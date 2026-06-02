@@ -1,0 +1,100 @@
+{
+  "timestamp": "2026-04-25T07:52:54.997423Z",
+  "sentiment_score": 77,
+  "hot_sectors": [
+    "IT设备",
+    "全国地产",
+    "医疗保健",
+    "汽车制造",
+    "专用机械",
+    "供气供热",
+    "互联网",
+    "元器件",
+    "保险",
+    "化工原料"
+  ],
+  "source": "akshare_stats_fallback",
+  "note": "第262轮增量采集，DeepSeek超时，akshare_stats兜底；过去12小时331条",
+  "sector_details": [
+    {
+      "sector": "IT设备",
+      "news_count": 11,
+      "positive": 11,
+      "negative": 0,
+      "neutral": 0,
+      "sentiment_score": 100
+    },
+    {
+      "sector": "全国地产",
+      "news_count": 6,
+      "positive": 6,
+      "negative": 0,
+      "neutral": 0,
+      "sentiment_score": 100
+    },
+    {
+      "sector": "医疗保健",
+      "news_count": 3,
+      "positive": 3,
+      "negative": 0,
+      "neutral": 0,
+      "sentiment_score": 100
+    },
+    {
+      "sector": "汽车制造",
+      "news_count": 5,
+      "positive": 5,
+      "negative": 0,
+      "neutral": 0,
+      "sentiment_score": 100
+    },
+    {
+      "sector": "专用机械",
+      "news_count": 13,
+      "positive": 11,
+      "negative": 0,
+      "neutral": 2,
+      "sentiment_score": 92
+    },
+    {
+      "sector": "供气供热",
+      "news_count": 8,
+      "positive": 6,
+      "negative": 0,
+      "neutral": 2,
+      "sentiment_score": 88
+    },
+    {
+      "sector": "互联网",
+      "news_count": 25,
+      "positive": 23,
+      "negative": 2,
+      "neutral": 0,
+      "sentiment_score": 84
+    },
+    {
+      "sector": "元器件",
+      "news_count": 49,
+      "positive": 45,
+      "negative": 4,
+      "neutral": 0,
+      "sentiment_score": 84
+    },
+    {
+      "sector": "保险",
+      "news_count": 12,
+      "positive": 6,
+      "negative": 0,
+      "neutral": 6,
+      "sentiment_score": 75
+    },
+    {
+      "sector": "化工原料",
+      "news_count": 16,
+      "positive": 10,
+      "negative": 1,
+      "neutral": 5,
+      "sentiment_score": 72
+    }
+  ]
+}

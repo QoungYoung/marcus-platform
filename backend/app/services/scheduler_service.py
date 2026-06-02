@@ -1,0 +1,1058 @@
+# -*- coding: utf-8 -*-
+"""
+Scheduler Service - 替代 OpenClaw 的任务调度系统
+基于 APScheduler + YAML 配置
+"""
+import os
+import re
+import sys
+import json
+import yaml
+import logging
+import subprocess
+import traceback
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+import threading
+import uuid
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.jobstores.memory import MemoryJobStore
+from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR, EVENT_JOB_MISSED
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class JobStatus(Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    DISABLED = "disabled"
+
+
+@dataclass
+class TaskConfig:
+    """任务配置"""
+    id: str
+    name: str
+    description: str = ""
+    enabled: bool = True
+    type: str = "script"  # "script" | "pi_trade" — pi_trade 由 Pi Agent 自主决策执行
+    schedule: Dict[str, Any] = field(default_factory=dict)
+    script: Dict[str, Any] = field(default_factory=dict)
+    output: Dict[str, Any] = field(default_factory=dict)
+    notifications: Dict[str, Any] = field(default_factory=dict)
+    depends_on: List[str] = field(default_factory=list)
+    pi_prompt: str = ""  # pi_trade 类型使用的 context 提示（如 "early""late_morning""afternoon""closing"）
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'TaskConfig':
+        return cls(
+            id=data.get('id', ''),
+            name=data.get('name', ''),
+            description=data.get('description', ''),
+            enabled=data.get('enabled', True),
+            type=data.get('type', 'script'),
+            schedule=data.get('schedule', {}),
+            script=data.get('script', {}),
+            output=data.get('output', {}),
+            notifications=data.get('notifications', {}),
+            depends_on=data.get('depends_on', []),
+            pi_prompt=data.get('pi_prompt', ''),
+        )
+
+
+@dataclass
+class JobExecution:
+    """任务执行记录"""
+    id: str
+    task_id: str
+    task_name: str
+    status: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    output: str = ""
+    error: str = ""
+    return_code: int = 0
+
+
+class SchedulerService:
+    """调度器服务"""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+
+        self.config_path = Path(__file__).parent.parent / ".." / ".." / "config" / "tasks.yaml"
+        self.tasks: Dict[str, TaskConfig] = {}
+        self.executions: Dict[str, JobExecution] = {}
+        self.workspace = ""
+        self.settings: Dict = {}
+
+        # QQ 通知
+        self._qq_notifier = None
+        self._qq_recipient = None
+
+        # APScheduler
+        self.scheduler = BackgroundScheduler(
+            jobstores={'default': MemoryJobStore()},
+            job_defaults={
+                'coalesce': True,
+                'max_instances': 1,
+                'misfire_grace_time': 300,
+            }
+        )
+
+        # Event listeners
+        self.scheduler.add_listener(self._on_job_executed, EVENT_JOB_EXECUTED)
+        self.scheduler.add_listener(self._on_job_error, EVENT_JOB_ERROR)
+        self.scheduler.add_listener(self._on_job_missed, EVENT_JOB_MISSED)
+
+        self._load_config()
+        self._load_execution_history()
+
+    def set_qq_notifier(self, notifier, recipient: str = None):
+        """设置 QQ 通知函数"""
+        self._qq_notifier = notifier
+        self._qq_recipient = recipient
+
+    def _load_execution_history(self):
+        """从日志文件加载历史执行记录"""
+        try:
+            log_dir = self._get_workspace_path() / "logs"
+            if not log_dir.exists():
+                return
+
+            for log_file in sorted(log_dir.glob("scheduler_*.jsonl")):
+                try:
+                    with open(log_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                data = json.loads(line)
+                                exec_id = data.get('execution_id', '')
+                                task_id = data.get('task_id', '')
+                                started = data.get('started_at', '')
+                                finished = data.get('finished_at', '')
+                                status = data.get('status', '')
+                                return_code = data.get('return_code', 0)
+                                output = data.get('output', '')
+                                error = data.get('error', '')
+
+                                from datetime import datetime
+                                execution = JobExecution(
+                                    id=exec_id,
+                                    task_id=task_id,
+                                    task_name=data.get('task_name', ''),
+                                    status=status,
+                                    started_at=datetime.fromisoformat(started) if started else datetime.now(),
+                                    finished_at=datetime.fromisoformat(finished) if finished else None,
+                                    output=output,
+                                    error=error,
+                                    return_code=return_code,
+                                )
+                                self.executions[exec_id] = execution
+                            except Exception:
+                                continue
+                except Exception:
+                    continue
+
+            logger.info(f"Loaded {len(self.executions)} execution records from history")
+        except Exception as e:
+            logger.warning(f"Failed to load execution history: {e}")
+
+    def _load_config(self):
+        """加载任务配置"""
+        if not self.config_path.exists():
+            logger.warning(f"Config file not found: {self.config_path}")
+            return
+
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+
+        # Load settings
+        self.settings = config.get('settings', {})
+        self.workspace = self.settings.get('workspace', 'F:/pythonProject/AITrade/workspace-marcus')
+
+        # Load tasks
+        tasks_data = config.get('tasks', [])
+        self.tasks = {}
+        for task_data in tasks_data:
+            task = TaskConfig.from_dict(task_data)
+            self.tasks[task.id] = task
+
+        logger.info(f"Loaded {len(self.tasks)} tasks from config")
+
+    def reload_config(self):
+        """重新加载配置"""
+        self.stop()
+        self._load_config()
+        self.start()
+
+    def start(self):
+        """启动调度器"""
+        if self.scheduler.running:
+            logger.info("Scheduler already running")
+            return
+
+        # Add jobs from config
+        for task_id, task in self.tasks.items():
+            if task.enabled:
+                self._add_job(task)
+
+        self.scheduler.start()
+        logger.info(f"Scheduler started with {len(self.tasks)} tasks")
+
+    def stop(self):
+        """停止调度器"""
+        if self.scheduler.running:
+            self.scheduler.pause()  # 先暂停，防止新任务触发
+            self.scheduler.shutdown(wait=True)  # 等待已提交任务完成
+            logger.info("Scheduler stopped")
+
+    def _get_workspace_path(self) -> Path:
+        """获取 workspace 路径"""
+        return Path(self.workspace)
+
+    def _add_job(self, task: TaskConfig):
+        """添加任务到调度器"""
+        if task.schedule.get('type') != 'cron':
+            logger.warning(f"Task {task.id}: Only cron schedule is supported")
+            return
+
+        expr = task.schedule.get('expr', '')
+        timezone = task.schedule.get('timezone', 'Asia/Shanghai')
+
+        try:
+            # Parse cron expression: "35 9,10,13 * * 1-5"
+            parts = expr.split()
+            if len(parts) != 5:
+                logger.error(f"Invalid cron expression: {expr}")
+                return
+
+            minute, hour, day, month, day_of_week = parts
+
+            trigger = CronTrigger(
+                minute=minute,
+                hour=hour,
+                day=day,
+                month=month,
+                day_of_week=day_of_week,
+                timezone=timezone,
+            )
+
+            self.scheduler.add_job(
+                func=self._execute_task,
+                trigger=trigger,
+                id=task.id,
+                name=task.name,
+                args=[task.id],
+                replace_existing=True,
+            )
+
+            logger.info(f"Added job: {task.id} ({task.name}) - {expr}")
+
+        except Exception as e:
+            logger.error(f"Failed to add job {task.id}: {e}")
+
+    def _execute_task(self, task_id: str, manual: bool = False):
+        """执行任务
+        
+        Args:
+            task_id: 任务ID
+            manual: 是否手动触发（True 时跳过时间窗口校验）
+        """
+        task = self.tasks.get(task_id)
+        if not task:
+            logger.error(f"Task not found: {task_id}")
+            return
+
+        # 交易日检查：盘前扫描/盘中扫描/自动交易/每日复盘 仅交易日执行
+        TRADE_DAY_ONLY_TASKS = {
+            'pre_market_scan', 'market_scan',
+            'auto_trade_morning', 'auto_trade_late_morning',
+            'auto_trade_afternoon', 'auto_trade_closing',
+            'daily_review',
+        }
+        if task_id in TRADE_DAY_ONLY_TASKS:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "core"))
+                from utils.trade_day_utils import is_today_trade_day
+            except ImportError:
+                # 无法导入时降级：简单跳过周末
+                weekday = datetime.now().strftime('%w')
+                if weekday in ['0', '6']:
+                    logger.info(f"[{task_id}] 周末休市，跳过任务: {task.name}")
+                    return
+                # 保守策略：允许执行
+                logger.warning(f"[{task_id}] 交易日检测模块不可用，跳过检查")
+            else:
+                is_trade, reason = is_today_trade_day()
+                if not is_trade:
+                    logger.info(f"[{task_id}] 非交易日({reason})，跳过任务: {task.name}")
+                    return
+                logger.info(f"[{task_id}] 交易日确认: {reason}")
+
+        # 时间窗口检查（仅定时触发时生效，手动触发跳过）
+        TASK_TIME_WINDOWS = {
+            'pre_market_scan':        ('盘前', 8*60,  9*60+25),
+            'market_scan':            ('盘中', 9*60+25, 15*60+5),
+            'auto_trade_morning':     ('早盘', 9*60+25, 11*60+35),
+            'auto_trade_late_morning':('午前', 9*60+25, 11*60+35),
+            'auto_trade_afternoon':   ('午后', 12*60+55, 15*60+5),
+            'auto_trade_closing':     ('尾盘', 12*60+55, 15*60+5),
+            'daily_review':           ('复盘', 15*60,  18*60),
+        }
+        if manual:
+            if task_id in TASK_TIME_WINDOWS:
+                logger.info(f"[{task_id}] 手动触发，跳过时间窗口校验")
+        else:
+            now = datetime.now()
+            now_time = now.hour * 60 + now.minute
+            window = TASK_TIME_WINDOWS.get(task_id)
+            if window:
+                window_name, start_min, end_min = window
+                if now_time < start_min or now_time > end_min:
+                    logger.info(
+                        f"[{task_id}] 超出{window_name}时间窗口 "
+                        f"({start_min//60:02d}:{start_min%60:02d}-{end_min//60:02d}:{end_min%60:02d})，"
+                        f"当前 {now.strftime('%H:%M')}，跳过任务: {task.name}"
+                    )
+                    return
+
+        execution_id = str(uuid.uuid4())[:8]
+        execution = JobExecution(
+            id=execution_id,
+            task_id=task_id,
+            task_name=task.name,
+            status=JobStatus.RUNNING.value,
+            started_at=datetime.now(),
+        )
+        self.executions[execution_id] = execution
+
+        logger.info(f"[{execution_id}] Starting task: {task.name} (type={task.type})")
+
+        # === Pi 自主交易模式 ===
+        if task.type == 'pi_trade':
+            try:
+                output = self._execute_pi_trade(task, execution_id)
+                execution.status = JobStatus.SUCCESS.value
+                execution.output = output
+                execution.return_code = 0
+            except Exception as e:
+                execution.status = JobStatus.FAILED.value
+                execution.error = f"{str(e)}\n{traceback.format_exc()}"
+                logger.error(f"[{execution_id}] Pi trade failed: {e}")
+            finally:
+                execution.finished_at = datetime.now()
+                self._save_execution_log(execution)
+                self._send_notifications(task, execution)
+            return
+
+        try:
+            # Prepare script path
+            script_path = self._get_workspace_path() / task.script.get('path', '')
+            logger.info(f"[{execution_id}] Script path: {script_path}")
+            logger.info(f"[{execution_id}] Script exists: {script_path.exists()}")
+
+            cwd = self._get_workspace_path() if task.script.get('cwd') == 'workspace-marcus' else self._get_workspace_path()
+            logger.info(f"[{execution_id}] Working dir: {cwd}")
+            args = task.script.get('args', [])
+            timeout = self.settings.get('job_timeout', 900)
+
+            # Build command
+            cmd = [sys.executable, str(script_path)] + args
+            logger.info(f"[{execution_id}] Command: {' '.join(cmd)}")
+
+            # Execute with UTF-8 encoding
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'
+            env['PYTHONUNBUFFERED'] = '1'  # Force unbuffered output
+            logger.info(f"[{execution_id}] About to run subprocess...")
+
+            # Debug: write command to batch file and run it
+            debug_dir = self._get_workspace_path() / "logs" / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_file = debug_dir / f"{execution_id}_debug.txt"
+
+            # Write full output to debug file
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write(f"Command: {' '.join(cmd)}\n")
+                f.write(f"CWD: {cwd}\n")
+                f.write(f"Python: {sys.executable}\n\n")
+
+            result = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=timeout,
+                env=env,
+            )
+
+            # Write results to debug file
+            with open(debug_file, 'a', encoding='utf-8') as f:
+                f.write(f"Return code: {result.returncode}\n")
+                f.write(f"stdout length: {len(result.stdout) if result.stdout else 0}\n")
+                f.write(f"stderr length: {len(result.stderr) if result.stderr else 0}\n\n")
+                f.write("=== STDOUT ===\n")
+                f.write(result.stdout if result.stdout else "(empty)")
+                f.write("\n\n=== STDERR ===\n")
+                f.write(result.stderr if result.stderr else "(empty)")
+
+            logger.info(f"[{execution_id}] Subprocess finished, returncode={result.returncode}")
+            logger.info(f"[{execution_id}] Debug log: {debug_file}")
+
+            output = result.stdout if result.stdout else ""
+            error = result.stderr if result.stderr else ""
+
+            # Log output for debugging
+            logger.info(f"[{execution_id}] stdout length: {len(output)}")
+            logger.info(f"[{execution_id}] stderr length: {len(error)}")
+            if output:
+                logger.info(f"[{execution_id}] stdout (first 500 chars): {output[:500]}")
+            return_code = result.returncode
+
+            logger.info(f"[{execution_id}] Return code: {return_code}")
+            logger.info(f"[{execution_id}] Output length: {len(output)}, Error length: {len(error)}")
+
+            if return_code == 0:
+                execution.status = JobStatus.SUCCESS.value
+                execution.error = error  # 保存 stderr 即使成功
+                logger.info(f"[{execution_id}] Task {task.name} completed successfully")
+            else:
+                execution.status = JobStatus.FAILED.value
+                execution.error = error
+                logger.error(f"[{execution_id}] Task {task.name} failed: {error}")
+
+            execution.output = output
+            execution.return_code = return_code
+
+        except subprocess.TimeoutExpired:
+            execution.status = JobStatus.FAILED.value
+            execution.error = f"Task timeout after {timeout} seconds"
+            logger.error(f"[{execution_id}] Task {task.name} timeout")
+
+        except Exception as e:
+            execution.status = JobStatus.FAILED.value
+            execution.error = f"{str(e)}\n{traceback.format_exc()}"
+            logger.error(f"[{execution_id}] Task {task.name} error: {e}")
+
+        finally:
+            execution.finished_at = datetime.now()
+            self._save_execution_log(execution)
+            self._send_notifications(task, execution)
+
+    def _save_execution_log(self, execution: JobExecution):
+        """保存执行日志"""
+        try:
+            log_dir = self._get_workspace_path() / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            log_file = log_dir / f"scheduler_{datetime.now().strftime('%Y-%m-%d')}.jsonl"
+            log_data = {
+                'execution_id': execution.id,
+                'task_id': execution.task_id,
+                'task_name': execution.task_name,
+                'status': execution.status,
+                'started_at': execution.started_at.isoformat(),
+                'finished_at': execution.finished_at.isoformat() if execution.finished_at else None,
+                'return_code': execution.return_code,
+                'output': execution.output if execution.output else "",
+                'error': execution.error if execution.error else "",
+            }
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_data, ensure_ascii=False) + '\n')
+
+            # Also save individual task log files for easier viewing
+            task_log_dir = log_dir / execution.task_id
+            task_log_dir.mkdir(exist_ok=True, parents=True)
+            task_log_file = task_log_dir / f"{execution.id}.json"
+            with open(task_log_file, 'w', encoding='utf-8') as f:
+                json.dump(log_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save execution log: {e}")
+
+    def _send_notifications(self, task: TaskConfig, execution: JobExecution):
+        """发送通知"""
+        notifications = task.notifications
+        channels = notifications.get('channels', [])
+
+        if execution.status == JobStatus.SUCCESS.value and not notifications.get('on_success'):
+            return
+        if execution.status == JobStatus.FAILED.value and not notifications.get('on_failure'):
+            return
+
+        # QQ Bot 通知
+        if 'qqbot' in channels:
+            if self._qq_notifier:
+                use_pi = notifications.get('pi_analysis', False)
+                
+                # === pi_trade 模式：output 已经是 Pi 报告，直接推送 ===
+                if task.type == 'pi_trade' and execution.output and execution.status == JobStatus.SUCCESS.value:
+                    try:
+                        # 去掉 SIGNAL 行再发送
+                        clean_output = re.sub(r'\n?SIGNAL:.*', '', execution.output).strip()
+                        self._qq_notifier(clean_output, self._qq_recipient)
+                        logger.info(f"QQ Pi-trade report sent for {task.name}")
+                        return
+                    except Exception as e:
+                        logger.error(f"Failed to send Pi-trade report: {e}")
+                
+                if use_pi and execution.output and execution.status == JobStatus.SUCCESS.value:
+                    # 将扫描结果发给 Pi 分析，生成报告
+                    report = self._call_pi_analysis(task.name, execution.output)
+                    if report:
+                        try:
+                            self._qq_notifier(report, self._qq_recipient)
+                            logger.info(f"QQ Pi-report sent for {task.name}")
+                            return
+                        except Exception as e:
+                            logger.error(f"Failed to send Pi report: {e}")
+                
+                # 回退：简单通知
+                emoji = "✅" if execution.status == JobStatus.SUCCESS.value else "❌"
+                lines = [
+                    f"{emoji} Marcus 任务通知",
+                    f"任务: {task.name}",
+                    f"状态: {execution.status}",
+                    f"时间: {execution.finished_at.strftime('%H:%M:%S')}" if execution.finished_at else "",
+                ]
+                if execution.output:
+                    output_preview = execution.output[:500]
+                    if len(execution.output) > 500:
+                        output_preview += "\n... (已截断)"
+                    lines.append(f"\n输出:\n{output_preview}")
+                if execution.error:
+                    lines.append(f"\n错误: {execution.error[:300]}")
+
+                message = "\n".join(filter(None, lines))
+                try:
+                    self._qq_notifier(message, self._qq_recipient)
+                    logger.info(f"QQ notification sent for {task.name}")
+                except Exception as e:
+                    logger.error(f"Failed to send QQ notification: {e}")
+            else:
+                logger.info(f"QQ notification not available for {task.name}")
+
+    def _call_pi_analysis(self, task_name: str, output: str) -> str:
+        """将扫描结果发送给 Pi Server，获取分析报告并写入策略链"""
+        import urllib.request, json as _json, ssl, re
+        try:
+            # 根据任务类型生成不同的分析指令
+            if '盘前' in task_name:
+                report_guide = (
+                    "报告结构：隔夜外盘 → A50/汇率 → 板块催化 → 今日展望。"
+                )
+            elif '交易' in task_name:
+                report_guide = (
+                    "报告结构：成交概况 → 盈亏分析 → 持仓变化 → 策略评估。"
+                    "对比盘前策略与实际执行差异，评估右侧信号有效性。"
+                )
+            elif '新闻' in task_name:
+                report_guide = (
+                    "报告结构：今日重大新闻 → 情绪倾向 → 热点板块关联 → 明日关注。"
+                    "侧重新闻对个股和板块的潜在影响，不重复市场数据。"
+                )
+            else:
+                report_guide = (
+                    "报告结构：市场概况 → 板块资金 → 指数复盘 → 风险关注点。"
+                )
+
+            prompt = (
+                f"以下是 {task_name} 定时任务的执行结果。\n"
+                f"请基于「右侧交易」框架对此数据进行分析，"
+                f"整合为简洁专业的任务报告。\n"
+                f"{report_guide}"
+                f"控制在 800 字以内。\n\n"
+                f"最后，用单独一行给出你的策略判断：\n"
+                f"SIGNAL: <green|yellow|red> POSITION:<0-100> REASON:<一句话理由>\n"
+                f"其中 green=激进 yellow=谨慎 red=观望。"
+                f"\n\n=== 任务输出 ===\n{output}"
+            )
+            payload = _json.dumps({
+                "message": prompt,
+                "session_id": f"report_{task_name}_{datetime.now().strftime('%Y%m%d')}"
+            }).encode("utf-8")
+
+            pi_url = "http://localhost:3001/chat"
+            req = urllib.request.Request(
+                pi_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, context=ctx, timeout=120) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+                reply = data.get("reply", "")
+                if not reply:
+                    return ""
+
+                logger.info(f"Pi analysis done for {task_name} ({len(reply)} chars)")
+
+                # 解析策略信号并写入策略链
+                signal_match = re.search(
+                    r'SIGNAL:\s*(green|yellow|red)\s+POSITION:\s*(\d+)\s*REASON:\s*(.+)',
+                    reply, re.IGNORECASE
+                )
+                stance = 'yellow'
+                position_limit = 60
+                reason_str = ''
+                if signal_match:
+                    try:
+                        stance = signal_match.group(1).lower()
+                        position_limit = int(signal_match.group(2))
+                        reason_str = signal_match.group(3).strip()
+                        from core.utils.strategy_chain import StrategyChain
+                        chain = StrategyChain()
+                        chain.set_pi_confirmation(
+                            stance=stance,
+                            position_limit=position_limit,
+                            reason=reason_str,
+                        )
+                        logger.info(
+                            f"Pi signal written: {signal_match.group(1)} "
+                            f"limit={signal_match.group(2)}%"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to write Pi signal: {e}")
+
+                # === 持久化 Pi 分析报告到 JSONL ===
+                self._save_pi_analysis(task_name, reply, stance, position_limit, reason_str)
+
+                # 返回报告时去掉 SIGNAL 行
+                clean_reply = re.sub(r'\n?SIGNAL:.*', '', reply).strip()
+                return clean_reply
+
+        except Exception as e:
+            logger.error(f"Pi analysis failed for {task_name}: {e}")
+        return ""
+
+    def _save_pi_analysis(self, task_name: str, reply: str, stance: str, position_limit: int, reason: str):
+        """持久化 Pi 分析报告，供后续自动交易读取"""
+        try:
+            log_dir = self._get_workspace_path() / "memory" / "pi-analysis-logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            today = datetime.now().strftime('%Y-%m-%d')
+            log_file = log_dir / f"{today}-analysis.jsonl"
+
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "task_name": task_name,
+                "stance": stance,
+                "position_limit": position_limit,
+                "reason": reason,
+                "report": reply,  # 含 SIGNAL 行的完整报告
+            }
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+            logger.info(f"Pi analysis saved: {log_file}")
+        except Exception as e:
+            logger.error(f"Failed to save Pi analysis: {e}")
+
+    def _execute_pi_trade(self, task: TaskConfig, execution_id: str) -> str:
+        """
+        Pi 自主交易模式 —— 代替 auto_trade.py 脚本。
+
+        流程：
+        1. 根据时段构造交易指令
+        2. 发送给 Pi Server /chat
+        3. Pi 自主调用 get_latest_scan_report → 分析 → place_order 等工具
+        4. Pi 返回交易报告
+        5. 提取 SIGNAL 写入策略链
+        6. 返回报告文本供 QQ 推送
+        """
+        import urllib.request, json as _json, ssl, re
+
+        now = datetime.now()
+        pi_prompt_context = task.pi_prompt or ''
+
+        # 根据时段生成不同的交易指令
+        if 'closing' in task.id or pi_prompt_context == 'closing':
+            # 尾盘模式：只止损止盈，不开新仓
+            trade_mode_instruction = (
+                "现在是尾盘 14:30，进入 **closing 模式**。\n"
+                "**严格禁止新开仓**。只执行以下操作：\n"
+                "1. 对持仓逐只检查，止损位触发则立即卖出\n"
+                "2. 达到止盈目标的卖出\n"
+                "3. 趋势破位的减仓 50%\n"
+                "4. 报告尾盘操作结果"
+            )
+        elif 'early' in task.id or pi_prompt_context == 'early' or 'morning' in task.id or pi_prompt_context == 'morning':
+            trade_mode_instruction = (
+                "现在是早盘 9:35，进入 **建仓模式**。\n"
+                "优先关注扫描报告中 hot_concepts 的强势标的，\n"
+                "严格按照右侧交易 SOP 建仓。"
+            )
+        elif 'late' in task.id or pi_prompt_context == 'late_morning' or 'late_morning' in task.id:
+            trade_mode_instruction = (
+                "现在是午前 10:35，进入 **趋势确认模式**。\n"
+                "评估早盘建仓标的走势，不符合预期的及时止损，\n"
+                "趋势确认的可以考虑加仓。"
+            )
+        elif 'afternoon' in task.id or pi_prompt_context == 'afternoon':
+            trade_mode_instruction = (
+                "现在是午后 13:35，进入 **午后修正模式**。\n"
+                "关注下午开盘方向，决定是否加仓或减仓。"
+            )
+        else:
+            trade_mode_instruction = "请基于最新扫描报告执行自主交易决策。"
+
+        prompt = (
+            f"{trade_mode_instruction}\n\n"
+            f"请立即执行以下操作：\n"
+            f"1. 调用 get_latest_scan_report 获取最新扫描报告\n"
+            f"   （报告中包含 pi_analysis 字段 — 这是上一轮 Pi 对扫描报告的预消化分析，优先参考其立场和仓位建议）\n"
+            f"2. 调用 get_portfolio 查看当前账户状态\n"
+            f"3. 按右侧交易 SOP 选股分析\n"
+            f"4. 执行交易（买入/卖出/调仓）\n"
+            f"5. 输出完整交易报告\n\n"
+            f"记住：你是 Marcus 右侧交易专家，严格遵循风控纪律。\n"
+            f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+        payload = _json.dumps({
+            "message": prompt,
+            "session_id": f"pi_trade_{task.id}_{now.strftime('%Y%m%d')}",
+            "mode": "trade"  # 使用交易模式（全工具+交易提示词）
+        }).encode("utf-8")
+
+        pi_url = "http://localhost:3001/chat"
+        req = urllib.request.Request(
+            pi_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        ctx = ssl.create_default_context()
+
+        logger.info(f"[{execution_id}] Sending pi_trade request for {task.id}...")
+        with urllib.request.urlopen(req, context=ctx, timeout=180) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            reply = data.get("reply", "")
+            elapsed = data.get("elapsed_ms", 0)
+            logger.info(f"[{execution_id}] Pi trade response ({len(reply)} chars, {elapsed}ms)")
+
+        if not reply or reply == '(无回复)':
+            raise RuntimeError("Pi 未返回有效交易报告")
+
+        # 解析策略信号并写入策略链
+        signal_match = re.search(
+            r'SIGNAL:\s*(green|yellow|red)\s+POSITION:\s*(\d+)\s*REASON:\s*(.+)',
+            reply, re.IGNORECASE
+        )
+        if signal_match:
+            try:
+                from core.utils.strategy_chain import StrategyChain
+                chain = StrategyChain()
+                chain.set_pi_confirmation(
+                    stance=signal_match.group(1).lower(),
+                    position_limit=int(signal_match.group(2)),
+                    reason=signal_match.group(3).strip(),
+                )
+                logger.info(f"[{execution_id}] Pi signal: {signal_match.group(1)} limit={signal_match.group(2)}%")
+            except Exception as e:
+                logger.error(f"[{execution_id}] Failed to write Pi signal: {e}")
+
+        # 返回完整报告（含 SIGNAL 行供后续通知使用）
+        return reply
+
+    def _on_job_executed(self, event):
+        """任务执行成功回调"""
+        logger.debug(f"Job executed: {event.job_id}")
+
+    def _on_job_error(self, event):
+        """任务执行失败回调"""
+        logger.error(f"Job error: {event.job_id}, exception: {event.exception}")
+
+    def _on_job_missed(self, event):
+        """任务错过的回调"""
+        logger.warning(f"Job missed: {event.job_id}")
+
+    # ==================== Public API ====================
+
+    def get_tasks(self) -> List[Dict]:
+        """获取所有任务"""
+        result = []
+        for task_id, task in self.tasks.items():
+            # Get next run time
+            job = self.scheduler.get_job(task_id)
+            next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+
+            # Get last execution
+            last_exec = self._get_last_execution(task_id)
+
+            result.append({
+                'id': task.id,
+                'name': task.name,
+                'description': task.description,
+                'enabled': task.enabled,
+                'type': task.type,
+                'schedule': task.schedule,
+                'notifications': task.notifications,
+                'next_run': next_run,
+                'last_execution': {
+                    'status': last_exec.status if last_exec else None,
+                    'started_at': last_exec.started_at.isoformat() if last_exec else None,
+                    'finished_at': last_exec.finished_at.isoformat() if last_exec and last_exec.finished_at else None,
+                } if last_exec else None,
+            })
+        return result
+
+    def get_task(self, task_id: str) -> Optional[Dict]:
+        """获取单个任务"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return None
+
+        job = self.scheduler.get_job(task_id)
+        next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+
+        return {
+            'id': task.id,
+            'name': task.name,
+            'description': task.description,
+            'enabled': task.enabled,
+            'type': task.type,
+            'schedule': task.schedule,
+            'script': task.script,
+            'output': task.output,
+            'notifications': task.notifications,
+            'next_run': next_run,
+        }
+
+    def get_task_executions(self, task_id: str, limit: int = 20) -> List[Dict]:
+        """获取任务执行历史"""
+        executions = [
+            e for e in self.executions.values()
+            if e.task_id == task_id
+        ]
+        # Sort by started_at descending
+        executions.sort(key=lambda x: x.started_at, reverse=True)
+        return [
+            {
+                'id': e.id,
+                'task_id': e.task_id,
+                'task_name': e.task_name,
+                'status': e.status,
+                'started_at': e.started_at.isoformat(),
+                'finished_at': e.finished_at.isoformat() if e.finished_at else None,
+                'output': e.output[:500] if e.output else "",
+                'error': e.error[:200] if e.error else "",
+                'return_code': e.return_code,
+            }
+            for e in executions[:limit]
+        ]
+
+    def get_execution_log(self, execution_id: str) -> Optional[str]:
+        """获取执行详细日志文件路径"""
+        for task_id_dir in (self._get_workspace_path() / "logs").iterdir():
+            if task_id_dir.is_dir():
+                log_file = task_id_dir / f"{execution_id}.json"
+                if log_file.exists():
+                    return str(log_file)
+        return None
+
+    def _get_last_execution(self, task_id: str) -> Optional[JobExecution]:
+        """获取任务最后执行记录"""
+        task_execs = [e for e in self.executions.values() if e.task_id == task_id]
+        if not task_execs:
+            return None
+        return max(task_execs, key=lambda x: x.started_at)
+
+    def trigger_task(self, task_id: str) -> Dict:
+        """手动触发任务"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return {'success': False, 'error': 'Task not found'}
+
+        if not task.enabled:
+            return {'success': False, 'error': 'Task is disabled'}
+
+        # Run in background thread，手动触发跳过时间窗口校验
+        thread = threading.Thread(target=self._execute_task, args=(task_id, True))
+        thread.start()
+
+        return {'success': True, 'message': f'Task {task.name} triggered'}
+
+    def enable_task(self, task_id: str) -> Dict:
+        """启用任务"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return {'success': False, 'error': 'Task not found'}
+
+        task.enabled = True
+        self._add_job(task)
+        logger.info(f"Task {task_id} enabled")
+
+        return {'success': True, 'message': f'Task {task.name} enabled'}
+
+    def disable_task(self, task_id: str) -> Dict:
+        """禁用任务"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return {'success': False, 'error': 'Task not found'}
+
+        task.enabled = False
+        self.scheduler.remove_job(task_id)
+        logger.info(f"Task {task_id} disabled")
+
+        return {'success': True, 'message': f'Task {task.name} disabled'}
+
+    def update_task(self, task_id: str, updates: Dict) -> Dict:
+        """更新任务配置"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return {'success': False, 'error': 'Task not found'}
+
+        # Validate cron expression if schedule is being updated
+        if 'schedule' in updates:
+            schedule = updates['schedule']
+            expr = schedule.get('expr', '')
+            if expr:
+                valid, error_msg = self._validate_cron(expr)
+                if not valid:
+                    return {'success': False, 'error': error_msg}
+
+        # Update fields
+        if 'enabled' in updates:
+            task.enabled = updates['enabled']
+        if 'schedule' in updates:
+            task.schedule = updates['schedule']
+        if 'notifications' in updates:
+            task.notifications = updates['notifications']
+
+        # Remove old job and add new one
+        try:
+            self.scheduler.remove_job(task_id)
+        except:
+            pass
+
+        if task.enabled:
+            self._add_job(task)
+
+        # Persist changes to YAML config file
+        self._persist_config()
+
+        logger.info(f"Task {task_id} updated")
+
+        return {'success': True, 'message': f'Task {task.name} updated'}
+
+    def _validate_cron(self, expr: str) -> tuple:
+        """Validate a cron expression.
+        Returns (is_valid, error_message)
+        """
+        try:
+            parts = expr.strip().split()
+            if len(parts) != 5:
+                return False, "Cron expression must have exactly 5 fields: minute hour day month day_of_week"
+
+            minute, hour, day, month, day_of_week = parts
+
+            # Validate each field by trying to create a CronTrigger
+            CronTrigger(
+                minute=minute,
+                hour=hour,
+                day=day,
+                month=month,
+                day_of_week=day_of_week,
+            )
+            return True, ""
+        except Exception as e:
+            return False, f"Invalid cron expression: {str(e)}"
+
+    def _persist_config(self):
+        """Save current task configurations back to the YAML config file"""
+        try:
+            # Build the config structure matching the original format
+            tasks_list = []
+            for task_id, task in self.tasks.items():
+                tasks_list.append({
+                    'id': task.id,
+                    'name': task.name,
+                    'description': task.description,
+                    'enabled': task.enabled,
+                    'schedule': task.schedule,
+                    'script': task.script,
+                    'output': task.output,
+                    'notifications': task.notifications,
+                    'depends_on': task.depends_on,
+                })
+
+            config = {
+                'settings': self.settings,
+                'tasks': tasks_list,
+            }
+
+            # Write back to config file
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(
+                    config,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                    indent=2,
+                )
+
+            logger.info(f"Configuration saved to {self.config_path}")
+        except Exception as e:
+            logger.error(f"Failed to persist config: {e}")
+            raise
+
+    def get_next_runs(self) -> List[Dict]:
+        """获取即将执行的任务"""
+        jobs = self.scheduler.get_jobs()
+        result = []
+        for job in jobs:
+            if job.next_run_time:
+                result.append({
+                    'task_id': job.id,
+                    'task_name': job.name,
+                    'next_run': job.next_run_time.isoformat(),
+                    'seconds_until': (job.next_run_time - datetime.now().astimezone()).total_seconds(),
+                })
+
+        result.sort(key=lambda x: x['seconds_until'])
+        return result[:10]
+
+    def get_scheduler_status(self) -> Dict:
+        """获取调度器状态"""
+        return {
+            'running': self.scheduler.running,
+            'task_count': len(self.tasks),
+            'enabled_count': sum(1 for t in self.tasks.values() if t.enabled),
+            'jobs_count': len(self.scheduler.get_jobs()),
+            'executions_today': sum(
+                1 for e in self.executions.values()
+                if e.started_at.date() == datetime.now().date()
+            ),
+        }
+
+
+# Global instance
+scheduler_service = SchedulerService()

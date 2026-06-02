@@ -1,0 +1,19 @@
+{
+  "_comment": "雪球数据查询配置文件",
+  "_version": "1.0.0",
+
+  "token": "xq_a_token=b39a5862bad8311e57a3fc68ebb0acd4167a303f;",
+  "u": "2245868006",
+
+  "data_dir": "./data",
+
+  "cache": {
+    "enabled": true,
+    "expire_seconds": 300
+  },
+
+  "logging": {
+    "level": "INFO",
+    "file": "./logs/xueqiu.log"
+  }
+}

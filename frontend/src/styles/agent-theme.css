@@ -1,0 +1,754 @@
+/* Agent Page Theme Variables */
+
+/* ── 深色主题 (默认) ── */
+:root,
+[data-theme="dark"] {
+  --agent-bg-deep: #0b0e14;
+  --agent-bg-main: #11161e;
+  --agent-bg-card: #0d121b;
+  --agent-bg-bubble: #1a2432;
+  --agent-bg-input: #1a2432;
+  --agent-bg-hover: #1f2a38;
+
+  --agent-gold: #f0b90b;
+  --agent-gold-dark: #d4a407;
+  --agent-gold-muted: rgba(240, 185, 11, 0.12);
+  --agent-gold-border: rgba(255, 215, 0, 0.08);
+
+  --agent-text-primary: #f0f4fa;
+  --agent-text-secondary: #c8d6e5;
+  --agent-text-muted: #8a9bb5;
+  --agent-text-dim: #6a7d9b;
+  --agent-text-extra-dim: #4a5d78;
+
+  /* 覆盖 pi-app.css (Tailwind) 的浅色主题变量 — 在深色 Agent 页面中使用亮色文字 */
+  --foreground: #e6edf3;
+  --muted-foreground: #8892a4;
+  --primary: #e6edf3;
+  --card-foreground: #e6edf3;
+  --popover-foreground: #e6edf3;
+  --accent-foreground: #e6edf3;
+  --destructive-foreground: #e6edf3;
+
+  --agent-green: #2ecc71;
+  --agent-green-bg: rgba(46, 204, 113, 0.15);
+  --agent-red: #e74c3c;
+  --agent-red-bg: rgba(231, 76, 60, 0.15);
+
+  --agent-border-subtle: rgba(255, 215, 0, 0.05);
+  --agent-border-light: rgba(255, 215, 0, 0.07);
+  --agent-border-input: rgba(255, 215, 0, 0.06);
+
+  /* TopNav 变量 (深色) */
+  --topnav-bg: linear-gradient(180deg, #131b26 0%, #0d121b 100%);
+  --topnav-border: rgba(255, 215, 0, 0.1);
+  --topnav-avatar-bg: linear-gradient(145deg, #f0b90b, #d4a407);
+  --topnav-avatar-icon: #0b0e14;
+  --topnav-brand-title: #f0f4fa;
+  --topnav-brand-sub: #6a7d9b;
+  --topnav-link-color: #8a9bb5;
+  --topnav-link-active-color: #f0b90b;
+  --topnav-link-active-bg: rgba(240, 185, 11, 0.1);
+  --topnav-status-text: #6a7d9b;
+  --topnav-status-dot: #2ecc71;
+
+  /* 面板 / 半透明覆盖层 */
+  --agent-panel-bg: rgba(13, 18, 27, 0.6);
+  --agent-tool-card-bg: rgba(13, 18, 27, 0.8);
+  --agent-code-block-bg: rgba(0, 0, 0, 0.35);
+  --agent-code-inline-bg: rgba(0, 0, 0, 0.3);
+  --agent-pre-block-bg: rgba(0, 0, 0, 0.4);
+  --agent-user-msg-bg: #122E8A;
+  --agent-user-msg-text: #F5EFEA;
+
+  /* 阴影 */
+  --agent-shadow-chat: 0 20px 60px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 215, 0, 0.08);
+  --agent-shadow-msg: 0 4px 12px rgba(0, 0, 0, 0.2);
+  --agent-shadow-popup: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --agent-shadow-card: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --agent-shadow-card-small: 0 2px 16px rgba(0, 0, 0, 0.2);
+
+  /* 图表颜色 */
+  --agent-chart-grid: #30363d;
+  --agent-chart-axis: #8b949e;
+  --agent-chart-tooltip-bg: #1e293b;
+  --agent-chart-tooltip-border: 1px solid #30363d;
+
+  /* 模态覆盖 */
+  --agent-modal-overlay: rgba(0, 0, 0, 0.5);
+
+  /* 输入框聚焦 */
+  --agent-input-focus-border: rgba(240, 185, 11, 0.35);
+  --agent-input-focus-shadow: 0 0 0 3px rgba(240, 185, 11, 0.05);
+
+  /* 滚动条 */
+  --agent-scrollbar-thumb: #2a3647;
+  --agent-scrollbar-thumb-hover: #3a4657;
+
+  --agent-sidebar-width: 260px;
+  --agent-panel-width: 280px;
+  --agent-transition-fast: 0.2s;
+  --agent-transition-smooth: 0.25s;
+}
+
+/* ── 浅色主题：深海蓝 + 柔奶白 ── */
+[data-theme="light"] {
+  --agent-bg-deep: #F5EFEA;
+  --agent-bg-main: #FDFAF7;
+  --agent-bg-card: #FFFFFF;
+  --agent-bg-bubble: #EDE6DD;
+  --agent-bg-input: #EDE6DD;
+  --agent-bg-hover: #E6DDD3;
+
+  --agent-gold: #122E8A;
+  --agent-gold-dark: #0E2470;
+  --agent-gold-muted: rgba(18, 46, 138, 0.10);
+  --agent-gold-border: rgba(18, 46, 138, 0.15);
+
+  --agent-text-primary: #0D1B5C;
+  --agent-text-secondary: #2A3F7A;
+  --agent-text-muted: #5B6B9E;
+  --agent-text-dim: #7D8BB8;
+  --agent-text-extra-dim: #9DABD0;
+
+  /* Tailwind 变量覆盖 */
+  --foreground: #0D1B5C;
+  --muted-foreground: #5B6B9E;
+  --primary: #0D1B5C;
+  --card-foreground: #0D1B5C;
+  --popover-foreground: #0D1B5C;
+  --accent-foreground: #0D1B5C;
+  --destructive-foreground: #0D1B5C;
+
+  --agent-green: #27AE60;
+  --agent-green-bg: rgba(39, 174, 96, 0.12);
+  --agent-red: #C0392B;
+  --agent-red-bg: rgba(192, 57, 43, 0.12);
+
+  --agent-border-subtle: rgba(18, 46, 138, 0.10);
+  --agent-border-light: rgba(18, 46, 138, 0.15);
+  --agent-border-input: rgba(18, 46, 138, 0.15);
+
+  /* TopNav 变量 (浅色) — 深海蓝导航栏 */
+  --topnav-bg: linear-gradient(180deg, #122E8A 0%, #0E2470 100%);
+  --topnav-border: rgba(255, 255, 255, 0.15);
+  --topnav-avatar-bg: linear-gradient(145deg, #F5EFEA, #E8DFD4);
+  --topnav-avatar-icon: #122E8A;
+  --topnav-brand-title: #F5EFEA;
+  --topnav-brand-sub: rgba(245, 239, 234, 0.75);
+  --topnav-link-color: rgba(245, 239, 234, 0.7);
+  --topnav-link-active-color: #F5EFEA;
+  --topnav-link-active-bg: rgba(245, 239, 234, 0.15);
+  --topnav-status-text: rgba(245, 239, 234, 0.6);
+  --topnav-status-dot: #27AE60;
+
+  /* 面板 / 半透明覆盖层 */
+  --agent-panel-bg: #F5EFEA;
+  --agent-tool-card-bg: #FFFFFF;
+  --agent-code-block-bg: #EDE6DD;
+  --agent-code-inline-bg: rgba(18, 46, 138, 0.06);
+  --agent-pre-block-bg: #EDE6DD;
+  --agent-user-msg-bg: #D4DBF2;
+  --agent-user-msg-text: #0D1B5C;
+
+  /* 阴影 */
+  --agent-shadow-chat: 0 20px 60px rgba(18, 46, 138, 0.12), 0 0 0 1px rgba(18, 46, 138, 0.08);
+  --agent-shadow-msg: 0 2px 8px rgba(18, 46, 138, 0.06);
+  --agent-shadow-popup: 0 8px 32px rgba(18, 46, 138, 0.1);
+  --agent-shadow-card: 0 4px 20px rgba(18, 46, 138, 0.06);
+  --agent-shadow-card-small: 0 2px 12px rgba(18, 46, 138, 0.05);
+
+  /* 图表颜色 */
+  --agent-chart-grid: rgba(18, 46, 138, 0.1);
+  --agent-chart-axis: #5B6B9E;
+  --agent-chart-tooltip-bg: #FFFFFF;
+  --agent-chart-tooltip-border: 1px solid rgba(18, 46, 138, 0.12);
+
+  /* 输入框聚焦 */
+  --agent-input-focus-border: rgba(18, 46, 138, 0.35);
+  --agent-input-focus-shadow: 0 0 0 3px rgba(18, 46, 138, 0.06);
+
+  /* 滚动条 */
+  --agent-scrollbar-thumb: #C4B5A5;
+  --agent-scrollbar-thumb-hover: #A89A8A;
+
+  /* 模态覆盖 */
+  --agent-modal-overlay: rgba(18, 46, 138, 0.25);
+}
+
+/* Scrollbar Styles */
+.agent-sidebar::-webkit-scrollbar,
+.agent-panel::-webkit-scrollbar {
+  width: 3px;
+}
+
+.agent-sidebar::-webkit-scrollbar-track,
+.agent-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.agent-sidebar::-webkit-scrollbar-thumb,
+.agent-panel::-webkit-scrollbar-thumb {
+  background: var(--agent-bg-hover);
+  border-radius: 10px;
+}
+
+/* Index Row */
+.agent-index-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--agent-transition-fast);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.agent-index-row:hover {
+  background: var(--agent-bg-hover);
+}
+
+.agent-index-row .idx-name {
+  color: var(--agent-text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.agent-index-row .idx-price {
+  color: var(--agent-text-primary);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.agent-idx-change {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 14px;
+  min-width: 52px;
+  text-align: center;
+}
+
+.agent-idx-change.up {
+  background: var(--agent-green-bg);
+  color: var(--agent-green);
+}
+
+.agent-idx-change.down {
+  background: var(--agent-red-bg);
+  color: var(--agent-red);
+}
+
+/* Watchlist Item */
+.agent-watchlist-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--agent-transition-fast);
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 1px;
+}
+
+.agent-watchlist-item:hover {
+  background: var(--agent-bg-hover);
+}
+
+.agent-watchlist-item.selected {
+  background: var(--agent-gold-muted);
+}
+
+.agent-watchlist-item .wl-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-watchlist-item .wl-name {
+  color: var(--agent-text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-watchlist-item .wl-code {
+  font-size: 10px;
+  color: var(--agent-text-dim);
+  letter-spacing: 0.3px;
+}
+
+.agent-watchlist-item .wl-price {
+  font-weight: 600;
+  color: var(--agent-text-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+  white-space: nowrap;
+}
+
+.agent-wl-change {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 12px;
+  min-width: 48px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.agent-wl-change.up {
+  background: var(--agent-green-bg);
+  color: var(--agent-green);
+}
+
+.agent-wl-change.down {
+  background: var(--agent-red-bg);
+  color: var(--agent-red);
+}
+
+/* Sector Row — 北向资金增持板块 */
+.agent-sector-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--agent-transition-fast);
+  border-left: 2px solid transparent;
+}
+
+.agent-sector-row.rise {
+  border-left-color: var(--agent-green);
+}
+
+.agent-sector-row.fall {
+  border-left-color: var(--agent-red);
+}
+
+.agent-sector-row:hover {
+  background: var(--agent-bg-hover);
+}
+
+/* keep old tags for backward compatibility */
+.agent-sector-tag {
+  display: inline-block;
+  padding: 5px 11px;
+  border-radius: 16px;
+  font-size: 11px;
+  font-weight: 500;
+  margin: 3px 4px 3px 0;
+  cursor: pointer;
+  transition: all var(--agent-transition-fast);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.agent-sector-tag.hot {
+  background: var(--agent-gold-muted);
+  color: var(--agent-gold);
+  border-color: var(--agent-border-light);
+}
+
+.agent-sector-tag.rise {
+  background: var(--agent-green-bg);
+  color: var(--agent-green);
+  border-color: var(--agent-green-bg);
+}
+
+.agent-sector-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--agent-shadow-card);
+}
+
+/* Section Title */
+.agent-sec-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--agent-text-dim);
+  margin-bottom: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-sec-title i {
+  font-size: 10px;
+  color: var(--agent-gold);
+  opacity: 0.7;
+}
+
+/* Panel Section */
+.agent-panel-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--agent-border-subtle);
+}
+
+.agent-panel-section:last-child {
+  border-bottom: none;
+}
+
+/* Stock Hero */
+.agent-stock-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-stock-hero .hero-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--agent-text-primary);
+  letter-spacing: 0.3px;
+}
+
+.agent-stock-hero .hero-code {
+  font-size: 11px;
+  color: var(--agent-text-dim);
+  letter-spacing: 0.4px;
+}
+
+.agent-stock-hero .hero-price {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--agent-text-primary);
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.agent-hero-change-badge {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 16px;
+}
+
+.agent-hero-change-badge.up {
+  background: var(--agent-green-bg);
+  color: var(--agent-green);
+}
+
+.agent-hero-change-badge.down {
+  background: var(--agent-red-bg);
+  color: var(--agent-red);
+}
+
+/* Detail Row */
+.agent-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12.5px;
+  color: var(--agent-text-secondary);
+  border-bottom: 1px solid var(--agent-border-subtle);
+}
+
+.agent-detail-row .dl {
+  color: var(--agent-text-dim);
+}
+
+.agent-detail-row .dv {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.agent-detail-row .dv.green {
+  color: var(--agent-green);
+}
+
+.agent-detail-row .dv.red {
+  color: var(--agent-red);
+}
+
+/* Flow Bar */
+.agent-flow-bar-wrap {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.agent-flow-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 10px;
+  background: var(--agent-bg-hover);
+  overflow: hidden;
+  display: flex;
+}
+
+.agent-flow-bar .flow-in {
+  background: var(--agent-green);
+  border-radius: 10px 0 0 10px;
+}
+
+.agent-flow-bar .flow-out {
+  background: var(--agent-red);
+  border-radius: 0 10px 10px 0;
+}
+
+/* AI Note */
+.agent-ai-note {
+  background: var(--agent-bg-bubble);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--agent-text-muted);
+  line-height: 1.6;
+  border-left: 3px solid var(--agent-gold);
+}
+
+.agent-ai-note strong {
+  color: var(--agent-text-secondary);
+}
+
+/* News Item */
+.agent-news-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--agent-border-subtle);
+  cursor: pointer;
+  transition: color var(--agent-transition-fast);
+  font-size: 12px;
+  color: var(--agent-text-muted);
+  line-height: 1.5;
+}
+
+.agent-news-item:hover {
+  color: var(--agent-text-secondary);
+}
+
+.agent-news-item .news-time {
+  font-size: 10px;
+  color: var(--agent-text-extra-dim);
+  display: block;
+  margin-top: 2px;
+}
+
+/* @提及 样式 */
+.stock-mention:hover {
+  color: var(--agent-gold) !important;
+  background: var(--agent-gold-muted);
+  border-radius: 4px;
+  padding: 0 2px;
+  margin: 0 -2px;
+}
+
+/* ===== 修复深色背景下 markdown 文字颜色 ===== */
+[data-theme="dark"] #trading-agent-container .markdown-content,
+[data-theme="dark"] #trading-agent-container .markdown-content p,
+[data-theme="dark"] #trading-agent-container .markdown-content td,
+[data-theme="dark"] #trading-agent-container .markdown-content th,
+[data-theme="dark"] #trading-agent-container .markdown-content li,
+[data-theme="dark"] #trading-agent-container .markdown-content blockquote,
+[data-theme="dark"] #trading-agent-container .markdown-content code:not(.hljs),
+[data-theme="dark"] #trading-agent-container .markdown-content h1,
+[data-theme="dark"] #trading-agent-container .markdown-content h2,
+[data-theme="dark"] #trading-agent-container .markdown-content h3,
+[data-theme="dark"] #trading-agent-container .markdown-content h4,
+[data-theme="dark"] #trading-agent-container .markdown-content h5,
+[data-theme="dark"] #trading-agent-container .markdown-content h6,
+[data-theme="dark"] #trading-agent-container .markdown-content strong,
+[data-theme="dark"] #trading-agent-container .markdown-content em,
+[data-theme="dark"] #trading-agent-container .markdown-content a {
+  color: #e6edf3;
+}
+
+[data-theme="dark"] #trading-agent-container .markdown-content th {
+  background: #1a2432;
+  color: #f0f4fa;
+  font-weight: 600;
+  border-color: rgba(255, 215, 0, 0.08);
+}
+[data-theme="dark"] #trading-agent-container .markdown-content td {
+  background: transparent;
+  border-color: rgba(255, 215, 0, 0.05);
+}
+[data-theme="dark"] #trading-agent-container .markdown-content table {
+  border-color: rgba(255, 215, 0, 0.1);
+}
+
+[data-theme="dark"] #trading-agent-container .markdown-content blockquote {
+  color: #8892a4;
+  border-left-color: var(--agent-gold);
+}
+
+[data-theme="dark"] #trading-agent-container .markdown-content code:not(.hljs) {
+  color: var(--agent-gold);
+  background: rgba(240, 185, 11, 0.1);
+}
+
+[data-theme="dark"] #trading-agent-container .markdown-content a {
+  color: var(--agent-gold);
+}
+
+[data-theme="dark"] #trading-agent-container assistant-message .markdown-content markdown-block {
+  color: #e6edf5;
+}
+
+[data-theme="dark"] #trading-agent-container user-message .markdown-content markdown-block {
+  color: var(--agent-text-primary);
+}
+
+/* ================================================================
+   TopNav 样式 — 使用 CSS 变量实现主题切换
+   ================================================================ */
+.top-nav {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  background: var(--topnav-bg);
+  border-bottom: 1px solid var(--topnav-border);
+  flex-shrink: 0;
+  z-index: 100;
+  gap: 16px;
+}
+
+.top-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: fit-content;
+}
+
+.top-nav-avatar {
+  width: 36px;
+  height: 36px;
+  background: var(--topnav-avatar-bg);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(212, 164, 7, 0.3);
+  flex-shrink: 0;
+}
+
+.top-nav-brand-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--topnav-brand-title);
+  display: block;
+  line-height: 1.2;
+}
+
+.top-nav-brand-sub {
+  font-size: 10px;
+  color: var(--topnav-brand-sub);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 1px;
+}
+
+.top-nav-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  background: var(--topnav-status-dot);
+  border-radius: 50%;
+}
+
+.top-nav-menu {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+
+.top-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--topnav-link-color);
+  text-decoration: none;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.top-nav-link:hover {
+  color: var(--topnav-link-active-color);
+  background: var(--topnav-link-active-bg);
+}
+
+.top-nav-link.active {
+  color: var(--topnav-link-active-color);
+  background: var(--topnav-link-active-bg);
+}
+
+.top-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.top-nav-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.top-nav-status-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--topnav-status-dot);
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(46, 204, 113, 0.4);
+}
+
+.top-nav-status-text {
+  font-size: 11px;
+  color: var(--topnav-status-text);
+  white-space: nowrap;
+}
+
+/* 主题切换按钮 */
+.theme-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--topnav-border);
+  background: transparent;
+  color: var(--topnav-link-color);
+  cursor: pointer;
+  transition: all 0.2s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.theme-toggle-btn:hover {
+  color: var(--topnav-link-active-color);
+  background: var(--topnav-link-active-bg);
+}
+
+.theme-toggle-btn svg {
+  width: 16px;
+  height: 16px;
+}

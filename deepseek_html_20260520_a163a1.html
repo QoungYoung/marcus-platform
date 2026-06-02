@@ -1,0 +1,1569 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>股智通 · 股票智能助理 | PC终端</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <style>
+        :root {
+            --bg-deep: #0b0e14;
+            --bg-main: #11161e;
+            --bg-card: #0d121b;
+            --bg-bubble: #1a2432;
+            --bg-input: #1a2432;
+            --bg-hover: #1f2a38;
+            --gold: #f0b90b;
+            --gold-dark: #d4a407;
+            --gold-muted: rgba(240, 185, 11, 0.12);
+            --gold-border: rgba(255, 215, 0, 0.08);
+            --text-primary: #f0f4fa;
+            --text-secondary: #c8d6e5;
+            --text-muted: #8a9bb5;
+            --text-dim: #6a7d9b;
+            --text-extra-dim: #4a5d78;
+            --green: #2ecc71;
+            --green-bg: rgba(46, 204, 113, 0.15);
+            --red: #e74c3c;
+            --red-bg: rgba(231, 76, 60, 0.15);
+            --border-subtle: rgba(255, 215, 0, 0.05);
+            --border-light: rgba(255, 215, 0, 0.07);
+            --border-input: rgba(255, 215, 0, 0.06);
+            --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.7);
+            --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.3);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --radius-2xl: 24px;
+            --transition-fast: 0.2s;
+            --transition-smooth: 0.25s;
+            --sidebar-width: 278px;
+            --panel-width: 310px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        html,
+        body {
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-deep);
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            color: var(--text-primary);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* ===== 顶部导航栏 ===== */
+        .top-nav {
+            height: 52px;
+            min-height: 52px;
+            background: var(--bg-main);
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 22px;
+            z-index: 10;
+            box-shadow: 0 1px 8px rgba(0, 0, 0, 0.3);
+            gap: 16px;
+            flex-shrink: 0;
+        }
+        .top-nav .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .top-nav .nav-brand .logo-icon {
+            width: 34px;
+            height: 34px;
+            background: linear-gradient(145deg, var(--gold), var(--gold-dark));
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 17px;
+            color: #0b0e14;
+            box-shadow: 0 3px 10px rgba(212, 164, 7, 0.25);
+        }
+        .top-nav .nav-brand span {
+            font-weight: 700;
+            font-size: 16px;
+            color: var(--text-primary);
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+        }
+        .top-nav .nav-brand span .accent {
+            color: var(--gold);
+        }
+        .top-nav .nav-search {
+            flex: 1;
+            max-width: 380px;
+            min-width: 180px;
+            position: relative;
+        }
+        .top-nav .nav-search input {
+            width: 100%;
+            background: var(--bg-input);
+            border: 1px solid var(--border-input);
+            border-radius: 24px;
+            padding: 9px 16px 9px 38px;
+            color: var(--text-primary);
+            font-size: 13px;
+            outline: none;
+            transition: border var(--transition-smooth), box-shadow var(--transition-smooth);
+        }
+        .top-nav .nav-search input::placeholder {
+            color: var(--text-extra-dim);
+        }
+        .top-nav .nav-search input:focus {
+            border-color: rgba(240, 185, 11, 0.35);
+            box-shadow: 0 0 0 3px rgba(240, 185, 11, 0.04);
+        }
+        .top-nav .nav-search .search-icon {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-dim);
+            font-size: 13px;
+            pointer-events: none;
+        }
+        .top-nav .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            flex-shrink: 0;
+        }
+        .top-nav .nav-actions i {
+            font-size: 17px;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: color var(--transition-fast);
+            padding: 4px;
+        }
+        .top-nav .nav-actions i:hover {
+            color: var(--gold);
+        }
+        .top-nav .nav-actions .user-avatar-sm {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--bg-hover);
+            border: 2px solid rgba(240, 185, 11, 0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--gold);
+            font-size: 13px;
+            cursor: pointer;
+            transition: border-color var(--transition-fast);
+        }
+        .top-nav .nav-actions .user-avatar-sm:hover {
+            border-color: var(--gold);
+        }
+        .mobile-menu-btn {
+            display: none;
+            font-size: 20px;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: color var(--transition-fast), background var(--transition-fast);
+        }
+        .mobile-menu-btn:hover {
+            color: var(--gold);
+            background: var(--bg-hover);
+        }
+
+        /* ===== 主布局容器 ===== */
+        .main-layout {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+            min-height: 0;
+        }
+
+        /* ===== 左侧边栏 ===== */
+        .sidebar-left {
+            width: var(--sidebar-width);
+            min-width: var(--sidebar-width);
+            background: var(--bg-card);
+            border-right: 1px solid var(--border-light);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
+            flex-shrink: 0;
+            transition: transform var(--transition-smooth), opacity var(--transition-smooth);
+        }
+        .sidebar-left::-webkit-scrollbar {
+            width: 3px;
+        }
+        .sidebar-left::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .sidebar-left::-webkit-scrollbar-thumb {
+            background: #2a3647;
+            border-radius: 10px;
+        }
+        .sidebar-section {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .sidebar-section:last-child {
+            border-bottom: none;
+        }
+        .sidebar-section .sec-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .sidebar-section .sec-title i {
+            font-size: 10px;
+            color: var(--gold);
+            opacity: 0.7;
+        }
+        .index-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 10px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: background var(--transition-fast);
+            font-size: 13px;
+            margin-bottom: 2px;
+        }
+        .index-row:hover {
+            background: var(--bg-hover);
+        }
+        .index-row .idx-name {
+            color: var(--text-secondary);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .index-row .idx-price {
+            color: var(--text-primary);
+            font-weight: 600;
+            letter-spacing: 0.2px;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+        }
+        .index-row .idx-change {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 14px;
+            min-width: 52px;
+            text-align: center;
+        }
+        .idx-change.up {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+        .idx-change.down {
+            background: var(--red-bg);
+            color: var(--red);
+        }
+
+        .watchlist-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 10px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: background var(--transition-fast);
+            gap: 8px;
+            font-size: 13px;
+            margin-bottom: 1px;
+        }
+        .watchlist-item:hover {
+            background: var(--bg-hover);
+        }
+        .watchlist-item .wl-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+        .watchlist-item .wl-name {
+            color: var(--text-secondary);
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .watchlist-item .wl-code {
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 0.3px;
+        }
+        .watchlist-item .wl-price {
+            font-weight: 600;
+            color: var(--text-primary);
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+            white-space: nowrap;
+        }
+        .watchlist-item .wl-change {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 12px;
+            min-width: 48px;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .sector-tag {
+            display: inline-block;
+            padding: 5px 11px;
+            border-radius: 16px;
+            font-size: 11px;
+            font-weight: 500;
+            margin: 3px 4px 3px 0;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            border: 1px solid transparent;
+            white-space: nowrap;
+        }
+        .sector-tag.hot {
+            background: rgba(240, 185, 11, 0.08);
+            color: var(--gold);
+            border-color: rgba(240, 185, 11, 0.18);
+        }
+        .sector-tag.rise {
+            background: var(--green-bg);
+            color: var(--green);
+            border-color: rgba(46, 204, 113, 0.2);
+        }
+        .sector-tag:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-card);
+        }
+
+        /* ===== 中央聊天容器 ===== */
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 380px;
+            max-width: 680px;
+            margin: 0 auto;
+            background: var(--bg-main);
+            border-left: 1px solid var(--border-subtle);
+            border-right: 1px solid var(--border-subtle);
+            position: relative;
+            overflow: hidden;
+        }
+        .chat-header {
+            padding: 14px 20px 12px 20px;
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(180deg, #131b26 0%, #11161e 100%);
+            flex-shrink: 0;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header-left .avatar {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(145deg, var(--gold), var(--gold-dark));
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            color: #0b0e14;
+            box-shadow: 0 3px 10px rgba(212, 164, 7, 0.3);
+            flex-shrink: 0;
+        }
+        .header-info h2 {
+            color: var(--text-primary);
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+        }
+        .header-info .sub {
+            color: var(--text-dim);
+            font-size: 11px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 2px;
+        }
+        .header-info .sub .dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background: var(--green);
+            border-radius: 50%;
+            animation: pulse-dot 1.6s infinite;
+        }
+        @keyframes pulse-dot {
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.4;
+                transform: scale(0.8);
+            }
+        }
+        .header-right {
+            display: flex;
+            gap: 12px;
+            color: var(--text-dim);
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+        .header-right i {
+            cursor: pointer;
+            transition: color var(--transition-fast);
+            padding: 2px;
+        }
+        .header-right i:hover {
+            color: var(--gold);
+        }
+
+        /* 迷你行情条 */
+        .market-ticker {
+            background: var(--bg-card);
+            padding: 8px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .ticker-item {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .ticker-item .symbol {
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        .ticker-item .price {
+            color: var(--text-primary);
+            letter-spacing: 0.2px;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+        }
+        .ticker-item .change {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 14px;
+            background: var(--green-bg);
+            color: var(--green);
+        }
+        .ticker-item .change.down {
+            background: var(--red-bg);
+            color: var(--red);
+        }
+        .ticker-divider {
+            width: 1px;
+            height: 20px;
+            background: rgba(255, 215, 0, 0.06);
+            flex-shrink: 0;
+        }
+
+        /* 聊天消息区 */
+        .chat-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 18px 8px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            scroll-behavior: smooth;
+            background: var(--bg-main);
+            position: relative;
+        }
+        .chat-body::-webkit-scrollbar {
+            width: 4px;
+        }
+        .chat-body::-webkit-scrollbar-track {
+            background: #0d121b;
+        }
+        .chat-body::-webkit-scrollbar-thumb {
+            background: #2a3647;
+            border-radius: 10px;
+        }
+        .chat-body::before {
+            content: '';
+            position: absolute;
+            top: 40px;
+            right: -40px;
+            width: 200px;
+            height: 200px;
+            background: radial-gradient(circle at 30% 40%, rgba(240, 185, 11, 0.015) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* 消息气泡 */
+        .message {
+            display: flex;
+            gap: 10px;
+            max-width: 88%;
+            animation: msgIn 0.35s ease-out;
+            position: relative;
+            z-index: 1;
+        }
+        @keyframes msgIn {
+            0% {
+                opacity: 0;
+                transform: translateY(12px) scale(0.97);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+        .message.bot {
+            align-self: flex-start;
+        }
+        .message.user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+        }
+        .message .msg-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 10px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 15px;
+            background: var(--bg-hover);
+            color: var(--text-muted);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        .message.bot .msg-avatar {
+            background: linear-gradient(145deg, var(--gold), var(--gold-dark));
+            color: #0b0e14;
+        }
+        .message.user .msg-avatar {
+            background: var(--bg-hover);
+            color: var(--gold);
+            border: 1px solid rgba(240, 185, 11, 0.2);
+        }
+        .message .bubble {
+            padding: 12px 16px;
+            border-radius: 18px;
+            font-size: 13.5px;
+            line-height: 1.65;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            position: relative;
+            word-break: break-word;
+        }
+        .message.bot .bubble {
+            background: var(--bg-bubble);
+            color: #e6edf5;
+            border-bottom-left-radius: 6px;
+            border-left: 3px solid var(--gold);
+        }
+        .message.user .bubble {
+            background: #0d1a2b;
+            color: var(--text-primary);
+            border-bottom-right-radius: 6px;
+            border-right: 3px solid var(--gold);
+        }
+        .bubble .timestamp {
+            display: block;
+            font-size: 10px;
+            color: #5a6f8a;
+            margin-top: 6px;
+            text-align: right;
+            letter-spacing: 0.2px;
+        }
+        .bubble .tag {
+            display: inline-block;
+            background: var(--gold-muted);
+            color: var(--gold);
+            padding: 0 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-right: 4px;
+        }
+        .bubble .tag.red {
+            background: var(--red-bg);
+            color: var(--red);
+        }
+        .bubble .tag.green {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+        .bubble .inline-chart {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 6px 0 4px 0;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .bubble .inline-chart .mini-k {
+            display: inline-block;
+            width: 40px;
+            height: 20px;
+            background: linear-gradient(90deg, #2ecc71 0%, #2ecc71 30%, #e74c3c 30%, #e74c3c 60%, #2ecc71 60%, #2ecc71 100%);
+            border-radius: 3px;
+            opacity: 0.7;
+        }
+        .bubble .inline-chart .mini-k.down {
+            background: linear-gradient(90deg, #e74c3c 0%, #e74c3c 40%, #2ecc71 40%, #2ecc71 70%, #e74c3c 70%, #e74c3c 100%);
+        }
+
+        /* 建议卡片 */
+        .suggest-card {
+            background: var(--bg-card);
+            border: 1px solid var(--gold-border);
+            border-radius: var(--radius-lg);
+            padding: 12px 14px;
+            margin-top: 4px;
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+        .suggest-card .s-title {
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .suggest-card .s-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-secondary);
+            font-size: 12.5px;
+        }
+        .suggest-card .s-row .label {
+            color: var(--text-dim);
+        }
+        .suggest-card .s-row .value {
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+        }
+        .suggest-card .s-row .value.green {
+            color: var(--green);
+        }
+        .suggest-card .s-row .value.red {
+            color: var(--red);
+        }
+        .suggest-card .s-row .value.gold {
+            color: var(--gold);
+        }
+
+        /* 底部输入区 */
+        .chat-footer {
+            padding: 12px 16px 16px 16px;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .chat-footer .input-wrapper {
+            flex: 1;
+            background: var(--bg-input);
+            border-radius: 28px;
+            padding: 4px 4px 4px 18px;
+            display: flex;
+            align-items: center;
+            border: 1px solid var(--border-input);
+            transition: border var(--transition-smooth), box-shadow var(--transition-smooth);
+        }
+        .chat-footer .input-wrapper:focus-within {
+            border-color: rgba(240, 185, 11, 0.3);
+            box-shadow: 0 0 0 3px rgba(240, 185, 11, 0.05);
+        }
+        .chat-footer .input-wrapper input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-primary);
+            font-size: 13.5px;
+            padding: 10px 0;
+        }
+        .chat-footer .input-wrapper input::placeholder {
+            color: var(--text-extra-dim);
+            font-weight: 400;
+        }
+        .chat-footer .input-wrapper .btn-send {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(145deg, var(--gold), var(--gold-dark));
+            border: none;
+            color: #0b0e14;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(212, 164, 7, 0.25);
+            flex-shrink: 0;
+        }
+        .chat-footer .input-wrapper .btn-send:hover {
+            transform: scale(1.04);
+            box-shadow: 0 6px 18px rgba(212, 164, 7, 0.35);
+        }
+        .chat-footer .input-wrapper .btn-send:active {
+            transform: scale(0.94);
+        }
+        .chat-footer .extra-tools {
+            display: flex;
+            gap: 4px;
+            color: var(--text-extra-dim);
+            font-size: 17px;
+            flex-shrink: 0;
+        }
+        .chat-footer .extra-tools i {
+            cursor: pointer;
+            transition: color var(--transition-fast);
+            padding: 6px;
+            border-radius: 50%;
+        }
+        .chat-footer .extra-tools i:hover {
+            color: var(--gold);
+            background: var(--bg-hover);
+        }
+
+        /* ===== 右侧详情面板 ===== */
+        .panel-right {
+            width: var(--panel-width);
+            min-width: var(--panel-width);
+            background: var(--bg-card);
+            border-left: 1px solid var(--border-light);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
+            flex-shrink: 0;
+            transition: transform var(--transition-smooth), opacity var(--transition-smooth);
+        }
+        .panel-right::-webkit-scrollbar {
+            width: 3px;
+        }
+        .panel-right::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .panel-right::-webkit-scrollbar-thumb {
+            background: #2a3647;
+            border-radius: 10px;
+        }
+        .panel-section {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .panel-section:last-child {
+            border-bottom: none;
+        }
+        .panel-section .sec-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .panel-section .sec-title i {
+            font-size: 10px;
+            color: var(--gold);
+            opacity: 0.7;
+        }
+        .stock-hero {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .stock-hero .hero-name {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: 0.3px;
+        }
+        .stock-hero .hero-code {
+            font-size: 11px;
+            color: var(--text-dim);
+            letter-spacing: 0.4px;
+        }
+        .stock-hero .hero-price {
+            font-size: 26px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: 0.5px;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+        }
+        .stock-hero .hero-change-badge {
+            font-size: 13px;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 16px;
+        }
+        .hero-change-badge.up {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+        .hero-change-badge.down {
+            background: var(--red-bg);
+            color: var(--red);
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 12.5px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+        }
+        .detail-row .dl {
+            color: var(--text-dim);
+        }
+        .detail-row .dv {
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+        }
+        .detail-row .dv.green {
+            color: var(--green);
+        }
+        .detail-row .dv.red {
+            color: var(--red);
+        }
+        .flow-bar-wrap {
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11px;
+        }
+        .flow-bar {
+            flex: 1;
+            height: 8px;
+            border-radius: 10px;
+            background: #1f2a38;
+            overflow: hidden;
+            display: flex;
+        }
+        .flow-bar .flow-in {
+            background: var(--green);
+            border-radius: 10px 0 0 10px;
+        }
+        .flow-bar .flow-out {
+            background: var(--red);
+            border-radius: 0 10px 10px 0;
+        }
+        .ai-note {
+            background: var(--bg-bubble);
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.6;
+            border-left: 3px solid var(--gold);
+        }
+        .ai-note strong {
+            color: var(--text-secondary);
+        }
+        .news-item {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            cursor: pointer;
+            transition: color var(--transition-fast);
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+        .news-item:hover {
+            color: var(--text-secondary);
+        }
+        .news-item .news-time {
+            font-size: 10px;
+            color: var(--text-extra-dim);
+            display: block;
+            margin-top: 2px;
+        }
+
+        /* ===== 响应式设计 ===== */
+        @media (max-width: 1280px) {
+            :root {
+                --sidebar-width: 240px;
+                --panel-width: 270px;
+            }
+            .chat-container {
+                max-width: 560px;
+            }
+            .top-nav .nav-search {
+                max-width: 280px;
+            }
+        }
+        @media (max-width: 1024px) {
+            :root {
+                --sidebar-width: 220px;
+                --panel-width: 0px;
+            }
+            .panel-right {
+                display: none;
+            }
+            .chat-container {
+                max-width: 600px;
+            }
+            .top-nav .nav-search {
+                max-width: 220px;
+            }
+        }
+        @media (max-width: 768px) {
+            :root {
+                --sidebar-width: 0px;
+            }
+            .sidebar-left {
+                position: fixed;
+                left: 0;
+                top: 52px;
+                bottom: 0;
+                z-index: 50;
+                width: 270px;
+                min-width: 270px;
+                transform: translateX(-100%);
+                box-shadow: var(--shadow-lg);
+                border-right: 1px solid var(--border-light);
+            }
+            .sidebar-left.open {
+                transform: translateX(0);
+            }
+            .panel-right {
+                display: none;
+            }
+            .chat-container {
+                max-width: 100%;
+                border-left: none;
+                border-right: none;
+                min-width: 0;
+            }
+            .mobile-menu-btn {
+                display: block;
+            }
+            .top-nav .nav-search {
+                max-width: 180px;
+                min-width: 120px;
+            }
+            .top-nav .nav-brand span {
+                font-size: 14px;
+            }
+            .market-ticker {
+                padding: 6px 12px;
+                gap: 3px;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+            }
+            .ticker-divider {
+                display: none;
+            }
+            .ticker-item {
+                font-size: 10px;
+                gap: 4px;
+                flex-shrink: 0;
+            }
+            .chat-body {
+                padding: 12px 10px 6px 10px;
+                gap: 10px;
+            }
+            .message {
+                max-width: 94%;
+            }
+            .message .bubble {
+                font-size: 12.5px;
+                padding: 10px 14px;
+            }
+            .chat-footer {
+                padding: 10px 10px 14px 10px;
+                gap: 6px;
+            }
+        }
+        @media (max-width: 480px) {
+            .top-nav {
+                padding: 0 10px;
+                gap: 8px;
+            }
+            .top-nav .nav-search {
+                max-width: 140px;
+                min-width: 100px;
+            }
+            .top-nav .nav-search input {
+                padding: 8px 12px 8px 30px;
+                font-size: 12px;
+            }
+            .top-nav .nav-actions {
+                gap: 8px;
+            }
+            .top-nav .nav-actions i {
+                font-size: 14px;
+            }
+            .header-info h2 {
+                font-size: 14px;
+            }
+            .chat-body {
+                padding: 10px 6px 4px 6px;
+            }
+            .message .bubble {
+                font-size: 12px;
+                padding: 10px 12px;
+                border-radius: 14px;
+            }
+        }
+
+        /* ===== 侧边栏遮罩 (移动端) ===== */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            inset: 52px 0 0 0;
+            background: rgba(0, 0, 0, 0.55);
+            z-index: 45;
+            opacity: 0;
+            transition: opacity var(--transition-smooth);
+            pointer-events: none;
+        }
+        .sidebar-overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        @media (max-width: 768px) {
+            .sidebar-overlay {
+                display: block;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 顶部导航栏 -->
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <div class="logo-icon"><i class="fas fa-chart-line"></i></div>
+            <span>股智通<span class="accent">·AI</span></span>
+        </div>
+        <div class="nav-search">
+            <i class="fas fa-search search-icon"></i>
+            <input type="text" placeholder="搜索股票代码 / 名称..." />
+        </div>
+        <div class="nav-actions">
+            <i class="fas fa-bell"></i>
+            <i class="fas fa-cog"></i>
+            <div class="user-avatar-sm"><i class="fas fa-user"></i></div>
+            <i class="fas fa-bars mobile-menu-btn" id="mobileMenuBtn" title="菜单"></i>
+        </div>
+    </nav>
+
+    <!-- 移动端侧边栏遮罩 -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- 主布局 -->
+    <div class="main-layout">
+
+        <!-- 左侧边栏：市场概览 & 自选股 -->
+        <aside class="sidebar-left" id="sidebarLeft">
+            <div class="sidebar-section">
+                <div class="sec-title"><i class="fas fa-globe-asia"></i> 市场指数</div>
+                <div class="index-row">
+                    <span class="idx-name">上证指数</span>
+                    <span class="idx-price">3,147.35</span>
+                    <span class="idx-change up">+0.68%</span>
+                </div>
+                <div class="index-row">
+                    <span class="idx-name">深证成指</span>
+                    <span class="idx-price">9,682.16</span>
+                    <span class="idx-change down">-0.23%</span>
+                </div>
+                <div class="index-row">
+                    <span class="idx-name">创业板指</span>
+                    <span class="idx-price">1,824.52</span>
+                    <span class="idx-change up">+1.12%</span>
+                </div>
+                <div class="index-row">
+                    <span class="idx-name">科创50</span>
+                    <span class="idx-price">876.30</span>
+                    <span class="idx-change up">+1.85%</span>
+                </div>
+                <div class="index-row">
+                    <span class="idx-name">恒生指数</span>
+                    <span class="idx-price">17,892.4</span>
+                    <span class="idx-change down">-0.41%</span>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sec-title"><i class="fas fa-star"></i> 自选股</div>
+                <div class="watchlist-item">
+                    <div class="wl-info">
+                        <span class="wl-name">宁德时代</span>
+                        <span class="wl-code">300750</span>
+                    </div>
+                    <div>
+                        <span class="wl-price">¥218.60</span>
+                        <span class="wl-change up" style="display:block;margin-top:2px;">+2.34%</span>
+                    </div>
+                </div>
+                <div class="watchlist-item">
+                    <div class="wl-info">
+                        <span class="wl-name">贵州茅台</span>
+                        <span class="wl-code">600519</span>
+                    </div>
+                    <div>
+                        <span class="wl-price">¥1,689.00</span>
+                        <span class="wl-change down" style="display:block;margin-top:2px;">-0.87%</span>
+                    </div>
+                </div>
+                <div class="watchlist-item">
+                    <div class="wl-info">
+                        <span class="wl-name">中科曙光</span>
+                        <span class="wl-code">603019</span>
+                    </div>
+                    <div>
+                        <span class="wl-price">¥52.18</span>
+                        <span class="wl-change up" style="display:block;margin-top:2px;">+5.12%</span>
+                    </div>
+                </div>
+                <div class="watchlist-item">
+                    <div class="wl-info">
+                        <span class="wl-name">东方财富</span>
+                        <span class="wl-code">300059</span>
+                    </div>
+                    <div>
+                        <span class="wl-price">¥18.95</span>
+                        <span class="wl-change up" style="display:block;margin-top:2px;">+3.47%</span>
+                    </div>
+                </div>
+                <div class="watchlist-item">
+                    <div class="wl-info">
+                        <span class="wl-name">比亚迪</span>
+                        <span class="wl-code">002594</span>
+                    </div>
+                    <div>
+                        <span class="wl-price">¥248.50</span>
+                        <span class="wl-change up" style="display:block;margin-top:2px;">+1.68%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sec-title"><i class="fas fa-fire"></i> 热门板块</div>
+                <span class="sector-tag hot">AI算力</span>
+                <span class="sector-tag rise">券商</span>
+                <span class="sector-tag rise">新能源</span>
+                <span class="sector-tag hot">半导体</span>
+                <span class="sector-tag rise">创新药</span>
+            </div>
+        </aside>
+
+        <!-- 中央聊天区域 -->
+        <main class="chat-container">
+            <!-- 聊天头部 -->
+            <div class="chat-header">
+                <div class="header-left">
+                    <div class="avatar"><i class="fas fa-robot"></i></div>
+                    <div class="header-info">
+                        <h2>股智通 · AI</h2>
+                        <div class="sub">
+                            <span class="dot"></span>
+                            实时行情 · 深度分析
+                        </div>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <i class="fas fa-phone-alt" title="语音通话"></i>
+                    <i class="fas fa-ellipsis-v" title="更多"></i>
+                </div>
+            </div>
+
+            <!-- 迷你行情条 -->
+            <div class="market-ticker">
+                <div class="ticker-item">
+                    <span class="symbol">上证</span>
+                    <span class="price">3,147.35</span>
+                    <span class="change">+0.68%</span>
+                </div>
+                <span class="ticker-divider"></span>
+                <div class="ticker-item">
+                    <span class="symbol">深证</span>
+                    <span class="price">9,682.16</span>
+                    <span class="change down">-0.23%</span>
+                </div>
+                <span class="ticker-divider"></span>
+                <div class="ticker-item">
+                    <span class="symbol">创业板</span>
+                    <span class="price">1,824.52</span>
+                    <span class="change">+1.12%</span>
+                </div>
+                <span class="ticker-divider"></span>
+                <div class="ticker-item">
+                    <span class="symbol">北向</span>
+                    <span class="price">+28.6亿</span>
+                    <span class="change">净流入</span>
+                </div>
+            </div>
+
+            <!-- 聊天消息 -->
+            <div class="chat-body" id="chatBody">
+                <!-- 机器人消息 1 -->
+                <div class="message bot">
+                    <div class="msg-avatar"><i class="fas fa-robot"></i></div>
+                    <div class="bubble">
+                        早上好，交易者！<br />
+                        今日大盘情绪偏暖，<span class="tag green">北向资金</span> 净流入 28.6 亿。
+                        <div class="inline-chart">
+                            <span class="mini-k"></span> 短线多头占优
+                        </div>
+                        <span class="timestamp">09:32</span>
+                    </div>
+                </div>
+                <!-- 用户消息 -->
+                <div class="message user">
+                    <div class="msg-avatar"><i class="fas fa-user"></i></div>
+                    <div class="bubble">
+                        帮我看看 <span class="tag">宁德时代</span> 今天的走势？
+                        <span class="timestamp">09:35</span>
+                    </div>
+                </div>
+                <!-- 机器人消息 2 -->
+                <div class="message bot">
+                    <div class="msg-avatar"><i class="fas fa-robot"></i></div>
+                    <div class="bubble">
+                        好的，以下是 <strong>宁德时代 (300750)</strong> 的实时快照：
+                        <div class="suggest-card">
+                            <div class="s-title">📊 实时数据</div>
+                            <div class="s-row">
+                                <span class="label">最新价</span>
+                                <span class="value gold">¥218.60</span>
+                            </div>
+                            <div class="s-row">
+                                <span class="label">涨跌幅</span>
+                                <span class="value green">+2.34%</span>
+                            </div>
+                            <div class="s-row">
+                                <span class="label">成交量</span>
+                                <span class="value">32.8 万手</span>
+                            </div>
+                            <div class="s-row">
+                                <span class="label">主力净流入</span>
+                                <span class="value green">+1.26 亿</span>
+                            </div>
+                        </div>
+                        短期趋势偏强，关注 <span class="tag green">支撑位 210</span>。
+                        <span class="timestamp">09:36</span>
+                    </div>
+                </div>
+                <!-- 用户消息 -->
+                <div class="message user">
+                    <div class="msg-avatar"><i class="fas fa-user"></i></div>
+                    <div class="bubble">
+                        那茅台呢？最近有点纠结。
+                        <span class="timestamp">09:40</span>
+                    </div>
+                </div>
+                <!-- 机器人消息 3 -->
+                <div class="message bot">
+                    <div class="msg-avatar"><i class="fas fa-robot"></i></div>
+                    <div class="bubble">
+                        贵州茅台 (600519) 当前 <span class="tag">¥1,689.00</span>
+                        <div class="inline-chart">
+                            <span class="mini-k down"></span> 短线回调
+                        </div>
+                        建议观察 <span class="tag red">1660</span> 支撑，若放量跌破需谨慎。
+                        <div style="margin-top:6px; font-size:11px; color:#6a7d9b;">
+                            <i class="fas fa-lightbulb" style="color:#f0b90b;"></i> 北向资金近期小幅减仓
+                        </div>
+                        <span class="timestamp">09:41</span>
+                    </div>
+                </div>
+                <!-- 用户消息 -->
+                <div class="message user">
+                    <div class="msg-avatar"><i class="fas fa-user"></i></div>
+                    <div class="bubble">
+                        收到，谢谢！帮我推荐两只短线标的。
+                        <span class="timestamp">09:44</span>
+                    </div>
+                </div>
+                <!-- 机器人消息 4 -->
+                <div class="message bot">
+                    <div class="msg-avatar"><i class="fas fa-robot"></i></div>
+                    <div class="bubble">
+                        基于资金流与动量筛选，今日关注：
+                        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                            <span style="background:#1a2432; padding:4px 14px; border-radius:20px; border-left:2px solid #2ecc71;">
+                                <span style="color:#f0b90b;">AI算力</span> <span style="color:#8a9bb5;">+4.2%</span>
+                            </span>
+                            <span style="background:#1a2432; padding:4px 14px; border-radius:20px; border-left:2px solid #f0b90b;">
+                                <span style="color:#f0b90b;">券商</span> <span style="color:#8a9bb5;">+2.8%</span>
+                            </span>
+                        </div>
+                        <div class="suggest-card" style="margin-top:8px;">
+                            <div class="s-row">
+                                <span class="label">🔹 中科曙光</span>
+                                <span class="value green">+5.12%</span>
+                            </div>
+                            <div class="s-row">
+                                <span class="label">🔹 东方财富</span>
+                                <span class="value green">+3.47%</span>
+                            </div>
+                        </div>
+                        注意控制仓位，设好止损。
+                        <span class="timestamp">09:45</span>
+                    </div>
+                </div>
+                <div style="height:4px;"></div>
+            </div>
+
+            <!-- 底部输入 -->
+            <div class="chat-footer">
+                <div class="extra-tools">
+                    <i class="fas fa-plus-circle" title="附件"></i>
+                </div>
+                <div class="input-wrapper">
+                    <input type="text" placeholder="输入股票代码或问题..." id="chatInput" />
+                    <button class="btn-send" title="发送">
+                        <i class="fas fa-arrow-up"></i>
+                    </button>
+                </div>
+                <div class="extra-tools">
+                    <i class="fas fa-microphone" title="语音输入"></i>
+                </div>
+            </div>
+        </main>
+
+        <!-- 右侧详情面板 -->
+        <aside class="panel-right" id="panelRight">
+            <div class="panel-section">
+                <div class="sec-title"><i class="fas fa-chart-bar"></i> 当前关注</div>
+                <div class="stock-hero">
+                    <div>
+                        <div class="hero-name">宁德时代</div>
+                        <div class="hero-code">300750 · 深市</div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div class="hero-price">¥218.60</div>
+                        <span class="hero-change-badge up">+2.34%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="sec-title"><i class="fas fa-info-circle"></i> 关键指标</div>
+                <div class="detail-row"><span class="dl">开盘价</span><span class="dv">¥213.80</span></div>
+                <div class="detail-row"><span class="dl">最高价</span><span class="dv green">¥220.15</span></div>
+                <div class="detail-row"><span class="dl">最低价</span><span class="dv red">¥212.50</span></div>
+                <div class="detail-row"><span class="dl">成交量</span><span class="dv">32.8 万手</span></div>
+                <div class="detail-row"><span class="dl">换手率</span><span class="dv">1.68%</span></div>
+                <div class="detail-row"><span class="dl">市盈率</span><span class="dv">22.4</span></div>
+                <div class="detail-row" style="border-bottom:none;">
+                    <span class="dl">资金流向</span>
+                    <span class="dv green">+1.26 亿</span>
+                </div>
+                <div class="flow-bar-wrap">
+                    <span style="color:#2ecc71;">流入</span>
+                    <div class="flow-bar">
+                        <div class="flow-in" style="width:64%;"></div>
+                        <div class="flow-out" style="width:36%;"></div>
+                    </div>
+                    <span style="color:#e74c3c;">流出</span>
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="sec-title"><i class="fas fa-brain"></i> AI 简评</div>
+                <div class="ai-note">
+                    <strong>短线趋势偏强</strong>，主力资金持续流入。关注 <strong style="color:#2ecc71;">¥210</strong> 支撑位，上方压力位 <strong style="color:#e74c3c;">¥225</strong>。建议轻仓跟进，严格止损。
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="sec-title"><i class="fas fa-newspaper"></i> 相关资讯</div>
+                <div class="news-item">
+                    宁德时代发布新一代钠离子电池，能量密度提升30%...
+                    <span class="news-time">2小时前</span>
+                </div>
+                <div class="news-item">
+                    北向资金连续三日增持宁德时代，累计净买入超8亿...
+                    <span class="news-time">5小时前</span>
+                </div>
+                <div class="news-item" style="border-bottom:none;">
+                    机构研报：维持"买入"评级，目标价上调至¥250...
+                    <span class="news-time">昨日</span>
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- 脚本 -->
+    <script>
+        (function() {
+            const chatBody = document.getElementById('chatBody');
+            const chatInput = document.getElementById('chatInput');
+            const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+            const sidebarLeft = document.getElementById('sidebarLeft');
+            const sidebarOverlay = document.getElementById('sidebarOverlay');
+            const btnSend = document.querySelector('.btn-send');
+
+            // 滚动到底部
+            function scrollToBottom() {
+                if (chatBody) {
+                    chatBody.scrollTop = chatBody.scrollHeight;
+                }
+            }
+            scrollToBottom();
+
+            // 移动端菜单切换
+            function toggleSidebar() {
+                const isOpen = sidebarLeft.classList.contains('open');
+                if (isOpen) {
+                    sidebarLeft.classList.remove('open');
+                    sidebarOverlay.classList.remove('active');
+                } else {
+                    sidebarLeft.classList.add('open');
+                    sidebarOverlay.classList.add('active');
+                }
+            }
+
+            if (mobileMenuBtn) {
+                mobileMenuBtn.addEventListener('click', toggleSidebar);
+            }
+            if (sidebarOverlay) {
+                sidebarOverlay.addEventListener('click', toggleSidebar);
+            }
+
+            // 发送消息的简单模拟
+            function sendMessage() {
+                const text = chatInput.value.trim();
+                if (!text) return;
+                // 添加用户消息
+                const userMsg = document.createElement('div');
+                userMsg.className = 'message user';
+                userMsg.innerHTML = `
+                        <div class="msg-avatar"><i class="fas fa-user"></i></div>
+                        <div class="bubble">
+                            ${escapeHTML(text)}
+                            <span class="timestamp">${getCurrentTime()}</span>
+                        </div>
+                    `;
+                chatBody.appendChild(userMsg);
+                chatInput.value = '';
+                scrollToBottom();
+
+                // 模拟机器人回复
+                setTimeout(() => {
+                    const botMsg = document.createElement('div');
+                    botMsg.className = 'message bot';
+                    botMsg.innerHTML = `
+                            <div class="msg-avatar"><i class="fas fa-robot"></i></div>
+                            <div class="bubble">
+                                收到您的查询：<span class="tag">${escapeHTML(text.length > 15 ? text.slice(0,15)+'...' : text)}</span><br/>
+                                我正在分析相关数据，请稍候...<br/>
+                                <span style="font-size:11px; color:#6a7d9b;">💡 提示：您可以继续输入其他问题</span>
+                                <span class="timestamp">${getCurrentTime()}</span>
+                            </div>
+                        `;
+                    chatBody.appendChild(botMsg);
+                    scrollToBottom();
+                }, 600 + Math.random() * 800);
+            }
+
+            function escapeHTML(str) {
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            }
+
+            function getCurrentTime() {
+                const now = new Date();
+                return now.getHours().toString().padStart(2, '0') + ':' +
+                    now.getMinutes().toString().padStart(2, '0');
+            }
+
+            if (btnSend) {
+                btnSend.addEventListener('click', sendMessage);
+            }
+            if (chatInput) {
+                chatInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            }
+
+            // 窗口大小改变时关闭移动端侧边栏
+            window.addEventListener('resize', function() {
+                if (window.innerWidth > 768 && sidebarLeft.classList.contains('open')) {
+                    sidebarLeft.classList.remove('open');
+                    sidebarOverlay.classList.remove('active');
+                }
+            });
+
+            // 点击自选股或指数行时高亮（简单交互）
+            document.querySelectorAll('.watchlist-item, .index-row').forEach(item => {
+                item.addEventListener('click', function() {
+                    // 移除其他高亮
+                    this.parentElement.querySelectorAll('.watchlist-item, .index-row').forEach(el => {
+                        el.style.background = '';
+                    });
+                    this.style.background = 'rgba(240,185,11,0.08)';
+                    // 移动端关闭侧边栏
+                    if (window.innerWidth <= 768) {
+                        toggleSidebar();
+                    }
+                });
+            });
+
+            console.log('🚀 股智通 · AI 终端已就绪 | 宽屏交易助手');
+        })();
+    </script>
+
+</body>
+</html>

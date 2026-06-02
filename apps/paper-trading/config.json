@@ -1,0 +1,61 @@
+{
+  "_comment": "VN.PY 模拟交易配置文件",
+  "_version": "1.0.0",
+  
+  "paper_account": {
+    "_comment": "Marcus A 股模拟交易账户 - 老板资金",
+    "enabled": true,
+    "initial_capital": 1000000,
+    "currency": "CNY",
+    "commission_rate": 0.0003,
+    "slippage": 0.01,
+    "size_multiplier": 100,
+    "max_position_pct": 0.20,
+    "max_daily_drawdown": 0.10
+  },
+  
+  "ctp_simnow": {
+    "_comment": "SimNow 期货模拟配置（http://www.simnow.com.cn/）",
+    "enabled": false,
+    "username": "你的 SimNow 账号",
+    "password": "你的密码",
+    "broker_id": "9999",
+    "trade_server": "180.168.146.187:10201",
+    "md_server": "180.168.146.187:10211",
+    "app_name": "simnow_client_test",
+    "app_code": "0000000000000000"
+  },
+  
+  "xtp": {
+    "_comment": "XTP A 股模拟配置（https://xtp.xsec.com.cn/）",
+    "enabled": false,
+    "user_id": "你的 XTP 账号",
+    "password": "你的密码",
+    "server": "127.0.0.1",
+    "port": 7708,
+    "client_id": 1,
+    "account_type": 0
+  },
+  
+  "data_source": {
+    "_comment": "数据源配置",
+    "type": "akshare",
+    "tushare_token": "",
+    "cache_dir": "./data"
+  },
+  
+  "strategy": {
+    "_comment": "策略通用配置",
+    "default_symbols": ["SH600519", "SZ000858", "IF2406"],
+    "timeframe": "1m",
+    "backtest_start": "2024-01-01",
+    "backtest_end": "2024-12-31"
+  },
+  
+  "logging": {
+    "_comment": "日志配置",
+    "level": "INFO",
+    "file": "./logs/vnpy.log",
+    "console": true
+  }
+}

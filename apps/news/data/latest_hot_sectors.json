@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-04-26 22:44:36",
+  "overall_sentiment": 46,
+  "hot_sectors": [
+    {
+      "industry": "元器件",
+      "news_score": 94,
+      "reason": "sentiment_ratio"
+    },
+    {
+      "industry": "互联网",
+      "news_score": 61,
+      "reason": "sentiment_ratio"
+    },
+    {
+      "industry": "IT设备",
+      "news_score": 100,
+      "reason": "sentiment_ratio"
+    },
+    {
+      "industry": "化工原料",
+      "news_score": 50,
+      "reason": "sentiment_ratio"
+    },
+    {
+      "industry": "医疗保健",
+      "news_score": 100,
+      "reason": "sentiment_ratio"
+    },
+    {
+      "industry": "专用机械",
+      "news_score": 100,
+      "reason": "sentiment_ratio"
+    },
+    {
+      "industry": "保险",
+      "news_score": 100,
+      "reason": "sentiment_ratio"
+    },
+    {
+      "industry": "化学制药",
+      "news_score": 100,
+      "reason": "sentiment_ratio"
+    }
+  ],
+  "watchlist": []
+}

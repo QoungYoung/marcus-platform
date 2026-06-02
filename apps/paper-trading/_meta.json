@@ -1,0 +1,9 @@
+{
+  "name": "vnpy-paper-trading",
+  "version": "1.0.0",
+  "description": "VN.PY 模拟交易环境配置，支持股票/期货模拟交易、策略回测、数据持久化",
+  "author": "OpenClaw",
+  "tags": ["vnpy", "trading", "simulation", "量化", "模拟交易"],
+  "entry": "paper_engine.py",
+  "requirements": ["vnpy>=4.0.0", "vnpy-paperaccount", "vnpy-ctastrategy"]
+}

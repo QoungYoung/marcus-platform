@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: oklch(20.5% 0 0);
+  --color-primary-foreground: oklch(98.5% 0 0);
+  --color-background: #0d1117;
+  --color-foreground: #e6edf3;
+  --color-border: oklch(27.5% 0 0);
+  --color-muted: oklch(26.9% 0 0);
+  --color-muted-foreground: oklch(70.8% 0 0);
+  --color-card: oklch(20.5% 0 0);
+  --color-card-foreground: oklch(98.5% 0 0);
+  --color-accent: oklch(26.9% 0 0);
+  --color-accent-foreground: oklch(75% 0.18 85);
+  --radius: 0.625rem;
+}
+
+@layer base {
+  html, body, #root {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  /* 深色模式为默认 */
+  body {
+    background-color: #0d1117;
+    color: #e6edf3;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+  /* 浅色模式背景 */
+  [data-theme="light"] body,
+  html[data-theme="light"] body {
+    background-color: #F5EFEA;
+    color: #0D1B5C;
+  }
+}
+
+/* ================================================================
+   浅色模式下覆盖 Tailwind dark-* 工具类
+   ================================================================ */
+[data-theme="light"] .bg-dark-400 {
+  background-color: #F5EFEA;
+}
+[data-theme="light"] .bg-dark-300 {
+  background-color: #EDE6DD;
+}
+[data-theme="light"] .bg-dark-200 {
+  background-color: #FFFFFF;
+}
+[data-theme="light"] .bg-dark-100 {
+  background-color: #FDFAF7;
+}
+
+[data-theme="light"] .border-gray-700,
+[data-theme="light"] .border-gray-800 {
+  border-color: rgba(18, 46, 138, 0.12);
+}
+
+[data-theme="light"] .bg-gray-600,
+[data-theme="light"] .bg-gray-700,
+[data-theme="light"] .bg-gray-800,
+[data-theme="light"] .bg-gray-900 {
+  background-color: #D4DBF2;
+}
+
+[data-theme="light"] .text-white,
+[data-theme="light"] .text-gray-300,
+[data-theme="light"] .text-gray-400,
+[data-theme="light"] .text-gray-500 {
+  color: #0D1B5C;
+}
+
+[data-theme="light"] .hover\:bg-dark-100:hover {
+  background-color: #EDE6DD;
+}
+[data-theme="light"] .hover\:bg-dark-200:hover {
+  background-color: #E6DDD3;
+}
+[data-theme="light"] .hover\:text-white:hover {
+  color: #0E2470;
+}
+[data-theme="light"] .bg-blue-600 {
+  background-color: #A9B7E5;
+  color: #0D1B5C;
+}
+[data-theme="light"] .hover\:bg-blue-700:hover {
+  background-color: #7E93D8;
+  color: #0D1B5C;
+}
+[data-theme="light"] .hover\:border-gray-600:hover {
+  border-color: rgba(18, 46, 138, 0.2);
+}
+
+/* 浅色模式模态遮罩 */
+[data-theme="light"] .bg-black\/50 {
+  background-color: var(--agent-modal-overlay);
+}
+
+/* ── 浅色模式：替换 Tailwind/pi-web-ui 的纯黑阴影为深海蓝色调 ── */
+/*   [data-theme="light"] .dark 优先级 (0,2,0) 覆盖 pi-web-ui 注入的 .dark 类 */
+[data-theme="light"],
+[data-theme="light"] .dark {
+  --shadow-2xs: 0 1px 3px 0px rgba(18, 46, 138, 0.04);
+  --shadow-xs: 0 1px 3px 0px rgba(18, 46, 138, 0.04);
+  --shadow-sm: 0 1px 3px 0px rgba(18, 46, 138, 0.06), 0 1px 2px -1px rgba(18, 46, 138, 0.06);
+  --shadow: 0 1px 3px 0px rgba(18, 46, 138, 0.06), 0 1px 2px -1px rgba(18, 46, 138, 0.06);
+  --shadow-md: 0 1px 3px 0px rgba(18, 46, 138, 0.06), 0 2px 4px -1px rgba(18, 46, 138, 0.06);
+  --shadow-lg: 0 1px 3px 0px rgba(18, 46, 138, 0.06), 0 4px 6px -1px rgba(18, 46, 138, 0.06);
+  --shadow-xl: 0 1px 3px 0px rgba(18, 46, 138, 0.06), 0 8px 10px -1px rgba(18, 46, 138, 0.06);
+  --shadow-2xl: 0 1px 3px 0px rgba(18, 46, 138, 0.15);
+
+  /* pi-web-ui 基础变量覆盖，防止 .dark 类注入暗色 */
+  --background: #F5EFEA;
+  --foreground: #0D1B5C;
+  --card: #FFFFFF;
+  --card-foreground: #0D1B5C;
+  --popover: #FFFFFF;
+  --popover-foreground: #0D1B5C;
+  --primary: #122E8A;
+  --primary-foreground: #F5EFEA;
+  --secondary: #FDFAF7;
+  --secondary-foreground: #0D1B5C;
+  --muted: #EDE6DD;
+  --muted-foreground: #5B6B9E;
+  --accent: #FDFAF7;
+  --accent-foreground: #122E8A;
+  --destructive: #C0392B;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(18, 46, 138, 0.15);
+  --input: rgba(18, 46, 138, 0.12);
+  --ring: rgba(18, 46, 138, 0.3);
+
+  /* 覆盖 @theme 中定义的 Tailwind 变量 */
+  --color-foreground: #0D1B5C;
+  --color-background: #F5EFEA;
+  --color-border: rgba(18, 46, 138, 0.15);
+  --color-muted: #EDE6DD;
+  --color-muted-foreground: #5B6B9E;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #0D1B5C;
+  --color-accent: #FDFAF7;
+  --color-accent-foreground: #122E8A;
+  --color-primary: #122E8A;
+  --color-primary-foreground: #F5EFEA;
+}
+
+/* ── 用户消息气泡：深蓝底上强制亮色文字（无论深/浅主题） ── */
+#trading-agent-container user-message .text-foreground,
+#trading-agent-container user-message .text-primary,
+#trading-agent-container user-message markdown-block,
+#trading-agent-container user-message .markdown-content,
+#trading-agent-container user-message .markdown-content * {
+  color: var(--agent-user-msg-text) !important;
+}

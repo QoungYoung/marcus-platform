@@ -1,0 +1,37 @@
+# VN.PY 模拟交易环境依赖
+# 使用方法：pip install -r requirements.txt
+
+# VN.PY 核心
+vnpy>=4.0.0
+
+# 模拟账户（必需）
+vnpy-paperaccount>=1.0.0
+
+# CTA 策略框架（必需）
+vnpy-ctastrategy>=1.0.0
+
+# 回测引擎（必需）
+vnpy-backtester>=1.0.0
+
+# 图表组件（可选，用于 GUI）
+vnpy-chartwizard>=1.0.0
+
+# CTP 期货接口（可选，用于期货模拟）
+# 需要 SimNow 账号：http://www.simnow.com.cn/
+vnpy-ctp>=1.0.0
+
+# XTP 股票接口（可选，用于 A 股模拟）
+# 需要向中泰证券申请：https://xtp.xsec.com.cn/
+# vnpy-xtp>=1.0.0
+
+# 数据源（可选）
+# AKShare - 免费金融数据
+akshare>=1.0.0
+
+# Tushare - 中国金融数据（需要 token）
+# tushare>=1.0.0
+
+# 开发工具（可选）
+# pytest>=7.0.0
+# black>=22.0.0
+# flake8>=5.0.0

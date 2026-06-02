@@ -1,0 +1,28 @@
+# -*- coding: utf-8 -*-
+# Marcus Platform Pi Server Dockerfile
+# Build: docker build -f docker/Dockerfile.piserver -t marcus-piserver .
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files first for caching
+COPY servers/pi-server/package*.json ./
+
+# Install dependencies (including devDependencies for tsx runtime)
+RUN npm ci
+
+# Copy source code
+COPY servers/pi-server/ .
+
+# Build TypeScript
+RUN npm run build
+
+# Expose Pi Server port
+EXPOSE 3001
+
+# Run in production mode (compiled JS)
+CMD ["node", "dist/index.js"]
+
+# For development mode, use:
+# CMD ["npx", "tsx", "src/index.ts"]

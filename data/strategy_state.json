@@ -1,0 +1,3896 @@
+{
+  "current_date": "2026-06-02",
+  "pre_market": {
+    "timestamp": "2026-06-02 09:00:39",
+    "us_market": {
+      "indices": {
+        "道琼斯": {
+          "symbol": ".DJI",
+          "name": "道琼斯",
+          "current": 51078.8789,
+          "change": 46.42,
+          "change_pct": 0.09,
+          "update_time": "2026-06-02 09:00:02"
+        },
+        "纳斯达克": {
+          "symbol": ".IXIC",
+          "name": "纳斯达克",
+          "current": 27086.8086,
+          "change": 114.19,
+          "change_pct": 0.42,
+          "update_time": "2026-06-02 09:00:02"
+        },
+        "标普 500": {
+          "symbol": ".INX",
+          "name": "标普 500",
+          "current": 7599.96,
+          "change": 19.9,
+          "change_pct": 0.26,
+          "update_time": "2026-06-02 09:00:03"
+        }
+      },
+      "china_etfs": [
+        {
+          "symbol": "KWEB",
+          "name": "KWEB ETF",
+          "current": 26.66,
+          "change_pct": -1.41
+        },
+        {
+          "symbol": "PGJ",
+          "name": "PGJ ETF",
+          "current": 25.45,
+          "change_pct": -0.51
+        }
+      ],
+      "a50_futures": {
+        "current": 11836.68,
+        "change": NaN,
+        "change_pct": NaN
+      },
+      "usd_cny": {
+        "rate": 7.2,
+        "date": "2026-06-02"
+      },
+      "commodities": {
+        "黄金": {
+          "symbol": "GC",
+          "name": "黄金",
+          "current": 4511.551,
+          "change": 5.251000000000204,
+          "change_pct": 0.11652575283492453,
+          "update_time": "2026-06-02 09:00:05"
+        },
+        "WTI原油": {
+          "symbol": "CL",
+          "name": "WTI原油",
+          "current": 92.299,
+          "change": 0.13900000000001,
+          "change_pct": 0.15082465277778864,
+          "update_time": "2026-06-02 09:00:07"
+        }
+      }
+    },
+    "sentiment": {
+      "score": 100,
+      "level": "🟢 强烈正面",
+      "timestamp": "2026-06-02 09:00:07"
+    },
+    "initial_strategy": {
+      "stance": "🟡 cautious_buy",
+      "stance_code": "yellow",
+      "position_limit": 40,
+      "stop_loss": "-8%",
+      "take_profit": "+20%",
+      "priority": [],
+      "adjustment_reason": "",
+      "gap_risk": {
+        "has_gap_risk": false,
+        "gap_count": 0,
+        "worst_gap": 0.0,
+        "worst_gap_name": "",
+        "gap_detail": {
+          "上证指数": {
+            "gap": -0.035,
+            "open": 4067.1578,
+            "last_close": 4068.5691,
+            "change": -0.2
+          },
+          "深证成指": {
+            "gap": 0.166,
+            "open": 15601.03,
+            "last_close": 15575.13,
+            "change": -1.42
+          },
+          "沪深300": {
+            "gap": 0.118,
+            "open": 4897.8968,
+            "last_close": 4892.1213,
+            "change": -0.92
+          },
+          "创业板指": {
+            "gap": 0.481,
+            "open": 4057.39,
+            "last_close": 4037.95,
+            "change": -2.02
+          },
+          "科创 50": {
+            "gap": -0.005,
+            "open": 1751.2315,
+            "last_close": 1751.3234,
+            "change": -4.55
+          }
+        },
+        "adjustment_needed": false,
+        "adjustment_reason": ""
+      },
+      "watchlist": [
+        {
+          "symbol": "600536",
+          "name": "中国软件",
+          "score": 39.5,
+          "stop_loss": 38.67,
+          "close_price": 38.27,
+          "one_lot_pct": 3.8,
+          "concept": "华为欧拉",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600588",
+          "name": "用友网络",
+          "score": 49.5,
+          "stop_loss": 11.2,
+          "close_price": 11.41,
+          "one_lot_pct": 1.1,
+          "concept": "财税数字化",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002279",
+          "name": "久其软件",
+          "score": 43.5,
+          "stop_loss": 7.29,
+          "close_price": 7.32,
+          "one_lot_pct": 0.7,
+          "concept": "财税数字化",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002955",
+          "name": "鸿合科技",
+          "score": 56.5,
+          "stop_loss": 24.32,
+          "close_price": 25.36,
+          "one_lot_pct": 2.5,
+          "concept": "托育服务",
+          "trend_score": 40,
+          "volume_score": 55,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000607",
+          "name": "华媒控股",
+          "score": 25.5,
+          "stop_loss": 3.85,
+          "close_price": 3.8,
+          "one_lot_pct": 0.4,
+          "concept": "托育服务",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 20,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600661",
+          "name": "昂立教育",
+          "score": 21.5,
+          "stop_loss": 9.22,
+          "close_price": 8.74,
+          "one_lot_pct": 0.9,
+          "concept": "托育服务",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 20,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "605398",
+          "name": "新炬网络",
+          "score": 39.5,
+          "stop_loss": 25.57,
+          "close_price": 24.76,
+          "one_lot_pct": 2.5,
+          "concept": "MLOps概念",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002232",
+          "name": "启明信息",
+          "score": 0.0,
+          "stop_loss": 17.12,
+          "close_price": 15.8,
+          "one_lot_pct": 1.6,
+          "concept": "MLOps概念",
+          "trend_score": 0,
+          "volume_score": 0,
+          "flow_score": 0,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000636",
+          "name": "风华高科",
+          "score": 83.0,
+          "stop_loss": 39.78,
+          "close_price": 55.05,
+          "one_lot_pct": 5.5,
+          "concept": "虚拟机器人",
+          "trend_score": 80,
+          "volume_score": 90,
+          "flow_score": 80,
+          "level": "🔥 优先"
+        },
+        {
+          "symbol": "001314",
+          "name": "亿道信息",
+          "score": 62.0,
+          "stop_loss": 56.2,
+          "close_price": 64.46,
+          "one_lot_pct": 6.4,
+          "concept": "虚拟机器人",
+          "trend_score": 80,
+          "volume_score": 0,
+          "flow_score": 100,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "603687",
+          "name": "大胜达",
+          "score": 27.0,
+          "stop_loss": 16.13,
+          "close_price": 16.26,
+          "one_lot_pct": 1.6,
+          "concept": "虚拟机器人",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 25,
+          "level": "📌 备选"
+        }
+      ],
+      "sector_analysis": [
+        {
+          "sector": "中概互联",
+          "external_impact": 100,
+          "news_impact": 50.6,
+          "combined_score": 75.3,
+          "stance": "🟢 超配",
+          "position_limit": 20,
+          "weight": 0.9
+        },
+        {
+          "sector": "科技/半导体",
+          "external_impact": 84.2,
+          "news_impact": 50.6,
+          "combined_score": 67.4,
+          "stance": "🟡 标配",
+          "position_limit": 15,
+          "weight": 0.8
+        },
+        {
+          "sector": "新能源",
+          "external_impact": 55.4,
+          "news_impact": 50.6,
+          "combined_score": 53.0,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.5
+        },
+        {
+          "sector": "出口链",
+          "external_impact": 55,
+          "news_impact": 50.6,
+          "combined_score": 51.9,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.4
+        },
+        {
+          "sector": "医药/生物科技",
+          "external_impact": 54.3,
+          "news_impact": 50.6,
+          "combined_score": 51.7,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.4
+        },
+        {
+          "sector": "金融",
+          "external_impact": 50,
+          "news_impact": 50.6,
+          "combined_score": 50.5,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.1
+        },
+        {
+          "sector": "消费",
+          "external_impact": 50,
+          "news_impact": 50.6,
+          "combined_score": 50.5,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.1
+        }
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      },
+      "hot_concepts": [
+        {
+          "name": "华为欧拉",
+          "pct_change": 5.79,
+          "vol": 2800289.0,
+          "amount": 8999715907.0,
+          "turnover_rate": 4.01,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "财税数字化",
+          "pct_change": 5.01,
+          "vol": 10077542.0,
+          "amount": 20034097702.0,
+          "turnover_rate": 3.6,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "托育服务",
+          "pct_change": 4.81,
+          "vol": 528783.0,
+          "amount": 454965000.0,
+          "turnover_rate": 1.79,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "MLOps概念",
+          "pct_change": 4.29,
+          "vol": 2198585.0,
+          "amount": 6426877147.0,
+          "turnover_rate": 3.39,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "虚拟机器人",
+          "pct_change": 4.27,
+          "vol": 9409013.0,
+          "amount": 35227484539.0,
+          "turnover_rate": 4.27,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "Kimi概念",
+          "pct_change": 4.25,
+          "vol": 6960991.0,
+          "amount": 24481863250.0,
+          "turnover_rate": 5.68,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "ERP概念",
+          "pct_change": 4.25,
+          "vol": 5301116.0,
+          "amount": 9951568073.0,
+          "turnover_rate": 3.76,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "转基因",
+          "pct_change": 4.23,
+          "vol": 4351966.0,
+          "amount": 2755020161.0,
+          "turnover_rate": 2.55,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "Web3.0",
+          "pct_change": 4.21,
+          "vol": 26109363.0,
+          "amount": 33920901709.0,
+          "turnover_rate": 5.91,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "超跌股",
+          "pct_change": 4.04,
+          "vol": 10575816.0,
+          "amount": 4450666138.0,
+          "turnover_rate": 4.82,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        }
+      ],
+      "all_concepts": [
+        {
+          "name": "华为欧拉",
+          "pct_change": 5.79,
+          "vol": 2800289.0,
+          "amount": 8999715907.0,
+          "turnover_rate": 4.01,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "财税数字化",
+          "pct_change": 5.01,
+          "vol": 10077542.0,
+          "amount": 20034097702.0,
+          "turnover_rate": 3.6,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "托育服务",
+          "pct_change": 4.81,
+          "vol": 528783.0,
+          "amount": 454965000.0,
+          "turnover_rate": 1.79,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "MLOps概念",
+          "pct_change": 4.29,
+          "vol": 2198585.0,
+          "amount": 6426877147.0,
+          "turnover_rate": 3.39,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "虚拟机器人",
+          "pct_change": 4.27,
+          "vol": 9409013.0,
+          "amount": 35227484539.0,
+          "turnover_rate": 4.27,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "Kimi概念",
+          "pct_change": 4.25,
+          "vol": 6960991.0,
+          "amount": 24481863250.0,
+          "turnover_rate": 5.68,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "ERP概念",
+          "pct_change": 4.25,
+          "vol": 5301116.0,
+          "amount": 9951568073.0,
+          "turnover_rate": 3.76,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "转基因",
+          "pct_change": 4.23,
+          "vol": 4351966.0,
+          "amount": 2755020161.0,
+          "turnover_rate": 2.55,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "Web3.0",
+          "pct_change": 4.21,
+          "vol": 26109363.0,
+          "amount": 33920901709.0,
+          "turnover_rate": 5.91,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "超跌股",
+          "pct_change": 4.04,
+          "vol": 10575816.0,
+          "amount": 4450666138.0,
+          "turnover_rate": 4.82,
+          "trade_date": "20260601",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        }
+      ]
+    }
+  },
+  "intraday_scans": [
+    {
+      "timestamp": "2026-06-02T11:50:46.139273",
+      "stance": "🟡 cautious_buy",
+      "stance_code": "yellow",
+      "position_limit": 45,
+      "sentiment_score": 62.5,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟡 cautious_buy",
+        "stance_code": "yellow",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": -0.04
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 0.96
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 0.78
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 2.15
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 1.39
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          "600588",
+          "002279",
+          "002955",
+          "000607",
+          "002712",
+          "000785"
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        "600588",
+        "002279",
+        "002955",
+        "000607",
+        "002712",
+        "000785"
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T13:20:39.067369",
+      "stance": "🟡 cautious_buy",
+      "stance_code": "yellow",
+      "position_limit": 45,
+      "sentiment_score": 78,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟡 cautious_buy",
+        "stance_code": "yellow",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": 0.4
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.55
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 1.32
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 2.66
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 2.18
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          {
+            "symbol": "603039",
+            "name": "泛微网络",
+            "score": 43.5,
+            "stop_loss": 42.97,
+            "close_price": 40.3,
+            "one_lot_pct": 4.0,
+            "concept": "AI应用",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000034",
+            "name": "神州数码",
+            "score": 39.5,
+            "stop_loss": 33.77,
+            "close_price": 26.59,
+            "one_lot_pct": 2.7,
+            "concept": "AI应用",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002712",
+            "name": "思美传媒",
+            "score": 39.5,
+            "stop_loss": 5.39,
+            "close_price": 5.38,
+            "one_lot_pct": 0.5,
+            "concept": "AI应用",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600588",
+            "name": "用友网络",
+            "score": 49.5,
+            "stop_loss": 11.2,
+            "close_price": 11.41,
+            "one_lot_pct": 1.1,
+            "concept": "信创",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000948",
+            "name": "南天信息",
+            "score": 39.5,
+            "stop_loss": 14.18,
+            "close_price": 13.78,
+            "one_lot_pct": 1.4,
+            "concept": "信创",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600536",
+            "name": "中国软件",
+            "score": 39.5,
+            "stop_loss": 38.67,
+            "close_price": 38.27,
+            "one_lot_pct": 3.8,
+            "concept": "信创",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600050",
+            "name": "中国联通",
+            "score": 32.0,
+            "stop_loss": 4.48,
+            "close_price": 4.4,
+            "one_lot_pct": 0.4,
+            "concept": "数据安全",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 55,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600198",
+            "name": "大唐电信",
+            "score": 24.0,
+            "stop_loss": 8.75,
+            "close_price": 8.05,
+            "one_lot_pct": 0.8,
+            "concept": "数据安全",
+            "trend_score": 0,
+            "volume_score": 0,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002212",
+            "name": "天融信",
+            "score": 24.0,
+            "stop_loss": 7.14,
+            "close_price": 6.81,
+            "one_lot_pct": 0.7,
+            "concept": "数据安全",
+            "trend_score": 0,
+            "volume_score": 25,
+            "flow_score": 55,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600704",
+            "name": "物产中大",
+            "score": 42.0,
+            "stop_loss": 4.93,
+            "close_price": 5.0,
+            "one_lot_pct": 0.5,
+            "concept": "数字经济",
+            "trend_score": 30,
+            "volume_score": 0,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000938",
+            "name": "紫光股份",
+            "score": 37.5,
+            "stop_loss": 30.3,
+            "close_price": 27.84,
+            "one_lot_pct": 2.8,
+            "concept": "数字经济",
+            "trend_score": 0,
+            "volume_score": 25,
+            "flow_score": 100,
+            "level": "📌 备选"
+          }
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        {
+          "symbol": "603039",
+          "name": "泛微网络",
+          "score": 43.5,
+          "stop_loss": 42.97,
+          "close_price": 40.3,
+          "one_lot_pct": 4.0,
+          "concept": "AI应用",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000034",
+          "name": "神州数码",
+          "score": 39.5,
+          "stop_loss": 33.77,
+          "close_price": 26.59,
+          "one_lot_pct": 2.7,
+          "concept": "AI应用",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002712",
+          "name": "思美传媒",
+          "score": 39.5,
+          "stop_loss": 5.39,
+          "close_price": 5.38,
+          "one_lot_pct": 0.5,
+          "concept": "AI应用",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600588",
+          "name": "用友网络",
+          "score": 49.5,
+          "stop_loss": 11.2,
+          "close_price": 11.41,
+          "one_lot_pct": 1.1,
+          "concept": "信创",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000948",
+          "name": "南天信息",
+          "score": 39.5,
+          "stop_loss": 14.18,
+          "close_price": 13.78,
+          "one_lot_pct": 1.4,
+          "concept": "信创",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600536",
+          "name": "中国软件",
+          "score": 39.5,
+          "stop_loss": 38.67,
+          "close_price": 38.27,
+          "one_lot_pct": 3.8,
+          "concept": "信创",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600050",
+          "name": "中国联通",
+          "score": 32.0,
+          "stop_loss": 4.48,
+          "close_price": 4.4,
+          "one_lot_pct": 0.4,
+          "concept": "数据安全",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 55,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600198",
+          "name": "大唐电信",
+          "score": 24.0,
+          "stop_loss": 8.75,
+          "close_price": 8.05,
+          "one_lot_pct": 0.8,
+          "concept": "数据安全",
+          "trend_score": 0,
+          "volume_score": 0,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002212",
+          "name": "天融信",
+          "score": 24.0,
+          "stop_loss": 7.14,
+          "close_price": 6.81,
+          "one_lot_pct": 0.7,
+          "concept": "数据安全",
+          "trend_score": 0,
+          "volume_score": 25,
+          "flow_score": 55,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600704",
+          "name": "物产中大",
+          "score": 42.0,
+          "stop_loss": 4.93,
+          "close_price": 5.0,
+          "one_lot_pct": 0.5,
+          "concept": "数字经济",
+          "trend_score": 30,
+          "volume_score": 0,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000938",
+          "name": "紫光股份",
+          "score": 37.5,
+          "stop_loss": 30.3,
+          "close_price": 27.84,
+          "one_lot_pct": 2.8,
+          "concept": "数字经济",
+          "trend_score": 0,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        }
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T13:31:46.222881",
+      "stance": "🟡 cautious_buy",
+      "stance_code": "yellow",
+      "position_limit": 45,
+      "sentiment_score": 78,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟡 cautious_buy",
+        "stance_code": "yellow",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.46,
+              "last_close": 4057.74,
+              "change": 0.61
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.93
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 1.63
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 3.2
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 2.5
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          {
+            "symbol": "600536",
+            "name": "中国软件",
+            "score": 39.5,
+            "stop_loss": 38.67,
+            "close_price": 38.27,
+            "one_lot_pct": 3.8,
+            "concept": "华为欧拉",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600588",
+            "name": "用友网络",
+            "score": 49.5,
+            "stop_loss": 11.2,
+            "close_price": 11.41,
+            "one_lot_pct": 1.1,
+            "concept": "财税数字化",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002279",
+            "name": "久其软件",
+            "score": 43.5,
+            "stop_loss": 7.29,
+            "close_price": 7.32,
+            "one_lot_pct": 0.7,
+            "concept": "财税数字化",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002955",
+            "name": "鸿合科技",
+            "score": 56.5,
+            "stop_loss": 24.32,
+            "close_price": 25.36,
+            "one_lot_pct": 2.5,
+            "concept": "托育服务",
+            "trend_score": 40,
+            "volume_score": 55,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000607",
+            "name": "华媒控股",
+            "score": 25.5,
+            "stop_loss": 3.85,
+            "close_price": 3.8,
+            "one_lot_pct": 0.4,
+            "concept": "托育服务",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 20,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600661",
+            "name": "昂立教育",
+            "score": 21.5,
+            "stop_loss": 9.22,
+            "close_price": 8.74,
+            "one_lot_pct": 0.9,
+            "concept": "托育服务",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 20,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "605398",
+            "name": "新炬网络",
+            "score": 39.5,
+            "stop_loss": 25.57,
+            "close_price": 24.76,
+            "one_lot_pct": 2.5,
+            "concept": "MLOps概念",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002232",
+            "name": "启明信息",
+            "score": 0.0,
+            "stop_loss": 17.12,
+            "close_price": 15.8,
+            "one_lot_pct": 1.6,
+            "concept": "MLOps概念",
+            "trend_score": 0,
+            "volume_score": 0,
+            "flow_score": 0,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000636",
+            "name": "风华高科",
+            "score": 83.0,
+            "stop_loss": 39.78,
+            "close_price": 55.05,
+            "one_lot_pct": 5.5,
+            "concept": "虚拟机器人",
+            "trend_score": 80,
+            "volume_score": 90,
+            "flow_score": 80,
+            "level": "🔥 优先"
+          },
+          {
+            "symbol": "001314",
+            "name": "亿道信息",
+            "score": 62.0,
+            "stop_loss": 56.2,
+            "close_price": 64.46,
+            "one_lot_pct": 6.4,
+            "concept": "虚拟机器人",
+            "trend_score": 80,
+            "volume_score": 0,
+            "flow_score": 100,
+            "level": "✅ 标准"
+          },
+          {
+            "symbol": "603687",
+            "name": "大胜达",
+            "score": 27.0,
+            "stop_loss": 16.13,
+            "close_price": 16.26,
+            "one_lot_pct": 1.6,
+            "concept": "虚拟机器人",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 25,
+            "level": "📌 备选"
+          }
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        {
+          "symbol": "600536",
+          "name": "中国软件",
+          "score": 39.5,
+          "stop_loss": 38.67,
+          "close_price": 38.27,
+          "one_lot_pct": 3.8,
+          "concept": "华为欧拉",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600588",
+          "name": "用友网络",
+          "score": 49.5,
+          "stop_loss": 11.2,
+          "close_price": 11.41,
+          "one_lot_pct": 1.1,
+          "concept": "财税数字化",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002279",
+          "name": "久其软件",
+          "score": 43.5,
+          "stop_loss": 7.29,
+          "close_price": 7.32,
+          "one_lot_pct": 0.7,
+          "concept": "财税数字化",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002955",
+          "name": "鸿合科技",
+          "score": 56.5,
+          "stop_loss": 24.32,
+          "close_price": 25.36,
+          "one_lot_pct": 2.5,
+          "concept": "托育服务",
+          "trend_score": 40,
+          "volume_score": 55,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000607",
+          "name": "华媒控股",
+          "score": 25.5,
+          "stop_loss": 3.85,
+          "close_price": 3.8,
+          "one_lot_pct": 0.4,
+          "concept": "托育服务",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 20,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600661",
+          "name": "昂立教育",
+          "score": 21.5,
+          "stop_loss": 9.22,
+          "close_price": 8.74,
+          "one_lot_pct": 0.9,
+          "concept": "托育服务",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 20,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "605398",
+          "name": "新炬网络",
+          "score": 39.5,
+          "stop_loss": 25.57,
+          "close_price": 24.76,
+          "one_lot_pct": 2.5,
+          "concept": "MLOps概念",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002232",
+          "name": "启明信息",
+          "score": 0.0,
+          "stop_loss": 17.12,
+          "close_price": 15.8,
+          "one_lot_pct": 1.6,
+          "concept": "MLOps概念",
+          "trend_score": 0,
+          "volume_score": 0,
+          "flow_score": 0,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000636",
+          "name": "风华高科",
+          "score": 83.0,
+          "stop_loss": 39.78,
+          "close_price": 55.05,
+          "one_lot_pct": 5.5,
+          "concept": "虚拟机器人",
+          "trend_score": 80,
+          "volume_score": 90,
+          "flow_score": 80,
+          "level": "🔥 优先"
+        },
+        {
+          "symbol": "001314",
+          "name": "亿道信息",
+          "score": 62.0,
+          "stop_loss": 56.2,
+          "close_price": 64.46,
+          "one_lot_pct": 6.4,
+          "concept": "虚拟机器人",
+          "trend_score": 80,
+          "volume_score": 0,
+          "flow_score": 100,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "603687",
+          "name": "大胜达",
+          "score": 27.0,
+          "stop_loss": 16.13,
+          "close_price": 16.26,
+          "one_lot_pct": 1.6,
+          "concept": "虚拟机器人",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 25,
+          "level": "📌 备选"
+        }
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T13:35:32.468271",
+      "stance": "🟡 cautious_buy",
+      "stance_code": "yellow",
+      "position_limit": 45,
+      "sentiment_score": 78,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟡 cautious_buy",
+        "stance_code": "yellow",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": 0.72
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 2.05
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 1.71
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 3.25
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 2.7
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          {
+            "symbol": "603039",
+            "name": "泛微网络",
+            "score": 43.5,
+            "stop_loss": 42.97,
+            "close_price": 40.3,
+            "one_lot_pct": 4.0,
+            "concept": "AI应用",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000034",
+            "name": "神州数码",
+            "score": 39.5,
+            "stop_loss": 33.77,
+            "close_price": 26.59,
+            "one_lot_pct": 2.7,
+            "concept": "AI应用",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002712",
+            "name": "思美传媒",
+            "score": 39.5,
+            "stop_loss": 5.39,
+            "close_price": 5.38,
+            "one_lot_pct": 0.5,
+            "concept": "AI应用",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600588",
+            "name": "用友网络",
+            "score": 49.5,
+            "stop_loss": 11.2,
+            "close_price": 11.41,
+            "one_lot_pct": 1.1,
+            "concept": "信创",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000948",
+            "name": "南天信息",
+            "score": 39.5,
+            "stop_loss": 14.18,
+            "close_price": 13.78,
+            "one_lot_pct": 1.4,
+            "concept": "信创",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600536",
+            "name": "中国软件",
+            "score": 39.5,
+            "stop_loss": 38.67,
+            "close_price": 38.27,
+            "one_lot_pct": 3.8,
+            "concept": "信创",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600050",
+            "name": "中国联通",
+            "score": 32.0,
+            "stop_loss": 4.48,
+            "close_price": 4.4,
+            "one_lot_pct": 0.4,
+            "concept": "数据安全",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 55,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600198",
+            "name": "大唐电信",
+            "score": 24.0,
+            "stop_loss": 8.75,
+            "close_price": 8.05,
+            "one_lot_pct": 0.8,
+            "concept": "数据安全",
+            "trend_score": 0,
+            "volume_score": 0,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002212",
+            "name": "天融信",
+            "score": 24.0,
+            "stop_loss": 7.14,
+            "close_price": 6.81,
+            "one_lot_pct": 0.7,
+            "concept": "数据安全",
+            "trend_score": 0,
+            "volume_score": 25,
+            "flow_score": 55,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600704",
+            "name": "物产中大",
+            "score": 42.0,
+            "stop_loss": 4.93,
+            "close_price": 5.0,
+            "one_lot_pct": 0.5,
+            "concept": "数字经济",
+            "trend_score": 30,
+            "volume_score": 0,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000938",
+            "name": "紫光股份",
+            "score": 37.5,
+            "stop_loss": 30.3,
+            "close_price": 27.84,
+            "one_lot_pct": 2.8,
+            "concept": "数字经济",
+            "trend_score": 0,
+            "volume_score": 25,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "002261",
+            "name": "拓维信息",
+            "score": 24.0,
+            "stop_loss": 32.92,
+            "close_price": 30.48,
+            "one_lot_pct": 3.0,
+            "concept": "华为欧拉",
+            "trend_score": 0,
+            "volume_score": 25,
+            "flow_score": 55,
+            "level": "📌 备选"
+          }
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        {
+          "symbol": "603039",
+          "name": "泛微网络",
+          "score": 43.5,
+          "stop_loss": 42.97,
+          "close_price": 40.3,
+          "one_lot_pct": 4.0,
+          "concept": "AI应用",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000034",
+          "name": "神州数码",
+          "score": 39.5,
+          "stop_loss": 33.77,
+          "close_price": 26.59,
+          "one_lot_pct": 2.7,
+          "concept": "AI应用",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002712",
+          "name": "思美传媒",
+          "score": 39.5,
+          "stop_loss": 5.39,
+          "close_price": 5.38,
+          "one_lot_pct": 0.5,
+          "concept": "AI应用",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600588",
+          "name": "用友网络",
+          "score": 49.5,
+          "stop_loss": 11.2,
+          "close_price": 11.41,
+          "one_lot_pct": 1.1,
+          "concept": "信创",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000948",
+          "name": "南天信息",
+          "score": 39.5,
+          "stop_loss": 14.18,
+          "close_price": 13.78,
+          "one_lot_pct": 1.4,
+          "concept": "信创",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600536",
+          "name": "中国软件",
+          "score": 39.5,
+          "stop_loss": 38.67,
+          "close_price": 38.27,
+          "one_lot_pct": 3.8,
+          "concept": "信创",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600050",
+          "name": "中国联通",
+          "score": 32.0,
+          "stop_loss": 4.48,
+          "close_price": 4.4,
+          "one_lot_pct": 0.4,
+          "concept": "数据安全",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 55,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600198",
+          "name": "大唐电信",
+          "score": 24.0,
+          "stop_loss": 8.75,
+          "close_price": 8.05,
+          "one_lot_pct": 0.8,
+          "concept": "数据安全",
+          "trend_score": 0,
+          "volume_score": 0,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002212",
+          "name": "天融信",
+          "score": 24.0,
+          "stop_loss": 7.14,
+          "close_price": 6.81,
+          "one_lot_pct": 0.7,
+          "concept": "数据安全",
+          "trend_score": 0,
+          "volume_score": 25,
+          "flow_score": 55,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600704",
+          "name": "物产中大",
+          "score": 42.0,
+          "stop_loss": 4.93,
+          "close_price": 5.0,
+          "one_lot_pct": 0.5,
+          "concept": "数字经济",
+          "trend_score": 30,
+          "volume_score": 0,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000938",
+          "name": "紫光股份",
+          "score": 37.5,
+          "stop_loss": 30.3,
+          "close_price": 27.84,
+          "one_lot_pct": 2.8,
+          "concept": "数字经济",
+          "trend_score": 0,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "002261",
+          "name": "拓维信息",
+          "score": 24.0,
+          "stop_loss": 32.92,
+          "close_price": 30.48,
+          "one_lot_pct": 3.0,
+          "concept": "华为欧拉",
+          "trend_score": 0,
+          "volume_score": 25,
+          "flow_score": 55,
+          "level": "📌 备选"
+        }
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T13:38:30.309015",
+      "stance": "🟢 aggressive_buy",
+      "stance_code": "green",
+      "position_limit": 45,
+      "sentiment_score": 78,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟢 aggressive_buy",
+        "stance_code": "green",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": 0.7
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.99
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.61,
+              "last_close": 4844.26,
+              "change": 1.71
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 3.21
+            },
+            "科创 50": {
+              "gap": 0.759,
+              "open": 1676.31,
+              "last_close": 1663.69,
+              "change": 2.51
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          "002712",
+          "600588"
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        "002712",
+        "600588"
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T13:39:34.202520",
+      "stance": "🟢 aggressive_buy",
+      "stance_code": "green",
+      "position_limit": 45,
+      "sentiment_score": 78,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟢 aggressive_buy",
+        "stance_code": "green",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": 0.56
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.85
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 1.6
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 3.05
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 2.4
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          "002712",
+          "600588"
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        "002712",
+        "600588"
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T13:52:03.579112",
+      "stance": "🟢 aggressive_buy",
+      "stance_code": "green",
+      "position_limit": 45,
+      "sentiment_score": 80,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟢 aggressive_buy",
+        "stance_code": "green",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": 0.49
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.68
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 1.43
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 2.76
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 2.23
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          "600588",
+          "002279",
+          "000607"
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        "600588",
+        "002279",
+        "000607"
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T14:21:04.289137",
+      "stance": "🟢 aggressive_buy",
+      "stance_code": "green",
+      "position_limit": 45,
+      "sentiment_score": 50,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟢 aggressive_buy",
+        "stance_code": "green",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": 0.35
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.65
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.61,
+              "last_close": 4844.26,
+              "change": 1.42
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 2.82
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 1.67
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          "600588",
+          "002279",
+          "002955",
+          "000607"
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        "600588",
+        "002279",
+        "002955",
+        "000607"
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T14:32:01.472504",
+      "stance": "🟢 aggressive_buy",
+      "stance_code": "green",
+      "position_limit": 45,
+      "sentiment_score": 50,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟢 aggressive_buy",
+        "stance_code": "green",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.46,
+              "last_close": 4057.74,
+              "change": 0.47
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.71
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 1.47
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 2.78
+            },
+            "科创 50": {
+              "gap": 0.759,
+              "open": 1676.31,
+              "last_close": 1663.69,
+              "change": 1.77
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          "600588",
+          "002279",
+          "000607"
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        "600588",
+        "002279",
+        "000607"
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    },
+    {
+      "timestamp": "2026-06-02T14:51:02.108287",
+      "stance": "🟢 aggressive_buy",
+      "stance_code": "green",
+      "position_limit": 45,
+      "sentiment_score": 50,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": true,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟢 aggressive_buy",
+        "stance_code": "green",
+        "position_limit": 45,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": 0.092,
+              "open": 4061.4629,
+              "last_close": 4057.74,
+              "change": 0.41
+            },
+            "深证成指": {
+              "gap": 0.459,
+              "open": 15410.7,
+              "last_close": 15340.36,
+              "change": 1.63
+            },
+            "沪深300": {
+              "gap": 0.338,
+              "open": 4860.6119,
+              "last_close": 4844.2556,
+              "change": 1.45
+            },
+            "创业板指": {
+              "gap": 0.923,
+              "open": 3987.41,
+              "last_close": 3950.94,
+              "change": 2.68
+            },
+            "科创 50": {
+              "gap": 0.758,
+              "open": 1676.3085,
+              "last_close": 1663.6935,
+              "change": 1.59
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          "600588",
+          "002279",
+          "002955",
+          "000607"
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "元器件": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "fund_net": "+8.46亿"
+          },
+          "软件服务": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "fund_net": "+3.31亿"
+          },
+          "IT设备": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "fund_net": "+2964万"
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        "600588",
+        "002279",
+        "002955",
+        "000607"
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "元器件": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "fund_net": "+8.46亿"
+        },
+        "软件服务": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "fund_net": "+3.31亿"
+        },
+        "IT设备": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "fund_net": "+2964万"
+        }
+      }
+    }
+  ],
+  "trades": [],
+  "feedback_loop": [],
+  "pi_confirmation": {
+    "timestamp": "2026-06-02 19:31:00",
+    "stance": "yellow",
+    "position_limit": 40,
+    "reason": "科技主线（CPO/光模块/人形机器人）趋势明确且右侧信号强，但中东地缘风险急剧升温构成系统性压力，维持顺势参与但控仓在四成以内，等待地缘明朗再加仓。",
+    "watchlist": []
+  }
+}

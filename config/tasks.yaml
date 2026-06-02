@@ -1,0 +1,240 @@
+settings:
+  max_concurrent_jobs: 3
+  job_timeout: 900
+  retry:
+    enabled: true
+    max_attempts: 3
+    delay_seconds: 60
+  log_retention_days: 30
+  workspace: F:/pythonProject/AITrade/marcus-platform
+  channels:
+    qqbot:
+      enabled: true
+      recipient: BF1510663A6C14D6E00E42B46108F51E
+tasks:
+- id: news_collector
+  name: 新闻定时采集
+  description: 每10分钟采集财经新闻，DeepSeek AI情绪分析
+  enabled: true
+  schedule:
+    type: cron
+    expr: '*/30 * * * *'
+    timezone: Asia/Shanghai
+  script:
+    path: apps/news/news_collector.py
+    args: []
+    cwd: workspace-marcus
+  output:
+    log_file: logs/news_collector_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+- id: pre_market_scan
+  name: 盘前扫描
+  description: 9:00 执行盘前扫描，美股联动分析 + 策略迭代
+  enabled: true
+  schedule:
+    type: cron
+    expr: 0 9 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/pre_market_scan.py
+    args:
+    - --debug
+    cwd: workspace-marcus
+  output:
+    log_file: logs/pre_market_scan_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: market_scan
+  name: 盘中扫描
+  description: 每小时20/31/50分执行，策略验证 + 候选股筛选
+  enabled: true
+  schedule:
+    type: cron
+    expr: 20,31,50 9-11,13-14 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/market_scan.py
+    args:
+    - --debug
+    cwd: workspace-marcus
+  output:
+    log_file: logs/market_scan_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: auto_trade_morning
+  name: 自动交易 (早盘)
+  description: 9:35 Pi自主执行早盘右侧交易建仓
+  enabled: true
+  type: pi_trade
+  pi_prompt: morning
+  schedule:
+    type: cron
+    expr: 35 9 * * *
+    timezone: Asia/Shanghai
+  # script:  # 原脚本模式（已保留备用）
+  #   path: jobs/auto_trade.py
+  #   args: [--debug]
+  #   cwd: workspace-marcus
+  output:
+    log_file: logs/auto_trade_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on:
+  - market_scan
+- id: auto_trade_late_morning
+  name: 自动交易 (午前)
+  description: 10:35 Pi自主执行午前趋势确认交易
+  enabled: true
+  type: pi_trade
+  pi_prompt: late_morning
+  schedule:
+    type: cron
+    expr: 35 10 * * *
+    timezone: Asia/Shanghai
+  # script:
+  #   path: jobs/auto_trade.py
+  #   args: [--debug]
+  #   cwd: workspace-marcus
+  output:
+    log_file: logs/auto_trade_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: auto_trade_afternoon
+  name: 自动交易 (午后)
+  description: 13:35 Pi自主执行午后调整窗口交易
+  enabled: true
+  type: pi_trade
+  pi_prompt: afternoon
+  schedule:
+    type: cron
+    expr: 35 13 * * *
+    timezone: Asia/Shanghai
+  # script:
+  #   path: jobs/auto_trade.py
+  #   args: [--debug]
+  #   cwd: workspace-marcus
+  output:
+    log_file: logs/auto_trade_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: auto_trade_closing
+  name: 自动交易 (尾盘)
+  description: 14:30 Pi自主执行尾盘止损止盈（只卖不买）
+  enabled: true
+  type: pi_trade
+  pi_prompt: closing
+  schedule:
+    type: cron
+    expr: 30 14 * * *
+    timezone: Asia/Shanghai
+  # script:
+  #   path: jobs/auto_trade.py
+  #   args: [--debug, --closing]
+  #   cwd: workspace-marcus
+  output:
+    log_file: logs/auto_trade_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: daily_review
+  name: 每日复盘
+  description: 15:00 收盘后市场分析与操作复盘
+  enabled: true
+  schedule:
+    type: cron
+    expr: 0 15 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_review_enhanced.py
+    args: []
+    cwd: workspace-marcus
+  output:
+    log_file: logs/daily_review_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: news_evening
+  name: 新闻晚报
+  description: 19:30 全天新闻汇总 + 明日关注（纯DB模式，不重新采集）
+  enabled: true
+  schedule:
+    type: cron
+    expr: 30 19 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: apps/news/news_evening_report.py
+    args: []
+    cwd: workspace-marcus
+  output:
+    log_file: logs/news_evening_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: stock_pool_refresh
+  name: 股票池更新
+  description: 每周一更新全市场股票+概念板块映射
+  enabled: true
+  schedule:
+    type: cron
+    expr: 0 8 * * mon
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/stock_pool_manager.py
+    args: []
+    cwd: workspace-marcus
+  output:
+    log_file: logs/stock_pool_refresh.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []

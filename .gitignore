@@ -1,0 +1,51 @@
+# Environment
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+*.egg
+
+# Node
+node_modules/
+frontend/dist/
+servers/pi-server/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Data (runtime generated)
+data/*.db
+data/*.sqlite
+# keep data directory structure
+!data/.gitkeep
+
+# Memory
+memory/
+
+# Sessions
+servers/pi-server/sessions/
+
+# Docker volumes
+docker/data/
+
+# Temporary
+*.tmp
+temp/

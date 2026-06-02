@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-03-07T22:23:16.970698",
+  "available_cash": 102894.9492,
+  "positions": {
+    "SH600989": {
+      "volume": 6900,
+      "avg_price": 28.59,
+      "current_price": 28.63,
+      "cost_value": 197271.0,
+      "market_value": 197547.0,
+      "pnl": 276.0
+    },
+    "SH600406": {
+      "volume": 6700,
+      "avg_price": 29.75,
+      "current_price": 30.01,
+      "cost_value": 199325.0,
+      "market_value": 201067.0,
+      "pnl": 1742.0
+    },
+    "SZ002493": {
+      "volume": 13000,
+      "avg_price": 15.3,
+      "current_price": 15.24,
+      "cost_value": 198900.0,
+      "market_value": 198120.0,
+      "pnl": -780.0
+    },
+    "SH600893": {
+      "volume": 1700,
+      "avg_price": 61.0,
+      "current_price": 61.18,
+      "cost_value": 103700.0,
+      "market_value": 104006.0,
+      "pnl": 306.0
+    },
+    "SH600089": {
+      "volume": 6100,
+      "avg_price": 32.4,
+      "current_price": 32.23,
+      "cost_value": 197640.0,
+      "market_value": 196602.99999999997,
+      "pnl": -1037.000000000029
+    }
+  },
+  "total_market": 897343.0,
+  "total_asset": 1000237.9492,
+  "total_pnl": 237.94920000003185
+}

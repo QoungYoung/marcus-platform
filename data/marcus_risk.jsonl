@@ -1,0 +1,7 @@
+{"timestamp": "2026-05-19T15:14:43.210437", "symbol": "SH512760", "side": "buy", "price": 1.149, "volume": 13000, "required_cash": 14981.810999999998, "status": "passed"}
+{"timestamp": "2026-05-19T15:14:43.465546", "symbol": "SH588080", "side": "buy", "price": 1.815, "volume": 8200, "required_cash": 14927.648999999998, "status": "passed"}
+{"timestamp": "2026-05-19T15:14:43.684245", "symbol": "SH512480", "side": "buy", "price": 2.131, "volume": 7000, "required_cash": 14961.750999999997, "status": "passed"}
+{"timestamp": "2026-05-19T15:14:43.884696", "symbol": "SH515980", "side": "buy", "price": 1.14, "volume": 13100, "required_cash": 14978.801999999996, "status": "passed"}
+{"timestamp": "2026-06-02T13:49:34.784052", "symbol": "000063", "side": "buy", "price": 36.05, "volume": 200, "required_cash": 7231.629999999998, "status": "passed"}
+{"timestamp": "2026-06-02T14:05:39.394953", "symbol": "000063", "side": "buy", "price": 36.02, "volume": 200, "required_cash": 7225.612, "status": "passed"}
+{"timestamp": "2026-06-02T14:11:50.957561", "symbol": "000063", "side": "buy", "price": 36.02, "volume": 200, "required_cash": 7225.612, "status": "passed"}

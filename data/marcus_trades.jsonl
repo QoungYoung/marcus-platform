@@ -1,0 +1,5 @@
+{"type": "buy", "timestamp": "2026-05-19T15:14:43.315745", "symbol": "SH512760", "price": 1.149, "volume": 13000, "order_id": "ORD000000", "reason": "芯片板块今日大涨+3.79%，受益AI需求和国产替代，建仓配置", "status": "executed", "cost": 14941.481099999999}
+{"type": "buy", "timestamp": "2026-05-19T15:14:43.581822", "symbol": "SH588080", "price": 1.815, "volume": 8200, "order_id": "ORD000000", "reason": "科创50今日领涨+3.89%，右侧趋势明确，建仓配置", "status": "executed", "cost": 14887.464899999999}
+{"type": "buy", "timestamp": "2026-05-19T15:14:43.767319", "symbol": "SH512480", "price": 2.131, "volume": 7000, "order_id": "ORD000000", "reason": "半导体今日强势+3.55%，国产替代逻辑强，建仓配置", "status": "executed", "cost": 14921.475099999998}
+{"type": "buy", "timestamp": "2026-05-19T15:14:43.988436", "symbol": "SH515980", "price": 1.14, "volume": 13100, "order_id": "ORD000000", "reason": "AI算力需求旺盛，涨幅较小安全边际高，建仓配置", "status": "executed", "cost": 14938.480199999998}
+{"type": "buy", "timestamp": "2026-06-02T14:11:51.068015", "symbol": "000063", "price": 36.02, "volume": 200, "order_id": "ORD000003", "reason": "", "status": "executed", "cost": 7206.1612000000005}

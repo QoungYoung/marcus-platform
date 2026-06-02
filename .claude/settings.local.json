@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\(Object.keys\\(l\\).filter\\(k => k.toLowerCase\\(\\).includes\\('oil'\\) || k.toLowerCase\\(\\).includes\\('gold'\\) || k.toLowerCase\\(\\).includes\\('commod'\\)\\)\")",
+      "Bash(pip show *)",
+      "Bash(pip install *)",
+      "Bash(curl -s http://localhost:8000/api/v1/market/global)",
+      "Bash(curl *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:stock.xueqiu.com)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'error_code: {d[\\\\\"error_code\\\\\"]}, items_size: {d[\\\\\"data\\\\\"][\\\\\"items_size\\\\\"]}'\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2, ensure_ascii=False\\)[:2000]\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'error_code: {d[\\\\\"error_code\\\\\"]}, items: {len\\(d[\\\\\"data\\\\\"].get\\(\\\\\"item\\\\\",[]\\)\\)}'\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'OK - items: {len\\(d[\\\\\"data\\\\\"][\\\\\"item\\\\\"]\\)}'\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.loads\\(sys.stdin.read\\(\\).split\\('.'\\)[1]+'=='\\); print\\(f'用户ID \\(uid\\): {d[\\\\\"uid\\\\\"]}'\\); import datetime; print\\(f'过期时间 \\(exp\\): {datetime.datetime.fromtimestamp\\(d[\\\\\"exp\\\\\"]\\)}'\\)\")",
+      "Bash(python3 *)",
+      "Bash(dir core\\\\\\\\data)",
+      "Bash(dir data *)",
+      "Bash(npm install *)",
+      "Bash(npm list *)",
+      "Bash(npm run *)",
+      "Bash(taskkill //F //IM node.exe)",
+      "WebSearch",
+      "WebFetch(domain:docs.siliconflow.cn)",
+      "Read(//c/Users/fengx/.pi/agent/extensions/pi-trading-tools/**)",
+      "Bash(dir \"C:\\\\Users\\\\fengx\\\\.pi\\\\agent\\\\extensions\\\\pi-trading-tools\")",
+      "Bash(sqlite3 data/trades.db \"SELECT * FROM account_info;\")",
+      "Bash(sqlite3 *)",
+      "Bash(cat vite.config.ts)",
+      "Bash(cat vite.config.js)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(taskkill //F //IM uvicorn.exe)",
+      "Bash(dir \"F:\\\\pythonProject\\\\AITrade\\\\marcus-platform\\\\core\\\\\")",
+      "Bash(tasklist)",
+      "Bash(iconv -f utf-8 -t gb18030)"
+    ]
+  }
+}

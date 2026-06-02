@@ -1,0 +1,1251 @@
+{
+  "current_date": "2026-05-30",
+  "pre_market": {
+    "timestamp": "2026-05-30 09:00:45",
+    "us_market": {
+      "indices": {
+        "道琼斯": {
+          "symbol": ".DJI",
+          "name": "道琼斯",
+          "current": 51032.4609,
+          "change": 363.49,
+          "change_pct": 0.72,
+          "update_time": "2026-05-30 09:00:01"
+        },
+        "纳斯达克": {
+          "symbol": ".IXIC",
+          "name": "纳斯达克",
+          "current": 26972.6191,
+          "change": 55.15,
+          "change_pct": 0.2,
+          "update_time": "2026-05-30 09:00:02"
+        },
+        "标普 500": {
+          "symbol": ".INX",
+          "name": "标普 500",
+          "current": 7580.0601,
+          "change": 16.43,
+          "change_pct": 0.22,
+          "update_time": "2026-05-30 09:00:02"
+        }
+      },
+      "china_etfs": [
+        {
+          "symbol": "KWEB",
+          "name": "KWEB ETF",
+          "current": 27.26,
+          "change_pct": 1.3
+        },
+        {
+          "symbol": "PGJ",
+          "name": "PGJ ETF",
+          "current": 25.24,
+          "change_pct": 0.32
+        }
+      ],
+      "a50_futures": {
+        "current": 12024.53,
+        "change": 69.78,
+        "change_pct": 0.58
+      },
+      "usd_cny": {
+        "rate": 7.2,
+        "date": "2026-05-30"
+      },
+      "commodities": {
+        "黄金": {
+          "symbol": "GC",
+          "name": "黄金",
+          "current": 4565.868,
+          "change": 33.46800000000076,
+          "change_pct": 0.7384167328567814,
+          "update_time": "2026-05-30 09:00:04"
+        },
+        "WTI原油": {
+          "symbol": "CL",
+          "name": "WTI原油",
+          "current": 87.861,
+          "change": -1.0390000000000015,
+          "change_pct": -1.1687289088863908,
+          "update_time": "2026-05-30 09:00:06"
+        }
+      }
+    },
+    "sentiment": {
+      "score": 68.97,
+      "level": "🟡 温和正面",
+      "timestamp": "2026-05-30 09:00:06"
+    },
+    "initial_strategy": {
+      "stance": "🟡 cautious_buy",
+      "stance_code": "yellow",
+      "position_limit": 40,
+      "stop_loss": "-8%",
+      "take_profit": "+20%",
+      "priority": [],
+      "adjustment_reason": "",
+      "gap_risk": {
+        "has_gap_risk": false,
+        "gap_count": 0,
+        "worst_gap": 0.0,
+        "worst_gap_name": "",
+        "gap_detail": {
+          "上证指数": {
+            "gap": 0.29,
+            "open": 4110.5212,
+            "last_close": 4098.6358,
+            "change": -0.99
+          },
+          "深证成指": {
+            "gap": 0.6,
+            "open": 15957.12,
+            "last_close": 15861.89,
+            "change": -2.24
+          },
+          "沪深300": {
+            "gap": 0.474,
+            "open": 4937.5119,
+            "last_close": 4914.2133,
+            "change": -0.65
+          },
+          "创业板指": {
+            "gap": 0.408,
+            "open": 4141.91,
+            "last_close": 4125.07,
+            "change": -2.67
+          },
+          "科创 50": {
+            "gap": 0.326,
+            "open": 1850.27,
+            "last_close": 1844.25,
+            "change": -6.16
+          }
+        },
+        "adjustment_needed": false,
+        "adjustment_reason": ""
+      },
+      "watchlist": [
+        {
+          "symbol": "600865",
+          "name": "百大集团",
+          "score": 52.5,
+          "stop_loss": 10.74,
+          "close_price": 10.87,
+          "one_lot_pct": 1.1,
+          "concept": "退税商店",
+          "trend_score": 30,
+          "volume_score": 55,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600828",
+          "name": "茂业商业",
+          "score": 49.5,
+          "stop_loss": 4.61,
+          "close_price": 4.63,
+          "one_lot_pct": 0.5,
+          "concept": "退税商店",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600628",
+          "name": "新世界",
+          "score": 45.5,
+          "stop_loss": 6.62,
+          "close_price": 6.42,
+          "one_lot_pct": 0.6,
+          "concept": "退税商店",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "601888",
+          "name": "中国中免",
+          "score": 63.0,
+          "stop_loss": 58.69,
+          "close_price": 59.58,
+          "one_lot_pct": 6.0,
+          "concept": "免税概念",
+          "trend_score": 30,
+          "volume_score": 90,
+          "flow_score": 80,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "601021",
+          "name": "春秋航空",
+          "score": 39.5,
+          "stop_loss": 46.81,
+          "close_price": 49.0,
+          "one_lot_pct": 4.9,
+          "concept": "免税概念",
+          "trend_score": 80,
+          "volume_score": 25,
+          "flow_score": 0,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000636",
+          "name": "风华高科",
+          "score": 66.5,
+          "stop_loss": 39.78,
+          "close_price": 53.03,
+          "one_lot_pct": 5.3,
+          "concept": "昨日连板_含一字",
+          "trend_score": 80,
+          "volume_score": 90,
+          "flow_score": 25,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "600503",
+          "name": "华丽家族",
+          "score": 62.0,
+          "stop_loss": 2.61,
+          "close_price": 2.65,
+          "one_lot_pct": 0.3,
+          "concept": "昨日连板_含一字",
+          "trend_score": 50,
+          "volume_score": 40,
+          "flow_score": 100,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "000518",
+          "name": "四环生物",
+          "score": 59.0,
+          "stop_loss": 3.32,
+          "close_price": 3.5,
+          "one_lot_pct": 0.4,
+          "concept": "昨日连板_含一字",
+          "trend_score": 50,
+          "volume_score": 75,
+          "flow_score": 55,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600779",
+          "name": "水井坊",
+          "score": 92.0,
+          "stop_loss": 31.61,
+          "close_price": 35.8,
+          "one_lot_pct": 3.6,
+          "concept": "酿酒概念",
+          "trend_score": 80,
+          "volume_score": 100,
+          "flow_score": 100,
+          "level": "🔥 优先"
+        },
+        {
+          "symbol": "600197",
+          "name": "伊力特",
+          "score": 78.5,
+          "stop_loss": 12.13,
+          "close_price": 13.08,
+          "one_lot_pct": 1.3,
+          "concept": "酿酒概念",
+          "trend_score": 80,
+          "volume_score": 75,
+          "flow_score": 80,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "000002",
+          "name": "万科Ａ",
+          "score": 55.5,
+          "stop_loss": 3.65,
+          "close_price": 3.55,
+          "one_lot_pct": 0.4,
+          "concept": "超级品牌",
+          "trend_score": 30,
+          "volume_score": 65,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000651",
+          "name": "格力电器",
+          "score": 45.5,
+          "stop_loss": 38.78,
+          "close_price": 39.17,
+          "one_lot_pct": 3.9,
+          "concept": "超级品牌",
+          "trend_score": 50,
+          "volume_score": 25,
+          "flow_score": 60,
+          "level": "📌 备选"
+        }
+      ],
+      "sector_analysis": [
+        {
+          "sector": "中概互联",
+          "external_impact": 100,
+          "news_impact": 50.6,
+          "combined_score": 75.3,
+          "stance": "🟢 超配",
+          "position_limit": 20,
+          "weight": 0.9
+        },
+        {
+          "sector": "科技/半导体",
+          "external_impact": 84.2,
+          "news_impact": 50.6,
+          "combined_score": 67.4,
+          "stance": "🟡 标配",
+          "position_limit": 15,
+          "weight": 0.8
+        },
+        {
+          "sector": "新能源",
+          "external_impact": 55.4,
+          "news_impact": 50.6,
+          "combined_score": 53.0,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.5
+        },
+        {
+          "sector": "出口链",
+          "external_impact": 55,
+          "news_impact": 50.6,
+          "combined_score": 51.9,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.4
+        },
+        {
+          "sector": "医药/生物科技",
+          "external_impact": 54.3,
+          "news_impact": 50.6,
+          "combined_score": 51.7,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.4
+        },
+        {
+          "sector": "金融",
+          "external_impact": 50,
+          "news_impact": 50.6,
+          "combined_score": 50.5,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.1
+        },
+        {
+          "sector": "消费",
+          "external_impact": 50,
+          "news_impact": 50.6,
+          "combined_score": 50.5,
+          "stance": "⚪ 低配",
+          "position_limit": 10,
+          "weight": 0.1
+        }
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "专用机械": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "fund_net": "+3.41亿"
+        },
+        "电气设备": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "fund_net": "+3.02亿"
+        },
+        "元器件": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "fund_net": "+2.86亿"
+        }
+      },
+      "hot_concepts": [
+        {
+          "name": "退税商店",
+          "pct_change": 3.19,
+          "vol": 3804060.0,
+          "amount": 3184906393.0,
+          "turnover_rate": 2.16,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "免税概念",
+          "pct_change": 2.46,
+          "vol": 9485139.0,
+          "amount": 13744986029.0,
+          "turnover_rate": 1.32,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "昨日连板_含一字",
+          "pct_change": 2.41,
+          "vol": 15645986.0,
+          "amount": 21767302606.0,
+          "turnover_rate": 6.21,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "酿酒概念",
+          "pct_change": 2.28,
+          "vol": 7098608.0,
+          "amount": 31656424926.0,
+          "turnover_rate": 2.31,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "超级品牌",
+          "pct_change": 2.23,
+          "vol": 13207563.0,
+          "amount": 44076597661.0,
+          "turnover_rate": 1.39,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "红利破净股",
+          "pct_change": 2.08,
+          "vol": 40957937.0,
+          "amount": 33982482311.0,
+          "turnover_rate": 0.32,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "肝素概念",
+          "pct_change": 1.99,
+          "vol": 1883814.0,
+          "amount": 2610083426.0,
+          "turnover_rate": 1.22,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "昨日连板",
+          "pct_change": 1.97,
+          "vol": 14564232.0,
+          "amount": 13267247748.0,
+          "turnover_rate": 6.01,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "特色药",
+          "pct_change": 1.84,
+          "vol": 5621029.0,
+          "amount": 7423878480.0,
+          "turnover_rate": 1.39,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        }
+      ],
+      "all_concepts": [
+        {
+          "name": "退税商店",
+          "pct_change": 3.19,
+          "vol": 3804060.0,
+          "amount": 3184906393.0,
+          "turnover_rate": 2.16,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "免税概念",
+          "pct_change": 2.46,
+          "vol": 9485139.0,
+          "amount": 13744986029.0,
+          "turnover_rate": 1.32,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "昨日连板_含一字",
+          "pct_change": 2.41,
+          "vol": 15645986.0,
+          "amount": 21767302606.0,
+          "turnover_rate": 6.21,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "酿酒概念",
+          "pct_change": 2.28,
+          "vol": 7098608.0,
+          "amount": 31656424926.0,
+          "turnover_rate": 2.31,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "超级品牌",
+          "pct_change": 2.23,
+          "vol": 13207563.0,
+          "amount": 44076597661.0,
+          "turnover_rate": 1.39,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "REITs概念",
+          "pct_change": 2.16,
+          "vol": 21721013.0,
+          "amount": 12674491353.0,
+          "turnover_rate": 2.54,
+          "trade_date": "20260529",
+          "confidence": "downgraded",
+          "reason": "新闻密度下降(4h=0, 8h=0)",
+          "news_total": 1,
+          "news_positive": 1,
+          "news_negative": 0,
+          "news_trend": "declining",
+          "news_titles": [
+            "港交所CEO陈翊庭：港交所沪深港通即将纳入REITs 引入大宗交易机制"
+          ]
+        },
+        {
+          "name": "红利破净股",
+          "pct_change": 2.08,
+          "vol": 40957937.0,
+          "amount": 33982482311.0,
+          "turnover_rate": 0.32,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "肝素概念",
+          "pct_change": 1.99,
+          "vol": 1883814.0,
+          "amount": 2610083426.0,
+          "turnover_rate": 1.22,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "昨日连板",
+          "pct_change": 1.97,
+          "vol": 14564232.0,
+          "amount": 13267247748.0,
+          "turnover_rate": 6.01,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        },
+        {
+          "name": "特色药",
+          "pct_change": 1.84,
+          "vol": 5621029.0,
+          "amount": 7423878480.0,
+          "turnover_rate": 1.39,
+          "trade_date": "20260529",
+          "confidence": "standard",
+          "reason": "新闻覆盖不足，仅靠资金信号",
+          "news_total": 0,
+          "news_positive": 0,
+          "news_negative": 0,
+          "news_trend": "stable",
+          "news_titles": []
+        }
+      ]
+    }
+  },
+  "intraday_scans": [
+    {
+      "timestamp": "2026-06-01T09:32:00.383649",
+      "stance": "🟡 cautious_buy",
+      "stance_code": "yellow",
+      "position_limit": 40,
+      "sentiment_score": 80,
+      "holdings_news": {},
+      "validation": {
+        "price_action_confirm": false,
+        "sentiment_bonus": 5,
+        "fund_flow_confirm": false,
+        "adjustment_needed": false,
+        "adjustment_reason": "",
+        "gap_risk": false
+      },
+      "adjusted_strategy": {
+        "stance": "🟡 cautious_buy",
+        "stance_code": "yellow",
+        "position_limit": 40,
+        "stop_loss": "-8%",
+        "take_profit": "+20%",
+        "priority": [],
+        "adjustment_reason": "",
+        "gap_risk": {
+          "has_gap_risk": false,
+          "gap_count": 0,
+          "worst_gap": 0.0,
+          "worst_gap_name": "",
+          "gap_detail": {
+            "上证指数": {
+              "gap": -0.035,
+              "open": 4067.1578,
+              "last_close": 4068.5691,
+              "change": -0.21
+            },
+            "深证成指": {
+              "gap": 0.166,
+              "open": 15601.03,
+              "last_close": 15575.13,
+              "change": 0.2
+            },
+            "沪深300": {
+              "gap": 0.118,
+              "open": 4897.9,
+              "last_close": 4892.12,
+              "change": -0.01
+            },
+            "创业板指": {
+              "gap": 0.481,
+              "open": 4057.39,
+              "last_close": 4037.95,
+              "change": 0.45
+            },
+            "科创 50": {
+              "gap": -0.005,
+              "open": 1751.2315,
+              "last_close": 1751.3234,
+              "change": -1.21
+            }
+          },
+          "adjustment_needed": false,
+          "adjustment_reason": ""
+        },
+        "watchlist": [
+          {
+            "symbol": "600865",
+            "name": "百大集团",
+            "score": 52.5,
+            "stop_loss": 10.74,
+            "close_price": 10.87,
+            "one_lot_pct": 1.1,
+            "concept": "退税商店",
+            "trend_score": 30,
+            "volume_score": 55,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600828",
+            "name": "茂业商业",
+            "score": 49.5,
+            "stop_loss": 4.61,
+            "close_price": 4.63,
+            "one_lot_pct": 0.5,
+            "concept": "退税商店",
+            "trend_score": 30,
+            "volume_score": 25,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600628",
+            "name": "新世界",
+            "score": 45.5,
+            "stop_loss": 6.62,
+            "close_price": 6.42,
+            "one_lot_pct": 0.6,
+            "concept": "退税商店",
+            "trend_score": 20,
+            "volume_score": 25,
+            "flow_score": 100,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "601888",
+            "name": "中国中免",
+            "score": 63.0,
+            "stop_loss": 58.69,
+            "close_price": 59.58,
+            "one_lot_pct": 6.0,
+            "concept": "免税概念",
+            "trend_score": 30,
+            "volume_score": 90,
+            "flow_score": 80,
+            "level": "✅ 标准"
+          },
+          {
+            "symbol": "601021",
+            "name": "春秋航空",
+            "score": 39.5,
+            "stop_loss": 46.81,
+            "close_price": 49.0,
+            "one_lot_pct": 4.9,
+            "concept": "免税概念",
+            "trend_score": 80,
+            "volume_score": 25,
+            "flow_score": 0,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000636",
+            "name": "风华高科",
+            "score": 66.5,
+            "stop_loss": 39.78,
+            "close_price": 53.03,
+            "one_lot_pct": 5.3,
+            "concept": "昨日连板_含一字",
+            "trend_score": 80,
+            "volume_score": 90,
+            "flow_score": 25,
+            "level": "✅ 标准"
+          },
+          {
+            "symbol": "600503",
+            "name": "华丽家族",
+            "score": 62.0,
+            "stop_loss": 2.61,
+            "close_price": 2.65,
+            "one_lot_pct": 0.3,
+            "concept": "昨日连板_含一字",
+            "trend_score": 50,
+            "volume_score": 40,
+            "flow_score": 100,
+            "level": "✅ 标准"
+          },
+          {
+            "symbol": "000518",
+            "name": "四环生物",
+            "score": 59.0,
+            "stop_loss": 3.32,
+            "close_price": 3.5,
+            "one_lot_pct": 0.4,
+            "concept": "昨日连板_含一字",
+            "trend_score": 50,
+            "volume_score": 75,
+            "flow_score": 55,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "600779",
+            "name": "水井坊",
+            "score": 92.0,
+            "stop_loss": 31.61,
+            "close_price": 35.8,
+            "one_lot_pct": 3.6,
+            "concept": "酿酒概念",
+            "trend_score": 80,
+            "volume_score": 100,
+            "flow_score": 100,
+            "level": "🔥 优先"
+          },
+          {
+            "symbol": "600197",
+            "name": "伊力特",
+            "score": 78.5,
+            "stop_loss": 12.13,
+            "close_price": 13.08,
+            "one_lot_pct": 1.3,
+            "concept": "酿酒概念",
+            "trend_score": 80,
+            "volume_score": 75,
+            "flow_score": 80,
+            "level": "✅ 标准"
+          },
+          {
+            "symbol": "000002",
+            "name": "万科Ａ",
+            "score": 55.5,
+            "stop_loss": 3.65,
+            "close_price": 3.55,
+            "one_lot_pct": 0.4,
+            "concept": "超级品牌",
+            "trend_score": 30,
+            "volume_score": 65,
+            "flow_score": 80,
+            "level": "📌 备选"
+          },
+          {
+            "symbol": "000651",
+            "name": "格力电器",
+            "score": 45.5,
+            "stop_loss": 38.78,
+            "close_price": 39.17,
+            "one_lot_pct": 3.9,
+            "concept": "超级品牌",
+            "trend_score": 50,
+            "volume_score": 25,
+            "flow_score": 60,
+            "level": "📌 备选"
+          }
+        ],
+        "sector_analysis": [
+          {
+            "sector": "中概互联",
+            "external_impact": 100,
+            "news_impact": 50.6,
+            "combined_score": 75.3,
+            "stance": "🟢 超配",
+            "position_limit": 20,
+            "weight": 0.9
+          },
+          {
+            "sector": "科技/半导体",
+            "external_impact": 84.2,
+            "news_impact": 50.6,
+            "combined_score": 67.4,
+            "stance": "🟡 标配",
+            "position_limit": 15,
+            "weight": 0.8
+          },
+          {
+            "sector": "新能源",
+            "external_impact": 55.4,
+            "news_impact": 50.6,
+            "combined_score": 53.0,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.5
+          },
+          {
+            "sector": "出口链",
+            "external_impact": 55,
+            "news_impact": 50.6,
+            "combined_score": 51.9,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "医药/生物科技",
+            "external_impact": 54.3,
+            "news_impact": 50.6,
+            "combined_score": 51.7,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.4
+          },
+          {
+            "sector": "金融",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          },
+          {
+            "sector": "消费",
+            "external_impact": 50,
+            "news_impact": 50.6,
+            "combined_score": 50.5,
+            "stance": "⚪ 低配",
+            "position_limit": 10,
+            "weight": 0.1
+          }
+        ],
+        "sector_allocation": {
+          "中概互联": {
+            "stance": "🟢 超配",
+            "weight": 0.9,
+            "position_limit": 20,
+            "news_score": 50
+          },
+          "科技/半导体": {
+            "stance": "🟡 标配",
+            "weight": 0.8,
+            "position_limit": 15,
+            "news_score": 50
+          },
+          "新能源": {
+            "stance": "⚪ 低配",
+            "weight": 0.5,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "出口链": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "医药/生物科技": {
+            "stance": "⚪ 低配",
+            "weight": 0.4,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "金融": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          },
+          "消费": {
+            "stance": "⚪ 低配",
+            "weight": 0.1,
+            "position_limit": 10,
+            "news_score": 50
+          }
+        }
+      },
+      "trade_feedback": [],
+      "watchlist": [
+        {
+          "symbol": "600865",
+          "name": "百大集团",
+          "score": 52.5,
+          "stop_loss": 10.74,
+          "close_price": 10.87,
+          "one_lot_pct": 1.1,
+          "concept": "退税商店",
+          "trend_score": 30,
+          "volume_score": 55,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600828",
+          "name": "茂业商业",
+          "score": 49.5,
+          "stop_loss": 4.61,
+          "close_price": 4.63,
+          "one_lot_pct": 0.5,
+          "concept": "退税商店",
+          "trend_score": 30,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600628",
+          "name": "新世界",
+          "score": 45.5,
+          "stop_loss": 6.62,
+          "close_price": 6.42,
+          "one_lot_pct": 0.6,
+          "concept": "退税商店",
+          "trend_score": 20,
+          "volume_score": 25,
+          "flow_score": 100,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "601888",
+          "name": "中国中免",
+          "score": 63.0,
+          "stop_loss": 58.69,
+          "close_price": 59.58,
+          "one_lot_pct": 6.0,
+          "concept": "免税概念",
+          "trend_score": 30,
+          "volume_score": 90,
+          "flow_score": 80,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "601021",
+          "name": "春秋航空",
+          "score": 39.5,
+          "stop_loss": 46.81,
+          "close_price": 49.0,
+          "one_lot_pct": 4.9,
+          "concept": "免税概念",
+          "trend_score": 80,
+          "volume_score": 25,
+          "flow_score": 0,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000636",
+          "name": "风华高科",
+          "score": 66.5,
+          "stop_loss": 39.78,
+          "close_price": 53.03,
+          "one_lot_pct": 5.3,
+          "concept": "昨日连板_含一字",
+          "trend_score": 80,
+          "volume_score": 90,
+          "flow_score": 25,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "600503",
+          "name": "华丽家族",
+          "score": 62.0,
+          "stop_loss": 2.61,
+          "close_price": 2.65,
+          "one_lot_pct": 0.3,
+          "concept": "昨日连板_含一字",
+          "trend_score": 50,
+          "volume_score": 40,
+          "flow_score": 100,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "000518",
+          "name": "四环生物",
+          "score": 59.0,
+          "stop_loss": 3.32,
+          "close_price": 3.5,
+          "one_lot_pct": 0.4,
+          "concept": "昨日连板_含一字",
+          "trend_score": 50,
+          "volume_score": 75,
+          "flow_score": 55,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "600779",
+          "name": "水井坊",
+          "score": 92.0,
+          "stop_loss": 31.61,
+          "close_price": 35.8,
+          "one_lot_pct": 3.6,
+          "concept": "酿酒概念",
+          "trend_score": 80,
+          "volume_score": 100,
+          "flow_score": 100,
+          "level": "🔥 优先"
+        },
+        {
+          "symbol": "600197",
+          "name": "伊力特",
+          "score": 78.5,
+          "stop_loss": 12.13,
+          "close_price": 13.08,
+          "one_lot_pct": 1.3,
+          "concept": "酿酒概念",
+          "trend_score": 80,
+          "volume_score": 75,
+          "flow_score": 80,
+          "level": "✅ 标准"
+        },
+        {
+          "symbol": "000002",
+          "name": "万科Ａ",
+          "score": 55.5,
+          "stop_loss": 3.65,
+          "close_price": 3.55,
+          "one_lot_pct": 0.4,
+          "concept": "超级品牌",
+          "trend_score": 30,
+          "volume_score": 65,
+          "flow_score": 80,
+          "level": "📌 备选"
+        },
+        {
+          "symbol": "000651",
+          "name": "格力电器",
+          "score": 45.5,
+          "stop_loss": 38.78,
+          "close_price": 39.17,
+          "one_lot_pct": 3.9,
+          "concept": "超级品牌",
+          "trend_score": 50,
+          "volume_score": 25,
+          "flow_score": 60,
+          "level": "📌 备选"
+        }
+      ],
+      "sector_allocation": {
+        "中概互联": {
+          "stance": "🟢 超配",
+          "weight": 0.9,
+          "position_limit": 20,
+          "news_score": 50
+        },
+        "科技/半导体": {
+          "stance": "🟡 标配",
+          "weight": 0.8,
+          "position_limit": 15,
+          "news_score": 50
+        },
+        "新能源": {
+          "stance": "⚪ 低配",
+          "weight": 0.5,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "出口链": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "医药/生物科技": {
+          "stance": "⚪ 低配",
+          "weight": 0.4,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "金融": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        },
+        "消费": {
+          "stance": "⚪ 低配",
+          "weight": 0.1,
+          "position_limit": 10,
+          "news_score": 50
+        }
+      }
+    }
+  ],
+  "trades": [],
+  "feedback_loop": [],
+  "pi_confirmation": {
+    "timestamp": "2026-05-30 14:30:15",
+    "stance": "red",
+    "position_limit": 0,
+    "reason": "市场全面走弱，科创50暴跌5%，右侧趋势信号明确偏空，空仓等待企稳后再寻入场时机。**",
+    "watchlist": []
+  }
+}

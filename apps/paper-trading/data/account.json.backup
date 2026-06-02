@@ -1,0 +1,21 @@
+{
+  "initial_capital": 1000000.0,
+  "available_cash": 759727.94,
+  "frozen_cash": 0.0,
+  "positions": {
+    "600519.SH": {
+      "symbol": "600519.SH",
+      "volume": 100,
+      "avg_price": 1410.0,
+      "frozen": 0
+    },
+    "601318.SH": {
+      "symbol": "601318.SH",
+      "volume": 1600,
+      "avg_price": 62.0,
+      "frozen": 0
+    }
+  },
+  "order_counter": 0,
+  "updated_at": "2026-03-04T18:29:50.763132"
+}

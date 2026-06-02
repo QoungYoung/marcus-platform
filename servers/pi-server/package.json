@@ -1,0 +1,24 @@
+{
+  "name": "marcus-pi-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi Agent HTTP server - bridges QQ Bot to Pi's tool calling capabilities",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.75.1",
+    "@earendil-works/pi-ai": "^0.75.1",
+    "@earendil-works/pi-web-ui": "^0.75.1",
+    "@sinclair/typebox": "^0.32.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
