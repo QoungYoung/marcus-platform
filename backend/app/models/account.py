@@ -11,6 +11,7 @@ class PositionResponse(BaseModel):
     volume: int
     avg_price: float
     current_price: float
+    change_pct: float = 0      # 当日涨跌幅(%)
     market_value: float
     floating_pnl: float
     floating_pnl_pct: float

@@ -60,7 +60,10 @@ def get_stock_name(symbol: str) -> str:
 
 
 def get_realtime_prices(symbols: list) -> dict:
-    """Fetch real-time stock prices from Xueqiu (non-blocking)."""
+    """Fetch real-time stock prices and change_pct from Xueqiu (non-blocking).
+    
+    Returns: dict like {symbol: {"price": float, "change_pct": float}, ...}
+    """
     global _stock_price_cache, _price_cache_time
     import time as _time
     import concurrent.futures
@@ -89,7 +92,10 @@ def get_realtime_prices(symbols: list) -> dict:
             try:
                 quote = engine.get_stock_quote(symbol)
                 if quote and quote.get('current'):
-                    return symbol, quote.get('current')
+                    return symbol, {
+                        "price": quote.get('current'),
+                        "change_pct": quote.get('percent', 0) or 0,
+                    }
             except Exception:
                 pass
             return symbol, None
@@ -99,9 +105,9 @@ def get_realtime_prices(symbols: list) -> dict:
             futures = {executor.submit(_fetch_one, s): s for s in symbols}
             for future in concurrent.futures.as_completed(futures, timeout=5):
                 try:
-                    symbol, price = future.result(timeout=3)
-                    if price is not None:
-                        _stock_price_cache[symbol] = price
+                    symbol, data = future.result(timeout=3)
+                    if data is not None:
+                        _stock_price_cache[symbol] = data
                 except concurrent.futures.TimeoutError:
                     print(f"[Portfolio] Timeout fetching price for {futures[future]}")
                 except Exception:
@@ -192,7 +198,14 @@ async def get_portfolio():
     total_position_value = 0
     positions = []
     for p in position_list:
-        current_price = prices.get(p['symbol'], p['avg_price'])
+        price_data = prices.get(p['symbol'], {})
+        if isinstance(price_data, dict):
+            current_price = price_data.get('price', p['avg_price'])
+            change_pct = price_data.get('change_pct', 0)
+        else:
+            # backward compatibility with old cache format
+            current_price = price_data
+            change_pct = 0
         market_value = p['volume'] * current_price
         cost_value = p['volume'] * p['avg_price']
         floating_pnl = market_value - cost_value
@@ -205,6 +218,7 @@ async def get_portfolio():
             volume=p['volume'],
             avg_price=p['avg_price'],
             current_price=current_price,
+            change_pct=change_pct,
             market_value=market_value,
             floating_pnl=floating_pnl,
             floating_pnl_pct=floating_pnl_pct,
@@ -262,7 +276,13 @@ async def get_positions():
 
     positions = []
     for p in position_list:
-        current_price = prices.get(p['symbol'], p['avg_price'])
+        price_data = prices.get(p['symbol'], {})
+        if isinstance(price_data, dict):
+            current_price = price_data.get('price', p['avg_price'])
+            change_pct = price_data.get('change_pct', 0)
+        else:
+            current_price = price_data
+            change_pct = 0
         market_value = p['volume'] * current_price
         cost_value = p['volume'] * p['avg_price']
         floating_pnl = market_value - cost_value
@@ -274,6 +294,7 @@ async def get_positions():
             volume=p['volume'],
             avg_price=p['avg_price'],
             current_price=current_price,
+            change_pct=change_pct,
             market_value=market_value,
             floating_pnl=floating_pnl,
             floating_pnl_pct=floating_pnl_pct,

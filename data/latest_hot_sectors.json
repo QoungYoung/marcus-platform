@@ -1,118 +1,24 @@
 {
-  "generated_at": "2026-06-03T07:09:40.087133",
-  "news_count": 6,
+  "generated_at": "2026-06-03T07:44:30.244908",
+  "news_count": 10,
   "source": "deepseek_concept",
-  "sentiment_score": 75.0,
+  "sentiment_score": 63.125,
   "hot_concepts": [
-    "光通信模块",
-    "半导体概念",
-    "英伟达概念"
+    "AIPC"
   ],
   "concept_scores": {},
   "summary": {
-    "s_level_count": 2,
-    "a_level_count": 4,
-    "b_level_count": 1,
-    "c_level_count": 1,
+    "s_level_count": 0,
+    "a_level_count": 8,
+    "b_level_count": 0,
+    "c_level_count": 0,
     "top_sectors": [
       {
-        "sector": "光通信模块",
-        "impact_score": 90,
-        "news_count": 1
-      },
-      {
-        "sector": "半导体概念",
+        "sector": "AIPC",
         "impact_score": 85,
         "news_count": 1
       }
     ]
   },
-  "impact_analysis": [
-    {
-      "news_id": 1,
-      "title": "造车新势力创单月交付纪录 新能源汽车行业孕育新动力",
-      "impact_level": "A",
-      "impact_scope": "板块",
-      "affected_sectors": [],
-      "credibility_score": 85,
-      "expected_impact": "提振新能源汽车产业链信心，短期可能带动相关个股上涨",
-      "reason": "行业销售纪录属于行业事件，对板块有积极影响"
-    },
-    {
-      "news_id": 2,
-      "title": "MiniMax、智谱相继宣布冲刺科创板 大模型双雄为何“快步”回A？",
-      "impact_level": "B",
-      "impact_scope": "个股",
-      "affected_sectors": [
-        "英伟达概念"
-      ],
-      "credibility_score": 80,
-      "expected_impact": "提升AI大模型公司上市预期，对概念股情绪有短期刺激",
-      "reason": "公司层面冲刺科创板上市，属于利好消息，但尚未落地"
-    },
-    {
-      "news_id": 3,
-      "title": "全新基因疗法大幅降低“坏”胆固醇",
-      "impact_level": "A",
-      "impact_scope": "板块",
-      "affected_sectors": [],
-      "credibility_score": 90,
-      "expected_impact": "生物医药板块获得技术突破支撑，可能引发概念炒作",
-      "reason": "重大科研成果属于行业事件，对医疗健康板块有正面催化"
-    },
-    {
-      "news_id": 4,
-      "title": "桌面级光刻机将数天工序压缩至数分钟",
-      "impact_level": "A",
-      "impact_scope": "板块",
-      "affected_sectors": [
-        "半导体概念"
-      ],
-      "credibility_score": 85,
-      "expected_impact": "对半导体设备及光刻机相关概念形成利好，可能带动板块活跃",
-      "reason": "技术突破属于行业重大事件，且涉及半导体核心环节"
-    },
-    {
-      "news_id": 5,
-      "title": "外资公募再增资 中国资产性价比吸引全球资金",
-      "impact_level": "S",
-      "impact_scope": "大盘",
-      "affected_sectors": [],
-      "credibility_score": 95,
-      "expected_impact": "外资流入预期增强，整体市场信心提升，可能推动指数上行",
-      "reason": "资金面重大利好，属国家级别资金流动事件"
-    },
-    {
-      "news_id": 6,
-      "title": "外资公募再增资，中国资产性价比吸引全球资金",
-      "impact_level": "S",
-      "impact_scope": "大盘",
-      "affected_sectors": [],
-      "credibility_score": 95,
-      "expected_impact": "与新闻5相同，强化外资流入信号",
-      "reason": "重复报道，但仍是国家级别资金面利好"
-    },
-    {
-      "news_id": 7,
-      "title": "光通信产业链领涨 A股结构性行情延续",
-      "impact_level": "A",
-      "impact_scope": "板块",
-      "affected_sectors": [
-        "光通信模块"
-      ],
-      "credibility_score": 80,
-      "expected_impact": "光通信板块成为市场主线，短期资金持续聚集",
-      "reason": "板块领涨属于行业事件，且带动结构性行情"
-    },
-    {
-      "news_id": 8,
-      "title": "美军在波斯湾袭击一艘油轮",
-      "impact_level": "C",
-      "impact_scope": "板块",
-      "affected_sectors": [],
-      "credibility_score": 60,
-      "expected_impact": "短期可能引发油价波动和避险情绪，但影响有限",
-      "reason": "突发地缘事件，属于外部不确定性消息，传导至A股程度较低"
-    }
-  ]
+  "impact_analysis": []
 }
