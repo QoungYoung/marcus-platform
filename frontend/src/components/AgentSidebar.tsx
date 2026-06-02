@@ -15,6 +15,19 @@ interface IndexData {
   volume?: number;
 }
 
+interface MarketFlowData {
+  net_amount: number;           // 主力净流入金额(元)
+  net_amount_fmt: string;       // 格式化: "+1.26亿"
+  net_amount_rate: number;      // 主力净流入占比(%)
+  flow_nature: string;          // 资金性质: 主力建仓/温和流入/主力出货/温和流出/平衡
+  buy_elg_amount: number;       // 超大单净流入
+  buy_lg_amount: number;        // 大单净流入
+  buy_md_amount: number;        // 中单净流入
+  buy_sm_amount: number;        // 小单净流入
+  pct_change_sh: number;        // 上证涨跌幅
+  pct_change_sz: number;        // 深证涨跌幅
+}
+
 interface HotSector {
   name: string;
   ts_code: string;
@@ -33,16 +46,18 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
   const [indices, setIndices] = useState<IndexData[]>([]);
   const [watchlist, setWatchlist] = useState<StockInfo[]>([]);
   const [hotSectors, setHotSectors] = useState<HotSector[]>([]);
+  const [marketFlow, setMarketFlow] = useState<MarketFlowData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchData = async () => {
     setRefreshing(true);
 
     // 并行请求，sectors 慢也不会阻塞 indices 和 portfolio
-    const [indicesRes, sectorsRes, portfolioRes] = await Promise.allSettled([
+    const [indicesRes, sectorsRes, portfolioRes, flowRes] = await Promise.allSettled([
       fetch(`${MARCUS_API}/market/indices`),
       fetch(`${MARCUS_API}/market/concept-fund-flow`),
       fetch(`${MARCUS_API}/portfolio`),
+      fetch(`${MARCUS_API}/market/moneyflow-mkt`),
     ]);
 
     // indices
@@ -85,6 +100,32 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
       }
     } else {
       console.log('Failed to fetch portfolio');
+    }
+
+    // market moneyflow
+    if (flowRes.status === 'fulfilled' && flowRes.value.ok) {
+      try {
+        const flowData = await flowRes.value.json();
+        const d = flowData.data;
+        if (d) {
+          setMarketFlow({
+            net_amount: d.net_amount || 0,
+            net_amount_fmt: d.net_amount_fmt || '',
+            net_amount_rate: d.net_amount_rate || 0,
+            flow_nature: d.flow_nature || '--',
+            buy_elg_amount: d.buy_elg_amount || 0,
+            buy_lg_amount: d.buy_lg_amount || 0,
+            buy_md_amount: d.buy_md_amount || 0,
+            buy_sm_amount: d.buy_sm_amount || 0,
+            pct_change_sh: d.pct_change_sh || 0,
+            pct_change_sz: d.pct_change_sz || 0,
+          });
+        }
+      } catch (e) {
+        console.log('Failed to parse market flow:', e);
+      }
+    } else {
+      console.log('Failed to fetch market flow');
     }
 
     setRefreshing(false);
@@ -157,6 +198,98 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
           </div>
         )}
       </div>
+
+      {/* Market Moneyflow Section — 大盘资金流向 */}
+      {marketFlow && (
+        <div className="agent-panel-section">
+          <div className="agent-sec-title">
+            <i className="fas fa-coins"></i> 大盘资金流向
+          </div>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '4px 0 6px 0',
+          }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--agent-text-primary)' }}>
+              主力净流入
+            </span>
+            <span style={{
+              fontSize: '14px',
+              fontWeight: 700,
+              color: marketFlow.net_amount >= 0 ? 'var(--agent-green)' : 'var(--agent-red)',
+            }}>
+              {marketFlow.net_amount_fmt || (marketFlow.net_amount / 100000000).toFixed(2) + '亿'}
+            </span>
+          </div>
+          {/* 资金性质标签 */}
+          <div style={{
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 600,
+            background: marketFlow.net_amount >= 0
+              ? 'rgba(0, 200, 100, 0.12)'
+              : 'rgba(255, 80, 80, 0.12)',
+            color: marketFlow.net_amount >= 0
+              ? 'var(--agent-green)'
+              : 'var(--agent-red)',
+            marginBottom: '8px',
+          }}>
+            {marketFlow.flow_nature}
+          </div>
+          {/* 分类资金流向 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '11px' }}>
+            {[
+              { label: '超大单', amount: marketFlow.buy_elg_amount },
+              { label: '大单', amount: marketFlow.buy_lg_amount },
+              { label: '中单', amount: marketFlow.buy_md_amount },
+              { label: '小单', amount: marketFlow.buy_sm_amount },
+            ].map(item => {
+              const yi = item.amount / 100000000;
+              const isIn = yi >= 0;
+              return (
+                <div key={item.label} style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}>
+                  <span style={{ color: 'var(--agent-text-dim)', width: '40px' }}>{item.label}</span>
+                  {/* mini bar */}
+                  <div style={{
+                    flex: 1,
+                    height: '6px',
+                    background: 'rgba(255,255,255,0.06)',
+                    borderRadius: '3px',
+                    margin: '0 8px',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      width: `${Math.min(100, Math.abs(yi) / 5 * 100)}%`,
+                      height: '100%',
+                      borderRadius: '3px',
+                      background: isIn ? 'var(--agent-green)' : 'var(--agent-red)',
+                      marginLeft: isIn ? 'auto' : '0',
+                      marginRight: isIn ? '0' : 'auto',
+                      float: isIn ? 'right' : 'left',
+                    }} />
+                  </div>
+                  <span style={{
+                    color: isIn ? 'var(--agent-green)' : 'var(--agent-red)',
+                    fontWeight: 600,
+                    width: '48px',
+                    textAlign: 'right',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {isIn ? '+' : ''}{yi.toFixed(2)}亿
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Watchlist Section */}
       <div className="agent-panel-section">

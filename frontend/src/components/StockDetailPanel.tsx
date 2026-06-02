@@ -42,9 +42,42 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
     const fetchQuote = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`${MARCUS_API}/market/quote/${stock.symbol}`);
-        if (res.ok) {
-          const data = await res.json();
+        const [quoteRes, flowRes] = await Promise.all([
+          fetch(`${MARCUS_API}/market/quote/${stock.symbol}`),
+          fetch(`${MARCUS_API}/market/moneyflow/${stock.symbol}?limit=1`),
+        ]);
+
+        let net_inflow: number | undefined;
+        let inflow_ratio: number | undefined;
+
+        // 解析资金流向数据（主力净流入）
+        if (flowRes.ok) {
+          const flowData = await flowRes.json();
+          console.log('Moneyflow API response:', flowData);
+          const flows = flowData.flows || [];
+          if (flows.length > 0) {
+            const latest = flows[0];
+            // net_mf_amount 单位是万元，转换为亿 (1亿 = 10000万)
+            net_inflow = (latest.net_mf_amount || 0) / 10000;
+
+            // 计算流入占比（用于流柱图）
+            const totalBuy =
+              (latest.buy_sm_amount || 0) +
+              (latest.buy_md_amount || 0) +
+              (latest.buy_lg_amount || 0) +
+              (latest.buy_elg_amount || 0);
+            const totalSell =
+              (latest.sell_sm_amount || 0) +
+              (latest.sell_md_amount || 0) +
+              (latest.sell_lg_amount || 0) +
+              (latest.sell_elg_amount || 0);
+            const total = totalBuy + totalSell;
+            inflow_ratio = total > 0 ? Math.round((totalBuy / total) * 100) : 50;
+          }
+        }
+
+        if (quoteRes.ok) {
+          const data = await quoteRes.json();
           console.log('Quote API response:', data);
           setQuote({
             symbol: data.symbol,
@@ -58,6 +91,8 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
             amount: data.amount,
             turnover_rate: data.turnover_rate,
             pe_ratio: data.pe_ttm,
+            net_inflow,
+            inflow_ratio,
           });
         }
       } catch (e) {
@@ -228,7 +263,7 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
             <div className="agent-detail-row" style={{ borderBottom: 'none' }}>
               <span className="dl">主力净流入</span>
               <span className={`dv ${(displayStock.net_inflow || 0) >= 0 ? 'green' : 'red'}`}>
-                {isUp ? '+' : ''}{(displayStock.net_inflow || 0).toFixed(2)} 亿
+                {(displayStock.net_inflow || 0) >= 0 ? '+' : ''}{(displayStock.net_inflow || 0).toFixed(2)} 亿
               </span>
             </div>
             <div className="agent-flow-bar-wrap">
