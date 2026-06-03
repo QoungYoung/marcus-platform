@@ -43,8 +43,10 @@ class XueqiuEngine:
         self.data_dir = os.path.expanduser(data_dir)
         os.makedirs(self.data_dir, exist_ok=True)
         
-        # 设置 token
-        self.token = self.config.get('token', '')
+        # 设置 token（优先环境变量，兼容 Docker 部署）
+        self.token = os.getenv('XUEQIU_TOKEN', self.config.get('token', ''))
+        if not self.token:
+            self.token = self.config.get('token', '')
         if self.token:
             ball.set_token(self.token)
             print(f"[OK] Token 已配置")
