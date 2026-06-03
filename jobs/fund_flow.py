@@ -11,11 +11,12 @@
 
 输出结构:
 {
-    'market':  {'main_net_fmt': '+3.52亿'},
+    'market':  {'main_net_fmt': '+3.52亿', 'source_stock_count': 12, 'source_date': '20260602'},
+    'market_wide': {'net_amount_fmt': '+100.50亿', 'flow_nature': '主力建仓', ...} | None,
     'north':   {'total_net': 0, 'sh_net': 0, 'sz_net': 0},
     'limit_up':{'zt_count': 47, 'market_heat': 68},  ← 精确来自 limit_list
-    'fund_score': 62.5,        # 0-100 综合评分
-    'fund_signal': '温和流入',  # 信号标签
+    'fund_score': 62.5,        # 0-100 综合评分（基于自选股）
+    'fund_signal': '温和流入',  # 信号标签（基于自选股）
     'top_inflow': [
         {'industry': '半导体', 'net_fmt': '12.3亿', ...},
     ],
@@ -174,6 +175,72 @@ def _fetch_limit_up(trade_date: str) -> dict:
         return None
 
 
+def _fetch_market_moneyflow_dc(trade_date: str) -> dict:
+    """
+    获取全市场（沪深两市合计）资金流向。
+    数据源: Tushare pro.moneyflow_mkt_dc() → 东方财富大盘资金流（日频，盘后更新）
+
+    Returns:
+        {"trade_date": str, "net_amount": float(万元), "net_amount_fmt": "+XX.XX亿",
+         "pct_change_sh": float, "pct_change_sz": float, "flow_nature": str} 或 None
+    """
+    try:
+        pro = get_tushare_pro()
+        df = pro.moneyflow_mkt_dc(trade_date=trade_date)
+        if df is None or df.empty:
+            print(f"[fund_flow] ⚠️ moneyflow_mkt_dc 无数据 (date={trade_date})", file=sys.stderr)
+            return None
+
+        row = df.iloc[0]
+        # ⚠️ Tushare moneyflow_mkt_dc 单位不一致：
+        #    net_amount → 元（yuan），buy_*_amount → 万元
+        #    统一归一化为万元
+        net_amount_raw = float(row.get("net_amount", 0) or 0)  # 元
+        net_amount = net_amount_raw / 10000                     # 元 → 万元
+
+        # 资金性质判断
+        elg_ratio = float(row.get("buy_elg_amount_rate", 0) or 0)
+        if net_amount > 0 and elg_ratio > 10:
+            flow_nature = "主力建仓"
+        elif net_amount > 0:
+            flow_nature = "温和流入"
+        elif net_amount < -500000 and elg_ratio < -5:  # 净流出超过 -50亿（万元）
+            flow_nature = "主力出货"
+        elif net_amount < 0:
+            flow_nature = "温和流出"
+        else:
+            flow_nature = "平衡"
+
+        net_yi = net_amount / 10000  # 万元 → 亿元
+        net_fmt = f"{net_yi:+.2f}亿" if abs(net_yi) >= 1 else f"{net_amount:+.0f}万"
+
+        return {
+            "trade_date": str(row.get("trade_date", trade_date)),
+            "net_amount": net_amount,
+            "net_amount_fmt": net_fmt,
+            "net_amount_yi": round(net_yi, 2),
+            "net_amount_rate": round(float(row.get("net_amount_rate", 0) or 0), 2),
+            "pct_change_sh": round(float(row.get("pct_change_sh", 0) or 0), 2),
+            "pct_change_sz": round(float(row.get("pct_change_sz", 0) or 0), 2),
+            "close_sh": round(float(row.get("close_sh", 0) or 0), 2),
+            "close_sz": round(float(row.get("close_sz", 0) or 0), 2),
+            "flow_nature": flow_nature,
+            "source": "tushare_daily",
+            # 大/中/小单拆分明细（万元）及占比（%）
+            "buy_elg_amount": float(row.get("buy_elg_amount", 0) or 0),
+            "buy_elg_amount_rate": round(float(row.get("buy_elg_amount_rate", 0) or 0), 2),
+            "buy_lg_amount": float(row.get("buy_lg_amount", 0) or 0),
+            "buy_lg_amount_rate": round(float(row.get("buy_lg_amount_rate", 0) or 0), 2),
+            "buy_md_amount": float(row.get("buy_md_amount", 0) or 0),
+            "buy_md_amount_rate": round(float(row.get("buy_md_amount_rate", 0) or 0), 2),
+            "buy_sm_amount": float(row.get("buy_sm_amount", 0) or 0),
+            "buy_sm_amount_rate": round(float(row.get("buy_sm_amount_rate", 0) or 0), 2),
+        }
+    except Exception as e:
+        print(f"[fund_flow] ⚠️ moneyflow_mkt_dc 获取失败: {e}", file=sys.stderr)
+        return None
+
+
 # ═══════════════════════════════════════════════════════
 # 公开接口
 # ═══════════════════════════════════════════════════════
@@ -185,15 +252,26 @@ def get_fund_flow_summary(symbols: list = None) -> dict:
     调用方传入关心的股票代码（watchlist + 持仓），按需拉取个股资金流，
     聚合计算主力净流向、综合评分、信号标签、板块排行。
 
+    同时拉取全市场大盘资金流（moneyflow_mkt_dc）作对照参考。
+
     Args:
         symbols: 股票代码列表，如 ['SH600570', 'SZ002230', 'SH688981', ...]
                  每个代码独立查询 pro.moneyflow()，汇总后计算评分。
 
     Returns:
-        dict: 见模块顶部文档
+        dict: {
+            "market":        {main_net_fmt, source_stock_count, source_date}  ← 自选股汇总
+            "market_wide":   {net_amount_fmt, net_amount_yi, flow_nature, ...} ← 全市场大盘
+            "north":         {total_net, sh_net, sz_net},
+            "limit_up":      {zt_count, market_heat, ...},
+            "fund_score":    float,        # 0-100 (基于自选股)
+            "fund_signal":   str,
+            "top_inflow":    [...],
+        }
     """
     empty = {
-        "market": {"main_net_fmt": "N/A"},
+        "market": {"main_net_fmt": "N/A", "source_stock_count": 0, "source_date": ""},
+        "market_wide": None,
         "north": {"total_net": 0, "sh_net": 0, "sz_net": 0},
         "limit_up": {"zt_count": 0, "market_heat": 50},
         "fund_score": 50.0,
@@ -201,7 +279,7 @@ def get_fund_flow_summary(symbols: list = None) -> dict:
         "top_inflow": [],
     }
 
-    # ── 0. 初始化 Tushare（无论有无 symbols 都需要拉涨停数据）──
+    # ── 0. 初始化 Tushare（无论有无 symbols 都需要拉涨停/大盘数据）──
     try:
         pro = get_tushare_pro()
     except Exception as e:
@@ -226,12 +304,44 @@ def get_fund_flow_summary(symbols: list = None) -> dict:
     else:
         print(f"[fund_flow] ⚠️ akshare 涨停池无数据", file=sys.stderr)
 
+    # ── 0.6 全市场大盘资金流（moneyflow_mkt_dc，尝试近3日）──
+    market_wide = None
+    from datetime import datetime as dt_mkt, timedelta as td_mkt
+    for offset in range(3):
+        attempt_date = (dt_mkt.now() - td_mkt(days=offset)).strftime("%Y%m%d")
+        mkt_data = _fetch_market_moneyflow_dc(attempt_date)
+        if mkt_data:
+            market_wide = mkt_data
+            print(f"[fund_flow] ✅ 全市场资金流 (date={mkt_data['trade_date']}): "
+                  f"net={mkt_data['net_amount_fmt']} | "
+                  f"沪指{mkt_data['pct_change_sh']:+.2f}% | "
+                  f"深指{mkt_data['pct_change_sz']:+.2f}% | "
+                  f"性质={mkt_data['flow_nature']}", file=sys.stderr)
+            break
+    if not market_wide:
+        print(f"[fund_flow] ⚠️ 全市场资金流无数据", file=sys.stderr)
+
     if not symbols:
         print("[fund_flow] ⚠️ symbols 为空，跳过个股资金流查询", file=sys.stderr)
+        if market_wide:
+            empty["market_wide"] = market_wide
         return empty
 
     # 去重
     symbols = list(dict.fromkeys([s.strip().upper() for s in symbols]))
+
+    # ── 1. 智能交易日判定：盘中（15:15前）优先检查昨日数据 ──
+    effective_trade_date = trade_date
+    now = datetime.now()
+    if now.hour < 15 or (now.hour == 15 and now.minute < 15):
+        # 盘中时段，Tushare moneyflow 日频数据尚未更新，直接回退到昨日
+        prev = now - timedelta(days=1)
+        if prev.weekday() == 5:
+            prev -= timedelta(days=1)
+        elif prev.weekday() == 6:
+            prev -= timedelta(days=2)
+        effective_trade_date = prev.strftime("%Y%m%d")
+        print(f"[fund_flow] 盘中({now.hour}:{now.minute:02d})，个股资金流使用昨日({effective_trade_date})数据", file=sys.stderr)
 
     # ── 2. 并发拉取个股资金流 ──
     def _batch_fetch(date_str: str) -> list[dict]:
@@ -253,20 +363,25 @@ def get_fund_flow_summary(symbols: list = None) -> dict:
                 print("[fund_flow] ⚠️ 部分请求超时", file=sys.stderr)
         return results
 
-    results_raw = _batch_fetch(trade_date)
+    results_raw = _batch_fetch(effective_trade_date)
+    final_source_date = effective_trade_date
 
     if not results_raw:
         # 降级：尝试前一个交易日
-        prev_date = (datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-        print(f"[fund_flow] 今日无数据，回退到 {prev_date}...", file=sys.stderr)
+        prev_date = (datetime.strptime(effective_trade_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+        print(f"[fund_flow] {effective_trade_date} 无数据，回退到 {prev_date}...", file=sys.stderr)
         results_raw = _batch_fetch(prev_date)
+        if results_raw:
+            final_source_date = prev_date
 
     if not results_raw:
         print("[fund_flow] ⚠️ 无任何有效数据，返回空摘要", file=sys.stderr)
+        if market_wide:
+            empty["market_wide"] = market_wide
         return empty
 
     success_rate = len(results_raw) / len(symbols) * 100
-    print(f"[fund_flow] 数据: {len(results_raw)}/{len(symbols)} ({success_rate:.0f}%)", file=sys.stderr)
+    print(f"[fund_flow] 数据: {len(results_raw)}/{len(symbols)} ({success_rate:.0f}%) | 数据源日期: {final_source_date}", file=sys.stderr)
 
     # ── 3. 聚合计算 ──
     total_main_buy = sum(r["main_buy"] for r in results_raw)
@@ -348,7 +463,12 @@ def get_fund_flow_summary(symbols: list = None) -> dict:
 
     # ── 8. 组装结果 ──
     result = {
-        "market": {"main_net_fmt": main_net_fmt},
+        "market": {
+            "main_net_fmt": main_net_fmt,
+            "source_stock_count": len(results_raw),
+            "source_date": final_source_date,
+        },
+        "market_wide": market_wide,
         "north": {"total_net": 0, "sh_net": 0, "sz_net": 0},
         "limit_up": limit_up,
         "fund_score": fund_score,
@@ -356,8 +476,13 @@ def get_fund_flow_summary(symbols: list = None) -> dict:
         "top_inflow": top_inflow,
     }
 
-    print(f"[fund_flow] ✅ net={main_net_fmt} | score={fund_score} | "
-          f"signal={fund_signal} | heat={market_heat} | zt={zt_count}", file=sys.stderr)
+    # 日志打印：自选股 + 全市场对照
+    mkt_wide_str = ""
+    if market_wide:
+        mkt_wide_str = f" | 全市场: {market_wide['net_amount_fmt']}({market_wide['flow_nature']})"
+    print(f"[fund_flow] ✅ 自选股({final_source_date}): net={main_net_fmt} (共{len(results_raw)}只) | "
+          f"score={fund_score} | signal={fund_signal}{mkt_wide_str} | "
+          f"zt={zt_count}", file=sys.stderr)
 
     return result
 

@@ -300,16 +300,20 @@ export const getMarketMoneyflowTool = {
 		const signSh = m.pct_change_sh >= 0 ? '+' : '';
 		const signSz = m.pct_change_sz >= 0 ? '+' : '';
 		const lines = [
-			`大盘资金流向 ${m.trade_date}`,
-			`上证: ${m.close_sh} (${signSh}${m.pct_change_sh}%)`,
-			`深证: ${m.close_sz} (${signSz}${m.pct_change_sz}%)`,
-			`主力净流入: ${m.net_amount_fmt} (${m.net_amount_rate}%)`,
-			`超大单: ${(m.buy_elg_amount/1e8).toFixed(2)}亿 (${m.buy_elg_amount_rate}%)`,
-			`大单: ${(m.buy_lg_amount/1e8).toFixed(2)}亿 (${m.buy_lg_amount_rate}%)`,
-			`中单: ${(m.buy_md_amount/1e8).toFixed(2)}亿 (${m.buy_md_amount_rate}%)`,
-			`小单: ${(m.buy_sm_amount/1e8).toFixed(2)}亿 (${m.buy_sm_amount_rate}%)`,
-			`性质: ${m.flow_nature}`,
+			`大盘资金流向 ${m.trade_date} (日频)`,
 		];
+		if (m.close_sh || m.close_sz) {
+			lines.push(`上证: ${m.close_sh} (${signSh}${m.pct_change_sh}%)`);
+			lines.push(`深证: ${m.close_sz} (${signSz}${m.pct_change_sz}%)`);
+		}
+		lines.push(
+			`主力净流入: ${m.net_amount_fmt}${m.net_amount_rate ? ` (${m.net_amount_rate}%)` : ''}`,
+			`超大单: ${(m.buy_elg_amount/10000).toFixed(2)}亿 (${m.buy_elg_amount_rate}%)`,
+			`大单: ${(m.buy_lg_amount/10000).toFixed(2)}亿 (${m.buy_lg_amount_rate}%)`,
+			`中单: ${(m.buy_md_amount/10000).toFixed(2)}亿 (${m.buy_md_amount_rate}%)`,
+			`小单: ${(m.buy_sm_amount/10000).toFixed(2)}亿 (${m.buy_sm_amount_rate}%)`,
+			`性质: ${m.flow_nature}`,
+		);
 		return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
 	},
 };
@@ -456,7 +460,7 @@ export const getDbSchemaTool = {
 export const placeOrderTool = {
   name: 'place_order',
   label: '下单交易',
-  description: '执行股票买入或卖出交易（模拟交易）。下单前必须先用 get_quote 获取最新价，用 get_portfolio 确认仓位和资金。返回订单结果含成交价、数量、成本/盈亏。',
+  description: '执行股票买入或卖出交易（模拟交易）。⚠️ A股T+1规则：当天买入的股票当天不能卖出！卖出前必须确认该持仓的入场日期不是今天。下单前必须先用 get_quote 获取最新价，用 get_portfolio 确认仓位和资金。返回订单结果含成交价、数量、成本/盈亏。',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001' }),
     side: Type.String({ description: '交易方向: buy(买入) 或 sell(卖出)' }),

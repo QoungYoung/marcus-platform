@@ -697,10 +697,11 @@ class SchedulerService:
             trade_mode_instruction = (
                 "现在是尾盘 14:30，进入 **closing 模式**。\n"
                 "**严格禁止新开仓**。只执行以下操作：\n"
-                "1. 对持仓逐只检查，止损位触发则立即卖出\n"
-                "2. 达到止盈目标的卖出\n"
-                "3. 趋势破位的减仓 50%\n"
-                "4. 报告尾盘操作结果"
+                "⚠️ A股 T+1 规则：今日买入的持仓今日不可卖出，跳过这些持仓！\n"
+                "1. 对持仓逐只检查（跳过今日买入的），止损位触发则立即卖出\n"
+                "2. 达到止盈目标的卖出（仅限昨日及之前买入的）\n"
+                "3. 趋势破位的减仓 50%（排除 T+1 锁定持仓）\n"
+                "4. 报告尾盘操作结果，标明哪些持仓因 T+1 锁定未操作"
             )
         elif 'early' in task.id or pi_prompt_context == 'early' or 'morning' in task.id or pi_prompt_context == 'morning':
             trade_mode_instruction = (

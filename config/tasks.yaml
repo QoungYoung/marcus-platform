@@ -6,7 +6,6 @@ settings:
     max_attempts: 3
     delay_seconds: 60
   log_retention_days: 30
-  workspace: .
   channels:
     qqbot:
       enabled: true

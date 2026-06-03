@@ -752,9 +752,16 @@ async def get_concept_fund_flow(
         pro = ts.pro_api(token)
 
         from datetime import datetime as dt, timedelta
-        
-        for offset in range(3):
-            attempt_date = (dt.now() - timedelta(days=offset)).strftime("%Y%m%d")
+        now = dt.now()
+        is_intraday = now.hour < 15 or (now.hour == 15 and now.minute < 15)
+        start_offset = 1 if is_intraday else 0  # 盘中跳过今天
+
+        for offset in range(start_offset, start_offset + 3):
+            attempt_date = (now - timedelta(days=offset)).strftime("%Y%m%d")
+            # 跳过周末
+            attempt_dt = now - timedelta(days=offset)
+            if attempt_dt.weekday() >= 5:
+                continue
             try:
                 df_daily = pro.dc_daily(
                     trade_date=attempt_date, idx_type='概念板块',
@@ -797,7 +804,7 @@ async def get_concept_fund_flow(
         raise HTTPException(status_code=500, detail=f"获取概念行情失败: {str(e)}")
 
 
-# ========== 大盘资金流向 API (数据源: Tushare moneyflow_mkt_dc) ==========
+# ========== 大盘资金流向 API (与 jobs/fund_flow._fetch_market_moneyflow_dc 同源) ==========
 
 @router.get("/moneyflow-mkt")
 async def get_moneyflow_mkt(
@@ -806,84 +813,82 @@ async def get_moneyflow_mkt(
     """
     获取大盘资金流向数据（主力/超大单/大单/中单/小单净流入）。
 
-    数据源: Tushare moneyflow_mkt_dc，东方财富大盘资金流。
-    返回上证/深证收盘价、涨跌幅，以及五类资金的净流入金额和占比。
+    数据源: Tushare moneyflow_mkt_dc → 东方财富大盘资金流。
+    与盘中扫描 jobs/fund_flow._fetch_market_moneyflow_dc 完全同源，保证数据一致。
 
     返回字段:
     - trade_date: 交易日期
     - close_sh/pct_change_sh: 上证收盘/涨跌幅
     - close_sz/pct_change_sz: 深证收盘/涨跌幅
-    - net_amount/net_amount_rate: 主力净流入/占比
+    - net_amount/net_amount_rate: 主力净流入(万元)/占比(%)
+    - net_amount_fmt: 主力净流入格式化 (如 +100.50亿)
+    - flow_nature: 资金性质 (主力建仓/温和流入/平衡/温和流出/主力出货)
     - buy_elg_amount/buy_elg_amount_rate: 超大单净流入/占比
     - buy_lg_amount/buy_lg_amount_rate: 大单净流入/占比
     - buy_md_amount/buy_md_amount_rate: 中单净流入/占比
     - buy_sm_amount/buy_sm_amount_rate: 小单净流入/占比
     """
+    from datetime import datetime as dt
+    from pathlib import Path
+    import sys
+
+    # 复用 jobs/fund_flow 中的 _fetch_market_moneyflow_dc，保证与盘中扫描完全一致
+    # backend/app/api/market.py → 上溯 4 层到 marcus-platform 根 → jobs/
+    _jobs_dir = str(Path(__file__).resolve().parent.parent.parent.parent / "jobs")
+    if _jobs_dir not in sys.path:
+        sys.path.insert(0, _jobs_dir)
+
     try:
-        from app.config import get_settings
-        settings = get_settings()
-        token = settings.get_tushare_token()
-
-        import tushare as ts
-        pro = ts.pro_api(token)
-
-        from datetime import datetime as dt, timedelta
+        from fund_flow import _fetch_market_moneyflow_dc
 
         if trade_date:
-            df = pro.moneyflow_mkt_dc(trade_date=trade_date)
+            mkt_data = _fetch_market_moneyflow_dc(trade_date)
         else:
-            for offset in range(3):
-                attempt_date = (dt.now() - timedelta(days=offset)).strftime("%Y%m%d")
-                try:
-                    df = pro.moneyflow_mkt_dc(trade_date=attempt_date)
-                    if df is not None and len(df) > 0:
-                        break
-                except Exception:
+            # 未指定日期：智能回退近3日（盘中自动跳过今天）
+            mkt_data = None
+            from datetime import timedelta
+            now = dt.now()
+            is_intraday = now.hour < 15 or (now.hour == 15 and now.minute < 15)
+            start = 1 if is_intraday else 0
+            for offset in range(start, start + 3):
+                attempt_dt = now - timedelta(days=offset)
+                if attempt_dt.weekday() >= 5:
                     continue
+                attempt_date = attempt_dt.strftime("%Y%m%d")
+                mkt_data = _fetch_market_moneyflow_dc(attempt_date)
+                if mkt_data:
+                    break
 
-        if df is None or len(df) == 0:
+        if not mkt_data:
             return {"data": None, "trade_date": trade_date or "", "message": "无数据"}
 
-        row = df.iloc[0]
+        # 补充明细字段（_fetch_market_moneyflow_dc 已返回 net_amount_fmt / flow_nature 等核心字段）
+        # 同时保持向后兼容的扁平结构返回
         data = {
-            "trade_date": str(row["trade_date"]),
-            "close_sh": round(float(row.get("close_sh", 0) or 0), 2),
-            "pct_change_sh": round(float(row.get("pct_change_sh", 0) or 0), 2),
-            "close_sz": round(float(row.get("close_sz", 0) or 0), 2),
-            "pct_change_sz": round(float(row.get("pct_change_sz", 0) or 0), 2),
-            "net_amount": float(row.get("net_amount", 0) or 0),
-            "net_amount_rate": round(float(row.get("net_amount_rate", 0) or 0), 2),
-            "buy_elg_amount": float(row.get("buy_elg_amount", 0) or 0),
-            "buy_elg_amount_rate": round(float(row.get("buy_elg_amount_rate", 0) or 0), 2),
-            "buy_lg_amount": float(row.get("buy_lg_amount", 0) or 0),
-            "buy_lg_amount_rate": round(float(row.get("buy_lg_amount_rate", 0) or 0), 2),
-            "buy_md_amount": float(row.get("buy_md_amount", 0) or 0),
-            "buy_md_amount_rate": round(float(row.get("buy_md_amount_rate", 0) or 0), 2),
-            "buy_sm_amount": float(row.get("buy_sm_amount", 0) or 0),
-            "buy_sm_amount_rate": round(float(row.get("buy_sm_amount_rate", 0) or 0), 2),
+            "trade_date": mkt_data["trade_date"],
+            "close_sh": mkt_data.get("close_sh", 0),
+            "pct_change_sh": mkt_data.get("pct_change_sh", 0),
+            "close_sz": mkt_data.get("close_sz", 0),
+            "pct_change_sz": mkt_data.get("pct_change_sz", 0),
+            "net_amount": mkt_data["net_amount"],
+            "net_amount_rate": mkt_data.get("net_amount_rate", 0),
+            "net_amount_fmt": mkt_data["net_amount_fmt"],
+            "net_amount_yi": mkt_data.get("net_amount_yi", 0),
+            "flow_nature": mkt_data["flow_nature"],
+            "buy_elg_amount": mkt_data.get("buy_elg_amount", 0),
+            "buy_elg_amount_rate": mkt_data.get("buy_elg_amount_rate", 0),
+            "buy_lg_amount": mkt_data.get("buy_lg_amount", 0),
+            "buy_lg_amount_rate": mkt_data.get("buy_lg_amount_rate", 0),
+            "buy_md_amount": mkt_data.get("buy_md_amount", 0),
+            "buy_md_amount_rate": mkt_data.get("buy_md_amount_rate", 0),
+            "buy_sm_amount": mkt_data.get("buy_sm_amount", 0),
+            "buy_sm_amount_rate": mkt_data.get("buy_sm_amount_rate", 0),
+            "source": mkt_data.get("source", "tushare_daily"),
+            "data_source": "日频(Tushare)",
         }
-
-        # 计算资金性质判断
-        net_amount = data["net_amount"]
-        elg_ratio = data["buy_elg_amount_rate"]
-        if net_amount > 0 and elg_ratio > 10:
-            flow_nature = "主力建仓"  # 超大单主导
-        elif net_amount > 0:
-            flow_nature = "温和流入"
-        elif net_amount < -5e9 and elg_ratio < -5:
-            flow_nature = "主力出货"
-        elif net_amount < 0:
-            flow_nature = "温和流出"
-        else:
-            flow_nature = "平衡"
-
-        data["flow_nature"] = flow_nature
-        data["net_amount_fmt"] = f"{net_amount/1e8:+.2f}亿"
 
         return {"data": data, "success": True}
 
-    except EnvironmentError as e:
-        raise HTTPException(status_code=503, detail=f"Tushare 配置错误: {str(e)}")
     except ImportError:
         raise HTTPException(status_code=503, detail="tushare 库未安装")
     except Exception as e:

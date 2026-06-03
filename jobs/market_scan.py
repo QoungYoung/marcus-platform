@@ -1745,23 +1745,40 @@ def generate_scan_report():
 
     # ====== 资金流向数据 ======
     fund_flow = None
-    try:
-        from fund_flow import get_fund_flow_summary
-        # 传入持仓 + 盘前观察列表，按需查询个股资金流
-        position_symbols = [p['symbol'] for p in positions] if positions else []
-        pre_watchlist = (chain.state.get('pre_market') or {}).get('initial_strategy', {}).get('watchlist', [])
-        # 兼容 watchlist 中可能是 dict 或 str
-        pre_symbols = [w['symbol'] if isinstance(w, dict) else w for w in pre_watchlist]
-        target_symbols = list(dict.fromkeys(position_symbols + pre_symbols))
-        print(f"[资金流] 正在获取资金流向数据 ({len(target_symbols)}只)...")
-        fund_flow = get_fund_flow_summary(symbols=target_symbols)
-        if fund_flow:
-            print(f"[资金流] ✅ 主力净额: {fund_flow.get('market', {}).get('main_net_fmt', 'N/A')} | "
-                  f"涨停: {fund_flow.get('limit_up', {}).get('zt_count', 0)}家 | "
-                  f"资金信号: {fund_flow.get('fund_signal', 'N/A')} (score={fund_flow.get('fund_score', 50)})")
-    except Exception as e:
-        print(f"[资金流] ⚠️ 获取失败: {e}")
-        fund_flow = None
+    now = datetime.now()
+    is_trading_hours = now.weekday() < 5 and (
+        (now.hour == 9 and now.minute >= 30) or
+        (now.hour in (10, 11)) or
+        (now.hour in (13, 14)) or
+        (now.hour == 15 and now.minute == 0)
+    )
+    if is_trading_hours:
+        print(f"[资金流] ⏭️ 盘中时段({now.hour}:{now.minute:02d})，Tushare 日频尚未更新，跳过资金流向查询")
+    else:
+        try:
+            from fund_flow import get_fund_flow_summary
+            # 传入持仓 + 盘前观察列表，按需查询个股资金流
+            position_symbols = [p['symbol'] for p in positions] if positions else []
+            pre_watchlist = (chain.state.get('pre_market') or {}).get('initial_strategy', {}).get('watchlist', [])
+            # 兼容 watchlist 中可能是 dict 或 str
+            pre_symbols = [w['symbol'] if isinstance(w, dict) else w for w in pre_watchlist]
+            target_symbols = list(dict.fromkeys(position_symbols + pre_symbols))
+            print(f"[资金流] 正在获取资金流向数据 ({len(target_symbols)}只，同时拉取全市场大盘)...")
+            fund_flow = get_fund_flow_summary(symbols=target_symbols)
+            if fund_flow:
+                mflow = fund_flow.get('market', {})
+                source_note = f"({mflow.get('source_date', '')})" if mflow.get('source_date') else ""
+                mw = fund_flow.get('market_wide')
+                mw_str = ""
+                if mw:
+                    src_label = "日频(Tushare)"
+                    mw_str = f" | 全市场({src_label}): {mw.get('net_amount_fmt', 'N/A')}({mw.get('flow_nature', '')}, date={mw.get('trade_date', '')})"
+                print(f"[资金流] ✅ 自选股{source_note}主力净额: {mflow.get('main_net_fmt', 'N/A')} (共{mflow.get('source_stock_count', 0)}只) | "
+                      f"涨停: {fund_flow.get('limit_up', {}).get('zt_count', 0)}家 | "
+                      f"资金信号: {fund_flow.get('fund_signal', 'N/A')} (score={fund_flow.get('fund_score', 50)}){mw_str}")
+        except Exception as e:
+            print(f"[资金流] ⚠️ 获取失败: {e}")
+            fund_flow = None
 
     # 🤖 节点B：资金流语义分析
     flow_nature = "量化噪音"
@@ -2323,6 +2340,8 @@ def generate_scan_report():
         top_inflow = fund_flow.get('top_inflow', [])
 
         main_net = mflow.get('main_net_fmt', 'N/A') if mflow else 'N/A'
+        source_stock_count = mflow.get('source_stock_count', 0) if mflow else 0
+        source_date = mflow.get('source_date', '') if mflow else ''
         zt_count = limitup.get('zt_count', 0) if limitup else 0
         market_heat = limitup.get('market_heat', 50) if limitup else 50
         # 盘前(<09:35)涨停家数=0是正常现象，不显示"冰点"
@@ -2339,8 +2358,20 @@ def generate_scan_report():
 
 | 维度 | 数据 |
 |------|------|
-| 主力净流入 | {main_net} |
-| 涨停家数 | {zt_count} {heat_emoji} ({heat_note}) |
+| 主力净流入(自选) | {main_net}{f' ({source_date}，共{source_stock_count}只)' if source_date else ''} |
+"""
+        # 全市场大盘资金流
+        market_wide = fund_flow.get('market_wide')
+        if market_wide:
+            mw_net = market_wide.get('net_amount_fmt', 'N/A')
+            mw_nature = market_wide.get('flow_nature', '')
+            mw_date = market_wide.get('trade_date', '')
+            mw_sh = market_wide.get('pct_change_sh', 0)
+            mw_sz = market_wide.get('pct_change_sz', 0)
+            mw_date_str = f' ({mw_date})' if mw_date else ''
+            report += f"| 全市场资金流 | {mw_net} ({mw_nature}，沪{mw_sh:+.2f}%/深{mw_sz:+.2f}%){mw_date_str} |\n"
+
+        report += f"""| 涨停家数 | {zt_count} {heat_emoji} ({heat_note}) |
 | 资金信号 | {fsignal} (score={fscore:.0f}) |
 """
         if north and north.get('total_net', 0) != 0:
@@ -2356,7 +2387,7 @@ def generate_scan_report():
                 net = item.get('net_fmt', 'N/A')
                 lead = item.get('lead_stock', '')
                 chg = item.get('change_pct', 0)
-                report += f"- {ind}：{net}万元 | 领涨 {lead}({chg:+.2f}%)\n"
+                report += f"- {ind}：{net} | 领涨 {lead}({chg:+.2f}%)\n"
         report += "\n"
 
     # 持仓表现（含今日涨跌幅 + 缩量检测）
