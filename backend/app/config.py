@@ -89,11 +89,8 @@ class Settings(BaseSettings):
 
     @property
     def data_dir(self) -> Path:
-        # Use marcus-platform's own data directory if it exists
-        platform_data = Path(__file__).parent.parent.parent / "data"
-        if platform_data.exists():
-            return platform_data
-        return self.workspace_path / "data"
+        # Always use marcus-platform's own data directory (mounted in Docker)
+        return Path(__file__).parent.parent.parent / "data"
 
     @property
     def vnpy_dir(self) -> Path:
