@@ -18,8 +18,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/ .
 
-# Copy Marcus workspace (read-only for reference)
-COPY workspace-marcus/ /app/workspace/
+# Copy core module (required by backend)
+COPY core/ /app/core/
+
+# Create workspace directory (volume-mounted at runtime)
+RUN mkdir -p /app/workspace
 
 # Expose port
 EXPOSE 8000
