@@ -44,3 +44,25 @@ def get_akshare_dir() -> Path:
 
 def get_data_dir() -> Path:
     return WORKSPACE / "data"
+
+def get_scanner_dir() -> Path:
+    return WORKSPACE / "apps" / "scanner"
+
+def get_trader_dir() -> Path:
+    return WORKSPACE / "apps" / "trader"
+
+def get_review_dir() -> Path:
+    return WORKSPACE / "apps" / "review"
+
+def get_core_dir() -> Path:
+    return WORKSPACE / "core"
+
+def get_jobs_dir() -> Path:
+    return WORKSPACE / "jobs"
+
+# Module-level constants for direct import
+VNPY_DIR = get_vnpy_dir()
+XUEQIU_DIR = get_xueqiu_dir()
+AKSHARE_DIR = get_akshare_dir()
+DATA_DIR = get_data_dir()
+MARCUS_INTEGRATION_DIR = WORKSPACE / "apps" / "integration"
