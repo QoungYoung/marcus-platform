@@ -1,4 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+/** Generate UUID v4 - works in both secure and non-secure contexts */
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for HTTP deployments
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
 import { html } from 'lit';
 import type { LitElement } from 'lit';
 import { Agent, type AgentState, type AgentTool } from '@earendil-works/pi-agent-core';
@@ -985,7 +997,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
     removeSessionMeta(sessionId);
     // 如果删除的是当前会话，新建一个
     if (sessionId === sessionIdRef.current) {
-      const newId = crypto.randomUUID();
+      const newId = generateUUID();
       localStorage.setItem('marcus_session_id', newId);
       sessionIdRef.current = newId;
       updateSessionMeta(newId, { title: '新会话', messageCount: 0, createdAt: new Date().toISOString() });
@@ -1126,7 +1138,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
       let sessionId = sessionIdRef.current;
 
       if (!sessionId) {
-        sessionId = crypto.randomUUID();
+        sessionId = generateUUID();
         sessionIdRef.current = sessionId;
         localStorage.setItem('marcus_session_id', sessionId);
       }
@@ -1591,7 +1603,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
                     createdAt: new Date().toISOString(),
                   });
                 }
-                const newId = crypto.randomUUID();
+                const newId = generateUUID();
                 localStorage.setItem('marcus_session_id', newId);
                 sessionIdRef.current = newId;
                 // 新建会话元数据
