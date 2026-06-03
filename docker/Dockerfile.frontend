@@ -14,7 +14,8 @@ RUN npm ci
 # Copy source files
 COPY frontend/ .
 
-# Build
+# Build (increase memory for large bundles)
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
 
 # Production nginx image
