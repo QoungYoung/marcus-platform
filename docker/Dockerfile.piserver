@@ -9,8 +9,8 @@ WORKDIR /app
 # Copy package files first for caching
 COPY servers/pi-server/package*.json ./
 
-# Install dependencies (including devDependencies for tsx runtime)
-RUN npm ci
+# Install dependencies (Aliyun mirror for faster downloads in China)
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 
 # Copy source code
 COPY servers/pi-server/ .

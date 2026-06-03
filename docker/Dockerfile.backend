@@ -5,6 +5,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Use Aliyun mirrors for faster downloads in China
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -13,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements first for caching
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
 # Copy backend code
 COPY backend/ .

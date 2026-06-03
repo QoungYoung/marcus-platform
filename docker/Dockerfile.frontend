@@ -8,8 +8,8 @@ WORKDIR /app
 # Copy package files
 COPY frontend/package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies (Aliyun mirror for faster downloads in China)
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 
 # Copy source files
 COPY frontend/ .
