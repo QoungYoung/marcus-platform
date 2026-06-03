@@ -183,28 +183,38 @@ configure_env() {
     echo -e "${CYAN}  配置 API Keys${NC}"
     echo -e "${CYAN}═══════════════════════════════════════${NC}"
 
-    if [ "$ENV_EXISTS" = false ] || [ -z "$(grep 'DEEPSEEK_API_KEY=your_deepseek_api_key_here' .env 2>/dev/null)" ]; then
-        read -p "$(echo -e ${YELLOW}DeepSeek API Key [必填]: ${NC})" DEEPSEEK_KEY
+    if [ "$ENV_EXISTS" = false ] || grep -q 'your_deepseek_api_key_here' .env 2>/dev/null; then
+        echo ""
+        echo -e "${YELLOW}请输入 API Keys（直接回车跳过）:${NC}"
+        echo ""
+
+        # 从 /dev/tty 读取以兼容管道模式
+        printf "${YELLOW}DeepSeek API Key [必填]: ${NC}" > /dev/tty
+        read -r DEEPSEEK_KEY < /dev/tty
         if [ -n "$DEEPSEEK_KEY" ]; then
             sed -i "s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=$DEEPSEEK_KEY|" .env
         fi
 
-        read -p "$(echo -e ${YELLOW}Tushare Token [必填]: ${NC})" TUSHARE_KEY
+        printf "${YELLOW}Tushare Token [必填]: ${NC}" > /dev/tty
+        read -r TUSHARE_KEY < /dev/tty
         if [ -n "$TUSHARE_KEY" ]; then
             sed -i "s|^TUSHARE_TOKEN=.*|TUSHARE_TOKEN=$TUSHARE_KEY|" .env
         fi
 
-        read -p "$(echo -e ${YELLOW}雪球 xq_a_token [必填]: ${NC})" XUEQIU_KEY
+        printf "${YELLOW}雪球 xq_a_token [必填]: ${NC}" > /dev/tty
+        read -r XUEQIU_KEY < /dev/tty
         if [ -n "$XUEQIU_KEY" ]; then
             sed -i "s|^XUEQIU_TOKEN=.*|XUEQIU_TOKEN=$XUEQIU_KEY|" .env
         fi
 
         # QQ Bot
-        read -p "$(echo -e ${YELLOW}QQ Bot APP ID [可选]: ${NC})" QQ_ID
+        printf "${YELLOW}QQ Bot APP ID [可选]: ${NC}" > /dev/tty
+        read -r QQ_ID < /dev/tty
         if [ -n "$QQ_ID" ]; then
             sed -i "s|^QQ_APP_ID=.*|QQ_APP_ID=$QQ_ID|" .env
             sed -i "s|^QQ_BOT_ENABLED=.*|QQ_BOT_ENABLED=true|" .env
-            read -p "$(echo -e ${YELLOW}QQ Bot APP Secret: ${NC})" QQ_SECRET
+            printf "${YELLOW}QQ Bot APP Secret: ${NC}" > /dev/tty
+            read -r QQ_SECRET < /dev/tty
             if [ -n "$QQ_SECRET" ]; then
                 sed -i "s|^QQ_APP_SECRET=.*|QQ_APP_SECRET=$QQ_SECRET|" .env
             fi
