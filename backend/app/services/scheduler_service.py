@@ -600,7 +600,7 @@ class SchedulerService:
                 "session_id": f"report_{task_name}_{datetime.now().strftime('%Y%m%d')}"
             }).encode("utf-8")
 
-            pi_url = "http://localhost:3001/chat"
+            pi_url = get_settings().PI_SERVER_URL
             req = urllib.request.Request(
                 pi_url,
                 data=payload,
@@ -744,7 +744,7 @@ class SchedulerService:
             "mode": "trade"  # 使用交易模式（全工具+交易提示词）
         }).encode("utf-8")
 
-        pi_url = "http://localhost:3001/chat"
+        pi_url = get_settings().PI_SERVER_URL
         req = urllib.request.Request(
             pi_url,
             data=payload,

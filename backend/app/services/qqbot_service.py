@@ -22,9 +22,10 @@ if str(_core_dir) not in sys.path:
     sys.path.insert(0, str(_core_dir))
 
 from qq_notifier import QQBotClient, send_c2c_message, get_access_token
+from app.config import get_settings
 
 # ===== 配置 =====
-PI_SERVER_URL = "http://localhost:3001/chat"
+PI_SERVER_URL = get_settings().PI_SERVER_URL
 QQ_RECIPIENT = None  # 将在启动时从 tasks.yaml 读取
 
 
@@ -34,13 +35,13 @@ class QQBotService:
     
     用法：
         service = QQBotService()
-        service.set_pi_server_url("http://localhost:3001/chat")
+        service.set_pi_server_url(get_settings().PI_SERVER_URL)
         await service.start()   # 启动 WebSocket 监听
         service.send_notification(openid, message)  # 发通知
     """
 
     def __init__(self):
-        self.client: Optional[QQBotClient] = None
+        self.client = None
         self.pi_server_url: str = PI_SERVER_URL
         self.default_recipient: Optional[str] = None
         self.running = False
