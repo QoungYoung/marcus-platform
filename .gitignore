@@ -34,6 +34,9 @@ logs/
 # Data (runtime generated)
 data/*.db
 data/*.sqlite
+data/*.json
+data/*.jsonl
+data/strategy_history/
 # keep data directory structure
 !data/.gitkeep
 
