@@ -225,14 +225,17 @@ async def search_market(q: str = Query(..., min_length=1, description="搜索关
     except Exception as e:
         print(f"Stock pool search failed: {e}")
 
-    # 2. 搜索 ETF 池（从 cache.db）
+    # 2. 搜索 ETF 池（从 cache.db，指定 data_dir 为项目 data 目录避免相对路径问题）
     try:
         sys_path = str(settings.xueqiu_dir)
         if sys_path not in __import__('sys').path:
             __import__('sys').path.insert(0, sys_path)
         from xueqiu_engine import XueqiuEngine
 
-        engine = XueqiuEngine(config_file=str(settings.xueqiu_dir / "config.json"))
+        engine = XueqiuEngine(
+            config_file=str(settings.xueqiu_dir / "config.json"),
+            data_dir=str(settings.data_dir),  # 显式指定为项目 data/ 目录
+        )
         etf_list = engine.get_etf_pool_from_db(limit=500)
 
         for etf in etf_list:

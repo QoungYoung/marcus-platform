@@ -1,31 +1,97 @@
 {
-  "generated_at": "2026-06-03T13:39:49.348407",
-  "news_count": 4,
+  "generated_at": "2026-06-03T16:39:47.972096",
+  "news_count": 17,
   "source": "deepseek_concept",
-  "sentiment_score": 80,
+  "sentiment_score": 40,
   "hot_concepts": [
-    "英伟达概念",
-    "超级电容",
-    "CPO概念"
+    "存储芯片"
   ],
   "concept_scores": {},
   "summary": {
     "s_level_count": 0,
-    "a_level_count": 6,
-    "b_level_count": 1,
-    "c_level_count": 1,
+    "a_level_count": 2,
+    "b_level_count": 2,
+    "c_level_count": 3,
     "top_sectors": [
       {
-        "sector": "超级电容",
+        "sector": "存储芯片",
         "impact_score": 85,
         "news_count": 1
-      },
-      {
-        "sector": "英伟达概念",
-        "impact_score": 80,
-        "news_count": 2
       }
     ]
   },
-  "impact_analysis": []
+  "impact_analysis": [
+    {
+      "news_id": 1,
+      "title": "俄称乌袭击客车系“猎杀式恐怖行动” 不排除军事回应",
+      "impact_level": "C",
+      "impact_scope": "地缘政治",
+      "affected_sectors": [],
+      "credibility_score": 80,
+      "expected_impact": "可能引发市场避险情绪，但直接冲击有限",
+      "reason": "俄乌冲突升级威胁，但尚未有实质性行动"
+    },
+    {
+      "news_id": 2,
+      "title": "植田和男：将不断提高利率以应对经济和通胀状况",
+      "impact_level": "B",
+      "impact_scope": "全球利率市场",
+      "affected_sectors": [],
+      "credibility_score": 90,
+      "expected_impact": "利空高估值成长股，全球资金面承压",
+      "reason": "日本央行加息预期明确，影响全球流动性"
+    },
+    {
+      "news_id": 4,
+      "title": "机构：今年一季度全球NAND存储市场规模环比翻倍 长江存储份额13%",
+      "impact_level": "A",
+      "impact_scope": "行业",
+      "affected_sectors": [
+        "存储芯片"
+      ],
+      "credibility_score": 85,
+      "expected_impact": "利好存储芯片产业链，尤其是国产替代方向",
+      "reason": "NAND市场量价齐升，长江存储份额提升验证国产突破"
+    },
+    {
+      "news_id": 5,
+      "title": "伊朗谴责美对格什姆岛侵略性袭击 将动用一切能力反击侵略行为",
+      "impact_level": "C",
+      "impact_scope": "地缘政治",
+      "affected_sectors": [],
+      "credibility_score": 70,
+      "expected_impact": "增加中东紧张局势，油价或有短期波动",
+      "reason": "伊朗强硬表态但未实际升级"
+    },
+    {
+      "news_id": 6,
+      "title": "以色列袭击黎巴嫩南部致6人死亡",
+      "impact_level": "C",
+      "impact_scope": "地缘政治",
+      "affected_sectors": [],
+      "credibility_score": 80,
+      "expected_impact": "局部冲突延续，对市场影响有限",
+      "reason": "以色列与黎巴嫩常规摩擦"
+    },
+    {
+      "news_id": 7,
+      "title": "美国对细旦聚酯短纤发起保障措施复审调查",
+      "impact_level": "B",
+      "impact_scope": "行业",
+      "affected_sectors": [],
+      "credibility_score": 90,
+      "expected_impact": "利空国内化纤出口企业，短期承压",
+      "reason": "美国贸易保护调查，涉及特定产品"
+    },
+    {
+      "news_id": 8,
+      "title": "特朗普签署“妥协版”AI模型审查行政令",
+      "impact_level": "A",
+      "impact_scope": "行业政策",
+      "affected_sectors": [],
+      "credibility_score": 95,
+      "expected_impact": "对AI监管不确定性落地，但妥协版缓和冲击，中性偏利好",
+      "reason": "美国AI政策正式出台，内容较预期温和"
+    }
+  ]
 }
