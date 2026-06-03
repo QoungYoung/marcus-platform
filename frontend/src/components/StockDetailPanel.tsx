@@ -3,6 +3,25 @@ import '../styles/agent-theme.css';
 
 const MARCUS_API = '/api/v1';
 
+function formatTimeAgo(dateStr: string): string {
+  if (!dateStr) return '';
+  const now = Date.now();
+  const pub = new Date(dateStr).getTime();
+  if (isNaN(pub)) return '';
+  const diffMs = now - pub;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return '刚刚';
+  if (diffMins < 60) return `${diffMins}分钟前`;
+  if (diffHours < 24) return `${diffHours}小时前`;
+  if (diffDays < 2) return '昨日';
+  if (diffDays < 7) return `${diffDays}天前`;
+  const d = new Date(dateStr);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 export interface StockInfo {
   symbol: string;
   name: string;
@@ -19,6 +38,15 @@ export interface StockInfo {
   inflow_ratio?: number;
 }
 
+interface NewsItem {
+  id: number;
+  title: string;
+  source: string;
+  publish_time: string;
+  sentiment: string;
+  url?: string;
+}
+
 interface StockDetailPanelProps {
   stock: StockInfo | null;
 }
@@ -28,6 +56,8 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
   const [loading, setLoading] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string>('');
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [newsList, setNewsList] = useState<NewsItem[]>([]);
+  const [newsLoading, setNewsLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -36,6 +66,7 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
     if (!stock?.symbol) {
       setQuote(null);
       setAiAnalysis('');
+      setNewsList([]);
       return;
     }
 
@@ -191,6 +222,31 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
     };
 
     fetchAnalysis();
+
+    // 获取个股相关新闻
+    const fetchNews = async () => {
+      setNewsLoading(true);
+      try {
+        const res = await fetch(`${MARCUS_API}/news?symbol=${stock.symbol}&limit=5`);
+        if (res.ok) {
+          const data = await res.json();
+          const items = (data.news || []).map((n: any) => ({
+            id: n.id,
+            title: n.title,
+            source: n.source || '财经媒体',
+            publish_time: n.publish_time,
+            sentiment: n.sentiment || 'neutral',
+            url: n.url,
+          }));
+          setNewsList(items);
+        }
+      } catch (e) {
+        console.log('Failed to fetch news:', e);
+      } finally {
+        setNewsLoading(false);
+      }
+    };
+    fetchNews();
   }, [stock?.symbol]);
 
   const displayStock = stock ? (quote || stock) : null;
@@ -291,18 +347,48 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
             <div className="agent-sec-title">
               <i className="fas fa-newspaper"></i> 相关资讯
             </div>
-            <div className="agent-news-item">
-              {displayStock.name}发布新一代产品，技术实力进一步提升...
-              <span className="news-time">2小时前</span>
-            </div>
-            <div className="agent-news-item">
-              机构研报：维持"买入"评级，目标价上调...
-              <span className="news-time">5小时前</span>
-            </div>
-            <div className="agent-news-item" style={{ borderBottom: 'none' }}>
-              北向资金连续增持，后市看好...
-              <span className="news-time">昨日</span>
-            </div>
+            {newsLoading ? (
+              <div style={{ color: 'var(--agent-text-dim)', fontSize: '12px', padding: '8px' }}>
+                加载中...
+              </div>
+            ) : newsList.length > 0 ? (
+              newsList.map((item, idx) => {
+                const timeAgo = formatTimeAgo(item.publish_time);
+                const sentColor =
+                  item.sentiment === 'positive' ? 'var(--agent-green)' :
+                  item.sentiment === 'negative' ? 'var(--agent-red)' :
+                  'var(--agent-text-dim)';
+                return (
+                  <div
+                    key={item.id}
+                    className="agent-news-item"
+                    style={{ borderBottom: idx < newsList.length - 1 ? undefined : 'none', cursor: item.url ? 'pointer' : 'default' }}
+                    onClick={() => { if (item.url) window.open(item.url, '_blank'); }}
+                    title={item.url ? '点击查看原文' : undefined}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                      <span style={{
+                        display: 'inline-block',
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: sentColor,
+                        marginTop: '6px',
+                        flexShrink: 0,
+                      }} />
+                      <span style={{ flex: 1, lineHeight: '1.4' }}>{item.title}</span>
+                    </div>
+                    <span className="news-time">
+                      {item.source} · {timeAgo}
+                    </span>
+                  </div>
+                );
+              })
+            ) : (
+              <div style={{ color: 'var(--agent-text-dim)', fontSize: '12px', padding: '8px' }}>
+                暂无相关资讯
+              </div>
+            )}
           </div>
         </>
       ) : (

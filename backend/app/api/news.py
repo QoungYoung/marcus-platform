@@ -25,8 +25,10 @@ async def get_news(
     """
     Get news feed.
     Data source: AKShare news collection with DeepSeek AI sentiment analysis.
+    Filter by symbol: resolve stock code to company name, then match in keyword/title.
     """
     import sqlite3
+    from pathlib import Path
 
     db_file = settings.data_dir / "news.db"
     if not db_file.exists():
@@ -40,10 +42,43 @@ async def get_news(
     where_clause = ""
     params = []
     if symbol:
-        # Remove prefix for database lookup
-        code = symbol[2:] if len(symbol) > 4 else symbol
-        where_clause = "WHERE keyword = ?"
-        params.append(code)
+        # Extract numeric code: "SZ000063" → "000063", or plain "000063"
+        code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
+
+        # Look up stock name from stock_pool.db
+        stock_name = code  # fallback
+        pool_db = settings.data_dir / "stock_pool.db"
+        if pool_db.exists():
+            try:
+                pool_conn = sqlite3.connect(str(pool_db))
+                pool_conn.row_factory = sqlite3.Row
+                pool_curs = pool_conn.cursor()
+                pool_curs.execute(
+                    "SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?",
+                    (code, f"SH{code}")
+                )
+                row = pool_curs.fetchone()
+                if not row:
+                    pool_curs.execute(
+                        "SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?",
+                        (code, f"SZ{code}")
+                    )
+                    row = pool_curs.fetchone()
+                if not row:
+                    pool_curs.execute(
+                        "SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?",
+                        (code, f"BJ{code}")
+                    )
+                    row = pool_curs.fetchone()
+                if row and row["name"]:
+                    stock_name = row["name"].strip()
+                pool_conn.close()
+            except Exception:
+                pass
+
+        # Match by keyword (company name) OR in title
+        where_clause = "WHERE (keyword LIKE ? OR title LIKE ? OR keyword = ?)"
+        params.extend([f"%{stock_name}%", f"%{stock_name}%", stock_name])
 
     # Get total count
     count_sql = f"SELECT COUNT(*) as cnt FROM news {where_clause}"

@@ -445,6 +445,39 @@ class StockPoolManager:
         }
 
 
+# === ETF 板块池更新（模块级函数，可被外部 import）===
+
+def update_etf_pool() -> int:
+    """同步 ETF 板块池到 cache.db（通过雪球 API）"""
+    print("=" * 60)
+    print("[ETF板块池更新] 开始执行...")
+    print("=" * 60)
+
+    try:
+        # XueqiuEngine 在 core/ 目录下
+        core_dir = Path(__file__).resolve().parent
+        config_file = core_dir / "config.json"
+        if not config_file.exists():
+            print("[ETF板块池更新] ⚠️ config.json 不存在，跳过")
+            return 0
+
+        sys.path.insert(0, str(core_dir))
+        from xueqiu_engine import XueqiuEngine
+        engine = XueqiuEngine(config_file=str(config_file))
+        count = engine.sync_etf_pool(pages=5)
+
+        print("=" * 60)
+        print(f"[ETF板块池更新] 完成！共同步 {count} 只 ETF")
+        print("=" * 60)
+        return count
+    except ImportError:
+        print("[ETF板块池更新] ⚠️ xueqiu_engine 不可用，跳过 ETF 更新")
+        return 0
+    except Exception as e:
+        print(f"[ETF板块池更新] ✗ 失败：{e}")
+        return 0
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='股票池管理')
