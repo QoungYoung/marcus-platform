@@ -3,38 +3,6 @@
 version: '3.8'
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: marcus-postgres
-    environment:
-      POSTGRES_USER: marcus
-      POSTGRES_PASSWORD: marcus_password
-      POSTGRES_DB: marcus_trading
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U marcus"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis Cache
-  redis:
-    image: redis:7-alpine
-    container_name: marcus-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # Backend API
   backend:
     build:
@@ -42,19 +10,12 @@ services:
       dockerfile: docker/Dockerfile.backend
     container_name: marcus-backend
     environment:
-      DATABASE_URL: postgresql://marcus:marcus_password@postgres:5432/marcus_trading
-      REDIS_URL: redis://redis:6379/0
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       TUSHARE_TOKEN: ${TUSHARE_TOKEN}
       XUEQIU_TOKEN: ${XUEQIU_TOKEN}
       MARCUS_WORKSPACE: /app
     ports:
       - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     volumes:
       - ../data:/app/data
       - ../apps:/app/apps:ro
@@ -90,7 +51,3 @@ services:
     depends_on:
       - backend
       - piserver
-
-volumes:
-  postgres_data:
-  redis_data:
