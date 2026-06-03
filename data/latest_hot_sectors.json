@@ -1,36 +1,36 @@
 {
-  "generated_at": "2026-06-03T10:09:47.767291",
-  "news_count": 8,
+  "generated_at": "2026-06-03T10:39:38.624031",
+  "news_count": 10,
   "source": "deepseek_concept",
-  "sentiment_score": 70,
+  "sentiment_score": 85,
   "hot_concepts": [
     "半导体概念",
-    "AI",
-    "存储芯片",
-    "激光雷达",
-    "CPO概念"
+    "CPO概念",
+    "光通信模块",
+    "消费电子概念",
+    "英伟达概念"
   ],
   "concept_scores": {},
   "summary": {
     "s_level_count": 0,
-    "a_level_count": 3,
-    "b_level_count": 2,
-    "c_level_count": 2,
+    "a_level_count": 8,
+    "b_level_count": 0,
+    "c_level_count": 0,
     "top_sectors": [
       {
+        "sector": "光通信模块",
+        "impact_score": 95,
+        "news_count": 3
+      },
+      {
         "sector": "半导体概念",
-        "impact_score": 80,
+        "impact_score": 90,
         "news_count": 2
       },
       {
         "sector": "CPO概念",
-        "impact_score": 75,
-        "news_count": 1
-      },
-      {
-        "sector": "存储芯片",
-        "impact_score": 75,
-        "news_count": 1
+        "impact_score": 85,
+        "news_count": 2
       }
     ]
   },

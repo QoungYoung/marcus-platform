@@ -579,7 +579,7 @@
     "name": "亨通光电",
     "symbol": "SH600487",
     "added_time": "2026-04-14T09:00:06.570362",
-    "update_time": "2026-06-03T09:51:55.364899",
+    "update_time": "2026-06-03T10:50:59.536270",
     "price": 0,
     "tag": "🔴",
     "catalyst_count": 3,
@@ -588,24 +588,24 @@
       "涨停",
       "发布"
     ],
-    "news_score": 55.5,
-    "latest_news": "600487，拟A拆A",
+    "news_score": 54.2,
+    "latest_news": "光赛道重大突破！600487，两连板！",
     "days_without_catalyst": 43,
     "news_count": 10,
     "sentiment": "neutral",
     "last_catalyst_time": "2026-04-20T15:02:35.841995",
-    "latest_time": "2026-06-03 09:11",
+    "latest_time": "2026-06-03 10:30",
     "score_source": "ai_weighted",
-    "ai_confidence": 0.8,
+    "ai_confidence": 0.825,
     "risk_keywords": [],
     "ai_scores_detail": [
-      70.0,
+      85.0,
       80.0,
-      75.0,
-      25.0
+      25.0,
+      55.0
     ],
     "ai_min_score": 25.0,
-    "ai_avg_score": 62.5
+    "ai_avg_score": 61.2
   },
   "600522": {
     "code": "600522",
@@ -919,7 +919,7 @@
     "name": "生益科技",
     "symbol": "SH600183",
     "added_time": "2026-04-14T09:47:00.758200",
-    "update_time": "2026-06-03T09:51:47.401381",
+    "update_time": "2026-06-03T10:32:45.312778",
     "price": 0,
     "tag": "🟢",
     "catalyst_count": 2,
@@ -927,27 +927,27 @@
       "发布",
       "创新"
     ],
-    "news_score": 77.5,
+    "news_score": 80.5,
     "latest_news": "生益科技600183.SH)：2026年一季报净利润为11.58亿元、同比较去年同期上涨105.47%",
     "days_without_catalyst": 0,
     "news_count": 10,
     "sentiment": "positive",
-    "last_catalyst_time": "2026-06-03T09:51:47.401381",
+    "last_catalyst_time": "2026-06-03T10:32:45.312778",
     "latest_time": "2026-06-02 16:53",
     "score_source": "ai_weighted",
-    "ai_confidence": 0.9,
+    "ai_confidence": 0.862,
     "risk_keywords": [
       "ST",
       "减持"
     ],
     "ai_scores_detail": [
-      75.0,
+      78.0,
       50.0,
-      85.0,
-      80.0
+      88.0,
+      86.0
     ],
     "ai_min_score": 50.0,
-    "ai_avg_score": 72.5
+    "ai_avg_score": 75.5
   },
   "002371": {
     "code": "002371",
@@ -1319,7 +1319,7 @@
     "name": "京东方Ａ",
     "symbol": "SZ000725",
     "added_time": "2026-04-14T09:47:12.763734",
-    "update_time": "2026-06-01T14:31:39.917440",
+    "update_time": "2026-06-03T10:51:30.419489",
     "price": 0,
     "tag": "🟡",
     "catalyst_count": 2,
@@ -1327,24 +1327,24 @@
       "涨停",
       "合作"
     ],
-    "news_score": 44.2,
+    "news_score": 51.8,
     "latest_news": "近1700万手封单！000725，一字涨停！",
-    "days_without_catalyst": 4,
+    "days_without_catalyst": 6,
     "news_count": 10,
     "sentiment": "neutral",
     "last_catalyst_time": "2026-05-27T14:51:23.386354",
     "latest_time": "2026-05-29 16:32",
     "score_source": "ai_weighted",
-    "ai_confidence": 0.75,
+    "ai_confidence": 0.8,
     "risk_keywords": [],
     "ai_scores_detail": [
       50.0,
-      40.0,
-      85.0,
+      65.0,
+      90.0,
       30.0
     ],
     "ai_min_score": 30.0,
-    "ai_avg_score": 51.2
+    "ai_avg_score": 58.8
   },
   "603993": {
     "code": "603993",
@@ -1705,7 +1705,7 @@
     "name": "光迅科技",
     "symbol": "SZ002281",
     "added_time": "2026-04-14T13:58:32.133407",
-    "update_time": "2026-06-03T09:52:06.257119",
+    "update_time": "2026-06-03T10:51:07.696325",
     "price": 0,
     "tag": "🟡",
     "catalyst_count": 2,
@@ -1713,24 +1713,24 @@
       "涨停",
       "发布"
     ],
-    "news_score": 54.2,
+    "news_score": 53.0,
     "latest_news": "尾盘爆发！301183、002281 双双涨停",
     "days_without_catalyst": 0,
     "news_count": 10,
     "sentiment": "neutral",
-    "last_catalyst_time": "2026-06-03T09:32:35.309381",
+    "last_catalyst_time": "2026-06-03T10:33:02.204400",
     "latest_time": "2026-06-02 17:37",
     "score_source": "ai_weighted",
-    "ai_confidence": 0.787,
+    "ai_confidence": 0.863,
     "risk_keywords": [],
     "ai_scores_detail": [
       75.0,
       50.0,
-      85.0,
+      80.0,
       35.0
     ],
     "ai_min_score": 35.0,
-    "ai_avg_score": 61.2
+    "ai_avg_score": 60.0
   },
   "603501": {
     "code": "603501",
@@ -1830,32 +1830,32 @@
     "name": "巨化股份",
     "symbol": "SH600160",
     "added_time": "2026-04-15T09:36:48.305854",
-    "update_time": "2026-04-29T14:57:33.029224",
+    "update_time": "2026-06-03T10:32:22.658490",
     "price": 0,
     "tag": "🟢",
-    "catalyst_count": 3,
+    "catalyst_count": 2,
     "catalyst_keywords": [
       "发布",
-      "增长",
-      "业绩"
+      "突破"
     ],
-    "news_score": 88.0,
-    "latest_news": "巨化股份：2025年净利润37.83亿元 同比增长94.29%",
+    "news_score": 79.2,
+    "latest_news": "巨化股份600160.SH)：2026年一季报净利润为11.73亿元、同比较去年同期上涨45.93%",
     "days_without_catalyst": 0,
     "news_count": 10,
     "sentiment": "positive",
-    "last_catalyst_time": "2026-04-29T14:57:33.029224",
-    "latest_time": "2026-04-29 09:07",
+    "last_catalyst_time": "2026-06-03T10:32:22.658490",
+    "latest_time": "2026-06-02 17:37",
     "score_source": "ai_weighted",
-    "ai_confidence": 0.933,
+    "ai_confidence": 0.75,
     "risk_keywords": [],
     "ai_scores_detail": [
       80.0,
-      75.0,
-      85.0
+      50.0,
+      85.0,
+      70.0
     ],
-    "ai_min_score": 75.0,
-    "ai_avg_score": 80.0
+    "ai_min_score": 50.0,
+    "ai_avg_score": 71.2
   },
   "002837": {
     "code": "002837",
@@ -4515,7 +4515,7 @@
     "name": "华天科技",
     "symbol": "SZ002185",
     "added_time": "2026-05-26T18:14:30.582169",
-    "update_time": "2026-05-27T13:32:16.564590",
+    "update_time": "2026-06-03T10:32:54.299379",
     "price": 0,
     "tag": "🟢",
     "catalyst_count": 4,
@@ -4525,23 +4525,23 @@
       "扩产",
       "发布"
     ],
-    "news_score": 84.2,
-    "latest_news": "002185，拟豪掷30亿元扩产先进封测！17股本周获机构大手笔净买入",
+    "news_score": 74.2,
+    "latest_news": "存储芯片，集体飙涨！002185，三连板！",
     "days_without_catalyst": 0,
     "score_source": "ai_weighted",
     "ai_confidence": 0.85,
     "sentiment": "positive",
-    "latest_time": "2026-05-27 10:37",
+    "latest_time": "2026-05-29 17:09",
     "risk_keywords": [],
     "ai_scores_detail": [
+      50.0,
+      50.0,
       85.0,
-      80.0,
-      90.0,
-      50.0
+      80.0
     ],
     "ai_min_score": 50.0,
-    "ai_avg_score": 76.2,
-    "last_catalyst_time": "2026-05-27T13:32:16.564590"
+    "ai_avg_score": 66.2,
+    "last_catalyst_time": "2026-06-03T10:32:54.299379"
   },
   "300493": {
     "code": "300493",
@@ -4579,30 +4579,30 @@
     "name": "中京电子",
     "symbol": "SZ002579",
     "added_time": "2026-05-26T18:15:32.480991",
-    "update_time": "2026-05-29T11:31:40.397567",
+    "update_time": "2026-06-03T10:51:11.692946",
     "price": 0,
     "tag": "🟡",
     "catalyst_count": 2,
     "catalyst_keywords": [
-      "发布",
-      "涨停"
+      "涨停",
+      "发布"
     ],
-    "news_score": 44.2,
-    "latest_news": "风华高科8天4板，培育钻石概念涨幅居前丨强势个股",
-    "days_without_catalyst": 2,
+    "news_score": 51.8,
+    "latest_news": "中京电子6天5板，CPO概念涨幅居前丨强势个股",
+    "days_without_catalyst": 7,
     "score_source": "ai_weighted",
-    "ai_confidence": 0.725,
+    "ai_confidence": 0.925,
     "sentiment": "neutral",
-    "latest_time": "2026-05-28 21:04",
+    "latest_time": "2026-06-02 19:13",
     "risk_keywords": [],
     "ai_scores_detail": [
-      75.0,
+      20.0,
       50.0,
-      50.0,
-      30.0
+      80.0,
+      85.0
     ],
-    "ai_min_score": 30.0,
-    "ai_avg_score": 51.2,
+    "ai_min_score": 20.0,
+    "ai_avg_score": 58.8,
     "last_catalyst_time": "2026-05-26T18:34:33.256775"
   },
   "603661": {
@@ -4742,31 +4742,34 @@
     "name": "博杰股份",
     "symbol": "SZ002975",
     "added_time": "2026-05-27T09:20:19.039011",
-    "update_time": "2026-06-01T09:50:50.308532",
+    "update_time": "2026-06-03T10:32:29.172470",
     "price": 0,
     "tag": "🟢",
-    "catalyst_count": 2,
+    "catalyst_count": 3,
     "catalyst_keywords": [
+      "增长",
       "发布",
       "涨停"
     ],
-    "news_score": 75.5,
-    "latest_news": "535股本月股价创历史新高",
+    "news_score": 78.0,
+    "latest_news": "68只股上午收盘涨停(附股)",
     "days_without_catalyst": 0,
     "score_source": "ai_weighted",
-    "ai_confidence": 0.725,
+    "ai_confidence": 0.775,
     "sentiment": "positive",
-    "latest_time": "2026-05-29 21:32",
-    "risk_keywords": [],
-    "ai_scores_detail": [
-      80.0,
-      55.0,
-      75.0,
-      60.0
+    "latest_time": "2026-06-02 17:37",
+    "risk_keywords": [
+      "ST"
     ],
-    "ai_min_score": 55.0,
-    "ai_avg_score": 67.5,
-    "last_catalyst_time": "2026-06-01T09:50:50.308532"
+    "ai_scores_detail": [
+      75.0,
+      80.0,
+      75.0,
+      50.0
+    ],
+    "ai_min_score": 50.0,
+    "ai_avg_score": 70.0,
+    "last_catalyst_time": "2026-06-03T10:32:29.172470"
   },
   "000100": {
     "code": "000100",
@@ -5233,7 +5236,7 @@
     "name": "中兵红箭",
     "symbol": "SZ000519",
     "added_time": "2026-05-27T11:52:00.682993",
-    "update_time": "2026-05-29T14:50:44.366632",
+    "update_time": "2026-06-03T10:50:55.339974",
     "price": 0,
     "tag": "🟢",
     "catalyst_count": 2,
@@ -5241,25 +5244,25 @@
       "发布",
       "突破"
     ],
-    "news_score": 76.8,
+    "news_score": 78.8,
     "latest_news": "中兵红箭000519.SZ)：2026年一季报净利润为5463.00万元，同比扭亏为盈",
     "days_without_catalyst": 0,
     "score_source": "ai_weighted",
-    "ai_confidence": 0.75,
+    "ai_confidence": 0.775,
     "sentiment": "positive",
-    "latest_time": "2026-05-28 15:32",
+    "latest_time": "2026-06-02 16:53",
     "risk_keywords": [
       "ST"
     ],
     "ai_scores_detail": [
-      55.0,
-      55.0,
-      85.0,
-      80.0
+      65.0,
+      80.0,
+      78.0,
+      60.0
     ],
-    "ai_min_score": 55.0,
-    "ai_avg_score": 68.8,
-    "last_catalyst_time": "2026-05-29T14:50:44.366632"
+    "ai_min_score": 60.0,
+    "ai_avg_score": 70.8,
+    "last_catalyst_time": "2026-06-03T10:50:55.339974"
   },
   "600850": {
     "code": "600850",
@@ -5901,31 +5904,33 @@
     "name": "光电股份",
     "symbol": "SH600184",
     "added_time": "2026-05-28T11:32:13.731406",
-    "update_time": "2026-05-28T11:32:13.731406",
+    "update_time": "2026-06-03T10:51:19.153584",
     "price": 0,
-    "tag": "🟡",
-    "catalyst_count": 1,
+    "tag": "🟢",
+    "catalyst_count": 2,
     "catalyst_keywords": [
-      "发布"
+      "发布",
+      "涨停"
     ],
-    "news_score": 45.0,
+    "news_score": 80.5,
     "latest_news": "光电股份600184.SH)：2025年年报净利润为5108.02万元，同比扭亏为盈",
     "days_without_catalyst": 0,
     "score_source": "ai_weighted",
-    "ai_confidence": 0.825,
-    "sentiment": "neutral",
-    "latest_time": "2026-05-26 16:34",
+    "ai_confidence": 0.787,
+    "sentiment": "positive",
+    "latest_time": "2026-06-02 17:37",
     "risk_keywords": [
       "ST"
     ],
     "ai_scores_detail": [
-      25.0,
-      50.0,
+      75.0,
+      60.0,
       80.0,
-      65.0
+      75.0
     ],
-    "ai_min_score": 25.0,
-    "ai_avg_score": 55.0
+    "ai_min_score": 60.0,
+    "ai_avg_score": 72.5,
+    "last_catalyst_time": "2026-06-03T10:51:19.153584"
   },
   "002001": {
     "code": "002001",
@@ -6167,31 +6172,33 @@
     "name": "诺德股份",
     "symbol": "SH600110",
     "added_time": "2026-05-29T09:51:34.499470",
-    "update_time": "2026-05-29T09:51:34.499470",
+    "update_time": "2026-06-03T10:51:45.216568",
     "price": 0,
-    "tag": "🟡",
+    "tag": "🔴",
     "catalyst_count": 3,
     "catalyst_keywords": [
       "发布",
       "涨停",
       "创新"
     ],
-    "news_score": 40.5,
+    "news_score": 30.0,
     "latest_news": "诺德股份600110.SH)：2026年一季报净利润为4008.97万元",
     "days_without_catalyst": 0,
     "score_source": "ai_weighted",
-    "ai_confidence": 0.875,
-    "sentiment": "neutral",
-    "latest_time": "2026-05-28 17:47",
-    "risk_keywords": [],
+    "ai_confidence": 0.75,
+    "sentiment": "negative",
+    "latest_time": "2026-06-02 16:53",
+    "risk_keywords": [
+      "ST"
+    ],
     "ai_scores_detail": [
+      25.0,
       50.0,
-      50.0,
-      70.0,
+      65.0,
       20.0
     ],
     "ai_min_score": 20.0,
-    "ai_avg_score": 47.5
+    "ai_avg_score": 40.0
   },
   "002350": {
     "code": "002350",
@@ -7981,7 +7988,7 @@
     "name": "东睦股份",
     "symbol": "SH600114",
     "added_time": "2026-06-03T09:32:10.551546",
-    "update_time": "2026-06-03T09:51:39.665159",
+    "update_time": "2026-06-03T10:51:15.382131",
     "price": 0,
     "tag": "🟢",
     "catalyst_count": 3,
@@ -7990,22 +7997,251 @@
       "涨停",
       "分红"
     ],
-    "news_score": 76.8,
+    "news_score": 83.0,
     "latest_news": "266.76亿主力资金净流入，共封装光学(CPO)概念涨3.48%",
     "days_without_catalyst": 0,
     "score_source": "ai_weighted",
-    "ai_confidence": 0.812,
+    "ai_confidence": 0.825,
     "sentiment": "positive",
     "latest_time": "2026-06-02 16:53",
     "risk_keywords": [],
     "ai_scores_detail": [
+      85.0,
+      70.0,
       80.0,
-      65.0,
-      75.0,
-      55.0
+      65.0
     ],
-    "ai_min_score": 55.0,
+    "ai_min_score": 65.0,
+    "ai_avg_score": 75.0,
+    "last_catalyst_time": "2026-06-03T10:51:15.382131"
+  },
+  "603890": {
+    "code": "603890",
+    "name": "春秋电子",
+    "symbol": "SH603890",
+    "added_time": "2026-06-03T10:32:26.097557",
+    "update_time": "2026-06-03T10:32:26.097557",
+    "price": 0,
+    "tag": "🔴",
+    "catalyst_count": 5,
+    "catalyst_keywords": [
+      "涨停",
+      "发布",
+      "合作",
+      "量产",
+      "收购"
+    ],
+    "news_score": 39.2,
+    "latest_news": "超34万手封单！603890，开盘涨停",
+    "days_without_catalyst": 0,
+    "score_source": "ai_weighted",
+    "ai_confidence": 0.8,
+    "sentiment": "negative",
+    "latest_time": "2026-06-02 19:32",
+    "risk_keywords": [
+      "ST"
+    ],
+    "ai_scores_detail": [
+      30.0,
+      50.0,
+      30.0,
+      75.0
+    ],
+    "ai_min_score": 30.0,
+    "ai_avg_score": 46.2
+  },
+  "600667": {
+    "code": "600667",
+    "name": "太极实业",
+    "symbol": "SH600667",
+    "added_time": "2026-06-03T10:32:37.221860",
+    "update_time": "2026-06-03T10:32:37.221860",
+    "price": 0,
+    "tag": "🟡",
+    "catalyst_count": 2,
+    "catalyst_keywords": [
+      "发布",
+      "涨停"
+    ],
+    "news_score": 40.5,
+    "latest_news": "37股受融资客青睐，净买入超亿元",
+    "days_without_catalyst": 0,
+    "score_source": "ai_weighted",
+    "ai_confidence": 0.875,
+    "sentiment": "neutral",
+    "latest_time": "2026-06-03 09:11",
+    "risk_keywords": [
+      "ST"
+    ],
+    "ai_scores_detail": [
+      65.0,
+      60.0,
+      50.0,
+      15.0
+    ],
+    "ai_min_score": 15.0,
+    "ai_avg_score": 47.5
+  },
+  "603319": {
+    "code": "603319",
+    "name": "美湖股份",
+    "symbol": "SH603319",
+    "added_time": "2026-06-03T10:33:05.613347",
+    "update_time": "2026-06-03T10:33:05.613347",
+    "price": 0,
+    "tag": "🟡",
+    "catalyst_count": 3,
+    "catalyst_keywords": [
+      "突破",
+      "发布",
+      "订单"
+    ],
+    "news_score": 51.8,
+    "latest_news": "强势股追踪 主力资金连续5日净流入93股",
+    "days_without_catalyst": 0,
+    "score_source": "ai_weighted",
+    "ai_confidence": 0.775,
+    "sentiment": "neutral",
+    "latest_time": "2026-06-01 17:32",
+    "risk_keywords": [
+      "ST"
+    ],
+    "ai_scores_detail": [
+      75.0,
+      70.0,
+      20.0,
+      70.0
+    ],
+    "ai_min_score": 20.0,
+    "ai_avg_score": 58.8
+  },
+  "002428": {
+    "code": "002428",
+    "name": "云南锗业",
+    "symbol": "SZ002428",
+    "added_time": "2026-06-03T10:51:22.005137",
+    "update_time": "2026-06-03T10:51:22.005137",
+    "price": 0,
+    "tag": "🟢",
+    "catalyst_count": 4,
+    "catalyst_keywords": [
+      "大涨",
+      "发布",
+      "涨停",
+      "增长"
+    ],
+    "news_score": 78.0,
+    "latest_news": "600961 5连板！002428 4天3板！",
+    "days_without_catalyst": 0,
+    "score_source": "ai_weighted",
+    "ai_confidence": 0.775,
+    "sentiment": "positive",
+    "latest_time": "2026-06-03 09:11",
+    "risk_keywords": [
+      "跌停"
+    ],
+    "ai_scores_detail": [
+      75.0,
+      85.0,
+      45.0,
+      75.0
+    ],
+    "ai_min_score": 45.0,
+    "ai_avg_score": 70.0,
+    "last_catalyst_time": "2026-06-03T10:51:22.005137"
+  },
+  "002056": {
+    "code": "002056",
+    "name": "横店东磁",
+    "symbol": "SZ002056",
+    "added_time": "2026-06-03T10:51:26.370016",
+    "update_time": "2026-06-03T10:51:26.370016",
+    "price": 0,
+    "tag": "🟢",
+    "catalyst_count": 4,
+    "catalyst_keywords": [
+      "突破",
+      "涨停",
+      "中标",
+      "投产"
+    ],
+    "news_score": 73.8,
+    "latest_news": "121只股收盘价创历史新高",
+    "days_without_catalyst": 0,
+    "score_source": "ai_weighted",
+    "ai_confidence": 0.838,
+    "sentiment": "positive",
+    "latest_time": "2026-05-28 17:48",
+    "risk_keywords": [
+      "ST"
+    ],
+    "ai_scores_detail": [
+      90.0,
+      60.0,
+      75.0,
+      50.0
+    ],
+    "ai_min_score": 50.0,
     "ai_avg_score": 68.8,
-    "last_catalyst_time": "2026-06-03T09:51:39.665159"
+    "last_catalyst_time": "2026-06-03T10:51:26.370016"
+  },
+  "603002": {
+    "code": "603002",
+    "name": "宏昌电子",
+    "symbol": "SH603002",
+    "added_time": "2026-06-03T10:51:33.951815",
+    "update_time": "2026-06-03T10:51:33.951815",
+    "price": 0,
+    "tag": "🟡",
+    "catalyst_count": 1,
+    "catalyst_keywords": [
+      "发布"
+    ],
+    "news_score": 44.2,
+    "latest_news": "PCB概念上涨2.34%，29股主力资金净流入超亿元",
+    "days_without_catalyst": 0,
+    "score_source": "ai_weighted",
+    "ai_confidence": 0.75,
+    "sentiment": "neutral",
+    "latest_time": "2026-06-02 17:37",
+    "risk_keywords": [],
+    "ai_scores_detail": [
+      75.0,
+      20.0,
+      50.0,
+      60.0
+    ],
+    "ai_min_score": 20.0,
+    "ai_avg_score": 51.2
+  },
+  "002851": {
+    "code": "002851",
+    "name": "麦格米特",
+    "symbol": "SZ002851",
+    "added_time": "2026-06-03T10:51:37.864106",
+    "update_time": "2026-06-03T10:51:37.864106",
+    "price": 0,
+    "tag": "🔴",
+    "catalyst_count": 2,
+    "catalyst_keywords": [
+      "发布",
+      "涨停"
+    ],
+    "news_score": 38.0,
+    "latest_news": "68只股上午收盘涨停(附股)",
+    "days_without_catalyst": 0,
+    "score_source": "ai_weighted",
+    "ai_confidence": 0.9,
+    "sentiment": "negative",
+    "latest_time": "2026-06-02 22:44",
+    "risk_keywords": [],
+    "ai_scores_detail": [
+      50.0,
+      50.0,
+      20.0,
+      60.0
+    ],
+    "ai_min_score": 20.0,
+    "ai_avg_score": 45.0
   }
 }

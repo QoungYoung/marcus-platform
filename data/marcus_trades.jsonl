@@ -4,3 +4,4 @@
 {"type": "buy", "timestamp": "2026-05-19T15:14:43.988436", "symbol": "SH515980", "price": 1.14, "volume": 13100, "order_id": "ORD000000", "reason": "AI算力需求旺盛，涨幅较小安全边际高，建仓配置", "status": "executed", "cost": 14938.480199999998}
 {"type": "buy", "timestamp": "2026-06-02T14:11:51.068015", "symbol": "000063", "price": 36.02, "volume": 200, "order_id": "ORD000003", "reason": "", "status": "executed", "cost": 7206.1612000000005}
 {"type": "buy", "timestamp": "2026-06-03T09:36:20.247113", "symbol": "SZ000733", "price": 54.75, "volume": 200, "order_id": "ORD000005", "reason": "元器件概念热点，右侧信号确认（价>MA5>MA20），昨日放量+6.35%突破，主力特大单净流入+1.15亿，今日继续+1.2%确认趋势", "status": "executed", "cost": 10953.285}
+{"type": "buy", "timestamp": "2026-06-03T10:36:08.732997", "symbol": "600160", "price": 39.38, "volume": 200, "order_id": "ORD000007", "reason": "右侧建仓：MACD金叉+放量突破+半导体概念热门龙头", "status": "executed", "cost": 7878.362800000001}

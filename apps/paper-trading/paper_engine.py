@@ -18,7 +18,6 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
-import hashlib
 
 # Use workspace_detector for cross-platform path resolution
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -540,9 +539,21 @@ class PaperTradingEngine:
         conn.commit()
         conn.close()
         
-        # 解冻资金（简化处理）
-        self.frozen_cash -= row[3] * row[4]
-        self.available_cash += row[3] * row[4]
+        # 解冻资金/持仓（区分买卖方向）
+        direction = row[2]
+        if direction == Direction.LONG.value:
+            # 买入订单：解冻资金（需与 buy() 冻结金额一致，A股含手续费）
+            if row[1].startswith("SH") or row[1].startswith("SZ"):
+                frozen_amount = row[3] * row[4] * 1.0005
+            else:
+                frozen_amount = row[3] * row[4] * 100 * 0.1
+            self.frozen_cash -= frozen_amount
+            self.available_cash += frozen_amount
+        else:
+            # 卖出订单：解冻持仓（sell() 只冻结了 pos.frozen，不涉及现金）
+            symbol = row[1]
+            if symbol in self.positions:
+                self.positions[symbol].frozen -= row[4]
         self._save_account()
         
         print(f"[OK] 已撤销订单：{order_id}")

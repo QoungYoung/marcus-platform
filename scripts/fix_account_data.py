@@ -51,13 +51,13 @@ def fix_account(db_path):
     print(f'  available_cash:  {old_available:,.2f}')
     print(f'  frozen_cash:     {old_frozen:,.2f}')
     
-    # 2. 检查未完成订单（用于计算 frozen_cash）
+    # 2. 检查未完成订单（用于计算 frozen_cash，仅买入订单冻结资金）
     cur.execute("""
         SELECT orderid, symbol, direction, price, volume, status 
         FROM orders 
         WHERE status NOT IN ('全部成交','已撤销','拒单')
     """)
-    pending_orders = cur.fetchall()
+    all_pending = cur.fetchall()
     
     # 3. 根据交易记录计算真实资金
     # available_cash = initial - 买入总额 + 卖出总额
@@ -71,16 +71,19 @@ def fix_account(db_path):
     total_buy = trade_sums.get('买入', 0)
     total_sell = trade_sums.get('卖出', 0)
     
-    # 计算正确的 frozen_cash（仅未完成订单）
+    # 计算正确的 frozen_cash（仅未完成的买入订单）
     calculated_frozen = 0
-    if pending_orders:
-        print(f'\n  未完成订单: {len(pending_orders)} 笔')
-        for o in pending_orders:
-            frozen = o['price'] * o['volume']
-            if o['symbol'].startswith('SH') or o['symbol'].startswith('SZ'):
-                frozen *= 1.0005
-            calculated_frozen += frozen
-            print(f'    {o["orderid"]}: {o["direction"]} {o["symbol"]} @{o["price"]}x{o["volume"]} 冻结={frozen:,.2f}')
+    if all_pending:
+        print(f'\n  未完成订单: {len(all_pending)} 笔')
+        for o in all_pending:
+            if o['direction'] == '买入':
+                frozen = o['price'] * o['volume']
+                if o['symbol'].startswith('SH') or o['symbol'].startswith('SZ'):
+                    frozen *= 1.0005
+                calculated_frozen += frozen
+                print(f'    {o["orderid"]}: {o["direction"]} {o["symbol"]} @{o["price"]}x{o["volume"]} 冻结={frozen:,.2f}')
+            else:
+                print(f'    {o["orderid"]}: {o["direction"]} {o["symbol"]} @{o["price"]}x{o["volume"]} (卖出，不冻结资金)')
     
     calculated_available = initial_capital - total_buy + total_sell - calculated_frozen
     

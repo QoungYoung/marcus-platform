@@ -1019,14 +1019,14 @@
       "reason": "量能正常 (1.0x) | 今日动量强 (+5.6%) | 新闻爆表 (80)",
       "source": "selector",
       "tag": "🟢",
-      "news_score": 77.5,
+      "news_score": 80.5,
       "catalyst_keywords": [
         "发布",
         "创新"
       ],
       "hit_count": 319,
       "days_since_catalyst": 0,
-      "last_catalyst_time": "2026-06-03T09:51:47.401381",
+      "last_catalyst_time": "2026-06-03T10:32:45.312778",
       "expired": false
     },
     "002938": {
@@ -1837,14 +1837,14 @@
       "reason": "观察列表🟢 | 观察列表🟢 | 观察列表🟢 | 观察列表🟢 | 观察列表🟢 | 量能正常 (1.0x) | 新闻爆表 (80) | 正面情绪",
       "source": "selector",
       "tag": "🟢",
-      "news_score": 44.2,
+      "news_score": 51.8,
       "catalyst_keywords": [
         "涨停",
         "合作"
       ],
       "hit_count": 102,
       "days_since_catalyst": 0,
-      "last_catalyst_time": "2026-06-01T14:31:39.917440",
+      "last_catalyst_time": "2026-06-03T10:51:30.419489",
       "expired": false
     },
     "002600": {

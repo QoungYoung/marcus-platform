@@ -227,7 +227,7 @@ async def get_portfolio():
 
     available_cash = account.get('available_cash', 0)
     initial_capital = account.get('initial_capital', 1000000)
-    total_asset = available_cash + total_position_value
+    total_asset = available_cash + account.get('frozen_cash', 0) + total_position_value
     total_float_pnl = sum(p.floating_pnl for p in positions)
 
     # Calculate realized PnL from trades

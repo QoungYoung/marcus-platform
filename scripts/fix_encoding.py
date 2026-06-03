@@ -7,7 +7,6 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 files = [
     r'f:\pythonProject\AITrade\marcus-platform\core\xueqiu_engine.py',
-    r'f:\pythonProject\AITrade\marcus-platform\backend\app\core\trading\paper_engine.py',
     r'f:\pythonProject\AITrade\marcus-platform\apps\paper-trading\paper_engine.py',
 ]
 
