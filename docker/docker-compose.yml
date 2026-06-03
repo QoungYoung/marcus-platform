@@ -11,9 +11,15 @@ services:
     container_name: marcus-backend
     environment:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       TUSHARE_TOKEN: ${TUSHARE_TOKEN}
       XUEQIU_TOKEN: ${XUEQIU_TOKEN}
       MARCUS_WORKSPACE: /app
+      QQ_APP_ID: ${QQ_APP_ID}
+      QQ_APP_SECRET: ${QQ_APP_SECRET}
+      QQ_BOT_ENABLED: ${QQ_BOT_ENABLED:-false}
+      QQ_BOT_RECIPIENT: ${QQ_BOT_RECIPIENT}
+      PI_SERVER_URL: http://piserver:3001/chat
     ports:
       - "8000:8000"
     volumes:
