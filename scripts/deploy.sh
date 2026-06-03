@@ -2,6 +2,7 @@
 # ============================================
 #  Marcus AI Trading Platform - 一键部署脚本
 #  适用于 Ubuntu 20.04+ / Debian 11+ / CentOS 8+
+#            OpenCloudOS 8+ / RHEL 8+ / Fedora
 #  用法: curl -fsSL https://raw.githubusercontent.com/QoungYoung/marcus-platform/main/scripts/deploy.sh | bash
 # ============================================
 set -e
@@ -14,6 +15,7 @@ NC='\033[0m'
 
 REPO_URL="https://github.com/QoungYoung/marcus-platform.git"
 INSTALL_DIR="/opt/marcus-platform"
+NEED_PYTHON=false
 
 # ============================================
 # 打印 Banner
@@ -41,22 +43,56 @@ detect_os() {
         echo -e "${RED}[ERROR] 无法检测操作系统${NC}"
         exit 1
     fi
-    echo -e "${GREEN}[✓] 操作系统: $OS $VER${NC}"
+
+    # OpenCloudOS 映射到 RHEL/CentOS 生态
+    case $OS in
+        opencloudos|tencentos|anolis|alinux)
+            OS_FAMILY="rhel"
+            PKG_MGR="dnf"
+            ;;
+        centos|rhel|fedora|rocky|almalinux)
+            OS_FAMILY="rhel"
+            PKG_MGR="dnf"
+            ;;
+        ubuntu|debian)
+            OS_FAMILY="debian"
+            PKG_MGR="apt-get"
+            ;;
+    esac
+
+    echo -e "${GREEN}[✓] 操作系统: $OS $VER (${OS_FAMILY} 系)${NC}"
 }
 
 # ============================================
 # 安装 Docker
 # ============================================
 install_docker() {
-    if command -v docker &>/dev/null && command -v docker-compose &>/dev/null; then
-        echo -e "${GREEN}[✓] Docker 已安装${NC}"
-        return
+    # 检测 Docker 是否已安装
+    if command -v docker &>/dev/null; then
+        DOCKER_VER=$(docker --version 2>/dev/null | grep -oP '\d+\.\d+' | head -1)
+        echo -e "${GREEN}[✓] Docker v${DOCKER_VER:-?} 已安装${NC}"
+        systemctl start docker 2>/dev/null || true
+    else
+        echo -e "${YELLOW}[*] 正在安装 Docker...${NC}"
+        install_docker_engine
     fi
 
-    echo -e "${YELLOW}[*] 正在安装 Docker...${NC}"
+    # 检测 docker compose 插件
+    if docker compose version &>/dev/null; then
+        COMPOSE_VER=$(docker compose version --short 2>/dev/null)
+        echo -e "${GREEN}[✓] Docker Compose v${COMPOSE_VER:-?} 已就绪${NC}"
+    elif command -v docker-compose &>/dev/null; then
+        COMPOSE_VER=$(docker-compose --version 2>/dev/null | grep -oP '\d+\.\d+' | head -1)
+        echo -e "${GREEN}[✓] docker-compose (standalone) v${COMPOSE_VER:-?} 已就绪${NC}"
+    else
+        echo -e "${YELLOW}[*] 正在安装 Docker Compose...${NC}"
+        install_docker_compose
+    fi
+}
 
-    case $OS in
-        ubuntu|debian)
+install_docker_engine() {
+    case $OS_FAMILY in
+        debian)
             apt-get update -y
             apt-get install -y ca-certificates curl gnupg lsb-release
             install -m 0755 -d /etc/apt/keyrings
@@ -65,22 +101,36 @@ install_docker() {
             apt-get update -y
             apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
             ;;
-        centos|rhel|fedora)
-            dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-            dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-            ;;
-        *)
-            echo -e "${RED}[ERROR] 不支持的操作系统: $OS${NC}"
-            echo "请手动安装 Docker: https://docs.docker.com/engine/install/"
-            echo "然后重新运行此脚本"
-            exit 1
+        rhel)
+            if [ "$OS" = "fedora" ]; then
+                dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+                dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            else
+                dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            fi
             ;;
     esac
-
     systemctl enable docker
     systemctl start docker
-
     echo -e "${GREEN}[✓] Docker 安装完成${NC}"
+}
+
+install_docker_compose() {
+    # 优先安装插件版 docker compose
+    if command -v dnf &>/dev/null; then
+        dnf install -y docker-compose-plugin 2>/dev/null || true
+    elif command -v apt-get &>/dev/null; then
+        apt-get install -y docker-compose-plugin 2>/dev/null || true
+    fi
+
+    # 如果插件装不上，装独立版本
+    if ! docker compose version &>/dev/null; then
+        COMPOSE_BIN="/usr/local/bin/docker-compose"
+        curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o "$COMPOSE_BIN"
+        chmod +x "$COMPOSE_BIN"
+    fi
+    echo -e "${GREEN}[✓] Docker Compose 安装完成${NC}"
 }
 
 # ============================================
@@ -92,9 +142,9 @@ install_git() {
         return
     fi
     echo -e "${YELLOW}[*] 正在安装 Git...${NC}"
-    case $OS in
-        ubuntu|debian) apt-get install -y git ;;
-        centos|rhel|fedora) dnf install -y git ;;
+    case $OS_FAMILY in
+        debian) apt-get install -y git ;;
+        rhel)   dnf install -y git || yum install -y git ;;
     esac
     echo -e "${GREEN}[✓] Git 安装完成${NC}"
 }
@@ -186,8 +236,22 @@ create_directories() {
 docker_deploy() {
     cd "$INSTALL_DIR/docker"
 
+    # 优先使用 docker compose 插件，其次 docker-compose
+    if docker compose version &>/dev/null; then
+        COMPOSE_CMD="docker compose"
+    else
+        COMPOSE_CMD="docker-compose"
+    fi
+
     echo -e "${YELLOW}[*] 正在构建并启动所有服务...${NC}"
-    docker compose --env-file ../.env up -d --build
+    $COMPOSE_CMD --env-file ../.env up -d --build
+
+    # 等待服务启动
+    echo -e "${YELLOW}[*] 等待服务就绪...${NC}"
+    sleep 5
+
+    # 显示状态
+    $COMPOSE_CMD ps
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════${NC}"
@@ -200,10 +264,10 @@ docker_deploy() {
     echo ""
     echo -e "  管理命令:"
     echo -e "    cd $INSTALL_DIR/docker"
-    echo -e "    docker compose ps        ${YELLOW}# 查看状态${NC}"
-    echo -e "    docker compose logs -f   ${YELLOW}# 查看日志${NC}"
-    echo -e "    docker compose restart   ${YELLOW}# 重启服务${NC}"
-    echo -e "    docker compose down      ${YELLOW}# 停止服务${NC}"
+    echo -e "    $COMPOSE_CMD ps        ${YELLOW}# 查看状态${NC}"
+    echo -e "    $COMPOSE_CMD logs -f   ${YELLOW}# 查看日志${NC}"
+    echo -e "    $COMPOSE_CMD restart   ${YELLOW}# 重启服务${NC}"
+    echo -e "    $COMPOSE_CMD down      ${YELLOW}# 停止服务${NC}"
     echo ""
 }
 
@@ -232,7 +296,7 @@ main() {
     install_git
 
     echo ""
-    echo -e "${YELLOW}[3/6] 安装 Docker + Compose...${NC}"
+    echo -e "${YELLOW}[3/6] 检测 Docker 环境...${NC}"
     install_docker
 
     echo ""
