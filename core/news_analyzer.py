@@ -17,13 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 
-# Marcus 独立 workspace
-import platform
-_system = platform.system()
-if _system == "Windows":
-    _ws = Path("F:/pythonProject/AITrade/marcus-platform")
-else:
-    _ws = Path("/root/.openclaw/workspace-marcus")
+# Marcus workspace - auto-detect from project root
+import platform as _plat
+_ws = Path(__file__).parent.parent  # core/ -> marcus-platform/
 
 AKSHARE_DIR = _ws / "apps" / "news"
 MARCUS_DIR = _ws / "apps" / "integration"

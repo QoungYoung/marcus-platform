@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
 import hashlib
+from pathlib import Path
 
 
 class Direction(Enum):
@@ -370,7 +371,7 @@ class PaperTradingEngine:
             股票名称，获取失败返回空字符串
         """
         try:
-            xueqiu_dir = '/root/.openclaw/workspace-marcus/skills/xueqiu-data-query'
+            xueqiu_dir = self._get_xueqiu_dir()
             xueqiu_config = os.path.join(xueqiu_dir, 'config.json')
             
             if os.path.exists(xueqiu_config):
@@ -385,6 +386,18 @@ class PaperTradingEngine:
         except Exception as e:
             print(f"[WARN]️ 获取 {symbol} 名称失败：{e}")
         return ""
+    
+    @staticmethod
+    def _get_xueqiu_dir() -> str:
+        """交叉平台获取雪球引擎目录"""
+        # 优先从 settings 获取
+        try:
+            from app.config import get_settings
+            return str(get_settings().xueqiu_dir)
+        except Exception:
+            pass
+        # 回退：项目根目录的 core/
+        return str(Path(__file__).parent.parent.parent.parent / "core")
     
     def buy(self, symbol: str, price: float, volume: int) -> Optional[str]:
         """
@@ -723,8 +736,8 @@ class PaperTradingEngine:
         if use_market_price:
             # 使用实时市价计算
             try:
-                # 使用绝对路径
-                xueqiu_dir = '/root/.openclaw/workspace-marcus/skills/xueqiu-data-query'
+                # 使用项目相对路径
+                xueqiu_dir = self._get_xueqiu_dir()
                 xueqiu_config = os.path.join(xueqiu_dir, 'config.json')
                 
                 if os.path.exists(xueqiu_config):
@@ -910,7 +923,7 @@ class PaperTradingEngine:
         current_prices = {}
         if use_market_price:
             try:
-                xueqiu_dir = '/root/.openclaw/workspace-marcus/skills/xueqiu-data-query'
+                xueqiu_dir = self._get_xueqiu_dir()
                 xueqiu_config = os.path.join(xueqiu_dir, 'config.json')
                 if os.path.exists(xueqiu_config):
                     sys.path.insert(0, xueqiu_dir)

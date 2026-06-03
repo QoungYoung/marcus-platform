@@ -77,7 +77,11 @@ class Settings(BaseSettings):
 
     @property
     def skills_dir(self) -> Path:
-        # Use marcus-platform's own skills directory if it exists
+        # Use marcus-platform's own apps directory (skills were migrated to apps/)
+        platform_apps = Path(__file__).parent.parent.parent / "apps"
+        if platform_apps.exists():
+            return platform_apps
+        # Legacy fallback
         platform_skills = Path(__file__).parent.parent.parent / "skills"
         if platform_skills.exists():
             return platform_skills
@@ -93,6 +97,10 @@ class Settings(BaseSettings):
 
     @property
     def vnpy_dir(self) -> Path:
+        # Actual location: apps/paper-trading/
+        p = self.workspace_path / "apps" / "paper-trading"
+        if p.exists():
+            return p
         return self.skills_dir / "vnpy-paper-trading"
 
     @property
@@ -101,10 +109,17 @@ class Settings(BaseSettings):
 
     @property
     def akshare_dir(self) -> Path:
+        # Actual location: apps/news/
+        p = self.workspace_path / "apps" / "news"
+        if p.exists():
+            return p
         return self.skills_dir / "akshare-news"
 
     @property
     def marcus_integration_dir(self) -> Path:
+        p = self.workspace_path / "apps" / "integration"
+        if p.exists():
+            return p
         return self.skills_dir / "marcus-vnpy-integration"
 
     def get_deepseek_key(self) -> str:

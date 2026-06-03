@@ -194,7 +194,7 @@ class SchedulerService:
 
         # Load settings
         self.settings = config.get('settings', {})
-        self.workspace = self.settings.get('workspace', 'F:/pythonProject/AITrade/workspace-marcus')
+        self.workspace = self.settings.get('workspace', str(Path(__file__).parent.parent.parent.parent))
 
         # Load tasks
         tasks_data = config.get('tasks', [])
@@ -377,7 +377,7 @@ class SchedulerService:
             logger.info(f"[{execution_id}] Script path: {script_path}")
             logger.info(f"[{execution_id}] Script exists: {script_path.exists()}")
 
-            cwd = self._get_workspace_path() if task.script.get('cwd') == 'workspace-marcus' else self._get_workspace_path()
+            cwd = self._get_workspace_path()
             logger.info(f"[{execution_id}] Working dir: {cwd}")
             args = task.script.get('args', [])
             timeout = self.settings.get('job_timeout', 900)

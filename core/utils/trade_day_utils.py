@@ -25,11 +25,11 @@ try:
 except ImportError:
     from _api_config import get_tushare_pro
 
-# Marcus 独立 workspace
-WORKSPACE = Path("/root/.openclaw/workspace-marcus")
+# Marcus workspace - auto-detect from project root
+WORKSPACE = Path(__file__).parent.parent.parent  # core/utils/ -> marcus-platform/
 MEMORY_DIR = WORKSPACE / "memory"
-VNPY_DIR = WORKSPACE / "skills" / "vnpy-paper-trading"
-DATA_DIR = WORKSPACE / "skills" / "marcus-vnpy-integration" / "data"
+VNPY_DIR = WORKSPACE / "apps" / "paper-trading"
+DATA_DIR = WORKSPACE / "data"
 
 
 def get_latest_trade_log() -> Optional[str]:

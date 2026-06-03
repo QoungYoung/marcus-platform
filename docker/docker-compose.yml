@@ -56,7 +56,9 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ../workspace-marcus:/app/workspace:ro
+      - ../data:/app/data
+      - ../apps:/app/apps:ro
+      - backend_workspace:/app/workspace
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   # Pi Server (Pi Agent HTTP Server)
@@ -93,3 +95,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  backend_workspace:

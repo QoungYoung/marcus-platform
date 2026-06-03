@@ -6,7 +6,7 @@ settings:
     max_attempts: 3
     delay_seconds: 60
   log_retention_days: 30
-  workspace: F:/pythonProject/AITrade/marcus-platform
+  workspace: .
   channels:
     qqbot:
       enabled: true
@@ -23,7 +23,6 @@ tasks:
   script:
     path: apps/news/news_collector.py
     args: []
-    cwd: workspace-marcus
   output:
     log_file: logs/news_collector_{date}.log
     append: true
@@ -46,7 +45,6 @@ tasks:
     path: jobs/pre_market_scan.py
     args:
     - --debug
-    cwd: workspace-marcus
   output:
     log_file: logs/pre_market_scan_{date}.log
     append: false
@@ -69,7 +67,6 @@ tasks:
     path: jobs/market_scan.py
     args:
     - --debug
-    cwd: workspace-marcus
   output:
     log_file: logs/market_scan_{date}.log
     append: true
@@ -90,10 +87,6 @@ tasks:
     type: cron
     expr: 35 9 * * *
     timezone: Asia/Shanghai
-  # script:  # 原脚本模式（已保留备用）
-  #   path: jobs/auto_trade.py
-  #   args: [--debug]
-  #   cwd: workspace-marcus
   output:
     log_file: logs/auto_trade_{date}.log
     append: false
@@ -114,10 +107,6 @@ tasks:
     type: cron
     expr: 35 10 * * *
     timezone: Asia/Shanghai
-  # script:
-  #   path: jobs/auto_trade.py
-  #   args: [--debug]
-  #   cwd: workspace-marcus
   output:
     log_file: logs/auto_trade_{date}.log
     append: true
@@ -137,10 +126,6 @@ tasks:
     type: cron
     expr: 35 13 * * *
     timezone: Asia/Shanghai
-  # script:
-  #   path: jobs/auto_trade.py
-  #   args: [--debug]
-  #   cwd: workspace-marcus
   output:
     log_file: logs/auto_trade_{date}.log
     append: true
@@ -160,10 +145,6 @@ tasks:
     type: cron
     expr: 30 14 * * *
     timezone: Asia/Shanghai
-  # script:
-  #   path: jobs/auto_trade.py
-  #   args: [--debug, --closing]
-  #   cwd: workspace-marcus
   output:
     log_file: logs/auto_trade_{date}.log
     append: true
@@ -184,7 +165,6 @@ tasks:
   script:
     path: jobs/daily_review_enhanced.py
     args: []
-    cwd: workspace-marcus
   output:
     log_file: logs/daily_review_{date}.log
     append: false
@@ -206,7 +186,6 @@ tasks:
   script:
     path: apps/news/news_evening_report.py
     args: []
-    cwd: workspace-marcus
   output:
     log_file: logs/news_evening_{date}.log
     append: false
@@ -228,7 +207,6 @@ tasks:
   script:
     path: jobs/stock_pool_manager.py
     args: []
-    cwd: workspace-marcus
   output:
     log_file: logs/stock_pool_refresh.log
     append: false
