@@ -47,7 +47,7 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       TUSHARE_TOKEN: ${TUSHARE_TOKEN}
       XUEQIU_TOKEN: ${XUEQIU_TOKEN}
-      MARCUS_WORKSPACE: /app/workspace
+      MARCUS_WORKSPACE: /app
     ports:
       - "8000:8000"
     depends_on:
@@ -58,7 +58,6 @@ services:
     volumes:
       - ../data:/app/data
       - ../apps:/app/apps:ro
-      - backend_workspace:/app/workspace
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   # Pi Server (Pi Agent HTTP Server)
@@ -95,4 +94,3 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  backend_workspace:

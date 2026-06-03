@@ -69,36 +69,19 @@ class Settings(BaseSettings):
 
     @property
     def memory_dir(self) -> Path:
-        # Use marcus-platform's own memory directory if it exists
-        platform_memory = Path(__file__).parent.parent.parent / "memory"
-        if platform_memory.exists():
-            return platform_memory
         return self.workspace_path / "memory"
 
     @property
     def skills_dir(self) -> Path:
-        # Use marcus-platform's own apps directory (skills were migrated to apps/)
-        platform_apps = Path(__file__).parent.parent.parent / "apps"
-        if platform_apps.exists():
-            return platform_apps
-        # Legacy fallback
-        platform_skills = Path(__file__).parent.parent.parent / "skills"
-        if platform_skills.exists():
-            return platform_skills
-        return self.workspace_path / "skills"
+        return self.workspace_path / "apps"
 
     @property
     def data_dir(self) -> Path:
-        # Always use marcus-platform's own data directory (mounted in Docker)
-        return Path(__file__).parent.parent.parent / "data"
+        return self.workspace_path / "data"
 
     @property
     def vnpy_dir(self) -> Path:
-        # Actual location: apps/paper-trading/
-        p = self.workspace_path / "apps" / "paper-trading"
-        if p.exists():
-            return p
-        return self.skills_dir / "vnpy-paper-trading"
+        return self.workspace_path / "apps" / "paper-trading"
 
     @property
     def xueqiu_dir(self) -> Path:
@@ -106,18 +89,11 @@ class Settings(BaseSettings):
 
     @property
     def akshare_dir(self) -> Path:
-        # Actual location: apps/news/
-        p = self.workspace_path / "apps" / "news"
-        if p.exists():
-            return p
-        return self.skills_dir / "akshare-news"
+        return self.workspace_path / "apps" / "news"
 
     @property
     def marcus_integration_dir(self) -> Path:
-        p = self.workspace_path / "apps" / "integration"
-        if p.exists():
-            return p
-        return self.skills_dir / "marcus-vnpy-integration"
+        return self.workspace_path / "apps" / "integration"
 
     def get_deepseek_key(self) -> str:
         """Get DeepSeek API key, raising error if not set."""
