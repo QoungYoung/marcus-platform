@@ -103,7 +103,7 @@ class SchedulerService:
             return
         self._initialized = True
 
-        self.config_path = Path(__file__).parent.parent / ".." / ".." / "config" / "tasks.yaml"
+        self.config_path = Path(__file__).parent.parent.parent / "config" / "tasks.yaml"
         self.tasks: Dict[str, TaskConfig] = {}
         self.executions: Dict[str, JobExecution] = {}
         self.workspace = ""
