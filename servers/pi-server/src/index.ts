@@ -33,7 +33,7 @@ import { CHAT_TOOLS, TRADE_TOOLS } from './tools.js';
 // ===== 配置 =====
 const PORT = parseInt(process.env.PI_SERVER_PORT || '3001', 10);
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
-const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const DEEPSEEK_MODEL = (process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash') as 'deepseek-v4-flash' | 'deepseek-v4-pro';
 const SESSIONS_DIR = resolve(__dirname, '..', 'sessions');
 mkdirSync(SESSIONS_DIR, { recursive: true });
 
