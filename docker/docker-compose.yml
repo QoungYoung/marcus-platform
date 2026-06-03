@@ -11,6 +11,7 @@ services:
     container_name: marcus-backend
     environment:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_API_HOST: ${DEEPSEEK_API_HOST:-api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       TUSHARE_TOKEN: ${TUSHARE_TOKEN}
       XUEQIU_TOKEN: ${XUEQIU_TOKEN}
