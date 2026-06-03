@@ -1137,7 +1137,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         fetch('/api/v1/config').catch(() => null),
       ]);
 
-      if (savedSession?.messages?.length > 0) {
+      if (savedSession && savedSession.messages && savedSession.messages.length > 0) {
         loadedMessages = savedSession.messages;
         console.log(`📂 加载会话: ${savedSession.id}, ${loadedMessages.length} 条消息`);
       }
