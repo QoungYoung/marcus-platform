@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 import threading
 import uuid
+from app.config import get_settings
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -195,7 +196,6 @@ class SchedulerService:
         # Load settings
         self.settings = config.get('settings', {})
         # Use config.py's workspace_path (respected by env var MARCUS_WORKSPACE)
-        from app.config import get_settings
         self.workspace = str(get_settings().workspace_path)
 
         # Load tasks
