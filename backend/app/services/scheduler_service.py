@@ -194,7 +194,9 @@ class SchedulerService:
 
         # Load settings
         self.settings = config.get('settings', {})
-        self.workspace = self.settings.get('workspace', str(Path(__file__).parent.parent.parent.parent))
+        # Use config.py's workspace_path (respected by env var MARCUS_WORKSPACE)
+        from app.config import get_settings
+        self.workspace = str(get_settings().workspace_path)
 
         # Load tasks
         tasks_data = config.get('tasks', [])
