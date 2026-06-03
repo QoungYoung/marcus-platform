@@ -150,6 +150,29 @@ async def get_trade_history(
     )
 
 
+@router.get("/orders")
+async def get_pending_orders(
+    symbol: Optional[str] = Query(None, description="Filter by symbol"),
+    status: Optional[str] = Query(None, description="Filter by status: 提交中/未成交/部分成交/已撤销"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """
+    Get pending/active orders from the paper trading engine.
+    Used by Pi agent to check order status before making new trades.
+    """
+    try:
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        executor = MarcusVNPyExecutor()
+        orders = executor.engine.get_orders(symbol=symbol, status=status, limit=limit)
+        return {
+            "orders": orders,
+            "count": len(orders),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_trade(order_id: str):
     """Get specific trade by order ID."""
@@ -194,29 +217,6 @@ async def get_trade(order_id: str):
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
     return trade
-
-
-@router.get("/orders")
-async def get_pending_orders(
-    symbol: Optional[str] = Query(None, description="Filter by symbol"),
-    status: Optional[str] = Query(None, description="Filter by status: 提交中/未成交/部分成交/已撤销"),
-    limit: int = Query(50, ge=1, le=200),
-):
-    """
-    Get pending/active orders from the paper trading engine.
-    Used by Pi agent to check order status before making new trades.
-    """
-    try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
-        orders = executor.engine.get_orders(symbol=symbol, status=status, limit=limit)
-        return {
-            "orders": orders,
-            "count": len(orders),
-            "timestamp": datetime.now().isoformat(),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{order_id}/cancel")

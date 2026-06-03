@@ -5,3 +5,4 @@
 {"timestamp": "2026-06-02T13:49:34.784052", "symbol": "000063", "side": "buy", "price": 36.05, "volume": 200, "required_cash": 7231.629999999998, "status": "passed"}
 {"timestamp": "2026-06-02T14:05:39.394953", "symbol": "000063", "side": "buy", "price": 36.02, "volume": 200, "required_cash": 7225.612, "status": "passed"}
 {"timestamp": "2026-06-02T14:11:50.957561", "symbol": "000063", "side": "buy", "price": 36.02, "volume": 200, "required_cash": 7225.612, "status": "passed"}
+{"timestamp": "2026-06-03T09:36:20.123089", "symbol": "SZ000733", "side": "buy", "price": 54.75, "volume": 200, "required_cash": 10982.849999999999, "status": "passed"}
