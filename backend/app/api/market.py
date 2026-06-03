@@ -232,11 +232,14 @@ async def search_market(q: str = Query(..., min_length=1, description="搜索关
             __import__('sys').path.insert(0, sys_path)
         from xueqiu_engine import XueqiuEngine
 
+        import os as _os
         engine = XueqiuEngine(
             config_file=str(settings.xueqiu_dir / "config.json"),
             data_dir=str(settings.data_dir),  # 显式指定为项目 data/ 目录
         )
+        print(f"[ETF搜索] data_dir={settings.data_dir}, db_file={engine.db_file}, exists={_os.path.exists(engine.db_file)}")
         etf_list = engine.get_etf_pool_from_db(limit=500)
+        print(f"[ETF搜索] 读取到 {len(etf_list)} 只 ETF，匹配关键词='{q}'")
 
         for etf in etf_list:
             sym = etf.get("symbol", "")
@@ -248,8 +251,11 @@ async def search_market(q: str = Query(..., min_length=1, description="搜索关
                     "type": "etf",
                     "sector": etf.get("sector", ""),
                 })
+        print(f"[ETF搜索] 匹配到 {sum(1 for r in results if r.get('type')=='etf')} 只 ETF")
     except Exception as e:
-        print(f"ETF search failed: {e}")
+        print(f"[ETF搜索] 失败: {e}")
+        import traceback
+        traceback.print_exc()
 
     return {
         "results": results[:20],  # 最多20条
