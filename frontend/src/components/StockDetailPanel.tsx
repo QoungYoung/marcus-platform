@@ -151,8 +151,8 @@ export default function StockDetailPanel({ stock }: StockDetailPanelProps) {
       abortRef.current = abort;
 
       try {
-        console.log('Fetching /agent/analyze for', stock.symbol, 'via direct URL');
-        const res = await fetch(`http://localhost:8000/api/v1/agent/analyze`, {
+        console.log('Fetching /agent/analyze for', stock.symbol);
+        const res = await fetch(`/api/v1/agent/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ symbol: stock.symbol }),
