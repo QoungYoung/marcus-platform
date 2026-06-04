@@ -1012,6 +1012,107 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
     refreshSessionList();
   }, [refreshSessionList]);
 
+  // ===== 导入导出会话 =====
+  const handleExportAll = useCallback(async () => {
+    if (!sessionsRef.current) return;
+    const meta = loadSessionsMeta();
+    const sessionIds = Object.keys(meta);
+    if (sessionIds.length === 0) { alert('没有可导出的会话'); return; }
+
+    const exportData: any = { version: 1, exportedAt: new Date().toISOString(), sessions: [] };
+    for (const sid of sessionIds) {
+      try {
+        const saved = await sessionsRef.current.loadSession(sid).catch(() => null);
+        const messages = saved?.messages || [];
+        exportData.sessions.push({
+          id: sid,
+          title: meta[sid]?.title || '新会话',
+          createdAt: meta[sid]?.createdAt || '',
+          messageCount: messages.length,
+          messages,
+        });
+      } catch { /* skip broken sessions */ }
+    }
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `marcus-sessions-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleExportSingle = useCallback(async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!sessionsRef.current) return;
+    const meta = loadSessionsMeta();
+    const info = meta[sessionId];
+    try {
+      const saved = await sessionsRef.current.loadSession(sessionId).catch(() => null);
+      const messages = saved?.messages || [];
+      const exportData = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        sessions: [{
+          id: sessionId,
+          title: info?.title || '新会话',
+          createdAt: info?.createdAt || '',
+          messageCount: messages.length,
+          messages,
+        }],
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `marcus-session-${(info?.title || 'session').slice(0, 20)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { alert('导出失败'); }
+  }, []);
+
+  const handleImport = useCallback(async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file || !sessionsRef.current) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (!data.sessions || !Array.isArray(data.sessions)) {
+          alert('无效的会话文件格式'); return;
+        }
+        let imported = 0;
+        for (const s of data.sessions) {
+          if (!s.id || !s.messages) continue;
+          const stateForSave = {
+            systemPrompt: buildSystemPrompt(tradeStatusRef.current),
+            model: agentRef.current?.state.model,
+            thinkingLevel: 'off',
+            messages: s.messages,
+            isStreaming: false,
+            pendingToolCalls: new Set(),
+          };
+          await sessionsRef.current.saveSession(s.id, stateForSave as any, undefined, s.title || '导入会话');
+          updateSessionMeta(s.id, {
+            title: s.title || '导入会话',
+            messageCount: s.messages.length,
+            createdAt: s.createdAt || new Date().toISOString(),
+          });
+          imported++;
+        }
+        refreshSessionList();
+        alert(`成功导入 ${imported} 个会话`);
+      } catch (e) {
+        alert(`导入失败: ${(e as Error).message}`);
+      }
+    };
+    input.click();
+  }, [refreshSessionList]);
+
   // ===== @提及 状态 =====
   const [mentionVisible, setMentionVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -1477,10 +1578,24 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             <i className="fas fa-history" style={{ marginRight: '6px', color: 'var(--agent-gold)', fontSize: '11px' }}></i>
             会话
           </span>
-          <span style={{
-            fontSize: '10px', color: 'var(--agent-text-dim)',
-            background: 'rgba(240,185,11,0.08)', padding: '1px 7px', borderRadius: '8px',
-          }}>{sessionsList.length}</span>
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+            <span style={{
+              fontSize: '10px', color: 'var(--agent-text-dim)',
+              background: 'rgba(240,185,11,0.08)', padding: '1px 7px', borderRadius: '8px',
+            }}>{sessionsList.length}</span>
+            <button onClick={handleImport} title="导入会话"
+              style={sessionIconBtnStyle}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-green)'; e.currentTarget.style.background = 'rgba(46,204,113,0.1)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
+              <i className="fas fa-file-import"></i>
+            </button>
+            <button onClick={handleExportAll} title="导出全部会话"
+              style={sessionIconBtnStyle}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-gold)'; e.currentTarget.style.background = 'var(--agent-gold-muted)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
+              <i className="fas fa-file-export"></i>
+            </button>
+          </div>
         </div>
         {/* 会话列表 */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 8px' }}>
@@ -1533,27 +1648,50 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
                       <span>{formatSessionTime(session.createdAt)}</span>
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => deleteSession(session.id, e)}
-                    title="删除会话"
-                    style={{
-                      background: 'none', border: 'none', cursor: 'pointer',
-                      color: 'var(--agent-text-dim)', fontSize: '11px',
-                      padding: '4px 6px', borderRadius: '4px', flexShrink: 0,
-                      transition: 'opacity 0.15s',
-                    }}
-                    className="session-delete-btn"
-                    onMouseEnter={e => {
-                      e.currentTarget.style.color = 'var(--agent-red)';
-                      e.currentTarget.style.background = 'var(--agent-red-bg)';
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.color = 'var(--agent-text-dim)';
-                      e.currentTarget.style.background = 'none';
-                    }}
-                  >
-                    <i className="fas fa-trash-alt"></i>
-                  </button>
+                  <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+                    <button
+                      onClick={(e) => handleExportSingle(session.id, e)}
+                      title="导出会话"
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        color: 'var(--agent-text-dim)', fontSize: '10px',
+                        padding: '4px 5px', borderRadius: '4px', flexShrink: 0,
+                        transition: 'opacity 0.15s',
+                      }}
+                      className="session-export-btn"
+                      onMouseEnter={e => {
+                        e.currentTarget.style.color = 'var(--agent-gold)';
+                        e.currentTarget.style.background = 'var(--agent-gold-muted)';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.color = 'var(--agent-text-dim)';
+                        e.currentTarget.style.background = 'none';
+                      }}
+                    >
+                      <i className="fas fa-download"></i>
+                    </button>
+                    <button
+                      onClick={(e) => deleteSession(session.id, e)}
+                      title="删除会话"
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        color: 'var(--agent-text-dim)', fontSize: '11px',
+                        padding: '4px 6px', borderRadius: '4px', flexShrink: 0,
+                        transition: 'opacity 0.15s',
+                      }}
+                      className="session-delete-btn"
+                      onMouseEnter={e => {
+                        e.currentTarget.style.color = 'var(--agent-red)';
+                        e.currentTarget.style.background = 'var(--agent-red-bg)';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.color = 'var(--agent-text-dim)';
+                        e.currentTarget.style.background = 'none';
+                      }}
+                    >
+                      <i className="fas fa-trash-alt"></i>
+                    </button>
+                  </div>
                 </div>
               );
             })
@@ -1724,7 +1862,9 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 // 会话删除按钮 hover 效果（通过 CSS 实现）
 const sessionPanelCss = `
   .session-delete-btn { opacity: 0; }
+  .session-export-btn { opacity: 0; }
   .session-item-row:hover .session-delete-btn { opacity: 1; }
+  .session-item-row:hover .session-export-btn { opacity: 1; }
 `;
 
 // Styles
@@ -1769,6 +1909,18 @@ const chatMainStyle: React.CSSProperties = {
   flexDirection: 'column',
   minWidth: 0,
   overflow: 'hidden',
+};
+
+const sessionIconBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  color: 'var(--agent-text-dim)',
+  fontSize: '11px',
+  cursor: 'pointer',
+  padding: '3px 5px',
+  borderRadius: '4px',
+  transition: 'all 0.2s',
+  flexShrink: 0,
 };
 
 const toolBtnStyle: React.CSSProperties = {
