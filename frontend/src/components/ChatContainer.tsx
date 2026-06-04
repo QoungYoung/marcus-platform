@@ -242,7 +242,8 @@ const getEtfKlineTool = {
     const lines = [`📊 ${params.symbol} ETF K线 (${params.period || 'day'}) - 共${klines.length}条`, ''];
     for (const k of klines.slice(-20)) {
       const up = k.close >= k.open ? '📈' : '📉';
-      lines.push(`${k.timestamp?.slice(0, 10) || '--'} | 开:${k.open?.toFixed(3)} 高:${k.high?.toFixed(3)} 低:${k.low?.toFixed(3)} 收:${k.close?.toFixed(3)} ${up} 量:${(k.volume / 1e4).toFixed(0)}万`);
+      const dateStr = k.timestamp ? new Date(k.timestamp).toISOString().slice(0, 10) : '--';
+      lines.push(`${dateStr} | 开:${k.open?.toFixed(3)} 高:${k.high?.toFixed(3)} 低:${k.low?.toFixed(3)} 收:${k.close?.toFixed(3)} ${up} 量:${(k.volume / 1e4).toFixed(0)}万`);
     }
     if (klines.length > 20) {
       lines.push(`... 仅显示最近20条，共${klines.length}条`);
@@ -909,6 +910,7 @@ ${marketStatus}
 - get_concept_fund_flow: 获取概念板块行情排行（涨幅排序，含涨跌幅/成交额/换手率，反映当日量价最强的概念方向）
 - get_concept_mapping: 查询概念板块及成分股（不传参列所有概念，传concept_name查该概念下的股票）
 - get_etf_quote: 查询ETF基金行情
+- get_etf_kline: 获取ETF历史K线数据（开高低收/量/额），用于分析ETF走势和趋势判断
 - get_daily_kline: 获取A股历史日K线数据（开高低收/量/额），用于趋势分析、找支撑阻力位、判断突破
 - get_moneyflow: 获取A股资金流向数据（大单/小单/特大单净流入），用于判断主力资金动向、确认趋势信号
 - get_technical: 获取MACD、KDJ、RSI、布林带等技术指标，用于判断超买超卖、金叉死叉、背离、趋势信号

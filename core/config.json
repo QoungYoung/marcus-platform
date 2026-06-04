@@ -2,8 +2,10 @@
   "_comment": "雪球数据查询配置文件",
   "_version": "1.0.0",
 
-  "token": "xq_a_token=b39a5862bad8311e57a3fc68ebb0acd4167a303f;",
+  "token": "xq_a_token=a019f4cba8e318efbcbef2ecd0a7bb7d1010f598;",
   "u": "2245868006",
+
+  "cookie": "xq_a_token=a019f4cba8e318efbcbef2ecd0a7bb7d1010f598; xqat=a019f4cba8e318efbcbef2ecd0a7bb7d1010f598; xq_id_token=eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1aWQiOjIyNDU4NjgwMDYsImlzcyI6InVjIiwiZXhwIjoxNzgzMDM2ODAyLCJjdG0iOjE3ODA0NDQ4MDI5MjMsImNpZCI6ImQ5ZDBuNEFadXAifQ.XGGRCPkT2ML9VN0EWYCvmPptS4WV545VCloU5CvgAi-UV1vnvoBXT5fRh5U8ZQK4-dLSLEciTt2KvLppq4k6Wnu21RFf-x5dBLsSSZsuemJtxYCqrlX1kHd9BlfYALgKB08cfuK9assz35sl7sqPCOgqvo71xPzY9nfE-I1CyUmxFtGlJYEZ4nFY8oh4whmxXFLWVHrK-lRaXT_Wo9GCKuW3D3ZMBwVcTQgtqypGtSLBPVtf1S2fQnQeW-LISkfAU11Fa0mwrLvWl1be14Pata8cVaBYYw8EZLEL6boc_8WSCBRFzPH8s5A4Y_13T1nyzeUhwXyinp92-xkr4fIm8g; xq_r_token=0fd09364310c75669a503e3b3a0215f56706e98c; u=2245868006; s=a412hwqyzi; bid=84ee09f60ba22ddc24cffa3bf81c1fa8_mpjgiudx; xq_is_login=1; device_id=53e16ccd0487b6ee8f3f70bdb373ae6c; is_overseas=0",
 
   "data_dir": "./data",
 

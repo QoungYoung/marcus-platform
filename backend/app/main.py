@@ -2,10 +2,14 @@
 """
 Marcus Platform Backend - FastAPI Application Entry Point
 """
+# Load .env into os.environ before any config reading (must be FIRST)
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
+
 from contextlib import asynccontextmanager
 from datetime import datetime
 import sys
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

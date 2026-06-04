@@ -52,11 +52,25 @@ class XueqiuEngine:
             print(f"[OK] Token 已配置")
         else:
             print("[WARN] 未配置 Token，部分 API 可能无法使用")
+
+        # 完整 Cookie（优先使用 config 中的 cookie 字段，支持完整雪球认证）
+        self.cookie = os.getenv('XUEQIU_COOKIE', self.config.get('cookie', ''))
+        if self.cookie:
+            print(f"[OK] 完整 Cookie 已配置")
+        else:
+            print("[INFO] 未配置完整 Cookie，将使用 token+u 拼接")
         
         # 初始化数据库
         self.db_file = os.path.join(self.data_dir, "cache.db")
         self._init_database()
-    
+
+    def _get_cookie(self) -> str:
+        """获取 Cookie 字符串。优先使用完整 cookie，其次用 token+u 拼接。"""
+        if self.cookie:
+            return self.cookie
+        u = self.config.get('u', '')
+        return f"{self.token} u={u}" if u else self.token
+
     def _load_config(self, config_file: str) -> dict:
         """加载配置文件"""
         if os.path.exists(config_file):
@@ -477,8 +491,7 @@ class XueqiuEngine:
 
         try:
             import requests
-            u = self.config.get('u', '')
-            cookie = f"{self.token} u={u}" if u else self.token
+            cookie = self._get_cookie()
 
             url = 'https://stock.xueqiu.com/v5/stock/quote.json'
             params = {'symbol': symbol, 'extend': 'detail'}
@@ -605,9 +618,8 @@ class XueqiuEngine:
         if '.' not in symbol and not symbol.startswith(('SH', 'SZ')):
             symbol = ('SH' if symbol.startswith(('5',)) else 'SZ') + symbol
 
-        # 构造 Cookie（token 已有分号，u 直接拼接）
-        u = self.config.get('u', '')
-        cookie = f"{self.token} u={u}" if u else self.token
+        # 构造 Cookie
+        cookie = self._get_cookie()
 
         # 默认使用明天的时间戳（雪球需要未来的begin才能取到最近数据）
         if begin is None:
@@ -694,8 +706,7 @@ class XueqiuEngine:
         """
         try:
             import requests
-            u = self.config.get('u', '')
-            cookie = f"{self.token} u={u}" if u else self.token
+            cookie = self._get_cookie()
 
             url = "https://stock.xueqiu.com/v5/stock/screener/fund/list.json"
             params = {
