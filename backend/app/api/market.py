@@ -840,12 +840,16 @@ async def get_moneyflow_mkt(
     from datetime import datetime as dt
     from pathlib import Path
     import sys
+    from app.config import get_settings
+    settings = get_settings()
 
     # 复用 jobs/fund_flow 中的 _fetch_market_moneyflow_dc，保证与盘中扫描完全一致
-    # backend/app/api/market.py → 上溯 4 层到 marcus-platform 根 → jobs/
-    _jobs_dir = str(Path(__file__).resolve().parent.parent.parent.parent / "jobs")
+    _jobs_dir = str(settings.workspace_path / "jobs")
+    _core_dir = str(settings.workspace_path / "core")
     if _jobs_dir not in sys.path:
         sys.path.insert(0, _jobs_dir)
+    if _core_dir not in sys.path:
+        sys.path.insert(0, _core_dir)
 
     try:
         from fund_flow import _fetch_market_moneyflow_dc

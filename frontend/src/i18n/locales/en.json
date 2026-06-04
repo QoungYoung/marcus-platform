@@ -42,7 +42,20 @@
     "currentPrice": "Current Price",
     "marketValue": "Market Value",
     "profit": "Profit",
-    "profitRate": "Profit Rate"
+    "profitRate": "Profit Rate",
+    "weight": "Weight",
+    "assetAllocation": "Asset Allocation",
+    "pnlOverview": "P&L Overview",
+    "topHoldings": "Top Holdings",
+    "cumulativeReturn": "Cumulative Return",
+    "cashPosition": "Cash & Positions",
+    "noPositions": "No positions yet, start trading",
+    "profitAmount": "P&L Amount",
+    "totalReturn": "Total Return",
+    "equityCurve": "Equity Curve",
+    "dailyPnL": "Daily P&L",
+    "indexKline": "Market K-line",
+    "vsBenchmark": "vs SH Index"
   },
   "trading": {
     "title": "Trading",
