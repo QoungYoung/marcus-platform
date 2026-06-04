@@ -292,7 +292,7 @@ export default function PortfolioPage() {
                   <XAxis dataKey="date" stroke={CHART_AXIS} fontSize={10} tickLine={false} interval="preserveStartEnd" />
                   <YAxis
                     stroke={CHART_AXIS} fontSize={10} tickLine={false}
-                    tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : v}
+                    tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)}
                     width={55}
                   />
                   <Tooltip content={<EquityTooltip />} />
@@ -333,7 +333,7 @@ export default function PortfolioPage() {
                   <XAxis dataKey="date" stroke={CHART_AXIS} fontSize={10} tickLine={false} interval="preserveStartEnd" />
                   <YAxis
                     stroke={CHART_AXIS} fontSize={10} tickLine={false}
-                    tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}
+                    tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
                     width={45}
                   />
                   <Tooltip content={<DailyPnlTooltip />} />
@@ -579,8 +579,8 @@ function AllocLegend({ cls, label, value, pct }: { cls: string; label: string; v
 }
 
 // ── 自定义 Tooltip ──
-function EquityTooltip({ active, payload, label }: Record<string, unknown>) {
-  const { t } = useTranslation();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function EquityTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="pp-tooltip-box">
@@ -595,7 +595,8 @@ function EquityTooltip({ active, payload, label }: Record<string, unknown>) {
   );
 }
 
-function DailyPnlTooltip({ active, payload, label }: Record<string, unknown>) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function DailyPnlTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   const pnl = (payload as Array<{ value: number }>)[0]?.value ?? 0;
   const isUp = pnl >= 0;
@@ -612,7 +613,8 @@ function DailyPnlTooltip({ active, payload, label }: Record<string, unknown>) {
   );
 }
 
-function KlineTooltip({ active, payload, label }: Record<string, unknown>) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function KlineTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   const pl = payload as Array<{ dataKey: string; value: number; name: string; color: string }>;
   const findVal = (key: string) => pl.find(p => p.dataKey === key)?.value;
