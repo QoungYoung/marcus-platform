@@ -7,7 +7,6 @@ __pycache__
 logs/
 data/
 memory/
-jobs/
 docs/
 *.txt
 .env
