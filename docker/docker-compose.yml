@@ -9,18 +9,11 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.backend
     container_name: marcus-backend
+    env_file:
+      - ../.env
     environment:
       TZ: Asia/Shanghai
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DEEPSEEK_API_HOST: ${DEEPSEEK_API_HOST:-api.deepseek.com}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
-      TUSHARE_TOKEN: ${TUSHARE_TOKEN}
-      XUEQIU_TOKEN: ${XUEQIU_TOKEN}
       MARCUS_WORKSPACE: /app
-      QQ_APP_ID: ${QQ_APP_ID}
-      QQ_APP_SECRET: ${QQ_APP_SECRET}
-      QQ_BOT_ENABLED: ${QQ_BOT_ENABLED:-false}
-      QQ_BOT_RECIPIENT: ${QQ_BOT_RECIPIENT}
       PI_SERVER_URL: http://piserver:3001/chat
     ports:
       - "8000:8000"
@@ -38,11 +31,11 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.piserver
     container_name: marcus-piserver
+    env_file:
+      - ../.env
     environment:
       TZ: Asia/Shanghai
       NODE_ENV: production
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       PI_SERVER_PORT: "3001"
       MARCUS_API_URL: http://backend:8000/api/v1
     ports:

@@ -10,19 +10,31 @@
  *   POST /reset   — 重置会话
  */
 
-import 'dotenv/config'; // 先尝试加载当前目录的 .env
-
+// 加载 .env 配置（按优先级从低到高）
 import * as dotenv from 'dotenv';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
-// 额外加载项目根目录的 .env（覆盖当前目录的值）
+// 先加载当前 CWD 的 .env（最低优先级）
+dotenv.config();
+
+// 尝试加载项目根目录的 .env（覆盖 CWD 的值）
+//   本地 dev: servers/pi-server/src/ → 上 3 级 → marcus-platform/.env
+//   Docker:    /app/dist/              → 上 1 级 → /app/.env
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const projectRootEnv = resolve(__dirname, '..', '..', '..', '.env');
-if (existsSync(projectRootEnv)) {
-  dotenv.config({ path: projectRootEnv, override: true });
-  console.log(`[PiServer] 已加载配置: ${projectRootEnv}`);
+const candidatePaths = [
+  resolve(__dirname, '..', '..', '..', '.env'),   // 本地开发路径: <projectRoot>/.env
+  resolve(__dirname, '..', '.env'),                 // Docker 编译后: /app/.env
+  resolve(process.cwd(), '.env'),                   // CWD 兜底
+];
+
+for (const envPath of candidatePaths) {
+  if (existsSync(envPath)) {
+    dotenv.config({ path: envPath, override: true });
+    console.log(`[PiServer] 已加载配置: ${envPath}`);
+    break;
+  }
 }
 
 import * as http from 'node:http';
