@@ -132,7 +132,15 @@ def main():
         'elapsed_seconds': 0,
         'ai_mode': True,
         'db_mode': True,
-        'db_total_today': today_stats['total']
+        'db_total_today': today_stats['total'],
+        'db_positive': today_stats['positive'],
+        'db_negative': today_stats['negative'],
+        'db_neutral': today_stats['neutral'],
+        'category_top5': [
+            {'category': cat, 'total': d['total'], 'score': round(d['score'], 1),
+             'positive': d['positive'], 'negative': d['negative']}
+            for cat, d in sorted(stats.items(), key=lambda x: x[1]['total'], reverse=True)[:5]
+        ]
     }
 
     # 4. 热点分析（读 DB + DeepSeek）
@@ -163,6 +171,11 @@ def main():
                 'impact_analysis': analysis.get('impact_analysis', []),
                 'source': 'deepseek_concept'
             })
+            # 追加到输出 JSON，供 Pi 分析使用
+            result['hot_concepts'] = hot_concepts
+            result['concept_scores'] = concept_scores
+            result['overall_sentiment'] = overall_sentiment
+            result['impact_analysis'] = analysis.get('impact_analysis', [])
             print(f"[热点缓存] ✅ DeepSeek 概念: {hot_concepts}", file=sys.stderr)
 
             # 概念回写到最近新闻
@@ -197,6 +210,11 @@ def main():
             concept_scores = {cat: round(stats[cat]['score'], 1) for cat, _ in sorted_sectors if stats[cat]['total'] > 0}
             total_news = sum(d['total'] for d in stats.values())
             overall_sentiment = round(sum(d['score'] * d['total'] for d in stats.values()) / total_news, 1) if total_news > 0 else 50
+            # 追加到输出 JSON，供 Pi 分析使用
+            result['hot_concepts'] = hot_concepts
+            result['concept_scores'] = concept_scores
+            result['overall_sentiment'] = overall_sentiment
+            result['impact_analysis'] = []
             cache_data.update({
                 'sentiment_score': overall_sentiment,
                 'hot_concepts': hot_concepts,
