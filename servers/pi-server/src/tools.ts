@@ -549,7 +549,17 @@ export const getLatestScanReportTool = {
   }),
   async execute(_toolCallId: string, params: { date?: string }, _signal?: AbortSignal) {
     const query = params.date ? `?date=${params.date}` : '';
-    const data = await apiFetch(`/scan/latest${query}`);
+    let data: any;
+    try {
+      data = await apiFetch(`/scan/latest${query}`);
+    } catch (e: any) {
+      // 404 等无数据情况 → 返回空结果而不是抛异常，让 Pi 优雅处理
+      const reason = e?.message?.includes('404') ? '今日暂无扫描报告' : `API 错误: ${e.message}`;
+      return {
+        content: [{ type: 'text', text: `📊 盘中扫描报告: ${reason}` }],
+        details: { error: reason },
+      };
+    }
     if (data.error) throw new Error(data.error);
     const lines = [
       `📊 盘中扫描报告 (${data.timestamp || '--'})`,

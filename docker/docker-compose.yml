@@ -28,6 +28,7 @@ services:
       - ../data:/app/data
       - ../apps:/app/apps:ro
       - ../logs:/app/logs
+      - ../memory:/app/memory
       - /etc/localtime:/etc/localtime:ro
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
