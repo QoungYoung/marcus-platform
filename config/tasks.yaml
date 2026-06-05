@@ -215,3 +215,23 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: weekly_reflect
+  name: 周度反思
+  description: 每周五收盘后 Pi 使用 DeepSeek-v4-pro 最高思考模式深度反思整周策略执行
+  enabled: true
+  type: pi_reflect
+  pi_prompt: weekly
+  schedule:
+    type: cron
+    expr: 30 15 * * fri
+    timezone: Asia/Shanghai
+  output:
+    log_file: logs/weekly_reflect_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on:
+  - daily_review

@@ -166,6 +166,92 @@ async def get_latest_scan_report(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/pi-analysis")
+async def get_pi_analysis_history(
+    start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD，默认本周一"),
+    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，默认今天"),
+):
+    """
+    按日期范围查询 Pi 分析历史记录。
+
+    返回指定日期范围内 `memory/pi-analysis-logs/` 下所有 Pi 分析报告。
+    每周反思任务通过此端点获取整周全部 Pi 分析记录。
+
+    返回格式:
+    {
+        "date_range": {"start": "...", "end": "..."},
+        "days_count": N,
+        "total_records": N,
+        "records": [
+            {"date": "2026-06-01", "timestamp": "...", "task_name": "...", "stance": "...", "position_limit": N, "reason": "...", "report": "..."}
+        ]
+    }
+    """
+    from datetime import timedelta
+
+    workspace = _get_workspace()
+    analysis_dir = workspace / "memory" / "pi-analysis-logs"
+
+    if not analysis_dir.exists():
+        return {
+            "date_range": {"start": start_date or "auto", "end": end_date or "auto"},
+            "days_count": 0,
+            "total_records": 0,
+            "records": [],
+        }
+
+    # 解析日期范围
+    today = datetime.now()
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="end_date 格式错误，应为 YYYY-MM-DD")
+    else:
+        end_dt = today
+
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="start_date 格式错误，应为 YYYY-MM-DD")
+    else:
+        # 默认本周一
+        start_dt = today - timedelta(days=today.weekday())
+
+    # 收集范围内所有 analysis 文件
+    all_records = []
+    current = start_dt
+    while current <= end_dt:
+        date_str = current.strftime("%Y-%m-%d")
+        target = analysis_dir / f"{date_str}-analysis.jsonl"
+        if target.exists():
+            try:
+                with open(target, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            record = json.loads(line)
+                            record["date"] = date_str
+                            all_records.append(record)
+            except Exception:
+                pass
+        current += timedelta(days=1)
+
+    # 按时间排序
+    all_records.sort(key=lambda r: r.get("timestamp", ""))
+
+    return {
+        "date_range": {
+            "start": start_dt.strftime("%Y-%m-%d"),
+            "end": end_dt.strftime("%Y-%m-%d"),
+        },
+        "days_count": len(set(r["date"] for r in all_records)),
+        "total_records": len(all_records),
+        "records": all_records,
+    }
+
+
 @router.get("/history")
 async def get_scan_history(
     date: Optional[str] = Query(None, description="日期 YYYY-MM-DD，默认今天"),

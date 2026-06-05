@@ -296,7 +296,7 @@ class SchedulerService:
             'pre_market_scan', 'market_scan',
             'auto_trade_morning', 'auto_trade_late_morning',
             'auto_trade_afternoon', 'auto_trade_closing',
-            'daily_review',
+            'daily_review', 'weekly_reflect',
         }
         if task_id in TRADE_DAY_ONLY_TASKS:
             try:
@@ -367,6 +367,23 @@ class SchedulerService:
                 execution.status = JobStatus.FAILED.value
                 execution.error = f"{str(e)}\n{traceback.format_exc()}"
                 logger.error(f"[{execution_id}] Pi trade failed: {e}")
+            finally:
+                execution.finished_at = datetime.now()
+                self._save_execution_log(execution)
+                self._send_notifications(task, execution)
+            return
+
+        # === Pi 周度反思模式 ===
+        if task.type == 'pi_reflect':
+            try:
+                output = self._execute_pi_reflect(task, execution_id)
+                execution.status = JobStatus.SUCCESS.value
+                execution.output = output
+                execution.return_code = 0
+            except Exception as e:
+                execution.status = JobStatus.FAILED.value
+                execution.error = f"{str(e)}\n{traceback.format_exc()}"
+                logger.error(f"[{execution_id}] Pi reflect failed: {e}")
             finally:
                 execution.finished_at = datetime.now()
                 self._save_execution_log(execution)
@@ -513,16 +530,16 @@ class SchedulerService:
             if self._qq_notifier:
                 use_pi = notifications.get('pi_analysis', False)
                 
-                # === pi_trade 模式：output 已经是 Pi 报告，直接推送 ===
-                if task.type == 'pi_trade' and execution.output and execution.status == JobStatus.SUCCESS.value:
+                # === pi_trade / pi_reflect 模式：output 已经是 Pi 报告，直接推送 ===
+                if task.type in ('pi_trade', 'pi_reflect') and execution.output and execution.status == JobStatus.SUCCESS.value:
                     try:
                         # 去掉 SIGNAL 行再发送
                         clean_output = re.sub(r'\n?SIGNAL:.*', '', execution.output).strip()
                         self._qq_notifier(clean_output, self._qq_recipient)
-                        logger.info(f"QQ Pi-trade report sent for {task.name}")
+                        logger.info(f"QQ Pi-report sent for {task.name} (type={task.type})")
                         return
                     except Exception as e:
-                        logger.error(f"Failed to send Pi-trade report: {e}")
+                        logger.error(f"Failed to send Pi-report: {e}")
                 
                 if use_pi and execution.output and execution.status == JobStatus.SUCCESS.value:
                     # 将扫描结果发给 Pi 分析，生成报告
@@ -676,6 +693,50 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"Failed to save Pi analysis: {e}")
 
+    def _save_weekly_reflect(self, start_date: str, end_date: str, reply: str,
+                             stance: str, position_limit: int, reason: str):
+        """持久化周度反思报告到 memory/weekly-reflect-logs/"""
+        try:
+            log_dir = self._get_workspace_path() / "memory" / "weekly-reflect-logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            now = datetime.now()
+            filename = f"{start_date}_to_{end_date}-reflect"
+            json_file = log_dir / f"{filename}.json"
+            md_file = log_dir / f"{filename}.md"
+
+            # ---- 结构化 JSON（完整原始回复） ----
+            record = {
+                "created_at": now.isoformat(),
+                "date_range": {
+                    "start": start_date,
+                    "end": end_date,
+                },
+                "stance": stance,
+                "position_limit": position_limit,
+                "reason": reason,
+                "report": reply,
+            }
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+
+            # ---- 纯净 Markdown（去掉 SIGNAL 行） ----
+            import re as _re
+            clean_report = _re.sub(r'\n?SIGNAL:.*', '', reply).strip()
+            md_content = (
+                f"<!-- Marcus 周度反思报告 -->\n"
+                f"<!-- 日期范围: {start_date} → {end_date} -->\n"
+                f"<!-- 生成时间: {now.strftime('%Y-%m-%d %H:%M:%S')} -->\n"
+                f"<!-- 信号: {stance} | 仓位上限: {position_limit}% -->\n\n"
+                f"{clean_report}\n"
+            )
+            with open(md_file, 'w', encoding='utf-8') as f:
+                f.write(md_content)
+
+            logger.info(f"Weekly reflect saved: {md_file} ({len(clean_report)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to save weekly reflect: {e}")
+
     def _execute_pi_trade(self, task: TaskConfig, execution_id: str) -> str:
         """
         Pi 自主交易模式 —— 代替 auto_trade.py 脚本。
@@ -782,6 +843,100 @@ class SchedulerService:
                 logger.error(f"[{execution_id}] Failed to write Pi signal: {e}")
 
         # 返回完整报告（含 SIGNAL 行供后续通知使用）
+        return reply
+
+    def _execute_pi_reflect(self, task: TaskConfig, execution_id: str) -> str:
+        """
+        Pi 周度反思模式 —— 使用 DeepSeek-v4-pro + 最高思考等级。
+
+        流程：
+        1. 计算本周一和本周五日期
+        2. 构造反思指令：告知 Pi 查询整周 Pi 分析历史
+        3. 发送给 Pi Server /chat（mode=reflect）
+        4. Pi 调用 get_pi_analysis_history → 深度分析
+        5. 输出周度反思报告
+        6. 提取 SIGNAL 写入策略链
+        """
+        import urllib.request, json as _json, ssl, re
+        from datetime import timedelta
+
+        now = datetime.now()
+        # 本周一
+        monday = now - timedelta(days=now.weekday())
+        start_date = monday.strftime('%Y-%m-%d')
+        end_date = now.strftime('%Y-%m-%d')
+
+        prompt = (
+            f"现在是 {now.strftime('%Y-%m-%d %H:%M:%S')}（周五收盘后），"
+            f"请执行周度反思。\n\n"
+            f"本周日期范围：{start_date} → {end_date}\n\n"
+            f"请立即执行以下操作：\n"
+            f"1. 调用 get_pi_analysis_history(start_date=\"{start_date}\", end_date=\"{end_date}\")"
+            f" 获取整周全部 Pi 分析记录\n"
+            f"2. 调用 get_latest_scan_report() 了解周五收盘市场状态\n"
+            f"3. 调用 get_portfolio() 了解最终账户状况\n"
+            f"4. 调用 get_market_indices() 看本周大盘涨跌\n"
+            f"5. 按反思 SOP 逐日分析 Pi 立场演变\n"
+            f"6. 输出完整的周度反思报告\n\n"
+            f"请用 DeepSeek-v4-pro 最高思考模式进行深度推理，不要匆忙下结论。\n"
+            f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+        payload = _json.dumps({
+            "message": prompt,
+            "session_id": f"pi_reflect_{task.id}_{now.strftime('%Y%m%d')}",
+            "mode": "reflect"  # 反思模式（隔离的工具集+提示词+模型+最高思考）
+        }).encode("utf-8")
+
+        pi_url = get_settings().PI_SERVER_URL
+        req = urllib.request.Request(
+            pi_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        ctx = ssl.create_default_context()
+
+        logger.info(f"[{execution_id}] Sending pi_reflect request for {task.id} "
+                    f"(日期范围: {start_date}→{end_date})...")
+        # 反思可能需要更长时间（深度推理）
+        with urllib.request.urlopen(req, context=ctx, timeout=300) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            reply = data.get("reply", "")
+            elapsed = data.get("elapsed_ms", 0)
+            logger.info(f"[{execution_id}] Pi reflect response ({len(reply)} chars, {elapsed}ms)")
+
+        if not reply or reply == '(无回复)':
+            raise RuntimeError("Pi 未返回有效周度反思报告")
+
+        # 解析策略信号并写入策略链
+        stance = 'yellow'
+        position_limit = 60
+        reason_str = ''
+        signal_match = re.search(
+            r'SIGNAL:\s*(green|yellow|red)\s+POSITION:\s*(\d+)\s*REASON:\s*(.+)',
+            reply, re.IGNORECASE
+        )
+        if signal_match:
+            try:
+                stance = signal_match.group(1).lower()
+                position_limit = int(signal_match.group(2))
+                reason_str = signal_match.group(3).strip()
+                from core.utils.strategy_chain import StrategyChain
+                chain = StrategyChain()
+                chain.set_pi_confirmation(
+                    stance=stance,
+                    position_limit=position_limit,
+                    reason=reason_str,
+                )
+                logger.info(f"[{execution_id}] Pi reflect signal: {stance} "
+                            f"limit={position_limit}%")
+            except Exception as e:
+                logger.error(f"[{execution_id}] Failed to write Pi reflect signal: {e}")
+
+        # === 持久化周度反思报告 ===
+        self._save_weekly_reflect(start_date, end_date, reply, stance, position_limit, reason_str)
+
         return reply
 
     def _on_job_executed(self, event):
