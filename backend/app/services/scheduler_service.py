@@ -994,17 +994,21 @@ class SchedulerService:
             # Build the config structure matching the original format
             tasks_list = []
             for task_id, task in self.tasks.items():
-                tasks_list.append({
+                task_dict = {
                     'id': task.id,
                     'name': task.name,
                     'description': task.description,
                     'enabled': task.enabled,
+                    'type': task.type,
                     'schedule': task.schedule,
                     'script': task.script,
                     'output': task.output,
                     'notifications': task.notifications,
                     'depends_on': task.depends_on,
-                })
+                }
+                if task.type == 'pi_trade':
+                    task_dict['pi_prompt'] = task.pi_prompt
+                tasks_list.append(task_dict)
 
             config = {
                 'settings': self.settings,
