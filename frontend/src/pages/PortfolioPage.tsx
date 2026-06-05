@@ -169,7 +169,7 @@ export default function PortfolioPage() {
     arr.sort((a, b) => {
       let va: number, vb: number;
       if (sortKey === 'weight') { va = totalAsset > 0 ? a.market_value / totalAsset : 0; vb = totalAsset > 0 ? b.market_value / totalAsset : 0; }
-      else { va = (a as Record<string, number>)[sortKey] || 0; vb = (b as Record<string, number>)[sortKey] || 0; }
+      else { va = (a as unknown as Record<string, number>)[sortKey] || 0; vb = (b as unknown as Record<string, number>)[sortKey] || 0; }
       return sortDir === 'desc' ? vb - va : va - vb;
     });
     return arr;
