@@ -1,480 +1,381 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, AreaChart, Area, ComposedChart, Legend,
+  PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi } from '../api/client';
 import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 
-// ── 类型定义 ──
+// ── 类型 ──
 interface Position {
-  symbol: string;
-  name: string;
-  volume: number;
-  avg_price: number;
-  current_price: number;
-  market_value: number;
-  floating_pnl: number;
-  floating_pnl_pct: number;
+  symbol: string; name: string; volume: number;
+  avg_price: number; current_price: number;
+  market_value: number; floating_pnl: number; floating_pnl_pct: number;
 }
-
 interface Account {
-  initial_capital: number;
-  available_cash: number;
-  frozen_cash?: number;
-  position_value: number;
-  total_asset: number;
-  realized_pnl: number;
-  float_pnl: number;
-  total_pnl: number;
-  position_ratio: number;
-  positions: Position[];
+  initial_capital: number; available_cash: number; frozen_cash?: number;
+  position_value: number; total_asset: number; realized_pnl: number;
+  float_pnl: number; total_pnl: number; position_ratio: number; positions: Position[];
 }
-
 interface PortfolioSummary {
-  account: Account;
-  total_return: number;
-  total_return_pct: number;
-  win_rate: number;
+  account: Account; total_return: number; total_return_pct: number; win_rate: number;
 }
+interface EquityPoint { date: string; value: number; benchmark: number; }
+interface DailyPnl { date: string; pnl: number; }
+interface IndexTicker { name: string; price: number; change_pct: number; }
+interface TradeRecord { order_id?: string; symbol: string; name?: string; direction: string; price: number; volume: number; created_at?: string; }
 
-interface EquityPoint {
-  date: string;
-  value: number;
-  benchmark: number;
-}
+type SortKey = 'market_value' | 'floating_pnl' | 'floating_pnl_pct' | 'weight';
 
-interface DailyPnl {
-  date: string;
-  pnl: number;
-}
-
-interface KlineBar {
-  date: string;
-  open: number;
-  close: number;
-  high: number;
-  low: number;
-  volume: number;
-  ma5?: number;
-  ma10?: number;
-}
-
-// ── 工具函数 ──
+// ── 工具 ──
 function fmtMoney(val: number): string {
   const abs = Math.abs(val);
   if (abs >= 1e8) return `${(val / 1e8).toFixed(2)}亿`;
   if (abs >= 1e4) return `${(val / 1e4).toFixed(2)}万`;
   return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
-
 function fmtMoneyShort(val: number): string {
-  const abs = Math.abs(val);
-  const sign = val < 0 ? '-' : '';
-  if (abs >= 1e8) return `${sign}¥${(abs / 1e8).toFixed(2)}亿`;
-  if (abs >= 1e4) return `${sign}¥${(abs / 1e4).toFixed(1)}万`;
-  return `${sign}¥${abs.toFixed(0)}`;
+  const abs = Math.abs(val); const sign = val < 0 ? '-' : '';
+  if (abs >= 1e8) return `${sign}${(abs / 1e8).toFixed(1)}亿`;
+  if (abs >= 1e4) return `${sign}${(abs / 1e4).toFixed(1)}万`;
+  return `${sign}${abs.toFixed(0)}`;
 }
-
 function cleanStockName(name: string | undefined, symbol: string): string {
   if (!name) return symbol;
   return name.replace(/^(SH|SZ|BJ)\d+/, '').trim() || symbol;
 }
 
-// ── 确定性 Mock 数据生成 ──
+// ── Mock 生成 ──
 function generateEquityCurve(initialCapital: number, totalReturnPct: number, days = 60): EquityPoint[] {
   const result: EquityPoint[] = [];
   const seed = Math.abs(totalReturnPct) * 1000 + initialCapital * 0.01;
-  let equity = initialCapital;
-  let bench = 1000;
-
+  let equity = initialCapital; let bench = 1000;
   const now = new Date();
   for (let i = 0; i < days; i++) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - (days - 1 - i));
+    const d = new Date(now); d.setDate(d.getDate() - (days - 1 - i));
     const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
-
     const noise = Math.sin(seed + i * 2.7 + i * i * 0.03) * 0.008;
-    const dailyTrend = totalReturnPct / (days * 100);
-    equity *= (1 + dailyTrend + noise);
-    bench *= (1 + dailyTrend * 0.6 + noise * 0.7);
+    const t = totalReturnPct / (days * 100);
+    equity *= (1 + t + noise); bench *= (1 + t * 0.6 + noise * 0.7);
     result.push({ date: dateStr, value: Math.round(equity), benchmark: Math.round(bench) });
   }
   return result;
 }
-
 function generateDailyPnl(days = 60): DailyPnl[] {
   const result: DailyPnl[] = [];
   const now = new Date();
   for (let i = 0; i < days; i++) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - (days - 1 - i));
+    const d = new Date(now); d.setDate(d.getDate() - (days - 1 - i));
     const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
-    const noise = Math.sin(i * 1.7 + i * i * 0.05) * 1500;
-    const trend = (i < 30 ? 200 : -100);
-    const pnl = Math.round(noise + trend + (Math.sin(i * 3.1) * 800));
+    const pnl = Math.round(Math.sin(i * 1.7 + i * i * 0.05) * 1500 + (i < 30 ? 200 : -100) + Math.sin(i * 3.1) * 800);
     result.push({ date: dateStr, pnl });
   }
   return result;
 }
 
-function computeMA(data: KlineBar[], period: number): (number | undefined)[] {
-  const result: (number | undefined)[] = [];
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) { result.push(undefined); continue; }
-    let sum = 0;
-    for (let j = i - period + 1; j <= i; j++) sum += data[j].close;
-    result.push(Number((sum / period).toFixed(2)));
+// ── 计算最大回撤 ──
+function calcMaxDrawdown(curve: EquityPoint[]): number {
+  let peak = 0; let maxDD = 0;
+  for (const pt of curve) {
+    if (pt.value > peak) peak = pt.value;
+    const dd = peak > 0 ? (peak - pt.value) / peak * 100 : 0;
+    if (dd > maxDD) maxDD = dd;
   }
-  return result;
+  return maxDD;
 }
 
 // ── 主组件 ──
 export default function PortfolioPage() {
   const { t } = useTranslation();
   const [data, setData] = useState<PortfolioSummary | null>(null);
-  const [klineData, setKlineData] = useState<KlineBar[]>([]);
+  const [tickers, setTickers] = useState<IndexTicker[]>([]);
+  const [recentTrades, setRecentTrades] = useState<TradeRecord[]>([]);
+  const [realEquity, setRealEquity] = useState<{ date: string; equity: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate] = useState<Date>(new Date());
+  const [sortKey, setSortKey] = useState<SortKey>('market_value');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [fabOpen, setFabOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-
     Promise.all([
       portfolioApi.getSummary(),
-      marketApi.getKline('000001.SH', { limit: 60 }).catch(() => null),
-    ])
-      .then(([portfolioRes, klineRes]) => {
-        if (cancelled) return;
-        setData(portfolioRes.data);
-
-        if (klineRes?.data?.length) {
-          const bars: KlineBar[] = klineRes.data.map((item: Record<string, unknown>) => ({
-            date: String(item.trade_date || item.date || '').slice(4),
-            open: Number(item.open ?? 0),
-            close: Number(item.close ?? 0),
-            high: Number(item.high ?? 0),
-            low: Number(item.low ?? 0),
-            volume: Number(item.vol ?? item.volume ?? 0),
-          })).filter((b: KlineBar) => b.close > 0);
-          const ma5 = computeMA(bars, 5);
-          const ma10 = computeMA(bars, 10);
-          bars.forEach((b, i) => { b.ma5 = ma5[i]; b.ma10 = ma10[i]; });
-          setKlineData(bars);
-        } else {
-          setKlineData(generateMockKline(60));
-        }
-        setLoading(false);
-      })
-      .catch((err: Error) => {
-        if (cancelled) return;
-        setError(err.message);
-        setLoading(false);
-      });
-
+      marketApi.getIndices().catch(() => null),
+      tradesApi.getHistory({ limit: 8 }).catch(() => null),
+      portfolioApi.getEquityHistory(60).catch(() => null),
+    ]).then(([pRes, idxRes, tRes, eqRes]) => {
+      if (cancelled) return;
+      setData(pRes.data);
+      if (idxRes?.data?.indices) {
+        setTickers(idxRes.data.indices.slice(0, 6).map((i: Record<string, unknown>) => ({
+          name: String(i.name || '').slice(0, 4),
+          price: Number(i.current_price ?? 0),
+          change_pct: Number(i.change_pct ?? 0),
+        })));
+      }
+      if (tRes?.data?.trades || tRes?.data?.data) {
+        const trades = tRes.data.trades || tRes.data.data || [];
+        setRecentTrades(Array.isArray(trades) ? trades.slice(0, 8) : []);
+      }
+      if (eqRes?.data && Array.isArray(eqRes.data) && eqRes.data.length > 0) {
+        setRealEquity(eqRes.data);
+      }
+      setLoading(false);
+    }).catch((err: Error) => { if (!cancelled) { setError(err.message); setLoading(false); } });
     return () => { cancelled = true; };
   }, []);
 
-  // ── 派生数据 ──
-  const equityCurve = useMemo(() => {
-    if (!data) return [];
-    return generateEquityCurve(data.account.initial_capital, data.total_return_pct, 60);
-  }, [data]);
+  // 排序
+  const handleSort = useCallback((key: SortKey) => {
+    setSortKey(prev => { setSortDir(prev === key ? (sortDir === 'desc' ? 'asc' : 'desc') : 'desc'); return key; });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortDir]);
 
+  // ── 所有 Hook 必须在 return 之前（包含 data 为 null 的降级逻辑）──
+  const initialCap = data?.account?.initial_capital || 0;
+  const totalReturnPct = data?.total_return_pct || 0;
+  const positions = data?.account?.positions || [];
+  const posVal = data?.account?.position_value || 0;
+  const cash = data?.account?.available_cash || 0;
+  const totalAsset = data?.account?.total_asset || 0;
+
+  const equityCurve: EquityPoint[] = useMemo(() => {
+    // 优先使用后端真实数据
+    if (realEquity.length > 0) {
+      return realEquity.map(p => ({
+        date: p.date.slice(5), // "2026-06-05" -> "06-05"
+        value: p.equity,
+        benchmark: 0,
+      }));
+    }
+    // 降级到模拟数据
+    return generateEquityCurve(initialCap, totalReturnPct, 60);
+  }, [realEquity, initialCap, totalReturnPct]);
   const dailyPnlData = useMemo(() => generateDailyPnl(60), []);
+  const maxDrawdown = useMemo(() => calcMaxDrawdown(equityCurve), [equityCurve]);
+  const volatility = useMemo(() => {
+    const returns = equityCurve.slice(1).map((p, i) => (p.value - equityCurve[i].value) / equityCurve[i].value);
+    const mean = returns.reduce((a, b) => a + b, 0) / (returns.length || 1);
+    return Math.sqrt(returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length || 1)) * Math.sqrt(252) * 100;
+  }, [equityCurve]);
 
-  // ── 加载 / 错误态 ──
-  if (loading) {
-    return (
-      <div className="pp-loading">
-        <i className="fas fa-spinner fa-spin" />
-        <span>{t('common.loading')}</span>
-      </div>
-    );
-  }
+  const sortedPositions = useMemo(() => {
+    const arr = [...positions];
+    arr.sort((a, b) => {
+      let va: number, vb: number;
+      if (sortKey === 'weight') { va = totalAsset > 0 ? a.market_value / totalAsset : 0; vb = totalAsset > 0 ? b.market_value / totalAsset : 0; }
+      else { va = (a as Record<string, number>)[sortKey] || 0; vb = (b as Record<string, number>)[sortKey] || 0; }
+      return sortDir === 'desc' ? vb - va : va - vb;
+    });
+    return arr;
+  }, [positions, sortKey, sortDir, posVal]);
 
-  if (error) {
-    return (
-      <div className="pp-page">
-        <div className="pp-error">
-          <div className="pp-error-inner">
-            <i className="fas fa-exclamation-triangle" />
-            {t('common.error')}: {error}
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const ringData = useMemo(() => {
+    const items = sortedPositions.slice(0, 5).map(p => ({
+      name: cleanStockName(p.name, p.symbol),
+      value: p.market_value,
+      pnl: p.floating_pnl >= 0 ? 'up' : 'down',
+    }));
+    const otherVal = sortedPositions.slice(5).reduce((s, p) => s + p.market_value, 0);
+    if (otherVal > 0) items.push({ name: '其他', value: otherVal, pnl: 'neutral' as const });
+    if (cash > 0) items.push({ name: '现金', value: cash, pnl: 'neutral' as const });
+    return items;
+  }, [sortedPositions, cash]);
 
+  const PIE_COLORS = ['#f0b90b', '#3498db', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c', '#6a7d9b'];
+
+  // ── 加载 / 错误 ──
+  if (loading) return <div className="cp-loading"><i className="fas fa-spinner fa-spin" /><span>{t('common.loading')}</span></div>;
+  if (error) return <div className="cp-page"><div className="cp-error"><div className="cp-error-inner"><i className="fas fa-exclamation-triangle" />{t('common.error')}: {error}</div></div></div>;
   if (!data) return null;
 
-  const { account, total_return, total_return_pct } = data;
-  const positions = account?.positions || [];
-  const totalAssetValue = account?.total_asset || 0;
-  const cashValue = account?.available_cash || 0;
-  const frozenValue = account?.frozen_cash || 0;
-  const positionValue = account?.position_value || 0;
+  const { account, total_return, total_return_pct, win_rate } = data;
+  const frozen = account?.frozen_cash || 0;
   const totalPnl = account?.total_pnl || 0;
   const realizedPnl = account?.realized_pnl || 0;
   const floatPnl = account?.float_pnl || 0;
-  const initialCapital = account?.initial_capital || 0;
-  const winRate = data?.win_rate || 0;
+  const posRatio = account?.position_ratio || 0;
 
-  const cashPct = totalAssetValue > 0 ? (cashValue / totalAssetValue) * 100 : 0;
-  const frozenPct = totalAssetValue > 0 ? (frozenValue / totalAssetValue) * 100 : 0;
-  const positionPct = totalAssetValue > 0 ? (positionValue / totalAssetValue) * 100 : 0;
-
-  const sortedPositions = [...positions].sort((a, b) => (b.market_value || 0) - (a.market_value || 0));
-
-  const CHART_GRID = 'rgba(255,255,255,0.04)';
-  const CHART_AXIS = 'var(--agent-text-dim, #6a7d9b)';
-  const CHART_TOOLTIP_BG = 'var(--agent-bg-card, #0d121b)';
-  const CHART_TOOLTIP_BORDER = '1px solid rgba(240,185,11,0.12)';
-  const GOLD = '#f0b90b';
-  const GREEN = '#2ecc71';
-  const RED = '#e74c3c';
+  // 图表常量
+  const G = 'rgba(255,255,255,0.04)';
+  const A = 'var(--agent-text-dim, #6a7d9b)';
+  const GOLD = '#f0b90b'; const GREEN = '#2ecc71'; const RED = '#e74c3c';
 
   return (
-    <div className="pp-page">
+    <div className="cp-page">
+      {/* ═══ 行情 Ticker ═══ */}
+      {tickers.length > 0 && (
+        <div className="cp-ticker-bar">
+          {tickers.map(tk => (
+            <div key={tk.name} className="cp-ticker-item">
+              <span className="cp-ticker-name">{tk.name}</span>
+              <span className="cp-ticker-price">{tk.price.toFixed(2)}</span>
+              <span className={`cp-ticker-pct ${tk.change_pct >= 0 ? 'up' : 'down'}`}>
+                {tk.change_pct >= 0 ? '+' : ''}{tk.change_pct.toFixed(2)}%
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ═══ 头部 ═══ */}
-      <header className="pp-header">
-        <div className="pp-header-left">
-          <div className="pp-header-icon"><i className="fas fa-wallet" /></div>
+      <header className="cp-header">
+        <div className="cp-header-left">
+          <div className="cp-header-icon"><i className="fas fa-wallet" /></div>
           <div>
-            <h1 className="pp-header-title">{t('portfolio.title')}</h1>
-            <div className="pp-header-meta">
-              <span className="pp-live-dot" />
-              <span className="pp-update-time">{t('common.refresh')}: {lastUpdate.toLocaleTimeString()}</span>
+            <h1 className="cp-header-title">{t('portfolio.title')}</h1>
+            <div className="cp-header-meta">
+              <span className="cp-live-dot" />
+              <span className="cp-update-time">{t('common.refresh')}: {lastUpdate.toLocaleTimeString()}</span>
             </div>
           </div>
         </div>
       </header>
 
-      {/* ═══ KPI 6连 ═══ */}
-      <div className="pp-kpi-row">
-        <KpiCard label={t('portfolio.totalAsset')} value={`¥${fmtMoney(totalAssetValue)}`} icon="fa-coins" />
-        <KpiCard label={t('portfolio.availableCash')} value={`¥${fmtMoney(cashValue)}`} icon="fa-hand-holding-usd" sub={`${cashPct.toFixed(1)}%`} />
-        <KpiCard label={t('portfolio.positionValue')} value={`¥${fmtMoney(positionValue)}`} icon="fa-chart-bar" sub={`${(account?.position_ratio || 0).toFixed(1)}%`} />
-        <KpiCard label={t('portfolio.totalPnL')} value={`${totalPnl >= 0 ? '+' : ''}¥${fmtMoney(Math.abs(totalPnl))}`} icon="fa-chart-line" trend={totalPnl >= 0 ? 'up' : 'down'} />
-        <KpiCard label={t('portfolio.totalReturn')} value={`${total_return_pct >= 0 ? '+' : ''}${(total_return_pct || 0).toFixed(2)}%`} icon="fa-percentage" trend={total_return_pct >= 0 ? 'up' : 'down'} />
-        <KpiCard label={t('portfolio.initialCapital')} value={`¥${fmtMoney(initialCapital)}`} icon="fa-piggy-bank" gold />
-      </div>
-
-      {/* ═══ 图表行 1：权益曲线(大) + 每日盈亏(小) ═══ */}
-      <div className="pp-row-charts">
-        {/* 权益曲线 */}
-        <div className="pp-panel" style={{ minHeight: 300 }}>
-          <div className="pp-panel-header">
-            <i className="fas fa-chart-area" />
-            <span className="pp-panel-title">{t('portfolio.equityCurve')}</span>
-            <span style={{ fontSize: 10, color: 'var(--agent-text-dim)', marginLeft: 'auto' }}>
-              {t('portfolio.vsBenchmark')}
+      {/* ═══ 资产 Hero 卡片 ═══ */}
+      <div className="cp-hero-card">
+        <div className="cp-hero-left">
+          <div className="cp-hero-label">{t('portfolio.totalAsset')}</div>
+          <div className="cp-hero-value">¥{fmtMoney(totalAsset)}</div>
+          <div className={`cp-hero-change ${totalPnl >= 0 ? 'up' : 'down'}`}>
+            <i className={`fas fa-caret-${totalPnl >= 0 ? 'up' : 'down'}`} />
+            {totalPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(totalPnl))}
+            <span style={{ fontWeight: 400, fontSize: 12 }}>
+              ({total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%)
             </span>
           </div>
-          <div className="pp-panel-body" style={{ padding: '8px 8px 12px' }}>
-            <div className="pp-chart-wrap full">
+        </div>
+        <div className="cp-hero-right">
+          <HeroKpi label={t('portfolio.availableCash')} value={`¥${fmtMoney(cash)}`} />
+          <HeroKpi label={t('portfolio.positionValue')} value={`¥${fmtMoney(posVal)}`} sub={`${posRatio.toFixed(1)}%`} />
+          <HeroKpi label={t('portfolio.realizedPnL')} value={`${realizedPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(realizedPnl))}`} trend={realizedPnl >= 0 ? 'up' : 'down'} />
+          <HeroKpi label={t('portfolio.floatingPnL')} value={`${floatPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(floatPnl))}`} trend={floatPnl >= 0 ? 'up' : 'down'} />
+        </div>
+      </div>
+
+      {/* ═══ 风险仪表 4 连 ═══ */}
+      <div className="cp-risk-strip">
+        <RiskCard
+          icon="fa-gauge-high" label={t('portfolio.positionRatio')}
+          value={`${posRatio.toFixed(0)}%`}
+          sub={posRatio > 80 ? '重仓' : posRatio > 50 ? '中性' : '轻仓'}
+          level={posRatio > 80 ? 'danger' : posRatio > 50 ? 'warn' : 'safe'}
+          ringColor={posRatio > 80 ? RED : posRatio > 50 ? GOLD : GREEN}
+          ringPct={posRatio}
+        />
+        <RiskCard
+          icon="fa-arrow-trend-down" label="最大回撤"
+          value={`-${maxDrawdown.toFixed(1)}%`}
+          sub="历史最大"
+          level={maxDrawdown > 15 ? 'danger' : maxDrawdown > 8 ? 'warn' : 'safe'}
+          ringColor={maxDrawdown > 15 ? RED : maxDrawdown > 8 ? GOLD : GREEN}
+          ringPct={Math.min(maxDrawdown * 2, 100)}
+        />
+        <RiskCard
+          icon="fa-bullseye" label={t('analytics.winRate')}
+          value={`${win_rate.toFixed(1)}%`}
+          sub={`${positions.length} 只持仓`}
+          level={win_rate > 60 ? 'safe' : win_rate > 40 ? 'warn' : 'danger'}
+          ringColor={win_rate > 60 ? GREEN : win_rate > 40 ? GOLD : RED}
+          ringPct={win_rate}
+        />
+        <RiskCard
+          icon="fa-wave-square" label="年化波动"
+          value={`${volatility.toFixed(1)}%`}
+          sub="60日滚动"
+          level={volatility > 25 ? 'danger' : volatility > 15 ? 'warn' : 'safe'}
+          ringColor={volatility > 25 ? RED : volatility > 15 ? GOLD : GREEN}
+          ringPct={Math.min(volatility * 2.5, 100)}
+        />
+      </div>
+
+      {/* ═══ 图表行：权益曲线 + 持仓环形图 ═══ */}
+      <div className="cp-row-charts">
+        {/* 权益曲线 */}
+        <div className="cp-panel" style={{ minHeight: 280 }}>
+          <div className="cp-panel-header">
+            <i className="fas fa-chart-area" />
+            <span className="cp-panel-title">{t('portfolio.equityCurve')}</span>
+            {realEquity.length === 0 && (
+              <span style={{ fontSize: 10, color: A, marginLeft: 'auto' }}>{t('portfolio.vsBenchmark')}</span>
+            )}
+          </div>
+          <div className="cp-panel-body" style={{ padding: '4px 8px 8px' }}>
+            <div className="cp-chart-h240">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={equityCurve}>
                   <defs>
-                    <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={GOLD} stopOpacity={0.2} />
+                    <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={GOLD} stopOpacity={0.18} />
                       <stop offset="100%" stopColor={GOLD} stopOpacity={0} />
                     </linearGradient>
-                    <linearGradient id="benchGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="rgba(255,255,255,0.1)" stopOpacity={0.15} />
-                      <stop offset="100%" stopColor="rgba(255,255,255,0)" stopOpacity={0} />
-                    </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
-                  <XAxis dataKey="date" stroke={CHART_AXIS} fontSize={10} tickLine={false} interval="preserveStartEnd" />
-                  <YAxis
-                    stroke={CHART_AXIS} fontSize={10} tickLine={false}
-                    tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)}
-                    width={55}
-                  />
-                  <Tooltip content={<EquityTooltip />} />
-                  <Area
-                    type="monotone" dataKey="value" name="账户权益"
-                    stroke={GOLD} strokeWidth={2} fill="url(#equityGrad)"
-                    dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }}
-                  />
-                  <Line
-                    type="monotone" dataKey="benchmark" name="上证指数(拟合)"
-                    stroke="rgba(141,155,181,0.6)" strokeWidth={1.2} strokeDasharray="4 4"
-                    dot={false}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 11, color: 'var(--agent-text-dim)' }}
-                    iconType="line"
-                  />
+                  <CartesianGrid strokeDasharray="3 3" stroke={G} />
+                  <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval="preserveStartEnd" />
+                  <YAxis stroke={A} fontSize={10} tickLine={false} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
+                  <Tooltip content={<ETip />} />
+                  <Area type="monotone" dataKey="value" name="账户权益" stroke={GOLD} strokeWidth={2} fill="url(#eqGrad)" dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }} />
+                  {realEquity.length === 0 && (
+                    <Line type="monotone" dataKey="benchmark" name="上证基准" stroke="rgba(141,155,181,0.5)" strokeWidth={1} strokeDasharray="4 4" dot={false} />
+                  )}
+                  <Legend wrapperStyle={{ fontSize: 10, color: A }} iconType="line" />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
           </div>
         </div>
 
-        {/* 每日盈亏 / 胜率 */}
-        <div className="pp-panel" style={{ minHeight: 300 }}>
-          <div className="pp-panel-header">
-            <i className="fas fa-chart-bar" />
-            <span className="pp-panel-title">{t('portfolio.dailyPnL')}</span>
-            <span style={{ fontSize: 10, color: CHART_AXIS, marginLeft: 'auto' }}>
-              {t('analytics.winRate')}: {winRate.toFixed(1)}%
-            </span>
+        {/* 持仓环形图 + 日盈亏 */}
+        <div className="cp-panel" style={{ minHeight: 280 }}>
+          <div className="cp-panel-header">
+            <i className="fas fa-chart-pie" />
+            <span className="cp-panel-title">{t('portfolio.assetAllocation')}</span>
           </div>
-          <div className="pp-panel-body" style={{ padding: '8px 8px 12px' }}>
-            <div className="pp-chart-wrap full">
+          <div className="cp-panel-body" style={{ padding: '8px 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ position: 'relative', height: 180 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dailyPnlData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
-                  <XAxis dataKey="date" stroke={CHART_AXIS} fontSize={10} tickLine={false} interval="preserveStartEnd" />
-                  <YAxis
-                    stroke={CHART_AXIS} fontSize={10} tickLine={false}
-                    tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
-                    width={45}
-                  />
-                  <Tooltip content={<DailyPnlTooltip />} />
-                  <Bar dataKey="pnl" radius={[2, 2, 0, 0]} maxBarSize={6}>
-                    {dailyPnlData.map((entry, i) => (
-                      <Cell key={i} fill={entry.pnl >= 0 ? GREEN : RED} fillOpacity={0.75} />
+                <PieChart>
+                  <Pie data={ringData} cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2} dataKey="value" stroke="none">
+                    {ringData.map((_, i) => (
+                      <PieCell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} fillOpacity={0.85} />
                     ))}
-                  </Bar>
-                </BarChart>
+                  </Pie>
+                  <Tooltip content={<PieTip />} />
+                </PieChart>
               </ResponsiveContainer>
+              <div className="cp-ring-center">
+                <div className="cp-ring-center-val">¥{fmtMoney(posVal)}</div>
+                <div className="cp-ring-center-label">持仓市值</div>
+              </div>
+            </div>
+            {/* 迷你图例 */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', justifyContent: 'center' }}>
+              {ringData.slice(0, 6).map((item, i) => (
+                <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0 }} />
+                  <span style={{ color: 'var(--agent-text-dim)' }}>{item.name}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      {/* ═══ 图表行 2：大盘K线(等宽) + 资产配置/P&L ═══ */}
-      <div className="pp-row-charts">
-        {/* 大盘K线 */}
-        <div className="pp-panel" style={{ minHeight: 300 }}>
-          <div className="pp-panel-header">
-            <i className="fas fa-chart-line" />
-            <span className="pp-panel-title">{t('portfolio.indexKline')}</span>
-            <span style={{ fontSize: 10, color: CHART_AXIS, marginLeft: 8 }}>上证指数</span>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 10, color: CHART_AXIS }}>
-              <span style={{ color: '#3498db' }}>━ MA5</span>
-              <span style={{ color: '#e67e22' }}>━ MA10</span>
-            </div>
-          </div>
-          <div className="pp-panel-body" style={{ padding: '8px 8px 12px' }}>
-            <div className="pp-chart-wrap full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={klineData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
-                  <XAxis dataKey="date" stroke={CHART_AXIS} fontSize={10} tickLine={false} interval="preserveStartEnd" />
-                  <YAxis
-                    stroke={CHART_AXIS} fontSize={10} tickLine={false}
-                    tickFormatter={(v: number) => v.toFixed(0)}
-                    width={55} domain={['dataMin - 50', 'dataMax + 50']}
-                  />
-                  <Tooltip content={<KlineTooltip />} />
-                  {/* 收盘价面积 */}
-                  <Area
-                    type="monotone" dataKey="close" name="收盘价"
-                    stroke={GOLD} strokeWidth={1.5} fillOpacity={0}
-                    dot={false}
-                  />
-                  {/* MA5 */}
-                  <Line
-                    type="monotone" dataKey="ma5" name="MA5"
-                    stroke="#3498db" strokeWidth={1.2} dot={false}
-                    connectNulls
-                  />
-                  {/* MA10 */}
-                  <Line
-                    type="monotone" dataKey="ma10" name="MA10"
-                    stroke="#e67e22" strokeWidth={1.2} dot={false}
-                    connectNulls
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        {/* 资产配置 + P&L 概览 */}
-        <div className="pp-panel" style={{ minHeight: 300 }}>
-          <div className="pp-panel-header">
-            <i className="fas fa-balance-scale" />
-            <span className="pp-panel-title">{t('portfolio.assetAllocation')}</span>
-          </div>
-          <div className="pp-panel-body">
-            <div className="pp-alloc-bar-wrap">
-              {cashPct > 0 && <div className="pp-alloc-seg cash" style={{ width: `${cashPct}%` }}>{cashPct > 12 ? `${cashPct.toFixed(0)}%` : ''}</div>}
-              {positionPct > 0 && <div className="pp-alloc-seg position" style={{ width: `${positionPct}%` }}>{positionPct > 12 ? `${positionPct.toFixed(0)}%` : ''}</div>}
-              {frozenPct > 0 && <div className="pp-alloc-seg frozen" style={{ width: `${frozenPct}%` }}>{frozenPct > 12 ? `${frozenPct.toFixed(0)}%` : ''}</div>}
-            </div>
-            <div className="pp-alloc-legend">
-              <AllocLegend cls="cash" label={t('portfolio.availableCash')} value={`¥${fmtMoney(cashValue)}`} pct={cashPct} />
-              <AllocLegend cls="position" label={t('portfolio.positionValue')} value={`¥${fmtMoney(positionValue)}`} pct={positionPct} />
-              {frozenValue > 0 && <AllocLegend cls="frozen" label={t('portfolio.frozenCash')} value={`¥${fmtMoney(frozenValue)}`} pct={frozenPct} />}
-            </div>
-
-            <div className="pp-pnl-divider" style={{ margin: '16px 0 10px' }} />
-
-            {/* P&L 概览 */}
-            <div className="pp-pnl-overview">
-              <PnlRow label={t('portfolio.realizedPnL')} amount={realizedPnl} />
-              <PnlRow label={t('portfolio.floatingPnL')} amount={floatPnl} />
-              <div className="pp-pnl-divider" />
-              <PnlRow label={t('portfolio.totalPnL')} amount={totalPnl} />
-              <PnlRow label={t('portfolio.cumulativeReturn')} amount={total_return} showPct pctValue={total_return_pct} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ═══ 持仓分布 + 持仓明细 同行 ═══ */}
-      <div className="pp-row-half">
-        {/* 持仓分布 */}
-        <div className="pp-panel">
-          <div className="pp-panel-header">
-            <i className="fas fa-list-ol" />
-            <span className="pp-panel-title">{t('portfolio.topHoldings')}</span>
-          </div>
-          <div className="pp-panel-body">
-            {sortedPositions.length === 0 ? (
-              <div className="pp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div>
-            ) : (
-              sortedPositions.slice(0, 8).map(pos => {
-                const isUp = (pos.floating_pnl || 0) >= 0;
-                const barWidth = Math.min((pos.market_value / Math.max(sortedPositions[0]?.market_value || 1, 1)) * 100, 100);
-                const weight = positionValue > 0 ? (pos.market_value / positionValue) * 100 : 0;
-                return (
-                  <div key={pos.symbol} className="pp-holding-item">
-                    <span className="pp-holding-name">{cleanStockName(pos.name, pos.symbol)}</span>
-                    <span className="pp-holding-code">{pos.symbol}</span>
-                    <div className="pp-holding-bar-wrap">
-                      <div className={`pp-holding-bar-fill ${isUp ? 'up' : 'down'}`} style={{ width: `${barWidth}%` }} />
-                    </div>
-                    <span className="pp-holding-pct"><span className="pp-weight-tag">{weight.toFixed(1)}%</span></span>
-                    <span className="pp-holding-val">¥{fmtMoney(pos.market_value)}</span>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* 持仓明细 */}
-        <div className="pp-panel">
-          <div className="pp-panel-header">
+      {/* ═══ 持仓表格 + 交易记录 同行 ═══ */}
+      <div className="cp-row-2col">
+        {/* 持仓表格 — 增强版 */}
+        <div className="cp-panel">
+          <div className="cp-panel-header">
             <i className="fas fa-table" />
-            <span className="pp-panel-title">
-              {t('portfolio.positions')}
-              {positions.length > 0 && (
-                <span style={{ color: CHART_AXIS, fontSize: 11, fontWeight: 400, marginLeft: 6 }}>({positions.length})</span>
-              )}
-            </span>
+            <span className="cp-panel-title">{t('portfolio.positions')} ({positions.length})</span>
           </div>
-          <div className="pp-table-wrap" style={{ maxHeight: 360, overflowY: 'auto' }}>
-            <table className="pp-table">
+          <div className="cp-table-wrap" style={{ maxHeight: 340 }}>
+            <table className="cp-table">
               <thead>
                 <tr>
                   <th>{t('portfolio.symbol')}</th>
@@ -482,38 +383,47 @@ export default function PortfolioPage() {
                   <th className="right">{t('portfolio.volume')}</th>
                   <th className="right">{t('portfolio.avgPrice')}</th>
                   <th className="right">{t('portfolio.currentPrice')}</th>
-                  <th className="right">{t('portfolio.marketValue')}</th>
-                  <th className="right">{t('portfolio.profitAmount')}</th>
-                  <th className="right">{t('portfolio.profitRate')}</th>
-                  <th className="right">{t('portfolio.weight')}</th>
+                  <th className={`right sortable ${sortKey === 'market_value' ? 'sorted' : ''}`} onClick={() => handleSort('market_value')}>
+                    {t('portfolio.marketValue')} {sortKey === 'market_value' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}
+                  </th>
+                  <th className={`right sortable ${sortKey === 'floating_pnl' ? 'sorted' : ''}`} onClick={() => handleSort('floating_pnl')}>
+                    {t('portfolio.profitAmount')} {sortKey === 'floating_pnl' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}
+                  </th>
+                  <th className={`right sortable ${sortKey === 'floating_pnl_pct' ? 'sorted' : ''}`} onClick={() => handleSort('floating_pnl_pct')}>
+                    {t('portfolio.profitRate')} {sortKey === 'floating_pnl_pct' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}
+                  </th>
+                  <th className={`right sortable ${sortKey === 'weight' ? 'sorted' : ''}`} onClick={() => handleSort('weight')}>
+                    {t('portfolio.weight')} {sortKey === 'weight' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}
+                  </th>
+                  <th className="right">风险</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedPositions.length === 0 ? (
-                  <tr><td colSpan={9}>
-                    <div className="pp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div>
-                  </td></tr>
+                  <tr><td colSpan={10}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
                 ) : (
                   sortedPositions.map(pos => {
                     const isUp = (pos.floating_pnl || 0) >= 0;
-                    const weight = positionValue > 0 ? (pos.market_value / positionValue) * 100 : 0;
+                    const weight = totalAsset > 0 ? (pos.market_value / totalAsset) * 100 : 0;
+                    const isHeavy = weight > 30;
+                    const isWarn = weight > 20 && weight <= 30;
+                    const rowClass = isHeavy ? 'risk-high' : isWarn ? 'risk-warn' : '';
                     return (
-                      <tr key={pos.symbol}>
+                      <tr key={pos.symbol} className={rowClass}>
                         <td className="symbol mono">{pos.symbol}</td>
                         <td className="bold">{cleanStockName(pos.name, pos.symbol)}</td>
                         <td className="num mono dim">{pos.volume.toLocaleString()}</td>
                         <td className="num mono">¥{(pos.avg_price || 0).toFixed(2)}</td>
                         <td className="num mono">¥{(pos.current_price || 0).toFixed(2)}</td>
-                        <td className="num mono bold">¥{(pos.market_value || 0).toFixed(2)}</td>
-                        <td className={`num mono ${isUp ? 'pnl-up' : 'pnl-down'}`}>
-                          {isUp ? '+' : ''}¥{(pos.floating_pnl || 0).toFixed(2)}
-                        </td>
+                        <td className="num mono bold">¥{fmtMoney(pos.market_value)}</td>
+                        <td className={`num mono ${isUp ? 'pnl-up' : 'pnl-down'}`}>{isUp ? '+' : ''}¥{(pos.floating_pnl || 0).toFixed(2)}</td>
+                        <td className="num"><span className={`cp-pnl-tag ${isUp ? 'up' : 'down'}`}>{isUp ? '+' : ''}{(pos.floating_pnl_pct || 0).toFixed(2)}%</span></td>
+                        <td className="num"><span className="cp-wt-tag">{weight.toFixed(1)}%</span></td>
                         <td className="num">
-                          <span className={`pp-pnl-badge ${isUp ? 'up' : 'down'}`}>
-                            {isUp ? '+' : ''}{(pos.floating_pnl_pct || 0).toFixed(2)}%
-                          </span>
+                          {isHeavy ? <span className="cp-risk-badge danger"><i className="fas fa-exclamation-triangle" style={{ fontSize: 8 }} /> 重仓</span>
+                           : isWarn ? <span className="cp-risk-badge warn">偏重</span>
+                           : <span style={{ color: 'var(--agent-text-dim)', fontSize: 10 }}>-</span>}
                         </td>
-                        <td className="num"><span className="pp-weight-tag">{weight.toFixed(1)}%</span></td>
                       </tr>
                     );
                   })
@@ -522,136 +432,99 @@ export default function PortfolioPage() {
             </table>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
 
-// ══════════════════════════════════════════════════════
-// 子组件
-// ══════════════════════════════════════════════════════
-
-function KpiCard({ label, value, icon, trend, sub, gold }: {
-  label: string; value: string; icon: string;
-  trend?: 'up' | 'down'; sub?: string; gold?: boolean;
-}) {
-  return (
-    <div className="pp-kpi-card">
-      <div className="pp-kpi-label"><i className={`fas ${icon}`} />{label}</div>
-      <div className={`pp-kpi-value ${trend === 'up' ? 'up' : trend === 'down' ? 'down' : gold ? 'gold' : ''}`}>
-        {value}
-      </div>
-      {sub && <div className="pp-kpi-sub">{sub}</div>}
-    </div>
-  );
-}
-
-function PnlRow({ label, amount, showPct, pctValue }: {
-  label: string; amount: number; showPct?: boolean; pctValue?: number;
-}) {
-  const isUp = amount >= 0;
-  return (
-    <div className="pp-pnl-item">
-      <span className="pp-pnl-label">{label}</span>
-      <div>
-        <div className={`pp-pnl-val ${isUp ? 'up' : 'down'}`}>
-          {isUp ? '+' : ''}{fmtMoneyShort(Math.abs(amount))}
+        {/* 近期交易动态 */}
+        <div className="cp-panel">
+          <div className="cp-panel-header">
+            <i className="fas fa-exchange-alt" />
+            <span className="cp-panel-title">近期交易</span>
+          </div>
+          <div className="cp-panel-body" style={{ padding: '8px 12px' }}>
+            {recentTrades.length === 0 ? (
+              <div className="cp-empty"><i className="fas fa-history" /><span>暂无交易记录</span></div>
+            ) : (
+              <div className="cp-trade-list">
+                {recentTrades.map((tr, i) => {
+                  const isBuy = (tr.direction || '').toLowerCase().includes('buy');
+                  const displayName = tr.name || tr.symbol;
+                  return (
+                    <div key={tr.order_id || i} className="cp-trade-item">
+                      <span className={`cp-trade-dir ${isBuy ? 'buy' : 'sell'}`}>{isBuy ? '买' : '卖'}</span>
+                      <span className="cp-trade-name">{displayName}</span>
+                      <span className="cp-trade-detail">¥{tr.price?.toFixed(2)} × {tr.volume}</span>
+                      <span className="cp-trade-time">{tr.created_at ? new Date(tr.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
-        {showPct && pctValue != null && (
-          <div className={`pp-pnl-sub ${isUp ? 'up' : 'down'}`}>
-            {pctValue >= 0 ? '+' : ''}{pctValue.toFixed(2)}%
+      </div>
+
+      {/* ═══ 快捷操作 FAB ═══ */}
+      <div className="cp-fab">
+        {fabOpen && (
+          <div className="cp-fab-menu">
+            <button className="cp-fab-item" onClick={() => {/* TODO: 下单浮窗 */}}>
+              <i className="fas fa-plus-circle" /> 手工下单
+            </button>
+            <button className="cp-fab-item" onClick={() => {/* TODO: 转入资金 */}}>
+              <i className="fas fa-arrow-right-to-bracket" /> 转入资金
+            </button>
+            <button className="cp-fab-item danger" onClick={() => {/* TODO: 一键平仓确认 */}}>
+              <i className="fas fa-skull" /> 紧急平仓
+            </button>
           </div>
         )}
+        <button className="cp-fab-main" onClick={() => setFabOpen(o => !o)} title="快捷操作">
+          <i className={`fas fa-${fabOpen ? 'times' : 'ellipsis'}`} />
+        </button>
       </div>
     </div>
   );
 }
 
-function AllocLegend({ cls, label, value, pct }: { cls: string; label: string; value: string; pct: number }) {
+// ── 子组件 ──
+function HeroKpi({ label, value, sub, trend }: { label: string; value: string; sub?: string; trend?: 'up' | 'down' }) {
   return (
-    <div className="pp-alloc-l-item">
-      <div className={`pp-alloc-l-dot ${cls}`} />
-      <span className="pp-alloc-l-text">{label}</span>
-      <span className="pp-alloc-l-val">{value}</span>
-      <span style={{ color: 'var(--agent-text-dim)', fontSize: 10 }}>({pct.toFixed(1)}%)</span>
+    <div className="cp-hero-kpi">
+      <div className="cp-hero-kpi-label">{label}</div>
+      <div className={`cp-hero-kpi-value ${trend === 'up' ? 'up' : trend === 'down' ? 'down' : ''}`}>{value}</div>
+      {sub && <div className="cp-hero-kpi-sub">{sub}</div>}
     </div>
   );
 }
 
-// ── 自定义 Tooltip ──
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function EquityTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
+function RiskCard({ icon, label, value, sub, level, ringColor, ringPct }: {
+  icon: string; label: string; value: string; sub: string;
+  level: 'safe' | 'warn' | 'danger'; ringColor: string; ringPct: number;
+}) {
   return (
-    <div className="pp-tooltip-box">
-      <div className="pp-tooltip-label">{label}</div>
-      {(payload as Array<{ name: string; value: number; color: string }>).map((p, i) => (
-        <div key={i} className="pp-tooltip-item">
-          <span className="label" style={{ color: p.color }}>{p.name}</span>
-          <span className="value" style={{ color: 'var(--agent-text-primary)' }}>¥{p.value.toLocaleString()}</span>
+    <div className="cp-risk-card">
+      <div className="cp-risk-gauge" style={{ background: `conic-gradient(${ringColor} ${ringPct * 3.6}deg, rgba(255,255,255,0.04) ${ringPct * 3.6}deg)` }}>
+        <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--agent-bg-card, #0d121b)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <i className={`fas ${icon}`} style={{ color: ringColor, opacity: 0.8 }} />
         </div>
-      ))}
-    </div>
-  );
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function DailyPnlTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  const pnl = (payload as Array<{ value: number }>)[0]?.value ?? 0;
-  const isUp = pnl >= 0;
-  return (
-    <div className="pp-tooltip-box">
-      <div className="pp-tooltip-label">{label}</div>
-      <div className="pp-tooltip-item">
-        <span className="label">日盈亏</span>
-        <span className="value" style={{ color: isUp ? '#2ecc71' : '#e74c3c' }}>
-          {isUp ? '+' : ''}¥{pnl.toLocaleString()}
-        </span>
+      </div>
+      <div className="cp-risk-info">
+        <div className="cp-risk-label">{label}</div>
+        <div className={`cp-risk-value ${level}`}>{value}</div>
+        <div className="cp-risk-sub">{sub}</div>
       </div>
     </div>
   );
 }
 
+// ── Tooltip ──
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function KlineTooltip({ active, payload, label }: any) {
+function ETip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-  const pl = payload as Array<{ dataKey: string; value: number; name: string; color: string }>;
-  const findVal = (key: string) => pl.find(p => p.dataKey === key)?.value;
-  const open = findVal('open');
-  const close = findVal('close');
-  const high = findVal('high');
-  const low = findVal('low');
-  return (
-    <div className="pp-tooltip-box">
-      <div className="pp-tooltip-label">{label}</div>
-      {open != null && <div className="pp-tooltip-item"><span className="label">开</span><span className="value">{open.toFixed(2)}</span></div>}
-      {close != null && <div className="pp-tooltip-item"><span className="label">收</span><span className="value" style={{ color: '#f0b90b' }}>{close.toFixed(2)}</span></div>}
-      {high != null && <div className="pp-tooltip-item"><span className="label">高</span><span className="value" style={{ color: '#2ecc71' }}>{high.toFixed(2)}</span></div>}
-      {low != null && <div className="pp-tooltip-item"><span className="label">低</span><span className="value" style={{ color: '#e74c3c' }}>{low.toFixed(2)}</span></div>}
-    </div>
-  );
+  return <div className="cp-tip-box"><div className="cp-tip-label">{label}</div>{(payload as Array<{ name: string; value: number; color: string }>).map((p, i) => <div key={i} className="cp-tip-row"><span className="l" style={{ color: p.color }}>{p.name}</span><span className="v">¥{p.value.toLocaleString()}</span></div>)}</div>;
 }
-
-// ── 模拟 K 线 ──
-function generateMockKline(days = 60): KlineBar[] {
-  const result: KlineBar[] = [];
-  let price = 3300;
-  const now = new Date();
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
-    const change = (Math.sin(i * 0.3 + i * i * 0.001) * 25 + (Math.random() - 0.5) * 15);
-    const open = price;
-    const close = Number((price + change).toFixed(2));
-    const high = Number((Math.max(open, close) + Math.random() * 12).toFixed(2));
-    const low = Number((Math.min(open, close) - Math.random() * 12).toFixed(2));
-    result.push({ date: dateStr, open, close, high, low, volume: 0 });
-    price = close;
-  }
-  const ma5 = computeMA(result, 5);
-  const ma10 = computeMA(result, 10);
-  result.forEach((b, i) => { b.ma5 = ma5[i]; b.ma10 = ma10[i]; });
-  return result;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function PieTip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0];
+  return <div className="cp-tip-box"><div className="cp-tip-label">{p.name}</div><div className="cp-tip-row"><span className="l">市值</span><span className="v">¥{p.value.toLocaleString()}</span></div></div>;
 }

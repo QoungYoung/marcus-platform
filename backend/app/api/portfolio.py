@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi import Query
 
 from app.config import get_settings
-from app.models.account import AccountResponse, PositionResponse, PortfolioSummary
+from app.models.account import AccountResponse, PositionResponse, PortfolioSummary, EquityPoint
 
 settings = get_settings()
 
@@ -234,6 +234,7 @@ async def get_portfolio():
     import sqlite3
     db_file = settings.data_dir / "trades.db"
     realized_pnl = 0
+    win_rate = 0
     try:
         conn = sqlite3.connect(str(db_file), timeout=5)
         curs = conn.cursor()
@@ -241,6 +242,11 @@ async def get_portfolio():
         row = curs.fetchone()
         if row and row[0]:
             realized_pnl = row[0]
+        # 计算胜率：盈利卖单 / 总卖单
+        curs.execute("SELECT COUNT(*) as total, SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins FROM trades WHERE direction='卖出'")
+        row = curs.fetchone()
+        if row and row[0] > 0:
+            win_rate = round(row[1] / row[0] * 100, 1) if row[0] > 0 else 0
         conn.close()
     except Exception:
         pass
@@ -263,7 +269,7 @@ async def get_portfolio():
         account=account_response,
         total_return=total_asset - initial_capital,
         total_return_pct=(total_asset / initial_capital - 1) * 100 if initial_capital > 0 else 0,
-        win_rate=0,  # TODO: calculate from trades
+        win_rate=win_rate,
     )
 
 
@@ -301,3 +307,68 @@ async def get_positions():
             entry_date="",
         ))
     return positions
+
+
+@router.get("/equity-history", response_model=list[EquityPoint])
+async def get_equity_history(days: int = Query(60, ge=1, le=365)):
+    """
+    Get daily equity curve aggregated from realized trade P&L.
+    Equity on each day = initial_capital + cumulative realized profit up to that day.
+    """
+    from collections import defaultdict
+
+    db_file = settings.data_dir / "trades.db"
+    if not db_file.exists():
+        return []
+
+    conn = sqlite3.connect(str(db_file), timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+    curs = conn.cursor()
+
+    # Get initial capital
+    curs.execute("SELECT initial_capital FROM account_info WHERE id=1")
+    row = curs.fetchone()
+    initial_capital = row["initial_capital"] if row else 1000000.0
+
+    # Query sell trades with profit, grouped by day
+    curs.execute("""
+        SELECT DATE(created_at) as trade_date, SUM(profit) as daily_profit
+        FROM trades
+        WHERE direction = '卖出' AND profit IS NOT NULL
+        GROUP BY DATE(created_at)
+        ORDER BY trade_date
+    """)
+    rows = curs.fetchall()
+    conn.close()
+
+    # Build daily profit map
+    daily_profit = {}
+    for row in rows:
+        daily_profit[row["trade_date"]] = row["daily_profit"] or 0
+
+    # Generate equity curve from first trade date to today
+    if not daily_profit:
+        return []
+
+    dates = sorted(daily_profit.keys())
+    from datetime import datetime as dt, timedelta
+
+    first_date = dt.strptime(dates[0], "%Y-%m-%d")
+    today = dt.now()
+
+    equity = initial_capital
+    result = []
+    current = first_date
+    while current <= today and len(result) < days:
+        date_str = current.strftime("%Y-%m-%d")
+        if date_str in daily_profit:
+            equity += daily_profit[date_str]
+        result.append(EquityPoint(date=date_str, equity=round(equity, 2)))
+        current += timedelta(days=1)
+
+    # Limit to most recent N days
+    if len(result) > days:
+        result = result[-days:]
+
+    return result

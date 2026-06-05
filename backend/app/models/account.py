@@ -37,3 +37,8 @@ class PortfolioSummary(BaseModel):
     total_return: float
     total_return_pct: float
     win_rate: float
+
+
+class EquityPoint(BaseModel):
+    date: str
+    equity: float

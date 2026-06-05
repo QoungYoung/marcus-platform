@@ -27,6 +27,7 @@ class TradeResponse(BaseModel):
 class OrderResponse(BaseModel):
     order_id: str
     symbol: str
+    name: str = ""
     direction: str
     price: float
     volume: int

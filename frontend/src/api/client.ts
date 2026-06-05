@@ -11,6 +11,7 @@ const api = axios.create({
 export const portfolioApi = {
   getSummary: () => api.get('/portfolio'),
   getPositions: () => api.get('/portfolio/positions'),
+  getEquityHistory: (days = 60) => api.get('/portfolio/equity-history', { params: { days } }),
 }
 
 // Trade APIs

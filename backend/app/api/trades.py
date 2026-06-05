@@ -6,6 +6,7 @@ import sys
 import time
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -16,6 +17,35 @@ from app.models.trade import TradeRequest, TradeResponse, OrderResponse, TradeHi
 settings = get_settings()
 
 router = APIRouter(prefix="/trades", tags=["Trades"])
+
+# Stock name cache
+_stock_name_cache = {}
+
+
+def _get_stock_name(symbol: str) -> str:
+    """Lookup stock name from stock_pool.db."""
+    if symbol in _stock_name_cache:
+        return _stock_name_cache[symbol]
+
+    pool_db = settings.data_dir / "stock_pool.db"
+    if pool_db.exists():
+        try:
+            conn = sqlite3.connect(str(pool_db))
+            conn.row_factory = sqlite3.Row
+            curs = conn.cursor()
+            code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
+            curs.execute("SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?", (code, symbol))
+            row = curs.fetchone()
+            conn.close()
+            if row and row['name']:
+                name = row['name'].strip()
+                _stock_name_cache[symbol] = name
+                return name
+        except Exception:
+            pass
+
+    _stock_name_cache[symbol] = symbol
+    return symbol
 
 
 def _get_db_conn(db_file, timeout=30):
@@ -122,9 +152,11 @@ async def get_trade_history(
 
         trades = []
         for row in rows:
+            sym = row["symbol"]
             trades.append(OrderResponse(
                 order_id=row["orderid"],
-                symbol=row["symbol"],
+                symbol=sym,
+                name=_get_stock_name(sym),
                 direction=row["direction"],
                 price=row["price"],
                 volume=row["volume"],
