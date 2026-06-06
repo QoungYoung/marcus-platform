@@ -429,6 +429,15 @@ def validate_pre_market_strategy(pre_market: dict, current_market: dict, news_se
                           for name in confirm_indices)
         print(f"[价格确认] ⚠️ {bullish_count}/{min_count}个指数确认 ({detail})，趋势未成立")
 
+    # 1b. 下跌检测：统计跌幅超过阈值的指数数量（对称反向信号，用于持续降级判断）
+    bearish_count = sum(1 for name in confirm_indices
+                        if indices.get(name, {}).get('change', 0) <= -threshold)
+    validation['bearish_count'] = bearish_count
+    if bearish_count >= min_count:
+        bearish_detail = ', '.join(f"{name}={indices.get(name, {}).get('change', 0):+.1f}%"
+                                   for name in confirm_indices)
+        print(f"[价格确认] 🔻 {bearish_count}/{min_count}个可交易指数跌幅≤-{threshold}%，空头压力 ({bearish_detail})")
+
     # 2. 情绪辅助加分（降级为辅助，权重 12%，最多 +5% 仓位）
     sentiment_score = news_sentiment.get('score', 50)
     if sentiment_score >= 60:
@@ -457,6 +466,122 @@ def validate_pre_market_strategy(pre_market: dict, current_market: dict, news_se
             print(f"[价格确认] ⚠️ 仅{bullish_count}个指数>0.5%，趋势未确认")
 
     return validation
+
+
+# ========== 持续降级检测（跨轮次下跌追踪） ==========
+
+# 降级配置（配置化，改这里无需改代码）
+DOWNGRADE_CONFIG = {
+    'persist_rounds': 2,       # 连续 N 轮扫描触发降级
+    'bearish_threshold': 0.5,  # 跌幅阈值（与 INDEX_CONFIRMATION.threshold 对称）
+    'min_bearish_indices': 2,  # 至少 N 个指数满足条件
+}
+
+
+def check_persistent_downgrade(validation: dict, chain: StrategyChain = None) -> dict:
+    """
+    检测空头压力是否持续多轮，触发 stance 降级。
+
+    触发条件：
+    - 至少 DOWNGRADE_CONFIG['min_bearish_indices'] 个可交易指数跌幅 ≤ -0.5%
+    - 该条件持续超过 DOWNGRADE_CONFIG['persist_rounds'] 轮扫描（约 20 分钟）
+
+    降级规则：
+    - 当前 green → 降级为 yellow
+    - 当前 yellow → 降级为 red（hold 观望）
+    - 当前已是 red → 不再继续降级
+
+    Args:
+        validation: 当前轮的 validation（含 bearish_count）
+        chain: 策略链管理器（读取 intraday_scans 历史）
+
+    Returns:
+        dict: {
+            'downgrade_triggered': bool,
+            'downgrade_from': str,
+            'downgrade_to': str,
+            'consecutive_rounds': int,  # 连续下跌轮数（含当前）
+            'reason': str,
+        }
+    """
+    result = {
+        'downgrade_triggered': False,
+        'downgrade_from': '',
+        'downgrade_to': '',
+        'consecutive_rounds': 0,
+        'reason': '',
+    }
+
+    current_bearish = validation.get('bearish_count', 0)
+    min_bearish = DOWNGRADE_CONFIG['min_bearish_indices']
+    persist_rounds = DOWNGRADE_CONFIG['persist_rounds']
+
+    # 本轮不满足下跌条件，不触发
+    if current_bearish < min_bearish:
+        return result
+
+    # 当前轮满足下跌条件，检查历史
+    consecutive = 1  # 含当前轮
+
+    if chain:
+        intraday_scans = chain.state.get('intraday_scans', [])
+        # 从最近一轮往前数，连续的 bearish
+        for scan in reversed(intraday_scans):
+            validation_hist = scan.get('validation', {})
+            hist_bearish = validation_hist.get('bearish_count', 0)
+            if hist_bearish >= min_bearish:
+                consecutive += 1
+            else:
+                break  # 连续性中断
+
+    result['consecutive_rounds'] = consecutive
+
+    if consecutive < persist_rounds:
+        print(f"[持续降级] 🔻 下跌{consecutive}轮 < {persist_rounds}轮阈值，继续观察")
+        return result
+
+    # 触发降级：读取上轮 stance 作为降级起点
+    prev_stance_code = 'yellow'  # 默认
+    from_stance = '未知'
+
+    if chain:
+        intraday_scans = chain.state.get('intraday_scans', [])
+        if intraday_scans:
+            prev_scan = intraday_scans[-1]
+            prev_stance_code = prev_scan.get('stance_code', 'yellow')
+            from_stance = prev_scan.get('stance', '未知')
+        else:
+            # 无历史扫描时，检查盘前策略
+            pre_market = chain.state.get('pre_market', {})
+            initial = pre_market.get('initial_strategy', {})
+            from_stance = initial.get('stance', '未知')
+
+    # 降级映射
+    downgrade_map = {
+        'green': ('yellow', '🟡 cautious_buy (降级: 空头持续)'),
+        'yellow': ('red', '🔴 hold (降级: 空头持续)'),
+        'red': ('red', '🔴 hold (持续空头中)'),
+    }
+
+    to_code, to_stance = downgrade_map.get(prev_stance_code, ('yellow', '🟡 cautious_buy (降级: 空头持续)'))
+
+    if to_code == prev_stance_code:
+        print(f"[持续降级] 🔴 已处于 {prev_stance_code}，不再继续降级")
+        return result
+
+    result['downgrade_triggered'] = True
+    result['downgrade_from'] = from_stance
+    result['downgrade_to'] = to_stance
+    result['reason'] = (
+        f"空头压力持续 {consecutive} 轮（≥{persist_rounds}轮阈值），"
+        f"{current_bearish}/{len(INDEX_CONFIRMATION['indices'])}个可交易指数跌幅≤-{DOWNGRADE_CONFIG['bearish_threshold']}%"
+    )
+    result['to_code'] = to_code
+
+    print(f"[持续降级] 🚨 触发降级! {prev_stance_code} → {to_code} ({consecutive}轮空头，从 '{from_stance}' 降级)")
+    print(f"[持续降级] 原因: {result['reason']}")
+
+    return result
 
 
 def analyze_trade_feedback(chain: StrategyChain) -> list:
@@ -1438,6 +1563,10 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
     # Step 9: 硬封顶 Marcus 60% 铁律
     position_limit = min(position_limit, MARCUS_POSITION_CAP)
 
+    # Step 9.5: 持续降级检测（跨轮次空头追踪）
+    # 当多个指数持续下跌超过多轮扫描，自动触发 stance 降级
+    downgrade = check_persistent_downgrade(validation, chain)
+
     # Step 10: 确定市场立场（信号驱动，不绑定仓位）
     # 价格确认 → green；未确认但情绪支持 → yellow；否则 → hold
     price_confirmed = validation.get('price_action_confirm', False)
@@ -1451,6 +1580,16 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         adjusted_stance = '⚪ hold'
         stance_code = 'yellow'
 
+    # Step 10.5: 应用持续降级（优先级高于 Step 10 常规判定）
+    if downgrade.get('downgrade_triggered'):
+        adjusted_stance = downgrade.get('downgrade_to', adjusted_stance)
+        stance_code = downgrade.get('to_code', stance_code)
+        # 降级为 red 时强制仓位上限 ≤ 20%（防御模式）
+        if stance_code == 'red':
+            position_limit = min(position_limit, 20)
+            print(f"[持续降级] 🛑 强制仓位上限 → {position_limit}%（防御模式）")
+    
+
     return {
         'stance': adjusted_stance,
         'stance_code': stance_code,
@@ -1462,7 +1601,8 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         'gap_risk': gap_risk,
         'watchlist': watchlist,
         'sector_analysis': sector_analysis,
-        'sector_allocation': sector_allocation
+        'sector_allocation': sector_allocation,
+        'downgrade': downgrade,  # 持续降级结果，供报告和 scan_result 引用
     }
 
 
@@ -2055,8 +2195,13 @@ def generate_scan_report():
 """
 
     # 策略验证
+    downgrade_info = adjusted_strategy.get('downgrade', {})
     if force_pause:
         report += f"🚨 **连续亏损暂停**: {pause_check.get('reason', '')}\n\n"
+    elif downgrade_info.get('downgrade_triggered'):
+        report += f"🔻 **持续降级触发**: {downgrade_info.get('reason', '')}\n"
+        report += f"   {downgrade_info.get('downgrade_from', '')} → {downgrade_info.get('downgrade_to', stance)}\n"
+        report += f"   连续 {downgrade_info.get('consecutive_rounds', 0)} 轮空头，仓位上限强制 {position_limit}%\n\n"
     elif validation.get('adjustment_needed'):
         report += f"⚠️ **策略调整**: {validation.get('adjustment_reason')}\n\n"
     else:
@@ -2528,6 +2673,8 @@ def generate_scan_report():
         'sector_warnings': sector_warnings,
         # 持仓 AI 评估
         'position_assessment': position_assessment,
+        # 持续降级检测结果
+        'downgrade': adjusted_strategy.get('downgrade', {}),
     }
 
 

@@ -80,7 +80,8 @@ class StrategyChain:
             'adjusted_strategy': scan_data.get('adjusted_strategy', {}),
             'trade_feedback': scan_data.get('trade_feedback', []),
             'watchlist': scan_data.get('watchlist', []),
-            'sector_allocation': scan_data.get('sector_allocation', {})
+            'sector_allocation': scan_data.get('sector_allocation', {}),
+            'downgrade': scan_data.get('downgrade', {}),  # 持续降级检测结果
         })
         # 限制最多保留 10 条记录
         if len(self.state['intraday_scans']) > 10:
