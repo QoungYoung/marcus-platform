@@ -653,6 +653,64 @@ export const getPiAnalysisHistoryTool = {
   },
 };
 
+// ===== 交易报告历史工具（周度反思用） =====
+export const getTradeHistoryTool = {
+  name: 'get_trade_history',
+  label: '交易报告历史',
+  description: '按日期范围查询整周 Pi 交易执行报告。返回每天每次交易窗口的完整报告，包含买卖决策、仓位变化、产业链组合逻辑、风险监控等。用于周度反思时评估策略执行质量，对比交易动作与 Pi 分析的一致性。',
+  parameters: Type.Object({
+    start_date: Type.Optional(Type.String({ description: '开始日期 YYYY-MM-DD，默认本周一' })),
+    end_date: Type.Optional(Type.String({ description: '结束日期 YYYY-MM-DD，默认今天' })),
+  }),
+  async execute(_toolCallId: string, params: { start_date?: string; end_date?: string }, _signal?: AbortSignal) {
+    const query = new URLSearchParams();
+    if (params.start_date) query.set('start_date', params.start_date);
+    if (params.end_date) query.set('end_date', params.end_date);
+    const qs = query.toString();
+    const data = await apiFetch(`/scan/trade-reports${qs ? '?' + qs : ''}`);
+    if (data.error) throw new Error(data.error);
+
+    const records = data.records || [];
+    if (records.length === 0) {
+      return {
+        content: [{ type: 'text', text: `📋 日期范围 ${data.date_range?.start || '--'} 至 ${data.date_range?.end || '--'} 内暂无交易执行报告` }],
+        details: data,
+      };
+    }
+
+    // 按日期分组展示
+    const lines: string[] = [
+      `📊 交易执行报告 (${data.date_range?.start || '--'} → ${data.date_range?.end || '--'})`,
+      `共 ${data.days_count} 天，${data.total_records} 条记录`,
+      '',
+    ];
+
+    let currentDate = '';
+    for (const r of records) {
+      if (r.date !== currentDate) {
+        currentDate = r.date;
+        lines.push(`--- ${currentDate} ---`);
+      }
+      const time = r.timestamp ? r.timestamp.slice(11, 19) : '--';
+      const taskLabel = (r.task_id || '').includes('morning') ? '早盘' :
+                        (r.task_id || '').includes('late') ? '午前' :
+                        (r.task_id || '').includes('afternoon') ? '午后' :
+                        (r.task_id || '').includes('closing') ? '尾盘' : (r.task_id || '');
+      lines.push(`  [${time}] ${taskLabel} | 立场: ${r.stance || '--'} | 仓位上限: ${r.position_limit || '--'}%`);
+      if (r.reason) {
+        lines.push(`     理由: ${r.reason}`);
+      }
+      if (r.report) {
+        // 截取报告前 400 字
+        const brief = r.report.length > 400 ? r.report.slice(0, 400) + '...' : r.report;
+        lines.push(`     报告: ${brief.replace(/\n/g, ' ')}`);
+      }
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 // ===== 工具分组 =====
 // 聊天模式（只读，QQ 聊天使用）
 export const CHAT_TOOLS = [
@@ -686,6 +744,7 @@ export const TRADE_TOOLS = [
 export const REFLECT_TOOLS = [
   ...CHAT_TOOLS,
   getPiAnalysisHistoryTool,
+  getTradeHistoryTool,
   // 反思模式也需要查看最新扫描报告（了解当前市场状态）
   getLatestScanReportTool,
 ];

@@ -703,6 +703,29 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"Failed to save Pi analysis: {e}")
 
+    def _save_trade_report(self, task_id: str, execution_id: str, reply: str, stance: str, position_limit: int, reason: str):
+        """持久化 Pi 交易报告到 memory/trade-reports/，供周度反思等查询"""
+        try:
+            log_dir = self._get_workspace_path() / "memory" / "trade-reports"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            today = datetime.now().strftime('%Y-%m-%d')
+            log_file = log_dir / f"{today}-trades.jsonl"
+
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "task_id": task_id,
+                "execution_id": execution_id,
+                "stance": stance,
+                "position_limit": position_limit,
+                "reason": reason,
+                "report": reply,  # 含 SIGNAL 行的完整交易报告
+            }
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+            logger.info(f"Trade report saved: {log_file}")
+        except Exception as e:
+            logger.error(f"Failed to save trade report: {e}")
+
     def _save_weekly_reflect(self, start_date: str, end_date: str, reply: str,
                              stance: str, position_limit: int, reason: str):
         """持久化周度反思报告到 memory/weekly-reflect-logs/"""
@@ -839,18 +862,27 @@ class SchedulerService:
             r'SIGNAL:\s*(green|yellow|red)\s+POSITION:\s*(\d+)\s*REASON:\s*(.+)',
             reply, re.IGNORECASE
         )
+        stance = 'yellow'
+        position_limit = 60
+        reason_str = ''
         if signal_match:
             try:
+                stance = signal_match.group(1).lower()
+                position_limit = int(signal_match.group(2))
+                reason_str = signal_match.group(3).strip()
                 from core.utils.strategy_chain import StrategyChain
                 chain = StrategyChain()
                 chain.set_pi_confirmation(
-                    stance=signal_match.group(1).lower(),
-                    position_limit=int(signal_match.group(2)),
-                    reason=signal_match.group(3).strip(),
+                    stance=stance,
+                    position_limit=position_limit,
+                    reason=reason_str,
                 )
                 logger.info(f"[{execution_id}] Pi signal: {signal_match.group(1)} limit={signal_match.group(2)}%")
             except Exception as e:
                 logger.error(f"[{execution_id}] Failed to write Pi signal: {e}")
+
+        # === 持久化交易报告到 memory/trade-reports/ ===
+        self._save_trade_report(task.id, execution_id, reply, stance, position_limit, reason_str)
 
         # 返回完整报告（含 SIGNAL 行供后续通知使用）
         return reply
@@ -883,11 +915,13 @@ class SchedulerService:
             f"请立即执行以下操作：\n"
             f"1. 调用 get_pi_analysis_history(start_date=\"{start_date}\", end_date=\"{end_date}\")"
             f" 获取整周全部 Pi 分析记录\n"
-            f"2. 调用 get_latest_scan_report() 了解周五收盘市场状态\n"
-            f"3. 调用 get_portfolio() 了解最终账户状况\n"
-            f"4. 调用 get_market_indices() 看本周大盘涨跌\n"
-            f"5. 按反思 SOP 逐日分析 Pi 立场演变\n"
-            f"6. 输出完整的周度反思报告\n\n"
+            f"2. 调用 get_trade_history(start_date=\"{start_date}\", end_date=\"{end_date}\")"
+            f" 获取整周全部交易执行报告（含买卖决策、仓位变化、组合逻辑）\n"
+            f"3. 调用 get_latest_scan_report() 了解周五收盘市场状态\n"
+            f"4. 调用 get_portfolio() 了解最终账户状况\n"
+            f"5. 调用 get_market_indices() 看本周大盘涨跌\n"
+            f"6. 按反思 SOP 逐日分析 Pi 立场演变，同时对比交易报告评估策略执行质量\n"
+            f"7. 输出完整的周度反思报告\n\n"
             f"⚠️ 注意：本周 Pi 扫描系统可能未完全运行，数据可能稀疏甚至为空。"
             f"但你仍然必须产出一份有价值的反思报告——即使只有一天数据也要深度分析，"
             f"无数据时则基于持仓和交易记录评估本周表现。不要因数据不足而拒绝输出。\n\n"
