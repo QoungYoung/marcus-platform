@@ -102,6 +102,8 @@ class QQBotService:
             else:
                 session_id = self.user_sessions.get(openid, openid)
                 self.user_sessions[openid] = session_id
+            
+            print(f"[QQBotService] session_id={session_id} (user={openid}), cached={session_id in self.user_sessions}", file=sys.stderr)
 
             # 特殊命令处理
             if content.strip() == f"{self.command_prefix}reset":

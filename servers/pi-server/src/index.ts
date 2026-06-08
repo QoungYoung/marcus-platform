@@ -68,8 +68,13 @@ function loadSession(sessionId: string): any[] {
         console.log(`[PiServer] 恢复会话 [${sessionId.slice(-16)}]: ${data.length} 条消息`);
         return data;
       }
+    } else {
+      // 会话文件不存在 — 可能是首次对话或 session_id 不匹配
+      console.log(`[PiServer] 会话文件未找到 [${sessionId.slice(-16)}]: ${file}`);
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    console.error(`[PiServer] 加载会话失败 [${sessionId.slice(-16)}]:`, e);
+  }
   return [];
 }
 

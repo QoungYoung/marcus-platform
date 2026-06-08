@@ -280,7 +280,8 @@ class QQBotClient:
             elif t in ("C2C_MESSAGE_CREATE", "C2C_MSG_RECEIVE", "DIRECT_MESSAGE_CREATE"):
                 # Private chat message (V2 official event name: C2C_MSG_RECEIVE)
                 author = d.get("author", {}) or d.get("sender", {})
-                openid = author.get("id", "") or author.get("openid", "")
+                # 优先使用 openid（持久化标识），id 是内部临时 ID
+                openid = author.get("openid", "") or author.get("id", "")
                 content = d.get("content", "")
                 msg_id = d.get("id", "")
 
@@ -293,7 +294,8 @@ class QQBotClient:
                 # Group @ message
                 group_openid = d.get("group_openid", "") or d.get("group_id", "")
                 author = d.get("author", {}) or d.get("sender", {})
-                openid = author.get("id", "") or author.get("openid", "")
+                # 优先使用 openid（持久化标识），id 是内部临时 ID
+                openid = author.get("openid", "") or author.get("id", "")
                 content = d.get("content", "")
                 msg_id = d.get("id", "")
 
