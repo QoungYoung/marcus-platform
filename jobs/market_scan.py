@@ -1883,24 +1883,78 @@ def generate_scan_report():
     account = executor.get_account()
     positions = executor.get_positions()
 
-    # ====== 资金流向数据 ======
+    # ====== 资金流向数据（东财实时 / Tushare日频 自适应） ======
     fund_flow = None
     now = datetime.now()
-    is_trading_hours = now.weekday() < 5 and (
+    is_intraday = now.weekday() < 5 and (
         (now.hour == 9 and now.minute >= 30) or
         (now.hour in (10, 11)) or
         (now.hour in (13, 14)) or
         (now.hour == 15 and now.minute == 0)
     )
-    if is_trading_hours:
-        print(f"[资金流] ⏭️ 盘中时段({now.hour}:{now.minute:02d})，Tushare 日频尚未更新，跳过资金流向查询")
+
+    # ── 盘中：东财实时大盘资金流 + 个股资金流（个股仍用Tushare前日数据）──
+    if is_intraday:
+        print(f"[资金流] 盘中({now.hour}:{now.minute:02d})，使用东财实时大盘+板块资金流")
+        try:
+            # 大盘实时资金流（东财 ulist.np）
+            sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
+            from utils.em_sector_flow import get_market_moneyflow_realtime
+            rt_market = get_market_moneyflow_realtime()
+            if rt_market:
+                combined = rt_market['combined']
+                fund_flow = {
+                    'market': {
+                        'main_net_fmt': combined['main_net_fmt'],
+                        'source_date': now.strftime('%Y%m%d'),
+                        'source_stock_count': 0,
+                    },
+                    'market_wide': {
+                        'net_amount_fmt': combined['main_net_fmt'],
+                        'net_amount_yi': round(combined['main_net'] / 10000, 2),
+                        'flow_nature': rt_market['flow_nature'],
+                        'trade_date': now.strftime('%Y%m%d'),
+                        'total_amount_fmt': combined['total_amount_fmt'],
+                        'source': 'em_push2_realtime',
+                    },
+                    'north': {'total_net': 0, 'sh_net': 0, 'sz_net': 0},
+                    'limit_up': {'zt_count': 0, 'market_heat': 50},
+                    'fund_score': 50.0,
+                    'fund_signal': '中性',
+                    'top_inflow': [],
+                }
+                print(f"[资金流] ✅ 大盘实时: {combined['main_net_fmt']} | "
+                      f"沪:{rt_market['sh']['main_net_fmt']} 深:{rt_market['sz']['main_net_fmt']} | "
+                      f"总成交:{combined['total_amount_fmt']} | {rt_market['flow_nature']}")
+        except Exception as e:
+            print(f"[资金流] ⚠️ 东财实时大盘获取失败: {e}")
+
+        # 个股资金流（盘中用 Tushare 昨日数据，仍有参考价值）
+        try:
+            from fund_flow import get_fund_flow_summary
+            position_symbols = [p['symbol'] for p in positions] if positions else []
+            pre_watchlist = (chain.state.get('pre_market') or {}).get('initial_strategy', {}).get('watchlist', [])
+            pre_symbols = [w['symbol'] if isinstance(w, dict) else w for w in pre_watchlist]
+            target_symbols = list(dict.fromkeys(position_symbols + pre_symbols))
+            if target_symbols:
+                print(f"[资金流] 获取个股资金流 ({len(target_symbols)}只，Tushare昨日数据)...")
+                stock_flow = get_fund_flow_summary(symbols=target_symbols)
+                if stock_flow:
+                    if fund_flow:
+                        fund_flow['limit_up'] = stock_flow.get('limit_up', fund_flow['limit_up'])
+                        fund_flow['fund_score'] = stock_flow.get('fund_score', 50)
+                        fund_flow['fund_signal'] = stock_flow.get('fund_signal', '中性')
+                        fund_flow['top_inflow'] = stock_flow.get('top_inflow', [])
+                        fund_flow['market'] = stock_flow.get('market', fund_flow['market'])
+        except Exception as e:
+            print(f"[资金流] ⚠️ 个股资金流获取失败: {e}")
+
+    # ── 盘后：Tushare 日频（已有当日数据）──
     else:
         try:
             from fund_flow import get_fund_flow_summary
-            # 传入持仓 + 盘前观察列表，按需查询个股资金流
             position_symbols = [p['symbol'] for p in positions] if positions else []
             pre_watchlist = (chain.state.get('pre_market') or {}).get('initial_strategy', {}).get('watchlist', [])
-            # 兼容 watchlist 中可能是 dict 或 str
             pre_symbols = [w['symbol'] if isinstance(w, dict) else w for w in pre_watchlist]
             target_symbols = list(dict.fromkeys(position_symbols + pre_symbols))
             print(f"[资金流] 正在获取资金流向数据 ({len(target_symbols)}只，同时拉取全市场大盘)...")
@@ -1925,38 +1979,63 @@ def generate_scan_report():
     if fund_flow:
         flow_nature = classify_fund_flow(fund_flow)
 
-    # ====== 概念板块行情 Top 50（量价驱动，用于刷新词汇表 + 报告展示） ======
+    # ====== 概念板块实时行情 Top 50（东财push2实时 + Tushare降级，含资金流） ======
     concept_flow_concepts = []
+    concept_flow_details = []  # 完整资金流明细，供报告使用
     try:
-        import pandas as pd
-        pro = get_tushare_pro()
-        from datetime import datetime as dt, timedelta
-        for offset in range(3):
-            attempt_date = (dt.now() - timedelta(days=offset)).strftime("%Y%m%d")
-            try:
-                df_daily = pro.dc_daily(
-                    trade_date=attempt_date, idx_type='概念板块',
-                    fields='ts_code,pct_change,vol,amount,turnover_rate'
-                )
-                df_index = pro.dc_index(
-                    trade_date=attempt_date, idx_type='概念板块',
-                    fields='ts_code,name'
-                )
-                if df_daily is not None and len(df_daily) > 0 and df_index is not None and len(df_index) > 0:
-                    df = pd.merge(df_index, df_daily, on='ts_code', how='inner')
-                    df = df.sort_values('pct_change', ascending=False).head(50)
-                    concept_flow_concepts = df['name'].tolist()
-                    top_pct = df.iloc[0]['pct_change'] if len(df) > 0 else 0
-                    break
-            except Exception:
-                continue
+        # ── 优先：东财 push2 实时接口 ──
+        sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
+        from utils.em_sector_flow import get_top_change_sectors, classify_flow_nature
+
+        em_sectors = get_top_change_sectors("concept", top_n=50, use_cache=True)
+        concept_flow_concepts = [s['name'] for s in em_sectors]
+        concept_flow_details = em_sectors
+        top_pct = em_sectors[0]['pct_change'] if em_sectors else 0
         if concept_flow_concepts:
-            print(f"[概念行情] ✅ Top {len(concept_flow_concepts)} 领涨概念: "
+            print(f"[概念行情] ✅ 东财实时 Top {len(concept_flow_concepts)} 领涨概念: "
                   f"{', '.join(concept_flow_concepts[:5])}... (最强 +{top_pct:.1f}%)", file=sys.stderr)
             from news_analyzer import supplement_concept_vocabulary
             supplement_concept_vocabulary(concept_flow_concepts)
     except Exception as e:
-        print(f"[概念行情] ⚠️ 获取失败: {e}", file=sys.stderr)
+        print(f"[概念行情] ⚠️ 东财实时获取失败，降级到Tushare: {e}", file=sys.stderr)
+        # ── 降级：Tushare dc_daily ──
+        try:
+            import pandas as pd
+            pro = get_tushare_pro()
+            from datetime import datetime as dt, timedelta
+            for offset in range(3):
+                attempt_date = (dt.now() - timedelta(days=offset)).strftime("%Y%m%d")
+                try:
+                    df_daily = pro.dc_daily(
+                        trade_date=attempt_date, idx_type='概念板块',
+                        fields='ts_code,pct_change,vol,amount,turnover_rate'
+                    )
+                    df_index = pro.dc_index(
+                        trade_date=attempt_date, idx_type='概念板块',
+                        fields='ts_code,name'
+                    )
+                    if df_daily is not None and len(df_daily) > 0 and df_index is not None and len(df_index) > 0:
+                        df = pd.merge(df_index, df_daily, on='ts_code', how='inner')
+                        df = df.sort_values('pct_change', ascending=False).head(50)
+                        concept_flow_concepts = df['name'].tolist()
+                        # 构造简化明细
+                        for _, row in df.iterrows():
+                            concept_flow_details.append({
+                                'name': row['name'],
+                                'pct_change': round(float(row.get('pct_change', 0) or 0), 2),
+                                'main_net_fmt': 'N/A',
+                            })
+                        top_pct = df.iloc[0]['pct_change'] if len(df) > 0 else 0
+                        break
+                except Exception:
+                    continue
+            if concept_flow_concepts:
+                print(f"[概念行情] ✅ Tushare Top {len(concept_flow_concepts)} 领涨概念: "
+                      f"{', '.join(concept_flow_concepts[:5])}... (最强 +{top_pct:.1f}%)", file=sys.stderr)
+                from news_analyzer import supplement_concept_vocabulary
+                supplement_concept_vocabulary(concept_flow_concepts)
+        except Exception as e2:
+            print(f"[概念行情] ⚠️ Tushare也失败: {e2}", file=sys.stderr)
 
     def _get_stock_name(sym: str) -> str:
         """两层名称 lookup：stock_pool.db（主力）→ Xueqiu（兜底）→ symbol 本身"""
@@ -2508,13 +2587,22 @@ def generate_scan_report():
         # 全市场大盘资金流
         market_wide = fund_flow.get('market_wide')
         if market_wide:
+            is_realtime = market_wide.get('source', '').startswith('em_push2')
             mw_net = market_wide.get('net_amount_fmt', 'N/A')
             mw_nature = market_wide.get('flow_nature', '')
             mw_date = market_wide.get('trade_date', '')
             mw_sh = market_wide.get('pct_change_sh', 0)
             mw_sz = market_wide.get('pct_change_sz', 0)
+            mw_total = market_wide.get('total_amount_fmt', '')
+            mw_label = '实时(东财)' if is_realtime else '日频(Tushare)'
             mw_date_str = f' ({mw_date})' if mw_date else ''
-            report += f"| 全市场资金流 | {mw_net} ({mw_nature}，沪{mw_sh:+.2f}%/深{mw_sz:+.2f}%){mw_date_str} |\n"
+            detail = f"{mw_net} ({mw_nature}"
+            if mw_total:
+                detail += f" | 成交:{mw_total}"
+            if mw_sh or mw_sz:
+                detail += f" | 沪{mw_sh:+.2f}%/深{mw_sz:+.2f}%"
+            detail += f"){mw_date_str}"
+            report += f"| 全市场资金流({mw_label}) | {detail} |\n"
 
         report += f"""| 涨停家数 | {zt_count} {heat_emoji} ({heat_note}) |
 | 资金信号 | {fsignal} (score={fscore:.0f}) |
@@ -2650,6 +2738,8 @@ def generate_scan_report():
         'position_analysis': position_analysis,
         # 资金流向数据
         'fund_flow': fund_flow,
+        # 实时概念板块行情（东财push2，含资金拆分明细+广度+领涨股）
+        'concept_flow': concept_flow_details[:20] if concept_flow_details else [],
         # 连续亏损检测
         'force_pause': force_pause,
         'consecutive_losses': pause_check,
