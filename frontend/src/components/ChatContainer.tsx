@@ -117,13 +117,17 @@ const getPortfolioTool = {
 
 const getConceptFundFlowTool = {
   name: 'get_concept_fund_flow',
-  description: '获取概念板块行情排行（涨幅排序）。数据源：Tushare dc_daily，返回当日量价数据（涨跌幅、成交量、成交额、换手率）。概念名与 stock_concept_map 一致',
+  description: '获取概念板块实时行情排行（按涨幅或主力资金流向排序）。数据源：东财push2实时接口(主力/超大单/大单/中单/小单净流入+板块广度+领涨股)，Tushare降级兜底。sort_by=pct_change看涨幅榜，sort_by=main_net看资金榜',
   parameters: Type.Object({
     limit: Type.Optional(Type.Number({ description: '返回数量，默认15' })),
+    sort_by: Type.Optional(Type.String({ description: '排序字段: pct_change(涨幅) / main_net(主力净流入)' })),
   }),
-  async execute(_toolCallId: string, params: { limit?: number }, _signal: AbortSignal | undefined) {
-    const query = params.limit ? `?limit=${params.limit}` : '';
-    const res = await fetch(`${MARCUS_API}/market/concept-fund-flow${query}`);
+  async execute(_toolCallId: string, params: { limit?: number; sort_by?: string }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.sort_by) query.set('sort_by', params.sort_by);
+    const qs = query.toString();
+    const res = await fetch(`${MARCUS_API}/market/concept-fund-flow${qs ? '?' + qs : ''}`);
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
@@ -131,12 +135,25 @@ const getConceptFundFlowTool = {
     if (sectors.length === 0) {
       return { content: [{ type: 'text', text: '暂无概念板块行情数据' }], details: data };
     }
-    const tradeDate = data.trade_date ? `交易日期: ${data.trade_date}` : '';
-    const lines = ['📊 概念板块行情 (涨幅排行)', tradeDate, ''];
+    const tradeDate = data.trade_date ? `日期: ${data.trade_date}` : '';
+    const sortLabel = params.sort_by === 'main_net' ? '资金流入排行' : '涨幅排行';
+    const lines = [`📊 概念板块行情 (${sortLabel})`, tradeDate, ''];
     sectors.forEach((s: any, idx: number) => {
       const sign = s.pct_change >= 0 ? '+' : '';
       const amountYi = (s.amount / 100000000).toFixed(2);
-      lines.push(`${idx + 1}. ${s.name} | 涨跌:${sign}${s.pct_change}% | 成交额:${amountYi}亿 | 换手率:${s.turnover_rate}%`);
+      let line = `${idx + 1}. ${s.name} | 涨跌:${sign}${s.pct_change}% | 成交:${amountYi}亿`;
+      // 附加资金流数据（如果有）
+      if (s.main_net_fmt) {
+        const nature = s.flow_nature || '';
+        line += ` | 主力:${s.main_net_fmt} ${nature}`;
+      }
+      if (s.advancing !== undefined && s.declining !== undefined) {
+        line += ` | ↑${s.advancing}/↓${s.declining}`;
+      }
+      if (s.lead_stock_name) {
+        line += ` | 领涨:${s.lead_stock_name}(${s.lead_stock_code})`;
+      }
+      lines.push(line);
     });
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },
@@ -457,7 +474,7 @@ const getTechnicalTool = {
 const getMarketMoneyflowTool = {
   name: 'get_market_moneyflow',
   label: '大盘资金流向',
-  description: '获取大盘资金流向（主力/超大单/大单/中单/小单净流入）。返回上证深证收盘涨跌+五类资金净流入，用于判断大盘整体资金情绪和主力动向',
+  description: '获取沪深两市大盘实时资金流向（主力/超大单/大单/中单/小单净流入+买/卖分明细+总成交额）。数据源：东财push2实时(优先)+Tushare日频(降级)。用于判断大盘整体资金情绪和主力动向',
   parameters: Type.Object({}),
   async execute(_toolCallId: string, _params: unknown, _signal: AbortSignal | undefined) {
     const res = await fetch(`${MARCUS_API}/market/moneyflow-mkt`);
@@ -466,12 +483,22 @@ const getMarketMoneyflowTool = {
     if (data.error) throw new Error(data.error);
     const m = data.data;
     if (!m) return { content: [{ type: 'text', text: '暂无大盘资金流向数据' }], details: data };
-    const signSh = m.pct_change_sh >= 0 ? '+' : '';
-    const signSz = m.pct_change_sz >= 0 ? '+' : '';
-    const lines = [`大盘资金流向 ${m.trade_date} (日频)`];
+    const isRealtime = (m.data_source || '').includes('实时');
+    const label = isRealtime ? '实时' : '日频';
+    let totalAmountLine = '';
+    if (m.total_amount_fmt) {
+      totalAmountLine = `总成交: ${m.total_amount_fmt}`;
+    }
+    const lines = [`大盘资金流向 ${m.trade_date} (${label})`, totalAmountLine].filter(Boolean);
     if (m.close_sh || m.close_sz) {
+      const signSh = m.pct_change_sh >= 0 ? '+' : '';
+      const signSz = m.pct_change_sz >= 0 ? '+' : '';
       lines.push(`上证: ${m.close_sh} (${signSh}${m.pct_change_sh}%)`);
       lines.push(`深证: ${m.close_sz} (${signSz}${m.pct_change_sz}%)`);
+    }
+    // 沪深分开（实时数据有）
+    if (data.sh && data.sz) {
+      lines.push(`沪市主力: ${data.sh.main_net_fmt} | 深市主力: ${data.sz.main_net_fmt}`);
     }
     lines.push(
       `主力净流入: ${m.net_amount_fmt}${m.net_amount_rate ? ` (${m.net_amount_rate}%)` : ''}`,
@@ -1055,8 +1082,8 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 - get_market_indices: 获取A股、美股、港股指数行情
 - get_quote: 查询个股实时行情
 - get_portfolio: 查看账户持仓和资金
-- get_market_moneyflow: 获取大盘资金流向（主力/超大单/大单/中单/小单净流入）
-- get_concept_fund_flow: 获取概念板块行情排行（涨幅排序，含涨跌幅/成交额/换手率）
+- get_market_moneyflow: 获取大盘实时资金流向（沪深分开+合计，含买/卖分明细+总成交额+资金性质）
+- get_concept_fund_flow: 获取概念板块实时行情（支持涨幅/主力资金排序，含净流入拆解+板块广度+资金性质+领涨股，默认实时）
 - get_concept_mapping: 查询概念板块及成分股（不传参列所有概念，传concept_name查该概念下的股票）
 - get_etf_quote: 查询ETF基金行情
 - get_etf_kline: 获取ETF历史K线数据（开高低收/量/额）

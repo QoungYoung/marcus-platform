@@ -63,19 +63,110 @@ from akshare_engine_enhanced import AKShareEnhancedEngine
 
 def get_hot_concepts_by_flow(top_n: int = 10) -> list:
     """
-    从 Tushare dc_daily 获取概念板块行情排名，返回领涨概念列表。
+    获取概念板块实时行情排名。
 
-    数据源: Tushare dc_daily + dc_index (东方财富概念板块)
+    数据源（优先级）:
+    1. 东财 push2 实时接口（盘中实时，含涨跌幅+资金拆分明细+板块广度+领涨股）
+    2. Tushare dc_daily（降级兜底，含历史成交量/换手率补充）
+
     逻辑: 按 pct_change 降序（涨幅最大），取 top_n 个概念。
     概念名与 stock_concept_map 完全一致。
 
     Returns:
         list[dict]: [
-            {'name': '半导体', 'pct_change': 2.35, 'vol': 1.5e9,
-             'amount': 5.23e9, 'turnover_rate': 1.2, 'trade_date': '20260525'},
+            {'name': '半导体', 'pct_change': 2.35, 'main_net_fmt': '+18.00亿',
+             'flow_nature': '温和流入', 'advancing': 160, 'declining': 16,
+             'lead_stock_name': '杰华特', 'lead_stock_code': '688141', ...},
             ...
         ]
     """
+    # ── 优先：东财 push2 实时接口 ──
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
+        from utils.em_sector_flow import get_top_change_sectors, classify_flow_nature
+
+        em_sectors = get_top_change_sectors("concept", top_n=top_n, use_cache=True)
+        concepts = []
+        for es in em_sectors:
+            concepts.append({
+                'name': es['name'],
+                'pct_change': es['pct_change'],
+                'main_net': es['main_net'],
+                'main_net_fmt': es['main_net_fmt'],
+                'main_net_rate': es['main_net_rate'],
+                'super_large_net': es['super_large_net'],
+                'large_net': es['large_net'],
+                'medium_net': es['medium_net'],
+                'small_net': es['small_net'],
+                'advancing': es['advancing'],
+                'declining': es['declining'],
+                'total_stocks': es['total_stocks'],
+                'lead_stock_name': es.get('lead_stock_name', ''),
+                'lead_stock_code': es.get('lead_stock_code', ''),
+                'flow_nature': classify_flow_nature(es['main_net'], es['main_net_rate']),
+                'source': 'em_push2_realtime',
+                # Tushare 补充字段默认值
+                'vol': 0, 'amount': 0, 'turnover_rate': 0, 'trade_date': '',
+            })
+
+        debug_names = [(c['name'], f"{c['pct_change']:+.1f}%",
+                        c.get('main_net_fmt', 'N/A'), c.get('flow_nature', ''))
+                       for c in concepts]
+        print(f"[热点概念] ✅ 东财实时 Top {len(concepts)}: {debug_names}", file=sys.stderr)
+
+        # ── 补充 Tushare 成交量数据（非阻塞，失败不影响）──
+        try:
+            import tushare as ts
+            import pandas as pd
+            token = os.getenv("TUSHARE_TOKEN", "")
+            if token:
+                from datetime import datetime as dt, timedelta
+                pro = ts.pro_api(token)
+                now = dt.now()
+                for offset in range(3):
+                    attempt_date = (now - timedelta(days=offset)).strftime("%Y%m%d")
+                    attempt_dt = now - timedelta(days=offset)
+                    if attempt_dt.weekday() >= 5:
+                        continue
+                    try:
+                        df_daily = pro.dc_daily(
+                            trade_date=attempt_date, idx_type='概念板块',
+                            fields='ts_code,pct_change,name,vol,amount,turnover_rate'
+                        )
+                        if df_daily is not None and len(df_daily) > 0:
+                            ts_map = {}
+                            for _, row in df_daily.iterrows():
+                                ts_map[row.get('name', '')] = row
+                                name = row.get('name', '')
+                                for sfx in ['概念', '板块']:
+                                    if name.endswith(sfx):
+                                        ts_map[name[:-len(sfx)]] = row
+                            for c in concepts:
+                                matched = ts_map.get(c['name'])
+                                if not matched:
+                                    for ts_name, ts_row in ts_map.items():
+                                        if ts_name in c['name'] or c['name'] in ts_name:
+                                            matched = ts_row
+                                            break
+                                if matched is not None:
+                                    c['vol'] = float(matched.get('vol', 0) or 0)
+                                    c['amount'] = float(matched.get('amount', 0) or 0)
+                                    c['turnover_rate'] = round(float(matched.get('turnover_rate', 0) or 0), 2)
+                                    c['trade_date'] = attempt_date
+                                    c['source'] = 'em_realtime+tushare_supplement'
+                            print(f"[热点概念] ✅ Tushare 量价补充完成 (date={attempt_date})", file=sys.stderr)
+                            break
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"[热点概念] Tushare 量价补充失败(非致命): {e}", file=sys.stderr)
+
+        return concepts
+
+    except Exception as e:
+        print(f"[热点概念] ⚠️ 东财 push2 获取失败，降级到 Tushare dc_daily: {e}", file=sys.stderr)
+
+    # ── 降级：纯 Tushare dc_daily ──
     try:
         import tushare as ts
         import pandas as pd
@@ -83,50 +174,96 @@ def get_hot_concepts_by_flow(top_n: int = 10) -> list:
         if not token:
             raise EnvironmentError("TUSHARE_TOKEN 未配置")
         pro = ts.pro_api(token)
+
+        from datetime import datetime as dt, timedelta
+        now = dt.now()
+
+        for offset in range(3):
+            attempt_date = (now - timedelta(days=offset)).strftime("%Y%m%d")
+            try:
+                df_daily = pro.dc_daily(
+                    trade_date=attempt_date, idx_type='概念板块',
+                    fields='ts_code,pct_change,vol,amount,turnover_rate'
+                )
+                df_index = pro.dc_index(
+                    trade_date=attempt_date, idx_type='概念板块',
+                    fields='ts_code,name'
+                )
+                if df_daily is not None and len(df_daily) > 0 and df_index is not None and len(df_index) > 0:
+                    df = pd.merge(df_index, df_daily, on='ts_code', how='inner')
+                    df = df.sort_values('pct_change', ascending=False)
+                    print(f"[热点概念] ✅ Tushare dc_daily {attempt_date}, {len(df)} 个概念", file=sys.stderr)
+                    break
+            except Exception as e:
+                print(f"[热点概念] {attempt_date} 无数据: {e}", file=sys.stderr)
+                continue
+        else:
+            print("[热点概念] ⚠️ 最近3个交易日均无数据", file=sys.stderr)
+            return []
+
+        concepts = []
+        for _, row in df.head(top_n).iterrows():
+            concepts.append({
+                'name': row['name'],
+                'pct_change': round(float(row.get('pct_change', 0) or 0), 2),
+                'vol': float(row.get('vol', 0) or 0),
+                'amount': float(row.get('amount', 0) or 0),
+                'turnover_rate': round(float(row.get('turnover_rate', 0) or 0), 2),
+                'trade_date': attempt_date,
+                'source': 'tushare_daily',
+            })
+
+        debug_names = [(c['name'], f"{c['pct_change']:+.1f}%") for c in concepts]
+        print(f"[热点概念] ✅ Tushare Top {len(concepts)}: {debug_names}", file=sys.stderr)
+        return concepts
+
     except Exception as e:
-        print(f"[热点概念] ⚠️ Tushare 初始化失败: {e}", file=sys.stderr)
+        print(f"[热点概念] ⚠️ 所有数据源均失败: {e}", file=sys.stderr)
         return []
 
-    from datetime import datetime as dt, timedelta
 
-    for offset in range(3):
-        attempt_date = (dt.now() - timedelta(days=offset)).strftime("%Y%m%d")
-        try:
-            df_daily = pro.dc_daily(
-                trade_date=attempt_date, idx_type='概念板块',
-                fields='ts_code,pct_change,vol,amount,turnover_rate'
-            )
-            df_index = pro.dc_index(
-                trade_date=attempt_date, idx_type='概念板块',
-                fields='ts_code,name'
-            )
-            if df_daily is not None and len(df_daily) > 0 and df_index is not None and len(df_index) > 0:
-                df = pd.merge(df_index, df_daily, on='ts_code', how='inner')
-                df = df.sort_values('pct_change', ascending=False)
-                print(f"[热点概念] ✅ dc_daily {attempt_date}, {len(df)} 个概念", file=sys.stderr)
-                break
-        except Exception as e:
-            print(f"[热点概念] {attempt_date} 无数据: {e}", file=sys.stderr)
-            continue
-    else:
-        print("[热点概念] ⚠️ 最近3个交易日均无数据", file=sys.stderr)
+def get_hot_concepts_by_fund_flow(top_n: int = 10) -> list:
+    """
+    按主力资金净流入排名获取概念板块（资金驱动选股）。
+
+    与 get_hot_concepts_by_flow 不同，此函数按主力净流入排序而非涨跌幅。
+    适合「资金先行」策略：找到主力资金大幅流入但涨幅尚未完全体现的板块。
+
+    Returns:
+        list[dict]: 与 get_hot_concepts_by_flow 相同结构，但按 main_net 降序排列
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
+        from utils.em_sector_flow import get_top_inflow_sectors, classify_flow_nature
+
+        em_sectors = get_top_inflow_sectors("concept", top_n=top_n, use_cache=True)
+        concepts = []
+        for es in em_sectors:
+            concepts.append({
+                'name': es['name'],
+                'pct_change': es['pct_change'],
+                'vol': 0, 'amount': 0, 'turnover_rate': 0, 'trade_date': '',
+                'main_net': es['main_net'],
+                'main_net_fmt': es['main_net_fmt'],
+                'main_net_rate': es['main_net_rate'],
+                'super_large_net': es['super_large_net'],
+                'large_net': es['large_net'],
+                'medium_net': es['medium_net'],
+                'small_net': es['small_net'],
+                'advancing': es['advancing'],
+                'declining': es['declining'],
+                'total_stocks': es['total_stocks'],
+                'flow_nature': classify_flow_nature(es['main_net'], es['main_net_rate']),
+                'source': 'em_realtime_inflow',
+            })
+
+        debug_names = [(c['name'], c.get('main_net_fmt', 'N/A'), f"{c['pct_change']:+.1f}%")
+                       for c in concepts]
+        print(f"[热点概念·资金] ✅ Top {len(concepts)}: {debug_names}", file=sys.stderr)
+        return concepts
+    except Exception as e:
+        print(f"[热点概念·资金] ⚠️ 东财 push2 获取失败: {e}", file=sys.stderr)
         return []
-    df = df
-
-    concepts = []
-    for _, row in df.head(top_n).iterrows():
-        concepts.append({
-            'name': row['name'],
-            'pct_change': round(float(row.get('pct_change', 0) or 0), 2),
-            'vol': float(row.get('vol', 0) or 0),
-            'amount': float(row.get('amount', 0) or 0),
-            'turnover_rate': round(float(row.get('turnover_rate', 0) or 0), 2),
-            'trade_date': attempt_date,
-        })
-
-    debug_names = [(c['name'], f"{c['pct_change']:+.1f}%") for c in concepts]
-    print(f"[热点概念] ✅ Top {len(concepts)}: {debug_names}", file=sys.stderr)
-    return concepts
 
 
 # ── Layer 2: 逻辑验证层（方案 A：新闻密度趋势 + 负面检测） ─────

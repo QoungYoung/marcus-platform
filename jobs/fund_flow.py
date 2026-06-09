@@ -488,6 +488,64 @@ def get_fund_flow_summary(symbols: list = None) -> dict:
 
 
 # ═══════════════════════════════════════════════════════
+# 实时板块资金流向（东财 push2 接口）
+# ═══════════════════════════════════════════════════════
+
+def get_sector_fund_flow_summary(top_n: int = 10) -> dict:
+    """
+    获取实时板块资金流向摘要（概念 + 行业双维度）。
+
+    数据源: 东方财富 push2 实时接口，盘中实时更新。
+    与 get_fund_flow_summary() 互补:
+    - get_fund_flow_summary: 自选股维度，Tushare 日频
+    - get_sector_fund_flow_summary: 板块维度，东财实时
+
+    Returns:
+        {
+            "top_inflow_concepts": [      # 主力净流入 Top N 概念
+                {"name": "半导体", "main_net_fmt": "+12.50亿",
+                 "pct_change": 3.25, "flow_nature": "主力建仓", ...},
+            ],
+            "top_inflow_industries": [    # 主力净流入 Top N 行业
+                {"name": "电子", "main_net_fmt": "+8.30亿", ...},
+            ],
+            "top_change_concepts": [...], # 涨幅 Top N 概念
+            "top_change_industries": [...], # 涨幅 Top N 行业
+            "updated_at": "2026-06-09T10:00:00",
+            "source": "em_push2_realtime",
+        }
+    """
+    try:
+        # 动态导入（jobs/ 目录无法直接 import core/utils）
+        _core_utils = str(Path(__file__).parent.parent / "core" / "utils")
+        if _core_utils not in sys.path:
+            sys.path.insert(0, _core_utils)
+        from em_sector_flow import get_market_sector_summary
+
+        return get_market_sector_summary(top_n=top_n)
+    except ImportError:
+        print("[fund_flow] ⚠️ 东财板块资金流模块不可用", file=sys.stderr)
+        return {
+            "top_inflow_concepts": [],
+            "top_inflow_industries": [],
+            "top_change_concepts": [],
+            "top_change_industries": [],
+            "updated_at": "",
+            "source": "unavailable",
+        }
+    except Exception as e:
+        print(f"[fund_flow] ⚠️ 获取板块资金流失败: {e}", file=sys.stderr)
+        return {
+            "top_inflow_concepts": [],
+            "top_inflow_industries": [],
+            "top_change_concepts": [],
+            "top_change_industries": [],
+            "updated_at": "",
+            "source": "error",
+        }
+
+
+# ═══════════════════════════════════════════════════════
 # 自测
 # ═══════════════════════════════════════════════════════
 if __name__ == "__main__":

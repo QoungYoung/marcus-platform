@@ -24,6 +24,19 @@ if str(_core_dir) not in _sys.path:
     _sys.path.insert(0, str(_core_dir))
 from workspace_detector import XUEQIU_DIR
 
+# 东财实时板块资金流（保留导入失败的降级处理）
+try:
+    from utils.em_sector_flow import (
+        get_sector_flow, get_top_inflow_sectors, get_top_change_sectors,
+        get_sector_flow_by_name, get_market_sector_summary,
+        classify_flow_nature,
+    )
+    _EM_FLOW_AVAILABLE = True
+    logger.info("[market] ✅ 东财实时板块资金流模块已加载")
+except ImportError:
+    _EM_FLOW_AVAILABLE = False
+    logger.warning("[market] ⚠️ 东财实时板块资金流模块不可用")
+
 
 @router.get("/indices", response_model=IndicesResponse)
 async def get_market_indices():
@@ -732,25 +745,84 @@ async def get_concept_mapping(
         raise HTTPException(status_code=500, detail=f"查询概念板块失败: {str(e)}")
 
 
-# ========== 概念板块行情 API (数据源: Tushare dc_daily) ==========
+# ========== 概念板块行情 API (数据源: 东财 push2 实时 + Tushare dc_daily 兜底) ==========
 
 @router.get("/concept-fund-flow")
 async def get_concept_fund_flow(
     limit: int = Query(15, ge=1, le=100, description="返回数量上限"),
+    sort_by: str = Query("pct_change", description="排序字段: pct_change(涨幅) / main_net(主力净流入)"),
 ):
     """
-    获取概念板块行情排行（按涨幅降序，右侧交易驱动）。
-    
-    数据源: Tushare dc_daily + dc_index 接口，概念名与 stock_concept_map 完全对齐。
-    按 pct_change 排序取涨幅最大概念，同时返回成交量/换手率用于量价确认。
-    
+    获取概念板块实时行情排行，支持按涨幅或主力资金流向排序。
+
+    数据源（优先级）:
+    1. 东财 push2 实时接口（盘中实时更新，含涨跌幅+资金拆分明细+板块广度+领涨股）
+    2. Tushare dc_daily（降级兜底，日频数据，含历史成交量/换手率）
+
     返回字段:
-    - name: 概念名称（与 stock_concept_map.concept_name 一致）
+    - name/code: 概念名称/代码
     - pct_change: 涨跌幅(%)
-    - vol: 成交量(股)
-    - amount: 成交额(元)
-    - turnover_rate: 换手率(%)
+    - main_net/main_net_fmt/main_net_rate: 主力净流入(万元/格式化/占比%)
+    - super_large_net/large_net/medium_net/small_net: 四类单净流入(万元, NET)
+    - advancing/declining/total_stocks: 上涨/下跌/总家数
+    - lead_stock_name/lead_stock_code: 领涨股
+    - flow_nature: 资金性质(主力建仓/温和流入/平衡/温和流出/主力出货)
+    - vol/amount/turnover_rate: 量价数据(仅Tushare降级时可用)
     """
+    from datetime import datetime as dt
+
+    # ── 优先：东财 push2 实时接口 ──
+    if _EM_FLOW_AVAILABLE:
+        try:
+            if sort_by == "main_net":
+                flow_data = get_top_inflow_sectors("concept", top_n=limit * 2, use_cache=True)
+                # 按主力净流入排序取 top_n
+                flow_data.sort(key=lambda x: x["main_net"], reverse=True)
+            else:
+                flow_data = get_top_change_sectors("concept", top_n=limit * 2, use_cache=True)
+                # 按涨跌幅排序取 top_n
+                flow_data.sort(key=lambda x: x["pct_change"], reverse=True)
+
+            sectors = []
+            for fd in flow_data[:limit]:
+                item = {
+                    "name": fd["name"],
+                    "code": fd["code"],
+                    "pct_change": fd["pct_change"],
+                    "main_net": fd["main_net"],
+                    "main_net_fmt": fd["main_net_fmt"],
+                    "main_net_rate": fd["main_net_rate"],
+                    "super_large_net": fd["super_large_net"],
+                    "super_large_net_rate": fd["super_large_net_rate"],
+                    "large_net": fd["large_net"],
+                    "large_net_rate": fd["large_net_rate"],
+                    "medium_net": fd["medium_net"],
+                    "medium_net_rate": fd["medium_net_rate"],
+                    "small_net": fd["small_net"],
+                    "small_net_rate": fd["small_net_rate"],
+                    "advancing": fd["advancing"],
+                    "declining": fd["declining"],
+                    "total_stocks": fd["total_stocks"],
+                    "lead_stock_name": fd.get("lead_stock_name", ""),
+                    "lead_stock_code": fd.get("lead_stock_code", ""),
+                    "flow_nature": classify_flow_nature(fd["main_net"], fd["main_net_rate"]),
+                    # Tushare 字段填充空值
+                    "vol": 0, "amount": 0, "turnover_rate": 0, "ts_code": "",
+                }
+                sectors.append(item)
+
+            logger.info(f"[concept-fund-flow] 东财实时: {len(sectors)} 个概念 (sort={sort_by})")
+            return {
+                "sectors": sectors,
+                "count": len(sectors),
+                "sort_by": sort_by,
+                "data_source": "东财push2(realtime)",
+                "trade_date": dt.now().strftime("%Y%m%d"),
+            }
+        except Exception as e:
+            logger.warning(f"[concept-fund-flow] 东财实时获取失败，降级到Tushare: {e}")
+
+    # ── 降级：Tushare dc_daily 日频数据 ──
     try:
         import pandas as pd
         from app.config import get_settings
@@ -760,14 +832,16 @@ async def get_concept_fund_flow(
         import tushare as ts
         pro = ts.pro_api(token)
 
-        from datetime import datetime as dt, timedelta
+        from datetime import timedelta
         now = dt.now()
         is_intraday = now.hour < 15 or (now.hour == 15 and now.minute < 15)
-        start_offset = 1 if is_intraday else 0  # 盘中跳过今天
+        start_offset = 1 if is_intraday else 0
+
+        sectors = []
+        trade_date = ""
 
         for offset in range(start_offset, start_offset + 3):
             attempt_date = (now - timedelta(days=offset)).strftime("%Y%m%d")
-            # 跳过周末
             attempt_dt = now - timedelta(days=offset)
             if attempt_dt.weekday() >= 5:
                 continue
@@ -782,28 +856,29 @@ async def get_concept_fund_flow(
                 )
                 if df_daily is not None and len(df_daily) > 0 and df_index is not None and len(df_index) > 0:
                     df = pd.merge(df_index, df_daily, on='ts_code', how='inner')
-                    df = df.sort_values('pct_change', ascending=False).head(limit)
-
-                    sectors = []
-                    for _, row in df.iterrows():
+                    df = df.sort_values('pct_change', ascending=False)
+                    trade_date = attempt_date
+                    for _, row in df.head(limit).iterrows():
                         sectors.append({
                             "name": row["name"],
                             "ts_code": row["ts_code"],
+                            "code": row["ts_code"],
                             "pct_change": round(float(row["pct_change"] or 0), 2),
                             "vol": float(row["vol"] or 0),
                             "amount": float(row["amount"] or 0),
                             "turnover_rate": round(float(row["turnover_rate"] or 0), 2),
                         })
-
-                    return {
-                        "sectors": sectors,
-                        "count": len(sectors),
-                        "trade_date": attempt_date,
-                    }
+                    break
             except Exception:
                 continue
 
-        return {"sectors": [], "count": 0, "trade_date": ""}
+        return {
+            "sectors": sectors,
+            "count": len(sectors),
+            "sort_by": sort_by,
+            "trade_date": trade_date,
+            "data_source": "Tushare(daily)",
+        }
 
     except EnvironmentError as e:
         raise HTTPException(status_code=503, detail=f"Tushare 配置错误: {str(e)}")
@@ -817,33 +892,87 @@ async def get_concept_fund_flow(
 
 @router.get("/moneyflow-mkt")
 async def get_moneyflow_mkt(
-    trade_date: str = Query(None, description="交易日期，YYYYMMDD，默认最近交易日"),
+    trade_date: str = Query(None, description="交易日期，YYYYMMDD。不传则使用实时数据"),
+    source: str = Query("auto", description="数据源: auto(自动,优先实时) / realtime(东财实时,仅当日) / tushare(Tushare日频)"),
 ):
     """
     获取大盘资金流向数据（主力/超大单/大单/中单/小单净流入）。
 
-    数据源: Tushare moneyflow_mkt_dc → 东方财富大盘资金流。
-    与盘中扫描 jobs/fund_flow._fetch_market_moneyflow_dc 完全同源，保证数据一致。
+    数据源:
+    - 默认(auto): 盘中优先用东财push2实时接口(沪深分开+合计)，盘后用Tushare日频
+    - realtime: 东财 push2 ulist.np 实时接口，含买/卖分明细
+    - tushare: Tushare moneyflow_mkt_dc，支持历史日期查询
 
-    返回字段:
-    - trade_date: 交易日期
-    - close_sh/pct_change_sh: 上证收盘/涨跌幅
-    - close_sz/pct_change_sz: 深证收盘/涨跌幅
-    - net_amount/net_amount_rate: 主力净流入(万元)/占比(%)
-    - net_amount_fmt: 主力净流入格式化 (如 +100.50亿)
-    - flow_nature: 资金性质 (主力建仓/温和流入/平衡/温和流出/主力出货)
-    - buy_elg_amount/buy_elg_amount_rate: 超大单净流入/占比
-    - buy_lg_amount/buy_lg_amount_rate: 大单净流入/占比
-    - buy_md_amount/buy_md_amount_rate: 中单净流入/占比
-    - buy_sm_amount/buy_sm_amount_rate: 小单净流入/占比
+    返回字段(兼容新旧格式):
+    - data.trade_date: 交易日期
+    - data.close_sh/pct_change_sh: 上证收盘/涨跌幅 (仅Tushare)
+    - data.net_amount/net_amount_fmt: 主力净流入(万元/格式化)
+    - data.flow_nature: 资金性质
+    - data.sh/sz: 沪深分开明细 (仅realtime)
+    - data.combined: 两市合计 (仅realtime)
+    - data.buy_elg_amount/buy_lg_amount/...: 各单净流入(万元)
+    - data.data_source: 数据来源标识
     """
     from datetime import datetime as dt
+
+    # ── 实时数据（东财 push2 ulist.np）──
+    if source in ("auto", "realtime") and not trade_date and _EM_FLOW_AVAILABLE:
+        try:
+            from utils.em_sector_flow import get_market_moneyflow_realtime
+            rt = get_market_moneyflow_realtime()
+            if rt:
+                combined = rt["combined"]
+                # 构建向后兼容的扁平结构
+                data = {
+                    "trade_date": dt.now().strftime("%Y%m%d"),
+                    "close_sh": 0,  # 实时接口无收盘价
+                    "pct_change_sh": 0,
+                    "close_sz": 0,
+                    "pct_change_sz": 0,
+                    "net_amount": combined["main_net"],
+                    "net_amount_rate": combined.get("main_net_rate", 0),
+                    "net_amount_fmt": combined["main_net_fmt"],
+                    "net_amount_yi": round(combined["main_net"] / 10000, 2),
+                    "flow_nature": rt["flow_nature"],
+                    "total_amount": combined["total_amount"],
+                    "total_amount_fmt": combined["total_amount_fmt"],
+                    # 各单净流入
+                    "buy_elg_amount": combined["super_large_net"],
+                    "buy_elg_amount_rate": combined.get("super_large_net_rate", 0),
+                    "buy_lg_amount": combined["large_net"],
+                    "buy_lg_amount_rate": combined.get("large_net_rate", 0),
+                    "buy_md_amount": combined["medium_net"],
+                    "buy_md_amount_rate": combined.get("medium_net_rate", 0),
+                    "buy_sm_amount": combined["small_net"],
+                    "buy_sm_amount_rate": combined.get("small_net_rate", 0),
+                    # 买/卖分明细
+                    "super_large_buy": combined.get("super_large_buy", 0),
+                    "super_large_sell": combined.get("super_large_sell", 0),
+                    "large_buy": combined.get("large_buy", 0),
+                    "large_sell": combined.get("large_sell", 0),
+                    "medium_buy": combined.get("medium_buy", 0),
+                    "medium_sell": combined.get("medium_sell", 0),
+                    "small_buy": combined.get("small_buy", 0),
+                    "small_sell": combined.get("small_sell", 0),
+                    "source": rt["source"],
+                    "data_source": "实时(东财push2)",
+                }
+                # 附加沪深分开
+                result = {"data": data, "success": True,
+                          "sh": rt["sh"], "sz": rt["sz"],
+                          "combined": combined,
+                          "updated_at": rt["updated_at"]}
+                logger.info(f"[moneyflow-mkt] 东财实时: {data['net_amount_fmt']} | {data['flow_nature']}")
+                return result
+        except Exception as e:
+            logger.warning(f"[moneyflow-mkt] 东财实时获取失败，降级到Tushare: {e}")
+
+    # ── 降级：Tushare 日频数据 ──
     from pathlib import Path
     import sys
     from app.config import get_settings
     settings = get_settings()
 
-    # 复用 jobs/fund_flow 中的 _fetch_market_moneyflow_dc，保证与盘中扫描完全一致
     _jobs_dir = str(settings.workspace_path / "jobs")
     _core_dir = str(settings.workspace_path / "core")
     if _jobs_dir not in sys.path:
@@ -857,7 +986,6 @@ async def get_moneyflow_mkt(
         if trade_date:
             mkt_data = _fetch_market_moneyflow_dc(trade_date)
         else:
-            # 未指定日期：智能回退近3日（盘中自动跳过今天）
             mkt_data = None
             from datetime import timedelta
             now = dt.now()
@@ -875,8 +1003,6 @@ async def get_moneyflow_mkt(
         if not mkt_data:
             return {"data": None, "trade_date": trade_date or "", "message": "无数据"}
 
-        # 补充明细字段（_fetch_market_moneyflow_dc 已返回 net_amount_fmt / flow_nature 等核心字段）
-        # 同时保持向后兼容的扁平结构返回
         data = {
             "trade_date": mkt_data["trade_date"],
             "close_sh": mkt_data.get("close_sh", 0),
@@ -1183,3 +1309,139 @@ async def get_trade_status():
         "trade_date": trade_date,
         "reason": trade_reason,
     }
+
+
+# ========== 东财实时板块资金流向 API (数据源: 东财 push2) ==========
+
+@router.get("/sector-flow")
+async def get_sector_flow_endpoint(
+    type: str = Query("concept", description="板块类型: concept(概念) / industry(行业) / region(地域)"),
+    sort_by: str = Query("main_net", description="排序字段: main_net(主力净流入) / pct_change(涨跌幅) / main_net_rate(主力占比)"),
+    limit: int = Query(20, ge=1, le=200, description="返回数量上限"),
+):
+    """
+    获取东财实时板块资金流向排名。
+
+    数据源: 东方财富 push2 实时接口，盘中实时更新。
+    相比 /concept-fund-flow 的 Tushare 日频数据，此接口提供:
+    - 实时主力/超大单/大单/中单/小单拆分明细
+    - 板块上涨/下跌家数（广度指标）
+    - 主力净流入占比
+
+    返回字段:
+    - code: 板块代码
+    - name: 板块名称
+    - pct_change: 涨跌幅(%)
+    - main_net: 主力净流入(万元)
+    - main_net_fmt: 主力净流入(格式化，如 +12.50亿)
+    - main_net_rate: 主力净流入占比(%)
+    - super_large_net: 超大单净流入(万元)
+    - large_net: 大单净流入(万元)
+    - medium_net: 中单净流入(万元)
+    - small_net: 小单净流入(万元)
+    - advancing: 上涨家数
+    - declining: 下跌家数
+    - total_stocks: 成分股总数
+    - flow_nature: 资金性质(主力建仓/温和流入/平衡/温和流出/主力出货)
+
+    示例:
+    - 概念板块主力净流入排名: GET /market/sector-flow?type=concept&sort_by=main_net
+    - 行业板块涨幅排名: GET /market/sector-flow?type=industry&sort_by=pct_change
+    """
+    if not _EM_FLOW_AVAILABLE:
+        raise HTTPException(status_code=503, detail="东财实时板块资金流模块不可用")
+
+    try:
+        sectors = get_sector_flow(
+            sector_type=type,
+            sort_by=sort_by,
+            top_n=limit,
+            use_cache=True,
+        )
+
+        # 附加资金性质分类
+        for s in sectors:
+            s["flow_nature"] = classify_flow_nature(
+                s["main_net"], s["main_net_rate"]
+            )
+
+        return {
+            "sectors": sectors,
+            "count": len(sectors),
+            "type": type,
+            "sort_by": sort_by,
+            "data_source": "东财push2(realtime)",
+            "updated_at": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取板块资金流失败: {str(e)}")
+
+
+@router.get("/sector-summary")
+async def get_sector_summary_endpoint(
+    top_n: int = Query(5, ge=1, le=20, description="每个维度返回数量"),
+):
+    """
+    获取市场板块资金流综合摘要（概念 + 行业双维度）。
+
+    同时返回:
+    - 主力净流入 Top 概念 / 行业
+    - 涨幅 Top 概念 / 行业
+
+    用于盘中快速判断当日最强方向。
+    """
+    if not _EM_FLOW_AVAILABLE:
+        raise HTTPException(status_code=503, detail="东财实时板块资金流模块不可用")
+
+    try:
+        summary = get_market_sector_summary(top_n=top_n)
+
+        # 为每个板块附加资金性质
+        for key in ["top_inflow_concepts", "top_inflow_industries",
+                     "top_change_concepts", "top_change_industries"]:
+            for s in summary.get(key, []):
+                s["flow_nature"] = classify_flow_nature(
+                    s["main_net"], s["main_net_rate"]
+                )
+
+        return {
+            **summary,
+            "data_source": "东财push2(realtime)",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取板块摘要失败: {str(e)}")
+
+
+@router.get("/sector-flow/{name}")
+async def get_sector_flow_by_name_endpoint(
+    name: str,
+    type: str = Query("concept", description="板块类型: concept / industry"),
+):
+    """
+    按名称模糊查询单个板块的实时资金流向。
+
+    示例:
+    - GET /market/sector-flow/半导体?type=concept
+    - GET /market/sector-flow/银行?type=industry
+    """
+    if not _EM_FLOW_AVAILABLE:
+        raise HTTPException(status_code=503, detail="东财实时板块资金流模块不可用")
+
+    try:
+        result = get_sector_flow_by_name(name, sector_type=type, use_cache=True)
+        if not result:
+            raise HTTPException(status_code=404, detail=f"未找到板块: {name}")
+
+        result["flow_nature"] = classify_flow_nature(
+            result["main_net"], result["main_net_rate"]
+        )
+        result["data_source"] = "东财push2(realtime)"
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询板块资金流失败: {str(e)}")
