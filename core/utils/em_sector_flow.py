@@ -44,143 +44,83 @@ import json
 import re
 import time
 import logging
-import traceback
 import random
-import ssl
 from typing import Optional, Literal
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+
+# ── 云服务器东财开关 ──
+# curl 在云服务器上可以正常访问东财 push2 接口（HTTP 200, 0.28s），
+# 说明不是 IP 封锁。如果 Python 仍然报 RemoteDisconnected，大概率是
+# Python SSL 库的 TLS 指纹与系统 OpenSSL 不同导致，可临时设置此变量跳过。
+# 设置环境变量 SKIP_EASTMONEY=true 可跳过东财，直接走 Tushare 降级源。
+import os as _os
+_SKIP_EASTMONEY = _os.getenv("SKIP_EASTMONEY", "").strip().lower() in ("1", "true", "yes", "on")
+if _SKIP_EASTMONEY:
+    logger.info("[em_sector_flow] SKIP_EASTMONEY=true，东财接口已禁用，将直接返回 None 走降级源")
+
 # ── HTTP 客户端选择 ──
-# requests 使用 urllib3，TLS 指纹与 Python urllib 不同，
-# 云服务器上可绕过东财的 TLS 指纹反爬检测
+# 优先 requests（urllib3 的 TLS 行为更接近系统 OpenSSL），不可用时降级 urllib。
+# 不使用 verify=False 和自定义 cipher——这些会导致 TLS 指纹异常，反被东财拒绝。
 try:
     import requests
-    from requests.adapters import HTTPAdapter
     _HAS_REQUESTS = True
 except ImportError:
     import urllib.request
     import urllib.error
-    import http.client
     _HAS_REQUESTS = False
-    logger.warning("[em_sector_flow] requests 不可用，降级为 urllib（云服务器可能被东财拦截）")
+    logger.info("[em_sector_flow] requests 不可用，使用 urllib")
 
-# ── Chrome 兼容的 SSL 密码套件（减少 TLS 指纹差异） ──
-_CHROME_CIPHERS = (
-    "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
-    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
-    "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:"
-    "DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"
-)
-
-# ── 浏览器级完整请求头 ──
+# ── 精简请求头（与 curl 保持一致即可，过多头反而可能触发 WAF） ──
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/149.0.0.0 Safari/537.36"
     ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;"
-        "q=0.9,image/avif,image/webp,image/apng,*/*;"
-        "q=0.8,application/signed-exchange;v=b3;q=0.7"
-    ),
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Sec-Ch-Ua": '"Google Chrome";v="149", "Chromium";v="149", "Not?A_Brand";v="24"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9",
     "Connection": "close",
 }
 
 
 # ═══════════════════════════════════════════════════════
-# HTTP Session 工厂
+# HTTP 统一请求
 # ═══════════════════════════════════════════════════════
 
-class _BrowserTLSAdapter(HTTPAdapter):
-    """使用 Chrome 兼容 SSL 密码套件的 HTTPAdapter"""
-
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        try:
-            ctx.set_ciphers(_CHROME_CIPHERS)
-        except ssl.SSLError:
-            pass  # 某些平台的 OpenSSL 不支持所有套件
-        kwargs["ssl_context"] = ctx
-        return super().init_poolmanager(*args, **kwargs)
-
-
-def _create_em_session() -> "requests.Session":
-    """创建模拟 Chrome 浏览器的 requests.Session"""
-    if not _HAS_REQUESTS:
-        return None
-    session = requests.Session()
-    session.headers.update(_BROWSER_HEADERS)
-    adapter = _BrowserTLSAdapter()
-    session.mount("https://", adapter)
-    return session
-
-
 def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
-    """统一的 HTTP GET 请求，优先使用 requests，降级 urllib"""
+    """统一的 HTTP GET 请求。使用系统默认 SSL 行为，与 curl 一致。"""
     headers = dict(_BROWSER_HEADERS)
     if referer:
         headers["Referer"] = referer
 
     if _HAS_REQUESTS:
         try:
-            session = _create_em_session()
-            resp = session.get(url, timeout=timeout, headers=headers)
+            resp = requests.get(url, timeout=timeout, headers=headers)
             resp.raise_for_status()
             return resp.text
         except requests.exceptions.ConnectionError as e:
-            # 底层连接错误（RemoteDisconnected 等）
-            logger.warning(f"[em] 连接错误 (requests): {e}")
+            logger.warning(f"[em] 连接错误: {e}")
             return None
-        except requests.exceptions.Timeout as e:
-            logger.warning(f"[em] 请求超时 (requests): {e}")
+        except requests.exceptions.Timeout:
+            logger.warning(f"[em] 请求超时")
             return None
         except requests.exceptions.RequestException as e:
-            logger.warning(f"[em] 请求失败 (requests): {e}")
+            logger.warning(f"[em] 请求失败: {e}")
             return None
     else:
-        # 降级：urllib
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        try:
-            ctx.set_ciphers(_CHROME_CIPHERS)
-        except ssl.SSLError:
-            pass
+        # 降级：urllib（系统默认 SSL，不做自定义）
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode("utf-8", errors="replace")
         except urllib.error.URLError as e:
-            reason = e.reason
-            if isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError)):
-                logger.warning(f"[em] 连接被远端关闭 (urllib): {reason}")
-            elif isinstance(reason, TimeoutError):
-                logger.warning(f"[em] 请求超时 (urllib): {reason}")
-            else:
-                logger.warning(f"[em] 请求失败 (urllib): {e}")
-            return None
-        except (http.client.RemoteDisconnected, ConnectionResetError) as e:
-            logger.warning(f"[em] 连接被远端关闭 (urllib 底层): {e}")
+            logger.warning(f"[em] 请求失败 (urllib): {e}")
             return None
         except Exception as e:
-            logger.warning(f"[em] 请求失败 (urllib 未知): {e}\n{traceback.format_exc()}")
+            logger.warning(f"[em] 请求失败 (urllib): {e}")
             return None
 
 # ═══════════════════════════════════════════════════════
@@ -426,6 +366,8 @@ def get_sector_flow(
         >>> for s in flows:
         ...     print(f"{s['name']}: 主力净流入 {s['main_net_fmt']}, 涨跌幅 {s['pct_change']:+.2f}%")
     """
+    if _SKIP_EASTMONEY:
+        raise RuntimeError("SKIP_EASTMONEY: 东财接口已禁用，请走 Tushare 降级源")
     # 检查缓存
     cache_key = f"{sector_type}_{sort_by}_{top_n}"
     if use_cache and cache_key in _cache:
@@ -696,6 +638,8 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
         }
         或 None（接口不可用时）
     """
+    if _SKIP_EASTMONEY:
+        return None
     # 同时请求沪深两市，带重试
     # 云服务器环境下东财 API 可能因代理/anti-bot 导致连接重置，
     # 使用较长的退避时间 + 随机抖动，减少被拦截概率

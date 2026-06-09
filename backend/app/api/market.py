@@ -32,7 +32,13 @@ try:
         classify_flow_nature,
     )
     _EM_FLOW_AVAILABLE = True
-    logger.info("[market] ✅ 东财实时板块资金流模块已加载")
+    # 检查环境变量 SKIP_EASTMONEY（云服务器被东财封 IP 时快速跳过）
+    import os as _os
+    if _os.getenv("SKIP_EASTMONEY", "").strip().lower() in ("1", "true", "yes", "on"):
+        _EM_FLOW_AVAILABLE = False
+        logger.info("[market] SKIP_EASTMONEY=true，东财实时接口已禁用，将走 Tushare 降级")
+    else:
+        logger.info("[market] ✅ 东财实时板块资金流模块已加载")
 except ImportError:
     _EM_FLOW_AVAILABLE = False
     logger.warning("[market] ⚠️ 东财实时板块资金流模块不可用")
