@@ -46,14 +46,142 @@ import time
 import logging
 import traceback
 import random
-import urllib.request
-import urllib.error
 import ssl
-import http.client
 from typing import Optional, Literal
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# ── HTTP 客户端选择 ──
+# requests 使用 urllib3，TLS 指纹与 Python urllib 不同，
+# 云服务器上可绕过东财的 TLS 指纹反爬检测
+try:
+    import requests
+    from requests.adapters import HTTPAdapter
+    _HAS_REQUESTS = True
+except ImportError:
+    import urllib.request
+    import urllib.error
+    import http.client
+    _HAS_REQUESTS = False
+    logger.warning("[em_sector_flow] requests 不可用，降级为 urllib（云服务器可能被东财拦截）")
+
+# ── Chrome 兼容的 SSL 密码套件（减少 TLS 指纹差异） ──
+_CHROME_CIPHERS = (
+    "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:"
+    "DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"
+)
+
+# ── 浏览器级完整请求头 ──
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/149.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;"
+        "q=0.9,image/avif,image/webp,image/apng,*/*;"
+        "q=0.8,application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Ch-Ua": '"Google Chrome";v="149", "Chromium";v="149", "Not?A_Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Connection": "close",
+}
+
+
+# ═══════════════════════════════════════════════════════
+# HTTP Session 工厂
+# ═══════════════════════════════════════════════════════
+
+class _BrowserTLSAdapter(HTTPAdapter):
+    """使用 Chrome 兼容 SSL 密码套件的 HTTPAdapter"""
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            ctx.set_ciphers(_CHROME_CIPHERS)
+        except ssl.SSLError:
+            pass  # 某些平台的 OpenSSL 不支持所有套件
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
+def _create_em_session() -> "requests.Session":
+    """创建模拟 Chrome 浏览器的 requests.Session"""
+    if not _HAS_REQUESTS:
+        return None
+    session = requests.Session()
+    session.headers.update(_BROWSER_HEADERS)
+    adapter = _BrowserTLSAdapter()
+    session.mount("https://", adapter)
+    return session
+
+
+def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
+    """统一的 HTTP GET 请求，优先使用 requests，降级 urllib"""
+    headers = dict(_BROWSER_HEADERS)
+    if referer:
+        headers["Referer"] = referer
+
+    if _HAS_REQUESTS:
+        try:
+            session = _create_em_session()
+            resp = session.get(url, timeout=timeout, headers=headers)
+            resp.raise_for_status()
+            return resp.text
+        except requests.exceptions.ConnectionError as e:
+            # 底层连接错误（RemoteDisconnected 等）
+            logger.warning(f"[em] 连接错误 (requests): {e}")
+            return None
+        except requests.exceptions.Timeout as e:
+            logger.warning(f"[em] 请求超时 (requests): {e}")
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"[em] 请求失败 (requests): {e}")
+            return None
+    else:
+        # 降级：urllib
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            ctx.set_ciphers(_CHROME_CIPHERS)
+        except ssl.SSLError:
+            pass
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.URLError as e:
+            reason = e.reason
+            if isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError)):
+                logger.warning(f"[em] 连接被远端关闭 (urllib): {reason}")
+            elif isinstance(reason, TimeoutError):
+                logger.warning(f"[em] 请求超时 (urllib): {reason}")
+            else:
+                logger.warning(f"[em] 请求失败 (urllib): {e}")
+            return None
+        except (http.client.RemoteDisconnected, ConnectionResetError) as e:
+            logger.warning(f"[em] 连接被远端关闭 (urllib 底层): {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"[em] 请求失败 (urllib 未知): {e}\n{traceback.format_exc()}")
+            return None
 
 # ═══════════════════════════════════════════════════════
 # 常量
@@ -120,41 +248,8 @@ def _fetch_raw(sector_type: str = "concept", sort_field: str = "f62",
     query_parts = [f"{k}={v}" for k, v in params.items()]
     url = EM_PUSH2_URL + "?" + "&".join(query_parts)
 
-    # 创建 SSL context（忽略证书，兼容代理环境）
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/149.0.0.0 Safari/537.36"
-            ),
-            "Referer": "https://data.eastmoney.com/bkzj/hy.html",
-            "Connection": "close",  # 禁止 keep-alive，避免云服务器代理断开连接
-        }
-    )
-
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as e:
-        reason = e.reason
-        if isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError)):
-            logger.warning(f"[em_sector_flow] 连接被远端关闭: {reason}")
-        elif isinstance(reason, TimeoutError):
-            logger.warning(f"[em_sector_flow] 请求超时: {reason}")
-        else:
-            logger.warning(f"[em_sector_flow] 请求失败 (URLError): {e}")
-        return []
-    except (http.client.RemoteDisconnected, ConnectionResetError) as e:
-        logger.warning(f"[em_sector_flow] 连接被远端关闭 (底层异常): {e}")
-        return []
-    except Exception as e:
-        logger.warning(f"[em_sector_flow] 异常: {e}\n{traceback.format_exc()}")
+    raw = _http_get(url, timeout=timeout, referer="https://data.eastmoney.com/bkzj/hy.html")
+    if raw is None:
         return []
 
     # 解析 JSONP 或 JSON
@@ -513,41 +608,8 @@ def _fetch_market_raw(secids: str, timeout: int = 10) -> list[dict]:
     query_parts = [f"{k}={v}" for k, v in params.items()]
     url = EM_ULIST_URL + "?" + "&".join(query_parts)
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/149.0.0.0 Safari/537.36"
-            ),
-            "Referer": "https://data.eastmoney.com/zjlx/dpzjlx.html",
-            "Connection": "close",  # 禁止 keep-alive，避免云服务器代理断开连接
-        }
-    )
-
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as e:
-        # 区分超时 vs 连接重置
-        reason = e.reason
-        if isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError)):
-            logger.warning(f"[em_market_flow] 连接被远端关闭: {reason}")
-        elif isinstance(reason, TimeoutError):
-            logger.warning(f"[em_market_flow] 请求超时: {reason}")
-        else:
-            logger.warning(f"[em_market_flow] 请求失败 (URLError): {e}")
-        return []
-    except (http.client.RemoteDisconnected, ConnectionResetError) as e:
-        logger.warning(f"[em_market_flow] 连接被远端关闭 (底层异常): {e}")
-        return []
-    except Exception as e:
-        logger.warning(f"[em_market_flow] 请求失败 (未知异常): {e}\n{traceback.format_exc()}")
+    raw = _http_get(url, timeout=timeout, referer="https://data.eastmoney.com/zjlx/dpzjlx.html")
+    if raw is None:
         return []
 
     data = _parse_response(raw)
