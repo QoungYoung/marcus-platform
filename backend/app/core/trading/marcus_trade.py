@@ -206,7 +206,7 @@ class MarcusVNPyExecutor:
             f.write(json.dumps(risk_data, ensure_ascii=False) + "\n")
     
     def buy(self, symbol: str, price: float, volume: int, reason: str = "") -> dict:
-        """买入操作 - 通过完整订单流程成交"""
+        """买入操作 - 通过完整订单流程成交，失败时解冻资金"""
         # 风控检查
         risk_result = self.check_risk(symbol, price, volume, 'buy')
 
@@ -239,8 +239,12 @@ class MarcusVNPyExecutor:
         if not order_id:
             return {'status': 'failed', 'reason': 'VN.PY 买入失败'}
 
-        # 自动成交 (模拟)
-        self.engine.match_order(order_id, price)
+        # 自动成交 (模拟)，失败时解冻资金
+        match_ok = self.engine.match_order(order_id, price)
+        if not match_ok:
+            self.engine.cancel_order(order_id)
+            print(f"[交易] ⚠️ {symbol} 撮合失败，资金已解冻", file=sys.stderr)
+            return {'status': 'failed', 'reason': 'VN.PY 撮合失败，资金已解冻'}
 
         # 创建订单记录
         trade_record = {
