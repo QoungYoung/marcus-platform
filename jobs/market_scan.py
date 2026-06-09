@@ -1726,39 +1726,35 @@ def get_market_status() -> dict:
         for name in index_map.keys():
             indices[name] = {'close': 0, 'change': 0}
 
-    # ========== 2. 获取多源新闻并分析情绪（统一接口） ==========
+    # ========== 2. 获取多源新闻并分析情绪（热点概念不使用缓存，由东财实时资金流驱动） ==========
     news_sentiment = {'score': 50, 'positive': 0, 'negative': 0, 'neutral': 0, 'total': 0}
     news_impact = {'impact_analysis': [], 'summary': {'s_level_count': 0, 'a_level_count': 0, 'b_level_count': 0, 'c_level_count': 0, 'top_sectors': []}}
-    hot_concepts = []  # 热点概念
+    hot_concepts = []  # 热点概念 → 由东财实时资金流填充（下方 concept_flow 段）
     catalysts = []  # 重大催化剂
     risks = []  # 重大风险
-    sentiment_score = 50  # 默认值，会被 hot_sectors 缓存覆盖
+    sentiment_score = 50
+    cached_concept_scores = {}
 
     try:
-        # 优先从采集时的缓存读取（热点分析只在采集时跑，扫描时直接复用）
+        # 读取缓存仅用于情绪分和新闻影响摘要（热点概念由实时资金流驱动，不用缓存）
         cache = get_hot_sectors_from_cache(max_age_minutes=30)
 
         if cache.get('available'):
-            print(f"[热点缓存] ✅ 使用采集时生成的热点分析（生成于 {cache.get('generated_at', '')[:19]}）", file=sys.stderr)
-            hot_concepts = cache.get('hot_concepts', [])
+            print(f"[新闻缓存] 📊 情绪分参考（生成于 {cache.get('generated_at', '')[:19]}），热点概念由东财实时资金流驱动", file=sys.stderr)
             sentiment_score = cache.get('sentiment_score', 50)
             impact_summary = cache.get('summary', {})
             news_impact = {'summary': impact_summary, 'impact_analysis': cache.get('impact_analysis', [])}
-            news_sentiment = {'score': sentiment_score, 'positive': 0, 'negative': 0, 'neutral': 0,
-                              'hot_concepts': hot_concepts, 'catalysts': [], 'risks': []}
-            catalysts, risks = [], []
+            cached_concept_scores = cache.get('concept_scores', {})
             sentiment_positive = impact_summary.get('s_level_count', 0) + impact_summary.get('a_level_count', 0)
             sentiment_negative = 0
         else:
-            # 无缓存，在扫描时跑完整分析（降级方案）
-            print(f"[新闻分析] 无缓存，调用 get_news_analysis()...", file=sys.stderr)
+            print(f"[新闻分析] 无缓存，调用 get_news_analysis()（仅情绪）...", file=sys.stderr)
             analysis_result = get_news_analysis(news_limit=30, use_ai=True)
             news_sentiment = analysis_result.get('sentiment', {})
             news_impact = {
                 'impact_analysis': analysis_result.get('impact_analysis', []),
                 'summary': analysis_result.get('summary', {})
             }
-            hot_concepts = news_sentiment.get('hot_concepts', [])
             catalysts = news_sentiment.get('catalysts', [])
             risks = news_sentiment.get('risks', [])
             sentiment_score = news_sentiment.get('score', 50)
@@ -1772,13 +1768,9 @@ def get_market_status() -> dict:
               f"B 级={impact_summary.get('b_level_count', 0)}, "
               f"C 级={impact_summary.get('c_level_count', 0)}")
 
-        if hot_concepts:
-            print(f"[热点概念] {', '.join(hot_concepts)}")
         top_sectors = impact_summary.get('top_sectors', [])
         if top_sectors:
             print(f"[重点板块] {[s['sector'] for s in top_sectors[:3]]}")
-        # 如果 cache 中有 AI 的 concept_scores，优先使用（来自 DeepSeek，比 top_sectors 更精确）
-        cached_concept_scores = cache.get('concept_scores', {}) if cache.get('available') else {}
         if cached_concept_scores:
             print(f"[AI概念评分] {cached_concept_scores}")
     except Exception as e:
@@ -1790,11 +1782,9 @@ def get_market_status() -> dict:
                 news_sentiment = get_news_sentiment(finance_news)
         except:
             pass
-        # 确保 news_impact 在所有分支都有定义
         news_impact = {'summary': {}, 'impact_analysis': []}
         if 'news_sentiment' not in dir():
             news_sentiment = {'score': 50, 'positive': 0, 'negative': 0}
-        # P0修复：news_sentiment['score'] 仍为默认值 50 时，从 strategy_state.json 兜底
         if news_sentiment.get('score', 50) == 50:
             try:
                 import json
@@ -2011,6 +2001,15 @@ def generate_scan_report():
         if concept_flow_concepts:
             print(f"[概念行情] ✅ 东财实时 Top {len(concept_flow_concepts)} 领涨概念(含资金驱动): "
                   f"{', '.join(concept_flow_concepts[:5])}... (最强 +{top_pct:.1f}%)", file=sys.stderr)
+            # 主推资金流入 Top 5 概念（覆盖 DeepSeek 缓存的旧数据）
+            if concept_flow_details:
+                inflow_preview = [(s['name'], s.get('main_net_fmt', 'N/A'))
+                                  for s in concept_flow_details[:5]]
+                print(f"[热点概念·实时资金] {inflow_preview}", file=sys.stderr)
+                # 实时资金流概念名合并到 hot_concepts（DeepSeek 缓存可能过期，用实时数据补强）
+                for s in concept_flow_details[:8]:
+                    if s['name'] not in hot_concepts:
+                        hot_concepts.append(s['name'])
             from news_analyzer import supplement_concept_vocabulary
             supplement_concept_vocabulary(concept_flow_concepts)
     except Exception as e:
@@ -2155,25 +2154,15 @@ def generate_scan_report():
                 if sym in shrink_volume_warnings:
                     p['shrink_volume'] = shrink_volume_warnings[sym]
 
-    # ====== 读取热点概念缓存获取情绪分 ======
+    # ====== 热点概念已由东财实时资金流驱动（上方 concept_flow 段），无需从缓存重新读取 ======
+    # 仅更新情绪分（如有更新的缓存数据）
     try:
         cache = get_hot_sectors_from_cache(max_age_minutes=30)
-        if cache.get('available'):
-            print(f"[热点缓存] ✅ 使用采集时生成的热点分析（生成于 {cache.get('generated_at', '')[:19]}）", file=sys.stderr)
-            raw_concepts = cache.get('hot_concepts', [])
-            # 🔧 概念名标准化：将 AI 输出的概念名映射到数据源中的标准概念名
-            from news_analyzer import normalize_concepts_batch
-            hot_concepts = normalize_concepts_batch(raw_concepts)
-            if hot_concepts != raw_concepts:
-                print(f"[概念标准化] {len(raw_concepts)}个原始 → {len(hot_concepts)}个标准: {hot_concepts}", file=sys.stderr)
-            news_sentiment = {'score': cache.get('sentiment_score', 50), 'positive': 0, 'negative': 0,
-                              'hot_concepts': hot_concepts}
-            impact_summary = cache.get('summary', {})
-            sentiment_positive = impact_summary.get('s_level_count', 0) + impact_summary.get('a_level_count', 0)
-            print(f"[新闻分析] 情绪={cache.get('sentiment_score', 50):.1f}, 正面={sentiment_positive}")
-            print(f"[热点概念] {', '.join(hot_concepts)}")
+        if cache.get('available') and cache.get('sentiment_score', 50) != 50:
+            news_sentiment['score'] = cache['sentiment_score']
+            print(f"[情绪分] 缓存更新: {cache['sentiment_score']}", file=sys.stderr)
     except Exception as e:
-        print(f"[警告] 获取热点缓存失败: {e}")
+        print(f"[警告] 情绪分缓存读取失败: {e}", file=sys.stderr)
 
     # 获取市场状态
     market = get_market_status()
