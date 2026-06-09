@@ -44,9 +44,12 @@ import json
 import re
 import time
 import logging
+import traceback
+import random
 import urllib.request
 import urllib.error
 import ssl
+import http.client
 from typing import Optional, Literal
 from datetime import datetime
 
@@ -131,6 +134,7 @@ def _fetch_raw(sector_type: str = "concept", sort_field: str = "f62",
                 "Chrome/149.0.0.0 Safari/537.36"
             ),
             "Referer": "https://data.eastmoney.com/bkzj/hy.html",
+            "Connection": "close",  # 禁止 keep-alive，避免云服务器代理断开连接
         }
     )
 
@@ -138,10 +142,19 @@ def _fetch_raw(sector_type: str = "concept", sort_field: str = "f62",
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.URLError as e:
-        logger.warning(f"[em_sector_flow] 请求失败: {e}")
+        reason = e.reason
+        if isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError)):
+            logger.warning(f"[em_sector_flow] 连接被远端关闭: {reason}")
+        elif isinstance(reason, TimeoutError):
+            logger.warning(f"[em_sector_flow] 请求超时: {reason}")
+        else:
+            logger.warning(f"[em_sector_flow] 请求失败 (URLError): {e}")
+        return []
+    except (http.client.RemoteDisconnected, ConnectionResetError) as e:
+        logger.warning(f"[em_sector_flow] 连接被远端关闭 (底层异常): {e}")
         return []
     except Exception as e:
-        logger.warning(f"[em_sector_flow] 异常: {e}")
+        logger.warning(f"[em_sector_flow] 异常: {e}\n{traceback.format_exc()}")
         return []
 
     # 解析 JSONP 或 JSON
@@ -513,14 +526,28 @@ def _fetch_market_raw(secids: str, timeout: int = 10) -> list[dict]:
                 "Chrome/149.0.0.0 Safari/537.36"
             ),
             "Referer": "https://data.eastmoney.com/zjlx/dpzjlx.html",
+            "Connection": "close",  # 禁止 keep-alive，避免云服务器代理断开连接
         }
     )
 
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as e:
+        # 区分超时 vs 连接重置
+        reason = e.reason
+        if isinstance(reason, (http.client.RemoteDisconnected, ConnectionResetError)):
+            logger.warning(f"[em_market_flow] 连接被远端关闭: {reason}")
+        elif isinstance(reason, TimeoutError):
+            logger.warning(f"[em_market_flow] 请求超时: {reason}")
+        else:
+            logger.warning(f"[em_market_flow] 请求失败 (URLError): {e}")
+        return []
+    except (http.client.RemoteDisconnected, ConnectionResetError) as e:
+        logger.warning(f"[em_market_flow] 连接被远端关闭 (底层异常): {e}")
+        return []
     except Exception as e:
-        logger.warning(f"[em_market_flow] 请求失败: {e}")
+        logger.warning(f"[em_market_flow] 请求失败 (未知异常): {e}\n{traceback.format_exc()}")
         return []
 
     data = _parse_response(raw)
@@ -608,6 +635,8 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
         或 None（接口不可用时）
     """
     # 同时请求沪深两市，带重试
+    # 云服务器环境下东财 API 可能因代理/anti-bot 导致连接重置，
+    # 使用较长的退避时间 + 随机抖动，减少被拦截概率
     secids = ",".join([MARKET_SECIDS["sh"], MARKET_SECIDS["sz"]])
     items = None
     for attempt in range(3):
@@ -615,8 +644,9 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
         if items and len(items) >= 2:
             break
         if attempt < 2:
-            time.sleep(1 * (attempt + 1))  # 1s, 2s 退避
-            logger.info(f"[em_market_flow] 重试 {attempt + 2}/3...")
+            sleep_time = (2 if attempt == 0 else 5) + random.uniform(0, 2)  # 2-4s / 5-7s 退避 + 抖动
+            logger.info(f"[em_market_flow] 等待 {sleep_time:.1f}s 后重试 {attempt + 2}/3...")
+            time.sleep(sleep_time)
 
     if not items or len(items) < 2:
         logger.warning("[em_market_flow] 大盘资金流不可用（网络或接口异常），将降级到 Tushare")
