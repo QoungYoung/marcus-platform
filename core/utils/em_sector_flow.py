@@ -343,6 +343,17 @@ def get_sector_flow(
             page=page,
             page_size=min(top_n * 2, 200),
         )
+        if not items and page == 1:
+            # 首页失败 → 重试一次
+            time.sleep(1)
+            logger.info(f"[em_sector_flow] 首页失败，重试...")
+            items = _fetch_raw(
+                sector_type=sector_type,
+                sort_field=sort_field,
+                sort_order=1,
+                page=page,
+                page_size=min(top_n * 2, 200),
+            )
         if not items:
             break
         all_items.extend(items)
@@ -583,6 +594,7 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
     获取沪深两市实时大盘资金流向（东财 push2 ulist.np）。
 
     返回沪深各自明细 + 两市合计，数据实时更新。
+    云服务器网络不稳定时会重试 2 次。
 
     Returns:
         {
@@ -595,12 +607,19 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
         }
         或 None（接口不可用时）
     """
-    # 同时请求沪深两市
+    # 同时请求沪深两市，带重试
     secids = ",".join([MARKET_SECIDS["sh"], MARKET_SECIDS["sz"]])
-    items = _fetch_market_raw(secids)
+    items = None
+    for attempt in range(3):
+        items = _fetch_market_raw(secids, timeout=8)
+        if items and len(items) >= 2:
+            break
+        if attempt < 2:
+            time.sleep(1 * (attempt + 1))  # 1s, 2s 退避
+            logger.info(f"[em_market_flow] 重试 {attempt + 2}/3...")
 
     if not items or len(items) < 2:
-        logger.warning("[em_market_flow] 获取大盘资金流失败")
+        logger.warning("[em_market_flow] 大盘资金流不可用（网络或接口异常），将降级到 Tushare")
         return None
 
     # 标准化
