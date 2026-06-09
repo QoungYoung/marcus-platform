@@ -45,6 +45,7 @@ import re
 import time
 import logging
 import random
+import subprocess
 from typing import Optional, Literal
 from datetime import datetime
 
@@ -73,7 +74,7 @@ except ImportError:
     _HAS_REQUESTS = False
     logger.info("[em_sector_flow] requests 不可用，使用 urllib")
 
-# ── 精简请求头（与 curl 保持一致即可，过多头反而可能触发 WAF） ──
+# ── 精简请求头（去除 Connection: close，与 curl 行为一致） ──
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -82,46 +83,66 @@ _BROWSER_HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9",
-    "Connection": "close",
 }
 
 
 # ═══════════════════════════════════════════════════════
-# HTTP 统一请求
+# HTTP 统一请求（三重降级：requests → urllib → curl）
 # ═══════════════════════════════════════════════════════
 
 def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
-    """统一的 HTTP GET 请求。使用系统默认 SSL 行为，与 curl 一致。"""
+    """HTTP GET，依次尝试 requests / urllib / curl。"""
     headers = dict(_BROWSER_HEADERS)
     if referer:
         headers["Referer"] = referer
 
+    # ── 第一重：requests（urllib3）──
     if _HAS_REQUESTS:
         try:
             resp = requests.get(url, timeout=timeout, headers=headers)
             resp.raise_for_status()
             return resp.text
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(f"[em] 连接错误: {e}")
-            return None
-        except requests.exceptions.Timeout:
-            logger.warning(f"[em] 请求超时")
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"[em] 请求失败: {e}")
-            return None
-    else:
-        # 降级：urllib（系统默认 SSL，不做自定义）
+        except requests.exceptions.RequestException:
+            pass  # 静默失败，不打印日志，继续下一个
+
+    # ── 第二重：urllib（stdlib）──
+    try:
+        import urllib.request
         req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-        except urllib.error.URLError as e:
-            logger.warning(f"[em] 请求失败 (urllib): {e}")
-            return None
-        except Exception as e:
-            logger.warning(f"[em] 请求失败 (urllib): {e}")
-            return None
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        pass
+
+    # ── 第三重：curl（系统 OpenSSL，与手动 curl 测试一致）──
+    try:
+        timeout_int = int(timeout)
+        cmd = [
+            "curl", "-s", "--max-time", str(timeout_int),
+            "-H", f"User-Agent: {headers['User-Agent']}",
+        ]
+        if referer:
+            cmd.extend(["-H", f"Referer: {referer}"])
+        cmd.append(url)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=timeout_int + 2,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            logger.debug(f"[em] ✅ curl 成功获取数据 ({len(result.stdout)} bytes)")
+            return result.stdout
+        elif result.returncode != 0:
+            logger.warning(f"[em] curl 返回非零退出码 {result.returncode}: {result.stderr[:200]}")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"[em] curl 超时 (>{timeout_int}s)")
+    except FileNotFoundError:
+        logger.error("[em] curl 未安装，所有 HTTP 通道均失败")
+    except Exception as e:
+        logger.warning(f"[em] curl 异常: {e}")
+
+    # 全部失败
+    logger.warning(f"[em] 所有 HTTP 通道均失败: requests/urllib/curl 都无法获取数据")
+    return None
 
 # ═══════════════════════════════════════════════════════
 # 常量
