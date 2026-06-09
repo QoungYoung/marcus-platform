@@ -454,6 +454,152 @@ const getTechnicalTool = {
   },
 };
 
+const getMarketMoneyflowTool = {
+  name: 'get_market_moneyflow',
+  label: '大盘资金流向',
+  description: '获取大盘资金流向（主力/超大单/大单/中单/小单净流入）。返回上证深证收盘涨跌+五类资金净流入，用于判断大盘整体资金情绪和主力动向',
+  parameters: Type.Object({}),
+  async execute(_toolCallId: string, _params: unknown, _signal: AbortSignal | undefined) {
+    const res = await fetch(`${MARCUS_API}/market/moneyflow-mkt`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const m = data.data;
+    if (!m) return { content: [{ type: 'text', text: '暂无大盘资金流向数据' }], details: data };
+    const signSh = m.pct_change_sh >= 0 ? '+' : '';
+    const signSz = m.pct_change_sz >= 0 ? '+' : '';
+    const lines = [`大盘资金流向 ${m.trade_date} (日频)`];
+    if (m.close_sh || m.close_sz) {
+      lines.push(`上证: ${m.close_sh} (${signSh}${m.pct_change_sh}%)`);
+      lines.push(`深证: ${m.close_sz} (${signSz}${m.pct_change_sz}%)`);
+    }
+    lines.push(
+      `主力净流入: ${m.net_amount_fmt}${m.net_amount_rate ? ` (${m.net_amount_rate}%)` : ''}`,
+      `超大单: ${(m.buy_elg_amount / 10000).toFixed(2)}亿 (${m.buy_elg_amount_rate}%)`,
+      `大单: ${(m.buy_lg_amount / 10000).toFixed(2)}亿 (${m.buy_lg_amount_rate}%)`,
+      `中单: ${(m.buy_md_amount / 10000).toFixed(2)}亿 (${m.buy_md_amount_rate}%)`,
+      `小单: ${(m.buy_sm_amount / 10000).toFixed(2)}亿 (${m.buy_sm_amount_rate}%)`,
+      `性质: ${m.flow_nature}`,
+    );
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+const getLatestScanReportTool = {
+  name: 'get_latest_scan_report',
+  label: '最新扫描报告',
+  description: '获取最新的盘中扫描报告，包含市场立场、热门概念、观察列表、完整分析。用于复盘时了解当前市场状态和交易背景',
+  parameters: Type.Object({
+    date: Type.Optional(Type.String({ description: '日期 YYYY-MM-DD，默认今天' })),
+  }),
+  async execute(_toolCallId: string, params: { date?: string }, _signal: AbortSignal | undefined) {
+    const query = params.date ? `?date=${params.date}` : '';
+    let data: any;
+    try {
+      const res = await fetch(`${MARCUS_API}/scan/latest${query}`);
+      if (!res.ok) throw new Error(`API error ${res.status}`);
+      data = await res.json();
+    } catch (e: any) {
+      const reason = e?.message?.includes('404') ? '今日暂无扫描报告' : `API 错误: ${e.message}`;
+      return { content: [{ type: 'text', text: `📊 盘中扫描报告: ${reason}` }], details: { error: reason } };
+    }
+    if (data.error) throw new Error(data.error);
+    const lines = [
+      `📊 盘中扫描报告 (${data.timestamp || '--'})`,
+      `市场立场: ${data.market_stance} (仓位上限: ${data.position_limit}%)`,
+      '',
+    ];
+    if (data.hot_concepts?.length > 0) {
+      lines.push('🔥 热门概念:');
+      for (const c of data.hot_concepts.slice(0, 8)) {
+        const name = typeof c === 'string' ? c : (c.name || c.concept || JSON.stringify(c));
+        lines.push(`  - ${name}`);
+      }
+      lines.push('');
+    }
+    if (data.report) {
+      lines.push('📝 系统扫描报告:');
+      lines.push(data.report.slice(0, 3000));
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+const getPiAnalysisHistoryTool = {
+  name: 'get_pi_analysis_history',
+  label: 'Pi分析历史',
+  description: '按日期范围查询整周 Pi 分析历史记录。返回每天每轮扫描的 Pi 策略分析，包含 stance（立场）、position_limit（仓位上限）、reason（判断理由）和完整 report。用于周度反思时回顾整周策略演变',
+  parameters: Type.Object({
+    start_date: Type.Optional(Type.String({ description: '开始日期 YYYY-MM-DD，默认本周一' })),
+    end_date: Type.Optional(Type.String({ description: '结束日期 YYYY-MM-DD，默认今天' })),
+  }),
+  async execute(_toolCallId: string, params: { start_date?: string; end_date?: string }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    if (params.start_date) query.set('start_date', params.start_date);
+    if (params.end_date) query.set('end_date', params.end_date);
+    const qs = query.toString();
+    const res = await fetch(`${MARCUS_API}/scan/pi-analysis${qs ? '?' + qs : ''}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const records = data.records || [];
+    if (records.length === 0) {
+      return { content: [{ type: 'text', text: `📋 日期范围 ${data.date_range?.start || '--'} 至 ${data.date_range?.end || '--'} 内暂无 Pi 分析记录` }], details: data };
+    }
+    const lines = [`📊 Pi 分析历史 (${data.date_range?.start || '--'} → ${data.date_range?.end || '--'})`, `共 ${data.days_count} 天，${data.total_records} 条记录`, ''];
+    let currentDate = '';
+    for (const r of records) {
+      if (r.date !== currentDate) {
+        currentDate = r.date;
+        lines.push(`--- ${currentDate} ---`);
+      }
+      const time = r.timestamp ? r.timestamp.slice(11, 19) : '--';
+      lines.push(`  [${time}] ${r.task_name || '--'} | 立场: ${r.stance || '--'} | 仓位上限: ${r.position_limit || '--'}%`);
+      if (r.reason) lines.push(`     理由: ${r.reason}`);
+      if (r.report) {
+        const brief = r.report.length > 300 ? r.report.slice(0, 300) + '...' : r.report;
+        lines.push(`     报告: ${brief.replace(/\n/g, ' ')}`);
+      }
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+const getTradeHistoryTool = {
+  name: 'get_trade_history',
+  label: '交易报告历史',
+  description: '按日期范围查询整周 Pi 交易执行报告。返回每天每次交易窗口的完整报告，包含买卖决策、仓位变化、产业链组合逻辑、风险监控等。用于复盘时评估策略执行质量',
+  parameters: Type.Object({
+    start_date: Type.Optional(Type.String({ description: '开始日期 YYYY-MM-DD，默认本周一' })),
+    end_date: Type.Optional(Type.String({ description: '结束日期 YYYY-MM-DD，默认今天' })),
+  }),
+  async execute(_toolCallId: string, params: { start_date?: string; end_date?: string }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    if (params.start_date) query.set('start_date', params.start_date);
+    if (params.end_date) query.set('end_date', params.end_date);
+    const qs = query.toString();
+    const res = await fetch(`${MARCUS_API}/scan/trade-reports${qs ? '?' + qs : ''}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const records = data.records || [];
+    if (records.length === 0) {
+      return { content: [{ type: 'text', text: `📋 日期范围 ${data.date_range?.start || '--'} 至 ${data.date_range?.end || '--'} 内暂无交易执行报告` }], details: data };
+    }
+    const lines = [`📊 交易执行报告 (${data.date_range?.start || '--'} → ${data.date_range?.end || '--'})`, `共 ${data.days_count} 天，${data.total_records} 条记录`, ''];
+    let currentDate = '';
+    for (const r of records) {
+      if (r.date !== currentDate) { currentDate = r.date; lines.push(`--- ${currentDate} ---`); }
+      const time = r.timestamp ? r.timestamp.slice(11, 19) : '--';
+      const taskLabel = (r.task_id || '').includes('morning') ? '早盘' : (r.task_id || '').includes('late') ? '午前' : (r.task_id || '').includes('afternoon') ? '午后' : (r.task_id || '').includes('closing') ? '尾盘' : (r.task_id || '');
+      lines.push(`  [${time}] ${taskLabel} | 立场: ${r.stance || '--'} | 仓位上限: ${r.position_limit || '--'}%`);
+      if (r.reason) lines.push(`     理由: ${r.reason}`);
+      if (r.report) { const brief = r.report.length > 400 ? r.report.slice(0, 400) + '...' : r.report; lines.push(`     报告: ${brief.replace(/\n/g, ' ')}`); }
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 // Convert tools to AgentTool format
 function createTool(toolDef: any): AgentTool {
   return {
@@ -464,21 +610,6 @@ function createTool(toolDef: any): AgentTool {
     execute: toolDef.execute,
   } as AgentTool;
 }
-
-const tradingTools: AgentTool[] = [
-  createTool(getMarketIndicesTool),
-  createTool(getQuoteTool),
-  createTool(getPortfolioTool),
-  createTool(getConceptFundFlowTool),
-  createTool(getConceptMappingTool),
-  createTool(getEtfQuoteTool),
-  createTool(getEtfKlineTool),
-  createTool(getDailyKlineTool),
-  createTool(getMoneyflowTool),
-  createTool(getTechnicalTool),
-  createTool(readDbTableTool),
-  createTool(getDbSchemaTool),
-];
 
 // Helper: 给原始文本保持 $SYMBOL(NAME) 格式，不做 HTML 注入
 // 后渲染阶段通过 DOM 扫描来处理（因为 markdown-block 会转义 HTML）
@@ -580,10 +711,42 @@ registerMessageRenderer('user', {
 // assistant 消息使用 Pi 内置的 <assistant-message> 组件渲染（原生支持 text/thinking/toolCall）
 // 不再注册自定义 assistant renderer，工具调用的 Input/Output 由内置 <tool-message> 组件自动展示
 
+// ===== 工具分组 =====
+// 聊天模式工具（只读）
+const chatTools: AgentTool[] = [
+  createTool(getMarketIndicesTool),
+  createTool(getQuoteTool),
+  createTool(getPortfolioTool),
+  createTool(getConceptFundFlowTool),
+  createTool(getMarketMoneyflowTool),
+  createTool(getConceptMappingTool),
+  createTool(getEtfQuoteTool),
+  createTool(getEtfKlineTool),
+  createTool(getDailyKlineTool),
+  createTool(getMoneyflowTool),
+  createTool(getTechnicalTool),
+  createTool(readDbTableTool),
+  createTool(getDbSchemaTool),
+];
+
+// 复盘模式工具（聊天工具 + 扫描报告 + Pi 历史 + 交易历史）
+const reflectTools: AgentTool[] = [
+  ...chatTools,
+  createTool(getLatestScanReportTool),
+  createTool(getPiAnalysisHistoryTool),
+  createTool(getTradeHistoryTool),
+];
+
+// 默认工具集（向后兼容）
+const tradingTools = chatTools;
+
 // ===== 可折叠工具调用渲染器 =====
 const COLLAPSIBLE_TOOLS = [
   'get_market_indices', 'get_quote', 'get_portfolio',
-  'get_concept_fund_flow', 'get_concept_mapping', 'get_etf_quote', 'get_daily_kline', 'get_moneyflow', 'get_technical', 'read_db_table', 'get_db_schema',
+  'get_concept_fund_flow', 'get_market_moneyflow', 'get_concept_mapping',
+  'get_etf_quote', 'get_etf_kline', 'get_daily_kline', 'get_moneyflow',
+  'get_technical', 'read_db_table', 'get_db_schema',
+  'get_latest_scan_report', 'get_pi_analysis_history', 'get_trade_history',
 ];
 
 // 中文工具名映射
@@ -592,13 +755,18 @@ const TOOL_LABELS: Record<string, string> = {
   get_quote: '查询个股行情',
   get_portfolio: '查看账户持仓',
   get_concept_fund_flow: '概念资金流向',
+  get_market_moneyflow: '大盘资金流向',
   get_concept_mapping: '查询概念成分股',
   get_etf_quote: '查询ETF行情',
+  get_etf_kline: 'ETF K线',
   get_daily_kline: '查询历史K线',
   get_moneyflow: '查询个股资金流向',
   get_technical: '查询技术指标',
   read_db_table: '读取数据库表',
   get_db_schema: '获取数据库结构',
+  get_latest_scan_report: '最新扫描报告',
+  get_pi_analysis_history: 'Pi分析历史',
+  get_trade_history: '交易报告历史',
 };
 
 const makeCollapsibleRenderer = (toolName: string) => ({
@@ -805,7 +973,9 @@ interface TradeStatus {
   reason: string;
 }
 
-const buildSystemPrompt = (tradeStatus?: TradeStatus | null): string => {
+type ChatMode = 'chat' | 'reflect';
+
+const getFormattedTime = (tradeStatus?: TradeStatus | null): { timeStr: string; marketStatus: string } => {
   let timeStr: string;
   let marketStatus: string;
 
@@ -818,70 +988,51 @@ const buildSystemPrompt = (tradeStatus?: TradeStatus | null): string => {
     const now = new Date();
     timeStr = now.toLocaleString('zh-CN', {
       timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      weekday: 'long',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'long',
     });
-
     const day = now.getDay();
-    const hour = now.getHours();
-    const minute = now.getMinutes();
-    const timeInMinutes = hour * 60 + minute;
-
-    if (day === 0 || day === 6) {
-      marketStatus = '🔴 今日休市（周末）';
-    } else if (timeInMinutes < 9 * 60 + 15) {
-      marketStatus = '⏳ 尚未开盘，等待集合竞价（9:15 开始）';
-    } else if (timeInMinutes < 9 * 60 + 25) {
-      marketStatus = '🟡 集合竞价中（9:15-9:25）';
-    } else if (timeInMinutes < 9 * 60 + 30) {
-      marketStatus = '🟡 集合竞价结束，等待连续竞价（9:30 开盘）';
-    } else if (timeInMinutes < 11 * 60 + 30) {
-      marketStatus = '🟢 早盘交易中（9:30-11:30）';
-    } else if (timeInMinutes < 13 * 60) {
-      marketStatus = '🔴 午间休市（11:30-13:00）';
-    } else if (timeInMinutes < 15 * 60) {
-      marketStatus = '🟢 午盘交易中（13:00-15:00）';
-    } else {
-      marketStatus = '🔴 今日已收盘';
-    }
+    const timeInMinutes = now.getHours() * 60 + now.getMinutes();
+    if (day === 0 || day === 6) marketStatus = '🔴 今日休市（周末）';
+    else if (timeInMinutes < 9 * 60 + 15) marketStatus = '⏳ 尚未开盘，等待集合竞价（9:15 开始）';
+    else if (timeInMinutes < 9 * 60 + 25) marketStatus = '🟡 集合竞价中（9:15-9:25）';
+    else if (timeInMinutes < 9 * 60 + 30) marketStatus = '🟡 集合竞价结束，等待连续竞价（9:30 开盘）';
+    else if (timeInMinutes < 11 * 60 + 30) marketStatus = '🟢 早盘交易中（9:30-11:30）';
+    else if (timeInMinutes < 13 * 60) marketStatus = '🔴 午间休市（11:30-13:00）';
+    else if (timeInMinutes < 15 * 60) marketStatus = '🟢 午盘交易中（13:00-15:00）';
+    else marketStatus = '🔴 今日已收盘';
   }
+  return { timeStr, marketStatus };
+};
 
-  return `## 你是 Marcus — 短线右侧交易专家
-
-### ⏰ 当前时间
-${timeStr}
-
-### 📊 市场状态
-${marketStatus}
+const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 
 ### 交易理念
-
 **右侧交易，顺势而为**：
 - 不抄底，不摸顶，只做趋势确认后的行情
 - 等待价格突破关键阻力/支撑位后确认趋势方向
 - 在趋势形成初期入场，在趋势衰竭时离场
 
 ### 交易风格
-
 - **短线为主**：持仓周期 1-5 天，追求快速复利
 - **严格止损**：单笔亏损不超过总资金的 2%
 - **趋势跟踪**：用技术面信号（均线、MACD、成交量）确认方向
 - **仓位管理**：趋势明确时重仓，趋势不明时轻仓或空仓
 
 ### 分析框架
-
 1. **趋势确认**：价格站稳 5 日线上方看多，跌破 5 日线看空
 2. **关键位置**：关注前高/前低、平台突破、均线交叉
 3. **量价配合**：放量突破是真突破，缩量上涨需警惕
 4. **市场情绪**：结合板块轮动和资金流向判断热点
+5. **右侧纪律**：不抄底不摸顶，等确认信号
+6. **产业链思维** — 选中一条主线后，沿产业链上下游布局
+   - 概念板块排行 → 发现主线方向
+   - 行业分类（industry）→ 区分上中下游层级
+   - 概念标签差异化 → 识别各环节核心标的
+   - 资金流向验证 → 剔除伪概念股
+   - 组合分配 → 上游重仓/中游适中/下游轻仓
 
 ### 风险控制（最高优先级）
-
 - **永远不要逆势加仓** — 亏损时第一时间止损
 - **单只股票仓位 ≤ 15%** — 分散风险
 - **单日总仓位 ≤ 60%** — 保留现金应对极端行情
@@ -889,32 +1040,141 @@ ${marketStatus}
 - **盈利出金** — 赚了钱要落袋为安
 
 ### 操作纪律
-
 1. 入场前写好止损点位，不随意改动
 2. 到达止损坚决执行，不幻想反弹
 3. 盈利时分批止盈，锁住利润
 4. 连续亏损 3 笔后强制休息 30 分钟
 
 ### 沟通风格
-
 - **冷静理性**：不以物喜，不以己悲
 - **数据说话**：用客观信号决策，不凭感觉
 - **简洁直接**：给出明确的买入/卖出/观望建议
 - **风险提示**：每次操作前说明风险和止损位置
 
 ### 可用工具
-
 - get_market_indices: 获取A股、美股、港股指数行情
 - get_quote: 查询个股实时行情
 - get_portfolio: 查看账户持仓和资金
-- get_concept_fund_flow: 获取概念板块行情排行（涨幅排序，含涨跌幅/成交额/换手率，反映当日量价最强的概念方向）
+- get_market_moneyflow: 获取大盘资金流向（主力/超大单/大单/中单/小单净流入）
+- get_concept_fund_flow: 获取概念板块行情排行（涨幅排序，含涨跌幅/成交额/换手率）
 - get_concept_mapping: 查询概念板块及成分股（不传参列所有概念，传concept_name查该概念下的股票）
 - get_etf_quote: 查询ETF基金行情
-- get_etf_kline: 获取ETF历史K线数据（开高低收/量/额），用于分析ETF走势和趋势判断
-- get_daily_kline: 获取A股历史日K线数据（开高低收/量/额），用于趋势分析、找支撑阻力位、判断突破
-- get_moneyflow: 获取A股资金流向数据（大单/小单/特大单净流入），用于判断主力资金动向、确认趋势信号
-- get_technical: 获取MACD、KDJ、RSI、布林带等技术指标，用于判断超买超卖、金叉死叉、背离、趋势信号
-- read_db_table: 查询数据库表数据（stock_pool.db 表名=stock_pool，含 symbol/name/industry/market_cap）`;
+- get_etf_kline: 获取ETF历史K线数据（开高低收/量/额）
+- get_daily_kline: 获取A股历史日K线数据（开高低收/量/额）
+- get_moneyflow: 获取A股资金流向数据（大单/小单/特大单净流入）
+- get_technical: 获取MACD、KDJ、RSI、布林带等60+技术指标
+- read_db_table: 查询数据库表数据
+- get_db_schema: 获取数据库表结构
+
+### 产业链选股逻辑（与交易模式一致）
+
+当用户要求选股或分析板块时，按以下流程操作：
+
+1. **锁定主线** — 用 get_concept_fund_flow 找出强势板块（大盘跌时还涨、连续资金流入的）
+2. **概念拆解** — 调用 get_concept_mapping(概念名) 获取全部成分股
+3. **行业分层** — 用 read_db_table(stock_pool, where="industry=...") 按行业区分产业链层级：
+   同行业归为同一层级（如"机械基件"→上游，"电气设备"→中游，"汽车配件"→下游）
+4. **纯度验证** — 剔除伪概念股（涨幅远低于板块均值、资金持续流出、主营不匹配的）
+5. **龙头确认** — 涨幅+资金+行业地位三因子排序，确定各环节龙头
+6. **组合建议** — 各环节选1只最优，形成3-4只产业链组合，上游重仓(10-15%)/中游适中(5-10%)/下游轻仓(3-5%)
+
+### 概念映射查询
+
+查询股票所属概念板块时，使用 stock_pool.db 的 stock_concept_map 表：
+- 查某股票的概念：read_db_table(db="stock_pool.db", table="stock_concept_map", where="ts_code LIKE '000001%'")
+- 查某概念包含的股票：read_db_table(db="stock_pool.db", table="stock_concept_map", where="concept_name = '半导体概念'", limit=50)
+- ts_code 格式为 "代码.交易所"（如 000001.SZ），symbol 为纯数字代码（如 000001）`;
+
+// ===== 复盘模式 System Prompt（周度反思 / 策略复盘）=====
+const REFLECT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家（复盘模式）
+
+### 你的职责
+你在复盘模式下进行深度分析。你的任务是回顾交易历史，评估策略执行质量，识别模式与偏差，并提供可执行的改进建议。
+
+你不是在交易——你是一位冷静的复盘分析师。
+
+### 核心工具
+| 工具 | 用途 | 使用时机 |
+|------|------|----------|
+| **get_pi_analysis_history** | 获取整周 Pi 分析历史 | 第一步必调，获取全部记录 |
+| **get_trade_history** | 获取整周交易执行报告 | 第一步必调，对比分析 vs 执行 |
+| **get_latest_scan_report** | 获取最新扫描报告 | 了解当前市场状态 |
+| **get_market_indices** | 大盘指数 | 判断大盘走势 |
+| **get_portfolio** | 账户持仓与资金 | 评估仓位状态 |
+| **get_concept_fund_flow** | 概念板块行情 | 概念轮动分析 |
+| **read_db_table / get_db_schema** | 数据库查询 | 查询交易记录等历史数据 |
+
+### 复盘 SOP
+**第一步：数据收集**
+1. 调用 get_pi_analysis_history(start_date, end_date) 获取整周 Pi 分析记录
+2. 调用 get_trade_history(start_date, end_date) 获取整周交易执行报告
+3. 调用 get_latest_scan_report() 了解最新市场状态
+4. 调用 get_portfolio() 查看账户状态
+5. 调用 get_market_indices() 看大盘走势
+
+**第二步：逐日分析**
+对每一天的 Pi 分析记录，提取：
+- 盘中立场（stance）的变化趋势
+- 仓位上限（position_limit）的调整节奏
+- 判断理由（reason）的一致性
+- Pi 的预测是否被后续走势验证
+- **交易执行对比**：Pi 分析建议 vs 实际交易动作，偏差多大？
+
+**第三步：关键决策回顾**
+- 立场切换点：从 green 变 yellow 或 red 的时刻——是什么触发的？
+- 连续模式：是否有连续的误判或连续的正确判断？
+- **交易执行对比**：对比交易报告中的动机与实际结果——
+  产业链组合逻辑是否得到贯彻？绿盘下是否缩手？红盘是否触发板块背离例外？
+
+**第四步：策略评估**
+- 整体立场准确率
+- 仓位管理质量
+- 风险意识评估
+- 板块轮动判断准确性
+
+**第五步：改进建议**
+- 针对暴露的问题，提出 2-3 条具体可执行的改进措施
+- 设定明确的关注重点和风险底线
+
+### 输出格式
+\`\`\`
+## Marcus 复盘报告 — {日期范围}
+
+### 一、市场概况
+- 大盘走势：{数据}
+- 市场情绪：{判断}
+- 概念轮动：{路径}
+
+### 二、Pi 立场演变
+| 日期 | 轮次 | 任务 | 立场 | 仓位上限 | 判断理由 |
+|------|------|------|------|----------|----------|
+
+### 三、立场趋势分析
+- 立场变化路径
+- 关键切换点
+- 趋势一致性评估
+
+### 四、仓位管理评估
+### 五、错误与偏差
+### 六、本周核心洞察
+### 七、改进计划
+\`\`\`
+
+### 分析原则
+- **数据驱动**：每个结论都必须有具体数据支撑
+- **面向改进**：反思的目的不是自责，是找到可执行的改进空间
+- **诚实客观**：承认错误，不粉饰，不过度自信`;
+
+const buildSystemPrompt = (tradeStatus?: TradeStatus | null, mode?: ChatMode): string => {
+  const { timeStr, marketStatus } = getFormattedTime(tradeStatus);
+
+  const header = `### ⏰ 当前时间\n${timeStr}\n\n### 📊 市场状态\n${marketStatus}\n\n`;
+  const tail = `${mode === 'reflect' ? `\n\n最后一行请输出：SIGNAL: <green|yellow|red> POSITION:<0-100> REASON:<一句话总结>` : ''}`;
+
+  if (mode === 'reflect') {
+    return REFLECT_SYSTEM_PROMPT + '\n\n' + header + tail;
+  }
+  return CHAT_SYSTEM_PROMPT + '\n\n' + header;
 };
 
 export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stock: { symbol: string; name: string }) => void }) {
@@ -925,6 +1185,21 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   const agentRef = useRef<Agent | null>(null);
   const apiKeyRef = useRef<string>('');
   const tradeStatusRef = useRef<TradeStatus | null>(null);
+  const [mode, setMode] = useState<ChatMode>((localStorage.getItem('marcus_chat_mode') || 'chat') as ChatMode);
+  const modeRef = useRef<ChatMode>(mode);
+
+  // Keep modeRef in sync
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+
+  // ===== 模式切换：更新 Agent 的 systemPrompt + tools =====
+  useEffect(() => {
+    if (!agentRef.current) return;
+    const agent = agentRef.current;
+    agent.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current, mode);
+    agent.state.tools = mode === 'reflect' ? reflectTools : chatTools;
+    localStorage.setItem('marcus_chat_mode', mode);
+    console.log(`[模式] 切换为: ${mode === 'reflect' ? '📊 复盘模式' : '💬 聊天模式'}`);
+  }, [mode]);
 
   // ===== Session Management State =====
   const [sessionsList, setSessionsList] = useState<SessionMeta[]>([]);
@@ -1089,7 +1364,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         for (const s of data.sessions) {
           if (!s.id || !s.messages) continue;
           const stateForSave = {
-            systemPrompt: buildSystemPrompt(tradeStatusRef.current),
+            systemPrompt: buildSystemPrompt(tradeStatusRef.current, modeRef.current),
             model: agentRef.current?.state.model,
             thinkingLevel: 'off',
             messages: s.messages,
@@ -1292,11 +1567,11 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
       const agent = new Agent({
         initialState: {
-          systemPrompt: buildSystemPrompt(tradeStatusRef.current),
+          systemPrompt: buildSystemPrompt(tradeStatusRef.current, mode),
           model: model,
           thinkingLevel: 'off',
           messages: loadedMessages,
-          tools: tradingTools,
+          tools: mode === 'reflect' ? reflectTools : chatTools,
           isStreaming: false,
           pendingToolCalls: new Set(),
         } as unknown as AgentState,
@@ -1310,7 +1585,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         // 🔄 每次对话轮次前更新系统提示词中的时间和开市状态
         const msgs = agent.state.messages;
         if (msgs.length > 0 && msgs[msgs.length - 1]?.role === 'user') {
-          agent.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current);
+          agent.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current, modeRef.current);
         }
 
         if (ev.type === 'message_end') {
@@ -1374,7 +1649,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         onApiKeyRequired: (provider) => ApiKeyPromptDialog.prompt(provider),
       });
 
-      agent.state.tools = tradingTools;
+      agent.state.tools = mode === 'reflect' ? reflectTools : chatTools;
 
       // 删除消息事件监听
       const handleDeleteMessage = (e: Event) => {
@@ -1729,8 +2004,30 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             </div>
           )}
           </div>
-          {/* Session tools */}
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0, marginLeft: '12px' }}>
+          {/* Mode Toggle + Session tools */}
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, marginLeft: '12px' }}>
+            {/* 模式切换按钮 */}
+            <button
+              onClick={() => setMode(prev => prev === 'chat' ? 'reflect' : 'chat')}
+              title={mode === 'reflect' ? '切换为聊天模式' : '切换为复盘模式'}
+              style={{
+                ...toolBtnStyle,
+                display: 'flex', alignItems: 'center', gap: '5px',
+                fontSize: '11px', fontWeight: 600,
+                padding: '3px 10px', borderRadius: '16px',
+                color: mode === 'reflect' ? 'var(--agent-code-keyword)' : 'var(--agent-gold)',
+                background: mode === 'reflect' ? 'rgba(155,89,255,0.12)' : 'var(--agent-gold-muted)',
+                border: mode === 'reflect' ? '1px solid rgba(155,89,255,0.25)' : '1px solid rgba(240,185,11,0.3)',
+                transition: 'all 0.25s',
+              }}
+            >
+              {mode === 'reflect' ? (
+                <><i className="fas fa-search" style={{ fontSize: '10px' }}></i> 复盘</>
+              ) : (
+                <><i className="fas fa-comments" style={{ fontSize: '10px' }}></i> 聊天</>
+              )}
+            </button>
+            {/* 新建会话 */}
             <button
               onClick={() => {
                 // 保存当前会话元数据后再新建
