@@ -445,7 +445,7 @@ export default function PortfolioPage() {
             ) : (
               <div className="cp-trade-list">
                 {recentTrades.map((tr, i) => {
-                  const isBuy = (tr.direction || '').toLowerCase().includes('buy');
+                  const isBuy = (tr.direction || '').includes('买') || (tr.direction || '').toLowerCase().includes('buy');
                   const displayName = tr.name || tr.symbol;
                   return (
                     <div key={tr.order_id || i} className="cp-trade-item">
