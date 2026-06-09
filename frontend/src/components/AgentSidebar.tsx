@@ -30,11 +30,20 @@ interface MarketFlowData {
 
 interface HotSector {
   name: string;
-  ts_code: string;
+  code?: string;
+  ts_code?: string;
   pct_change: number;           // 涨跌幅(%)
   vol: number;                  // 成交量(股)
   amount: number;               // 成交额(元)
   turnover_rate: number;        // 换手率(%)
+  main_net?: number;            // 主力净流入(万元)
+  main_net_fmt?: string;        // 格式化
+  main_net_rate?: number;       // 主力占比(%)
+  flow_nature?: string;         // 资金性质
+  advancing?: number;           // 上涨家数
+  declining?: number;           // 下跌家数
+  lead_stock_name?: string;     // 领涨股名
+  lead_stock_code?: string;     // 领涨股代码
 }
 
 interface AgentSidebarProps {
@@ -55,7 +64,7 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
     // 并行请求，sectors 慢也不会阻塞 indices 和 portfolio
     const [indicesRes, sectorsRes, portfolioRes, flowRes] = await Promise.allSettled([
       fetch(`${MARCUS_API}/market/indices`),
-      fetch(`${MARCUS_API}/market/concept-fund-flow`),
+      fetch(`${MARCUS_API}/market/concept-fund-flow?sort_by=main_net&limit=25`),
       fetch(`${MARCUS_API}/portfolio`),
       fetch(`${MARCUS_API}/market/moneyflow-mkt`),
     ]);
@@ -326,25 +335,27 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
         )}
       </div>
 
-      {/* Hot Sectors Section — 概念板块行情排行（按涨幅排序） */}
+      {/* Hot Sectors Section — 概念板块实时资金流向排行 */}
       <div className="agent-panel-section">
         <div className="agent-sec-title">
-          <i className="fas fa-fire"></i> 概念板块行情
+          <i className="fas fa-fire"></i> 概念资金流
         </div>
         {hotSectors.length > 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {hotSectors.map((sector, idx) => {
-              const amountYi = sector.amount / 100000000;
+            {hotSectors.slice(0, 15).map((sector, idx) => {
               const isUp = sector.pct_change >= 0;
+              const hasFlow = !!sector.main_net_fmt;
+              const flowLabel = hasFlow
+                ? (sector.flow_nature ? sector.flow_nature.replace('温和', '').replace('流入', '入').replace('流出', '出') : '')
+                : '';
+              const tooltip = hasFlow
+                ? `主力:${sector.main_net_fmt}${flowLabel} | 涨跌:${isUp?'+':''}${sector.pct_change}% | ↑${sector.advancing??'?'}/↓${sector.declining??'?'}${sector.lead_stock_name ? ' | 领涨:'+sector.lead_stock_name : ''}`
+                : `涨跌: ${isUp?'+':''}${sector.pct_change}%`;
               return (
               <div
                 key={sector.name}
                 className={`agent-sector-row ${isUp ? 'rise' : 'fall'}`}
-                title={
-                  `涨跌: ${isUp ? '+' : ''}${sector.pct_change}% | ` +
-                  `成交额: ${amountYi.toFixed(1)}亿 | ` +
-                  `换手率: ${sector.turnover_rate}%`
-                }
+                title={tooltip}
               >
                 <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--agent-text-dim)', width: '16px', textAlign: 'right', flexShrink: 0, marginRight: '4px' }}>
                   {idx + 1}
@@ -352,17 +363,30 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
                 <span style={{ flex: 1, fontSize: '12px', fontWeight: 500, color: 'var(--agent-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {sector.name}
                 </span>
-                <span style={{
-                  fontSize: '10px',
-                  fontWeight: 600,
-                  color: isUp ? 'var(--agent-green)' : 'var(--agent-red)',
-                  whiteSpace: 'nowrap',
-                  marginLeft: '6px',
-                  minWidth: '48px',
-                  textAlign: 'right',
-                }}>
-                  {isUp ? '+' : ''}{sector.pct_change}%
-                </span>
+                {hasFlow ? (
+                  <span style={{
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    color: sector.main_net! >= 0 ? 'var(--agent-green)' : 'var(--agent-red)',
+                    whiteSpace: 'nowrap',
+                    marginLeft: '4px',
+                    textAlign: 'right',
+                  }}>
+                    {sector.main_net_fmt}
+                  </span>
+                ) : (
+                  <span style={{
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    color: isUp ? 'var(--agent-green)' : 'var(--agent-red)',
+                    whiteSpace: 'nowrap',
+                    marginLeft: '6px',
+                    minWidth: '48px',
+                    textAlign: 'right',
+                  }}>
+                    {isUp ? '+' : ''}{sector.pct_change}%
+                  </span>
+                )}
               </div>
             )})}
           </div>

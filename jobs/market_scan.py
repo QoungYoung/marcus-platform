@@ -1898,7 +1898,8 @@ def generate_scan_report():
         print(f"[资金流] 盘中({now.hour}:{now.minute:02d})，使用东财实时大盘+板块资金流")
         try:
             # 大盘实时资金流（东财 ulist.np）
-            sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
+            from pathlib import Path as _P
+            sys.path.insert(0, str(_P(__file__).parent.parent / "core"))
             from utils.em_sector_flow import get_market_moneyflow_realtime
             rt_market = get_market_moneyflow_realtime()
             if rt_market:
@@ -1981,18 +1982,34 @@ def generate_scan_report():
 
     # ====== 概念板块实时行情 Top 50（东财push2实时 + Tushare降级，含资金流） ======
     concept_flow_concepts = []
-    concept_flow_details = []  # 完整资金流明细，供报告使用
+    concept_flow_details = []  # 完整资金流明细（主力净流入排序），供报告使用
+    concept_fund_inflow_concepts = []  # 主力净流入 Top 概念名列表
     try:
-        # ── 优先：东财 push2 实时接口 ──
-        sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
-        from utils.em_sector_flow import get_top_change_sectors, classify_flow_nature
+        # ── 优先：东财 push2 实时接口，主力净流入排序 ──
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).parent.parent / "core"))
+        from utils.em_sector_flow import get_top_inflow_sectors, get_top_change_sectors, classify_flow_nature
 
-        em_sectors = get_top_change_sectors("concept", top_n=50, use_cache=True)
-        concept_flow_concepts = [s['name'] for s in em_sectors]
-        concept_flow_details = em_sectors
-        top_pct = em_sectors[0]['pct_change'] if em_sectors else 0
+        # 主力净流入榜（资金驱动，主排序）
+        em_inflow = get_top_inflow_sectors("concept", top_n=50, use_cache=True)
+        concept_flow_details = em_inflow
+        concept_flow_concepts = [s['name'] for s in em_inflow]
+        concept_fund_inflow_concepts = concept_flow_concepts
+        if em_inflow:
+            top_names = [(s['name'], s['main_net_fmt'], f"{s['pct_change']:+.1f}%")
+                        for s in em_inflow[:5]]
+            print(f"[概念资金] ✅ 东财实时主力净流入 Top 50: {top_names}", file=sys.stderr)
+
+        # 涨幅榜补充（价格驱动，合并涨幅领先但资金未进前50的概念名）
+        em_change = get_top_change_sectors("concept", top_n=30, use_cache=True)
+        top_pct = em_change[0]['pct_change'] if em_change else 0
+        for s in em_change:
+            if s['name'] not in concept_flow_concepts:
+                concept_flow_concepts.append(s['name'])
+                concept_flow_details.append(s)
+
         if concept_flow_concepts:
-            print(f"[概念行情] ✅ 东财实时 Top {len(concept_flow_concepts)} 领涨概念: "
+            print(f"[概念行情] ✅ 东财实时 Top {len(concept_flow_concepts)} 领涨概念(含资金驱动): "
                   f"{', '.join(concept_flow_concepts[:5])}... (最强 +{top_pct:.1f}%)", file=sys.stderr)
             from news_analyzer import supplement_concept_vocabulary
             supplement_concept_vocabulary(concept_flow_concepts)
@@ -2323,13 +2340,14 @@ def generate_scan_report():
 
     if hot_concepts and is_trading_session:
         # 交易时段强制刷新：每次盘中扫描重建 watchlist
-        # 概念来源：新闻 DeepSeek 概念（反映当日舆论） + dc_daily（反映当日涨幅），合并去重
+        # 概念来源：新闻 DeepSeek 概念（当日舆论） + 涨幅榜（价格驱动） + 资金榜（主力净流入驱动），合并去重
         old_watchlist = watchlist
         dyn_watchlist = None
-        # 合并两个来源：DeepSeek 新闻概念优先，dc_daily 补充
+        # 三层合并：新闻 → 涨幅 → 资金流入
         merged_concepts = list(dict.fromkeys(
             [c for c in hot_concepts if c] +
-            [c for c in (concept_flow_concepts or []) if c not in (hot_concepts or [])]
+            [c for c in (concept_flow_concepts or []) if c not in (hot_concepts or [])] +
+            [c for c in (concept_fund_inflow_concepts or []) if c not in (hot_concepts or []) and c not in (concept_flow_concepts or [])]
         ))
         refresh_concepts = merged_concepts if merged_concepts else (concept_flow_concepts or hot_concepts)
         try:
@@ -2740,6 +2758,8 @@ def generate_scan_report():
         'fund_flow': fund_flow,
         # 实时概念板块行情（东财push2，含资金拆分明细+广度+领涨股）
         'concept_flow': concept_flow_details[:20] if concept_flow_details else [],
+        # 主力净流入 Top 概念（资金驱动，用于发现"钱比价先动"的板块）
+        'concept_fund_inflow': concept_fund_inflow_concepts[:15],
         # 连续亏损检测
         'force_pause': force_pause,
         'consecutive_losses': pause_check,
