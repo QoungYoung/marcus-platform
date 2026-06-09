@@ -2316,135 +2316,25 @@ def generate_scan_report():
         report += f"- **市场环境**: 🔴 观望为主，控制风险\n"
         report += f"- **操作建议**: 减仓避险，保留现金\n"
     
-    # ── 盘中 watchlist 矫正 ──────────────────────────────────────
-    # 观察标的：盘中热点概念变化时强制刷新，不用 DB 旧数据
-    watchlist = adjusted_strategy.get('watchlist', [])
-    # 判断是否在交易时段（9:35 后），交易时段强制用实时热点重建 watchlist
-    now = datetime.now()
-    time_minutes = now.hour * 60 + now.minute
-    is_trading_session = (now.hour == 9 and now.minute >= 35) or (9 < now.hour < 15)
-
-    if hot_concepts and is_trading_session:
-        # 交易时段强制刷新：每次盘中扫描重建 watchlist
-        # 概念来源：新闻 DeepSeek 概念（当日舆论） + 涨幅榜（价格驱动） + 资金榜（主力净流入驱动），合并去重
-        old_watchlist = watchlist
-        dyn_watchlist = None
-        # 三层合并：新闻 → 涨幅 → 资金流入
-        merged_concepts = list(dict.fromkeys(
-            [c for c in hot_concepts if c] +
-            [c for c in (concept_flow_concepts or []) if c not in (hot_concepts or [])] +
-            [c for c in (concept_fund_inflow_concepts or []) if c not in (hot_concepts or []) and c not in (concept_flow_concepts or [])]
-        ))
-        refresh_concepts = merged_concepts if merged_concepts else (concept_flow_concepts or hot_concepts)
-        try:
-            from pre_market_scan import generate_watchlist
-            from pre_market_scan import save_watchlist_to_db
-
-            # 尝试从盘前策略中获取上下文
-            pre_market_state = (chain.state.get('pre_market') or {})
-            pre_report = pre_market_state.get('report', {})
-            pre_us_report = pre_report.get('us_market', {}) or {}
-            pre_sector_analysis = adjusted_strategy.get('sector_analysis', []) or \
-                                  pre_market_state.get('initial_strategy', {}).get('sector_analysis', [])
-
-            dyn_watchlist = generate_watchlist(
-                {'us_market': pre_us_report, 'sentiment': {}},
-                pre_market_state.get('initial_strategy', {}).get('hot_concepts', []),
-                refresh_concepts,  # dc_daily 实时概念优先
-                pre_sector_analysis
-            )
-        except Exception as e:
-            print(f"[盘中选股] ⚠️ 动态选股失败: {e}", file=sys.stderr)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
-
-        # ── 矫正决策 ──
-        if dyn_watchlist:
-            # 质量检查：新 watchlist 数量 >= 旧 watchlist 才替换，否则合并
-            if len(dyn_watchlist) >= len(old_watchlist) or len(old_watchlist) == 0:
-                watchlist = dyn_watchlist
-                adjusted_strategy['watchlist'] = watchlist
-                print(f"[盘中选股] ✅ 强制刷新 watchlist ({len(watchlist)}只): {[w['symbol'] if isinstance(w,dict) else w for w in watchlist[:5]]}", file=sys.stderr)
-            else:
-                # 新 watchlist 数量偏少（可能概念切换导致），合并去重
-                old_symbols = {w['symbol'] if isinstance(w, dict) else w for w in old_watchlist}
-                new_only = [w for w in dyn_watchlist if
-                            (w['symbol'] if isinstance(w, dict) else w) not in old_symbols]
-                watchlist = old_watchlist + new_only
-                adjusted_strategy['watchlist'] = watchlist
-                print(f"[盘中选股] 🔄 新watchlist({len(dyn_watchlist)}只)少于旧({len(old_watchlist)}只)，合并后 {len(watchlist)}只", file=sys.stderr)
-
-            # 回写 DB：确保 auto_trade 等下游读到最新数据
-            try:
-                save_watchlist_to_db(watchlist, source='market_scan')
-            except Exception as e_db:
-                print(f"[盘中选股] ⚠️ watchlist 回写 DB 失败: {e_db}", file=sys.stderr)
-        else:
-            # generate_watchlist 返回空 → 降级从 DB 读
-            print(f"[盘中选股] ⚠️ 实时选股返回空，降级到 DB", file=sys.stderr)
-            if not watchlist:
-                try:
-                    from pre_market_scan import get_watchlist_from_db
-                    watchlist = get_watchlist_from_db()
-                    if watchlist:
-                        adjusted_strategy['watchlist'] = watchlist
-                        print(f"[盘中选股] ✅ DB 兜底 watchlist ({len(watchlist)}只)", file=sys.stderr)
-                except Exception as e_db:
-                    print(f"[盘中选股] ❌ DB 兜底也失败: {e_db}", file=sys.stderr)
-    elif not watchlist:
-        # 非交易时段或无热点时降级 DB
-        try:
-            from pre_market_scan import get_watchlist_from_db
-            watchlist = get_watchlist_from_db()
-            if watchlist:
-                adjusted_strategy['watchlist'] = watchlist
-        except Exception:
-            pass
-    # ── 盘中 watchlist 矫正结束 ──────────────────────────────────
-
-    if watchlist:
-        name_list = [_get_stock_name(w.get('symbol', w) if isinstance(w, dict) else w) for w in watchlist[:5]]
-        report += f"- **观察标的**: {', '.join(name_list)}\n"
-
-    # ====== 个股技术面筛选（右侧交易硬过滤） ======
+    report += f"- ℹ️ **候选股交由后续自动交易进行选股。盘中扫描不再进行选股操作**\n"
+    
+    # ── 盘中选股已交由 auto_trade 脚本独立执行 ──
+    # watchlist / 技术面筛选 / AI评估 不再在扫描阶段运行
+    watchlist = []
     tech_scan = {'passed': [], 'failed': [], 'total_scanned': 0, 'total_passed': 0}
-    ai_assessment = {'passed': [], 'rejected': []}  # 节点C+D 结果
-    if watchlist and not force_pause:
-        # 仅在交易时段对候选股做技术面筛选
-        now = datetime.now()
-        is_trading = (now.hour == 9 and now.minute >= 35) or (9 < now.hour < 15)
-        if is_trading:
-            try:
-                tech_scan = screen_candidates_technically(watchlist)
-                # 🤖 节点C+D：假突破过滤 + 催化质量打分
-                if tech_scan.get('passed'):
-                    ai_assessment = assess_candidates(tech_scan['passed'])
-                    # 用 AI 评估通过的股票替换 watchlist
-                    if ai_assessment.get('passed'):
-                        passed_symbols = [p['symbol'] for p in ai_assessment['passed']]
-                        watchlist = passed_symbols
-                        adjusted_strategy['watchlist'] = watchlist
-                        print(f"[盘中选股] ✅ AI评估后 watchlist: {watchlist}", file=sys.stderr)
-                    else:
-                        print(f"[盘中选股] ⚠️ 无股票通过AI评估，保留原始 watchlist", file=sys.stderr)
-                elif tech_scan.get('passed'):
-                    passed_symbols = [p['symbol'] for p in tech_scan['passed']]
-                    watchlist = passed_symbols
-                    adjusted_strategy['watchlist'] = watchlist
-                    print(f"[盘中选股] ✅ 技术面筛选后 watchlist: {watchlist}", file=sys.stderr)
-                else:
-                    print(f"[盘中选股] ⚠️ 无股票通过技术面筛选，保留原始 watchlist", file=sys.stderr)
-            except Exception as e:
-                print(f"[盘中选股] ⚠️ 技术面筛选失败: {e}", file=sys.stderr)
+    ai_assessment = {'passed': [], 'rejected': []}
+    print(f"[盘中扫描] 选股已委托 auto_trade，扫描只负责行情+资金流+概念分析", file=sys.stderr)
 
-    # ====== 节点E：持仓相关性预警（纯规则） ======
+    # ====== 节点E：持仓相关性预警（纯规则，基于持仓而非候选股） ======
     sector_warnings = []
-    if watchlist and positions:
-        for sym in watchlist[:3]:  # 仅检查前 3 只候选
-            corr = check_correlation(positions, sym, sector_warnings)
-            if corr.get('warning'):
-                level_emoji = '🔴' if corr['level'] == 'red' else '🟡'
-                print(f"[相关性] {level_emoji} {corr['reason']}", file=sys.stderr)
+    if positions:
+        for pos in positions[:3]:
+            sym = pos.get('symbol', '')
+            if sym:
+                corr = check_correlation(positions, sym, sector_warnings)
+                if corr.get('warning'):
+                    level_emoji = '🔴' if corr['level'] == 'red' else '🟡'
+                    print(f"[相关性] {level_emoji} {corr['reason']}", file=sys.stderr)
 
     # 板块配置
     sector_alloc = adjusted_strategy.get('sector_allocation', {})
@@ -2733,7 +2623,6 @@ def generate_scan_report():
 
     scan_result = {
         'timestamp': datetime.now().isoformat(),
-        # stance 字段使用今日动态计算的 adjusted_stance，与 position_limit 保持同步
         'stance': adjusted_strategy.get('stance', stance),
         'stance_code': adjusted_strategy.get('stance_code', 'yellow'),
         'position_limit': position_limit,
@@ -2742,9 +2631,8 @@ def generate_scan_report():
         'validation': validation,
         'adjusted_strategy': adjusted_strategy,
         'trade_feedback': feedback_list,
-        'watchlist': adjusted_strategy.get('watchlist', []),
         'sector_allocation': adjusted_strategy.get('sector_allocation', {}),
-        # Step 5 核心：热点概念数据（供 stock_selector 复用，无需再跑 DeepSeek）
+        # Step 5 核心：热点概念数据
         'hot_concepts': hot_concepts,
         'concept_scores': concept_scores,
         # 持仓实时表现（含今日涨跌幅）
@@ -2758,18 +2646,7 @@ def generate_scan_report():
         # 连续亏损检测
         'force_pause': force_pause,
         'consecutive_losses': pause_check,
-        # 技术面筛选结果
-        'tech_scan': {
-            'total_scanned': tech_scan.get('total_scanned', 0),
-            'total_passed': tech_scan.get('total_passed', 0),
-            'passed': tech_scan.get('passed', []),
-            'failed': tech_scan.get('failed', []),
-        },
-        # AI 评估结果
-        'ai_assessment': {
-            'passed': ai_assessment.get('passed', []),
-            'rejected': ai_assessment.get('rejected', []),
-        },
+        # 选股已全部委托 auto_trade，扫描不再产出 watchlist/tech_scan/ai_assessment
         # 缺口性质
         'gap_nature': gap_nature,
         # 资金流性质
@@ -2808,53 +2685,19 @@ def main():
     print(report)
 
     # ===== P0 催化剂+动态观察列表更新 =====
-    try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "news"))
-        from news_catalyst_tracker import update_catalysts_batch
-        from dynamic_watchlist import update_watchlist_tags, add_batch_from_scan
-        
-        # 从扫描报告获取候选股票更新催化剂
-        watchlist = scan_result.get('watchlist', [])
-        if watchlist:
-            # P0修复: update_catalysts_batch 接受 list[str]，不是 list[dict]
-            # 兼容 watchlist 中可能是 dict 或 str
-            def _extract_code(w):
-                if isinstance(w, dict):
-                    code = w.get('symbol', w.get('code', ''))
-                    return code[2:] if code.startswith(('SH', 'SZ')) else code
-                w = str(w).strip()
-                return w[-6:] if len(w) > 6 else w
-            symbols = [_extract_code(w) for w in watchlist[:12]]  # 全量 watchlist 催化剂更新
-            symbols = [s for s in symbols if s]  # 过滤空值
-            print(f"[催化剂] 更新 top {len(symbols)} 只观察列表股票...")
-            update_catalysts_batch(symbols)
-            # 同步观察列表（传入催化剂数据，避免空参数导致不更新）
-            cat_file = WORKSPACE / 'data' / 'news_catalysts.json'
-            if cat_file.exists():
-                with open(cat_file, encoding='utf-8') as f:
-                    catalyst_data = json.load(f)
-                update_watchlist_tags(catalyst_data=catalyst_data)
-    except Exception as e:
-        print(f"[P0催化剂] ⚠️ 更新失败: {e}")
-    # ===== P0 催化剂更新结束 =====
+    # 催化剂更新已委派 auto_trade 处理，扫描不再更新 watchlist 标签
 
     # 同时输出 JSON 格式供程序处理
-    # 合并 scan_result 中的关键字段，供交易决策使用
     scan_data = {
         'timestamp': datetime.now().isoformat(),
         'type': 'market_scan',
         'report': report,
-'workspace': 'marcus',
+        'workspace': 'marcus',
         'adjusted_strategy': scan_result.get('adjusted_strategy', {}),
-        # 添加关键字段供交易使用
         'sentiment_score': scan_result.get('sentiment_score', 50),
-        'watchlist': scan_result.get('watchlist', []),
         'sector_allocation': scan_result.get('sector_allocation', {}),
-        # Step 5 核心：热点概念数据（供 stock_selector 复用）
         'hot_concepts': scan_result.get('hot_concepts', []),
         'concept_scores': scan_result.get('concept_scores', {}),
-        # 持仓实时表现（含今日涨跌幅）
         'position_analysis': position_analysis,
     }
 
