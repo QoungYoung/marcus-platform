@@ -1768,9 +1768,6 @@ def get_market_status() -> dict:
               f"B 级={impact_summary.get('b_level_count', 0)}, "
               f"C 级={impact_summary.get('c_level_count', 0)}")
 
-        top_sectors = impact_summary.get('top_sectors', [])
-        if top_sectors:
-            print(f"[重点板块] {[s['sector'] for s in top_sectors[:3]]}")
         if cached_concept_scores:
             print(f"[AI概念评分] {cached_concept_scores}")
     except Exception as e:
@@ -2707,23 +2704,32 @@ def generate_scan_report():
                 else:
                     report += f"- {code}: 无新闻数据\n"
 
-    # 记录策略链
-    # 从 top_sectors 和 cache 构建 concept_scores {sector: score}
-    # 优先使用 AI cache 的 concept_scores（DeepSeek 主题评分），再补充 top_sectors
+    # 记录策略链 — concept_scores 由东财实时资金流构建
     concept_scores = {}
-    # 读取热点缓存获取 AI 概念评分
-    ai_cache = get_hot_sectors_from_cache(max_age_minutes=30)
-    cached_concept_scores = ai_cache.get('concept_scores', {}) if ai_cache.get('available') else {}
-    # 1. AI cache 的 concept_scores（DeepSeek 主题评分，更精确）
-    if cached_concept_scores:
-        concept_scores.update(cached_concept_scores)
-    # 2. top_sectors 兜底
-    top_sectors = news_impact.get('summary', {}).get('top_sectors', [])
-    for s in top_sectors:
-        if isinstance(s, dict) and 'sector' in s:
-            sector_name = s['sector']
-            if sector_name not in concept_scores:
-                concept_scores[sector_name] = s.get('score', s.get('impact_score', 50))
+    # 用实时概念资金流构建 concept_scores（主力净流入越大 → 分数越高）
+    if concept_flow_details:
+        max_inflow = max((s.get('main_net', 0) for s in concept_flow_details), default=1)
+        for s in concept_flow_details[:30]:
+            name = s.get('name', '')
+            if name and name not in concept_scores:
+                # 映射主力净流入到 50-100 分数区间
+                net = s.get('main_net', 0)
+                if max_inflow > 0 and net > 0:
+                    score = 50 + min(50, (net / max_inflow) * 50)
+                elif net < 0:
+                    score = max(20, 50 + (net / max(abs(max_inflow), 1)) * 30)
+                else:
+                    score = 50
+                concept_scores[name] = round(score, 1)
+    # 补充 AI 缓存的 concept_scores（DeepSeek 主题评分，辅助参考）
+    try:
+        ai_cache = get_hot_sectors_from_cache(max_age_minutes=30)
+        ai_scores = ai_cache.get('concept_scores', {}) if ai_cache.get('available') else {}
+        for name, score in ai_scores.items():
+            if name not in concept_scores:
+                concept_scores[name] = score
+    except Exception:
+        pass
 
     scan_result = {
         'timestamp': datetime.now().isoformat(),
