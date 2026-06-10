@@ -121,6 +121,7 @@ def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
         cmd = [
             "curl", "-s", "--max-time", str(timeout_int),
             "--retry", "1", "--retry-delay", "2",
+            "--noproxy", "*",  # 忽略父进程继承的代理环境变量
             "-H", f"User-Agent: {headers['User-Agent']}",
             "-H", f"Cookie: {headers['Cookie']}",
         ]
