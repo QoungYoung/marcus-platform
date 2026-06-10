@@ -135,12 +135,10 @@ async def get_latest_scan_report(
 
         report = last_scan.get('report', '')
 
-        # === 同时读取最新的 Pi 分析报告 ===
+        # === 同时读取最新的 Pi 分析报告（仅作参考，不覆盖 scan 自身的 stance） ===
         pi_analysis = _get_latest_pi_analysis(workspace, date)
-        # Pi 分析覆盖系统立场（更权威）
-        if pi_analysis:
-            stance = pi_analysis.get('stance', stance)
-            position_limit = pi_analysis.get('position_limit', position_limit)
+        # ⚠️ 不再用 Pi 分析覆盖 scan 的 stance/position_limit，
+        # 否则会形成循环：scan 算出的真实立场被上一次 Pi 的旧值覆盖，永远无法更新。
 
         return {
             "file": str(scan_file),

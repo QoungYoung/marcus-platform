@@ -32,11 +32,9 @@ Marcus 是一个基于 AI 的 A 股模拟交易平台，提供从行情分析、
 └─────────────┘    └──────────────┘    └──────┬───────┘
                                                │
                                     ┌──────────┴───────┐
-                                    │        ↓          │
-                              ┌─────┴─────┐  ┌─────────┴──┐
-                              │ PostgreSQL │  │   Redis    │
-                              │   :5432    │  │   :6379    │
-                              └───────────┘  └────────────┘
+                                    │   SQLite / Redis   │
+                                    │     （可选）         │
+                                    └────────────────────┘
 ```
 
 **三大核心服务：**
@@ -187,7 +185,7 @@ docker-compose ps
 docker-compose logs -f
 ```
 
-Docker 会启动 5 个容器：`postgres`、`redis`、`backend`、`piserver`、`frontend`。
+Docker 会启动 3 个容器：`backend`、`piserver`、`frontend`。
 
 ---
 
@@ -198,6 +196,7 @@ Docker 会启动 5 个容器：`postgres`、`redis`、`backend`、`piserver`、`
 | `DEEPSEEK_API_KEY` | AI 对话、情绪分析 | [platform.deepseek.com](https://platform.deepseek.com) |
 | `TUSHARE_TOKEN` | A 股数据 | [tushare.pro](https://tushare.pro) |
 | `XUEQIU_TOKEN` | 雪球实时行情 | 浏览器登录雪球后获取 Cookie |
+| `SKIP_EASTMONEY` | 云服务器被东财限流时设为 `true`，跳过实时接口走 Tushare | 可选 |
 
 完整环境变量见 [`.env.example`](./.env.example)。
 
@@ -224,6 +223,9 @@ Base URL: `http://localhost:8000/api/v1`
 | `/market/indices` | GET | A 股主要指数 |
 | `/market/quote/{symbol}` | GET | 个股行情 |
 | `/market/sectors` | GET | 板块涨跌幅 |
+| `/market/concept-fund-flow` | GET | 概念板块实时资金流向（东财 push2） |
+| `/market/moneyflow-mkt` | GET | 大盘实时资金流向（沪深分开+合计，含买/卖分明细） |
+| `/market/concept` | GET | 概念板块及成分股查询 |
 | `/market/global` | GET | 全球市场 |
 | `/news` | GET | 新闻列表 |
 | `/news/sentiment` | GET | 情绪分析 |
@@ -260,6 +262,16 @@ marcus-platform/
 │   │   └── agent/              # AI Agent
 │   ├── requirements.txt
 │   └── main.py
+├── core/                       # 核心工具库
+│   ├── utils/
+│   │   └── em_sector_flow.py   # 东财 push2 实时资金流向
+│   ├── news_analyzer.py        # 新闻情绪分析引擎
+│   └── xueqiu_engine.py        # 雪球行情引擎
+├── jobs/                       # 定时任务脚本
+│   ├── market_scan.py          # 盘中扫描（Pi 策略分析）
+│   ├── pre_market_scan.py      # 盘前扫描
+│   ├── fund_flow.py            # Tushare 资金流向
+│   └── auto_trade.py           # 自动交易执行
 ├── frontend/                   # React 前端
 │   ├── src/
 │   │   ├── pages/              # 页面组件 (8 个)
@@ -291,8 +303,8 @@ marcus-platform/
 | 层级 | 技术 |
 |------|------|
 | 后端框架 | FastAPI + Uvicorn |
-| 数据库 | PostgreSQL 15 / SQLite |
-| 缓存 | Redis 7 |
+| 数据库 | SQLite / PostgreSQL 15 |
+| 缓存 | Redis 7（可选） |
 | 任务调度 | APScheduler |
 | 前端框架 | React 18 + TypeScript |
 | 构建工具 | Vite 5 |

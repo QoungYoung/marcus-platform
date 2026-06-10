@@ -823,7 +823,7 @@ class SchedulerService:
             f"{trade_mode_instruction}\n\n"
             f"请立即执行以下操作：\n"
             f"1. 调用 get_latest_scan_report 获取最新扫描报告\n"
-            f"   （报告中包含 pi_analysis 字段 — 这是上一轮 Pi 对扫描报告的预消化分析，优先参考其立场和仓位建议）\n"
+            f"   （报告中 market_stance 为盘中扫描系统根据实时行情计算的市场立场，以此为准。pi_analysis 为历史参考）\n"
             f"2. 调用 get_portfolio 查看当前账户状态\n"
             f"3. 按右侧交易 SOP 选股分析\n"
             f"4. 执行交易（买入/卖出/调仓）\n"
