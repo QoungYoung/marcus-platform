@@ -790,13 +790,16 @@ def get_latest_scan_report() -> dict:
                 
 # 【BugFix】优先级：adjusted_strategy.stance > stance_code > scan_result.stance
                 # scan_result['stance'] 是 None，真实值在 adjusted_strategy['stance']
-                adj_stance = last_scan.get('adjusted_strategy', {}).get('stance', '')
+                adj = last_scan.get('adjusted_strategy', {})
+                adj_stance = adj.get('stance', '')
                 if adj_stance and adj_stance != 'None':
                     if 'aggressive' in adj_stance.lower() or '🟢' in adj_stance:
                         stance = 'green'
                     elif 'cut_loss' in adj_stance.lower() or '🔴' in adj_stance:
                         stance = 'red'
                     elif 'hold' in adj_stance.lower() or '⚪' in adj_stance or '⚠' in adj_stance:
+                        stance = 'yellow'
+                    elif 'cautious' in adj_stance.lower() or '🟡' in adj_stance:
                         stance = 'yellow'
                 elif 'stance_code' in last_scan:
                     stance = last_scan['stance_code']
@@ -838,7 +841,7 @@ def get_latest_scan_report() -> dict:
                         'report': report,
                         'from_scan': True,
                         'watchlist': last_scan.get('watchlist', []),
-                        'position_limit': last_scan.get('position_limit', 80),
+                        'position_limit': adj.get('position_limit', last_scan.get('position_limit', 80)),
                         'sector_allocation': last_scan.get('sector_allocation', {}),
                         'hot_concepts': last_scan.get('hot_concepts', []),
                         'concept_scores': last_scan.get('concept_scores', {}),
