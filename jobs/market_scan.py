@@ -9,6 +9,7 @@ Marcus 盘中扫描脚本
 
 import sys
 import json
+import time
 from typing import List
 from datetime import datetime
 from pathlib import Path
@@ -1968,8 +1969,8 @@ def generate_scan_report():
         flow_nature = classify_fund_flow(fund_flow)
 
     # ====== 概念板块实时行情 Top 50（东财push2实时 + Tushare降级，含资金流） ======
-    # 间隔 3 秒，避免与上一步 get_market_moneyflow_realtime 并发触发东财限流
-    time.sleep(3)
+    # 间隔 5 秒，避免与上一步 get_market_moneyflow_realtime 并发触发东财限流
+    time.sleep(5)
     concept_flow_concepts = []
     concept_flow_details = []  # 完整资金流明细（主力净流入排序），供报告使用
     concept_fund_inflow_concepts = []  # 主力净流入 Top 概念名列表

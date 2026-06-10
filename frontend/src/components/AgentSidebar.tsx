@@ -118,7 +118,7 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
       }
     }
 
-    await new Promise(r => setTimeout(r, 3000)); // 间隔 3 秒
+    await new Promise(r => setTimeout(r, 5000)); // 间隔 5 秒，避免触发东财限流
 
     const sectorsRes = await fetch(`${MARCUS_API}/market/concept-fund-flow?sort_by=main_net&limit=25`);
     if (sectorsRes.ok) {
