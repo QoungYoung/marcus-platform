@@ -45,6 +45,7 @@ import re
 import time
 import logging
 import random
+import socket
 import subprocess
 from typing import Optional, Literal
 from datetime import datetime
@@ -114,25 +115,38 @@ def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
     except Exception:
         pass
 
-    # ── 第三重：curl（系统 OpenSSL，与手动 curl 测试一致）──
+    # ── 第三重：curl（IP 轮换：东财 CDN 多节点，逐个尝试）──
     try:
         timeout_int = int(timeout)
-        cmd = [
-            "curl", "-s", "--max-time", str(timeout_int),
-            "-H", f"User-Agent: {headers['User-Agent']}",
-        ]
-        if referer:
-            cmd.extend(["-H", f"Referer: {referer}"])
-        cmd.append(url)
-        result = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=timeout_int + 2,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            logger.debug(f"[em] ✅ curl 成功获取数据 ({len(result.stdout)} bytes)")
-            return result.stdout
-        elif result.returncode != 0:
-            logger.warning(f"[em] curl 返回非零退出码 {result.returncode}: {result.stderr[:200]}")
+        # 解析 hostname 所有 IP（应对 CDN 节点故障）
+        from urllib.parse import urlparse as _urlparse
+        hostname = _urlparse(url).hostname
+        ips = set()
+        try:
+            for info in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM):
+                ips.add(info[4][0])
+        except Exception:
+            ips = {hostname}  # 解析失败则用 hostname 让 curl 自己解析
+
+        for ip in list(ips)[:3]:  # 最多试 3 个 IP
+            cmd = [
+                "curl", "-s", "--max-time", str(timeout_int),
+                "--resolve", f"{hostname}:443:{ip}",
+                "-H", f"User-Agent: {headers['User-Agent']}",
+            ]
+            if referer:
+                cmd.extend(["-H", f"Referer: {referer}"])
+            cmd.append(url)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=timeout_int + 2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                snippet = result.stdout[:300].replace("\n", " ")
+                logger.info(f"[em] ✅ curl({ip}) 成功, {len(result.stdout)}B → {snippet}...")
+                return result.stdout
+        else:
+            logger.warning(f"[em] curl 尝试了 {len(ips)} 个 IP，全部失败")
     except subprocess.TimeoutExpired:
         logger.warning(f"[em] curl 超时 (>{timeout_int}s)")
     except FileNotFoundError:
@@ -415,9 +429,10 @@ def get_sector_flow(
             page_size=min(top_n * 2, 200),
         )
         if not items and page == 1:
-            # 首页失败 → 重试一次
-            time.sleep(1)
-            logger.info(f"[em_sector_flow] 首页失败，重试...")
+            # 首页失败 → 冷却后重试一次（避免触发东财频率限制）
+            cooldown = 20 + random.uniform(0, 5)
+            logger.info(f"[em_sector_flow] 首页失败，冷却 {cooldown:.0f}s 后重试...")
+            time.sleep(cooldown)
             items = _fetch_raw(
                 sector_type=sector_type,
                 sort_field=sort_field,
@@ -661,19 +676,17 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
     """
     if _SKIP_EASTMONEY:
         return None
-    # 同时请求沪深两市，带重试
-    # 云服务器环境下东财 API 可能因代理/anti-bot 导致连接重置，
-    # 使用较长的退避时间 + 随机抖动，减少被拦截概率
+    # 请求沪深两市，带冷却式重试（避免触发东财频率限制）
     secids = ",".join([MARKET_SECIDS["sh"], MARKET_SECIDS["sz"]])
     items = None
-    for attempt in range(3):
+    for attempt in range(2):
         items = _fetch_market_raw(secids, timeout=8)
         if items and len(items) >= 2:
             break
-        if attempt < 2:
-            sleep_time = (2 if attempt == 0 else 5) + random.uniform(0, 2)  # 2-4s / 5-7s 退避 + 抖动
-            logger.info(f"[em_market_flow] 等待 {sleep_time:.1f}s 后重试 {attempt + 2}/3...")
-            time.sleep(sleep_time)
+        if attempt < 1:
+            cooldown = 30 + random.uniform(0, 10)  # 失败后冷却 30-40s，避免触发限流
+            logger.info(f"[em_market_flow] 冷却 {cooldown:.0f}s 后重试（避免触发东财频率限制）...")
+            time.sleep(cooldown)
 
     if not items or len(items) < 2:
         logger.warning("[em_market_flow] 大盘资金流不可用（网络或接口异常），将降级到 Tushare")
