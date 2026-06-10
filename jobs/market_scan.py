@@ -1968,6 +1968,8 @@ def generate_scan_report():
         flow_nature = classify_fund_flow(fund_flow)
 
     # ====== 概念板块实时行情 Top 50（东财push2实时 + Tushare降级，含资金流） ======
+    # 间隔 3 秒，避免与上一步 get_market_moneyflow_realtime 并发触发东财限流
+    time.sleep(3)
     concept_flow_concepts = []
     concept_flow_details = []  # 完整资金流明细（主力净流入排序），供报告使用
     concept_fund_inflow_concepts = []  # 主力净流入 Top 概念名列表
@@ -1975,9 +1977,9 @@ def generate_scan_report():
         # ── 优先：东财 push2 实时接口，主力净流入排序 ──
         from pathlib import Path as _P
         sys.path.insert(0, str(_P(__file__).parent.parent / "core"))
-        from utils.em_sector_flow import get_top_inflow_sectors, get_top_change_sectors, classify_flow_nature
+        from utils.em_sector_flow import get_top_inflow_sectors, classify_flow_nature
 
-        # 主力净流入榜（资金驱动，主排序）
+        # 主力净流入榜（资金驱动）
         em_inflow = get_top_inflow_sectors("concept", top_n=50, use_cache=True)
         concept_flow_details = em_inflow
         concept_flow_concepts = [s['name'] for s in em_inflow]
@@ -1987,16 +1989,10 @@ def generate_scan_report():
                         for s in em_inflow[:5]]
             print(f"[概念资金] ✅ 东财实时主力净流入 Top 50: {top_names}", file=sys.stderr)
 
-        # 涨幅榜补充（价格驱动，合并涨幅领先但资金未进前50的概念名）
-        em_change = get_top_change_sectors("concept", top_n=30, use_cache=True)
-        top_pct = em_change[0]['pct_change'] if em_change else 0
-        for s in em_change:
-            if s['name'] not in concept_flow_concepts:
-                concept_flow_concepts.append(s['name'])
-                concept_flow_details.append(s)
+        top_pct = em_inflow[0]['pct_change'] if em_inflow else 0
 
         if concept_flow_concepts:
-            print(f"[概念行情] ✅ 东财实时 Top {len(concept_flow_concepts)} 领涨概念(含资金驱动): "
+            print(f"[概念行情] ✅ 东财实时 Top {len(concept_flow_concepts)} 领涨概念(资金驱动): "
                   f"{', '.join(concept_flow_concepts[:5])}... (最强 +{top_pct:.1f}%)", file=sys.stderr)
             # 主推资金流入 Top 5 概念（覆盖 DeepSeek 缓存的旧数据）
             if concept_flow_details:

@@ -102,6 +102,7 @@ def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
         try:
             resp = requests.get(url, timeout=timeout, headers=headers)
             resp.raise_for_status()
+            logger.debug(f"[em] ✅ requests 成功 ({len(resp.text)}B)")
             return resp.text
         except requests.exceptions.RequestException:
             pass  # 静默失败，不打印日志，继续下一个
@@ -111,7 +112,9 @@ def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
         import urllib.request
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+            raw = resp.read().decode("utf-8", errors="replace")
+            logger.debug(f"[em] ✅ urllib 成功 ({len(raw)}B)")
+            return raw
     except Exception:
         pass
 

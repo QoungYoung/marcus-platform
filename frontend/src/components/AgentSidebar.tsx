@@ -61,12 +61,10 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
   const fetchData = async () => {
     setRefreshing(true);
 
-    // 并行请求，sectors 慢也不会阻塞 indices 和 portfolio
-    const [indicesRes, sectorsRes, portfolioRes, flowRes] = await Promise.allSettled([
+    // 第一批：非东财接口，并行（不受限流影响）
+    const [indicesRes, portfolioRes] = await Promise.allSettled([
       fetch(`${MARCUS_API}/market/indices`),
-      fetch(`${MARCUS_API}/market/concept-fund-flow?sort_by=main_net&limit=25`),
       fetch(`${MARCUS_API}/portfolio`),
-      fetch(`${MARCUS_API}/market/moneyflow-mkt`),
     ]);
 
     // indices
@@ -77,20 +75,6 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
       } catch (e) {
         console.log('Failed to parse indices:', e);
       }
-    } else {
-      console.log('Failed to fetch indices');
-    }
-
-    // sectors
-    if (sectorsRes.status === 'fulfilled' && sectorsRes.value.ok) {
-      try {
-        const sectorsData = await sectorsRes.value.json();
-        setHotSectors(sectorsData.sectors || []);
-      } catch (e) {
-        console.log('Failed to parse sectors:', e);
-      }
-    } else {
-      console.log('Failed to fetch sectors');
     }
 
     // portfolio
@@ -107,14 +91,13 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
       } catch (e) {
         console.log('Failed to parse portfolio:', e);
       }
-    } else {
-      console.log('Failed to fetch portfolio');
     }
 
-    // market moneyflow
-    if (flowRes.status === 'fulfilled' && flowRes.value.ok) {
+    // 第二批：东财接口，间隔 3 秒顺序请求（避免并发触发限流）
+    const flowRes = await fetch(`${MARCUS_API}/market/moneyflow-mkt`);
+    if (flowRes.ok) {
       try {
-        const flowData = await flowRes.value.json();
+        const flowData = await flowRes.json();
         const d = flowData.data;
         if (d) {
           setMarketFlow({
@@ -133,8 +116,18 @@ export default function AgentSidebar({ onStockSelect, selectedSymbol }: AgentSid
       } catch (e) {
         console.log('Failed to parse market flow:', e);
       }
-    } else {
-      console.log('Failed to fetch market flow');
+    }
+
+    await new Promise(r => setTimeout(r, 3000)); // 间隔 3 秒
+
+    const sectorsRes = await fetch(`${MARCUS_API}/market/concept-fund-flow?sort_by=main_net&limit=25`);
+    if (sectorsRes.ok) {
+      try {
+        const sectorsData = await sectorsRes.json();
+        setHotSectors(sectorsData.sectors || []);
+      } catch (e) {
+        console.log('Failed to parse sectors:', e);
+      }
     }
 
     setRefreshing(false);
