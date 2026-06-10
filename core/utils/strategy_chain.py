@@ -262,6 +262,16 @@ class StrategyChain:
         self._save_state()
         print(f"[策略链] Pi确认已写入: stance={stance}, limit={position_limit}%")
 
+    def get_pi_confirmation(self) -> dict:
+        """
+        获取最近一次 Pi 确认的立场和仓位上限。
+
+        Returns:
+            dict: {"stance": "yellow", "position_limit": 60, "reason": "...", ...}
+                  若从未写入则返回空 dict。
+        """
+        return self.state.get("pi_confirmation", {})
+
     def get_current_strategy(self) -> dict:
         """
         获取当前有效策略

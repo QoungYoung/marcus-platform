@@ -577,15 +577,97 @@ class SchedulerService:
             else:
                 logger.info(f"QQ notification not available for {task.name}")
 
+    def _get_recent_pi_review(self) -> Optional[dict]:
+        """
+        获取前一日最后一条有效 Pi 分析记录（排除新闻/晚报类任务）。
+
+        优先级：每日复盘 > 盘中扫描 > 其他非新闻任务
+        跳过 task_name 含 "新闻" / "晚报" 的记录（偏情绪而非技术面立场）。
+
+        Returns:
+            dict | None: {"stance": "red", "position_limit": 20, "reason": "...", "task_name": "..."}
+        """
+        try:
+            from datetime import timedelta
+            prev_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            log_dir = self._get_workspace_path() / "memory" / "pi-analysis-logs"
+            log_file = log_dir / f"{prev_date}-analysis.jsonl"
+
+            if not log_file.exists():
+                logger.info(f"[pre_market] No pi-analysis log for {prev_date}")
+                return None
+
+            records = []
+            with open(log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        records.append(rec)
+                    except json.JSONDecodeError:
+                        continue
+
+            if not records:
+                return None
+
+            # 倒序遍历，按优先级筛选
+            # 第一遍：找每日复盘
+            for rec in reversed(records):
+                task = rec.get('task_name', '')
+                if '复盘' in task and '新闻' not in task and '晚报' not in task:
+                    logger.info(f"[pre_market] Found daily_review from {prev_date}: "
+                                f"stance={rec.get('stance')}, limit={rec.get('position_limit')}%")
+                    return rec
+
+            # 第二遍：找盘中扫描（跳过新闻/晚报）
+            for rec in reversed(records):
+                task = rec.get('task_name', '')
+                if '新闻' in task or '晚报' in task:
+                    continue
+                logger.info(f"[pre_market] Found scan review from {prev_date}: "
+                            f"stance={rec.get('stance')}, limit={rec.get('position_limit')}%, task={task}")
+                return rec
+
+            # 全是新闻/晚报
+            logger.info(f"[pre_market] {prev_date} only has news/evening reports, no technical review")
+            return None
+
+        except Exception as e:
+            logger.error(f"[pre_market] Failed to read recent pi review: {e}")
+            return None
+
     def _call_pi_analysis(self, task_name: str, output: str) -> str:
         """将扫描结果发送给 Pi Server，获取分析报告并写入策略链"""
         import urllib.request, json as _json, ssl, re
         try:
             # 根据任务类型生成不同的分析指令
+            prev_review_context = ""  # 默认为空，仅盘前分支使用
             if '盘前' in task_name:
                 report_guide = (
                     "报告结构：隔夜外盘 → A50/汇率 → 板块催化 → 今日展望。"
                 )
+                # === 盘前加载前日最终复盘信号 ===
+                prev_review = self._get_recent_pi_review()
+                prev_review_context = ""
+                if prev_review:
+                    prev_stance = prev_review.get('stance', 'yellow')
+                    prev_limit = prev_review.get('position_limit', 60)
+                    prev_reason = prev_review.get('reason', '')
+                    prev_task = prev_review.get('task_name', '未知')
+                    prev_review_context = (
+                        f"\n\n⚠️ 前日最终复盘信号（{prev_task}）：\n"
+                        f"立场：{prev_stance} | 仓位上限：{prev_limit}%\n"
+                        f"理由：{prev_reason}\n"
+                        f"盘前约束：若上调仓位需额外确认，盘前立场不得超过前日复盘仓位的 2 倍。\n"
+                        f"若前日最终为 red 或催化强度 < 20，盘前立场不得超出 yellow/40%。"
+                    )
+                    if prev_stance == 'red' or prev_limit <= 20:
+                        prev_review_context += (
+                            f"\n🔴 前日为 red/仓位≤20%，今日盘前必须以 yellow/≤40% 为上限，"
+                            f"不得给出 green 立场，仓位不得超过 {min(prev_limit * 2, 40)}%。"
+                        )
             elif '交易' in task_name:
                 report_guide = (
                     "报告结构：成交概况 → 盈亏分析 → 持仓变化 → 策略评估。"
@@ -616,7 +698,8 @@ class SchedulerService:
                 f"请基于「右侧交易」框架对此数据进行分析，"
                 f"整合为简洁专业的任务报告。\n"
                 f"{report_guide}"
-                f"控制在 800 字以内。\n\n"
+                f"控制在 800 字以内。\n"
+                f"{prev_review_context}\n"
                 f"最后，用单独一行给出你的策略判断：\n"
                 f"SIGNAL: <green|yellow|red> POSITION:<0-100> REASON:<一句话理由>\n"
                 f"其中 green=激进 yellow=谨慎 red=观望。"
@@ -819,8 +902,90 @@ class SchedulerService:
         else:
             trade_mode_instruction = "请基于最新扫描报告执行自主交易决策。"
 
+        # === 立场偏离检测：对比扫描系统当前立场 vs Pi 上一轮立场 ===
+        stance_warning = ""
+        try:
+            # 1. 读取最新扫描报告的 stance
+            scan_dir = self._get_workspace_path() / "memory" / "market-scan-logs"
+            scan_file = None
+            if scan_dir.exists():
+                scan_files = sorted(scan_dir.glob("*-scans.jsonl"), reverse=True)
+                if scan_files:
+                    scan_file = scan_files[0]
+            scan_stance = None
+            scan_limit = None
+            if scan_file and scan_file.exists():
+                with open(scan_file, 'r', encoding='utf-8') as sf:
+                    lines = [l.strip() for l in sf if l.strip()]
+                if lines:
+                    last_scan = json.loads(lines[-1])
+                    scan_stance = (
+                        last_scan.get('adjusted_strategy', {}).get('stance_code')
+                        or last_scan.get('market_stance')
+                        or last_scan.get('stance_code')
+                    )
+                    scan_limit = (
+                        last_scan.get('adjusted_strategy', {}).get('position_limit')
+                        or last_scan.get('position_limit')
+                    )
+            # 转换为统一 stance code
+            def _normalize_stance(s):
+                if not s:
+                    return None
+                s = str(s).lower()
+                if 'green' in s or 'aggressive' in s or '🟢' in s:
+                    return 'green'
+                if 'red' in s or '🟡' not in s and 'hold' not in s and 'cautious' not in s:
+                    if 'red' in s:
+                        return 'red'
+                if 'hold' in s or '⚪' in s:
+                    return 'yellow'  # hold 归入 yellow 但属于低档
+                if 'yellow' in s or 'cautious' in s or '🟡' in s:
+                    return 'yellow'
+                return 'yellow'
+
+            scan_stance = _normalize_stance(scan_stance)
+
+            # 2. 获取 Pi 上一轮立场
+            from core.utils.strategy_chain import StrategyChain
+            chain = StrategyChain()
+            pi_conf = chain.get_pi_confirmation()
+            pi_stance = pi_conf.get('stance', 'yellow')
+            pi_limit = pi_conf.get('position_limit', 60)
+
+            # 3. 计算偏离度
+            STANCE_RANK = {'green': 3, 'yellow': 2, 'red': 1}
+            if scan_stance and pi_stance:
+                scan_rank = STANCE_RANK.get(scan_stance, 2)
+                pi_rank = STANCE_RANK.get(pi_stance, 2)
+                rank_diff = pi_rank - scan_rank
+
+                if rank_diff >= 2:
+                    # 扫描立场比 Pi 保守 2 档以上
+                    stance_warning = (
+                        f"\n🔴 **立场偏离警告（代码层检测）**\n"
+                        f"扫描系统当前立场: {scan_stance}"
+                        + (f"/{scan_limit}%" if scan_limit else "") + "\n"
+                        f"Pi 上轮立场: {pi_stance}/{pi_limit}%\n"
+                        f"偏离度: {rank_diff} 档 → **Pi 立场严重滞后！**\n"
+                        f"⚠️ 本轮必须以降级处理：立场至少降至 {scan_stance}，"
+                        f"仓位上限以扫描值为准。\n"
+                    )
+                    logger.info(f"[{execution_id}] [stance_divergence] scan={scan_stance}/{scan_limit}, "
+                                f"pi={pi_stance}/{pi_limit}, diff={rank_diff}档, warning_injected=True")
+                elif rank_diff == 1 and scan_limit and pi_limit and scan_limit < pi_limit * 0.5:
+                    stance_warning = (
+                        f"\n🟡 **立场偏离注意（代码层检测）**\n"
+                        f"扫描系统仓位上限: {scan_limit}% | Pi 上轮仓位上限: {pi_limit}%\n"
+                        f"扫描仓位 < Pi仓位的 50%，建议重新评估当前仓位上限。\n"
+                    )
+                    logger.info(f"[{execution_id}] [stance_divergence] limit_gap: scan={scan_limit}% vs pi={pi_limit}%, warning_injected=True")
+        except Exception as e:
+            logger.error(f"[{execution_id}] Stance divergence check failed (non-fatal): {e}")
+
         prompt = (
-            f"{trade_mode_instruction}\n\n"
+            f"{trade_mode_instruction}\n"
+            f"{stance_warning}\n"
             f"请立即执行以下操作：\n"
             f"1. 调用 get_latest_scan_report 获取最新扫描报告\n"
             f"   （报告中 market_stance 为盘中扫描系统根据实时行情计算的市场立场，以此为准。pi_analysis 为历史参考）\n"
