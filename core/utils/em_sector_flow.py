@@ -45,7 +45,6 @@ import re
 import time
 import logging
 import random
-import socket
 import subprocess
 from typing import Optional, Literal
 from datetime import datetime
@@ -116,39 +115,28 @@ def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
     except Exception:
         pass
 
-    # ── 第三重：curl（IP 轮换：东财 CDN 多节点，逐个尝试）──
+    # ── 第三重：curl（系统 OpenSSL，与手动 curl 测试一致）──
     try:
         timeout_int = int(timeout)
-        # 解析 hostname 所有 IP（应对 CDN 节点故障）
-        from urllib.parse import urlparse as _urlparse
-        hostname = _urlparse(url).hostname
-        ips = set()
-        try:
-            for info in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM):
-                ips.add(info[4][0])
-        except Exception:
-            ips = {hostname}  # 解析失败则用 hostname 让 curl 自己解析
-
-        for ip in list(ips)[:3]:  # 最多试 3 个 IP
-            cmd = [
-                "curl", "-s", "--max-time", str(timeout_int),
-                "--resolve", f"{hostname}:443:{ip}",
-                "-H", f"User-Agent: {headers['User-Agent']}",
-                "-H", f"Cookie: {headers['Cookie']}",
-            ]
-            if referer:
-                cmd.extend(["-H", f"Referer: {referer}"])
-            cmd.append(url)
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=timeout_int + 2,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                snippet = result.stdout[:300].replace("\n", " ")
-                logger.info(f"[em] ✅ curl({ip}) 成功, {len(result.stdout)}B → {snippet}...")
-                return result.stdout
+        cmd = [
+            "curl", "-s", "--max-time", str(timeout_int),
+            "--retry", "1", "--retry-delay", "2",
+            "-H", f"User-Agent: {headers['User-Agent']}",
+            "-H", f"Cookie: {headers['Cookie']}",
+        ]
+        if referer:
+            cmd.extend(["-H", f"Referer: {referer}"])
+        cmd.append(url)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=timeout_int + 5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            snippet = result.stdout[:300].replace("\n", " ")
+            logger.info(f"[em] ✅ curl 成功, {len(result.stdout)}B → {snippet}...")
+            return result.stdout
         else:
-            logger.warning(f"[em] curl 尝试了 {len(ips)} 个 IP，全部失败")
+            logger.warning(f"[em] curl 失败 (exit={result.returncode}): {result.stderr[:200]}")
     except subprocess.TimeoutExpired:
         logger.warning(f"[em] curl 超时 (>{timeout_int}s)")
     except FileNotFoundError:

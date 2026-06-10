@@ -298,7 +298,7 @@ def _analyze_news_simple(news_list: List[dict]) -> dict:
     }
 
 
-def get_hot_sectors_from_cache(max_age_minutes: int = 30) -> dict:
+def get_hot_sectors_from_cache(max_age_minutes: int = 1440) -> dict:
     """
     从缓存文件读取热点概念分析结果（由 news_collector 生成）
     如果缓存不存在或过期，返回空 dict

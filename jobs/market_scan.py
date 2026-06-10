@@ -1737,7 +1737,7 @@ def get_market_status() -> dict:
 
     try:
         # 读取缓存仅用于情绪分和新闻影响摘要（热点概念由实时资金流驱动，不用缓存）
-        cache = get_hot_sectors_from_cache(max_age_minutes=30)
+        cache = get_hot_sectors_from_cache()
 
         if cache.get('available'):
             print(f"[新闻缓存] 📊 情绪分参考（生成于 {cache.get('generated_at', '')[:19]}），热点概念由东财实时资金流驱动", file=sys.stderr)
@@ -2154,7 +2154,7 @@ def generate_scan_report():
     # ====== 热点概念已由东财实时资金流驱动（上方 concept_flow 段），无需从缓存重新读取 ======
     # 仅更新情绪分（如有更新的缓存数据）
     try:
-        cache = get_hot_sectors_from_cache(max_age_minutes=30)
+        cache = get_hot_sectors_from_cache()
         if cache.get('available') and cache.get('sentiment_score', 50) != 50:
             news_sentiment['score'] = cache['sentiment_score']
             print(f"[情绪分] 缓存更新: {cache['sentiment_score']}", file=sys.stderr)
@@ -2613,7 +2613,7 @@ def generate_scan_report():
                 concept_scores[name] = round(score, 1)
     # 补充 AI 缓存的 concept_scores（DeepSeek 主题评分，辅助参考）
     try:
-        ai_cache = get_hot_sectors_from_cache(max_age_minutes=30)
+        ai_cache = get_hot_sectors_from_cache()
         ai_scores = ai_cache.get('concept_scores', {}) if ai_cache.get('available') else {}
         for name, score in ai_scores.items():
             if name not in concept_scores:
