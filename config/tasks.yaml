@@ -155,11 +155,11 @@ tasks:
   depends_on: []
 - id: daily_review
   name: 每日复盘
-  description: 15:00 收盘后市场分析与操作复盘
+  description: 16:00 收盘后市场分析与操作复盘
   enabled: true
   schedule:
     type: cron
-    expr: 0 15 * * *
+    expr: 0 16 * * *
     timezone: Asia/Shanghai
   script:
     path: jobs/daily_review_enhanced.py

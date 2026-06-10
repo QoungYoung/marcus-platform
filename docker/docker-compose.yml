@@ -18,6 +18,7 @@ services:
     volumes:
       - ../data:/app/data
       - ../apps:/app/apps:ro
+      - ../config:/app/config
       - ../logs:/app/logs
       - ../memory:/app/memory
       - /etc/localtime:/etc/localtime:ro
