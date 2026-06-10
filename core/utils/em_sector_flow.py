@@ -84,6 +84,7 @@ _BROWSER_HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9",
+    "Cookie": "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; st_nvi=W6lpD9Ad7PhFwtvK87DTf930b",
 }
 
 
@@ -133,6 +134,7 @@ def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
                 "curl", "-s", "--max-time", str(timeout_int),
                 "--resolve", f"{hostname}:443:{ip}",
                 "-H", f"User-Agent: {headers['User-Agent']}",
+                "-H", f"Cookie: {headers['Cookie']}",
             ]
             if referer:
                 cmd.extend(["-H", f"Referer: {referer}"])
