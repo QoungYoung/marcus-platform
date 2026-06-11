@@ -309,6 +309,79 @@ async def get_positions():
     return positions
 
 
+@router.post("/unfreeze")
+async def unfreeze_funds():
+    """Manually unfreeze all frozen funds.
+    
+    Used when trading exceptions cause funds to be incorrectly frozen.
+    Moves all frozen_cash back to available_cash and cancels any stuck orders.
+    """
+    db_file = settings.data_dir / "trades.db"
+    if not db_file.exists():
+        raise HTTPException(status_code=404, detail="交易数据库不存在")
+    
+    try:
+        conn = sqlite3.connect(str(db_file), timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.row_factory = sqlite3.Row
+        curs = conn.cursor()
+        
+        # Read current account
+        curs.execute("SELECT * FROM account_info WHERE id=1")
+        account = curs.fetchone()
+        if not account:
+            conn.close()
+            raise HTTPException(status_code=404, detail="账户信息不存在")
+        
+        frozen = account['frozen_cash']
+        available = account['available_cash']
+        
+        if frozen <= 0:
+            conn.close()
+            return {
+                "success": True,
+                "message": "没有冻结资金需要解冻",
+                "unfrozen_amount": 0,
+                "available_cash": available,
+                "frozen_cash": 0,
+                "orders_cancelled": 0,
+            }
+        
+        # Cancel any stuck orders (status = 'submitting' or 'submitted')
+        curs.execute(
+            "SELECT COUNT(*) as cnt FROM orders WHERE status IN ('submitting', 'submitted')"
+        )
+        stuck_count = curs.fetchone()['cnt']
+        
+        if stuck_count > 0:
+            curs.execute(
+                "UPDATE orders SET status='cancelled', cancelled_at=datetime('now', 'localtime') "
+                "WHERE status IN ('submitting', 'submitted')"
+            )
+        
+        # Unfreeze funds
+        new_available = available + frozen
+        curs.execute(
+            "UPDATE account_info SET available_cash=?, frozen_cash=0, updated_at=? WHERE id=1",
+            (new_available, datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        
+        return {
+            "success": True,
+            "message": f"已解冻 ¥{frozen:,.2f}，取消 {stuck_count} 笔卡住订单",
+            "unfrozen_amount": frozen,
+            "available_cash": new_available,
+            "frozen_cash": 0,
+            "orders_cancelled": stuck_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"解冻失败: {str(e)}")
+
+
 @router.get("/equity-history", response_model=list[EquityPoint])
 async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     """

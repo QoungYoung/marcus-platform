@@ -55,7 +55,11 @@
     "equityCurve": "Equity Curve",
     "dailyPnL": "Daily P&L",
     "indexKline": "Market K-line",
-    "vsBenchmark": "vs SH Index"
+    "vsBenchmark": "vs SH Index",
+    "unfreezeFunds": "Unfreeze Funds",
+    "unfreezeConfirm": "Are you sure you want to unfreeze all frozen funds? This will move all frozen cash to available cash and cancel any stuck orders.",
+    "unfreezeSuccess": "Funds unfrozen successfully",
+    "unfreezeFailed": "Failed to unfreeze funds"
   },
   "trading": {
     "title": "Trading",

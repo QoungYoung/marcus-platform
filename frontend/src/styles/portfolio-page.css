@@ -100,6 +100,31 @@
 .cp-hero-kpi-value.down { color: var(--agent-red, #e74c3c); }
 .cp-hero-kpi-sub { font-size: 10px; color: var(--agent-text-dim, #6a7d9b); margin-top: 1px; }
 
+/* ── 解冻资金按钮 ── */
+.cp-unfreeze-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 8px;
+  border: 1px solid rgba(240,185,11,0.25);
+  border-radius: 10px;
+  background: rgba(240,185,11,0.06);
+  color: var(--agent-gold, #f0b90b);
+  font-size: 10px; font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.cp-unfreeze-btn:hover {
+  background: rgba(240,185,11,0.15);
+  border-color: rgba(240,185,11,0.45);
+}
+.cp-unfreeze-btn:active {
+  transform: scale(0.95);
+}
+.cp-unfreeze-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── 仓位/风险仪表 ── */
 .cp-risk-strip {
   display: grid;

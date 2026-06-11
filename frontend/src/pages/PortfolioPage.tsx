@@ -100,6 +100,30 @@ export default function PortfolioPage() {
   const [sortKey, setSortKey] = useState<SortKey>('market_value');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [fabOpen, setFabOpen] = useState(false);
+  const [unfreezing, setUnfreezing] = useState(false);
+
+  // 解冻资金
+  const handleUnfreeze = useCallback(async () => {
+    if (unfreezing) return;
+    if (!window.confirm(t('portfolio.unfreezeConfirm'))) return;
+    setUnfreezing(true);
+    try {
+      const res = await portfolioApi.unfreeze();
+      if (res.data?.success) {
+        alert(t('portfolio.unfreezeSuccess') + `: ¥${(res.data.unfrozen_amount || 0).toLocaleString()}`);
+        // 刷新摘要数据
+        const pRes = await portfolioApi.getSummary();
+        setData(pRes.data);
+      } else {
+        alert(t('portfolio.unfreezeFailed') + ': ' + (res.data?.message || ''));
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(t('portfolio.unfreezeFailed') + ': ' + msg);
+    } finally {
+      setUnfreezing(false);
+    }
+  }, [unfreezing, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -251,7 +275,30 @@ export default function PortfolioPage() {
           </div>
         </div>
         <div className="cp-hero-right">
-          <HeroKpi label={t('portfolio.availableCash')} value={`¥${fmtMoney(cash)}`} />
+          <div className="cp-hero-kpi">
+            <div className="cp-hero-kpi-label">{t('portfolio.availableCash')}</div>
+            <div className="cp-hero-kpi-value">¥{fmtMoney(cash)}</div>
+            {frozen > 0 && (
+              <div className="cp-hero-kpi-sub" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <span style={{ color: 'var(--agent-warn, #f0b90b)', fontSize: 10 }}>
+                  <i className="fas fa-lock" style={{ marginRight: 3 }} />
+                  {t('portfolio.frozenCash')}: ¥{fmtMoney(frozen)}
+                </span>
+                <button
+                  className="cp-unfreeze-btn"
+                  onClick={handleUnfreeze}
+                  disabled={unfreezing}
+                  title={t('portfolio.unfreezeFunds')}
+                >
+                  {unfreezing ? (
+                    <><i className="fas fa-spinner fa-spin" style={{ fontSize: 9 }} /> 解冻中</>
+                  ) : (
+                    <><i className="fas fa-unlock" style={{ fontSize: 9 }} /> {t('portfolio.unfreezeFunds')}</>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
           <HeroKpi label={t('portfolio.positionValue')} value={`¥${fmtMoney(posVal)}`} sub={`${posRatio.toFixed(1)}%`} />
           <HeroKpi label={t('portfolio.realizedPnL')} value={`${realizedPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(realizedPnl))}`} trend={realizedPnl >= 0 ? 'up' : 'down'} />
           <HeroKpi label={t('portfolio.floatingPnL')} value={`${floatPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(floatPnl))}`} trend={floatPnl >= 0 ? 'up' : 'down'} />

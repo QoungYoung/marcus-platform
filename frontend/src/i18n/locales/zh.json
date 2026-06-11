@@ -55,7 +55,11 @@
     "equityCurve": "权益曲线",
     "dailyPnL": "每日盈亏",
     "indexKline": "大盘K线",
-    "vsBenchmark": "vs 上证指数"
+    "vsBenchmark": "vs 上证指数",
+    "unfreezeFunds": "解冻资金",
+    "unfreezeConfirm": "确定要解冻所有冻结资金吗？这将把冻结资金全部转为可用资金，并取消所有卡住的订单。",
+    "unfreezeSuccess": "解冻成功",
+    "unfreezeFailed": "解冻失败"
   },
   "trading": {
     "title": "交易",
