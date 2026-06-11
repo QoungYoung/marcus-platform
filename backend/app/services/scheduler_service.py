@@ -1013,7 +1013,7 @@ class SchedulerService:
         ctx = ssl.create_default_context()
 
         logger.info(f"[{execution_id}] Sending pi_trade request for {task.id}...")
-        with urllib.request.urlopen(req, context=ctx, timeout=180) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=600) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
             reply = data.get("reply", "")
             elapsed = data.get("elapsed_ms", 0)
