@@ -22,6 +22,8 @@ class TradeResponse(BaseModel):
     volume: int
     amount: float
     timestamp: datetime
+    reason: Optional[str] = None
+    message: Optional[str] = None
 
 
 class OrderResponse(BaseModel):

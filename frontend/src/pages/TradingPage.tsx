@@ -161,8 +161,20 @@ export default function TradingPage() {
           )}
 
           {result && (
-            <div className="bg-green-900/20 border border-green-800 rounded p-3 text-green-400 text-sm">
-              {t('trading.orderId')}: {result.order_id} - {t('common.success')}!
+            <div className={`rounded p-3 text-sm ${
+              result.status === 'rejected' || result.status === 'failed'
+                ? 'bg-red-900/20 border border-red-800 text-red-400'
+                : 'bg-green-900/20 border border-green-800 text-green-400'
+            }`}>
+              {result.status === 'executed' ? (
+                <>{t('trading.orderId')}: {result.order_id} - {t('common.success')}!</>
+              ) : result.status === 'rejected' ? (
+                <>❌ {t('trading.rejected')}: {result.reason || result.message || t('common.error')}</>
+              ) : result.status === 'failed' ? (
+                <>⚠️ {t('trading.failed')}: {result.reason || result.message || t('common.error')}</>
+              ) : (
+                <>{result.message || result.reason || `${t('common.success')}!`}</>
+              )}
             </div>
           )}
 

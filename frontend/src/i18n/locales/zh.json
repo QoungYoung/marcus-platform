@@ -76,7 +76,9 @@
     "direction": "方向",
     "status": "状态",
     "traded": "已成交",
-    "createdAt": "创建时间"
+    "createdAt": "创建时间",
+    "rejected": "交易被拒绝",
+    "failed": "交易失败"
   },
   "market": {
     "title": "实时行情",

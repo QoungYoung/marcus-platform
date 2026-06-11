@@ -76,6 +76,14 @@ async def execute_trade(trade: TradeRequest):
     """
     Execute a trade (buy or sell).
     Note: This is paper trading - no real money involved.
+    
+    Returns detailed reason on failure/rejection, e.g.:
+    - '资金不足' (insufficient funds)
+    - '超过单笔最大仓位 (40%)' (exceeds max position per trade)
+    - '无持仓' (no position to sell)
+    - '卖出数量超过持仓' (sell volume exceeds holdings)
+    - 'VN.PY 买入失败' / 'VN.PY 卖出失败' (engine failure)
+    - 'VN.PY 撮合失败，资金已解冻' (match failure, funds unfrozen)
     """
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
@@ -97,15 +105,63 @@ async def execute_trade(trade: TradeRequest):
                 reason=trade.reason or "",
             )
 
+        # Extract reason/message from executor result
+        fail_reason = result.get("reason", "")
+        direction = "买入" if trade.side.lower() == "buy" else "卖出"
+        
+        # Build a detailed message for rejected/failed trades
+        if result.get("status") == "rejected":
+            detail_msg = fail_reason or "交易被拒绝"
+            # Add context info if available
+            if result.get("required"):
+                detail_msg += f" (需要 ¥{result['required']:,.2f}"
+            if result.get("available") is not None:
+                detail_msg += f"，可用 ¥{result['available']:,.2f}"
+            if result.get("required") or result.get("available") is not None:
+                detail_msg += ")"
+            print(f"[交易] ❌ {direction} {trade.symbol} 被拒绝: {detail_msg}", flush=True)
+            return TradeResponse(
+                order_id="",
+                status="rejected",
+                symbol=trade.symbol,
+                direction=direction,
+                price=trade.price,
+                volume=trade.volume,
+                amount=trade.price * trade.volume,
+                timestamp=datetime.now(),
+                reason=fail_reason,
+                message=detail_msg,
+            )
+        
+        if result.get("status") == "failed":
+            detail_msg = fail_reason or "交易执行失败"
+            print(f"[交易] ❌ {direction} {trade.symbol} 失败: {detail_msg}", flush=True)
+            return TradeResponse(
+                order_id="",
+                status="failed",
+                symbol=trade.symbol,
+                direction=direction,
+                price=trade.price,
+                volume=trade.volume,
+                amount=trade.price * trade.volume,
+                timestamp=datetime.now(),
+                reason=fail_reason,
+                message=detail_msg,
+            )
+
+        # Success
+        print(f"[交易] ✅ {direction} {trade.symbol} x{result.get('volume', trade.volume)} @ ¥{trade.price:.2f}", flush=True)
         return TradeResponse(
             order_id=result.get("order_id", ""),
             status=result.get("status", "executed"),
             symbol=trade.symbol,
-            direction="买入" if trade.side.lower() == "buy" else "卖出",
+            direction=direction,
             price=trade.price,
             volume=trade.volume,
             amount=trade.price * trade.volume,
             timestamp=datetime.now(),
+            reason=fail_reason,
+            message=f"交易成功: {direction} {trade.symbol} ¥{trade.price:.2f} × {trade.volume}",
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -76,7 +76,9 @@
     "direction": "Direction",
     "status": "Status",
     "traded": "Traded",
-    "createdAt": "Created At"
+    "createdAt": "Created At",
+    "rejected": "Trade Rejected",
+    "failed": "Trade Failed"
   },
   "market": {
     "title": "Live Market",
