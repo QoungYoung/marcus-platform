@@ -47,6 +47,53 @@ INDUSTRY_LIST = ['半导体', '人工智能', '新能源', '消费电子', '机�
 FOCUS_INDUSTRIES = ['半导体', '人工智能', '新能源', '消费电子', '机器人']
 
 
+# ============= 内部辅助函数 =============
+
+def _calc_sentiment_by_level(impact_analysis: List[dict], news_list: List[dict]) -> dict:
+    """
+    根据原始新闻的 DB sentiment 字段，统计各影响等级的看多/看空数量。
+
+    Args:
+        impact_analysis: AI 返回的影响力分析列表，每项含 news_id + impact_level
+        news_list: 原始新闻列表（与 AI 分析的顺序一致，news_id 为 1-indexed）
+
+    Returns:
+        dict: {s_bullish_count, s_bearish_count, a_bullish_count, a_bearish_count, ...}
+    """
+    counts = {
+        's_bullish_count': 0, 's_bearish_count': 0,
+        'a_bullish_count': 0, 'a_bearish_count': 0,
+        'b_bullish_count': 0, 'b_bearish_count': 0,
+        'c_bullish_count': 0, 'c_bearish_count': 0,
+    }
+
+    for item in impact_analysis:
+        news_id = item.get('news_id', -1)
+        if not (1 <= news_id <= len(news_list)):
+            continue
+
+        db_sentiment = (news_list[news_id - 1].get('sentiment') or 'neutral').lower()
+        level = (item.get('impact_level') or '').upper()
+
+        is_bullish = db_sentiment == 'positive'
+        is_bearish = db_sentiment == 'negative'
+
+        if level == 'S':
+            if is_bullish: counts['s_bullish_count'] += 1
+            elif is_bearish: counts['s_bearish_count'] += 1
+        elif level == 'A':
+            if is_bullish: counts['a_bullish_count'] += 1
+            elif is_bearish: counts['a_bearish_count'] += 1
+        elif level == 'B':
+            if is_bullish: counts['b_bullish_count'] += 1
+            elif is_bearish: counts['b_bearish_count'] += 1
+        elif level == 'C':
+            if is_bullish: counts['c_bullish_count'] += 1
+            elif is_bearish: counts['c_bearish_count'] += 1
+
+    return counts
+
+
 # ============= 核心接口 =============
 
 def get_news_analysis(news_limit: int = DEFAULT_NEWS_LIMIT, use_ai: bool = True) -> dict:
@@ -88,7 +135,14 @@ def get_news_analysis(news_limit: int = DEFAULT_NEWS_LIMIT, use_ai: bool = True)
     default_result = {
         'sentiment': {'score': 50, 'positive': 0, 'negative': 0, 'neutral': 0, 'hot_concepts': [], 'catalysts': [], 'risks': []},
         'impact_analysis': [],
-        'summary': {'s_level_count': 0, 'a_level_count': 0, 'b_level_count': 0, 'c_level_count': 0, 'top_sectors': []}
+        'summary': {
+            's_level_count': 0, 'a_level_count': 0, 'b_level_count': 0, 'c_level_count': 0,
+            's_bullish_count': 0, 's_bearish_count': 0,
+            'a_bullish_count': 0, 'a_bearish_count': 0,
+            'b_bullish_count': 0, 'b_bearish_count': 0,
+            'c_bullish_count': 0, 'c_bearish_count': 0,
+            'top_sectors': []
+        }
     }
     
     if AKShareEnhancedEngine is None:
@@ -119,8 +173,13 @@ def get_news_analysis(news_limit: int = DEFAULT_NEWS_LIMIT, use_ai: bool = True)
             print(f"[news_analyzer] ✓ 使用 DeepSeek AI 分析 {len(all_news)} 条新闻", file=sys.stderr)
             combined_result = analyze_news_combined(all_news[:20])
             sentiment_result = combined_result.get('sentiment', default_result['sentiment'])
-            impact_summary = combined_result.get('summary', default_result['summary'])
+            impact_summary = dict(combined_result.get('summary', default_result['summary']))
             impact_analysis = combined_result.get('impact_analysis', [])
+
+            # 根据 DB 中的 sentiment 字段，统计各影响等级的看多/看空数量
+            sentiment_by_level = _calc_sentiment_by_level(impact_analysis, all_news[:20])
+            impact_summary.update(sentiment_by_level)
+
             return {
                 'sentiment': sentiment_result,
                 'impact_analysis': impact_analysis,

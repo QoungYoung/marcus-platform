@@ -1764,10 +1764,25 @@ def get_market_status() -> dict:
 
         print(f"[新闻分析] 情绪={sentiment_score:.1f}, 正面={sentiment_positive}, 负面={sentiment_negative}")
         impact_summary = news_impact.get('summary', {})
-        print(f"[新闻分析] S 级={impact_summary.get('s_level_count', 0)}, "
-              f"A 级={impact_summary.get('a_level_count', 0)}, "
-              f"B 级={impact_summary.get('b_level_count', 0)}, "
-              f"C 级={impact_summary.get('c_level_count', 0)}")
+
+        # 构建各级别看多/看空明细
+        def _format_level(summary, prefix):
+            count = summary.get(f'{prefix}_level_count', 0)
+            bull = summary.get(f'{prefix}_bullish_count', 0)
+            bear = summary.get(f'{prefix}_bearish_count', 0)
+            parts = []
+            if bear > 0:
+                parts.append(f'看空{bear}条')
+            if bull > 0:
+                parts.append(f'看多{bull}条')
+            if parts:
+                return f'{prefix} 级={count}（{",".join(parts)}）'
+            return f'{prefix} 级={count}'
+
+        print(f"[新闻分析] {_format_level(impact_summary, 's')}, "
+              f"{_format_level(impact_summary, 'a')}, "
+              f"{_format_level(impact_summary, 'b')}, "
+              f"{_format_level(impact_summary, 'c')}")
 
         if cached_concept_scores:
             print(f"[AI概念评分] {cached_concept_scores}")
