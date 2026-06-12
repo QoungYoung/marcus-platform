@@ -777,8 +777,14 @@ async def get_concept_fund_flow(
     """
     from datetime import datetime as dt
 
-    # ── 优先：东财 push2 实时接口 ──
-    if _EM_FLOW_AVAILABLE:
+    # ── 判断是否应该跳过东财实接口（16:00 后 / 周末） ──
+    now = dt.now()
+    skip_em = now.hour >= 16 or now.weekday() >= 5  # 16点后数据已定型，周末无实数据
+    if skip_em:
+        logger.info(f"[concept-fund-flow] 已过 16:00 或非交易日，跳过东财实接口，走 Tushare")
+
+    # ── 优先：东财 push2 实时接口（仅在 16:00 前尝试） ──
+    if _EM_FLOW_AVAILABLE and not skip_em:
         try:
             if sort_by == "main_net":
                 flow_data = get_top_inflow_sectors("concept", top_n=limit * 2, use_cache=True)
@@ -818,13 +824,16 @@ async def get_concept_fund_flow(
                 sectors.append(item)
 
             logger.info(f"[concept-fund-flow] 东财实时: {len(sectors)} 个概念 (sort={sort_by})")
-            return {
-                "sectors": sectors,
-                "count": len(sectors),
-                "sort_by": sort_by,
-                "data_source": "东财push2(realtime)",
-                "trade_date": dt.now().strftime("%Y%m%d"),
-            }
+            if sectors:
+                return {
+                    "sectors": sectors,
+                    "count": len(sectors),
+                    "sort_by": sort_by,
+                    "data_source": "东财push2(realtime)",
+                    "trade_date": dt.now().strftime("%Y%m%d"),
+                }
+            # 东财返回空 → 降级到 Tushare
+            logger.info("[concept-fund-flow] 东财返回 0 条，降级到 Tushare")
         except Exception as e:
             logger.warning(f"[concept-fund-flow] 东财实时获取失败，降级到Tushare: {e}")
 
@@ -922,7 +931,10 @@ async def get_moneyflow_mkt(
     from datetime import datetime as dt
 
     # ── 实时数据（东财 push2 ulist.np）──
-    if source in ("auto", "realtime") and not trade_date and _EM_FLOW_AVAILABLE:
+    # 16:00 后 / 周末跳过实时，走 Tushare
+    now = dt.now()
+    skip_em = now.hour >= 16 or now.weekday() >= 5
+    if source in ("auto", "realtime") and not trade_date and _EM_FLOW_AVAILABLE and not skip_em:
         try:
             from utils.em_sector_flow import get_market_moneyflow_realtime
             rt = get_market_moneyflow_realtime()
