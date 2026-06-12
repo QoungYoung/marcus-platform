@@ -885,7 +885,7 @@ class SchedulerService:
         elif 'early' in task.id or pi_prompt_context == 'early' or 'morning' in task.id or pi_prompt_context == 'morning':
             trade_mode_instruction = (
                 "现在是早盘 9:35，进入 **建仓模式**。\n"
-                "优先关注扫描报告中 hot_concepts 的强势标的，\n"
+                "分析扫描报告中 寻找短线右侧强势标的，\n"
                 "严格按照右侧交易 SOP 建仓。"
             )
         elif 'late' in task.id or pi_prompt_context == 'late_morning' or 'late_morning' in task.id:

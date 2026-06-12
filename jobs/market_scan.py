@@ -1461,6 +1461,7 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         print(f"[情绪辅助] +{sentiment_bonus}% → limit={position_limit}%")
 
     # Step 4: 交易反馈调整（仅计当日持仓亏损）
+    losing_trades = []  # 提前初始化，供后续恢复检测使用
     if feedback_list:
         from datetime import date
         today = date.today().isoformat()
@@ -1561,6 +1562,23 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
                         'fund_net': item.get('net_fmt', 'N/A')
                     }
 
+    # Step 8.5: 仓位恢复检测
+    # 解决"只降不升"的非对称困局：当导致降仓的风险信号减弱或消失时，逐步恢复
+    base_limit = initial.get('position_limit', 60)
+    price_confirmed = validation.get('price_action_confirm', False)
+    if position_limit < base_limit * 0.7:  # 当前仓位被压低到基础值的 70% 以下 → 触发恢复评估
+        # 恢复条件：价格已确认 + 当日显著亏损不超过 1 只 + 资金流非对倒出货
+        recovery_ok = (
+            price_confirmed
+            and len(losing_trades) <= 1
+            and flow_nature not in ('对倒出货',)
+        )
+        if recovery_ok:
+            # 逐步恢复：每轮 +5%，目标为 max(基础值×80%, 40%)
+            recovery_target = max(int(base_limit * 0.8), 40)
+            position_limit = min(position_limit + 5, recovery_target, MARCUS_POSITION_CAP)
+            print(f"[仓位恢复] ✅ 风险信号减弱（价格确认✅ 显著亏损≤1✅），仓位上限恢复 +5% → {position_limit}%")
+
     # Step 9: 硬封顶 Marcus 60% 铁律
     position_limit = min(position_limit, MARCUS_POSITION_CAP)
 
@@ -1568,7 +1586,7 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
     # 当多个指数持续下跌超过多轮扫描，自动触发 stance 降级
     downgrade = check_persistent_downgrade(validation, chain)
 
-    # Step 10: 确定市场立场（信号驱动，不绑定仓位）
+    # Step 10: 确定市场立场（信号驱动）
     # 价格确认 → green；未确认但情绪支持 → yellow；否则 → hold
     price_confirmed = validation.get('price_action_confirm', False)
     if price_confirmed:
@@ -1580,6 +1598,17 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
     else:
         adjusted_stance = '⚪ hold'
         stance_code = 'yellow'
+
+    # Step 10.3: 立场-仓位一致性校验
+    # 避免立场与仓位上限矛盾（如 aggressive_buy 但仓位上限仅 20%）
+    if stance_code == 'green' and position_limit < 30:
+        # 激进看多但仓位被风险控制压低 → 立场降为谨慎
+        adjusted_stance = '🟡 cautious_buy'
+        stance_code = 'yellow'
+        # 保留原始判定信息用于报告展示
+        validation['stance_override_reason'] = (
+            f'价格已确认，但仓位上限仅{position_limit}%（<30%），立场降级为 cautious_buy'
+        )
 
     # Step 10.5: 应用持续降级（优先级高于 Step 10 常规判定）
     if downgrade.get('downgrade_triggered'):
