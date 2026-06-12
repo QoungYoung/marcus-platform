@@ -1342,6 +1342,9 @@ const server = http.createServer(async (req, res) => {
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       };
 
+      // 立即发送启动事件，建立流连接（避免浏览器显示"阻塞"）
+      sendSSE('start', { message: '专家组讨论已启动，正在收集数据...' });
+
       try {
         const result = await executePanelDiscussion(message, sessionId, (event) => {
           sendSSE(event.phase, event);

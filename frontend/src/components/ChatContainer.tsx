@@ -1617,9 +1617,8 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         const makeLoadingContent = (text: string) => [{ type: 'text' as const, text }];
         const loadingId = generateUUID();
         const loadingMsg = `## 👥 专家组群聊讨论启动\n\n> 5 位专家已就位，正在进行多轮讨论...\n\n| 阶段 | 状态 |\n|------|:--:|\n| 🗂️ 数据采集 | ⏳ 进行中... |\n| 📝 独立分析（4 专家并行） | ⬜ 等待中 |\n| 💬 交叉评论（相互点评） | ⬜ 等待中 |\n| 🔄 二次反思改进 | ⬜ 等待中 |\n| 🎤 主持人综合 | ⬜ 等待中 |\n\n⏱️ 预计耗时 5-9 分钟，请耐心等待...`;
-        // 添加一个标记 ID 用于后续替换
-        (msgs[msgs.length - 1] as any)._panelLoadingId = loadingId;
-        msgs.push({ role: 'assistant', content: makeLoadingContent(loadingMsg) } as any);
+        // 加载消息带上标记 ID，SSE 事件到达时原地替换
+        msgs.push({ role: 'assistant', content: makeLoadingContent(loadingMsg), _panelLoadingId: loadingId } as any);
         agent.state.messages = [...msgs];
         triggerUIRefresh();
 
