@@ -890,14 +890,16 @@ class SchedulerService:
             )
         elif 'late' in task.id or pi_prompt_context == 'late_morning' or 'late_morning' in task.id:
             trade_mode_instruction = (
-                "现在是午前 10:35，进入 **趋势确认模式**。\n"
-                "评估早盘建仓标的走势，不符合预期的及时止损，\n"
-                "趋势确认的可以考虑加仓。"
+                "现在是午前 10:35，进入 **趋势确认+建仓模式**。\n"
+                "1. 评估早盘建仓标的走势，不符合预期的及时止损\n"
+                "2. 趋势确认的可以考虑加仓\n"
+                "3. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
             )
         elif 'afternoon' in task.id or pi_prompt_context == 'afternoon':
             trade_mode_instruction = (
-                "现在是午后 13:35，进入 **午后修正模式**。\n"
-                "关注下午开盘方向，决定是否加仓或减仓。"
+                "现在是午后 13:35，进入 **午后修正+建仓模式**。\n"
+                "1. 关注下午开盘方向，决定是否加仓或减仓\n"
+                "2. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
             )
         else:
             trade_mode_instruction = "请基于最新扫描报告执行自主交易决策。"
