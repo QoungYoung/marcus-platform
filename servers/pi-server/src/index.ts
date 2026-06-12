@@ -615,10 +615,10 @@ function getOrCreateAgent(sessionId: string, mode: string): Agent {
 
   const { systemPrompt, tools } = getModeConfig(mode);
 
-  // 反思模式：DeepSeek-v4-pro + 最高思考等级
-  const isReflect = mode === 'reflect';
-  const model = getModel('deepseek', isReflect ? REFLECT_MODEL : DEEPSEEK_MODEL);
-  const thinkingLevel = isReflect ? 'high' : 'medium';
+  // 交易/反思模式：DeepSeek-v4-pro + 最高思考等级；聊天模式：轻量模型
+  const isHighThinking = mode === 'reflect' || mode === 'trade';
+  const model = getModel('deepseek', isHighThinking ? REFLECT_MODEL : DEEPSEEK_MODEL);
+  const thinkingLevel = isHighThinking ? 'high' : 'medium';
 
   const savedMessages = loadSession(sessionId);
 
@@ -637,7 +637,7 @@ function getOrCreateAgent(sessionId: string, mode: string): Agent {
   });
 
   modeSessions.set(sessionId, agent);
-  console.log(`[PiServer] 新会话 [${mode}]: ${sessionId} (${savedMessages.length > 0 ? '已恢复' : '空白'})${isReflect ? ' 🔍 v4-pro·高思考' : ''}`);
+  console.log(`[PiServer] 新会话 [${mode}]: ${sessionId} (${savedMessages.length > 0 ? '已恢复' : '空白'})${isHighThinking ? ' 🔍 v4-pro·高思考' : ''}`);
   return agent;
 }
 
@@ -804,8 +804,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`🚀 Marcus Pi Server 已启动: http://localhost:${PORT}`);
-  console.log(`   交易模型: deepseek/${DEEPSEEK_MODEL}`);
-  console.log(`   反思模型: deepseek/${REFLECT_MODEL} (最高思考)`);
+  console.log(`   聊天模型: deepseek/${DEEPSEEK_MODEL}`);
+  console.log(`   交易/反思模型: deepseek/${REFLECT_MODEL} (最高思考)`);
   console.log(`   聊天工具: ${chatTools.length} 个 (只读)`);
   console.log(`   交易工具: ${tradeTools.length} 个 (含下单)`);
   console.log(`   反思工具: ${reflectTools.length} 个 (只读+历史)`);
