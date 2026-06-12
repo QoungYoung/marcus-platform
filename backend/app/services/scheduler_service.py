@@ -1123,8 +1123,8 @@ class SchedulerService:
 
         logger.info(f"[{execution_id}] Sending pi_reflect request for {task.id} "
                     f"(日期范围: {start_date}→{end_date})...")
-        # 反思可能需要更长时间（深度推理）
-        with urllib.request.urlopen(req, context=ctx, timeout=300) as resp:
+        # 反思可能需要更长时间（专家组群聊：数据采集 + 4 专家并行 + 交叉评论 + 主持人综合）
+        with urllib.request.urlopen(req, context=ctx, timeout=600) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
             reply = data.get("reply", "")
             elapsed = data.get("elapsed_ms", 0)
