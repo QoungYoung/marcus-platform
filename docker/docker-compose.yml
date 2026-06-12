@@ -13,7 +13,7 @@ services:
       TZ: Asia/Shanghai
     ports:
       # 开发/调试用：如需外部访问，将 127.0.0.1 改为 0.0.0.0（见下方说明）
-      - "127.0.0.1:5432:5432"
+      - "0.0.0.0:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - /etc/localtime:/etc/localtime:ro
