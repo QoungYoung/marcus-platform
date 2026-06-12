@@ -585,6 +585,114 @@ def check_persistent_downgrade(validation: dict, chain: StrategyChain = None) ->
     return result
 
 
+def check_accelerated_downgrade(validation: dict, fund_flow: dict = None,
+                                 chain: StrategyChain = None) -> dict:
+    """
+    盘中加速降级检测：当三个条件同时满足时，不等收盘复盘，直接降为 red。
+
+    触发条件（ALL）：
+    ① trend_confirm 连续 3 轮 0/2（没有任何指数趋势确认）
+    ② 主力资金流出加速（每轮净流出递增 > 10%）
+    ③ 指数跌幅持续扩大（当前轮跌幅 > 前两轮跌幅均值）
+
+    与 check_persistent_downgrade 的区别：
+    - persistent 基于"持续空头"的低速累积（≥5 轮才触发）
+    - accelerated 基于"恶化加速"的高速检测（3 轮即触发，要求三个信号同时）
+
+    Args:
+        validation: 当前轮 validation（含 trend_confirm_flag / fund_outflow_rate / avg_index_change）
+        fund_flow: 资金流向数据（net_flow 等）
+        chain: 策略链管理器（读取历史轮次）
+
+    Returns:
+        dict: {downgrade_triggered, downgrade_to, consecutive_rounds, reason}
+    """
+    result = {
+        'downgrade_triggered': False,
+        'downgrade_to': '🔴 hold (加速降级: 三信号恶化)',
+        'to_code': 'red',
+        'consecutive_rounds': 0,
+        'reason': '',
+    }
+
+    # 条件①：本轮趋势确认失败？
+    trend_confirm_flag = validation.get('trend_confirm_flag', True)
+    trend_confirm_count = validation.get('trend_confirm_count', 0)
+    if trend_confirm_flag and trend_confirm_count > 0:
+        return result  # 本轮有确认，不触发
+
+    # 检查连续 3 轮 trend_confirm 失败
+    consecutive = 1  # 含当前轮
+    if chain:
+        intraday_scans = chain.state.get('intraday_scans', [])
+        for scan in reversed(intraday_scans):
+            val_hist = scan.get('validation', {})
+            tc = val_hist.get('trend_confirm_count', 0)
+            tf = val_hist.get('trend_confirm_flag', True)
+            if not tf or tc == 0:
+                consecutive += 1
+            else:
+                break
+
+    result['consecutive_rounds'] = consecutive
+    if consecutive < 3:
+        print(f"[加速降级] ⏳ trend_confirm 连续 {consecutive}/3 轮失败，继续观察")
+        return result
+
+    # 条件②：资金流出加速（每轮递增 > 10%）
+    fund_accelerating = False
+    if fund_flow and chain:
+        current_outflow = abs(fund_flow.get('net_flow', 0)) if fund_flow.get('net_flow', 0) < 0 else 0
+        intraday_scans = chain.state.get('intraday_scans', [])
+        outflows = [current_outflow]
+        for scan in reversed(intraday_scans[-2:]):  # 取最近 2 轮
+            ff = scan.get('fund_flow', {})
+            nf = ff.get('net_flow', 0)
+            outflows.append(abs(nf) if nf < 0 else 0)
+        # 检查是否递增
+        if len(outflows) >= 2 and outflows[0] > 0:
+            accelerating_count = 0
+            for i in range(1, len(outflows)):
+                if outflows[i-1] > outflows[i] * 1.1 and outflows[i-1] > 0:
+                    accelerating_count += 1
+            if accelerating_count >= 2:  # 至少 2 次递增
+                fund_accelerating = True
+
+    if not fund_accelerating:
+        print(f"[加速降级] ⏳ trend_confirm 连续失败但资金流出未加速，不触发")
+        return result
+
+    # 条件③：指数跌幅持续扩大
+    index_declining = False
+    current_change = validation.get('avg_index_change', 0)
+    if current_change < 0 and chain:
+        intraday_scans = chain.state.get('intraday_scans', [])
+        recent_changes = [current_change]
+        for scan in reversed(intraday_scans[-2:]):
+            val_hist = scan.get('validation', {})
+            avg_chg = val_hist.get('avg_index_change', 0)
+            recent_changes.append(avg_chg)
+        # 当前跌幅 > 前两轮跌幅均值
+        if len(recent_changes) >= 2:
+            prev_avg = sum(recent_changes[1:]) / len(recent_changes[1:])
+            if current_change < prev_avg and current_change < -0.3:
+                index_declining = True
+
+    if not index_declining:
+        print(f"[加速降级] ⏳ trend_confirm 失败 + 资金加速流出，但指数跌幅未扩大，不触发")
+        return result
+
+    # 三个条件全部满足 → 触发降级
+    result['downgrade_triggered'] = True
+    result['reason'] = (
+        f"三信号恶化：trend_confirm 连续 {consecutive} 轮失败 + "
+        f"资金流出加速 + 指数跌幅扩大（当前 {current_change:+.2f}%），"
+        f"不等收盘复盘，直接降为 red"
+    )
+    print(f"[加速降级] 🚨 触发！{result['reason']}")
+    return result
+
+
 def analyze_trade_feedback(chain: StrategyChain) -> list:
     """
     分析已有交易的反馈，并将结果写回策略链（闭环核心）
@@ -1582,6 +1690,9 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
     # Step 9: 硬封顶 Marcus 60% 铁律
     position_limit = min(position_limit, MARCUS_POSITION_CAP)
 
+    # Step 9.3: 加速降级检测（三信号恶化 → 不等收盘，直接降 red）
+    accelerated = check_accelerated_downgrade(validation, fund_flow, chain)
+
     # Step 9.5: 持续降级检测（跨轮次空头追踪）
     # 当多个指数持续下跌超过多轮扫描，自动触发 stance 降级
     downgrade = check_persistent_downgrade(validation, chain)
@@ -1610,8 +1721,16 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
             f'价格已确认，但仓位上限仅{position_limit}%（<30%），立场降级为 cautious_buy'
         )
 
-    # Step 10.5: 应用持续降级（优先级高于 Step 10 常规判定）
-    if downgrade.get('downgrade_triggered'):
+
+    # Step 10.4: 应用加速降级（优先级：加速 > 持续 > 常规判定）
+    if accelerated.get('downgrade_triggered'):
+        adjusted_stance = accelerated.get('downgrade_to', adjusted_stance)
+        stance_code = accelerated.get('to_code', stance_code)
+        position_limit = min(position_limit, 15)  # 加速降级更激进：仓位 ≤ 15%
+        print(f"[加速降级] 🛑 强制 red + 仓位上限 → {position_limit}%")
+
+    # Step 10.5: 应用持续降级（加速降级未触发时生效）
+    if downgrade.get('downgrade_triggered') and not accelerated.get('downgrade_triggered'):
         adjusted_stance = downgrade.get('downgrade_to', adjusted_stance)
         stance_code = downgrade.get('to_code', stance_code)
         # 降级为 red 时强制仓位上限 ≤ 20%（防御模式）
@@ -1633,6 +1752,7 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         'sector_analysis': sector_analysis,
         'sector_allocation': sector_allocation,
         'downgrade': downgrade,  # 持续降级结果，供报告和 scan_result 引用
+        'accelerated_downgrade': accelerated,  # 加速降级结果（更紧急）
     }
 
 

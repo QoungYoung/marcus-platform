@@ -982,6 +982,16 @@ class SchedulerService:
                         f"扫描仓位 < Pi仓位的 50%，建议重新评估当前仓位上限。\n"
                     )
                     logger.info(f"[{execution_id}] [stance_divergence] limit_gap: scan={scan_limit}% vs pi={pi_limit}%, warning_injected=True")
+                elif rank_diff == 0 and scan_limit and pi_limit and scan_limit < pi_limit * 0.35:
+                    # 同档立场但仓位差距 > 3倍（如 Pi yellow/60% vs 扫描 yellow/20%）
+                    stance_warning = (
+                        f"\n🟡 **仓位级偏离警告（代码层检测）**\n"
+                        f"立场同档（均为 {scan_stance}），但仓位上限严重脱节：\n"
+                        f"扫描系统仓位上限: {scan_limit}% | Pi 上轮仓位上限: {pi_limit}%\n"
+                        f"差距 {pi_limit / scan_limit:.1f}x → Pi 仓位上限严重虚高，以扫描值为准。\n"
+                    )
+                    logger.info(f"[{execution_id}] [stance_divergence] same_stance_limit_gap: "
+                                f"scan={scan_limit}% vs pi={pi_limit}%, ratio={pi_limit/scan_limit:.1f}x, warning_injected=True")
         except Exception as e:
             logger.error(f"[{execution_id}] Stance divergence check failed (non-fatal): {e}")
 
