@@ -1,6 +1,28 @@
 # Marcus AI Trading Platform - Docker Compose Configuration
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: marcus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marcus
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-marcus123}
+      POSTGRES_DB: marcus_trading
+      TZ: Asia/Shanghai
+    ports:
+      # 开发/调试用：如需外部访问，将 127.0.0.1 改为 0.0.0.0（见下方说明）
+      - "0.0.0.0:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marcus -d marcus_trading"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # Backend API
   backend:
     build:
@@ -13,6 +35,7 @@ services:
       TZ: Asia/Shanghai
       MARCUS_WORKSPACE: /app
       PI_SERVER_URL: http://piserver:3001/chat
+      DATABASE_URL: postgresql://marcus:${DB_PASSWORD:-marcus123}@postgres:5432/marcus_trading
     ports:
       - "8000:8000"
     volumes:
@@ -22,6 +45,9 @@ services:
       - ../logs:/app/logs
       - ../memory:/app/memory
       - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   # Pi Server (Pi Agent HTTP Server)
@@ -58,3 +84,6 @@ services:
     depends_on:
       - backend
       - piserver
+
+volumes:
+  pgdata:

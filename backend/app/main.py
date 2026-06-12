@@ -33,16 +33,39 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
-from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan
+from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts
 from app.api.scheduler import router as scheduler_router
 from app.services.scheduler_service import scheduler_service
 from app.services.qqbot_service import qqbot_service, get_qqbot_service
+from app.database import init_db
+from app.services.prompt_service import seed_prompts
+from app.db.prompt_seeds import PROMPT_SEEDS
 
 import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop scheduler and QQ bot"""
+    # Startup — 初始化数据库 + 种子数据
+    try:
+        print("[Main] 初始化 PostgreSQL 表结构...")
+        init_db()
+        print("[Main] 表结构初始化完成")
+
+        # 种子 prompts（幂等，只插入不存在的）
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            seeded = seed_prompts(db, PROMPT_SEEDS)
+            if seeded > 0:
+                print(f"[Main] 已写入 {seeded} 条初始 prompt")
+            else:
+                print("[Main] Prompt 表已有数据，跳过种子写入")
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[Main] 数据库初始化警告（如无 PostgreSQL 可忽略）: {e}")
+
     # Startup
     scheduler_service.start()
     print(f"Scheduler started - {len(scheduler_service.tasks)} tasks loaded")
@@ -100,6 +123,7 @@ app.include_router(agent.router, prefix="/api/v1")
 app.include_router(etf.router, prefix="/api/v1")
 app.include_router(db.router, prefix="/api/v1")
 app.include_router(scan.router, prefix="/api/v1")
+app.include_router(prompts.router, prefix="/api/v1")
 
 
 @app.get("/")
