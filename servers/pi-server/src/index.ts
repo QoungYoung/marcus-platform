@@ -63,25 +63,34 @@ function getPrompt(name: string): string {
 }
 
 /**
- * 从 Backend API 获取所有 prompt（{name: content}）。
+ * 从 Backend API 获取所有 prompt（{name: content}），带重试。
  * 成功则写入缓存，失败则保留内置回退。
  */
-async function fetchPromptsFromAPI(): Promise<void> {
-  try {
-    const resp = await fetch(`${MARCUS_API_URL}/prompts`);
-    if (!resp.ok) {
-      console.warn(`[PiServer] Prompt API 返回 ${resp.status}，使用内置回退`);
-      return;
-    }
-    const data = await resp.json() as { prompts: Record<string, string>; count: number };
-    if (data.prompts && data.count > 0) {
-      for (const [name, content] of Object.entries(data.prompts)) {
-        promptCache.set(name, content);
+async function fetchPromptsFromAPI(retries = 3, delayMs = 5000): Promise<void> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const resp = await fetch(`${MARCUS_API_URL}/prompts`);
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
       }
-      console.log(`[PiServer] ✅ 从 API 加载了 ${data.count} 条 prompt`);
+      const data = await resp.json() as { prompts: Record<string, string>; count: number };
+      if (data.prompts && data.count > 0) {
+        for (const [name, content] of Object.entries(data.prompts)) {
+          promptCache.set(name, content);
+        }
+        console.log(`[PiServer] ✅ 从 API 加载了 ${data.count} 条 prompt`);
+        return;
+      }
+      throw new Error('空响应');
+    } catch (e: any) {
+      const attempt = i + 1;
+      if (attempt < retries) {
+        console.log(`[PiServer] Prompt API 获取失败 (${e.message})，${delayMs / 1000}s 后重试 (${attempt}/${retries})...`);
+        await new Promise(r => setTimeout(r, delayMs));
+      } else {
+        console.warn(`[PiServer] Prompt API 不可用 (${e.message})，使用内置回退`);
+      }
     }
-  } catch (e: any) {
-    console.warn(`[PiServer] Prompt API 不可用 (${e.message})，使用内置回退`);
   }
 }
 
