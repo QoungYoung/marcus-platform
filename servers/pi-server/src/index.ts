@@ -836,7 +836,7 @@ const reflectTools = REFLECT_TOOLS.map(toAgentTool);
 interface PanelMember {
   role: string;
   roleLabel: string;
-  provider: 'deepseek' | 'minimax';
+  provider: 'deepseek' | 'minimax' | 'minimax-cn';
   modelId: string;
   customModel?: Model<any>;
   thinkingLevel: string;
@@ -850,8 +850,8 @@ function buildMinimaxM3Model(): Model<"anthropic-messages"> {
     id: "MiniMax-M3",
     name: "MiniMax-M3",
     api: "anthropic-messages" as const,
-    provider: "minimax",
-    baseUrl: "https://api.minimax.io/anthropic",
+    provider: "minimax-cn",
+    baseUrl: "https://api.minimaxi.com/anthropic",
     reasoning: true,
     input: ["text"],
     cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
@@ -860,54 +860,66 @@ function buildMinimaxM3Model(): Model<"anthropic-messages"> {
   };
 }
 
-const PANEL_MEMBERS: PanelMember[] = [
-  {
-    role: 'risk_controller',
-    roleLabel: '风控审计师',
-    provider: 'deepseek',
-    modelId: 'deepseek-v4-pro',
-    thinkingLevel: 'high',
-    promptName: 'PANEL_RISK_CONTROLLER_PROMPT',
-    apiKey: DEEPSEEK_API_KEY,
-  },
-  {
-    role: 'trend_trader',
-    roleLabel: '趋势交易员',
-    provider: 'deepseek',
-    modelId: 'deepseek-v4-flash',
-    thinkingLevel: 'medium',
-    promptName: 'PANEL_TREND_TRADER_PROMPT',
-    apiKey: DEEPSEEK_API_KEY,
-  },
-  {
-    role: 'data_analyst',
-    roleLabel: '数据统计师',
-    provider: 'minimax',
-    modelId: 'MiniMax-M2.7',
-    thinkingLevel: 'medium',
-    promptName: 'PANEL_DATA_ANALYST_PROMPT',
-    apiKey: MINIMAX_API_KEY,
-  },
-  {
-    role: 'devils_advocate',
-    roleLabel: '逆向质疑者',
-    provider: 'minimax',
-    modelId: 'MiniMax-M3',
-    customModel: buildMinimaxM3Model(),  // M3 未在 pi-ai 内置注册，使用自定义 Model
-    thinkingLevel: 'medium',
-    promptName: 'PANEL_DEVILS_ADVOCATE_PROMPT',
-    apiKey: MINIMAX_API_KEY,
-  },
-  {
-    role: 'moderator',
-    roleLabel: '主持人',
-    provider: 'deepseek',
-    modelId: 'deepseek-v4-pro',
-    thinkingLevel: 'high',
-    promptName: 'PANEL_MODERATOR_PROMPT',
-    apiKey: DEEPSEEK_API_KEY,
-  },
-];
+const PANEL_MEMBERS: PanelMember[] = (() => {
+  const baseMembers: PanelMember[] = [
+    {
+      role: 'risk_controller',
+      roleLabel: '风控审计师',
+      provider: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+      thinkingLevel: 'high',
+      promptName: 'PANEL_RISK_CONTROLLER_PROMPT',
+      apiKey: DEEPSEEK_API_KEY,
+    },
+    {
+      role: 'trend_trader',
+      roleLabel: '趋势交易员',
+      provider: 'deepseek',
+      modelId: 'deepseek-v4-flash',
+      thinkingLevel: 'medium',
+      promptName: 'PANEL_TREND_TRADER_PROMPT',
+      apiKey: DEEPSEEK_API_KEY,
+    },
+    {
+      role: 'moderator',
+      roleLabel: '主持人',
+      provider: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+      thinkingLevel: 'high',
+      promptName: 'PANEL_MODERATOR_PROMPT',
+      apiKey: DEEPSEEK_API_KEY,
+    },
+  ];
+
+  // MiniMax 专家：仅在有 API Key 时加入
+  if (MINIMAX_API_KEY) {
+    baseMembers.splice(2, 0,
+      {
+        role: 'data_analyst',
+        roleLabel: '数据统计师',
+        provider: 'minimax-cn' as const,
+        modelId: 'MiniMax-M2.7',
+        thinkingLevel: 'medium',
+        promptName: 'PANEL_DATA_ANALYST_PROMPT',
+        apiKey: MINIMAX_API_KEY,
+      },
+      {
+        role: 'devils_advocate',
+        roleLabel: '逆向质疑者',
+        provider: 'minimax-cn' as const,
+        modelId: 'MiniMax-M3',
+        customModel: buildMinimaxM3Model(),
+        thinkingLevel: 'medium',
+        promptName: 'PANEL_DEVILS_ADVOCATE_PROMPT',
+        apiKey: MINIMAX_API_KEY,
+      }
+    );
+  } else {
+    console.log('[PiServer] ⚠️ MINIMAX_API_KEY 未配置，专家组仅使用 DeepSeek (3 位专家)');
+  }
+
+  return baseMembers;
+})();
 
 // ===== 按模式获取提示词和工具（chat / trade 模式） =====
 function getModeConfig(mode: string) {
@@ -1032,13 +1044,13 @@ async function executePanelDiscussion(
   // === Phase 0: 数据采集 ===
   console.log(`[Panel] Phase 0: 数据采集（收集整周数据）...`);
   // 用主持人模型进行数据采集（有 reflectTools 全部工具）
-  const collector = createPanelAgent(PANEL_MEMBERS[4], sessionId); // moderator
+  const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId); // moderator 始终在最后
   const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写反思报告的。你的唯一任务是调用工具收集数据。\n请依次调用 get_pi_analysis_history、get_trade_history、get_latest_scan_report、get_portfolio、get_market_indices 等工具，\n把获取到的所有数据原样输出（不要分析，不要总结）。输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
   const dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
 
   // === Phase 1: 4 位专家并行独立分析 ===
   console.log(`[Panel] Phase 1: 4 位专家并行独立分析...`);
-  const analysts = PANEL_MEMBERS.slice(0, 4); // 前 4 位（不含主持人）
+  const analysts = PANEL_MEMBERS.slice(0, -1); // 除主持人外所有专家
   const phase1Prompt = `以下是本周完整的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n请按照你的角色定位，产出一份专业的分析报告。直接输出报告，不要重复数据。`;
 
   const phase1Results = await Promise.all(
@@ -1111,20 +1123,22 @@ async function executePanelDiscussion(
 
   // === Phase 3: 主持人综合 ===
   console.log(`[Panel] Phase 3: 主持人综合产出最终报告...`);
-  const moderator = PANEL_MEMBERS[4];
-  // 组装完整讨论记录（含 3 轮）
+  const moderator = PANEL_MEMBERS[PANEL_MEMBERS.length - 1]; // 主持人始终在最后
+  // 组装讨论记录，每份报告截断到 2000 字防止上下文溢出
+  const truncate = (text: string, maxLen = 2000) =>
+    text.length <= maxLen ? text : text.slice(0, maxLen) + '\n\n...（已截断）';
   const discussionTranscript = [
     '## 第 1 轮：独立分析',
-    ...phase1Results.map(r => `### ${r.roleLabel}（${r.role}）\n${r.report}`),
+    ...phase1Results.map(r => `### ${r.roleLabel}（${r.role}）\n${truncate(r.report)}`),
     '',
     '## 第 2 轮：交叉评论',
-    ...phase2Results.map(r => `### ${r.roleLabel} 的评论\n${r.commentary}`),
+    ...phase2Results.map(r => `### ${r.roleLabel} 的评论\n${truncate(r.commentary, 1500)}`),
     '',
     '## 第 2.5 轮：二次反思改进',
-    ...phase25Results.map(r => `### ${r.roleLabel} 改进报告\n${r.refinement}`),
+    ...phase25Results.map(r => `### ${r.roleLabel} 改进报告\n${truncate(r.refinement, 1500)}`),
   ].join('\n\n');
 
-  const phase3Prompt = `以下是专家组群聊讨论的完整记录：\n\n---\n${discussionTranscript}\n---\n\n${message}\n\n请综合以上所有专家的分析和评论，产出最终的周度反思报告。\n按你的输出格式要求，包含市场概况、立场演变、仓位评估、错误与偏差、交易执行对比、核心洞察、专家组共识与分歧、下周改进计划、下周关注重点。\n最后一行输出 SIGNAL 行。`;
+  const phase3Prompt = `以下是专家组群聊讨论记录（长报告已截断，保留核心观点）：\n\n---\n${discussionTranscript}\n---\n\n${message}\n\n请综合以上所有专家的分析和评论，产出最终的周度反思报告。\n按你的输出格式要求，包含市场概况、立场演变、仓位评估、错误与偏差、交易执行对比、核心洞察、专家组共识与分歧、下周改进计划、下周关注重点。\n最后一行输出 SIGNAL 行。`;
 
   const moderatorAgent = createPanelAgent(moderator, sessionId);
   const finalReport = await runAgentTurn(moderatorAgent, phase3Prompt, '主持人(综合)');
@@ -1358,12 +1372,11 @@ server.listen(PORT, () => {
   console.log(`🚀 Marcus Pi Server 已启动: http://localhost:${PORT}`);
   console.log(`   聊天模型: deepseek/${DEEPSEEK_MODEL}`);
   console.log(`   交易模型: deepseek/deepseek-v4-pro (最高思考)`);
-  console.log(`   反思模式: 专家组群聊 (5 位专家 × 多模型)`);
-  console.log(`      - 风控审计师: deepseek-v4-pro`);
-  console.log(`      - 趋势交易员: deepseek-v4-flash`);
-  console.log(`      - 数据统计师: MiniMax-M2.7`);
-  console.log(`      - 逆向质疑者: MiniMax-M3`);
-  console.log(`      - 主持人: deepseek-v4-pro`);
+  const panelCount = PANEL_MEMBERS.length;
+  console.log(`   反思模式: 专家组群聊 (${panelCount} 位专家 × 多模型)`);
+  PANEL_MEMBERS.forEach(m => {
+    console.log(`      - ${m.roleLabel}: ${m.provider}/${m.modelId}`);
+  });
   console.log(`   聊天工具: ${chatTools.length} 个 (只读)`);
   console.log(`   交易工具: ${tradeTools.length} 个 (含下单)`);
   console.log(`   反思工具: ${reflectTools.length} 个 (只读+历史)`);

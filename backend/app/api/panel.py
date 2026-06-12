@@ -5,7 +5,8 @@
 import json
 import urllib.request
 import ssl
-from fastapi import APIRouter, HTTPException, Request
+import httpx
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from app.config import get_settings
@@ -62,8 +63,7 @@ def trigger_panel_reflect(req: PanelRequest):
 @router.post("/panel/reflect/stream")
 async def trigger_panel_reflect_stream(req: PanelRequest):
     """
-    SSE 流式版本：实时推送每轮专家发言。
-    使用 EventSource / fetch 消费 SSE 事件流。
+    SSE 流式版本：使用 httpx 异步流实时转发 pi-server 的 SSE 事件。
     """
     settings = get_settings()
     pi_url = settings.PI_SERVER_URL.replace("/chat", "/chat/stream")
@@ -73,22 +73,21 @@ async def trigger_panel_reflect_stream(req: PanelRequest):
         "session_id": "frontend_panel_stream",
     }).encode("utf-8")
 
-    pi_req = urllib.request.Request(
-        pi_url,
-        data=payload,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        method="POST",
-    )
-
-    ctx = ssl.create_default_context()
-
-    def event_stream():
+    async def event_stream():
         try:
-            with urllib.request.urlopen(pi_req, context=ctx, timeout=600) as resp:
-                for line in resp:
-                    decoded = line.decode("utf-8").rstrip("\n")
-                    yield decoded + "\n"
-        except urllib.error.URLError as e:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10)) as client:
+                async with client.stream(
+                    "POST", pi_url,
+                    content=payload,
+                    headers={"Content-Type": "application/json; charset=utf-8"},
+                ) as resp:
+                    if resp.status_code != 200:
+                        yield f"event: error\ndata: {{\"message\":\"Pi Server 返回 {resp.status_code}\"}}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if line:
+                            yield line + "\n"
+        except httpx.ConnectError as e:
             yield f"event: error\ndata: {{\"message\":\"Pi Server 不可用: {str(e)}\"}}\n\n"
         except Exception as e:
             yield f"event: error\ndata: {{\"message\":\"{str(e)}\"}}\n\n"
