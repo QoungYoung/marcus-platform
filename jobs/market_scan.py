@@ -1563,10 +1563,10 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
                     }
 
     # Step 8.5: 仓位恢复检测
-    # 解决"只降不升"的非对称困局：当导致降仓的风险信号减弱或消失时，逐步恢复
+    # 解决"只降不升"的非对称困局：风险解除后直接恢复到盘前基础仓位
     base_limit = initial.get('position_limit', 60)
     price_confirmed = validation.get('price_action_confirm', False)
-    if position_limit < base_limit * 0.7:  # 当前仓位被压低到基础值的 70% 以下 → 触发恢复评估
+    if position_limit < base_limit:
         # 恢复条件：价格已确认 + 当日显著亏损不超过 1 只 + 资金流非对倒出货
         recovery_ok = (
             price_confirmed
@@ -1574,10 +1574,10 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
             and flow_nature not in ('对倒出货',)
         )
         if recovery_ok:
-            # 逐步恢复：每轮 +5%，目标为 max(基础值×80%, 40%)
-            recovery_target = max(int(base_limit * 0.8), 40)
-            position_limit = min(position_limit + 5, recovery_target, MARCUS_POSITION_CAP)
-            print(f"[仓位恢复] ✅ 风险信号减弱（价格确认✅ 显著亏损≤1✅），仓位上限恢复 +5% → {position_limit}%")
+            old_limit = position_limit
+            # 直接恢复到盘前基础仓位（Step 9 会施加 60% 硬封顶）
+            position_limit = base_limit
+            print(f"[仓位恢复] ✅ 风险解除（价格确认✅ 显著亏损≤1✅），仓位上限直接恢复 {old_limit}% → {position_limit}%")
 
     # Step 9: 硬封顶 Marcus 60% 铁律
     position_limit = min(position_limit, MARCUS_POSITION_CAP)
