@@ -764,6 +764,16 @@ const reflectTools: AgentTool[] = [
   createTool(getTradeHistoryTool),
 ];
 
+// 占位工具（reflect 模式下不调用本地模型，给 agent 一个空工具让它直接返回）
+const spoofTools: AgentTool[] = [createTool({
+  name: 'placeholder',
+  description: 'Internal tool for panel discussion mode',
+  parameters: Type.Object({}),
+  async execute(_toolCallId: string, _params: unknown, _signal: AbortSignal | undefined) {
+    return { content: [{ type: 'text' as const, text: 'ok' }] };
+  },
+})];
+
 // 默认工具集（向后兼容）
 const tradingTools = chatTools;
 
@@ -1000,7 +1010,7 @@ interface TradeStatus {
   reason: string;
 }
 
-type ChatMode = 'chat' | 'reflect';
+type ChatMode = 'chat' | 'reflect'; // reflect = 专家组群聊讨论
 
 const getFormattedTime = (tradeStatus?: TradeStatus | null): { timeStr: string; marketStatus: string } => {
   let timeStr: string;
@@ -1112,85 +1122,24 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 - 查某概念包含的股票：read_db_table(db="stock_pool.db", table="stock_concept_map", where="concept_name = '半导体概念'", limit=50)
 - ts_code 格式为 "代码.交易所"（如 000001.SZ），symbol 为纯数字代码（如 000001）`;
 
-// ===== 复盘模式 System Prompt（周度反思 / 策略复盘）=====
-const REFLECT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家（复盘模式）
+// ===== 专家组群聊讨论模式 — 由 pi-server 执行，前端仅做中转 =====
+const REFLECT_SYSTEM_PROMPT = `## 专家组群聊讨论模式
 
-### 你的职责
-你在复盘模式下进行深度分析。你的任务是回顾交易历史，评估策略执行质量，识别模式与偏差，并提供可执行的改进建议。
+你是 Marcus 系统的专家组主持人。本模式由 5 位不同性格的右侧交易专家组成群聊讨论：
+- 🛡️ 风控审计师 (DeepSeek-v4-pro) — 保守吹毛求疵，审计每一笔风控
+- 📈 趋势交易员 (DeepSeek-v4-flash) — 激进右侧信仰，评估趋势和选股
+- 📊 数据统计师 (MiniMax-M2.7) — 客观量化，纯数据统计
+- 🔍 逆向质疑者 (MiniMax-M3) — 怀疑论者，挑战所有共识
+- 🎤 主持人 (DeepSeek-v4-pro) — 公正提炼，综合各方观点
 
-你不是在交易——你是一位冷静的复盘分析师。
+### 讨论流程（4 轮）
+1. **数据采集** — 收集整周交易数据、Pi分析、持仓
+2. **独立分析** — 4 位专家并行独立分析（约 2 分钟）
+3. **交叉评论** — 每位专家对他人的报告发表评论（约 2 分钟）
+4. **二次反思** — 根据评论修正/强化自己的分析（约 2 分钟）
+5. **主持人综合** — 综合所有讨论产出最终报告（约 2 分钟）
 
-### 核心工具
-| 工具 | 用途 | 使用时机 |
-|------|------|----------|
-| **get_pi_analysis_history** | 获取整周 Pi 分析历史 | 第一步必调，获取全部记录 |
-| **get_trade_history** | 获取整周交易执行报告 | 第一步必调，对比分析 vs 执行 |
-| **get_latest_scan_report** | 获取最新扫描报告 | 了解当前市场状态 |
-| **get_market_indices** | 大盘指数 | 判断大盘走势 |
-| **get_portfolio** | 账户持仓与资金 | 评估仓位状态 |
-| **get_concept_fund_flow** | 概念板块行情 | 概念轮动分析 |
-| **read_db_table / get_db_schema** | 数据库查询 | 查询交易记录等历史数据 |
-
-### 复盘 SOP
-**第一步：数据收集**
-1. 调用 get_pi_analysis_history(start_date, end_date) 获取整周 Pi 分析记录
-2. 调用 get_trade_history(start_date, end_date) 获取整周交易执行报告
-3. 调用 get_latest_scan_report() 了解最新市场状态
-4. 调用 get_portfolio() 查看账户状态
-5. 调用 get_market_indices() 看大盘走势
-
-**第二步：逐日分析**
-对每一天的 Pi 分析记录，提取：
-- 盘中立场（stance）的变化趋势
-- 仓位上限（position_limit）的调整节奏
-- 判断理由（reason）的一致性
-- Pi 的预测是否被后续走势验证
-- **交易执行对比**：Pi 分析建议 vs 实际交易动作，偏差多大？
-
-**第三步：关键决策回顾**
-- 立场切换点：从 green 变 yellow 或 red 的时刻——是什么触发的？
-- 连续模式：是否有连续的误判或连续的正确判断？
-- **交易执行对比**：对比交易报告中的动机与实际结果——
-  产业链组合逻辑是否得到贯彻？绿盘下是否缩手？红盘是否触发板块背离例外？
-
-**第四步：策略评估**
-- 整体立场准确率
-- 仓位管理质量
-- 风险意识评估
-- 板块轮动判断准确性
-
-**第五步：改进建议**
-- 针对暴露的问题，提出 2-3 条具体可执行的改进措施
-- 设定明确的关注重点和风险底线
-
-### 输出格式
-\`\`\`
-## Marcus 复盘报告 — {日期范围}
-
-### 一、市场概况
-- 大盘走势：{数据}
-- 市场情绪：{判断}
-- 概念轮动：{路径}
-
-### 二、Pi 立场演变
-| 日期 | 轮次 | 任务 | 立场 | 仓位上限 | 判断理由 |
-|------|------|------|------|----------|----------|
-
-### 三、立场趋势分析
-- 立场变化路径
-- 关键切换点
-- 趋势一致性评估
-
-### 四、仓位管理评估
-### 五、错误与偏差
-### 六、本周核心洞察
-### 七、改进计划
-\`\`\`
-
-### 分析原则
-- **数据驱动**：每个结论都必须有具体数据支撑
-- **面向改进**：反思的目的不是自责，是找到可执行的改进空间
-- **诚实客观**：承认错误，不粉饰，不过度自信`;
+⏱️ 总耗时约 5-9 分钟，请耐心等待。`;
 
 const buildSystemPrompt = (tradeStatus?: TradeStatus | null, mode?: ChatMode): string => {
   const { timeStr, marketStatus } = getFormattedTime(tradeStatus);
@@ -1218,14 +1167,31 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   // Keep modeRef in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
+  // 触发 ChatPanel 的消息列表刷新
+  const triggerUIRefresh = () => {
+    queueMicrotask(() => {
+      const ml = document.querySelector('message-list') as any;
+      if (ml) {
+        ml.messages = [...ml.messages];
+        (ml as LitElement).requestUpdate?.();
+      }
+      const me = document.querySelector('message-editor') as any;
+      if (me) {
+        me.isStreaming = false;
+        (me as LitElement).requestUpdate?.();
+      }
+    });
+  };
+
   // ===== 模式切换：更新 Agent 的 systemPrompt + tools =====
   useEffect(() => {
     if (!agentRef.current) return;
     const agent = agentRef.current;
     agent.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current, mode);
-    agent.state.tools = mode === 'reflect' ? reflectTools : chatTools;
+    // reflect（专家组群聊）模式下不调用本地模型，spoofTools 确保 agent 立即返回不浪费 API
+    agent.state.tools = mode === 'reflect' ? spoofTools : chatTools;
     localStorage.setItem('marcus_chat_mode', mode);
-    console.log(`[模式] 切换为: ${mode === 'reflect' ? '📊 复盘模式' : '💬 聊天模式'}`);
+    console.log(`[模式] 切换为: ${mode === 'reflect' ? '👥 专家组群聊' : '💬 聊天模式'}`);
   }, [mode]);
 
   // ===== Session Management State =====
@@ -1608,6 +1574,172 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
       });
       agentRef.current = agent;
 
+      // ===== Reflect 模式拦截：路由到后端 pi-server 专家组群聊 =====
+      const originalPrompt = (agent as any).prompt.bind(agent);
+      (agent as any).prompt = async (message: string) => {
+        if (modeRef.current !== 'reflect') {
+          return originalPrompt(message);
+        }
+
+        // --- Panel Discussion 模式 ---
+        const msgs = agent.state.messages;
+        // 添加用户消息到 UI（使用 textContent 格式）
+        msgs.push({ role: 'user', content: [{ type: 'text', text: message }] } as any);
+        agent.state.messages = [...msgs];
+        triggerUIRefresh();
+
+        // 构建加载消息内容
+        const makeLoadingContent = (text: string) => [{ type: 'text' as const, text }];
+        const loadingId = generateUUID();
+        const loadingMsg = `## 👥 专家组群聊讨论启动\n\n> 5 位专家已就位，正在进行多轮讨论...\n\n| 阶段 | 状态 |\n|------|:--:|\n| 🗂️ 数据采集 | ⏳ 进行中... |\n| 📝 独立分析（4 专家并行） | ⬜ 等待中 |\n| 💬 交叉评论（相互点评） | ⬜ 等待中 |\n| 🔄 二次反思改进 | ⬜ 等待中 |\n| 🎤 主持人综合 | ⬜ 等待中 |\n\n⏱️ 预计耗时 5-9 分钟，请耐心等待...`;
+        // 添加一个标记 ID 用于后续替换
+        (msgs[msgs.length - 1] as any)._panelLoadingId = loadingId;
+        msgs.push({ role: 'assistant', content: makeLoadingContent(loadingMsg) } as any);
+        agent.state.messages = [...msgs];
+        triggerUIRefresh();
+
+        // 使用定时器更新加载消息（模拟阶段进展）
+        const phases = ['🗂️ 数据采集', '📝 独立分析（4 专家并行）', '💬 交叉评论（相互点评）', '🔄 二次反思改进', '🎤 主持人综合'];
+        let phaseIdx = 0;
+        let elapsed = 0;
+        const progressTimer = setInterval(() => {
+          elapsed += 10;
+          const newPhase = Math.min(Math.floor(elapsed / 90), phases.length - 1);
+          if (newPhase > phaseIdx) {
+            phaseIdx = newPhase;
+            const updatedLines = ['## 👥 专家组群聊讨论中...', '', '> 5 位专家正在进行多轮讨论', '', '| 阶段 | 状态 |', '|------|:--:|'];
+            for (let i = 0; i < phases.length; i++) {
+              if (i < phaseIdx) updatedLines.push(`| ${phases[i]} | ✅ 已完成 |`);
+              else if (i === phaseIdx) updatedLines.push(`| ${phases[i]} | ⏳ 进行中... |`);
+              else updatedLines.push(`| ${phases[i]} | ⬜ 等待中 |`);
+            }
+            updatedLines.push('', `⏱️ 已耗时: ${Math.floor(elapsed / 60)}分${elapsed % 60}秒`);
+            const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
+            if (idx !== -1) {
+              agent.state.messages[idx] = { role: 'assistant', content: makeLoadingContent(updatedLines.join('\n')), _panelLoadingId: loadingId } as any;
+              triggerUIRefresh();
+            }
+          }
+        }, 10000);
+
+        // SSE 流式接收每轮专家发言
+        const t0 = Date.now();
+        const phaseMessages: Array<{ role: string; roleLabel: string; content: string; phase: string }> = [];
+
+        const appendPhaseMessage = (phase: string, label: string, results: Array<{ role: string; roleLabel: string; content: string }>) => {
+          // 移除旧的加载消息
+          const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
+          // 构建当前所有阶段的聊天记录
+          results.forEach(r => phaseMessages.push({ ...r, phase }));
+
+          const chatLines = ['## 👥 专家组群聊讨论 — 实时直播\n'];
+          const seenPhases = [...new Set(phaseMessages.map(p => p.phase))];
+          seenPhases.forEach(ph => {
+            const phaseResults = phaseMessages.filter(p => p.phase === ph);
+            const phaseLabel = phaseResults[0]?.phase === 'phase1' ? '📝 第 1 轮：独立分析' :
+                               phaseResults[0]?.phase === 'phase2' ? '💬 第 2 轮：交叉评论' :
+                               phaseResults[0]?.phase === 'phase25' ? '🔄 第 2.5 轮：二次反思' : ph;
+            chatLines.push('', `### ${phaseLabel}`, '');
+            phaseResults.forEach(r => {
+              chatLines.push(`**${r.roleLabel}**：`);
+              chatLines.push('');
+              // 截断太长的内容（每段最多 500 字符预览）
+              const preview = r.content.length > 500 ? r.content.slice(0, 500) + '\n\n...（完整内容将在讨论结束后展示）' : r.content;
+              chatLines.push(preview);
+              chatLines.push('');
+            });
+          });
+
+          if (idx !== -1) {
+            agent.state.messages[idx] = {
+              role: 'assistant',
+              content: makeLoadingContent(chatLines.join('\n')),
+              _panelLoadingId: loadingId,
+            } as any;
+          }
+          agent.state.messages = [...agent.state.messages];
+          triggerUIRefresh();
+        };
+
+        try {
+          const resp = await fetch('/api/v1/panel/reflect/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+          });
+
+          if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${errText}`);
+          }
+
+          clearInterval(progressTimer);
+
+          const reader = resp.body?.getReader();
+          const decoder = new TextDecoder();
+          if (!reader) throw new Error('Response body not readable');
+
+          let buffer = '';
+          let currentEvent = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // 保留未完整行
+
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                currentEvent = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
+                const data = JSON.parse(line.slice(6));
+                if (currentEvent === 'phase1' || currentEvent === 'phase2' || currentEvent === 'phase25') {
+                  appendPhaseMessage(currentEvent, data.label, data.results);
+                } else if (currentEvent === 'error') {
+                  throw new Error(data.message || 'Panel error');
+                } else if (currentEvent === 'done') {
+                  // 讨论完成，清空当前流式输出，等待加载消息被替换
+                }
+              }
+            }
+          }
+
+          // SSE 完成 — 调用阻塞 API 获取最终完整报告
+          const finalResp = await fetch('/api/v1/panel/reflect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+          });
+
+          if (!finalResp.ok) throw new Error(`Final API error: ${finalResp.status}`);
+          const finalData = await finalResp.json();
+          const totalSec = ((Date.now() - t0) / 1000).toFixed(1);
+
+          const loadingIdx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
+          const elapsedHeader = `> ⏱️ 群聊讨论完成，总耗时 ${totalSec} 秒 (${(Number(totalSec) / 60).toFixed(1)} 分钟)\n\n---\n\n`;
+          if (loadingIdx !== -1) {
+            agent.state.messages[loadingIdx] = {
+              role: 'assistant',
+              content: makeLoadingContent(elapsedHeader + finalData.reply),
+            } as any;
+          }
+          agent.state.messages = [...agent.state.messages];
+          triggerUIRefresh();
+
+        } catch (e: any) {
+          clearInterval(progressTimer);
+          const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
+          if (idx !== -1) {
+            const errMsg = `## ❌ 专家组群聊讨论失败\n\n> 错误: ${e.message}\n\n请检查 pi-server 是否正常运行，或切换到聊天模式重试。`;
+            agent.state.messages[idx] = { role: 'assistant', content: makeLoadingContent(errMsg) } as any;
+          }
+          agent.state.messages = [...agent.state.messages];
+          triggerUIRefresh();
+        }
+      };
+
       agent.subscribe(async (ev: any) => {
         // 🔄 每次对话轮次前更新系统提示词中的时间和开市状态
         const msgs = agent.state.messages;
@@ -1676,7 +1808,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         onApiKeyRequired: (provider) => ApiKeyPromptDialog.prompt(provider),
       });
 
-      agent.state.tools = mode === 'reflect' ? reflectTools : chatTools;
+      agent.state.tools = mode === 'reflect' ? spoofTools : chatTools;
 
       // 删除消息事件监听
       const handleDeleteMessage = (e: Event) => {
@@ -2036,20 +2168,20 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             {/* 模式切换按钮 */}
             <button
               onClick={() => setMode(prev => prev === 'chat' ? 'reflect' : 'chat')}
-              title={mode === 'reflect' ? '切换为聊天模式' : '切换为复盘模式'}
+              title={mode === 'reflect' ? '切换为聊天模式' : '切换为专家组群聊讨论'}
               style={{
                 ...toolBtnStyle,
                 display: 'flex', alignItems: 'center', gap: '5px',
                 fontSize: '11px', fontWeight: 600,
                 padding: '3px 10px', borderRadius: '16px',
-                color: mode === 'reflect' ? 'var(--agent-code-keyword)' : 'var(--agent-gold)',
-                background: mode === 'reflect' ? 'rgba(155,89,255,0.12)' : 'var(--agent-gold-muted)',
-                border: mode === 'reflect' ? '1px solid rgba(155,89,255,0.25)' : '1px solid rgba(240,185,11,0.3)',
+                color: mode === 'reflect' ? '#7c3aed' : 'var(--agent-gold)',
+                background: mode === 'reflect' ? 'rgba(124,58,237,0.12)' : 'var(--agent-gold-muted)',
+                border: mode === 'reflect' ? '1px solid rgba(124,58,237,0.3)' : '1px solid rgba(240,185,11,0.3)',
                 transition: 'all 0.25s',
               }}
             >
               {mode === 'reflect' ? (
-                <><i className="fas fa-search" style={{ fontSize: '10px' }}></i> 复盘</>
+                <><i className="fas fa-users" style={{ fontSize: '10px' }}></i> 群聊</>
               ) : (
                 <><i className="fas fa-comments" style={{ fontSize: '10px' }}></i> 聊天</>
               )}

@@ -1003,16 +1003,28 @@ async function runAgentTurn(agent: Agent, prompt: string, label: string): Promis
   return reply;
 }
 
+/** 流式事件类型 */
+interface PanelEvent {
+  phase: string;
+  label: string;
+  results: Array<{ role: string; roleLabel: string; content: string }>;
+  elapsed_sec: number;
+}
+
 /**
- * 执行专家组群聊讨论（3 轮）：
- *   Phase 0：数据采集（单 Agent 调用工具获取整周数据）
+ * 执行专家组群聊讨论（4 轮）：
+ *   Phase 0：数据采集
  *   Phase 1：4 位专家并行独立分析
- *   Phase 2：交叉评论 — 每位专家看到其他人的报告后发表评论
+ *   Phase 2：交叉评论
+ *   Phase 2.5：二次反思改进
  *   Phase 3：主持人综合产出最终报告
+ *
+ * @param onPhase 流式回调，每轮完成时触发（可选）
  */
 async function executePanelDiscussion(
   message: string,
-  sessionId: string
+  sessionId: string,
+  onPhase?: (event: PanelEvent) => void
 ): Promise<{ reply: string; elapsed_ms: number }> {
   const totalStart = Date.now();
   console.log(`\n[Panel] ===== 专家组群聊讨论开始 [${sessionId.slice(-16)}] =====`);
@@ -1038,6 +1050,12 @@ async function executePanelDiscussion(
     })
   );
   console.log(`[Panel] Phase 1 完成，收集到 ${phase1Results.length} 份独立报告`);
+  onPhase?.({
+    phase: 'phase1',
+    label: '📝 第 1 轮：独立分析',
+    results: phase1Results.map(r => ({ role: r.role, roleLabel: r.roleLabel, content: r.report })),
+    elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
+  });
 
   // === Phase 2: 交叉评论 ===
   console.log(`[Panel] Phase 2: 交叉评论...`);
@@ -1057,6 +1075,12 @@ async function executePanelDiscussion(
     })
   );
   console.log(`[Panel] Phase 2 完成，收集到 ${phase2Results.length} 份交叉评论`);
+  onPhase?.({
+    phase: 'phase2',
+    label: '💬 第 2 轮：交叉评论',
+    results: phase2Results.map(r => ({ role: r.role, roleLabel: r.roleLabel, content: r.commentary })),
+    elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
+  });
 
   // === Phase 2.5: 二次反思改进 ===
   console.log(`[Panel] Phase 2.5: 专家二次反思改进...`);
@@ -1078,6 +1102,12 @@ async function executePanelDiscussion(
     })
   );
   console.log(`[Panel] Phase 2.5 完成，收集到 ${phase25Results.length} 份二次反思报告`);
+  onPhase?.({
+    phase: 'phase25',
+    label: '🔄 第 2.5 轮：二次反思改进',
+    results: phase25Results.map(r => ({ role: r.role, roleLabel: r.roleLabel, content: r.refinement })),
+    elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
+  });
 
   // === Phase 3: 主持人综合 ===
   console.log(`[Panel] Phase 3: 主持人综合产出最终报告...`);
@@ -1267,6 +1297,52 @@ const server = http.createServer(async (req, res) => {
     } catch (e: any) {
       console.error('[PiServer] 错误:', e);
       jsonResponse(res, 500, { error: e.message || '内部错误' });
+    }
+    return;
+  }
+
+  // SSE 流式端点：专家组群聊讨论实时推送
+  if (req.method === 'POST' && req.url === '/chat/stream') {
+    try {
+      const body = await readBody(req);
+      const { message, session_id } = JSON.parse(body);
+
+      if (!message) {
+        jsonResponse(res, 400, { error: '缺少 message 参数' });
+        return;
+      }
+
+      const sessionId = session_id || 'stream_' + Date.now();
+      console.log(`[PiServer] --> SSE Panel [${sessionId.slice(-8)}]: ${message.slice(0, 100)}`);
+
+      // 设置 SSE 响应头
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'X-Accel-Buffering': 'no', // 禁用 nginx 缓冲
+      });
+
+      const sendSSE = (event: string, data: any) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      try {
+        await executePanelDiscussion(message, sessionId, (event) => {
+          sendSSE(event.phase, event);
+        });
+
+        sendSSE('done', { message: 'panel discussion complete' });
+      } catch (e: any) {
+        console.error('[PiServer] SSE Panel 错误:', e);
+        sendSSE('error', { message: e.message || '内部错误' });
+      }
+
+      res.end();
+    } catch (e: any) {
+      console.error('[PiServer] SSE 解析错误:', e);
+      jsonResponse(res, 400, { error: e.message || '请求格式错误' });
     }
     return;
   }
