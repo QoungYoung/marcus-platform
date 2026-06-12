@@ -1343,11 +1343,22 @@ const server = http.createServer(async (req, res) => {
       };
 
       try {
-        await executePanelDiscussion(message, sessionId, (event) => {
+        const result = await executePanelDiscussion(message, sessionId, (event) => {
           sendSSE(event.phase, event);
         });
 
-        sendSSE('done', { message: 'panel discussion complete' });
+        // 保存讨论结果到本地
+        const panelFile = resolve(SESSIONS_DIR, `panel_${sessionId.replace(/[<>:"/\\|?*]/g, '_')}.json`);
+        writeFileSync(panelFile, JSON.stringify({
+          session_id: sessionId,
+          timestamp: new Date().toISOString(),
+          message,
+          reply: result.reply,
+          elapsed_ms: result.elapsed_ms,
+        }, null, 2), 'utf-8');
+        console.log(`[PiServer] 群聊结果已保存: ${panelFile}`);
+
+        sendSSE('done', { reply: result.reply, elapsed_ms: result.elapsed_ms });
       } catch (e: any) {
         console.error('[PiServer] SSE Panel 错误:', e);
         sendSSE('error', { message: e.message || '内部错误' });

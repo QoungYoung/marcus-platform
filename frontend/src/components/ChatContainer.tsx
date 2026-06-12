@@ -701,7 +701,32 @@ registerMessageRenderer('user', {
     const copyMsg = (e: Event) => {
       e.stopPropagation();
       const btn = e.currentTarget as HTMLElement;
-      navigator.clipboard.writeText(rawText).then(() => {
+      const doCopy = () => {
+        // 优先使用 Clipboard API（需要 HTTPS/localhost）
+        if (navigator.clipboard?.writeText) {
+          return navigator.clipboard.writeText(rawText);
+        }
+        // 降级：execCommand（兼容 HTTP 环境）
+        return new Promise<void>((resolve, reject) => {
+          const ta = document.createElement('textarea');
+          ta.value = rawText;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          ta.style.top = '-9999px';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          try {
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            resolve();
+          } catch (err) {
+            document.body.removeChild(ta);
+            reject(err);
+          }
+        });
+      };
+      doCopy().then(() => {
         const orig = btn.textContent;
         btn.textContent = '✅';
         setTimeout(() => { btn.textContent = orig; }, 1200);
@@ -1623,10 +1648,9 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         }, 10000);
 
         // SSE 流式接收每轮专家发言
-        const t0 = Date.now();
         const phaseMessages: Array<{ role: string; roleLabel: string; content: string; phase: string }> = [];
 
-        const appendPhaseMessage = (phase: string, label: string, results: Array<{ role: string; roleLabel: string; content: string }>) => {
+        const appendPhaseMessage = (phase: string, results: Array<{ role: string; roleLabel: string; content: string }>) => {
           // 移除旧的加载消息
           const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
           // 构建当前所有阶段的聊天记录
@@ -1681,6 +1705,8 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
           let buffer = '';
           let currentEvent = '';
+          let finalReply = '';
+          let finalElapsed = 0;
 
           while (true) {
             const { done, value } = await reader.read();
@@ -1696,33 +1722,27 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
               } else if (line.startsWith('data: ')) {
                 const data = JSON.parse(line.slice(6));
                 if (currentEvent === 'phase1' || currentEvent === 'phase2' || currentEvent === 'phase25') {
-                  appendPhaseMessage(currentEvent, data.label, data.results);
+                  appendPhaseMessage(currentEvent, data.results);
                 } else if (currentEvent === 'error') {
                   throw new Error(data.message || 'Panel error');
                 } else if (currentEvent === 'done') {
-                  // 讨论完成，清空当前流式输出，等待加载消息被替换
+                  finalReply = data.reply || '';
+                  finalElapsed = data.elapsed_ms || 0;
                 }
               }
             }
           }
 
-          // SSE 完成 — 调用阻塞 API 获取最终完整报告
-          const finalResp = await fetch('/api/v1/panel/reflect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message }),
-          });
+          // SSE 完成 — 直接从 done 事件取报告，不再二次调用 API
+          if (!finalReply) throw new Error('未收到最终报告');
 
-          if (!finalResp.ok) throw new Error(`Final API error: ${finalResp.status}`);
-          const finalData = await finalResp.json();
-          const totalSec = ((Date.now() - t0) / 1000).toFixed(1);
-
+          const totalSec = (finalElapsed / 1000).toFixed(1);
           const loadingIdx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
           const elapsedHeader = `> ⏱️ 群聊讨论完成，总耗时 ${totalSec} 秒 (${(Number(totalSec) / 60).toFixed(1)} 分钟)\n\n---\n\n`;
           if (loadingIdx !== -1) {
             agent.state.messages[loadingIdx] = {
               role: 'assistant',
-              content: makeLoadingContent(elapsedHeader + finalData.reply),
+              content: makeLoadingContent(elapsedHeader + finalReply),
             } as any;
           }
           agent.state.messages = [...agent.state.messages];
