@@ -4,6 +4,13 @@
  * 所有工具调用 localhost:8000 的 Backend API 获取数据
  */
 
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SESSIONS_DIR = resolve(__dirname, '..', 'sessions');
+
 // ===== 简化的 Type 工厂（服务端不需要 TypeBox 的完整反射，用 JSON Schema 即可） =====
 const Type = {
   Object: (props: Record<string, any>) => ({
@@ -761,14 +768,66 @@ export const TRADE_TOOLS = [
   getLatestScanReportTool,
 ];
 
-// 反思模式（只读 + Pi 分析历史，周度反思使用）
+// ===== 历史复盘查询工具（专家组群聊） =====
+export const getPanelHistoryTool = {
+  name: 'get_panel_history',
+  label: '历史复盘记录',
+  description: '查询历史专家组群聊复盘记录。不传参数列出所有历史复盘，传 date（YYYY-MM-DD）返回指定日期的完整讨论报告。用于专家交叉评论时引用上周/上月的复盘结论。',
+  parameters: Type.Object({
+    date: Type.Optional(Type.String({ description: '复盘日期 YYYY-MM-DD，不传则列出所有可选日期' })),
+  }),
+  async execute(_toolCallId: string, params: { date?: string }, _signal?: AbortSignal) {
+    try {
+      if (!existsSync(SESSIONS_DIR)) {
+        return { content: [{ type: 'text', text: '暂无历史复盘记录（sessions 目录不存在）' }] };
+      }
+      const files = readdirSync(SESSIONS_DIR).filter(f => f.startsWith('panel_') && f.endsWith('.json'));
+      if (files.length === 0) {
+        return { content: [{ type: 'text', text: '暂无历史复盘记录' }] };
+      }
+
+      if (!params.date) {
+        // 列出所有可用复盘的日期和概览
+        const summaries = files.map(f => {
+          try {
+            const data = JSON.parse(readFileSync(resolve(SESSIONS_DIR, f), 'utf-8'));
+            const replyLen = data.reply ? data.reply.length : 0;
+            const elapsed = data.elapsed_ms ? `${(data.elapsed_ms / 1000 / 60).toFixed(1)}分钟` : '未知';
+            return `📅 ${data.timestamp?.slice(0, 10) || '未知日期'} | 耗时: ${elapsed} | 报告字数: ${replyLen}`;
+          } catch { return `📅 ${f}`; }
+        });
+        return { content: [{ type: 'text', text: `📋 历史复盘记录 (${files.length}条):\n\n${summaries.join('\n')}` }] };
+      }
+
+      // 查找指定日期的复盘
+      const targetFile = files.find(f => {
+        try {
+          const data = JSON.parse(readFileSync(resolve(SESSIONS_DIR, f), 'utf-8'));
+          return data.timestamp?.startsWith(params.date!);
+        } catch { return false; }
+      });
+
+      if (!targetFile) {
+        return { content: [{ type: 'text', text: `未找到 ${params.date} 的复盘记录` }] };
+      }
+
+      const data = JSON.parse(readFileSync(resolve(SESSIONS_DIR, targetFile), 'utf-8'));
+      const header = `📊 历史复盘 — ${data.timestamp?.slice(0, 10) || '未知日期'}\n耗时: ${(data.elapsed_ms / 1000 / 60).toFixed(1)} 分钟\n\n`;
+      return { content: [{ type: 'text', text: header + (data.reply || '无内容') }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text', text: `读取复盘记录失败: ${e.message}` }] };
+    }
+  },
+};
+
+// 反思模式（只读 + Pi 分析历史 + 历史复盘，周度反思使用）
 // 与聊天/交易模式完全隔离，无交易权限
 export const REFLECT_TOOLS = [
   ...CHAT_TOOLS,
   getPiAnalysisHistoryTool,
   getTradeHistoryTool,
-  // 反思模式也需要查看最新扫描报告（了解当前市场状态）
   getLatestScanReportTool,
+  getPanelHistoryTool,
 ];
 
 // 向后兼容

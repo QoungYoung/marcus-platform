@@ -1045,13 +1045,13 @@ async function executePanelDiscussion(
   console.log(`[Panel] Phase 0: 数据采集（收集整周数据）...`);
   // 用主持人模型进行数据采集（有 reflectTools 全部工具）
   const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId); // moderator 始终在最后
-  const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写反思报告的。你的唯一任务是调用工具收集数据。\n请依次调用 get_pi_analysis_history、get_trade_history、get_latest_scan_report、get_portfolio、get_market_indices 等工具，\n把获取到的所有数据原样输出（不要分析，不要总结）。输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
+  const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写反思报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下所有工具，把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — 本周 Pi 策略分析历史\n2. get_trade_history — 本周交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告\n4. get_portfolio — 当前持仓和账户\n5. get_market_indices — 大盘行情\n6. get_panel_history — 上周/历史复盘结论（用于跨周对比）\n7. get_concept_fund_flow — 概念板块资金流向\n输出格式：直接输出工具返回的 JSON/文本，尽量完整，不要省略任何关键数据。`;
   const dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
 
   // === Phase 1: 4 位专家并行独立分析 ===
   console.log(`[Panel] Phase 1: 4 位专家并行独立分析...`);
   const analysts = PANEL_MEMBERS.slice(0, -1); // 除主持人外所有专家
-  const phase1Prompt = `以下是本周完整的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n⚠️ 用户的核心问题：${message}\n\n请严格按照你的角色定位，围绕用户的上述问题产出一份专业的分析报告。你的报告必须针对用户的问题，不要泛泛而谈，不要跑题。直接输出报告，不要重复原始数据。`;
+  const phase1Prompt = `以下是本周的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n⚠️ 用户的核心问题：${message}\n\n请严格按照你的角色定位，围绕用户的上述问题产出一份专业的分析报告。\n\n🔧 你有完整的工具权限（get_trade_history / get_portfolio / get_market_indices / get_quote / get_daily_kline / get_technical / get_moneyflow / get_panel_history 等），如果简报数据不足以支撑你的审计/分析，请主动调用工具补充细节。不允许在数据不足的情况下敷衍结论——缺什么就查什么。\n\n你的报告必须针对用户的问题，不要泛泛而谈，不要跑题。输出前请确保你引用的每一条数据都有可靠来源。`;
 
   const phase1Results = await Promise.all(
     analysts.map(async (member) => {
@@ -1138,7 +1138,7 @@ async function executePanelDiscussion(
     ...phase25Results.map(r => `### ${r.roleLabel} 改进报告\n${truncate(r.refinement, 1500)}`),
   ].join('\n\n');
 
-  const phase3Prompt = `以下是专家组群聊讨论记录（长报告已截断，保留核心观点）：\n\n---\n${discussionTranscript}\n---\n\n${message}\n\n请综合以上所有专家的分析和评论，产出最终的周度反思报告。\n按你的输出格式要求，包含市场概况、立场演变、仓位评估、错误与偏差、交易执行对比、核心洞察、专家组共识与分歧、下周改进计划、下周关注重点。\n最后一行输出 SIGNAL 行。`;
+  const phase3Prompt = `以下是专家组群聊讨论记录（长报告已截断，保留核心观点）：\n\n---\n${discussionTranscript}\n---\n\n${message}\n\n请综合以上所有专家的分析和评论，产出最终的周度反思报告。\n按你的输出格式要求，包含市场概况、立场演变、仓位评估、错误与偏差、交易执行对比、核心洞察、专家组共识与分歧、下周改进计划、下周关注重点。\n最后一行输出 SIGNAL 行。\n\n🔧 如果截断的报告缺少关键细节，你可以调用 get_panel_history / get_trade_history / get_pi_analysis_history 等工具获取完整数据。不要因为摘要不全就敷衍结论。`;
 
   const moderatorAgent = createPanelAgent(moderator, sessionId);
   const finalReport = await runAgentTurn(moderatorAgent, phase3Prompt, '主持人(综合)');
