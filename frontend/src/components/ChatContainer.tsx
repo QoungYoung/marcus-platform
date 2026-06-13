@@ -1192,12 +1192,12 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   // Keep modeRef in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
-  // 触发 ChatPanel 的消息列表刷新
+  // 触发 ChatPanel 的消息列表刷新（同步 agent.state.messages → UI）
   const triggerUIRefresh = () => {
     queueMicrotask(() => {
       const ml = document.querySelector('message-list') as any;
       if (ml) {
-        ml.messages = [...ml.messages];
+        ml.messages = [...(agentRef.current?.state?.messages || [])];
         (ml as LitElement).requestUpdate?.();
       }
       const me = document.querySelector('message-editor') as any;
