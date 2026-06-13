@@ -672,8 +672,8 @@ export const getPiAnalysisHistoryTool = {
         lines.push(`     理由: ${r.reason}`);
       }
       if (r.report) {
-        // 截取报告前 300 字
-        const brief = r.report.length > 300 ? r.report.slice(0, 300) + '...' : r.report;
+        // 截取报告前 2000 字（足够涵盖策略逻辑，又不溢出上下文）
+        const brief = r.report.length > 2000 ? r.report.slice(0, 2000) + '...（完整报告请用 get_panel_history 查询）' : r.report;
         lines.push(`     报告: ${brief.replace(/\n/g, ' ')}`);
       }
     }
@@ -730,8 +730,8 @@ export const getTradeHistoryTool = {
         lines.push(`     理由: ${r.reason}`);
       }
       if (r.report) {
-        // 截取报告前 400 字
-        const brief = r.report.length > 400 ? r.report.slice(0, 400) + '...' : r.report;
+        // 截取报告前 1000 字
+        const brief = r.report.length > 1000 ? r.report.slice(0, 1000) + '...' : r.report;
         lines.push(`     报告: ${brief.replace(/\n/g, ' ')}`);
       }
     }
