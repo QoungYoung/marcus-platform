@@ -239,6 +239,14 @@ class SchedulerService:
                 self._add_job(task)
 
         self.scheduler.start()
+        
+        # ── 启动时关键模组健康检查 ──
+        monitor = _get_monitor()
+        if monitor:
+            logger.info(f"✅ 止损监控模块已加载（当前未启用，30秒轮询会触发雪球IP限流）")
+        else:
+            logger.warning("⚠️ 止损监控模块加载失败，东睦式滑点风险仅靠定时窗口保护")
+        
         logger.info(f"Scheduler started with {len(self.tasks)} tasks")
 
     def stop(self):
@@ -372,7 +380,7 @@ class SchedulerService:
 
         # === Pi 自主交易模式 ===
         if task.type == 'pi_trade':
-            # ── 止损监控生命周期管理（暂不启用，待验证后开启）──
+            # ── 止损监控生命周期管理（暂不启用：30秒轮询会导致雪球封IP）──
             # 开启方式：取消下方注释即可
             # is_first_trade = 'morning' in task.id and 'late' not in task.id
             # is_closing = 'closing' in task.id
@@ -398,6 +406,35 @@ class SchedulerService:
                 # if is_closing and monitor and monitor.is_running():
                 #     monitor.stop()
                 #     logger.info(f"[{execution_id}] 🔴 止损监控已随尾盘任务停止")
+                
+                # ── 极端流出日扫描（遗漏#1）──
+                # 每次扫描结束后记录全市场主力净流出
+                try:
+                    from app.core.trading.marcus_trade import MarcusVNPyExecutor
+                    executor = MarcusVNPyExecutor()
+                    outflow = executor._get_market_outflow_billion()
+                    scan_result = executor.record_market_outflow_scan(outflow)
+                    
+                    scan_label = task.id.split('_')[-1] if '_' in task.id else task.id
+                    if outflow > 800:
+                        logger.warning(
+                            f"[{execution_id}] [extreme_outflow] {scan_label} 轮次: "
+                            f"主力净流出 {outflow:.0f}亿 | 连续 {scan_result['scans']}/3 轮"
+                        )
+                    
+                    # 尾盘触发时执行强制减仓
+                    if scan_result['triggered'] and is_closing:
+                        logger.warning(f"[{execution_id}] ⚠️ 极端流出防御触发！执行强制减仓50%")
+                        defense_results = executor.execute_extreme_outflow_defense()
+                        if defense_results:
+                            logger.warning(
+                                f"[{execution_id}] [extreme_outflow] 已强制减仓: "
+                                f"{', '.join(r['symbol'] + ' ' + str(r['sold_volume']) + '股' for r in defense_results)}"
+                            )
+                        else:
+                            logger.warning(f"[{execution_id}] [extreme_outflow] 无可减仓持仓（全部T+1锁定）")
+                except Exception as e:
+                    logger.debug(f"[{execution_id}] [extreme_outflow] 扫描跳过: {e}")
             return
 
         # === Pi 周度反思模式 ===

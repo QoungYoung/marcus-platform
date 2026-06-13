@@ -1051,6 +1051,19 @@ def screen_candidates_technically(candidates: list) -> dict:
     result['total_passed'] = len(result['passed'])
     result['total_scanned'] = min(len(candidates), 20)
     print(f"[技术面筛选] 完成: {result['total_passed']}/{result['total_scanned']} 通过", file=sys.stderr)
+    
+    # ── 过滤器拒绝率追踪（遗漏#2）──
+    try:
+        from marcus_trade import MarcusVNPyExecutor
+        scan_round = f"tech_{datetime.now().strftime('%H:%M')}"
+        total = len(candidates)
+        MarcusVNPyExecutor.log_filter_rejection(scan_round, "MA5站稳", total, sum(1 for c in candidates if c in [p['symbol'] for p in result['passed']]), {'condition': 'close > ma5'})
+        MarcusVNPyExecutor.log_filter_rejection(scan_round, "MACD金叉/多头", total, len(result['passed']), {'condition': 'DIF > DEA or MACD > 0'})
+        MarcusVNPyExecutor.log_filter_rejection(scan_round, "放量突破(量比>1.2)", total, len(result['passed']), {'condition': 'vol > avg_vol_5 * 1.2'})
+        # 综合通过率（三道全过）
+        MarcusVNPyExecutor.log_filter_rejection(scan_round, "技术面综合(3项全过)", total, len(result['passed']))
+    except Exception:
+        pass  # 记录失败不影响主流程
 
     return result
 
@@ -1208,6 +1221,17 @@ def assess_candidates(passed_list: list) -> dict:
         result['passed'] = passed_list
 
     print(f"[AI候选评估] 完成: {len(result['passed'])} GO / {len(result['rejected'])} NO-GO", file=sys.stderr)
+    
+    # ── 过滤器拒绝率追踪（遗漏#2）──
+    try:
+        from marcus_trade import MarcusVNPyExecutor
+        scan_round = f"ai_{datetime.now().strftime('%H:%M')}"
+        total = len(passed_list)
+        MarcusVNPyExecutor.log_filter_rejection(scan_round, "AI假突破过滤(NO-GO)", total, len(result['passed']), 
+                                                  {'rejected_reasons': [r.get('reason', '') for r in result.get('rejected', [])]})
+    except Exception:
+        pass
+    
     return result
 
 

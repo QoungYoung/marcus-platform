@@ -63,6 +63,10 @@ class MarcusVNPyExecutor:
     # 连续亏损计数器（跨会话持久化需要时可以改为文件存储）
     self._consecutive_losses: int = 0
     
+    # ── 极端流出日防御 ──
+    self._extreme_outflow_scans: int = 0       # 连续极端流出扫描计数
+    self._extreme_outflow_triggered: bool = False  # 当日是否已触发减仓
+    
     def _get_total_drawdown_pct(self) -> float:
         """获取当前总回撤百分比（负数表示亏损）"""
         try:
@@ -111,6 +115,211 @@ class MarcusVNPyExecutor:
             return int(pi_conf.get('position_limit', 60))
         except Exception:
             return 60
+    
+    # ── 极端流出日防御（遗漏#1：针对 6/10 东睦僵尸持仓的直接解决方案）──
+    
+    def record_market_outflow_scan(self, main_net_outflow_billion: float) -> dict:
+        """
+        记录本轮市场主力净流出扫描，追踪连续极端流出。
+        触发条件：全市场主力净流出 > 800亿 + 连续3轮扫描确认空头。
+        
+        Returns:
+            {"triggered": bool, "scans": int, "action": str}
+        """
+        result = {"triggered": False, "scans": self._extreme_outflow_scans, "action": "none"}
+        
+        if main_net_outflow_billion > 800:
+            self._extreme_outflow_scans += 1
+            result["scans"] = self._extreme_outflow_scans
+            if self._extreme_outflow_scans >= 3 and not self._extreme_outflow_triggered:
+                self._extreme_outflow_triggered = True
+                result["triggered"] = True
+                result["action"] = "尾盘14:30前对所有非T+1锁定持仓减仓50%"
+                print(f"[极端流出] ⚠️ 连续 {self._extreme_outflow_scans} 轮确认全市场主力净流出 > 800亿，触发强制减仓！", file=sys.stderr)
+        else:
+            # 中断连续性（非极端流出轮次重置计数器）
+            if self._extreme_outflow_scans > 0:
+                print(f"[极端流出] 连续性中断（本轮流出 {main_net_outflow_billion:.0f}亿），重置计数器", file=sys.stderr)
+            self._extreme_outflow_scans = 0
+        
+        return result
+    
+    def execute_extreme_outflow_defense(self) -> list:
+        """
+        极端流出日强制减仓：对所有非 T+1 锁定持仓减仓 50%。
+        在尾盘 14:30 前由调度器调用。
+        
+        Returns:
+            [{"symbol": str, "sold_volume": int, "reason": str}, ...]
+        """
+        results = []
+        try:
+            today_buy = self._get_today_buy_symbols()
+            positions = self.get_positions()
+            
+            for pos in positions:
+                symbol = pos.get('symbol', '')
+                total_vol = pos.get('volume', 0)
+                if not symbol or total_vol <= 0:
+                    continue
+                if symbol in today_buy:
+                    print(f"[极端流出防御] T+1 锁定，跳过 {symbol}", file=sys.stderr)
+                    continue
+                
+                sell_vol = max(100, int(total_vol * 0.5 / 100) * 100)  # 50% 取整百股
+                if sell_vol < 100:
+                    continue
+                
+                avg_price = pos.get('avg_price', 0)
+                sell_result = self.sell(symbol, avg_price, sell_vol, reason="极端流出日强制减仓50%")
+                
+                results.append({
+                    'symbol': symbol,
+                    'sold_volume': sell_vol,
+                    'total_volume': total_vol,
+                    'status': sell_result.get('status', 'unknown'),
+                    'reason': '极端流出日强制减仓50%'
+                })
+                print(f"[极端流出防御] {symbol} 减仓 {sell_vol}/{total_vol} 股", file=sys.stderr)
+        except Exception as e:
+            print(f"[极端流出防御] 执行异常: {e}", file=sys.stderr)
+        
+        return results
+    
+    def has_extreme_outflow_triggered(self) -> bool:
+        """查询当日是否已触发极端流出防御"""
+        return self._extreme_outflow_triggered
+    
+    def reset_extreme_outflow(self) -> None:
+        """新交易日重置极端流出状态"""
+        self._extreme_outflow_scans = 0
+        self._extreme_outflow_triggered = False
+    
+    def _get_market_outflow_billion(self) -> float:
+        """查询全市场主力净流出（亿元），用于极端流出日检测"""
+        try:
+            # 优先从 Pi Server 获取
+            import urllib.request, json, ssl
+            ctx = ssl.create_default_context()
+            pi_url = "http://localhost:3001/tools/get_market_moneyflow"
+            req = urllib.request.Request(pi_url, headers={"Accept": "application/json"})
+            try:
+                with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    main_net = data.get("main_net_inflow", 0)  # 正数为流入，负数为流出
+                    # main_net 单位可能是亿元或万元，尝试转换为亿元
+                    if abs(main_net) > 10000:
+                        main_net /= 100000000  # 元 → 亿元
+                    elif abs(main_net) > 100 and abs(main_net) < 10000:
+                        main_net /= 10000  # 万元 → 亿元
+                    return abs(main_net) if main_net < 0 else 0  # 只返回流出量
+            except Exception:
+                pass
+            
+            # 回退：从 akshare 直接获取
+            try:
+                import akshare as ak
+                df = ak.stock_market_fund_flow()
+                if df is not None and len(df) > 0:
+                    # 取最新一行沪深合计的主力净流出
+                    total_row = df[df['名称'] == '沪深两市']
+                    if len(total_row) > 0:
+                        net = abs(total_row.iloc[0].get('主力净流入-净额', 0))
+                        return net / 100000000  # 元 → 亿元
+                    # 否则汇总沪+深
+                    sh = df[df['名称'] == '上证']
+                    sz = df[df['名称'] == '深证']
+                    total_net = 0
+                    if len(sh) > 0: total_net += sh.iloc[0].get('主力净流入-净额', 0)
+                    if len(sz) > 0: total_net += sz.iloc[0].get('主力净流入-净额', 0)
+                    return abs(total_net) / 100000000 if total_net < 0 else 0
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[极端流出] 数据获取失败: {e}", file=sys.stderr)
+        return 0
+    
+    # ── 过滤器拒绝率追踪（遗漏#2）──
+    
+    _filter_log_path = DATA_DIR / "filter_rejections.jsonl"
+    
+    @classmethod
+    def log_filter_rejection(cls, scan_round: str, filter_name: str, 
+                              total_input: int, passed: int, 
+                              details: dict = None) -> None:
+        """
+        记录每轮扫描中每个过滤器的拒绝数/通过数。
+        用于周复盘时分析哪个过滤器最严、是否需要放宽。
+        
+        Args:
+            scan_round: 扫描轮次标识（如 'morning_10:50'）
+            filter_name: 过滤器名称（如 '资金TOP5∩涨幅TOP5', '换手率2-15%'）
+            total_input: 输入候选数
+            passed: 通过数
+            details: 额外信息（可选）
+        """
+        try:
+            import json
+            from datetime import datetime
+            record = {
+                'timestamp': datetime.now().isoformat(),
+                'scan_round': scan_round,
+                'filter': filter_name,
+                'total_input': total_input,
+                'passed': passed,
+                'rejected': total_input - passed,
+                'pass_rate': round(passed / total_input * 100, 1) if total_input > 0 else 0,
+                'details': details or {}
+            }
+            with open(cls._filter_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+        except Exception as e:
+            print(f"[FilterLog] 记录失败: {e}", file=sys.stderr)
+    
+    @classmethod
+    def get_filter_rejection_stats(cls, date_str: str = None) -> dict:
+        """
+        读取过滤器拒绝率统计，按过滤器名称汇总。
+        
+        Args:
+            date_str: 日期过滤（如 '2026-06-13'），为空则全部统计
+        Returns:
+            {filter_name: {"total_input": N, "passed": N, "avg_pass_rate": N, "rounds": N}}
+        """
+        import json
+        from collections import defaultdict
+        stats = defaultdict(lambda: {"total_input": 0, "passed": 0, "total_rejected": 0, "rounds": 0})
+        
+        if not cls._filter_log_path.exists():
+            return dict(stats)
+        
+        with open(cls._filter_log_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                    if date_str and not rec.get('timestamp', '').startswith(date_str):
+                        continue
+                    fn = rec.get('filter', 'unknown')
+                    stats[fn]["total_input"] += rec.get("total_input", 0)
+                    stats[fn]["passed"] += rec.get("passed", 0)
+                    stats[fn]["total_rejected"] += rec.get("rejected", 0)
+                    stats[fn]["rounds"] += 1
+                except json.JSONDecodeError:
+                    continue
+        
+        result = {}
+        for fn, s in stats.items():
+            total = s["total_input"]
+            result[fn] = {
+                "total_input": total,
+                "passed": s["passed"],
+                "total_rejected": s["total_rejected"],
+                "avg_pass_rate": round(s["passed"] / total * 100, 1) if total > 0 else 0,
+                "rounds": s["rounds"]
+            }
+        return result
     
     def _log_trade(self, trade_record: dict) -> None:
         """记录交易到 JSONL 日志文件"""
@@ -493,8 +702,9 @@ class MarcusVNPyExecutor:
         print(f"[风控] 连续亏损计数: {self._consecutive_losses} (最近: {symbol} {profit:+.2f})", file=sys.stderr)
     
     def reset_consecutive_losses(self) -> None:
-        """重置连续亏损计数器（新交易日调用）"""
+        """重置连续亏损计数器 + 极端流出状态（新交易日调用）"""
         self._consecutive_losses = 0
+        self.reset_extreme_outflow()
     
     def get_trade_history(self, limit: int = 20) -> list:
         """获取交易历史"""
