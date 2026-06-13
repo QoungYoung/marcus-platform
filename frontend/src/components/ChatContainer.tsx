@@ -1624,9 +1624,12 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
         // 群聊模式：每个专家完成后立即追加独立聊天气泡
         const appendExpertBubble = (roleLabel: string, content: string) => {
+          console.log(`[Panel] 🫧 appendExpertBubble: ${roleLabel} (${content.length}字)`);
           const bubbleContent = `**${roleLabel}**\n\n${content}`;
           agent.state.messages = [...agent.state.messages, { role: 'assistant', content: makeLoadingContent(bubbleContent) } as any];
+          console.log(`[Panel] 📋 消息总数: ${agent.state.messages.length}, 最新:`, agent.state.messages[agent.state.messages.length - 1]);
           triggerUIRefresh();
+          console.log(`[Panel] ✅ triggerUIRefresh 完成`);
         };
 
         // 首次收到专家消息时，移除加载提示
@@ -1635,7 +1638,11 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           if (loadingRemoved) return;
           loadingRemoved = true;
           const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
-          if (idx !== -1) agent.state.messages.splice(idx, 1);
+          console.log(`[Panel] 🗑️ removeLoadingOnce: loadingId=${loadingId.slice(-8)}, foundIdx=${idx}, 当前消息数=${agent.state.messages.length}`);
+          if (idx !== -1) {
+            agent.state.messages.splice(idx, 1);
+            console.log(`[Panel] 🗑️ 已移除加载消息, 剩余消息数=${agent.state.messages.length}`);
+          }
         };
 
         try {
@@ -1650,6 +1657,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             throw new Error(`HTTP ${resp.status}: ${errText}`);
           }
 
+          console.log('[Panel] 🔌 SSE 连接建立, 开始读取流...');
           const reader = resp.body?.getReader();
           const decoder = new TextDecoder();
           if (!reader) throw new Error('Response body not readable');
@@ -1660,34 +1668,43 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
           while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) { console.log('[Panel] 🔌 SSE 流结束 (done=true)'); break; }
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
             for (const line of lines) {
+              if (!line) continue;
               if (line.startsWith('event: ')) {
                 currentEvent = line.slice(7).trim();
+                console.log(`[Panel] 📡 event: ${currentEvent}`);
               } else if (line.startsWith('data: ')) {
-                const data = JSON.parse(line.slice(6));
-                if (currentEvent === 'expert_message') {
-                  removeLoadingOnce();
-                  for (const r of (data.results || [])) {
-                    appendExpertBubble(data.label || r.roleLabel, r.content);
-                    expertCount++;
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  console.log(`[Panel] 📦 data keys: ${Object.keys(data).join(',')}, event=${currentEvent}`);
+                  if (currentEvent === 'expert_message') {
+                    removeLoadingOnce();
+                    for (const r of (data.results || [])) {
+                      appendExpertBubble(data.label || r.roleLabel, r.content);
+                      expertCount++;
+                    }
+                  } else if (currentEvent === 'error') {
+                    throw new Error(data.message || 'Panel error');
+                  } else if (currentEvent === 'done') {
+                    const totalSec = ((data.elapsed_ms || 0) / 1000).toFixed(1);
+                    agent.state.messages = [...agent.state.messages, {
+                      role: 'assistant',
+                      content: makeLoadingContent(`> ⏱️ 群聊讨论完成，总耗时 ${totalSec} 秒 (${(Number(totalSec) / 60).toFixed(1)} 分钟)，共 ${expertCount} 条专家发言`),
+                    } as any];
+                    triggerUIRefresh();
+                  } else if (currentEvent === 'start') {
+                    console.log('[Panel] 🟢 讨论已启动');
+                  } else {
+                    console.warn(`[Panel] ⚠️ 未知事件: ${currentEvent}`);
                   }
-                } else if (currentEvent === 'error') {
-                  throw new Error(data.message || 'Panel error');
-                } else if (currentEvent === 'done') {
-                  const totalSec = ((data.elapsed_ms || 0) / 1000).toFixed(1);
-                  agent.state.messages = [...agent.state.messages, {
-                    role: 'assistant',
-                    content: makeLoadingContent(`> ⏱️ 群聊讨论完成，总耗时 ${totalSec} 秒 (${(Number(totalSec) / 60).toFixed(1)} 分钟)，共 ${expertCount} 条专家发言`),
-                  } as any];
-                  triggerUIRefresh();
-                } else if (currentEvent === 'start') {
-                  // 连接已建立，忽略
+                } catch (parseErr: any) {
+                  console.error('[Panel] ❌ JSON 解析失败:', parseErr.message, line.slice(0, 200));
                 }
               }
             }

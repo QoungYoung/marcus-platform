@@ -1051,7 +1051,7 @@ async function executePanelDiscussion(
   // === Phase 1: 4 位专家并行独立分析 ===
   console.log(`[Panel] Phase 1: 4 位专家并行独立分析...`);
   const analysts = PANEL_MEMBERS.slice(0, -1); // 除主持人外所有专家
-  const phase1Prompt = `以下是本周完整的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n请按照你的角色定位，产出一份专业的分析报告。直接输出报告，不要重复数据。`;
+  const phase1Prompt = `以下是本周完整的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n⚠️ 用户的核心问题：${message}\n\n请严格按照你的角色定位，围绕用户的上述问题产出一份专业的分析报告。你的报告必须针对用户的问题，不要泛泛而谈，不要跑题。直接输出报告，不要重复原始数据。`;
 
   const phase1Results = await Promise.all(
     analysts.map(async (member) => {
@@ -1079,7 +1079,7 @@ async function executePanelDiscussion(
         .filter((_, i) => i !== idx)
         .map(r => `========== ${r.roleLabel}（${r.role}）==========\n${r.report}`)
         .join('\n\n');
-      const myPrompt = `以下是本次专家组讨论中其他 ${analysts.length - 1} 位专家的分析报告：\n\n---\n${othersReports}\n---\n\n请阅读以上所有报告，然后从你专业角度发表评论：\n1. 你同意哪些观点？为什么？\n2. 你不同意哪些观点？为什么？\n3. 你有哪些补充或修正？\n4. 你认为被其他人忽视的关键点是什么？\n\n请以「评论者：${member.roleLabel}」开头，直接发表评论。`;
+      const myPrompt = `⚠️ 原始用户问题：${message}\n\n以下是本次专家组讨论中其他 ${analysts.length - 1} 位专家针对上述问题的分析报告：\n\n---\n${othersReports}\n---\n\n请阅读以上所有报告，始终围绕原始用户问题，从你专业角度发表评论：\n1. 你同意哪些观点？为什么？\n2. 你不同意哪些观点？为什么？\n3. 你有哪些补充或修正？\n4. 你认为被其他人忽视的关键点是什么？\n\n请以「评论者：${member.roleLabel}」开头，直接发表评论。`;
       const agent = createPanelAgent(member, sessionId);
       const commentary = await runAgentTurn(agent, myPrompt, `${member.roleLabel}(评论)`);
       // 每个专家完成后立即推送
@@ -1106,7 +1106,7 @@ async function executePanelDiscussion(
         .join('\n\n');
       // 同时附上自己 Phase 1 原始报告，方便对照
       const myReport = phase1Results[idx].report;
-      const refPrompt = `你的 Phase 1 独立分析报告如下：\n\n---\n## 你的原始报告\n${myReport}\n---\n\n以下是其他专家对你的报告的评论：\n\n---\n${commentsOnMe}\n---\n\n请基于上述评论进行二次反思，产出改进后的分析：\n1. 你接受哪些批评？你的报告中哪些地方需要修正？\n2. 你坚持哪些观点？为什么坚持（用数据/逻辑反驳）？\n3. 有哪些观点是被其他人启发后你新认识到的？\n4. 如果让你重写你的报告，你最想改动哪一部分？\n\n请以「改进报告 by ${member.roleLabel}」开头，输出你的修正/强化后的最终分析意见。不需要重复原始报告全部内容，只需要输出你修正/坚持/新增的观点，以及在哪些议题上发生了观点变化。`;
+      const refPrompt = `⚠️ 原始用户问题：${message}\n\n你的 Phase 1 独立分析报告如下：\n\n---\n## 你的原始报告\n${myReport}\n---\n\n以下是其他专家对你的报告的评论：\n\n---\n${commentsOnMe}\n---\n\n请始终围绕原始用户问题，基于上述评论进行二次反思，产出改进后的分析：\n1. 你接受哪些批评？你的报告中哪些地方需要修正？\n2. 你坚持哪些观点？为什么坚持（用数据/逻辑反驳）？\n3. 有哪些观点是被其他人启发后你新认识到的？\n4. 如果让你重写你的报告，你最想改动哪一部分？\n\n请以「改进报告 by ${member.roleLabel}」开头，输出你的修正/强化后的最终分析意见。不需要重复原始报告全部内容，只需要输出你修正/坚持/新增的观点，以及在哪些议题上发生了观点变化。`;
       const agent = createPanelAgent(member, sessionId);
       const refinement = await runAgentTurn(agent, refPrompt, `${member.roleLabel}(二次反思)`);
       // 每个专家完成后立即推送
