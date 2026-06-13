@@ -311,7 +311,7 @@ const getDbSchemaTool = {
 
 const getDailyKlineTool = {
   name: 'get_daily_kline',
-  description: '获取A股个股历史日K线数据（前复权 qfq），包含开高低收、成交量、成交额等。数据源：Tushare。用于分析个股历史走势、判断趋势、寻找支撑阻力位。前复权保证了除权除息日无价格跳空，技术指标连续可靠',
+  description: '获取A股个股历史日K线数据（未复权），包含开高低收、成交量、成交额等。数据源：Tushare。用于分析个股历史走势、判断趋势、寻找支撑阻力位',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
     start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认90天前' })),

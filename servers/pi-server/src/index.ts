@@ -1045,13 +1045,13 @@ async function executePanelDiscussion(
   console.log(`[Panel] Phase 0: 数据采集（收集整周数据）...`);
   // 用主持人模型进行数据采集（有 reflectTools 全部工具）
   const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId); // moderator 始终在最后
-  const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写反思报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下所有工具（均为 Tushare 历史数据，无需实时行情），把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — 本周 Pi 策略分析历史\n2. get_trade_history — 本周交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 上周/历史复盘结论（用于跨周对比）\n5. get_daily_kline（前复权 qfq）— 关键个股的日K线和均线\n6. get_technical — 关键个股的 MACD/KDJ/RSI 等技术指标\n输出格式：直接输出工具返回的 JSON/文本，尽量完整，不要省略任何关键数据。`;
+  const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写反思报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下所有工具（均为 Tushare 历史数据，无需实时行情），把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — 本周 Pi 策略分析历史\n2. get_trade_history — 本周交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 上周/历史复盘结论（用于跨周对比）\n5. get_daily_kline_qfq — 关键个股前复权日K线（无除权缺口）\n6. get_technical — 关键个股的 MACD/KDJ/RSI 等技术指标\n输出格式：直接输出工具返回的 JSON/文本，尽量完整，不要省略任何关键数据。`;
   const dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
 
   // === Phase 1: 4 位专家并行独立分析 ===
   console.log(`[Panel] Phase 1: 4 位专家并行独立分析...`);
   const analysts = PANEL_MEMBERS.slice(0, -1); // 除主持人外所有专家
-  const phase1Prompt = `以下是本周的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n⚠️ 用户的核心问题：${message}\n\n请严格按照你的角色定位，围绕用户的上述问题产出一份专业的分析报告。\n\n🔧 你有完整的工具权限（get_pi_analysis_history / get_trade_history / get_latest_scan_report / get_panel_history / get_daily_kline（前复权 qfq）/ get_technical / get_moneyflow / read_db_table 均为 Tushare 历史数据），如果简报数据不足以支撑你的审计/分析，请主动调用工具补充细节。不允许在数据不足的情况下敷衍结论——缺什么就查什么。\n\n你的报告必须针对用户的问题，不要泛泛而谈，不要跑题。输出前请确保你引用的每一条数据都有可靠来源。`;
+  const phase1Prompt = `以下是本周的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n⚠️ 用户的核心问题：${message}\n\n请严格按照你的角色定位，围绕用户的上述问题产出一份专业的分析报告。\n\n🔧 你有完整的工具权限（get_pi_analysis_history / get_trade_history / get_latest_scan_report / get_panel_history / get_daily_kline_qfq（前复权）/ get_technical / get_moneyflow / read_db_table 均为 Tushare 历史数据），如果简报数据不足以支撑你的审计/分析，请主动调用工具补充细节。不允许在数据不足的情况下敷衍结论——缺什么就查什么。\n\n你的报告必须针对用户的问题，不要泛泛而谈，不要跑题。输出前请确保你引用的每一条数据都有可靠来源。`;
 
   const phase1Results = await Promise.all(
     analysts.map(async (member) => {

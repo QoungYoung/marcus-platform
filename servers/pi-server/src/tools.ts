@@ -264,7 +264,7 @@ export const getEtfKlineTool = {
 export const getDailyKlineTool = {
   name: 'get_daily_kline',
   label: '日K线',
-  description: '获取A股个股历史日K线数据（前复权 qfq），包含开高低收、成交量、成交额等。用于分析个股历史走势、判断趋势、寻找支撑阻力位。数据已做前复权处理，除权除息日无价格跳空缺口，技术指标计算不受除权干扰',
+  description: '获取A股个股历史日K线数据（未复权），包含开高低收、成交量、成交额等。用于分析个股历史走势、判断趋势、寻找支撑阻力位',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
     start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认90天前' })),
@@ -306,6 +306,43 @@ export const getDailyKlineTool = {
       if (firstClose !== 0) {
         lines.push(`区间涨跌: ${totalChg}% (${firstClose.toFixed(2)} → ${lastClose.toFixed(2)})`);
       }
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+// 前复权 K线（复盘专用，调用 pro_bar 接口，避免除权缺口干扰技术分析）
+export const getDailyKlineQfqTool = {
+  name: 'get_daily_kline_qfq',
+  label: '日K线(前复权)',
+  description: '获取A股个股历史日K线数据（前复权 qfq），包含开高低收、成交量、成交额等。数据源：Tushare pro_bar。前复权保证了除权除息日无价格跳空缺口，均线/ MACD/RSI 等技术指标连续可靠。复盘分析专用。',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
+    start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认90天前' })),
+    end_date: Type.Optional(Type.String({ description: '结束日期 YYYYMMDD，如 20240524，默认今天' })),
+    limit: Type.Optional(Type.Number({ description: '返回条数上限，默认100，最大500' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; start_date?: string; end_date?: string; limit?: number }, _signal?: AbortSignal) {
+    const query = new URLSearchParams();
+    query.set('adj', 'qfq');
+    if (params.start_date) query.set('start_date', params.start_date);
+    if (params.end_date) query.set('end_date', params.end_date);
+    if (params.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    const data = await apiFetch(`/market/pro-bar/${params.symbol}?${qs}`);
+    if (data.error) throw new Error(data.error);
+    const bars = data.bars || [];
+    if (bars.length === 0) {
+      return { content: [{ type: 'text', text: `未获取到 ${params.symbol} 的前复权K线数据` }], details: data };
+    }
+    const lines: string[] = [];
+    lines.push(`${data.symbol} 历史日K线 · 前复权 (最近${bars.length}条)`);
+    lines.push('日期       | 开盘   | 收盘   | 最高   | 最低   | 成交量(手) | 成交额(万元)');
+    lines.push('-'.repeat(85));
+    for (const b of bars.slice(0, 20)) {
+      const volWan = (b.vol / 100).toFixed(0);
+      const amtWan = (b.amount / 10).toFixed(0);
+      lines.push(`${b.trade_date} | ${b.open.toFixed(2).padStart(6)} | ${b.close.toFixed(2).padStart(6)} | ${b.high.toFixed(2).padStart(6)} | ${b.low.toFixed(2).padStart(6)} | ${volWan.padStart(9)} | ${amtWan.padStart(10)}`);
     }
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },
@@ -821,7 +858,7 @@ export const getPanelHistoryTool = {
 // 与聊天/交易模式完全隔离，无交易权限
 export const REFLECT_TOOLS = [
   // Tushare 历史数据
-  getDailyKlineTool,
+  getDailyKlineQfqTool,
   getTechnicalTool,
   getMoneyflowTool,
   // 持久化记录

@@ -109,7 +109,6 @@ class KlineResponse(BaseModel):
     klines: List[KlineData]
     count: int
     updated_at: datetime
-    adj: str = "qfq"  # 复权方式: qfq=前复权, hfq=后复权, None=不复权
 
 
 class MoneyflowData(BaseModel):
