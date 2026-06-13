@@ -196,47 +196,76 @@ class MarcusVNPyExecutor:
         self._extreme_outflow_triggered = False
     
     def _get_market_outflow_billion(self) -> float:
-        """查询全市场主力净流出（亿元），用于极端流出日检测"""
+        """查询全市场主力净流出（亿元），用于极端流出日检测。
+        所有东财 API 失败时回退到今日缓存，并标注时点。"""
+        import urllib.request, json, ssl, urllib.error
+        
+        def _parse_and_save(raw_net: float) -> float:
+            """解析单位并存入缓存"""
+            # 统一转为亿元
+            if abs(raw_net) > 10000:
+                raw_net /= 100000000  # 元 → 亿元
+            elif abs(raw_net) > 100 and abs(raw_net) < 10000:
+                raw_net /= 10000  # 万元 → 亿元
+            outflow = abs(raw_net) if raw_net < 0 else 0
+            try:
+                from core.utils.eastmoney_cache import get_em_cache
+                get_em_cache().save("market_outflow", outflow)
+            except Exception:
+                pass
+            return outflow
+        
+        ctx = ssl.create_default_context()
+        
+        # 尝试 1: Backend API（通过 Pi Server 代理）
         try:
-            # 优先从 Pi Server 获取
-            import urllib.request, json, ssl
-            ctx = ssl.create_default_context()
-            pi_url = "http://localhost:3001/tools/get_market_moneyflow"
+            pi_url = "http://localhost:3001/api/v1/market/moneyflow-mkt"
             req = urllib.request.Request(pi_url, headers={"Accept": "application/json"})
-            try:
-                with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    main_net = data.get("main_net_inflow", 0)  # 正数为流入，负数为流出
-                    # main_net 单位可能是亿元或万元，尝试转换为亿元
-                    if abs(main_net) > 10000:
-                        main_net /= 100000000  # 元 → 亿元
-                    elif abs(main_net) > 100 and abs(main_net) < 10000:
-                        main_net /= 10000  # 万元 → 亿元
-                    return abs(main_net) if main_net < 0 else 0  # 只返回流出量
-            except Exception:
-                pass
-            
-            # 回退：从 akshare 直接获取
-            try:
-                import akshare as ak
-                df = ak.stock_market_fund_flow()
-                if df is not None and len(df) > 0:
-                    # 取最新一行沪深合计的主力净流出
-                    total_row = df[df['名称'] == '沪深两市']
-                    if len(total_row) > 0:
-                        net = abs(total_row.iloc[0].get('主力净流入-净额', 0))
-                        return net / 100000000  # 元 → 亿元
-                    # 否则汇总沪+深
-                    sh = df[df['名称'] == '上证']
-                    sz = df[df['名称'] == '深证']
-                    total_net = 0
-                    if len(sh) > 0: total_net += sh.iloc[0].get('主力净流入-净额', 0)
-                    if len(sz) > 0: total_net += sz.iloc[0].get('主力净流入-净额', 0)
-                    return abs(total_net) / 100000000 if total_net < 0 else 0
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"[极端流出] 数据获取失败: {e}", file=sys.stderr)
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+            if resp_data.get("data"):
+                main_net = resp_data["data"].get("main_net", 0)
+                if isinstance(main_net, (int, float)) and main_net != 0:
+                    return _parse_and_save(main_net)
+        except (urllib.error.HTTPError, urllib.error.URLError, ConnectionRefusedError, 
+                TimeoutError, OSError, json.JSONDecodeError, Exception):
+            pass
+        
+        # 尝试 2: akshare 直接调用
+        try:
+            import akshare as ak
+            df = ak.stock_market_fund_flow()
+            if df is not None and len(df) > 0:
+                total_row = df[df['名称'] == '沪深两市']
+                if len(total_row) > 0:
+                    return _parse_and_save(total_row.iloc[0].get('主力净流入-净额', 0))
+                sh = df[df['名称'] == '上证']
+                sz = df[df['名称'] == '深证']
+                total_net = 0
+                if len(sh) > 0: total_net += sh.iloc[0].get('主力净流入-净额', 0)
+                if len(sz) > 0: total_net += sz.iloc[0].get('主力净流入-净额', 0)
+                if total_net != 0:
+                    return _parse_and_save(total_net)
+        except (ConnectionRefusedError, TimeoutError, OSError) as e:
+            pass  # 连接拒绝 → 回退缓存
+        except Exception:
+            pass  # 数据解析失败 → 回退缓存
+        
+        # 尝试 3: 全部失败 → 回退今日缓存
+        try:
+            from core.utils.eastmoney_cache import get_em_cache
+            cache = get_em_cache()
+            cached_val, meta = cache.load_with_fallback("market_outflow")
+            if meta["from_cache"]:
+                print(
+                    f"[极端流出] ⚠️ 东财 API 不可用，使用今日缓存数据 "
+                    f"(流出={cached_val:.0f}亿, 时点={meta['cached_at']})",
+                    file=sys.stderr
+                )
+                return cached_val
+        except Exception:
+            pass
+        
         return 0
     
     # ── 过滤器拒绝率追踪（遗漏#2）──

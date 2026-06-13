@@ -440,6 +440,24 @@ def get_sector_flow(
         if len(items) < min(top_n * 2, 200):
             break
 
+    # ── 东财缓存回退：所有渠道（requests/urllib/curl）均失败 → 返回今日上一次缓存 ──
+    if not all_items:
+        try:
+            from core.utils.eastmoney_cache import get_em_cache
+            cache = get_em_cache()
+            cached_val, meta = cache.load_with_fallback("sector_flow", subtype=sector_type)
+            if meta["from_cache"] and cached_val:
+                aged = cache.get_aged_minutes("sector_flow", subtype=sector_type)
+                age_str = f"{aged:.0f}分钟前" if aged is not None else "未知时点"
+                logger.warning(
+                    f"[em_sector_flow] ⚠️ 东财 {sector_type} 接口不可达，"
+                    f"返回今日缓存数据 ({age_str}，{meta['cached_at']})"
+                )
+                return cached_val
+        except Exception:
+            pass
+        return []
+
     # 去重 + 标准化
     seen = set()
     result = []
@@ -455,8 +473,15 @@ def get_sector_flow(
     result.sort(key=lambda x: x.get(sort_by, 0), reverse=True)
     result = result[:top_n]
 
-    # 更新缓存
+    # 更新内存缓存
     _cache[cache_key] = (time.time(), result)
+    
+    # ── 东财缓存：成功获取 → 存入持久缓存（用于 API 不可达时回退）──
+    try:
+        from core.utils.eastmoney_cache import get_em_cache
+        get_em_cache().save("sector_flow", result, subtype=sector_type)
+    except Exception:
+        pass
 
     return result
 

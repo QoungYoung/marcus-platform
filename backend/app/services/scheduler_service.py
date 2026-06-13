@@ -247,6 +247,15 @@ class SchedulerService:
         else:
             logger.warning("⚠️ 止损监控模块加载失败，东睦式滑点风险仅靠定时窗口保护")
         
+        # ── 东财缓存清理（保留3天）──
+        try:
+            from core.utils.eastmoney_cache import get_em_cache
+            deleted = get_em_cache().prune(keep_days=3)
+            if deleted > 0:
+                logger.info(f"🗑️ 东财缓存清理: 删除 {deleted} 个过期文件")
+        except Exception:
+            pass
+        
         logger.info(f"Scheduler started with {len(self.tasks)} tasks")
 
     def stop(self):
