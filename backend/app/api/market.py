@@ -313,17 +313,22 @@ async def get_stock_kline(
     start_date: Optional[str] = Query(None, description="开始日期 YYYYMMDD，默认90天前"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYYMMDD，默认今天"),
     limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
+    adj: str = Query("qfq", description="复权方式: qfq=前复权, hfq=后复权, None=不复权"),
 ):
     """
-    获取A股个股历史日K线数据（未复权）。
-    数据源: Tushare pro daily 接口。
+    获取A股个股历史日K线数据（默认前复权）。
+    数据源: Tushare pro_bar 接口，adj 参数控制复权方式。
     
     参数示例:
     - symbol: SH600519 或 600519 或 600519.SH
     - start_date: 20240101
     - end_date: 20240524
+    - adj: qfq (前复权，默认) / hfq (后复权) / None (不复权)
     """
     try:
+        if adj.lower() == "none":
+            adj = None
+        
         from app.config import get_settings
         settings = get_settings()
         token = settings.get_tushare_token()
@@ -340,10 +345,12 @@ async def get_stock_kline(
         if not start_date:
             start_date = (dt.now() - timedelta(days=90)).strftime("%Y%m%d")
 
-        df = pro.daily(
+        df = pro.bar(
             ts_code=ts_code,
             start_date=start_date,
             end_date=end_date,
+            adj=adj,
+            freq='D',
         )
 
         if df is None or df.empty:
@@ -352,6 +359,7 @@ async def get_stock_kline(
                 klines=[],
                 count=0,
                 updated_at=datetime.now(),
+                adj=adj or "None",
             )
 
         # 按交易日期降序排列（最新在前），限制条数
@@ -378,6 +386,7 @@ async def get_stock_kline(
             klines=klines,
             count=len(klines),
             updated_at=datetime.now(),
+            adj=adj or "None",
         )
 
     except EnvironmentError as e:

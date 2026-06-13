@@ -82,7 +82,7 @@ export const getQuoteTool = {
 export const getPortfolioTool = {
   name: 'get_portfolio',
   label: '账户持仓',
-  description: '查看当前账户资金状况和所有持仓',
+  description: '查看当前账户资金状况和所有持仓。成本价为实际成交价（不复权），当前价为实时行情。短期交易除权概率低。',
   parameters: Type.Object({}),
   async execute(_toolCallId: string, _params: unknown, _signal?: AbortSignal) {
     const data = await apiFetch('/portfolio');
@@ -264,7 +264,7 @@ export const getEtfKlineTool = {
 export const getDailyKlineTool = {
   name: 'get_daily_kline',
   label: '日K线',
-  description: '获取A股个股历史日K线数据（未复权），包含开高低收、成交量、成交额等。用于分析个股历史走势、判断趋势、寻找支撑阻力位',
+  description: '获取A股个股历史日K线数据（前复权 qfq），包含开高低收、成交量、成交额等。用于分析个股历史走势、判断趋势、寻找支撑阻力位。数据已做前复权处理，除权除息日无价格跳空缺口，技术指标计算不受除权干扰',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
     start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认90天前' })),
@@ -816,14 +816,22 @@ export const getPanelHistoryTool = {
   },
 };
 
-// 反思模式（只读 + Pi 分析历史 + 历史复盘，周度反思使用）
+// 反思模式（仅 Tushare 历史数据 + 持久化记录，不含雪球实时查询）
+// 操作: get_panel_history, get_daily_kline, get_technical, get_moneyflow, read_db_table
 // 与聊天/交易模式完全隔离，无交易权限
 export const REFLECT_TOOLS = [
-  ...CHAT_TOOLS,
+  // Tushare 历史数据
+  getDailyKlineTool,
+  getTechnicalTool,
+  getMoneyflowTool,
+  // 持久化记录
   getPiAnalysisHistoryTool,
   getTradeHistoryTool,
   getLatestScanReportTool,
   getPanelHistoryTool,
+  // 数据库查询
+  readDbTableTool,
+  getDbSchemaTool,
 ];
 
 // 向后兼容
