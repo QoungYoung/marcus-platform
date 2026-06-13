@@ -1710,6 +1710,14 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             }
           }
 
+          // 保存群聊消息到 IndexedDB（chat 模式走 subscribe 的 agent_end，这里单独处理）
+          const panelSnapshot = [...agent.state.messages];
+          if (sessionId && sessionsRef.current) {
+            const stateForSave = { ...agent.state, messages: panelSnapshot };
+            sessionsRef.current.saveSession(sessionId, stateForSave, undefined, '专家群聊').catch(() => {});
+            updateSessionMeta(sessionId, { messageCount: panelSnapshot.length });
+          }
+
         } catch (e: any) {
           const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
           if (idx !== -1) {
@@ -1717,6 +1725,11 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             agent.state.messages[idx] = { role: 'assistant', content: makeLoadingContent(errMsg) } as any;
             agent.state.messages = [...agent.state.messages];
             triggerUIRefresh();
+          }
+          // 失败也保存（保留已有讨论记录）
+          if (sessionId && sessionsRef.current) {
+            const stateForSave = { ...agent.state, messages: [...agent.state.messages] };
+            sessionsRef.current.saveSession(sessionId, stateForSave, undefined, '专家群聊').catch(() => {});
           }
         }
       };
