@@ -342,11 +342,11 @@ class StrategyChain:
     
     def analyze_and_iterate(self) -> dict:
         """
-        【新增】分析交易结果并迭代策略
-        根据今日交易表现自动调整明日策略
+        【增强版】分析交易结果并迭代策略
+        根据今日交易表现自动调整明日策略，并对比历史模式
         
         Returns:
-            dict: 迭代后的策略调整建议
+            dict: 迭代后的策略调整建议，包含跨周模式对比
         """
         trades = self.state.get("trades", [])
         
@@ -360,15 +360,24 @@ class StrategyChain:
         # 统计止损/止盈触发
         stop_loss_count = 0
         take_profit_count = 0
+        float_to_loss_count = 0  # 浮盈→亏损模式计数
         total_pnl = 0
         
         for t in sell_trades:
             pnl = t.get("pnl", 0)
             total_pnl += pnl
-            if pnl < -0.05:  # 亏损超过 5%
+            # 新SOP止损线：-2%（对齐铁律二基础止损）
+            if pnl < -0.02:
                 stop_loss_count += 1
-            elif pnl > 0.05:  # 盈利超过 5%
+            elif pnl > 0.05:
                 take_profit_count += 1
+            
+            # 检测「浮盈→亏损」模式
+            feedback = t.get("feedback", {})
+            if feedback:
+                max_float = feedback.get("max_float_pnl", 0)
+                if max_float > 0.01 and pnl < 0:
+                    float_to_loss_count += 1
         
         # 根据交易结果生成策略调整
         iteration = {
@@ -379,23 +388,38 @@ class StrategyChain:
                 "sell_count": len(sell_trades),
                 "stop_loss_count": stop_loss_count,
                 "take_profit_count": take_profit_count,
+                "float_to_loss_count": float_to_loss_count,
                 "total_pnl": round(total_pnl, 4)
             },
             "adjustments": []
         }
         
-        # 策略迭代逻辑
+        # 策略迭代逻辑（阈值对齐新SOP）
         if stop_loss_count >= 2:
             iteration["action"] = "tighten_risk"
             iteration["adjustments"] = [
-                "降低仓位至 50% 以下",
-                "收紧止损线至 -5%",
+                "降低仓位至 30% 以下",
+                "收紧止损线至 -1.5%（大盘弱势时）",
                 "增加基本面过滤条件",
-                "减少追高操作"
+                "减少追高操作",
+                "启用铁律二移动止盈保护（浮盈≥1%止损上移至成本价）"
             ]
-            iteration["position_limit"] = 50
-            iteration["stop_loss"] = -0.05
+            iteration["position_limit"] = 30
+            iteration["stop_loss"] = -0.015
             print(f"⚠️ 策略调整: 止损触发 {stop_loss_count} 次，从严风控")
+            
+        elif float_to_loss_count >= 1:
+            # 「浮盈→亏损」模式警惕
+            iteration["action"] = "tighten_stop"
+            iteration["adjustments"] = [
+                f"检测到 {float_to_loss_count} 笔「浮盈→亏损」交易",
+                "铁律二疑似未执行，强制启用移动止盈",
+                "所有新开仓预设浮盈保护线（+1%止损上移至成本价）",
+                "仓位上限降低 20%"
+            ]
+            iteration["position_limit"] = 40
+            iteration["stop_loss"] = -0.02
+            print(f"⚠️ 策略调整: 浮盈→亏损 {float_to_loss_count} 笔，铁律二强制执行")
             
         elif total_pnl > 0.05:
             iteration["action"] = "maintain"
@@ -404,26 +428,31 @@ class StrategyChain:
                 "继续关注热点概念",
                 "可以适当激进"
             ]
-            iteration["position_limit"] = 80
+            iteration["position_limit"] = 60
             print(f"✅ 策略维持: 盈利 {total_pnl:.2%}，保持积极")
             
         elif total_pnl < -0.03:
             iteration["action"] = "cautious"
             iteration["adjustments"] = [
-                "降低仓位至 30%",
-                "加强止损检查",
+                "降低仓位至 20%",
+                "加强止损检查（大盘背景动态止损）",
                 "减少新开仓位",
-                "优先处理现有持仓"
+                "优先处理现有持仓",
+                "检查是否存在跨周复现的错误模式"
             ]
-            iteration["position_limit"] = 30
-            iteration["stop_loss"] = -0.06
+            iteration["position_limit"] = 20
+            iteration["stop_loss"] = -0.015
             print(f"⚠️ 策略调整: 亏损 {total_pnl:.2%}，保持谨慎")
             
         else:
             iteration["action"] = "maintain"
             iteration["adjustments"] = ["维持当前策略"]
-            iteration["position_limit"] = 60
+            iteration["position_limit"] = 50
             print(f"➡️ 策略维持: 交易平淡，保持观察")
+        
+        # ── 跨周模式对比 ──
+        cross_week = self._check_cross_week_pattern(float_to_loss_count, stop_loss_count)
+        iteration["cross_week"] = cross_week
         
         # 保存迭代结果
         self.state["strategy_iteration"] = iteration
@@ -431,15 +460,86 @@ class StrategyChain:
         self.state["daily_strategy"] = {
             'timestamp': iteration['timestamp'],
             'action': iteration['action'],
-            'position_limit': iteration.get('position_limit', 80),
-            'stop_loss': iteration.get('stop_loss', -0.08),
+            'position_limit': iteration.get('position_limit', 50),
+            'stop_loss': iteration.get('stop_loss', -0.02),
             'adjustments': iteration.get('adjustments', []),
             'stats': iteration.get('stats', {}),
-            'reason': f"根据{'止损触发' if iteration['action']=='tighten_risk' else ('亏损' if iteration['action']=='cautious' else '盈利')}自动调整"
+            'cross_week': cross_week,
+            'reason': f"根据{'止损触发' if iteration['action']=='tighten_risk' else ('浮盈转亏损' if iteration['action']=='tighten_stop' else ('亏损' if iteration['action']=='cautious' else '盈利'))}自动调整"
         }
         self._save_state()
 
         return iteration
+    
+    def _check_cross_week_pattern(self, float_to_loss_count: int, stop_loss_count: int) -> dict:
+        """
+        检查当前错误模式是否在上周已出现（跨周模式识别）。
+        
+        Returns:
+            dict: {"recurring": bool, "patterns": [str], "action": str}
+        """
+        result = {"recurring": False, "patterns": [], "action": "none"}
+        
+        try:
+            # 加载上周归档的策略状态
+            from pathlib import Path
+            from workspace_detector import get_data_dir
+            archive_dir = get_data_dir() / "strategy_history"
+        except ImportError:
+            from pathlib import Path
+            archive_dir = Path(__file__).resolve().parents[2] / "data" / "strategy_history"
+        
+        if not archive_dir.exists():
+            return result
+        
+        # 查找上周的归档文件（最近 7-14 天）
+        one_week_ago = datetime.now() - timedelta(days=7)
+        two_weeks_ago = datetime.now() - timedelta(days=14)
+        
+        last_week_files = []
+        for f in archive_dir.glob("*_strategy.json"):
+            try:
+                date_str = f.stem.replace("_strategy", "")
+                file_date = datetime.strptime(date_str, "%Y-%m-%d")
+                if two_weeks_ago <= file_date <= one_week_ago:
+                    last_week_files.append(f)
+            except ValueError:
+                continue
+        
+        # 分析上周的错误模式
+        last_week_patterns = set()
+        for f in sorted(last_week_files):
+            try:
+                with open(f, 'r', encoding='utf-8') as fp:
+                    data = json.load(fp)
+                iteration = data.get("strategy_iteration", {})
+                stats = iteration.get("stats", {})
+                # 如果上周也有止损触发，记录
+                if stats.get("stop_loss_count", 0) >= 2:
+                    last_week_patterns.add("止损频发")
+                if stats.get("float_to_loss_count", 0) >= 1:
+                    last_week_patterns.add("浮盈→亏损")
+                if iteration.get("action") in ("tighten_risk", "cautious"):
+                    last_week_patterns.add("风控收紧")
+            except Exception:
+                continue
+        
+        # 对比本周模式
+        current_patterns = set()
+        if stop_loss_count >= 2:
+            current_patterns.add("止损频发")
+        if float_to_loss_count >= 1:
+            current_patterns.add("浮盈→亏损")
+        
+        recurring = current_patterns & last_week_patterns
+        
+        if recurring:
+            result["recurring"] = True
+            result["patterns"] = list(recurring)
+            result["action"] = "escalate"
+            print(f"🔴 跨周模式复现: {', '.join(recurring)} — 需升级处理优先级")
+        
+        return result
     
     def print_summary(self):
         """打印策略摘要"""

@@ -59,6 +59,59 @@ class MarcusVNPyExecutor:
         # 确保数据目录存在
         DATA_DIR.mkdir(parents=True, exist_ok=True)
     
+    # ── 回撤熔断 ──
+    # 连续亏损计数器（跨会话持久化需要时可以改为文件存储）
+    self._consecutive_losses: int = 0
+    
+    def _get_total_drawdown_pct(self) -> float:
+        """获取当前总回撤百分比（负数表示亏损）"""
+        try:
+            account = self.get_account()
+            total_pnl_str = account.get('total_profit', '0')
+            import re
+            match = re.search(r'([+-]?\d+\.?\d*)', str(total_pnl_str))
+            if match:
+                total_pnl = float(match.group(1))
+            else:
+                total_pnl = 0.0
+            initial = account.get('initial_capital', 100000)
+            return (total_pnl / initial) * 100 if initial > 0 else 0.0
+        except Exception:
+            return 0.0
+    
+    def _get_today_buy_symbols(self) -> set:
+        """查询 trades.db 获取今日买入的股票代码集合（用于 T+1 拦截）"""
+        today_symbols = set()
+        try:
+            import sqlite3
+            db_path = Path(self.data_dir) / "trades.db"
+            if not db_path.exists():
+                return today_symbols
+            conn = sqlite3.connect(str(db_path), timeout=10)
+            conn.execute("PRAGMA busy_timeout=10000")
+            cursor = conn.cursor()
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            cursor.execute(
+                "SELECT DISTINCT symbol FROM trades WHERE direction='买入' AND date(created_at)=?",
+                (today_str,)
+            )
+            for row in cursor.fetchall():
+                today_symbols.add(row[0])
+            conn.close()
+        except Exception as e:
+            print(f"[T+1] 查询今日买入记录失败（非致命）：{e}", file=sys.stderr)
+        return today_symbols
+    
+    def _get_pi_recommended_limit(self) -> int:
+        """从策略链获取 Pi 建议的仓位上限百分比"""
+        try:
+            from core.utils.strategy_chain import StrategyChain
+            chain = StrategyChain()
+            pi_conf = chain.get_pi_confirmation()
+            return int(pi_conf.get('position_limit', 60))
+        except Exception:
+            return 60
+    
     def _log_trade(self, trade_record: dict) -> None:
         """记录交易到 JSONL 日志文件"""
         try:
@@ -139,7 +192,7 @@ class MarcusVNPyExecutor:
     
     def check_risk(self, symbol: str, price: float, volume: int, side: str) -> dict:
         """
-        风控检查
+        风控检查（增强版 — 包含回撤熔断、T+1拦截、仓位利用率检查）
         
         Returns:
             {"allowed": bool, "reason": str, "data": dict}
@@ -155,6 +208,29 @@ class MarcusVNPyExecutor:
             'volume': volume,
             'required_cash': required_cash
         }
+        
+        # ── 规则 0: 回撤熔断（优先级最高） ──
+        drawdown_pct = self._get_total_drawdown_pct()
+        if side == 'buy' and drawdown_pct <= -5.0:
+            risk_data['reason'] = f'回撤熔断：总回撤 {drawdown_pct:.2f}% 已达 -5% 硬禁止线，停止所有买入'
+            risk_data['drawdown_pct'] = drawdown_pct
+            self._log_risk(risk_data)
+            return {'allowed': False, 'reason': f'回撤熔断（{drawdown_pct:.2f}%）', 'data': risk_data}
+        
+        # ── 规则 0.5: 连续亏损熔断 ──
+        if side == 'buy' and self._consecutive_losses >= 3:
+            risk_data['reason'] = f'连续亏损熔断：已连续亏损 {self._consecutive_losses} 笔，停止当日所有买入'
+            self._log_risk(risk_data)
+            return {'allowed': False, 'reason': f'连续亏损熔断（{self._consecutive_losses}笔）', 'data': risk_data}
+        
+        # ── 规则 0.6: T+1 拦截（卖出方向） ──
+        if side == 'sell':
+            today_buy_symbols = self._get_today_buy_symbols()
+            if symbol in today_buy_symbols:
+                risk_data['reason'] = f'T+1 拦截：{symbol} 为今日买入，当日不可卖出'
+                risk_data['t1_blocked'] = True
+                self._log_risk(risk_data)
+                return {'allowed': False, 'reason': f'T+1 拦截（{symbol}今日买入）', 'data': risk_data}
         
         # 规则 1: 资金检查
         if side == 'buy' and required_cash > account['available_cash']:
@@ -195,8 +271,22 @@ class MarcusVNPyExecutor:
                 self._log_risk(risk_data)
                 return {'allowed': False, 'reason': '卖出数量超过持仓', 'data': risk_data}
         
+        # ── 规则 4: 仓位利用率检查（仅买入方向，软警告不硬拦截） ──
+        if side == 'buy':
+            pi_limit = self._get_pi_recommended_limit()
+            actual_position_ratio = account.get('position_value', 0) / account.get('total_asset', 1) * 100
+            # 如果 Pi 建议仓位 > 实际仓位的 3 倍（即利用率 < 33%），注入警告
+            if pi_limit > 0 and (pi_limit > actual_position_ratio * 3) and pi_limit >= 20:
+                risk_data['position_utilization_warning'] = (
+                    f'仓位利用率过低：Pi建议{pi_limit}%，实际持仓{actual_position_ratio:.1f}%（利用率{actual_position_ratio/pi_limit*100:.0f}%），'
+                    f'请关注仓位脱节问题'
+                )
+        
         # 风控通过
         risk_data['status'] = 'passed'
+        risk_data['drawdown_pct'] = round(drawdown_pct, 2)
+        if 'position_utilization_warning' in risk_data:
+            risk_data['status'] = 'passed_with_warning'
         self._log_risk(risk_data)
         return {'allowed': True, 'reason': '风控通过', 'data': risk_data}
     
@@ -311,6 +401,9 @@ class MarcusVNPyExecutor:
         }
         self._log_trade(trade_record)
         
+        # 记录交易结果用于连续亏损追踪
+        self.record_trade_result(symbol, profit)
+        
         return {
             'status': 'executed',
             'order_id': order_id,
@@ -387,6 +480,21 @@ class MarcusVNPyExecutor:
     def get_positions(self) -> list:
         """获取持仓（优先从数据库读取）"""
         return self.get_positions_from_db()
+    
+    def record_trade_result(self, symbol: str, profit: float) -> None:
+        """
+        记录交易结果用于连续亏损追踪。
+        卖出时调用此方法，profit > 0 重置计数器，profit <= 0 累加。
+        """
+        if profit > 0:
+            self._consecutive_losses = 0
+        else:
+            self._consecutive_losses += 1
+        print(f"[风控] 连续亏损计数: {self._consecutive_losses} (最近: {symbol} {profit:+.2f})", file=sys.stderr)
+    
+    def reset_consecutive_losses(self) -> None:
+        """重置连续亏损计数器（新交易日调用）"""
+        self._consecutive_losses = 0
     
     def get_trade_history(self, limit: int = 20) -> list:
         """获取交易历史"""

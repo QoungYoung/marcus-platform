@@ -30,6 +30,20 @@ from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR, EVENT_JOB_MI
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 实时止损监控（延迟导入避免循环依赖）
+_stop_loss_monitor = None
+
+
+def _get_monitor():
+    global _stop_loss_monitor
+    if _stop_loss_monitor is None:
+        try:
+            from app.services.stop_loss_monitor import get_stop_loss_monitor
+            _stop_loss_monitor = get_stop_loss_monitor()
+        except Exception as e:
+            logger.warning(f"[StopLoss] 监控模块加载失败: {e}")
+    return _stop_loss_monitor
+
 
 class JobStatus(Enum):
     IDLE = "idle"
@@ -358,6 +372,15 @@ class SchedulerService:
 
         # === Pi 自主交易模式 ===
         if task.type == 'pi_trade':
+            # ── 止损监控生命周期管理（暂不启用，待验证后开启）──
+            # 开启方式：取消下方注释即可
+            # is_first_trade = 'morning' in task.id and 'late' not in task.id
+            # is_closing = 'closing' in task.id
+            # monitor = _get_monitor()
+            # if is_first_trade and monitor and not monitor.is_running():
+            #     monitor.start()
+            #     logger.info(f"[{execution_id}] 🟢 止损监控已随首个交易任务启动")
+            
             try:
                 output = self._execute_pi_trade(task, execution_id)
                 execution.status = JobStatus.SUCCESS.value
@@ -371,6 +394,10 @@ class SchedulerService:
                 execution.finished_at = datetime.now()
                 self._save_execution_log(execution)
                 self._send_notifications(task, execution)
+                # ── 止损监控停止（暂不启用）──
+                # if is_closing and monitor and monitor.is_running():
+                #     monitor.stop()
+                #     logger.info(f"[{execution_id}] 🔴 止损监控已随尾盘任务停止")
             return
 
         # === Pi 周度反思模式 ===
@@ -1055,6 +1082,41 @@ class SchedulerService:
                     reason=reason_str,
                 )
                 logger.info(f"[{execution_id}] Pi signal: {signal_match.group(1)} limit={signal_match.group(2)}%")
+
+                # ── 仓位利用率校验 ──
+                # 如果 Pi 建议仓位 > 实际仓位的 3 倍（利用率 < 33%），记录警告
+                try:
+                    from core.utils.strategy_chain import StrategyChain
+                    chain = StrategyChain()
+                    # 获取账户实际仓位
+                    import urllib.request as _ur, json as _js, ssl as _ssl
+                    _ctx = _ssl.create_default_context()
+                    portfolio_url = f"{get_settings().MARCUS_API_URL}/portfolio" if hasattr(get_settings(), 'MARCUS_API_URL') else "http://localhost:8000/api/v1/portfolio"
+                    try:
+                        _req = _ur.request.Request(portfolio_url, headers={"Accept": "application/json"})
+                        with _ur.request.urlopen(_req, context=_ctx, timeout=10) as _resp:
+                            _pdata = _js.loads(_resp.read().decode("utf-8"))
+                            _acc = _pdata.get('account', {})
+                            _total_asset = _acc.get('total_asset', 100000)
+                            _position_value = _acc.get('position_value', 0)
+                            actual_pct = (_position_value / _total_asset * 100) if _total_asset > 0 else 0
+                    except Exception:
+                        actual_pct = 0
+                    
+                    if position_limit > 0 and actual_pct < position_limit * 0.3 and position_limit >= 20:
+                        utilization = actual_pct / position_limit * 100
+                        logger.warning(
+                            f"[{execution_id}] [position_utilization] Pi建议{position_limit}% "
+                            f"但实际仅{actual_pct:.1f}%（利用率{utilization:.0f}%），仓位严重脱节"
+                        )
+                        # 注入到下一轮提示中
+                        chain.set_pi_confirmation(
+                            stance=stance,
+                            position_limit=position_limit,
+                            reason=f"{reason_str} | ⚠️ 仓位利用率仅{utilization:.0f}%",
+                        )
+                except Exception as e:
+                    logger.debug(f"[{execution_id}] Position utilization check skipped: {e}")
             except Exception as e:
                 logger.error(f"[{execution_id}] Failed to write Pi signal: {e}")
 
