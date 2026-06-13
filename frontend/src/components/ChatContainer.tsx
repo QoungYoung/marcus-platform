@@ -1622,66 +1622,20 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         agent.state.messages = [...msgs];
         triggerUIRefresh();
 
-        // 使用定时器更新加载消息（模拟阶段进展）
-        const phases = ['🗂️ 数据采集', '📝 独立分析（4 专家并行）', '💬 交叉评论（相互点评）', '🔄 二次反思改进', '🎤 主持人综合'];
-        let phaseIdx = 0;
-        let elapsed = 0;
-        const progressTimer = setInterval(() => {
-          elapsed += 10;
-          const newPhase = Math.min(Math.floor(elapsed / 90), phases.length - 1);
-          if (newPhase > phaseIdx) {
-            phaseIdx = newPhase;
-            const updatedLines = ['## 👥 专家组群聊讨论中...', '', '> 5 位专家正在进行多轮讨论', '', '| 阶段 | 状态 |', '|------|:--:|'];
-            for (let i = 0; i < phases.length; i++) {
-              if (i < phaseIdx) updatedLines.push(`| ${phases[i]} | ✅ 已完成 |`);
-              else if (i === phaseIdx) updatedLines.push(`| ${phases[i]} | ⏳ 进行中... |`);
-              else updatedLines.push(`| ${phases[i]} | ⬜ 等待中 |`);
-            }
-            updatedLines.push('', `⏱️ 已耗时: ${Math.floor(elapsed / 60)}分${elapsed % 60}秒`);
-            const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
-            if (idx !== -1) {
-              agent.state.messages[idx] = { role: 'assistant', content: makeLoadingContent(updatedLines.join('\n')), _panelLoadingId: loadingId } as any;
-              triggerUIRefresh();
-            }
-          }
-        }, 10000);
-
-        // SSE 流式接收每轮专家发言
-        const phaseMessages: Array<{ role: string; roleLabel: string; content: string; phase: string }> = [];
-
-        const appendPhaseMessage = (phase: string, results: Array<{ role: string; roleLabel: string; content: string }>) => {
-          // 移除旧的加载消息
-          const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
-          // 构建当前所有阶段的聊天记录
-          results.forEach(r => phaseMessages.push({ ...r, phase }));
-
-          const chatLines = ['## 👥 专家组群聊讨论 — 实时直播\n'];
-          const seenPhases = [...new Set(phaseMessages.map(p => p.phase))];
-          seenPhases.forEach(ph => {
-            const phaseResults = phaseMessages.filter(p => p.phase === ph);
-            const phaseLabel = phaseResults[0]?.phase === 'phase1' ? '📝 第 1 轮：独立分析' :
-                               phaseResults[0]?.phase === 'phase2' ? '💬 第 2 轮：交叉评论' :
-                               phaseResults[0]?.phase === 'phase25' ? '🔄 第 2.5 轮：二次反思' : ph;
-            chatLines.push('', `### ${phaseLabel}`, '');
-            phaseResults.forEach(r => {
-              chatLines.push(`**${r.roleLabel}**：`);
-              chatLines.push('');
-              // 截断太长的内容（每段最多 500 字符预览）
-              const preview = r.content.length > 500 ? r.content.slice(0, 500) + '\n\n...（完整内容将在讨论结束后展示）' : r.content;
-              chatLines.push(preview);
-              chatLines.push('');
-            });
-          });
-
-          if (idx !== -1) {
-            agent.state.messages[idx] = {
-              role: 'assistant',
-              content: makeLoadingContent(chatLines.join('\n')),
-              _panelLoadingId: loadingId,
-            } as any;
-          }
-          agent.state.messages = [...agent.state.messages];
+        // 群聊模式：每个专家完成后立即追加独立聊天气泡
+        const appendExpertBubble = (roleLabel: string, content: string) => {
+          const bubbleContent = `**${roleLabel}**\n\n${content}`;
+          agent.state.messages = [...agent.state.messages, { role: 'assistant', content: makeLoadingContent(bubbleContent) } as any];
           triggerUIRefresh();
+        };
+
+        // 首次收到专家消息时，移除加载提示
+        let loadingRemoved = false;
+        const removeLoadingOnce = () => {
+          if (loadingRemoved) return;
+          loadingRemoved = true;
+          const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
+          if (idx !== -1) agent.state.messages.splice(idx, 1);
         };
 
         try {
@@ -1696,16 +1650,13 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             throw new Error(`HTTP ${resp.status}: ${errText}`);
           }
 
-          clearInterval(progressTimer);
-
           const reader = resp.body?.getReader();
           const decoder = new TextDecoder();
           if (!reader) throw new Error('Response body not readable');
 
           let buffer = '';
           let currentEvent = '';
-          let finalReply = '';
-          let finalElapsed = 0;
+          let expertCount = 0;
 
           while (true) {
             const { done, value } = await reader.read();
@@ -1713,49 +1664,43 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // 保留未完整行
+            buffer = lines.pop() || '';
 
             for (const line of lines) {
               if (line.startsWith('event: ')) {
                 currentEvent = line.slice(7).trim();
               } else if (line.startsWith('data: ')) {
                 const data = JSON.parse(line.slice(6));
-                if (currentEvent === 'phase1' || currentEvent === 'phase2' || currentEvent === 'phase25') {
-                  appendPhaseMessage(currentEvent, data.results);
+                if (currentEvent === 'expert_message') {
+                  removeLoadingOnce();
+                  for (const r of (data.results || [])) {
+                    appendExpertBubble(data.label || r.roleLabel, r.content);
+                    expertCount++;
+                  }
                 } else if (currentEvent === 'error') {
                   throw new Error(data.message || 'Panel error');
                 } else if (currentEvent === 'done') {
-                  finalReply = data.reply || '';
-                  finalElapsed = data.elapsed_ms || 0;
+                  const totalSec = ((data.elapsed_ms || 0) / 1000).toFixed(1);
+                  agent.state.messages = [...agent.state.messages, {
+                    role: 'assistant',
+                    content: makeLoadingContent(`> ⏱️ 群聊讨论完成，总耗时 ${totalSec} 秒 (${(Number(totalSec) / 60).toFixed(1)} 分钟)，共 ${expertCount} 条专家发言`),
+                  } as any];
+                  triggerUIRefresh();
+                } else if (currentEvent === 'start') {
+                  // 连接已建立，忽略
                 }
               }
             }
           }
 
-          // SSE 完成 — 直接从 done 事件取报告，不再二次调用 API
-          if (!finalReply) throw new Error('未收到最终报告');
-
-          const totalSec = (finalElapsed / 1000).toFixed(1);
-          const loadingIdx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
-          const elapsedHeader = `> ⏱️ 群聊讨论完成，总耗时 ${totalSec} 秒 (${(Number(totalSec) / 60).toFixed(1)} 分钟)\n\n---\n\n`;
-          if (loadingIdx !== -1) {
-            agent.state.messages[loadingIdx] = {
-              role: 'assistant',
-              content: makeLoadingContent(elapsedHeader + finalReply),
-            } as any;
-          }
-          agent.state.messages = [...agent.state.messages];
-          triggerUIRefresh();
-
         } catch (e: any) {
-          clearInterval(progressTimer);
           const idx = agent.state.messages.findIndex((m: any) => m._panelLoadingId === loadingId);
           if (idx !== -1) {
             const errMsg = `## ❌ 专家组群聊讨论失败\n\n> 错误: ${e.message}\n\n请检查 pi-server 是否正常运行，或切换到聊天模式重试。`;
             agent.state.messages[idx] = { role: 'assistant', content: makeLoadingContent(errMsg) } as any;
+            agent.state.messages = [...agent.state.messages];
+            triggerUIRefresh();
           }
-          agent.state.messages = [...agent.state.messages];
-          triggerUIRefresh();
         }
       };
 

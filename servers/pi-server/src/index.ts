@@ -1054,20 +1054,20 @@ async function executePanelDiscussion(
   const phase1Prompt = `以下是本周完整的交易与市场数据简报：\n\n---\n${dataBriefing}\n---\n\n请按照你的角色定位，产出一份专业的分析报告。直接输出报告，不要重复数据。`;
 
   const phase1Results = await Promise.all(
-    analysts.map(member => {
+    analysts.map(async (member) => {
       const agent = createPanelAgent(member, sessionId);
-      return runAgentTurn(agent, phase1Prompt, member.roleLabel).then(
-        report => ({ role: member.role, roleLabel: member.roleLabel, report })
-      );
+      const report = await runAgentTurn(agent, phase1Prompt, member.roleLabel);
+      // 每个专家完成后立即推送到前端（群聊体验）
+      onPhase?.({
+        phase: 'expert_message',
+        label: `📝 ${member.roleLabel}`,
+        results: [{ role: member.role, roleLabel: member.roleLabel, content: report }],
+        elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
+      });
+      return { role: member.role, roleLabel: member.roleLabel, report };
     })
   );
   console.log(`[Panel] Phase 1 完成，收集到 ${phase1Results.length} 份独立报告`);
-  onPhase?.({
-    phase: 'phase1',
-    label: '📝 第 1 轮：独立分析',
-    results: phase1Results.map(r => ({ role: r.role, roleLabel: r.roleLabel, content: r.report })),
-    elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
-  });
 
   // === Phase 2: 交叉评论 ===
   console.log(`[Panel] Phase 2: 交叉评论...`);
@@ -1081,18 +1081,18 @@ async function executePanelDiscussion(
         .join('\n\n');
       const myPrompt = `以下是本次专家组讨论中其他 ${analysts.length - 1} 位专家的分析报告：\n\n---\n${othersReports}\n---\n\n请阅读以上所有报告，然后从你专业角度发表评论：\n1. 你同意哪些观点？为什么？\n2. 你不同意哪些观点？为什么？\n3. 你有哪些补充或修正？\n4. 你认为被其他人忽视的关键点是什么？\n\n请以「评论者：${member.roleLabel}」开头，直接发表评论。`;
       const agent = createPanelAgent(member, sessionId);
-      return runAgentTurn(agent, myPrompt, `${member.roleLabel}(评论)`).then(
-        commentary => ({ role: member.role, roleLabel: member.roleLabel, commentary })
-      );
+      const commentary = await runAgentTurn(agent, myPrompt, `${member.roleLabel}(评论)`);
+      // 每个专家完成后立即推送
+      onPhase?.({
+        phase: 'expert_message',
+        label: `💬 ${member.roleLabel} · 交叉评论`,
+        results: [{ role: member.role, roleLabel: member.roleLabel, content: commentary }],
+        elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
+      });
+      return { role: member.role, roleLabel: member.roleLabel, commentary };
     })
   );
   console.log(`[Panel] Phase 2 完成，收集到 ${phase2Results.length} 份交叉评论`);
-  onPhase?.({
-    phase: 'phase2',
-    label: '💬 第 2 轮：交叉评论',
-    results: phase2Results.map(r => ({ role: r.role, roleLabel: r.roleLabel, content: r.commentary })),
-    elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
-  });
 
   // === Phase 2.5: 二次反思改进 ===
   console.log(`[Panel] Phase 2.5: 专家二次反思改进...`);
@@ -1108,18 +1108,18 @@ async function executePanelDiscussion(
       const myReport = phase1Results[idx].report;
       const refPrompt = `你的 Phase 1 独立分析报告如下：\n\n---\n## 你的原始报告\n${myReport}\n---\n\n以下是其他专家对你的报告的评论：\n\n---\n${commentsOnMe}\n---\n\n请基于上述评论进行二次反思，产出改进后的分析：\n1. 你接受哪些批评？你的报告中哪些地方需要修正？\n2. 你坚持哪些观点？为什么坚持（用数据/逻辑反驳）？\n3. 有哪些观点是被其他人启发后你新认识到的？\n4. 如果让你重写你的报告，你最想改动哪一部分？\n\n请以「改进报告 by ${member.roleLabel}」开头，输出你的修正/强化后的最终分析意见。不需要重复原始报告全部内容，只需要输出你修正/坚持/新增的观点，以及在哪些议题上发生了观点变化。`;
       const agent = createPanelAgent(member, sessionId);
-      return runAgentTurn(agent, refPrompt, `${member.roleLabel}(二次反思)`).then(
-        refinement => ({ role: member.role, roleLabel: member.roleLabel, refinement })
-      );
+      const refinement = await runAgentTurn(agent, refPrompt, `${member.roleLabel}(二次反思)`);
+      // 每个专家完成后立即推送
+      onPhase?.({
+        phase: 'expert_message',
+        label: `🔄 ${member.roleLabel} · 反思改进`,
+        results: [{ role: member.role, roleLabel: member.roleLabel, content: refinement }],
+        elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
+      });
+      return { role: member.role, roleLabel: member.roleLabel, refinement };
     })
   );
   console.log(`[Panel] Phase 2.5 完成，收集到 ${phase25Results.length} 份二次反思报告`);
-  onPhase?.({
-    phase: 'phase25',
-    label: '🔄 第 2.5 轮：二次反思改进',
-    results: phase25Results.map(r => ({ role: r.role, roleLabel: r.roleLabel, content: r.refinement })),
-    elapsed_sec: Math.round((Date.now() - totalStart) / 1000),
-  });
 
   // === Phase 3: 主持人综合 ===
   console.log(`[Panel] Phase 3: 主持人综合产出最终报告...`);
@@ -1145,6 +1145,14 @@ async function executePanelDiscussion(
 
   const totalElapsed = Date.now() - totalStart;
   console.log(`[Panel] ===== 专家组群聊讨论完成 (总耗时 ${(totalElapsed / 1000).toFixed(1)}s) =====\n`);
+
+  // 主持人总结也作为独立消息推送
+  onPhase?.({
+    phase: 'expert_message',
+    label: '🎤 主持人 · 最终总结',
+    results: [{ role: 'moderator', roleLabel: '主持人', content: finalReport }],
+    elapsed_sec: Math.round(totalElapsed / 1000),
+  });
 
   return { reply: finalReport, elapsed_ms: totalElapsed };
 }
