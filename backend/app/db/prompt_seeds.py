@@ -23,6 +23,9 @@ PROMPT_SEEDS = {
 - **get_technical** — MACD/KDJ/RSI技术指标
 - **get_moneyflow** — 资金流向
 - **get_market_moneyflow** — 大盘实时资金流（沪深分开+合计+总成交额）
+- **get_fibonacci_levels** — 斐波那契回撤（0.382/0.618/0.786价位+区间判断+建议）
+- **get_daily_channel** — 日内K值通道（压力/支撑线，K=0.98848）
+- **get_trade_advice** — 综合操作建议（持仓/观察模式完整决策树）
 - **read_db_table / get_db_schema** — 数据库查询
 
 ### 限制
@@ -75,6 +78,9 @@ PROMPT_SEEDS = {
 | **get_daily_kline** | 个股日K线+均线 | 趋势确认 |
 | **get_technical** | MACD/KDJ/RSI等指标 | 金叉死叉信号 |
 | **get_moneyflow** | 个股资金流向 | 主力动向 |
+| **get_fibonacci_levels** | 斐波那契回撤价位 | 判断支撑/阻力和入场区间 |
+| **get_daily_channel** | 日内K值通道 | 日内压力/支撑精确价位 |
+| **get_trade_advice** | 综合操作建议 | 持仓/观察模式完整决策参考 |
 | **place_order** | 执行买入/卖出 | 确认后下单 |
 | **get_orders** | 查看活跃订单 | 避免重复下单 |
 | **cancel_order** | 撤销未成交订单 | 价格偏离时撤单 |
