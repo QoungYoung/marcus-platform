@@ -846,7 +846,7 @@ export const getDailyChannelTool = {
 export const getTradeAdviceTool = {
   name: 'get_trade_advice',
   label: '操作建议',
-  description: '获取完整的股票操作建议（牛股计算器决策树）。结合斐波那契回撤、K值通道、时间证伪、破底止损等规则，输出格式化操作信号。传入 cost 则为持仓模式，不传则为观察模式。用于交易决策时快速获取综合建议',
+  description: '获取完整的股票操作建议（牛股计算器决策树）。当你需要判断某只股票该买入/持有/卖出时调用此工具。结合斐波那契回撤、K值通道、时间证伪、破底止损等规则给出明确信号。cost（成本价）有值则为持仓模式，不传则为观察模式。触发场景：用户问"这只股票怎么看""该买还是该卖""现在什么建议""帮我分析持仓"',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
     cost: Type.Optional(Type.Number({ description: '成本价（有持仓时传入，触发持仓模式决策逻辑）' })),
