@@ -195,6 +195,23 @@ async def get_portfolio():
     symbols = [p['symbol'] for p in position_list]
     prices = get_realtime_prices(symbols) if symbols else {}
 
+    # 获取 High Water Mark 数据（牛股计算器策略）
+    high_water_marks = {}
+    try:
+        from core.utils.strategy_chain import StrategyChain
+        chain = StrategyChain()
+        for p in position_list:
+            hwm = chain.get_high_water_mark(p['symbol'])
+            if hwm:
+                high_water_marks[p['symbol']] = hwm
+            # 同时更新 high water mark
+            price_data = prices.get(p['symbol'], {})
+            current_p = price_data.get('price', p['avg_price']) if isinstance(price_data, dict) else price_data
+            if current_p > 0:
+                chain.update_high_water_mark(p['symbol'], current_p)
+    except Exception:
+        pass
+
     total_position_value = 0
     positions = []
     for p in position_list:
@@ -212,6 +229,9 @@ async def get_portfolio():
         floating_pnl_pct = (current_price / p['avg_price'] - 1) * 100 if p['avg_price'] > 0 else 0
         total_position_value += market_value
 
+        # 附加 High Water Mark
+        hwm = high_water_marks.get(p['symbol'], {})
+
         positions.append(PositionResponse(
             symbol=p['symbol'],
             name=p['name'],
@@ -223,6 +243,9 @@ async def get_portfolio():
             floating_pnl=floating_pnl,
             floating_pnl_pct=floating_pnl_pct,
             entry_date="",
+            high_water_mark=hwm.get('high_price'),
+            high_water_date=hwm.get('high_date'),
+            days_since_high=hwm.get('days_since_high'),
         ))
 
     available_cash = account.get('available_cash', 0)
@@ -294,6 +317,20 @@ async def get_positions():
         floating_pnl = market_value - cost_value
         floating_pnl_pct = (current_price / p['avg_price'] - 1) * 100 if p['avg_price'] > 0 else 0
 
+        # 获取 High Water Mark
+        hwm = {}
+        try:
+            from core.utils.strategy_chain import StrategyChain
+            chain = StrategyChain()
+            hwm_data = chain.get_high_water_mark(p['symbol'])
+            if hwm_data:
+                hwm = hwm_data
+            # 更新 high water mark
+            if current_price > 0:
+                chain.update_high_water_mark(p['symbol'], current_price)
+        except Exception:
+            pass
+
         positions.append(PositionResponse(
             symbol=p['symbol'],
             name=p['name'],
@@ -305,6 +342,9 @@ async def get_positions():
             floating_pnl=floating_pnl,
             floating_pnl_pct=floating_pnl_pct,
             entry_date="",
+            high_water_mark=hwm.get('high_price'),
+            high_water_date=hwm.get('high_date'),
+            days_since_high=hwm.get('days_since_high'),
         ))
     return positions
 

@@ -3,11 +3,13 @@
 """
 雪球数据查询引擎
 
+行情数据源已切换为腾讯 qt.gtimg.cn（免认证/无频率限制/60+字段）。
+
 支持：
-- 股票行情查询
-- 组合数据查询
-- 财务数据查询
-- 基金数据查询
+- 股票实时行情查询（腾讯 qt.gtimg.cn）
+- 组合数据查询（雪球）
+- 财务数据查询（雪球）
+- 基金数据查询（雪球）
 - 数据持久化存储
 """
 
@@ -159,77 +161,160 @@ class XueqiuEngine:
     
     # ========== 股票相关 ==========
     
+    def _tencent_to_symbol(self, symbol: str) -> str:
+        """将 SH600519 转为腾讯格式 sh600519"""
+        symbol = symbol.upper().strip()
+        if '.' in symbol:
+            code, market = symbol.split('.')
+            return f"{market.lower()}{code}"
+        if symbol.startswith(('SH', 'SZ', 'BJ', 'HK')):
+            market = symbol[:2].lower()
+            code = symbol[2:]
+            return f"{market}{code}"
+        return symbol.lower()
+
+    def _parse_tencent_quote(self, symbol: str, raw: str) -> Optional[dict]:
+        """
+        解析腾讯 qt.gtimg.cn 返回的行情数据，映射为雪球兼容的 dict 格式。
+        
+        腾讯字段索引（~分隔）：
+        [0]市场 [1]名称 [2]代码 [3]当前价 [4]昨收 [5]今开 [6]涨跌量
+        [7]涨停价 [8]跌停价 [9]流通股本 [10]量比
+        [11-20]买卖5档 [30]日期 [31]涨跌额 [32]涨跌幅%
+        [33]最高 [34]最低 [36]成交量(手) [37]成交额(万元)
+        [38]换手率% [39]静态PE [40]开盘金额 [41]委比 [42]外盘
+        [43]振幅% [44]流通市值 [45]总市值 [46]PB [47]涨停幅度
+        [48]跌停幅度 [49]年最高 [50]年最低 [51]均价 [57]52周最高
+        [58]52周最低 ...更多
+        """
+        if not raw or '~' not in raw:
+            return None
+        try:
+            # 去掉 JSONP 前缀 v_sh600519="..." 
+            idx = raw.find('"')
+            if idx < 0:
+                return None
+            raw = raw[idx + 1:].rstrip('";\n\r ').strip()
+            parts = raw.split('~')
+            if len(parts) < 40:
+                return None
+
+            def _f(i: int) -> float:
+                try:
+                    return float(parts[i]) if parts[i] else 0.0
+                except (ValueError, IndexError):
+                    return 0.0
+
+            current = _f(3)
+            last_close = _f(4)
+            open_price = _f(5)
+            high = _f(33)
+            low = _f(34)
+            volume = _f(36)  # 手
+            turnover = _f(37)  # 万元
+            percent = _f(32)
+            chg = _f(31)
+            name = parts[1] if len(parts) > 1 else ''
+
+            # 修复：涨跌额/涨幅为0但当前价≠昨收时反推
+            if (chg == 0 or percent == 0) and last_close > 0 and current > 0 and abs(current - last_close) > 0.001:
+                chg = round(current - last_close, 3)
+                percent = round((current - last_close) / last_close * 100, 2)
+
+            # 成交额：腾讯万元 → 元
+            amount = round(turnover * 10000, 2) if turnover > 0 else 0.0
+
+            # 分时均价：按市场规则计算
+            avg_price = 0.0
+            if volume > 0 and turnover > 0:
+                market_lower = self._tencent_to_symbol(symbol).lower()
+                if market_lower.startswith('hk'):
+                    avg_price = round(turnover / volume, 3) if volume > 0 else 0
+                elif market_lower.startswith(('sh68', 'bj')):
+                    avg_price = round((turnover * 10000) / volume, 3)
+                else:
+                    avg_price = round((turnover * 10000) / (volume * 100), 3)
+
+            # 构建雪球兼容 dict
+            return {
+                'symbol': symbol,
+                'name': name,
+                'current': current,
+                'chg': chg,
+                'percent': percent,
+                'last_close': last_close,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'volume': volume,
+                'amount': amount,
+                'turnover_rate': _f(38),
+                'amplitude': _f(43),
+                'pe_ttm': _f(39),          # 腾讯是静态PE，雪球用TTM
+                'pb': _f(46),
+                'market_capital': _f(45),
+                'float_market_capital': _f(44),
+                'avg_price': avg_price if avg_price > 0 else _f(current) if current > 0 else 0,
+                'high_52w': _f(57) or _f(49) or high,  # 优先52周最高，降级年最高/今日最高
+                'low_52w': _f(58) or _f(50) or low,    # 优先52周最低，降级年最低/今日最低
+                'data_source': 'tencent',
+            }
+        except Exception as e:
+            print(f"[ERR] 解析腾讯行情失败: {symbol} - {e}")
+            return None
+
     def get_stock_quote(self, symbol: str, use_cache: bool = True) -> Optional[dict]:
         """
-        获取股票实时行情
+        获取股票实时行情（腾讯 qt.gtimg.cn 接口，无认证/无频率限制）
         
         Args:
             symbol: 股票代码（如 SH600519，无前缀也能自动识别）
-            use_cache: 是否使用缓存
+            use_cache: 是否使用缓存（默认 True，缓存5分钟）
             
         Returns:
-            行情数据字典
+            行情数据字典（与雪球格式兼容）
         """
         # 自动补全交易所前缀（无前缀时根据代码规则补全）
-        # 国际代码（包含 . 的如 US.DJI、HK.HSI）直接使用，不加前缀
-        if '.' not in symbol and not symbol.startswith(('SH', 'SZ', 'SH60', 'SZ00', 'BJ')):
-            # 6开头 → SH，0/3开头 → SZ
-            symbol = ('SH' if symbol.startswith(('6', '9')) else 'SZ') + symbol
+        if '.' not in symbol and not symbol.startswith(('SH', 'SZ', 'SH60', 'SZ00', 'BJ', 'HK')):
+            if symbol.isdigit() and len(symbol) <= 5:
+                symbol = 'HK' + symbol.zfill(5)
+            elif symbol.isdigit() and len(symbol) == 6:
+                symbol = ('SH' if symbol.startswith(('6', '9')) else 'SZ') + symbol
+            else:
+                symbol = 'SH' + symbol
         
         # 尝试从缓存读取
         if use_cache:
             cached = self._get_from_cache('stock_quotes', symbol)
             if cached:
-                print(f"[OK] 从缓存读取：{symbol}")
                 return cached
         
         try:
-            # 直接调用雪球 API 获取完整数据（包含 name 字段）
-            import requests
-            url = 'https://stock.xueqiu.com/v5/stock/quote.json'
-            params = {'symbol': symbol, 'extend': 'detail'}
-            headers = {
-                'Cookie': self.token,
-                'User-Agent': 'Xueqiu App'
-            }
-            r = requests.get(url, headers=headers, params=params, timeout=10)
-            
-            if r.status_code == 200:
-                result = r.json()
-                if 'data' in result and 'quote' in result['data']:
-                    quote_data = result['data']['quote']
-                elif 'data' in result and isinstance(result['data'], list) and len(result['data']) > 0:
-                    quote_data = result['data'][0]
-                else:
-                    quote_data = {}
-            else:
-                # 降级使用 pysnowball
-                result = ball.quotec(symbol)
-                if result and 'data' in result and len(result['data']) > 0:
-                    quote_data = result['data'][0]
-                else:
-                    quote_data = result
-            
-            # 防御：API 降级失败时 quote_data 可能为 None
-            if quote_data is None:
-                quote_data = {}
-            
-            # 【修复】指数数据 chg/percent 为 0 或 None 时，用 last_close 反推
-            # 雪球对指数代码（SH0/SZ3开头）在预开盘或部分时段返回 chg=0/percent=0/None
-            # 但 current 和 last_close 通常是正确的，用两者计算真实涨跌
-            percent = quote_data.get('percent', 0)
-            chg = quote_data.get('chg', 0)
-            last_close = quote_data.get('last_close', 0)
-            current = quote_data.get('current', 0)
-            if (percent in (0, None) or chg in (0, None)) and last_close and last_close > 0 and current and current > 0 and last_close != current:
-                computed_chg = round(current - last_close, 3)
-                computed_percent = round((current - last_close) / last_close * 100, 2)
-                if percent in (0, None):
-                    quote_data['percent'] = computed_percent
-                if chg in (0, None):
-                    quote_data['chg'] = computed_chg
+            import urllib.request
+            import ssl
 
-            # 【增强修复】非交易时段 current 可能为 0，此时不缓存无效数据
+            # 转换为腾讯代码格式
+            t_symbol = self._tencent_to_symbol(symbol)
+            url = f'https://qt.gtimg.cn/q={t_symbol}'
+            
+            ctx = ssl.create_default_context()
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://finance.qq.com/',
+            })
+            
+            with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
+                raw = resp.read().decode('gbk', errors='replace')
+            
+            if not raw or 'pv_none' in raw.lower():
+                print(f"[WARN] 腾讯接口无数据: {symbol}")
+                return None
+            
+            quote_data = self._parse_tencent_quote(symbol, raw)
+            if quote_data is None:
+                return None
+
+            # 非交易时段 current 可能为 0，此时不缓存无效数据
             current = quote_data.get('current', 0)
             if current == 0 or current is None:
                 print(f"[WARN] 跳过缓存 {symbol}：current={current}（非交易时段或API异常）")
@@ -237,11 +322,11 @@ class XueqiuEngine:
 
             # 保存到缓存
             self._save_to_cache('stock_quotes', symbol, quote_data)
-
-            print(f"[OK] 获取行情：{symbol}")
+            print(f"[OK] 腾讯行情: {symbol} @ {current}")
             return quote_data
+            
         except Exception as e:
-            print(f"[ERR] 获取行情失败：{symbol} - {e}")
+            print(f"[ERR] 腾讯行情获取失败: {symbol} - {e}")
             return None
     
     def get_stock_quotes(self, symbols: List[str]) -> Dict[str, dict]:

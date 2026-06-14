@@ -243,7 +243,7 @@ class SchedulerService:
         # ── 启动时关键模组健康检查 ──
         monitor = _get_monitor()
         if monitor:
-            logger.info(f"✅ 止损监控模块已加载（当前未启用，30秒轮询会触发雪球IP限流）")
+            logger.info(f"✅ 止损监控模块已加载（腾讯接口无频率限制，30秒轮询安全）")
         else:
             logger.warning("⚠️ 止损监控模块加载失败，东睦式滑点风险仅靠定时窗口保护")
         
@@ -389,14 +389,22 @@ class SchedulerService:
 
         # === Pi 自主交易模式 ===
         if task.type == 'pi_trade':
-            # ── 止损监控生命周期管理（暂不启用：30秒轮询会导致雪球封IP）──
-            # 开启方式：取消下方注释即可
-            # is_first_trade = 'morning' in task.id and 'late' not in task.id
-            # is_closing = 'closing' in task.id
-            # monitor = _get_monitor()
-            # if is_first_trade and monitor and not monitor.is_running():
-            #     monitor.start()
-            #     logger.info(f"[{execution_id}] 🟢 止损监控已随首个交易任务启动")
+            # ── 止损监控生命周期管理（腾讯接口无IP封禁风险，已启用）──
+            is_first_trade = 'morning' in task.id and 'late' not in task.id
+            is_closing = 'closing' in task.id
+            monitor = _get_monitor()
+            if is_first_trade and monitor:
+                # 注入 executor（延迟注入，监控器需要它来获取持仓和执行卖出）
+                if monitor.executor is None:
+                    try:
+                        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+                        monitor.executor = MarcusVNPyExecutor()
+                        logger.info(f"[{execution_id}] 🔗 止损监控器已绑定交易执行器")
+                    except Exception as e:
+                        logger.warning(f"[{execution_id}] ⚠️ 止损监控器无法绑定执行器: {e}")
+                if not monitor.is_running():
+                    monitor.start()
+                    logger.info(f"[{execution_id}] 🟢 止损监控已随首个交易任务启动")
             
             try:
                 output = self._execute_pi_trade(task, execution_id)
@@ -411,10 +419,10 @@ class SchedulerService:
                 execution.finished_at = datetime.now()
                 self._save_execution_log(execution)
                 self._send_notifications(task, execution)
-                # ── 止损监控停止（暂不启用）──
-                # if is_closing and monitor and monitor.is_running():
-                #     monitor.stop()
-                #     logger.info(f"[{execution_id}] 🔴 止损监控已随尾盘任务停止")
+                # ── 止损监控停止 ──
+                if is_closing and monitor and monitor.is_running():
+                    monitor.stop()
+                    logger.info(f"[{execution_id}] 🔴 止损监控已随尾盘任务停止")
                 
                 # ── 极端流出日扫描（遗漏#1）──
                 # 每次扫描结束后记录全市场主力净流出
@@ -444,6 +452,40 @@ class SchedulerService:
                             logger.warning(f"[{execution_id}] [extreme_outflow] 无可减仓持仓（全部T+1锁定）")
                 except Exception as e:
                     logger.debug(f"[{execution_id}] [extreme_outflow] 扫描跳过: {e}")
+
+                # ── 时间证伪检查（尾盘 + 每日复盘时触发）──
+                if is_closing or 'daily_review' in task.id or 'review' in task.id:
+                    try:
+                        from app.services.stop_loss_monitor import get_stop_loss_monitor
+                        monitor = get_stop_loss_monitor()
+                        falsifications = monitor.check_time_falsification()
+                        if falsifications:
+                            logger.warning(
+                                f"[{execution_id}] [time_falsification] "
+                                f"触发 {len(falsifications)} 条时间证伪规则"
+                            )
+                            for f in falsifications:
+                                logger.warning(
+                                    f"[{execution_id}] [time_falsification] "
+                                    f"{f['symbol']}: {f['message']}"
+                                )
+                            # 通过 QQ 通知用户
+                            if self._qq_notifier:
+                                msgs = ["⏰ 时间证伪提醒（13交易日未创新高）", ""]
+                                for f in falsifications:
+                                    msgs.append(
+                                        f"🔴 {f['symbol']}: 已 {f['days_since_high']} 天未创新高 "
+                                        f"(最高价 {f['high_price']} @ {f['high_date']})"
+                                    )
+                                msgs.append("\n💡 建议：检查以上持仓是否符合离场条件")
+                                try:
+                                    self._qq_notifier("\n".join(msgs), self._qq_recipient)
+                                except Exception:
+                                    pass
+                        else:
+                            logger.debug(f"[{execution_id}] [time_falsification] 所有持仓均未触发时间证伪")
+                    except Exception as e:
+                        logger.debug(f"[{execution_id}] [time_falsification] 检查跳过: {e}")
             return
 
         # === Pi 周度反思模式 ===
@@ -461,6 +503,23 @@ class SchedulerService:
                 execution.finished_at = datetime.now()
                 self._save_execution_log(execution)
                 self._send_notifications(task, execution)
+                # ── 周度反思后触发时间证伪检查 ──
+                try:
+                    from app.services.stop_loss_monitor import get_stop_loss_monitor
+                    rf_monitor = get_stop_loss_monitor()
+                    rf_falsifications = rf_monitor.check_time_falsification()
+                    if rf_falsifications:
+                        logger.warning(
+                            f"[{execution_id}] [time_falsification] "
+                            f"周度反思触发 {len(rf_falsifications)} 条时间证伪规则"
+                        )
+                        for f in rf_falsifications:
+                            logger.warning(
+                                f"[{execution_id}] [time_falsification] "
+                                f"{f['symbol']}: {f['message']}"
+                            )
+                except Exception:
+                    pass
             return
 
         try:
@@ -557,6 +616,38 @@ class SchedulerService:
             execution.finished_at = datetime.now()
             self._save_execution_log(execution)
             self._send_notifications(task, execution)
+            
+            # ── 每日复盘后触发时间证伪检查 ──
+            if 'daily_review' in task.id or 'review' in task.id:
+                try:
+                    from app.services.stop_loss_monitor import get_stop_loss_monitor
+                    tm_monitor = get_stop_loss_monitor()
+                    falsifications = tm_monitor.check_time_falsification()
+                    if falsifications:
+                        logger.warning(
+                            f"[{execution_id}] [time_falsification] "
+                            f"触发 {len(falsifications)} 条时间证伪规则"
+                        )
+                        for f in falsifications:
+                            logger.warning(
+                                f"[{execution_id}] [time_falsification] "
+                                f"{f['symbol']}: {f['message']}"
+                            )
+                        # 通过 QQ 通知用户
+                        if self._qq_notifier:
+                            msgs = ["⏰ 时间证伪提醒（13交易日未创新高）", ""]
+                            for f in falsifications:
+                                msgs.append(
+                                    f"🔴 {f['symbol']}: 已 {f['days_since_high']} 天未创新高 "
+                                    f"(最高价 {f['high_price']} @ {f['high_date']})"
+                                )
+                            msgs.append("\n💡 建议：检查以上持仓是否符合离场条件")
+                            try:
+                                self._qq_notifier("\n".join(msgs), self._qq_recipient)
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.debug(f"[{execution_id}] [time_falsification] 检查跳过: {e}")
 
     def _save_execution_log(self, execution: JobExecution):
         """保存执行日志"""

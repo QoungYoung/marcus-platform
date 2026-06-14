@@ -4,19 +4,21 @@
 实时止损监控器 — 独立后台线程持续轮询持仓价格，触发止损规则自动卖出。
 
 止损规则（优先级从高到低）：
-  1. 板块背离止损：个股跌幅 > 同板块平均跌幅 × 3 → 立即止损
-  2. 铁律二移动止盈保护：
+  0. 破底止损：跌破阶段底部 3% → 立即止损（牛股计算器策略）
+  1. 成本止损：亏损超过 6% → 立即止损（牛股计算器策略）
+  2. 板块背离止损：个股跌幅 > 同板块平均跌幅 × 3 → 立即止损
+  3. 铁律二移动止盈保护：
      - 浮盈 ≥ 1%  → 止损线上移至成本价（保本）
      - 浮盈 ≥ 3%  → 止损线上移至成本价 + 1%
      - 浮盈 ≥ 5%  → 止损线上移至成本价 + 2%
      - 浮盈 ≥ 8%  → 止损线上移至成本价 + 4%
      - 浮盈 < 1%  → 保持原止损线 -2%
-  3. 大盘背景动态止损：
+  4. 大盘背景动态止损：
      - 大盘跌 > 2%      → 止损收紧至 -1.5%
      - 大盘 -1%~+1%    → 止损线 -2%
      - 大盘 +1%~+2%    → 止损放宽至 -3%
      - 大盘 +2% 以上    → 止损放宽至 -4%
-  4. T+1 保护：今日买入的持仓不执行止损卖出
+  5. T+1 保护：今日买入的持仓不执行止损卖出
 """
 
 import sys
@@ -196,33 +198,85 @@ class StopLossMonitor:
             float_pnl_pct = (current_price - avg_price) / avg_price * 100
 
             # 检查各止损规则
-            stop_reason = self._evaluate_stop_rules(symbol, float_pnl_pct, current_price, market_pct)
+            stop_reason = self._evaluate_stop_rules(
+                symbol, float_pnl_pct, current_price, avg_price, market_pct
+            )
 
             if stop_reason:
                 self._execute_stop(symbol, current_price, volume, stop_reason, float_pnl_pct)
 
     def _evaluate_stop_rules(
-        self, symbol: str, float_pnl_pct: float, current_price: float, market_pct: float
+        self, symbol: str, float_pnl_pct: float, current_price: float,
+        avg_price: float, market_pct: float
     ) -> Optional[str]:
         """
         依次评估止损规则，返回触发的规则描述，未触发返回 None。
         规则按优先级排列。
         """
-        # ── 规则 0: 板块背离止损（优先级最高） ──
+        # ── 规则 0 (a): 破底止损（牛股计算器策略）──
+        break_low_reason = self._check_break_low_stop(symbol, current_price)
+        if break_low_reason:
+            return break_low_reason
+
+        # ── 规则 0 (b): 成本止损 -6%（牛股计算器策略）──
+        cost_stop_reason = self._check_cost_stop(float_pnl_pct, current_price, avg_price)
+        if cost_stop_reason:
+            return cost_stop_reason
+
+        # ── 规则 1: 板块背离止损（优先级最高） ──
         sector_reason = self._check_sector_divergence(symbol, float_pnl_pct)
         if sector_reason:
             return sector_reason
 
-        # ── 规则 1: 铁律二 — 移动止盈保护 ──
+        # ── 规则 2: 铁律二 — 移动止盈保护 ──
         iron_rule2_reason = self._check_iron_rule2(float_pnl_pct, current_price)
         if iron_rule2_reason:
             return iron_rule2_reason
 
-        # ── 规则 2: 大盘背景动态止损 ──
+        # ── 规则 3: 大盘背景动态止损 ──
         dynamic_reason = self._check_dynamic_stop(float_pnl_pct, market_pct)
         if dynamic_reason:
             return dynamic_reason
 
+        return None
+
+    def _check_break_low_stop(self, symbol: str, current_price: float) -> Optional[str]:
+        """
+        破底止损（牛股计算器策略）：当前价跌破阶段底部 3% → 立即止损。
+
+        从 Tushare K线获取近90天阶段最低价进行判断。
+        """
+        if current_price <= 0:
+            return None
+        try:
+            # 获取阶段最低价
+            from app.api.indicator import _normalize_to_ts_code, _fetch_kline_high_low
+            ts_code = _normalize_to_ts_code(symbol)
+            _high, stage_low, _close = _fetch_kline_high_low(ts_code)
+            if stage_low <= 0:
+                return None
+            if current_price < stage_low * 0.97:
+                return (
+                    f'破底止损（牛股计算器）：当前价 {current_price:.2f}'
+                    f' 跌破阶段底部 {stage_low:.2f} 的 3% 容错线 ({round(stage_low*0.97,2)})'
+                )
+        except Exception as e:
+            logger.debug(f"[StopLoss] 破底检查跳过 {symbol}: {e}")
+        return None
+
+    def _check_cost_stop(
+        self, float_pnl_pct: float, current_price: float, avg_price: float
+    ) -> Optional[str]:
+        """
+        成本止损（牛股计算器策略）：亏损超过 6% → 立即止损。
+        """
+        if avg_price <= 0:
+            return None
+        if float_pnl_pct <= -6.0:
+            return (
+                f'成本止损-6%（牛股计算器）：当前价 {current_price:.2f}'
+                f' 亏损 {float_pnl_pct:.2f}% 触及 -6% 止损线（成本 {avg_price:.2f}）'
+            )
         return None
 
     def _check_iron_rule2(self, float_pnl_pct: float, current_price: float) -> Optional[str]:
@@ -386,6 +440,48 @@ class StopLossMonitor:
                 logger.warning(f"[StopLoss] ⚠️ 止损执行失败: {symbol} - {result.get('reason', '未知')}")
         except Exception as e:
             logger.error(f"[StopLoss] ❌ 止损异常: {symbol} - {e}", exc_info=True)
+
+    def check_time_falsification(self, symbols: list = None) -> list:
+        """
+        检查时间证伪规则：持仓超过 13 个交易日未创新高。
+
+        此方法可被外部（如调度器 daily_review）调用，不依赖实时轮询。
+        使用 StrategyChain 的 High Water Mark 追踪数据。
+
+        Args:
+            symbols: 要检查的股票代码列表，为 None 时检查所有持仓
+
+        Returns:
+            list[dict]: 触发时间证伪的详情列表
+        """
+        triggered = []
+        try:
+            from core.utils.strategy_chain import StrategyChain
+            chain = StrategyChain()
+
+            if symbols is None:
+                # 获取所有持仓
+                if self.executor:
+                    positions = self.executor.get_positions()
+                    symbols = [p.get('symbol', '') for p in positions if p.get('symbol')]
+                else:
+                    return triggered
+
+            for symbol in symbols:
+                if not symbol:
+                    continue
+                result = chain.check_time_falsification(symbol)
+                if result:
+                    triggered.append(result)
+                    logger.warning(
+                        f"[StopLoss] ⏰ 时间证伪: {symbol} "
+                        f"已 {result['days_since_high']} 个交易日未创新高"
+                    )
+
+        except Exception as e:
+            logger.error(f"[StopLoss] 时间证伪检查异常: {e}")
+
+        return triggered
 
     def _log_stop(
         self, symbol: str, price: float, volume: int, reason: str, float_pnl: float, profit: float

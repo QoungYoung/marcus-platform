@@ -471,6 +471,145 @@ const getTechnicalTool = {
   },
 };
 
+// ── 牛股计算器策略工具 ──
+
+const getFibonacciLevelsTool = {
+  name: 'get_fibonacci_levels',
+  description: '计算斐波那契回撤价位（0.382/0.618/0.786），用于判断支撑/阻力位和当前价格所处区间。传入 symbol 自动从90天K线提取阶段顶/底，也可手动指定 high/low。用于右侧交易寻找入场点和止损位参考',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    high: Type.Optional(Type.Number({ description: '阶段顶部价格（不传则自动从K线提取）' })),
+    low: Type.Optional(Type.Number({ description: '阶段底部价格（不传则自动从K线提取）' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; high?: number; low?: number }, _signal: AbortSignal | undefined) {
+    const body: Record<string, unknown> = { symbol: params.symbol };
+    if (params.high !== undefined) body.high = params.high;
+    if (params.low !== undefined) body.low = params.low;
+    const res = await fetch(`${MARCUS_API}/indicator/fibonacci`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const lines = [
+      `📊 ${data.symbol} 斐波那契回撤分析`,
+      `阶段顶部: ${data.high}  阶段底部: ${data.low}  差价: ${data.diff}`,
+      `当前价格: ${data.current_price}`,
+      '',
+      `回撤价位:`,
+    ];
+    for (const lv of data.levels || []) {
+      const isCurrent = data.current_price && lv.price ?
+        (data.current_price <= lv.price * 1.03 && data.current_price >= lv.price * 0.97) : false;
+      const marker = isCurrent ? ' ◀ 当前附近' : '';
+      lines.push(`  ${lv.ratio} (${(lv.ratio*100).toFixed(1)}%): ${lv.price} — ${lv.label}${marker}`);
+    }
+    lines.push('');
+    lines.push(`📍 当前区间: ${data.position_zone}`);
+    lines.push(`💡 建议: ${data.zone_suggestion}`);
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+const getDailyChannelTool = {
+  name: 'get_daily_channel',
+  description: '计算日内压力/支撑通道（基于K=0.98848常数）。压力线=分时均价/K，支撑线=分时均价×K。用于判断日内超短线交易的精确入场/离场价位',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    avg_price: Type.Optional(Type.Number({ description: '分时均价（不传则从行情估算）' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; avg_price?: number }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    if (params.avg_price !== undefined) query.set('avg_price', String(params.avg_price));
+    const qs = query.toString();
+    const url = `${MARCUS_API}/indicator/daily-channel/${params.symbol}${qs ? '?' + qs : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const lines = [
+      `📊 ${data.symbol} 日内K值通道 (K=${data.constant_k})`,
+      `分时均价: ${data.avg_price}`,
+      `当前价格: ${data.current_price}`,
+      '',
+      `🔴 压力线: ${data.top_line} (均价/K)`,
+      `🟢 支撑线: ${data.bottom_line} (均价×K)`,
+      `通道宽度: ${data.channel_width_pct}%`,
+      '',
+      `📍 当前位置: ${data.position}`,
+    ];
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+const getTradeAdviceTool = {
+  name: 'get_trade_advice',
+  description: '获取完整的股票操作建议（牛股计算器决策树）。结合斐波那契回撤、K值通道、时间证伪、破底止损等规则，输出格式化操作信号。传入 cost 则为持仓模式，不传则为观察模式。用于交易决策时快速获取综合建议',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    cost: Type.Optional(Type.Number({ description: '成本价（有持仓时传入，触发持仓模式决策逻辑）' })),
+    high: Type.Optional(Type.Number({ description: '阶段顶部价格（不传则自动从K线提取）' })),
+    low: Type.Optional(Type.Number({ description: '阶段底部价格（不传则自动从K线提取）' })),
+    avg_price: Type.Optional(Type.Number({ description: '分时均价（用于K值通道计算，不传则用当前价估算）' })),
+    buy_date: Type.Optional(Type.String({ description: '建仓日期 YYYY-MM-DD（有持仓时传入）' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; cost?: number; high?: number; low?: number; avg_price?: number; buy_date?: string }, _signal: AbortSignal | undefined) {
+    const body: Record<string, unknown> = { symbol: params.symbol };
+    if (params.cost !== undefined) body.cost = params.cost;
+    if (params.high !== undefined) body.high = params.high;
+    if (params.low !== undefined) body.low = params.low;
+    if (params.avg_price !== undefined) body.avg_price = params.avg_price;
+    if (params.buy_date !== undefined) body.buy_date = params.buy_date;
+    const res = await fetch(`${MARCUS_API}/indicator/advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const signalEmoji: Record<string, string> = {
+      danger: '🔴', warning: '🟡', gold: '🏆', blue: '🔵', cyan: '🩵', normal: '⚪',
+    };
+    const lines = [
+      `📊 ${data.symbol}${data.name ? ' ' + data.name : ''} 操作建议`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `当前价: ${data.current_price}  (${data.change_pct >= 0 ? '+' : ''}${data.change_pct}%)`,
+      `模式: ${data.mode === 'holding' ? '🏠 持仓模式' : '👀 观察模式'}`,
+      '',
+    ];
+    if (data.mode === 'holding' && data.cost) {
+      lines.push(`💰 成本价: ${data.cost}`);
+      if (data.hold_days !== null) lines.push(`📅 持仓: ${data.hold_days} 个交易日`);
+      if (data.high_water_mark) lines.push(`📈 最高价: ${data.high_water_mark} (${data.days_since_high}天前)`);
+      lines.push('');
+    }
+    lines.push(`── 斐波那契回撤 ──`);
+    lines.push(`  0.382 (常规买点): ${data.fib_382}`);
+    lines.push(`  0.618 (强防生死线): ${data.fib_618}`);
+    lines.push(`  0.786 (深坑/放弃): ${data.fib_786}`);
+    lines.push('');
+    lines.push(`── K值通道 (K=0.98848) ──`);
+    lines.push(`  🔴 压力线: ${data.k_channel_top}`);
+    lines.push(`  🟢 支撑线: ${data.k_channel_bottom}`);
+    lines.push(`  宽度: ${data.k_channel_width_pct}%`);
+    lines.push('');
+    lines.push(`${signalEmoji[data.signal_class] || '⚪'} 操作建议: ${data.signal}`);
+    if (data.signal_details && data.signal_details.length > 0) {
+      for (const d of data.signal_details) {
+        lines.push(`  └ ${d}`);
+      }
+    }
+    if (data.risk_flags && data.risk_flags.length > 0) {
+      lines.push('');
+      lines.push(`⚠️ 风险标记: ${data.risk_flags.join(' / ')}`);
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 const getMarketMoneyflowTool = {
   name: 'get_market_moneyflow',
   label: '大盘资金流向',
@@ -777,6 +916,9 @@ const chatTools: AgentTool[] = [
   createTool(getDailyKlineTool),
   createTool(getMoneyflowTool),
   createTool(getTechnicalTool),
+  createTool(getFibonacciLevelsTool),
+  createTool(getDailyChannelTool),
+  createTool(getTradeAdviceTool),
   createTool(readDbTableTool),
   createTool(getDbSchemaTool),
 ];
@@ -807,7 +949,8 @@ const COLLAPSIBLE_TOOLS = [
   'get_market_indices', 'get_quote', 'get_portfolio',
   'get_concept_fund_flow', 'get_market_moneyflow', 'get_concept_mapping',
   'get_etf_quote', 'get_etf_kline', 'get_daily_kline', 'get_moneyflow',
-  'get_technical', 'read_db_table', 'get_db_schema',
+  'get_technical', 'get_fibonacci_levels', 'get_daily_channel', 'get_trade_advice',
+  'read_db_table', 'get_db_schema',
   'get_latest_scan_report', 'get_pi_analysis_history', 'get_trade_history',
 ];
 
@@ -826,6 +969,9 @@ const TOOL_LABELS: Record<string, string> = {
   get_technical: '查询技术指标',
   read_db_table: '读取数据库表',
   get_db_schema: '获取数据库结构',
+  get_fibonacci_levels: '斐波那契回撤',
+  get_daily_channel: '日内K值通道',
+  get_trade_advice: '获取NGA用户牛哥策略操作建议',
   get_latest_scan_report: '最新扫描报告',
   get_pi_analysis_history: 'Pi分析历史',
   get_trade_history: '交易报告历史',

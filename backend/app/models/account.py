@@ -16,6 +16,9 @@ class PositionResponse(BaseModel):
     floating_pnl: float
     floating_pnl_pct: float
     entry_date: str
+    high_water_mark: Optional[float] = None    # 持仓期间最高价
+    high_water_date: Optional[str] = None      # 达到最高价的日期
+    days_since_high: Optional[int] = None      # 距上次创新高已过交易日数
 
 
 class AccountResponse(BaseModel):

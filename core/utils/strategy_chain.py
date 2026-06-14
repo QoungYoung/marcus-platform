@@ -541,6 +541,186 @@ class StrategyChain:
         
         return result
     
+    # ── High Water Mark（持仓顶部追踪，牛股计算器策略） ──
+
+    def _get_highs_path(self) -> str:
+        """获取 position_highs.json 路径"""
+        try:
+            from workspace_detector import get_data_dir
+            data_dir = str(get_data_dir())
+        except ImportError:
+            from pathlib import Path
+            data_dir = str(Path(__file__).resolve().parents[2] / "data")
+        return os.path.join(data_dir, "position_highs.json")
+
+    def _load_highs(self) -> dict:
+        """加载持仓最高价记录"""
+        highs_path = self._get_highs_path()
+        if os.path.exists(highs_path):
+            try:
+                with open(highs_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_highs(self, highs: dict):
+        """保存持仓最高价记录"""
+        highs_path = self._get_highs_path()
+        os.makedirs(os.path.dirname(highs_path), exist_ok=True)
+        with open(highs_path, "w", encoding="utf-8") as f:
+            json.dump(highs, f, ensure_ascii=False, indent=2)
+
+    def update_high_water_mark(self, symbol: str, current_price: float) -> dict:
+        """
+        更新持仓的历史最高价追踪。
+
+        如果当前价格突破历史最高价，自动更新记录。
+        如果首次追踪该标的，自动初始化。
+
+        Args:
+            symbol: 股票代码
+            current_price: 当前价格
+
+        Returns:
+            dict: {"high_price": float, "high_date": str, "is_new_high": bool}
+        """
+        highs = self._load_highs()
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        is_new_high = False
+        if symbol not in highs:
+            highs[symbol] = {
+                "high_price": round(current_price, 3),
+                "high_date": today,
+                "updated_at": datetime.now().isoformat(),
+            }
+            is_new_high = True
+        elif current_price > highs[symbol]["high_price"]:
+            highs[symbol] = {
+                "high_price": round(current_price, 3),
+                "high_date": today,
+                "updated_at": datetime.now().isoformat(),
+            }
+            is_new_high = True
+
+        if is_new_high:
+            self._save_highs(highs)
+
+        return {
+            "high_price": highs[symbol]["high_price"],
+            "high_date": highs[symbol]["high_date"],
+            "is_new_high": is_new_high,
+        }
+
+    def get_high_water_mark(self, symbol: str) -> dict:
+        """
+        获取指定标的的历史最高价追踪。
+
+        Returns:
+            dict: {"high_price": float, "high_date": str, "days_since_high": int} 或空 dict
+        """
+        highs = self._load_highs()
+        if symbol not in highs:
+            return {}
+
+        hwm = highs[symbol]
+        days = self._count_trading_days_since(hwm["high_date"])
+        return {
+            "high_price": hwm["high_price"],
+            "high_date": hwm["high_date"],
+            "days_since_high": days,
+        }
+
+    def get_all_high_water_marks(self) -> dict:
+        """
+        获取所有持仓的最高价追踪（附带距新高天数）。
+
+        Returns:
+            dict: {symbol: {high_price, high_date, days_since_high}}
+        """
+        highs = self._load_highs()
+        result = {}
+        for symbol, hwm in highs.items():
+            days = self._count_trading_days_since(hwm["high_date"])
+            result[symbol] = {
+                "high_price": hwm["high_price"],
+                "high_date": hwm["high_date"],
+                "days_since_high": days,
+            }
+        return result
+
+    def _count_trading_days_since(self, date_str: str) -> int:
+        """
+        计算从指定日期到今天的交易天数（剔除周末和节假日近似）。
+
+        Args:
+            date_str: 起始日期 YYYY-MM-DD
+
+        Returns:
+            int: 交易天数
+        """
+        try:
+            start = datetime.strptime(date_str, "%Y-%m-%d")
+            today = datetime.now()
+            if start.date() >= today.date():
+                return 0
+
+            # 简单估算：总天数 × 5/7 - 周末调整
+            total_days = (today - start).days
+            # 粗略剔除周末（约 2/7）
+            trading_days = int(total_days * 5 / 7)
+            # 如果起始日是周末，适当调整
+            if start.weekday() >= 5:
+                trading_days = max(0, trading_days - 1)
+            return max(0, trading_days)
+        except Exception:
+            return 0
+
+    def check_time_falsification(self, symbol: str) -> Optional[dict]:
+        """
+        检查时间证伪规则：持仓超过13个交易日未创新高。
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            dict | None: 触发时返回详情，未触发返回 None
+        """
+        hwm = self.get_high_water_mark(symbol)
+        if not hwm:
+            return None
+
+        days = hwm.get("days_since_high", 0)
+        if days >= 13:
+            return {
+                "symbol": symbol,
+                "triggered": True,
+                "rule": "时间证伪",
+                "days_since_high": days,
+                "high_price": hwm["high_price"],
+                "high_date": hwm["high_date"],
+                "message": f"时间证伪：{symbol} 已 {days} 个交易日未创新高（>13天），建议离场",
+            }
+        return None
+
+    def check_all_time_falsification(self, active_symbols: list) -> list:
+        """
+        批量检查所有活跃持仓的时间证伪规则。
+
+        Args:
+            active_symbols: 当前持仓的股票代码列表
+
+        Returns:
+            list[dict]: 触发时间证伪的标的列表
+        """
+        triggered = []
+        for symbol in active_symbols:
+            result = self.check_time_falsification(symbol)
+            if result:
+                triggered.append(result)
+        return triggered
+
     def print_summary(self):
         """打印策略摘要"""
         print("\n" + "="*60)
