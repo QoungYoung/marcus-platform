@@ -1062,17 +1062,29 @@ interface PanelEvent {
 async function executePanelDiscussion(
   message: string,
   sessionId: string,
-  onPhase?: (event: PanelEvent) => void
+  onPhase?: (event: PanelEvent) => void,
+  skipDataCollection: boolean = false
 ): Promise<{ reply: string; elapsed_ms: number }> {
   const totalStart = Date.now();
-  console.log(`\n[Panel] ===== 专家组群聊讨论开始 [${sessionId.slice(-16)}] =====`);
+  console.log(`\n[Panel] ===== 专家组群聊讨论开始 [${sessionId.slice(-16)}]${skipDataCollection ? '（跳过数据采集）' : ''} =====`);
 
-  // === Phase 0: 数据采集 ===
-  console.log(`[Panel] Phase 0: 数据采集...`);
-  // 用主持人模型进行数据采集（有 reflectTools 全部工具）
-  const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId); // moderator 始终在最后
-  const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下工具，把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — Pi 策略分析历史\n2. get_trade_history — 交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 历史复盘结论（用于跨时段对比）\n5. get_daily_kline_qfq — 关键个股前复权日K线（⚠️ 需要 symbol 参数。先从上一步 trade_history 中提取交易过的股票代码传入，最多取 3 只。没有任何代码则跳过此工具）\n6. get_technical — 关键个股技术指标（⚠️ 同上，传入股票代码。没有代码则跳过，不要传空参数）\n输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
-  const dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
+  // === Phase 0: 数据采集（可跳过） ===
+  let dataBriefing: string;
+  if (skipDataCollection) {
+    console.log(`[Panel] Phase 0: 已跳过（专家自行采集）`);
+    dataBriefing = '（本次讨论跳过集中数据采集，各位专家如有需要请自行调用工具获取数据）';
+    onPhase?.({
+      phase: 'expert_message',
+      label: '⚡ 跳过数据采集',
+      results: [{ role: 'moderator', roleLabel: '主持人', content: '本次讨论由各位专家自行采集所需数据。' }],
+      elapsed_sec: 0,
+    });
+  } else {
+    console.log(`[Panel] Phase 0: 数据采集...`);
+    const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId);
+    const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下工具，把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — Pi 策略分析历史\n2. get_trade_history — 交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 历史复盘结论（用于跨时段对比）\n5. get_daily_kline_qfq — 关键个股前复权日K线（⚠️ 需要 symbol 参数。先从上一步 trade_history 中提取交易过的股票代码传入，最多取 3 只。没有任何代码则跳过此工具）\n6. get_technical — 关键个股技术指标（⚠️ 同上，传入股票代码。没有代码则跳过，不要传空参数）\n输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
+    dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
+  }
 
   // === Phase 1: 4 位专家并行独立分析 ===
   console.log(`[Panel] Phase 1: 4 位专家并行独立分析...`);
@@ -1353,7 +1365,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/chat/stream') {
     try {
       const body = await readBody(req);
-      const { message, session_id } = JSON.parse(body);
+      const { message, session_id, skip_data_collection } = JSON.parse(body);
 
       if (!message) {
         jsonResponse(res, 400, { error: '缺少 message 参数' });
@@ -1361,7 +1373,8 @@ const server = http.createServer(async (req, res) => {
       }
 
       const sessionId = session_id || 'stream_' + Date.now();
-      console.log(`[PiServer] --> SSE Panel [${sessionId.slice(-8)}]: ${message.slice(0, 100)}`);
+      const skipDC = skip_data_collection === true;
+      console.log(`[PiServer] --> SSE Panel [${sessionId.slice(-8)}]: ${message.slice(0, 100)}${skipDC ? ' (跳过数据采集)' : ''}`);
 
       // 设置 SSE 响应头
       res.writeHead(200, {
@@ -1382,7 +1395,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const result = await executePanelDiscussion(message, sessionId, (event) => {
           sendSSE(event.phase, event);
-        });
+        }, skipDC);
 
         // 保存讨论结果到本地
         const panelFile = resolve(SESSIONS_DIR, `panel_${sessionId.replace(/[<>:"/\\|?*]/g, '_')}.json`);

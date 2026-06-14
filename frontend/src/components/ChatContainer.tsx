@@ -1334,6 +1334,8 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   const tradeStatusRef = useRef<TradeStatus | null>(null);
   const [mode, setMode] = useState<ChatMode>((localStorage.getItem('marcus_chat_mode') || 'chat') as ChatMode);
   const modeRef = useRef<ChatMode>(mode);
+  const [skipDataCollection, setSkipDataCollection] = useState(false);
+  const skipDataRef = useRef(false);
 
   // Keep modeRef in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -1795,7 +1797,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           const resp = await fetch('/api/v1/panel/reflect/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, skip_data_collection: skipDataRef.current }),
           });
 
           if (!resp.ok) {
@@ -2326,6 +2328,26 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
                 <><i className="fas fa-comments" style={{ fontSize: '10px' }}></i> 聊天</>
               )}
             </button>
+            {/* 群聊模式：跳过数据采集开关 */}
+            {mode === 'reflect' && (
+              <button
+                onClick={() => {
+                  setSkipDataCollection(prev => !prev);
+                  skipDataRef.current = !skipDataRef.current;
+                }}
+                title={skipDataCollection ? '开启：讨论前先采集数据' : '关闭：讨论前不采集数据，专家各自获取'}
+                style={{
+                  ...toolBtnStyle,
+                  fontSize: '10px', fontWeight: 500,
+                  padding: '2px 8px', borderRadius: '12px',
+                  color: skipDataCollection ? '#f56c6c' : '#67c23a',
+                  background: skipDataCollection ? 'rgba(245,108,108,0.1)' : 'rgba(103,194,58,0.1)',
+                  border: skipDataCollection ? '1px solid rgba(245,108,108,0.3)' : '1px solid rgba(103,194,58,0.3)',
+                }}
+              >
+                {skipDataCollection ? '⏭️ 跳过采集' : '📊 自动采集'}
+              </button>
+            )}
             {/* 新建会话 */}
             <button
               onClick={() => {
