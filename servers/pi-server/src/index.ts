@@ -1016,14 +1016,14 @@ async function executePanelDiscussion(
   } else {
     console.log(`[Panel] Phase 0: 数据采集...`);
     const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId, panelMode);
-    const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下工具，把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — Pi 策略分析历史\n2. get_trade_history — 交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 历史复盘结论（用于跨时段对比）\n5. get_daily_kline_qfq — 关键个股前复权日K线（⚠️ 需要 symbol 参数。先从上一步 trade_history 中提取交易过的股票代码传入，最多取 3 只。没有任何代码则跳过此工具）\n6. get_technical — 关键个股技术指标（⚠️ 同上，传入股票代码。没有代码则跳过，不要传空参数）\n输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
+    const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下工具，把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — Pi 策略分析历史\n2. get_trade_history — 交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_daily_kline_qfq — 关键个股前复权日K线（⚠️ 需要 symbol 参数。先从上一步 trade_history 中提取交易过的股票代码传入，最多取 3 只。没有任何代码则跳过此工具）\n5. get_technical — 关键个股技术指标（⚠️ 同上，传入股票代码。没有代码则跳过，不要传空参数）\n输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
     dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
   }
 
   // === Phase 1: 4 位专家并行独立分析 ===
   console.log(`[Panel] Phase 1: 4 位专家并行独立分析...`);
   const analysts = PANEL_MEMBERS.slice(0, -1); // 除主持人外所有专家
-  const phase1Prompt = `以下是系统为你采集的数据简报：\n\n---\n${dataBriefing}\n---\n\n⚠️ 用户的核心问题：${message}\n\n请严格按照你的角色定位，围绕用户的上述问题产出一份专业的分析报告。不要使用"本周""上周""下周"等时间限定词，除非用户问题中有明确的时间范围——围绕用户问题本身来组织你的分析。\n\n🔧 你有完整的工具权限（get_pi_analysis_history / get_trade_history / get_latest_scan_report / get_panel_history / get_daily_kline_qfq（前复权）/ get_technical / get_moneyflow / read_db_table 均为 Tushare 历史数据），如果简报数据不足以支撑你的分析，请主动调用工具补充细节。不允许在数据不足的情况下敷衍结论。\n\n你的报告必须针对用户的问题，不要跑题。输出前确保你引用的每一条数据都有可靠来源。`;
+  const phase1Prompt = `以下是系统为你采集的数据简报：\n\n---\n${dataBriefing}\n---\n\n⚠️ 用户的核心问题：${message}\n\n请严格按照你的角色定位，围绕用户的上述问题产出一份专业的分析报告。不要使用"本周""上周""下周"等时间限定词，除非用户问题中有明确的时间范围——围绕用户问题本身来组织你的分析。\n\n🔧 你有完整的工具权限（get_pi_analysis_history / get_trade_history / get_latest_scan_report / get_daily_kline_qfq（前复权）/ get_technical / get_moneyflow / read_db_table 均为 Tushare 历史数据），如果简报数据不足以支撑你的分析，请主动调用工具补充细节。不允许在数据不足的情况下敷衍结论。\n\n你的报告必须针对用户的问题，不要跑题。输出前确保你引用的每一条数据都有可靠来源。`;
 
   const phase1Results = await Promise.all(
     analysts.map(async (member) => {
@@ -1110,7 +1110,7 @@ async function executePanelDiscussion(
     ...phase25Results.map(r => `### ${r.roleLabel} 改进报告\n${truncate(r.refinement, 1500)}`),
   ].join('\n\n');
 
-  const phase3Prompt = `以下是专家组群聊讨论记录（长报告已截断，保留核心观点）：\n\n---\n${discussionTranscript}\n---\n\n${message}\n\n请综合以上所有专家的分析和评论，产出最终的综合报告。\n按你的输出格式要求（问题分析 → 核心结论 → 专家共识 → 分歧点 → 风险警示 → 行动建议），直接回答用户的原始问题。\n如果有交易相关讨论，最后一行输出 SIGNAL 行。\n\n🔧 如果截断的报告缺少关键细节，你可以调用 get_panel_history / get_pi_analysis_history / get_trade_history / get_daily_kline（前复权 qfq）等 Tushare 历史数据工具获取完整数据。`;
+  const phase3Prompt = `以下是专家组群聊讨论记录（长报告已截断，保留核心观点）：\n\n---\n${discussionTranscript}\n---\n\n${message}\n\n请综合以上所有专家的分析和评论，产出最终的综合报告。\n按你的输出格式要求（问题分析 → 核心结论 → 专家共识 → 分歧点 → 风险警示 → 行动建议），直接回答用户的原始问题。\n如果有交易相关讨论，最后一行输出 SIGNAL 行。\n\n🔧 如果截断的报告缺少关键细节，你可以调用 get_pi_analysis_history / get_trade_history / get_daily_kline（前复权 qfq）等 Tushare 历史数据工具获取完整数据。`;
 
   const moderatorAgent = createPanelAgent(moderator, sessionId, panelMode);
   const finalReport = await runAgentTurn(moderatorAgent, phase3Prompt, '主持人(综合)');
