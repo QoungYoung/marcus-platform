@@ -493,8 +493,8 @@ async def get_stock_technical(
     limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
 ):
     """
-    获取A股个股技术面因子数据，包含 MACD、KDJ、RSI、布林带等60+技术指标。
-    数据源: Tushare pro stk_factor_pro 接口。
+   获取A股个股技术面因子数据，包含 MACD、KDJ、RSI、布林带等60+技术指标。
+   数据源: Tushare stk_factor_pro 接口。
 
     主要指标参数:
     - MACD: 12,26,9 | KDJ: 9,3,3 | RSI: 6,12,24 | BOLL: 20,2 | ATR: 20 | CCI: 14
@@ -524,6 +524,7 @@ async def get_stock_technical(
             ts_code=ts_code,
             start_date=start_date,
             end_date=end_date,
+            fields='ts_code,trade_date,close,macd,macd_dif,macd_dea,kdj,kdj_k,kdj_d,rsi_6,rsi_12,rsi_24,boll_upper,boll_mid,boll_lower,atr,cci,wr',
         )
 
         if df is None or df.empty:

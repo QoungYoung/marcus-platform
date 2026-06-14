@@ -1071,7 +1071,7 @@ async function executePanelDiscussion(
   console.log(`[Panel] Phase 0: 数据采集...`);
   // 用主持人模型进行数据采集（有 reflectTools 全部工具）
   const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId); // moderator 始终在最后
-  const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下所有工具（均为 Tushare 历史数据），把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — Pi 策略分析历史\n2. get_trade_history — 交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 历史复盘结论（用于跨时段对比）\n5. get_daily_kline_qfq — 关键个股前复权日K线（无除权缺口）\n6. get_technical — 关键个股的 MACD/KDJ/RSI 等技术指标\n输出格式：直接输出工具返回的 JSON/文本，尽量完整，不要省略任何关键数据。`;
+  const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下工具，把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — Pi 策略分析历史\n2. get_trade_history — 交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 历史复盘结论（用于跨时段对比）\n5. get_daily_kline_qfq — 关键个股前复权日K线（⚠️ 需要 symbol 参数。先从上一步 trade_history 中提取交易过的股票代码传入，最多取 3 只。没有任何代码则跳过此工具）\n6. get_technical — 关键个股技术指标（⚠️ 同上，传入股票代码。没有代码则跳过，不要传空参数）\n输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
   const dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
 
   // === Phase 1: 4 位专家并行独立分析 ===
