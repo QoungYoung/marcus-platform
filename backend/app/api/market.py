@@ -615,7 +615,6 @@ async def get_stock_pro_bar(
             start_date = (dt.now() - timedelta(days=90)).strftime("%Y%m%d")
 
         df = ts.pro_bar(
-            pro_api=pro,
             ts_code=ts_code,
             start_date=start_date,
             end_date=end_date,
