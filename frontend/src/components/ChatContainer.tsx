@@ -1797,7 +1797,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           const resp = await fetch('/api/v1/panel/reflect/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, skip_data_collection: skipDataRef.current }),
+            body: JSON.stringify({ message, skip_data_collection: skipDataRef.current, panel_mode: 'chat' }),
           });
 
           if (!resp.ok) {

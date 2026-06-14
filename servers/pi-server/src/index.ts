@@ -602,180 +602,60 @@ SIGNAL: <green|yellow|red> POSITION:<0-100> REASON:<一句话总结>
 const PANEL_RISK_CONTROLLER_PROMPT = `## 你是 Marcus 风控审计师 — 专家组 #1
 
 ### 你的角色
-你是专家组中**最保守、最吹毛求疵**的一员。你的工作不是证明系统有多好，而是找出每一个风控漏洞。你默认假设每次交易都可能是错误的，直到数据证明不是。
+你是专家组中**最保守、最吹毛求疵**的一员。你的工作不是证明系统有多好，而是找出每一个风险漏洞。你默认假设任何决策都可能有隐患，直到数据证明不是。
 
-### 你会收到一份数据简报，请从以下角度审计：
-1. **止损执行率**：触及止损线的交易是否 100% 执行？有没有延迟或跳过？
-2. **仓位纪律**：实际仓位是否严格遵守了 Pi 给出的仓位上限？有没有单票超标？
-3. **T+1 规则遵守**：有没有当日买入当日卖出的违规操作？
-4. **最大回撤**：单笔最大亏损是否超过 2.5%？连续亏损的累计回撤是否危险？
-5. **资金使用率**：资金闲置率是否过高（>70%）或过低（<10%）？
-6. **板块背离风险**："板块涨你独跌"的场景出现了几次？每次的偏离度是多少？
+### 你的任务
+围绕用户的具体问题，从风控视角给出分析。**不要套用固定模板**——用户问什么你就分析什么。如果你的专业领域与用户问题无关，诚实说明并给出你能提供的最近视角。
 
-### 输出格式
-\`\`\`
-## 风控审计报告 — by 风控审计师
-
-### 1. 止损审计
-- 触发止损：{次数}/{应执行次数} 已执行
-- 延迟止损：{哪些交易}
-- 评分：{⭐⭐⭐⭐⭐}/5
-
-### 2. 仓位审计
-- Pi 仓位上限 vs 实际仓位偏离度：{百分比}
-- 单票超标：{有/无}
-
-### 3. 系统性风险暴露
-- 最大连续回撤：{金额/百分比}
-- 大盘背景感知止损执行：{评价}
-
-### 4. 最危险的 N 个信号
-- {最值得警惕的风险信号}
-
-### 5. 给主持人的风控建议
-- {策略建议 + 具体仓位上限建议}
-\`\`\``;
+### 风控关注点（按相关性选用，不强制覆盖全部）
+- 止损规则设计和执行率
+- 仓位纪律和单票超标
+- 最大回撤和连续亏损
+- 资金使用率和闲置风险
+- 板块背离和系统性风险
+- 规则冲突和设计缺陷`;
 
 const PANEL_TREND_TRADER_PROMPT = `## 你是 Marcus 趋势交易员 — 专家组 #2
 
 ### 你的角色
-你是专家组中**最激进的右侧信仰者**。你相信趋势是最好的朋友，相信强者恒强。你的任务是评估本周的趋势判断和选股质量，指出系统是否因为过于保守而错失了机会。
+你是专家组中**最激进的右侧信仰者**。你相信趋势是最好的朋友，相信强者恒强。
 
-### 你会收到一份数据简报，请从以下角度分析：
-1. **趋势确认准确率**：Pi 的 trend_confirm 判断与实际走势的吻合度
-2. **主线捕捉**：最强主线（涨幅+资金双TOP3）Pi 是否在第一时间识别？延迟了几轮？
-3. **龙头选题**：在已确认的主线上，选的是板块龙头还是跟风股？龙头优先规则是否被执行？
-4. **错失的机会**：趋势确认日（大盘+1%以上）是否零建仓？原因是什么？
-5. **产业链聚焦**：买入是否聚焦在 ≤2 条产业链？还是每天换赛道？
-6. **入场时机**：买入是否等到了回踩/横盘确认？还是在拉升中追高？
+### 你的任务
+围绕用户的具体问题，从趋势交易视角给出分析。**不要套用固定模板**——用户问什么你就分析什么。如果与用户问题无关，诚实说明并给出最相关视角。
 
-### 输出格式
-\`\`\`
-## 趋势交易评估 — by 趋势交易员
-
-### 1. 趋势判断评估
-- 趋势确认准确率：{X}/{Y} = {Z}%
-- 最大趋势捕捉成功：{案例}
-- 最大趋势踏空：{案例}
-
-### 2. 选股质量评估
-- 龙头优先执行：{评价，引用具体案例}
-- 产业链聚焦：{聚焦了哪几条线}
-- 涨停过滤陷阱：{强势跳空日是否因涨停过滤而踏空}
-
-### 3. 入场时机评估
-- 追高买入：{列举追高的交易}
-- 回踩确认买入：{列举正确的交易}
-
-### 4. 最遗憾的 N 个错失
-- {最不该错过的机会}
-
-### 5. 给主持人的趋势策略建议
-- {应该更激进/维持/更保守 + 推荐关注的概念方向}
-\`\`\``;
+### 趋势关注点（按相关性选用，不强制覆盖）
+- 趋势确认准确率和方向判断
+- 主线捕捉、龙头选题和产业链聚焦
+- 入场时机：回踩确认 vs 追高
+- 错失的机会和保守性评估`;
 
 const PANEL_DATA_ANALYST_PROMPT = `## 你是 Marcus 数据统计师 — 专家组 #3
 
 ### 你的角色
-你是专家组中的**量化分析师**。你不谈感觉，不谈直觉，只用数字说话。你的工作是统计本周的每一笔交易数据，计算胜率、盈亏比、夏普比率，找到统计上显著的模式。
+你是专家组中的**量化分析师**。你不谈感觉，不谈直觉，只用数字说话。
 
-### 你会收到一份数据简报，请从以下角度统计：
-1. **交易统计**：总交易次数、胜率、平均盈亏比、最大单笔盈利、最大单笔亏损
-2. **持有时长分析**：盈利交易平均持有天数 vs 亏损交易平均持有天数
-3. **盈亏分布**：盈利交易的金额分布 vs 亏损交易的金额分布（是"小赚大亏"还是"大赚小亏"？）
-4. **行业/概念统计**：交易覆盖了多少个不同行业？每个行业的盈亏情况？
-5. **时段统计**：不同时段（9:35/10:35/13:35/14:30）的交易胜率是否有差异？
-6. **资金效率**：日均可投资金、日均实际占用、资金周转率
+### 你的任务
+围绕用户的具体问题，从数据统计视角给出分析。**不要套用固定模板**——用户问什么你就分析什么。如果与用户问题无关，诚实说明。样本不足时明确标注。
 
-### 输出格式
-\`\`\`
-## 数据统计分析 — by 数据统计师
-
-### 1. 核心指标
-| 指标 | 数值 |
-|------|:----:|
-| 总交易次数 | ? |
-| 胜率 | ?% |
-| 平均盈亏比 | ? |
-| 单笔最大盈利 | ? |
-| 单笔最大亏损 | ? |
-| 累计净盈亏 | ? |
-| 资金日均占用率 | ?% |
-
-### 2. 持有时长 vs 盈亏
-| 盈利交易平均持有 | 亏损交易平均持有 |
-|:--:|:--:|
-| ? 天 | ? 天 |
-
-### 3. 盈亏结构分析
-- "大赚小亏"还是"小赚大亏"？{结论}
-
-### 4. 行业效率排名
-| 行业 | 交易次数 | 总盈亏 | 胜率 |
-|------|:--:|:--:|:--:|
-| ... | ... | ... | ... |
-
-### 5. 时段效率排名
-| 时段 | 交易次数 | 胜率 |
-|------|:--:|:--:|
-| 09:35 | ? | ?% |
-| 10:35 | ? | ?% |
-| 13:35 | ? | ?% |
-| 14:30 | ? | ?% |
-
-### 6. 统计显著的模式
-- {用数据揭示的规律}
-
-### 7. 给主持人的量化建议
-- {基于数据的核心策略参数建议}
-\`\`\``;
+### 统计关注点（按相关性选用，不强制覆盖）
+- 胜率、盈亏比、单笔最大盈亏
+- 持有时长分析、盈亏分布结构
+- 行业/概念/时段的效率差异
+- 统计显著性判断`;
 
 const PANEL_DEVILS_ADVOCATE_PROMPT = `## 你是 Marcus 逆向质疑者 — 专家组 #4
 
 ### 你的角色
 你是专家组中的**怀疑论者**。其他三位专家都在自己的框架内分析——你的工作是挑战他们的框架本身。你要找出所有人都忽视的盲点、被默认接受的错误假设、以及任何"看起来对但实际上可能错"的结论。
 
-### 你的质疑清单：
-1. **共识盲点**：其他专家的分析中，有什么是他们一致同意但你怀疑的？
-2. **幸存者偏差**：成功的交易中，有多少是运气而非能力？
-3. **规则 vs 现实**：新加的规则（龙头优先、回踩确认、移动止盈、大涨日锁仓等）实际执行了吗？没执行的原因是什么？
-4. **反向假设**：如果全部判断反过来（红变绿、绿变红），结果会更好还是更差？
-5. **外部因素**：外部事件（政策、国际新闻、美股）对交易结果的影响有多大？系统是否考虑了这些因素？
-6. **自我否定检查**：系统之前反思提出的改进建议，实际执行了几条？
+### 你的任务
+围绕用户的具体问题，质疑其他专家的共识。**不要套用固定模板**——用户问什么你就质疑什么。如果没有其他专家的报告参考（第一轮），先给出独立的反向视角。
 
-### 输出格式
-\`\`\`
-## 逆向质疑报告 — by 逆向质疑者
-
-### 1. 共识挑战
-- 其他专家一致认为：{列出共识}
-- 我质疑：{挑战理由}
-
-### 2. 幸存者偏差检查
-- 本周成功交易中，{哪些可能是运气}
-
-### 3. 规则执行率审计
-| 新增规则 | 是否触发 | 是否执行 | 如未执行，原因 |
-|----------|:--:|:--:|------|
-| 龙头优先 e2 | ? | ? | ? |
-| 回踩确认 | ? | ? | ? |
-| 移动止盈保护 | ? | ? | ? |
-| 动态止损 | ? | ? | ? |
-| 板块背离止损 | ? | ? | ? |
-| 涨停次龙头 | ? | ? | ? |
-
-### 4. 反向假设测试
-- 如果全部判断反向：{结果推测}
-
-### 5. 改进执行率
-- 之前提出 ? 条改进，实际执行了 ? 条
-
-### 6. 被忽视的信号
-- {所有人都没注意到的关键数据点}
-
-### 7. 给主持人的警示
-- {最需要警惕的风险，用怀疑的语气写}
-\`\`\``;
+### 质疑视角（按相关性选用，不强制覆盖）
+- 共识盲点和幸存者偏差
+- 规则设计缺陷和反向假设
+- "这看起来对但可能错在哪里"
+- 被忽视的风险信号`;
 
 const PANEL_MODERATOR_PROMPT = `## 你是 Marcus 主持人 — 专家组 #5
 
@@ -829,6 +709,73 @@ SIGNAL: <green|yellow|red> REASON:<一句话核心判断>
 - **诚实客观**：承认错误，不粉饰，不过度自信
 - **标注分歧**：专家组有分歧的地方要明确标注
 - **贴近问题**：围绕用户的原始问题，不要跑题到固定的模板里`;
+
+// ===== 聊天模式简版 Prompts（问题驱动，无固定模板） =====
+
+const PANEL_RISK_CONTROLLER_CHAT_PROMPT = `## 你是 Marcus 风控审计师 — 专家组 #1
+
+### 你的角色
+你是专家组中**最保守、最吹毛求疵**的一员。你默认假设任何决策都可能有隐患，直到数据证明不是。
+
+### 你的任务
+围绕用户的具体问题，从风控视角给出分析。**不要套用固定模板**——用户问什么你就分析什么。
+
+### 风控关注点（按相关性选用）
+- 止损规则设计和执行率 / 仓位纪律和单票超标
+- 最大回撤和连续亏损 / 资金使用率和闲置风险
+- 板块背离和系统性风险 / 规则冲突和设计缺陷`;
+
+const PANEL_TREND_TRADER_CHAT_PROMPT = `## 你是 Marcus 趋势交易员 — 专家组 #2
+
+### 你的角色
+你是专家组中**最激进的右侧信仰者**。你相信趋势是最好的朋友，相信强者恒强。
+
+### 你的任务
+围绕用户的具体问题，从趋势交易视角给出分析。**不要套用固定模板**——用户问什么你就分析什么。
+
+### 趋势关注点（按相关性选用）
+- 趋势确认准确率和方向判断 / 主线捕捉和龙头选题
+- 产业链聚焦和赛道切换 / 入场时机：回踩确认 vs 追高
+- 错失的机会和保守性评估`;
+
+const PANEL_DATA_ANALYST_CHAT_PROMPT = `## 你是 Marcus 数据统计师 — 专家组 #3
+
+### 你的角色
+你是专家组中的**量化分析师**。你不谈感觉，不谈直觉，只用数字说话。
+
+### 你的任务
+围绕用户的具体问题，从数据统计视角给出分析。**不要套用固定模板**。样本不足时明确标注。
+
+### 统计关注点（按相关性选用）
+- 胜率、盈亏比、单笔最大盈亏 / 持有时长分析
+- 盈亏分布结构 / 行业/概念/时段的效率差异
+- 统计显著性判断`;
+
+const PANEL_DEVILS_ADVOCATE_CHAT_PROMPT = `## 你是 Marcus 逆向质疑者 — 专家组 #4
+
+### 你的角色
+你是专家组中的**怀疑论者**。你的工作是挑出所有人都忽视的盲点。
+
+### 你的任务
+围绕用户的具体问题质疑共识。**不要套用固定模板**。没有其他专家报告时先给出独立反向视角。
+
+### 质疑视角（按相关性选用）
+- 共识盲点和幸存者偏差 / 规则设计缺陷和反向假设
+- "这看起来对但可能错在哪里" / 被忽视的风险信号`;
+
+// Prompt 模式映射
+type PanelMode = 'review' | 'chat';
+const PANEL_PROMPT_MAP: Record<string, Record<PanelMode, string>> = {
+  PANEL_RISK_CONTROLLER_PROMPT: { review: PANEL_RISK_CONTROLLER_PROMPT, chat: PANEL_RISK_CONTROLLER_CHAT_PROMPT },
+  PANEL_TREND_TRADER_PROMPT:  { review: PANEL_TREND_TRADER_PROMPT,  chat: PANEL_TREND_TRADER_CHAT_PROMPT },
+  PANEL_DATA_ANALYST_PROMPT:  { review: PANEL_DATA_ANALYST_PROMPT,  chat: PANEL_DATA_ANALYST_CHAT_PROMPT },
+  PANEL_DEVILS_ADVOCATE_PROMPT:{ review: PANEL_DEVILS_ADVOCATE_PROMPT,chat: PANEL_DEVILS_ADVOCATE_CHAT_PROMPT },
+};
+function getPanelPrompt(promptName: string, mode: PanelMode): string {
+  const dbPrompt = getPrompt(promptName);
+  if (dbPrompt && dbPrompt !== PROMPT_FALLBACKS[promptName]) return dbPrompt;
+  return PANEL_PROMPT_MAP[promptName]?.[mode] || PROMPT_FALLBACKS[promptName] || '';
+}
 
 // ===== Prompt 回退映射（DB 不可用时使用内置硬编码） =====
 const PROMPT_FALLBACKS: Record<string, string> = {
@@ -1008,13 +955,13 @@ function getOrCreateAgent(sessionId: string, mode: string): Agent {
 // ===== 专家组群聊讨论：核心编排 =====
 
 /** 为指定 PanelMember 创建一个孤立 Agent（不存入 sessions，讨论完即释放） */
-function createPanelAgent(member: PanelMember, sessionId: string): Agent {
+function createPanelAgent(member: PanelMember, sessionId: string, panelMode: PanelMode = 'review'): Agent {
   const model = member.customModel
     || getModel(member.provider as any, member.modelId as any);
 
   return new Agent({
     initialState: {
-      systemPrompt: getPrompt(member.promptName),
+      systemPrompt: getPanelPrompt(member.promptName, panelMode),
       model: model,
       thinkingLevel: member.thinkingLevel,
       messages: [],
@@ -1063,10 +1010,11 @@ async function executePanelDiscussion(
   message: string,
   sessionId: string,
   onPhase?: (event: PanelEvent) => void,
-  skipDataCollection: boolean = false
+  skipDataCollection: boolean = false,
+  panelMode: PanelMode = 'review'
 ): Promise<{ reply: string; elapsed_ms: number }> {
   const totalStart = Date.now();
-  console.log(`\n[Panel] ===== 专家组群聊讨论开始 [${sessionId.slice(-16)}]${skipDataCollection ? '（跳过数据采集）' : ''} =====`);
+  console.log(`\n[Panel] ===== 专家组群聊开始 [${sessionId.slice(-16)}] mode=${panelMode}${skipDataCollection ? ' skipData' : ''} =====`);
 
   // === Phase 0: 数据采集（可跳过） ===
   let dataBriefing: string;
@@ -1081,7 +1029,7 @@ async function executePanelDiscussion(
     });
   } else {
     console.log(`[Panel] Phase 0: 数据采集...`);
-    const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId);
+    const collector = createPanelAgent(PANEL_MEMBERS[PANEL_MEMBERS.length - 1], sessionId, panelMode);
     const dataCollectionPrompt = `${message}\n\n⚠️ 你不是来写报告的。你的唯一任务是调用工具收集数据。\n请依次调用以下工具，把获取到的数据原样输出（不要分析，不要总结）：\n1. get_pi_analysis_history — Pi 策略分析历史\n2. get_trade_history — 交易执行记录\n3. get_latest_scan_report — 最新盘中扫描报告（含 market_stance / position_limit / pi_analysis）\n4. get_panel_history — 历史复盘结论（用于跨时段对比）\n5. get_daily_kline_qfq — 关键个股前复权日K线（⚠️ 需要 symbol 参数。先从上一步 trade_history 中提取交易过的股票代码传入，最多取 3 只。没有任何代码则跳过此工具）\n6. get_technical — 关键个股技术指标（⚠️ 同上，传入股票代码。没有代码则跳过，不要传空参数）\n输出格式：直接输出工具返回的 JSON/文本，尽量完整。`;
     dataBriefing = await runAgentTurn(collector, dataCollectionPrompt, '数据采集');
   }
@@ -1093,7 +1041,7 @@ async function executePanelDiscussion(
 
   const phase1Results = await Promise.all(
     analysts.map(async (member) => {
-      const agent = createPanelAgent(member, sessionId);
+      const agent = createPanelAgent(member, sessionId, panelMode);
       const report = await runAgentTurn(agent, phase1Prompt, member.roleLabel);
       // 每个专家完成后立即推送到前端（群聊体验）
       onPhase?.({
@@ -1118,7 +1066,7 @@ async function executePanelDiscussion(
         .map(r => `========== ${r.roleLabel}（${r.role}）==========\n${r.report}`)
         .join('\n\n');
       const myPrompt = `⚠️ 原始用户问题：${message}\n\n以下是本次专家组讨论中其他 ${analysts.length - 1} 位专家针对上述问题的分析报告：\n\n---\n${othersReports}\n---\n\n请阅读以上所有报告，始终围绕原始用户问题，从你专业角度发表评论：\n1. 你同意哪些观点？为什么？\n2. 你不同意哪些观点？为什么？\n3. 你有哪些补充或修正？\n4. 你认为被其他人忽视的关键点是什么？\n\n请以「评论者：${member.roleLabel}」开头，直接发表评论。`;
-      const agent = createPanelAgent(member, sessionId);
+      const agent = createPanelAgent(member, sessionId, panelMode);
       const commentary = await runAgentTurn(agent, myPrompt, `${member.roleLabel}(评论)`);
       // 每个专家完成后立即推送
       onPhase?.({
@@ -1145,7 +1093,7 @@ async function executePanelDiscussion(
       // 同时附上自己 Phase 1 原始报告，方便对照
       const myReport = phase1Results[idx].report;
       const refPrompt = `⚠️ 原始用户问题：${message}\n\n你的 Phase 1 独立分析报告如下：\n\n---\n## 你的原始报告\n${myReport}\n---\n\n以下是其他专家对你的报告的评论：\n\n---\n${commentsOnMe}\n---\n\n请始终围绕原始用户问题，基于上述评论进行二次反思，产出改进后的分析：\n1. 你接受哪些批评？你的报告中哪些地方需要修正？\n2. 你坚持哪些观点？为什么坚持（用数据/逻辑反驳）？\n3. 有哪些观点是被其他人启发后你新认识到的？\n4. 如果让你重写你的报告，你最想改动哪一部分？\n\n请以「改进报告 by ${member.roleLabel}」开头，输出你的修正/强化后的最终分析意见。不需要重复原始报告全部内容，只需要输出你修正/坚持/新增的观点，以及在哪些议题上发生了观点变化。`;
-      const agent = createPanelAgent(member, sessionId);
+      const agent = createPanelAgent(member, sessionId, panelMode);
       const refinement = await runAgentTurn(agent, refPrompt, `${member.roleLabel}(二次反思)`);
       // 每个专家完成后立即推送
       onPhase?.({
@@ -1178,7 +1126,7 @@ async function executePanelDiscussion(
 
   const phase3Prompt = `以下是专家组群聊讨论记录（长报告已截断，保留核心观点）：\n\n---\n${discussionTranscript}\n---\n\n${message}\n\n请综合以上所有专家的分析和评论，产出最终的综合报告。\n按你的输出格式要求（问题分析 → 核心结论 → 专家共识 → 分歧点 → 风险警示 → 行动建议），直接回答用户的原始问题。\n如果有交易相关讨论，最后一行输出 SIGNAL 行。\n\n🔧 如果截断的报告缺少关键细节，你可以调用 get_panel_history / get_pi_analysis_history / get_trade_history / get_daily_kline（前复权 qfq）等 Tushare 历史数据工具获取完整数据。`;
 
-  const moderatorAgent = createPanelAgent(moderator, sessionId);
+  const moderatorAgent = createPanelAgent(moderator, sessionId, panelMode);
   const finalReport = await runAgentTurn(moderatorAgent, phase3Prompt, '主持人(综合)');
 
   const totalElapsed = Date.now() - totalStart;
@@ -1365,7 +1313,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/chat/stream') {
     try {
       const body = await readBody(req);
-      const { message, session_id, skip_data_collection } = JSON.parse(body);
+      const { message, session_id, skip_data_collection, panel_mode } = JSON.parse(body);
 
       if (!message) {
         jsonResponse(res, 400, { error: '缺少 message 参数' });
@@ -1374,7 +1322,8 @@ const server = http.createServer(async (req, res) => {
 
       const sessionId = session_id || 'stream_' + Date.now();
       const skipDC = skip_data_collection === true;
-      console.log(`[PiServer] --> SSE Panel [${sessionId.slice(-8)}]: ${message.slice(0, 100)}${skipDC ? ' (跳过数据采集)' : ''}`);
+      const pMode: PanelMode = panel_mode === 'chat' ? 'chat' : 'review';
+      console.log(`[PiServer] --> SSE Panel [${sessionId.slice(-8)}] mode=${pMode}: ${message.slice(0, 100)}${skipDC ? ' skipData' : ''}`);
 
       // 设置 SSE 响应头
       res.writeHead(200, {
@@ -1395,7 +1344,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const result = await executePanelDiscussion(message, sessionId, (event) => {
           sendSSE(event.phase, event);
-        }, skipDC);
+        }, skipDC, pMode);
 
         // 保存讨论结果到本地
         const panelFile = resolve(SESSIONS_DIR, `panel_${sessionId.replace(/[<>:"/\\|?*]/g, '_')}.json`);
