@@ -1068,108 +1068,37 @@ class SchedulerService:
         else:
             trade_mode_instruction = "请基于最新扫描报告执行自主交易决策。"
 
-        # === 立场偏离检测：对比扫描系统当前立场 vs Pi 上一轮立场 ===
-        stance_warning = ""
+        # === Pi 是唯一立场来源（v1.5：扫描仅提供数据，Pi 做最终判断） ===
+        # 读取 Pi 上一轮立场作为参考上下文
+        stance_context = ""
         try:
-            # 1. 读取最新扫描报告的 stance
-            scan_dir = self._get_workspace_path() / "memory" / "market-scan-logs"
-            scan_file = None
-            if scan_dir.exists():
-                scan_files = sorted(scan_dir.glob("*-scans.jsonl"), reverse=True)
-                if scan_files:
-                    scan_file = scan_files[0]
-            scan_stance = None
-            scan_limit = None
-            if scan_file and scan_file.exists():
-                with open(scan_file, 'r', encoding='utf-8') as sf:
-                    lines = [l.strip() for l in sf if l.strip()]
-                if lines:
-                    last_scan = json.loads(lines[-1])
-                    scan_stance = (
-                        last_scan.get('adjusted_strategy', {}).get('stance_code')
-                        or last_scan.get('market_stance')
-                        or last_scan.get('stance_code')
-                    )
-                    scan_limit = (
-                        last_scan.get('adjusted_strategy', {}).get('position_limit')
-                        or last_scan.get('position_limit')
-                    )
-            # 转换为统一 stance code
-            def _normalize_stance(s):
-                if not s:
-                    return None
-                s = str(s).lower()
-                if 'green' in s or 'aggressive' in s or '🟢' in s:
-                    return 'green'
-                if 'red' in s or '🟡' not in s and 'hold' not in s and 'cautious' not in s:
-                    if 'red' in s:
-                        return 'red'
-                if 'hold' in s or '⚪' in s:
-                    return 'yellow'  # hold 归入 yellow 但属于低档
-                if 'yellow' in s or 'cautious' in s or '🟡' in s:
-                    return 'yellow'
-                return 'yellow'
-
-            scan_stance = _normalize_stance(scan_stance)
-
-            # 2. 获取 Pi 上一轮立场
             from core.utils.strategy_chain import StrategyChain
             chain = StrategyChain()
             pi_conf = chain.get_pi_confirmation()
-            pi_stance = pi_conf.get('stance', 'yellow')
-            pi_limit = pi_conf.get('position_limit', 60)
-
-            # 3. 计算偏离度
-            STANCE_RANK = {'green': 3, 'yellow': 2, 'red': 1}
-            if scan_stance and pi_stance:
-                scan_rank = STANCE_RANK.get(scan_stance, 2)
-                pi_rank = STANCE_RANK.get(pi_stance, 2)
-                rank_diff = pi_rank - scan_rank
-
-                if rank_diff >= 2:
-                    # 扫描立场比 Pi 保守 2 档以上
-                    stance_warning = (
-                        f"\n🔴 **立场偏离警告（代码层检测）**\n"
-                        f"扫描系统当前立场: {scan_stance}"
-                        + (f"/{scan_limit}%" if scan_limit else "") + "\n"
-                        f"Pi 上轮立场: {pi_stance}/{pi_limit}%\n"
-                        f"偏离度: {rank_diff} 档 → **Pi 立场严重滞后！**\n"
-                        f"⚠️ 本轮必须以降级处理：立场至少降至 {scan_stance}，"
-                        f"仓位上限以扫描值为准。\n"
-                    )
-                    logger.info(f"[{execution_id}] [stance_divergence] scan={scan_stance}/{scan_limit}, "
-                                f"pi={pi_stance}/{pi_limit}, diff={rank_diff}档, warning_injected=True")
-                elif rank_diff == 1 and scan_limit and pi_limit and scan_limit < pi_limit * 0.5:
-                    stance_warning = (
-                        f"\n🟡 **立场偏离注意（代码层检测）**\n"
-                        f"扫描系统仓位上限: {scan_limit}% | Pi 上轮仓位上限: {pi_limit}%\n"
-                        f"扫描仓位 < Pi仓位的 50%，建议重新评估当前仓位上限。\n"
-                    )
-                    logger.info(f"[{execution_id}] [stance_divergence] limit_gap: scan={scan_limit}% vs pi={pi_limit}%, warning_injected=True")
-                elif rank_diff == 0 and scan_limit and pi_limit and scan_limit < pi_limit * 0.35:
-                    # 同档立场但仓位差距 > 3倍（如 Pi yellow/60% vs 扫描 yellow/20%）
-                    stance_warning = (
-                        f"\n🟡 **仓位级偏离警告（代码层检测）**\n"
-                        f"立场同档（均为 {scan_stance}），但仓位上限严重脱节：\n"
-                        f"扫描系统仓位上限: {scan_limit}% | Pi 上轮仓位上限: {pi_limit}%\n"
-                        f"差距 {pi_limit / scan_limit:.1f}x → Pi 仓位上限严重虚高，以扫描值为准。\n"
-                    )
-                    logger.info(f"[{execution_id}] [stance_divergence] same_stance_limit_gap: "
-                                f"scan={scan_limit}% vs pi={pi_limit}%, ratio={pi_limit/scan_limit:.1f}x, warning_injected=True")
+            if pi_conf:
+                stance_context = (
+                    f"\n📌 你上一轮的判断：{pi_conf.get('stance', 'yellow')}"
+                    f" / 仓位上限 {pi_conf.get('position_limit', 60)}%"
+                    f" — 理由：{pi_conf.get('reason', '无')}"
+                    f"\n"
+                )
         except Exception as e:
-            logger.error(f"[{execution_id}] Stance divergence check failed (non-fatal): {e}")
+            logger.debug(f"[{execution_id}] Pi context read failed: {e}")
 
         prompt = (
             f"{trade_mode_instruction}\n"
-            f"{stance_warning}\n"
+            f"{stance_context}"
             f"请立即执行以下操作：\n"
             f"1. 调用 get_latest_scan_report 获取最新扫描报告\n"
-            f"   （报告中 market_stance 为盘中扫描系统根据实时行情计算的市场立场，以此为准。pi_analysis 为历史参考）\n"
+            f"   （报告中的 market_stance/position_limit 为扫描系统的参考数据，"
+            f"pi_analysis 为你上一轮的历史判断。\n"
+            f"   **你读完报告后自行决定本轮立场和仓位上限**——你是唯一决策者。）\n"
             f"2. 调用 get_portfolio 查看当前账户状态\n"
             f"3. 按右侧交易 SOP 选股分析\n"
             f"4. 执行交易（买入/卖出/调仓）\n"
             f"5. 输出完整交易报告\n\n"
             f"记住：你是 Marcus 右侧交易专家，严格遵循风控纪律。\n"
+            f"你拥有独立的判断能力——综合所有数据后独立决定 stance 和 position_limit。\n"
             f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 

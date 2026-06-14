@@ -135,17 +135,19 @@ async def get_latest_scan_report(
 
         report = last_scan.get('report', '')
 
-        # === 同时读取最新的 Pi 分析报告（仅作参考，不覆盖 scan 自身的 stance） ===
+        # === v1.5: Pi 是唯一决策者，scan stance 仅作参考输入 ===
         pi_analysis = _get_latest_pi_analysis(workspace, date)
-        # ⚠️ 不再用 Pi 分析覆盖 scan 的 stance/position_limit，
-        # 否则会形成循环：scan 算出的真实立场被上一次 Pi 的旧值覆盖，永远无法更新。
 
         return {
             "file": str(scan_file),
             "scan_count": len(lines),
             "timestamp": last_scan.get('timestamp', ''),
-            "market_stance": stance,
-            "position_limit": position_limit,
+            # scan 系统的参考数据（仅作输入，不绑定 Pi 判断）
+            "scan_stance": stance,
+            "scan_position_limit": position_limit,
+            # Pi 的权威立场（v1.5: Pi 综合分析后决定）
+            "market_stance": pi_analysis.get('stance', stance) if pi_analysis else stance,
+            "position_limit": pi_analysis.get('position_limit', position_limit) if pi_analysis else position_limit,
             "hot_concepts": hot_concepts[:10] if isinstance(hot_concepts, list) else hot_concepts,
             "watchlist": watchlist[:15] if isinstance(watchlist, list) else watchlist,
             "report": report,
