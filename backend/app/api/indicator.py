@@ -413,16 +413,47 @@ async def get_trade_advice(req: TradeAdviceRequest):
             signal_details.append(f"当前价 {current_price} 跌破阶段底部 {low} 的3%容错线 ({round(low*0.97,3)})")
             risk_flags.append("破底")
 
-        # 优先级 2：成本止损（亏损超 6%）
-        elif current_price <= cost * 0.94:
-            loss_pct = round((current_price - cost) / cost * 100, 2)
-            signal = f"止损({loss_pct}%)"
-            signal_class = "danger"
-            signal_details.append(f"当前价 {current_price} 已跌破成本价 {cost} 的 -6% 止损线")
-            risk_flags.append("深亏")
+        # 优先级 2：智能成本止损（分级判断，替代一刀切 -6%）
+        if not signal and cost and cost > 0:
+            max_profit_pct = (
+                round((hwm_price - cost) / cost * 100, 2)
+                if hwm_price and hwm_price > cost else 0
+            )
+
+            # 场景 2a：曾大盈(≥5%) 转亏损 → 保本离场
+            if max_profit_pct >= 5 and current_price < cost * 0.99:
+                signal = "大盈转亏(-1%)"
+                signal_class = "danger"
+                signal_details.append(f"曾浮盈 +{max_profit_pct}%（最高 {hwm_price}）→ 现价已跌破成本")
+                signal_details.append("赚钱变亏钱是最大错误，建议保本离场")
+                risk_flags.append("大盈转亏")
+
+            # 场景 2b：曾小盈(≥3%) 转亏损超 3%
+            elif max_profit_pct >= 3 and current_price <= cost * 0.97:
+                loss_pct = round((current_price - cost) / cost * 100, 2)
+                signal = f"小盈转亏({loss_pct}%)"
+                signal_class = "danger"
+                signal_details.append(f"曾浮盈 +{max_profit_pct}% → 现亏损超 3% 止损线")
+                risk_flags.append("小盈转亏")
+
+            # 场景 2c：从未盈利 → -4% 快速止损
+            elif max_profit_pct < 3 and current_price <= cost * 0.96:
+                loss_pct = round((current_price - cost) / cost * 100, 2)
+                signal = f"止损({loss_pct}%)"
+                signal_class = "danger"
+                signal_details.append(f"从未盈利，亏损 {loss_pct}% 触及 -4% 快速止损线")
+                risk_flags.append("深亏")
+
+            # 场景 2d：无 HWM 数据 → -6% 保守底线
+            elif hwm_price is None and current_price <= cost * 0.94:
+                loss_pct = round((current_price - cost) / cost * 100, 2)
+                signal = f"止损({loss_pct}%)"
+                signal_class = "danger"
+                signal_details.append(f"当前价已跌破成本价 -6% 保守止损线")
+                risk_flags.append("深亏")
 
         # 优先级 3：时间证伪（13个交易日不创新高）
-        elif days_since_high is not None and days_since_high >= 13 and not is_new_high:
+        if not signal and days_since_high is not None and days_since_high >= 13 and not is_new_high:
             signal = f"时间证伪(>{days_since_high}天)"
             signal_class = "warning"
             signal_details.append(f"已 {days_since_high} 个交易日未创新高（阈值13天）")
@@ -430,14 +461,14 @@ async def get_trade_advice(req: TradeAdviceRequest):
             risk_flags.append("时间证伪")
 
         # 优先级 4：突破新高
-        elif is_new_high or (current_price == high and high > 0):
+        if not signal and (is_new_high or (current_price == high and high > 0)):
             signal = "突破新高 🏆"
             signal_class = "gold"
-            signal_details.append(f"当前价突破历史最高价，自动重置时间计数")
+            signal_details.append("当前价突破历史最高价，自动重置时间计数")
             risk_flags.append("强势")
 
         # 默认：持有
-        else:
+        if not signal:
             days_text = f"{hold_days}天" if hold_days else ""
             signal = f"持有({days_text})" if days_text else "持有"
             signal_class = "blue"

@@ -5,7 +5,11 @@
 
 止损规则（优先级从高到低）：
   0. 破底止损：跌破阶段底部 3% → 立即止损（牛股计算器策略）
-  1. 成本止损：亏损超过 6% → 立即止损（牛股计算器策略）
+  1. 成本止损（智能分级）：
+     - 曾大盈(≥5%) 转亏损 → 保本离场(-1%)
+     - 曾小盈(3-5%) 转亏损 → -3% 止损
+     - 从未盈利 → -4% 止损（快速认错）
+     - 无 HWM 数据 → -6% 保守底线
   2. 板块背离止损：个股跌幅 > 同板块平均跌幅 × 3 → 立即止损
   3. 铁律二移动止盈保护：
      - 浮盈 ≥ 1%  → 止损线上移至成本价（保本）
@@ -218,8 +222,8 @@ class StopLossMonitor:
         if break_low_reason:
             return break_low_reason
 
-        # ── 规则 0 (b): 成本止损 -6%（牛股计算器策略）──
-        cost_stop_reason = self._check_cost_stop(float_pnl_pct, current_price, avg_price)
+        # ── 规则 0 (b): 智能成本止损（分级，替代一刀切 -6%）──
+        cost_stop_reason = self._check_cost_stop(symbol, float_pnl_pct, current_price, avg_price)
         if cost_stop_reason:
             return cost_stop_reason
 
@@ -265,18 +269,73 @@ class StopLossMonitor:
         return None
 
     def _check_cost_stop(
-        self, float_pnl_pct: float, current_price: float, avg_price: float
+        self, symbol: str, float_pnl_pct: float, current_price: float, avg_price: float
     ) -> Optional[str]:
         """
-        成本止损（牛股计算器策略）：亏损超过 6% → 立即止损。
+        智能成本止损（分级优化，替代一刀切 -6%）。
+
+        根据是否曾盈利 + 最大盈利幅度，分三级判断：
+        ┌─────────────────────┬──────────┬─────────────────────────┐
+        │ 场景                │ 止损阈值  │ 逻辑                    │
+        ├─────────────────────┼──────────┼─────────────────────────┤
+        │ 曾大盈(≥5%) 转亏损  │ 保本(-1%) │ 赚钱变亏钱是最大错误    │
+        │ 曾小盈(3-5%) 转亏  │ -3%      │ 给了盈利机会但没把握住   │
+        │ 从未盈利            │ -4%      │ 买完就跌，快速认错       │
+        │ 无 HWM 数据(降级)   │ -6%      │ 保守降级，保持原逻辑     │
+        └─────────────────────┴──────────┴─────────────────────────┘
         """
         if avg_price <= 0:
             return None
-        if float_pnl_pct <= -6.0:
+
+        # 获取历史最高价判断是否曾盈利
+        hwm = None
+        hwm_days = None
+        try:
+            chain = self.strategy_chain
+            if chain:
+                hwm_data = chain.get_high_water_mark(symbol)
+                if hwm_data:
+                    hwm = hwm_data.get('high_price', 0)
+                    hwm_days = hwm_data.get('days_since_high', 0)
+        except Exception:
+            pass
+
+        max_profit_pct = (
+            round((hwm - avg_price) / avg_price * 100, 2)
+            if hwm and hwm > avg_price else 0
+        )
+
+        # ── 场景 1: 曾大盈(≥5%) → 现亏损 → 保本离场 ──
+        if max_profit_pct >= 5 and float_pnl_pct <= -1.0:
             return (
-                f'成本止损-6%（牛股计算器）：当前价 {current_price:.2f}'
-                f' 亏损 {float_pnl_pct:.2f}% 触及 -6% 止损线（成本 {avg_price:.2f}）'
+                f'成本止损-大盈转亏：曾浮盈 +{max_profit_pct:.1f}%'
+                f'（最高 {hwm:.2f}）→ 现亏损 {float_pnl_pct:.2f}%'
+                f'（当前价 {current_price:.2f}）→ 保本离场'
             )
+
+        # ── 场景 2: 曾盈利(≥3%) → 现亏损超 3% ──
+        if max_profit_pct >= 3 and float_pnl_pct <= -3.0:
+            return (
+                f'成本止损-小盈转亏：曾浮盈 +{max_profit_pct:.1f}% → '
+                f'现亏损 {float_pnl_pct:.2f}% 触及 -3% 止损线'
+                f'（成本 {avg_price:.2f}）'
+            )
+
+        # ── 场景 3: 从未盈利 → -4% 硬止损 ──
+        if hwm is not None and float_pnl_pct <= -4.0:
+            days_tag = f' 持仓约{hwm_days}天' if hwm_days else ''
+            return (
+                f'成本止损-未盈利-4%：从未盈利{days_tag}，'
+                f'当前亏损 {float_pnl_pct:.2f}% 触及止损线（成本 {avg_price:.2f}）'
+            )
+
+        # ── 降级方案: 无 HWM 数据 → 保持 -6% 保守底线 ──
+        if hwm is None and float_pnl_pct <= -6.0:
+            return (
+                f'成本止损-6%（降级）：当前价 {current_price:.2f}'
+                f' 亏损 {float_pnl_pct:.2f}% 触及底线（成本 {avg_price:.2f}）'
+            )
+
         return None
 
     def _check_iron_rule2(self, float_pnl_pct: float, current_price: float) -> Optional[str]:
