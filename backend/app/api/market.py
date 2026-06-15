@@ -49,6 +49,19 @@ except ImportError:
     logger.warning("[market] ⚠️ 东财实时板块资金流模块不可用")
 
 
+def _fmt_net_amount(wan: float) -> str:
+    """格式化净流入金额（万元）为人类可读字符串，与 _format_amount_wan 保持一致。
+
+    Args:
+        wan: 金额（万元）
+    Returns:
+        "+1.26亿" / "-345万" 等
+    """
+    if abs(wan) >= 10000:
+        return f"{wan / 10000:+.2f}亿"
+    return f"{wan:+.0f}万"
+
+
 @router.get("/indices", response_model=IndicesResponse)
 async def get_market_indices():
     """
@@ -1149,7 +1162,7 @@ async def get_concept_mapping(
         raise HTTPException(status_code=500, detail=f"查询概念板块失败: {str(e)}")
 
 
-# ========== 概念板块行情 API (数据源: 东财 push2 实时 + Tushare dc_daily 兜底) ==========
+# ========== 概念板块行情 API (数据源: 东财 push2 实时 + Tushare moneyflow_ind_dc 兜底) ==========
 
 @router.get("/concept-fund-flow")
 async def get_concept_fund_flow(
@@ -1161,7 +1174,7 @@ async def get_concept_fund_flow(
 
     数据源（优先级）:
     1. 东财 push2 实时接口（盘中实时更新，含涨跌幅+资金拆分明细+板块广度+领涨股）
-    2. Tushare dc_daily（降级兜底，日频数据，含历史成交量/换手率）
+    2. Tushare moneyflow_ind_dc（降级兜底，日频盘后数据，含概念板块资金拆分明细）
 
     返回字段:
     - name/code: 概念名称/代码
@@ -1275,9 +1288,8 @@ async def get_concept_fund_flow(
         except Exception:
             pass
 
-    # ── 降级：Tushare dc_daily 日频数据 ──
+    # ── 降级：Tushare moneyflow_ind_dc 日频盘后数据（含资金拆分明细）──
     try:
-        import pandas as pd
         from app.config import get_settings
         settings = get_settings()
         token = settings.get_tushare_token()
@@ -1286,40 +1298,66 @@ async def get_concept_fund_flow(
         pro = ts.pro_api(token)
 
         from datetime import timedelta
-        now = dt.now()
-        is_intraday = now.hour < 15 or (now.hour == 15 and now.minute < 15)
-        start_offset = 1 if is_intraday else 0
 
         sectors = []
         trade_date = ""
 
-        for offset in range(start_offset, start_offset + 3):
+        # moneyflow_ind_dc 每天盘后更新，盘中走最近已收盘交易日
+        is_intraday = now.hour < 15 or (now.hour == 15 and now.minute < 15)
+        start_offset = 1 if is_intraday else 0
+
+        for offset in range(start_offset, start_offset + 4):
             attempt_date = (now - timedelta(days=offset)).strftime("%Y%m%d")
             attempt_dt = now - timedelta(days=offset)
             if attempt_dt.weekday() >= 5:
                 continue
             try:
-                df_daily = pro.dc_daily(
-                    trade_date=attempt_date, idx_type='概念板块',
-                    fields='ts_code,pct_change,vol,amount,turnover_rate'
+                df = pro.moneyflow_ind_dc(
+                    trade_date=attempt_date,
+                    content_type='概念',
                 )
-                df_index = pro.dc_index(
-                    trade_date=attempt_date, idx_type='概念板块',
-                    fields='ts_code,name'
-                )
-                if df_daily is not None and len(df_daily) > 0 and df_index is not None and len(df_index) > 0:
-                    df = pd.merge(df_index, df_daily, on='ts_code', how='inner')
-                    df = df.sort_values('pct_change', ascending=False)
+                if df is not None and not df.empty:
                     trade_date = attempt_date
+
+                    # 排序
+                    if sort_by == "main_net":
+                        df = df.sort_values('net_amount', ascending=False)
+                    else:
+                        df = df.sort_values('pct_change', ascending=False)
+
                     for _, row in df.head(limit).iterrows():
+                        # moneyflow_ind_dc 返回字段单位为元，统一转为万元（与东财实时数据一致）
+                        main_net_val = round(float(row.get("net_amount", 0) or 0) / 10000, 2)
+                        main_net_rate_val = round(float(row.get("net_amount_rate", 0) or 0), 2)
+
                         sectors.append({
-                            "name": row["name"],
-                            "ts_code": row["ts_code"],
-                            "code": row["ts_code"],
-                            "pct_change": round(float(row["pct_change"] or 0), 2),
-                            "vol": float(row["vol"] or 0),
-                            "amount": float(row["amount"] or 0),
-                            "turnover_rate": round(float(row["turnover_rate"] or 0), 2),
+                            "name": str(row["name"]),
+                            "ts_code": str(row["ts_code"]),
+                            "code": str(row["ts_code"]),
+                            "pct_change": round(float(row.get("pct_change", 0) or 0), 2),
+                            # 资金拆分明细（元→万元）
+                            "main_net": main_net_val,
+                            "main_net_fmt": _fmt_net_amount(main_net_val),
+                            "main_net_rate": main_net_rate_val,
+                            "super_large_net": round(float(row.get("buy_elg_amount", 0) or 0) / 10000, 2),
+                            "super_large_net_rate": round(float(row.get("buy_elg_amount_rate", 0) or 0), 2),
+                            "large_net": round(float(row.get("buy_lg_amount", 0) or 0) / 10000, 2),
+                            "large_net_rate": round(float(row.get("buy_lg_amount_rate", 0) or 0), 2),
+                            "medium_net": round(float(row.get("buy_md_amount", 0) or 0) / 10000, 2),
+                            "medium_net_rate": round(float(row.get("buy_md_amount_rate", 0) or 0), 2),
+                            "small_net": round(float(row.get("buy_sm_amount", 0) or 0) / 10000, 2),
+                            "small_net_rate": round(float(row.get("buy_sm_amount_rate", 0) or 0), 2),
+                            # moneyflow_ind_dc 无法提供板块广度/成分股
+                            "advancing": 0,
+                            "declining": 0,
+                            "total_stocks": 0,
+                            "lead_stock_name": str(row.get("buy_sm_amount_stock", "") or ""),
+                            "lead_stock_code": "",
+                            "flow_nature": classify_flow_nature(main_net_val, main_net_rate_val),
+                            # 量价数据（moneyflow_ind_dc 不含 vol/amount/turnover_rate）
+                            "vol": 0,
+                            "amount": 0,
+                            "turnover_rate": 0,
                         })
                     break
             except Exception:
@@ -1330,7 +1368,7 @@ async def get_concept_fund_flow(
             "count": len(sectors),
             "sort_by": sort_by,
             "trade_date": trade_date,
-            "data_source": "Tushare(daily)",
+            "data_source": "Tushare(moneyflow_ind_dc·盘后)",
         }
 
     except EnvironmentError as e:

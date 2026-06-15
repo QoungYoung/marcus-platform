@@ -143,8 +143,12 @@ export const getConceptFundFlowTool = {
     const lines = [`📊 概念板块行情 (${sortLabel})`, tradeDate, ''];
     sectors.forEach((s: any, idx: number) => {
       const sign = s.pct_change >= 0 ? '+' : '';
-      const amountYi = (s.amount / 100000000).toFixed(2);
-      let line = `${idx + 1}. ${s.name} | 涨跌:${sign}${s.pct_change}% | 成交:${amountYi}亿`;
+      let line = `${idx + 1}. ${s.name} | 涨跌:${sign}${s.pct_change}%`;
+      // 成交额（东财实时有，Tushare降级无）
+      if (s.amount > 0) {
+        const amountYi = (s.amount / 100000000).toFixed(2);
+        line += ` | 成交:${amountYi}亿`;
+      }
       // 附加资金流数据
       if (s.main_net_fmt) {
         const nature = s.flow_nature ? `[${s.flow_nature}]` : '';
