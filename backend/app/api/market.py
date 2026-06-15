@@ -489,14 +489,20 @@ def _load_em_flow_persist() -> Optional[dict]:
 
 
 def _fetch_em_flow_cache() -> Optional[dict]:
-    """获取东方财富个股资金流排名（带缓存，分页获取全量 5000+ 只）"""
+    """获取东方财富个股资金流排名（带缓存，强制 IPv4）"""
     global _em_flow_cache, _em_flow_cache_time
     now = datetime.now()
     if _em_flow_cache and _em_flow_cache_time and (now - _em_flow_cache_time).total_seconds() < _FLOW_CACHE_TTL:
         return _em_flow_cache
 
     try:
-        import urllib.request, urllib.parse, json, ssl
+        import urllib.request, urllib.parse, json, ssl, socket
+
+        # 强制 IPv4（Docker 内 IPv6 不通）
+        _orig_getaddrinfo = socket.getaddrinfo
+        def _v4(host, port, family=0, *args, **kwargs):
+            return _orig_getaddrinfo(host, port, socket.AF_INET, *args, **kwargs)
+        socket.getaddrinfo = _v4
 
         base_url = "https://push2.eastmoney.com/api/qt/clist/get"
         base_params = {
@@ -627,16 +633,20 @@ async def get_stock_moneyflow(
     ts_code = _normalize_to_ts_code(symbol)
     bare_code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ").lower()
 
-    # ── 优先：SQLite 缓存（5分钟定时落库）──
+    # ── 优先：PG 缓存（fund_flow_cache 定时落库）──
     cached = _read_flow_cache("individual", bare_code)
     if cached:
+        # 适配同花顺格式（inflow/outflow/net_amount）或东财格式（main_net/lg_net...）
+        net = cached.get("net_amount") or cached.get("main_net", 0)
         return ThsMoneyflowResponse(
             symbol=ts_code, name=cached.get("name", ""),
             price=cached.get("price", 0),
             change_pct=str(cached.get("change_pct", "")),
-            turnover_rate="",
-            net_amount=cached.get("main_net", 0),
-            main_net=cached.get("main_net", 0),
+            turnover_rate=str(cached.get("turnover_rate", "")),
+            inflow=cached.get("inflow", 0),
+            outflow=cached.get("outflow", 0),
+            net_amount=net,
+            main_net=cached.get("main_net", 0) or net,
             main_pct=str(cached.get("main_pct", "")),
             lg_net=cached.get("lg_net", 0), lg_pct=str(cached.get("lg_pct", "")),
             md_net=cached.get("md_net", 0), md_pct=str(cached.get("md_pct", "")),

@@ -108,55 +108,44 @@ def fetch_concept_flow():
         print(f"[fund_flow_cache] concept FAIL: {e}", flush=True)
 
 
-# ── 3. 个股资金流 ──
+# ── 3. 个股资金流（同花顺 data.10jqka.com.cn，Docker 内东财不通） ──
 def fetch_individual_flow():
     try:
-        import urllib.request, urllib.parse, ssl
+        import akshare as ak
 
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
-        ctx = ssl.create_default_context()
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "http://data.eastmoney.com/zjlx/detail.html",
-        }
-        base_params = {
-            "fid": "f3", "po": "0", "pz": "500", "np": "1",
-            "fltt": "2", "invt": "2",
-            "ut": "b2884a393a59ad64002292a3e90d46a5",
-            "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
-            "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
-        }
+        def _parse(val):
+            if isinstance(val, (int, float)):
+                return float(val)
+            s = str(val).replace(",", "").strip()
+            try:
+                if "亿" in s:
+                    return float(s.replace("亿", "")) * 1e8
+                elif "万" in s:
+                    return float(s.replace("万", "")) * 1e4
+                return float(s)
+            except ValueError:
+                return 0.0
+
+        df = ak.stock_fund_flow_individual(symbol="即时")
+        if df is None or df.empty:
+            print("[fund_flow_cache] individual: 空数据", flush=True)
+            return
 
         count = 0
-        for pn in range(1, 15):
-            params = {**base_params, "pn": str(pn)}
-            full_url = url + "?" + urllib.parse.urlencode(params)
-            req = urllib.request.Request(full_url, headers=headers)
-            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-                raw = resp.read().decode("utf-8")
-            result = json.loads(raw)
-            diff = result.get("data", {}).get("diff", [])
-            if not diff:
-                break
-            for d in diff:
-                code = str(d.get("f12", "")).zfill(6)
-                upsert_cache("individual", code, {
-                    "symbol": code,
-                    "name": str(d.get("f14", "")),
-                    "price": float(d.get("f2", 0) or 0),
-                    "change_pct": str(d.get("f3", "")),
-                    "main_net": float(d.get("f62", 0) or 0),
-                    "main_pct": str(d.get("f184", "")),
-                    "lg_net": float(d.get("f66", 0) or 0),
-                    "lg_pct": str(d.get("f69", "")),
-                    "md_net": float(d.get("f72", 0) or 0),
-                    "md_pct": str(d.get("f75", "")),
-                    "sm_net": float(d.get("f78", 0) or 0),
-                    "sm_pct": str(d.get("f81", "")),
-                    "xs_net": float(d.get("f84", 0) or 0),
-                    "xs_pct": str(d.get("f87", "")),
-                })
-                count += 1
+        for _, row in df.iterrows():
+            code = str(int(row.get("股票代码", 0))).zfill(6)
+            upsert_cache("individual", code, {
+                "symbol": code,
+                "name": str(row.get("股票简称", "")),
+                "price": float(row.get("最新价", 0) or 0),
+                "change_pct": str(row.get("涨跌幅", "")),
+                "turnover_rate": str(row.get("换手率", "")),
+                "inflow": _parse(row.get("流入资金", 0)),
+                "outflow": _parse(row.get("流出资金", 0)),
+                "net_amount": _parse(row.get("净额", 0)),
+                "volume": _parse(row.get("成交额", 0)),
+            })
+            count += 1
         upsert_cache("individual", "__index__", {"count": count})
         print(f"[fund_flow_cache] individual: {count} 只", flush=True)
     except Exception as e:
