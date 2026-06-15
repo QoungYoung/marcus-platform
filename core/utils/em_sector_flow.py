@@ -103,18 +103,20 @@ def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
     if referer:
         headers["Referer"] = referer
 
-    # ── 第〇重：FRP 本地代理（env EM_PROXY_URL）──
+    # ── 第〇重：FRP 本地代理（env EM_PROXY_URL，唯一通道）──
     proxy_url = _os.environ.get("EM_PROXY_URL", "")
     if proxy_url:
         try:
             parsed = url.replace("https://push2.eastmoney.com", proxy_url)
             import requests as req
-            resp = req.get(parsed, headers=headers, timeout=timeout)
+            resp = req.get(parsed, headers=headers, timeout=max(timeout, 20))
             if resp.status_code == 200:
                 logger.debug(f"[em] proxy 成功 ({len(resp.text)}B)")
                 return resp.text
-        except Exception:
-            pass
+            logger.warning(f"[em] proxy HTTP {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"[em] proxy 失败: {e}")
+        return None  # 代理模式下不降级到本地 curl，避免浪费时间
 
     # ── 第一重：curl_cffi（TLS 指纹 + Cookie，绕过反爬）──
     try:
@@ -506,11 +508,7 @@ def get_sector_flow(
     """
     if _SKIP_EASTMONEY:
         raise RuntimeError("SKIP_EASTMONEY: 东财接口已禁用，请走 Tushare 降级源")
-    # ── 优先：SQLite 缓存（fund_flow_cache 定时任务落库） ──
-    dbc = _try_sqlite_cache(sector_type, top_n, sort_by)
-    if dbc:
-        return dbc
-    # 检查内存缓存
+    # 检查内存缓存（30秒TTL）
     cache_key = f"{sector_type}_{sort_by}_{top_n}"
     if use_cache and cache_key in _cache:
         cached_time, cached_data = _cache[cache_key]
@@ -809,10 +807,6 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
     """
     if _SKIP_EASTMONEY:
         return None
-    # ── 优先：SQLite 缓存 ──
-    dbc = _try_sqlite_market_cache()
-    if dbc:
-        return _build_market_response(dbc)
     # 请求沪深两市，带冷却式重试（避免触发东财频率限制）
     secids = ",".join([MARKET_SECIDS["sh"], MARKET_SECIDS["sz"]])
     items = None
