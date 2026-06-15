@@ -191,9 +191,18 @@ EM_PUSH2_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 
 # 板块类型
 SECTOR_TYPE_MAP = {
-    "concept": "m:90+t:2",   # 概念板块
-    "industry": "m:90+t:3",  # 行业板块
+    "concept": "m:90+t:3",   # 概念板块（浏览器实测）
+    "industry": "m:90+t:2",  # 行业板块
     "region": "m:90+t:1",    # 地域板块
+}
+
+# 过滤：股票篮子/指数类概念（无主线参考意义）
+_BASKET_CONCEPTS = {
+    "BK0596", "BK0821", "BK0867",  # 融资融券、MSCI中国、富时罗素
+    "BK0637", "BK0636",              # 深股通、沪股通
+    "BK0878", "BK0883",              # 深成500、中证500
+    "BK0871", "BK0876",              # 上证180、上证50
+    "BK0638",                         # 标普道琼斯A股
 }
 
 # 请求字段 (经实测验证的正确映射)
@@ -569,13 +578,15 @@ def get_sector_flow(
             pass
         return []
 
-    # 去重 + 标准化
+    # 去重 + 标准化 + 过滤篮子概念
     seen = set()
     result = []
     for raw in all_items:
         item = _normalize_item(raw)
         code = item["code"]
         if code in seen:
+            continue
+        if code in _BASKET_CONCEPTS:
             continue
         seen.add(code)
         result.append(item)

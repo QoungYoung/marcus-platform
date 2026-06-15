@@ -159,6 +159,50 @@ const getConceptFundFlowTool = {
   },
 };
 
+const getIndustryFundFlowTool = {
+  name: 'get_industry_fund_flow',
+  description: '获取行业板块实时行情排行（按涨幅或主力资金流向排序）。数据源：东财push2实时(主力/超大单/大单/中单/小单净流入+板块广度+领涨股)。sort_by=pct_change看涨幅榜，sort_by=main_net看资金榜',
+  parameters: Type.Object({
+    limit: Type.Optional(Type.Number({ description: '返回数量，默认15' })),
+    sort_by: Type.Optional(Type.String({ description: '排序字段: pct_change(涨幅排行) / main_net(主力净流入排行)' })),
+  }),
+  async execute(_toolCallId: string, params: { limit?: number; sort_by?: string }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    query.set('type', 'industry');
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.sort_by) query.set('sort_by', params.sort_by);
+    const qs = query.toString();
+    const res = await fetch(`${MARCUS_API}/market/sector-flow${qs ? '?' + qs : ''}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const sectors = data.sectors || [];
+    if (sectors.length === 0) {
+      return { content: [{ type: 'text', text: '暂无行业板块行情数据' }], details: data };
+    }
+    const sortLabel = params.sort_by === 'main_net' ? '主力资金流入排行' : '涨幅排行';
+    const lines = [`📊 行业板块行情 (${sortLabel})`, ''];
+    sectors.forEach((s: any, idx: number) => {
+      const sign = s.pct_change >= 0 ? '+' : '';
+      let line = `${idx + 1}. ${s.name} | ${sign}${s.pct_change.toFixed(2)}% | `;
+      if (s.main_net_fmt) {
+        line += `主力:${s.main_net_fmt}`;
+      } else if (s.main_net) {
+        line += `主力:${(s.main_net / 10000).toFixed(2)}亿`;
+      }
+      if (s.advancing !== undefined) {
+        const ratio = s.total_stocks ? `(${s.advancing}/${s.total_stocks})` : '';
+        line += ` | 📈${s.advancing}📉${s.declining}${ratio}`;
+      }
+      if (s.lead_stock_name) {
+        line += ` | 领涨:${s.lead_stock_name}(${s.lead_stock_code})`;
+      }
+      lines.push(line);
+    });
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 const getConceptMappingTool = {
   name: 'get_concept_mapping',
   description: '查询东方财富概念板块及其成分股。不传参数则列出所有概念，传concept_name则返回该概念下的所有股票',
@@ -925,6 +969,7 @@ const chatTools: AgentTool[] = [
   createTool(getQuoteTool),
   createTool(getPortfolioTool),
   createTool(getConceptFundFlowTool),
+  createTool(getIndustryFundFlowTool),
   createTool(getMarketMoneyflowTool),
   createTool(getConceptMappingTool),
   createTool(getEtfQuoteTool),
@@ -963,7 +1008,7 @@ const tradingTools = chatTools;
 // ===== 可折叠工具调用渲染器 =====
 const COLLAPSIBLE_TOOLS = [
   'get_market_indices', 'get_quote', 'get_portfolio',
-  'get_concept_fund_flow', 'get_market_moneyflow', 'get_concept_mapping',
+  'get_concept_fund_flow', 'get_industry_fund_flow', 'get_market_moneyflow', 'get_concept_mapping',
   'get_etf_quote', 'get_etf_kline', 'get_daily_kline', 'get_moneyflow',
   'get_technical', 'get_fibonacci_levels', 'get_daily_channel', 'get_trade_advice',
   'read_db_table', 'get_db_schema',
@@ -976,6 +1021,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_quote: '查询个股行情',
   get_portfolio: '查看账户持仓',
   get_concept_fund_flow: '概念资金流向',
+  get_industry_fund_flow: '行业资金流向',
   get_market_moneyflow: '大盘资金流向',
   get_concept_mapping: '查询概念成分股',
   get_etf_quote: '查询ETF行情',
@@ -1281,6 +1327,7 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 - get_portfolio: 查看账户持仓和资金
 - get_market_moneyflow: 获取大盘实时资金流向（沪深分开+合计，含买/卖分明细+总成交额+资金性质）
 - get_concept_fund_flow: 获取概念板块实时行情（支持涨幅/主力资金排序，含净流入拆解+板块广度+资金性质+领涨股，默认实时）
+- get_industry_fund_flow: 获取行业板块实时行情（同概念板块，但只包含行业分类。用于判断产业链轮动方向）
 - get_concept_mapping: 查询概念板块及成分股（不传参列所有概念，传concept_name查该概念下的股票）
 - get_etf_quote: 查询ETF基金行情
 - get_etf_kline: 获取ETF历史K线数据（开高低收/量/额）
@@ -1294,7 +1341,7 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 
 当用户要求选股或分析板块时，按以下流程操作：
 
-1. **锁定主线** — 用 get_concept_fund_flow 找出强势板块（大盘跌时还涨、连续资金流入的）
+1. **锁定主线** — 先用 get_concept_fund_flow 找出强势概念板块，再用 get_industry_fund_flow 确认行业轮动方向（大盘跌时还涨、连续资金流入的）
 2. **概念拆解** — 调用 get_concept_mapping(概念名) 获取全部成分股
 3. **行业分层** — 用 read_db_table(stock_pool, where="industry=...") 按行业区分产业链层级：
    同行业归为同一层级（如"机械基件"→上游，"电气设备"→中游，"汽车配件"→下游）

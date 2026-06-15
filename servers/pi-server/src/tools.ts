@@ -209,6 +209,49 @@ export const getConceptMappingTool = {
   },
 };
 
+export const getIndustryFundFlowTool = {
+  name: 'get_industry_fund_flow',
+  label: '行业板块行情',
+  description: '获取行业板块实时行情排行（按涨幅或主力资金流向排序）。数据源：东财push2实时(主力/超大单/大单/中单/小单净流入+板块广度+领涨股)。sort_by=pct_change看涨幅榜，sort_by=main_net看资金榜',
+  parameters: Type.Object({
+    limit: Type.Optional(Type.Number({ description: '返回数量，默认15' })),
+    sort_by: Type.Optional(Type.String({ description: '排序字段: pct_change(涨幅排行) / main_net(主力净流入排行)' })),
+  }),
+  async execute(_toolCallId: string, params: { limit?: number; sort_by?: string }, _signal?: AbortSignal) {
+    const query = new URLSearchParams();
+    query.set('type', 'industry');
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.sort_by) query.set('sort_by', params.sort_by);
+    const qs = query.toString();
+    const data = await apiFetch(`/market/sector-flow${qs ? '?' + qs : ''}`);
+    if (data.error) throw new Error(data.error);
+    const sectors = data.sectors || [];
+    if (sectors.length === 0) {
+      return { content: [{ type: 'text', text: '暂无行业板块行情数据' }], details: data };
+    }
+    const sortLabel = params.sort_by === 'main_net' ? '主力资金流入排行' : '涨幅排行';
+    const lines = [`📊 行业板块行情 (${sortLabel})`, ''];
+    sectors.forEach((s: any, idx: number) => {
+      const sign = s.pct_change >= 0 ? '+' : '';
+      let line = `${idx + 1}. ${s.name} | ${sign}${s.pct_change.toFixed(2)}% | `;
+      if (s.main_net_fmt) {
+        line += `主力:${s.main_net_fmt}`;
+      } else if (s.main_net) {
+        line += `主力:${(s.main_net / 10000).toFixed(2)}亿`;
+      }
+      if (s.advancing !== undefined) {
+        const ratio = s.total_stocks ? `(${s.advancing}/${s.total_stocks})` : '';
+        line += ` | 📈${s.advancing}📉${s.declining}${ratio}`;
+      }
+      if (s.lead_stock_name) {
+        line += ` | 领涨:${s.lead_stock_name}(${s.lead_stock_code})`;
+      }
+      lines.push(line);
+    });
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 export const getEtfQuoteTool = {
   name: 'get_etf_quote',
   label: 'ETF行情',
@@ -935,6 +978,7 @@ export const CHAT_TOOLS = [
   getQuoteTool,
   getPortfolioTool,
   getConceptFundFlowTool,
+  getIndustryFundFlowTool,
   getMarketMoneyflowTool,
   getConceptMappingTool,
   getEtfQuoteTool,

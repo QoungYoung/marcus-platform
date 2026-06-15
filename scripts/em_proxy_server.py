@@ -1,8 +1,8 @@
-"""东财 API 代理服务 — 监听本地端口，转发到 push2.eastmoney.com（curl_cffi + Cookie）"""
+"""东财 API 代理服务 — 监听本地端口，转发到 push2.eastmoney.com"""
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
-import urllib.request
 import json
+import requests as req
 
 COOKIE = "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; st_nvi=W6lpD9Ad7PhFwtvK87DTf930b; nid18=0669c78d6e75a0345b1571c451cbd4b4; nid18_create_time=1777289270410; gviem=K3qwW0bI41sVLDrtqtPBQ2d3c; gviem_create_time=1777289270410"
 
@@ -10,7 +10,6 @@ PORT = 8199
 
 class ProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # 解析路径: /api/qt/clist/get?params... 或 /api/qt/stock/get?params...
         parsed = urllib.parse.urlparse(self.path)
         backend_url = f"https://push2.eastmoney.com{parsed.path}"
         if parsed.query:
@@ -22,13 +21,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"ok")
             return
 
-        from curl_cffi import requests as cffi_req
         try:
-            resp = cffi_req.get(backend_url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            resp = req.get(backend_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0",
+                "Accept": "*/*",
                 "Cookie": COOKIE,
                 "Referer": "https://data.eastmoney.com/zjlx/detail.html",
-            }, impersonate="chrome124", timeout=15)
+            }, timeout=15)
             self.send_response(resp.status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
