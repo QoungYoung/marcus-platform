@@ -83,7 +83,7 @@ _BROWSER_HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9",
-    "Cookie": os.environ.get("EASTMONEY_COOKIE", 
+    "Cookie": _os.environ.get("EASTMONEY_COOKIE", 
         "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; "
         "st_nvi=W6lpD9Ad7PhFwtvK87DTf930b; "
         "nid18=0669c78d6e75a0345b1571c451cbd4b4; "
