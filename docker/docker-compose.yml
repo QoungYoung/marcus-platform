@@ -36,6 +36,7 @@ services:
       MARCUS_WORKSPACE: /app
       PI_SERVER_URL: http://piserver:3001/chat
       DATABASE_URL: postgresql://marcus:${DB_PASSWORD:-marcus123}@postgres:5432/marcus_trading
+      EASTMONEY_COOKIE: ${EASTMONEY_COOKIE}
     ports:
       - "8000:8000"
     volumes:

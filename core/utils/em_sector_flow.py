@@ -83,7 +83,7 @@ _BROWSER_HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9",
-    "Cookie": "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; st_nvi=W6lpD9Ad7PhFwtvK87DTf930b",
+    "Cookie": "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; st_nvi=W6lpD9Ad7PhFwtvK87DTf930b; nid18=0669c78d6e75a0345b1571c451cbd4b4; nid18_create_time=1777289270410; gviem=K3qwW0bI41sVLDrtqtPBQ2d3c; gviem_create_time=1777289270410",
 }
 
 
@@ -92,12 +92,22 @@ _BROWSER_HEADERS = {
 # ═══════════════════════════════════════════════════════
 
 def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
-    """HTTP GET，依次尝试 requests / urllib / curl。"""
+    """HTTP GET，依次尝试 curl_cffi / requests / urllib / curl。"""
     headers = dict(_BROWSER_HEADERS)
     if referer:
         headers["Referer"] = referer
 
-    # ── 第一重：requests（urllib3）──
+    # ── 第一重：curl_cffi（TLS 指纹 + Cookie，绕过反爬）──
+    try:
+        from curl_cffi import requests as cffi_req
+        resp = cffi_req.get(url, headers=headers, impersonate="chrome124", timeout=timeout)
+        if resp.status_code == 200:
+            logger.debug(f"[em] curl_cffi 成功 ({len(resp.text)}B)")
+            return resp.text
+    except Exception:
+        pass
+
+    # ── 第二重：requests（urllib3）──
     if _HAS_REQUESTS:
         try:
             resp = requests.get(url, timeout=timeout, headers=headers)

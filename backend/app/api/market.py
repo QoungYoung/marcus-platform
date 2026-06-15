@@ -489,43 +489,44 @@ def _load_em_flow_persist() -> Optional[dict]:
 
 
 def _fetch_em_flow_cache() -> Optional[dict]:
-    """获取东方财富个股资金流排名（带缓存，强制 IPv4）"""
+    """获取东方财富个股资金流排名（带缓存，curl_cffi + 浏览器 Cookie）"""
     global _em_flow_cache, _em_flow_cache_time
     now = datetime.now()
     if _em_flow_cache and _em_flow_cache_time and (now - _em_flow_cache_time).total_seconds() < _FLOW_CACHE_TTL:
         return _em_flow_cache
 
     try:
-        import urllib.request, urllib.parse, json, ssl, socket
+        import os as _os
+        from curl_cffi import requests as cffi_req
 
-        # 强制 IPv4（Docker 内 IPv6 不通）
-        _orig_getaddrinfo = socket.getaddrinfo
-        def _v4(host, port, family=0, *args, **kwargs):
-            return _orig_getaddrinfo(host, port, socket.AF_INET, *args, **kwargs)
-        socket.getaddrinfo = _v4
-
+        em_cookie = _os.environ.get("EASTMONEY_COOKIE",
+            "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; "
+            "st_nvi=W6lpD9Ad7PhFwtvK87DTf930b; "
+            "nid18=0669c78d6e75a0345b1571c451cbd4b4; "
+            "nid18_create_time=1777289270410; "
+            "gviem=K3qwW0bI41sVLDrtqtPBQ2d3c; "
+            "gviem_create_time=1777289270410"
+        )
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "*/*",
+            "Referer": "https://data.eastmoney.com/zjlx/detail.html",
+            "Cookie": em_cookie,
+        }
         base_url = "https://push2.eastmoney.com/api/qt/clist/get"
         base_params = {
-            "fid": "f3", "po": "0", "pz": "500", "np": "1",
+            "fid": "f3", "po": "0", "pz": "100", "np": "1",
             "fltt": "2", "invt": "2",
-            "ut": "b2884a393a59ad64002292a3e90d46a5",
+            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
             "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
             "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
         }
-        ctx = ssl.create_default_context()
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Referer": "http://data.eastmoney.com/zjlx/detail.html",
-        }
 
         cache: dict = {}
-        for pn in range(1, 15):  # 最多 15 页 × 500 = 7500 只
+        for pn in range(1, 80):
             params = {**base_params, "pn": str(pn)}
-            full_url = base_url + "?" + urllib.parse.urlencode(params)
-            req = urllib.request.Request(full_url, headers=headers)
-            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-                raw = resp.read().decode("utf-8")
-            result = json.loads(raw)
+            resp = cffi_req.get(base_url, params=params, headers=headers, impersonate="chrome124", timeout=15)
+            result = resp.json()
             diff = result.get("data", {}).get("diff", [])
             if not diff:
                 break
