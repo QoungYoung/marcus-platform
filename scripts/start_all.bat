@@ -1,52 +1,18 @@
 @echo off
-REM ============================================
-REM Marcus - Start All Services
-REM ============================================
-setlocal enabledelayedexpansion
+chcp 65001 >nul
+cd /d "%~dp0"
+call "%~dp0..\backend\venv\Scripts\activate.bat"
 
-set ROOT=%~dp0\..
-
+echo ========================================
+echo  Marcus 本地东财代理服务
+echo ========================================
 echo.
-echo ================================================
-echo   Marcus AI Trading Platform - Startup
-echo ================================================
+echo 启动东财 API 代理 :8199
+start "EM Proxy" python em_proxy_server.py
+echo 已启动（新窗口，不要关闭）
 echo.
-
-REM --- Kill existing services on known ports ---
-echo [*] Stopping old processes...
-for %%p in (3001 8000 5173) do (
-    for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%%p " ^| findstr "LISTENING"') do (
-        taskkill /PID %%a /F >nul 2>&1
-    )
-)
-timeout /t 2 >nul
-echo [*] Old processes cleared
-echo.
-
-REM --- 1. Pi Server (Node.js) ---
-echo [1/3] Starting Pi Server (port 3001)...
-start "Marcus-PiServer" cmd /c "cd /d %ROOT%\servers\pi-server && npx tsx src\index.ts"
-timeout /t 5 >nul
-
-REM --- 2. Backend + QQ Bot (Python) ---
-echo [2/3] Starting Backend + QQ Bot (port 8000)...
-start "Marcus-Backend" cmd /c "cd /d %ROOT%\backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
-timeout /t 5 >nul
-
-REM --- 3. Frontend (Vite) ---
-echo [3/3] Starting Frontend (Vite port 5173)...
-start "Marcus-Frontend" cmd /c "cd /d %ROOT%\frontend && npm run dev"
-
-timeout /t 3 >nul
-
-echo.
-echo ================================================
-echo   All services launched!
-echo.
-echo   Pi Server : http://localhost:3001/health
-echo   Backend   : http://localhost:8000/docs
-echo   Frontend  : http://localhost:5173
-echo   QQ Bot    : auto-connected
-echo ================================================
-echo.
+echo ========================================
+echo  代理地址: http://localhost:8199
+echo  服务器通过 FRP 隧道: 81.70.44.68:8199
+echo ========================================
 pause
