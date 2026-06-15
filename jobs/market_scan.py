@@ -480,6 +480,16 @@ DOWNGRADE_CONFIG = {
 }
 
 
+def scan_stance_matches(pi_stance: str, scan_stance_code: str) -> bool:
+    """判断 Pi 立场和扫描立场是否同向（允许差异在1档以内）"""
+    if not pi_stance or not scan_stance_code:
+        return False
+    rank = {'green': 3, 'yellow': 2, 'red': 1}
+    p = rank.get(pi_stance, 2)
+    s = rank.get(scan_stance_code, 2)
+    return abs(p - s) <= 1  # 差异 ≤ 1 档视为同向
+
+
 def check_persistent_downgrade(validation: dict, chain: StrategyChain = None) -> dict:
     """
     检测空头压力是否持续多轮，触发 stance 降级。
@@ -1714,6 +1724,17 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
 
     # Step 9: 硬封顶 Marcus 60% 铁律
     position_limit = min(position_limit, MARCUS_POSITION_CAP)
+
+    # Step 9.1: Pi 立场同步（v1.5：Pi 是唯一决策者，扫描计算值不得低于 Pi 建议值）
+    if chain:
+        pi = chain.get_pi_confirmation()
+        pi_limit = pi.get('position_limit', 0)
+        pi_stance = pi.get('stance', '')
+        if pi_limit > 0 and scan_stance_matches(pi_stance, stance_code):
+            # Pi 和扫描立场同向时，以 Pi 的仓位为准（不低于 Pi）
+            if position_limit < pi_limit:
+                print(f"[Pi同步] 扫描仓位 {position_limit}% < Pi建议 {pi_limit}%，上修至 Pi 值")
+                position_limit = pi_limit
 
     # Step 9.3: 加速降级检测（三信号恶化 → 不等收盘，直接降 red）
     accelerated = check_accelerated_downgrade(validation, fund_flow, chain)
