@@ -372,6 +372,92 @@ def _normalize_item(raw: dict) -> dict:
 # 公开接口
 # ═══════════════════════════════════════════════════════
 
+def _try_sqlite_cache(sector_type: str, top_n: int, sort_by: str) -> Optional[list]:
+    """从 fund_flow_cache.db 读取概念板块资金流缓存（≤3分钟视为有效）"""
+    try:
+        import sqlite3, json
+        from workspace_detector import get_data_dir
+        db = get_data_dir() / "fund_flow_cache.db"
+        if not db.exists():
+            return None
+        conn = sqlite3.connect(str(db), timeout=3)
+        cursor = conn.cursor()
+        # 检查索引缓存的年龄
+        cursor.execute(
+            "SELECT updated_at FROM fund_flow_cache WHERE data_type='concept' AND symbol='__index__'"
+        )
+        idx_row = cursor.fetchone()
+        if not idx_row:
+            conn.close()
+            return None
+        from datetime import datetime
+        age = (datetime.now() - datetime.fromisoformat(idx_row[0])).total_seconds()
+        if age > 300:  # 超过 5 分钟视为过期
+            conn.close()
+            return None
+        # 读取所有概念缓存
+        cursor.execute(
+            "SELECT symbol, data_json FROM fund_flow_cache WHERE data_type='concept' AND symbol!='__index__'"
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        if not rows:
+            return None
+        items = [json.loads(r[1]) for r in rows]
+        items.sort(key=lambda x: x.get(sort_by, 0), reverse=True)
+        return items[:top_n]
+    except Exception:
+        return None
+
+
+def _try_sqlite_market_cache() -> Optional[dict]:
+    """从 fund_flow_cache.db 读取大盘资金流缓存（≤3分钟视为有效）"""
+    try:
+        import sqlite3, json
+        from workspace_detector import get_data_dir
+        db = get_data_dir() / "fund_flow_cache.db"
+        if not db.exists():
+            return None
+        conn = sqlite3.connect(str(db), timeout=3)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data_json, updated_at FROM fund_flow_cache WHERE data_type='market' AND symbol=''"
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        from datetime import datetime
+        age = (datetime.now() - datetime.fromisoformat(row[1])).total_seconds()
+        if age > 300:
+            return None
+        return json.loads(row[0])
+    except Exception:
+        return None
+
+
+def _build_market_response(d: dict) -> dict:
+    """将扁平缓存 dict 还原为 get_market_moneyflow_realtime() 格式"""
+    combined = {
+        "main_net": d.get("main_net", 0),
+        "main_net_fmt": d.get("main_net_fmt", ""),
+        "main_net_rate": d.get("main_net_rate", 0),
+        "super_large_net": d.get("super_large_net", 0),
+        "large_net": d.get("large_net", 0),
+        "medium_net": d.get("medium_net", 0),
+        "small_net": d.get("small_net", 0),
+        "total_amount": d.get("total_amount", 0),
+        "total_amount_fmt": d.get("total_amount_fmt", ""),
+    }
+    return {
+        "sh": {}, "sz": {},
+        "combined": combined,
+        "flow_nature": d.get("flow_nature", "平衡"),
+        "updated_at": datetime.now().isoformat(),
+        "source": "cache(fund_flow_cache.db)",
+    }
+
+
 def get_sector_flow(
     sector_type: Literal["concept", "industry", "region"] = "concept",
     sort_by: str = "main_net",
@@ -397,7 +483,11 @@ def get_sector_flow(
     """
     if _SKIP_EASTMONEY:
         raise RuntimeError("SKIP_EASTMONEY: 东财接口已禁用，请走 Tushare 降级源")
-    # 检查缓存
+    # ── 优先：SQLite 缓存（fund_flow_cache 定时任务落库） ──
+    dbc = _try_sqlite_cache(sector_type, top_n, sort_by)
+    if dbc:
+        return dbc
+    # 检查内存缓存
     cache_key = f"{sector_type}_{sort_by}_{top_n}"
     if use_cache and cache_key in _cache:
         cached_time, cached_data = _cache[cache_key]
@@ -695,6 +785,10 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
     """
     if _SKIP_EASTMONEY:
         return None
+    # ── 优先：SQLite 缓存 ──
+    dbc = _try_sqlite_market_cache()
+    if dbc:
+        return _build_market_response(dbc)
     # 请求沪深两市，带冷却式重试（避免触发东财频率限制）
     secids = ",".join([MARKET_SECIDS["sh"], MARKET_SECIDS["sz"]])
     items = None
