@@ -17,7 +17,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '*/5 9-11,13-14 * * 1-5'
+    expr: '*/5 9-11,13-14 * * 0-4'
     timezone: Asia/Shanghai
   script:
     path: jobs/fund_flow_cache.py
