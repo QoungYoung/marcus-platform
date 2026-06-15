@@ -135,7 +135,8 @@ class SchedulerService:
                 'coalesce': True,
                 'max_instances': 1,
                 'misfire_grace_time': 300,
-            }
+            },
+            timezone='Asia/Shanghai',
         )
 
         # Event listeners
@@ -1548,7 +1549,7 @@ class SchedulerService:
                     'task_id': job.id,
                     'task_name': job.name,
                     'next_run': job.next_run_time.astimezone().isoformat(),
-                    'seconds_until': (job.next_run_time - datetime.now().astimezone()).total_seconds(),
+                    'seconds_until': (job.next_run_time.astimezone() - datetime.now().astimezone()).total_seconds(),
                 })
 
         result.sort(key=lambda x: x['seconds_until'])
