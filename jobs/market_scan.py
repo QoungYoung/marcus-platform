@@ -30,8 +30,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core" / "utils"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "core" / "deepseek"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "paper-trading"))
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 from paper_engine import PaperTradingEngine
-from marcus_trade import MarcusVNPyExecutor
+from app.core.trading.marcus_trade import MarcusVNPyExecutor
 from trade_day_utils import is_today_trade_day
 from xueqiu_engine import XueqiuEngine
 from akshare_engine import AKShareEngine
@@ -1054,7 +1055,7 @@ def screen_candidates_technically(candidates: list) -> dict:
     
     # ── 过滤器拒绝率追踪（遗漏#2）──
     try:
-        from marcus_trade import MarcusVNPyExecutor
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
         scan_round = f"tech_{datetime.now().strftime('%H:%M')}"
         total = len(candidates)
         MarcusVNPyExecutor.log_filter_rejection(scan_round, "MA5站稳", total, sum(1 for c in candidates if c in [p['symbol'] for p in result['passed']]), {'condition': 'close > ma5'})
@@ -1224,7 +1225,7 @@ def assess_candidates(passed_list: list) -> dict:
     
     # ── 过滤器拒绝率追踪（遗漏#2）──
     try:
-        from marcus_trade import MarcusVNPyExecutor
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
         scan_round = f"ai_{datetime.now().strftime('%H:%M')}"
         total = len(passed_list)
         MarcusVNPyExecutor.log_filter_rejection(scan_round, "AI假突破过滤(NO-GO)", total, len(result['passed']), 
