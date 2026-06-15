@@ -98,10 +98,23 @@ _BROWSER_HEADERS = {
 # ═══════════════════════════════════════════════════════
 
 def _http_get(url: str, timeout: int = 10, referer: str = "") -> Optional[str]:
-    """HTTP GET，依次尝试 curl_cffi / requests / urllib / curl。"""
+    """HTTP GET，优先 FRP 代理 → curl_cffi → requests → urllib → curl。"""
     headers = dict(_BROWSER_HEADERS)
     if referer:
         headers["Referer"] = referer
+
+    # ── 第〇重：FRP 本地代理（env EM_PROXY_URL）──
+    proxy_url = _os.environ.get("EM_PROXY_URL", "")
+    if proxy_url:
+        try:
+            parsed = url.replace("https://push2.eastmoney.com", proxy_url)
+            import requests as req
+            resp = req.get(parsed, headers=headers, timeout=timeout)
+            if resp.status_code == 200:
+                logger.debug(f"[em] proxy 成功 ({len(resp.text)}B)")
+                return resp.text
+        except Exception:
+            pass
 
     # ── 第一重：curl_cffi（TLS 指纹 + Cookie，绕过反爬）──
     try:

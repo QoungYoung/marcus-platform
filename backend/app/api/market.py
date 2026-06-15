@@ -4,6 +4,7 @@ Market data API endpoints.
 """
 import logging
 import sys
+import os
 import json
 from datetime import datetime
 from typing import Optional
@@ -488,6 +489,8 @@ def _load_em_flow_persist() -> Optional[dict]:
         return None
 
 
+EM_PROXY_URL = os.environ.get("EM_PROXY_URL", "")  # FRP 隧道代理: http://81.70.44.68:8199
+
 def _safe_float(v):
     try:
         return float(v)
@@ -495,8 +498,99 @@ def _safe_float(v):
         return 0.0
 
 
+def _query_stock_flow(ts_code: str) -> Optional[dict]:
+    """
+    查询单只股票实时资金流（api/qt/stock/get）。
+    secid: 1.600519 (沪) / 0.000878 (深)
+    """
+    code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
+    secid = f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
+    fields = "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f170,f119,f291"
+
+    if EM_PROXY_URL:
+        import requests as req
+        resp = req.get(f"{EM_PROXY_URL}/api/qt/stock/get?secid={secid}&fields={fields}", timeout=10)
+        data = resp.json()
+    else:
+        from curl_cffi import requests as cffi_req
+        resp = cffi_req.get("https://push2.eastmoney.com/api/qt/stock/get",
+            params={"secid": secid, "fields": fields},
+            headers={"User-Agent": "Mozilla/5.0", "Cookie": os.environ.get("EASTMONEY_COOKIE", "")},
+            impersonate="chrome124", timeout=10)
+        data = resp.json()
+
+    d = data.get("data")
+    if not d:
+        return None
+    return {
+        "symbol": code,
+        "name": str(d.get("f14", "")),
+        "price": _safe_float(d.get("f2")),
+        "change_pct": str(d.get("f3", "")),
+        "turnover_rate": str(d.get("f170", "")),
+        "inflow": 0, "outflow": 0,
+        "net_amount": _safe_float(d.get("f62")),
+        "main_net": _safe_float(d.get("f62")),
+        "main_pct": str(d.get("f184", "")),
+        "lg_net": _safe_float(d.get("f66")), "lg_pct": str(d.get("f69", "")),
+        "md_net": _safe_float(d.get("f72")), "md_pct": str(d.get("f75", "")),
+        "sm_net": _safe_float(d.get("f78")), "sm_pct": str(d.get("f81", "")),
+        "xs_net": _safe_float(d.get("f84")), "xs_pct": str(d.get("f87", "")),
+    }
+
+
 def _fetch_em_flow_cache() -> Optional[dict]:
-    """获取东方财富个股资金流排名（带缓存，curl_cffi + 浏览器 Cookie）"""
+    """获取东方财富个股资金流排名"""
+    # ── 优先：本地代理 ──
+    if EM_PROXY_URL:
+        return _fetch_em_via_proxy()
+    return _fetch_em_direct()
+
+
+def _fetch_em_via_proxy() -> Optional[dict]:
+    """通过 FRP 代理获取东方财富数据"""
+    import urllib.request
+    import requests as req
+    cache: dict = {}
+    for pn in range(1, 80):
+        params = {
+            "fid": "f3", "po": "0", "pz": "100", "pn": str(pn), "np": "1",
+            "fltt": "2", "invt": "2",
+            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
+            "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
+            "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
+        }
+        qs = urllib.request.urlencode(params)
+        resp = req.get(f"{EM_PROXY_URL}/api/qt/clist/get?{qs}", timeout=15)
+        result = resp.json()
+        d = result.get("data")
+        if not d:
+            break
+        diff = d.get("diff", [])
+        if not diff:
+            break
+        for row in diff:
+            code = str(row.get("f12", "")).zfill(6)
+            cache[code] = {
+                "symbol": code, "name": str(row.get("f14", "")),
+                "price": _safe_float(row.get("f2")),
+                "change_pct": str(row.get("f3", "")),
+                "main_net": _safe_float(row.get("f62")),
+                "main_pct": str(row.get("f184", "")),
+                "lg_net": _safe_float(row.get("f66")), "lg_pct": str(row.get("f69", "")),
+                "md_net": _safe_float(row.get("f72")), "md_pct": str(row.get("f75", "")),
+                "sm_net": _safe_float(row.get("f78")), "sm_pct": str(row.get("f81", "")),
+                "xs_net": _safe_float(row.get("f84")), "xs_pct": str(row.get("f87", "")),
+            }
+    if cache:
+        global _em_flow_cache, _em_flow_cache_time
+        _em_flow_cache = cache
+        _em_flow_cache_time = datetime.now()
+    return cache
+
+
+def _fetch_em_direct() -> Optional[dict]:
+    """直接获取东方财富个股资金流排名（curl_cffi + 浏览器 Cookie）"""
     global _em_flow_cache, _em_flow_cache_time
     now = datetime.now()
     if _em_flow_cache and _em_flow_cache_time and (now - _em_flow_cache_time).total_seconds() < _FLOW_CACHE_TTL:
@@ -644,7 +738,24 @@ async def get_stock_moneyflow(
     ts_code = _normalize_to_ts_code(symbol)
     bare_code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ").lower()
 
-    # ── 优先：PG 缓存（fund_flow_cache 定时落库）──
+    # ── 优先：东财实时个股接口（api/qt/stock/get）──
+    flow = _query_stock_flow(ts_code)
+    if flow:
+        return ThsMoneyflowResponse(
+            symbol=ts_code, name=flow["name"],
+            price=flow["price"], change_pct=flow["change_pct"],
+            turnover_rate=flow.get("turnover_rate", ""),
+            inflow=0, outflow=0,
+            net_amount=flow["net_amount"],
+            main_net=flow["main_net"], main_pct=flow["main_pct"],
+            lg_net=flow["lg_net"], lg_pct=flow["lg_pct"],
+            md_net=flow["md_net"], md_pct=flow["md_pct"],
+            sm_net=flow["sm_net"], sm_pct=flow["sm_pct"],
+            xs_net=flow["xs_net"], xs_pct=flow["xs_pct"],
+            source="eastmoney_stock_get", updated_at=datetime.now(),
+        )
+
+    # ── 降级：PG 缓存 ──
     cached = _read_flow_cache("individual", bare_code)
     if cached:
         # 适配同花顺格式（inflow/outflow/net_amount）或东财格式（main_net/lg_net...）

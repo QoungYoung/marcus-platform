@@ -86,19 +86,20 @@ def fetch_individual():
     }
 
     count = 0
-    for pn in range(1, 80):
-        params = {**base_params, "pn": str(pn)}
-        resp = cffi_req.get(url, params=params, headers=HEADERS, impersonate="chrome124", timeout=15)
-        result = resp.json()
-        data = result.get("data")
-        if not data:
-            break
-        diff = data.get("diff", [])
-        if not diff:
-            break
-        for d in diff:
-            code = str(d.get("f12", "")).zfill(6)
-            upsert("individual", code, {
+    try:
+        for pn in range(1, 80):
+            params = {**base_params, "pn": str(pn)}
+            resp = cffi_req.get(url, params=params, headers=HEADERS, impersonate="chrome124", timeout=15)
+            result = resp.json()
+            data = result.get("data")
+            if not data:
+                break
+            diff = data.get("diff", [])
+            if not diff:
+                break
+            for d in diff:
+                code = str(d.get("f12", "")).zfill(6)
+                upsert("individual", code, {
                 "symbol": code, "name": str(d.get("f14", "")),
                 "price": _sf(d.get("f2")),
                 "change_pct": str(d.get("f3", "")),
@@ -110,11 +111,12 @@ def fetch_individual():
                 "xs_net": _sf(d.get("f84")), "xs_pct": str(d.get("f87", "")),
             })
             count += 1
-        print(f"  p{pn}: {count}", flush=True)
-        time.sleep(0.3)
-
-    upsert("individual", "__index__", {"count": count})
-    print(f"[fund_flow_cache] individual: {count} 只", flush=True)
+            print(f"  p{pn}: {count}", flush=True)
+            time.sleep(0.3)
+        upsert("individual", "__index__", {"count": count})
+        print(f"[fund_flow_cache] individual: {count} 只", flush=True)
+    except Exception as e:
+        print(f"[fund_flow_cache] 东财不可达（{e}），依赖本地同步的 PG 缓存", flush=True)
 
 
 if __name__ == "__main__":
