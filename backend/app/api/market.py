@@ -388,19 +388,86 @@ async def get_stock_kline(
         raise HTTPException(status_code=500, detail=f"获取K线失败: {str(e)}")
 
 
-# ========== 个股资金流向 API (数据源: 同花顺 akshare, 降级 Tushare) ==========
+# ========== 个股资金流向 API (数据源: 东方财富>同花顺> Tushare) ==========
 
-# 同花顺全量数据缓存（5分钟TTL）
-_ths_flow_cache: Optional[dict] = None
+# 缓存（5分钟TTL）
+_em_flow_cache: Optional[dict] = None       # 东方财富排名
+_em_flow_cache_time: Optional[datetime] = None
+_ths_flow_cache: Optional[dict] = None       # 同花顺即时
 _ths_flow_cache_time: Optional[datetime] = None
-_THS_CACHE_TTL = 300  # 5分钟
+_FLOW_CACHE_TTL = 300  # 5分钟
+
+
+def _fetch_em_flow_cache() -> Optional[dict]:
+    """获取东方财富个股资金流排名（带缓存，分页获取全量 5000+ 只）"""
+    global _em_flow_cache, _em_flow_cache_time
+    now = datetime.now()
+    if _em_flow_cache and _em_flow_cache_time and (now - _em_flow_cache_time).total_seconds() < _FLOW_CACHE_TTL:
+        return _em_flow_cache
+
+    try:
+        import urllib.request, urllib.parse, json, ssl
+
+        base_url = "https://push2.eastmoney.com/api/qt/clist/get"
+        base_params = {
+            "fid": "f3", "po": "0", "pz": "500", "np": "1",
+            "fltt": "2", "invt": "2",
+            "ut": "b2884a393a59ad64002292a3e90d46a5",
+            "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
+            "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
+        }
+        ctx = ssl.create_default_context()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Referer": "http://data.eastmoney.com/zjlx/detail.html",
+        }
+
+        cache: dict = {}
+        for pn in range(1, 15):  # 最多 15 页 × 500 = 7500 只
+            params = {**base_params, "pn": str(pn)}
+            full_url = base_url + "?" + urllib.parse.urlencode(params)
+            req = urllib.request.Request(full_url, headers=headers)
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                raw = resp.read().decode("utf-8")
+            result = json.loads(raw)
+            diff = result.get("data", {}).get("diff", [])
+            if not diff:
+                break
+            for d in diff:
+                code = str(d.get("f12", "")).zfill(6)
+                if code in cache:
+                    continue
+                cache[code] = {
+                    "symbol": code,
+                    "name": str(d.get("f14", "")),
+                    "price": float(d.get("f2", 0) or 0),
+                    "change_pct": str(d.get("f3", "")),
+                    "main_net": float(d.get("f62", 0) or 0),
+                    "main_pct": str(d.get("f184", "")),
+                    "lg_net": float(d.get("f66", 0) or 0),
+                    "lg_pct": str(d.get("f69", "")),
+                    "md_net": float(d.get("f72", 0) or 0),
+                    "md_pct": str(d.get("f75", "")),
+                    "sm_net": float(d.get("f78", 0) or 0),
+                    "sm_pct": str(d.get("f81", "")),
+                    "xs_net": float(d.get("f84", 0) or 0),
+                    "xs_pct": str(d.get("f87", "")),
+                }
+
+        _em_flow_cache = cache
+        _em_flow_cache_time = now
+        print(f"[EM] 分页获取完成: {len(cache)} 只股票", flush=True)
+        return cache
+    except Exception as e:
+        print(f"[EM] 东方财富资金流获取失败: {e}", flush=True)
+        return None
 
 
 def _fetch_ths_flow_cache() -> Optional[dict]:
     """获取同花顺全量个股资金流数据（带缓存）"""
     global _ths_flow_cache, _ths_flow_cache_time
     now = datetime.now()
-    if _ths_flow_cache and _ths_flow_cache_time and (now - _ths_flow_cache_time).total_seconds() < _THS_CACHE_TTL:
+    if _ths_flow_cache and _ths_flow_cache_time and (now - _ths_flow_cache_time).total_seconds() < _FLOW_CACHE_TTL:
         return _ths_flow_cache
 
     try:
@@ -409,7 +476,6 @@ def _fetch_ths_flow_cache() -> Optional[dict]:
         if df is None or df.empty:
             return None
 
-        # 构建 {代码: {字段}} 索引
         cache: dict = {}
         for _, row in df.iterrows():
             code = str(int(row.get("股票代码", 0))).zfill(6)
@@ -470,28 +536,40 @@ async def get_stock_moneyflow(
         and (9, 30) <= (now.hour, now.minute) < (15, 0)
     )
 
-    # ── 交易时段：仅同花顺实时 ──
+    # ── 交易时段：东方财富 → 同花顺 ──
     if is_trading:
-        cache = _fetch_ths_flow_cache()
-        if cache is None:
-            raise HTTPException(status_code=503, detail="同花顺实时资金流接口不可用")
-        if bare_code not in cache:
-            raise HTTPException(
-                status_code=404,
-                detail=f"同花顺实时资金流中未找到 {bare_code}（交易时段仅使用实时数据）"
+        # 优先：东方财富（覆盖全量 + 按订单大小分类）
+        em = _fetch_em_flow_cache()
+        if em and bare_code in em:
+            d = em[bare_code]
+            return ThsMoneyflowResponse(
+                symbol=ts_code, name=d["name"], price=d["price"],
+                change_pct=d["change_pct"], turnover_rate="",
+                inflow=0, outflow=0,
+                net_amount=d["main_net"],
+                main_net=d["main_net"], main_pct=d["main_pct"],
+                lg_net=d["lg_net"], lg_pct=d["lg_pct"],
+                md_net=d["md_net"], md_pct=d["md_pct"],
+                sm_net=d["sm_net"], sm_pct=d["sm_pct"],
+                xs_net=d["xs_net"], xs_pct=d["xs_pct"],
+                source="eastmoney", updated_at=datetime.now(),
             )
-        d = cache[bare_code]
-        return ThsMoneyflowResponse(
-            symbol=ts_code,
-            name=d["name"],
-            price=d["price"],
-            change_pct=d["change_pct"],
-            turnover_rate=d["turnover_rate"],
-            inflow=d["inflow"],
-            outflow=d["outflow"],
-            net_amount=d["net_amount"],
-            source="ths",
-            updated_at=datetime.now(),
+
+        # 降级：同花顺
+        ths = _fetch_ths_flow_cache()
+        if ths and bare_code in ths:
+            d = ths[bare_code]
+            return ThsMoneyflowResponse(
+                symbol=ts_code, name=d["name"], price=d["price"],
+                change_pct=d["change_pct"], turnover_rate=d["turnover_rate"],
+                inflow=d["inflow"], outflow=d["outflow"],
+                net_amount=d["net_amount"],
+                source="ths", updated_at=datetime.now(),
+            )
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"东方财富+同花顺实时资金流中均未找到 {bare_code}"
         )
 
     # ── 降级：Tushare 日频（仅非交易时段或 THS 接口完全不可用时） ──

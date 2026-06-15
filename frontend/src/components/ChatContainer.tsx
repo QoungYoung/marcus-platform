@@ -363,7 +363,7 @@ const getDailyKlineTool = {
 
 const getMoneyflowTool = {
   name: 'get_moneyflow',
-  description: '获取个股实时资金流向（同花顺即时数据：流入/流出/净额+涨跌幅+换手率）。用于判断主力资金是否在入场或出逃',
+  description: '获取个股实时资金流向（东方财富/同花顺即时数据：主力/超大单/大单/中单/小单净流入+净占比）。用于判断主力资金动向',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
   }),
@@ -380,20 +380,26 @@ const getMoneyflowTool = {
       if (abs >= 1e4) return (v / 1e4).toFixed(2) + '万';
       return v.toFixed(2);
     };
-    const netFmt = fmt(data.net_amount);
-    const inflowFmt = fmt(data.inflow);
-    const outflowFmt = fmt(data.outflow);
-    const sign = data.net_amount >= 0 ? '+' : '';
+    const sign = (v: number) => v >= 0 ? '+' : '';
     const lines = [
-      `💰 ${data.symbol}${data.name ? ' ' + data.name : ''} 实时资金流向`,
-      `━━━━━━━━━━━━━━━━━━━━`,
-      `最新价: ${data.price}  |  涨跌幅: ${data.change_pct}  |  换手率: ${data.turnover_rate}`,
-      `━━━━━━━━━━━━━━━━━━━━`,
-      `🔴 流入: ${inflowFmt}  |  🟢 流出: ${outflowFmt}`,
-      `📊 净额: ${sign}${netFmt}`,
-      `━━━━━━━━━━━━━━━━━━━━`,
-      `数据源: ${data.source === 'ths' ? '同花顺(即时)' : 'Tushare(日频降级)'}`,
+      `${data.symbol}${data.name ? ' ' + data.name : ''} 实时资金流向`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `最新价: ${data.price}  |  涨跌幅: ${data.change_pct}%  |  换手率: ${data.turnover_rate || '-'}`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
     ];
+    if (data.source === 'eastmoney') {
+      lines.push(`📊 主力净流入: ${sign(data.main_net)}${fmt(data.main_net)}  (${data.main_pct || '-'}%)`);
+      lines.push(`  ├ 超大单: ${sign(data.lg_net)}${fmt(data.lg_net)}  (${data.lg_pct || '-'}%)`);
+      lines.push(`  ├ 大  单: ${sign(data.md_net)}${fmt(data.md_net)}  (${data.md_pct || '-'}%)`);
+      lines.push(`  ├ 中  单: ${sign(data.sm_net)}${fmt(data.sm_net)}  (${data.sm_pct || '-'}%)`);
+      lines.push(`  └ 小  单: ${sign(data.xs_net)}${fmt(data.xs_net)}  (${data.xs_pct || '-'}%)`);
+    } else {
+      lines.push(`🔴 流入: ${fmt(data.inflow)}  |  🟢 流出: ${fmt(data.outflow)}`);
+      lines.push(`📊 净额: ${sign(data.net_amount)}${fmt(data.net_amount)}`);
+    }
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    const srcMap: Record<string, string> = { eastmoney: '东方财富(即时)', ths: '同花顺(即时)', tushare: 'Tushare(日频降级)' };
+    lines.push(`数据源: ${srcMap[data.source] || data.source}`);
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },
 };

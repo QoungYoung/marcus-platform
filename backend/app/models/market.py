@@ -158,16 +158,28 @@ class ThsMoneyflowRow(BaseModel):
 
 
 class ThsMoneyflowResponse(BaseModel):
-    """同花顺个股资金流响应"""
+    """个股资金流响应（同花顺/东方财富/Tushare）"""
     symbol: str
     name: str = ""
     price: float = 0
     change_pct: str = "0%"
     turnover_rate: str = "0%"
-    inflow: float = 0
-    outflow: float = 0
-    net_amount: float = 0
-    source: str = "ths"        # 数据源标记
+    # 同花顺字段
+    inflow: float = 0          # 流入资金（元）
+    outflow: float = 0         # 流出资金（元）
+    net_amount: float = 0      # 净额（元）
+    # 东方财富字段（主力/超大单/大单/中单/小单）
+    main_net: float = 0        # 主力净流入（元）
+    main_pct: str = ""         # 主力净占比(%)
+    lg_net: float = 0          # 超大单净流入（元）
+    lg_pct: str = ""           # 超大单净占比(%)
+    md_net: float = 0          # 大单净流入（元）
+    md_pct: str = ""           # 大单净占比(%)
+    sm_net: float = 0          # 中单净流入（元）
+    sm_pct: str = ""           # 中单净占比(%)
+    xs_net: float = 0          # 小单净流入（元）
+    xs_pct: str = ""           # 小单净占比(%)
+    source: str = "ths"        # 数据源标记: eastmoney/ths/tushare
     updated_at: datetime
 class TechnicalData(BaseModel):
     """单日技术面因子数据 (Tushare stk_factor_pro 接口)"""
