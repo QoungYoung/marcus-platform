@@ -4,8 +4,10 @@ Market data API endpoints.
 """
 import logging
 import sys
+import json
 from datetime import datetime
 from typing import Optional
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +17,10 @@ from app.models.market import IndexResponse, IndicesResponse, QuoteResponse, Sec
 
 router = APIRouter(prefix="/market", tags=["Market Data"])
 
+# 项目根目录（用于读 SQLite 缓存）
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
 # Import XUEQIU_DIR from workspace_detector (core package)
-from pathlib import Path
 import sys as _sys
 _platform_root = Path(__file__).parent.parent.parent
 _core_dir = _platform_root / "core"
@@ -388,14 +392,117 @@ async def get_stock_kline(
         raise HTTPException(status_code=500, detail=f"获取K线失败: {str(e)}")
 
 
+# ========== 资金流缓存读取（jobs/fund_flow_cache.py 定时落库） ==========
+
+def _read_flow_cache(data_type: str, symbol: str = "") -> Optional[dict]:
+    """从 SQLite 缓存表读取资金流数据"""
+    try:
+        import sqlite3
+        from pathlib import Path
+        db_path = Path(PROJECT_ROOT) / "data" / "fund_flow_cache.db"
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        conn.execute("PRAGMA busy_timeout=3000")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data_json, updated_at FROM fund_flow_cache WHERE data_type=? AND symbol=?",
+            (data_type, symbol),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return json.loads(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def _read_flow_cache_age(data_type: str, symbol: str = "") -> Optional[int]:
+    """获取缓存年龄（秒），None 表示无缓存"""
+    try:
+        import sqlite3
+        from pathlib import Path
+        db_path = Path(PROJECT_ROOT) / "data" / "fund_flow_cache.db"
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT updated_at FROM fund_flow_cache WHERE data_type=? AND symbol=?",
+            (data_type, symbol),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            age = (datetime.now() - datetime.fromisoformat(row[0])).total_seconds()
+            return int(age)
+    except Exception:
+        pass
+    return None
+
+
 # ========== 个股资金流向 API (数据源: 东方财富>同花顺> Tushare) ==========
 
-# 缓存（5分钟TTL）
+# 缓存（内存 5 分钟 TTL + 持久化 EMCache 兜底）
 _em_flow_cache: Optional[dict] = None       # 东方财富排名
 _em_flow_cache_time: Optional[datetime] = None
 _ths_flow_cache: Optional[dict] = None       # 同花顺即时
 _ths_flow_cache_time: Optional[datetime] = None
 _FLOW_CACHE_TTL = 300  # 5分钟
+
+
+def _persist_em_flow(em_cache: dict) -> None:
+    """将东方财富个股资金流缓存持久化到 EMCache"""
+    try:
+        from core.utils.eastmoney_cache import get_em_cache
+        # 只缓存核心字段缩小体积
+        compact = {}
+        for code, d in list(em_cache.items())[:5000]:
+            compact[code] = {
+                "n": d.get("name", ""),
+                "p": d.get("price", 0),
+                "c": d.get("change_pct", ""),
+                "m": d.get("main_net", 0),
+                "mp": d.get("main_pct", ""),
+                "l": d.get("lg_net", 0),
+                "d": d.get("md_net", 0),
+                "s": d.get("sm_net", 0),
+                "x": d.get("xs_net", 0),
+            }
+        get_em_cache().save("em_stock_flow", compact)
+    except Exception:
+        pass
+
+
+def _load_em_flow_persist() -> Optional[dict]:
+    """从 EMCache 加载个股资金流缓存（字段还原）"""
+    try:
+        from core.utils.eastmoney_cache import get_em_cache
+        compact, meta = get_em_cache().load_with_fallback("em_stock_flow")
+        if not compact or not meta.get("from_cache"):
+            return None
+        full: dict = {}
+        for code, d in compact.items():
+            full[code] = {
+                "symbol": code,
+                "name": d.get("n", ""),
+                "price": d.get("p", 0),
+                "change_pct": d.get("c", ""),
+                "main_net": d.get("m", 0),
+                "main_pct": d.get("mp", ""),
+                "lg_net": d.get("l", 0),
+                "lg_pct": "",
+                "md_net": d.get("d", 0),
+                "md_pct": "",
+                "sm_net": d.get("s", 0),
+                "sm_pct": "",
+                "xs_net": d.get("x", 0),
+                "xs_pct": "",
+            }
+        return full
+    except Exception:
+        return None
 
 
 def _fetch_em_flow_cache() -> Optional[dict]:
@@ -456,10 +563,18 @@ def _fetch_em_flow_cache() -> Optional[dict]:
 
         _em_flow_cache = cache
         _em_flow_cache_time = now
+        _persist_em_flow(cache)  # 持久化
         print(f"[EM] 分页获取完成: {len(cache)} 只股票", flush=True)
         return cache
     except Exception as e:
         print(f"[EM] 东方财富资金流获取失败: {e}", flush=True)
+        # 降级：读持久化缓存
+        persist = _load_em_flow_persist()
+        if persist:
+            _em_flow_cache = persist
+            _em_flow_cache_time = now
+            print(f"[EM] 降级使用持久化缓存: {len(persist)} 只", flush=True)
+            return persist
         return None
 
 
@@ -528,6 +643,24 @@ async def get_stock_moneyflow(
     """
     ts_code = _normalize_to_ts_code(symbol)
     bare_code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ").lower()
+
+    # ── 优先：SQLite 缓存（5分钟定时落库）──
+    cached = _read_flow_cache("individual", bare_code)
+    if cached:
+        return ThsMoneyflowResponse(
+            symbol=ts_code, name=cached.get("name", ""),
+            price=cached.get("price", 0),
+            change_pct=str(cached.get("change_pct", "")),
+            turnover_rate="",
+            net_amount=cached.get("main_net", 0),
+            main_net=cached.get("main_net", 0),
+            main_pct=str(cached.get("main_pct", "")),
+            lg_net=cached.get("lg_net", 0), lg_pct=str(cached.get("lg_pct", "")),
+            md_net=cached.get("md_net", 0), md_pct=str(cached.get("md_pct", "")),
+            sm_net=cached.get("sm_net", 0), sm_pct=str(cached.get("sm_pct", "")),
+            xs_net=cached.get("xs_net", 0), xs_pct=str(cached.get("xs_pct", "")),
+            source="cache", updated_at=datetime.now(),
+        )
 
     # ── 判断交易时段 ──
     now = datetime.now()
@@ -955,10 +1088,49 @@ async def get_concept_fund_flow(
                     "data_source": "东财push2(realtime)",
                     "trade_date": dt.now().strftime("%Y%m%d"),
                 }
-            # 东财返回空 → 降级到 Tushare
-            logger.info("[concept-fund-flow] 东财返回 0 条，降级到 Tushare")
+            # 东财返回空 → 降级到缓存 → Tushare
+            logger.info("[concept-fund-flow] 东财返回 0 条，尝试缓存")
         except Exception as e:
-            logger.warning(f"[concept-fund-flow] 东财实时获取失败，降级到Tushare: {e}")
+            logger.warning(f"[concept-fund-flow] 东财实时获取失败: {e}")
+
+    # ── 降级：持久化缓存（东财失败时，读上一次成功的数据） ──
+    if not skip_em:
+        try:
+            from core.utils.eastmoney_cache import get_em_cache
+            em = get_em_cache()
+            cached, meta = em.load_with_fallback("sector_flow", subtype="concept")
+            if meta.get("from_cache") and cached:
+                aged = em.get_aged_minutes("sector_flow", subtype="concept")
+                sectors = []
+                for item in cached[:limit]:
+                    sectors.append({
+                        "name": item.get("name", ""),
+                        "code": item.get("code", ""),
+                        "pct_change": item.get("pct_change", 0),
+                        "main_net": item.get("main_net", 0),
+                        "main_net_rate": item.get("main_net_rate", 0),
+                        "super_large_net": item.get("super_large_net", 0),
+                        "large_net": item.get("large_net", 0),
+                        "medium_net": item.get("medium_net", 0),
+                        "small_net": item.get("small_net", 0),
+                        "advancing": item.get("advancing", 0),
+                        "declining": item.get("declining", 0),
+                        "total_stocks": item.get("total_stocks", 0),
+                        "lead_stock_name": item.get("lead_stock_name", ""),
+                        "lead_stock_code": item.get("lead_stock_code", ""),
+                        "flow_nature": item.get("flow_nature", "平衡"),
+                        "vol": 0, "amount": 0, "turnover_rate": 0, "ts_code": "",
+                    })
+                logger.info(f"[concept-fund-flow] 缓存: {len(sectors)} 个概念 (约{aged:.0f}分钟前)")
+                return {
+                    "sectors": sectors,
+                    "count": len(sectors),
+                    "sort_by": sort_by,
+                    "data_source": f"东财缓存({aged:.0f}分钟前)",
+                    "trade_date": meta.get("cached_at", dt.now().strftime("%Y%m%d"))[:10],
+                }
+        except Exception:
+            pass
 
     # ── 降级：Tushare dc_daily 日频数据 ──
     try:
@@ -1053,6 +1225,15 @@ async def get_moneyflow_mkt(
     """
     from datetime import datetime as dt
 
+    # ── 优先：SQLite 缓存 ──
+    if source == "auto" and not trade_date:
+        cached = _read_flow_cache("market", "")
+        if cached:
+            age = _read_flow_cache_age("market", "")
+            cached["data_source"] = f"缓存(约{age}秒前)"
+            cached["trade_date"] = dt.now().strftime("%Y%m%d")
+            return {"data": cached, "success": True}
+
     # ── 实时数据（东财 push2 ulist.np）──
     # 9:30前 / 16:00后 / 周末跳过实时，走 Tushare
     now = dt.now()
@@ -1105,9 +1286,26 @@ async def get_moneyflow_mkt(
                           "combined": combined,
                           "updated_at": rt["updated_at"]}
                 logger.info(f"[moneyflow-mkt] 东财实时: {data['net_amount_fmt']} | {data['flow_nature']}")
+                # 持久化缓存
+                try:
+                    from core.utils.eastmoney_cache import get_em_cache
+                    get_em_cache().save("market_moneyflow", result)
+                except Exception:
+                    pass
                 return result
         except Exception as e:
-            logger.warning(f"[moneyflow-mkt] 东财实时获取失败，降级到Tushare: {e}")
+            logger.warning(f"[moneyflow-mkt] 东财实时获取失败: {e}")
+            # 降级：读持久化缓存
+            try:
+                from core.utils.eastmoney_cache import get_em_cache
+                cache = get_em_cache()
+                cached, meta = cache.load_with_fallback("market_moneyflow")
+                if meta.get("from_cache"):
+                    aged = cache.get_aged_minutes("market_moneyflow")
+                    logger.warning(f"[moneyflow-mkt] 降级使用缓存 (约{aged:.0f}分钟前)")
+                    return cached
+            except Exception:
+                pass
 
     # ── 降级：Tushare 日频数据 ──
     from pathlib import Path

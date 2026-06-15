@@ -39,4 +39,5 @@ def init_db():
     # 确保所有模型被导入，让它们注册到 Base.metadata
     import app.models.prompt  # noqa: F401
     import app.models.stop_loss_log  # noqa: F401
+    import app.models.fund_flow_cache  # noqa: F401
     Base.metadata.create_all(bind=engine)
