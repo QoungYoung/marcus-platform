@@ -26,6 +26,7 @@ numpy>=1.26.0
 
 # Market Data APIs
 tushare>=1.4.0
+curl_cffi>=0.7.0
 
 # Marcus Skills Dependencies (for importing)
 akshare>=1.12.0

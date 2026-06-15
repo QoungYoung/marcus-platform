@@ -505,7 +505,12 @@ def _query_stock_flow(ts_code: str) -> Optional[dict]:
     """
     code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
     secid = f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
-    fields = "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f170,f119,f291"
+    # stock/get 字段: f137=主力 f140=超大单 f143=大单 f146=中单 f149=小单 (净额)
+    #                 f193=主力% f194=超大单% f195=大单% f196=中单% f197=小单% (占比)
+    fields = ("f12,f14,f2,f3,f170,"
+              "f137,f140,f143,f146,f149,f193,f194,f195,f196,f197,"   # 今日
+              "f434,f435,f436,f437,f438,f454,f455,f456,f457,f458,"   # 5日
+              "f459,f461,f463,f465,f467,f460,f462,f464,f466,f468")  # 10日
 
     if EM_PROXY_URL:
         import requests as req
@@ -522,20 +527,33 @@ def _query_stock_flow(ts_code: str) -> Optional[dict]:
     d = data.get("data")
     if not d:
         return None
+    # 占比是万分比（如 1788 = 17.88%），除以100
     return {
         "symbol": code,
         "name": str(d.get("f14", "")),
         "price": _safe_float(d.get("f2")),
-        "change_pct": str(d.get("f3", "")),
-        "turnover_rate": str(d.get("f170", "")),
+        "change_pct": str(round(_safe_float(d.get("f3")) / 100, 2)) if d.get("f3") else "0",
+        "turnover_rate": str(round(_safe_float(d.get("f170")) / 100, 2)) if d.get("f170") else "0",
         "inflow": 0, "outflow": 0,
-        "net_amount": _safe_float(d.get("f62")),
-        "main_net": _safe_float(d.get("f62")),
-        "main_pct": str(d.get("f184", "")),
-        "lg_net": _safe_float(d.get("f66")), "lg_pct": str(d.get("f69", "")),
-        "md_net": _safe_float(d.get("f72")), "md_pct": str(d.get("f75", "")),
-        "sm_net": _safe_float(d.get("f78")), "sm_pct": str(d.get("f81", "")),
-        "xs_net": _safe_float(d.get("f84")), "xs_pct": str(d.get("f87", "")),
+        "net_amount": _safe_float(d.get("f137")),            # 主力净额
+        "main_net": _safe_float(d.get("f137")),
+        "main_pct": str(round(_safe_float(d.get("f193")) / 100, 2)),
+        "lg_net": _safe_float(d.get("f140")), "lg_pct": str(round(_safe_float(d.get("f194")) / 100, 2)),
+        "md_net": _safe_float(d.get("f143")), "md_pct": str(round(_safe_float(d.get("f195")) / 100, 2)),
+        "sm_net": _safe_float(d.get("f146")), "sm_pct": str(round(_safe_float(d.get("f196")) / 100, 2)),
+        "xs_net": _safe_float(d.get("f149")), "xs_pct": str(round(_safe_float(d.get("f197")) / 100, 2)),
+        # 5日
+        "d5_main_net": _safe_float(d.get("f434")), "d5_main_pct": str(round(_safe_float(d.get("f454")) / 100, 2)),
+        "d5_lg_net": _safe_float(d.get("f435")), "d5_lg_pct": str(round(_safe_float(d.get("f455")) / 100, 2)),
+        "d5_md_net": _safe_float(d.get("f436")), "d5_md_pct": str(round(_safe_float(d.get("f456")) / 100, 2)),
+        "d5_sm_net": _safe_float(d.get("f437")), "d5_sm_pct": str(round(_safe_float(d.get("f457")) / 100, 2)),
+        "d5_xs_net": _safe_float(d.get("f438")), "d5_xs_pct": str(round(_safe_float(d.get("f458")) / 100, 2)),
+        # 10日
+        "d10_main_net": _safe_float(d.get("f459")), "d10_main_pct": str(round(_safe_float(d.get("f460")) / 100, 2)),
+        "d10_lg_net": _safe_float(d.get("f461")), "d10_lg_pct": str(round(_safe_float(d.get("f462")) / 100, 2)),
+        "d10_md_net": _safe_float(d.get("f463")), "d10_md_pct": str(round(_safe_float(d.get("f464")) / 100, 2)),
+        "d10_sm_net": _safe_float(d.get("f465")), "d10_sm_pct": str(round(_safe_float(d.get("f466")) / 100, 2)),
+        "d10_xs_net": _safe_float(d.get("f467")), "d10_xs_pct": str(round(_safe_float(d.get("f468")) / 100, 2)),
     }
 
 
@@ -752,6 +770,16 @@ async def get_stock_moneyflow(
             md_net=flow["md_net"], md_pct=flow["md_pct"],
             sm_net=flow["sm_net"], sm_pct=flow["sm_pct"],
             xs_net=flow["xs_net"], xs_pct=flow["xs_pct"],
+            d5_main_net=flow.get("d5_main_net",0), d5_main_pct=flow.get("d5_main_pct",""),
+            d5_lg_net=flow.get("d5_lg_net",0), d5_lg_pct=flow.get("d5_lg_pct",""),
+            d5_md_net=flow.get("d5_md_net",0), d5_md_pct=flow.get("d5_md_pct",""),
+            d5_sm_net=flow.get("d5_sm_net",0), d5_sm_pct=flow.get("d5_sm_pct",""),
+            d5_xs_net=flow.get("d5_xs_net",0), d5_xs_pct=flow.get("d5_xs_pct",""),
+            d10_main_net=flow.get("d10_main_net",0), d10_main_pct=flow.get("d10_main_pct",""),
+            d10_lg_net=flow.get("d10_lg_net",0), d10_lg_pct=flow.get("d10_lg_pct",""),
+            d10_md_net=flow.get("d10_md_net",0), d10_md_pct=flow.get("d10_md_pct",""),
+            d10_sm_net=flow.get("d10_sm_net",0), d10_sm_pct=flow.get("d10_sm_pct",""),
+            d10_xs_net=flow.get("d10_xs_net",0), d10_xs_pct=flow.get("d10_xs_pct",""),
             source="eastmoney_stock_get", updated_at=datetime.now(),
         )
 
@@ -1340,16 +1368,7 @@ async def get_moneyflow_mkt(
     """
     from datetime import datetime as dt
 
-    # ── 优先：SQLite 缓存 ──
-    if source == "auto" and not trade_date:
-        cached = _read_flow_cache("market", "")
-        if cached:
-            age = _read_flow_cache_age("market", "")
-            cached["data_source"] = f"缓存(约{age}秒前)"
-            cached["trade_date"] = dt.now().strftime("%Y%m%d")
-            return {"data": cached, "success": True}
-
-    # ── 实时数据（东财 push2 ulist.np）──
+    # ── 实时数据（东财 push2 ulist.np，走 FRP 代理）──
     # 9:30前 / 16:00后 / 周末跳过实时，走 Tushare
     now = dt.now()
     before_mkt = now.hour < 9 or (now.hour == 9 and now.minute < 30)

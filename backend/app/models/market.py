@@ -179,6 +179,19 @@ class ThsMoneyflowResponse(BaseModel):
     sm_pct: str = ""           # 中单净占比(%)
     xs_net: float = 0          # 小单净流入（元）
     xs_pct: str = ""           # 小单净占比(%)
+    # 5日/10日参考
+    d5_main_net: float = 0     # 5日主力净额
+    d5_main_pct: str = ""
+    d5_lg_net: float = 0; d5_lg_pct: str = ""
+    d5_md_net: float = 0; d5_md_pct: str = ""
+    d5_sm_net: float = 0; d5_sm_pct: str = ""
+    d5_xs_net: float = 0; d5_xs_pct: str = ""
+    d10_main_net: float = 0    # 10日主力净额
+    d10_main_pct: str = ""
+    d10_lg_net: float = 0; d10_lg_pct: str = ""
+    d10_md_net: float = 0; d10_md_pct: str = ""
+    d10_sm_net: float = 0; d10_sm_pct: str = ""
+    d10_xs_net: float = 0; d10_xs_pct: str = ""
     source: str = "ths"        # 数据源标记: eastmoney/ths/tushare
     updated_at: datetime
 class TechnicalData(BaseModel):

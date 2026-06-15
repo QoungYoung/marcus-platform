@@ -387,18 +387,35 @@ const getMoneyflowTool = {
       `最新价: ${data.price}  |  涨跌幅: ${data.change_pct}%  |  换手率: ${data.turnover_rate || '-'}`,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
     ];
-    if (data.source === 'eastmoney') {
-      lines.push(`📊 主力净流入: ${sign(data.main_net)}${fmt(data.main_net)}  (${data.main_pct || '-'}%)`);
-      lines.push(`  ├ 超大单: ${sign(data.lg_net)}${fmt(data.lg_net)}  (${data.lg_pct || '-'}%)`);
-      lines.push(`  ├ 大  单: ${sign(data.md_net)}${fmt(data.md_net)}  (${data.md_pct || '-'}%)`);
-      lines.push(`  ├ 中  单: ${sign(data.sm_net)}${fmt(data.sm_net)}  (${data.sm_pct || '-'}%)`);
-      lines.push(`  └ 小  单: ${sign(data.xs_net)}${fmt(data.xs_net)}  (${data.xs_pct || '-'}%)`);
+    if (data.source === 'eastmoney' || data.source === 'eastmoney_stock_get') {
+      const fmtRow = (label: string, net: number, pct: string) =>
+        `  ${label}: ${sign(net)}${fmt(net)}  (${pct || '-'}%)`;
+      lines.push('[今日]');
+      lines.push(fmtRow('主力  ', data.main_net, data.main_pct));
+      lines.push(fmtRow('超大单', data.lg_net, data.lg_pct));
+      lines.push(fmtRow('大  单', data.md_net, data.md_pct));
+      lines.push(fmtRow('中  单', data.sm_net, data.sm_pct));
+      lines.push(fmtRow('小  单', data.xs_net, data.xs_pct));
+      if (data.d5_main_net) {
+        lines.push('');
+        lines.push('[5日参考]');
+        lines.push(fmtRow('主力  ', data.d5_main_net, data.d5_main_pct));
+        lines.push(fmtRow('超大单', data.d5_lg_net, data.d5_lg_pct));
+        lines.push(fmtRow('大  单', data.d5_md_net, data.d5_md_pct));
+      }
+      if (data.d10_main_net) {
+        lines.push('');
+        lines.push('[10日参考]');
+        lines.push(fmtRow('主力  ', data.d10_main_net, data.d10_main_pct));
+        lines.push(fmtRow('超大单', data.d10_lg_net, data.d10_lg_pct));
+        lines.push(fmtRow('大  单', data.d10_md_net, data.d10_md_pct));
+      }
     } else {
       lines.push(`🔴 流入: ${fmt(data.inflow)}  |  🟢 流出: ${fmt(data.outflow)}`);
       lines.push(`📊 净额: ${sign(data.net_amount)}${fmt(data.net_amount)}`);
     }
     lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    const srcMap: Record<string, string> = { eastmoney: '东方财富(即时)', ths: '同花顺(即时)', tushare: 'Tushare(日频降级)' };
+    const srcMap: Record<string, string> = { eastmoney_stock_get: '东方财富(实时)', eastmoney: '东方财富(即时)', ths: '同花顺(即时)', tushare: 'Tushare(日频降级)' };
     lines.push(`数据源: ${srcMap[data.source] || data.source}`);
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },
