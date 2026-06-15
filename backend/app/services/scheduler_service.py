@@ -1311,7 +1311,7 @@ class SchedulerService:
         for task_id, task in self.tasks.items():
             # Get next run time
             job = self.scheduler.get_job(task_id)
-            next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+            next_run = job.next_run_time.astimezone().isoformat() if job and job.next_run_time else None
 
             # Get last execution
             last_exec = self._get_last_execution(task_id)
@@ -1340,7 +1340,7 @@ class SchedulerService:
             return None
 
         job = self.scheduler.get_job(task_id)
-        next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+        next_run = job.next_run_time.astimezone().isoformat() if job and job.next_run_time else None
 
         return {
             'id': task.id,
@@ -1547,7 +1547,7 @@ class SchedulerService:
                 result.append({
                     'task_id': job.id,
                     'task_name': job.name,
-                    'next_run': job.next_run_time.isoformat(),
+                    'next_run': job.next_run_time.astimezone().isoformat(),
                     'seconds_until': (job.next_run_time - datetime.now().astimezone()).total_seconds(),
                 })
 
