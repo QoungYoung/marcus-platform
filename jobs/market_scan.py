@@ -1581,15 +1581,14 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
 
     initial = pre_market.get('initial_strategy', {}).copy()
 
-    # Step 1: 初始仓位 — 从盘前策略开始，Pi 确认（Step 9.1）会覆盖
+    # Step 1: 初始仓位 — 从盘前策略起步，Pi 确认（Step 9.1）会最终决定
     position_limit = initial.get('position_limit', 60)
     position_limit = min(position_limit, MARCUS_POSITION_CAP)
-    # 仅当昨日策略因连续亏损/浮盈转亏触发从严风控时才降仓
-    if daily_strategy and daily_strategy.get('action') in ('tighten_risk', 'tighten_stop', 'cautious'):
-        yesterday_limit = daily_strategy.get('position_limit', MARCUS_POSITION_CAP)
-        if yesterday_limit < position_limit:
-            print(f"[策略调整] ⚡ 昨日策略严控（{daily_strategy.get('action')}），仓位 {position_limit}% → {yesterday_limit}%")
-            position_limit = yesterday_limit
+    # （v1.5：昨日风控降仓逻辑已注释，仓位上限仅由 Pi 分析决定）
+    # if daily_strategy and daily_strategy.get('action') in ('tighten_risk', 'tighten_stop', 'cautious'):
+    #     yesterday_limit = daily_strategy.get('position_limit', MARCUS_POSITION_CAP)
+    #     if yesterday_limit < position_limit:
+    #         position_limit = yesterday_limit
 
     # Step 2: 根据验证结果调整（价格行为驱动的调整）
     if validation.get('adjustment_needed'):
