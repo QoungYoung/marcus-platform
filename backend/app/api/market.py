@@ -488,6 +488,13 @@ def _load_em_flow_persist() -> Optional[dict]:
         return None
 
 
+def _safe_float(v):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _fetch_em_flow_cache() -> Optional[dict]:
     """获取东方财富个股资金流排名（带缓存，curl_cffi + 浏览器 Cookie）"""
     global _em_flow_cache, _em_flow_cache_time
@@ -527,7 +534,10 @@ def _fetch_em_flow_cache() -> Optional[dict]:
             params = {**base_params, "pn": str(pn)}
             resp = cffi_req.get(base_url, params=params, headers=headers, impersonate="chrome124", timeout=15)
             result = resp.json()
-            diff = result.get("data", {}).get("diff", [])
+            data = result.get("data")
+            if not data:
+                break
+            diff = data.get("diff", [])
             if not diff:
                 break
             for d in diff:
@@ -537,17 +547,17 @@ def _fetch_em_flow_cache() -> Optional[dict]:
                 cache[code] = {
                     "symbol": code,
                     "name": str(d.get("f14", "")),
-                    "price": float(d.get("f2", 0) or 0),
+                    "price": _safe_float(d.get("f2")),
                     "change_pct": str(d.get("f3", "")),
-                    "main_net": float(d.get("f62", 0) or 0),
+                    "main_net": _safe_float(d.get("f62")),
                     "main_pct": str(d.get("f184", "")),
-                    "lg_net": float(d.get("f66", 0) or 0),
+                    "lg_net": _safe_float(d.get("f66")),
                     "lg_pct": str(d.get("f69", "")),
-                    "md_net": float(d.get("f72", 0) or 0),
+                    "md_net": _safe_float(d.get("f72")),
                     "md_pct": str(d.get("f75", "")),
-                    "sm_net": float(d.get("f78", 0) or 0),
+                    "sm_net": _safe_float(d.get("f78")),
                     "sm_pct": str(d.get("f81", "")),
-                    "xs_net": float(d.get("f84", 0) or 0),
+                    "xs_net": _safe_float(d.get("f84")),
                     "xs_pct": str(d.get("f87", "")),
                 }
 

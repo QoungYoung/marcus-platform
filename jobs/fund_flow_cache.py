@@ -67,6 +67,13 @@ def upsert(data_type: str, symbol: str, data: dict):
     conn.close()
 
 
+def _sf(v):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def fetch_individual():
     """采集全量个股资金流（主力/超大单/大单/中单/小单 + 占比）"""
     url = "https://push2.eastmoney.com/api/qt/clist/get"
@@ -83,21 +90,24 @@ def fetch_individual():
         params = {**base_params, "pn": str(pn)}
         resp = cffi_req.get(url, params=params, headers=HEADERS, impersonate="chrome124", timeout=15)
         result = resp.json()
-        diff = result.get("data", {}).get("diff", [])
+        data = result.get("data")
+        if not data:
+            break
+        diff = data.get("diff", [])
         if not diff:
             break
         for d in diff:
             code = str(d.get("f12", "")).zfill(6)
             upsert("individual", code, {
                 "symbol": code, "name": str(d.get("f14", "")),
-                "price": float(d.get("f2", 0) or 0),
+                "price": _sf(d.get("f2")),
                 "change_pct": str(d.get("f3", "")),
-                "main_net": float(d.get("f62", 0) or 0),
+                "main_net": _sf(d.get("f62")),
                 "main_pct": str(d.get("f184", "")),
-                "lg_net": float(d.get("f66", 0) or 0), "lg_pct": str(d.get("f69", "")),
-                "md_net": float(d.get("f72", 0) or 0), "md_pct": str(d.get("f75", "")),
-                "sm_net": float(d.get("f78", 0) or 0), "sm_pct": str(d.get("f81", "")),
-                "xs_net": float(d.get("f84", 0) or 0), "xs_pct": str(d.get("f87", "")),
+                "lg_net": _sf(d.get("f66")), "lg_pct": str(d.get("f69", "")),
+                "md_net": _sf(d.get("f72")), "md_pct": str(d.get("f75", "")),
+                "sm_net": _sf(d.get("f78")), "sm_pct": str(d.get("f81", "")),
+                "xs_net": _sf(d.get("f84")), "xs_pct": str(d.get("f87", "")),
             })
             count += 1
         print(f"  p{pn}: {count}", flush=True)

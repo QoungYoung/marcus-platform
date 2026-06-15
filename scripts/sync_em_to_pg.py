@@ -23,6 +23,12 @@ cur.execute("CREATE INDEX IF NOT EXISTS idx_ffc_type_time ON fund_flow_cache(dat
 conn.commit()
 print("[PG] connected")
 
+def safe_float(v, default=0.0):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
 # 浏览器 Cookie（从你的 curl 中提取）
 COOKIE = "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; st_nvi=W6lpD9Ad7PhFwtvK87DTf930b; nid18=0669c78d6e75a0345b1571c451cbd4b4; nid18_create_time=1777289270410; gviem=K3qwW0bI41sVLDrtqtPBQ2d3c; gviem_create_time=1777289270410; fullscreengg=1; fullscreengg2=1; websitepoptg_api_time=1781502832785"
 
@@ -52,21 +58,24 @@ for pn in range(1, 80):
     params = {**base_params, "pn": str(pn)}
     resp = cffi_req.get(url, params=params, headers=headers, impersonate="chrome124", timeout=15)
     result = resp.json()
-    diff = result.get("data", {}).get("diff", [])
+    data = result.get("data")
+    if not data:
+        break
+    diff = data.get("diff", [])
     if not diff:
         break
     for d in diff:
         code = str(d.get("f12", "")).zfill(6)
         data = {
             "symbol": code, "name": str(d.get("f14", "")),
-            "price": float(d.get("f2", 0) or 0),
+            "price": safe_float(d.get("f2")),
             "change_pct": str(d.get("f3", "")),
-            "main_net": float(d.get("f62", 0) or 0),
+            "main_net": safe_float(d.get("f62")),
             "main_pct": str(d.get("f184", "")),
-            "lg_net": float(d.get("f66", 0) or 0), "lg_pct": str(d.get("f69", "")),
-            "md_net": float(d.get("f72", 0) or 0), "md_pct": str(d.get("f75", "")),
-            "sm_net": float(d.get("f78", 0) or 0), "sm_pct": str(d.get("f81", "")),
-            "xs_net": float(d.get("f84", 0) or 0), "xs_pct": str(d.get("f87", "")),
+            "lg_net": safe_float(d.get("f66")), "lg_pct": str(d.get("f69", "")),
+            "md_net": safe_float(d.get("f72")), "md_pct": str(d.get("f75", "")),
+            "sm_net": safe_float(d.get("f78")), "sm_pct": str(d.get("f81", "")),
+            "xs_net": safe_float(d.get("f84")), "xs_pct": str(d.get("f87", "")),
         }
         cur.execute(
             "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s,%s,%s,%s) "
