@@ -58,14 +58,13 @@ class MarcusVNPyExecutor:
         
         # 确保数据目录存在
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-    
-    # ── 回撤熔断 ──
-    # 连续亏损计数器（跨会话持久化需要时可以改为文件存储）
-    self._consecutive_losses: int = 0
-    
-    # ── 极端流出日防御 ──
-    self._extreme_outflow_scans: int = 0       # 连续极端流出扫描计数
-    self._extreme_outflow_triggered: bool = False  # 当日是否已触发减仓
+        
+        # ── 回撤熔断 ──
+        self._consecutive_losses: int = 0           # 连续亏损计数器
+        
+        # ── 极端流出日防御 ──
+        self._extreme_outflow_scans: int = 0        # 连续极端流出扫描计数
+        self._extreme_outflow_triggered: bool = False  # 当日是否已触发减仓
     
     def _get_total_drawdown_pct(self) -> float:
         """获取当前总回撤百分比（负数表示亏损）"""
