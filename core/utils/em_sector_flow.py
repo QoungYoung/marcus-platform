@@ -532,33 +532,15 @@ def get_sector_flow(
     }
     sort_field = sort_field_map.get(sort_by, "f62")
 
-    # 请求 2 页确保有足够数据（每页最多 200）
-    all_items = []
-    for page in range(1, 3):
-        items = _fetch_raw(
-            sector_type=sector_type,
-            sort_field=sort_field,
-            sort_order=1,  # 降序
-            page=page,
-            page_size=min(top_n * 2, 200),
-        )
-        if not items and page == 1:
-            # 首页失败 → 冷却后重试一次（避免触发东财频率限制）
-            cooldown = 20 + random.uniform(0, 5)
-            logger.info(f"[em_sector_flow] 首页失败，冷却 {cooldown:.0f}s 后重试...")
-            time.sleep(cooldown)
-            items = _fetch_raw(
-                sector_type=sector_type,
-                sort_field=sort_field,
-                sort_order=1,
-                page=page,
-                page_size=min(top_n * 2, 200),
-            )
-        if not items:
-            break
-        all_items.extend(items)
-        if len(items) < min(top_n * 2, 200):
-            break
+    # 只取一页 50 条
+    all_items = _fetch_raw(
+        sector_type=sector_type,
+        sort_field=sort_field,
+        sort_order=1,
+        page=1,
+        page_size=50,
+    ) or []
+
 
     # ── 东财缓存回退：所有渠道（requests/urllib/curl）均失败 → 返回今日上一次缓存 ──
     if not all_items:

@@ -22,31 +22,34 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            print(f"[em_proxy] >> {parsed.path[:30]}...", flush=True)
             resp = req.get(backend_url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0",
                 "Accept": "*/*",
                 "Cookie": COOKIE,
                 "Referer": "https://data.eastmoney.com/zjlx/detail.html",
-            }, timeout=15)
+            }, timeout=(10, 30))  # 10s 连接, 30s 读取
             self.send_response(resp.status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(resp.content)
+            content = resp.content
+            self.wfile.write(content)
+            print(f"[em_proxy] << {resp.status_code} {len(content)}B", flush=True)
         except Exception as e:
+            print(f"[em_proxy] !! {type(e).__name__}: {e}", flush=True)
             self.send_response(502)
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode())
 
     def log_message(self, format, *args):
-        print(f"[em_proxy] {self.client_address[0]} - {args[0]}")
+        pass  # 用上面的 print 替代
 
 
 if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", PORT), ProxyHandler)
-    print(f"[em_proxy] 东财代理服务已启动: http://localhost:{PORT}")
-    print(f"[em_proxy] 转发目标: push2.eastmoney.com")
+    print(f"[em_proxy] 东财代理服务已启动: http://localhost:{PORT}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n[em_proxy] 已停止")
+        print("\n[em_proxy] 已停止", flush=True)
