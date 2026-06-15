@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """资金流缓存定时任务 — 采集东方财富实时资金流，落 PostgreSQL"""
 import sys
+import os
 import json
 import time
 from datetime import datetime
