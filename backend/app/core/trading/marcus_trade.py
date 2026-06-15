@@ -131,11 +131,16 @@ class MarcusVNPyExecutor:
         if main_net_outflow_billion > 800:
             self._extreme_outflow_scans += 1
             result["scans"] = self._extreme_outflow_scans
-            if self._extreme_outflow_scans >= 3 and not self._extreme_outflow_triggered:
+            # v1.5: 渐进式防御
+            if self._extreme_outflow_scans == 1:
+                result["action"] = "1轮→仓位保留70%"
+            elif self._extreme_outflow_scans == 2:
+                result["action"] = "2轮→仓位保留40%"
+            elif self._extreme_outflow_scans >= 3 and not self._extreme_outflow_triggered:
                 self._extreme_outflow_triggered = True
                 result["triggered"] = True
-                result["action"] = "尾盘14:30前对所有非T+1锁定持仓减仓50%"
-                print(f"[极端流出] ⚠️ 连续 {self._extreme_outflow_scans} 轮确认全市场主力净流出 > 800亿，触发强制减仓！", file=sys.stderr)
+                result["action"] = "3轮→仓位保留20%"
+                print(f"[极端流出] ⚠️ 连续 {self._extreme_outflow_scans} 轮确认全市场主力净流出 > 800亿，渐进防御已触发3轮！", file=sys.stderr)
         else:
             # 中断连续性（非极端流出轮次重置计数器）
             if self._extreme_outflow_scans > 0:
@@ -146,13 +151,25 @@ class MarcusVNPyExecutor:
     
     def execute_extreme_outflow_defense(self) -> list:
         """
-        极端流出日强制减仓：对所有非 T+1 锁定持仓减仓 50%。
+        v1.5：极端流出日渐进式强制减仓。
+        - 第1轮扫描：保留70%（减仓30%）
+        - 第2轮扫描：保留40%（减仓60%）
+        - 第3轮扫描：保留20%（减仓80%）
         在尾盘 14:30 前由调度器调用。
         
         Returns:
             [{"symbol": str, "sold_volume": int, "reason": str}, ...]
         """
         results = []
+        # 根据扫描轮次决定保留比例
+        scans = self._extreme_outflow_scans
+        if scans == 1:
+            keep_ratio = 0.70
+        elif scans == 2:
+            keep_ratio = 0.40
+        else:
+            keep_ratio = 0.20
+        
         try:
             today_buy = self._get_today_buy_symbols()
             positions = self.get_positions()
@@ -166,7 +183,9 @@ class MarcusVNPyExecutor:
                     print(f"[极端流出防御] T+1 锁定，跳过 {symbol}", file=sys.stderr)
                     continue
                 
-                sell_vol = max(100, int(total_vol * 0.5 / 100) * 100)  # 50% 取整百股
+                sell_ratio = 1.0 - keep_ratio
+                sell_vol = max(100, int(total_vol * sell_ratio / 100) * 100)
+                sell_vol = min(sell_vol, total_vol)
                 if sell_vol < 100:
                     continue
                 

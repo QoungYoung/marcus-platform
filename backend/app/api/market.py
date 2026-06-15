@@ -778,11 +778,12 @@ async def get_concept_fund_flow(
     """
     from datetime import datetime as dt
 
-    # ── 判断是否应该跳过东财实接口（16:00 后 / 周末） ──
+    # ── 判断是否应该跳过东财实时接口（9:30前 / 16:00后 / 周末） ──
     now = dt.now()
-    skip_em = now.hour >= 16 or now.weekday() >= 5  # 16点后数据已定型，周末无实数据
+    before_market = now.hour < 9 or (now.hour == 9 and now.minute < 30)
+    skip_em = before_market or now.hour >= 16 or now.weekday() >= 5
     if skip_em:
-        logger.info(f"[concept-fund-flow] 已过 16:00 或非交易日，跳过东财实接口，走 Tushare")
+        logger.info(f"[concept-fund-flow] {'盘前' if before_market else '已过16:00或非交易日'}，跳过东财实时接口，走 Tushare")
 
     # ── 优先：东财 push2 实时接口（仅在 16:00 前尝试） ──
     if _EM_FLOW_AVAILABLE and not skip_em:
@@ -932,9 +933,10 @@ async def get_moneyflow_mkt(
     from datetime import datetime as dt
 
     # ── 实时数据（东财 push2 ulist.np）──
-    # 16:00 后 / 周末跳过实时，走 Tushare
+    # 9:30前 / 16:00后 / 周末跳过实时，走 Tushare
     now = dt.now()
-    skip_em = now.hour >= 16 or now.weekday() >= 5
+    before_mkt = now.hour < 9 or (now.hour == 9 and now.minute < 30)
+    skip_em = before_mkt or now.hour >= 16 or now.weekday() >= 5
     if source in ("auto", "realtime") and not trade_date and _EM_FLOW_AVAILABLE and not skip_em:
         try:
             from utils.em_sector_flow import get_market_moneyflow_realtime
@@ -1369,6 +1371,11 @@ async def get_sector_flow_endpoint(
     """
     if not _EM_FLOW_AVAILABLE:
         raise HTTPException(status_code=503, detail="东财实时板块资金流模块不可用")
+
+    # 9:30前 / 16:00后 / 周末 → 拒绝实时查询
+    now = datetime.now()
+    if now.hour < 9 or (now.hour == 9 and now.minute < 30) or now.hour >= 16 or now.weekday() >= 5:
+        raise HTTPException(status_code=503, detail="东财实时接口仅在交易时段 9:30-16:00 可用")
 
     try:
         sectors = get_sector_flow(
