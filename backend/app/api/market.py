@@ -392,27 +392,18 @@ async def get_stock_kline(
         raise HTTPException(status_code=500, detail=f"获取K线失败: {str(e)}")
 
 
-# ========== 资金流缓存读取（jobs/fund_flow_cache.py 定时落库） ==========
+# ========== 资金流缓存读取（jobs/fund_flow_cache.py 定时落 PostgreSQL） ==========
 
 def _read_flow_cache(data_type: str, symbol: str = "") -> Optional[dict]:
-    """从 SQLite 缓存表读取资金流数据"""
+    """从 PostgreSQL 缓存表读取资金流数据"""
     try:
-        import sqlite3
-        from pathlib import Path
-        db_path = Path(PROJECT_ROOT) / "data" / "fund_flow_cache.db"
-        if not db_path.exists():
-            return None
-        conn = sqlite3.connect(str(db_path), timeout=5)
-        conn.execute("PRAGMA busy_timeout=3000")
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT data_json, updated_at FROM fund_flow_cache WHERE data_type=? AND symbol=?",
-            (data_type, symbol),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        from app.database import SessionLocal
+        from app.models.fund_flow_cache import FundFlowCache
+        db = SessionLocal()
+        row = db.query(FundFlowCache).filter_by(data_type=data_type, symbol=symbol).first()
+        db.close()
         if row:
-            return json.loads(row[0])
+            return json.loads(row.data_json)
     except Exception:
         pass
     return None
@@ -421,21 +412,13 @@ def _read_flow_cache(data_type: str, symbol: str = "") -> Optional[dict]:
 def _read_flow_cache_age(data_type: str, symbol: str = "") -> Optional[int]:
     """获取缓存年龄（秒），None 表示无缓存"""
     try:
-        import sqlite3
-        from pathlib import Path
-        db_path = Path(PROJECT_ROOT) / "data" / "fund_flow_cache.db"
-        if not db_path.exists():
-            return None
-        conn = sqlite3.connect(str(db_path), timeout=5)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT updated_at FROM fund_flow_cache WHERE data_type=? AND symbol=?",
-            (data_type, symbol),
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if row:
-            age = (datetime.now() - datetime.fromisoformat(row[0])).total_seconds()
+        from app.database import SessionLocal
+        from app.models.fund_flow_cache import FundFlowCache
+        db = SessionLocal()
+        row = db.query(FundFlowCache).filter_by(data_type=data_type, symbol=symbol).first()
+        db.close()
+        if row and row.updated_at:
+            age = (datetime.now() - row.updated_at).total_seconds()
             return int(age)
     except Exception:
         pass

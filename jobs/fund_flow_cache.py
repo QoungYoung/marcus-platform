@@ -1,39 +1,33 @@
 #!/usr/bin/env python3
-"""
-资金流缓存定时任务 — 每 5 分钟采集东方财富实时资金流，落库供所有接口读取。
-
-采集三类数据:
-  individual  — 个股资金流 (主力/超大单/大单/中单/小单)
-  market     — 大盘资金流 (沪深两市合计)
-  concept    — 概念板块资金流 (Top 50)
-"""
+"""资金流缓存定时任务 — 采集东方财富实时资金流，落 PostgreSQL"""
 import sys
 import json
 import time
 from datetime import datetime
 from pathlib import Path
 
-# 确保 core/ 和 backend/ 都在 sys.path 上
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core"))
 
-import sqlite3
+import psycopg2
 
-DATA_DIR = Path(PROJECT_ROOT) / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / "fund_flow_cache.db"
+# PostgreSQL 连接 — Docker 内 postgres 是服务名
+DB_URL = "postgresql://marcus:password@postgres:5432/marcus_trading"
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL)
 
 
 def init_db():
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn = get_conn()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS fund_flow_cache (
-            data_type TEXT NOT NULL,
-            symbol TEXT NOT NULL DEFAULT '',
+            data_type VARCHAR(32) NOT NULL,
+            symbol VARCHAR(32) NOT NULL DEFAULT '',
             data_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
             PRIMARY KEY (data_type, symbol)
         )
     """)
@@ -45,11 +39,11 @@ def init_db():
 
 
 def upsert_cache(data_type: str, symbol: str, data: dict):
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA busy_timeout=10000")
+    conn = get_conn()
     conn.execute(
-        "INSERT OR REPLACE INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (?, ?, ?, ?)",
-        (data_type, symbol, json.dumps(data, ensure_ascii=False), datetime.now().isoformat()),
+        "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
+        (data_type, symbol, json.dumps(data, ensure_ascii=False), datetime.now()),
     )
     conn.commit()
     conn.close()
@@ -76,11 +70,9 @@ def fetch_market_flow():
                 "source": rt["source"],
             }
             upsert_cache("market", "", data)
-            print(f"[fund_flow_cache] market: {data['main_net_fmt']} | {data['flow_nature']}", flush=True)
-            return True
+            print(f"[fund_flow_cache] market: {data['main_net_fmt']}", flush=True)
     except Exception as e:
         print(f"[fund_flow_cache] market FAIL: {e}", flush=True)
-    return False
 
 
 # ── 2. 概念资金流 ──
@@ -107,13 +99,10 @@ def fetch_concept_flow():
                     "lead_stock_name": item.get("lead_stock_name", ""),
                     "lead_stock_code": item.get("lead_stock_code", ""),
                 })
-            # 同时存一份全量索引
-            upsert_cache("concept", "__index__", {"count": len(items), "top_names": [i.get("name", "") for i in items[:10]]})
+            upsert_cache("concept", "__index__", {"count": len(items)})
             print(f"[fund_flow_cache] concept: {len(items)} 个", flush=True)
-            return True
     except Exception as e:
         print(f"[fund_flow_cache] concept FAIL: {e}", flush=True)
-    return False
 
 
 # ── 3. 个股资金流 ──
@@ -124,7 +113,7 @@ def fetch_individual_flow():
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         ctx = ssl.create_default_context()
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "User-Agent": "Mozilla/5.0",
             "Referer": "http://data.eastmoney.com/zjlx/detail.html",
         }
         base_params = {
@@ -165,21 +154,18 @@ def fetch_individual_flow():
                     "xs_pct": str(d.get("f87", "")),
                 })
                 count += 1
-        # 全量索引
         upsert_cache("individual", "__index__", {"count": count})
         print(f"[fund_flow_cache] individual: {count} 只", flush=True)
-        return True
     except Exception as e:
         print(f"[fund_flow_cache] individual FAIL: {e}", flush=True)
-    return False
 
 
-# ── main ──
 if __name__ == "__main__":
     init_db()
     start = time.time()
     print(f"[fund_flow_cache] === {datetime.now().strftime('%H:%M:%S')} 开始 ===", flush=True)
-    fetch_market_flow()
-    fetch_concept_flow()
+    # 随机延迟 3-8s，避免与 market_scan 并发抢东财接口
+    time.sleep(3 + hash(datetime.now().strftime('%S')) % 5)
     fetch_individual_flow()
+    # 大盘和概念由 market_scan 采集，此处不再重复请求以避免并发冲突
     print(f"[fund_flow_cache] === 完成 ({time.time() - start:.1f}s) ===", flush=True)

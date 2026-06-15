@@ -373,33 +373,29 @@ def _normalize_item(raw: dict) -> dict:
 # ═══════════════════════════════════════════════════════
 
 def _try_sqlite_cache(sector_type: str, top_n: int, sort_by: str) -> Optional[list]:
-    """从 fund_flow_cache.db 读取概念板块资金流缓存（≤3分钟视为有效）"""
+    """从 PostgreSQL fund_flow_cache 读取概念板块资金流缓存（≤5分钟视为有效）"""
     try:
-        import sqlite3, json
-        from workspace_detector import get_data_dir
-        db = get_data_dir() / "fund_flow_cache.db"
-        if not db.exists():
-            return None
-        conn = sqlite3.connect(str(db), timeout=3)
-        cursor = conn.cursor()
-        # 检查索引缓存的年龄
-        cursor.execute(
-            "SELECT updated_at FROM fund_flow_cache WHERE data_type='concept' AND symbol='__index__'"
+        import json, os
+        from datetime import datetime
+        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:password@postgres:5432/marcus_trading")
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT data_json, updated_at FROM fund_flow_cache WHERE data_type='concept' AND symbol='__index__'"
         )
-        idx_row = cursor.fetchone()
+        idx_row = cur.fetchone()
         if not idx_row:
             conn.close()
             return None
-        from datetime import datetime
-        age = (datetime.now() - datetime.fromisoformat(idx_row[0])).total_seconds()
-        if age > 300:  # 超过 5 分钟视为过期
+        age = (datetime.now() - idx_row[1]).total_seconds()
+        if age > 300:
             conn.close()
             return None
-        # 读取所有概念缓存
-        cursor.execute(
+        cur.execute(
             "SELECT symbol, data_json FROM fund_flow_cache WHERE data_type='concept' AND symbol!='__index__'"
         )
-        rows = cursor.fetchall()
+        rows = cur.fetchall()
         conn.close()
         if not rows:
             return None
@@ -411,24 +407,22 @@ def _try_sqlite_cache(sector_type: str, top_n: int, sort_by: str) -> Optional[li
 
 
 def _try_sqlite_market_cache() -> Optional[dict]:
-    """从 fund_flow_cache.db 读取大盘资金流缓存（≤3分钟视为有效）"""
+    """从 PostgreSQL fund_flow_cache 读取大盘资金流缓存（≤5分钟视为有效）"""
     try:
-        import sqlite3, json
-        from workspace_detector import get_data_dir
-        db = get_data_dir() / "fund_flow_cache.db"
-        if not db.exists():
-            return None
-        conn = sqlite3.connect(str(db), timeout=3)
-        cursor = conn.cursor()
-        cursor.execute(
+        import json, os
+        from datetime import datetime
+        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:password@postgres:5432/marcus_trading")
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute(
             "SELECT data_json, updated_at FROM fund_flow_cache WHERE data_type='market' AND symbol=''"
         )
-        row = cursor.fetchone()
+        row = cur.fetchone()
         conn.close()
         if not row:
             return None
-        from datetime import datetime
-        age = (datetime.now() - datetime.fromisoformat(row[1])).total_seconds()
+        age = (datetime.now() - row[1]).total_seconds()
         if age > 300:
             return None
         return json.loads(row[0])
@@ -566,12 +560,13 @@ def get_sector_flow(
     # 更新内存缓存
     _cache[cache_key] = (time.time(), result)
     
-    # ── 东财缓存：成功获取 → 存入持久缓存（用于 API 不可达时回退）──
+    # ── 东财缓存 → EMCache + PostgreSQL ──
     try:
         from core.utils.eastmoney_cache import get_em_cache
         get_em_cache().save("sector_flow", result, subtype=sector_type)
     except Exception:
         pass
+    _save_sector_to_pg(result, sector_type)
 
     return result
 
@@ -843,7 +838,7 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
 
     flow_nature = classify_flow_nature(combined["main_net"], combined.get("main_net_rate", 0))
 
-    return {
+    result = {
         "sh": sh_data,
         "sz": sz_data,
         "combined": combined,
@@ -851,6 +846,8 @@ def get_market_moneyflow_realtime() -> Optional[dict]:
         "updated_at": datetime.now().isoformat(),
         "source": "em_push2_ulist_realtime",
     }
+    _save_market_to_pg(result)
+    return result
 
 
 # ═══════════════════════════════════════════════════════
@@ -878,6 +875,84 @@ def classify_flow_nature(main_net: float, main_net_rate: float) -> str:
         return "温和流出"
     else:
         return "平衡"
+
+
+# ═══════════════════════════════════════════════════════
+# PostgreSQL 持久化（market_scan 调用时同步落库）
+# ═══════════════════════════════════════════════════════
+
+def _save_sector_to_pg(items: list, sector_type: str):
+    """将板块资金流写入 fund_flow_cache 表"""
+    try:
+        import json, os
+        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:password@postgres:5432/marcus_trading")
+        import psycopg2
+        from datetime import datetime
+        conn = psycopg2.connect(db_url)
+        for item in items:
+            name = item.get("name", "")
+            data = {
+                "name": name, "code": item.get("code", ""),
+                "pct_change": item.get("pct_change", 0),
+                "main_net": item.get("main_net", 0),
+                "main_net_rate": item.get("main_net_rate", 0),
+                "super_large_net": item.get("super_large_net", 0),
+                "large_net": item.get("large_net", 0),
+                "medium_net": item.get("medium_net", 0),
+                "small_net": item.get("small_net", 0),
+                "advancing": item.get("advancing", 0),
+                "declining": item.get("declining", 0),
+                "total_stocks": item.get("total_stocks", 0),
+                "lead_stock_name": item.get("lead_stock_name", ""),
+                "lead_stock_code": item.get("lead_stock_code", ""),
+            }
+            conn.execute(
+                "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s,%s,%s,%s) "
+                "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
+                ("concept", name, json.dumps(data, ensure_ascii=False), datetime.now()),
+            )
+        conn.execute(
+            "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s,%s,%s,%s) "
+            "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
+            ("concept", "__index__", json.dumps({"count": len(items)}), datetime.now()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _save_market_to_pg(data: dict):
+    """将大盘资金流写入 fund_flow_cache 表"""
+    try:
+        import json, os
+        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:password@postgres:5432/marcus_trading")
+        import psycopg2
+        from datetime import datetime
+        conn = psycopg2.connect(db_url)
+        combined = data.get("combined", data)
+        flat = {
+            "main_net": combined.get("main_net", 0),
+            "main_net_fmt": combined.get("main_net_fmt", ""),
+            "main_net_rate": combined.get("main_net_rate", 0),
+            "super_large_net": combined.get("super_large_net", 0),
+            "large_net": combined.get("large_net", 0),
+            "medium_net": combined.get("medium_net", 0),
+            "small_net": combined.get("small_net", 0),
+            "total_amount": combined.get("total_amount", 0),
+            "total_amount_fmt": combined.get("total_amount_fmt", ""),
+            "flow_nature": data.get("flow_nature", "平衡"),
+            "source": data.get("source", ""),
+        }
+        conn.execute(
+            "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s,%s,%s,%s) "
+            "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
+            ("market", "", json.dumps(flat, ensure_ascii=False), datetime.now()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════
