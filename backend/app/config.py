@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # Database
-    DATABASE_URL: str = "postgresql://marcus:password@localhost:5432/marcus_trading"
+    DATABASE_URL: str = "postgresql://marcus:marcus123@localhost:5432/marcus_trading"
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Security
