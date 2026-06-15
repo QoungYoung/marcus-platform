@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "core"))
 import psycopg2
 
 # PostgreSQL 连接 — Docker 内 postgres 是服务名
-DB_URL = "postgresql://marcus:marcus123@postgres:5432/marcus_trading"
+DB_URL = os.environ["DATABASE_URL"]
 
 
 def get_conn():

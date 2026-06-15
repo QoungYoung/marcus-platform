@@ -377,7 +377,7 @@ def _try_sqlite_cache(sector_type: str, top_n: int, sort_by: str) -> Optional[li
     try:
         import json, os
         from datetime import datetime
-        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        db_url = os.environ.get("DATABASE_URL", os.environ["DATABASE_URL"])
         import psycopg2
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
@@ -411,7 +411,7 @@ def _try_sqlite_market_cache() -> Optional[dict]:
     try:
         import json, os
         from datetime import datetime
-        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        db_url = os.environ.get("DATABASE_URL", os.environ["DATABASE_URL"])
         import psycopg2
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
@@ -885,7 +885,7 @@ def _save_sector_to_pg(items: list, sector_type: str):
     """将板块资金流写入 fund_flow_cache 表"""
     try:
         import json, os
-        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        db_url = os.environ.get("DATABASE_URL", os.environ["DATABASE_URL"])
         import psycopg2
         from datetime import datetime
         conn = psycopg2.connect(db_url)
@@ -927,7 +927,7 @@ def _save_market_to_pg(data: dict):
     """将大盘资金流写入 fund_flow_cache 表"""
     try:
         import json, os
-        db_url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        db_url = os.environ.get("DATABASE_URL", os.environ["DATABASE_URL"])
         import psycopg2
         from datetime import datetime
         conn = psycopg2.connect(db_url)
