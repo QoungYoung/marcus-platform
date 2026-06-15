@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.market import IndexResponse, IndicesResponse, QuoteResponse, SectorResponse, SectorsResponse, GlobalMarketResponse, GlobalIndexResponse, CommodityResponse, KlineData, KlineResponse, MoneyflowData, MoneyflowResponse, TechnicalData, TechnicalResponse, ProBarData, ProBarResponse
+from app.models.market import IndexResponse, IndicesResponse, QuoteResponse, SectorResponse, SectorsResponse, GlobalMarketResponse, GlobalIndexResponse, CommodityResponse, KlineData, KlineResponse, MoneyflowData, MoneyflowResponse, TechnicalData, TechnicalResponse, ProBarData, ProBarResponse, ThsMoneyflowResponse
 
 router = APIRouter(prefix="/market", tags=["Market Data"])
 
@@ -388,99 +388,142 @@ async def get_stock_kline(
         raise HTTPException(status_code=500, detail=f"获取K线失败: {str(e)}")
 
 
-# ========== 资金流向 API (数据源: Tushare moneyflow) ==========
+# ========== 个股资金流向 API (数据源: 同花顺 akshare, 降级 Tushare) ==========
 
-@router.get("/moneyflow/{symbol}", response_model=MoneyflowResponse)
+# 同花顺全量数据缓存（5分钟TTL）
+_ths_flow_cache: Optional[dict] = None
+_ths_flow_cache_time: Optional[datetime] = None
+_THS_CACHE_TTL = 300  # 5分钟
+
+
+def _fetch_ths_flow_cache() -> Optional[dict]:
+    """获取同花顺全量个股资金流数据（带缓存）"""
+    global _ths_flow_cache, _ths_flow_cache_time
+    now = datetime.now()
+    if _ths_flow_cache and _ths_flow_cache_time and (now - _ths_flow_cache_time).total_seconds() < _THS_CACHE_TTL:
+        return _ths_flow_cache
+
+    try:
+        import akshare as ak
+        df = ak.stock_fund_flow_individual(symbol="即时")
+        if df is None or df.empty:
+            return None
+
+        # 构建 {代码: {字段}} 索引
+        cache: dict = {}
+        for _, row in df.iterrows():
+            code = str(int(row.get("股票代码", 0))).zfill(6)
+            cache[code] = {
+                "symbol": code,
+                "name": str(row.get("股票简称", "")),
+                "price": float(row.get("最新价", 0) or 0),
+                "change_pct": str(row.get("涨跌幅", "0%")),
+                "turnover_rate": str(row.get("换手率", "0%")),
+                "inflow": _parse_amount(row.get("流入资金", 0)),
+                "outflow": _parse_amount(row.get("流出资金", 0)),
+                "net_amount": _parse_amount(row.get("净额", 0)),
+            }
+        _ths_flow_cache = cache
+        _ths_flow_cache_time = now
+        return cache
+    except Exception as e:
+        print(f"[THS] 同花顺资金流获取失败: {e}", flush=True)
+        return None
+
+
+def _parse_amount(val) -> float:
+    """解析 akshare 的中文金额（如 '1.48亿' / '7588.54万'）→ 元"""
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).replace(",", "").strip()
+    try:
+        if "亿" in s:
+            return float(s.replace("亿", "")) * 1e8
+        elif "万" in s:
+            return float(s.replace("万", "")) * 1e4
+        else:
+            return float(s)
+    except ValueError:
+        return 0.0
+
+
+@router.get("/moneyflow/{symbol}", response_model=ThsMoneyflowResponse)
 async def get_stock_moneyflow(
     symbol: str,
-    start_date: Optional[str] = Query(None, description="开始日期 YYYYMMDD，默认30天前"),
-    end_date: Optional[str] = Query(None, description="结束日期 YYYYMMDD，默认今天"),
-    limit: int = Query(30, ge=1, le=100, description="返回条数上限"),
 ):
     """
-    获取A股个股资金流向数据，分析大单、小单成交情况。
-    数据源: Tushare pro moneyflow 接口。
-    
-    成交单分类:
-    - 小单: <5万 | 中单: 5-20万 | 大单: 20-100万 | 特大单: ≥100万
-    
-    参数示例:
-    - symbol: SH600519 或 600519 或 600519.SH
-    - start_date: 20240101
-    - end_date: 20240524
+    获取个股实时资金流向数据（同花顺即时流向，降级Tushare日频）。
+
+    数据源: akshare stock_fund_flow_individual（同花顺数据中心）
+    返回字段:
+    - inflow/outflow: 流入/流出资金（元）
+    - net_amount: 净额（元）
+    - change_pct/turnover_rate: 涨跌幅/换手率
     """
+    ts_code = _normalize_to_ts_code(symbol)
+    bare_code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ").lower()
+
+    # ── 判断交易时段 ──
+    now = datetime.now()
+    is_trading = (
+        now.weekday() < 5
+        and (9, 30) <= (now.hour, now.minute) < (15, 0)
+    )
+
+    # ── 交易时段：仅同花顺实时 ──
+    if is_trading:
+        cache = _fetch_ths_flow_cache()
+        if cache is None:
+            raise HTTPException(status_code=503, detail="同花顺实时资金流接口不可用")
+        if bare_code not in cache:
+            raise HTTPException(
+                status_code=404,
+                detail=f"同花顺实时资金流中未找到 {bare_code}（交易时段仅使用实时数据）"
+            )
+        d = cache[bare_code]
+        return ThsMoneyflowResponse(
+            symbol=ts_code,
+            name=d["name"],
+            price=d["price"],
+            change_pct=d["change_pct"],
+            turnover_rate=d["turnover_rate"],
+            inflow=d["inflow"],
+            outflow=d["outflow"],
+            net_amount=d["net_amount"],
+            source="ths",
+            updated_at=datetime.now(),
+        )
+
+    # ── 降级：Tushare 日频（仅非交易时段或 THS 接口完全不可用时） ──
     try:
         from app.config import get_settings
         settings = get_settings()
         token = settings.get_tushare_token()
-
         import tushare as ts
         pro = ts.pro_api(token)
-
-        ts_code = _normalize_to_ts_code(symbol)
-
-        # 默认日期范围: 近30天
-        from datetime import datetime as dt, timedelta
-        if not end_date:
-            end_date = dt.now().strftime("%Y%m%d")
-        if not start_date:
-            start_date = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
-
-        df = pro.moneyflow(
-            ts_code=ts_code,
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit,
-        )
-
-        if df is None or df.empty:
-            return MoneyflowResponse(
+        from datetime import timedelta
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
+        df = pro.moneyflow(ts_code=ts_code, start_date=start_date, end_date=end_date, limit=1)
+        if df is not None and not df.empty:
+            row = df.iloc[0]
+            net_amt = float(row.get("net_mf_amount", 0) or 0)
+            return ThsMoneyflowResponse(
                 symbol=ts_code,
-                flows=[],
-                count=0,
+                name="",
+                price=0,
+                change_pct="0%",
+                turnover_rate="0%",
+                inflow=0,
+                outflow=0,
+                net_amount=net_amt * 10000,  # Tushare万元→元
+                source="tushare",
                 updated_at=datetime.now(),
             )
-
-        df = df.sort_values("trade_date", ascending=False).head(limit)
-
-        flows = []
-        for _, row in df.iterrows():
-            flows.append(MoneyflowData(
-                ts_code=str(row["ts_code"]),
-                trade_date=str(row["trade_date"]),
-                buy_sm_vol=int(row.get("buy_sm_vol", 0) or 0),
-                buy_sm_amount=float(row.get("buy_sm_amount", 0) or 0),
-                sell_sm_vol=int(row.get("sell_sm_vol", 0) or 0),
-                sell_sm_amount=float(row.get("sell_sm_amount", 0) or 0),
-                buy_md_vol=int(row.get("buy_md_vol", 0) or 0),
-                buy_md_amount=float(row.get("buy_md_amount", 0) or 0),
-                sell_md_vol=int(row.get("sell_md_vol", 0) or 0),
-                sell_md_amount=float(row.get("sell_md_amount", 0) or 0),
-                buy_lg_vol=int(row.get("buy_lg_vol", 0) or 0),
-                buy_lg_amount=float(row.get("buy_lg_amount", 0) or 0),
-                sell_lg_vol=int(row.get("sell_lg_vol", 0) or 0),
-                sell_lg_amount=float(row.get("sell_lg_amount", 0) or 0),
-                buy_elg_vol=int(row.get("buy_elg_vol", 0) or 0),
-                buy_elg_amount=float(row.get("buy_elg_amount", 0) or 0),
-                sell_elg_vol=int(row.get("sell_elg_vol", 0) or 0),
-                sell_elg_amount=float(row.get("sell_elg_amount", 0) or 0),
-                net_mf_vol=int(row.get("net_mf_vol", 0) or 0),
-                net_mf_amount=float(row.get("net_mf_amount", 0) or 0),
-            ))
-
-        return MoneyflowResponse(
-            symbol=ts_code,
-            flows=flows,
-            count=len(flows),
-            updated_at=datetime.now(),
-        )
-
-    except EnvironmentError as e:
-        raise HTTPException(status_code=503, detail=f"Tushare 配置错误: {str(e)}")
-    except ImportError:
-        raise HTTPException(status_code=503, detail="tushare 库未安装，请 pip install tushare")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取资金流向失败: {str(e)}")
+        print(f"[Tushare] moneyflow 降级也失败: {e}", flush=True)
+
+    raise HTTPException(status_code=503, detail=f"获取 {ts_code} 资金流向失败（同花顺+ Tushare 均不可用）")
 
 
 # ========== 技术面因子 API (数据源: Tushare stk_factor_pro) ==========

@@ -86,8 +86,11 @@ async def query_table(
         return result
 
     except sqlite3.Error as e:
+        print(f"[DB] SQLite error on {table}: {e}", flush=True)
         raise HTTPException(status_code=500, detail=f"数据库错误: {str(e)}")
     except Exception as e:
+        print(f"[DB] Unexpected error on {table}: {e}", flush=True)
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/schema/{db_name}")

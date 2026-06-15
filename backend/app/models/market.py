@@ -143,6 +143,32 @@ class MoneyflowResponse(BaseModel):
     updated_at: datetime
 
 
+# ── 同花顺个股资金流（实时，akshare stock_fund_flow_individual）──
+
+class ThsMoneyflowRow(BaseModel):
+    """同花顺个股资金流单行"""
+    symbol: str = ""           # 股票代码（6位数字）
+    name: str = ""             # 股票简称
+    price: float = 0           # 最新价
+    change_pct: str = "0%"     # 涨跌幅
+    turnover_rate: str = "0%"  # 换手率
+    inflow: float = 0          # 流入资金（元）
+    outflow: float = 0         # 流出资金（元）
+    net_amount: float = 0      # 净额（元）
+
+
+class ThsMoneyflowResponse(BaseModel):
+    """同花顺个股资金流响应"""
+    symbol: str
+    name: str = ""
+    price: float = 0
+    change_pct: str = "0%"
+    turnover_rate: str = "0%"
+    inflow: float = 0
+    outflow: float = 0
+    net_amount: float = 0
+    source: str = "ths"        # 数据源标记
+    updated_at: datetime
 class TechnicalData(BaseModel):
     """单日技术面因子数据 (Tushare stk_factor_pro 接口)"""
     ts_code: str            # 股票代码

@@ -11,6 +11,15 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = resolve(__dirname, '..', 'sessions');
 
+// ===== 工具函数 =====
+function formatAmount(val: number): string {
+  if (!val || val === 0) return '0';
+  const abs = Math.abs(val);
+  if (abs >= 1e8) return (val / 1e8).toFixed(2) + '亿';
+  if (abs >= 1e4) return (val / 1e4).toFixed(2) + '万';
+  return val.toFixed(2);
+}
+
 // ===== 简化的 Type 工厂（服务端不需要 TypeBox 的完整反射，用 JSON Schema 即可） =====
 const Type = {
   Object: (props: Record<string, any>) => ({
@@ -387,39 +396,27 @@ export const getMarketMoneyflowTool = {
 export const getMoneyflowTool = {
 	name: 'get_moneyflow',
 	label: '资金流向',
-	description: '获取A股个股资金流向数据，分析大单/小单/特大单净流入/净流出情况。用于判断主力资金是否在入场或出逃',
+	description: '获取个股实时资金流向（同花顺即时数据：流入/流出/净额+涨跌幅+换手率）。用于判断主力资金是否在入场或出逃',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
-    start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认30天前' })),
-    end_date: Type.Optional(Type.String({ description: '结束日期 YYYYMMDD，如 20240524，默认今天' })),
-    limit: Type.Optional(Type.Number({ description: '返回条数上限，默认30，最大100' })),
   }),
-  async execute(_toolCallId: string, params: { symbol: string; start_date?: string; end_date?: string; limit?: number }, _signal?: AbortSignal) {
-    const query = new URLSearchParams();
-    if (params.start_date) query.set('start_date', params.start_date);
-    if (params.end_date) query.set('end_date', params.end_date);
-    if (params.limit) query.set('limit', String(params.limit));
-    const qs = query.toString();
-    const data = await apiFetch(`/market/moneyflow/${params.symbol}${qs ? '?' + qs : ''}`);
+  async execute(_toolCallId: string, params: { symbol: string }, _signal?: AbortSignal) {
+    const data = await apiFetch(`/market/moneyflow/${params.symbol}`);
     if (data.error) throw new Error(data.error);
-    const flows = data.flows || [];
-    if (flows.length === 0) {
-      return { content: [{ type: 'text', text: `未获取到 ${params.symbol} 的资金流向数据` }], details: data };
-    }
-    const lines: string[] = [];
-    lines.push(`${data.symbol} 资金流向 (最近${flows.length}条)`);
-    lines.push('日期       | 特大单净流入(万) | 大单净流入(万) | 中单净流入(万) | 小单净流入(万) | 当日净流入(万)');
-    lines.push('-'.repeat(90));
-    for (const f of flows.slice(0, 20)) {
-      const net = f.net_mf_amount >= 0 ? '+' : '';
-      lines.push(`${f.trade_date} | ${(f.buy_elg_amount - f.sell_elg_amount).toFixed(0).padStart(13)} | ${(f.buy_lg_amount - f.sell_lg_amount).toFixed(0).padStart(13)} | ${(f.buy_md_amount - f.sell_md_amount).toFixed(0).padStart(13)} | ${(f.buy_sm_amount - f.sell_sm_amount).toFixed(0).padStart(13)} | ${net}${f.net_mf_amount.toFixed(0).padStart(12)}`);
-    }
-    if (flows.length >= 3) {
-      const recentNet = flows.slice(0, 3).reduce((s: number, f: any) => s + f.net_mf_amount, 0);
-      const sign = recentNet >= 0 ? '+' : '';
-      lines.push('');
-      lines.push(`近3日主力净流入: ${sign}${(recentNet / 10000).toFixed(2)}万元`);
-    }
+    const netFmt = formatAmount(data.net_amount);
+    const inflowFmt = formatAmount(data.inflow);
+    const outflowFmt = formatAmount(data.outflow);
+    const sign = data.net_amount >= 0 ? '+' : '';
+    const lines = [
+      `💰 ${data.symbol}${data.name ? ' ' + data.name : ''} 实时资金流向`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `最新价: ${data.price}  |  涨跌幅: ${data.change_pct}  |  换手率: ${data.turnover_rate}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `🔴 流入: ${inflowFmt}  |  🟢 流出: ${outflowFmt}`,
+      `📊 净额: ${sign}${netFmt}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `数据源: ${data.source === 'ths' ? '同花顺(即时)' : 'Tushare(日频降级)'}`,
+    ];
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },
 };
