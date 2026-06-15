@@ -889,6 +889,7 @@ def _save_sector_to_pg(items: list, sector_type: str):
         import psycopg2
         from datetime import datetime
         conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
         for item in items:
             name = item.get("name", "")
             data = {
@@ -906,12 +907,12 @@ def _save_sector_to_pg(items: list, sector_type: str):
                 "lead_stock_name": item.get("lead_stock_name", ""),
                 "lead_stock_code": item.get("lead_stock_code", ""),
             }
-            conn.execute(
+            cur.execute(
                 "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s,%s,%s,%s) "
                 "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
                 ("concept", name, json.dumps(data, ensure_ascii=False), datetime.now()),
             )
-        conn.execute(
+        cur.execute(
             "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s,%s,%s,%s) "
             "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
             ("concept", "__index__", json.dumps({"count": len(items)}), datetime.now()),
@@ -930,6 +931,7 @@ def _save_market_to_pg(data: dict):
         import psycopg2
         from datetime import datetime
         conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
         combined = data.get("combined", data)
         flat = {
             "main_net": combined.get("main_net", 0),
@@ -944,7 +946,7 @@ def _save_market_to_pg(data: dict):
             "flow_nature": data.get("flow_nature", "平衡"),
             "source": data.get("source", ""),
         }
-        conn.execute(
+        cur.execute(
             "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s,%s,%s,%s) "
             "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
             ("market", "", json.dumps(flat, ensure_ascii=False), datetime.now()),

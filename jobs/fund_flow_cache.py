@@ -22,7 +22,8 @@ def get_conn():
 
 def init_db():
     conn = get_conn()
-    conn.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS fund_flow_cache (
             data_type VARCHAR(32) NOT NULL,
             symbol VARCHAR(32) NOT NULL DEFAULT '',
@@ -31,7 +32,7 @@ def init_db():
             PRIMARY KEY (data_type, symbol)
         )
     """)
-    conn.execute("""
+    cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_ffc_type_time ON fund_flow_cache(data_type, updated_at)
     """)
     conn.commit()
@@ -40,7 +41,8 @@ def init_db():
 
 def upsert_cache(data_type: str, symbol: str, data: dict):
     conn = get_conn()
-    conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         "INSERT INTO fund_flow_cache (data_type, symbol, data_json, updated_at) VALUES (%s, %s, %s, %s) "
         "ON CONFLICT (data_type, symbol) DO UPDATE SET data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
         (data_type, symbol, json.dumps(data, ensure_ascii=False), datetime.now()),
