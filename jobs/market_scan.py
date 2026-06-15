@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Cross-platform workspace detection
+sys.path.insert(0, str(Path(__file__).parent.parent))  # project root for 'app' imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 from workspace_detector import WORKSPACE, get_vnpy_dir, get_xueqiu_dir, get_akshare_dir, get_data_dir
 
@@ -30,7 +31,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core" / "utils"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "core" / "deepseek"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "paper-trading"))
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 from paper_engine import PaperTradingEngine
 from app.core.trading.marcus_trade import MarcusVNPyExecutor
 from trade_day_utils import is_today_trade_day
