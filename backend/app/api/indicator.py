@@ -17,6 +17,7 @@ from app.models.indicator import (
     DailyChannelResponse,
     TradeAdviceRequest, TradeAdviceResponse,
 )
+from app.models.market import RealtimeIndicatorItem, RealtimeIndicatorResponse
 from app.config import get_settings
 
 router = APIRouter(prefix="/indicator", tags=["Technical Indicators"])
@@ -551,4 +552,215 @@ async def get_trade_advice(req: TradeAdviceRequest):
         signal_class=signal_class,
         signal_details=signal_details,
         risk_flags=risk_flags,
+    )
+
+
+# ──────────────────────── 盘中实时技术指标 ────────────────────────
+
+# core/ is already on sys.path from the top of this file (as _sys.path via _core_dir)
+# Re-confirm it's there for the realtime endpoint
+
+
+@router.get("/realtime/{symbol}", response_model=RealtimeIndicatorResponse)
+async def get_realtime_indicators(
+    symbol: str,
+    limit: int = Query(3, ge=1, le=5, description="返回最近N日盘后确认指标作为基准"),
+):
+    """
+    获取个股盘中实时估算技术指标（KDJ/MACD/RSI/MA）。
+
+    数据来源：
+    - 腾讯 qt.gtimg.cn 实时 OHLCV（当前价/最高/最低/开盘/昨收）
+    - Tushare daily 历史日K线（未复权，≥35条）
+    - Tushare stk_factor_pro 前日盘后确认指标（KDJ/MACD锚点）
+
+    返回：
+    - realtime: 盘中估算值（data_source='intraday_estimate'，⚠️ 未收盘确认）
+    - historical: 最近N日 Tushare 盘后确认指标（data_source='daily_confirmed'）
+
+    可靠性：
+    - 盘中估算仅作辅助参考，不能作为独立建仓的唯一理由
+    - 决策应基于 historical 中的盘后确认数据 + 当日行情综合判断
+    """
+    ts_code = _normalize_to_ts_code(symbol)
+    xq_symbol = _make_xueqiu_symbol(ts_code)
+
+    settings = get_settings()
+    token = settings.get_tushare_token()
+    xueqiu_config = str(settings.workspace_path / "core" / "config.json")
+
+    import asyncio
+
+    # ── 并行获取所有数据源 ──
+
+    # 1. 腾讯实时行情
+    async def _fetch_realtime_quote():
+        try:
+            from xueqiu_engine import XueqiuEngine
+            engine = XueqiuEngine(config_file=xueqiu_config)
+            return engine.get_stock_quote(xq_symbol)
+        except Exception as e:
+            logger.warning(f"腾讯实时行情获取失败: {e}")
+            return None
+
+    # 2. Tushare 历史日K线（≥35条，用于 MACD 初始化 + 滚动窗口）
+    async def _fetch_daily_bars():
+        try:
+            import tushare as ts
+            from datetime import datetime as dt, timedelta
+            pro = ts.pro_api(token)
+            end_d = dt.now().strftime("%Y%m%d")
+            start_d = (dt.now() - timedelta(days=60)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=35)
+            if df is not None and not df.empty:
+                return df.sort_values("trade_date", ascending=True)
+        except Exception as e:
+            logger.warning(f"Tushare daily 获取失败: {e}")
+        return None
+
+    # 3. Tushare stk_factor_pro 最近 5 条（用于构建 PrevIndicators 锚点）
+    async def _fetch_stk_factor():
+        try:
+            import tushare as ts
+            from datetime import datetime as dt, timedelta
+            pro = ts.pro_api(token)
+            end_d = dt.now().strftime("%Y%m%d")
+            start_d = (dt.now() - timedelta(days=35)).strftime("%Y%m%d")
+            df = pro.stk_factor_pro(
+                ts_code=ts_code,
+                start_date=start_d,
+                end_date=end_d,
+                fields='ts_code,trade_date,close,macd_qfq,macd_dif_qfq,macd_dea_qfq,'
+                       'kdj_qfq,kdj_k_qfq,kdj_d_qfq,'
+                       'rsi_qfq_6,rsi_qfq_12,rsi_qfq_24,'
+                       'boll_upper_qfq,boll_mid_qfq,boll_lower_qfq,atr_qfq,cci_qfq,wr_qfq',
+            )
+            if df is not None and not df.empty:
+                return df.sort_values("trade_date", ascending=True)
+        except Exception as e:
+            logger.warning(f"Tushare stk_factor_pro 获取失败: {e}")
+        return None
+
+    quote, daily_df, factor_df = await asyncio.gather(
+        _fetch_realtime_quote(),
+        _fetch_daily_bars(),
+        _fetch_stk_factor(),
+    )
+
+    # ── 构建 historical（最近 N 日盘后确认指标）──
+    historical: list = []
+    prev_indicators = None
+
+    if factor_df is not None and not factor_df.empty:
+        from app.models.market import TechnicalData
+        factor_desc = factor_df.sort_values("trade_date", ascending=False)
+        for _, row in factor_desc.head(limit).iterrows():
+            historical.append(TechnicalData(
+                ts_code=str(row["ts_code"]),
+                trade_date=str(row["trade_date"]),
+                close=float(row.get("close", 0) or 0),
+                macd=float(row.get("macd_qfq", 0) or 0),
+                macd_dif=float(row.get("macd_dif_qfq", 0) or 0),
+                macd_dea=float(row.get("macd_dea_qfq", 0) or 0),
+                kdj=float(row.get("kdj_qfq", 0) or 0),
+                kdj_k=float(row.get("kdj_k_qfq", 0) or 0),
+                kdj_d=float(row.get("kdj_d_qfq", 0) or 0),
+                rsi_6=float(row.get("rsi_qfq_6", 0) or 0),
+                rsi_12=float(row.get("rsi_qfq_12", 0) or 0),
+                rsi_24=float(row.get("rsi_qfq_24", 0) or 0),
+                boll_upper=float(row.get("boll_upper_qfq", 0) or 0),
+                boll_mid=float(row.get("boll_mid_qfq", 0) or 0),
+                boll_lower=float(row.get("boll_lower_qfq", 0) or 0),
+                atr=float(row.get("atr_qfq", 0) or 0),
+                cci=float(row.get("cci_qfq", 0) or 0),
+                wr=float(row.get("wr_qfq", 0) or 0),
+            ))
+
+        # 提取最新一条作为 PrevIndicators 种子
+        if len(factor_desc) > 0:
+            latest_tech = factor_desc.iloc[0]
+            prev_close = float(latest_tech.get("close", 0) or 0) or 0
+            prev_kdj_k = float(latest_tech.get("kdj_k_qfq", 0) or 0) or 50.0
+            prev_kdj_d = float(latest_tech.get("kdj_d_qfq", 0) or 0) or 50.0
+            prev_macd_dif = float(latest_tech.get("macd_dif_qfq", 0) or 0) or 0.0
+            prev_macd_dea = float(latest_tech.get("macd_dea_qfq", 0) or 0) or 0.0
+
+            from core.realtime_indicators import PrevIndicators
+            # Reconstruct ema12/ema26 from DIF and close:
+            # DIF = ema12 - ema26, and roughly ema26 ≈ close (当日)
+            # So ema12 ≈ close + DIF, ema26 ≈ close
+            prev_indicators = PrevIndicators(
+                trade_date=str(latest_tech["trade_date"]),
+                kdj_k=prev_kdj_k,
+                kdj_d=prev_kdj_d,
+                macd_dea=prev_macd_dea,
+                macd_ema12=prev_close + prev_macd_dif if prev_close > 0 and prev_macd_dif else 0.0,
+                macd_ema26=prev_close if prev_close > 0 else 0.0,
+            )
+
+    # ── 计算实时指标 ──
+    warning_msg = ""
+    realtime = None
+    stock_name = ""
+
+    if quote:
+        stock_name = quote.get("name", "")
+    else:
+        warning_msg = "⚠️ 腾讯实时行情不可用，无法计算盘中实时指标。以下仅为最近盘后确认数据。"
+
+    if quote and daily_df is not None and not daily_df.empty:
+        from core.realtime_indicators import DailyBar, calculate_realtime_indicators
+
+        bars = [
+            DailyBar(
+                trade_date=str(r["trade_date"]),
+                open=float(r["open"]),
+                high=float(r["high"]),
+                low=float(r["low"]),
+                close=float(r["close"]),
+                vol=float(r["vol"]),
+            )
+            for _, r in daily_df.iterrows()
+        ]
+
+        result = calculate_realtime_indicators(
+            symbol=ts_code,
+            realtime_quote=quote,
+            historical_bars=bars,
+            prev_indicators=prev_indicators,
+        )
+
+        warning_msg = result.warning
+
+        realtime = RealtimeIndicatorItem(
+            symbol=ts_code,
+            current_price=result.current_price,
+            data_source=result.data_source,
+            calc_time=result.calc_time,
+            prev_trade_date=result.prev_trade_date,
+            used_prev_indicators=result.used_prev_indicators,
+            kdj_k=result.kdj_k,
+            kdj_d=result.kdj_d,
+            kdj_j=result.kdj_j,
+            macd_dif=result.macd_dif,
+            macd_dea=result.macd_dea,
+            macd_bar=result.macd_bar,
+            rsi_6=result.rsi_6,
+            rsi_12=result.rsi_12,
+            rsi_24=result.rsi_24,
+            ma5=result.ma5,
+            ma10=result.ma10,
+            ma20=result.ma20,
+            warning=result.warning,
+        )
+    elif quote and (daily_df is None or daily_df.empty):
+        warning_msg = "⚠️ Tushare 历史K线不可用，无法计算实时指标。请稍后重试。"
+
+    return RealtimeIndicatorResponse(
+        symbol=ts_code,
+        name=stock_name,
+        realtime=realtime,
+        historical=historical,
+        warning=warning_msg,
+        updated_at=datetime.now(),
     )

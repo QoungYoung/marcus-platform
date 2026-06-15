@@ -248,3 +248,56 @@ class ProBarResponse(BaseModel):
     bars: List[ProBarData]
     count: int
     updated_at: datetime
+
+
+# ── 实时技术指标（盘中估算）──
+
+class RealtimeIndicatorItem(BaseModel):
+    """盘中实时估算技术指标（单条）。
+    
+    data_source 始终为 'intraday_estimate'，区别于 Tushare stk_factor_pro
+    的 'daily_confirmed'（盘后确认值）。
+    """
+    symbol: str = ""
+    current_price: float = 0.0
+    data_source: str = "intraday_estimate"   # 始终为盘中估算，与盘后确认区分
+    calc_time: Optional[datetime] = None
+    prev_trade_date: str = ""           # 最近已收盘交易日 YYYYMMDD
+    used_prev_indicators: bool = False  # 是否使用Tushare前日确认值作锚点
+
+    # KDJ (9,3,3)
+    kdj_k: float = 50.0
+    kdj_d: float = 50.0
+    kdj_j: float = 50.0
+
+    # MACD (12,26,9)
+    macd_dif: float = 0.0
+    macd_dea: float = 0.0
+    macd_bar: float = 0.0
+
+    # RSI
+    rsi_6: float = 50.0
+    rsi_12: float = 50.0
+    rsi_24: float = 50.0
+
+    # MA
+    ma5: float = 0.0
+    ma10: float = 0.0
+    ma20: float = 0.0
+
+    # 警告
+    warning: str = ""
+
+
+class RealtimeIndicatorResponse(BaseModel):
+    """实时指标查询响应。
+    
+    realtime: 盘中估算值（数据源=腾讯实时行情+Tushare历史日线）
+    historical: 最近3日 Tushare 盘后确认指标作为基准参考
+    """
+    symbol: str
+    name: str = ""
+    realtime: Optional[RealtimeIndicatorItem] = None
+    historical: List[TechnicalData] = []
+    warning: str = ""
+    updated_at: datetime = datetime.now()

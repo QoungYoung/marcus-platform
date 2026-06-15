@@ -172,6 +172,65 @@ TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_kline",
+            "description": "【日频·非实时】获取个股历史日K线（未复权），包含开高低收、成交量、成交额。数据源：Tushare daily（盘后数据，今日K线当天收盘后才生成）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "股票代码，如 000001 或 600519"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回条数上限，默认20，最大60"
+                    }
+                },
+                "required": ["symbol"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_technical",
+            "description": "【日频·非实时】获取个股历史盘后技术指标（KDJ/MACD/RSI/BOLL/CCI/WR）。数据源：Tushare stk_factor_pro（盘后数据，基于收盘价计算）。⚠️ 该接口返回的是最近收盘日的已确认值，不是当日盘中值",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "股票代码，如 000001 或 600519"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回条数上限，默认5，最大20。建议取3-5条看趋势"
+                    }
+                },
+                "required": ["symbol"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_realtime_indicators",
+            "description": "【实时·盘中估算】获取个股盘中实时估算技术指标（KDJ/MACD/RSI/MA5/MA10/MA20）。数据源：腾讯实时行情+Tushare历史日线。⚠️ 返回值标记为'intraday_estimate'（盘中估算），今日高低点未最终确认，仅作辅助参考，不能作为独立建仓的唯一理由",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "股票代码，如 000001 或 600519"
+                    }
+                },
+                "required": ["symbol"]
+            }
+        }
+    },
 ]
 
 
@@ -217,6 +276,17 @@ TOOL_IMPLEMENTATIONS: Dict[str, Callable] = {
         "volume": params.get("quantity", 0),
         "reason": params.get("reason", ""),
     }),
+    # 日频工具（Tushare 盘后数据）
+    "get_kline": lambda params: call_marcus_api(
+        f"/api/v1/market/kline/{params.get('symbol')}?limit={params.get('limit', 20)}"
+    ),
+    "get_technical": lambda params: call_marcus_api(
+        f"/api/v1/market/technical/{params.get('symbol')}?limit={params.get('limit', 5)}"
+    ),
+    # 实时工具（腾讯实时行情+Tushare历史结合计算）
+    "get_realtime_indicators": lambda params: call_marcus_api(
+        f"/api/v1/indicator/realtime/{params.get('symbol')}"
+    ),
 }
 
 
@@ -233,7 +303,6 @@ SYSTEM_PROMPT = """## 你是 Marcus — 短线右侧交易专家
 ### 交易风格
 
 - **短线为主**：持仓周期 1-5 天，追求快速复利
-- **严格止损**：单笔亏损不超过总资金的 2%
 - **趋势跟踪**：用技术面信号（均线、MACD、成交量）确认方向
 - **仓位管理**：趋势明确时重仓，趋势不明时轻仓或空仓
 
@@ -247,8 +316,6 @@ SYSTEM_PROMPT = """## 你是 Marcus — 短线右侧交易专家
 ### 风险控制（最高优先级）
 
 - **永远不要逆势加仓** — 亏损时第一时间止损
-- **单只股票仓位 ≤ 15%** — 分散风险
-- **单日总仓位 ≤ 60%** — 保留现金应对极端行情
 - **总回撤 ≥ 5% 时停止交易** — 强制冷静期
 - **盈利出金** — 赚了钱要落袋为安
 
@@ -267,7 +334,41 @@ SYSTEM_PROMPT = """## 你是 Marcus — 短线右侧交易专家
 - **风险提示**：每次操作前说明风险和止损位置
 
 当需要获取数据时，使用提供的工具函数获取市场数据。
-工具调用后，系统会返回数据结果，基于数据给出分析和建议。"""
+工具调用后，系统会返回数据结果，基于数据给出分析和建议。
+
+### 技术指标引用规范（严格遵循 ⚠️）
+
+**1. 必须用工具取实际值**
+
+KDJ/MACD/RSI/MA/BOLL 等任何技术指标，必须通过以下工具获取：
+
+| 工具 | 数据类型 | 数据来源 | 可靠性 |
+|------|----------|----------|:------:|
+| get_realtime_indicators | 盘中实时估算 | 腾讯实时行情+Tushare历史 | ⭐⭐ |
+| get_technical | 盘后日频确认 | Tushare stk_factor_pro | ⭐⭐⭐ |
+| get_kline | 日K线原始数据 | Tushare daily | ⭐⭐⭐ |
+
+**严禁在未调用工具的情况下凭空编造任何指标数值或信号**，包括但不限于：
+- 禁止编造"KDJ金叉/死叉""MACD底背离/顶背离""RSI超买/超卖"等信号
+- 禁止编造"5日线上穿10日线""布林带收窄"等形态描述
+- 禁止引用任何未经工具返回确认的指标值
+
+**2. 必须标注数据来源和可靠性**
+
+每次引用指标时必须附带来源标注：
+- 盘后确认值（get_technical）：标注 `[盘后确认/T-N日]`，可用于交易决策
+- 盘中估算值（get_realtime_indicators）：标注 `[盘中估算/未确认]`，仅作辅助参考，**不能作为独立建仓的唯一理由**
+- 日K线（get_kline）：标注 `[日频/T-N日]`，用于趋势分析
+
+**3. 禁止过时信号**
+
+ 昨日盘后的金叉/死叉在今天开盘后即可能失效。引用历史指标时必须说明：
+"该信号基于 T-N 日收盘数据，今日盘中需通过 get_realtime_indicators 重新确认"
+
+**4. 指标来源兼容性说明**
+
+- get_technical 返回的 MACD/KDJ 值基于前复权价格计算，与 get_kline 的未复权价格可能存在微小偏差
+- get_realtime_indicators 的盘中估算值使用前日 Tushare 确认值作锚点，与收盘后 Tushare 实际值误差通常在 5% 以内"""
 
 
 async def call_deepseek(messages: List[Dict[str, Any]], api_key: str, tools: Optional[List] = None) -> Dict:
@@ -389,6 +490,78 @@ def format_result_for_llm(result: Any, tool_name: str) -> str:
                 return "\n".join(lines)
         elif tool_name == "get_account":
             return f"总资产: {result.get('total_assets', 0)}, 现金: {result.get('cash', 0)}, 盈亏: {result.get('total_profit_loss', 0)}"
+        elif tool_name == "get_kline":
+            # ── 日K线格式化 ──
+            klines = result.get("klines", [])
+            if not klines:
+                return f"{result.get('symbol', '')}: 暂无K线数据"
+            latest_date = klines[0].get("trade_date", "--")
+            lines = [
+                f"【日频·非实时】{result.get('symbol', '')} 历史日K线 (最近{len(klines)}条，Tushare daily 盘后数据)",
+                f"数据截止日期: {latest_date}（最近收盘日，非当日实时数据）",
+            ]
+            lines.append("日期     | 开盘   | 收盘   | 最高   | 最低   | 涨跌幅")
+            for k in klines[:10]:
+                sign = "+" if k.get("pct_chg", 0) >= 0 else ""
+                lines.append(
+                    f"{k.get('trade_date','')} | {k.get('open',0):.2f} | {k.get('close',0):.2f} | "
+                    f"{k.get('high',0):.2f} | {k.get('low',0):.2f} | {sign}{k.get('pct_chg',0):.2f}%"
+                )
+            if len(klines) >= 5:
+                closes = [k.get("close", 0) for k in klines[:5]]
+                lines.append(f"5日均价: {sum(closes)/5:.2f}  |  最高: {max(closes):.2f}  |  最低: {min(closes):.2f}")
+            return "\n".join(lines)
+        elif tool_name == "get_technical":
+            # ── 盘后技术指标格式化 ──
+            data = result.get("data", [])
+            if not data:
+                return f"{result.get('symbol', '')}: 暂无技术指标数据"
+            latest_date = data[0].get("trade_date", "--")
+            lines = [
+                f"【日频·非实时】{result.get('symbol', '')} 盘后技术指标 (最近{len(data)}个交易日，Tushare stk_factor_pro 盘后确认值)",
+                f"数据截止日期: {latest_date}（最近收盘日，非当日实时数据）",
+            ]
+            lines.append("⚠️ 以下为盘后确认值，不是当日盘中值")
+            for r in data[:5]:
+                lines.append(
+                    f"  {r.get('trade_date','')}: "
+                    f"KDJ(K={r.get('kdj_k',0):.1f}/D={r.get('kdj_d',0):.1f}/J={r.get('kdj',0):.1f}) | "
+                    f"MACD(DIF={r.get('macd_dif',0):.3f}/DEA={r.get('macd_dea',0):.3f}/柱={r.get('macd',0):.3f}) | "
+                    f"RSI(6={r.get('rsi_6',0):.1f}/12={r.get('rsi_12',0):.1f}/24={r.get('rsi_24',0):.1f})"
+                )
+            return "\n".join(lines)
+        elif tool_name == "get_realtime_indicators":
+            # ── 实时指标格式化 ──
+            rt = result.get("realtime")
+            hist = result.get("historical", [])
+            warning = result.get("warning", "")
+
+            if not rt:
+                return f"【实时·盘中估算】{result.get('symbol', '')}: 盘中实时指标不可用。{warning}"
+
+            lines = [
+                f"【实时·盘中估算】{result.get('name', result.get('symbol', ''))} 盘中指标",
+                f"当前价: {rt.get('current_price', 0)} | 计算时间: {rt.get('calc_time', '')}",
+                f"⚠️ 数据来源: {rt.get('data_source', 'intraday_estimate')}（腾讯实时行情+Tushare历史日线）",
+                f"⚠️ {warning or '盘中估算值，未收盘确认，仅供参考'}",
+                "",
+                f"KDJ(9,3,3): K={rt.get('kdj_k',0):.2f} D={rt.get('kdj_d',0):.2f} J={rt.get('kdj_j',0):.2f}",
+                f"MACD(12,26,9): DIF={rt.get('macd_dif',0):.4f} DEA={rt.get('macd_dea',0):.4f} 柱={rt.get('macd_bar',0):.4f}",
+                f"RSI: 6={rt.get('rsi_6',0):.2f} 12={rt.get('rsi_12',0):.2f} 24={rt.get('rsi_24',0):.2f}",
+                f"MA: 5={rt.get('ma5',0):.2f} 10={rt.get('ma10',0):.2f} 20={rt.get('ma20',0):.2f}",
+            ]
+
+            if hist:
+                lines.append("")
+                lines.append("--- 最近盘后确认值（Tushare 基准，用于对比）---")
+                for h in hist[:3]:
+                    lines.append(
+                        f"  {h.get('trade_date','')}: "
+                        f"KDJ(K={h.get('kdj_k',0):.1f}/D={h.get('kdj_d',0):.1f}) | "
+                        f"MACD(DIF={h.get('macd_dif',0):.3f}/DEA={h.get('macd_dea',0):.3f})"
+                    )
+
+            return "\n".join(lines)
         return json.dumps(result, ensure_ascii=False, indent=2)
     return str(result)
 

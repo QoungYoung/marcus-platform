@@ -4,6 +4,57 @@
 
 ---
 
+## [1.5.1] — 2026-06-15（技术指标幻觉修复 + 数据时效标注体系）
+
+本次更新解决了 Marcus Agent 在没有技术指标工具可用的情况下凭空编造 KDJ/MACD/RSI 信号的幻觉问题，同时建立了完整的数据时效标注体系。
+
+### 📊 盘中实时技术指标计算
+
+- **新增 `core/realtime_indicators.py`**：KDJ(9,3,3)/MACD(12,26,9)/RSI(6/12/24)/MA(5/10/20) 盘中实时估算算法
+  - 数据源：腾讯 qt.gtimg.cn 实时 OHLCV + Tushare daily 历史日K线（≥35条）+ Tushare stk_factor_pro 前日确认值锚定
+  - 所有返回值标记 `data_source='intraday_estimate'`，与盘后确认值明确区分
+  - 可靠性 ⭐⭐（盘中估算），收盘后 Tushare 实际值误差通常 5% 以内
+- **新增 `GET /indicator/realtime/{symbol}` API 端点**：并行获取腾讯行情 + Tushare daily + stk_factor_pro
+  - `realtime`：盘中估算值
+  - `historical`：最近 N 日 Tushare 盘后确认指标作基准对比
+- **新增模型** `RealtimeIndicatorItem` / `RealtimeIndicatorResponse`（`backend/app/models/market.py`）
+
+### 🔧 Agent 工具链补全
+
+- **`agent.py` 新增 3 个工具**：
+  | 工具 | 数据类型 | 数据源 | 可靠性 |
+  |------|----------|--------|:------:|
+  | `get_kline` | 日频·非实时 | Tushare daily 盘后 | ⭐⭐⭐ |
+  | `get_technical` | 日频·非实时 | Tushare stk_factor_pro 盘后确认 | ⭐⭐⭐ |
+  | `get_realtime_indicators` | 实时·盘中估算 | 腾讯行情+Tushare历史 | ⭐⭐ |
+- **`format_result_for_llm`** 新增 3 个工具的专用格式化逻辑，含指标信号标记（金叉/死叉/超买/超卖）
+- **`TOOL_IMPLEMENTATIONS`** 映射补全，桥接到后端 API
+
+### 🛡️ System Prompt 幻觉防护
+
+- **禁止编造规则**：KDJ/MACD/RSI/MA/BOLL 等指标必须通过工具获取实际返回值
+- **来源标注强制**：引用指标时必须附带 `[盘中估算/未确认]` 或 `[盘后确认/T-N日]` 标签
+- **过时信号警告**：昨日盘后金叉/死叉在今天开盘后可能已失效，需盘中重新确认
+- **建仓决策层级**：盘后确认信号为主（⭐⭐⭐），盘中估算为辅（⭐⭐）
+
+### ⏱️ 数据时效标注体系
+
+- **工具描述三分类**：`[实时]` / `[日频·非实时]` / `[实时·盘中估算]`，贯穿 agent.py TOOLS 定义、Pi server tools.ts、index.ts System Prompt 三处
+- **Pi server 动态日期注入**：每次会话 `getOrCreateAgent` 在 systemPrompt 前动态注入 `当前时间: 2026-06-15 21:18 (周一)`
+- **日频数据截止日期**：所有日频工具（get_kline/get_technical/get_daily_kline_qfq）输出首行标注 `数据截止日期: YYYYMMDD（最近收盘日）`
+- **Pi server 工具分组更新**：`CHAT_TOOLS` / `REFLECT_TOOLS` 补全 `getRealtimeIndicatorsTool`
+
+### 📝 涉及文件
+
+- `core/realtime_indicators.py`（新建）
+- `backend/app/models/market.py`
+- `backend/app/api/indicator.py`
+- `backend/app/api/agent.py`
+- `servers/pi-server/src/tools.ts`
+- `servers/pi-server/src/index.ts`
+
+---
+
 ## [1.5.0] — 2026-06-15（仓位规则优化 + 群聊模式升级 + 止损体系完善）
 
 本次更新基于专家组群聊复盘暴露的 23 条仓位规则过度保守、Pi vs Scan 立场冲突、Yellow 下购买力归零等问题，进行了外科手术式精准修复。

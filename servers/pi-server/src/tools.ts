@@ -316,7 +316,7 @@ export const getEtfKlineTool = {
 export const getDailyKlineTool = {
   name: 'get_daily_kline',
   label: '日K线',
-  description: '获取A股个股历史日K线数据（未复权），包含开高低收、成交量、成交额等。用于分析个股历史走势、判断趋势、寻找支撑阻力位',
+  description: '【日频·非实时】获取A股个股历史日K线数据（未复权），包含开高低收、成交量、成交额等。数据源：Tushare daily（盘后数据，今日K线收盘后才生成）。用于分析个股历史走势、判断趋势、寻找支撑阻力位',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
     start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认90天前' })),
@@ -335,8 +335,11 @@ export const getDailyKlineTool = {
     if (klines.length === 0) {
       return { content: [{ type: 'text', text: `未获取到 ${params.symbol} 的K线数据` }], details: data };
     }
+    const lastDate = klines[0].trade_date || '--';
+    const firstDate = klines[klines.length - 1].trade_date || '--';
     const lines: string[] = [];
-    lines.push(`${data.symbol} 历史日K线 (最近${klines.length}条)`);
+    lines.push(`${data.symbol} 历史日K线 · 未复权 (${firstDate} → ${lastDate}，共${klines.length}条，日频·非实时·Tushare daily 盘后数据)`);
+    lines.push(`⚠️ 数据截止日期: ${lastDate}（最近收盘日，当日K线收盘后才生成）`);
     lines.push('日期       | 开盘   | 收盘   | 最高   | 最低   | 涨跌幅  | 成交量(手) | 成交额(万元)');
     lines.push('-'.repeat(85));
     for (const k of klines.slice(0, 20)) {
@@ -367,7 +370,7 @@ export const getDailyKlineTool = {
 export const getDailyKlineQfqTool = {
   name: 'get_daily_kline_qfq',
   label: '日K线(前复权)',
-  description: '获取A股个股历史日K线数据（前复权 qfq），包含开高低收、成交量、成交额等。数据源：Tushare pro_bar。前复权保证了除权除息日无价格跳空缺口，均线/ MACD/RSI 等技术指标连续可靠。复盘分析专用。',
+  description: '【日频·非实时/前复权】获取A股个股历史日K线数据（前复权 qfq），包含开高低收、成交量、成交额等。数据源：Tushare pro_bar（盘后数据）。前复权保证了除权除息日无价格跳空缺口，均线/MACD/RSI等技术指标连续可靠。复盘分析专用。',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
     start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认90天前' })),
@@ -387,8 +390,11 @@ export const getDailyKlineQfqTool = {
     if (bars.length === 0) {
       return { content: [{ type: 'text', text: `未获取到 ${params.symbol} 的前复权K线数据` }], details: data };
     }
+    const lastDate_2 = bars[0].trade_date || '--';
+    const firstDate_2 = bars[bars.length - 1].trade_date || '--';
     const lines: string[] = [];
-    lines.push(`${data.symbol} 历史日K线 · 前复权 (最近${bars.length}条)`);
+    lines.push(`${data.symbol} 历史日K线 · 前复权 (${firstDate_2} → ${lastDate_2}，共${bars.length}条，日频·非实时·Tushare pro_bar 盘后数据)`);
+    lines.push(`⚠️ 数据截止日期: ${lastDate_2}（最近收盘日，当日K线收盘后才生成）`);
     lines.push('日期       | 开盘   | 收盘   | 最高   | 最低   | 成交量(手) | 成交额(万元)');
     lines.push('-'.repeat(85));
     for (const b of bars.slice(0, 20)) {
@@ -439,7 +445,7 @@ export const getMarketMoneyflowTool = {
 export const getMoneyflowTool = {
 	name: 'get_moneyflow',
 	label: '资金流向',
-	description: '获取个股实时资金流向（东方财富/同花顺即时数据：主力/超大单/大单/中单/小单净流入+净占比）。用于判断主力资金动向',
+	description: '【实时】获取个股实时资金流向（东方财富/同花顺即时数据：主力/超大单/大单/中单/小单净流入+净占比+5日/10日累计）。用于判断主力资金动向',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
   }),
@@ -490,7 +496,7 @@ export const getMoneyflowTool = {
 export const getTechnicalTool = {
   name: 'get_technical',
   label: '技术指标',
-  description: '获取A股个股技术面因子数据，包含MACD、KDJ、RSI、布林带等60+指标。用于判断超买超卖、背离、趋势强度、金叉死叉等交易信号',
+  description: '【日频·非实时】获取A股个股历史盘后技术面因子数据，包含MACD、KDJ、RSI、布林带等60+指标。数据源：Tushare stk_factor_pro（盘后数据，基于收盘价计算）。⚠️ 返回的是最近收盘日的已确认值，不是当日盘中值。用于判断超买超卖、背离、趋势强度、金叉死叉等交易信号。如需当日盘中指标请用 get_realtime_indicators',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字如 600519' }),
     start_date: Type.Optional(Type.String({ description: '开始日期 YYYYMMDD，如 20240101，默认90天前' })),
@@ -509,8 +515,10 @@ export const getTechnicalTool = {
     if (rows.length === 0) {
       return { content: [{ type: 'text', text: `未获取到 ${params.symbol} 的技术指标数据` }], details: data };
     }
+    const latestDate = rows[0].trade_date || '--';
     const lines: string[] = [];
-    lines.push(`${data.symbol} 技术指标 (最近${rows.length}条)`);
+    lines.push(`${data.symbol} 技术指标 (最近${rows.length}条，日频·非实时·Tushare stk_factor_pro 盘后确认值)`);
+    lines.push(`⚠️ 数据截止日期: ${latestDate}（最近收盘日，基于收盘价计算，非当日盘中值）`);
     lines.push('日期       | 收盘价 | MACD(DIF/DEA/柱) | KDJ(K/D/J) | RSI(6/12/24) | BOLL(上/中/下) | CCI | WR');
     lines.push('-'.repeat(110));
     for (const r of rows.slice(0, 20)) {
@@ -971,6 +979,62 @@ export const getTradeAdviceTool = {
   },
 };
 
+// ===== 盘中实时技术指标工具（腾讯行情+Tushare历史结合计算） =====
+
+export const getRealtimeIndicatorsTool = {
+  name: 'get_realtime_indicators',
+  label: '实时技术指标',
+  description: '【实时·盘中估算】获取个股盘中实时估算技术指标（KDJ/MACD/RSI/MA5/MA10/MA20）。数据源：腾讯qt.gtimg.cn实时行情+Tushare历史日线计算。⚠️ data_source="intraday_estimate"（盘中估算），今日高低点未最终确认，仅作辅助参考，不能作为独立建仓的唯一理由。同时返回最近3日Tushare盘后确认值作基准对比',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string }, _signal?: AbortSignal) {
+    const data = await apiFetch(`/indicator/realtime/${params.symbol}`);
+    if (data.error) throw new Error(data.error);
+
+    const rt = data.realtime;
+    const hist = data.historical || [];
+    const warning = data.warning || '';
+
+    if (!rt) {
+      return { content: [{ type: 'text', text: `${data.symbol || params.symbol}: 盘中实时指标不可用。${warning}` }], details: data };
+    }
+
+    const lines: string[] = [];
+    lines.push(`🔴 实时盘中指标 — ${data.name || data.symbol}`);
+    lines.push(`计算时间: ${rt.calc_time || data.updated_at || '--'} | 当前价: ${rt.current_price} | 锚点日期: ${rt.prev_trade_date || '--'}`);
+    lines.push(`⚠️ 数据来源: ${rt.data_source || 'intraday_estimate'}（腾讯实时行情+Tushare历史日线），未收盘确认，仅辅助参考`);
+    lines.push(`⚠️ ${rt.warning || warning}`);
+    lines.push('');
+    lines.push('── 盘中估算值（data_source=intraday_estimate）──');
+    // KDJ
+    const kdj_signal = rt.kdj_k > rt.kdj_d ? 'K>D ↑' : rt.kdj_k < rt.kdj_d ? 'K<D ↓' : 'K=D ─';
+    lines.push(`KDJ(9,3,3): K=${rt.kdj_k.toFixed(2)} D=${rt.kdj_d.toFixed(2)} J=${rt.kdj_j.toFixed(2)} [${kdj_signal}]`);
+    // MACD
+    const macd_signal = rt.macd_dif > rt.macd_dea ? 'DIF>DEA ↑' : rt.macd_dif < rt.macd_dea ? 'DIF<DEA ↓' : 'DIF=DEA ─';
+    lines.push(`MACD(12,26,9): DIF=${rt.macd_dif.toFixed(4)} DEA=${rt.macd_dea.toFixed(4)} 柱=${rt.macd_bar >= 0 ? '+' : ''}${rt.macd_bar.toFixed(4)} [${macd_signal}]`);
+    // RSI
+    const rsi6_label = rt.rsi_6 >= 70 ? '超买' : rt.rsi_6 <= 30 ? '超卖' : '正常';
+    const rsi12_label = rt.rsi_12 >= 70 ? '超买' : rt.rsi_12 <= 30 ? '超卖' : '正常';
+    lines.push(`RSI: 6=${rt.rsi_6.toFixed(2)}[${rsi6_label}] 12=${rt.rsi_12.toFixed(2)}[${rsi12_label}] 24=${rt.rsi_24.toFixed(2)}`);
+    // MA
+    const ma_position = rt.current_price > rt.ma5 ? '价>MA5 ↑' : rt.current_price < rt.ma5 ? '价<MA5 ↓' : '价=MA5 ─';
+    lines.push(`MA: 5=${rt.ma5.toFixed(2)} 10=${rt.ma10.toFixed(2)} 20=${rt.ma20.toFixed(2)} [${ma_position}]`);
+
+    if (hist.length > 0) {
+      lines.push('');
+      lines.push('── 盘后确认值（Tushare stk_factor_pro，基准对比）──');
+      for (const h of hist.slice(0, 3)) {
+        const kdj_s = h.kdj_k > h.kdj_d ? '金叉' : h.kdj_k < h.kdj_d ? '死叉' : '持平';
+        const macd_s = h.macd_dif > h.macd_dea ? '金叉' : h.macd_dif < h.macd_dea ? '死叉' : '持平';
+        lines.push(`  ${h.trade_date}: KDJ(${h.kdj_k.toFixed(1)}/${h.kdj_d.toFixed(1)})${kdj_s} | MACD(${h.macd_dif.toFixed(3)}/${h.macd_dea.toFixed(3)})${macd_s} | RSI6=${h.rsi_6.toFixed(1)}`);
+      }
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 // ===== 工具分组 =====
 // 聊天模式（只读，QQ 聊天使用）
 export const CHAT_TOOLS = [
@@ -986,6 +1050,7 @@ export const CHAT_TOOLS = [
   getDailyKlineTool,
   getMoneyflowTool,
   getTechnicalTool,
+  getRealtimeIndicatorsTool,
   getFibonacciLevelsTool,
   getDailyChannelTool,
   getTradeAdviceTool,
@@ -1056,13 +1121,14 @@ export const getPanelHistoryTool = {
 };
 
 // 反思模式（仅 Tushare 历史数据 + 持久化记录，不含雪球实时查询）
-// 操作: get_panel_history, get_daily_kline, get_technical, get_moneyflow, read_db_table
+// 操作: get_panel_history, get_daily_kline, get_technical, get_realtime_indicators, get_moneyflow, read_db_table
 // 与聊天/交易模式完全隔离，无交易权限
 export const REFLECT_TOOLS = [
   // Tushare 历史数据
   getDailyKlineQfqTool,
   getTechnicalTool,
   getMoneyflowTool,
+  getRealtimeIndicatorsTool,
   getFibonacciLevelsTool,
   getDailyChannelTool,
   getTradeAdviceTool,
