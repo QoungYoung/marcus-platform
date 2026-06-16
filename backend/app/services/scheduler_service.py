@@ -326,7 +326,8 @@ class SchedulerService:
         # 交易日检查：盘前扫描/盘中扫描/自动交易/每日复盘 仅交易日执行
         TRADE_DAY_ONLY_TASKS = {
             'pre_market_scan', 'market_scan',
-            'auto_trade_morning', 'auto_trade_late_morning',
+            'auto_trade_morning', 'auto_trade_mid_morning',
+            'auto_trade_late_morning',
             'auto_trade_afternoon', 'auto_trade_closing',
             'daily_review', 'weekly_reflect',
         }
@@ -354,6 +355,7 @@ class SchedulerService:
             'pre_market_scan':        ('盘前', 8*60,  9*60+25),
             'market_scan':            ('盘中', 9*60+25, 15*60+5),
             'auto_trade_morning':     ('早盘', 9*60+25, 11*60+35),
+            'auto_trade_mid_morning': ('早盘中游', 9*60+25, 11*60+35),
             'auto_trade_late_morning':('午前', 9*60+25, 11*60+35),
             'auto_trade_afternoon':   ('午后', 12*60+55, 15*60+5),
             'auto_trade_closing':     ('尾盘', 12*60+55, 15*60+5),
@@ -1049,16 +1051,26 @@ class SchedulerService:
             )
         elif 'early' in task.id or pi_prompt_context == 'early' or 'morning' in task.id or pi_prompt_context == 'morning':
             trade_mode_instruction = (
-                "现在是早盘 9:35，进入 **建仓模式**。\n"
-                "分析扫描报告中 寻找短线右侧强势标的，\n"
-                "严格按照右侧交易 SOP 建仓。"
+                "现在是早盘 9:35，进入 **产业链建仓计划+上游龙头建仓模式**。\n"
+                "1. 先完成产业链建仓计划表（规划全部3个环节），再买入上游龙头\n"
+                "2. 重点检查上游标的盘中实时MA（get_realtime_indicators）和日内分位（intraday_percentile）\n"
+                "3. 严格按照右侧交易 SOP 建仓"
+            )
+        elif 'mid_morning' in task.id or pi_prompt_context == 'mid_morning':
+            trade_mode_instruction = (
+                "现在是早盘 9:50，进入 **产业链中游跟进建仓模式**。\n"
+                "此刻上游已运行 15 分钟，可确认其站稳。\n"
+                "1. 检查上游持仓走势，确认站住分时均线\n"
+                "2. 买入建仓计划表中的中游标的（如有），检查中游技术面\n"
+                "3. 若中游无合格标的，跳过该环节并记录原因"
             )
         elif 'late' in task.id or pi_prompt_context == 'late_morning' or 'late_morning' in task.id:
             trade_mode_instruction = (
-                "现在是午前 10:35，进入 **趋势确认+建仓模式**。\n"
-                "1. 评估早盘建仓标的走势，不符合预期的及时止损\n"
-                "2. 趋势确认的可以考虑加仓\n"
-                "3. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
+                "现在是午前 10:35，进入 **产业链收尾+趋势确认模式**。\n"
+                "1. 评估已建仓标的走势，不符合预期的及时止损\n"
+                "2. 如 9:35/9:50 尚未完成全部产业链覆盖，在此时段完成下游建仓\n"
+                "3. 趋势确认的可考虑加仓\n"
+                "4. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
             )
         elif 'afternoon' in task.id or pi_prompt_context == 'afternoon':
             trade_mode_instruction = (

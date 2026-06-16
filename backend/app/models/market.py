@@ -46,6 +46,8 @@ class QuoteResponse(BaseModel):
     avg_price: Optional[float] = None
     high_52w: Optional[float] = None
     low_52w: Optional[float] = None
+    rsr: Optional[float] = None          # 相对强弱比 = 个股涨幅 / 板块涨幅，>1=跑赢板块
+    intraday_percentile: Optional[float] = None  # 日内价格分位 0-100，>90%=追高风险
     updated_at: datetime
 
 
@@ -192,6 +194,7 @@ class ThsMoneyflowResponse(BaseModel):
     d10_md_net: float = 0; d10_md_pct: str = ""
     d10_sm_net: float = 0; d10_sm_pct: str = ""
     d10_xs_net: float = 0; d10_xs_pct: str = ""
+    capital_efficiency: Optional[float] = None  # 资金效率指数 = |主力占比 / 涨跌幅|, <5%=缺乏主力背书
     source: str = "ths"        # 数据源标记: eastmoney/ths/tushare
     updated_at: datetime
 class TechnicalData(BaseModel):

@@ -17,7 +17,20 @@ from app.models.indicator import (
     DailyChannelResponse,
     TradeAdviceRequest, TradeAdviceResponse,
 )
-from app.models.market import RealtimeIndicatorItem, RealtimeIndicatorResponse
+from app.models.market import RealtimeIndicatorItem, RealtimeIndicatorResponse, QuoteResponse
+
+# ── 安全垫检查模型 ──
+from pydantic import BaseModel as PydanticBaseModel
+class SafetyMarginResponse(PydanticBaseModel):
+    symbol: str
+    entry_price: float
+    current_price: float
+    atr: float
+    stop_distance: float        # 止损距离 = max(5%, ATR*1.5)
+    intraday_risk: float        # 日内剩余波动风险
+    rating: str                 # 安全/偏紧/危险
+    rating_description: str
+    updated_at: datetime
 from app.config import get_settings
 
 router = APIRouter(prefix="/indicator", tags=["Technical Indicators"])
@@ -762,5 +775,112 @@ async def get_realtime_indicators(
         realtime=realtime,
         historical=historical,
         warning=warning_msg,
+        updated_at=datetime.now(),
+    )
+
+
+# ──────────────────────── 建仓前安全垫检查 ────────────────────────
+
+@router.get("/safety-margin/{symbol}", response_model=SafetyMarginResponse)
+async def check_safety_margin(
+    symbol: str,
+    entry_price: float = Query(..., gt=0, description="计划建仓价格"),
+):
+    """
+    建仓前安全垫检查：判断建仓价位是否会在日内被正常波动击穿止损。
+
+    计算逻辑：
+    - 止损距离 = entry_price * max(5%, ATR × 1.5)
+    - 日内剩余波动风险 = ATR × sqrt(剩余交易分钟 / 240)
+    - 安全垫评级 = 止损距离 / 日内剩余波动风险
+
+    评级标准：
+    - 评级 > 2 → 安全（止损距离是日内波动的 2 倍以上）
+    - 评级 1-2 → 偏紧（日内波动可能触及止损）
+    - 评级 < 1 → 危险（正常日内波动就能击穿止损，禁止建仓）
+    """
+    ts_code = _normalize_to_ts_code(symbol)
+    xq_symbol = _make_xueqiu_symbol(ts_code)
+
+    # ── 1. 获取当前价格 ──
+    current_price = _get_current_price(xq_symbol)
+    if current_price <= 0:
+        current_price = entry_price  # fallback
+
+    # ── 2. 获取 ATR ──
+    atr = 0.0
+    try:
+        settings = get_settings()
+        token = settings.get_tushare_token()
+        import tushare as ts
+        from datetime import datetime as dt, timedelta
+        pro = ts.pro_api(token)
+        end_d = dt.now().strftime("%Y%m%d")
+        start_d = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
+        df = pro.stk_factor_pro(
+            ts_code=ts_code,
+            start_date=start_d,
+            end_date=end_d,
+            fields='ts_code,trade_date,atr_qfq',
+            limit=1,
+        )
+        if df is not None and not df.empty:
+            atr = float(df.iloc[0].get("atr_qfq", 0) or 0)
+    except Exception:
+        pass
+
+    if atr <= 0:
+        # 无法获取 ATR 时使用保守估算：当前价 × 3%
+        atr = current_price * 0.03
+
+    # ── 3. 计算安全垫 ──
+    stop_distance = entry_price * max(0.05, (atr / entry_price) * 1.5 if entry_price > 0 else 0.05)
+
+    # 日内剩余波动风险
+    import math
+    now = datetime.now()
+    total_trading_minutes = 240.0  # 9:30-11:30 (120) + 13:00-15:00 (120)
+    current_minutes = now.hour * 60 + now.minute
+    morning_start, morning_end = 9 * 60 + 30, 11 * 60 + 30
+    afternoon_start, afternoon_end = 13 * 60, 15 * 60
+
+    elapsed = 0.0
+    if current_minutes >= afternoon_end:
+        elapsed = total_trading_minutes
+    elif current_minutes >= afternoon_start:
+        elapsed = 120.0 + (current_minutes - afternoon_start)
+    elif current_minutes >= morning_end:
+        elapsed = 120.0
+    elif current_minutes >= morning_start:
+        elapsed = current_minutes - morning_start
+
+    remaining_minutes = max(5.0, total_trading_minutes - elapsed)
+    intraday_risk = atr * math.sqrt(remaining_minutes / total_trading_minutes)
+
+    # 评级
+    if intraday_risk > 0:
+        ratio = stop_distance / intraday_risk
+    else:
+        ratio = 999.0
+
+    if ratio > 2.0:
+        rating = "安全"
+        rating_desc = f"止损距离({stop_distance:.2f})为日内波动({intraday_risk:.2f})的{ratio:.1f}倍，建仓安全垫充足"
+    elif ratio >= 1.0:
+        rating = "偏紧"
+        rating_desc = f"止损距离({stop_distance:.2f})仅{ratio:.1f}倍于日内波动({intraday_risk:.2f})，建议降仓至≤5%试探仓"
+    else:
+        rating = "危险"
+        rating_desc = f"日内正常波动({intraday_risk:.2f})即可击穿止损({stop_distance:.2f})，建议放弃建仓"
+
+    return SafetyMarginResponse(
+        symbol=ts_code,
+        entry_price=round(entry_price, 3),
+        current_price=round(current_price, 3),
+        atr=round(atr, 3),
+        stop_distance=round(stop_distance, 3),
+        intraday_risk=round(intraday_risk, 3),
+        rating=rating,
+        rating_description=rating_desc,
         updated_at=datetime.now(),
     )

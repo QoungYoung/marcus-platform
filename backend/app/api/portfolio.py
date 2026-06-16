@@ -288,11 +288,117 @@ async def get_portfolio():
         updated_at=datetime.now(),
     )
 
+    # ── 计算板块集中度 ──
+    sector_concentration = None
+    if positions:
+        try:
+            import sqlite3
+            pool_db = settings.data_dir / "stock_pool.db"
+            if pool_db.exists():
+                conn = sqlite3.connect(str(pool_db))
+                curs = conn.cursor()
+
+                # 按申万三级行业分组统计持仓市值
+                industry_exposure = {}
+                for p in positions:
+                    bare_code = p.symbol[2:] if len(p.symbol) > 4 else p.symbol
+                    curs.execute(
+                        "SELECT industry FROM stock_pool WHERE symbol = ? OR ts_code = ?",
+                        (bare_code, p.symbol)
+                    )
+                    row = curs.fetchone()
+                    if row and row[0]:
+                        ind = row[0] or "未知行业"
+                    else:
+                        ind = "未知行业"
+                    industry_exposure[ind] = industry_exposure.get(ind, 0) + p.market_value
+
+                conn.close()
+
+                max_industry = max(industry_exposure, key=industry_exposure.get) if industry_exposure else ""
+                max_concentration = (
+                    round(industry_exposure[max_industry] / total_asset * 100, 1)
+                    if total_asset > 0 and max_industry else 0
+                )
+
+                sector_concentration = {
+                    "max_sector": max_industry,
+                    "concentration_pct": max_concentration,
+                    "breakdown": {k: round(v / total_asset * 100, 1) if total_asset > 0 else 0
+                                 for k, v in industry_exposure.items()},
+                }
+        except Exception:
+            pass
+
+    # ── 计算持仓弱势排名 ──
+    if positions:
+        try:
+            import sqlite3
+            pool_db = settings.data_dir / "stock_pool.db"
+            if pool_db.exists():
+                conn = sqlite3.connect(str(pool_db))
+                curs = conn.cursor()
+
+                for p in positions:
+                    bare_code = p.symbol[2:] if len(p.symbol) > 4 else p.symbol
+                    # 查找股票所属的概念板块
+                    curs.execute(
+                        "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ? LIMIT 1",
+                        (f"%{bare_code}%",)
+                    )
+                    row = curs.fetchone()
+                    if row:
+                        concept = row[0]
+                        # 获取该概念板块所有成分股
+                        curs.execute(
+                            "SELECT ts_code FROM stock_concept_map WHERE concept_name = ?",
+                            (concept,)
+                        )
+                        members = [r[0] for r in curs.fetchall()]
+                        if len(members) > 1:
+                            # 获取同板块股票的实时涨幅并排序
+                            member_changes = []
+                            for m_ts_code in members[:30]:  # 限制查询数量
+                                m_symbol = m_ts_code.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+                                # 构建Xueqiu符号
+                                if ".SH" in m_ts_code:
+                                    m_xq = f"SH{m_symbol}"
+                                elif ".SZ" in m_ts_code:
+                                    m_xq = f"SZ{m_symbol}"
+                                else:
+                                    m_xq = f"BJ{m_symbol}"
+                                try:
+                                    m_price = get_realtime_prices([m_xq]).get(m_xq, {})
+                                    if isinstance(m_price, dict):
+                                        m_change = m_price.get("change_pct", 0) or 0
+                                    else:
+                                        m_change = 0
+                                    member_changes.append((m_xq, abs(float(m_change))))
+                                except (ValueError, TypeError):
+                                    member_changes.append((m_xq, 0))
+
+                            member_changes.sort(key=lambda x: x[1], reverse=True)
+                            # 找到当前持仓的排名
+                            own_rank = None
+                            for rank, (mc_sym, _) in enumerate(member_changes, 1):
+                                if bare_code in mc_sym.upper():
+                                    own_rank = rank
+                                    break
+
+                            if own_rank:
+                                p.sector_rank = own_rank
+                                p.sector_rank_pct = round(own_rank / len(member_changes) * 100, 1) if member_changes else None
+
+                conn.close()
+        except Exception:
+            pass
+
     return PortfolioSummary(
         account=account_response,
         total_return=total_asset - initial_capital,
         total_return_pct=(total_asset / initial_capital - 1) * 100 if initial_capital > 0 else 0,
         win_rate=win_rate,
+        sector_concentration=sector_concentration,
     )
 
 

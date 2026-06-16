@@ -132,16 +132,56 @@ async def get_stock_quote(symbol: str):
         engine = XueqiuEngine(config_file=str(XUEQIU_DIR / "config.json"))
         quote = engine.get_stock_quote(symbol)
 
+        # ── 计算日内价格分位 ──
+        current_p = quote.get("current", 0)
+        high_p = quote.get("high") or current_p
+        low_p = quote.get("low") or current_p
+        intraday_percentile = None
+        if high_p > low_p and current_p > 0:
+            intraday_percentile = round((current_p - low_p) / (high_p - low_p) * 100, 1)
+
+        # ── 计算 RSR（相对强弱比）──
+        rsr = None
+        bare_code = symbol[2:] if symbol.startswith(("SH", "SZ", "BJ")) else symbol
+        try:
+            import sqlite3
+            pool_db = settings.data_dir / "stock_pool.db"
+            if pool_db.exists():
+                conn = sqlite3.connect(str(pool_db))
+                curs = conn.cursor()
+                # 查找该股票所属的首要概念板块
+                curs.execute(
+                    "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ? LIMIT 1",
+                    (f"%{bare_code}%",)
+                )
+                row = curs.fetchone()
+                if row:
+                    concept_name = row[0]
+                    # 从概念资金流数据中获取板块涨幅
+                    try:
+                        from utils.em_sector_flow import get_sector_flow_by_name
+                        sector = get_sector_flow_by_name(concept_name, sector_type="concept", use_cache=True)
+                        if sector and sector.get("pct_change", 0) != 0:
+                            sector_pct = sector["pct_change"]
+                            stock_pct = quote.get("percent", 0)
+                            if sector_pct != 0:
+                                rsr = round(stock_pct / sector_pct, 2)
+                    except Exception:
+                        pass
+                conn.close()
+        except Exception:
+            pass
+
         return QuoteResponse(
             symbol=symbol,
             name=quote.get("name", ""),
-            current=quote.get("current", 0),
+            current=current_p,
             change=quote.get("chg", 0),
             percent=quote.get("percent", 0),
             last_close=quote.get("last_close", 0),
             open=quote.get("open"),
-            high=quote.get("high"),
-            low=quote.get("low"),
+            high=high_p if high_p != current_p else None,
+            low=low_p if low_p != current_p else None,
             volume=quote.get("volume", 0),
             amount=quote.get("amount", 0),
             turnover_rate=quote.get("turnover_rate"),
@@ -153,6 +193,8 @@ async def get_stock_quote(symbol: str):
             avg_price=quote.get("avg_price"),
             high_52w=quote.get("high_52w"),
             low_52w=quote.get("low_52w"),
+            rsr=rsr,
+            intraday_percentile=intraday_percentile,
             updated_at=datetime.now(),
         )
     except Exception as e:
@@ -503,6 +545,16 @@ async def get_stock_moneyflow(
     if is_trading:
         flow = _query_stock_flow(ts_code)
         if flow:
+            # ── 计算资金效率指数 ──
+            capital_efficiency = None
+            try:
+                main_pct_val = float(flow.get("main_pct", "0").replace("%", ""))
+                chg_val = abs(float(flow.get("change_pct", "0").replace("%", "")))
+                if chg_val > 0.001:
+                    capital_efficiency = round(main_pct_val / chg_val, 2)
+            except (ValueError, TypeError):
+                pass
+
             return ThsMoneyflowResponse(
                 symbol=ts_code, name=flow["name"],
                 price=flow["price"], change_pct=flow["change_pct"],
@@ -524,6 +576,7 @@ async def get_stock_moneyflow(
                 d10_md_net=flow.get("d10_md_net",0), d10_md_pct=flow.get("d10_md_pct",""),
                 d10_sm_net=flow.get("d10_sm_net",0), d10_sm_pct=flow.get("d10_sm_pct",""),
                 d10_xs_net=flow.get("d10_xs_net",0), d10_xs_pct=flow.get("d10_xs_pct",""),
+                capital_efficiency=capital_efficiency,
                 source="eastmoney_stock_get", updated_at=datetime.now(),
             )
 
@@ -895,11 +948,20 @@ async def get_concept_fund_flow(
 
             sectors = []
             for fd in flow_data[:limit]:
+                # ── 计算信号强度标签 ──
+                main_net_val = fd.get("main_net", 0)
+                if main_net_val >= 400000:
+                    signal_level = "⚡极端"
+                elif main_net_val >= 150000:
+                    signal_level = "🔥偏强"
+                else:
+                    signal_level = "📊常规"
+
                 item = {
                     "name": fd["name"],
                     "code": fd["code"],
                     "pct_change": fd["pct_change"],
-                    "main_net": fd["main_net"],
+                    "main_net": main_net_val,
                     "main_net_fmt": fd["main_net_fmt"],
                     "main_net_rate": fd["main_net_rate"],
                     "super_large_net": fd["super_large_net"],
@@ -916,6 +978,7 @@ async def get_concept_fund_flow(
                     "lead_stock_name": fd.get("lead_stock_name", ""),
                     "lead_stock_code": fd.get("lead_stock_code", ""),
                     "flow_nature": classify_flow_nature(fd["main_net"], fd["main_net_rate"]),
+                    "signal_level": signal_level,
                     # Tushare 字段填充空值
                     "vol": 0, "amount": 0, "turnover_rate": 0, "ts_code": "",
                 }
@@ -945,11 +1008,20 @@ async def get_concept_fund_flow(
                 aged = em.get_aged_minutes("sector_flow", subtype="concept")
                 sectors = []
                 for item in cached[:limit]:
+                    # ── 信号强度标签 ──
+                    cached_main_net = item.get("main_net", 0)
+                    if cached_main_net >= 400000:
+                        cached_signal = "⚡极端"
+                    elif cached_main_net >= 150000:
+                        cached_signal = "🔥偏强"
+                    else:
+                        cached_signal = "📊常规"
+
                     sectors.append({
                         "name": item.get("name", ""),
                         "code": item.get("code", ""),
                         "pct_change": item.get("pct_change", 0),
-                        "main_net": item.get("main_net", 0),
+                        "main_net": cached_main_net,
                         "main_net_rate": item.get("main_net_rate", 0),
                         "super_large_net": item.get("super_large_net", 0),
                         "large_net": item.get("large_net", 0),
@@ -961,6 +1033,7 @@ async def get_concept_fund_flow(
                         "lead_stock_name": item.get("lead_stock_name", ""),
                         "lead_stock_code": item.get("lead_stock_code", ""),
                         "flow_nature": item.get("flow_nature", "平衡"),
+                        "signal_level": cached_signal,
                         "vol": 0, "amount": 0, "turnover_rate": 0, "ts_code": "",
                     })
                 logger.info(f"[concept-fund-flow] 缓存: {len(sectors)} 个概念 (约{aged:.0f}分钟前)")
@@ -1016,6 +1089,14 @@ async def get_concept_fund_flow(
                         main_net_val = round(float(row.get("net_amount", 0) or 0) / 10000, 2)
                         main_net_rate_val = round(float(row.get("net_amount_rate", 0) or 0), 2)
 
+                        # ── 信号强度标签 ──
+                        if main_net_val >= 400000:
+                            ts_signal = "⚡极端"
+                        elif main_net_val >= 150000:
+                            ts_signal = "🔥偏强"
+                        else:
+                            ts_signal = "📊常规"
+
                         sectors.append({
                             "name": str(row["name"]),
                             "ts_code": str(row["ts_code"]),
@@ -1040,7 +1121,8 @@ async def get_concept_fund_flow(
                             "lead_stock_name": str(row.get("buy_sm_amount_stock", "") or ""),
                             "lead_stock_code": "",
                             "flow_nature": classify_flow_nature(main_net_val, main_net_rate_val),
-                            # 量价数据（moneyflow_ind_dc 不含 vol/amount/turnover_rate）
+                            "signal_level": ts_signal,
+                            # 量价数据
                             "vol": 0,
                             "amount": 0,
                             "turnover_rate": 0,

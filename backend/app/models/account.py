@@ -19,6 +19,8 @@ class PositionResponse(BaseModel):
     high_water_mark: Optional[float] = None    # 持仓期间最高价
     high_water_date: Optional[str] = None      # 达到最高价的日期
     days_since_high: Optional[int] = None      # 距上次创新高已过交易日数
+    sector_rank: Optional[int] = None          # 同板块涨幅排名（第X名）
+    sector_rank_pct: Optional[float] = None    # 同板块涨幅排名百分比（如 20%=前20%）
 
 
 class AccountResponse(BaseModel):
@@ -40,6 +42,7 @@ class PortfolioSummary(BaseModel):
     total_return: float
     total_return_pct: float
     win_rate: float
+    sector_concentration: Optional[dict] = None  # 板块集中度: {"sector": "xxx", "concentration_pct": 25.0, "high_corr_exposure_pct": 30.0}
 
 
 class EquityPoint(BaseModel):

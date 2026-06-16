@@ -11,27 +11,6 @@ settings:
       enabled: true
       recipient: BF1510663A6C14D6E00E42B46108F51E
 tasks:
-- id: fund_flow_cache
-  name: 资金流缓存
-  description: 每5分钟采集东方财富个股/大盘/概念资金流，落SQLite缓存，仅交易日盘中使用
-  enabled: true
-  schedule:
-    type: cron
-    expr: '*/5 9-11,13-14 * * 0-4'
-    timezone: Asia/Shanghai
-  script:
-    path: jobs/fund_flow_cache.py
-    args: []
-  output:
-    log_file: logs/fund_flow_cache_{date}.log
-    append: false
-  notifications:
-    on_success: false
-    on_failure: true
-    pi_analysis: false
-    channels:
-    - qqbot
-  depends_on: []
 - id: news_collector
   name: 新闻定时采集
   description: 每10分钟采集财经新闻，DeepSeek AI情绪分析
@@ -117,6 +96,25 @@ tasks:
     - qqbot
   depends_on:
   - market_scan
+- id: auto_trade_mid_morning
+  name: 自动交易 (早盘中游)
+  description: 9:50 产业链中下游跟进建仓（15分钟间隔，上游已运行确认）
+  enabled: true
+  type: pi_trade
+  pi_prompt: mid_morning
+  schedule:
+    type: cron
+    expr: 50 9 * * *
+    timezone: Asia/Shanghai
+  output:
+    log_file: logs/auto_trade_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
 - id: auto_trade_late_morning
   name: 自动交易 (午前)
   description: 10:35 Pi自主执行午前趋势确认交易
