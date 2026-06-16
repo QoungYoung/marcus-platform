@@ -608,6 +608,16 @@ async def get_stock_moneyflow(
             xs_net = _f("buy_sm_amount") * 10000       # 小单
             main_net = _f("net_amount") * 10000        # 主力=超大单+大单
 
+            # ── 计算资金效率指数 ──
+            capital_efficiency = None
+            try:
+                main_pct_val = float(row.get("net_amount_rate", 0) or 0)
+                chg_val = abs(float(row.get("pct_change", 0) or 0))
+                if chg_val > 0.001:
+                    capital_efficiency = round(main_pct_val / chg_val, 2)
+            except (ValueError, TypeError):
+                pass
+
             return ThsMoneyflowResponse(
                 symbol=ts_code,
                 name=str(row.get("name", "") or ""),
@@ -622,6 +632,7 @@ async def get_stock_moneyflow(
                 md_net=md_net, md_pct=_pct("buy_lg_amount_rate"),
                 sm_net=sm_net, sm_pct=_pct("buy_md_amount_rate"),
                 xs_net=xs_net, xs_pct=_pct("buy_sm_amount_rate"),
+                capital_efficiency=capital_efficiency,
                 source="tushare",
                 updated_at=datetime.now(),
             )
