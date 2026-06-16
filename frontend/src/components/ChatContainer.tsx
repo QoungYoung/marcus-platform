@@ -459,7 +459,7 @@ const getMoneyflowTool = {
       lines.push(`📊 净额: ${sign(data.net_amount)}${fmt(data.net_amount)}`);
     }
     lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    const srcMap: Record<string, string> = { eastmoney_stock_get: '东方财富(实时)', eastmoney: '东方财富(即时)', ths: '同花顺(即时)', tushare: 'Tushare(日频降级)' };
+    const srcMap: Record<string, string> = { eastmoney_stock_get: '东方财富(实时)', tushare: 'Tushare(日频降级)' };
     lines.push(`数据源: ${srcMap[data.source] || data.source}`);
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },

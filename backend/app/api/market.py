@@ -5,7 +5,6 @@ Market data API endpoints.
 import logging
 import sys
 import os
-import json
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -406,101 +405,7 @@ async def get_stock_kline(
         raise HTTPException(status_code=500, detail=f"获取K线失败: {str(e)}")
 
 
-# ========== 资金流缓存读取（jobs/fund_flow_cache.py 定时落 PostgreSQL） ==========
-
-def _read_flow_cache(data_type: str, symbol: str = "") -> Optional[dict]:
-    """从 PostgreSQL 缓存表读取资金流数据"""
-    try:
-        from app.database import SessionLocal
-        from app.models.fund_flow_cache import FundFlowCache
-        db = SessionLocal()
-        row = db.query(FundFlowCache).filter_by(data_type=data_type, symbol=symbol).first()
-        db.close()
-        if row:
-            return json.loads(row.data_json)
-    except Exception:
-        pass
-    return None
-
-
-def _read_flow_cache_age(data_type: str, symbol: str = "") -> Optional[int]:
-    """获取缓存年龄（秒），None 表示无缓存"""
-    try:
-        from app.database import SessionLocal
-        from app.models.fund_flow_cache import FundFlowCache
-        db = SessionLocal()
-        row = db.query(FundFlowCache).filter_by(data_type=data_type, symbol=symbol).first()
-        db.close()
-        if row and row.updated_at:
-            age = (datetime.now() - row.updated_at).total_seconds()
-            return int(age)
-    except Exception:
-        pass
-    return None
-
-
-# ========== 个股资金流向 API (数据源: 东方财富>同花顺> Tushare) ==========
-
-# 缓存（内存 5 分钟 TTL + 持久化 EMCache 兜底）
-_em_flow_cache: Optional[dict] = None       # 东方财富排名
-_em_flow_cache_time: Optional[datetime] = None
-_ths_flow_cache: Optional[dict] = None       # 同花顺即时
-_ths_flow_cache_time: Optional[datetime] = None
-_FLOW_CACHE_TTL = 300  # 5分钟
-
-
-def _persist_em_flow(em_cache: dict) -> None:
-    """将东方财富个股资金流缓存持久化到 EMCache"""
-    try:
-        from core.utils.eastmoney_cache import get_em_cache
-        # 只缓存核心字段缩小体积
-        compact = {}
-        for code, d in list(em_cache.items())[:5000]:
-            compact[code] = {
-                "n": d.get("name", ""),
-                "p": d.get("price", 0),
-                "c": d.get("change_pct", ""),
-                "m": d.get("main_net", 0),
-                "mp": d.get("main_pct", ""),
-                "l": d.get("lg_net", 0),
-                "d": d.get("md_net", 0),
-                "s": d.get("sm_net", 0),
-                "x": d.get("xs_net", 0),
-            }
-        get_em_cache().save("em_stock_flow", compact)
-    except Exception:
-        pass
-
-
-def _load_em_flow_persist() -> Optional[dict]:
-    """从 EMCache 加载个股资金流缓存（字段还原）"""
-    try:
-        from core.utils.eastmoney_cache import get_em_cache
-        compact, meta = get_em_cache().load_with_fallback("em_stock_flow")
-        if not compact or not meta.get("from_cache"):
-            return None
-        full: dict = {}
-        for code, d in compact.items():
-            full[code] = {
-                "symbol": code,
-                "name": d.get("n", ""),
-                "price": d.get("p", 0),
-                "change_pct": d.get("c", ""),
-                "main_net": d.get("m", 0),
-                "main_pct": d.get("mp", ""),
-                "lg_net": d.get("l", 0),
-                "lg_pct": "",
-                "md_net": d.get("d", 0),
-                "md_pct": "",
-                "sm_net": d.get("s", 0),
-                "sm_pct": "",
-                "xs_net": d.get("x", 0),
-                "xs_pct": "",
-            }
-        return full
-    except Exception:
-        return None
-
+# ========== 个股资金流向 API (数据源: 东财实时 + Tushare 日频降级) ==========
 
 EM_PROXY_URL = os.environ.get("EM_PROXY_URL", "")  # FRP 隧道代理: http://81.70.44.68:8199
 
@@ -570,197 +475,15 @@ def _query_stock_flow(ts_code: str) -> Optional[dict]:
     }
 
 
-def _fetch_em_flow_cache() -> Optional[dict]:
-    """获取东方财富个股资金流排名"""
-    # ── 优先：本地代理 ──
-    if EM_PROXY_URL:
-        return _fetch_em_via_proxy()
-    return _fetch_em_direct()
-
-
-def _fetch_em_via_proxy() -> Optional[dict]:
-    """通过 FRP 代理获取东方财富数据"""
-    import urllib.request
-    import requests as req
-    cache: dict = {}
-    for pn in range(1, 80):
-        params = {
-            "fid": "f3", "po": "0", "pz": "100", "pn": str(pn), "np": "1",
-            "fltt": "2", "invt": "2",
-            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
-            "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
-            "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
-        }
-        qs = urllib.request.urlencode(params)
-        resp = req.get(f"{EM_PROXY_URL}/api/qt/clist/get?{qs}", timeout=15)
-        result = resp.json()
-        d = result.get("data")
-        if not d:
-            break
-        diff = d.get("diff", [])
-        if not diff:
-            break
-        for row in diff:
-            code = str(row.get("f12", "")).zfill(6)
-            cache[code] = {
-                "symbol": code, "name": str(row.get("f14", "")),
-                "price": _safe_float(row.get("f2")),
-                "change_pct": str(row.get("f3", "")),
-                "main_net": _safe_float(row.get("f62")),
-                "main_pct": str(row.get("f184", "")),
-                "lg_net": _safe_float(row.get("f66")), "lg_pct": str(row.get("f69", "")),
-                "md_net": _safe_float(row.get("f72")), "md_pct": str(row.get("f75", "")),
-                "sm_net": _safe_float(row.get("f78")), "sm_pct": str(row.get("f81", "")),
-                "xs_net": _safe_float(row.get("f84")), "xs_pct": str(row.get("f87", "")),
-            }
-    if cache:
-        global _em_flow_cache, _em_flow_cache_time
-        _em_flow_cache = cache
-        _em_flow_cache_time = datetime.now()
-    return cache
-
-
-def _fetch_em_direct() -> Optional[dict]:
-    """直接获取东方财富个股资金流排名（curl_cffi + 浏览器 Cookie）"""
-    global _em_flow_cache, _em_flow_cache_time
-    now = datetime.now()
-    if _em_flow_cache and _em_flow_cache_time and (now - _em_flow_cache_time).total_seconds() < _FLOW_CACHE_TTL:
-        return _em_flow_cache
-
-    try:
-        import os as _os
-        from curl_cffi import requests as cffi_req
-
-        em_cookie = _os.environ.get("EASTMONEY_COOKIE",
-            "qgqp_b_id=1cc3c89ff09003f14504d6ce2704f978; "
-            "st_nvi=W6lpD9Ad7PhFwtvK87DTf930b; "
-            "nid18=0669c78d6e75a0345b1571c451cbd4b4; "
-            "nid18_create_time=1777289270410; "
-            "gviem=K3qwW0bI41sVLDrtqtPBQ2d3c; "
-            "gviem_create_time=1777289270410"
-        )
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "*/*",
-            "Referer": "https://data.eastmoney.com/zjlx/detail.html",
-            "Cookie": em_cookie,
-        }
-        base_url = "https://push2.eastmoney.com/api/qt/clist/get"
-        base_params = {
-            "fid": "f3", "po": "0", "pz": "100", "np": "1",
-            "fltt": "2", "invt": "2",
-            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
-            "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
-            "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
-        }
-
-        cache: dict = {}
-        for pn in range(1, 80):
-            params = {**base_params, "pn": str(pn)}
-            resp = cffi_req.get(base_url, params=params, headers=headers, impersonate="chrome124", timeout=15)
-            result = resp.json()
-            data = result.get("data")
-            if not data:
-                break
-            diff = data.get("diff", [])
-            if not diff:
-                break
-            for d in diff:
-                code = str(d.get("f12", "")).zfill(6)
-                if code in cache:
-                    continue
-                cache[code] = {
-                    "symbol": code,
-                    "name": str(d.get("f14", "")),
-                    "price": _safe_float(d.get("f2")),
-                    "change_pct": str(d.get("f3", "")),
-                    "main_net": _safe_float(d.get("f62")),
-                    "main_pct": str(d.get("f184", "")),
-                    "lg_net": _safe_float(d.get("f66")),
-                    "lg_pct": str(d.get("f69", "")),
-                    "md_net": _safe_float(d.get("f72")),
-                    "md_pct": str(d.get("f75", "")),
-                    "sm_net": _safe_float(d.get("f78")),
-                    "sm_pct": str(d.get("f81", "")),
-                    "xs_net": _safe_float(d.get("f84")),
-                    "xs_pct": str(d.get("f87", "")),
-                }
-
-        _em_flow_cache = cache
-        _em_flow_cache_time = now
-        _persist_em_flow(cache)  # 持久化
-        print(f"[EM] 分页获取完成: {len(cache)} 只股票", flush=True)
-        return cache
-    except Exception as e:
-        print(f"[EM] 东方财富资金流获取失败: {e}", flush=True)
-        # 降级：读持久化缓存
-        persist = _load_em_flow_persist()
-        if persist:
-            _em_flow_cache = persist
-            _em_flow_cache_time = now
-            print(f"[EM] 降级使用持久化缓存: {len(persist)} 只", flush=True)
-            return persist
-        return None
-
-
-def _fetch_ths_flow_cache() -> Optional[dict]:
-    """获取同花顺全量个股资金流数据（带缓存）"""
-    global _ths_flow_cache, _ths_flow_cache_time
-    now = datetime.now()
-    if _ths_flow_cache and _ths_flow_cache_time and (now - _ths_flow_cache_time).total_seconds() < _FLOW_CACHE_TTL:
-        return _ths_flow_cache
-
-    try:
-        import akshare as ak
-        df = ak.stock_fund_flow_individual(symbol="即时")
-        if df is None or df.empty:
-            return None
-
-        cache: dict = {}
-        for _, row in df.iterrows():
-            code = str(int(row.get("股票代码", 0))).zfill(6)
-            cache[code] = {
-                "symbol": code,
-                "name": str(row.get("股票简称", "")),
-                "price": float(row.get("最新价", 0) or 0),
-                "change_pct": str(row.get("涨跌幅", "0%")),
-                "turnover_rate": str(row.get("换手率", "0%")),
-                "inflow": _parse_amount(row.get("流入资金", 0)),
-                "outflow": _parse_amount(row.get("流出资金", 0)),
-                "net_amount": _parse_amount(row.get("净额", 0)),
-            }
-        _ths_flow_cache = cache
-        _ths_flow_cache_time = now
-        return cache
-    except Exception as e:
-        print(f"[THS] 同花顺资金流获取失败: {e}", flush=True)
-        return None
-
-
-def _parse_amount(val) -> float:
-    """解析 akshare 的中文金额（如 '1.48亿' / '7588.54万'）→ 元"""
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).replace(",", "").strip()
-    try:
-        if "亿" in s:
-            return float(s.replace("亿", "")) * 1e8
-        elif "万" in s:
-            return float(s.replace("万", "")) * 1e4
-        else:
-            return float(s)
-    except ValueError:
-        return 0.0
-
 
 @router.get("/moneyflow/{symbol}", response_model=ThsMoneyflowResponse)
 async def get_stock_moneyflow(
     symbol: str,
 ):
     """
-    获取个股实时资金流向数据（同花顺即时流向，降级Tushare日频）。
+    获取个股资金流向数据（东方财富实时 + Tushare日频降级）。
 
-    数据源: akshare stock_fund_flow_individual（同花顺数据中心）
+    数据源: push2.eastmoney.com（实时，仅交易时段）+ Tushare moneyflow（日频盘后）
     返回字段:
     - inflow/outflow: 流入/流出资金（元）
     - net_amount: 净额（元）
@@ -769,55 +492,6 @@ async def get_stock_moneyflow(
     ts_code = _normalize_to_ts_code(symbol)
     bare_code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ").lower()
 
-    # ── 优先：东财实时个股接口（api/qt/stock/get）──
-    flow = _query_stock_flow(ts_code)
-    if flow:
-        return ThsMoneyflowResponse(
-            symbol=ts_code, name=flow["name"],
-            price=flow["price"], change_pct=flow["change_pct"],
-            turnover_rate=flow.get("turnover_rate", ""),
-            inflow=0, outflow=0,
-            net_amount=flow["net_amount"],
-            main_net=flow["main_net"], main_pct=flow["main_pct"],
-            lg_net=flow["lg_net"], lg_pct=flow["lg_pct"],
-            md_net=flow["md_net"], md_pct=flow["md_pct"],
-            sm_net=flow["sm_net"], sm_pct=flow["sm_pct"],
-            xs_net=flow["xs_net"], xs_pct=flow["xs_pct"],
-            d5_main_net=flow.get("d5_main_net",0), d5_main_pct=flow.get("d5_main_pct",""),
-            d5_lg_net=flow.get("d5_lg_net",0), d5_lg_pct=flow.get("d5_lg_pct",""),
-            d5_md_net=flow.get("d5_md_net",0), d5_md_pct=flow.get("d5_md_pct",""),
-            d5_sm_net=flow.get("d5_sm_net",0), d5_sm_pct=flow.get("d5_sm_pct",""),
-            d5_xs_net=flow.get("d5_xs_net",0), d5_xs_pct=flow.get("d5_xs_pct",""),
-            d10_main_net=flow.get("d10_main_net",0), d10_main_pct=flow.get("d10_main_pct",""),
-            d10_lg_net=flow.get("d10_lg_net",0), d10_lg_pct=flow.get("d10_lg_pct",""),
-            d10_md_net=flow.get("d10_md_net",0), d10_md_pct=flow.get("d10_md_pct",""),
-            d10_sm_net=flow.get("d10_sm_net",0), d10_sm_pct=flow.get("d10_sm_pct",""),
-            d10_xs_net=flow.get("d10_xs_net",0), d10_xs_pct=flow.get("d10_xs_pct",""),
-            source="eastmoney_stock_get", updated_at=datetime.now(),
-        )
-
-    # ── 降级：PG 缓存 ──
-    cached = _read_flow_cache("individual", bare_code)
-    if cached:
-        # 适配同花顺格式（inflow/outflow/net_amount）或东财格式（main_net/lg_net...）
-        net = cached.get("net_amount") or cached.get("main_net", 0)
-        return ThsMoneyflowResponse(
-            symbol=ts_code, name=cached.get("name", ""),
-            price=cached.get("price", 0),
-            change_pct=str(cached.get("change_pct", "")),
-            turnover_rate=str(cached.get("turnover_rate", "")),
-            inflow=cached.get("inflow", 0),
-            outflow=cached.get("outflow", 0),
-            net_amount=net,
-            main_net=cached.get("main_net", 0) or net,
-            main_pct=str(cached.get("main_pct", "")),
-            lg_net=cached.get("lg_net", 0), lg_pct=str(cached.get("lg_pct", "")),
-            md_net=cached.get("md_net", 0), md_pct=str(cached.get("md_pct", "")),
-            sm_net=cached.get("sm_net", 0), sm_pct=str(cached.get("sm_pct", "")),
-            xs_net=cached.get("xs_net", 0), xs_pct=str(cached.get("xs_pct", "")),
-            source="cache", updated_at=datetime.now(),
-        )
-
     # ── 判断交易时段 ──
     now = datetime.now()
     is_trading = (
@@ -825,43 +499,35 @@ async def get_stock_moneyflow(
         and (9, 30) <= (now.hour, now.minute) < (15, 0)
     )
 
-    # ── 交易时段：东方财富 → 同花顺 ──
+    # ── 交易时段：优先东财实时个股接口（api/qt/stock/get）──
     if is_trading:
-        # 优先：东方财富（覆盖全量 + 按订单大小分类）
-        em = _fetch_em_flow_cache()
-        if em and bare_code in em:
-            d = em[bare_code]
+        flow = _query_stock_flow(ts_code)
+        if flow:
             return ThsMoneyflowResponse(
-                symbol=ts_code, name=d["name"], price=d["price"],
-                change_pct=d["change_pct"], turnover_rate="",
+                symbol=ts_code, name=flow["name"],
+                price=flow["price"], change_pct=flow["change_pct"],
+                turnover_rate=flow.get("turnover_rate", ""),
                 inflow=0, outflow=0,
-                net_amount=d["main_net"],
-                main_net=d["main_net"], main_pct=d["main_pct"],
-                lg_net=d["lg_net"], lg_pct=d["lg_pct"],
-                md_net=d["md_net"], md_pct=d["md_pct"],
-                sm_net=d["sm_net"], sm_pct=d["sm_pct"],
-                xs_net=d["xs_net"], xs_pct=d["xs_pct"],
-                source="eastmoney", updated_at=datetime.now(),
+                net_amount=flow["net_amount"],
+                main_net=flow["main_net"], main_pct=flow["main_pct"],
+                lg_net=flow["lg_net"], lg_pct=flow["lg_pct"],
+                md_net=flow["md_net"], md_pct=flow["md_pct"],
+                sm_net=flow["sm_net"], sm_pct=flow["sm_pct"],
+                xs_net=flow["xs_net"], xs_pct=flow["xs_pct"],
+                d5_main_net=flow.get("d5_main_net",0), d5_main_pct=flow.get("d5_main_pct",""),
+                d5_lg_net=flow.get("d5_lg_net",0), d5_lg_pct=flow.get("d5_lg_pct",""),
+                d5_md_net=flow.get("d5_md_net",0), d5_md_pct=flow.get("d5_md_pct",""),
+                d5_sm_net=flow.get("d5_sm_net",0), d5_sm_pct=flow.get("d5_sm_pct",""),
+                d5_xs_net=flow.get("d5_xs_net",0), d5_xs_pct=flow.get("d5_xs_pct",""),
+                d10_main_net=flow.get("d10_main_net",0), d10_main_pct=flow.get("d10_main_pct",""),
+                d10_lg_net=flow.get("d10_lg_net",0), d10_lg_pct=flow.get("d10_lg_pct",""),
+                d10_md_net=flow.get("d10_md_net",0), d10_md_pct=flow.get("d10_md_pct",""),
+                d10_sm_net=flow.get("d10_sm_net",0), d10_sm_pct=flow.get("d10_sm_pct",""),
+                d10_xs_net=flow.get("d10_xs_net",0), d10_xs_pct=flow.get("d10_xs_pct",""),
+                source="eastmoney_stock_get", updated_at=datetime.now(),
             )
 
-        # 降级：同花顺
-        ths = _fetch_ths_flow_cache()
-        if ths and bare_code in ths:
-            d = ths[bare_code]
-            return ThsMoneyflowResponse(
-                symbol=ts_code, name=d["name"], price=d["price"],
-                change_pct=d["change_pct"], turnover_rate=d["turnover_rate"],
-                inflow=d["inflow"], outflow=d["outflow"],
-                net_amount=d["net_amount"],
-                source="ths", updated_at=datetime.now(),
-            )
-
-        raise HTTPException(
-            status_code=404,
-            detail=f"东方财富+同花顺实时资金流中均未找到 {bare_code}"
-        )
-
-    # ── 降级：Tushare 日频（仅非交易时段或 THS 接口完全不可用时） ──
+    # ── 降级：Tushare 日频 ──
     try:
         from app.config import get_settings
         settings = get_settings()
@@ -890,7 +556,7 @@ async def get_stock_moneyflow(
     except Exception as e:
         print(f"[Tushare] moneyflow 降级也失败: {e}", flush=True)
 
-    raise HTTPException(status_code=503, detail=f"获取 {ts_code} 资金流向失败（同花顺+ Tushare 均不可用）")
+    raise HTTPException(status_code=503, detail=f"获取 {ts_code} 资金流向失败（东方财富+ Tushare 均不可用）")
 
 
 # ========== 技术面因子 API (数据源: Tushare stk_factor_pro) ==========
