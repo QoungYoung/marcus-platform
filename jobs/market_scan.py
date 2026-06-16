@@ -1555,19 +1555,70 @@ def interpret_gap(gap_risk: dict, news_sentiment: dict) -> str:
     return "技术性"
 
 
+def _get_account_drawdown(chain) -> float:
+    """
+    计算账户从历史峰值的回撤百分比。
+    从 trades.db 读取交易记录推算当前净值，与历史峰值比较。
+
+    Returns:
+        float: 回撤百分比（0-100），无数据时返回 0
+    """
+    try:
+        import sqlite3
+        from pathlib import Path
+        db_path = Path(__file__).resolve().parents[1] / "data" / "trades.db"
+        if not db_path.exists():
+            return 0
+        conn = sqlite3.connect(str(db_path))
+        # 从 positions 表获取当前持仓市值
+        cur = conn.execute("SELECT SUM(current_value) FROM positions WHERE current_value > 0")
+        row = cur.fetchone()
+        current_holdings = float(row[0]) if row and row[0] else 0
+        # 从 trades 表获取已实现盈亏
+        cur = conn.execute("SELECT SUM(actual_profit) FROM trades WHERE actual_profit IS NOT NULL")
+        row = cur.fetchone()
+        realized_pnl = float(row[0]) if row and row[0] else 0
+        # 假设初始本金 10 万
+        initial_capital = 100000
+        current_equity = initial_capital + realized_pnl + (current_holdings - 0)  # 简化估算
+        conn.close()
+        # 从 chain 获取历史峰值
+        peak = (chain.state.get('_account_peak', initial_capital) if chain else initial_capital)
+        # 更新峰值
+        if current_equity > peak:
+            peak = current_equity
+            if chain:
+                chain.state['_account_peak'] = peak
+        if peak <= 0:
+            return 0
+        drawdown = (peak - current_equity) / peak * 100
+        return max(0, round(drawdown, 1))
+    except Exception as e:
+        print(f"[净值熔断] ⚠️ 计算失败: {e}", file=sys.stderr)
+        return 0
+
+
 def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
                    chain: StrategyChain = None, daily_strategy: dict = None,
                    gap_risk: dict = None, fund_flow: dict = None,
                    gap_nature: str = "技术性", flow_nature: str = "量化噪音") -> dict:
     """
-    微调策略（右侧交易版本）。
+    微调策略（右侧交易 v2 版本）。
+
+    🎯 目标函数：在年化最大回撤 < 15% 约束下，追求夏普比率最大化。
+    —— 防御优先（活下来），在趋势确认后逐步放大敞口（赚钱）。
+
+    v2 分层架构：
+      L1 硬风控（不可推翻）：净值熔断、缺口风控、加速/持续降级
+      L2 软风控（Pi可推翻但记录）：持仓反馈、策略链反馈
+      L3 信号层（服从L1+L2）：趋势确认、情绪/资金流加分、Pi同步
 
     决策优先级：价格行为确认 → 量价配合 → 资金流 → 情绪加分。
-    仓位硬上限 60%（Marcus 铁律），立场简化为 3 档。
+    仓位硬上限 100%，立场简化为 3 档。
 
     Args:
         pre_market: 盘前策略
-        validation: 验证结果（含 price_action_confirm / sentiment_bonus / fund_flow_confirm）
+        validation: 验证结果（含 price_action_confirm / sentiment_bonus / fund_flow_confirm / trend_strength）
         feedback_list: 交易反馈
         chain: 策略链管理器（可选）
         daily_strategy: 昨日策略迭代结果
@@ -1577,25 +1628,51 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
     Returns:
         dict: 调整后的策略
     """
-    MARCUS_POSITION_CAP = 60  # Marcus 单日仓位铁律
+    MARCUS_POSITION_CAP = 100  # Marcus 单日仓位铁律
 
     initial = pre_market.get('initial_strategy', {}).copy()
 
-    # Step 1: 初始仓位 — 从盘前策略起步，Pi 确认（Step 9.1）会最终决定
-    position_limit = initial.get('position_limit', 60)
-    position_limit = min(position_limit, MARCUS_POSITION_CAP)
-    # （v1.5：昨日风控降仓逻辑已注释，仓位上限仅由 Pi 分析决定）
-    # if daily_strategy and daily_strategy.get('action') in ('tighten_risk', 'tighten_stop', 'cautious'):
-    #     yesterday_limit = daily_strategy.get('position_limit', MARCUS_POSITION_CAP)
-    #     if yesterday_limit < position_limit:
-    #         position_limit = yesterday_limit
+    # ── 持久化状态（通过 chain.state 跨扫描轮次记忆）──
+    state = chain.state if chain else {}
+    # Step 2 冷却期：连续确认失败轮数
+    consecutive_failure_count = state.get('_cons_fail_count', 0)
+    # Step 8.5 阶梯恢复：连续恢复确认轮数
+    recovery_confirm_count = state.get('_recovery_confirm_count', 0)
+    # 级联去重：缺口触发时的扫描轮次标记
+    gap_triggered_round = state.get('_gap_triggered_round', -999)
 
-    # Step 2: 根据验证结果调整（价格行为驱动的调整）
+    # Step 1: 初始仓位 — 固定起点 100%，后续步骤动态调整
+    position_limit = 100
+
+    # Step 2: 根据验证结果调整（v2: 冷却期 + 趋势确认豁免）
+    # 需连续2轮确认失败才触发降仓；若3/3指数确认上涨趋势，不触发无条件降仓
     if validation.get('adjustment_needed'):
         reason = validation.get('adjustment_reason', '')
         if '降低仓位' in reason or '谨慎' in reason:
-            position_limit = min(position_limit, 30)
-            print(f"[策略调整] 降低仓位 → limit={position_limit}% ({reason})")
+            consecutive_failure_count += 1
+            if consecutive_failure_count >= 2:
+                # 趋势确认豁免：3/3指数上涨 + MACD金叉 → 不触发降仓
+                trend_exempt = (
+                    validation.get('price_action_confirm')
+                    and validation.get('trend_strength', 0) >= 70
+                )
+                if trend_exempt:
+                    print(f"[策略调整] 🛡️ 趋势确认豁免（3/3指数+MACD金叉），跳过降仓 ({reason})")
+                else:
+                    # 级联去重：若本轮已被 Step 6 系统性缺口覆盖，跳过
+                    current_round = state.get('_scan_round', 0)
+                    if current_round - gap_triggered_round > 2:
+                        position_limit = min(position_limit, 30)
+                        print(f"[策略调整] 连续{consecutive_failure_count}轮确认失败 → limit={position_limit}% ({reason})")
+                    else:
+                        print(f"[策略调整] ⏭️ 级联去重：缺口已覆盖本轮降仓 → 跳过 Step 2")
+            else:
+                print(f"[策略调整] ⏸️ 确认失败第{consecutive_failure_count}轮，等待确认（需≥2轮） ({reason})")
+        else:
+            consecutive_failure_count = 0
+    else:
+        # 无调整信号时重置
+        consecutive_failure_count = max(0, consecutive_failure_count - 1)
 
     # Step 3: 情绪辅助加分（仅在价格行为已确认时生效，最多 +5%）
     sentiment_bonus = validation.get('sentiment_bonus', 0)
@@ -1603,23 +1680,40 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         position_limit = min(position_limit + sentiment_bonus, MARCUS_POSITION_CAP)
         print(f"[情绪辅助] +{sentiment_bonus}% → limit={position_limit}%")
 
-    # Step 4: 交易反馈调整（仅计当日持仓亏损）
-    losing_trades = []  # 提前初始化，供后续恢复检测使用
+    # Step 4: 交易反馈调整（v2: 区分试错成本 vs 选股失误）
+    losing_trades = []       # B类：真实亏损（幅度≥2% 或 持仓≥2天）
+    trial_losses = []        # A类：试错成本（幅度<2% 且 持仓<2天）
     if feedback_list:
         from datetime import date
         today = date.today().isoformat()
-        losing_trades = [f for f in feedback_list
-                         if f.get('current_pnl', 0) < -5
-                         and f.get('timestamp', '').startswith(today)]
-        losing_trades_all = [f for f in feedback_list
-                             if f.get('current_pnl', 0) < 0
-                             and f.get('timestamp', '').startswith(today)]
+        for f in feedback_list:
+            if not f.get('timestamp', '').startswith(today):
+                continue
+            pnl = f.get('current_pnl', 0)
+            hold_days = f.get('hold_days', 1)
+            if pnl <= -2 or hold_days >= 2:
+                losing_trades.append(f)       # B类：真实亏损
+            elif pnl < 0:
+                trial_losses.append(f)        # A类：试错成本
+
+        # B类统计（真实亏损）— 触发更严格的风控
         if len(losing_trades) > 2:
             position_limit = min(position_limit, 20)
-            print(f"[持仓反馈] 今日{len(losing_trades)}只显著亏损 → limit={position_limit}%")
-        elif len(losing_trades_all) > 2:
+            print(f"[持仓反馈] 今日{len(losing_trades)}只真实亏损(B类) → limit={position_limit}%")
+        elif len(losing_trades) > 1:
             position_limit = min(position_limit, 30)
-            print(f"[持仓反馈] 今日{len(losing_trades_all)}只亏损 → limit={position_limit}%")
+            print(f"[持仓反馈] 今日{len(losing_trades)}只真实亏损(B类) → limit={position_limit}%")
+
+        # A类统计（试错成本）— 触发较轻的风控
+        if len(trial_losses) > 3:
+            position_limit = min(position_limit, 40)
+            print(f"[持仓反馈] 今日{len(trial_losses)}只试错亏损(A类) → limit={position_limit}%")
+
+        # 显著亏损（PnL < -5%）— 保留原有逻辑，补充严重性
+        severe_losses = [f for f in losing_trades if f.get('current_pnl', 0) < -5]
+        if len(severe_losses) > 2:
+            position_limit = min(position_limit, 15)
+            print(f"[持仓反馈] 🔴 今日{len(severe_losses)}只严重亏损(<-5%) → limit={position_limit}%")
 
     # Step 5: 策略链反馈（仅当日有效）
     if chain:
@@ -1657,93 +1751,169 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         cap = max_by_nature.get(gap_nature, 40)
         position_limit = min(position_limit, cap)
         print(f"[缺口风控] ⚠️ 性质={gap_nature} 最弱缺口{worst_gap:+.2f}% → limit={position_limit}%")
+        # 级联去重：记录本轮触发缺口的时间戳，抑制 Step 2/Step 10.4 的重复响应
+        gap_triggered_round = state.get('_scan_round', 0)
+
+    # Step 6.5: 净值回撤熔断（账户级别，优先级高于所有信号层）
+    account_drawdown_pct = _get_account_drawdown(chain)
+    if account_drawdown_pct >= 8:
+        position_limit = 0
+        print(f"[净值熔断] 🔴 账户回撤 {account_drawdown_pct:.1f}% ≥ 8%，暂停交易")
+    elif account_drawdown_pct >= 5:
+        position_limit = min(position_limit, 10)
+        print(f"[净值熔断] 🟠 账户回撤 {account_drawdown_pct:.1f}% ≥ 5%，仓位≤10%")
+    elif account_drawdown_pct >= 3:
+        position_limit = min(position_limit, 20)
+        print(f"[净值熔断] 🟡 账户回撤 {account_drawdown_pct:.1f}% ≥ 3%，仓位≤20%")
 
     # Step 7: 初始化板块配置（从盘前策略获取，后续资金流会补充）
-    watchlist = initial.get('watchlist', [])
     sector_analysis = initial.get('sector_analysis', [])
     sector_allocation = {}
     for sector in sector_analysis:
         sector_allocation[sector.get('sector', '')] = {
             'stance': sector.get('stance', ''),
             'weight': sector.get('weight', 0.5),
-            'position_limit': sector.get('position_limit', 10),
             'news_score': sector.get('news_score', 50),
         }
 
-    # Step 8: 资金流向影响（AI 语义分类驱动，不再只看净额）
+    # Step 8: 资金流向影响（v2: 增加数据日期戳校验）
     if fund_flow:
-        fscore = fund_flow.get('fund_score', 50)
-        fsignal = fund_flow.get('fund_signal', '中性')
-        top_inflow = fund_flow.get('top_inflow', [])
-        print(f"[资金流] nature={flow_nature} score={fscore} signal={fsignal}")
-
-        flow_adjustments = {
-            '主力建仓': 8,    # 确认度最高，多加
-            '对倒出货': -20,  # 危险信号，多减
-            '护盘维稳': 0,    # 不是进攻信号，不调整
-            '量化噪音': 0,    # 无方向性，忽略
-        }
-        delta = flow_adjustments.get(flow_nature, 0)
-        if delta > 0:
-            position_limit = min(position_limit + delta, MARCUS_POSITION_CAP)
-            print(f"[资金流] ✅ {flow_nature}: +{delta}% → {position_limit}%")
-        elif delta < 0:
-            position_limit = max(position_limit + delta, 10)
-            print(f"[资金流] ⚠️ {flow_nature}: {delta}% → {position_limit}%")
+        # ── 数据新鲜度校验：非当日数据则跳过仓位调整 ──
+        flow_data_date = fund_flow.get('data_date', '')
+        from datetime import date as _date
+        today_str = _date.today().strftime('%Y-%m-%d')
+        is_today_data = (flow_data_date == today_str) if flow_data_date else False
+        if not is_today_data and flow_data_date:
+            print(f"[资金流] ⚠️ 数据日期={flow_data_date}（非当日={today_str}），跳过仓位调整，仅用 sector_allocation 补充")
+            # 继续用资金流入行业补充 sector_allocation，但不调整仓位
         else:
-            print(f"[资金流] ⏭️ {flow_nature}: 不调整仓位")
+            fscore = fund_flow.get('fund_score', 50)
+            fsignal = fund_flow.get('fund_signal', '中性')
+            top_inflow = fund_flow.get('top_inflow', [])
+            print(f"[资金流] nature={flow_nature} score={fscore} signal={fsignal} data_date={flow_data_date or 'N/A'}")
 
-        # 用资金流入行业补充 sector_allocation
-        if top_inflow:
-            for item in top_inflow[:3]:
-                ind = item.get('industry', '')
-                if ind and ind not in sector_allocation:
-                    sector_allocation[ind] = {
-                        'stance': '🟢 超配',
-                        'weight': 0.9,
-                        'position_limit': 20,
-                        'fund_net': item.get('net_fmt', 'N/A')
-                    }
+            flow_adjustments = {
+                '主力建仓': 8,    # 确认度最高，多加
+                '对倒出货': -20,  # 危险信号，多减
+                '护盘维稳': 0,    # 不是进攻信号，不调整
+                '量化噪音': 0,    # 无方向性，忽略
+            }
+            delta = flow_adjustments.get(flow_nature, 0)
+            if delta > 0:
+                position_limit = min(position_limit + delta, MARCUS_POSITION_CAP)
+                print(f"[资金流] ✅ {flow_nature}: +{delta}% → {position_limit}%")
+            elif delta < 0:
+                position_limit = max(position_limit + delta, 10)
+                print(f"[资金流] ⚠️ {flow_nature}: {delta}% → {position_limit}%")
+            else:
+                print(f"[资金流] ⏭️ {flow_nature}: 不调整仓位")
 
-    # Step 8.5: 仓位恢复检测
-    # 解决"只降不升"的非对称困局：风险解除后直接恢复到盘前基础仓位
-    base_limit = initial.get('position_limit', 60)
+        # 用资金流入行业补充 sector_allocation（无论数据新旧，行业方向可参考）
+        if fund_flow:
+            top_inflow = fund_flow.get('top_inflow', [])
+            if top_inflow:
+                for item in top_inflow[:3]:
+                    ind = item.get('industry', '')
+                    if ind and ind not in sector_allocation:
+                        sector_allocation[ind] = {
+                            'stance': '🟢 超配',
+                            'weight': 0.9,
+                            'position_limit': 20,
+                            'fund_net': item.get('net_fmt', 'N/A')
+                        }
+
+    # Step 8.5: 仓位阶梯恢复（v2: 每次最多恢复25个百分点，需连续确认）
+    base_limit = 100
     price_confirmed = validation.get('price_action_confirm', False)
     if position_limit < base_limit:
-        # 恢复条件：价格已确认 + 当日显著亏损不超过 1 只 + 资金流非对倒出货
+        # 恢复条件：价格已确认 + 真实亏损(B类)不超过 1 只 + 资金流非对倒出货
         recovery_ok = (
             price_confirmed
             and len(losing_trades) <= 1
             and flow_nature not in ('对倒出货',)
         )
         if recovery_ok:
-            old_limit = position_limit
-            # 直接恢复到盘前基础仓位（Step 9 会施加 60% 硬封顶）
-            position_limit = base_limit
-            print(f"[仓位恢复] ✅ 风险解除（价格确认✅ 显著亏损≤1✅），仓位上限直接恢复 {old_limit}% → {position_limit}%")
+            recovery_confirm_count += 1
+            if recovery_confirm_count >= 2:
+                # 每次恢复最多 +25%，阶梯上行
+                new_limit = min(position_limit + 25, base_limit)
+                print(f"[仓位恢复] ✅ 连续{recovery_confirm_count}轮确认 → 阶梯恢复 {position_limit}% → {new_limit}%")
+                position_limit = new_limit
+                recovery_confirm_count = 0
+            else:
+                print(f"[仓位恢复] ⏸️ 恢复确认第{recovery_confirm_count}轮（需≥2轮）")
+        else:
+            recovery_confirm_count = max(0, recovery_confirm_count - 1)
+            if position_limit < 30:
+                print(f"[仓位恢复] ❌ 条件不满足(确认={price_confirmed}, 亏损={len(losing_trades)}只, 资金={flow_nature})，维持{position_limit}%")
 
-    # Step 9: 硬封顶 Marcus 60% 铁律
+    # ═══════════ 分层架构：硬风控(L1) → 软风控(L2) → 信号层(L3) ═══════════
+    # v2: L1 硬风控不可被 Pi/信号推翻；L2 软风控可被 Pi 推翻但需记录；L3 信号服从 L1+L2
+
+    # Step 9: 硬封顶
     position_limit = min(position_limit, MARCUS_POSITION_CAP)
 
-    # Step 9.1: Pi 立场同步（v1.5：Pi 是唯一决策者，扫描计算值不得低于 Pi 建议值）
+    # Step 9.0: 提前确定市场立场（供 Pi 同步使用）
+    price_confirmed = validation.get('price_action_confirm', False)
+    if price_confirmed:
+        stance_code = 'green'
+    elif position_limit >= 40:
+        stance_code = 'yellow'
+    else:
+        stance_code = 'yellow'
+
+    # ── Layer 1: 硬风控层（绝对不可被推翻）──
+    l1_hard_cap = 100  # 初始无限制
+
+    # L1: 净值回撤熔断已在前面的 Step 6.5 直接应用到 position_limit，无需重复
+    # L1: 缺口风控已在前面的 Step 6 直接应用
+
+    # L1: 加速降级检测（三信号恶化 → 不等收盘，直接降 red）
+    accelerated = check_accelerated_downgrade(validation, fund_flow, chain)
+    if accelerated.get('downgrade_triggered'):
+        # 级联去重：若本轮缺口已触发，且加速降级是同一事件衍生，适当放宽底线
+        current_round = state.get('_scan_round', 0)
+        if current_round - gap_triggered_round <= 2:
+            l1_hard_cap = min(l1_hard_cap, 20)  # 缺口已覆盖，底线从15放宽到20
+            print(f"[加速降级] ⏭️ 级联去重（缺口{current_round - gap_triggered_round}轮前已触发）→ 底线=20%")
+        else:
+            l1_hard_cap = min(l1_hard_cap, 15)  # 独立触发，底线15%
+            print(f"[加速降级] 🛑 独立触发 → 底线=15%")
+
+    # L1: 持续降级检测（跨轮次空头追踪）
+    downgrade = check_persistent_downgrade(validation, chain)
+    if downgrade.get('downgrade_triggered') and not accelerated.get('downgrade_triggered'):
+        l1_hard_cap = min(l1_hard_cap, 20)
+        print(f"[持续降级] 🛑 强制仓位上限 → {l1_hard_cap}%（防御模式）")
+
+    # ── Layer 2: 软风控层（可被 Pi 推翻，但需记录）──
+    # Step 4(持仓反馈)和 Step 5(策略链反馈)已经在前面对 position_limit 直接应用
+    # 这里记录 L2 的限制值
+    l2_soft_limit = position_limit  # L2 已经压缩过的值
+
+    # ── Layer 3: 信号层（服从 L1+L2）──
+    # Step 9.1: Pi 立场同步（v2: Pi 只能提升 L2 以上的部分，不能突破 L1）
     if chain:
         pi = chain.get_pi_confirmation()
         pi_limit = pi.get('position_limit', 0)
         pi_stance = pi.get('stance', '')
         if pi_limit > 0 and scan_stance_matches(pi_stance, stance_code):
-            # Pi 和扫描立场同向时，以 Pi 的仓位为准（不低于 Pi）
-            if position_limit < pi_limit:
-                print(f"[Pi同步] 扫描仓位 {position_limit}% < Pi建议 {pi_limit}%，上修至 Pi 值")
-                position_limit = pi_limit
+            # Pi 可以在 L2_limit 和 pi_limit 之间上修，但不能超过 L1_hard_cap
+            signal_limit = max(l2_soft_limit, pi_limit)
+            signal_limit = min(signal_limit, l1_hard_cap)  # L1 硬封顶
+            if signal_limit > position_limit:
+                if l1_hard_cap < 100 and signal_limit > l1_hard_cap:
+                    print(f"[Pi同步] Pi建议{pi_limit}%，但 L1硬风控限制={l1_hard_cap}%，不可突破")
+                print(f"[Pi同步] 扫描仓位 {position_limit}% → {signal_limit}%（L1硬顶={l1_hard_cap}% L2={l2_soft_limit}% Pi={pi_limit}%）")
+                position_limit = signal_limit
 
-    # Step 9.3: 加速降级检测（三信号恶化 → 不等收盘，直接降 red）
-    accelerated = check_accelerated_downgrade(validation, fund_flow, chain)
+    # 应用 L1 硬风控的最终底线
+    # L1 优先于所有信号：Step 6(缺口) + Step 6.5(净值熔断) 已直接压缩，此处处理降级层
+    if l1_hard_cap < 100:
+        position_limit = min(position_limit, l1_hard_cap)
+        print(f"[L1硬风控] 最终底线={l1_hard_cap}%，仓位上限={position_limit}%")
 
-    # Step 9.5: 持续降级检测（跨轮次空头追踪）
-    # 当多个指数持续下跌超过多轮扫描，自动触发 stance 降级
-    downgrade = check_persistent_downgrade(validation, chain)
-
-    # Step 10: 确定市场立场（信号驱动）
+    # ═══════════ Step 10: 确定市场立场（信号驱动）═══════════
     # 价格确认 → green；未确认但情绪支持 → yellow；否则 → hold
     price_confirmed = validation.get('price_action_confirm', False)
     if price_confirmed:
@@ -1756,34 +1926,42 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         adjusted_stance = '⚪ hold'
         stance_code = 'yellow'
 
-    # Step 10.3: 立场-仓位一致性校验
+    # Step 10.3: 立场-仓位一致性校验（v2: 排除 L1 硬风控导致的低仓位）
     # 避免立场与仓位上限矛盾（如 aggressive_buy 但仓位上限仅 20%）
+    # 若低仓位由 L1 硬风控（缺口/净值熔断）驱动，不触发立场降级
+    l1_triggered = (l1_hard_cap < 100)
     if stance_code == 'green' and position_limit < 30:
-        # 激进看多但仓位被风险控制压低 → 立场降为谨慎
-        adjusted_stance = '🟡 cautious_buy'
-        stance_code = 'yellow'
-        # 保留原始判定信息用于报告展示
-        validation['stance_override_reason'] = (
-            f'价格已确认，但仓位上限仅{position_limit}%（<30%），立场降级为 cautious_buy'
-        )
+        if l1_triggered:
+            # L1 硬风控导致的低仓位，不降立场，仅记录
+            validation['stance_override_reason'] = (
+                f'价格已确认（green），但 L1硬风控 限制仓位={position_limit}%（缺口/净值熔断），立场维持 green'
+            )
+            print(f"[立场一致性] ⏭️ green + limit < 30% 由 L1硬风控 导致，维持 green")
+        else:
+            # 软风控导致的低仓位，降立场
+            adjusted_stance = '🟡 cautious_buy'
+            stance_code = 'yellow'
+            validation['stance_override_reason'] = (
+                f'价格已确认，但软风控限制仓位={position_limit}%（<30%），立场降级为 cautious_buy'
+            )
+            print(f"[立场一致性] 降级 green → yellow（软风控限制仓位={position_limit}%）")
 
-
-    # Step 10.4: 应用加速降级（优先级：加速 > 持续 > 常规判定）
+    # Step 10.4: 应用加速降级（仅调整立场，仓位已在 L1 层处理）
     if accelerated.get('downgrade_triggered'):
         adjusted_stance = accelerated.get('downgrade_to', adjusted_stance)
         stance_code = accelerated.get('to_code', stance_code)
-        position_limit = min(position_limit, 15)  # 加速降级更激进：仓位 ≤ 15%
-        print(f"[加速降级] 🛑 强制 red + 仓位上限 → {position_limit}%")
 
-    # Step 10.5: 应用持续降级（加速降级未触发时生效）
+    # Step 10.5: 应用持续降级（仅调整立场，仓位已在 L1 层处理）
     if downgrade.get('downgrade_triggered') and not accelerated.get('downgrade_triggered'):
         adjusted_stance = downgrade.get('downgrade_to', adjusted_stance)
         stance_code = downgrade.get('to_code', stance_code)
-        # 降级为 red 时强制仓位上限 ≤ 20%（防御模式）
-        if stance_code == 'red':
-            position_limit = min(position_limit, 20)
-            print(f"[持续降级] 🛑 强制仓位上限 → {position_limit}%（防御模式）")
     
+
+    # ── 持久化跨轮次状态 ──
+    if chain:
+        state['_cons_fail_count'] = consecutive_failure_count
+        state['_recovery_confirm_count'] = recovery_confirm_count
+        state['_gap_triggered_round'] = gap_triggered_round
 
     return {
         'stance': adjusted_stance,
@@ -1794,11 +1972,13 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
         'priority': [],
         'adjustment_reason': validation.get('adjustment_reason', '无调整'),
         'gap_risk': gap_risk,
-        'watchlist': watchlist,
         'sector_analysis': sector_analysis,
         'sector_allocation': sector_allocation,
         'downgrade': downgrade,  # 持续降级结果，供报告和 scan_result 引用
         'accelerated_downgrade': accelerated,  # 加速降级结果（更紧急）
+        # v2: 分层风控元信息
+        'l1_hard_cap': l1_hard_cap,
+        'account_drawdown': account_drawdown_pct,
     }
 
 
@@ -2132,9 +2312,7 @@ def generate_scan_report():
         try:
             from fund_flow import get_fund_flow_summary
             position_symbols = [p['symbol'] for p in positions] if positions else []
-            pre_watchlist = (chain.state.get('pre_market') or {}).get('initial_strategy', {}).get('watchlist', [])
-            pre_symbols = [w['symbol'] if isinstance(w, dict) else w for w in pre_watchlist]
-            target_symbols = list(dict.fromkeys(position_symbols + pre_symbols))
+            target_symbols = list(dict.fromkeys(position_symbols))
             if target_symbols:
                 print(f"[资金流] 获取个股资金流 ({len(target_symbols)}只，Tushare昨日数据)...")
                 stock_flow = get_fund_flow_summary(symbols=target_symbols)
@@ -2153,9 +2331,7 @@ def generate_scan_report():
         try:
             from fund_flow import get_fund_flow_summary
             position_symbols = [p['symbol'] for p in positions] if positions else []
-            pre_watchlist = (chain.state.get('pre_market') or {}).get('initial_strategy', {}).get('watchlist', [])
-            pre_symbols = [w['symbol'] if isinstance(w, dict) else w for w in pre_watchlist]
-            target_symbols = list(dict.fromkeys(position_symbols + pre_symbols))
+            target_symbols = list(dict.fromkeys(position_symbols))
             print(f"[资金流] 正在获取资金流向数据 ({len(target_symbols)}只，同时拉取全市场大盘)...")
             fund_flow = get_fund_flow_summary(symbols=target_symbols)
             if fund_flow:
@@ -2375,9 +2551,6 @@ def generate_scan_report():
     # 1. 读取盘前策略
     pre_market = chain.state.get('pre_market') or {}
     print(f"[策略链] 盘前策略: {pre_market.get('initial_strategy', {}).get('stance', 'N/A')}")
-    print(f"[策略链] 盘前仓位限制: {pre_market.get('initial_strategy', {}).get('position_limit', 'N/A')}%")
-    print(f"[策略链] 观察列表: {pre_market.get('initial_strategy', {}).get('watchlist', [])}")
-
     # Step 6 核心：读取昨日策略迭代结果（影响今日仓位上限）
     daily_strategy = chain.state.get('daily_strategy') or {}
     if daily_strategy:
@@ -2456,6 +2629,9 @@ def generate_scan_report():
             print(f"[持仓评估] ⚠️ 跳过: {e}", file=sys.stderr)
 
     # 调整策略（传入策略链以读取更多反馈 + 缺口性质 + 资金流性质）
+    # v2: 递增扫描轮次（用于冷却期/级联去重）
+    if chain:
+        chain.state['_scan_round'] = chain.state.get('_scan_round', 0) + 1
     adjusted_strategy = adjust_strategy(pre_market, validation, feedback_list, chain, daily_strategy, gap_risk, fund_flow, gap_nature, flow_nature)
 
     # 连续亏损强制休息：覆盖 adjusted_strategy，阻止入场
