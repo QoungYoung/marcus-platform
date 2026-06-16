@@ -527,7 +527,7 @@ async def get_stock_moneyflow(
                 source="eastmoney_stock_get", updated_at=datetime.now(),
             )
 
-    # ── 降级：Tushare 日频 ──
+    # ── 降级：Tushare 日频（moneyflow_dc）──
     try:
         from app.config import get_settings
         settings = get_settings()
@@ -537,59 +537,38 @@ async def get_stock_moneyflow(
         from datetime import timedelta
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
-        df = pro.moneyflow(ts_code=ts_code, start_date=start_date, end_date=end_date, limit=1)
+        df = pro.moneyflow_dc(ts_code=ts_code, start_date=start_date, end_date=end_date, limit=1)
         if df is not None and not df.empty:
             row = df.iloc[0]
-            # 各档买卖金额(万元)
-            buy_elg = float(row.get("buy_elg_amount", 0) or 0)
-            sell_elg = float(row.get("sell_elg_amount", 0) or 0)
-            buy_lg = float(row.get("buy_lg_amount", 0) or 0)
-            sell_lg = float(row.get("sell_lg_amount", 0) or 0)
-            buy_md = float(row.get("buy_md_amount", 0) or 0)
-            sell_md = float(row.get("sell_md_amount", 0) or 0)
-            buy_sm = float(row.get("buy_sm_amount", 0) or 0)
-            sell_sm = float(row.get("sell_sm_amount", 0) or 0)
-            # 净流入(万元→元)
-            lg_net = (buy_elg - sell_elg) * 10000    # 超大单
-            md_net = (buy_lg - sell_lg) * 10000      # 大单
-            sm_net = (buy_md - sell_md) * 10000      # 中单
-            xs_net = (buy_sm - sell_sm) * 10000      # 小单
-            main_net = lg_net + md_net                # 主力=超大单+大单
-            # 净占比
-            total = buy_elg + sell_elg + buy_lg + sell_lg + buy_md + sell_md + buy_sm + sell_sm
-            def _pct(net: float) -> str:
-                if total == 0:
-                    return "0"
-                return str(round(net / (total * 10000) * 100, 2))
-            # 尝试获取股票名称
-            stock_name = ""
-            try:
-                import sqlite3
-                pool_db = settings.data_dir / "stock_pool.db"
-                if pool_db.exists():
-                    conn = sqlite3.connect(str(pool_db))
-                    cur = conn.cursor()
-                    cur.execute("SELECT name FROM stock_pool WHERE ts_code = ?", (ts_code,))
-                    r = cur.fetchone()
-                    if r:
-                        stock_name = r[0]
-                    conn.close()
-            except Exception:
-                pass
+            def _f(col: str, default=0.0) -> float:
+                v = row.get(col)
+                return float(v) if v is not None and v != '' else default
+            def _pct(col: str) -> str:
+                v = row.get(col)
+                if v is not None and v != '' and v != 0:
+                    return str(round(float(v), 2))
+                return "0"
+            # moneyflow_dc 字段均为净额（万元）→ 元
+            lg_net = _f("buy_elg_amount") * 10000      # 超大单
+            md_net = _f("buy_lg_amount") * 10000       # 大单
+            sm_net = _f("buy_md_amount") * 10000       # 中单
+            xs_net = _f("buy_sm_amount") * 10000       # 小单
+            main_net = _f("net_amount") * 10000        # 主力=超大单+大单
+
             return ThsMoneyflowResponse(
                 symbol=ts_code,
-                name=stock_name,
-                price=0,
-                change_pct="0%",
+                name=str(row.get("name", "") or ""),
+                price=round(_f("close"), 2),
+                change_pct=str(round(_f("pct_change"), 2)) + "%",
                 turnover_rate="0%",
-                inflow=(buy_elg + buy_lg + buy_md + buy_sm) * 10000,
-                outflow=(sell_elg + sell_lg + sell_md + sell_sm) * 10000,
+                inflow=0,
+                outflow=0,
                 net_amount=main_net,
-                main_net=main_net, main_pct=_pct(main_net),
-                lg_net=lg_net, lg_pct=_pct(lg_net),
-                md_net=md_net, md_pct=_pct(md_net),
-                sm_net=sm_net, sm_pct=_pct(sm_net),
-                xs_net=xs_net, xs_pct=_pct(xs_net),
+                main_net=main_net, main_pct=_pct("net_amount_rate"),
+                lg_net=lg_net, lg_pct=_pct("buy_elg_amount_rate"),
+                md_net=md_net, md_pct=_pct("buy_lg_amount_rate"),
+                sm_net=sm_net, sm_pct=_pct("buy_md_amount_rate"),
+                xs_net=xs_net, xs_pct=_pct("buy_sm_amount_rate"),
                 source="tushare",
                 updated_at=datetime.now(),
             )
