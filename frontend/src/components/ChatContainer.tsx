@@ -425,13 +425,15 @@ const getMoneyflowTool = {
       return v.toFixed(2);
     };
     const sign = (v: number) => v >= 0 ? '+' : '';
+    const isDetail = data.source === 'eastmoney' || data.source === 'eastmoney_stock_get' || data.source === 'tushare';
+    const label = data.source === 'tushare' ? '日频资金流向' : '实时资金流向';
     const lines = [
-      `${data.symbol}${data.name ? ' ' + data.name : ''} 实时资金流向`,
+      `${data.symbol}${data.name ? ' ' + data.name : ''} ${label}`,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `最新价: ${data.price}  |  涨跌幅: ${data.change_pct}%  |  换手率: ${data.turnover_rate || '-'}`,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
     ];
-    if (data.source === 'eastmoney' || data.source === 'eastmoney_stock_get') {
+    if (isDetail) {
       const fmtRow = (label: string, net: number, pct: string) =>
         `  ${label}: ${sign(net)}${fmt(net)}  (${pct || '-'}%)`;
       lines.push('[今日]');

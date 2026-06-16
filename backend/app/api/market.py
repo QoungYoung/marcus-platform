@@ -540,21 +540,62 @@ async def get_stock_moneyflow(
         df = pro.moneyflow(ts_code=ts_code, start_date=start_date, end_date=end_date, limit=1)
         if df is not None and not df.empty:
             row = df.iloc[0]
-            net_amt = float(row.get("net_mf_amount", 0) or 0)
+            # 各档买卖金额(万元)
+            buy_elg = float(row.get("buy_elg_amount", 0) or 0)
+            sell_elg = float(row.get("sell_elg_amount", 0) or 0)
+            buy_lg = float(row.get("buy_lg_amount", 0) or 0)
+            sell_lg = float(row.get("sell_lg_amount", 0) or 0)
+            buy_md = float(row.get("buy_md_amount", 0) or 0)
+            sell_md = float(row.get("sell_md_amount", 0) or 0)
+            buy_sm = float(row.get("buy_sm_amount", 0) or 0)
+            sell_sm = float(row.get("sell_sm_amount", 0) or 0)
+            # 净流入(万元→元)
+            lg_net = (buy_elg - sell_elg) * 10000    # 超大单
+            md_net = (buy_lg - sell_lg) * 10000      # 大单
+            sm_net = (buy_md - sell_md) * 10000      # 中单
+            xs_net = (buy_sm - sell_sm) * 10000      # 小单
+            main_net = lg_net + md_net                # 主力=超大单+大单
+            # 净占比
+            total = buy_elg + sell_elg + buy_lg + sell_lg + buy_md + sell_md + buy_sm + sell_sm
+            def _pct(net: float) -> str:
+                if total == 0:
+                    return "0"
+                return str(round(net / (total * 10000) * 100, 2))
+            # 尝试获取股票名称
+            stock_name = ""
+            try:
+                import sqlite3
+                pool_db = settings.data_dir / "stock_pool.db"
+                if pool_db.exists():
+                    conn = sqlite3.connect(str(pool_db))
+                    cur = conn.cursor()
+                    cur.execute("SELECT name FROM stock_pool WHERE ts_code = ?", (ts_code,))
+                    r = cur.fetchone()
+                    if r:
+                        stock_name = r[0]
+                    conn.close()
+            except Exception:
+                pass
             return ThsMoneyflowResponse(
                 symbol=ts_code,
-                name="",
+                name=stock_name,
                 price=0,
                 change_pct="0%",
                 turnover_rate="0%",
-                inflow=0,
-                outflow=0,
-                net_amount=net_amt * 10000,  # Tushare万元→元
+                inflow=(buy_elg + buy_lg + buy_md + buy_sm) * 10000,
+                outflow=(sell_elg + sell_lg + sell_md + sell_sm) * 10000,
+                net_amount=main_net,
+                main_net=main_net, main_pct=_pct(main_net),
+                lg_net=lg_net, lg_pct=_pct(lg_net),
+                md_net=md_net, md_pct=_pct(md_net),
+                sm_net=sm_net, sm_pct=_pct(sm_net),
+                xs_net=xs_net, xs_pct=_pct(xs_net),
                 source="tushare",
                 updated_at=datetime.now(),
             )
     except Exception as e:
         print(f"[Tushare] moneyflow 降级也失败: {e}", flush=True)
+        import traceback; traceback.print_exc()
 
     raise HTTPException(status_code=503, detail=f"获取 {ts_code} 资金流向失败（东方财富+ Tushare 均不可用）")
 
