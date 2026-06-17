@@ -675,6 +675,70 @@ const getTradeAdviceTool = {
   },
 };
 
+const getRealtimeIndicatorsTool = {
+  name: 'get_realtime_indicators',
+  label: '实时技术指标',
+  description: '【实时·盘中估算】获取个股盘中实时估算技术指标（KDJ/MACD/RSI/MA5/MA10/MA20）。数据源：腾讯qt.gtimg.cn实时行情+Tushare历史日线计算。⚠️ data_source="intraday_estimate"（盘中估算），今日高低点未最终确认，仅作辅助参考，不能作为独立建仓的唯一理由。同时返回最近3日Tushare盘后确认值作基准对比',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string }, _signal: AbortSignal | undefined) {
+    const symbol = params.symbol;
+    const res = await fetch(`${MARCUS_API}/indicator/realtime/${encodeURIComponent(symbol)}?limit=3`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const lines: string[] = [];
+    if (data.warning) {
+      lines.push(`⚠️ 警告: ${data.warning}`);
+      lines.push('');
+    }
+
+    // 实时盘中指标
+    const rt = data.realtime;
+    if (rt) {
+      lines.push(`📊 ${data.symbol}${data.name ? ' ' + data.name : ''} 实时技术指标`);
+      lines.push(`💰 当前价: ${rt.current_price} | 数据源: ${rt.data_source}`);
+      lines.push(`📅 计算时间: ${rt.calc_time || 'N/A'} | 锚定交易日: ${rt.prev_trade_date}`);
+      lines.push('');
+      lines.push('── MA 均线 ──');
+      lines.push(`  MA5: ${rt.ma5?.toFixed(2) || 'N/A'}  MA10: ${rt.ma10?.toFixed(2) || 'N/A'}  MA20: ${rt.ma20?.toFixed(2) || 'N/A'}`);
+      lines.push('');
+      lines.push('── KDJ (9,3,3) ──');
+      lines.push(`  K: ${rt.kdj_k?.toFixed(2) || 'N/A'}  D: ${rt.kdj_d?.toFixed(2) || 'N/A'}  J: ${rt.kdj_j?.toFixed(2) || 'N/A'}`);
+      const kdjSignal = rt.kdj_k > rt.kdj_d ? '金叉 ↑' : rt.kdj_k < rt.kdj_d ? '死叉 ↓' : '交叉';
+      lines.push(`  状态: ${kdjSignal}`);
+      lines.push('');
+      lines.push('── MACD (12,26,9) ──');
+      lines.push(`  DIF: ${rt.macd_dif?.toFixed(4) || 'N/A'}  DEA: ${rt.macd_dea?.toFixed(4) || 'N/A'}  BAR: ${rt.macd_bar?.toFixed(4) || 'N/A'}`);
+      const macdSignal = rt.macd_bar > 0 ? '红柱 (多头)' : rt.macd_bar < 0 ? '绿柱 (空头)' : '零';
+      lines.push(`  状态: ${macdSignal}`);
+      lines.push('');
+      lines.push('── RSI ──');
+      lines.push(`  RSI6: ${rt.rsi_6?.toFixed(1) || 'N/A'}  RSI12: ${rt.rsi_12?.toFixed(1) || 'N/A'}  RSI24: ${rt.rsi_24?.toFixed(1) || 'N/A'}`);
+      const rsiStatus = rt.rsi_6 > 80 ? '超买区⚠️' : rt.rsi_6 < 20 ? '超卖区✨' : rt.rsi_6 > 50 ? '偏强' : '偏弱';
+      lines.push(`  状态: ${rsiStatus}`);
+      if (rt.warning) lines.push(`  ⚠️ ${rt.warning}`);
+    } else {
+      lines.push(`⚠️ 无法获取 ${data.symbol} 的实时指标（可能非盘中时段或数据源异常）`);
+    }
+
+    // 历史盘后确认值
+    if (data.historical && data.historical.length > 0) {
+      lines.push('');
+      lines.push('── 最近交易日盘后确认值（Tushare，已确认）──');
+      for (const h of data.historical) {
+        lines.push(`📅 ${h.trade_date || 'N/A'}`);
+        lines.push(`  收盘: ${h.close || 'N/A'} | KDJ_K: ${h.kdj_k_qfq || 'N/A'} | KDJ_D: ${h.kdj_d_qfq || 'N/A'}`);
+        lines.push(`  MACD_DIF: ${h.macd_dif_qfq || 'N/A'} | MACD_DEA: ${h.macd_dea_qfq || 'N/A'}`);
+      }
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 const getMarketMoneyflowTool = {
   name: 'get_market_moneyflow',
   label: '大盘资金流向',
@@ -982,6 +1046,7 @@ const chatTools: AgentTool[] = [
   createTool(getDailyKlineTool),
   createTool(getMoneyflowTool),
   createTool(getTechnicalTool),
+  createTool(getRealtimeIndicatorsTool),
   createTool(getFibonacciLevelsTool),
   createTool(getDailyChannelTool),
   createTool(getTradeAdviceTool),
@@ -1015,7 +1080,7 @@ const COLLAPSIBLE_TOOLS = [
   'get_market_indices', 'get_quote', 'get_portfolio',
   'get_concept_fund_flow', 'get_industry_fund_flow', 'get_market_moneyflow', 'get_concept_mapping',
   'get_etf_quote', 'get_etf_kline', 'get_daily_kline', 'get_moneyflow',
-  'get_technical', 'get_fibonacci_levels', 'get_daily_channel', 'get_trade_advice',
+  'get_technical', 'get_realtime_indicators', 'get_fibonacci_levels', 'get_daily_channel', 'get_trade_advice',
   'read_db_table', 'get_db_schema',
   'get_latest_scan_report', 'get_pi_analysis_history', 'get_trade_history',
 ];
@@ -1034,6 +1099,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_daily_kline: '查询历史K线',
   get_moneyflow: '查看资金流向',
   get_technical: '查询技术指标',
+  get_realtime_indicators: '实时技术指标',
   read_db_table: '读取数据库表',
   get_db_schema: '获取数据库结构',
   get_fibonacci_levels: '斐波那契回撤',

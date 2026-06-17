@@ -98,13 +98,13 @@ tasks:
   - market_scan
 - id: auto_trade_mid_morning
   name: 自动交易 (早盘中游)
-  description: 9:50 产业链中下游跟进建仓（15分钟间隔，上游已运行确认）
+  description: 9:53 产业链中下游跟进建仓（15分钟间隔，上游已运行确认）
   enabled: true
   type: pi_trade
   pi_prompt: mid_morning
   schedule:
     type: cron
-    expr: 50 9 * * *
+    expr: 53 9 * * *
     timezone: Asia/Shanghai
   output:
     log_file: logs/auto_trade_{date}.log

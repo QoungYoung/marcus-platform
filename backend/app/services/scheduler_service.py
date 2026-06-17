@@ -1058,8 +1058,8 @@ class SchedulerService:
             )
         elif 'mid_morning' in task.id or pi_prompt_context == 'mid_morning':
             trade_mode_instruction = (
-                "现在是早盘 9:50，进入 **产业链中游跟进建仓模式**。\n"
-                "此刻上游已运行 15 分钟，可确认其站稳。\n"
+                "现在是早盘 9:53，进入 **产业链中游跟进建仓模式**。\n"
+                "此刻上游已运行 18 分钟，可确认其站稳。\n"
                 "1. 检查上游持仓走势，确认站住分时均线\n"
                 "2. 买入建仓计划表中的中游标的（如有），检查中游技术面\n"
                 "3. 若中游无合格标的，跳过该环节并记录原因"

@@ -77,6 +77,40 @@ class PaperTradingEngine:
     - 交易记录：trades 表
     """
     
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        """规范化股票代码，自动添加 SH/SZ 前缀
+
+        A股前缀规则：
+        - 000xxx ~ 004xxx → SZ (深市主板)
+        - 300xxx ~ 301xxx → SZ (创业板)
+        - 600xxx ~ 605xxx → SH (沪市主板)
+        - 688xxx → SH (科创板)
+
+        Args:
+            symbol: 原始代码，如 "300162" 或 "SZ300162"
+
+        Returns:
+            带前缀的规范代码，如 "SZ300162"
+        """
+        symbol = symbol.strip().upper()
+        # 已有前缀，直接返回
+        if symbol.startswith("SH") or symbol.startswith("SZ"):
+            return symbol
+        # 纯数字代码，自动补充前缀
+        if symbol.isdigit() and len(symbol) == 6:
+            prefix = symbol[:3]
+            if "000" <= prefix <= "004":
+                return f"SZ{symbol}"
+            elif "300" <= prefix <= "301":
+                return f"SZ{symbol}"
+            elif "600" <= prefix <= "605":
+                return f"SH{symbol}"
+            elif prefix == "688":
+                return f"SH{symbol}"
+        # 无法识别，保持原样（可能是期货代码等）
+        return symbol
+
     def __init__(self, data_dir: str = "./data", initial_capital: float = 1000000.0):
         """
         初始化模拟账户
@@ -401,6 +435,9 @@ class PaperTradingEngine:
         Returns:
             订单 ID，失败返回 None
         """
+        # 规范化股票代码（自动补充 SH/SZ 前缀）
+        symbol = self._normalize_symbol(symbol)
+
         # 计算所需资金
         if symbol.startswith("SH") or symbol.startswith("SZ"):
             required_cash = price * volume * 1.0005  # 含手续费
@@ -468,6 +505,9 @@ class PaperTradingEngine:
         Returns:
             订单 ID，失败返回 None
         """
+        # 规范化股票代码（自动补充 SH/SZ 前缀）
+        symbol = self._normalize_symbol(symbol)
+
         if symbol not in self.positions:
             print(f"[ERR] 没有 {symbol} 的持仓")
             return None
