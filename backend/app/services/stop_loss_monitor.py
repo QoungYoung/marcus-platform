@@ -7,9 +7,11 @@
   0a. 破底止损（锚点动态上移）：跌破 max(阶段底×0.97, 入场后最高收盘×0.90)
   0b. 成本止损：从未盈利→-4% / 曾小盈转亏→-3% / 无HWM→-6%
   1.  板块背离止损：个股日收益 - 板块日收益 < -3pp（差值法）
-  2.  铁律二移动止盈（含HWM增强）：
+  2.  铁律二移动止盈（v2.0 振幅分档统一版）：
       - HWM曾大盈≥5% → 保本离场(-1%)
-      - 浮盈≥8%→保护线+6% / ≥5%→+3.5% / ≥3%→+1% / ≥1%→保本
+      - 低波<3%: T1≥1%→保本 | T2≥3%→+1% | T3≥5%→+2%
+      - 中波3-6%: T1≥2%→保本 | T2≥5%→+2% | T3≥8%→+4%
+      - 高波>6%: T1≥3%→保本 | T2≥7%→+3% | T3≥10%→+5%
   3.  大盘相对表现止损：大盘跌>2%且个股跌幅-大盘跌幅<-3pp→强审
   4.  T+1 保护：今日买入的持仓不执行止损卖出
   5.  早盘冷静期：09:30-09:45 不执行卖出（该窗口统计胜率 0%）
@@ -371,15 +373,88 @@ class StopLossMonitor:
 
         return None
 
-    # ── 规则 2: 铁律二移动止盈（P0-3: HWM增强 + P1回吐比例收紧） ──
+    # ── 规则 2: 铁律二移动止盈（v2.0 振幅分档统一版） ──
+
+    # 振幅缓存（按交易日缓存，日K线盘中不变）
+    _amplitude_cache: Dict[str, tuple] = {}  # symbol -> (tier, date_str)
+
+    @staticmethod
+    def _get_iron_rule2_thresholds(amplitude_tier: str) -> dict:
+        """返回振幅档位对应的铁律二保护线阈值（统一版 v2.0）。
+
+        | 波动档 | T1:浮盈→保本 | T2:浮盈→成本+X% | T3:浮盈→成本+Y% |
+        |:------:|:-----------:|:--------------:|:--------------:|
+        | 低波<3% | ≥1%        | ≥3%→+1%        | ≥5%→+2%        |
+        | 中波3-6%| ≥2%        | ≥5%→+2%        | ≥8%→+4%        |
+        | 高波>6% | ≥3%        | ≥7%→+3%        | ≥10%→+5%       |
+        """
+        if amplitude_tier == "低波":
+            return {"t1_pct": 1.0, "t2_pct": 3.0, "t2_plus_pct": 1.0, "t3_pct": 5.0, "t3_plus_pct": 2.0}
+        elif amplitude_tier == "中波":
+            return {"t1_pct": 2.0, "t2_pct": 5.0, "t2_plus_pct": 2.0, "t3_pct": 8.0, "t3_plus_pct": 4.0}
+        else:  # 高波
+            return {"t1_pct": 3.0, "t2_pct": 7.0, "t2_plus_pct": 3.0, "t3_pct": 10.0, "t3_plus_pct": 5.0}
+
+    def _get_amplitude_tier(self, symbol: str) -> str:
+        """获取个股近5日日均振幅档位。
+
+        数据来源：Tushare 日K线（已收盘的完整日线，盘中不变化）。
+        缓存策略：按交易日缓存，同一交易日不重复查询 Tushare。
+        """
+        today = datetime.now().strftime("%Y%m%d")
+        cached = self._amplitude_cache.get(symbol)
+        if cached:
+            tier, cached_date = cached
+            if cached_date == today:
+                return tier
+
+        tier = "中波"  # 默认
+        try:
+            from app.api.indicator import _normalize_to_ts_code
+            from app.config import get_settings
+            import tushare as ts
+            settings = get_settings()
+            token = settings.get_tushare_token()
+            pro = ts.pro_api(token)
+            ts_code = _normalize_to_ts_code(symbol)
+            from datetime import datetime as dt, timedelta
+            end_d = dt.now().strftime("%Y%m%d")
+            start_d = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=5)
+            if df is not None and not df.empty:
+                df = df.sort_values("trade_date", ascending=False)
+                amps = []
+                for _, row in df.head(5).iterrows():
+                    close = float(row["close"])
+                    if close > 0:
+                        amp = (float(row["high"]) - float(row["low"])) / close * 100
+                        amps.append(amp)
+                if amps:
+                    avg_amp = sum(amps) / len(amps)
+                    if avg_amp < 3.0:
+                        tier = "低波"
+                    elif avg_amp <= 6.0:
+                        tier = "中波"
+                    else:
+                        tier = "高波"
+        except Exception:
+            pass
+
+        self._amplitude_cache[symbol] = (tier, today)
+        return tier
 
     def _check_iron_rule2(
         self, symbol: str, float_pnl_pct: float, current_price: float, avg_price: float
     ) -> Optional[str]:
         """
-        铁律二：盈利单不能变亏损。
-        P0-3: HWM 增强——检测曾大盈后回撤。
-        P1: 回吐比例收紧（专家组建议）。
+        铁律二：盈利单不能变亏损（v2.0 振幅分档统一版）。
+
+        根据近5日日均振幅确定档位，每条保护线为成本价上移幅度：
+        | 波动档 | T1·保本 | T2·保护线 | T3·保护线 |
+        |:------:|:-----:|:-------:|:-------:|
+        | 低波<3% | ≥1%→成本 | ≥3%→+1% | ≥5%→+2% |
+        | 中波3-6%| ≥2%→成本 | ≥5%→+2% | ≥8%→+4% |
+        | 高波>6% | ≥3%→成本 | ≥7%→+3% | ≥10%→+5% |
         """
         # ── HWM 增强：曾大盈(≥5%) 转亏损 → 保本离场 ──
         try:
@@ -395,23 +470,33 @@ class StopLossMonitor:
         except Exception:
             pass
 
-        # ── 标准移动止盈（回吐比例收紧） ──
-        # P1: ≥8%→保护线+6%(回吐25%) / ≥5%→+3.5%(回吐30%) / ≥3%→+1% / ≥1%→保本
-        if float_pnl_pct >= 8.0:
-            if float_pnl_pct < 6.0:
-                return f'铁律二触发：浮盈从≥8%回落至{float_pnl_pct:+.2f}%，跌破+6%保护线'
-        elif float_pnl_pct >= 5.0:
-            if float_pnl_pct < 3.5:
-                return f'铁律二触发：浮盈从≥5%回落至{float_pnl_pct:+.2f}%，跌破+3.5%保护线'
-        elif float_pnl_pct >= 3.0:
-            if float_pnl_pct < 1.0:
-                return f'铁律二触发：浮盈从≥3%回落至{float_pnl_pct:+.2f}%，跌破+1%保护线'
-        elif float_pnl_pct >= 1.0:
-            if float_pnl_pct < 0.0:
-                return f'铁律二触发：浮盈{float_pnl_pct:+.2f}%转为亏损，保本止损'
-        else:
-            if float_pnl_pct <= -2.0:
-                return f'铁律二+基础止损：浮亏{float_pnl_pct:.2f}%触及-2%止损线'
+        # ── 振幅分档保护线 ──
+        amplitude_tier = self._get_amplitude_tier(symbol)
+        rules = self._get_iron_rule2_thresholds(amplitude_tier)
+
+        t1, t2, t3 = rules["t1_pct"], rules["t2_pct"], rules["t3_pct"]
+        t2_protect, t3_protect = rules["t2_plus_pct"], rules["t3_plus_pct"]
+
+        # 确定当前保护线
+        protect_pct = None
+        protect_desc = None
+
+        if float_pnl_pct >= t3:
+            protect_pct = t3_protect
+            protect_desc = f'T3·浮盈≥{t3}%→保护线+{t3_protect}%'
+        elif float_pnl_pct >= t2:
+            protect_pct = t2_protect
+            protect_desc = f'T2·浮盈≥{t2}%→保护线+{t2_protect}%'
+        elif float_pnl_pct >= t1:
+            protect_pct = 0.0  # 保本线 = 成本价
+            protect_desc = f'T1·浮盈≥{t1}%→保本线(成本价)'
+
+        # 触发判断
+        if protect_pct is not None and float_pnl_pct < protect_pct:
+            return (
+                f'铁律二触发({amplitude_tier}波): {protect_desc}，'
+                f'当前浮盈{float_pnl_pct:+.2f}%跌破保护线'
+            )
 
         return None
 

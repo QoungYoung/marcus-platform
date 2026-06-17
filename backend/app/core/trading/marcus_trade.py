@@ -660,6 +660,9 @@ class MarcusVNPyExecutor:
         # 记录交易结果用于连续亏损追踪
         self.record_trade_result(symbol, profit)
         
+        # 推送 QQ 通知
+        self._notify_sell(symbol, price, volume, reason, profit, avg_cost)
+        
         return {
             'status': 'executed',
             'order_id': order_id,
@@ -670,6 +673,58 @@ class MarcusVNPyExecutor:
             'profit': profit,
             'timestamp': trade_record['timestamp']
         }
+
+    def _notify_sell(self, symbol: str, price: float, volume: int, reason: str, profit: float, 
+                     avg_cost: float = 0) -> None:
+        """卖出成交后推送 QQ 通知。覆盖止损卖出和止盈卖出。"""
+        try:
+            from app.services.qqbot_service import send_qq_notification
+
+            # 提取规则类型
+            is_stop_loss = reason.startswith('[StopLoss自动]')
+            is_take_profit = not is_stop_loss and ('止盈' in reason or '盈利' in reason or 
+                          '≥10%' in reason or '≥15%' in reason or '≥20%' in reason)
+
+            if is_stop_loss:
+                clean_reason = reason.replace('[StopLoss自动] ', '').strip()
+                tag = '🔴 **止损卖出**'
+            elif is_take_profit:
+                clean_reason = reason.strip()
+                tag = '🟢 **止盈卖出**'
+            else:
+                clean_reason = reason.strip() if reason else '手动卖出'
+                tag = '📤 **卖出成交**'
+
+            # 获取股票名称
+            stock_name = symbol
+            try:
+                from app.api.portfolio import get_stock_name
+                stock_name = get_stock_name(symbol)
+            except Exception:
+                pass
+
+            # 计算盈亏百分比
+            pnl_pct = round((price - avg_cost) / avg_cost * 100, 2) if avg_cost > 0 else 0
+            sign = '+' if profit >= 0 else ''
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            message = (
+                f"{tag}\n\n"
+                f"标的: {stock_name} ({symbol})\n"
+                f"价格: {price:.2f}  |  数量: {volume}股\n"
+                f"盈亏: {sign}{profit:.2f}"
+            )
+            if avg_cost > 0:
+                message += f" ({sign}{pnl_pct}%)"
+            message += f"\n\n> {clean_reason}\n\n"
+            message += f"时间: {now_str}"
+
+            send_qq_notification(message)
+            import logging
+            logging.getLogger(__name__).info(f"[MarcusTrade] 📨 QQ通知已发送: {symbol}")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[MarcusTrade] QQ通知发送失败: {e}")
     
     def _calc_profit(self, symbol: str, sell_price: float, volume: int) -> float:
         """计算卖出盈亏 (简化版)"""
