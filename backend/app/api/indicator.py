@@ -16,6 +16,11 @@ from app.models.indicator import (
     FibonacciRequest, FibonacciLevel, FibonacciResponse,
     DailyChannelResponse,
     TradeAdviceRequest, TradeAdviceResponse,
+    CalcPositionRequest, CalcPositionResponse,
+    CalcPositionQuantity, CalcPositionStopLoss, CalcPositionValidation,
+    EntryCheckRequest, EntryCheckResponse,
+    EntryCheckTechDetail, EntryCheckCapitalDetail,
+    EntryBuyConfirmation, LayerResult,
 )
 from app.models.market import RealtimeIndicatorItem, RealtimeIndicatorResponse, QuoteResponse
 
@@ -873,7 +878,7 @@ async def check_safety_margin(
         rating = "危险"
         rating_desc = f"日内正常波动({intraday_risk:.2f})即可击穿止损({stop_distance:.2f})，建议放弃建仓"
 
-    return SafetyMarginResponse(
+        return SafetyMarginResponse(
         symbol=ts_code,
         entry_price=round(entry_price, 3),
         current_price=round(current_price, 3),
@@ -883,4 +888,855 @@ async def check_safety_margin(
         rating=rating,
         rating_description=rating_desc,
         updated_at=datetime.now(),
+    )
+
+
+# ──────────────────────── 仓位计算 ────────────────────────
+
+def _get_single_stock_cap(strength: str) -> float:
+    """信号强度 → 单票上限%"""
+    return {"low": 10.0, "medium": 18.0, "high": 25.0}.get(strength, 18.0)
+
+
+def _get_role_cap(role: str) -> float:
+    """产业链角色 → 环节上限%"""
+    return {"upstream": 15.0, "mid": 10.0, "downstream": 5.0}.get(role, 10.0)
+
+
+def _get_total_cap(stance: str) -> float:
+    """市场立场 → 总仓上限%"""
+    return {"green": 60.0, "yellow": 50.0, "red": 20.0}.get(stance, 50.0)
+
+
+def _get_tier_condition(tier: str) -> str:
+    """加仓层级 → 前仓条件描述"""
+    return {
+        "probe": "无（首仓试探）",
+        "confirm": "浮盈 ≥ 1%",
+        "sprint": "浮盈 ≥ 3%",
+    }.get(tier, "无")
+
+
+def _get_tier_profit_threshold(tier: str) -> float:
+    """加仓层级 → 所需浮盈阈值(%)"""
+    return {"probe": 0.0, "confirm": 1.0, "sprint": 3.0}.get(tier, 0.0)
+
+
+def _calculate_amplitude_from_kline(klines: list) -> float:
+    """从K线数据计算近N日日均振幅。
+    
+    振幅 = (最高 - 最低) / 收盘价 * 100
+    """
+    if not klines:
+        return 0.0
+    amplitudes = []
+    for k in klines:
+        if k.close > 0:
+            amp = (k.high - k.low) / k.close * 100
+            amplitudes.append(amp)
+    if not amplitudes:
+        return 0.0
+    return round(sum(amplitudes) / len(amplitudes), 2)
+
+
+def _get_amplitude_tier(amplitude: float) -> str:
+    """振幅 → 档位"""
+    if amplitude < 3.0:
+        return "低波"
+    elif amplitude <= 6.0:
+        return "中波"
+    else:
+        return "高波"
+
+
+def _get_dynamic_stop_pct(index_pct: float) -> float:
+    """大盘涨跌幅 → 动态止损率(%)"""
+    if index_pct < -2.0:
+        return 1.5
+    elif index_pct <= 1.0:
+        return 2.0
+    elif index_pct <= 2.0:
+        return 3.0
+    else:
+        return 4.0
+
+
+def _get_iron_rule2(amplitude_tier: str) -> dict:
+    """根据振幅档位返回铁律二的各级触发线。
+    
+    铁律二：盈利单不能变亏损（移动止盈保护）。
+    不同振幅档位下触发阈值不同：
+    - 低波（<3%）：浮动小，阈值紧凑
+    - 中波（3-6%）：标准阈值
+    - 高波（>6%）：放宽阈值，避免被震出
+    """
+    if amplitude_tier == "低波":
+        return {
+            "t1_pct": 1.0, "t1_desc": "浮盈≥1%→成本价",
+            "t2_pct": 2.0, "t2_plus_pct": 0.5, "t2_desc": "浮盈≥2%→成本价+0.5%",
+            "t3_pct": 4.0, "t3_plus_pct": 1.0, "t3_desc": "浮盈≥4%→成本价+1%",
+        }
+    elif amplitude_tier == "中波":
+        return {
+            "t1_pct": 1.0, "t1_desc": "浮盈≥1%→成本价",
+            "t2_pct": 3.0, "t2_plus_pct": 1.0, "t2_desc": "浮盈≥3%→成本价+1%",
+            "t3_pct": 5.0, "t3_plus_pct": 2.0, "t3_desc": "浮盈≥5%→成本价+2%",
+        }
+    else:  # 高波
+        return {
+            "t1_pct": 1.5, "t1_desc": "浮盈≥1.5%→成本价",
+            "t2_pct": 4.0, "t2_plus_pct": 1.5, "t2_desc": "浮盈≥4%→成本价+1.5%",
+            "t3_pct": 7.0, "t3_plus_pct": 3.0, "t3_desc": "浮盈≥7%→成本价+3%",
+        }
+
+
+@router.post("/calc-position", response_model=CalcPositionResponse)
+async def calc_position(req: CalcPositionRequest):
+    """
+    仓位计算工具 — 根据信号强度、产业链角色、加仓层级、市场立场，
+    综合计算建议仓位数量、止损价位和风险验证。
+
+    内部自动获取：
+    - get_portfolio() → 总资产、可用资金、持仓市值
+    - get_quote(symbol) → 当前价格
+    - get_daily_kline(limit=5) → 近5日日均振幅
+    - get_market_indices() → 大盘涨跌幅（动态止损依据）
+    - get_technical(limit=5) → ATR 交叉验证（可选）
+    """
+    symbol = req.symbol.strip().upper()
+    ts_code = _normalize_to_ts_code(symbol)
+    xq_symbol = _make_xueqiu_symbol(ts_code)
+
+    # ── Layer 1: 获取基础数据 ──
+    warnings = []
+
+    # 1a. 获取账户信息
+    from app.api.portfolio import calculate_positions_from_db
+    try:
+        position_list, account = calculate_positions_from_db()
+        available_cash = account.get("available_cash", 0)
+        initial_capital = account.get("initial_capital", 1000000)
+        # 计算当前持仓市值
+        position_value = 0.0
+        for p in position_list:
+            try:
+                price_data = _get_current_price(p["symbol"])
+                if price_data <= 0:
+                    price_data = p["avg_price"]
+                position_value += p["volume"] * price_data
+            except Exception:
+                position_value += p["volume"] * p["avg_price"]
+        total_asset = available_cash + account.get("frozen_cash", 0) + position_value
+        position_ratio = round(position_value / total_asset * 100, 2) if total_asset > 0 else 0
+    except Exception as e:
+        logger.warning(f"获取账户信息失败: {e}")
+        total_asset = 1000000.0
+        available_cash = 1000000.0
+        position_value = 0.0
+        position_ratio = 0.0
+        warnings.append(f"⚠️ 账户数据不可用，使用默认值(总资产={total_asset})")
+
+    # 1b. 获取当前价格
+    current_price = _get_current_price(xq_symbol)
+    stock_name = ""
+    change_pct = 0.0
+    try:
+        settings = get_settings()
+        xueqiu_dir = settings.workspace_path / "core"
+        xueqiu_config = xueqiu_dir / "config.json"
+        import sys as _sys
+        if str(xueqiu_dir) not in _sys.path:
+            _sys.path.insert(0, str(xueqiu_dir))
+        from xueqiu_engine import XueqiuEngine
+        engine = XueqiuEngine(config_file=str(xueqiu_config))
+        quote = engine.get_stock_quote(xq_symbol)
+        if quote:
+            current_price = float(quote.get("current", current_price))
+            stock_name = quote.get("name", "")
+            change_pct = float(quote.get("percent", 0))
+    except Exception as e:
+        logger.warning(f"获取行情失败: {e}")
+
+    if current_price <= 0:
+        raise HTTPException(status_code=400, detail=f"无法获取 {symbol} 的实时价格")
+
+    # 1c. 获取近5日K线计算振幅
+    amplitude = 0.0
+    try:
+        from app.api.market import get_stock_kline
+        kline_response = await get_stock_kline(symbol=symbol, limit=5)
+        klines = kline_response.klines if hasattr(kline_response, 'klines') else []
+        amplitude = _calculate_amplitude_from_kline(klines)
+    except Exception as e:
+        logger.warning(f"获取K线振幅失败: {e}")
+        warnings.append("⚠️ K线振幅数据不可用，使用默认振幅0%")
+
+    # 1d. 获取大盘指数涨跌幅
+    index_pct = 0.0
+    try:
+        from app.api.market import get_market_indices as _get_indices
+        indices_response = await _get_indices()
+        indices = indices_response.indices if hasattr(indices_response, 'indices') else []
+        # 取上证指数涨跌幅为主要参考
+        for idx in indices:
+            if hasattr(idx, 'symbol') and '000001' in idx.symbol:
+                index_pct = idx.change_pct
+                break
+        if index_pct == 0.0 and indices:
+            index_pct = indices[0].change_pct
+    except Exception as e:
+        logger.warning(f"获取大盘指数失败: {e}")
+        warnings.append("⚠️ 大盘指数数据不可用，使用默认涨跌幅0%")
+
+    # ── Layer 2: 加载约束条件 ──
+    single_cap_pct = _get_single_stock_cap(req.signal_strength)
+    role_cap_pct = _get_role_cap(req.chain_role)
+    total_cap_pct = _get_total_cap(req.stance)
+    tier_condition = _get_tier_condition(req.tier)
+    amplitude_tier = _get_amplitude_tier(amplitude)
+    dynamic_stop_pct = _get_dynamic_stop_pct(index_pct)
+
+    # ── Layer 3: 计算数量 ──
+    effective_single_cap = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset
+    total_remaining = total_cap_pct / 100.0 * total_asset - position_value
+    cash_reserve_line = total_asset * 0.25
+    cash_available_for_buy = available_cash - cash_reserve_line
+    max_usable = min(effective_single_cap, max(total_remaining, 0), max(cash_available_for_buy, 0))
+
+    # 手数计算（A股100股/手）
+    def _round_lot(shares: float) -> int:
+        return max(0, int(shares // 100) * 100)
+
+    max_shares = _round_lot(max_usable / current_price)
+    max_amount = round(max_shares * current_price, 2)
+
+    rec_amount_raw = min(role_cap_pct / 100.0 * total_asset, max_usable)
+    rec_shares = _round_lot(rec_amount_raw / current_price)
+    rec_amount = round(rec_shares * current_price, 2)
+    rec_pct = round(rec_amount / total_asset * 100, 2) if total_asset > 0 else 0
+
+    probe_amount_raw = min(0.10 * total_asset, max_usable)
+    probe_shares = _round_lot(probe_amount_raw / current_price)
+    probe_amount = round(probe_shares * current_price, 2)
+    probe_pct = round(probe_amount / total_asset * 100, 2) if total_asset > 0 else 0
+
+    # ── Layer 4: 计算止损 ──
+    hard_stop_price = round(current_price * (1 - dynamic_stop_pct / 100.0), 3)
+    max_loss_per_share = round(current_price - hard_stop_price, 3)
+    total_max_loss = round(rec_shares * max_loss_per_share, 2)
+
+    iron_rule = _get_iron_rule2(amplitude_tier)
+
+    # ── Layer 5: 逐条验证 ──
+    validation_checks = []
+
+    # 单票上限
+    single_cap_actual_pct = round(rec_amount / total_asset * 100, 2) if total_asset > 0 else 0
+    single_cap_ok = rec_amount <= effective_single_cap
+    single_cap_detail = f"建议{rec_amount}({single_cap_actual_pct}%) ≤ 上限{round(effective_single_cap,2)}({min(single_cap_pct, role_cap_pct)}%)"
+
+    # 总仓位
+    new_total_position = position_value + rec_amount
+    new_total_ratio = round(new_total_position / total_asset * 100, 2) if total_asset > 0 else 0
+    total_position_ok = new_total_position <= total_cap_pct / 100.0 * total_asset
+    total_position_detail = f"建仓后{new_total_ratio}% ≤ 上限{total_cap_pct}%"
+
+    # 现金底线
+    new_cash = available_cash - rec_amount
+    new_cash_ratio = round(new_cash / total_asset * 100, 2) if total_asset > 0 else 0
+    cash_reserve_ok = new_cash >= cash_reserve_line
+    cash_reserve_detail = f"建仓后现金{new_cash_ratio}% ≥ 底线25%"
+
+    # 单笔亏损
+    loss_ratio = round(total_max_loss / total_asset * 100, 2) if total_asset > 0 else 0
+    max_loss_ok = total_max_loss <= total_asset * 0.02
+    max_loss_detail = f"单笔亏损{total_max_loss}({loss_ratio}%) ≤ 上限{round(total_asset*0.02,2)}(2%)"
+
+    # 前仓条件（仅 confirm/sprint 层级需要检查已有持仓浮盈）
+    pre_condition_ok = None
+    pre_condition_detail = None
+    threshold = _get_tier_profit_threshold(req.tier)
+    if threshold > 0:
+        # 检查是否已有该股持仓
+        existing_profit = None
+        try:
+            for p in position_list:
+                p_symbol = p.get("symbol", "")
+                # 匹配符号（兼容不同格式）
+                if symbol.replace("SH", "").replace("SZ", "").replace("BJ", "") == \
+                   p_symbol.replace("SH", "").replace("SZ", "").replace("BJ", ""):
+                    avg_price = p.get("avg_price", 0)
+                    existing_profit = round((current_price - avg_price) / avg_price * 100, 2)
+                    break
+        except Exception:
+            pass
+
+        if existing_profit is None:
+            pre_condition_ok = False
+            pre_condition_detail = f"无该股持仓，{req.tier}层级需要已有持仓且浮盈≥{threshold}%"
+            warnings.append(f"⚠️ 前仓条件不满足: {req.tier}层级需要已有该股持仓且浮盈≥{threshold}%")
+        elif existing_profit < threshold:
+            pre_condition_ok = False
+            pre_condition_detail = f"当前浮盈{existing_profit}% < 所需{threshold}%"
+            warnings.append(f"⚠️ 前仓条件不满足: 当前浮盈{existing_profit}% < 所需{threshold}%")
+        else:
+            pre_condition_ok = True
+            pre_condition_detail = f"当前浮盈{existing_profit}% ≥ 所需{threshold}%"
+
+    # 汇总验证
+    all_pass = single_cap_ok and total_position_ok and cash_reserve_ok and max_loss_ok
+    if pre_condition_ok is not None and not pre_condition_ok:
+        all_pass = False
+
+    validation = CalcPositionValidation(
+        single_cap_ok=single_cap_ok,
+        single_cap_detail=single_cap_detail,
+        total_position_ok=total_position_ok,
+        total_position_detail=total_position_detail,
+        cash_reserve_ok=cash_reserve_ok,
+        cash_reserve_detail=cash_reserve_detail,
+        max_loss_ok=max_loss_ok,
+        max_loss_detail=max_loss_detail,
+        pre_condition_ok=pre_condition_ok,
+        pre_condition_detail=pre_condition_detail,
+    )
+
+    # 构建降级建议
+    if not all_pass:
+        suggestions = []
+        if not single_cap_ok:
+            cap_shares = _round_lot(effective_single_cap / current_price)
+            suggestions.append(f"单票超标→降为{cap_shares}股")
+        if not total_position_ok:
+            remaining_shares = _round_lot(max(total_remaining, 0) / current_price)
+            suggestions.append(f"总仓超标→最多再买{remaining_shares}股")
+        if not cash_reserve_ok:
+            max_for_cash = _round_lot(max(cash_available_for_buy, 0) / current_price)
+            suggestions.append(f"现金不足→最多买{max_for_cash}股")
+        if not max_loss_ok:
+            suggestions.append(f"亏损超标→减少数量至亏损≤{round(total_asset*0.02,2)}")
+        if suggestions:
+            warnings.insert(0, f"🔴 验证不通过: {'; '.join(suggestions)}")
+
+    quantity = CalcPositionQuantity(
+        max_shares=max_shares,
+        max_amount=max_amount,
+        rec_shares=rec_shares,
+        rec_amount=rec_amount,
+        rec_pct=rec_pct,
+        probe_shares=probe_shares,
+        probe_amount=probe_amount,
+        probe_pct=probe_pct,
+    )
+
+    stop_loss = CalcPositionStopLoss(
+        volatility_tier=amplitude_tier,
+        dynamic_stop_pct=dynamic_stop_pct,
+        hard_stop_price=hard_stop_price,
+        max_loss_per_share=max_loss_per_share,
+        total_max_loss=total_max_loss,
+        iron_rule2_t1_pct=iron_rule["t1_pct"],
+        iron_rule2_t2_pct=iron_rule["t2_pct"],
+        iron_rule2_t2_plus_pct=iron_rule["t2_plus_pct"],
+        iron_rule2_t3_pct=iron_rule["t3_pct"],
+        iron_rule2_t3_plus_pct=iron_rule["t3_plus_pct"],
+    )
+
+    return CalcPositionResponse(
+        symbol=ts_code,
+        name=stock_name,
+        total_asset=round(total_asset, 2),
+        available_cash=round(available_cash, 2),
+        position_value=round(position_value, 2),
+        position_ratio=position_ratio,
+        signal_strength=req.signal_strength,
+        single_stock_cap_pct=single_cap_pct,
+        chain_role=req.chain_role,
+        role_cap_pct=role_cap_pct,
+        tier=req.tier,
+        tier_condition=tier_condition,
+        stance=req.stance,
+        total_cap_pct=total_cap_pct,
+        amplitude=amplitude,
+        amplitude_tier=amplitude_tier,
+        index_pct=round(index_pct, 2),
+        current_price=round(current_price, 3),
+        quantity=quantity,
+        stop_loss=stop_loss,
+        validation=validation,
+        warnings=warnings,
+        all_pass=all_pass,
+    )
+
+
+# ──────────────────────── 入场过滤三层检查 ────────────────────────
+
+def _check_macd_dif_converging(indicators_data: dict) -> bool:
+    """检查 MACD DIF 是否连续2日收敛（DIF 绝对值缩小）。
+    
+    从 historical 数据中取最近2日的 MACD DIF 进行比较。
+    """
+    historical = indicators_data.get("historical", [])
+    if len(historical) < 2:
+        return False
+    h0 = historical[0]  # 最近一日（最新）
+    h1 = historical[1]  # 前一日
+    dif0 = abs(getattr(h0, "macd_dif", 0) or 0)
+    dif1 = abs(getattr(h1, "macd_dif", 0) or 0)
+    return dif0 < dif1
+
+
+@router.post("/check-entry-filters", response_model=EntryCheckResponse)
+async def check_entry_filters(req: EntryCheckRequest):
+    """
+    入场过滤三层检查 — 对建仓计划表中的每只标的执行技术面、主力行为、超买过滤。
+
+    内部自动获取：
+    - get_realtime_indicators(symbol) → MA5/MA20/MACD/RSI6/KDJ-J
+    - get_quote(symbol) → 价格/涨幅/分时均价/RSR/日内分位
+    - get_moneyflow(symbol) → 今日/5日/10日主力资金流向
+    """
+    ts_code = _normalize_to_ts_code(req.symbol)
+    xq_symbol = _make_xueqiu_symbol(ts_code)
+    settings = get_settings()
+
+    # ══════════════════════════════════════
+    # Stage 1: 并行获取所有数据源
+    # ══════════════════════════════════════
+    import asyncio
+
+    # 1a. 获取行情价格
+    quote_data = {}
+    stock_name = ""
+    change_pct = 0.0
+    turnover_rate = 0.0
+    amplitude_val = 0.0
+    current_price = 0.0
+    rsr = None
+    intraday_percentile = None
+    avg_price = None
+    volume_ratio = req.volume_ratio
+
+    try:
+        xueqiu_config = str(settings.workspace_path / "core" / "config.json")
+        import sys as _sys
+        if str(settings.workspace_path / "core") not in _sys.path:
+            _sys.path.insert(0, str(settings.workspace_path / "core"))
+        from xueqiu_engine import XueqiuEngine
+        engine = XueqiuEngine(config_file=xueqiu_config)
+        quote = engine.get_stock_quote(xq_symbol)
+        if quote:
+            current_price = float(quote.get("current", 0))
+            stock_name = quote.get("name", "")
+            change_pct = float(quote.get("percent", 0))
+            turnover_rate = float(quote.get("turnover_rate", 0) or 0)
+            amplitude_val = float(quote.get("amplitude", 0) or 0)
+            rsr = quote.get("rsr")
+            intraday_percentile = quote.get("intraday_percentile")
+            avg_price = quote.get("avg_price")
+            # 估算量比（volume / avg_volume，简化用换手率参照）
+            if volume_ratio is None and turnover_rate > 0:
+                # 粗略估算：量比 ≈ 换手率 / 历史日均换手率(约2%)
+                volume_ratio = round(turnover_rate / 2.0, 2) if turnover_rate > 0 else None
+    except Exception as e:
+        logger.warning(f"获取行情失败: {e}")
+
+    if current_price <= 0:
+        raise HTTPException(status_code=400, detail=f"无法获取 {req.symbol} 的实时价格")
+
+    # 1b. 获取实时技术指标 (MA5/MA20/MACD/KDJ/RSI)
+    indicators_data = {"realtime": None, "historical": []}
+    try:
+        from app.api.indicator import get_realtime_indicators as _get_rt
+        rt_response = await _get_rt(symbol=req.symbol, limit=3)
+        indicators_data["realtime"] = rt_response.realtime
+        indicators_data["historical"] = rt_response.historical
+    except Exception as e:
+        logger.warning(f"获取实时指标失败: {e}")
+
+    # 1c. 获取资金流向
+    moneyflow_data = None
+    try:
+        from app.api.market import get_stock_moneyflow as _get_mf
+        mf_response = await _get_mf(symbol=req.symbol)
+        moneyflow_data = mf_response
+    except Exception as e:
+        logger.warning(f"获取资金流向失败: {e}")
+
+    # ══════════════════════════════════════
+    # Stage 2: 提取指标值
+    # ══════════════════════════════════════
+    rt = indicators_data.get("realtime")
+    ma5 = getattr(rt, "ma5", 0) or 0 if rt else 0
+    ma20 = getattr(rt, "ma20", 0) or 0 if rt else 0
+    rsi6 = getattr(rt, "rsi_6", 0) or 0 if rt else 0
+    kdj_j = getattr(rt, "kdj_j", 0) or 0 if rt else 0
+
+    # MACD 状态判断
+    macd_status = "未知"
+    macd_dif_converging = False
+    if rt:
+        macd_dif = getattr(rt, "macd_dif", 0) or 0
+        macd_dea = getattr(rt, "macd_dea", 0) or 0
+        if macd_dif > macd_dea:
+            macd_status = "金叉"
+        elif macd_dif < macd_dea:
+            macd_status = "死叉"
+        else:
+            macd_status = "持平"
+        macd_dif_converging = _check_macd_dif_converging(indicators_data)
+
+    # 资金流向数据
+    capital_efficiency = None
+    today_main_net = 0.0
+    d5_main_net = 0.0
+    d10_main_net = 0.0
+    xs_net = 0.0
+    mf_data_available = False
+    if moneyflow_data:
+        try:
+            today_main_net = getattr(moneyflow_data, "main_net", 0) or 0
+            d5_main_net = getattr(moneyflow_data, "d5_main_net", 0) or 0
+            d10_main_net = getattr(moneyflow_data, "d10_main_net", 0) or 0
+            xs_net = getattr(moneyflow_data, "xs_net", 0) or 0
+            capital_efficiency = getattr(moneyflow_data, "capital_efficiency", None)
+            mf_data_available = True
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════
+    # Stage 3: 三层过滤
+    # ══════════════════════════════════════
+    tech_details = []
+    capital_details = []
+    overbought_details = []
+    downgrade_multiplier = 1.0
+
+    # ── Layer 1: 技术面 ──
+    layer1_passed = True
+    layer1_grade = "✅通过"
+    layer1_downgrade = ""
+    layer1_action = ""
+
+    # 1a. MA 检查
+    if ma5 > 0 and ma20 > 0:
+        if ma5 > ma20:
+            tech_details.append(f"✅ MA5({ma5:.2f}) > MA20({ma20:.2f}) — 通过")
+        else:
+            tech_details.append(f"⚠️ MA5({ma5:.2f}) < MA20({ma20:.2f}) — 趋势待确认")
+            # 启用备用检查
+            price_above_vwap = current_price > avg_price if avg_price and avg_price > 0 else None
+            sector_ok = req.sector_net_inflow is not None and req.sector_net_inflow > 0
+            if price_above_vwap and sector_ok:
+                tech_details.append("  备用检查: 价格站稳分时均价✅ + 板块资金净流入✅ → 仅试探仓≤5%")
+                layer1_grade = "⚠️降级"
+                layer1_downgrade = "MA5<MA20 趋势待确认"
+                layer1_action = "仅试探仓≤5%"
+                downgrade_multiplier = min(downgrade_multiplier, 0.5)
+            elif price_above_vwap is False:
+                tech_details.append("  备用检查: 价格跌破分时均价❌ → 从计划表移除")
+                layer1_passed = False
+                layer1_grade = "🚫排除"
+                layer1_downgrade = "MA5<MA20 且价格跌破分时均价"
+                layer1_action = "从计划表移除"
+                downgrade_multiplier = 0.0
+            elif not sector_ok:
+                tech_details.append("  备用检查: 板块资金净流入不可用或≤0 → 从计划表移除")
+                layer1_passed = False
+                layer1_grade = "🚫排除"
+                layer1_downgrade = "MA5<MA20 且板块无资金支撑"
+                layer1_action = "从计划表移除"
+                downgrade_multiplier = 0.0
+    else:
+        tech_details.append("⚠️ MA数据不可用，跳过MA检查")
+
+    # 1b. MACD 检查
+    if macd_status == "金叉":
+        tech_details.append(f"✅ MACD金叉(DIF>DEA) — 通过")
+    elif macd_status == "死叉":
+        if macd_dif_converging:
+            tech_details.append(f"⚠️ MACD死叉但DIF连续2日收敛 → 可观察")
+        else:
+            tech_details.append(f"⚠️ MACD死叉且DIF未收敛 → 趋势转弱")
+            layer1_grade = "⚠️降级"
+            layer1_downgrade = "MACD死叉+未收敛"
+            layer1_action = "降仓50%或放观察"
+            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+
+    # 1c. RSR 检查
+    if rsr is not None:
+        if rsr < 0.8:
+            tech_details.append(f"⚠️ RSR({rsr:.2f}) < 0.8 → 弱势，降仓50%")
+            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+            layer1_grade = "⚠️降级"
+            layer1_downgrade = "RSR<0.8弱势"
+            layer1_action = "降仓50%"
+        else:
+            tech_details.append(f"✅ RSR({rsr:.2f}) ≥ 0.8 — 通过")
+
+    # 1d. 日内分位检查
+    if intraday_percentile is not None:
+        if intraday_percentile > 90:
+            tech_details.append(f"⚠️ 日内分位({intraday_percentile:.0f}%) > 90% → 追高风险，仅试探仓≤5%或放弃")
+            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+            layer1_grade = "⚠️降级"
+            layer1_downgrade = "日内分位>90%追高风险"
+            layer1_action = "仅试探仓≤5%或放弃"
+        else:
+            tech_details.append(f"✅ 日内分位({intraday_percentile:.0f}%) ≤ 90% — 通过")
+
+    # 1e. 资金效率检查
+    if capital_efficiency is not None:
+        if capital_efficiency < 5:
+            tech_details.append(f"⚠️ 资金效率({capital_efficiency:.1f}) < 5% → 涨幅缺乏主力背书，降仓50%")
+            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+            layer1_grade = "⚠️降级"
+            layer1_downgrade = "资金效率<5%"
+            layer1_action = "降仓50%"
+        else:
+            tech_details.append(f"✅ 资金效率({capital_efficiency:.1f}) ≥ 5% — 通过")
+
+    layer1 = LayerResult(
+        passed=layer1_passed,
+        grade=layer1_grade if layer1_passed else "🚫排除",
+        details=tech_details,
+        downgrade_reason=layer1_downgrade,
+        downgrade_action=layer1_action,
+    )
+
+    # ── Layer 2: 主力行为 ──
+    layer2_passed = True
+    layer2_grade = "✅通过"
+    layer2_downgrade = ""
+    layer2_action = ""
+
+    if mf_data_available:
+        # 2a. 5日主力检查
+        if d5_main_net < 0:
+            capital_details.append(f"🚫 5日主力净流入({d5_main_net/1e8:.2f}亿) < 0 → 直接排除")
+            layer2_passed = False
+            layer2_grade = "🚫排除"
+            layer2_downgrade = "5日主力持续净流出"
+            layer2_action = "直接排除"
+            downgrade_multiplier = 0.0
+        else:
+            capital_details.append(f"✅ 5日主力({d5_main_net/1e8:.2f}亿) > 0 — 通过")
+
+        # 2b. 5日 > 10日 加速
+        if layer2_passed and d5_main_net > 0 and d10_main_net > 0 and d5_main_net > d10_main_net:
+            capital_details.append(f"✅ 5日主力({d5_main_net/1e8:.2f}亿) > 10日({d10_main_net/1e8:.2f}亿) → 加速建仓，加分")
+        elif layer2_passed and d5_main_net > 0 and d10_main_net > 0:
+            capital_details.append(f"⚠️ 5日主力({d5_main_net/1e8:.2f}亿) ≤ 10日({d10_main_net/1e8:.2f}亿) → 减速中")
+
+        # 2c. 今日出货检查
+        if layer2_passed and today_main_net < 0:
+            capital_details.append(f"⚠️ 今日主力({today_main_net/1e8:.2f}亿) < 0 →「今日出货」，降仓50%或放观察")
+            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+            layer2_grade = "⚠️降级"
+            layer2_downgrade = "今日主力出货"
+            layer2_action = "降仓50%或放观察"
+
+        # 2d. 10日主力排除（双条件+豁免）
+        if layer2_passed and d10_main_net < -500000000:
+            # 条件A: 10日主力流出 > 5亿
+            # 条件B: 5日主力 < 10日主力×0.5（流出加速中）
+            accelerating_outflow = d5_main_net < d10_main_net * 0.5
+            # 豁免: 5日主力 > 0 且 5日 > 10日主力（趋势逆转中）
+            trend_reversing = d5_main_net > 0 and d5_main_net > d10_main_net
+            
+            if accelerating_outflow and not trend_reversing:
+                capital_details.append(f"🚫 10日主力({d10_main_net/1e8:.2f}亿) < -5亿 + 5日主力({d5_main_net/1e8:.2f}亿) < 10日×0.5({d10_main_net*0.5/1e8:.2f}亿) → 排除")
+                layer2_passed = False
+                layer2_grade = "🚫排除"
+                layer2_downgrade = "10日主力持续大幅流出且加速"
+                layer2_action = "直接排除"
+                downgrade_multiplier = 0.0
+            elif trend_reversing:
+                capital_details.append(f"⚠️ 10日主力({d10_main_net/1e8:.2f}亿) < -5亿，但5日主力({d5_main_net/1e8:.2f}亿) > 0且>10日 → 趋势逆转，豁免排除")
+            elif not accelerating_outflow:
+                capital_details.append(f"⚠️ 10日主力({d10_main_net/1e8:.2f}亿) < -5亿，但5日主力({d5_main_net/1e8:.2f}亿) ≥ 10日×0.5 → 流出减速中，暂不排除")
+
+        # 2e. 小单净流出加分
+        if layer2_passed and xs_net < 0:
+            capital_details.append(f"✅ 小单净流出 → 散户离场，加分")
+    else:
+        capital_details.append("⚠️ 资金流向数据不可用，跳过主力行为检查")
+        layer2_grade = "⚠️数据缺失"
+
+    layer2 = LayerResult(
+        passed=layer2_passed,
+        grade=layer2_grade,
+        details=capital_details,
+        downgrade_reason=layer2_downgrade,
+        downgrade_action=layer2_action,
+    )
+
+    # ── Layer 3: 超买过滤 ──
+    layer3_passed = True
+    layer3_grade = "✅通过"
+    layer3_downgrade = ""
+    layer3_action = ""
+
+    rsi_blocked = rsi6 >= 90
+    rsi_probe_only = 85 <= rsi6 < 90
+    kdj_blocked = kdj_j >= 110
+    kdj_probe_only = 105 <= kdj_j < 110
+
+    if rsi_blocked:
+        overbought_details.append(f"🚫 RSI6({rsi6:.0f}) ≥ 90 → 严重超买，禁止建仓")
+        layer3_passed = False
+        layer3_grade = "🚫排除"
+        layer3_downgrade = "RSI6严重超买"
+        layer3_action = "禁止建仓"
+        downgrade_multiplier = 0.0
+    elif rsi_probe_only:
+        overbought_details.append(f"⚠️ RSI6({rsi6:.0f}) 85-90 → 仅试探仓")
+        layer3_grade = "⚠️仅试探仓"
+        layer3_downgrade = "RSI6偏高"
+        layer3_action = "仅试探仓"
+        downgrade_multiplier = min(downgrade_multiplier, 0.5)
+    else:
+        overbought_details.append(f"✅ RSI6({rsi6:.0f}) < 85 — 正常")
+
+    if kdj_blocked:
+        overbought_details.append(f"🚫 KDJ-J({kdj_j:.0f}) ≥ 110 → 严重超买，禁止建仓")
+        layer3_passed = False
+        layer3_grade = "🚫排除"
+        layer3_downgrade = "KDJ-J严重超买"
+        layer3_action = "禁止建仓"
+        downgrade_multiplier = 0.0
+    elif kdj_probe_only:
+        overbought_details.append(f"⚠️ KDJ-J({kdj_j:.0f}) 105-110 → 仅试探仓")
+        layer3_grade = "⚠️仅试探仓"
+        layer3_downgrade = "KDJ-J偏高"
+        layer3_action = "仅试探仓"
+        downgrade_multiplier = min(downgrade_multiplier, 0.5)
+    else:
+        overbought_details.append(f"✅ KDJ-J({kdj_j:.0f}) < 105 — 正常")
+
+    layer3 = LayerResult(
+        passed=layer3_passed,
+        grade=layer3_grade,
+        details=overbought_details,
+        downgrade_reason=layer3_downgrade,
+        downgrade_action=layer3_action,
+    )
+
+    # ══════════════════════════════════════
+    # Stage 4: 综合判定
+    # ══════════════════════════════════════
+    all_layers_pass = layer1_passed and layer2_passed and layer3_passed
+
+    if downgrade_multiplier <= 0:
+        final_decision = "🚫禁止建仓"
+        final_grade = "blocked"
+        max_position_pct = 0.0
+    elif downgrade_multiplier <= 0.5:
+        final_decision = "⚠️仅试探仓（≤5%）"
+        final_grade = "probe_only"
+        max_position_pct = 5.0
+    elif downgrade_multiplier < 1.0:
+        final_decision = "⚠️降仓建仓"
+        final_grade = "downgraded"
+        max_position_pct = round(10.0 * downgrade_multiplier, 1)
+    else:
+        final_decision = "✅可建仓"
+        final_grade = "pass"
+        max_position_pct = 10.0  # 默认首仓上限
+
+    # ══════════════════════════════════════
+    # Stage 5: 买入确认规则
+    # ══════════════════════════════════════
+    buy_action = ""
+    buy_wait = 0
+    vol_ok = None
+
+    if change_pct < 3:
+        buy_action = "直接入场"
+        buy_wait = 0
+    elif change_pct <= 5:
+        buy_action = "等3-5分钟横盘不破均线"
+        buy_wait = 3
+    elif change_pct <= 8:
+        buy_action = "等2-3分钟，量比>1.5才入场"
+        buy_wait = 2
+        if volume_ratio is not None:
+            vol_ok = volume_ratio > 1.5
+    else:
+        buy_action = "放弃（涨幅>8%，不追涨）"
+        buy_wait = 0
+        downgrade_multiplier = 0.0
+        final_decision = "🚫涨幅>8%放弃"
+        final_grade = "blocked"
+        max_position_pct = 0.0
+
+    buy_confirmation = EntryBuyConfirmation(
+        change_pct=round(change_pct, 2),
+        action=buy_action,
+        wait_minutes=buy_wait,
+        volume_ratio=volume_ratio,
+        volume_ratio_ok=vol_ok,
+    )
+
+    # ══════════════════════════════════════
+    # Stage 6: 构建响应
+    # ══════════════════════════════════════
+    ma_status = ""
+    if ma5 > 0 and ma20 > 0:
+        ma_status = "MA5>MA20" if ma5 > ma20 else "MA5<MA20"
+
+    tech = EntryCheckTechDetail(
+        ma5=round(ma5, 2),
+        ma20=round(ma20, 2),
+        ma_status=ma_status,
+        macd_status=macd_status,
+        macd_dif_converging=macd_dif_converging,
+        rsr=rsr,
+        intraday_percentile=intraday_percentile,
+        capital_efficiency=capital_efficiency,
+        rsi6=round(rsi6, 1),
+        kdj_j=round(kdj_j, 1),
+        current_price=round(current_price, 3),
+        avg_price=round(avg_price, 3) if avg_price else None,
+    )
+
+    capital = EntryCheckCapitalDetail(
+        today_main_net=round(today_main_net, 2),
+        d5_main_net=round(d5_main_net, 2),
+        d10_main_net=round(d10_main_net, 2),
+        d5_gt_d10=(d5_main_net > 0 and d10_main_net > 0 and d5_main_net > d10_main_net),
+        today_selling=(today_main_net < 0),
+        xs_net=round(xs_net, 2),
+        xs_outflow=(xs_net < 0),
+        data_available=mf_data_available,
+    )
+
+    # 生成摘要
+    summary_parts = []
+    if final_grade == "pass":
+        summary_parts.append("✅ 三层过滤全部通过，可按建议仓位建仓")
+    elif final_grade == "probe_only":
+        summary_parts.append("⚠️ 仅允许试探仓（≤5%总资产）")
+    elif final_grade == "downgraded":
+        summary_parts.append(f"⚠️ 降仓至{max_position_pct}%")
+    else:
+        summary_parts.append("🚫 禁止建仓")
+    if buy_wait > 0:
+        summary_parts.append(f"入场规则: {buy_action}")
+    summary = " | ".join(summary_parts)
+
+    return EntryCheckResponse(
+        symbol=ts_code,
+        name=stock_name,
+        tech=tech,
+        layer1_tech=layer1,
+        layer2_capital=layer2,
+        layer3_overbought=layer3,
+        final_decision=final_decision,
+        final_grade=final_grade,
+        max_position_pct=max_position_pct,
+        downgrade_multiplier=round(downgrade_multiplier, 2),
+        buy_confirmation=buy_confirmation,
+        all_layers_pass=all_layers_pass,
+        summary=summary,
     )

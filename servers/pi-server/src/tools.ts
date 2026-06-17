@@ -1039,6 +1039,144 @@ export const getRealtimeIndicatorsTool = {
   },
 };
 
+export const calcPositionTool = {
+  name: 'calc_position',
+  label: '仓位计算',
+  description: '【建仓前必调】根据信号强度、产业链角色、加仓层级、市场立场，综合计算建议仓位数量、止损价位和风险验证。自动拉取账户状态、当前价格、近5日振幅、大盘涨跌幅等数据。参数: symbol(股票代码), signal_strength(low/medium/high), chain_role(upstream/mid/downstream), tier(probe/confirm/sprint), stance(green/yellow/red)',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    signal_strength: Type.String({ description: '信号强度: low(低确定性/单一信号) / medium(中确定性/2指标共振) / high(高确定性/3+指标共振+板块龙头+主力净流入)' }),
+    chain_role: Type.String({ description: '产业链角色: upstream(上游核心环节) / mid(中游配套) / downstream(下游应用)' }),
+    tier: Type.String({ description: '加仓层级: probe(试探仓/首仓) / confirm(确认仓/需浮盈≥1%) / sprint(冲刺仓/需浮盈≥3%)' }),
+    stance: Type.String({ description: '市场立场: green(激进/总仓≤60%) / yellow(谨慎/总仓≤50%) / red(观望/总仓≤20%)' }),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; signal_strength: string; chain_role: string; tier: string; stance: string }, _signal?: AbortSignal) {
+    const data = await apiFetch('/indicator/calc-position', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol: params.symbol,
+        signal_strength: params.signal_strength || 'medium',
+        chain_role: params.chain_role || 'mid',
+        tier: params.tier || 'probe',
+        stance: params.stance || 'yellow',
+      }),
+    });
+    if (data.error) throw new Error(data.error);
+
+    const q = data.quantity || {};
+    const sl = data.stop_loss || {};
+    const v = data.validation || {};
+    const w = data.warnings || [];
+
+    const lines: string[] = [];
+    const nameStr = data.name ? ` ${data.name}` : '';
+
+    lines.push(`📊 ${data.symbol}${nameStr} — 仓位计算`);
+    lines.push('');
+    lines.push(`【账户】总资产 ${(data.total_asset||0).toFixed(2)} | 可用 ${(data.available_cash||0).toFixed(2)} | 当前仓位 ${(data.position_ratio||0).toFixed(2)}%`);
+    lines.push('');
+    lines.push(`【约束】`);
+    lines.push(`信号${data.signal_strength}→单票≤${data.single_stock_cap_pct}% | ${data.chain_role}→环节≤${data.role_cap_pct}% | ${data.tier}→前仓需${data.tier_condition}`);
+    lines.push(`立场${data.stance}→总仓≤${data.total_cap_pct}% | 振幅${(data.amplitude||0).toFixed(2)}%→${data.amplitude_tier}波档`);
+    lines.push('');
+    lines.push(`【数量】`);
+    lines.push(`最大可买: ${q.max_shares}股 (${(q.max_amount||0).toFixed(2)})`);
+    lines.push(`建议买入: ${q.rec_shares}股 (${(q.rec_amount||0).toFixed(2)}, ${(q.rec_pct||0).toFixed(2)}%)`);
+    lines.push(`试探仓:   ${q.probe_shares}股 (${(q.probe_amount||0).toFixed(2)}, ${(q.probe_pct||0).toFixed(2)}%)`);
+    lines.push('');
+    lines.push(`【止损】(动态止损率 ${(sl.dynamic_stop_pct||0).toFixed(1)}%)`);
+    lines.push(`硬止损价: ${(sl.hard_stop_price||0).toFixed(3)} (亏损 -${(sl.total_max_loss||0).toFixed(2)})`);
+    lines.push(`铁律二: 浮盈≥${(sl.iron_rule2_t1_pct||0).toFixed(1)}%→成本价 | ≥${(sl.iron_rule2_t2_pct||0).toFixed(1)}%→成本价+${(sl.iron_rule2_t2_plus_pct||0).toFixed(1)}% | ≥${(sl.iron_rule2_t3_pct||0).toFixed(1)}%→成本价+${(sl.iron_rule2_t3_plus_pct||0).toFixed(1)}%`);
+    lines.push('');
+    lines.push(`【验证】`);
+    lines.push(`${v.single_cap_ok ? '✅' : '❌'} 单票${v.single_cap_detail}`);
+    lines.push(`${v.total_position_ok ? '✅' : '❌'} 总仓${v.total_position_detail}`);
+    lines.push(`${v.cash_reserve_ok ? '✅' : '❌'} 现金${v.cash_reserve_detail}`);
+    lines.push(`${v.max_loss_ok ? '✅' : '❌'} 单笔亏损${v.max_loss_detail}`);
+    if (v.pre_condition_detail) {
+      lines.push(`${v.pre_condition_ok ? '✅' : '❌'} 前仓条件: ${v.pre_condition_detail}`);
+    }
+
+    if (w.length > 0) {
+      lines.push('');
+      lines.push(`【警告】`);
+      for (const warning of w) {
+        lines.push(warning);
+      }
+    }
+
+    lines.push('');
+    lines.push(`${data.all_pass ? '✅ 全部验证通过，可按建议数量执行买入' : '🔴 验证未通过，请按警告降级调整'}`);
+
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+export const checkEntryFiltersTool = {
+  name: 'check_entry_filters',
+  label: '入场过滤',
+  description: '【建仓前必调】对标的执行三层过滤检查：技术面(MA5/MA20/MACD/RSR/分位/资金效率) → 主力行为(5日/10日/今日主力流向) → 超买过滤(RSI6/KDJ-J)。返回逐层判定(✅/⚠️/🚫) + 降仓系数 + 买入确认规则(涨幅分段)。参数: symbol(股票代码), sector_net_inflow(可选,板块主力净流入元), volume_ratio(可选,量比)',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    sector_net_inflow: Type.Optional(Type.Number({ description: '所属板块主力资金净流入（元），用于MA5<MA20时的备用检查' })),
+    volume_ratio: Type.Optional(Type.Number({ description: '量比，已知可传入，否则从行情估算' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; sector_net_inflow?: number; volume_ratio?: number }, _signal?: AbortSignal) {
+    const body: any = { symbol: params.symbol };
+    if (params.sector_net_inflow !== undefined) body.sector_net_inflow = params.sector_net_inflow;
+    if (params.volume_ratio !== undefined) body.volume_ratio = params.volume_ratio;
+
+    const data = await apiFetch('/indicator/check-entry-filters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (data.error) throw new Error(data.error);
+
+    const t = data.tech || {};
+    const l1 = data.layer1_tech || {};
+    const l2 = data.layer2_capital || {};
+    const l3 = data.layer3_overbought || {};
+    const bc = data.buy_confirmation || {};
+    const nameStr = data.name ? ` ${data.name}` : '';
+
+    const lines: string[] = [];
+    lines.push(`🔍 ${data.symbol}${nameStr} — 入场过滤检查`);
+    lines.push('');
+    lines.push(`【技术面数据】现价 ${t.current_price} | MA5=${t.ma5} MA20=${t.ma20} | MACD:${t.macd_status} | RSI6=${t.rsi6} J=${t.kdj_j}`);
+    if (t.rsr != null) lines.push(`  RSR=${t.rsr.toFixed(2)} | 日内分位=${t.intraday_percentile?.toFixed(0) ?? '--'}% | 资金效率=${t.capital_efficiency?.toFixed(1) ?? '--'}`);
+
+    lines.push('');
+    lines.push(`── 第一层·技术面 ──`);
+    lines.push(`${l1.grade} ${l1.downgrade_reason || ''}`);
+    for (const d of (l1.details || [])) lines.push(`  ${d}`);
+
+    lines.push('');
+    lines.push(`── 第二层·主力行为 ──`);
+    lines.push(`${l2.grade} ${l2.downgrade_reason || ''}`);
+    for (const d of (l2.details || [])) lines.push(`  ${d}`);
+
+    lines.push('');
+    lines.push(`── 第三层·超买过滤 ──`);
+    lines.push(`${l3.grade} ${l3.downgrade_reason || ''}`);
+    for (const d of (l3.details || [])) lines.push(`  ${d}`);
+
+    lines.push('');
+    lines.push(`【买入确认】涨幅${bc.change_pct}% → ${bc.action}`);
+    if (bc.wait_minutes > 0) lines.push(`  需等待约${bc.wait_minutes}分钟`);
+
+    lines.push('');
+    lines.push(`【综合判定】${data.final_decision}`);
+    if (data.downgrade_multiplier < 1 && data.downgrade_multiplier > 0) {
+      lines.push(`  降仓系数: ×${data.downgrade_multiplier} | 最大仓位: ${data.max_position_pct}%`);
+    }
+    lines.push(`  ${data.summary}`);
+
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 // ===== 工具分组 =====
 // 聊天模式（只读，QQ 聊天使用）
 export const CHAT_TOOLS = [
@@ -1058,6 +1196,8 @@ export const CHAT_TOOLS = [
   getFibonacciLevelsTool,
   getDailyChannelTool,
   getTradeAdviceTool,
+  calcPositionTool,
+  checkEntryFiltersTool,
   readDbTableTool,
   getDbSchemaTool,
 ];
@@ -1136,6 +1276,8 @@ export const REFLECT_TOOLS = [
   getFibonacciLevelsTool,
   getDailyChannelTool,
   getTradeAdviceTool,
+  calcPositionTool,
+  checkEntryFiltersTool,
   // 持久化记录
   getPiAnalysisHistoryTool,
   getTradeHistoryTool,
