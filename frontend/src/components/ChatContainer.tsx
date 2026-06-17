@@ -1028,8 +1028,73 @@ registerMessageRenderer('user', {
   },
 } as MessageRenderer<any>);
 
-// assistant 消息使用 Pi 内置的 <assistant-message> 组件渲染（原生支持 text/thinking/toolCall）
-// 不再注册自定义 assistant renderer，工具调用的 Input/Output 由内置 <tool-message> 组件自动展示
+// assistant 消息自定义渲染：保留原始 Markdown，添加复制按钮
+registerMessageRenderer('assistant', {
+  render: (msg: any) => {
+    // 从 content blocks 中提取原始 Markdown 文本（仅 text 类型）
+    const rawMarkdown: string = Array.isArray(msg.content)
+      ? msg.content
+          .filter((block: any) => block.type === 'text')
+          .map((block: any) => block.text)
+          .join('\n\n')
+      : (typeof msg.content === 'string' ? msg.content : '');
+
+    // 无文本内容时回退到内置组件渲染
+    if (!rawMarkdown) {
+      return html`<assistant-message .message=${msg}></assistant-message>`;
+    }
+
+    const copyMsg = (e: Event) => {
+      e.stopPropagation();
+      const btn = e.currentTarget as HTMLElement;
+      const doCopy = () => {
+        // 优先使用 Clipboard API（需要 HTTPS/localhost）
+        if (navigator.clipboard?.writeText) {
+          return navigator.clipboard.writeText(rawMarkdown);
+        }
+        // 降级：execCommand（兼容 HTTP 环境）
+        return new Promise<void>((resolve, reject) => {
+          const ta = document.createElement('textarea');
+          ta.value = rawMarkdown;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          ta.style.top = '-9999px';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          try {
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            resolve();
+          } catch (err) {
+            document.body.removeChild(ta);
+            reject(err);
+          }
+        });
+      };
+      doCopy().then(() => {
+        btn.textContent = '✅ 已复制';
+        setTimeout(() => { btn.textContent = '📋 MD'; }, 1500);
+      }).catch(() => {});
+    };
+
+    return html`
+    <div class="flex justify-start mx-2 message-row group">
+      <div class="assistant-message-container py-2 px-4 relative" style="background: var(--agent-bg-bubble); border-radius: 12px 12px 12px 4px; border-left: 3px solid var(--agent-green); padding: 12px 16px; max-width: 85%; min-width: 200px; box-shadow: var(--agent-shadow-msg);">
+        <markdown-block .content=${rawMarkdown}></markdown-block>
+        <div class="message-actions" style="position:absolute; top:-8px; right:8px; display:flex; gap:4px; opacity:0; transition:opacity 0.15s;">
+          <button @click=${copyMsg} title="复制 Markdown 原文" style="background:var(--agent-surface); border:1px solid var(--agent-border); border-radius:6px; padding:2px 8px; cursor:pointer; font-size:12px; color:var(--agent-text-secondary); white-space:nowrap;">📋 MD</button>
+        </div>
+      </div>
+    </div>
+    <style>
+      .message-row:hover .message-actions { opacity: 1 !important; }
+    </style>
+  `;
+  },
+} as MessageRenderer<any>);
+
+// 工具调用的 Input/Output 由内置 <tool-message> 组件自动展示
 
 // ===== 工具分组 =====
 // 聊天模式工具（只读）
