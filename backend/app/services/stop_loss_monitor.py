@@ -229,7 +229,7 @@ class StopLossMonitor:
             return iron_rule2_reason
 
         # ── 规则 3: 大盘相对表现止损 ──
-        dynamic_reason = self._check_dynamic_stop(float_pnl_pct, market_pct)
+        dynamic_reason = self._check_dynamic_stop(float_pnl_pct, market_pct, symbol)
         if dynamic_reason:
             return dynamic_reason
 
@@ -376,7 +376,7 @@ class StopLossMonitor:
     # ── 规则 2: 铁律二移动止盈（v2.0 振幅分档统一版） ──
 
     # 振幅缓存（按交易日缓存，日K线盘中不变）
-    _amplitude_cache: Dict[str, tuple] = {}  # symbol -> (tier, date_str)
+    _amplitude_cache: Dict[str, tuple] = {}  # symbol -> (tier, amplitude_pct, date_str)
 
     @staticmethod
     def _get_iron_rule2_thresholds(amplitude_tier: str) -> dict:
@@ -400,15 +400,17 @@ class StopLossMonitor:
 
         数据来源：Tushare 日K线（已收盘的完整日线，盘中不变化）。
         缓存策略：按交易日缓存，同一交易日不重复查询 Tushare。
+        同时缓存原始振幅值供 _get_amplitude_pct 使用。
         """
         today = datetime.now().strftime("%Y%m%d")
         cached = self._amplitude_cache.get(symbol)
         if cached:
-            tier, cached_date = cached
+            tier, amp_val, cached_date = cached
             if cached_date == today:
                 return tier
 
         tier = "中波"  # 默认
+        avg_amp = 3.0   # 默认值
         try:
             from app.api.indicator import _normalize_to_ts_code
             from app.config import get_settings
@@ -440,8 +442,21 @@ class StopLossMonitor:
         except Exception:
             pass
 
-        self._amplitude_cache[symbol] = (tier, today)
+        self._amplitude_cache[symbol] = (tier, round(avg_amp, 2), today)
         return tier
+
+    def _get_amplitude_pct(self, symbol: str) -> float:
+        """获取个股近5日日均振幅原始百分比值。
+
+        缓存复用 _get_amplitude_tier 的结果，同一交易日不重复查询。
+        """
+        # 先触发 _get_amplitude_tier 确保缓存是最新的
+        self._get_amplitude_tier(symbol)
+        cached = self._amplitude_cache.get(symbol)
+        if cached:
+            _, amp_val, _ = cached
+            return amp_val
+        return 3.0  # 默认值
 
     def _check_iron_rule2(
         self, symbol: str, float_pnl_pct: float, current_price: float, avg_price: float
@@ -502,11 +517,14 @@ class StopLossMonitor:
 
     # ── 规则 3: 大盘相对表现止损（P1-2） ──
 
-    def _check_dynamic_stop(self, float_pnl_pct: float, market_pct: float) -> Optional[str]:
+    def _check_dynamic_stop(self, float_pnl_pct: float, market_pct: float, symbol: str = "") -> Optional[str]:
         """
-        P1-2: 个股 vs 大盘相对表现。
-        大盘跌 >2% 且个股跑输大盘 >3pp → 强审止损。
-        否则使用标准阈值。
+        动态止损（大盘感知 + 振幅因子）。
+        
+        阈值 = -max(f(大盘涨跌), 近5日日均振幅 × 0.4)
+        - 大盘跌>2% → 收紧至 -1.5% / 大盘震荡 → -2% / 大盘涨 → 放宽
+        - 高振幅个股自动扩宽止损空间，避免被正常波动击穿
+        - 强审：大盘跌>2%且个股跑输>3pp → 立即触发
         """
         # 强审：大盘跌 >2% 且个股跌幅显著大于大盘
         if market_pct <= -2.0 and (float_pnl_pct - market_pct) < -3.0:
@@ -515,22 +533,31 @@ class StopLossMonitor:
                 f'个股{float_pnl_pct:+.2f}%，跑输 {abs(float_pnl_pct - market_pct):.1f}pp'
             )
 
-        # 标准阈值
+        # 大盘感知基础阈值
         if market_pct <= -2.0:
-            threshold = -1.5
-            label = '大盘跌>2%，止损-1.5%'
+            market_threshold = 1.5
+            label = '大盘跌>2%'
         elif -1.0 <= market_pct <= 1.0:
-            threshold = -2.0
-            label = '大盘震荡，止损-2%'
+            market_threshold = 2.0
+            label = '大盘震荡'
         elif 1.0 < market_pct <= 2.0:
-            threshold = -3.0
-            label = '大盘小涨，止损放宽至-3%'
+            market_threshold = 3.0
+            label = '大盘小涨'
         else:
-            threshold = -4.0
-            label = '大盘大涨，止损放宽至-4%'
+            market_threshold = 4.0
+            label = '大盘大涨'
+
+        # 振幅因子：至少 40% 的日均振幅作为止损空间
+        amp_threshold = 2.0  # 默认
+        if symbol:
+            amp_pct = self._get_amplitude_pct(symbol)
+            amp_threshold = amp_pct * 0.4
+
+        threshold = -max(market_threshold, amp_threshold)
+        amp_note = f' +振幅{amp_threshold:.1f}%' if amp_threshold > market_threshold else ''
 
         if float_pnl_pct <= threshold:
-            return f'动态止损触发：{label}，当前浮亏{float_pnl_pct:.2f}%'
+            return f'动态止损触发：{label}{amp_note}，止损{-threshold:.1f}%，当前浮亏{float_pnl_pct:.2f}%'
 
         return None
 

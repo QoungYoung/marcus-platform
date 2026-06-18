@@ -949,16 +949,27 @@ def _get_amplitude_tier(amplitude: float) -> str:
         return "高波"
 
 
-def _get_dynamic_stop_pct(index_pct: float) -> float:
-    """大盘涨跌幅 → 动态止损率(%)"""
+def _get_dynamic_stop_pct(index_pct: float, amplitude: float = 0.0) -> float:
+    """大盘涨跌幅 + 振幅 → 动态止损率(%)
+    
+    动态止损率 = max(f(大盘涨跌), 近5日日均振幅 × 0.4)
+    - 大盘感知保证系统性风险收紧
+    - 振幅因子保证高波动个股不会被窄止损频繁击穿
+    """
+    # 大盘感知基本阈值
     if index_pct < -2.0:
-        return 1.5
+        market_rate = 1.5
     elif index_pct <= 1.0:
-        return 2.0
+        market_rate = 2.0
     elif index_pct <= 2.0:
-        return 3.0
+        market_rate = 3.0
     else:
-        return 4.0
+        market_rate = 4.0
+    
+    # 振幅因子：至少 40% 的日均振幅作为止损空间
+    amp_rate = amplitude * 0.4 if amplitude > 0 else 0.0
+    
+    return round(max(market_rate, amp_rate), 2)
 
 
 def _get_iron_rule2(amplitude_tier: str) -> dict:
@@ -1101,7 +1112,7 @@ async def calc_position(req: CalcPositionRequest):
     total_cap_pct = _get_total_cap(req.stance)
     tier_condition = _get_tier_condition(req.tier)
     amplitude_tier = _get_amplitude_tier(amplitude)
-    dynamic_stop_pct = _get_dynamic_stop_pct(index_pct)
+    dynamic_stop_pct = _get_dynamic_stop_pct(index_pct, amplitude)
 
     # ── Layer 3: 计算数量 ──
     effective_single_cap = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset
