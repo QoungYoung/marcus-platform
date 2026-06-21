@@ -1081,10 +1081,24 @@ async def calc_position(req: CalcPositionRequest):
     # 1c. 获取近5日K线计算振幅
     amplitude = 0.0
     try:
-        from app.api.market import get_stock_kline
-        kline_response = await get_stock_kline(symbol=symbol, limit=5)
-        klines = kline_response.klines if hasattr(kline_response, 'klines') else []
-        amplitude = _calculate_amplitude_from_kline(klines)
+        from app.config import get_settings
+        from datetime import datetime, timedelta
+        settings = get_settings()
+        token = settings.get_tushare_token()
+        if token:
+            import tushare as ts
+            pro = ts.pro_api(token)
+            end_d = datetime.now().strftime("%Y%m%d")
+            start_d = (datetime.now() - timedelta(days=15)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=5)
+            if df is not None and not df.empty:
+                klines = [
+                    {"close": float(r.get("close", 0) or 0),
+                     "high": float(r.get("high", 0) or 0),
+                     "low": float(r.get("low", 0) or 0)}
+                    for _, r in df.iterrows()
+                ]
+                amplitude = _calculate_amplitude_from_kline([type("K", (), k) for k in klines])
     except Exception as e:
         logger.warning(f"获取K线振幅失败: {e}")
         warnings.append("⚠️ K线振幅数据不可用，使用默认振幅0%")
@@ -1446,7 +1460,7 @@ async def check_entry_filters(req: EntryCheckRequest):
             price_above_vwap = current_price > avg_price if avg_price and avg_price > 0 else None
             sector_ok = req.sector_net_inflow is not None and req.sector_net_inflow > 0
             if price_above_vwap and sector_ok:
-                tech_details.append("  备用检查: 价格站稳分时均价✅ + 板块资金净流入✅ → 仅试探仓≤5%")
+                tech_details.append("  备用检查: 重新你你你5✅ + 板块资金净流入✅ → 仅试探仓≤5%")
                 layer1_grade = "⚠️降级"
                 layer1_downgrade = "MA5<MA20 趋势待确认"
                 layer1_action = "仅试探仓≤5%"

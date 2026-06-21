@@ -40,7 +40,7 @@ for (const envPath of candidatePaths) {
 import * as http from 'node:http';
 import { Agent, type AgentState } from '@earendil-works/pi-agent-core';
 import { getModel, type Model } from '@earendil-works/pi-ai';
-import { CHAT_TOOLS, TRADE_TOOLS, REFLECT_TOOLS } from './tools.js';
+import { CHAT_TOOLS, TRADE_TOOLS, REFLECT_TOOLS, BACKTEST_ONLY_TOOLS, setBacktestContext, getBacktestContext } from './tools.js';
 
 // ===== 配置 =====
 const PORT = parseInt(process.env.PI_SERVER_PORT || '3001', 10);
@@ -246,13 +246,20 @@ const TRADE_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家（自
 
 ### 交易决策 SOP（每次交易窗口严格执行）
 
-**第一步：获取数据**
+**第一步：获取数据（每个窗口强制执行，全部 6 条缺一不可）**
 1. 调用 get_latest_scan_report() 获取最新扫描报告
    - **重点关注 pi_analysis 部分** — 这是上一轮 Pi 对系统扫描报告的预消化分析
    - pi_analysis 提供的 stance 和 position_limit 比系统原始 stance 更权威
    - pi_analysis 的 reason 给出了核心策略判断方向
 2. 调用 get_portfolio() 查看当前账户状态
 3. 调用 get_market_indices() 看大盘方向
+4. ⚠️ **每个窗口必须调用 get_concept_fund_flow(limit=30, sort_by="main_net")** — 获取当日概念板块主力资金排行
+   - 回测模式下基于 B2 成交额加权缩放，不同 phase_time 返回不同的渐进数据
+   - 即使上次调用返回昨日数据，也必须重新调用（缩放权重随盘中时间递增）
+5. ⚠️ **每个窗口必须调用 get_industry_fund_flow(limit=20, sort_by="main_net")** — 获取当日行业板块主力资金排行
+   - 同上，盘中渐进数据，每次窗口权重不同
+6. ⚠️ **每个窗口必须调用 get_market_moneyflow()** — 获取当日大盘资金情绪
+   - 同上，每次窗口都应重新确认主力动向
 
 **第二步：环境判断（v1.5: Pi 是唯一决策者）**
 - scan stance 仅作参考输入，不做硬性约束
@@ -952,12 +959,17 @@ const PANEL_MEMBERS: PanelMember[] = (() => {
 
 // ===== 按模式获取提示词和工具（chat / trade 模式） =====
 function getModeConfig(mode: string) {
+  // 回测专用工具: 仅在 setBacktestContext 已注入时追加到 LLM 工具集,
+  // 避免正常模式工具列表里出现一个跑不通的工具名污染 LLM 决策.
+  const backtestOnlyAgentTools = getBacktestContext() !== null
+    ? BACKTEST_ONLY_TOOLS.map(toAgentTool)
+    : [];
   if (mode === 'trade') {
-    return { systemPrompt: getPrompt('TRADE_SYSTEM_PROMPT'), tools: tradeTools };
+    return { systemPrompt: getPrompt('TRADE_SYSTEM_PROMPT'), tools: [...tradeTools, ...backtestOnlyAgentTools] };
   }
-  // reflect 模式不再走此路径，由 executePanelDiscussion 处理
+  // reflect 模式不走此路径，由 executePanelDiscussion 处理
   // 默认 chat 模式
-  return { systemPrompt: getPrompt('CHAT_SYSTEM_PROMPT'), tools: chatTools };
+  return { systemPrompt: getPrompt('CHAT_SYSTEM_PROMPT'), tools: [...chatTools, ...backtestOnlyAgentTools] };
 }
 
 // ===== Session → Agent 映射（chat / trade 模式） =====
@@ -983,7 +995,7 @@ function getOrCreateAgent(sessionId: string, mode: string): Agent {
 
   const { systemPrompt, tools } = getModeConfig(mode);
 
-  // 动态注入当前日期上下文
+  // 动态注入当前日期上下文（回测模式由引擎提供，不注入实时时间）
   const now = new Date();
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -1320,10 +1332,25 @@ const server = http.createServer(async (req, res) => {
       const chatMode = mode || 'chat';
       console.log(`[PiServer] --> 收到消息 [${chatMode}][${sessionId.slice(-8)}]: ${message.slice(0, 100)}`);
 
+      // ── 检测并解析回测上下文前缀 [BKT:task_id|YYYY-MM-DD|HH:MM] ──
+      let cleanMessage = message;
+      const bktMatch = message.match(/^\[BKT:([^|\]]+)\|(\d{4}-\d{2}-\d{2})\|?(\d{2}:\d{2})?\]\s*/);
+      if (bktMatch) {
+        const bktTaskId = bktMatch[1];
+        const bktDate = bktMatch[2];
+        const bktTime = bktMatch[3] || null;
+        setBacktestContext({ task_id: bktTaskId, trade_date: bktDate, phase_time: bktTime });
+        cleanMessage = message.slice(bktMatch[0].length);
+        console.log(`[PiServer] 回测上下文: task=${bktTaskId} date=${bktDate}${bktTime?' time='+bktTime:''}`);
+      } else {
+        setBacktestContext(null);
+      }
+
       // === reflect 模式：专家组群聊讨论 ===
       if (chatMode === 'reflect') {
-        const result = await executePanelDiscussion(message, sessionId);
+        const result = await executePanelDiscussion(cleanMessage, sessionId);
         console.log(`[PiServer] <-- Panel 回复 [reflect][${sessionId.slice(-8)}] (${result.elapsed_ms}ms): ${result.reply.slice(0, 100)}`);
+        setBacktestContext(null);
         jsonResponse(res, 200, {
           reply: result.reply,
           session_id: sessionId,
@@ -1348,8 +1375,9 @@ const server = http.createServer(async (req, res) => {
       locks.set(lockKey, newLock);
 
       try {
-        await (agent as any).prompt(message);
+        await (agent as any).prompt(cleanMessage);
       } finally {
+        setBacktestContext(null);
         resolveLock!();
       }
 
@@ -1435,6 +1463,50 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // 回测交易报告下载 (读取 session 文件中 Pi 的最后回复)
+  if (req.method === 'GET' && req.url?.startsWith('/reports/')) {
+    const taskId = req.url.split('/reports/')[1]?.split('?')[0];
+    if (!taskId) {
+      jsonResponse(res, 400, { error: '缺少 task_id' });
+      return;
+    }
+
+    try {
+      const reports: { date: string; report: string }[] = [];
+      const files = readdirSync(SESSIONS_DIR)
+        .filter(f => f.startsWith(`backtest_${taskId}_`) && f.endsWith('.json'))
+        .sort();
+
+      for (const f of files) {
+        const dateMatch = f.match(/_(\d{8})\.json$/);
+        const date = dateMatch ? `${dateMatch[1].slice(0,4)}-${dateMatch[1].slice(4,6)}-${dateMatch[1].slice(6,8)}` : f;
+        try {
+          const data = JSON.parse(readFileSync(resolve(SESSIONS_DIR, f), 'utf-8'));
+          const reply = extractReplyText(data);
+          if (reply && reply !== '(无回复)') {
+            reports.push({ date, report: reply });
+          }
+        } catch { /* skip corrupted files */ }
+      }
+
+      const format = req.url.includes('format=md') ? 'markdown' : 'json';
+      if (format === 'markdown') {
+        const md = reports.map(r => `# ${r.date}\n\n${r.report}\n\n---\n`).join('\n');
+        res.writeHead(200, {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': `attachment; filename="pi_reports_${taskId.slice(0,8)}.md"`,
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(md);
+      } else {
+        jsonResponse(res, 200, { task_id: taskId, count: reports.length, reports });
+      }
+    } catch (e: any) {
+      jsonResponse(res, 500, { error: e.message });
+    }
+    return;
+  }
+
   // 404
   jsonResponse(res, 404, { error: 'Not Found' });
 });
@@ -1452,7 +1524,7 @@ server.listen(PORT, () => {
     console.log(`      - ${m.roleLabel}: ${m.provider}/${m.modelId}`);
   });
   console.log(`   聊天工具: ${chatTools.length} 个 (只读)`);
-  console.log(`   交易工具: ${tradeTools.length} 个 (含下单)`);
+  console.log(`   交易工具: ${tradeTools.length} 个 (含下单，回测自动路由)`);
   console.log(`   反思工具: ${reflectTools.length} 个 (只读+历史)`);
   console.log(`   模式: chat(默认)/trade/reflect`);
   console.log(`   DeepSeek API Key: ${DEEPSEEK_API_KEY ? '已配置 ✓' : '⚠️ 未配置'}`);

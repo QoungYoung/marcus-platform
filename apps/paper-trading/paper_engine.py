@@ -125,6 +125,8 @@ class PaperTradingEngine:
         
         # 初始化数据库（必须先执行，确保 positions 表存在）
         self._init_database()
+        # 回测专用: 当前模拟交易日, FIFO排序用; 实盘为 None 则回退 created_at
+        self._trade_date: Optional[str] = None
 
         # 初始化账户
         self._init_account(initial_capital)
@@ -200,8 +202,11 @@ class PaperTradingEngine:
             for row in cursor.fetchall():
                 pos_meta[row[0]] = {'entry_date': row[1], 'highest_price': row[2] or 0.0}
 
-            # 获取所有交易记录
-            cursor.execute('SELECT symbol, direction, price, volume FROM trades ORDER BY created_at')
+            # 获取所有交易记录 (回测用 trade_date 排序, 实盘回退 created_at)
+            cursor.execute(
+                'SELECT symbol, direction, price, volume FROM trades '
+                'ORDER BY COALESCE(trade_date, substr(created_at,1,10)), created_at'
+            )
             trades = cursor.fetchall()
 
             # FIFO 计算持仓
@@ -360,9 +365,15 @@ class PaperTradingEngine:
                 amount REAL NOT NULL,
                 profit REAL DEFAULT 0,
                 created_at TEXT NOT NULL,
+                trade_date TEXT,
                 FOREIGN KEY (orderid) REFERENCES orders (orderid)
             )
         ''')
+        # 迁移: 为旧 trades 表补 trade_date 列 (回测专用, 实盘为 NULL)
+        try:
+            cursor.execute('ALTER TABLE trades ADD COLUMN trade_date TEXT')
+        except sqlite3.OperationalError:
+            pass
 
         # 创建持仓追踪表（Step 8：统一数据源）
         cursor.execute('''
@@ -678,31 +689,35 @@ class PaperTradingEngine:
                     (order.symbol, pos.entry_date, 0.0, now_meta)
                 )
 
-            # 记录成交
+            # 记录成交 (回测带 trade_date, 实盘为 NULL)
+            td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute('''
-                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
-                  fill_price * order.volume, 0, datetime.now().isoformat()))
+                  fill_price * order.volume, 0, datetime.now().isoformat(), td))
 
         else:
             # 卖出成交（FIFO 修正：正确重建历史持仓避免未来数据污染 lots）
             # 核心：只取当前卖出时间之前的买入 + 之前的卖出，两段时间边界完全隔离
+            # 回测模式优先 trade_date, 实盘回退 created_at
+            date_col = "trade_date" if self._trade_date else "created_at"
+            date_val = self._trade_date or (order.created_at if hasattr(order, 'created_at') and order.created_at else datetime.now().isoformat())
             current_time = order.created_at if hasattr(order, 'created_at') and order.created_at else datetime.now().isoformat()
 
             # 【BugFix】分段时间查询，避免未来买入/卖出污染 lots
-            # buys: 时间 <= current_time
+            # buys: 时间 <= current_date
             cursor.execute(
-                'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND created_at<=? ORDER BY created_at',
-                (order.symbol, Direction.LONG.value, current_time)
+                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? ORDER BY {date_col}',
+                (order.symbol, Direction.LONG.value, date_val)
             )
-            buy_trades = cursor.fetchall()  # [(price, volume), ...]
-            # sells: 时间 < current_time（不包含当前这笔卖出）
+            buy_trades = cursor.fetchall()
+            # sells: 时间 < current_date（不包含当前这笔卖出）
             cursor.execute(
-                'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND created_at<? ORDER BY created_at',
-                (order.symbol, Direction.SHORT.value, current_time)
+                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<? ORDER BY {date_col}',
+                (order.symbol, Direction.SHORT.value, date_val)
             )
-            sell_trades = cursor.fetchall()  # [(price, volume), ...]
+            sell_trades = cursor.fetchall()
 
             # 重构 FIFO lots（买）
             lots = [[vol, price] for price, vol in buy_trades]
@@ -749,11 +764,12 @@ class PaperTradingEngine:
             pos.frozen -= order.volume
 
             # 记录成交
+            td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute('''
-                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
-                  fill_price * order.volume, profit, datetime.now().isoformat()))
+                  fill_price * order.volume, profit, datetime.now().isoformat(), td))
 
             if pos.volume == 0:
                 # Step 8: 卖出清仓时删除 positions 表记录（在同一连接内执行，避免死锁）

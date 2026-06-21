@@ -4,7 +4,7 @@ import PortfolioPage from './pages/PortfolioPage'
 import TradingPage from './pages/TradingPage'
 import MarketPage from './pages/MarketPage'
 import NewsPage from './pages/NewsPage'
-import StrategyPage from './pages/StrategyPage'
+import BacktestPage from './pages/BacktestPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import SchedulerPage from './pages/SchedulerPage'
 import TradingAgentPage from './pages/TradingAgentPage'
@@ -19,7 +19,7 @@ function App() {
           <Route path="trading" element={<TradingPage />} />
           <Route path="market" element={<MarketPage />} />
           <Route path="news" element={<NewsPage />} />
-          <Route path="strategy" element={<StrategyPage />} />
+          <Route path="backtest" element={<BacktestPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="agent" element={<TradingAgentPage />} />

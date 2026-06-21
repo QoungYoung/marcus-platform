@@ -174,6 +174,10 @@ class CalcPositionResponse(BaseModel):
     # 警告
     warnings: list[str] = []
     all_pass: bool = False
+    # 数据源标识（回测时填 "backtest_local"）
+    data_source: Optional[str] = None
+    trade_date: Optional[str] = None
+    phase_time: Optional[str] = None
 
 
 # ── 入场过滤检查 ──

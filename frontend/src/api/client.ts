@@ -50,10 +50,32 @@ export const newsApi = {
   getSentiment: () => api.get('/news/sentiment'),
 }
 
-// Strategy APIs
+// Strategy APIs (legacy, kept for backward compatibility)
 export const strategyApi = {
   getCurrent: () => api.get('/strategy/current'),
   getScanHistory: (params?: { limit?: number }) => api.get('/strategy/scans', { params }),
+}
+
+// Backtest APIs
+export const backtestApi = {
+  create: (data: { name: string; start_date: string; end_date: string; initial_capital: number; include_chinext?: boolean }) =>
+    api.post('/backtest/create', data),
+  start: (taskId: string) => api.post(`/backtest/${taskId}/start`),
+  cancel: (taskId: string) => api.post(`/backtest/${taskId}/cancel`),
+  getStreamUrl: (taskId: string) => `/api/v1/backtest/${taskId}/stream`,
+  getDetail: (taskId: string) => api.get(`/backtest/${taskId}`),
+  listTasks: (params?: { limit?: number; offset?: number }) =>
+    api.get('/backtest/tasks', { params }),
+  deleteTask: (taskId: string) => api.delete(`/backtest/${taskId}`),
+  getEquityCsvUrl: (taskId: string) => `/api/v1/backtest/${taskId}/equity-csv`,
+  getTradesCsvUrl: (taskId: string) => `/api/v1/backtest/${taskId}/trades-csv`,
+  getPositionsCsvUrl: (taskId: string) => `/api/v1/backtest/${taskId}/positions-csv`,
+  getIndexCsvUrl: (taskId: string) => `/api/v1/backtest/${taskId}/index-csv`,
+  getExportAllUrl: (taskId: string) => `/api/v1/backtest/${taskId}/export-all`,
+  getStrategyReport: async (taskId: string) => {
+    const r = await api.get(`/backtest/${taskId}/strategy-report`)
+    return r.data as { task_id: string; markdown: string; stats: any }
+  },
 }
 
 // Scheduler APIs
