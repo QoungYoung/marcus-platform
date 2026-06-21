@@ -566,6 +566,70 @@ class LocalDataProvider:
         except Exception:
             return None
 
+    def get_cumulative_intraday_high_low(self, sym: str, trade_date: date,
+                                          target_hour: int, target_minute: int
+                                          ) -> Optional[dict]:
+        """获取从开盘(09:30)到目标时刻的累计日内最高/最低价 + 当前价
+        用于计算真正的日内价格分位 (intraday_percentile)
+
+        之前: 使用单根分钟K线的 high/low → 分位一直在 50-65% 无意义
+        现在: 累计09:30→phase_time所有分钟K线的最高/最低 → 真正反映日内走势位置
+
+        返回: {day_high, day_low, current_price, intraday_percentile} or None
+        """
+        df = self._load_minute_stock(sym)
+        if df is None or df.empty:
+            return None
+        needed = ["open", "high", "low", "close"]
+        if not all(c in df.columns for c in needed):
+            return None
+
+        date_str = trade_date.isoformat()
+        td_ts = pd.Timestamp(trade_date)
+        # 窗口: 09:30:00 ~ target_hour:target_minute:59
+        time_min = pd.Timestamp(f"{date_str} 09:30:00")
+        # cur_minutes 补偿 stock_1min 偏移, 上界取 target_minute
+        cur_total = target_hour * 60 + target_minute + 1
+        if cur_total >= 24 * 60:
+            time_max = pd.Timestamp(f"{date_str} 15:01:00")
+        else:
+            time_max = pd.Timestamp(f"{date_str} {cur_total // 60:02d}:{cur_total % 60:02d}:00")
+
+        try:
+            if isinstance(df.index, pd.MultiIndex) and df.index.nlevels >= 2:
+                l0 = df.index.get_level_values(0)
+                l1 = df.index.get_level_values(1)
+                mask = (l0.date == td_ts.date()) & (l1 >= time_min) & (l1 < time_max)
+                candles = df.loc[mask]
+            elif isinstance(df.index, pd.DatetimeIndex):
+                mask = (df.index.date == td_ts.date()) & (df.index >= time_min) & (df.index < time_max)
+                candles = df.loc[mask]
+            else:
+                return None
+        except Exception:
+            return None
+
+        if candles is None or candles.empty:
+            return None
+
+        day_high = round(float(candles["high"].max()), 2)
+        day_low = round(float(candles["low"].min()), 2)
+        # 当前价取最后一根K线的收盘价
+        current_price = round(float(candles.iloc[-1]["close"]), 2)
+
+        intraday_percentile = None
+        if day_high > day_low and current_price > 0:
+            intraday_percentile = round(
+                (current_price - day_low) / (day_high - day_low) * 100, 1
+            )
+
+        return {
+            "day_high": day_high,
+            "day_low": day_low,
+            "current_price": current_price,
+            "intraday_percentile": intraday_percentile,
+        }
+
     def get_minute_flow_bias(self, sym: str, trade_date: date, 
                               target_hour: int, target_minute: int) -> Optional[dict]:
         """用分钟K线 OHLC 估算 09:30→phase_time 的净买卖倾向
@@ -643,12 +707,18 @@ class LocalDataProvider:
             return None
 
         bias = round((buy_vol - sell_vol) / total_vol, 4)  # -1(纯卖) ~ +1(纯买)
+        # 累计成交额: 窗口内所有K线 amount/vol 之和 (amount优先)
+        if "amount" in candles.columns:
+            cumulative_amount = round(float(candles["amount"].sum()), 2)
+        else:
+            cumulative_amount = round(float(candles["volume"].sum()), 2)
         return {
             "bias": bias,
             "buy_vol_est": round(buy_vol, 0),
             "sell_vol_est": round(sell_vol, 0),
             "total_vol": round(total_vol, 0),
             "candle_count": candle_count,
+            "cumulative_amount": cumulative_amount,  # 窗口累计成交额(元) or 成交量(股)
         }
 
     def get_moneyflow(self, sym: str, trade_date: date) -> Optional[dict]:
@@ -905,6 +975,103 @@ class LocalDataProvider:
             "intraday_main_net": round((eod_buy_elg + eod_buy_lg) * weight, 2),
             "basis": basis,
             "proxy_symbol": proxy_symbol if basis == "single_symbol_proxy" else None,
+        }
+
+    # ── 方案B: 成分股分钟K线估算板块资金流 (替代 B2 缩放 EOD) ──
+
+    def get_component_stocks(self, sector_name: str,
+                              sector_type: str = "concept",
+                              limit: int = 10) -> List[str]:
+        """从 stock_pool.db 获取板块市值前N的成分股 ts_code 列表
+
+        sector_type: "concept" → stock_concept_map 表, "industry" → stock_pool.industry 字段
+        返回: ["000001.SZ", "600519.SH", ...]
+        """
+        import sqlite3
+        pool_db = self.DATA_ROOT.parent.parent / "stock_pool.db"
+        if not pool_db.exists():
+            return []
+        try:
+            conn = sqlite3.connect(str(pool_db))
+            cur = conn.cursor()
+            if sector_type == "concept":
+                cur.execute("""
+                    SELECT p.ts_code FROM stock_pool p
+                    JOIN stock_concept_map m ON p.ts_code = m.ts_code
+                    WHERE m.concept_name = ? AND p.is_st = 0
+                    ORDER BY p.market_cap DESC
+                    LIMIT ?
+                """, (sector_name, limit))
+            else:  # industry
+                cur.execute("""
+                    SELECT ts_code FROM stock_pool
+                    WHERE industry = ? AND is_st = 0
+                    ORDER BY market_cap DESC
+                    LIMIT ?
+                """, (sector_name, limit))
+            stocks = [row[0] for row in cur.fetchall()]
+            conn.close()
+            return stocks
+        except Exception:
+            return []
+
+    def get_sector_intraday_bias(self, sector_name: str, trade_date: date,
+                                  hh: int, mm: int,
+                                  sector_type: str = "concept",
+                                  component_limit: int = 10) -> Optional[dict]:
+        """从成分股分钟K线蜡烛形态估算板块盘中资金流向
+
+        核心算法:
+        1. 取板块市值前N的成分股
+        2. 对每只股调用 get_minute_flow_bias() 获取买卖倾向 (-1~1)
+        3. 取每只股的当前分钟成交额
+        4. 加权计算板块整体 bias 和估算净买入
+           板块净买入 = Σ(股票成交额 × bias × 缩放到亿元)
+
+        返回: {estimated_net: 估算净买入(亿), bias: 整体买卖倾向, sample_count: 有效样本数,
+               detail: [{sym, bias, amount}]} or None
+        """
+        stocks = self.get_component_stocks(sector_name, sector_type, component_limit)
+        if not stocks:
+            return None
+
+        stock_biases = []
+        for sym in stocks:
+            bias_info = self.get_minute_flow_bias(sym, trade_date, hh, mm)
+            if bias_info is None:
+                continue
+            # 用累计成交额 (09:30→当前时刻所有分钟K线的 amount 之和)
+            # 而非单根分钟K线的 amount, 这样在 09:35 也能有 5 分钟的量
+            cum_amount = bias_info.get("cumulative_amount", 0)
+            stock_biases.append({
+                "sym": sym,
+                "bias": bias_info["bias"],
+                "amount": cum_amount,  # ← 累计成交额
+                "candle_count": bias_info.get("candle_count", 0),
+            })
+
+        if not stock_biases:
+            return None
+
+        # 加权计算板块整体买卖倾向 (以成交额为权重)
+        total_amount = sum(s["amount"] for s in stock_biases)
+        if total_amount <= 0:
+            # 退化为等权平均
+            avg_bias = sum(s["bias"] for s in stock_biases) / len(stock_biases)
+            estimated_net = 0.0  # 无量无法估算金额
+        else:
+            weighted_bias = sum(s["bias"] * s["amount"] for s in stock_biases) / total_amount
+            avg_bias = weighted_bias
+            # 估算净买入: 总成交额 × 买卖倾向 (正=买入主导, 负=卖出主导)
+            # 缩放到亿元: amount 单位是元
+            estimated_net = round(total_amount * avg_bias / 1e8, 4)
+
+        return {
+            "estimated_net": estimated_net,          # 估算净买入(亿)
+            "bias": round(avg_bias, 4),              # 整体买卖倾向 (-1~1)
+            "sample_count": len(stock_biases),        # 有效样本数
+            "total_amount": round(total_amount / 1e8, 4),  # 总成交额(亿)
+            "detail": sorted(stock_biases, key=lambda x: abs(x["bias"]), reverse=True)[:5],
         }
 
 

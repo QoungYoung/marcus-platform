@@ -983,7 +983,7 @@ function getModeSessions(mode: string): Map<string, Agent> {
   return sessions.get(mode)!;
 }
 
-function getOrCreateAgent(sessionId: string, mode: string): Agent {
+function getOrCreateAgent(sessionId: string, mode: string, modelOverride?: string, thinkingLevelOverride?: string): Agent {
   // reflect 模式不走此路径
   if (mode === 'reflect') {
     throw new Error('reflect mode should use executePanelDiscussion, not getOrCreateAgent');
@@ -1003,9 +1003,20 @@ function getOrCreateAgent(sessionId: string, mode: string): Agent {
   const dateContext = `当前时间: ${dateStr} (${weekdays[now.getDay()]})\n⚠️ 日频工具（get_daily_kline/get_technical）返回的是最后收盘日的盘后数据，不是当日盘中数据，引用时必须确认返回数据的截止日期。`;
   const datedSystemPrompt = `${dateContext}\n\n${systemPrompt}`;
 
-  const isHighThinking = mode === 'trade';
-  const model = getModel('deepseek', isHighThinking ? 'deepseek-v4-pro' : DEEPSEEK_MODEL);
-  const thinkingLevel = isHighThinking ? 'high' : 'medium';
+  // ── 模型选择: 外部覆盖 > mode 默认 ──
+  let modelId: string;
+  let thinkingLevel: string;
+  if (modelOverride) {
+    // 回测任务显式传入的模型配置
+    modelId = modelOverride;
+    thinkingLevel = thinkingLevelOverride || 'high';
+  } else {
+    // 默认: trade → v4-pro+high, chat → DEEPSEEK_MODEL+medium
+    const isHighThinking = mode === 'trade';
+    modelId = isHighThinking ? 'deepseek-v4-pro' : DEEPSEEK_MODEL;
+    thinkingLevel = isHighThinking ? 'high' : 'medium';
+  }
+  const model = getModel('deepseek', modelId as any);
 
   const savedMessages = loadSession(sessionId);
 
@@ -1024,7 +1035,8 @@ function getOrCreateAgent(sessionId: string, mode: string): Agent {
   });
 
   modeSessions.set(sessionId, agent);
-  console.log(`[PiServer] 新会话 [${mode}]: ${sessionId} (${savedMessages.length > 0 ? '已恢复' : '空白'})${isHighThinking ? ' 🔍 v4-pro·高思考' : ''}`);
+  const thinkLabel = thinkingLevel === 'high' ? '🔍高思考' : thinkingLevel === 'medium' ? '📊中思考' : '💤低思考';
+  console.log(`[PiServer] 新会话 [${mode}]: ${sessionId} (${savedMessages.length > 0 ? '已恢复' : '空白'}) model=${modelId} ${thinkLabel}`);
   return agent;
 }
 
@@ -1320,7 +1332,7 @@ const server = http.createServer(async (req, res) => {
     const startTime = Date.now();
     try {
       const body = await readBody(req);
-      const { message, session_id, mode } = JSON.parse(body);
+      const { message, session_id, mode, model, thinking_level } = JSON.parse(body);
 
       if (!message) {
         console.log(`[PiServer] POST /chat -> 400 (missing message)`);
@@ -1330,7 +1342,9 @@ const server = http.createServer(async (req, res) => {
 
       const sessionId = session_id || 'default';
       const chatMode = mode || 'chat';
-      console.log(`[PiServer] --> 收到消息 [${chatMode}][${sessionId.slice(-8)}]: ${message.slice(0, 100)}`);
+      const modelOverride = model || undefined;
+      const thinkingOverride = thinking_level || undefined;
+      console.log(`[PiServer] --> 收到消息 [${chatMode}][${sessionId.slice(-8)}]${modelOverride ? ' model='+modelOverride : ''}${thinkingOverride ? ' think='+thinkingOverride : ''}: ${message.slice(0, 100)}`);
 
       // ── 检测并解析回测上下文前缀 [BKT:task_id|YYYY-MM-DD|HH:MM] ──
       let cleanMessage = message;
@@ -1361,7 +1375,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       // === chat / trade 模式：单 Agent ===
-      const agent = getOrCreateAgent(sessionId, chatMode);
+      const agent = getOrCreateAgent(sessionId, chatMode, modelOverride, thinkingOverride);
 
       const lockKey = `${chatMode}:${sessionId}`;
       const prevLock = locks.get(lockKey);

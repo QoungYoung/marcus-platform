@@ -73,6 +73,9 @@ def _apply_schema_patches():
         # 2026-06: T+1 违规标记 (回测引擎历史 bug: set_current_date 缺失导致 T+0 违规)
         ("backtest_trades", "is_t0_violation", "BOOLEAN DEFAULT FALSE"),
         ("backtest_trades", "t0_violation_note", "VARCHAR(200) DEFAULT ''"),
+        # 2026-06: 回测模型可配置化
+        ("backtest_tasks", "model_name", "VARCHAR(50) DEFAULT 'deepseek-v4-pro'"),
+        ("backtest_tasks", "thinking_level", "VARCHAR(20) DEFAULT 'high'"),
     ]
     try:
         inspector = inspect(engine)

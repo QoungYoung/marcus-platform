@@ -50,30 +50,33 @@ async function apiFetch(path: string, init?: RequestInit) {
 // 回测上下文 —— 工具层感知回测状态，Pi Server 无需知道
 // ══════════════════════════════════════════════════════════
 
-interface BacktestContext {
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+export interface BacktestContext {
   task_id: string;
   trade_date: string;  // YYYY-MM-DD
   phase_time?: string | null;  // HH:MM（分钟级快照用）
 }
 
-let _backtestCtx: BacktestContext | null = null;
+// 用 AsyncLocalStorage 替代全局变量，防止并发请求互相覆盖
+const _ctxStore = new AsyncLocalStorage<BacktestContext | null>();
 
-/** 设置回测上下文（Pi Server 在每次 agent.prompt 前调用） */
+/** 设置回测上下文（请求级隔离，并发安全） */
 export function setBacktestContext(ctx: BacktestContext | null) {
-  _backtestCtx = ctx;
+  _ctxStore.enterWith(ctx);
   if (ctx) {
     console.log(`[Tools] 进入回测上下文: task=${ctx.task_id} date=${ctx.trade_date}`);
   }
 }
 
-/** 获取当前回测上下文 */
+/** 获取当前请求的回测上下文（请求级隔离） */
 export function getBacktestContext(): BacktestContext | null {
-  return _backtestCtx;
+  return _ctxStore.getStore() ?? null;
 }
 
 /** 是否处于回测模式 */
 function isBacktest(): boolean {
-  return _backtestCtx !== null;
+  return _ctxStore.getStore() !== null;
 }
 
 // ===== 工具定义 =====
@@ -124,7 +127,7 @@ export const getQuoteTool = {
   async execute(_toolCallId: string, params: { symbol: string }, _signal?: AbortSignal) {
     // 回测模式：分钟级快照（按需懒加载单只标的）
     if (isBacktest()) {
-      const ctx = _backtestCtx!;
+      const ctx = getBacktestContext()!;
       let qs = `trade_date=${ctx.trade_date}`;
       if (ctx.phase_time) {
         const [h, m] = ctx.phase_time.split(':');
@@ -145,10 +148,12 @@ export const getQuoteTool = {
       const chg = data.close - (data.pre_close || data.open);
       const chgPct = (data.pre_close || data.open) > 0 ? (chg / (data.pre_close || data.open) * 100) : 0;
       const sign = chg >= 0 ? '+' : '';
+      const ip = data.intraday_percentile;
+      const ipStr = ip != null ? `  日内分位: ${ip.toFixed(0)}%${ip > 90 ? ' (追高风险)' : ''}` : '';
       const lines = [
         `${params.symbol} (回测 ${data.trade_date}${data.actual_time ? ' ' + data.actual_time.slice(-8) : ''})`,
-        `现价: ${data.close}  涨跌: ${sign}${chg.toFixed(2)} (${sign}${chgPct.toFixed(2)}%)`,
-        `开盘: ${data.open}  最高: ${data.high}  最低: ${data.low}`,
+        `现价: ${data.close}  涨跌: ${sign}${chg.toFixed(2)} (${sign}${chgPct.toFixed(2)}%)${ipStr}`,
+        `开盘: ${data.open}  日内最高: ${data.high}  日内最低: ${data.low}`,
         `成交量: ${(data.volume || 0).toLocaleString()}  来源: ${data.source}`,
       ];
       return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
@@ -158,9 +163,11 @@ export const getQuoteTool = {
     if (data.error) throw new Error(data.error);
     const q = data;
     const sign = q.percent >= 0 ? '+' : '';
+    const ip = q.intraday_percentile;
+    const ipStr = ip != null ? `  日内分位: ${ip.toFixed(0)}%${ip > 90 ? ' (追高风险)' : ''}` : '';
     const lines = [
       `${q.name} (${q.symbol})`,
-      `当前价: ${q.current}  涨跌: ${sign}${q.change} (${sign}${q.percent}%)`,
+      `当前价: ${q.current}  涨跌: ${sign}${q.change} (${sign}${q.percent}%)${ipStr}`,
       `今开: ${q.open}  最高: ${q.high}  最低: ${q.low}`,
       `昨收: ${q.last_close}  成交量: ${q.volume}  成交额: ${q.amount}`,
     ];
@@ -178,7 +185,7 @@ export const getPortfolioTool = {
   async execute(_toolCallId: string, _params: unknown, _signal?: AbortSignal) {
     // 回测模式：读取沙盒账户
     if (isBacktest()) {
-      const ctx = _backtestCtx!;
+      const ctx = getBacktestContext()!;
       const accData = await apiFetch(`/backtest/${ctx.task_id}/sandbox/account?trade_date=${ctx.trade_date}`);
       const posData = await apiFetch(`/backtest/${ctx.task_id}/sandbox/positions?trade_date=${ctx.trade_date}`);
       const lines = [
@@ -244,7 +251,7 @@ export const getPortfolioTool = {
 export const getConceptFundFlowTool = {
   name: 'get_concept_fund_flow',
   label: '概念板块行情',
-  description: '获取概念板块行情排行（按涨幅或主力资金流向排序）。数据源：东财push2实时(主力/超大单/大单/中单/小单净流入+板块广度+领涨股)，Tushare降级兜底。回测模式下基于B2成交额加权缩放提供盘中渐进数据，不同时间窗口调用返回不同的缩放权重，每次交易窗口应重新调用获取最新值。sort_by=pct_change看涨幅榜，sort_by=main_net看资金榜',
+  description: '获取概念板块行情排行（按涨幅或主力资金流向排序）。数据源：东财push2实时(主力/超大单/大单/中单/小单净流入+板块广度+领涨股)，Tushare降级兜底。回测模式下每次交易窗口应重新调用获取最新值。sort_by=pct_change看涨幅榜，sort_by=main_net看资金榜',
   parameters: Type.Object({
     limit: Type.Optional(Type.Number({ description: '返回数量，默认15' })),
     sort_by: Type.Optional(Type.String({ description: '排序字段: pct_change(涨幅排行) / main_net(主力净流入排行)' })),
@@ -267,13 +274,14 @@ export const getConceptFundFlowTool = {
       const lines = [`📊 概念板块行情 (回测 ${data.trade_date} · ${sortLabel})`, ''];
       sectors.forEach((s: any, idx: number) => {
         const sign = (s.pct_change || 0) >= 0 ? '+' : '';
-        const net = s.net_amount ? `主力:${s.net_amount.toFixed(2)}亿` : '';
+        const na = Math.abs(s.net_amount || 0);
+        const net = na > 0
+          ? `主力:${na >= 0.01 ? s.net_amount.toFixed(2) + '亿' : (s.net_amount * 10000).toFixed(0) + '万'}`
+          : '';
         const lead = s.lead_stock ? ` | 领涨:${s.lead_stock}` : '';
         lines.push(`${idx + 1}. ${s.name} | 涨跌:${sign}${(s.pct_change || 0).toFixed(2)}%${net ? ' | ' + net : ''}${lead}`);
       });
-      // 数据新鲜度提示 (盘中期看的是昨日日终资金流)
-      const caveatHeader = data.caveat ? `${data.caveat}\n\n` : '';
-      return { content: [{ type: 'text', text: `${caveatHeader}${lines.join('\n')}` }], details: data };
+      return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
     }
 
     const query = new URLSearchParams();
@@ -407,7 +415,7 @@ export const getConceptMappingTool = {
 export const getIndustryFundFlowTool = {
   name: 'get_industry_fund_flow',
   label: '行业板块行情',
-  description: '获取行业板块行情排行（按涨幅或主力资金流向排序）。数据源：东财push2实时(主力/超大单/大单/中单/小单净流入+板块广度+领涨股)。回测模式下基于B2成交额加权缩放提供盘中渐进数据，不同时间窗口调用返回不同的缩放权重，每次交易窗口应重新调用获取最新值。sort_by=pct_change看涨幅榜，sort_by=main_net看资金榜',
+  description: '获取行业板块行情排行（按涨幅或主力资金流向排序）。数据源：东财push2实时(主力/超大单/大单/中单/小单净流入+板块广度+领涨股)。回测模式下每次交易窗口应重新调用获取最新值。sort_by=pct_change看涨幅榜，sort_by=main_net看资金榜',
   parameters: Type.Object({
     limit: Type.Optional(Type.Number({ description: '返回数量，默认15' })),
     sort_by: Type.Optional(Type.String({ description: '排序字段: pct_change(涨幅排行) / main_net(主力净流入排行)' })),
@@ -430,7 +438,10 @@ export const getIndustryFundFlowTool = {
       const lines = [`📊 行业板块行情 (回测 ${data.trade_date} · ${sortLabel})`, ''];
       sectors.forEach((s: any, idx: number) => {
         const sign = (s.pct_change || 0) >= 0 ? '+' : '';
-        const net = s.net_amount ? `主力:${s.net_amount.toFixed(2)}亿` : '';
+        const na = Math.abs(s.net_amount || 0);
+        const net = na > 0
+          ? `主力:${na >= 0.01 ? s.net_amount.toFixed(2) + '亿' : (s.net_amount * 10000).toFixed(0) + '万'}`
+          : '';
         lines.push(`${idx + 1}. ${s.name} | ${sign}${(s.pct_change || 0).toFixed(2)}%${net ? ' | ' + net : ''}`);
       });
       return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
@@ -495,7 +506,6 @@ export const getRealtimeSectorPctTool = {
     const themes = (data.themes || []) as any[];
     const lines = [
       `📊 盘中实时板块行情 (回测 ${data.trade_date} ${data.phase_time})`,
-      `⚠️ ${data.caveat || ''}`,
       '',
       '── 10 个中证一级行业 (按涨幅) ──',
     ];
@@ -698,7 +708,7 @@ export const getDailyKlineQfqTool = {
 export const getMarketMoneyflowTool = {
 	name: 'get_market_moneyflow',
 	label: '大盘资金流向',
-	description: '获取沪深两市大盘资金流向（主力/超大单/大单/中单/小单净流入+买/卖分明细+总成交额）。数据源：东财push2实时(优先)+Tushare日频(降级)。回测模式下基于B2成交额加权缩放提供盘中渐进数据，不同时间窗口调用返回不同的缩放权重，每次交易窗口应重新调用获取最新值。用于判断大盘整体资金情绪和主力动向',
+	description: '获取沪深两市大盘资金流向（主力/超大单/大单/中单/小单净流入+买/卖分明细+总成交额）。数据源：东财push2实时(优先)+Tushare日频(降级)。回测模式下每次交易窗口应重新调用获取最新值。用于判断大盘整体资金情绪和主力动向',
 	parameters: Type.Object({}),
 	async execute(_toolCallId: string, _params: unknown, _signal?: AbortSignal) {
 		// 回测模式: 用本地 parquet 大盘资金流
@@ -710,11 +720,12 @@ export const getMarketMoneyflowTool = {
 			if (data.error) return { content: [{ type: 'text', text: data.error }], details: data };
 			const m = data.data;
 			if (!m) return { content: [{ type: 'text', text: '暂无大盘资金流向数据' }], details: data };
+			const fmtBig = (v: number) => Math.abs(v) >= 0.01 ? v.toFixed(2) + '亿' : (v * 10000).toFixed(0) + '万';
 			const lines = [
 				`大盘资金流向 (回测 ${data.trade_date})`,
-				`主力净流入: ${(m.net_amount || 0).toFixed(2)}亿`,
-				`超大单: ${(m.buy_elg || 0).toFixed(2)}亿`,
-				`大单: ${(m.buy_lg || 0).toFixed(2)}亿`,
+				`主力净流入: ${fmtBig(m.net_amount || 0)}`,
+				`超大单: ${fmtBig(m.buy_elg || 0)}`,
+				`大单: ${fmtBig(m.buy_lg || 0)}`,
 				`上证: ${m.close_sh || '--'} (${(m.pct_sh || 0).toFixed(2)}%)`,
 			];
 			return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
@@ -775,16 +786,15 @@ export const getMoneyflowTool = {
       const sign = (v: number) => v >= 0 ? '+' : '';
       const fmtWan = (v: number) => `${sign(v)}${(v / 1e4).toFixed(0)}万`;
       const lines: string[] = [];
-      // 标题: 根据 data_freshness 区分 盘前/盘中(估算)/盘后(EOD)
+      // 数据新鲜度标签 (不暴露内部缩放参数)
       const freshnessLabel = data.is_pre_market
-        ? '盘前 (scale=0)'
+        ? '盘前 (昨日数据)'
         : data.is_intraday
-          ? `盘中估算 (scale=${(data.scale ?? 0).toFixed(2)})`
-          : '盘后 (EOD 全量)';
+          ? '盘中估算'
+          : '盘后 (EOD)';
       lines.push(`${params.symbol} 资金流向 (回测 ${today.date} · ${freshnessLabel})`);
-      if (data.caveat) lines.push(data.caveat);
       lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-      lines.push(`[当日 · ${today.date}${today.scaled ? ' · 缩放后' : ' · 全量'}]`);
+      lines.push(`[当日 · ${today.date}]`);
       lines.push(`  主力净流入: ${fmtWan(today.main_net_amount)}  (买${fmtWan(today.main_buy_amount)} / 卖${fmtWan(today.main_sell_amount)})`);
       lines.push(`  净流入额:   ${fmtWan(today.net_mf_amount)}`);
       lines.push(`  超大单: 买${fmtWan(today.buy_elg_amount)} / 卖${fmtWan(today.sell_elg_amount)}`);
@@ -981,7 +991,7 @@ export const placeOrderTool = {
   async execute(_toolCallId: string, params: { symbol: string; side: string; price: number; volume: number; reason?: string }, _signal?: AbortSignal) {
     // 回测模式：沙盒下单
     if (isBacktest()) {
-      const ctx = _backtestCtx!;
+      const ctx = getBacktestContext()!;
       const data = await apiFetch(`/backtest/${ctx.task_id}/sandbox/order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1101,7 +1111,7 @@ export const getLatestScanReportTool = {
   async execute(_toolCallId: string, params: { date?: string }, _signal?: AbortSignal) {
     // 回测模式：读取沙盒扫描报告
     if (isBacktest()) {
-      const ctx = _backtestCtx!;
+      const ctx = getBacktestContext()!;
       const dateParam = params.date || ctx.trade_date;
       const data = await apiFetch(`/backtest/${ctx.task_id}/sandbox/scan-report?trade_date=${dateParam}`);
       const reports = data.reports || [];
@@ -1681,13 +1691,25 @@ export const checkEntryFiltersTool = {
       const nameStr = data.name ? ` ${data.name}` : '';
       const lines: string[] = [];
       lines.push(`🔍 ${data.symbol}${nameStr} — 入场过滤检查 (回测 ${data.trade_date})`);
-      lines.push(`当前价: ${data.current_price} | MA5: ${data.ma5} | MA20: ${data.ma20} | RSI6: ${data.rsi_6}`);
+      const ip = data.intraday_percentile ?? t.intraday_percentile;
+      const ipStr = ip != null ? ` | 日内分位: ${ip.toFixed(0)}%${ip > 90 ? ' 🚫追高风险' : ip > 70 ? ' ⚠️偏高' : ''}` : '';
+      lines.push(`当前价: ${data.current_price} | MA5: ${data.ma5} | MA20: ${data.ma20} | RSI6: ${data.rsi_6}${ipStr}`);
       lines.push('');
       lines.push('── Layer 1: 技术面 ──');
       lines.push(`MA5>MA20: ${l1.ma5_gt_ma20 ? '✅' : '⚠️'} | 价>MA5: ${l1.above_ma5 ? '✅' : '⚠️'} | 价>MA20: ${l1.above_ma20 ? '✅' : '⚠️'} | MACD金叉: ${l1.macd_golden ? '✅' : '⚠️'} → ${l1.pass ? '✅ PASS' : '🚫 FAIL'}`);
       lines.push('');
       lines.push('── Layer 2: 主力行为 ──');
-      lines.push(`5日主力净流入: ${(l2.main_net_5d || 0).toFixed(2)}亿 → ${l2.pass ? '✅ PASS' : '🚫 FAIL'}`);
+      const net5d = l2.main_net_5d || 0;
+      const absNet = Math.abs(net5d);
+      let netStr: string;
+      if (absNet < 0.005) {
+        netStr = '≈0 (资金中性)';
+      } else if (absNet < 1) {
+        netStr = `${(net5d * 10000).toFixed(0)}万`;
+      } else {
+        netStr = `${net5d.toFixed(2)}亿`;
+      }
+      lines.push(`5日主力净流入: ${netStr} → ${l2.pass ? '✅ PASS' : '🚫 FAIL'}`);
       lines.push('');
       lines.push('── Layer 3: 超买 ──');
       lines.push(`RSI6: ${l3.rsi_6} ${l3.rsi_overbought ? '🚫 超买' : '✅ 正常'} → ${l3.pass ? '✅ PASS' : '🚫 FAIL'}`);

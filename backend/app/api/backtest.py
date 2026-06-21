@@ -36,6 +36,8 @@ class CreateBacktestRequest(BaseModel):
     end_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="结束日期 YYYY-MM-DD")
     initial_capital: float = Field(1_000_000, ge=10000, description="初始资金")
     include_chinext: bool = Field(False, description="是否包含创业板股票(300/301开头)")
+    model: Optional[str] = Field("deepseek-v4-pro", description="AI模型: deepseek-v4-pro / deepseek-v4-flash")
+    thinking_level: Optional[str] = Field("high", description="思考等级: high / medium / low")
 
 
 class BacktestTaskResponse(BaseModel):
@@ -81,6 +83,8 @@ def _task_to_dict(task: BacktestTask) -> dict:
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
         "error_message": task.error_message,
         "created_at": task.created_at.isoformat() if task.created_at else "",
+        "model": getattr(task, "model_name", "deepseek-v4-pro") or "deepseek-v4-pro",
+        "thinking_level": getattr(task, "thinking_level", "high") or "high",
     }
 
 
@@ -100,6 +104,8 @@ async def create_backtest(req: CreateBacktestRequest):
             end_date=date.fromisoformat(req.end_date),
             initial_capital=req.initial_capital,
             include_chinext=req.include_chinext,
+            model_name=req.model or "deepseek-v4-pro",
+            thinking_level=req.thinking_level or "high",
             status="pending",
         )
         db.add(task)
@@ -1683,6 +1689,8 @@ async def _run_backtest_async(task_id: str, on_event_callback=None):
         end_date = task.end_date
         initial_capital = task.initial_capital
         include_chinext = getattr(task, "include_chinext", True) or True
+        model_name = getattr(task, "model_name", "deepseek-v4-pro") or "deepseek-v4-pro"
+        thinking_level = getattr(task, "thinking_level", "high") or "high"
     finally:
         db.close()
 
@@ -1692,6 +1700,8 @@ async def _run_backtest_async(task_id: str, on_event_callback=None):
         end_date=end_date,
         initial_capital=initial_capital,
         include_chinext=include_chinext,
+        model_name=model_name,
+        thinking_level=thinking_level,
         on_event=on_event_callback,
     )
 
@@ -2283,8 +2293,16 @@ async def get_sandbox_realtime_indicators(task_id: str, symbol: str,
         if not minute_q:
             return {"symbol": symbol, "error": f"无 {trade_date} {phase_time} 分钟快照"}
         current_price = minute_q["close"]
-        day_high = minute_q["high"]
-        day_low = minute_q["low"]
+        # ── 累计日内高低点 (真正的日内分位, 而非单根分钟K线) ──
+        cumulative = local_data.get_cumulative_intraday_high_low(
+            symbol, trade_dt, hh, mm
+        )
+        if cumulative:
+            day_high = cumulative["day_high"]
+            day_low = cumulative["day_low"]
+        else:
+            day_high = minute_q["high"]
+            day_low = minute_q["low"]
         day_open = minute_q["open"]
         prev_close = minute_q.get("pre_close", 0.0)
     else:
@@ -2457,6 +2475,8 @@ async def check_entry_filters_sandbox(task_id: str, req: dict):
     except Exception:
         main_net_5d = 0
     layer2_pass = main_net_5d > 0
+    # 转换为 亿 供前端显示 (parquet 原始单位是 元, tools.ts 显示后缀为"亿")
+    main_net_5d_e8 = round(main_net_5d / 1e8, 4)
 
     # ── Layer 3: 超买 ──
     rsi_overbought = rsi_6 > 70
@@ -2490,6 +2510,19 @@ async def check_entry_filters_sandbox(task_id: str, req: dict):
         bc_allow = False
         bc_ratio = 0.0
 
+    # ── 日内分位 (累计日内高低点, 非单根分钟K线) ──
+    intraday_percentile = None
+    if phase_time and current_price > 0:
+        try:
+            hh, mm = map(int, phase_time.split(":")[:2])
+            cum = local_data.get_cumulative_intraday_high_low(
+                symbol, trade_dt, hh, mm
+            )
+            if cum:
+                intraday_percentile = cum["intraday_percentile"]
+        except Exception:
+            pass
+
     return {
         "symbol": symbol,
         "name": symbol_name,
@@ -2500,12 +2533,16 @@ async def check_entry_filters_sandbox(task_id: str, req: dict):
         "ma5": ma5, "ma10": ma10, "ma20": ma20,
         "macd_dif": macd_dif, "macd_dea": macd_dea, "macd_bar": macd_bar,
         "rsi_6": rsi_6,
-        "main_net_5d": main_net_5d,
+        "main_net_5d": main_net_5d_e8,      # 亿 (tools.ts 显示为 `亿`)
         "volume_ratio": volume_ratio,
+        "intraday_percentile": intraday_percentile,
         "layer1_tech": {"pass": layer1_pass, "above_ma5": above_ma5, "above_ma20": above_ma20, "macd_golden": macd_golden, "ma5_gt_ma20": ma5_gt_ma20},
-        "layer2_capital": {"pass": layer2_pass, "main_net_5d": main_net_5d},
+        "layer2_capital": {"pass": layer2_pass, "main_net_5d": main_net_5d_e8},  # 亿
         "layer3_overbought": {"pass": layer3_pass, "rsi_6": rsi_6, "rsi_overbought": rsi_overbought},
-        "tech": {"pass": all_pass, "summary": "✅ 全部通过" if all_pass else "⚠️ 部分过滤未通过"},
+        "tech": {
+            "pass": all_pass, "summary": "✅ 全部通过" if all_pass else "⚠️ 部分过滤未通过",
+            "intraday_percentile": intraday_percentile,
+        },
         "buy_confirmation": {
             "allow": bc_allow, "ratio": bc_ratio,
             "action": bc_action, "wait_minutes": bc_wait,
@@ -2662,24 +2699,13 @@ async def get_sandbox_moneyflow(task_id: str, symbol: str,
         caveat = f"⚠️ 盘前 phase_time={phase_time}, 资金流尚未开始, 全部字段=0"
     elif is_intraday:
         data_freshness = "intraday_eod_scaled"
+        # caveat 仅供调试日志, 不暴露内部缩放参数给 AI
         if scale_basis in ("amount_weighted", "amount_weighted_candle_adj"):
-            ta = scale_debug.get("target_amount", 0)
-            tot = scale_debug.get("total_amount", 0)
-            cb = scale_debug.get("candle_bias")
-            cc = scale_debug.get("candle_count", 0)
-            cb_str = f", K线bias={cb:.2f}({cc}根蜡烛)" if cb is not None else ""
-            caveat = (
-                f"📊 盘中 phase_time={phase_time} 成交额加权缩放 (weight={scale:.4f} = "
-                f"{ta/1e4:.0f}万 / {tot/1e4:.0f}万){cb_str}, "
-                f"假设全天资金流分布 ≈ 全天成交额分布, K线方向修正±30%, 比纯时间均匀更准但仍有偏差"
-            )
+            caveat = "盘中估算 (基于成交额进度, 非EOD全量)"
         elif scale_basis == "time_linear_fallback":
-            caveat = (
-                f"⚠️ 盘中 phase_time={phase_time} 时间线性缩放 (scale={scale:.4f}), "
-                f"本地无 stock_1min 数据, 退回到均匀分布假设, 误差可能 ±20~50%"
-            )
+            caveat = "盘中估算 (时间线性缩放, 误差可能较大)"
         else:
-            caveat = f"⚠️ 盘中 phase_time={phase_time} 缩放算法={scale_basis}"
+            caveat = "盘中估算"
     else:
         data_freshness = "post_market_eod"
         caveat = None
@@ -2735,26 +2761,74 @@ async def get_sandbox_concept_fund_flow(task_id: str,
         base_dt -= timedelta(days=1)
 
     sectors = local_data.get_concept_flow(base_dt, top_n=limit)
+
+    # ── 盘中 pct_change 修正 (避免"全天排名冻结" + 反未来函数) ──
+    # 问题: parquet 的 pct_change 是当日 EOD 值, 盘中不变 → 排名永远相同 → Pi 误判"市场冻结"
+    # 修复: 用 lead_stock 的分钟行情估算板块当日实时涨跌
+    sector_today_pct = {}
+    if include_today and phase_time and sectors:
+        try:
+            hh, mm = map(int, phase_time.split(":")[:2])
+            for s in sectors:
+                ls = s.get("lead_stock", "")
+                if ls:
+                    mq = local_data.get_minute_quote(ls, end_dt, hh, mm)
+                    if mq:
+                        cur = float(mq.get("close", 0))
+                        prev = float(mq.get("last_close", 0)) or float(mq.get("pre_close", 0))
+                        if cur > 0 and prev > 0:
+                            sector_today_pct[ls] = round((cur / prev - 1) * 100, 2)
+            # 对有 lead_stock 的 sector, 覆盖 pct_change 为盘中实时值
+            if sector_today_pct:
+                for s in sectors:
+                    ls = s.get("lead_stock", "")
+                    if ls in sector_today_pct:
+                        s["pct_change"] = sector_today_pct[ls]
+        except Exception:
+            pass  # 静默降级: 用原 EOD pct_change
+
     if sort_by == "pct_change":
         sectors = sorted(sectors, key=lambda x: x.get("pct_change", 0), reverse=True)
 
-    # B2 缩放: 仅在"当日"(include_today=True) 且 phase_time 存在时启用
+    # ── 方案B: 成分股分钟K线估算盘中资金流 (替代 B2 EOD 缩放) ──
+    # 原理: 不用 EOD net_amount × 权重, 而是从板块成分股的真实分钟蜡烛图
+    #       估算买卖方向和净额。这消除了 B2 的 "EOD 排名保留" 偏差,
+    #       09:35 的板块排名可以完全不同于 EOD, 更接近真实市场的不确定性。
     scale = 1.0
-    scale_basis = "eod_full"
+    scale_basis = "minute_component_stocks"
     scale_debug: dict = {}
-    if include_today and phase_time:
+    if include_today and phase_time and sectors:
         try:
             hh, mm = map(int, phase_time.split(":")[:2])
-            w = local_data.get_sector_moneyflow_weight(end_dt, hh, mm)
-            scale = w["weight"]
-            scale_basis = w["basis"]
-            scale_debug = {k: w[k] for k in ("proxy_symbol", "target_amount", "total_amount",
-                                              "direction_discount", "direction_note") if k in w}
-            # 缩放每个 sector 的 net_amount (其他字段 name/lead_stock/pct_change 不动)
-            if scale != 1.0 and sectors:
-                for s in sectors:
-                    if "net_amount" in s:
-                        s["net_amount"] = round(float(s["net_amount"]) * scale, 4)
+            for s in sectors:
+                sector_name = s.get("name", "")
+                if not sector_name:
+                    continue
+                # 方案B: 从成分股分钟K线估算板块资金流
+                ib = local_data.get_sector_intraday_bias(
+                    sector_name, end_dt, hh, mm,
+                    sector_type="concept", component_limit=8,
+                )
+                if ib and ib["sample_count"] > 0:
+                    s["net_amount"] = ib["estimated_net"]
+                    s["intraday_bias"] = ib["bias"]          # 买卖倾向
+                    s["sample_stocks"] = ib["sample_count"]   # 有效成分股数
+                    s["detail"] = ib.get("detail", [])[:3]    # 前3详情
+                else:
+                    # 降级: 用 lead_stock 的分钟 bias 估算
+                    ls = s.get("lead_stock", "")
+                    if ls:
+                        bias_info = local_data.get_minute_flow_bias(ls, end_dt, hh, mm)
+                        if bias_info:
+                            eod_net = abs(float(s.get("net_amount", 0)))
+                            s["net_amount"] = round(eod_net * bias_info["bias"] * 0.15, 4)
+                            s["intraday_bias"] = bias_info["bias"]
+                            s["sample_stocks"] = 1
+                        else:
+                            s["net_amount"] = 0.0
+                    else:
+                        s["net_amount"] = 0.0
+            scale_basis = "minute_component_stocks"
         except Exception:
             scale = 1.0
             scale_basis = "eod_full"
@@ -2767,17 +2841,9 @@ async def get_sandbox_concept_fund_flow(task_id: str,
             data_freshness = "pre_market_zero"
             caveat = f"⚠️ 盘前 phase_time={phase_time}, 资金流尚未开始, 全部 net_amount=0"
         else:
-            data_freshness = "intraday_eod_scaled"
-            pa = scale_debug.get("proxy_symbol", "?")
-            ta = scale_debug.get("target_amount", 0)
-            tot = scale_debug.get("total_amount", 0)
-            direction_note = scale_debug.get("direction_note", "")
-            caveat = (
-                f"📊 盘中 phase_time={phase_time} 成交额加权缩放 (weight={scale:.4f}, "
-                f"代理 {pa}, {ta/1e4:.0f}万 / {tot/1e4:.0f}万), "
-                f"net_amount 按比例估算盘中累计, pct_change/lead_stock 为开盘时快照"
-                f"{', ⚠️' + direction_note if direction_note else ''}"
-            )
+            data_freshness = "intraday_component_estimated"
+            # 不暴露内部算法细节给 AI
+            caveat = None
     else:
         data_freshness = "yesterday_eod"
         caveat = f"⚠️ 资金流数据为昨日({base_dt.isoformat()})日终, 不是今日盘中实时"
@@ -2826,25 +2892,60 @@ async def get_sandbox_industry_fund_flow(task_id: str,
         base_dt -= timedelta(days=1)
 
     sectors = local_data.get_industry_flow(base_dt, top_n=limit)
+
+    # ── 盘中 pct_change 修正 (同概念端点: 用 lead_stock 分钟行情) ──
+    if include_today and phase_time and sectors:
+        try:
+            hh, mm = map(int, phase_time.split(":")[:2])
+            for s in sectors:
+                ls = s.get("lead_stock", "") or s.get("lead_stock_code", "")
+                if ls:
+                    mq = local_data.get_minute_quote(ls, end_dt, hh, mm)
+                    if mq:
+                        cur = float(mq.get("close", 0))
+                        prev = float(mq.get("last_close", 0)) or float(mq.get("pre_close", 0))
+                        if cur > 0 and prev > 0:
+                            s["pct_change"] = round((cur / prev - 1) * 100, 2)
+        except Exception:
+            pass
+
     if sort_by == "pct_change":
         sectors = sorted(sectors, key=lambda x: x.get("pct_change", 0), reverse=True)
 
-    # B2 缩放 (与概念端点一致)
+    # ── 方案B: 成分股分钟K线估算盘中资金流 (替代 B2 EOD 缩放) ──
     scale = 1.0
-    scale_basis = "eod_full"
+    scale_basis = "minute_component_stocks"
     scale_debug: dict = {}
-    if include_today and phase_time:
+    if include_today and phase_time and sectors:
         try:
             hh, mm = map(int, phase_time.split(":")[:2])
-            w = local_data.get_sector_moneyflow_weight(end_dt, hh, mm)
-            scale = w["weight"]
-            scale_basis = w["basis"]
-            scale_debug = {k: w[k] for k in ("proxy_symbol", "target_amount", "total_amount",
-                                              "direction_discount", "direction_note") if k in w}
-            if scale != 1.0 and sectors:
-                for s in sectors:
-                    if "net_amount" in s:
-                        s["net_amount"] = round(float(s["net_amount"]) * scale, 4)
+            for s in sectors:
+                sector_name = s.get("name", "")
+                if not sector_name:
+                    continue
+                ib = local_data.get_sector_intraday_bias(
+                    sector_name, end_dt, hh, mm,
+                    sector_type="industry", component_limit=8,
+                )
+                if ib and ib["sample_count"] > 0:
+                    s["net_amount"] = ib["estimated_net"]
+                    s["intraday_bias"] = ib["bias"]
+                    s["sample_stocks"] = ib["sample_count"]
+                    s["detail"] = ib.get("detail", [])[:3]
+                else:
+                    ls = s.get("lead_stock", "") or s.get("lead_stock_code", "")
+                    if ls:
+                        bias_info = local_data.get_minute_flow_bias(ls, end_dt, hh, mm)
+                        if bias_info:
+                            eod_net = abs(float(s.get("net_amount", 0)))
+                            s["net_amount"] = round(eod_net * bias_info["bias"] * 0.15, 4)
+                            s["intraday_bias"] = bias_info["bias"]
+                            s["sample_stocks"] = 1
+                        else:
+                            s["net_amount"] = 0.0
+                    else:
+                        s["net_amount"] = 0.0
+            scale_basis = "minute_component_stocks"
         except Exception:
             scale = 1.0
             scale_basis = "eod_full"
@@ -2857,17 +2958,8 @@ async def get_sandbox_industry_fund_flow(task_id: str,
             data_freshness = "pre_market_zero"
             caveat = f"⚠️ 盘前 phase_time={phase_time}, 资金流尚未开始, 全部 net_amount=0"
         else:
-            data_freshness = "intraday_eod_scaled"
-            pa = scale_debug.get("proxy_symbol", "?")
-            ta = scale_debug.get("target_amount", 0)
-            tot = scale_debug.get("total_amount", 0)
-            direction_note = scale_debug.get("direction_note", "")
-            caveat = (
-                f"📊 盘中 phase_time={phase_time} 成交额加权缩放 (weight={scale:.4f}, "
-                f"代理 {pa}, {ta/1e4:.0f}万 / {tot/1e4:.0f}万), "
-                f"net_amount 按比例估算盘中累计, pct_change 为开盘时快照"
-                f"{', ⚠️' + direction_note if direction_note else ''}"
-            )
+            data_freshness = "intraday_component_estimated"
+            caveat = None
     else:
         data_freshness = "yesterday_eod"
         caveat = f"⚠️ 行业资金流数据为昨日({base_dt.isoformat()})日终, 不是今日盘中实时"
@@ -2918,13 +3010,8 @@ async def get_sandbox_market_moneyflow(task_id: str,
             if mi is not None:
                 data_freshness = "intraday_eod_scaled" if mi["basis"] not in ("eod_full", "pre_market_zero") else "today_eod"
                 basis = mi["basis"]
-                proxy = mi.get("proxy_symbol") or "?"
-                pa = mi.get("eod_buy_elg", 0)  # placeholder
-                caveat = (
-                    f"📊 盘中 phase_time={phase_time} 全市场加总 + 成交额加权缩放 "
-                    f"(weight={mi['weight']:.4f}, 代理 {proxy}), "
-                    f"net_amount/buy_elg/buy_lg 均为估算的盘中累计"
-                ) if mi["weight"] != 1.0 else None
+                # caveat 仅供调试日志, 不暴露内部缩放参数给 AI
+                caveat = "盘中估算 (基于全市场加总缩放)" if mi["weight"] != 1.0 else None
                 return {
                     "data": {
                         "trade_date": end_dt.isoformat(),
@@ -3420,12 +3507,29 @@ async def get_sandbox_quote(task_id: str, symbol: str,
         if mq:
             pre_close = mq.get("pre_close", 0) or 0
             chg = round((mq["close"] - pre_close) / pre_close * 100, 2) if pre_close > 0 else 0
+            # ── 累计日内高低点 (真正的日内分位, 而非单根分钟K线的分位) ──
+            cumulative = local_data.get_cumulative_intraday_high_low(
+                symbol, td, hour, minute
+            )
+            if cumulative:
+                day_high = cumulative["day_high"]
+                day_low = cumulative["day_low"]
+                intraday_percentile = cumulative["intraday_percentile"]
+            else:
+                # 降级: 用分钟K线自身的高低点 (原行为, 可能不准确)
+                day_high = mq["high"]
+                day_low = mq["low"]
+                intraday_percentile = None
             return {
                 "symbol": symbol, "trade_date": trade_date,
                 "source": "minute", "actual_time": mq["time"],
-                "open": mq["open"], "high": mq["high"], "low": mq["low"],
+                "open": mq["open"],
+                "high": day_high, "low": day_low,  # ← 累计日内高低点
+                # 保留分钟K线原始 high/low 供调试
+                "bar_high": mq["high"], "bar_low": mq["low"],
                 "close": mq["close"], "pre_close": pre_close, "change_pct": chg,
                 "volume": mq["volume"], "amount": mq["amount"],
+                "intraday_percentile": intraday_percentile,
             }
         # 分钟数据缺失: 盘中期不允许回退日线 (会泄漏收盘价)
         if phase_time and _is_day_finalized(phase_time):
@@ -3452,12 +3556,20 @@ async def get_sandbox_quote(task_id: str, symbol: str,
     q = local_data.get_daily_quote(symbol, td)
     if not q:
         return {"error": f"{symbol} 无 {trade_date} 数据"}
+    # 日线路径: high/low 本身就是全天累计值, 直接计算分位
+    day_high = q["high"]
+    day_low = q["low"]
+    close_p = q["close"]
+    intraday_percentile = None
+    if day_high > day_low and close_p > 0:
+        intraday_percentile = round((close_p - day_low) / (day_high - day_low) * 100, 1)
     return {
         "symbol": symbol, "trade_date": trade_date,
         "source": "daily",
-        "open": q["open"], "high": q["high"], "low": q["low"],
-        "close": q["close"], "pre_close": q["pre_close"],
+        "open": q["open"], "high": day_high, "low": day_low,
+        "close": close_p, "pre_close": q["pre_close"],
         "change_pct": q["change_pct"], "volume": q["volume"], "amount": q["amount"],
+        "intraday_percentile": intraday_percentile,
     }
 
 

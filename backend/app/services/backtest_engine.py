@@ -76,10 +76,14 @@ class BacktestEngine:
 
     async def run(self, task_id: str, start_date: date, end_date: date,
                   initial_capital: float, on_event: Callable = None,
-                  include_chinext: bool = True):
+                  include_chinext: bool = True,
+                  model_name: str = "deepseek-v4-pro",
+                  thinking_level: str = "high"):
         """运行回测，进度写入全局 _stream_queues[task_id]"""
-        print(f"\n[Engine] ====== START {task_id[:8]} {start_date}~{end_date} ======", flush=True)
-        logger.info(f"START {task_id[:8]} {start_date}~{end_date}")
+        print(f"\n[Engine] ====== START {task_id[:8]} {start_date}~{end_date} model={model_name} think={thinking_level} ======", flush=True)
+        logger.info(f"START {task_id[:8]} {start_date}~{end_date} model={model_name} think={thinking_level}")
+        self._model_name = model_name
+        self._thinking_level = thinking_level
         from app.api.backtest import _stream_queues
 
         async def emit(event_type: str, message: str = "", progress: float = 0, data: dict = None):
@@ -648,6 +652,69 @@ class BacktestEngine:
         # ── 更新持仓市值（DataFrame 按需取价） ──
         self._update_positions_market_value_df(account, day_df)
 
+        # ── 止损检查 (复用实盘规则, 用分钟K线替代实时行情) ──
+        if phase_time and phase_time != "16:00":
+            try:
+                from app.services.backtest_stop_loss import check_backtest_stop_loss
+                stop_triggers = check_backtest_stop_loss(account, trade_date, phase_time)
+                for st in stop_triggers:
+                    symbol = st["symbol"]
+                    price = st["price"]
+                    volume = st["volume"]
+                    reason_text = f"[回测止损] {st['reason']}"
+
+                    # 执行卖出
+                    result = account.place_order(symbol, "sell", price, volume)
+                    if not result.get("success"):
+                        await emit("log",
+                            f"[{date_str} {phase_time}] 🔴 止损失败: {symbol} — {result.get('message', '?')}",
+                            progress)
+                        continue
+
+                    # ── 写 PG backtest_trades (与 sandbox 端点一致) ──
+                    try:
+                        from app.models.backtest_orm import BacktestTrade
+                        # engine FIFO profit
+                        engine_sym = account._to_engine_sym(symbol)
+                        engine_trades = account._engine.get_trades(symbol=engine_sym, limit=1)
+                        fifo_profit = 0.0
+                        if engine_trades:
+                            dir_val = engine_trades[0].get("direction", "")
+                            if "卖" in str(dir_val) or dir_val in ("sell", "short", "SELL"):
+                                fifo_profit = float(engine_trades[0].get("profit", 0) or 0)
+                        sell_amount = price * volume
+                        stamp_tax = round(sell_amount * 0.001, 2)
+                        commission = round(sell_amount * 0.0005, 2)
+                        profit = round(fifo_profit - stamp_tax - commission, 2)
+                        profit_pct = round(fifo_profit / sell_amount * 100, 4) if sell_amount > 0 else 0
+                        net_profit = round(profit, 2)
+
+                        trade_record = BacktestTrade(
+                            task_id=task_id, trade_date=trade_date,
+                            symbol=symbol, stock_name="",
+                            direction="sell", price=price, volume=volume,
+                            amount=sell_amount, commission=commission,
+                            stamp_tax=stamp_tax, transfer_fee=0.0,
+                            signal_price=round(price, 2), actual_price=round(price, 2),
+                            slippage_pct=0.0, net_profit=net_profit,
+                            profit=profit, profit_pct=profit_pct,
+                            reason=reason_text,
+                            phase_time=phase_time,
+                        )
+                        db.add(trade_record)
+                        db.commit()
+                    except Exception as e:
+                        await emit("log",
+                            f"[{date_str} {phase_time}] ⚠️ 止损PG写入失败: {symbol} — {e}",
+                            progress)
+
+                    await emit("log",
+                        f"[{date_str} {phase_time}] 🔴 止损: {symbol} @ {price:.2f} "
+                        f"x{volume} ({st['float_pnl_pct']:+.1f}%) — {st['reason']} → 已成交",
+                        progress)
+            except Exception as e:
+                await emit("log", f"[{date_str} {phase_time}] ⚠️ 止损检查异常: {e}", progress)
+
     # ── 市场数据摘要 ──
 
     def _build_market_summary(self, date_str: str, quotes: dict, day_data: dict) -> str:
@@ -799,6 +866,8 @@ class BacktestEngine:
                     payload = json.dumps({
                         "message": full_prompt, "session_id": session_id,
                         "mode": "trade",
+                        "model": getattr(self, "_model_name", "deepseek-v4-pro"),
+                        "thinking_level": getattr(self, "_thinking_level", "high"),
                     }).encode("utf-8")
                     req = urllib.request.Request(
                         pi_url, data=payload,

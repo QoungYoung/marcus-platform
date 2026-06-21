@@ -22,6 +22,8 @@ class BacktestTask(Base):
     end_date = Column(Date, nullable=False, comment="结束日期")
     initial_capital = Column(Float, nullable=False, default=1_000_000, comment="初始资金")
     include_chinext = Column(Boolean, nullable=False, default=False, comment="是否包含创业板(300/301开头)")
+    model_name = Column(String(50), nullable=False, default="deepseek-v4-pro", comment="AI模型: deepseek-v4-pro/deepseek-v4-flash")
+    thinking_level = Column(String(20), nullable=False, default="high", comment="思考等级: high/medium/low")
     status = Column(String(20), nullable=False, default="pending",
                     comment="pending/running/completed/failed/cancelled")
     current_day = Column(Date, nullable=True, comment="当前模拟日期")
