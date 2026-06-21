@@ -58,7 +58,7 @@ export const strategyApi = {
 
 // Backtest APIs
 export const backtestApi = {
-  create: (data: { name: string; start_date: string; end_date: string; initial_capital: number; include_chinext?: boolean }) =>
+  create: (data: { name: string; start_date: string; end_date: string; initial_capital: number; include_chinext?: boolean; model?: string; thinking_level?: string }) =>
     api.post('/backtest/create', data),
   start: (taskId: string) => api.post(`/backtest/${taskId}/start`),
   cancel: (taskId: string) => api.post(`/backtest/${taskId}/cancel`),

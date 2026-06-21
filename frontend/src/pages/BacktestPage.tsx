@@ -55,6 +55,7 @@ interface TaskDetail {
   id: string; name: string; status: string;
   start_date: string; end_date: string;
   initial_capital: number; total_days: number; completed_days: number;
+  progress?: number; error_message?: string | null;
   metrics: Record<string, number> | null;
   equity_curve: EquityPoint[];
   trades: TradeItem[];
