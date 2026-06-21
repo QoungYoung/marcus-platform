@@ -14,7 +14,7 @@
 import * as dotenv from 'dotenv';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 // 先加载当前 CWD 的 .env（最低优先级）
 dotenv.config();
@@ -1488,7 +1488,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const reports: { date: string; report: string }[] = [];
       const files = readdirSync(SESSIONS_DIR)
-        .filter(f => f.startsWith(`backtest_${taskId}_`) && f.endsWith('.json'))
+        .filter((f: string) => f.startsWith(`backtest_${taskId}_`) && f.endsWith('.json'))
         .sort();
 
       for (const f of files) {
