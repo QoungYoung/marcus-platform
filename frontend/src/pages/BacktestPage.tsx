@@ -147,7 +147,7 @@ export default function BacktestPage() {
     backtestApi.getDetail(selectedTaskId)
       .then(res => {
         setDetail(res.data);
-        if (res.data.status === 'completed' || res.data.status === 'failed') {
+        if (['completed', 'failed', 'cancelled'].includes(res.data.status)) {
           setViewMode('results');
         }
       })
@@ -611,12 +611,12 @@ export default function BacktestPage() {
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  {detail?.status === 'completed' && (
+                  {['completed', 'cancelled', 'failed'].includes(detail?.status || '') && (
                     <button className="bt-preset-btn" onClick={() => setViewMode(viewMode === 'results' ? 'progress' : 'results')}>
                       {viewMode === 'results' ? '查看进度' : '查看结果'}
                     </button>
                   )}
-                  {detail?.status === 'completed' && (
+                  {['completed', 'cancelled', 'failed'].includes(detail?.status || '') && (
                     <div ref={exportMenuRef} style={{ position: 'relative' }}>
                       <button
                         className="bt-preset-btn"
@@ -1183,7 +1183,7 @@ export default function BacktestPage() {
               )}
 
               {/* Error / Fallback */}
-              {!loading && detail?.status === 'failed' && viewMode === 'results' && (
+              {!loading && ['failed', 'cancelled'].includes(detail?.status || '') && viewMode === 'results' && detail?.error_message && (
                 <div style={{
                   padding: 16, borderRadius: 10, background: 'rgba(231,76,60,0.1)',
                   border: '1px solid rgba(231,76,60,0.3)', color: '#e74c3c', fontSize: 13,

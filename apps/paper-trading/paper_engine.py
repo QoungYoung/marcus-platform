@@ -652,12 +652,18 @@ class PaperTradingEngine:
         
         # 更新持仓
         if order.symbol not in self.positions:
-            # 首次建仓，获取股票名称
-            stock_name = ""
-            if order.symbol.startswith("SH") or order.symbol.startswith("SZ"):
-                stock_name = self._get_stock_name(order.symbol)
-            today = datetime.now().strftime('%Y-%m-%d')
-            self.positions[order.symbol] = Position(symbol=order.symbol, name=stock_name, entry_date=today)
+            if order.direction == Direction.LONG.value:
+                # 买入: 首次建仓
+                stock_name = ""
+                if order.symbol.startswith("SH") or order.symbol.startswith("SZ"):
+                    stock_name = self._get_stock_name(order.symbol)
+                today = datetime.now().strftime('%Y-%m-%d')
+                self.positions[order.symbol] = Position(symbol=order.symbol, name=stock_name, entry_date=today)
+            else:
+                # 卖出: 仓位不存在 → 拒绝成交 (防御同日多次卖出超卖)
+                print(f"[ERR] 无法卖出 {order.symbol}: 无持仓记录 (可能已被同日早前卖出清仓)")
+                conn.close()
+                return False
         
         pos = self.positions[order.symbol]
         
@@ -712,9 +718,9 @@ class PaperTradingEngine:
                 (order.symbol, Direction.LONG.value, date_val)
             )
             buy_trades = cursor.fetchall()
-            # sells: 时间 < current_date（不包含当前这笔卖出）
+            # sells: 时间 <= current_date（包含同日更早的卖出, 防同日多次超卖）
             cursor.execute(
-                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<? ORDER BY {date_col}',
+                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? ORDER BY {date_col}',
                 (order.symbol, Direction.SHORT.value, date_val)
             )
             sell_trades = cursor.fetchall()
