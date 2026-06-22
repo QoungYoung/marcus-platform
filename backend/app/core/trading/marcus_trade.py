@@ -782,9 +782,32 @@ class MarcusVNPyExecutor:
                 result.append({
                     'symbol': symbol,
                     'volume': total_vol,
-                    'avg_price': avg_price
+                    'avg_price': avg_price,
+                    'current_price': avg_price,   # 默认用成本价，下面实时覆盖
                 })
-        
+
+        # 补全实时 current_price（止损监控需要）
+        if result:
+            try:
+                import sys, os
+                from pathlib import Path as _P
+                xq_dir = _P(__file__).parent.parent / "xueqiu-data-query"
+                sys.path.insert(0, str(xq_dir))
+                from xueqiu_engine import XueqiuEngine
+                xq_config = str(xq_dir / "config.json")
+                if os.path.exists(xq_config):
+                    xq = XueqiuEngine(config_file=xq_config)
+                    for pos in result:
+                        try:
+                            quote = xq.get_stock_quote(pos['symbol'], use_cache=True)
+                            if quote:
+                                pos['current_price'] = quote.get('current', pos['avg_price'])
+                                pos['name'] = quote.get('name', '')
+                        except Exception:
+                            pass  # 保留 avg_price 作为 fallback
+            except Exception:
+                pass  # 雪球不可用时保留 avg_price
+
         conn.close()
         return result
     
