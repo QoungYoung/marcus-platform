@@ -391,8 +391,10 @@ class MarcusVNPyExecutor:
         # 用雪球实时价格计算持仓市值和浮动盈亏
         import sys
         from pathlib import Path
-        xueqiu_dir = Path(__file__).parent.parent / "xueqiu-data-query"
-        sys.path.insert(0, str(xueqiu_dir))
+        # 雪球引擎在 workspace/core 下
+        xueqiu_dir = Path(__file__).parent.parent.parent.parent.parent / "core"
+        if str(xueqiu_dir) not in sys.path:
+            sys.path.insert(0, str(xueqiu_dir))
         from xueqiu_engine import XueqiuEngine
         
         xueqiu_config = xueqiu_dir / "config.json"
@@ -799,16 +801,23 @@ class MarcusVNPyExecutor:
                 xq_config = str(xq_dir / "config.json")
                 if os.path.exists(xq_config):
                     xq = XueqiuEngine(config_file=xq_config)
+                    print(f"[雪球] 获取 {len(result)} 只持仓实时价格...", file=sys.stderr)
+                    fetched = 0
                     for pos in result:
                         try:
-                            quote = xq.get_stock_quote(pos['symbol'], use_cache=True)
+                            quote = xq.get_stock_quote(pos['symbol'], use_cache=False)
                             if quote:
                                 pos['current_price'] = quote.get('current', pos['avg_price'])
                                 pos['name'] = quote.get('name', '')
+                                fetched += 1
+                                print(f"[雪球]   {pos['symbol']} → ¥{pos['current_price']} (name={pos.get('name', '?')})", file=sys.stderr)
                         except Exception:
-                            pass  # 保留 avg_price 作为 fallback
-            except Exception:
-                pass  # 雪球不可用时保留 avg_price
+                            print(f"[雪球]   {pos['symbol']} ⚠️ 获取失败，使用成本价 ¥{pos['avg_price']}", file=sys.stderr)
+                    print(f"[雪球] 完成: {fetched}/{len(result)} 只获取成功", file=sys.stderr)
+                else:
+                    print(f"[雪球] ⚠️ config.json 不存在: {xq_config}", file=sys.stderr)
+            except Exception as e:
+                print(f"[雪球] ⚠️ 引擎加载失败: {e}", file=sys.stderr)
 
         conn.close()
         return result

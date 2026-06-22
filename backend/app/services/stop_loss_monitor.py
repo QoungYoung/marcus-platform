@@ -170,11 +170,16 @@ class StopLossMonitor:
 
     def _run_loop(self) -> None:
         print("[StopLoss] 后台监控线程启动", file=sys.stderr)
+        cycle = 0
         while self.running:
+            cycle += 1
             try:
                 if self._is_trading_time():
+                    print(f"[StopLoss] 🔄 第 {cycle} 轮检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
                     self._check_all_positions()
                 else:
+                    if cycle % 20 == 1:  # 非交易时段每 10 分钟才打印一次
+                        print(f"[StopLoss] ⏸️ 非交易时段，跳过检查 (cycle={cycle})", file=sys.stderr)
                     self._daily_reset()
             except Exception as e:
                 logger.error(f"[StopLoss] 检查异常: {e}", exc_info=True)
@@ -230,7 +235,10 @@ class StopLossMonitor:
             return
 
         if not positions:
+            print(f"[StopLoss] 持仓为空，跳过检查", file=sys.stderr)
             return
+
+        print(f"[StopLoss] 持仓 {len(positions)} 只，开始止损评估...", file=sys.stderr)
 
         market_pct = self._get_market_change_pct()
         today_buy_symbols = self.executor._get_today_buy_symbols() if self.executor else set()
