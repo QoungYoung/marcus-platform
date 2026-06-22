@@ -534,30 +534,44 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     Get daily equity curve aggregated from realized trade P&L.
     Equity on each day = initial_capital + cumulative realized profit up to that day.
     """
-    from collections import defaultdict
+    from datetime import datetime as dt, timedelta
 
     db_file = settings.data_dir / "trades.db"
     if not db_file.exists():
         return []
 
-    conn = sqlite3.connect(str(db_file), timeout=30)
+    conn = sqlite3.connect(str(db_file), timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA busy_timeout=5000")  # 快速失败而非长时间等待写锁
     curs = conn.cursor()
+
+    # 确保性能索引存在
+    curs.execute("CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades(direction, created_at)")
 
     # Get initial capital
     curs.execute("SELECT initial_capital FROM account_info WHERE id=1")
     row = curs.fetchone()
     initial_capital = row["initial_capital"] if row else 1000000.0
 
-    # Query sell trades with profit, grouped by day
+    # 只查询日期范围内的卖出记录（避免全表扫描）
+    start_date = (dt.now() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
+
+    # 先查窗口之前的累计利润
+    curs.execute("""
+        SELECT COALESCE(SUM(profit), 0)
+        FROM trades
+        WHERE direction = '卖出' AND profit IS NOT NULL AND DATE(created_at) < ?
+    """, (start_date,))
+    prior_profit = curs.fetchone()[0] or 0
+
+    # 再查窗口内的每日利润
     curs.execute("""
         SELECT DATE(created_at) as trade_date, SUM(profit) as daily_profit
         FROM trades
-        WHERE direction = '卖出' AND profit IS NOT NULL
+        WHERE direction = '卖出' AND profit IS NOT NULL AND DATE(created_at) >= ?
         GROUP BY DATE(created_at)
         ORDER BY trade_date
-    """)
+    """, (start_date,))
     rows = curs.fetchall()
     conn.close()
 
@@ -566,19 +580,11 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     for row in rows:
         daily_profit[row["trade_date"]] = row["daily_profit"] or 0
 
-    # Generate equity curve from first trade date to today
-    if not daily_profit:
-        return []
-
-    dates = sorted(daily_profit.keys())
-    from datetime import datetime as dt, timedelta
-
-    first_date = dt.strptime(dates[0], "%Y-%m-%d")
+    # Generate equity curve for the requested window
     today = dt.now()
-
-    equity = initial_capital
+    equity = initial_capital + prior_profit
     result = []
-    current = first_date
+    current = dt.strptime(start_date, "%Y-%m-%d")
     while current <= today and len(result) < days:
         date_str = current.strftime("%Y-%m-%d")
         if date_str in daily_profit:

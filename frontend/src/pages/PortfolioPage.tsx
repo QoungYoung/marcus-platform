@@ -5,7 +5,7 @@ import {
   BarChart, Bar, Cell, AreaChart, Area, ComposedChart, Legend,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi, tradesApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi, schedulerApi } from '../api/client';
 import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 
@@ -27,6 +27,20 @@ interface EquityPoint { date: string; value: number; benchmark: number; }
 interface DailyPnl { date: string; pnl: number; }
 interface IndexTicker { name: string; price: number; change_pct: number; }
 interface TradeRecord { order_id?: string; symbol: string; name?: string; direction: string; price: number; volume: number; created_at?: string; }
+
+// ── 止损监控类型 ──
+interface StopDistance {
+  symbol: string; avg_price: number; current_price: number; volume: number;
+  float_pnl_pct: number; t1_locked: boolean; daily_stops_used: number;
+  nearest_trigger: { rule: string; distance_pct: number; danger_level: string; };
+  rule_distances: Record<string, number | null>;
+}
+interface StopLossStatus {
+  running: boolean; thread_alive: boolean; interval_seconds: number;
+  today_stops_count: number; is_trading_time: boolean;
+  is_morning_volatility: boolean; position_count: number;
+  triggered_count: number; positions: StopDistance[];
+}
 
 type SortKey = 'market_value' | 'floating_pnl' | 'floating_pnl_pct' | 'weight';
 
@@ -101,6 +115,8 @@ export default function PortfolioPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [fabOpen, setFabOpen] = useState(false);
   const [unfreezing, setUnfreezing] = useState(false);
+  const [stopLoss, setStopLoss] = useState<StopLossStatus | null>(null);
+  const [slExpanded, setSlExpanded] = useState(false);
 
   // 解冻资金
   const handleUnfreeze = useCallback(async () => {
@@ -132,7 +148,8 @@ export default function PortfolioPage() {
       marketApi.getIndices().catch(() => null),
       tradesApi.getHistory({ limit: 8 }).catch(() => null),
       portfolioApi.getEquityHistory(60).catch(() => null),
-    ]).then(([pRes, idxRes, tRes, eqRes]) => {
+      schedulerApi.getStopLossMonitor().catch(() => null),
+    ]).then(([pRes, idxRes, tRes, eqRes, slRes]) => {
       if (cancelled) return;
       setData(pRes.data);
       if (idxRes?.data?.indices) {
@@ -148,6 +165,9 @@ export default function PortfolioPage() {
       }
       if (eqRes?.data && Array.isArray(eqRes.data) && eqRes.data.length > 0) {
         setRealEquity(eqRes.data);
+      }
+      if (slRes?.data?.success) {
+        setStopLoss(slRes.data as StopLossStatus);
       }
       setLoading(false);
     }).catch((err: Error) => { if (!cancelled) { setError(err.message); setLoading(false); } });
@@ -341,6 +361,100 @@ export default function PortfolioPage() {
         />
       </div>
 
+      {/* ═══ 止损监控卡片 ═══ */}
+      {stopLoss && (
+        <div className="cp-sl-strip">
+          {/* 状态摘要 */}
+          <div className="cp-sl-card" onClick={() => setSlExpanded(e => !e)} style={{ cursor: 'pointer' }}>
+            <div className="cp-sl-indicator">
+              <span className={`cp-sl-dot ${stopLoss.running && stopLoss.thread_alive ? 'live' : 'dead'}`} />
+              <span className="cp-sl-status-text">
+                {stopLoss.running && stopLoss.thread_alive ? '运行中' : '已停止'}
+              </span>
+              {stopLoss.is_morning_volatility && (
+                <span className="cp-sl-tag warn">早盘冷静期</span>
+              )}
+              {!stopLoss.is_trading_time && (
+                <span className="cp-sl-tag muted">非交易时段</span>
+              )}
+            </div>
+            <div className="cp-sl-metrics">
+              <div className={`cp-sl-metric ${stopLoss.triggered_count > 0 ? 'danger' : 'safe'}`}>
+                <span className="cp-sl-metric-val">{stopLoss.triggered_count}</span>
+                <span className="cp-sl-metric-label">已触发</span>
+              </div>
+              <div className="cp-sl-metric">
+                <span className="cp-sl-metric-val">{stopLoss.position_count}</span>
+                <span className="cp-sl-metric-label">监控中</span>
+              </div>
+              <div className="cp-sl-metric">
+                <span className="cp-sl-metric-val">{stopLoss.today_stops_count}</span>
+                <span className="cp-sl-metric-label">今日止损</span>
+              </div>
+              <div className="cp-sl-metric">
+                <span className="cp-sl-metric-val">{stopLoss.interval_seconds}s</span>
+                <span className="cp-sl-metric-label">扫描间隔</span>
+              </div>
+            </div>
+            <div className="cp-sl-expand-hint" style={{ fontSize: 10, color: 'var(--agent-text-dim, #6a7d9b)', textAlign: 'center', marginTop: 4 }}>
+              <i className={`fas fa-chevron-${slExpanded ? 'up' : 'down'}`} /> {slExpanded ? '收起' : '展开'}持仓距离
+            </div>
+          </div>
+
+          {/* 展开的持仓距离明细 */}
+          {slExpanded && stopLoss.positions.length > 0 && (
+            <div className="cp-sl-detail">
+              <table className="cp-sl-table">
+                <thead>
+                  <tr>
+                    <th>股票</th>
+                    <th className="right">现价</th>
+                    <th className="right">浮盈</th>
+                    <th className="right">距离%</th>
+                    <th className="right">最近规则</th>
+                    <th className="right">风险</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stopLoss.positions.map(p => {
+                    const danger = p.nearest_trigger?.danger_level || 'no_rules';
+                    const isTriggered = danger === 'triggered';
+                    const isCritical = danger === 'critical';
+                    const ruleLabels: Record<string, string> = {
+                      rul0a_break_low: '破底', rul0b_cost_stop: '成本',
+                      rul1_sector: '板块', rul2_iron: '铁律2',
+                      rul3_dynamic: '动态',
+                    };
+                    const nearestRule = p.nearest_trigger?.rule || '';
+                    const ruleLabel = ruleLabels[nearestRule] || nearestRule;
+                    return (
+                      <tr key={p.symbol} className={isTriggered ? 'sl-row-danger' : isCritical ? 'sl-row-critical' : ''}>
+                        <td className="mono bold">{p.symbol}</td>
+                        <td className="num mono">¥{p.current_price.toFixed(2)}</td>
+                        <td className={`num ${p.float_pnl_pct >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                          {p.float_pnl_pct >= 0 ? '+' : ''}{p.float_pnl_pct.toFixed(2)}%
+                        </td>
+                        <td className="num mono">
+                          {p.nearest_trigger?.distance_pct != null
+                            ? `${p.nearest_trigger.distance_pct >= 0 ? '+' : ''}${p.nearest_trigger.distance_pct.toFixed(2)}%`
+                            : '-'}
+                        </td>
+                        <td className="num dim">{ruleLabel}</td>
+                        <td className="num">
+                          <span className={`cp-sl-badge ${danger}`}>
+                            {danger === 'triggered' ? '🔴触发' : danger === 'critical' ? '🟠危急' : danger === 'warning' ? '🟡警告' : danger === 'caution' ? '⚪关注' : '🟢安全'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ═══ 图表行：权益曲线 + 持仓环形图 ═══ */}
       <div className="cp-row-charts">
         {/* 权益曲线 */}
@@ -363,7 +477,7 @@ export default function PortfolioPage() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke={G} />
-                  <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval="preserveStartEnd" />
+                  <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(equityCurve.length / 6) - 1)} />
                   <YAxis stroke={A} fontSize={10} tickLine={false} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
                   <Tooltip content={<ETip />} />
                   <Area type="monotone" dataKey="value" name="账户权益" stroke={GOLD} strokeWidth={2} fill="url(#eqGrad)" dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }} />

@@ -347,3 +347,124 @@
   .cp-fab { bottom: 16px; right: 16px; }
   .cp-fab-main { width: 40px; height: 40px; font-size: 16px; }
 }
+
+/* ═══════════════════════════════════════════════════════
+   止损监控卡片
+   ═══════════════════════════════════════════════════════ */
+.cp-sl-strip {
+  display: flex; flex-direction: column;
+  gap: 8px; flex-shrink: 0;
+}
+.cp-sl-card {
+  background: var(--agent-bg-card, #0d121b);
+  border: 1px solid rgba(255,215,0,0.06);
+  border-radius: 12px;
+  padding: 12px 16px;
+  transition: border-color 0.15s;
+}
+.cp-sl-card:hover {
+  border-color: rgba(255,215,0,0.15);
+}
+
+/* 状态指示器 */
+.cp-sl-indicator {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+}
+.cp-sl-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  animation: pulse-dot 2s ease infinite;
+}
+.cp-sl-dot.live { background: var(--agent-green, #2ecc71); box-shadow: 0 0 8px rgba(46,204,113,0.4); }
+.cp-sl-dot.dead { background: var(--agent-red, #e74c3c); box-shadow: 0 0 8px rgba(231,76,60,0.3); animation: none; }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.cp-sl-status-text {
+  font-size: 12px; font-weight: 600;
+  color: var(--agent-text-secondary, #c8d6e5);
+}
+.cp-sl-tag {
+  font-size: 10px; padding: 1px 8px; border-radius: 8px; font-weight: 500;
+}
+.cp-sl-tag.warn { background: rgba(240,185,11,0.12); color: var(--agent-gold, #f0b90b); }
+.cp-sl-tag.muted { background: rgba(106,125,155,0.12); color: var(--agent-text-dim, #6a7d9b); }
+
+/* 指标网格 */
+.cp-sl-metrics {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.cp-sl-metric {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 6px 4px; border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  gap: 2px;
+}
+.cp-sl-metric.danger { background: rgba(231,76,60,0.08); }
+.cp-sl-metric.safe { background: rgba(46,204,113,0.06); }
+.cp-sl-metric-val {
+  font-size: 18px; font-weight: 700;
+  font-family: 'SF Mono','JetBrains Mono','Consolas',monospace;
+  color: var(--agent-text-primary, #f0f4fa);
+}
+.cp-sl-metric.danger .cp-sl-metric-val { color: var(--agent-red, #e74c3c); }
+.cp-sl-metric.safe .cp-sl-metric-val { color: var(--agent-green, #2ecc71); }
+.cp-sl-metric-label {
+  font-size: 9px; color: var(--agent-text-dim, #6a7d9b); text-transform: uppercase;
+}
+
+/* 展开详情表格 */
+.cp-sl-detail {
+  background: var(--agent-bg-card, #0d121b);
+  border: 1px solid rgba(255,215,0,0.06);
+  border-radius: 12px;
+  padding: 8px 12px;
+  max-height: 240px; overflow-y: auto;
+}
+.cp-sl-detail::-webkit-scrollbar { width: 3px; }
+.cp-sl-detail::-webkit-scrollbar-thumb { background: #2a3647; border-radius: 6px; }
+.cp-sl-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 11px;
+}
+.cp-sl-table th {
+  color: var(--agent-text-dim, #6a7d9b);
+  font-weight: 500; font-size: 10px;
+  padding: 4px 8px; text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.cp-sl-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  color: var(--agent-text-secondary, #c8d6e5);
+}
+.cp-sl-table .right { text-align: right; }
+.cp-sl-table .mono { font-family: 'SF Mono','JetBrains Mono','Consolas',monospace; }
+.cp-sl-table .num { font-variant-numeric: tabular-nums; }
+.cp-sl-table .pnl-up { color: var(--agent-green, #2ecc71); }
+.cp-sl-table .pnl-down { color: var(--agent-red, #e74c3c); }
+.cp-sl-table .dim { color: var(--agent-text-dim, #6a7d9b); }
+.cp-sl-table .bold { font-weight: 600; }
+
+/* 危险行高亮 */
+.sl-row-danger td { background: rgba(231,76,60,0.08); }
+.sl-row-critical td { background: rgba(240,185,11,0.05); }
+
+/* 风险标记 */
+.cp-sl-badge {
+  font-size: 9px; padding: 1px 5px; border-radius: 5px; font-weight: 500; white-space: nowrap;
+}
+.cp-sl-badge.triggered { background: rgba(231,76,60,0.15); color: var(--agent-red, #e74c3c); }
+.cp-sl-badge.critical { background: rgba(240,185,11,0.12); color: var(--agent-gold, #f0b90b); }
+.cp-sl-badge.warning { background: rgba(240,185,11,0.08); color: rgba(240,185,11,0.7); }
+.cp-sl-badge.caution { background: rgba(141,155,181,0.08); color: var(--agent-text-dim, #6a7d9b); }
+.cp-sl-badge.safe { background: rgba(46,204,113,0.08); color: var(--agent-green, #2ecc71); }
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .cp-sl-metrics { grid-template-columns: repeat(2, 1fr); }
+  .cp-sl-table { font-size: 10px; }
+  .cp-sl-table td, .cp-sl-table th { padding: 3px 4px; }
+}

@@ -400,6 +400,7 @@ class PaperTradingEngine:
         # 创建索引
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_time ON trades (created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades (direction, created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders (symbol)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status)')
         

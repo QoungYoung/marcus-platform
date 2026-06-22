@@ -100,6 +100,7 @@ export const schedulerApi = {
   reload: () => api.post('/scheduler/reload'),
   start: () => api.post('/scheduler/start'),
   stop: () => api.post('/scheduler/stop'),
+  getStopLossMonitor: () => api.get('/scheduler/stop-loss-monitor'),
 }
 
 // Health check
