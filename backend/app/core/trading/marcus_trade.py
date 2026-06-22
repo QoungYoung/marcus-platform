@@ -388,36 +388,26 @@ class MarcusVNPyExecutor:
         positions = self.engine.get_positions()
         total_cost = sum(pos['volume'] * pos['avg_price'] for pos in positions)
         
-        # 用雪球实时价格计算持仓市值和浮动盈亏
-        import sys
-        from pathlib import Path
-        # 雪球引擎在 workspace/core 下
-        xueqiu_dir = Path(__file__).parent.parent.parent.parent.parent / "core"
-        if str(xueqiu_dir) not in sys.path:
-            sys.path.insert(0, str(xueqiu_dir))
+        # 用雪球实时价格计算持仓市值和浮动盈亏（腾讯 qt.gtimg.cn）
         from xueqiu_engine import XueqiuEngine
-        
-        xueqiu_config = xueqiu_dir / "config.json"
+        xq_config = str(XUEQIU_DIR / "config.json")
+        xueqiu = XueqiuEngine(config_file=xq_config)
         position_value = 0
         float_pnl = 0
         
-        if xueqiu_config.exists():
-            try:
-                xueqiu = XueqiuEngine(config_file=str(xueqiu_config))
-                for pos in positions:
-                    try:
-                        quote = xueqiu.get_stock_quote(pos['symbol'], use_cache=False)
-                        if quote:
-                            current_price = quote.get('current', pos['avg_price'])
-                            position_value += current_price * pos['volume']
-                        else:
-                            position_value += pos['avg_price'] * pos['volume']
-                    except:
+        try:
+            for pos in positions:
+                try:
+                    quote = xueqiu.get_stock_quote(pos['symbol'], use_cache=False)
+                    if quote:
+                        current_price = quote.get('current', pos['avg_price'])
+                        position_value += current_price * pos['volume']
+                    else:
                         position_value += pos['avg_price'] * pos['volume']
-            except Exception as e:
-                print(f"[警告] 获取实时价格失败：{e}")
-                position_value = total_cost
-        else:
+                except:
+                    position_value += pos['avg_price'] * pos['volume']
+        except Exception as e:
+            print(f"[警告] 获取实时价格失败：{e}")
             position_value = total_cost
         
         float_pnl = position_value - total_cost
@@ -788,34 +778,26 @@ class MarcusVNPyExecutor:
                     'current_price': avg_price,   # 默认用成本价，下面实时覆盖
                 })
 
-        # 补全实时 current_price（止损监控需要）
+        # 补全实时 current_price（止损监控需要）— 走腾讯 qt.gtimg.cn 实时行情
         if result:
             try:
-                import sys, os
-                from pathlib import Path as _P
-                # 雪球引擎在 workspace/core 下（与 workspace_detector 的 XUEQIU_DIR 一致）
-                xq_dir = _P(__file__).parent.parent.parent.parent.parent / "core"
-                if str(xq_dir) not in sys.path:
-                    sys.path.insert(0, str(xq_dir))
                 from xueqiu_engine import XueqiuEngine
-                xq_config = str(xq_dir / "config.json")
-                if os.path.exists(xq_config):
-                    xq = XueqiuEngine(config_file=xq_config)
-                    print(f"[雪球] 获取 {len(result)} 只持仓实时价格...", file=sys.stderr)
-                    fetched = 0
-                    for pos in result:
-                        try:
-                            quote = xq.get_stock_quote(pos['symbol'], use_cache=False)
-                            if quote:
-                                pos['current_price'] = quote.get('current', pos['avg_price'])
-                                pos['name'] = quote.get('name', '')
-                                fetched += 1
-                                print(f"[雪球]   {pos['symbol']} → ¥{pos['current_price']} (name={pos.get('name', '?')})", file=sys.stderr)
-                        except Exception:
-                            print(f"[雪球]   {pos['symbol']} ⚠️ 获取失败，使用成本价 ¥{pos['avg_price']}", file=sys.stderr)
-                    print(f"[雪球] 完成: {fetched}/{len(result)} 只获取成功", file=sys.stderr)
-                else:
-                    print(f"[雪球] ⚠️ config.json 不存在: {xq_config}", file=sys.stderr)
+                # config.json 仅用于 token（腾讯接口无需认证），不存在也能正常工作
+                xq_config = str(XUEQIU_DIR / "config.json")
+                xq = XueqiuEngine(config_file=xq_config)
+                print(f"[雪球] 获取 {len(result)} 只持仓实时价格 (腾讯 qt.gtimg.cn)...", file=sys.stderr)
+                fetched = 0
+                for pos in result:
+                    try:
+                        quote = xq.get_stock_quote(pos['symbol'], use_cache=False)
+                        if quote:
+                            pos['current_price'] = quote.get('current', pos['avg_price'])
+                            pos['name'] = quote.get('name', '')
+                            fetched += 1
+                            print(f"[雪球]   {pos['symbol']} → ¥{pos['current_price']} (name={pos.get('name', '?')})", file=sys.stderr)
+                    except Exception:
+                        print(f"[雪球]   {pos['symbol']} ⚠️ 获取失败，使用成本价 ¥{pos['avg_price']}", file=sys.stderr)
+                print(f"[雪球] 完成: {fetched}/{len(result)} 只获取成功", file=sys.stderr)
             except Exception as e:
                 print(f"[雪球] ⚠️ 引擎加载失败: {e}", file=sys.stderr)
 
