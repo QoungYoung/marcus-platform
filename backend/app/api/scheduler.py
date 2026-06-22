@@ -4,12 +4,13 @@ Scheduler API endpoints - 任务调度管理
 """
 from datetime import datetime
 from typing import Optional
+import sys
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.scheduler_service import scheduler_service
-from app.services.stop_loss_monitor import get_monitor_status, get_position_distances
+from app.services.stop_loss_monitor import get_monitor_status, get_position_distances, start_monitor, stop_monitor, get_stop_loss_monitor
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
@@ -161,6 +162,55 @@ async def get_stop_loss_distances():
             "success": True,
             "positions": distances,
             "market_pct": None,  # 由调用方自行获取
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+@router.post("/stop-loss-monitor/start")
+async def start_stop_loss_monitor():
+    """启动止损监控器（自动关联 MarcusVNPyExecutor）"""
+    try:
+        # 尝试导入并创建 executor
+        executor = None
+        try:
+            from app.core.trading.marcus_trade import MarcusVNPyExecutor
+            executor = MarcusVNPyExecutor()
+            print("[StopLoss] ✅ 已创建 MarcusVNPyExecutor", file=sys.stderr)
+        except Exception as e:
+            print(f"[StopLoss] ⚠️ 无法创建 executor: {e}", file=sys.stderr)
+
+        ok = start_monitor(executor=executor)
+        monitor = get_stop_loss_monitor()
+        return {
+            "success": ok,
+            "message": "止损监控已启动" if ok else "启动失败",
+            "running": monitor.running,
+            "thread_alive": monitor.thread.is_alive() if monitor.thread else False,
+            "has_executor": monitor.executor is not None,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+@router.post("/stop-loss-monitor/stop")
+async def stop_stop_loss_monitor():
+    """停止止损监控器"""
+    try:
+        stop_monitor()
+        return {
+            "success": True,
+            "message": "止损监控已停止",
             "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:

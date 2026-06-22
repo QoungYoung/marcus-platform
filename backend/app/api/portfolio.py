@@ -545,7 +545,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     conn.execute("PRAGMA busy_timeout=5000")  # 快速失败而非长时间等待写锁
     curs = conn.cursor()
 
-    # 确保性能索引存在
+    # 索引已在 lifespan 预热阶段创建，此处仅作兜底（幂等，极快）
     curs.execute("CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades(direction, created_at)")
 
     # Get initial capital

@@ -101,6 +101,8 @@ export const schedulerApi = {
   start: () => api.post('/scheduler/start'),
   stop: () => api.post('/scheduler/stop'),
   getStopLossMonitor: () => api.get('/scheduler/stop-loss-monitor'),
+  startStopLossMonitor: () => api.post('/scheduler/stop-loss-monitor/start'),
+  stopStopLossMonitor: () => api.post('/scheduler/stop-loss-monitor/stop'),
 }
 
 // Health check

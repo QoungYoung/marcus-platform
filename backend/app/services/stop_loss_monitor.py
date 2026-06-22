@@ -34,6 +34,32 @@ from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
+# ── K线数据缓存（避免频繁 Tushare API 调用导致超时）──
+# 缓存 key: ts_code → (timestamp, high, low, close)
+# TTL: 120 秒（足够覆盖一次扫描周期，第二次请求命中缓存）
+_kline_cache: Dict[str, tuple] = {}
+_kline_cache_ttl: float = 120.0
+_kline_cache_lock = threading.Lock()
+
+
+def _cached_fetch_kline(ts_code: str) -> Optional[tuple]:
+    """带缓存的 K 线获取，避免重复 Tushare HTTP 调用"""
+    with _kline_cache_lock:
+        if ts_code in _kline_cache:
+            ts, high, low, close_val = _kline_cache[ts_code]
+            if time.time() - ts < _kline_cache_ttl:
+                return (high, low, close_val)
+
+    try:
+        from app.api.indicator import _fetch_kline_high_low
+        high, low, close_val = _fetch_kline_high_low(ts_code, days=90)
+        with _kline_cache_lock:
+            _kline_cache[ts_code] = (time.time(), high, low, close_val)
+        return (high, low, close_val)
+    except Exception as e:
+        logger.warning(f"[StopLoss] K线缓存获取失败 {ts_code}: {e}")
+        return None
+
 
 class StopLossMonitor:
     """
@@ -620,9 +646,13 @@ class StopLossMonitor:
         """计算每个持仓到各止损线的距离（正值=安全距离，负值=已触发）。
 
         返回每个持仓的最近止损线和详细规则距离。
+        单次调用超时上限 10 秒，避免因 Tushare API 慢导致接口超时。
         """
         if self.executor is None:
             return []
+
+        start_time = time.time()
+        deadline = start_time + 10  # 总超时 10 秒
 
         try:
             positions = self.executor.get_positions()
@@ -652,6 +682,11 @@ class StopLossMonitor:
             float_pnl_pct = round((current_price - avg_price) / avg_price * 100, 2)
             self._ensure_hwm(symbol, current_price)
             t1_locked = symbol in today_buy_symbols
+
+            # 超时保护：剩余时间不足 2 秒则退出，返回已计算的部分结果
+            if time.time() > deadline - 2:
+                logger.warning(f"[StopLoss] 距离计算超时，已处理 {len(results)}/{len(positions)} 只")
+                break
 
             distances = {
                 "rul0a_break_low": self._calc_break_low_distance(symbol, current_price),
@@ -709,9 +744,12 @@ class StopLossMonitor:
     def _calc_break_low_distance(self, symbol: str, current_price: float) -> Optional[float]:
         """规则 0a：当前价到破底止损线的安全距离(%)"""
         try:
-            from app.api.indicator import _normalize_to_ts_code, _fetch_kline_high_low
+            from app.api.indicator import _normalize_to_ts_code
             ts_code = _normalize_to_ts_code(symbol)
-            _high, stage_low, _close = _fetch_kline_high_low(ts_code)
+            cached = _cached_fetch_kline(ts_code)
+            if cached is None:
+                return None
+            _high, stage_low, _close = cached
             if stage_low <= 0 or current_price <= 0:
                 return None
 

@@ -37,7 +37,7 @@ from app.api import portfolio, trades, market, news, strategy, agent, etf, db, s
 from app.api.scheduler import router as scheduler_router
 from app.services.scheduler_service import scheduler_service
 from app.services.qqbot_service import qqbot_service, get_qqbot_service
-from app.services.stop_loss_monitor import get_monitor_status
+from app.services.stop_loss_monitor import get_monitor_status, start_monitor, stop_monitor as stop_sl_monitor
 from app.database import init_db
 from app.services.prompt_service import seed_prompts
 from app.db.prompt_seeds import PROMPT_SEEDS
@@ -71,6 +71,32 @@ async def lifespan(app: FastAPI):
     scheduler_service.start()
     print(f"Scheduler started - {len(scheduler_service.tasks)} tasks loaded")
 
+    # 启动止损监控器（自动关联 MarcusVNPyExecutor）
+    try:
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        executor = MarcusVNPyExecutor()
+        started = start_monitor(executor=executor)
+        if started:
+            print(f"[Main] ✅ 止损监控已启动 (executor=MarcusVNPyExecutor)")
+        else:
+            print(f"[Main] ⚠️ 止损监控启动返回 False（可能已在运行）")
+    except Exception as e:
+        print(f"[Main] ⚠️ 止损监控启动失败: {e}")
+
+    # 预热 trades.db（建索引 + WAL 预热，避免首次 API 请求超时）
+    try:
+        import sqlite3
+        db_path = settings.data_dir / "trades.db"
+        if db_path.exists():
+            conn = sqlite3.connect(str(db_path), timeout=5)
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades(direction, created_at)")
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            conn.close()
+            print(f"[Main] ✅ trades.db 索引预热完成")
+    except Exception as e:
+        print(f"[Main] ⚠️ trades.db 预热失败（非致命）: {e}")
+
     # 启动 QQ Bot 监听器
     if settings.QQ_BOT_ENABLED:
         print(f"[Main] 启动 QQ Bot 服务...")
@@ -90,6 +116,11 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     scheduler_service.stop()
+    try:
+        stop_sl_monitor()
+        print("[Main] 止损监控已停止")
+    except Exception:
+        pass
     if settings.QQ_BOT_ENABLED:
         await qqbot_service.stop()
     print("Scheduler and QQ Bot stopped")

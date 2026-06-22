@@ -117,6 +117,31 @@ export default function PortfolioPage() {
   const [unfreezing, setUnfreezing] = useState(false);
   const [stopLoss, setStopLoss] = useState<StopLossStatus | null>(null);
   const [slExpanded, setSlExpanded] = useState(false);
+  const [slToggling, setSlToggling] = useState(false);
+
+  // 启动/停止止损监控
+  const handleToggleSL = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation(); // 防止触发展开/收起
+    if (slToggling || !stopLoss) return;
+    setSlToggling(true);
+    try {
+      const isRunning = stopLoss.running && stopLoss.thread_alive;
+      if (isRunning) {
+        await schedulerApi.stopStopLossMonitor();
+      } else {
+        await schedulerApi.startStopLossMonitor();
+      }
+      // 刷新状态
+      const slRes = await schedulerApi.getStopLossMonitor();
+      if (slRes.data?.success) {
+        setStopLoss(slRes.data as StopLossStatus);
+      }
+    } catch (err) {
+      console.error('止损监控操作失败:', err);
+    } finally {
+      setSlToggling(false);
+    }
+  }, [slToggling, stopLoss]);
 
   // 解冻资金
   const handleUnfreeze = useCallback(async () => {
@@ -377,6 +402,14 @@ export default function PortfolioPage() {
               {!stopLoss.is_trading_time && (
                 <span className="cp-sl-tag muted">非交易时段</span>
               )}
+              <button
+                className={`cp-sl-toggle ${stopLoss.running && stopLoss.thread_alive ? 'on' : 'off'}`}
+                onClick={handleToggleSL}
+                disabled={slToggling}
+                title={stopLoss.running && stopLoss.thread_alive ? '停止监控' : '启动监控'}
+              >
+                <i className={`fas fa-${slToggling ? 'spinner fa-spin' : stopLoss.running && stopLoss.thread_alive ? 'stop' : 'play'}`} />
+              </button>
             </div>
             <div className="cp-sl-metrics">
               <div className={`cp-sl-metric ${stopLoss.triggered_count > 0 ? 'danger' : 'safe'}`}>
