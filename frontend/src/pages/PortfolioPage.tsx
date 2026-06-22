@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -125,89 +126,70 @@ export default function PortfolioPage() {
   const [slExpanded, setSlExpanded] = useState(false);
   const [slToggling, setSlToggling] = useState(false);
 
-  // ── 各模块独立 fetch ──
-  const fetchSummary = useCallback(async () => {
+  // ── 各模块独立 fetch（flushSync 确保 React 18 不批量合并，每个模块加载后即时渲染） ──
+  const refreshSummary = useCallback(async () => {
     setLoadingSummary(true);
     try {
       const res = await portfolioApi.getSummary();
-      setSummary(res.data);
-      setError(null);
+      flushSync(() => { setSummary(res.data); setError(null); setLoadingSummary(false); });
     } catch (err: unknown) {
-      setError((err as Error).message);
-    } finally {
-      setLoadingSummary(false);
+      flushSync(() => { setError((err as Error).message); setLoadingSummary(false); });
     }
   }, []);
 
-  const fetchTickers = useCallback(async () => {
+  const refreshTickers = useCallback(async () => {
     setLoadingTickers(true);
     try {
       const res = await marketApi.getIndices();
       if (res.data?.indices) {
-        setTickers(res.data.indices.slice(0, 6).map((i: Record<string, unknown>) => ({
+        const list = res.data.indices.slice(0, 6).map((i: Record<string, unknown>) => ({
           name: String(i.name || '').slice(0, 4),
           price: Number(i.current_price ?? 0),
           change_pct: Number(i.change_pct ?? 0),
-        })));
-      }
-    } catch { /* 静默 */ }
-    finally { setLoadingTickers(false); }
+        }));
+        flushSync(() => { setTickers(list); setLoadingTickers(false); });
+      } else { flushSync(() => setLoadingTickers(false)); }
+    } catch { flushSync(() => setLoadingTickers(false)); }
   }, []);
 
-  const fetchEquity = useCallback(async () => {
+  const refreshEquity = useCallback(async () => {
     setLoadingEquity(true);
     try {
       const res = await portfolioApi.getEquityHistory(60);
       if (res.data && Array.isArray(res.data) && res.data.length > 0) {
-        setRealEquity(res.data);
-      }
-    } catch { /* 静默 */ }
-    finally { setLoadingEquity(false); }
+        flushSync(() => { setRealEquity(res.data); setLoadingEquity(false); });
+      } else { flushSync(() => setLoadingEquity(false)); }
+    } catch { flushSync(() => setLoadingEquity(false)); }
   }, []);
 
-  const fetchTrades = useCallback(async () => {
+  const refreshTrades = useCallback(async () => {
     setLoadingTrades(true);
     try {
       const res = await tradesApi.getHistory({ limit: 8 });
       const trades = res.data?.trades || res.data?.data || [];
-      setRecentTrades(Array.isArray(trades) ? trades.slice(0, 8) : []);
-    } catch { /* 静默 */ }
-    finally { setLoadingTrades(false); }
+      flushSync(() => { setRecentTrades(Array.isArray(trades) ? trades.slice(0, 8) : []); setLoadingTrades(false); });
+    } catch { flushSync(() => setLoadingTrades(false)); }
   }, []);
 
-  const fetchStopLoss = useCallback(async () => {
+  const refreshStopLoss = useCallback(async () => {
     setLoadingStopLoss(true);
     try {
       const res = await schedulerApi.getStopLossMonitor();
-      if (res.data?.success) {
-        setStopLoss(res.data as StopLossStatus);
-      } else {
-        setStopLoss({
-          running: false, thread_alive: false, interval_seconds: 0,
-          today_stops_count: 0, is_trading_time: false,
-          is_morning_volatility: false, position_count: 0,
-          triggered_count: 0, positions: [],
-        } as StopLossStatus);
-      }
-    } catch {
-      setStopLoss({
-        running: false, thread_alive: false, interval_seconds: 0,
-        today_stops_count: 0, is_trading_time: false,
-        is_morning_volatility: false, position_count: 0,
-        triggered_count: 0, positions: [],
-      } as StopLossStatus);
-    } finally {
-      setLoadingStopLoss(false);
-    }
+      flushSync(() => {
+        if (res.data?.success) { setStopLoss(res.data as StopLossStatus); }
+        else { setStopLoss({ running: false } as StopLossStatus); }
+        setLoadingStopLoss(false);
+      });
+    } catch { flushSync(() => { setStopLoss({ running: false } as StopLossStatus); setLoadingStopLoss(false); }); }
   }, []);
 
   // ── 首次并行加载 ──
   useEffect(() => {
-    fetchSummary();
-    fetchTickers();
-    fetchEquity();
-    fetchTrades();
-    fetchStopLoss();
+    refreshSummary();
+    refreshTickers();
+    refreshEquity();
+    refreshTrades();
+    refreshStopLoss();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -223,11 +205,11 @@ export default function PortfolioPage() {
       } else {
         await schedulerApi.startStopLossMonitor();
       }
-      await fetchStopLoss();
+      await refreshStopLoss();
     } catch (err) {
       console.error('止损监控操作失败:', err);
     } finally { setSlToggling(false); }
-  }, [slToggling, stopLoss, fetchStopLoss]);
+  }, [slToggling, stopLoss, refreshStopLoss]);
 
   const handleUnfreeze = useCallback(async () => {
     if (unfreezing) return;
@@ -237,14 +219,14 @@ export default function PortfolioPage() {
       const res = await portfolioApi.unfreeze();
       if (res.data?.success) {
         alert(t('portfolio.unfreezeSuccess') + `: ¥${(res.data.unfrozen_amount || 0).toLocaleString()}`);
-        await fetchSummary();
+        await refreshSummary();
       } else {
         alert(t('portfolio.unfreezeFailed') + ': ' + (res.data?.message || ''));
       }
     } catch (err: unknown) {
       alert(t('portfolio.unfreezeFailed') + ': ' + (err instanceof Error ? err.message : String(err)));
     } finally { setUnfreezing(false); }
-  }, [unfreezing, t, fetchSummary]);
+  }, [unfreezing, t, refreshSummary]);
 
   // ── 排序 ──
   const handleSort = useCallback((key: SortKey) => {
@@ -345,7 +327,7 @@ export default function PortfolioPage() {
             </div>
           </div>
         </div>
-        <button className="cp-refresh-btn" onClick={fetchSummary} title="刷新资产">
+        <button className="cp-refresh-btn" onClick={refreshSummary} title="刷新资产">
           <i className={`fas fa-sync-alt ${loadingSummary ? 'fa-spin' : ''}`} />
         </button>
       </header>
@@ -428,7 +410,7 @@ export default function PortfolioPage() {
                 title={stopLoss.running && stopLoss.thread_alive ? '停止监控' : '启动监控'}>
                 <i className={`fas fa-${slToggling ? 'spinner fa-spin' : stopLoss.running && stopLoss.thread_alive ? 'stop' : 'play'}`} />
               </button>
-              <button className="cp-refresh-btn" onClick={(e) => { e.stopPropagation(); fetchStopLoss(); }}
+              <button className="cp-refresh-btn" onClick={(e) => { e.stopPropagation(); refreshStopLoss(); }}
                 title="刷新止损" style={{ marginLeft: 4 }}>
                 <i className={`fas fa-sync-alt ${loadingStopLoss ? 'fa-spin' : ''}`} style={{ fontSize: 10 }} />
               </button>
@@ -502,7 +484,7 @@ export default function PortfolioPage() {
             <i className="fas fa-chart-area" />
             <span className="cp-panel-title">{t('portfolio.equityCurve')}</span>
             {realEquity.length === 0 && <span style={{ fontSize: 10, color: A, marginLeft: 'auto' }}>{t('portfolio.vsBenchmark')}</span>}
-            <button className="cp-refresh-btn" onClick={fetchEquity} title="刷新曲线" style={{ marginLeft: 'auto' }}>
+            <button className="cp-refresh-btn" onClick={refreshEquity} title="刷新曲线" style={{ marginLeft: 'auto' }}>
               <i className={`fas fa-sync-alt ${loadingEquity ? 'fa-spin' : ''}`} />
             </button>
           </div>
@@ -574,7 +556,7 @@ export default function PortfolioPage() {
           <div className="cp-panel-header">
             <i className="fas fa-table" />
             <span className="cp-panel-title">{t('portfolio.positions')} ({positions.length})</span>
-            <button className="cp-refresh-btn" onClick={fetchSummary} title="刷新持仓" style={{ marginLeft: 'auto' }}>
+            <button className="cp-refresh-btn" onClick={refreshSummary} title="刷新持仓" style={{ marginLeft: 'auto' }}>
               <i className={`fas fa-sync-alt ${loadingSummary ? 'fa-spin' : ''}`} />
             </button>
           </div>
@@ -631,7 +613,7 @@ export default function PortfolioPage() {
           <div className="cp-panel-header">
             <i className="fas fa-exchange-alt" />
             <span className="cp-panel-title">近期交易</span>
-            <button className="cp-refresh-btn" onClick={fetchTrades} title="刷新交易" style={{ marginLeft: 'auto' }}>
+            <button className="cp-refresh-btn" onClick={refreshTrades} title="刷新交易" style={{ marginLeft: 'auto' }}>
               <i className={`fas fa-sync-alt ${loadingTrades ? 'fa-spin' : ''}`} />
             </button>
           </div>
