@@ -293,8 +293,8 @@ export default function PortfolioPage() {
       pnl: p.floating_pnl >= 0 ? 'up' as const : 'down' as const,
     }));
     const otherVal = sortedPositions.slice(5).reduce((s, p) => s + p.market_value, 0);
-    if (otherVal > 0) items.push({ name: '其他', value: otherVal });
-    if (cash > 0) items.push({ name: '现金', value: cash });
+    if (otherVal > 0) items.push({ name: '其他', value: otherVal, pnl: 'up' as const });
+    if (cash > 0) items.push({ name: '现金', value: cash, pnl: 'up' as const });
     return items;
   }, [sortedPositions, cash]);
 
