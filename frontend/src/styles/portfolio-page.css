@@ -487,3 +487,35 @@
   .cp-sl-table { font-size: 10px; }
   .cp-sl-table td, .cp-sl-table th { padding: 3px 4px; }
 }
+
+/* ═══════════════════════════════════════════════════════
+   Skeleton 骨架屏
+   ═══════════════════════════════════════════════════════ */
+.cp-skel {
+  background: linear-gradient(90deg,
+    rgba(255,255,255,0.04) 25%,
+    rgba(255,255,255,0.08) 50%,
+    rgba(255,255,255,0.04) 75%
+  );
+  background-size: 200% 100%;
+  animation: cp-shimmer 1.5s ease infinite;
+  display: inline-block;
+}
+@keyframes cp-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ═══════════════════════════════════════════════════════
+   刷新按钮
+   ═══════════════════════════════════════════════════════ */
+.cp-refresh-btn {
+  background: none; border: none;
+  color: var(--agent-text-dim, #6a7d9b);
+  cursor: pointer; padding: 2px 4px; border-radius: 4px;
+  font-size: 12px; transition: all 0.15s;
+  display: inline-flex; align-items: center;
+}
+.cp-refresh-btn:hover { color: var(--agent-gold, #f0b90b); }
+.cp-panel-header .cp-refresh-btn { font-size: 11px; }
+.cp-sl-indicator .cp-refresh-btn { margin-left: 8px; }
