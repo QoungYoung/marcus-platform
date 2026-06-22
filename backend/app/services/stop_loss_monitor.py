@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # 缓存 key: ts_code → (timestamp, high, low, close)
 # TTL: 120 秒（足够覆盖一次扫描周期，第二次请求命中缓存）
 _kline_cache: Dict[str, tuple] = {}
-_kline_cache_ttl: float = 120.0
+_kline_cache_ttl: float = 3600.0  # 90天K线高低点一天内不变，缓存1小时
 _kline_cache_lock = threading.Lock()
 
 
@@ -313,9 +313,12 @@ class StopLossMonitor:
         if current_price <= 0:
             return None
         try:
-            from app.api.indicator import _normalize_to_ts_code, _fetch_kline_high_low
+            from app.api.indicator import _normalize_to_ts_code
             ts_code = _normalize_to_ts_code(symbol)
-            _high, stage_low, _close = _fetch_kline_high_low(ts_code)
+            cached = _cached_fetch_kline(ts_code)
+            if cached is None:
+                return None
+            _high, stage_low, _close = cached
             if stage_low <= 0:
                 return None
 

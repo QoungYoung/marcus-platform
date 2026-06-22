@@ -173,7 +173,10 @@ export default function PortfolioPage() {
       marketApi.getIndices().catch(() => null),
       tradesApi.getHistory({ limit: 8 }).catch(() => null),
       portfolioApi.getEquityHistory(60).catch(() => null),
-      schedulerApi.getStopLossMonitor().catch(() => null),
+      schedulerApi.getStopLossMonitor().catch((err: unknown) => {
+        console.warn('[Portfolio] 止损监控 API 调用失败:', err);
+        return { data: { success: false, error: String(err) } };
+      }),
     ]).then(([pRes, idxRes, tRes, eqRes, slRes]) => {
       if (cancelled) return;
       setData(pRes.data);
@@ -193,6 +196,14 @@ export default function PortfolioPage() {
       }
       if (slRes?.data?.success) {
         setStopLoss(slRes.data as StopLossStatus);
+      } else {
+        // API 失败也显示占位卡片，方便排查
+        setStopLoss({
+          running: false, thread_alive: false, interval_seconds: 0,
+          today_stops_count: 0, is_trading_time: false,
+          is_morning_volatility: false, position_count: 0,
+          triggered_count: 0, positions: [],
+        } as StopLossStatus);
       }
       setLoading(false);
     }).catch((err: Error) => { if (!cancelled) { setError(err.message); setLoading(false); } });
@@ -394,7 +405,7 @@ export default function PortfolioPage() {
             <div className="cp-sl-indicator">
               <span className={`cp-sl-dot ${stopLoss.running && stopLoss.thread_alive ? 'live' : 'dead'}`} />
               <span className="cp-sl-status-text">
-                {stopLoss.running && stopLoss.thread_alive ? '运行中' : '已停止'}
+                {stopLoss.interval_seconds === 0 ? 'API 不可达' : stopLoss.running && stopLoss.thread_alive ? '运行中' : '已停止'}
               </span>
               {stopLoss.is_morning_volatility && (
                 <span className="cp-sl-tag warn">早盘冷静期</span>

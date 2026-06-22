@@ -97,6 +97,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Main] ⚠️ trades.db 预热失败（非致命）: {e}")
 
+    # 预热 K 线缓存（后台任务，避免首次 API 调用因 Tushare 超时）
+    async def _warm_kline_cache():
+        await asyncio.sleep(5)  # 等止损监控线程启动 + 首次持仓查询完成
+        try:
+            from app.services.stop_loss_monitor import get_stop_loss_monitor, _cached_fetch_kline
+            from app.api.indicator import _normalize_to_ts_code
+            monitor = get_stop_loss_monitor()
+            if monitor.executor:
+                positions = monitor.executor.get_positions()
+                if positions:
+                    for pos in positions:
+                        try:
+                            ts_code = _normalize_to_ts_code(pos.get('symbol', ''))
+                            _cached_fetch_kline(ts_code)
+                        except Exception:
+                            pass
+                    print(f"[Main] ✅ K线缓存预热完成 ({len(positions)} 只)")
+        except Exception as e:
+            print(f"[Main] ⚠️ K线缓存预热失败（非致命）: {e}")
+    asyncio.create_task(_warm_kline_cache())
+
     # 启动 QQ Bot 监听器
     if settings.QQ_BOT_ENABLED:
         print(f"[Main] 启动 QQ Bot 服务...")
