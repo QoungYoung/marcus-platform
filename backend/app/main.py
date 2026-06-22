@@ -37,6 +37,7 @@ from app.api import portfolio, trades, market, news, strategy, agent, etf, db, s
 from app.api.scheduler import router as scheduler_router
 from app.services.scheduler_service import scheduler_service
 from app.services.qqbot_service import qqbot_service, get_qqbot_service
+from app.services.stop_loss_monitor import get_monitor_status
 from app.database import init_db
 from app.services.prompt_service import seed_prompts
 from app.db.prompt_seeds import PROMPT_SEEDS
@@ -136,6 +137,8 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "scheduler": "/api/v1/scheduler/status",
+        "stop_loss_monitor": "/api/v1/scheduler/stop-loss-monitor",
+        "stop_loss_distances": "/api/v1/scheduler/stop-loss-monitor/distances",
     }
 
 
@@ -150,10 +153,15 @@ async def get_config():
 @app.get("/api/v1/health")
 async def health_check():
     """Health check endpoint."""
+    try:
+        monitor = get_monitor_status()
+    except Exception:
+        monitor = {"error": "unavailable"}
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "scheduler": scheduler_service.get_scheduler_status(),
+        "stop_loss_monitor": monitor,
     }
 
 

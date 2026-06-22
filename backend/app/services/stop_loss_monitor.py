@@ -103,8 +103,42 @@ class StopLossMonitor:
             self.thread.join(timeout=5)
         logger.info("[StopLoss] ⏹️ 监控已停止")
 
-    def is_running(self) -> bool:
-        return self.running
+    def is_running(self, check_thread: bool = True) -> bool:
+        """检查监控是否在运行。
+
+        Args:
+            check_thread: 是否同时校验后台线程存活状态（更可靠）
+        Returns:
+            True 表示监控正在运行
+        """
+        if not self.running:
+            return False
+        if check_thread:
+            return self.thread is not None and self.thread.is_alive()
+        return True
+
+    def status(self) -> Dict[str, Any]:
+        """获取监控器运行状态详情（含持仓止损距离）。"""
+        positions = []
+        try:
+            positions = self.get_position_stop_distances()
+        except Exception:
+            pass
+
+        return {
+            "running": self.running,
+            "thread_alive": self.thread.is_alive() if self.thread else False,
+            "thread_name": self.thread.name if self.thread else None,
+            "interval_seconds": self.interval,
+            "today_stops_count": len(self.today_stops),
+            "today_stops": dict(self.today_stops),
+            "has_executor": self.executor is not None,
+            "is_trading_time": self._is_trading_time(),
+            "is_morning_volatility": self._is_morning_volatility(),
+            "position_count": len(positions),
+            "triggered_count": sum(1 for p in positions if p["nearest_trigger"]["danger_level"] == "triggered"),
+            "positions": positions,
+        }
 
     # ── 主循环 ──
 
@@ -580,6 +614,251 @@ class StopLossMonitor:
             logger.debug(f"[StopLoss] 获取大盘指数失败: {e}")
         return 0.0
 
+    # ── 持仓止损距离计算 ──
+
+    def get_position_stop_distances(self) -> List[Dict[str, Any]]:
+        """计算每个持仓到各止损线的距离（正值=安全距离，负值=已触发）。
+
+        返回每个持仓的最近止损线和详细规则距离。
+        """
+        if self.executor is None:
+            return []
+
+        try:
+            positions = self.executor.get_positions()
+        except Exception as e:
+            logger.warning(f"[StopLoss] 获取持仓失败: {e}")
+            return []
+
+        if not positions:
+            return []
+
+        market_pct = self._get_market_change_pct()
+        today_buy_symbols = self.executor._get_today_buy_symbols() if self.executor else set()
+        results = []
+
+        for pos in positions:
+            symbol = pos.get('symbol', '')
+            if not symbol:
+                continue
+
+            avg_price = pos.get('avg_price', 0)
+            current_price = pos.get('current_price', 0)
+            volume = pos.get('volume', 0)
+
+            if avg_price <= 0 or current_price <= 0 or volume <= 0:
+                continue
+
+            float_pnl_pct = round((current_price - avg_price) / avg_price * 100, 2)
+            self._ensure_hwm(symbol, current_price)
+            t1_locked = symbol in today_buy_symbols
+
+            distances = {
+                "rul0a_break_low": self._calc_break_low_distance(symbol, current_price),
+                "rul0b_cost_stop": self._calc_cost_stop_distance(symbol, float_pnl_pct, current_price, avg_price),
+                "rul1_sector": self._calc_sector_distance(symbol, float_pnl_pct),
+                "rul2_iron": self._calc_iron_rule2_distance(symbol, float_pnl_pct, current_price, avg_price),
+                "rul3_dynamic": self._calc_dynamic_distance(float_pnl_pct, market_pct, symbol),
+            }
+
+            # 过滤掉不适用(None)的规则，找出最危险（距离最小）的
+            applicable = {k: v for k, v in distances.items() if v is not None}
+            min_rule = None
+            min_distance = None
+            if applicable:
+                min_rule = min(applicable, key=applicable.get)
+                min_distance = round(applicable[min_rule], 2)
+
+            # 距离等级
+            if min_distance is None:
+                danger_level = "no_rules"
+            elif min_distance < 0:
+                danger_level = "triggered"  # 已触发，应止损
+            elif min_distance < 1:
+                danger_level = "critical"   # 小于 1%，非常危险
+            elif min_distance < 3:
+                danger_level = "warning"    # 小于 3%，需要关注
+            elif min_distance < 5:
+                danger_level = "caution"    # 小于 5%，轻微关注
+            else:
+                danger_level = "safe"
+
+            results.append({
+                "symbol": symbol,
+                "avg_price": round(avg_price, 2),
+                "current_price": round(current_price, 2),
+                "volume": volume,
+                "float_pnl_pct": float_pnl_pct,
+                "t1_locked": t1_locked,
+                "daily_stops_used": self.today_stops.get(symbol, 0),
+                "nearest_trigger": {
+                    "rule": min_rule,
+                    "distance_pct": min_distance,
+                    "danger_level": danger_level,
+                },
+                "rule_distances": {k: round(v, 2) if v is not None else None for k, v in distances.items()},
+            })
+
+        # 按危险程度排序：已触发 > 危急 > 警告 > 关注 > 安全
+        order = {"triggered": 0, "critical": 1, "warning": 2, "caution": 3, "safe": 4, "no_rules": 5}
+        results.sort(key=lambda x: order.get(x["nearest_trigger"]["danger_level"], 5))
+        return results
+
+    # ── 各规则的距离计算（正值=距触发还远，负值=已触发） ──
+
+    def _calc_break_low_distance(self, symbol: str, current_price: float) -> Optional[float]:
+        """规则 0a：当前价到破底止损线的安全距离(%)"""
+        try:
+            from app.api.indicator import _normalize_to_ts_code, _fetch_kline_high_low
+            ts_code = _normalize_to_ts_code(symbol)
+            _high, stage_low, _close = _fetch_kline_high_low(ts_code)
+            if stage_low <= 0 or current_price <= 0:
+                return None
+
+            base_stop = stage_low * 0.97
+            hwm_stop = 0.0
+            try:
+                hwm_data = self._ensure_hwm(symbol, current_price)
+                hwm = hwm_data.get('high_price', 0)
+                if hwm > stage_low:
+                    hwm_stop = hwm * 0.90
+            except Exception:
+                pass
+
+            stop_price = max(base_stop, hwm_stop)
+            return round((current_price - stop_price) / current_price * 100, 2)
+        except Exception:
+            return None
+
+    def _calc_cost_stop_distance(
+        self, symbol: str, float_pnl_pct: float, current_price: float, avg_price: float
+    ) -> Optional[float]:
+        """规则 0b：当前浮盈到成本止损线的距离(%)"""
+        if avg_price <= 0:
+            return None
+
+        hwm = None
+        max_profit_pct = 0
+        try:
+            chain = self.strategy_chain
+            if chain:
+                hwm_data = chain.get_high_water_mark(symbol)
+                if hwm_data:
+                    hwm = hwm_data.get('high_price', 0)
+                    if hwm and hwm > avg_price:
+                        max_profit_pct = round((hwm - avg_price) / avg_price * 100, 2)
+        except Exception:
+            pass
+
+        # 曾大盈(≥5%) → 不在成本止损范围内，交给规则2
+        if max_profit_pct >= 5:
+            return None
+
+        # 曾小盈(3-5%) → -3% 止损线
+        if max_profit_pct >= 3:
+            return round(float_pnl_pct + 3.0, 2)  # distance to -3%
+
+        # 从未盈利 → -4% 止损线
+        if hwm is not None:
+            return round(float_pnl_pct + 4.0, 2)  # distance to -4%
+
+        # 无 HWM → -6% 底线
+        if hwm is None:
+            return round(float_pnl_pct + 6.0, 2)  # distance to -6%
+
+        return None
+
+    def _calc_sector_distance(self, symbol: str, float_pnl_pct: float) -> Optional[float]:
+        """规则 1：当前背离值到 -3pp 触发线的距离(%)"""
+        if float_pnl_pct >= 0:
+            return None  # 仅在亏损时适用
+
+        try:
+            chain = self.strategy_chain
+            if chain is None:
+                return None
+
+            latest_scan = chain.get_latest_scan()
+            if not latest_scan:
+                return None
+
+            sector_data = latest_scan.get('sector_allocation', {})
+            if not sector_data:
+                return None
+
+            for sector_name, sector_info in sector_data.items():
+                stocks = sector_info.get('stocks', []) if isinstance(sector_info, dict) else []
+                if symbol in stocks or any(s.get('symbol') == symbol for s in stocks if isinstance(s, dict)):
+                    sector_pct = sector_info.get('pct_change', 0) if isinstance(sector_info, dict) else 0
+                    divergence = float_pnl_pct - sector_pct
+                    return round(divergence + 3.0, 2)  # distance to -3pp
+        except Exception:
+            pass
+
+        return None
+
+    def _calc_iron_rule2_distance(
+        self, symbol: str, float_pnl_pct: float, current_price: float, avg_price: float
+    ) -> Optional[float]:
+        """规则 2：当前浮盈到铁律二保护线的距离(%)"""
+        # HWM 大盈保本
+        try:
+            hwm_data = self._ensure_hwm(symbol, current_price)
+            hwm = hwm_data.get('high_price', 0)
+            if hwm > avg_price:
+                max_profit_pct = round((hwm - avg_price) / avg_price * 100, 2)
+                if max_profit_pct >= 5:
+                    return round(float_pnl_pct + 1.0, 2)  # distance to -1%
+        except Exception:
+            pass
+
+        # 振幅分档保护线
+        amplitude_tier = self._get_amplitude_tier(symbol)
+        rules = self._get_iron_rule2_thresholds(amplitude_tier)
+        t1, t2, t3 = rules["t1_pct"], rules["t2_pct"], rules["t3_pct"]
+        t2_protect, t3_protect = rules["t2_plus_pct"], rules["t3_plus_pct"]
+
+        if float_pnl_pct >= t3:
+            return round(float_pnl_pct - t3_protect, 2)
+        elif float_pnl_pct >= t2:
+            return round(float_pnl_pct - t2_protect, 2)
+        elif float_pnl_pct >= t1:
+            return round(float_pnl_pct, 2)  # 保本线 = 0
+        else:
+            return None  # 未进入盈利区，规则2不适用
+
+    def _calc_dynamic_distance(
+        self, float_pnl_pct: float, market_pct: float, symbol: str = ""
+    ) -> Optional[float]:
+        """规则 3：当前浮亏到动态止损线的距离(%)"""
+        # 强审条件：大盘跌>2% 且跑输>3pp
+        if market_pct <= -2.0:
+            strong_divergence = float_pnl_pct - market_pct
+            if strong_divergence < -3.0:
+                return round(strong_divergence + 3.0, 2)
+
+        # 大盘感知阈值
+        if market_pct <= -2.0:
+            market_threshold = 1.5
+        elif -1.0 <= market_pct <= 1.0:
+            market_threshold = 2.0
+        elif 1.0 < market_pct <= 2.0:
+            market_threshold = 3.0
+        else:
+            market_threshold = 4.0
+
+        # 振幅因子
+        amp_threshold = 2.0
+        if symbol:
+            try:
+                amp_pct = self._get_amplitude_pct(symbol)
+                amp_threshold = amp_pct * 0.4
+            except Exception:
+                pass
+
+        threshold = -max(market_threshold, amp_threshold)
+        return round(float_pnl_pct - threshold, 2)  # distance to dynamic stop
+
     # ── 止损执行 ──
 
     def _execute_stop(
@@ -719,3 +998,15 @@ def stop_monitor() -> None:
     with _monitor_lock:
         if _monitor_instance is not None:
             _monitor_instance.stop()
+
+
+def get_monitor_status() -> Dict[str, Any]:
+    """获取止损监控运行状态的便捷函数。"""
+    monitor = get_stop_loss_monitor()
+    return monitor.status()
+
+
+def get_position_distances() -> List[Dict[str, Any]]:
+    """获取所有持仓止损距离的便捷函数。"""
+    monitor = get_stop_loss_monitor()
+    return monitor.get_position_stop_distances()

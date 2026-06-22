@@ -1809,17 +1809,19 @@ def adjust_strategy(pre_market: dict, validation: dict, feedback_list: list,
                 print(f"[资金流] ⏭️ {flow_nature}: 不调整仓位")
 
         # 用资金流入行业补充 sector_allocation（无论数据新旧，行业方向可参考）
+        # 兼容东财实时(name/main_net_fmt) 和 Tushare(industry/net_fmt) 两种字段格式
         if fund_flow:
             top_inflow = fund_flow.get('top_inflow', [])
             if top_inflow:
                 for item in top_inflow[:3]:
-                    ind = item.get('industry', '')
+                    ind = item.get('industry') or item.get('name', '')
                     if ind and ind not in sector_allocation:
                         sector_allocation[ind] = {
                             'stance': '🟢 超配',
                             'weight': 0.9,
                             'position_limit': 20,
-                            'fund_net': item.get('net_fmt', 'N/A')
+                            'fund_net': item.get('net_fmt') or item.get('main_net_fmt', 'N/A'),
+                            'pct_change': item.get('pct_change', 0),
                         }
 
     # Step 8.5: 仓位阶梯恢复（v2: 每次最多恢复25个百分点，需连续确认）
@@ -2278,7 +2280,7 @@ def generate_scan_report():
             # 大盘实时资金流（东财 ulist.np）
             from pathlib import Path as _P
             sys.path.insert(0, str(_P(__file__).parent.parent / "core"))
-            from utils.em_sector_flow import get_market_moneyflow_realtime
+            from utils.em_sector_flow import get_market_moneyflow_realtime, get_top_inflow_sectors
             rt_market = get_market_moneyflow_realtime()
             if rt_market:
                 combined = rt_market['combined']
@@ -2325,6 +2327,24 @@ def generate_scan_report():
                         fund_flow['market'] = stock_flow.get('market', fund_flow['market'])
         except Exception as e:
             print(f"[资金流] ⚠️ 个股资金流获取失败: {e}")
+
+        # 东财实时行业资金流（替换 Tushare 个股聚合，当日板块资金方向更准确）
+        try:
+            if fund_flow:
+                em_industries = get_top_inflow_sectors("industry", top_n=10, use_cache=True)
+                if em_industries:
+                    em_top_inflow = []
+                    for s in em_industries[:5]:
+                        em_top_inflow.append({
+                            'industry': s['name'],
+                            'net_fmt': s.get('main_net_fmt', 'N/A'),
+                            'pct_change': s.get('pct_change', 0),
+                            'lead_stock': s.get('lead_stock', ''),
+                        })
+                    fund_flow['top_inflow'] = em_top_inflow
+                    print(f"[资金流] ✅ 东财实时行业资金流 Top 5: {[(s['industry'], s['net_fmt']) for s in em_top_inflow]}")
+        except Exception as e:
+            print(f"[资金流] ⚠️ 东财实时行业资金流获取失败: {e}")
 
     # ── 盘后：Tushare 日频（已有当日数据）──
     else:
@@ -2722,9 +2742,9 @@ def generate_scan_report():
     # 板块配置
     sector_alloc = adjusted_strategy.get('sector_allocation', {})
     if sector_alloc:
-        high_weight = [(s, d.get('weight', 0)) for s, d in sector_alloc.items() if d.get('weight', 0) > 0.5]
+        high_weight = [(s, d.get('weight', 0), d.get('pct_change', 0)) for s, d in sector_alloc.items() if d.get('weight', 0) > 0.5]
         if high_weight:
-            sectors = ', '.join([s for s, w in sorted(high_weight, key=lambda x: -x[1])[:3]])
+            sectors = ', '.join([f"{s}({pct:+.1f}%)" if pct else s for s, w, pct in sorted(high_weight, key=lambda x: -x[1])[:3]])
             report += f"- **重点板块**: {sectors}\n"
 
     # hot_concepts 为空时显式标注

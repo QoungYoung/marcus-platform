@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.scheduler_service import scheduler_service
+from app.services.stop_loss_monitor import get_monitor_status, get_position_distances
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
@@ -131,6 +132,43 @@ async def get_execution_log(execution_id: str):
         return {"success": True, "content": content}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stop-loss-monitor")
+async def get_stop_loss_monitor_status():
+    """获取实时止损监控器运行状态（含持仓止损距离）"""
+    try:
+        status = get_monitor_status()
+        return {
+            "success": True,
+            **status,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+@router.get("/stop-loss-monitor/distances")
+async def get_stop_loss_distances():
+    """获取所有持仓到各止损线的距离"""
+    try:
+        distances = get_position_distances()
+        return {
+            "success": True,
+            "positions": distances,
+            "market_pct": None,  # 由调用方自行获取
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
 
 
 @router.post("/stop")
