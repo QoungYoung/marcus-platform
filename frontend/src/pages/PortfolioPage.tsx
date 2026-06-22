@@ -293,8 +293,8 @@ export default function PortfolioPage() {
       pnl: p.floating_pnl >= 0 ? 'up' as const : 'down' as const,
     }));
     const otherVal = sortedPositions.slice(5).reduce((s, p) => s + p.market_value, 0);
-    if (otherVal > 0) items.push({ name: '其他', value: otherVal, pnl: 'neutral' as const });
-    if (cash > 0) items.push({ name: '现金', value: cash, pnl: 'neutral' as const });
+    if (otherVal > 0) items.push({ name: '其他', value: otherVal });
+    if (cash > 0) items.push({ name: '现金', value: cash });
     return items;
   }, [sortedPositions, cash]);
 
@@ -715,7 +715,7 @@ function RiskCard({ icon, label, value, sub, level, ringColor, ringPct }: {
 
 // ══════════════════ 骨架屏组件 ══════════════════
 
-function Skel({ w, h = 14, br = 6 }: { w: number | string; h?: number; br?: number }) {
+function Skel({ w, h = 14, br = 6 }: { w: number | string; h?: number; br?: number | string }) {
   return <div className="cp-skel" style={{ width: w, height: h, borderRadius: br }} />;
 }
 
@@ -788,7 +788,7 @@ function SkeletonTable({ rows = 5 }: { rows?: number }) {
       <thead><tr>{Array.from({ length: 10 }).map((_, i) => <th key={i}><Skel w={48} h={10} /></th>)}</tr></thead>
       <tbody>
         {Array.from({ length: rows }).map((_, r) => (
-          <tr key={r}>{Array.from({ length: 10 }).map((_, c) => <td key={c}><Skel w={40 + Math.random() * 30} h={12} /></td>)}</tr>
+          <tr key={r}>{Array.from({ length: 10 }).map((_, c) => <td key={c}><Skel w={40 + Math.round(Math.random() * 30)} h={12} /></td>)}</tr>
         ))}
       </tbody>
     </table>
