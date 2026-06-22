@@ -598,6 +598,9 @@ class MarcusVNPyExecutor:
         }
         self._log_trade(trade_record)
 
+        # 推送 QQ 通知
+        self._notify_buy(symbol, price, volume, reason, total_cost)
+
         return {
             'status': 'executed',
             'order_id': order_id,
@@ -665,6 +668,40 @@ class MarcusVNPyExecutor:
             'profit': profit,
             'timestamp': trade_record['timestamp']
         }
+
+    def _notify_buy(self, symbol: str, price: float, volume: int, reason: str, cost: float = 0) -> None:
+        """买入成交后推送 QQ 通知。"""
+        try:
+            from app.services.qqbot_service import send_qq_notification
+
+            # 获取股票名称
+            stock_name = symbol
+            try:
+                from app.api.portfolio import get_stock_name
+                stock_name = get_stock_name(symbol)
+            except Exception:
+                pass
+
+            clean_reason = reason.strip() if reason else '自动交易'
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            message = (
+                f"🟢 **买入成交**\n\n"
+                f"标的: {stock_name} ({symbol})\n"
+                f"价格: {price:.2f}  |  数量: {volume}股\n"
+                f"金额: {cost:.2f}"
+            )
+            if cost > 0:
+                message += f" (含佣金约 {cost - price * volume:.2f})"
+            message += f"\n\n> {clean_reason}\n\n"
+            message += f"时间: {now_str}"
+
+            send_qq_notification(message)
+            import logging
+            logging.getLogger(__name__).info(f"[MarcusTrade] 📨 QQ买入通知已发送: {symbol}")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[MarcusTrade] QQ买入通知发送失败: {e}")
 
     def _notify_sell(self, symbol: str, price: float, volume: int, reason: str, profit: float, 
                      avg_cost: float = 0) -> None:
