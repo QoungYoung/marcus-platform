@@ -55,6 +55,10 @@ class BacktestPaperEngine:
         # 当前回测模拟交易日（由回测引擎在每日循环开始前调用 set_current_date 更新）
         self._current_date: Optional[_date] = None
 
+        # 最近一次下单失败的具体原因 (T+1 锁定 / 资金不足 / 持仓不足 / 撮合拒绝)
+        # 供 place_order / 止损调用方读取, 避免统一报"资金/持仓不足"的误导信息
+        self.last_error: str = ""
+
         # ⚠️ P0 修复: 后端进程重启会导致 _last_buy_date 内存清空, T+1 形同虚设.
         # 启动时从 PG backtest_trades 重建: 对每只票取最后一次 buy 的 trade_date.
         # (SQLite positions.entry_date 用的是服务器时间 datetime.now(), 不能用于回测)
@@ -148,20 +152,30 @@ class BacktestPaperEngine:
 
     def buy(self, symbol: str, price: float, volume: int) -> Optional[str]:
         """买入。返回订单ID，失败返回None
-        回测场景下记录 _last_buy_date 用于 T+1 校验"""
+        回测场景下记录 _last_buy_date 用于 T+1 校验
+        失败原因同时写入 self.last_error, 供日志读取具体原因 (资金不足/跌停)"""
         oid = self._engine.buy(self._to_engine_sym(symbol), price, volume)
         if oid and self._current_date is not None:
             self._last_buy_date[self._to_engine_sym(symbol)] = self._current_date
+        if not oid:
+            # 资金不足是 buy 唯一失败原因 (paper_engine.buy line 458-460)
+            self.last_error = f"资金不足: 需 {price * volume * 1.0005:.2f}, " \
+                              f"可用 {self._engine.available_cash:.2f}"
+        else:
+            self.last_error = ""
         return oid
 
     def sell(self, symbol: str, price: float, volume: int) -> Optional[str]:
         """卖出。返回订单ID，失败返回None
         ⚠️ A 股 T+1 规则：当日买入的股票当日不可卖（即使已成交）
-        失败时可通过 get_t1_status(symbol) 查询锁定原因"""
+        失败时可通过 get_t1_status(symbol) 查询锁定原因
+        失败原因同时写入 self.last_error, 供 place_order / 止损日志读取具体原因"""
         if self._is_t1_locked(symbol):
             st = self.get_t1_status(symbol)
+            self.last_error = f"T+1锁定: {st['reason']}"
             print(f"[T+1] {symbol} 卖出被拒: {st['reason']}")
             return None
+        self.last_error = ""
         return self._engine.sell(self._to_engine_sym(symbol), price, volume)
 
     def match_order(self, order_id: str, fill_price: float) -> bool:
@@ -170,14 +184,19 @@ class BacktestPaperEngine:
 
     def place_order(self, symbol: str, direction: str, price: float,
                     volume: int) -> dict:
-        """统一下单接口。返回 {success, order_id, filled, message}"""
+        """统一下单接口。返回 {success, order_id, filled, message}
+        message 优先使用 self.last_error (T+1 锁定/超卖/资金不足的具体原因),
+        旧版固定 "资金/持仓不足" 已升级"""
         if direction == "buy":
             oid = self.buy(symbol, price, volume)
         else:
             oid = self.sell(symbol, price, volume)
 
         if not oid:
-            return {"success": False, "message": "资金/持仓不足"}
+            # 优先用 self.last_error (T+1 等具体原因), 兜底用 "资金/持仓不足"
+            msg = self.last_error or "资金/持仓不足"
+            self.last_error = ""
+            return {"success": False, "message": msg, "order_id": None, "filled": False}
 
         # 立即按同一价格撮合（回测场景：行情已知、即时成交）
         ok = self.match_order(oid, fill_price=price)

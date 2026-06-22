@@ -689,9 +689,16 @@ class BacktestEngine:
                         profit_pct = round(fifo_profit / sell_amount * 100, 4) if sell_amount > 0 else 0
                         net_profit = round(profit, 2)
 
+                        # 查股票名称 (local_data 已在文件顶部导入)
+                        sname = ""
+                        try:
+                            sname = local_data.get_stock_name(symbol) or ""
+                        except Exception:
+                            pass
+
                         trade_record = BacktestTrade(
                             task_id=task_id, trade_date=trade_date,
-                            symbol=symbol, stock_name="",
+                            symbol=_norm_pg_symbol(symbol), stock_name=sname,
                             direction="sell", price=price, volume=volume,
                             amount=sell_amount, commission=commission,
                             stamp_tax=stamp_tax, transfer_fee=0.0,
@@ -748,6 +755,14 @@ class BacktestEngine:
         return "\n".join(lines)
 
     # ── 账户状态 ──
+
+    @staticmethod
+    def _norm_pg_symbol(sym: str) -> str:
+        """统一 PG 写入的 symbol 格式: SH600559 → 600559.SH"""
+        sym = sym.strip()
+        if len(sym) >= 8 and sym[:2] in ('SH', 'SZ', 'BJ') and '.' not in sym:
+            return f"{sym[2:]}.{sym[:2]}"
+        return sym
 
     def _build_account_summary_df(self, account: BacktestPaperEngine, day_df) -> str:
         s = account.get_account()
@@ -896,138 +911,6 @@ class BacktestEngine:
             "考虑到风险控制原则，当前阶段采取观望策略。\n\n"
             "TRADE: HOLD REASON: 市场数据不足或API未配置，保持当前仓位观望"
         )
-
-    # ── 交易解析与执行 ──
-
-    def _parse_and_execute_trades(self, db, task_id: str, trade_date: date,
-                                   day_idx: int, phase_id: str, phase_time: str,
-                                   pi_reply: str, account,
-                                   quotes: dict, emit, progress: float) -> int:
-        """解析 Pi 回复中的交易指令并执行"""
-        import re
-        executed = 0
-
-        # symbol → 名称缓存 (跨多笔 buy/sell 共用)
-        name_cache: Dict[str, str] = {}
-
-        def _get_stock_name(sym: str) -> str:
-            """从本地 stock_basic_data.parquet 查名称（覆盖全 A 股 5854 只）"""
-            if sym in name_cache:
-                return name_cache[sym]
-            try:
-                name = local_data.get_stock_name(sym) or ""
-            except Exception:
-                name = ""
-            name_cache[sym] = name
-            return name
-
-        def _is_sh_stock(sym: str) -> bool:
-            """判断是否沪市股票(沪市有过户费,深市免征)"""
-            return sym.endswith(".SH")
-
-        # 解析 BUY/SELL 指令
-        trade_pattern = r'TRADE:\s*(BUY|SELL)\s+(\S+)\s+(\d+)\s*股?\s*@\s*([\d.]+)\s*REASON:\s*(.+)'
-        for match in re.finditer(trade_pattern, pi_reply, re.IGNORECASE):
-            direction = match.group(1).upper()
-            symbol = match.group(2).strip()
-            volume = int(match.group(3))
-            signal_price = float(match.group(4))  # Pi 信号价
-            reason = match.group(5).strip()
-
-            # 获取实际行情价格 (来自该 phase 的分钟快照,无未来函数)
-            q = quotes.get(symbol, {})
-            actual_price = q.get("close", signal_price)
-
-            # 滑点 (百分比, 信号价 → 实际成交价)
-            slippage_pct = round((actual_price - signal_price) / signal_price * 100, 4) \
-                if signal_price > 0 else 0.0
-
-            if direction == "BUY":
-                # 买入：取买入前已有的 avg_price (FIFO 成本基准)
-                pre_avg_price = 0.0
-                try:
-                    engine_sym = account._to_engine_sym(symbol)
-                    pre_pos = account._engine.positions.get(engine_sym)
-                    if pre_pos and pre_pos.volume > 0:
-                        pre_avg_price = float(getattr(pre_pos, "avg_price", 0))
-                except Exception:
-                    pass
-
-                oid = account.buy(symbol, actual_price, volume)
-                if oid:
-                    amount = actual_price * volume
-                    commission = round(amount * account.COMMISSION_BUY, 2)
-                    # 买入无印花税,沪市有过户费(0.001%)
-                    transfer_fee = round(amount * 0.00001, 2) if _is_sh_stock(symbol) else 0.0
-                    stock_name = _get_stock_name(symbol)
-                    db.add(BacktestTrade(
-                        task_id=task_id, trade_date=trade_date,
-                        symbol=symbol, stock_name=stock_name,
-                        direction="buy",
-                        price=actual_price, volume=volume,
-                        amount=amount, commission=commission,
-                        reason=reason,
-                        phase_time=phase_time,
-                        signal_price=signal_price,
-                        actual_price=actual_price,
-                        stamp_tax=0.0,
-                        transfer_fee=transfer_fee,
-                        slippage_pct=slippage_pct,
-                        net_profit=0.0,
-                    ))
-                    executed += 1
-            elif direction == "SELL":
-                # 卖出前记录 avg_price 作为成本基准（用于算 profit）
-                pre_avg_price = 0.0
-                pre_volume = 0
-                try:
-                    engine_sym = account._to_engine_sym(symbol)
-                    pre_pos = account._engine.positions.get(engine_sym)
-                    if pre_pos:
-                        pre_avg_price = float(getattr(pre_pos, "avg_price", 0))
-                        pre_volume = int(getattr(pre_pos, "volume", 0))
-                except Exception:
-                    pass
-
-                oid = account.sell(symbol, actual_price, volume)
-                if oid:
-                    amount = actual_price * volume
-                    commission = round(amount * account.COMMISSION_SELL, 2)  # 0.15% 含 0.1% 印花税
-                    # 拆分明细: 手续费 0.05% + 印花税 0.1%
-                    stamp_tax = round(amount * 0.001, 2)
-                    transfer_fee = round(amount * 0.00001, 2) if _is_sh_stock(symbol) else 0.0
-                    # 实现毛盈亏 = (sell_price - cost_avg) * volume
-                    if pre_avg_price > 0 and pre_volume > 0:
-                        profit = round((actual_price - pre_avg_price) * volume, 2)
-                        profit_pct = round((actual_price / pre_avg_price - 1) * 100, 4) if pre_avg_price > 0 else 0
-                    else:
-                        profit = 0.0
-                        profit_pct = 0.0
-                    # 净盈亏 = 毛盈亏 - 印花税 - 过户费 (commission 字段已含印花税,需拆)
-                    net_profit = round(profit - stamp_tax - transfer_fee, 2)
-                    stock_name = _get_stock_name(symbol)
-                    db.add(BacktestTrade(
-                        task_id=task_id, trade_date=trade_date,
-                        symbol=symbol, stock_name=stock_name,
-                        direction="sell",
-                        price=actual_price, volume=volume,
-                        amount=amount, commission=commission,
-                        profit=profit, profit_pct=profit_pct,
-                        reason=reason,
-                        phase_time=phase_time,
-                        signal_price=signal_price,
-                        actual_price=actual_price,
-                        stamp_tax=stamp_tax,
-                        transfer_fee=transfer_fee,
-                        slippage_pct=slippage_pct,
-                        net_profit=net_profit,
-                    ))
-                    executed += 1
-
-        if executed > 0:
-            db.commit()
-
-        return executed
 
     # ── 持仓市值更新 ──
 

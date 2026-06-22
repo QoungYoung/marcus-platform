@@ -67,6 +67,10 @@ export const backtestApi = {
   listTasks: (params?: { limit?: number; offset?: number }) =>
     api.get('/backtest/tasks', { params }),
   deleteTask: (taskId: string) => api.delete(`/backtest/${taskId}`),
+  getTrades: (taskId: string, params?: {
+    page?: number; page_size?: number; direction?: string;
+    keyword?: string; start_date?: string; end_date?: string;
+  }) => api.get(`/backtest/${taskId}/trades`, { params }),
   getEquityCsvUrl: (taskId: string) => `/api/v1/backtest/${taskId}/equity-csv`,
   getTradesCsvUrl: (taskId: string) => `/api/v1/backtest/${taskId}/trades-csv`,
   getPositionsCsvUrl: (taskId: string) => `/api/v1/backtest/${taskId}/positions-csv`,

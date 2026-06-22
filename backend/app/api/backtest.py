@@ -9,7 +9,7 @@ import logging
 import re
 import uuid
 from datetime import date, datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
@@ -291,6 +291,9 @@ async def get_backtest_detail(task_id: str):
                 "stock_name": t.stock_name or "",
                 "direction": t.direction,
                 "price": t.price,
+                "avg_cost": round(
+                    (t.price - (t.profit or 0) / t.volume) if t.direction == 'sell' and t.volume > 0 else t.price, 2
+                ),
                 "volume": t.volume,
                 "amount": t.amount,
                 "commission": t.commission or 0,
@@ -316,6 +319,8 @@ async def get_backtest_detail(task_id: str):
             .order_by(BacktestMonthlyMetric.month)
             .all()
         )
+        if not monthly:
+            monthly = _compute_monthly_metrics_from_db(db, task_id)
         result["monthly_metrics"] = [
             {
                 "month": m.month,
@@ -466,6 +471,104 @@ async def get_backtest_detail(task_id: str):
         db.close()
 
 
+@router.get("/{task_id}/trades")
+async def get_backtest_trades(
+    task_id: str,
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=200, description="每页条数"),
+    direction: Optional[str] = Query(None, description="方向: buy / sell"),
+    keyword: Optional[str] = Query(None, description="搜索关键词 (代码/名称/理由)"),
+    start_date: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+):
+    """获取回测交易明细（分页 + 条件搜索）"""
+    db = SessionLocal()
+    try:
+        task = db.query(BacktestTask).filter(BacktestTask.id == task_id).first()
+        if not task:
+            raise HTTPException(404, "任务不存在")
+
+        from sqlalchemy import func, or_
+
+        # 构建过滤条件
+        filters = [BacktestTrade.task_id == task_id]
+
+        if direction:
+            filters.append(BacktestTrade.direction == direction)
+
+        if keyword:
+            kw_pattern = f"%{keyword}%"
+            filters.append(or_(
+                BacktestTrade.symbol.ilike(kw_pattern),
+                BacktestTrade.stock_name.ilike(kw_pattern),
+                BacktestTrade.reason.ilike(kw_pattern),
+            ))
+
+        if start_date:
+            try:
+                filters.append(BacktestTrade.trade_date >= date.fromisoformat(start_date))
+            except ValueError:
+                raise HTTPException(400, f"无效的起始日期: {start_date}")
+
+        if end_date:
+            try:
+                filters.append(BacktestTrade.trade_date <= date.fromisoformat(end_date))
+            except ValueError:
+                raise HTTPException(400, f"无效的结束日期: {end_date}")
+
+        # 总数
+        total = db.query(func.count(BacktestTrade.id)).filter(*filters).scalar() or 0
+
+        # 分页查询
+        offset = (page - 1) * page_size
+        trades = (
+            db.query(BacktestTrade)
+            .filter(*filters)
+            .order_by(BacktestTrade.trade_date.desc(), BacktestTrade.id.desc())
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+
+        result_trades = [
+            {
+                "id": t.id,
+                "trade_date": t.trade_date.isoformat(),
+                "symbol": t.symbol,
+                "stock_name": t.stock_name or "",
+                "direction": t.direction,
+                "price": t.price,
+                "avg_cost": round(
+                    (t.price - (t.profit or 0) / t.volume) if t.direction == 'sell' and t.volume > 0 else t.price, 2
+                ),
+                "volume": t.volume,
+                "amount": t.amount,
+                "commission": t.commission or 0,
+                "profit": t.profit or 0,
+                "profit_pct": t.profit_pct or 0,
+                "reason": t.reason,
+                "phase_time": t.phase_time or "",
+                "signal_price": round(float(t.signal_price or 0), 2),
+                "actual_price": round(float(t.actual_price or 0) or t.price, 2),
+                "slippage_pct": round(float(t.slippage_pct or 0), 4),
+                "stamp_tax": round(float(t.stamp_tax or 0), 2),
+                "transfer_fee": round(float(t.transfer_fee or 0), 2),
+                "net_profit": round(float(t.net_profit or 0), 2),
+            }
+            for t in trades
+        ]
+
+        return {
+            "trades": result_trades,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+        }
+    finally:
+        db.close()
+
+
 @router.get("/{task_id}/equity-csv")
 async def export_equity_csv(task_id: str):
     """导出回测实时权益曲线为 CSV 文件"""
@@ -533,6 +636,105 @@ async def export_equity_csv(task_id: str):
         )
     finally:
         db.close()
+
+
+
+
+# ─────────────────────────────────────────────────────────────
+# 月度指标 On-Demand 计算 (已取消任务缺少 BacktestMonthlyMetric 时用)
+# ─────────────────────────────────────────────────────────────
+
+class _MonthlyRow:
+    """轻量月度指标行, 兼容 BacktestMonthlyMetric 的属性访问"""
+    def __init__(self, month, return_pct, trades_count, win_count, win_rate, max_drawdown):
+        self.month = month
+        self.return_pct = return_pct
+        self.trades_count = trades_count
+        self.win_count = win_count
+        self.win_rate = win_rate
+        self.max_drawdown = max_drawdown
+
+
+def _compute_monthly_metrics_from_db(db, task_id: str) -> List[_MonthlyRow]:
+    """从 equity snapshots + trades 实时计算月度绩效"""
+    from collections import defaultdict
+    from sqlalchemy import func
+
+    results: List[_MonthlyRow] = []
+
+    # 1) 每月首/末资产 + 日收益
+    equity = (
+        db.query(BacktestEquitySnapshot)
+        .filter(BacktestEquitySnapshot.task_id == task_id)
+        .order_by(BacktestEquitySnapshot.trade_date)
+        .all()
+    )
+    if not equity:
+        return results
+
+    month_first: dict = {}
+    month_last: dict = {}
+    month_daily: dict = defaultdict(list)
+
+    for e in equity:
+        m = e.trade_date.isoformat()[:7]
+        if m not in month_first:
+            month_first[m] = float(e.total_asset or 0)
+        month_last[m] = float(e.total_asset or 0)
+        month_daily[m].append(float(e.daily_pct or 0))
+
+    # 2) 每月交易笔数 + 胜率
+    trades_by_month: dict = defaultdict(lambda: {"total": 0, "wins": 0, "losses": 0})
+    all_trades = (
+        db.query(BacktestTrade)
+        .filter(BacktestTrade.task_id == task_id)
+        .all()
+    )
+    for t in all_trades:
+        m = t.trade_date.isoformat()[:7]
+        td = trades_by_month[m]
+        if t.direction == "sell":
+            td["total"] += 1
+            p = float(t.profit or 0)
+            if p > 0:
+                td["wins"] += 1
+            elif p < 0:
+                td["losses"] += 1
+
+    for month in sorted(month_first.keys()):
+        start = month_first[month]
+        end = month_last[month]
+        month_return = (end / start - 1) * 100 if start > 0 else 0
+
+        td = trades_by_month.get(month, {"total": 0, "wins": 0, "losses": 0})
+        trades_cnt = td["total"]
+        wins = td["wins"]
+        losses = td["losses"]
+        denom = wins + losses
+        win_rate = round(wins / denom * 100, 2) if denom > 0 else 0
+
+        # 月内最大回撤 (累乘日收益率)
+        peak = 1.0
+        max_dd = 0.0
+        cum = 1.0
+        for daily_pct in month_daily[month]:
+            cum *= (1 + daily_pct / 100)
+            if cum > peak:
+                peak = cum
+            dd = (peak - cum) / peak * 100 if peak > 0 else 0
+            if dd > max_dd:
+                max_dd = dd
+
+        results.append(_MonthlyRow(
+            month=month,
+            return_pct=round(month_return, 4),
+            trades_count=trades_cnt,
+            win_count=wins,
+            win_rate=win_rate,
+            max_drawdown=round(max_dd, 4),
+        ))
+
+    return results
 
 
 # ─────────────────────────────────────────────────────────────
@@ -795,6 +997,9 @@ def _build_xlsx_sync(task_id: str, db):
                    .filter(BacktestMonthlyMetric.task_id == task_id)
                    .order_by(BacktestMonthlyMetric.month)
                    .all())
+        if not metrics:
+            # 已取消的任务缺少月度指标 → 从 equity + trades 实时计算
+            metrics = _compute_monthly_metrics_from_db(db, task_id)
         for ri, m in enumerate(metrics, 2):
             row = [
                 m.month, round(float(m.return_pct or 0), 4),
@@ -1284,6 +1489,8 @@ async def get_strategy_report(task_id: str):
             .order_by(BacktestMonthlyMetric.month)
             .all()
         )
+        if not metrics:
+            metrics = _compute_monthly_metrics_from_db(db, task_id)
 
         # 交易汇总
         from sqlalchemy import func

@@ -713,25 +713,31 @@ class PaperTradingEngine:
 
             # 【BugFix】分段时间查询，避免未来买入/卖出污染 lots
             # buys: 时间 <= current_date
+            # 【P0 Fix】用 id ASC 二级排序, 保证同日多笔 trade_date 相同时 FIFO 稳定
             cursor.execute(
-                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? ORDER BY {date_col}',
+                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? '
+                f'ORDER BY {date_col}, id',
                 (order.symbol, Direction.LONG.value, date_val)
             )
             buy_trades = cursor.fetchall()
             # sells: 时间 <= current_date（包含同日更早的卖出, 防同日多次超卖）
             cursor.execute(
-                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? ORDER BY {date_col}',
+                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? '
+                f'ORDER BY {date_col}, id',
                 (order.symbol, Direction.SHORT.value, date_val)
             )
             sell_trades = cursor.fetchall()
 
-            # 重构 FIFO lots（买）
+            # 重构 FIFO lots（买）: [vol, price]
             lots = [[vol, price] for price, vol in buy_trades]
             fifo_cost = 0.0  # 历史累计成本（废弃，保留兼容性）
 
             # 历史卖出预消耗 lots
-            for sell_vol, sell_price in sell_trades:
-                rs = sell_vol
+            # 【P0 Fix】SQL 返回 (price, volume) 顺序, 变量名要对应, 否则 rs 取到 price
+            # 旧代码: for sell_vol, sell_price in sell_trades → sell_vol 实际是 price, 导致 rs=15.84 不是 800
+            #         FIFO 几乎不消耗 lot, 后续 current_sell 凭空拿 12.45 成本算 profit → 幽灵超卖
+            for sell_price_db, sell_vol_db in sell_trades:
+                rs = sell_vol_db
                 i = 0
                 while rs > 0 and i < len(lots):
                     used = min(lots[i][0], rs)
@@ -742,6 +748,25 @@ class PaperTradingEngine:
                         lots.pop(i)
                     else:
                         i += 1
+
+            # 【P0 死防御】当前 sell 前先检查剩余可卖股数 (FIFO 重构后 lots 总量 = 真实可用持仓)
+            available_to_sell = sum(v for v, _ in lots)
+            if order.volume > available_to_sell:
+                # 拒绝超卖: 撤单状态回滚到 SUBMITTING, 解冻 pos.frozen
+                print(
+                    f"[ERR] 无法卖出 {order.symbol} x {order.volume}: "
+                    f"FIFO 可用 {available_to_sell} (同日多次卖出或回放重放所致)"
+                )
+                cursor.execute(
+                    'UPDATE orders SET status=?, updated_at=? WHERE orderid=?',
+                    (OrderStatus.SUBMITTING.value, datetime.now().isoformat(), order_id)
+                )
+                conn.commit()
+                conn.close()
+                if order.symbol in self.positions:
+                    self.positions[order.symbol].frozen -= order.volume
+                self._save_account()
+                return False
 
             # 当前卖出匹配 FIFO
             remaining_sell = order.volume

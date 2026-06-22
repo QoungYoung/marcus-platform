@@ -24,7 +24,7 @@ interface TaskInfo {
 
 interface TradeItem {
   id: number; trade_date: string; symbol: string; stock_name: string; direction: string;
-  price: number; volume: number; amount: number; commission: number;
+  price: number; avg_cost?: number; volume: number; amount: number; commission: number;
   profit: number; profit_pct: number; reason: string;
   phase_time?: string; signal_price?: number; actual_price?: number;
   slippage_pct?: number; stamp_tax?: number; transfer_fee?: number; net_profit?: number;
@@ -110,6 +110,44 @@ export default function BacktestPage() {
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  // ── 交易明细分页 + 搜索 ──
+  const [tradePage, setTradePage] = useState(1);
+  const [tradeTotal, setTradeTotal] = useState(0);
+  const [tradePageSize, setTradePageSize] = useState(20);
+  const [tradeDirection, setTradeDirection] = useState<string>('');
+  const [tradeKeyword, setTradeKeyword] = useState('');
+  const [tradeStartDate, setTradeStartDate] = useState('');
+  const [tradeEndDate, setTradeEndDate] = useState('');
+  const [tradeRows, setTradeRows] = useState<TradeItem[]>([]);
+  const [tradesLoading, setTradesLoading] = useState(false);
+  const totalPages = Math.max(1, Math.ceil(tradeTotal / tradePageSize));
+
+  const loadTrades = useCallback(async () => {
+    if (!selectedTaskId) return;
+    setTradesLoading(true);
+    try {
+      const res = await backtestApi.getTrades(selectedTaskId, {
+        page: tradePage,
+        page_size: tradePageSize,
+        direction: tradeDirection || undefined,
+        keyword: tradeKeyword || undefined,
+        start_date: tradeStartDate || undefined,
+        end_date: tradeEndDate || undefined,
+      });
+      setTradeRows((res.data as any).trades || []);
+      setTradeTotal((res.data as any).total || 0);
+    } catch (e) {
+      console.error('loadTrades failed', e);
+    } finally {
+      setTradesLoading(false);
+    }
+  }, [selectedTaskId, tradePage, tradePageSize, tradeDirection, tradeKeyword, tradeStartDate, tradeEndDate]);
+
+  // 切换筛选条件时回到第 1 页
+  useEffect(() => { setTradePage(1); }, [tradeDirection, tradeKeyword, tradeStartDate, tradeEndDate, tradePageSize]);
+  // 翻页 / 筛选变化时加载
+  useEffect(() => { loadTrades(); }, [loadTrades]);
+
   // ── 导出菜单项统一样式 ──
   const menuItemStyle: React.CSSProperties = {
     display: 'flex', alignItems: 'flex-start', gap: 10,
@@ -118,6 +156,36 @@ export default function BacktestPage() {
     color: 'var(--agent-text-primary)', cursor: 'pointer',
     textAlign: 'left', width: '100%', fontSize: 13,
     transition: 'background 0.15s',
+  };
+
+  // ── 分页控件样式 ──
+  const pBtnStyle: React.CSSProperties = {
+    background: 'var(--agent-bg-input)', color: 'var(--agent-text)',
+    border: '1px solid var(--color-border)', borderRadius: 4,
+    padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+  };
+
+  const renderPageNumbers = (cur: number, total: number, setPage: (p: number) => void, style: React.CSSProperties) => {
+    const btns: React.ReactNode[] = [];
+    const maxShow = 5;
+    let start = Math.max(1, cur - Math.floor(maxShow / 2));
+    let end = Math.min(total, start + maxShow - 1);
+    if (end - start < maxShow - 1) start = Math.max(1, end - maxShow + 1);
+    for (let i = start; i <= end; i++) {
+      btns.push(
+        <button
+          key={i}
+          onClick={() => setPage(i)}
+          style={{
+            ...style,
+            fontWeight: i === cur ? 700 : 400,
+            borderColor: i === cur ? 'var(--agent-accent)' : 'var(--color-border)',
+          }}
+          disabled={false}
+        >{i}</button>
+      );
+    }
+    return btns;
   };
 
   // ── Load task list ──
@@ -1113,8 +1181,74 @@ export default function BacktestPage() {
                   {/* Trade Log */}
                   {detail.trades.length > 0 && (
                     <div className="bt-panel">
-                      <div className="bt-panel-header">
-                        <div className="bt-panel-title"><ChevronRight size={14} /> 交易明细 ({detail.trades.length}笔)</div>
+                      <div className="bt-panel-header" style={{ flexWrap: 'wrap', gap: 8 }}>
+                        <div className="bt-panel-title"><ChevronRight size={14} /> 交易明细 ({tradeTotal || detail.trades.length}笔)</div>
+                        {/* 搜索栏 */}
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginLeft: 'auto' }}>
+                          {/* 方向筛选 */}
+                          <select
+                            value={tradeDirection}
+                            onChange={e => setTradeDirection(e.target.value)}
+                            style={{
+                              background: 'var(--agent-bg-input)', color: 'var(--agent-text)',
+                              border: '1px solid var(--color-border)', borderRadius: 6,
+                              padding: '5px 8px', fontSize: 12, outline: 'none',
+                            }}
+                          >
+                            <option value="">全部方向</option>
+                            <option value="buy">买入</option>
+                            <option value="sell">卖出</option>
+                          </select>
+                          {/* 关键词搜索 */}
+                          <input
+                            type="text"
+                            placeholder="代码/名称/理由"
+                            value={tradeKeyword}
+                            onChange={e => setTradeKeyword(e.target.value)}
+                            style={{
+                              background: 'var(--agent-bg-input)', color: 'var(--agent-text)',
+                              border: '1px solid var(--color-border)', borderRadius: 6,
+                              padding: '5px 10px', fontSize: 12, width: 130, outline: 'none',
+                            }}
+                          />
+                          {/* 日期范围 */}
+                          <input
+                            type="date"
+                            value={tradeStartDate}
+                            onChange={e => setTradeStartDate(e.target.value)}
+                            style={{
+                              background: 'var(--agent-bg-input)', color: 'var(--agent-text)',
+                              border: '1px solid var(--color-border)', borderRadius: 6,
+                              padding: '4px 6px', fontSize: 12, width: 110, outline: 'none',
+                            }}
+                          />
+                          <span style={{ color: 'var(--agent-text-muted)', fontSize: 12 }}>—</span>
+                          <input
+                            type="date"
+                            value={tradeEndDate}
+                            onChange={e => setTradeEndDate(e.target.value)}
+                            style={{
+                              background: 'var(--agent-bg-input)', color: 'var(--agent-text)',
+                              border: '1px solid var(--color-border)', borderRadius: 6,
+                              padding: '4px 6px', fontSize: 12, width: 110, outline: 'none',
+                            }}
+                          />
+                          {/* 每页条数 */}
+                          <select
+                            value={tradePageSize}
+                            onChange={e => setTradePageSize(Number(e.target.value))}
+                            style={{
+                              background: 'var(--agent-bg-input)', color: 'var(--agent-text)',
+                              border: '1px solid var(--color-border)', borderRadius: 6,
+                              padding: '5px 6px', fontSize: 12, outline: 'none',
+                            }}
+                          >
+                            <option value={10}>10条</option>
+                            <option value={20}>20条</option>
+                            <option value={50}>50条</option>
+                            <option value={100}>100条</option>
+                          </select>
+                        </div>
                       </div>
                       <div className="bt-table-wrap">
                         <table className="bt-table">
@@ -1125,6 +1259,7 @@ export default function BacktestPage() {
                               <th className="bt-align-left">名称</th>
                               <th>方向</th>
                               <th>价格</th>
+                              <th>成本</th>
                               <th>数量</th>
                               <th>金额</th>
                               <th>佣金</th>
@@ -1135,43 +1270,90 @@ export default function BacktestPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {detail.trades.slice(0, 100).map(t => {
-                              const hasProfit = t.direction === 'sell' && t.profit !== 0;
-                              const profitColor = t.profit > 0 ? '#2ecc71' : (t.profit < 0 ? '#e74c3c' : '#8a9bb5');
-                              const slipVal = (t.slippage_pct ?? 0);
-                              const slipColor = slipVal === 0 ? '#8a9bb5' : (t.direction === 'buy' ? (slipVal > 0.05 ? '#e67e22' : '#8a9bb5') : (slipVal < -0.05 ? '#e74c3c' : '#8a9bb5'));
-                              return (
-                                <tr key={t.id}>
-                                  <td className="bt-td-muted">{t.trade_date}</td>
-                                  <td className="bt-td-symbol">{t.symbol}</td>
-                                  <td className="bt-td-muted" style={{ maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {t.stock_name || '—'}
-                                  </td>
-                                  <td style={{ color: t.direction === 'buy' ? '#2ecc71' : '#e74c3c', fontWeight: 600, fontSize: 12 }}>
-                                    {t.direction === 'buy' ? '买入' : '卖出'}
-                                  </td>
-                                  <td className="bt-td-muted">{t.price.toFixed(2)}</td>
-                                  <td className="bt-td-muted">{t.volume.toLocaleString()}</td>
-                                  <td className="bt-td-muted">{fmtMoney(t.amount)}</td>
-                                  <td className="bt-td-muted">{t.commission.toFixed(2)}</td>
-                                  <td className="bt-td-muted" style={{ color: slipColor, fontWeight: slipVal !== 0 ? 600 : 400 }}>
-                                    {slipVal !== 0 ? `${slipVal > 0 ? '+' : ''}${slipVal.toFixed(2)}%` : '—'}
-                                  </td>
-                                  <td className="bt-td-muted" style={{ color: hasProfit ? profitColor : '#8a9bb5', fontWeight: hasProfit ? 600 : 400 }}>
-                                    {hasProfit ? `${t.profit > 0 ? '+' : ''}${fmtMoney(t.profit)}` : '—'}
-                                  </td>
-                                  <td className="bt-td-muted" style={{ color: hasProfit ? profitColor : '#8a9bb5', fontWeight: hasProfit ? 600 : 400 }}>
-                                    {hasProfit ? `${t.profit_pct > 0 ? '+' : ''}${t.profit_pct.toFixed(2)}%` : '—'}
-                                  </td>
-                                  <td className="bt-td-muted" style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    {t.reason}
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                            {tradesLoading ? (
+                              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 20, color: 'var(--agent-text-muted)' }}>加载中...</td></tr>
+                            ) : tradeRows.length === 0 ? (
+                              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 20, color: 'var(--agent-text-muted)' }}>无匹配记录</td></tr>
+                            ) : (
+                              tradeRows.map(t => {
+                                const hasProfit = t.direction === 'sell' && t.profit !== 0;
+                                const profitColor = t.profit > 0 ? '#2ecc71' : (t.profit < 0 ? '#e74c3c' : '#8a9bb5');
+                                const slipVal = (t.slippage_pct ?? 0);
+                                const slipColor = slipVal === 0 ? '#8a9bb5' : (t.direction === 'buy' ? (slipVal > 0.05 ? '#e67e22' : '#8a9bb5') : (slipVal < -0.05 ? '#e74c3c' : '#8a9bb5'));
+                                return (
+                                  <tr key={t.id}>
+                                    <td className="bt-td-muted">{t.trade_date}</td>
+                                    <td className="bt-td-symbol bt-align-left">{t.symbol}</td>
+                                    <td className="bt-td-muted bt-align-left" style={{ maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {t.stock_name || '—'}
+                                    </td>
+                                    <td style={{ color: t.direction === 'buy' ? '#2ecc71' : '#e74c3c', fontWeight: 600, fontSize: 12 }}>
+                                      {t.direction === 'buy' ? '买入' : '卖出'}
+                                    </td>
+                                    <td className="bt-td-muted">{t.price.toFixed(2)}</td>
+                                    <td className="bt-td-muted">
+                                      {t.direction === 'sell'
+                                        ? (t.avg_cost ?? (t.volume > 0 ? +(t.price - t.profit / t.volume).toFixed(2) : t.price)).toFixed(2)
+                                        : '—'}
+                                    </td>
+                                    <td className="bt-td-muted">{t.volume.toLocaleString()}</td>
+                                    <td className="bt-td-muted">{fmtMoney(t.amount)}</td>
+                                    <td className="bt-td-muted">{t.commission.toFixed(2)}</td>
+                                    <td className="bt-td-muted" style={{ color: slipColor, fontWeight: slipVal !== 0 ? 600 : 400 }}>
+                                      {slipVal !== 0 ? `${slipVal > 0 ? '+' : ''}${slipVal.toFixed(2)}%` : '—'}
+                                    </td>
+                                    <td className="bt-td-muted" style={{ color: hasProfit ? profitColor : '#8a9bb5', fontWeight: hasProfit ? 600 : 400 }}>
+                                      {hasProfit ? `${t.profit > 0 ? '+' : ''}${fmtMoney(t.profit)}` : '—'}
+                                    </td>
+                                    <td className="bt-td-muted" style={{ color: hasProfit ? profitColor : '#8a9bb5', fontWeight: hasProfit ? 600 : 400 }}>
+                                      {hasProfit ? `${t.profit_pct > 0 ? '+' : ''}${t.profit_pct.toFixed(2)}%` : '—'}
+                                    </td>
+                                    <td className="bt-td-muted bt-align-left"
+                                      title={t.reason || ''}
+                                      style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'default' }}>
+                                      {t.reason}
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
                           </tbody>
                         </table>
                       </div>
+                      {/* 分页控件 */}
+                      {tradeTotal > 0 && (
+                        <div style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          padding: '10px 16px', borderTop: '1px solid var(--color-border)',
+                          color: 'var(--agent-text-muted)', fontSize: 12,
+                        }}>
+                          <span>共 {tradeTotal} 条，第 {tradePage}/{totalPages} 页</span>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button
+                              disabled={tradePage <= 1}
+                              onClick={() => setTradePage(1)}
+                              style={{ ...pBtnStyle, opacity: tradePage <= 1 ? 0.4 : 1, cursor: tradePage <= 1 ? 'default' : 'pointer' }}
+                            >« 首页</button>
+                            <button
+                              disabled={tradePage <= 1}
+                              onClick={() => setTradePage(p => Math.max(1, p - 1))}
+                              style={{ ...pBtnStyle, opacity: tradePage <= 1 ? 0.4 : 1, cursor: tradePage <= 1 ? 'default' : 'pointer' }}
+                            >‹ 上页</button>
+                            {/* 页码按钮 */}
+                            {renderPageNumbers(tradePage, totalPages, setTradePage, pBtnStyle)}
+                            <button
+                              disabled={tradePage >= totalPages}
+                              onClick={() => setTradePage(p => Math.min(totalPages, p + 1))}
+                              style={{ ...pBtnStyle, opacity: tradePage >= totalPages ? 0.4 : 1, cursor: tradePage >= totalPages ? 'default' : 'pointer' }}
+                            >下页 ›</button>
+                            <button
+                              disabled={tradePage >= totalPages}
+                              onClick={() => setTradePage(totalPages)}
+                              style={{ ...pBtnStyle, opacity: tradePage >= totalPages ? 0.4 : 1, cursor: tradePage >= totalPages ? 'default' : 'pointer' }}
+                            >末页 »</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </>

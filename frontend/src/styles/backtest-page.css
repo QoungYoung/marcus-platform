@@ -498,6 +498,10 @@
   text-align: left;
 }
 
+.bt-table tbody td.bt-align-left {
+  text-align: left;
+}
+
 .bt-table tbody tr:hover {
   background: rgba(255, 255, 255, 0.02);
 }
