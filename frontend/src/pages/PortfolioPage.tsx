@@ -463,17 +463,17 @@ export default function PortfolioPage() {
                     return (
                       <tr key={p.symbol} className={isTriggered ? 'sl-row-danger' : isCritical ? 'sl-row-critical' : ''}>
                         <td className="mono bold">{p.symbol}</td>
-                        <td className="num mono">¥{p.current_price.toFixed(2)}</td>
-                        <td className={`num ${p.float_pnl_pct >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                        <td className="num mono right">¥{p.current_price.toFixed(2)}</td>
+                        <td className={`num right ${p.float_pnl_pct >= 0 ? 'pnl-up' : 'pnl-down'}`}>
                           {p.float_pnl_pct >= 0 ? '+' : ''}{p.float_pnl_pct.toFixed(2)}%
                         </td>
-                        <td className="num mono">
+                        <td className="num mono right">
                           {p.nearest_trigger?.distance_pct != null
                             ? `${p.nearest_trigger.distance_pct >= 0 ? '+' : ''}${p.nearest_trigger.distance_pct.toFixed(2)}%`
                             : '-'}
                         </td>
-                        <td className="num dim">{ruleLabel}</td>
-                        <td className="num">
+                        <td className="num dim right">{ruleLabel}</td>
+                        <td className="num right">
                           <span className={`cp-sl-badge ${danger}`}>
                             {danger === 'triggered' ? '🔴触发' : danger === 'critical' ? '🟠危急' : danger === 'warning' ? '🟡警告' : danger === 'caution' ? '⚪关注' : '🟢安全'}
                           </span>
@@ -511,7 +511,7 @@ export default function PortfolioPage() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke={G} />
                   <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(equityCurve.length / 6) - 1)} />
-                  <YAxis stroke={A} fontSize={10} tickLine={false} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
+                  <YAxis stroke={A} fontSize={10} tickLine={false} domain={['auto', 'auto']} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
                   <Tooltip content={<ETip />} />
                   <Area type="monotone" dataKey="value" name="账户权益" stroke={GOLD} strokeWidth={2} fill="url(#eqGrad)" dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }} />
                   {realEquity.length === 0 && (

@@ -791,8 +791,10 @@ class MarcusVNPyExecutor:
             try:
                 import sys, os
                 from pathlib import Path as _P
-                xq_dir = _P(__file__).parent.parent / "xueqiu-data-query"
-                sys.path.insert(0, str(xq_dir))
+                # 雪球引擎在 workspace/core 下（与 workspace_detector 的 XUEQIU_DIR 一致）
+                xq_dir = _P(__file__).parent.parent.parent.parent.parent / "core"
+                if str(xq_dir) not in sys.path:
+                    sys.path.insert(0, str(xq_dir))
                 from xueqiu_engine import XueqiuEngine
                 xq_config = str(xq_dir / "config.json")
                 if os.path.exists(xq_config):
