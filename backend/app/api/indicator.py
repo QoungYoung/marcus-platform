@@ -1772,3 +1772,175 @@ async def check_entry_filters(req: EntryCheckRequest):
         all_layers_pass=all_layers_pass,
         summary=summary,
     )
+
+
+# ──────────────────────── 主营业务构成 ────────────────────────
+
+@router.get("/fina-mainbz/{symbol}")
+async def get_fina_mainbz(
+    symbol: str,
+    period: Optional[str] = Query(None, description="报告期 YYYYMMDD，如 20231231，默认最近报告期"),
+    limit: int = Query(10, ge=1, le=50, description="返回条数上限"),
+):
+    """
+    获取个股主营业务构成（产品/行业/地区维度收入占比）。
+
+    数据源: Tushare fina_mainbz 接口。
+
+    返回字段:
+    - ts_code: 股票代码
+    - end_date: 报告期
+    - bz_item: 业务项（产品/行业/地区分类）
+    - bz_sales: 营业收入（元）
+    - bz_profit: 营业利润（元）
+    - bz_cost: 营业成本（元）
+    - curr_type: 币种
+    - type: 类型（P=产品/I=行业/R=地区）
+
+    参数示例:
+    - GET /indicator/fina-mainbz/000001.SZ → 平安银行最主营业务构成
+    - GET /indicator/fina-mainbz/SH600519?limit=20 → 贵州茅台主营业务构成（最多20条）
+    """
+    ts_code = _normalize_to_ts_code(symbol)
+
+    try:
+        settings = get_settings()
+        token = settings.get_tushare_token()
+
+        import tushare as ts
+        pro = ts.pro_api(token)
+
+        kw = {"ts_code": ts_code, "limit": limit}
+        if period:
+            kw["end_date"] = period
+
+        df = pro.fina_mainbz(**kw)
+
+        if df is None or df.empty:
+            return {
+                "symbol": ts_code,
+                "records": [],
+                "count": 0,
+                "message": f"{ts_code} 暂无主营业务构成数据",
+            }
+
+        # 按报告期降序，取最新一期
+        df = df.sort_values("end_date", ascending=False)
+        latest_period = str(df.iloc[0]["end_date"]) if len(df) > 0 else ""
+
+        records = []
+        for _, row in df.iterrows():
+            records.append({
+                "end_date": str(row.get("end_date", "")),
+                "bz_item": str(row.get("bz_item", "")),
+                "bz_sales": float(row.get("bz_sales", 0) or 0),
+                "bz_profit": float(row.get("bz_profit", 0) or 0),
+                "bz_cost": float(row.get("bz_cost", 0) or 0),
+                "curr_type": str(row.get("curr_type", "")),
+                "type": str(row.get("type", "")),
+            })
+
+        return {
+            "symbol": ts_code,
+            "report_period": latest_period,
+            "records": records,
+            "count": len(records),
+            "data_source": "Tushare(fina_mainbz)",
+        }
+
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Tushare 配置错误: {str(e)}")
+    except ImportError:
+        raise HTTPException(status_code=503, detail="tushare 库未安装，请 pip install tushare")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取主营业务构成失败: {str(e)}")
+
+
+# ──────────────────────── 业绩快报 ────────────────────────
+
+@router.get("/express/{symbol}")
+async def get_express(
+    symbol: str,
+    period: Optional[str] = Query(None, description="报告期 YYYYMMDD，如 20231231，默认最近报告期"),
+    limit: int = Query(5, ge=1, le=50, description="返回条数上限"),
+):
+    """
+    获取个股业绩快报数据。
+
+    数据源: Tushare express 接口。
+
+    返回字段:
+    - ts_code: 股票代码
+    - end_date: 报告期
+    - revenue: 营业收入（元）
+    - operate_profit: 营业利润（元）
+    - total_profit: 利润总额（元）
+    - n_income: 净利润（元）
+    - basic_eps: 每股收益
+    - weighted_roe: 净资产收益率(%)
+    - yoy_revenue: 营收同比增长(%)
+    - yoy_operate_profit: 营业利润同比增长(%)
+    - yoy_n_income: 净利润同比增长(%)
+    - total_assets: 总资产（元）
+    - announce_date: 公告日期
+
+    参数示例:
+    - GET /indicator/express/000001.SZ → 平安银行最新业绩快报
+    - GET /indicator/express/SH600519?limit=5 → 贵州茅台最近5期业绩快报
+    """
+    ts_code = _normalize_to_ts_code(symbol)
+
+    try:
+        settings = get_settings()
+        token = settings.get_tushare_token()
+
+        import tushare as ts
+        pro = ts.pro_api(token)
+
+        kw = {"ts_code": ts_code, "limit": limit + 5}  # 多取一些用于过滤空值
+        if period:
+            kw["end_date"] = period
+
+        df = pro.express(**kw)
+
+        if df is None or df.empty:
+            return {
+                "symbol": ts_code,
+                "records": [],
+                "count": 0,
+                "message": f"{ts_code} 暂无业绩快报数据",
+            }
+
+        df = df.sort_values("end_date", ascending=False)
+
+        records = []
+        for _, row in df.iterrows():
+            rec = {
+                "end_date": str(row.get("end_date", "")),
+                "revenue": float(row.get("revenue", 0) or 0),
+                "operate_profit": float(row.get("operate_profit", 0) or 0),
+                "total_profit": float(row.get("total_profit", 0) or 0),
+                "n_income": float(row.get("n_income", 0) or 0),
+                "basic_eps": float(row.get("basic_eps", 0) or 0),
+                "weighted_roe": float(row.get("weighted_roe", 0) or 0),
+                "yoy_revenue": float(row.get("yoy_revenue", 0) or 0),
+                "yoy_operate_profit": float(row.get("yoy_operate_profit", 0) or 0),
+                "yoy_n_income": float(row.get("yoy_n_income", 0) or 0),
+                "total_assets": float(row.get("total_assets", 0) or 0),
+                "announce_date": str(row.get("announce_date", "")),
+            }
+            records.append(rec)
+
+        return {
+            "symbol": ts_code,
+            "records": records[:limit],
+            "count": min(len(records), limit),
+            "data_source": "Tushare(express)",
+        }
+
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Tushare 配置错误: {str(e)}")
+    except ImportError:
+        raise HTTPException(status_code=503, detail="tushare 库未安装，请 pip install tushare")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取业绩快报失败: {str(e)}")

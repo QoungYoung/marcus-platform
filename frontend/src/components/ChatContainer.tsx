@@ -895,6 +895,100 @@ const getTradeHistoryTool = {
   },
 };
 
+const getFinaMainbzTool = {
+  name: 'get_fina_mainbz',
+  label: '主营业务构成',
+  description: '获取个股主营业务构成（产品/行业/地区维度的收入与利润占比）。数据源：Tushare fina_mainbz。用于分析公司核心收入来源、产业链定位',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    period: Type.Optional(Type.String({ description: '报告期 YYYYMMDD，如 20231231，默认最新' })),
+    limit: Type.Optional(Type.Number({ description: '返回条数，默认10，最大50' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; period?: string; limit?: number }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    if (params.period) query.set('period', params.period);
+    if (params.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    const res = await fetch(`${MARCUS_API}/indicator/fina-mainbz/${params.symbol}${qs ? '?' + qs : ''}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const records = data.records || [];
+    if (records.length === 0) {
+      return { content: [{ type: 'text', text: data.message || `${data.symbol}: 暂无主营业务构成数据` }], details: data };
+    }
+    const period = data.report_period || '--';
+    const totalSales = records.reduce((sum: number, r: any) => sum + (r.bz_sales || 0), 0);
+    const lines: string[] = [];
+    lines.push(`🏢 ${data.symbol} 主营业务构成 (报告期: ${period})`);
+    lines.push(`数据源: ${data.data_source}`, '');
+    const typeLabels: Record<string, string> = { P: '📦 产品', I: '🏭 行业', R: '🌍 地区' };
+    const grouped: Record<string, any[]> = {};
+    for (const r of records) {
+      const t = r.type || '';
+      if (!grouped[t]) grouped[t] = [];
+      grouped[t].push(r);
+    }
+    for (const [t, items] of Object.entries(grouped)) {
+      const label = typeLabels[t] || `分类${t}`;
+      lines.push(`── ${label} ──`);
+      for (const item of items) {
+        const pct = totalSales > 0 ? ((item.bz_sales / totalSales) * 100).toFixed(1) : '--';
+        const salesYi = (item.bz_sales / 1e8).toFixed(2);
+        const profitYi = (item.bz_profit / 1e8).toFixed(2);
+        const profitSign = (item.bz_profit || 0) >= 0 ? '+' : '';
+        lines.push(`  ${item.bz_item}: 营收 ${salesYi}亿 (${pct}%) | 利润 ${profitSign}${profitYi}亿`);
+      }
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+const getExpressTool = {
+  name: 'get_express',
+  label: '业绩快报',
+  description: '获取个股业绩快报数据（营业收入、利润、每股收益、净资产收益率及同比增长率）。数据源：Tushare express。用于快速了解公司经营业绩变化趋势，判断基本面强弱',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    period: Type.Optional(Type.String({ description: '报告期 YYYYMMDD，如 20231231，默认最近报告期' })),
+    limit: Type.Optional(Type.Number({ description: '返回期数，默认5，最大50' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; period?: string; limit?: number }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    if (params.period) query.set('period', params.period);
+    if (params.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    const res = await fetch(`${MARCUS_API}/indicator/express/${params.symbol}${qs ? '?' + qs : ''}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const records = data.records || [];
+    if (records.length === 0) {
+      return { content: [{ type: 'text', text: data.message || `${data.symbol}: 暂无业绩快报数据` }], details: data };
+    }
+    const lines: string[] = [];
+    lines.push(`📋 ${data.symbol} 业绩快报 (${records.length}期)`);
+    lines.push(`数据源: ${data.data_source}`, '');
+    lines.push('报告期    | 营收(亿) | 营收YoY% | 净利润(亿) | 净利YoY% | EPS  | ROE% | 营业利润(亿) | 营业利润YoY%');
+    lines.push('-'.repeat(100));
+    for (const r of records) {
+      const revYi = (r.revenue / 1e8).toFixed(2);
+      const nIncomeYi = (r.n_income / 1e8).toFixed(2);
+      const opYi = (r.operate_profit / 1e8).toFixed(2);
+      const yoyRevSign = (r.yoy_revenue || 0) >= 0 ? '+' : '';
+      const yoyNiSign = (r.yoy_n_income || 0) >= 0 ? '+' : '';
+      const yoyOpSign = (r.yoy_operate_profit || 0) >= 0 ? '+' : '';
+      lines.push(
+        `${r.end_date} | ${revYi.padStart(7)} | ${yoyRevSign}${(r.yoy_revenue||0).toFixed(1).padStart(5)}% | ` +
+        `${nIncomeYi.padStart(9)} | ${yoyNiSign}${(r.yoy_n_income||0).toFixed(1).padStart(5)}% | ` +
+        `${(r.basic_eps||0).toFixed(2).padStart(4)} | ${(r.weighted_roe||0).toFixed(1).padStart(4)} | ` +
+        `${opYi.padStart(10)} | ${yoyOpSign}${(r.yoy_operate_profit||0).toFixed(1).padStart(5)}%`
+      );
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 // Convert tools to AgentTool format
 function createTool(toolDef: any): AgentTool {
   return {
@@ -1115,6 +1209,8 @@ const chatTools: AgentTool[] = [
   createTool(getFibonacciLevelsTool),
   createTool(getDailyChannelTool),
   createTool(getTradeAdviceTool),
+  createTool(getFinaMainbzTool),
+  createTool(getExpressTool),
   createTool(readDbTableTool),
   createTool(getDbSchemaTool),
 ];
@@ -1146,6 +1242,7 @@ const COLLAPSIBLE_TOOLS = [
   'get_concept_fund_flow', 'get_industry_fund_flow', 'get_market_moneyflow', 'get_concept_mapping',
   'get_etf_quote', 'get_etf_kline', 'get_daily_kline', 'get_moneyflow',
   'get_technical', 'get_realtime_indicators', 'get_fibonacci_levels', 'get_daily_channel', 'get_trade_advice',
+  'get_fina_mainbz', 'get_express',
   'read_db_table', 'get_db_schema',
   'get_latest_scan_report', 'get_pi_analysis_history', 'get_trade_history',
 ];
@@ -1165,6 +1262,8 @@ const TOOL_LABELS: Record<string, string> = {
   get_moneyflow: '查看资金流向',
   get_technical: '查询技术指标',
   get_realtime_indicators: '实时技术指标',
+  get_fina_mainbz: '主营业务构成',
+  get_express: '业绩快报',
   read_db_table: '读取数据库表',
   get_db_schema: '获取数据库结构',
   get_fibonacci_levels: '斐波那契回撤',

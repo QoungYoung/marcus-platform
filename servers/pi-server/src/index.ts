@@ -155,6 +155,8 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 - **get_trade_advice** — 综合操作建议（持仓/观察模式完整决策树）
 - **check_entry_filters** — 入场三层过滤（技术面/主力行为/超买判断/买入确认规则）[建仓前必调]
 - **calc_position** — 仓位计算（建议股数/止损价/铁律二/风险验证）[建仓前必调]
+- **get_fina_mainbz** — 主营业务构成（产品/行业/地区收入利润占比）[静态]
+- **get_express** — 业绩快报（营收/利润/EPS/ROE/同比增长）[静态]
 - **read_db_table / get_db_schema** — 数据库查询 [静态]
 
 ### 技术指标数据来源说明
@@ -236,6 +238,8 @@ const TRADE_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家（自
 | **place_order** | 执行买入/卖出 | 确认后下单 | — |
 | **get_orders** | 查看活跃订单 | 避免重复下单 | — |
 | **cancel_order** | 撤销未成交订单 | 价格偏离时撤单 | — |
+| **get_fina_mainbz** | 主营业务构成（产品/行业/地区收入利润占比） | 产业链定位、个股基本面判断 | 静态 |
+| **get_express** | 业绩快报（营收/利润/EPS/ROE同比增长） | 经营业绩趋势判断、基本面强弱 | 静态 |
 
 ### 技术指标工具使用规则
 
