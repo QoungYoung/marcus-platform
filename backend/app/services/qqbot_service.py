@@ -48,7 +48,7 @@ class QQBotService:
         # 用户会话映射：openid → session_id
         self.user_sessions: Dict[str, str] = {}
         # 简单的命令前缀
-        self.command_prefix = "!"
+        self.command_prefix = "/"
 
     def set_pi_server_url(self, url: str):
         """设置 Pi Server URL"""
@@ -106,7 +106,7 @@ class QQBotService:
             print(f"[QQBotService] session_id={session_id} (user={openid}), cached={session_id in self.user_sessions}", file=sys.stderr)
 
             # 特殊命令处理
-            if content.strip() == f"{self.command_prefix}reset":
+            if content.strip() == f"{self.command_prefix}new":
                 await self._reset_session(openid, group_openid)
                 return
 
@@ -225,7 +225,7 @@ class QQBotService:
             f"* Command prefix: {self.command_prefix}",
             "",
             "Commands:",
-            f"  {self.command_prefix}reset  - Reset session",
+            f"  {self.command_prefix}new    - 新对话",
             f"  {self.command_prefix}status - Show status",
             f"  Just type to chat with AI",
         ]
