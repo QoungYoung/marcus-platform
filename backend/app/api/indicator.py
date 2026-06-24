@@ -44,6 +44,18 @@ router = APIRouter(prefix="/indicator", tags=["Technical Indicators"])
 K_CONSTANT = 0.98848
 
 
+def _safe_float(v, default: float = 0.0) -> float:
+    """将值转为安全的 float，NaN/Inf 统一替换为 default 以确保 JSON 序列化兼容。"""
+    import math
+    try:
+        f = float(v) if v is not None and v != '' else default
+    except (ValueError, TypeError):
+        return default
+    if math.isnan(f) or math.isinf(f):
+        return default
+    return f
+
+
 def _normalize_to_ts_code(symbol: str) -> str:
     """将各种格式的股票代码转换为 Tushare ts_code 格式"""
     symbol = symbol.strip().upper()
@@ -1831,13 +1843,13 @@ async def get_fina_mainbz(
         records = []
         for _, row in df.iterrows():
             records.append({
-                "end_date": str(row.get("end_date", "")),
-                "bz_item": str(row.get("bz_item", "")),
-                "bz_sales": float(row.get("bz_sales", 0) or 0),
-                "bz_profit": float(row.get("bz_profit", 0) or 0),
-                "bz_cost": float(row.get("bz_cost", 0) or 0),
-                "curr_type": str(row.get("curr_type", "")),
-                "type": str(row.get("type", "")),
+                "end_date": str(row.get("end_date", "") or ""),
+                "bz_item": str(row.get("bz_item", "") or ""),
+                "bz_sales": _safe_float(row.get("bz_sales")),
+                "bz_profit": _safe_float(row.get("bz_profit")),
+                "bz_cost": _safe_float(row.get("bz_cost")),
+                "curr_type": str(row.get("curr_type", "") or ""),
+                "type": str(row.get("type", "") or ""),
             })
 
         return {
@@ -1916,18 +1928,18 @@ async def get_express(
         records = []
         for _, row in df.iterrows():
             rec = {
-                "end_date": str(row.get("end_date", "")),
-                "revenue": float(row.get("revenue", 0) or 0),
-                "operate_profit": float(row.get("operate_profit", 0) or 0),
-                "total_profit": float(row.get("total_profit", 0) or 0),
-                "n_income": float(row.get("n_income", 0) or 0),
-                "basic_eps": float(row.get("basic_eps", 0) or 0),
-                "weighted_roe": float(row.get("weighted_roe", 0) or 0),
-                "yoy_revenue": float(row.get("yoy_revenue", 0) or 0),
-                "yoy_operate_profit": float(row.get("yoy_operate_profit", 0) or 0),
-                "yoy_n_income": float(row.get("yoy_n_income", 0) or 0),
-                "total_assets": float(row.get("total_assets", 0) or 0),
-                "announce_date": str(row.get("announce_date", "")),
+                "end_date": str(row.get("end_date", "") or ""),
+                "revenue": _safe_float(row.get("revenue")),
+                "operate_profit": _safe_float(row.get("operate_profit")),
+                "total_profit": _safe_float(row.get("total_profit")),
+                "n_income": _safe_float(row.get("n_income")),
+                "basic_eps": _safe_float(row.get("basic_eps")),
+                "weighted_roe": _safe_float(row.get("weighted_roe")),
+                "yoy_revenue": _safe_float(row.get("yoy_revenue")),
+                "yoy_operate_profit": _safe_float(row.get("yoy_operate_profit")),
+                "yoy_n_income": _safe_float(row.get("yoy_n_income")),
+                "total_assets": _safe_float(row.get("total_assets")),
+                "announce_date": str(row.get("announce_date", "") or ""),
             }
             records.append(rec)
 
