@@ -107,11 +107,11 @@ class QQBotService:
 
             # 特殊命令处理
             if content.strip() == f"{self.command_prefix}reset":
-                await self._reset_session(openid)
+                await self._reset_session(openid, group_openid)
                 return
 
             if content.strip() == f"{self.command_prefix}status":
-                await self._send_status(openid)
+                await self._send_status(openid, group_openid)
                 return
 
             # 转发给 Pi Server
@@ -186,24 +186,37 @@ class QQBotService:
         except Exception as e:
             print(f"[QQBotService] Send failed: {e}", file=sys.stderr)
 
-    async def _reset_session(self, openid: str):
-        """重置用户会话"""
-        session_id = self.user_sessions.get(openid, openid)
+    async def _reset_session(self, openid: str, group_openid: str = ""):
+        """重置用户会话（群聊时使用 group_openid 作为会话 key）"""
+        # 群聊：会话 key 是 group_openid；私聊：会话 key 是 openid
+        session_key = group_openid if group_openid else openid
+        session_id = self.user_sessions.get(session_key, session_key)
         import aiohttp
+        reset_url = self.pi_server_url.replace('/chat', '/reset')
+        print(f"[QQBotService] 重置会话: session_key={session_key}, session_id={session_id}, reset_url={reset_url}", file=sys.stderr)
         try:
             async with aiohttp.ClientSession() as session:
-                await session.post(
-                    self.pi_server_url.replace('/chat', '/reset'),
+                async with session.post(
+                    reset_url,
                     json={"session_id": session_id},
                     timeout=aiohttp.ClientTimeout(total=5),
-                )
-            self.user_sessions[openid] = openid
-            await self._send_text(openid, "会话已重置，让我们重新开始吧！")
+                ) as resp:
+                    resp_body = await resp.text()
+                    print(f"[QQBotService] Pi Server 响应: status={resp.status}, body={resp_body}", file=sys.stderr)
+                    if resp.status != 200:
+                        raise Exception(f"Pi Server 返回 {resp.status}: {resp_body}")
+            # 清除本地用户会话缓存，重置为初始值
+            if session_key in self.user_sessions:
+                del self.user_sessions[session_key]
+            reply_openid = group_openid if group_openid else openid
+            await self._send_text(reply_openid, "会话已重置，让我们重新开始吧！")
         except Exception as e:
+            print(f"[QQBotService] 重置会话失败: {e}", file=sys.stderr)
             await self._send_text(openid, f"重置失败: {e}")
 
-    async def _send_status(self, openid: str):
+    async def _send_status(self, openid: str, group_openid: str = ""):
         """发送当前状态"""
+        reply_openid = group_openid if group_openid else openid
         session_count = len(self.user_sessions)
         status_lines = [
             "Marcus QQ Bot Status",
@@ -216,7 +229,7 @@ class QQBotService:
             f"  {self.command_prefix}status - Show status",
             f"  Just type to chat with AI",
         ]
-        await self._send_text(openid, '\n'.join(status_lines))
+        await self._send_text(reply_openid, '\n'.join(status_lines))
 
     def _send_to_qq(self, openid: str, content: str):
         """发送 QQ 消息（同步回退，供非异步调用者使用）"""

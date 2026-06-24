@@ -124,12 +124,21 @@ function loadSession(sessionId: string): any[] {
 }
 
 function deleteSession(sessionId: string) {
+  const file = resolve(SESSIONS_DIR, `${sessionId.replace(/[<>:"/\\|?*]/g, '_')}.json`);
   try {
-    const file = resolve(SESSIONS_DIR, `${sessionId.replace(/[<>:"/\\|?*]/g, '_')}.json`);
+    // 先尝试删除文件
     if (existsSync(file)) {
       require('fs').unlinkSync(file);
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // 删除失败（如 Docker 权限问题），回退到覆盖空内容
+    console.warn(`[PiServer] 删除会话文件失败 [${sessionId.slice(-16)}]: ${e}，尝试覆盖为空`);
+    try {
+      writeFileSync(file, JSON.stringify([], null, 2), 'utf-8');
+    } catch (e2) {
+      console.error(`[PiServer] 覆盖会话文件也失败 [${sessionId.slice(-16)}]: ${e2}`);
+    }
+  }
 }
 
 // ===== 聊天模式 System Prompt（QQ 聊天 / 手动查询，只读） =====
