@@ -112,6 +112,8 @@ class PositionTierMonitor:
         self._last_eval: Dict[str, float] = {}
         # 单日单票最大加仓次数
         self.MAX_ADDS_PER_DAY = 3
+        # 趋势强度缓存 {cache_key: (timestamp, ...)}（板块资金5分钟缓存）
+        self._trend_cache: Dict[str, tuple] = {}
 
         # 加载持久化的层级状态
         self._load_tier_states()
@@ -329,12 +331,13 @@ class PositionTierMonitor:
             return GateResult(allowed=False, checks=checks)
         checks.append(('PASSED', f'今日加仓 {daily_adds}/{self.MAX_ADDS_PER_DAY}'))
 
-        # ── 门控 6：趋势确认（MA5/MA20） ──
-        trend_ok, trend_reason = self._check_trend_confirmation(symbol)
-        if not trend_ok:
-            checks.append(('BLOCKED', trend_reason))
+        # ── 门控 6：趋势强度过滤（4项检查） ──
+        trend = self.check_trend_strength(symbol)
+        if not trend['passed']:
+            failed_desc = ', '.join(trend['failed_items'])
+            checks.append(('BLOCKED', f'趋势强度未通过: {failed_desc}'))
             return GateResult(allowed=False, checks=checks)
-        checks.append(('PASSED', trend_reason))
+        checks.append(('PASSED', f'趋势强度通过（MA5斜率/量比/板块资金/多头排列）'))
 
         # ── 全部通过 ──
         checks.append(('PASSED', '全部门控通过'))
@@ -425,17 +428,34 @@ class PositionTierMonitor:
             logger.debug(f"[TierMonitor] 保护线检查异常 {symbol}: {e}")
             return False, '保护线检查跳过'
 
-    def _check_trend_confirmation(self, symbol: str) -> tuple:
+    def check_trend_strength(self, symbol: str) -> dict:
         """
-        趋势确认检查（MA5 > MA20 + 量比 > 0.8）。
-        
+        趋势强度过滤 — 区分「噪声浮盈」和「趋势浮盈」。
+
+        四项检查全部通过才算趋势确认：
+          1. MA5 斜率 > 0（趋势向上）
+          2. 量比 > 0.8（非缩量下跌）
+          3. 所属板块主力净流入 > 0（板块有资金支持）
+          4. MA5 > MA20（多头排列）
+
         Returns:
-            (ok: bool, reason: str)
+            {
+                'passed': bool,          # 全部通过？
+                'failed_items': [str],   # 未通过的项
+                'checks': {              # 各项详情
+                    'ma5_slope': {'passed', 'value', 'threshold', 'detail'},
+                    'volume_ratio': {'passed', 'value', 'threshold'},
+                    'sector_flow': {'passed', 'value', 'threshold', 'detail'},
+                    'ma_align': {'passed', 'value', 'threshold'},
+                }
+            }
         """
+        checks = {}
         try:
             from app.api.indicator import _normalize_to_ts_code
             from app.config import get_settings
             import tushare as ts
+            import urllib.request, ssl, json as _json
 
             settings = get_settings()
             token = settings.get_tushare_token()
@@ -448,36 +468,172 @@ class PositionTierMonitor:
             df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=30)
 
             if df is None or df.empty or len(df) < 5:
-                return True, '趋势数据不足，跳过确认'
+                checks['ma5_slope'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0', 'detail': '数据不足'}
+                checks['volume_ratio'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0.8', 'detail': '数据不足'}
+                checks['sector_flow'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0', 'detail': '数据不足'}
+                checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': '数据不足'}
+                failed = list(checks.keys())
+                return {'passed': False, 'failed_items': failed, 'checks': checks}
 
             df = df.sort_values("trade_date", ascending=True)
-
-            # 计算 MA5 和 MA20
             closes = df['close'].values
-            ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
-            ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
 
-            if ma5 <= 0 or ma20 <= 0:
-                return True, 'MA计算失败，跳过确认'
+            # ── 条件 1：MA5 斜率 > 0 ──
+            if len(closes) >= 10:
+                ma5_now = float(sum(closes[-5:]) / 5)
+                ma5_prev = float(sum(closes[-10:-5]) / 5)
+                if ma5_prev > 0:
+                    ma5_slope = (ma5_now - ma5_prev) / ma5_prev
+                    checks['ma5_slope'] = {
+                        'passed': ma5_slope > 0,
+                        'value': f'{ma5_slope:.2%}',
+                        'threshold': '> 0',
+                        'detail': f'MA5 {ma5_now:.2f} vs 前5日MA5 {ma5_prev:.2f}'
+                    }
+                else:
+                    checks['ma5_slope'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0', 'detail': 'MA5计算异常'}
+            else:
+                ma5_now = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
+                checks['ma5_slope'] = {
+                    'passed': False, 'value': 'N/A', 'threshold': '> 0',
+                    'detail': f'数据不足(需≥10条,当前{len(closes)}条)'
+                }
 
-            if ma5 <= ma20:
-                return False, f'趋势未确认：MA5({ma5:.2f}) ≤ MA20({ma20:.2f})'
-
-            # 量比检查（可选，不做硬拦截）
+            # ── 条件 2：量比 > 0.8 ──
             try:
                 last_vol = float(df['vol'].values[-1])
                 recent_avg_vol = float(sum(df['vol'].values[-6:-1]) / 5) if len(df) >= 6 else last_vol
-                vol_ratio = last_vol / recent_avg_vol if recent_avg_vol > 0 else 1.0
-                if vol_ratio < 0.5:
-                    return False, f'量比过低：{vol_ratio:.1f} < 0.5'
+                vol_ratio = last_vol / recent_avg_vol if recent_avg_vol > 0 else 0
+                checks['volume_ratio'] = {
+                    'passed': vol_ratio > 0.8,
+                    'value': f'{vol_ratio:.2f}',
+                    'threshold': '> 0.8'
+                }
+            except Exception:
+                checks['volume_ratio'] = {'passed': True, 'value': 'N/A', 'threshold': '> 0.8', 'detail': '计算跳过'}
+
+            # ── 条件 3：板块资金净流入 > 0（5分钟缓存） ──
+            sector_net = 0
+            sector_name = ''
+            try:
+                cache_key = f'concept_flow_{symbol}'
+                cached = self._trend_cache.get(cache_key)
+                if cached:
+                    ts_cached, sector_net, sector_name = cached
+                    if time.time() - ts_cached < 300:  # 5分钟内缓存
+                        pass  # 使用缓存值
+                    else:
+                        sector_net, sector_name = self._fetch_sector_flow(symbol)
+                        self._trend_cache[cache_key] = (time.time(), sector_net, sector_name)
+                else:
+                    sector_net, sector_name = self._fetch_sector_flow(symbol)
+                    self._trend_cache[cache_key] = (time.time(), sector_net, sector_name)
             except Exception:
                 pass
 
-            return True, f'MA5({ma5:.2f}) > MA20({ma20:.2f}) ✅'
+            checks['sector_flow'] = {
+                'passed': sector_net > 0,
+                'value': f'{sector_net / 1e8:.2f}亿',
+                'threshold': '> 0',
+                'detail': f'所属{sector_name}板块' if sector_name else '板块信息获取失败'
+            }
+
+            # ── 条件 4：MA5 > MA20（多头排列） ──
+            ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
+            ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
+            if ma5 > 0 and ma20 > 0:
+                checks['ma_align'] = {
+                    'passed': ma5 > ma20,
+                    'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
+                    'threshold': 'MA5 > MA20'
+                }
+            else:
+                checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': 'MA计算异常'}
+
+            # ── 条件 5：主力资金流向（当日主力 > 0，5分钟缓存） ──
+            main_net_today = 0.0
+            try:
+                cache_key = f'moneyflow_{symbol}'
+                cached = self._trend_cache.get(cache_key)
+                if cached:
+                    ts_cached, main_net_today = cached
+                    if time.time() - ts_cached < 300:
+                        pass
+                    else:
+                        main_net_today = self._fetch_moneyflow_today(symbol)
+                        self._trend_cache[cache_key] = (time.time(), main_net_today)
+                else:
+                    main_net_today = self._fetch_moneyflow_today(symbol)
+                    self._trend_cache[cache_key] = (time.time(), main_net_today)
+            except Exception:
+                pass
+
+            checks['moneyflow'] = {
+                'passed': main_net_today > 0,
+                'value': f'{main_net_today / 1e8:.2f}亿' if main_net_today != 0 else '0',
+                'threshold': '> 0',
+                'detail': f'当日主力净流入' + ('' if main_net_today > 0 else '（主力流出中）')
+            }
+
+            # ── 综合判定 ──
+            failed_items = [k for k, v in checks.items() if not v['passed']]
+            all_passed = len(failed_items) == 0
+
+            return {'passed': all_passed, 'failed_items': failed_items, 'checks': checks}
 
         except Exception as e:
-            logger.debug(f"[TierMonitor] 趋势确认异常 {symbol}: {e}")
-            return True, f'趋势检查异常-放行: {e}'
+            logger.debug(f"[TierMonitor] 趋势强度检查异常 {symbol}: {e}")
+            failed = list(checks.keys()) if checks else ['ma5_slope', 'volume_ratio', 'sector_flow', 'ma_align']
+            return {'passed': False, 'failed_items': failed, 'checks': checks}
+
+    def _fetch_sector_flow(self, symbol: str) -> tuple:
+        """
+        从概念板块资金流 API 获取该标的所属板块的主力净流入。
+        
+        Returns:
+            (sector_net_inflow: float, sector_name: str)
+        """
+        try:
+            import urllib.request, ssl, json as _json
+            ctx = ssl.create_default_context()
+            url = 'http://localhost:8000/api/v1/market/concept-fund-flow?limit=30&sort_by=main_net'
+            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = _json.loads(resp.read().decode('utf-8'))
+                concepts = data.get('concepts', [])
+                for concept in concepts:
+                    stocks = concept.get('stocks', [])
+                    if isinstance(stocks, list):
+                        for s in stocks:
+                            s_code = s.get('symbol', '') if isinstance(s, dict) else str(s)
+                            if symbol in s_code or s_code in symbol:
+                                return concept.get('main_net', 0), concept.get('name', '')
+        except Exception:
+            pass
+        return 0, ''
+
+    def _fetch_moneyflow_today(self, symbol: str) -> float:
+        """
+        获取个股当日主力净流入金额。
+        通过 /api/v1/market/moneyflow 接口获取，5 分钟缓存。
+
+        Returns:
+            当日主力净流入（元）
+        """
+        try:
+            import urllib.request, ssl, json as _json
+            ctx = ssl.create_default_context()
+            url = f'http://localhost:8000/api/v1/market/moneyflow?symbol={symbol}&days=1'
+            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = _json.loads(resp.read().decode('utf-8'))
+                flows = data.get('flows', []) if isinstance(data, dict) else []
+                if flows:
+                    f0 = flows[0] if isinstance(flows[0], dict) else {}
+                    return float(f0.get('main_net_inflow', 0))
+        except Exception:
+            pass
+        return 0.0
 
     # ── 振幅辅助 ──
 

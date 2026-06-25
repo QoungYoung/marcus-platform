@@ -24,6 +24,10 @@ _stock_name_cache = {}
 _stock_price_cache = {}
 _price_cache_time = 0
 
+# 费率常量（与 paper_engine.py 保持一致）
+_BUY_COMMISSION = 0.0005
+_SELL_FEE_RATE = 0.0015  # 佣金 0.05% + 印花税 0.1%
+
 
 def get_stock_name(symbol: str) -> str:
     """Get stock name from symbol, query stock_pool.db for Chinese name."""
@@ -123,42 +127,67 @@ def get_realtime_prices(symbols: list) -> dict:
 
 
 def calculate_positions_from_db():
-    """Calculate current positions from trades.db using FIFO."""
+    """Calculate current positions and available_cash from trades.db using FIFO replay.
+
+    不再依赖 account_info.available_cash（可能因引擎异常而偏离），
+    完全从交易记录重放资金流水，确保 total_asset 与持仓自洽。
+    """
     import sqlite3
 
     db_file = settings.data_dir / "trades.db"
     if not db_file.exists():
-        return [], {"available_cash": 0, "initial_capital": 1000000}
+        return [], {"available_cash": 0, "initial_capital": 1000000, "frozen_cash": 0}
 
     conn = sqlite3.connect(str(db_file), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
     curs = conn.cursor()
 
-    # Get account info
-    curs.execute("SELECT * FROM account_info WHERE id=1")
+    # 只读取 initial_capital 和 frozen_cash（initial 不变，frozen 由 orders 表决定）
+    curs.execute("SELECT initial_capital, frozen_cash FROM account_info WHERE id=1")
     account_row = curs.fetchone()
     if not account_row:
-        account = {"initial_capital": 1000000, "available_cash": 1000000, "frozen_cash": 0}
+        initial_cap = 1000000.0
+        frozen_cash = 0.0
     else:
-        account = dict(account_row)
+        initial_cap = account_row["initial_capital"]
+        frozen_cash = account_row["frozen_cash"] or 0.0
 
-    # Get all trades in FIFO order (by trade_date then id, 与 paper_engine 排序策略一致)
-    # trade_date 保证回测时序正确，id 保证同日多笔交易确定性排序
-    curs.execute("SELECT id, symbol, direction, price, volume FROM trades ORDER BY trade_date, id")
+    # 获取全部成交，排序策略与 paper_engine 一致
+    curs.execute("""
+        SELECT id, symbol, direction, price, volume
+        FROM trades
+        ORDER BY COALESCE(trade_date, DATE(created_at)), id
+    """)
     trades = curs.fetchall()
+    conn.close()
 
-    # Calculate positions using FIFO
+    # ── FIFO 重放：同时计算持仓和资金 ──
+    available_cash = initial_cap
     positions = {}
+
     for trade in trades:
-        symbol, direction, price, volume = trade['symbol'], trade['direction'], trade['price'], trade['volume']
-        if symbol not in positions:
-            positions[symbol] = []
+        symbol = trade['symbol']
+        direction = trade['direction']
+        price = trade['price']
+        volume = trade['volume']
+
         if direction == '买入':
-            positions[symbol].append({'price': price, 'volume': volume})
-        else:
+            cost = price * volume * (1 + _BUY_COMMISSION)
+            available_cash -= cost
+            positions.setdefault(symbol, []).append({'price': price, 'volume': volume})
+
+        elif direction == '卖出':
+            lots = positions.get(symbol, [])
+            if not lots:
+                continue
+
+            gross = price * volume
+            sell_fee = gross * _SELL_FEE_RATE
+            available_cash += gross - sell_fee
+
+            # FIFO 出库
             remaining = volume
-            lots = positions[symbol]
             i = 0
             while remaining > 0 and i < len(lots):
                 used = min(lots[i]['volume'], remaining)
@@ -169,7 +198,7 @@ def calculate_positions_from_db():
                 else:
                     i += 1
 
-    # Calculate position details
+    # ── 构建持仓列表 ──
     position_list = []
     for symbol, lots in positions.items():
         if not lots:
@@ -183,7 +212,11 @@ def calculate_positions_from_db():
             'avg_price': avg_price,
         })
 
-    conn.close()
+    account = {
+        "initial_capital": initial_cap,
+        "available_cash": available_cash,
+        "frozen_cash": frozen_cash,
+    }
     return position_list, account
 
 
@@ -275,9 +308,10 @@ async def get_portfolio():
     except Exception:
         pass
 
-    # 🔧 total_pnl 强制 = total_asset - initial_capital，保证与 total_return 一致
-    #     float_pnl + realized_pnl 可能因手续费、数据同步等原因偏离，仅作参考展示
+    # 🔧 total_pnl = total_asset - initial_capital（始终与 total_return 一致）
+    #     float_pnl 作为推导值 = total_pnl - realized_pnl，保证三数自洽
     total_pnl = total_asset - initial_capital
+    derived_float_pnl = total_pnl - realized_pnl
 
     account_response = AccountResponse(
         initial_capital=initial_capital,
@@ -286,7 +320,7 @@ async def get_portfolio():
         position_value=total_position_value,
         total_asset=total_asset,
         realized_pnl=realized_pnl,
-        float_pnl=total_float_pnl,
+        float_pnl=derived_float_pnl,
         total_pnl=total_pnl,
         position_ratio=total_position_value / initial_capital * 100 if initial_capital > 0 else 0,
         positions=positions,
@@ -652,9 +686,6 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     return result
 
 
-# 费率常量（与 paper_engine.py 保持一致）
-_BUY_COMMISSION = 0.0005
-_SELL_FEE_RATE = 0.0015  # 佣金 0.05% + 印花税 0.1%
 
 
 def _apply_trade(trade, cash: float, positions: dict) -> tuple:

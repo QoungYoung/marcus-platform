@@ -427,6 +427,8 @@ class MarcusVNPyExecutor:
         # 🔧 修复：总资产应包含冻结资金（委托未成交时资金已冻结但尚未转为持仓）
         total_asset = available_cash + frozen_cash + position_value
         total_pnl = total_asset - initial_capital
+        # 🔧 derived_float_pnl = total_pnl - realized_pnl（保证三数自洽）
+        derived_float_pnl = total_pnl - realized_pnl
         
         return {
             'initial_capital': initial_capital,
@@ -436,7 +438,7 @@ class MarcusVNPyExecutor:
             'total_asset': total_asset,
             'total_profit': f"{total_pnl:+,.2f} ({total_pnl/initial_capital*100:+.2f}%)",
             'position_count': len(positions),
-            'float_pnl': float_pnl,
+            'float_pnl': derived_float_pnl,
             'realized_pnl': realized_pnl
         }
     
