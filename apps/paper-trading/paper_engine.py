@@ -785,35 +785,47 @@ class PaperTradingEngine:
                 else:
                     i += 1
 
-            # FIFO profit = 卖出金额 - 卖出成本
-            profit = fill_price * order.volume - current_sell_cost
+            # 🔧 卖出费用: 佣金 0.05% + 印花税 0.1% = 0.15%
+            SELL_FEE_RATE = 0.0015  # 佣金 0.05% + 印花税 0.1%
+            sell_fee = fill_price * order.volume * SELL_FEE_RATE
+            net_proceeds = fill_price * order.volume - sell_fee
+
+            # FIFO 毛利 = 卖出金额 - FIFO 持仓成本
+            fifo_gross_profit = fill_price * order.volume - current_sell_cost
+            # 净利润 = 毛利 - 卖出手续费（佣金 + 印花税）
+            net_profit = fifo_gross_profit - sell_fee
 
             # 更新剩余持仓的均价
             remaining_vol = sum(v for v, _ in lots)
             remaining_cost = sum(v * p for v, p in lots)
 
-            self.available_cash += fill_price * order.volume
+            self.available_cash += net_proceeds
             pos.volume = remaining_vol
             pos.avg_price = remaining_cost / remaining_vol if remaining_vol > 0 else 0.0
             pos.frozen -= order.volume
 
-            # 记录成交
+            # 记录成交（amount 存 gross 金额，profit 存净利润）
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute('''
                 INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
-                  fill_price * order.volume, profit, datetime.now().isoformat(), td))
+                  fill_price * order.volume, net_profit, datetime.now().isoformat(), td))
 
             if pos.volume == 0:
                 # Step 8: 卖出清仓时删除 positions 表记录（在同一连接内执行，避免死锁）
                 cursor.execute('DELETE FROM positions WHERE symbol = ?', (order.symbol,))
                 del self.positions[order.symbol]
 
+        # 🔧 在同一连接内保存账户状态，确保 trade + account_info 原子写入（修复竞争窗口）
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            INSERT OR REPLACE INTO account_info (id, initial_capital, available_cash, frozen_cash, order_counter, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?)
+        ''', (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now))
+        
         conn.commit()
         conn.close()
-        
-        self._save_account()
         
         print(f"[OK] 成交：{order.symbol} @ {fill_price:.2f} x {order.volume}")
         return True

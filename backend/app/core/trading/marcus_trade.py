@@ -424,12 +424,14 @@ class MarcusVNPyExecutor:
         
         # 总盈亏 = 浮动盈亏 + 已实现盈亏
         total_pnl = float_pnl + realized_pnl
-        total_asset = available_cash + position_value
+        frozen_cash = parse_float_chinese(raw.get('冻结资金', 0))
+        # 🔧 修复：总资产应包含冻结资金（委托未成交时资金已冻结但尚未转为持仓）
+        total_asset = available_cash + frozen_cash + position_value
         
         return {
             'initial_capital': initial_capital,
             'available_cash': available_cash,
-            'frozen_cash': parse_float_chinese(raw.get('冻结资金', 0)),
+            'frozen_cash': frozen_cash,
             'position_value': position_value,
             'total_asset': total_asset,
             'total_profit': f"{total_pnl:+,.2f} ({total_pnl/initial_capital*100:+.2f}%)",

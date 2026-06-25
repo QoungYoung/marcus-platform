@@ -143,8 +143,9 @@ def calculate_positions_from_db():
     else:
         account = dict(account_row)
 
-    # Get all trades in FIFO order (by created_at for chronological ordering)
-    curs.execute("SELECT id, symbol, direction, price, volume FROM trades ORDER BY created_at")
+    # Get all trades in FIFO order (by trade_date then id, 与 paper_engine 排序策略一致)
+    # trade_date 保证回测时序正确，id 保证同日多笔交易确定性排序
+    curs.execute("SELECT id, symbol, direction, price, volume FROM trades ORDER BY trade_date, id")
     trades = curs.fetchall()
 
     # Calculate positions using FIFO
