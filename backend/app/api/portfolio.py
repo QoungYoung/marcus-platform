@@ -275,6 +275,10 @@ async def get_portfolio():
     except Exception:
         pass
 
+    # 🔧 total_pnl 强制 = total_asset - initial_capital，保证与 total_return 一致
+    #     float_pnl + realized_pnl 可能因手续费、数据同步等原因偏离，仅作参考展示
+    total_pnl = total_asset - initial_capital
+
     account_response = AccountResponse(
         initial_capital=initial_capital,
         available_cash=available_cash,
@@ -283,7 +287,7 @@ async def get_portfolio():
         total_asset=total_asset,
         realized_pnl=realized_pnl,
         float_pnl=total_float_pnl,
-        total_pnl=total_float_pnl + realized_pnl,
+        total_pnl=total_pnl,
         position_ratio=total_position_value / initial_capital * 100 if initial_capital > 0 else 0,
         positions=positions,
         updated_at=datetime.now(),
@@ -396,7 +400,7 @@ async def get_portfolio():
 
     return PortfolioSummary(
         account=account_response,
-        total_return=total_asset - initial_capital,
+        total_return=total_pnl,  # 与 account.total_pnl 同源，始终一致
         total_return_pct=(total_asset / initial_capital - 1) * 100 if initial_capital > 0 else 0,
         win_rate=win_rate,
         sector_concentration=sector_concentration,
@@ -532,8 +536,10 @@ async def unfreeze_funds():
 @router.get("/equity-history", response_model=list[EquityPoint])
 async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     """
-    Get daily equity curve aggregated from realized trade P&L.
-    Equity on each day = initial_capital + cumulative realized profit up to that day.
+    Get daily equity curve = available_cash + position_value on each day.
+
+    历史日使用持仓成本价估值，当日使用实时市价估值，
+    确保权益曲线与 total_asset 一致。
     """
     from datetime import datetime as dt, timedelta
 
@@ -543,10 +549,9 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
     conn = sqlite3.connect(str(db_file), timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")  # 快速失败而非长时间等待写锁
+    conn.execute("PRAGMA busy_timeout=5000")
     curs = conn.cursor()
 
-    # 索引已在 lifespan 预热阶段创建，此处仅作兜底（幂等，极快）
     curs.execute("CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades(direction, created_at)")
 
     # Get initial capital
@@ -554,47 +559,132 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     row = curs.fetchone()
     initial_capital = row["initial_capital"] if row else 1000000.0
 
-    # 只查询日期范围内的卖出记录（避免全表扫描）
-    start_date = (dt.now() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
-
-    # 先查窗口之前的累计利润
+    # 获取全部成交，按 trade_date, id 排序（与 FIFO 策略一致）
     curs.execute("""
-        SELECT COALESCE(SUM(profit), 0)
+        SELECT id, symbol, direction, price, volume, trade_date, created_at
         FROM trades
-        WHERE direction = '卖出' AND profit IS NOT NULL AND DATE(created_at) < ?
-    """, (start_date,))
-    prior_profit = curs.fetchone()[0] or 0
+        ORDER BY trade_date, id
+    """)
+    all_trades = curs.fetchall()
 
-    # 再查窗口内的每日利润
-    curs.execute("""
-        SELECT DATE(created_at) as trade_date, SUM(profit) as daily_profit
-        FROM trades
-        WHERE direction = '卖出' AND profit IS NOT NULL AND DATE(created_at) >= ?
-        GROUP BY DATE(created_at)
-        ORDER BY trade_date
-    """, (start_date,))
-    rows = curs.fetchall()
-    conn.close()
+    # 按日期分组 trade（使用 trade_date 作为日期）
+    trades_by_date = {}
+    for t in all_trades:
+        # trade_date 可能为 NULL（旧数据），回退到 created_at 的日期部分
+        td = t["trade_date"] or (t["created_at"][:10] if t["created_at"] else None)
+        if td:
+            trades_by_date.setdefault(td, []).append(t)
 
-    # Build daily profit map
-    daily_profit = {}
-    for row in rows:
-        daily_profit[row["trade_date"]] = row["daily_profit"] or 0
+    if not trades_by_date:
+        conn.close()
+        return []
 
-    # Generate equity curve for the requested window
+    # 找到最早 & 最晚日期
+    sorted_dates = sorted(trades_by_date.keys())
+    min_trade_date = dt.strptime(sorted_dates[0], "%Y-%m-%d")
     today = dt.now()
-    equity = initial_capital + prior_profit
+    start_date = today - timedelta(days=days + 5)
+    if start_date < min_trade_date:
+        start_date = min_trade_date
+
+    # 获取当前持仓的实时价格（仅用于最后一天）
+    today_str = today.strftime("%Y-%m-%d")
+    current_positions, _ = calculate_positions_from_db()
+    symbols = [p['symbol'] for p in current_positions]
+    realtime_prices = get_realtime_prices(symbols) if symbols else {}
+
+    # ── 逐日重放交易，计算每日权益 ──
+    available_cash = initial_capital
+    positions = {}  # symbol -> [{'price': float, 'volume': int}, ...]
+
+    # 先处理 start_date 之前的所有 trade
+    for d in sorted_dates:
+        if d >= start_date.strftime("%Y-%m-%d"):
+            break
+        for t in trades_by_date.get(d, []):
+            available_cash, positions = _apply_trade(t, available_cash, positions)
+
+    # 生成每日权益曲线
     result = []
-    current = dt.strptime(start_date, "%Y-%m-%d")
+    current = start_date
     while current <= today and len(result) < days:
         date_str = current.strftime("%Y-%m-%d")
-        if date_str in daily_profit:
-            equity += daily_profit[date_str]
+
+        # 应用当日的交易
+        for t in trades_by_date.get(date_str, []):
+            available_cash, positions = _apply_trade(t, available_cash, positions)
+
+        # 计算当日持仓市值
+        if date_str == today_str:
+            # 当日：使用实时市价
+            position_value = 0.0
+            for sym, lots in positions.items():
+                total_vol = sum(l['volume'] for l in lots)
+                if total_vol > 0:
+                    price_data = realtime_prices.get(sym, {})
+                    if isinstance(price_data, dict):
+                        price = price_data.get('price')
+                    else:
+                        price = price_data if isinstance(price_data, (int, float)) else None
+                    if not price:
+                        # 实时价不可用时回退到成本价
+                        price = sum(l['price'] * l['volume'] for l in lots) / total_vol
+                    position_value += price * total_vol
+        else:
+            # 历史日：使用持仓成本价估值
+            position_value = sum(
+                l['price'] * l['volume']
+                for lots in positions.values()
+                for l in lots
+            )
+
+        equity = available_cash + position_value
         result.append(EquityPoint(date=date_str, equity=round(equity, 2)))
+
         current += timedelta(days=1)
+
+    conn.close()
 
     # Limit to most recent N days
     if len(result) > days:
         result = result[-days:]
 
     return result
+
+
+# 费率常量（与 paper_engine.py 保持一致）
+_BUY_COMMISSION = 0.0005
+_SELL_FEE_RATE = 0.0015  # 佣金 0.05% + 印花税 0.1%
+
+
+def _apply_trade(trade, cash: float, positions: dict) -> tuple:
+    """将一笔成交应用到账户状态，返回 (new_cash, new_positions)"""
+    symbol = trade["symbol"]
+    direction = trade["direction"]
+    price = trade["price"]
+    volume = trade["volume"]
+
+    if direction == '买入':
+        cost = price * volume * (1 + _BUY_COMMISSION)
+        cash -= cost
+        positions.setdefault(symbol, []).append({'price': price, 'volume': volume})
+
+    elif direction == '卖出':
+        lots = positions.get(symbol, [])
+        gross = price * volume
+        sell_fee = gross * _SELL_FEE_RATE
+        cash += gross - sell_fee
+
+        # FIFO 出库
+        remaining = volume
+        i = 0
+        while remaining > 0 and i < len(lots):
+            used = min(lots[i]['volume'], remaining)
+            lots[i]['volume'] -= used
+            remaining -= used
+            if lots[i]['volume'] == 0:
+                lots.pop(i)
+            else:
+                i += 1
+
+    return cash, positions
