@@ -210,6 +210,14 @@ class StopLossMonitor:
 
     # ── HWM 辅助（P0-2: 监控器内部直接更新） ──
 
+    def _update_highest_price(self, symbol: str, current_price: float) -> None:
+        """将当前行情价格更新到 positions 表的 highest_price 字段"""
+        try:
+            if self.executor and hasattr(self.executor, 'engine'):
+                self.executor.engine.update_position_meta(symbol, highest_price=current_price)
+        except Exception:
+            pass
+
     def _ensure_hwm(self, symbol: str, current_price: float) -> dict:
         """确保 HWM 已更新并返回最新数据"""
         try:
@@ -254,9 +262,12 @@ class StopLossMonitor:
             avg_price = pos.get('avg_price', 0)
             current_price = pos.get('current_price', 0)
             volume = pos.get('volume', 0)
-
+            
             if avg_price <= 0 or current_price <= 0 or volume <= 0:
                 continue
+
+            # 每次轮询更新持仓最高价到 positions 表
+            self._update_highest_price(symbol, current_price)
 
             float_pnl_pct = (current_price - avg_price) / avg_price * 100
 

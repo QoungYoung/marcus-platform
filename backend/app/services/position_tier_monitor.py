@@ -1,0 +1,870 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+持仓层级监控器 — 代码层自动加仓引擎。
+
+职责：
+  1. 评估每只持仓的当前层级（probe/confirm/sprint）
+  2. 浮盈达标时自动触发层级升级评估
+  3. 门控仲裁（Pi立场/回撤/连亏/保护线/趋势确认）
+  4. 全部门控通过后自动执行加仓下单
+  5. 写入通知供 AI 在交易报告中引用
+
+用法：
+    monitor = get_position_tier_monitor(executor=executor)
+    monitor.start()  # 与 StopLossMonitor 并行运行
+
+架构：
+    ┌─ 第1层: 层级评估 (evaluate_position_tier) ─┐
+    └─ 第2层: 门控仲裁 (can_execute_add) ────────┘
+    └─ 第3层: 自动执行 (execute_add_position) ───┘
+    └─ 通知写入 ──────────────────────────────────┘
+"""
+
+import sys
+import os
+import json
+import time
+import threading
+import logging
+from datetime import datetime, time as dtime
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+
+logger = logging.getLogger(__name__)
+
+# ── 层级状态持久化路径 ──
+TIER_STATE_FILE = Path(__file__).parent.parent.parent.parent / "data" / "position_tiers.json"
+
+
+class TierEvaluation:
+    """层级评估结果"""
+    __slots__ = ('action', 'current_tier', 'target_tier', 'max_position_pct', 'signal')
+    
+    def __init__(self, action: str, signal: str, current_tier: str = 'probe',
+                 target_tier: str = '', max_position_pct: float = 0.0):
+        self.action = action
+        self.current_tier = current_tier
+        self.target_tier = target_tier
+        self.max_position_pct = max_position_pct
+        self.signal = signal
+
+
+class GateResult:
+    """门控裁决结果"""
+    __slots__ = ('allowed', 'checks', 'trigger_action', 'reason')
+    
+    def __init__(self, allowed: bool, checks: List[tuple], 
+                 trigger_action: str = '', reason: str = ''):
+        self.allowed = allowed
+        self.checks = checks
+        self.trigger_action = trigger_action
+        self.reason = reason
+
+
+class PositionTierMonitor:
+    """
+    持仓层级监控器 — 代码层自动加仓引擎。
+
+    与 StopLossMonitor 并行运行，各司其职：
+      - StopLossMonitor: 止损/保护线 → 卖出
+      - PositionTierMonitor: 浮盈达标 → 加仓买入
+    """
+
+    # A股交易时段
+    TRADING_START = dtime(9, 30)
+    TRADING_END = dtime(15, 0)
+    LUNCH_START = dtime(11, 30)
+    LUNCH_END = dtime(13, 0)
+    # 早盘冷静期：09:30-09:45 不加仓（波动剧烈）
+    MORNING_QUIET_END = dtime(9, 45)
+    # 尾盘禁止加仓：14:30 后
+    CLOSING_CUTOFF = dtime(14, 30)
+
+    # ── 加仓层级阈值 ──
+    TIER_THRESHOLDS = {
+        'probe_to_confirm': 0.01,    # 试探仓 → 确认仓：浮盈 ≥ 1%
+        'confirm_to_sprint': 0.03,   # 确认仓 → 冲刺仓：浮盈 ≥ 3%
+        'probe_to_sprint': 0.03,     # 试探仓 → 冲刺仓（跳级）：浮盈 ≥ 3%
+    }
+
+    # ── 层级仓位上限 ──
+    TIER_CAPS = {
+        'probe': 0.10,
+        'confirm': 0.18,
+        'sprint': 0.25,
+    }
+
+    def __init__(self, executor=None, interval_seconds: int = 30):
+        self.executor = executor
+        self.interval = interval_seconds
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+        self.lock = threading.Lock()
+
+        # 内存中的层级状态 {symbol: tier_info}
+        self.tier_states: Dict[str, dict] = {}
+        # 通知队列 [[type, message, timestamp], ...] 供 AI 读取
+        self.notifications: List[dict] = []
+        # 当日已加仓计数 {symbol: count}
+        self.today_adds: Dict[str, int] = {}
+        # 最近一次评价时间 {symbol: timestamp}（防重复触发）
+        self._last_eval: Dict[str, float] = {}
+        # 单日单票最大加仓次数
+        self.MAX_ADDS_PER_DAY = 3
+
+        # 加载持久化的层级状态
+        self._load_tier_states()
+
+        # 通知日志文件
+        self.log_dir = self._resolve_log_dir()
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_log_dir(self) -> Path:
+        try:
+            from workspace_detector import DATA_DIR
+            return Path(str(DATA_DIR))
+        except Exception:
+            return Path(__file__).parent.parent.parent.parent / "data"
+
+    # ── 层级状态持久化 ──
+
+    def _save_tier_states(self) -> None:
+        """持久化当前层级状态到 JSON 文件"""
+        try:
+            with self.lock:
+                TIER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                with open(TIER_STATE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(self.tier_states, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.debug(f"[TierMonitor] 层级状态保存失败: {e}")
+
+    def _load_tier_states(self) -> None:
+        """从 JSON 文件加载层级状态"""
+        try:
+            if TIER_STATE_FILE.exists():
+                with open(TIER_STATE_FILE, 'r', encoding='utf-8') as f:
+                    self.tier_states = json.load(f)
+            else:
+                self.tier_states = {}
+        except Exception:
+            self.tier_states = {}
+            logger.warning("[TierMonitor] 层级状态加载失败，使用空状态")
+
+    # ── 生命周期 ──
+
+    def start(self) -> bool:
+        with self.lock:
+            if self.running:
+                return False
+            self.running = True
+            self._daily_reset()
+            self.thread = threading.Thread(
+                target=self._run_loop, daemon=True, name="position-tier-monitor"
+            )
+            self.thread.start()
+            logger.info(f"[TierMonitor] ✅ 加仓监控已启动，轮询间隔 {self.interval}s")
+            return True
+
+    def stop(self) -> None:
+        with self.lock:
+            self.running = False
+        self._save_tier_states()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5)
+        logger.info("[TierMonitor] ⏹️ 加仓监控已停止")
+
+    # ── 主循环 ──
+
+    def _run_loop(self) -> None:
+        print("[TierMonitor] 后台加仓监控线程启动", file=sys.stderr)
+        cycle = 0
+        while self.running:
+            cycle += 1
+            try:
+                if self._is_trading_time() and not self._is_blocked_window():
+                    if cycle % 2 == 1:  # 只在奇数轮打印（减少噪音）
+                        print(f"[TierMonitor] 🔄 第 {cycle} 轮层级检查 | {datetime.now().strftime('%H:%M:%S')}",
+                              file=sys.stderr)
+                    self._check_all_positions()
+                else:
+                    if cycle % 20 == 1:
+                        print(f"[TierMonitor] ⏸️ 非交易/禁止窗口，跳过 (cycle={cycle})", file=sys.stderr)
+                    self._daily_reset()
+            except Exception as e:
+                logger.error(f"[TierMonitor] 检查异常: {e}", exc_info=True)
+            time.sleep(self.interval)
+
+    def _is_trading_time(self) -> bool:
+        now = datetime.now().time()
+        morning = self.TRADING_START <= now <= self.LUNCH_START
+        afternoon = self.LUNCH_END <= now <= self.TRADING_END
+        return morning or afternoon
+
+    def _is_blocked_window(self) -> bool:
+        """返回是否处于禁止加仓的时间窗口"""
+        now = datetime.now().time()
+        # 早盘冷静期 09:30-09:45
+        if now < self.MORNING_QUIET_END:
+            return True
+        # 尾盘禁止加仓 14:30 后
+        if now >= self.CLOSING_CUTOFF:
+            return True
+        return False
+
+    def _is_morning_volatility(self) -> bool:
+        """早盘冷静期"""
+        now = datetime.now().time()
+        return self.TRADING_START <= now < self.MORNING_QUIET_END
+
+    def _daily_reset(self) -> None:
+        today = datetime.now().strftime('%Y-%m-%d')
+        if getattr(self, '_last_reset_date', '') != today:
+            self.today_adds.clear()
+            self._last_eval.clear()
+            self._last_reset_date = today
+
+    # ══════════════════════════════════════════════════
+    # 第 1 层：层级评估
+    # ══════════════════════════════════════════════════
+
+    def evaluate_position_tier(self, symbol: str, float_pnl_pct: float,
+                               current_tier: str) -> TierEvaluation:
+        """代码层自动评估加仓层级。"""
+        pnl_pct = float_pnl_pct / 100.0 if float_pnl_pct > 1 else float_pnl_pct  # 统一为小数
+
+        # 试探仓 → 冲刺仓（跳级）：浮盈 ≥ 3%
+        if current_tier in ('probe', 'unknown', '') and pnl_pct >= 0.03:
+            return TierEvaluation(
+                action='UPGRADE_TO_SPRINT',
+                current_tier='probe',
+                target_tier='sprint',
+                max_position_pct=self.TIER_CAPS['sprint'],
+                signal=f'浮盈 {pnl_pct:.1%} ≥ 3%，跳过确认仓直接触发冲刺仓评估'
+            )
+
+        # 试探仓 → 确认仓：浮盈 ≥ 1%
+        if current_tier in ('probe', 'unknown', '') and pnl_pct >= 0.01:
+            return TierEvaluation(
+                action='UPGRADE_TO_CONFIRM',
+                current_tier='probe',
+                target_tier='confirm',
+                max_position_pct=self.TIER_CAPS['confirm'],
+                signal=f'浮盈 {pnl_pct:.1%} ≥ 1%，触发确认仓评估'
+            )
+
+        # 确认仓 → 冲刺仓：浮盈 ≥ 3%
+        if current_tier == 'confirm' and pnl_pct >= 0.03:
+            return TierEvaluation(
+                action='UPGRADE_TO_SPRINT',
+                current_tier='confirm',
+                target_tier='sprint',
+                max_position_pct=self.TIER_CAPS['sprint'],
+                signal=f'浮盈 {pnl_pct:.1%} ≥ 3%，触发冲刺仓评估'
+            )
+
+        # 已达到最高层级或未满足条件
+        if current_tier == 'sprint':
+            return TierEvaluation(action='MAX_TIER', signal=f'已达冲刺仓（最高层级），浮盈 {pnl_pct:.1%}')
+
+        return TierEvaluation(action='HOLD', signal=f'浮盈 {pnl_pct:.1%} 未满足升级条件')
+
+    # ══════════════════════════════════════════════════
+    # 第 2 层：门控仲裁
+    # ══════════════════════════════════════════════════
+
+    def can_execute_add(self, symbol: str, evaluation: TierEvaluation,
+                        current_price: float, avg_price: float,
+                        account: dict, pi_stance: str = 'yellow') -> GateResult:
+        """加仓执行门控 — 所有条件必须通过。"""
+        checks = []
+        total_asset = account.get('total_asset', 100000)
+        position_value = account.get('position_value', 0)
+        total_position_pct = position_value / total_asset if total_asset > 0 else 0
+        add_position_pct = evaluation.max_position_pct
+
+        # ── 门控 1：Pi 立场检查 ──
+        if pi_stance == 'red':
+            if total_position_pct + add_position_pct > 0.20:
+                checks.append(('BLOCKED', f'RED 立场下总仓 {total_position_pct:.1%}+{add_position_pct:.0%} > 20%'))
+                return GateResult(allowed=False, checks=checks)
+            else:
+                checks.append(('ALLOWED_RED', 'RED 例外：已验证盈利头寸限额内加仓'))
+        else:
+            checks.append(('ALLOWED', f'{pi_stance.upper()} 立场通过'))
+
+        # ── 门控 2：总回撤检查 ──
+        try:
+            drawdown = self._get_total_drawdown(account)
+            if drawdown >= 0.05:
+                checks.append(('BLOCKED', f'总回撤 {drawdown:.1%} ≥ 5%，硬禁止'))
+                return GateResult(allowed=False, checks=checks)
+            checks.append(('PASSED', f'回撤 {drawdown:.1%} < 5%'))
+        except Exception as e:
+            checks.append(('SKIPPED', f'回撤检查异常: {e}'))
+
+        # ── 门控 3：连续亏损检查 ──
+        try:
+            consecutive = self._get_consecutive_losses()
+            if consecutive >= 3:
+                checks.append(('BLOCKED', f'连续亏损 {consecutive} 笔，熔断'))
+                return GateResult(allowed=False, checks=checks)
+            checks.append(('PASSED', f'连续亏损 {consecutive} < 3'))
+        except Exception as e:
+            checks.append(('SKIPPED', f'连亏检查异常: {e}'))
+
+        # ── 门控 4：铁律二保护线检查 ──
+        protection_blocked, protection_reason = self._check_protection_line(
+            symbol, current_price, avg_price, evaluation
+        )
+        if protection_blocked:
+            checks.append(('BLOCKED', protection_reason))
+            return GateResult(allowed=False, checks=checks)
+        checks.append(('PASSED', '保护线通过'))
+
+        # ── 门控 5：今日加仓次数 ──
+        daily_adds = self.today_adds.get(symbol, 0)
+        if daily_adds >= self.MAX_ADDS_PER_DAY:
+            checks.append(('BLOCKED', f'今日已加仓 {daily_adds} 次，达上限'))
+            return GateResult(allowed=False, checks=checks)
+        checks.append(('PASSED', f'今日加仓 {daily_adds}/{self.MAX_ADDS_PER_DAY}'))
+
+        # ── 门控 6：趋势确认（MA5/MA20） ──
+        trend_ok, trend_reason = self._check_trend_confirmation(symbol)
+        if not trend_ok:
+            checks.append(('BLOCKED', trend_reason))
+            return GateResult(allowed=False, checks=checks)
+        checks.append(('PASSED', trend_reason))
+
+        # ── 全部通过 ──
+        checks.append(('PASSED', '全部门控通过'))
+        return GateResult(allowed=True, checks=checks)
+
+    def _get_total_drawdown(self, account: dict) -> float:
+        """计算总回撤比例"""
+        try:
+            initial = account.get('initial_capital', 100000)
+            total_pnl = 0
+            if 'float_pnl' in account:
+                total_pnl = account['float_pnl']
+            if 'realized_pnl' in account:
+                total_pnl += account['realized_pnl']
+            elif hasattr(self, 'executor') and self.executor:
+                # 尝试从 executor 获取
+                try:
+                    acc = self.executor.get_account()
+                    # 解析 total_profit
+                    profit_str = acc.get('total_profit', '0')
+                    if isinstance(profit_str, str):
+                        import re
+                        match = re.search(r'[-+]?\d+\.?\d*', profit_str)
+                        if match:
+                            total_pnl = float(match.group())
+                except Exception:
+                    pass
+
+            if initial <= 0:
+                return 0
+            return -min(0, total_pnl) / initial
+        except Exception:
+            return 0
+
+    def _get_consecutive_losses(self) -> int:
+        """获取连续亏损笔数"""
+        try:
+            if self.executor and hasattr(self.executor, '_consecutive_losses'):
+                return self.executor._consecutive_losses
+        except Exception:
+            pass
+        return 0
+
+    def _check_protection_line(self, symbol: str, current_price: float,
+                               avg_price: float, evaluation: TierEvaluation) -> tuple:
+        """
+        铁律二保护线检查。
+        
+        根据目标层级确定保护线：
+          confirm → T1 保本线（成本价）
+          sprint  → T2 保护线（成本+X%，X 由振幅决定）
+        
+        Returns:
+            (blocked: bool, reason: str)
+        """
+        try:
+            float_pnl_pct = (current_price - avg_price) / avg_price
+
+            # 获取振幅档位
+            amplitude_tier, amplitude_val = self._get_amplitude_info(symbol)
+
+            if evaluation.target_tier == 'confirm':
+                # T1 保本线 = 成本价，即浮盈不能 < 0
+                if float_pnl_pct < 0:
+                    return True, f'T1保本线：浮盈 {float_pnl_pct:.1%} < 0，已跌破成本价'
+                # 浮盈距离保本线不足 0.5% → 太危险，不加仓
+                if float_pnl_pct < 0.005:
+                    return True, f'T1保本线：浮盈 {float_pnl_pct:.1%} 距离保本线不足0.5%'
+
+            elif evaluation.target_tier == 'sprint':
+                # T2 保护线 = 成本+X%
+                if amplitude_tier == '低波':
+                    x = 0.01
+                elif amplitude_tier == '中波':
+                    x = 0.02
+                else:
+                    x = 0.03
+                protection_pct = x
+                if float_pnl_pct < protection_pct:
+                    return True, f'T2保护线：浮盈 {float_pnl_pct:.1%} < 成本+{x:.0%}({amplitude_tier})'
+                # 浮盈距离保护线不足 0.5%
+                if float_pnl_pct - protection_pct < 0.005:
+                    return True, f'T2保护线：浮盈 {float_pnl_pct:.1%} 距离保护线不足0.5%'
+
+            return False, '保护线安全'
+
+        except Exception as e:
+            logger.debug(f"[TierMonitor] 保护线检查异常 {symbol}: {e}")
+            return False, '保护线检查跳过'
+
+    def _check_trend_confirmation(self, symbol: str) -> tuple:
+        """
+        趋势确认检查（MA5 > MA20 + 量比 > 0.8）。
+        
+        Returns:
+            (ok: bool, reason: str)
+        """
+        try:
+            from app.api.indicator import _normalize_to_ts_code
+            from app.config import get_settings
+            import tushare as ts
+
+            settings = get_settings()
+            token = settings.get_tushare_token()
+            pro = ts.pro_api(token)
+            ts_code = _normalize_to_ts_code(symbol)
+
+            from datetime import datetime as dt, timedelta
+            end_d = dt.now().strftime("%Y%m%d")
+            start_d = (dt.now() - timedelta(days=60)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=30)
+
+            if df is None or df.empty or len(df) < 5:
+                return True, '趋势数据不足，跳过确认'
+
+            df = df.sort_values("trade_date", ascending=True)
+
+            # 计算 MA5 和 MA20
+            closes = df['close'].values
+            ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
+            ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
+
+            if ma5 <= 0 or ma20 <= 0:
+                return True, 'MA计算失败，跳过确认'
+
+            if ma5 <= ma20:
+                return False, f'趋势未确认：MA5({ma5:.2f}) ≤ MA20({ma20:.2f})'
+
+            # 量比检查（可选，不做硬拦截）
+            try:
+                last_vol = float(df['vol'].values[-1])
+                recent_avg_vol = float(sum(df['vol'].values[-6:-1]) / 5) if len(df) >= 6 else last_vol
+                vol_ratio = last_vol / recent_avg_vol if recent_avg_vol > 0 else 1.0
+                if vol_ratio < 0.5:
+                    return False, f'量比过低：{vol_ratio:.1f} < 0.5'
+            except Exception:
+                pass
+
+            return True, f'MA5({ma5:.2f}) > MA20({ma20:.2f}) ✅'
+
+        except Exception as e:
+            logger.debug(f"[TierMonitor] 趋势确认异常 {symbol}: {e}")
+            return True, f'趋势检查异常-放行: {e}'
+
+    # ── 振幅辅助 ──
+
+    _amplitude_cache: Dict[str, tuple] = {}
+
+    def _get_amplitude_info(self, symbol: str) -> tuple:
+        """获取振幅档位和百分比值，带交易日缓存"""
+        today = datetime.now().strftime("%Y%m%d")
+        cached = self._amplitude_cache.get(symbol)
+        if cached:
+            tier, amp_val, cached_date = cached
+            if cached_date == today:
+                return tier, amp_val
+
+        tier = "中波"
+        avg_amp = 3.0
+        try:
+            from app.api.indicator import _normalize_to_ts_code
+            from app.config import get_settings
+            import tushare as ts
+            settings = get_settings()
+            token = settings.get_tushare_token()
+            pro = ts.pro_api(token)
+            ts_code = _normalize_to_ts_code(symbol)
+            from datetime import datetime as dt, timedelta
+            end_d = dt.now().strftime("%Y%m%d")
+            start_d = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=5)
+            if df is not None and not df.empty:
+                df = df.sort_values("trade_date", ascending=False)
+                amps = []
+                for _, row in df.head(5).iterrows():
+                    close = float(row["close"])
+                    if close > 0:
+                        amp = (float(row["high"]) - float(row["low"])) / close * 100
+                        amps.append(amp)
+                if amps:
+                    avg_amp = sum(amps) / len(amps)
+                    if avg_amp < 3.0:
+                        tier = "低波"
+                    elif avg_amp <= 6.0:
+                        tier = "中波"
+                    else:
+                        tier = "高波"
+        except Exception:
+            pass
+
+        self._amplitude_cache[symbol] = (tier, round(avg_amp, 2), today)
+        return tier, avg_amp
+
+    # ══════════════════════════════════════════════════
+    # 第 3 层：自动执行
+    # ══════════════════════════════════════════════════
+
+    def execute_add_position(self, symbol: str, evaluation: TierEvaluation,
+                             current_price: float, account: dict) -> Optional[dict]:
+        """代码层自动执行加仓下单。"""
+        total_asset = account.get('total_asset', 100000)
+        current_position_mv = self._get_position_market_value(symbol)
+
+        if total_asset <= 0:
+            self._add_notification(symbol, 'BLOCKED', '总资产为0，无法计算')
+            return None
+
+        current_pct = current_position_mv / total_asset
+        target_pct = evaluation.max_position_pct
+        add_pct = target_pct - current_pct
+
+        if add_pct <= 0:
+            self._add_notification(
+                symbol, 'SKIPPED',
+                f'仓位已满：当前 {current_pct:.1%} ≥ 目标 {target_pct:.0%}'
+            )
+            return None
+
+        add_amount = total_asset * add_pct
+        add_shares = int(add_amount / current_price / 100) * 100
+
+        if add_shares < 100:
+            self._add_notification(
+                symbol, 'SKIPPED',
+                f'加仓量 {add_shares} 股不足100，金额 {add_amount:.0f} 不足（100股陷阱）'
+            )
+            return None
+
+        # 下单前最后一次保护线检查
+        avg_price = self._get_position_avg_price(symbol)
+        if avg_price > 0:
+            blocked, reason = self._check_protection_line(
+                symbol, current_price, avg_price, evaluation
+            )
+            if blocked:
+                self._add_notification(symbol, 'BLOCKED', f'下单前保护线检查失败: {reason}')
+                return None
+
+        # 执行下单
+        if self.executor is None:
+            self._add_notification(symbol, 'BLOCKED', 'executor 未注入')
+            return None
+
+        try:
+            result = self.executor.buy(
+                symbol=symbol,
+                price=current_price,
+                volume=add_shares,
+                reason=(
+                    f'[TierMonitor自动加仓] {evaluation.signal} | '
+                    f'当前仓位 {current_pct:.1%} → 目标 {target_pct:.0%} | '
+                    f'加仓 {add_shares} 股 ({add_pct:.1%}) | '
+                    f'层级 {evaluation.current_tier}→{evaluation.target_tier}'
+                )
+            )
+
+            if result.get('status') == 'executed':
+                # 更新层级状态
+                with self.lock:
+                    self.tier_states[symbol] = {
+                        'tier': evaluation.target_tier,
+                        'updated_at': datetime.now().isoformat(),
+                        'avg_price': current_price,
+                    }
+                    self.today_adds[symbol] = self.today_adds.get(symbol, 0) + 1
+                self._save_tier_states()
+
+                self._add_notification(
+                    symbol, 'EXECUTED',
+                    f'代码层自动加仓: {evaluation.current_tier}→{evaluation.target_tier}, '
+                    f'+{add_shares}股, 浮盈信息, '
+                    f'仓位 {current_pct:.1%}→{current_pct + add_pct:.1%}'
+                )
+                logger.info(
+                    f"[TierMonitor] ✅ 自动加仓 {symbol}: "
+                    f"{evaluation.current_tier}→{evaluation.target_tier}, "
+                    f"+{add_shares}股 @ {current_price}"
+                )
+                print(
+                    f"[TierMonitor] ✅ {symbol} 自动加仓 +{add_shares}股 @ {current_price} | "
+                    f"{evaluation.signal}",
+                    file=sys.stderr
+                )
+                return result
+            else:
+                self._add_notification(
+                    symbol, 'FAILED',
+                    f'下单失败: {result.get("reason", "未知")}'
+                )
+                return result
+
+        except Exception as e:
+            self._add_notification(symbol, 'ERROR', f'加仓异常: {e}')
+            logger.error(f"[TierMonitor] ❌ 加仓异常 {symbol}: {e}", exc_info=True)
+            return None
+
+    # ── 持仓辅助 ──
+
+    def _get_position_market_value(self, symbol: str) -> float:
+        """获取某只持仓的当前市值"""
+        try:
+            positions = self.executor.get_positions() if self.executor else []
+            for pos in positions:
+                if pos.get('symbol') == symbol:
+                    return pos.get('current_price', 0) * pos.get('volume', 0)
+        except Exception:
+            pass
+        return 0.0
+
+    def _get_position_avg_price(self, symbol: str) -> float:
+        """获取某只持仓的均价"""
+        try:
+            positions = self.executor.get_positions() if self.executor else []
+            for pos in positions:
+                if pos.get('symbol') == symbol:
+                    return pos.get('avg_price', 0)
+        except Exception:
+            pass
+        return 0.0
+
+    def _get_position_tier(self, symbol: str) -> str:
+        """获取持仓当前层级"""
+        with self.lock:
+            state = self.tier_states.get(symbol, {})
+            return state.get('tier', 'probe')
+
+    # ══════════════════════════════════════════════════
+    # 核心检查逻辑（由主循环调用）
+    # ══════════════════════════════════════════════════
+
+    def _check_all_positions(self) -> None:
+        """主循环调用的全持仓检查"""
+        if self.executor is None:
+            return
+
+        try:
+            account = self.executor.get_account()
+            positions = self.executor.get_positions()
+        except Exception as e:
+            logger.warning(f"[TierMonitor] 获取账户/持仓失败: {e}")
+            return
+
+        if not positions:
+            return
+
+        # 获取 Pi 立场
+        pi_stance = self._get_pi_stance()
+
+        # 今日买入的跳过（T+1 下不加今天买的）
+        today_buy_symbols = (
+            self.executor._get_today_buy_symbols() if self.executor else set()
+        )
+
+        for pos in positions:
+            symbol = pos.get('symbol', '')
+            if not symbol:
+                continue
+
+            # 跳过今日买入的
+            if symbol in today_buy_symbols:
+                continue
+
+            avg_price = pos.get('avg_price', 0)
+            current_price = pos.get('current_price', 0)
+            volume = pos.get('volume', 0)
+
+            if avg_price <= 0 or current_price <= 0 or volume <= 0:
+                continue
+
+            float_pnl_pct = (current_price - avg_price) / avg_price * 100
+
+            # ── 第 1 层：层级评估 ──
+            current_tier = self._get_position_tier(symbol)
+            evaluation = self.evaluate_position_tier(
+                symbol, float_pnl_pct, current_tier
+            )
+
+            if evaluation.action in ('HOLD', 'MAX_TIER'):
+                continue
+
+            # 防重复触发：同一符号 5 分钟内不重复评估
+            now_ts = time.time()
+            last_eval = self._last_eval.get(symbol, 0)
+            if now_ts - last_eval < 300:  # 5 分钟
+                continue
+            self._last_eval[symbol] = now_ts
+
+            # ── 第 2 层：门控仲裁 ──
+            gate = self.can_execute_add(
+                symbol, evaluation, current_price, avg_price,
+                account, pi_stance
+            )
+
+            if gate.allowed:
+                # ── 第 3 层：执行加仓 ──
+                self.execute_add_position(symbol, evaluation, current_price, account)
+            else:
+                # 记录拦截原因
+                block_reasons = [c[1] for c in gate.checks if c[0] == 'BLOCKED']
+                if block_reasons:
+                    self._add_notification(
+                        symbol, 'BLOCKED',
+                        f'加仓拦截 ({evaluation.target_tier}): {"; ".join(block_reasons)}'
+                    )
+
+    def _get_pi_stance(self) -> str:
+        """获取 Pi 最新立场"""
+        try:
+            from core.utils.strategy_chain import StrategyChain
+            chain = StrategyChain()
+            pi_conf = chain.get_pi_confirmation()
+            if pi_conf:
+                return pi_conf.get('stance', 'yellow')
+        except Exception:
+            pass
+        return 'yellow'
+
+    # ── 通知管理 ──
+
+    def _add_notification(self, symbol: str, ntype: str, message: str) -> None:
+        """添加通知到队列"""
+        notif = {
+            'timestamp': datetime.now().isoformat(),
+            'symbol': symbol,
+            'type': ntype,  # EXECUTED / BLOCKED / SKIPPED / FAILED / ERROR
+            'message': message,
+        }
+        with self.lock:
+            self.notifications.append(notif)
+            # 保留最近 500 条
+            if len(self.notifications) > 500:
+                self.notifications = self.notifications[-500:]
+
+        # 写入通知日志文件
+        self._log_notification(notif)
+
+    def _log_notification(self, notif: dict) -> None:
+        """写入通知日志"""
+        try:
+            today = datetime.now().strftime('%Y-%m-%d')
+            log_file = self.log_dir / f"tier_notifications_{today}.jsonl"
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(notif, ensure_ascii=False) + '\n')
+        except Exception:
+            pass
+
+    def get_notifications(self, since: Optional[str] = None) -> List[dict]:
+        """获取通知列表。since 为 ISO 时间字符串，仅返回此时间之后的通知。"""
+        with self.lock:
+            notifs = list(self.notifications)
+        if since:
+            notifs = [n for n in notifs if n['timestamp'] > since]
+        return notifs
+
+    def get_tier_status(self) -> Dict[str, Any]:
+        """获取所有持仓的层级状态"""
+        result = []
+        try:
+            positions = self.executor.get_positions() if self.executor else []
+            for pos in positions:
+                symbol = pos.get('symbol', '')
+                if not symbol:
+                    continue
+                tier = self._get_position_tier(symbol)
+                avg_price = pos.get('avg_price', 0)
+                current_price = pos.get('current_price', 0)
+                float_pnl_pct = (current_price - avg_price) / avg_price * 100 if avg_price > 0 else 0
+
+                result.append({
+                    'symbol': symbol,
+                    'tier': tier,
+                    'avg_price': round(avg_price, 2),
+                    'current_price': round(current_price, 2),
+                    'float_pnl_pct': round(float_pnl_pct, 2),
+                    'today_adds': self.today_adds.get(symbol, 0),
+                    'next_tier': self._get_next_tier(tier, float_pnl_pct / 100 if float_pnl_pct > 1 else float_pnl_pct),
+                })
+        except Exception:
+            pass
+        return {
+            'positions': result,
+            'total_notifications': len(self.notifications),
+            'running': self.running,
+        }
+
+    def _get_next_tier(self, current_tier: str, float_pnl_pct: float) -> Optional[str]:
+        """计算下一个可达层级"""
+        if current_tier == 'sprint':
+            return None
+        if float_pnl_pct >= 0.03:
+            return 'sprint'
+        if float_pnl_pct >= 0.01 and current_tier == 'probe':
+            return 'confirm'
+        return None
+
+
+# ── 全局单例 ──
+_monitor_instance: Optional[PositionTierMonitor] = None
+_monitor_lock = threading.Lock()
+
+
+def get_position_tier_monitor(executor=None, interval_seconds: int = 30) -> PositionTierMonitor:
+    global _monitor_instance
+    with _monitor_lock:
+        if _monitor_instance is None:
+            _monitor_instance = PositionTierMonitor(
+                executor=executor, interval_seconds=interval_seconds
+            )
+        elif executor is not None and _monitor_instance.executor is None:
+            _monitor_instance.executor = executor
+        return _monitor_instance
+
+
+def start_tier_monitor(executor=None) -> bool:
+    monitor = get_position_tier_monitor(executor=executor)
+    return monitor.start()
+
+
+def stop_tier_monitor() -> None:
+    global _monitor_instance
+    with _monitor_lock:
+        if _monitor_instance is not None:
+            _monitor_instance.stop()
+
+
+def get_tier_status() -> Dict[str, Any]:
+    monitor = get_position_tier_monitor()
+    return monitor.get_tier_status()
+
+
+def get_tier_notifications(since: Optional[str] = None) -> List[dict]:
+    monitor = get_position_tier_monitor()
+    return monitor.get_notifications(since=since)

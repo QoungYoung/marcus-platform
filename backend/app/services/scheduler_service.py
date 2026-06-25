@@ -857,7 +857,13 @@ class SchedulerService:
                 )
             else:
                 report_guide = (
-                    "报告结构：市场概况 → 板块资金 → 指数复盘 → 风险关注点。"
+                    "报告结构：市场概况 → 板块资金 → 指数复盘 → 风险关注点。\n"
+                    "\n"
+                    "⚠️ 职责边界 — 你只负责市场环境判断，不负责个股操作建议：\n"
+                    "- 止盈/减仓/止损 由代码层铁律二自动执行，你不需要、也不应该建议\n"
+                    "- 加仓 由代码层门控自动执行，你不需要、也不应该建议\n"
+                    "- '风险关注点'仅描述市场层面的风险（如板块轮动、资金背离），"
+                    "不涉及具体持仓操作（如'建议减仓XX'、'建议止盈XX'）\n"
                 )
 
             prompt = (
@@ -1062,21 +1068,23 @@ class SchedulerService:
                 "此刻上游已运行 18 分钟，可确认其站稳。\n"
                 "1. 检查上游持仓走势，确认站住分时均线\n"
                 "2. 买入建仓计划表中的中游标的（如有），检查中游技术面\n"
-                "3. 若中游无合格标的，跳过该环节并记录原因"
+                "3. 若中游无合格标的，跳过该环节并记录原因\n"
+                "4. ⚠️ 查看代码层加仓通知：get_portfolio 中检查上游持仓是否已被 PositionTierMonitor 自动加仓，在报告中记录"
             )
         elif 'late' in task.id or pi_prompt_context == 'late_morning' or 'late_morning' in task.id:
             trade_mode_instruction = (
                 "现在是午前 10:35，进入 **产业链收尾+趋势确认模式**。\n"
                 "1. 评估已建仓标的走势，不符合预期的及时止损\n"
                 "2. 如 9:35/9:50 尚未完成全部产业链覆盖，在此时段完成下游建仓\n"
-                "3. 趋势确认的可考虑加仓\n"
+                "3. ⚠️ 查看代码层加仓通知：检查 get_portfolio 中持仓增量和 PositionTierMonitor 拦截原因，在报告中记录\n"
                 "4. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
             )
         elif 'afternoon' in task.id or pi_prompt_context == 'afternoon':
             trade_mode_instruction = (
                 "现在是午后 13:35，进入 **午后修正+建仓模式**。\n"
-                "1. 关注下午开盘方向，决定是否加仓或减仓\n"
-                "2. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
+                "1. 关注下午开盘方向\n"
+                "2. ⚠️ 查看代码层加仓通知：get_portfolio 确认午后 PositionTierMonitor 自动加仓/拦截记录\n"
+                "3. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
             )
         else:
             trade_mode_instruction = "请基于最新扫描报告执行自主交易决策。"

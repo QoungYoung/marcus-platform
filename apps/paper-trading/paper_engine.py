@@ -686,14 +686,16 @@ class PaperTradingEngine:
             cursor.execute('SELECT highest_price FROM positions WHERE symbol = ?', (order.symbol,))
             meta_row = cursor.fetchone()
             if meta_row:
+                current_high = meta_row[0] or 0.0
+                new_high = fill_price if fill_price > current_high else current_high
                 cursor.execute(
-                    'UPDATE positions SET entry_date = ?, updated_at = ? WHERE symbol = ?',
-                    (pos.entry_date, now_meta, order.symbol)
+                    'UPDATE positions SET entry_date = ?, highest_price = ?, updated_at = ? WHERE symbol = ?',
+                    (pos.entry_date, new_high, now_meta, order.symbol)
                 )
             else:
                 cursor.execute(
                     'INSERT INTO positions (symbol, entry_date, highest_price, updated_at) VALUES (?, ?, ?, ?)',
-                    (order.symbol, pos.entry_date, 0.0, now_meta)
+                    (order.symbol, pos.entry_date, fill_price, now_meta)
                 )
 
             # 记录成交 (回测带 trade_date, 实盘为 NULL)

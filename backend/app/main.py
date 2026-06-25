@@ -38,6 +38,7 @@ from app.api.scheduler import router as scheduler_router
 from app.services.scheduler_service import scheduler_service
 from app.services.qqbot_service import qqbot_service, get_qqbot_service
 from app.services.stop_loss_monitor import get_monitor_status, start_monitor, stop_monitor as stop_sl_monitor
+from app.services.position_tier_monitor import start_tier_monitor, stop_tier_monitor, get_tier_status
 from app.database import init_db
 from app.services.prompt_service import seed_prompts
 from app.db.prompt_seeds import PROMPT_SEEDS
@@ -82,6 +83,18 @@ async def lifespan(app: FastAPI):
             print(f"[Main] ⚠️ 止损监控启动返回 False（可能已在运行）")
     except Exception as e:
         print(f"[Main] ⚠️ 止损监控启动失败: {e}")
+    
+    # 启动加仓层级监控器（与止损监控并行）
+    try:
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        executor = MarcusVNPyExecutor()
+        started = start_tier_monitor(executor=executor)
+        if started:
+            print(f"[Main] ✅ 加仓层级监控已启动 (executor=MarcusVNPyExecutor)")
+        else:
+            print(f"[Main] ⚠️ 加仓层级监控启动返回 False（可能已在运行）")
+    except Exception as e:
+        print(f"[Main] ⚠️ 加仓层级监控启动失败: {e}")
 
     # 预热 trades.db（建索引 + WAL 预热，避免首次 API 请求超时）
     try:
@@ -140,6 +153,11 @@ async def lifespan(app: FastAPI):
     try:
         stop_sl_monitor()
         print("[Main] 止损监控已停止")
+    except Exception:
+        pass
+    try:
+        stop_tier_monitor()
+        print("[Main] 加仓层级监控已停止")
     except Exception:
         pass
     if settings.QQ_BOT_ENABLED:
@@ -209,11 +227,16 @@ async def health_check():
         monitor = get_monitor_status()
     except Exception:
         monitor = {"error": "unavailable"}
+    try:
+        tier = get_tier_status()
+    except Exception:
+        tier = {"error": "unavailable"}
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "scheduler": scheduler_service.get_scheduler_status(),
         "stop_loss_monitor": monitor,
+        "position_tier_monitor": tier,
     }
 
 

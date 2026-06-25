@@ -685,8 +685,15 @@ class MarcusVNPyExecutor:
             clean_reason = reason.strip() if reason else '自动交易'
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            # 区分代码层自动加仓 vs 手动买入
+            is_tier_add = reason.startswith('[TierMonitor自动加仓]')
+            if is_tier_add:
+                tag = '🟢 **自动加仓**'
+            else:
+                tag = '🟢 **买入成交**'
+
             message = (
-                f"🟢 **买入成交**\n\n"
+                f"{tag}\n\n"
                 f"标的: {stock_name} ({symbol})\n"
                 f"价格: {price:.2f}  |  数量: {volume}股\n"
                 f"金额: {cost:.2f}"
