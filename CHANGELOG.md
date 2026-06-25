@@ -4,6 +4,59 @@
 
 ---
 
+## [1.5.2] — 2026-06-25（加仓代码化 + 职责边界澄清）
+
+本次更新将三级加仓判断从 AI 手中收回，改为代码层自动执行，解决 22 笔交易中加仓 0 次的系统性问题。同时明确了盘中扫描报告的 AI 职责边界。
+
+### 🤖 加仓代码化：PositionTierMonitor
+
+- **新增 `backend/app/services/position_tier_monitor.py`**（~540 行）：独立后台线程，与 StopLossMonitor 并行运行
+- **三层架构全部落入代码层**：
+  | 层 | 功能 | 触发 |
+  |:---:|:---|:---|
+  | 第 1 层 | 层级评估 | 浮盈 ≥ 1% → confirm / 浮盈 ≥ 3% → sprint |
+  | 第 2 层 | 门控仲裁 | Pi立场/回撤＜5%/连亏＜3/保护线/趋势确认/单日≤3次 |
+  | 第 3 层 | 自动执行 | 计算股数 → 保护线末检 → 下单并更新层级状态 |
+- **时间窗口控制**：早盘 09:30-09:45 冷静期 + 尾盘 14:30 后禁止加仓
+- **层级状态持久化**：JSON 文件 + 通知日志 `tier_notifications_{date}.jsonl`
+
+### 🛡️ 保护线与加仓联动
+
+- 确认仓 → T1 保本线（跌回成本价拦截加仓）
+- 冲刺仓 → T2 保护线（成本+X%，X 由近5日日均振幅决定）
+- 浮盈距离保护线不足 0.5% → 不加仓
+
+### 📋 Prompt 职责重新分配
+
+- **`prompt_seeds.py` TRADE_SYSTEM_PROMPT**：
+  - 删除 AI 加仓判断职责，"可加"改为"代码自动，AI 只记录"
+  - 新增 `6.0 接收代码层通知` 节（EXECUTED / BLOCKED / SKIPPED / EDGE_CASE）
+  - 新增"代码硬性保护规则"节（8 条加仓门控明文化）
+  - 交易报告模板中增加代码层加仓/拦截示例行
+- **`scheduler_service.py` 盘中扫描 `_call_pi_analysis`**：
+  - 新增"职责边界"声明：AI 只负责市场环境判断，不负责个股止盈/减仓/加仓建议
+- **`scheduler_service.py` 交易窗口指令**：
+  - 9:53 / 10:35 / 13:35 三个窗口删除"可考虑加仓"，改为"查看 PositionTierMonitor 通知"
+
+### 📱 QQ 通知分类
+
+- 代码层自动加仓 → `🟢 **自动加仓**`（新增分类，区别于 `🟢 **买入成交**`）
+- 修改 `marcus_trade.py` `_notify_buy`：按 `[TierMonitor自动加仓]` 前缀自动分流
+
+### 🔧 集成
+
+- **`main.py`**：启动时 `start_tier_monitor()`，关闭时 `stop_tier_monitor()`，`/health` 端点新增 `position_tier_monitor` 字段
+
+### 📝 涉及文件
+
+- `backend/app/services/position_tier_monitor.py`（新建）
+- `backend/app/db/prompt_seeds.py`
+- `backend/app/services/scheduler_service.py`
+- `backend/app/core/trading/marcus_trade.py`
+- `backend/app/main.py`
+
+---
+
 ## [1.5.1] — 2026-06-15（技术指标幻觉修复 + 数据时效标注体系）
 
 本次更新解决了 Marcus Agent 在没有技术指标工具可用的情况下凭空编造 KDJ/MACD/RSI 信号的幻觉问题，同时建立了完整的数据时效标注体系。
