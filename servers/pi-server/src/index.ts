@@ -1378,6 +1378,25 @@ const server = http.createServer(async (req, res) => {
         const result = await executePanelDiscussion(cleanMessage, sessionId);
         console.log(`[PiServer] <-- Panel 回复 [reflect][${sessionId.slice(-8)}] (${result.elapsed_ms}ms): ${result.reply.slice(0, 100)}`);
         setBacktestContext(null);
+
+        // 持久化 reflect 报告到 sessions 目录，防止后端超时导致报告丢失
+        try {
+          const reflectRecord = [{
+            role: 'user',
+            content: cleanMessage,
+            timestamp: new Date().toISOString(),
+          }, {
+            role: 'assistant',
+            content: result.reply,
+            timestamp: new Date().toISOString(),
+            elapsed_ms: result.elapsed_ms,
+          }];
+          saveSession(sessionId, reflectRecord);
+          console.log(`[PiServer] 💾 reflect 报告已持久化到 sessions/${sessionId}.json (${result.reply.length} 字)`);
+        } catch (e) {
+          console.error(`[PiServer] reflect 报告持久化失败:`, e);
+        }
+
         jsonResponse(res, 200, {
           reply: result.reply,
           session_id: sessionId,

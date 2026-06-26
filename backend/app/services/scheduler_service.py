@@ -699,6 +699,10 @@ class SchedulerService:
                 
                 # === pi_trade / pi_reflect 模式：output 已经是 Pi 报告，直接推送 ===
                 if task.type in ('pi_trade', 'pi_reflect') and execution.output and execution.status == JobStatus.SUCCESS.value:
+                    # reflect 流式模式已逐条推送专家回复，跳过重复发送完整报告
+                    if task.type == 'pi_reflect' and getattr(self, '_reflect_notified', False):
+                        logger.info(f"QQ Pi-report skipped for {task.name} (已流式推送)")
+                        return
                     try:
                         # 去掉 SIGNAL 行再发送
                         clean_output = re.sub(r'\n?SIGNAL:.*', '', execution.output).strip()
@@ -1213,20 +1217,36 @@ class SchedulerService:
         # 返回完整报告（含 SIGNAL 行供后续通知使用）
         return reply
 
+    def _push_reflect_qq(self, message: str, execution_id: str, label: str):
+        """流式推送反思专家回复到 QQ（每个专家完成即推送）"""
+        if not self._qq_notifier:
+            logger.warning(f"[{execution_id}] [reflect-stream] QQ notifier 未配置，跳过: {label}")
+            return
+        try:
+            # 去掉 SIGNAL 行（主持人最终报告可能包含）
+            clean_msg = re.sub(r'\n?SIGNAL:.*', '', message).strip()
+            self._qq_notifier(clean_msg, self._qq_recipient)
+            self._reflect_notified = True
+            logger.info(f"[{execution_id}] [reflect-stream] QQ 已推送: {label} ({len(clean_msg)} 字)")
+        except Exception as e:
+            logger.error(f"[{execution_id}] [reflect-stream] QQ 推送失败 ({label}): {e}")
+
     def _execute_pi_reflect(self, task: TaskConfig, execution_id: str) -> str:
         """
-        Pi 周度反思模式 —— 使用 DeepSeek-v4-pro + 最高思考等级。
+        Pi 周度反思模式 —— 专家组群聊（SSE 流式），每个专家完成即推送 QQ。
 
         流程：
         1. 计算本周一和本周五日期
-        2. 构造反思指令：告知 Pi 查询整周 Pi 分析历史
-        3. 发送给 Pi Server /chat（mode=reflect）
-        4. Pi 调用 get_pi_analysis_history → 深度分析
-        5. 输出周度反思报告
-        6. 提取 SIGNAL 写入策略链
+        2. 构造反思指令
+        3. 通过 SSE 连接 Pi Server /chat/stream
+        4. 每个专家完成时立即推送 QQ（不等全部完成）
+        5. 主持人综合报告完成后保存并提取 SIGNAL
         """
         import urllib.request, json as _json, ssl, re
         from datetime import timedelta
+
+        # 标记：流式通知已发送，_send_notifications 跳过重复
+        self._reflect_notified = False
 
         now = datetime.now()
         # 本周一
@@ -1258,32 +1278,91 @@ class SchedulerService:
         payload = _json.dumps({
             "message": prompt,
             "session_id": f"pi_reflect_{task.id}_{now.strftime('%Y%m%d')}",
-            "mode": "reflect"  # 反思模式（隔离的工具集+提示词+模型+最高思考）
         }).encode("utf-8")
 
-        pi_url = get_settings().PI_SERVER_URL
+        # 改用 SSE 流式端点，逐个接收专家回复
+        pi_url = get_settings().PI_SERVER_URL.replace('/chat', '/chat/stream')
         req = urllib.request.Request(
             pi_url,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
             method="POST"
         )
         ctx = ssl.create_default_context()
 
-        logger.info(f"[{execution_id}] Sending pi_reflect request for {task.id} "
+        logger.info(f"[{execution_id}] Sending pi_reflect SSE request for {task.id} "
                     f"(日期范围: {start_date}→{end_date})...")
-        # 反思可能需要更长时间（专家组群聊：数据采集 + 4 专家并行 + 交叉评论 + 主持人综合）
-        # 注意：urllib 的 timeout 同时控制连接和读取超时，周度反思涉及大量工具调用和深度推理，
-        # 900 秒（15 分钟）是合理上限
-        REFLECT_TIMEOUT = 900
-        with urllib.request.urlopen(req, context=ctx, timeout=REFLECT_TIMEOUT) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-            reply = data.get("reply", "")
-            elapsed = data.get("elapsed_ms", 0)
-            logger.info(f"[{execution_id}] Pi reflect response ({len(reply)} chars, {elapsed}ms)")
+        # 专家组群聊可达 17 分钟+，1800 秒（30 分钟）留足余量
+        REFLECT_TIMEOUT = 1800
 
-        if not reply or reply == '(无回复)':
+        final_reply = ""
+        final_elapsed = 0
+
+        with urllib.request.urlopen(req, context=ctx, timeout=REFLECT_TIMEOUT) as resp:
+            # SSE 流式解析：逐行读取 event:/data:/空行 分隔的事件
+            current_event = None
+            data_buffer = []
+
+            for raw_line in resp:
+                line = raw_line.decode('utf-8').rstrip('\r\n')
+
+                if line.startswith('event:'):
+                    current_event = line[6:].strip()
+                elif line.startswith('data:'):
+                    data_buffer.append(line[5:].lstrip())
+                elif line == '':
+                    # 事件结束，处理累积的 data
+                    if current_event and data_buffer:
+                        data_str = '\n'.join(data_buffer)
+                        try:
+                            event_data = _json.loads(data_str)
+                        except _json.JSONDecodeError:
+                            current_event = None
+                            data_buffer = []
+                            continue
+
+                        phase = current_event
+
+                        if phase == 'expert_message':
+                            label = event_data.get('label', '')
+                            results = event_data.get('results', [])
+                            elapsed_sec = event_data.get('elapsed_sec', 0)
+                            # 跳过 Phase 0 数据采集（原始数据不适合推送）
+                            if '数据采集' in label or '跳过数据采集' in label:
+                                logger.info(f"[{execution_id}] [reflect-stream] 跳过: {label}")
+                            else:
+                                # 每个专家/主持人的回复立即推送 QQ
+                                for r in results:
+                                    content = r.get('content', '')
+                                    if content:
+                                        qq_msg = (
+                                            f"📋 周度反思 · {label}\n"
+                                            f"⏱ 已用时 {elapsed_sec}s\n\n{content}"
+                                        )
+                                        self._push_reflect_qq(qq_msg, execution_id, label)
+
+                        elif phase == 'done':
+                            final_reply = event_data.get('reply', '')
+                            final_elapsed = event_data.get('elapsed_ms', 0)
+                            logger.info(f"[{execution_id}] [reflect-stream] 完成 "
+                                        f"({len(final_reply)} chars, {final_elapsed}ms)")
+
+                        elif phase == 'start':
+                            logger.info(f"[{execution_id}] [reflect-stream] 已启动: "
+                                        f"{event_data.get('message', '')}")
+
+                        elif phase == 'error':
+                            err_msg = event_data.get('message', '未知错误')
+                            logger.error(f"[{execution_id}] [reflect-stream] Pi Server 错误: {err_msg}")
+                            raise RuntimeError(f"Pi Server reflect 错误: {err_msg}")
+
+                    current_event = None
+                    data_buffer = []
+
+        if not final_reply or final_reply == '(无回复)':
             raise RuntimeError("Pi 未返回有效周度反思报告")
+
+        reply = final_reply
 
         # 解析策略信号并写入策略链
         stance = 'yellow'
