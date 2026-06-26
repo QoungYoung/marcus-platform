@@ -1273,7 +1273,10 @@ class SchedulerService:
         logger.info(f"[{execution_id}] Sending pi_reflect request for {task.id} "
                     f"(日期范围: {start_date}→{end_date})...")
         # 反思可能需要更长时间（专家组群聊：数据采集 + 4 专家并行 + 交叉评论 + 主持人综合）
-        with urllib.request.urlopen(req, context=ctx, timeout=600) as resp:
+        # 注意：urllib 的 timeout 同时控制连接和读取超时，周度反思涉及大量工具调用和深度推理，
+        # 900 秒（15 分钟）是合理上限
+        REFLECT_TIMEOUT = 900
+        with urllib.request.urlopen(req, context=ctx, timeout=REFLECT_TIMEOUT) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
             reply = data.get("reply", "")
             elapsed = data.get("elapsed_ms", 0)

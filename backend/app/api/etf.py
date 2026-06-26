@@ -317,13 +317,18 @@ async def get_etf_kline(
     """
     获取ETF K线数据
 
-    - period: K线周期 (day/week/month/minute/5minute/15minute/30minute/60minute)
+    - period: K线周期 (day 使用 Tushare fund_daily / 其他周期使用雪球)
     - count: 数据条数，负数表示取起点之前的历史数据
     - begin: 起始时间戳（毫秒）
     """
     try:
-        engine = _get_xueqiu_engine()
-        klines = engine.get_etf_kline(symbol, period=period, count=count, begin=begin)
+        # ── 日线：使用 Tushare fund_daily（更稳定、数据更完整） ──
+        if period == "day":
+            klines = _fetch_etf_kline_from_tushare(symbol, count=abs(count) if count < 0 else count)
+        else:
+            # 其他周期（周/月/分钟）仍使用雪球
+            engine = _get_xueqiu_engine()
+            klines = engine.get_etf_kline(symbol, period=period, count=count, begin=begin)
 
         if not klines:
             raise HTTPException(status_code=404, detail=f"No kline data for {symbol}")
@@ -331,7 +336,7 @@ async def get_etf_kline(
         return {
             "symbol": symbol,
             "period": period,
-            "count": count,
+            "count": len(klines),
             "klines": klines,
             "count": len(klines),
             "updated_at": datetime.now().isoformat(),
@@ -340,3 +345,80 @@ async def get_etf_kline(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch ETF kline: {str(e)}")
+
+
+def _fetch_etf_kline_from_tushare(symbol: str, count: int = 284) -> list:
+    """
+    通过 Tushare fund_daily 接口获取 ETF 日线行情。
+
+    Args:
+        symbol: ETF 代码，如 "510050"、"SH510050"、"159513"
+        count: 返回最近多少条数据
+
+    Returns:
+        [{"timestamp": "2026-06-26", "open": 1.234, "high": ..., "low": ..., 
+          "close": ..., "volume": ..., "amount": ..., "change_pct": ...}, ...]
+    """
+    import tushare as ts
+    from app.config import get_settings
+    from datetime import datetime as dt, timedelta
+
+    settings = get_settings()
+    token = settings.get_tushare_token()
+    pro = ts.pro_api(token)
+
+    # 符号标准化：SH510050 / 510050 → 510050.SH
+    ts_code = _symbol_to_ts_code(symbol, market='SH')
+
+    # 计算日期范围
+    end_date = dt.now().strftime("%Y%m%d")
+    # 多取一些，留出非交易日余量（ETF fund_daily 只在交易日有数据）
+    start_date = (dt.now() - timedelta(days=count * 2)).strftime("%Y%m%d")
+
+    df = pro.fund_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    
+    if df is None or df.empty:
+        # 尝试深市
+        ts_code_sz = _symbol_to_ts_code(symbol, market='SZ')
+        if ts_code_sz != ts_code:
+            df = pro.fund_daily(ts_code=ts_code_sz, start_date=start_date, end_date=end_date)
+
+    if df is None or df.empty:
+        return []
+
+    df = df.sort_values("trade_date", ascending=True)
+    klines = []
+    for _, row in df.iterrows():
+        klines.append({
+            "timestamp": str(row["trade_date"]),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["vol"]),
+            "amount": float(row["amount"]) * 1000,  # Tushare fund_daily amount 单位千元→元
+            "change_pct": float(row.get("pct_chg", 0)),
+        })
+
+    # 截取最近 count 条
+    return klines[-count:] if len(klines) > count else klines
+
+
+def _symbol_to_ts_code(symbol: str, market: str = 'SH') -> str:
+    """
+    将 ETF 代码标准化为 Tushare 格式。
+
+    "SH510050" → "510050.SH"
+    "510050" → "510050.SH" (默认沪市)
+    "SZ159995" → "159995.SZ"
+    "159995" → "159995.SZ" (判断：159开头→深市)
+    """
+    s = symbol.strip().upper()
+    if s.startswith("SH"):
+        return f"{s[2:]}.SH"
+    if s.startswith("SZ"):
+        return f"{s[2:]}.SZ"
+    # 纯数字：按开头判断
+    if s.startswith("159") or s.startswith("16"):
+        return f"{s}.SZ"
+    return f"{s}.SH"
