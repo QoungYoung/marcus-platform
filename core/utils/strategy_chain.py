@@ -553,6 +553,24 @@ class StrategyChain:
             data_dir = str(Path(__file__).resolve().parents[2] / "data")
         return os.path.join(data_dir, "position_highs.json")
 
+    @staticmethod
+    def _normalize_symbol_key(symbol: str) -> str:
+        """将各种代码格式统一为 ts_code 格式 (CODE.MARKET)，作为 position_highs.json 的 key"""
+        symbol = symbol.strip().upper()
+        # 去掉已经存在的后缀
+        pure = symbol.replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
+        # 去掉前缀 SH/SZ/BJ
+        if pure.startswith(('SH', 'SZ', 'BJ')):
+            pure = pure[2:]
+        # 根据首位数字判断市场
+        if pure.startswith(('6', '9')):
+            return f"{pure}.SH"
+        elif pure.startswith(('0', '3')):
+            return f"{pure}.SZ"
+        elif pure.startswith(('4', '8')):
+            return f"{pure}.BJ"
+        return pure  # 无法判断则原样返回
+
     def _load_highs(self) -> dict:
         """加载持仓最高价记录"""
         highs_path = self._get_highs_path()
@@ -585,19 +603,34 @@ class StrategyChain:
         Returns:
             dict: {"high_price": float, "high_date": str, "is_new_high": bool}
         """
+        key = self._normalize_symbol_key(symbol)
         highs = self._load_highs()
         today = datetime.now().strftime("%Y-%m-%d")
 
+        # 迁移旧 key（不同格式的）→ 新 key（统一的 ts_code 格式）
+        for old_key in list(highs.keys()):
+            if self._normalize_symbol_key(old_key) == key and old_key != key:
+                if key not in highs:
+                    highs[key] = highs.pop(old_key)
+                else:
+                    # 两个都有，取较新的合并
+                    old_ts = highs[old_key].get("updated_at", "")
+                    new_ts = highs[key].get("updated_at", "")
+                    if old_ts > new_ts:
+                        highs[key] = highs.pop(old_key)
+                    else:
+                        highs.pop(old_key)
+
         is_new_high = False
-        if symbol not in highs:
-            highs[symbol] = {
+        if key not in highs:
+            highs[key] = {
                 "high_price": round(current_price, 3),
                 "high_date": today,
                 "updated_at": datetime.now().isoformat(),
             }
             is_new_high = True
-        elif current_price > highs[symbol]["high_price"]:
-            highs[symbol] = {
+        elif current_price > highs[key]["high_price"]:
+            highs[key] = {
                 "high_price": round(current_price, 3),
                 "high_date": today,
                 "updated_at": datetime.now().isoformat(),
@@ -608,8 +641,8 @@ class StrategyChain:
             self._save_highs(highs)
 
         return {
-            "high_price": highs[symbol]["high_price"],
-            "high_date": highs[symbol]["high_date"],
+            "high_price": highs[key]["high_price"],
+            "high_date": highs[key]["high_date"],
             "is_new_high": is_new_high,
         }
 
@@ -620,11 +653,16 @@ class StrategyChain:
         Returns:
             dict: {"high_price": float, "high_date": str, "days_since_high": int} 或空 dict
         """
+        key = self._normalize_symbol_key(symbol)
         highs = self._load_highs()
-        if symbol not in highs:
-            return {}
-
-        hwm = highs[symbol]
+        if key not in highs:
+            # 兼容旧数据：尝试原样 key 查找
+            if symbol in highs:
+                hwm = highs[symbol]
+            else:
+                return {}
+        else:
+            hwm = highs[key]
         days = self._count_trading_days_since(hwm["high_date"])
         return {
             "high_price": hwm["high_price"],
@@ -641,9 +679,14 @@ class StrategyChain:
         """
         highs = self._load_highs()
         result = {}
+        seen_keys = set()
         for symbol, hwm in highs.items():
+            norm = self._normalize_symbol_key(symbol)
+            if norm in seen_keys:
+                continue  # 跳过重复 key
+            seen_keys.add(norm)
             days = self._count_trading_days_since(hwm["high_date"])
-            result[symbol] = {
+            result[norm] = {
                 "high_price": hwm["high_price"],
                 "high_date": hwm["high_date"],
                 "days_since_high": days,
