@@ -79,7 +79,7 @@ class StopLossMonitor:
     # 早盘冷静期：09:30-09:45 开盘波动剧烈，统计显著性显示此窗口卖出胜率 0%
     MORNING_QUIET_END = dtime(9, 45)
 
-    def __init__(self, executor=None, interval_seconds: int = 30):
+    def __init__(self, executor=None, interval_seconds: int = 31):
         self.executor = executor
         self.interval = interval_seconds
         self.running = False
@@ -169,7 +169,7 @@ class StopLossMonitor:
     # ── 主循环 ──
 
     def _run_loop(self) -> None:
-        print("[StopLoss] 后台监控线程启动", file=sys.stderr)
+        print("[StopLoss] 后台监控线程启动 (间隔=31s, 偏移=0s)", file=sys.stderr)
         cycle = 0
         while self.running:
             cycle += 1
@@ -1038,7 +1038,7 @@ _monitor_instance: Optional[StopLossMonitor] = None
 _monitor_lock = threading.Lock()
 
 
-def get_stop_loss_monitor(executor=None, interval_seconds: int = 30) -> StopLossMonitor:
+def get_stop_loss_monitor(executor=None, interval_seconds: int = 31) -> StopLossMonitor:
     global _monitor_instance
     with _monitor_lock:
         if _monitor_instance is None:

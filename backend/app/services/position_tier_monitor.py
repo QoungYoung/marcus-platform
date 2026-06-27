@@ -95,7 +95,7 @@ class PositionTierMonitor:
         'sprint': 0.25,
     }
 
-    def __init__(self, executor=None, interval_seconds: int = 30):
+    def __init__(self, executor=None, interval_seconds: int = 33):
         self.executor = executor
         self.interval = interval_seconds
         self.running = False
@@ -179,7 +179,8 @@ class PositionTierMonitor:
     # ── 主循环 ──
 
     def _run_loop(self) -> None:
-        print("[TierMonitor] 后台加仓监控线程启动", file=sys.stderr)
+        print("[TierMonitor] 后台加仓监控线程启动 (间隔=33s, 偏移=10s)", file=sys.stderr)
+        time.sleep(10)  # 初始偏移，错开与其他监控器的首轮执行
         cycle = 0
         while self.running:
             cycle += 1
@@ -188,7 +189,17 @@ class PositionTierMonitor:
                     if cycle % 2 == 1:  # 只在奇数轮打印（减少噪音）
                         print(f"[TierMonitor] 🔄 第 {cycle} 轮层级检查 | {datetime.now().strftime('%H:%M:%S')}",
                               file=sys.stderr)
-                    self._check_all_positions()
+                    summary = self._check_all_positions()
+                    # 每轮都输出摘要日志
+                    if summary:
+                        logger.info(
+                            f"[TierMonitor] 第{cycle}轮: "
+                            f"持仓{summary['total']}只 | "
+                            f"触发{summary['triggered']}只 | "
+                            f"未达标{summary['hold']}只 | "
+                            f"已执行{summary['executed']}只 | "
+                            f"拦截{summary['blocked']}只"
+                        )
                 else:
                     if cycle % 20 == 1:
                         print(f"[TierMonitor] ⏸️ 非交易/禁止窗口，跳过 (cycle={cycle})", file=sys.stderr)
@@ -821,20 +832,22 @@ class PositionTierMonitor:
     # 核心检查逻辑（由主循环调用）
     # ══════════════════════════════════════════════════
 
-    def _check_all_positions(self) -> None:
-        """主循环调用的全持仓检查"""
+    def _check_all_positions(self) -> dict:
+        """主循环调用的全持仓检查，返回统计摘要。"""
+        summary = {"total": 0, "triggered": 0, "hold": 0, "executed": 0, "blocked": 0}
+
         if self.executor is None:
-            return
+            return summary
 
         try:
             account = self.executor.get_account()
             positions = self.executor.get_positions()
         except Exception as e:
             logger.warning(f"[TierMonitor] 获取账户/持仓失败: {e}")
-            return
+            return summary
 
         if not positions:
-            return
+            return summary
 
         # 获取 Pi 立场
         pi_stance = self._get_pi_stance()
@@ -843,6 +856,9 @@ class PositionTierMonitor:
         today_buy_symbols = (
             self.executor._get_today_buy_symbols() if self.executor else set()
         )
+
+        # 收集每只持仓的评估结果用于日志
+        hold_details = []
 
         for pos in positions:
             symbol = pos.get('symbol', '')
@@ -860,6 +876,7 @@ class PositionTierMonitor:
             if avg_price <= 0 or current_price <= 0 or volume <= 0:
                 continue
 
+            summary["total"] += 1
             float_pnl_pct = (current_price - avg_price) / avg_price * 100
 
             # ── 第 1 层：层级评估 ──
@@ -869,7 +886,11 @@ class PositionTierMonitor:
             )
 
             if evaluation.action in ('HOLD', 'MAX_TIER'):
+                summary["hold"] += 1
+                hold_details.append(f"{symbol}({current_tier}→{evaluation.signal})")
                 continue
+
+            summary["triggered"] += 1
 
             # 防重复触发：同一符号 5 分钟内不重复评估
             now_ts = time.time()
@@ -886,8 +907,11 @@ class PositionTierMonitor:
 
             if gate.allowed:
                 # ── 第 3 层：执行加仓 ──
-                self.execute_add_position(symbol, evaluation, current_price, account)
+                success = self.execute_add_position(symbol, evaluation, current_price, account)
+                if success:
+                    summary["executed"] += 1
             else:
+                summary["blocked"] += 1
                 # 记录拦截原因
                 block_reasons = [c[1] for c in gate.checks if c[0] == 'BLOCKED']
                 if block_reasons:
@@ -895,6 +919,12 @@ class PositionTierMonitor:
                         symbol, 'BLOCKED',
                         f'加仓拦截 ({evaluation.target_tier}): {"; ".join(block_reasons)}'
                     )
+
+        # 有持仓但全部未触发时，记录详情
+        if summary["total"] > 0 and summary["triggered"] == 0:
+            logger.debug(f"[TierMonitor] {summary['total']}只持仓均未满足层级升级条件: {', '.join(hold_details)}")
+
+        return summary
 
     def _get_pi_stance(self) -> str:
         """获取 Pi 最新立场"""
@@ -992,7 +1022,7 @@ _monitor_instance: Optional[PositionTierMonitor] = None
 _monitor_lock = threading.Lock()
 
 
-def get_position_tier_monitor(executor=None, interval_seconds: int = 30) -> PositionTierMonitor:
+def get_position_tier_monitor(executor=None, interval_seconds: int = 33) -> PositionTierMonitor:
     global _monitor_instance
     with _monitor_lock:
         if _monitor_instance is None:

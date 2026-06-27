@@ -250,6 +250,9 @@ class EntryCheckResponse(BaseModel):
     final_grade: str                    # pass / probe_only / blocked
     max_position_pct: float = 0         # 最大建议仓位%(相对总资产)
     downgrade_multiplier: float = 1.0   # 降仓系数(1.0=全仓, 0.5=半仓, 0.0=禁止)
+    # 硬拦截（不可被产业链信号豁免）
+    hard_block: bool = False            # 代码层硬拦截标志
+    hard_block_reasons: list[str] = []  # 硬拦截原因列表
     # 买入确认
     buy_confirmation: EntryBuyConfirmation
     # 汇总

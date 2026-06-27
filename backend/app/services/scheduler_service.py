@@ -408,6 +408,30 @@ class SchedulerService:
                 if not monitor.is_running():
                     monitor.start()
                     logger.info(f"[{execution_id}] 🟢 止损监控已随首个交易任务启动")
+
+            # ── 候选池监控生命周期管理 ──
+            if is_first_trade:
+                try:
+                    from app.services.candidate_pool_monitor import get_candidate_pool_monitor
+                    from app.core.trading.marcus_trade import MarcusVNPyExecutor
+                    pool_monitor = get_candidate_pool_monitor(executor=MarcusVNPyExecutor())
+                    if not pool_monitor.is_running():
+                        pool_monitor.start()
+                        logger.info(f"[{execution_id}] 🟢 候选池监控已随首个交易任务启动")
+                except Exception as e:
+                    logger.warning(f"[{execution_id}] ⚠️ 候选池监控启动失败: {e}")
+
+            # ── 加仓层级监控生命周期管理 ──
+            if is_first_trade:
+                try:
+                    from app.services.position_tier_monitor import get_position_tier_monitor
+                    from app.core.trading.marcus_trade import MarcusVNPyExecutor
+                    tier_monitor = get_position_tier_monitor(executor=MarcusVNPyExecutor())
+                    if not tier_monitor.is_running():
+                        tier_monitor.start()
+                        logger.info(f"[{execution_id}] 🟢 加仓层级监控已随首个交易任务启动")
+                except Exception as e:
+                    logger.warning(f"[{execution_id}] ⚠️ 加仓层级监控启动失败: {e}")
             
             try:
                 output = self._execute_pi_trade(task, execution_id)
@@ -426,6 +450,24 @@ class SchedulerService:
                 if is_closing and monitor and monitor.is_running():
                     monitor.stop()
                     logger.info(f"[{execution_id}] 🔴 止损监控已随尾盘任务停止")
+
+                # ── 候选池监控停止 ──
+                if is_closing:
+                    try:
+                        from app.services.candidate_pool_monitor import stop_pool_monitor
+                        stop_pool_monitor()
+                        logger.info(f"[{execution_id}] 🔴 候选池监控已随尾盘任务停止")
+                    except Exception as e:
+                        logger.warning(f"[{execution_id}] ⚠️ 候选池监控停止失败: {e}")
+
+                # ── 加仓层级监控停止 ──
+                if is_closing:
+                    try:
+                        from app.services.position_tier_monitor import stop_tier_monitor
+                        stop_tier_monitor()
+                        logger.info(f"[{execution_id}] 🔴 加仓层级监控已随尾盘任务停止")
+                    except Exception as e:
+                        logger.warning(f"[{execution_id}] ⚠️ 加仓层级监控停止失败: {e}")
                 
                 # ── 极端流出日扫描（遗漏#1）──
                 # 每次扫描结束后记录全市场主力净流出
@@ -1047,6 +1089,25 @@ class SchedulerService:
         now = datetime.now()
         pi_prompt_context = task.pi_prompt or ''
 
+        # ── 跨窗口候选池：过期清理 + 注入 Pi 提示 ──
+        # 候选标的由 CandidatePoolMonitor 实时监控并自动建仓，无需在窗口前刷新。
+        # 此处仅做过期清理 + 生成提示区块，告知 Pi 已自动建仓和等待中的标的。
+        pool_context = ""
+        try:
+            from app.services.candidate_pool import get_candidate_pool
+            pool = get_candidate_pool()
+
+            if 'closing' not in task.id:
+                pool.expire_stale()
+                active = pool.get_all_active()
+                promoted = pool.get_promoted()
+                if active or promoted:
+                    pool_context = pool.format_for_pi()
+        except Exception as e:
+            logger.warning(
+                f"[{execution_id}] [CandidatePool] context/inject failed: {e}"
+            )
+
         # 根据时段生成不同的交易指令
         if 'closing' in task.id or pi_prompt_context == 'closing':
             # 尾盘模式：只止损止盈，不开新仓
@@ -1085,10 +1146,12 @@ class SchedulerService:
             )
         elif 'afternoon' in task.id or pi_prompt_context == 'afternoon':
             trade_mode_instruction = (
-                "现在是午后 13:35，进入 **午后修正+建仓模式**。\n"
-                "1. 关注下午开盘方向\n"
-                "2. ⚠️ 查看代码层加仓通知：get_portfolio 确认午后 PositionTierMonitor 自动加仓/拦截记录\n"
-                "3. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
+                "现在是午后 13:35，进入 **午后修正模式**。\n"
+                "⚠️ T+1 隔夜风险：下午建仓无法当日退出，需比早盘更严格。\n"
+                "1. 新建仓条件：涨幅 ≤ 3% 且 日内分位 ≤ 60%（check_entry_filters 分位检查已内建）\n"
+                "2. 不满足建仓条件 → 只做持仓管理（止损/止盈/减仓），不强行寻找替代标的\n"
+                "3. check_entry_filters 返回 hard_block=true → 无条件放弃该标的，不通过产业链豁免覆盖\n"
+                "4. ⚠️ 查看代码层加仓通知：get_portfolio 确认午后 PositionTierMonitor 自动加仓/拦截记录"
             )
         else:
             trade_mode_instruction = "请基于最新扫描报告执行自主交易决策。"
@@ -1111,6 +1174,7 @@ class SchedulerService:
             logger.debug(f"[{execution_id}] Pi context read failed: {e}")
 
         prompt = (
+            f"{pool_context}"
             f"{trade_mode_instruction}\n"
             f"{stance_context}"
             f"请立即执行以下操作：\n"
@@ -1210,6 +1274,22 @@ class SchedulerService:
                     logger.debug(f"[{execution_id}] Position utilization check skipped: {e}")
             except Exception as e:
                 logger.error(f"[{execution_id}] Failed to write Pi signal: {e}")
+
+        # ── 候选池：Pi 买入的标的从池中移除 ──
+        try:
+            from app.services.candidate_pool import get_candidate_pool
+            pool = get_candidate_pool()
+            bought = set()
+            for m in re.finditer(
+                r'(?:买入|建仓|加仓|已建仓).*?[（(]?(SH|SZ|BJ)(\d{6})[)）]?',
+                reply,
+            ):
+                bought.add(f"{m.group(2)}.{m.group(1)}")
+            for sym in bought:
+                pool.mark_promoted(sym)
+                logger.info(f"[{execution_id}] [CandidatePool] Promoted {sym} (bought by Pi)")
+        except Exception:
+            pass
 
         # === 持久化交易报告到 memory/trade-reports/ ===
         self._save_trade_report(task.id, execution_id, reply, stance, position_limit, reason_str)

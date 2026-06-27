@@ -1455,6 +1455,8 @@ async def check_entry_filters(req: EntryCheckRequest):
     capital_details = []
     overbought_details = []
     downgrade_multiplier = 1.0
+    hard_block = False
+    hard_block_reasons = []
 
     # ── Layer 1: 技术面 ──
     layer1_passed = True
@@ -1520,14 +1522,23 @@ async def check_entry_filters(req: EntryCheckRequest):
 
     # 1d. 日内分位检查
     if intraday_percentile is not None:
-        if intraday_percentile > 90:
-            tech_details.append(f"⚠️ 日内分位({intraday_percentile:.0f}%) > 90% → 追高风险，仅试探仓≤5%或放弃")
-            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+        if intraday_percentile > 80:
+            tech_details.append(f"🚫 日内分位({intraday_percentile:.0f}%) > 80% → 追高风险，硬禁止建仓")
+            layer1_passed = False
+            layer1_grade = "🚫排除"
+            layer1_downgrade = "日内分位>80%硬禁止"
+            layer1_action = "硬禁止建仓，等回调至分位≤50%"
+            downgrade_multiplier = 0.0
+            hard_block = True
+            hard_block_reasons.append(f"日内分位{intraday_percentile:.0f}%>80%")
+        elif intraday_percentile > 60:
+            tech_details.append(f"⚠️ 日内分位({intraday_percentile:.0f}%) 60-80% → 仅试探仓")
             layer1_grade = "⚠️降级"
-            layer1_downgrade = "日内分位>90%追高风险"
-            layer1_action = "仅试探仓≤5%或放弃"
+            layer1_downgrade = "日内分位偏高"
+            layer1_action = "仅试探仓≤5%"
+            downgrade_multiplier = min(downgrade_multiplier, 0.5)
         else:
-            tech_details.append(f"✅ 日内分位({intraday_percentile:.0f}%) ≤ 90% — 通过")
+            tech_details.append(f"✅ 日内分位({intraday_percentile:.0f}%) ≤ 60% — 通过")
 
     # 1e. 资金效率检查
     if capital_efficiency is not None:
@@ -1666,6 +1677,27 @@ async def check_entry_filters(req: EntryCheckRequest):
         downgrade_action=layer3_action,
     )
 
+    # ── 硬拦截判定（不可被产业链信号豁免）──
+    if rsi6 >= 95:
+        hard_block = True
+        hard_block_reasons.append(f"RSI6={rsi6:.0f}>=95(动量耗尽)")
+        overbought_details.append(f"🔴 硬拦截: RSI6({rsi6:.0f}) >= 95 → 动量耗尽，不可被产业链信号豁免")
+        layer3_passed = False
+        layer3_grade = "🔴硬禁止"
+        layer3_downgrade = "RSI6>=95硬拦截"
+        layer3_action = "硬禁止"
+        downgrade_multiplier = 0.0
+
+    if kdj_j >= 120:
+        hard_block = True
+        hard_block_reasons.append(f"J={kdj_j:.0f}>=120(极端超买)")
+        overbought_details.append(f"🔴 硬拦截: KDJ-J({kdj_j:.0f}) >= 120 → 极端超买，不可被产业链信号豁免")
+        layer3_passed = False
+        layer3_grade = "🔴硬禁止"
+        layer3_downgrade = "KDJ-J>=120硬拦截"
+        layer3_action = "硬禁止"
+        downgrade_multiplier = 0.0
+
     # ══════════════════════════════════════
     # Stage 4: 综合判定
     # ══════════════════════════════════════
@@ -1769,6 +1801,31 @@ async def check_entry_filters(req: EntryCheckRequest):
         summary_parts.append(f"入场规则: {buy_action}")
     summary = " | ".join(summary_parts)
 
+    # ── 跨窗口候选池：时机性拒绝自动入池 ──
+    try:
+        from app.services.candidate_pool import get_candidate_pool
+        pool = get_candidate_pool()
+        captured = pool.maybe_capture(
+            symbol=ts_code,
+            name=stock_name,
+            final_grade=final_grade,
+            downgrade_multiplier=downgrade_multiplier,
+            hard_block=hard_block,
+            layer1_passed=layer1_passed,
+            layer2_passed=layer2_passed,
+            layer3_passed=layer3_passed,
+            macd_status=macd_status,
+            macd_dif_converging=macd_dif_converging,
+            change_pct=change_pct,
+            layer1_downgrade=layer1_downgrade,
+            layer2_downgrade=layer2_downgrade,
+            layer3_downgrade=layer3_downgrade,
+        )
+        if captured:
+            logger.info(f"[CandidatePool] Captured {ts_code} ({stock_name})")
+    except Exception:
+        pass
+
     return EntryCheckResponse(
         symbol=ts_code,
         name=stock_name,
@@ -1780,6 +1837,8 @@ async def check_entry_filters(req: EntryCheckRequest):
         final_grade=final_grade,
         max_position_pct=max_position_pct,
         downgrade_multiplier=round(downgrade_multiplier, 2),
+        hard_block=hard_block,
+        hard_block_reasons=hard_block_reasons,
         buy_confirmation=buy_confirmation,
         all_layers_pass=all_layers_pass,
         summary=summary,

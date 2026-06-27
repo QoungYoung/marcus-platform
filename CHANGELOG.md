@@ -4,6 +4,80 @@
 
 ---
 
+## [1.5.3] — 2026-06-27（跨窗口候选池 + 监控器对齐 + 轮询错峰）
+
+本次更新构建了跨窗口候选池机制，将前序窗口被"时机性"拒绝的标的自动入池，由独立的守护线程实时监控并在回调到位后自动建仓。同时统一了三个监控器的生命周期管理和轮询节奏。
+
+### 📋 跨窗口候选池：等回调再入场
+
+- **新增 `backend/app/services/candidate_pool.py`**（~300 行）：候选池核心服务
+  - 7 条件入池筛选：区分"时机性拒绝"与"结构性缺陷"
+  - 状态机：`waiting → ready → promoted / expired`
+  - JSON 文件持久化到 `data/candidate_pool.json`
+  - `format_for_pi()`：生成 Pi prompt 候选池区块
+- **新增 `backend/app/services/candidate_pool_monitor.py`**（~310 行）：候选池实时监控守护线程
+  - 30 秒轮询，与止损/加仓监控并行运行
+  - 条件到位时自动：`check_entry_filters → stance 判断 → calc_position → buy`
+  - 安全护栏：Pi 窗口避开、早盘冷静期、每日上限 3 笔、单票 1 次/日、午后额外涨幅/分位检查
+  - 硬拦截标的不入池，red 立场不建仓
+- **新增 `backend/app/api/pool.py`**（~90 行）：候选池管理 API
+  - `GET/POST/DELETE /pool/candidates` + `POST /pool/refresh`
+- **`backend/app/api/indicator.py`**：`check_entry_filters` 返回前自动调用 `maybe_capture` 入池
+
+### 🔄 Pi 提示词更新
+
+- **`backend/app/db/prompt_seeds.py`**：候选池指令改为"自动建仓通知"模式
+  - 🟢 已自动建仓的标的告知 Pi，不重复买入
+  - ⏳ 等待回调的标的由监控器处理，Pi 不干涉
+  - 明确标注监控器安全护栏供 Pi 参考
+
+### ⚖️ 监控器生命周期对齐
+
+三个监控器现在统一受 scheduler 管理，随首个交易任务启动、随尾盘任务停止：
+
+| 监控器 | 之前 | 现在 |
+|--------|------|------|
+| StopLossMonitor | scheduler 管理 | 不变 |
+| PositionTierMonitor | main.py 常驻 | scheduler 管理 |
+| CandidatePoolMonitor | —（新建） | scheduler 管理 |
+
+- **`backend/app/services/scheduler_service.py`**：`_execute_task_wrapper` 中统一启停
+
+### 📊 加仓监控日志增强
+
+- **`backend/app/services/position_tier_monitor.py`**：
+  - `_check_all_positions` 返回统计摘要（total / triggered / hold / executed / blocked）
+  - 每轮循环都输出日志：`[TierMonitor] 第N轮: 持仓X只 | 触发Y只 | 未达标Z只 | 已执行W只 | 拦截V只`
+  - 不加仓时也有日志输出，不再静默
+
+### ⏱️ 轮询间隔错峰
+
+三个监控器使用质数间隔 + 初始偏移，避免同时冲击实时价格接口：
+
+| 监控器 | 间隔 | 初始偏移 |
+|--------|:---:|:---:|
+| StopLossMonitor | 31s | 0s |
+| PositionTierMonitor | 33s | 10s |
+| CandidatePoolMonitor | 37s | 20s |
+
+### 🔍 健康检查扩展
+
+- **`backend/app/main.py`**：`/api/v1/health` 新增 `candidate_pool_monitor` 状态字段
+
+### 📝 涉及文件
+
+- `backend/app/services/candidate_pool.py`（新建）
+- `backend/app/services/candidate_pool_monitor.py`（新建）
+- `backend/app/api/pool.py`（新建）
+- `backend/app/api/indicator.py`（修改）
+- `backend/app/services/scheduler_service.py`（修改）
+- `backend/app/services/position_tier_monitor.py`（修改）
+- `backend/app/services/stop_loss_monitor.py`（修改）
+- `backend/app/db/prompt_seeds.py`（修改）
+- `backend/app/main.py`（修改）
+
+---
+
 ## [1.5.2] — 2026-06-25（加仓代码化 + 职责边界澄清）
 
 本次更新将三级加仓判断从 AI 手中收回，改为代码层自动执行，解决 22 笔交易中加仓 0 次的系统性问题。同时明确了盘中扫描报告的 AI 职责边界。
