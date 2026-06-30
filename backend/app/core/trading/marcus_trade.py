@@ -618,6 +618,8 @@ class MarcusVNPyExecutor:
     
     def sell(self, symbol: str, price: float, volume: int, reason: str = "") -> dict:
         """卖出操作"""
+        # 归一化 symbol（兼容 301566.SZ / SZ301566 / 301566 多种输入格式）
+        symbol = self.engine._normalize_symbol(symbol)
         # 风控检查
         risk_result = self.check_risk(symbol, price, volume, 'sell')
         if not risk_result['allowed']:

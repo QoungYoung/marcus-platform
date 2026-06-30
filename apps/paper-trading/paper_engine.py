@@ -87,15 +87,24 @@ class PaperTradingEngine:
         - 600xxx ~ 605xxx → SH (沪市主板)
         - 688xxx → SH (科创板)
 
+        输入格式兼容：
+        - "300162" / "SZ300162" / "300162.SZ" → 统一输出 "SZ300162"
+        - "600519" / "SH600519" / "600519.SH" → 统一输出 "SH600519"
+
         Args:
-            symbol: 原始代码，如 "300162" 或 "SZ300162"
+            symbol: 原始代码，如 "300162" 或 "SZ300162" 或 "300162.SZ"
 
         Returns:
             带前缀的规范代码，如 "SZ300162"
         """
         symbol = symbol.strip().upper()
+        # ── 处理 Tushare/通达信 code.exchange 格式 "301566.SZ" → "SZ301566" ──
+        if '.' in symbol:
+            code, exchange = symbol.split('.', 1)
+            if code.isdigit() and len(code) == 6 and exchange in ('SH', 'SZ', 'BJ'):
+                return f"{exchange}{code}"
         # 已有前缀，直接返回
-        if symbol.startswith("SH") or symbol.startswith("SZ"):
+        if symbol.startswith(("SH", "SZ", "BJ")):
             return symbol
         # 纯数字代码，自动补充前缀
         if symbol.isdigit() and len(symbol) == 6:
@@ -152,6 +161,8 @@ class PaperTradingEngine:
                 self.available_cash = row[1]
                 self.frozen_cash = row[2] if row[2] is not None else 0.0
                 self.order_counter = row[3] if row[3] is not None else 0
+                # 迁移旧 dot-format symbol (如 301566.SZ → SZ301566)
+                self._run_legacy_migration()
                 self.positions = self._load_positions_from_db()
                 print(f"[OK] 账户数据从 trades.db 读取，可用资金：{self.available_cash:,.2f}")
                 print(f"[OK] 持仓从 trades.db 读取: {len(self.positions)} 只")
@@ -186,6 +197,34 @@ class PaperTradingEngine:
             self._save_account()
             print(f"[OK] 已创建新账户，初始资金：{initial_capital:,.2f}")
     
+    def _migrate_legacy_symbols(self, cursor) -> int:
+        """将旧 dot-format symbol (301566.SZ) 迁移为标准格式 (SZ301566)"""
+        fixed = 0
+        for table in ('trades', 'positions', 'orders'):
+            cursor.execute(
+                f"SELECT DISTINCT symbol FROM {table} WHERE symbol LIKE '%.SZ' OR symbol LIKE '%.SH' OR symbol LIKE '%.BJ'"
+            )
+            for (bad_sym,) in cursor.fetchall():
+                code, exchange = bad_sym.split('.', 1)
+                new_sym = f"{exchange}{code}"
+                cursor.execute(f"UPDATE {table} SET symbol=? WHERE symbol=?", (new_sym, bad_sym))
+                fixed += cursor.rowcount
+                print(f"[迁移] {table}.{bad_sym} → {new_sym}")
+        return fixed
+
+    def _run_legacy_migration(self):
+        """执行旧 symbol 格式迁移（容错：迁移失败不影响正常流程）"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            fixed = self._migrate_legacy_symbols(cursor)
+            if fixed > 0:
+                conn.commit()
+                print(f"[迁移] 完成，共修复 {fixed} 条记录")
+            conn.close()
+        except Exception as e:
+            print(f"[迁移] symbol 格式迁移失败（非致命）: {e}")
+
     def _load_positions_from_db(self) -> dict:
         """从 trades.db 读取持仓（FIFO 计算）"""
         positions = {}
