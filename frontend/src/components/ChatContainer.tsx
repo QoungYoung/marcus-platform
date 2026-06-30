@@ -989,6 +989,112 @@ const getExpressTool = {
   },
 };
 
+// ── 长期观察候选池工具 ──
+
+const listLTCandidatesTool = {
+  name: 'list_lt_candidates',
+  label: '查看长期候选池',
+  description: '列出长期观察候选池中的标的。长期池不过期，条件满足时自动建仓并推送 QQ 通知。可选 status=active(待建仓)/promoted(已建仓) 过滤',
+  parameters: Type.Object({
+    status: Type.Optional(Type.String({ description: '筛选状态: active(待建仓) / promoted(已建仓)，不传返回全部' })),
+  }),
+  async execute(_toolCallId: string, params: { status?: string }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    if (params.status) query.set('status', params.status);
+    const qs = query.toString();
+    const res = await fetch(`${MARCUS_API}/lt-pool/candidates${qs ? '?' + qs : ''}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const lines: string[] = [];
+    lines.push(`📋 长期候选池 (共 ${data.total} 只，active: ${data.active_count}，promoted: ${data.promoted_count})`);
+    lines.push('');
+    for (const c of (data.candidates || [])) {
+      const statusIcon = c.status === 'promoted' ? '✅' : '⏳';
+      const meta = [c.chain_name, c.chain_role].filter(Boolean).join('·');
+      const grade = c.last_grade ? ` [${c.last_grade}]` : '';
+      lines.push(`  ${statusIcon} ${c.symbol} ${c.name || ''} ${meta ? '(' + meta + ')' : ''}${grade} | 检查 ${c.checks_count} 次`);
+    }
+    if (!data.candidates?.length) lines.push('  (空)');
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+const addLTCandidateTool = {
+  name: 'add_lt_candidate',
+  label: '添加长期候选',
+  description: '添加标的到长期观察候选池。标的将持续被监控，条件满足时自动建仓。需提供 symbol，可选产业链名称/角色/备注',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    name: Type.Optional(Type.String({ description: '股票名称，如 贵州茅台' })),
+    chain_name: Type.Optional(Type.String({ description: '产业链名称，如 AI算力、固态电池' })),
+    chain_role: Type.Optional(Type.String({ description: '产业链角色: upstream(上游) / mid(中游) / downstream(下游)' })),
+    notes: Type.Optional(Type.String({ description: '备注信息，如 等回调到30日线' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; name?: string; chain_name?: string; chain_role?: string; notes?: string }, _signal: AbortSignal | undefined) {
+    const res = await fetch(`${MARCUS_API}/lt-pool/candidates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `API error: ${res.status}`);
+    }
+    const data = await res.json();
+    return { content: [{ type: 'text', text: `✅ ${data.symbol} 已加入长期候选池` }], details: data };
+  },
+};
+
+const removeLTCandidateTool = {
+  name: 'remove_lt_candidate',
+  label: '移除长期候选',
+  description: '从长期观察候选池中删除标的。已建仓的标的不会被卖出，只是不再继续监控',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string }, _signal: AbortSignal | undefined) {
+    const res = await fetch(`${MARCUS_API}/lt-pool/candidates/${encodeURIComponent(params.symbol)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `API error: ${res.status}`);
+    }
+    const data = await res.json();
+    return { content: [{ type: 'text', text: `🗑️ ${data.symbol} 已从长期候选池移除` }], details: data };
+  },
+};
+
+const updateLTCandidateTool = {
+  name: 'update_lt_candidate',
+  label: '更新长期候选',
+  description: '更新长期候选池中标的的元数据（备注、产业链名、产业链角色）',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
+    notes: Type.Optional(Type.String({ description: '新的备注信息' })),
+    chain_name: Type.Optional(Type.String({ description: '产业链名称' })),
+    chain_role: Type.Optional(Type.String({ description: '产业链角色: upstream(上游) / mid(中游) / downstream(下游)' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string; notes?: string; chain_name?: string; chain_role?: string }, _signal: AbortSignal | undefined) {
+    const res = await fetch(`${MARCUS_API}/lt-pool/candidates/${encodeURIComponent(params.symbol)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notes: params.notes,
+        chain_name: params.chain_name,
+        chain_role: params.chain_role,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `API error: ${res.status}`);
+    }
+    const data = await res.json();
+    return { content: [{ type: 'text', text: `✏️ ${data.symbol} 元数据已更新` }], details: data };
+  },
+};
+
 // Convert tools to AgentTool format
 function createTool(toolDef: any): AgentTool {
   return {
@@ -1213,6 +1319,10 @@ const chatTools: AgentTool[] = [
   createTool(getExpressTool),
   createTool(readDbTableTool),
   createTool(getDbSchemaTool),
+  createTool(listLTCandidatesTool),
+  createTool(addLTCandidateTool),
+  createTool(removeLTCandidateTool),
+  createTool(updateLTCandidateTool),
 ];
 
 // 复盘模式工具（聊天工具 + 扫描报告 + Pi 历史 + 交易历史）
@@ -1245,6 +1355,7 @@ const COLLAPSIBLE_TOOLS = [
   'get_fina_mainbz', 'get_express',
   'read_db_table', 'get_db_schema',
   'get_latest_scan_report', 'get_pi_analysis_history', 'get_trade_history',
+  'list_lt_candidates', 'add_lt_candidate', 'remove_lt_candidate', 'update_lt_candidate',
 ];
 
 // 中文工具名映射
@@ -1272,6 +1383,10 @@ const TOOL_LABELS: Record<string, string> = {
   get_latest_scan_report: '最新扫描报告',
   get_pi_analysis_history: 'Pi分析历史',
   get_trade_history: '交易报告历史',
+  list_lt_candidates: '查看长期候选池',
+  add_lt_candidate: '添加长期候选',
+  remove_lt_candidate: '移除长期候选',
+  update_lt_candidate: '更新长期候选',
 };
 
 const makeCollapsibleRenderer = (toolName: string) => ({

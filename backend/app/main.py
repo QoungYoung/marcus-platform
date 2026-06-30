@@ -33,13 +33,14 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
-from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool
+from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool
 from app.api.scheduler import router as scheduler_router
 from app.services.scheduler_service import scheduler_service
 from app.services.qqbot_service import qqbot_service, get_qqbot_service
 from app.services.stop_loss_monitor import get_monitor_status, start_monitor, stop_monitor as stop_sl_monitor
 from app.services.position_tier_monitor import start_tier_monitor, stop_tier_monitor, get_tier_status
 from app.services.candidate_pool_monitor import start_pool_monitor, stop_pool_monitor
+from app.services.long_term_pool_monitor import start_lt_pool_monitor, stop_lt_pool_monitor
 from app.database import init_db
 from app.services.prompt_service import seed_prompts
 from app.db.prompt_seeds import PROMPT_SEEDS
@@ -108,6 +109,18 @@ async def lifespan(app: FastAPI):
             print(f"[Main] ⚠️ 候选池监控启动返回 False（可能已在运行）")
     except Exception as e:
         print(f"[Main] ⚠️ 候选池监控启动失败: {e}")
+
+    # 启动长期观察候选池监控器（5分钟轮询，无过期，日上限5笔）
+    try:
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        executor_lt = MarcusVNPyExecutor()
+        started = start_lt_pool_monitor(executor=executor_lt)
+        if started:
+            print(f"[Main] ✅ 长期候选池监控已启动 (executor=MarcusVNPyExecutor)")
+        else:
+            print(f"[Main] ⚠️ 长期候选池监控启动返回 False（可能已在运行）")
+    except Exception as e:
+        print(f"[Main] ⚠️ 长期候选池监控启动失败: {e}")
 
     # 预热 trades.db（建索引 + WAL 预热，避免首次 API 请求超时）
     try:
@@ -178,6 +191,11 @@ async def lifespan(app: FastAPI):
         print("[Main] 候选池监控已停止")
     except Exception:
         pass
+    try:
+        stop_lt_pool_monitor()
+        print("[Main] 长期候选池监控已停止")
+    except Exception:
+        pass
     if settings.QQ_BOT_ENABLED:
         await qqbot_service.stop()
     print("Scheduler and QQ Bot stopped")
@@ -217,6 +235,7 @@ app.include_router(panel.router, prefix="/api/v1")
 app.include_router(indicator.router, prefix="/api/v1")
 app.include_router(backtest.router, prefix="/api/v1")
 app.include_router(pool.router, prefix="/api/v1")
+app.include_router(lt_pool.router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -255,6 +274,11 @@ async def health_check():
         pool_monitor = get_pool_monitor_status()
     except Exception:
         pool_monitor = {"error": "unavailable"}
+    try:
+        from app.services.long_term_pool_monitor import get_lt_pool_monitor_status
+        lt_pool_monitor = get_lt_pool_monitor_status()
+    except Exception:
+        lt_pool_monitor = {"error": "unavailable"}
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -262,6 +286,7 @@ async def health_check():
         "stop_loss_monitor": monitor,
         "position_tier_monitor": tier,
         "candidate_pool_monitor": pool_monitor,
+        "long_term_pool_monitor": lt_pool_monitor,
     }
 
 
