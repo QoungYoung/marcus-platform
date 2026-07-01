@@ -4187,3 +4187,862 @@ async def calc_position_sandbox(task_id: str, req: dict):
         phase_time=phase_time,
     ).dict()
 
+
+# ═══════════════════════════════════════════════════════════════
+# 条件诊断端点：加仓条件 / 建仓条件
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/{task_id}/sandbox/position-add-conditions")
+async def position_add_conditions(
+    task_id: str,
+    symbol: str = Query(None, description="指定标的，不传则检查全部持仓"),
+    phase_time: str = Query(None, description="阶段时间 HH:MM，用于获取盘中价格"),
+):
+    """查询持仓距离加仓还差哪些条件。
+
+    逐只检查当前持仓：
+      - 当前层级 + 浮盈 → 是否触发层级升级评估
+      - 6 道门控逐一判定（Pi 立场 / 回撤 / 保护线 / 日加仓上限 / 趋势强度）
+      - 返回每道门的通过/未通过状态及未通过原因
+    """
+    from app.services.local_data_provider import local_data
+    from app.core.trading.backtest_paper import BacktestPaperEngine
+    from datetime import date as dt_date, timedelta
+
+    db = SessionLocal()
+    try:
+        task = db.query(BacktestTask).filter(BacktestTask.id == task_id).first()
+        if not task:
+            raise HTTPException(404, f"任务 {task_id} 不存在")
+        trade_date = task.current_day
+        if not trade_date:
+            return {"error": "任务尚未开始或无当前日期", "task_id": task_id}
+        trade_date_str = trade_date.isoformat()
+        initial_capital = float(task.initial_capital or 1000000)
+    finally:
+        db.close()
+
+    hh = mm = None
+    if phase_time:
+        try:
+            hh, mm = map(int, phase_time.split(":")[:2])
+        except Exception:
+            pass
+
+    # ── 获取沙盒账户 + 持仓 ──
+    try:
+        engine = BacktestPaperEngine(task_id, initial_capital=initial_capital)
+        acc = engine.get_account(day_df=None)
+        positions = engine.get_positions()
+        total_asset = float(acc.get("total_asset", initial_capital))
+        available_cash = float(acc.get("available_cash", 0))
+    except Exception as e:
+        return {"error": f"沙盒账户读取失败: {e}", "task_id": task_id}
+
+    if not positions:
+        return {
+            "task_id": task_id,
+            "trade_date": trade_date_str,
+            "total_asset": total_asset,
+            "positions": [],
+            "summary": "当前无持仓",
+        }
+
+    # ── Pi 立场（从最近日志读取）──
+    pi_stance = "yellow"
+    try:
+        db2 = SessionLocal()
+        recent_log = (
+            db2.query(BacktestDailyLog)
+            .filter(
+                BacktestDailyLog.task_id == task_id,
+                BacktestDailyLog.log_type == "pi_decision",
+            )
+            .order_by(BacktestDailyLog.created_at.desc())
+            .first()
+        )
+        if recent_log and recent_log.content:
+            import re as _re
+            m = _re.search(r'立场[：:]\s*(green|yellow|red)', str(recent_log.content))
+            if m:
+                pi_stance = m.group(1)
+        db2.close()
+    except Exception:
+        pass
+
+    # ── 总回撤 ──
+    total_pnl = float(acc.get("float_pnl", 0)) + float(acc.get("realized_pnl", 0))
+    total_drawdown = -min(0, total_pnl) / initial_capital if initial_capital > 0 else 0
+
+    # ── 逐只评估 ──
+    results = []
+    for pos in positions:
+        sym = pos.get("symbol", "")
+        if not sym or (symbol and sym != symbol):
+            continue
+
+        volume = int(pos.get("volume", 0))
+        avg_cost = float(pos.get("avg_cost", pos.get("avg_price", 0)))
+        if volume <= 0 or avg_cost <= 0:
+            continue
+
+        # 当前价（盘中快照或日线收盘价）
+        cur_price = 0.0
+        if hh is not None and mm is not None:
+            q = local_data.get_minute_quote(sym, trade_date, hh, mm)
+            if q:
+                cur_price = float(q.get("close", 0))
+        if cur_price <= 0:
+            bar = local_data.get_daily_quote(sym, trade_date)
+            if bar:
+                cur_price = float(bar.get("close", 0))
+        if cur_price <= 0:
+            continue
+
+        float_pnl = (cur_price / avg_cost) - 1
+        float_pnl_pct = round(float_pnl * 100, 2)
+
+        # T+1 锁定
+        t1 = engine.get_t1_status(sym) if hasattr(engine, "get_t1_status") else {}
+        t1_locked = t1.get("locked", False)
+
+        # ── 层级评估 ──
+        current_tier = "probe"  # backtest 默认从 probe 开始
+        tier_info = _eval_position_tier_diag(float_pnl, current_tier)
+
+        # ── 门控检查 ──
+        gates = _eval_position_gates_diag(
+            symbol=sym,
+            float_pnl=float_pnl,
+            target_tier=tier_info.get("target_tier", ""),
+            trade_date=trade_date,
+            total_asset=total_asset,
+            total_drawdown=total_drawdown,
+            pi_stance=pi_stance,
+            t1_locked=t1_locked,
+            current_price=cur_price,
+            avg_cost=avg_cost,
+        )
+
+        # 汇总缺失条件
+        missing_conditions = []
+        if t1_locked:
+            missing_conditions.append("T+1锁定中，今日买入无法加仓")
+        elif tier_info.get("action") == "MAX_TIER":
+            missing_conditions.append("已达最高层级(冲刺仓)，无法继续加仓")
+        elif tier_info.get("action") == "HOLD":
+            need = tier_info.get("need_pnl", 0)
+            missing_conditions.append(
+                f"浮盈不足: 当前{float_pnl_pct}%, 需要≥{round(need*100,1)}%才能触发{tier_info.get('next_tier','')}升级"
+            )
+        else:
+            for g in gates:
+                if not g["passed"]:
+                    missing_conditions.append(g["detail"])
+
+        current_mv = cur_price * volume
+        current_pct = round(current_mv / total_asset * 100, 2) if total_asset > 0 else 0
+
+        results.append({
+            "symbol": sym,
+            "current_price": round(cur_price, 2),
+            "avg_cost": round(avg_cost, 2),
+            "volume": volume,
+            "market_value": round(current_mv, 2),
+            "position_pct": current_pct,
+            "float_pnl_pct": float_pnl_pct,
+            "current_tier": current_tier,
+            "t1_locked": t1_locked,
+            "tier_evaluation": tier_info,
+            "gates": gates,
+            "missing_conditions": missing_conditions,
+            "can_add": len(missing_conditions) == 0,
+        })
+
+    return {
+        "task_id": task_id,
+        "trade_date": trade_date_str,
+        "phase_time": phase_time,
+        "total_asset": round(total_asset, 2),
+        "available_cash": round(available_cash, 2),
+        "total_drawdown_pct": round(total_drawdown * 100, 2),
+        "pi_stance": pi_stance,
+        "positions": results,
+        "summary": (
+            f"共{len(results)}只持仓, "
+            f"{sum(1 for r in results if r['can_add'])}只满足加仓条件, "
+            f"{sum(1 for r in results if not r['can_add'])}只条件不足"
+        ),
+    }
+
+
+@router.get("/{task_id}/sandbox/candidate-entry-conditions")
+async def candidate_entry_conditions(
+    task_id: str,
+    symbol: str = Query(None, description="指定标的，不传则检查全部候选池标的"),
+    phase_time: str = Query(None, description="阶段时间 HH:MM"),
+):
+    """查询候选池股票距离建仓还差哪些条件。
+
+    逐只检查候选池中 waiting 状态的标的：
+      - 入场过滤三层（技术面 / 主力资金 / 超买）
+      - Pi 立场检查
+      - 午后额外检查（涨幅/分位）
+      - 基本仓位验证
+      - 返回每层的通过/未通过状态及具体原因
+    """
+    from app.services.local_data_provider import local_data
+    from datetime import date as dt_date, timedelta
+
+    db = SessionLocal()
+    try:
+        task = db.query(BacktestTask).filter(BacktestTask.id == task_id).first()
+        if not task:
+            raise HTTPException(404, f"任务 {task_id} 不存在")
+        trade_date = task.current_day
+        if not trade_date:
+            return {"error": "任务尚未开始或无当前日期", "task_id": task_id}
+        trade_date_str = trade_date.isoformat()
+        initial_capital = float(task.initial_capital or 1000000)
+    finally:
+        db.close()
+
+    hh = mm = None
+    if phase_time:
+        try:
+            hh, mm = map(int, phase_time.split(":")[:2])
+        except Exception:
+            pass
+
+    # ── 获取沙盒账户 ──
+    try:
+        from app.core.trading.backtest_paper import BacktestPaperEngine
+        engine = BacktestPaperEngine(task_id, initial_capital=initial_capital)
+        acc = engine.get_account(day_df=None)
+        total_asset = float(acc.get("total_asset", initial_capital))
+        available_cash = float(acc.get("available_cash", 0))
+        positions = engine.get_positions()
+        position_value = 0.0
+        for p in positions:
+            sym = p.get("symbol", "")
+            vol = float(p.get("volume", 0))
+            cost = float(p.get("avg_cost", p.get("avg_price", 0)))
+            try:
+                q = local_data.get_daily_quote(sym, trade_date)
+                px = float(q["close"]) if q else cost
+            except Exception:
+                px = cost
+            position_value += vol * px
+    except Exception as e:
+        return {"error": f"沙盒账户读取失败: {e}", "task_id": task_id}
+
+    # ── Pi 立场 ──
+    pi_stance = "yellow"
+    try:
+        db2 = SessionLocal()
+        recent_log = (
+            db2.query(BacktestDailyLog)
+            .filter(
+                BacktestDailyLog.task_id == task_id,
+                BacktestDailyLog.log_type == "pi_decision",
+            )
+            .order_by(BacktestDailyLog.created_at.desc())
+            .first()
+        )
+        if recent_log and recent_log.content:
+            import re as _re
+            m = _re.search(r'立场[：:]\s*(green|yellow|red)', str(recent_log.content))
+            if m:
+                pi_stance = m.group(1)
+        db2.close()
+    except Exception:
+        pass
+
+    # ── 获取候选池 ──
+    from app.services.candidate_pool import get_candidate_pool
+    pool = get_candidate_pool()
+    waiting = pool.get_waiting()
+    if symbol:
+        waiting = [c for c in waiting if c.get("symbol") == symbol]
+    if not waiting:
+        return {
+            "task_id": task_id,
+            "trade_date": trade_date_str,
+            "candidates": [],
+            "summary": "候选池无 waiting 状态标的",
+        }
+
+    # ── 午后判断 ──
+    is_afternoon = hh is not None and hh >= 13
+
+    # ── 逐只评估 ──
+    results = []
+    for candidate in waiting:
+        sym = candidate.get("symbol", "")
+        name = candidate.get("name", "")
+
+        # 获取当前价
+        cur_price = 0.0
+        prev_close = 0.0
+        if hh is not None and mm is not None:
+            q = local_data.get_minute_quote(sym, trade_date, hh, mm)
+            if q:
+                cur_price = float(q.get("close", 0))
+        if cur_price <= 0:
+            bar = local_data.get_daily_quote(sym, trade_date)
+            if bar:
+                cur_price = float(bar.get("close", 0))
+                prev_close = float(bar.get("pre_close", 0))
+        if cur_price <= 0:
+            results.append({
+                "symbol": sym,
+                "name": name,
+                "error": "无法获取当前价格",
+                "missing_conditions": ["无法获取当前价格"],
+                "can_entry": False,
+            })
+            continue
+
+        if prev_close <= 0:
+            # 从日线获取前收盘
+            bar = local_data.get_daily_quote(sym, trade_date)
+            if bar:
+                prev_close = float(bar.get("pre_close", 0))
+        change_pct = round((cur_price / prev_close - 1) * 100, 2) if prev_close > 0 else 0
+
+        # ── 搜集技术指标数据 ──
+        closes = _get_recent_closes(sym, trade_date, cur_price, local_data)
+        ma5 = sum(closes[-5:]) / 5 if len(closes) >= 5 else 0
+        ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else 0
+        rsi6 = _calc_rsi(closes, 6) if len(closes) >= 7 else 50
+
+        # ── Layer 1: 技术面 ──
+        above_ma5 = cur_price > ma5 if ma5 > 0 else False
+        above_ma20 = cur_price > ma20 if ma20 > 0 else False
+        ma5_gt_ma20 = ma5 > ma20 if ma5 > 0 and ma20 > 0 else False
+        l1_pass = above_ma5 and above_ma20
+        if not ma5_gt_ma20:
+            l1_pass = False  # 死叉
+        l1_failed = []
+        if not above_ma5:
+            l1_failed.append(f"价格{cur_price:.2f} ≤ MA5({ma5:.2f})" if ma5 > 0 else "MA5数据不足")
+        if not above_ma20:
+            l1_failed.append(f"价格{cur_price:.2f} ≤ MA20({ma20:.2f})" if ma20 > 0 else "MA20数据不足")
+        if not ma5_gt_ma20:
+            l1_failed.append(f"MA5({ma5:.2f}) ≤ MA20({ma20:.2f}) 死叉" if ma5 > 0 and ma20 > 0 else "MA排列数据不足")
+        if l1_pass and not l1_failed:
+            l1_failed = []
+
+        # ── Layer 2: 主力资金 ──
+        main_net_5d, main_net_5d_detail = _get_main_net_5d_diag(sym, trade_date, hh, mm, local_data)
+        l2_pass = main_net_5d > 0
+        l2_failed = []
+        if not l2_pass:
+            l2_failed.append(f"5日主力净流入{main_net_5d/1e8:.2f}亿 ≤ 0")
+
+        # ── Layer 3: 超买 ──
+        l3_pass = rsi6 < 70
+        l3_failed = []
+        if not l3_pass:
+            l3_failed.append(f"RSI6={rsi6:.1f} ≥ 70 超买")
+
+        # ── 综合过滤结果 ──
+        all_filter_pass = l1_pass and l2_pass and l3_pass
+
+        # ── 涨幅买入确认 ──
+        buy_confirm_pass = True
+        buy_confirm_failed = []
+        if change_pct > 8:
+            buy_confirm_pass = False
+            buy_confirm_failed.append(f"涨幅{change_pct}% > 8%，放弃追涨")
+        elif change_pct > 5:
+            buy_confirm_pass = False
+            buy_confirm_failed.append(f"涨幅{change_pct}% > 5% 且 ≤ 8%，需量比>1.5确认")
+        # 回测简化: change_pct <= 5 直接通过
+
+        # ── PT立场检查 ──
+        stance_pass = pi_stance != "red"
+        stance_detail = f"Pi立场={pi_stance}" + (" (red禁止建仓)" if not stance_pass else " (允许)")
+
+        # ── 午后检查 ──
+        afternoon_pass = True
+        afternoon_failed = []
+        if is_afternoon:
+            if change_pct > 3:
+                afternoon_pass = False
+                afternoon_failed.append(f"午后涨幅{change_pct}% > 3%")
+            # 日内分位检查
+            cum = None
+            if hh is not None and mm is not None:
+                try:
+                    cum = local_data.get_cumulative_intraday_high_low(sym, trade_date, hh, mm)
+                except Exception:
+                    pass
+            intraday_pct = cum.get("intraday_percentile") if cum else None
+            if intraday_pct is not None and intraday_pct > 60:
+                afternoon_pass = False
+                afternoon_failed.append(f"午后分位{intraday_pct:.0f}% > 60%")
+
+        # ── 汇总 ──
+        missing_conditions = []
+        if not l1_pass:
+            missing_conditions.append(f"[技术面] {', '.join(l1_failed)}")
+        if not l2_pass:
+            missing_conditions.append(f"[主力资金] {', '.join(l2_failed)}")
+        if not l3_pass:
+            missing_conditions.append(f"[超买] {', '.join(l3_failed)}")
+        if not stance_pass:
+            missing_conditions.append(f"[立场] {stance_detail}")
+        if not buy_confirm_pass:
+            missing_conditions.append(f"[买入确认] {', '.join(buy_confirm_failed)}")
+        if not afternoon_pass:
+            missing_conditions.append(f"[午后限制] {', '.join(afternoon_failed)}")
+
+        can_entry = all_filter_pass and stance_pass and buy_confirm_pass and afternoon_pass
+
+        # 候选池周期判断（长期/短期）
+        added_date = candidate.get("added_trade_day", "")
+        pool_type = "短期"  # default
+        try:
+            if added_date:
+                added_dt = dt_date.fromisoformat(added_date)
+                days_in_pool = (trade_date - added_dt).days
+                pool_type = "短期" if days_in_pool <= 3 else "长期"
+        except Exception:
+            pass
+
+        results.append({
+            "symbol": sym,
+            "name": name,
+            "pool_type": pool_type,
+            "added_date": added_date,
+            "current_price": round(cur_price, 2),
+            "change_pct": change_pct,
+            "last_reject_reason": candidate.get("last_reject_reason", candidate.get("reject_reasons", [])),
+            "checks_count": candidate.get("checks_count", 0),
+            "filters": {
+                "layer1_tech": {
+                    "passed": l1_pass,
+                    "above_ma5": above_ma5, "above_ma20": above_ma20,
+                    "ma5_gt_ma20": ma5_gt_ma20,
+                    "ma5": round(ma5, 2), "ma20": round(ma20, 2),
+                    "failed": l1_failed,
+                },
+                "layer2_capital": {
+                    "passed": l2_pass,
+                    "main_net_5d_e8": round(main_net_5d / 1e8, 2),
+                    "detail": main_net_5d_detail,
+                    "failed": l2_failed,
+                },
+                "layer3_overbought": {
+                    "passed": l3_pass,
+                    "rsi6": round(rsi6, 1),
+                    "failed": l3_failed,
+                },
+            },
+            "stance_check": {"passed": stance_pass, "detail": stance_detail},
+            "buy_confirmation": {"passed": buy_confirm_pass, "failed": buy_confirm_failed},
+            "afternoon_check": {"passed": afternoon_pass, "failed": afternoon_failed, "is_afternoon": is_afternoon},
+            "missing_conditions": missing_conditions,
+            "can_entry": can_entry,
+        })
+
+    long_term = [r for r in results if r["pool_type"] == "长期"]
+    short_term = [r for r in results if r["pool_type"] == "短期"]
+
+    return {
+        "task_id": task_id,
+        "trade_date": trade_date_str,
+        "phase_time": phase_time,
+        "total_asset": round(total_asset, 2),
+        "available_cash": round(available_cash, 2),
+        "position_value": round(position_value, 2),
+        "pi_stance": pi_stance,
+        "is_afternoon": is_afternoon,
+        "candidates": results,
+        "summary": (
+            f"长期候选池 {len(long_term)} 只 / 短期候选池 {len(short_term)} 只, "
+            f"共 {sum(1 for r in results if r['can_entry'])} 只满足建仓条件, "
+            f"{sum(1 for r in results if not r['can_entry'])} 只条件不足"
+        ),
+        "long_term": long_term,
+        "short_term": short_term,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# 诊断辅助函数
+# ═══════════════════════════════════════════════════════════════
+
+def _eval_position_tier_diag(float_pnl: float, current_tier: str) -> dict:
+    """诊断用层级评估，返回详细信息"""
+    if current_tier == "sprint":
+        return {
+            "action": "MAX_TIER",
+            "current_tier": "sprint",
+            "target_tier": None,
+            "next_tier": None,
+            "signal": "已达冲刺仓（最高层级），无法继续加仓",
+            "need_pnl": None,
+        }
+    if float_pnl >= 0.03:
+        return {
+            "action": "UPGRADE_TO_SPRINT",
+            "current_tier": current_tier,
+            "target_tier": "sprint",
+            "next_tier": "sprint",
+            "max_position_pct": 0.25,
+            "signal": f"浮盈{float_pnl:.1%} ≥ 3%，触发冲刺仓评估",
+            "need_pnl": None,
+        }
+    if current_tier in ("probe", "unknown", "") and float_pnl >= 0.01:
+        return {
+            "action": "UPGRADE_TO_CONFIRM",
+            "current_tier": "probe",
+            "target_tier": "confirm",
+            "next_tier": "confirm",
+            "max_position_pct": 0.18,
+            "signal": f"浮盈{float_pnl:.1%} ≥ 1%，触发确认仓评估",
+            "need_pnl": None,
+        }
+    # HOLD: 浮盈不足
+    if current_tier in ("probe", "unknown", ""):
+        next_tier = "confirm"
+        need = 0.01
+    else:
+        next_tier = "sprint"
+        need = 0.03
+    return {
+        "action": "HOLD",
+        "current_tier": current_tier,
+        "target_tier": None,
+        "next_tier": next_tier,
+        "signal": f"浮盈{float_pnl:.1%} 不满足升级条件",
+        "need_pnl": need,
+    }
+
+
+def _eval_position_gates_diag(
+    symbol: str, float_pnl: float, target_tier: str,
+    trade_date, total_asset: float, total_drawdown: float,
+    pi_stance: str, t1_locked: bool,
+    current_price: float, avg_cost: float,
+) -> list:
+    """诊断用门控检查，返回每道门的通过状态和详情"""
+    from datetime import date as dt_date, timedelta
+    from app.services.local_data_provider import local_data
+
+    gates = []
+
+    # 门控 1: Pi 立场
+    if pi_stance == "red":
+        total_pos_pct = 0  # simplified
+        if total_pos_pct + 0.18 > 0.20:  # rough check
+            gates.append({
+                "name": "Pi立场",
+                "passed": False,
+                "detail": f"RED立场下总仓超20%限制，禁止加仓",
+            })
+        else:
+            gates.append({
+                "name": "Pi立场",
+                "passed": True,
+                "detail": "RED例外：验证盈利头寸限额内",
+            })
+    else:
+        gates.append({
+            "name": "Pi立场",
+            "passed": True,
+            "detail": f"{pi_stance.upper()}立场通过",
+        })
+
+    # 门控 2: 总回撤
+    if total_drawdown >= 0.05:
+        gates.append({
+            "name": "总回撤",
+            "passed": False,
+            "detail": f"总回撤{total_drawdown:.1%} ≥ 5%，硬禁止加仓",
+        })
+    else:
+        gates.append({
+            "name": "总回撤",
+            "passed": True,
+            "detail": f"回撤{total_drawdown:.1%} < 5%，通过",
+        })
+
+    # 门控 3: 保护线
+    if target_tier in ("confirm", "sprint"):
+        amp = _calc_avg_amplitude_diag(symbol, trade_date, local_data)
+        if target_tier == "confirm":
+            if float_pnl < 0:
+                gates.append({
+                    "name": "保护线(T1)",
+                    "passed": False,
+                    "detail": f"T1保本线：浮盈{float_pnl:.1%} < 0，已跌破成本价",
+                })
+            elif float_pnl < 0.005:
+                gates.append({
+                    "name": "保护线(T1)",
+                    "passed": False,
+                    "detail": f"T1保本线：浮盈{float_pnl:.1%}距离保本线不足0.5%",
+                })
+            else:
+                gates.append({
+                    "name": "保护线(T1)",
+                    "passed": True,
+                    "detail": f"T1保本线：浮盈{float_pnl:.1%} ≥ 0.5%，安全",
+                })
+        else:  # sprint
+            if amp <= 0.03:
+                x, tier_label = 0.01, "低波"
+            elif amp <= 0.06:
+                x, tier_label = 0.02, "中波"
+            else:
+                x, tier_label = 0.03, "高波"
+            if float_pnl < x:
+                gates.append({
+                    "name": "保护线(T2)",
+                    "passed": False,
+                    "detail": f"T2保护线({tier_label})：浮盈{float_pnl:.1%} < 成本+{x:.0%}",
+                })
+            elif float_pnl - x < 0.005:
+                gates.append({
+                    "name": "保护线(T2)",
+                    "passed": False,
+                    "detail": f"T2保护线({tier_label})：浮盈{float_pnl:.1%}距离保护线不足0.5%",
+                })
+            else:
+                gates.append({
+                    "name": "保护线(T2)",
+                    "passed": True,
+                    "detail": f"T2保护线({tier_label})：浮盈{float_pnl:.1%} ≥ 成本+{x:.0%}，安全",
+                })
+    else:
+        gates.append({
+            "name": "保护线",
+            "passed": True,
+            "detail": "未触发层级升级，保护线不适用",
+        })
+
+    # 门控 4: T+1 锁定
+    if t1_locked:
+        gates.append({
+            "name": "T+1锁定",
+            "passed": False,
+            "detail": "今日买入，T+1锁定中，无法加仓",
+        })
+    else:
+        gates.append({
+            "name": "T+1锁定",
+            "passed": True,
+            "detail": "非今日买入，可以加仓",
+        })
+
+    # 门控 5: 趋势强度（简化：MA5斜率 + 量比 + MA5>MA20 + 资金流向）
+    trend = _check_trend_strength_diag(symbol, trade_date, local_data)
+    gates.append({
+        "name": "趋势强度",
+        "passed": trend["passed"],
+        "detail": (
+            "全部通过" if trend["passed"]
+            else f"未通过: {', '.join(trend['failed_items'])}"
+        ),
+        "sub_checks": trend.get("checks", {}),
+    })
+
+    return gates
+
+
+def _calc_avg_amplitude_diag(symbol: str, trade_date, local_data) -> float:
+    """计算近5日平均振幅"""
+    from datetime import date as dt_date, timedelta
+    amps = []
+    current = trade_date - timedelta(days=1)
+    days_checked = 0
+    while days_checked < 30 and len(amps) < 5:
+        if current.weekday() < 5:
+            try:
+                bar = local_data.get_daily_quote(symbol, current)
+                if bar and bar.get("high", 0) > 0 and bar.get("low", 0) > 0:
+                    amp = (float(bar["high"]) - float(bar["low"])) / float(bar["low"])
+                    amps.append(amp)
+                days_checked += 1
+            except Exception:
+                days_checked += 1
+        current -= timedelta(days=1)
+    return sum(amps) / len(amps) if amps else 0.03
+
+
+def _check_trend_strength_diag(symbol: str, trade_date, local_data) -> dict:
+    """诊断用趋势强度检查（基于本地数据）"""
+    from datetime import date as dt_date, timedelta
+
+    checks = {}
+    try:
+        closes = _get_recent_closes(symbol, trade_date, None, local_data)
+
+        # MA5 斜率
+        if len(closes) >= 10:
+            ma5_now = sum(closes[-5:]) / 5
+            ma5_prev = sum(closes[-10:-5]) / 5
+            if ma5_prev > 0:
+                slope = (ma5_now - ma5_prev) / ma5_prev
+                checks["ma5_slope"] = {
+                    "passed": slope > 0,
+                    "value": f"{slope:.2%}",
+                    "threshold": "> 0",
+                    "detail": f"MA5 {ma5_now:.2f} vs 前期{ma5_prev:.2f}",
+                }
+            else:
+                checks["ma5_slope"] = {"passed": False, "value": "N/A", "threshold": "> 0", "detail": "MA5计算异常"}
+        else:
+            checks["ma5_slope"] = {"passed": False, "value": "N/A", "threshold": "> 0", "detail": f"数据不足(需≥10条,当前{len(closes)}条)"}
+
+        # 量比
+        try:
+            vols = []
+            current = trade_date
+            days_collected = 0
+            while days_collected < 30 and len(vols) < 6:
+                if current.weekday() < 5:
+                    bar = local_data.get_daily_quote(symbol, current)
+                    if bar and bar.get("volume", 0) > 0:
+                        vols.append(float(bar["volume"]))
+                    days_collected += 1
+                current -= timedelta(days=1)
+            if len(vols) >= 6:
+                vol_ratio = vols[0] / (sum(vols[1:6]) / 5) if sum(vols[1:6]) > 0 else 0
+                checks["volume_ratio"] = {
+                    "passed": vol_ratio > 0.8,
+                    "value": f"{vol_ratio:.2f}",
+                    "threshold": "> 0.8",
+                }
+            else:
+                checks["volume_ratio"] = {"passed": True, "value": "N/A", "threshold": "> 0.8", "detail": "数据不足,跳过"}
+        except Exception:
+            checks["volume_ratio"] = {"passed": True, "value": "N/A", "threshold": "> 0.8", "detail": "计算跳过"}
+
+        # 板块资金
+        try:
+            mapping = local_data.get_concept_mapping(symbol, trade_date)
+            concepts = mapping.get("concepts", []) if mapping else []
+            sector_flow = 0.0
+            sector_name = ""
+            if concepts:
+                flows = local_data.get_concept_flow(trade_date, top_n=30) or []
+                flow_map = {f.get("name", ""): f.get("main_net", 0) for f in flows}
+                for cn in concepts[:3]:
+                    cn_name = cn.get("concept_name", "") if isinstance(cn, dict) else str(cn)
+                    sf = flow_map.get(cn_name, 0)
+                    if sf != 0:
+                        sector_flow = sf
+                        sector_name = cn_name
+                        break
+            checks["sector_flow"] = {
+                "passed": sector_flow > 0,
+                "value": f"{sector_flow/1e8:.2f}亿" if sector_flow else "0",
+                "threshold": "> 0",
+                "detail": f"所属{sector_name}" if sector_name else "板块信息获取失败",
+            }
+        except Exception:
+            checks["sector_flow"] = {"passed": True, "value": "N/A", "threshold": "> 0", "detail": "检查跳过"}
+
+        # MA5 > MA20
+        if len(closes) >= 20:
+            ma5 = sum(closes[-5:]) / 5
+            ma20 = sum(closes[-20:]) / 20
+            checks["ma_align"] = {
+                "passed": ma5 > ma20 and ma5 > 0,
+                "value": f"MA5={ma5:.2f} MA20={ma20:.2f}",
+                "threshold": "MA5 > MA20",
+            }
+        else:
+            checks["ma_align"] = {"passed": False, "value": "N/A", "threshold": "MA5 > MA20", "detail": f"数据不足(需≥20条,当前{len(closes)}条)"}
+
+        # 主力资金流向
+        main_net_today, detail = _get_main_net_5d_diag(symbol, trade_date, None, None, local_data)
+        checks["moneyflow"] = {
+            "passed": main_net_today > 0,
+            "value": f"{main_net_today/1e8:.2f}亿",
+            "threshold": "> 0",
+            "detail": "5日主力净流入",
+        }
+
+        failed_items = [k for k, v in checks.items() if not v["passed"]]
+        return {"passed": len(failed_items) == 0, "failed_items": failed_items, "checks": checks}
+    except Exception as e:
+        return {"passed": False, "failed_items": ["exception"], "checks": {"error": str(e)}}
+
+
+def _get_recent_closes(symbol: str, trade_date, cur_price: float, local_data) -> list:
+    """获取最近25个交易日收盘价，含当日"""
+    from datetime import date as dt_date, timedelta
+    closes = []
+    current = trade_date - timedelta(days=1)
+    days_checked = 0
+    while days_checked < 60 and len(closes) < 25:
+        if current.weekday() < 5:
+            try:
+                bar = local_data.get_daily_quote(symbol, current)
+                if bar and bar.get("close", 0) > 0:
+                    closes.append(float(bar["close"]))
+                days_checked += 1
+            except Exception:
+                days_checked += 1
+        current -= timedelta(days=1)
+    closes.reverse()
+    if cur_price is not None and cur_price > 0:
+        closes.append(cur_price)
+    return closes
+
+
+def _calc_rsi(closes: list, period: int = 6) -> float:
+    """计算 RSI"""
+    if len(closes) < period + 1:
+        return 50.0
+    gains = []
+    losses = []
+    for i in range(-period, 0):
+        diff = closes[i] - closes[i-1]
+        if diff > 0:
+            gains.append(diff)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(diff))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def _get_main_net_5d_diag(symbol: str, trade_date, hh, mm, local_data) -> tuple:
+    """获取5日主力净流入（诊断用），返回 (net_amount, detail_str)"""
+    from datetime import date as dt_date, timedelta
+    try:
+        main_net = 0.0
+        days_count = 0
+        cursor = trade_date
+        while days_count < 5:
+            if cursor.weekday() < 5:
+                mf = local_data.get_moneyflow(symbol, cursor)
+                if mf:
+                    lg = float(mf.get("buy_elg_amount", 0) or 0) - float(mf.get("sell_elg_amount", 0) or 0)
+                    md = float(mf.get("buy_lg_amount", 0) or 0) - float(mf.get("sell_lg_amount", 0) or 0)
+                    day_val = lg + md
+                    if cursor == trade_date and hh is not None and mm is not None:
+                        try:
+                            wi = local_data.get_moneyflow_intraday_weight(symbol, trade_date, hh, mm)
+                            if wi:
+                                day_val *= wi["weight"]
+                        except Exception:
+                            pass
+                    main_net += day_val
+                    days_count += 1
+            cursor -= timedelta(days=1)
+        return main_net, f"累计{days_count}日"
+    except Exception:
+        return 0.0, "计算异常"
+
