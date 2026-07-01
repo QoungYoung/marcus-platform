@@ -1878,6 +1878,156 @@ export const checkEntryFiltersTool = {
   },
 };
 
+// ===== 加仓条件诊断工具（回测专用） =====
+export const getPositionAddConditionsTool = {
+  name: 'get_position_add_conditions',
+  label: '加仓条件检查',
+  description: '查询当前持仓距离加仓还差哪些条件。逐只检查层级评估（probe→confirm→sprint）和6道门控（Pi立场/回撤/保护线/日加仓上限/趋势强度/T+1锁定），返回每只持仓的通过状态和缺失条件清单。参数: symbol(可选，不传检查全部)',
+  parameters: Type.Object({
+    symbol: Type.Optional(Type.String({ description: '指定股票代码，不传则检查全部持仓' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol?: string }, _signal?: AbortSignal) {
+    if (!isBacktest()) {
+      return { content: [{ type: 'text', text: '此工具仅在回测模式下可用' }] };
+    }
+    const ctx = getBacktestContext()!;
+    const query = new URLSearchParams();
+    if (params.symbol) query.set('symbol', params.symbol);
+    if (ctx.phase_time) query.set('phase_time', ctx.phase_time);
+    const qs = query.toString();
+    const data = await apiFetch(
+      `/backtest/${ctx.task_id}/sandbox/position-add-conditions${qs ? '?' + qs : ''}`
+    );
+    if (data.error) return { content: [{ type: 'text', text: data.error }], details: data };
+    const lines: string[] = [];
+    lines.push(`## 📊 加仓条件诊断`);
+    lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${(data.total_asset ?? 0).toLocaleString()} | 可用: ${(data.available_cash ?? 0).toLocaleString()}`);
+    lines.push(`> Pi立场: ${data.pi_stance} | 总回撤: ${data.total_drawdown_pct}%`);
+    lines.push('');
+    lines.push(`**${data.summary}**`);
+    lines.push('');
+    for (const pos of (data.positions || [])) {
+      const icon = pos.can_add ? '✅' : '❌';
+      lines.push(`### ${icon} ${pos.symbol} (${pos.current_tier})`);
+      lines.push(`- 持仓: ${pos.volume}股 × ¥${pos.current_price} = ¥${(pos.market_value ?? 0).toLocaleString()} (${pos.position_pct}%)`);
+      lines.push(`- 浮盈: **${pos.float_pnl_pct}%** | 均价: ¥${pos.avg_cost} | T+1锁定: ${pos.t1_locked ? '是' : '否'}`);
+      const te = pos.tier_evaluation;
+      if (te) {
+        lines.push(`- 层级评估: ${te.action} → ${te.signal}`);
+      }
+      if (pos.gates) {
+        for (const g of pos.gates) {
+          const gIcon = g.passed ? '✅' : '❌';
+          lines.push(`- ${gIcon} ${g.name}: ${g.detail}`);
+          if (g.sub_checks) {
+            for (const [k, v] of Object.entries(g.sub_checks)) {
+              const sc = v as any;
+              const sIcon = sc.passed ? '  ✅' : '  ❌';
+              const val = sc.value || 'N/A';
+              lines.push(`  ${sIcon} ${k}: ${val} (阈值: ${sc.threshold}) ${sc.detail || ''}`);
+            }
+          }
+        }
+      }
+      if (pos.missing_conditions?.length) {
+        lines.push(`- ⚠️ 缺失条件:`);
+        for (const mc of pos.missing_conditions) {
+          lines.push(`  - ${mc}`);
+        }
+      }
+      lines.push('');
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
+// ===== 建仓条件诊断工具（回测专用） =====
+export const getCandidateEntryConditionsTool = {
+  name: 'get_candidate_entry_conditions',
+  label: '建仓条件检查',
+  description: '查询候选池股票距离建仓还差哪些条件。逐只检查入场过滤三层（技术面/主力资金/超买）、Pi立场、午后限制、涨幅确认，区分长期池(>3天)和短期池(≤3天)，返回每只的通过状态和缺失条件清单。参数: symbol(可选，不传检查全部)',
+  parameters: Type.Object({
+    symbol: Type.Optional(Type.String({ description: '指定股票代码，不传则检查全部候选池标的' })),
+  }),
+  async execute(_toolCallId: string, params: { symbol?: string }, _signal?: AbortSignal) {
+    if (!isBacktest()) {
+      return { content: [{ type: 'text', text: '此工具仅在回测模式下可用' }] };
+    }
+    const ctx = getBacktestContext()!;
+    const query = new URLSearchParams();
+    if (params.symbol) query.set('symbol', params.symbol);
+    if (ctx.phase_time) query.set('phase_time', ctx.phase_time);
+    const qs = query.toString();
+    const data = await apiFetch(
+      `/backtest/${ctx.task_id}/sandbox/candidate-entry-conditions${qs ? '?' + qs : ''}`
+    );
+    if (data.error) return { content: [{ type: 'text', text: data.error }], details: data };
+    const lines: string[] = [];
+    lines.push(`## 📋 建仓条件诊断`);
+    lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${(data.total_asset ?? 0).toLocaleString()} | Pi立场: ${data.pi_stance} | ${data.is_afternoon ? '午后' : '上午'}`);
+    lines.push('');
+    lines.push(`**${data.summary}**`);
+    lines.push('');
+
+    const _fmt = (c: any): string[] => {
+      const out: string[] = [];
+      const icon = c.can_entry ? '✅' : '❌';
+      out.push(`#### ${icon} ${c.symbol} ${c.name || ''}`);
+      if (c.error) { out.push(`- ⚠️ ${c.error}`); out.push(''); return out; }
+      out.push(`- 入池: ${c.added_date} | 已检查 ${c.checks_count} 次 | 当前价: ¥${c.current_price} (${c.change_pct}%)`);
+      if (c.last_reject_reason) {
+        const reason = Array.isArray(c.last_reject_reason) ? c.last_reject_reason.join(' → ') : c.last_reject_reason;
+        out.push(`- 上次拒因: ${reason}`);
+      }
+      const f = c.filters;
+      if (f) {
+        const layers: [string, string][] = [['layer1_tech', '技术面'], ['layer2_capital', '主力资金'], ['layer3_overbought', '超买']];
+        for (const [key, label] of layers) {
+          const info = f[key];
+          if (!info) continue;
+          const li = info.passed ? '✅' : '❌';
+          out.push(`- ${li} ${label}: ${info.passed ? '通过' : '未通过'}`);
+          if (info.failed?.length) for (const fd of info.failed) out.push(`  - ${fd}`);
+          if (key === 'layer1_tech') {
+            const vals: string[] = [];
+            if (info.ma5) vals.push(`MA5=${info.ma5}`);
+            if (info.ma20) vals.push(`MA20=${info.ma20}`);
+            if (vals.length) out.push(`  ${vals.join(', ')} | 价>MA5:${info.above_ma5 ? '是' : '否'} 价>MA20:${info.above_ma20 ? '是' : '否'} 多头:${info.ma5_gt_ma20 ? '是' : '否'}`);
+          }
+          if (key === 'layer2_capital' && info.main_net_5d_e8 !== undefined) out.push(`  5日主力净流入: ${info.main_net_5d_e8}亿`);
+          if (key === 'layer3_overbought' && info.rsi6 !== undefined) out.push(`  RSI6: ${info.rsi6}`);
+        }
+      }
+      out.push(`- ${c.stance_check?.passed ? '✅' : '❌'} Pi立场: ${c.stance_check?.detail || 'N/A'}`);
+      const bci = c.buy_confirmation?.passed ? '✅' : '❌';
+      out.push(`- ${bci} 买入确认: ${c.buy_confirmation?.failed?.length ? c.buy_confirmation.failed.join(', ') : '通过'}`);
+      if (c.afternoon_check?.is_afternoon) {
+        const ai = c.afternoon_check?.passed ? '✅' : '❌';
+        out.push(`- ${ai} 午后限制: ${c.afternoon_check?.failed?.length ? c.afternoon_check.failed.join(', ') : '通过'}`);
+      }
+      if (c.missing_conditions?.length) {
+        out.push(`- ⚠️ 缺失条件:`);
+        for (const mc of c.missing_conditions) out.push(`  - ${mc}`);
+      }
+      out.push('');
+      return out;
+    };
+
+    if (data.long_term?.length) {
+      lines.push(`### 🐢 长期候选池 (>3天, ${data.long_term.length}只)`);
+      lines.push('');
+      for (const c of data.long_term) lines.push(..._fmt(c));
+    }
+    if (data.short_term?.length) {
+      lines.push(`### 🐇 短期候选池 (≤3天, ${data.short_term.length}只)`);
+      lines.push('');
+      for (const c of data.short_term) lines.push(..._fmt(c));
+    }
+    if (!data.candidates?.length) lines.push('_候选池为空_');
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 // ===== 工具分组 =====
 // 聊天模式（只读，QQ 聊天使用）
 export const CHAT_TOOLS = [
@@ -2002,4 +2152,6 @@ export const ALL_TOOLS = TRADE_TOOLS;
 // 避免在 LLM 工具列表里出现一个永远跑不通的条目。
 export const BACKTEST_ONLY_TOOLS = [
   getRealtimeSectorPctTool,
+  getPositionAddConditionsTool,
+  getCandidateEntryConditionsTool,
 ];
