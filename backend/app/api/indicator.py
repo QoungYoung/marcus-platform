@@ -2043,6 +2043,370 @@ def _get_trading_period() -> dict:
         return {"period": "after_market", "label": "收盘后", "is_trading": False, "is_blocked": True}
 
 
+# ── Tushare 日频数据辅助函数（非交易时段回退用） ──
+
+def _get_tushare_pro():
+    """统一获取 Tushare pro_api 实例"""
+    from app.core.trading._api_config import get_tushare_pro as _gtp
+    return _gtp()
+
+
+def _normalize_sym(symbol: str) -> str:
+    """将 symbol 标准化为 Tushare ts_code 格式"""
+    return _normalize_to_ts_code(symbol)
+
+
+def _fetch_tushare_daily_df(symbol: str, days: int = 60) -> dict:
+    """从 Tushare 获取日K线数据，返回 {date: {open,high,low,close,volume}} 或空dict"""
+    try:
+        pro = _get_tushare_pro()
+        ts_code = _normalize_sym(symbol)
+        from datetime import datetime as _dt, timedelta as _td
+        end = _dt.now().strftime("%Y%m%d")
+        start = (_dt.now() - _td(days=days + 10)).strftime("%Y%m%d")
+        df = pro.daily(ts_code=ts_code, start_date=start, end_date=end,
+                       fields="trade_date,open,high,low,close,vol")
+        if df is None or df.empty:
+            return {}
+        result = {}
+        for _, row in df.iterrows():
+            result[row["trade_date"]] = {
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["vol"]),
+            }
+        return result
+    except Exception:
+        return {}
+
+
+def _fetch_tushare_close_prices(symbol: str, days: int = 25) -> list:
+    """从 Tushare 获取最近N个交易日收盘价列表（从旧到新，不含当日）"""
+    daily = _fetch_tushare_daily_df(symbol, days=days + 5)
+    if not daily:
+        return []
+    sorted_dates = sorted(daily.keys())
+    closes = [daily[d]["close"] for d in sorted_dates[-days:]]
+    return closes
+
+
+def _calc_rsi_tushare(closes: list, period: int = 6) -> float:
+    """从收盘价列表计算 RSI"""
+    if len(closes) < period + 1:
+        return 50.0
+    gains, losses = [], []
+    for i in range(-period, 0):
+        diff = closes[i] - closes[i - 1]
+        if diff > 0:
+            gains.append(diff); losses.append(0)
+        else:
+            gains.append(0); losses.append(abs(diff))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    return 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+
+
+def _calc_amp_tushare(daily: dict) -> float:
+    """从日K线字典计算近5日平均振幅"""
+    sorted_dates = sorted(daily.keys())[-5:]
+    amps = []
+    for d in sorted_dates:
+        bar = daily[d]
+        if bar["low"] > 0:
+            amps.append((bar["high"] - bar["low"]) / bar["low"])
+    return sum(amps) / len(amps) if amps else 0.03
+
+
+def _check_trend_tushare(symbol: str, closes: list, daily: dict) -> dict:
+    """基于 Tushare 日频数据检查趋势强度
+
+    Returns:
+        {passed, failed_items, checks: {ma5_slope, volume_ratio, ma_align, moneyflow}}
+    """
+    checks = {}
+
+    # MA5 斜率
+    if len(closes) >= 10:
+        ma5_now = sum(closes[-5:]) / 5
+        ma5_prev = sum(closes[-10:-5]) / 5
+        if ma5_prev > 0:
+            slope = (ma5_now - ma5_prev) / ma5_prev
+            checks["ma5_slope"] = {
+                "passed": slope > 0,
+                "value": f"{slope:.2%}",
+                "threshold": "> 0",
+                "detail": f"MA5 {ma5_now:.2f} vs 前期{ma5_prev:.2f}",
+            }
+        else:
+            checks["ma5_slope"] = {"passed": False, "value": "N/A", "threshold": "> 0", "detail": "MA5计算异常"}
+    else:
+        checks["ma5_slope"] = {"passed": False, "value": "N/A", "threshold": "> 0",
+                                "detail": f"数据不足(需≥10条,当前{len(closes)}条)"}
+
+    # 量比
+    sorted_dates = sorted(daily.keys())
+    vols = [daily[d]["volume"] for d in sorted_dates[-6:] if daily[d]["volume"] > 0]
+    if len(vols) >= 6:
+        vol_ratio = vols[-1] / (sum(vols[:-1]) / 5) if sum(vols[:-1]) > 0 else 0
+        checks["volume_ratio"] = {
+            "passed": vol_ratio > 0.8,
+            "value": f"{vol_ratio:.2f}",
+            "threshold": "> 0.8",
+        }
+    else:
+        checks["volume_ratio"] = {"passed": True, "value": "N/A", "threshold": "> 0.8", "detail": "数据不足,跳过"}
+
+    # MA5 > MA20
+    if len(closes) >= 20:
+        ma5 = sum(closes[-5:]) / 5
+        ma20 = sum(closes[-20:]) / 20
+        checks["ma_align"] = {
+            "passed": ma5 > ma20 and ma5 > 0,
+            "value": f"MA5={ma5:.2f} MA20={ma20:.2f}",
+            "threshold": "MA5 > MA20",
+        }
+    else:
+        checks["ma_align"] = {"passed": False, "value": "N/A", "threshold": "MA5 > MA20",
+                               "detail": f"数据不足(需≥20条,当前{len(closes)}条)"}
+
+    # 主力资金流向 (5日)
+    try:
+        mf = _fetch_tushare_moneyflow(symbol, days=5)
+        main_net_5d = 0.0
+        if not mf.empty:
+            for _, row in mf.iterrows():
+                lg = (float(row.get("buy_elg_amount", 0) or 0) -
+                      float(row.get("sell_elg_amount", 0) or 0))
+                md = (float(row.get("buy_lg_amount", 0) or 0) -
+                      float(row.get("sell_lg_amount", 0) or 0))
+                main_net_5d += (lg + md)
+        checks["moneyflow"] = {
+            "passed": main_net_5d > 0,
+            "value": f"{main_net_5d / 1e8:.2f}亿",
+            "threshold": "> 0",
+            "detail": "5日主力净流入(Tushare)",
+        }
+    except Exception:
+        checks["moneyflow"] = {"passed": True, "value": "N/A", "threshold": "> 0", "detail": "数据获取跳过"}
+
+    failed_items = [k for k, v in checks.items() if not v["passed"]]
+    return {"passed": len(failed_items) == 0, "failed_items": failed_items, "checks": checks}
+
+
+def _fetch_tushare_moneyflow(symbol: str, days: int = 10):
+    """从 Tushare 获取个股资金流向 DataFrame（最近N天）"""
+    try:
+        pro = _get_tushare_pro()
+        ts_code = _normalize_sym(symbol)
+        from datetime import datetime as _dt, timedelta as _td
+        end = _dt.now().strftime("%Y%m%d")
+        start = (_dt.now() - _td(days=days + 10)).strftime("%Y%m%d")
+        df = pro.moneyflow(ts_code=ts_code, start_date=start, end_date=end)
+        if df is None or df.empty:
+            return None
+        df = df.sort_values("trade_date", ascending=False)
+        return df.head(days)
+    except Exception:
+        return None
+
+
+def _build_tier_gates_tushare(symbol: str, cur_price: float, avg_price: float,
+                               float_pnl_pct: float, current_tier: str,
+                               total_asset: float, pi_stance: str,
+                               closes: list, daily: dict) -> dict:
+    """基于 Tushare 日频数据构建层级+门控检查结果
+
+    Returns:
+        {tier_info, gates, missing_conditions, can_add}
+    """
+    tier_info = {}
+    missing_conditions = []
+    gates = []
+
+    # ── 层级评估 ──
+    from app.services.position_tier_monitor import get_position_tier_monitor
+    monitor = get_position_tier_monitor()
+    try:
+        evaluation = monitor.evaluate_position_tier(symbol, float_pnl_pct, current_tier)
+    except Exception:
+        # 简易层级判断
+        from app.services.position_tier_monitor import TierEvaluation
+        class _Eval:
+            action = "HOLD"
+            current_tier = current_tier
+            target_tier = None
+            signal = ""
+        evaluation = _Eval()
+        if current_tier in ("probe", "unknown", ""):
+            if float_pnl_pct >= 1.0:
+                evaluation = type('_E', (), {'action': 'UPGRADE', 'current_tier': 'probe',
+                                              'target_tier': 'confirm', 'signal': 'probe→confirm'})()
+        elif current_tier == "confirm":
+            if float_pnl_pct >= 3.0:
+                evaluation = type('_E', (), {'action': 'UPGRADE', 'current_tier': 'confirm',
+                                              'target_tier': 'sprint', 'signal': 'confirm→sprint'})()
+
+    tier_info = {
+        "action": evaluation.action,
+        "current_tier": evaluation.current_tier,
+        "target_tier": evaluation.target_tier if evaluation.target_tier else None,
+        "next_tier": evaluation.target_tier or None,
+        "signal": evaluation.signal,
+    }
+    if evaluation.action == "HOLD":
+        tier_info["need_pnl"] = 0.01 if current_tier in ("probe", "unknown", "") else 0.03
+
+    if evaluation.action in ("HOLD", "MAX_TIER"):
+        if evaluation.action == "MAX_TIER":
+            missing_conditions.append("已达最高层级(冲刺仓)，无法继续加仓")
+        else:
+            need = tier_info.get("need_pnl", 0)
+            next_tier = tier_info.get("next_tier", "")
+            missing_conditions.append(
+                f"浮盈不足: 当前{float_pnl_pct}%, 需要≥{round(need * 100, 1)}%触发{next_tier}升级"
+            )
+        return {
+            "tier_evaluation": tier_info,
+            "gates": gates,
+            "missing_conditions": missing_conditions,
+            "can_add": False,
+        }
+
+    # ── 门控检查（Tushare 日频版，部分检查标记为 N/A） ──
+    can_add = True
+
+    # 1. Pi 立场
+    stance_pass = pi_stance != "red"
+    gates.append({"name": "Pi立场", "passed": stance_pass,
+                   "detail": f"Pi立场={pi_stance}" + (" (red禁止加仓)" if not stance_pass else "")})
+    if not stance_pass:
+        can_add = False
+        missing_conditions.append("Pi立场=red，禁止加仓")
+
+    # 2. 总回撤 (无法从日频数据获取实时账户，标记通过)
+    gates.append({"name": "总回撤<5%", "passed": True,
+                   "detail": "N/A (日频数据无法计算实时回撤, 默认通过)"})
+
+    # 3. 保护线 (T1/T2，无法从日频获取实时动态止损价)
+    gates.append({"name": "保护线", "passed": True,
+                   "detail": "N/A (日频数据无T1/T2价格, 默认通过)"})
+
+    # 4. 单日加仓次数 (无法获取当日执行记录)
+    gates.append({"name": "单日加仓上限", "passed": True,
+                   "detail": "N/A (日频数据无当日执行记录, 默认通过)"})
+
+    # 5. 趋势强度
+    trend = _check_trend_tushare(symbol, closes, daily)
+    for name, check in trend.get("checks", {}).items():
+        label_map = {"ma5_slope": "MA5斜率", "volume_ratio": "量比", "ma_align": "均线排列", "moneyflow": "主力资金"}
+        gates.append({"name": f"趋势-{label_map.get(name, name)}", "passed": check["passed"],
+                       "detail": f"{check.get('value', '')} {check.get('threshold', '')}"})
+    if not trend["passed"]:
+        can_add = False
+        missing_conditions.append(f"趋势强度不足: {', '.join(trend['failed_items'])}")
+
+    # 6. T+1 锁 (无法从日频数据获取)
+    gates.append({"name": "T+1锁", "passed": True, "detail": "N/A (日频数据无当日执行记录, 默认通过)"})
+
+    return {
+        "tier_evaluation": tier_info,
+        "gates": gates,
+        "missing_conditions": missing_conditions,
+        "can_add": can_add,
+    }
+
+
+def _check_entry_tushare(symbol: str, closes: list, daily: dict) -> dict:
+    """基于 Tushare 日频数据检查3层入场过滤
+
+    Returns:
+        {all_pass, l1_pass, l2_pass, l3_pass, l1_reasons, l2_reasons, l3_reasons,
+         rsi, ma5, ma20, main_net_5d, cur_price}
+    """
+    sorted_dates = sorted(daily.keys())
+    last_date = sorted_dates[-1] if sorted_dates else None
+    cur_price = daily[last_date]["close"] if last_date else 0
+
+    # L1 技术面: MA5 > MA20 + MACD > 0 + RSI6 < 80
+    l1_reasons = []
+    if len(closes) >= 20:
+        ma5 = sum(closes[-5:]) / 5
+        ma20 = sum(closes[-20:]) / 20
+    elif closes:
+        ma5 = sum(closes[-min(5, len(closes)):]) / min(5, len(closes))
+        ma20 = sum(closes) / len(closes)
+    else:
+        ma5 = ma20 = cur_price
+
+    l1_pass = True
+    if ma5 <= ma20:
+        l1_pass = False
+        l1_reasons.append(f"MA5({ma5:.2f}) ≤ MA20({ma20:.2f})")
+
+    # MACD (简化: DIF=EMA12-EMA26, DEA=EMA(DIF,9))
+    macd_pass = True
+    if len(closes) >= 26:
+        def _ema(data, n):
+            k = 2.0 / (n + 1)
+            result = [data[0]]
+            for x in data[1:]:
+                result.append(x * k + result[-1] * (1 - k))
+            return result
+        ema12 = _ema(closes, 12)
+        ema26 = _ema(closes, 26)
+        dif = [ema12[i] - ema26[i] for i in range(len(closes))]
+        if len(dif) >= 9:
+            dea = _ema(dif, 9)
+            macd_val = 2 * (dif[-1] - dea[-1])
+            if macd_val <= 0:
+                macd_pass = False
+                l1_reasons.append(f"MACD({macd_val:.4f}) ≤ 0")
+
+    rsi = _calc_rsi_tushare(closes, 6)
+    if rsi >= 80:
+        l1_pass = False
+        l1_reasons.append(f"RSI6({rsi:.1f}) ≥ 80 (超买)")
+
+    # L2 主力资金: 5日主力净流入 > 0
+    l2_pass = True
+    l2_reasons = []
+    main_net_5d = 0.0
+    try:
+        mf = _fetch_tushare_moneyflow(symbol, days=5)
+        if mf is not None and not mf.empty:
+            for _, row in mf.iterrows():
+                lg = (float(row.get("buy_elg_amount", 0) or 0) -
+                      float(row.get("sell_elg_amount", 0) or 0))
+                md = (float(row.get("buy_lg_amount", 0) or 0) -
+                      float(row.get("sell_lg_amount", 0) or 0))
+                main_net_5d += (lg + md)
+            if main_net_5d <= 0:
+                l2_pass = False
+                l2_reasons.append(f"5日主力净流入({main_net_5d / 1e8:.2f}亿) ≤ 0")
+        else:
+            l2_reasons.append("无法获取资金流向数据")
+    except Exception as e:
+        l2_reasons.append(f"资金流向获取异常: {e}")
+
+    # L3 超买: RSI6 < 80
+    l3_pass = rsi < 80
+    l3_reasons = [] if l3_pass else [f"RSI6({rsi:.1f}) ≥ 80"]
+
+    all_pass = l1_pass and l2_pass and l3_pass
+
+    return {
+        "all_pass": all_pass,
+        "l1_pass": l1_pass, "l2_pass": l2_pass, "l3_pass": l3_pass,
+        "l1_reasons": l1_reasons, "l2_reasons": l2_reasons, "l3_reasons": l3_reasons,
+        "rsi": round(rsi, 1), "ma5": round(ma5, 2), "ma20": round(ma20, 2),
+        "main_net_5d": round(main_net_5d, 2), "cur_price": round(cur_price, 2),
+    }
+
+
 @router.get("/position-add-conditions")
 async def position_add_conditions_live(symbol: str = Query(None)):
     """实盘模式：查询持仓距离加仓还差哪些条件。
@@ -2085,60 +2449,79 @@ async def position_add_conditions_live(symbol: str = Query(None)):
     except Exception:
         pass
 
+    use_tushare = not trading["is_trading"]
+
     results = []
     for pos in positions:
         sym = pos["symbol"]
         cur_price = pos.get("current_price", 0)
         avg_price = pos.get("avg_price", 0)
         float_pnl_pct = pos.get("float_pnl_pct", 0)
-        float_pnl = float_pnl_pct / 100.0 if abs(float_pnl_pct) > 1 else float_pnl_pct
         current_tier = pos.get("tier", "probe")
+        data_source = "tushare_daily" if use_tushare else "realtime"
 
-        # 层级评估
-        evaluation = monitor.evaluate_position_tier(sym, float_pnl_pct, current_tier)
-
-        tier_info = {
-            "action": evaluation.action,
-            "current_tier": evaluation.current_tier,
-            "target_tier": evaluation.target_tier if evaluation.target_tier else None,
-            "next_tier": evaluation.target_tier or None,
-            "signal": evaluation.signal,
-        }
-        if evaluation.action == "HOLD":
-            tier_info["need_pnl"] = 0.01 if current_tier in ("probe", "unknown", "") else 0.03
-
-        missing_conditions = []
-        gates = []
-
-        if evaluation.action in ("HOLD", "MAX_TIER"):
-            if evaluation.action == "MAX_TIER":
-                missing_conditions.append("已达最高层级(冲刺仓)，无法继续加仓")
-            else:
-                need = tier_info.get("need_pnl", 0)
-                next_tier = tier_info.get("next_tier", "")
-                missing_conditions.append(
-                    f"浮盈不足: 当前{float_pnl_pct}%, 需要≥{round(need*100,1)}%触发{next_tier}升级"
-                )
-            can_add = False
+        if use_tushare:
+            # ── 非交易时段：Tushare 日频数据 ──
+            daily = _fetch_tushare_daily_df(sym, days=60)
+            closes = [daily[d]["close"] for d in sorted(daily.keys())] if daily else []
+            if daily:
+                sorted_dates = sorted(daily.keys())
+                last_close = daily[sorted_dates[-1]]["close"]
+                if cur_price == 0:
+                    cur_price = last_close
+            diag = _build_tier_gates_tushare(
+                sym, cur_price, avg_price, float_pnl_pct, current_tier,
+                total_asset, pi_stance, closes, daily
+            )
+            tier_info = diag["tier_evaluation"]
+            gates = diag["gates"]
+            missing_conditions = diag["missing_conditions"]
+            can_add = diag["can_add"]
+            t1_locked = None  # 日频数据无法获取
         else:
-            # 门控检查
-            try:
-                gate = monitor.can_execute_add(
-                    sym, evaluation, cur_price, avg_price, account, pi_stance
-                )
-                can_add = gate.allowed
-                for name, detail in gate.checks:
-                    passed = name not in ("BLOCKED", "FAILED")
-                    gates.append({"name": name, "passed": passed, "detail": detail})
-                if not can_add:
-                    blocked = [c[1] for c in gate.checks if c[0] in ("BLOCKED", "FAILED")]
-                    missing_conditions = blocked
-            except Exception:
-                can_add = False
-                missing_conditions = ["门控检查异常"]
+            # ── 交易时段：实时数据 ──
+            evaluation = monitor.evaluate_position_tier(sym, float_pnl_pct, current_tier)
 
-        current_mv = cur_price * pos.get("volume", 0) if hasattr(pos, "get") and "volume" in pos else 0
-        # get tier_status positions don't have volume directly, skip market_value
+            tier_info = {
+                "action": evaluation.action,
+                "current_tier": evaluation.current_tier,
+                "target_tier": evaluation.target_tier if evaluation.target_tier else None,
+                "next_tier": evaluation.target_tier or None,
+                "signal": evaluation.signal,
+            }
+            if evaluation.action == "HOLD":
+                tier_info["need_pnl"] = 0.01 if current_tier in ("probe", "unknown", "") else 0.03
+
+            missing_conditions = []
+            gates = []
+            t1_locked = False
+
+            if evaluation.action in ("HOLD", "MAX_TIER"):
+                if evaluation.action == "MAX_TIER":
+                    missing_conditions.append("已达最高层级(冲刺仓)，无法继续加仓")
+                else:
+                    need = tier_info.get("need_pnl", 0)
+                    next_tier = tier_info.get("next_tier", "")
+                    missing_conditions.append(
+                        f"浮盈不足: 当前{float_pnl_pct}%, 需要≥{round(need*100,1)}%触发{next_tier}升级"
+                    )
+                can_add = False
+            else:
+                # 门控检查
+                try:
+                    gate = monitor.can_execute_add(
+                        sym, evaluation, cur_price, avg_price, account, pi_stance
+                    )
+                    can_add = gate.allowed
+                    for name, detail in gate.checks:
+                        passed = name not in ("BLOCKED", "FAILED")
+                        gates.append({"name": name, "passed": passed, "detail": detail})
+                    if not can_add:
+                        blocked = [c[1] for c in gate.checks if c[0] in ("BLOCKED", "FAILED")]
+                        missing_conditions = blocked
+                except Exception:
+                    can_add = False
+                    missing_conditions = ["门控检查异常"]
 
         results.append({
             "symbol": sym,
@@ -2146,7 +2529,8 @@ async def position_add_conditions_live(symbol: str = Query(None)):
             "avg_cost": round(avg_price, 2),
             "float_pnl_pct": round(float_pnl_pct, 2),
             "current_tier": current_tier,
-            "t1_locked": False,
+            "t1_locked": t1_locked,
+            "data_source": data_source,
             "tier_evaluation": tier_info,
             "gates": gates,
             "missing_conditions": missing_conditions,
@@ -2158,7 +2542,7 @@ async def position_add_conditions_live(symbol: str = Query(None)):
         if trading["period"] == "closing":
             warning = "尾盘时段：仅止损，不加仓。以下诊断仅供参考"
         elif not trading["is_trading"]:
-            warning = f"非交易时段（{trading['label']}）：价格数据为收盘价，加仓条件仅供参考"
+            warning = f"非交易时段（{trading['label']}）：使用Tushare日频数据，部分门控标记为N/A，结果仅供参考"
 
     return {
         "total_asset": round(total_asset, 2),
@@ -2215,6 +2599,9 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
     except Exception:
         pass
 
+    use_tushare = not trading["is_trading"]
+    stance_pass = pi_stance != "red"
+
     now = dt_datetime.now()
     today_str = now.strftime("%Y-%m-%d")
     is_afternoon = now.hour >= 13
@@ -2223,7 +2610,93 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
     for candidate in waiting:
         sym = candidate.get("symbol", "")
         name = candidate.get("name", "")
+        pool_type = _classify_pool_type(candidate)
+        added_date = candidate.get("added_trade_day", "")
+        checks_count = candidate.get("checks_count", 0)
+        data_source = "tushare_daily" if use_tushare else "realtime"
 
+        if use_tushare:
+            # ── 非交易时段：Tushare 日频数据 ──
+            daily = _fetch_tushare_daily_df(sym, days=60)
+            closes = [daily[d]["close"] for d in sorted(daily.keys())] if daily else []
+            entry = _check_entry_tushare(sym, closes, daily)
+
+            l1_pass = entry["l1_pass"]
+            l2_pass = entry["l2_pass"]
+            l3_pass = entry["l3_pass"]
+            all_filter_pass = entry["all_pass"]
+            cur_price = entry["cur_price"]
+            rsi_val = entry["rsi"]
+            change_pct = 0.0
+
+            # 买入确认：Tushare 日频无法获取实时涨跌幅，跳过
+            bc_pass = True
+            bc_action = "N/A (日频数据无实时涨跌幅)"
+
+            # 午后限制：无法获取分时数据
+            afternoon_pass = True
+            afternoon_failed = []
+
+            # 汇总缺失条件
+            missing_conditions = []
+            if not l1_pass:
+                for reason in entry["l1_reasons"]:
+                    missing_conditions.append(f"[技术面] fail: {reason}")
+            if not l2_pass:
+                for reason in entry["l2_reasons"]:
+                    missing_conditions.append(f"[主力资金] fail: {reason}")
+            if not l3_pass:
+                for reason in entry["l3_reasons"]:
+                    missing_conditions.append(f"[超买] fail: {reason}")
+            if not stance_pass:
+                missing_conditions.append(f"[Pi立场] red 禁止建仓")
+
+            can_entry = all_filter_pass and stance_pass
+
+            # 构建 filters 详情
+            filters = {
+                "layer1_tech": {
+                    "passed": l1_pass,
+                    "grade": "pass" if l1_pass else "fail",
+                    "failed": entry["l1_reasons"],
+                },
+                "layer2_capital": {
+                    "passed": l2_pass,
+                    "grade": "pass" if l2_pass else "fail",
+                    "failed": entry["l2_reasons"],
+                },
+                "layer3_overbought": {
+                    "passed": l3_pass,
+                    "grade": "pass" if l3_pass else "fail",
+                    "failed": entry["l3_reasons"],
+                },
+            }
+
+            results.append({
+                "symbol": sym,
+                "name": name,
+                "pool_type": pool_type,
+                "added_date": added_date,
+                "current_price": cur_price,
+                "change_pct": change_pct,
+                "rsi": rsi_val,
+                "ma5": entry.get("ma5", 0),
+                "ma20": entry.get("ma20", 0),
+                "main_net_5d": entry.get("main_net_5d", 0),
+                "last_reject_reason": candidate.get("reject_reasons", []),
+                "checks_count": checks_count,
+                "data_source": data_source,
+                "filters": filters,
+                "stance_check": {"passed": stance_pass,
+                                 "detail": f"Pi立场={pi_stance}" + (" (red禁止)" if not stance_pass else "")},
+                "buy_confirmation": {"passed": bc_pass, "action": bc_action, "failed": []},
+                "afternoon_check": {"passed": afternoon_pass, "is_afternoon": is_afternoon, "failed": afternoon_failed},
+                "missing_conditions": missing_conditions,
+                "can_entry": can_entry,
+            })
+            continue
+
+        # ── 交易时段：实时数据 ──
         # 重新运行入场过滤
         try:
             async def _run():
@@ -2240,9 +2713,10 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
                 "error": f"入场过滤检查失败: {e}",
                 "missing_conditions": [f"入场过滤检查失败: {e}"],
                 "can_entry": False,
-                "pool_type": _classify_pool_type(candidate),
-                "added_date": candidate.get("added_trade_day", ""),
-                "checks_count": candidate.get("checks_count", 0),
+                "pool_type": pool_type,
+                "added_date": added_date,
+                "checks_count": checks_count,
+                "data_source": data_source,
             })
             continue
 
@@ -2271,8 +2745,6 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
                 afternoon_pass = False
                 afternoon_failed.append(f"午后分位{ip:.0f}% > 60%")
 
-        stance_pass = pi_stance != "red"
-
         # 汇总
         missing_conditions = []
         if not l1_pass:
@@ -2295,12 +2767,13 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
         results.append({
             "symbol": sym,
             "name": name,
-            "pool_type": _classify_pool_type(candidate),
-            "added_date": candidate.get("added_trade_day", ""),
+            "pool_type": pool_type,
+            "added_date": added_date,
             "current_price": round(cur_price, 2),
             "change_pct": round(bc.change_pct, 2) if bc.change_pct else 0,
             "last_reject_reason": candidate.get("reject_reasons", []),
-            "checks_count": candidate.get("checks_count", 0),
+            "checks_count": checks_count,
+            "data_source": data_source,
             "filters": {
                 "layer1_tech": {
                     "passed": l1_pass,
@@ -2335,7 +2808,7 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
         elif trading["period"] == "morning_quiet":
             warning = "早盘冷静期（09:30-09:45）：不自动建仓。以下诊断仅供参考"
         elif not trading["is_trading"]:
-            warning = f"非交易时段（{trading['label']}）：入场过滤依赖实时行情，结果仅供参考"
+            warning = f"非交易时段（{trading['label']}）：使用Tushare日频数据，买入确认/午后限制跳过，结果仅供参考"
 
     return {
         "pi_stance": pi_stance,
