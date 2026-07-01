@@ -2023,7 +2023,7 @@ async def get_express(
 
 def _get_trading_period() -> dict:
     """判断当前所处交易时段"""
-    from datetime import time as dtime
+    from datetime import datetime as dtime
     now = dtime.now()
     t = now.hour * 60 + now.minute
 
