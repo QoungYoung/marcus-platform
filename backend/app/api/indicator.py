@@ -2021,13 +2021,38 @@ async def get_express(
 # 条件诊断端点（实盘）：加仓条件 / 建仓条件
 # ═══════════════════════════════════════════════════════════════
 
+def _get_trading_period() -> dict:
+    """判断当前所处交易时段"""
+    from datetime import time as dtime
+    now = dtime.now()
+    t = now.hour * 60 + now.minute
+
+    if t < 9 * 60 + 30:
+        return {"period": "pre_market", "label": "盘前", "is_trading": False, "is_blocked": True}
+    elif t < 9 * 60 + 45:
+        return {"period": "morning_quiet", "label": "早盘冷静期 (09:30-09:45)", "is_trading": True, "is_blocked": True}
+    elif t < 11 * 60 + 30:
+        return {"period": "morning", "label": "上午交易", "is_trading": True, "is_blocked": False}
+    elif t < 13 * 60:
+        return {"period": "lunch", "label": "午休 (11:30-13:00)", "is_trading": False, "is_blocked": True}
+    elif t < 14 * 60 + 30:
+        return {"period": "afternoon", "label": "下午交易", "is_trading": True, "is_blocked": False}
+    elif t < 15 * 60:
+        return {"period": "closing", "label": "尾盘 (14:30-15:00)", "is_trading": True, "is_blocked": True}
+    else:
+        return {"period": "after_market", "label": "收盘后", "is_trading": False, "is_blocked": True}
+
+
 @router.get("/position-add-conditions")
 async def position_add_conditions_live(symbol: str = Query(None)):
     """实盘模式：查询持仓距离加仓还差哪些条件。
 
     逐只检查当前持仓的层级评估和门控状态，返回缺失条件清单。
+    非交易时段仍可查询，但会标注数据可能滞后。
     """
     from app.services.position_tier_monitor import get_position_tier_monitor
+
+    trading = _get_trading_period()
 
     monitor = get_position_tier_monitor()
     tier_status = monitor.get_tier_status()
@@ -2128,9 +2153,18 @@ async def position_add_conditions_live(symbol: str = Query(None)):
             "can_add": can_add,
         })
 
+    warning = None
+    if trading["is_blocked"]:
+        if trading["period"] == "closing":
+            warning = "尾盘时段：仅止损，不加仓。以下诊断仅供参考"
+        elif not trading["is_trading"]:
+            warning = f"非交易时段（{trading['label']}）：价格数据为收盘价，加仓条件仅供参考"
+
     return {
         "total_asset": round(total_asset, 2),
         "pi_stance": pi_stance,
+        "trading_period": trading,
+        "warning": warning,
         "positions": results,
         "summary": (
             f"共{len(results)}只持仓, "
@@ -2147,11 +2181,14 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
 
     逐只检查入场过滤三层、Pi立场、午后限制、涨幅确认，
     区分长期池(>3天)和短期池(≤3天)。
+    非交易时段仍可查询，但入场过滤依赖实时行情，盘后可能无法通过。
     """
     import asyncio
     from datetime import date as dt_date, datetime as dt_datetime, timedelta
     from app.services.candidate_pool import get_candidate_pool
     from app.models.indicator import EntryCheckRequest
+
+    trading = _get_trading_period()
 
     pool = get_candidate_pool()
     waiting = pool.get_waiting()
@@ -2291,8 +2328,19 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
     long_term = [r for r in results if r["pool_type"] == "长期"]
     short_term = [r for r in results if r["pool_type"] == "短期"]
 
+    warning = None
+    if trading["is_blocked"]:
+        if trading["period"] == "closing":
+            warning = "尾盘时段：14:30后不建仓。以下诊断仅供参考"
+        elif trading["period"] == "morning_quiet":
+            warning = "早盘冷静期（09:30-09:45）：不自动建仓。以下诊断仅供参考"
+        elif not trading["is_trading"]:
+            warning = f"非交易时段（{trading['label']}）：入场过滤依赖实时行情，结果仅供参考"
+
     return {
         "pi_stance": pi_stance,
+        "trading_period": trading,
+        "warning": warning,
         "is_afternoon": is_afternoon,
         "candidates": results,
         "long_term": long_term,

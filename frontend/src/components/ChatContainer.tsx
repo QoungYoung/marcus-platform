@@ -1119,7 +1119,10 @@ const getPositionAddConditionsTool = {
     const lines: string[] = [];
     lines.push(`## 📊 加仓条件诊断`);
     if (isLive) {
-      lines.push(`> 总资产: ${data.total_asset?.toLocaleString()} | Pi立场: ${data.pi_stance} | 模式: 实盘`);
+      const tp = data.trading_period;
+      const periodLabel = tp ? ` | ${tp.label}` : '';
+      lines.push(`> 总资产: ${data.total_asset?.toLocaleString()} | Pi立场: ${data.pi_stance} | 模式: 实盘${periodLabel}`);
+      if (data.warning) lines.push(`> ⚠️ ${data.warning}`);
     } else {
       lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${data.total_asset?.toLocaleString()} | 可用: ${data.available_cash?.toLocaleString()}`);
       lines.push(`> Pi立场: ${data.pi_stance} | 总回撤: ${data.total_drawdown_pct}%`);
@@ -1187,7 +1190,10 @@ const getCandidateEntryConditionsTool = {
     const lines: string[] = [];
     lines.push(`## 📋 建仓条件诊断`);
     if (isLive) {
-      lines.push(`> Pi立场: ${data.pi_stance} | ${data.is_afternoon ? '午后' : '上午'} | 模式: 实盘`);
+      const tp = data.trading_period;
+      const periodLabel = tp ? ` | ${tp.label}` : '';
+      lines.push(`> Pi立场: ${data.pi_stance} | ${data.is_afternoon ? '午后' : '上午'} | 模式: 实盘${periodLabel}`);
+      if (data.warning) lines.push(`> ⚠️ ${data.warning}`);
     } else {
       lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${data.total_asset?.toLocaleString()} | Pi立场: ${data.pi_stance} | ${data.is_afternoon ? '午后' : '上午'}`);
     }
