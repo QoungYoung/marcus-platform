@@ -1100,29 +1100,39 @@ const getPositionAddConditionsTool = {
   label: '加仓条件检查',
   description: '查询当前持仓距离加仓还差哪些条件。逐只检查层级评估（probe→confirm→sprint）和6道门控（Pi立场/回撤/保护线/日加仓上限/趋势强度/T+1锁定），返回每只持仓的通过状态和缺失条件清单',
   parameters: Type.Object({
-    task_id: Type.String({ description: '回测任务ID，用于沙盒账户查询。不传则尝试从会话上下文推断' }),
+    task_id: Type.Optional(Type.String({ description: '回测任务ID，用于沙盒账户查询。实盘模式不传' })),
     symbol: Type.Optional(Type.String({ description: '指定股票代码，不传则检查全部持仓' })),
   }),
-  async execute(_toolCallId: string, params: { task_id: string; symbol?: string }, _signal: AbortSignal | undefined) {
+  async execute(_toolCallId: string, params: { task_id?: string; symbol?: string }, _signal: AbortSignal | undefined) {
     const query = new URLSearchParams();
     if (params.symbol) query.set('symbol', params.symbol);
     const qs = query.toString();
-    const res = await fetch(`${MARCUS_API}/backtest/${params.task_id}/sandbox/position-add-conditions${qs ? '?' + qs : ''}`);
+    // 回测模式：走 sandbox 端点；实盘模式：走实时端点
+    const url = params.task_id
+      ? `${MARCUS_API}/backtest/${params.task_id}/sandbox/position-add-conditions${qs ? '?' + qs : ''}`
+      : `${MARCUS_API}/indicator/position-add-conditions${qs ? '?' + qs : ''}`;
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    const isLive = data.mode === 'live';
     const lines: string[] = [];
     lines.push(`## 📊 加仓条件诊断`);
-    lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${data.total_asset?.toLocaleString()} | 可用: ${data.available_cash?.toLocaleString()}`);
-    lines.push(`> Pi立场: ${data.pi_stance} | 总回撤: ${data.total_drawdown_pct}%`);
+    if (isLive) {
+      lines.push(`> 总资产: ${data.total_asset?.toLocaleString()} | Pi立场: ${data.pi_stance} | 模式: 实盘`);
+    } else {
+      lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${data.total_asset?.toLocaleString()} | 可用: ${data.available_cash?.toLocaleString()}`);
+      lines.push(`> Pi立场: ${data.pi_stance} | 总回撤: ${data.total_drawdown_pct}%`);
+    }
     lines.push('');
     lines.push(`**${data.summary}**`);
     lines.push('');
     for (const pos of (data.positions || [])) {
       const icon = pos.can_add ? '✅' : '❌';
       lines.push(`### ${icon} ${pos.symbol} (当前层: ${pos.current_tier})`);
-      lines.push(`- 持仓: ${pos.volume}股 × ¥${pos.current_price} = ¥${pos.market_value?.toLocaleString()} (${pos.position_pct}%)`);
-      lines.push(`- 浮盈: **${pos.float_pnl_pct}%** | 均价: ¥${pos.avg_cost} | T+1锁定: ${pos.t1_locked ? '是' : '否'}`);
+      if (pos.volume) lines.push(`- 持仓: ${pos.volume}股 × ¥${pos.current_price} = ¥${pos.market_value?.toLocaleString()} (${pos.position_pct}%)`);
+      lines.push(`- 浮盈: **${pos.float_pnl_pct}%** | 均价: ¥${pos.avg_cost}`);
+      if (!isLive) lines.push(`- T+1锁定: ${pos.t1_locked ? '是' : '否'}`);
       const te = pos.tier_evaluation;
       if (te) {
         lines.push(`- 层级评估: ${te.action} → ${te.signal}`);
@@ -1158,25 +1168,33 @@ const getCandidateEntryConditionsTool = {
   label: '建仓条件检查',
   description: '查询长期/短期候选池股票距离建仓还差哪些条件。逐只检查入场过滤三层（技术面/主力资金/超买）、Pi立场、午后限制、涨幅确认，区分长期池(>3天)和短期池(≤3天)，返回每只的通过状态和缺失条件清单',
   parameters: Type.Object({
-    task_id: Type.String({ description: '回测任务ID，用于沙盒账户查询' }),
+    task_id: Type.Optional(Type.String({ description: '回测任务ID，用于沙盒账户查询。实盘模式不传' })),
     symbol: Type.Optional(Type.String({ description: '指定股票代码，不传则检查全部候选池标的' })),
   }),
-  async execute(_toolCallId: string, params: { task_id: string; symbol?: string }, _signal: AbortSignal | undefined) {
+  async execute(_toolCallId: string, params: { task_id?: string; symbol?: string }, _signal: AbortSignal | undefined) {
     const query = new URLSearchParams();
     if (params.symbol) query.set('symbol', params.symbol);
     const qs = query.toString();
-    const res = await fetch(`${MARCUS_API}/backtest/${params.task_id}/sandbox/candidate-entry-conditions${qs ? '?' + qs : ''}`);
+    // 回测模式：走 sandbox 端点；实盘模式：走实时端点
+    const url = params.task_id
+      ? `${MARCUS_API}/backtest/${params.task_id}/sandbox/candidate-entry-conditions${qs ? '?' + qs : ''}`
+      : `${MARCUS_API}/indicator/candidate-entry-conditions${qs ? '?' + qs : ''}`;
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    const isLive = data.mode === 'live';
     const lines: string[] = [];
     lines.push(`## 📋 建仓条件诊断`);
-    lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${data.total_asset?.toLocaleString()} | Pi立场: ${data.pi_stance} | ${data.is_afternoon ? '午后' : '上午'}`);
+    if (isLive) {
+      lines.push(`> Pi立场: ${data.pi_stance} | ${data.is_afternoon ? '午后' : '上午'} | 模式: 实盘`);
+    } else {
+      lines.push(`> 交易日期: ${data.trade_date} | 总资产: ${data.total_asset?.toLocaleString()} | Pi立场: ${data.pi_stance} | ${data.is_afternoon ? '午后' : '上午'}`);
+    }
     lines.push('');
     lines.push(`**${data.summary}**`);
     lines.push('');
 
-    // 长期候选池
     if (data.long_term?.length) {
       lines.push(`### 🐢 长期候选池 (>3天, ${data.long_term.length}只)`);
       lines.push('');
@@ -1184,8 +1202,6 @@ const getCandidateEntryConditionsTool = {
         lines.push(..._formatCandidateDiag(c));
       }
     }
-
-    // 短期候选池
     if (data.short_term?.length) {
       lines.push(`### 🐇 短期候选池 (≤3天, ${data.short_term.length}只)`);
       lines.push('');
@@ -1193,7 +1209,6 @@ const getCandidateEntryConditionsTool = {
         lines.push(..._formatCandidateDiag(c));
       }
     }
-
     if (!data.candidates?.length) {
       lines.push('_候选池为空_');
     }

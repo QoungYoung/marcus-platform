@@ -2015,3 +2015,306 @@ async def get_express(
         raise HTTPException(status_code=503, detail="tushare 库未安装，请 pip install tushare")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取业绩快报失败: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# 条件诊断端点（实盘）：加仓条件 / 建仓条件
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/position-add-conditions")
+async def position_add_conditions_live(symbol: str = Query(None)):
+    """实盘模式：查询持仓距离加仓还差哪些条件。
+
+    逐只检查当前持仓的层级评估和门控状态，返回缺失条件清单。
+    """
+    from app.services.position_tier_monitor import get_position_tier_monitor
+
+    monitor = get_position_tier_monitor()
+    tier_status = monitor.get_tier_status()
+    positions = tier_status.get("positions", [])
+
+    if symbol:
+        positions = [p for p in positions if p["symbol"] == symbol]
+
+    if not positions:
+        return {
+            "positions": [],
+            "summary": "当前无持仓",
+            "mode": "live",
+        }
+
+    try:
+        executor = monitor.executor
+        account = executor.get_account() if executor else {}
+        total_asset = float(account.get("total_asset", 100000))
+    except Exception:
+        total_asset = 100000
+
+    pi_stance = "yellow"
+    try:
+        from core.utils.strategy_chain import StrategyChain
+        chain = StrategyChain()
+        pi_conf = chain.get_pi_confirmation()
+        if pi_conf:
+            pi_stance = pi_conf.get("stance", "yellow")
+    except Exception:
+        pass
+
+    results = []
+    for pos in positions:
+        sym = pos["symbol"]
+        cur_price = pos.get("current_price", 0)
+        avg_price = pos.get("avg_price", 0)
+        float_pnl_pct = pos.get("float_pnl_pct", 0)
+        float_pnl = float_pnl_pct / 100.0 if abs(float_pnl_pct) > 1 else float_pnl_pct
+        current_tier = pos.get("tier", "probe")
+
+        # 层级评估
+        evaluation = monitor.evaluate_position_tier(sym, float_pnl_pct, current_tier)
+
+        tier_info = {
+            "action": evaluation.action,
+            "current_tier": evaluation.current_tier,
+            "target_tier": evaluation.target_tier if evaluation.target_tier else None,
+            "next_tier": evaluation.target_tier or None,
+            "signal": evaluation.signal,
+        }
+        if evaluation.action == "HOLD":
+            tier_info["need_pnl"] = 0.01 if current_tier in ("probe", "unknown", "") else 0.03
+
+        missing_conditions = []
+        gates = []
+
+        if evaluation.action in ("HOLD", "MAX_TIER"):
+            if evaluation.action == "MAX_TIER":
+                missing_conditions.append("已达最高层级(冲刺仓)，无法继续加仓")
+            else:
+                need = tier_info.get("need_pnl", 0)
+                next_tier = tier_info.get("next_tier", "")
+                missing_conditions.append(
+                    f"浮盈不足: 当前{float_pnl_pct}%, 需要≥{round(need*100,1)}%触发{next_tier}升级"
+                )
+            can_add = False
+        else:
+            # 门控检查
+            try:
+                gate = monitor.can_execute_add(
+                    sym, evaluation, cur_price, avg_price, account, pi_stance
+                )
+                can_add = gate.allowed
+                for name, detail in gate.checks:
+                    passed = name not in ("BLOCKED", "FAILED")
+                    gates.append({"name": name, "passed": passed, "detail": detail})
+                if not can_add:
+                    blocked = [c[1] for c in gate.checks if c[0] in ("BLOCKED", "FAILED")]
+                    missing_conditions = blocked
+            except Exception:
+                can_add = False
+                missing_conditions = ["门控检查异常"]
+
+        current_mv = cur_price * pos.get("volume", 0) if hasattr(pos, "get") and "volume" in pos else 0
+        # get tier_status positions don't have volume directly, skip market_value
+
+        results.append({
+            "symbol": sym,
+            "current_price": round(cur_price, 2),
+            "avg_cost": round(avg_price, 2),
+            "float_pnl_pct": round(float_pnl_pct, 2),
+            "current_tier": current_tier,
+            "t1_locked": False,
+            "tier_evaluation": tier_info,
+            "gates": gates,
+            "missing_conditions": missing_conditions,
+            "can_add": can_add,
+        })
+
+    return {
+        "total_asset": round(total_asset, 2),
+        "pi_stance": pi_stance,
+        "positions": results,
+        "summary": (
+            f"共{len(results)}只持仓, "
+            f"{sum(1 for r in results if r['can_add'])}只满足加仓条件, "
+            f"{sum(1 for r in results if not r['can_add'])}只条件不足"
+        ),
+        "mode": "live",
+    }
+
+
+@router.get("/candidate-entry-conditions")
+async def candidate_entry_conditions_live(symbol: str = Query(None)):
+    """实盘模式：查询候选池股票距离建仓还差哪些条件。
+
+    逐只检查入场过滤三层、Pi立场、午后限制、涨幅确认，
+    区分长期池(>3天)和短期池(≤3天)。
+    """
+    import asyncio
+    from datetime import date as dt_date, datetime as dt_datetime, timedelta
+    from app.services.candidate_pool import get_candidate_pool
+    from app.models.indicator import EntryCheckRequest
+
+    pool = get_candidate_pool()
+    waiting = pool.get_waiting()
+    if symbol:
+        waiting = [c for c in waiting if c.get("symbol") == symbol]
+
+    if not waiting:
+        return {
+            "candidates": [],
+            "long_term": [],
+            "short_term": [],
+            "summary": "候选池无 waiting 状态标的",
+            "mode": "live",
+        }
+
+    # Pi 立场
+    pi_stance = "yellow"
+    try:
+        from core.utils.strategy_chain import StrategyChain
+        chain = StrategyChain()
+        pi_conf = chain.get_pi_confirmation()
+        if pi_conf:
+            pi_stance = pi_conf.get("stance", "yellow")
+    except Exception:
+        pass
+
+    now = dt_datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    is_afternoon = now.hour >= 13
+
+    results = []
+    for candidate in waiting:
+        sym = candidate.get("symbol", "")
+        name = candidate.get("name", "")
+
+        # 重新运行入场过滤
+        try:
+            async def _run():
+                from app.api.indicator import check_entry_filters
+                return await check_entry_filters(EntryCheckRequest(symbol=sym))
+            loop = asyncio.new_event_loop()
+            try:
+                filter_result = loop.run_until_complete(_run())
+            finally:
+                loop.close()
+        except Exception as e:
+            results.append({
+                "symbol": sym, "name": name,
+                "error": f"入场过滤检查失败: {e}",
+                "missing_conditions": [f"入场过滤检查失败: {e}"],
+                "can_entry": False,
+                "pool_type": _classify_pool_type(candidate),
+                "added_date": candidate.get("added_trade_day", ""),
+                "checks_count": candidate.get("checks_count", 0),
+            })
+            continue
+
+        l1 = filter_result.layer1_tech
+        l2 = filter_result.layer2_capital
+        l3 = filter_result.layer3_overbought
+
+        l1_pass = l1.grade == "pass"
+        l2_pass = l2.grade == "pass"
+        l3_pass = l3.grade == "pass"
+        all_filter_pass = filter_result.final_grade == "pass" and not filter_result.hard_block
+
+        # 买入确认
+        bc = filter_result.buy_confirmation
+        bc_pass = bc.action != "放弃（涨幅>8%，不追涨）"
+
+        # 午后检查
+        afternoon_pass = True
+        afternoon_failed = []
+        if is_afternoon:
+            if bc.change_pct > 3:
+                afternoon_pass = False
+                afternoon_failed.append(f"午后涨幅{bc.change_pct}% > 3%")
+            ip = filter_result.tech.intraday_percentile if filter_result.tech else None
+            if ip is not None and ip > 60:
+                afternoon_pass = False
+                afternoon_failed.append(f"午后分位{ip:.0f}% > 60%")
+
+        stance_pass = pi_stance != "red"
+
+        # 汇总
+        missing_conditions = []
+        if not l1_pass:
+            missing_conditions.append(f"[技术面] {l1.grade}: {getattr(l1, 'downgrade_reason', '') or '未通过'}")
+        if not l2_pass:
+            missing_conditions.append(f"[主力资金] {l2.grade}: {getattr(l2, 'downgrade_reason', '') or '未通过'}")
+        if not l3_pass:
+            missing_conditions.append(f"[超买] {l3.grade}: {getattr(l3, 'downgrade_reason', '') or '未通过'}")
+        if not stance_pass:
+            missing_conditions.append(f"[Pi立场] red 禁止建仓")
+        if not bc_pass:
+            missing_conditions.append(f"[买入确认] {bc.action}")
+        if not afternoon_pass:
+            missing_conditions.append(f"[午后限制] {', '.join(afternoon_failed)}")
+
+        can_entry = all_filter_pass and stance_pass and bc_pass and afternoon_pass
+
+        cur_price = filter_result.tech.current_price if filter_result.tech else 0
+
+        results.append({
+            "symbol": sym,
+            "name": name,
+            "pool_type": _classify_pool_type(candidate),
+            "added_date": candidate.get("added_trade_day", ""),
+            "current_price": round(cur_price, 2),
+            "change_pct": round(bc.change_pct, 2) if bc.change_pct else 0,
+            "last_reject_reason": candidate.get("reject_reasons", []),
+            "checks_count": candidate.get("checks_count", 0),
+            "filters": {
+                "layer1_tech": {
+                    "passed": l1_pass,
+                    "grade": l1.grade,
+                    "failed": [] if l1_pass else [getattr(l1, 'downgrade_reason', '') or '未通过'],
+                },
+                "layer2_capital": {
+                    "passed": l2_pass,
+                    "grade": l2.grade,
+                    "failed": [] if l2_pass else [getattr(l2, 'downgrade_reason', '') or '未通过'],
+                },
+                "layer3_overbought": {
+                    "passed": l3_pass,
+                    "grade": l3.grade,
+                    "failed": [] if l3_pass else [getattr(l3, 'downgrade_reason', '') or '未通过'],
+                },
+            },
+            "stance_check": {"passed": stance_pass, "detail": f"Pi立场={pi_stance}" + (" (red禁止)" if not stance_pass else "")},
+            "buy_confirmation": {"passed": bc_pass, "action": bc.action, "failed": [] if bc_pass else [bc.action]},
+            "afternoon_check": {"passed": afternoon_pass, "is_afternoon": is_afternoon, "failed": afternoon_failed},
+            "missing_conditions": missing_conditions,
+            "can_entry": can_entry,
+        })
+
+    long_term = [r for r in results if r["pool_type"] == "长期"]
+    short_term = [r for r in results if r["pool_type"] == "短期"]
+
+    return {
+        "pi_stance": pi_stance,
+        "is_afternoon": is_afternoon,
+        "candidates": results,
+        "long_term": long_term,
+        "short_term": short_term,
+        "summary": (
+            f"长期候选池 {len(long_term)} 只 / 短期候选池 {len(short_term)} 只, "
+            f"共 {sum(1 for r in results if r['can_entry'])} 只满足建仓条件, "
+            f"{sum(1 for r in results if not r['can_entry'])} 只条件不足"
+        ),
+        "mode": "live",
+    }
+
+
+def _classify_pool_type(candidate: dict) -> str:
+    """根据入池天数分类长期/短期"""
+    from datetime import date as dt_date
+    added = candidate.get("added_trade_day", "")
+    if not added:
+        return "短期"
+    try:
+        added_dt = dt_date.fromisoformat(added)
+        days = (dt_date.today() - added_dt).days
+        return "短期" if days <= 3 else "长期"
+    except Exception:
+        return "短期"
