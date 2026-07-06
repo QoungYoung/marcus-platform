@@ -208,6 +208,37 @@ class StopLossMonitor:
                 except Exception:
                     pass
 
+    # ── 持仓天数 ──
+
+    def _get_holding_days(self, symbol: str) -> Optional[int]:
+        """获取某只股票的首笔买入距今自然天数，用于 T1 保本门槛判断。"""
+        try:
+            if self.executor is None:
+                return None
+            import sqlite3
+            from pathlib import Path
+            data_dir = Path(self.executor.data_dir)
+            db_path = data_dir / "trades.db"
+            if not db_path.exists():
+                return None
+            conn = sqlite3.connect(str(db_path), timeout=30)
+            conn.execute("PRAGMA busy_timeout=30000")
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT MIN(created_at) FROM trades WHERE symbol = ? AND direction = '买入'",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0]:
+                first_date = row[0][:10]  # "2026-07-03" from "2026-07-03T09:35:00"
+                from datetime import date as dt_date
+                first_dt = dt_date.fromisoformat(first_date)
+                return (dt_date.today() - first_dt).days
+        except Exception:
+            pass
+        return None
+
     # ── HWM 辅助（P0-2: 监控器内部直接更新） ──
 
     def _update_highest_price(self, symbol: str, current_price: float) -> None:
@@ -590,6 +621,10 @@ class StopLossMonitor:
             protect_pct = t2_protect
             protect_desc = f'T2·浮盈≥{t2}%→保护线+{t2_protect}%'
         elif float_pnl_pct >= t1:
+            # T1 保本：持仓 ≤ 3 天不启用，避免刚买入被盘中波动震出去
+            holding_days = self._get_holding_days(symbol)
+            if holding_days is not None and holding_days <= 3:
+                return None
             protect_pct = 0.0  # 保本线 = 成本价
             protect_desc = f'T1·浮盈≥{t1}%→保本线(成本价)'
 
@@ -888,6 +923,10 @@ class StopLossMonitor:
         elif float_pnl_pct >= t2:
             return round(float_pnl_pct - t2_protect, 2)
         elif float_pnl_pct >= t1:
+            # T1 保本：持仓 ≤ 3 天跳过
+            holding_days = self._get_holding_days(symbol)
+            if holding_days is not None and holding_days <= 3:
+                return None  # T1 未启用，返回 None 让上层选其他规则
             return round(float_pnl_pct, 2)  # 保本线 = 0
         else:
             return None  # 未进入盈利区，规则2不适用
