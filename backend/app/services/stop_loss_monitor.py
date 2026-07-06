@@ -175,7 +175,7 @@ class StopLossMonitor:
             cycle += 1
             try:
                 if self._is_trading_time():
-                    print(f"[StopLoss] 🔄 第 {cycle} 轮检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
+                    print(f"[止损] 🔄 第 {cycle} 轮检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
                     self._check_all_positions()
                 else:
                     if cycle % 20 == 1:  # 非交易时段每 10 分钟才打印一次
@@ -246,10 +246,11 @@ class StopLossMonitor:
             print(f"[StopLoss] 持仓为空，跳过检查", file=sys.stderr)
             return
 
-        print(f"[StopLoss] 持仓 {len(positions)} 只，开始止损评估...", file=sys.stderr)
+        print(f"[止损] 持仓 {len(positions)} 只，开始止损评估...", file=sys.stderr)
 
         market_pct = self._get_market_change_pct()
         today_buy_symbols = self.executor._get_today_buy_symbols() if self.executor else set()
+        t1_skipped = []
 
         for pos in positions:
             symbol = pos.get('symbol', '')
@@ -257,6 +258,7 @@ class StopLossMonitor:
                 continue
 
             if symbol in today_buy_symbols:
+                t1_skipped.append(symbol)
                 continue
 
             avg_price = pos.get('avg_price', 0)
@@ -280,6 +282,9 @@ class StopLossMonitor:
 
             if stop_reason:
                 self._execute_stop(symbol, current_price, volume, stop_reason, float_pnl_pct)
+
+        if t1_skipped:
+            print(f"[止损] ⏭️ T+1 锁定跳过: {', '.join(t1_skipped)}", file=sys.stderr)
 
     def _evaluate_stop_rules(
         self, symbol: str, float_pnl_pct: float, current_price: float,
@@ -929,24 +934,28 @@ class StopLossMonitor:
             logger.info(
                 f"[StopLoss] ⏸️ 早盘冷静期，延迟卖出: {symbol} @ {price} | {reason}"
             )
+            print(f"[止损] ⏸️ {symbol} 早盘冷静期，延迟卖出: {reason}", file=sys.stderr)
             return
 
         trigger_key = f"{symbol}_{price:.2f}"
         with self.lock:
             if trigger_key in self._triggered:
+                print(f"[止损] ⏭️ {symbol} 已触发过 (key={trigger_key})，跳过", file=sys.stderr)
                 return
             self._triggered[trigger_key] = price
 
         daily_count = self.today_stops.get(symbol, 0)
         if daily_count >= 3:
             logger.warning(f"[StopLoss] {symbol} 今日已止损 {daily_count} 次，跳过")
+            print(f"[止损] ⛔ {symbol} 今日已止损{daily_count}次达上限，跳过", file=sys.stderr)
             return
 
         logger.info(f"[StopLoss] 🔴 触发止损: {symbol} @ {price} | {reason}")
-        print(f"[StopLoss] 🔴 {symbol} 止损 @ {price} | 浮盈{float_pnl_pct:+.2f}% | {reason}", file=sys.stderr)
+        print(f"[止损] 🔴 {symbol} 止损 @ {price} | 浮盈{float_pnl_pct:+.2f}% | {reason}", file=sys.stderr)
 
         if self.executor is None:
             logger.error(f"[StopLoss] executor 未注入，无法执行止损: {symbol}")
+            print(f"[止损] ❌ {symbol} executor未注入，无法卖出", file=sys.stderr)
             return
 
         try:
@@ -959,11 +968,14 @@ class StopLossMonitor:
             if result.get('status') == 'executed':
                 self.today_stops[symbol] = daily_count + 1
                 logger.info(f"[StopLoss] ✅ 止损已执行: {symbol} @ {price} x{volume}")
+                print(f"[止损] ✅ {symbol} 已卖出 {volume}股 @ {price} | {reason}", file=sys.stderr)
                 self._log_stop(symbol, price, volume, reason, float_pnl_pct, result.get('profit', 0))
             else:
                 logger.warning(f"[StopLoss] ⚠️ 止损执行失败: {symbol} - {result.get('reason', '未知')}")
+                print(f"[止损] ⚠️ {symbol} 卖出被拒: {result.get('reason', '未知')}", file=sys.stderr)
         except Exception as e:
             logger.error(f"[StopLoss] ❌ 止损异常: {symbol} - {e}", exc_info=True)
+            print(f"[止损] ❌ {symbol} 卖出异常: {e}", file=sys.stderr)
 
     def check_time_falsification(self, symbols: list = None) -> list:
         triggered = []
