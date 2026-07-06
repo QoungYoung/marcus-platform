@@ -188,13 +188,15 @@ class PositionTierMonitor:
                 if self._is_trading_time() and not self._is_blocked_window():
                     print(f"[加仓] 🔄 第 {cycle} 轮层级检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
                     summary = self._check_all_positions()
-                    if summary:
+                    if summary.get("total", 0) > 0:
                         print(
                             f"[加仓] {summary['total']}只持仓 | "
                             f"触发{summary['triggered']} | "
                             f"未达标{summary['hold']} | "
                             f"已执行{summary['executed']} | "
-                            f"拦截{summary['blocked']}",
+                            f"拦截{summary['blocked']} | "
+                            f"跳过{summary['skipped']} | "
+                            f"去重{summary['dedup']}",
                             file=sys.stderr
                         )
                     else:
@@ -718,6 +720,7 @@ class PositionTierMonitor:
                 symbol, 'SKIPPED',
                 f'仓位已满：当前 {current_pct:.1%} ≥ 目标 {target_pct:.0%}'
             )
+            print(f"[加仓] ⚠️ {symbol} 仓位已满: 当前{current_pct:.1%} ≥ 目标{target_pct:.0%}", file=sys.stderr)
             return None
 
         add_amount = total_asset * add_pct
@@ -728,6 +731,7 @@ class PositionTierMonitor:
                 symbol, 'SKIPPED',
                 f'加仓量 {add_shares} 股不足100，金额 {add_amount:.0f} 不足（100股陷阱）'
             )
+            print(f"[加仓] ⚠️ {symbol} 加仓量不足: {add_shares}股, 金额{add_amount:.0f}", file=sys.stderr)
             return None
 
         # 下单前最后一次保护线检查
@@ -787,11 +791,13 @@ class PositionTierMonitor:
                 )
                 return result
             else:
+                reason = result.get("reason", "未知")
                 self._add_notification(
                     symbol, 'FAILED',
-                    f'下单失败: {result.get("reason", "未知")}'
+                    f'下单失败: {reason}'
                 )
-                return result
+                print(f"[加仓] ❌ {symbol} 下单被拒: {reason}", file=sys.stderr)
+                return None  # 返回 None 让上层正确计入 skipped
 
         except Exception as e:
             self._add_notification(symbol, 'ERROR', f'加仓异常: {e}')
@@ -834,7 +840,7 @@ class PositionTierMonitor:
 
     def _check_all_positions(self) -> dict:
         """主循环调用的全持仓检查，返回统计摘要。"""
-        summary = {"total": 0, "triggered": 0, "hold": 0, "executed": 0, "blocked": 0}
+        summary = {"total": 0, "triggered": 0, "hold": 0, "executed": 0, "blocked": 0, "skipped": 0, "dedup": 0}
 
         if self.executor is None:
             return summary
@@ -896,6 +902,7 @@ class PositionTierMonitor:
             now_ts = time.time()
             last_eval = self._last_eval.get(symbol, 0)
             if now_ts - last_eval < 300:  # 5 分钟
+                summary["dedup"] += 1
                 continue
             self._last_eval[symbol] = now_ts
 
@@ -910,11 +917,23 @@ class PositionTierMonitor:
                 success = self.execute_add_position(symbol, evaluation, current_price, account)
                 if success:
                     summary["executed"] += 1
+                else:
+                    summary["skipped"] += 1
+                    print(
+                        f"[加仓] ⚠️ {symbol} 门控通过但执行失败 | "
+                        f"层级 {evaluation.current_tier}→{evaluation.target_tier} | "
+                        f"详见 tier_notifications 日志",
+                        file=sys.stderr
+                    )
             else:
                 summary["blocked"] += 1
                 # 记录拦截原因
                 block_reasons = [c[1] for c in gate.checks if c[0] == 'BLOCKED']
                 if block_reasons:
+                    print(
+                        f"[加仓] 🚫 {symbol} 门控拦截: {'; '.join(block_reasons)}",
+                        file=sys.stderr
+                    )
                     self._add_notification(
                         symbol, 'BLOCKED',
                         f'加仓拦截 ({evaluation.target_tier}): {"; ".join(block_reasons)}'
