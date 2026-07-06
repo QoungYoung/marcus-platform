@@ -13,7 +13,7 @@ services:
       TZ: Asia/Shanghai
     ports:
       # 外部访问用 "5432:5432"，仅本机访问用 "127.0.0.1:5432:5432"
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - /etc/localtime:/etc/localtime:ro

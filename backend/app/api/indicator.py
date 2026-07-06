@@ -2423,12 +2423,13 @@ async def position_add_conditions_live(symbol: str = Query(None)):
     positions = tier_status.get("positions", [])
 
     if symbol:
-        positions = [p for p in positions if p["symbol"] == symbol]
+        # 兼容带/不带交易所前缀的代码格式（SZ002714 ↔ 002714）
+        positions = [p for p in positions if p["symbol"] == symbol or p["symbol"][2:] == symbol]
 
     if not positions:
         return {
             "positions": [],
-            "summary": "当前无持仓",
+            "summary": f"未找到标的 {symbol} 的持仓" if symbol else "当前无持仓",
             "mode": "live",
         }
 

@@ -73,7 +73,7 @@ class CandidatePoolMonitor:
                 target=self._run_loop, daemon=True, name="candidate-pool-monitor"
             )
             self.thread.start()
-            logger.info(f"[CandidatePool] ✅ 监控已启动，轮询间隔 {self.interval}s")
+            logger.info(f"[建仓] ✅ 监控已启动，轮询间隔 {self.interval}s")
             return True
 
     def stop(self) -> None:
@@ -81,7 +81,7 @@ class CandidatePoolMonitor:
             self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
-        logger.info("[CandidatePool] ⏹️ 监控已停止")
+        logger.info("[建仓] ⏹️ 监控已停止")
 
     def is_running(self, check_thread: bool = True) -> bool:
         if not self.running:
@@ -106,11 +106,12 @@ class CandidatePoolMonitor:
     # ── 主循环 ──
 
     def _run_loop(self) -> None:
-        print("[CandidatePool] 后台监控线程启动 (间隔=37s, 偏移=20s)", file=sys.stderr)
+        print("[建仓] 后台监控线程启动 (间隔=37s, 偏移=20s)", file=sys.stderr)
         time.sleep(20)  # 初始偏移，错开与其他监控器的首轮执行
         cycle = 0
         while self.running:
             cycle += 1
+            self._cycle = cycle
             try:
                 if self._is_trading_time() and not self._is_morning_volatility():
                     self._daily_reset()
@@ -118,9 +119,9 @@ class CandidatePoolMonitor:
                 else:
                     if cycle % 20 == 1:
                         label = "非交易时段" if not self._is_trading_time() else "早盘冷静期"
-                        print(f"[CandidatePool] ⏸️ {label}，跳过 (cycle={cycle})", file=sys.stderr)
+                        print(f"[建仓] ⏸️ {label}，跳过 (cycle={cycle})", file=sys.stderr)
             except Exception as e:
-                logger.error(f"[CandidatePool] 检查异常: {e}", exc_info=True)
+                logger.error(f"[建仓] 检查异常: {e}", exc_info=True)
             time.sleep(self.interval)
 
     def _daily_reset(self) -> None:
@@ -168,15 +169,16 @@ class CandidatePoolMonitor:
 
         # Pi 窗口期间不建仓
         if self._is_pi_window():
-            print(f"[CandidatePool] ⏸️ Pi 窗口期，{len(waiting)} 只等待中，跳过自动建仓", file=sys.stderr)
+            print(f"[建仓] ⏸️ Pi 窗口期，{len(waiting)} 只等待中，跳过自动建仓", file=sys.stderr)
             return
 
         # 每日自动建仓上限
         total_today = sum(self.today_buys.values())
         if total_today >= self.max_daily_auto_buys:
+            print(f"[建仓] ⛔ 已达每日上限({self.max_daily_auto_buys}只)，跳过", file=sys.stderr)
             return
 
-        print(f"[CandidatePool] 🔄 检查 {len(waiting)} 只候选标的 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
+        print(f"[建仓] 🔄 第 {self._cycle} 轮检查 | {len(waiting)} 只候选 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
 
         for entry in waiting:
             if total_today >= self.max_daily_auto_buys:
@@ -186,7 +188,7 @@ class CandidatePoolMonitor:
                 if bought:
                     total_today += 1
             except Exception as e:
-                logger.error(f"[CandidatePool] 评估 {entry.get('symbol')} 失败: {e}")
+                logger.error(f"[建仓] 评估 {entry.get('symbol')} 失败: {e}")
 
     def _evaluate_and_buy(self, entry: dict) -> bool:
         """对单个候选标的执行：check_entry_filters → stance check → calc_position → buy"""
@@ -213,7 +215,7 @@ class CandidatePoolMonitor:
             finally:
                 loop.close()
         except Exception as e:
-            logger.warning(f"[CandidatePool] check_entry_filters failed for {symbol}: {e}")
+            logger.warning(f"[建仓] check_entry_filters failed for {symbol}: {e}")
             return False
 
         # ── 硬拦截 → 移出候选池 ──
@@ -221,7 +223,7 @@ class CandidatePoolMonitor:
             from app.services.candidate_pool import get_candidate_pool
             pool = get_candidate_pool()
             pool.mark_expired(symbol, f"结构恶化: {result.final_decision}")
-            logger.info(f"[CandidatePool] {symbol} → expired (hard_block={result.hard_block})")
+            logger.info(f"[建仓] {symbol} → expired (hard_block={result.hard_block})")
             return False
 
         # ── 仍未通过 → 更新 last_reject ──
@@ -254,17 +256,17 @@ class CandidatePoolMonitor:
 
         # Red 立场不自动建仓
         if stance == "red":
-            logger.info(f"[CandidatePool] {symbol} 过滤通过但 stance=red，跳过自动建仓")
+            logger.info(f"[建仓] {symbol} 过滤通过但 stance=red，跳过自动建仓")
             return False
 
         # ── 午后额外检查：涨幅≤3% 且 分位≤60% ──
         if self._is_afternoon():
             if result.buy_confirmation.change_pct > 3:
-                logger.info(f"[CandidatePool] {symbol} 午后涨幅 {result.buy_confirmation.change_pct:.1f}%>3%，跳过")
+                logger.info(f"[建仓] {symbol} 午后涨幅 {result.buy_confirmation.change_pct:.1f}%>3%，跳过")
                 return False
             intraday_pct = result.tech.intraday_percentile
             if intraday_pct is not None and intraday_pct > 60:
-                logger.info(f"[CandidatePool] {symbol} 午后分位 {intraday_pct:.0f}%>60%，跳过")
+                logger.info(f"[建仓] {symbol} 午后分位 {intraday_pct:.0f}%>60%，跳过")
                 return False
 
         # ── Step 3: 仓位计算 ──
@@ -296,7 +298,7 @@ class CandidatePoolMonitor:
             finally:
                 loop.close()
         except Exception as e:
-            logger.warning(f"[CandidatePool] calc_position failed for {symbol}: {e}")
+            logger.warning(f"[建仓] calc_position failed for {symbol}: {e}")
             return False
 
         # ── Step 4: 验证 ──
@@ -311,13 +313,13 @@ class CandidatePoolMonitor:
                 failures.append(v.cash_reserve_detail)
             if not v.max_loss_ok:
                 failures.append(v.max_loss_detail)
-            logger.info(f"[CandidatePool] {symbol} 仓位验证失败: {'; '.join(failures)}")
+            logger.info(f"[建仓] {symbol} 仓位验证失败: {'; '.join(failures)}")
             return False
 
         # ── Step 5: 执行建仓 ──
         buy_volume = pos_result.quantity.probe_shares
         if buy_volume < 100:
-            logger.info(f"[CandidatePool] {symbol} 建议股数 {buy_volume} < 100，跳过")
+            logger.info(f"[建仓] {symbol} 建议股数 {buy_volume} < 100，跳过")
             return False
 
         buy_price = result.tech.current_price
@@ -336,7 +338,7 @@ class CandidatePoolMonitor:
                 reason=reason,
             )
         except Exception as e:
-            logger.error(f"[CandidatePool] buy failed for {symbol}: {e}")
+            logger.error(f"[建仓] buy failed for {symbol}: {e}")
             return False
 
         if buy_result.get("status") in ("executed", "filled", "matched"):
@@ -347,7 +349,7 @@ class CandidatePoolMonitor:
             pool.mark_promoted(symbol)
 
             msg = (
-                f"✅ [CandidatePool] 自动建仓: {symbol} "
+                f"✅ [建仓] 自动建仓: {symbol} "
                 f"@{buy_price:.2f} × {buy_volume}股 "
                 f"({pos_result.quantity.probe_pct:.1f}%仓位) | {entry.get('name', '')}"
             )
@@ -366,7 +368,7 @@ class CandidatePoolMonitor:
             return True
         else:
             reason_text = buy_result.get("reason", "未知")
-            logger.warning(f"[CandidatePool] {symbol} 建仓失败: {reason_text}")
+            logger.warning(f"[建仓] {symbol} 建仓失败: {reason_text}")
             return False
 
 

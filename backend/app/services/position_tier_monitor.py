@@ -139,7 +139,7 @@ class PositionTierMonitor:
                 with open(TIER_STATE_FILE, 'w', encoding='utf-8') as f:
                     json.dump(self.tier_states, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.debug(f"[TierMonitor] 层级状态保存失败: {e}")
+            logger.debug(f"[加仓] 层级状态保存失败: {e}")
 
     def _load_tier_states(self) -> None:
         """从 JSON 文件加载层级状态"""
@@ -151,7 +151,7 @@ class PositionTierMonitor:
                 self.tier_states = {}
         except Exception:
             self.tier_states = {}
-            logger.warning("[TierMonitor] 层级状态加载失败，使用空状态")
+            logger.warning("[加仓] 层级状态加载失败，使用空状态")
 
     # ── 生命周期 ──
 
@@ -165,7 +165,7 @@ class PositionTierMonitor:
                 target=self._run_loop, daemon=True, name="position-tier-monitor"
             )
             self.thread.start()
-            logger.info(f"[TierMonitor] ✅ 加仓监控已启动，轮询间隔 {self.interval}s")
+            logger.info(f"[加仓] ✅ 加仓监控已启动，轮询间隔 {self.interval}s")
             return True
 
     def stop(self) -> None:
@@ -174,38 +174,38 @@ class PositionTierMonitor:
         self._save_tier_states()
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
-        logger.info("[TierMonitor] ⏹️ 加仓监控已停止")
+        logger.info("[加仓] ⏹️ 加仓监控已停止")
 
     # ── 主循环 ──
 
     def _run_loop(self) -> None:
-        print("[TierMonitor] 后台加仓监控线程启动 (间隔=33s, 偏移=10s)", file=sys.stderr)
+        print("[加仓] 后台加仓监控线程启动 (间隔=33s, 偏移=10s)", file=sys.stderr)
         time.sleep(10)  # 初始偏移，错开与其他监控器的首轮执行
         cycle = 0
         while self.running:
             cycle += 1
             try:
                 if self._is_trading_time() and not self._is_blocked_window():
-                    if cycle % 2 == 1:  # 只在奇数轮打印（减少噪音）
-                        print(f"[TierMonitor] 🔄 第 {cycle} 轮层级检查 | {datetime.now().strftime('%H:%M:%S')}",
-                              file=sys.stderr)
+                    print(f"[加仓] 🔄 第 {cycle} 轮层级检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
                     summary = self._check_all_positions()
-                    # 每轮都输出摘要日志
                     if summary:
-                        logger.info(
-                            f"[TierMonitor] 第{cycle}轮: "
-                            f"持仓{summary['total']}只 | "
-                            f"触发{summary['triggered']}只 | "
-                            f"未达标{summary['hold']}只 | "
-                            f"已执行{summary['executed']}只 | "
-                            f"拦截{summary['blocked']}只"
+                        print(
+                            f"[加仓] {summary['total']}只持仓 | "
+                            f"触发{summary['triggered']} | "
+                            f"未达标{summary['hold']} | "
+                            f"已执行{summary['executed']} | "
+                            f"拦截{summary['blocked']}",
+                            file=sys.stderr
                         )
+                    else:
+                        print(f"[加仓] 无持仓数据", file=sys.stderr)
                 else:
                     if cycle % 20 == 1:
-                        print(f"[TierMonitor] ⏸️ 非交易/禁止窗口，跳过 (cycle={cycle})", file=sys.stderr)
+                        label = "非交易时段" if not self._is_trading_time() else "禁止窗口"
+                        print(f"[加仓] ⏸️ {label}，跳过 (cycle={cycle})", file=sys.stderr)
                     self._daily_reset()
             except Exception as e:
-                logger.error(f"[TierMonitor] 检查异常: {e}", exc_info=True)
+                logger.error(f"[加仓] 检查异常: {e}", exc_info=True)
             time.sleep(self.interval)
 
     def _is_trading_time(self) -> bool:
@@ -436,7 +436,7 @@ class PositionTierMonitor:
             return False, '保护线安全'
 
         except Exception as e:
-            logger.debug(f"[TierMonitor] 保护线检查异常 {symbol}: {e}")
+            logger.debug(f"[加仓] 保护线检查异常 {symbol}: {e}")
             return False, '保护线检查跳过'
 
     def check_trend_strength(self, symbol: str) -> dict:
@@ -593,7 +593,7 @@ class PositionTierMonitor:
             return {'passed': all_passed, 'failed_items': failed_items, 'checks': checks}
 
         except Exception as e:
-            logger.debug(f"[TierMonitor] 趋势强度检查异常 {symbol}: {e}")
+            logger.debug(f"[加仓] 趋势强度检查异常 {symbol}: {e}")
             failed = list(checks.keys()) if checks else ['ma5_slope', 'volume_ratio', 'sector_flow', 'ma_align']
             return {'passed': False, 'failed_items': failed, 'checks': checks}
 
@@ -776,12 +776,12 @@ class PositionTierMonitor:
                     f'仓位 {current_pct:.1%}→{current_pct + add_pct:.1%}'
                 )
                 logger.info(
-                    f"[TierMonitor] ✅ 自动加仓 {symbol}: "
+                    f"[加仓] ✅ 自动加仓 {symbol}: "
                     f"{evaluation.current_tier}→{evaluation.target_tier}, "
                     f"+{add_shares}股 @ {current_price}"
                 )
                 print(
-                    f"[TierMonitor] ✅ {symbol} 自动加仓 +{add_shares}股 @ {current_price} | "
+                    f"[加仓] ✅ {symbol} 自动加仓 +{add_shares}股 @ {current_price} | "
                     f"{evaluation.signal}",
                     file=sys.stderr
                 )
@@ -795,7 +795,7 @@ class PositionTierMonitor:
 
         except Exception as e:
             self._add_notification(symbol, 'ERROR', f'加仓异常: {e}')
-            logger.error(f"[TierMonitor] ❌ 加仓异常 {symbol}: {e}", exc_info=True)
+            logger.error(f"[加仓] ❌ 加仓异常 {symbol}: {e}", exc_info=True)
             return None
 
     # ── 持仓辅助 ──
@@ -843,7 +843,7 @@ class PositionTierMonitor:
             account = self.executor.get_account()
             positions = self.executor.get_positions()
         except Exception as e:
-            logger.warning(f"[TierMonitor] 获取账户/持仓失败: {e}")
+            logger.warning(f"[加仓] 获取账户/持仓失败: {e}")
             return summary
 
         if not positions:
@@ -922,7 +922,7 @@ class PositionTierMonitor:
 
         # 有持仓但全部未触发时，记录详情
         if summary["total"] > 0 and summary["triggered"] == 0:
-            logger.debug(f"[TierMonitor] {summary['total']}只持仓均未满足层级升级条件: {', '.join(hold_details)}")
+            logger.debug(f"[加仓] {summary['total']}只持仓均未满足层级升级条件: {', '.join(hold_details)}")
 
         return summary
 
@@ -998,8 +998,8 @@ class PositionTierMonitor:
                     'today_adds': self.today_adds.get(symbol, 0),
                     'next_tier': self._get_next_tier(tier, float_pnl_pct / 100 if float_pnl_pct > 1 else float_pnl_pct),
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[加仓] get_tier_status 异常: {e}", exc_info=True)
         return {
             'positions': result,
             'total_notifications': len(self.notifications),
