@@ -2575,17 +2575,32 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
 
     trading = _get_trading_period()
 
+    # ── 短期候选池 ──
     pool = get_candidate_pool()
     waiting = pool.get_waiting()
     if symbol:
-        waiting = [c for c in waiting if c.get("symbol") == symbol]
+        # 兼容带/不带交易所前缀（SH603259 ↔ 603259）
+        waiting = [
+            c for c in waiting
+            if c.get("symbol") == symbol or c.get("symbol", "")[2:] == symbol
+        ]
 
-    if not waiting:
+    # ── 长期候选池 ──
+    from app.services.long_term_pool import get_long_term_pool
+    ltp = get_long_term_pool()
+    lt_active = ltp.get_active()
+    if symbol:
+        lt_active = [
+            c for c in lt_active
+            if c.get("symbol") == symbol or c.get("symbol", "")[2:] == symbol
+        ]
+
+    if not waiting and not lt_active:
         return {
             "candidates": [],
             "long_term": [],
             "short_term": [],
-            "summary": "候选池无 waiting 状态标的",
+            "summary": f"候选池无 {symbol} 的 waiting/active 状态记录" if symbol else "候选池无 waiting/active 状态标的",
             "mode": "live",
         }
 
@@ -2601,6 +2616,30 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
         pass
 
     use_tushare = not trading["is_trading"]
+    # ── 长期候选池：标准化为与短期池一致的 dict 格式 ──
+    for lt in lt_active:
+        added_at = lt.get("added_at", "")
+        added_trade_day = added_at[:10] if added_at else ""
+        waiting.append({
+            "symbol": lt.get("symbol", ""),
+            "name": lt.get("name", ""),
+            "added_trade_day": added_trade_day,
+            "checks_count": lt.get("checks_count", 0),
+            "reject_reasons": [],
+            "chain_name": lt.get("chain_name", ""),
+            "chain_role": lt.get("chain_role", ""),
+            "_pool_source": "long_term",  # 标记来源
+        })
+
+    if not waiting:
+        return {
+            "candidates": [],
+            "long_term": [],
+            "short_term": [],
+            "summary": f"候选池无 {symbol} 的 waiting/active 状态记录" if symbol else "候选池无 waiting/active 状态标的",
+            "mode": "live",
+        }
+
     stance_pass = pi_stance != "red"
 
     now = dt_datetime.now()
@@ -2611,7 +2650,11 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
     for candidate in waiting:
         sym = candidate.get("symbol", "")
         name = candidate.get("name", "")
-        pool_type = _classify_pool_type(candidate)
+        pool_source = candidate.get("_pool_source", "short_term")
+        if pool_source == "long_term":
+            pool_type = "长期池"
+        else:
+            pool_type = _classify_pool_type(candidate)
         added_date = candidate.get("added_trade_day", "")
         checks_count = candidate.get("checks_count", 0)
         data_source = "tushare_daily" if use_tushare else "realtime"
@@ -2799,7 +2842,7 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             "can_entry": can_entry,
         })
 
-    long_term = [r for r in results if r["pool_type"] == "长期"]
+    long_term = [r for r in results if r["pool_type"] in ("长期", "长期池")]
     short_term = [r for r in results if r["pool_type"] == "短期"]
 
     warning = None
