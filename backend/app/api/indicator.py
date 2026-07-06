@@ -2741,16 +2741,10 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             continue
 
         # ── 交易时段：实时数据 ──
-        # 重新运行入场过滤
+        # 重新运行入场过滤（handler 已是 async，直接 await）
         try:
-            async def _run():
-                from app.api.indicator import check_entry_filters
-                return await check_entry_filters(EntryCheckRequest(symbol=sym))
-            loop = asyncio.new_event_loop()
-            try:
-                filter_result = loop.run_until_complete(_run())
-            finally:
-                loop.close()
+            from app.api.indicator import check_entry_filters
+            filter_result = await check_entry_filters(EntryCheckRequest(symbol=sym))
         except Exception as e:
             results.append({
                 "symbol": sym, "name": name,
