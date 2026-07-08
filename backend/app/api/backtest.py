@@ -4968,8 +4968,24 @@ def _check_trend_strength_diag(symbol: str, trade_date, local_data) -> dict:
             "detail": "5日主力净流入",
         }
 
-        failed_items = [k for k, v in checks.items() if not v["passed"]]
-        return {"passed": len(failed_items) == 0, "failed_items": failed_items, "checks": checks}
+        # ── 综合判定：核心（MA5>MA20）+ 辅助 5选2 ──
+        aux_keys = ['ma5_slope', 'volume_ratio', 'sector_flow', 'moneyflow']
+        core_passed = checks.get('ma_align', {}).get('passed', False)
+        aux_passed = sum(1 for k in aux_keys if checks.get(k, {}).get('passed', False))
+        aux_total = len(aux_keys)
+
+        if not core_passed:
+            failed_items = ['ma_align(核心)'] + [k for k in aux_keys if not checks.get(k, {}).get('passed', False)]
+        else:
+            failed_items = [k for k, v in checks.items() if not v['passed']]
+
+        all_passed = core_passed and aux_passed >= 2
+
+        return {
+            'passed': all_passed, 'failed_items': failed_items, 'checks': checks,
+            'rule': 'core_plus_2aux', 'aux_passed': aux_passed, 'aux_total': aux_total,
+            'core_passed': core_passed,
+        }
     except Exception as e:
         return {"passed": False, "failed_items": ["exception"], "checks": {"error": str(e)}}
 

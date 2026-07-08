@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.services.scheduler_service import scheduler_service
 from app.services.stop_loss_monitor import get_monitor_status, get_position_distances, start_monitor, stop_monitor, get_stop_loss_monitor
+from app.services.position_tier_monitor import start_tier_monitor, stop_tier_monitor, get_position_tier_monitor
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
@@ -211,6 +212,53 @@ async def stop_stop_loss_monitor():
         return {
             "success": True,
             "message": "止损监控已停止",
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+@router.post("/tier-monitor/start")
+async def start_tier_monitor_endpoint():
+    """启动加仓层级监控器（自动关联 MarcusVNPyExecutor）"""
+    try:
+        executor = None
+        try:
+            from app.core.trading.marcus_trade import MarcusVNPyExecutor
+            executor = MarcusVNPyExecutor()
+            print("[TierMonitor] ✅ 已创建 MarcusVNPyExecutor", file=sys.stderr)
+        except Exception as e:
+            print(f"[TierMonitor] ⚠️ 无法创建 executor: {e}", file=sys.stderr)
+
+        ok = start_tier_monitor(executor=executor)
+        monitor = get_position_tier_monitor()
+        return {
+            "success": ok,
+            "message": "加仓层级监控已启动" if ok else "启动失败",
+            "running": monitor.is_running(),
+            "has_executor": monitor.executor is not None,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+@router.post("/tier-monitor/stop")
+async def stop_tier_monitor_endpoint():
+    """停止加仓层级监控器"""
+    try:
+        stop_tier_monitor()
+        return {
+            "success": True,
+            "message": "加仓层级监控已停止",
             "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:

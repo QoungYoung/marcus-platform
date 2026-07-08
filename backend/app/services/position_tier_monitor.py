@@ -344,13 +344,15 @@ class PositionTierMonitor:
             return GateResult(allowed=False, checks=checks)
         checks.append(('PASSED', f'今日加仓 {daily_adds}/{self.MAX_ADDS_PER_DAY}'))
 
-        # ── 门控 6：趋势强度过滤（4项检查） ──
+        # ── 门控 6：趋势强度过滤（核心MA5>MA20 + 辅助5选2） ──
         trend = self.check_trend_strength(symbol)
         if not trend['passed']:
             failed_desc = ', '.join(trend['failed_items'])
-            checks.append(('BLOCKED', f'趋势强度未通过: {failed_desc}'))
+            aux_info = f"辅助{trend.get('aux_passed', 0)}/{trend.get('aux_total', 4)}"
+            checks.append(('BLOCKED', f'趋势强度未通过: {failed_desc} ({aux_info})'))
             return GateResult(allowed=False, checks=checks)
-        checks.append(('PASSED', f'趋势强度通过（MA5斜率/量比/板块资金/多头排列）'))
+        aux_info = f"辅助{trend.get('aux_passed', 0)}/{trend.get('aux_total', 4)}"
+        checks.append(('PASSED', f'趋势强度通过（核心MA5>MA20 + {aux_info}）'))
 
         # ── 全部通过 ──
         checks.append(('PASSED', '全部门控通过'))
@@ -445,22 +447,21 @@ class PositionTierMonitor:
         """
         趋势强度过滤 — 区分「噪声浮盈」和「趋势浮盈」。
 
-        四项检查全部通过才算趋势确认：
-          1. MA5 斜率 > 0（趋势向上）
-          2. 量比 > 0.8（非缩量下跌）
-          3. 所属板块主力净流入 > 0（板块有资金支持）
-          4. MA5 > MA20（多头排列）
+        核心 + 辅助 宽松规则（回测验证 +348 PnL）：
+          核心（必须通过）：MA5 > MA20（多头排列）
+          辅助（5选2即可）：
+            1. MA5 斜率 > 0（趋势向上）
+            2. 量比 > 0.8（非缩量下跌）
+            3. 所属板块主力净流入 > 0（板块有资金支持）
+            4. 当日主力资金净流入 > 0（主力看好）
 
         Returns:
             {
-                'passed': bool,          # 全部通过？
-                'failed_items': [str],   # 未通过的项
-                'checks': {              # 各项详情
-                    'ma5_slope': {'passed', 'value', 'threshold', 'detail'},
-                    'volume_ratio': {'passed', 'value', 'threshold'},
-                    'sector_flow': {'passed', 'value', 'threshold', 'detail'},
-                    'ma_align': {'passed', 'value', 'threshold'},
-                }
+                'passed': bool,
+                'failed_items': [str],
+                'checks': {...},
+                'rule': 'core_plus_2aux',  # 新增
+                'aux_passed': int,         # 新增：辅助条件通过数
             }
         """
         checks = {}
@@ -588,11 +589,28 @@ class PositionTierMonitor:
                 'detail': f'当日主力净流入' + ('' if main_net_today > 0 else '（主力流出中）')
             }
 
-            # ── 综合判定 ──
-            failed_items = [k for k, v in checks.items() if not v['passed']]
-            all_passed = len(failed_items) == 0
+            # ── 综合判定：核心（MA5>MA20）+ 辅助 5选2 ──
+            aux_keys = ['ma5_slope', 'volume_ratio', 'sector_flow', 'moneyflow']
+            core_passed = checks.get('ma_align', {}).get('passed', False)
+            aux_passed = sum(1 for k in aux_keys if checks.get(k, {}).get('passed', False))
+            aux_total = len(aux_keys)
 
-            return {'passed': all_passed, 'failed_items': failed_items, 'checks': checks}
+            if not core_passed:
+                failed_items = ['ma_align(核心)'] + [k for k in aux_keys if not checks.get(k, {}).get('passed', False)]
+            else:
+                failed_items = [k for k, v in checks.items() if not v['passed']]
+
+            all_passed = core_passed and aux_passed >= 2
+
+            return {
+                'passed': all_passed,
+                'failed_items': failed_items,
+                'checks': checks,
+                'rule': 'core_plus_2aux',
+                'aux_passed': aux_passed,
+                'aux_total': aux_total,
+                'core_passed': core_passed,
+            }
 
         except Exception as e:
             logger.debug(f"[加仓] 趋势强度检查异常 {symbol}: {e}")

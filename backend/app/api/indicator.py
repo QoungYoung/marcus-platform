@@ -985,36 +985,41 @@ def _get_dynamic_stop_pct(index_pct: float, amplitude: float = 0.0) -> float:
 
 
 def _get_iron_rule2(amplitude_tier: str) -> dict:
-    """根据振幅档位返回铁律二的各级保护线（统一版本 v2.0）。
+    """根据振幅档位返回铁律二的各级保护线（渐进版本 v2.1）。
 
     铁律二：盈利单不能变亏损（移动止盈保护）。
     不同振幅档位下触发阈值不同：
     - 低波（<3%）：浮动小，阈值紧凑
     - 中波（3-6%）：标准阈值
     - 高波（>6%）：放宽阈值，避免被震出
-    
+
+    T1.5 为 T1→T2 之间的渐进保护线，填补浮盈回吐真空区。
+
     统一表：
-    | 波动档 | T1:浮盈→保本 | T2:浮盈→成本+X% | T3:浮盈→成本+Y% |
-    |:------:|:-----------:|:--------------:|:--------------:|
-    | 低波<3% | ≥1%        | ≥3%→+1%        | ≥5%→+2%        |
-    | 中波3-6%| ≥2%        | ≥5%→+2%        | ≥8%→+4%        |
-    | 高波>6% | ≥3%        | ≥7%→+3%        | ≥10%→+5%       |
+    | 波动档 | T1→保本 | T1.5→保护 | T2→保护 | T3→保护 |
+    |:------:|:------:|:--------:|:------:|:------:|
+    | 低波<3% | ≥1%→0% | ≥2%→+0.5% | ≥3%→+1% | ≥5%→+2% |
+    | 中波3-6%| ≥2%→0% | ≥3.5%→+1% | ≥5%→+2% | ≥8%→+4% |
+    | 高波>6% | ≥3%→0% | ≥5%→+1.5% | ≥7%→+3% | ≥10%→+5% |
     """
     if amplitude_tier == "低波":
         return {
             "t1_pct": 1.0, "t1_desc": "浮盈≥1%→成本价",
+            "t1_5_pct": 2.0, "t1_5_plus_pct": 0.5, "t1_5_desc": "浮盈≥2%→成本价+0.5%",
             "t2_pct": 3.0, "t2_plus_pct": 1.0, "t2_desc": "浮盈≥3%→成本价+1%",
             "t3_pct": 5.0, "t3_plus_pct": 2.0, "t3_desc": "浮盈≥5%→成本价+2%",
         }
     elif amplitude_tier == "中波":
         return {
             "t1_pct": 2.0, "t1_desc": "浮盈≥2%→成本价",
+            "t1_5_pct": 3.5, "t1_5_plus_pct": 1.0, "t1_5_desc": "浮盈≥3.5%→成本价+1%",
             "t2_pct": 5.0, "t2_plus_pct": 2.0, "t2_desc": "浮盈≥5%→成本价+2%",
             "t3_pct": 8.0, "t3_plus_pct": 4.0, "t3_desc": "浮盈≥8%→成本价+4%",
         }
     else:  # 高波
         return {
             "t1_pct": 3.0, "t1_desc": "浮盈≥3%→成本价",
+            "t1_5_pct": 5.0, "t1_5_plus_pct": 1.5, "t1_5_desc": "浮盈≥5%→成本价+1.5%",
             "t2_pct": 7.0, "t2_plus_pct": 3.0, "t2_desc": "浮盈≥7%→成本价+3%",
             "t3_pct": 10.0, "t3_plus_pct": 5.0, "t3_desc": "浮盈≥10%→成本价+5%",
         }
@@ -1280,6 +1285,8 @@ async def calc_position(req: CalcPositionRequest):
         max_loss_per_share=max_loss_per_share,
         total_max_loss=total_max_loss,
         iron_rule2_t1_pct=iron_rule["t1_pct"],
+        iron_rule2_t1_5_pct=iron_rule["t1_5_pct"],
+        iron_rule2_t1_5_plus_pct=iron_rule["t1_5_plus_pct"],
         iron_rule2_t2_pct=iron_rule["t2_pct"],
         iron_rule2_t2_plus_pct=iron_rule["t2_plus_pct"],
         iron_rule2_t3_pct=iron_rule["t3_pct"],
@@ -1457,6 +1464,15 @@ async def check_entry_filters(req: EntryCheckRequest):
     downgrade_multiplier = 1.0
     hard_block = False
     hard_block_reasons = []
+
+    # ── 时间门控：午后 13:00 后禁止新开仓 ──
+    # 仅允许对已有持仓加仓，新开仓隔夜风险不可控（历史胜率 0%）
+    trading_period = _get_trading_period()
+    if trading_period["new_positions_blocked"] and trading_period["period"] not in ("morning_quiet", "pre_market"):
+        hard_block = True
+        hard_block_reasons.append(f'午后禁止新开仓: {trading_period["label"]}')
+        downgrade_multiplier = 0.0
+        tech_details.append(f'🚫 时间门控: {trading_period["label"]}，禁止新开仓。仅允许对已有浮盈持仓加仓')
 
     # ── Layer 1: 技术面 ──
     layer1_passed = True
@@ -2028,19 +2044,19 @@ def _get_trading_period() -> dict:
     t = now.hour * 60 + now.minute
 
     if t < 9 * 60 + 30:
-        return {"period": "pre_market", "label": "盘前", "is_trading": False, "is_blocked": True}
+        return {"period": "pre_market", "label": "盘前", "is_trading": False, "is_blocked": True, "new_positions_blocked": True}
     elif t < 9 * 60 + 45:
-        return {"period": "morning_quiet", "label": "早盘冷静期 (09:30-09:45)", "is_trading": True, "is_blocked": True}
+        return {"period": "morning_quiet", "label": "早盘冷静期 (09:30-09:45)", "is_trading": True, "is_blocked": True, "new_positions_blocked": True}
     elif t < 11 * 60 + 30:
-        return {"period": "morning", "label": "上午交易", "is_trading": True, "is_blocked": False}
+        return {"period": "morning", "label": "上午交易", "is_trading": True, "is_blocked": False, "new_positions_blocked": False}
     elif t < 13 * 60:
-        return {"period": "lunch", "label": "午休 (11:30-13:00)", "is_trading": False, "is_blocked": True}
+        return {"period": "lunch", "label": "午休 (11:30-13:00)", "is_trading": False, "is_blocked": True, "new_positions_blocked": True}
     elif t < 14 * 60 + 30:
-        return {"period": "afternoon", "label": "下午交易", "is_trading": True, "is_blocked": False}
+        return {"period": "afternoon", "label": "下午交易 (仅加仓，不新开仓)", "is_trading": True, "is_blocked": False, "new_positions_blocked": True}
     elif t < 15 * 60:
-        return {"period": "closing", "label": "尾盘 (14:30-15:00)", "is_trading": True, "is_blocked": True}
+        return {"period": "closing", "label": "尾盘 (14:30-15:00)", "is_trading": True, "is_blocked": True, "new_positions_blocked": True}
     else:
-        return {"period": "after_market", "label": "收盘后", "is_trading": False, "is_blocked": True}
+        return {"period": "after_market", "label": "收盘后", "is_trading": False, "is_blocked": True, "new_positions_blocked": True}
 
 
 # ── Tushare 日频数据辅助函数（非交易时段回退用） ──

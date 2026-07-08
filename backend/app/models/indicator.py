@@ -110,6 +110,8 @@ class CalcPositionStopLoss(BaseModel):
     max_loss_per_share: float          # 每股最大亏损
     total_max_loss: float              # 单笔最大亏损金额
     iron_rule2_t1_pct: float           # 铁律二触发线1: 浮盈≥x%→成本价
+    iron_rule2_t1_5_pct: float         # 铁律二触发线1.5: 浮盈≥x%→成本价+y%(渐进保护)
+    iron_rule2_t1_5_plus_pct: float    # 铁律二触发线1.5加价幅度(%)
     iron_rule2_t2_pct: float           # 铁律二触发线2: 浮盈≥x%→成本价+y%
     iron_rule2_t2_plus_pct: float      # 铁律二触发线2加价幅度(%)
     iron_rule2_t3_pct: float           # 铁律二触发线3: 浮盈≥x%→成本价+y%

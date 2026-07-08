@@ -1074,228 +1074,28 @@ class SchedulerService:
 
     def _execute_pi_trade(self, task: TaskConfig, execution_id: str) -> str:
         """
-        Pi 自主交易模式 —— 代替 auto_trade.py 脚本。
+        Pi 自主交易模式 —— LangGraph 编排版。
 
-        流程：
-        1. 根据时段构造交易指令
-        2. 发送给 Pi Server /chat
-        3. Pi 自主调用 get_latest_scan_report → 分析 → place_order 等工具
-        4. Pi 返回交易报告
-        5. 提取 SIGNAL 写入策略链
-        6. 返回报告文本供 QQ 推送
+        图流程（详见 app/services/trade_graph.py）：
+          fetch_context → check_safety_gates → [条件分岔]
+            ├─ hard_blocked → handle_blocked → END
+            └─ cleared → call_pi_decision → process_result → END
+
+        确定性节点（数据获取、安全门）由代码层保证执行，
+        LLM 只负责选股分析和下单决策。
         """
-        import urllib.request, json as _json, ssl, re
+        from app.services.trade_graph import run_trade_decision
 
-        now = datetime.now()
-        pi_prompt_context = task.pi_prompt or ''
-
-        # ── 跨窗口候选池：过期清理 + 注入 Pi 提示 ──
-        # 候选标的由 CandidatePoolMonitor 实时监控并自动建仓，无需在窗口前刷新。
-        # 此处仅做过期清理 + 生成提示区块，告知 Pi 已自动建仓和等待中的标的。
-        pool_context = ""
-        try:
-            from app.services.candidate_pool import get_candidate_pool
-            pool = get_candidate_pool()
-
-            if 'closing' not in task.id:
-                pool.expire_stale()
-                active = pool.get_all_active()
-                promoted = pool.get_promoted()
-                if active or promoted:
-                    pool_context = pool.format_for_pi()
-        except Exception as e:
-            logger.warning(
-                f"[{execution_id}] [CandidatePool] context/inject failed: {e}"
-            )
-
-        # 根据时段生成不同的交易指令
-        if 'closing' in task.id or pi_prompt_context == 'closing':
-            # 尾盘模式：只止损止盈，不开新仓
-            trade_mode_instruction = (
-                "现在是尾盘 14:30，进入 **closing 模式**。\n"
-                "**严格禁止新开仓**。只执行以下操作：\n"
-                "⚠️ A股 T+1 规则：今日买入的持仓今日不可卖出，跳过这些持仓！\n"
-                "1. 对持仓逐只检查（跳过今日买入的），止损位触发则立即卖出\n"
-                "2. 达到止盈目标的卖出（仅限昨日及之前买入的）\n"
-                "3. 趋势破位的减仓 50%（排除 T+1 锁定持仓）\n"
-                "4. 报告尾盘操作结果，标明哪些持仓因 T+1 锁定未操作"
-            )
-        elif 'early' in task.id or pi_prompt_context == 'early' or 'morning' in task.id or pi_prompt_context == 'morning':
-            trade_mode_instruction = (
-                "现在是早盘 9:35，进入 **产业链建仓计划+上游龙头建仓模式**。\n"
-                "1. 先完成产业链建仓计划表（规划全部3个环节），再买入上游龙头\n"
-                "2. 重点检查上游标的盘中实时MA（get_realtime_indicators）和日内分位（intraday_percentile）\n"
-                "3. 严格按照右侧交易 SOP 建仓"
-            )
-        elif 'mid_morning' in task.id or pi_prompt_context == 'mid_morning':
-            trade_mode_instruction = (
-                "现在是早盘 9:53，进入 **产业链中游跟进建仓模式**。\n"
-                "此刻上游已运行 18 分钟，可确认其站稳。\n"
-                "1. 检查上游持仓走势，确认站住分时均线\n"
-                "2. 买入建仓计划表中的中游标的（如有），检查中游技术面\n"
-                "3. 若中游无合格标的，跳过该环节并记录原因\n"
-                "4. ⚠️ 查看代码层加仓通知：get_portfolio 中检查上游持仓是否已被 PositionTierMonitor 自动加仓，在报告中记录"
-            )
-        elif 'late' in task.id or pi_prompt_context == 'late_morning' or 'late_morning' in task.id:
-            trade_mode_instruction = (
-                "现在是午前 10:35，进入 **产业链收尾+趋势确认模式**。\n"
-                "1. 评估已建仓标的走势，不符合预期的及时止损\n"
-                "2. 如 9:35/9:50 尚未完成全部产业链覆盖，在此时段完成下游建仓\n"
-                "3. ⚠️ 查看代码层加仓通知：检查 get_portfolio 中持仓增量和 PositionTierMonitor 拦截原因，在报告中记录\n"
-                "4. 扫描报告中新出现的强势标的，可按照右侧交易 SOP 新建仓"
-            )
-        elif 'afternoon' in task.id or pi_prompt_context == 'afternoon':
-            trade_mode_instruction = (
-                "现在是午后 13:35，进入 **午后修正模式**。\n"
-                "⚠️ T+1 隔夜风险：下午建仓无法当日退出，需比早盘更严格。\n"
-                "1. 新建仓条件：涨幅 ≤ 3% 且 日内分位 ≤ 60%（check_entry_filters 分位检查已内建）\n"
-                "2. 不满足建仓条件 → 只做持仓管理（止损/止盈/减仓），不强行寻找替代标的\n"
-                "3. check_entry_filters 返回 hard_block=true → 无条件放弃该标的，不通过产业链豁免覆盖\n"
-                "4. ⚠️ 查看代码层加仓通知：get_portfolio 确认午后 PositionTierMonitor 自动加仓/拦截记录"
-            )
-        else:
-            trade_mode_instruction = "请基于最新扫描报告执行自主交易决策。"
-
-        # === Pi 是唯一立场来源（v1.5：扫描仅提供数据，Pi 做最终判断） ===
-        # 读取 Pi 上一轮立场作为参考上下文
-        stance_context = ""
-        try:
-            from core.utils.strategy_chain import StrategyChain
-            chain = StrategyChain()
-            pi_conf = chain.get_pi_confirmation()
-            if pi_conf:
-                stance_context = (
-                    f"\n📌 你上一轮的判断：{pi_conf.get('stance', 'yellow')}"
-                    f" / 仓位上限 {pi_conf.get('position_limit', 60)}%"
-                    f" — 理由：{pi_conf.get('reason', '无')}"
-                    f"\n"
-                )
-        except Exception as e:
-            logger.debug(f"[{execution_id}] Pi context read failed: {e}")
-
-        prompt = (
-            f"{pool_context}"
-            f"{trade_mode_instruction}\n"
-            f"{stance_context}"
-            f"请立即执行以下操作：\n"
-            f"1. 调用 get_latest_scan_report 获取最新扫描报告\n"
-            f"   （报告中的 market_stance/position_limit 为扫描系统的参考数据，"
-            f"pi_analysis 为你上一轮的历史判断。\n"
-            f"   **你读完报告后自行决定本轮立场和仓位上限**——你是唯一决策者。）\n"
-            f"2. 调用 get_portfolio 查看当前账户状态\n"
-            f"3. 按右侧交易 SOP 选股分析\n"
-            f"4. 执行交易（买入/卖出/调仓）\n"
-            f"5. 输出完整交易报告\n\n"
-            f"记住：你是 Marcus 右侧交易专家，严格遵循风控纪律。\n"
-            f"你拥有独立的判断能力——综合所有数据后独立决定 stance 和 position_limit。\n"
-            f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
+        result = run_trade_decision(
+            task_id=task.id,
+            execution_id=execution_id,
+            pi_prompt=task.pi_prompt or '',
         )
 
-        payload = _json.dumps({
-            "message": prompt,
-            "session_id": f"pi_trade_{task.id}_{now.strftime('%Y%m%d')}",
-            "mode": "trade"  # 使用交易模式（全工具+交易提示词）
-        }).encode("utf-8")
+        if result.get('error') and not result.get('pi_raw_reply'):
+            raise RuntimeError(result['error'])
 
-        pi_url = get_settings().PI_SERVER_URL
-        req = urllib.request.Request(
-            pi_url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        ctx = ssl.create_default_context()
-
-        logger.info(f"[{execution_id}] Sending pi_trade request for {task.id}...")
-        with urllib.request.urlopen(req, context=ctx, timeout=600) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-            reply = data.get("reply", "")
-            elapsed = data.get("elapsed_ms", 0)
-            logger.info(f"[{execution_id}] Pi trade response ({len(reply)} chars, {elapsed}ms)")
-
-        if not reply or reply == '(无回复)':
-            raise RuntimeError("Pi 未返回有效交易报告")
-
-        # 解析策略信号并写入策略链
-        signal_match = re.search(
-            r'SIGNAL:\s*(green|yellow|red)\s+POSITION:\s*(\d+)\s*REASON:\s*(.+)',
-            reply, re.IGNORECASE
-        )
-        stance = 'yellow'
-        position_limit = 60
-        reason_str = ''
-        if signal_match:
-            try:
-                stance = signal_match.group(1).lower()
-                position_limit = int(signal_match.group(2))
-                reason_str = signal_match.group(3).strip()
-                from core.utils.strategy_chain import StrategyChain
-                chain = StrategyChain()
-                chain.set_pi_confirmation(
-                    stance=stance,
-                    position_limit=position_limit,
-                    reason=reason_str,
-                )
-                logger.info(f"[{execution_id}] Pi signal: {signal_match.group(1)} limit={signal_match.group(2)}%")
-
-                # ── 仓位利用率校验 ──
-                # 如果 Pi 建议仓位 > 实际仓位的 3 倍（利用率 < 33%），记录警告
-                try:
-                    from core.utils.strategy_chain import StrategyChain
-                    chain = StrategyChain()
-                    # 获取账户实际仓位
-                    import urllib.request as _ur, json as _js, ssl as _ssl
-                    _ctx = _ssl.create_default_context()
-                    portfolio_url = f"{get_settings().MARCUS_API_URL}/portfolio" if hasattr(get_settings(), 'MARCUS_API_URL') else "http://localhost:8000/api/v1/portfolio"
-                    try:
-                        _req = _ur.request.Request(portfolio_url, headers={"Accept": "application/json"})
-                        with _ur.request.urlopen(_req, context=_ctx, timeout=10) as _resp:
-                            _pdata = _js.loads(_resp.read().decode("utf-8"))
-                            _acc = _pdata.get('account', {})
-                            _total_asset = _acc.get('total_asset', 100000)
-                            _position_value = _acc.get('position_value', 0)
-                            actual_pct = (_position_value / _total_asset * 100) if _total_asset > 0 else 0
-                    except Exception:
-                        actual_pct = 0
-                    
-                    if position_limit > 0 and actual_pct < position_limit * 0.3 and position_limit >= 20:
-                        utilization = actual_pct / position_limit * 100
-                        logger.warning(
-                            f"[{execution_id}] [position_utilization] Pi建议{position_limit}% "
-                            f"但实际仅{actual_pct:.1f}%（利用率{utilization:.0f}%），仓位严重脱节"
-                        )
-                        # 注入到下一轮提示中
-                        chain.set_pi_confirmation(
-                            stance=stance,
-                            position_limit=position_limit,
-                            reason=f"{reason_str} | ⚠️ 仓位利用率仅{utilization:.0f}%",
-                        )
-                except Exception as e:
-                    logger.debug(f"[{execution_id}] Position utilization check skipped: {e}")
-            except Exception as e:
-                logger.error(f"[{execution_id}] Failed to write Pi signal: {e}")
-
-        # ── 候选池：Pi 买入的标的从池中移除 ──
-        try:
-            from app.services.candidate_pool import get_candidate_pool
-            pool = get_candidate_pool()
-            bought = set()
-            for m in re.finditer(
-                r'(?:买入|建仓|加仓|已建仓).*?[（(]?(SH|SZ|BJ)(\d{6})[)）]?',
-                reply,
-            ):
-                bought.add(f"{m.group(2)}.{m.group(1)}")
-            for sym in bought:
-                pool.mark_promoted(sym)
-                logger.info(f"[{execution_id}] [CandidatePool] Promoted {sym} (bought by Pi)")
-        except Exception:
-            pass
-
-        # === 持久化交易报告到 memory/trade-reports/ ===
-        self._save_trade_report(task.id, execution_id, reply, stance, position_limit, reason_str)
-
-        # 返回完整报告（含 SIGNAL 行供后续通知使用）
-        return reply
+        return result['pi_raw_reply']
 
     def _push_reflect_qq(self, message: str, execution_id: str, label: str):
         """流式推送反思专家回复到 QQ（每个专家完成即推送）"""

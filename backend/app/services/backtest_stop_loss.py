@@ -214,7 +214,7 @@ def _rule_sector_divergence(sym: str, float_pnl_pct: float,
 
 def _rule_iron_rule2(sym: str, cur_price: float, avg_cost: float,
                       float_pnl_pct: float, trade_date: dt_date) -> Optional[str]:
-    """铁律二: 盈利单不能变亏损 (简化版: 用振幅分档)"""
+    """铁律二: 盈利单不能变亏损 (简化版: 用振幅分档+渐进保护)"""
     if float_pnl_pct >= 0:
         return None
 
@@ -240,20 +240,20 @@ def _rule_iron_rule2(sym: str, cur_price: float, avg_cost: float,
         avg_amp = sum(amps) / len(amps) if amps else 3.0
 
         if avg_amp < 3:
-            t1, t2, t2p, t3, t3p = 1, 3, 1, 5, 2
+            t1, t1_5 = 1, 2
             tier = "低波"
         elif avg_amp <= 6:
-            t1, t2, t2p, t3, t3p = 2, 5, 2, 8, 4
+            t1, t1_5 = 2, 3.5
             tier = "中波"
         else:
-            t1, t2, t2p, t3, t3p = 3, 7, 3, 10, 5
+            t1, t1_5 = 3, 5
             tier = "高波"
 
-        # 判断当前保护线 (需知道历史最高浮盈, 简化: 只看当前浮盈绝对值)
-        # 曾大盈≥5% → 保本(成本-1%)
-        # 这里用简化逻辑: 当前浮亏超过 t1 阈值至少 0.5pp → 触发
-        if float_pnl_pct < -t1:
-            return f"铁律二触发({tier}波): 浮亏{float_pnl_pct:.2f}% > T1{-t1}%"
+        # 简化逻辑: 浮亏超过 T1.5 阈值 → 触发渐进保护
+        if float_pnl_pct < -t1_5:
+            return f"铁律二触发({tier}波): 浮亏{float_pnl_pct:.2f}% > T1.5={-t1_5}%"
+        elif float_pnl_pct < -t1:
+            return f"铁律二触发({tier}波): 浮亏{float_pnl_pct:.2f}% > T1={-t1}%"
     except Exception:
         pass
     return None

@@ -491,27 +491,33 @@ class StopLossMonitor:
 
         return None
 
-    # ── 规则 2: 铁律二移动止盈（v2.0 振幅分档统一版） ──
+    # ── 规则 2: 铁律二移动止盈（v2.1 振幅分档+渐进保护版） ──
 
     # 振幅缓存（按交易日缓存，日K线盘中不变）
     _amplitude_cache: Dict[str, tuple] = {}  # symbol -> (tier, amplitude_pct, date_str)
 
     @staticmethod
     def _get_iron_rule2_thresholds(amplitude_tier: str) -> dict:
-        """返回振幅档位对应的铁律二保护线阈值（统一版 v2.0）。
+        """返回振幅档位对应的铁律二保护线阈值（渐进版 v2.1）。
 
-        | 波动档 | T1:浮盈→保本 | T2:浮盈→成本+X% | T3:浮盈→成本+Y% |
-        |:------:|:-----------:|:--------------:|:--------------:|
-        | 低波<3% | ≥1%        | ≥3%→+1%        | ≥5%→+2%        |
-        | 中波3-6%| ≥2%        | ≥5%→+2%        | ≥8%→+4%        |
-        | 高波>6% | ≥3%        | ≥7%→+3%        | ≥10%→+5%       |
+        T1.5 为 T1→T2 之间的渐进保护线，浮盈每增加约 1.5% 保护线上移 1%，
+        避免浮盈 3-5% 区间回吐全部利润才在成本价离场。
+
+        | 波动档 | T1→保本 | T1.5→保护 | T2→保护 | T3→保护 |
+        |:------:|:------:|:--------:|:------:|:------:|
+        | 低波<3% | ≥1%→0% | ≥2%→+0.5% | ≥3%→+1% | ≥5%→+2% |
+        | 中波3-6%| ≥2%→0% | ≥3.5%→+1% | ≥5%→+2% | ≥8%→+4% |
+        | 高波>6% | ≥3%→0% | ≥5%→+1.5% | ≥7%→+3% | ≥10%→+5% |
         """
         if amplitude_tier == "低波":
-            return {"t1_pct": 1.0, "t2_pct": 3.0, "t2_plus_pct": 1.0, "t3_pct": 5.0, "t3_plus_pct": 2.0}
+            return {"t1_pct": 1.0, "t1_5_pct": 2.0, "t1_5_plus_pct": 0.5,
+                    "t2_pct": 3.0, "t2_plus_pct": 1.0, "t3_pct": 5.0, "t3_plus_pct": 2.0}
         elif amplitude_tier == "中波":
-            return {"t1_pct": 2.0, "t2_pct": 5.0, "t2_plus_pct": 2.0, "t3_pct": 8.0, "t3_plus_pct": 4.0}
+            return {"t1_pct": 2.0, "t1_5_pct": 3.5, "t1_5_plus_pct": 1.0,
+                    "t2_pct": 5.0, "t2_plus_pct": 2.0, "t3_pct": 8.0, "t3_plus_pct": 4.0}
         else:  # 高波
-            return {"t1_pct": 3.0, "t2_pct": 7.0, "t2_plus_pct": 3.0, "t3_pct": 10.0, "t3_plus_pct": 5.0}
+            return {"t1_pct": 3.0, "t1_5_pct": 5.0, "t1_5_plus_pct": 1.5,
+                    "t2_pct": 7.0, "t2_plus_pct": 3.0, "t3_pct": 10.0, "t3_plus_pct": 5.0}
 
     def _get_amplitude_tier(self, symbol: str) -> str:
         """获取个股近5日日均振幅档位。
@@ -580,14 +586,14 @@ class StopLossMonitor:
         self, symbol: str, float_pnl_pct: float, current_price: float, avg_price: float
     ) -> Optional[str]:
         """
-        铁律二：盈利单不能变亏损（v2.0 振幅分档统一版）。
+        铁律二：盈利单不能变亏损（v2.1 振幅分档+渐进保护版）。
 
         根据近5日日均振幅确定档位，每条保护线为成本价上移幅度：
-        | 波动档 | T1·保本 | T2·保护线 | T3·保护线 |
-        |:------:|:-----:|:-------:|:-------:|
-        | 低波<3% | ≥1%→成本 | ≥3%→+1% | ≥5%→+2% |
-        | 中波3-6%| ≥2%→成本 | ≥5%→+2% | ≥8%→+4% |
-        | 高波>6% | ≥3%→成本 | ≥7%→+3% | ≥10%→+5% |
+        | 波动档 | T1·保本 | T1.5·保护 | T2·保护线 | T3·保护线 |
+        |:------:|:-----:|:--------:|:-------:|:-------:|
+        | 低波<3% | ≥1%→0% | ≥2%→+0.5% | ≥3%→+1% | ≥5%→+2% |
+        | 中波3-6%| ≥2%→0% | ≥3.5%→+1% | ≥5%→+2% | ≥8%→+4% |
+        | 高波>6% | ≥3%→0% | ≥5%→+1.5% | ≥7%→+3% | ≥10%→+5% |
         """
         # ── HWM 增强：曾大盈(≥5%) 转亏损 → 保本离场 ──
         try:
@@ -607,8 +613,10 @@ class StopLossMonitor:
         amplitude_tier = self._get_amplitude_tier(symbol)
         rules = self._get_iron_rule2_thresholds(amplitude_tier)
 
-        t1, t2, t3 = rules["t1_pct"], rules["t2_pct"], rules["t3_pct"]
-        t2_protect, t3_protect = rules["t2_plus_pct"], rules["t3_plus_pct"]
+        t1 = rules["t1_pct"]
+        t1_5, t1_5_protect = rules["t1_5_pct"], rules["t1_5_plus_pct"]
+        t2, t2_protect = rules["t2_pct"], rules["t2_plus_pct"]
+        t3, t3_protect = rules["t3_pct"], rules["t3_plus_pct"]
 
         # 确定当前保护线
         protect_pct = None
@@ -620,6 +628,9 @@ class StopLossMonitor:
         elif float_pnl_pct >= t2:
             protect_pct = t2_protect
             protect_desc = f'T2·浮盈≥{t2}%→保护线+{t2_protect}%'
+        elif float_pnl_pct >= t1_5:
+            protect_pct = t1_5_protect
+            protect_desc = f'T1.5·浮盈≥{t1_5}%→保护线+{t1_5_protect}%'
         elif float_pnl_pct >= t1:
             # T1 保本：持仓 ≤ 3 天不启用，避免刚买入被盘中波动震出去
             holding_days = self._get_holding_days(symbol)
@@ -915,13 +926,17 @@ class StopLossMonitor:
         # 振幅分档保护线
         amplitude_tier = self._get_amplitude_tier(symbol)
         rules = self._get_iron_rule2_thresholds(amplitude_tier)
-        t1, t2, t3 = rules["t1_pct"], rules["t2_pct"], rules["t3_pct"]
-        t2_protect, t3_protect = rules["t2_plus_pct"], rules["t3_plus_pct"]
+        t1 = rules["t1_pct"]
+        t1_5, t1_5_protect = rules["t1_5_pct"], rules["t1_5_plus_pct"]
+        t2, t2_protect = rules["t2_pct"], rules["t2_plus_pct"]
+        t3, t3_protect = rules["t3_pct"], rules["t3_plus_pct"]
 
         if float_pnl_pct >= t3:
             return round(float_pnl_pct - t3_protect, 2)
         elif float_pnl_pct >= t2:
             return round(float_pnl_pct - t2_protect, 2)
+        elif float_pnl_pct >= t1_5:
+            return round(float_pnl_pct - t1_5_protect, 2)
         elif float_pnl_pct >= t1:
             # T1 保本：持仓 ≤ 3 天跳过
             holding_days = self._get_holding_days(symbol)

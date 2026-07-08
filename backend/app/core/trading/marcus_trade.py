@@ -65,6 +65,9 @@ class MarcusVNPyExecutor:
         # ── 极端流出日防御 ──
         self._extreme_outflow_scans: int = 0        # 连续极端流出扫描计数
         self._extreme_outflow_triggered: bool = False  # 当日是否已触发减仓
+
+        # ── 卖出趋势约束缓存 ──
+        self._trend_constraint_cache: dict = {}  # symbol -> (timestamp, ma5, ma20)
     
     def _get_total_drawdown_pct(self) -> float:
         """获取当前总回撤百分比（负数表示亏损）"""
@@ -522,7 +525,15 @@ class MarcusVNPyExecutor:
                 risk_data['have'] = pos.get('volume', 0)
                 self._log_risk(risk_data)
                 return {'allowed': False, 'reason': '卖出数量超过持仓', 'data': risk_data}
-        
+
+            # ── 规则 3.5: 卖出趋势约束（MA5>MA20 时阻止手动卖出） ──
+            trend_block = self._check_sell_trend_constraint(symbol, avg_cost=pos.get('avg_cost', 0) or pos.get('avg_price', 0), cur_price=price)
+            if trend_block:
+                risk_data['reason'] = trend_block
+                risk_data['trend_blocked'] = True
+                self._log_risk(risk_data)
+                return {'allowed': False, 'reason': trend_block, 'data': risk_data}
+
         # ── 规则 4: 仓位利用率检查（仅买入方向，软警告不硬拦截） ──
         if side == 'buy':
             pi_limit = self._get_pi_recommended_limit()
@@ -546,7 +557,74 @@ class MarcusVNPyExecutor:
         """记录风控日志"""
         with open(self.risk_log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(risk_data, ensure_ascii=False) + "\n")
-    
+
+    def _check_sell_trend_constraint(self, symbol: str, avg_cost: float, cur_price: float) -> str:
+        """
+        卖出趋势约束：当 MA5 > MA20（趋势完好）且浮亏未触发硬止损时，阻止手动卖出。
+
+        防止 AI 主观判断导致过早卖出趋势完好的持仓（如 SH688396、SH600276）。
+
+        Returns:
+            空字符串 = 通过（允许卖出），非空 = 阻止原因
+        """
+        if avg_cost <= 0 or cur_price <= 0:
+            return ""
+        float_pnl_pct = (cur_price / avg_cost - 1) * 100
+        # 盈利或严重亏损时不拦截（盈利可自由止盈，严重亏损交给止损规则）
+        if float_pnl_pct >= 0:
+            return ""
+        if float_pnl_pct <= -4.0:
+            return ""
+
+        import time as _time
+        # 5分钟缓存，避免频繁 Tushare 调用
+        cache_key = f"trend_{symbol}"
+        cached = self._trend_constraint_cache.get(cache_key)
+        if cached:
+            ts, ma5, ma20 = cached
+            if _time.time() - ts < 300:
+                if ma5 > ma20 > 0:
+                    return (
+                        f"趋势约束阻止卖出: MA5({ma5:.2f}) > MA20({ma20:.2f})，"
+                        f"趋势完好，浮亏{float_pnl_pct:.2f}%未触发硬止损，禁止手动卖出"
+                    )
+                return ""
+
+        try:
+            from app.api.indicator import _normalize_to_ts_code
+            from app.config import get_settings
+            import tushare as ts
+            from datetime import datetime as _dt, timedelta as _td
+
+            settings = get_settings()
+            token = settings.get_tushare_token()
+            if not token:
+                return ""
+            pro = ts.pro_api(token)
+            ts_code = _normalize_to_ts_code(symbol)
+            end_d = _dt.now().strftime("%Y%m%d")
+            start_d = (_dt.now() - _td(days=60)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=30)
+
+            if df is None or df.empty or len(df) < 20:
+                self._trend_constraint_cache[cache_key] = (_time.time(), 0, 0)
+                return ""
+
+            df = df.sort_values("trade_date", ascending=True)
+            closes = df['close'].values
+            ma5 = float(sum(closes[-5:]) / 5)
+            ma20 = float(sum(closes[-20:]) / 20)
+            self._trend_constraint_cache[cache_key] = (_time.time(), ma5, ma20)
+
+            if ma5 > ma20 > 0:
+                return (
+                    f"趋势约束阻止卖出: MA5({ma5:.2f}) > MA20({ma20:.2f})，"
+                    f"趋势完好，浮亏{float_pnl_pct:.2f}%未触发硬止损，禁止手动卖出"
+                )
+        except Exception:
+            pass
+        return ""
+
     def buy(self, symbol: str, price: float, volume: int, reason: str = "") -> dict:
         """买入操作 - 通过完整订单流程成交，失败时解冻资金"""
         # 风控检查

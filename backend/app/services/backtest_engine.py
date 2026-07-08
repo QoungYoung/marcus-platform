@@ -13,6 +13,8 @@ import threading
 from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List, Callable, Any
 
+import pandas as pd
+
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -205,7 +207,41 @@ class BacktestEngine:
                 # ── 前日 DataFrame（市场概况用） ──
                 prev_day_df = local_data.get_all_daily_quotes(prev_td)
 
+                # ── 初始化分钟级监控器状态 ──
+                daily_adds = {}       # {symbol: count} 当日加仓计数
+                tier_states = {}      # {symbol: {tier, ...}} 层级状态
+                pool_state = {'candidates': {}, 'today_buys': {}}  # 候选池
+                monitor_stop_triggers = []
+                monitor_tier_triggers = []
+                monitor_pool_triggers = []
+
+                # ── 早盘开盘→首个Pi窗口: 仅止损监控 ──
+                await emit("log", f"[{date_str}] 分钟级监控: 09:30→09:35 (止损)", base_progress)
+                try:
+                    from app.services.backtest_monitors import run_minute_by_minute, capture_candidate
+                    result = run_minute_by_minute(
+                        account, trade_date,
+                        9, 30, 9, 34,  # 09:30→09:34 (09:35是Pi窗口)
+                        pi_stance='yellow',
+                        daily_adds=daily_adds, tier_states=tier_states,
+                        pool_state=pool_state,
+                        allow_buys=False,  # 早盘冷静期不买入
+                        db=db, task_id=task_id,
+                    )
+                    monitor_stop_triggers.extend(result['stop_triggers'])
+                    daily_adds = result['daily_adds']
+                    tier_states = result['tier_states']
+                    pool_state = result['pool_state']
+                    if result['stop_triggers']:
+                        await emit("log",
+                            f"[{date_str}] 早盘止损: {len(result['stop_triggers'])}笔 | "
+                            f"扫描{result['minutes_scanned']}分钟",
+                            base_progress)
+                except Exception as e:
+                    await emit("log", f"[{date_str}] 早盘监控异常: {e}", base_progress)
+
                 # ── 执行各 Pi 阶段（跳过 pre_market，那是纯数据准备） ──
+                last_phase_hh, last_phase_mm = 9, 35  # 首个窗口起始
                 for phase_cfg in TRADING_PHASES:
                     await asyncio.sleep(0)  # 让出 event loop，避免阻塞 HTTP 请求
                     if self.is_cancelled(task_id):
@@ -248,7 +284,7 @@ class BacktestEngine:
                     ))
                     db.commit()
 
-                    await self._run_pi_phase(
+                    pi_reply = await self._run_pi_phase(
                         db, task_id, trade_date, day_idx + 1,
                         phase_id, phase_label, phase_cfg["time"],
                         account, day_df, prev_day_df, minute_quotes,
@@ -257,6 +293,180 @@ class BacktestEngine:
 
                     # ── 更新持仓市值（从 DataFrame 按需取） ──
                     self._update_positions_market_value_df(account, day_df)
+
+                    # ── 提取 Pi 立场 ──
+                    pi_stance = 'yellow'
+                    if pi_reply:
+                        import re as _re
+                        stance_m = _re.search(
+                            r'(?:stance|立场)[：:]\s*(green|yellow|red)',
+                            pi_reply, _re.IGNORECASE
+                        )
+                        if stance_m:
+                            pi_stance = stance_m.group(1).lower()
+
+                    # ── 捕获候选池标的 (从 Pi 拒绝原因中) ──
+                    if pi_reply:
+                        self._capture_candidates_from_reply(
+                            pi_reply, pool_state, trade_date
+                        )
+
+                    # ── 分钟级监控：当前窗口 → 下一窗口 ──
+                    cur_hh, cur_mm = t_h, t_m
+                    # 找下一个 Pi 窗口
+                    next_phase = None
+                    for pc in TRADING_PHASES[TRADING_PHASES.index(phase_cfg) + 1:]:
+                        if pc["pi"]:
+                            next_phase = pc
+                            break
+                    if next_phase:
+                        next_t = next_phase["time"].split(":")
+                        nxt_hh, nxt_mm = int(next_t[0]), int(next_t[1])
+                        # 午休后首个窗口特殊处理
+                        if cur_hh == 10 and nxt_hh == 13:
+                            # 先运行到 11:30
+                            await emit("log",
+                                f"[{date_str}] 分钟级监控: {cur_hh:02d}:{cur_mm:02d}→11:30",
+                                base_progress)
+                            try:
+                                result = run_minute_by_minute(
+                                    account, trade_date,
+                                    cur_hh, cur_mm + 1, 11, 29,
+                                    pi_stance=pi_stance,
+                                    daily_adds=daily_adds, tier_states=tier_states,
+                                    pool_state=pool_state,
+                                    allow_buys=True,
+                                    db=db, task_id=task_id,
+                                )
+                                monitor_stop_triggers.extend(result['stop_triggers'])
+                                monitor_tier_triggers.extend(result['tier_triggers'])
+                                monitor_pool_triggers.extend(result['pool_triggers'])
+                                daily_adds = result['daily_adds']
+                                tier_states = result['tier_states']
+                                pool_state = result['pool_state']
+                            except Exception as e:
+                                await emit("log",
+                                    f"[{date_str}] 午前监控异常: {e}", base_progress)
+                            # 再运行 13:00 → 下一窗口
+                            await emit("log",
+                                f"[{date_str}] 分钟级监控: 13:00→{nxt_hh:02d}:{nxt_mm:02d}",
+                                base_progress)
+                            try:
+                                result = run_minute_by_minute(
+                                    account, trade_date,
+                                    13, 0, nxt_hh, nxt_mm - 1,
+                                    pi_stance=pi_stance,
+                                    daily_adds=daily_adds, tier_states=tier_states,
+                                    pool_state=pool_state,
+                                    allow_buys=True,
+                                    db=db, task_id=task_id,
+                                )
+                                monitor_stop_triggers.extend(result['stop_triggers'])
+                                monitor_tier_triggers.extend(result['tier_triggers'])
+                                monitor_pool_triggers.extend(result['pool_triggers'])
+                                daily_adds = result['daily_adds']
+                                tier_states = result['tier_states']
+                                pool_state = result['pool_state']
+                            except Exception as e:
+                                await emit("log",
+                                    f"[{date_str}] 午后监控异常: {e}", base_progress)
+                        else:
+                            await emit("log",
+                                f"[{date_str}] 分钟级监控: "
+                                f"{cur_hh:02d}:{cur_mm:02d}→{nxt_hh:02d}:{nxt_mm:02d}",
+                                base_progress)
+                            try:
+                                result = run_minute_by_minute(
+                                    account, trade_date,
+                                    cur_hh, cur_mm + 1, nxt_hh, nxt_mm - 1,
+                                    pi_stance=pi_stance,
+                                    daily_adds=daily_adds, tier_states=tier_states,
+                                    pool_state=pool_state,
+                                    allow_buys=True,
+                                    db=db, task_id=task_id,
+                                )
+                                monitor_stop_triggers.extend(result['stop_triggers'])
+                                monitor_tier_triggers.extend(result['tier_triggers'])
+                                monitor_pool_triggers.extend(result['pool_triggers'])
+                                daily_adds = result['daily_adds']
+                                tier_states = result['tier_states']
+                                pool_state = result['pool_state']
+                            except Exception as e:
+                                await emit("log",
+                                    f"[{date_str}] 监控异常: {e}", base_progress)
+                    else:
+                        # 最后一个窗口 (14:30): 尾盘仅止损
+                        await emit("log",
+                            f"[{date_str}] 分钟级监控: 14:31→15:00 (仅止损)",
+                            base_progress)
+                        try:
+                            result = run_minute_by_minute(
+                                account, trade_date,
+                                14, 31, 14, 59,
+                                pi_stance=pi_stance,
+                                daily_adds=daily_adds, tier_states=tier_states,
+                                pool_state=pool_state,
+                                allow_buys=False,  # 尾盘不买
+                                db=db, task_id=task_id,
+                            )
+                            monitor_stop_triggers.extend(result['stop_triggers'])
+                            monitor_tier_triggers.extend(result['tier_triggers'])
+                            monitor_pool_triggers.extend(result['pool_triggers'])
+                        except Exception as e:
+                            await emit("log",
+                                f"[{date_str}] 尾盘监控异常: {e}", base_progress)
+
+                    # ── 记录本轮监控日志 ──
+                    if monitor_stop_triggers or monitor_tier_triggers or monitor_pool_triggers:
+                        new_stops = len(monitor_stop_triggers)
+                        new_tiers = len(monitor_tier_triggers)
+                        new_pools = len(monitor_pool_triggers)
+                        await emit("log",
+                            f"[{date_str}] 监控触发: "
+                            f"{new_stops}止损/{new_tiers}加仓/{new_pools}候选池",
+                            base_progress)
+
+                # ── 尾盘最后15:00收盘检查 ──
+                try:
+                    result = run_minute_by_minute(
+                        account, trade_date,
+                        15, 0, 15, 0,
+                        pi_stance=pi_stance,
+                        daily_adds=daily_adds, tier_states=tier_states,
+                        pool_state=pool_state,
+                        allow_buys=False,
+                        db=db, task_id=task_id,
+                    )
+                    monitor_stop_triggers.extend(result['stop_triggers'])
+                except Exception:
+                    pass
+
+                # ── 每日监控摘要 ──
+                total_stops = len(monitor_stop_triggers)
+                total_tiers = len(monitor_tier_triggers)
+                total_pools = len(monitor_pool_triggers)
+                if total_stops or total_tiers or total_pools:
+                    await emit("log",
+                        f"[{date_str}] 全天监控总计: "
+                        f"🔴{total_stops}止损 | 🟢{total_tiers}加仓 | 🔵{total_pools}候选池建仓",
+                        base_progress)
+
+                # ── 记录监控器触发的交易到 PG ──
+                if monitor_stop_triggers:
+                    self._record_monitor_trades(
+                        db, task_id, trade_date,
+                        monitor_stop_triggers, 'sell', 'monitor'
+                    )
+                if monitor_tier_triggers:
+                    self._record_monitor_trades(
+                        db, task_id, trade_date,
+                        monitor_tier_triggers, 'buy', 'monitor'
+                    )
+                if monitor_pool_triggers:
+                    self._record_monitor_trades(
+                        db, task_id, trade_date,
+                        monitor_pool_triggers, 'buy', 'monitor'
+                    )
 
                 # ── 每日收盘快照 ──
                 self._update_positions_market_value_df(account, day_df)
@@ -450,9 +660,112 @@ class BacktestEngine:
         finally:
             db.close()
             self._cancel_flags.pop(task_id, None)
-            self._accounts.pop(task_id, None)
+            self._engines.pop(task_id, None)
 
     # ── 板块资金流背景 ──
+
+    def _capture_candidates_from_reply(self, pi_reply: str, pool_state: dict,
+                                        trade_date: date) -> int:
+        """从 Pi 回复中解析被拒绝的标的，尝试加入候选池。"""
+        if not pi_reply:
+            return 0
+
+        import re as _re
+        from app.services.backtest_monitors import capture_candidate
+
+        captured = 0
+        # 匹配拒绝行模式:
+        # - "| **药明康德 SH603259** | ...RSI6=89..."
+        # - "- **华海清科 SH688120**：..."
+        for m in _re.finditer(
+            r'[-|]\s*\*{0,2}([一-鿿]{2,4}(?:科技|光电|微|先进|智能|电子|股份|通信|集成|电路|装备|医药|激光|材料|能源|软件|数据)?)\*{0,2}\s*'
+            r'(?:[（(]?SH|SZ|BJ)?(\d{6})[)）]?',
+            pi_reply
+        ):
+            name = m.group(1)
+            code = m.group(2)
+            # 标准化代码
+            pure = code
+            if pure.startswith(('6', '9')):
+                symbol = f"{pure}.SH"
+            elif pure.startswith(('0', '3')):
+                symbol = f"{pure}.SZ"
+            elif pure.startswith(('4', '8')):
+                symbol = f"{pure}.BJ"
+            else:
+                continue
+
+            # 在匹配位置附近提取拒绝原因
+            start = max(0, m.start() - 50)
+            end = min(len(pi_reply), m.end() + 200)
+            context = pi_reply[start:end]
+
+            # 判断是否被拒绝
+            if _re.search(r'[🚫❌]|不买|拒绝|放弃|不建仓|暂不|跳过|排除|未通过', context):
+                if capture_candidate(symbol, name, context, pool_state, trade_date):
+                    captured += 1
+
+        return captured
+
+    def _record_monitor_trades(self, db, task_id: str, trade_date: date,
+                                triggers: list, direction: str,
+                                phase_time: str = '') -> int:
+        """将监控器触发的交易写入 PG backtest_trades。"""
+        if not triggers:
+            return 0
+        try:
+            from app.models.backtest_orm import BacktestTrade
+        except ImportError:
+            return 0
+
+        recorded = 0
+        for t in triggers:
+            symbol = t.get('symbol', '')
+            price = t.get('price', 0)
+            volume = t.get('volume', 0)
+            reason = t.get('reason', f'[回测监控] {direction}')
+
+            if direction == 'sell':
+                amount = price * volume
+                stamp_tax = round(amount * 0.001, 2)
+                commission = round(amount * 0.0005, 2)
+                profit = round(-stamp_tax - commission, 2)
+                profit_pct = round(-0.15, 4)  # approx
+            else:
+                amount = price * volume
+                stamp_tax = 0.0
+                commission = round(amount * 0.0005, 2)
+                profit = 0.0
+                profit_pct = 0.0
+
+            sname = t.get('name', '')
+            if not sname:
+                try:
+                    sname = local_data.get_stock_name(symbol) or ''
+                except Exception:
+                    pass
+
+            try:
+                trade_record = BacktestTrade(
+                    task_id=task_id, trade_date=trade_date,
+                    symbol=self._norm_pg_symbol(symbol), stock_name=sname,
+                    direction=direction, price=price, volume=volume,
+                    amount=amount, commission=commission,
+                    stamp_tax=stamp_tax, transfer_fee=0.0,
+                    signal_price=round(price, 2), actual_price=round(price, 2),
+                    slippage_pct=0.0, net_profit=round(profit, 2),
+                    profit=round(profit, 2), profit_pct=profit_pct,
+                    reason=reason[:500],
+                    phase_time=(phase_time or t.get('minute', ''))[:5],
+                )
+                db.add(trade_record)
+                recorded += 1
+            except Exception:
+                pass
+
+        if recorded:
+            db.commit()
+        return recorded
 
     def _build_sector_context(self, prev_trade_date: date) -> str:
         """构建前日板块资金流背景（盘前阶段调用，同日 Pi 阶段复用）"""
@@ -627,7 +940,7 @@ class BacktestEngine:
             )
             db.add(log_entry)
             db.commit()
-            return
+            return ""
 
         # ── 保存 Pi 报告（含完整 prompt + reply 快照） ──
         log_entry = BacktestDailyLog(
@@ -652,75 +965,7 @@ class BacktestEngine:
         # ── 更新持仓市值（DataFrame 按需取价） ──
         self._update_positions_market_value_df(account, day_df)
 
-        # ── 止损检查 (复用实盘规则, 用分钟K线替代实时行情) ──
-        if phase_time and phase_time != "16:00":
-            try:
-                from app.services.backtest_stop_loss import check_backtest_stop_loss
-                stop_triggers = check_backtest_stop_loss(account, trade_date, phase_time)
-                for st in stop_triggers:
-                    symbol = st["symbol"]
-                    price = st["price"]
-                    volume = st["volume"]
-                    reason_text = f"[回测止损] {st['reason']}"
-
-                    # 执行卖出
-                    result = account.place_order(symbol, "sell", price, volume)
-                    if not result.get("success"):
-                        await emit("log",
-                            f"[{date_str} {phase_time}] 🔴 止损失败: {symbol} — {result.get('message', '?')}",
-                            progress)
-                        continue
-
-                    # ── 写 PG backtest_trades (与 sandbox 端点一致) ──
-                    try:
-                        from app.models.backtest_orm import BacktestTrade
-                        # engine FIFO profit
-                        engine_sym = account._to_engine_sym(symbol)
-                        engine_trades = account._engine.get_trades(symbol=engine_sym, limit=1)
-                        fifo_profit = 0.0
-                        if engine_trades:
-                            dir_val = engine_trades[0].get("direction", "")
-                            if "卖" in str(dir_val) or dir_val in ("sell", "short", "SELL"):
-                                fifo_profit = float(engine_trades[0].get("profit", 0) or 0)
-                        sell_amount = price * volume
-                        stamp_tax = round(sell_amount * 0.001, 2)
-                        commission = round(sell_amount * 0.0005, 2)
-                        profit = round(fifo_profit - stamp_tax - commission, 2)
-                        profit_pct = round(fifo_profit / sell_amount * 100, 4) if sell_amount > 0 else 0
-                        net_profit = round(profit, 2)
-
-                        # 查股票名称 (local_data 已在文件顶部导入)
-                        sname = ""
-                        try:
-                            sname = local_data.get_stock_name(symbol) or ""
-                        except Exception:
-                            pass
-
-                        trade_record = BacktestTrade(
-                            task_id=task_id, trade_date=trade_date,
-                            symbol=_norm_pg_symbol(symbol), stock_name=sname,
-                            direction="sell", price=price, volume=volume,
-                            amount=sell_amount, commission=commission,
-                            stamp_tax=stamp_tax, transfer_fee=0.0,
-                            signal_price=round(price, 2), actual_price=round(price, 2),
-                            slippage_pct=0.0, net_profit=net_profit,
-                            profit=profit, profit_pct=profit_pct,
-                            reason=reason_text,
-                            phase_time=phase_time,
-                        )
-                        db.add(trade_record)
-                        db.commit()
-                    except Exception as e:
-                        await emit("log",
-                            f"[{date_str} {phase_time}] ⚠️ 止损PG写入失败: {symbol} — {e}",
-                            progress)
-
-                    await emit("log",
-                        f"[{date_str} {phase_time}] 🔴 止损: {symbol} @ {price:.2f} "
-                        f"x{volume} ({st['float_pnl_pct']:+.1f}%) — {st['reason']} → 已成交",
-                        progress)
-            except Exception as e:
-                await emit("log", f"[{date_str} {phase_time}] ⚠️ 止损检查异常: {e}", progress)
+        return pi_reply
 
     # ── 市场数据摘要 ──
 

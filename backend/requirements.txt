@@ -35,6 +35,9 @@ pysnowball>=0.1.0
 # Scheduler
 apscheduler>=3.10.4
 
+# Agent Orchestration
+langgraph>=1.2.0
+
 # Utils
 python-dotenv>=1.0.0
 python-multipart>=0.0.6
