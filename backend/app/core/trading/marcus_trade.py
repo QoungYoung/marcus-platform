@@ -86,27 +86,33 @@ class MarcusVNPyExecutor:
             return 0.0
     
     def _get_today_buy_symbols(self) -> set:
-        """查询 trades.db 获取今日买入的股票代码集合（用于 T+1 拦截）"""
-        today_symbols = set()
+        """查询 trades.db 获取今日买入的股票代码集合（兼容旧接口，内部使用）"""
+        return set(self._get_today_buy_volumes().keys())
+
+    def _get_today_buy_volumes(self) -> dict:
+        """查询 trades.db 获取今日买入的股票代码→股数映射（用于 T+1 拦截）
+        Returns: {symbol_str: total_volume_int}
+        """
+        today_volumes = {}
         try:
             import sqlite3
             db_path = Path(self.data_dir) / "trades.db"
             if not db_path.exists():
-                return today_symbols
+                return today_volumes
             conn = sqlite3.connect(str(db_path), timeout=10)
             conn.execute("PRAGMA busy_timeout=10000")
             cursor = conn.cursor()
             today_str = datetime.now().strftime('%Y-%m-%d')
             cursor.execute(
-                "SELECT DISTINCT symbol FROM trades WHERE direction='买入' AND date(created_at)=?",
+                "SELECT symbol, SUM(volume) FROM trades WHERE direction='买入' AND date(created_at)=? GROUP BY symbol",
                 (today_str,)
             )
             for row in cursor.fetchall():
-                today_symbols.add(row[0])
+                today_volumes[row[0]] = int(row[1] or 0)
             conn.close()
         except Exception as e:
             print(f"[T+1] 查询今日买入记录失败（非致命）：{e}", file=sys.stderr)
-        return today_symbols
+        return today_volumes
     
     def _get_pi_recommended_limit(self) -> int:
         """从策略链获取 Pi 建议的仓位上限百分比"""
@@ -173,21 +179,23 @@ class MarcusVNPyExecutor:
             keep_ratio = 0.20
         
         try:
-            today_buy = self._get_today_buy_symbols()
+            today_volumes = self._get_today_buy_volumes()
             positions = self.get_positions()
-            
+
             for pos in positions:
                 symbol = pos.get('symbol', '')
                 total_vol = pos.get('volume', 0)
                 if not symbol or total_vol <= 0:
                     continue
-                if symbol in today_buy:
-                    print(f"[极端流出防御] T+1 锁定，跳过 {symbol}", file=sys.stderr)
+                today_buy_vol = today_volumes.get(symbol, 0)
+                available = total_vol - today_buy_vol
+                if available <= 0:
+                    print(f"[极端流出防御] T+1 锁定全部{total_vol}股，跳过 {symbol}", file=sys.stderr)
                     continue
-                
+
                 sell_ratio = 1.0 - keep_ratio
-                sell_vol = max(100, int(total_vol * sell_ratio / 100) * 100)
-                sell_vol = min(sell_vol, total_vol)
+                sell_vol = max(100, int(available * sell_ratio / 100) * 100)
+                sell_vol = min(sell_vol, available)
                 if sell_vol < 100:
                     continue
                 
@@ -478,14 +486,24 @@ class MarcusVNPyExecutor:
             self._log_risk(risk_data)
             return {'allowed': False, 'reason': f'连续亏损熔断（{self._consecutive_losses}笔）', 'data': risk_data}
         
-        # ── 规则 0.6: T+1 拦截（卖出方向） ──
+        # ── 规则 0.6: T+1 拦截（卖出方向，按股数而非按标的） ──
         if side == 'sell':
-            today_buy_symbols = self._get_today_buy_symbols()
-            if symbol in today_buy_symbols:
-                risk_data['reason'] = f'T+1 拦截：{symbol} 为今日买入，当日不可卖出'
-                risk_data['t1_blocked'] = True
-                self._log_risk(risk_data)
-                return {'allowed': False, 'reason': f'T+1 拦截（{symbol}今日买入）', 'data': risk_data}
+            positions = self.engine.get_positions()
+            pos = next((p for p in positions if p.get('symbol') == symbol), None)
+            if pos:
+                today_volumes = self._get_today_buy_volumes()
+                today_buy_vol = today_volumes.get(symbol, 0)
+                available = pos.get('volume', 0) - today_buy_vol
+                if available <= 0:
+                    risk_data['reason'] = f'T+1 拦截：{symbol} 今日买入{today_buy_vol}股，无可卖股数'
+                    risk_data['t1_blocked'] = True
+                    self._log_risk(risk_data)
+                    return {'allowed': False, 'reason': f'T+1 拦截（{symbol}今日买入{today_buy_vol}股，无可卖）', 'data': risk_data}
+                if volume > available:
+                    risk_data['reason'] = f'T+1 部分锁定：{symbol} 需卖{volume}股，仅{available}股可卖（{today_buy_vol}股锁仓）'
+                    risk_data['t1_blocked'] = True
+                    self._log_risk(risk_data)
+                    return {'allowed': False, 'reason': f'T+1 部分锁定（{symbol}仅{available}股可卖）', 'data': risk_data}
         
         # 规则 1: 资金检查
         if side == 'buy' and required_cash > account['available_cash']:

@@ -280,7 +280,7 @@ class StopLossMonitor:
         print(f"[止损] 持仓 {len(positions)} 只，开始止损评估...", file=sys.stderr)
 
         market_pct = self._get_market_change_pct()
-        today_buy_symbols = self.executor._get_today_buy_symbols() if self.executor else set()
+        today_volumes = self.executor._get_today_buy_volumes() if self.executor else {}
         t1_skipped = []
 
         for pos in positions:
@@ -288,14 +288,17 @@ class StopLossMonitor:
             if not symbol:
                 continue
 
-            if symbol in today_buy_symbols:
+            total_vol = pos.get('volume', 0)
+            today_buy_vol = today_volumes.get(symbol, 0)
+            available = total_vol - today_buy_vol
+            if available <= 0:
                 t1_skipped.append(symbol)
                 continue
 
             avg_price = pos.get('avg_price', 0)
             current_price = pos.get('current_price', 0)
-            volume = pos.get('volume', 0)
-            
+            volume = available  # 只卖非锁定的股数
+
             if avg_price <= 0 or current_price <= 0 or volume <= 0:
                 continue
 
@@ -737,7 +740,7 @@ class StopLossMonitor:
             return []
 
         market_pct = self._get_market_change_pct()
-        today_buy_symbols = self.executor._get_today_buy_symbols() if self.executor else set()
+        today_volumes = self.executor._get_today_buy_volumes() if self.executor else {}
         results = []
 
         for pos in positions:
@@ -747,14 +750,14 @@ class StopLossMonitor:
 
             avg_price = pos.get('avg_price', 0)
             current_price = pos.get('current_price', 0)
-            volume = pos.get('volume', 0)
+            total_volume = pos.get('volume', 0)
 
-            if avg_price <= 0 or current_price <= 0 or volume <= 0:
+            if avg_price <= 0 or current_price <= 0 or total_volume <= 0:
                 continue
 
-            float_pnl_pct = round((current_price - avg_price) / avg_price * 100, 2)
-            self._ensure_hwm(symbol, current_price)
-            t1_locked = symbol in today_buy_symbols
+            today_buy_vol = today_volumes.get(symbol, 0)
+            volume = total_volume - today_buy_vol  # 可卖股数
+            t1_locked = volume <= 0
 
             # 超时保护：剩余时间不足 2 秒则退出，返回已计算的部分结果
             if time.time() > deadline - 2:
