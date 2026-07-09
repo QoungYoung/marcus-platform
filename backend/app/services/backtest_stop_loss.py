@@ -43,29 +43,20 @@ def check_backtest_stop_loss(
 
     from app.services.local_data_provider import local_data
 
-    # 当天已买入的标的 (T+1 保护)
-    # 既要过滤 _last_buy_date, 也要对每个持仓调用 get_t1_status 双重确认
-    # (某些场景如 buy 委托生成但 match 失败, _last_buy_date 不会写入)
-    today_buy_syms = set()
-    for sym, last_buy in getattr(account, '_last_buy_date', {}).items():
-        if last_buy == trade_date:
-            today_buy_syms.add(sym)
-
     for pos in positions:
         sym = pos.get("symbol", "")
         avg_cost = pos.get("avg_cost", 0) or pos.get("avg_price", 0)
         vol = pos.get("volume", 0)
         if not sym or avg_cost <= 0 or vol <= 0:
             continue
-        if sym in today_buy_syms:
-            continue  # T+1 (从 _last_buy_date 推断)
-        # 双重确认: 即使 _last_buy_date 没记录, 实际 T+1 锁定时也跳过
+        # T+1: 检查可卖股数，只有非当日买入的股数可被止损卖出
         try:
             t1 = account.get_t1_status(sym)
-            if t1.get("locked"):
-                continue
+            available = t1.get("available_volume", 0)
         except Exception:
-            pass
+            available = vol  # 降级：出错时允许卖出
+        if available <= 0:
+            continue
 
         # 分钟快照: 更新当前价
         mq = local_data.get_minute_quote(sym, trade_date, hh, mm)

@@ -147,9 +147,9 @@ def run_minute_by_minute(
             if not symbol or volume <= 0 or avg_cost <= 0:
                 continue
 
-            # 当日买入跳过 (T+1 不可卖)
+            # T+1: 只有非当日买入的股数可被止损卖出
             t1 = account.get_t1_status(symbol) if hasattr(account, 'get_t1_status') else {}
-            if t1.get('locked', False):
+            if t1.get('available_volume', 0) <= 0:
                 continue
 
             # 获取分钟价格

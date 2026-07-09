@@ -1979,7 +1979,7 @@ async def get_sandbox_positions(task_id: str, trade_date: str = Query(None)):
 
         positions = q.all()
 
-        # 从实时引擎取 T+1 状态（_last_buy_date 在内存里，最准确）
+        # 从实时引擎取 T+1 状态（_buy_lots 在内存里，按批次追踪最准确）
         engine = backtest_engine._engines.get(task_id)
         result_positions = []
         for p in positions:
@@ -2003,7 +2003,9 @@ async def get_sandbox_positions(task_id: str, trade_date: str = Query(None)):
                 t1 = engine.get_t1_status(engine_sym)
                 pos_dict["t1_status"] = t1
             else:
-                pos_dict["t1_status"] = {"locked": False, "last_buy_date": None,
+                pos_dict["t1_status"] = {"locked": False, "locked_volume": 0,
+                                          "available_volume": 0,
+                                          "last_buy_date": None,
                                           "unlock_date": None, "reason": "引擎已结束"}
             result_positions.append(pos_dict)
 
