@@ -1025,6 +1025,59 @@ def _get_iron_rule2(amplitude_tier: str) -> dict:
         }
 
 
+def calculate_position_quantity(
+    *,
+    total_asset: float,
+    available_cash: float,
+    position_value: float,
+    current_price: float,
+    single_stock_cap_pct: float,
+    total_cap_pct: float,
+    role_cap_pct: float = 999.0,
+    max_loss_pct: float = 2.0,
+    cash_reserve_pct: float = 25.0,
+    hard_stop_pct: float = 5.0,
+) -> dict:
+    """计算仓位数量（与 calc_position 共用约束逻辑）。
+
+    返回 {"shares": int, "amount": float, "pct": float, "warnings": [...]}
+    shares 是最大可持仓股数（总仓），调用方自行减去现有持仓得到加仓量。
+    """
+    def _round_lot(shares: float) -> int:
+        return max(0, int(shares // 100) * 100)
+
+    warnings = []
+    effective_single_cap = min(single_stock_cap_pct, role_cap_pct) / 100.0 * total_asset
+    total_remaining = total_cap_pct / 100.0 * total_asset - position_value
+    cash_reserve_line = total_asset * cash_reserve_pct / 100.0
+    cash_available_for_buy = available_cash - cash_reserve_line
+    max_usable = min(effective_single_cap, max(total_remaining, 0), max(cash_available_for_buy, 0))
+
+    max_shares = _round_lot(max_usable / current_price)
+    max_amount = round(max_shares * current_price, 2)
+
+    # 单笔亏损上限检查：如果止损空间大导致亏损超标，降量
+    max_loss_amount = total_asset * max_loss_pct / 100.0
+    loss_per_share = current_price * hard_stop_pct / 100.0
+    if loss_per_share > 0 and max_shares * loss_per_share > max_loss_amount:
+        capped_shares = _round_lot(max_loss_amount / loss_per_share)
+        warnings.append(
+            f"亏损超标→降量 {max_shares}→{capped_shares}股 "
+            f"(单笔亏损 {round(max_shares * loss_per_share, 2)} > 上限 {round(max_loss_amount, 2)})"
+        )
+        max_shares = capped_shares
+        max_amount = round(max_shares * current_price, 2)
+
+    max_pct = round(max_amount / total_asset * 100, 2) if total_asset > 0 else 0
+
+    return {
+        "shares": max_shares,
+        "amount": max_amount,
+        "pct": max_pct,
+        "warnings": warnings,
+    }
+
+
 @router.post("/calc-position", response_model=CalcPositionResponse)
 async def calc_position(req: CalcPositionRequest):
     """

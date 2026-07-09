@@ -728,36 +728,58 @@ class PositionTierMonitor:
     # ══════════════════════════════════════════════════
 
     def execute_add_position(self, symbol: str, evaluation: TierEvaluation,
-                             current_price: float, account: dict) -> Optional[dict]:
-        """代码层自动执行加仓下单。"""
+                             current_price: float, account: dict,
+                             pi_stance: str = 'yellow') -> Optional[dict]:
+        """代码层自动执行加仓下单（通过 calc_position 仓位计算器决定数量）。"""
         total_asset = account.get('total_asset', 100000)
+        available_cash = account.get('available_cash', 0)
         current_position_mv = self._get_position_market_value(symbol)
 
         if total_asset <= 0:
             self._add_notification(symbol, 'BLOCKED', '总资产为0，无法计算')
             return None
 
-        current_pct = current_position_mv / total_asset
         target_pct = evaluation.max_position_pct
-        add_pct = target_pct - current_pct
 
-        if add_pct <= 0:
-            self._add_notification(
-                symbol, 'SKIPPED',
-                f'仓位已满：当前 {current_pct:.1%} ≥ 目标 {target_pct:.0%}'
-            )
-            print(f"[加仓] ⚠️ {symbol} 仓位已满: 当前{current_pct:.1%} ≥ 目标{target_pct:.0%}", file=sys.stderr)
-            return None
+        # tier → 单票上限
+        cap_map = {'probe': 10.0, 'confirm': 18.0, 'sprint': 25.0}
+        single_cap = cap_map.get(evaluation.target_tier, 10.0)
 
-        add_amount = total_asset * add_pct
+        # stance → 总仓上限
+        total_cap = {'green': 60.0, 'yellow': 50.0, 'red': 20.0}.get(pi_stance, 50.0)
+
+        # 调用共享仓位计算器：返回的是最大总仓位，减去现有持仓得到加仓量
+        # position_value 必须是总持仓市值（用于总仓上限约束），不只是当前股票
+        total_position_mv = self._get_total_position_market_value()
+        from app.api.indicator import calculate_position_quantity
+        result = calculate_position_quantity(
+            total_asset=total_asset,
+            available_cash=available_cash,
+            position_value=total_position_mv,
+            current_price=current_price,
+            single_stock_cap_pct=single_cap,
+            total_cap_pct=total_cap,
+        )
+
+        max_total_amount = result['amount']  # 约束后的最大总仓位金额
+        add_amount = max(0, max_total_amount - current_position_mv)
         add_shares = int(add_amount / current_price / 100) * 100
+        current_pct = current_position_mv / total_asset if total_asset > 0 else 0
+        add_pct = add_amount / total_asset if total_asset > 0 else 0
 
         if add_shares < 100:
             self._add_notification(
                 symbol, 'SKIPPED',
-                f'加仓量 {add_shares} 股不足100，金额 {add_amount:.0f} 不足（100股陷阱）'
+                f'仓位计算器结果：最大总仓 {max_total_amount:.0f}（{result["pct"]}%），'
+                f'当前 {current_position_mv:.0f}（{current_pct:.1%}），'
+                f'加仓量 {add_shares} 股不足100'
+                + (f' | 约束警告: {"; ".join(result["warnings"])}' if result['warnings'] else '')
             )
-            print(f"[加仓] ⚠️ {symbol} 加仓量不足: {add_shares}股, 金额{add_amount:.0f}", file=sys.stderr)
+            print(
+                f"[加仓] ⚠️ {symbol} 加仓量不足: {add_shares}股 | "
+                f"最大总仓{max_total_amount:.0f}({result['pct']}%) 当前{current_position_mv:.0f}",
+                file=sys.stderr
+            )
             return None
 
         # 下单前最后一次保护线检查
@@ -839,6 +861,18 @@ class PositionTierMonitor:
             for pos in positions:
                 if pos.get('symbol') == symbol:
                     return pos.get('current_price', 0) * pos.get('volume', 0)
+        except Exception:
+            pass
+        return 0.0
+
+    def _get_total_position_market_value(self) -> float:
+        """获取所有持仓的总市值"""
+        try:
+            positions = self.executor.get_positions() if self.executor else []
+            total = 0.0
+            for pos in positions:
+                total += pos.get('current_price', 0) * pos.get('volume', 0)
+            return total
         except Exception:
             pass
         return 0.0
@@ -940,7 +974,7 @@ class PositionTierMonitor:
 
             if gate.allowed:
                 # ── 第 3 层：执行加仓 ──
-                success = self.execute_add_position(symbol, evaluation, current_price, account)
+                success = self.execute_add_position(symbol, evaluation, current_price, account, pi_stance)
                 if success:
                     summary["executed"] += 1
                 else:
