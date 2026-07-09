@@ -6,7 +6,7 @@
 职责：
   1. 评估每只持仓的当前层级（probe/confirm/sprint）
   2. 浮盈达标时自动触发层级升级评估
-  3. 门控仲裁（Pi立场/回撤/连亏/保护线/趋势确认）
+  3. 门控仲裁（Pi立场/回撤/连亏/保护线/趋势确认/概念TOP10）
   4. 全部门控通过后自动执行加仓下单
   5. 写入通知供 AI 在交易报告中引用
 
@@ -191,11 +191,12 @@ class PositionTierMonitor:
                 if self._is_trading_time() and not self._is_blocked_window():
                     print(f"[加仓] 🔄 第 {cycle} 轮层级检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
                     summary = self._check_all_positions()
-                    if summary.get("total", 0) > 0:
+                    if summary.get("total", 0) > 0 or summary.get("outflow", 0) > 0:
                         print(
                             f"[加仓] {summary['total']}只持仓 | "
                             f"触发{summary['triggered']} | "
                             f"未达标{summary['hold']} | "
+                            f"流出{summary['outflow']} | "
                             f"已执行{summary['executed']} | "
                             f"拦截{summary['blocked']} | "
                             f"跳过{summary['skipped']} | "
@@ -357,6 +358,13 @@ class PositionTierMonitor:
         aux_info = f"辅助{trend.get('aux_passed', 0)}/{trend.get('aux_total', 4)}"
         checks.append(('PASSED', f'趋势强度通过（核心MA5>MA20 + {aux_info}）'))
 
+        # ── 门控 7：概念板块 TOP10 最后一关 ──
+        concept_passed, concept_detail = self._check_concept_top10_gate(symbol)
+        if not concept_passed:
+            checks.append(('BLOCKED', f'概念TOP10门控: {concept_detail}'))
+            return GateResult(allowed=False, checks=checks)
+        checks.append(('PASSED', f'概念TOP10门控: {concept_detail}'))
+
         # ── 全部通过 ──
         checks.append(('PASSED', '全部门控通过'))
         return GateResult(allowed=True, checks=checks)
@@ -446,15 +454,173 @@ class PositionTierMonitor:
             logger.debug(f"[加仓] 保护线检查异常 {symbol}: {e}")
             return False, '保护线检查跳过'
 
+    # ── 概念板块 TOP10 辅助方法 ──
+
+    _stock_concepts_cache: Dict[str, tuple] = {}
+
+    def _get_stock_concept_names(self, symbol: str) -> set:
+        """查询 stock_pool.db 获取股票所属的所有概念板块名称，带当日缓存"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        cached = self._stock_concepts_cache.get(symbol)
+        if cached:
+            names, cache_date = cached
+            if cache_date == today:
+                return names
+
+        try:
+            from app.api.indicator import _normalize_to_ts_code
+            import sqlite3
+            ts_code = _normalize_to_ts_code(symbol)
+            pool_db = Path(__file__).parent.parent.parent.parent / "data" / "stock_pool.db"
+            if not pool_db.exists():
+                logger.warning(f"[加仓] stock_pool.db 不存在，无法获取 {symbol} 的概念板块")
+                return set()
+
+            conn = sqlite3.connect(str(pool_db))
+            cursor = conn.cursor()
+            bare_code = ts_code.split('.')[0] if '.' in ts_code else ts_code
+            cursor.execute(
+                "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
+                (f"%{bare_code}%",)
+            )
+            names = {row[0] for row in cursor.fetchall()}
+            conn.close()
+            self._stock_concepts_cache[symbol] = (names, today)
+            return names
+        except Exception as e:
+            logger.debug(f"[加仓] 获取 {symbol} 概念板块失败: {e}")
+            return set()
+
+    def _fetch_top_concept_names(self, sort_by: str, top_n: int = 10) -> set:
+        """
+        获取当日概念排名 TOP N 的概念名称集合。
+
+        Args:
+            sort_by: 'pct_change'（涨幅排名）或 'main_net'（主力净流入排名）
+            top_n: 取前 N 名
+
+        Returns:
+            概念名称集合，已缓存 5 分钟
+        """
+        cache_key = f'top_concepts_{sort_by}'
+        cached = self._trend_cache.get(cache_key)
+        if cached:
+            ts_cached, names = cached
+            if time.time() - ts_cached < 300:
+                return names
+
+        try:
+            import urllib.request, ssl, json as _json
+            ctx = ssl.create_default_context()
+            url = f'http://localhost:8000/api/v1/market/concept-fund-flow?limit={top_n}&sort_by={sort_by}'
+            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = _json.loads(resp.read().decode('utf-8'))
+                sectors = data.get('sectors', []) or data.get('concepts', [])
+                names = {s.get('name', '') for s in sectors if s.get('name')}
+                self._trend_cache[cache_key] = (time.time(), names)
+                return names
+        except Exception as e:
+            logger.debug(f"[加仓] 获取 TOP10 概念 ({sort_by}) 失败: {e}")
+            # 如果有旧缓存，降级使用
+            if cached:
+                _, old_names = cached
+                return old_names
+            return set()
+
+    def _check_concept_top10_gate(self, symbol: str) -> tuple:
+        """
+        最后一关门控：该股票所属概念中，是否有任何一个板块在
+        「当日概念涨幅 TOP 10」或「主力净流入 TOP 10」中。
+
+        Returns:
+            (passed: bool, detail: str)
+        """
+        try:
+            stock_concepts = self._get_stock_concept_names(symbol)
+            if not stock_concepts:
+                return False, '未找到所属概念板块（stock_pool.db 无该股映射）'
+
+            top_change = self._fetch_top_concept_names('pct_change', 10)
+            top_inflow = self._fetch_top_concept_names('main_net', 10)
+
+            in_change = stock_concepts & top_change
+            in_inflow = stock_concepts & top_inflow
+
+            if in_change and in_inflow:
+                return True, f'双榜命中: 涨幅TOP10[{", ".join(sorted(in_change)[:3])}{"…" if len(in_change) > 3 else ""}] + 主力TOP10[{", ".join(sorted(in_inflow)[:3])}{"…" if len(in_inflow) > 3 else ""}]'
+            if in_change:
+                return True, f'概念涨幅TOP10命中: {", ".join(sorted(in_change)[:3])}{"…" if len(in_change) > 3 else ""}'
+            if in_inflow:
+                return True, f'主力净流入TOP10命中: {", ".join(sorted(in_inflow)[:3])}{"…" if len(in_inflow) > 3 else ""}'
+
+            # 提供调试信息：股票有哪些概念，TOP10 有哪些
+            top_change_sample = ', '.join(sorted(top_change)[:5]) if top_change else '空'
+            top_inflow_sample = ', '.join(sorted(top_inflow)[:5]) if top_inflow else '空'
+            stock_sample = ', '.join(sorted(stock_concepts)[:5])
+            return False, (
+                f'所属概念 [{stock_sample}{"…" if len(stock_concepts) > 5 else ""}] '
+                f'未进入涨幅TOP10 [{top_change_sample}] '
+                f'也未进入主力TOP10 [{top_inflow_sample}]'
+            )
+        except Exception as e:
+            logger.warning(f"[加仓] 概念TOP10门控异常 {symbol}: {e}")
+            return False, f'概念TOP10检查异常: {e}'
+
+    # ── 实时技术指标缓存 ──
+    _realtime_ma_cache: Dict[str, tuple] = {}
+
+    def _fetch_realtime_ma(self, symbol: str) -> dict:
+        """
+        获取盘中实时 MA5/MA10/MA20，5 分钟缓存。
+
+        数据源: /api/v1/indicator/realtime/{symbol}
+        （腾讯 qt.gtimg.cn 实时行情 + Tushare 历史日线混合计算）
+
+        Returns:
+            {'ma5': float, 'ma10': float, 'ma20': float, 'current_price': float, 'source': str}
+            失败时返回空 dict
+        """
+        cache_key = f'realtime_ma_{symbol}'
+        cached = self._realtime_ma_cache.get(cache_key)
+        if cached:
+            ts_cached, result = cached
+            if time.time() - ts_cached < 300:
+                return result
+
+        try:
+            import urllib.request, ssl, json as _json
+            ctx = ssl.create_default_context()
+            url = f'http://localhost:8000/api/v1/indicator/realtime/{symbol}'
+            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = _json.loads(resp.read().decode('utf-8'))
+                rt = data.get('realtime', {}) or {}
+                result = {
+                    'ma5': rt.get('ma5', 0) or 0,
+                    'ma10': rt.get('ma10', 0) or 0,
+                    'ma20': rt.get('ma20', 0) or 0,
+                    'current_price': rt.get('current_price', 0) or 0,
+                    'source': rt.get('data_source', 'intraday_estimate'),
+                }
+                self._realtime_ma_cache[cache_key] = (time.time(), result)
+                return result
+        except Exception as e:
+            logger.debug(f"[加仓] 实时MA获取失败 {symbol}: {e}")
+            if cached:
+                _, old_result = cached
+                return old_result
+            return {}
+
     def check_trend_strength(self, symbol: str) -> dict:
         """
         趋势强度过滤 — 区分「噪声浮盈」和「趋势浮盈」。
 
         核心（必须全部通过）：
-          1. MA5 > MA20（多头排列）
+          1. MA5 > MA20（多头排列）→ 实时MA（腾讯行情+Tushare历史）
           2. 当日主力资金净流入 > 0（主力看好）
         辅助（3选2即可）：
-          1. MA5 斜率 > 0（趋势向上）
+          1. MA5 斜率 > 0（趋势向上）→ 实时MA5 vs 前5日MA5
           2. 量比 > 0.8（非缩量下跌）
           3. 所属板块主力净流入 > 0（板块有资金支持）
 
@@ -475,6 +641,13 @@ class PositionTierMonitor:
             import tushare as ts
             import urllib.request, ssl, json as _json
 
+            # ── 获取实时 MA 数据（盘中估算） ──
+            rt_ma = self._fetch_realtime_ma(symbol)
+            rt_ma5 = rt_ma.get('ma5', 0) if rt_ma else 0
+            rt_ma20 = rt_ma.get('ma20', 0) if rt_ma else 0
+            rt_source = rt_ma.get('source', '') if rt_ma else ''
+
+            # ── 获取 Tushare 日线（量比 + MA5斜率 + 降级兜底） ──
             settings = get_settings()
             token = settings.get_tushare_token()
             pro = ts.pro_api(token)
@@ -482,22 +655,30 @@ class PositionTierMonitor:
 
             from datetime import datetime as dt, timedelta
             end_d = dt.now().strftime("%Y%m%d")
-            start_d = (dt.now() - timedelta(days=60)).strftime("%Y%m%d")
-            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=30)
+            start_d = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=15)
 
-            if df is None or df.empty or len(df) < 5:
-                checks['ma5_slope'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0', 'detail': '数据不足'}
-                checks['volume_ratio'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0.8', 'detail': '数据不足'}
-                checks['sector_flow'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0', 'detail': '数据不足'}
-                checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': '数据不足'}
-                failed = list(checks.keys())
-                return {'passed': False, 'failed_items': failed, 'checks': checks}
-
-            df = df.sort_values("trade_date", ascending=True)
-            closes = df['close'].values
+            has_daily = df is not None and not df.empty and len(df) >= 5
+            if has_daily:
+                df = df.sort_values("trade_date", ascending=True)
+                closes = df['close'].values
 
             # ── 条件 1：MA5 斜率 > 0 ──
-            if len(closes) >= 10:
+            if rt_ma5 > 0 and has_daily and len(closes) >= 10:
+                # 盘中实时 MA5 vs 前5日 MA5（基于日线收盘价）
+                ma5_prev = float(sum(closes[-10:-5]) / 5)
+                if ma5_prev > 0:
+                    ma5_slope = (rt_ma5 - ma5_prev) / ma5_prev
+                    checks['ma5_slope'] = {
+                        'passed': ma5_slope > 0,
+                        'value': f'{ma5_slope:.2%}',
+                        'threshold': '> 0',
+                        'detail': f'实时MA5 {rt_ma5:.2f} vs 前5日MA5 {ma5_prev:.2f} [{rt_source}]'
+                    }
+                else:
+                    checks['ma5_slope'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0', 'detail': 'MA5计算异常'}
+            elif has_daily and len(closes) >= 10:
+                # 降级: 全部用日线计算
                 ma5_now = float(sum(closes[-5:]) / 5)
                 ma5_prev = float(sum(closes[-10:-5]) / 5)
                 if ma5_prev > 0:
@@ -506,29 +687,31 @@ class PositionTierMonitor:
                         'passed': ma5_slope > 0,
                         'value': f'{ma5_slope:.2%}',
                         'threshold': '> 0',
-                        'detail': f'MA5 {ma5_now:.2f} vs 前5日MA5 {ma5_prev:.2f}'
+                        'detail': f'MA5 {ma5_now:.2f} vs 前5日MA5 {ma5_prev:.2f} [日线降级]'
                     }
                 else:
                     checks['ma5_slope'] = {'passed': False, 'value': 'N/A', 'threshold': '> 0', 'detail': 'MA5计算异常'}
             else:
-                ma5_now = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
                 checks['ma5_slope'] = {
                     'passed': False, 'value': 'N/A', 'threshold': '> 0',
-                    'detail': f'数据不足(需≥10条,当前{len(closes)}条)'
+                    'detail': f'数据不足(需≥10条日线)'
                 }
 
             # ── 条件 2：量比 > 0.8 ──
-            try:
-                last_vol = float(df['vol'].values[-1])
-                recent_avg_vol = float(sum(df['vol'].values[-6:-1]) / 5) if len(df) >= 6 else last_vol
-                vol_ratio = last_vol / recent_avg_vol if recent_avg_vol > 0 else 0
-                checks['volume_ratio'] = {
-                    'passed': vol_ratio > 0.8,
-                    'value': f'{vol_ratio:.2f}',
-                    'threshold': '> 0.8'
-                }
-            except Exception:
-                checks['volume_ratio'] = {'passed': True, 'value': 'N/A', 'threshold': '> 0.8', 'detail': '计算跳过'}
+            if has_daily:
+                try:
+                    last_vol = float(df['vol'].values[-1])
+                    recent_avg_vol = float(sum(df['vol'].values[-6:-1]) / 5) if len(df) >= 6 else last_vol
+                    vol_ratio = last_vol / recent_avg_vol if recent_avg_vol > 0 else 0
+                    checks['volume_ratio'] = {
+                        'passed': vol_ratio > 0.8,
+                        'value': f'{vol_ratio:.2f}',
+                        'threshold': '> 0.8'
+                    }
+                except Exception:
+                    checks['volume_ratio'] = {'passed': True, 'value': 'N/A', 'threshold': '> 0.8', 'detail': '计算跳过'}
+            else:
+                checks['volume_ratio'] = {'passed': True, 'value': 'N/A', 'threshold': '> 0.8', 'detail': '日线数据不足'}
 
             # ── 条件 3：板块资金净流入 > 0（5分钟缓存） ──
             sector_net = 0
@@ -538,8 +721,8 @@ class PositionTierMonitor:
                 cached = self._trend_cache.get(cache_key)
                 if cached:
                     ts_cached, sector_net, sector_name = cached
-                    if time.time() - ts_cached < 300:  # 5分钟内缓存
-                        pass  # 使用缓存值
+                    if time.time() - ts_cached < 300:
+                        pass
                     else:
                         sector_net, sector_name = self._fetch_sector_flow(symbol)
                         self._trend_cache[cache_key] = (time.time(), sector_net, sector_name)
@@ -557,16 +740,27 @@ class PositionTierMonitor:
             }
 
             # ── 条件 4：MA5 > MA20（多头排列） ──
-            ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
-            ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
-            if ma5 > 0 and ma20 > 0:
+            if rt_ma5 > 0 and rt_ma20 > 0:
                 checks['ma_align'] = {
-                    'passed': ma5 > ma20,
-                    'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
-                    'threshold': 'MA5 > MA20'
+                    'passed': rt_ma5 > rt_ma20,
+                    'value': f'实时MA5={rt_ma5:.2f} MA20={rt_ma20:.2f}',
+                    'threshold': 'MA5 > MA20',
+                    'detail': f'[{rt_source}]'
                 }
+            elif has_daily:
+                ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
+                ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
+                if ma5 > 0 and ma20 > 0:
+                    checks['ma_align'] = {
+                        'passed': ma5 > ma20,
+                        'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
+                        'threshold': 'MA5 > MA20',
+                        'detail': '[日线降级]'
+                    }
+                else:
+                    checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': 'MA计算异常'}
             else:
-                checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': 'MA计算异常'}
+                checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': '数据不足'}
 
             # ── 条件 5：主力资金流向（当日主力 > 0，5分钟缓存） ──
             main_net_today = 0.0
@@ -601,7 +795,6 @@ class PositionTierMonitor:
             aux_passed = sum(1 for k in aux_keys if checks.get(k, {}).get('passed', False))
             aux_total = len(aux_keys)
 
-            # 收集失败项：核心条件单独标注
             failed_items = []
             if not ma_ok:
                 failed_items.append('ma_align(核心)')
@@ -911,8 +1104,11 @@ class PositionTierMonitor:
     # ══════════════════════════════════════════════════
 
     def _check_all_positions(self) -> dict:
-        """主循环调用的全持仓检查，返回统计摘要。"""
-        summary = {"total": 0, "triggered": 0, "hold": 0, "executed": 0, "blocked": 0, "skipped": 0, "dedup": 0}
+        """主循环调用的全持仓检查，按主力净流入降序处理，净流出直接跳过。"""
+        summary = {
+            "total": 0, "triggered": 0, "hold": 0, "executed": 0,
+            "blocked": 0, "skipped": 0, "dedup": 0, "outflow": 0,
+        }
 
         if self.executor is None:
             return summary
@@ -935,24 +1131,53 @@ class PositionTierMonitor:
             self.executor._get_today_buy_symbols() if self.executor else set()
         )
 
-        # 收集每只持仓的评估结果用于日志
+        # ── 第一遍：收集有效持仓 + 主力资金流向 → 排序 ──
+        enriched = []  # [(moneyflow, symbol, pos), ...]
         hold_details = []
 
         for pos in positions:
             symbol = pos.get('symbol', '')
             if not symbol:
                 continue
-
-            # 跳过今日买入的
             if symbol in today_buy_symbols:
                 continue
 
             avg_price = pos.get('avg_price', 0)
             current_price = pos.get('current_price', 0)
             volume = pos.get('volume', 0)
-
             if avg_price <= 0 or current_price <= 0 or volume <= 0:
                 continue
+
+            # 获取主力净流入（缓存 5 分钟）
+            moneyflow = self._fetch_moneyflow_today(symbol)
+
+            # 主力净流出 → 不加仓，标记并跳过
+            if moneyflow < 0:
+                summary["outflow"] += 1
+                self._add_notification(
+                    symbol, 'BLOCKED',
+                    f'主力净流出 {moneyflow/1e8:.2f}亿，跳过加仓（建议关注是否减仓）'
+                )
+                print(
+                    f"[加仓] 💸 {symbol} 主力净流出 {moneyflow/1e8:.2f}亿，跳过加仓",
+                    file=sys.stderr
+                )
+                continue
+
+            enriched.append((moneyflow, symbol, pos))
+
+        # 按主力净流入降序排列：龙头优先加仓
+        enriched.sort(key=lambda x: x[0], reverse=True)
+
+        if enriched:
+            flows = ', '.join(f"{s}({mf/1e8:.1f}亿)" for mf, s, _ in enriched)
+            print(f"[加仓] 📊 加仓排序: {flows}", file=sys.stderr)
+
+        # ── 第二遍：按排序逐只评估 + 门控 + 执行 ──
+        for moneyflow, symbol, pos in enriched:
+            avg_price = pos.get('avg_price', 0)
+            current_price = pos.get('current_price', 0)
+            volume = pos.get('volume', 0)
 
             summary["total"] += 1
             float_pnl_pct = (current_price - avg_price) / avg_price * 100
@@ -979,7 +1204,6 @@ class PositionTierMonitor:
                             max_position_pct=tier_cap,
                             signal=f'补仓：当前 {current_pct:.1%} < {tier_cap:.0%}×{self.REFILL_THRESHOLD:.0%}={refill_threshold_pct:.1%}'
                         )
-                        # 不 continue，继续走门控和加仓流程
                     else:
                         summary["hold"] += 1
                         hold_details.append(f"{symbol}({current_tier}→{evaluation.signal})")
@@ -994,7 +1218,7 @@ class PositionTierMonitor:
             # 防重复触发：同一符号 5 分钟内不重复评估
             now_ts = time.time()
             last_eval = self._last_eval.get(symbol, 0)
-            if now_ts - last_eval < 300:  # 5 分钟
+            if now_ts - last_eval < 300:
                 summary["dedup"] += 1
                 continue
             self._last_eval[symbol] = now_ts
@@ -1020,7 +1244,6 @@ class PositionTierMonitor:
                     )
             else:
                 summary["blocked"] += 1
-                # 记录拦截原因
                 block_reasons = [c[1] for c in gate.checks if c[0] == 'BLOCKED']
                 if block_reasons:
                     print(
