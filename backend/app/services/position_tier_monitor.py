@@ -95,6 +95,9 @@ class PositionTierMonitor:
         'sprint': 0.25,
     }
 
+    # ── 补仓阈值：实际仓位 < 目标上限 × 此比例时触发 REFILL ──
+    REFILL_THRESHOLD = 0.8
+
     def __init__(self, executor=None, interval_seconds: int = 33):
         self.executor = executor
         self.interval = interval_seconds
@@ -798,42 +801,51 @@ class PositionTierMonitor:
             return None
 
         try:
+            is_refill = getattr(evaluation, 'action', '') == 'REFILL'
+            label = '补仓' if is_refill else '自动加仓'
             result = self.executor.buy(
                 symbol=symbol,
                 price=current_price,
                 volume=add_shares,
                 reason=(
-                    f'[TierMonitor自动加仓] {evaluation.signal} | '
+                    f'[TierMonitor{label}] {evaluation.signal} | '
                     f'当前仓位 {current_pct:.1%} → 目标 {target_pct:.0%} | '
                     f'加仓 {add_shares} 股 ({add_pct:.1%}) | '
-                    f'层级 {evaluation.current_tier}→{evaluation.target_tier}'
+                    f'层级 {evaluation.current_tier}'
+                    + (f'→{evaluation.target_tier}' if not is_refill else '（补仓）')
                 )
             )
 
             if result.get('status') == 'executed':
-                # 更新层级状态
-                with self.lock:
-                    self.tier_states[symbol] = {
-                        'tier': evaluation.target_tier,
-                        'updated_at': datetime.now().isoformat(),
-                        'avg_price': current_price,
-                    }
-                    self.today_adds[symbol] = self.today_adds.get(symbol, 0) + 1
-                self._save_tier_states()
+                # 更新层级状态（补仓不改变层级）
+                if not is_refill:
+                    with self.lock:
+                        self.tier_states[symbol] = {
+                            'tier': evaluation.target_tier,
+                            'updated_at': datetime.now().isoformat(),
+                            'avg_price': current_price,
+                        }
+                        self.today_adds[symbol] = self.today_adds.get(symbol, 0) + 1
+                    self._save_tier_states()
+                else:
+                    with self.lock:
+                        self.today_adds[symbol] = self.today_adds.get(symbol, 0) + 1
 
                 self._add_notification(
                     symbol, 'EXECUTED',
-                    f'代码层自动加仓: {evaluation.current_tier}→{evaluation.target_tier}, '
-                    f'+{add_shares}股, 浮盈信息, '
+                    f'代码层{label}: {evaluation.current_tier}'
+                    + (f'→{evaluation.target_tier}' if not is_refill else '补仓')
+                    + f', +{add_shares}股, 浮盈信息, '
                     f'仓位 {current_pct:.1%}→{current_pct + add_pct:.1%}'
                 )
                 logger.info(
-                    f"[加仓] ✅ 自动加仓 {symbol}: "
-                    f"{evaluation.current_tier}→{evaluation.target_tier}, "
-                    f"+{add_shares}股 @ {current_price}"
+                    f"[加仓] ✅ {label} {symbol}: "
+                    f"{evaluation.current_tier}"
+                    f"{'→' + evaluation.target_tier if not is_refill else '补仓'}"
+                    f", +{add_shares}股 @ {current_price}"
                 )
                 print(
-                    f"[加仓] ✅ {symbol} 自动加仓 +{add_shares}股 @ {current_price} | "
+                    f"[加仓] ✅ {symbol} {label} +{add_shares}股 @ {current_price} | "
                     f"{evaluation.signal}",
                     file=sys.stderr
                 )
@@ -952,9 +964,30 @@ class PositionTierMonitor:
             )
 
             if evaluation.action in ('HOLD', 'MAX_TIER'):
-                summary["hold"] += 1
-                hold_details.append(f"{symbol}({current_tier}→{evaluation.signal})")
-                continue
+                # ── 补仓检测：层级已达上限但仓位未满 ──
+                if evaluation.action == 'MAX_TIER':
+                    tier_cap = self.TIER_CAPS.get(current_tier, 0.10)
+                    total_asset = account.get('total_asset', 100000)
+                    pos_mv = current_price * volume
+                    current_pct = pos_mv / total_asset if total_asset > 0 else 0
+                    refill_threshold_pct = tier_cap * self.REFILL_THRESHOLD
+                    if current_pct < refill_threshold_pct:
+                        evaluation = TierEvaluation(
+                            action='REFILL',
+                            current_tier=current_tier,
+                            target_tier=current_tier,
+                            max_position_pct=tier_cap,
+                            signal=f'补仓：当前 {current_pct:.1%} < {tier_cap:.0%}×{self.REFILL_THRESHOLD:.0%}={refill_threshold_pct:.1%}'
+                        )
+                        # 不 continue，继续走门控和加仓流程
+                    else:
+                        summary["hold"] += 1
+                        hold_details.append(f"{symbol}({current_tier}→{evaluation.signal})")
+                        continue
+                else:
+                    summary["hold"] += 1
+                    hold_details.append(f"{symbol}({current_tier}→{evaluation.signal})")
+                    continue
 
             summary["triggered"] += 1
 
