@@ -119,6 +119,12 @@ class PositionTierMonitor:
         self._trend_cache: Dict[str, tuple] = {}
         # 概念TOP10拦截每日推送去重 {symbol: date_str}
         self._concept_top10_notified: Dict[str, str] = {}
+        # 股票概念缓存 {symbol: (date_str, set)}
+        self._stock_concepts_cache: Dict[str, tuple] = {}
+        # 实时MA缓存 {cache_key: (timestamp, result)}
+        self._realtime_ma_cache: Dict[str, tuple] = {}
+        # AI判断缓存 {cache_key: (timestamp, result)}
+        self._ai_judge_cache: Dict[str, tuple] = {}
 
         # 加载持久化的层级状态
         self._load_tier_states()
@@ -244,6 +250,7 @@ class PositionTierMonitor:
             self.today_adds.clear()
             self._last_eval.clear()
             self._concept_top10_notified.clear()
+            self._ai_judge_cache.clear()
             self._last_reset_date = today
 
     # ══════════════════════════════════════════════════
@@ -460,8 +467,6 @@ class PositionTierMonitor:
 
     # ── 概念板块 TOP10 辅助方法 ──
 
-    _stock_concepts_cache: Dict[str, tuple] = {}
-
     def _get_stock_concept_names(self, symbol: str) -> set:
         """查询 stock_pool.db 获取股票所属的所有概念板块名称，带当日缓存"""
         today = datetime.now().strftime('%Y-%m-%d')
@@ -532,13 +537,65 @@ class PositionTierMonitor:
                 return old_names
             return set()
 
+    def _call_ai_judge(self, prompt: str) -> dict:
+        """
+        调用 deepseek-v4-flash 做概念语义匹配判断（无思考，低延迟）。
+        """
+        import requests as _requests
+
+        settings = None
+        try:
+            from app.config import get_settings
+            settings = get_settings()
+        except Exception:
+            pass
+
+        api_key = settings.DEEPSEEK_API_KEY if settings else ''
+        api_host = settings.DEEPSEEK_API_HOST if settings else 'api.deepseek.com'
+
+        if not api_key:
+            logger.warning("[加仓] DeepSeek API Key 未配置，无法进行AI概念匹配")
+            return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'API Key未配置'}
+
+        payload = {
+            'model': 'deepseek-v4-flash',
+            'messages': [
+                {'role': 'system', 'content': '你是一个概念板块语义匹配工具。只输出JSON，不要解释。'},
+                {'role': 'user', 'content': prompt},
+            ],
+            'temperature': 0.0,
+            'max_tokens': 200,
+            'response_format': {'type': 'json_object'},
+        }
+
+        try:
+            resp = _requests.post(
+                f'https://{api_host}/v1/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[加仓] AI判断调用失败: {resp.status_code}")
+                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': f'API错误 {resp.status_code}'}
+
+            data = resp.json()
+            content = data['choices'][0]['message']['content']
+            import json as _json
+            result = _json.loads(content)
+            return result
+        except Exception as e:
+            logger.warning(f"[加仓] AI判断异常: {e}")
+            return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': f'调用异常: {e}'}
+
     def _check_concept_top10_gate(self, symbol: str) -> tuple:
         """
-        最后一关门控：该股票所属概念中，是否有任何一个板块在
-        「当日概念涨幅 TOP 10」或「主力净流入 TOP 10」中。
-
-        Returns:
-            (passed: bool, detail: str)
+        最后一关门控：使用 AI 语义匹配判断该股票所属概念中，
+        是否有任何一个板块在「当日概念涨幅 TOP 10」或「主力净流入 TOP 10」中。
+        替换纯字符串匹配，防止概念名称差异（如"机器人概念"vs"机器人"）导致漏匹配。
         """
         try:
             stock_concepts = self._get_stock_concept_names(symbol)
@@ -548,28 +605,80 @@ class PositionTierMonitor:
             top_change = self._fetch_top_concept_names('pct_change', 10)
             top_inflow = self._fetch_top_concept_names('main_net', 10)
 
-            in_change = stock_concepts & top_change
-            in_inflow = stock_concepts & top_inflow
+            if not top_change and not top_inflow:
+                return False, '无法获取当日概念TOP10数据（API返回空）'
 
-            if in_change and in_inflow:
-                return True, f'双榜命中: 涨幅TOP10[{", ".join(sorted(in_change)[:3])}{"…" if len(in_change) > 3 else ""}] + 主力TOP10[{", ".join(sorted(in_inflow)[:3])}{"…" if len(in_inflow) > 3 else ""}]'
-            if in_change:
-                return True, f'概念涨幅TOP10命中: {", ".join(sorted(in_change)[:3])}{"…" if len(in_change) > 3 else ""}'
-            if in_inflow:
-                return True, f'主力净流入TOP10命中: {", ".join(sorted(in_inflow)[:3])}{"…" if len(in_inflow) > 3 else ""}'
+            # ── 快路径：字符串精确/包含匹配 ──
+            in_change_exact = stock_concepts & top_change
+            in_inflow_exact = stock_concepts & top_inflow
+            if in_change_exact and in_inflow_exact:
+                return True, f'双榜命中: 涨幅TOP10[{", ".join(sorted(in_change_exact)[:3])}] + 主力TOP10[{", ".join(sorted(in_inflow_exact)[:3])}]'
+            if in_change_exact:
+                return True, f'概念涨幅TOP10命中: {", ".join(sorted(in_change_exact)[:3])}'
+            if in_inflow_exact:
+                return True, f'主力净流入TOP10命中: {", ".join(sorted(in_inflow_exact)[:3])}'
 
-            # 提供调试信息：股票有哪些概念，TOP10 有哪些
-            top_change_sample = ', '.join(sorted(top_change)[:5]) if top_change else '空'
-            top_inflow_sample = ', '.join(sorted(top_inflow)[:5]) if top_inflow else '空'
+            # ── 检查AI缓存 ──
+            stock_hash = ','.join(sorted(stock_concepts))
+            change_hash = ','.join(sorted(top_change))
+            inflow_hash = ','.join(sorted(top_inflow))
+            cache_key = f'{symbol}|{stock_hash}|{change_hash}|{inflow_hash}'
+            cached = self._ai_judge_cache.get(cache_key)
+            if cached:
+                ts_cached, ai_result = cached
+                if time.time() - ts_cached < 300:
+                    if ai_result.get('matched'):
+                        mc = ai_result.get('matched_concept', '')
+                        iw = ai_result.get('in_which', '')
+                        return True, f'AI语义匹配命中: {mc} ({iw})'
+                    else:
+                        return False, f'AI判断未命中: {ai_result.get("reason", "概念不匹配")}'
+
+            # ── 慢路径：AI 语义匹配 ──
+            stock_concepts_str = '\n'.join(f'- {c}' for c in sorted(stock_concepts))
+            top_change_str = '\n'.join(f'- {c}' for c in sorted(top_change)) if top_change else '(空)'
+            top_inflow_str = '\n'.join(f'- {c}' for c in sorted(top_inflow)) if top_inflow else '(空)'
+
+            prompt = f"""判断「股票所属概念」列表中是否有任何一个概念，与「涨幅TOP10」或「主力TOP10」中的某个概念语义相同或指向同一板块。
+
+语义匹配标准（宽松）：
+1. 名称相似：如"机器人概念"≈"机器人"，"AI智能体"≈"人工智能"，"低空经济"≈"低空飞行器"
+2. 产业链同向：如"锂电池"≈"新能源车"，"光伏"≈"太阳能"
+3. 简称/全称：如"CPO"≈"光电共封装"，"PCB"≈"印制电路板"
+4. 同一板块的不同命名方式：如"人形机器人"≈"人行机器人"，"半导体"≈"芯片"
+5. 概念名称中有1-3个字不同但指向同一板块的，视为匹配
+
+股票所属概念：
+{stock_concepts_str}
+
+当日概念涨幅TOP10：
+{top_change_str}
+
+主力净流入TOP10：
+{top_inflow_str}
+
+请只回复一个JSON对象，不要任何其他内容：
+{{"matched": true或false, "matched_concept": "匹配到的概念名（false时为空字符串）", "in_which": "change/inflow/both/none", "reason": "一句话说明匹配理由（命中时说明哪个概念匹配了哪个TOP10概念，未命中时说明为什么都不匹配）"}}"""
+
+            ai_result = self._call_ai_judge(prompt)
+            self._ai_judge_cache[cache_key] = (time.time(), ai_result)
+
+            if ai_result.get('matched'):
+                mc = ai_result.get('matched_concept', '')
+                iw = ai_result.get('in_which', '')
+                return True, f'AI语义匹配命中: {mc} ({iw})'
+
+            reason = ai_result.get('reason', '概念不匹配')
             stock_sample = ', '.join(sorted(stock_concepts)[:5])
             return False, (
+                f'AI判断未命中: {reason} | '
                 f'所属概念 [{stock_sample}{"…" if len(stock_concepts) > 5 else ""}] '
-                f'未进入涨幅TOP10 [{top_change_sample}] '
-                f'也未进入主力TOP10 [{top_inflow_sample}]'
+                f'未语义匹配涨幅/主力TOP10'
             )
+
         except Exception as e:
-            logger.warning(f"[加仓] 概念TOP10门控异常 {symbol}: {e}")
-            return False, f'概念TOP10检查异常: {e}'
+            logger.warning(f"[加仓] AI概念TOP10门控异常 {symbol}: {e}")
+            return False, f'AI概念TOP10检查异常: {e}'
 
     def _notify_concept_top10_block(self, symbol: str, detail: str) -> None:
         """
@@ -597,8 +706,6 @@ class PositionTierMonitor:
             logger.debug(f"[加仓] QQ推送失败: {e}")
 
     # ── 实时技术指标缓存 ──
-    _realtime_ma_cache: Dict[str, tuple] = {}
-
     def _fetch_realtime_ma(self, symbol: str) -> dict:
         """
         获取盘中实时 MA5/MA10/MA20，5 分钟缓存。
