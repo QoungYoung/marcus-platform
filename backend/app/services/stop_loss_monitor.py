@@ -145,9 +145,18 @@ class StopLossMonitor:
 
     def status(self) -> Dict[str, Any]:
         """获取监控器运行状态详情（含持仓止损距离）。"""
-        positions = []
+        # 直接从 trades.db 读持仓（与 /api/v1/portfolio 同源），不受 executor data_dir 影响
+        basic_positions = []
         try:
-            positions = self.get_position_stop_distances()
+            from app.api.portfolio import calculate_positions_from_db
+            basic_positions, _ = calculate_positions_from_db()
+        except Exception:
+            pass
+
+        # 止损距离（计算可能较慢，超时 10s 自动截断）
+        stop_distances = []
+        try:
+            stop_distances = self.get_position_stop_distances()
         except Exception:
             pass
 
@@ -161,9 +170,10 @@ class StopLossMonitor:
             "has_executor": self.executor is not None,
             "is_trading_time": self._is_trading_time(),
             "is_morning_volatility": self._is_morning_volatility(),
-            "position_count": len(positions),
-            "triggered_count": sum(1 for p in positions if p["nearest_trigger"]["danger_level"] == "triggered"),
-            "positions": positions,
+            "position_count": len(basic_positions),
+            "triggered_count": sum(1 for p in stop_distances if p.get("nearest_trigger", {}).get("danger_level") == "triggered"),
+            "positions": basic_positions,
+            "stop_distances": stop_distances,
         }
 
     # ── 主循环 ──
