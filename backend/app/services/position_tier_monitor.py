@@ -117,6 +117,8 @@ class PositionTierMonitor:
         self.MAX_ADDS_PER_DAY = 3
         # 趋势强度缓存 {cache_key: (timestamp, ...)}（板块资金5分钟缓存）
         self._trend_cache: Dict[str, tuple] = {}
+        # 概念TOP10拦截每日推送去重 {symbol: date_str}
+        self._concept_top10_notified: Dict[str, str] = {}
 
         # 加载持久化的层级状态
         self._load_tier_states()
@@ -241,6 +243,7 @@ class PositionTierMonitor:
         if getattr(self, '_last_reset_date', '') != today:
             self.today_adds.clear()
             self._last_eval.clear()
+            self._concept_top10_notified.clear()
             self._last_reset_date = today
 
     # ══════════════════════════════════════════════════
@@ -362,6 +365,7 @@ class PositionTierMonitor:
         concept_passed, concept_detail = self._check_concept_top10_gate(symbol)
         if not concept_passed:
             checks.append(('BLOCKED', f'概念TOP10门控: {concept_detail}'))
+            self._notify_concept_top10_block(symbol, concept_detail)
             return GateResult(allowed=False, checks=checks)
         checks.append(('PASSED', f'概念TOP10门控: {concept_detail}'))
 
@@ -566,6 +570,31 @@ class PositionTierMonitor:
         except Exception as e:
             logger.warning(f"[加仓] 概念TOP10门控异常 {symbol}: {e}")
             return False, f'概念TOP10检查异常: {e}'
+
+    def _notify_concept_top10_block(self, symbol: str, detail: str) -> None:
+        """
+        概念TOP10拦截时发送 QQ 推送，每日每只股票仅推送一次。
+        """
+        today = datetime.now().strftime('%Y-%m-%d')
+        last_notified = self._concept_top10_notified.get(symbol, '')
+        if last_notified == today:
+            return  # 今日已推送，跳过
+
+        try:
+            from app.services.qqbot_service import send_qq_notification
+            msg = (
+                f"[加仓拦截·概念TOP10]\n"
+                f"标的: {symbol}\n"
+                f"原因: {detail}\n"
+                f"时间: {datetime.now().strftime('%H:%M:%S')}\n"
+                f"提示: 该股所属概念板块未进入当日涨幅/主力净流入 TOP10，"
+                f"等待板块轮动或趋势确认后再考虑加仓"
+            )
+            send_qq_notification(msg)
+            self._concept_top10_notified[symbol] = today
+            print(f"[加仓] 📱 QQ推送: {symbol} 概念TOP10拦截", file=sys.stderr)
+        except Exception as e:
+            logger.debug(f"[加仓] QQ推送失败: {e}")
 
     # ── 实时技术指标缓存 ──
     _realtime_ma_cache: Dict[str, tuple] = {}
