@@ -518,7 +518,7 @@ def _tier_gate_pass(float_pnl: float, target_tier: str, symbol: str,
                     trade_date: dt_date, daily_adds: dict, max_pct: float,
                     cur_price: float, cur_volume: int, total_asset: float,
                     acc: dict) -> bool:
-    """门控检查 (简化为关键项)"""
+    """门控检查（含个股资金流向必要条件）"""
 
     # 保护线
     if target_tier == 'confirm':
@@ -534,6 +534,11 @@ def _tier_gate_pass(float_pnl: float, target_tier: str, symbol: str,
             x = 0.03
         if float_pnl < x or float_pnl - x < 0.005:
             return False
+
+    # 个股当日主力资金流向（必要条件）
+    mf = local_data.get_moneyflow(symbol, trade_date)
+    if mf is None or float(mf.get('net_mf_amount', 0)) <= 0:
+        return False
 
     # 日加仓上限
     if daily_adds.get(symbol, 0) >= MAX_ADDS_PER_SYMBOL_PER_DAY:

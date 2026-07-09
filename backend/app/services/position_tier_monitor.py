@@ -447,21 +447,22 @@ class PositionTierMonitor:
         """
         趋势强度过滤 — 区分「噪声浮盈」和「趋势浮盈」。
 
-        核心 + 辅助 宽松规则（回测验证 +348 PnL）：
-          核心（必须通过）：MA5 > MA20（多头排列）
-          辅助（5选2即可）：
-            1. MA5 斜率 > 0（趋势向上）
-            2. 量比 > 0.8（非缩量下跌）
-            3. 所属板块主力净流入 > 0（板块有资金支持）
-            4. 当日主力资金净流入 > 0（主力看好）
+        核心（必须全部通过）：
+          1. MA5 > MA20（多头排列）
+          2. 当日主力资金净流入 > 0（主力看好）
+        辅助（3选2即可）：
+          1. MA5 斜率 > 0（趋势向上）
+          2. 量比 > 0.8（非缩量下跌）
+          3. 所属板块主力净流入 > 0（板块有资金支持）
 
         Returns:
             {
                 'passed': bool,
                 'failed_items': [str],
                 'checks': {...},
-                'rule': 'core_plus_2aux',  # 新增
-                'aux_passed': int,         # 新增：辅助条件通过数
+                'rule': 'core_dual_plus_2aux',
+                'aux_passed': int,
+                'core_passed': bool,
             }
         """
         checks = {}
@@ -589,16 +590,23 @@ class PositionTierMonitor:
                 'detail': f'当日主力净流入' + ('' if main_net_today > 0 else '（主力流出中）')
             }
 
-            # ── 综合判定：核心（MA5>MA20）+ 辅助 5选2 ──
-            aux_keys = ['ma5_slope', 'volume_ratio', 'sector_flow', 'moneyflow']
-            core_passed = checks.get('ma_align', {}).get('passed', False)
+            # ── 综合判定：核心(MA5>MA20 + 个股资金>0) + 辅助 3选2 ──
+            ma_ok = checks.get('ma_align', {}).get('passed', False)
+            mf_ok = checks.get('moneyflow', {}).get('passed', False)
+            core_passed = ma_ok and mf_ok
+            aux_keys = ['ma5_slope', 'volume_ratio', 'sector_flow']
             aux_passed = sum(1 for k in aux_keys if checks.get(k, {}).get('passed', False))
             aux_total = len(aux_keys)
 
-            if not core_passed:
-                failed_items = ['ma_align(核心)'] + [k for k in aux_keys if not checks.get(k, {}).get('passed', False)]
-            else:
-                failed_items = [k for k, v in checks.items() if not v['passed']]
+            # 收集失败项：核心条件单独标注
+            failed_items = []
+            if not ma_ok:
+                failed_items.append('ma_align(核心)')
+            if not mf_ok:
+                failed_items.append('moneyflow(核心)')
+            for k in aux_keys:
+                if not checks.get(k, {}).get('passed', False):
+                    failed_items.append(k)
 
             all_passed = core_passed and aux_passed >= 2
 
@@ -606,7 +614,7 @@ class PositionTierMonitor:
                 'passed': all_passed,
                 'failed_items': failed_items,
                 'checks': checks,
-                'rule': 'core_plus_2aux',
+                'rule': 'core_dual_plus_2aux',
                 'aux_passed': aux_passed,
                 'aux_total': aux_total,
                 'core_passed': core_passed,
