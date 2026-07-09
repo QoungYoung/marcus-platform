@@ -205,10 +205,16 @@ export const getPortfolioTool = {
         for (const p of positions) {
           const pnlSign = p.float_pnl >= 0 ? '+' : '';
           const t1 = p.t1_status || {};
-          // T+1 状态显示（用引擎实际返回值，不要凭感觉判断）
+          // T+1 状态显示（区分可卖/锁定股数）
           let t1Str = '🟢可卖';
-          if (t1.locked) {
-            t1Str = `🔒T+1锁定(${t1.unlock_date || '次日'}解锁)`;
+          const lockedVol = t1.locked_volume || 0;
+          const availVol = t1.available_volume || 0;
+          if (t1.locked && lockedVol > 0) {
+            if (availVol > 0) {
+              t1Str = `⚠️部分锁定(可卖${availVol}股+锁仓${lockedVol}股/${t1.unlock_date || '次日'}解锁)`;
+            } else {
+              t1Str = `🔒T+1全锁(${lockedVol}股/${t1.unlock_date || '次日'}解锁)`;
+            }
           } else if (t1.last_buy_date) {
             t1Str = `✅已过T+1(${t1.last_buy_date}买入)`;
           }
