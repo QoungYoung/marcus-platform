@@ -1152,6 +1152,10 @@ class PositionTierMonitor:
             return None
 
         target_pct = evaluation.max_position_pct  # 如 sprint=0.25
+
+        # 不在概念主线 → 目标仓位上限减半
+        if not getattr(self, '_last_concept_in_main_theme', True):
+            target_pct = target_pct * 0.5
         current_pct = current_position_mv / total_asset if total_asset > 0 else 0
 
         # 当前仓位已超目标上限，跳过
@@ -1171,10 +1175,6 @@ class PositionTierMonitor:
         add_amount = min(add_amount, max_by_cash)
         add_shares = int(add_amount / current_price / 100) * 100
         add_pct = add_amount / total_asset if total_asset > 0 else 0
-
-        # 不在概念主线 → 仓位减半
-        if not getattr(self, '_last_concept_in_main_theme', True):
-            add_shares = int(add_shares * 0.5 / 100) * 100
 
         if add_shares < 100:
             self._add_notification(
