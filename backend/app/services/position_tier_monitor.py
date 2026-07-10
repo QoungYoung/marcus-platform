@@ -587,11 +587,19 @@ class PositionTierMonitor:
                 timeout=10,
             )
             if resp.status_code != 200:
-                logger.warning(f"[加仓] AI判断调用失败: {resp.status_code}")
-                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': f'API错误 {resp.status_code}'}
+                logger.warning(f"[加仓] AI判断调用失败: status={resp.status_code}")
+                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': f'API HTTP {resp.status_code}'}
 
-            data = resp.json()
-            message = data['choices'][0]['message']
+            raw_text = resp.text
+            if not raw_text or not raw_text.strip():
+                logger.warning(f"[加仓] AI返回空body, status={resp.status_code}")
+                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'API返回空响应'}
+            try:
+                data = json.loads(raw_text)
+            except Exception:
+                logger.warning(f"[加仓] AI返回非JSON: {raw_text[:200]}")
+                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'API返回非JSON格式'}
+            message = data.get('choices', [{}])[0].get('message', {})
             content = message.get('content', '') or ''
             # v4-flash 有时把答案放在 reasoning_content 里导致 content 为空
             if not content:
