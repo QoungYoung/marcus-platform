@@ -796,6 +796,133 @@ async def get_realtime_indicators(
     )
 
 
+# ──────────────────────── 止盈趋势检查 ────────────────────────
+
+class StopProfitCheckResponse(PydanticBaseModel):
+    """止盈趋势检查结果"""
+    symbol: str
+    block_stop_profit: bool  # True=禁止止盈（趋势完好，继续持有）
+    reason: str
+    checks: dict = {}
+
+@router.get("/check-stop-profit/{symbol}", response_model=StopProfitCheckResponse)
+async def check_stop_profit(symbol: str):
+    """
+    检查是否应该阻止止盈（趋势完好 → 继续持有，让利润奔跑）。
+
+    三项检查：
+    1. 趋势检查：价>MA5 且 MA5>MA20（均线多头排列）
+    2. 资金检查：今日主力净流入 > 0（主力未撤退）
+    3. 主线检查：该股概念板块在当日主力净流入 TOP10 中（仍在主线）
+
+    全部通过 → block_stop_profit=True（禁止止盈，继续持有）
+    任一项失败 → block_stop_profit=False（允许止盈）
+    """
+    import sqlite3
+    from pathlib import Path
+
+    checks = {}
+    reasons = []
+
+    # 1. 趋势检查
+    try:
+        from app.api.indicator import get_realtime_indicators as _get_rt
+        rt_response = await _get_rt(symbol=symbol, limit=1)
+        rt = rt_response.realtime
+        if rt:
+            price_above_ma5 = rt.current_price > rt.ma5 if rt.ma5 else False
+            ma5_above_ma20 = rt.ma5 > rt.ma20 if rt.ma5 and rt.ma20 else False
+            checks['trend'] = {
+                'current_price': rt.current_price,
+                'ma5': rt.ma5,
+                'ma20': rt.ma20,
+                'price_above_ma5': price_above_ma5,
+                'ma5_above_ma20': ma5_above_ma20,
+            }
+            if price_above_ma5 and ma5_above_ma20:
+                reasons.append('趋势完好(价>MA5 + MA5>MA20)')
+            else:
+                reasons.append(f'趋势走弱(价{"<" if not price_above_ma5 else ">"}MA5, MA5{"<" if not ma5_above_ma20 else ">"}MA20)')
+        else:
+            checks['trend'] = {'error': '无法获取实时指标'}
+            reasons.append('趋势数据不可用')
+    except Exception as e:
+        checks['trend'] = {'error': str(e)}
+        reasons.append('趋势检查异常')
+
+    # 2. 资金检查
+    try:
+        from app.api.market import get_stock_moneyflow as _get_mf
+        mf_response = await _get_mf(symbol=symbol)
+        main_net = float(mf_response.main_net) if hasattr(mf_response, 'main_net') else 0
+        checks['moneyflow'] = {'main_net': main_net}
+        if main_net > 0:
+            reasons.append('主力净流入>0')
+        else:
+            reasons.append(f'主力净流出({main_net/1e4:.0f}万)')
+    except Exception as e:
+        checks['moneyflow'] = {'error': str(e)}
+        reasons.append('资金数据不可用')
+
+    # 3. 主线检查：该股概念是否在当日主力净流入 TOP10 中
+    try:
+        import urllib.request, ssl, json as _json
+        ctx = ssl.create_default_context()
+        url = 'http://localhost:8000/api/v1/market/concept-fund-flow?sort_by=main_net&limit=10'
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+            data = _json.loads(resp.read().decode('utf-8'))
+            items = data.get('data', data) if isinstance(data, dict) else []
+            top_concepts = set()
+            for it in items[:10]:
+                name = it.get('name', '') if isinstance(it, dict) else str(it)
+                if name:
+                    top_concepts.add(name)
+
+        # 查股票所属概念
+        ts_code = _normalize_to_ts_code(symbol)
+        bare = ts_code.split('.')[0]
+        pool_db = Path(__file__).parent.parent.parent.parent / "data" / "stock_pool.db"
+        if pool_db.exists():
+            conn = sqlite3.connect(str(pool_db))
+            cur = conn.execute(
+                "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
+                (f"%{bare}%",)
+            )
+            stock_concepts = {row[0] for row in cur.fetchall()}
+            conn.close()
+            in_main_line = bool(stock_concepts & top_concepts)
+            checks['main_line'] = {
+                'stock_concepts': sorted(stock_concepts)[:10],
+                'top_concepts': sorted(top_concepts),
+                'in_main_line': in_main_line,
+            }
+            if in_main_line:
+                reasons.append(f'仍在主线({", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+            else:
+                reasons.append('已脱离当日主线')
+        else:
+            checks['main_line'] = {'error': 'stock_pool.db 不存在'}
+            reasons.append('主线数据不可用')
+    except Exception as e:
+        checks['main_line'] = {'error': str(e)}
+        reasons.append('主线检查异常')
+
+    # 全部通过才阻止止盈
+    trend_ok = checks.get('trend', {}).get('price_above_ma5') and checks.get('trend', {}).get('ma5_above_ma20')
+    money_ok = checks.get('moneyflow', {}).get('main_net', 0) > 0
+    main_ok = checks.get('main_line', {}).get('in_main_line', False)
+
+    block = trend_ok and money_ok and main_ok
+
+    return StopProfitCheckResponse(
+        symbol=symbol,
+        block_stop_profit=block,
+        reason='; '.join(reasons) if reasons else '数据不足',
+        checks=checks,
+    )
+
+
 # ──────────────────────── 建仓前安全垫检查 ────────────────────────
 
 @router.get("/safety-margin/{symbol}", response_model=SafetyMarginResponse)

@@ -1884,6 +1884,49 @@ export const checkEntryFiltersTool = {
   },
 };
 
+// ===== 止盈趋势检查工具 =====
+export const checkStopProfitTool = {
+  name: 'check_stop_profit',
+  label: '止盈检查',
+  description: '【止盈前必调】检查是否应该阻止止盈。趋势完好(价>MA5+MA5>MA20)+主力净流入>0+仍在当日主线→禁止止盈，继续持有让利润奔跑。趋势走弱或脱离主线→允许止盈。',
+  parameters: Type.Object({
+    symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001' }),
+  }),
+  async execute(_toolCallId: string, params: { symbol: string }, _signal?: AbortSignal) {
+    if (isBacktest()) {
+      const ctx = getBacktestContext()!;
+      const data = await apiFetch(`/backtest/${ctx.task_id}/sandbox/check-stop-profit/${params.symbol}`);
+      if (data.error) return { content: [{ type: 'text', text: data.error }], details: data };
+      const lines: string[] = [];
+      const icon = data.block_stop_profit ? '🔒 禁止止盈' : '✅ 可以止盈';
+      lines.push(`${icon} | ${data.symbol}`);
+      lines.push(`原因: ${data.reason}`);
+      if (data.checks) {
+        const c = data.checks;
+        if (c.trend) lines.push(`趋势: 价${c.trend.price_above_ma5 ? '>' : '<'}MA5(${c.trend.ma5}) MA5${c.trend.ma5_above_ma20 ? '>' : '<'}MA20(${c.trend.ma20})`);
+        if (c.moneyflow) lines.push(`资金: 主力净流入 ${(c.moneyflow.main_net / 1e4).toFixed(0)}万`);
+        if (c.main_line) lines.push(`主线: ${c.main_line.in_main_line ? '仍在主线' : '已脱离'}`);
+      }
+      return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+    }
+
+    const data = await apiFetch(`/indicator/check-stop-profit/${params.symbol}`);
+    if (data.error) throw new Error(data.error);
+
+    const lines: string[] = [];
+    const icon = data.block_stop_profit ? '🔒 禁止止盈' : '✅ 可以止盈';
+    lines.push(`${icon} | ${data.symbol}`);
+    lines.push(`原因: ${data.reason}`);
+    if (data.checks) {
+      const c = data.checks;
+      if (c.trend) lines.push(`趋势: 价${c.trend.price_above_ma5 ? '>' : '<'}MA5(${c.trend.ma5?.toFixed(2)}) MA5${c.trend.ma5_above_ma20 ? '>' : '<'}MA20(${c.trend.ma20?.toFixed(2)})`);
+      if (c.moneyflow) lines.push(`资金: 主力净流入 ${(c.moneyflow.main_net / 1e4).toFixed(0)}万`);
+      if (c.main_line) lines.push(`主线: ${c.main_line.in_main_line ? '仍在主线' : '已脱离'} | 概念: [${(c.main_line.stock_concepts || []).slice(0, 5).join(', ')}]`);
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 // ===== 加仓条件诊断工具（回测专用） =====
 export const getPositionAddConditionsTool = {
   name: 'get_position_add_conditions',
@@ -2069,6 +2112,7 @@ export const TRADE_TOOLS = [
   getOrdersTool,
   cancelOrderTool,
   getLatestScanReportTool,
+  checkStopProfitTool,
 ];
 
 // ===== 历史复盘查询工具（专家组群聊） =====
