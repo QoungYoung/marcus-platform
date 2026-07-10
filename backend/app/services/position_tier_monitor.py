@@ -1134,7 +1134,7 @@ class PositionTierMonitor:
     def execute_add_position(self, symbol: str, evaluation: TierEvaluation,
                              current_price: float, account: dict,
                              pi_stance: str = 'yellow') -> Optional[dict]:
-        """代码层自动执行加仓下单（通过 calc_position 仓位计算器决定数量）。"""
+        """代码层自动执行加仓下单。直接用 tier 目标仓位计算加仓量，不受新仓约束限制。"""
         total_asset = account.get('total_asset', 100000)
         available_cash = account.get('available_cash', 0)
         current_position_mv = self._get_position_market_value(symbol)
@@ -1143,45 +1143,30 @@ class PositionTierMonitor:
             self._add_notification(symbol, 'BLOCKED', '总资产为0，无法计算')
             return None
 
-        target_pct = evaluation.max_position_pct
+        target_pct = evaluation.max_position_pct  # 如 sprint=0.25
 
-        # tier → 单票上限
-        cap_map = {'probe': 10.0, 'confirm': 18.0, 'sprint': 25.0}
-        single_cap = cap_map.get(evaluation.target_tier, 10.0)
-
-        # stance → 总仓上限
-        total_cap = {'green': 60.0, 'yellow': 50.0, 'red': 20.0}.get(pi_stance, 50.0)
-
-        # 调用共享仓位计算器：返回的是最大总仓位，减去现有持仓得到加仓量
-        # position_value 必须是总持仓市值（用于总仓上限约束），不只是当前股票
-        total_position_mv = self._get_total_position_market_value()
-        from app.api.indicator import calculate_position_quantity
-        result = calculate_position_quantity(
-            total_asset=total_asset,
-            available_cash=available_cash,
-            position_value=total_position_mv,
-            current_price=current_price,
-            single_stock_cap_pct=single_cap,
-            total_cap_pct=total_cap,
-        )
-
-        max_total_amount = result['amount']  # 约束后的最大总仓位金额
-        add_amount = max(0, max_total_amount - current_position_mv)
+        # 目标仓位金额 = 总资产 × 目标百分比
+        target_amount = total_asset * target_pct
+        # 加仓金额 = 目标 - 当前持仓（已持部分不算现金消耗）
+        add_amount = max(0, target_amount - current_position_mv)
+        # 现金约束：最多用到可用现金（保留 5% 缓冲防止零头失败）
+        max_by_cash = max(0, available_cash - total_asset * 0.05)
+        add_amount = min(add_amount, max_by_cash)
         add_shares = int(add_amount / current_price / 100) * 100
         current_pct = current_position_mv / total_asset if total_asset > 0 else 0
-        add_pct = add_amount / total_asset if total_asset > 0 else 0
 
         if add_shares < 100:
             self._add_notification(
                 symbol, 'SKIPPED',
-                f'仓位计算器结果：最大总仓 {max_total_amount:.0f}（{result["pct"]}%），'
+                f'目标仓位 {target_pct:.0%} → 目标金额 {target_amount:.0f}，'
                 f'当前 {current_position_mv:.0f}（{current_pct:.1%}），'
-                f'加仓量 {add_shares} 股不足100'
-                + (f' | 约束警告: {"; ".join(result["warnings"])}' if result['warnings'] else '')
+                f'加仓 {add_shares} 股不足100'
+                + (f' | 现金不足 (可用{available_cash:.0f})' if add_amount < target_amount - current_position_mv else '')
             )
             print(
                 f"[加仓] ⚠️ {symbol} 加仓量不足: {add_shares}股 | "
-                f"最大总仓{max_total_amount:.0f}({result['pct']}%) 当前{current_position_mv:.0f}",
+                f"目标{target_pct:.0%}→{target_amount:.0f} 当前{current_position_mv:.0f}({current_pct:.1%}) "
+                f"可用{available_cash:.0f}",
                 file=sys.stderr
             )
             return None
