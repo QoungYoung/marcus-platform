@@ -242,8 +242,8 @@ class PositionTierMonitor:
         # 早盘冷静期 09:30-09:45
         if now < self.MORNING_QUIET_END:
             return True
-        # 尾盘禁止加仓 14:30 后
-        if now >= self.CLOSING_CUTOFF:
+        # 午后不交易
+        if now >= self.LUNCH_END:
             return True
         return False
 
