@@ -1044,7 +1044,7 @@ def _get_role_cap(role: str) -> float:
 
 def _get_total_cap(stance: str) -> float:
     """市场立场 → 总仓上限%"""
-    return {"green": 60.0, "yellow": 50.0, "red": 20.0}.get(stance, 50.0)
+    return {"green": 100.0, "yellow": 50.0, "red": 20.0}.get(stance, 50.0)
 
 
 def _get_tier_condition(tier: str) -> str:

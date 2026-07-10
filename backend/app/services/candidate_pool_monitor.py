@@ -39,11 +39,10 @@ class CandidatePoolMonitor:
 
     # Pi 交易窗口时段（此时不自动建仓，避免与 Pi 决策冲突）
     PI_WINDOWS = [
-        (dtime(9, 35), dtime(9, 43)),
-        (dtime(9, 53), dtime(10, 2)),
-        (dtime(10, 35), dtime(10, 43)),
-        (dtime(13, 35), dtime(13, 43)),
-        (dtime(14, 30), dtime(15, 0)),   # 尾盘不买
+        (dtime(9, 35), dtime(9, 40)),
+        (dtime(9, 53), dtime(9, 58)),
+        (dtime(10, 35), dtime(10, 40)),
+        (dtime(13, 0), dtime(15, 0)),    # 午后不建仓
     ]
 
     def __init__(self, executor=None, interval_seconds: int = 37):
