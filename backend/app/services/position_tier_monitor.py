@@ -1138,17 +1138,29 @@ class PositionTierMonitor:
 
     def execute_add_position(self, symbol: str, evaluation: TierEvaluation,
                              current_price: float, account: dict,
-                             pi_stance: str = 'yellow') -> Optional[dict]:
+                             pi_stance: str = 'yellow',
+                             pos_mv: float = None) -> Optional[dict]:
         """代码层自动执行加仓下单。直接用 tier 目标仓位计算加仓量，不受新仓约束限制。"""
         total_asset = account.get('total_asset', 100000)
         available_cash = account.get('available_cash', 0)
-        current_position_mv = self._get_position_market_value(symbol)
+        if pos_mv is None:
+            pos_mv = self._get_position_market_value(symbol)
+        current_position_mv = pos_mv
 
         if total_asset <= 0:
             self._add_notification(symbol, 'BLOCKED', '总资产为0，无法计算')
             return None
 
         target_pct = evaluation.max_position_pct  # 如 sprint=0.25
+        current_pct = current_position_mv / total_asset if total_asset > 0 else 0
+
+        # 当前仓位已超目标上限，跳过
+        if current_pct >= target_pct:
+            self._add_notification(
+                symbol, 'SKIPPED',
+                f'当前仓位 {current_pct:.1%} 已达目标上限 {target_pct:.0%}，无需加仓'
+            )
+            return None
 
         # 目标仓位金额 = 总资产 × 目标百分比
         target_amount = total_asset * target_pct
@@ -1158,7 +1170,6 @@ class PositionTierMonitor:
         max_by_cash = max(0, available_cash - total_asset * 0.05)
         add_amount = min(add_amount, max_by_cash)
         add_shares = int(add_amount / current_price / 100) * 100
-        current_pct = current_position_mv / total_asset if total_asset > 0 else 0
         add_pct = add_amount / total_asset if total_asset > 0 else 0
 
         # 不在概念主线 → 仓位减半
@@ -1434,7 +1445,7 @@ class PositionTierMonitor:
 
             if gate.allowed:
                 # ── 第 3 层：执行加仓 ──
-                success = self.execute_add_position(symbol, evaluation, current_price, account, pi_stance)
+                success = self.execute_add_position(symbol, evaluation, current_price, account, pi_stance, current_price * volume)
                 if success:
                     summary["executed"] += 1
                 else:
