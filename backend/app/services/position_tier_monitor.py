@@ -383,13 +383,15 @@ class PositionTierMonitor:
         aux_info = f"辅助{trend.get('aux_passed', 0)}/{trend.get('aux_total', 4)}"
         checks.append(('PASSED', f'趋势强度通过（核心MA5>MA20 + {aux_info}）'))
 
-        # ── 门控 7：概念板块 TOP10 最后一关 ──
+        # ── 门控 7：概念板块 TOP10 —— 降仓而非拦截 ──
         concept_passed, concept_detail = self._check_concept_top10_gate(symbol)
-        if not concept_passed:
-            checks.append(('BLOCKED', f'概念TOP10门控: {concept_detail}'))
+        if concept_passed:
+            checks.append(('PASSED', f'概念TOP10: {concept_detail}'))
+            self._last_concept_in_main_theme = True
+        else:
+            checks.append(('DOWNGRADE', f'概念TOP10降仓50%: {concept_detail}'))
+            self._last_concept_in_main_theme = False
             self._notify_concept_top10_block(symbol, concept_detail)
-            return GateResult(allowed=False, checks=checks)
-        checks.append(('PASSED', f'概念TOP10门控: {concept_detail}'))
 
         # ── 全部通过 ──
         checks.append(('PASSED', '全部门控通过'))
@@ -628,20 +630,23 @@ class PositionTierMonitor:
 
     def _check_concept_top10_gate(self, symbol: str) -> tuple:
         """
-        最后一关门控：使用 AI 语义匹配判断该股票所属概念中，
-        是否有任何一个板块在「当日概念涨幅 TOP 10」或「主力净流入 TOP 10」中。
-        替换纯字符串匹配，防止概念名称差异（如"机器人概念"vs"机器人"）导致漏匹配。
+        概念主线检查：判断该股票是否在当日主线中。
+
+        Returns:
+            (in_main_theme: bool, detail: str)
+            True = 在主线中，正常仓位
+            False = 不在主线，降仓 50%
         """
         try:
             stock_concepts = self._get_stock_concept_names(symbol)
             if not stock_concepts:
-                return False, '未找到所属概念板块（stock_pool.db 无该股映射）'
+                return False, '未找到所属概念板块（stock_pool.db 无该股映射），降仓50%'
 
             top_change = self._fetch_top_concept_names('pct_change', 10)
             top_inflow = self._fetch_top_concept_names('main_net', 10)
 
             if not top_change and not top_inflow:
-                return False, '无法获取当日概念TOP10数据（API返回空）'
+                return False, '无法获取当日概念TOP10数据，降仓50%'
 
             # ── 快路径：字符串精确/包含匹配 ──
             in_change_exact = stock_concepts & top_change
@@ -667,7 +672,7 @@ class PositionTierMonitor:
                         iw = ai_result.get('in_which', '')
                         return True, f'AI语义匹配命中: {mc} ({iw})'
                     else:
-                        return False, f'AI判断未命中: {ai_result.get("reason", "概念不匹配")}'
+                        return False, f'AI判断未命中: {ai_result.get("reason", "概念不匹配")}，降仓50%'
 
             # ── 慢路径：AI 语义匹配 ──
             stock_concepts_str = '\n'.join(f'- {c}' for c in sorted(stock_concepts))
@@ -706,37 +711,37 @@ class PositionTierMonitor:
             reason = ai_result.get('reason', '概念不匹配')
             stock_sample = ', '.join(sorted(stock_concepts)[:5])
             return False, (
-                f'AI判断未命中: {reason} | '
+                f'降仓50% | AI判断未命中: {reason} | '
                 f'所属概念 [{stock_sample}{"…" if len(stock_concepts) > 5 else ""}] '
                 f'未语义匹配涨幅/主力TOP10'
             )
 
         except Exception as e:
             logger.warning(f"[加仓] AI概念TOP10门控异常 {symbol}: {e}")
-            return False, f'AI概念TOP10检查异常: {e}'
+            return False, f'降仓50% | AI概念TOP10检查异常: {e}'
 
     def _notify_concept_top10_block(self, symbol: str, detail: str) -> None:
         """
-        概念TOP10拦截时发送 QQ 推送，每日每只股票仅推送一次。
+        概念TOP10降仓通知，每日每只股票仅推送一次。
         """
         today = datetime.now().strftime('%Y-%m-%d')
         last_notified = self._concept_top10_notified.get(symbol, '')
         if last_notified == today:
-            return  # 今日已推送，跳过
+            return
 
         try:
             from app.services.qqbot_service import send_qq_notification
             msg = (
-                f"[加仓拦截·概念TOP10]\n"
+                f"[加仓降仓·概念TOP10]\n"
                 f"标的: {symbol}\n"
                 f"原因: {detail}\n"
                 f"时间: {datetime.now().strftime('%H:%M:%S')}\n"
                 f"提示: 该股所属概念板块未进入当日涨幅/主力净流入 TOP10，"
-                f"等待板块轮动或趋势确认后再考虑加仓"
+                f"仓位减半处理"
             )
             send_qq_notification(msg)
             self._concept_top10_notified[symbol] = today
-            print(f"[加仓] 📱 QQ推送: {symbol} 概念TOP10拦截", file=sys.stderr)
+            print(f"[加仓] 📱 QQ推送: {symbol} 概念TOP10降仓50%", file=sys.stderr)
         except Exception as e:
             logger.debug(f"[加仓] QQ推送失败: {e}")
 
@@ -1154,6 +1159,11 @@ class PositionTierMonitor:
         add_amount = min(add_amount, max_by_cash)
         add_shares = int(add_amount / current_price / 100) * 100
         current_pct = current_position_mv / total_asset if total_asset > 0 else 0
+        add_pct = add_amount / total_asset if total_asset > 0 else 0
+
+        # 不在概念主线 → 仓位减半
+        if not getattr(self, '_last_concept_in_main_theme', True):
+            add_shares = int(add_shares * 0.5 / 100) * 100
 
         if add_shares < 100:
             self._add_notification(
