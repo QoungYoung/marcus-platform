@@ -583,7 +583,19 @@ class PositionTierMonitor:
                 return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': f'API错误 {resp.status_code}'}
 
             data = resp.json()
-            content = data['choices'][0]['message']['content']
+            message = data['choices'][0]['message']
+            content = message.get('content', '') or ''
+            # v4-flash 有时把答案放在 reasoning_content 里导致 content 为空
+            if not content:
+                content = message.get('reasoning_content', '') or ''
+            if not content:
+                logger.warning(f"[加仓] AI返回content为空, keys={list(message.keys())}")
+                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'AI返回content为空'}
+            # 去除可能的 markdown 代码块包装
+            content = content.strip()
+            if content.startswith('```'):
+                lines = content.split('\n')
+                content = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
             import json as _json
             result = _json.loads(content)
             return result
