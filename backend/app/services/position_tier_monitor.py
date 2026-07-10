@@ -187,6 +187,14 @@ class PositionTierMonitor:
             self.thread.join(timeout=5)
         logger.info("[加仓] ⏹️ 加仓监控已停止")
 
+    def is_running(self, check_thread: bool = True) -> bool:
+        """检查监控是否在运行。"""
+        if not self.running:
+            return False
+        if check_thread:
+            return self.thread is not None and self.thread.is_alive()
+        return True
+
     # ── 主循环 ──
 
     def _run_loop(self) -> None:
