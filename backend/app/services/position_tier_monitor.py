@@ -322,13 +322,9 @@ class PositionTierMonitor:
 
         # ── 门控 1：Pi 立场检查 ──
         if pi_stance == 'red':
-            if total_position_pct + add_position_pct > 0.20:
-                checks.append(('BLOCKED', f'RED 立场下总仓 {total_position_pct:.1%}+{add_position_pct:.0%} > 20%'))
-                return GateResult(allowed=False, checks=checks)
-            else:
-                checks.append(('ALLOWED_RED', 'RED 例外：已验证盈利头寸限额内加仓'))
-        else:
-            checks.append(('ALLOWED', f'{pi_stance.upper()} 立场通过'))
+            checks.append(('BLOCKED', 'RED 立场禁止加仓'))
+            return GateResult(allowed=False, checks=checks)
+        checks.append(('ALLOWED', f'{pi_stance.upper()} 立场通过'))
 
         # ── 门控 2：总回撤检查 ──
         try:

@@ -146,6 +146,18 @@ class LongTermPoolMonitor:
                 return True
         return False
 
+    def _get_pi_stance(self) -> str:
+        """获取 Pi 最新立场"""
+        try:
+            from core.utils.strategy_chain import StrategyChain
+            chain = StrategyChain()
+            pi_conf = chain.get_pi_confirmation()
+            if pi_conf:
+                return pi_conf.get('stance', 'yellow')
+        except Exception:
+            pass
+        return 'yellow'
+
     # ── 核心检查 ──
 
     def _check_candidates(self) -> None:
@@ -166,6 +178,12 @@ class LongTermPoolMonitor:
         # Pi 窗口期间不建仓
         if self._is_pi_window():
             print(f"[长期池] ⏸️ Pi 窗口期，{len(active)} 只活跃，跳过建仓", file=sys.stderr)
+            return
+
+        # Red 立场不建仓
+        stance = self._get_pi_stance()
+        if stance == 'red':
+            print(f"[长期池] ⛔ Pi 立场 RED，{len(active)} 只活跃，禁止建仓", file=sys.stderr)
             return
 
         # 每日建仓上限
