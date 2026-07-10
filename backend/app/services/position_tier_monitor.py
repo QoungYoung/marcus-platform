@@ -366,6 +366,13 @@ class PositionTierMonitor:
             return GateResult(allowed=False, checks=checks)
         checks.append(('PASSED', f'今日加仓 {daily_adds}/{self.MAX_ADDS_PER_DAY}'))
 
+        # ── 门控 5.5：涨停板检查 ──
+        limit_up, limit_detail = self._check_limit_up(symbol)
+        if limit_up:
+            checks.append(('BLOCKED', f'涨停板: {limit_detail}'))
+            return GateResult(allowed=False, checks=checks)
+        checks.append(('PASSED', f'非涨停: {limit_detail}'))
+
         # ── 门控 6：趋势强度过滤（核心MA5>MA20 + 辅助5选2） ──
         trend = self.check_trend_strength(symbol)
         if not trend['passed']:
@@ -1030,6 +1037,46 @@ class PositionTierMonitor:
         except Exception:
             pass
         return 0.0
+
+    def _check_limit_up(self, symbol: str) -> tuple:
+        """
+        检查股票是否涨停，返回 (is_limit_up, detail)。
+
+        根据板块确定涨停阈值：
+        - 主板 (60xxxx/00xxxx): 10%
+        - 创业板 (30xxxx): 20%
+        - 科创板 (688xxx): 20%
+        - 北交所 (8xxxxx/4xxxxx): 30%
+        """
+        try:
+            import urllib.request, ssl, json as _json
+            ctx = ssl.create_default_context()
+            url = f'http://localhost:8000/api/v1/market/quote/{symbol}'
+            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = _json.loads(resp.read().decode('utf-8'))
+                change_pct = float(data.get('percent', 0) or 0)
+                if change_pct <= 0:
+                    return False, f'涨幅{change_pct:.1f}%'
+
+                # 确定涨停阈值
+                bare = symbol.replace('SH', '').replace('SZ', '').replace('BJ', '').replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
+                if len(bare) >= 6:
+                    bare = bare[-6:]
+                if bare.startswith('688'):
+                    limit = 20.0
+                elif bare.startswith(('300', '301')):
+                    limit = 20.0
+                elif bare.startswith(('8', '4')):
+                    limit = 30.0
+                else:
+                    limit = 10.0
+
+                if change_pct >= limit - 0.1:
+                    return True, f'{change_pct:.1f}% 触及涨停板({limit}%)，禁止加仓'
+                return False, f'涨幅{change_pct:.1f}% < 涨停{limit}%'
+        except Exception:
+            return False, '涨停检查异常，放行'
 
     # ── 振幅辅助 ──
 
