@@ -1278,7 +1278,6 @@ async def calc_position(req: CalcPositionRequest):
     # 1c. 获取近5日K线计算振幅
     amplitude = 0.0
     try:
-        from app.config import get_settings
         from datetime import datetime, timedelta
         settings = get_settings()
         token = settings.get_tushare_token()
