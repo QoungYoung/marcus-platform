@@ -480,7 +480,7 @@ class PositionTierMonitor:
             from app.api.indicator import _normalize_to_ts_code
             import sqlite3
             ts_code = _normalize_to_ts_code(symbol)
-            pool_db = Path(__file__).parent.parent.parent.parent / "data" / "stock_pool.db"
+            pool_db = self.log_dir / "stock_pool.db"
             if not pool_db.exists():
                 logger.warning(f"[加仓] stock_pool.db 不存在，无法获取 {symbol} 的概念板块")
                 return set()
