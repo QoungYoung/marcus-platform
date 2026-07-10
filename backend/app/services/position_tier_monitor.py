@@ -994,14 +994,11 @@ class PositionTierMonitor:
         try:
             import urllib.request, ssl, json as _json
             ctx = ssl.create_default_context()
-            url = f'http://localhost:8000/api/v1/market/moneyflow?symbol={symbol}&days=1'
+            url = f'http://localhost:8000/api/v1/market/moneyflow/{symbol}'
             req = urllib.request.Request(url, headers={'Accept': 'application/json'})
             with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
                 data = _json.loads(resp.read().decode('utf-8'))
-                flows = data.get('flows', []) if isinstance(data, dict) else []
-                if flows:
-                    f0 = flows[0] if isinstance(flows[0], dict) else {}
-                    return float(f0.get('main_net_inflow', 0))
+                return float(data.get('main_net', 0))
         except Exception:
             pass
         return 0.0
