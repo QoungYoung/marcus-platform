@@ -38,6 +38,7 @@ class OrderResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     id: Optional[int] = None
+    reason: str = ""
 
 
 class TradeHistoryResponse(BaseModel):

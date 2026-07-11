@@ -673,7 +673,7 @@ class MarcusVNPyExecutor:
             }
 
         # 通过完整订单流程执行（与 sell() 保持一致）
-        order_id = self.engine.buy(symbol, price, volume)
+        order_id = self.engine.buy(symbol, price, volume, reason)
         if not order_id:
             return {'status': 'failed', 'reason': 'VN.PY 买入失败'}
 
@@ -733,7 +733,7 @@ class MarcusVNPyExecutor:
         profit = (price - avg_cost) * volume if avg_cost > 0 else 0.0
         
         # 执行卖出
-        order_id = self.engine.sell(symbol, price, volume)
+        order_id = self.engine.sell(symbol, price, volume, reason)
         if not order_id:
             return {'status': 'failed', 'reason': 'VN.PY 卖出失败'}
         

@@ -348,14 +348,15 @@ export default function TradingPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-800 bg-dark-100/30">
-                  <th className="px-5 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">订单号</th>
-                  <th className="px-5 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">标的</th>
-                  <th className="px-5 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">方向</th>
-                  <th className="px-5 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">价格</th>
-                  <th className="px-5 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">数量</th>
-                  <th className="px-5 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">金额</th>
-                  <th className="px-5 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">时间</th>
-                  <th className="px-5 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">操作</th>
+                  <th className="px-4 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">标的</th>
+                  <th className="px-4 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">名称</th>
+                  <th className="px-4 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">方向</th>
+                  <th className="px-4 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">价格</th>
+                  <th className="px-4 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">数量</th>
+                  <th className="px-4 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">金额</th>
+                  <th className="px-4 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">原因</th>
+                  <th className="px-4 py-3 text-left text-xs text-gray-500 font-medium uppercase tracking-wider">时间</th>
+                  <th className="px-4 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/50">
@@ -368,20 +369,17 @@ export default function TradingPage() {
                     >
                       <td className="px-5 py-3.5">
                         <button
-                          onClick={() => copyOrderId(trade.order_id)}
-                          className="font-mono text-xs text-gray-400 hover:text-blue-400 transition-colors cursor-pointer"
-                          title="点击复制"
+                          onClick={() => { navigator.clipboard.writeText(trade.symbol); showToast('success', '已复制股票代码'); }}
+                          className="font-mono text-sm font-medium text-gray-300 hover:text-blue-400 transition-colors cursor-pointer"
+                          title="点击复制股票代码"
                         >
-                          {trade.order_id.length > 16
-                            ? trade.order_id.slice(0, 8) + '...' + trade.order_id.slice(-4)
-                            : trade.order_id}
+                          {trade.symbol}
                         </button>
                       </td>
                       <td className="px-5 py-3.5">
-                        <span className="font-mono text-sm font-medium">{trade.symbol}</span>
-                        {trade.name && trade.name !== trade.symbol && (
-                          <span className="text-xs text-gray-600 ml-1.5">{trade.name}</span>
-                        )}
+                        <span className="text-sm text-gray-400">
+                          {trade.name && trade.name !== trade.symbol ? trade.name : '-'}
+                        </span>
                       </td>
                       <td className="px-5 py-3.5">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
@@ -403,6 +401,9 @@ export default function TradingPage() {
                       </td>
                       <td className="px-5 py-3.5 font-mono text-sm text-right text-gray-400">
                         ¥{tradeAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-5 py-3.5 text-xs text-gray-500 max-w-[120px] truncate" title={trade.reason || ''}>
+                        {trade.reason || '-'}
                       </td>
                       <td className="px-5 py-3.5 text-xs text-gray-500 whitespace-nowrap">
                         {new Date(trade.created_at).toLocaleString('zh-CN', {

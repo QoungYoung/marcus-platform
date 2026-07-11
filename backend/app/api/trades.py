@@ -197,7 +197,7 @@ async def get_trade_history(
         # Get paginated trades
         offset = (page - 1) * limit
         sql = f"""
-            SELECT id, orderid, symbol, direction, price, volume, created_at
+            SELECT id, orderid, symbol, direction, price, volume, created_at, reason
             FROM trades
             {where_clause}
             ORDER BY created_at DESC
@@ -221,6 +221,7 @@ async def get_trade_history(
                 traded=row["volume"],
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(row["created_at"]),
+                reason=row["reason"] or "",
             ))
 
         conn.close()

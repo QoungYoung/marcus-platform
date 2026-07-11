@@ -427,6 +427,10 @@ class PaperTradingEngine:
             cursor.execute('ALTER TABLE trades ADD COLUMN voided_at TEXT')
         except sqlite3.OperationalError:
             pass
+        try:
+            cursor.execute('ALTER TABLE trades ADD COLUMN reason TEXT')
+        except sqlite3.OperationalError:
+            pass
 
         # 创建持仓追踪表（Step 8：统一数据源）
         cursor.execute('''
@@ -488,7 +492,7 @@ class PaperTradingEngine:
             print(f"[WARN]️ 获取 {symbol} 名称失败：{e}")
         return ""
     
-    def buy(self, symbol: str, price: float, volume: int) -> Optional[str]:
+    def buy(self, symbol: str, price: float, volume: int, reason: str = "") -> Optional[str]:
         """
         买入股票/期货
         
@@ -545,7 +549,8 @@ class PaperTradingEngine:
             direction=Direction.LONG.value,
             price=price,
             volume=volume,
-            status=OrderStatus.SUBMITTING.value
+            status=OrderStatus.SUBMITTING.value,
+            reason=reason
         )
         
         # 保存订单到数据库
@@ -558,7 +563,7 @@ class PaperTradingEngine:
         print(f"[UP] 买入委托：{symbol} {name_display} @ {price:.2f} x {volume} | 订单号：{order_id}")
         return order_id
     
-    def sell(self, symbol: str, price: float, volume: int) -> Optional[str]:
+    def sell(self, symbol: str, price: float, volume: int, reason: str = "") -> Optional[str]:
         """
         卖出股票/期货
         
@@ -606,7 +611,8 @@ class PaperTradingEngine:
             direction=Direction.SHORT.value,
             price=price,
             volume=volume,
-            status=OrderStatus.SUBMITTING.value
+            status=OrderStatus.SUBMITTING.value,
+            reason=reason
         )
         
         self._save_order(order)
@@ -754,10 +760,10 @@ class PaperTradingEngine:
             # 记录成交 (回测带 trade_date, 实盘为 NULL)
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute('''
-                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date)
+                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
-                  fill_price * order.volume, 0, datetime.now().isoformat(), td))
+                  fill_price * order.volume, 0, datetime.now().isoformat(), td, getattr(order, 'reason', '')))
 
         else:
             # 卖出成交（FIFO 修正：正确重建历史持仓避免未来数据污染 lots）
@@ -860,10 +866,10 @@ class PaperTradingEngine:
             # 记录成交（amount 存 gross 金额，profit 存净利润）
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute('''
-                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
-                  fill_price * order.volume, net_profit, datetime.now().isoformat(), td))
+                  fill_price * order.volume, net_profit, datetime.now().isoformat(), td, getattr(order, 'reason', '')))
 
             if pos.volume == 0:
                 # Step 8: 卖出清仓时删除 positions 表记录（在同一连接内执行，避免死锁）
