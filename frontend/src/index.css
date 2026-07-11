@@ -148,6 +148,15 @@
   --color-primary-foreground: #F5EFEA;
 }
 
+/* ── Toast animation ── */
+@keyframes slide-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
 /* ── 用户消息气泡：深蓝底上强制亮色文字（无论深/浅主题） ── */
 #trading-agent-container user-message .text-foreground,
 #trading-agent-container user-message .text-primary,

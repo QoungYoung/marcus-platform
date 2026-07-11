@@ -197,7 +197,7 @@ async def get_trade_history(
         # Get paginated trades
         offset = (page - 1) * limit
         sql = f"""
-            SELECT orderid, symbol, direction, price, volume, created_at
+            SELECT id, orderid, symbol, direction, price, volume, created_at
             FROM trades
             {where_clause}
             ORDER BY created_at DESC
@@ -210,6 +210,7 @@ async def get_trade_history(
         for row in rows:
             sym = row["symbol"]
             trades.append(OrderResponse(
+                id=row["id"],
                 order_id=row["orderid"],
                 symbol=sym,
                 name=_get_stock_name(sym),

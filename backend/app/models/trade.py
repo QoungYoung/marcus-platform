@@ -37,6 +37,7 @@ class OrderResponse(BaseModel):
     traded: int
     created_at: datetime
     updated_at: datetime
+    id: Optional[int] = None
 
 
 class TradeHistoryResponse(BaseModel):
