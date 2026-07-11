@@ -44,3 +44,17 @@ class TradeHistoryResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class VoidRequest(BaseModel):
+    reason: str
+
+
+class VoidResponse(BaseModel):
+    success: bool
+    trade_id: int
+    symbol: str = ""
+    direction: str = ""
+    volume: int = 0
+    reason: str = ""
+    error: str = ""

@@ -884,8 +884,8 @@ class MarcusVNPyExecutor:
         cursor = conn.cursor()
         conn.execute("PRAGMA busy_timeout=30000")
         
-        # 按 FIFO 计算真实持仓
-        cursor.execute('SELECT symbol, direction, price, volume FROM trades ORDER BY created_at')
+        # 按 FIFO 计算真实持仓（跳过已撤回交易）
+        cursor.execute('SELECT symbol, direction, price, volume FROM trades WHERE voided = 0 OR voided IS NULL ORDER BY created_at')
         trades = cursor.fetchall()
         
         # FIFO 成本计算
@@ -983,6 +983,86 @@ class MarcusVNPyExecutor:
         
         return trades[-limit:]
     
+    def void_trade(self, trade_id: int, reason: str) -> dict:
+        """撤回一笔成交（软删除，不计入持仓）"""
+        import sqlite3
+        from datetime import datetime as _dt
+
+        db_path = str(self.data_dir / "trades.db")
+        conn = sqlite3.connect(db_path, timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, symbol, direction, price, volume, voided FROM trades WHERE id = ?", (trade_id,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": f"交易 {trade_id} 不存在"}
+            if row[5]:
+                return {"success": False, "error": f"交易 {trade_id} 已被撤回"}
+
+            cur.execute(
+                "UPDATE trades SET voided = 1, void_reason = ?, voided_at = ? WHERE id = ?",
+                (reason, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), trade_id)
+            )
+            conn.commit()
+            print(
+                f"[交易撤回] ✅ #{trade_id} {row[1]} {row[2]} {row[4]}股 @ {row[3]} | 原因: {reason}",
+                file=sys.stderr
+            )
+            return {"success": True, "trade_id": trade_id, "symbol": row[1],
+                    "direction": row[2], "volume": row[4], "reason": reason}
+        finally:
+            conn.close()
+
+    def unvoid_trade(self, trade_id: int) -> dict:
+        """恢复一笔已撤回的成交"""
+        import sqlite3
+
+        db_path = str(self.data_dir / "trades.db")
+        conn = sqlite3.connect(db_path, timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, symbol, direction, price, volume, voided FROM trades WHERE id = ?", (trade_id,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": f"交易 {trade_id} 不存在"}
+            if not row[5]:
+                return {"success": False, "error": f"交易 {trade_id} 未被撤回"}
+
+            cur.execute(
+                "UPDATE trades SET voided = 0, void_reason = NULL, voided_at = NULL WHERE id = ?",
+                (trade_id,)
+            )
+            conn.commit()
+            print(
+                f"[交易恢复] ✅ #{trade_id} {row[1]} {row[2]} {row[4]}股 @ {row[3]} 已恢复",
+                file=sys.stderr
+            )
+            return {"success": True, "trade_id": trade_id, "symbol": row[1],
+                    "direction": row[2], "volume": row[4]}
+        finally:
+            conn.close()
+
+    def get_voided_trades(self) -> list:
+        """获取所有已撤回的交易"""
+        import sqlite3
+
+        db_path = str(self.data_dir / "trades.db")
+        conn = sqlite3.connect(db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, symbol, direction, price, volume, amount, profit, "
+                "created_at, trade_date, void_reason, voided_at "
+                "FROM trades WHERE voided = 1 ORDER BY voided_at DESC"
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
     def show_account(self):
         """显示账户信息"""
         account = self.get_account()

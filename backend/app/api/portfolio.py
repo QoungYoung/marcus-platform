@@ -157,6 +157,7 @@ def calculate_positions_from_db():
     curs.execute("""
         SELECT id, symbol, direction, price, volume
         FROM trades
+        WHERE voided = 0 OR voided IS NULL
         ORDER BY COALESCE(trade_date, DATE(created_at)), id
     """)
     trades = curs.fetchall()
@@ -597,6 +598,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     curs.execute("""
         SELECT id, symbol, direction, price, volume, trade_date, created_at
         FROM trades
+        WHERE voided = 0 OR voided IS NULL
         ORDER BY trade_date, id
     """)
     all_trades = curs.fetchall()

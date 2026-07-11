@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import get_settings
-from app.models.trade import TradeRequest, TradeResponse, OrderResponse, TradeHistoryResponse
+from app.models.trade import TradeRequest, TradeResponse, OrderResponse, TradeHistoryResponse, VoidRequest, VoidResponse
 
 settings = get_settings()
 
@@ -182,11 +182,11 @@ async def get_trade_history(
         conn = _get_db_conn(db_file)
         curs = conn.cursor()
 
-        # Build query
-        where_clause = ""
+        # Build query (exclude voided trades by default)
+        where_clause = "WHERE (voided = 0 OR voided IS NULL)"
         params = []
         if symbol:
-            where_clause = "WHERE symbol = ?"
+            where_clause += " AND symbol = ?"
             params.append(symbol)
 
         # Get total count
@@ -305,6 +305,52 @@ async def get_trade(order_id: str):
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
     return trade
+
+
+@router.get("/voided")
+async def get_voided_trades():
+    """Get all voided (cancelled) trades."""
+    try:
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        executor = MarcusVNPyExecutor()
+        trades = executor.get_voided_trades()
+        for t in trades:
+            t["name"] = _get_stock_name(t["symbol"])
+        return {"trades": trades, "total": len(trades)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{trade_id}/void", response_model=VoidResponse)
+async def void_trade(trade_id: int, body: VoidRequest):
+    """Void a trade (soft-delete, excluded from position calculation)."""
+    try:
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        executor = MarcusVNPyExecutor()
+        result = executor.void_trade(trade_id, body.reason)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return VoidResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{trade_id}/unvoid", response_model=VoidResponse)
+async def unvoid_trade(trade_id: int):
+    """Restore a voided trade."""
+    try:
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        executor = MarcusVNPyExecutor()
+        result = executor.unvoid_trade(trade_id)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return VoidResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{order_id}/cancel")

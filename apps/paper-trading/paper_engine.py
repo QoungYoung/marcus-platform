@@ -414,6 +414,20 @@ class PaperTradingEngine:
         except sqlite3.OperationalError:
             pass
 
+        # 迁移: 交易撤回功能（voided=1 的成交不计入持仓）
+        try:
+            cursor.execute('ALTER TABLE trades ADD COLUMN voided INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute('ALTER TABLE trades ADD COLUMN void_reason TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute('ALTER TABLE trades ADD COLUMN voided_at TEXT')
+        except sqlite3.OperationalError:
+            pass
+
         # 创建持仓追踪表（Step 8：统一数据源）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS positions (
