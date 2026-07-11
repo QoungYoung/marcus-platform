@@ -988,7 +988,7 @@ class MarcusVNPyExecutor:
         import sqlite3
         from datetime import datetime as _dt
 
-        db_path = str(self.data_dir / "trades.db")
+        db_path = str(Path(self.data_dir) / "trades.db")
         conn = sqlite3.connect(db_path, timeout=30)
         conn.execute("PRAGMA busy_timeout=30000")
         try:
@@ -1018,7 +1018,7 @@ class MarcusVNPyExecutor:
         """恢复一笔已撤回的成交"""
         import sqlite3
 
-        db_path = str(self.data_dir / "trades.db")
+        db_path = str(Path(self.data_dir) / "trades.db")
         conn = sqlite3.connect(db_path, timeout=30)
         conn.execute("PRAGMA busy_timeout=30000")
         try:
@@ -1048,7 +1048,7 @@ class MarcusVNPyExecutor:
         """获取所有已撤回的交易"""
         import sqlite3
 
-        db_path = str(self.data_dir / "trades.db")
+        db_path = str(Path(self.data_dir) / "trades.db")
         conn = sqlite3.connect(db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=30000")

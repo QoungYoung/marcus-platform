@@ -48,6 +48,7 @@ class Order:
     traded: int = 0
     created_at: str = None
     updated_at: str = None
+    reason: str = ""
     
     def __post_init__(self):
         now = datetime.now().isoformat()
@@ -761,7 +762,7 @@ class PaperTradingEngine:
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute('''
                 INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
                   fill_price * order.volume, 0, datetime.now().isoformat(), td, getattr(order, 'reason', '')))
 
