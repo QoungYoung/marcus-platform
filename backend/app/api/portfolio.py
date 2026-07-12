@@ -131,12 +131,15 @@ def calculate_positions_from_db():
 
     不再依赖 account_info.available_cash（可能因引擎异常而偏离），
     完全从交易记录重放资金流水，确保 total_asset 与持仓自洽。
+
+    Returns:
+        (position_list, account, realized_pnl, win_rate)
     """
     import sqlite3
 
     db_file = settings.data_dir / "trades.db"
     if not db_file.exists():
-        return [], {"available_cash": 0, "initial_capital": 1000000, "frozen_cash": 0}
+        return [], {"available_cash": 0, "initial_capital": 1000000, "frozen_cash": 0}, 0, 0
 
     conn = sqlite3.connect(str(db_file), timeout=30)
     conn.row_factory = sqlite3.Row
@@ -161,6 +164,19 @@ def calculate_positions_from_db():
         ORDER BY COALESCE(trade_date, DATE(created_at)), id
     """)
     trades = curs.fetchall()
+
+    # ── 同时查询 realized_pnl 和 win_rate（复用连接）──
+    curs.execute("SELECT SUM(profit) FROM trades WHERE direction='卖出'")
+    row = curs.fetchone()
+    realized_pnl = float(row[0]) if row and row[0] else 0.0
+
+    curs.execute("SELECT COUNT(*) as total, SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins FROM trades WHERE direction='卖出'")
+    row = curs.fetchone()
+    if row and row["total"] > 0:
+        win_rate = round(row["wins"] / row["total"] * 100, 1)
+    else:
+        win_rate = 0.0
+
     conn.close()
 
     # ── FIFO 重放：同时计算持仓和资金 ──
@@ -218,13 +234,13 @@ def calculate_positions_from_db():
         "available_cash": available_cash,
         "frozen_cash": frozen_cash,
     }
-    return position_list, account
+    return position_list, account, realized_pnl, win_rate
 
 
 @router.get("", response_model=PortfolioSummary)
 async def get_portfolio():
     """Get full portfolio summary."""
-    position_list, account = calculate_positions_from_db()
+    position_list, account, realized_pnl, win_rate = calculate_positions_from_db()
 
     # Fetch real-time prices from Xueqiu
     symbols = [p['symbol'] for p in position_list]
@@ -288,27 +304,6 @@ async def get_portfolio():
     total_asset = available_cash + account.get('frozen_cash', 0) + total_position_value
     total_float_pnl = sum(p.floating_pnl for p in positions)
 
-    # Calculate realized PnL from trades
-    import sqlite3
-    db_file = settings.data_dir / "trades.db"
-    realized_pnl = 0
-    win_rate = 0
-    try:
-        conn = sqlite3.connect(str(db_file), timeout=5)
-        curs = conn.cursor()
-        curs.execute("SELECT SUM(profit) FROM trades WHERE direction='卖出'")
-        row = curs.fetchone()
-        if row and row[0]:
-            realized_pnl = row[0]
-        # 计算胜率：盈利卖单 / 总卖单
-        curs.execute("SELECT COUNT(*) as total, SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins FROM trades WHERE direction='卖出'")
-        row = curs.fetchone()
-        if row and row[0] > 0:
-            win_rate = round(row[1] / row[0] * 100, 1) if row[0] > 0 else 0
-        conn.close()
-    except Exception:
-        pass
-
     # 🔧 total_pnl = total_asset - initial_capital（始终与 total_return 一致）
     #     float_pnl 作为推导值 = total_pnl - realized_pnl，保证三数自洽
     total_pnl = total_asset - initial_capital
@@ -328,124 +323,18 @@ async def get_portfolio():
         updated_at=datetime.now(),
     )
 
-    # ── 计算板块集中度 ──
-    sector_concentration = None
-    if positions:
-        try:
-            import sqlite3
-            pool_db = settings.data_dir / "stock_pool.db"
-            if pool_db.exists():
-                conn = sqlite3.connect(str(pool_db))
-                curs = conn.cursor()
-
-                # 按申万三级行业分组统计持仓市值
-                industry_exposure = {}
-                for p in positions:
-                    bare_code = p.symbol[2:] if len(p.symbol) > 4 else p.symbol
-                    curs.execute(
-                        "SELECT industry FROM stock_pool WHERE symbol = ? OR ts_code = ?",
-                        (bare_code, p.symbol)
-                    )
-                    row = curs.fetchone()
-                    if row and row[0]:
-                        ind = row[0] or "未知行业"
-                    else:
-                        ind = "未知行业"
-                    industry_exposure[ind] = industry_exposure.get(ind, 0) + p.market_value
-
-                conn.close()
-
-                max_industry = max(industry_exposure, key=industry_exposure.get) if industry_exposure else ""
-                max_concentration = (
-                    round(industry_exposure[max_industry] / total_asset * 100, 1)
-                    if total_asset > 0 and max_industry else 0
-                )
-
-                sector_concentration = {
-                    "max_sector": max_industry,
-                    "concentration_pct": max_concentration,
-                    "breakdown": {k: round(v / total_asset * 100, 1) if total_asset > 0 else 0
-                                 for k, v in industry_exposure.items()},
-                }
-        except Exception:
-            pass
-
-    # ── 计算持仓弱势排名 ──
-    if positions:
-        try:
-            import sqlite3
-            pool_db = settings.data_dir / "stock_pool.db"
-            if pool_db.exists():
-                conn = sqlite3.connect(str(pool_db))
-                curs = conn.cursor()
-
-                for p in positions:
-                    bare_code = p.symbol[2:] if len(p.symbol) > 4 else p.symbol
-                    # 查找股票所属的概念板块
-                    curs.execute(
-                        "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ? LIMIT 1",
-                        (f"%{bare_code}%",)
-                    )
-                    row = curs.fetchone()
-                    if row:
-                        concept = row[0]
-                        # 获取该概念板块所有成分股
-                        curs.execute(
-                            "SELECT ts_code FROM stock_concept_map WHERE concept_name = ?",
-                            (concept,)
-                        )
-                        members = [r[0] for r in curs.fetchall()]
-                        if len(members) > 1:
-                            # 获取同板块股票的实时涨幅并排序
-                            member_changes = []
-                            for m_ts_code in members[:30]:  # 限制查询数量
-                                m_symbol = m_ts_code.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
-                                # 构建Xueqiu符号
-                                if ".SH" in m_ts_code:
-                                    m_xq = f"SH{m_symbol}"
-                                elif ".SZ" in m_ts_code:
-                                    m_xq = f"SZ{m_symbol}"
-                                else:
-                                    m_xq = f"BJ{m_symbol}"
-                                try:
-                                    m_price = get_realtime_prices([m_xq]).get(m_xq, {})
-                                    if isinstance(m_price, dict):
-                                        m_change = m_price.get("change_pct", 0) or 0
-                                    else:
-                                        m_change = 0
-                                    member_changes.append((m_xq, abs(float(m_change))))
-                                except (ValueError, TypeError):
-                                    member_changes.append((m_xq, 0))
-
-                            member_changes.sort(key=lambda x: x[1], reverse=True)
-                            # 找到当前持仓的排名
-                            own_rank = None
-                            for rank, (mc_sym, _) in enumerate(member_changes, 1):
-                                if bare_code in mc_sym.upper():
-                                    own_rank = rank
-                                    break
-
-                            if own_rank:
-                                p.sector_rank = own_rank
-                                p.sector_rank_pct = round(own_rank / len(member_changes) * 100, 1) if member_changes else None
-
-                conn.close()
-        except Exception:
-            pass
-
     return PortfolioSummary(
         account=account_response,
         total_return=total_pnl,  # 与 account.total_pnl 同源，始终一致
         total_return_pct=(total_asset / initial_capital - 1) * 100 if initial_capital > 0 else 0,
         win_rate=win_rate,
-        sector_concentration=sector_concentration,
     )
 
 
 @router.get("/positions", response_model=list[PositionResponse])
 async def get_positions():
     """Get current positions only."""
-    position_list, _ = calculate_positions_from_db()
+    position_list, _ = calculate_positions_from_db()[:2]
     symbols = [p['symbol'] for p in position_list]
     prices = get_realtime_prices(symbols) if symbols else {}
 
