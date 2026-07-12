@@ -108,10 +108,11 @@ export default function TradingPage() {
     setQuoteData(null);
     try {
       const res = await marketApi.getQuote(quoteSymbol.trim().toUpperCase());
+      const d = res.data;
       setQuoteData({
-        price: res.data.price ?? res.data.current_price ?? 0,
-        change_pct: res.data.change_pct ?? res.data.percent ?? 0,
-        name: res.data.name ?? '',
+        price: d.current ?? d.price ?? 0,
+        change_pct: d.percent ?? d.change_pct ?? 0,
+        name: d.name ?? '',
       });
     } catch {
       setQuoteError('查询失败');
