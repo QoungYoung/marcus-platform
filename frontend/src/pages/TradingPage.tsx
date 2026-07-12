@@ -474,11 +474,22 @@ export default function TradingPage() {
                   return (
                     <tr
                       key={idx}
-                      className="hover:bg-dark-100/50 transition-colors group"
+                      onClick={() => {
+                        setSymbol(trade.symbol);
+                        setSide(trade.direction === '买入' ? 'buy' : 'sell');
+                        setPrice(trade.price.toString());
+                        setVolume(trade.volume.toString());
+                        setResult(null);
+                        setError(null);
+                        showToast('success', `已填充 ${trade.symbol}`);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="hover:bg-dark-100/50 transition-colors group cursor-pointer"
+                      title="点击填充到执行交易表单"
                     >
                       <td className="px-5 py-3.5">
                         <button
-                          onClick={() => { navigator.clipboard.writeText(trade.symbol); showToast('success', '已复制股票代码'); }}
+                          onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(trade.symbol); showToast('success', '已复制股票代码'); }}
                           className="font-mono text-sm font-medium text-gray-300 hover:text-blue-400 transition-colors cursor-pointer"
                           title="点击复制股票代码"
                         >
@@ -525,7 +536,8 @@ export default function TradingPage() {
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         <button
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setVoidTarget({
                               id: trade.id || 0,
                               symbol: trade.symbol,
