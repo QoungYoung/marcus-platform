@@ -85,18 +85,16 @@ services:
       - backend
     restart: unless-stopped
 
-  # Frontend (Production Build)
+  # Frontend (本地预构建 dist，Dockerfile 只 COPY 到 nginx)
   frontend:
-    deploy:
-      resources:
-        limits:
-          memory: 128M
     build:
       context: ..
       dockerfile: docker/Dockerfile.frontend
     container_name: marcus-frontend
-    environment:
-      VITE_API_BASE_URL: http://localhost:8000
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     ports:
       - "80:80"
     depends_on:
