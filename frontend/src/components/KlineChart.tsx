@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import * as echarts from 'echarts';
 import { marketApi } from '../api/client';
 
 interface KlineBar {
@@ -23,24 +24,38 @@ interface Props {
   className?: string;
 }
 
-const BAR_WIDTH = 8;
-const BAR_GAP = 2;
-const PADDING = { top: 20, right: 12, bottom: 36, left: 52 };
+const UP_COLOR = '#ef4444';
+const DOWN_COLOR = '#00c882';
+const BG_COLOR = '#0f1117';
+const GRID_COLOR = '#1e2233';
+const TEXT_COLOR = '#6b7280';
 
-export default function KlineChart({ symbol, trades = [], height = 240, className }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+function calcMA(data: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) { result.push(null); continue; }
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += data[j];
+    result.push(sum / period);
+  }
+  return result;
+}
+
+export default function KlineChart({ symbol, trades = [], height = 340, className }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
   const [data, setData] = useState<KlineBar[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; bar: KlineBar } | null>(null);
 
+  // ── Fetch data ──
   useEffect(() => {
     if (!symbol || symbol.length < 6) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    marketApi.getKline(symbol, { limit: 60 })
+    marketApi.getKline(symbol, { limit: 90 })
       .then(res => {
         if (cancelled) return;
         const klines: KlineBar[] = (res.data.klines || [])
@@ -57,185 +72,243 @@ export default function KlineChart({ symbol, trades = [], height = 240, classNam
         setLoading(false);
       })
       .catch(() => {
-        if (!cancelled) {
-          setError('K线数据加载失败');
-          setLoading(false);
-        }
+        if (!cancelled) { setError('K线数据加载失败'); setLoading(false); }
       });
-
     return () => { cancelled = true; };
   }, [symbol]);
 
-  // ── Draw ──
+  // ── Init chart ──
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || data.length === 0) return;
+    if (!containerRef.current) return;
+    const chart = echarts.init(containerRef.current, undefined, {
+      devicePixelRatio: window.devicePixelRatio || 1,
+    });
+    chartRef.current = chart;
 
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = height;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    const ctx = canvas.getContext('2d')!;
-    ctx.scale(dpr, dpr);
+    const handleResize = () => chart.resize();
+    window.addEventListener('resize', handleResize);
 
-    // Clear
-    ctx.fillStyle = '#0f1117';
-    ctx.fillRect(0, 0, w, h);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.dispose();
+      chartRef.current = null;
+    };
+  }, []);
 
-    const chartW = w - PADDING.left - PADDING.right;
-    const chartH = h - PADDING.top - PADDING.bottom;
-    const step = BAR_WIDTH + BAR_GAP;
-    const count = Math.min(data.length, Math.floor(chartW / step));
-    const visible = data.slice(-count);
+  // ── Build option ──
+  const buildOption = useCallback((rawData: KlineBar[], markers: TradeMarker[]) => {
+    const dates = rawData.map(d => d.trade_date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'));
+    const ohlc = rawData.map(d => [d.open, d.close, d.low, d.high]);
+    const volumes = rawData.map(d => d.vol);
+    const closes = rawData.map(d => d.close);
 
-    if (visible.length === 0) return;
+    const ma5 = calcMA(closes, 5);
+    const ma10 = calcMA(closes, 10);
+    const ma20 = calcMA(closes, 20);
 
-    const high = Math.max(...visible.map(d => d.high));
-    const low = Math.min(...visible.map(d => d.low));
-    const range = high - low || 1;
-
-    const toX = (i: number) => PADDING.left + i * step + BAR_WIDTH / 2;
-    const toY = (v: number) => PADDING.top + chartH * (1 - (v - low) / range);
-
-    // ── Grid lines ──
-    ctx.strokeStyle = '#1e2233';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-      const y = PADDING.top + (chartH / 4) * i;
-      ctx.beginPath();
-      ctx.moveTo(PADDING.left, y);
-      ctx.lineTo(w - PADDING.right, y);
-      ctx.stroke();
-
-      // Price label
-      const price = high - (range / 4) * i;
-      ctx.fillStyle = '#5a6070';
-      ctx.font = '10px monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(price.toFixed(2), PADDING.left - 6, y + 3);
-    }
-
-    // Date labels
-    ctx.fillStyle = '#5a6070';
-    ctx.font = '9px monospace';
-    ctx.textAlign = 'center';
-    const labelStep = Math.max(1, Math.floor(visible.length / 5));
-    for (let i = 0; i < visible.length; i += labelStep) {
-      const date = visible[i].trade_date;
-      const label = date.length === 8 ? `${date.slice(4, 6)}/${date.slice(6, 8)}` : date;
-      ctx.fillText(label, toX(i), h - 8);
-    }
-
-    // ── Volume bars (thin) ──
-    const maxVol = Math.max(...visible.map(d => d.vol));
-    const volH = chartH * 0.15;
-    const volY = h - PADDING.bottom - volH - 2;
-    for (let i = 0; i < visible.length; i++) {
-      const d = visible[i];
-      const barH = (d.vol / maxVol) * volH;
-      ctx.fillStyle = d.close >= d.open ? 'rgba(0,200,130,0.3)' : 'rgba(239,68,68,0.3)';
-      ctx.fillRect(toX(i) - BAR_WIDTH / 2 + 1, volY + volH - barH, BAR_WIDTH - 2, barH);
-    }
-
-    // ── MA5 line ──
-    ctx.strokeStyle = '#f0a030';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    for (let i = 4; i < visible.length; i++) {
-      const ma5 = visible.slice(i - 4, i + 1).reduce((s, d) => s + d.close, 0) / 5;
-      const x = toX(i);
-      const y = toY(ma5);
-      if (i === 4) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // ── Candles ──
-    for (let i = 0; i < visible.length; i++) {
-      const d = visible[i];
-      const x = toX(i);
-      const isUp = d.close >= d.open;
-      const bodyTop = toY(Math.max(d.open, d.close));
-      const bodyBot = toY(Math.min(d.open, d.close));
-      const bodyH = Math.max(1, bodyBot - bodyTop);
-      const wickTop = toY(d.high);
-      const wickBot = toY(d.low);
-      const color = isUp ? '#ef4444' : '#00c882';
-
-      ctx.strokeStyle = color;
-      ctx.fillStyle = isUp ? color : '#0f1117';
-
-      // Wick
-      ctx.beginPath();
-      ctx.moveTo(x, wickTop);
-      ctx.lineTo(x, wickBot);
-      ctx.stroke();
-
-      // Body
-      ctx.fillRect(x - BAR_WIDTH / 2 + 0.5, bodyTop, BAR_WIDTH - 1, bodyH);
-      if (!isUp) {
-        ctx.strokeRect(x - BAR_WIDTH / 2 + 0.5, bodyTop, BAR_WIDTH - 1, bodyH);
-      }
-    }
-
-    // ── Buy/Sell markers ──
-    for (const t of trades) {
-      // Find closest bar date
-      let bestIdx = -1;
-      let bestDiff = Infinity;
-      for (let i = 0; i < visible.length; i++) {
-        const diff = Math.abs(parseInt(visible[i].trade_date) - parseInt(t.date.replace(/-/g, '')));
-        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
-      }
-      if (bestIdx < 0) continue;
-
-      const x = toX(bestIdx);
-      const y = toY(t.price);
+    // ── Trade markers as markPoints ──
+    const buyPoints: any[] = [];
+    const sellPoints: any[] = [];
+    for (const t of markers) {
+      const dateStr = t.date.replace(/-/g, '');
+      const idx = rawData.findIndex(d => d.trade_date === dateStr);
+      if (idx < 0) continue;
       const isBuy = t.direction === '买入';
-      const r = 5;
-
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = isBuy ? '#ef4444' : '#00c882';
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Arrow
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 8px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(isBuy ? 'B' : 'S', x, y + 3);
+      const point = {
+        name: isBuy ? 'B' : 'S',
+        coord: [dates[idx], t.price],
+        value: isBuy ? 'B' : 'S',
+        symbol: 'pin',
+        symbolSize: 28,
+        itemStyle: {
+          color: isBuy ? UP_COLOR : DOWN_COLOR,
+          borderColor: '#fff',
+          borderWidth: 1.5,
+        },
+        label: {
+          show: true,
+          color: '#fff',
+          fontSize: 10,
+          fontWeight: 'bold',
+          position: isBuy ? 'top' : 'bottom',
+          offset: [0, isBuy ? -6 : 6],
+        },
+      };
+      if (isBuy) buyPoints.push(point);
+      else sellPoints.push(point);
     }
-  }, [data, height, trades]);
 
-  // ── Mouse move for tooltip ──
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || data.length === 0) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    return {
+      backgroundColor: BG_COLOR,
+      animation: false,
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross' },
+        backgroundColor: 'rgba(20,22,30,0.95)',
+        borderColor: GRID_COLOR,
+        textStyle: { color: '#e5e7eb', fontSize: 12, fontFamily: 'monospace' },
+        formatter: (params: any[]) => {
+          const k = params.find((p: any) => p.seriesName === 'K线');
+          if (!k) return '';
+          const d = k.data;
+          return [
+            `<div class="text-gray-400 mb-1">${k.axisValue}</div>`,
+            `<span class="text-gray-500">开 </span><span>${d[1].toFixed(2)}</span>`,
+            `<span class="text-gray-500"> 收 </span><span class="${d[2] >= d[1] ? 'text-red-400' : 'text-emerald-400'}">${d[2].toFixed(2)}</span>`,
+            `<span class="text-gray-500"> 高 </span><span>${d[4].toFixed(2)}</span>`,
+            `<span class="text-gray-500"> 低 </span><span>${d[3].toFixed(2)}</span>`,
+            `<span class="text-gray-500"> 幅 </span><span>${((d[2] - d[1]) / d[1] * 100).toFixed(2)}%</span>`,
+          ].join('&nbsp;&nbsp;');
+        },
+      },
+      axisPointer: {
+        link: [{ xAxisIndex: 'all' }],
+        label: { backgroundColor: '#1f2937' },
+      },
+      grid: [
+        { left: 56, right: 16, top: 16, height: '55%' },
+        { left: 56, right: 16, top: '75%', height: '16%' },
+      ],
+      xAxis: [
+        {
+          type: 'category',
+          data: dates,
+          gridIndex: 0,
+          axisLine: { lineStyle: { color: GRID_COLOR } },
+          axisTick: { show: false },
+          axisLabel: { color: TEXT_COLOR, fontSize: 10 },
+          splitLine: { show: false },
+        },
+        {
+          type: 'category',
+          data: dates,
+          gridIndex: 1,
+          axisLine: { lineStyle: { color: GRID_COLOR } },
+          axisTick: { show: false },
+          axisLabel: { show: false },
+          splitLine: { show: false },
+        },
+      ],
+      yAxis: [
+        {
+          type: 'value',
+          gridIndex: 0,
+          scale: true,
+          splitNumber: 5,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { color: TEXT_COLOR, fontSize: 10 },
+          splitLine: { lineStyle: { color: GRID_COLOR, type: 'dashed' } },
+          position: 'left',
+        },
+        {
+          type: 'value',
+          gridIndex: 1,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { show: false },
+          splitLine: { show: false },
+          position: 'left',
+        },
+      ],
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: [0, 1],
+          zoomOnMouseWheel: true,
+          moveOnMouseMove: true,
+        },
+        {
+          type: 'slider',
+          xAxisIndex: [0, 1],
+          bottom: 4,
+          height: 20,
+          borderColor: GRID_COLOR,
+          backgroundColor: 'rgba(30,34,51,0.5)',
+          fillerColor: 'rgba(59,130,246,0.15)',
+          handleStyle: { color: '#3b82f6', borderColor: '#3b82f6' },
+          textStyle: { color: TEXT_COLOR, fontSize: 10 },
+        },
+      ],
+      series: [
+        {
+          name: 'K线',
+          type: 'candlestick',
+          data: ohlc,
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          itemStyle: {
+            color: UP_COLOR,
+            color0: DOWN_COLOR,
+            borderColor: UP_COLOR,
+            borderColor0: DOWN_COLOR,
+          },
+          markPoint: {
+            symbol: 'pin',
+            symbolSize: 30,
+            animation: false,
+            data: [...buyPoints, ...sellPoints],
+          },
+        },
+        {
+          name: 'MA5',
+          type: 'line',
+          data: ma5,
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          smooth: false,
+          symbol: 'none',
+          lineStyle: { color: '#f59e0b', width: 1 },
+        },
+        {
+          name: 'MA10',
+          type: 'line',
+          data: ma10,
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          smooth: false,
+          symbol: 'none',
+          lineStyle: { color: '#8b5cf6', width: 1 },
+        },
+        {
+          name: 'MA20',
+          type: 'line',
+          data: ma20,
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          smooth: false,
+          symbol: 'none',
+          lineStyle: { color: '#06b6d4', width: 1 },
+        },
+        {
+          name: '成交量',
+          type: 'bar',
+          data: volumes.map((v, i) => {
+            const up = rawData[i].close >= rawData[i].open;
+            return { value: v, itemStyle: { color: up ? `${UP_COLOR}66` : `${DOWN_COLOR}66` } };
+          }),
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+        },
+      ],
+    };
+  }, []);
 
-    const chartW = rect.width - PADDING.left - PADDING.right;
-    const step = BAR_WIDTH + BAR_GAP;
-    const count = Math.min(data.length, Math.floor(chartW / step));
-    const visible = data.slice(-count);
+  // ── Update chart ──
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || data.length === 0) return;
+    chart.setOption(buildOption(data, trades), true);
+  }, [data, trades, buildOption]);
 
-    const idx = Math.round((mx - PADDING.left - BAR_WIDTH / 2) / step);
-    if (idx >= 0 && idx < visible.length) {
-      const bar = visible[idx];
-      const toY = (v: number) => PADDING.top + (height - PADDING.top - PADDING.bottom) * (1 - (v - Math.min(...visible.map(d => d.low))) / (Math.max(...visible.map(d => d.high)) - Math.min(...visible.map(d => d.low)) || 1));
-      setTooltip({ x: mx + 10, y: Math.min(my, height - 80), bar });
-    } else {
-      setTooltip(null);
-    }
-  };
+  // ── Resize observer ──
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => chartRef.current?.resize());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   if (!symbol || symbol.length < 6) {
     return <div className={`text-xs text-gray-600 text-center py-6 ${className}`}>输入股票代码后显示K线</div>;
@@ -252,30 +325,7 @@ export default function KlineChart({ symbol, trades = [], height = 240, classNam
           <div className="text-xs text-gray-500 animate-pulse">加载K线...</div>
         </div>
       )}
-      <canvas
-        ref={canvasRef}
-        style={{ width: '100%', height, cursor: 'crosshair' }}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => setTooltip(null)}
-      />
-      {tooltip && (
-        <div
-          className="absolute z-20 bg-dark-100 border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs shadow-xl pointer-events-none"
-          style={{ left: tooltip.x, top: tooltip.y }}
-        >
-          <div className="text-gray-400 mb-0.5">
-            {tooltip.bar.trade_date.length === 8
-              ? `${tooltip.bar.trade_date.slice(0, 4)}-${tooltip.bar.trade_date.slice(4, 6)}-${tooltip.bar.trade_date.slice(6, 8)}`
-              : tooltip.bar.trade_date}
-          </div>
-          <div className="font-mono space-y-0.5">
-            <div><span className="text-gray-500">开 </span><span className="text-white">{tooltip.bar.open.toFixed(2)}</span></div>
-            <div><span className="text-gray-500">高 </span><span className="text-white">{tooltip.bar.high.toFixed(2)}</span></div>
-            <div><span className="text-gray-500">低 </span><span className="text-white">{tooltip.bar.low.toFixed(2)}</span></div>
-            <div><span className="text-gray-500">收 </span><span className={tooltip.bar.close >= tooltip.bar.open ? 'text-red-400' : 'text-emerald-400'}>{tooltip.bar.close.toFixed(2)}</span></div>
-          </div>
-        </div>
-      )}
+      <div ref={containerRef} style={{ width: '100%', height }} />
     </div>
   );
 }
