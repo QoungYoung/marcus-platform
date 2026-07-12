@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { tradesApi } from '../api/client';
+import { tradesApi, portfolioApi, strategyApi, marketApi } from '../api/client';
 import type { AxiosError } from 'axios';
 
 interface TradeRecord {
@@ -14,6 +14,27 @@ interface TradeRecord {
   created_at: string;
   reason?: string;
   id?: number;
+}
+
+interface AccountSnapshot {
+  total_asset: number;
+  available_cash: number;
+  position_ratio: number;
+  total_pnl: number;
+  realized_pnl: number;
+  float_pnl: number;
+}
+
+interface PiStatus {
+  stance: string;
+  stance_code: string;
+  position_limit: number;
+}
+
+interface QuoteData {
+  price: number;
+  change_pct: number;
+  name: string;
 }
 
 export default function TradingPage() {
@@ -35,9 +56,68 @@ export default function TradingPage() {
   const [voidTarget, setVoidTarget] = useState<{ id: number; symbol: string; direction: string } | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
+  // ── 右侧辅助面板状态 ──
+  const [account, setAccount] = useState<AccountSnapshot | null>(null);
+  const [piStatus, setPiStatus] = useState<PiStatus | null>(null);
+  const [quoteSymbol, setQuoteSymbol] = useState('');
+  const [quoteData, setQuoteData] = useState<QuoteData | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+
   useEffect(() => {
     fetchHistory();
+    fetchAccount();
+    fetchPiStatus();
   }, []);
+
+  const fetchAccount = async () => {
+    try {
+      const res = await portfolioApi.getSummary();
+      const d = res.data;
+      setAccount({
+        total_asset: d.total_asset,
+        available_cash: d.available_cash,
+        position_ratio: d.position_ratio,
+        total_pnl: d.total_pnl,
+        realized_pnl: d.realized_pnl,
+        float_pnl: d.float_pnl,
+      });
+    } catch {
+      // silent
+    }
+  };
+
+  const fetchPiStatus = async () => {
+    try {
+      const res = await strategyApi.getCurrent();
+      setPiStatus({
+        stance: res.data.stance,
+        stance_code: res.data.stance_code,
+        position_limit: res.data.position_limit,
+      });
+    } catch {
+      // silent
+    }
+  };
+
+  const handleQuoteLookup = async () => {
+    if (!quoteSymbol.trim()) return;
+    setQuoteLoading(true);
+    setQuoteError(null);
+    setQuoteData(null);
+    try {
+      const res = await marketApi.getQuote(quoteSymbol.trim().toUpperCase());
+      setQuoteData({
+        price: res.data.price ?? res.data.current_price ?? 0,
+        change_pct: res.data.change_pct ?? res.data.percent ?? 0,
+        name: res.data.name ?? '',
+      });
+    } catch {
+      setQuoteError('查询失败');
+    } finally {
+      setQuoteLoading(false);
+    }
+  };
 
   const showToast = (type: 'success' | 'error', msg: string) => {
     setToast({ type, msg });
@@ -126,7 +206,7 @@ export default function TradingPage() {
   const amount = price && volume ? parseFloat(price) * parseInt(volume) : 0;
 
   return (
-    <div className="p-6 space-y-6 h-full overflow-auto">
+    <div className="p-6 h-full overflow-auto">
       {/* Toast */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-slide-in ${
@@ -138,88 +218,91 @@ export default function TradingPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold tracking-tight">{t('trading.title')}</h1>
         <button
-          onClick={fetchHistory}
+          onClick={() => { fetchHistory(); fetchAccount(); fetchPiStatus(); }}
           className="px-3 py-1.5 text-xs rounded-lg bg-dark-100 border border-gray-700 text-gray-400 hover:text-white hover:border-gray-600 transition-colors"
         >
           🔄 刷新
         </button>
       </div>
 
-      {/* New Trade Form */}
-      <div className="bg-dark-200 rounded-xl border border-gray-800 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-800 bg-dark-100/50">
-          <h2 className="text-base font-semibold">{t('trading.execute')}</h2>
-        </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ── 左侧: 执行交易 + 历史记录 ── */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* New Trade Form */}
+          <div className="bg-dark-200 rounded-xl border border-gray-800 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-800 bg-dark-100/50">
+              <h2 className="text-base font-semibold">{t('trading.execute')}</h2>
+            </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          <div className="grid grid-cols-4 gap-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.symbol')}</label>
-              <input
-                type="text"
-                value={symbol}
-                onChange={e => setSymbol(e.target.value.toUpperCase())}
-                placeholder="SH600519"
-                className="w-full bg-dark-100 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.price')}</label>
-              <input
-                type="number"
-                step="0.01"
-                value={price}
-                onChange={e => setPrice(e.target.value)}
-                placeholder="0.00"
-                className="w-full bg-dark-100 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.volume')}</label>
-              <input
-                type="number"
-                value={volume}
-                onChange={e => setVolume(e.target.value)}
-                placeholder="100"
-                min="100"
-                step="100"
-                className="w-full bg-dark-100 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.direction')}</label>
-              <div className="flex rounded-lg overflow-hidden border border-gray-700">
-                <button
-                  type="button"
-                  onClick={() => setSide('buy')}
-                  className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-                    side === 'buy'
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-dark-100 text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  {t('trading.buy')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSide('sell')}
-                  className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-                    side === 'sell'
-                      ? 'bg-red-600 text-white'
-                      : 'bg-dark-100 text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  {t('trading.sell')}
-                </button>
+            <form onSubmit={handleSubmit} className="p-6 space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.symbol')}</label>
+                  <input
+                    type="text"
+                    value={symbol}
+                    onChange={e => setSymbol(e.target.value.toUpperCase())}
+                    placeholder="SH600519"
+                    className="w-full bg-dark-100 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.direction')}</label>
+                  <div className="flex rounded-lg overflow-hidden border border-gray-700">
+                    <button
+                      type="button"
+                      onClick={() => setSide('buy')}
+                      className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
+                        side === 'buy'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-dark-100 text-gray-400 hover:text-gray-200'
+                      }`}
+                    >
+                      {t('trading.buy')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSide('sell')}
+                      className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
+                        side === 'sell'
+                          ? 'bg-red-600 text-white'
+                          : 'bg-dark-100 text-gray-400 hover:text-gray-200'
+                      }`}
+                    >
+                      {t('trading.sell')}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.price')}</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={price}
+                    onChange={e => setPrice(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full bg-dark-100 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">{t('trading.volume')}</label>
+                  <input
+                    type="number"
+                    value={volume}
+                    onChange={e => setVolume(e.target.value)}
+                    placeholder="100"
+                    min="100"
+                    step="100"
+                    className="w-full bg-dark-100 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
+                    required
+                  />
+                </div>
               </div>
-            </div>
-          </div>
 
           {/* Reason + Amount */}
           <div className="flex gap-4 items-end">
@@ -438,6 +521,170 @@ export default function TradingPage() {
             </table>
           </div>
         )}
+      </div>
+
+        </div>
+
+        {/* ── 右侧: 交易辅助面板 ── */}
+        <div className="space-y-4">
+          {/* Pi 立场卡片 */}
+          <div className="bg-dark-200 rounded-xl border border-gray-800 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-800 bg-dark-100/50">
+              <h3 className="text-sm font-semibold">Pi 立场</h3>
+            </div>
+            <div className="p-4">
+              {piStatus ? (
+                <div className="flex items-center gap-3">
+                  <div className={`w-4 h-4 rounded-full shadow-lg ${
+                    piStatus.stance === 'green' ? 'bg-emerald-400 shadow-emerald-400/30' :
+                    piStatus.stance === 'red' ? 'bg-red-400 shadow-red-400/30' :
+                    'bg-yellow-400 shadow-yellow-400/30'
+                  }`} />
+                  <div>
+                    <span className={`text-lg font-bold uppercase ${
+                      piStatus.stance === 'green' ? 'text-emerald-400' :
+                      piStatus.stance === 'red' ? 'text-red-400' :
+                      'text-yellow-400'
+                    }`}>
+                      {piStatus.stance === 'green' ? 'GREEN 积极' :
+                       piStatus.stance === 'red' ? 'RED 防守' :
+                       'YELLOW 中性'}
+                    </span>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      仓位限制: {piStatus.position_limit}%
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <div className="w-4 h-4 rounded-full bg-gray-600 animate-pulse" />
+                  <span className="text-sm text-gray-500">加载中...</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 账户快照卡片 */}
+          <div className="bg-dark-200 rounded-xl border border-gray-800 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-800 bg-dark-100/50">
+              <h3 className="text-sm font-semibold">账户快照</h3>
+            </div>
+            <div className="p-4 space-y-3">
+              {account ? (
+                <>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-gray-500">总资产</span>
+                    <span className="text-sm font-mono font-semibold text-white">
+                      ¥{account.total_asset.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-gray-500">可用现金</span>
+                    <span className="text-sm font-mono text-emerald-400">
+                      ¥{account.available_cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-gray-500">仓位占比</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-20 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            (account.position_ratio ?? 0) > 80 ? 'bg-red-500' :
+                            (account.position_ratio ?? 0) > 50 ? 'bg-yellow-500' :
+                            'bg-emerald-500'
+                          }`}
+                          style={{ width: `${Math.min(account.position_ratio ?? 0, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-sm font-mono text-gray-300">
+                        {(account.position_ratio ?? 0).toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                  <hr className="border-gray-800" />
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-gray-500">累计盈亏</span>
+                    <span className={`text-sm font-mono font-semibold ${(account.total_pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {(account.total_pnl ?? 0) >= 0 ? '+' : ''}¥{(account.total_pnl ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-gray-500">已实现</span>
+                    <span className={`text-xs font-mono ${(account.realized_pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {(account.realized_pnl ?? 0) >= 0 ? '+' : ''}¥{(account.realized_pnl ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-gray-500">浮动盈亏</span>
+                    <span className={`text-xs font-mono ${(account.float_pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {(account.float_pnl ?? 0) >= 0 ? '+' : ''}¥{(account.float_pnl ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  {[...Array(4)].map((_, i) => (
+                    <div key={i} className="flex justify-between animate-pulse">
+                      <div className="h-3 bg-gray-800 rounded w-16" />
+                      <div className="h-3 bg-gray-800 rounded w-24" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 快速报价卡片 */}
+          <div className="bg-dark-200 rounded-xl border border-gray-800 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-800 bg-dark-100/50">
+              <h3 className="text-sm font-semibold">快速报价</h3>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={quoteSymbol}
+                  onChange={e => setQuoteSymbol(e.target.value.toUpperCase())}
+                  onKeyDown={e => e.key === 'Enter' && handleQuoteLookup()}
+                  placeholder="SH600519"
+                  className="flex-1 bg-dark-100 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
+                />
+                <button
+                  onClick={handleQuoteLookup}
+                  disabled={quoteLoading || !quoteSymbol.trim()}
+                  className="px-3 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg transition-colors"
+                >
+                  {quoteLoading ? '...' : '查询'}
+                </button>
+              </div>
+
+              {quoteError && (
+                <div className="text-xs text-red-400">{quoteError}</div>
+              )}
+
+              {quoteData && (
+                <div className="bg-dark-100 rounded-lg p-3 space-y-2">
+                  {quoteData.name && (
+                    <div className="text-xs text-gray-400">{quoteData.name}</div>
+                  )}
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xl font-mono font-bold text-white">
+                      ¥{quoteData.price.toFixed(2)}
+                    </span>
+                    <span className={`text-sm font-mono font-semibold px-2 py-0.5 rounded ${
+                      quoteData.change_pct >= 0
+                        ? 'bg-emerald-950/50 text-emerald-400'
+                        : 'bg-red-950/50 text-red-400'
+                    }`}>
+                      {quoteData.change_pct >= 0 ? '+' : ''}{quoteData.change_pct.toFixed(2)}%
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Void Confirmation Dialog */}
