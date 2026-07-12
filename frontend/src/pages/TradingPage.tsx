@@ -70,6 +70,30 @@ export default function TradingPage() {
     fetchPiStatus();
   }, []);
 
+  // ── 输入股票代码后自动获取实时价格 ──
+  useEffect(() => {
+    if (!symbol.trim() || symbol.length < 6) return;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await marketApi.getQuote(symbol.trim().toUpperCase());
+        const d = res.data;
+        const realPrice = d.current ?? d.price ?? 0;
+        if (realPrice > 0) {
+          setPrice(realPrice.toFixed(2));
+          // 同步填入快速报价面板
+          setQuoteData({
+            price: realPrice,
+            change_pct: d.percent ?? d.change_pct ?? 0,
+            name: d.name ?? '',
+          });
+        }
+      } catch {
+        // 代码不存在或其他错误，静默忽略
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [symbol]);
+
   const fetchAccount = async () => {
     try {
       const res = await portfolioApi.getSummary();
