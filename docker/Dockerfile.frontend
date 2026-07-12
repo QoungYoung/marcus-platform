@@ -15,7 +15,7 @@ RUN npm config set registry https://registry.npmmirror.com && npm ci
 COPY frontend/ .
 
 # Build (skip tsc in Docker — 类型检查在开发阶段已完成，省内存)
-ENV NODE_OPTIONS="--max-old-space-size=768"
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 RUN npx vite build
 
 # Production nginx image
