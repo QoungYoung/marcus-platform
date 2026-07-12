@@ -204,7 +204,10 @@ class PositionTierMonitor:
         while self.running:
             cycle += 1
             try:
-                if self._is_trading_time() and not self._is_blocked_window():
+                if not self._is_trading_day():
+                    if cycle % 20 == 1:
+                        print(f"[加仓] ⏸️ 非交易日，跳过 (cycle={cycle})", file=sys.stderr)
+                elif self._is_trading_time() and not self._is_blocked_window():
                     print(f"[加仓] 🔄 第 {cycle} 轮层级检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
                     summary = self._check_all_positions()
                     if summary.get("total", 0) > 0 or summary.get("outflow", 0) > 0:
@@ -235,6 +238,22 @@ class PositionTierMonitor:
         morning = self.TRADING_START <= now <= self.LUNCH_START
         afternoon = self.LUNCH_END <= now <= self.TRADING_END
         return morning or afternoon
+
+    def _is_trading_day(self) -> bool:
+        """检查今天是否为交易日（带日缓存，避免频繁API调用）"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        if getattr(self, '_last_trading_day_check_date', '') == today:
+            return getattr(self, '_last_trading_day_result', True)
+        try:
+            from core.utils.trade_day_utils import is_today_trade_day
+            is_trade, reason = is_today_trade_day()
+            self._last_trading_day_check_date = today
+            self._last_trading_day_result = is_trade
+            if not is_trade:
+                logger.info(f"[加仓] 非交易日: {reason}")
+            return is_trade
+        except Exception:
+            return True  # API 不可用时默认视为交易日
 
     def _is_blocked_window(self) -> bool:
         """返回是否处于禁止加仓的时间窗口"""
@@ -1135,7 +1154,8 @@ class PositionTierMonitor:
     def execute_add_position(self, symbol: str, evaluation: TierEvaluation,
                              current_price: float, account: dict,
                              pi_stance: str = 'yellow',
-                             pos_mv: float = None) -> Optional[dict]:
+                             pos_mv: float = None,
+                             gate: GateResult = None) -> Optional[dict]:
         """代码层自动执行加仓下单。直接用 tier 目标仓位计算加仓量，不受新仓约束限制。"""
         total_asset = account.get('total_asset', 100000)
         available_cash = account.get('available_cash', 0)
@@ -1240,6 +1260,11 @@ class PositionTierMonitor:
                     + (f'→{evaluation.target_tier}' if not is_refill else '补仓')
                     + f', +{add_shares}股, 浮盈信息, '
                     f'仓位 {current_pct:.1%}→{current_pct + add_pct:.1%}'
+                )
+                # ── QQ 推送：包含完整门控结果 ──
+                self._send_execution_qq_notification(
+                    symbol, evaluation, gate, add_shares, add_pct,
+                    current_pct, current_price, is_refill
                 )
                 logger.info(
                     f"[加仓] ✅ {label} {symbol}: "
@@ -1441,7 +1466,7 @@ class PositionTierMonitor:
 
             if gate.allowed:
                 # ── 第 3 层：执行加仓 ──
-                success = self.execute_add_position(symbol, evaluation, current_price, account, pi_stance, current_price * volume)
+                success = self.execute_add_position(symbol, evaluation, current_price, account, pi_stance, current_price * volume, gate)
                 if success:
                     summary["executed"] += 1
                 else:
@@ -1511,6 +1536,51 @@ class PositionTierMonitor:
                 f.write(json.dumps(notif, ensure_ascii=False) + '\n')
         except Exception:
             pass
+
+    def _send_execution_qq_notification(self, symbol: str, evaluation: TierEvaluation,
+                                         gate: GateResult, add_shares: int,
+                                         add_pct: float, current_pct: float,
+                                         current_price: float, is_refill: bool) -> None:
+        """构建并发送包含完整门控结果的 QQ 加仓通知"""
+        try:
+            from app.services.qqbot_service import send_qq_notification
+
+            is_refill_flag = is_refill
+            label = '补仓' if is_refill_flag else '自动加仓'
+            tier_info = (f"{evaluation.current_tier}→{evaluation.target_tier}"
+                         if not is_refill_flag else f"{evaluation.current_tier}（补仓）")
+
+            # ── 解析门控结果 ──
+            gate_lines = []
+            if gate and gate.checks:
+                for status, detail in gate.checks:
+                    if status == 'ALLOWED':
+                        gate_lines.append(f"  ✓ {detail}")
+                    elif status == 'PASSED':
+                        gate_lines.append(f"  ✓ {detail}")
+                    elif status == 'DOWNGRADE':
+                        gate_lines.append(f"  ⚠ {detail}")
+                    elif status == 'BLOCKED':
+                        gate_lines.append(f"  ✗ {detail}")
+            gate_detail = '\n'.join(gate_lines) if gate_lines else '  (门控详情缺失)'
+
+            msg = (
+                f"[加仓·{label}] {symbol}\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"触发信号: {evaluation.signal}\n"
+                f"层级: {tier_info}\n"
+                f"价格: {current_price:.2f}\n"
+                f"加仓: +{add_shares}股 (+{add_pct:.1%})\n"
+                f"仓位: {current_pct:.1%}→{current_pct + add_pct:.1%}\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"门控确认:\n{gate_detail}\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"时间: {datetime.now().strftime('%H:%M:%S')}"
+            )
+            send_qq_notification(msg)
+            print(f"[加仓] 📱 QQ推送: {symbol} {label}成功, 门控{len(gate_lines)}项确认", file=sys.stderr)
+        except Exception as e:
+            logger.debug(f"[加仓] QQ推送失败: {e}")
 
     def get_notifications(self, since: Optional[str] = None) -> List[dict]:
         """获取通知列表。since 为 ISO 时间字符串，仅返回此时间之后的通知。"""

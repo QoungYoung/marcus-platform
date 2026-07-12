@@ -108,7 +108,10 @@ class LongTermPoolMonitor:
         while self.running:
             cycle += 1
             try:
-                if self._is_trading_time() and not self._is_morning_volatility():
+                if not self._is_trading_day():
+                    if cycle % 4 == 1:
+                        print(f"[长期池] ⏸️ 非交易日，跳过 (cycle={cycle})", file=sys.stderr)
+                elif self._is_trading_time() and not self._is_morning_volatility():
                     self._daily_reset()
                     self._check_candidates()
                 else:
@@ -133,6 +136,22 @@ class LongTermPoolMonitor:
             (self.TRADING_START <= now <= self.LUNCH_START) or
             (self.LUNCH_END <= now <= self.TRADING_END)
         )
+
+    def _is_trading_day(self) -> bool:
+        """检查今天是否为交易日（带日缓存，避免频繁API调用）"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        if getattr(self, '_last_trading_day_check_date', '') == today:
+            return getattr(self, '_last_trading_day_result', True)
+        try:
+            from core.utils.trade_day_utils import is_today_trade_day
+            is_trade, reason = is_today_trade_day()
+            self._last_trading_day_check_date = today
+            self._last_trading_day_result = is_trade
+            if not is_trade:
+                logger.info(f"[长期池] 非交易日: {reason}")
+            return is_trade
+        except Exception:
+            return True  # API 不可用时默认视为交易日
 
     def _is_morning_volatility(self) -> bool:
         now = datetime.now().time()
