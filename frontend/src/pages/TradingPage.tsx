@@ -73,14 +73,15 @@ export default function TradingPage() {
   const fetchAccount = async () => {
     try {
       const res = await portfolioApi.getSummary();
-      const d = res.data;
+      const a = res.data.account;
+      if (!a) return;
       setAccount({
-        total_asset: d.total_asset,
-        available_cash: d.available_cash,
-        position_ratio: d.position_ratio,
-        total_pnl: d.total_pnl,
-        realized_pnl: d.realized_pnl,
-        float_pnl: d.float_pnl,
+        total_asset: a.total_asset,
+        available_cash: a.available_cash,
+        position_ratio: a.position_ratio,
+        total_pnl: a.total_pnl,
+        realized_pnl: a.realized_pnl,
+        float_pnl: a.float_pnl,
       });
     } catch {
       // silent
