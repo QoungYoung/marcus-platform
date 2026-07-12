@@ -6,6 +6,10 @@ services:
     image: postgres:16-alpine
     container_name: marcus-postgres
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     environment:
       POSTGRES_USER: marcus
       POSTGRES_PASSWORD: ${DB_PASSWORD:-marcus123}
@@ -25,6 +29,10 @@ services:
 
   # Backend API
   backend:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     build:
       context: ..
       dockerfile: docker/Dockerfile.backend
@@ -54,6 +62,10 @@ services:
 
   # Pi Server (Pi Agent HTTP Server)
   piserver:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     build:
       context: ..
       dockerfile: docker/Dockerfile.piserver
@@ -75,6 +87,10 @@ services:
 
   # Frontend (Production Build)
   frontend:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     build:
       context: ..
       dockerfile: docker/Dockerfile.frontend

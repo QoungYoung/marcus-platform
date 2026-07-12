@@ -310,22 +310,24 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
     return () => ro.disconnect();
   }, []);
 
-  if (!symbol || symbol.length < 6) {
-    return <div className={`text-xs text-gray-600 text-center py-6 ${className}`}>输入股票代码后显示K线</div>;
-  }
-
-  if (error) {
-    return <div className={`text-xs text-red-400 text-center py-6 ${className}`}>{error}</div>;
-  }
-
   return (
     <div className={`relative ${className}`}>
-      {loading && (
+      {/* 始终渲染 chart 容器，确保 containerRef 在 mount 时就能绑定 */}
+      <div ref={containerRef} style={{ width: '100%', height }} />
+      {/* 无 symbol / error / loading 用覆盖层展示 */}
+      {(!symbol || symbol.length < 6) ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-dark-200 rounded-lg">
+          <span className="text-xs text-gray-600">输入股票代码后显示K线</span>
+        </div>
+      ) : error ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-dark-200 rounded-lg">
+          <span className="text-xs text-red-400">{error}</span>
+        </div>
+      ) : loading ? (
         <div className="absolute inset-0 flex items-center justify-center z-10 bg-dark-200/60 rounded-lg">
           <div className="text-xs text-gray-500 animate-pulse">加载K线...</div>
         </div>
-      )}
-      <div ref={containerRef} style={{ width: '100%', height }} />
+      ) : null}
     </div>
   );
 }
