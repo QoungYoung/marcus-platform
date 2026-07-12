@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { tradesApi, portfolioApi, strategyApi, marketApi } from '../api/client';
+import KlineChart from '../components/KlineChart';
 import type { AxiosError } from 'axios';
 
 interface TradeRecord {
@@ -228,6 +229,19 @@ export default function TradingPage() {
   const filteredHistory = filter === 'all'
     ? history
     : history.filter(t => t.direction === filter);
+
+  // ── K线图买卖点标记 ──
+  const tradeMarkers = useMemo(() => {
+    if (!symbol) return [];
+    const bare = symbol.replace(/^(SH|SZ|BJ)/, '');
+    return history
+      .filter(t => t.symbol.replace(/^(SH|SZ|BJ)/, '') === bare)
+      .map(t => ({
+        price: t.price,
+        date: t.created_at.slice(0, 10),
+        direction: t.direction,
+      }));
+  }, [symbol, history]);
 
   const amount = price && volume ? parseFloat(price) * parseInt(volume) : 0;
 
@@ -502,11 +516,26 @@ export default function TradingPage() {
                         </span>
                       </td>
                       <td className="px-5 py-3.5">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                          trade.direction === '买入'
-                            ? 'bg-emerald-950/50 text-emerald-400'
-                            : 'bg-red-950/50 text-red-400'
-                        }`}>
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSymbol(trade.symbol);
+                            setSide(trade.direction === '买入' ? 'sell' : 'buy');
+                            setPrice(trade.price.toString());
+                            setVolume(trade.volume.toString());
+                            setResult(null);
+                            setError(null);
+                            const toggled = trade.direction === '买入' ? '卖出' : '买入';
+                            showToast('success', `已填充 ${trade.symbol} 方向切换为 ${toggled}`);
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:ring-1 hover:ring-white/30 transition-all ${
+                            trade.direction === '买入'
+                              ? 'bg-emerald-950/50 text-emerald-400'
+                              : 'bg-red-950/50 text-red-400'
+                          }`}
+                          title={`点击切换为${trade.direction === '买入' ? '卖出' : '买入'}方向并填充`}
+                        >
                           <span className={`w-1.5 h-1.5 rounded-full ${
                             trade.direction === '买入' ? 'bg-emerald-400' : 'bg-red-400'
                           }`} />
@@ -720,6 +749,20 @@ export default function TradingPage() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* K线图 + 买卖点 */}
+          <div className="bg-dark-200 rounded-xl border border-gray-800 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-800 bg-dark-100/50">
+              <h3 className="text-sm font-semibold">K线 · 买卖点</h3>
+            </div>
+            <div className="p-2">
+              <KlineChart
+                symbol={symbol}
+                trades={tradeMarkers}
+                height={260}
+              />
             </div>
           </div>
         </div>
