@@ -14,9 +14,9 @@ RUN npm config set registry https://registry.npmmirror.com && npm ci
 # Copy source files
 COPY frontend/ .
 
-# Build (increase memory for large bundles)
-ENV NODE_OPTIONS="--max-old-space-size=512"
-RUN npm run build
+# Build (skip tsc in Docker — 类型检查在开发阶段已完成，省内存)
+ENV NODE_OPTIONS="--max-old-space-size=768"
+RUN npx vite build
 
 # Production nginx image
 FROM nginx:alpine
