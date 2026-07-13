@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  ComposedChart, Area,
+  BarChart, Bar, Cell,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
 import { portfolioApi, marketApi, tradesApi, schedulerApi } from '../api/client';
@@ -45,6 +45,8 @@ interface StopLossStatus {
 
 type SortKey = 'market_value' | 'floating_pnl' | 'floating_pnl_pct' | 'weight';
 
+const GREEN = '#2ecc71'; const RED = '#e74c3c'; const GOLD = '#f0b90b';
+
 // ── 工具 ──
 function fmtMoney(val: number): string {
   const abs = Math.abs(val);
@@ -63,33 +65,6 @@ function cleanStockName(name: string | undefined, symbol: string): string {
   return name.replace(/^(SH|SZ|BJ)\d+/, '').trim() || symbol;
 }
 
-// ── Mock ──
-function generateEquityCurve(initialCapital: number, totalReturnPct: number, days = 60): EquityPoint[] {
-  const result: EquityPoint[] = [];
-  const seed = Math.abs(totalReturnPct) * 1000 + initialCapital * 0.01;
-  let equity = initialCapital;
-  const now = new Date();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(now); d.setDate(d.getDate() - (days - 1 - i));
-    const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
-    const noise = Math.sin(seed + i * 2.7 + i * i * 0.03) * 0.008;
-    const t = totalReturnPct / (days * 100);
-    equity *= (1 + t + noise);
-    result.push({ date: dateStr, value: Math.round(equity) });
-  }
-  return result;
-}
-function generateDailyPnl(days = 60): DailyPnl[] {
-  const result: DailyPnl[] = [];
-  const now = new Date();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(now); d.setDate(d.getDate() - (days - 1 - i));
-    const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
-    const pnl = Math.round(Math.sin(i * 1.7 + i * i * 0.05) * 1500 + (i < 30 ? 200 : -100) + Math.sin(i * 3.1) * 800);
-    result.push({ date: dateStr, pnl });
-  }
-  return result;
-}
 function calcMaxDrawdown(curve: EquityPoint[]): number {
   let peak = 0; let maxDD = 0;
   for (const pt of curve) {
@@ -243,14 +218,17 @@ export default function PortfolioPage() {
   const totalAsset = summary?.account?.total_asset || 0;
 
   const equityCurve: EquityPoint[] = useMemo(() => {
-    if (realEquity.length > 0) {
-      return realEquity.map(p => ({ date: p.date.slice(5), value: p.equity }));
-    }
-    return generateEquityCurve(initialCap, totalReturnPct, 60);
-  }, [realEquity, initialCap, totalReturnPct]);
+    return realEquity.map(p => ({ date: p.date.slice(5), value: p.equity }));
+  }, [realEquity]);
 
   const maxDrawdown = useMemo(() => calcMaxDrawdown(equityCurve), [equityCurve]);
-  const dailyPnlData = useMemo(() => generateDailyPnl(60), []);
+  const dailyPnlData = useMemo(() => {
+    if (realEquity.length < 2) return [];
+    return realEquity.slice(1).map((p, i) => ({
+      date: p.date.slice(5),
+      pnl: p.equity - realEquity[i].equity,
+    }));
+  }, [realEquity]);
   const volatility = useMemo(() => {
     const returns = equityCurve.slice(1).map((p, i) => (p.value - equityCurve[i].value) / equityCurve[i].value);
     const mean = returns.reduce((a, b) => a + b, 0) / (returns.length || 1);
@@ -295,7 +273,6 @@ export default function PortfolioPage() {
   // 图表常量
   const G = 'rgba(255,255,255,0.04)';
   const A = 'var(--agent-text-dim, #6a7d9b)';
-  const GOLD = '#f0b90b'; const GREEN = '#2ecc71'; const RED = '#e74c3c';
 
   return (
     <div className="cp-page">
@@ -480,32 +457,32 @@ export default function PortfolioPage() {
 
       {/* ═══ 图表行 ═══ */}
       <div className="cp-row-charts">
-        {/* 权益曲线 */}
+        {/* 每日盈亏柱状图 */}
         <div className="cp-panel" style={{ minHeight: 280 }}>
           <div className="cp-panel-header">
-            <i className="fas fa-chart-area" />
-            <span className="cp-panel-title">{t('portfolio.equityCurve')}</span>
-            <button className="cp-refresh-btn" onClick={refreshEquity} title="刷新曲线" style={{ marginLeft: 'auto' }}>
+            <i className="fas fa-chart-bar" />
+            <span className="cp-panel-title">{t('portfolio.dailyPnL')}</span>
+            <button className="cp-refresh-btn" onClick={refreshEquity} title="刷新" style={{ marginLeft: 'auto' }}>
               <i className={`fas fa-sync-alt ${loadingEquity ? 'fa-spin' : ''}`} />
             </button>
           </div>
           <div className="cp-panel-body" style={{ padding: '4px 8px 8px' }}>
-            {loadingEquity ? <SkeletonBlock h={220} /> : (
+            {loadingEquity ? <SkeletonBlock h={220} /> : dailyPnlData.length === 0 ? (
+              <div className="cp-empty" style={{ height: 220 }}><i className="fas fa-chart-bar" /><span>{t('common.noData')}</span></div>
+            ) : (
               <div className="cp-chart-h240">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={equityCurve}>
-                    <defs>
-                      <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={GOLD} stopOpacity={0.18} />
-                        <stop offset="100%" stopColor={GOLD} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
+                  <BarChart data={dailyPnlData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={G} />
-                    <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(equityCurve.length / 6) - 1)} />
-                    <YAxis stroke={A} fontSize={10} tickLine={false} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
-                    <Tooltip content={<ETip />} />
-                    <Area type="monotone" dataKey="value" name="账户权益" stroke={GOLD} strokeWidth={2} fill="url(#eqGrad)" dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }} />
-                  </ComposedChart>
+                    <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(dailyPnlData.length / 6) - 1)} />
+                    <YAxis stroke={A} fontSize={10} tickLine={false} tickFormatter={(v: number) => fmtMoneyShort(v)} width={50} />
+                    <Tooltip content={<PTip />} />
+                    <Bar dataKey="pnl" radius={[1, 1, 0, 0]}>
+                      {dailyPnlData.map((entry, i) => (
+                        <Cell key={i} fill={entry.pnl >= 0 ? GREEN : RED} />
+                      ))}
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
             )}
@@ -794,9 +771,10 @@ function SkeletonList({ n = 5 }: { n?: number }) {
 // ══════════════════ Tooltip ══════════════════
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function ETip({ active, payload, label }: any) {
+function PTip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-  return <div className="cp-tip-box"><div className="cp-tip-label">{label}</div>{(payload as Array<{ name: string; value: number; color: string }>).map((p, i) => <div key={i} className="cp-tip-row"><span className="l" style={{ color: p.color }}>{p.name}</span><span className="v">¥{p.value.toLocaleString()}</span></div>)}</div>;
+  const pnl = payload[0]?.value || 0;
+  return <div className="cp-tip-box"><div className="cp-tip-label">{label}</div><div className="cp-tip-row"><span className="l">日盈亏</span><span className="v" style={{ color: pnl >= 0 ? GREEN : RED }}>{pnl >= 0 ? '+' : ''}¥{pnl.toLocaleString()}</span></div></div>;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function PieTip({ active, payload }: any) {
