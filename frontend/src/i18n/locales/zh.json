@@ -40,6 +40,8 @@
     "volume": "数量",
     "avgPrice": "成本价",
     "currentPrice": "现价",
+    "todayPnL": "今日盈亏",
+    "floatingPnL": "浮动盈亏",
     "marketValue": "市值",
     "profit": "盈亏",
     "profitRate": "收益率",

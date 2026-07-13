@@ -161,6 +161,7 @@ class StopLossMonitor:
                 for p in basic_positions:
                     positions.append({
                         "symbol": p["symbol"],
+                        "name": p.get("name", ""),
                         "avg_price": round(p.get("avg_price", 0), 2),
                         "current_price": 0,
                         "volume": p.get("volume", 0),
@@ -770,6 +771,7 @@ class StopLossMonitor:
             if not symbol:
                 continue
 
+            name = pos.get('name', '')
             avg_price = pos.get('avg_price', 0)
             current_price = pos.get('current_price', 0)
             total_volume = pos.get('volume', 0)
@@ -819,6 +821,7 @@ class StopLossMonitor:
 
             results.append({
                 "symbol": symbol,
+                "name": name,
                 "avg_price": round(avg_price, 2),
                 "current_price": round(current_price, 2),
                 "volume": volume,

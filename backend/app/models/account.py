@@ -12,6 +12,7 @@ class PositionResponse(BaseModel):
     avg_price: float
     current_price: float
     change_pct: float = 0      # 当日涨跌幅(%)
+    today_pnl: float = 0       # 今日盈亏
     market_value: float
     floating_pnl: float
     floating_pnl_pct: float

@@ -280,6 +280,14 @@ async def get_portfolio():
         floating_pnl_pct = (current_price / p['avg_price'] - 1) * 100 if p['avg_price'] > 0 else 0
         total_position_value += market_value
 
+        # 今日盈亏 = volume * (current_price - prev_close)
+        # prev_close = current_price / (1 + change_pct / 100)
+        if abs(100 + change_pct) > 0.001:
+            prev_close = current_price / (1 + change_pct / 100)
+        else:
+            prev_close = current_price
+        today_pnl = p['volume'] * (current_price - prev_close)
+
         # 附加 High Water Mark
         hwm = high_water_marks.get(p['symbol'], {})
 
@@ -290,6 +298,7 @@ async def get_portfolio():
             avg_price=p['avg_price'],
             current_price=current_price,
             change_pct=change_pct,
+            today_pnl=today_pnl,
             market_value=market_value,
             floating_pnl=floating_pnl,
             floating_pnl_pct=floating_pnl_pct,

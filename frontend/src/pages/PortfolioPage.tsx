@@ -13,7 +13,7 @@ import '../styles/portfolio-page.css';
 // ── 类型 ──
 interface Position {
   symbol: string; name: string; volume: number;
-  avg_price: number; current_price: number;
+  avg_price: number; current_price: number; change_pct?: number; today_pnl?: number;
   market_value: number; floating_pnl: number; floating_pnl_pct: number;
 }
 interface Account {
@@ -31,7 +31,7 @@ interface TradeRecord { order_id?: string; symbol: string; name?: string; direct
 
 // ── 止损监控类型 ──
 interface StopDistance {
-  symbol: string; avg_price: number; current_price: number; volume: number;
+  symbol: string; name?: string; avg_price: number; current_price: number; volume: number;
   float_pnl_pct: number; t1_locked: boolean; daily_stops_used: number;
   nearest_trigger: { rule: string; distance_pct: number; danger_level: string; };
   rule_distances: Record<string, number | null>;
@@ -441,7 +441,7 @@ export default function PortfolioPage() {
             <div className="cp-sl-detail">
               <table className="cp-sl-table">
                 <thead><tr>
-                  <th>股票</th><th className="right">现价</th><th className="right">浮盈</th>
+                  <th>代码</th><th>名称</th><th className="right">成本价</th><th className="right">现价</th><th className="right">浮盈</th>
                   <th className="right">距离%</th><th className="right">最近规则</th><th className="right">风险</th>
                 </tr></thead>
                 <tbody>
@@ -455,6 +455,8 @@ export default function PortfolioPage() {
                     return (
                       <tr key={p.symbol} className={danger === 'triggered' ? 'sl-row-danger' : danger === 'critical' ? 'sl-row-critical' : ''}>
                         <td className="mono bold">{p.symbol}</td>
+                        <td className="dim">{p.name || p.symbol}</td>
+                        <td className="num mono right">¥{p.avg_price.toFixed(2)}</td>
                         <td className="num mono right">¥{p.current_price.toFixed(2)}</td>
                         <td className={`num right ${p.float_pnl_pct >= 0 ? 'pnl-up' : 'pnl-down'}`}>
                           {p.float_pnl_pct >= 0 ? '+' : ''}{p.float_pnl_pct.toFixed(2)}%</td>
@@ -501,7 +503,7 @@ export default function PortfolioPage() {
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={G} />
                     <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(equityCurve.length / 6) - 1)} />
-                    <YAxis stroke={A} fontSize={10} tickLine={false} domain={['auto', 'auto']} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
+                    <YAxis stroke={A} fontSize={10} tickLine={false} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
                     <Tooltip content={<ETip />} />
                     <Area type="monotone" dataKey="value" name="账户权益" stroke={GOLD} strokeWidth={2} fill="url(#eqGrad)" dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }} />
                     {realEquity.length === 0 && <Line type="monotone" dataKey="benchmark" name="上证基准" stroke="rgba(141,155,181,0.5)" strokeWidth={1} strokeDasharray="4 4" dot={false} />}
@@ -567,19 +569,20 @@ export default function PortfolioPage() {
                   <th>{t('portfolio.symbol')}</th><th>{t('portfolio.name')}</th>
                   <th className="right">{t('portfolio.volume')}</th><th className="right">{t('portfolio.avgPrice')}</th>
                   <th className="right">{t('portfolio.currentPrice')}</th>
-                  <th className={`right sortable ${sortKey === 'market_value' ? 'sorted' : ''}`} onClick={() => handleSort('market_value')}>
-                    {t('portfolio.marketValue')} {sortKey === 'market_value' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
+                  <th className="right">{t('portfolio.todayPnL')}</th>
                   <th className={`right sortable ${sortKey === 'floating_pnl' ? 'sorted' : ''}`} onClick={() => handleSort('floating_pnl')}>
-                    {t('portfolio.profitAmount')} {sortKey === 'floating_pnl' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
+                    {t('portfolio.floatingPnL')} {sortKey === 'floating_pnl' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
                   <th className={`right sortable ${sortKey === 'floating_pnl_pct' ? 'sorted' : ''}`} onClick={() => handleSort('floating_pnl_pct')}>
                     {t('portfolio.profitRate')} {sortKey === 'floating_pnl_pct' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
+                  <th className={`right sortable ${sortKey === 'market_value' ? 'sorted' : ''}`} onClick={() => handleSort('market_value')}>
+                    {t('portfolio.marketValue')} {sortKey === 'market_value' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
                   <th className={`right sortable ${sortKey === 'weight' ? 'sorted' : ''}`} onClick={() => handleSort('weight')}>
                     {t('portfolio.weight')} {sortKey === 'weight' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
                   <th className="right">风险</th>
                 </tr></thead>
                 <tbody>
                   {sortedPositions.length === 0 ? (
-                    <tr><td colSpan={10}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
+                    <tr><td colSpan={12}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
                   ) : sortedPositions.map(pos => {
                     const isUp = (pos.floating_pnl || 0) >= 0;
                     const weight = totalAsset > 0 ? (pos.market_value / totalAsset) * 100 : 0;
@@ -591,9 +594,11 @@ export default function PortfolioPage() {
                         <td className="num mono dim">{pos.volume.toLocaleString()}</td>
                         <td className="num mono">¥{(pos.avg_price || 0).toFixed(2)}</td>
                         <td className="num mono">¥{(pos.current_price || 0).toFixed(2)}</td>
-                        <td className="num mono bold">¥{fmtMoney(pos.market_value)}</td>
-                        <td className={`num mono ${isUp ? 'pnl-up' : 'pnl-down'}`}>{isUp ? '+' : ''}¥{(pos.floating_pnl || 0).toFixed(2)}</td>
+                        <td className={`num mono ${(pos.today_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                          {(pos.today_pnl || 0) >= 0 ? '+' : ''}¥{fmtMoney(Math.abs(pos.today_pnl || 0))}</td>
+                        <td className={`num mono ${isUp ? 'pnl-up' : 'pnl-down'}`}>{isUp ? '+' : ''}¥{fmtMoney(Math.abs(pos.floating_pnl || 0))}</td>
                         <td className="num"><span className={`cp-pnl-tag ${isUp ? 'up' : 'down'}`}>{isUp ? '+' : ''}{(pos.floating_pnl_pct || 0).toFixed(2)}%</span></td>
+                        <td className="num mono bold">¥{fmtMoney(pos.market_value)}</td>
                         <td className="num"><span className="cp-wt-tag">{weight.toFixed(1)}%</span></td>
                         <td className="num">
                           {isHeavy ? <span className="cp-risk-badge danger"><i className="fas fa-exclamation-triangle" style={{ fontSize: 8 }} /> 重仓</span>
