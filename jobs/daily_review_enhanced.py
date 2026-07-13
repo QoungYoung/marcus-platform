@@ -337,6 +337,7 @@ def generate_review_report():
                 quote = engine.get_stock_quote(symbol, use_cache=False)
                 current = float(quote.get('current', 0)) if quote else pos['avg_price']
                 change_pct = float(quote.get('percent', 0)) if quote else 0  # 个股今日涨跌%
+                last_close = float(quote.get('last_close', 0)) if quote else 0
                 name = quote.get('name', symbol) if quote else symbol
             except:
                 current = pos['avg_price']
@@ -359,9 +360,11 @@ def generate_review_report():
                 today_profit = (current - today_cost) * volume
                 today_profit_pct = (current - today_cost) / today_cost * 100 if today_cost > 0 else 0
             else:
-                # 今日无买入：用个股今日涨跌%推算持仓盈亏
-                # 昨收价 = 现价 / (1 + 涨跌%/100)
-                yesterday_close = current / (1 + change_pct / 100) if change_pct != 0 else current
+                # 今日无买入：用昨收价计算持仓盈亏
+                if last_close > 0:
+                    yesterday_close = last_close
+                else:
+                    yesterday_close = current / (1 + change_pct / 100) if change_pct != 0 else current
                 today_profit = (current - yesterday_close) * volume
                 today_profit_pct = change_pct
             

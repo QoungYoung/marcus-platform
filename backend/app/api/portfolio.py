@@ -99,6 +99,7 @@ def get_realtime_prices(symbols: list) -> dict:
                     return symbol, {
                         "price": quote.get('current'),
                         "change_pct": quote.get('percent', 0) or 0,
+                        "last_close": quote.get('last_close', 0) or 0,
                     }
             except Exception:
                 pass
@@ -440,8 +441,11 @@ async def get_portfolio():
         total_position_value += market_value
 
         # 今日盈亏 = volume * (current_price - prev_close)
-        # prev_close = current_price / (1 + change_pct / 100)
-        if abs(100 + change_pct) > 0.001:
+        # 优先使用API返回的昨收价, 开盘前current_price==last_close→today_pnl=0
+        last_close = price_data.get('last_close', 0) if isinstance(price_data, dict) else 0
+        if last_close > 0:
+            prev_close = last_close
+        elif abs(100 + change_pct) > 0.001:
             prev_close = current_price / (1 + change_pct / 100)
         else:
             prev_close = current_price
