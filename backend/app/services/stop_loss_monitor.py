@@ -1046,7 +1046,8 @@ class StopLossMonitor:
                 symbol=symbol,
                 price=price,
                 volume=volume,
-                reason=f'[StopLoss自动] {reason}'
+                reason=f'[StopLoss自动] {reason}',
+                skip_trend_constraint=True
             )
             if result.get('status') == 'executed':
                 self.today_stops[symbol] = daily_count + 1

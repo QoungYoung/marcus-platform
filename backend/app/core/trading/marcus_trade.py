@@ -453,7 +453,8 @@ class MarcusVNPyExecutor:
             'realized_pnl': realized_pnl
         }
     
-    def check_risk(self, symbol: str, price: float, volume: int, side: str) -> dict:
+    def check_risk(self, symbol: str, price: float, volume: int, side: str,
+                   skip_trend_constraint: bool = False) -> dict:
         """
         风控检查（增强版 — 包含回撤熔断、T+1拦截、仓位利用率检查）
         
@@ -544,8 +545,12 @@ class MarcusVNPyExecutor:
                 self._log_risk(risk_data)
                 return {'allowed': False, 'reason': '卖出数量超过持仓', 'data': risk_data}
 
-            # ── 规则 3.5: 卖出趋势约束（MA5>MA20 时阻止手动卖出） ──
-            trend_block = self._check_sell_trend_constraint(symbol, avg_cost=pos.get('avg_cost', 0) or pos.get('avg_price', 0), cur_price=price)
+            # ── 规则 3.5: 卖出趋势约束（MA5>MA20 时阻止手动卖出，止损卖出豁免） ──
+            if not skip_trend_constraint:
+                trend_block = self._check_sell_trend_constraint(
+                    symbol, avg_cost=pos.get('avg_cost', 0) or pos.get('avg_price', 0), cur_price=price)
+            else:
+                trend_block = ""
             if trend_block:
                 risk_data['reason'] = trend_block
                 risk_data['trend_blocked'] = True
@@ -712,12 +717,14 @@ class MarcusVNPyExecutor:
             'timestamp': trade_record['timestamp']
         }
     
-    def sell(self, symbol: str, price: float, volume: int, reason: str = "") -> dict:
+    def sell(self, symbol: str, price: float, volume: int, reason: str = "",
+             skip_trend_constraint: bool = False) -> dict:
         """卖出操作"""
         # 归一化 symbol（兼容 301566.SZ / SZ301566 / 301566 多种输入格式）
         symbol = self.engine._normalize_symbol(symbol)
         # 风控检查
-        risk_result = self.check_risk(symbol, price, volume, 'sell')
+        risk_result = self.check_risk(symbol, price, volume, 'sell',
+                                      skip_trend_constraint=skip_trend_constraint)
         if not risk_result['allowed']:
             return {
                 'status': 'rejected',
