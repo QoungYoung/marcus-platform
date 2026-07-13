@@ -694,12 +694,11 @@ class StopLossMonitor:
         self, symbol: str, current_price: float, float_pnl_pct: float
     ):
         """
-        五大技术信号综合判定：
-        ① MACD红柱连续2日缩量（价格涨但柱子变短）
-        ② RSI顶背离（价格创新高，RSI未创新高）
-        ③ 量价背离（价格上涨但成交量较前一波明显萎缩）
-        ④ KDJ(J值) > 100（极端超买）
-        ⑤ 价格脱离布林上轨外运行
+        五大技术信号综合判定（实时日内数据版）。
+
+        数据源：XueqiuEngine 实时行情 + Tushare pro.daily() 历史K线
+               + stk_factor_pro 昨日确认指标 → calculate_realtime_indicators()
+               → 实时估算 MACD/RSI/KDJ → 5 信号评估
 
         Returns:
             (None, 1.0)          — 信号不足 3 个，不触发
@@ -707,144 +706,16 @@ class StopLossMonitor:
             (reason_str, 1.0)    — ≥4 个信号，清仓
         """
         if float_pnl_pct <= 0:
-            # 只在盈利状态下检查技术背离，亏损交给其他止损规则
             return None, 1.0
 
-        today_str = datetime.now().strftime('%Y%m%d')
-        cache_key = f"{symbol}_{today_str}"
-        now = time.time()
+        from app.core.trading._tech_divergence import check_tech_divergence_signals
 
-        # 检查缓存（同一天内不重复请求 Tushare）
-        if cache_key in self._tech_divergence_cache:
-            cached_result, cached_ts = self._tech_divergence_cache[cache_key]
-            if now - cached_ts < 3600:  # 1小时缓存
-                signals, signal_names = cached_result
-                return self._eval_tech_signals(signals, signal_names, symbol)
-
-        try:
-            from app.api.indicator import _normalize_to_ts_code
-            from app.config import get_settings
-            import tushare as ts
-
-            settings = get_settings()
-            token = settings.get_tushare_token()
-            if not token:
-                return None, 1.0
-            pro = ts.pro_api(token)
-            ts_code = _normalize_to_ts_code(symbol)
-            end_d = datetime.now().strftime("%Y%m%d")
-            start_d = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
-
-            # ── 获取技术指标（stk_factor_pro）──
-            df_tech = pro.stk_factor_pro(
-                ts_code=ts_code, start_date=start_d, end_date=end_d,
-                fields='trade_date,close,macd_dif_qfq,macd_dea_qfq,'
-                       'rsi_qfq_6,kdj_k_qfq,kdj_d_qfq,boll_upper_qfq'
-            )
-
-            # ── 获取日K线（成交量）──
-            df_daily = pro.daily(
-                ts_code=ts_code, start_date=start_d, end_date=end_d,
-                fields='trade_date,close,vol'
-            )
-
-            if df_tech is None or df_tech.empty or len(df_tech) < 20:
-                return None, 1.0
-            if df_daily is None or df_daily.empty or len(df_daily) < 10:
-                return None, 1.0
-
-            df_tech = df_tech.sort_values("trade_date", ascending=True)
-            df_daily = df_daily.sort_values("trade_date", ascending=True)
-
-            # ── 对齐两个数据源的日期 ──
-            tech_dates = set(df_tech['trade_date'].values)
-            df_daily = df_daily[df_daily['trade_date'].isin(tech_dates)]
-
-            closes = [float(v) for v in df_tech['close'].values]
-            macd_difs = [float(v) for v in df_tech['macd_dif_qfq'].values]
-            macd_deas = [float(v) for v in df_tech['macd_dea_qfq'].values]
-            rsi6s = [float(v) for v in df_tech['rsi_qfq_6'].values]
-            kdj_ks = [float(v) for v in df_tech['kdj_k_qfq'].values]
-            kdj_ds = [float(v) for v in df_tech['kdj_d_qfq'].values]
-            boll_uppers = [float(v) for v in df_tech['boll_upper_qfq'].values]
-            volumes = [float(v) for v in df_daily['vol'].values]
-
-            if len(closes) < 20:
-                return None, 1.0
-
-            # ── 计算 MACD 柱（bar = 2 * (DIF - DEA)）──
-            macd_bars = [2.0 * (dif - dea) for dif, dea in zip(macd_difs, macd_deas)]
-            # 取最近 5 根
-            recent_bars = macd_bars[-5:] if len(macd_bars) >= 5 else macd_bars
-            recent_closes_for_macd = closes[-5:] if len(closes) >= 5 else closes
-
-            signals = [False] * 5
-            signal_details = []
-
-            # ── 信号 1: MACD 红柱连续 2 日缩量 ──
-            if len(recent_bars) >= 4:
-                bar_last3 = recent_bars[-3:]
-                close_last4 = recent_closes_for_macd[-4:]
-                bar_positive = all(b > 0 for b in bar_last3)
-                bar_shrinking = bar_last3[0] > bar_last3[1] > bar_last3[2]
-                price_rising = close_last4[-1] > close_last4[0]
-                if bar_positive and bar_shrinking and price_rising:
-                    signals[0] = True
-                    signal_details.append(
-                        f"MACD红柱缩量(bar:{bar_last3[0]:.4f}>{bar_last3[1]:.4f}>{bar_last3[2]:.4f})"
-                    )
-
-            # ── 信号 2: RSI 顶背离 ──
-            if len(closes) >= 20 and len(rsi6s) >= 20:
-                closes_20 = closes[-20:]
-                rsis_20 = rsi6s[-20:]
-                peak_idx = closes_20.index(max(closes_20))
-                peak_close = closes_20[peak_idx]
-                peak_rsi = rsis_20[peak_idx]
-                cur_close = closes_20[-1]
-                cur_rsi = rsis_20[-1]
-                # 当前价格接近前高（≥99%）且 RSI 明显低于前高对应 RSI
-                if peak_idx < len(closes_20) - 1:  # 前高不是今天
-                    if cur_close >= peak_close * 0.99 and cur_rsi < peak_rsi * 0.95:
-                        signals[1] = True
-                        signal_details.append(
-                            f"RSI顶背离(价{cur_close:.2f}≈前高{peak_close:.2f}, RSI{cur_rsi:.1f}<前高RSI{peak_rsi:.1f})"
-                        )
-
-            # ── 信号 3: 量价背离 ──
-            if len(volumes) >= 10:
-                vol_5d = sum(volumes[-5:]) / 5
-                vol_prev_5d = sum(volumes[-10:-5]) / 5
-                if vol_prev_5d > 0:
-                    price_up = closes[-1] > closes[-6] if len(closes) >= 6 else False
-                    vol_decline = vol_5d < vol_prev_5d * 0.8
-                    if price_up and vol_decline:
-                        signals[2] = True
-                        signal_details.append(
-                            f"量价背离(近5日均量{vol_5d/1e6:.1f}M<前5日均量{vol_prev_5d/1e6:.1f}M×0.8)"
-                        )
-
-            # ── 信号 4: KDJ J > 100 ──
-            if len(kdj_ks) >= 1 and len(kdj_ds) >= 1:
-                j_val = 3.0 * kdj_ks[-1] - 2.0 * kdj_ds[-1]
-                if j_val > 100:
-                    signals[3] = True
-                    signal_details.append(f"KDJ J={j_val:.1f}>100")
-
-            # ── 信号 5: 布林上轨外 ──
-            if len(boll_uppers) >= 1 and boll_uppers[-1] > 0:
-                if current_price > boll_uppers[-1]:
-                    signals[4] = True
-                    signal_details.append(
-                        f"布林上轨外(现价{current_price:.2f}>上轨{boll_uppers[-1]:.2f})"
-                    )
-
-        except Exception as e:
-            logger.warning(f"[StopLoss] 技术背离计算失败 {symbol}: {e}")
-            return None, 1.0
-
-        # ── 缓存结果 ──
-        self._tech_divergence_cache[cache_key] = ((signals.copy(), signal_details.copy()), now)
+        signals, signal_details = check_tech_divergence_signals(
+            symbol=symbol,
+            current_price=current_price,
+            float_pnl_pct=float_pnl_pct,
+            cache=self._tech_divergence_cache,
+        )
 
         return self._eval_tech_signals(signals, signal_details, symbol)
 

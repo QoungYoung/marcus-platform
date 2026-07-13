@@ -68,6 +68,7 @@ class MarcusVNPyExecutor:
 
         # ── 卖出趋势约束缓存 ──
         self._trend_constraint_cache: dict = {}  # symbol -> (timestamp, ma5, ma20)
+        self._tech_divergence_cache: dict = {}   # (symbol, date) -> ((signals, details), timestamp)
     
     def _get_total_drawdown_pct(self) -> float:
         """获取当前总回撤百分比（负数表示亏损）"""
@@ -583,9 +584,12 @@ class MarcusVNPyExecutor:
 
     def _check_sell_trend_constraint(self, symbol: str, avg_cost: float, cur_price: float) -> str:
         """
-        卖出趋势约束：当 MA5 > MA20（趋势完好）且浮亏未触发硬止损时，阻止手动卖出。
+        卖出趋势约束：当 MA5 > MA20（趋势完好）时检查技术背离信号。
 
-        防止 AI 主观判断导致过早卖出趋势完好的持仓（如 SH688396、SH600276）。
+        - 技术背离 ≥3 个信号 → 趋势可能衰竭，放行卖出
+        - 技术背离 <3 个信号 → 趋势完好，阻止手动/AI卖出
+
+        防止 AI 主观判断导致过早卖出趋势完好的持仓。
 
         Returns:
             空字符串 = 通过（允许卖出），非空 = 阻止原因
@@ -607,9 +611,8 @@ class MarcusVNPyExecutor:
             ts, ma5, ma20 = cached
             if _time.time() - ts < 300:
                 if ma5 > ma20 > 0:
-                    return (
-                        f"趋势约束阻止卖出: MA5({ma5:.2f}) > MA20({ma20:.2f})，"
-                        f"趋势完好，浮亏{float_pnl_pct:.2f}%未触发硬止损，禁止手动卖出"
+                    return self._evaluate_trend_divergence(
+                        symbol, cur_price, float_pnl_pct, ma5, ma20
                     )
                 return ""
 
@@ -640,13 +643,48 @@ class MarcusVNPyExecutor:
             self._trend_constraint_cache[cache_key] = (_time.time(), ma5, ma20)
 
             if ma5 > ma20 > 0:
-                return (
-                    f"趋势约束阻止卖出: MA5({ma5:.2f}) > MA20({ma20:.2f})，"
-                    f"趋势完好，浮亏{float_pnl_pct:.2f}%未触发硬止损，禁止手动卖出"
+                return self._evaluate_trend_divergence(
+                    symbol, cur_price, float_pnl_pct, ma5, ma20
                 )
         except Exception:
             pass
         return ""
+
+    def _evaluate_trend_divergence(
+        self, symbol: str, cur_price: float, float_pnl_pct: float,
+        ma5: float, ma20: float,
+    ) -> str:
+        """Check tech divergence signals when MA5 > MA20. Allow sale if ≥3 signals."""
+        try:
+            from app.core.trading._tech_divergence import check_tech_divergence_signals
+
+            signals, _details = check_tech_divergence_signals(
+                symbol=symbol,
+                current_price=cur_price,
+                float_pnl_pct=float_pnl_pct,
+                cache=getattr(self, '_tech_divergence_cache', None),
+                cache_key=f"trend_div_{symbol}",
+            )
+
+            if sum(signals) >= 3:
+                # Technicals confirm trend exhaustion, allow the sale
+                import logging
+                logging.getLogger(__name__).info(
+                    f"[TrendConstraint] {symbol} 技术背离≥3({sum(signals)}/5)，"
+                    f"趋势可能衰竭，放行卖出"
+                )
+                return ""
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(
+                f"[TrendConstraint] 技术背离检查失败 {symbol}: {e}"
+            )
+
+        return (
+            f"趋势约束阻止卖出: MA5({ma5:.2f}) > MA20({ma20:.2f})，"
+            f"趋势完好，浮亏{float_pnl_pct:.2f}%未触发硬止损，禁止手动卖出"
+        )
 
     def buy(self, symbol: str, price: float, volume: int, reason: str = "") -> dict:
         """买入操作 - 通过完整订单流程成交，失败时解冻资金"""
