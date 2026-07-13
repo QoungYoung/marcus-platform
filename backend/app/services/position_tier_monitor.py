@@ -571,7 +571,7 @@ class PositionTierMonitor:
 
     def _call_ai_judge(self, prompt: str) -> dict:
         """
-        调用 deepseek-v4-flash 做概念语义匹配判断（无思考，低延迟）。
+        调用 deepseek-v4-flash 做概念语义匹配判断（关闭思考模式，低延迟）。
         """
         import requests as _requests
 
@@ -597,6 +597,7 @@ class PositionTierMonitor:
             ],
             'temperature': 0.0,
             'max_tokens': 200,
+            'thinking': {'type': 'disabled'},
             'response_format': {'type': 'json_object'},
         }
 
@@ -625,8 +626,8 @@ class PositionTierMonitor:
                 return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'API返回非JSON格式'}
             message = data.get('choices', [{}])[0].get('message', {})
             content = message.get('content', '') or ''
-            # v4-flash 有时把答案放在 reasoning_content 里导致 content 为空
             if not content:
+                # 兼容推理类模型（如 deepseek-v4-flash）将答案放在 reasoning_content 的情况
                 content = message.get('reasoning_content', '') or ''
             if not content:
                 logger.warning(f"[加仓] AI返回content为空, keys={list(message.keys())}")
@@ -636,9 +637,25 @@ class PositionTierMonitor:
             if content.startswith('```'):
                 lines = content.split('\n')
                 content = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
+                content = content.strip()
+            # strip 或 markdown 剥离后可能变空，必须再次检查
+            if not content:
+                logger.warning(f"[加仓] AI返回content经strip/markdown处理后为空, raw={raw_text[:200]}")
+                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'AI返回content为空（strip后）'}
             import json as _json
-            result = _json.loads(content)
-            return result
+            try:
+                return _json.loads(content)
+            except _json.JSONDecodeError:
+                # content 可能是中文推理文本（reasoning_content 回退场景），尝试从中提取 JSON
+                import re as _re
+                match = _re.search(r'\{[^{}]*"matched"[^{}]*\}', content)
+                if match:
+                    try:
+                        return _json.loads(match.group())
+                    except _json.JSONDecodeError:
+                        pass
+                logger.warning(f"[加仓] AI返回content非JSON: {content[:200]}")
+                return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'AI返回content非JSON格式'}
         except Exception as e:
             logger.warning(f"[加仓] AI判断异常: {e}")
             return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': f'调用异常: {e}'}
