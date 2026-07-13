@@ -50,9 +50,6 @@ def check_tech_divergence_signals(
         signals: [bool×5]
         details: [str] descriptions of triggered signals
     """
-    if float_pnl_pct <= 0:
-        return [False] * 5, []
-
     # ── Cache check ──
     today_str = datetime.now().strftime('%Y%m%d')
     key = cache_key or f"{symbol}_{today_str}"
