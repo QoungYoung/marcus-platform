@@ -12,12 +12,16 @@
       - 低波<3%: T1≥1%→保本 | T2≥3%→+1% | T3≥5%→+2%
       - 中波3-6%: T1≥2%→保本 | T2≥5%→+2% | T3≥8%→+4%
       - 高波>6%: T1≥3%→保本 | T2≥7%→+3% | T3≥10%→+5%
+  2.5 技术指标背离止损（五大信号综合判定）：
+      - ≥4 个信号触发 → 清仓 (100%)
+      - ≥3 个信号触发 → 减仓 (50%)
+      信号: ①MACD红柱缩量 ②RSI顶背离 ③量价背离 ④KDJ J>100 ⑤布林上轨外
   3.  大盘相对表现止损：大盘跌>2%且个股跌幅-大盘跌幅<-3pp→强审
   4.  T+1 保护：今日买入的持仓不执行止损卖出
   5.  早盘冷静期：09:30-09:45 不执行卖出（该窗口统计胜率 0%）
 
 规则冲突 SOP：
-  - 规则按优先级 0a→0b→1→2→3 依次评估，首个命中即执行，后续规则不再检查
+  - 规则按优先级 0a→0b→1→2→2.5→3 依次评估，首个命中即执行，后续规则不再检查
   - 规则 4（T+1）和规则 5（冷静期）为前置拦截，不参与优先级竞争
   - 单日单票最多执行 3 次止损，同一价位不可重复触发
 """
@@ -28,7 +32,7 @@ import json
 import time
 import threading
 import logging
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -89,6 +93,7 @@ class StopLossMonitor:
         self.today_stops: Dict[str, int] = {}
         self._triggered: Dict[str, float] = {}
         self._strategy_chain = None
+        self._tech_divergence_cache: Dict[str, tuple] = {}  # (symbol, date_str) -> (signals_tuple, timestamp)
 
         self.log_dir = self._resolve_log_dir()
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -333,12 +338,13 @@ class StopLossMonitor:
             # P0-2: 每次轮询主动更新 HWM
             self._ensure_hwm(symbol, current_price)
 
-            stop_reason = self._evaluate_stop_rules(
+            stop_reason, sell_ratio = self._evaluate_stop_rules(
                 symbol, float_pnl_pct, current_price, avg_price, market_pct
             )
 
             if stop_reason:
-                self._execute_stop(symbol, current_price, volume, stop_reason, float_pnl_pct)
+                self._execute_stop(symbol, current_price, volume, stop_reason,
+                                   float_pnl_pct, sell_ratio=sell_ratio)
 
         if t1_skipped:
             print(f"[止损] ⏭️ T+1 锁定跳过: {', '.join(t1_skipped)}", file=sys.stderr)
@@ -346,35 +352,43 @@ class StopLossMonitor:
     def _evaluate_stop_rules(
         self, symbol: str, float_pnl_pct: float, current_price: float,
         avg_price: float, market_pct: float
-    ) -> Optional[str]:
-        """依次评估止损规则，按优先级返回第一个触发的规则。"""
-        
+    ):
+        """依次评估止损规则，按优先级返回第一个触发的规则。
+
+        Returns: (Optional[str], float) = (reason, sell_ratio)
+        """
+
         # ── 规则 0a: 破底止损（锚点动态上移） ──
         break_low_reason = self._check_break_low_stop(symbol, current_price)
         if break_low_reason:
-            return break_low_reason
+            return break_low_reason, 1.0
 
         # ── 规则 0b: 成本止损（仅处理未盈利/降级场景，大盈转亏交给规则2） ──
         cost_stop_reason = self._check_cost_stop(symbol, float_pnl_pct, current_price, avg_price)
         if cost_stop_reason:
-            return cost_stop_reason
+            return cost_stop_reason, 1.0
 
         # ── 规则 1: 板块背离止损（差值法） ──
         sector_reason = self._check_sector_divergence(symbol, float_pnl_pct)
         if sector_reason:
-            return sector_reason
+            return sector_reason, 1.0
 
         # ── 规则 2: 铁律二移动止盈（含HWM增强） ──
         iron_rule2_reason = self._check_iron_rule2(symbol, float_pnl_pct, current_price, avg_price)
         if iron_rule2_reason:
-            return iron_rule2_reason
+            return iron_rule2_reason, 1.0
+
+        # ── 规则 2.5: 技术指标背离止损（五大信号综合判定） ──
+        tech_reason, tech_ratio = self._check_technical_divergence(symbol, current_price, float_pnl_pct)
+        if tech_reason:
+            return tech_reason, tech_ratio
 
         # ── 规则 3: 大盘相对表现止损 ──
         dynamic_reason = self._check_dynamic_stop(float_pnl_pct, market_pct, symbol)
         if dynamic_reason:
-            return dynamic_reason
+            return dynamic_reason, 1.0
 
-        return None
+        return None, 1.0
 
     # ── 规则 0a: 破底止损（锚点动态上移） ──
 
@@ -674,6 +688,183 @@ class StopLossMonitor:
 
         return None
 
+    # ── 规则 2.5: 技术指标背离止损（五大信号综合判定） ──
+
+    def _check_technical_divergence(
+        self, symbol: str, current_price: float, float_pnl_pct: float
+    ):
+        """
+        五大技术信号综合判定：
+        ① MACD红柱连续2日缩量（价格涨但柱子变短）
+        ② RSI顶背离（价格创新高，RSI未创新高）
+        ③ 量价背离（价格上涨但成交量较前一波明显萎缩）
+        ④ KDJ(J值) > 100（极端超买）
+        ⑤ 价格脱离布林上轨外运行
+
+        Returns:
+            (None, 1.0)          — 信号不足 3 个，不触发
+            (reason_str, 0.5)    — ≥3 个信号，减仓一半
+            (reason_str, 1.0)    — ≥4 个信号，清仓
+        """
+        if float_pnl_pct <= 0:
+            # 只在盈利状态下检查技术背离，亏损交给其他止损规则
+            return None, 1.0
+
+        today_str = datetime.now().strftime('%Y%m%d')
+        cache_key = f"{symbol}_{today_str}"
+        now = time.time()
+
+        # 检查缓存（同一天内不重复请求 Tushare）
+        if cache_key in self._tech_divergence_cache:
+            cached_result, cached_ts = self._tech_divergence_cache[cache_key]
+            if now - cached_ts < 3600:  # 1小时缓存
+                signals, signal_names = cached_result
+                return self._eval_tech_signals(signals, signal_names, symbol)
+
+        try:
+            from app.api.indicator import _normalize_to_ts_code
+            from app.config import get_settings
+            import tushare as ts
+
+            settings = get_settings()
+            token = settings.get_tushare_token()
+            if not token:
+                return None, 1.0
+            pro = ts.pro_api(token)
+            ts_code = _normalize_to_ts_code(symbol)
+            end_d = datetime.now().strftime("%Y%m%d")
+            start_d = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
+
+            # ── 获取技术指标（stk_factor_pro）──
+            df_tech = pro.stk_factor_pro(
+                ts_code=ts_code, start_date=start_d, end_date=end_d,
+                fields='trade_date,close,macd_dif_qfq,macd_dea_qfq,'
+                       'rsi_qfq_6,kdj_k_qfq,kdj_d_qfq,boll_upper_qfq'
+            )
+
+            # ── 获取日K线（成交量）──
+            df_daily = pro.daily(
+                ts_code=ts_code, start_date=start_d, end_date=end_d,
+                fields='trade_date,close,vol'
+            )
+
+            if df_tech is None or df_tech.empty or len(df_tech) < 20:
+                return None, 1.0
+            if df_daily is None or df_daily.empty or len(df_daily) < 10:
+                return None, 1.0
+
+            df_tech = df_tech.sort_values("trade_date", ascending=True)
+            df_daily = df_daily.sort_values("trade_date", ascending=True)
+
+            # ── 对齐两个数据源的日期 ──
+            tech_dates = set(df_tech['trade_date'].values)
+            df_daily = df_daily[df_daily['trade_date'].isin(tech_dates)]
+
+            closes = [float(v) for v in df_tech['close'].values]
+            macd_difs = [float(v) for v in df_tech['macd_dif_qfq'].values]
+            macd_deas = [float(v) for v in df_tech['macd_dea_qfq'].values]
+            rsi6s = [float(v) for v in df_tech['rsi_qfq_6'].values]
+            kdj_ks = [float(v) for v in df_tech['kdj_k_qfq'].values]
+            kdj_ds = [float(v) for v in df_tech['kdj_d_qfq'].values]
+            boll_uppers = [float(v) for v in df_tech['boll_upper_qfq'].values]
+            volumes = [float(v) for v in df_daily['vol'].values]
+
+            if len(closes) < 20:
+                return None, 1.0
+
+            # ── 计算 MACD 柱（bar = 2 * (DIF - DEA)）──
+            macd_bars = [2.0 * (dif - dea) for dif, dea in zip(macd_difs, macd_deas)]
+            # 取最近 5 根
+            recent_bars = macd_bars[-5:] if len(macd_bars) >= 5 else macd_bars
+            recent_closes_for_macd = closes[-5:] if len(closes) >= 5 else closes
+
+            signals = [False] * 5
+            signal_details = []
+
+            # ── 信号 1: MACD 红柱连续 2 日缩量 ──
+            if len(recent_bars) >= 4:
+                bar_last3 = recent_bars[-3:]
+                close_last4 = recent_closes_for_macd[-4:]
+                bar_positive = all(b > 0 for b in bar_last3)
+                bar_shrinking = bar_last3[0] > bar_last3[1] > bar_last3[2]
+                price_rising = close_last4[-1] > close_last4[0]
+                if bar_positive and bar_shrinking and price_rising:
+                    signals[0] = True
+                    signal_details.append(
+                        f"MACD红柱缩量(bar:{bar_last3[0]:.4f}>{bar_last3[1]:.4f}>{bar_last3[2]:.4f})"
+                    )
+
+            # ── 信号 2: RSI 顶背离 ──
+            if len(closes) >= 20 and len(rsi6s) >= 20:
+                closes_20 = closes[-20:]
+                rsis_20 = rsi6s[-20:]
+                peak_idx = closes_20.index(max(closes_20))
+                peak_close = closes_20[peak_idx]
+                peak_rsi = rsis_20[peak_idx]
+                cur_close = closes_20[-1]
+                cur_rsi = rsis_20[-1]
+                # 当前价格接近前高（≥99%）且 RSI 明显低于前高对应 RSI
+                if peak_idx < len(closes_20) - 1:  # 前高不是今天
+                    if cur_close >= peak_close * 0.99 and cur_rsi < peak_rsi * 0.95:
+                        signals[1] = True
+                        signal_details.append(
+                            f"RSI顶背离(价{cur_close:.2f}≈前高{peak_close:.2f}, RSI{cur_rsi:.1f}<前高RSI{peak_rsi:.1f})"
+                        )
+
+            # ── 信号 3: 量价背离 ──
+            if len(volumes) >= 10:
+                vol_5d = sum(volumes[-5:]) / 5
+                vol_prev_5d = sum(volumes[-10:-5]) / 5
+                if vol_prev_5d > 0:
+                    price_up = closes[-1] > closes[-6] if len(closes) >= 6 else False
+                    vol_decline = vol_5d < vol_prev_5d * 0.8
+                    if price_up and vol_decline:
+                        signals[2] = True
+                        signal_details.append(
+                            f"量价背离(近5日均量{vol_5d/1e6:.1f}M<前5日均量{vol_prev_5d/1e6:.1f}M×0.8)"
+                        )
+
+            # ── 信号 4: KDJ J > 100 ──
+            if len(kdj_ks) >= 1 and len(kdj_ds) >= 1:
+                j_val = 3.0 * kdj_ks[-1] - 2.0 * kdj_ds[-1]
+                if j_val > 100:
+                    signals[3] = True
+                    signal_details.append(f"KDJ J={j_val:.1f}>100")
+
+            # ── 信号 5: 布林上轨外 ──
+            if len(boll_uppers) >= 1 and boll_uppers[-1] > 0:
+                if current_price > boll_uppers[-1]:
+                    signals[4] = True
+                    signal_details.append(
+                        f"布林上轨外(现价{current_price:.2f}>上轨{boll_uppers[-1]:.2f})"
+                    )
+
+        except Exception as e:
+            logger.warning(f"[StopLoss] 技术背离计算失败 {symbol}: {e}")
+            return None, 1.0
+
+        # ── 缓存结果 ──
+        self._tech_divergence_cache[cache_key] = ((signals.copy(), signal_details.copy()), now)
+
+        return self._eval_tech_signals(signals, signal_details, symbol)
+
+    def _eval_tech_signals(self, signals: list, signal_details: list, symbol: str):
+        """根据信号数量决定操作：≥4清仓，≥3减半，<3不操作"""
+        count = sum(signals)
+        detail_str = '; '.join(signal_details)
+
+        if count >= 4:
+            return (
+                f"技术指标背离清仓({count}/5): {detail_str}",
+                1.0
+            )
+        elif count >= 3:
+            return (
+                f"技术指标背离减仓({count}/5): {detail_str}",
+                0.5
+            )
+        return None, 1.0
+
     # ── 规则 3: 大盘相对表现止损（P1-2） ──
 
     def _check_dynamic_stop(self, float_pnl_pct: float, market_pct: float, symbol: str = "") -> Optional[str]:
@@ -794,6 +985,7 @@ class StopLossMonitor:
                 "rul0b_cost_stop": self._calc_cost_stop_distance(symbol, float_pnl_pct, current_price, avg_price),
                 "rul1_sector": self._calc_sector_distance(symbol, float_pnl_pct),
                 "rul2_iron": self._calc_iron_rule2_distance(symbol, float_pnl_pct, current_price, avg_price),
+                "rul2_5_tech": self._calc_tech_divergence_distance(symbol, current_price, float_pnl_pct),
                 "rul3_dynamic": self._calc_dynamic_distance(float_pnl_pct, market_pct, symbol),
             }
 
@@ -1007,10 +1199,36 @@ class StopLossMonitor:
         threshold = -max(market_threshold, amp_threshold)
         return round(float_pnl_pct - threshold, 2)  # distance to dynamic stop
 
+    def _calc_tech_divergence_distance(
+        self, symbol: str, current_price: float, float_pnl_pct: float
+    ) -> Optional[float]:
+        """规则 2.5：到技术背离触发所需的信号数距离。
+        正值=还需N个信号才触发 0=已触发放量 -1=已触发清仓 None=无法计算"""
+        if float_pnl_pct <= 0:
+            return None  # 只在盈利时检查
+
+        today_str = datetime.now().strftime('%Y%m%d')
+        cache_key = f"{symbol}_{today_str}"
+        cached = self._tech_divergence_cache.get(cache_key)
+        if cached is None:
+            return None  # 尚未计算，下次扫描会有
+
+        (signals_list, _details), _ts = cached
+        count = sum(signals_list)
+
+        if count >= 4:
+            return -1.0  # 已触发清仓
+        elif count >= 3:
+            return -0.5  # 已触发减仓
+        else:
+            # 距触发还差 (3 - count) 个信号
+            return float(3 - count)
+
     # ── 止损执行 ──
 
     def _execute_stop(
-        self, symbol: str, price: float, volume: int, reason: str, float_pnl_pct: float
+        self, symbol: str, price: float, volume: int, reason: str, float_pnl_pct: float,
+        sell_ratio: float = 1.0
     ) -> None:
         # 早盘冷静期：09:30-09:45 不执行卖出（09:35窗口统计胜率 0%）
         if self._is_morning_volatility():
@@ -1033,8 +1251,14 @@ class StopLossMonitor:
             print(f"[止损] ⛔ {symbol} 今日已止损{daily_count}次达上限，跳过", file=sys.stderr)
             return
 
-        logger.info(f"[StopLoss] 🔴 触发止损: {symbol} @ {price} | {reason}")
-        print(f"[止损] 🔴 {symbol} 止损 @ {price} | 浮盈{float_pnl_pct:+.2f}% | {reason}", file=sys.stderr)
+        # 根据 sell_ratio 计算实际卖出量（至少 1 手）
+        sell_volume = max(int(volume * sell_ratio), 100) if sell_ratio < 1.0 else volume
+        if sell_volume > volume:
+            sell_volume = volume
+
+        action_tag = "清仓" if sell_ratio >= 0.99 else f"减仓{sell_ratio*100:.0f}%"
+        logger.info(f"[StopLoss] 🔴 触发止损: {symbol} @ {price} x{sell_volume}({action_tag}) | {reason}")
+        print(f"[止损] 🔴 {symbol} 止损[{action_tag}] @ {price} x{sell_volume} | 浮盈{float_pnl_pct:+.2f}% | {reason}", file=sys.stderr)
 
         if self.executor is None:
             logger.error(f"[StopLoss] executor 未注入，无法执行止损: {symbol}")
@@ -1045,15 +1269,15 @@ class StopLossMonitor:
             result = self.executor.sell(
                 symbol=symbol,
                 price=price,
-                volume=volume,
+                volume=sell_volume,
                 reason=f'[StopLoss自动] {reason}',
                 skip_trend_constraint=True
             )
             if result.get('status') == 'executed':
                 self.today_stops[symbol] = daily_count + 1
-                logger.info(f"[StopLoss] ✅ 止损已执行: {symbol} @ {price} x{volume}")
-                print(f"[止损] ✅ {symbol} 已卖出 {volume}股 @ {price} | {reason}", file=sys.stderr)
-                self._log_stop(symbol, price, volume, reason, float_pnl_pct, result.get('profit', 0))
+                logger.info(f"[StopLoss] ✅ 止损已执行: {symbol} @ {price} x{sell_volume}")
+                print(f"[止损] ✅ {symbol} 已卖出 {sell_volume}股 @ {price} | {reason}", file=sys.stderr)
+                self._log_stop(symbol, price, sell_volume, reason, float_pnl_pct, result.get('profit', 0))
             else:
                 logger.warning(f"[StopLoss] ⚠️ 止损执行失败: {symbol} - {result.get('reason', '未知')}")
                 print(f"[止损] ⚠️ {symbol} 卖出被拒: {result.get('reason', '未知')}", file=sys.stderr)
