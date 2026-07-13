@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  ComposedChart, Legend, Area, Line,
+  ComposedChart, Area,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
 import { portfolioApi, marketApi, tradesApi, schedulerApi } from '../api/client';
@@ -24,7 +24,7 @@ interface Account {
 interface PortfolioSummary {
   account: Account; total_return: number; total_return_pct: number; win_rate: number;
 }
-interface EquityPoint { date: string; value: number; benchmark: number; }
+interface EquityPoint { date: string; value: number; }
 interface DailyPnl { date: string; pnl: number; }
 interface IndexTicker { name: string; price: number; change_pct: number; }
 interface TradeRecord { order_id?: string; symbol: string; name?: string; direction: string; price: number; volume: number; created_at?: string; }
@@ -67,15 +67,15 @@ function cleanStockName(name: string | undefined, symbol: string): string {
 function generateEquityCurve(initialCapital: number, totalReturnPct: number, days = 60): EquityPoint[] {
   const result: EquityPoint[] = [];
   const seed = Math.abs(totalReturnPct) * 1000 + initialCapital * 0.01;
-  let equity = initialCapital; let bench = 1000;
+  let equity = initialCapital;
   const now = new Date();
   for (let i = 0; i < days; i++) {
     const d = new Date(now); d.setDate(d.getDate() - (days - 1 - i));
     const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
     const noise = Math.sin(seed + i * 2.7 + i * i * 0.03) * 0.008;
     const t = totalReturnPct / (days * 100);
-    equity *= (1 + t + noise); bench *= (1 + t * 0.6 + noise * 0.7);
-    result.push({ date: dateStr, value: Math.round(equity), benchmark: Math.round(bench) });
+    equity *= (1 + t + noise);
+    result.push({ date: dateStr, value: Math.round(equity) });
   }
   return result;
 }
@@ -244,7 +244,7 @@ export default function PortfolioPage() {
 
   const equityCurve: EquityPoint[] = useMemo(() => {
     if (realEquity.length > 0) {
-      return realEquity.map(p => ({ date: p.date.slice(5), value: p.equity, benchmark: 0 }));
+      return realEquity.map(p => ({ date: p.date.slice(5), value: p.equity }));
     }
     return generateEquityCurve(initialCap, totalReturnPct, 60);
   }, [realEquity, initialCap, totalReturnPct]);
@@ -485,7 +485,6 @@ export default function PortfolioPage() {
           <div className="cp-panel-header">
             <i className="fas fa-chart-area" />
             <span className="cp-panel-title">{t('portfolio.equityCurve')}</span>
-            {realEquity.length === 0 && <span style={{ fontSize: 10, color: A, marginLeft: 'auto' }}>{t('portfolio.vsBenchmark')}</span>}
             <button className="cp-refresh-btn" onClick={refreshEquity} title="刷新曲线" style={{ marginLeft: 'auto' }}>
               <i className={`fas fa-sync-alt ${loadingEquity ? 'fa-spin' : ''}`} />
             </button>
@@ -506,8 +505,6 @@ export default function PortfolioPage() {
                     <YAxis stroke={A} fontSize={10} tickLine={false} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} tickFormatter={(v: number) => v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)} width={50} />
                     <Tooltip content={<ETip />} />
                     <Area type="monotone" dataKey="value" name="账户权益" stroke={GOLD} strokeWidth={2} fill="url(#eqGrad)" dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }} />
-                    {realEquity.length === 0 && <Line type="monotone" dataKey="benchmark" name="上证基准" stroke="rgba(141,155,181,0.5)" strokeWidth={1} strokeDasharray="4 4" dot={false} />}
-                    <Legend wrapperStyle={{ fontSize: 10, color: A }} iconType="line" />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
