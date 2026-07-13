@@ -723,10 +723,11 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
         for t in trades_by_date.get(d, []):
             available_cash, positions = _apply_trade(t, available_cash, positions)
 
-    # 生成每日权益曲线
+    # 生成每日权益曲线（截至昨日，当日实时权益由 /portfolio 接口提供）
+    yesterday = today - timedelta(days=1)
     result = []
     current = start_date
-    while current <= today and len(result) < days:
+    while current <= yesterday and len(result) < days:
         date_str = current.strftime("%Y-%m-%d")
 
         # 应用当日的交易
