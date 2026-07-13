@@ -884,8 +884,12 @@ class MarcusVNPyExecutor:
         cursor = conn.cursor()
         conn.execute("PRAGMA busy_timeout=30000")
         
-        # 按 FIFO 计算真实持仓（跳过已撤回交易）
-        cursor.execute('SELECT symbol, direction, price, volume FROM trades WHERE voided = 0 OR voided IS NULL ORDER BY created_at')
+        # 按 FIFO 计算真实持仓（与 portfolio.calculate_positions_from_db 保持一致）
+        cursor.execute(
+            'SELECT symbol, direction, price, volume FROM trades '
+            'WHERE voided = 0 OR voided IS NULL '
+            'ORDER BY COALESCE(trade_date, DATE(created_at)), id'
+        )
         trades = cursor.fetchall()
         
         # FIFO 成本计算

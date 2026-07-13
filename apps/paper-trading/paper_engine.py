@@ -242,10 +242,11 @@ class PaperTradingEngine:
             for row in cursor.fetchall():
                 pos_meta[row[0]] = {'entry_date': row[1], 'highest_price': row[2] or 0.0}
 
-            # 获取所有交易记录 (回测用 trade_date 排序, 实盘回退 created_at)
+            # 获取所有交易记录（与 portfolio.calculate_positions_from_db 保持一致）
             cursor.execute(
                 'SELECT symbol, direction, price, volume FROM trades '
-                'ORDER BY COALESCE(trade_date, substr(created_at,1,10)), created_at'
+                'WHERE voided = 0 OR voided IS NULL '
+                'ORDER BY COALESCE(trade_date, DATE(created_at)), id'
             )
             trades = cursor.fetchall()
 
