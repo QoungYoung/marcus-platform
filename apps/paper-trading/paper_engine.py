@@ -796,14 +796,14 @@ class PaperTradingEngine:
             # buys: 时间 <= current_date
             # 【P0 Fix】用 id ASC 二级排序, 保证同日多笔 trade_date 相同时 FIFO 稳定
             cursor.execute(
-                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? '
+                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? AND (voided = 0 OR voided IS NULL) '
                 f'ORDER BY {date_col}, id',
                 (order.symbol, Direction.LONG.value, date_val)
             )
             buy_trades = cursor.fetchall()
             # sells: 时间 <= current_date（包含同日更早的卖出, 防同日多次超卖）
             cursor.execute(
-                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? '
+                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? AND (voided = 0 OR voided IS NULL) '
                 f'ORDER BY {date_col}, id',
                 (order.symbol, Direction.SHORT.value, date_val)
             )

@@ -105,7 +105,7 @@ class MarcusVNPyExecutor:
             cursor = conn.cursor()
             today_str = datetime.now().strftime('%Y-%m-%d')
             cursor.execute(
-                "SELECT symbol, SUM(volume) FROM trades WHERE direction='买入' AND date(created_at)=? GROUP BY symbol",
+                "SELECT symbol, SUM(volume) FROM trades WHERE direction='买入' AND date(created_at)=? AND (voided = 0 OR voided IS NULL) GROUP BY symbol",
                 (today_str,)
             )
             for row in cursor.fetchall():
@@ -430,7 +430,7 @@ class MarcusVNPyExecutor:
         conn = sqlite3.connect(str(data_dir / "trades.db"), timeout=30)
         cursor = conn.cursor()
         conn.execute("PRAGMA busy_timeout=30000")
-        cursor.execute('SELECT SUM(profit) FROM trades WHERE direction = "卖出"')
+        cursor.execute('SELECT SUM(profit) FROM trades WHERE direction = "卖出" AND (voided = 0 OR voided IS NULL)')
         realized_pnl = cursor.fetchone()[0] or 0
         conn.close()
         

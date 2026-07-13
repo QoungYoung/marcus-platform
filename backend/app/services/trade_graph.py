@@ -156,7 +156,7 @@ def _read_portfolio() -> str:
         # 全部成交记录
         trades = conn.execute(
             "SELECT symbol, direction, price, volume, amount, profit, trade_date "
-            "FROM trades WHERE volume > 0 ORDER BY created_at"
+            "FROM trades WHERE volume > 0 AND (voided = 0 OR voided IS NULL) ORDER BY created_at"
         ).fetchall()
 
         # 按标的汇总持仓量和成本
@@ -320,7 +320,7 @@ def _check_consecutive_losses() -> int:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT profit FROM trades WHERE direction='sell' AND volume > 0 "
+            "SELECT profit FROM trades WHERE direction='sell' AND volume > 0 AND (voided = 0 OR voided IS NULL) "
             "ORDER BY created_at DESC LIMIT 10"
         ).fetchall()
         conn.close()

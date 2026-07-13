@@ -166,11 +166,11 @@ def calculate_positions_from_db():
     trades = curs.fetchall()
 
     # ── 同时查询 realized_pnl 和 win_rate（复用连接）──
-    curs.execute("SELECT SUM(profit) FROM trades WHERE direction='卖出'")
+    curs.execute("SELECT SUM(profit) FROM trades WHERE direction='卖出' AND (voided = 0 OR voided IS NULL)")
     row = curs.fetchone()
     realized_pnl = float(row[0]) if row and row[0] else 0.0
 
-    curs.execute("SELECT COUNT(*) as total, SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins FROM trades WHERE direction='卖出'")
+    curs.execute("SELECT COUNT(*) as total, SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins FROM trades WHERE direction='卖出' AND (voided = 0 OR voided IS NULL)")
     row = curs.fetchone()
     if row and row["total"] > 0:
         win_rate = round(row["wins"] / row["total"] * 100, 1)

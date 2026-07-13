@@ -61,7 +61,7 @@ def find_fake_oversells(db_path: Path):
         # 查所有 trades 按 trade_date + id 排序
         cur.execute(
             f"SELECT id, orderid, direction, price, volume, profit, created_at{select_td} "
-            f"FROM trades WHERE symbol=? ORDER BY {order_expr}",
+            f"FROM trades WHERE symbol=? AND (voided = 0 OR voided IS NULL) ORDER BY {order_expr}",
             (sym,)
         )
         rows = cur.fetchall()

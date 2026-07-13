@@ -253,7 +253,7 @@ class StopLossMonitor:
             conn.execute("PRAGMA busy_timeout=30000")
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT MIN(created_at) FROM trades WHERE symbol = ? AND direction = '买入'",
+                "SELECT MIN(created_at) FROM trades WHERE symbol = ? AND direction = '买入' AND (voided = 0 OR voided IS NULL)",
                 (symbol,)
             )
             row = cursor.fetchone()

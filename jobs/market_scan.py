@@ -1575,7 +1575,7 @@ def _get_account_drawdown(chain) -> float:
         row = cur.fetchone()
         current_holdings = float(row[0]) if row and row[0] else 0
         # 从 trades 表获取已实现盈亏
-        cur = conn.execute("SELECT SUM(actual_profit) FROM trades WHERE actual_profit IS NOT NULL")
+        cur = conn.execute("SELECT SUM(actual_profit) FROM trades WHERE actual_profit IS NOT NULL AND (voided = 0 OR voided IS NULL)")
         row = cur.fetchone()
         realized_pnl = float(row[0]) if row and row[0] else 0
         # 假设初始本金 10 万
