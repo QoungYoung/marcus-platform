@@ -161,7 +161,7 @@ class StopLossMonitor:
         if not positions:
             try:
                 from app.api.portfolio import calculate_positions_from_db
-                basic_positions, _ = calculate_positions_from_db()
+                basic_positions, _account, _realized, _winrate = calculate_positions_from_db()
                 # 转换为前端兼容的格式（虽然缺少止损字段）
                 for p in basic_positions:
                     positions.append({

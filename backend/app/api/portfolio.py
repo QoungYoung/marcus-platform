@@ -704,7 +704,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
     # 获取当前持仓的实时价格（仅用于最后一天）
     today_str = today.strftime("%Y-%m-%d")
-    current_positions, _ = calculate_positions_from_db()
+    current_positions, _account, _realized, _winrate = calculate_positions_from_db()
     symbols = [p['symbol'] for p in current_positions]
     realtime_prices = get_realtime_prices(symbols) if symbols else {}
 

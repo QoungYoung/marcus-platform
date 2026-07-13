@@ -1228,7 +1228,7 @@ async def calc_position(req: CalcPositionRequest):
     # 1a. 获取账户信息
     from app.api.portfolio import calculate_positions_from_db
     try:
-        position_list, account = calculate_positions_from_db()
+        position_list, account, _realized, _winrate = calculate_positions_from_db()
         available_cash = account.get("available_cash", 0)
         initial_capital = account.get("initial_capital", 1000000)
         # 计算当前持仓市值
