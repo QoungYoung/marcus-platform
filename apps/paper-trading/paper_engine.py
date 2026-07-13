@@ -456,6 +456,23 @@ class PaperTradingEngine:
             )
         ''')
 
+        # 每日权益快照表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS daily_snapshot (
+                trade_date TEXT PRIMARY KEY,
+                total_asset REAL NOT NULL,
+                available_cash REAL NOT NULL,
+                frozen_cash REAL DEFAULT 0,
+                position_value REAL DEFAULT 0,
+                cost_value REAL DEFAULT 0,
+                realized_pnl REAL DEFAULT 0,
+                float_pnl REAL DEFAULT 0,
+                total_pnl REAL DEFAULT 0,
+                initial_capital REAL NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ''')
+
         # 创建索引
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_time ON trades (created_at)')

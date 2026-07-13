@@ -237,6 +237,165 @@ def calculate_positions_from_db():
     return position_list, account, realized_pnl, win_rate
 
 
+def save_daily_snapshot(target_date: str = None) -> dict:
+    """Compute and persist a daily portfolio snapshot to trades.db.
+
+    Uses FIFO trade replay to determine positions up to target_date,
+    values positions at real-time market prices for today, or at cost for historical dates.
+
+    Returns: dict with success, trade_date, total_asset, price_source, etc.
+    """
+    if target_date is None:
+        target_date = datetime.now().strftime('%Y-%m-%d')
+
+    db_file = settings.data_dir / "trades.db"
+    if not db_file.exists():
+        return {'success': False, 'error': 'trades.db not found'}
+
+    conn = sqlite3.connect(str(db_file), timeout=30)
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.row_factory = sqlite3.Row
+    curs = conn.cursor()
+
+    # Ensure table exists (idempotent)
+    curs.execute('''
+        CREATE TABLE IF NOT EXISTS daily_snapshot (
+            trade_date TEXT PRIMARY KEY,
+            total_asset REAL NOT NULL,
+            available_cash REAL NOT NULL,
+            frozen_cash REAL DEFAULT 0,
+            position_value REAL DEFAULT 0,
+            cost_value REAL DEFAULT 0,
+            realized_pnl REAL DEFAULT 0,
+            float_pnl REAL DEFAULT 0,
+            total_pnl REAL DEFAULT 0,
+            initial_capital REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    ''')
+
+    # Read initial_capital and frozen_cash
+    curs.execute("SELECT initial_capital, frozen_cash FROM account_info WHERE id=1")
+    row = curs.fetchone()
+    if not row:
+        conn.close()
+        return {'success': False, 'error': 'No account_info found'}
+    initial_cap = row['initial_capital']
+    frozen_cash = row['frozen_cash'] or 0.0
+
+    # Read all trades up to target_date
+    curs.execute("""
+        SELECT id, symbol, direction, price, volume, trade_date, created_at
+        FROM trades
+        WHERE (voided = 0 OR voided IS NULL)
+          AND (trade_date <= ? OR (trade_date IS NULL AND DATE(created_at) <= ?))
+        ORDER BY COALESCE(trade_date, DATE(created_at)), id
+    """, (target_date, target_date))
+    trades = curs.fetchall()
+
+    # Get realized PnL up to target_date
+    curs.execute("""
+        SELECT COALESCE(SUM(profit), 0) FROM trades
+        WHERE direction='卖出'
+          AND (trade_date <= ? OR (trade_date IS NULL AND DATE(created_at) <= ?))
+    """, (target_date, target_date))
+    realized_pnl = float(curs.fetchone()[0])
+
+    # FIFO replay to compute positions and available_cash
+    available_cash = initial_cap
+    positions_lots = {}
+
+    for t in trades:
+        sym = t['symbol']
+        direction = t['direction']
+        price = t['price']
+        volume = t['volume']
+
+        if direction == '买入':
+            cost = price * volume * (1 + _BUY_COMMISSION)
+            available_cash -= cost
+            positions_lots.setdefault(sym, []).append({'price': price, 'volume': volume})
+        elif direction == '卖出':
+            lots = positions_lots.get(sym, [])
+            if not lots:
+                continue
+            gross = price * volume
+            sell_fee = gross * _SELL_FEE_RATE
+            available_cash += gross - sell_fee
+            remaining = volume
+            i = 0
+            while remaining > 0 and i < len(lots):
+                used = min(lots[i]['volume'], remaining)
+                lots[i]['volume'] -= used
+                remaining -= used
+                if lots[i]['volume'] == 0:
+                    lots.pop(i)
+                else:
+                    i += 1
+
+    # Build position list for valuation
+    position_list = []
+    for sym, lots in positions_lots.items():
+        if not lots:
+            continue
+        total_vol = sum(l['volume'] for l in lots)
+        avg_price = sum(l['price'] * l['volume'] for l in lots) / total_vol
+        position_list.append({'symbol': sym, 'volume': total_vol, 'avg_price': avg_price})
+
+    # Determine valuation: market prices for today, cost for historical
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    is_today = (target_date == today_str)
+    price_source = 'cost'
+
+    if is_today and position_list:
+        symbols = [p['symbol'] for p in position_list]
+        prices = get_realtime_prices(symbols)
+        position_value = 0.0
+        for p in position_list:
+            price_data = prices.get(p['symbol'], {})
+            if isinstance(price_data, dict):
+                market_price = price_data.get('price', p['avg_price'])
+            else:
+                market_price = p['avg_price']
+            position_value += market_price * p['volume']
+        if prices:
+            price_source = 'market'
+    else:
+        position_value = sum(p['avg_price'] * p['volume'] for p in position_list)
+
+    cost_value = sum(p['avg_price'] * p['volume'] for p in position_list)
+    total_asset = available_cash + frozen_cash + position_value
+    float_pnl = position_value - cost_value
+    total_pnl = total_asset - initial_cap
+
+    curs.execute('''
+        INSERT OR REPLACE INTO daily_snapshot
+        (trade_date, total_asset, available_cash, frozen_cash, position_value,
+         cost_value, realized_pnl, float_pnl, total_pnl, initial_capital, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (target_date, total_asset, available_cash, frozen_cash, position_value,
+          cost_value, realized_pnl, float_pnl, total_pnl, initial_cap, datetime.now().isoformat()))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        'success': True,
+        'trade_date': target_date,
+        'total_asset': round(total_asset, 2),
+        'available_cash': round(available_cash, 2),
+        'frozen_cash': round(frozen_cash, 2),
+        'position_value': round(position_value, 2),
+        'cost_value': round(cost_value, 2),
+        'realized_pnl': round(realized_pnl, 2),
+        'float_pnl': round(float_pnl, 2),
+        'total_pnl': round(total_pnl, 2),
+        'initial_capital': initial_cap,
+        'price_source': price_source,
+        'position_count': len(position_list),
+    }
+
+
 @router.get("", response_model=PortfolioSummary)
 async def get_portfolio():
     """Get full portfolio summary."""
@@ -466,6 +625,19 @@ async def unfreeze_funds():
         raise HTTPException(status_code=500, detail=f"解冻失败: {str(e)}")
 
 
+@router.post("/daily-snapshot")
+async def trigger_daily_snapshot(date: str = Query(None, description="Target date YYYY-MM-DD, defaults to today")):
+    """Manually trigger a daily portfolio snapshot.
+
+    Computes current positions and total_asset (valued at market prices for today,
+    at cost for historical dates) and persists to trades.db::daily_snapshot.
+    """
+    result = save_daily_snapshot(target_date=date)
+    if not result.get('success'):
+        raise HTTPException(status_code=500, detail=result.get('error', 'Snapshot failed'))
+    return result
+
+
 @router.get("/equity-history", response_model=list[EquityPoint])
 async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     """
@@ -521,6 +693,15 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     if start_date < min_trade_date:
         start_date = min_trade_date
 
+    # 读取已落库的快照（市价估值优先）
+    snapshots = {}
+    try:
+        curs.execute("SELECT trade_date, total_asset FROM daily_snapshot ORDER BY trade_date")
+        for row in curs.fetchall():
+            snapshots[row['trade_date']] = row['total_asset']
+    except sqlite3.OperationalError:
+        pass  # 表还不存在，全部回退到成本价重放
+
     # 获取当前持仓的实时价格（仅用于最后一天）
     today_str = today.strftime("%Y-%m-%d")
     current_positions, _ = calculate_positions_from_db()
@@ -549,30 +730,33 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
             available_cash, positions = _apply_trade(t, available_cash, positions)
 
         # 计算当日持仓市值
-        if date_str == today_str:
-            # 当日：使用实时市价
-            position_value = 0.0
-            for sym, lots in positions.items():
-                total_vol = sum(l['volume'] for l in lots)
-                if total_vol > 0:
-                    price_data = realtime_prices.get(sym, {})
-                    if isinstance(price_data, dict):
-                        price = price_data.get('price')
-                    else:
-                        price = price_data if isinstance(price_data, (int, float)) else None
-                    if not price:
-                        # 实时价不可用时回退到成本价
-                        price = sum(l['price'] * l['volume'] for l in lots) / total_vol
-                    position_value += price * total_vol
+        if date_str in snapshots:
+            # 已落库的快照：直接使用市价估值
+            equity = snapshots[date_str]
         else:
-            # 历史日：使用持仓成本价估值
-            position_value = sum(
-                l['price'] * l['volume']
-                for lots in positions.values()
-                for l in lots
-            )
-
-        equity = available_cash + position_value
+            if date_str == today_str:
+                # 当日：使用实时市价
+                position_value = 0.0
+                for sym, lots in positions.items():
+                    total_vol = sum(l['volume'] for l in lots)
+                    if total_vol > 0:
+                        price_data = realtime_prices.get(sym, {})
+                        if isinstance(price_data, dict):
+                            price = price_data.get('price')
+                        else:
+                            price = price_data if isinstance(price_data, (int, float)) else None
+                        if not price:
+                            # 实时价不可用时回退到成本价
+                            price = sum(l['price'] * l['volume'] for l in lots) / total_vol
+                        position_value += price * total_vol
+            else:
+                # 历史日：使用持仓成本价估值
+                position_value = sum(
+                    l['price'] * l['volume']
+                    for lots in positions.values()
+                    for l in lots
+                )
+            equity = available_cash + position_value
         result.append(EquityPoint(date=date_str, equity=round(equity, 2)))
 
         current += timedelta(days=1)

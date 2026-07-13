@@ -172,6 +172,26 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: daily_snapshot
+  name: 每日净值快照
+  description: 15:01 收盘后抓取实时市价计算总资产并持久化到 daily_snapshot 表
+  enabled: true
+  schedule:
+    type: cron
+    expr: 1 15 * * 1-5
+    timezone: Asia/Shanghai
+  script:
+    path: scripts/snapshot_portfolio.py
+    args: []
+  output:
+    log_file: logs/snapshot_portfolio_{date}.log
+    append: false
+  notifications:
+    on_success: false
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
 - id: daily_review
   name: 每日复盘
   description: 16:00 收盘后市场分析与操作复盘
