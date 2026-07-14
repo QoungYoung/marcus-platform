@@ -1625,7 +1625,7 @@ async def get_market_diagnosis():
     else:
         state, label, suggestion = "trend", "🟢 趋势市", "日线右侧（MA5>MA20），持仓5-30天"
 
-    return {
+    result = {
         "trade_date": trade_date,
         "data_source": "tushare_index_daily",
         "indicators": {
@@ -1669,6 +1669,98 @@ async def get_market_diagnosis():
         },
         "details": detail_list,
     }
+
+    # 持久化到数据库
+    _save_market_diagnosis(result)
+
+    return result
+
+
+def _save_market_diagnosis(result: dict):
+    """将市场诊断结果保存到 trades.db"""
+    import sqlite3
+    import json as _json
+    from app.config import get_settings as _gs
+    try:
+        db_file = _gs().data_dir / "trades.db"
+        conn = sqlite3.connect(str(db_file), timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS market_diagnosis (
+                trade_date TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                label TEXT NOT NULL,
+                suggestion TEXT NOT NULL,
+                score_trend INTEGER DEFAULT 0,
+                score_oscillation INTEGER DEFAULT 0,
+                score_extreme INTEGER DEFAULT 0,
+                indicators_json TEXT,
+                created_at TEXT NOT NULL
+            )
+        ''')
+        d = result["diagnosis"]
+        conn.execute('''
+            INSERT OR REPLACE INTO market_diagnosis
+                (trade_date, state, label, suggestion,
+                 score_trend, score_oscillation, score_extreme,
+                 indicators_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            result["trade_date"],
+            d["state"], d["label"], d["suggestion"],
+            d["score"]["trend"], d["score"]["oscillation"], d["score"]["extreme"],
+            _json.dumps(result["indicators"], ensure_ascii=False),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"保存市场诊断失败: {e}")
+
+
+# ========== 市场状态查询 API ==========
+
+@router.get("/market-state")
+async def get_market_state():
+    """查询当日市场状态（趋势/震荡/极端），从数据库读取缓存的诊断结果"""
+    import sqlite3
+    import json as _json
+    from app.config import get_settings as _gs
+
+    today_str = datetime.now().strftime("%Y%m%d")
+    db_file = _gs().data_dir / "trades.db"
+
+    if not db_file.exists():
+        return {"trade_date": today_str, "state": "unknown", "label": "⚪ 未知",
+                "suggestion": "尚未执行盘前诊断，请稍后刷新", "indicators": None}
+
+    try:
+        conn = sqlite3.connect(str(db_file), timeout=5)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM market_diagnosis WHERE trade_date = ?", (today_str,))
+        row = cur.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                "trade_date": row["trade_date"],
+                "state": row["state"],
+                "label": row["label"],
+                "suggestion": row["suggestion"],
+                "score": {
+                    "trend": row["score_trend"],
+                    "oscillation": row["score_oscillation"],
+                    "extreme": row["score_extreme"],
+                },
+                "indicators": _json.loads(row["indicators_json"]) if row["indicators_json"] else None,
+            }
+        else:
+            return {"trade_date": today_str, "state": "unknown", "label": "⚪ 未知",
+                    "suggestion": "今日尚未执行盘前诊断", "indicators": None}
+    except Exception as e:
+        return {"trade_date": today_str, "state": "error", "label": "⚠️ 错误",
+                "suggestion": f"读取失败: {e}", "indicators": None}
 
 
 # ========== 涨跌榜 API (数据源: Tushare daily_basic) ==========
