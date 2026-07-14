@@ -45,11 +45,14 @@ def format_message(data: dict) -> str:
     limit_r = indicators.get("limit_ratio", {})
     ma5 = indicators.get("ma5_direction", {})
 
+    # ① 振幅来源
+    amp_source = ampl.get('source', '')
+    amp_note = f" [{amp_source}]" if amp_source else ""
+
     lines = [
-        f"📊 盘前市场诊断 ({trade_date})",
+        f"📊 盘前市场诊断 V2.0 ({trade_date})",
         "━" * 24,
-        f"① 振幅指数: {ampl.get('value', '?')}% → {ampl.get('signal', '?')}",
-        f"   10日高 {ampl.get('high_10d', '?')} / 低 {ampl.get('low_10d', '?')}",
+        f"① 平均振幅: {ampl.get('value', '?')}% → {ampl.get('signal', '?')}{amp_note}",
         f"② 连续涨跌: 最多连{consec.get('max_any', '?')}天 → {consec.get('signal', '?')}",
         f"③ 板块轮动: {sector.get('label', '?')} (速度{sector.get('speed', 0):.0%}) → {sector.get('signal', '?')}",
     ]
@@ -64,7 +67,7 @@ def format_message(data: dict) -> str:
 
     lines += [
         f"④ 涨跌停比: {limit_r.get('limit_up', '?')}↑/{limit_r.get('limit_down', '?')}↓ = {limit_r.get('ratio', '?'):.1f}:1 → {limit_r.get('signal', '?')}",
-        f"⑤ MA5方向: {ma5.get('direction', '?')} (斜率{ma5.get('slope_pct', 0):.3f}%) → {ma5.get('signal', '?')}",
+        f"⑤ MA5方向: {ma5.get('direction', '?')} ({ma5.get('angle_deg', 0):+.1f}°) → {ma5.get('signal', '?')} [{ma5.get('weight', '降权')}]",
         "━" * 24,
         f"综合诊断: {diagnosis.get('label', '?')}",
         f"操作建议: {diagnosis.get('suggestion', '?')}",
@@ -72,7 +75,8 @@ def format_message(data: dict) -> str:
 
     score = diagnosis.get("score", {})
     if score:
-        lines.append(f"信号分布: 趋势{score.get('trend', 0)} / 震荡{score.get('oscillation', 0)} / 极端{score.get('extreme', 0)}")
+        tv = score.get('total_votes', 6.5)
+        lines.append(f"得票: 趋势{score.get('trend', 0)} / 震荡{score.get('oscillation', 0)} / 极端{score.get('extreme', 0)} (总{tv}票)")
 
     return "\n".join(lines)
 
