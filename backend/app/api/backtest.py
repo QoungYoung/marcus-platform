@@ -3342,7 +3342,7 @@ async def get_sandbox_concept_mapping(task_id: str,
 
     try:
         import tushare as ts
-        pro = ts.pro_api(token)
+        from app.core.trading._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
         td = dt_date.fromisoformat(trade_date)
         td_str = td.strftime("%Y%m%d")
 
@@ -3522,7 +3522,7 @@ async def get_sandbox_indices(task_id: str,
 
     try:
         import tushare as ts
-        pro = ts.pro_api(token)
+        from app.core.trading._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
         td = dt_date.fromisoformat(trade_date)
         td_str = td.strftime("%Y%m%d")
 

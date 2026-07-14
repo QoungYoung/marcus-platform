@@ -387,8 +387,7 @@ async def get_stock_kline(
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         ts_code = _normalize_to_ts_code(symbol)
 
@@ -456,6 +455,12 @@ def _safe_float(v):
         return float(v)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _get_tushare_pro():
+    """统一获取 Tushare pro_api 实例"""
+    from app.core.trading._api_config import get_tushare_pro as _gtp
+    return _gtp()
 
 
 def _query_stock_flow(ts_code: str) -> Optional[dict]:
@@ -585,8 +590,7 @@ async def get_stock_moneyflow(
         from app.config import get_settings
         settings = get_settings()
         token = settings.get_tushare_token()
-        import tushare as ts
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
         from datetime import timedelta
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
@@ -669,8 +673,7 @@ async def get_stock_technical(
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         ts_code = _normalize_to_ts_code(symbol)
 
@@ -765,7 +768,8 @@ async def get_stock_pro_bar(
         token = settings.get_tushare_token()
 
         import tushare as ts
-        pro = ts.pro_api(token)
+
+        pro = _get_tushare_pro()
 
         ts_code = _normalize_to_ts_code(symbol)
 
@@ -1064,8 +1068,7 @@ async def get_concept_fund_flow(
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         from datetime import timedelta
 
@@ -1338,11 +1341,10 @@ async def get_market_breadth():
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
         import pandas as pd
         from datetime import datetime as dt, timedelta
 
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         # 默认值
         advancing = 0
@@ -1423,11 +1425,10 @@ async def get_top_movers(
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
         import sqlite3
         from datetime import datetime as dt, timedelta
 
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         # 尝试最近3个交易日
         # 使用 daily 而非 daily_basic，因为只有 daily 接口包含 pct_chg（涨跌幅）字段

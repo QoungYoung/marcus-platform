@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     DEEPSEEK_API_HOST: str = "api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-chat"
     TUSHARE_TOKEN: str = ""
+    TUSHARE_API_URL: str = ""  # 代理地址, 如 https://ts.gyzcloud.top/api
     XUEQIU_TOKEN: str = ""
 
     # QQ Bot

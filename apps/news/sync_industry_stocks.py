@@ -29,8 +29,8 @@ from workspace_detector import WORKSPACE, get_akshare_dir
 
 AKSHARE_DIR = get_akshare_dir()
 
-# Tushare 配置
-TUSHARE_URL = "https://api.tushare.pro"
+# Tushare 配置（支持 TUSHARE_API_URL 环境变量切换代理）
+TUSHARE_URL = os.getenv("TUSHARE_API_URL", "https://api.tushare.pro")
 
 # 输出文件
 OUTPUT_FILE = AKSHARE_DIR / "industry_keywords_auto.py"

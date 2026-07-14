@@ -64,14 +64,13 @@ def check_tech_divergence_signals(
     try:
         from app.api.indicator import _normalize_to_ts_code
         from app.config import get_settings
-        import tushare as ts
 
         settings = get_settings()
         token = settings.get_tushare_token()
         if not token:
             return [False] * 5, []
 
-        pro = ts.pro_api(token)
+        from app.core.trading._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
         ts_code = _normalize_to_ts_code(symbol)
         end_d = datetime.now().strftime("%Y%m%d")
         start_d = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")

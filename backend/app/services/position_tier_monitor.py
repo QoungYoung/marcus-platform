@@ -858,7 +858,7 @@ class PositionTierMonitor:
             # ── 获取 Tushare 日线（量比 + MA5斜率 + 降级兜底） ──
             settings = get_settings()
             token = settings.get_tushare_token()
-            pro = ts.pro_api(token)
+            from app.core.trading._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
             ts_code = _normalize_to_ts_code(symbol)
 
             from datetime import datetime as dt, timedelta
@@ -1136,7 +1136,7 @@ class PositionTierMonitor:
             import tushare as ts
             settings = get_settings()
             token = settings.get_tushare_token()
-            pro = ts.pro_api(token)
+            from app.core.trading._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
             ts_code = _normalize_to_ts_code(symbol)
             from datetime import datetime as dt, timedelta
             end_d = dt.now().strftime("%Y%m%d")

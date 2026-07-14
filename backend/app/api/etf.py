@@ -365,7 +365,7 @@ def _fetch_etf_kline_from_tushare(symbol: str, count: int = 284) -> list:
 
     settings = get_settings()
     token = settings.get_tushare_token()
-    pro = ts.pro_api(token)
+    from app.core.trading._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
 
     # 符号标准化：SH510050 / 510050 → 510050.SH
     ts_code = _symbol_to_ts_code(symbol, market='SH')

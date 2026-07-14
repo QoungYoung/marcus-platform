@@ -121,7 +121,7 @@ def get_hot_concepts_by_flow(top_n: int = 10) -> list:
             token = os.getenv("TUSHARE_TOKEN", "")
             if token:
                 from datetime import datetime as dt, timedelta
-                pro = ts.pro_api(token)
+                from core._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
                 now = dt.now()
                 for offset in range(3):
                     attempt_date = (now - timedelta(days=offset)).strftime("%Y%m%d")
@@ -173,7 +173,7 @@ def get_hot_concepts_by_flow(top_n: int = 10) -> list:
         token = os.getenv("TUSHARE_TOKEN", "")
         if not token:
             raise EnvironmentError("TUSHARE_TOKEN 未配置")
-        pro = ts.pro_api(token)
+        from core._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
 
         from datetime import datetime as dt, timedelta
         now = dt.now()
@@ -661,7 +661,7 @@ class SectorConfigManager:
         if not token:
             raise EnvironmentError("TUSHARE_TOKEN 未在环境变量或 .env 中配置")
         import tushare as ts
-        pro = ts.pro_api(token)
+        from core._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
 
         keys_to_sync = [key] if key else [
             k for k, v in SectorConfigManager._cache.items() if v.get('etf_codes')

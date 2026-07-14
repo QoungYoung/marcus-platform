@@ -39,8 +39,8 @@ import json
 # ============================================================================
 
 
-# Tushare API 配置
-TUSHARE_URL = "https://api.tushare.pro"
+# Tushare API 配置（支持 TUSHARE_API_URL 环境变量切换代理）
+TUSHARE_URL = os.getenv("TUSHARE_API_URL", "https://api.tushare.pro")
 
 # ============================================================================
 # 行业分类配置

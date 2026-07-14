@@ -626,7 +626,7 @@ class MarcusVNPyExecutor:
             token = settings.get_tushare_token()
             if not token:
                 return ""
-            pro = ts.pro_api(token)
+            from app.core.trading._api_config import get_tushare_pro as _get_ts_pro; pro = _get_ts_pro()
             ts_code = _normalize_to_ts_code(symbol)
             end_d = _dt.now().strftime("%Y%m%d")
             start_d = (_dt.now() - _td(days=60)).strftime("%Y%m%d")

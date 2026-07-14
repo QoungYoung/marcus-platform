@@ -94,8 +94,7 @@ def _fetch_kline_high_low(ts_code: str, days: int = 90) -> tuple:
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         from datetime import datetime as dt, timedelta
         end_date = dt.now().strftime("%Y%m%d")
@@ -636,9 +635,8 @@ async def get_realtime_indicators(
     # 2. Tushare 历史日K线（≥35条，用于 MACD 初始化 + 滚动窗口）
     async def _fetch_daily_bars():
         try:
-            import tushare as ts
-            from datetime import datetime as dt, timedelta
-            pro = ts.pro_api(token)
+                from datetime import datetime as dt, timedelta
+            pro = _get_tushare_pro()
             end_d = dt.now().strftime("%Y%m%d")
             start_d = (dt.now() - timedelta(days=60)).strftime("%Y%m%d")
             df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=35)
@@ -651,9 +649,8 @@ async def get_realtime_indicators(
     # 3. Tushare stk_factor_pro 最近 5 条（用于构建 PrevIndicators 锚点）
     async def _fetch_stk_factor():
         try:
-            import tushare as ts
-            from datetime import datetime as dt, timedelta
-            pro = ts.pro_api(token)
+                from datetime import datetime as dt, timedelta
+            pro = _get_tushare_pro()
             end_d = dt.now().strftime("%Y%m%d")
             start_d = (dt.now() - timedelta(days=35)).strftime("%Y%m%d")
             df = pro.stk_factor_pro(
@@ -956,9 +953,8 @@ async def check_safety_margin(
     try:
         settings = get_settings()
         token = settings.get_tushare_token()
-        import tushare as ts
         from datetime import datetime as dt, timedelta
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
         end_d = dt.now().strftime("%Y%m%d")
         start_d = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
         df = pro.stk_factor_pro(
@@ -1282,8 +1278,7 @@ async def calc_position(req: CalcPositionRequest):
         settings = get_settings()
         token = settings.get_tushare_token()
         if token:
-            import tushare as ts
-            pro = ts.pro_api(token)
+                pro = _get_tushare_pro()
             end_d = datetime.now().strftime("%Y%m%d")
             start_d = (datetime.now() - timedelta(days=15)).strftime("%Y%m%d")
             df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=5)
@@ -2073,8 +2068,7 @@ async def get_fina_mainbz(
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         kw = {"ts_code": ts_code, "limit": limit}
         if period:
@@ -2160,8 +2154,7 @@ async def get_express(
         settings = get_settings()
         token = settings.get_tushare_token()
 
-        import tushare as ts
-        pro = ts.pro_api(token)
+        pro = _get_tushare_pro()
 
         kw = {"ts_code": ts_code, "limit": limit + 5}  # 多取一些用于过滤空值
         if period:

@@ -40,10 +40,15 @@ def get_tushare_pro():
     统一获取 Tushare pro_api 实例（Token 从环境变量 TUSHARE_TOKEN 读取）。
 
     所有调用 ts.pro_api() 的地方都应改用此函数，确保 Token 统一从 .env 控制。
+    支持 TUSHARE_API_URL 环境变量切换代理地址。
     """
     import tushare as ts
 
     token = os.getenv("TUSHARE_TOKEN", "")
     if not token:
         raise EnvironmentError("TUSHARE_TOKEN 未在环境变量或 .env 中配置")
-    return ts.pro_api(token)
+    pro = ts.pro_api(token)
+    api_url = os.getenv("TUSHARE_API_URL", "")
+    if api_url:
+        pro._DataApi__http_url = api_url
+    return pro
