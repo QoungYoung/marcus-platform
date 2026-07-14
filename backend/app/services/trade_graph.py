@@ -46,12 +46,18 @@ class TradeState(TypedDict):
     pool_context: str
     stance_context: str
     trade_mode_instruction: str
+    regime_context: str           # 市场结构指令（趋势/震荡）
+    market_regime: str            # "trend" / "oscillation"
 
     # 安全门
     drawdown_pct: float
     consecutive_losses: int
     hard_blocked: bool
     block_reason: str
+
+    # 策略合规
+    regime_violation: bool
+    regime_violation_reason: str
 
     # Pi 决策结果
     pi_raw_reply: str
@@ -253,43 +259,210 @@ def _read_stance_context() -> str:
     return ""
 
 
-def _get_trade_instruction(window: str) -> str:
-    """根据时间窗口返回交易模式指令"""
+def _read_market_regime() -> tuple:
+    """从 market_diagnosis 表读取今日市场结构。
+
+    Returns:
+        (regime: str, label: str, suggestion: str)
+        regime: "trend" / "oscillation" / "unknown"
+    """
+    try:
+        workspace = _get_workspace()
+        db_path = workspace / "data" / "trades.db"
+        if not db_path.exists():
+            return ("unknown", "未知", "数据不可用，按趋势市策略保守操作")
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        today = datetime.now().strftime("%Y%m%d")
+        row = conn.execute(
+            "SELECT state, label, suggestion FROM market_diagnosis WHERE trade_date = ?",
+            (today,)
+        ).fetchone()
+        conn.close()
+        if row:
+            return (row["state"], row["label"], row["suggestion"])
+    except Exception:
+        pass
+    return ("unknown", "未知", "诊断数据不可用，按趋势市策略保守操作")
+
+
+def _get_regime_strategy(regime: str) -> str:
+    """根据市场结构生成策略切换指令块"""
+    if regime == "oscillation":
+        return (
+            "\n📊 **今日市场结构：🔴 震荡市**\n"
+            "你必须严格遵循以下震荡市策略参数，不得使用趋势市策略：\n\n"
+            "| 参数 | 🔴 震荡市（当前） | 🟢 趋势市（禁用） |\n"
+            "|------|:------:|:------:|\n"
+            "| K线周期 | **60分钟**（get_intraday_min freq='60min'） | 日线 |\n"
+            "| 均线系统 | **60分MA10 > 60分MA30** | 日线MA5 > MA20 |\n"
+            "| 持仓天数 | **1-3天** | 5-30天 |\n"
+            "| 单票仓位 | **5-8%** | 10-15% |\n"
+            "| 盈亏比目标 | **1:1.5** | 1:3 |\n"
+            "| 入场方式 | **回踩通道下沿低吸**，不追突破 | 突破确认后追入 |\n"
+            "| 止盈风格 | **到目标即走**，不贪趋势延续 | 分批止盈，趋势不走不止盈 |\n"
+            "| 产业链建仓 | **禁用**，不执行产业链计划 | 按产业链上中下游布局 |\n\n"
+            "⚠️ 震荡市节奏（关键！）：\n"
+            "- 主力在 09:35 就试探，但第一个冒头的往往是诱饵\n"
+            "- **09:50 才见真章**，09:50 时的第1名才是真正的龙头\n"
+            "- ❌ 禁止使用日线MA5/MA20作为入场信号\n"
+            "- ❌ 禁止产业链建仓计划\n"
+            "- ❌ 禁止不调用 get_intraday_min 就下单\n"
+            "- ✅ 每次建仓前必须调用 get_intraday_min(freq='60min') 确认60分MA10>MA30\n"
+            "- ✅ 止盈止损紧凑：到达目标盈亏比1:1.5立即执行\n"
+        )
+    else:
+        return (
+            "\n📊 **今日市场结构：🟢 趋势市**\n"
+            "严格遵循以下趋势市策略参数：\n\n"
+            "| 参数 | 🟢 趋势市（当前） |\n"
+            "|------|:------:|\n"
+            "| K线周期 | **日线**（get_daily_kline） |\n"
+            "| 均线系统 | **MA5 > MA20** |\n"
+            "| 持仓天数 | **5-30天** |\n"
+            "| 单票仓位 | **10-15%** |\n"
+            "| 盈亏比目标 | **1:3** |\n"
+            "| 入场方式 | **突破确认后追入** |\n"
+            "| 止盈风格 | **分批止盈**，趋势不走不止盈 |\n"
+            "| 产业链建仓 | **启用**，按产业链上中下游布局 |\n\n"
+            "⚠️ 趋势市节奏（关键！）：\n"
+            "- 主力 10:00 前在试探，早盘是噪声，不要动手\n"
+            "- **等到 10:35** 日线信号确认后才建仓\n"
+        )
+
+
+def _get_trade_instruction(window: str, regime: str = "trend") -> str:
+    """根据时间窗口和市场结构返回交易模式指令。
+
+    趋势市节奏：主力 10:00 前试探，早盘是噪声 → 09:35/09:50 观察不动，10:35 日线确认后建仓 40%
+    震荡市节奏：主力 09:35 试探但第一个冒头的是诱饵 → 09:35 记排名不动，09:50 买第1名 60%，10:35 第1名还在则加仓 40%
+    """
+    is_osc = regime == "oscillation"
+
+    if is_osc:
+        return {
+            "morning": (
+                "现在是早盘 9:35，🔴 震荡市 → **扫描记排名，不买！**\n\n"
+                "震荡市第一个冒头的往往是诱饵，9:35 是主力试探窗口，不要建仓。\n\n"
+                "你的任务（只做前三步，不买）：\n"
+                "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 获取概念板块资金排行\n"
+                "2. 调用 get_intraday_min(freq='60min') 扫描资金TOP3概念中60分MA10>MA30的领涨股\n"
+                "3. **记录第1名**（涨幅最高+资金净流入为正的那个），记住它的代码和涨幅\n"
+                "4. ⛔ 禁止建仓！禁止调用 place_order！只观察和记录！\n\n"
+                "输出格式：\n"
+                "## Marcus 交易报告 — 震荡市 9:35 观察窗口\n"
+                "### 排名记录（供 9:50 确认用）\n"
+                "| 排名 | 标的 | 涨幅 | 60分趋势 | 资金 |\n"
+                "|:--:|------|-----|:---:|-----|\n"
+                "| 🥇 | xxx | +X% | MA10>MA30 ✅ | 净流入X亿 |\n"
+                "| 🥈 | xxx | +X% | ⚠️ | ... |\n\n"
+                "⛔ 本窗口不建仓。9:50 回来确认第1名是否还在。\n"
+                "SIGNAL: yellow POSITION:0 REASON:震荡市9:35观察窗口，记录排名待9:50确认"
+            ),
+            "mid_morning": (
+                "现在是早盘 9:50，🔴 震荡市 → **确认第1名，建仓60%！**\n\n"
+                "9:35 记的第1名是诱饵还是真龙？现在确认！\n\n"
+                "执行流程：\n"
+                "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 获取当前资金排行\n"
+                "2. 找到当前的**资金+涨幅双料第1名**\n"
+                "3. 判断：\n"
+                "   - 第1名没变（和 9:35 一样）→ **买它 60%！** 诱饵已被验证是真龙\n"
+                "   - 第1名换了（新面孔冒头）→ **买新第1名 60%！** 谁在 9:50 是第1就买谁\n"
+                "4. 调用 get_intraday_min(freq='60min') 确认60分MA10>MA30\n"
+                "5. 调用 check_entry_filters + calc_position → place_order\n"
+                "6. ⚠️ 单票 ≤ 8%，试探仓 ≤ 5%\n\n"
+                "SIGNAL: green POSITION:60 REASON:震荡市9:50确认第1名(SH/SZxxxxxx)，建仓60%"
+            ),
+            "late_morning": (
+                "现在是午前 10:35，🔴 震荡市 → **第1名还在？加仓40%！**\n\n"
+                "执行流程：\n"
+                "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 获取当前资金排行\n"
+                "2. 确认你在 9:50 买入的第1名现在还是不是第1名：\n"
+                "   - ✅ 第1名还在 → **加仓 40%！** 总仓位达到 100% 上限\n"
+                "   - ❌ 第1名又换了 → **不动！** 已买的不要加仓（说明震荡市无主线，加仓风险大）\n"
+                "3. ⚠️ 无论加不加仓，都不要买卖新的标的\n"
+                "4. 检查已持仓标的的60分趋势是否仍在（MA10仍>MA30？），趋势跌破→止损/止盈\n"
+                "5. 如果 9:50 没有建仓（当时无合格标的）→ 本窗口也不建仓，直接跳过\n\n"
+                "SIGNAL: green POSITION:100 REASON:震荡市10:35第1名仍在，加仓40%至满仓"
+                if "第1名还在" else
+                "SIGNAL: yellow POSITION:60 REASON:震荡市10:35第1名已换，维持60%不加仓"
+            ),
+            "afternoon": (
+                "现在是午后 13:35，🔴 震荡市 → **只卖不买！**\n\n"
+                "1. 对持仓逐只检查（跳过今日买入的 T+1 锁定持仓）\n"
+                "2. 60分MA10跌破MA30 → 立即止损/止盈，不等待日线确认\n"
+                "3. 浮盈已达目标(1:1.5) → 执行止盈，不贪\n"
+                "4. ⛔ 禁止新建仓！不寻找新标的！\n\n"
+                "SIGNAL: red POSITION:<当前仓位> REASON:午后只卖不买"
+            ),
+            "closing": (
+                "现在是尾盘 14:35，🔴 震荡市 → **只卖不买！**\n\n"
+                "严格禁止新开仓。只执行以下操作：\n"
+                "⚠️ A股 T+1 规则：今日买入的持仓今日不可卖出，跳过！\n"
+                "1. 对持仓逐只检查（跳过今日买入的），止损位触发则立即卖出\n"
+                "2. 达到止盈目标的卖出（仅限昨日及之前买入的）\n"
+                "3. 60分趋势破位的减仓 50%（排除 T+1 锁定持仓）\n"
+                "4. 报告尾盘操作结果，标明哪些持仓因 T+1 锁定未操作\n\n"
+                "SIGNAL: red POSITION:<当前仓位> REASON:尾盘只卖不买"
+            ),
+        }.get(window, "请基于最新扫描报告执行震荡市交易决策。")
+
+    # ── 趋势市 ──
     return {
         "morning": (
-            "现在是早盘 9:35，进入**产业链建仓计划+上游龙头建仓模式**。\n"
-            "1. 先完成产业链建仓计划表（规划全部3个环节），再买入上游龙头\n"
-            "2. 重点检查上游标的盘中实时MA（get_realtime_indicators）和日内分位\n"
-            "3. 严格按照右侧交易 SOP 建仓"
+            "现在是早盘 9:35，🟢 趋势市 → **观察，不动手！**\n\n"
+            "趋势市主力 10:00 前在试探，早盘是噪声。不要被开盘脉冲诱骗建仓。\n\n"
+            "你的任务（只观察，不买）：\n"
+            "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 了解当日热点方向\n"
+            "2. 调用 get_market_indices() 看大盘开盘情况\n"
+            "3. ⛔ 禁止建仓！禁止调用 place_order！\n\n"
+            "输出格式：\n"
+            "## Marcus 交易报告 — 趋势市 9:35 观察窗口\n"
+            "### 早盘观察\n"
+            "- 大盘开盘：{涨跌情况}\n"
+            "- 热点方向：{资金TOP3概念}\n"
+            "- 当前立场：观察中，等待 10:35 日线确认\n\n"
+            "⛔ 本窗口不建仓。趋势市等到 10:35 日线确认后才动手。\n"
+            "SIGNAL: yellow POSITION:0 REASON:趋势市早盘噪声期，10:35日线确认后建仓"
         ),
         "mid_morning": (
-            "现在是早盘 9:53，进入**产业链中游跟进建仓模式**。\n"
-            "1. 检查上游持仓走势，确认站住分时均线\n"
-            "2. 买入建仓计划表中的中游标的（如有）\n"
-            "3. 若中游无合格标的，跳过该环节并记录原因\n"
-            "4. 检查 get_portfolio 中上游持仓是否已被 PositionTierMonitor 自动加仓"
+            "现在是早盘 9:50，🟢 趋势市 → **继续观察，不动手！**\n\n"
+            "10:00 前的行情仍处噪声期，主力还在试探方向。不要动手。\n\n"
+            "你的任务：\n"
+            "1. 回顾 9:35 观察的热点方向是否仍在（资金排名没有大换血？）\n"
+            "2. 调用 get_daily_kline 查看候选标的日线形态（MA5>MA20？突破前高？）\n"
+            "3. 提前完成产业链建仓计划表（不买，只规划）\n"
+            "4. ⛔ 禁止建仓！禁止调用 place_order！\n\n"
+            "SIGNAL: yellow POSITION:0 REASON:趋势市继续观察，等待10:35"
         ),
         "late_morning": (
-            "现在是午前 10:35，进入**产业链收尾+趋势确认模式**。\n"
-            "1. 评估已建仓标的走势，不符合预期的及时止损\n"
-            "2. 如早盘尚未完成全部产业链覆盖，在此窗口完成下游建仓\n"
-            "3. 扫描报告中新出现的强势标的，可按右侧交易 SOP 新建仓"
+            "现在是午前 10:35，🟢 趋势市 → **日线信号确认，建仓40%！**\n\n"
+            "10:00 已过，噪声消退，日线方向明确。现在可以动手！\n\n"
+            "执行流程：\n"
+            "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 确认当日主线\n"
+            "2. 完成产业链建仓计划表（上中下游各 1 只）→ 买入上游龙头\n"
+            "3. 每只买入前必须调用 check_entry_filters + calc_position\n"
+            "4. ⚠️ 总仓位目标 40%，单票 10-15%\n"
+            "5. 止损设在日线 MA5 下方\n\n"
+            "SIGNAL: green POSITION:40 REASON:趋势市10:35日线确认，建仓40%"
         ),
         "afternoon": (
-            "现在是午后 13:35，进入**午后修正模式**。\n"
-            "⚠️ T+1 隔夜风险：下午建仓无法当日退出，需比早盘更严格。\n"
-            "1. 新建仓条件：涨幅 ≤ 3% 且 日内分位 ≤ 60%\n"
-            "2. 不满足建仓条件 → 只做持仓管理（止损/止盈/减仓），不强行寻找替代标的\n"
-            "3. check_entry_filters 返回 hard_block=true → 无条件放弃该标的"
+            "现在是午后 13:35，🟢 趋势市 → **只卖不买！**\n\n"
+            "1. 对持仓逐只检查（跳过今日买入的 T+1 锁定持仓）\n"
+            "2. 趋势破位（日线跌破 MA5 或 MACD 死叉）→ 减仓 50%\n"
+            "3. 盈利 10%+ → 卖 1/3 分批止盈\n"
+            "4. ⛔ 禁止新建仓！\n\n"
+            "SIGNAL: red POSITION:<当前仓位> REASON:午后只卖不买"
         ),
         "closing": (
-            "现在是尾盘 14:30，进入**closing 模式**。\n"
-            "**严格禁止新开仓**。只执行以下操作：\n"
+            "现在是尾盘 14:35，🟢 趋势市 → **只卖不买！**\n\n"
+            "严格禁止新开仓。只执行以下操作：\n"
             "⚠️ A股 T+1 规则：今日买入的持仓今日不可卖出，跳过！\n"
             "1. 对持仓逐只检查（跳过今日买入的），止损位触发则立即卖出\n"
             "2. 达到止盈目标的卖出（仅限昨日及之前买入的）\n"
             "3. 趋势破位的减仓 50%（排除 T+1 锁定持仓）\n"
-            "4. 报告尾盘操作结果，标明哪些持仓因 T+1 锁定未操作"
+            "4. 报告尾盘操作结果，标明哪些持仓因 T+1 锁定未操作\n\n"
+            "SIGNAL: red POSITION:<当前仓位> REASON:尾盘只卖不买"
         ),
     }.get(window, "请基于最新扫描报告执行自主交易决策。")
 
@@ -440,18 +613,22 @@ def node_fetch_context(state: TradeState) -> dict:
     """
     节点 1: 获取上下文 —— 确定性节点
 
-    直接读取扫描报告、持仓、候选池、上一轮立场、时段指令。
+    直接读取扫描报告、持仓、候选池、上一轮立场、市场结构、时段指令。
     这些数据之前由 Pi Agent 通过 tool-calling 获取，现在由代码层保证。
     """
     eid = state['execution_id']
     logger.info(f"[{eid}] [Graph] ▶ fetch_context")
+
+    regime, label, suggestion = _read_market_regime()
 
     return {
         "scan_report_text": _read_scan_report(),
         "portfolio_json": _read_portfolio(),
         "pool_context": _read_pool_context(state['task_id']),
         "stance_context": _read_stance_context(),
-        "trade_mode_instruction": _get_trade_instruction(state['window']),
+        "regime_context": _get_regime_strategy(regime),
+        "market_regime": regime,
+        "trade_mode_instruction": _get_trade_instruction(state['window'], regime),
     }
 
 
@@ -533,6 +710,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         scan = scan[:2000] + '\n... (已截断)'
 
     prompt = (
+        f"{state['regime_context']}\n"
         f"{state['pool_context']}"
         f"{state['trade_mode_instruction']}\n"
         f"{state['stance_context']}"
@@ -541,9 +719,9 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"## 当前账户持仓\n```json\n{state['portfolio_json']}\n```\n\n"
         f"请立即执行以下操作：\n"
         f"1. 分析上方已提供的扫描报告和持仓数据\n"
-        f"2. 按右侧交易 SOP 选股分析"
+        f"2. 按当前市场结构对应的策略参数选股分析"
         f"（可调用 check_entry_filters / calc_position / get_quote / "
-        f"get_concept_fund_flow / get_realtime_indicators / get_technical 等）\n"
+        f"get_concept_fund_flow / get_realtime_indicators / get_technical / get_intraday_min 等）\n"
         f"3. 执行交易（买入/卖出/调仓）\n"
         f"4. 输出完整交易报告（含 SIGNAL 行）\n\n"
         f"你是 Marcus 右侧交易专家。基础数据已就绪，请直接分析和决策。\n"
@@ -594,6 +772,65 @@ def node_process_result(state: TradeState) -> dict:
     }
 
 
+def node_check_regime_compliance(state: TradeState) -> dict:
+    """
+    节点 3.5: 策略合规检查 —— 确定性节点
+
+    检查 Pi 的决策是否符合当前市场结构的策略参数。
+    震荡市下对仓位/工具/策略进行硬拦截，发现违规强制修正。
+    """
+    eid = state['execution_id']
+    regime = state.get('market_regime', 'trend')
+    reply = state.get('pi_raw_reply', '')
+
+    if regime != 'oscillation':
+        logger.info(f"[{eid}] [Graph] ✓ 趋势市，跳过策略合规检查")
+        return {"regime_violation": False, "regime_violation_reason": ""}
+
+    logger.info(f"[{eid}] [Graph] ▶ check_regime_compliance (震荡市)")
+    violations = []
+
+    # 1. 检查仓位上限
+    stance, position_limit, reason = _parse_signal(reply)
+    if position_limit > 50:
+        violations.append(
+            f"仓位上限{position_limit}%超过震荡市上限50%，已强制修正为50%")
+        # 修正回复中的 SIGNAL 行
+        old_signal = f"POSITION:{position_limit}"
+        new_signal = f"POSITION:50"
+        state['pi_raw_reply'] = reply.replace(old_signal, new_signal)
+        # 追加合规警告到报告末尾
+        state['pi_raw_reply'] += (
+            f"\n\n⚠️ [策略合规自动修正] 震荡市仓位上限从{position_limit}%修正为50%。"
+        )
+
+    # 2. 检查是否使用了日线策略（震荡市必须用60分钟）
+    if '产业链建仓计划' in reply or '产业链建仓' in reply:
+        violations.append("震荡市报告中出现「产业链建仓计划」→ 趋势市策略误用！")
+
+    # 3. 检查是否调用了分钟线工具
+    if 'get_intraday_min' not in reply and '下单' in reply:
+        violations.append("震荡市执行买入但未调用 get_intraday_min → 未确认60分钟趋势！")
+
+    # 4. 检查单票仓位是否超过8%（从报告中解析）
+    buy_pcts = re.findall(r'买入.*?(\d+(?:\.\d+)?)%', reply)
+    for pct_str in buy_pcts:
+        pct = float(pct_str)
+        if pct > 8:
+            violations.append(f"震荡市单票仓位{pct}%超过8%上限")
+
+    if violations:
+        reason_str = "; ".join(violations)
+        logger.warning(f"[{eid}] [Graph] ⚠️ 策略合规违规: {reason_str}")
+        return {
+            "regime_violation": True,
+            "regime_violation_reason": reason_str,
+        }
+    else:
+        logger.info(f"[{eid}] [Graph] ✓ 策略合规通过")
+        return {"regime_violation": False, "regime_violation_reason": ""}
+
+
 # ═══════════════════════════════════════════════════════════
 # 路由
 # ═══════════════════════════════════════════════════════════
@@ -618,6 +855,7 @@ def build_graph() -> StateGraph:
     g.add_node("check_safety_gates", node_check_safety_gates)
     g.add_node("handle_blocked", node_handle_blocked)
     g.add_node("call_pi_decision", node_call_pi_decision)
+    g.add_node("check_regime_compliance", node_check_regime_compliance)
     g.add_node("process_result", node_process_result)
 
     g.set_entry_point("fetch_context")
@@ -628,7 +866,8 @@ def build_graph() -> StateGraph:
         {"handle_blocked": "handle_blocked", "call_pi_decision": "call_pi_decision"},
     )
     g.add_edge("handle_blocked", END)
-    g.add_edge("call_pi_decision", "process_result")
+    g.add_edge("call_pi_decision", "check_regime_compliance")
+    g.add_edge("check_regime_compliance", "process_result")
     g.add_edge("process_result", END)
 
     return g
@@ -662,10 +901,14 @@ def run_trade_decision(task_id: str, execution_id: str, pi_prompt: str) -> Trade
         "pool_context": "",
         "stance_context": "",
         "trade_mode_instruction": "",
+        "regime_context": "",
+        "market_regime": "trend",
         "drawdown_pct": 0.0,
         "consecutive_losses": 0,
         "hard_blocked": False,
         "block_reason": "",
+        "regime_violation": False,
+        "regime_violation_reason": "",
         "pi_raw_reply": "",
         "pi_stance": "yellow",
         "pi_position_limit": 60,

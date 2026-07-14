@@ -1033,6 +1033,28 @@ def _get_single_stock_cap(strength: str) -> float:
     return {"low": 10.0, "medium": 18.0, "high": 25.0}.get(strength, 18.0)
 
 
+def _get_market_regime_for_calc() -> str:
+    """从 market_diagnosis 表读取今日市场结构，用于仓位收紧。"""
+    try:
+        from app.config import get_settings as _gs
+        import sqlite3
+        db_file = _gs().data_dir / "trades.db"
+        if not db_file.exists():
+            return "trend"
+        conn = sqlite3.connect(str(db_file), timeout=5)
+        from datetime import datetime
+        today = datetime.now().strftime("%Y%m%d")
+        row = conn.execute(
+            "SELECT state FROM market_diagnosis WHERE trade_date = ?", (today,)
+        ).fetchone()
+        conn.close()
+        if row:
+            return row[0]
+    except Exception:
+        pass
+    return "trend"  # 默认趋势市，不做收紧
+
+
 def _get_role_cap(role: str) -> float:
     """产业链角色 → 环节上限%"""
     return {"upstream": 15.0, "mid": 10.0, "downstream": 5.0}.get(role, 10.0)
@@ -1319,8 +1341,26 @@ async def calc_position(req: CalcPositionRequest):
     amplitude_tier = _get_amplitude_tier(amplitude)
     dynamic_stop_pct = _get_dynamic_stop_pct(index_pct, amplitude)
 
+    # ── 震荡市仓位收紧 ──
+    market_regime = _get_market_regime_for_calc()
+    if market_regime == "oscillation":
+        single_cap_pct = min(single_cap_pct, 8.0)
+        total_cap_pct = min(total_cap_pct, 50.0)
+        if req.stance == "green":
+            warnings.append("🔴 震荡市：立场从green收紧为yellow，单票上限≤8%，总仓≤50%")
+        logger.info(f"[calc_position] 震荡市收紧: single_cap={single_cap_pct}%, total_cap={total_cap_pct}%")
+
     # ── Layer 3: 计算数量 ──
-    effective_single_cap = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset
+    effective_single_cap_before = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset
+    effective_single_cap = effective_single_cap_before
+
+    # ── 最低股数放行：A股100股起买，100股×当前价 > 单票上限时，允许买入100股 ──
+    min_lot_amount = 100 * current_price
+    if min_lot_amount > effective_single_cap:
+        effective_single_cap = min_lot_amount
+        warnings.append(
+            f"⚡ 最低股数放行：100股={min_lot_amount:.0f}元 > 单票上限，允许按100股买入"
+        )
     total_remaining = total_cap_pct / 100.0 * total_asset - position_value
     cash_reserve_line = total_asset * 0.25
     cash_available_for_buy = available_cash - cash_reserve_line
