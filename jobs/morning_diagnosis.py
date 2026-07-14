@@ -76,7 +76,7 @@ def format_message(data: dict) -> str:
     score = diagnosis.get("score", {})
     if score:
         tv = score.get('total_votes', 6.5)
-        lines.append(f"得票: 趋势{score.get('trend', 0)} / 震荡{score.get('oscillation', 0)} / 极端{score.get('extreme', 0)} (总{tv}票)")
+        lines.append(f"得票: 趋势{score.get('trend', 0)} / 震荡{score.get('oscillation', 0)}")
 
     return "\n".join(lines)
 

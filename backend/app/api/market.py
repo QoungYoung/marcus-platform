@@ -1648,7 +1648,7 @@ async def get_market_diagnosis():
     # ④ 涨跌停比（1票）：1:5~5:1 → 震荡，>5:1 → 趋势，<1:5 → 极端+震荡
     if limit_down > 0 and limit_up / limit_down < 0.2:  # <1:5
         osc += 1
-        detail_list.append(f"④ 涨跌停 {limit_up}↑/{limit_down}↓ = 1:{limit_down//max(limit_up,1)} < 1:5 → 极端+1票")
+        detail_list.append(f"④ 涨跌停 {limit_up}↑/{limit_down}↓ = 1:{limit_down//max(limit_up,1)} < 1:5 → 震荡 +1票")
     elif limit_ratio > 5:
         trd += 1
         detail_list.append(f"④ 涨跌停 {limit_up}↑/{limit_down}↓ = {limit_ratio:.1f}:1 >5:1 → 趋势 +1票")
@@ -1670,12 +1670,8 @@ async def get_market_diagnosis():
         osc += 0.5
         detail_list.append(f"⑤ MA5角度{ma5_angle:+.1f}° → 震荡 +0.5票（降权）")
 
-    # ── 最终判定（总票数6.5，≥3.5票震荡 → 震荡市）──
-    is_extreme = limit_down > 0 and limit_up / limit_down < 0.2
-    total_votes = 6.5
-    if is_extreme:
-        state, label, suggestion = "extreme", "🔴 极端市", "减仓或空仓，等待情绪修复"
-    elif osc >= 3.5:
+    # ── 最终判定（总票数6.5，≥3.5票震荡 → 震荡市，否则 → 趋势市）──
+    if osc >= 3.5:
         state, label, suggestion = "oscillation", "🟡 震荡市", "60分钟右侧交易，持仓1-3天"
     else:
         state, label, suggestion = "trend", "🟢 趋势市", "日线右侧（MA5>MA20），持仓5-30天"
@@ -1706,7 +1702,7 @@ async def get_market_diagnosis():
                 "limit_up": limit_up,
                 "limit_down": limit_down,
                 "ratio": round(limit_ratio, 2),
-                "signal": "极端" if is_extreme else ("趋势" if limit_ratio > 5 or limit_ratio < 0.2 else "震荡"),
+                "signal": "趋势" if limit_ratio > 5 or limit_ratio < 0.2 else "震荡",
             },
             "ma5_direction": {
                 "direction": ma5_direction,
@@ -1719,8 +1715,7 @@ async def get_market_diagnosis():
             "state": state,
             "label": label,
             "suggestion": suggestion,
-            "score": {"oscillation": osc, "trend": trd, "extreme": 1 if is_extreme else 0,
-                      "total_votes": total_votes},
+            "score": {"oscillation": osc, "trend": trd},
         },
         "details": detail_list,
     }
