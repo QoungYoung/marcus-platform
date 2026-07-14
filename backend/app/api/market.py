@@ -1409,6 +1409,268 @@ async def get_market_breadth():
         raise HTTPException(status_code=500, detail=f"获取市场宽度失败: {str(e)}")
 
 
+# ========== 市场状态诊断仪表盘 ==========
+
+# 申万一级行业指数代码（10个代表性行业）
+_SW_SECTOR_CODES = [
+    "801080.SI",  # 电子
+    "801180.SI",  # 医药生物
+    "801120.SI",  # 食品饮料
+    "801750.SI",  # 计算机
+    "801730.SI",  # 电力设备
+    "801880.SI",  # 汽车
+    "801050.SI",  # 有色金属
+    "801760.SI",  # 传媒
+    "801150.SI",  # 银行
+    "801230.SI",  # 综合
+]
+
+_SW_SECTOR_NAMES = {
+    "801080.SI": "电子", "801180.SI": "医药生物", "801120.SI": "食品饮料",
+    "801750.SI": "计算机", "801730.SI": "电力设备", "801880.SI": "汽车",
+    "801050.SI": "有色金属", "801760.SI": "传媒", "801150.SI": "银行",
+    "801230.SI": "综合",
+}
+
+
+@router.get("/market-diagnosis")
+async def get_market_diagnosis():
+    """
+    市场状态诊断仪表盘。
+
+    五大指标：
+      ① 振幅指数 — 近10天高点到低点的振幅
+      ② 连阳/连阴天数 — 最大连续同向天数
+      ③ 板块轮动速度 — 近5天涨幅前3板块是否重复
+      ④ 涨跌停比例 — 涨停/跌停家数比
+      ⑤ MA5方向 — 大盘MA5向上/向下/走平
+
+    综合诊断 → 趋势市 / 震荡市 / 极端市 + 对应策略建议
+    """
+    from datetime import datetime as dt, timedelta
+    import pandas as pd
+
+    pro = _get_tushare_pro()
+    end_date = dt.now().strftime("%Y%m%d")
+    start_date = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
+
+    # ── 1. 获取上证指数日线（000001.SH）+ 申万行业指数日线 ──
+    all_codes = ["000001.SH"] + _SW_SECTOR_CODES
+    ts_codes_str = ",".join(all_codes)
+    df_all = pro.index_daily(ts_code=ts_codes_str, start_date=start_date, end_date=end_date)
+    if df_all is None or df_all.empty:
+        raise HTTPException(status_code=503, detail="无法获取指数数据")
+
+    df_all = df_all.sort_values(["ts_code", "trade_date"])
+    all_dates = sorted(df_all['trade_date'].unique())
+
+    # 提取上证指数数据
+    df_sh = df_all[df_all['ts_code'] == "000001.SH"].sort_values("trade_date")
+    if df_sh.empty or len(df_sh) < 5:
+        raise HTTPException(status_code=503, detail="上证指数数据不足")
+
+    last_10 = df_sh.tail(10)
+    closes = [float(c) for c in last_10['close'].values]
+    trade_date = str(last_10.iloc[-1]['trade_date'])
+
+    # ── ① 振幅指数 ──
+    high_10 = float(last_10['high'].max())
+    low_10 = float(last_10['low'].min())
+    close_latest = closes[-1]
+    amplitude = (high_10 - low_10) / low_10 * 100 if low_10 > 0 else 0
+
+    # ── ② 连阳/连阴天数 ──
+    max_up = 0
+    max_down = 0
+    cur_up = 0
+    cur_down = 0
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            cur_up += 1
+            cur_down = 0
+        elif closes[i] < closes[i - 1]:
+            cur_down += 1
+            cur_up = 0
+        max_up = max(max_up, cur_up)
+        max_down = max(max_down, cur_down)
+    max_consecutive = max(max_up, max_down)
+
+    # ── ③ 板块轮动速度 ──
+    rotation_speed = 0
+    rotation_label = "无数据"
+    sector_top_history = []
+
+    # 对每个申万行业，取近10个交易日、计算每日涨跌幅、取前3
+    last_dates = sorted(df_all['trade_date'].unique())[-5:]  # 近5个交易日
+    if len(last_dates) >= 3:
+        daily_tops = []
+        for td in last_dates:
+            day_data = df_all[df_all['trade_date'] == td]
+            day_sectors = day_data[day_data['ts_code'].isin(_SW_SECTOR_CODES)]
+            if day_sectors.empty or 'pct_chg' not in day_sectors.columns:
+                continue
+            ranked = day_sectors.sort_values("pct_chg", ascending=False)
+            top3 = [str(r['ts_code']) for _, r in ranked.head(3).iterrows()]
+            top3_names = [_SW_SECTOR_NAMES.get(c, c) for c in top3]
+            daily_tops.append({"date": str(td), "top3": top3, "top3_names": top3_names})
+
+        if daily_tops:
+            # 统计5天内出现过多少不重复的板块
+            all_top_codes = set()
+            for d in daily_tops:
+                all_top_codes.update(d['top3'])
+            unique_count = len(all_top_codes)
+            # 最多可能有 5天 × 3 = 15 个不同板块（全不同=快速轮动），最少 3 个（霸榜）
+            max_unique = min(len(daily_tops) * 3, len(_SW_SECTOR_CODES))
+            rotation_speed = unique_count / max(max_unique, 1)  # 0=霸榜, 1=快速轮动
+            if rotation_speed >= 0.7:
+                rotation_label = "快速轮动"
+            elif rotation_speed >= 0.4:
+                rotation_label = "中等轮动"
+            else:
+                rotation_label = "同一批霸榜"
+            sector_top_history = daily_tops
+
+    # ── ④ 涨跌停比例 ──
+    limit_up = 0
+    limit_down = 0
+    try:
+        limit_df = pro.limit_list_d(trade_date=trade_date, limit_type='U,D')
+        if limit_df is not None and len(limit_df) > 0 and 'limit' in limit_df.columns:
+            limit_up = int((limit_df['limit'] == 'U').sum())
+            limit_down = int((limit_df['limit'] == 'D').sum())
+    except Exception:
+        pass
+    limit_ratio = limit_up / limit_down if limit_down > 0 else (99 if limit_up > 0 else 1)
+
+    # ── ⑤ MA5方向 ──
+    ma5_values = []
+    for i in range(len(closes)):
+        if i >= 4:
+            ma5_values.append(sum(closes[i - 4:i + 1]) / 5)
+
+    ma5_direction = "走平"
+    ma5_slope_pct = 0.0
+    if len(ma5_values) >= 3:
+        n = len(ma5_values)
+        x_avg = (n - 1) / 2
+        y_avg = sum(ma5_values) / n
+        num = sum((i - x_avg) * (ma5_values[i] - y_avg) for i in range(n))
+        den = sum((i - x_avg) ** 2 for i in range(n))
+        if den > 0 and y_avg > 0:
+            slope = num / den
+            ma5_slope_pct = slope / y_avg * 100
+            if ma5_slope_pct > 0.15:
+                ma5_direction = "向上"
+            elif ma5_slope_pct < -0.15:
+                ma5_direction = "向下"
+
+    # ── 综合诊断 ──
+    osc = 0  # 震荡信号
+    trd = 0  # 趋势信号
+    ext = 0  # 极端信号
+    detail_list = []
+
+    # ①
+    if amplitude > 40:
+        ext += 1
+        detail_list.append(f"振幅{amplitude:.0f}%>40% → 极端")
+    elif amplitude > 25:
+        osc += 1
+        detail_list.append(f"振幅{amplitude:.0f}%>25% → 震荡")
+    else:
+        trd += 1
+        detail_list.append(f"振幅{amplitude:.0f}%<25% → 趋势")
+
+    # ②
+    if max_consecutive >= 5:
+        trd += 1
+        detail_list.append(f"最大连续{max_consecutive}天 → 趋势")
+    else:
+        osc += 1
+        detail_list.append(f"最多连{max_consecutive}天 → 震荡")
+
+    # ③
+    if rotation_label == "快速轮动":
+        osc += 1
+        detail_list.append(f"板块轮动速度{rotation_speed:.0%} → 快速轮动")
+    elif rotation_label == "同一批霸榜":
+        trd += 1
+        detail_list.append(f"板块轮动速度{rotation_speed:.0%} → 霸榜")
+    else:
+        osc += 1
+        detail_list.append(f"板块轮动速度{rotation_speed:.0%} → 中等轮动")
+
+    # ④
+    if limit_ratio > 3 or limit_ratio < 0.33:
+        trd += 1
+        detail_list.append(f"涨跌停比{limit_ratio:.1f}:1 → 趋势/极端")
+    else:
+        osc += 1
+        detail_list.append(f"涨跌停比{limit_ratio:.1f}:1 → 震荡")
+
+    # ⑤
+    if ma5_direction != "走平":
+        trd += 1
+        detail_list.append(f"MA5{ma5_direction} → 趋势")
+    else:
+        osc += 1
+        detail_list.append(f"MA5{ma5_direction} → 震荡")
+
+    # 最终判定
+    if ext >= 2:
+        state, label, suggestion = "extreme", "🔴 极端市", "空仓或极小仓位（<10%）"
+    elif osc >= 3:
+        state, label, suggestion = "oscillation", "🟡 震荡市", "60分钟右侧，持仓1-3天"
+    else:
+        state, label, suggestion = "trend", "🟢 趋势市", "日线右侧（MA5>MA20），持仓5-30天"
+
+    return {
+        "trade_date": trade_date,
+        "data_source": "tushare_index_daily",
+        "indicators": {
+            "amplitude": {
+                "value": round(amplitude, 1),
+                "high_10d": round(high_10, 2),
+                "low_10d": round(low_10, 2),
+                "latest_close": round(close_latest, 2),
+                "signal": "震荡" if amplitude > 25 else ("极端" if amplitude > 40 else "趋势"),
+            },
+            "consecutive": {
+                "max_up": max_up,
+                "max_down": max_down,
+                "max_any": max_consecutive,
+                "signal": "趋势" if max_consecutive >= 5 else "震荡",
+            },
+            "sector_rotation": {
+                "speed": round(rotation_speed, 2),
+                "label": rotation_label,
+                "unique_sectors": len(set.union(*[set(d['top3']) for d in sector_top_history])) if sector_top_history else 0,
+                "history": sector_top_history,
+                "signal": "趋势" if rotation_label == "同一批霸榜" else "震荡",
+            },
+            "limit_ratio": {
+                "limit_up": limit_up,
+                "limit_down": limit_down,
+                "ratio": round(limit_ratio, 1),
+                "signal": "趋势" if (limit_ratio > 3 or limit_ratio < 0.33) else "震荡",
+            },
+            "ma5_direction": {
+                "direction": ma5_direction,
+                "slope_pct": round(ma5_slope_pct, 3),
+                "signal": "趋势" if ma5_direction != "走平" else "震荡",
+            },
+        },
+        "diagnosis": {
+            "state": state,
+            "label": label,
+            "suggestion": suggestion,
+            "score": {"oscillation": osc, "trend": trd, "extreme": ext},
+        },
+        "details": detail_list,
+    }
+
+
 # ========== 涨跌榜 API (数据源: Tushare daily_basic) ==========
 
 @router.get("/top-movers")
