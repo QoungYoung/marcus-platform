@@ -22,10 +22,11 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r req
 # Copy backend code
 COPY backend/ .
 
-# Copy config, core, jobs (required at runtime)
+# Copy config, core, jobs, scripts (required at runtime)
 COPY config/ /app/config/
 COPY core/ /app/core/
 COPY jobs/ /app/jobs/
+COPY scripts/ /app/scripts/
 
 # Create workspace directory (volume-mounted at runtime)
 RUN mkdir -p /app/workspace
