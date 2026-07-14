@@ -54,6 +54,27 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: morning_diagnosis
+  name: 盘前诊断
+  description: 9:10 推送市场诊断仪表盘（趋势/震荡/极端）到QQ
+  enabled: true
+  schedule:
+    type: cron
+    expr: 10 9 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/morning_diagnosis.py
+    args: []
+  output:
+    log_file: logs/morning_diagnosis_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: market_scan
   name: 盘中扫描
   description: 每小时20/31/50分执行，策略验证 + 候选股筛选

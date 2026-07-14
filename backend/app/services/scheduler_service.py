@@ -325,7 +325,7 @@ class SchedulerService:
 
         # 交易日检查：盘前扫描/盘中扫描/自动交易/每日复盘 仅交易日执行
         TRADE_DAY_ONLY_TASKS = {
-            'pre_market_scan', 'market_scan',
+            'pre_market_scan', 'market_scan', 'morning_diagnosis',
             'auto_trade_morning', 'auto_trade_mid_morning',
             'auto_trade_late_morning',
             'auto_trade_afternoon', 'auto_trade_closing',
