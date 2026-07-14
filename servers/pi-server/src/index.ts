@@ -157,6 +157,7 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 - **get_daily_kline** — 日K线走势 [日频·非实时，Tushare daily盘后数据]
 - **get_technical** — MACD/KDJ/RSI技术指标 [日频·非实时，Tushare stk_factor_pro盘后确认值]
 - **get_realtime_indicators** — KDJ/MACD/RSI/MA盘中实时估算 [实时·盘中估算，腾讯行情+Tushare历史]
+- **get_intraday_min** — 实时分钟K线（1/5/15/30/60分钟，批量查询）[实时·盘中分钟数据]
 - **get_moneyflow** — 资金流向 [实时]
 - **get_market_moneyflow** — 大盘实时资金流（沪深分开+合计+总成交额）[实时]
 - **get_fibonacci_levels** — 斐波那契回撤（0.382/0.618/0.786价位+区间判断+建议）
@@ -238,6 +239,7 @@ const TRADE_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家（自
 | **get_daily_kline** | 个股日K线+均线 | 趋势确认 | 日频·非实时 |
 | **get_technical** | MACD/KDJ/RSI等盘后确认指标 | 金叉死叉信号 | 日频·非实时 |
 | **get_realtime_indicators** | KDJ/MACD/RSI/MA盘中实时估算 | 当日指标辅助参考 | 实时·盘中估算 |
+| **get_intraday_min** | 实时分钟K线（1/5/15/30/60分钟，批量查询） | 日内趋势判断、多持仓监控、精确入场/离场点 | 实时·盘中分钟数据 |
 | **get_moneyflow** | 个股资金流向 | 主力动向 | 实时 |
 | **get_fibonacci_levels** | 斐波那契回撤价位 | 判断支撑/阻力和入场区间 | 混合 |
 | **get_daily_channel** | 日内K值通道 | 日内压力/支撑精确价位 | 实时 |

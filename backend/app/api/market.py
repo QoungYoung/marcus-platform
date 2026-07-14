@@ -2146,3 +2146,104 @@ async def get_sector_flow_by_name_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询板块资金流失败: {str(e)}")
+
+
+@router.get("/intraday-min")
+async def get_intraday_min(
+    symbols: str = Query(..., description="股票代码，逗号分隔，如 000001.SZ,600519.SH"),
+    freq: str = Query("1min", description="分钟K线周期: 1min/5min/15min/30min/60min"),
+):
+    """
+    获取多只股票今日实时分钟K线（盘中数据）。
+
+    数据源：Tushare rt_min（实时分钟行情，支持批量查询）
+    - 单次最多查询约4-5只股票（按1000行上限，240分钟×4≈960行）
+    - 返回每只股票的分钟K线序列：时间/开/高/低/收/量/额
+    - 震荡市行情下用于监控多只持仓的日内走势、寻找精确入场点
+    """
+    if freq not in ("1min", "5min", "15min", "30min", "60min"):
+        raise HTTPException(status_code=400, detail=f"不支持的K线周期: {freq}，可选 1min/5min/15min/30min/60min")
+
+    ts_codes = [c.strip() for c in symbols.split(",") if c.strip()]
+    if not ts_codes:
+        raise HTTPException(status_code=400, detail="请提供至少一个股票代码")
+    if len(ts_codes) > 10:
+        raise HTTPException(status_code=400, detail="单次最多查询10只股票")
+
+    try:
+        pro = _get_tushare_pro()
+        df = pro.rt_min(ts_code=",".join(ts_codes), freq=freq)
+        if df is None or df.empty:
+            return {
+                "symbols": ts_codes,
+                "freq": freq,
+                "bars": [],
+                "count": 0,
+                "data_source": "tushare_rt_min",
+                "note": "无数据（非交易时段或代码无效）",
+            }
+
+        # 按 code 分组
+        grouped = {}
+        for _, row in df.iterrows():
+            code = row.get("code", "")
+            bar = {
+                "time": str(row.get("time", "")),
+                "open": float(row.get("open", 0)),
+                "close": float(row.get("close", 0)),
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "vol": float(row.get("vol", 0)),
+                "amount": float(row.get("amount", 0)),
+            }
+            grouped.setdefault(code, []).append(bar)
+
+        # 构建每只股票的摘要
+        symbols_data = []
+        for code in ts_codes:
+            bars = grouped.get(code, [])
+            if not bars:
+                # 尝试匹配（rt_min 返回的 code 可能不带交易所后缀）
+                for k, v in grouped.items():
+                    if k.split(".")[0] == code.split(".")[0]:
+                        bars = v
+                        break
+
+            summary = None
+            if bars:
+                latest = bars[-1]
+                day_high = max(b["high"] for b in bars)
+                day_low = min(b["low"] for b in bars)
+                day_vol = sum(b["vol"] for b in bars)
+                day_amount = sum(b["amount"] for b in bars)
+                first_close = bars[0]["close"] if bars else latest["close"]
+                change_pct = ((latest["close"] - first_close) / first_close * 100) if first_close else 0
+                summary = {
+                    "latest_price": latest["close"],
+                    "day_high": day_high,
+                    "day_low": day_low,
+                    "day_vol": day_vol,
+                    "day_amount": day_amount,
+                    "change_pct": round(change_pct, 2),
+                    "bar_count": len(bars),
+                }
+
+            symbols_data.append({
+                "code": code,
+                "bars": bars[-60:],  # 最近60根K线，防止数据过大
+                "summary": summary,
+            })
+
+        return {
+            "symbols": ts_codes,
+            "freq": freq,
+            "symbols_data": symbols_data,
+            "total_bars": sum(len(d["bars"]) for d in symbols_data),
+            "data_source": "tushare_rt_min",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[intraday-min] 获取分钟K线失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取分钟K线失败: {str(e)}")

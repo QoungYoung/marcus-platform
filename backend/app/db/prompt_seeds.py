@@ -23,6 +23,7 @@ PROMPT_SEEDS = {
 - **get_technical** — MACD/KDJ/RSI技术指标
 - **get_moneyflow** — 资金流向
 - **get_market_moneyflow** — 大盘实时资金流（沪深分开+合计+总成交额）
+- **get_intraday_min** — 实时分钟K线（1/5/15/30/60分钟，批量查询多只股票）
 - **get_fibonacci_levels** — 斐波那契回撤（0.382/0.618/0.786价位+区间判断+建议）
 - **get_daily_channel** — 日内K值通道（压力/支撑线，K=0.98848）
 - **get_trade_advice** — 综合操作建议（持仓/观察模式完整决策树）
@@ -67,7 +68,7 @@ PROMPT_SEEDS = {
     },
     "TRADE_SYSTEM_PROMPT": {
         "label": "交易模式",
-        "content": """## 你是 Marcus — 短线右侧交易专家（自主交易模式）
+        "content": """## 你是 Marcus — 专注短线与趋势的右侧交易专家（自主交易模式）
 
 ### 你的职责
 
@@ -93,6 +94,7 @@ PROMPT_SEEDS = {
 | **get_concept_mapping** | 概念成分股 | 产业链拆解 |
 | **get_daily_kline** | 个股日K线+均线 | 趋势确认 |
 | **get_realtime_indicators** | 个股盘中实时估算技术指标（MA5/MA10/MA20/KDJ/MACD/RSI） | **建仓前必调**，盘中实时MA是唯一MA过滤标准 |
+| **get_intraday_min** | 实时分钟K线（1/5/15/30/60分钟，批量查询） | 震荡市监控日内走势、识别盘中趋势变化、寻找精确入场/离场点 |
 | **get_technical** | MACD/KDJ/RSI 盘后确认指标（含 ATR） | 辅助参考，金叉死叉信号确认 |
 | **get_moneyflow** | 个股资金流向（含 capital_efficiency 资金效率指数） | 主力动向验证 |
 | **get_fibonacci_levels** | 斐波那契回撤价位 | 判断支撑/阻力和入场区间 |
