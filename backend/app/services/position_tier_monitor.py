@@ -1210,20 +1210,32 @@ class PositionTierMonitor:
         add_pct = add_amount / total_asset if total_asset > 0 else 0
 
         if add_shares < 100:
-            self._add_notification(
-                symbol, 'SKIPPED',
-                f'目标仓位 {target_pct:.0%} → 目标金额 {target_amount:.0f}，'
-                f'当前 {current_position_mv:.0f}（{current_pct:.1%}），'
-                f'加仓 {add_shares} 股不足100'
-                + (f' | 现金不足 (可用{available_cash:.0f})' if add_amount < target_amount - current_position_mv else '')
-            )
-            print(
-                f"[加仓] ⚠️ {symbol} 加仓量不足: {add_shares}股 | "
-                f"目标{target_pct:.0%}→{target_amount:.0f} 当前{current_position_mv:.0f}({current_pct:.1%}) "
-                f"可用{available_cash:.0f}",
-                file=sys.stderr
-            )
-            return None
+            # 加仓检测：如最低股数超出仓位限制，买入最低股数100
+            min_cost = 100 * current_price
+            if available_cash >= min_cost:
+                add_shares = 100
+                add_amount = min_cost
+                add_pct = min_cost / total_asset if total_asset > 0 else 0
+                print(
+                    f"[加仓] {symbol} 建议股数不足100，强制买入100股 (成本{min_cost:.0f}) | "
+                    f"目标{target_pct:.0%}→{target_amount:.0f} 当前{current_position_mv:.0f}({current_pct:.1%})",
+                    file=sys.stderr
+                )
+            else:
+                self._add_notification(
+                    symbol, 'SKIPPED',
+                    f'目标仓位 {target_pct:.0%} → 目标金额 {target_amount:.0f}，'
+                    f'当前 {current_position_mv:.0f}（{current_pct:.1%}），'
+                    f'加仓 {add_shares} 股不足100'
+                    + (f' | 现金不足 (可用{available_cash:.0f})' if add_amount < target_amount - current_position_mv else '')
+                )
+                print(
+                    f"[加仓] ⚠️ {symbol} 加仓量不足: {add_shares}股 | "
+                    f"目标{target_pct:.0%}→{target_amount:.0f} 当前{current_position_mv:.0f}({current_pct:.1%}) "
+                    f"可用{available_cash:.0f}",
+                    file=sys.stderr
+                )
+                return None
 
         # 下单前最后一次保护线检查
         avg_price = self._get_position_avg_price(symbol)

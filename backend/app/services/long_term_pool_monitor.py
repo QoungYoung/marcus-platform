@@ -325,8 +325,14 @@ class LongTermPoolMonitor:
         # ── Step 4: 执行建仓 ──
         buy_volume = pos_result.quantity.probe_shares
         if buy_volume < 100:
-            print(f"[长期池] {symbol} 建议股数 {buy_volume}<100，跳过", file=sys.stderr)
-            return False
+            # 长期候选池：如最低股数超出仓位限制，买入最低股数100
+            min_cost = 100 * pos_result.current_price
+            if pos_result.available_cash >= min_cost:
+                buy_volume = 100
+                print(f"[长期池] {symbol} 建议股数不足100，强制买入100股 (成本{min_cost:.0f})", file=sys.stderr)
+            else:
+                print(f"[长期池] {symbol} 建议股数 {buy_volume}<100 且现金不足({pos_result.available_cash:.0f}<{min_cost:.0f})，跳过", file=sys.stderr)
+                return False
 
         buy_price = result.tech.current_price
         name = entry.get("name", "")
