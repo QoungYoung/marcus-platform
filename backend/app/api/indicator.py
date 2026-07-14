@@ -635,7 +635,7 @@ async def get_realtime_indicators(
     # 2. Tushare 历史日K线（≥35条，用于 MACD 初始化 + 滚动窗口）
     async def _fetch_daily_bars():
         try:
-                from datetime import datetime as dt, timedelta
+            from datetime import datetime as dt, timedelta
             pro = _get_tushare_pro()
             end_d = dt.now().strftime("%Y%m%d")
             start_d = (dt.now() - timedelta(days=60)).strftime("%Y%m%d")
@@ -649,7 +649,7 @@ async def get_realtime_indicators(
     # 3. Tushare stk_factor_pro 最近 5 条（用于构建 PrevIndicators 锚点）
     async def _fetch_stk_factor():
         try:
-                from datetime import datetime as dt, timedelta
+            from datetime import datetime as dt, timedelta
             pro = _get_tushare_pro()
             end_d = dt.now().strftime("%Y%m%d")
             start_d = (dt.now() - timedelta(days=35)).strftime("%Y%m%d")
@@ -1278,7 +1278,7 @@ async def calc_position(req: CalcPositionRequest):
         settings = get_settings()
         token = settings.get_tushare_token()
         if token:
-                pro = _get_tushare_pro()
+            pro = _get_tushare_pro()
             end_d = datetime.now().strftime("%Y%m%d")
             start_d = (datetime.now() - timedelta(days=15)).strftime("%Y%m%d")
             df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=5)
