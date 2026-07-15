@@ -254,7 +254,7 @@ class XueqiuEngine:
                 'pb': _f(46),
                 'market_capital': _f(45),
                 'float_market_capital': _f(44),
-                'avg_price': avg_price if avg_price > 0 else _f(current) if current > 0 else 0,
+                'avg_price': avg_price if avg_price > 0 else current if current > 0 else 0,
                 'high_52w': _f(57) or _f(49) or high,  # 优先52周最高，降级年最高/今日最高
                 'low_52w': _f(58) or _f(50) or low,    # 优先52周最低，降级年最低/今日最低
                 'data_source': 'tencent',
