@@ -464,13 +464,6 @@ def _get_tushare_pro():
     return _gtp()
 
 
-def _get_rt_min_pro():
-    """获取 Tushare pro_api 实例，专门用于 rt_min_daily（走分钟线代理 tu.brze.top）"""
-    import tushare as ts
-    pro = ts.pro_api('SC9b-_EoiR-gUuR1hHMIddmTqHvF6D_DGOizKGo2KQk')
-    pro._DataApi__http_url = 'https://tu.brze.top/api'
-    return pro
-
 
 def _query_stock_flow(ts_code: str) -> Optional[dict]:
     """
@@ -2183,10 +2176,10 @@ async def get_intraday_min(
         raise HTTPException(status_code=400, detail="单次最多查询10只股票")
 
     try:
-        time.sleep(1.0)  # tu.brze.top 代理限速 1 QPS
-        pro = _get_rt_min_pro()
-        df = pro.rt_min_daily(ts_code=",".join(ts_codes), freq=freq)
-        if df is None or df.empty:
+        from app.core.trading._60min_analysis import _call_rt_min_daily_raw
+
+        data = _call_rt_min_daily_raw(ts_codes, freq)
+        if not data:
             return {
                 "symbols": ts_codes,
                 "freq": freq,
@@ -2196,18 +2189,22 @@ async def get_intraday_min(
                 "note": "无数据（非交易时段或代码无效）",
             }
 
-        # 按 code 分组
+        fields = data.get("fields", [])
+        items = data.get("items", [])
+        col_map = {name: idx for idx, name in enumerate(fields)}
+
+        # 按 ts_code 分组（原始返回的是 ts_code 字段）
         grouped = {}
-        for _, row in df.iterrows():
-            code = row.get("code", "")
+        for row in items:
+            code = row[col_map.get("ts_code", 0)]
             bar = {
-                "time": str(row.get("time", "")),
-                "open": float(row.get("open", 0)),
-                "close": float(row.get("close", 0)),
-                "high": float(row.get("high", 0)),
-                "low": float(row.get("low", 0)),
-                "vol": float(row.get("vol", 0)),
-                "amount": float(row.get("amount", 0)),
+                "time": str(row[col_map.get("trade_time", 1)]),
+                "open": float(row[col_map.get("open", 2)]),
+                "close": float(row[col_map.get("close", 3)]),
+                "high": float(row[col_map.get("high", 4)]),
+                "low": float(row[col_map.get("low", 5)]),
+                "vol": float(row[col_map.get("vol", 6)]),
+                "amount": float(row[col_map.get("amount", 7)]),
             }
             grouped.setdefault(code, []).append(bar)
 
@@ -2216,7 +2213,6 @@ async def get_intraday_min(
         for code in ts_codes:
             bars = grouped.get(code, [])
             if not bars:
-                # 尝试匹配（rt_min 返回的 code 可能不带交易所后缀）
                 for k, v in grouped.items():
                     if k.split(".")[0] == code.split(".")[0]:
                         bars = v
@@ -2243,7 +2239,7 @@ async def get_intraday_min(
 
             symbols_data.append({
                 "code": code,
-                "bars": bars[-60:],  # 最近60根K线，防止数据过大
+                "bars": bars[-60:],
                 "summary": summary,
             })
 

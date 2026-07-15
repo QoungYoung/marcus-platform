@@ -23,20 +23,46 @@
   2. 日线技术指标近似（60min MA10≈日线MA5, 60min MA20≈日线MA10）
 """
 
+import json
 import logging
 import time
+import urllib.request
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List, Dict
 
 logger = logging.getLogger(__name__)
 
+# tu.brze.top 代理配置（仅用于 rt_min_daily）
+_RT_MIN_TOKEN = 'SC9b-_EoiR-gUuR1hHMIddmTqHvF6D_DGOizKGo2KQk'
+_RT_MIN_URL = 'https://tu.brze.top/api'
 
-def _get_rt_min_daily_pro():
-    """获取 Tushare pro_api 实例，专门用于 rt_min_daily（走分钟线代理 tu.brze.top，1 QPS 限制）"""
-    import tushare as ts
-    pro = ts.pro_api('SC9b-_EoiR-gUuR1hHMIddmTqHvF6D_DGOizKGo2KQk')
-    pro._DataApi__http_url = 'https://tu.brze.top/api'
-    return pro
+
+def _call_rt_min_daily_raw(ts_codes: list, freq: str) -> Optional[dict]:
+    """直接 HTTP 调用 tu.brze.top rt_min_daily，绕过 Tushare SDK（SDK 无法解析此代理的响应格式）。
+
+    返回 {"fields": [...], "items": [[...], ...]} 或 None。
+    """
+    time.sleep(1.0)
+    payload = json.dumps({
+        'api_name': 'rt_min_daily',
+        'token': _RT_MIN_TOKEN,
+        'params': {'ts_code': ','.join(ts_codes), 'freq': freq},
+        'fields': '',
+    }).encode('utf-8')
+    req = urllib.request.Request(
+        _RT_MIN_URL, data=payload,
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception as e:
+        logger.warning(f"[rt_min_daily] HTTP 请求失败: {e}")
+        return None
+    if data.get('code') != 0 or not data.get('data'):
+        return None
+    return data['data']
 
 # 缓存：避免同一扫描周期重复 Tushare 调用
 _signal_cache: Dict[str, Tuple[float, tuple]] = {}  # key -> (timestamp, result)
@@ -50,24 +76,28 @@ def _normalize_to_ts_code(symbol: str) -> str:
 
 
 def _fetch_60min_bars(ts_code: str) -> Optional[List[dict]]:
-    """从 Tushare rt_min_daily 获取今日60分钟K线（tu.brze.top 代理，1 QPS 限制）"""
+    """从 rt_min_daily 获取今日60分钟K线（绕过 Tushare SDK，直接解析 HTTP JSON）"""
     try:
-        time.sleep(1.0)  # 新代理每秒并发1次
-        pro = _get_rt_min_daily_pro()
-        df = pro.rt_min_daily(ts_code=ts_code, freq="60min")
-        if df is None or df.empty:
+        data = _call_rt_min_daily_raw([ts_code], "60min")
+        if not data:
             return None
-        df = df.sort_values("time", ascending=True)
+        fields = data.get("fields", [])
+        items = data.get("items", [])
+        if not fields or not items:
+            return None
+        # fields 顺序: ts_code, trade_time, open, close, high, low, vol, amount
+        col_map = {name: idx for idx, name in enumerate(fields)}
         bars = []
-        for _, row in df.iterrows():
+        for row in items:
             bars.append({
-                "time": str(row.get("time", "")),
-                "open": float(row.get("open", 0)),
-                "close": float(row.get("close", 0)),
-                "high": float(row.get("high", 0)),
-                "low": float(row.get("low", 0)),
-                "vol": float(row.get("vol", 0)),
+                "time": str(row[col_map.get("trade_time", 1)]),
+                "open": float(row[col_map.get("open", 2)]),
+                "close": float(row[col_map.get("close", 3)]),
+                "high": float(row[col_map.get("high", 4)]),
+                "low": float(row[col_map.get("low", 5)]),
+                "vol": float(row[col_map.get("vol", 6)]),
             })
+        bars.sort(key=lambda b: b["time"])
         return bars
     except Exception as e:
         logger.debug(f"[60min] rt_min_daily 获取失败 {ts_code}: {e}")
