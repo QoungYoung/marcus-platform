@@ -541,51 +541,43 @@ async def get_stock_moneyflow(
     ts_code = _normalize_to_ts_code(symbol)
     bare_code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ").lower()
 
-    # ── 判断交易时段 ──
-    now = datetime.now()
-    is_trading = (
-        now.weekday() < 5
-        and (9, 30) <= (now.hour, now.minute) < (15, 0)
-    )
+    # ── 优先：东财实时个股接口（7×24 可用，盘后返回收盘快照）──
+    flow = _query_stock_flow(ts_code)
+    if flow:
+        # ── 计算资金效率指数 ──
+        capital_efficiency = None
+        try:
+            main_pct_val = float(flow.get("main_pct", "0").replace("%", ""))
+            chg_val = abs(float(flow.get("change_pct", "0").replace("%", "")))
+            if chg_val > 0.001:
+                capital_efficiency = round(main_pct_val / chg_val, 2)
+        except (ValueError, TypeError):
+            pass
 
-    # ── 交易时段：优先东财实时个股接口（api/qt/stock/get）──
-    if is_trading:
-        flow = _query_stock_flow(ts_code)
-        if flow:
-            # ── 计算资金效率指数 ──
-            capital_efficiency = None
-            try:
-                main_pct_val = float(flow.get("main_pct", "0").replace("%", ""))
-                chg_val = abs(float(flow.get("change_pct", "0").replace("%", "")))
-                if chg_val > 0.001:
-                    capital_efficiency = round(main_pct_val / chg_val, 2)
-            except (ValueError, TypeError):
-                pass
-
-            return ThsMoneyflowResponse(
-                symbol=ts_code, name=flow["name"],
-                price=flow["price"], change_pct=flow["change_pct"],
-                turnover_rate=flow.get("turnover_rate", ""),
-                inflow=0, outflow=0,
-                net_amount=flow["net_amount"],
-                main_net=flow["main_net"], main_pct=flow["main_pct"],
-                lg_net=flow["lg_net"], lg_pct=flow["lg_pct"],
-                md_net=flow["md_net"], md_pct=flow["md_pct"],
-                sm_net=flow["sm_net"], sm_pct=flow["sm_pct"],
-                xs_net=flow["xs_net"], xs_pct=flow["xs_pct"],
-                d5_main_net=flow.get("d5_main_net",0), d5_main_pct=flow.get("d5_main_pct",""),
-                d5_lg_net=flow.get("d5_lg_net",0), d5_lg_pct=flow.get("d5_lg_pct",""),
-                d5_md_net=flow.get("d5_md_net",0), d5_md_pct=flow.get("d5_md_pct",""),
-                d5_sm_net=flow.get("d5_sm_net",0), d5_sm_pct=flow.get("d5_sm_pct",""),
-                d5_xs_net=flow.get("d5_xs_net",0), d5_xs_pct=flow.get("d5_xs_pct",""),
-                d10_main_net=flow.get("d10_main_net",0), d10_main_pct=flow.get("d10_main_pct",""),
-                d10_lg_net=flow.get("d10_lg_net",0), d10_lg_pct=flow.get("d10_lg_pct",""),
-                d10_md_net=flow.get("d10_md_net",0), d10_md_pct=flow.get("d10_md_pct",""),
-                d10_sm_net=flow.get("d10_sm_net",0), d10_sm_pct=flow.get("d10_sm_pct",""),
-                d10_xs_net=flow.get("d10_xs_net",0), d10_xs_pct=flow.get("d10_xs_pct",""),
-                capital_efficiency=capital_efficiency,
-                source="eastmoney_stock_get", updated_at=datetime.now(),
-            )
+        return ThsMoneyflowResponse(
+            symbol=ts_code, name=flow["name"],
+            price=flow["price"], change_pct=flow["change_pct"],
+            turnover_rate=flow.get("turnover_rate", ""),
+            inflow=0, outflow=0,
+            net_amount=flow["net_amount"],
+            main_net=flow["main_net"], main_pct=flow["main_pct"],
+            lg_net=flow["lg_net"], lg_pct=flow["lg_pct"],
+            md_net=flow["md_net"], md_pct=flow["md_pct"],
+            sm_net=flow["sm_net"], sm_pct=flow["sm_pct"],
+            xs_net=flow["xs_net"], xs_pct=flow["xs_pct"],
+            d5_main_net=flow.get("d5_main_net",0), d5_main_pct=flow.get("d5_main_pct",""),
+            d5_lg_net=flow.get("d5_lg_net",0), d5_lg_pct=flow.get("d5_lg_pct",""),
+            d5_md_net=flow.get("d5_md_net",0), d5_md_pct=flow.get("d5_md_pct",""),
+            d5_sm_net=flow.get("d5_sm_net",0), d5_sm_pct=flow.get("d5_sm_pct",""),
+            d5_xs_net=flow.get("d5_xs_net",0), d5_xs_pct=flow.get("d5_xs_pct",""),
+            d10_main_net=flow.get("d10_main_net",0), d10_main_pct=flow.get("d10_main_pct",""),
+            d10_lg_net=flow.get("d10_lg_net",0), d10_lg_pct=flow.get("d10_lg_pct",""),
+            d10_md_net=flow.get("d10_md_net",0), d10_md_pct=flow.get("d10_md_pct",""),
+            d10_sm_net=flow.get("d10_sm_net",0), d10_sm_pct=flow.get("d10_sm_pct",""),
+            d10_xs_net=flow.get("d10_xs_net",0), d10_xs_pct=flow.get("d10_xs_pct",""),
+            capital_efficiency=capital_efficiency,
+            source="eastmoney_stock_get", updated_at=datetime.now(),
+        )
 
     # ── 降级：Tushare 日频（moneyflow_dc）──
     try:
@@ -596,9 +588,13 @@ async def get_stock_moneyflow(
         from datetime import timedelta
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
-        df = pro.moneyflow_dc(ts_code=ts_code, start_date=start_date, end_date=end_date, limit=1)
+        df = pro.moneyflow_dc(ts_code=ts_code, start_date=start_date, end_date=end_date)
         if df is not None and not df.empty:
+            # 按交易日降序，取最新一条
+            df = df.sort_values('trade_date', ascending=False)
             row = df.iloc[0]
+            logger.info(f"[moneyflow] Tushare 降级: {ts_code}, trade_date={row.get('trade_date')}, "
+                        f"net_mf_amount={row.get('net_mf_amount')}, columns={list(df.columns)}")
             def _f(col: str, default=0.0) -> float:
                 v = row.get(col)
                 return float(v) if v is not None and v != '' else default
@@ -612,7 +608,12 @@ async def get_stock_moneyflow(
             md_net = (_f("buy_lg_amount") - _f("sell_lg_amount")) * 10000
             sm_net = (_f("buy_md_amount") - _f("sell_md_amount")) * 10000
             xs_net = (_f("buy_sm_amount") - _f("sell_sm_amount")) * 10000
-            main_net = _f("net_mf_amount") * 10000     # 主力净流入=超大单+大单
+            # net_mf_amount 优先，不存在则用买卖差额计算
+            main_net_raw = row.get("net_mf_amount")
+            if main_net_raw is None or main_net_raw == '':
+                main_net = lg_net + md_net  # 主力=超大单+大单净额
+            else:
+                main_net = float(main_net_raw) * 10000
 
             # ── 计算资金效率指数 ──
             capital_efficiency = None
