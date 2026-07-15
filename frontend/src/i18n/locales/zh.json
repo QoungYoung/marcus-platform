@@ -19,7 +19,7 @@
     "market": "行情",
     "news": "资讯",
     "backtest": "回测",
-    "analytics": "分析",
+    "analytics": "工具测试",
     "scheduler": "调度",
     "agent": "AI助手"
   },
@@ -215,16 +215,34 @@
       "invalidExpression": "Cron 表达式不正确"
     }
   },
-  "analytics": {
-    "title": "分析",
-    "dailyPnL": "每日盈亏",
-    "monthlyPnL": "月度盈亏",
-    "winRate": "胜率",
-    "avgProfit": "平均盈利",
-    "avgLoss": "平均亏损",
-    "totalTrades": "总交易次数",
-    "profitableTrades": "盈利交易",
-    "losingTrades": "亏损交易"
+  "tools": {
+    "title": "工具测试台",
+    "searchPlaceholder": "搜索工具...",
+    "noToolsFound": "未找到匹配的工具",
+    "selectTool": "请从左侧选择一个工具",
+    "selectToolDesc": "点击工具名称查看参数并执行调用",
+    "execute": "执行",
+    "executing": "执行中...",
+    "parameters": "参数",
+    "response": "响应结果",
+    "responseTime": "耗时",
+    "copyResult": "复制结果",
+    "copied": "已复制",
+    "toolCategories": "工具分类",
+    "allTools": "全部工具",
+    "required": "必填",
+    "optional": "可选",
+    "stockLookup": "搜索股票代码...",
+    "noStockFound": "未找到匹配股票",
+    "categoryLabels": {
+      "market": "行情查询",
+      "technical": "技术分析",
+      "moneyflow": "资金流向",
+      "fundamental": "基本面",
+      "trading": "交易执行",
+      "database": "数据库查询",
+      "analysis": "分析历史"
+    }
   },
   "language": {
     "switchToChinese": "切换到中文",

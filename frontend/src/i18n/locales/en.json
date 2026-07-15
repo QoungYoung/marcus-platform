@@ -19,7 +19,7 @@
     "market": "Market",
     "news": "News",
     "backtest": "Backtest",
-    "analytics": "Analytics",
+    "analytics": "Tools",
     "scheduler": "Scheduler",
     "agent": "AI Agent"
   },
@@ -213,16 +213,34 @@
       "invalidExpression": "Invalid cron expression"
     }
   },
-  "analytics": {
-    "title": "Analytics",
-    "dailyPnL": "Daily P&L",
-    "monthlyPnL": "Monthly P&L",
-    "winRate": "Win Rate",
-    "avgProfit": "Avg Profit",
-    "avgLoss": "Avg Loss",
-    "totalTrades": "Total Trades",
-    "profitableTrades": "Profitable Trades",
-    "losingTrades": "Losing Trades"
+  "tools": {
+    "title": "Tools Test Bench",
+    "searchPlaceholder": "Search tools...",
+    "noToolsFound": "No matching tools found",
+    "selectTool": "Select a tool from the sidebar",
+    "selectToolDesc": "Click on a tool name to view its parameters and execute",
+    "execute": "Execute",
+    "executing": "Executing...",
+    "parameters": "Parameters",
+    "response": "Response",
+    "responseTime": "Response time",
+    "copyResult": "Copy result",
+    "copied": "Copied",
+    "toolCategories": "Tool Categories",
+    "allTools": "All Tools",
+    "required": "Required",
+    "optional": "Optional",
+    "stockLookup": "Search stock code...",
+    "noStockFound": "No matching stocks",
+    "categoryLabels": {
+      "market": "Market Data",
+      "technical": "Technical Analysis",
+      "moneyflow": "Money Flow",
+      "fundamental": "Fundamentals",
+      "trading": "Trade Execution",
+      "database": "Database",
+      "analysis": "Analysis History"
+    }
   },
   "language": {
     "switchToChinese": "切换到中文",

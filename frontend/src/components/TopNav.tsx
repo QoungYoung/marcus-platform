@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { LayoutDashboard, BarChart3, TrendingUp, Newspaper, PieChart, LineChart, CalendarClock, Bot, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, BarChart3, TrendingUp, Newspaper, PieChart, Wrench, CalendarClock, Bot, Sun, Moon } from 'lucide-react';
 import clsx from 'clsx';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { useThemeStore } from '../store/themeStore';
@@ -11,7 +11,7 @@ const navItems = [
   { path: '/market', labelKey: 'nav.market', icon: TrendingUp },
   { path: '/news', labelKey: 'nav.news', icon: Newspaper },
   { path: '/backtest', labelKey: 'nav.backtest', icon: PieChart },
-  { path: '/analytics', labelKey: 'nav.analytics', icon: LineChart },
+  { path: '/analytics', labelKey: 'nav.analytics', icon: Wrench },
   { path: '/scheduler', labelKey: 'nav.scheduler', icon: CalendarClock },
   { path: '/agent', labelKey: 'nav.agent', icon: Bot },
 ];
