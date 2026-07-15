@@ -27,6 +27,25 @@ async function fetchStockSuggestions(query: string): Promise<StockOption[]> {
   }
 }
 
+// ─── 股票代码标准化 ───
+// 将各种格式统一转换为 SZ000739 格式（Xueqiu 格式，不带点）
+function normalizeStockCode(input: string): string {
+  const raw = input.trim().toUpperCase();
+  if (!raw) return raw;
+  // 已经是 SZ000739 / SH600519 格式
+  if (/^(SH|SZ|BJ)\d{6}$/.test(raw)) return raw;
+  // 000739.SZ → SZ000739
+  const dotMatch = raw.match(/^(\d{6})\.(SH|SZ|BJ)$/);
+  if (dotMatch) return dotMatch[2] + dotMatch[1];
+  // 纯数字
+  if (/^\d{6}$/.test(raw)) {
+    if (raw.startsWith('6') || raw.startsWith('9')) return 'SH' + raw;
+    if (raw.startsWith('0') || raw.startsWith('3')) return 'SZ' + raw;
+    if (raw.startsWith('4') || raw.startsWith('8')) return 'BJ' + raw;
+  }
+  return raw;
+}
+
 // ─── StockCodeInput 组件 ───
 
 function StockCodeInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
@@ -57,9 +76,16 @@ function StockCodeInput({ value, onChange, placeholder }: { value: string; onCha
     }
   }, [onChange]);
 
+  // 失焦时自动标准化代码格式
+  const handleBlur = useCallback(() => {
+    if (value) {
+      const normalized = normalizeStockCode(value);
+      if (normalized !== value) onChange(normalized);
+    }
+  }, [value, onChange]);
+
   const selectStock = useCallback((opt: StockOption) => {
-    const code = opt.ts_code?.replace(/\.(SZ|SH|BJ)$/, (_, m) => m + opt.symbol?.padStart(6, '0') || '') || opt.symbol;
-    onChange(code.startsWith('SH') || code.startsWith('SZ') || code.startsWith('BJ') ? code : opt.ts_code || opt.symbol);
+    onChange(normalizeStockCode(opt.ts_code || opt.symbol || ''));
     setOpen(false);
   }, [onChange]);
 
@@ -81,6 +107,7 @@ function StockCodeInput({ value, onChange, placeholder }: { value: string; onCha
           onChange={e => handleInputChange(e.target.value)}
           onFocus={() => value.trim().length >= 1 && setOpen(true)}
           onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
           placeholder={placeholder || 'SH600519'}
           className="w-full bg-dark-300 border border-gray-700 rounded-lg px-3 py-2 text-sm
                      text-foreground placeholder:text-gray-500 focus:outline-none focus:border-blue-500 transition-colors"

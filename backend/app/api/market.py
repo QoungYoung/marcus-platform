@@ -123,12 +123,10 @@ async def get_stock_quote(symbol: str):
     try:
         from xueqiu_engine import XueqiuEngine
 
-        # Normalize symbol format
-        if not symbol.startswith(("SH", "SZ", "BJ")):
-            if symbol.startswith("6"):
-                symbol = "SH" + symbol
-            elif symbol.startswith(("0", "3")):
-                symbol = "SZ" + symbol
+        # Normalize symbol format → Xueqiu SH/SZ/BJ + 6-digit code
+        ts = _normalize_to_ts_code(symbol)  # → 000739.SZ
+        code, market = ts.split(".") if "." in ts else (ts, "")
+        symbol = f"{market}{code}"  # → SZ000739
 
         engine = XueqiuEngine(config_file=str(XUEQIU_DIR / "config.json"))
         quote = engine.get_stock_quote(symbol)
