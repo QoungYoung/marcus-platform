@@ -2578,21 +2578,49 @@ def _check_entry_tushare(symbol: str, closes: list, daily: dict) -> dict:
     last_date = sorted_dates[-1] if sorted_dates else None
     cur_price = daily[last_date]["close"] if last_date else 0
 
-    # L1 技术面: MA5 > MA20 + MACD > 0 + RSI6 < 80
+    # L1 技术面: MA 检查（趋势市日线 / 震荡市60分钟线）+ MACD > 0 + RSI6 < 80
     l1_reasons = []
-    if len(closes) >= 20:
-        ma5 = sum(closes[-5:]) / 5
-        ma20 = sum(closes[-20:]) / 20
-    elif closes:
-        ma5 = sum(closes[-min(5, len(closes)):]) / min(5, len(closes))
-        ma20 = sum(closes) / len(closes)
-    else:
-        ma5 = ma20 = cur_price
-
     l1_pass = True
-    if ma5 <= ma20:
-        l1_pass = False
-        l1_reasons.append(f"MA5({ma5:.2f}) ≤ MA20({ma20:.2f})")
+
+    # ── MA 检查 — 按市场状态切换时间周期 ──
+    use_daily = True  # 默认使用日线
+
+    try:
+        regime = _get_market_regime_for_calc()
+    except Exception:
+        regime = "trend"
+
+    if regime == "oscillation":
+        try:
+            from app.core.trading._60min_analysis import get_60min_ma_values
+            ts_code = _normalize_to_ts_code(symbol)
+            min60 = get_60min_ma_values(ts_code)
+            ma10_60 = min60.get('ma10', 0) if min60 else 0
+            ma30_60 = min60.get('ma30', 0) if min60 else 0
+            if ma10_60 > 0 and ma30_60 > 0:
+                use_daily = False
+                if ma10_60 <= ma30_60:
+                    l1_pass = False
+                    l1_reasons.append(f"震荡市 MA10(60分,{ma10_60:.2f}) ≤ MA30(60分,{ma30_60:.2f})")
+            else:
+                logger.debug(f"[_check_entry_tushare] {symbol} 震荡市60分MA数据不足，降级日线")
+        except Exception as e:
+            logger.debug(f"[_check_entry_tushare] {symbol} 震荡市60分MA获取异常: {e}")
+
+    if use_daily:
+        # 趋势市 或 震荡市60分数据不足 → 日线兜底
+        if len(closes) >= 20:
+            ma5 = sum(closes[-5:]) / 5
+            ma20 = sum(closes[-20:]) / 20
+        elif closes:
+            ma5 = sum(closes[-min(5, len(closes)):]) / min(5, len(closes))
+            ma20 = sum(closes) / len(closes)
+        else:
+            ma5 = ma20 = cur_price
+
+        if ma5 <= ma20:
+            l1_pass = False
+            l1_reasons.append(f"MA5({ma5:.2f}) ≤ MA20({ma20:.2f})")
 
     # MACD (简化: DIF=EMA12-EMA26, DEA=EMA(DIF,9))
     macd_pass = True
@@ -2904,10 +2932,20 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             pool_type = _classify_pool_type(candidate)
         added_date = candidate.get("added_trade_day", "")
         checks_count = candidate.get("checks_count", 0)
-        data_source = "tushare_daily" if use_tushare else "realtime"
+        data_source = "realtime"
 
-        if use_tushare:
-            # ── 非交易时段：Tushare 日频数据 ──
+        # ── 统一使用 check_entry_filters（交易/非交易时段一致）──
+        try:
+            from app.api.indicator import check_entry_filters as _cef
+            filter_result = await _cef(EntryCheckRequest(symbol=sym))
+            use_tushare_fallback = False
+        except Exception as e:
+            # check_entry_filters 失败（如行情获取不到），降级到 Tushare 日频
+            logger.debug(f"[candidate-entry] {sym} check_entry_filters 失败, 降级日频: {e}")
+            use_tushare_fallback = True
+
+        if use_tushare_fallback:
+            # ── 降级：Tushare 日频数据 ──
             daily = _fetch_tushare_daily_df(sym, days=60)
             closes = [daily[d]["close"] for d in sorted(daily.keys())] if daily else []
             entry = _check_entry_tushare(sym, closes, daily)
@@ -2920,15 +2958,11 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             rsi_val = entry["rsi"]
             change_pct = 0.0
 
-            # 买入确认：Tushare 日频无法获取实时涨跌幅，跳过
             bc_pass = True
             bc_action = "N/A (日频数据无实时涨跌幅)"
-
-            # 午后限制：无法获取分时数据
             afternoon_pass = True
             afternoon_failed = []
 
-            # 汇总缺失条件
             missing_conditions = []
             if not l1_pass:
                 for reason in entry["l1_reasons"]:
@@ -2944,7 +2978,6 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
 
             can_entry = all_filter_pass and stance_pass
 
-            # 构建 filters 详情
             filters = {
                 "layer1_tech": {
                     "passed": l1_pass,
@@ -2976,7 +3009,7 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
                 "main_net_5d": entry.get("main_net_5d", 0),
                 "last_reject_reason": candidate.get("reject_reasons", []),
                 "checks_count": checks_count,
-                "data_source": data_source,
+                "data_source": "tushare_daily_fallback",
                 "filters": filters,
                 "stance_check": {"passed": stance_pass,
                                  "detail": f"Pi立场={pi_stance}" + (" (red禁止)" if not stance_pass else "")},
@@ -2987,24 +3020,7 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             })
             continue
 
-        # ── 交易时段：实时数据 ──
-        # 重新运行入场过滤（handler 已是 async，直接 await）
-        try:
-            from app.api.indicator import check_entry_filters
-            filter_result = await check_entry_filters(EntryCheckRequest(symbol=sym))
-        except Exception as e:
-            results.append({
-                "symbol": sym, "name": name,
-                "error": f"入场过滤检查失败: {e}",
-                "missing_conditions": [f"入场过滤检查失败: {e}"],
-                "can_entry": False,
-                "pool_type": pool_type,
-                "added_date": added_date,
-                "checks_count": checks_count,
-                "data_source": data_source,
-            })
-            continue
-
+        # ── 主路径：使用前面已获取的 filter_result ──
         l1 = filter_result.layer1_tech
         l2 = filter_result.layer2_capital
         l3 = filter_result.layer3_overbought
@@ -3048,6 +3064,9 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
         can_entry = all_filter_pass and stance_pass and bc_pass and afternoon_pass
 
         cur_price = filter_result.tech.current_price if filter_result.tech else 0
+        rsi_val = filter_result.tech.rsi6 if filter_result.tech else 0
+        ma5_val = filter_result.tech.ma5 if filter_result.tech else 0
+        ma20_val = filter_result.tech.ma20 if filter_result.tech else 0
 
         results.append({
             "symbol": sym,
@@ -3056,6 +3075,10 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             "added_date": added_date,
             "current_price": round(cur_price, 2),
             "change_pct": round(bc.change_pct, 2) if bc.change_pct else 0,
+            "rsi": round(rsi_val, 1),
+            "ma5": round(ma5_val, 2),
+            "ma20": round(ma20_val, 2),
+            "main_net_5d": round(filter_result.capital.d5_main_net if filter_result.capital else 0, 2),
             "last_reject_reason": candidate.get("reject_reasons", []),
             "checks_count": checks_count,
             "data_source": data_source,
