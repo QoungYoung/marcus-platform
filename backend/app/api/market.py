@@ -2218,6 +2218,7 @@ async def get_intraday_min(
                         bars = v
                         break
 
+            bars.sort(key=lambda b: b["time"])  # API 返回降序，转为升序
             summary = None
             if bars:
                 latest = bars[-1]
