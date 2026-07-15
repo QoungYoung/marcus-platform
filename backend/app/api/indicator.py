@@ -2616,9 +2616,9 @@ def _check_trend_tushare(symbol: str, closes: list, daily: dict) -> dict:
                 main_net_5d += (lg + md)
         checks["moneyflow"] = {
             "passed": main_net_5d > 0,
-            "value": f"{main_net_5d / 1e8:.2f}亿",
+            "value": f"{main_net_5d / 1e4:.2f}亿",
             "threshold": "> 0",
-            "detail": "5日主力净流入(Tushare)",
+            "detail": "5日主力净流入(Tushare,万元→亿)",
         }
     except Exception:
         checks["moneyflow"] = {"passed": True, "value": "N/A", "threshold": "> 0", "detail": "数据获取跳过"}
