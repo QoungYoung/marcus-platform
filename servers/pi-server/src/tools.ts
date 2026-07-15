@@ -2112,7 +2112,7 @@ export const getIntradayMinTool = {
       // 最近12根K线摘要
       const recent = bars.slice(-12);
       if (recent.length > 0) {
-        const barLines = recent.map(b => {
+        const barLines = recent.map((b: any) => {
           const dir = b.close >= b.open ? '↑' : '↓';
           return `  ${b.time} ${dir} O:${b.open.toFixed(2)} C:${b.close.toFixed(2)} H:${b.high.toFixed(2)} L:${b.low.toFixed(2)} V:${(b.vol / 100).toFixed(0)}手`;
         });
