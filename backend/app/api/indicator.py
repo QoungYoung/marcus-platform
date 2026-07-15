@@ -899,7 +899,8 @@ async def check_stop_profit(symbol: str):
         # 查股票所属概念
         ts_code = _normalize_to_ts_code(symbol)
         bare = ts_code.split('.')[0]
-        pool_db = Path(__file__).parent.parent.parent.parent / "data" / "stock_pool.db"
+        settings = get_settings()
+        pool_db = settings.data_dir / "stock_pool.db"
         if pool_db.exists():
             conn = sqlite3.connect(str(pool_db))
             cur = conn.execute(
