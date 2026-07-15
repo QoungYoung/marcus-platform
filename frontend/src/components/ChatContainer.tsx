@@ -1294,9 +1294,15 @@ function _formatCandidateDiag(c: any): string[] {
   const f = c.filters;
   if (f) {
     for (const [layer, info] of Object.entries(f) as [string, any][]) {
-      const lIcon = info.passed ? '✅' : '❌';
+      const gradeIcon = info.grade === '✅通过' ? '✅' : info.grade === '⚠️降级' ? '⚠️' : '❌';
       const label = layer === 'layer1_tech' ? '技术面' : layer === 'layer2_capital' ? '主力资金' : '超买';
-      lines.push(`- ${lIcon} ${label}: ${info.passed ? '通过' : '未通过'}`);
+      const gradeText = info.grade || (info.passed ? '通过' : '未通过');
+      lines.push(`- ${gradeIcon} ${label}: ${gradeText}`);
+      // 降级原因和操作建议
+      if (info.downgrade) {
+        if (info.downgrade.reason) lines.push(`  - 原因: ${info.downgrade.reason}`);
+        if (info.downgrade.action) lines.push(`  - 操作: ${info.downgrade.action}`);
+      }
       if (info.failed?.length) {
         for (const fd of info.failed) {
           lines.push(`  - ${fd}`);
