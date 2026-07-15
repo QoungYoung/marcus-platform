@@ -3,8 +3,9 @@
 Technical indicator API endpoints.
 Fibonacci retracement & daily K-channel (牛股计算器策略).
 """
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 
@@ -807,10 +808,15 @@ async def check_stop_profit(symbol: str):
     """
     检查是否应该阻止止盈（趋势完好 → 继续持有，让利润奔跑）。
 
-    三项检查：
+    趋势市（严格，AND 关系）：
     1. 趋势检查：价>MA5 且 MA5>MA20（均线多头排列）
     2. 资金检查：今日主力净流入 > 0（主力未撤退）
     3. 主线检查：该股概念板块在当日主力净流入 TOP10 中（仍在主线）
+
+    震荡市（宽松，每项内部 OR 关系）：
+    1. 趋势检查：(价>MA5 且 MA5>MA20) 或 (价>MA10 且 MA10>MA20)
+    2. 资金检查：今日主力净流入 > 0 或 5日主力净流入 > 0
+    3. 主线检查：概念今日排名 ≤10 或 3日均排名 ≤15
 
     全部通过 → block_stop_profit=True（禁止止盈，继续持有）
     任一项失败 → block_stop_profit=False（允许止盈）
@@ -818,7 +824,11 @@ async def check_stop_profit(symbol: str):
     import sqlite3
     from pathlib import Path
 
-    checks = {}
+    # 市场状态：趋势市/震荡市分别使用不同止盈策略
+    regime = _get_market_regime_for_calc()
+    is_oscillation = (regime == "oscillation")
+
+    checks = {"regime": regime}
     reasons = []
 
     # 1. 趋势检查
@@ -829,22 +839,39 @@ async def check_stop_profit(symbol: str):
         if rt:
             price_above_ma5 = rt.current_price > rt.ma5 if rt.ma5 else False
             ma5_above_ma20 = rt.ma5 > rt.ma20 if rt.ma5 and rt.ma20 else False
+            price_above_ma10 = rt.current_price > rt.ma10 if rt.ma10 else False
+            ma10_above_ma20 = rt.ma10 > rt.ma20 if rt.ma10 and rt.ma20 else False
             checks['trend'] = {
                 'current_price': rt.current_price,
                 'ma5': rt.ma5,
+                'ma10': rt.ma10,
                 'ma20': rt.ma20,
                 'price_above_ma5': price_above_ma5,
                 'ma5_above_ma20': ma5_above_ma20,
+                'price_above_ma10': price_above_ma10,
+                'ma10_above_ma20': ma10_above_ma20,
+                'relaxed_pass': (price_above_ma5 and ma5_above_ma20) or (price_above_ma10 and ma10_above_ma20),
             }
-            if price_above_ma5 and ma5_above_ma20:
-                reasons.append('趋势完好(价>MA5 + MA5>MA20)')
+            if is_oscillation:
+                if checks['trend']['relaxed_pass']:
+                    parts = []
+                    if price_above_ma5 and ma5_above_ma20:
+                        parts.append('MA5>MA20')
+                    if price_above_ma10 and ma10_above_ma20:
+                        parts.append('MA10>MA20')
+                    reasons.append(f'趋势完好(震荡市: {",".join(parts)})')
+                else:
+                    reasons.append('趋势走弱(震荡市: 无均线组多头排列)')
             else:
-                reasons.append(f'趋势走弱(价{"<" if not price_above_ma5 else ">"}MA5, MA5{"<" if not ma5_above_ma20 else ">"}MA20)')
+                if price_above_ma5 and ma5_above_ma20:
+                    reasons.append('趋势完好(价>MA5 + MA5>MA20)')
+                else:
+                    reasons.append(f'趋势走弱(价{"<" if not price_above_ma5 else ">"}MA5, MA5{"<" if not ma5_above_ma20 else ">"}MA20)')
         else:
-            checks['trend'] = {'error': '无法获取实时指标'}
+            checks['trend'] = {'error': '无法获取实时指标', 'relaxed_pass': False}
             reasons.append('趋势数据不可用')
     except Exception as e:
-        checks['trend'] = {'error': str(e)}
+        checks['trend'] = {'error': str(e), 'relaxed_pass': False}
         reasons.append('趋势检查异常')
 
     # 2. 资金检查
@@ -852,13 +879,26 @@ async def check_stop_profit(symbol: str):
         from app.api.market import get_stock_moneyflow as _get_mf
         mf_response = await _get_mf(symbol=symbol)
         main_net = float(mf_response.main_net) if hasattr(mf_response, 'main_net') else 0
-        checks['moneyflow'] = {'main_net': main_net}
-        if main_net > 0:
-            reasons.append('主力净流入>0')
+        d5_main_net = float(mf_response.d5_main_net) if hasattr(mf_response, 'd5_main_net') else 0
+        checks['moneyflow'] = {
+            'main_net': main_net,
+            'd5_main_net': d5_main_net,
+            'relaxed_pass': (main_net > 0 or d5_main_net > 0),
+        }
+        if is_oscillation:
+            if main_net > 0:
+                reasons.append('主力净流入>0(震荡市)')
+            elif d5_main_net > 0:
+                reasons.append('5日主力净流入>0(震荡市放宽)')
+            else:
+                reasons.append(f'主力资金疲弱(日{main_net/1e4:.0f}万,5日{d5_main_net/1e4:.0f}万)')
         else:
-            reasons.append(f'主力净流出({main_net/1e4:.0f}万)')
+            if main_net > 0:
+                reasons.append('主力净流入>0')
+            else:
+                reasons.append(f'主力净流出({main_net/1e4:.0f}万)')
     except Exception as e:
-        checks['moneyflow'] = {'error': str(e)}
+        checks['moneyflow'] = {'error': str(e), 'relaxed_pass': False}
         reasons.append('资金数据不可用')
 
     # 3. 主线检查：该股概念是否在当日主力净流入 TOP10 中
@@ -910,29 +950,60 @@ async def check_stop_profit(symbol: str):
             stock_concepts = {row[0] for row in cur.fetchall()}
             conn.close()
             in_main_line = bool(stock_concepts & top_concepts)
+
+            # 震荡市额外：概念排名
+            concept_rank_today = 9999
+            concept_rank_3d_avg = 9999.0
+            if is_oscillation:
+                concept_rank_today, concept_rank_3d_avg = _get_concept_ranks(symbol)
+
             checks['main_line'] = {
                 'stock_concepts': sorted(stock_concepts)[:10],
                 'top_concepts': sorted(top_concepts),
                 'in_main_line': in_main_line,
+                'concept_rank_today': concept_rank_today,
+                'concept_rank_3d_avg': concept_rank_3d_avg,
+                'relaxed_pass': (in_main_line or concept_rank_today <= 10 or concept_rank_3d_avg <= 15),
             }
-            if top_concepts:
+
+            if is_oscillation:
                 if in_main_line:
-                    reasons.append(f'仍在主线({", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+                    reasons.append(f'仍在主线(震荡市: {", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+                elif concept_rank_today <= 10:
+                    reasons.append(f'概念排名今日第{concept_rank_today}(震荡市)')
+                elif concept_rank_3d_avg <= 15:
+                    reasons.append(f'概念3日均排名第{concept_rank_3d_avg}(震荡市放宽)')
                 else:
-                    reasons.append('已脱离当日主线')
+                    reasons.append(f'概念排名靠后(今日第{concept_rank_today}, 3日均{concept_rank_3d_avg})')
             else:
-                reasons.append('主线数据不可用（无概念排行数据）')
+                if top_concepts:
+                    if in_main_line:
+                        reasons.append(f'仍在主线({", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+                    else:
+                        reasons.append('已脱离当日主线')
+                else:
+                    reasons.append('主线数据不可用（无概念排行数据）')
         else:
-            checks['main_line'] = {'error': 'stock_pool.db 不存在'}
+            checks['main_line'] = {
+                'error': 'stock_pool.db 不存在',
+                'concept_rank_today': 9999,
+                'concept_rank_3d_avg': 9999.0,
+                'relaxed_pass': False,
+            }
             reasons.append('主线数据不可用')
     except Exception as e:
-        checks['main_line'] = {'error': str(e)}
+        checks['main_line'] = {'error': str(e), 'relaxed_pass': False}
         reasons.append('主线检查异常')
 
-    # 全部通过才阻止止盈
-    trend_ok = checks.get('trend', {}).get('price_above_ma5') and checks.get('trend', {}).get('ma5_above_ma20')
-    money_ok = checks.get('moneyflow', {}).get('main_net', 0) > 0
-    main_ok = checks.get('main_line', {}).get('in_main_line', False)
+    # 全部通过才阻止止盈（按市场状态选用不同判定条件）
+    if is_oscillation:
+        trend_ok = checks.get('trend', {}).get('relaxed_pass', False)
+        money_ok = checks.get('moneyflow', {}).get('relaxed_pass', False)
+        main_ok = checks.get('main_line', {}).get('relaxed_pass', False)
+    else:
+        trend_ok = checks.get('trend', {}).get('price_above_ma5') and checks.get('trend', {}).get('ma5_above_ma20')
+        money_ok = checks.get('moneyflow', {}).get('main_net', 0) > 0
+        main_ok = checks.get('main_line', {}).get('in_main_line', False)
 
     block = trend_ok and money_ok and main_ok
 
@@ -1076,6 +1147,94 @@ def _get_market_regime_for_calc() -> str:
     except Exception:
         pass
     return "trend"  # 默认趋势市，不做收紧
+
+
+def _get_concept_ranks(symbol: str) -> tuple:
+    """
+    获取股票在概念板块资金流排名中的最佳排名（今日 + 3日均值）。
+
+    Returns:
+        (rank_today: int, rank_3d_avg: float)
+        - rank_today: 1-based best rank among stock's concepts today (lower=better), 9999 if no data
+        - rank_3d_avg: Average best rank over up to 3 trading days, 9999.0 if no data
+    """
+    import sqlite3
+
+    settings = get_settings()
+    pool_db = settings.data_dir / "stock_pool.db"
+    stock_concepts: set[str] = set()
+
+    # 1. 获取股票所属概念
+    if pool_db.exists():
+        ts_code = _normalize_to_ts_code(symbol)
+        bare = ts_code.split('.')[0]
+        conn = sqlite3.connect(str(pool_db))
+        cur = conn.execute(
+            "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
+            (f"%{bare}%",)
+        )
+        stock_concepts = {row[0] for row in cur.fetchall()}
+        conn.close()
+
+    if not stock_concepts:
+        return 9999, 9999.0
+
+    # 2. 今日概念排名
+    rank_today: int = 9999
+    try:
+        from utils.em_sector_flow import get_sector_flow
+        all_concepts = get_sector_flow("concept", sort_by="main_net", top_n=50)
+        concept_rank_map: dict[str, int] = {}
+        for i, item in enumerate(all_concepts):
+            concept_rank_map[item.get("name", "")] = i + 1  # 1-based
+        ranks = [concept_rank_map[c] for c in stock_concepts if c in concept_rank_map]
+        if ranks:
+            rank_today = min(ranks)
+    except Exception:
+        pass
+
+    # 3. 3日平均排名（今日 + 前2个交易日）
+    daily_best_ranks = [rank_today] if rank_today < 9999 else []
+    cache_dir = settings.data_dir / "eastmoney_cache"
+    now = datetime.now()
+
+    for offset in range(1, 3):
+        target_date = (now - timedelta(days=offset)).strftime("%Y%m%d")
+        day_ranks = []
+
+        # 3a. 尝试 EastMoney 缓存文件
+        cache_file = cache_dir / f"{target_date}.json"
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r', encoding='utf-8') as fp:
+                    cache_data = json.load(fp)
+                concepts_val = cache_data.get("sector_flow", {}).get("concept", {}).get("value")
+                if concepts_val and isinstance(concepts_val, list):
+                    sorted_concepts = sorted(concepts_val, key=lambda x: x.get("main_net", 0), reverse=True)
+                    day_map = {item.get("name", ""): idx + 1 for idx, item in enumerate(sorted_concepts)}
+                    day_ranks = [day_map[c] for c in stock_concepts if c in day_map]
+            except (json.JSONDecodeError, IOError, KeyError):
+                pass
+
+        # 3b. 回退：Tushare moneyflow_ind_dc
+        if not day_ranks:
+            try:
+                pro = _get_tushare_pro()
+                df = pro.moneyflow_ind_dc(trade_date=target_date, content_type='概念')
+                if df is not None and not df.empty:
+                    sorted_df = df.sort_values('net_amount', ascending=False)
+                    tushare_map = {}
+                    for idx, (_, row) in enumerate(sorted_df.iterrows()):
+                        tushare_map[str(row.get("name", ""))] = idx + 1
+                    day_ranks = [tushare_map[c] for c in stock_concepts if c in tushare_map]
+            except Exception:
+                pass
+
+        if day_ranks:
+            daily_best_ranks.append(min(day_ranks))
+
+    rank_3d_avg = round(sum(daily_best_ranks) / len(daily_best_ranks), 1) if daily_best_ranks else 9999.0
+    return rank_today, rank_3d_avg
 
 
 def _get_role_cap(role: str) -> float:
