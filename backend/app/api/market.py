@@ -1465,7 +1465,8 @@ async def get_market_diagnosis():
         raise HTTPException(status_code=503, detail="上证指数数据不足")
 
     closes = [float(c) for c in df_sh['close'].values]
-    trade_date = str(df_sh.iloc[-1]['trade_date'])
+    data_trade_date = str(df_sh.iloc[-1]['trade_date'])  # Tushare 最新数据日期（盘前可能是昨天）
+    execution_date = dt.now().strftime("%Y%m%d")  # 诊断执行日期（用于存储和查询）
     close_latest = closes[-1]
 
     # ── ① 市场平均振幅：成交额前100活跃股的近10天平均振幅 ──
@@ -1473,7 +1474,7 @@ async def get_market_diagnosis():
     top100_detail = ""
     try:
         # 获取最新交易日全市场成交额排名
-        df_amount = pro.daily(trade_date=trade_date, fields='ts_code,amount')
+        df_amount = pro.daily(trade_date=data_trade_date, fields='ts_code,amount')
         if df_amount is not None and not df_amount.empty:
             top100 = df_amount.sort_values('amount', ascending=False).head(100)
             top_codes = top100['ts_code'].tolist()
@@ -1571,7 +1572,7 @@ async def get_market_diagnosis():
     limit_up = 0
     limit_down = 0
     try:
-        limit_df = pro.limit_list_d(trade_date=trade_date, limit_type='U,D')
+        limit_df = pro.limit_list_d(trade_date=data_trade_date, limit_type='U,D')
         if limit_df is not None and len(limit_df) > 0 and 'limit' in limit_df.columns:
             limit_up = int((limit_df['limit'] == 'U').sum())
             limit_down = int((limit_df['limit'] == 'D').sum())
@@ -1677,7 +1678,7 @@ async def get_market_diagnosis():
         state, label, suggestion = "trend", "🟢 趋势市", "日线右侧（MA5>MA20），持仓5-30天"
 
     result = {
-        "trade_date": trade_date,
+        "trade_date": execution_date,
         "data_source": "tushare_v2",
         "indicators": {
             "amplitude": {

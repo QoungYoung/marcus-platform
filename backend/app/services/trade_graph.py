@@ -270,7 +270,7 @@ def _read_market_regime() -> tuple:
         workspace = _get_workspace()
         db_path = workspace / "data" / "trades.db"
         if not db_path.exists():
-            return ("unknown", "未知", "数据不可用，按趋势市策略保守操作")
+            return ("unknown", "未知", "⚠️ 今日尚未执行盘前诊断（9:10），无法确定市场结构。禁止按趋势市默认策略操作！")
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         today = datetime.now().strftime("%Y%m%d")
@@ -283,7 +283,7 @@ def _read_market_regime() -> tuple:
             return (row["state"], row["label"], row["suggestion"])
     except Exception:
         pass
-    return ("unknown", "未知", "诊断数据不可用，按趋势市策略保守操作")
+    return ("unknown", "未知", "⚠️ 今日尚未执行盘前诊断（9:10），无法确定市场结构。禁止按趋势市默认策略操作！")
 
 
 def _get_regime_strategy(regime: str) -> str:
@@ -311,7 +311,7 @@ def _get_regime_strategy(regime: str) -> str:
             "- ✅ 每次建仓前必须调用 get_intraday_min(freq='60min') 确认60分MA10>MA30\n"
             "- ✅ 止盈止损紧凑：到达目标盈亏比1:1.5立即执行\n"
         )
-    else:
+    elif regime == "trend":
         return (
             "\n📊 **今日市场结构：🟢 趋势市**\n"
             "严格遵循以下趋势市策略参数：\n\n"
@@ -329,17 +329,30 @@ def _get_regime_strategy(regime: str) -> str:
             "- 主力 10:00 前在试探，早盘是噪声，不要动手\n"
             "- **等到 10:35** 日线信号确认后才建仓\n"
         )
+    else:
+        return (
+            "\n⚠️ **今日市场结构：未诊断**\n"
+            "今日尚未执行盘前诊断（9:10 由 morning_diagnosis 任务执行），无法确定市场结构。\n\n"
+            "⛔ **严格禁止按任何默认策略操作！**\n"
+            "- ❌ 禁止假设为趋势市\n"
+            "- ❌ 禁止假设为震荡市\n"
+            "- ✅ 只能执行以下安全操作：\n"
+            "  1. 检查持仓盈亏状态\n"
+            "  2. 执行止损/止盈（如果触发阈值）\n"
+            "  3. 报告当前持仓状态\n"
+            "- ⛔ 禁止建新仓！禁止加仓！\n\n"
+            "等待盘前诊断完成后，在下一次交易窗口再执行建仓操作。\n"
+        )
 
 
-def _get_trade_instruction(window: str, regime: str = "trend") -> str:
+def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
     """根据时间窗口和市场结构返回交易模式指令。
 
     趋势市节奏：主力 10:00 前试探，早盘是噪声 → 09:35/09:50 观察不动，10:35 日线确认后建仓 40%
     震荡市节奏：主力 09:35 试探但第一个冒头的是诱饵 → 09:35 记排名不动，09:50 买第1名 60%，10:35 第1名还在则加仓 40%
     """
-    is_osc = regime == "oscillation"
 
-    if is_osc:
+    if regime == "oscillation":
         return {
             "morning": (
                 "现在是早盘 9:35，🔴 震荡市 → **扫描记排名，不买！**\n\n"
@@ -408,63 +421,104 @@ def _get_trade_instruction(window: str, regime: str = "trend") -> str:
         }.get(window, "请基于最新扫描报告执行震荡市交易决策。")
 
     # ── 趋势市 ──
+    elif regime == "trend":
+        return {
+            "morning": (
+                "现在是早盘 9:35，🟢 趋势市 → **观察，不动手！**\n\n"
+                "趋势市主力 10:00 前在试探，早盘是噪声。不要被开盘脉冲诱骗建仓。\n\n"
+                "你的任务（只观察，不买）：\n"
+                "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 了解当日热点方向\n"
+                "2. 调用 get_market_indices() 看大盘开盘情况\n"
+                "3. ⛔ 禁止建仓！禁止调用 place_order！\n\n"
+                "输出格式：\n"
+                "## Marcus 交易报告 — 趋势市 9:35 观察窗口\n"
+                "### 早盘观察\n"
+                "- 大盘开盘：{涨跌情况}\n"
+                "- 热点方向：{资金TOP3概念}\n"
+                "- 当前立场：观察中，等待 10:35 日线确认\n\n"
+                "⛔ 本窗口不建仓。趋势市等到 10:35 日线确认后才动手。\n"
+                "SIGNAL: yellow POSITION:0 REASON:趋势市早盘噪声期，10:35日线确认后建仓"
+            ),
+            "mid_morning": (
+                "现在是早盘 9:50，🟢 趋势市 → **继续观察，不动手！**\n\n"
+                "10:00 前的行情仍处噪声期，主力还在试探方向。不要动手。\n\n"
+                "你的任务：\n"
+                "1. 回顾 9:35 观察的热点方向是否仍在（资金排名没有大换血？）\n"
+                "2. 调用 get_daily_kline 查看候选标的日线形态（MA5>MA20？突破前高？）\n"
+                "3. 提前完成产业链建仓计划表（不买，只规划）\n"
+                "4. ⛔ 禁止建仓！禁止调用 place_order！\n\n"
+                "SIGNAL: yellow POSITION:0 REASON:趋势市继续观察，等待10:35"
+            ),
+            "late_morning": (
+                "现在是午前 10:35，🟢 趋势市 → **日线信号确认，建仓40%！**\n\n"
+                "10:00 已过，噪声消退，日线方向明确。现在可以动手！\n\n"
+                "执行流程：\n"
+                "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 确认当日主线\n"
+                "2. 完成产业链建仓计划表（上中下游各 1 只）→ 买入上游龙头\n"
+                "3. 每只买入前必须调用 check_entry_filters + calc_position\n"
+                "4. ⚠️ 总仓位目标 40%，单票 10-15%\n"
+                "5. 止损设在日线 MA5 下方\n\n"
+                "SIGNAL: green POSITION:40 REASON:趋势市10:35日线确认，建仓40%"
+            ),
+            "afternoon": (
+                "现在是午后 13:35，🟢 趋势市 → **只卖不买！**\n\n"
+                "1. 对持仓逐只检查（跳过今日买入的 T+1 锁定持仓）\n"
+                "2. 趋势破位（日线跌破 MA5 或 MACD 死叉）→ 减仓 50%\n"
+                "3. 盈利 10%+ → 卖 1/3 分批止盈\n"
+                "4. ⛔ 禁止新建仓！\n\n"
+                "SIGNAL: red POSITION:<当前仓位> REASON:午后只卖不买"
+            ),
+            "closing": (
+                "现在是尾盘 14:35，🟢 趋势市 → **只卖不买！**\n\n"
+                "严格禁止新开仓。只执行以下操作：\n"
+                "⚠️ A股 T+1 规则：今日买入的持仓今日不可卖出，跳过！\n"
+                "1. 对持仓逐只检查（跳过今日买入的），止损位触发则立即卖出\n"
+                "2. 达到止盈目标的卖出（仅限昨日及之前买入的）\n"
+                "3. 趋势破位的减仓 50%（排除 T+1 锁定持仓）\n"
+                "4. 报告尾盘操作结果，标明哪些持仓因 T+1 锁定未操作\n\n"
+                "SIGNAL: red POSITION:<当前仓位> REASON:尾盘只卖不买"
+            ),
+        }.get(window, "请基于最新扫描报告执行趋势市交易决策。")
+
+    # ── 未知市场结构 ──
     return {
         "morning": (
-            "现在是早盘 9:35，🟢 趋势市 → **观察，不动手！**\n\n"
-            "趋势市主力 10:00 前在试探，早盘是噪声。不要被开盘脉冲诱骗建仓。\n\n"
-            "你的任务（只观察，不买）：\n"
-            "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 了解当日热点方向\n"
-            "2. 调用 get_market_indices() 看大盘开盘情况\n"
-            "3. ⛔ 禁止建仓！禁止调用 place_order！\n\n"
-            "输出格式：\n"
-            "## Marcus 交易报告 — 趋势市 9:35 观察窗口\n"
-            "### 早盘观察\n"
-            "- 大盘开盘：{涨跌情况}\n"
-            "- 热点方向：{资金TOP3概念}\n"
-            "- 当前立场：观察中，等待 10:35 日线确认\n\n"
-            "⛔ 本窗口不建仓。趋势市等到 10:35 日线确认后才动手。\n"
-            "SIGNAL: yellow POSITION:0 REASON:趋势市早盘噪声期，10:35日线确认后建仓"
+            "⛔ 今日市场结构**未诊断**（盘前诊断 morning_diagnosis 尚未执行或执行失败）。\n\n"
+            "严格禁止按任何默认策略操作！当前只能执行安全操作：\n"
+            "1. 调用 get_positions() 查看当前持仓和盈亏状态\n"
+            "2. 检查是否有触发止损/止盈的持仓需要处理\n"
+            "3. ⛔ 禁止建新仓！禁止加仓！\n"
+            "4. 报告当前持仓状态，等待下一次交易窗口\n\n"
+            "SIGNAL: red POSITION:0 REASON:市场结构未诊断，禁止建仓"
         ),
         "mid_morning": (
-            "现在是早盘 9:50，🟢 趋势市 → **继续观察，不动手！**\n\n"
-            "10:00 前的行情仍处噪声期，主力还在试探方向。不要动手。\n\n"
-            "你的任务：\n"
-            "1. 回顾 9:35 观察的热点方向是否仍在（资金排名没有大换血？）\n"
-            "2. 调用 get_daily_kline 查看候选标的日线形态（MA5>MA20？突破前高？）\n"
-            "3. 提前完成产业链建仓计划表（不买，只规划）\n"
-            "4. ⛔ 禁止建仓！禁止调用 place_order！\n\n"
-            "SIGNAL: yellow POSITION:0 REASON:趋势市继续观察，等待10:35"
+            "⛔ 今日市场结构**未诊断**。\n\n"
+            "如果盘前诊断仍未执行，继续禁止建仓。检查持仓是否需要止损/止盈处理。\n"
+            "如果盘前诊断已完成，请以诊断结果为准（趋势市或震荡市）。\n\n"
+            "SIGNAL: red POSITION:0 REASON:市场结构未诊断，禁止建仓"
         ),
         "late_morning": (
-            "现在是午前 10:35，🟢 趋势市 → **日线信号确认，建仓40%！**\n\n"
-            "10:00 已过，噪声消退，日线方向明确。现在可以动手！\n\n"
-            "执行流程：\n"
-            "1. 调用 get_concept_fund_flow(limit=30, sort_by='main_net') 确认当日主线\n"
-            "2. 完成产业链建仓计划表（上中下游各 1 只）→ 买入上游龙头\n"
-            "3. 每只买入前必须调用 check_entry_filters + calc_position\n"
-            "4. ⚠️ 总仓位目标 40%，单票 10-15%\n"
-            "5. 止损设在日线 MA5 下方\n\n"
-            "SIGNAL: green POSITION:40 REASON:趋势市10:35日线确认，建仓40%"
+            "⛔ 今日市场结构**未诊断**。\n\n"
+            "10:35 已过，如果诊断仍未完成，今天不建议建仓。\n"
+            "仅执行止损/止盈检查。\n\n"
+            "SIGNAL: red POSITION:0 REASON:市场结构未诊断，今日不建议建仓"
         ),
         "afternoon": (
-            "现在是午后 13:35，🟢 趋势市 → **只卖不买！**\n\n"
+            "⛔ 今日市场结构**未诊断** → **只检查止损，不建仓！**\n\n"
             "1. 对持仓逐只检查（跳过今日买入的 T+1 锁定持仓）\n"
-            "2. 趋势破位（日线跌破 MA5 或 MACD 死叉）→ 减仓 50%\n"
-            "3. 盈利 10%+ → 卖 1/3 分批止盈\n"
-            "4. ⛔ 禁止新建仓！\n\n"
+            "2. 止损位触发则立即卖出\n"
+            "3. ⛔ 禁止新建仓！\n\n"
             "SIGNAL: red POSITION:<当前仓位> REASON:午后只卖不买"
         ),
         "closing": (
-            "现在是尾盘 14:35，🟢 趋势市 → **只卖不买！**\n\n"
+            "⛔ 今日市场结构**未诊断** → **只检查止损，不建仓！**\n\n"
             "严格禁止新开仓。只执行以下操作：\n"
             "⚠️ A股 T+1 规则：今日买入的持仓今日不可卖出，跳过！\n"
             "1. 对持仓逐只检查（跳过今日买入的），止损位触发则立即卖出\n"
-            "2. 达到止盈目标的卖出（仅限昨日及之前买入的）\n"
-            "3. 趋势破位的减仓 50%（排除 T+1 锁定持仓）\n"
-            "4. 报告尾盘操作结果，标明哪些持仓因 T+1 锁定未操作\n\n"
+            "2. 报告尾盘操作结果\n\n"
             "SIGNAL: red POSITION:<当前仓位> REASON:尾盘只卖不买"
         ),
-    }.get(window, "请基于最新扫描报告执行自主交易决策。")
+    }.get(window, "市场结构未诊断，禁止交易操作。请等待盘前诊断完成。")
 
 
 def _check_drawdown(portfolio_json: str) -> tuple:
