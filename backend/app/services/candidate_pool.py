@@ -55,7 +55,23 @@ class CandidatePool:
         if self._file.exists():
             try:
                 with open(self._file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                # ── 自动迁移：002714.SZ → SZ002714 ──
+                migrated = False
+                for e in data.get("candidates", []):
+                    sym = e.get("symbol", "")
+                    if "." in sym:
+                        code, exchange = sym.split(".", 1)
+                        if code.isdigit() and len(code) == 6 and exchange in ("SH", "SZ", "BJ"):
+                            e["symbol"] = f"{exchange}{code}"
+                            migrated = True
+                if migrated:
+                    logger.info("[CandidatePool] 已迁移候选池 symbol 格式 → SZ002714")
+                    data["updated_at"] = datetime.now().isoformat()
+                    self._file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(self._file, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                return data
             except (json.JSONDecodeError, IOError):
                 logger.warning(f"[CandidatePool] Corrupt file, resetting")
         return {"candidates": [], "updated_at": ""}

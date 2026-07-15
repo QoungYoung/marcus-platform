@@ -85,34 +85,28 @@ async def list_candidates(
 async def add_candidate(req: AddCandidateRequest):
     """手动添加候选标的到池中"""
     from app.services.candidate_pool import get_candidate_pool
-    from app.api.indicator import _normalize_to_ts_code
+    from app.api.indicator import _to_xueqiu_symbol
 
     pool = get_candidate_pool()
-    try:
-        ts_code = _normalize_to_ts_code(req.symbol)
-    except Exception:
-        ts_code = req.symbol
+    sym = _to_xueqiu_symbol(req.symbol)
 
-    ok = pool.add_manual(ts_code, "")
+    ok = pool.add_manual(sym, "")
     if not ok:
-        raise HTTPException(status_code=409, detail=f"{ts_code} 已在候选池中")
-    return {"symbol": ts_code, "status": "added"}
+        raise HTTPException(status_code=409, detail=f"{sym} 已在候选池中")
+    return {"symbol": sym, "status": "added"}
 
 
 @router.delete("/candidates/{symbol:path}")
 async def remove_candidate(symbol: str):
     """从候选池中删除标的"""
     from app.services.candidate_pool import get_candidate_pool
-    from app.api.indicator import _normalize_to_ts_code
+    from app.api.indicator import _to_xueqiu_symbol
 
     pool = get_candidate_pool()
-    try:
-        ts_code = _normalize_to_ts_code(symbol)
-    except Exception:
-        ts_code = symbol
+    sym = _to_xueqiu_symbol(symbol)
 
-    pool.remove(ts_code)
-    return {"symbol": ts_code, "status": "removed"}
+    pool.remove(sym)
+    return {"symbol": sym, "status": "removed"}
 
 
 @router.post("/refresh", response_model=RefreshResponse)

@@ -77,6 +77,28 @@ def _normalize_to_ts_code(symbol: str) -> str:
     return symbol
 
 
+def _to_xueqiu_symbol(raw: str) -> str:
+    """将任意股票代码转为雪球格式 SZ002714 / SH600519（兼容 002714.SZ / SZ002714 / 002714）"""
+    raw = raw.strip().upper()
+    # 已经是雪球格式 SH600519 / SZ000001 / BJxxxxxx
+    if raw.startswith(("SH", "SZ", "BJ")) and len(raw) == 8 and raw[2:].isdigit():
+        return raw
+    # Tushare 格式 002714.SZ
+    if "." in raw:
+        code, exchange = raw.split(".", 1)
+        if code.isdigit() and len(code) == 6 and exchange in ("SH", "SZ", "BJ"):
+            return f"{exchange}{code}"
+    # 纯6位数字
+    if raw.isdigit() and len(raw) == 6:
+        if raw.startswith(("6", "9")):
+            return f"SH{raw}"
+        elif raw.startswith(("0", "3")):
+            return f"SZ{raw}"
+        elif raw.startswith(("4", "8")):
+            return f"BJ{raw}"
+    return raw
+
+
 def _make_xueqiu_symbol(ts_code: str) -> str:
     """将 Tushare ts_code 转为雪球格式 SH600519 / SZ000001"""
     if '.' in ts_code:
@@ -2238,7 +2260,7 @@ async def check_entry_filters(req: EntryCheckRequest):
         from app.services.candidate_pool import get_candidate_pool
         pool = get_candidate_pool()
         captured = pool.maybe_capture(
-            symbol=ts_code,
+            symbol=xq_symbol,
             name=stock_name,
             final_grade=final_grade,
             downgrade_multiplier=downgrade_multiplier,
