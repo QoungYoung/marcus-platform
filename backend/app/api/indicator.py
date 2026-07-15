@@ -2634,8 +2634,8 @@ def _check_trend_tushare(symbol: str, closes: list, daily: dict) -> dict:
                     "threshold": "MA10(60min) > MA30(60min)",
                     "detail": f"震荡市·60分钟线 (regime={regime})",
                 }
-    except Exception as e:
-        logger.debug(f"[_check_trend_tushare] {symbol} 震荡市60分MA获取异常: {e}")
+        except Exception as e:
+            logger.debug(f"[_check_trend_tushare] {symbol} 震荡市60分MA获取异常: {e}")
 
     if use_daily and len(closes) >= 20:
         ma5 = sum(closes[-5:]) / 5
