@@ -305,8 +305,12 @@ def _get_regime_strategy(regime: str) -> str:
             "- **09:50 才见真章**，09:50 时的第1名才是真正的龙头\n"
             "- ❌ 禁止使用日线MA5/MA20作为入场信号\n"
             "- ❌ 禁止产业链建仓计划\n"
-            "- ❌ 禁止不调用 get_intraday_min 就下单\n"
-            "- ✅ 每次建仓前必须调用 get_intraday_min(freq='60min') 确认60分MA10>MA30\n"
+            "- 🚫 get_intraday_min 是建仓的前置硬门槛：\n"
+            "  ① 必须先调用 get_intraday_min(freq='60min') 获取分钟K线\n"
+            "  ② 必须确认 60分MA10 > 60分MA30 才能建仓\n"
+            "  ③ 如果 get_intraday_min 返回空数据（\"无数据\"）或失败 → ⛔ 本轮禁止建仓！跳过该标的！\n"
+            "  ④ 严禁\"调用失败后跳过验证直接下单\"——这是严重违规！\n"
+            "  ⑤ 没有例外。分钟数据不可用 = 不建仓。\n"
             "- ✅ 止盈止损紧凑：到达目标盈亏比1:1.5立即执行\n"
         )
     elif regime == "trend":
