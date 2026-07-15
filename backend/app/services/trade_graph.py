@@ -260,27 +260,25 @@ def _read_stance_context() -> str:
 
 
 def _read_market_regime() -> tuple:
-    """从 market_diagnosis 表读取今日市场结构。
+    """从 market_diagnosis 表（PostgreSQL）读取今日市场结构。
 
     Returns:
         (regime: str, label: str, suggestion: str)
         regime: "trend" / "oscillation" / "unknown"
     """
     try:
-        workspace = _get_workspace()
-        db_path = workspace / "data" / "trades.db"
-        if not db_path.exists():
-            return ("unknown", "未知", "⚠️ 今日尚未执行盘前诊断（9:10），无法确定市场结构。禁止按趋势市默认策略操作！")
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        today = datetime.now().strftime("%Y%m%d")
-        row = conn.execute(
-            "SELECT state, label, suggestion FROM market_diagnosis WHERE trade_date = ?",
-            (today,)
-        ).fetchone()
-        conn.close()
-        if row:
-            return (row["state"], row["label"], row["suggestion"])
+        from app.database import SessionLocal
+        from app.models.market_orm import MarketDiagnosis
+        db = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y%m%d")
+            row = db.query(MarketDiagnosis).filter(
+                MarketDiagnosis.trade_date == today
+            ).first()
+            if row:
+                return (row.state, row.label, row.suggestion)
+        finally:
+            db.close()
     except Exception:
         pass
     return ("unknown", "未知", "⚠️ 今日尚未执行盘前诊断（9:10），无法确定市场结构。禁止按趋势市默认策略操作！")

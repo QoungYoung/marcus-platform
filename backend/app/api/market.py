@@ -1728,46 +1728,44 @@ async def get_market_diagnosis():
 
 
 def _save_market_diagnosis(result: dict):
-    """将市场诊断结果保存到 trades.db"""
-    import sqlite3
+    """将市场诊断结果保存到 PostgreSQL"""
     import json as _json
-    from app.config import get_settings as _gs
+    from app.database import SessionLocal
+    from app.models.market_orm import MarketDiagnosis
     try:
-        db_file = _gs().data_dir / "trades.db"
-        conn = sqlite3.connect(str(db_file), timeout=10)
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS market_diagnosis (
-                trade_date TEXT PRIMARY KEY,
-                state TEXT NOT NULL,
-                label TEXT NOT NULL,
-                suggestion TEXT NOT NULL,
-                score_trend REAL DEFAULT 0,
-                score_oscillation REAL DEFAULT 0,
-                score_extreme REAL DEFAULT 0,
-                indicators_json TEXT,
-                created_at TEXT NOT NULL
-            )
-        ''')
-        d = result["diagnosis"]
-        conn.execute('''
-            INSERT OR REPLACE INTO market_diagnosis
-                (trade_date, state, label, suggestion,
-                 score_trend, score_oscillation, score_extreme,
-                 indicators_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            result["trade_date"],
-            d["state"], d["label"], d["suggestion"],
-            d["score"]["trend"], d["score"]["oscillation"], d["score"]["extreme"],
-            _json.dumps(result["indicators"], ensure_ascii=False),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        ))
-        conn.commit()
-        conn.close()
+        db = SessionLocal()
+        try:
+            d = result["diagnosis"]
+            row = db.query(MarketDiagnosis).filter(
+                MarketDiagnosis.trade_date == result["trade_date"]
+            ).first()
+            if row:
+                row.state = d["state"]
+                row.label = d["label"]
+                row.suggestion = d["suggestion"]
+                row.score_trend = d["score"]["trend"]
+                row.score_oscillation = d["score"]["oscillation"]
+                row.score_extreme = d["score"].get("extreme", 0)
+                row.indicators_json = _json.dumps(result["indicators"], ensure_ascii=False)
+                row.created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                db.add(MarketDiagnosis(
+                    trade_date=result["trade_date"],
+                    state=d["state"],
+                    label=d["label"],
+                    suggestion=d["suggestion"],
+                    score_trend=d["score"]["trend"],
+                    score_oscillation=d["score"]["oscillation"],
+                    score_extreme=d["score"].get("extreme", 0),
+                    indicators_json=_json.dumps(result["indicators"], ensure_ascii=False),
+                    created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ))
+            db.commit()
+        finally:
+            db.close()
     except Exception as e:
         import traceback
-        err_msg = f"[market-diagnosis] 保存失败: {e}\n{traceback.format_exc()}"
+        err_msg = f"[market-diagnosis] PostgreSQL 保存失败: {e}\n{traceback.format_exc()}"
         logging.getLogger(__name__).warning(err_msg)
         print(err_msg, flush=True)
         try:
@@ -1781,42 +1779,38 @@ def _save_market_diagnosis(result: dict):
 
 @router.get("/market-state")
 async def get_market_state():
-    """查询当日市场状态（趋势/震荡/极端），从数据库读取缓存的诊断结果"""
-    import sqlite3
+    """查询当日市场状态（趋势/震荡/极端），从 PostgreSQL 读取缓存的诊断结果"""
     import json as _json
-    from app.config import get_settings as _gs
+    from app.database import SessionLocal
+    from app.models.market_orm import MarketDiagnosis
 
     today_str = datetime.now().strftime("%Y%m%d")
-    db_file = _gs().data_dir / "trades.db"
-
-    if not db_file.exists():
-        return {"trade_date": today_str, "state": "unknown", "label": "⚪ 未知",
-                "suggestion": "尚未执行盘前诊断，请稍后刷新", "indicators": None}
 
     try:
-        conn = sqlite3.connect(str(db_file), timeout=5)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM market_diagnosis WHERE trade_date = ?", (today_str,))
-        row = cur.fetchone()
-        conn.close()
+        db = SessionLocal()
+        try:
+            row = db.query(MarketDiagnosis).filter(
+                MarketDiagnosis.trade_date == today_str
+            ).first()
 
-        if row:
-            return {
-                "trade_date": row["trade_date"],
-                "state": row["state"],
-                "label": row["label"],
-                "suggestion": row["suggestion"],
-                "score": {
-                    "trend": row["score_trend"],
-                    "oscillation": row["score_oscillation"],
-                    "extreme": row["score_extreme"],
-                },
-                "indicators": _json.loads(row["indicators_json"]) if row["indicators_json"] else None,
-            }
-        else:
-            return {"trade_date": today_str, "state": "unknown", "label": "⚪ 未知",
-                    "suggestion": "今日尚未执行盘前诊断", "indicators": None}
+            if row:
+                return {
+                    "trade_date": row.trade_date,
+                    "state": row.state,
+                    "label": row.label,
+                    "suggestion": row.suggestion,
+                    "score": {
+                        "trend": row.score_trend,
+                        "oscillation": row.score_oscillation,
+                        "extreme": row.score_extreme,
+                    },
+                    "indicators": _json.loads(row.indicators_json) if row.indicators_json else None,
+                }
+            else:
+                return {"trade_date": today_str, "state": "unknown", "label": "⚪ 未知",
+                        "suggestion": "今日尚未执行盘前诊断", "indicators": None}
+        finally:
+            db.close()
     except Exception as e:
         return {"trade_date": today_str, "state": "error", "label": "⚠️ 错误",
                 "suggestion": f"读取失败: {e}", "indicators": None}

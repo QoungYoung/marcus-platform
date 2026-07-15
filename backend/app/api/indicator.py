@@ -1034,22 +1034,21 @@ def _get_single_stock_cap(strength: str) -> float:
 
 
 def _get_market_regime_for_calc() -> str:
-    """从 market_diagnosis 表读取今日市场结构，用于仓位收紧。"""
+    """从 market_diagnosis 表（PostgreSQL）读取今日市场结构，用于仓位收紧。"""
     try:
-        from app.config import get_settings as _gs
-        import sqlite3
-        db_file = _gs().data_dir / "trades.db"
-        if not db_file.exists():
-            return "trend"
-        conn = sqlite3.connect(str(db_file), timeout=5)
+        from app.database import SessionLocal
+        from app.models.market_orm import MarketDiagnosis
         from datetime import datetime
-        today = datetime.now().strftime("%Y%m%d")
-        row = conn.execute(
-            "SELECT state FROM market_diagnosis WHERE trade_date = ?", (today,)
-        ).fetchone()
-        conn.close()
-        if row:
-            return row[0]
+        db = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y%m%d")
+            row = db.query(MarketDiagnosis).filter(
+                MarketDiagnosis.trade_date == today
+            ).first()
+            if row:
+                return row.state
+        finally:
+            db.close()
     except Exception:
         pass
     return "trend"  # 默认趋势市，不做收紧
