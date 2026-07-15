@@ -863,18 +863,38 @@ async def check_stop_profit(symbol: str):
 
     # 3. 主线检查：该股概念是否在当日主力净流入 TOP10 中
     try:
-        import urllib.request, ssl, json as _json
-        ctx = ssl.create_default_context()
-        url = 'http://localhost:8000/api/v1/market/concept-fund-flow?sort_by=main_net&limit=10'
-        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-            data = _json.loads(resp.read().decode('utf-8'))
-            items = data.get('data', data) if isinstance(data, dict) else []
-            top_concepts = set()
-            for it in items[:10]:
-                name = it.get('name', '') if isinstance(it, dict) else str(it)
-                if name:
-                    top_concepts.add(name)
+        top_concepts: set[str] = set()
+
+        # ── 优先：直接调用东财 push2 实时数据（非盘中时段自动跳过） ──
+        try:
+            from utils.em_sector_flow import get_top_inflow_sectors
+            now = datetime.now()
+            before_market = now.hour < 9 or (now.hour == 9 and now.minute < 30)
+            skip_em = before_market or now.hour >= 16 or now.weekday() >= 5
+            if not skip_em:
+                flow_data = get_top_inflow_sectors("concept", top_n=10, use_cache=True)
+                flow_data.sort(key=lambda x: x.get("main_net", 0), reverse=True)
+                for it in flow_data[:10]:
+                    name = it.get("name", "")
+                    if name:
+                        top_concepts.add(name)
+        except Exception:
+            pass
+
+    # ── 回退：东财数据不可用时，直接查数据库缓存 ──
+        if not top_concepts:
+            try:
+                # 尝试从 EastMoney 缓存管理器读取上次缓存的 sector_flow 数据
+                from core.utils.eastmoney_cache import get_em_cache
+                em = get_em_cache()
+                cached, meta = em.load_with_fallback("sector_flow", subtype="concept")
+                if cached:
+                    for it in cached[:10]:
+                        name = it.get("name", "") if isinstance(it, dict) else str(it)
+                        if name:
+                            top_concepts.add(name)
+            except Exception:
+                pass
 
         # 查股票所属概念
         ts_code = _normalize_to_ts_code(symbol)
@@ -894,10 +914,13 @@ async def check_stop_profit(symbol: str):
                 'top_concepts': sorted(top_concepts),
                 'in_main_line': in_main_line,
             }
-            if in_main_line:
-                reasons.append(f'仍在主线({", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+            if top_concepts:
+                if in_main_line:
+                    reasons.append(f'仍在主线({", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+                else:
+                    reasons.append('已脱离当日主线')
             else:
-                reasons.append('已脱离当日主线')
+                reasons.append('主线数据不可用（无概念排行数据）')
         else:
             checks['main_line'] = {'error': 'stock_pool.db 不存在'}
             reasons.append('主线数据不可用')
