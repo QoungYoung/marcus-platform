@@ -2603,25 +2603,42 @@ def _check_trend_tushare(symbol: str, closes: list, daily: dict) -> dict:
         checks["ma_align"] = {"passed": False, "value": "N/A", "threshold": "MA5 > MA20",
                                "detail": f"数据不足(需≥20条,当前{len(closes)}条)"}
 
-    # 主力资金流向 (5日)
+    # 主力资金流向 — 优先东财实时，降级 Tushare
     try:
-        mf = _fetch_tushare_moneyflow(symbol, days=5)
-        main_net_5d = 0.0
-        if not mf.empty:
-            for _, row in mf.iterrows():
-                lg = (float(row.get("buy_elg_amount", 0) or 0) -
-                      float(row.get("sell_elg_amount", 0) or 0))
-                md = (float(row.get("buy_lg_amount", 0) or 0) -
-                      float(row.get("sell_lg_amount", 0) or 0))
-                main_net_5d += (lg + md)
-        checks["moneyflow"] = {
-            "passed": main_net_5d > 0,
-            "value": f"{main_net_5d / 1e4:.2f}亿",
-            "threshold": "> 0",
-            "detail": "5日主力净流入(Tushare,万元→亿)",
-        }
+        from app.api.market import _query_stock_flow as _qsf
+        ts_code = _normalize_sym(symbol)
+        flow = _qsf(ts_code)
+        if flow:
+            main_net_today = flow.get("main_net", 0) or 0
+            d5_main_net = flow.get("d5_main_net", 0) or 0
+            checks["moneyflow"] = {
+                "passed": main_net_today > 0,
+                "value": f"{main_net_today / 1e8:.2f}亿",
+                "d5_value": f"{d5_main_net / 1e8:.2f}亿",
+                "threshold": "> 0",
+                "detail": "今日主力净流入(东财实时,元→亿)",
+            }
+        else:
+            raise ValueError("Eastmoney returned no data")
     except Exception:
-        checks["moneyflow"] = {"passed": True, "value": "N/A", "threshold": "> 0", "detail": "数据获取跳过"}
+        try:
+            mf = _fetch_tushare_moneyflow(symbol, days=5)
+            main_net_5d = 0.0
+            if mf is not None and not mf.empty:
+                for _, row in mf.iterrows():
+                    lg = (float(row.get("buy_elg_amount", 0) or 0) -
+                          float(row.get("sell_elg_amount", 0) or 0))
+                    md = (float(row.get("buy_lg_amount", 0) or 0) -
+                          float(row.get("sell_lg_amount", 0) or 0))
+                    main_net_5d += (lg + md)
+            checks["moneyflow"] = {
+                "passed": main_net_5d > 0,
+                "value": f"{main_net_5d / 1e4:.2f}亿",
+                "threshold": "> 0",
+                "detail": "5日主力净流入(Tushare降级,万元→亿)",
+            }
+        except Exception:
+            checks["moneyflow"] = {"passed": True, "value": "N/A", "threshold": "> 0", "detail": "数据获取跳过"}
 
     failed_items = [k for k, v in checks.items() if not v["passed"]]
     return {"passed": len(failed_items) == 0, "failed_items": failed_items, "checks": checks}
