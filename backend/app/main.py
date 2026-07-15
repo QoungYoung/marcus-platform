@@ -9,6 +9,7 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 from contextlib import asynccontextmanager
 from datetime import datetime
+import os
 import sys
 
 from fastapi import FastAPI
@@ -56,15 +57,21 @@ async def lifespan(app: FastAPI):
         init_db()
         print("[Main] 表结构初始化完成")
 
-        # 种子 prompts（幂等，只插入不存在的）
+        # 种子 prompts（幂等，只插入不存在的；FORCE_RESEED_PROMPTS=true 时强制覆盖更新）
         from app.database import SessionLocal
         db = SessionLocal()
         try:
-            seeded = seed_prompts(db, PROMPT_SEEDS)
-            if seeded > 0:
-                print(f"[Main] 已写入 {seeded} 条初始 prompt")
+            if os.environ.get('FORCE_RESEED_PROMPTS', '').lower() == 'true':
+                from app.services.prompt_service import upsert_prompt
+                for name, data in PROMPT_SEEDS.items():
+                    upsert_prompt(db, name, data['content'], data.get('label'))
+                print(f"[Main] 已强制刷新 {len(PROMPT_SEEDS)} 条 prompt（upsert）")
             else:
-                print("[Main] Prompt 表已有数据，跳过种子写入")
+                seeded = seed_prompts(db, PROMPT_SEEDS)
+                if seeded > 0:
+                    print(f"[Main] 已写入 {seeded} 条初始 prompt")
+                else:
+                    print("[Main] Prompt 表已有数据，跳过种子写入")
         finally:
             db.close()
     except Exception as e:
