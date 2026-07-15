@@ -153,6 +153,24 @@ class LongTermPool:
             logger.error(f"[长期池] 删除{symbol}失败: {e}")
             return False
 
+    def reset_to_active(self, symbol: str) -> bool:
+        """清仓后将 promoted 重置为 active，恢复监控"""
+        try:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE long_term_candidates SET status='active', promoted_at=NULL WHERE symbol=? AND status='promoted'",
+                (symbol,)
+            )
+            affected = conn.total_changes
+            conn.commit()
+            conn.close()
+            if affected:
+                logger.info(f"[长期池] {symbol} promoted → active (仓位已清)")
+            return affected > 0
+        except Exception as e:
+            logger.error(f"[长期池] 重置active失败 {symbol}: {e}")
+            return False
+
     def mark_promoted(self, symbol: str) -> bool:
         try:
             conn = self._get_conn()

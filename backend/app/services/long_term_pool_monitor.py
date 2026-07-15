@@ -185,6 +185,20 @@ class LongTermPoolMonitor:
 
         from app.services.long_term_pool import get_long_term_pool
         pool = get_long_term_pool()
+
+        # ── 清仓复位：已 promoted 但持仓已清 → 恢复 active ──
+        promoted = pool.get_promoted()
+        if promoted:
+            try:
+                positions = self.executor.engine.get_positions() if self.executor else {}
+                held_symbols = {p.get('symbol', '') for p in positions} if isinstance(positions, list) else set()
+                for entry in promoted:
+                    sym = entry.get("symbol", "")
+                    if sym and sym not in held_symbols:
+                        pool.reset_to_active(sym)
+            except Exception:
+                pass
+
         active = pool.get_active()
         if not active:
             if hasattr(self, '_last_active_count') and self._last_active_count != 0:
