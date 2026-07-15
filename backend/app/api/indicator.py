@@ -1898,53 +1898,67 @@ async def check_entry_filters(req: EntryCheckRequest):
     layer1_downgrade = ""
     layer1_action = ""
 
-    # 1a. MA 检查 — 趋势市日线 / 震荡市60分钟线
+    # 1a. MA 检查
     market_regime = _get_market_regime_for_calc()
+
     if market_regime == "oscillation":
+        # 震荡市：先看60分钟（找时机），再看日线（定仓位）
         from app.core.trading._60min_analysis import get_60min_ma_values
         min60 = get_60min_ma_values(ts_code)
-        ma_short_val = min60.get('ma10', 0) if min60 else 0
-        ma_long_val = min60.get('ma30', 0) if min60 else 0
-        ma_short_label = "MA10(60分)"
-        ma_long_label = "MA30(60分)"
-        downgrade_prefix = "60分MA10<MA30"
-    else:
-        ma_short_val = ma5
-        ma_long_val = ma20
-        ma_short_label = "MA5"
-        ma_long_label = "MA20"
-        downgrade_prefix = "MA5<MA20"
+        ma60_10 = min60.get('ma10', 0) if min60 else 0
+        ma60_30 = min60.get('ma30', 0) if min60 else 0
 
-    if ma_short_val > 0 and ma_long_val > 0:
-        if ma_short_val > ma_long_val:
-            tech_details.append(f"✅ {ma_short_label}({ma_short_val:.2f}) > {ma_long_label}({ma_long_val:.2f}) — 通过{' (震荡市60分)' if market_regime == 'oscillation' else ''}")
-        else:
-            tech_details.append(f"⚠️ {ma_short_label}({ma_short_val:.2f}) < {ma_long_label}({ma_long_val:.2f}) — 趋势待确认")
-            # 启用备用检查
-            price_above_vwap = current_price > avg_price if avg_price and avg_price > 0 else None
-            sector_ok = req.sector_net_inflow is not None and req.sector_net_inflow > 0
-            if price_above_vwap and sector_ok:
-                tech_details.append("  备用检查: 价格>分时均价✅ + 板块资金净流入✅ → 仅试探仓≤5%")
+        if ma60_10 > 0 and ma60_30 > 0:
+            if ma60_10 < ma60_30:
+                tech_details.append(f"🚫 60分 MA10({ma60_10:.2f}) < MA30({ma60_30:.2f}) → 短线未走好，排除")
+                layer1_passed = False
+                layer1_grade = "🚫排除"
+                layer1_downgrade = "60分MA10<MA30 短线未走好"
+                layer1_action = "排除，等60分钟金叉后再看"
+                downgrade_multiplier = 0.0
+            elif ma5 > 0 and ma20 > 0 and ma5 < ma20:
+                tech_details.append(f"⚠️ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) 通过，但日线 MA5({ma5:.2f}) < MA20({ma20:.2f}) → 60分钟先行，仅试探仓≤5%")
                 layer1_grade = "⚠️降级"
-                layer1_downgrade = f"{downgrade_prefix} 趋势待确认"
+                layer1_downgrade = "60分金叉但日线未跟上"
                 layer1_action = "仅试探仓≤5%"
                 downgrade_multiplier = min(downgrade_multiplier, 0.5)
-            elif price_above_vwap is False:
-                tech_details.append("  备用检查: 价格跌破分时均价❌ → 从计划表移除")
-                layer1_passed = False
-                layer1_grade = "🚫排除"
-                layer1_downgrade = f"{downgrade_prefix} 且价格跌破分时均价"
-                layer1_action = "从计划表移除"
-                downgrade_multiplier = 0.0
-            elif not sector_ok:
-                tech_details.append("  备用检查: 板块资金净流入不可用或≤0 → 从计划表移除")
-                layer1_passed = False
-                layer1_grade = "🚫排除"
-                layer1_downgrade = f"{downgrade_prefix} 且板块无资金支撑"
-                layer1_action = "从计划表移除"
-                downgrade_multiplier = 0.0
+            else:
+                day_info = f"日线 MA5({ma5:.2f}) > MA20({ma20:.2f})" if (ma5 > 0 and ma20 > 0 and ma5 > ma20) else "日线数据可用"
+                tech_details.append(f"✅ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) + {day_info} → 双周期共振，正常仓位")
+        else:
+            tech_details.append(f"⚠️ 60分MA数据不可用，跳过MA检查")
+
     else:
-        tech_details.append(f"⚠️ {ma_short_label}/{ma_long_label}数据不可用，跳过MA检查")
+        # 趋势市：日线 MA5/MA20
+        if ma5 > 0 and ma20 > 0:
+            if ma5 > ma20:
+                tech_details.append(f"✅ MA5({ma5:.2f}) > MA20({ma20:.2f}) — 通过")
+            else:
+                tech_details.append(f"⚠️ MA5({ma5:.2f}) < MA20({ma20:.2f}) — 趋势待确认")
+                price_above_vwap = current_price > avg_price if avg_price and avg_price > 0 else None
+                sector_ok = req.sector_net_inflow is not None and req.sector_net_inflow > 0
+                if price_above_vwap and sector_ok:
+                    tech_details.append("  备用检查: 价格>分时均价✅ + 板块资金净流入✅ → 仅试探仓≤5%")
+                    layer1_grade = "⚠️降级"
+                    layer1_downgrade = "MA5<MA20 趋势待确认"
+                    layer1_action = "仅试探仓≤5%"
+                    downgrade_multiplier = min(downgrade_multiplier, 0.5)
+                elif price_above_vwap is False:
+                    tech_details.append("  备用检查: 价格跌破分时均价❌ → 从计划表移除")
+                    layer1_passed = False
+                    layer1_grade = "🚫排除"
+                    layer1_downgrade = "MA5<MA20 且价格跌破分时均价"
+                    layer1_action = "从计划表移除"
+                    downgrade_multiplier = 0.0
+                elif not sector_ok:
+                    tech_details.append("  备用检查: 板块资金净流入不可用或≤0 → 从计划表移除")
+                    layer1_passed = False
+                    layer1_grade = "🚫排除"
+                    layer1_downgrade = "MA5<MA20 且板块无资金支撑"
+                    layer1_action = "从计划表移除"
+                    downgrade_multiplier = 0.0
+        else:
+            tech_details.append(f"⚠️ MA5/MA20数据不可用，跳过MA检查")
 
     # 1b. MACD 检查
     if macd_status == "金叉":
