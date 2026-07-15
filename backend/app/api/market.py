@@ -607,12 +607,12 @@ async def get_stock_moneyflow(
                 if v is not None and v != '' and v != 0:
                     return str(round(float(v), 2))
                 return "0"
-            # moneyflow_dc 字段均为净额（万元）→ 元
-            lg_net = _f("buy_elg_amount") * 10000      # 超大单
-            md_net = _f("buy_lg_amount") * 10000       # 大单
-            sm_net = _f("buy_md_amount") * 10000       # 中单
-            xs_net = _f("buy_sm_amount") * 10000       # 小单
-            main_net = _f("net_amount") * 10000        # 主力=超大单+大单
+            # moneyflow_dc 字段单位：万元 → 元（net=买入-卖出）
+            lg_net = (_f("buy_elg_amount") - _f("sell_elg_amount")) * 10000
+            md_net = (_f("buy_lg_amount") - _f("sell_lg_amount")) * 10000
+            sm_net = (_f("buy_md_amount") - _f("sell_md_amount")) * 10000
+            xs_net = (_f("buy_sm_amount") - _f("sell_sm_amount")) * 10000
+            main_net = _f("net_mf_amount") * 10000     # 主力净流入=超大单+大单
 
             # ── 计算资金效率指数 ──
             capital_efficiency = None
