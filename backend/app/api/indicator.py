@@ -3025,9 +3025,9 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
         l2 = filter_result.layer2_capital
         l3 = filter_result.layer3_overbought
 
-        l1_pass = l1.grade == "pass"
-        l2_pass = l2.grade == "pass"
-        l3_pass = l3.grade == "pass"
+        l1_pass = l1.passed
+        l2_pass = l2.passed
+        l3_pass = l3.passed
         all_filter_pass = filter_result.final_grade == "pass" and not filter_result.hard_block
 
         # 买入确认
