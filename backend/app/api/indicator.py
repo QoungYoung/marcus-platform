@@ -3340,16 +3340,28 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
                     "passed": l1_pass,
                     "grade": l1.grade,
                     "failed": [] if l1_pass else [getattr(l1, 'downgrade_reason', '') or '未通过'],
+                    "downgrade": {
+                        "reason": getattr(l1, 'downgrade_reason', '') or "",
+                        "action": getattr(l1, 'downgrade_action', '') or "",
+                    } if not l1_pass or l1.grade != "✅通过" else None,
                 },
                 "layer2_capital": {
                     "passed": l2_pass,
                     "grade": l2.grade,
                     "failed": [] if l2_pass else [getattr(l2, 'downgrade_reason', '') or '未通过'],
+                    "downgrade": {
+                        "reason": getattr(l2, 'downgrade_reason', '') or "",
+                        "action": getattr(l2, 'downgrade_action', '') or "",
+                    } if not l2_pass or l2.grade != "✅通过" else None,
                 },
                 "layer3_overbought": {
                     "passed": l3_pass,
                     "grade": l3.grade,
                     "failed": [] if l3_pass else [getattr(l3, 'downgrade_reason', '') or '未通过'],
+                    "downgrade": {
+                        "reason": getattr(l3, 'downgrade_reason', '') or "",
+                        "action": getattr(l3, 'downgrade_action', '') or "",
+                    } if not l3_pass or l3.grade != "✅通过" else None,
                 },
             },
             "stance_check": {"passed": stance_pass, "detail": f"Pi立场={pi_stance}" + (" (red禁止)" if not stance_pass else "")},
