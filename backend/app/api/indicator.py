@@ -2612,8 +2612,32 @@ def _check_trend_tushare(symbol: str, closes: list, daily: dict) -> dict:
     else:
         checks["volume_ratio"] = {"passed": True, "value": "N/A", "threshold": "> 0.8", "detail": "数据不足,跳过"}
 
-    # MA5 > MA20
-    if len(closes) >= 20:
+    # MA 检查 — 按市场状态切换: 趋势市 MA5>MA20 / 震荡市 60分钟 MA10>MA30
+    use_daily = True
+    try:
+        regime = _get_market_regime_for_calc()
+    except Exception:
+        regime = "trend"
+
+    if regime == "oscillation":
+        try:
+            from app.core.trading._60min_analysis import get_60min_ma_values
+            ts_code = _normalize_sym(symbol)
+            min60 = get_60min_ma_values(ts_code)
+            ma10_60 = min60.get('ma10', 0) if min60 else 0
+            ma30_60 = min60.get('ma30', 0) if min60 else 0
+            if ma10_60 > 0 and ma30_60 > 0:
+                use_daily = False
+                checks["ma_align"] = {
+                    "passed": ma10_60 > ma30_60,
+                    "value": f"MA10(60min)={ma10_60:.2f} MA30(60min)={ma30_60:.2f}",
+                    "threshold": "MA10(60min) > MA30(60min)",
+                    "detail": f"震荡市·60分钟线 (regime={regime})",
+                }
+    except Exception as e:
+        logger.debug(f"[_check_trend_tushare] {symbol} 震荡市60分MA获取异常: {e}")
+
+    if use_daily and len(closes) >= 20:
         ma5 = sum(closes[-5:]) / 5
         ma20 = sum(closes[-20:]) / 20
         checks["ma_align"] = {
