@@ -288,7 +288,19 @@ def _read_market_regime() -> tuple:
 
 def _get_regime_strategy(regime: str) -> str:
     """根据市场结构生成策略切换指令块"""
-    if regime == "oscillation":
+    if regime == "extreme":
+        return (
+            "\n🚨 **今日市场结构：🔴 极端市**\n"
+            "市场处于极端状态（涨跌停比严重失衡），风险极高。\n\n"
+            "⚠️ 极端市交易规则（最高优先级）：\n"
+            "- ⛔ **禁止建新仓！禁止加仓！**\n"
+            "- ✅ 只检查止损：所有持仓按铁律止损位执行\n"
+            "- ✅ 浮盈 > 5% 的建议减仓锁定利润\n"
+            "- ✅ 浮亏触及止损位的立即卖出\n"
+            "- 总仓位控制在 20% 以内\n"
+            "- 等待市场情绪修复后再恢复正常交易\n"
+        )
+    elif regime == "oscillation":
         return (
             "\n📊 **今日市场结构：🔴 震荡市**\n"
             "你必须严格遵循以下震荡市策略参数，不得使用趋势市策略：\n\n"

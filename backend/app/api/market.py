@@ -1766,7 +1766,10 @@ def _save_market_diagnosis(result: dict):
         conn.commit()
         conn.close()
     except Exception as e:
+        import traceback
         logging.getLogger(__name__).warning(f"保存市场诊断失败: {e}")
+        print(f"[market-diagnosis] 保存失败: {e}", flush=True)
+        traceback.print_exc()
 
 
 # ========== 市场状态查询 API ==========
