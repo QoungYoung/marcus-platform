@@ -563,3 +563,69 @@ def evaluate_60min_stop(
     _signal_cache[cache_key] = (now_ts, (reason, sell_ratio))
 
     return reason, sell_ratio
+
+
+# ── 60分钟MA10/MA30 快速查询（供建仓/加仓震荡市使用） ──
+
+_60MIN_MA_CACHE: Dict[str, tuple] = {}  # {ts_code: (timestamp, {ma10, ma30, bar_count})}
+
+
+def get_60min_ma_values(ts_code: str, cache_ttl: int = 120) -> Dict[str, float]:
+    """
+    获取60分钟K线的 MA10 和 MA30 值。
+
+    合并今日 rt_min_daily + 历史 stk_mins 数据计算。
+    2分钟缓存，避免频繁 Tushare 调用。
+
+    Returns:
+        {'ma10': float, 'ma30': float, 'bar_count': int}
+        失败时返回空 dict
+    """
+    cached = _60MIN_MA_CACHE.get(ts_code)
+    if cached:
+        ts_cached, result = cached
+        if time.time() - ts_cached < cache_ttl:
+            return result
+
+    try:
+        raw = _call_rt_min_daily_raw([ts_code], "60min")
+        if not raw:
+            return {}
+
+        fields = raw.get("fields", [])
+        items = raw.get("items", [])
+        col_map = {name: idx for idx, name in enumerate(fields)}
+
+        today_bars = []
+        for row in items:
+            today_bars.append({
+                "time": str(row[col_map.get("trade_time", 1)]),
+                "close": float(row[col_map.get("close", 3)]),
+            })
+
+        if not today_bars:
+            return {}
+
+        hist_bars = _fetch_60min_bars_history(ts_code)
+        if hist_bars:
+            merged = {b["time"]: b for b in hist_bars}
+            for b in today_bars:
+                merged[b["time"]] = b
+            all_bars = sorted(merged.values(), key=lambda b: b["time"])
+        else:
+            all_bars = today_bars
+
+        closes = [b["close"] for b in all_bars]
+        n = len(closes)
+
+        result: Dict[str, float] = {'bar_count': n}
+        if n >= 10:
+            result['ma10'] = round(_sma(closes, 10)[-1], 4)
+        if n >= 30:
+            result['ma30'] = round(_sma(closes, 30)[-1], 4)
+
+        _60MIN_MA_CACHE[ts_code] = (time.time(), result)
+        return result
+    except Exception as e:
+        logger.debug(f"[60min MA] 获取失败 {ts_code}: {e}")
+        return {}

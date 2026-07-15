@@ -782,8 +782,8 @@ class PositionTierMonitor:
         """
         获取盘中实时 MA5/MA10/MA20，5 分钟缓存。
 
-        数据源: /api/v1/indicator/realtime/{symbol}
-        （腾讯 qt.gtimg.cn 实时行情 + Tushare 历史日线混合计算）
+        直接调用 get_realtime_indicators()（与建仓同源），
+        腾讯 qt.gtimg.cn 实时行情 + Tushare 历史日线混合计算。
 
         Returns:
             {'ma5': float, 'ma10': float, 'ma20': float, 'current_price': float, 'source': str}
@@ -797,22 +797,28 @@ class PositionTierMonitor:
                 return result
 
         try:
-            import urllib.request, ssl, json as _json
-            ctx = ssl.create_default_context()
-            url = f'http://localhost:8000/api/v1/indicator/realtime/{symbol}'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = _json.loads(resp.read().decode('utf-8'))
-                rt = data.get('realtime', {}) or {}
-                result = {
-                    'ma5': rt.get('ma5', 0) or 0,
-                    'ma10': rt.get('ma10', 0) or 0,
-                    'ma20': rt.get('ma20', 0) or 0,
-                    'current_price': rt.get('current_price', 0) or 0,
-                    'source': rt.get('data_source', 'intraday_estimate'),
-                }
-                self._realtime_ma_cache[cache_key] = (time.time(), result)
-                return result
+            import asyncio
+            from app.api.indicator import get_realtime_indicators as _get_rt
+
+            async def _fetch():
+                return await _get_rt(symbol=symbol, limit=1)
+
+            loop = asyncio.new_event_loop()
+            try:
+                rt_response = loop.run_until_complete(_fetch())
+            finally:
+                loop.close()
+
+            rt = rt_response.realtime
+            result = {
+                'ma5': rt.ma5 if rt else 0,
+                'ma10': rt.ma10 if rt else 0,
+                'ma20': rt.ma20 if rt else 0,
+                'current_price': rt.current_price if rt else 0,
+                'source': rt.data_source if rt else 'intraday_estimate',
+            }
+            self._realtime_ma_cache[cache_key] = (time.time(), result)
+            return result
         except Exception as e:
             logger.debug(f"[加仓] 实时MA获取失败 {symbol}: {e}")
             if cached:
@@ -947,28 +953,71 @@ class PositionTierMonitor:
                 'detail': f'所属{sector_name}板块' if sector_name else '板块信息获取失败'
             }
 
-            # ── 条件 4：MA5 > MA20（多头排列） ──
-            if rt_ma5 > 0 and rt_ma20 > 0:
-                checks['ma_align'] = {
-                    'passed': rt_ma5 > rt_ma20,
-                    'value': f'实时MA5={rt_ma5:.2f} MA20={rt_ma20:.2f}',
-                    'threshold': 'MA5 > MA20',
-                    'detail': f'[{rt_source}]'
-                }
-            elif has_daily:
-                ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
-                ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
-                if ma5 > 0 and ma20 > 0:
-                    checks['ma_align'] = {
-                        'passed': ma5 > ma20,
-                        'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
-                        'threshold': 'MA5 > MA20',
-                        'detail': '[日线降级]'
-                    }
-                else:
-                    checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': 'MA计算异常'}
+            # ── 条件 4：MA 多头排列（趋势市日线 / 震荡市60分钟线） ──
+            # 获取市场状态
+            try:
+                from app.api.indicator import _get_market_regime_for_calc
+                regime = _get_market_regime_for_calc()
+            except Exception:
+                regime = "trend"
+
+            if regime == "oscillation":
+                # 震荡市：60分钟线 MA10 > MA30
+                try:
+                    from app.core.trading._60min_analysis import get_60min_ma_values
+                    from app.api.indicator import _normalize_to_ts_code as _norm
+                    min60 = get_60min_ma_values(_norm(symbol))
+                    ma10_60 = min60.get('ma10', 0) if min60 else 0
+                    ma30_60 = min60.get('ma30', 0) if min60 else 0
+                    bar_count = min60.get('bar_count', 0) if min60 else 0
+                    if ma10_60 > 0 and ma30_60 > 0:
+                        checks['ma_align'] = {
+                            'passed': ma10_60 > ma30_60,
+                            'value': f'MA10(60分)={ma10_60:.2f} MA30(60分)={ma30_60:.2f}',
+                            'threshold': 'MA10 > MA30 (震荡市60分)',
+                            'detail': f'[震荡市60分, {bar_count}根K线]'
+                        }
+                    else:
+                        # 60分数据不足，降级使用日线
+                        if has_daily:
+                            ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
+                            ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
+                            if ma5 > 0 and ma20 > 0:
+                                checks['ma_align'] = {
+                                    'passed': ma5 > ma20,
+                                    'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
+                                    'threshold': 'MA5 > MA20 (60分不足,日线降级)',
+                                    'detail': '[震荡市60分数据不足,日线降级]'
+                                }
+                            else:
+                                checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA10>MA30(60分)', 'detail': '60分+日线数据均不足'}
+                        else:
+                            checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA10>MA30(60分)', 'detail': '60分数据不足,日线不可用'}
+                except Exception as e:
+                    checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA10>MA30(60分)', 'detail': f'震荡市60分获取异常: {e}'}
             else:
-                checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': '数据不足'}
+                # 趋势市：日线 MA5 > MA20（原逻辑）
+                if rt_ma5 > 0 and rt_ma20 > 0:
+                    checks['ma_align'] = {
+                        'passed': rt_ma5 > rt_ma20,
+                        'value': f'实时MA5={rt_ma5:.2f} MA20={rt_ma20:.2f}',
+                        'threshold': 'MA5 > MA20',
+                        'detail': f'[{rt_source}]'
+                    }
+                elif has_daily:
+                    ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
+                    ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
+                    if ma5 > 0 and ma20 > 0:
+                        checks['ma_align'] = {
+                            'passed': ma5 > ma20,
+                            'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
+                            'threshold': 'MA5 > MA20',
+                            'detail': '[日线降级]'
+                        }
+                    else:
+                        checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': 'MA计算异常'}
+                else:
+                    checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': '数据不足'}
 
             # ── 条件 5：主力资金流向（当日主力 > 0，5分钟缓存） ──
             main_net_today = 0.0
