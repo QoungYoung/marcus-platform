@@ -83,6 +83,47 @@ const getQuoteTool = {
   },
 };
 
+const getIntradayMinTool = {
+  name: 'get_intraday_min',
+  description: '【实时·盘中分钟K线】获取多只股票今日实时分钟K线（1/5/15/30/60分钟可选）。数据源：Tushare rt_min（实时分钟行情）。支持批量查询（逗号分隔多个代码），单次最多10只股票。震荡市行情下用于监控多只持仓的日内走势、识别盘中趋势变化、寻找精确入场/离场点。返回每只股票的开/高/低/收/量/额序列+日内摘要（最新价/日内高低/涨跌幅/累计成交额）',
+  parameters: Type.Object({
+    symbols: Type.String({ description: '股票代码，逗号分隔，如 000001.SZ,600519.SH,300750.SZ' }),
+    freq: Type.Optional(Type.String({ description: 'K线周期: 1min/5min/15min/30min/60min，默认 1min' })),
+  }),
+  async execute(_toolCallId: string, params: { symbols: string; freq?: string }, _signal: AbortSignal | undefined) {
+    const freq = params.freq || '1min';
+    const res = await fetch(`${MARCUS_API}/market/intraday-min?symbols=${encodeURIComponent(params.symbols)}&freq=${freq}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.error) return { content: [{ type: 'text', text: data.error }], details: data };
+    const symbolsData = data.symbols_data || [];
+    if (symbolsData.length === 0) {
+      return { content: [{ type: 'text', text: `⏰ ${params.symbols}: 无分钟数据（非交易时段或代码无效）` }], details: data };
+    }
+    const lines: string[] = [];
+    lines.push(`📊 实时分钟K线 — ${freq} | 数据源: ${data.data_source || 'tushare_rt_min'}`);
+    lines.push('');
+    for (const sd of symbolsData) {
+      const s = sd.summary;
+      if (!s) { lines.push(`### ${sd.code}: 无数据`); continue; }
+      const bars = sd.bars || [];
+      const changeSymbol = s.change_pct >= 0 ? '+' : '';
+      lines.push(`### ${sd.code} | 最新: ${s.latest_price.toFixed(2)} (${changeSymbol}${s.change_pct.toFixed(2)}%) | 日内: ${s.day_low.toFixed(2)}-${s.day_high.toFixed(2)} | ${s.bar_count}根K线`);
+      const recent = bars.slice(-12);
+      if (recent.length > 0) {
+        const barLines = recent.map((b: any) => {
+          const dir = b.close >= b.open ? '↑' : '↓';
+          return `  ${b.time} ${dir} O:${b.open.toFixed(2)} C:${b.close.toFixed(2)} H:${b.high.toFixed(2)} L:${b.low.toFixed(2)} V:${(b.vol / 100).toFixed(0)}手`;
+        });
+        lines.push(`  最近${recent.length}根K线:`);
+        lines.push(...barLines);
+      }
+      lines.push('');
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 const getPortfolioTool = {
   name: 'get_portfolio',
   description: '查看当前账户资金状况和所有持仓',
@@ -1510,6 +1551,7 @@ const chatTools: AgentTool[] = [
   createTool(getMoneyflowTool),
   createTool(getTechnicalTool),
   createTool(getRealtimeIndicatorsTool),
+  createTool(getIntradayMinTool),
   createTool(getFibonacciLevelsTool),
   createTool(getDailyChannelTool),
   createTool(getTradeAdviceTool),
@@ -1551,7 +1593,7 @@ const COLLAPSIBLE_TOOLS = [
   'get_market_indices', 'get_quote', 'get_portfolio',
   'get_concept_fund_flow', 'get_industry_fund_flow', 'get_market_moneyflow', 'get_concept_mapping',
   'get_etf_quote', 'get_etf_kline', 'get_daily_kline', 'get_moneyflow',
-  'get_technical', 'get_realtime_indicators', 'get_fibonacci_levels', 'get_daily_channel', 'get_trade_advice',
+  'get_technical', 'get_realtime_indicators', 'get_intraday_min', 'get_fibonacci_levels', 'get_daily_channel', 'get_trade_advice',
   'get_fina_mainbz', 'get_express',
   'read_db_table', 'get_db_schema',
   'get_latest_scan_report', 'get_pi_analysis_history', 'get_trade_history',
@@ -1574,6 +1616,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_moneyflow: '查看资金流向',
   get_technical: '查询技术指标',
   get_realtime_indicators: '实时技术指标',
+  get_intraday_min: '实时分钟K线',
   get_fina_mainbz: '主营业务构成',
   get_express: '业绩快报',
   read_db_table: '读取数据库表',
@@ -1887,6 +1930,7 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 - get_daily_kline: 获取A股历史日K线数据（开高低收/量/额）
 - get_moneyflow: 获取个股实时资金流向（同花顺即时：流入/流出/净额）
 - get_technical: 获取MACD、KDJ、RSI、布林带等60+技术指标
+- get_intraday_min: 获取多只股票实时分钟K线（1/5/15/30/60分钟），适合震荡市日内趋势判断
 - read_db_table: 查询数据库表数据
 - get_db_schema: 获取数据库表结构
 
