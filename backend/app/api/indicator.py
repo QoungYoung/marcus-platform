@@ -1970,19 +1970,20 @@ async def check_entry_filters(req: EntryCheckRequest):
         else:
             tech_details.append(f"✅ RSR({rsr:.2f}) ≥ 0.8 — 通过")
 
-    # 1d. 日内分位检查
+    # 1d. 日内分位检查（震荡市放宽至90%）
     if intraday_percentile is not None:
-        if intraday_percentile > 80:
-            tech_details.append(f"🚫 日内分位({intraday_percentile:.0f}%) > 80% → 追高风险，硬禁止建仓")
+        hard_pct = 90 if market_regime == "oscillation" else 80
+        if intraday_percentile > hard_pct:
+            tech_details.append(f"🚫 日内分位({intraday_percentile:.0f}%) > {hard_pct}% → 追高风险，硬禁止建仓")
             layer1_passed = False
             layer1_grade = "🚫排除"
-            layer1_downgrade = "日内分位>80%硬禁止"
+            layer1_downgrade = f"日内分位>{hard_pct}%硬禁止"
             layer1_action = "硬禁止建仓，等回调至分位≤50%"
             downgrade_multiplier = 0.0
             hard_block = True
-            hard_block_reasons.append(f"日内分位{intraday_percentile:.0f}%>80%")
+            hard_block_reasons.append(f"日内分位{intraday_percentile:.0f}%>{hard_pct}%")
         elif intraday_percentile > 60:
-            tech_details.append(f"⚠️ 日内分位({intraday_percentile:.0f}%) 60-80% → 仅试探仓")
+            tech_details.append(f"⚠️ 日内分位({intraday_percentile:.0f}%) 60-{hard_pct}% → 仅试探仓")
             layer1_grade = "⚠️降级"
             layer1_downgrade = "日内分位偏高"
             layer1_action = "仅试探仓≤5%"
