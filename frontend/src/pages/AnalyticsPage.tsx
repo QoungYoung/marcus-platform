@@ -220,6 +220,9 @@ export default function AnalyticsPage() {
         case 'POST':
           result = await axios.post(fullUrl, body);
           break;
+        case 'PUT':
+          result = await axios.put(fullUrl, body);
+          break;
         default:
           result = await axios.get(fullUrl);
       }

@@ -20,7 +20,7 @@ export interface ToolDef {
   description: string;
   category: ToolCategory;
   endpoint: {
-    method: 'GET' | 'POST' | 'DELETE';
+    method: 'GET' | 'POST' | 'DELETE' | 'PUT';
     path: string; // 相对 /api/v1 的路径模板，如 '/market/quote/{symbol}'
   };
   parameters: Record<string, ParamDef>;
@@ -450,6 +450,102 @@ export const ALL_TOOLS: ToolDef[] = [
     endpoint: { method: 'GET', path: '/scan/latest' },
     parameters: {
       date: { type: 'date', description: '日期 YYYY-MM-DD，默认今天', required: false },
+    },
+    pathParamNames: [],
+  },
+
+  // ═══ 候选池管理 ═══
+  {
+    name: 'list_lt_candidates',
+    label: '查看长期候选池',
+    description: '列出长期观察候选池中的标的。长期池不过期，条件满足时自动建仓并推送通知',
+    category: 'trading',
+    endpoint: { method: 'GET', path: '/lt-pool/candidates' },
+    parameters: {
+      status: {
+        type: 'select', description: '筛选状态', required: false,
+        options: [
+          { label: '全部', value: '' },
+          { label: '待建仓 (active)', value: 'active' },
+          { label: '已建仓 (promoted)', value: 'promoted' },
+        ],
+      },
+    },
+    pathParamNames: [],
+  },
+  {
+    name: 'add_lt_candidate',
+    label: '添加长期候选',
+    description: '添加标的到长期观察候选池。标的将持续被监控，条件满足时自动建仓',
+    category: 'trading',
+    endpoint: { method: 'POST', path: '/lt-pool/candidates' },
+    parameters: {
+      symbol: { type: 'stock_code', description: '股票代码', required: true, placeholder: 'SH600519' },
+      name: { type: 'string', description: '股票名称', required: false, placeholder: '贵州茅台' },
+      chain_name: { type: 'string', description: '产业链名称', required: false, placeholder: 'AI算力' },
+      chain_role: {
+        type: 'select', description: '产业链角色', required: false,
+        options: [
+          { label: '上游', value: 'upstream' },
+          { label: '中游', value: 'mid' },
+          { label: '下游', value: 'downstream' },
+        ],
+      },
+      notes: { type: 'string', description: '备注信息', required: false, placeholder: '等回调到30日线' },
+    },
+    pathParamNames: [],
+  },
+  {
+    name: 'remove_lt_candidate',
+    label: '移除长期候选',
+    description: '从长期观察候选池中删除标的。已建仓的标的不会被卖出，只是不再继续监控',
+    category: 'trading',
+    endpoint: { method: 'DELETE', path: '/lt-pool/candidates/{symbol}' },
+    parameters: {
+      symbol: { type: 'stock_code', description: '股票代码', required: true, placeholder: 'SH600519' },
+    },
+    pathParamNames: ['symbol'],
+  },
+  {
+    name: 'update_lt_candidate',
+    label: '更新长期候选',
+    description: '更新长期候选池中标的的元数据（备注、产业链名、产业链角色）',
+    category: 'trading',
+    endpoint: { method: 'PUT', path: '/lt-pool/candidates/{symbol}' },
+    parameters: {
+      symbol: { type: 'stock_code', description: '股票代码', required: true, placeholder: 'SH600519' },
+      notes: { type: 'string', description: '新的备注信息', required: false },
+      chain_name: { type: 'string', description: '产业链名称', required: false },
+      chain_role: {
+        type: 'select', description: '产业链角色', required: false,
+        options: [
+          { label: '上游', value: 'upstream' },
+          { label: '中游', value: 'mid' },
+          { label: '下游', value: 'downstream' },
+        ],
+      },
+    },
+    pathParamNames: ['symbol'],
+  },
+  {
+    name: 'get_position_add_conditions',
+    label: '加仓条件检查',
+    description: '查询当前持仓距离加仓还差哪些条件。逐只检查层级评估（probe→confirm→sprint）和6道门控（Pi立场/回撤/保护线/日加仓上限/趋势强度/T+1锁定），返回通过状态和缺失条件清单',
+    category: 'trading',
+    endpoint: { method: 'GET', path: '/indicator/position-add-conditions' },
+    parameters: {
+      symbol: { type: 'stock_code', description: '指定股票代码，不传则检查全部持仓', required: false },
+    },
+    pathParamNames: [],
+  },
+  {
+    name: 'get_candidate_entry_conditions',
+    label: '建仓条件检查',
+    description: '查询候选池股票距离建仓还差哪些条件。逐只检查入场过滤三层（技术面/主力资金/超买）、Pi立场、午后限制、涨幅确认，区分长期池(>3天)和短期池(≤3天)',
+    category: 'trading',
+    endpoint: { method: 'GET', path: '/indicator/candidate-entry-conditions' },
+    parameters: {
+      symbol: { type: 'stock_code', description: '指定股票代码，不传则检查全部候选池标的', required: false },
     },
     pathParamNames: [],
   },
