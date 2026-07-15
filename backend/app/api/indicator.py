@@ -3078,7 +3078,6 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             "rsi": round(rsi_val, 1),
             "ma5": round(ma5_val, 2),
             "ma20": round(ma20_val, 2),
-            "main_net_5d": round(filter_result.capital.d5_main_net if filter_result.capital else 0, 2),
             "last_reject_reason": candidate.get("reject_reasons", []),
             "checks_count": checks_count,
             "data_source": data_source,
