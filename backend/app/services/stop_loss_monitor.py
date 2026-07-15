@@ -16,12 +16,18 @@
       - ≥4 个信号触发 → 清仓 (100%)
       - ≥3 个信号触发 → 减仓 (50%)
       信号: ①MACD红柱缩量 ②RSI顶背离 ③量价背离 ④KDJ J>100 ⑤布林上轨外
+      2.6 60分钟K线级别分析（结构+背离决策矩阵）：
+          - 60min bullish + 日线背离 → 减仓 40%
+          - 60min bearish + 日线背离 → 清仓 100%
+          - 60min bearish + 日线健康 → 减仓 50%
+          - 60min weakening + 日线背离 → 减仓 67%
+          - 其他组合 → 不触发
   3.  大盘相对表现止损：大盘跌>2%且个股跌幅-大盘跌幅<-3pp→强审
   4.  T+1 保护：今日买入的持仓不执行止损卖出
   5.  早盘冷静期：09:30-09:45 不执行卖出（该窗口统计胜率 0%）
 
 规则冲突 SOP：
-  - 规则按优先级 0a→0b→1→2→2.5→3 依次评估，首个命中即执行，后续规则不再检查
+  - 规则按优先级 0a→0b→1→2→2.5→2.6→3 依次评估，首个命中即执行，后续规则不再检查
   - 规则 4（T+1）和规则 5（冷静期）为前置拦截，不参与优先级竞争
   - 单日单票最多执行 3 次止损，同一价位不可重复触发
 """
@@ -35,6 +41,9 @@ import logging
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+
+# 60分钟K线级别分析（v2.6）
+from app.core.trading._60min_analysis import evaluate_60min_stop
 
 logger = logging.getLogger(__name__)
 
@@ -382,6 +391,11 @@ class StopLossMonitor:
         tech_reason, tech_ratio = self._check_technical_divergence(symbol, current_price, float_pnl_pct)
         if tech_reason:
             return tech_reason, tech_ratio
+
+        # ── 规则 2.6: 60分钟K线级别分析（结构+背离决策矩阵） ──
+        min60_reason, min60_ratio = self._check_60min_analysis(symbol, current_price, float_pnl_pct)
+        if min60_reason:
+            return min60_reason, min60_ratio
 
         # ── 规则 3: 大盘相对表现止损 ──
         dynamic_reason = self._check_dynamic_stop(float_pnl_pct, market_pct, symbol)
@@ -736,6 +750,31 @@ class StopLossMonitor:
             )
         return None, 1.0
 
+    # ── 规则 2.6: 60分钟K线级别分析 ──
+
+    def _check_60min_analysis(
+        self, symbol: str, current_price: float, float_pnl_pct: float
+    ):
+        """
+        60分钟K线级别止损评估 - 决策矩阵。
+
+        - 60min bullish + 日线背离 -> 减仓 40%
+        - 60min bearish + 日线背离 -> 清仓 100%
+        - 60min bearish + 日线健康 -> 减仓 50%
+        - 60min weakening + 日线背离 -> 减仓 67%
+        - 其他组合 -> 不触发
+        """
+        try:
+            reason, sell_ratio = evaluate_60min_stop(
+                symbol=symbol,
+                current_price=current_price,
+                float_pnl_pct=float_pnl_pct,
+            )
+            return reason, sell_ratio
+        except Exception as e:
+            logger.debug(f"[StopLoss] 60分钟分析跳过 {symbol}: {e}")
+            return None, 1.0
+
     # ── 规则 3: 大盘相对表现止损（P1-2） ──
 
     def _check_dynamic_stop(self, float_pnl_pct: float, market_pct: float, symbol: str = "") -> Optional[str]:
@@ -857,6 +896,7 @@ class StopLossMonitor:
                 "rul1_sector": self._calc_sector_distance(symbol, float_pnl_pct),
                 "rul2_iron": self._calc_iron_rule2_distance(symbol, float_pnl_pct, current_price, avg_price),
                 "rul2_5_tech": self._calc_tech_divergence_distance(symbol, current_price, float_pnl_pct),
+                "rul2_6_60min": self._calc_60min_distance(symbol, current_price, float_pnl_pct),
                 "rul3_dynamic": self._calc_dynamic_distance(float_pnl_pct, market_pct, symbol),
             }
 
@@ -1095,6 +1135,30 @@ class StopLossMonitor:
             # 距触发还差 (3 - count) 个信号
             return float(3 - count)
 
+    def _calc_60min_distance(
+        self, symbol: str, current_price: float, float_pnl_pct: float
+    ) -> Optional[float]:
+        """规则 2.6：60分钟K线级别分析的距离。
+
+        决策矩阵触发时返回负值，未触发返回正值表示安全。
+        - 触发减仓40% -> -0.4
+        - 触发减仓50% -> -0.5
+        - 触发减仓67% -> -0.67
+        - 触发清仓 -> -1.0
+        - 未触发 -> 1.0（安全）
+        """
+        try:
+            reason, sell_ratio = evaluate_60min_stop(
+                symbol=symbol,
+                current_price=current_price,
+                float_pnl_pct=float_pnl_pct,
+            )
+            if reason:
+                return -sell_ratio  # 负值表示已触发
+            return 1.0  # 未触发，安全
+        except Exception:
+            return None
+
     # ── 止损执行 ──
 
     def _execute_stop(
@@ -1196,6 +1260,8 @@ class StopLossMonitor:
             rule = 'sector'
         elif '铁律二' in reason:
             rule = 'iron_rule2'
+        elif '60分钟' in reason:
+            rule = '60min_analysis'
         elif '动态止损' in reason:
             rule = 'dynamic'
         elif '时间证伪' in reason:

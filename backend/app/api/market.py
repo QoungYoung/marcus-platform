@@ -5,6 +5,7 @@ Market data API endpoints.
 import logging
 import sys
 import os
+import time
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -458,9 +459,17 @@ def _safe_float(v):
 
 
 def _get_tushare_pro():
-    """统一获取 Tushare pro_api 实例"""
+    """统一获取 Tushare pro_api 实例（走主代理 ts.gyzcloud.top）"""
     from app.core.trading._api_config import get_tushare_pro as _gtp
     return _gtp()
+
+
+def _get_rt_min_pro():
+    """获取 Tushare pro_api 实例，专门用于 rt_min_daily（走分钟线代理 tu.brze.top）"""
+    import tushare as ts
+    pro = ts.pro_api('SC9b-_EoiR-gUuR1hHMIddmTqHvF6D_DGOizKGo2KQk')
+    pro._DataApi__http_url = 'https://tu.brze.top/api'
+    return pro
 
 
 def _query_stock_flow(ts_code: str) -> Optional[dict]:
@@ -2174,15 +2183,16 @@ async def get_intraday_min(
         raise HTTPException(status_code=400, detail="单次最多查询10只股票")
 
     try:
-        pro = _get_tushare_pro()
-        df = pro.rt_min(ts_code=",".join(ts_codes), freq=freq)
+        time.sleep(1.0)  # tu.brze.top 代理限速 1 QPS
+        pro = _get_rt_min_pro()
+        df = pro.rt_min_daily(ts_code=",".join(ts_codes), freq=freq)
         if df is None or df.empty:
             return {
                 "symbols": ts_codes,
                 "freq": freq,
                 "bars": [],
                 "count": 0,
-                "data_source": "tushare_rt_min",
+                "data_source": "tushare_rt_min_daily",
                 "note": "无数据（非交易时段或代码无效）",
             }
 
@@ -2242,7 +2252,7 @@ async def get_intraday_min(
             "freq": freq,
             "symbols_data": symbols_data,
             "total_bars": sum(len(d["bars"]) for d in symbols_data),
-            "data_source": "tushare_rt_min",
+            "data_source": "tushare_rt_min_daily",
         }
 
     except HTTPException:

@@ -108,6 +108,73 @@ def _infer_window(task_id: str, pi_prompt: str) -> str:
     return 'morning'
 
 
+def _get_peak_equity_path() -> Path:
+    return _get_workspace() / "data" / "peak_equity.json"
+
+
+def _load_peak_equity() -> float:
+    """加载历史峰值权益，首次运行返回初始资金"""
+    try:
+        path = _get_peak_equity_path()
+        if path.exists():
+            data = json.loads(path.read_text(encoding='utf-8'))
+            return float(data.get('peak_equity', 100000))
+    except Exception:
+        pass
+    return 100000.0
+
+
+def _save_peak_equity(equity: float) -> None:
+    """当当前权益超过历史峰值时更新"""
+    try:
+        prev = _load_peak_equity()
+        if equity > prev:
+            path = _get_peak_equity_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "peak_equity": round(equity, 2),
+                "peak_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def _get_market_values(positions: list) -> dict:
+    """通过雪球引擎获取持仓实时市价，计算总市值。
+    返回 {"market_value": float, "prices": dict}。
+    失败时回退到成本价。
+    """
+    if not positions:
+        return {"market_value": 0.0, "prices": {}}
+    try:
+        import sys as _sys
+        _core_dir = str(_get_workspace() / "core")
+        if _core_dir not in _sys.path:
+            _sys.path.insert(0, _core_dir)
+        from xueqiu_engine import XueqiuEngine
+        xq_config = str(_get_workspace() / "core" / "config.json")
+        xq = XueqiuEngine(config_file=xq_config)
+
+        market_value = 0.0
+        prices = {}
+        for pos in positions:
+            sym = pos['symbol']
+            try:
+                quote = xq.get_stock_quote(sym, use_cache=True)
+                if quote:
+                    price = quote.get('current', pos['avg_cost'])
+                else:
+                    price = pos['avg_cost']
+            except Exception:
+                price = pos['avg_cost']
+            market_value += price * pos['volume']
+            prices[sym] = price
+        return {"market_value": round(market_value, 2), "prices": prices}
+    except Exception:
+        cost = sum(p['avg_cost'] * p['volume'] for p in positions)
+        return {"market_value": cost, "prices": {}}
+
+
 def _read_scan_report() -> str:
     """读取最新扫描报告（读取文件而非 HTTP 调用，避免进程内 HTTP 开销）"""
     workspace = _get_workspace()
@@ -199,7 +266,16 @@ def _read_portfolio() -> str:
         total_profit = sum(t['profit'] or 0 for t in trades)
         cash = 100000.0 - total_buy + total_sell  # 初始资金 10 万
         total_cost = sum(p['avg_cost'] * p['volume'] for p in positions)
-        total_asset = cash + total_cost  # 简化：持仓市值 ≈ 成本（无实时价时用成本近似）
+
+        # 实时市值（雪球引擎 → 腾讯行情），失败回退成本价
+        mv_result = _get_market_values(positions)
+        market_value = mv_result["market_value"]
+        total_asset_market = cash + market_value
+        total_asset = cash + total_cost  # 兼容旧字段名
+
+        # 峰值权益追踪（用于回撤计算）
+        _save_peak_equity(total_asset_market)
+        peak_equity = _load_peak_equity()
 
         # 今日买入（T+1 锁定）
         today = datetime.now().strftime('%Y-%m-%d')
@@ -215,6 +291,9 @@ def _read_portfolio() -> str:
             "cash": round(cash, 2),
             "total_cost": round(total_cost, 2),
             "total_asset": round(total_asset, 2),
+            "total_asset_market": round(total_asset_market, 2),
+            "market_value": round(market_value, 2),
+            "peak_equity": round(peak_equity, 2),
             "total_profit": round(total_profit, 2),
             "position_count": len(positions),
             "today_bought": today_bought,
@@ -524,15 +603,22 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
 
 
 def _check_drawdown(portfolio_json: str) -> tuple:
-    """检查总回撤，返回 (pct, blocked, reason)"""
+    """检查总回撤（峰值回撤），返回 (pct, blocked, reason)。
+
+    公式：drawdown = (current_equity - peak_equity) / peak_equity
+    current_equity 使用实时市值（total_asset_market），peak_equity 从文件追踪。
+    """
     try:
         p = json.loads(portfolio_json)
-        total_asset = p.get('total_asset', 100000)
-        total_cost = p.get('total_cost', total_asset)
-        if total_cost > 0:
-            drawdown = (total_asset - total_cost) / total_cost
+        current_equity = p.get('total_asset_market', p.get('total_asset', 100000))
+        peak_equity = p.get('peak_equity', max(current_equity, 100000))
+        if peak_equity > 0:
+            drawdown = (current_equity - peak_equity) / peak_equity
             if drawdown <= -0.05:
-                return drawdown * 100, True, f"总回撤 {drawdown*100:.1f}% 已达 5% 硬止损线"
+                return drawdown * 100, True, (
+                    f"总回撤 {drawdown*100:.1f}% 已达 5% 硬止损线 "
+                    f"(当前权益 {current_equity:.0f} / 峰值 {peak_equity:.0f})"
+                )
             return drawdown * 100, False, ""
     except Exception:
         pass
@@ -638,13 +724,13 @@ def _save_trade_report(task_id: str, execution_id: str, reply: str,
 
 
 def _check_position_utilization(execution_id: str, position_limit: int, reason: str, stance: str):
-    """仓位利用率检测：Pi 建议仓位 vs 实际持仓成本占比，脱节时告警"""
+    """仓位利用率检测：Pi 建议仓位 vs 实际持仓市值占比，脱节时告警"""
     try:
         portfolio_str = _read_portfolio()
         p = json.loads(portfolio_str)
-        total_asset = p.get('total_asset', 100000)
-        total_cost = p.get('total_cost', 0)  # 用成本作为持仓市值的近似
-        actual_pct = (total_cost / total_asset * 100) if total_asset > 0 else 0
+        total_asset_market = p.get('total_asset_market', p.get('total_asset', 100000))
+        market_value = p.get('market_value', p.get('total_cost', 0))
+        actual_pct = (market_value / total_asset_market * 100) if total_asset_market > 0 else 0
 
         if position_limit > 0 and actual_pct < position_limit * 0.3 and position_limit >= 20:
             utilization = actual_pct / position_limit * 100
