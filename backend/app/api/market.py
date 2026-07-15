@@ -2238,10 +2238,44 @@ async def get_intraday_min(
                     "bar_count": len(bars),
                 }
 
+            # ── 60分钟级别：补充历史数据计算 MA 指标 ──
+            indicators = None
+            if freq == "60min" and bars:
+                try:
+                    from app.core.trading._60min_analysis import (
+                        _fetch_60min_bars_history, _sma, _calc_macd,
+                    )
+                    hist_bars = _fetch_60min_bars_history(code)
+                    if hist_bars:
+                        merged = {b["time"]: b for b in hist_bars}
+                        for b in bars:
+                            merged[b["time"]] = b
+                        all_bars = sorted(merged.values(), key=lambda b: b["time"])
+                    else:
+                        all_bars = bars
+                    closes = [b["close"] for b in all_bars]
+                    n = len(closes)
+                    mas = {}
+                    for period in [5, 10, 20, 30, 60]:
+                        if n >= period:
+                            mas[f"ma{period}"] = round(_sma(closes, period)[-1], 4)
+                    macd = _calc_macd(closes) if n >= 26 else None
+                    if mas or macd:
+                        indicators = {"mas": mas, "bar_count": n}
+                        if macd:
+                            indicators["macd"] = {
+                                "dif": round(macd["dif_latest"], 4),
+                                "dea": round(macd["dea_latest"], 4),
+                                "bar": round(macd["bar_latest"], 4),
+                            }
+                except Exception as e:
+                    logger.debug(f"[intraday-min] MA计算跳过 {code}: {e}")
+
             symbols_data.append({
                 "code": code,
                 "bars": bars[-60:],
                 "summary": summary,
+                "indicators": indicators,
             })
 
         return {

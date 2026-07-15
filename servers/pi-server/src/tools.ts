@@ -2080,7 +2080,7 @@ export const getCandidateEntryConditionsTool = {
 export const getIntradayMinTool = {
   name: 'get_intraday_min',
   label: '实时分钟K线',
-  description: '【实时·盘中分钟K线】获取多只股票今日实时分钟K线（1/5/15/30/60分钟可选）。数据源：Tushare rt_min（实时分钟行情）。支持批量查询（逗号分隔多个代码），单次最多10只股票。震荡市行情下用于监控多只持仓的日内走势、识别盘中趋势变化、寻找精确入场/离场点。返回每只股票的开/高/低/收/量/额序列+日内摘要（最新价/日内高低/涨跌幅/累计成交额）',
+  description: '【实时·盘中分钟K线】获取多只股票今日实时分钟K线（1/5/15/30/60分钟可选）。数据源：Tushare rt_min（实时分钟行情）。支持批量查询（逗号分隔多个代码），单次最多10只股票。震荡市行情下用于监控多只持仓的日内走势、识别盘中趋势变化、寻找精确入场/离场点。返回每只股票的开/高/低/收/量/额序列+日内摘要（最新价/日内高低/涨跌幅/累计成交额）。60min频率额外返回indicators字段：mas(MA5/MA10/MA20/MA30/MA60)+macd(DIF/DEA/BAR)，用于震荡市60分钟趋势判断',
   parameters: Type.Object({
     symbols: Type.String({ description: '股票代码，逗号分隔，如 000001.SZ,600519.SH,300750.SZ。支持带或不带交易所后缀' }),
     freq: Type.Optional(Type.String({ description: 'K线周期: 1min/5min/15min/30min/60min，默认 1min' })),
@@ -2108,6 +2108,19 @@ export const getIntradayMinTool = {
       const bars = sd.bars || [];
       const changeSymbol = s.change_pct >= 0 ? '+' : '';
       lines.push(`### ${sd.code} | 最新: ${s.latest_price.toFixed(2)} (${changeSymbol}${s.change_pct.toFixed(2)}%) | 日内: ${s.day_low.toFixed(2)}-${s.day_high.toFixed(2)} | ${s.bar_count}根K线`);
+
+      // 60分钟级 MA 指标
+      const ind = sd.indicators;
+      if (ind?.mas) {
+        const maParts: string[] = [];
+        for (const [k, v] of Object.entries(ind.mas)) {
+          maParts.push(`${k.toUpperCase()}:${(v as number).toFixed(2)}`);
+        }
+        if (maParts.length > 0) lines.push(`  均线: ${maParts.join(' | ')}`);
+        if (ind.macd) {
+          lines.push(`  MACD: DIF=${ind.macd.dif.toFixed(4)} DEA=${ind.macd.dea.toFixed(4)} BAR=${ind.macd.bar.toFixed(4)}`);
+        }
+      }
 
       // 最近12根K线摘要
       const recent = bars.slice(-12);

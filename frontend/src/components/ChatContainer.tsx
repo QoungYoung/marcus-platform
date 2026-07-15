@@ -109,6 +109,18 @@ const getIntradayMinTool = {
       const bars = sd.bars || [];
       const changeSymbol = s.change_pct >= 0 ? '+' : '';
       lines.push(`### ${sd.code} | 最新: ${s.latest_price.toFixed(2)} (${changeSymbol}${s.change_pct.toFixed(2)}%) | 日内: ${s.day_low.toFixed(2)}-${s.day_high.toFixed(2)} | ${s.bar_count}根K线`);
+      // 分钟级 MA 指标（60min 频率专属）
+      const ind = sd.indicators;
+      if (ind?.mas) {
+        const maParts: string[] = [];
+        for (const [k, v] of Object.entries(ind.mas)) {
+          maParts.push(`${k.toUpperCase()}:${(v as number).toFixed(2)}`);
+        }
+        if (maParts.length > 0) lines.push(`  均线: ${maParts.join(' | ')}`);
+        if (ind.macd) {
+          lines.push(`  MACD: DIF=${ind.macd.dif.toFixed(4)} DEA=${ind.macd.dea.toFixed(4)} BAR=${ind.macd.bar.toFixed(4)}`);
+        }
+      }
       const recent = bars.slice(-12);
       if (recent.length > 0) {
         const barLines = recent.map((b: any) => {

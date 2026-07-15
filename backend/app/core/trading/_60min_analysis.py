@@ -103,7 +103,7 @@ def _fetch_60min_bars_today(ts_code: str) -> Optional[List[dict]]:
         return None
 
 
-def _fetch_60min_bars_history(ts_code: str, days: int = 20) -> Optional[List[dict]]:
+def _fetch_60min_bars_history(ts_code: str, days: int = 30) -> Optional[List[dict]]:
     """从 stk_mins 获取历史60分钟K线（主代理，用于计算 MA10/MA30 等）"""
     try:
         from app.core.trading._api_config import get_tushare_pro
