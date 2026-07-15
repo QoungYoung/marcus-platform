@@ -75,8 +75,8 @@ def _normalize_to_ts_code(symbol: str) -> str:
     return _norm(symbol)
 
 
-def _fetch_60min_bars(ts_code: str) -> Optional[List[dict]]:
-    """从 rt_min_daily 获取今日60分钟K线（绕过 Tushare SDK，直接解析 HTTP JSON）"""
+def _fetch_60min_bars_today(ts_code: str) -> Optional[List[dict]]:
+    """从 rt_min_daily 获取今日60分钟K线（tu.brze.top 代理）"""
     try:
         data = _call_rt_min_daily_raw([ts_code], "60min")
         if not data:
@@ -85,7 +85,6 @@ def _fetch_60min_bars(ts_code: str) -> Optional[List[dict]]:
         items = data.get("items", [])
         if not fields or not items:
             return None
-        # fields 顺序: ts_code, trade_time, open, close, high, low, vol, amount
         col_map = {name: idx for idx, name in enumerate(fields)}
         bars = []
         for row in items:
@@ -102,6 +101,57 @@ def _fetch_60min_bars(ts_code: str) -> Optional[List[dict]]:
     except Exception as e:
         logger.debug(f"[60min] rt_min_daily 获取失败 {ts_code}: {e}")
         return None
+
+
+def _fetch_60min_bars_history(ts_code: str, days: int = 20) -> Optional[List[dict]]:
+    """从 stk_mins 获取历史60分钟K线（主代理，用于计算 MA10/MA30 等）"""
+    try:
+        from app.core.trading._api_config import get_tushare_pro
+        pro = get_tushare_pro()
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=days)
+        df = pro.stk_mins(
+            ts_code=ts_code, freq='60min',
+            start_date=start_dt.strftime('%Y-%m-%d 09:30:00'),
+            end_date=end_dt.strftime('%Y-%m-%d 15:00:00'),
+        )
+        if df is None or df.empty:
+            return None
+        df = df.sort_values('trade_time', ascending=True)
+        bars = []
+        for _, row in df.iterrows():
+            bars.append({
+                "time": str(row.get("trade_time", "")),
+                "open": float(row.get("open", 0)),
+                "close": float(row.get("close", 0)),
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "vol": float(row.get("vol", 0)),
+            })
+        return bars
+    except Exception as e:
+        logger.debug(f"[60min] stk_mins 获取失败 {ts_code}: {e}")
+        return None
+
+
+def _fetch_60min_bars_merged(ts_code: str) -> Optional[List[dict]]:
+    """获取历史+今日60分钟K线，合并去重（今日 rt_min_daily 覆盖历史同时间）"""
+    hist_bars = _fetch_60min_bars_history(ts_code)
+    today_bars = _fetch_60min_bars_today(ts_code)
+
+    if not hist_bars and not today_bars:
+        return None
+
+    merged = {}
+    if hist_bars:
+        for b in hist_bars:
+            merged[b["time"]] = b
+    if today_bars:
+        for b in today_bars:
+            merged[b["time"]] = b  # 当日数据覆盖历史同时间
+
+    result = sorted(merged.values(), key=lambda b: b["time"])
+    return result if result else None
 
 
 def _sma(values: List[float], period: int) -> List[float]:
@@ -147,14 +197,16 @@ def _calc_macd(closes: List[float]) -> dict:
 
 
 def calc_60min_indicators_from_bars(bars: List[dict]) -> Optional[dict]:
-    """从60分钟K线计算技术指标"""
+    """从60分钟K线计算技术指标（需≥5根，MA10/MA20/MA30 不足时按窗口宽度降级）"""
     if not bars or len(bars) < 5:
         return None
 
     closes = [b["close"] for b in bars]
+    n = len(closes)
     ma5 = _sma(closes, 5)
-    ma10 = _sma(closes, 10)
-    ma20 = _sma(closes, 20) if len(closes) >= 20 else _sma(closes, len(closes))
+    ma10 = _sma(closes, 10) if n >= 10 else _sma(closes, n)
+    ma20 = _sma(closes, 20) if n >= 20 else _sma(closes, min(n, 19))
+    ma30 = _sma(closes, 30) if n >= 30 else _sma(closes, min(n, 29))
     macd = _calc_macd(closes)
 
     return {
@@ -162,6 +214,7 @@ def calc_60min_indicators_from_bars(bars: List[dict]) -> Optional[dict]:
         "ma5": ma5[-1] if ma5 else 0,
         "ma10": ma10[-1] if ma10 else 0,
         "ma20": ma20[-1] if ma20 else 0,
+        "ma30": ma30[-1] if ma30 else 0,
         "ma5_prev": ma5[-2] if len(ma5) >= 2 else ma5[-1] if ma5 else 0,
         "dif": macd["dif_latest"],
         "dea": macd["dea_latest"],
@@ -243,6 +296,7 @@ def calc_60min_indicators_from_daily(symbol: str, current_price: float) -> Optio
             "ma5": ma5_60m,
             "ma10": ma10_60m,
             "ma20": ma20_60m,
+            "ma30": ma20_daily[-1] if ma20_daily else 0,
             "ma5_prev": ma5_daily[-2] if len(ma5_daily) >= 2 else ma5_60m,
             "dif": dif_latest,
             "dea": dea_latest,
@@ -259,13 +313,18 @@ def calc_60min_indicators_from_daily(symbol: str, current_price: float) -> Optio
 
 
 def get_60min_indicators(symbol: str, current_price: float) -> Optional[dict]:
-    """获取60分钟级别技术指标（优先实时K线，降级日线近似）"""
+    """获取60分钟级别技术指标。
+
+    数据优先级：
+    1. stk_mins（历史，~20天）+ rt_min_daily（当日）合并 → 真实 60min MA/MA10/MA20/MA30
+    2. 降级：日线近似（当日线指标无法获取足够分钟K线时）
+    """
     try:
         from app.api.indicator import _normalize_to_ts_code
         ts_code = _normalize_to_ts_code(symbol)
 
-        # 优先：实际60分钟K线
-        bars = _fetch_60min_bars(ts_code)
+        # 优先：实际60分钟K线（历史+当日合并）
+        bars = _fetch_60min_bars_merged(ts_code)
         if bars and len(bars) >= 5:
             result = calc_60min_indicators_from_bars(bars)
             if result:
