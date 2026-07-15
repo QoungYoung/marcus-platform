@@ -1767,9 +1767,14 @@ def _save_market_diagnosis(result: dict):
         conn.close()
     except Exception as e:
         import traceback
-        logging.getLogger(__name__).warning(f"保存市场诊断失败: {e}")
-        print(f"[market-diagnosis] 保存失败: {e}", flush=True)
-        traceback.print_exc()
+        err_msg = f"[market-diagnosis] 保存失败: {e}\n{traceback.format_exc()}"
+        logging.getLogger(__name__).warning(err_msg)
+        print(err_msg, flush=True)
+        try:
+            from app.services.qqbot_service import send_qq_notification
+            send_qq_notification(f"⚠️ 盘前诊断保存DB失败\n{traceback.format_exc()}")
+        except Exception:
+            pass
 
 
 # ========== 市场状态查询 API ==========
