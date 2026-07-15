@@ -3035,6 +3035,20 @@ async def position_add_conditions_live(symbol: str = Query(None)):
     }
 
 
+def _bare_symbol(s: str) -> str:
+    """提取裸6位代码: SZ002714 / 002714.SZ / 002714 → 002714"""
+    s = s.strip().upper()
+    if "." in s:
+        code, _ = s.split(".", 1)
+        if code.isdigit() and len(code) == 6:
+            return code
+    if s.startswith(("SH", "SZ", "BJ")) and len(s) == 8 and s[2:].isdigit():
+        return s[2:]
+    if s.isdigit() and len(s) == 6:
+        return s
+    return s
+
+
 @router.get("/candidate-entry-conditions")
 async def candidate_entry_conditions_live(symbol: str = Query(None)):
     """实盘模式：查询候选池股票距离建仓还差哪些条件。
@@ -3054,21 +3068,15 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
     pool = get_candidate_pool()
     waiting = pool.get_waiting()
     if symbol:
-        # 兼容带/不带交易所前缀（SH603259 ↔ 603259）
-        waiting = [
-            c for c in waiting
-            if c.get("symbol") == symbol or c.get("symbol", "")[2:] == symbol
-        ]
+        bare = _bare_symbol(symbol)
+        waiting = [c for c in waiting if _bare_symbol(c.get("symbol", "")) == bare]
 
     # ── 长期候选池 ──
     from app.services.long_term_pool import get_long_term_pool
     ltp = get_long_term_pool()
     lt_active = ltp.get_active()
     if symbol:
-        lt_active = [
-            c for c in lt_active
-            if c.get("symbol") == symbol or c.get("symbol", "")[2:] == symbol
-        ]
+        lt_active = [c for c in lt_active if _bare_symbol(c.get("symbol", "")) == bare]
 
     if not waiting and not lt_active:
         return {
