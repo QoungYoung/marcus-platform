@@ -18,7 +18,7 @@ async function fetchStockSuggestions(query: string): Promise<StockOption[]> {
     const numeric = clean.replace(/^(SH|SZ|BJ)/, '');
     const where = `ts_code LIKE '%${numeric}%' OR symbol LIKE '%${numeric}%' OR name LIKE '%${query}%'`;
     const resp = await axios.get(`${API_BASE}/db/query`, {
-      params: { db: 'stock_pool.db', table: 'stock_daily', columns: 'ts_code,symbol,name', where, limit: 10 },
+      params: { db: 'stock_pool.db', table: 'stock_pool', columns: 'ts_code,symbol,name', where, limit: 10 },
     });
     const rows = resp.data?.rows || [];
     return [...new Map(rows.map((r: any) => [r.ts_code || r.symbol, r])).values()] as StockOption[];
