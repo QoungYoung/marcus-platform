@@ -37,16 +37,12 @@ _RT_MIN_TOKEN = 'SC9b-_EoiR-gUuR1hHMIddmTqHvF6D_DGOizKGo2KQk'
 _RT_MIN_URL = 'https://tu.brze.top/api'
 
 
-def _call_rt_min_daily_raw(ts_codes: list, freq: str) -> Optional[dict]:
-    """直接 HTTP 调用 tu.brze.top rt_min_daily，绕过 Tushare SDK（SDK 无法解析此代理的响应格式）。
-
-    返回 {"fields": [...], "items": [[...], ...]} 或 None。
-    """
-    time.sleep(1.0)
+def _call_rt_min_daily_single(ts_code: str, freq: str) -> Optional[dict]:
+    """单股票 rt_min_daily 请求。tu.brze.top 代理不支持批量查询，必须逐股票调用。"""
     payload = json.dumps({
         'api_name': 'rt_min_daily',
         'token': _RT_MIN_TOKEN,
-        'params': {'ts_code': ','.join(ts_codes), 'freq': freq},
+        'params': {'ts_code': ts_code, 'freq': freq},
         'fields': '',
     }).encode('utf-8')
     req = urllib.request.Request(
@@ -58,11 +54,33 @@ def _call_rt_min_daily_raw(ts_codes: list, freq: str) -> Optional[dict]:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode('utf-8'))
     except Exception as e:
-        logger.warning(f"[rt_min_daily] HTTP 请求失败: {e}")
+        logger.warning(f"[rt_min_daily] HTTP 请求失败 {ts_code}: {e}")
         return None
     if data.get('code') != 0 or not data.get('data'):
         return None
     return data['data']
+
+
+def _call_rt_min_daily_raw(ts_codes: list, freq: str) -> Optional[dict]:
+    """获取 rt_min_daily 数据，合并多股票结果。
+
+    tu.brze.top 代理不支持批量查询，因此逐股票请求后合并。
+    返回 {"fields": [...], "items": [[...], ...]} 或 None。
+    """
+    all_fields = None
+    all_items = []
+    for ts_code in ts_codes:
+        data = _call_rt_min_daily_single(ts_code, freq)
+        if data:
+            if all_fields is None:
+                all_fields = data.get("fields", [])
+            items = data.get("items", [])
+            if items:
+                all_items.extend(items)
+        time.sleep(1.0)  # 代理 QPS 限制
+    if all_fields is None:
+        return None
+    return {"fields": all_fields, "items": all_items}
 
 # 缓存：避免同一扫描周期重复 Tushare 调用
 _signal_cache: Dict[str, Tuple[float, tuple]] = {}  # key -> (timestamp, result)
