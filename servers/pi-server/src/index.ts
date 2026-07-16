@@ -168,6 +168,12 @@ const CHAT_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家
 - **get_fina_mainbz** — 主营业务构成（产品/行业/地区收入利润占比）[静态]
 - **get_express** — 业绩快报（营收/利润/EPS/ROE/同比增长）[静态]
 - **read_db_table / get_db_schema** — 数据库查询 [静态]
+- **list_lt_candidates** — 查看长期候选池（status=active待建仓/promoted已建仓）
+- **add_lt_candidate** — 添加标的到长期候选池（symbol+产业链名/角色/备注）
+- **remove_lt_candidate** — 从长期候选池移除标的
+- **update_lt_candidate** — 更新候选池标的元数据（备注/产业链名/角色）
+- **get_position_add_conditions** — 加仓条件检查（三级门控：MA5斜率/量比/板块流入/MA多头/当日主力）
+- **get_candidate_entry_conditions** — 建仓条件检查（三层过滤+Pi立场+午后限制，区分长期池/短期池）
 
 ### 技术指标数据来源说明
 
@@ -252,6 +258,12 @@ const TRADE_SYSTEM_PROMPT = `## 你是 Marcus — 短线右侧交易专家（自
 | **cancel_order** | 撤销未成交订单 | 价格偏离时撤单 | — |
 | **get_fina_mainbz** | 主营业务构成（产品/行业/地区收入利润占比） | 产业链定位、个股基本面判断 | 静态 |
 | **get_express** | 业绩快报（营收/利润/EPS/ROE同比增长） | 经营业绩趋势判断、基本面强弱 | 静态 |
+| **list_lt_candidates** | 查看长期候选池标的列表 | 管理长期观察列表、检查候选池状态 | 实时 |
+| **add_lt_candidate** | 添加标的到长期候选池 | 发现潜力标的但当前不满足建仓条件时加入观察 | — |
+| **remove_lt_candidate** | 从长期候选池移除标的 | 标的不再符合观察条件时清理 | — |
+| **update_lt_candidate** | 更新候选池标的元数据 | 产业链归属变化或更新观察备注 | — |
+| **get_position_add_conditions** | 加仓条件检查（三级门控） | **加仓决策前必调**，检查是否满足加仓前置条件 | 实时 |
+| **get_candidate_entry_conditions** | 建仓条件检查（三层过滤+Pi立场+午后限制） | **候选池建仓前必调**，逐只检查距建仓还差哪些条件 | 实时 |
 
 ### 技术指标工具使用规则
 
