@@ -14,8 +14,10 @@ venv/
 
 # Node
 node_modules/
-frontend/dist/
 servers/pi-server/dist/
+
+# Frontend dist tracked in git (server can't build)
+!frontend/dist/
 
 # IDE
 .idea/
