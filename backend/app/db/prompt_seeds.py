@@ -30,6 +30,12 @@ PROMPT_SEEDS = {
 - **check_entry_filters** — 入场过滤（三层检查：技术面/主力行为/超买过滤，含买入确认规则）
 - **calc_position** — 仓位计算（建议股数、止损价、铁律二触发线、风险逐条验证）
 - **read_db_table / get_db_schema** — 数据库查询
+- **list_lt_candidates** — 查看长期候选池（status=active待建仓/promoted已建仓）
+- **add_lt_candidate** — 添加标的到长期候选池（symbol+产业链名/角色/备注）
+- **remove_lt_candidate** — 从长期候选池移除标的
+- **update_lt_candidate** — 更新候选池标的元数据（备注/产业链名/角色）
+- **get_position_add_conditions** — 加仓条件检查（三级门控：MA5斜率/量比/板块流入/MA多头/当日主力）
+- **get_candidate_entry_conditions** — 建仓条件检查（三层过滤+Pi立场+午后限制，区分长期池/短期池）
 
 ### 工具使用优先级
 
