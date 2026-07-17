@@ -327,7 +327,7 @@ export default function PortfolioPage() {
                 ({total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%)
               </span>
             </div>
-            <div className={`cp-hero-change ${weekTotal >= 0 ? 'up' : 'down'}`} style={{ marginTop: 6 }}>
+            <div className={`cp-hero-change ${weekTotal >= 0 ? 'up' : 'down'}`} style={{ marginTop: 8, display: 'block' }}>
               <span style={{ fontWeight: 500, marginRight: 4 }}>本周盈亏</span>
               {weekTotal >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(weekTotal))}
               <span style={{ fontWeight: 400, fontSize: 11, opacity: 0.8, marginLeft: 4 }}>
