@@ -413,33 +413,61 @@ class PositionTierMonitor:
         return GateResult(allowed=True, checks=checks)
 
     def _get_total_drawdown(self, account: dict) -> float:
-        """计算总回撤比例"""
+        """计算总回撤比例（峰值回撤）：
+        drawdown = (current_equity - peak_equity) / peak_equity
+        正值表示回撤深度，0 表示无回撤（当前在峰值）。
+        """
         try:
-            initial = account.get('initial_capital', 100000)
-            total_pnl = 0
-            if 'float_pnl' in account:
-                total_pnl = account['float_pnl']
-            if 'realized_pnl' in account:
-                total_pnl += account['realized_pnl']
-            elif hasattr(self, 'executor') and self.executor:
-                # 尝试从 executor 获取
-                try:
-                    acc = self.executor.get_account()
-                    # 解析 total_profit
-                    profit_str = acc.get('total_profit', '0')
-                    if isinstance(profit_str, str):
-                        import re
-                        match = re.search(r'[-+]?\d+\.?\d*', profit_str)
-                        if match:
-                            total_pnl = float(match.group())
-                except Exception:
-                    pass
-
-            if initial <= 0:
+            current_equity = account.get('total_asset', 0)
+            if current_equity <= 0:
                 return 0
-            return -min(0, total_pnl) / initial
+
+            initial = account.get('initial_capital', 100000)
+            peak_equity = self._load_peak_equity()
+            # 首次运行或无记录时，用 max(初始资金, 当前权益) 作为基准
+            if peak_equity <= 0:
+                peak_equity = max(initial, current_equity)
+
+            # 更新峰值（如当前权益创新高）
+            if current_equity > peak_equity:
+                self._save_peak_equity(current_equity)
+                return 0  # 新高，无回撤
+
+            if peak_equity <= 0:
+                return 0
+            drawdown = (current_equity - peak_equity) / peak_equity
+            return -drawdown  # 正值（如 0.05 = 5% 回撤）
         except Exception:
             return 0
+
+    def _load_peak_equity(self) -> float:
+        """从 data/peak_equity.json 加载历史峰值权益"""
+        try:
+            data_dir = getattr(self.executor, 'data_dir', None) if self.executor else None
+            if not data_dir:
+                return 0
+            path = Path(data_dir) / "peak_equity.json" if not isinstance(data_dir, Path) else data_dir / "peak_equity.json"
+            if path.exists():
+                data = json.loads(path.read_text(encoding='utf-8'))
+                return float(data.get('peak_equity', 0))
+        except Exception:
+            pass
+        return 0
+
+    def _save_peak_equity(self, equity: float) -> None:
+        """保存新峰值到 data/peak_equity.json"""
+        try:
+            data_dir = getattr(self.executor, 'data_dir', None) if self.executor else None
+            if not data_dir:
+                return
+            path = Path(data_dir) / "peak_equity.json" if not isinstance(data_dir, Path) else data_dir / "peak_equity.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "peak_equity": round(equity, 2),
+                "peak_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }, ensure_ascii=False, indent=2), encoding='utf-8')
+        except Exception:
+            pass
 
     def _get_consecutive_losses(self) -> int:
         """获取连续亏损笔数"""

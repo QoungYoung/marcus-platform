@@ -4272,9 +4272,20 @@ async def position_add_conditions(
     except Exception:
         pass
 
-    # ── 总回撤 ──
-    total_pnl = float(acc.get("float_pnl", 0)) + float(acc.get("realized_pnl", 0))
-    total_drawdown = -min(0, total_pnl) / initial_capital if initial_capital > 0 else 0
+    # ── 总回撤（峰值回撤公式）──
+    try:
+        from pathlib import Path as _Path
+        peak_path = _Path("data") / "peak_equity.json"
+        peak_equity = float(initial_capital)
+        if peak_path.exists():
+            peak_data = json.loads(peak_path.read_text(encoding='utf-8'))
+            peak_equity = max(float(peak_data.get('peak_equity', initial_capital)), initial_capital)
+        if total_asset >= peak_equity:
+            total_drawdown = 0
+        else:
+            total_drawdown = (peak_equity - total_asset) / peak_equity if peak_equity > 0 else 0
+    except Exception:
+        total_drawdown = 0
 
     # ── 逐只评估 ──
     results = []
