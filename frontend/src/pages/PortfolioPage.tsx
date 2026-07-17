@@ -327,6 +327,14 @@ export default function PortfolioPage() {
                 ({total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%)
               </span>
             </div>
+            <div className={`cp-hero-change ${weekTotal >= 0 ? 'up' : 'down'}`} style={{ marginTop: 6 }}>
+              <span style={{ fontWeight: 500, marginRight: 4 }}>本周盈亏</span>
+              {weekTotal >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(weekTotal))}
+              <span style={{ fontWeight: 400, fontSize: 11, opacity: 0.8, marginLeft: 4 }}>
+                (已实现<span style={{ color: weekRealized >= 0 ? 'var(--agent-up, #2ecc71)' : 'var(--agent-down, #e74c3c)' }}>{weekRealized >= 0 ? '+' : ''}{fmtMoneyShort(Math.abs(weekRealized))}</span>
+                {' / '}浮盈<span style={{ color: weekFloat >= 0 ? 'var(--agent-up, #2ecc71)' : 'var(--agent-down, #e74c3c)' }}>{weekFloat >= 0 ? '+' : ''}{fmtMoneyShort(Math.abs(weekFloat))}</span>)
+              </span>
+            </div>
           </div>
           <div className="cp-hero-right">
             <div className="cp-hero-kpi">
@@ -349,10 +357,6 @@ export default function PortfolioPage() {
             <HeroKpi label={t('portfolio.positionValue')} value={`¥${fmtMoney(posVal)}`} sub={`${posRatio.toFixed(1)}%`} />
             <HeroKpi label={t('portfolio.realizedPnL')} value={`${realizedPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(realizedPnl))}`} trend={realizedPnl >= 0 ? 'up' : 'down'} />
             <HeroKpi label={t('portfolio.floatingPnL')} value={`${floatPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(floatPnl))}`} trend={floatPnl >= 0 ? 'up' : 'down'} />
-            <HeroKpi label={t('portfolio.weekPnL')}
-              value={`${weekTotal >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(weekTotal))}`}
-              trend={weekTotal >= 0 ? 'up' : 'down'}
-              sub={`已实现${weekRealized >= 0 ? '+' : ''}${fmtMoneyShort(Math.abs(weekRealized))} / 浮盈${weekFloat >= 0 ? '+' : ''}${fmtMoneyShort(Math.abs(weekFloat))}`} />
           </div>
         </div>
       )}
