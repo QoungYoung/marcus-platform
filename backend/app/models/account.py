@@ -34,6 +34,8 @@ class AccountResponse(BaseModel):
     float_pnl: float
     total_pnl: float
     position_ratio: float
+    week_realized_pnl: float = 0     # 本周已实现盈亏
+    week_float_pnl: float = 0        # 本周持仓浮盈
     positions: List[PositionResponse] = []
     updated_at: datetime
 

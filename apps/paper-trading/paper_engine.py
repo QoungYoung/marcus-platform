@@ -434,6 +434,12 @@ class PaperTradingEngine:
         except sqlite3.OperationalError:
             pass
 
+        # 迁移: orders 表补 reason 列（自动建仓时 Order 带 reason，需持久化到 orders 表）
+        try:
+            cursor.execute('ALTER TABLE orders ADD COLUMN reason TEXT')
+        except sqlite3.OperationalError:
+            pass
+
         # 创建持仓追踪表（Step 8：统一数据源）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS positions (
@@ -706,16 +712,21 @@ class PaperTradingEngine:
         # 获取订单
         cursor.execute('SELECT * FROM orders WHERE orderid = ?', (order_id,))
         row = cursor.fetchone()
-        
+
         if not row:
             print(f"[ERR] 订单 {order_id} 不存在")
             conn.close()
             return False
-        
+
+        # 兼容旧 orders 表无 reason 列
+        cols = [desc[0] for desc in cursor.description]
+        order_reason = row[cols.index('reason')] if 'reason' in cols else ''
+
         order = Order(
             orderid=row[0], symbol=row[1], direction=row[2],
             price=row[3], volume=row[4], status=row[5],
-            traded=row[6], created_at=row[7], updated_at=row[8]
+            traded=row[6], created_at=row[7], updated_at=row[8],
+            reason=order_reason
         )
         
         # 更新订单状态
@@ -1082,10 +1093,10 @@ class PaperTradingEngine:
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO orders (orderid, symbol, direction, price, volume, status, traded, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO orders (orderid, symbol, direction, price, volume, status, traded, created_at, updated_at, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (order.orderid, order.symbol, order.direction, order.price, order.volume,
-              order.status, order.traded, order.created_at, order.updated_at))
+              order.status, order.traded, order.created_at, order.updated_at, getattr(order, 'reason', '')))
         conn.commit()
         conn.close()
     

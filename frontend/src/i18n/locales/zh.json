@@ -32,6 +32,7 @@
     "totalAsset": "总资产",
     "realizedPnL": "已实现盈亏",
     "floatingPnL": "浮动盈亏",
+    "weekPnL": "本周盈亏",
     "totalPnL": "总盈亏",
     "positionRatio": "持仓比例",
     "positions": "持仓明细",

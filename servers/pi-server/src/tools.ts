@@ -992,9 +992,9 @@ export const placeOrderTool = {
     side: Type.String({ description: '交易方向: buy(买入) 或 sell(卖出)' }),
     price: Type.Number({ description: '委托价格（元）' }),
     volume: Type.Number({ description: '交易数量（股），必须是100的整数倍' }),
-    reason: Type.Optional(Type.String({ description: '交易理由' })),
+    reason: Type.String({ description: '交易理由（必填，至少10字，说明为什么买卖）' }),
   }),
-  async execute(_toolCallId: string, params: { symbol: string; side: string; price: number; volume: number; reason?: string }, _signal?: AbortSignal) {
+  async execute(_toolCallId: string, params: { symbol: string; side: string; price: number; volume: number; reason: string }, _signal?: AbortSignal) {
     // 回测模式：沙盒下单
     if (isBacktest()) {
       const ctx = getBacktestContext()!;

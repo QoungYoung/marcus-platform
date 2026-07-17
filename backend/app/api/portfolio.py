@@ -238,6 +238,52 @@ def calculate_positions_from_db():
     return position_list, account, realized_pnl, win_rate
 
 
+def _calc_week_pnl(positions: list) -> tuple:
+    """计算本周持仓盈亏：(本周已实现, 本周浮盈)
+
+    本周已实现：本周一至今日所有卖出交易的 profit 之和
+    本周浮盈：本周内有买入记录的当前持仓的浮盈之和
+    """
+    from datetime import datetime, timedelta
+
+    db_file = settings.data_dir / "trades.db"
+    if not db_file.exists():
+        return 0.0, 0.0
+
+    today = datetime.now()
+    monday = today - timedelta(days=today.weekday())
+    monday_str = monday.strftime('%Y-%m-%d')
+
+    conn = sqlite3.connect(str(db_file), timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+    curs = conn.cursor()
+
+    # 本周已实现盈亏
+    curs.execute(
+        "SELECT COALESCE(SUM(profit), 0) FROM trades "
+        "WHERE direction='卖出' AND (voided = 0 OR voided IS NULL) "
+        "AND DATE(created_at) >= ?",
+        (monday_str,),
+    )
+    week_realized = float(curs.fetchone()[0])
+
+    # 本周买入过的标的
+    curs.execute(
+        "SELECT DISTINCT symbol FROM trades "
+        "WHERE direction='买入' AND (voided = 0 OR voided IS NULL) "
+        "AND DATE(created_at) >= ?",
+        (monday_str,),
+    )
+    week_bought = {row[0] for row in curs.fetchall()}
+    conn.close()
+
+    # 本周浮盈 = 本周买入过且当前仍持仓的浮盈
+    week_float = sum(p.floating_pnl for p in positions if p.symbol in week_bought)
+
+    return week_realized, week_float
+
+
 def save_daily_snapshot(target_date: str = None) -> dict:
     """Compute and persist a daily portfolio snapshot to trades.db.
 
@@ -476,6 +522,15 @@ async def get_portfolio():
     total_asset = available_cash + account.get('frozen_cash', 0) + total_position_value
     total_float_pnl = sum(p.floating_pnl for p in positions)
 
+    # ── 本周持仓盈亏 ──
+    week_realized_pnl, week_float_pnl = _calc_week_pnl(positions)
+    week_total = week_realized_pnl + week_float_pnl
+    print(
+        f"[Portfolio] 本周盈亏: 总{week_total:+.2f} "
+        f"(已实现{week_realized_pnl:+.2f} / 浮盈{week_float_pnl:+.2f})",
+        flush=True,
+    )
+
     # 🔧 total_pnl = total_asset - initial_capital（始终与 total_return 一致）
     #     float_pnl 作为推导值 = total_pnl - realized_pnl，保证三数自洽
     total_pnl = total_asset - initial_capital
@@ -491,6 +546,8 @@ async def get_portfolio():
         float_pnl=derived_float_pnl,
         total_pnl=total_pnl,
         position_ratio=total_position_value / initial_capital * 100 if initial_capital > 0 else 0,
+        week_realized_pnl=week_realized_pnl,
+        week_float_pnl=week_float_pnl,
         positions=positions,
         updated_at=datetime.now(),
     )

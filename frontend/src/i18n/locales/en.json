@@ -32,6 +32,7 @@
     "totalAsset": "Total Asset",
     "realizedPnL": "Realized P&L",
     "floatingPnL": "Floating P&L",
+    "weekPnL": "Week P&L",
     "totalPnL": "Total P&L",
     "positionRatio": "Position Ratio",
     "positions": "Positions",

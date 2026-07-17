@@ -19,7 +19,9 @@ interface Position {
 interface Account {
   initial_capital: number; available_cash: number; frozen_cash?: number;
   position_value: number; total_asset: number; realized_pnl: number;
-  float_pnl: number; total_pnl: number; position_ratio: number; positions: Position[];
+  float_pnl: number; total_pnl: number; position_ratio: number;
+  week_realized_pnl?: number; week_float_pnl?: number;
+  positions: Position[];
 }
 interface PortfolioSummary {
   account: Account; total_return: number; total_return_pct: number; win_rate: number;
@@ -269,6 +271,9 @@ export default function PortfolioPage() {
   const floatPnl = account?.float_pnl || 0;
   const posRatio = account?.position_ratio || 0;
   const total_return_pct = summary?.total_return_pct || 0;
+  const weekRealized = account?.week_realized_pnl || 0;
+  const weekFloat = account?.week_float_pnl || 0;
+  const weekTotal = weekRealized + weekFloat;
 
   // 图表常量
   const G = 'rgba(255,255,255,0.04)';
@@ -344,6 +349,10 @@ export default function PortfolioPage() {
             <HeroKpi label={t('portfolio.positionValue')} value={`¥${fmtMoney(posVal)}`} sub={`${posRatio.toFixed(1)}%`} />
             <HeroKpi label={t('portfolio.realizedPnL')} value={`${realizedPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(realizedPnl))}`} trend={realizedPnl >= 0 ? 'up' : 'down'} />
             <HeroKpi label={t('portfolio.floatingPnL')} value={`${floatPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(floatPnl))}`} trend={floatPnl >= 0 ? 'up' : 'down'} />
+            <HeroKpi label={t('portfolio.weekPnL')}
+              value={`${weekTotal >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(weekTotal))}`}
+              trend={weekTotal >= 0 ? 'up' : 'down'}
+              sub={`已实现${weekRealized >= 0 ? '+' : ''}${fmtMoneyShort(Math.abs(weekRealized))} / 浮盈${weekFloat >= 0 ? '+' : ''}${fmtMoneyShort(Math.abs(weekFloat))}`} />
           </div>
         </div>
       )}
