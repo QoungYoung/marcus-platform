@@ -108,37 +108,6 @@ def _infer_window(task_id: str, pi_prompt: str) -> str:
     return 'morning'
 
 
-def _get_peak_equity_path() -> Path:
-    return _get_workspace() / "data" / "peak_equity.json"
-
-
-def _load_peak_equity() -> float:
-    """加载历史峰值权益，首次运行返回初始资金"""
-    try:
-        path = _get_peak_equity_path()
-        if path.exists():
-            data = json.loads(path.read_text(encoding='utf-8'))
-            return float(data.get('peak_equity', 100000))
-    except Exception:
-        pass
-    return 100000.0
-
-
-def _save_peak_equity(equity: float) -> None:
-    """当当前权益超过历史峰值时更新"""
-    try:
-        prev = _load_peak_equity()
-        if equity > prev:
-            path = _get_peak_equity_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({
-                "peak_equity": round(equity, 2),
-                "peak_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            }, ensure_ascii=False, indent=2), encoding='utf-8')
-    except Exception:
-        pass
-
-
 def _get_market_values(positions: list) -> dict:
     """通过雪球引擎获取持仓实时市价，计算总市值。
     返回 {"market_value": float, "prices": dict}。
@@ -273,9 +242,10 @@ def _read_portfolio() -> str:
         total_asset_market = cash + market_value
         total_asset = cash + total_cost  # 兼容旧字段名
 
-        # 峰值权益追踪（用于回撤计算）
-        _save_peak_equity(total_asset_market)
-        peak_equity = _load_peak_equity()
+        # 峰值权益追踪（用于回撤计算，入库 PostgreSQL）
+        from app.core.peak_equity import save_peak_equity, load_peak_equity
+        save_peak_equity(total_asset_market)
+        peak_equity = load_peak_equity(fallback=max(100000, total_asset_market))
 
         # 今日买入（T+1 锁定）
         today = datetime.now().strftime('%Y-%m-%d')

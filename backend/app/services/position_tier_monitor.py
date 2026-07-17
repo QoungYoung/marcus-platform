@@ -441,33 +441,14 @@ class PositionTierMonitor:
             return 0
 
     def _load_peak_equity(self) -> float:
-        """从 data/peak_equity.json 加载历史峰值权益"""
-        try:
-            data_dir = getattr(self.executor, 'data_dir', None) if self.executor else None
-            if not data_dir:
-                return 0
-            path = Path(data_dir) / "peak_equity.json" if not isinstance(data_dir, Path) else data_dir / "peak_equity.json"
-            if path.exists():
-                data = json.loads(path.read_text(encoding='utf-8'))
-                return float(data.get('peak_equity', 0))
-        except Exception:
-            pass
-        return 0
+        """从 PostgreSQL system_state 表加载历史峰值权益"""
+        from app.core.peak_equity import load_peak_equity
+        return load_peak_equity(fallback=0.0)
 
     def _save_peak_equity(self, equity: float) -> None:
-        """保存新峰值到 data/peak_equity.json"""
-        try:
-            data_dir = getattr(self.executor, 'data_dir', None) if self.executor else None
-            if not data_dir:
-                return
-            path = Path(data_dir) / "peak_equity.json" if not isinstance(data_dir, Path) else data_dir / "peak_equity.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({
-                "peak_equity": round(equity, 2),
-                "peak_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            }, ensure_ascii=False, indent=2), encoding='utf-8')
-        except Exception:
-            pass
+        """保存新峰值到 PostgreSQL system_state 表"""
+        from app.core.peak_equity import save_peak_equity
+        save_peak_equity(equity)
 
     def _get_consecutive_losses(self) -> int:
         """获取连续亏损笔数"""
