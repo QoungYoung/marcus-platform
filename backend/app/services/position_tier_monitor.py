@@ -287,7 +287,7 @@ class PositionTierMonitor:
     def evaluate_position_tier(self, symbol: str, float_pnl_pct: float,
                                current_tier: str) -> TierEvaluation:
         """代码层自动评估加仓层级。"""
-        pnl_pct = float_pnl_pct / 100.0 if float_pnl_pct > 1 else float_pnl_pct  # 统一为小数
+        pnl_pct = float_pnl_pct / 100.0 if abs(float_pnl_pct) > 1 else float_pnl_pct  # 统一为小数
 
         # 试探仓 → 冲刺仓（跳级）：浮盈 ≥ 3%
         if current_tier in ('probe', 'unknown', '') and pnl_pct >= 0.03:
@@ -1698,7 +1698,7 @@ class PositionTierMonitor:
                     'current_price': round(current_price, 2),
                     'float_pnl_pct': round(float_pnl_pct, 2),
                     'today_adds': self.today_adds.get(symbol, 0),
-                    'next_tier': self._get_next_tier(tier, float_pnl_pct / 100 if float_pnl_pct > 1 else float_pnl_pct),
+                    'next_tier': self._get_next_tier(tier, float_pnl_pct / 100 if abs(float_pnl_pct) > 1 else float_pnl_pct),
                 })
         except Exception as e:
             logger.warning(f"[加仓] get_tier_status 异常: {e}", exc_info=True)
