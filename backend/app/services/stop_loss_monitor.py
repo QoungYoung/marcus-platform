@@ -211,7 +211,11 @@ class StopLossMonitor:
         while self.running:
             cycle += 1
             try:
-                if self._is_trading_time():
+                if not self._is_trading_day():
+                    if cycle % 20 == 1:
+                        print(f"[StopLoss] ⏸️ 非交易日，跳过检查 (cycle={cycle})", file=sys.stderr)
+                    self._daily_reset()
+                elif self._is_trading_time():
                     print(f"[止损] 🔄 第 {cycle} 轮检查 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
                     self._check_all_positions()
                 else:
@@ -221,6 +225,30 @@ class StopLossMonitor:
             except Exception as e:
                 logger.error(f"[StopLoss] 检查异常: {e}", exc_info=True)
             time.sleep(self.interval)
+
+    def _is_trading_day(self) -> bool:
+        """检查今天是否为交易日（带日缓存，避免频繁API调用）。
+
+        硬守卫：周末一定不是交易日，不依赖外部 API。
+        """
+        # 硬守卫：周六(5)、周日(6)一定不是交易日
+        if datetime.now().weekday() >= 5:
+            return False
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        if getattr(self, '_last_trading_day_check_date', '') == today:
+            return getattr(self, '_last_trading_day_result', True)
+        try:
+            from core.utils.trade_day_utils import is_today_trade_day
+            is_trade, reason = is_today_trade_day()
+            self._last_trading_day_check_date = today
+            self._last_trading_day_result = is_trade
+            if not is_trade:
+                logger.info(f"[StopLoss] 非交易日: {reason}")
+            return is_trade
+        except Exception:
+            logger.warning("[StopLoss] 交易日判定API不可用，降级为允许交易")
+            return True  # API 不可用时默认视为交易日（已在顶部拦截周末）
 
     def _is_trading_time(self) -> bool:
         now = datetime.now().time()
@@ -1165,6 +1193,12 @@ class StopLossMonitor:
         self, symbol: str, price: float, volume: int, reason: str, float_pnl_pct: float,
         sell_ratio: float = 1.0
     ) -> None:
+        # 非交易日不执行卖出
+        if not self._is_trading_day():
+            logger.info(f"[StopLoss] ⏸️ 非交易日，跳过卖出: {symbol}")
+            print(f"[止损] ⏸️ 非交易日，跳过卖出: {symbol}", file=sys.stderr)
+            return
+
         # 早盘冷静期：09:30-09:45 不执行卖出（09:35窗口统计胜率 0%）
         if self._is_morning_volatility():
             logger.info(

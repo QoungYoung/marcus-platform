@@ -138,7 +138,13 @@ class LongTermPoolMonitor:
         )
 
     def _is_trading_day(self) -> bool:
-        """检查今天是否为交易日（带日缓存，避免频繁API调用）"""
+        """检查今天是否为交易日（带日缓存，避免频繁API调用）。
+
+        硬守卫：周末一定不是交易日，不依赖外部 API。
+        """
+        if datetime.now().weekday() >= 5:
+            return False
+
         today = datetime.now().strftime('%Y-%m-%d')
         if getattr(self, '_last_trading_day_check_date', '') == today:
             return getattr(self, '_last_trading_day_result', True)
@@ -151,7 +157,8 @@ class LongTermPoolMonitor:
                 logger.info(f"[长期池] 非交易日: {reason}")
             return is_trade
         except Exception:
-            return True  # API 不可用时默认视为交易日
+            logger.warning("[长期池] 交易日判定API不可用，降级为允许交易")
+            return True  # API 不可用时默认视为交易日（已在顶部拦截周末）
 
     def _is_morning_volatility(self) -> bool:
         now = datetime.now().time()
