@@ -159,7 +159,7 @@ def calculate_positions_from_db():
 
     # 获取全部成交，排序策略与 paper_engine 一致
     curs.execute("""
-        SELECT id, symbol, direction, price, volume
+        SELECT id, symbol, direction, price, volume, trade_date, created_at
         FROM trades
         WHERE voided = 0 OR voided IS NULL
         ORDER BY COALESCE(trade_date, DATE(created_at)), id
@@ -193,7 +193,8 @@ def calculate_positions_from_db():
         if direction == '买入':
             cost = price * volume * (1 + _BUY_COMMISSION)
             available_cash -= cost
-            positions.setdefault(symbol, []).append({'price': price, 'volume': volume})
+            entry_date = trade['trade_date'] or (trade['created_at'][:10] if trade['created_at'] else '')
+            positions.setdefault(symbol, []).append({'price': price, 'volume': volume, 'entry_date': entry_date})
 
         elif direction == '卖出':
             lots = positions.get(symbol, [])
@@ -223,11 +224,14 @@ def calculate_positions_from_db():
             continue
         total_vol = sum(l['volume'] for l in lots)
         avg_price = sum(l['price'] * l['volume'] for l in lots) / total_vol
+        entry_dates = [l['entry_date'] for l in lots if l.get('entry_date')]
+        entry_date = min(entry_dates) if entry_dates else ''
         position_list.append({
             'symbol': symbol,
             'name': get_stock_name(symbol),
             'volume': total_vol,
             'avg_price': avg_price,
+            'entry_date': entry_date,
         })
 
     account = {
@@ -511,7 +515,7 @@ async def get_portfolio():
             market_value=market_value,
             floating_pnl=floating_pnl,
             floating_pnl_pct=floating_pnl_pct,
-            entry_date="",
+            entry_date=p.get('entry_date', ''),
             high_water_mark=hwm.get('high_price'),
             high_water_date=hwm.get('high_date'),
             days_since_high=hwm.get('days_since_high'),
@@ -605,7 +609,7 @@ async def get_positions():
             market_value=market_value,
             floating_pnl=floating_pnl,
             floating_pnl_pct=floating_pnl_pct,
-            entry_date="",
+            entry_date=p.get('entry_date', ''),
             high_water_mark=hwm.get('high_price'),
             high_water_date=hwm.get('high_date'),
             days_since_high=hwm.get('days_since_high'),
