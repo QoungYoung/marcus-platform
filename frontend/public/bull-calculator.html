@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>牛股计算器</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus@2.6.3/dist/index.css">
+    <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/element-plus@2.6.3/dist/index.full.min.js"></script>
+    <script src="https://unpkg.com/element-plus/dist/locale/zh-cn.js"></script>
+    <script src="https://unpkg.com/sortablejs@1.15.2/Sortable.min.js"></script>
+    <style>
+        body { background-color: #f0f2f5; margin: 0; padding: 10px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; height: 100vh; box-sizing: border-box; overflow: hidden; }
+        #app { height: 100%; display: flex; flex-direction: column; }
+        .app-container { flex: 1; display: flex; flex-direction: column; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); overflow: hidden; position: relative; }
+        .header-box { flex-shrink: 0; margin-bottom: 20px; border-bottom: 1px solid #ebeef5; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .header-box h2 { margin: 0; color: #409EFF; font-size: 22px; display: flex; align-items: center; }
+        .header-sub { font-size:12px; color:#909399; font-weight:normal; margin-left:8px; }
+        .btn-group-wrapper { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 2px; }
+        .toolbar { flex-shrink: 0; margin-bottom: 15px; display: flex; gap: 12px; align-items: flex-start; }
+        .red-text { color: #f56c6c; font-weight: bold; }
+        .green-text { color: #67c23a; font-weight: bold; }
+        .fib-val { font-family: 'Monaco', 'Consolas', monospace; font-size: 13px; font-weight: bold; color: #606266; }
+        .price-now { font-weight: 800; font-size: 15px; color: #303133; }
+        .market-tag { font-size: 10px; padding: 0 4px; border-radius: 3px; margin-right: 4px; display: inline-block; vertical-align: middle; }
+        .tag-sh { background: #fee; color: #f56c6c; border: 1px solid #fcc; }
+        .tag-sz { background: #eef5ff; color: #409eff; border: 1px solid #c6e2ff; }
+        .tag-hk { background: #f0f9eb; color: #67c23a; border: 1px solid #c2e7b0; }
+        .header-color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+        .warning-tag { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #f5222d; color: #fff; margin-left: 5px; animation: pulse 2s infinite; }
+        .advice-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; color: #fff; text-align: center; min-width: 80px; }
+        .advice-danger { background-color: #f5222d; }
+        .advice-gold { background-color: #faad14; color: #000; }
+        .advice-blue { background-color: #1890ff; }
+        .advice-cyan { background-color: #13c2c2; }
+        .advice-normal { background-color: #bfbfbf; }
+        .advice-warning { background-color: #e6a23c; }
+        .hidden-input { display: none; }
+        .drag-handle { cursor: grab; font-size: 18px; color: #909399; padding: 0 4px; transition: color 0.2s; }
+        .drag-handle:hover { color: #409EFF; }
+        .drag-handle:active { cursor: grabbing; }
+        .el-table .warning-row td.el-table__cell { background-color: #fffaf3 !important; }
+        .el-table .danger-row td.el-table__cell { background-color: #fff9e6 !important; }
+        .sortable-ghost { opacity: 0.5; background-color: #eef5ff !important; }
+        .mobile-list-container { flex: 1; overflow-y: auto; padding-right: 2px; -webkit-overflow-scrolling: touch; }
+        .m-card { background: #fff; border: 1px solid #ebeef5; border-radius: 8px; padding: 12px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); position: relative; }
+        .m-card.warning-bg { background-color: #fffaf3; border-color: #fdf5e6; }
+        .m-card.danger-bg { background-color: #fff9e6; border-color: #faecd8; }
+        .m-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+        .m-title { font-size: 16px; font-weight: bold; color: #303133; display: flex; align-items: center; flex-wrap: wrap; }
+        .m-code { font-size: 12px; color: #909399; font-weight: normal; margin-left: 5px; margin-right: 5px; }
+        .m-price-row { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px dashed #ebeef5; }
+        .m-price-val { font-size: 20px; font-weight: 800; color: #303133; }
+        .m-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .m-item label { font-size: 11px; color: #909399; display: block; margin-bottom: 2px; }
+        .m-fib-row { display: flex; justify-content: space-between; background: #f5f7fa; padding: 8px; border-radius: 4px; font-size: 12px; margin-bottom: 10px; }
+        .m-fib-item { text-align: center; }
+        .m-fib-item div:first-child { color: #909399; font-size: 10px; margin-bottom: 2px; }
+        .m-fib-item div:last-child { font-weight: bold; color: #606266; font-family: 'Monaco', monospace; }
+        .m-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 5px; }
+        .m-drag-handle { font-size: 20px; padding: 5px 10px; color: #C0C4CC; touch-action: none; }
+        @media (max-width: 768px) {
+            body { padding: 5px; }
+            .app-container { padding: 10px; }
+            .header-box { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .header-box > div { width: 100%; }
+            .btn-group-wrapper { width: 100%; overflow-x: auto; white-space: nowrap; padding-bottom: 5px; }
+            .toolbar { flex-direction: column; }
+            .toolbar .el-button { width: 100%; margin-left: 0 !important; margin-top: 5px; height: 40px !important; }
+            .el-dialog { width: 90% !important; max-width: 400px; }
+            .pc-table-view { display: none !important; }
+            .mobile-list-container { display: block !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-list-container { display: none !important; }
+            .pc-table-view { display: block !important; }
+        }
+        .disclaimer-text p { margin-top: 0; margin-bottom: 12px; font-size: 14px; line-height: 1.6; color: #606266; }
+        .disclaimer-text b { color: #f56c6c; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <el-config-provider :locale="locale">
+        <el-dialog v-model="showDisclaimer" title="⚠️ 免责声明" :close-on-click-modal="false" :show-close="false" :keyboard="false" width="480px" center>
+            <div class="disclaimer-text">
+                <p>1. 本工具（牛股计算器）仅为个人复盘与数据测算辅助工具，所有的计算结果及操作建议均基于特定数学模型自动生成。</p>
+                <p>2. 本工具提供的任何信息均<b>不构成任何实质性的投资建议或买卖指导</b>。金融市场行情瞬息万变，请勿盲目依赖本工具所提示的指标。</p>
+                <p>3. <b>股市有风险，交易需谨慎。</b>任何人据此进行真实的证券投资，所产生的任何盈亏、风险及法律责任均由您<b>完全自行承担</b>。</p>
+            </div>
+            <template #footer>
+                <span class="dialog-footer">
+                    <el-button type="danger" @click="agreeDisclaimer" style="width: 100%; font-size: 16px; font-weight: bold; padding: 20px 0;">我已阅读并知晓，盈亏自负</el-button>
+                </span>
+            </template>
+        </el-dialog>
+        <div class="app-container">
+            <div class="header-box">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <h2>
+                            牛股策略计算器
+                            <span class="header-sub" v-if="!isMobile">(盘中自动刷新)</span>
+                            <span class="header-sub" v-else style="font-size:10px;">{{lastRefreshTime}}</span>
+                        </h2>
+                        <el-popover placement="bottom" :width="isMobile ? 300 : 500" trigger="click">
+                            <template #reference>
+                                <el-button type="primary" size="small" round>💡 策略逻辑</el-button>
+                            </template>
+                            <div style="font-size: 13px; line-height: 1.6; max-height: 550px; overflow-y: auto; padding-right: 5px; color: #303133;">
+                                <p style="margin-top: 0; color: #606266;"><b>核心思想：</b>“四维交易体系”，结合空间、时间、防守与逻辑自洽。</p>
+                                <el-divider style="margin: 12px 0;"></el-divider>
+                                <h4 style="margin: 0 0 8px 0; color: #409EFF;">👀 一、 观察模式</h4>
+                                <ul style="padding-left: 18px; margin: 0 0 15px 0;">
+                                    <li><b>常规买点 (0.382)</b>：强势龙头首阴/浅回踩。</li>
+                                    <li><b>强防生死线 (0.618)</b>：波段多空生死线。</li>
+                                    <li><b>放弃观察 (0.786)</b>：套牢盘极重，大概率A杀。</li>
+                                </ul>
+                                <h4 style="margin: 0 0 8px 0; color: #67C23A;">🛡️ 二、 持仓模式</h4>
+                                <ul style="padding-left: 18px; margin: 0 0 15px 0;">
+                                    <li><b>🛑 破底/成本止损</b>：跌破低点3%或亏损6%离场。</li>
+                                    <li><b>⏳ 时间证伪</b>：13个交易日(除周末)不创新高离场。</li>
+                                    <li><b>🏆 突破新高</b>：自动更新顶部并重置时间。</li>
+                                </ul>
+                            </div>
+                        </el-popover>
+                    </div>
+                </div>
+                <div class="btn-group-wrapper">
+                    <el-button type="primary" @click="refreshAllPrices()" :loading="loading">刷新行情</el-button>
+                    <el-button style="margin-left: 10px;" type="danger" @click="clearAll">清空列表</el-button>
+                    <el-button style="margin-left: 10px;" type="warning" @click="triggerImport">导入</el-button>
+                    <el-button style="margin-left: 10px;" type="success" @click="exportData">导出</el-button>
+                    <el-button style="margin-left: 10px;" type="primary" @click="loadPortfolioFromServer" :loading="loadingPortfolio">加载持仓</el-button>
+                    <input type="file" ref="fileInput" class="hidden-input" accept=".csv" @change="importData">
+                </div>
+            </div>
+            <div class="toolbar">
+                <el-input v-model="inputCodes" type="textarea" :rows="2" placeholder="代码示例：300308,588170,9992" style="flex: 1;"></el-input>
+                <el-button type="primary" @click="addNewCodes" :loading="loading" style="height: 52px; width: 120px;">查询并追加</el-button>
+            </div>
+            <div class="pc-table-view" style="flex: 1; overflow: hidden; height: 100%;">
+                <el-table ref="tableRef" :data="tableData" border height="100%" :row-class-name="tableRowClassName" row-key="fullCode">
+                    <el-table-column label="名称/代码" min-width="150" fixed="left">
+                        <template #default="scope">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="drag-handle" title="按住拖拽排序">☰</div>
+                                <div>
+                                    <div style="font-weight: bold;">
+                                        <span :class="['market-tag', 'tag-' + getMarket(scope.row.fullCode)]">{{getMarket(scope.row.fullCode).toUpperCase()}}</span>
+                                        {{scope.row.name}}
+                                    </div>
+                                    <div style="font-size: 11px; color: #909399;">{{scope.row.fullCode}}</div>
+                                </div>
+                                <span v-if="scope.row.isBreakLow" class="warning-tag">破位</span>
+                            </div>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="最新价" width="160">
+                        <template #default="scope">
+                            <div style="display: flex; align-items: baseline; gap: 8px;">
+                                <span class="price-now">{{scope.row.now}}</span>
+                                <span v-if="scope.row.changePct !== undefined"
+                                      :style="{
+                                          color: scope.row.changePct > 0 ? '#f56c6c' : (scope.row.changePct < 0 ? '#67c23a' : '#303133'),
+                                          fontSize: '14px',
+                                          fontWeight: 'bold'
+                                      }">
+                                    ({{scope.row.changePct > 0 ? '↑' : (scope.row.changePct < 0 ? '↓' : '')}}{{Math.abs(scope.row.changePct).toFixed(2)}}%)
+                                </span>
+                            </div>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="阶段顶部" width="110">
+                        <template #header><span class="header-color-dot" style="background:#cc96f8"></span>顶部</template>
+                        <template #default="scope">
+                            <el-input v-model="scope.row.high" size="small" style="width: 100%"
+                                @focus="scope.row._focusHigh=true" @blur="handleBlur(scope.row, '_focusHigh')" @change="calculateRow(scope.row)">
+                            </el-input>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="阶段底部" width="110">
+                        <template #header><span class="header-color-dot" style="background:#ff5252"></span>底部</template>
+                        <template #default="scope">
+                            <el-input v-model="scope.row.low" size="small" style="width: 100%"
+                                @focus="scope.row._focusLow=true" @blur="handleBlur(scope.row, '_focusLow')" @change="calculateRow(scope.row)">
+                            </el-input>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="常规(0.382)" width="95">
+                        <template #default="scope"><span class="fib-val">{{scope.row.f382}}</span></template>
+                    </el-table-column>
+                    <el-table-column label="强防(0.618)" width="95">
+                        <template #default="scope"><span class="fib-val">{{scope.row.f618}}</span></template>
+                    </el-table-column>
+                    <el-table-column label="深坑(0.786)" width="95">
+                        <template #default="scope"><span class="fib-val">{{scope.row.f786}}</span></template>
+                    </el-table-column>
+                    <el-table-column label="成本价" width="100">
+                        <template #default="scope">
+                            <el-input v-model="scope.row.cost" size="small" style="width: 100%"
+                                @focus="scope.row._focusCost=true" @blur="handleBlur(scope.row, '_focusCost')" @change="calculateRow(scope.row)">
+                            </el-input>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="建仓日期" width="140">
+                        <template #default="scope">
+                            <el-date-picker v-model="scope.row.buyDate" type="date" size="small" value-format="YYYY-MM-DD" style="width: 100%" @change="calculateRow(scope.row)"></el-date-picker>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="分时均价" width="110">
+                        <template #default="scope">
+                            <el-input v-model="scope.row.avg" size="small" style="width: 100%"
+                                @focus="scope.row._focusAvg=true" @blur="handleBlur(scope.row, '_focusAvg')" @change="calculateRow(scope.row)">
+                            </el-input>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="日内压力/支撑" width="140">
+                        <template #default="scope">
+                            <div class="red-text">↑ {{scope.row.topLine}}</div>
+                            <div class="green-text">↓ {{scope.row.bottomLine}}</div>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="操作建议" width="135" fixed="right">
+                        <template #default="scope">
+                            <span class="advice-badge" :class="scope.row.adviceClass">{{scope.row.signal}}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="60" fixed="right">
+                        <template #default="scope">
+                            <el-button type="danger" size="small" link @click="removeItem(scope.$index)">删</el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
+            </div>
+            <div id="mobileList" class="mobile-list-container">
+                <div v-for="(item, index) in tableData" :key="item.fullCode" class="m-card" :class="getMobileCardClass(item)">
+                    <div class="m-header">
+                        <div class="m-title">
+                            <span :class="['market-tag', 'tag-' + getMarket(item.fullCode)]">{{getMarket(item.fullCode).toUpperCase()}}</span>
+                            <span>{{item.name}}</span>
+                            <span class="m-code">{{item.fullCode}}</span>
+                            <span v-if="item.isBreakLow" class="warning-tag">破位</span>
+                        </div>
+                        <el-button type="danger" size="small" link @click="removeItem(index)">删除</el-button>
+                    </div>
+                    <div class="m-price-row">
+                        <span class="m-price-val">{{item.now}}</span>
+                        <span :style="{ color: getPriceColor(item.changePct), fontSize: '14px', fontWeight: 'bold' }">
+                            {{formatPct(item.changePct)}}
+                        </span>
+                        <div style="margin-left: auto;">
+                            <span class="advice-badge" :class="item.adviceClass">{{item.signal || '待计算'}}</span>
+                        </div>
+                    </div>
+                    <div class="m-fib-row">
+                        <div class="m-fib-item"><div>0.382</div><div>{{item.f382}}</div></div>
+                        <div class="m-fib-item"><div>0.618</div><div>{{item.f618}}</div></div>
+                        <div class="m-fib-item"><div>0.786</div><div>{{item.f786}}</div></div>
+                        <div class="m-fib-item"><div>均价</div><div>{{item.avg}}</div></div>
+                    </div>
+                    <div class="m-grid">
+                        <div class="m-item">
+                            <label><span class="header-color-dot" style="background:#cc96f8"></span>顶部</label>
+                            <el-input v-model="item.high" size="small" type="number"
+                                @focus="item._focusHigh=true" @blur="handleBlur(item, '_focusHigh')" @change="calculateRow(item)">
+                            </el-input>
+                        </div>
+                        <div class="m-item">
+                            <label><span class="header-color-dot" style="background:#ff5252"></span>底部</label>
+                            <el-input v-model="item.low" size="small" type="number"
+                                @focus="item._focusLow=true" @blur="handleBlur(item, '_focusLow')" @change="calculateRow(item)">
+                            </el-input>
+                        </div>
+                        <div class="m-item">
+                            <label>成本价</label>
+                            <el-input v-model="item.cost" size="small" type="number"
+                                @focus="item._focusCost=true" @blur="handleBlur(item, '_focusCost')" @change="calculateRow(item)">
+                            </el-input>
+                        </div>
+                        <div class="m-item">
+                            <label>建仓日期</label>
+                            <el-date-picker v-model="item.buyDate" type="date" size="small" value-format="YYYY-MM-DD" style="width: 100%" @change="calculateRow(item)"></el-date-picker>
+                        </div>
+                    </div>
+                    <div class="m-footer">
+                        <div style="font-size: 11px;">
+                            <span class="red-text" style="margin-right:8px;">压:{{item.topLine}}</span>
+                            <span class="green-text">撑:{{item.bottomLine}}</span>
+                        </div>
+                        <div class="m-drag-handle">☰</div>
+                    </div>
+                </div>
+                <div v-if="tableData.length === 0" style="text-align: center; color: #909399; margin-top: 50px;">
+                    暂无数据，请添加代码
+                </div>
+            </div>
+        </div>
+    </el-config-provider>
+</div>
+<script>
+    const { createApp, ref, onMounted, reactive, nextTick, onUnmounted } = Vue;
+    const { ElMessage, ElMessageBox } = ElementPlus;
+    const App = {
+        setup() {
+            const locale = ElementPlusLocaleZhCn;
+            const STORAGE_KEY = 'phi_batch_table_v5';
+            const inputCodes = ref("");
+            const tableData = ref([]);
+            const loading = ref(false);
+            const fileInput = ref(null);
+            const tableRef = ref(null);
+            const showDisclaimer = ref(false);
+            const isMobile = ref(window.innerWidth <= 768);
+            const lastRefreshTime = ref('');
+            let autoRefreshTimer = null;
+            window.addEventListener('resize', () => {
+                isMobile.value = window.innerWidth <= 768;
+            });
+            const agreeDisclaimer = () => {
+                localStorage.setItem('phi_disclaimer_agreed_v1', '1');
+                showDisclaimer.value = false;
+            };
+            const getMarket = (fullCode) => {
+                if (!fullCode) return 'other';
+                if (fullCode.startsWith('sh')) return 'sh';
+                if (fullCode.startsWith('sz')) return 'sz';
+                if (fullCode.startsWith('hk')) return 'hk';
+                if (fullCode.startsWith('bj')) return 'bj';
+                return 'other';
+            };
+            const formatPct = (pct) => {
+                if (pct === undefined || pct === null) return '--';
+                const p = parseFloat(pct);
+                if (p > 0) return `↑${p.toFixed(2)}%`;
+                if (p < 0) return `↓${Math.abs(p).toFixed(2)}%`;
+                return `0.00%`;
+            };
+            const getPriceColor = (pct) => {
+                const p = parseFloat(pct);
+                if (p > 0) return '#f56c6c';
+                if (p < 0) return '#67c23a';
+                return '#303133';
+            };
+            const getHoldDays = (startDateStr) => {
+                if (!startDateStr) return 0;
+                const startDate = new Date(startDateStr);
+                const today = new Date();
+                startDate.setHours(0,0,0,0);
+                today.setHours(0,0,0,0);
+                if (startDate > today) return 1;
+                let days = 0;
+                let current = new Date(startDate);
+                while (current <= today) {
+                    const dayOfWeek = current.getDay();
+                    if (dayOfWeek !== 0 && dayOfWeek !== 6) days++;
+                    current.setDate(current.getDate() + 1);
+                }
+                return days;
+            };
+            const isTradingTime = () => {
+                const now = new Date();
+                const day = now.getDay();
+                if (day === 0 || day === 6) return false;
+                const time = now.getHours() * 100 + now.getMinutes();
+                return (time >= 910 && time <= 1205) || (time >= 1255 && time <= 1605);
+            };
+            const saveToLocal = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(tableData.value));
+            const handleBlur = (row, field) => {
+                row[field] = false;
+                calculateRow(row);
+            };
+            const getMobileCardClass = (row) => {
+                const now = parseFloat(row.now);
+                if (now <= parseFloat(row.f786)) return 'danger-bg';
+                if (now <= parseFloat(row.f618)) return 'warning-bg';
+                return '';
+            };
+            const tableRowClassName = ({ row }) => {
+                const now = parseFloat(row.now);
+                if (now <= parseFloat(row.f786)) return 'danger-row';
+                if (now <= parseFloat(row.f618)) return 'warning-row';
+                return '';
+            };
+            const sortData = () => {
+                tableData.value.sort((a, b) => {
+                    const c1 = parseFloat(a.cost) > 0 ? 1 : 0;
+                    const c2 = parseFloat(b.cost) > 0 ? 1 : 0;
+                    return c2 - c1;
+                });
+            };
+            const calculateRow = (row) => {
+                let now = parseFloat(row.now) || 0;
+                let cost = parseFloat(row.cost) || 0;
+                let low = parseFloat(row.low) || 0;
+                let high = parseFloat(row.high) || 0;
+                let avg = parseFloat(row.avg) || 0;
+                if (!row._focusHigh && now > high && high > 0) {
+                    row.high = now;
+                    high = now;
+                    row.highDate = new Date().toISOString().split('T')[0];
+                    row._isNewHigh = true;
+                } else {
+                    row._isNewHigh = false;
+                }
+                const diff = high - low;
+                row.f382 = (high - diff * 0.382).toFixed(3);
+                row.f618 = (high - diff * 0.618).toFixed(3);
+                row.f786 = (high - diff * 0.786).toFixed(3);
+                const K = 0.98848;
+                if (avg > 0) {
+                    row.topLine = (avg / K).toFixed(3);
+                    row.bottomLine = (avg * K).toFixed(3);
+                } else {
+                    row.topLine = '0.00'; row.bottomLine = '0.00';
+                }
+                row.isBreakLow = false;
+                if (cost > 0) {
+                    if (!row.buyDate) {
+                        const d = new Date();
+                        const tzOffset = d.getTimezoneOffset() * 60000;
+                        row.buyDate = new Date(d.getTime() - tzOffset).toISOString().split('T')[0];
+                    }
+                    const holdDays = getHoldDays(row.buyDate);
+                    const daysSinceHigh = row.highDate ? getHoldDays(row.highDate) : holdDays;
+                    if (low > 0 && now < low * 0.97) {
+                        row.signal = '破底止损'; row.adviceClass = 'advice-danger';
+                    } else if (now <= cost * 0.94) {
+                        row.signal = '止损(-6%)'; row.adviceClass = 'advice-danger';
+                    } else if (daysSinceHigh >= 13 && high > 0 && !row._isNewHigh) {
+                        row.signal = '时间证伪(>13天)'; row.adviceClass = 'advice-warning';
+                    } else if (row._isNewHigh || (now === high && high > 0)) {
+                        row.signal = '突破新高'; row.adviceClass = 'advice-gold';
+                    } else {
+                        row.signal = `持有(${holdDays}天)`; row.adviceClass = 'advice-blue';
+                    }
+                } else {
+                    const f382_val = parseFloat(row.f382);
+                    const f618_val = parseFloat(row.f618);
+                    const f786_val = parseFloat(row.f786);
+                    const f500_val = high - diff * 0.5;
+                    if (low > 0 && now < low) {
+                        row.isBreakLow = true; row.signal = '破位严禁'; row.adviceClass = 'advice-danger';
+                    } else if (row._isNewHigh) {
+                        row.signal = '突破跟进'; row.adviceClass = 'advice-danger';
+                    } else if (low > 0) {
+                        if (now < f786_val) {
+                            row.signal = '放弃(极弱)'; row.adviceClass = 'advice-normal';
+                        } else if (now < f618_val * 0.99) {
+                            row.signal = '跌破618(弱)'; row.adviceClass = 'advice-warning';
+                        } else if (now <= f500_val * 1.02) {
+                            row.signal = '强防生死线'; row.adviceClass = 'advice-blue';
+                        } else if (now <= f382_val * 1.03) {
+                            row.signal = '常规买点'; row.adviceClass = 'advice-cyan';
+                        } else {
+                            row.signal = '高位观望'; row.adviceClass = 'advice-normal';
+                        }
+                    } else {
+                        row.signal = '观望'; row.adviceClass = 'advice-normal';
+                    }
+                }
+                saveToLocal();
+            };
+            const initSortable = () => {
+                if (tableRef.value) {
+                    const el = tableRef.value.$el.querySelector('.el-table__body-wrapper tbody');
+                    if(el) Sortable.create(el, { animation: 150, handle: '.drag-handle', ghostClass: 'sortable-ghost', onEnd: onSortEnd });
+                }
+                const mobileEl = document.getElementById('mobileList');
+                if (mobileEl) {
+                    Sortable.create(mobileEl, { animation: 150, handle: '.m-drag-handle', ghostClass: 'sortable-ghost', onEnd: onSortEnd });
+                }
+            };
+            const onSortEnd = (evt) => {
+                const { oldIndex, newIndex } = evt;
+                if (oldIndex === newIndex) return;
+                const targetRow = tableData.value.splice(oldIndex, 1)[0];
+                tableData.value.splice(newIndex, 0, targetRow);
+                saveToLocal();
+            };
+            const formatCode = (code) => {
+                code = code.trim().toLowerCase();
+                if (!code) return null;
+                if (/^(sh|sz|hk|bj)/.test(code)) return code;
+                if (/^\d+$/.test(code)) {
+                    if (code.length <= 4 || (code.length === 5 && code.startsWith('0'))) return 'hk' + code.padStart(5, '0');
+                    if (code.length === 6) {
+                        if (/^(5[168]|6)/.test(code)) return 'sh' + code;
+                        if (/^(1[568]|0|3)/.test(code)) return 'sz' + code;
+                        if (/^(4|8)/.test(code)) return 'bj' + code;
+                    }
+                }
+                return code;
+            };
+            const fetchData = (codes, isAddition = true, isAuto = false) => {
+                if (codes.length === 0) return;
+                if (!isAuto) loading.value = true;
+                const queryStr = codes.join(',');
+                const oldScript = document.getElementById('jsonp-stock');
+                if (oldScript) oldScript.remove();
+                const script = document.createElement('script');
+                script.id = 'jsonp-stock';
+                script.src = `https://qt.gtimg.cn/q=${queryStr}`;
+                document.body.appendChild(script);
+                script.onload = () => {
+                    codes.forEach(code => {
+                        const dataStr = window[`v_${code}`];
+                        if (dataStr) {
+                            const d = dataStr.split('~');
+                            const nowPrice = parseFloat(d[3]);
+                            const changePct = parseFloat(d[32]) || 0;
+                            const dayHigh = parseFloat(d[33]);
+                            const dayLow = parseFloat(d[34]);
+                            let turnover = parseFloat(d[37]);
+                            let volume = parseFloat(d[36]);
+                            let newAvg = 0;
+                            if (code.startsWith('hk')) {
+                                newAvg = volume > 0 ? turnover / volume : parseFloat(d[4]);
+                            } else if (code.startsWith('sh68') || code.startsWith('bj')) {
+                                newAvg = volume > 0 ? (turnover * 10000) / volume : parseFloat(d[4]);
+                            } else {
+                                newAvg = volume > 0 ? (turnover * 10000) / (volume * 100) : parseFloat(d[4]);
+                            }
+                            const idx = tableData.value.findIndex(item => item.fullCode === code);
+                            if (idx > -1) {
+                                const item = tableData.value[idx];
+                                item.now = nowPrice;
+                                item.changePct = changePct;
+                                if (!item._focusAvg) item.avg = parseFloat(newAvg.toFixed(3));
+                                calculateRow(item);
+                            } else if (isAddition) {
+                                const newItem = reactive({
+                                    name: d[1], fullCode: code, now: nowPrice, changePct: changePct, cost: '',
+                                    high: dayHigh || nowPrice, low: dayLow || nowPrice, buyDate: '', highDate: '',
+                                    avg: parseFloat(newAvg.toFixed(3)), signal: '', f382: 0, f618: 0, f786: 0, topLine: 0, bottomLine: 0,
+                                    _focusHigh: false, _focusLow: false, _focusCost: false, _focusAvg: false
+                                });
+                                calculateRow(newItem);
+                                tableData.value.unshift(newItem);
+                            }
+                        }
+                    });
+                    sortData();
+                    if (!isAuto) loading.value = false;
+                    const now = new Date();
+                    lastRefreshTime.value = `${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+                    saveToLocal();
+                    if (isAddition) inputCodes.value = "";
+                };
+            };
+            const addNewCodes = () => {
+                const codes = inputCodes.value.split(/[,\s\n]/).map(c => formatCode(c)).filter(c => c);
+                if(codes.length > 0) fetchData(codes, true);
+                else ElMessage.warning('请输入有效的股票代码');
+            };
+            const refreshAllPrices = (isAuto = false) => {
+                const currentCodes = tableData.value.map(item => item.fullCode);
+                if (currentCodes.length > 0) fetchData(currentCodes, false, isAuto);
+            };
+            const loadingPortfolio = ref(false);
+            const API_BASE = window.location.protocol + '//' + window.location.hostname + ':8000';
+            const loadPortfolioFromServer = async () => {
+                loadingPortfolio.value = true;
+                try {
+                    const resp = await fetch(`${API_BASE}/api/v1/portfolio/positions`);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const positions = await resp.json();
+                    if (!Array.isArray(positions) || positions.length === 0) {
+                        ElMessage.info('服务器无持仓数据');
+                        return;
+                    }
+                    positions.forEach(p => {
+                        const fullCode = formatCode(p.symbol);
+                        if (!fullCode) return;
+                        const existing = tableData.value.find(item => item.fullCode === fullCode);
+                        if (existing) {
+                            // 已存在：更新成本价和 HWM
+                            existing.cost = p.avg_price;
+                            if (p.high_water_mark && parseFloat(p.high_water_mark) > parseFloat(existing.high)) {
+                                existing.high = p.high_water_mark;
+                            }
+                            calculateRow(existing);
+                        } else {
+                            // 新增
+                            const newItem = reactive({
+                                name: p.name, fullCode, now: p.current_price, changePct: p.change_pct || 0,
+                                cost: p.avg_price, high: p.high_water_mark || p.current_price,
+                                low: '', buyDate: p.entry_date || '', highDate: p.high_water_date || '',
+                                avg: '', signal: '', f382: 0, f618: 0, f786: 0, topLine: 0, bottomLine: 0,
+                                _focusHigh: false, _focusLow: false, _focusCost: false, _focusAvg: false
+                            });
+                            calculateRow(newItem);
+                            tableData.value.unshift(newItem);
+                        }
+                    });
+                    sortData();
+                    saveToLocal();
+                    ElMessage.success(`已加载 ${positions.length} 只持仓`);
+                    // 统一刷新行情
+                    const allCodes = tableData.value.map(item => item.fullCode);
+                    if (allCodes.length > 0) fetchData(allCodes, false, false);
+                } catch (e) {
+                    ElMessage.error(`加载持仓失败: ${e.message}`);
+                } finally {
+                    loadingPortfolio.value = false;
+                }
+            };
+            const removeItem = (index) => {
+                if(!isMobile.value) {
+                    tableData.value.splice(index, 1);
+                } else {
+                    ElMessageBox.confirm('确认删除?', '提示', { confirmButtonText: '删', cancelButtonText: '留', type: 'warning', center: true })
+                    .then(() => tableData.value.splice(index, 1));
+                }
+                saveToLocal();
+            };
+            const clearAll = () => {
+                ElMessageBox.confirm('确定清空所有数据吗？', '警告', { confirmButtonText: '清空', cancelButtonText: '取消', type: 'warning' }).then(() => {
+                    tableData.value = [];
+                    saveToLocal();
+                }).catch(() => {});
+            };
+            const triggerImport = () => fileInput.value.click();
+            const exportData = () => {
+                let csv = '\uFEFF代码,名称,最新价,阶段顶部,阶段底部,均价,成本价,建仓日期,新高日期\n';
+                tableData.value.forEach(row => {
+                    csv += `${row.fullCode},${row.name},${row.now},${row.high},${row.low},${row.avg},${row.cost},${row.buyDate||''},${row.highDate||''}\n`;
+                });
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = "策略备份.csv";
+                link.click();
+            };
+            const importData = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.readAsArrayBuffer(file);
+                reader.onload = (e) => {
+                    const buffer = e.target.result;
+                    let text = '';
+                    const decoderUTF8 = new TextDecoder('utf-8');
+                    const decodedUTF8 = decoderUTF8.decode(buffer);
+                    if (decodedUTF8.includes('代码') || decodedUTF8.includes('名称')) {
+                        text = decodedUTF8;
+                    } else {
+                        try {
+                            const decoderGBK = new TextDecoder('gbk');
+                            text = decoderGBK.decode(buffer);
+                        } catch (e) {
+                            text = decodedUTF8;
+                        }
+                    }
+                    const lines = text.split('\n').filter(l => l.trim());
+                    if (lines.length <= 1) return;
+                    lines.slice(1).forEach(line => {
+                        const cols = line.split(',');
+                        if (cols.length >= 2) {
+                            const code = formatCode(cols[0]);
+                            if (!code) return;
+                            const safeVal = (val, def = '') => (val === undefined || val === 'null' || val.trim() === '') ? def : val.trim();
+                            const itemData = {
+                                fullCode: code, name: safeVal(cols[1]), now: safeVal(cols[2], 0),
+                                high: safeVal(cols[3], 0), low: safeVal(cols[4], 0), avg: safeVal(cols[5], 0),
+                                cost: safeVal(cols[6]), buyDate: safeVal(cols[7]), highDate: safeVal(cols[8]),
+                                _focusHigh: false, _focusLow: false, _focusCost: false, _focusAvg: false
+                            };
+                            const idx = tableData.value.findIndex(t => t.fullCode === code);
+                            if (idx > -1) {
+                                Object.assign(tableData.value[idx], itemData);
+                                calculateRow(tableData.value[idx]);
+                            } else {
+                                const newItem = reactive({ ...itemData, changePct: 0, signal: '', f382: 0, f618: 0, f786: 0, topLine: 0, bottomLine: 0 });
+                                calculateRow(newItem);
+                                tableData.value.unshift(newItem);
+                            }
+                        }
+                    });
+                    sortData();
+                    ElMessage.success('导入成功');
+                    refreshAllPrices();
+                    event.target.value = '';
+                };
+            };
+            onMounted(() => {
+                if (!localStorage.getItem('phi_disclaimer_agreed_v1')) showDisclaimer.value = true;
+                const cached = localStorage.getItem(STORAGE_KEY);
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        tableData.value = parsed.map(item => reactive({
+                            ...item, _focusHigh:false, _focusLow:false, _focusCost:false, _focusAvg:false
+                        }));
+                        sortData();
+                        refreshAllPrices();
+                    } catch(e){}
+                }
+                nextTick(initSortable);
+                autoRefreshTimer = setInterval(() => {
+                    if (isTradingTime()) refreshAllPrices(true);
+                }, 5000);
+            });
+            onUnmounted(() => clearInterval(autoRefreshTimer));
+            return {
+                locale, inputCodes, tableData, loading, fileInput, tableRef, showDisclaimer, agreeDisclaimer,
+                addNewCodes, refreshAllPrices, calculateRow, removeItem, clearAll, isMobile, lastRefreshTime,
+                loadingPortfolio, loadPortfolioFromServer,
+                getMarket, triggerImport, exportData, importData, tableRowClassName, getPriceColor, formatPct, handleBlur, getMobileCardClass
+            };
+        }
+    };
+    const app = createApp(App);
+    app.use(ElementPlus);
+    app.mount('#app');
+</script>
+</body>
+</html>

@@ -21,7 +21,8 @@
     "backtest": "Backtest",
     "analytics": "Tools",
     "scheduler": "Scheduler",
-    "agent": "AI Agent"
+    "agent": "AI Agent",
+    "calculator": "Bull Calculator"
   },
   "portfolio": {
     "title": "Portfolio Overview",
