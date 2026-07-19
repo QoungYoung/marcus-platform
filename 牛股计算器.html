@@ -527,6 +527,8 @@
                                 item.now = nowPrice;
                                 item.changePct = changePct;
                                 if (!item._focusAvg) item.avg = parseFloat(newAvg.toFixed(3));
+                                if (!item._focusHigh) item.high = dayHigh || nowPrice;
+                                if (!item._focusLow) item.low = dayLow || nowPrice;
                                 calculateRow(item);
                             } else if (isAddition) {
                                 const newItem = reactive({
@@ -585,7 +587,7 @@
                             const newItem = reactive({
                                 name: p.name, fullCode, now: p.current_price, changePct: p.change_pct || 0,
                                 cost: p.avg_price, high: p.high_water_mark || p.current_price,
-                                low: '', buyDate: p.entry_date || '', highDate: p.high_water_date || '',
+                                low: p.current_price, buyDate: p.entry_date || '', highDate: p.high_water_date || '',
                                 avg: '', signal: '', f382: 0, f618: 0, f786: 0, topLine: 0, bottomLine: 0,
                                 _focusHigh: false, _focusLow: false, _focusCost: false, _focusAvg: false
                             });
