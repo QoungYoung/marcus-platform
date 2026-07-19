@@ -4083,6 +4083,25 @@ async def calc_position_sandbox(task_id: str, req: dict):
     probe_amount = round(probe_shares * current_price, 2)
     probe_pct = round(probe_amount / total_asset * 100, 2) if total_asset > 0 else 0
 
+    # ── 兜底：rec/probe 归零但 max >= 100 时，给 100 股 ──
+    if max_shares >= 100:
+        if rec_shares == 0:
+            rec_shares = 100
+            rec_amount = round(100 * current_price, 2)
+            rec_pct = round(rec_amount / total_asset * 100, 2) if total_asset > 0 else 0
+            warnings.append(
+                f"⚡ 建议仓兜底: role_cap 买不足100股，按100股买入 "
+                f"({rec_pct}%仓位，请注意占比偏高)"
+            )
+        if probe_shares == 0:
+            probe_shares = 100
+            probe_amount = round(100 * current_price, 2)
+            probe_pct = round(probe_amount / total_asset * 100, 2) if total_asset > 0 else 0
+            warnings.append(
+                f"⚡ 试探仓兜底: 10%总资产买不足100股，按100股买入 "
+                f"({probe_pct}%仓位，请注意占比偏高)"
+            )
+
     # ── 7. 止损 ──
     hard_stop_price = round(current_price * (1 - dynamic_stop_pct / 100.0), 3)
     max_loss_per_share = round(current_price - hard_stop_price, 3)
@@ -4092,6 +4111,8 @@ async def calc_position_sandbox(task_id: str, req: dict):
     # ── 8. 逐条验证 ──
     single_cap_actual_pct = round(rec_amount / total_asset * 100, 2) if total_asset > 0 else 0
     single_cap_ok = rec_amount <= effective_single_cap
+    if not single_cap_ok and rec_shares == 100 and rec_amount_raw < 100 * current_price:
+        single_cap_ok = True
     single_cap_detail = f"建议{rec_amount}({single_cap_actual_pct}%) ≤ 上限{round(effective_single_cap,2)}({min(single_cap_pct, role_cap_pct)}%)"
     new_total_position = position_value + rec_amount
     new_total_ratio = round(new_total_position / total_asset * 100, 2) if total_asset > 0 else 0
@@ -4135,7 +4156,22 @@ async def calc_position_sandbox(task_id: str, req: dict):
             pre_condition_ok = True
             pre_condition_detail = f"当前浮盈{existing_profit}% ≥ 所需{threshold}%"
 
-    all_pass = single_cap_ok and total_position_ok and cash_reserve_ok and max_loss_ok
+    if max_shares == 0:
+        need_amount = 100 * current_price
+        limits = []
+        if effective_single_cap < need_amount:
+            limits.append(f"单票上限{round(effective_single_cap, 0)}元")
+        if total_remaining < need_amount:
+            limits.append(f"总仓剩余{round(total_remaining, 0)}元")
+        if cash_available_for_buy < need_amount:
+            limits.append(f"可用现金{round(max(cash_available_for_buy, 0), 0)}元")
+        all_pass = False
+        if limits:
+            warnings.insert(0, f"🔴 无法建仓: 100股需{round(need_amount, 0)}元，但{'; '.join(limits)}")
+        else:
+            warnings.insert(0, f"🔴 无法建仓: 100股需{round(need_amount, 0)}元，超出约束")
+    else:
+        all_pass = single_cap_ok and total_position_ok and cash_reserve_ok and max_loss_ok
     if pre_condition_ok is not None and not pre_condition_ok:
         all_pass = False
 
