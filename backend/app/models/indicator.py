@@ -165,6 +165,12 @@ class CalcPositionResponse(BaseModel):
     amplitude: float                   # 近5日日均振幅(%)
     amplitude_tier: str                # 振幅档位
     index_pct: float                   # 大盘涨跌幅(%)
+    # 波动率 & 趋势强度
+    volatility_level: str = ""         # ATR波动率档位: 低波/中波/高波/极高/无数据
+    atr_pct: float = 0.0               # ATR/价格 (%)
+    volatility_coef: float = 1.0       # 波动率仓位系数
+    adx: float = 0.0                   # ADX 趋势强度
+    adx_coef: float = 1.0              # ADX 仓位系数
     # 价格
     current_price: float
     # 数量计算

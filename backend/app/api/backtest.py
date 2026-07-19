@@ -4159,6 +4159,11 @@ async def calc_position_sandbox(task_id: str, req: dict):
         amplitude=round(amplitude, 2), amplitude_tier=amplitude_tier,
         index_pct=round(index_pct, 2),
         current_price=current_price,
+        volatility_level="无数据",
+        atr_pct=0.0,
+        volatility_coef=1.0,
+        adx=0.0,
+        adx_coef=1.0,
         quantity=CalcPositionQuantity(
             max_shares=max_shares, max_amount=max_amount,
             rec_shares=rec_shares, rec_amount=rec_amount, rec_pct=rec_pct,

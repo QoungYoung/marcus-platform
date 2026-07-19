@@ -1374,6 +1374,39 @@ def _get_iron_rule2(amplitude_tier: str) -> dict:
         }
 
 
+def _get_volatility_coefficient(atr: float, close: float) -> tuple:
+    """ATR/close → (volatility_level, atr_pct, coefficient).
+
+    波动率越高 → 仓位越小，反向调节风险敞口。
+    """
+    if atr <= 0 or close <= 0:
+        return ("无数据", 0.0, 1.0)
+    atr_pct = round(atr / close * 100, 2)
+    if atr_pct < 2:
+        return ("低波", atr_pct, 1.0)
+    elif atr_pct < 4:
+        return ("中波", atr_pct, 0.85)
+    elif atr_pct < 6:
+        return ("高波", atr_pct, 0.7)
+    else:
+        return ("极高", atr_pct, 0.5)
+
+
+def _get_adx_coefficient(adx: float) -> float:
+    """ADX → 趋势强度系数。
+
+    强趋势 → 满仓，弱趋势 → 打折，无趋势 → 进一步收缩。
+    """
+    if adx <= 0:
+        return 1.0
+    if adx > 40:
+        return 1.0
+    elif adx > 25:
+        return 0.8
+    else:
+        return 0.6
+
+
 def calculate_position_quantity(
     *,
     total_asset: float,
@@ -1520,7 +1553,26 @@ async def calc_position(req: CalcPositionRequest):
         logger.warning(f"获取K线振幅失败: {e}")
         warnings.append("⚠️ K线振幅数据不可用，使用默认振幅0%")
 
-    # 1d. 获取大盘指数涨跌幅
+    # 1d. 获取 ATR 和 ADX (stk_factor_pro, 用于波动率/趋势强度系数)
+    atr = 0.0
+    adx = 0.0
+    try:
+        if token:
+            df_factor = pro.stk_factor_pro(
+                ts_code=ts_code,
+                start_date=start_d,
+                end_date=end_d,
+                fields='atr_qfq,dmi_adx_qfq',
+                limit=1,
+            )
+            if df_factor is not None and not df_factor.empty:
+                row = df_factor.iloc[0]
+                atr = float(row.get("atr_qfq", 0) or 0)
+                adx = float(row.get("dmi_adx_qfq", 0) or 0)
+    except Exception as e:
+        logger.warning(f"获取ATR/ADX失败 {symbol}: {e}")
+
+    # 1e. 获取大盘指数涨跌幅
     index_pct = 0.0
     try:
         from app.api.market import get_market_indices as _get_indices
@@ -1557,6 +1609,39 @@ async def calc_position(req: CalcPositionRequest):
     # ── Layer 3: 计算数量 ──
     effective_single_cap_before = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset
     effective_single_cap = effective_single_cap_before
+
+    # ── 波动率自适应仓位 ──
+    volatility_level, atr_pct, volatility_coef = _get_volatility_coefficient(atr, current_price)
+    if volatility_coef < 1.0:
+        effective_single_cap *= volatility_coef
+        warnings.append(
+            f"🔴 波动率自适应: {volatility_level}(ATR/价格={atr_pct}%), 仓位×{volatility_coef}"
+        )
+        logger.info(
+            f"[calc_position] 波动率收紧: level={volatility_level}, "
+            f"atr_pct={atr_pct}%, coef={volatility_coef}, cap={effective_single_cap}"
+        )
+
+    # ── ADX 趋势强度系数 ──
+    adx_coef = _get_adx_coefficient(adx)
+    if adx_coef < 1.0:
+        effective_single_cap *= adx_coef
+        warnings.append(f"🔴 ADX趋势强度: ADX={adx:.1f}, 仓位×{adx_coef}")
+        logger.info(
+            f"[calc_position] ADX收紧: adx={adx}, coef={adx_coef}, cap={effective_single_cap}"
+        )
+
+    # ── 最低仓位底线 (2% 总资产) ──
+    min_floor = total_asset * 0.02
+    if effective_single_cap < min_floor:
+        floor_shares = int(min_floor / current_price / 100) * 100
+        if floor_shares >= 100:
+            effective_single_cap = min_floor
+            warnings.append("⚡ 仓位底线: 系数乘积后仓位低于2%，上浮至2%底线")
+        else:
+            warnings.append(
+                f"⚠️ 仓位不足: 即使2%底线也只能买{floor_shares}股(<100股)，建议跳过此标的"
+            )
 
     # ── 最低股数放行：A股100股起买，100股×当前价 > 单票上限时，允许买入100股 ──
     min_lot_amount = 100 * current_price
@@ -1730,6 +1815,11 @@ async def calc_position(req: CalcPositionRequest):
         amplitude_tier=amplitude_tier,
         index_pct=round(index_pct, 2),
         current_price=round(current_price, 3),
+        volatility_level=volatility_level,
+        atr_pct=atr_pct,
+        volatility_coef=volatility_coef,
+        adx=round(adx, 1),
+        adx_coef=adx_coef,
         quantity=quantity,
         stop_loss=stop_loss,
         validation=validation,
@@ -1910,12 +2000,11 @@ async def check_entry_filters(req: EntryCheckRequest):
 
         if ma60_10 > 0 and ma60_30 > 0:
             if ma60_10 < ma60_30:
-                tech_details.append(f"🚫 60分 MA10({ma60_10:.2f}) < MA30({ma60_30:.2f}) → 短线未走好，排除")
-                layer1_passed = False
-                layer1_grade = "🚫排除"
+                tech_details.append(f"⚠️ 60分 MA10({ma60_10:.2f}) < MA30({ma60_30:.2f}) → 短线未走好，降级入候选池")
+                layer1_grade = "⚠️降级"
                 layer1_downgrade = "60分MA10<MA30 短线未走好"
-                layer1_action = "排除，等60分钟金叉后再看"
-                downgrade_multiplier = 0.0
+                layer1_action = "入候选池观察，等60分钟金叉"
+                downgrade_multiplier = min(downgrade_multiplier, 0.3)
             elif ma5 > 0 and ma20 > 0 and ma5 < ma20:
                 tech_details.append(f"⚠️ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) 通过，但日线 MA5({ma5:.2f}) < MA20({ma20:.2f}) → 60分钟先行，仅试探仓≤5%")
                 layer1_grade = "⚠️降级"
@@ -3297,7 +3386,7 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
         l1_pass = l1.passed
         l2_pass = l2.passed
         l3_pass = l3.passed
-        all_filter_pass = filter_result.final_grade != "blocked" and not filter_result.hard_block
+        all_filter_pass = filter_result.final_grade == "pass"
 
         # 买入确认
         bc = filter_result.buy_confirmation
@@ -3323,6 +3412,14 @@ async def candidate_entry_conditions_live(symbol: str = Query(None)):
             missing_conditions.append(f"[主力资金] {l2.grade}: {getattr(l2, 'downgrade_reason', '') or '未通过'}")
         if not l3_pass:
             missing_conditions.append(f"[超买] {l3.grade}: {getattr(l3, 'downgrade_reason', '') or '未通过'}")
+        if all_filter_pass or (l1_pass and l2_pass and l3_pass):
+            # 各层都过但 final_grade != "pass" → 降级
+            if filter_result.final_grade == "probe_only":
+                reasons = [getattr(l, 'downgrade_reason', '') for l in (l1, l2, l3) if getattr(l, 'downgrade_reason', '')]
+                missing_conditions.append(f"[综合] 仅试探仓，原因: {'; '.join(reasons) if reasons else '多项降级'}")
+            elif filter_result.final_grade == "downgraded":
+                reasons = [getattr(l, 'downgrade_reason', '') for l in (l1, l2, l3) if getattr(l, 'downgrade_reason', '')]
+                missing_conditions.append(f"[综合] 降仓建仓，原因: {'; '.join(reasons) if reasons else '多项降级'}")
         if not stance_pass:
             missing_conditions.append(f"[Pi立场] red 禁止建仓")
         if not bc_pass:
