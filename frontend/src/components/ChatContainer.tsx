@@ -356,7 +356,7 @@ const getEtfKlineTool = {
     const lines = [`📊 ${params.symbol} ETF K线 (${params.period || 'day'}) - 共${klines.length}条`, ''];
     for (const k of klines.slice(-20)) {
       const up = k.close >= k.open ? '📈' : '📉';
-      const dateStr = k.timestamp ? new Date(k.timestamp).toISOString().slice(0, 10) : '--';
+      const dateStr = k.timestamp?.slice(0, 10) || '--';
       lines.push(`${dateStr} | 开:${k.open?.toFixed(3)} 高:${k.high?.toFixed(3)} 低:${k.low?.toFixed(3)} 收:${k.close?.toFixed(3)} ${up} 量:${(k.volume / 1e4).toFixed(0)}万`);
     }
     if (klines.length > 20) {

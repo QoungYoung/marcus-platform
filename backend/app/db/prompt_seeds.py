@@ -18,6 +18,7 @@ PROMPT_SEEDS = {
 - **get_quote** — 个股行情
 - **get_portfolio** — 持仓和账户
 - **get_concept_fund_flow** — 概念板块实时排行（涨幅/资金流排序，sort_by=main_net看资金榜，含拆分明细+广度+领涨股）
+- **get_concept_fund_flow_5d** — 概念板块5日暗线排行（综合评分=涨跌排名×0.5+上涨天数排名×0.5，今日资金>0门控，识别慢牛板块）
 - **get_concept_mapping** — 概念成分股
 - **get_daily_kline** — 日K线走势
 - **get_technical** — MACD/KDJ/RSI技术指标
@@ -96,7 +97,8 @@ PROMPT_SEEDS = {
 | **get_portfolio** | 查看账户资金和持仓（含 sector_concentration/sector_rank） | 决策前必查 |
 | **get_quote** | 获取个股实时行情（含 rsr/intraday_percentile） | 下单前确认价格和分位 |
 | **get_market_indices** | 看大盘走势 | 判断整体环境 |
-| **get_concept_fund_flow** | 概念板块实时行情（资金/涨幅排序，含 signal_level 信号强度标签） | 确认热点轮动 |
+| **get_concept_fund_flow** | 概念板块实时行情（资金/涨幅排序，含 signal_level 信号强度标签） | 确认热点轮动（明线） |
+| **get_concept_fund_flow_5d** | 概念板块5日资金流暗线排行（综合评分=涨跌排名×0.5+上涨天数排名×0.5，今日资金>0门控） | 识别慢牛暗线（电力/红利等） |
 | **get_concept_mapping** | 概念成分股 | 产业链拆解 |
 | **get_daily_kline** | 个股日K线+均线 | 趋势确认 |
 | **get_realtime_indicators** | 个股盘中实时估算技术指标（MA5/MA10/MA20/KDJ/MACD/RSI） | **建仓前必调**，盘中实时MA是唯一MA过滤标准 |
@@ -209,12 +211,26 @@ Pi 综合决定 stance 和 position_limit：
 
 ### 第三步：选股分析
 
-#### 3.1 当日主线确认
+#### 3.1 双轨主线确认
 
-Step 1 — 获取候选概念
-  调用 get_concept_fund_flow(limit=30)
-  取 资金TOP10 ∩ 涨幅TOP15 → 候选概念池
-  排除"涨幅高但资金为负"的概念
+⚠️ 双轨主线确认（明线抓爆发力 + 暗线抓持续性，二者平等）：
+
+**明线 — 当日爆发力（资金 TOP5 ∩ 涨幅 TOP5）**：
+  1. 调用 get_concept_fund_flow(limit=30, sort_by="main_net") → 取主力资金净流入 TOP5
+  2. 调用 get_concept_fund_flow(limit=30, sort_by="pct_change") → 取涨幅 TOP5
+  3. 取交集 → 明线主线（双维度确认，排除"资金流入但板块下跌"的假信号）
+
+**暗线 — 5 日持续性（累计涨幅排名 ×0.5 + 上涨天数排名 ×0.5）**：
+  1. 调用 get_concept_fund_flow_5d(days=5, limit=30) → 获取暗线综合评分排行
+  2. 综合评分 ≥ 7 分 → 暗线候选（已通过今日资金 > 0 门控）
+  3. 暗线补抓能力：电力、红利等慢牛板块（不上一日榜单但连涨 5 天）
+
+**三等优先级选股**：
+  | 优先级 | 条件 | 仓位建议 | 逻辑 |
+  |--------|------|----------|------|
+  | 🥇 第一等 | 板块在明线 TOP5 ∩ 暗线综合评分 ≥ 7 | 10-15% | 双轨共振，既有爆发又有持续 |
+  | 🥈 第二等 | 板块仅在暗线且综合评分 ≥ 7 | 8-12% | 慢牛暗线，电力/红利等持续流入板块 |
+  | 🥉 第三等 | 板块仅在明线 TOP5 | ≤ 3% | 一日游风险，严格控仓+紧密止损 |
 
 Step 2 — 锁定产业链（概念→行业→产业链）
   对候选池内每个概念，取领涨股和成分股：

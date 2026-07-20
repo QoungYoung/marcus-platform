@@ -328,6 +328,48 @@ export const getConceptFundFlowTool = {
   },
 };
 
+export const getConceptFundFlow5dTool = {
+  name: 'get_concept_fund_flow_5d',
+  label: '概念板块5日资金流(暗线)',
+  description: '获取概念板块5日累计资金流向排行（暗线·持续性维度）。按概念聚合5个交易日数据，综合评分=涨跌幅排名分×0.5+上涨天数排名分×0.5，今日主力净流入>0为门控。用于识别明线(当日爆发)遗漏的慢牛板块(电力/红利等)',
+  parameters: Type.Object({
+    days: Type.Optional(Type.Number({ description: '回溯交易日天数，默认5，范围3-20' })),
+    limit: Type.Optional(Type.Number({ description: '返回数量，默认30' })),
+  }),
+  async execute(_toolCallId: string, params: { days?: number; limit?: number }, _signal?: AbortSignal) {
+    // 回测模式暂不支持5日聚合
+    if (isBacktest()) {
+      return { content: [{ type: 'text', text: '回测模式暂不支持5日概念资金流聚合，请使用 get_concept_fund_flow' }], details: {} };
+    }
+
+    const query = new URLSearchParams();
+    if (params.days) query.set('days', String(params.days));
+    if (params.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    const data = await apiFetch(`/market/concept-fund-flow-5d${qs ? '?' + qs : ''}`);
+    if (data.error) throw new Error(data.error);
+    const items = data.items || [];
+    if (items.length === 0) {
+      return { content: [{ type: 'text', text: '暂无5日概念板块数据（可能所有概念今日主力净流入均<=0）' }], details: data };
+    }
+    const lines = [`🌑 概念板块5日暗线排行 (数据日期: ${data.data_date || '--'}, 交易日: ${(data.trading_days || []).length}天)`, ''];
+    lines.push('排名 | 概念 | 综合分 | 5日累计涨跌 | 上涨天数 | 今日主力');
+    lines.push('--- | --- | --- | --- | --- | ---');
+    items.forEach((s: any, idx: number) => {
+      const sign = (s.total_pct_change || 0) >= 0 ? '+' : '';
+      const todayNet = s.today_net_amount || 0;
+      const todayNetStr = todayNet >= 10000
+        ? `${(todayNet / 10000).toFixed(2)}亿`
+        : `${todayNet.toFixed(0)}万`;
+      const marker = s.composite_score >= 7 ? '⭐' : '  ';
+      lines.push(`${marker}${idx + 1} | ${s.name} | ${s.composite_score}分 | ${sign}${s.total_pct_change}% | ${s.up_days}/${data.trading_days?.length || 5}天 | ${todayNetStr}`);
+    });
+    lines.push('');
+    lines.push('⭐ = 暗线候选 (综合评分≥7分)');
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
+  },
+};
+
 export const getConceptMappingTool = {
   name: 'get_concept_mapping',
   label: '概念板块查询',
@@ -2234,6 +2276,7 @@ export const CHAT_TOOLS = [
   getQuoteTool,
   getPortfolioTool,
   getConceptFundFlowTool,
+  getConceptFundFlow5dTool,
   getIndustryFundFlowTool,
   getMarketMoneyflowTool,
   getConceptMappingTool,

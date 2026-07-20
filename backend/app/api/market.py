@@ -1162,6 +1162,183 @@ async def get_concept_fund_flow(
         raise HTTPException(status_code=500, detail=f"获取概念行情失败: {str(e)}")
 
 
+# ========== 概念板块 5 日资金流向聚合 API (暗线·持续性维度) ==========
+
+@router.get("/concept-fund-flow-5d")
+async def get_concept_fund_flow_5d(
+    days: int = Query(5, ge=3, le=20, description="回溯交易日天数"),
+    limit: int = Query(30, ge=1, le=100, description="返回数量上限"),
+):
+    """
+    获取概念板块 5 日累计资金流向排行（暗线·持续性维度）。
+
+    数据源: Tushare moneyflow_ind_dc（日频盘后数据）
+
+    聚合逻辑:
+    - 按概念名称聚合 N 个交易日数据
+    - 计算 5 日累计涨跌幅 (SUM pct_change)、上涨天数 (COUNT pct_change > 0)、5 日累计主力净流入 (SUM net_amount)
+    - 门控: 最新交易日主力净流入 > 0 才进入暗线
+    - 综合评分 = 涨跌幅排名分 × 0.5 + 上涨天数排名分 × 0.5
+    - 排名分: TOP10 得分 10→1, 10 名以外 0 分
+
+    返回字段:
+    - data_date: 最新数据日期
+    - trading_days: 聚合的交易日列表
+    - items: 按综合评分降序排列的概念列表
+    """
+    from datetime import timedelta
+
+    try:
+        pro = _get_tushare_pro()
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Tushare 配置错误: {str(e)}")
+    except ImportError:
+        raise HTTPException(status_code=503, detail="tushare 库未安装，请 pip install tushare")
+
+    now = datetime.now()
+    today_str = now.strftime("%Y%m%d")
+
+    # ── 获取最近 N 个交易日列表 ──
+    trading_days: list[str] = []
+    try:
+        lookback = days * 3  # 留足够余量跳过周末和节假日
+        df_cal = pro.trade_cal(
+            exchange='SSE',
+            start_date=(now - timedelta(days=lookback)).strftime("%Y%m%d"),
+            end_date=today_str,
+        )
+        if df_cal is not None and not df_cal.empty:
+            open_days = df_cal[df_cal['is_open'] == 1]['cal_date'].tolist()
+            open_days.sort(reverse=True)
+            trading_days = open_days[:days]
+    except Exception as e:
+        logger.warning(f"[concept-fund-flow-5d] trade_cal 查询失败: {e}，使用自然日回退")
+        # 回退：最近 N 个工作日
+        cursor = now
+        while len(trading_days) < days:
+            if cursor.weekday() < 5:
+                trading_days.append(cursor.strftime("%Y%m%d"))
+            cursor -= timedelta(days=1)
+
+    if not trading_days:
+        raise HTTPException(status_code=500, detail="无法确定交易日列表")
+
+    trading_days.sort(reverse=True)
+    start_date = trading_days[-1]
+    end_date = trading_days[0]
+    latest_trade_date = trading_days[0]
+
+    logger.info(f"[concept-fund-flow-5d] 交易日范围: {start_date} ~ {end_date}, 共 {len(trading_days)} 天")
+
+    # ── 查询 Tushare moneyflow_ind_dc ──
+    try:
+        df = pro.moneyflow_ind_dc(
+            start_date=start_date,
+            end_date=end_date,
+            content_type='概念',
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Tushare moneyflow_ind_dc 查询失败: {str(e)}")
+
+    if df is None or df.empty:
+        return {
+            "items": [],
+            "count": 0,
+            "data_date": latest_trade_date,
+            "trading_days": trading_days,
+            "data_source": "Tushare(moneyflow_ind_dc·无数据)",
+        }
+
+    # ── 按概念名称聚合 ──
+    agg: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        name = str(row["name"])
+        trade_date = str(row["trade_date"])
+        pct = float(row.get("pct_change", 0) or 0)
+        net = float(row.get("net_amount", 0) or 0)
+
+        if name not in agg:
+            agg[name] = {
+                "name": name,
+                "ts_code": str(row.get("ts_code", "")),
+                "total_pct_change": 0.0,
+                "up_days": 0,
+                "total_net_amount": 0.0,
+                "today_net_amount": 0.0,
+                "day_count": 0,
+            }
+        entry = agg[name]
+        entry["total_pct_change"] += pct
+        if pct > 0:
+            entry["up_days"] += 1
+        entry["total_net_amount"] += net
+        entry["day_count"] += 1
+
+        # 记录最新交易日当天的资金流（用于门控）
+        if trade_date == latest_trade_date:
+            entry["today_net_amount"] += net
+
+    # ── 当日资金门控：最新交易日主力净流入 <= 0 则剔除 ──
+    candidates = [v for v in agg.values() if v["today_net_amount"] > 0]
+
+    if not candidates:
+        return {
+            "items": [],
+            "count": 0,
+            "data_date": latest_trade_date,
+            "trading_days": trading_days,
+            "data_source": "Tushare(moneyflow_ind_dc·所有概念今日主力净流入<=0)",
+        }
+
+    # ── 排名打分 ──
+    # 按累计涨跌幅降序排名
+    sorted_by_pct = sorted(candidates, key=lambda x: x["total_pct_change"], reverse=True)
+    pct_rank_map: dict[str, int] = {}
+    for rank, item in enumerate(sorted_by_pct, 1):
+        score = max(0, 11 - rank) if rank <= 10 else 0
+        # 处理并列：同一值得同分
+        if rank > 1:
+            prev = sorted_by_pct[rank - 2]
+            if abs(item["total_pct_change"] - prev["total_pct_change"]) < 0.001:
+                score = pct_rank_map[prev["name"]]
+        pct_rank_map[item["name"]] = score
+
+    # 按上涨天数降序排名
+    sorted_by_up = sorted(candidates, key=lambda x: x["up_days"], reverse=True)
+    up_rank_map: dict[str, int] = {}
+    for rank, item in enumerate(sorted_by_up, 1):
+        score = max(0, 11 - rank) if rank <= 10 else 0
+        if rank > 1:
+            prev = sorted_by_up[rank - 2]
+            if item["up_days"] == prev["up_days"]:
+                score = up_rank_map[prev["name"]]
+        up_rank_map[item["name"]] = score
+
+    # ── 综合评分 + 排序 ──
+    for item in candidates:
+        name = item["name"]
+        pct_score = pct_rank_map.get(name, 0)
+        up_score = up_rank_map.get(name, 0)
+        item["pct_rank_score"] = pct_score
+        item["up_days_rank_score"] = up_score
+        item["composite_score"] = round(pct_score * 0.5 + up_score * 0.5, 1)
+        # 格式化数值
+        item["total_pct_change"] = round(item["total_pct_change"], 2)
+        item["today_net_amount"] = round(item["today_net_amount"] / 10000, 2)  # 元→万元
+        item["total_net_amount"] = round(item["total_net_amount"] / 10000, 2)
+
+    candidates.sort(key=lambda x: x["composite_score"], reverse=True)
+    result = candidates[:limit]
+
+    return {
+        "items": result,
+        "count": len(result),
+        "data_date": latest_trade_date,
+        "trading_days": trading_days,
+        "data_source": "Tushare(moneyflow_ind_dc·5日聚合)",
+    }
+
+
 # ========== 大盘资金流向 API (与 jobs/fund_flow._fetch_market_moneyflow_dc 同源) ==========
 
 @router.get("/moneyflow-mkt")
