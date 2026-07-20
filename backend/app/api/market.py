@@ -1249,6 +1249,10 @@ async def get_concept_fund_flow_5d(
             "data_source": "Tushare(moneyflow_ind_dc·无数据)",
         }
 
+    # 数据中实际存在的最新日期（可能比日历最新交易日晚1天，Tushare T+1更新）
+    actual_data_date = str(df['trade_date'].max())
+    logger.info(f"[concept-fund-flow-5d] 实际数据最新日期: {actual_data_date} (日历最晚: {latest_trade_date})")
+
     # ── 按概念名称聚合 ──
     agg: dict[str, dict] = {}
     for _, row in df.iterrows():
@@ -1274,20 +1278,20 @@ async def get_concept_fund_flow_5d(
         entry["total_net_amount"] += net
         entry["day_count"] += 1
 
-        # 记录最新交易日当天的资金流（用于门控）
-        if trade_date == latest_trade_date:
+        # 记录实际最新数据日期当天的资金流（用于门控）
+        if trade_date == actual_data_date:
             entry["today_net_amount"] += net
 
-    # ── 当日资金门控：最新交易日主力净流入 <= 0 则剔除 ──
+    # ── 当日资金门控：实际最新数据日期主力净流入 <= 0 则剔除 ──
     candidates = [v for v in agg.values() if v["today_net_amount"] > 0]
 
     if not candidates:
         return {
             "items": [],
             "count": 0,
-            "data_date": latest_trade_date,
+            "data_date": actual_data_date,
             "trading_days": trading_days,
-            "data_source": "Tushare(moneyflow_ind_dc·所有概念今日主力净流入<=0)",
+            "data_source": f"Tushare(moneyflow_ind_dc·{actual_data_date}所有概念主力净流入<=0)",
         }
 
     # ── 排名打分 ──
@@ -1333,7 +1337,7 @@ async def get_concept_fund_flow_5d(
     return {
         "items": result,
         "count": len(result),
-        "data_date": latest_trade_date,
+        "data_date": actual_data_date,
         "trading_days": trading_days,
         "data_source": "Tushare(moneyflow_ind_dc·5日聚合)",
     }
