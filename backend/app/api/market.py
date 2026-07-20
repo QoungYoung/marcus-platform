@@ -1249,15 +1249,14 @@ async def get_concept_fund_flow_5d(
             "data_source": "Tushare(moneyflow_ind_dc·无数据)",
         }
 
-    # 数据中实际存在的最新日期（可能比日历最新交易日晚1天，Tushare T+1更新）
+    # 数据中实际存在的最新日期（Tushare T+1更新，通常比日历晚1天）
     actual_data_date = str(df['trade_date'].max())
     logger.info(f"[concept-fund-flow-5d] 实际数据最新日期: {actual_data_date} (日历最晚: {latest_trade_date})")
 
-    # ── 按概念名称聚合 ──
+    # ── 按概念名称聚合（5日历史数据） ──
     agg: dict[str, dict] = {}
     for _, row in df.iterrows():
         name = str(row["name"])
-        trade_date = str(row["trade_date"])
         pct = float(row.get("pct_change", 0) or 0)
         net = float(row.get("net_amount", 0) or 0)
 
@@ -1268,7 +1267,7 @@ async def get_concept_fund_flow_5d(
                 "total_pct_change": 0.0,
                 "up_days": 0,
                 "total_net_amount": 0.0,
-                "today_net_amount": 0.0,
+                "today_net_amount": 0.0,  # 门控用，后面从实时数据填充
                 "day_count": 0,
             }
         entry = agg[name]
@@ -1278,20 +1277,54 @@ async def get_concept_fund_flow_5d(
         entry["total_net_amount"] += net
         entry["day_count"] += 1
 
-        # 记录实际最新数据日期当天的资金流（用于门控）
-        if trade_date == actual_data_date:
-            entry["today_net_amount"] += net
+    # ── 当日资金门控（优先东财实时数据，降级到Tushare最新日期） ──
+    today_gate_map: dict[str, float] = {}  # name → today_main_net (万元)
+    gate_source = ""
 
-    # ── 当日资金门控：实际最新数据日期主力净流入 <= 0 则剔除 ──
-    candidates = [v for v in agg.values() if v["today_net_amount"] > 0]
+    # 判断是否应该尝试东财实时接口
+    from datetime import datetime as dt
+    now_gate = dt.now()
+    before_market = now_gate.hour < 9 or (now_gate.hour == 9 and now_gate.minute < 30)
+    skip_em = before_market or now_gate.hour >= 16 or now_gate.weekday() >= 5
+
+    if _EM_FLOW_AVAILABLE and not skip_em:
+        try:
+            em_data = get_sector_flow("concept", sort_by="main_net", top_n=200, use_cache=True)
+            for fd in em_data:
+                # 东财 main_net 单位为万元，转元存储（与 Tushare net_amount 统一）
+                today_gate_map[fd["name"]] = fd["main_net"] * 10000
+            gate_source = "东财push2(实时)"
+            logger.info(f"[concept-fund-flow-5d] 东财实时门控: {len(today_gate_map)} 个概念")
+        except Exception as e:
+            logger.warning(f"[concept-fund-flow-5d] 东财实时门控获取失败: {e}，降级到 Tushare")
+
+    # ── 应用门控 ──
+    if today_gate_map:
+        for name, entry in agg.items():
+            entry["today_net_amount"] = today_gate_map.get(name, 0)
+        candidates = [v for v in agg.values() if v["today_net_amount"] > 0]
+        gate_date = dt.now().strftime("%Y%m%d")
+    else:
+        # 降级：用 Tushare 最新日期数据做门控（net_amount 单位：元）
+        gate_source = f"Tushare({actual_data_date})"
+        df_latest = df[df['trade_date'] == actual_data_date]
+        tushare_gate: dict[str, float] = {}
+        for _, row in df_latest.iterrows():
+            name = str(row["name"])
+            net = float(row.get("net_amount", 0) or 0)
+            tushare_gate[name] = tushare_gate.get(name, 0) + net
+        for name, entry in agg.items():
+            entry["today_net_amount"] = tushare_gate.get(name, 0)
+        candidates = [v for v in agg.values() if v["today_net_amount"] > 0]
+        gate_date = actual_data_date
 
     if not candidates:
         return {
             "items": [],
             "count": 0,
-            "data_date": actual_data_date,
+            "data_date": gate_date,
             "trading_days": trading_days,
-            "data_source": f"Tushare(moneyflow_ind_dc·{actual_data_date}所有概念主力净流入<=0)",
+            "data_source": f"{gate_source}·所有概念主力净流入<=0",
         }
 
     # ── 排名打分 ──
@@ -1337,7 +1370,7 @@ async def get_concept_fund_flow_5d(
     return {
         "items": result,
         "count": len(result),
-        "data_date": actual_data_date,
+        "data_date": gate_date,
         "trading_days": trading_days,
         "data_source": "Tushare(moneyflow_ind_dc·5日聚合)",
     }
