@@ -361,11 +361,11 @@ export const getConceptFundFlow5dTool = {
       const todayNetStr = todayNet >= 10000
         ? `${(todayNet / 10000).toFixed(2)}亿`
         : `${todayNet.toFixed(0)}万`;
-      const marker = s.composite_score >= 7 ? '⭐' : '  ';
+      const marker = s.composite_score >= 5 ? '⭐' : '  ';
       lines.push(`${marker}${idx + 1} | ${s.name} | ${s.composite_score}分 | ${sign}${s.total_pct_change}% | ${s.up_days}/${data.trading_days?.length || 5}天 | ${todayNetStr}`);
     });
     lines.push('');
-    lines.push('⭐ = 暗线候选 (综合评分≥7分)');
+    lines.push('⭐ = 暗线候选 (综合评分≥5分)');
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },
 };

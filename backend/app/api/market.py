@@ -1327,8 +1327,32 @@ async def get_concept_fund_flow_5d(
             "data_source": f"{gate_source}·所有概念主力净流入<=0",
         }
 
+    # ── 过滤技术性概念（非真实行业板块） ──
+    TECH_CONCEPT_KEYWORDS = [
+        '首板', '连板', '昨日涨停', '昨日触板', '昨高', '昨涨',
+        '百日新高', '近期新高', '百日新低',
+        '微盘股', '微盘精选',
+        '题材股',  # 风格标签，非行业
+    ]
+    def _is_tech_concept(name: str) -> bool:
+        for kw in TECH_CONCEPT_KEYWORDS:
+            if kw in name:
+                return True
+        return False
+
+    filtered_candidates = [c for c in candidates if not _is_tech_concept(c["name"])]
+    if not filtered_candidates:
+        return {
+            "items": [],
+            "count": 0,
+            "data_date": gate_date,
+            "trading_days": trading_days,
+            "data_source": f"{gate_source}·过滤后无真实行业概念",
+        }
+    candidates = filtered_candidates
+
     # ── 排名打分 ──
-    # 按累计涨跌幅降序排名
+    # 按累计涨跌幅降序排名（TOP10得分10→1）
     sorted_by_pct = sorted(candidates, key=lambda x: x["total_pct_change"], reverse=True)
     pct_rank_map: dict[str, int] = {}
     for rank, item in enumerate(sorted_by_pct, 1):
@@ -1340,22 +1364,18 @@ async def get_concept_fund_flow_5d(
                 score = pct_rank_map[prev["name"]]
         pct_rank_map[item["name"]] = score
 
-    # 按上涨天数降序排名
-    sorted_by_up = sorted(candidates, key=lambda x: x["up_days"], reverse=True)
-    up_rank_map: dict[str, int] = {}
-    for rank, item in enumerate(sorted_by_up, 1):
-        score = max(0, 11 - rank) if rank <= 10 else 0
-        if rank > 1:
-            prev = sorted_by_up[rank - 2]
-            if item["up_days"] == prev["up_days"]:
-                score = up_rank_map[prev["name"]]
-        up_rank_map[item["name"]] = score
+    # 按上涨天数比例制评分（max_up_days→10分，其余按比例）
+    max_up_days = max(c["up_days"] for c in candidates) if candidates else 1
+    up_score_map: dict[str, int] = {}
+    for item in candidates:
+        raw = item["up_days"] / max_up_days * 10 if max_up_days > 0 else 0
+        up_score_map[item["name"]] = round(raw, 1)
 
     # ── 综合评分 + 排序 ──
     for item in candidates:
         name = item["name"]
         pct_score = pct_rank_map.get(name, 0)
-        up_score = up_rank_map.get(name, 0)
+        up_score = up_score_map.get(name, 0)
         item["pct_rank_score"] = pct_score
         item["up_days_rank_score"] = up_score
         item["composite_score"] = round(pct_score * 0.5 + up_score * 0.5, 1)
