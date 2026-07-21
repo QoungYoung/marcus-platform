@@ -535,10 +535,7 @@ async def get_portfolio():
         flush=True,
     )
 
-    # 🔧 total_pnl = total_asset - initial_capital（始终与 total_return 一致）
-    #     float_pnl 作为推导值 = total_pnl - realized_pnl，保证三数自洽
     total_pnl = total_asset - initial_capital
-    derived_float_pnl = total_pnl - realized_pnl
 
     account_response = AccountResponse(
         initial_capital=initial_capital,
@@ -547,7 +544,7 @@ async def get_portfolio():
         position_value=total_position_value,
         total_asset=total_asset,
         realized_pnl=realized_pnl,
-        float_pnl=derived_float_pnl,
+        float_pnl=total_float_pnl,
         total_pnl=total_pnl,
         position_ratio=total_position_value / initial_capital * 100 if initial_capital > 0 else 0,
         week_realized_pnl=week_realized_pnl,
