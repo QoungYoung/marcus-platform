@@ -103,6 +103,7 @@ class StopLossMonitor:
         self._triggered: Dict[str, float] = {}
         self._strategy_chain = None
         self._tech_divergence_cache: Dict[str, tuple] = {}  # (symbol, date_str) -> (signals_tuple, timestamp)
+        self._panic_suspension_count: Dict[str, int] = {}  # 恐慌错杀警戒日计数器
 
         self.log_dir = self._resolve_log_dir()
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -266,6 +267,7 @@ class StopLossMonitor:
         if getattr(self, '_last_reset_date', '') != today:
             self.today_stops.clear()
             self._triggered.clear()
+            self._panic_suspension_count.clear()
             self._last_reset_date = today
             if self.executor:
                 try:
@@ -510,36 +512,218 @@ class StopLossMonitor:
         if max_profit_pct >= 5:
             return None
 
-        # 曾小盈(3-5%) → -3% 止损
-        if max_profit_pct >= 3 and float_pnl_pct <= -3.0:
-            return (
-                f'成本止损-小盈转亏：曾浮盈 +{max_profit_pct:.1f}% → '
-                f'现亏损 {float_pnl_pct:.2f}% 触及 -3% 止损线（成本 {avg_price:.2f}）'
-            )
+        # 动态阈值：基于近5日日均振幅自适应扩宽
+        amp = self._get_amplitude_pct(symbol)
 
-        # 从未盈利 → -4% 快速止损
-        if hwm is not None and float_pnl_pct <= -4.0:
-            days_tag = f' 持仓约{hwm_days}天' if hwm_days else ''
-            return (
-                f'成本止损-未盈利-4%：从未盈利{days_tag}，'
-                f'当前亏损 {float_pnl_pct:.2f}% 触及止损线（成本 {avg_price:.2f}）'
-            )
+        # 曾小盈(3-5%) → max(-3%, 振幅×0.40) 止损
+        if max_profit_pct >= 3:
+            threshold = max(3.0, amp * 0.40)
+            if float_pnl_pct <= -threshold:
+                return (
+                    f'成本止损-小盈转亏：曾浮盈 +{max_profit_pct:.1f}% → '
+                    f'现亏损 {float_pnl_pct:.2f}% 触及 -{threshold:.1f}% 止损线'
+                    f'（振幅 {amp:.1f}%, 成本 {avg_price:.2f}）'
+                )
 
-        # 无 HWM 数据 → -6% 保守底线
-        if hwm is None and float_pnl_pct <= -6.0:
-            return (
-                f'成本止损-6%（降级）：当前价 {current_price:.2f}'
-                f' 亏损 {float_pnl_pct:.2f}% 触及底线（成本 {avg_price:.2f}）'
-            )
+        # 从未盈利 → max(-4%, 振幅×0.40) 快速止损
+        if hwm is not None:
+            threshold = max(4.0, amp * 0.40)
+            if float_pnl_pct <= -threshold:
+                days_tag = f' 持仓约{hwm_days}天' if hwm_days else ''
+                return (
+                    f'成本止损-未盈利-{threshold:.1f}%：从未盈利{days_tag}，'
+                    f'当前亏损 {float_pnl_pct:.2f}% 触及止损线'
+                    f'（振幅 {amp:.1f}%, 成本 {avg_price:.2f}）'
+                )
+
+        # 无 HWM 数据 → max(-6%, 振幅×0.50) 保守底线
+        if hwm is None:
+            threshold = max(6.0, amp * 0.50)
+            if float_pnl_pct <= -threshold:
+                return (
+                    f'成本止损-{threshold:.1f}%（降级）：当前价 {current_price:.2f}'
+                    f' 亏损 {float_pnl_pct:.2f}% 触及底线（振幅 {amp:.1f}%, 成本 {avg_price:.2f}）'
+                )
 
         return None
+
+    # ── 规则 1: 板块背离止损（P0-1: 差值法 + P0c 极端行情阈值动态化） ──
+
+    def _is_extreme_panic(self) -> bool:
+        """P0c: 检查全市场主力净流出是否超过 300 亿（60s 周期缓存）。
+
+        300 亿是一个保守阈值——只有明确的全市场恐慌日才激活放宽逻辑。
+        """
+        cache_key = 'market_panic'
+        cached = getattr(self, '_market_panic_cache', None)
+        if cached:
+            ts, is_panic = cached
+            if time.time() - ts < 60:
+                return is_panic
+
+        try:
+            import urllib.request, json, ssl
+            ctx = ssl.create_default_context()
+            url = 'http://localhost:8000/api/v1/market/moneyflow-mkt'
+            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                inner = data.get('data', {})
+                # net_amount 单位为万元，300亿 = 3,000,000 万元，净流出为负值
+                net_amount = inner.get('net_amount', 0)
+                is_panic = net_amount < -3000000
+                self._market_panic_cache = (time.time(), is_panic)
+                if is_panic:
+                    logger.info(
+                        f"[StopLoss] 🔴 极端恐慌日检测: 全市场主力净流出 "
+                        f"{inner.get('net_amount_fmt', str(net_amount))}"
+                    )
+                return is_panic
+        except Exception as e:
+            logger.debug(f"[StopLoss] 大盘资金流获取失败: {e}")
+            return False
+
+    def _get_stock_main_net(self, symbol: str) -> Optional[float]:
+        """P0c STEP 1: 获取个股主力净流入（亿元），2s 超时。
+
+        Returns:
+            主力净流入（亿元），正值为流入、负值为流出。失败返回 None。
+        """
+        try:
+            import urllib.request, json, ssl, concurrent.futures
+
+            def _fetch():
+                ctx = ssl.create_default_context()
+                url = f'http://localhost:8000/api/v1/market/moneyflow/{symbol}'
+                req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+                with urllib.request.urlopen(req, context=ctx, timeout=3) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    # main_net 单位为元，转换为亿元
+                    main_net_yuan = data.get('main_net', 0) or 0
+                    return round(main_net_yuan / 1e8, 4)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_fetch)
+                return future.result(timeout=2)
+        except concurrent.futures.TimeoutError:
+            logger.debug(f"[StopLoss] 个股资金流超时 {symbol}")
+            return None
+        except Exception as e:
+            logger.debug(f"[StopLoss] 个股资金流获取失败 {symbol}: {e}")
+            return None
+
+    def _get_sector_main_net(self, symbol: str) -> Optional[float]:
+        """P0c STEP 2: 获取个股所属板块的主力净流入（亿元），60s 周期缓存。
+
+        先从 strategy_chain 确定板块名，再查询资金流数据。
+        """
+        try:
+            chain = self.strategy_chain
+            if chain is None:
+                return None
+            latest_scan = chain.get_latest_scan()
+            if not latest_scan:
+                return None
+            sector_data = latest_scan.get('sector_allocation', {})
+            if not sector_data:
+                return None
+
+            # 找到 symbol 所属的板块名
+            target_sector = None
+            for sector_name, sector_info in sector_data.items():
+                stocks = sector_info.get('stocks', []) if isinstance(sector_info, dict) else []
+                if symbol in stocks or any(
+                    s.get('symbol') == symbol for s in stocks if isinstance(s, dict)
+                ):
+                    target_sector = sector_name
+                    break
+            if not target_sector:
+                return None
+
+            # 先尝试从 sector_data 中直接取 main_net（如果扫描报告已包含）
+            sector_info = sector_data.get(target_sector, {})
+            if isinstance(sector_info, dict):
+                main_net = sector_info.get('main_net')
+                if main_net is not None:
+                    # main_net 可能是万元，转为亿元
+                    return round(float(main_net) / 10000, 4)
+
+            # 降级：HTTP 查询概念板块资金流
+            cache_key = 'sector_flow_cache'
+            cached = getattr(self, '_sector_flow_cache', None)
+            if cached:
+                ts, flow_map = cached
+                if time.time() - ts < 60 and target_sector in flow_map:
+                    return flow_map[target_sector]
+
+            import urllib.request, json, ssl
+            ctx = ssl.create_default_context()
+            url = 'http://localhost:8000/api/v1/market/concept-fund-flow?sort_by=main_net&limit=50'
+            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                items = data.get('data', [])
+                flow_map = {}
+                for item in items:
+                    name = item.get('name', '')
+                    # main_net 单位为万元 → 转亿元
+                    mn = item.get('main_net', 0) or 0
+                    flow_map[name] = round(float(mn) / 10000, 4)
+                self._sector_flow_cache = (time.time(), flow_map)
+                return flow_map.get(target_sector)
+        except Exception as e:
+            logger.debug(f"[StopLoss] 板块资金流获取失败 {symbol}: {e}")
+            return None
+
+    def _get_panic_divergence_threshold(self, symbol: str) -> float:
+        """P0c: 两步决策树——极端恐慌日规则 1 阈值动态化。
+
+        STEP 1: 检查个股自身主力资金（防真出货）
+        STEP 2: 检查板块资金强度分档
+
+        Returns:
+            调整后的 divergence 阈值（负值，单位 pp），-3/-5/-8
+        """
+        # STEP 1: 个股主力防线
+        stock_net = self._get_stock_main_net(symbol)
+        if stock_net is not None and stock_net < -0.3:
+            logger.info(
+                f"[StopLoss] P0c STEP1: {symbol} 个股主力净流出 {stock_net:.2f}亿 > 0.3亿，"
+                f"判定真出货，规则1阈值保持 -3pp"
+            )
+            return -3.0
+
+        # STEP 2: 板块资金分档
+        sector_net = self._get_sector_main_net(symbol)
+        if sector_net is None:
+            logger.debug(f"[StopLoss] P0c STEP2: {symbol} 板块资金数据不可得，阈值保持 -3pp")
+            return -3.0
+
+        if sector_net > 10.0:
+            logger.info(
+                f"[StopLoss] P0c: {symbol} 板块净流入 {sector_net:.1f}亿 > 10亿，"
+                f"高置信度错杀，规则1阈值 -3pp → -8pp"
+            )
+            return -8.0
+        elif sector_net > 0:
+            logger.info(
+                f"[StopLoss] P0c: {symbol} 板块净流入 {sector_net:.1f}亿 0~10亿，"
+                f"中等置信度错杀，规则1阈值 -3pp → -5pp"
+            )
+            return -5.0
+        else:
+            logger.debug(
+                f"[StopLoss] P0c STEP2: {symbol} 板块净流出 {sector_net:.1f}亿，"
+                f"无错杀基础，阈值保持 -3pp"
+            )
+            return -3.0
 
     # ── 规则 1: 板块背离止损（P0-1: 差值法） ──
 
     def _check_sector_divergence(self, symbol: str, float_pnl_pct: float) -> Optional[str]:
         """
         P0-1: 板块背离止损——差值法替代 3x 乘法。
-        触发条件：个股日收益 - 板块日收益 < -3pp（个股跑输板块 3 个百分点以上）
+        触发条件：个股日收益 - 板块日收益 < 阈值（默认 -3pp，极端恐慌日动态放宽）
         """
         if float_pnl_pct >= 0:
             return None
@@ -557,15 +741,23 @@ class StopLossMonitor:
             if not sector_data:
                 return None
 
+            # P0c: 极端恐慌日动态阈值（全市场流出 > 300亿时自动放宽）
+            threshold = -3.0
+            threshold_label = "-3pp"
+            if self._is_extreme_panic():
+                dynamic = self._get_panic_divergence_threshold(symbol)
+                if dynamic != -3.0:
+                    threshold = dynamic
+                    threshold_label = f"{threshold:.0f}pp(恐慌放宽)"
+
             for sector_name, sector_info in sector_data.items():
                 stocks = sector_info.get('stocks', []) if isinstance(sector_info, dict) else []
                 if symbol in stocks or any(s.get('symbol') == symbol for s in stocks if isinstance(s, dict)):
                     sector_pct = sector_info.get('pct_change', 0) if isinstance(sector_info, dict) else 0
-                    # 差值法：个股 - 板块 < -3pp
                     divergence = float_pnl_pct - sector_pct
-                    if divergence < -3.0:
+                    if divergence < threshold:
                         return (
-                            f'板块背离止损：板块{sector_name}({sector_pct:+.2f}%)，'
+                            f'板块背离止损[{threshold_label}]：板块{sector_name}({sector_pct:+.2f}%)，'
                             f'个股{float_pnl_pct:+.2f}%，跑输 {abs(divergence):.1f}pp'
                         )
         except Exception:
@@ -803,6 +995,54 @@ class StopLossMonitor:
             logger.debug(f"[StopLoss] 60分钟分析跳过 {symbol}: {e}")
             return None, 1.0
 
+    # ── 止损执行前 60 分钟趋势校验（P0b：恐慌错杀防线） ──
+
+    def _check_60min_trend_uptrend(self, symbol: str) -> bool:
+        """检查60分钟K线中期趋势是否仍为上升（MA10 > MA30）。
+
+        止损执行前的最后一道防线：若中期上升趋势未破，
+        当前下跌更可能是短期恐慌而非趋势反转。
+
+        Returns:
+            True  = MA10 > MA30, 上升趋势成立（应暂停止损）
+            False = MA10 ≤ MA30 或数据不可得（继续执行止损）
+        """
+        import concurrent.futures
+
+        try:
+            from app.api.indicator import _normalize_to_ts_code
+            ts_code = _normalize_to_ts_code(symbol)
+        except Exception:
+            return False
+
+        def _fetch_and_check():
+            try:
+                from app.core.trading._60min_analysis import (
+                    _fetch_60min_bars_merged, _sma
+                )
+                bars = _fetch_60min_bars_merged(ts_code)
+                if not bars or len(bars) < 10:
+                    return False
+                closes = [b["close"] for b in bars]
+                ma10 = _sma(closes, 10)
+                ma30 = _sma(closes, 30)
+                if len(ma10) < 1 or len(ma30) < 1:
+                    return False
+                return ma10[-1] > ma30[-1]
+            except Exception:
+                return False
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_fetch_and_check)
+                return future.result(timeout=3)
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"[StopLoss] 60分钟趋势检查超时 {symbol}，跳过校验")
+            return False
+        except Exception as e:
+            logger.debug(f"[StopLoss] 60分钟趋势检查异常 {symbol}: {e}")
+            return False
+
     # ── 规则 3: 大盘相对表现止损（P1-2） ──
 
     def _check_dynamic_stop(self, float_pnl_pct: float, market_pct: float, symbol: str = "") -> Optional[str]:
@@ -1025,22 +1265,27 @@ class StopLossMonitor:
         if max_profit_pct >= 5:
             return None
 
-        # 曾小盈(3-5%) → -3% 止损线
+        amp = self._get_amplitude_pct(symbol)
+
+        # 曾小盈(3-5%) → max(-3%, 振幅×0.40) 止损线
         if max_profit_pct >= 3:
-            return round(float_pnl_pct + 3.0, 2)  # distance to -3%
+            threshold = max(3.0, amp * 0.40)
+            return round(float_pnl_pct + threshold, 2)
 
-        # 从未盈利 → -4% 止损线
+        # 从未盈利 → max(-4%, 振幅×0.40) 止损线
         if hwm is not None:
-            return round(float_pnl_pct + 4.0, 2)  # distance to -4%
+            threshold = max(4.0, amp * 0.40)
+            return round(float_pnl_pct + threshold, 2)
 
-        # 无 HWM → -6% 底线
+        # 无 HWM → max(-6%, 振幅×0.50) 底线
         if hwm is None:
-            return round(float_pnl_pct + 6.0, 2)  # distance to -6%
+            threshold = max(6.0, amp * 0.50)
+            return round(float_pnl_pct + threshold, 2)
 
         return None
 
     def _calc_sector_distance(self, symbol: str, float_pnl_pct: float) -> Optional[float]:
-        """规则 1：当前背离值到 -3pp 触发线的距离(%)"""
+        """规则 1：当前背离值到触发线的距离(%)，含 P0c 极端行情动态阈值"""
         if float_pnl_pct >= 0:
             return None  # 仅在亏损时适用
 
@@ -1057,12 +1302,18 @@ class StopLossMonitor:
             if not sector_data:
                 return None
 
+            # P0c: 极端恐慌日动态阈值
+            threshold_abs = 3.0
+            if self._is_extreme_panic():
+                dynamic = self._get_panic_divergence_threshold(symbol)
+                threshold_abs = abs(dynamic)
+
             for sector_name, sector_info in sector_data.items():
                 stocks = sector_info.get('stocks', []) if isinstance(sector_info, dict) else []
                 if symbol in stocks or any(s.get('symbol') == symbol for s in stocks if isinstance(s, dict)):
                     sector_pct = sector_info.get('pct_change', 0) if isinstance(sector_info, dict) else 0
                     divergence = float_pnl_pct - sector_pct
-                    return round(divergence + 3.0, 2)  # distance to -3pp
+                    return round(divergence + threshold_abs, 2)
         except Exception:
             pass
 
@@ -1205,6 +1456,22 @@ class StopLossMonitor:
                 f"[StopLoss] ⏸️ 早盘冷静期，延迟卖出: {symbol} @ {price} | {reason}"
             )
             print(f"[止损] ⏸️ {symbol} 早盘冷静期，延迟卖出: {reason}", file=sys.stderr)
+            return
+
+        # P0b: 60分钟趋势校验 — 止损触发前确认中期趋势是否真的走坏
+        panic_count = self._panic_suspension_count.get(symbol, 0)
+        if panic_count < 3 and self._check_60min_trend_uptrend(symbol):
+            self._panic_suspension_count[symbol] = panic_count + 1
+            logger.warning(
+                f"[StopLoss] 🟡 恐慌错杀警戒: {symbol} @ {price} | "
+                f"60分钟 MA10>MA30 上升趋势未破，暂停止损 "
+                f"(第{panic_count + 1}/3次) | 原触发: {reason}"
+            )
+            print(
+                f"[止损] 🟡 {symbol} 恐慌错杀警戒(第{panic_count + 1}/3次): "
+                f"60分钟上升趋势未破，暂停止损 | {reason}",
+                file=sys.stderr
+            )
             return
 
         trigger_key = f"{symbol}_{price:.2f}"
