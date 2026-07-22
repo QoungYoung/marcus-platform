@@ -515,23 +515,14 @@ class StopLossMonitor:
         # 动态阈值：基于近5日日均振幅自适应扩宽
         amp = self._get_amplitude_pct(symbol)
 
-        # 曾小盈(3-5%) → max(-3%, 振幅×0.40) 止损
-        if max_profit_pct >= 3:
+        # 有 HWM → max(-3%, 振幅×0.40) 统一止损（合并原"小盈转亏"和"从未盈利"两档）
+        if hwm is not None:
             threshold = max(3.0, amp * 0.40)
             if float_pnl_pct <= -threshold:
-                return (
-                    f'成本止损-小盈转亏：曾浮盈 +{max_profit_pct:.1f}% → '
-                    f'现亏损 {float_pnl_pct:.2f}% 触及 -{threshold:.1f}% 止损线'
-                    f'（振幅 {amp:.1f}%, 成本 {avg_price:.2f}）'
-                )
-
-        # 从未盈利 → max(-4%, 振幅×0.40) 快速止损
-        if hwm is not None:
-            threshold = max(4.0, amp * 0.40)
-            if float_pnl_pct <= -threshold:
+                profit_tag = f'曾浮盈 +{max_profit_pct:.1f}% → ' if max_profit_pct >= 3 else ''
                 days_tag = f' 持仓约{hwm_days}天' if hwm_days else ''
                 return (
-                    f'成本止损-未盈利-{threshold:.1f}%：从未盈利{days_tag}，'
+                    f'成本止损-{threshold:.1f}%：{profit_tag}'
                     f'当前亏损 {float_pnl_pct:.2f}% 触及止损线'
                     f'（振幅 {amp:.1f}%, 成本 {avg_price:.2f}）'
                 )
@@ -1267,14 +1258,9 @@ class StopLossMonitor:
 
         amp = self._get_amplitude_pct(symbol)
 
-        # 曾小盈(3-5%) → max(-3%, 振幅×0.40) 止损线
-        if max_profit_pct >= 3:
-            threshold = max(3.0, amp * 0.40)
-            return round(float_pnl_pct + threshold, 2)
-
-        # 从未盈利 → max(-4%, 振幅×0.40) 止损线
+        # 有 HWM → max(-3%, 振幅×0.40) 统一止损线（合并原两档）
         if hwm is not None:
-            threshold = max(4.0, amp * 0.40)
+            threshold = max(3.0, amp * 0.40)
             return round(float_pnl_pct + threshold, 2)
 
         # 无 HWM → max(-6%, 振幅×0.50) 底线

@@ -20,6 +20,11 @@
 - [x] 3.4 添加 `_get_panic_divergence_threshold(symbol)` 方法：实现两步决策树。STEP 1 检查个股主力是否在出货（净流出 > 0.3 亿）→ 返回 -3pp。STEP 2 按板块资金分档 → 返回 -5pp 或 -8pp
 - [x] 3.5 修改 `_check_sector_divergence`：在现有固定 `-3pp` 判断之前，先检查 `_is_extreme_panic()`，若是则用 `_get_panic_divergence_threshold` 替换硬编码阈值
 
+## 5. P2: 合并"从未盈利"+"小盈转亏"为统一公式
+
+- [x] 5.1 `_check_cost_stop` 有 HWM 分支合并为 `max(-3%, 振幅×0.40)` 统一公式，移除 max_profit_pct 边界判断
+- [x] 5.2 `_calc_cost_stop_distance` 同步合并两档为统一公式
+
 ## 4. 验证
 
 - [ ] 4.1 用豫能控股 07-20 行情数据验证 P0a：振幅 12.37%，从未盈利止损线应为 -4.95%
