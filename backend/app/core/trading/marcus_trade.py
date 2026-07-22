@@ -388,25 +388,70 @@ class MarcusVNPyExecutor:
         except Exception as e:
             print(f"[日志] 记录交易失败: {e}")
     
+    # 费率常量（与 paper_engine.py 及 portfolio.py 保持一致）
+    _BUY_COMMISSION = 0.0005   # 买入手续费 0.05%
+    _SELL_FEE_RATE = 0.0015    # 卖出手续费 0.05% + 印花税 0.1%
+
     def get_account(self) -> dict:
-        """获取账户信息 (标准化字段名)"""
+        """获取账户信息 (标准化字段名)
+
+        available_cash 通过 FIFO 交易重放计算，不依赖 account_info 表
+        （该表可能因多实例并发写入而漂移）。
+        """
+        import sqlite3
+
         raw = self.engine.get_account_info()
-        
-        # 计算正确的总盈亏 = 浮动盈亏 + 已实现盈亏
         initial_capital = parse_float_chinese(raw.get('初始资金', 1000000))
-        available_cash = parse_float_chinese(raw.get('可用资金', 0))
-        
-        # 持仓成本
+        frozen_cash = parse_float_chinese(raw.get('冻结资金', 0))
+
+        # 从 trades.db 获取全部成交（FIFO 排序）
+        data_dir = Path(self.data_dir) if isinstance(self.data_dir, str) else self.data_dir
+        conn = sqlite3.connect(str(data_dir / "trades.db"), timeout=30)
+        cursor = conn.cursor()
+        conn.execute("PRAGMA busy_timeout=30000")
+        cursor.execute(
+            'SELECT symbol, direction, price, volume FROM trades '
+            'WHERE voided = 0 OR voided IS NULL '
+            'ORDER BY COALESCE(trade_date, DATE(created_at)), id'
+        )
+        trades = cursor.fetchall()
+
+        # ── FIFO 重放：从交易记录重建 available_cash ──
+        available_cash = initial_capital
+        for symbol, direction, price, volume in trades:
+            if direction == '买入':
+                cost = price * volume * (1 + self._BUY_COMMISSION)
+                available_cash -= cost
+            elif direction == '卖出':
+                gross = price * volume
+                sell_fee = gross * self._SELL_FEE_RATE
+                available_cash += gross - sell_fee
+
+        # 已实现盈亏
+        cursor.execute('SELECT SUM(profit) FROM trades WHERE direction = "卖出" AND (voided = 0 OR voided IS NULL)')
+        realized_pnl = cursor.fetchone()[0] or 0
+
+        # 同步纠正：若 account_info.available_cash 已漂移，用 FIFO 重放值覆盖
+        engine_cash = parse_float_chinese(raw.get('可用资金', 0))
+        if abs(engine_cash - available_cash) > 0.01:
+            print(
+                f"[AccountFix] account_info.available_cash 漂移 {engine_cash - available_cash:+.2f}，"
+                f"已纠正为 {available_cash:,.2f}",
+                file=sys.stderr
+            )
+            self.engine.available_cash = available_cash
+            self.engine._save_account()
+        conn.close()
+
+        # 持仓成本与市值
         positions = self.engine.get_positions()
         total_cost = sum(pos['volume'] * pos['avg_price'] for pos in positions)
-        
-        # 用雪球实时价格计算持仓市值和浮动盈亏（腾讯 qt.gtimg.cn）
+
         from xueqiu_engine import XueqiuEngine
         xq_config = str(XUEQIU_DIR / "config.json")
         xueqiu = XueqiuEngine(config_file=xq_config)
         position_value = 0
-        float_pnl = 0
-        
+
         try:
             for pos in positions:
                 try:
@@ -421,27 +466,11 @@ class MarcusVNPyExecutor:
         except Exception as e:
             print(f"[警告] 获取实时价格失败：{e}")
             position_value = total_cost
-        
-        float_pnl = position_value - total_cost
-        
-        # 已实现盈亏 = 从 trades 表查询
-        import sqlite3
-        data_dir = Path(self.data_dir) if isinstance(self.data_dir, str) else self.data_dir
-        conn = sqlite3.connect(str(data_dir / "trades.db"), timeout=30)
-        cursor = conn.cursor()
-        conn.execute("PRAGMA busy_timeout=30000")
-        cursor.execute('SELECT SUM(profit) FROM trades WHERE direction = "卖出" AND (voided = 0 OR voided IS NULL)')
-        realized_pnl = cursor.fetchone()[0] or 0
-        conn.close()
-        
-        # 总盈亏 = 总资产 - 初始资金（保证与 total_asset 始终一致）
-        frozen_cash = parse_float_chinese(raw.get('冻结资金', 0))
-        # 🔧 修复：总资产应包含冻结资金（委托未成交时资金已冻结但尚未转为持仓）
+
         total_asset = available_cash + frozen_cash + position_value
         total_pnl = total_asset - initial_capital
-        # 🔧 derived_float_pnl = total_pnl - realized_pnl（保证三数自洽）
         derived_float_pnl = total_pnl - realized_pnl
-        
+
         return {
             'initial_capital': initial_capital,
             'available_cash': available_cash,
