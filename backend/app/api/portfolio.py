@@ -3,15 +3,17 @@
 Portfolio API endpoints.
 """
 import sys
-import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi import Query
+from sqlalchemy import func
 
 from app.config import get_settings
+from app.database import SessionLocal
 from app.models.account import AccountResponse, PositionResponse, PortfolioSummary, EquityPoint
+from app.models.paper_trade import PaperAccountInfo, PaperTrade, PaperDailySnapshot, PaperOrder
 
 settings = get_settings()
 
@@ -128,84 +130,65 @@ def get_realtime_prices(symbols: list) -> dict:
 
 
 def calculate_positions_from_db():
-    """Calculate current positions and available_cash from trades.db using FIFO replay.
+    """Calculate current positions from PostgreSQL paper_trades using FIFO replay.
 
-    不再依赖 account_info.available_cash（可能因引擎异常而偏离），
-    完全从交易记录重放资金流水，确保 total_asset 与持仓自洽。
+    available_cash 直接从 paper_account_info 读取（PostgreSQL FOR UPDATE 行锁保证一致性）。
 
     Returns:
         (position_list, account, realized_pnl, win_rate)
     """
-    import sqlite3
+    db = SessionLocal()
+    try:
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        if not acct:
+            return [], {"available_cash": 0, "initial_capital": 1000000, "frozen_cash": 0}, 0, 0
 
-    db_file = settings.data_dir / "trades.db"
-    if not db_file.exists():
-        return [], {"available_cash": 0, "initial_capital": 1000000, "frozen_cash": 0}, 0, 0
+        initial_cap = float(acct.initial_capital)
+        available_cash = float(acct.available_cash)
+        frozen_cash = float(acct.frozen_cash or 0)
 
-    conn = sqlite3.connect(str(db_file), timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
-    curs = conn.cursor()
+        trades = db.query(PaperTrade).filter(
+            (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+        ).order_by(
+            func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),
+            PaperTrade.id
+        ).all()
 
-    # 只读取 initial_capital 和 frozen_cash（initial 不变，frozen 由 orders 表决定）
-    curs.execute("SELECT initial_capital, frozen_cash FROM account_info WHERE id=1")
-    account_row = curs.fetchone()
-    if not account_row:
-        initial_cap = 1000000.0
-        frozen_cash = 0.0
-    else:
-        initial_cap = account_row["initial_capital"]
-        frozen_cash = account_row["frozen_cash"] or 0.0
+        realized_pnl = float(
+            db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                PaperTrade.direction == '卖出',
+                (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+            ).scalar() or 0
+        )
 
-    # 获取全部成交，排序策略与 paper_engine 一致
-    curs.execute("""
-        SELECT id, symbol, direction, price, volume, trade_date, created_at
-        FROM trades
-        WHERE voided = 0 OR voided IS NULL
-        ORDER BY COALESCE(trade_date, DATE(created_at)), id
-    """)
-    trades = curs.fetchall()
+        total_sells = db.query(func.count()).filter(
+            PaperTrade.direction == '卖出',
+            (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+        ).scalar() or 0
+        wins = db.query(func.count()).filter(
+            PaperTrade.direction == '卖出',
+            PaperTrade.profit > 0,
+            (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+        ).scalar() or 0
+        win_rate = round(wins / total_sells * 100, 1) if total_sells > 0 else 0.0
+    finally:
+        db.close()
 
-    # ── 同时查询 realized_pnl 和 win_rate（复用连接）──
-    curs.execute("SELECT SUM(profit) FROM trades WHERE direction='卖出' AND (voided = 0 OR voided IS NULL)")
-    row = curs.fetchone()
-    realized_pnl = float(row[0]) if row and row[0] else 0.0
-
-    curs.execute("SELECT COUNT(*) as total, SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins FROM trades WHERE direction='卖出' AND (voided = 0 OR voided IS NULL)")
-    row = curs.fetchone()
-    if row and row["total"] > 0:
-        win_rate = round(row["wins"] / row["total"] * 100, 1)
-    else:
-        win_rate = 0.0
-
-    conn.close()
-
-    # ── FIFO 重放：同时计算持仓和资金 ──
-    available_cash = initial_cap
+    # ── FIFO 重放：仅计算持仓（资金已从 paper_account_info 直接读取） ──
     positions = {}
-
     for trade in trades:
-        symbol = trade['symbol']
-        direction = trade['direction']
-        price = trade['price']
-        volume = trade['volume']
+        symbol = trade.symbol
+        direction = trade.direction
+        price = trade.price
+        volume = trade.volume
 
         if direction == '买入':
-            cost = price * volume * (1 + _BUY_COMMISSION)
-            available_cash -= cost
-            entry_date = trade['trade_date'] or (trade['created_at'][:10] if trade['created_at'] else '')
+            entry_date = trade.trade_date or (trade.created_at[:10] if trade.created_at else '')
             positions.setdefault(symbol, []).append({'price': price, 'volume': volume, 'entry_date': entry_date})
-
         elif direction == '卖出':
             lots = positions.get(symbol, [])
             if not lots:
                 continue
-
-            gross = price * volume
-            sell_fee = gross * _SELL_FEE_RATE
-            available_cash += gross - sell_fee
-
-            # FIFO 出库
             remaining = volume
             i = 0
             while remaining > 0 and i < len(lots):
@@ -248,48 +231,37 @@ def _calc_week_pnl(positions: list) -> tuple:
     本周已实现：本周一至今日所有卖出交易的 profit 之和
     本周浮盈：本周内有买入记录的当前持仓的浮盈之和
     """
-    from datetime import datetime, timedelta
-
-    db_file = settings.data_dir / "trades.db"
-    if not db_file.exists():
-        return 0.0, 0.0
-
     today = datetime.now()
     monday = today - timedelta(days=today.weekday())
     monday_str = monday.strftime('%Y-%m-%d')
 
-    conn = sqlite3.connect(str(db_file), timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
-    curs = conn.cursor()
+    db = SessionLocal()
+    try:
+        week_realized = float(
+            db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                PaperTrade.direction == '卖出',
+                (PaperTrade.voided == 0) | (PaperTrade.voided == None),
+                func.substr(PaperTrade.created_at, 1, 10) >= monday_str
+            ).scalar() or 0
+        )
 
-    # 本周已实现盈亏
-    curs.execute(
-        "SELECT COALESCE(SUM(profit), 0) FROM trades "
-        "WHERE direction='卖出' AND (voided = 0 OR voided IS NULL) "
-        "AND DATE(created_at) >= ?",
-        (monday_str,),
-    )
-    week_realized = float(curs.fetchone()[0])
+        week_bought = {
+            row[0] for row in
+            db.query(PaperTrade.symbol).filter(
+                PaperTrade.direction == '买入',
+                (PaperTrade.voided == 0) | (PaperTrade.voided == None),
+                func.substr(PaperTrade.created_at, 1, 10) >= monday_str
+            ).distinct().all()
+        }
+    finally:
+        db.close()
 
-    # 本周买入过的标的
-    curs.execute(
-        "SELECT DISTINCT symbol FROM trades "
-        "WHERE direction='买入' AND (voided = 0 OR voided IS NULL) "
-        "AND DATE(created_at) >= ?",
-        (monday_str,),
-    )
-    week_bought = {row[0] for row in curs.fetchall()}
-    conn.close()
-
-    # 本周浮盈 = 本周买入过且当前仍持仓的浮盈
     week_float = sum(p.floating_pnl for p in positions if p.symbol in week_bought)
-
     return week_realized, week_float
 
 
 def save_daily_snapshot(target_date: str = None) -> dict:
-    """Compute and persist a daily portfolio snapshot to trades.db.
+    """Compute and persist a daily portfolio snapshot to PostgreSQL paper_daily_snapshot.
 
     Uses FIFO trade replay to determine positions up to target_date,
     values positions at real-time market prices for today, or at cost for historical dates.
@@ -299,68 +271,43 @@ def save_daily_snapshot(target_date: str = None) -> dict:
     if target_date is None:
         target_date = datetime.now().strftime('%Y-%m-%d')
 
-    db_file = settings.data_dir / "trades.db"
-    if not db_file.exists():
-        return {'success': False, 'error': 'trades.db not found'}
+    db = SessionLocal()
+    try:
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        if not acct:
+            return {'success': False, 'error': 'No account_info found'}
+        initial_cap = float(acct.initial_capital)
+        frozen_cash = float(acct.frozen_cash or 0)
 
-    conn = sqlite3.connect(str(db_file), timeout=30)
-    conn.execute("PRAGMA busy_timeout=30000")
-    conn.row_factory = sqlite3.Row
-    curs = conn.cursor()
+        trades = db.query(PaperTrade).filter(
+            (PaperTrade.voided == 0) | (PaperTrade.voided == None),
+            (PaperTrade.trade_date <= target_date) |
+            ((PaperTrade.trade_date == None) & (func.substr(PaperTrade.created_at, 1, 10) <= target_date))
+        ).order_by(
+            func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),
+            PaperTrade.id
+        ).all()
 
-    # Ensure table exists (idempotent)
-    curs.execute('''
-        CREATE TABLE IF NOT EXISTS daily_snapshot (
-            trade_date TEXT PRIMARY KEY,
-            total_asset REAL NOT NULL,
-            available_cash REAL NOT NULL,
-            frozen_cash REAL DEFAULT 0,
-            position_value REAL DEFAULT 0,
-            cost_value REAL DEFAULT 0,
-            realized_pnl REAL DEFAULT 0,
-            float_pnl REAL DEFAULT 0,
-            total_pnl REAL DEFAULT 0,
-            initial_capital REAL NOT NULL,
-            created_at TEXT NOT NULL
+        realized_pnl = float(
+            db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                PaperTrade.direction == '卖出',
+                (PaperTrade.voided == 0) | (PaperTrade.voided == None),
+                (PaperTrade.trade_date <= target_date) |
+                ((PaperTrade.trade_date == None) & (func.substr(PaperTrade.created_at, 1, 10) <= target_date))
+            ).scalar() or 0
         )
-    ''')
+    finally:
+        db.close()
 
-    # Read initial_capital and frozen_cash
-    curs.execute("SELECT initial_capital, frozen_cash FROM account_info WHERE id=1")
-    row = curs.fetchone()
-    if not row:
-        conn.close()
-        return {'success': False, 'error': 'No account_info found'}
-    initial_cap = row['initial_capital']
-    frozen_cash = row['frozen_cash'] or 0.0
-
-    # Read all trades up to target_date
-    curs.execute("""
-        SELECT id, symbol, direction, price, volume, trade_date, created_at
-        FROM trades
-        WHERE (voided = 0 OR voided IS NULL)
-          AND (trade_date <= ? OR (trade_date IS NULL AND DATE(created_at) <= ?))
-        ORDER BY COALESCE(trade_date, DATE(created_at)), id
-    """, (target_date, target_date))
-    trades = curs.fetchall()
-
-    # Get realized PnL up to target_date
-    curs.execute("""
-        SELECT COALESCE(SUM(profit), 0) FROM trades
-        WHERE direction='卖出'
-          AND (trade_date <= ? OR (trade_date IS NULL AND DATE(created_at) <= ?))
-    """, (target_date, target_date))
-    realized_pnl = float(curs.fetchone()[0])
-
-    # FIFO replay to compute positions and available_cash
+    # ── FIFO 重放：计算截至 target_date 的持仓和资金 ──
     available_cash = initial_cap
     positions_lots = {}
 
     for t in trades:
-        sym = t['symbol']
-        direction = t['direction']
-        price = t['price']
-        volume = t['volume']
+        sym = t.symbol
+        direction = t.direction
+        price = t.price
+        volume = t.volume
 
         if direction == '买入':
             cost = price * volume * (1 + _BUY_COMMISSION)
@@ -384,7 +331,6 @@ def save_daily_snapshot(target_date: str = None) -> dict:
                 else:
                     i += 1
 
-    # Build position list for valuation
     position_list = []
     for sym, lots in positions_lots.items():
         if not lots:
@@ -393,7 +339,6 @@ def save_daily_snapshot(target_date: str = None) -> dict:
         avg_price = sum(l['price'] * l['volume'] for l in lots) / total_vol
         position_list.append({'symbol': sym, 'volume': total_vol, 'avg_price': avg_price})
 
-    # Determine valuation: market prices for today, cost for historical
     today_str = datetime.now().strftime('%Y-%m-%d')
     is_today = (target_date == today_str)
     price_source = 'cost'
@@ -419,16 +364,38 @@ def save_daily_snapshot(target_date: str = None) -> dict:
     float_pnl = position_value - cost_value
     total_pnl = total_asset - initial_cap
 
-    curs.execute('''
-        INSERT OR REPLACE INTO daily_snapshot
-        (trade_date, total_asset, available_cash, frozen_cash, position_value,
-         cost_value, realized_pnl, float_pnl, total_pnl, initial_capital, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (target_date, total_asset, available_cash, frozen_cash, position_value,
-          cost_value, realized_pnl, float_pnl, total_pnl, initial_cap, datetime.now().isoformat()))
-
-    conn.commit()
-    conn.close()
+    # ── Upsert into PostgreSQL ──
+    db = SessionLocal()
+    try:
+        snap = db.query(PaperDailySnapshot).filter(PaperDailySnapshot.trade_date == target_date).first()
+        if snap:
+            snap.total_asset = total_asset
+            snap.available_cash = available_cash
+            snap.frozen_cash = frozen_cash
+            snap.position_value = position_value
+            snap.cost_value = cost_value
+            snap.realized_pnl = realized_pnl
+            snap.float_pnl = float_pnl
+            snap.total_pnl = total_pnl
+            snap.initial_capital = initial_cap
+            snap.created_at = datetime.now().isoformat()
+        else:
+            db.add(PaperDailySnapshot(
+                trade_date=target_date,
+                total_asset=total_asset,
+                available_cash=available_cash,
+                frozen_cash=frozen_cash,
+                position_value=position_value,
+                cost_value=cost_value,
+                realized_pnl=realized_pnl,
+                float_pnl=float_pnl,
+                total_pnl=total_pnl,
+                initial_capital=initial_cap,
+                created_at=datetime.now().isoformat(),
+            ))
+        db.commit()
+    finally:
+        db.close()
 
     return {
         'success': True,
@@ -617,32 +584,20 @@ async def get_positions():
 @router.post("/unfreeze")
 async def unfreeze_funds():
     """Manually unfreeze all frozen funds.
-    
+
     Used when trading exceptions cause funds to be incorrectly frozen.
     Moves all frozen_cash back to available_cash and cancels any stuck orders.
     """
-    db_file = settings.data_dir / "trades.db"
-    if not db_file.exists():
-        raise HTTPException(status_code=404, detail="交易数据库不存在")
-    
+    db = SessionLocal()
     try:
-        conn = sqlite3.connect(str(db_file), timeout=30)
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.row_factory = sqlite3.Row
-        curs = conn.cursor()
-        
-        # Read current account
-        curs.execute("SELECT * FROM account_info WHERE id=1")
-        account = curs.fetchone()
-        if not account:
-            conn.close()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        if not acct:
             raise HTTPException(status_code=404, detail="账户信息不存在")
-        
-        frozen = account['frozen_cash']
-        available = account['available_cash']
-        
+
+        frozen = float(acct.frozen_cash or 0)
+        available = float(acct.available_cash or 0)
+
         if frozen <= 0:
-            conn.close()
             return {
                 "success": True,
                 "message": "没有冻结资金需要解冻",
@@ -651,28 +606,25 @@ async def unfreeze_funds():
                 "frozen_cash": 0,
                 "orders_cancelled": 0,
             }
-        
-        # Cancel any stuck orders (status = 'submitting' or 'submitted')
-        curs.execute(
-            "SELECT COUNT(*) as cnt FROM orders WHERE status IN ('submitting', 'submitted')"
-        )
-        stuck_count = curs.fetchone()['cnt']
-        
+
+        stuck_count = db.query(PaperOrder).filter(
+            PaperOrder.status.in_(['提交中', '未成交'])
+        ).count()
+
         if stuck_count > 0:
-            curs.execute(
-                "UPDATE orders SET status='cancelled', cancelled_at=datetime('now', 'localtime') "
-                "WHERE status IN ('submitting', 'submitted')"
+            db.query(PaperOrder).filter(
+                PaperOrder.status.in_(['提交中', '未成交'])
+            ).update(
+                {PaperOrder.status: '已撤销', PaperOrder.updated_at: datetime.now().isoformat()},
+                synchronize_session=False
             )
-        
-        # Unfreeze funds
+
         new_available = available + frozen
-        curs.execute(
-            "UPDATE account_info SET available_cash=?, frozen_cash=0, updated_at=? WHERE id=1",
-            (new_available, datetime.now().isoformat())
-        )
-        conn.commit()
-        conn.close()
-        
+        acct.available_cash = new_available
+        acct.frozen_cash = 0
+        acct.updated_at = datetime.now().isoformat()
+        db.commit()
+
         return {
             "success": True,
             "message": f"已解冻 ¥{frozen:,.2f}，取消 {stuck_count} 笔卡住订单",
@@ -685,6 +637,8 @@ async def unfreeze_funds():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解冻失败: {str(e)}")
+    finally:
+        db.close()
 
 
 @router.post("/daily-snapshot")
@@ -692,7 +646,7 @@ async def trigger_daily_snapshot(date: str = Query(None, description="Target dat
     """Manually trigger a daily portfolio snapshot.
 
     Computes current positions and total_asset (valued at market prices for today,
-    at cost for historical dates) and persists to trades.db::daily_snapshot.
+    at cost for historical dates) and persists to PostgreSQL paper_daily_snapshot.
     """
     result = save_daily_snapshot(target_date=date)
     if not result.get('success'):
@@ -710,44 +664,31 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     """
     from datetime import datetime as dt, timedelta
 
-    db_file = settings.data_dir / "trades.db"
-    if not db_file.exists():
-        return []
+    db = SessionLocal()
+    try:
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        initial_capital = float(acct.initial_capital) if acct else 1000000.0
 
-    conn = sqlite3.connect(str(db_file), timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")
-    curs = conn.cursor()
+        all_trades = db.query(PaperTrade).filter(
+            (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+        ).order_by(PaperTrade.trade_date, PaperTrade.id).all()
 
-    curs.execute("CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades(direction, created_at)")
+        snapshots = {}
+        for snap in db.query(PaperDailySnapshot).order_by(PaperDailySnapshot.trade_date).all():
+            snapshots[snap.trade_date] = snap.total_asset
+    finally:
+        db.close()
 
-    # Get initial capital
-    curs.execute("SELECT initial_capital FROM account_info WHERE id=1")
-    row = curs.fetchone()
-    initial_capital = row["initial_capital"] if row else 1000000.0
-
-    # 获取全部成交，按 trade_date, id 排序（与 FIFO 策略一致）
-    curs.execute("""
-        SELECT id, symbol, direction, price, volume, trade_date, created_at
-        FROM trades
-        WHERE voided = 0 OR voided IS NULL
-        ORDER BY trade_date, id
-    """)
-    all_trades = curs.fetchall()
-
-    # 按日期分组 trade（使用 trade_date 作为日期）
+    # 按日期分组 trade
     trades_by_date = {}
     for t in all_trades:
-        # trade_date 可能为 NULL（旧数据），回退到 created_at 的日期部分
-        td = t["trade_date"] or (t["created_at"][:10] if t["created_at"] else None)
+        td = t.trade_date or (t.created_at[:10] if t.created_at else None)
         if td:
             trades_by_date.setdefault(td, []).append(t)
 
     if not trades_by_date:
-        conn.close()
         return []
 
-    # 找到最早 & 最晚日期
     sorted_dates = sorted(trades_by_date.keys())
     min_trade_date = dt.strptime(sorted_dates[0], "%Y-%m-%d")
     today = dt.now()
@@ -755,16 +696,6 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     if start_date < min_trade_date:
         start_date = min_trade_date
 
-    # 读取已落库的快照（市价估值优先）
-    snapshots = {}
-    try:
-        curs.execute("SELECT trade_date, total_asset FROM daily_snapshot ORDER BY trade_date")
-        for row in curs.fetchall():
-            snapshots[row['trade_date']] = row['total_asset']
-    except sqlite3.OperationalError:
-        pass  # 表还不存在，全部回退到成本价重放
-
-    # 获取当前持仓的实时价格（仅用于最后一天）
     today_str = today.strftime("%Y-%m-%d")
     current_positions, _account, _realized, _winrate = calculate_positions_from_db()
     symbols = [p['symbol'] for p in current_positions]
@@ -772,33 +703,27 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
     # ── 逐日重放交易，计算每日权益 ──
     available_cash = initial_capital
-    positions = {}  # symbol -> [{'price': float, 'volume': int}, ...]
+    positions = {}
 
-    # 先处理 start_date 之前的所有 trade
     for d in sorted_dates:
         if d >= start_date.strftime("%Y-%m-%d"):
             break
         for t in trades_by_date.get(d, []):
             available_cash, positions = _apply_trade(t, available_cash, positions)
 
-    # 生成每日权益曲线（截至昨日，当日实时权益由 /portfolio 接口提供）
     yesterday = today - timedelta(days=1)
     result = []
     current = start_date
     while current <= yesterday and len(result) < days:
         date_str = current.strftime("%Y-%m-%d")
 
-        # 应用当日的交易
         for t in trades_by_date.get(date_str, []):
             available_cash, positions = _apply_trade(t, available_cash, positions)
 
-        # 计算当日持仓市值
         if date_str in snapshots:
-            # 已落库的快照：直接使用市价估值
             equity = snapshots[date_str]
         else:
             if date_str == today_str:
-                # 当日：使用实时市价
                 position_value = 0.0
                 for sym, lots in positions.items():
                     total_vol = sum(l['volume'] for l in lots)
@@ -809,11 +734,9 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
                         else:
                             price = price_data if isinstance(price_data, (int, float)) else None
                         if not price:
-                            # 实时价不可用时回退到成本价
                             price = sum(l['price'] * l['volume'] for l in lots) / total_vol
                         position_value += price * total_vol
             else:
-                # 历史日：使用持仓成本价估值
                 position_value = sum(
                     l['price'] * l['volume']
                     for lots in positions.values()
@@ -824,9 +747,6 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
         current += timedelta(days=1)
 
-    conn.close()
-
-    # Limit to most recent N days
     if len(result) > days:
         result = result[-days:]
 
@@ -836,11 +756,18 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
 
 def _apply_trade(trade, cash: float, positions: dict) -> tuple:
-    """将一笔成交应用到账户状态，返回 (new_cash, new_positions)"""
-    symbol = trade["symbol"]
-    direction = trade["direction"]
-    price = trade["price"]
-    volume = trade["volume"]
+    """将一笔成交应用到账户状态，返回 (new_cash, new_positions)
+
+    支持 SQLAlchemy ORM 对象 (attr access) 和 dict (key access)。
+    """
+    # 兼容 ORM 对象和 dict
+    if hasattr(trade, 'symbol'):
+        symbol, direction, price, volume = trade.symbol, trade.direction, trade.price, trade.volume
+    else:
+        symbol = trade["symbol"]
+        direction = trade["direction"]
+        price = trade["price"]
+        volume = trade["volume"]
 
     if direction == '买入':
         cost = price * volume * (1 + _BUY_COMMISSION)

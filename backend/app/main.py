@@ -129,19 +129,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Main] ⚠️ 长期候选池监控启动失败: {e}")
 
-    # 预热 trades.db（建索引 + WAL 预热，避免首次 API 请求超时）
+    # 预热 PostgreSQL 连接池（Paper trading 已迁移至 PostgreSQL）
     try:
-        import sqlite3
-        db_path = settings.data_dir / "trades.db"
-        if db_path.exists():
-            conn = sqlite3.connect(str(db_path), timeout=5)
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades(direction, created_at)")
-            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-            conn.close()
-            print(f"[Main] ✅ trades.db 索引预热完成")
+        from app.database import engine, SessionLocal
+        db = SessionLocal()
+        db.execute(__import__('sqlalchemy').text("SELECT 1"))
+        db.close()
+        print("[Main] ✅ PostgreSQL 连接池预热完成")
     except Exception as e:
-        print(f"[Main] ⚠️ trades.db 预热失败（非致命）: {e}")
+        print(f"[Main] ⚠️ PostgreSQL 预热失败（非致命）: {e}")
 
     # 预热 K 线缓存（后台任务，避免首次 API 调用因 Tushare 超时）
     async def _warm_kline_cache():

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VN.PY 模拟交易引擎 - 持久化版本
+VN.PY 模拟交易引擎 - 持久化版本 (PostgreSQL)
 
 支持：
-- SQLite 数据库存储交易记录
-- JSON 文件存储账户状态
+- PostgreSQL 数据库存储交易记录
+- JSON 文件存储账户状态（已废弃，仅用于首次迁移）
 - 查询历史交易和持仓
+- SELECT ... FOR UPDATE 行锁保证并发资金安全
 """
 
-import sqlite3
 import json
 import os
 import sys
@@ -18,6 +18,10 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
+from urllib.parse import urlparse
+
+import psycopg2
+import psycopg2.extensions
 
 # Use workspace_detector for cross-platform path resolution
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -72,11 +76,33 @@ class PaperTradingEngine:
     """
     持久化模拟交易引擎
 
-    数据存储（Step 8 统一到 trades.db）：
-    - 账户状态：account_info 表
-    - 持仓追踪：positions 表
-    - 交易记录：trades 表
+    数据存储（PostgreSQL）：
+    - 账户状态：paper_account_info 表
+    - 持仓追踪：paper_positions 表
+    - 交易记录：paper_trades 表
+    - 订单记录：paper_orders 表
+    - 每日快照：paper_daily_snapshot 表
     """
+
+    @staticmethod
+    def _parse_db_url(url: str = None):
+        """从 DATABASE_URL 解析 PostgreSQL 连接参数。"""
+        if url is None:
+            url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+        parsed = urlparse(url)
+        return {
+            "host": parsed.hostname or "localhost",
+            "port": parsed.port or 5432,
+            "dbname": (parsed.path or "/marcus_trading").lstrip("/"),
+            "user": parsed.username or "marcus",
+            "password": parsed.password or "marcus123",
+        }
+
+    def _get_pg_conn(self):
+        """获取 PostgreSQL 连接（autocommit=False，显式事务控制）。"""
+        conn = psycopg2.connect(**self._pg_params)
+        conn.autocommit = False
+        return conn
     
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
@@ -124,16 +150,19 @@ class PaperTradingEngine:
     def __init__(self, data_dir: str = "./data", initial_capital: float = 1000000.0):
         """
         初始化模拟账户
-        
+
         Args:
-            data_dir: 数据目录
+            data_dir: 数据目录（兼容旧接口，PostgreSQL 模式下仅用于 account.json 回退）
             initial_capital: 初始资金（仅首次创建账户时有效）
         """
         self.data_dir = os.path.expanduser(data_dir)
         os.makedirs(self.data_dir, exist_ok=True)
-        self.db_file = os.path.join(self.data_dir, "trades.db")
-        
-        # 初始化数据库（必须先执行，确保 positions 表存在）
+        self.db_file = os.path.join(self.data_dir, "trades.db")  # 保留用于迁移
+
+        # PostgreSQL 连接参数
+        self._pg_params = self._parse_db_url()
+
+        # 初始化数据库（必须先执行，确保表存在）
         self._init_database()
         # 回测专用: 当前模拟交易日, FIFO排序用; 实盘为 None 则回退 created_at
         self._trade_date: Optional[str] = None
@@ -141,19 +170,19 @@ class PaperTradingEngine:
         # 初始化账户
         self._init_account(initial_capital)
     
-    def _get_conn(self, timeout: int = 30):
-        """获取数据库连接（统一配置超时和WAL模式）"""
-        conn = sqlite3.connect(self.db_file, timeout=timeout)
-        conn.execute("PRAGMA busy_timeout=30000")
-        return conn
-    
+    def _get_conn(self):
+        """获取 PostgreSQL 连接（兼容旧接口名，内部调用 _get_pg_conn）。"""
+        return self._get_pg_conn()
+
     def _init_account(self, initial_capital: float):
-        """初始化或加载账户 - 优先从 trades.db 读取持仓和账户数据"""
-        # Step 8：优先从 SQLite 的 account_info 表读取
+        """初始化或加载账户 - 优先从 PostgreSQL paper_account_info 表读取"""
         try:
-            conn = self._get_conn()
+            conn = self._get_pg_conn()
             cursor = conn.cursor()
-            cursor.execute('SELECT initial_capital, available_cash, frozen_cash, order_counter FROM account_info WHERE id=1')
+            cursor.execute(
+                'SELECT initial_capital, available_cash, frozen_cash, order_counter '
+                'FROM paper_account_info WHERE id=1'
+            )
             row = cursor.fetchone()
             conn.close()
 
@@ -162,14 +191,12 @@ class PaperTradingEngine:
                 self.available_cash = row[1]
                 self.frozen_cash = row[2] if row[2] is not None else 0.0
                 self.order_counter = row[3] if row[3] is not None else 0
-                # 迁移旧 dot-format symbol (如 301566.SZ → SZ301566)
-                self._run_legacy_migration()
                 self.positions = self._load_positions_from_db()
-                print(f"[OK] 账户数据从 trades.db 读取，可用资金：{self.available_cash:,.2f}")
-                print(f"[OK] 持仓从 trades.db 读取: {len(self.positions)} 只")
+                print(f"[OK] 账户数据从 PostgreSQL 读取，可用资金：{self.available_cash:,.2f}")
+                print(f"[OK] 持仓从 PostgreSQL 读取: {len(self.positions)} 只")
                 return
         except Exception as e:
-            print(f"[迁移] 从 SQLite 读取账户失败: {e}，尝试从 account.json 迁移...")
+            print(f"[迁移] 从 PostgreSQL 读取账户失败: {e}，尝试从 account.json 迁移...")
 
         # 降级：从 account.json 读取（首次迁移）
         if os.path.exists(os.path.join(self.data_dir, "account.json")):
@@ -180,14 +207,11 @@ class PaperTradingEngine:
                 self.frozen_cash = data.get('frozen_cash', 0.0)
                 self.order_counter = data.get('order_counter', 0)
 
-            # 迁移完成后立即写入 SQLite
             self._save_account()
-
-            # 从 trades.db 读取持仓（FIFO）
             self.positions = self._load_positions_from_db()
 
-            print(f"[OK] 账户数据从 account.json 迁移至 trades.db，可用资金：{self.available_cash:,.2f}")
-            print(f"[OK] 持仓从 trades.db 读取: {len(self.positions)} 只")
+            print(f"[OK] 账户数据从 account.json 迁移至 PostgreSQL，可用资金：{self.available_cash:,.2f}")
+            print(f"[OK] 持仓从 PostgreSQL 读取: {len(self.positions)} 只")
         else:
             # 创建新账户
             self.initial_capital = initial_capital
@@ -198,55 +222,25 @@ class PaperTradingEngine:
             self._save_account()
             print(f"[OK] 已创建新账户，初始资金：{initial_capital:,.2f}")
     
-    def _migrate_legacy_symbols(self, cursor) -> int:
-        """将旧 dot-format symbol (301566.SZ) 迁移为标准格式 (SZ301566)"""
-        fixed = 0
-        for table in ('trades', 'positions', 'orders'):
-            cursor.execute(
-                f"SELECT DISTINCT symbol FROM {table} WHERE symbol LIKE '%.SZ' OR symbol LIKE '%.SH' OR symbol LIKE '%.BJ'"
-            )
-            for (bad_sym,) in cursor.fetchall():
-                code, exchange = bad_sym.split('.', 1)
-                new_sym = f"{exchange}{code}"
-                cursor.execute(f"UPDATE {table} SET symbol=? WHERE symbol=?", (new_sym, bad_sym))
-                fixed += cursor.rowcount
-                print(f"[迁移] {table}.{bad_sym} → {new_sym}")
-        return fixed
-
-    def _run_legacy_migration(self):
-        """执行旧 symbol 格式迁移（容错：迁移失败不影响正常流程）"""
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            fixed = self._migrate_legacy_symbols(cursor)
-            if fixed > 0:
-                conn.commit()
-                print(f"[迁移] 完成，共修复 {fixed} 条记录")
-            conn.close()
-        except Exception as e:
-            print(f"[迁移] symbol 格式迁移失败（非致命）: {e}")
-
     def _load_positions_from_db(self) -> dict:
-        """从 trades.db 读取持仓（FIFO 计算）"""
+        """从 PostgreSQL 读取持仓（FIFO 计算）"""
         positions = {}
-        if not os.path.exists(self.db_file):
-            return positions
 
         try:
-            conn = self._get_conn()
+            conn = self._get_pg_conn()
             cursor = conn.cursor()
 
-            # 从 positions 表读取 entry_date 和 highest_price
-            pos_meta = {}  # {symbol: {'entry_date': ..., 'highest_price': ...}}
-            cursor.execute('SELECT symbol, entry_date, highest_price FROM positions')
+            # 从 paper_positions 表读取 entry_date 和 highest_price
+            pos_meta = {}
+            cursor.execute('SELECT symbol, entry_date, highest_price FROM paper_positions')
             for row in cursor.fetchall():
-                pos_meta[row[0]] = {'entry_date': row[1], 'highest_price': row[2] or 0.0}
+                pos_meta[row[0]] = {'entry_date': row[1], 'highest_price': float(row[2] or 0)}
 
             # 获取所有交易记录（与 portfolio.calculate_positions_from_db 保持一致）
             cursor.execute(
-                'SELECT symbol, direction, price, volume FROM trades '
+                'SELECT symbol, direction, price, volume FROM paper_trades '
                 'WHERE voided = 0 OR voided IS NULL '
-                'ORDER BY COALESCE(trade_date, DATE(created_at)), id'
+                'ORDER BY COALESCE(trade_date, created_at::date::text), id'
             )
             trades = cursor.fetchall()
 
@@ -290,205 +284,164 @@ class PaperTradingEngine:
             conn.close()
             return result
         except Exception as e:
-            print(f"[警告] 从 trades.db 读取持仓失败: {e}")
+            print(f"[警告] 从 PostgreSQL 读取持仓失败: {e}")
             return {}
 
     def update_position_meta(self, symbol: str, entry_date: str = None, highest_price: float = None):
-        """
-        更新持仓元数据到 positions 表（Step 8 统一数据源）
-
-        Args:
-            symbol: 股票代码
-            entry_date: 入场日期（买入时设置）
-            highest_price: 持仓期间最高价（盘中更新）
-        """
+        """更新持仓元数据到 paper_positions 表"""
         if entry_date is None and highest_price is None:
             return
 
-        conn = self._get_conn()
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # 获取现有数据
-        cursor.execute('SELECT highest_price FROM positions WHERE symbol = ?', (symbol,))
+        cursor.execute('SELECT highest_price FROM paper_positions WHERE symbol = %s', (symbol,))
         row = cursor.fetchone()
 
         if row:
-            # 更新现有记录
-            current_high = row[0] or 0.0
+            current_high = float(row[0] or 0)
             new_high = highest_price if (highest_price is not None and highest_price > current_high) else current_high
 
             if entry_date is not None:
                 cursor.execute(
-                    'UPDATE positions SET entry_date = ?, highest_price = ?, updated_at = ? WHERE symbol = ?',
+                    'UPDATE paper_positions SET entry_date = %s, highest_price = %s, updated_at = %s WHERE symbol = %s',
                     (entry_date, new_high, now, symbol)
                 )
             else:
                 cursor.execute(
-                    'UPDATE positions SET highest_price = ?, updated_at = ? WHERE symbol = ?',
+                    'UPDATE paper_positions SET highest_price = %s, updated_at = %s WHERE symbol = %s',
                     (new_high, now, symbol)
                 )
         else:
-            # 新建记录
             cursor.execute(
-                'INSERT INTO positions (symbol, entry_date, highest_price, updated_at) VALUES (?, ?, ?, ?)',
-                (
-                    symbol,
-                    entry_date or datetime.now().strftime('%Y-%m-%d'),
-                    highest_price if highest_price is not None else 0.0,
-                    now
-                )
+                'INSERT INTO paper_positions (symbol, entry_date, highest_price, updated_at) VALUES (%s, %s, %s, %s)',
+                (symbol, entry_date or datetime.now().strftime('%Y-%m-%d'),
+                 highest_price if highest_price is not None else 0.0, now)
             )
 
         conn.commit()
         conn.close()
 
     def remove_position_meta(self, symbol: str):
-        """从 positions 表删除持仓记录（卖出后调用）"""
+        """从 paper_positions 表删除持仓记录（卖出后调用）"""
         try:
-            conn = self._get_conn()
+            conn = self._get_pg_conn()
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM positions WHERE symbol = ?', (symbol,))
+            cursor.execute('DELETE FROM paper_positions WHERE symbol = %s', (symbol,))
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[警告] 删除持仓元数据失败: {e}")
-    
+
     def _save_account(self):
-        """保存账户状态到 trades.db（Step 8：统一数据源，不再写 account.json）"""
+        """保存账户状态到 PostgreSQL paper_account_info（SELECT ... FOR UPDATE 防并发写）"""
         try:
-            conn = self._get_conn()
+            conn = self._get_pg_conn()
             cursor = conn.cursor()
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('''
-                INSERT OR REPLACE INTO account_info (id, initial_capital, available_cash, frozen_cash, order_counter, updated_at)
-                VALUES (1, ?, ?, ?, ?, ?)
-            ''', (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now))
+            # 锁定行再 upsert，保证并发安全
+            cursor.execute('SELECT id FROM paper_account_info WHERE id = 1 FOR UPDATE')
+            if cursor.fetchone():
+                cursor.execute(
+                    'UPDATE paper_account_info SET initial_capital = %s, available_cash = %s, '
+                    'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE id = 1',
+                    (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now)
+                )
+            else:
+                cursor.execute(
+                    'INSERT INTO paper_account_info (id, initial_capital, available_cash, frozen_cash, order_counter, updated_at) '
+                    'VALUES (1, %s, %s, %s, %s, %s)',
+                    (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now)
+                )
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[警告] 保存账户状态失败: {e}")
-    
+
     def _init_database(self):
-        """初始化 SQLite 数据库"""
-        conn = sqlite3.connect(self.db_file, timeout=30)
+        """初始化 PostgreSQL 表结构"""
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        
-        # 启用 WAL 模式（允许并发读写，避免 database is locked 错误）
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
-        
-        # 创建订单表
+
+        # PostgreSQL DDL — 5 张表
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS orders (
+            CREATE TABLE IF NOT EXISTS paper_orders (
                 orderid TEXT PRIMARY KEY,
                 symbol TEXT NOT NULL,
                 direction TEXT NOT NULL,
-                price REAL NOT NULL,
+                price DOUBLE PRECISION NOT NULL,
                 volume INTEGER NOT NULL,
-                status TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT '提交中',
                 traded INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                reason TEXT DEFAULT ''
             )
         ''')
-        
-        # 创建成交表
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+            CREATE TABLE IF NOT EXISTS paper_trades (
+                id SERIAL PRIMARY KEY,
                 orderid TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 direction TEXT NOT NULL,
-                price REAL NOT NULL,
+                price DOUBLE PRECISION NOT NULL,
                 volume INTEGER NOT NULL,
-                amount REAL NOT NULL,
-                profit REAL DEFAULT 0,
+                amount DOUBLE PRECISION NOT NULL,
+                profit DOUBLE PRECISION DEFAULT 0,
                 created_at TEXT NOT NULL,
                 trade_date TEXT,
-                FOREIGN KEY (orderid) REFERENCES orders (orderid)
+                voided INTEGER DEFAULT 0,
+                void_reason TEXT,
+                voided_at TEXT,
+                reason TEXT DEFAULT ''
             )
         ''')
-        # 迁移: 为旧 trades 表补 trade_date 列 (回测专用, 实盘为 NULL)
-        try:
-            cursor.execute('ALTER TABLE trades ADD COLUMN trade_date TEXT')
-        except sqlite3.OperationalError:
-            pass
-
-        # 迁移: 交易撤回功能（voided=1 的成交不计入持仓）
-        try:
-            cursor.execute('ALTER TABLE trades ADD COLUMN voided INTEGER DEFAULT 0')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute('ALTER TABLE trades ADD COLUMN void_reason TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute('ALTER TABLE trades ADD COLUMN voided_at TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute('ALTER TABLE trades ADD COLUMN reason TEXT')
-        except sqlite3.OperationalError:
-            pass
-
-        # 迁移: orders 表补 reason 列（自动建仓时 Order 带 reason，需持久化到 orders 表）
-        try:
-            cursor.execute('ALTER TABLE orders ADD COLUMN reason TEXT')
-        except sqlite3.OperationalError:
-            pass
-
-        # 创建持仓追踪表（Step 8：统一数据源）
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS positions (
+            CREATE TABLE IF NOT EXISTS paper_positions (
                 symbol TEXT PRIMARY KEY,
                 entry_date TEXT NOT NULL,
-                highest_price REAL DEFAULT 0.0,
+                highest_price DOUBLE PRECISION DEFAULT 0.0,
                 updated_at TEXT NOT NULL
             )
         ''')
-
-        # 创建账户信息表（Step 8：统一数据源）
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS account_info (
+            CREATE TABLE IF NOT EXISTS paper_account_info (
                 id INTEGER PRIMARY KEY,
-                initial_capital REAL NOT NULL,
-                available_cash REAL NOT NULL,
-                frozen_cash REAL NOT NULL DEFAULT 0,
+                initial_capital DOUBLE PRECISION NOT NULL,
+                available_cash DOUBLE PRECISION NOT NULL,
+                frozen_cash DOUBLE PRECISION NOT NULL DEFAULT 0,
                 order_counter INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             )
         ''')
-
-        # 每日权益快照表
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS daily_snapshot (
+            CREATE TABLE IF NOT EXISTS paper_daily_snapshot (
                 trade_date TEXT PRIMARY KEY,
-                total_asset REAL NOT NULL,
-                available_cash REAL NOT NULL,
-                frozen_cash REAL DEFAULT 0,
-                position_value REAL DEFAULT 0,
-                cost_value REAL DEFAULT 0,
-                realized_pnl REAL DEFAULT 0,
-                float_pnl REAL DEFAULT 0,
-                total_pnl REAL DEFAULT 0,
-                initial_capital REAL NOT NULL,
+                total_asset DOUBLE PRECISION NOT NULL,
+                available_cash DOUBLE PRECISION NOT NULL,
+                frozen_cash DOUBLE PRECISION DEFAULT 0,
+                position_value DOUBLE PRECISION DEFAULT 0,
+                cost_value DOUBLE PRECISION DEFAULT 0,
+                realized_pnl DOUBLE PRECISION DEFAULT 0,
+                float_pnl DOUBLE PRECISION DEFAULT 0,
+                total_pnl DOUBLE PRECISION DEFAULT 0,
+                initial_capital DOUBLE PRECISION NOT NULL,
                 created_at TEXT NOT NULL
             )
         ''')
 
-        # 创建索引
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_time ON trades (created_at)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_dir_date ON trades (direction, created_at)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders (symbol)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status)')
-        
+        # 索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades (symbol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_time ON paper_trades (created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_dir_date ON paper_trades (direction, created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_orders_symbol ON paper_orders (symbol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_orders_status ON paper_orders (status)')
+
         conn.commit()
         conn.close()
-        print(f"[OK] 数据库已初始化：{self.db_file}")
+        print(f"[OK] PostgreSQL 表已初始化")
+
     
     def _get_stock_name(self, symbol: str) -> str:
         """
@@ -551,11 +504,11 @@ class PaperTradingEngine:
         self.available_cash -= required_cash
         self.frozen_cash += required_cash
         
-        # 【修复】从数据库获取最大订单ID，确保同步
+        # 从数据库获取最大订单ID，确保同步
         try:
-            conn = self._get_conn()
+            conn = self._get_pg_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT MAX(orderid) FROM orders WHERE orderid LIKE 'ORD%'")
+            cursor.execute("SELECT MAX(orderid) FROM paper_orders WHERE orderid LIKE 'ORD%'")
             result = cursor.fetchone()[0]
             conn.close()
             if result:
@@ -614,11 +567,11 @@ class PaperTradingEngine:
         
         pos.frozen += volume
         
-        # 【修复】从数据库获取最大订单ID，确保同步
+        # 从数据库获取最大订单ID，确保同步
         try:
-            conn = self._get_conn()
+            conn = self._get_pg_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT MAX(orderid) FROM orders WHERE orderid LIKE 'ORD%'")
+            cursor.execute("SELECT MAX(orderid) FROM paper_orders WHERE orderid LIKE 'ORD%'")
             result = cursor.fetchone()[0]
             conn.close()
             if result:
@@ -648,29 +601,28 @@ class PaperTradingEngine:
     
     def cancel_order(self, order_id: str) -> bool:
         """撤销订单"""
-        conn = self._get_conn()
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM orders WHERE orderid = ?', (order_id,))
+
+        cursor.execute('SELECT * FROM paper_orders WHERE orderid = %s', (order_id,))
         row = cursor.fetchone()
-        
+
         if not row:
             print(f"[ERR] 订单 {order_id} 不存在")
             conn.close()
             return False
-        
+
         status = row[5]
         if status in [OrderStatus.ALLTRADED.value, OrderStatus.CANCELLED.value, OrderStatus.REJECTED.value]:
             print(f"[ERR] 订单状态为 {status}, 无法撤销")
             conn.close()
             return False
-        
+
         # 更新订单状态
-        cursor.execute('''
-            UPDATE orders 
-            SET status = ?, updated_at = ?
-            WHERE orderid = ?
-        ''', (OrderStatus.CANCELLED.value, datetime.now().isoformat(), order_id))
+        cursor.execute(
+            'UPDATE paper_orders SET status = %s, updated_at = %s WHERE orderid = %s',
+            (OrderStatus.CANCELLED.value, datetime.now().isoformat(), order_id)
+        )
         
         conn.commit()
         conn.close()
@@ -697,48 +649,47 @@ class PaperTradingEngine:
     
     def match_order(self, order_id: str, fill_price: float) -> bool:
         """
-        模拟订单成交
-        
+        模拟订单成交（PostgreSQL 事务 + FOR UPDATE 行锁）
+
         Args:
             order_id: 订单 ID
             fill_price: 成交价格
-            
+
         Returns:
             是否成功
         """
-        conn = self._get_conn()
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        
+
+        # 锁定账户行，保证整个 match_order 期间无并发写
+        cursor.execute('SELECT id FROM paper_account_info WHERE id = 1 FOR UPDATE')
+
         # 获取订单
-        cursor.execute('SELECT * FROM orders WHERE orderid = ?', (order_id,))
+        cursor.execute('SELECT * FROM paper_orders WHERE orderid = %s', (order_id,))
         row = cursor.fetchone()
 
         if not row:
             print(f"[ERR] 订单 {order_id} 不存在")
+            conn.rollback()
             conn.close()
             return False
-
-        # 兼容旧 orders 表无 reason 列
-        cols = [desc[0] for desc in cursor.description]
-        order_reason = row[cols.index('reason')] if 'reason' in cols else ''
 
         order = Order(
             orderid=row[0], symbol=row[1], direction=row[2],
             price=row[3], volume=row[4], status=row[5],
             traded=row[6], created_at=row[7], updated_at=row[8],
-            reason=order_reason
+            reason=row[9] if len(row) > 9 else ''
         )
-        
+
         # 更新订单状态
         order.status = OrderStatus.ALLTRADED.value
         order.traded = order.volume
         order.updated_at = datetime.now().isoformat()
-        
-        cursor.execute('''
-            UPDATE orders 
-            SET status = ?, traded = ?, updated_at = ?
-            WHERE orderid = ?
-        ''', (order.status, order.traded, order.updated_at, order_id))
+
+        cursor.execute(
+            'UPDATE paper_orders SET status = %s, traded = %s, updated_at = %s WHERE orderid = %s',
+            (order.status, order.traded, order.updated_at, order_id)
+        )
         
         # 更新持仓
         if order.symbol not in self.positions:
@@ -750,8 +701,8 @@ class PaperTradingEngine:
                 today = datetime.now().strftime('%Y-%m-%d')
                 self.positions[order.symbol] = Position(symbol=order.symbol, name=stock_name, entry_date=today)
             else:
-                # 卖出: 仓位不存在 → 拒绝成交 (防御同日多次卖出超卖)
                 print(f"[ERR] 无法卖出 {order.symbol}: 无持仓记录 (可能已被同日早前卖出清仓)")
+                conn.rollback()
                 conn.close()
                 return False
         
@@ -768,55 +719,51 @@ class PaperTradingEngine:
                 frozen_amount = order.price * order.volume * 1.0005  # A股含手续费
             self.frozen_cash -= frozen_amount
 
-            # Step 8: 更新持仓元数据到 positions 表（在同一连接内执行，避免死锁）
+            # Step 8: 更新持仓元数据到 paper_positions 表
             if not pos.entry_date:
                 pos.entry_date = datetime.now().strftime('%Y-%m-%d')
             now_meta = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('SELECT highest_price FROM positions WHERE symbol = ?', (order.symbol,))
+            cursor.execute('SELECT highest_price FROM paper_positions WHERE symbol = %s', (order.symbol,))
             meta_row = cursor.fetchone()
             if meta_row:
-                current_high = meta_row[0] or 0.0
+                current_high = float(meta_row[0] or 0)
                 new_high = fill_price if fill_price > current_high else current_high
                 cursor.execute(
-                    'UPDATE positions SET entry_date = ?, highest_price = ?, updated_at = ? WHERE symbol = ?',
+                    'UPDATE paper_positions SET entry_date = %s, highest_price = %s, updated_at = %s WHERE symbol = %s',
                     (pos.entry_date, new_high, now_meta, order.symbol)
                 )
             else:
                 cursor.execute(
-                    'INSERT INTO positions (symbol, entry_date, highest_price, updated_at) VALUES (?, ?, ?, ?)',
+                    'INSERT INTO paper_positions (symbol, entry_date, highest_price, updated_at) VALUES (%s, %s, %s, %s)',
                     (order.symbol, pos.entry_date, fill_price, now_meta)
                 )
 
-            # 记录成交 (回测带 trade_date, 实盘为 NULL)
+            # 记录成交
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
-            cursor.execute('''
-                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
-                  fill_price * order.volume, 0, datetime.now().isoformat(), td, getattr(order, 'reason', '')))
+            cursor.execute(
+                'INSERT INTO paper_trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                (order_id, order.symbol, order.direction, fill_price, order.volume,
+                 fill_price * order.volume, 0, datetime.now().isoformat(), td, getattr(order, 'reason', ''))
+            )
 
         else:
-            # 卖出成交（FIFO 修正：正确重建历史持仓避免未来数据污染 lots）
-            # 核心：只取当前卖出时间之前的买入 + 之前的卖出，两段时间边界完全隔离
-            # 回测模式优先 trade_date, 实盘回退 created_at
+            # 卖出成交（FIFO 修正）
             date_col = "trade_date" if self._trade_date else "created_at"
             date_val = self._trade_date or (order.created_at if hasattr(order, 'created_at') and order.created_at else datetime.now().isoformat())
-            current_time = order.created_at if hasattr(order, 'created_at') and order.created_at else datetime.now().isoformat()
 
-            # 【BugFix】分段时间查询，避免未来买入/卖出污染 lots
-            # buys: 时间 <= current_date
-            # 【P0 Fix】用 id ASC 二级排序, 保证同日多笔 trade_date 相同时 FIFO 稳定
             cursor.execute(
-                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? AND (voided = 0 OR voided IS NULL) '
-                f'ORDER BY {date_col}, id',
-                (order.symbol, Direction.LONG.value, date_val)
+                'SELECT price, volume FROM paper_trades WHERE symbol = %s AND direction = %s '
+                'AND (voided = 0 OR voided IS NULL) '
+                'ORDER BY COALESCE(trade_date, created_at::date::text), id',
+                (order.symbol, Direction.LONG.value)
             )
             buy_trades = cursor.fetchall()
-            # sells: 时间 <= current_date（包含同日更早的卖出, 防同日多次超卖）
             cursor.execute(
-                f'SELECT price, volume FROM trades WHERE symbol=? AND direction=? AND {date_col}<=? AND (voided = 0 OR voided IS NULL) '
-                f'ORDER BY {date_col}, id',
-                (order.symbol, Direction.SHORT.value, date_val)
+                'SELECT price, volume FROM paper_trades WHERE symbol = %s AND direction = %s '
+                'AND (voided = 0 OR voided IS NULL) '
+                'ORDER BY COALESCE(trade_date, created_at::date::text), id',
+                (order.symbol, Direction.SHORT.value)
             )
             sell_trades = cursor.fetchall()
 
@@ -841,16 +788,15 @@ class PaperTradingEngine:
                     else:
                         i += 1
 
-            # 【P0 死防御】当前 sell 前先检查剩余可卖股数 (FIFO 重构后 lots 总量 = 真实可用持仓)
+            # 【P0 死防御】当前 sell 前先检查剩余可卖股数
             available_to_sell = sum(v for v, _ in lots)
             if order.volume > available_to_sell:
-                # 拒绝超卖: 撤单状态回滚到 SUBMITTING, 解冻 pos.frozen
                 print(
                     f"[ERR] 无法卖出 {order.symbol} x {order.volume}: "
                     f"FIFO 可用 {available_to_sell} (同日多次卖出或回放重放所致)"
                 )
                 cursor.execute(
-                    'UPDATE orders SET status=?, updated_at=? WHERE orderid=?',
+                    'UPDATE paper_orders SET status = %s, updated_at = %s WHERE orderid = %s',
                     (OrderStatus.SUBMITTING.value, datetime.now().isoformat(), order_id)
                 )
                 conn.commit()
@@ -893,29 +839,30 @@ class PaperTradingEngine:
             pos.avg_price = remaining_cost / remaining_vol if remaining_vol > 0 else 0.0
             pos.frozen -= order.volume
 
-            # 记录成交（amount 存 gross 金额，profit 存净利润）
+            # 记录成交
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
-            cursor.execute('''
-                INSERT INTO trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (order_id, order.symbol, order.direction, fill_price, order.volume,
-                  fill_price * order.volume, net_profit, datetime.now().isoformat(), td, getattr(order, 'reason', '')))
+            cursor.execute(
+                'INSERT INTO paper_trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                (order_id, order.symbol, order.direction, fill_price, order.volume,
+                 fill_price * order.volume, net_profit, datetime.now().isoformat(), td, getattr(order, 'reason', ''))
+            )
 
             if pos.volume == 0:
-                # Step 8: 卖出清仓时删除 positions 表记录（在同一连接内执行，避免死锁）
-                cursor.execute('DELETE FROM positions WHERE symbol = ?', (order.symbol,))
+                cursor.execute('DELETE FROM paper_positions WHERE symbol = %s', (order.symbol,))
                 del self.positions[order.symbol]
 
-        # 🔧 在同一连接内保存账户状态，确保 trade + account_info 原子写入（修复竞争窗口）
+        # 在同一事务内更新账户状态（行已由开头的 FOR UPDATE 锁定）
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        cursor.execute('''
-            INSERT OR REPLACE INTO account_info (id, initial_capital, available_cash, frozen_cash, order_counter, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?)
-        ''', (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now))
-        
+        cursor.execute(
+            'UPDATE paper_account_info SET initial_capital = %s, available_cash = %s, '
+            'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE id = 1',
+            (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now)
+        )
+
         conn.commit()
         conn.close()
-        
+
         print(f"[OK] 成交：{order.symbol} @ {fill_price:.2f} x {order.volume}")
         return True
     
@@ -987,88 +934,65 @@ class PaperTradingEngine:
         return positions
     
     def get_orders(self, symbol: str = None, status: str = None, limit: int = 100) -> List[dict]:
-        """
-        查询订单记录
-        
-        Args:
-            symbol: 标的代码（可选）
-            status: 订单状态（可选）
-            limit: 返回数量限制
-            
-        Returns:
-            订单列表
-        """
-        conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        """查询订单记录"""
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        
-        query = 'SELECT * FROM orders WHERE 1=1'
+
+        query = 'SELECT * FROM paper_orders WHERE 1=1'
         params = []
-        
+
         if symbol:
-            query += ' AND symbol = ?'
+            query += ' AND symbol = %s'
             params.append(symbol)
-        
+
         if status:
-            query += ' AND status = ?'
+            query += ' AND status = %s'
             params.append(status)
-        
-        query += ' ORDER BY created_at DESC LIMIT ?'
+
+        query += ' ORDER BY created_at DESC LIMIT %s'
         params.append(limit)
-        
+
         cursor.execute(query, params)
-        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
         conn.close()
-        
-        return [dict(row) for row in rows]
-    
+
+        return rows
+
     def get_trades(self, symbol: str = None, limit: int = 100) -> List[dict]:
-        """
-        查询成交记录
-        
-        Args:
-            symbol: 标的代码（可选）
-            limit: 返回数量限制
-            
-        Returns:
-            成交记录列表
-        """
-        conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
+        """查询成交记录"""
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        
-        query = 'SELECT * FROM trades WHERE 1=1'
+
+        query = 'SELECT * FROM paper_trades WHERE 1=1'
         params = []
-        
+
         if symbol:
-            query += ' AND symbol = ?'
+            query += ' AND symbol = %s'
             params.append(symbol)
-        
-        query += ' ORDER BY created_at DESC LIMIT ?'
+
+        query += ' ORDER BY created_at DESC LIMIT %s'
         params.append(limit)
-        
+
         cursor.execute(query, params)
-        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
         conn.close()
-        
-        return [dict(row) for row in rows]
-    
+
+        return rows
+
     def get_profit_summary(self) -> dict:
         """获取盈亏汇总"""
-        conn = self._get_conn()
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        
-        # 总盈亏
-        cursor.execute('SELECT SUM(profit) as total_profit FROM trades')
+
+        cursor.execute('SELECT COALESCE(SUM(profit), 0) FROM paper_trades')
         total_profit = cursor.fetchone()[0] or 0
-        
-        # 按标的汇总
-        cursor.execute('''
-            SELECT symbol, SUM(profit) as profit, COUNT(*) as trades
-            FROM trades
-            GROUP BY symbol
-            ORDER BY profit DESC
-        ''')
+
+        cursor.execute(
+            'SELECT symbol, COALESCE(SUM(profit), 0), COUNT(*) '
+            'FROM paper_trades GROUP BY symbol ORDER BY 2 DESC'
+        )
         by_symbol = cursor.fetchall()
         
         conn.close()
@@ -1081,22 +1005,23 @@ class PaperTradingEngine:
     
     def get_trade_count(self) -> int:
         """获取总交易次数"""
-        conn = self._get_conn()
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM trades')
+        cursor.execute('SELECT COUNT(*) FROM paper_trades')
         count = cursor.fetchone()[0]
         conn.close()
         return count
-    
+
     def _save_order(self, order: Order):
-        """保存订单到数据库"""
-        conn = self._get_conn()
+        """保存订单到 PostgreSQL"""
+        conn = self._get_pg_conn()
         cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO orders (orderid, symbol, direction, price, volume, status, traded, created_at, updated_at, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (order.orderid, order.symbol, order.direction, order.price, order.volume,
-              order.status, order.traded, order.created_at, order.updated_at, getattr(order, 'reason', '')))
+        cursor.execute(
+            'INSERT INTO paper_orders (orderid, symbol, direction, price, volume, status, traded, created_at, updated_at, reason) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            (order.orderid, order.symbol, order.direction, order.price, order.volume,
+             order.status, order.traded, order.created_at, order.updated_at, getattr(order, 'reason', ''))
+        )
         conn.commit()
         conn.close()
     

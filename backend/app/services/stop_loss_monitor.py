@@ -282,23 +282,15 @@ class StopLossMonitor:
         try:
             if self.executor is None:
                 return None
-            import sqlite3
-            from pathlib import Path
-            data_dir = Path(self.executor.data_dir)
-            db_path = data_dir / "trades.db"
-            if not db_path.exists():
-                return None
-            conn = sqlite3.connect(str(db_path), timeout=30)
-            conn.execute("PRAGMA busy_timeout=30000")
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT MIN(created_at) FROM trades WHERE symbol = ? AND direction = '买入' AND (voided = 0 OR voided IS NULL)",
-                (symbol,)
-            )
-            row = cursor.fetchone()
-            conn.close()
-            if row and row[0]:
-                first_date = row[0][:10]  # "2026-07-03" from "2026-07-03T09:35:00"
+            # 使用 engine.get_trades() 从 PostgreSQL paper_trades 查询
+            trades = self.executor.engine.get_trades(symbol=symbol, limit=10000)
+            buy_dates = [
+                (t.get('created_at', '') or '')[:10]
+                for t in trades
+                if t.get('direction') == '买入' and not t.get('voided')
+            ]
+            if buy_dates:
+                first_date = min(buy_dates)
                 from datetime import date as dt_date
                 first_dt = dt_date.fromisoformat(first_date)
                 return (dt_date.today() - first_dt).days

@@ -87,30 +87,28 @@ class MarcusVNPyExecutor:
             return 0.0
     
     def _get_today_buy_symbols(self) -> set:
-        """查询 trades.db 获取今日买入的股票代码集合（兼容旧接口，内部使用）"""
+        """查询 PostgreSQL 获取今日买入的股票代码集合（兼容旧接口，内部使用）"""
         return set(self._get_today_buy_volumes().keys())
 
     def _get_today_buy_volumes(self) -> dict:
-        """查询 trades.db 获取今日买入的股票代码→股数映射（用于 T+1 拦截）
+        """查询 PostgreSQL 获取今日买入的股票代码→股数映射（用于 T+1 拦截）
         Returns: {symbol_str: total_volume_int}
         """
         today_volumes = {}
         try:
-            import sqlite3
-            db_path = Path(self.data_dir) / "trades.db"
-            if not db_path.exists():
-                return today_volumes
-            conn = sqlite3.connect(str(db_path), timeout=10)
-            conn.execute("PRAGMA busy_timeout=10000")
-            cursor = conn.cursor()
             today_str = datetime.now().strftime('%Y-%m-%d')
-            cursor.execute(
-                "SELECT symbol, SUM(volume) FROM trades WHERE direction='买入' AND date(created_at)=? AND (voided = 0 OR voided IS NULL) GROUP BY symbol",
-                (today_str,)
-            )
-            for row in cursor.fetchall():
-                today_volumes[row[0]] = int(row[1] or 0)
-            conn.close()
+            trades = self.engine.get_trades(limit=10000)
+            for t in trades:
+                if t.get('direction') != '买入':
+                    continue
+                if t.get('voided'):
+                    continue
+                created_date = (t.get('created_at', '') or '')[:10]
+                if created_date != today_str:
+                    continue
+                sym = t.get('symbol', '')
+                vol = int(t.get('volume', 0) or 0)
+                today_volumes[sym] = today_volumes.get(sym, 0) + vol
         except Exception as e:
             print(f"[T+1] 查询今日买入记录失败（非致命）：{e}", file=sys.stderr)
         return today_volumes
@@ -395,53 +393,17 @@ class MarcusVNPyExecutor:
     def get_account(self) -> dict:
         """获取账户信息 (标准化字段名)
 
-        available_cash 通过 FIFO 交易重放计算，不依赖 account_info 表
-        （该表可能因多实例并发写入而漂移）。
+        available_cash 直接从 PostgreSQL account_info 表读取，
+        SELECT ... FOR UPDATE 行锁已保证并发一致性。
         """
-        import sqlite3
-
         raw = self.engine.get_account_info()
         initial_capital = parse_float_chinese(raw.get('初始资金', 1000000))
+        available_cash = parse_float_chinese(raw.get('可用资金', 0))
         frozen_cash = parse_float_chinese(raw.get('冻结资金', 0))
 
-        # 从 trades.db 获取全部成交（FIFO 排序）
-        data_dir = Path(self.data_dir) if isinstance(self.data_dir, str) else self.data_dir
-        conn = sqlite3.connect(str(data_dir / "trades.db"), timeout=30)
-        cursor = conn.cursor()
-        conn.execute("PRAGMA busy_timeout=30000")
-        cursor.execute(
-            'SELECT symbol, direction, price, volume FROM trades '
-            'WHERE voided = 0 OR voided IS NULL '
-            'ORDER BY COALESCE(trade_date, DATE(created_at)), id'
-        )
-        trades = cursor.fetchall()
-
-        # ── FIFO 重放：从交易记录重建 available_cash ──
-        available_cash = initial_capital
-        for symbol, direction, price, volume in trades:
-            if direction == '买入':
-                cost = price * volume * (1 + self._BUY_COMMISSION)
-                available_cash -= cost
-            elif direction == '卖出':
-                gross = price * volume
-                sell_fee = gross * self._SELL_FEE_RATE
-                available_cash += gross - sell_fee
-
-        # 已实现盈亏
-        cursor.execute('SELECT SUM(profit) FROM trades WHERE direction = "卖出" AND (voided = 0 OR voided IS NULL)')
-        realized_pnl = cursor.fetchone()[0] or 0
-
-        # 同步纠正：若 account_info.available_cash 已漂移，用 FIFO 重放值覆盖
-        engine_cash = parse_float_chinese(raw.get('可用资金', 0))
-        if abs(engine_cash - available_cash) > 0.01:
-            print(
-                f"[AccountFix] account_info.available_cash 漂移 {engine_cash - available_cash:+.2f}，"
-                f"已纠正为 {available_cash:,.2f}",
-                file=sys.stderr
-            )
-            self.engine.available_cash = available_cash
-            self.engine._save_account()
-        conn.close()
+        # 已实现盈亏 — 从 PostgreSQL paper_trades 查询
+        profit_summary = self.engine.get_profit_summary()
+        realized_pnl = profit_summary.get('总盈亏', 0)
 
         # 持仓成本与市值
         positions = self.engine.get_positions()
@@ -949,32 +911,28 @@ class MarcusVNPyExecutor:
         return 0.0
     
     def get_positions_from_db(self) -> list:
-        """从 trades.db 直接查询真实持仓（修复数据不同步问题）"""
-        import sqlite3
-        from pathlib import Path
-        
-        data_dir = Path(self.data_dir) if isinstance(self.data_dir, str) else self.data_dir
-        conn = sqlite3.connect(str(data_dir / "trades.db"), timeout=30)
-        cursor = conn.cursor()
-        conn.execute("PRAGMA busy_timeout=30000")
-        
-        # 按 FIFO 计算真实持仓（与 portfolio.calculate_positions_from_db 保持一致）
-        cursor.execute(
-            'SELECT symbol, direction, price, volume FROM trades '
-            'WHERE voided = 0 OR voided IS NULL '
-            'ORDER BY COALESCE(trade_date, DATE(created_at)), id'
+        """从 PostgreSQL paper_trades 查询真实持仓（FIFO 成本计算）"""
+        trades = self.engine.get_trades(limit=100000)
+        # get_trades 返回按 created_at DESC 排序，FIFO 需要正序
+        trades_sorted = sorted(
+            [t for t in trades if not t.get('voided')],
+            key=lambda t: (t.get('trade_date') or (t.get('created_at', '') or '')[:10], t.get('id', 0))
         )
-        trades = cursor.fetchall()
-        
+
         # FIFO 成本计算
         positions = {}
-        for symbol, direction, price, vol in trades:
+        for t in trades_sorted:
+            symbol = t.get('symbol', '')
+            direction = t.get('direction', '')
+            price = t.get('price', 0)
+            vol = t.get('volume', 0)
+
             if symbol not in positions:
                 positions[symbol] = []
-            
+
             if direction == '买入':
                 positions[symbol].append({'price': price, 'volume': vol})
-            else:  # 卖出
+            else:
                 remaining = vol
                 lots = positions[symbol]
                 i = 0
@@ -987,7 +945,7 @@ class MarcusVNPyExecutor:
                         lots.pop(i)
                     else:
                         i += 1
-        
+
         # 转换为持仓格式
         result = []
         for symbol, lots in positions.items():
@@ -999,17 +957,15 @@ class MarcusVNPyExecutor:
                     'symbol': symbol,
                     'volume': total_vol,
                     'avg_price': avg_price,
-                    'current_price': avg_price,   # 默认用成本价，下面实时覆盖
+                    'current_price': avg_price,
                 })
 
-        # 补全实时 current_price（止损监控需要）— 走腾讯 qt.gtimg.cn 实时行情
+        # 补全实时 current_price（止损监控需要）
         if result:
             try:
                 from xueqiu_engine import XueqiuEngine
-                # config.json 仅用于 token（腾讯接口无需认证），不存在也能正常工作
                 xq_config = str(XUEQIU_DIR / "config.json")
                 xq = XueqiuEngine(config_file=xq_config)
-                print(f"[雪球] 获取 {len(result)} 只持仓实时价格 (腾讯 qt.gtimg.cn)...", file=sys.stderr)
                 fetched = 0
                 for pos in result:
                     try:
@@ -1018,14 +974,11 @@ class MarcusVNPyExecutor:
                             pos['current_price'] = quote.get('current', pos['avg_price'])
                             pos['name'] = quote.get('name', '')
                             fetched += 1
-                            print(f"[雪球]   {pos['symbol']} → ¥{pos['current_price']} (name={pos.get('name', '?')})", file=sys.stderr)
                     except Exception:
-                        print(f"[雪球]   {pos['symbol']} ⚠️ 获取失败，使用成本价 ¥{pos['avg_price']}", file=sys.stderr)
-                print(f"[雪球] 完成: {fetched}/{len(result)} 只获取成功", file=sys.stderr)
+                        pass
             except Exception as e:
                 print(f"[雪球] ⚠️ 引擎加载失败: {e}", file=sys.stderr)
 
-        conn.close()
         return result
     
     def get_positions(self) -> list:
@@ -1063,15 +1016,15 @@ class MarcusVNPyExecutor:
     
     def void_trade(self, trade_id: int, reason: str) -> dict:
         """撤回一笔成交（软删除，不计入持仓）"""
-        import sqlite3
         from datetime import datetime as _dt
 
-        db_path = str(Path(self.data_dir) / "trades.db")
-        conn = sqlite3.connect(db_path, timeout=30)
-        conn.execute("PRAGMA busy_timeout=30000")
+        conn = self.engine._get_pg_conn()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT id, symbol, direction, price, volume, voided FROM trades WHERE id = ?", (trade_id,))
+            cur.execute(
+                "SELECT id, symbol, direction, price, volume, voided FROM paper_trades WHERE id = %s",
+                (trade_id,)
+            )
             row = cur.fetchone()
             if not row:
                 return {"success": False, "error": f"交易 {trade_id} 不存在"}
@@ -1079,7 +1032,7 @@ class MarcusVNPyExecutor:
                 return {"success": False, "error": f"交易 {trade_id} 已被撤回"}
 
             cur.execute(
-                "UPDATE trades SET voided = 1, void_reason = ?, voided_at = ? WHERE id = ?",
+                "UPDATE paper_trades SET voided = 1, void_reason = %s, voided_at = %s WHERE id = %s",
                 (reason, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), trade_id)
             )
             conn.commit()
@@ -1094,14 +1047,13 @@ class MarcusVNPyExecutor:
 
     def unvoid_trade(self, trade_id: int) -> dict:
         """恢复一笔已撤回的成交"""
-        import sqlite3
-
-        db_path = str(Path(self.data_dir) / "trades.db")
-        conn = sqlite3.connect(db_path, timeout=30)
-        conn.execute("PRAGMA busy_timeout=30000")
+        conn = self.engine._get_pg_conn()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT id, symbol, direction, price, volume, voided FROM trades WHERE id = ?", (trade_id,))
+            cur.execute(
+                "SELECT id, symbol, direction, price, volume, voided FROM paper_trades WHERE id = %s",
+                (trade_id,)
+            )
             row = cur.fetchone()
             if not row:
                 return {"success": False, "error": f"交易 {trade_id} 不存在"}
@@ -1109,7 +1061,7 @@ class MarcusVNPyExecutor:
                 return {"success": False, "error": f"交易 {trade_id} 未被撤回"}
 
             cur.execute(
-                "UPDATE trades SET voided = 0, void_reason = NULL, voided_at = NULL WHERE id = ?",
+                "UPDATE paper_trades SET voided = 0, void_reason = NULL, voided_at = NULL WHERE id = %s",
                 (trade_id,)
             )
             conn.commit()
@@ -1124,20 +1076,16 @@ class MarcusVNPyExecutor:
 
     def get_voided_trades(self) -> list:
         """获取所有已撤回的交易"""
-        import sqlite3
-
-        db_path = str(Path(self.data_dir) / "trades.db")
-        conn = sqlite3.connect(db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=30000")
+        conn = self.engine._get_pg_conn()
         try:
             cur = conn.cursor()
             cur.execute(
                 "SELECT id, symbol, direction, price, volume, amount, profit, "
                 "created_at, trade_date, void_reason, voided_at "
-                "FROM trades WHERE voided = 1 ORDER BY voided_at DESC"
+                "FROM paper_trades WHERE voided = 1 ORDER BY voided_at DESC"
             )
-            return [dict(r) for r in cur.fetchall()]
+            cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
         finally:
             conn.close()
 

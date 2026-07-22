@@ -3,7 +3,6 @@
 Trades API endpoints.
 """
 import sys
-import time
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +11,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import get_settings
+from app.database import SessionLocal
+from app.models.paper_trade import PaperTrade
 from app.models.trade import TradeRequest, TradeResponse, OrderResponse, TradeHistoryResponse, VoidRequest, VoidResponse
 
 settings = get_settings()
@@ -46,29 +47,6 @@ def _get_stock_name(symbol: str) -> str:
 
     _stock_name_cache[symbol] = symbol
     return symbol
-
-
-def _get_db_conn(db_file, timeout=30):
-    """获取数据库连接（统一配置）"""
-    conn = sqlite3.connect(str(db_file), timeout=timeout)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
-
-
-def _execute_with_retry(func, max_retries=3, delay=0.5):
-    """数据库操作重试装饰器"""
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            return func()
-        except sqlite3.OperationalError as e:
-            last_error = e
-            if "locked" in str(e).lower() and attempt < max_retries - 1:
-                time.sleep(delay * (attempt + 1))  # 递增等待
-                continue
-            raise
-    raise last_error
 
 
 @router.post("", response_model=TradeResponse)
@@ -173,64 +151,38 @@ async def get_trade_history(
     limit: int = Query(20, ge=1, le=100, description="Number of records"),
     page: int = Query(1, ge=1, description="Page number"),
 ):
-    """Get trade history."""
-    db_file = settings.data_dir / "trades.db"
-    if not db_file.exists():
-        return TradeHistoryResponse(trades=[], total=0, page=page, page_size=limit)
-
-    def _query():
-        conn = _get_db_conn(db_file)
-        curs = conn.cursor()
-
-        # Build query (exclude voided trades by default)
-        where_clause = "WHERE (voided = 0 OR voided IS NULL)"
-        params = []
+    """Get trade history from PostgreSQL."""
+    db = SessionLocal()
+    try:
+        query = db.query(PaperTrade).filter(
+            (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+        )
         if symbol:
-            where_clause += " AND symbol = ?"
-            params.append(symbol)
+            query = query.filter(PaperTrade.symbol == symbol)
 
-        # Get total count
-        count_sql = f"SELECT COUNT(*) as cnt FROM trades {where_clause}"
-        curs.execute(count_sql, params)
-        total = curs.fetchone()["cnt"]
-
-        # Get paginated trades
+        total = query.count()
         offset = (page - 1) * limit
-        sql = f"""
-            SELECT id, orderid, symbol, direction, price, volume, created_at, reason
-            FROM trades
-            {where_clause}
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        """
-        curs.execute(sql, params + [limit, offset])
-        rows = curs.fetchall()
+        rows = query.order_by(PaperTrade.created_at.desc()).offset(offset).limit(limit).all()
 
         trades = []
         for row in rows:
-            sym = row["symbol"]
+            sym = row.symbol
             trades.append(OrderResponse(
-                id=row["id"],
-                order_id=row["orderid"],
+                id=row.id,
+                order_id=row.orderid,
                 symbol=sym,
                 name=_get_stock_name(sym),
-                direction=row["direction"],
-                price=row["price"],
-                volume=row["volume"],
+                direction=row.direction,
+                price=row.price,
+                volume=row.volume,
                 status="completed",
-                traded=row["volume"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                updated_at=datetime.fromisoformat(row["created_at"]),
-                reason=row["reason"] or "",
+                traded=row.volume,
+                created_at=datetime.fromisoformat(row.created_at),
+                updated_at=datetime.fromisoformat(row.created_at),
+                reason=row.reason or "",
             ))
-
-        conn.close()
-        return trades, total
-
-    try:
-        trades, total = _execute_with_retry(_query)
-    except sqlite3.OperationalError as e:
-        raise HTTPException(status_code=503, detail=f"Database busy, please retry: {str(e)}")
+    finally:
+        db.close()
 
     return TradeHistoryResponse(
         trades=trades,
@@ -265,47 +217,26 @@ async def get_pending_orders(
 
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_trade(order_id: str):
-    """Get specific trade by order ID."""
-    db_file = settings.data_dir / "trades.db"
-    if not db_file.exists():
-        raise HTTPException(status_code=404, detail="Trade not found")
-
-    def _query():
-        conn = _get_db_conn(db_file)
-        curs = conn.cursor()
-
-        curs.execute("""
-            SELECT orderid, symbol, direction, price, volume, created_at
-            FROM trades WHERE orderid = ?
-        """, (order_id,))
-        row = curs.fetchone()
-
+    """Get specific trade by order ID from PostgreSQL."""
+    db = SessionLocal()
+    try:
+        row = db.query(PaperTrade).filter(PaperTrade.orderid == order_id).first()
         if not row:
-            conn.close()
-            return None
+            raise HTTPException(status_code=404, detail="Trade not found")
 
         trade = OrderResponse(
-            order_id=row["orderid"],
-            symbol=row["symbol"],
-            direction=row["direction"],
-            price=row["price"],
-            volume=row["volume"],
+            order_id=row.orderid,
+            symbol=row.symbol,
+            direction=row.direction,
+            price=row.price,
+            volume=row.volume,
             status="completed",
-            traded=row["volume"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["created_at"]),
+            traded=row.volume,
+            created_at=datetime.fromisoformat(row.created_at),
+            updated_at=datetime.fromisoformat(row.created_at),
         )
-
-        conn.close()
-        return trade
-
-    try:
-        trade = _execute_with_retry(_query)
-    except sqlite3.OperationalError as e:
-        raise HTTPException(status_code=503, detail=f"Database busy, please retry: {str(e)}")
-
-    if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
+    finally:
+        db.close()
     return trade
 
 

@@ -19,7 +19,6 @@ LangGraph 交易决策流程编排
 import json
 import logging
 import re
-import sqlite3
 import ssl
 import urllib.request
 from datetime import datetime
@@ -174,47 +173,48 @@ def _read_scan_report() -> str:
 
 
 def _read_portfolio() -> str:
-    """读取账户持仓数据（直接读 trades.db 计算，避免进程内 HTTP 调用）
-
-    实际 DB schema:
-      positions: symbol, entry_date, highest_price, updated_at
-      trades: id, orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date
-    """
+    """读取账户持仓数据（从 PostgreSQL paper_* 表计算）"""
     try:
-        workspace = _get_workspace()
-        db_path = workspace / "data" / "trades.db"
-        if not db_path.exists():
-            return "{}"
+        from app.database import SessionLocal
+        from app.models.paper_trade import PaperTrade, PaperPosition, PaperAccountInfo
+        from sqlalchemy import func
 
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+        db = SessionLocal()
+        try:
+            acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+            initial_cap = float(acct.initial_capital) if acct else 100000.0
 
-        # 当前持仓标的
-        pos_rows = conn.execute(
-            "SELECT symbol, entry_date, highest_price, updated_at FROM positions"
-        ).fetchall()
-        held_symbols = {r['symbol']: r for r in pos_rows}
+            # 当前持仓标的元数据
+            pos_rows = db.query(PaperPosition).all()
+            held_symbols = {r.symbol: r for r in pos_rows}
 
-        # 全部成交记录
-        trades = conn.execute(
-            "SELECT symbol, direction, price, volume, amount, profit, trade_date "
-            "FROM trades WHERE volume > 0 AND (voided = 0 OR voided IS NULL) ORDER BY created_at"
-        ).fetchall()
+            # 全部非撤回成交
+            trades = db.query(PaperTrade).filter(
+                PaperTrade.volume > 0,
+                (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+            ).order_by(PaperTrade.created_at).all()
+
+            total_profit = float(
+                db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                    (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+                ).scalar() or 0
+            )
+        finally:
+            db.close()
 
         # 按标的汇总持仓量和成本
         symbol_pos: dict = {}
         for t in trades:
-            sym = t['symbol']
+            sym = t.symbol
             if sym not in symbol_pos:
                 symbol_pos[sym] = {'buy_volume': 0, 'buy_amount': 0.0, 'sell_volume': 0, 'sell_amount': 0.0}
-            if t['direction'] == 'buy':
-                symbol_pos[sym]['buy_volume'] += (t['volume'] or 0)
-                symbol_pos[sym]['buy_amount'] += (t['amount'] or 0)
-            elif t['direction'] == 'sell':
-                symbol_pos[sym]['sell_volume'] += (t['volume'] or 0)
-                symbol_pos[sym]['sell_amount'] += (t['amount'] or 0)
+            if t.direction == '买入':
+                symbol_pos[sym]['buy_volume'] += (t.volume or 0)
+                symbol_pos[sym]['buy_amount'] += (t.amount or 0)
+            elif t.direction == '卖出':
+                symbol_pos[sym]['sell_volume'] += (t.volume or 0)
+                symbol_pos[sym]['sell_amount'] += (t.amount or 0)
 
-        # 当前持仓明细
         positions = []
         for sym, pos in symbol_pos.items():
             net_vol = pos['buy_volume'] - pos['sell_volume']
@@ -225,39 +225,32 @@ def _read_portfolio() -> str:
                     "symbol": sym,
                     "volume": net_vol,
                     "avg_cost": round(avg_cost, 2),
-                    "entry_date": entry_info['entry_date'] or '',
-                    "highest_price": entry_info['highest_price'],
+                    "entry_date": entry_info.entry_date or '',
+                    "highest_price": entry_info.highest_price,
                 })
 
-        # 账户汇总
-        total_buy = sum(t['amount'] or 0 for t in trades if t['direction'] == 'buy')
-        total_sell = sum(t['amount'] or 0 for t in trades if t['direction'] == 'sell')
-        total_profit = sum(t['profit'] or 0 for t in trades)
-        cash = 100000.0 - total_buy + total_sell  # 初始资金 10 万
+        total_buy = sum(t.amount or 0 for t in trades if t.direction == '买入')
+        total_sell = sum(t.amount or 0 for t in trades if t.direction == '卖出')
+        cash = initial_cap - total_buy + total_sell
         total_cost = sum(p['avg_cost'] * p['volume'] for p in positions)
 
-        # 实时市值（雪球引擎 → 腾讯行情），失败回退成本价
         mv_result = _get_market_values(positions)
         market_value = mv_result["market_value"]
         total_asset_market = cash + market_value
-        total_asset = cash + total_cost  # 兼容旧字段名
+        total_asset = cash + total_cost
 
-        # 峰值权益追踪（用于回撤计算，入库 PostgreSQL）
         from app.core.peak_equity import save_peak_equity, load_peak_equity
         save_peak_equity(total_asset_market)
         peak_equity = load_peak_equity(fallback=max(100000, total_asset_market))
 
-        # 今日买入（T+1 锁定）
         today = datetime.now().strftime('%Y-%m-%d')
         today_bought = list(set(
-            t['symbol'] for t in trades
-            if t['direction'] == 'buy' and (t.get('trade_date') or '') == today
+            t.symbol for t in trades
+            if t.direction == '买入' and (t.trade_date or '') == today
         ))
 
-        conn.close()
-
         return json.dumps({
-            "initial_capital": 100000,
+            "initial_capital": initial_cap,
             "cash": round(cash, 2),
             "total_cost": round(total_cost, 2),
             "total_asset": round(total_asset, 2),
@@ -596,22 +589,24 @@ def _check_drawdown(portfolio_json: str) -> tuple:
 
 
 def _check_consecutive_losses() -> int:
-    """从 trades.db 查询连续亏损笔数（最近卖出交易的 profit 字段）"""
+    """从 PostgreSQL paper_trades 查询连续亏损笔数（最近卖出交易的 profit 字段）"""
     try:
-        workspace = _get_workspace()
-        db_path = workspace / "data" / "trades.db"
-        if not db_path.exists():
-            return 0
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT profit FROM trades WHERE direction='sell' AND volume > 0 AND (voided = 0 OR voided IS NULL) "
-            "ORDER BY created_at DESC LIMIT 10"
-        ).fetchall()
-        conn.close()
+        from app.database import SessionLocal
+        from app.models.paper_trade import PaperTrade
+
+        db = SessionLocal()
+        try:
+            rows = db.query(PaperTrade.profit).filter(
+                PaperTrade.direction == '卖出',
+                PaperTrade.volume > 0,
+                (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+            ).order_by(PaperTrade.created_at.desc()).limit(10).all()
+        finally:
+            db.close()
+
         count = 0
         for r in rows:
-            if r['profit'] is not None and r['profit'] < 0:
+            if r.profit is not None and r.profit < 0:
                 count += 1
             else:
                 break
