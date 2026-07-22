@@ -57,6 +57,13 @@ TABLE_MAP = {
                      "position_value", "cost_value", "realized_pnl", "float_pnl",
                      "total_pnl", "initial_capital", "created_at"],
     },
+    "long_term_candidates": {
+        "pg_table": "long_term_candidates",
+        "pk": "id",
+        "columns": ["id", "symbol", "name", "status", "chain_name", "chain_role",
+                     "notes", "added_at", "promoted_at", "last_checked_at",
+                     "last_grade", "checks_count"],
+    },
 }
 
 

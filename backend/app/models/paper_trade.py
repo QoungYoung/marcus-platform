@@ -72,3 +72,21 @@ class PaperDailySnapshot(Base):
     total_pnl = Column(Float, default=0)
     initial_capital = Column(Float, nullable=False)
     created_at = Column(Text, nullable=False)
+
+
+class LongTermCandidate(Base):
+    """长期观察候选池 — 从 SQLite trades.db 迁移到 PostgreSQL"""
+    __tablename__ = "long_term_candidates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(16), nullable=False, unique=True, index=True)
+    name = Column(String(50), default="")
+    status = Column(String(16), default="active")
+    chain_name = Column(String(50), default="")
+    chain_role = Column(String(50), default="")
+    notes = Column(Text, default="")
+    added_at = Column(Text, nullable=False)
+    promoted_at = Column(Text, nullable=True)
+    last_checked_at = Column(Text, nullable=True)
+    last_grade = Column(Text, default="")
+    checks_count = Column(Integer, default=0)
