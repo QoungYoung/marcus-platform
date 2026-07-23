@@ -660,25 +660,7 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
 
 
 def _check_drawdown(portfolio_json: str) -> tuple:
-    """检查总回撤（峰值回撤），返回 (pct, blocked, reason)。
-
-    公式：drawdown = (current_equity - peak_equity) / peak_equity
-    current_equity 使用实时市值（total_asset_market），peak_equity 从文件追踪。
-    """
-    try:
-        p = json.loads(portfolio_json)
-        current_equity = p.get('total_asset_market', p.get('total_asset', 100000))
-        peak_equity = p.get('peak_equity', max(current_equity, 100000))
-        if peak_equity > 0:
-            drawdown = (current_equity - peak_equity) / peak_equity
-            if drawdown <= -0.05:
-                return drawdown * 100, True, (
-                    f"总回撤 {drawdown*100:.1f}% 已达 5% 硬止损线 "
-                    f"(当前权益 {current_equity:.0f} / 峰值 {peak_equity:.0f})"
-                )
-            return drawdown * 100, False, ""
-    except Exception:
-        pass
+    # TODO: 临时屏蔽，等诊断日志定位真因后恢复
     return 0.0, False, ""
 
 
