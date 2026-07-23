@@ -183,6 +183,8 @@ def _read_portfolio() -> str:
         try:
             acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
             initial_cap = float(acct.initial_capital) if acct else 100000.0
+            # 现金从 paper_account_info 直接读取（paper engine 维护，含佣金/费用调整后的准确值）
+            available_cash = float(acct.available_cash) if acct else (initial_cap - 0)
 
             # 当前持仓标的元数据
             pos_rows = db.query(PaperPosition).all()
@@ -231,7 +233,7 @@ def _read_portfolio() -> str:
 
         total_buy = sum(t.amount or 0 for t in trades if t.direction == '买入')
         total_sell = sum(t.amount or 0 for t in trades if t.direction == '卖出')
-        cash = initial_cap - total_buy + total_sell
+        cash = available_cash
         total_cost = sum(p['avg_cost'] * p['volume'] for p in positions)
 
         mv_result = _get_market_values(positions)
@@ -660,7 +662,25 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
 
 
 def _check_drawdown(portfolio_json: str) -> tuple:
-    # TODO: 临时屏蔽，等诊断日志定位真因后恢复
+    """检查总回撤（峰值回撤），返回 (pct, blocked, reason)。
+
+    公式：drawdown = (current_equity - peak_equity) / peak_equity
+    current_equity 使用实时市值（total_asset_market），peak_equity 从文件追踪。
+    """
+    try:
+        p = json.loads(portfolio_json)
+        current_equity = p.get('total_asset_market', p.get('total_asset', 100000))
+        peak_equity = p.get('peak_equity', max(current_equity, 100000))
+        if peak_equity > 0:
+            drawdown = (current_equity - peak_equity) / peak_equity
+            if drawdown <= -0.05:
+                return drawdown * 100, True, (
+                    f"总回撤 {drawdown*100:.1f}% 已达 5% 硬止损线 "
+                    f"(当前权益 {current_equity:.0f} / 峰值 {peak_equity:.0f})"
+                )
+            return drawdown * 100, False, ""
+    except Exception:
+        pass
     return 0.0, False, ""
 
 
