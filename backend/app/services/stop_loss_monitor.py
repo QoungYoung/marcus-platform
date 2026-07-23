@@ -1452,7 +1452,11 @@ class StopLossMonitor:
             )
             return
 
-        trigger_key = f"{symbol}_{price:.2f}"
+        # 去重键：清仓用 symbol+price（防同一价格重复触发），减仓用 symbol+ratio（同一减仓比例每日只执行一次）
+        if sell_ratio >= 0.99:
+            trigger_key = f"{symbol}_{price:.2f}"
+        else:
+            trigger_key = f"{symbol}_reduce_{sell_ratio:.0%}"
         with self.lock:
             if trigger_key in self._triggered:
                 print(f"[止损] ⏭️ {symbol} 已触发过 (key={trigger_key})，跳过", file=sys.stderr)

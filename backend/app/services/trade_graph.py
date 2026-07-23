@@ -241,12 +241,6 @@ def _read_portfolio() -> str:
         total_asset_market = cash + market_value
         total_asset = cash + total_cost
 
-        import sys as _sys
-        print(f"[TradeGraph] cash={cash:.0f} total_cost={total_cost:.0f} market_value={market_value:.0f} "
-              f"total_asset={total_asset:.0f} total_asset_market={total_asset_market:.0f} "
-              f"positions={len(positions)} symbols={[p['symbol']+' v='+str(p['volume'])+' ac='+str(p['avg_cost']) for p in positions]}",
-              file=_sys.stderr)
-
         from app.core.peak_equity import save_peak_equity, load_peak_equity
         save_peak_equity(total_asset_market)
         peak_equity = load_peak_equity(fallback=max(100000, total_asset_market))
