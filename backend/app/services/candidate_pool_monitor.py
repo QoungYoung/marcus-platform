@@ -229,6 +229,16 @@ class CandidatePoolMonitor:
         if self.today_buys.get(symbol, 0) >= self.max_per_symbol_per_day:
             return False
 
+        # ── 已在持仓中？跳过 ──
+        try:
+            positions = self.executor.engine.get_positions() if self.executor else {}
+            held_symbols = {p.get('symbol', '') for p in positions} if isinstance(positions, list) else set()
+            if symbol in held_symbols:
+                return False
+        except Exception as e:
+            logger.error(f"[建仓] 查询持仓失败，保守拒绝买入 {symbol}: {e}")
+            return False
+
         # ── Step 1: 重跑入场过滤 ──
         try:
             async def _run_filters():

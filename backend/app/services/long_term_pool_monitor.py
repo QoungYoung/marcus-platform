@@ -264,8 +264,9 @@ class LongTermPoolMonitor:
             held_symbols = {p.get('symbol', '') for p in positions} if isinstance(positions, list) else set()
             if symbol in held_symbols:
                 return False
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"[长期池] 查询持仓失败，保守拒绝买入 {symbol}: {e}")
+            return False
 
         # ── Step 1: 入场过滤 ──
         try:
