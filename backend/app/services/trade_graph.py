@@ -218,15 +218,15 @@ def _read_portfolio() -> str:
         positions = []
         for sym, pos in symbol_pos.items():
             net_vol = pos['buy_volume'] - pos['sell_volume']
-            if net_vol > 0 and sym in held_symbols:
+            if net_vol > 0:
                 avg_cost = pos['buy_amount'] / pos['buy_volume'] if pos['buy_volume'] > 0 else 0
-                entry_info = held_symbols[sym]
+                entry_info = held_symbols.get(sym)
                 positions.append({
                     "symbol": sym,
                     "volume": net_vol,
                     "avg_cost": round(avg_cost, 2),
-                    "entry_date": entry_info.entry_date or '',
-                    "highest_price": entry_info.highest_price,
+                    "entry_date": entry_info.entry_date if entry_info else '',
+                    "highest_price": entry_info.highest_price if entry_info else None,
                 })
 
         total_buy = sum(t.amount or 0 for t in trades if t.direction == '买入')
