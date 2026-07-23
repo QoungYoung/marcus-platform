@@ -1171,6 +1171,46 @@ def _get_market_regime_for_calc() -> str:
     return "trend"  # 默认趋势市，不做收紧
 
 
+def _get_style_regime_for_calc() -> str:
+    """从 market_diagnosis 表读取今日风格轮动信号，用于仓位调整。"""
+    try:
+        import json as _json
+        from app.database import SessionLocal
+        from app.models.market_orm import MarketDiagnosis
+        from datetime import datetime
+        db = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y%m%d")
+            row = db.query(MarketDiagnosis).filter(
+                MarketDiagnosis.trade_date == today
+            ).first()
+            if row and row.indicators_json:
+                indicators = _json.loads(row.indicators_json)
+                sr = indicators.get("style_rotation", {})
+                return sr.get("style_regime", "NEUTRAL")
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return "NEUTRAL"  # 默认均衡，不做风格偏好
+
+
+def _get_style_cap_modifier(style_regime: str) -> tuple:
+    """风格模式 → (单票上限倍率, 总仓上限倍率, 说明)。
+
+    OFFENSE: 放宽单票上限，鼓励进攻
+    DEFENSE: 收紧单票上限，控制风险
+    RESOURCE_HEDGE: 中等收紧
+    """
+    if style_regime == "OFFENSE":
+        return (1.15, 1.0, "进攻模式：单票上限×1.15")
+    elif style_regime == "DEFENSE":
+        return (0.65, 0.75, "防御模式：单票上限×0.65，总仓×0.75")
+    elif style_regime == "RESOURCE_HEDGE":
+        return (0.85, 0.85, "资源避险：单票上限×0.85，总仓×0.85")
+    return (1.0, 1.0, "")
+
+
 def _get_concept_ranks(symbol: str) -> tuple:
     """
     获取股票在概念板块资金流排名中的最佳排名（今日 + 3日均值）。
@@ -1620,6 +1660,15 @@ async def calc_position(req: CalcPositionRequest):
         if req.stance == "green":
             warnings.append("🔴 震荡市：立场从green收紧为yellow，单票上限≤8%，总仓≤50%")
         logger.info(f"[calc_position] 震荡市收紧: single_cap={single_cap_pct}%, total_cap={total_cap_pct}%")
+
+    # ── 风格轮动仓位调整 ──
+    style_regime = _get_style_regime_for_calc()
+    style_single_mod, style_total_mod, style_note = _get_style_cap_modifier(style_regime)
+    if style_single_mod != 1.0:
+        single_cap_pct *= style_single_mod
+        total_cap_pct *= style_total_mod
+        warnings.append(f"🎨 {style_note}")
+        logger.info(f"[calc_position] 风格调整({style_regime}): single_cap={single_cap_pct:.1f}%, total_cap={total_cap_pct:.1f}%")
 
     # ── Layer 3: 计算数量 ──
     effective_single_cap_before = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset

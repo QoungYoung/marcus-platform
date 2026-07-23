@@ -1668,20 +1668,304 @@ _SW_SECTOR_NAMES = {
     "801230.SI": "综合",
 }
 
+# ========== 风格轮动检查 ==========
+
+# 申万L1行业名称 → 风格篮子 关键词映射（按优先级: tech > resource > defense）
+_STYLE_BASKET_KEYWORDS = {
+    "tech":     ["电子", "计算机", "传媒", "通信", "电力设备", "机械设备"],
+    "resource": ["有色金属", "基础化工", "钢铁"],
+    "defense":  ["银行", "公用", "煤炭", "石油石化", "交通运输", "食品饮料"],
+}
+
+# 概念板块资金流 → 风格篮子 关键词映射（同样优先级）
+_CONCEPT_FLOW_KEYWORDS = {
+    "tech":     ["AI", "芯片", "半导体", "算力", "信创", "5G", "消费电子", "机器人",
+                 "数字经济", "云计算", "区块链", "软件", "互联网", "大数据", "人工智能",
+                 "通信", "电子", "计算机"],
+    "resource": ["黄金", "有色", "铜", "锂矿", "稀土", "铝", "钢铁", "煤炭", "石油",
+                 "天然气", "金属", "矿产"],
+    "defense":  ["银行", "红利", "高股息", "中特估", "公用", "白酒", "食品饮料",
+                 "高速", "港口", "电力", "保险", "破净股", "价值", "上证50"],
+}
+
+# SW 篮子缓存
+_sw_baskets_cache = None
+_sw_baskets_cache_time = None
+
+# 硬编码兜底（index_classify 不可用时使用）
+_FALLBACK_SW_BASKETS = {
+    "defense":  ["801150.SI", "801120.SI", "801160.SI", "801950.SI",
+                 "801960.SI", "801170.SI"],
+    "tech":     ["801080.SI", "801750.SI", "801760.SI", "801770.SI",
+                 "801730.SI", "801890.SI"],
+    "resource": ["801050.SI", "801030.SI", "801040.SI"],
+}
+
+
+def _get_sw_style_baskets():
+    """动态获取申万L1行业代码，按防御/科技/资源分类。结果缓存30天。"""
+    global _sw_baskets_cache, _sw_baskets_cache_time
+    now = datetime.now()
+    if _sw_baskets_cache is not None and _sw_baskets_cache_time is not None:
+        if (now - _sw_baskets_cache_time).days < 30:
+            return _sw_baskets_cache
+
+    pro = _get_tushare_pro()
+    try:
+        df = pro.index_classify(level='L1', src='SW2021')
+    except Exception as e:
+        logger.warning(f"[style_rotation] index_classify 失败，使用硬编码兜底: {e}")
+        return _FALLBACK_SW_BASKETS
+
+    if df is None or df.empty:
+        return _FALLBACK_SW_BASKETS
+
+    baskets = {"defense": [], "tech": [], "resource": []}
+
+    for _, row in df.iterrows():
+        if str(row.get('is_pub', '1')) != '1':
+            continue
+        code = str(row['index_code'])
+        name = str(row['industry_name'])
+
+        matched = False
+        for basket_name in ["tech", "resource", "defense"]:
+            for kw in _STYLE_BASKET_KEYWORDS[basket_name]:
+                if kw in name:
+                    baskets[basket_name].append(code)
+                    matched = True
+                    break
+            if matched:
+                break
+
+    for k in baskets:
+        if not baskets[k]:
+            logger.warning(f"[style_rotation] {k} 篮子为空，回退到硬编码")
+            baskets[k] = _FALLBACK_SW_BASKETS.get(k, [])
+
+    logger.info(f"[style_rotation] SW篮子: defense={len(baskets['defense'])}行业, "
+                f"tech={len(baskets['tech'])}行业, resource={len(baskets['resource'])}行业")
+    _sw_baskets_cache = baskets
+    _sw_baskets_cache_time = now
+    return baskets
+
+
+def _classify_concept_to_basket(name: str) -> str:
+    """将概念板块名称分类到风格篮子，按优先级 tech > resource > defense"""
+    for basket_name in ["tech", "resource", "defense"]:
+        for kw in _CONCEPT_FLOW_KEYWORDS[basket_name]:
+            if kw in name:
+                return basket_name
+    return "other"
+
+
+def _basket_daily_comparison(day_data: dict) -> str:
+    """比较三个篮子的单日表现，返回跑赢的篮子名称。day_data: {basket: avg_pct_chg}"""
+    if not day_data:
+        return "none"
+    return max(day_data, key=day_data.get)
+
+
+def _count_consecutive_leader(daily_leaders: list) -> tuple:
+    """统计最新连续跑赢的篮子和天数。daily_leaders: [leader_name, ...] 按日期升序"""
+    if not daily_leaders:
+        return ("none", 0)
+    leader = daily_leaders[-1]
+    count = 0
+    for l in reversed(daily_leaders):
+        if l == leader:
+            count += 1
+        else:
+            break
+    return (leader, count)
+
+
+def _compute_price_5d_comparison(baskets: dict, pro, start_date: str, end_date: str):
+    """价格维度：近5日三个风格篮子的指数涨跌幅对比"""
+    import pandas as pd
+
+    all_codes = []
+    for codes in baskets.values():
+        all_codes.extend(codes)
+    if not all_codes:
+        return None
+
+    try:
+        df = pro.index_daily(ts_code=','.join(all_codes),
+                             start_date=start_date, end_date=end_date)
+        if df is None or df.empty:
+            return None
+
+        df = df.sort_values(["ts_code", "trade_date"])
+        dates = sorted(df['trade_date'].unique())[-5:]
+
+        daily_leaders = []
+        daily_returns = {"defense": [], "tech": [], "resource": []}
+
+        for td in dates:
+            day_data = df[df['trade_date'] == td]
+            basket_avg = {}
+            for b_name, codes in baskets.items():
+                bdf = day_data[day_data['ts_code'].isin(codes)]
+                if not bdf.empty and 'pct_chg' in bdf.columns:
+                    basket_avg[b_name] = round(float(bdf['pct_chg'].mean()), 2)
+
+            if basket_avg:
+                leader = _basket_daily_comparison(basket_avg)
+                daily_leaders.append(leader)
+                for k in daily_returns:
+                    daily_returns[k].append(basket_avg.get(k, 0))
+
+        leader, consecutive = _count_consecutive_leader(daily_leaders)
+
+        return {
+            "defense_avg_return": round(float(pd.Series(daily_returns["defense"]).mean()), 2),
+            "tech_avg_return": round(float(pd.Series(daily_returns["tech"]).mean()), 2),
+            "resource_avg_return": round(float(pd.Series(daily_returns["resource"]).mean()), 2),
+            "daily_leaders": daily_leaders,
+            "leader": leader,
+            "consecutive_days": consecutive,
+            "defense_win_days": daily_leaders.count("defense"),
+            "tech_win_days": daily_leaders.count("tech"),
+            "resource_win_days": daily_leaders.count("resource"),
+        }
+    except Exception as e:
+        logger.warning(f"[style_rotation] 价格维度计算失败: {e}")
+        return None
+
+
+def _compute_flow_10d_comparison(pro, start_date_10d: str, end_date: str):
+    """资金维度：近10日概念板块资金流按风格篮子聚合对比"""
+    try:
+        df = pro.moneyflow_ind_dc(start_date=start_date_10d, end_date=end_date,
+                                  content_type='概念')
+        if df is None or df.empty:
+            return None
+
+        df = df.sort_values("trade_date")
+        dates = sorted(df['trade_date'].unique())[-10:]
+
+        daily_leaders = []
+        daily_flows = {"defense": [], "tech": [], "resource": []}
+
+        for td in dates:
+            day_data = df[df['trade_date'] == td]
+            basket_flows = {"defense": 0.0, "tech": 0.0, "resource": 0.0}
+
+            for _, row in day_data.iterrows():
+                name = str(row.get('name', ''))
+                net_amount = float(row.get('net_amount', 0) or 0) / 10000  # 元→万元
+                basket = _classify_concept_to_basket(name)
+                if basket != "other":
+                    basket_flows[basket] += net_amount
+
+            leader = _basket_daily_comparison(basket_flows)
+            daily_leaders.append(leader)
+            for k in daily_flows:
+                daily_flows[k].append(basket_flows[k])
+
+        leader, consecutive = _count_consecutive_leader(daily_leaders)
+
+        return {
+            "defense_total_flow": round(sum(daily_flows["defense"]), 0),
+            "tech_total_flow": round(sum(daily_flows["tech"]), 0),
+            "resource_total_flow": round(sum(daily_flows["resource"]), 0),
+            "daily_leaders": daily_leaders,
+            "leader": leader,
+            "consecutive_days": consecutive,
+            "defense_win_days": daily_leaders.count("defense"),
+            "tech_win_days": daily_leaders.count("tech"),
+            "resource_win_days": daily_leaders.count("resource"),
+        }
+    except Exception as e:
+        logger.warning(f"[style_rotation] 资金维度计算失败: {e}")
+        return None
+
+
+def _compute_style_rotation(pro, start_date: str, start_date_10d: str,
+                            end_date: str) -> dict:
+    """风格轮动检测主函数：价格+资金双维度确认，输出进攻/防御/资源避险/均衡"""
+    baskets = _get_sw_style_baskets()
+
+    price_result = _compute_price_5d_comparison(baskets, pro, start_date, end_date)
+    flow_result = _compute_flow_10d_comparison(pro, start_date_10d, end_date)
+
+    result = {
+        "baskets": {b: baskets[b] for b in baskets},
+        "price_5d": price_result,
+        "flow_10d": flow_result,
+        "style_regime": "NEUTRAL",
+        "consecutive_days": 0,
+        "suggestion": "按正常产业链逻辑选股，不做风格偏好",
+        "divergence_warning": None,
+    }
+
+    if price_result is None or flow_result is None:
+        result["suggestion"] = "风格轮动数据不足，维持均衡配置"
+        return result
+
+    p_leader = price_result.get("leader", "none")
+    p_days = price_result.get("consecutive_days", 0)
+    f_leader = flow_result.get("leader", "none")
+    f_days = flow_result.get("consecutive_days", 0)
+
+    # 双维度确认：价格和资金必须指向同一方向，且各自连续跑赢≥3天
+    if p_leader == f_leader and p_leader in ("defense", "tech", "resource") \
+            and p_days >= 3 and f_days >= 3:
+        regime_map = {
+            "defense": "DEFENSE",
+            "tech": "OFFENSE",
+            "resource": "RESOURCE_HEDGE",
+        }
+        suggestion_map = {
+            "OFFENSE": "科技连续跑赢 → 切换到进攻模式 → 重仓科技主线",
+            "DEFENSE": "避险连续跑赢 → 切换到防御模式 → 科技板块只卖不买，积极寻找避险标的",
+            "RESOURCE_HEDGE": "资源连续跑赢 → 切换到资源避险 → 关注黄金/有色/能源标的",
+        }
+        result["style_regime"] = regime_map[p_leader]
+        result["consecutive_days"] = min(p_days, f_days)
+        result["suggestion"] = suggestion_map[p_leader]
+        logger.info(f"[style_rotation] 触发模式: {result['style_regime']} "
+                     f"(价格{p_days}天/资金{f_days}天)")
+
+    # 背离检测：价格和资金持续矛盾 ≥ 5天
+    if p_leader != "none" and f_leader != "none" and p_leader != f_leader:
+        p_leaders = price_result.get("daily_leaders", [])
+        f_leaders = flow_result.get("daily_leaders", [])
+        min_len = min(len(p_leaders), len(f_leaders))
+        divergence_count = 0
+        for i in range(1, min_len + 1):
+            if p_leaders[-i] != f_leaders[-i] \
+                    and p_leaders[-i] != "none" and f_leaders[-i] != "none":
+                divergence_count += 1
+            else:
+                break
+        if divergence_count >= 5:
+            result["divergence_warning"] = (
+                "⚠️ 价格与资金背离：价格与资金方向持续矛盾，"
+                "市场分歧严重，建议轻仓观望"
+            )
+            result["suggestion"] = "价格与资金背离，轻仓观望"
+            logger.warning(f"[style_rotation] 背离: 价格{p_leader} vs 资金{f_leader} "
+                           f"已{divergence_count}天")
+
+    return result
+
 
 @router.get("/market-diagnosis")
 async def get_market_diagnosis():
     """
     市场状态诊断仪表盘 V2.0。
 
-    五大指标：
+    六大指标：
       ① 市场平均振幅 — 成交额前100活跃股近10天平均振幅
       ② 连阳/连阴天数 — 上证指数最大连续同向天数
       ③ 板块轮动速度 — 近5天申万行业涨幅前3是否重复
       ④ 涨跌停比 — 涨停/跌停家数比
       ⑤ MA5方向 — 大盘MA5角度（降权，仅参考）
+      ⑥ 风格轮动 — 防御/科技/资源三篮子价格+资金双维度对比
 
-    综合诊断 → 趋势市 / 震荡市 / 极端市 + 对应策略建议
+    综合诊断 → 趋势市 / 震荡市 + 风格模式（进攻/防御/资源避险/均衡）
     """
     import math
     from datetime import datetime as dt, timedelta
@@ -1907,6 +2191,9 @@ async def get_market_diagnosis():
         osc += 0.5
         detail_list.append(f"⑤ MA5角度{ma5_angle:+.1f}° → 震荡 +0.5票（降权）")
 
+    # ── ⑥ 风格轮动检查（不影响趋势/震荡判定）──
+    style_rotation = _compute_style_rotation(pro, start_date, start_date_10d, end_date)
+
     # ── 最终判定（总票数6.5，≥3.5票震荡 → 震荡市，否则 → 趋势市）──
     if osc >= 3.5:
         state, label, suggestion = "oscillation", "🟡 震荡市", "60分钟右侧交易，持仓1-3天"
@@ -1947,6 +2234,7 @@ async def get_market_diagnosis():
                 "signal": "趋势" if abs(ma5_angle) > 30 else "震荡",
                 "weight": "降权参考",
             },
+            "style_rotation": style_rotation,
         },
         "diagnosis": {
             "state": state,

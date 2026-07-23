@@ -326,6 +326,94 @@ def _read_market_regime() -> tuple:
     return ("unknown", "未知", "⚠️ 今日尚未执行盘前诊断（9:10），无法确定市场结构。禁止按趋势市默认策略操作！")
 
 
+def _read_style_regime() -> dict:
+    """从 market_diagnosis 表读取今日风格轮动信号。
+
+    Returns:
+        dict with keys: style_regime, consecutive_days, suggestion
+    """
+    try:
+        import json as _json
+        from app.database import SessionLocal
+        from app.models.market_orm import MarketDiagnosis
+        db = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y%m%d")
+            row = db.query(MarketDiagnosis).filter(
+                MarketDiagnosis.trade_date == today
+            ).first()
+            if row and row.indicators_json:
+                indicators = _json.loads(row.indicators_json)
+                sr = indicators.get("style_rotation", {})
+                return {
+                    "style_regime": sr.get("style_regime", "NEUTRAL"),
+                    "consecutive_days": sr.get("consecutive_days", 0),
+                    "suggestion": sr.get("suggestion", ""),
+                    "divergence_warning": sr.get("divergence_warning"),
+                }
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return {"style_regime": "NEUTRAL", "consecutive_days": 0,
+            "suggestion": "", "divergence_warning": None}
+
+
+def _get_style_strategy(style_info: dict) -> str:
+    """根据风格轮动信号生成策略提示"""
+    regime = style_info.get("style_regime", "NEUTRAL")
+    days = style_info.get("consecutive_days", 0)
+    suggestion = style_info.get("suggestion", "")
+    warning = style_info.get("divergence_warning")
+
+    if regime == "OFFENSE":
+        block = (
+            "\n📊 **风格模式：⚔️ 进攻**\n"
+            f"科技风格已连续跑赢 {days} 天（价格+资金双确认）。\n"
+            "操作规则：\n"
+            "| 规则 | 内容 |\n"
+            "|------|------|\n"
+            "| 选股偏好 | 优先科技成长类标的（半导体/AI/算力/机器人等） |\n"
+            "| 科技仓位上限 | **20%**（从15%上调） |\n"
+            "| 防御仓位上限 | **10%**（从15%下调） |\n"
+            "| 总仓位上限 | 维持现有配置 |\n"
+        )
+    elif regime == "DEFENSE":
+        block = (
+            "\n📊 **风格模式：🛡️ 防御**\n"
+            f"防御风格已连续跑赢 {days} 天（价格+资金双确认）。\n"
+            "操作规则：\n"
+            "| 规则 | 内容 |\n"
+            "|------|------|\n"
+            "| 科技板块 | **只卖不买**，严禁开新仓 |\n"
+            "| 选股偏好 | 积极寻找避险标的（银行/红利/高股息/公用事业） |\n"
+            "| 科技仓位上限 | **5%**（从15%下调） |\n"
+            "| 防御仓位上限 | **20%**（从15%上调） |\n"
+            "| 总仓位上限 | 主力净流出>200亿时降至40% |\n"
+        )
+    elif regime == "RESOURCE_HEDGE":
+        block = (
+            "\n📊 **风格模式：🥇 资源避险**\n"
+            f"资源风格已连续跑赢 {days} 天（价格+资金双确认）。\n"
+            "操作规则：\n"
+            "| 规则 | 内容 |\n"
+            "|------|------|\n"
+            "| 选股偏好 | 关注黄金/有色/能源类标的 |\n"
+            "| 资源仓位上限 | **20%**（从15%上调） |\n"
+            "| 科技仓位上限 | **10%**（从15%下调） |\n"
+        )
+    else:
+        block = "\n📊 **风格模式：⚖️ 均衡**\n按正常产业链逻辑选股，不做风格偏好。\n"
+
+    if warning:
+        block += f"\n{warning}\n"
+
+    if suggestion:
+        block += f"\n风格建议: {suggestion}\n"
+
+    return block
+
+
 def _get_regime_strategy(regime: str) -> str:
     """根据市场结构生成策略切换指令块"""
     if regime == "oscillation":
@@ -727,6 +815,7 @@ def node_fetch_context(state: TradeState) -> dict:
     logger.info(f"[{eid}] [Graph] ▶ fetch_context")
 
     regime, label, suggestion = _read_market_regime()
+    style_info = _read_style_regime()
 
     return {
         "scan_report_text": _read_scan_report(),
@@ -734,7 +823,9 @@ def node_fetch_context(state: TradeState) -> dict:
         "pool_context": _read_pool_context(state['task_id']),
         "stance_context": _read_stance_context(),
         "regime_context": _get_regime_strategy(regime),
+        "style_context": _get_style_strategy(style_info),
         "market_regime": regime,
+        "style_regime": style_info.get("style_regime", "NEUTRAL"),
         "trade_mode_instruction": _get_trade_instruction(state['window'], regime),
     }
 
@@ -818,6 +909,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
 
     prompt = (
         f"{state['regime_context']}\n"
+        f"{state.get('style_context', '')}"
         f"{state['pool_context']}"
         f"{state['trade_mode_instruction']}\n"
         f"{state['stance_context']}"
@@ -1009,7 +1101,9 @@ def run_trade_decision(task_id: str, execution_id: str, pi_prompt: str) -> Trade
         "stance_context": "",
         "trade_mode_instruction": "",
         "regime_context": "",
+        "style_context": "",
         "market_regime": "trend",
+        "style_regime": "NEUTRAL",
         "drawdown_pct": 0.0,
         "consecutive_losses": 0,
         "hard_blocked": False,

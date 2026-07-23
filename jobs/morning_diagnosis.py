@@ -68,6 +68,44 @@ def format_message(data: dict) -> str:
     lines += [
         f"④ 涨跌停比: {limit_r.get('limit_up', '?')}↑/{limit_r.get('limit_down', '?')}↓ = {limit_r.get('ratio', '?'):.1f}:1 → {limit_r.get('signal', '?')}",
         f"⑤ MA5方向: {ma5.get('direction', '?')} ({ma5.get('angle_deg', 0):+.1f}°) → {ma5.get('signal', '?')} [{ma5.get('weight', '降权')}]",
+    ]
+
+    # ⑥ 风格轮动检查
+    style = indicators.get("style_rotation", {})
+    if style:
+        regime = style.get("style_regime", "NEUTRAL")
+        style_days = style.get("consecutive_days", 0)
+        style_suggestion = style.get("suggestion", "")
+        divergence = style.get("divergence_warning")
+
+        regime_icons = {
+            "OFFENSE": "⚔️ 进攻模式",
+            "DEFENSE": "🛡️ 防御模式",
+            "RESOURCE_HEDGE": "🥇 资源避险",
+            "NEUTRAL": "⚖️ 均衡",
+        }
+        regime_label = regime_icons.get(regime, f"❓ {regime}")
+
+        if regime != "NEUTRAL":
+            lines.append(f"⑥ 风格轮动: {regime_label} (持续{style_days}天)")
+            if style_suggestion:
+                lines.append(f"   → {style_suggestion}")
+        else:
+            lines.append(f"⑥ 风格轮动: {regime_label}")
+
+        if divergence:
+            lines.append(f"   {divergence}")
+
+        # 显示篮子对比
+        price_5d = style.get("price_5d", {})
+        if price_5d:
+            lines.append(
+                f"   近5日涨跌: 防御{price_5d.get('defense_avg_return', 0):+.2f}%  "
+                f"科技{price_5d.get('tech_avg_return', 0):+.2f}%  "
+                f"资源{price_5d.get('resource_avg_return', 0):+.2f}%"
+            )
+
+    lines += [
         "━" * 24,
         f"综合诊断: {diagnosis.get('label', '?')}",
         f"操作建议: {diagnosis.get('suggestion', '?')}",
