@@ -3,6 +3,7 @@
 Portfolio API endpoints.
 """
 import sys
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
