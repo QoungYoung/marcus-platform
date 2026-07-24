@@ -110,6 +110,12 @@ export const schedulerApi = {
   stopStopLossMonitor: () => api.post('/scheduler/stop-loss-monitor/stop'),
 }
 
+// Reflect Panel APIs
+export const reflectApi = {
+  getSessions: () => api.get('/panel/reflect/sessions'),
+  getSession: (id: string) => api.get(`/panel/reflect/sessions/${id}`),
+}
+
 // Health check
 export const healthApi = {
   check: () => api.get('/health'),

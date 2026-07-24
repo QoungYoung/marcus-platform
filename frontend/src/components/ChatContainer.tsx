@@ -1733,6 +1733,7 @@ interface SessionMeta {
   title: string;
   createdAt: string;
   messageCount: number;
+  type: 'chat' | 'reflect';
 }
 
 const SESSIONS_META_KEY = 'marcus_sessions_meta';
@@ -1749,7 +1750,7 @@ const saveSessionsMeta = (meta: Record<string, Omit<SessionMeta, 'id'>>) => {
 const buildSessionsList = (): SessionMeta[] => {
   const meta = loadSessionsMeta();
   return Object.entries(meta)
-    .map(([id, m]) => ({ id, ...m }))
+    .map(([id, m]) => ({ id, ...m, type: (m as any).type || 'chat' }))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 };
 
@@ -1763,6 +1764,116 @@ const removeSessionMeta = (sessionId: string) => {
   const meta = loadSessionsMeta();
   delete meta[sessionId];
   saveSessionsMeta(meta);
+};
+
+// ===== Reflect Group Chat Helpers =====
+
+interface ReflectGroup {
+  year: number;
+  week: number;
+  startDate: string;
+  endDate: string;
+  label: string;
+  sessions: Array<{
+    id: string;
+    title: string;
+    stance?: string;
+    position_limit?: number;
+    messageCount: number;
+    createdAt: string;
+    source: 'backend' | 'indexeddb';
+    dbSession?: SessionMeta;  // reference to IndexedDB session
+  }>;
+}
+
+const getISOWeek = (dateStr: string): { year: number; week: number; monday: Date; sunday: Date } => {
+  const d = new Date(dateStr);
+  d.setHours(0, 0, 0, 0);
+  const dayNum = d.getDay() || 7; // Sunday = 7
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - dayNum + 1);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 4);
+  // ISO week number
+  const thursday = new Date(monday);
+  thursday.setDate(monday.getDate() + 3);
+  const yearStart = new Date(thursday.getFullYear(), 0, 1);
+  const weekNum = Math.ceil(((thursday.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return { year: d.getFullYear(), week: weekNum, monday, sunday };
+};
+
+const formatDate = (d: Date): string => {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}/${dd}`;
+};
+
+const buildReflectGroups = (backendSessions: any[], localSessions: SessionMeta[]): ReflectGroup[] => {
+  const weekMap = new Map<string, ReflectGroup>();
+  const seenIds = new Set<string>();
+
+  // Helper to add a session to the correct week group
+  const addToGroup = (item: ReflectGroup['sessions'][0], map: Map<string, ReflectGroup>) => {
+    const { year, week, monday, sunday } = getISOWeek(item.createdAt);
+    const key = `${year}-W${week}`;
+    if (!map.has(key)) {
+      const startDate = formatDate(monday);
+      const endDate = formatDate(sunday);
+      map.set(key, {
+        year, week,
+        startDate,
+        endDate,
+        label: `${year}年第${week}周 (${startDate}-${endDate})`,
+        sessions: [],
+      });
+    }
+    map.get(key)!.sessions.push(item);
+  };
+
+  // 1. IndexedDB reflect sessions (prefer these, richer data)
+  for (const s of localSessions) {
+    if (s.type !== 'reflect') continue;
+    seenIds.add(s.id);
+    addToGroup({
+      id: s.id,
+      title: s.title,
+      messageCount: s.messageCount,
+      createdAt: s.createdAt,
+      source: 'indexeddb',
+      dbSession: s,
+    }, weekMap);
+  }
+
+  // 2. Backend file-based sessions (only if not already in IndexedDB)
+  for (const bs of backendSessions) {
+    // Deduplicate: skip if an IndexedDB session with close timestamp already exists in the same week
+    const { year, week } = getISOWeek(bs.created_at);
+    const key = `${year}-W${week}`;
+    const group = weekMap.get(key);
+    const isDuplicate = group?.sessions.some(s =>
+      s.source === 'indexeddb' &&
+      Math.abs(new Date(s.createdAt).getTime() - new Date(bs.created_at).getTime()) < 86400000 * 3
+    );
+    if (!isDuplicate) {
+      addToGroup({
+        id: bs.id,
+        title: `周度反思 (${bs.start_date} → ${bs.end_date})`,
+        stance: bs.stance,
+        position_limit: bs.position_limit,
+        messageCount: 0,
+        createdAt: bs.created_at || bs.start_date,
+        source: 'backend',
+      }, weekMap);
+    }
+  }
+
+  // Sort groups by year/week descending, sessions within each group by createdAt descending
+  const sorted = Array.from(weekMap.values())
+    .sort((a, b) => b.year - a.year || b.week - a.week);
+  for (const g of sorted) {
+    g.sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+  return sorted;
 };
 
 const generateAISessionTitle = async (messages: any[], apiKey: string): Promise<string> => {
@@ -2014,6 +2125,11 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   const modeRef = useRef<ChatMode>(mode);
   const [skipDataCollection, setSkipDataCollection] = useState(false);
   const skipDataRef = useRef(false);
+  const [tabView, setTabView] = useState<'chat' | 'group_chat'>(
+    (localStorage.getItem('marcus_chat_mode') || 'chat') === 'reflect' ? 'group_chat' : 'chat'
+  );
+  const [backendReflectSessions, setBackendReflectSessions] = useState<any[]>([]);
+  const [reflectLoading, setReflectLoading] = useState(false);
 
   // Keep modeRef in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -2121,7 +2237,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
       const newId = generateUUID();
       localStorage.setItem('marcus_session_id', newId);
       sessionIdRef.current = newId;
-      updateSessionMeta(newId, { title: '新会话', messageCount: 0, createdAt: new Date().toISOString() });
+      updateSessionMeta(newId, { title: '新会话', messageCount: 0, createdAt: new Date().toISOString(), type: 'chat' });
       agentRef.current?.reset();
       const ml = document.querySelector('message-list') as any;
       if (ml) { ml.messages = []; (ml as LitElement).requestUpdate?.(); }
@@ -2220,6 +2336,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             title: s.title || '导入会话',
             messageCount: s.messages.length,
             createdAt: s.createdAt || new Date().toISOString(),
+            type: 'chat',
           });
           imported++;
         }
@@ -2384,6 +2501,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           title,
           messageCount: loadedMessages.length,
           createdAt: new Date().toISOString(),
+          type: modeRef.current,
         });
       }
       // 刷新会话列表
@@ -2472,10 +2590,23 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
         };
 
         try {
+          // Build history messages for session continuity (last 50, excluding loading placeholders)
+          const historyMsgs = agent.state.messages
+            .filter((m: any) => !m._panelLoadingId)
+            .slice(-50)
+            .map((m: any) => ({ role: m.role, content: m.content }));
+          const sessionId = sessionIdRef.current || generateUUID();
+
           const resp = await fetch('/api/v1/panel/reflect/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, skip_data_collection: skipDataRef.current, panel_mode: 'chat' }),
+            body: JSON.stringify({
+              message,
+              session_id: sessionId,
+              history_messages: historyMsgs,
+              skip_data_collection: skipDataRef.current,
+              panel_mode: 'chat',
+            }),
           });
 
           if (!resp.ok) {
@@ -2541,7 +2672,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           if (sessionId && sessionsRef.current) {
             const stateForSave = { ...agent.state, messages: panelSnapshot };
             sessionsRef.current.saveSession(sessionId, stateForSave, undefined, '专家群聊').catch(() => {});
-            updateSessionMeta(sessionId, { messageCount: panelSnapshot.length });
+            updateSessionMeta(sessionId, { messageCount: panelSnapshot.length, type: 'reflect' });
           }
 
         } catch (e: any) {
@@ -2556,6 +2687,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           if (sessionId && sessionsRef.current) {
             const stateForSave = { ...agent.state, messages: [...agent.state.messages] };
             sessionsRef.current.saveSession(sessionId, stateForSave, undefined, '专家群聊').catch(() => {});
+            updateSessionMeta(sessionId, { messageCount: agent.state.messages.length, type: 'reflect' });
           }
         }
       };
@@ -2821,136 +2953,362 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
     };
   }, []);
 
+  // Fetch backend reflect sessions when group chat tab is active
+  useEffect(() => {
+    if (tabView !== 'group_chat') return;
+    setReflectLoading(true);
+    fetch('/api/v1/panel/reflect/sessions')
+      .then(res => res.ok ? res.json() : Promise.reject(res))
+      .then(data => setBackendReflectSessions(data || []))
+      .catch(() => setBackendReflectSessions([]))
+      .finally(() => setReflectLoading(false));
+  }, [tabView]);
+
+  // Save tab preference to localStorage
+  const handleTabSwitch = useCallback((tab: 'chat' | 'group_chat') => {
+    setTabView(tab);
+    localStorage.setItem('marcus_chat_mode', tab === 'group_chat' ? 'reflect' : 'chat');
+  }, []);
+
+  // Switch to a reflect session (backend or IndexedDB)
+  const switchToReflectSession = useCallback(async (item: ReflectGroup['sessions'][0]) => {
+    if (!agentRef.current || !sessionsRef.current) return;
+
+    if (item.source === 'indexeddb' && item.dbSession) {
+      // Load from IndexedDB
+      await switchToSession(item.id);
+      // Ensure we're in reflect mode
+      if (modeRef.current !== 'reflect') {
+        setMode('reflect');
+        agentRef.current!.state.tools = reflectTools;
+        agentRef.current!.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current, 'reflect');
+      }
+    } else {
+      // Backend-only: fetch report, create IndexedDB session
+      try {
+        const res = await fetch(`/api/v1/panel/reflect/sessions/${item.id}`);
+        if (!res.ok) throw new Error('Session not found');
+        const data = await res.json();
+        const report = data.report || '';
+        const newId = generateUUID();
+        // Create new session
+        sessionIdRef.current = newId;
+        localStorage.setItem('marcus_session_id', newId);
+        updateSessionMeta(newId, {
+          title: item.title,
+          messageCount: 1,
+          createdAt: new Date().toISOString(),
+          type: 'reflect',
+        });
+        // Convert report to a single assistant message
+        const msg = { role: 'assistant' as const, content: report };
+        agentRef.current!.state.messages = [msg];
+        agentRef.current!.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current, 'reflect');
+        agentRef.current!.state.tools = reflectTools;
+        // Save to IndexedDB
+        const stateForSave = { ...agentRef.current!.state, messages: [msg] };
+        sessionsRef.current.saveSession(newId, stateForSave, undefined, item.title).catch(() => {});
+        // Update UI
+        const ml = document.querySelector('message-list') as any;
+        if (ml) { ml.messages = [msg]; (ml as LitElement).requestUpdate?.(); }
+        const sc = document.querySelector('streaming-message-container') as any;
+        if (sc && sc.setMessage) sc.setMessage(null, true);
+        setMode('reflect');
+        setTabView('group_chat');
+        // 清除输入框残留
+        const me = document.querySelector('message-editor') as any;
+        if (me) { me.value = ''; }
+        // 重新取 querySelector 防止 DOM 复用
+        setTimeout(() => {
+          const me2 = document.querySelector('message-editor') as any;
+          if (me2) { me2.value = ''; me2.requestUpdate?.(); }
+        }, 100);
+        refreshSessionList();
+      } catch (e) {
+        console.error('Failed to load reflect session:', e);
+      }
+    }
+  }, [switchToSession]);
+
+  // Build merged reflect groups for the group chat tab
+  const reflectGroups = buildReflectGroups(backendReflectSessions, sessionsList);
+  const chatSessions = sessionsList.filter(s => s.type !== 'reflect');
+
+  // Create a new reflect session
+  const createNewReflectSession = useCallback(() => {
+    const newId = generateUUID();
+    sessionIdRef.current = newId;
+    localStorage.setItem('marcus_session_id', newId);
+    updateSessionMeta(newId, {
+      title: '新群聊',
+      messageCount: 0,
+      createdAt: new Date().toISOString(),
+      type: 'reflect',
+    });
+    agentRef.current?.reset();
+    agentRef.current!.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current, 'reflect');
+    agentRef.current!.state.tools = reflectTools;
+    setMode('reflect');
+    const ml = document.querySelector('message-list') as any;
+    if (ml) { ml.messages = []; (ml as LitElement).requestUpdate?.(); }
+    const sc = document.querySelector('streaming-message-container') as any;
+    if (sc && sc.setMessage) sc.setMessage(null, true);
+    // 清除输入框残留
+    const me = document.querySelector('message-editor') as any;
+    if (me) { me.value = ''; }
+    setTimeout(() => {
+      const me2 = document.querySelector('message-editor') as any;
+      if (me2) { me2.value = ''; me2.requestUpdate?.(); }
+    }, 100);
+    refreshSessionList();
+  }, [refreshSessionList]);
+
   return (
     <div style={chatContainerStyle}>
       <style>{sessionPanelCss}</style>
       {/* 左侧：常驻会话面板 */}
       <div style={sessionPanelStyle}>
-        {/* 面板头部 */}
+        {/* 面板头部 — Tab Switcher */}
         <div style={sessionPanelHeaderStyle}>
-          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--agent-text-primary)' }}>
-            <i className="fas fa-history" style={{ marginRight: '6px', color: 'var(--agent-gold)', fontSize: '11px' }}></i>
-            会话
-          </span>
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-            <span style={{
-              fontSize: '10px', color: 'var(--agent-text-dim)',
-              background: 'rgba(240,185,11,0.08)', padding: '1px 7px', borderRadius: '8px',
-            }}>{sessionsList.length}</span>
-            <button onClick={handleImport} title="导入会话"
-              style={sessionIconBtnStyle}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-green)'; e.currentTarget.style.background = 'rgba(46,204,113,0.1)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
-              <i className="fas fa-file-import"></i>
+          <div style={{ display: 'flex', gap: '4px', flex: 1 }}>
+            <button
+              onClick={() => handleTabSwitch('chat')}
+              style={{
+                ...tabBtnStyle,
+                color: tabView === 'chat' ? 'var(--agent-gold)' : 'var(--agent-text-dim)',
+                background: tabView === 'chat' ? 'var(--agent-gold-muted)' : 'transparent',
+                border: tabView === 'chat' ? '1px solid rgba(240,185,11,0.3)' : '1px solid transparent',
+              }}
+            >
+              <i className="fas fa-comments" style={{ fontSize: '10px' }}></i> 聊天
+              <span style={{
+                fontSize: '10px', opacity: 0.6,
+                background: 'rgba(240,185,11,0.08)', padding: '1px 6px', borderRadius: '6px',
+                marginLeft: '2px',
+              }}>{chatSessions.length}</span>
             </button>
-            <button onClick={handleExportAll} title="导出全部会话"
-              style={sessionIconBtnStyle}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-gold)'; e.currentTarget.style.background = 'var(--agent-gold-muted)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
-              <i className="fas fa-file-export"></i>
+            <button
+              onClick={() => handleTabSwitch('group_chat')}
+              style={{
+                ...tabBtnStyle,
+                color: tabView === 'group_chat' ? '#7c3aed' : 'var(--agent-text-dim)',
+                background: tabView === 'group_chat' ? 'rgba(124,58,237,0.12)' : 'transparent',
+                border: tabView === 'group_chat' ? '1px solid rgba(124,58,237,0.3)' : '1px solid transparent',
+              }}
+            >
+              <i className="fas fa-users" style={{ fontSize: '10px' }}></i> 群聊
+              <span style={{
+                fontSize: '10px', opacity: 0.6,
+                background: 'rgba(124,58,237,0.08)', padding: '1px 6px', borderRadius: '6px',
+                marginLeft: '2px',
+              }}>{sessionsList.filter(s => s.type === 'reflect').length + backendReflectSessions.length}</span>
             </button>
           </div>
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+            {tabView === 'chat' ? (
+              <>
+                <button onClick={handleImport} title="导入会话"
+                  style={sessionIconBtnStyle}
+                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-green)'; e.currentTarget.style.background = 'rgba(46,204,113,0.1)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
+                  <i className="fas fa-file-import"></i>
+                </button>
+                <button onClick={handleExportAll} title="导出全部会话"
+                  style={sessionIconBtnStyle}
+                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-gold)'; e.currentTarget.style.background = 'var(--agent-gold-muted)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
+                  <i className="fas fa-file-export"></i>
+                </button>
+              </>
+            ) : (
+              <span style={{
+                fontSize: '10px', color: 'var(--agent-text-dim)',
+                background: 'rgba(124,58,237,0.06)', padding: '1px 7px', borderRadius: '8px',
+              }}>{reflectGroups.reduce((sum, g) => sum + g.sessions.length, 0)}次</span>
+            )}
+          </div>
         </div>
-        {/* 会话列表 */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 8px' }}>
-          {sessionsList.length === 0 ? (
-            <div style={{
-              padding: '24px 8px', textAlign: 'center',
-              color: 'var(--agent-text-dim)', fontSize: '11px',
-            }}>
-              <i className="fas fa-inbox" style={{ fontSize: '20px', display: 'block', marginBottom: '8px', opacity: 0.25 }}></i>
-              暂无会话
-            </div>
-          ) : (
-            sessionsList.map(session => {
-              const isActive = session.id === sessionIdRef.current;
-              return (
-                <div
-                  key={session.id}
-                  className="session-item-row"
-                  onClick={() => switchToSession(session.id)}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '10px 12px', borderRadius: '9px', cursor: 'pointer',
-                    marginBottom: '3px',
-                    background: isActive ? 'rgba(240,185,11,0.1)' : 'transparent',
-                    border: isActive ? '1px solid rgba(240,185,11,0.2)' : '1px solid transparent',
-                    borderLeft: isActive ? '3px solid var(--agent-gold)' : '3px solid transparent',
-                    transition: 'all 0.15s',
-                  }}
-                  onMouseEnter={e => {
-                    if (!isActive) e.currentTarget.style.background = 'var(--agent-bg-hover)';
-                  }}
-                  onMouseLeave={e => {
-                    if (!isActive) e.currentTarget.style.background = 'transparent';
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0, marginRight: '6px' }}>
-                    <div style={{
-                      fontSize: '12.5px', fontWeight: 500,
-                      color: isActive ? 'var(--agent-gold)' : 'var(--agent-text-secondary)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      marginBottom: '3px', lineHeight: 1.3,
-                    }}>
-                      {session.title || '新会话'}
+
+        {/* Chat Tab 内容 */}
+        {tabView === 'chat' && (
+          <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 8px' }}>
+            {chatSessions.length === 0 ? (
+              <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--agent-text-dim)', fontSize: '11px' }}>
+                <i className="fas fa-inbox" style={{ fontSize: '20px', display: 'block', marginBottom: '8px', opacity: 0.25 }}></i>
+                暂无会话
+              </div>
+            ) : (
+              chatSessions.map(session => {
+                const isActive = session.id === sessionIdRef.current;
+                return (
+                  <div
+                    key={session.id}
+                    className="session-item-row"
+                    onClick={() => switchToSession(session.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '10px 12px', borderRadius: '9px', cursor: 'pointer',
+                      marginBottom: '3px',
+                      background: isActive ? 'rgba(240,185,11,0.1)' : 'transparent',
+                      border: isActive ? '1px solid rgba(240,185,11,0.2)' : '1px solid transparent',
+                      borderLeft: isActive ? '3px solid var(--agent-gold)' : '3px solid transparent',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'var(--agent-bg-hover)'; }}
+                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0, marginRight: '6px' }}>
+                      <div style={{ fontSize: '12.5px', fontWeight: 500, color: isActive ? 'var(--agent-gold)' : 'var(--agent-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '3px', lineHeight: 1.3 }}>
+                        {session.title || '新会话'}
+                      </div>
+                      <div style={{ fontSize: '10px', color: 'var(--agent-text-dim)', display: 'flex', gap: '8px' }}>
+                        <span>{session.messageCount || 0}条</span>
+                        <span>{formatSessionTime(session.createdAt)}</span>
+                      </div>
                     </div>
-                    <div style={{
-                      fontSize: '10px', color: 'var(--agent-text-dim)',
-                      display: 'flex', gap: '8px',
-                    }}>
-                      <span>{session.messageCount || 0}条</span>
-                      <span>{formatSessionTime(session.createdAt)}</span>
+                    <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+                      <button onClick={(e) => handleExportSingle(session.id, e)} title="导出会话"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--agent-text-dim)', fontSize: '10px', padding: '4px 5px', borderRadius: '4px', flexShrink: 0, transition: 'opacity 0.15s' }}
+                        className="session-export-btn"
+                        onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-gold)'; e.currentTarget.style.background = 'var(--agent-gold-muted)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
+                        <i className="fas fa-download"></i>
+                      </button>
+                      <button onClick={(e) => deleteSession(session.id, e)} title="删除会话"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--agent-text-dim)', fontSize: '11px', padding: '4px 6px', borderRadius: '4px', flexShrink: 0, transition: 'opacity 0.15s' }}
+                        className="session-delete-btn"
+                        onMouseEnter={e => { e.currentTarget.style.color = 'var(--agent-red)'; e.currentTarget.style.background = 'var(--agent-red-bg)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--agent-text-dim)'; e.currentTarget.style.background = 'none'; }}>
+                        <i className="fas fa-trash-alt"></i>
+                      </button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
-                    <button
-                      onClick={(e) => handleExportSingle(session.id, e)}
-                      title="导出会话"
-                      style={{
-                        background: 'none', border: 'none', cursor: 'pointer',
-                        color: 'var(--agent-text-dim)', fontSize: '10px',
-                        padding: '4px 5px', borderRadius: '4px', flexShrink: 0,
-                        transition: 'opacity 0.15s',
-                      }}
-                      className="session-export-btn"
-                      onMouseEnter={e => {
-                        e.currentTarget.style.color = 'var(--agent-gold)';
-                        e.currentTarget.style.background = 'var(--agent-gold-muted)';
-                      }}
-                      onMouseLeave={e => {
-                        e.currentTarget.style.color = 'var(--agent-text-dim)';
-                        e.currentTarget.style.background = 'none';
-                      }}
-                    >
-                      <i className="fas fa-download"></i>
-                    </button>
-                    <button
-                      onClick={(e) => deleteSession(session.id, e)}
-                      title="删除会话"
-                      style={{
-                        background: 'none', border: 'none', cursor: 'pointer',
-                        color: 'var(--agent-text-dim)', fontSize: '11px',
-                        padding: '4px 6px', borderRadius: '4px', flexShrink: 0,
-                        transition: 'opacity 0.15s',
-                      }}
-                      className="session-delete-btn"
-                      onMouseEnter={e => {
-                        e.currentTarget.style.color = 'var(--agent-red)';
-                        e.currentTarget.style.background = 'var(--agent-red-bg)';
-                      }}
-                      onMouseLeave={e => {
-                        e.currentTarget.style.color = 'var(--agent-text-dim)';
-                        e.currentTarget.style.background = 'none';
-                      }}
-                    >
-                      <i className="fas fa-trash-alt"></i>
-                    </button>
-                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* Group Chat Tab 内容 */}
+        {tabView === 'group_chat' && (
+          <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 8px' }}>
+            {/* New Group Chat Button */}
+            <button
+              onClick={createNewReflectSession}
+              style={{
+                width: '100%', padding: '9px 0', marginBottom: '8px',
+                borderRadius: '9px', cursor: 'pointer',
+                fontSize: '12px', fontWeight: 600,
+                color: '#7c3aed', background: 'rgba(124,58,237,0.08)',
+                border: '1px dashed rgba(124,58,237,0.35)',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(124,58,237,0.16)'; e.currentTarget.style.borderColor = 'rgba(124,58,237,0.6)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(124,58,237,0.08)'; e.currentTarget.style.borderColor = 'rgba(124,58,237,0.35)'; }}
+            >
+              <i className="fas fa-plus" style={{ fontSize: '10px', marginRight: '6px' }}></i>
+              新建群聊讨论
+            </button>
+
+            {/* Loading state */}
+            {reflectLoading && (
+              <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--agent-text-dim)', fontSize: '11px' }}>
+                <i className="fas fa-spinner fa-spin" style={{ display: 'block', marginBottom: '6px', fontSize: '16px' }}></i>
+                加载历史群聊...
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!reflectLoading && reflectGroups.length === 0 && (
+              <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--agent-text-dim)', fontSize: '11px' }}>
+                <i className="fas fa-users" style={{ fontSize: '20px', display: 'block', marginBottom: '8px', opacity: 0.25 }}></i>
+                暂无群聊记录<br />
+                <span style={{ fontSize: '10px', opacity: 0.6 }}>点击上方按钮发起新的群聊讨论</span>
+              </div>
+            )}
+
+            {/* Week-grouped reflect sessions */}
+            {!reflectLoading && reflectGroups.map(group => (
+              <div key={`${group.year}-W${group.week}`} style={{ marginBottom: '12px' }}>
+                <div style={{
+                  fontSize: '10.5px', fontWeight: 600, color: 'var(--agent-text-dim)',
+                  padding: '4px 8px 6px', letterSpacing: '0.3px',
+                }}>
+                  <i className="fas fa-calendar-week" style={{ marginRight: '5px', opacity: 0.5, fontSize: '10px' }}></i>
+                  {group.label}
                 </div>
-              );
-            })
-          )}
-        </div>
+                {group.sessions.map(item => {
+                  const isActive = item.source === 'indexeddb' && item.id === sessionIdRef.current;
+                  const stanceColor = item.stance === 'green' ? '#22c55e' : item.stance === 'red' ? '#ef4444' : '#eab308';
+                  return (
+                    <div
+                      key={item.id}
+                      className="session-item-row"
+                      onClick={() => switchToReflectSession(item)}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '10px 12px', borderRadius: '9px', cursor: 'pointer',
+                        marginBottom: '3px',
+                        background: isActive ? 'rgba(124,58,237,0.1)' : 'transparent',
+                        border: isActive ? '1px solid rgba(124,58,237,0.25)' : '1px solid transparent',
+                        borderLeft: isActive ? '3px solid #7c3aed' : '3px solid transparent',
+                        transition: 'all 0.15s',
+                      }}
+                      onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'rgba(124,58,237,0.05)'; }}
+                      onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0, marginRight: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                          {item.stance && (
+                            <span style={{
+                              width: '8px', height: '8px', borderRadius: '50%',
+                              background: stanceColor, flexShrink: 0,
+                              boxShadow: `0 0 4px ${stanceColor}`,
+                            }}></span>
+                          )}
+                          <span style={{
+                            fontSize: '12.5px', fontWeight: 500,
+                            color: isActive ? '#7c3aed' : 'var(--agent-text-secondary)',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            lineHeight: 1.3,
+                          }}>
+                            {item.title}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '10px', color: 'var(--agent-text-dim)', display: 'flex', gap: '8px' }}>
+                          {item.position_limit != null && (
+                            <span>仓位上限: {item.position_limit}%</span>
+                          )}
+                          {item.source === 'indexeddb' && item.messageCount > 0 && (
+                            <span>{item.messageCount}条</span>
+                          )}
+                          {item.source !== 'indexeddb' && (
+                            <span style={{ opacity: 0.6 }}>仅查看</span>
+                          )}
+                          <span>{formatSessionTime(item.createdAt)}</span>
+                        </div>
+                      </div>
+                      <div style={{ flexShrink: 0 }}>
+                        {item.stance && (
+                          <span style={{
+                            fontSize: '9px', fontWeight: 600, textTransform: 'uppercase',
+                            padding: '1px 6px', borderRadius: '8px',
+                            color: stanceColor,
+                            background: `${stanceColor}15`,
+                            border: `1px solid ${stanceColor}30`,
+                          }}>
+                            {item.stance === 'green' ? '看多' : item.stance === 'red' ? '看空' : '观望'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+
       </div>
 
       {/* 右侧：聊天主区域 */}
@@ -2987,7 +3345,12 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, marginLeft: '12px' }}>
             {/* 模式切换按钮 */}
             <button
-              onClick={() => setMode(prev => prev === 'chat' ? 'reflect' : 'chat')}
+              onClick={() => {
+                const newMode = mode === 'chat' ? 'reflect' : 'chat';
+                setMode(newMode);
+                setTabView(newMode === 'reflect' ? 'group_chat' : 'chat');
+                localStorage.setItem('marcus_chat_mode', newMode);
+              }}
               title={mode === 'reflect' ? '切换为聊天模式' : '切换为专家组群聊讨论'}
               style={{
                 ...toolBtnStyle,
@@ -3043,7 +3406,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
                 localStorage.setItem('marcus_session_id', newId);
                 sessionIdRef.current = newId;
                 // 新建会话元数据
-                updateSessionMeta(newId, { title: '新会话', messageCount: 0, createdAt: new Date().toISOString() });
+                updateSessionMeta(newId, { title: '新会话', messageCount: 0, createdAt: new Date().toISOString(), type: modeRef.current });
                 agentRef.current?.reset();
                 const ml = document.querySelector('message-list') as any;
                 if (ml) { ml.messages = []; (ml as LitElement).requestUpdate?.(); }
@@ -3217,6 +3580,20 @@ const sessionIconBtnStyle: React.CSSProperties = {
   borderRadius: '4px',
   transition: 'all 0.2s',
   flexShrink: 0,
+};
+
+const tabBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '5px',
+  fontSize: '11px',
+  fontWeight: 600,
+  padding: '4px 10px',
+  borderRadius: '16px',
+  cursor: 'pointer',
+  border: '1px solid transparent',
+  background: 'transparent',
+  transition: 'all 0.2s',
 };
 
 const toolBtnStyle: React.CSSProperties = {
