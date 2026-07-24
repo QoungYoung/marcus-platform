@@ -115,7 +115,7 @@ def list_reflect_sessions():
 def get_reflect_session(session_id: str):
     """获取单次周度反思群聊的完整内容"""
     log_dir = _get_reflect_logs_dir()
-    filepath = log_dir / f"{session_id}.json"
+    filepath = log_dir / f"{session_id}-reflect.json"
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
     parsed = _parse_reflect_file(filepath)
