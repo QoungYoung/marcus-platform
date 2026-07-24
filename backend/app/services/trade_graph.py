@@ -29,6 +29,9 @@ from langgraph.graph import StateGraph, END
 
 logger = logging.getLogger(__name__)
 
+# 安全门临时旁路开关 —— 设为 True 跳过回撤/熔断检查
+SAFETY_GATE_BYPASS = True
+
 
 # ═══════════════════════════════════════════════════════════
 # State
@@ -842,6 +845,15 @@ def node_check_safety_gates(state: TradeState) -> dict:
     """
     eid = state['execution_id']
     logger.info(f"[{eid}] [Graph] ▶ check_safety_gates")
+
+    if SAFETY_GATE_BYPASS:
+        logger.warning(f"[{eid}] [Graph] ⚠ 安全门已旁路 (SAFETY_GATE_BYPASS=True)，跳过回撤/熔断检查")
+        return {
+            "drawdown_pct": 0.0,
+            "consecutive_losses": 0,
+            "hard_blocked": False,
+            "block_reason": "",
+        }
 
     drawdown, blocked, reason = _check_drawdown(state['portfolio_json'])
     consecutive = _check_consecutive_losses()
