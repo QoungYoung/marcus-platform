@@ -2688,8 +2688,10 @@ async def check_entry_filters_sandbox(task_id: str, req: dict):
     main_net_5d_e8 = round(main_net_5d / 1e8, 4)
 
     # ── Layer 3: 超买 ──
-    rsi_overbought = rsi_6 > 70
-    layer3_pass = not rsi_overbought
+    # 回测本地数据不支持 KDJ-J / CCI，传入 0 使对应指标判为正常
+    from app.api.indicator import _eval_overbought
+    l3_result, l3_mult, l3_hb, l3_hb_reasons, l3_downgrade = _eval_overbought(rsi_6, 0, 0)
+    layer3_pass = l3_result.passed
 
     # ── 决策 ──
     all_pass = layer1_pass and layer2_pass and layer3_pass
@@ -2747,7 +2749,15 @@ async def check_entry_filters_sandbox(task_id: str, req: dict):
         "intraday_percentile": intraday_percentile,
         "layer1_tech": {"pass": layer1_pass, "above_ma5": above_ma5, "above_ma20": above_ma20, "macd_golden": macd_golden, "ma5_gt_ma20": ma5_gt_ma20},
         "layer2_capital": {"pass": layer2_pass, "main_net_5d": main_net_5d_e8},  # 亿
-        "layer3_overbought": {"pass": layer3_pass, "rsi_6": rsi_6, "rsi_overbought": rsi_overbought},
+        "layer3_overbought": {
+            "passed": layer3_pass,
+            "grade": l3_result.grade,
+            "details": l3_result.details,
+            "downgrade_reason": l3_result.downgrade_reason,
+            "downgrade_action": l3_result.downgrade_action,
+            "rsi_6": rsi_6,
+            "rsi_overbought": rsi_6 >= 75,
+        },
         "tech": {
             "pass": all_pass, "summary": "✅ 全部通过" if all_pass else "⚠️ 部分过滤未通过",
             "intraday_percentile": intraday_percentile,

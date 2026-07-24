@@ -218,6 +218,7 @@ class EntryCheckTechDetail(BaseModel):
     capital_efficiency: Optional[float] = None
     rsi6: float = 0
     kdj_j: float = 0
+    cci: float = 0
     current_price: float = 0
     avg_price: Optional[float] = None   # 分时均价
 

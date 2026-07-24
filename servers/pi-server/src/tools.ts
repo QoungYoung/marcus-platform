@@ -1865,7 +1865,8 @@ export const checkEntryFiltersTool = {
       lines.push(`5日主力净流入: ${netStr} → ${l2.pass ? '✅ PASS' : '🚫 FAIL'}`);
       lines.push('');
       lines.push('── Layer 3: 超买 ──');
-      lines.push(`RSI6: ${l3.rsi_6} ${l3.rsi_overbought ? '🚫 超买' : '✅ 正常'} → ${l3.pass ? '✅ PASS' : '🚫 FAIL'}`);
+      lines.push(`${l3.grade || (l3.pass ? '✅正常' : '🚫超买')} ${l3.downgrade_reason || ''}`);
+      for (const d of (l3.details || [])) lines.push(`  ${d}`);
       lines.push('');
       lines.push(`综合: ${t.summary || '?'}`);
       const vr = data.volume_ratio;

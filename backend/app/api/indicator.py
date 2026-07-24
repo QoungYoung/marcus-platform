@@ -1946,6 +1946,108 @@ def _check_macd_dif_converging(indicators_data: dict) -> bool:
     return dif0 < dif1
 
 
+def _eval_overbought(rsi6: float, kdj_j: float, cci: float) -> tuple:
+    """
+    Layer 3 超买过滤 — 评估 RSI6 / KDJ-J / CCI 三项指标，
+    含多指标共振检测：≥2 个指标处于警告或更高级别时联合降级。
+
+    Returns: (LayerResult, downgrade_multiplier, hard_block, hard_block_reasons, downgrade_reason)
+    """
+    # (upper_bound, severity, label)
+    # severity: 1=probe, 2=blocked, 3=hard_block
+    RSI_THRESHOLDS = [(75, 1, "RSI6"), (85, 2, "RSI6"), (95, 3, "RSI6")]
+    KDJ_THRESHOLDS = [(95, 1, "KDJ-J"), (105, 2, "KDJ-J"), (120, 3, "KDJ-J")]
+    CCI_THRESHOLDS = [(150, 1, "CCI"), (200, 2, "CCI"), (300, 3, "CCI")]
+
+    SEVERITY_GRADE = {
+        0: "✅通过",
+        1: "⚠️仅试探仓",
+        2: "🚫排除",
+        3: "🔴硬禁止",
+    }
+    SEVERITY_MULTIPLIER = {0: 1.0, 1: 0.5, 2: 0.0, 3: 0.0}
+
+    def _classify(value: float, thresholds: list[tuple[float, int, str]], unit: str = "") -> dict:
+        """Classify single indicator, return severity + detail string."""
+        severity = 0
+        for upper, sev, _ in thresholds:
+            if value >= upper:
+                severity = max(severity, sev)
+
+        upper0 = thresholds[0][0]
+        name = thresholds[0][2]
+
+        if severity == 0:
+            return {"severity": 0, "detail": f"✅ {name}({value:.0f}{unit}) < {upper0} — 正常", "hard": False}
+
+        if severity == 1:
+            upper1 = thresholds[1][0] if len(thresholds) > 1 else upper0
+            return {"severity": 1, "detail": f"⚠️ {name}({value:.0f}{unit}) {upper0}-{upper1} → 仅试探仓", "hard": False}
+
+        if severity == 2:
+            lower = thresholds[1][0] if len(thresholds) > 1 else thresholds[0][0]
+            return {"severity": 2, "detail": f"🚫 {name}({value:.0f}{unit}) ≥ {lower} → 严重超买，禁止建仓", "hard": False}
+
+        lower = thresholds[2][0] if len(thresholds) > 2 else thresholds[-1][0]
+        return {"severity": 3, "detail": f"🔴 硬拦截: {name}({value:.0f}{unit}) ≥ {lower} → 不可被产业链信号豁免", "hard": True}
+
+    # Classify all three indicators
+    rsi_r = _classify(rsi6, RSI_THRESHOLDS)
+    kdj_r = _classify(kdj_j, KDJ_THRESHOLDS)
+    cci_r = _classify(cci, CCI_THRESHOLDS)
+    results = [rsi_r, kdj_r, cci_r]
+    severities = [r["severity"] for r in results]
+
+    # Resonance: ≥2 indicators at severity ≥ 1 → shift up
+    warning_count = sum(1 for s in severities if s >= 1)
+    highest_sev = max(severities)
+    resonance = warning_count >= 2
+
+    if resonance and highest_sev < 3:
+        highest_sev += 1
+
+    # Build details list
+    details = [r["detail"] for r in results]
+
+    if resonance:
+        warning_names = [r["detail"].split("(")[0].strip().lstrip("✅⚠️🚫🔴").rstrip() for r in results if r["severity"] >= 1]
+        # Use indicator names from thresholds
+        names = []
+        for r, label in [(rsi_r, "RSI6"), (kdj_r, "KDJ-J"), (cci_r, "CCI")]:
+            if r["severity"] >= 1:
+                names.append(label)
+        details.append(f"🔗 共振: {' + '.join(names)} 中 ≥2 项偏高 → 联合降级")
+
+    # Determine final grade
+    passed = highest_sev < 2
+    grade = SEVERITY_GRADE[highest_sev]
+    multiplier = SEVERITY_MULTIPLIER[highest_sev]
+
+    hard_block = any(r["hard"] for r in results)
+    hard_block_reasons = [r["detail"] for r in results if r["hard"]]
+
+    if highest_sev == 0:
+        downgrade_reason = ""
+    elif resonance:
+        downgrade_reason = "共振: 多指标偏高" if highest_sev <= 2 else "共振: 多指标极端超买"
+    elif highest_sev == 1:
+        downgrade_reason = [r["detail"].split("→")[0].strip() for r in results if r["severity"] >= 1][0]
+    elif highest_sev == 2:
+        downgrade_reason = [r["detail"].split("→")[0].strip() for r in results if r["severity"] == 2][0]
+    else:
+        downgrade_reason = [r["detail"] for r in results if r["severity"] == 3][0] if any(r["severity"] == 3 for r in results) else "硬拦截"
+
+    layer3 = LayerResult(
+        passed=passed,
+        grade=grade,
+        details=details,
+        downgrade_reason=downgrade_reason,
+        downgrade_action="" if highest_sev == 0 else ("仅试探仓" if highest_sev == 1 else ("禁止建仓" if highest_sev == 2 else "硬禁止")),
+    )
+
+    return layer3, multiplier, hard_block, hard_block_reasons, downgrade_reason
+
+
 @router.post("/check-entry-filters", response_model=EntryCheckResponse)
 async def check_entry_filters(req: EntryCheckRequest):
     """
@@ -2032,6 +2134,13 @@ async def check_entry_filters(req: EntryCheckRequest):
     rsi6 = getattr(rt, "rsi_6", 0) or 0 if rt else 0
     kdj_j = getattr(rt, "kdj_j", 0) or 0 if rt else 0
 
+    # CCI 提取自 Tushare 盘后确认数据（stk_factor_pro 含 cci_qfq），
+    # realtime 估算不含 CCI，取最近一个历史确认日的值
+    cci = 0.0
+    historical = indicators_data.get("historical") or []
+    if historical:
+        cci = getattr(historical[0], "cci", 0) or 0
+
     # MACD 状态判断
     macd_status = "未知"
     macd_dif_converging = False
@@ -2069,7 +2178,6 @@ async def check_entry_filters(req: EntryCheckRequest):
     # ══════════════════════════════════════
     tech_details = []
     capital_details = []
-    overbought_details = []
     downgrade_multiplier = 1.0
     hard_block = False
     hard_block_reasons = []
@@ -2282,85 +2390,16 @@ async def check_entry_filters(req: EntryCheckRequest):
     )
 
     # ── Layer 3: 超买过滤 ──
-    layer3_passed = True
-    layer3_grade = "✅通过"
-    layer3_downgrade = ""
-    layer3_action = ""
-
-    rsi_blocked = rsi6 >= 90
-    rsi_probe_only = 85 <= rsi6 < 90
-    kdj_blocked = kdj_j >= 110
-    kdj_probe_only = 105 <= kdj_j < 110
-
-    if rsi_blocked:
-        overbought_details.append(f"🚫 RSI6({rsi6:.0f}) ≥ 90 → 严重超买，禁止建仓")
+    layer3, l3_multiplier, l3_hard_block, l3_hard_block_reasons, layer3_downgrade = _eval_overbought(rsi6, kdj_j, cci)
+    downgrade_multiplier = min(downgrade_multiplier, l3_multiplier)
+    if l3_hard_block:
         hard_block = True
-        hard_block_reasons.append(f"RSI6={rsi6:.0f}≥90(严重超买)")
-        layer3_passed = False
-        layer3_grade = "🚫排除"
-        layer3_downgrade = "RSI6严重超买"
-        layer3_action = "禁止建仓"
-        downgrade_multiplier = 0.0
-    elif rsi_probe_only:
-        overbought_details.append(f"⚠️ RSI6({rsi6:.0f}) 85-90 → 仅试探仓")
-        layer3_grade = "⚠️仅试探仓"
-        layer3_downgrade = "RSI6偏高"
-        layer3_action = "仅试探仓"
-        downgrade_multiplier = min(downgrade_multiplier, 0.5)
-    else:
-        overbought_details.append(f"✅ RSI6({rsi6:.0f}) < 85 — 正常")
-
-    if kdj_blocked:
-        overbought_details.append(f"🚫 KDJ-J({kdj_j:.0f}) ≥ 110 → 严重超买，禁止建仓")
-        hard_block = True
-        hard_block_reasons.append(f"J={kdj_j:.0f}≥110(严重超买)")
-        layer3_passed = False
-        layer3_grade = "🚫排除"
-        layer3_downgrade = "KDJ-J严重超买"
-        layer3_action = "禁止建仓"
-        downgrade_multiplier = 0.0
-    elif kdj_probe_only:
-        overbought_details.append(f"⚠️ KDJ-J({kdj_j:.0f}) 105-110 → 仅试探仓")
-        layer3_grade = "⚠️仅试探仓"
-        layer3_downgrade = "KDJ-J偏高"
-        layer3_action = "仅试探仓"
-        downgrade_multiplier = min(downgrade_multiplier, 0.5)
-    else:
-        overbought_details.append(f"✅ KDJ-J({kdj_j:.0f}) < 105 — 正常")
-
-    layer3 = LayerResult(
-        passed=layer3_passed,
-        grade=layer3_grade,
-        details=overbought_details,
-        downgrade_reason=layer3_downgrade,
-        downgrade_action=layer3_action,
-    )
-
-    # ── 硬拦截判定（不可被产业链信号豁免）──
-    if rsi6 >= 95:
-        hard_block = True
-        hard_block_reasons.append(f"RSI6={rsi6:.0f}>=95(动量耗尽)")
-        overbought_details.append(f"🔴 硬拦截: RSI6({rsi6:.0f}) >= 95 → 动量耗尽，不可被产业链信号豁免")
-        layer3_passed = False
-        layer3_grade = "🔴硬禁止"
-        layer3_downgrade = "RSI6>=95硬拦截"
-        layer3_action = "硬禁止"
-        downgrade_multiplier = 0.0
-
-    if kdj_j >= 120:
-        hard_block = True
-        hard_block_reasons.append(f"J={kdj_j:.0f}>=120(极端超买)")
-        overbought_details.append(f"🔴 硬拦截: KDJ-J({kdj_j:.0f}) >= 120 → 极端超买，不可被产业链信号豁免")
-        layer3_passed = False
-        layer3_grade = "🔴硬禁止"
-        layer3_downgrade = "KDJ-J>=120硬拦截"
-        layer3_action = "硬禁止"
-        downgrade_multiplier = 0.0
+    hard_block_reasons.extend(l3_hard_block_reasons)
 
     # ══════════════════════════════════════
     # Stage 4: 综合判定
     # ══════════════════════════════════════
-    all_layers_pass = layer1_passed and layer2_passed and layer3_passed
+    all_layers_pass = layer1_passed and layer2_passed and layer3.passed
 
     if downgrade_multiplier <= 0:
         final_decision = "🚫禁止建仓"
@@ -2431,6 +2470,7 @@ async def check_entry_filters(req: EntryCheckRequest):
         capital_efficiency=capital_efficiency,
         rsi6=round(rsi6, 1),
         kdj_j=round(kdj_j, 1),
+        cci=round(cci, 1),
         current_price=round(current_price, 3),
         avg_price=round(avg_price, 3) if avg_price else None,
     )
@@ -2472,7 +2512,7 @@ async def check_entry_filters(req: EntryCheckRequest):
             hard_block=hard_block,
             layer1_passed=layer1_passed,
             layer2_passed=layer2_passed,
-            layer3_passed=layer3_passed,
+            layer3_passed=layer3.passed,
             macd_status=macd_status,
             macd_dif_converging=macd_dif_converging,
             change_pct=change_pct,
