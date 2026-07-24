@@ -1946,9 +1946,139 @@ def _check_macd_dif_converging(indicators_data: dict) -> bool:
     return dif0 < dif1
 
 
-def _eval_overbought(rsi6: float, kdj_j: float, cci: float) -> tuple:
+def _eval_kdj_death_cross(prev_k: float, prev_d: float, cur_k: float, cur_d: float) -> tuple:
     """
-    Layer 3 超买过滤 — 评估 RSI6 / KDJ-J / CCI 三项指标，
+    Layer 1 KDJ 高位死叉检测。
+    比较当日与前一日 KDJ-K/D 值，判断是否发生 K 线下穿 D 线。
+
+    Returns: (LayerResult, downgrade_multiplier)
+    """
+    if prev_k <= 0 or prev_d <= 0 or cur_k <= 0 or cur_d <= 0:
+        return LayerResult(
+            passed=True, grade="✅通过",
+            details=["⚠️ KDJ-K/D数据不可用，跳过死叉检查"],
+        ), 1.0
+
+    was_golden = prev_k >= prev_d
+    is_dead = cur_k < cur_d
+    crossed = was_golden and is_dead
+
+    if not crossed:
+        if cur_k >= cur_d:
+            return LayerResult(
+                passed=True, grade="✅通过",
+                details=[f"✅ KDJ K({cur_k:.1f}) ≥ D({cur_d:.1f}) — 维持金叉"],
+            ), 1.0
+        else:
+            return LayerResult(
+                passed=True, grade="✅通过",
+                details=[f"✅ KDJ K({cur_k:.1f}) < D({cur_d:.1f}) — 已处于死叉但非新增交叉"],
+            ), 1.0
+
+    if cur_k >= 80:
+        return LayerResult(
+            passed=False, grade="🚫排除",
+            details=[f"🚫 KDJ高位死叉: K({cur_k:.1f}) < D({cur_d:.1f}), K≥80 → 动能衰竭，禁止入场"],
+            downgrade_reason="KDJ高位死叉(K≥80)",
+            downgrade_action="禁止入场",
+        ), 0.0
+    elif cur_k >= 70:
+        return LayerResult(
+            passed=True, grade="⚠️仅试探仓",
+            details=[f"⚠️ KDJ中位死叉: K({cur_k:.1f}) < D({cur_d:.1f}), 70≤K<80 → 仅试探仓"],
+            downgrade_reason="KDJ中位死叉(70≤K<80)",
+            downgrade_action="仅试探仓≤5%",
+        ), 0.5
+    else:
+        return LayerResult(
+            passed=True, grade="✅通过",
+            details=[f"⚠️ KDJ低位死叉: K({cur_k:.1f}) < D({cur_d:.1f}), K<70 → 低位死叉不显著"],
+        ), 1.0
+
+
+def _detect_patterns(bars: list) -> dict:
+    """
+    K线顶部反转形态识别。
+    基于最近两根已收盘日线的 OHLC 数据，检测射击之星和看跌吞没。
+
+    Returns: {"pattern": str|None, "hard_block": bool, "detail": str}
+    """
+    if not bars or len(bars) < 2:
+        return {"pattern": None, "hard_block": False, "detail": ""}
+
+    bar0 = bars[0]
+    bar1 = bars[1]
+
+    try:
+        o0, h0, l0, c0 = float(bar0.open), float(bar0.high), float(bar0.low), float(bar0.close)
+        o1, h1, l1, c1 = float(bar1.open), float(bar1.high), float(bar1.low), float(bar1.close)
+    except (ValueError, TypeError, AttributeError):
+        return {"pattern": None, "hard_block": False, "detail": ""}
+
+    # ── 射击之星 ──
+    body = abs(c0 - o0)
+    upper_shadow = h0 - max(o0, c0)
+    lower_shadow = min(o0, c0) - l0
+
+    if body > 0 and upper_shadow >= 2.0 * body and upper_shadow > lower_shadow * 1.5:
+        return {
+            "pattern": "shooting_star",
+            "hard_block": True,
+            "detail": f"🔴 射击之星: 上影线({upper_shadow:.2f}) ≥ 实体({body:.2f})×2, 顶部反转信号 → 硬禁止",
+        }
+
+    # ── 看跌吞没 ──
+    if c1 > o1 and c0 < o0 and o0 > c1 and c0 < o1:
+        return {
+            "pattern": "bearish_engulfing",
+            "hard_block": True,
+            "detail": "🔴 看跌吞没: 前阳后阴, 阴线实体完全吞没阳线实体 → 硬禁止",
+        }
+
+    return {"pattern": None, "hard_block": False, "detail": ""}
+
+
+def _eval_volume_divergence(bars: list) -> dict:
+    """
+    量价背离检测（5日窗口）。
+    当日创近5日最高价但成交量未同步创新高 → 背离警告。
+
+    Returns: {"divergence": bool, "warning": bool, "detail": str}
+    """
+    if not bars or len(bars) < 5:
+        return {"divergence": False, "warning": False, "detail": ""}
+
+    try:
+        recent = bars[:5]
+        highs = [float(b.high) for b in recent]
+        volumes = [float(b.vol) for b in recent]
+    except (ValueError, TypeError, AttributeError):
+        return {"divergence": False, "warning": False, "detail": ""}
+
+    cur_high = highs[0]
+    max_high = max(highs)
+
+    if cur_high < max_high:
+        return {"divergence": False, "warning": False, "detail": ""}
+
+    cur_vol = volumes[0]
+    max_vol = max(volumes)
+
+    if cur_vol < max_vol:
+        return {
+            "divergence": True,
+            "warning": True,
+            "detail": f"⚠️ 量价背离: 价格创5日新高({cur_high:.2f})但成交量({cur_vol/10000:.0f}万) < 前高峰({max_vol/10000:.0f}万) → 仅试探仓",
+        }
+
+    return {"divergence": False, "warning": False, "detail": ""}
+
+
+def _eval_overbought(rsi6: float, kdj_j: float, cci: float,
+                     pattern_hard_block: bool = False, pattern_detail: str = "",
+                     divergence_warning: bool = False, divergence_detail: str = "") -> tuple:
+    """
+    Layer 3 超买+形态+量价三合一过滤 — 评估 RSI6 / KDJ-J / CCI / K线形态 / 量价背离，
     含多指标共振检测：≥2 个指标处于警告或更高级别时联合降级。
 
     Returns: (LayerResult, downgrade_multiplier, hard_block, hard_block_reasons, downgrade_reason)
@@ -1996,6 +2126,17 @@ def _eval_overbought(rsi6: float, kdj_j: float, cci: float) -> tuple:
     kdj_r = _classify(kdj_j, KDJ_THRESHOLDS)
     cci_r = _classify(cci, CCI_THRESHOLDS)
     results = [rsi_r, kdj_r, cci_r]
+
+    # Pattern detection: hard block = severity 3
+    if pattern_hard_block:
+        pat_r = {"severity": 3, "detail": pattern_detail, "hard": True}
+        results.append(pat_r)
+
+    # Divergence detection: warning = severity 1
+    if divergence_warning:
+        div_r = {"severity": 1, "detail": divergence_detail, "hard": False}
+        results.append(div_r)
+
     severities = [r["severity"] for r in results]
 
     # Resonance: ≥2 indicators at severity ≥ 1 → shift up
@@ -2010,12 +2151,14 @@ def _eval_overbought(rsi6: float, kdj_j: float, cci: float) -> tuple:
     details = [r["detail"] for r in results]
 
     if resonance:
-        warning_names = [r["detail"].split("(")[0].strip().lstrip("✅⚠️🚫🔴").rstrip() for r in results if r["severity"] >= 1]
-        # Use indicator names from thresholds
         names = []
         for r, label in [(rsi_r, "RSI6"), (kdj_r, "KDJ-J"), (cci_r, "CCI")]:
             if r["severity"] >= 1:
                 names.append(label)
+        if pattern_hard_block:
+            names.append("K线形态")
+        if divergence_warning:
+            names.append("量价背离")
         details.append(f"🔗 共振: {' + '.join(names)} 中 ≥2 项偏高 → 联合降级")
 
     # Determine final grade
@@ -2133,6 +2276,8 @@ async def check_entry_filters(req: EntryCheckRequest):
     ma20 = getattr(rt, "ma20", 0) or 0 if rt else 0
     rsi6 = getattr(rt, "rsi_6", 0) or 0 if rt else 0
     kdj_j = getattr(rt, "kdj_j", 0) or 0 if rt else 0
+    kdj_k = getattr(rt, "kdj_k", 0) or 0 if rt else 0
+    kdj_d = getattr(rt, "kdj_d", 0) or 0 if rt else 0
 
     # CCI 提取自 Tushare 盘后确认数据（stk_factor_pro 含 cci_qfq），
     # realtime 估算不含 CCI，取最近一个历史确认日的值
@@ -2140,6 +2285,33 @@ async def check_entry_filters(req: EntryCheckRequest):
     historical = indicators_data.get("historical") or []
     if historical:
         cci = getattr(historical[0], "cci", 0) or 0
+
+    # 上一日 KDJ-K/D 盘后确认值（用于死叉交叉判断）
+    prev_k = 0.0
+    prev_d = 0.0
+    if historical:
+        prev_k = getattr(historical[0], "kdj_k", 0) or 0
+        prev_d = getattr(historical[0], "kdj_d", 0) or 0
+
+    # 日K线数据（用于形态识别和量价背离检测）
+    daily_bars = []
+    try:
+        from app.core.trading._api_config import get_tushare_pro
+        import tushare as ts
+        pro = get_tushare_pro()
+        k_start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+        k_end = datetime.now().strftime("%Y%m%d")
+        kline_df = ts.pro_bar(api=pro, ts_code=ts_code, start_date=k_start, end_date=k_end, adj='qfq', freq='D')
+        if kline_df is not None and not kline_df.empty:
+            kline_df = kline_df.sort_values("trade_date", ascending=False).head(5)
+            for _, row in kline_df.iterrows():
+                daily_bars.append(type("Bar", (), {
+                    "open": float(row["open"]), "high": float(row["high"]),
+                    "low": float(row["low"]), "close": float(row["close"]),
+                    "vol": float(row["vol"]),
+                }))
+    except Exception as e:
+        logger.warning(f"获取日K线失败: {e}")
 
     # MACD 状态判断
     macd_status = "未知"
@@ -2314,6 +2486,20 @@ async def check_entry_filters(req: EntryCheckRequest):
         else:
             tech_details.append(f"✅ 资金效率({capital_efficiency:.1f}) ≥ 5% — 通过")
 
+    # 1f. KDJ 高位死叉检查
+    kdj_cross_result, kdj_cross_mult = _eval_kdj_death_cross(prev_k, prev_d, kdj_k, kdj_d)
+    tech_details.extend(kdj_cross_result.details)
+    if not kdj_cross_result.passed:
+        layer1_passed = False
+        layer1_grade = "🚫排除"
+        layer1_downgrade = kdj_cross_result.downgrade_reason
+        layer1_action = kdj_cross_result.downgrade_action
+    downgrade_multiplier = min(downgrade_multiplier, kdj_cross_mult)
+    if kdj_cross_mult <= 0.5 and layer1_passed:
+        layer1_grade = "⚠️降级"
+        layer1_downgrade = kdj_cross_result.downgrade_reason
+        layer1_action = kdj_cross_result.downgrade_action
+
     layer1 = LayerResult(
         passed=layer1_passed,
         grade=layer1_grade if layer1_passed else "🚫排除",
@@ -2390,7 +2576,17 @@ async def check_entry_filters(req: EntryCheckRequest):
     )
 
     # ── Layer 3: 超买过滤 ──
-    layer3, l3_multiplier, l3_hard_block, l3_hard_block_reasons, layer3_downgrade = _eval_overbought(rsi6, kdj_j, cci)
+    # 运行形态和量价检测
+    pattern_result = _detect_patterns(daily_bars)
+    divergence_result = _eval_volume_divergence(daily_bars)
+
+    layer3, l3_multiplier, l3_hard_block, l3_hard_block_reasons, layer3_downgrade = _eval_overbought(
+        rsi6, kdj_j, cci,
+        pattern_hard_block=pattern_result["hard_block"],
+        pattern_detail=pattern_result["detail"],
+        divergence_warning=divergence_result["warning"],
+        divergence_detail=divergence_result["detail"],
+    )
     downgrade_multiplier = min(downgrade_multiplier, l3_multiplier)
     if l3_hard_block:
         hard_block = True
@@ -2470,6 +2666,8 @@ async def check_entry_filters(req: EntryCheckRequest):
         capital_efficiency=capital_efficiency,
         rsi6=round(rsi6, 1),
         kdj_j=round(kdj_j, 1),
+        kdj_k=round(kdj_k, 1),
+        kdj_d=round(kdj_d, 1),
         cci=round(cci, 1),
         current_price=round(current_price, 3),
         avg_price=round(avg_price, 3) if avg_price else None,

@@ -2687,10 +2687,14 @@ async def check_entry_filters_sandbox(task_id: str, req: dict):
     # 转换为 亿 供前端显示 (parquet 原始单位是 元, tools.ts 显示后缀为"亿")
     main_net_5d_e8 = round(main_net_5d / 1e8, 4)
 
-    # ── Layer 3: 超买 ──
-    # 回测本地数据不支持 KDJ-J / CCI，传入 0 使对应指标判为正常
+    # ── Layer 3: 超买+形态+量价三合一 ──
+    # 回测本地数据不支持 KDJ-J / CCI / K线形态 / 量价背离，传入 0/False 使对应指标判为正常
     from app.api.indicator import _eval_overbought
-    l3_result, l3_mult, l3_hb, l3_hb_reasons, l3_downgrade = _eval_overbought(rsi_6, 0, 0)
+    l3_result, l3_mult, l3_hb, l3_hb_reasons, l3_downgrade = _eval_overbought(
+        rsi_6, 0, 0,
+        pattern_hard_block=False, pattern_detail="",
+        divergence_warning=False, divergence_detail="",
+    )
     layer3_pass = l3_result.passed
 
     # ── 决策 ──

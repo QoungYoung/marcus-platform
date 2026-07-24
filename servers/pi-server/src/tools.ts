@@ -1814,7 +1814,7 @@ export const calcPositionTool = {
 export const checkEntryFiltersTool = {
   name: 'check_entry_filters',
   label: '入场过滤',
-  description: '【建仓前必调】对标的执行三层过滤检查：技术面(MA5/MA20/MACD/RSR/分位/资金效率) → 主力行为(5日/10日/今日主力流向) → 超买过滤(RSI6/KDJ-J)。返回逐层判定(✅/⚠️/🚫) + 降仓系数 + 买入确认规则(涨幅分段)。参数: symbol(股票代码), sector_net_inflow(可选,板块主力净流入元), volume_ratio(可选,量比)',
+  description: '【建仓前必调】对标的执行三层过滤检查：技术面(MA5/MA20/MACD/KDJ死叉/RSR/分位/资金效率) → 主力行为(5日/10日/今日主力流向) → 超买+形态+量价(RSI6/KDJ-J/CCI/K线形态/量价背离)。返回逐层判定(✅/⚠️/🚫) + 降仓系数 + 买入确认规则(涨幅分段)。参数: symbol(股票代码), sector_net_inflow(可选,板块主力净流入元), volume_ratio(可选,量比)',
   parameters: Type.Object({
     symbol: Type.String({ description: '股票代码，如 SH600519、SZ000001 或纯数字 600519' }),
     sector_net_inflow: Type.Optional(Type.Number({ description: '所属板块主力资金净流入（元），用于MA5<MA20时的备用检查' })),
@@ -1894,7 +1894,7 @@ export const checkEntryFiltersTool = {
     const lines: string[] = [];
     lines.push(`🔍 ${data.symbol}${nameStr} — 入场过滤检查`);
     lines.push('');
-    lines.push(`【技术面数据】现价 ${t.current_price} | MA5=${t.ma5} MA20=${t.ma20} | MACD:${t.macd_status} | RSI6=${t.rsi6} J=${t.kdj_j}`);
+    lines.push(`【技术面数据】现价 ${t.current_price} | MA5=${t.ma5} MA20=${t.ma20} | MACD:${t.macd_status} | RSI6=${t.rsi6} KDJ-J=${t.kdj_j}`);
     if (t.rsr != null) lines.push(`  RSR=${t.rsr.toFixed(2)} | 日内分位=${t.intraday_percentile?.toFixed(0) ?? '--'}% | 资金效率=${t.capital_efficiency?.toFixed(1) ?? '--'}`);
 
     lines.push('');
@@ -1908,7 +1908,7 @@ export const checkEntryFiltersTool = {
     for (const d of (l2.details || [])) lines.push(`  ${d}`);
 
     lines.push('');
-    lines.push(`── 第三层·超买过滤 ──`);
+    lines.push(`── 第三层·超买+形态+量价 ──`);
     lines.push(`${l3.grade} ${l3.downgrade_reason || ''}`);
     for (const d of (l3.details || [])) lines.push(`  ${d}`);
 
