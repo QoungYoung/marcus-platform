@@ -207,11 +207,15 @@ export default function PortfolioPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [loadingBreakdowns, setLoadingBreakdowns] = useState(true);
+
   // ── 30日盈亏明细（贡献排名用）──
   useEffect(() => {
+    setLoadingBreakdowns(true);
     portfolioApi.getDailyPnlBreakdown(30).then(res => {
       if (Array.isArray(res.data)) setBreakdowns(res.data);
-    }).catch(() => { /* 静默失败，贡献排名显示空状态 */ });
+    }).catch(() => { /* 静默失败，贡献排名显示空状态 */ })
+      .finally(() => setLoadingBreakdowns(false));
   }, []);
 
   // ── 资金流数据（持仓股）──
@@ -968,7 +972,9 @@ export default function PortfolioPage() {
             <span className="cp-panel-title">个股盈亏贡献 (30日)</span>
           </div>
           <div className="cp-panel-body" style={{ padding: '0' }}>
-            {pnlContributions.length === 0 ? (
+            {loadingBreakdowns ? (
+              <SkeletonTable rows={10} />
+            ) : pnlContributions.length === 0 ? (
               <div className="cp-empty" style={{ height: 200 }}>
                 <i className="fas fa-chart-bar" />
                 <span>暂无盈亏明细数据</span>

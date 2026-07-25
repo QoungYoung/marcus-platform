@@ -922,9 +922,13 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
 
 @router.get("/daily-pnl-breakdown", response_model=list[DailyPnlBreakdown])
-async def get_daily_pnl_breakdown(days: int = Query(30, ge=1, le=60)):
+async def get_daily_pnl_breakdown(
+    days: int = Query(30, ge=1, le=60),
+    sort_dir: str = Query("desc", regex="^(asc|desc)$"),
+):
     """
     每日盈亏明细 — 含个股贡献分解 (Tushare 历史收盘价)。
+    sort_dir: asc=日期升序, desc=日期降序
     """
     from datetime import datetime as dt, timedelta
 
@@ -1075,6 +1079,9 @@ async def get_daily_pnl_breakdown(days: int = Query(30, ge=1, le=60)):
 
         if len(result) >= days:
             break
+
+    if sort_dir == "desc":
+        result.reverse()
 
     return result
 
