@@ -26,6 +26,11 @@ _CACHE_TTL = 60  # 秒
 
 def _get_data_dir() -> Path:
     """Resolve data directory (stock_pool.db location)."""
+    try:
+        from app.config import get_settings
+        return get_settings().data_dir
+    except Exception:
+        pass
     candidates = [
         Path(__file__).resolve().parents[3] / "data",
         Path(os.getcwd()) / "data",
