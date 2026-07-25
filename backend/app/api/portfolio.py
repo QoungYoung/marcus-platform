@@ -1015,8 +1015,8 @@ async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Ta
             all_stocks.add(t.symbol)
 
     sorted_dates = sorted(trades_by_date.keys())
-    if date not in trades_by_date and date not in [d for d in sorted_dates if d <= date]:
-        # No trades up to this date
+    has_trades_up_to_date = any(d <= date for d in sorted_dates)
+    if not has_trades_up_to_date:
         return DailyPnlBreakdown(date=date, daily_pnl=0, realized_total=0, float_total=0, stocks=[])
 
     # ── FIFO replay up to target date ──
