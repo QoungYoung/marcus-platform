@@ -210,13 +210,16 @@ export default function PortfolioPage() {
   const [loadingBreakdowns, setLoadingBreakdowns] = useState(true);
 
   // ── 30日盈亏明细（贡献排名用）──
-  useEffect(() => {
+  const refreshBreakdowns = useCallback(async () => {
     setLoadingBreakdowns(true);
-    portfolioApi.getDailyPnlBreakdown(30).then(res => {
+    try {
+      const res = await portfolioApi.getDailyPnlBreakdown(30);
       if (Array.isArray(res.data)) setBreakdowns(res.data);
-    }).catch(() => { /* 静默失败，贡献排名显示空状态 */ })
-      .finally(() => setLoadingBreakdowns(false));
+    } catch { /* 静默失败 */ }
+    finally { setLoadingBreakdowns(false); }
   }, []);
+
+  useEffect(() => { refreshBreakdowns(); }, [refreshBreakdowns]);
 
   // ── 资金流数据（持仓股）──
   const refreshMoneyflow = useCallback(async () => {
@@ -984,6 +987,9 @@ export default function PortfolioPage() {
           <div className="cp-panel-header">
             <i className="fas fa-ranking-star" />
             <span className="cp-panel-title">个股盈亏贡献 (30日)</span>
+            <button className="cp-refresh-btn" onClick={refreshBreakdowns} title="刷新贡献数据" style={{ marginLeft: 'auto' }}>
+              <i className={`fas fa-sync-alt ${loadingBreakdowns ? 'fa-spin' : ''}`} />
+            </button>
           </div>
           <div className="cp-panel-body" style={{ padding: '0' }}>
             {loadingBreakdowns ? (

@@ -483,10 +483,10 @@ def save_daily_snapshot(target_date: str = None) -> dict:
 
 
 def _compute_sector_concentration(positions: list, total_position_value: float) -> dict | None:
-    """计算行业集中度。
+    """计算行业集中度（申万行业分类）。
 
-    从 stock_pool.db 的 stock_concept_map 表查询每个持仓股所属行业概念，
-    聚合并计算各行业的市值权重。多概念股票将市值均分到各概念。
+    从 stock_pool.db 的 stock_pool.industry 查询每个持仓股的申万行业，
+    聚合各行业的市值权重。每只股票只属于一个行业，无需均分。
 
     Returns: dict with sectors, max_sector, concentration_level
     """
@@ -502,9 +502,9 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
         conn.row_factory = sqlite3.Row
         curs = conn.cursor()
 
-        # 收集所有持仓股的行业概念
-        sector_values: dict[str, float] = {}
-        sector_stocks: dict[str, set] = {}
+        # 收集所有持仓股的申万行业
+        industry_values: dict[str, float] = {}
+        industry_stocks: dict[str, set] = {}
 
         for p in positions:
             symbol = p.symbol if isinstance(p, dict) else getattr(p, 'symbol', '')
@@ -514,29 +514,24 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
                 else 0
             )
 
-            # 从 Marcus 代码提取纯数字代码 (SH600519 → 600519)
-            code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
-
-            curs.execute(
-                "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
-                (f"%{code}%",)
-            )
-            concepts = [row['concept_name'] for row in curs.fetchall()]
-
-            if not concepts:
-                sector_values.setdefault("其他/未分类", 0.0)
-                sector_values["其他/未分类"] += market_value
-                sector_stocks.setdefault("其他/未分类", set()).add(symbol)
+            # SH600519 → 600519.SH
+            if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ'):
+                exchange = symbol[:2]
+                code = symbol[2:]
+                ts_code = f"{code}.{exchange}"
             else:
-                # 多概念股票：市值均分
-                per_concept_value = market_value / len(concepts)
-                for c in concepts:
-                    sector_values[c] = sector_values.get(c, 0.0) + per_concept_value
-                    sector_stocks.setdefault(c, set()).add(symbol)
+                ts_code = symbol
+
+            curs.execute("SELECT industry FROM stock_pool WHERE ts_code = ?", (ts_code,))
+            row = curs.fetchone()
+
+            industry = row['industry'] if row and row['industry'] else "其他"
+            industry_values[industry] = industry_values.get(industry, 0.0) + market_value
+            industry_stocks.setdefault(industry, set()).add(symbol)
 
         conn.close()
 
-        if not sector_values:
+        if not industry_values:
             return None
 
         # 构建 sectors 列表
@@ -545,9 +540,9 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
                 {
                     "name": name,
                     "weight_pct": round(val / total_position_value * 100, 1),
-                    "stock_count": len(sector_stocks.get(name, set())),
+                    "stock_count": len(industry_stocks.get(name, set())),
                 }
-                for name, val in sector_values.items()
+                for name, val in industry_values.items()
             ],
             key=lambda x: x["weight_pct"],
             reverse=True,
