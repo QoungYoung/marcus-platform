@@ -333,18 +333,22 @@ export default function PortfolioPage() {
         </button>
       </header>
 
+      {/* ═══ 概览组：资产 + 风险 ═══ */}
+      <div className="cp-section-group">
+
       {/* ═══ 资产 Hero 卡片 ═══ */}
       {loadingSummary ? <SkeletonHero /> : summary && (
         <div className="cp-hero-card">
           <div className="cp-hero-left">
             <div className="cp-hero-label">{t('portfolio.totalAsset')}</div>
             <div className="cp-hero-value">¥{fmtMoney(totalAsset)}</div>
+            <div className="cp-hero-label" style={{ marginTop: 12 }}>{t('portfolio.totalPnL')}</div>
+            <div className={`cp-hero-pnl ${totalPnl >= 0 ? 'up' : 'down'}`}>
+              {totalPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(totalPnl))}
+            </div>
             <div className={`cp-hero-change ${totalPnl >= 0 ? 'up' : 'down'}`}>
               <i className={`fas fa-caret-${totalPnl >= 0 ? 'up' : 'down'}`} />
-              {totalPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(totalPnl))}
-              <span style={{ fontWeight: 400, fontSize: 12 }}>
-                ({total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%)
-              </span>
+              {total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%
             </div>
             <div className={`cp-hero-change ${weekTotal >= 0 ? 'up' : 'down'}`} style={{ marginTop: 8, display: 'block' }}>
               <span style={{ fontWeight: 500, marginRight: 4 }}>本周盈亏</span>
@@ -398,8 +402,10 @@ export default function PortfolioPage() {
             level={volatility > 25 ? 'danger' : volatility > 15 ? 'warn' : 'safe'} />
         </div>
       )}
+      </div>
 
       {/* ═══ 止损监控卡片 ═══ */}
+      <div className="cp-section-group">
       {loadingStopLoss ? <SkeletonSL /> : stopLoss && (
         <div className="cp-sl-strip">
           <div className="cp-sl-card" onClick={() => setSlExpanded(e => !e)} style={{ cursor: 'pointer' }}>
@@ -482,6 +488,10 @@ export default function PortfolioPage() {
           )}
         </div>
       )}
+      </div>
+
+      {/* ═══ 分析组：图表 + 持仓 + 交易 ═══ */}
+      <div className="cp-section-group">
 
       {/* ═══ 图表行 ═══ */}
       <div className="cp-row-charts">
@@ -580,15 +590,16 @@ export default function PortfolioPage() {
                     {t('portfolio.marketValue')} {sortKey === 'market_value' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
                   <th className={`right sortable ${sortKey === 'weight' ? 'sorted' : ''}`} onClick={() => handleSort('weight')}>
                     {t('portfolio.weight')} {sortKey === 'weight' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                  <th className="right">风险</th>
                 </tr></thead>
                 <tbody>
                   {sortedPositions.length === 0 ? (
-                    <tr><td colSpan={12}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
+                    <tr><td colSpan={11}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
                   ) : sortedPositions.map(pos => {
                     const isUp = (pos.floating_pnl || 0) >= 0;
                     const weight = totalAsset > 0 ? (pos.market_value / totalAsset) * 100 : 0;
                     const isHeavy = weight > 30; const isWarn = weight > 20 && weight <= 30;
+                    const pnlPct = pos.floating_pnl_pct || 0;
+                    const pnlMag = Math.abs(pnlPct) > 5 ? 'strong' : Math.abs(pnlPct) < 2 ? 'mild' : '';
                     return (
                       <tr key={pos.symbol} className={isHeavy ? 'risk-high' : isWarn ? 'risk-warn' : ''}>
                         <td className="symbol mono">{pos.symbol}</td>
@@ -599,13 +610,10 @@ export default function PortfolioPage() {
                         <td className={`num mono ${(pos.today_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>
                           {(pos.today_pnl || 0) >= 0 ? '+' : ''}¥{fmtMoney(Math.abs(pos.today_pnl || 0))}</td>
                         <td className={`num mono ${isUp ? 'pnl-up' : 'pnl-down'}`}>{isUp ? '+' : ''}¥{fmtMoney(Math.abs(pos.floating_pnl || 0))}</td>
-                        <td className="num"><span className={`cp-pnl-tag ${isUp ? 'up' : 'down'}`}>{isUp ? '+' : ''}{(pos.floating_pnl_pct || 0).toFixed(2)}%</span></td>
+                        <td className="num"><span className={`cp-pnl-tag ${isUp ? 'up' : 'down'} ${pnlMag ? `pnl-${pnlMag}-${isUp ? 'up' : 'down'}` : ''}`}>{isUp ? '+' : ''}{pnlPct.toFixed(2)}%</span></td>
                         <td className="num mono bold">¥{fmtMoney(pos.market_value)}</td>
-                        <td className="num"><span className="cp-wt-tag">{weight.toFixed(1)}%</span></td>
                         <td className="num">
-                          {isHeavy ? <span className="cp-risk-badge danger"><i className="fas fa-exclamation-triangle" style={{ fontSize: 8 }} /> 重仓</span>
-                           : isWarn ? <span className="cp-risk-badge warn">偏重</span>
-                           : <span style={{ color: 'var(--agent-text-dim)', fontSize: 10 }}>-</span>}</td>
+                          <span className={`cp-wt-tag ${isHeavy ? 'danger' : isWarn ? 'warn' : ''}`}>{weight.toFixed(1)}%</span></td>
                       </tr>
                     );
                   })}
@@ -646,15 +654,10 @@ export default function PortfolioPage() {
         </div>
       </div>
 
+      </div>
+
       {/* ═══ FAB ═══ */}
       <div className="cp-fab">
-        {fabOpen && (
-          <div className="cp-fab-menu">
-            <button className="cp-fab-item" onClick={() => {}}><i className="fas fa-plus-circle" /> 手工下单</button>
-            <button className="cp-fab-item" onClick={() => {}}><i className="fas fa-arrow-right-to-bracket" /> 转入资金</button>
-            <button className="cp-fab-item danger" onClick={() => {}}><i className="fas fa-skull" /> 紧急平仓</button>
-          </div>
-        )}
         <button className="cp-fab-main" onClick={() => setFabOpen(o => !o)} title="快捷操作">
           <i className={`fas fa-${fabOpen ? 'times' : 'ellipsis'}`} />
         </button>

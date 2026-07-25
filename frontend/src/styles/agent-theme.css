@@ -89,6 +89,32 @@
   --agent-scrollbar-thumb: #2a3647;
   --agent-scrollbar-thumb-hover: #3a4657;
 
+  /* 语义化半透明色 */
+  --agent-red-subtle: rgba(231, 76, 60, 0.06);
+  --agent-red-muted: rgba(231, 76, 60, 0.12);
+  --agent-red-border: rgba(231, 76, 60, 0.2);
+  --agent-red-border-strong: rgba(231, 76, 60, 0.35);
+  --agent-red-bg: rgba(231, 76, 60, 0.08);
+  --agent-red-bg-border: rgba(231, 76, 60, 0.15);
+  --agent-red-hover: rgba(231, 76, 60, 0.3);
+  --agent-border-hover-12: rgba(255, 255, 255, 0.12);
+  --agent-warning-dim: rgba(240, 185, 11, 0.7);
+  --agent-gold-subtle: rgba(240, 185, 11, 0.04);
+  --agent-gold-muted-2: rgba(240, 185, 11, 0.08);
+  --agent-green-subtle: rgba(46, 204, 113, 0.06);
+  --agent-green-border: rgba(46, 204, 113, 0.25);
+  --agent-green-border-hover: rgba(46, 204, 113, 0.4);
+  --agent-border-hover: rgba(255, 255, 255, 0.06);
+  --agent-border-hover-strong: rgba(255, 255, 255, 0.08);
+  --agent-table-border: rgba(255, 255, 255, 0.02);
+  --agent-table-border-strong: rgba(255, 255, 255, 0.04);
+
+  /* P&L 幅度分层 */
+  --agent-pnl-strong-up: #2ecc71;
+  --agent-pnl-strong-down: #e74c3c;
+  --agent-pnl-mild-up: rgba(46, 204, 113, 0.7);
+  --agent-pnl-mild-down: rgba(231, 76, 60, 0.7);
+
   --agent-sidebar-width: 260px;
   --agent-panel-width: 280px;
   --agent-transition-fast: 0.2s;
@@ -128,13 +154,13 @@
   --accent-foreground: #0D1B5C;
   --destructive-foreground: #0D1B5C;
 
-  --agent-green: #27AE60;
-  --agent-green-bg: rgba(39, 174, 96, 0.12);
+  --agent-green: #219A52;
+  --agent-green-bg: rgba(33, 154, 82, 0.12);
   --agent-red: #C0392B;
   --agent-red-bg: rgba(192, 57, 43, 0.12);
 
-  --agent-border-subtle: rgba(18, 46, 138, 0.10);
-  --agent-border-light: rgba(18, 46, 138, 0.15);
+  --agent-border-subtle: rgba(18, 46, 138, 0.14);
+  --agent-border-light: rgba(18, 46, 138, 0.18);
   --agent-border-input: rgba(18, 46, 138, 0.15);
 
   /* TopNav 变量 (浅色) — 深海蓝导航栏 */
@@ -148,7 +174,7 @@
   --topnav-link-active-color: #F5EFEA;
   --topnav-link-active-bg: rgba(245, 239, 234, 0.15);
   --topnav-status-text: rgba(245, 239, 234, 0.6);
-  --topnav-status-dot: #27AE60;
+  --topnav-status-dot: #219A52;
 
   /* 面板 / 半透明覆盖层 */
   --agent-panel-bg: #F5EFEA;
@@ -179,6 +205,32 @@
   /* 滚动条 */
   --agent-scrollbar-thumb: #C4B5A5;
   --agent-scrollbar-thumb-hover: #A89A8A;
+
+  /* 语义化半透明色 (浅色) */
+  --agent-red-subtle: rgba(192, 57, 43, 0.06);
+  --agent-red-muted: rgba(192, 57, 43, 0.12);
+  --agent-red-border: rgba(192, 57, 43, 0.2);
+  --agent-red-border-strong: rgba(192, 57, 43, 0.35);
+  --agent-red-bg: rgba(192, 57, 43, 0.08);
+  --agent-red-bg-border: rgba(192, 57, 43, 0.15);
+  --agent-red-hover: rgba(192, 57, 43, 0.3);
+  --agent-border-hover-12: rgba(18, 46, 138, 0.12);
+  --agent-warning-dim: rgba(18, 46, 138, 0.7);
+  --agent-gold-subtle: rgba(18, 46, 138, 0.04);
+  --agent-gold-muted-2: rgba(18, 46, 138, 0.08);
+  --agent-green-subtle: rgba(39, 174, 96, 0.06);
+  --agent-green-border: rgba(39, 174, 96, 0.25);
+  --agent-green-border-hover: rgba(39, 174, 96, 0.4);
+  --agent-border-hover: rgba(18, 46, 138, 0.05);
+  --agent-border-hover-strong: rgba(18, 46, 138, 0.08);
+  --agent-table-border: rgba(18, 46, 138, 0.03);
+  --agent-table-border-strong: rgba(18, 46, 138, 0.06);
+
+  /* P&L 幅度分层 */
+  --agent-pnl-strong-up: #27AE60;
+  --agent-pnl-strong-down: #C0392B;
+  --agent-pnl-mild-up: rgba(39, 174, 96, 0.7);
+  --agent-pnl-mild-down: rgba(192, 57, 43, 0.7);
 
   /* 模态覆盖 */
   --agent-modal-overlay: rgba(18, 46, 138, 0.25);
