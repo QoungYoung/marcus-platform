@@ -133,6 +133,8 @@ class PositionTierMonitor:
         self._realtime_ma_cache: Dict[str, tuple] = {}
         # AI判断缓存 {cache_key: (timestamp, result)}
         self._ai_judge_cache: Dict[str, tuple] = {}
+        # 超买指标缓存（与 stop_loss_monitor 的 _tech_divergence_cache 同格式）
+        self._overbought_cache: Dict[str, tuple] = {}
 
         # 加载持久化的层级状态
         self._load_tier_states()
@@ -413,7 +415,14 @@ class PositionTierMonitor:
         aux_info = f"辅助{trend.get('aux_passed', 0)}/{trend.get('aux_total', 4)}"
         checks.append(('PASSED', f'趋势强度通过（核心MA5>MA20 + {aux_info}）'))
 
-        # ── 门控 7：概念板块 TOP10 —— 降仓而非拦截 ──
+        # ── 门控 7：超买拦截（KDJ/RSI）──
+        overbought_blocked, overbought_reason = self._check_overbought_gate(symbol)
+        if overbought_blocked:
+            checks.append(('BLOCKED', overbought_reason))
+            return GateResult(allowed=False, checks=checks)
+        checks.append(('PASSED', '超买指标通过'))
+
+        # ── 门控 8：概念板块 TOP10 —— 降仓而非拦截 ──
         concept_passed, concept_detail = self._check_concept_top10_gate(symbol)
         if concept_passed:
             checks.append(('PASSED', f'概念TOP10: {concept_detail}'))
@@ -520,6 +529,38 @@ class PositionTierMonitor:
         except Exception as e:
             logger.debug(f"[加仓] 保护线检查异常 {symbol}: {e}")
             return False, '保护线检查跳过'
+
+    # ── 超买拦截（KDJ/RSI）──
+
+    def _check_overbought_gate(self, symbol: str) -> tuple:
+        """
+        加仓前的超买指标门控。
+
+        复用规则 2.3 的数据源和阈值：
+        - KDJ_K ≥ 80 → 拦截（与超买止盈"首次预警"阈值对齐）
+        - RSI6 ≥ 85 → 拦截（极端超买，与 _eval_overbought 的 Blocked 阈值对齐）
+
+        任一触发即拦截加仓。
+        数据获取失败时放行（不因 API 问题阻塞加仓）。
+        """
+        try:
+            from app.core.trading._tech_divergence import get_overbought_indicators
+
+            kdj_k, rsi6, _chg = get_overbought_indicators(
+                symbol=symbol,
+                cache=getattr(self, '_overbought_cache', None),
+            )
+
+            if rsi6 >= 85:
+                return True, f'RSI6={rsi6:.1f}≥85，极端超买，禁止加仓'
+            if kdj_k >= 80:
+                return True, f'KDJ_K={kdj_k:.1f}≥80，超买区域，禁止加仓'
+
+            return False, f'KDJ_K={kdj_k:.1f}, RSI6={rsi6:.1f} 正常'
+
+        except Exception as e:
+            logger.debug(f"[加仓] 超买检查异常 {symbol}: {e}")
+            return False, '超买检查跳过'
 
     # ── 概念板块 TOP10 辅助方法 ──
 
