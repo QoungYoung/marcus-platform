@@ -52,3 +52,23 @@ class EquityPoint(BaseModel):
     date: str
     equity: float
     daily_pnl: float = 0.0
+
+
+class DailyStockPnl(BaseModel):
+    """个股当日盈亏明细"""
+    symbol: str
+    name: str = ""
+    volume: int = 0
+    close_price: float = 0.0
+    prev_close: float = 0.0
+    float_pnl: float = 0.0       # 浮动盈亏变动 = volume * (close - prev_close)
+    realized_pnl: float = 0.0    # 当日卖出已实现盈亏
+
+
+class DailyPnlBreakdown(BaseModel):
+    """单日盈亏明细"""
+    date: str
+    daily_pnl: float = 0.0
+    realized_total: float = 0.0
+    float_total: float = 0.0
+    stocks: List[DailyStockPnl] = []
