@@ -261,6 +261,55 @@ def _calc_week_pnl(positions: list) -> tuple:
     return week_realized, week_float
 
 
+def _normalize_to_ts_code(symbol: str) -> str:
+    """Marcus 代码 SH600900 → Tushare ts_code 600900.SH"""
+    code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
+    if symbol.startswith("SH") or code.startswith("6"):
+        return f"{code}.SH"
+    elif symbol.startswith("SZ") or code.startswith(("0", "3")):
+        return f"{code}.SZ"
+    elif symbol.startswith("BJ") or code.startswith(("8", "4")):
+        return f"{code}.BJ"
+    return f"{code}.SH"
+
+
+def _get_tushare_close_prices(symbols: list, trade_date: str) -> dict:
+    """从 Tushare 获取指定日期的收盘价。
+
+    Returns: {marcus_symbol: close_price}
+    """
+    if not symbols:
+        return {}
+    try:
+        from app.core.trading._api_config import get_tushare_pro
+        pro = get_tushare_pro()
+    except Exception:
+        return {}
+
+    ts_codes = [_normalize_to_ts_code(s) for s in symbols]
+    code_to_marcus = {ts: ms for ts, ms in zip(ts_codes, symbols)}
+    date_str = trade_date.replace("-", "")
+
+    try:
+        df = pro.daily(
+            ts_code=",".join(ts_codes),
+            trade_date=date_str,
+            fields="ts_code,trade_date,close",
+        )
+    except Exception:
+        return {}
+
+    if df is None or df.empty:
+        return {}
+
+    result = {}
+    for _, row in df.iterrows():
+        marcus = code_to_marcus.get(row["ts_code"])
+        if marcus:
+            result[marcus] = float(row["close"])
+    return result
+
+
 def save_daily_snapshot(target_date: str = None) -> dict:
     """Compute and persist a daily portfolio snapshot to PostgreSQL paper_daily_snapshot.
 
@@ -344,21 +393,39 @@ def save_daily_snapshot(target_date: str = None) -> dict:
     is_today = (target_date == today_str)
     price_source = 'cost'
 
-    if is_today and position_list:
-        symbols = [p['symbol'] for p in position_list]
-        prices = get_realtime_prices(symbols)
-        position_value = 0.0
-        for p in position_list:
-            price_data = prices.get(p['symbol'], {})
-            if isinstance(price_data, dict):
-                market_price = price_data.get('price', p['avg_price'])
-            else:
-                market_price = p['avg_price']
-            position_value += market_price * p['volume']
-        if prices:
-            price_source = 'market'
+    if position_list:
+        if is_today:
+            # 当日：实时行情
+            symbols = [p['symbol'] for p in position_list]
+            prices = get_realtime_prices(symbols)
+            position_value = 0.0
+            for p in position_list:
+                price_data = prices.get(p['symbol'], {})
+                if isinstance(price_data, dict):
+                    market_price = price_data.get('price', p['avg_price'])
+                else:
+                    market_price = p['avg_price']
+                position_value += market_price * p['volume']
+            if prices:
+                price_source = 'market'
+        else:
+            # 历史日期：Tushare 收盘价
+            close_prices = _get_tushare_close_prices(
+                [p['symbol'] for p in position_list], target_date
+            )
+            position_value = 0.0
+            priced = 0
+            for p in position_list:
+                cp = close_prices.get(p['symbol'])
+                if cp and cp > 0:
+                    position_value += cp * p['volume']
+                    priced += 1
+                else:
+                    position_value += p['avg_price'] * p['volume']
+            if priced > 0:
+                price_source = 'tushare'
     else:
-        position_value = sum(p['avg_price'] * p['volume'] for p in position_list)
+        position_value = 0.0
 
     cost_value = sum(p['avg_price'] * p['volume'] for p in position_list)
     total_asset = available_cash + frozen_cash + position_value
@@ -715,6 +782,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     yesterday = today - timedelta(days=1)
     result = []
     current = start_date
+    prev_equity = None
     while current <= yesterday and len(result) < days:
         date_str = current.strftime("%Y-%m-%d")
 
@@ -744,7 +812,10 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
                     for l in lots
                 )
             equity = available_cash + position_value
-        result.append(EquityPoint(date=date_str, equity=round(equity, 2)))
+
+        daily_pnl = round(equity - prev_equity, 2) if prev_equity is not None else 0.0
+        prev_equity = equity
+        result.append(EquityPoint(date=date_str, equity=round(equity, 2), daily_pnl=daily_pnl))
 
         current += timedelta(days=1)
 

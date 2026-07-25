@@ -51,3 +51,4 @@ class PortfolioSummary(BaseModel):
 class EquityPoint(BaseModel):
     date: str
     equity: float
+    daily_pnl: float = 0.0
