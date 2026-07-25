@@ -791,26 +791,29 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
         if date_str in snapshots:
             equity = snapshots[date_str]
+        elif date_str == today_str:
+            position_value = 0.0
+            for sym, lots in positions.items():
+                total_vol = sum(l['volume'] for l in lots)
+                if total_vol > 0:
+                    price_data = realtime_prices.get(sym, {})
+                    if isinstance(price_data, dict):
+                        price = price_data.get('price')
+                    else:
+                        price = price_data if isinstance(price_data, (int, float)) else None
+                    if not price:
+                        price = sum(l['price'] * l['volume'] for l in lots) / total_vol
+                    position_value += price * total_vol
+            equity = available_cash + position_value
+        elif date_str not in trades_by_date and prev_equity is not None:
+            # 非交易日且无快照：权益不变（避免成本估值与市价估值跳变）
+            equity = prev_equity
         else:
-            if date_str == today_str:
-                position_value = 0.0
-                for sym, lots in positions.items():
-                    total_vol = sum(l['volume'] for l in lots)
-                    if total_vol > 0:
-                        price_data = realtime_prices.get(sym, {})
-                        if isinstance(price_data, dict):
-                            price = price_data.get('price')
-                        else:
-                            price = price_data if isinstance(price_data, (int, float)) else None
-                        if not price:
-                            price = sum(l['price'] * l['volume'] for l in lots) / total_vol
-                        position_value += price * total_vol
-            else:
-                position_value = sum(
-                    l['price'] * l['volume']
-                    for lots in positions.values()
-                    for l in lots
-                )
+            position_value = sum(
+                l['price'] * l['volume']
+                for lots in positions.values()
+                for l in lots
+            )
             equity = available_cash + position_value
 
         daily_pnl = round(equity - prev_equity, 2) if prev_equity is not None else 0.0
