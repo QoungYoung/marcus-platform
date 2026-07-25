@@ -382,9 +382,56 @@ class VNPyBridge:
             result.append(pos)
         return result
 
+    # ── 行情辅助 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _vt_to_marcus_symbol(vt_symbol: str) -> str:
+        """VN.PY vt_symbol (如 600900.SSE) → Marcus 代码 (SH600900)"""
+        parts = vt_symbol.rsplit(".", 1)
+        code = parts[0]
+        ex_str = parts[1] if len(parts) == 2 else ""
+        prefix = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(ex_str, "")
+        return f"{prefix}{code}"
+
+    @staticmethod
+    def _get_workspace() -> Path:
+        """获取项目根目录"""
+        ws = os.getenv("MARCUS_WORKSPACE")
+        if ws:
+            return Path(ws)
+        return Path(__file__).parents[4]
+
+    def _fetch_live_quotes(self, marcus_symbols: List[str]) -> Dict[str, dict]:
+        """获取实时行情 (腾讯 qt.gtimg.cn, 通过 XueqiuEngine)"""
+        if not marcus_symbols:
+            return {}
+        try:
+            workspace = VNPyBridge._get_workspace()
+            core_dir = workspace / "core"
+            config_file = core_dir / "config.json"
+            if not config_file.exists():
+                logger.warning("[VNPyBridge] xueqiu config.json not found at %s", config_file)
+                return {}
+            sys.path.insert(0, str(core_dir))
+            from xueqiu_engine import XueqiuEngine
+            engine = XueqiuEngine(config_file=str(config_file))
+            quotes = engine.get_stock_quotes(marcus_symbols)
+            result = {}
+            for sym, q in (quotes or {}).items():
+                if q and q.get("current"):
+                    result[sym] = {
+                        "price": q.get("current"),
+                        "change_pct": q.get("percent", 0) or 0,
+                        "last_close": q.get("last_close", 0) or 0,
+                    }
+            return result
+        except Exception as e:
+            logger.warning("[VNPyBridge] 获取实时行情失败: %s", e)
+            return {}
+
     def get_account(self) -> dict:
         """
-        获取账户摘要。
+        获取账户摘要（按市价估值）。
         优先从 VN.PY 内存查, 回退到 PostgreSQL。
         """
         if self._main_engine is None:
@@ -401,9 +448,25 @@ class VNPyBridge:
             frozen = self._frozen_cash
 
         positions = self._get_vnpy_positions()
-        position_value = 0.0
+
+        # 获取实时行情, 按市价计算持仓市值和浮动盈亏
+        marcus_symbols = [
+            self._vt_to_marcus_symbol(
+                p.vt_symbol if hasattr(p, "vt_symbol") else p.symbol
+            )
+            for p in positions
+        ]
+        quotes = self._fetch_live_quotes(marcus_symbols)
+
+        position_value = 0.0  # 市价估值
+        position_cost = 0.0   # 成本价
         for p in positions:
-            position_value += p.volume * p.price
+            vt_symbol = p.vt_symbol if hasattr(p, "vt_symbol") else p.symbol
+            marcus_sym = self._vt_to_marcus_symbol(vt_symbol)
+            quote = quotes.get(marcus_sym, {})
+            current_price = quote.get("price", p.price)
+            position_value += p.volume * current_price
+            position_cost += p.volume * p.price
 
         total_asset = balance + frozen + position_value
         total_pnl = total_asset - self._initial_capital
@@ -411,47 +474,57 @@ class VNPyBridge:
         # 从 paper_trades 汇总已实现盈亏
         realized_pnl = self._get_realized_pnl_from_pg()
 
+        # 浮动盈亏 = 市价估值 - 成本价 (更准确的 mark-to-market)
+        float_pnl = position_value - position_cost
+
         return {
             "initial_capital": self._initial_capital,
             "available_cash": balance,
             "frozen_cash": frozen,
             "position_value": position_value,
+            "position_cost": position_cost,
             "total_asset": total_asset,
             "realized_pnl": realized_pnl,
-            "float_pnl": total_pnl - realized_pnl,
+            "float_pnl": float_pnl,
             "total_pnl": total_pnl,
             "position_count": len(positions),
         }
 
     def get_positions(self) -> List[dict]:
-        """获取当前所有净持仓 (从 PaperEngine 内部)"""
+        """获取当前所有净持仓 (从 PaperEngine 内部, 包含市价)"""
         if self._main_engine is None:
             return self._get_positions_from_pg()
 
+        vnpy_positions = self._get_vnpy_positions()
+
+        # 获取实时行情
+        marcus_symbols = [
+            self._vt_to_marcus_symbol(
+                p.vt_symbol if hasattr(p, "vt_symbol") else p.symbol
+            )
+            for p in vnpy_positions
+        ]
+        quotes = self._fetch_live_quotes(marcus_symbols)
+
         result = []
-        for p in self._get_vnpy_positions():
-            # p 是 PositionData, 但 symbol/exchange 存储在 vt_symbol 中
-            symbol = p.vt_symbol if hasattr(p, 'vt_symbol') else p.symbol
-            # vt_symbol 格式: "600900.SSE"
-            parts = symbol.rsplit(".", 1)
-            if len(parts) == 2:
-                code, ex_str = parts
-            else:
-                code, ex_str = symbol, ""
-            if ex_str == "SSE":
-                prefix = "SH"
-            elif ex_str == "SZSE":
-                prefix = "SZ"
-            elif ex_str == "BSE":
-                prefix = "BJ"
-            else:
-                prefix = ""
+        for p in vnpy_positions:
+            vt_symbol = p.vt_symbol if hasattr(p, "vt_symbol") else p.symbol
+            marcus_sym = self._vt_to_marcus_symbol(vt_symbol)
+            quote = quotes.get(marcus_sym, {})
+            current_price = quote.get("price", p.price)
+            change_pct = quote.get("change_pct", 0.0)
+            market_value = int(p.volume) * current_price
+            cost_value = int(p.volume) * p.price
             result.append({
-                "symbol": f"{prefix}{code}",
+                "symbol": marcus_sym,
                 "volume": int(p.volume),
                 "frozen": int(p.frozen),
                 "avg_price": p.price,
-                "highest_price": p.price,
+                "current_price": current_price,
+                "change_pct": change_pct,
+                "market_value": market_value,
+                "float_pnl": market_value - cost_value,
+                "highest_price": max(p.price, current_price),
                 "entry_date": "",
             })
         return result
