@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 import sys
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.services.scheduler_service import scheduler_service
@@ -174,14 +174,14 @@ async def get_stop_loss_distances():
 
 
 @router.post("/stop-loss-monitor/start")
-async def start_stop_loss_monitor():
+async def start_stop_loss_monitor(request: Request):
     """启动止损监控器（自动关联 MarcusVNPyExecutor）"""
     try:
-        # 尝试导入并创建 executor
         executor = None
         try:
             from app.core.trading.marcus_trade import MarcusVNPyExecutor
-            executor = MarcusVNPyExecutor()
+            bridge = getattr(request.app.state, 'vnpy_bridge', None)
+            executor = MarcusVNPyExecutor(bridge=bridge)
             print("[StopLoss] ✅ 已创建 MarcusVNPyExecutor", file=sys.stderr)
         except Exception as e:
             print(f"[StopLoss] ⚠️ 无法创建 executor: {e}", file=sys.stderr)
@@ -223,13 +223,14 @@ async def stop_stop_loss_monitor():
 
 
 @router.post("/tier-monitor/start")
-async def start_tier_monitor_endpoint():
+async def start_tier_monitor_endpoint(request: Request):
     """启动加仓层级监控器（自动关联 MarcusVNPyExecutor）"""
     try:
         executor = None
         try:
             from app.core.trading.marcus_trade import MarcusVNPyExecutor
-            executor = MarcusVNPyExecutor()
+            bridge = getattr(request.app.state, 'vnpy_bridge', None)
+            executor = MarcusVNPyExecutor(bridge=bridge)
             print("[TierMonitor] ✅ 已创建 MarcusVNPyExecutor", file=sys.stderr)
         except Exception as e:
             print(f"[TierMonitor] ⚠️ 无法创建 executor: {e}", file=sys.stderr)

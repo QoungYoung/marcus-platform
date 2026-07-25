@@ -29,6 +29,7 @@ sys.path.insert(0, str(AKSHARE_DIR))
 sys.path.insert(0, str(MARCUS_INTEGRATION_DIR))
 
 from paper_engine import PaperTradingEngine
+from app.core.trading.vnpy_bridge import VNPyBridge
 
 
 def parse_float_chinese(value):
@@ -50,9 +51,10 @@ def parse_float_chinese(value):
 class MarcusVNPyExecutor:
     """Marcus × VN.PY 交易执行器"""
     
-    def __init__(self):
+    def __init__(self, bridge: VNPyBridge = None):
         self.data_dir = str(DATA_DIR)
-        self.engine = PaperTradingEngine(data_dir=self.data_dir)
+        self.bridge = bridge  # VN.PY bridge (primary when available)
+        self.engine = PaperTradingEngine(data_dir=self.data_dir) if bridge is None else None
         self.trade_log_path = DATA_DIR / "marcus_trades.jsonl"
         self.risk_log_path = DATA_DIR / "marcus_risk.jsonl"
         
@@ -90,6 +92,24 @@ class MarcusVNPyExecutor:
         """查询 PostgreSQL 获取今日买入的股票代码集合（兼容旧接口，内部使用）"""
         return set(self._get_today_buy_volumes().keys())
 
+    def _get_trades_list(self, symbol: str = None, limit: int = 10000) -> list:
+        """跨后端统一获取成交记录"""
+        if self.bridge:
+            return self.bridge.get_trades(symbol=symbol, limit=limit)
+        return self.engine.get_trades(limit=limit)
+
+    def _get_positions_list(self) -> list:
+        """跨后端统一获取持仓"""
+        if self.bridge:
+            return self.bridge.get_positions()
+        return self.engine.get_positions()
+
+    def _get_pg_conn(self):
+        """跨后端统一获取 PostgreSQL 连接"""
+        if self.bridge:
+            return self.bridge._get_pg_conn()
+        return self.engine._get_pg_conn()
+
     def _get_today_buy_volumes(self) -> dict:
         """查询 PostgreSQL 获取今日买入的股票代码→股数映射（用于 T+1 拦截）
         Returns: {symbol_str: total_volume_int}
@@ -97,7 +117,7 @@ class MarcusVNPyExecutor:
         today_volumes = {}
         try:
             today_str = datetime.now().strftime('%Y-%m-%d')
-            trades = self.engine.get_trades(limit=10000)
+            trades = self._get_trades_list(limit=10000)
             for t in trades:
                 if t.get('direction') != '买入':
                     continue
@@ -393,9 +413,27 @@ class MarcusVNPyExecutor:
     def get_account(self) -> dict:
         """获取账户信息 (标准化字段名)
 
+        优先使用 VN.PY bridge，回退到 legacy paper_engine。
         available_cash 直接从 PostgreSQL account_info 表读取，
         SELECT ... FOR UPDATE 行锁已保证并发一致性。
         """
+        if self.bridge:
+            bridge_acct = self.bridge.get_account()
+            if bridge_acct:
+                total_pnl = bridge_acct.get('total_pnl', 0)
+                initial = bridge_acct.get('initial_capital', 100000)
+                return {
+                    'initial_capital': initial,
+                    'available_cash': bridge_acct.get('available_cash', 0),
+                    'frozen_cash': bridge_acct.get('frozen_cash', 0),
+                    'position_value': bridge_acct.get('position_value', 0),
+                    'total_asset': bridge_acct.get('total_asset', initial),
+                    'total_profit': f"{total_pnl:+,.2f} ({total_pnl / initial * 100:+.2f}%)" if initial > 0 else '0',
+                    'position_count': bridge_acct.get('position_count', 0),
+                    'float_pnl': bridge_acct.get('float_pnl', 0),
+                    'realized_pnl': bridge_acct.get('realized_pnl', 0),
+                }
+
         raw = self.engine.get_account_info()
         initial_capital = parse_float_chinese(raw.get('初始资金', 1000000))
         available_cash = parse_float_chinese(raw.get('可用资金', 0))
@@ -481,7 +519,7 @@ class MarcusVNPyExecutor:
         
         # ── 规则 0.6: T+1 拦截（卖出方向，按股数而非按标的） ──
         if side == 'sell':
-            positions = self.engine.get_positions()
+            positions = self._get_positions_list()
             pos = next((p for p in positions if p.get('symbol') == symbol), None)
             if pos:
                 today_volumes = self._get_today_buy_volumes()
@@ -525,7 +563,7 @@ class MarcusVNPyExecutor:
         
         # 规则 3: 卖出时检查持仓
         if side == 'sell':
-            positions = self.engine.get_positions()
+            positions = self._get_positions_list()
             pos = next((p for p in positions if p.get('symbol') == symbol), None)
             if not pos:
                 risk_data['reason'] = '无持仓'
@@ -706,18 +744,20 @@ class MarcusVNPyExecutor:
                 'available': account['available_cash']
             }
 
-        # 通过完整订单流程执行（与 sell() 保持一致）
-        order_id = self.engine.buy(symbol, price, volume, reason)
+        # 通过完整订单流程执行
+        if self.bridge:
+            order_id = self.bridge.send_order(symbol, "买入", price, volume, reason)
+        else:
+            order_id = self.engine.buy(symbol, price, volume, reason)
         if not order_id:
             return {'status': 'failed', 'reason': 'VN.PY 买入失败'}
 
-        # 自动成交 (模拟)，失败时解冻资金
-        match_ok = self.engine.match_order(order_id, price)
-        if not match_ok:
-            self.engine.cancel_order(order_id)
-            print(f"[交易] ⚠️ {symbol} 撮合失败，资金已解冻", file=sys.stderr)
-            return {'status': 'failed', 'reason': 'VN.PY 撮合失败，资金已解冻'}
-
+        if not self.bridge:
+            match_ok = self.engine.match_order(order_id, price)
+            if not match_ok:
+                self.engine.cancel_order(order_id)
+                print(f'[交易] 撮合失败，资金已解冻', file=sys.stderr)
+                return {'status': 'failed', 'reason': 'VN.PY 撮合失败，资金已解冻'}
         # 创建订单记录
         trade_record = {
             'type': 'buy',
@@ -750,7 +790,8 @@ class MarcusVNPyExecutor:
              skip_trend_constraint: bool = False) -> dict:
         """卖出操作"""
         # 归一化 symbol（兼容 301566.SZ / SZ301566 / 301566 多种输入格式）
-        symbol = self.engine._normalize_symbol(symbol)
+        if self.engine:
+            symbol = self.engine._normalize_symbol(symbol)
         # 风控检查
         risk_result = self.check_risk(symbol, price, volume, 'sell',
                                       skip_trend_constraint=skip_trend_constraint)
@@ -763,18 +804,21 @@ class MarcusVNPyExecutor:
         
         # === 在卖出前计算盈亏 ===
         # 获取当前持仓成本（卖出前）
-        positions = self.engine.get_positions()
+        positions = self._get_positions_list()
         pos = next((p for p in positions if p.get('symbol') == symbol), None)
         avg_cost = pos.get('avg_price', 0) if pos else 0
         profit = (price - avg_cost) * volume if avg_cost > 0 else 0.0
         
         # 执行卖出
-        order_id = self.engine.sell(symbol, price, volume, reason)
+        if self.bridge:
+            order_id = self.bridge.send_order(symbol, "卖出", price, volume, reason)
+        else:
+            order_id = self.engine.sell(symbol, price, volume, reason)
         if not order_id:
             return {'status': 'failed', 'reason': 'VN.PY 卖出失败'}
-        
-        # 自动成交 (模拟)
-        self.engine.match_order(order_id, price)
+
+        if not self.bridge:
+            self.engine.match_order(order_id, price)
         
         # 记录交易日志
         trade_record = {
@@ -912,7 +956,7 @@ class MarcusVNPyExecutor:
     
     def get_positions_from_db(self) -> list:
         """从 PostgreSQL paper_trades 查询真实持仓（FIFO 成本计算）"""
-        trades = self.engine.get_trades(limit=100000)
+        trades = self._get_trades_list(limit=100000)
         # get_trades 返回按 created_at DESC 排序，FIFO 需要正序
         trades_sorted = sorted(
             [t for t in trades if not t.get('voided')],
@@ -982,7 +1026,11 @@ class MarcusVNPyExecutor:
         return result
     
     def get_positions(self) -> list:
-        """获取持仓（优先从数据库读取）"""
+        """获取持仓（优先从 VN.PY bridge，回退到 PG 计算）"""
+        if self.bridge:
+            positions = self.bridge.get_positions()
+            if positions:
+                return positions
         return self.get_positions_from_db()
     
     def record_trade_result(self, symbol: str, profit: float) -> None:
@@ -1018,7 +1066,7 @@ class MarcusVNPyExecutor:
         """撤回一笔成交（软删除，不计入持仓）"""
         from datetime import datetime as _dt
 
-        conn = self.engine._get_pg_conn()
+        conn = self._get_pg_conn()
         try:
             cur = conn.cursor()
             cur.execute(
@@ -1047,7 +1095,7 @@ class MarcusVNPyExecutor:
 
     def unvoid_trade(self, trade_id: int) -> dict:
         """恢复一笔已撤回的成交"""
-        conn = self.engine._get_pg_conn()
+        conn = self._get_pg_conn()
         try:
             cur = conn.cursor()
             cur.execute(
@@ -1076,7 +1124,7 @@ class MarcusVNPyExecutor:
 
     def get_voided_trades(self) -> list:
         """获取所有已撤回的交易"""
-        conn = self.engine._get_pg_conn()
+        conn = self._get_pg_conn()
         try:
             cur = conn.cursor()
             cur.execute(

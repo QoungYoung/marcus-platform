@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -50,11 +50,11 @@ def _get_stock_name(symbol: str) -> str:
 
 
 @router.post("", response_model=TradeResponse)
-async def execute_trade(trade: TradeRequest):
+async def execute_trade(trade: TradeRequest, request: Request):
     """
     Execute a trade (buy or sell).
     Note: This is paper trading - no real money involved.
-    
+
     Returns detailed reason on failure/rejection, e.g.:
     - '资金不足' (insufficient funds)
     - '超过单笔最大仓位 (40%)' (exceeds max position per trade)
@@ -66,7 +66,8 @@ async def execute_trade(trade: TradeRequest):
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
 
-        executor = MarcusVNPyExecutor()
+        bridge = getattr(request.app.state, 'vnpy_bridge', None)
+        executor = MarcusVNPyExecutor(bridge=bridge)
 
         if trade.side.lower() == "buy":
             result = executor.buy(
@@ -194,6 +195,7 @@ async def get_trade_history(
 
 @router.get("/orders")
 async def get_pending_orders(
+    request: Request,
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     status: Optional[str] = Query(None, description="Filter by status: 提交中/未成交/部分成交/已撤销"),
     limit: int = Query(50, ge=1, le=200),
@@ -204,8 +206,12 @@ async def get_pending_orders(
     """
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
-        orders = executor.engine.get_orders(symbol=symbol, status=status, limit=limit)
+        bridge = getattr(request.app.state, 'vnpy_bridge', None)
+        executor = MarcusVNPyExecutor(bridge=bridge)
+        if bridge:
+            orders = bridge.get_orders(symbol=symbol, status=status, limit=limit)
+        else:
+            orders = executor.engine.get_orders(symbol=symbol, status=status, limit=limit)
         return {
             "orders": orders,
             "count": len(orders),
@@ -241,11 +247,12 @@ async def get_trade(order_id: str):
 
 
 @router.get("/voided")
-async def get_voided_trades():
+async def get_voided_trades(request: Request):
     """Get all voided (cancelled) trades."""
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
+        bridge = getattr(request.app.state, 'vnpy_bridge', None)
+        executor = MarcusVNPyExecutor(bridge=bridge)
         trades = executor.get_voided_trades()
         for t in trades:
             t["name"] = _get_stock_name(t["symbol"])
@@ -255,11 +262,12 @@ async def get_voided_trades():
 
 
 @router.post("/{trade_id}/void", response_model=VoidResponse)
-async def void_trade(trade_id: int, body: VoidRequest):
+async def void_trade(trade_id: int, body: VoidRequest, request: Request):
     """Void a trade (soft-delete, excluded from position calculation)."""
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
+        bridge = getattr(request.app.state, 'vnpy_bridge', None)
+        executor = MarcusVNPyExecutor(bridge=bridge)
         result = executor.void_trade(trade_id, body.reason)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["error"])
@@ -271,11 +279,12 @@ async def void_trade(trade_id: int, body: VoidRequest):
 
 
 @router.post("/{trade_id}/unvoid", response_model=VoidResponse)
-async def unvoid_trade(trade_id: int):
+async def unvoid_trade(trade_id: int, request: Request):
     """Restore a voided trade."""
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
+        bridge = getattr(request.app.state, 'vnpy_bridge', None)
+        executor = MarcusVNPyExecutor(bridge=bridge)
         result = executor.unvoid_trade(trade_id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["error"])
@@ -287,15 +296,20 @@ async def unvoid_trade(trade_id: int):
 
 
 @router.delete("/{order_id}/cancel")
-async def cancel_order(order_id: str):
+async def cancel_order(order_id: str, request: Request):
     """
     Cancel a pending order by order ID.
     Only orders with status '提交中' or '未成交' can be cancelled.
     """
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
-        success = executor.engine.cancel_order(order_id)
+        bridge = getattr(request.app.state, 'vnpy_bridge', None)
+        executor = MarcusVNPyExecutor(bridge=bridge)
+        if executor.engine:
+            success = executor.engine.cancel_order(order_id)
+        else:
+            # VN.PY bridge handles cancellations automatically on stop/timeout
+            raise HTTPException(status_code=400, detail="VN.PY bridge 不支持手动撤单，订单会自动超时取消")
         if success:
             return {
                 "status": "cancelled",

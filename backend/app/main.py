@@ -78,29 +78,45 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Main] 数据库初始化警告（如无 PostgreSQL 可忽略）: {e}")
 
-    # Startup
+    # Startup — VN.PY Bridge 单例
+    bridge = None
+    if settings.ENGINE_BACKEND == "vnpy":
+        try:
+            from app.core.trading.vnpy_bridge import VNPyBridge
+            db_url = settings.DATABASE_URL
+            bridge = VNPyBridge(db_url=db_url)
+            bridge.start()
+            app.state.vnpy_bridge = bridge
+            print(f"[Main] ✅ VN.PY Bridge 已启动 (ENGINE_BACKEND=vnpy)")
+        except Exception as e:
+            print(f"[Main] ⚠️ VN.PY Bridge 启动失败: {e}")
+            app.state.vnpy_bridge = None
+    else:
+        app.state.vnpy_bridge = None
+        print(f"[Main] 使用 legacy paper engine (ENGINE_BACKEND=paper)")
+
+    from app.core.trading.marcus_trade import MarcusVNPyExecutor
+
     scheduler_service.start()
     print(f"Scheduler started - {len(scheduler_service.tasks)} tasks loaded")
 
     # 启动止损监控器（自动关联 MarcusVNPyExecutor）
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
+        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
         started = start_monitor(executor=executor)
         if started:
-            print(f"[Main] ✅ 止损监控已启动 (executor=MarcusVNPyExecutor)")
+            print(f"[Main] ✅ 止损监控已启动 (bridge={'vnpy' if bridge else 'paper'})")
         else:
             print(f"[Main] ⚠️ 止损监控启动返回 False（可能已在运行）")
     except Exception as e:
         print(f"[Main] ⚠️ 止损监控启动失败: {e}")
-    
+
     # 启动加仓层级监控器（与止损监控并行）
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
+        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
         started = start_tier_monitor(executor=executor)
         if started:
-            print(f"[Main] ✅ 加仓层级监控已启动 (executor=MarcusVNPyExecutor)")
+            print(f"[Main] ✅ 加仓层级监控已启动")
         else:
             print(f"[Main] ⚠️ 加仓层级监控启动返回 False（可能已在运行）")
     except Exception as e:
@@ -108,11 +124,10 @@ async def lifespan(app: FastAPI):
 
     # 启动候选池监控器（与止损/加仓监控并行，30s轮询自动建仓）
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor = MarcusVNPyExecutor()
+        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
         started = start_pool_monitor(executor=executor)
         if started:
-            print(f"[Main] ✅ 候选池监控已启动 (executor=MarcusVNPyExecutor)")
+            print(f"[Main] ✅ 候选池监控已启动")
         else:
             print(f"[Main] ⚠️ 候选池监控启动返回 False（可能已在运行）")
     except Exception as e:
@@ -120,11 +135,10 @@ async def lifespan(app: FastAPI):
 
     # 启动长期观察候选池监控器（5分钟轮询，无过期，日上限5笔）
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        executor_lt = MarcusVNPyExecutor()
+        executor_lt = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
         started = start_lt_pool_monitor(executor=executor_lt)
         if started:
-            print(f"[Main] ✅ 长期候选池监控已启动 (executor=MarcusVNPyExecutor)")
+            print(f"[Main] ✅ 长期候选池监控已启动")
         else:
             print(f"[Main] ⚠️ 长期候选池监控启动返回 False（可能已在运行）")
     except Exception as e:
@@ -202,6 +216,13 @@ async def lifespan(app: FastAPI):
         pass
     if settings.QQ_BOT_ENABLED:
         await qqbot_service.stop()
+    # Stop VN.PY bridge
+    if app.state.vnpy_bridge is not None:
+        try:
+            app.state.vnpy_bridge.stop()
+            print("[Main] VN.PY Bridge 已停止")
+        except Exception:
+            pass
     print("Scheduler and QQ Bot stopped")
 
 

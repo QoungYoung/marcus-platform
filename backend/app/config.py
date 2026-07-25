@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     QQ_BOT_RECIPIENT: str = ""
     PI_SERVER_URL: str = "http://localhost:3001/chat"
 
+    # Trading Engine
+    ENGINE_BACKEND: str = "vnpy"  # "vnpy" (VN.PY PaperAccount) or "paper" (legacy PaperTradingEngine)
+
     # Server
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
