@@ -954,6 +954,7 @@ async def get_daily_pnl_breakdown(days: int = Query(30, ge=1, le=60)):
             day_float += stock_float
             stocks_pnl.append(DailyStockPnl(
                 symbol=sym,
+                name=get_stock_name(sym),
                 volume=total_vol,
                 close_price=close_today,
                 prev_close=prev_close,
@@ -964,7 +965,7 @@ async def get_daily_pnl_breakdown(days: int = Query(30, ge=1, le=60)):
         for sym, realized in day_realized_by_stock.items():
             if sym not in touched:
                 stocks_pnl.append(DailyStockPnl(
-                    symbol=sym, volume=0,
+                    symbol=sym, name=get_stock_name(sym), volume=0,
                     float_pnl=0, realized_pnl=round(realized, 2),
                 ))
 
@@ -1098,6 +1099,7 @@ async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Ta
         day_float += stock_float
         stocks_pnl.append(DailyStockPnl(
             symbol=sym,
+            name=get_stock_name(sym),
             volume=total_vol,
             close_price=close_today,
             prev_close=prev_close,
@@ -1108,7 +1110,7 @@ async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Ta
     for sym, realized in day_realized_by_stock.items():
         if sym not in touched:
             stocks_pnl.append(DailyStockPnl(
-                symbol=sym, volume=0,
+                symbol=sym, name=get_stock_name(sym), volume=0,
                 float_pnl=0, realized_pnl=round(realized, 2),
             ))
 

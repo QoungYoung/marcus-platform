@@ -694,7 +694,7 @@ export default function PortfolioPage() {
                   {modalData.stocks.length > 0 ? (
                     <table className="cp-table" style={{ fontSize: 11 }}>
                       <thead><tr>
-                        <th>代码</th><th className="right">持仓</th><th className="right">收盘价</th><th className="right">涨跌</th><th className="right">浮盈变动</th><th className="right">已实现</th>
+                        <th>代码</th><th>名称</th><th className="right">持仓</th><th className="right">收盘价</th><th className="right">涨跌</th><th className="right">浮盈变动</th><th className="right">已实现</th>
                       </tr></thead>
                       <tbody>
                         {modalData.stocks.map(s => {
@@ -702,6 +702,7 @@ export default function PortfolioPage() {
                           return (
                             <tr key={s.symbol}>
                               <td className="mono bold">{s.symbol}</td>
+                              <td className="dim" style={{ fontSize: 10 }}>{s.name || '-'}</td>
                               <td className="num dim">{s.volume > 0 ? `${s.volume}股` : '-'}</td>
                               <td className="num mono">{s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : '-'}</td>
                               <td className={`num ${chgPct >= 0 ? 'pnl-up' : 'pnl-down'}`}>{s.close_price > 0 && s.prev_close > 0 ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '-'}</td>
