@@ -36,6 +36,7 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
 
 from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool
 from app.api.scheduler import router as scheduler_router
+from app.api.monitor_log import router as monitor_log_router
 from app.services.scheduler_service import scheduler_service
 from app.services.qqbot_service import qqbot_service, get_qqbot_service
 from app.services.stop_loss_monitor import get_monitor_status, start_monitor, stop_monitor as stop_sl_monitor
@@ -239,7 +240,7 @@ app.include_router(indicator.router, prefix="/api/v1")
 app.include_router(backtest.router, prefix="/api/v1")
 app.include_router(pool.router, prefix="/api/v1")
 app.include_router(lt_pool.router, prefix="/api/v1")
-
+app.include_router(monitor_log_router, prefix="/api/v1")
 
 @app.get("/")
 async def root():

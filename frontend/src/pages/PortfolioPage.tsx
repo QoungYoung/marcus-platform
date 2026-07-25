@@ -456,7 +456,7 @@ export default function PortfolioPage() {
                         <td className="num dim right">{ruleLabel}</td>
                         <td className="num right">
                           <span className={`cp-sl-badge ${danger}`}>
-                            {danger === 'triggered' ? '🔴触发' : danger === 'critical' ? '🟠危急' : danger === 'warning' ? '🟡警告' : danger === 'caution' ? '⚪关注' : '🟢安全'}</span>
+                            {danger === 'triggered' ? '触发' : danger === 'critical' ? '危急' : danger === 'warning' ? '警告' : danger === 'caution' ? '关注' : '安全'}</span>
                         </td>
                       </tr>
                     );

@@ -3001,7 +3001,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           type: 'reflect',
         });
         // Convert report to a single assistant message
-        const msg = { role: 'assistant' as const, content: report };
+        const msg = { role: 'assistant' as const, content: report } as any;
         agentRef.current!.state.messages = [msg];
         agentRef.current!.state.systemPrompt = buildSystemPrompt(tradeStatusRef.current, 'reflect');
         agentRef.current!.state.tools = reflectTools;

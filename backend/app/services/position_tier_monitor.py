@@ -52,14 +52,16 @@ class TierEvaluation:
 
 class GateResult:
     """门控裁决结果"""
-    __slots__ = ('allowed', 'checks', 'trigger_action', 'reason')
-    
-    def __init__(self, allowed: bool, checks: List[tuple], 
-                 trigger_action: str = '', reason: str = ''):
+    __slots__ = ('allowed', 'checks', 'trigger_action', 'reason', 'trend_details')
+
+    def __init__(self, allowed: bool, checks: List[tuple],
+                 trigger_action: str = '', reason: str = '',
+                 trend_details: dict = None):
         self.allowed = allowed
         self.checks = checks
         self.trigger_action = trigger_action
         self.reason = reason
+        self.trend_details = trend_details or {}
 
 
 class PositionTierMonitor:
@@ -97,6 +99,12 @@ class PositionTierMonitor:
 
     # ── 补仓阈值：实际仓位 < 目标上限 × 此比例时触发 REFILL ──
     REFILL_THRESHOLD = 0.8
+
+    # ── 门控名称映射（与 can_execute_add 中的 checks 追加顺序一致）──
+    GATE_LABELS = [
+        'Pi 立场', '总回撤', '连续亏损', '保护线',
+        '今日加仓次数', '涨停板', '趋势强度', '概念TOP10', '全部门控通过',
+    ]
 
     def __init__(self, executor=None, interval_seconds: int = 33):
         self.executor = executor
@@ -401,7 +409,7 @@ class PositionTierMonitor:
             failed_desc = ', '.join(trend['failed_items'])
             aux_info = f"辅助{trend.get('aux_passed', 0)}/{trend.get('aux_total', 4)}"
             checks.append(('BLOCKED', f'趋势强度未通过: {failed_desc} ({aux_info})'))
-            return GateResult(allowed=False, checks=checks)
+            return GateResult(allowed=False, checks=checks, trend_details=trend)
         aux_info = f"辅助{trend.get('aux_passed', 0)}/{trend.get('aux_total', 4)}"
         checks.append(('PASSED', f'趋势强度通过（核心MA5>MA20 + {aux_info}）'))
 
@@ -417,7 +425,7 @@ class PositionTierMonitor:
 
         # ── 全部通过 ──
         checks.append(('PASSED', '全部门控通过'))
-        return GateResult(allowed=True, checks=checks)
+        return GateResult(allowed=True, checks=checks, trend_details=trend)
 
     def _get_total_drawdown(self, account: dict) -> float:
         """计算总回撤比例（峰值回撤）：
@@ -1491,6 +1499,16 @@ class PositionTierMonitor:
                     f"[加仓] 💸 {symbol} 主力净流出 {moneyflow/1e8:.2f}亿，跳过加仓",
                     file=sys.stderr
                 )
+                self._write_monitor_log(
+                    symbol=symbol,
+                    current_tier=self._get_position_tier(symbol),
+                    target_tier='',
+                    action='OUTFLOW',
+                    result='OUTFLOW',
+                    float_pnl_pct=round((current_price - avg_price) / avg_price * 100, 2) if avg_price > 0 else 0,
+                    current_price=current_price,
+                    block_reason=f'主力净流出 {moneyflow/1e8:.2f}亿',
+                )
                 continue
 
             enriched.append((moneyflow, symbol, pos))
@@ -1536,10 +1554,22 @@ class PositionTierMonitor:
                     else:
                         summary["hold"] += 1
                         hold_details.append(f"{symbol}({current_tier}→{evaluation.signal})")
+                        self._write_monitor_log(
+                            symbol=symbol, current_tier=current_tier, target_tier='',
+                            action=evaluation.action, result='HOLD',
+                            float_pnl_pct=float_pnl_pct, current_price=current_price,
+                            block_reason=evaluation.signal,
+                        )
                         continue
                 else:
                     summary["hold"] += 1
                     hold_details.append(f"{symbol}({current_tier}→{evaluation.signal})")
+                    self._write_monitor_log(
+                        symbol=symbol, current_tier=current_tier, target_tier='',
+                        action=evaluation.action, result='HOLD',
+                        float_pnl_pct=float_pnl_pct, current_price=current_price,
+                        block_reason=evaluation.signal,
+                    )
                     continue
 
             summary["triggered"] += 1
@@ -1549,6 +1579,13 @@ class PositionTierMonitor:
             last_eval = self._last_eval.get(symbol, 0)
             if now_ts - last_eval < 300:
                 summary["dedup"] += 1
+                self._write_monitor_log(
+                    symbol=symbol, current_tier=current_tier,
+                    target_tier=evaluation.target_tier,
+                    action=evaluation.action, result='SKIPPED',
+                    float_pnl_pct=float_pnl_pct, current_price=current_price,
+                    block_reason='5分钟内已评估，去重跳过',
+                )
                 continue
             self._last_eval[symbol] = now_ts
 
@@ -1563,8 +1600,24 @@ class PositionTierMonitor:
                 success = self.execute_add_position(symbol, evaluation, current_price, account, pi_stance, current_price * volume, gate)
                 if success:
                     summary["executed"] += 1
+                    self._write_monitor_log(
+                        symbol=symbol, current_tier=current_tier,
+                        target_tier=evaluation.target_tier,
+                        action=evaluation.action, result='EXECUTED',
+                        float_pnl_pct=float_pnl_pct, current_price=current_price,
+                        add_shares=success.get('volume', 0) if isinstance(success, dict) else 0,
+                        gate=gate,
+                    )
                 else:
                     summary["skipped"] += 1
+                    self._write_monitor_log(
+                        symbol=symbol, current_tier=current_tier,
+                        target_tier=evaluation.target_tier,
+                        action=evaluation.action, result='SKIPPED',
+                        float_pnl_pct=float_pnl_pct, current_price=current_price,
+                        block_reason='门控通过但执行失败（资金不足或股数不足）',
+                        gate=gate,
+                    )
                     print(
                         f"[加仓] ⚠️ {symbol} 门控通过但执行失败 | "
                         f"层级 {evaluation.current_tier}→{evaluation.target_tier} | "
@@ -1574,6 +1627,14 @@ class PositionTierMonitor:
             else:
                 summary["blocked"] += 1
                 block_reasons = [c[1] for c in gate.checks if c[0] == 'BLOCKED']
+                self._write_monitor_log(
+                    symbol=symbol, current_tier=current_tier,
+                    target_tier=evaluation.target_tier,
+                    action=evaluation.action, result='BLOCKED',
+                    float_pnl_pct=float_pnl_pct, current_price=current_price,
+                    block_reason='; '.join(block_reasons) if block_reasons else '门控拦截',
+                    gate=gate,
+                )
                 if block_reasons:
                     print(
                         f"[加仓] 🚫 {symbol} 门控拦截: {'; '.join(block_reasons)}",
@@ -1589,6 +1650,52 @@ class PositionTierMonitor:
             logger.debug(f"[加仓] {summary['total']}只持仓均未满足层级升级条件: {', '.join(hold_details)}")
 
         return summary
+
+    def _write_monitor_log(self, symbol: str, current_tier: str, target_tier: str,
+                           action: str, result: str, float_pnl_pct: float,
+                           current_price: float, add_shares: int = 0,
+                           block_reason: str = '', gate: GateResult = None) -> None:
+        """将加仓检测结果写入 PostgreSQL 日志表。"""
+        try:
+            from app.database import SessionLocal
+            from app.models.position_add_log import PositionAddMonitorLog
+            from datetime import datetime
+
+            db = SessionLocal()
+            try:
+                # 构建门控详情 JSON
+                gate_details = []
+                trend_details = {}
+                if gate and gate.checks:
+                    for i, (status, detail) in enumerate(gate.checks):
+                        label = self.GATE_LABELS[i] if i < len(self.GATE_LABELS) else f'Gate{i}'
+                        gate_details.append({
+                            'gate': label,
+                            'status': status,
+                            'detail': detail,
+                        })
+                    trend_details = gate.trend_details
+
+                log = PositionAddMonitorLog(
+                    timestamp=datetime.now(),
+                    symbol=symbol,
+                    current_tier=current_tier,
+                    target_tier=target_tier,
+                    action=action,
+                    result=result,
+                    float_pnl_pct=float_pnl_pct,
+                    current_price=current_price,
+                    add_shares=add_shares,
+                    block_reason=block_reason,
+                    gate_details=gate_details,
+                    trend_details=trend_details,
+                )
+                db.add(log)
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[加仓] 写入监控日志失败 {symbol}: {e}")
 
     def _get_pi_stance(self) -> str:
         """获取 Pi 最新立场"""
