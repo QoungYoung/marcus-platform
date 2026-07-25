@@ -760,3 +760,46 @@
   width: 16px;
   height: 16px;
 }
+
+/* ═══════════════════════════════════════════════════════
+   Hallmark · typography + spacing + motion tokens
+   Genre: atmospheric · Theme: Midnight (technical)
+   Display: JetBrains Mono (data) · Body: Geist (UI)
+   ═══════════════════════════════════════════════════════ */
+:root {
+  --font-display: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+  --font-body:    'Geist', system-ui, -apple-system, sans-serif;
+
+  /* 4pt spacing scale */
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs:  0.5rem;
+  --space-sm:  0.75rem;
+  --space-md:  1rem;
+  --space-lg:  1.5rem;
+  --space-xl:  2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+
+  /* Motion */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:     cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast:  120ms;
+  --dur-short: 220ms;
+  --dur-md:    350ms;
+
+  /* Z-index */
+  --z-base:     1;
+  --z-raised:   10;
+  --z-dropdown: 100;
+  --z-sticky:   200;
+  --z-modal:    400;
+  --z-toast:    500;
+  --z-tooltip:  600;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}

@@ -49,7 +49,7 @@ interface StopLossStatus {
 
 type SortKey = 'market_value' | 'floating_pnl' | 'floating_pnl_pct' | 'weight';
 
-const GREEN = '#2ecc71'; const RED = '#e74c3c'; const GOLD = '#f0b90b';
+const GREEN = '#2ecc71'; const RED = '#e74c3c';
 
 // ── 工具 ──
 function fmtMoney(val: number): string {
@@ -386,20 +386,16 @@ export default function PortfolioPage() {
           <RiskCard icon="fa-gauge-high" label={t('portfolio.positionRatio')}
             value={`${posRatio.toFixed(0)}%`}
             sub={posRatio > 80 ? '重仓' : posRatio > 50 ? '中性' : '轻仓'}
-            level={posRatio > 80 ? 'danger' : posRatio > 50 ? 'warn' : 'safe'}
-            ringColor={posRatio > 80 ? RED : posRatio > 50 ? GOLD : GREEN} ringPct={posRatio} />
+            level={posRatio > 80 ? 'danger' : posRatio > 50 ? 'warn' : 'safe'} />
           <RiskCard icon="fa-arrow-trend-down" label="最大回撤"
             value={`-${maxDrawdown.toFixed(1)}%`} sub="历史最大"
-            level={maxDrawdown > 15 ? 'danger' : maxDrawdown > 8 ? 'warn' : 'safe'}
-            ringColor={maxDrawdown > 15 ? RED : maxDrawdown > 8 ? GOLD : GREEN} ringPct={Math.min(maxDrawdown * 2, 100)} />
+            level={maxDrawdown > 15 ? 'danger' : maxDrawdown > 8 ? 'warn' : 'safe'} />
           <RiskCard icon="fa-bullseye" label={t('analytics.winRate')}
             value={`${win_rate.toFixed(1)}%`} sub={`${positions.length} 只持仓`}
-            level={win_rate > 60 ? 'safe' : win_rate > 40 ? 'warn' : 'danger'}
-            ringColor={win_rate > 60 ? GREEN : win_rate > 40 ? GOLD : RED} ringPct={win_rate} />
+            level={win_rate > 60 ? 'safe' : win_rate > 40 ? 'warn' : 'danger'} />
           <RiskCard icon="fa-wave-square" label="年化波动"
             value={`${volatility.toFixed(1)}%`} sub="60日滚动"
-            level={volatility > 25 ? 'danger' : volatility > 15 ? 'warn' : 'safe'}
-            ringColor={volatility > 25 ? RED : volatility > 15 ? GOLD : GREEN} ringPct={Math.min(volatility * 2.5, 100)} />
+            level={volatility > 25 ? 'danger' : volatility > 15 ? 'warn' : 'safe'} />
         </div>
       )}
 
@@ -748,20 +744,16 @@ function HeroKpi({ label, value, sub, trend }: { label: string; value: string; s
   );
 }
 
-function RiskCard({ icon, label, value, sub, level, ringColor, ringPct }: {
+function RiskCard({ icon, label, value, sub, level }: {
   icon: string; label: string; value: string; sub: string;
-  level: 'safe' | 'warn' | 'danger'; ringColor: string; ringPct: number;
+  level: 'safe' | 'warn' | 'danger';
 }) {
   return (
-    <div className="cp-risk-card">
-      <div className="cp-risk-gauge" style={{ background: `conic-gradient(${ringColor} ${ringPct * 3.6}deg, rgba(255,255,255,0.04) ${ringPct * 3.6}deg)` }}>
-        <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--agent-bg-card, #0d121b)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <i className={`fas ${icon}`} style={{ color: ringColor, opacity: 0.8 }} />
-        </div>
-      </div>
+    <div className={`cp-risk-card ${level}`}>
+      <i className={`fas ${icon} cp-risk-icon`} />
       <div className="cp-risk-info">
         <div className="cp-risk-label">{label}</div>
-        <div className={`cp-risk-value ${level}`}>{value}</div>
+        <div className="cp-risk-value">{value}</div>
         <div className="cp-risk-sub">{sub}</div>
       </div>
     </div>
