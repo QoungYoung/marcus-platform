@@ -414,7 +414,16 @@ export default function PortfolioPage() {
   const sharpeRatio = useMemo(() => computeSharpeRatio(realEquity), [realEquity]);
   const monthlyReturns = useMemo(() => computeMonthlyReturns(realEquity, 6), [realEquity]);
   const quarterlyReturns = useMemo(() => computeQuarterlyReturns(realEquity, 4), [realEquity]);
-  const pnlContributions = useMemo(() => aggregatePnlContributions(breakdowns, 10), [breakdowns]);
+  const pnlContributions = useMemo(() => aggregatePnlContributions(breakdowns), [breakdowns]);
+  const [contributionPage, setContributionPage] = useState(1);
+  const CONTRIB_PAGE_SIZE = 10;
+  const contributionPageCount = Math.max(1, Math.ceil(pnlContributions.length / CONTRIB_PAGE_SIZE));
+  const contributionPageItems = useMemo(() => {
+    const start = (contributionPage - 1) * CONTRIB_PAGE_SIZE;
+    return pnlContributions.slice(start, start + CONTRIB_PAGE_SIZE);
+  }, [pnlContributions, contributionPage]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setContributionPage(1); }, [pnlContributions.length]);
 
   // 沪深300 基准对比
   const hs300 = useMemo(() => {
@@ -958,30 +967,51 @@ export default function PortfolioPage() {
             <i className="fas fa-ranking-star" />
             <span className="cp-panel-title">个股盈亏贡献 (30日)</span>
           </div>
-          <div className="cp-panel-body" style={{ padding: '12px 16px' }}>
+          <div className="cp-panel-body" style={{ padding: '0' }}>
             {pnlContributions.length === 0 ? (
               <div className="cp-empty" style={{ height: 200 }}>
                 <i className="fas fa-chart-bar" />
                 <span>暂无盈亏明细数据</span>
               </div>
             ) : (
-              <div style={{ height: Math.max(200, pnlContributions.length * 32) }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={pnlContributions} layout="vertical" margin={{ left: 60, right: 60, top: 4, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={G} horizontal={false} />
-                    <XAxis type="number" stroke={A} fontSize={10} tickLine={false}
-                      tickFormatter={(v: number) => fmtMoneyShort(v)} />
-                    <YAxis type="category" dataKey="symbol" stroke={A} fontSize={10} tickLine={false} width={56}
-                      tick={{ fontFamily: 'var(--font-display)', fontSize: 10 }} />
-                    <Tooltip content={<ContributionTip />} />
-                    <Bar dataKey="totalPnl" radius={[0, 2, 2, 0]}>
-                      {pnlContributions.map((entry, i) => (
-                        <Cell key={i} fill={entry.totalPnl >= 0 ? GREEN : RED} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <>
+                <table className="cp-table cp-contribution-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 40 }}>#</th>
+                      <th>代码</th>
+                      <th>名称</th>
+                      <th className="right">30日贡献</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {contributionPageItems.map((item, i) => {
+                      const rank = (contributionPage - 1) * CONTRIB_PAGE_SIZE + i + 1;
+                      return (
+                        <tr key={item.symbol}>
+                          <td className="cp-contrib-rank">{rank}</td>
+                          <td className="cp-contrib-code">{item.symbol}</td>
+                          <td className="cp-contrib-name">{item.name || item.symbol}</td>
+                          <td className={`right cp-contrib-pnl ${item.totalPnl >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                            {item.totalPnl >= 0 ? '+' : ''}¥{item.totalPnl.toLocaleString()}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {contributionPageCount > 1 && (
+                  <div className="cp-contrib-pager">
+                    <button disabled={contributionPage <= 1} onClick={() => setContributionPage(p => p - 1)}>
+                      <i className="fas fa-chevron-left" />
+                    </button>
+                    <span>{contributionPage} / {contributionPageCount}</span>
+                    <button disabled={contributionPage >= contributionPageCount} onClick={() => setContributionPage(p => p + 1)}>
+                      <i className="fas fa-chevron-right" />
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -1206,19 +1236,3 @@ function PieTip({ active, payload }: any) {
   return <div className="cp-tip-box"><div className="cp-tip-label">{p.name}</div><div className="cp-tip-row"><span className="l">市值</span><span className="v">¥{p.value.toLocaleString()}</span></div></div>;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function ContributionTip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  const totalPnl = payload[0]?.value || 0;
-  return (
-    <div className="cp-tip-box">
-      <div className="cp-tip-label">{label}</div>
-      <div className="cp-tip-row">
-        <span className="l">30日贡献</span>
-        <span className="v" style={{ color: totalPnl >= 0 ? GREEN : RED }}>
-          {totalPnl >= 0 ? '+' : ''}¥{Math.abs(totalPnl).toLocaleString()}
-        </span>
-      </div>
-    </div>
-  );
-}

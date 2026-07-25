@@ -127,7 +127,6 @@ export function computeBenchmarkDelta(
 // ── 个股盈亏贡献排名 ──
 export function aggregatePnlContributions(
   breakdowns: PnlBreakdownItem[],
-  topN = 10,
 ): PnlContribution[] {
   const map: Record<string, { totalPnl: number; name: string }> = {};
 
@@ -142,6 +141,5 @@ export function aggregatePnlContributions(
 
   return Object.entries(map)
     .map(([symbol, { totalPnl, name }]) => ({ symbol, name, totalPnl }))
-    .sort((a, b) => Math.abs(b.totalPnl) - Math.abs(a.totalPnl))
-    .slice(0, topN);
+    .sort((a, b) => Math.abs(b.totalPnl) - Math.abs(a.totalPnl));
 }

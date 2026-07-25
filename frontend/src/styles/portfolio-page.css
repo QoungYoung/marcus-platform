@@ -348,6 +348,63 @@
 .cp-contribution-section {
   flex-shrink: 0;
 }
+.cp-contrib-rank {
+  color: var(--agent-text-dim);
+  font-family: var(--font-display);
+  font-size: 11px;
+  text-align: center;
+}
+.cp-contrib-code {
+  font-family: var(--font-display);
+  font-size: 11px;
+  color: var(--agent-text-secondary);
+}
+.cp-contrib-name {
+  font-size: 12px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cp-contrib-pnl {
+  font-family: var(--font-display);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.cp-contrib-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-top: 1px solid var(--agent-table-border);
+}
+.cp-contrib-pager button {
+  background: var(--agent-bg-raised);
+  border: 1px solid var(--agent-table-border);
+  border-radius: var(--space-3xs);
+  color: var(--agent-text-secondary);
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 10px;
+  transition: background var(--agent-transition-smooth), color var(--agent-transition-smooth);
+}
+.cp-contrib-pager button:hover:not(:disabled) {
+  background: var(--agent-accent);
+  color: #111;
+}
+.cp-contrib-pager button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.cp-contrib-pager span {
+  font-family: var(--font-display);
+  font-size: 11px;
+  color: var(--agent-text-dim);
+  min-width: 48px;
+  text-align: center;
+}
 
 /* ── Fund flow summary ── */
 .cp-flow-summary {
