@@ -315,3 +315,135 @@ def _eval_five_signals(
             )
 
     return signals, details
+
+
+def get_overbought_indicators(
+    symbol: str,
+    cache: Optional[Dict] = None,
+) -> Tuple[float, float, float]:
+    """
+    Get current KDJ_K, RSI6, and daily change percentage for overbought take-profit.
+
+    Data sources (same pipeline as check_tech_divergence_signals):
+      1. Tencent qt.gtimg.cn -> today's live price and change_pct
+      2. Tushare stk_factor_pro -> yesterday's confirmed KDJ_K, RSI6
+      3. core.realtime_indicators -> intraday KDJ/RSI estimates
+
+    Returns:
+        (kdj_k, rsi6, daily_change_pct)
+        kdj_k: KDJ K value (0-100), intraday estimate preferred
+        rsi6: RSI6 value (0-100), intraday estimate preferred
+        daily_change_pct: today's price change percentage (e.g. 3.5 = +3.5%)
+
+    Cache: 60-second TTL, independent of the 1-hour 5-signal cache.
+    """
+    today_str = datetime.now().strftime('%Y%m%d')
+    cache_key = f"ob_{symbol}_{today_str}"
+    now = time.time()
+
+    if cache is not None and cache_key in cache:
+        cached_result, cached_ts = cache[cache_key]
+        if now - cached_ts < 60:
+            return cached_result
+
+    default = (50.0, 50.0, 0.0)
+
+    try:
+        from app.api.indicator import _normalize_to_ts_code
+        from app.config import get_settings
+
+        settings = get_settings()
+        token = settings.get_tushare_token()
+        if not token:
+            return default
+
+        from app.core.trading._api_config import get_tushare_pro as _get_ts_pro
+        pro = _get_ts_pro()
+        ts_code = _normalize_to_ts_code(symbol)
+        end_d = datetime.now().strftime("%Y%m%d")
+        start_d = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
+
+        # Fetch yesterday's confirmed indicators
+        df_tech = pro.stk_factor_pro(
+            ts_code=ts_code, start_date=start_d, end_date=end_d,
+            fields='trade_date,close,kdj_k_qfq,kdj_d_qfq,rsi_qfq_6'
+        )
+        if df_tech is None or df_tech.empty:
+            return default
+        df_tech = df_tech.sort_values("trade_date", ascending=True)
+
+        latest = df_tech.iloc[-1]
+        prev_close = float(latest.get("close", 0) or 0)
+        confirmed_kdj_k = float(latest.get("kdj_k_qfq", 0) or 0) or 50.0
+        confirmed_rsi6 = float(latest.get("rsi_qfq_6", 0) or 0) or 50.0
+
+        # Fetch daily bars for daily_change_pct fallback
+        df_daily = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=5)
+        daily_change_pct = 0.0
+        if df_daily is not None and len(df_daily) >= 2:
+            df_daily = df_daily.sort_values("trade_date", ascending=True)
+            yesterday_close = float(df_daily.iloc[-2].get("close", 0) or 0)
+            if yesterday_close > 0 and prev_close > 0:
+                daily_change_pct = round((prev_close - yesterday_close) / yesterday_close * 100, 2)
+
+        # Try realtime path
+        realtime_quote = _fetch_realtime_quote(symbol)
+        if realtime_quote and realtime_quote.get('current'):
+            try:
+                from core.realtime_indicators import (
+                    PrevIndicators, DailyBar, calculate_realtime_indicators,
+                )
+
+                prev_kdj_d = float(latest.get("kdj_d_qfq", 0) or 0) or 50.0
+
+                prev_indicators = PrevIndicators(
+                    trade_date=str(latest["trade_date"]),
+                    kdj_k=confirmed_kdj_k,
+                    kdj_d=prev_kdj_d,
+                    macd_dea=0.0,
+                    macd_ema12=prev_close if prev_close > 0 else 0.0,
+                    macd_ema26=prev_close if prev_close > 0 else 0.0,
+                )
+
+                bars = [
+                    DailyBar(
+                        trade_date=str(r["trade_date"]),
+                        open=float(r["open"]),
+                        high=float(r["high"]),
+                        low=float(r["low"]),
+                        close=float(r["close"]),
+                        vol=float(r.get("vol", 0) or 0),
+                    )
+                    for _, r in df_daily.iterrows()
+                ] if df_daily is not None else []
+
+                realtime = calculate_realtime_indicators(
+                    symbol="",
+                    realtime_quote=realtime_quote,
+                    historical_bars=bars,
+                    prev_indicators=prev_indicators,
+                )
+
+                kdj_k = realtime.kdj_k if realtime.kdj_k else confirmed_kdj_k
+                rsi6 = realtime.rsi_6 if realtime.rsi_6 else confirmed_rsi6
+                daily_change_pct = float(realtime_quote.get('change_pct', daily_change_pct) or daily_change_pct)
+
+                result = (round(float(kdj_k), 2), round(float(rsi6), 2), round(float(daily_change_pct), 2))
+                if cache is not None:
+                    cache[cache_key] = (result, now)
+                return result
+
+            except Exception:
+                pass
+
+        # Fallback: use confirmed values
+        result = (round(confirmed_kdj_k, 2), round(confirmed_rsi6, 2), round(daily_change_pct, 2))
+
+    except Exception as e:
+        logger.warning(f"[Overbought] get_overbought_indicators failed {symbol}: {e}")
+        result = default
+
+    if cache is not None:
+        cache[cache_key] = (result, now)
+
+    return result

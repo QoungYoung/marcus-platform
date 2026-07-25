@@ -104,6 +104,8 @@ class StopLossMonitor:
         self._strategy_chain = None
         self._tech_divergence_cache: Dict[str, tuple] = {}  # (symbol, date_str) -> (signals_tuple, timestamp)
         self._panic_suspension_count: Dict[str, int] = {}  # 恐慌错杀警戒日计数器
+        self._session_max_float: Dict[str, float] = {}  # 会话最高浮盈百分比，用于铁律二层级判定
+        self._overbought_history: Dict[str, List[str]] = {}  # KDJ_K≥80 日期列表，用于超买止盈连续天数判定
 
         self.log_dir = self._resolve_log_dir()
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -268,6 +270,7 @@ class StopLossMonitor:
             self.today_stops.clear()
             self._triggered.clear()
             self._panic_suspension_count.clear()
+            self._session_max_float.clear()
             self._last_reset_date = today
             if self.executor:
                 try:
@@ -366,6 +369,11 @@ class StopLossMonitor:
 
             float_pnl_pct = (current_price - avg_price) / avg_price * 100
 
+            # P1: 更新会话最高浮盈（用于铁律二峰值判定）
+            prev_max = self._session_max_float.get(symbol, float_pnl_pct)
+            if float_pnl_pct > prev_max:
+                self._session_max_float[symbol] = float_pnl_pct
+
             # P0-2: 每次轮询主动更新 HWM
             self._ensure_hwm(symbol, current_price)
 
@@ -408,6 +416,11 @@ class StopLossMonitor:
         iron_rule2_reason = self._check_iron_rule2(symbol, float_pnl_pct, current_price, avg_price)
         if iron_rule2_reason:
             return iron_rule2_reason, 1.0
+
+        # ── 规则 2.3: 超买止盈（KDJ/RSI 三级递进主动止盈） ──
+        overbought_reason, overbought_ratio = self._check_overbought_take_profit(symbol, float_pnl_pct)
+        if overbought_reason:
+            return overbought_reason, overbought_ratio
 
         # ── 规则 2.5: 技术指标背离止损（五大信号综合判定） ──
         tech_reason, tech_ratio = self._check_technical_divergence(symbol, current_price, float_pnl_pct)
@@ -843,9 +856,10 @@ class StopLossMonitor:
         self, symbol: str, float_pnl_pct: float, current_price: float, avg_price: float
     ) -> Optional[str]:
         """
-        铁律二：盈利单不能变亏损（v2.1 振幅分档+渐进保护版）。
+        铁律二：盈利单不能变亏损（v2.2 会话峰值判定版）。
 
-        根据近5日日均振幅确定档位，每条保护线为成本价上移幅度：
+        根据近5日日均振幅确定档位，每条保护线为成本价上移幅度。
+        **层级判定使用会话最高浮盈（_session_max_float），避免保护线随价格下滑而失效**：
         | 波动档 | T1·保本 | T1.5·保护 | T2·保护线 | T3·保护线 |
         |:------:|:-----:|:--------:|:-------:|:-------:|
         | 低波<3% | ≥1%→0% | ≥2%→+0.5% | ≥3%→+1% | ≥5%→+2% |
@@ -875,35 +889,135 @@ class StopLossMonitor:
         t2, t2_protect = rules["t2_pct"], rules["t2_plus_pct"]
         t3, t3_protect = rules["t3_pct"], rules["t3_plus_pct"]
 
-        # 确定当前保护线
+        # ── v2.2: 用会话最高浮盈判定层级，而非当前浮盈 ──
+        max_float = self._session_max_float.get(symbol, float_pnl_pct)
+
+        # 确定当前保护线（基于会话峰值）
         protect_pct = None
         protect_desc = None
 
-        if float_pnl_pct >= t3:
+        if max_float >= t3:
             protect_pct = t3_protect
-            protect_desc = f'T3·浮盈≥{t3}%→保护线+{t3_protect}%'
-        elif float_pnl_pct >= t2:
+            protect_desc = f'T3·峰值浮盈≥{t3}%→保护线+{t3_protect}%'
+        elif max_float >= t2:
             protect_pct = t2_protect
-            protect_desc = f'T2·浮盈≥{t2}%→保护线+{t2_protect}%'
-        elif float_pnl_pct >= t1_5:
+            protect_desc = f'T2·峰值浮盈≥{t2}%→保护线+{t2_protect}%'
+        elif max_float >= t1_5:
             protect_pct = t1_5_protect
-            protect_desc = f'T1.5·浮盈≥{t1_5}%→保护线+{t1_5_protect}%'
-        elif float_pnl_pct >= t1:
+            protect_desc = f'T1.5·峰值浮盈≥{t1_5}%→保护线+{t1_5_protect}%'
+        elif max_float >= t1:
             # T1 保本：持仓 ≤ 3 天不启用，避免刚买入被盘中波动震出去
             holding_days = self._get_holding_days(symbol)
             if holding_days is not None and holding_days <= 3:
                 return None
             protect_pct = 0.0  # 保本线 = 成本价
-            protect_desc = f'T1·浮盈≥{t1}%→保本线(成本价)'
+            protect_desc = f'T1·峰值浮盈≥{t1}%→保本线(成本价)'
 
-        # 触发判断
+        # 触发判断（仍用当前浮盈比较保护线）
         if protect_pct is not None and float_pnl_pct < protect_pct:
             return (
                 f'铁律二触发({amplitude_tier}波): {protect_desc}，'
                 f'当前浮盈{float_pnl_pct:+.2f}%跌破保护线'
+                f'（会话峰值{max_float:+.2f}%）'
             )
 
         return None
+
+    # ── 规则 2.3: 超买止盈（KDJ/RSI 三级递进主动止盈） ──
+
+    def _update_overbought_history(self, symbol: str, kdj_k: float) -> int:
+        """
+        更新超买历史记录，返回连续超买交易日数。
+
+        规则：
+        - KDJ_K ≥ 80：追加今日日期，累加连续计数
+        - KDJ_K < 80：检查间隔。若距上次超买 > 3 天，重置计数
+        - 自然日间隔 ≤ 3 天视为连续（跨周末/节假日不断）
+        """
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        history = self._overbought_history.get(symbol, [])
+
+        if kdj_k >= 80:
+            if today_str not in history:
+                history.append(today_str)
+                self._overbought_history[symbol] = history
+            return len(history)
+
+        # KDJ < 80: check if streak should be reset
+        if history:
+            last_date = history[-1]
+            try:
+                last_dt = datetime.strptime(last_date, '%Y-%m-%d')
+                today_dt = datetime.strptime(today_str, '%Y-%m-%d')
+                gap = (today_dt - last_dt).days
+                if gap > 3:
+                    # Streak broken — reset
+                    self._overbought_history[symbol] = []
+                    return 0
+            except ValueError:
+                pass
+            return len(history)
+
+        return 0
+
+    def _check_overbought_take_profit(
+        self, symbol: str, float_pnl_pct: float
+    ):
+        """
+        规则 2.3: 超买止盈 — KDJ/RSI 三级递进主动减仓。
+
+        只在浮盈状态下检查（浮亏时不触发超买止盈）。
+        三级递进，高优先级命中后不再检查低优先级：
+          第三档: KDJ_K ≥ 80 连续 3 个交易日 → 100% 清仓
+          第二档: KDJ_K ≥ 80 + RSI6 ≥ 75 + 单日涨幅 > 3% → 50% 减仓
+          第一档: KDJ_K ≥ 80 首次触发 → 30% 减仓（同日仅触发一次）
+
+        Returns:
+            (None, 1.0)          — 不触发
+            (reason_str, ratio)  — 触发减仓
+        """
+        if float_pnl_pct <= 0:
+            return None, 1.0
+
+        try:
+            from app.core.trading._tech_divergence import get_overbought_indicators
+
+            kdj_k, rsi6, daily_change_pct = get_overbought_indicators(
+                symbol=symbol,
+                cache=self._tech_divergence_cache,
+            )
+        except Exception:
+            return None, 1.0
+
+        # 更新超买历史
+        consecutive_days = self._update_overbought_history(symbol, kdj_k)
+
+        # ── 第三档（最高优先级）：连续 3 日超买 → 强制清仓 ──
+        if consecutive_days >= 3:
+            return (
+                f'超买止盈-清仓: KDJ_K={kdj_k:.1f}≥80 连续{consecutive_days}日, 强制清仓',
+                1.0,
+            )
+
+        # ── 第二档：超买 + 急涨 → 减仓 50% ──
+        if kdj_k >= 80 and rsi6 >= 75 and daily_change_pct > 3.0:
+            return (
+                f'超买止盈-急涨: KDJ_K={kdj_k:.1f}≥80, RSI6={rsi6:.1f}≥75, '
+                f'涨幅{daily_change_pct:+.1f}%>3%, 减仓50%',
+                0.5,
+            )
+
+        # ── 第一档（最低优先级）：KDJ 首次超买 → 减仓 30% ──
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        trigger_key = f"ob_t1_{symbol}_{today_str}"
+        if kdj_k >= 80 and trigger_key not in self._triggered:
+            self._triggered[trigger_key] = kdj_k
+            return (
+                f'超买止盈-预警: KDJ_K={kdj_k:.1f}≥80 首次触发, 减仓30%',
+                0.3,
+            )
+
+        return None, 1.0
 
     # ── 规则 2.5: 技术指标背离止损（五大信号综合判定） ──
 
@@ -1146,6 +1260,7 @@ class StopLossMonitor:
                 "rul0b_cost_stop": self._calc_cost_stop_distance(symbol, float_pnl_pct, current_price, avg_price),
                 "rul1_sector": self._calc_sector_distance(symbol, float_pnl_pct),
                 "rul2_iron": self._calc_iron_rule2_distance(symbol, float_pnl_pct, current_price, avg_price),
+                "rul2_3_overbought": self._calc_overbought_distance(symbol, float_pnl_pct),
                 "rul2_5_tech": self._calc_tech_divergence_distance(symbol, current_price, float_pnl_pct),
                 "rul2_6_60min": self._calc_60min_distance(symbol, current_price, float_pnl_pct),
                 "rul3_dynamic": self._calc_dynamic_distance(float_pnl_pct, market_pct, symbol),
@@ -1366,6 +1481,20 @@ class StopLossMonitor:
 
         threshold = -max(market_threshold, amp_threshold)
         return round(float_pnl_pct - threshold, 2)  # distance to dynamic stop
+
+    def _calc_overbought_distance(self, symbol: str, float_pnl_pct: float) -> Optional[float]:
+        """规则 2.3：超买止盈距离。返回 KDJ_K 到 80 的距离（正值=安全，负值=超买）。"""
+        if float_pnl_pct <= 0:
+            return None  # 浮亏时不检查超买止盈
+        try:
+            from app.core.trading._tech_divergence import get_overbought_indicators
+            kdj_k, _rsi6, _chg = get_overbought_indicators(
+                symbol=symbol,
+                cache=self._tech_divergence_cache,
+            )
+            return round(80.0 - kdj_k, 2)
+        except Exception:
+            return None
 
     def _calc_tech_divergence_distance(
         self, symbol: str, current_price: float, float_pnl_pct: float
