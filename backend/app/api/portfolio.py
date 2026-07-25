@@ -1031,45 +1031,59 @@ async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Ta
             cash, positions = _apply_trade(t, cash, positions)
 
     # ── Fetch close prices for target date and previous trading day ──
+    # 当天不是交易日时，回退到最近交易日
     close_prices: dict[str, float] = {}
     prev_close_prices: dict[str, float] = {}
     try:
         from app.core.trading._api_config import get_tushare_pro
         pro = get_tushare_pro()
-        ts_date = date.replace("-", "")
         held = [s for s, lots in positions.items() if sum(l["volume"] for l in lots) > 0]
-        if held:
-            df = pro.daily(
-                ts_code=",".join([_normalize_to_ts_code(s) for s in held]),
-                trade_date=ts_date,
-                fields="ts_code,close",
-            )
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    for sym in held:
-                        if _normalize_to_ts_code(sym) == row["ts_code"]:
-                            close_prices[sym] = float(row["close"])
-                            break
 
-        # Find previous trading day's close
-        prev_d = dt.strptime(date, "%Y-%m-%d")
-        for _ in range(15):
-            prev_d -= timedelta(days=1)
-            prev_str = prev_d.strftime("%Y%m%d")
+        def _fetch_close_for_date(symbols: list, date_str: str) -> dict[str, float]:
+            """获取指定日期的收盘价，无数据则返回空"""
+            result: dict[str, float] = {}
+            if not symbols:
+                return result
             try:
-                prev_df = pro.daily(
-                    ts_code=",".join([_normalize_to_ts_code(s) for s in all_stocks]),
-                    trade_date=prev_str,
+                df = pro.daily(
+                    ts_code=",".join([_normalize_to_ts_code(s) for s in symbols]),
+                    trade_date=date_str.replace("-", ""),
                     fields="ts_code,close",
                 )
-                if prev_df is not None and not prev_df.empty:
-                    for _, row in prev_df.iterrows():
-                        for sym in all_stocks:
+                if df is not None and not df.empty:
+                    for _, row in df.iterrows():
+                        for sym in symbols:
                             if _normalize_to_ts_code(sym) == row["ts_code"]:
-                                prev_close_prices[sym] = float(row["close"])
-                    break
+                                result[sym] = float(row["close"])
+                                break
             except Exception:
-                continue
+                pass
+            return result
+
+        # 1) 尝试获取当日收盘价
+        close_prices = _fetch_close_for_date(held, date)
+        actual_date = date
+
+        # 2) 当日无数据（周末/节假日），向前查找最近交易日
+        if not close_prices and held:
+            ref_dt = dt.strptime(date, "%Y-%m-%d")
+            for _ in range(10):
+                ref_dt -= timedelta(days=1)
+                ref_str = ref_dt.strftime("%Y-%m-%d")
+                close_prices = _fetch_close_for_date(held, ref_str)
+                if close_prices:
+                    actual_date = ref_str
+                    break
+
+        # 3) 获取前一交易日收盘价（从 actual_date 往前找）
+        if held:
+            prev_dt = dt.strptime(actual_date, "%Y-%m-%d")
+            for _ in range(15):
+                prev_dt -= timedelta(days=1)
+                prev_str = prev_dt.strftime("%Y-%m-%d")
+                prev_close_prices = _fetch_close_for_date(list(all_stocks), prev_str)
+                if prev_close_prices:
+                    break
     except Exception as e:
         print(f"[daily-pnl-breakdown/date] Tushare fetch failed: {e}", flush=True)
 
