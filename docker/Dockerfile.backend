@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     libxcb1 libxcb-render0 libxcb-shape0 libxcb-xfixes0 \
     libxkbcommon0 libfontconfig1 libfreetype6 \
     libegl1 libgl1 libopengl0 libglib2.0-0 \
+    libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for caching
