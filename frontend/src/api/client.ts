@@ -13,6 +13,7 @@ export const portfolioApi = {
   getPositions: () => api.get('/portfolio/positions'),
   getEquityHistory: (days = 60) => api.get('/portfolio/equity-history', { params: { days } }),
   getDailyPnlBreakdown: (days = 30) => api.get('/portfolio/daily-pnl-breakdown', { params: { days } }),
+  getDailyPnlBreakdownByDate: (date: string) => api.get('/portfolio/daily-pnl-breakdown/date', { params: { date } }),
   unfreeze: () => api.post('/portfolio/unfreeze'),
 }
 

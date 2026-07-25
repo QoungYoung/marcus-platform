@@ -984,6 +984,143 @@ async def get_daily_pnl_breakdown(days: int = Query(30, ge=1, le=60)):
 
 
 
+@router.get("/daily-pnl-breakdown/date", response_model=DailyPnlBreakdown)
+async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Target date YYYY-MM-DD")):
+    """获取指定日期的个股盈亏明细（懒加载用）"""
+    from datetime import datetime as dt, timedelta
+
+    db = SessionLocal()
+    try:
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        initial_capital = float(acct.initial_capital) if acct else 100000.0
+
+        all_trades = db.query(PaperTrade).filter(
+            (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+        ).order_by(
+            func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),
+            PaperTrade.id,
+        ).all()
+    finally:
+        db.close()
+
+    if not all_trades:
+        raise HTTPException(status_code=404, detail="No trades found")
+
+    trades_by_date: dict[str, list] = {}
+    all_stocks: set[str] = set()
+    for t in all_trades:
+        td = t.trade_date or (t.created_at[:10] if t.created_at else None)
+        if td:
+            trades_by_date.setdefault(td, []).append(t)
+            all_stocks.add(t.symbol)
+
+    sorted_dates = sorted(trades_by_date.keys())
+    if date not in trades_by_date and date not in [d for d in sorted_dates if d <= date]:
+        # No trades up to this date
+        return DailyPnlBreakdown(date=date, daily_pnl=0, realized_total=0, float_total=0, stocks=[])
+
+    # ── FIFO replay up to target date ──
+    cash = initial_capital
+    positions: dict[str, list[dict]] = {}
+
+    for d in sorted_dates:
+        if d > date:
+            break
+        for t in trades_by_date.get(d, []):
+            cash, positions = _apply_trade(t, cash, positions)
+
+    # ── Fetch close prices for target date and previous trading day ──
+    close_prices: dict[str, float] = {}
+    prev_close_prices: dict[str, float] = {}
+    try:
+        from app.core.trading._api_config import get_tushare_pro
+        pro = get_tushare_pro()
+        ts_date = date.replace("-", "")
+        held = [s for s, lots in positions.items() if sum(l["volume"] for l in lots) > 0]
+        if held:
+            df = pro.daily(
+                ts_code=",".join([_normalize_to_ts_code(s) for s in held]),
+                trade_date=ts_date,
+                fields="ts_code,close",
+            )
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    for sym in held:
+                        if _normalize_to_ts_code(sym) == row["ts_code"]:
+                            close_prices[sym] = float(row["close"])
+                            break
+
+        # Find previous trading day's close
+        prev_d = dt.strptime(date, "%Y-%m-%d")
+        for _ in range(15):
+            prev_d -= timedelta(days=1)
+            prev_str = prev_d.strftime("%Y%m%d")
+            try:
+                prev_df = pro.daily(
+                    ts_code=",".join([_normalize_to_ts_code(s) for s in all_stocks]),
+                    trade_date=prev_str,
+                    fields="ts_code,close",
+                )
+                if prev_df is not None and not prev_df.empty:
+                    for _, row in prev_df.iterrows():
+                        for sym in all_stocks:
+                            if _normalize_to_ts_code(sym) == row["ts_code"]:
+                                prev_close_prices[sym] = float(row["close"])
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[daily-pnl-breakdown/date] Tushare fetch failed: {e}", flush=True)
+
+    # ── Compute day realized P&L ──
+    day_realized = 0.0
+    day_realized_by_stock: dict[str, float] = {}
+    for t in trades_by_date.get(date, []):
+        if hasattr(t, "direction") and t.direction == "卖出":
+            profit = float(t.profit or 0)
+            day_realized += profit
+            day_realized_by_stock[t.symbol] = day_realized_by_stock.get(t.symbol, 0) + profit
+
+    # ── Compute per-stock float P&L ──
+    stocks_pnl: list[DailyStockPnl] = []
+    day_float = 0.0
+    touched: set[str] = set()
+
+    for sym, lots in positions.items():
+        total_vol = sum(l["volume"] for l in lots)
+        if total_vol <= 0:
+            continue
+        touched.add(sym)
+        close_today = close_prices.get(sym, 0)
+        prev_close = prev_close_prices.get(sym, close_today)
+        stock_float = total_vol * (close_today - prev_close) if close_today and prev_close else 0.0
+        stock_realized = day_realized_by_stock.get(sym, 0.0)
+        day_float += stock_float
+        stocks_pnl.append(DailyStockPnl(
+            symbol=sym,
+            volume=total_vol,
+            close_price=close_today,
+            prev_close=prev_close,
+            float_pnl=round(stock_float, 2),
+            realized_pnl=round(stock_realized, 2),
+        ))
+
+    for sym, realized in day_realized_by_stock.items():
+        if sym not in touched:
+            stocks_pnl.append(DailyStockPnl(
+                symbol=sym, volume=0,
+                float_pnl=0, realized_pnl=round(realized, 2),
+            ))
+
+    return DailyPnlBreakdown(
+        date=date,
+        daily_pnl=round(day_realized + day_float, 2),
+        realized_total=round(day_realized, 2),
+        float_total=round(day_float, 2),
+        stocks=sorted(stocks_pnl, key=lambda s: abs(s.float_pnl + s.realized_pnl), reverse=True),
+    )
+
+
 def _apply_trade(trade, cash: float, positions: dict) -> tuple:
     """将一笔成交应用到账户状态，返回 (new_cash, new_positions)
 
