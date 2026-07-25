@@ -9,6 +9,7 @@ import AnalyticsPage from './pages/AnalyticsPage'
 import SchedulerPage from './pages/SchedulerPage'
 import TradingAgentPage from './pages/TradingAgentPage'
 import BullCalculatorPage from './pages/BullCalculatorPage'
+import MonitorLogPage from './pages/MonitorLogPage'
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="agent" element={<TradingAgentPage />} />
           <Route path="calculator" element={<BullCalculatorPage />} />
+          <Route path="monitor" element={<MonitorLogPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
