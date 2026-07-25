@@ -1026,10 +1026,12 @@ async def get_daily_pnl_breakdown(
         day_realized_by_stock: dict[str, float] = {}
         for t in trades_by_date.get(d, []):
             if hasattr(t, "direction") and t.direction == "卖出":
-                profit = float(t.profit or 0)
-                day_realized += profit
+                sell_price = t.price
+                prev_close = prev_close_cache.get(t.symbol, sell_price)
+                daily_incr = t.volume * (sell_price - prev_close)
+                day_realized += daily_incr
                 sym = t.symbol
-                day_realized_by_stock[sym] = day_realized_by_stock.get(sym, 0) + profit
+                day_realized_by_stock[sym] = day_realized_by_stock.get(sym, 0) + daily_incr
             cash, positions = _apply_trade(t, cash, positions)
 
         stocks_pnl: list[DailyStockPnl] = []
@@ -1190,9 +1192,11 @@ async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Ta
     day_realized_by_stock: dict[str, float] = {}
     for t in trades_by_date.get(date, []):
         if hasattr(t, "direction") and t.direction == "卖出":
-            profit = float(t.profit or 0)
-            day_realized += profit
-            day_realized_by_stock[t.symbol] = day_realized_by_stock.get(t.symbol, 0) + profit
+            sell_price = t.price
+            prev_close = prev_close_prices.get(t.symbol, sell_price)
+            daily_incr = t.volume * (sell_price - prev_close)
+            day_realized += daily_incr
+            day_realized_by_stock[t.symbol] = day_realized_by_stock.get(t.symbol, 0) + daily_incr
 
     # ── Compute per-stock float P&L ──
     stocks_pnl: list[DailyStockPnl] = []
