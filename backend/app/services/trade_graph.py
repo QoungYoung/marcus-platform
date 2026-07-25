@@ -280,6 +280,7 @@ def _read_pool_context(task_id: str) -> str:
         from app.services.candidate_pool import get_candidate_pool
         pool = get_candidate_pool()
         pool.expire_stale()
+        pool.cleanup_sold_promoted()
         active = pool.get_all_active()
         promoted = pool.get_promoted()
         if active or promoted:

@@ -341,6 +341,52 @@ class CandidatePool:
             self._save(self._data)
         return count
 
+    def cleanup_sold_promoted(self) -> int:
+        """清理已卖出的 promoted 候选。检查当前持仓，已不持有的从池中移除。"""
+        try:
+            from app.database import SessionLocal
+            from app.models.paper_trade import PaperTrade
+            from sqlalchemy import func
+
+            db = SessionLocal()
+            try:
+                trades = db.query(PaperTrade).filter(
+                    (PaperTrade.voided == 0) | (PaperTrade.voided == None)
+                ).order_by(
+                    func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),
+                    PaperTrade.id,
+                ).all()
+            finally:
+                db.close()
+
+            # FIFO 重放计算当前持仓
+            positions: dict[str, int] = {}
+            for t in trades:
+                sym = t.symbol
+                if t.direction == '买入':
+                    positions[sym] = positions.get(sym, 0) + t.volume
+                elif t.direction == '卖出':
+                    positions[sym] = positions.get(sym, 0) - t.volume
+
+            held = {sym for sym, vol in positions.items() if vol > 0}
+
+            count = 0
+            for e in list(self._data["candidates"]):
+                if e.get("status") != "promoted":
+                    continue
+                sym = e["symbol"]
+                code = sym[2:] if len(sym) > 4 and sym[:2] in ('SH', 'SZ', 'BJ') else sym
+                if sym not in held and code not in held and sym.replace('.SH', '').replace('.SZ', '').replace('.BJ', '') not in held:
+                    self._data["candidates"].remove(e)
+                    count += 1
+
+            if count:
+                self._save(self._data)
+            return count
+        except Exception as e:
+            logger.warning(f"[CandidatePool] 清理已卖出候选失败: {e}")
+            return 0
+
     # ── Pi 提示文本 ──
 
     def format_for_pi(self) -> str:
