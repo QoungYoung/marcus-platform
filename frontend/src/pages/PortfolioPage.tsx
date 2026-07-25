@@ -773,66 +773,6 @@ export default function PortfolioPage() {
         </div>
       </div>
 
-      {/* ═══ 行业集中度 ═══ */}
-      <div className="cp-sector-section">
-        <div className="cp-panel">
-          <div className="cp-panel-header">
-            <i className="fas fa-layer-group" />
-            <span className="cp-panel-title">行业集中度</span>
-          </div>
-          <div className="cp-panel-body" style={{ padding: '12px 16px' }}>
-            {sectorData && sectorData.sectors && sectorData.sectors.length > 0 ? (
-              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-                <div style={{ width: 160, height: 160, flexShrink: 0 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={sectorData.sectors} cx="50%" cy="50%" innerRadius={36} outerRadius={64} paddingAngle={2} dataKey="weight_pct" nameKey="name" stroke="none">
-                        {sectorData.sectors.map((_, i) => (
-                          <PieCell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} fillOpacity={0.85} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={({ active, payload }: any) => {
-                        if (!active || !payload?.length) return null;
-                        const d = payload[0]?.payload;
-                        return <div className="cp-tip-box"><div className="cp-tip-label">{d?.name}</div><div className="cp-tip-row"><span className="l">权重</span><span className="v">{d?.weight_pct}%</span></div><div className="cp-tip-row"><span className="l">持仓数</span><span className="v">{d?.stock_count}只</span></div></div>;
-                      }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ marginBottom: 6 }}>
-                    <span className={`cp-sector-level ${sectorData.concentration_level === '集中' ? 'danger' : sectorData.concentration_level === '适中' ? 'warn' : 'safe'}`}>
-                      {sectorData.concentration_level}
-                    </span>
-                    {sectorData.max_sector && (
-                      <span style={{ fontSize: 11, color: 'var(--agent-text-dim)', marginLeft: 8 }}>
-                        最大: {sectorData.max_sector.name} ({sectorData.max_sector.weight_pct}%)
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {sectorData.sectors.slice(0, 6).map(s => (
-                      <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-                        <span style={{ width: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--agent-text-secondary)' }}>{s.name}</span>
-                        <div style={{ flex: 1, height: 6, background: 'var(--agent-bg-hover)', borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${Math.min(s.weight_pct, 100)}%`, background: s.weight_pct > 50 ? 'var(--agent-red)' : s.weight_pct > 30 ? 'var(--agent-gold)' : 'var(--agent-green)', borderRadius: 3, transition: 'width 0.3s ease' }} />
-                        </div>
-                        <span style={{ width: 40, textAlign: 'right', fontFamily: 'var(--font-display)', fontSize: 10, color: 'var(--agent-text-dim)' }}>{s.weight_pct}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="cp-empty" style={{ height: 160 }}>
-                <i className="fas fa-layer-group" />
-                <span>暂无行业数据</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
       {/* ═══ 持仓表格 + 交易记录 ═══ */}
       <div className="cp-row-2col">
         <div className="cp-panel">
@@ -981,8 +921,9 @@ export default function PortfolioPage() {
         </div>
       </div>
 
-      {/* ═══ 个股盈亏贡献排名 ═══ */}
-      <div className="cp-contribution-section">
+      {/* ═══ 行业集中度 + 个股盈亏贡献 ═══ */}
+      <div className="cp-row-charts">
+        {/* 个股盈亏贡献排名 */}
         <div className="cp-panel">
           <div className="cp-panel-header">
             <i className="fas fa-ranking-star" />
@@ -1041,6 +982,64 @@ export default function PortfolioPage() {
                   </div>
                 )}
               </>
+            )}
+          </div>
+        </div>
+
+        {/* 行业集中度 */}
+        <div className="cp-panel">
+          <div className="cp-panel-header">
+            <i className="fas fa-layer-group" />
+            <span className="cp-panel-title">行业集中度</span>
+          </div>
+          <div className="cp-panel-body" style={{ padding: '12px 16px' }}>
+            {sectorData && sectorData.sectors && sectorData.sectors.length > 0 ? (
+              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                <div style={{ width: 160, height: 160, flexShrink: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={sectorData.sectors} cx="50%" cy="50%" innerRadius={36} outerRadius={64} paddingAngle={2} dataKey="weight_pct" nameKey="name" stroke="none">
+                        {sectorData.sectors.map((_, i) => (
+                          <PieCell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} fillOpacity={0.85} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={({ active, payload }: any) => {
+                        if (!active || !payload?.length) return null;
+                        const d = payload[0]?.payload;
+                        return <div className="cp-tip-box"><div className="cp-tip-label">{d?.name}</div><div className="cp-tip-row"><span className="l">权重</span><span className="v">{d?.weight_pct}%</span></div><div className="cp-tip-row"><span className="l">持仓数</span><span className="v">{d?.stock_count}只</span></div></div>;
+                      }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ marginBottom: 6 }}>
+                    <span className={`cp-sector-level ${sectorData.concentration_level === '集中' ? 'danger' : sectorData.concentration_level === '适中' ? 'warn' : 'safe'}`}>
+                      {sectorData.concentration_level}
+                    </span>
+                    {sectorData.max_sector && (
+                      <span style={{ fontSize: 11, color: 'var(--agent-text-dim)', marginLeft: 8 }}>
+                        最大: {sectorData.max_sector.name} ({sectorData.max_sector.weight_pct}%)
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {sectorData.sectors.slice(0, 6).map(s => (
+                      <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                        <span style={{ width: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--agent-text-secondary)' }}>{s.name}</span>
+                        <div style={{ flex: 1, height: 6, background: 'var(--agent-bg-hover)', borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${Math.min(s.weight_pct, 100)}%`, background: s.weight_pct > 50 ? 'var(--agent-red)' : s.weight_pct > 30 ? 'var(--agent-gold)' : 'var(--agent-green)', borderRadius: 3, transition: 'width 0.3s ease' }} />
+                        </div>
+                        <span style={{ width: 40, textAlign: 'right', fontFamily: 'var(--font-display)', fontSize: 10, color: 'var(--agent-text-dim)' }}>{s.weight_pct}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="cp-empty" style={{ height: 160 }}>
+                <i className="fas fa-layer-group" />
+                <span>暂无行业数据</span>
+              </div>
             )}
           </div>
         </div>
