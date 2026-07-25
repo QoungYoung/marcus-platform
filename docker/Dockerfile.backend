@@ -8,16 +8,20 @@ WORKDIR /app
 # Use Aliyun mirrors for faster downloads in China
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
 
-# Install system dependencies
+# Install system dependencies (including Qt libs for VN.PY/PySide6)
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
     curl \
+    libxcb1 libxcb-render0 libxcb-shape0 libxcb-xfixes0 \
+    libxkbcommon0 libfontconfig1 libfreetype6 \
+    libegl1 libgl1 libopengl0 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for caching
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ PySide6 vnpy vnpy_paperaccount
 
 # Copy backend code
 COPY backend/ .
