@@ -483,10 +483,10 @@ def save_daily_snapshot(target_date: str = None) -> dict:
 
 
 def _compute_sector_concentration(positions: list, total_position_value: float) -> dict | None:
-    """计算板块集中度。
+    """计算行业集中度。
 
-    从 stock_pool.db 的 stock_concept_map 表查询每个持仓股所属概念板块，
-    聚合并计算各板块的市值权重。多概念股票将市值均分到各概念。
+    从 stock_pool.db 的 stock_concept_map 表查询每个持仓股所属行业概念，
+    聚合并计算各行业的市值权重。多概念股票将市值均分到各概念。
 
     Returns: dict with sectors, max_sector, concentration_level
     """
@@ -502,7 +502,7 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
         conn.row_factory = sqlite3.Row
         curs = conn.cursor()
 
-        # 收集所有持仓股的概念板块
+        # 收集所有持仓股的行业概念
         sector_values: dict[str, float] = {}
         sector_stocks: dict[str, set] = {}
 

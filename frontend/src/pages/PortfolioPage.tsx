@@ -21,7 +21,7 @@ interface MoneyflowRow {
   net_amount: number; price?: number; change_pct?: string;
 }
 
-// ── 板块集中度类型 ──
+// ── 行业集中度类型 ──
 interface SectorItem { name: string; weight_pct: number; stock_count: number; }
 interface SectorConcentration {
   sectors: SectorItem[]; max_sector: SectorItem | null; concentration_level: string;
@@ -251,7 +251,7 @@ export default function PortfolioPage() {
     return { inflow, outflow, total: symbols.length };
   }, [moneyflowMap]);
 
-  // ── 衍生：板块集中度 ──
+  // ── 衍生：行业集中度 ──
   const sectorData = summary?.sector_concentration ?? null;
 
   // 启动/停止止损监控
@@ -419,13 +419,27 @@ export default function PortfolioPage() {
   const monthlyReturns = useMemo(() => computeMonthlyReturns(realEquity, 6), [realEquity]);
   const quarterlyReturns = useMemo(() => computeQuarterlyReturns(realEquity, 4), [realEquity]);
   const pnlContributions = useMemo(() => aggregatePnlContributions(breakdowns), [breakdowns]);
+  // ── 贡献排序 ──
+  type ContribSortKey = 'symbol' | 'name' | 'totalPnl';
+  const [contribSortKey, setContribSortKey] = useState<ContribSortKey>('totalPnl');
+  const [contribSortDir, setContribSortDir] = useState<'desc' | 'asc'>('desc');
+  const sortedContributions = useMemo(() => {
+    const arr = [...pnlContributions];
+    arr.sort((a, b) => {
+      const va = a[contribSortKey];
+      const vb = b[contribSortKey];
+      if (typeof va === 'string' && typeof vb === 'string') return contribSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+      return contribSortDir === 'asc' ? (va as number) - (vb as number) : (vb as number) - (va as number);
+    });
+    return arr;
+  }, [pnlContributions, contribSortKey, contribSortDir]);
   const [contributionPage, setContributionPage] = useState(1);
   const CONTRIB_PAGE_SIZE = 10;
-  const contributionPageCount = Math.max(1, Math.ceil(pnlContributions.length / CONTRIB_PAGE_SIZE));
+  const contributionPageCount = Math.max(1, Math.ceil(sortedContributions.length / CONTRIB_PAGE_SIZE));
   const contributionPageItems = useMemo(() => {
     const start = (contributionPage - 1) * CONTRIB_PAGE_SIZE;
-    return pnlContributions.slice(start, start + CONTRIB_PAGE_SIZE);
-  }, [pnlContributions, contributionPage]);
+    return sortedContributions.slice(start, start + CONTRIB_PAGE_SIZE);
+  }, [sortedContributions, contributionPage]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setContributionPage(1); }, [pnlContributions.length]);
 
@@ -652,7 +666,7 @@ export default function PortfolioPage() {
                     const danger = p.nearest_trigger?.danger_level || 'no_rules';
                     const ruleLabels: Record<string, string> = {
                       rul0a_break_low: '破底', rul0b_cost_stop: '成本',
-                      rul1_sector: '板块', rul2_iron: '铁律2', rul3_dynamic: '动态',
+                      rul1_sector: '行业', rul2_iron: '铁律2', rul3_dynamic: '动态',
                     };
                     const ruleLabel = ruleLabels[p.nearest_trigger?.rule || ''] || p.nearest_trigger?.rule || '';
                     return (
@@ -756,12 +770,12 @@ export default function PortfolioPage() {
         </div>
       </div>
 
-      {/* ═══ 板块集中度 ═══ */}
+      {/* ═══ 行业集中度 ═══ */}
       <div className="cp-sector-section">
         <div className="cp-panel">
           <div className="cp-panel-header">
             <i className="fas fa-layer-group" />
-            <span className="cp-panel-title">板块集中度</span>
+            <span className="cp-panel-title">行业集中度</span>
           </div>
           <div className="cp-panel-body" style={{ padding: '12px 16px' }}>
             {sectorData && sectorData.sectors && sectorData.sectors.length > 0 ? (
@@ -809,7 +823,7 @@ export default function PortfolioPage() {
             ) : (
               <div className="cp-empty" style={{ height: 160 }}>
                 <i className="fas fa-layer-group" />
-                <span>暂无板块数据</span>
+                <span>暂无行业数据</span>
               </div>
             )}
           </div>
@@ -985,9 +999,12 @@ export default function PortfolioPage() {
                   <thead>
                     <tr>
                       <th style={{ width: 40 }}>#</th>
-                      <th>代码</th>
-                      <th>名称</th>
-                      <th className="right">30日贡献</th>
+                      <th className={`sortable ${contribSortKey === 'symbol' ? 'sorted' : ''}`} onClick={() => { setContribSortKey('symbol'); setContribSortDir(prev => contribSortKey === 'symbol' ? (prev === 'asc' ? 'desc' : 'asc') : 'desc'); setContributionPage(1); }}>
+                        代码{contribSortKey === 'symbol' && <i className={`fas fa-sort-${contribSortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
+                      <th className={`sortable ${contribSortKey === 'name' ? 'sorted' : ''}`} onClick={() => { setContribSortKey('name'); setContribSortDir(prev => contribSortKey === 'name' ? (prev === 'asc' ? 'desc' : 'asc') : 'desc'); setContributionPage(1); }}>
+                        名称{contribSortKey === 'name' && <i className={`fas fa-sort-${contribSortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
+                      <th className={`right sortable ${contribSortKey === 'totalPnl' ? 'sorted' : ''}`} onClick={() => { setContribSortKey('totalPnl'); setContribSortDir(prev => contribSortKey === 'totalPnl' ? (prev === 'asc' ? 'desc' : 'asc') : 'desc'); setContributionPage(1); }}>
+                        30日贡献{contribSortKey === 'totalPnl' && <i className={`fas fa-sort-${contribSortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
                     </tr>
                   </thead>
                   <tbody>
