@@ -7,6 +7,11 @@ import {
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
 import { portfolioApi, marketApi, tradesApi, schedulerApi } from '../api/client';
+import {
+  computeSharpeRatio, computeMonthlyReturns, computeQuarterlyReturns,
+  computeBenchmarkDelta, aggregatePnlContributions,
+} from './portfolioMetrics';
+import type { PnlContribution, PeriodReturn } from './portfolioMetrics';
 import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 
@@ -92,6 +97,7 @@ export default function PortfolioPage() {
   const [modalData, setModalData] = useState<PnlBreakdownItem | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [stopLoss, setStopLoss] = useState<StopLossStatus | null>(null);
+  const [breakdowns, setBreakdowns] = useState<PnlBreakdownItem[]>([]);
 
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingTickers, setLoadingTickers] = useState(true);
@@ -173,6 +179,13 @@ export default function PortfolioPage() {
     refreshTrades();
     refreshStopLoss();
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── 30日盈亏明细（贡献排名用）──
+  useEffect(() => {
+    portfolioApi.getDailyPnlBreakdown(30).then(res => {
+      if (Array.isArray(res.data)) setBreakdowns(res.data);
+    }).catch(() => { /* 静默失败，贡献排名显示空状态 */ });
   }, []);
 
   // 启动/停止止损监控
@@ -294,6 +307,25 @@ export default function PortfolioPage() {
   const weekFloat = account?.week_float_pnl || 0;
   const weekTotal = weekRealized + weekFloat;
 
+  // ── 绩效指标（纯客户端计算）──
+  const sharpeRatio = useMemo(() => computeSharpeRatio(realEquity), [realEquity]);
+  const monthlyReturns = useMemo(() => computeMonthlyReturns(realEquity, 6), [realEquity]);
+  const quarterlyReturns = useMemo(() => computeQuarterlyReturns(realEquity, 4), [realEquity]);
+  const pnlContributions = useMemo(() => aggregatePnlContributions(breakdowns, 10), [breakdowns]);
+
+  // 沪深300 基准对比
+  const hs300 = useMemo(() => {
+    return tickers.find(t => t.name.includes('沪深') || t.name.includes('300'));
+  }, [tickers]);
+  const todayAccountReturn = useMemo(() => {
+    if (!totalAsset || totalAsset <= 0) return 0;
+    return (totalPnl / (totalAsset - totalPnl)) * 100;
+  }, [totalAsset, totalPnl]);
+  const benchmarkDelta = useMemo(() => {
+    if (hs300 == null) return null;
+    return computeBenchmarkDelta(todayAccountReturn, hs300.change_pct);
+  }, [todayAccountReturn, hs300]);
+
   // 图表常量
   const G = 'rgba(255,255,255,0.04)';
   const A = 'var(--agent-text-dim, #6a7d9b)';
@@ -380,6 +412,50 @@ export default function PortfolioPage() {
             <HeroKpi label={t('portfolio.positionValue')} value={`¥${fmtMoney(posVal)}`} sub={`${posRatio.toFixed(1)}%`} />
             <HeroKpi label={t('portfolio.realizedPnL')} value={`${realizedPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(realizedPnl))}`} trend={realizedPnl >= 0 ? 'up' : 'down'} />
             <HeroKpi label={t('portfolio.floatingPnL')} value={`${floatPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(floatPnl))}`} trend={floatPnl >= 0 ? 'up' : 'down'} />
+          </div>
+        </div>
+      )}
+
+      {/* ═══ 绩效指标卡片行 ═══ */}
+      {summary && (
+        <div className="cp-metrics-row">
+          <div className="cp-metric-card">
+            <div className="cp-metric-label">夏普比率</div>
+            <div className="cp-metric-value">{sharpeRatio != null ? sharpeRatio.toFixed(2) : 'N/A'}</div>
+            <div className="cp-metric-sub">{sharpeRatio != null ? (sharpeRatio > 1 ? '优秀' : sharpeRatio > 0.5 ? '良好' : '一般') : '需要更多数据'}</div>
+          </div>
+          <div className="cp-metric-card">
+            <div className="cp-metric-label">本月收益</div>
+            <div className={`cp-metric-value ${(monthlyReturns[0]?.returnPct ?? 0) >= 0 ? 'up' : 'down'}`}>
+              {monthlyReturns[0] != null ? `${monthlyReturns[0].returnPct >= 0 ? '+' : ''}${monthlyReturns[0].returnPct.toFixed(2)}%` : 'N/A'}
+            </div>
+            <div className="cp-metric-sub">{monthlyReturns[0]?.period ?? '—'}</div>
+          </div>
+          <div className="cp-metric-card">
+            <div className="cp-metric-label">本季收益</div>
+            <div className={`cp-metric-value ${(quarterlyReturns[0]?.returnPct ?? 0) >= 0 ? 'up' : 'down'}`}>
+              {quarterlyReturns[0] != null ? `${quarterlyReturns[0].returnPct >= 0 ? '+' : ''}${quarterlyReturns[0].returnPct.toFixed(2)}%` : 'N/A'}
+            </div>
+            <div className="cp-metric-sub">{quarterlyReturns[0]?.period ?? '—'}</div>
+          </div>
+          <div className="cp-metric-card">
+            <div className="cp-metric-label">今日 vs 沪深300</div>
+            {benchmarkDelta ? (
+              <>
+                <div className={`cp-metric-value ${benchmarkDelta.label === 'outperform' ? 'up' : benchmarkDelta.label === 'underperform' ? 'down' : ''}`}>
+                  {benchmarkDelta.label === 'outperform' ? '跑赢' : benchmarkDelta.label === 'underperform' ? '跑输' : '持平'}
+                  <span style={{ fontSize: 12, marginLeft: 4 }}>
+                    {benchmarkDelta.delta >= 0 ? '+' : ''}{benchmarkDelta.delta.toFixed(2)}%
+                  </span>
+                </div>
+                <div className="cp-metric-sub">沪深300 {hs300?.change_pct != null ? `${hs300.change_pct >= 0 ? '+' : ''}${hs300.change_pct.toFixed(2)}%` : '—'}</div>
+              </>
+            ) : (
+              <>
+                <div className="cp-metric-value" style={{ color: 'var(--agent-text-dim)' }}>—</div>
+                <div className="cp-metric-sub">等待指数数据</div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -654,6 +730,42 @@ export default function PortfolioPage() {
         </div>
       </div>
 
+      {/* ═══ 个股盈亏贡献排名 ═══ */}
+      <div className="cp-contribution-section">
+        <div className="cp-panel">
+          <div className="cp-panel-header">
+            <i className="fas fa-ranking-star" />
+            <span className="cp-panel-title">个股盈亏贡献 (30日)</span>
+          </div>
+          <div className="cp-panel-body" style={{ padding: '12px 16px' }}>
+            {pnlContributions.length === 0 ? (
+              <div className="cp-empty" style={{ height: 200 }}>
+                <i className="fas fa-chart-bar" />
+                <span>暂无盈亏明细数据</span>
+              </div>
+            ) : (
+              <div style={{ height: Math.max(200, pnlContributions.length * 32) }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={pnlContributions} layout="vertical" margin={{ left: 60, right: 60, top: 4, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={G} horizontal={false} />
+                    <XAxis type="number" stroke={A} fontSize={10} tickLine={false}
+                      tickFormatter={(v: number) => fmtMoneyShort(v)} />
+                    <YAxis type="category" dataKey="symbol" stroke={A} fontSize={10} tickLine={false} width={56}
+                      tick={{ fontFamily: 'var(--font-display)', fontSize: 10 }} />
+                    <Tooltip content={<ContributionTip />} />
+                    <Bar dataKey="totalPnl" radius={[0, 2, 2, 0]}>
+                      {pnlContributions.map((entry, i) => (
+                        <Cell key={i} fill={entry.totalPnl >= 0 ? GREEN : RED} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       </div>
 
       {/* ═══ FAB ═══ */}
@@ -871,4 +983,21 @@ function PieTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const p = payload[0];
   return <div className="cp-tip-box"><div className="cp-tip-label">{p.name}</div><div className="cp-tip-row"><span className="l">市值</span><span className="v">¥{p.value.toLocaleString()}</span></div></div>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ContributionTip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  const totalPnl = payload[0]?.value || 0;
+  return (
+    <div className="cp-tip-box">
+      <div className="cp-tip-label">{label}</div>
+      <div className="cp-tip-row">
+        <span className="l">30日贡献</span>
+        <span className="v" style={{ color: totalPnl >= 0 ? GREEN : RED }}>
+          {totalPnl >= 0 ? '+' : ''}¥{Math.abs(totalPnl).toLocaleString()}
+        </span>
+      </div>
+    </div>
+  );
 }

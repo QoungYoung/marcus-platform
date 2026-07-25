@@ -304,6 +304,51 @@
   .cp-row-charts { grid-template-columns: 2fr 1fr; }
 }
 
+/* ── Metrics row ── */
+.cp-metrics-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+.cp-metric-card {
+  background: var(--agent-bg-card);
+  border: 1px solid var(--agent-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  display: flex; flex-direction: column;
+  gap: 2px;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.cp-metric-card:hover { border-color: var(--agent-border-hover); }
+.cp-metric-label {
+  font-size: 10px;
+  color: var(--agent-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: var(--font-body);
+  font-weight: 500;
+}
+.cp-metric-value {
+  font-family: var(--font-display);
+  font-size: 1.125rem; font-weight: 600;
+  color: var(--agent-text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+.cp-metric-value.up   { color: var(--agent-green); }
+.cp-metric-value.down { color: var(--agent-red); }
+.cp-metric-sub {
+  font-size: 10px;
+  color: var(--agent-text-dim);
+  font-family: var(--font-body);
+}
+
+/* ── Contribution section ── */
+.cp-contribution-section {
+  flex-shrink: 0;
+}
+
 /* ── Section grouping ── */
 .cp-section-group {
   display: flex; flex-direction: column;
@@ -829,6 +874,7 @@
   .cp-chart-h240, .cp-chart-h200 { height: 200px; }
   .cp-section-group { gap: var(--space-md); }
   .cp-risk-strip { grid-template-columns: repeat(4, 1fr); }
+  .cp-metrics-row { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 768px) {
@@ -837,6 +883,7 @@
   .cp-hero-pnl { font-size: 1.25rem; }
   .cp-hero-right { grid-template-columns: 1fr; gap: var(--space-xs); }
   .cp-risk-strip { grid-template-columns: repeat(2, 1fr); }
+  .cp-metrics-row { grid-template-columns: 1fr; }
   .cp-sl-metrics { grid-template-columns: repeat(2, 1fr); }
   .cp-sl-table { font-size: 10px; }
   .cp-sl-table td, .cp-sl-table th { padding: 3px 4px; }
