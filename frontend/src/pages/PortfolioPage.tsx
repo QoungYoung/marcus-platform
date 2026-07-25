@@ -15,6 +15,21 @@ import type { PnlContribution, PeriodReturn } from './portfolioMetrics';
 import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 
+// ── 资金流类型 ──
+interface MoneyflowRow {
+  symbol: string; name?: string; main_net: number; inflow: number; outflow: number;
+  net_amount: number; price?: number; change_pct?: string;
+}
+
+// ── 板块集中度类型 ──
+interface SectorItem { name: string; weight_pct: number; stock_count: number; }
+interface SectorConcentration {
+  sectors: SectorItem[]; max_sector: SectorItem | null; concentration_level: string;
+}
+
+// ── 快捷交易表单 ──
+interface TradeForm { direction: '买' | '卖'; price: number; volume: number; reason: string; }
+
 // ── 类型 ──
 interface Position {
   symbol: string; name: string; volume: number;
@@ -30,6 +45,7 @@ interface Account {
 }
 interface PortfolioSummary {
   account: Account; total_return: number; total_return_pct: number; win_rate: number;
+  sector_concentration?: SectorConcentration | null;
 }
 interface EquityPoint { date: string; value: number; }
 interface DailyPnl { date: string; pnl: number; }
@@ -114,6 +130,16 @@ export default function PortfolioPage() {
   const [slExpanded, setSlExpanded] = useState(false);
   const [slToggling, setSlToggling] = useState(false);
 
+  // ── 资金流 ──
+  const [moneyflowMap, setMoneyflowMap] = useState<Record<string, MoneyflowRow>>({});
+  const [loadingFlow, setLoadingFlow] = useState(false);
+
+  // ── 快捷交易面板 ──
+  const [expandedTradeSymbol, setExpandedTradeSymbol] = useState<string | null>(null);
+  const [tradeForm, setTradeForm] = useState<TradeForm>({ direction: '买', price: 0, volume: 0, reason: '' });
+  const [tradeError, setTradeError] = useState<string | null>(null);
+  const [tradeSubmitting, setTradeSubmitting] = useState(false);
+
   // ── 各模块独立 fetch（flushSync 确保 React 18 不批量合并，每个模块加载后即时渲染） ──
   const refreshSummary = useCallback(async () => {
     setLoadingSummary(true);
@@ -188,6 +214,42 @@ export default function PortfolioPage() {
     }).catch(() => { /* 静默失败，贡献排名显示空状态 */ });
   }, []);
 
+  // ── 资金流数据（持仓股）──
+  const refreshMoneyflow = useCallback(async () => {
+    const syms = summary?.account?.positions?.map(p => p.symbol) || [];
+    if (syms.length === 0) return;
+    setLoadingFlow(true);
+    const results = await Promise.allSettled(
+      syms.map(sym => marketApi.getMoneyflow(sym).then(r => ({ symbol: sym, data: r.data })))
+    );
+    const map: Record<string, MoneyflowRow> = {};
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        const { symbol, data } = r.value;
+        if (data) map[symbol] = data as MoneyflowRow;
+      }
+    }
+    setMoneyflowMap(map);
+    setLoadingFlow(false);
+  }, [summary?.account?.positions]);
+
+  useEffect(() => {
+    if (summary?.account?.positions?.length) refreshMoneyflow();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary?.account?.positions?.length]);
+
+  // ── 衍生：资金流汇总 ──
+  const flowSummary = useMemo(() => {
+    const symbols = Object.keys(moneyflowMap);
+    if (symbols.length === 0) return null;
+    const inflow = symbols.filter(s => (moneyflowMap[s].main_net || 0) > 0).length;
+    const outflow = symbols.filter(s => (moneyflowMap[s].main_net || 0) < 0).length;
+    return { inflow, outflow, total: symbols.length };
+  }, [moneyflowMap]);
+
+  // ── 衍生：板块集中度 ──
+  const sectorData = summary?.sector_concentration ?? null;
+
   // 启动/停止止损监控
   const handleToggleSL = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -236,6 +298,47 @@ export default function PortfolioPage() {
   const posVal = summary?.account?.position_value || 0;
   const cash = summary?.account?.available_cash || 0;
   const totalAsset = summary?.account?.total_asset || 0;
+
+  // ── 快捷交易 ──
+  const openTradePanel = useCallback((symbol: string, direction: '买' | '卖', currentPrice: number, volume: number) => {
+    if (expandedTradeSymbol === symbol) {
+      setExpandedTradeSymbol(null);
+      setTradeError(null);
+    } else {
+      setExpandedTradeSymbol(symbol);
+      setTradeForm({ direction, price: currentPrice, volume: direction === '卖' ? volume : 0, reason: '' });
+      setTradeError(null);
+    }
+  }, [expandedTradeSymbol]);
+
+  const handleTradeSubmit = useCallback(async () => {
+    if (!expandedTradeSymbol) return;
+    setTradeError(null);
+    if (tradeForm.price <= 0) { setTradeError('价格必须大于0'); return; }
+    if (tradeForm.volume <= 0) { setTradeError('数量必须大于0'); return; }
+    if (tradeForm.direction === '卖') {
+      const pos = positions.find(p => p.symbol === expandedTradeSymbol);
+      if (pos && tradeForm.volume > pos.volume) { setTradeError('卖出数量超过持仓'); return; }
+    }
+    setTradeSubmitting(true);
+    try {
+      await tradesApi.execute({
+        symbol: expandedTradeSymbol,
+        side: tradeForm.direction === '买' ? 'buy' : 'sell',
+        price: tradeForm.price,
+        volume: tradeForm.volume,
+        reason: tradeForm.reason || undefined,
+      });
+      setExpandedTradeSymbol(null);
+      setTradeError(null);
+      await refreshSummary();
+    } catch (err: unknown) {
+      setTradeError((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        || (err instanceof Error ? err.message : '交易失败'));
+    } finally {
+      setTradeSubmitting(false);
+    }
+  }, [expandedTradeSymbol, tradeForm, positions, refreshSummary]);
 
   const equityCurve: EquityPoint[] = useMemo(() => {
     return realEquity.map(p => ({ date: p.date.slice(5), value: p.equity }));
@@ -640,16 +743,92 @@ export default function PortfolioPage() {
         </div>
       </div>
 
+      {/* ═══ 板块集中度 ═══ */}
+      <div className="cp-sector-section">
+        <div className="cp-panel">
+          <div className="cp-panel-header">
+            <i className="fas fa-layer-group" />
+            <span className="cp-panel-title">板块集中度</span>
+          </div>
+          <div className="cp-panel-body" style={{ padding: '12px 16px' }}>
+            {sectorData && sectorData.sectors && sectorData.sectors.length > 0 ? (
+              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                <div style={{ width: 160, height: 160, flexShrink: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={sectorData.sectors} cx="50%" cy="50%" innerRadius={36} outerRadius={64} paddingAngle={2} dataKey="weight_pct" nameKey="name" stroke="none">
+                        {sectorData.sectors.map((_, i) => (
+                          <PieCell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} fillOpacity={0.85} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={({ active, payload }: any) => {
+                        if (!active || !payload?.length) return null;
+                        const d = payload[0]?.payload;
+                        return <div className="cp-tip-box"><div className="cp-tip-label">{d?.name}</div><div className="cp-tip-row"><span className="l">权重</span><span className="v">{d?.weight_pct}%</span></div><div className="cp-tip-row"><span className="l">持仓数</span><span className="v">{d?.stock_count}只</span></div></div>;
+                      }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ marginBottom: 6 }}>
+                    <span className={`cp-sector-level ${sectorData.concentration_level === '集中' ? 'danger' : sectorData.concentration_level === '适中' ? 'warn' : 'safe'}`}>
+                      {sectorData.concentration_level}
+                    </span>
+                    {sectorData.max_sector && (
+                      <span style={{ fontSize: 11, color: 'var(--agent-text-dim)', marginLeft: 8 }}>
+                        最大: {sectorData.max_sector.name} ({sectorData.max_sector.weight_pct}%)
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {sectorData.sectors.slice(0, 6).map(s => (
+                      <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                        <span style={{ width: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--agent-text-secondary)' }}>{s.name}</span>
+                        <div style={{ flex: 1, height: 6, background: 'var(--agent-bg-hover)', borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${Math.min(s.weight_pct, 100)}%`, background: s.weight_pct > 50 ? 'var(--agent-red)' : s.weight_pct > 30 ? 'var(--agent-gold)' : 'var(--agent-green)', borderRadius: 3, transition: 'width 0.3s ease' }} />
+                        </div>
+                        <span style={{ width: 40, textAlign: 'right', fontFamily: 'var(--font-display)', fontSize: 10, color: 'var(--agent-text-dim)' }}>{s.weight_pct}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="cp-empty" style={{ height: 160 }}>
+                <i className="fas fa-layer-group" />
+                <span>暂无板块数据</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* ═══ 持仓表格 + 交易记录 ═══ */}
       <div className="cp-row-2col">
         <div className="cp-panel">
           <div className="cp-panel-header">
             <i className="fas fa-table" />
             <span className="cp-panel-title">{t('portfolio.positions')} ({positions.length})</span>
-            <button className="cp-refresh-btn" onClick={refreshSummary} title="刷新持仓" style={{ marginLeft: 'auto' }}>
+            <button className="cp-refresh-btn" onClick={refreshMoneyflow} title="刷新资金流" style={{ marginLeft: 'auto' }}>
+              <i className={`fas fa-coins ${loadingFlow ? 'fa-spin' : ''}`} />
+            </button>
+            <button className="cp-refresh-btn" onClick={refreshSummary} title="刷新持仓">
               <i className={`fas fa-sync-alt ${loadingSummary ? 'fa-spin' : ''}`} />
             </button>
           </div>
+          {/* 资金流汇总条 */}
+          {flowSummary && (
+            <div className="cp-flow-summary">
+              <i className="fas fa-chart-waterfall" />
+              {flowSummary.inflow > 0 && flowSummary.outflow > 0 ? (
+                <span><span className="cp-flow-in">{flowSummary.inflow}只流入</span> / <span className="cp-flow-out">{flowSummary.outflow}只流出</span></span>
+              ) : flowSummary.outflow === 0 ? (
+                <span className="cp-flow-in">主力全部流入</span>
+              ) : flowSummary.inflow === 0 ? (
+                <span className="cp-flow-out">主力全部流出</span>
+              ) : null}
+            </div>
+          )}
           <div className="cp-table-wrap" style={{ maxHeight: 340 }}>
             {loadingSummary ? <SkeletonTable rows={5} /> : (
               <table className="cp-table">
@@ -666,18 +845,25 @@ export default function PortfolioPage() {
                     {t('portfolio.marketValue')} {sortKey === 'market_value' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
                   <th className={`right sortable ${sortKey === 'weight' ? 'sorted' : ''}`} onClick={() => handleSort('weight')}>
                     {t('portfolio.weight')} {sortKey === 'weight' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
+                  <th className="center">资金流</th>
+                  <th className="center">操作</th>
                 </tr></thead>
                 <tbody>
                   {sortedPositions.length === 0 ? (
-                    <tr><td colSpan={11}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
-                  ) : sortedPositions.map(pos => {
+                    <tr><td colSpan={13}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
+                  ) : sortedPositions.flatMap(pos => {
                     const isUp = (pos.floating_pnl || 0) >= 0;
                     const weight = totalAsset > 0 ? (pos.market_value / totalAsset) * 100 : 0;
                     const isHeavy = weight > 30; const isWarn = weight > 20 && weight <= 30;
                     const pnlPct = pos.floating_pnl_pct || 0;
                     const pnlMag = Math.abs(pnlPct) > 5 ? 'strong' : Math.abs(pnlPct) < 2 ? 'mild' : '';
-                    return (
-                      <tr key={pos.symbol} className={isHeavy ? 'risk-high' : isWarn ? 'risk-warn' : ''}>
+                    const flow = moneyflowMap[pos.symbol];
+                    const flowLabel = !flow ? '—' : (flow.main_net || 0) > (pos.market_value * 0.01) ? '主力流入' : (flow.main_net || 0) < -(pos.market_value * 0.01) ? '主力流出' : '平衡';
+                    const flowClass = flowLabel === '主力流入' ? 'in' : flowLabel === '主力流出' ? 'out' : 'neutral';
+                    const isExpanded = expandedTradeSymbol === pos.symbol;
+
+                    const rows = [
+                      <tr key={pos.symbol} className={`${isHeavy ? 'risk-high' : isWarn ? 'risk-warn' : ''} ${isExpanded ? 'trade-expanded' : ''}`}>
                         <td className="symbol mono">{pos.symbol}</td>
                         <td className="bold">{cleanStockName(pos.name, pos.symbol)}</td>
                         <td className="num mono dim">{pos.volume.toLocaleString()}</td>
@@ -690,8 +876,43 @@ export default function PortfolioPage() {
                         <td className="num mono bold">¥{fmtMoney(pos.market_value)}</td>
                         <td className="num">
                           <span className={`cp-wt-tag ${isHeavy ? 'danger' : isWarn ? 'warn' : ''}`}>{weight.toFixed(1)}%</span></td>
-                      </tr>
-                    );
+                        <td className="num center">
+                          <span className={`cp-flow-badge ${flowClass}`}>{flowLabel}</span></td>
+                        <td className="num center">
+                          <div className="cp-trade-actions">
+                            <button className="cp-trade-btn buy" title="买入" onClick={() => openTradePanel(pos.symbol, '买', pos.current_price, 0)}>+</button>
+                            <button className="cp-trade-btn sell" title="卖出" onClick={() => openTradePanel(pos.symbol, '卖', pos.current_price, pos.volume)}>−</button>
+                          </div>
+                        </td>
+                      </tr>,
+                    ];
+
+                    // 内联交易面板
+                    if (isExpanded) {
+                      rows.push(
+                        <tr key={`${pos.symbol}-trade`} className="cp-trade-panel-row">
+                          <td colSpan={13} className="cp-trade-panel-cell">
+                            <div className="cp-trade-panel">
+                              <span className={`cp-trade-panel-dir ${tradeForm.direction === '买' ? 'buy' : 'sell'}`}>{tradeForm.direction === '买' ? '买入' : '卖出'} {pos.symbol} {cleanStockName(pos.name, pos.symbol)}</span>
+                              <div className="cp-trade-panel-fields">
+                                <label>价格 <input type="number" className="cp-trade-input" value={tradeForm.price || ''} onChange={e => setTradeForm(f => ({ ...f, price: parseFloat(e.target.value) || 0 }))} step="0.01" min="0" /></label>
+                                <label>数量(股) <input type="number" className="cp-trade-input" value={tradeForm.volume || ''} onChange={e => setTradeForm(f => ({ ...f, volume: parseInt(e.target.value) || 0 }))} step="100" min="0" /></label>
+                                <label>理由 <input type="text" className="cp-trade-input" value={tradeForm.reason} onChange={e => setTradeForm(f => ({ ...f, reason: e.target.value }))} placeholder="选填" /></label>
+                              </div>
+                              {tradeError && <div className="cp-trade-error"><i className="fas fa-exclamation-circle" /> {tradeError}</div>}
+                              <div className="cp-trade-panel-actions">
+                                <button className="cp-trade-submit" onClick={handleTradeSubmit} disabled={tradeSubmitting}>
+                                  {tradeSubmitting ? <><i className="fas fa-spinner fa-spin" /> 提交中</> : '确认下单'}
+                                </button>
+                                <button className="cp-trade-cancel" onClick={() => { setExpandedTradeSymbol(null); setTradeError(null); }}>取消</button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return rows;
                   })}
                 </tbody>
               </table>

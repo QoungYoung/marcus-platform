@@ -349,6 +349,148 @@
   flex-shrink: 0;
 }
 
+/* ── Fund flow summary ── */
+.cp-flow-summary {
+  display: flex; align-items: center; gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-md);
+  border-bottom: 1px solid var(--agent-table-border);
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--agent-text-dim);
+}
+.cp-flow-summary i { font-size: 10px; color: var(--agent-text-dim); }
+.cp-flow-in  { color: var(--agent-green); font-weight: 600; }
+.cp-flow-out { color: var(--agent-red); font-weight: 600; }
+
+/* ── Fund flow badge ── */
+.cp-flow-badge {
+  display: inline-block;
+  padding: 1px 6px; border-radius: 4px;
+  font-family: var(--font-body);
+  font-size: 10px; font-weight: 500;
+  white-space: nowrap;
+}
+.cp-flow-badge.in  { color: var(--agent-green); }
+.cp-flow-badge.out { color: var(--agent-red); }
+.cp-flow-badge.neutral { color: var(--agent-text-dim); }
+
+/* ── Trade action buttons (hidden by default, shown on row hover) ── */
+.cp-trade-actions {
+  display: flex; gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.cp-table tbody tr:hover .cp-trade-actions { opacity: 1; }
+.cp-trade-btn {
+  width: 22px; height: 22px; border-radius: 4px;
+  border: 1px solid var(--agent-border-subtle);
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 13px; font-weight: 600;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+  padding: 0; line-height: 1;
+}
+.cp-trade-btn.buy  { color: var(--agent-green); }
+.cp-trade-btn.buy:hover  { border-color: var(--agent-green); background: var(--agent-green-subtle); }
+.cp-trade-btn.sell { color: var(--agent-red); }
+.cp-trade-btn.sell:hover { border-color: var(--agent-red); background: var(--agent-red-subtle); }
+.cp-trade-btn:focus-visible { outline: 2px solid var(--agent-gold); outline-offset: 2px; }
+
+/* ── Expanded trade row ── */
+.cp-table tbody tr.trade-expanded td {
+  background: var(--agent-bg-hover);
+}
+.cp-trade-panel-row td {
+  padding: 0 !important;
+  border-bottom: 1px solid var(--agent-table-border-strong) !important;
+}
+.cp-trade-panel-cell {
+  padding: 0 !important;
+}
+.cp-trade-panel {
+  display: flex; align-items: center; gap: var(--space-md);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--agent-bg-deep);
+  border-bottom: 1px solid var(--agent-table-border-strong);
+  flex-wrap: wrap;
+}
+.cp-trade-panel-dir {
+  font-family: var(--font-display);
+  font-size: 12px; font-weight: 600;
+  flex-shrink: 0;
+}
+.cp-trade-panel-dir.buy  { color: var(--agent-green); }
+.cp-trade-panel-dir.sell { color: var(--agent-red); }
+.cp-trade-panel-fields {
+  display: flex; gap: var(--space-sm); flex: 1; flex-wrap: wrap;
+}
+.cp-trade-panel-fields label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; color: var(--agent-text-dim);
+  font-family: var(--font-body);
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.cp-trade-input {
+  width: 90px; padding: 3px 6px;
+  border: 1px solid var(--agent-border-light);
+  border-radius: 4px;
+  background: var(--agent-bg-card);
+  color: var(--agent-text-primary);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.cp-trade-input:focus { border-color: var(--agent-gold); outline: none; }
+.cp-trade-input::placeholder { color: var(--agent-text-dim); font-size: 10px; }
+.cp-trade-error {
+  font-family: var(--font-body);
+  font-size: 10px; color: var(--agent-red);
+  display: flex; align-items: center; gap: 4px;
+}
+.cp-trade-panel-actions {
+  display: flex; gap: var(--space-xs); flex-shrink: 0;
+}
+.cp-trade-submit {
+  padding: 4px 12px; border-radius: 4px;
+  border: 1px solid var(--agent-gold);
+  background: transparent;
+  color: var(--agent-gold);
+  font-family: var(--font-body);
+  font-size: 11px; font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+  white-space: nowrap;
+}
+.cp-trade-submit:hover { background: var(--agent-gold); color: var(--agent-bg-deep); }
+.cp-trade-submit:active { transform: translateY(1px); }
+.cp-trade-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+.cp-trade-submit:focus-visible { outline: 2px solid var(--agent-gold); outline-offset: 2px; }
+.cp-trade-cancel {
+  padding: 4px 8px; border-radius: 4px;
+  border: 1px solid var(--agent-border-subtle);
+  background: transparent;
+  color: var(--agent-text-dim);
+  font-family: var(--font-body);
+  font-size: 11px; cursor: pointer;
+  transition: color var(--dur-fast);
+  white-space: nowrap;
+}
+.cp-trade-cancel:hover { color: var(--agent-text-secondary); }
+.cp-trade-cancel:focus-visible { outline: 2px solid var(--agent-gold); outline-offset: 2px; }
+
+/* ── Sector concentration ── */
+.cp-sector-section { flex-shrink: 0; }
+.cp-sector-level {
+  display: inline-block;
+  padding: 1px 8px; border-radius: 4px;
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 600;
+}
+.cp-sector-level.danger { color: var(--agent-red); }
+.cp-sector-level.warn   { color: var(--agent-gold); }
+.cp-sector-level.safe   { color: var(--agent-green); }
+
 /* ── Section grouping ── */
 .cp-section-group {
   display: flex; flex-direction: column;

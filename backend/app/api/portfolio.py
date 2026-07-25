@@ -482,6 +482,96 @@ def save_daily_snapshot(target_date: str = None) -> dict:
     }
 
 
+def _compute_sector_concentration(positions: list, total_position_value: float) -> dict | None:
+    """计算板块集中度。
+
+    从 stock_pool.db 的 stock_concept_map 表查询每个持仓股所属概念板块，
+    聚合并计算各板块的市值权重。多概念股票将市值均分到各概念。
+
+    Returns: dict with sectors, max_sector, concentration_level
+    """
+    if not positions or total_position_value <= 0:
+        return None
+
+    pool_db = settings.data_dir / "stock_pool.db"
+    if not pool_db.exists():
+        return None
+
+    try:
+        conn = sqlite3.connect(str(pool_db))
+        conn.row_factory = sqlite3.Row
+        curs = conn.cursor()
+
+        # 收集所有持仓股的概念板块
+        sector_values: dict[str, float] = {}
+        sector_stocks: dict[str, set] = {}
+
+        for p in positions:
+            symbol = p.symbol if isinstance(p, dict) else getattr(p, 'symbol', '')
+            market_value = (
+                p.market_value if hasattr(p, 'market_value')
+                else p.get('market_value', 0) if isinstance(p, dict)
+                else 0
+            )
+
+            # 从 Marcus 代码提取纯数字代码 (SH600519 → 600519)
+            code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
+
+            curs.execute(
+                "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
+                (f"%{code}%",)
+            )
+            concepts = [row['concept_name'] for row in curs.fetchall()]
+
+            if not concepts:
+                sector_values.setdefault("其他/未分类", 0.0)
+                sector_values["其他/未分类"] += market_value
+                sector_stocks.setdefault("其他/未分类", set()).add(symbol)
+            else:
+                # 多概念股票：市值均分
+                per_concept_value = market_value / len(concepts)
+                for c in concepts:
+                    sector_values[c] = sector_values.get(c, 0.0) + per_concept_value
+                    sector_stocks.setdefault(c, set()).add(symbol)
+
+        conn.close()
+
+        if not sector_values:
+            return None
+
+        # 构建 sectors 列表
+        sectors = sorted(
+            [
+                {
+                    "name": name,
+                    "weight_pct": round(val / total_position_value * 100, 1),
+                    "stock_count": len(sector_stocks.get(name, set())),
+                }
+                for name, val in sector_values.items()
+            ],
+            key=lambda x: x["weight_pct"],
+            reverse=True,
+        )
+
+        max_sector = sectors[0] if sectors else None
+        max_weight = max_sector["weight_pct"] if max_sector else 0
+        if max_weight > 50:
+            level = "集中"
+        elif max_weight > 30:
+            level = "适中"
+        else:
+            level = "分散"
+
+        return {
+            "sectors": sectors,
+            "max_sector": max_sector,
+            "concentration_level": level,
+        }
+    except Exception as e:
+        print(f"[Portfolio] sector_concentration 计算失败: {e}", flush=True)
+        return None
+
+
 @router.get("", response_model=PortfolioSummary)
 async def get_portfolio():
     """Get full portfolio summary."""
@@ -588,11 +678,14 @@ async def get_portfolio():
         updated_at=datetime.now(),
     )
 
+    sector_concentration = _compute_sector_concentration(positions, total_position_value)
+
     return PortfolioSummary(
         account=account_response,
-        total_return=total_pnl,  # 与 account.total_pnl 同源，始终一致
+        total_return=total_pnl,
         total_return_pct=(total_asset / initial_capital - 1) * 100 if initial_capital > 0 else 0,
         win_rate=win_rate,
+        sector_concentration=sector_concentration,
     )
 
 
