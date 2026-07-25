@@ -699,11 +699,12 @@ export default function PortfolioPage() {
                       <tbody>
                         {modalData.stocks.map(s => {
                           const chgPct = s.prev_close > 0 ? ((s.close_price / s.prev_close - 1) * 100) : 0;
+                          const isSold = s.volume === 0;
                           return (
-                            <tr key={s.symbol}>
+                            <tr key={s.symbol} style={{ opacity: isSold ? 0.55 : 1 }}>
                               <td className="mono bold">{s.symbol}</td>
                               <td className="dim" style={{ fontSize: 10 }}>{s.name || '-'}</td>
-                              <td className="num dim">{s.volume > 0 ? `${s.volume}股` : '-'}</td>
+                              <td className="num dim">{isSold ? <span style={{color: 'var(--agent-text-dim)', fontSize: 9}}>已卖出</span> : `${s.volume}股`}</td>
                               <td className="num mono">{s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : '-'}</td>
                               <td className={`num ${chgPct >= 0 ? 'pnl-up' : 'pnl-down'}`}>{s.close_price > 0 && s.prev_close > 0 ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '-'}</td>
                               <td className={`num mono ${(s.float_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>{(s.float_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.float_pnl || 0).toFixed(0)}</td>
