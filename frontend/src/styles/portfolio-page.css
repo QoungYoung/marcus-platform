@@ -530,9 +530,43 @@
 .cp-panel-header .cp-refresh-btn { font-size: 11px; }
 .cp-sl-indicator .cp-refresh-btn { margin-left: 8px; }
 
+/* ── 弹窗 (Modal) ── */
+.cp-modal-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center;
+  animation: cp-fade-in 0.15s ease;
+}
+.cp-modal {
+  background: var(--agent-bg-card, #111827);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  animation: cp-scale-in 0.15s ease;
+}
+.cp-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 14px; font-weight: 600;
+}
+.cp-modal-close {
+  background: none; border: none; color: var(--agent-text-dim, #6a7d9b);
+  cursor: pointer; font-size: 14px; padding: 4px 8px; border-radius: 6px;
+  transition: color 0.15s;
+}
+.cp-modal-close:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.cp-modal-body { max-height: 60vh; overflow-y: auto; }
+
+@keyframes cp-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cp-scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
 @media (prefers-reduced-motion: reduce) {
   .cp-live-dot,
   .cp-sl-dot.live,
   .cp-skel,
   .fa-spin { animation: none !important; }
+  .cp-modal-overlay,
+  .cp-modal { animation: none !important; }
 }

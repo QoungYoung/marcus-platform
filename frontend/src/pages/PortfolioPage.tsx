@@ -88,8 +88,9 @@ export default function PortfolioPage() {
   const [tickers, setTickers] = useState<IndexTicker[]>([]);
   const [recentTrades, setRecentTrades] = useState<TradeRecord[]>([]);
   const [realEquity, setRealEquity] = useState<{ date: string; equity: number; daily_pnl?: number }[]>([]);
-  const [breakdownCache, setBreakdownCache] = useState<Record<string, PnlBreakdownItem>>({});
-  const [fetchingDate, setFetchingDate] = useState<string | null>(null);
+  const [modalDate, setModalDate] = useState<string | null>(null);
+  const [modalData, setModalData] = useState<PnlBreakdownItem | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
   const [stopLoss, setStopLoss] = useState<StopLossStatus | null>(null);
 
   const [loadingSummary, setLoadingSummary] = useState(true);
@@ -237,17 +238,18 @@ export default function PortfolioPage() {
     }));
   }, [realEquity]);
 
-  const handleHoverDate = useCallback(async (date: string) => {
-    if (!date || breakdownCache[date] || fetchingDate) return;
-    setFetchingDate(date);
+  const handleBarClick = useCallback(async (data: any) => {
+    if (!data?.fullDate) return;
+    const date = data.fullDate;
+    setModalDate(date);
+    setModalLoading(true);
+    setModalData(null);
     try {
       const res = await portfolioApi.getDailyPnlBreakdownByDate(date);
-      if (res.data) {
-        setBreakdownCache(prev => ({ ...prev, [date]: res.data, [date.slice(5)]: res.data }));
-      }
+      setModalData(res.data);
     } catch { /* ignore */ }
-    finally { setFetchingDate(null); }
-  }, [breakdownCache, fetchingDate]);
+    finally { setModalLoading(false); }
+  }, []);
   const volatility = useMemo(() => {
     const returns = equityCurve.slice(1).map((p, i) => (p.value - equityCurve[i].value) / equityCurve[i].value);
     const mean = returns.reduce((a, b) => a + b, 0) / (returns.length || 1);
@@ -506,8 +508,8 @@ export default function PortfolioPage() {
                     <CartesianGrid strokeDasharray="3 3" stroke={G} />
                     <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(dailyPnlData.length / 6) - 1)} />
                     <YAxis stroke={A} fontSize={10} tickLine={false} tickFormatter={(v: number) => fmtMoneyShort(v)} width={50} />
-                    <Tooltip content={<PnlBreakdownTip breakdownCache={breakdownCache} fetchingDate={fetchingDate} onHoverDate={handleHoverDate} />} />
-                    <Bar dataKey="pnl" radius={[1, 1, 0, 0]}>
+                    <Tooltip content={<PTip />} />
+                    <Bar dataKey="pnl" radius={[1, 1, 0, 0]} onClick={handleBarClick} cursor="pointer">
                       {dailyPnlData.map((entry, i) => (
                         <Cell key={i} fill={entry.pnl >= 0 ? GREEN : RED} />
                       ))}
@@ -662,6 +664,66 @@ export default function PortfolioPage() {
         </button>
       </div>
 
+      {/* ═══ 日盈亏弹窗 ═══ */}
+      {modalDate && (
+        <div className="cp-modal-overlay" onClick={() => { setModalDate(null); setModalData(null); }}>
+          <div className="cp-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="cp-modal-header">
+              <span>{modalDate} 个股盈亏明细</span>
+              <button className="cp-modal-close" onClick={() => { setModalDate(null); setModalData(null); }}>
+                <i className="fas fa-times" />
+              </button>
+            </div>
+            <div className="cp-modal-body" style={{ padding: '12px 16px' }}>
+              {modalLoading ? (
+                <div style={{ textAlign: 'center', padding: 24, color: 'var(--agent-text-dim)' }}>
+                  <i className="fas fa-spinner fa-spin" /> 加载中...
+                </div>
+              ) : modalData ? (
+                <>
+                  <div style={{ fontSize: 13, marginBottom: 10, display: 'flex', gap: 16 }}>
+                    <span>日盈亏 <span style={{ color: modalData.daily_pnl >= 0 ? GREEN : RED, fontWeight: 700 }}>
+                      {modalData.daily_pnl >= 0 ? '+' : ''}¥{Math.abs(modalData.daily_pnl).toFixed(0)}</span></span>
+                    <span style={{ fontSize: 11, color: 'var(--agent-text-dim)' }}>
+                      已实现 <span style={{ color: modalData.realized_total >= 0 ? GREEN : RED }}>{modalData.realized_total >= 0 ? '+' : ''}¥{Math.abs(modalData.realized_total).toFixed(0)}</span>
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--agent-text-dim)' }}>
+                      浮盈变动 <span style={{ color: modalData.float_total >= 0 ? GREEN : RED }}>{modalData.float_total >= 0 ? '+' : ''}¥{Math.abs(modalData.float_total).toFixed(0)}</span>
+                    </span>
+                  </div>
+                  {modalData.stocks.length > 0 ? (
+                    <table className="cp-table" style={{ fontSize: 11 }}>
+                      <thead><tr>
+                        <th>代码</th><th className="right">持仓</th><th className="right">收盘价</th><th className="right">涨跌</th><th className="right">浮盈变动</th><th className="right">已实现</th>
+                      </tr></thead>
+                      <tbody>
+                        {modalData.stocks.map(s => {
+                          const chgPct = s.prev_close > 0 ? ((s.close_price / s.prev_close - 1) * 100) : 0;
+                          return (
+                            <tr key={s.symbol}>
+                              <td className="mono bold">{s.symbol}</td>
+                              <td className="num dim">{s.volume > 0 ? `${s.volume}股` : '-'}</td>
+                              <td className="num mono">{s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : '-'}</td>
+                              <td className={`num ${chgPct >= 0 ? 'pnl-up' : 'pnl-down'}`}>{s.close_price > 0 && s.prev_close > 0 ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '-'}</td>
+                              <td className={`num mono ${(s.float_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>{(s.float_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.float_pnl || 0).toFixed(0)}</td>
+                              <td className={`num mono ${(s.realized_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>{(s.realized_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.realized_pnl || 0).toFixed(0)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div style={{ fontSize: 11, color: 'var(--agent-text-dim)', textAlign: 'center', padding: 16 }}>当日无持仓数据</div>
+                  )}
+                </>
+              ) : (
+                <div style={{ fontSize: 11, color: 'var(--agent-text-dim)', textAlign: 'center', padding: 16 }}>加载失败</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ═══ 错误提示 ═══ */}
       {error && (
         <div className="cp-error"><div className="cp-error-inner">
@@ -807,77 +869,6 @@ function PTip({ active, payload, label }: any) {
   return <div className="cp-tip-box"><div className="cp-tip-label">{label}</div><div className="cp-tip-row"><span className="l">日盈亏</span><span className="v" style={{ color: pnl >= 0 ? GREEN : RED }}>{pnl >= 0 ? '+' : ''}¥{pnl.toLocaleString()}</span></div></div>;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function PnlBreakdownTip({ active, payload, label, breakdownCache, fetchingDate, onHoverDate }: any) {
-  const [triggered, setTriggered] = useState<Set<string>>(new Set());
-  if (!active || !payload?.length) return null;
-  const pnl = payload[0]?.value || 0;
-  const bd = breakdownCache?.[label];
-  const isLoading = fetchingDate === label || (fetchingDate && fetchingDate.length === 10 && label === fetchingDate.slice(5));
-
-  // Trigger lazy fetch on hover
-  if (!bd && !isLoading && label && !triggered.has(label)) {
-    setTriggered(prev => new Set(prev).add(label));
-    setTimeout(() => onHoverDate?.(label), 0);
-  }
-
-  const stocks: StockPnlItem[] = bd?.stocks || [];
-
-  return (
-    <div className="cp-tip-box" style={{ minWidth: 200, maxWidth: 300 }}>
-      <div className="cp-tip-label" style={{ marginBottom: 6 }}>
-        {label}  ·  日盈亏 <span style={{ color: pnl >= 0 ? GREEN : RED, fontWeight: 700 }}>
-          {pnl >= 0 ? '+' : ''}¥{Math.abs(pnl).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-        </span>
-      </div>
-      {isLoading && (
-        <div style={{ fontSize: 10, color: 'var(--agent-text-dim)', textAlign: 'center', padding: '8px 0' }}>
-          <i className="fas fa-spinner fa-spin" /> 加载中...
-        </div>
-      )}
-      {!isLoading && bd && (
-        <>
-          <div style={{ fontSize: 10, color: 'var(--agent-text-dim)', marginBottom: 4, display: 'flex', gap: 10 }}>
-            <span>已实现 <span style={{ color: bd.realized_total >= 0 ? GREEN : RED }}>{bd.realized_total >= 0 ? '+' : ''}¥{Math.abs(bd.realized_total).toFixed(0)}</span></span>
-            <span>浮盈变动 <span style={{ color: bd.float_total >= 0 ? GREEN : RED }}>{bd.float_total >= 0 ? '+' : ''}¥{Math.abs(bd.float_total).toFixed(0)}</span></span>
-          </div>
-          {stocks.length > 0 && (
-            <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 4, marginTop: 2 }}>
-              {stocks.slice(0, 6).map(s => {
-                const total = (s.float_pnl || 0) + (s.realized_pnl || 0);
-                return (
-                  <div key={s.symbol} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '1px 0', fontSize: 10 }}>
-                    <span style={{ fontWeight: 500, minWidth: 64 }}>{s.symbol}</span>
-                    {s.volume > 0 ? (
-                      <span style={{ color: 'var(--agent-text-dim)', fontSize: 9, minWidth: 36, textAlign: 'right' }}>
-                        {s.volume}股
-                      </span>
-                    ) : <span style={{ minWidth: 36 }} />}
-                    <span style={{ color: 'var(--agent-text-dim)', fontSize: 9, minWidth: 88, textAlign: 'right' }}>
-                      {s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : ''}
-                      {s.prev_close > 0 && s.close_price > 0 ? ` (${s.close_price >= s.prev_close ? '+' : ''}${((s.close_price / s.prev_close - 1) * 100).toFixed(1)}%)` : ''}
-                    </span>
-                    <span style={{ color: total >= 0 ? GREEN : RED, fontWeight: 600, minWidth: 52, textAlign: 'right' }}>
-                      {total >= 0 ? '+' : ''}¥{Math.abs(total).toFixed(0)}
-                    </span>
-                  </div>
-                );
-              })}
-              {stocks.length > 6 && (
-                <div style={{ fontSize: 9, color: 'var(--agent-text-dim)', textAlign: 'center', marginTop: 2 }}>
-                  ...还有 {stocks.length - 6} 只
-                </div>
-              )}
-            </div>
-          )}
-          {stocks.length === 0 && (
-            <div style={{ fontSize: 10, color: 'var(--agent-text-dim)' }}>空仓或无行情数据</div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function PieTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
