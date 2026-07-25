@@ -133,9 +133,6 @@ class IndustryLeaderboardService:
         daily_bars, volume_data_status = self._fetch_daily_bars_batch(symbols)
         logger.info(f"[Leaderboard] Daily bars: {len(daily_bars)} stocks ({volume_data_status})")
 
-        # stk_factor_pro 不可用时从 daily 补算 MA
-        indicators = self._compute_indicators_from_daily(indicators, daily_bars)
-
         # 1.9 硬过滤
         candidates, excluded = self._apply_hard_filters(candidates, quotes, indicators)
         logger.info(f"[Leaderboard] After hard filters: {len(candidates)} candidates (excluded {len(excluded)})")
@@ -414,43 +411,6 @@ class IndustryLeaderboardService:
                     }
         except Exception as e:
             logger.error(f"[Leaderboard] stk_factor_pro batch failed: {e}")
-        return indicators
-
-    @staticmethod
-    def _compute_indicators_from_daily(
-        indicators: Dict[str, dict], daily_bars: Dict[str, List[dict]]
-    ) -> Dict[str, dict]:
-        """stk_factor_pro 不可用时，从 daily 日线数据手动计算 MA 作为降级。"""
-        fallback_count = 0
-        for ts_code, bars in daily_bars.items():
-            ind = indicators.get(ts_code, {})
-            # 只在 indicators 缺少 MA 数据时才补算
-            if ind.get("ma5", 0) > 0 and ind.get("ma20", 0) > 0:
-                continue
-            if len(bars) < 5:
-                continue
-            closes = [b["close"] for b in bars]
-            n = len(closes)
-            if not ind:
-                ind = {}
-            if not ind.get("close") and closes:
-                ind["close"] = closes[-1]
-            if not ind.get("ma5") and n >= 5:
-                ind["ma5"] = round(sum(closes[-5:]) / 5, 2)
-            if not ind.get("ma10") and n >= 10:
-                ind["ma10"] = round(sum(closes[-10:]) / 10, 2)
-            if not ind.get("ma20") and n >= 20:
-                ind["ma20"] = round(sum(closes[-20:]) / 20, 2)
-            if not ind.get("ma60") and n >= 60:
-                ind["ma60"] = round(sum(closes[-60:]) / 60, 2)
-            if not ind.get("vol") and bars:
-                ind["vol"] = bars[-1].get("vol", 0)
-            if not ind.get("amount") and bars:
-                ind["amount"] = bars[-1].get("amount", 0)
-            indicators[ts_code] = ind
-            fallback_count += 1
-        if fallback_count:
-            logger.info(f"[Leaderboard] stk_factor_pro unavailable, computed MAs from daily for {fallback_count} stocks")
         return indicators
 
     # ── 1.5 Tushare 日线批量 ─────────────────────────────────
