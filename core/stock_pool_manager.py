@@ -28,13 +28,16 @@ except ImportError:
 
 
 def get_latest_trade_day(method='auto') -> Tuple[Optional[str], str]:
-    """获取最近交易日"""
+    """获取最近交易日（回溯最近 30 天，避免全量 trade_cal 拉取超时）"""
     if ts is None:
         return None, "tushare_unavailable"
     try:
         pro = get_tushare_pro()
-        cal = pro.trade_cal()
         today = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+        cal = pro.trade_cal(start_date=start_date, end_date=today)
+        if cal is None or len(cal) == 0:
+            return None, 'cal_empty'
         is_trade = cal[cal['cal_date'] == today]
         if len(is_trade) > 0 and is_trade.iloc[0]['is_open'] == 1:
             return today, 'today'
@@ -148,8 +151,21 @@ class StockPoolManager:
             else:
                 yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
                 trade_date = yesterday
+
+            # 尝试获取 daily_basic，空则回溯最多 5 个自然日（覆盖周末 + 假期）
             daily_basic = pro.daily_basic(trade_date=trade_date)
-            
+            retry_date = trade_date
+            for _ in range(5):
+                if daily_basic is not None and len(daily_basic) > 0:
+                    break
+                retry_date = (datetime.strptime(retry_date, '%Y%m%d') - timedelta(days=1)).strftime('%Y%m%d')
+                print(f"  - daily_basic({trade_date}) 为空，回溯尝试 {retry_date}")
+                daily_basic = pro.daily_basic(trade_date=retry_date)
+                if daily_basic is not None and len(daily_basic) > 0:
+                    trade_date = retry_date
+
+            print(f"  - daily_basic({trade_date}) 获取到 {len(daily_basic) if daily_basic is not None else 0} 条")
+
             updated_count = 0
             now = datetime.now().isoformat()
             

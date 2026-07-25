@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.market import IndexResponse, IndicesResponse, QuoteResponse, SectorResponse, SectorsResponse, GlobalMarketResponse, GlobalIndexResponse, CommodityResponse, KlineData, KlineResponse, MoneyflowData, MoneyflowResponse, TechnicalData, TechnicalResponse, ProBarData, ProBarResponse, ThsMoneyflowResponse
+from app.models.market import IndexResponse, IndicesResponse, QuoteResponse, SectorResponse, SectorsResponse, GlobalMarketResponse, GlobalIndexResponse, CommodityResponse, KlineData, KlineResponse, MoneyflowData, MoneyflowResponse, TechnicalData, TechnicalResponse, ProBarData, ProBarResponse, ThsMoneyflowResponse, LeaderboardItem, LeaderboardResponse
 
 router = APIRouter(prefix="/market", tags=["Market Data"])
 
@@ -2814,3 +2814,50 @@ async def get_intraday_min(
     except Exception as e:
         logger.error(f"[intraday-min] 获取分钟K线失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取分钟K线失败: {str(e)}")
+
+
+# ── 行业龙头排行 ──
+
+@router.get("/industry-leaderboard", response_model=LeaderboardResponse)
+async def get_industry_leaderboard(
+    limit: int = Query(50, ge=1, le=100, description="返回条数"),
+    sort_by: str = Query("composite_score", description="排序字段: composite_score/trend_score/volume_price_score/industry_relative_score/price_residual_score/capital_score/change_pct"),
+    industry: Optional[str] = Query(None, description="行业筛选（申万一级行业名称）"),
+    refresh: bool = Query(False, description="强制刷新，跳过缓存"),
+):
+    """
+    获取申万一级行业龙头股实时排行。
+
+    110 个申万一级行业，每行业取市值前 3 名候选（约 330 只），通过五维加权评分模型
+    排序：趋势综合 + 量价配合 + 行业相对强度 + 价格残差 + 资金持续性（仅 Top10 实时计算）。
+
+    数据源：
+    - 实时行情：腾讯 qt.gtimg.cn（降级为 Tushare daily）
+    - 技术指标：Tushare stk_factor_pro（昨日盘后确认值）
+    - 日线数据：Tushare daily（超时降级为 volume_ratio 估算）
+    - 资金流向：东方财富实时接口（仅 Top10，不可用时取中性分）
+
+    缓存：60 秒服务端内存缓存，refresh=true 强制刷新。
+    """
+    try:
+        from app.services.industry_leaderboard import IndustryLeaderboardService
+
+        service = IndustryLeaderboardService()
+        result = service.get_leaderboard(
+            limit=limit,
+            sort_by=sort_by,
+            industry=industry,
+            refresh=refresh,
+        )
+
+        return LeaderboardResponse(
+            items=[LeaderboardItem(**item) for item in result["items"]],
+            market_regime=result["market_regime"],
+            industries_covered=result["industries_covered"],
+            data_source=result["data_source"],
+            volume_data=result["volume_data"],
+            updated_at=datetime.fromisoformat(result["updated_at"]),
+        )
+    except Exception as e:
+        logger.error(f"[industry-leaderboard] Failed: {e}")
+        raise HTTPException(status_code=500, detail=f"获取行业龙头排行失败: {str(e)}")

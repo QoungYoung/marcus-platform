@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { LayoutDashboard, BarChart3, TrendingUp, Newspaper, PieChart, Wrench, Calculator, CalendarClock, Bot, FileSearch, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, BarChart3, TrendingUp, Newspaper, PieChart, Wrench, Calculator, CalendarClock, Bot, FileSearch, Crown, Sun, Moon } from 'lucide-react';
 import clsx from 'clsx';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { useThemeStore } from '../store/themeStore';
@@ -16,6 +16,7 @@ const navItems = [
   { path: '/scheduler', labelKey: 'nav.scheduler', icon: CalendarClock },
   { path: '/agent', labelKey: 'nav.agent', icon: Bot },
   { path: '/monitor', labelKey: 'nav.monitor', icon: FileSearch },
+  { path: '/industry-leaderboard', labelKey: 'nav.leaderboard', icon: Crown },
 ];
 
 export default function TopNav() {

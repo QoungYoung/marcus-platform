@@ -10,6 +10,7 @@ import SchedulerPage from './pages/SchedulerPage'
 import TradingAgentPage from './pages/TradingAgentPage'
 import BullCalculatorPage from './pages/BullCalculatorPage'
 import MonitorLogPage from './pages/MonitorLogPage'
+import IndustryLeaderboardPage from './pages/IndustryLeaderboard'
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
           <Route path="agent" element={<TradingAgentPage />} />
           <Route path="calculator" element={<BullCalculatorPage />} />
           <Route path="monitor" element={<MonitorLogPage />} />
+          <Route path="industry-leaderboard" element={<IndustryLeaderboardPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

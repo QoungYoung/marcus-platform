@@ -23,7 +23,8 @@
     "scheduler": "Scheduler",
     "agent": "AI Agent",
     "calculator": "Bull Calculator",
-    "monitor": "Monitor Log"
+    "monitor": "Monitor Log",
+    "leaderboard": "Leaderboard"
   },
   "portfolio": {
     "title": "Portfolio Overview",

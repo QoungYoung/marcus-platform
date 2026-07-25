@@ -304,3 +304,36 @@ class RealtimeIndicatorResponse(BaseModel):
     historical: List[TechnicalData] = []
     warning: str = ""
     updated_at: datetime = datetime.now()
+
+
+# ── 行业龙头排行 ──
+
+class LeaderboardItem(BaseModel):
+    """行业龙头排行单条"""
+    symbol: str                                # ts_code, e.g. "000001.SZ"
+    name: str = ""                             # 股票名称
+    industry: str = ""                         # 申万一级行业
+    market_cap: float = 0                      # 市值(亿)
+    change_pct: float = 0                      # 涨跌幅(%)
+    turnover_rate: float = 0                   # 换手率(%)
+    turnover_amount: float = 0                 # 成交额(元)
+    composite_score: float = 0                 # 综合分 0-100
+    trend_score: float = 0                     # 趋势综合分
+    volume_price_score: float = 0              # 量价配合分
+    industry_relative_score: float = 0          # 行业相对强度分
+    price_residual_score: float = 0            # 价格残差分
+    capital_score: float = 0                   # 资金持续性分
+    capital_data: str = "neutral"              # available / unavailable / neutral
+    warnings: List[str] = []                   # untradeable / high_pe / overheat / dimension_floor
+    data_source: str = "tencent"               # tencent / tushare
+    volume_data: str = "full"                  # full / degraded
+
+
+class LeaderboardResponse(BaseModel):
+    """行业龙头排行响应"""
+    items: List[LeaderboardItem] = []
+    market_regime: str = "transitional"        # trending / ranging / transitional
+    industries_covered: List[str] = []         # 覆盖的行业列表
+    data_source: str = "tencent"               # tencent / tushare
+    volume_data: str = "full"                  # full / degraded
+    updated_at: datetime = datetime.now()

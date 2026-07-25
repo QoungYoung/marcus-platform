@@ -1,0 +1,308 @@
+/* ── 行业龙头排行页面 ── */
+
+.lb-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 20px 24px;
+  overflow: hidden;
+  color: var(--agent-text-primary, #e0e0e0);
+  background: var(--agent-bg-deep, #0f1219);
+}
+
+/* ── 页头 ── */
+.lb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.lb-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lb-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--agent-text-primary, #e8eaed);
+}
+
+/* ── 市场状态标签 ── */
+.lb-regime {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.regime-trending {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+
+.regime-ranging {
+  background: rgba(46, 204, 113, 0.12);
+  color: #2ecc71;
+}
+
+.regime-transitional {
+  background: rgba(243, 156, 18, 0.12);
+  color: #f39c12;
+}
+
+.lb-degraded-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(243, 156, 18, 0.15);
+  color: #f39c12;
+}
+
+/* ── 页头右侧 ── */
+.lb-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lb-industry-select {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--agent-border, #2a2e38);
+  background: var(--agent-card, #1a1d27);
+  color: var(--agent-text-primary, #e0e0e0);
+  font-size: 13px;
+  max-width: 180px;
+  cursor: pointer;
+}
+
+.lb-industry-select:focus {
+  outline: none;
+  border-color: var(--agent-accent, #3498db);
+}
+
+.lb-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--agent-border, #2a2e38);
+  background: var(--agent-card, #1a1d27);
+  color: var(--agent-text-primary, #e0e0e0);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lb-refresh-btn:hover:not(:disabled) {
+  background: var(--agent-accent, #3498db);
+  border-color: var(--agent-accent, #3498db);
+  color: #fff;
+}
+
+.lb-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── 元信息 ── */
+.lb-meta {
+  font-size: 11px;
+  color: var(--agent-text-secondary, #888);
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
+.lb-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: rgba(231, 76, 60, 0.1);
+  color: #e74c3c;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+/* ── 表格 ── */
+.lb-table-wrap {
+  flex: 1;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid var(--agent-border, #2a2e38);
+}
+
+.lb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.lb-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.lb-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--agent-text-secondary, #888);
+  background: var(--agent-card, #1a1d27);
+  border-bottom: 2px solid var(--agent-border, #2a2e38);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.lb-table th.sortable {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.lb-table th.sortable:hover,
+.lb-table th.sortable.active {
+  color: var(--agent-accent, #3498db);
+}
+
+.lb-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(42, 46, 56, 0.5);
+  vertical-align: middle;
+}
+
+.lb-table tbody tr:hover {
+  background: rgba(52, 152, 219, 0.04);
+}
+
+/* ── 列宽 ── */
+.col-rank { width: 40px; text-align: center !important; color: var(--agent-text-secondary, #888); }
+.col-name { min-width: 140px; }
+.col-industry { min-width: 80px; }
+.col-pct { width: 80px; text-align: right !important; font-variant-numeric: tabular-nums; }
+.col-amount { width: 90px; text-align: right !important; font-size: 12px; color: var(--agent-text-secondary, #888); }
+.col-score { width: 70px; text-align: center !important; font-variant-numeric: tabular-nums; }
+.col-score.dim { color: var(--agent-text-secondary, #888); font-size: 12px; }
+
+/* ── 股票名称 ── */
+.lb-stock-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lb-stock-symbol {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--agent-accent, #3498db);
+  min-width: 60px;
+}
+
+.lb-stock-cname {
+  font-weight: 500;
+}
+
+/* ── 警告标签 ── */
+.lb-stock-warnings {
+  display: flex;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.lb-warn-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.lb-warn-tag.untradeable {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+
+.lb-warn-tag.overheat {
+  background: rgba(255, 165, 0, 0.15);
+  color: #ff8c00;
+}
+
+.lb-warn-tag.high-pe {
+  background: rgba(243, 156, 18, 0.12);
+  color: #f39c12;
+}
+
+/* ── 综合分徽章 ── */
+.lb-score-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 12px;
+  color: #fff;
+  min-width: 44px;
+  text-align: center;
+}
+
+/* ── 资金提示 ── */
+.lb-capital-hint {
+  font-size: 10px;
+  color: var(--agent-text-secondary, #888);
+  margin-left: 2px;
+  cursor: help;
+}
+
+/* ── 骨架屏 ── */
+.lb-skeleton-row td {
+  padding: 8px 12px;
+}
+
+.lb-skeleton {
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--agent-card, #1a1d27) 25%, rgba(52,152,219,0.1) 50%, var(--agent-card, #1a1d27) 75%);
+  background-size: 200% 100%;
+  animation: lb-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes lb-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── 响应式 ── */
+@media (max-width: 1200px) {
+  .col-industry { display: none; }
+}
+
+@media (max-width: 900px) {
+  .lb-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .lb-header-right { width: 100%; }
+  .lb-industry-select { flex: 1; max-width: none; }
+}

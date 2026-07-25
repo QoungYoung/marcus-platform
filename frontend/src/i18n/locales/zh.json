@@ -23,7 +23,8 @@
     "scheduler": "调度",
     "agent": "AI助手",
     "calculator": "牛股计算器",
-    "monitor": "监控日志"
+    "monitor": "监控日志",
+    "leaderboard": "龙头排行"
   },
   "portfolio": {
     "title": "账户概览",
