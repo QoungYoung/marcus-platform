@@ -133,6 +133,9 @@ class IndustryLeaderboardService:
         daily_bars, volume_data_status = self._fetch_daily_bars_batch(symbols)
         logger.info(f"[Leaderboard] Daily bars: {len(daily_bars)} stocks ({volume_data_status})")
 
+        # stk_factor_pro 不可用时从 daily 补算 MA
+        indicators = self._compute_indicators_from_daily(indicators, daily_bars)
+
         # 1.9 硬过滤
         candidates, excluded = self._apply_hard_filters(candidates, quotes, indicators)
         logger.info(f"[Leaderboard] After hard filters: {len(candidates)} candidates (excluded {len(excluded)})")
@@ -383,7 +386,6 @@ class IndustryLeaderboardService:
         indicators: Dict[str, dict] = {}
         try:
             pro = _get_tushare_pro()
-            # stk_factor_pro 批量逗号分隔
             for i in range(0, len(symbols), 100):
                 batch = ",".join(symbols[i:i + 100])
                 df = pro.stk_factor_pro(ts_code=batch, limit=len(symbols[i:i + 100]))
@@ -393,18 +395,18 @@ class IndustryLeaderboardService:
                     ts_code = str(row["ts_code"])
                     indicators[ts_code] = {
                         "trade_date": str(row.get("trade_date", "")),
-                        "close": float(row.get("close_qfq", 0) or 0),
-                        "ma5": float(row.get("ma_qfq_5", 0) or 0),
-                        "ma10": float(row.get("ma_qfq_10", 0) or 0),
-                        "ma20": float(row.get("ma_qfq_20", 0) or 0),
-                        "ma60": float(row.get("ma_qfq_60", 0) or 0),
-                        "macd_dif": float(row.get("macd_dif_qfq", 0) or 0),
-                        "macd_dea": float(row.get("macd_dea_qfq", 0) or 0),
-                        "macd": float(row.get("macd_qfq", 0) or 0),  # histogram
-                        "adx": float(row.get("dmi_adx_qfq", 0) or 0),
-                        "pdi": float(row.get("dmi_pdi_qfq", 0) or 0),
-                        "mdi": float(row.get("dmi_mdi_qfq", 0) or 0),
-                        "rsi6": float(row.get("rsi_qfq_6", 0) or 0),
+                        "close": float(row.get("close_qfq", 0) or row.get("close", 0) or 0),
+                        "ma5": float(row.get("ma_qfq_5", 0) or row.get("ma5", 0) or 0),
+                        "ma10": float(row.get("ma_qfq_10", 0) or row.get("ma10", 0) or 0),
+                        "ma20": float(row.get("ma_qfq_20", 0) or row.get("ma20", 0) or 0),
+                        "ma60": float(row.get("ma_qfq_60", 0) or row.get("ma60", 0) or 0),
+                        "macd_dif": float(row.get("macd_dif_qfq", 0) or row.get("macd_dif", 0) or 0),
+                        "macd_dea": float(row.get("macd_dea_qfq", 0) or row.get("macd_dea", 0) or 0),
+                        "macd": float(row.get("macd_qfq", 0) or row.get("macd", 0) or 0),
+                        "adx": float(row.get("dmi_adx_qfq", 0) or row.get("dmi_adx", 0) or 0),
+                        "pdi": float(row.get("dmi_pdi_qfq", 0) or row.get("dmi_pdi", 0) or 0),
+                        "mdi": float(row.get("dmi_mdi_qfq", 0) or row.get("dmi_mdi", 0) or 0),
+                        "rsi6": float(row.get("rsi_qfq_6", 0) or row.get("rsi_6", 0) or 0),
                         "pe_ttm": float(row.get("pe_ttm", 0) or 0),
                         "vol": float(row.get("vol", 0) or 0),
                         "amount": float(row.get("amount", 0) or 0),
@@ -412,6 +414,43 @@ class IndustryLeaderboardService:
                     }
         except Exception as e:
             logger.error(f"[Leaderboard] stk_factor_pro batch failed: {e}")
+        return indicators
+
+    @staticmethod
+    def _compute_indicators_from_daily(
+        indicators: Dict[str, dict], daily_bars: Dict[str, List[dict]]
+    ) -> Dict[str, dict]:
+        """stk_factor_pro 不可用时，从 daily 日线数据手动计算 MA 作为降级。"""
+        fallback_count = 0
+        for ts_code, bars in daily_bars.items():
+            ind = indicators.get(ts_code, {})
+            # 只在 indicators 缺少 MA 数据时才补算
+            if ind.get("ma5", 0) > 0 and ind.get("ma20", 0) > 0:
+                continue
+            if len(bars) < 5:
+                continue
+            closes = [b["close"] for b in bars]
+            n = len(closes)
+            if not ind:
+                ind = {}
+            if not ind.get("close") and closes:
+                ind["close"] = closes[-1]
+            if not ind.get("ma5") and n >= 5:
+                ind["ma5"] = round(sum(closes[-5:]) / 5, 2)
+            if not ind.get("ma10") and n >= 10:
+                ind["ma10"] = round(sum(closes[-10:]) / 10, 2)
+            if not ind.get("ma20") and n >= 20:
+                ind["ma20"] = round(sum(closes[-20:]) / 20, 2)
+            if not ind.get("ma60") and n >= 60:
+                ind["ma60"] = round(sum(closes[-60:]) / 60, 2)
+            if not ind.get("vol") and bars:
+                ind["vol"] = bars[-1].get("vol", 0)
+            if not ind.get("amount") and bars:
+                ind["amount"] = bars[-1].get("amount", 0)
+            indicators[ts_code] = ind
+            fallback_count += 1
+        if fallback_count:
+            logger.info(f"[Leaderboard] stk_factor_pro unavailable, computed MAs from daily for {fallback_count} stocks")
         return indicators
 
     # ── 1.5 Tushare 日线批量 ─────────────────────────────────
