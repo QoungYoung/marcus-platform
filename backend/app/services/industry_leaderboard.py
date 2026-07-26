@@ -70,18 +70,18 @@ REGIME_TRANSITIONAL = "transitional"
 WEIGHTS = {
     REGIME_TRENDING: {
         "trend": 0.28, "volume_price": 0.15,
-        "industry_relative": 0.17, "price_residual": 0.15, "capital": 0.20,
-        "overbought": 0.05,
+        "industry_relative": 0.17, "price_residual": 0.15, "capital": 0.17,
+        "overbought": 0.08,
     },
     REGIME_RANGING: {
         "trend": 0.22, "volume_price": 0.18,
-        "industry_relative": 0.20, "price_residual": 0.18, "capital": 0.17,
-        "overbought": 0.05,
+        "industry_relative": 0.20, "price_residual": 0.18, "capital": 0.14,
+        "overbought": 0.08,
     },
     REGIME_TRANSITIONAL: {
         "trend": 0.25, "volume_price": 0.165,
-        "industry_relative": 0.185, "price_residual": 0.165, "capital": 0.185,
-        "overbought": 0.05,
+        "industry_relative": 0.185, "price_residual": 0.165, "capital": 0.155,
+        "overbought": 0.08,
     },
 }
 
@@ -1580,13 +1580,18 @@ class IndustryLeaderboardService:
     def _compute_overbought_risk(
         self, candidates: List[Dict], indicators: Dict[str, dict]
     ) -> Tuple[Dict[str, float], Dict[str, dict]]:
-        """超买风险维度（纯负向）：RSI6 超买 + KDJ-J 极度超买扣分。
+        """超买风险维度（纯负向）：RSI6 + KDJ-J 双确认才扣分。
 
-        得分范围: -10 (极度超买) ~ 0 (健康)，max = 10。
+        - 阈值：RSI6>78 且 KDJ-J>105 同时满足 → 扣分（双确认避免误伤强势股）
+        - 单项超买仅记录，不扣分
+        - 得分范围: -10 (极度超买) ~ 0 (健康)，max = 10
         """
         scores: Dict[str, float] = {}
         details: Dict[str, dict] = {}
         dim_max = 10
+
+        RSI_THRESHOLD = 78
+        KDJ_THRESHOLD = 105
 
         for c in candidates:
             sym = c["ts_code"]
@@ -1594,35 +1599,51 @@ class IndustryLeaderboardService:
             rsi6 = ind.get("rsi6", 0)
             kdj_j = ind.get("kdj_j", 0)
 
+            rsi_over = rsi6 > RSI_THRESHOLD
+            kdj_over = kdj_j > KDJ_THRESHOLD
+            dual_confirm = rsi_over and kdj_over
+
             sub_scores = []
             total_penalty = 0.0
 
-            # RSI6 超买检测: >70 开始扣分，>85 严重
-            if rsi6 > 70:
-                rsi_penalty = min(5.0, (rsi6 - 70) / 15 * 5.0)  # 70→0, 85→-5
-                total_penalty += rsi_penalty
-                sub_scores.append({
-                    "label": "RSI6超买", "score": -rsi_penalty, "max": 5.0,
-                    "reason": f"RSI6={rsi6:.1f}，超过70进入超买区，追高风险",
-                })
+            # RSI6 子项
+            if rsi_over:
+                if dual_confirm:
+                    rsi_penalty = min(5.0, (rsi6 - RSI_THRESHOLD) / 12 * 5.0)  # 78→0, 90→-5
+                    total_penalty += rsi_penalty
+                    sub_scores.append({
+                        "label": "RSI6超买", "score": -rsi_penalty, "max": 5.0,
+                        "reason": f"RSI6={rsi6:.1f}>78 且 KDJ-J={kdj_j:.1f}>105 双确认超买",
+                    })
+                else:
+                    sub_scores.append({
+                        "label": "RSI6偏高", "score": 0.0, "max": 5.0,
+                        "reason": f"RSI6={rsi6:.1f}>78，但KDJ-J={kdj_j:.1f}未触发，不扣分（强势趋势可能延续）",
+                    })
             else:
                 sub_scores.append({
                     "label": "RSI6正常", "score": 0.0, "max": 5.0,
-                    "reason": f"RSI6={rsi6:.1f}，未超买",
+                    "reason": f"RSI6={rsi6:.1f}≤78，正常",
                 })
 
-            # KDJ-J 极度超买: >100 扣分
-            if kdj_j > 100:
-                j_penalty = min(5.0, (kdj_j - 100) / 20 * 5.0)  # 100→0, 120→-5
-                total_penalty += j_penalty
-                sub_scores.append({
-                    "label": "KDJ-J超买", "score": -j_penalty, "max": 5.0,
-                    "reason": f"KDJ-J={kdj_j:.1f}，超过100极度超买，大概率回调",
-                })
+            # KDJ-J 子项
+            if kdj_over:
+                if dual_confirm:
+                    j_penalty = min(5.0, (kdj_j - KDJ_THRESHOLD) / 15 * 5.0)  # 105→0, 120→-5
+                    total_penalty += j_penalty
+                    sub_scores.append({
+                        "label": "KDJ-J超买", "score": -j_penalty, "max": 5.0,
+                        "reason": f"KDJ-J={kdj_j:.1f}>105 且 RSI6={rsi6:.1f}>78 双确认超买",
+                    })
+                else:
+                    sub_scores.append({
+                        "label": "KDJ-J偏高", "score": 0.0, "max": 5.0,
+                        "reason": f"KDJ-J={kdj_j:.1f}>105，但RSI6={rsi6:.1f}未触发，不扣分",
+                    })
             else:
                 sub_scores.append({
                     "label": "KDJ-J正常", "score": 0.0, "max": 5.0,
-                    "reason": f"KDJ-J={kdj_j:.1f}，未超买",
+                    "reason": f"KDJ-J={kdj_j:.1f}≤105，正常",
                 })
 
             final_score = -total_penalty
