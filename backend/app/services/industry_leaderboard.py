@@ -95,43 +95,66 @@ class IndustryLeaderboardService:
         sort_by: str = "composite_score",
         industry: Optional[str] = None,
         refresh: bool = False,
+        date: Optional[str] = None,
     ) -> dict:
-        """Main entry: fetch, score, rank, cache."""
-        cache_key = f"{sort_by}:{industry or ''}"
+        """Main entry: fetch, score, rank, cache.
+
+        Args:
+            date: Optional historical date in YYYYMMDD format.
+                  When provided, uses Tushare historical data exclusively.
+                  When None, uses real-time sources (Tencent, East Money).
+        """
+        is_historical = bool(date)
+        cache_key = f"{sort_by}:{industry or ''}:{date or 'realtime'}"
         now = time.time()
 
         if not refresh and cache_key in _leaderboard_cache:
             ts, data = _leaderboard_cache[cache_key]
-            if now - ts < _CACHE_TTL:
+            # Historical dates: permanent cache (no TTL expiry)
+            if is_historical or (now - ts < _CACHE_TTL):
                 logger.info(f"[Leaderboard] Cache hit for '{cache_key}' ({now - ts:.0f}s ago)")
                 return data
 
-        logger.info("[Leaderboard] Round 1: fetching ~330 candidates + 3 batch APIs...")
+        logger.info(f"[Leaderboard] Round 1: fetching ~330 candidates + 3 batch APIs (historical={is_historical})...")
 
         # 1.2 候选股筛选
         candidates = self._get_industry_candidates()
         if not candidates:
             return {"items": [], "market_regime": REGIME_TRANSITIONAL, "industries_covered": [],
-                    "data_source": "tencent", "volume_data": "full", "updated_at": datetime.now().isoformat()}
+                    "data_source": "tencent", "volume_data": "full",
+                    "trading_days": [], "updated_at": datetime.now().isoformat()}
 
         symbols = [c["ts_code"] for c in candidates]
         logger.info(f"[Leaderboard] {len(symbols)} candidates from {len(set(c['industry'] for c in candidates))} industries")
 
-        # 1.6 市场状态
-        regime = self._detect_market_regime()
+        # 1.6 市场状态 (历史模式下指定日期)
+        regime = self._detect_market_regime(as_of_date=date)
         logger.info(f"[Leaderboard] Market regime: {regime}")
 
-        # 1.3 实时行情 (腾讯)
-        quotes, data_source = self._fetch_realtime_quotes_batch(symbols)
-        logger.info(f"[Leaderboard] Quotes: {len(quotes)} stocks (source={data_source})")
+        if is_historical:
+            # ── 历史模式：全部使用 Tushare 盘后数据 ──
+            quotes = self._historical_quotes(symbols, date)
+            data_source = "tushare"
+            logger.info(f"[Leaderboard] Historical quotes: {len(quotes)} stocks for {date}")
 
-        # 1.4 技术指标 (Tushare stk_factor_pro)
-        indicators = self._fetch_indicators_batch(symbols)
-        logger.info(f"[Leaderboard] Indicators: {len(indicators)} stocks")
+            indicators = self._historical_indicators(symbols, date)
+            logger.info(f"[Leaderboard] Historical indicators: {len(indicators)} stocks for {date}")
 
-        # 1.5 日线数据 (Tushare daily)
-        daily_bars, volume_data_status = self._fetch_daily_bars_batch(symbols)
-        logger.info(f"[Leaderboard] Daily bars: {len(daily_bars)} stocks ({volume_data_status})")
+            daily_bars, volume_data_status = self._fetch_daily_bars_batch(symbols, end_date=date)
+            logger.info(f"[Leaderboard] Historical daily bars: {len(daily_bars)} stocks ({volume_data_status})")
+        else:
+            # ── 实时模式：现有逻辑不变 ──
+            # 1.3 实时行情 (腾讯)
+            quotes, data_source = self._fetch_realtime_quotes_batch(symbols)
+            logger.info(f"[Leaderboard] Quotes: {len(quotes)} stocks (source={data_source})")
+
+            # 1.4 技术指标 (Tushare stk_factor_pro)
+            indicators = self._fetch_indicators_batch(symbols)
+            logger.info(f"[Leaderboard] Indicators: {len(indicators)} stocks")
+
+            # 1.5 日线数据 (Tushare daily)
+            daily_bars, volume_data_status = self._fetch_daily_bars_batch(symbols)
+            logger.info(f"[Leaderboard] Daily bars: {len(daily_bars)} stocks ({volume_data_status})")
 
         # 1.9 硬过滤
         candidates, excluded = self._apply_hard_filters(candidates, quotes, indicators)
@@ -174,7 +197,10 @@ class IndustryLeaderboardService:
 
         # 1.8 Round 2: Top 10 资金补算
         top10 = candidates[:10]
-        moneyflows = self._fetch_top10_moneyflow([c["ts_code"] for c in top10])
+        if is_historical:
+            moneyflows = self._historical_moneyflow([c["ts_code"] for c in top10], date)
+        else:
+            moneyflows = self._fetch_top10_moneyflow([c["ts_code"] for c in top10])
         capital_scores, cap_details = self._compute_capital_persistence(top10, moneyflows, regime)
 
         for c in top10:
@@ -273,12 +299,16 @@ class IndustryLeaderboardService:
             c["industry"] for c in self._get_industry_candidates()
         ))
 
+        # 最近 20 个交易日列表（前端时间线用）
+        trading_days = self._get_recent_trading_days(20, as_of_date=date)
+
         result = {
             "items": items,
             "market_regime": regime,
             "industries_covered": industries,
             "data_source": data_source,
             "volume_data": volume_data_status,
+            "trading_days": trading_days,
             "updated_at": datetime.now().isoformat(),
         }
 
@@ -518,19 +548,172 @@ class IndustryLeaderboardService:
             logger.error(f"[Leaderboard] stk_factor batch failed: {e}")
         return indicators
 
-    # ── 1.5 Tushare 日线批量 ─────────────────────────────────
 
-    def _fetch_daily_bars_batch(self, symbols: List[str]) -> Tuple[Dict[str, List[dict]], str]:
-        """Tushare daily 批量获取近 20 个交易日 OHLCV。返回 (daily_bars_dict, status)。"""
-        daily_bars: Dict[str, List[dict]] = {}
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=40)).strftime("%Y%m%d")  # 40 calendar days ≈ 20 trading days
+    # ── 1.6 市场状态判别 ────────────────────────────────────
+
+    def _detect_market_regime(self, as_of_date: Optional[str] = None) -> str:
+        """从上证综指 000001.SH 的 ADX + MA5/MA20 判别市场状态。
+
+        Args:
+            as_of_date: Optional YYYYMMDD date. When provided, uses data up to that date.
+        """
+        try:
+            pro = _get_tushare_pro()
+            end_date = as_of_date or datetime.now().strftime("%Y%m%d")
+            start_date = (datetime.strptime(end_date, "%Y%m%d") - timedelta(days=100)).strftime("%Y%m%d")
+            df = pro.stk_factor(ts_code="000001.SH", start_date=start_date, end_date=end_date)
+            if df is None or df.empty:
+                return REGIME_TRANSITIONAL
+            df = df.sort_values("trade_date")
+            closes = [float(v) for v in df["close_qfq"].values if v and float(v) > 0]
+            highs = [float(v) for v in df["high_qfq"].values if v and float(v) > 0]
+            lows = [float(v) for v in df["low_qfq"].values if v and float(v) > 0]
+            ma = self._calc_ma(closes)
+            adx, _, _ = self._calc_adx(highs, lows, closes)
+
+            if adx > 25 and ma["ma5"] > ma["ma20"]:
+                return REGIME_TRENDING
+            elif adx < 20:
+                return REGIME_RANGING
+            else:
+                return REGIME_TRANSITIONAL
+        except Exception as e:
+            logger.warning(f"[Leaderboard] Market regime detection failed: {e}")
+            return REGIME_TRANSITIONAL
+
+    # ── 交易日历 ───────────────────────────────────────────
+
+    @staticmethod
+    def _get_recent_trading_days(n: int = 20, as_of_date: Optional[str] = None) -> List[str]:
+        """Get the most recent N trading days.
+
+        Args:
+            n: Number of trading days to return.
+            as_of_date: Optional YYYYMMDD reference date. When provided, returns
+                        the N trading days up to and including that date.
+        """
+        try:
+            pro = _get_tushare_pro()
+            ref_date = datetime.strptime(as_of_date, "%Y%m%d") if as_of_date else datetime.now()
+            end_date = ref_date.strftime("%Y%m%d")
+            lookback = n * 3
+            start_date = (ref_date - timedelta(days=lookback)).strftime("%Y%m%d")
+            df_cal = pro.trade_cal(exchange='SSE', start_date=start_date, end_date=end_date)
+            if df_cal is not None and not df_cal.empty:
+                open_days = df_cal[df_cal['is_open'] == 1]['cal_date'].tolist()
+                open_days.sort(reverse=True)
+                return open_days[:n]
+        except Exception as e:
+            logger.warning(f"[Leaderboard] trade_cal failed: {e}, using weekday fallback")
+        # Fallback: skip weekends
+        cursor = datetime.strptime(as_of_date, "%Y%m%d") if as_of_date else datetime.now()
+        days = []
+        while len(days) < n:
+            if cursor.weekday() < 5:
+                days.append(cursor.strftime("%Y%m%d"))
+            cursor -= timedelta(days=1)
+        return days
+
+    # ── 历史模式数据获取 ─────────────────────────────────────
+
+    def _historical_quotes(self, symbols: List[str], date: str) -> Dict[str, dict]:
+        """从 Tushare daily 表获取指定日期的行情，组装为与腾讯行情相同格式的 dict。"""
+        quotes: Dict[str, dict] = {}
+        try:
+            pro = _get_tushare_pro()
+            # 需要前一日 pre_close，所以往前多取几天
+            start_date = (datetime.strptime(date, "%Y%m%d") - timedelta(days=5)).strftime("%Y%m%d")
+            for i in range(0, len(symbols), 100):
+                batch = ",".join(symbols[i:i + 100])
+                df = pro.daily(ts_code=batch, start_date=start_date, end_date=date)
+                if df is None or df.empty:
+                    continue
+                df = df.sort_values("trade_date")
+                for ts_code, group in df.groupby("ts_code"):
+                    group = group.reset_index(drop=True)
+                    # 取最后一条（指定日期当天，或最近的交易日）
+                    row = group.iloc[-1]
+                    if str(row["trade_date"]) != date:
+                        continue  # 该股票在指定日期停牌/无交易
+                    # pre_close 从当日行获取
+                    pre_close = float(row.get("pre_close", 0) or 0)
+                    pct = float(row.get("pct_chg", 0) or 0)
+                    quotes[str(ts_code)] = {
+                        "price": float(row["close"]),
+                        "change_pct": pct,
+                        "turnover_rate": 0,  # daily 表无换手率
+                        "amount": float(row["amount"]) * 1000,  # 千元→元
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "open": float(row["open"]),
+                        "pre_close": pre_close,
+                    }
+        except Exception as e:
+            logger.error(f"[Leaderboard] _historical_quotes failed: {e}")
+        return quotes
+
+    def _historical_indicators(self, symbols: List[str], date: str) -> Dict[str, dict]:
+        """从 Tushare stk_factor_pro 获取指定日期之前的技术指标，计算当日 MA/ADX/MACD/RSI。"""
+        indicators: Dict[str, dict] = {}
+        end_date = date
+        start_date = (datetime.strptime(date, "%Y%m%d") - timedelta(days=100)).strftime("%Y%m%d")
 
         try:
             pro = _get_tushare_pro()
             for i in range(0, len(symbols), 100):
                 batch = ",".join(symbols[i:i + 100])
-                df = pro.daily(ts_code=batch, start_date=start_date, end_date=end_date)
+                df = pro.stk_factor(ts_code=batch, start_date=start_date, end_date=end_date)
+                if df is None or df.empty:
+                    continue
+                df = df.sort_values("trade_date")
+                for ts_code, group in df.groupby("ts_code"):
+                    group = group.reset_index(drop=True)
+                    # 只取到 date 为止的数据
+                    mask = group["trade_date"] <= date
+                    group = group[mask].reset_index(drop=True)
+                    if group.empty:
+                        continue
+                    latest = group.iloc[-1]
+                    closes = [float(v) for v in group["close_qfq"].values if v and float(v) > 0]
+                    highs = [float(v) for v in group["high_qfq"].values if v and float(v) > 0]
+                    lows = [float(v) for v in group["low_qfq"].values if v and float(v) > 0]
+                    ma = self._calc_ma(closes)
+                    adx, pdi, mdi = self._calc_adx(highs, lows, closes)
+                    indicators[str(ts_code)] = {
+                        "trade_date": str(latest.get("trade_date", "")),
+                        "close": float(latest.get("close_qfq", 0) or latest.get("close", 0) or 0),
+                        "ma5": ma["ma5"], "ma10": ma["ma10"], "ma20": ma["ma20"], "ma60": ma["ma60"],
+                        "macd_dif": float(latest.get("macd_dif", 0) or 0),
+                        "macd_dea": float(latest.get("macd_dea", 0) or 0),
+                        "macd": float(latest.get("macd", 0) or 0),
+                        "adx": adx, "pdi": pdi, "mdi": mdi,
+                        "rsi6": float(latest.get("rsi_6", 0) or 0),
+                        "pe_ttm": 0,
+                        "vol": float(latest.get("vol", 0) or 0),
+                        "amount": float(latest.get("amount", 0) or 0),
+                        "volume_ratio": float(latest.get("volume_ratio", 0) or 0),
+                    }
+        except Exception as e:
+            logger.error(f"[Leaderboard] _historical_indicators failed: {e}")
+        return indicators
+
+    def _fetch_daily_bars_batch(
+        self, symbols: List[str], end_date: Optional[str] = None
+    ) -> Tuple[Dict[str, List[dict]], str]:
+        """Tushare daily 批量获取近 20 个交易日 OHLCV。返回 (daily_bars_dict, status)。
+
+        Args:
+            end_date: Optional YYYYMMDD. When provided, fetches data up to this date.
+        """
+        daily_bars: Dict[str, List[dict]] = {}
+        ref_end = end_date or datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.strptime(ref_end, "%Y%m%d") - timedelta(days=40)).strftime("%Y%m%d")
+
+        try:
+            pro = _get_tushare_pro()
+            for i in range(0, len(symbols), 100):
+                batch = ",".join(symbols[i:i + 100])
+                df = pro.daily(ts_code=batch, start_date=start_date, end_date=ref_end)
                 if df is None or df.empty:
                     continue
                 df = df.sort_values("trade_date")
@@ -555,33 +738,175 @@ class IndustryLeaderboardService:
 
         return daily_bars, status
 
-    # ── 1.6 市场状态判别 ────────────────────────────────────
-
-    def _detect_market_regime(self) -> str:
-        """从上证综指 000001.SH 的 ADX + MA5/MA20 判别市场状态。"""
+    def _historical_moneyflow(self, top10_symbols: List[str], date: str) -> Dict[str, dict]:
+        """从 Tushare moneyflow 表获取指定日期的资金流向（仅 Top10）。"""
+        moneyflows: Dict[str, dict] = {}
         try:
             pro = _get_tushare_pro()
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=100)).strftime("%Y%m%d")
-            df = pro.stk_factor(ts_code="000001.SH", start_date=start_date, end_date=end_date)
-            if df is None or df.empty:
-                return REGIME_TRANSITIONAL
-            df = df.sort_values("trade_date")
-            closes = [float(v) for v in df["close_qfq"].values if v and float(v) > 0]
-            highs = [float(v) for v in df["high_qfq"].values if v and float(v) > 0]
-            lows = [float(v) for v in df["low_qfq"].values if v and float(v) > 0]
-            ma = self._calc_ma(closes)
-            adx, _, _ = self._calc_adx(highs, lows, closes)
-
-            if adx > 25 and ma["ma5"] > ma["ma20"]:
-                return REGIME_TRENDING
-            elif adx < 20:
-                return REGIME_RANGING
-            else:
-                return REGIME_TRANSITIONAL
+            for ts_code in top10_symbols:
+                df = pro.moneyflow(ts_code=ts_code, start_date=date, end_date=date)
+                if df is None or df.empty:
+                    continue
+                row = df.iloc[0]
+                code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
+                # 使用 net_mf_amount (万元) 作为主力净流入的近似
+                net_amount = float(row.get("net_mf_amount", 0) or 0)
+                buy_lg = float(row.get("buy_lg_amount", 0) or 0)
+                sell_lg = float(row.get("sell_lg_amount", 0) or 0)
+                buy_elg = float(row.get("buy_elg_amount", 0) or 0)
+                sell_elg = float(row.get("sell_elg_amount", 0) or 0)
+                main_net = (buy_lg + buy_elg - sell_lg - sell_elg) * 10000  # 万元→元
+                moneyflows[ts_code] = {
+                    "symbol": code,
+                    "name": "",
+                    "price": 0,
+                    "change_pct": "0",
+                    "turnover_rate": "0",
+                    "main_net": main_net,
+                    "main_pct": "0",  # Tushare moneyflow 无百分比
+                    "d5_main_net": 0,
+                    "d5_main_pct": "0",
+                }
+                time.sleep(0.1)  # QPS 限制
         except Exception as e:
-            logger.warning(f"[Leaderboard] Market regime detection failed: {e}")
-            return REGIME_TRANSITIONAL
+            logger.warning(f"[Leaderboard] _historical_moneyflow failed: {e}")
+        return moneyflows
+
+    # ── 前瞻收益验证 ─────────────────────────────────────────
+
+    def get_forward_returns(self, symbol: str, date: str) -> dict:
+        """Return forward-looking returns for a stock from a historical date.
+
+        Computes next-day, 3-day, and 5-day cumulative returns,
+        plus 10 daily close prices after the given date for sparkline.
+        """
+        try:
+            pro = _get_tushare_pro()
+
+            # Normalize ts_code
+            if "." not in symbol:
+                code = symbol.lstrip("SHEZBJ")
+                if len(code) == 6:
+                    symbol = f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
+
+            # Get the most recent trading day to check if date is latest
+            ref_date = datetime.strptime(date, "%Y%m%d")
+            today_str = datetime.now().strftime("%Y%m%d")
+            df_cal = pro.trade_cal(exchange='SSE',
+                                   start_date=(datetime.now() - timedelta(days=10)).strftime("%Y%m%d"),
+                                   end_date=today_str)
+            latest_trading_day = today_str
+            if df_cal is not None and not df_cal.empty:
+                open_days = df_cal[df_cal['is_open'] == 1]['cal_date'].tolist()
+                open_days.sort(reverse=True)
+                latest_trading_day = open_days[0] if open_days else today_str
+
+            if date >= latest_trading_day:
+                return {
+                    "symbol": symbol, "name": "", "benchmark_date": date,
+                    "available": False, "warning": "最新交易日尚无前瞻数据",
+                    "next_day_pct": None, "day3_pct": None, "day5_pct": None,
+                    "sparkline_closes": [], "sparkline_dates": [],
+                }
+
+            # Get post-date trading days via trade_cal
+            start_cal = (ref_date + timedelta(days=1)).strftime("%Y%m%d")
+            end_cal = (ref_date + timedelta(days=30)).strftime("%Y%m%d")
+            df_cal = pro.trade_cal(exchange='SSE', start_date=start_cal, end_date=end_cal)
+            future_trading_days: List[str] = []
+            if df_cal is not None and not df_cal.empty:
+                future_trading_days = df_cal[df_cal['is_open'] == 1]['cal_date'].tolist()
+
+            if len(future_trading_days) < 1:
+                return {
+                    "symbol": symbol, "name": "", "benchmark_date": date,
+                    "available": False,
+                    "warning": "无法获取后续交易日数据",
+                    "next_day_pct": None, "day3_pct": None, "day5_pct": None,
+                    "sparkline_closes": [], "sparkline_dates": [],
+                }
+
+            # Get benchmark close price
+            start_daily = (ref_date - timedelta(days=5)).strftime("%Y%m%d")
+            end_daily = future_trading_days[-1] if future_trading_days else (ref_date + timedelta(days=20)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=symbol, start_date=start_daily, end_date=end_daily)
+            if df is None or df.empty:
+                return {
+                    "symbol": symbol, "name": "", "benchmark_date": date,
+                    "available": False, "warning": f"{symbol} 在 {date} 附近无日线数据",
+                    "next_day_pct": None, "day3_pct": None, "day5_pct": None,
+                    "sparkline_closes": [], "sparkline_dates": [],
+                }
+
+            df = df.sort_values("trade_date")
+            closed = df.set_index("trade_date")
+
+            # Benchmark close
+            if date not in closed.index:
+                # Find nearest trading day before date
+                prev_dates = [d for d in closed.index if d <= date]
+                if not prev_dates:
+                    return {"symbol": symbol, "name": "", "benchmark_date": date,
+                            "available": False, "warning": "基准日期之前无交易数据",
+                            "next_day_pct": None, "day3_pct": None, "day5_pct": None,
+                            "sparkline_closes": [], "sparkline_dates": []}
+                benchmark_date_actual = prev_dates[-1]
+            else:
+                benchmark_date_actual = date
+
+            base_close = float(closed.loc[benchmark_date_actual, "close"])
+
+            # Calculate returns for next-day, 3-day, 5-day
+            def _get_return(n: int) -> Optional[float]:
+                if n > len(future_trading_days):
+                    return None
+                target_date = future_trading_days[n - 1]
+                if target_date not in closed.index:
+                    return None
+                target_close = float(closed.loc[target_date, "close"])
+                return round((target_close - base_close) / base_close * 100, 2)
+
+            next_day_pct = _get_return(1)
+            day3_pct = _get_return(3)
+            day5_pct = _get_return(5)
+
+            # Sparkline: 10 daily closes after benchmark date
+            sparkline_closes: List[float] = []
+            sparkline_dates: List[str] = []
+            for td in future_trading_days[:10]:
+                if td in closed.index:
+                    sparkline_closes.append(round(float(closed.loc[td, "close"]), 2))
+                    sparkline_dates.append(td)
+
+            # Get stock name from stock_pool
+            name = ""
+            try:
+                conn = sqlite3.connect(self._db_path)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM stock_pool WHERE ts_code = ?", (symbol,))
+                row = cursor.fetchone()
+                if row:
+                    name = row["name"]
+                conn.close()
+            except Exception:
+                pass
+
+            return {
+                "symbol": symbol, "name": name, "benchmark_date": benchmark_date_actual,
+                "available": True, "warning": "",
+                "next_day_pct": next_day_pct, "day3_pct": day3_pct, "day5_pct": day5_pct,
+                "sparkline_closes": sparkline_closes, "sparkline_dates": sparkline_dates,
+            }
+
+        except Exception as e:
+            logger.error(f"[Leaderboard] get_forward_returns failed for {symbol} @ {date}: {e}")
+            return {
+                "symbol": symbol, "name": "", "benchmark_date": date,
+                "available": False, "warning": str(e),
+                "next_day_pct": None, "day3_pct": None, "day5_pct": None,
+                "sparkline_closes": [], "sparkline_dates": [],
+            }
 
     # ── 1.7 Round 1 四维评分 ─────────────────────────────────
 

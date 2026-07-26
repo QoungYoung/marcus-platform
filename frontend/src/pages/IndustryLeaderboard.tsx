@@ -47,7 +47,21 @@ interface LeaderboardResponse {
   industries_covered: string[];
   data_source: string;
   volume_data: string;
+  trading_days: string[];
   updated_at: string;
+}
+
+interface ForwardReturnsData {
+  symbol: string;
+  name: string;
+  benchmark_date: string;
+  available: boolean;
+  next_day_pct: number | null;
+  day3_pct: number | null;
+  day5_pct: number | null;
+  sparkline_closes: number[];
+  sparkline_dates: string[];
+  warning: string;
 }
 
 type SortKey = 'composite_score' | 'trend_score' | 'volume_price_score' | 'industry_relative_score' | 'price_residual_score' | 'capital_score' | 'change_pct';
@@ -138,6 +152,12 @@ const DIM_ICONS: Record<string, string> = {
   '价格残差': '◇',
   '资金持续性': '◆',
 };
+
+// ── 日期格式化 ──
+function fmtDate(ymd: string): string {
+  if (ymd.length !== 8) return ymd;
+  return `${ymd.substring(4, 6)}/${ymd.substring(6, 8)}`;
+}
 
 // ══════════════════════════════════════════════════════════════
 //  背景 Canvas
@@ -298,6 +318,9 @@ export default function IndustryLeaderboardPage() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [modalItem, setModalItem] = useState<LeaderboardItem | null>(null);
   const [entranceDone, setEntranceDone] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [forwardReturns, setForwardReturns] = useState<ForwardReturnsData | null>(null);
+  const [forwardLoading, setForwardLoading] = useState(false);
 
   useBackgroundCanvas(canvasRef);
 
@@ -309,8 +332,25 @@ export default function IndustryLeaderboardPage() {
     }
   }, [loading, data?.items.length]);
 
-  const openModal = (item: LeaderboardItem) => setModalItem(item);
-  const closeModal = () => setModalItem(null);
+  const openModal = async (item: LeaderboardItem) => {
+    setModalItem(item);
+    // If viewing historical date, fetch forward returns
+    if (selectedDate && data?.trading_days?.length && selectedDate < data.trading_days[0]) {
+      setForwardLoading(true);
+      setForwardReturns(null);
+      try {
+        const resp = await marketApi.getForwardReturns(item.symbol, selectedDate);
+        setForwardReturns(resp.data as ForwardReturnsData);
+      } catch {
+        setForwardReturns(null);
+      } finally {
+        setForwardLoading(false);
+      }
+    } else {
+      setForwardReturns(null);
+    }
+  };
+  const closeModal = () => { setModalItem(null); setForwardReturns(null); };
 
   const fetchData = useCallback(async (refresh = false) => {
     try {
@@ -320,6 +360,7 @@ export default function IndustryLeaderboardPage() {
         sort_by: sortBy,
         industry: filterIndustry || undefined,
         refresh,
+        date: selectedDate || undefined,
       });
       setData(resp.data as LeaderboardResponse);
       setLastUpdate(new Date());
@@ -329,7 +370,7 @@ export default function IndustryLeaderboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [sortBy, filterIndustry]);
+  }, [sortBy, filterIndustry, selectedDate]);
 
   useEffect(() => {
     setLoading(true);
@@ -379,6 +420,27 @@ export default function IndustryLeaderboardPage() {
           )}
           <hr className="divider-hr" />
         </div>
+
+        {/* ── 时间线 ── */}
+        {data?.trading_days && data.trading_days.length > 0 && (
+          <div className="timeline-bar">
+            <button
+              className={`timeline-pill ${!selectedDate ? 'timeline-pill--active' : ''}`}
+              onClick={() => setSelectedDate(null)}
+            >
+              最新
+            </button>
+            {data.trading_days.map((d) => (
+              <button
+                key={d}
+                className={`timeline-pill ${selectedDate === d ? 'timeline-pill--active' : ''}`}
+                onClick={() => setSelectedDate(d)}
+              >
+                {fmtDate(d)}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* ── 工具栏 ── */}
         <div className="toolbar">
@@ -696,6 +758,78 @@ export default function IndustryLeaderboardPage() {
                 );
               })()}
             </div>
+
+            {/* ── 前瞻验证 (仅历史日期显示) ── */}
+            {selectedDate && data?.trading_days?.length && selectedDate < data.trading_days[0] && (
+              <div className="bp-forward">
+                <div className="bp-forward-header">
+                  <span className="bp-forward-label">FORWARD VALIDATION</span>
+                  <span className="bp-forward-date">基准日: {selectedDate}</span>
+                </div>
+
+                {forwardLoading ? (
+                  <div className="bp-forward-loading">加载前瞻数据...</div>
+                ) : forwardReturns && forwardReturns.available ? (
+                  <>
+                    <div className="bp-forward-cards">
+                      {[
+                        { label: '次日涨幅', pct: forwardReturns.next_day_pct },
+                        { label: '3日涨幅', pct: forwardReturns.day3_pct },
+                        { label: '5日涨幅', pct: forwardReturns.day5_pct },
+                      ].map((m) => (
+                        <div key={m.label} className="bp-forward-card">
+                          <div className="bp-forward-card-label">{m.label}</div>
+                          <div
+                            className="bp-forward-card-value"
+                            style={{ color: m.pct != null ? (m.pct >= 0 ? '#e74c3c' : '#2ecc71') : '#6b7280' }}
+                          >
+                            {m.pct != null ? `${m.pct > 0 ? '+' : ''}${m.pct.toFixed(2)}%` : '—'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Sparkline */}
+                    {forwardReturns.sparkline_closes.length >= 2 && (
+                      <div className="bp-sparkline">
+                        <svg
+                          viewBox={`0 0 ${forwardReturns.sparkline_closes.length * 30} 60`}
+                          className="bp-sparkline-svg"
+                        >
+                          <polyline
+                            fill="none"
+                            stroke="var(--bp-accent, #2d8cf0)"
+                            strokeWidth="1.5"
+                            points={(() => {
+                              const prices = forwardReturns.sparkline_closes;
+                              const min = Math.min(...prices);
+                              const max = Math.max(...prices);
+                              const range = max - min || 1;
+                              return prices
+                                .map((p, i) => {
+                                  const x = i * 30 + 10;
+                                  const y = 55 - ((p - min) / range) * 45;
+                                  return `${x},${y.toFixed(1)}`;
+                                })
+                                .join(' ');
+                            })()}
+                          />
+                        </svg>
+                        <div className="bp-sparkline-dates">
+                          {forwardReturns.sparkline_dates.map((d, i) => (
+                            <span key={i}>{fmtDate(d)}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="bp-forward-empty">
+                    {forwardReturns?.warning || '暂无前瞻数据'}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

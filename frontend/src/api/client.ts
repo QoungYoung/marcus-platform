@@ -49,8 +49,10 @@ export const marketApi = {
   getProBar: (symbol: string, params?: { start_date?: string; end_date?: string; adj?: string; limit?: number }) =>
     api.get(`/market/pro-bar/${symbol}`, { params }),
   getIndustryLeaderboard: (params?: {
-    limit?: number; sort_by?: string; industry?: string; refresh?: boolean;
+    limit?: number; sort_by?: string; industry?: string; refresh?: boolean; date?: string;
   }) => api.get('/market/industry-leaderboard', { params }),
+  getForwardReturns: (symbol: string, date: string) =>
+    api.get(`/market/forward-returns/${symbol}`, { params: { date } }),
 }
 
 // News APIs

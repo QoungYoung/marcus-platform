@@ -353,4 +353,21 @@ class LeaderboardResponse(BaseModel):
     industries_covered: List[str] = []         # 覆盖的行业列表
     data_source: str = "tencent"               # tencent / tushare
     volume_data: str = "full"                  # full / degraded
+    trading_days: List[str] = []               # 最近 20 个交易日，前端时间线用
     updated_at: datetime = datetime.now()
+
+
+# ── 前瞻收益验证 ──
+
+class ForwardReturnsResponse(BaseModel):
+    """指定日期之后的前瞻收益数据"""
+    symbol: str = ""
+    name: str = ""
+    benchmark_date: str = ""                   # 基准日期 YYYYMMDD
+    available: bool = True                     # 是否有前瞻数据（最新交易日无数据）
+    next_day_pct: Optional[float] = None       # 次日涨幅(%)
+    day3_pct: Optional[float] = None           # 3日累计涨幅(%)
+    day5_pct: Optional[float] = None           # 5日累计涨幅(%)
+    sparkline_closes: List[float] = []         # 基准日之后 10 个交易日收盘价（用于迷你曲线）
+    sparkline_dates: List[str] = []            # 对应的交易日期
+    warning: str = ""                          # 边界情况说明

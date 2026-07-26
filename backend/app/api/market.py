@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.market import IndexResponse, IndicesResponse, QuoteResponse, SectorResponse, SectorsResponse, GlobalMarketResponse, GlobalIndexResponse, CommodityResponse, KlineData, KlineResponse, MoneyflowData, MoneyflowResponse, TechnicalData, TechnicalResponse, ProBarData, ProBarResponse, ThsMoneyflowResponse, LeaderboardItem, LeaderboardResponse
+from app.models.market import IndexResponse, IndicesResponse, QuoteResponse, SectorResponse, SectorsResponse, GlobalMarketResponse, GlobalIndexResponse, CommodityResponse, KlineData, KlineResponse, MoneyflowData, MoneyflowResponse, TechnicalData, TechnicalResponse, ProBarData, ProBarResponse, ThsMoneyflowResponse, LeaderboardItem, LeaderboardResponse, ForwardReturnsResponse
 
 router = APIRouter(prefix="/market", tags=["Market Data"])
 
@@ -2824,20 +2824,23 @@ async def get_industry_leaderboard(
     sort_by: str = Query("composite_score", description="排序字段: composite_score/trend_score/volume_price_score/industry_relative_score/price_residual_score/capital_score/change_pct"),
     industry: Optional[str] = Query(None, description="行业筛选（申万一级行业名称）"),
     refresh: bool = Query(False, description="强制刷新，跳过缓存"),
+    date: Optional[str] = Query(None, description="历史日期 YYYYMMDD，传入时使用 Tushare 历史数据重建排行榜"),
 ):
     """
-    获取申万一级行业龙头股实时排行。
+    获取申万一级行业龙头股排行（支持历史回溯）。
 
     110 个申万一级行业，每行业取市值前 3 名候选（约 330 只），通过五维加权评分模型
     排序：趋势综合 + 量价配合 + 行业相对强度 + 价格残差 + 资金持续性（仅 Top10 实时计算）。
 
-    数据源：
+    实时模式（date 为空）：
     - 实时行情：腾讯 qt.gtimg.cn（降级为 Tushare daily）
     - 技术指标：Tushare stk_factor_pro（昨日盘后确认值）
-    - 日线数据：Tushare daily（超时降级为 volume_ratio 估算）
     - 资金流向：东方财富实时接口（仅 Top10，不可用时取中性分）
+    - 缓存：60 秒服务端内存缓存
 
-    缓存：60 秒服务端内存缓存，refresh=true 强制刷新。
+    历史模式（date 非空）：
+    - 行情/指标/资金流向 全部使用 Tushare 盘后数据
+    - 缓存：永久有效（历史数据不变）
     """
     try:
         from app.services.industry_leaderboard import IndustryLeaderboardService
@@ -2848,6 +2851,7 @@ async def get_industry_leaderboard(
             sort_by=sort_by,
             industry=industry,
             refresh=refresh,
+            date=date,
         )
 
         return LeaderboardResponse(
@@ -2856,8 +2860,36 @@ async def get_industry_leaderboard(
             industries_covered=result["industries_covered"],
             data_source=result["data_source"],
             volume_data=result["volume_data"],
+            trading_days=result.get("trading_days", []),
             updated_at=datetime.fromisoformat(result["updated_at"]),
         )
     except Exception as e:
         logger.error(f"[industry-leaderboard] Failed: {e}")
         raise HTTPException(status_code=500, detail=f"获取行业龙头排行失败: {str(e)}")
+
+
+# ── 前瞻收益验证 ──
+
+@router.get("/forward-returns/{symbol}", response_model=ForwardReturnsResponse)
+async def get_forward_returns(
+    symbol: str,
+    date: str = Query(..., description="基准日期 YYYYMMDD"),
+):
+    """
+    返回指定日期之后的前瞻收益数据（用于历史排行榜弹窗验证评分预测能力）。
+
+    包含次日涨幅、3日累计涨幅、5日累计涨幅，以及 10 日收盘价用于迷你 sparkline 曲线。
+
+    边界处理：
+    - date 为最新交易日时返回 available=false（尚无前瞻数据）
+    - symbol 在 date 无数据时返回空
+    - 非交易日 date 通过 trade_cal 自动找到最近交易日
+    """
+    try:
+        from app.services.industry_leaderboard import IndustryLeaderboardService
+        service = IndustryLeaderboardService()
+        result = service.get_forward_returns(symbol, date)
+        return ForwardReturnsResponse(**result)
+    except Exception as e:
+        logger.error(f"[forward-returns] Failed for {symbol} @ {date}: {e}")
+        raise HTTPException(status_code=500, detail=f"获取前瞻收益失败: {str(e)}")
