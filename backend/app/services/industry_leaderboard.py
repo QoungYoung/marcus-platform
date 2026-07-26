@@ -843,7 +843,7 @@ class IndustryLeaderboardService:
             df_cal = pro.trade_cal(exchange='SSE', start_date=start_cal, end_date=end_cal)
             future_trading_days: List[str] = []
             if df_cal is not None and not df_cal.empty:
-                future_trading_days = [str(d) for d in df_cal[df_cal['is_open'] == 1]['cal_date'].tolist()]
+                future_trading_days = sorted(str(d) for d in df_cal[df_cal['is_open'] == 1]['cal_date'].tolist())
 
             if len(future_trading_days) < 1:
                 return {
