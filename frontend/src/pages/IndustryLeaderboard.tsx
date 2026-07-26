@@ -92,6 +92,15 @@ function tierCardClass(key: string) {
   return `rank-card tier-${key}`;
 }
 
+function getStatRank(pct: number): { letter: string; color: string; label: string } {
+  if (pct >= 90) return { letter: 'S', color: '#c6922e', label: '卓越' };
+  if (pct >= 75) return { letter: 'A', color: '#8a4fc0', label: '优秀' };
+  if (pct >= 60) return { letter: 'B', color: '#3d8cc7', label: '良好' };
+  if (pct >= 40) return { letter: 'C', color: '#6b7280', label: '一般' };
+  if (pct >= 20) return { letter: 'D', color: '#9ca3af', label: '较弱' };
+  return { letter: 'E', color: '#b0b8c4', label: '极弱' };
+}
+
 function pct(score: number, max: number): number {
   return Math.min(100, Math.max(0, (score / max) * 100));
 }
@@ -563,46 +572,129 @@ export default function IndustryLeaderboardPage() {
               </div>
             </div>
 
-            {/* 参数网格 */}
-            <div className="bp-grid">
-              {Object.entries(modalItem.score_detail).map(([key, dim]) => {
-                const dimPct = pct(dim.score, dim.max);
+            {/* ── 战斗参数 ── */}
+            <div className="bp-params">
+              {(() => {
+                const entries = Object.entries(modalItem.score_detail);
+                const topRow = entries.slice(0, 2);
+                const bottomRow = entries.slice(2, 5);
                 return (
-                  <div key={key} className="bp-module">
-                    <div className="bp-module-head">
-                      <span className="bp-module-icon">{DIM_ICONS[dim.label] || '·'}</span>
-                      <span className="bp-module-label">{dim.label}</span>
-                      <span className="bp-module-score">
-                        {dim.score.toFixed(1)}<i>/ {dim.max}</i>
-                      </span>
-                    </div>
-                    <div className="bp-module-bar">
-                      <div
-                        className="bp-module-fill"
-                        style={{
-                          width: `${dimPct}%`,
-                          boxShadow: dimPct > 75 ? '0 0 10px var(--bp-glow)' : 'none',
-                        }}
-                      />
-                      <div className="bp-module-bar-tick" style={{ left: '25%' }} />
-                      <div className="bp-module-bar-tick" style={{ left: '50%' }} />
-                      <div className="bp-module-bar-tick" style={{ left: '75%' }} />
-                    </div>
-                    <div className="bp-subs">
-                      {dim.sub_scores.map((sub, si) => (
-                        <div key={si} className="bp-sub">
-                          <div className="bp-sub-head">
-                            <span className="bp-sub-dot" />
-                            <span>{sub.label}</span>
-                            <span className="bp-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
+                  <>
+                    <div className="bp-stat-row bp-stat-row--top">
+                      {topRow.map(([key, dim]) => {
+                        const dimPct = pct(dim.score, dim.max);
+                        const rank = getStatRank(dimPct);
+                        return (
+                          <div key={key} className="bp-stat-card bp-stat-card--large">
+                            <div className="bp-stat-card-inner">
+                              <div className="bp-stat-top">
+                                <div className="bp-stat-info">
+                                  <span className="bp-stat-icon">{DIM_ICONS[dim.label] || '·'}</span>
+                                  <span className="bp-stat-label">{dim.label}</span>
+                                </div>
+                                <div className="bp-stat-rank" style={{ borderColor: rank.color, color: rank.color }}>
+                                  <span className="bp-stat-rank-letter">{rank.letter}</span>
+                                  <span className="bp-stat-rank-label">{rank.label}</span>
+                                </div>
+                              </div>
+                              <div className="bp-stat-value-row">
+                                <span className="bp-stat-value" style={{ color: rank.color }}>
+                                  {dim.score.toFixed(1)}
+                                </span>
+                                <span className="bp-stat-max">/ {dim.max}</span>
+                              </div>
+                              <div className="bp-stat-gauge">
+                                <div className="bp-stat-gauge-track">
+                                  {[20, 40, 60, 75, 90].map((threshold) => (
+                                    <div key={threshold} className="bp-stat-gauge-notch" style={{ left: `${threshold}%` }} />
+                                  ))}
+                                  <div
+                                    className="bp-stat-gauge-fill"
+                                    style={{
+                                      width: `${dimPct}%`,
+                                      background: rank.color,
+                                      boxShadow: dimPct >= 60 ? `0 0 8px ${rank.color}66` : 'none',
+                                    }}
+                                  />
+                                </div>
+                                <div className="bp-stat-gauge-labels">
+                                  <span>E</span><span>D</span><span>C</span><span>B</span><span>A</span><span>S</span>
+                                </div>
+                              </div>
+                              <div className="bp-stat-attributes">
+                                {dim.sub_scores.map((sub, si) => (
+                                  <div key={si} className="bp-attr">
+                                    <div className="bp-attr-head">
+                                      <span className="bp-attr-dot" />
+                                      <span className="bp-attr-name">{sub.label}</span>
+                                      <span className="bp-attr-val">{sub.score.toFixed(1)}</span>
+                                    </div>
+                                    <p className="bp-attr-desc">{sub.reason}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
                           </div>
-                          <p className="bp-sub-reason">{sub.reason}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
-                  </div>
+                    <div className="bp-stat-row bp-stat-row--bottom">
+                      {bottomRow.map(([key, dim]) => {
+                        const dimPct = pct(dim.score, dim.max);
+                        const rank = getStatRank(dimPct);
+                        return (
+                          <div key={key} className="bp-stat-card bp-stat-card--small">
+                            <div className="bp-stat-card-inner">
+                              <div className="bp-stat-top">
+                                <div className="bp-stat-info">
+                                  <span className="bp-stat-icon">{DIM_ICONS[dim.label] || '·'}</span>
+                                  <span className="bp-stat-label">{dim.label}</span>
+                                </div>
+                                <div className="bp-stat-rank" style={{ borderColor: rank.color, color: rank.color }}>
+                                  <span className="bp-stat-rank-letter">{rank.letter}</span>
+                                </div>
+                              </div>
+                              <div className="bp-stat-value-row">
+                                <span className="bp-stat-value bp-stat-value--sm" style={{ color: rank.color }}>
+                                  {dim.score.toFixed(1)}
+                                </span>
+                                <span className="bp-stat-max">/ {dim.max}</span>
+                              </div>
+                              <div className="bp-stat-gauge">
+                                <div className="bp-stat-gauge-track">
+                                  {[20, 40, 60, 75, 90].map((threshold) => (
+                                    <div key={threshold} className="bp-stat-gauge-notch" style={{ left: `${threshold}%` }} />
+                                  ))}
+                                  <div
+                                    className="bp-stat-gauge-fill"
+                                    style={{
+                                      width: `${dimPct}%`,
+                                      background: rank.color,
+                                      boxShadow: dimPct >= 60 ? `0 0 8px ${rank.color}66` : 'none',
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                              <div className="bp-stat-attributes">
+                                {dim.sub_scores.map((sub, si) => (
+                                  <div key={si} className="bp-attr">
+                                    <div className="bp-attr-head">
+                                      <span className="bp-attr-dot" />
+                                      <span className="bp-attr-name">{sub.label}</span>
+                                      <span className="bp-attr-val">{sub.score.toFixed(1)}</span>
+                                    </div>
+                                    <p className="bp-attr-desc">{sub.reason}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
                 );
-              })}
+              })()}
             </div>
           </div>
         </div>
