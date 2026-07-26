@@ -490,7 +490,9 @@ export default function IndustryLeaderboardPage() {
         )}
 
         {/* ── 排行榜列表 ── */}
-        <div className="ranking-list">
+        <div className={`ranking-list${loading && data ? ' ranking-list--loading' : ''}`}>
+          {/* 切换日期时的顶部加载条 */}
+          {loading && data && <div className="ranking-loading-bar"><div className="ranking-loading-bar-inner" /></div>}
           {loading && !data ? (
             Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} idx={i} />)
           ) : (
