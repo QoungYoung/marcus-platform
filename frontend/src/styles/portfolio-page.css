@@ -1145,76 +1145,141 @@
 }
 
 /* ═══════════════════════════════════════════════════════
-   INLINE BATTLE REPORT — slides open below battlefield
+   HUD BATTLE REPORT — modal popup with scanlines + corners
    ═══════════════════════════════════════════════════════ */
-.cp-battle-report {
-  background: var(--cc-paper-strong);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: .032rem solid rgba(186, 201, 217, 0.4);
-  border-radius: var(--cc-radius-lg);
-  padding: 12px 16px;
-  max-height: 220px;
+.cp-hud-report {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: .032rem solid rgba(186, 201, 217, 0.5);
+  border-radius: 10px;
+  padding: 16px 20px;
+  min-width: 520px;
+  max-width: 640px;
+  max-height: 65vh;
   overflow-y: auto;
-  animation: cc-slide-down 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
   position: relative;
-  box-shadow: 2px 4px 12px var(--cc-sky-glow);
+  animation: cc-hud-pop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow:
+    0 0 0 1px rgba(17, 137, 249, 0.15),
+    0 20px 50px rgba(20, 28, 37, 0.25),
+    0 0 40px rgba(167, 216, 234, 0.2);
 }
 
-@keyframes cc-slide-down {
-  from { opacity: 0; transform: translateY(-8px); max-height: 0; }
-  to { opacity: 1; transform: translateY(0); max-height: 220px; }
+@keyframes cc-hud-pop {
+  from { opacity: 0; transform: scale(0.93) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
-.cp-battle-report-header {
+/* Scanline overlay */
+.cp-hud-report-scanline {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.025;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    var(--cc-blue) 2px,
+    var(--cc-blue) 3px
+  );
+  border-radius: 10px;
+}
+
+/* HUD corner brackets */
+.cp-hud-report-corner {
+  position: absolute;
+  width: 16px; height: 16px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cp-hud-report-corner--tl {
+  top: 6px; left: 6px;
+  border-top: 2px solid var(--cc-blue);
+  border-left: 2px solid var(--cc-blue);
+}
+.cp-hud-report-corner--tr {
+  top: 6px; right: 6px;
+  border-top: 2px solid var(--cc-blue);
+  border-right: 2px solid var(--cc-blue);
+}
+.cp-hud-report-corner--bl {
+  bottom: 6px; left: 6px;
+  border-bottom: 2px solid var(--cc-blue);
+  border-left: 2px solid var(--cc-blue);
+}
+.cp-hud-report-corner--br {
+  bottom: 6px; right: 6px;
+  border-bottom: 2px solid var(--cc-blue);
+  border-right: 2px solid var(--cc-blue);
+}
+
+.cp-hud-report-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 14px;
+  margin-bottom: 10px;
   font-size: 11px;
+  position: relative;
+  z-index: 2;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(186, 201, 217, 0.35);
 }
 
-.cp-battle-report-date {
+.cp-hud-report-date {
   font-family: var(--font-display, 'JetBrains Mono', monospace);
   font-weight: 700;
+  font-size: 14px;
   color: var(--cc-text);
 }
 
-.cp-battle-report-summary {
+.cp-hud-report-summary {
   display: flex;
-  gap: 16px;
+  gap: 18px;
   font-size: 10px;
   color: var(--cc-text-dim);
 }
 
-.cp-battle-report-summary span {
+.cp-hud-report-summary span {
   font-family: var(--font-display, 'JetBrains Mono', monospace);
 }
 
-.cp-battle-report-close {
+.cp-hud-report-close {
   margin-left: auto;
-  width: 22px; height: 22px;
-  border: 1px solid var(--cc-border);
+  width: 26px; height: 26px;
+  border: 1px solid rgba(186, 201, 217, 0.4);
   border-radius: 50%;
   background: transparent;
   cursor: pointer;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--cc-text-dim);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.12s ease;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 
-.cp-battle-report-close:hover {
+.cp-hud-report-close:hover {
   background: rgba(192, 57, 43, 0.08);
   color: var(--cc-red);
   border-color: var(--cc-red);
 }
 
-.cp-battle-report::-webkit-scrollbar { width: 3px; }
-.cp-battle-report::-webkit-scrollbar-track { background: transparent; }
-.cp-battle-report::-webkit-scrollbar-thumb { background: rgba(17, 137, 249, 0.15); border-radius: 10px; }
+.cp-hud-report > .cp-table-mini {
+  position: relative;
+  z-index: 2;
+}
+
+.cp-hud-report::-webkit-scrollbar { width: 3px; }
+.cp-hud-report::-webkit-scrollbar-track { background: transparent; }
+.cp-hud-report::-webkit-scrollbar-thumb { background: rgba(17, 137, 249, 0.15); border-radius: 10px; }
 
 /* ═══════════════════════════════════════════════════════
    MODAL — HUD Battle Report (legacy, kept for other uses)
