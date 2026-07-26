@@ -1706,11 +1706,10 @@ class IndustryLeaderboardService:
     ) -> Tuple[Dict[str, float], Dict[str, dict]]:
         """技术指标背离风险维度（纯负向）：MACD红柱缩量 + RSI顶背离 + 量价背离 + KDJ J>100 + 布林上轨外。
 
-        5 信号综合判定，信号越多 → 扣分越多:
-          - 0 信号 → 0 分（健康）
-          - 1-2 信号 → -2~-5 分（轻度背离）
-          - 3 信号 → -7 分（中度背离，≥3=止损监控减仓线）
-          - 4-5 信号 → -10 分（重度背离，≥4=止损监控清仓线）
+        对齐止损监控规则2.5阈值：<3信号不扣分，仅记录:
+          - 0-2 信号 → 0 分（不扣分，背离信号不足）
+          - 3 信号 → -7 分（中度背离，止损监控减仓线）
+          - 4-5 信号 → -10 分（重度背离，止损监控清仓线）
 
         得分范围: -10 ~ 0, max = 10
         """
@@ -1802,18 +1801,14 @@ class IndustryLeaderboardService:
                     f"布林上轨外(现价{current_close:.2f}>上轨{boll_uppers[-1]:.2f})"
                 )
 
-            # ── 评分 ──
+            # ── 评分（对齐止损监控规则2.5：≥3信号才减仓）──
             signal_count = sum(signals)
             if signal_count >= 4:
                 final_score = -10.0
             elif signal_count == 3:
                 final_score = -7.0
-            elif signal_count == 2:
-                final_score = -5.0
-            elif signal_count == 1:
-                final_score = -2.0
             else:
-                final_score = 0.0
+                final_score = 0.0  # 0-2 信号不扣分，仅记录
 
             sub_scores = []
             signal_names = [
@@ -1822,9 +1817,12 @@ class IndustryLeaderboardService:
             for i, name in enumerate(signal_names):
                 triggered = signals[i]
                 reason = signal_reasons[i] if triggered else f"{name}未触发，正常"
+                # 0-2 信号不扣分，子项显示0分但标注触发状态
+                if triggered and signal_count < 3:
+                    reason += "（信号不足3个，不扣分）"
                 sub_scores.append({
                     "label": name,
-                    "score": -2.0 if triggered else 0.0,
+                    "score": -2.0 if (triggered and signal_count >= 3) else 0.0,
                     "max": 2.0,
                     "reason": reason,
                 })
