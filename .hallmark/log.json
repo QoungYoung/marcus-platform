@@ -2,6 +2,13 @@
   {
     "date": "2026-07-26",
     "macrostructure": "Command Center (custom 3-column tactical grid)",
+    "theme": "Blue Archive Official · studied-DNA: bluearchive-cn.com · accent #1189F9 · sky-glow #a7d8ea",
+    "enrichment": "canvas particles (blue+sky mix) + Kivotos cross pattern + scanning lines (Tier-B)",
+    "brief": "Portfolio page refined with official Blue Archive website DNA — exact #1189F9 accent, #a7d8ea sky-blue glow shadows, glass-morphism panels, Kivotos cross background pattern, rounded-geometric system font stack, translucent white cards with blue-tinged box-shadows"
+  },
+  {
+    "date": "2026-07-26",
+    "macrostructure": "Command Center (custom 3-column tactical grid)",
     "theme": "Blue Archive (light) · studied-DNA: IndustryLeaderboard",
     "enrichment": "canvas particles + hex grid + scanning lines + corner brackets (Tier-B)",
     "brief": "Portfolio page complete structural overhaul — 3-column command center grid with strategic resources, battlefield overview, unit deployment cards, threat assessment strip, defense system panel, intel center, and mission log"

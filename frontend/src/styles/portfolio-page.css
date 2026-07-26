@@ -1,9 +1,11 @@
-/* Hallmark · studied-DNA (source: IndustryLeaderboard Blue Archive) · genre: atmospheric
+/* Hallmark · studied-DNA (source: official Blue Archive website bluearchive-cn.com) · genre: atmospheric
  * macrostructure: Command Center (custom 3-column tactical grid)
- * theme: Blue Archive (light) · accent: #2d8cf0 · display: JetBrains Mono · body: PingFang SC
- * enrichment: canvas particles + hex grid + scanning lines (Tier-B)
+ * theme: Blue Archive Official (light) · accent: #1189F9 · sky-glow: #a7d8ea
+ * display: system rounded-geometric · body: PingFang SC
+ * enrichment: canvas particles + Kivotos cross pattern + scanning lines (Tier-B)
  * nav: N/A (app shell) · footer: N/A (app shell)
- */
+ * designed-as-app */
+/* Hallmark · pre-emit critique: P5 H4 E4 S5 R5 V4 */
 
 /* ═══════════════════════════════════════════════════════
    Command Center · Blue Archive Tactical Dashboard
@@ -12,24 +14,26 @@
 
 /* ── CSS Variables ── */
 .cp-page {
-  --cc-blue: #2d8cf0;
-  --cc-blue-deep: #1a5bbf;
-  --cc-blue-glow: rgba(45, 140, 240, 0.3);
-  --cc-blue-pale: rgba(45, 140, 240, 0.08);
+  --cc-blue: #1189F9;
+  --cc-blue-deep: #0d6fd4;
+  --cc-blue-glow: rgba(17, 137, 249, 0.25);
+  --cc-blue-pale: rgba(17, 137, 249, 0.07);
+  --cc-sky: #a7d8ea;
+  --cc-sky-glow: rgba(167, 216, 234, 0.55);
   --cc-green: #27AE60;
   --cc-red: #C0392B;
   --cc-amber: #d4a407;
-  --cc-paper: rgba(255, 255, 255, 0.72);
-  --cc-paper-strong: rgba(255, 255, 255, 0.88);
-  --cc-glass: rgba(255, 255, 255, 0.55);
-  --cc-glass-hover: rgba(255, 255, 255, 0.7);
-  --cc-border: rgba(255, 255, 255, 0.5);
-  --cc-border-strong: rgba(255, 255, 255, 0.65);
-  --cc-text: #1a1d24;
-  --cc-text-secondary: #4a5568;
-  --cc-text-dim: #8e94a2;
-  --cc-radius: 6px;
-  --cc-radius-lg: 10px;
+  --cc-paper: rgba(255, 255, 255, 0.88);
+  --cc-paper-strong: rgba(255, 255, 255, 0.95);
+  --cc-glass: rgba(255, 255, 255, 0.62);
+  --cc-glass-hover: rgba(255, 255, 255, 0.80);
+  --cc-border: rgba(231, 231, 231, 0.75);
+  --cc-border-strong: rgba(209, 213, 220, 0.70);
+  --cc-text: #141c25;
+  --cc-text-secondary: #575757;
+  --cc-text-dim: #858585;
+  --cc-radius: 4px;
+  --cc-radius-lg: 8px;
 }
 
 /* ── Page Base ── */
@@ -39,20 +43,23 @@
   overflow-y: auto;
   overflow-x: clip;
   background:
-    radial-gradient(ellipse at 50% 30%, #dce6f0, #b8c8dd);
+    radial-gradient(ellipse 80% 60% at 50% 20%, rgba(167, 216, 234, 0.35), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 20% 70%, rgba(17, 137, 249, 0.06), transparent 50%),
+    radial-gradient(ellipse 50% 40% at 80% 50%, rgba(167, 216, 234, 0.18), transparent 50%),
+    linear-gradient(180deg, #edf3f8 0%, #dce6f0 30%, #c8d8e8 100%);
   display: grid;
   grid-template-columns: 280px 1fr 324px;
   grid-template-rows: auto 1fr auto auto;
   gap: 10px;
   padding: 8px 10px;
-  font-family: var(--font-body, 'PingFang SC', 'Geist', sans-serif);
+  font-family: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   font-size: 12px;
   color: var(--cc-text-secondary);
 }
 
 .cp-page::-webkit-scrollbar { width: 4px; }
 .cp-page::-webkit-scrollbar-track { background: transparent; }
-.cp-page::-webkit-scrollbar-thumb { background: rgba(45, 140, 240, 0.18); border-radius: 10px; }
+.cp-page::-webkit-scrollbar-thumb { background: rgba(17, 137, 249, 0.18); border-radius: 10px; }
 
 /* ── Canvas Background ── */
 #cp-bg-canvas {
@@ -69,7 +76,7 @@
   z-index: 1;
 }
 
-/* ── Hex Grid Background Overlay ── */
+/* ── Kivotos Cross Pattern Background Overlay ── */
 .cp-page::before {
   content: '';
   position: fixed;
@@ -77,10 +84,10 @@
   width: 100vw; height: 100vh;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.04;
+  opacity: 0.035;
   background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='46'%3E%3Cpath d='M20 0l20 11.5v23L20 46 0 34.5v-23z' fill='none' stroke='%232d8cf0' stroke-width='0.8'/%3E%3C/svg%3E");
-  background-size: 40px 46px;
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Ccircle cx='24' cy='24' r='1.2' fill='%231189F9' opacity='0.5'/%3E%3Cpath d='M24 4v8M24 36v8M4 24h8M36 24h8M9.86 9.86l5.66 5.66M32.48 32.48l5.66 5.66M9.86 38.14l5.66-5.66M32.48 15.52l5.66-5.66' stroke='%231189F9' stroke-width='0.5' opacity='0.4'/%3E%3C/svg%3E");
+  background-size: 48px 48px;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -93,15 +100,16 @@
   align-items: center;
   gap: 16px;
   padding: 6px 14px;
-  background: var(--cc-glass);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--cc-paper);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--cc-border);
   border-radius: var(--cc-radius);
   font-size: 11px;
   font-family: var(--font-display, 'JetBrains Mono', monospace);
   color: var(--cc-text-dim);
   min-height: 32px;
+  box-shadow: 0 1px 4px var(--cc-sky-glow);
 }
 
 .cp-status-sys {
@@ -187,33 +195,35 @@
   background: var(--cc-paper);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--cc-border-strong);
+  border: .032rem solid rgba(186, 201, 217, 0.4);
   border-radius: var(--cc-radius-lg);
   padding: 14px 16px;
   position: relative;
   overflow: hidden;
+  box-shadow: 2px 4px 12px var(--cc-sky-glow);
 }
 
-/* Corner brackets */
+/* Corner brackets — subtle blue accent */
 .cp-strategic-panel::before,
 .cp-strategic-panel::after {
   content: '';
   position: absolute;
-  width: 18px; height: 18px;
+  width: 14px; height: 14px;
   pointer-events: none;
   z-index: 2;
+  opacity: 0.5;
 }
 
 .cp-strategic-panel::before {
-  top: 4px; left: 4px;
-  border-top: 2px solid var(--cc-blue);
-  border-left: 2px solid var(--cc-blue);
+  top: 3px; left: 3px;
+  border-top: 1.5px solid var(--cc-blue);
+  border-left: 1.5px solid var(--cc-blue);
 }
 
 .cp-strategic-panel::after {
-  bottom: 4px; right: 4px;
-  border-bottom: 2px solid var(--cc-blue);
-  border-right: 2px solid var(--cc-blue);
+  bottom: 3px; right: 3px;
+  border-bottom: 1.5px solid var(--cc-blue);
+  border-right: 1.5px solid var(--cc-blue);
 }
 
 .cp-strategic-label {
@@ -348,10 +358,10 @@
 
 .cp-battlefield {
   flex: 1;
-  background: var(--cc-paper);
+  background: var(--cc-paper-strong);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--cc-border-strong);
+  border: .032rem solid rgba(186, 201, 217, 0.4);
   border-radius: var(--cc-radius-lg);
   padding: 12px 16px;
   display: flex;
@@ -359,27 +369,29 @@
   position: relative;
   overflow: hidden;
   min-height: 240px;
+  box-shadow: 2px 4px 12px var(--cc-sky-glow);
 }
 
 .cp-battlefield::before,
 .cp-battlefield::after {
   content: '';
   position: absolute;
-  width: 22px; height: 22px;
+  width: 16px; height: 16px;
   pointer-events: none;
   z-index: 2;
+  opacity: 0.5;
 }
 
 .cp-battlefield::before {
-  top: 4px; left: 4px;
-  border-top: 2px solid var(--cc-blue);
-  border-left: 2px solid var(--cc-blue);
+  top: 3px; left: 3px;
+  border-top: 1.5px solid var(--cc-blue);
+  border-left: 1.5px solid var(--cc-blue);
 }
 
 .cp-battlefield::after {
-  bottom: 4px; right: 4px;
-  border-bottom: 2px solid var(--cc-blue);
-  border-right: 2px solid var(--cc-blue);
+  bottom: 3px; right: 3px;
+  border-bottom: 1.5px solid var(--cc-blue);
+  border-right: 1.5px solid var(--cc-blue);
 }
 
 /* Scanning line overlay */
@@ -440,12 +452,13 @@
   background: var(--cc-paper);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--cc-border-strong);
+  border: .032rem solid rgba(186, 201, 217, 0.4);
   border-radius: var(--cc-radius-lg);
   padding: 10px 16px;
   position: relative;
   max-height: 140px;
   min-height: 110px;
+  box-shadow: 1px 2px 8px var(--cc-sky-glow);
 }
 
 .cp-daily-strip-header {
@@ -483,25 +496,26 @@
   background: var(--cc-paper);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--cc-border-strong);
+  border: .032rem solid rgba(186, 201, 217, 0.4);
   border-radius: var(--cc-radius-lg);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  box-shadow: 2px 4px 12px var(--cc-sky-glow);
 }
 
 .cp-deployment-panel::before {
   content: '';
   position: absolute;
-  top: 4px; right: 4px;
-  width: 18px; height: 18px;
-  border-top: 2px solid var(--cc-blue);
-  border-right: 2px solid var(--cc-blue);
-  border-radius: 0 2px 0 0;
+  top: 3px; right: 3px;
+  width: 14px; height: 14px;
+  border-top: 1.5px solid var(--cc-blue);
+  border-right: 1.5px solid var(--cc-blue);
   pointer-events: none;
   z-index: 2;
+  opacity: 0.5;
 }
 
 .cp-deployment-header {
@@ -542,36 +556,37 @@
 
 .cp-deployment-scroll::-webkit-scrollbar { width: 3px; }
 .cp-deployment-scroll::-webkit-scrollbar-track { background: transparent; }
-.cp-deployment-scroll::-webkit-scrollbar-thumb { background: rgba(45, 140, 240, 0.15); border-radius: 10px; }
+.cp-deployment-scroll::-webkit-scrollbar-thumb { background: rgba(17, 137, 249, 0.15); border-radius: 10px; }
 
 /* Unit card */
 .cp-unit-card {
-  background: var(--cc-glass);
-  border: 1px solid var(--cc-border);
+  background: rgba(255, 255, 255, 0.82);
+  border: .033rem solid rgba(241, 241, 241, 0.85);
   border-radius: var(--cc-radius);
   padding: 8px 10px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
   position: relative;
   flex-shrink: 0;
 }
 
 .cp-unit-card:hover {
-  background: var(--cc-glass-hover);
-  border-color: var(--cc-blue);
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(17, 137, 249, 0.35);
   transform: translateX(2px);
+  box-shadow: 1px 2px 8px var(--cc-sky-glow);
 }
 
 .cp-unit-card.trade-expanded {
-  border-color: var(--cc-blue);
-  box-shadow: 0 0 0 1px var(--cc-blue-glow);
+  border-color: rgba(17, 137, 249, 0.5);
+  box-shadow: 0 0 0 1px var(--cc-blue-glow), 1px 1px 10px var(--cc-sky);
 }
 
-/* Left color bar on unit card */
+/* Left color bar on unit card — Blue Archive signature */
 .cp-unit-card::after {
   content: '';
   position: absolute;
-  left: 0; top: 4px; bottom: 4px;
+  left: 0; top: 3px; bottom: 3px;
   width: 3px;
   border-radius: 0 2px 2px 0;
 }
@@ -735,20 +750,22 @@
 
 .cp-threat-card {
   flex: 1;
-  background: var(--cc-glass);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid var(--cc-border);
+  background: var(--cc-paper);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: .032rem solid rgba(186, 201, 217, 0.35);
   border-radius: var(--cc-radius);
   padding: 10px 14px;
   display: flex;
   align-items: center;
   gap: 10px;
-  transition: background 0.15s ease;
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+  box-shadow: 1px 1px 6px rgba(167, 216, 234, 0.3);
 }
 
 .cp-threat-card:hover {
-  background: var(--cc-glass-hover);
+  background: var(--cc-paper-strong);
+  box-shadow: 1px 2px 10px var(--cc-sky-glow);
 }
 
 .cp-threat-icon {
@@ -829,10 +846,10 @@
 }
 
 .cp-bottom-panel {
-  background: var(--cc-glass);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid var(--cc-border);
+  background: var(--cc-paper);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: .032rem solid rgba(186, 201, 217, 0.35);
   border-radius: var(--cc-radius-lg);
   padding: 10px 14px;
   min-height: 160px;
@@ -841,6 +858,7 @@
   display: flex;
   flex-direction: column;
   position: relative;
+  box-shadow: 1px 2px 8px rgba(167, 216, 234, 0.35);
 }
 
 .cp-bottom-header {
@@ -868,7 +886,7 @@
 
 .cp-bottom-body::-webkit-scrollbar { width: 3px; }
 .cp-bottom-body::-webkit-scrollbar-track { background: transparent; }
-.cp-bottom-body::-webkit-scrollbar-thumb { background: rgba(45, 140, 240, 0.12); border-radius: 10px; }
+.cp-bottom-body::-webkit-scrollbar-thumb { background: rgba(17, 137, 249, 0.12); border-radius: 10px; }
 
 /* Defense system (Stop Loss) */
 .cp-defense-status {
@@ -1130,16 +1148,17 @@
    INLINE BATTLE REPORT — slides open below battlefield
    ═══════════════════════════════════════════════════════ */
 .cp-battle-report {
-  background: var(--cc-paper);
+  background: var(--cc-paper-strong);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--cc-border-strong);
+  border: .032rem solid rgba(186, 201, 217, 0.4);
   border-radius: var(--cc-radius-lg);
   padding: 12px 16px;
   max-height: 220px;
   overflow-y: auto;
   animation: cc-slide-down 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
+  box-shadow: 2px 4px 12px var(--cc-sky-glow);
 }
 
 @keyframes cc-slide-down {
@@ -1195,7 +1214,7 @@
 
 .cp-battle-report::-webkit-scrollbar { width: 3px; }
 .cp-battle-report::-webkit-scrollbar-track { background: transparent; }
-.cp-battle-report::-webkit-scrollbar-thumb { background: rgba(45, 140, 240, 0.15); border-radius: 10px; }
+.cp-battle-report::-webkit-scrollbar-thumb { background: rgba(17, 137, 249, 0.15); border-radius: 10px; }
 
 /* ═══════════════════════════════════════════════════════
    MODAL — HUD Battle Report (legacy, kept for other uses)
@@ -1203,7 +1222,7 @@
 .cp-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(10, 15, 25, 0.5);
+  background: rgba(20, 28, 37, 0.45);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   z-index: 100;
@@ -1219,10 +1238,10 @@
 }
 
 .cp-modal {
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.93);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.7);
+  border: .032rem solid rgba(186, 201, 217, 0.5);
   border-radius: 10px;
   padding: 0;
   min-width: 380px;
@@ -1234,8 +1253,8 @@
   position: relative;
   animation: cc-modal-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow:
-    0 0 0 1px rgba(45, 140, 240, 0.15),
-    0 24px 60px rgba(0, 0, 0, 0.25);
+    0 0 0 1px rgba(17, 137, 249, 0.12),
+    0 24px 60px rgba(20, 28, 37, 0.22);
 }
 
 @keyframes cc-modal-in {
@@ -1406,7 +1425,7 @@
   background: rgba(30, 35, 48, 0.94) !important;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(45, 140, 240, 0.25) !important;
+  border: 1px solid rgba(17, 137, 249, 0.25) !important;
   border-radius: 6px !important;
   padding: 8px 12px !important;
   font-size: 11px;
@@ -1450,13 +1469,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px var(--cc-blue-glow);
+  box-shadow: 0 4px 16px rgba(17, 137, 249, 0.4);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
 .cp-fab-main:hover {
   transform: scale(1.08);
-  box-shadow: 0 6px 24px rgba(45, 140, 240, 0.5);
+  box-shadow: 0 6px 24px rgba(17, 137, 249, 0.55);
 }
 
 .cp-fab-main:active { transform: scale(0.95); }
