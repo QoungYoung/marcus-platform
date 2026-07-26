@@ -1213,9 +1213,9 @@ function usePortfolioBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
         ctx!.rotate(angle);
         const r0 = Math.max(0.1, r * 0.2), r1 = Math.max(0.1, r);
         const grad = ctx!.createRadialGradient(0, 0, r0, 0, 0, r1);
-        grad.addColorStop(0, 'rgba(240,185,11,0)');
-        grad.addColorStop(0.7, 'rgba(240,185,11,0.03)');
-        grad.addColorStop(1, 'rgba(240,185,11,0.08)');
+        grad.addColorStop(0, 'rgba(45,140,240,0)');
+        grad.addColorStop(0.7, 'rgba(45,140,240,0.03)');
+        grad.addColorStop(1, 'rgba(45,140,240,0.08)');
         ctx!.beginPath();
         ctx!.arc(0, 0, r1, 0, Math.PI * 2);
         ctx!.fillStyle = grad;
@@ -1223,7 +1223,7 @@ function usePortfolioBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
         if (r * 0.5 > 0.5) {
           ctx!.beginPath();
           ctx!.arc(0, 0, r * 0.5, 0, Math.PI * 2);
-          ctx!.strokeStyle = 'rgba(240,185,11,0.1)';
+          ctx!.strokeStyle = 'rgba(45,140,240,0.1)';
           ctx!.lineWidth = 1;
           ctx!.stroke();
         }
@@ -1236,7 +1236,7 @@ function usePortfolioBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
         if (p.y < 0 || p.y > h) p.sy *= -1;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx!.fillStyle = `rgba(240,185,11,${p.alpha})`;
+        ctx!.fillStyle = `rgba(45,140,240,${p.alpha})`;
         ctx!.fill();
       }
 
@@ -1249,7 +1249,7 @@ function usePortfolioBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
             ctx!.beginPath();
             ctx!.moveTo(particles[i].x, particles[i].y);
             ctx!.lineTo(particles[j].x, particles[j].y);
-            ctx!.strokeStyle = `rgba(240,185,11,${(1 - dist / 100) * 0.06})`;
+            ctx!.strokeStyle = `rgba(45,140,240,${(1 - dist / 100) * 0.06})`;
             ctx!.lineWidth = 0.5;
             ctx!.stroke();
           }
