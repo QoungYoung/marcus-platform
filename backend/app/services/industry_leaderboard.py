@@ -749,12 +749,16 @@ class IndustryLeaderboardService:
                 try:
                     df = pro.moneyflow(ts_code=ts_code, start_date=start_date, end_date=date)
                     if df is None or df.empty:
+                        logger.warning(f"[Leaderboard] _historical_moneyflow {ts_code}: no data")
                         continue
                     df = df.sort_values("trade_date")
+                    # 统一转为字符串比较，兼容 tushare 不同版本返回 int/str 的差异
+                    df["_td_str"] = df["trade_date"].astype(str)
 
                     # 当日行
-                    day_rows = df[df["trade_date"] == date]
+                    day_rows = df[df["_td_str"] == date]
                     if day_rows.empty:
+                        logger.warning(f"[Leaderboard] _historical_moneyflow {ts_code}: date {date} not in data, available={df['_td_str'].tolist()}")
                         continue
                     row = day_rows.iloc[-1]
                     code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
@@ -773,7 +777,7 @@ class IndustryLeaderboardService:
                         main_pct = 0.0
 
                     # 5日累计主力净流入（从查询结果中取 date 之前最近5个交易日）
-                    pre_rows = df[df["trade_date"] < date].tail(5)
+                    pre_rows = df[df["_td_str"] < date].tail(5)
                     d5_main_net = 0.0
                     for _, pr in pre_rows.iterrows():
                         d5_buy_lg = float(pr.get("buy_lg_amount", 0) or 0)
@@ -796,6 +800,7 @@ class IndustryLeaderboardService:
                     time.sleep(0.12)  # QPS 限制
                 except Exception as e:
                     logger.warning(f"[Leaderboard] _historical_moneyflow failed for {ts_code}: {e}")
+            logger.info(f"[Leaderboard] _historical_moneyflow: got data for {len(moneyflows)}/{len(top10_symbols)} top10 stocks")
         except Exception as e:
             logger.warning(f"[Leaderboard] _historical_moneyflow overall failed: {e}")
         return moneyflows
