@@ -1895,9 +1895,10 @@ class IndustryLeaderboardService:
             ind_name = c.get("industry", "其他")
             by_industry.setdefault(ind_name, []).append(c)
 
-        # 从 daily_basic 获取 PE/PB 数据
+        # 从 daily_basic 获取 PE/PB/股息率 数据
         pe_map: Dict[str, float] = {}
         pb_map: Dict[str, float] = {}
+        dv_map: Dict[str, float] = {}
         symbols = [c["ts_code"] for c in candidates]
         ref_date = date or datetime.now().strftime("%Y%m%d")
         try:
@@ -1918,10 +1919,13 @@ class IndustryLeaderboardService:
                     latest = group.iloc[-1]
                     pe = float(latest.get("pe_ttm", 0) or 0)
                     pb = float(latest.get("pb", 0) or 0)
+                    dv = float(latest.get("dv_ttm", 0) or 0)
                     if pe > 0:
                         pe_map[str(ts_code)] = pe
                     if pb > 0:
                         pb_map[str(ts_code)] = pb
+                    if dv > 0:
+                        dv_map[str(ts_code)] = dv
         except Exception as e:
             logger.warning(f"[Leaderboard] daily_basic PE/PB fetch failed: {e}")
 
@@ -2003,9 +2007,20 @@ class IndustryLeaderboardService:
                 pb_score = 1.5
                 pb_reason = "PB数据缺失，取中位分"
 
-            # 股息率 (0-2 pts)
+            # 股息率 (0-2 pts): dv_ttm > 2% = 2pt, > 1% = 1pt
+            dv = dv_map.get(sym, 0)
             div_score: float = 0
-            div_reason = "股息率数据暂不可用，取0分"
+            div_reason = ""
+            if dv > 2:
+                div_score = 2
+                div_reason = f"股息率TTM={dv:.1f}%，高股息"
+            elif dv > 1:
+                div_score = 1
+                div_reason = f"股息率TTM={dv:.1f}%，中等股息"
+            elif dv > 0:
+                div_reason = f"股息率TTM={dv:.1f}%，低于阈值"
+            else:
+                div_reason = "股息率数据缺失，取0分"
 
             score = pe_score + pb_score + div_score
             final_score = round(max(0, min(dim_max, score)), 1)
