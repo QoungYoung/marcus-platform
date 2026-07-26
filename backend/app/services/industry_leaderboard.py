@@ -139,10 +139,10 @@ class IndustryLeaderboardService:
 
         # 1.7 Round 1 四维评分
         w = WEIGHTS[regime] if regime in WEIGHTS else WEIGHTS[REGIME_TRANSITIONAL]
-        trend_scores = self._compute_trend_composite(candidates, indicators, regime)
-        volume_scores = self._compute_volume_price(candidates, indicators, daily_bars, regime)
-        industry_scores = self._compute_industry_relative_strength(candidates, quotes, daily_bars, regime)
-        residual_scores = self._compute_price_residual(candidates, quotes, indicators, regime)
+        trend_scores, trend_details = self._compute_trend_composite(candidates, indicators, regime)
+        volume_scores, vol_details = self._compute_volume_price(candidates, indicators, daily_bars, regime)
+        industry_scores, ind_details = self._compute_industry_relative_strength(candidates, quotes, daily_bars, regime)
+        residual_scores, res_details = self._compute_price_residual(candidates, quotes, indicators, regime)
 
         # 资金维度先取中性分
         capital_max = 25 if regime == REGIME_TRENDING else 22
@@ -175,7 +175,7 @@ class IndustryLeaderboardService:
         # 1.8 Round 2: Top 10 资金补算
         top10 = candidates[:10]
         moneyflows = self._fetch_top10_moneyflow([c["ts_code"] for c in top10])
-        capital_scores = self._compute_capital_persistence(top10, moneyflows, regime)
+        capital_scores, cap_details = self._compute_capital_persistence(top10, moneyflows, regime)
 
         for c in top10:
             sym = c["ts_code"]
@@ -220,8 +220,34 @@ class IndustryLeaderboardService:
         # 构建响应
         items = []
         for c in candidates:
-            q = quotes.get(c["ts_code"], {})
-            ind = indicators.get(c["ts_code"], {})
+            sym = c["ts_code"]
+            q = quotes.get(sym, {})
+            cap_data = c.get("capital_data", "neutral")
+            cap_score = c.get("capital_score", 0)
+
+            # 组装资金维度明细
+            if cap_data == "available" and sym in cap_details:
+                cap_detail = cap_details[sym]
+            else:
+                cap_reason = "非Top10股票，资金分取中性值(max*0.5)，未使用东方财富实时数据" if cap_data == "neutral" else "东方财富接口不可用，资金分取中性值(max*0.5)"
+                cap_detail = {
+                    "label": "资金持续性",
+                    "score": round(cap_score, 1),
+                    "max": capital_max,
+                    "sub_scores": [
+                        {"label": "数据说明", "score": round(cap_score, 1), "max": capital_max, "reason": cap_reason},
+                    ],
+                }
+
+            # 组装 score_detail
+            score_detail = {
+                "trend": trend_details.get(sym, {}),
+                "volume_price": vol_details.get(sym, {}),
+                "industry_relative": ind_details.get(sym, {}),
+                "price_residual": res_details.get(sym, {}),
+                "capital": cap_detail,
+            }
+
             items.append({
                 "symbol": c["ts_code"],
                 "name": c["name"],
@@ -235,11 +261,12 @@ class IndustryLeaderboardService:
                 "volume_price_score": c.get("volume_price_score", 0),
                 "industry_relative_score": c.get("industry_relative_score", 0),
                 "price_residual_score": c.get("price_residual_score", 0),
-                "capital_score": c.get("capital_score", 0),
-                "capital_data": c.get("capital_data", "neutral"),
+                "capital_score": cap_score,
+                "capital_data": cap_data,
                 "warnings": c.get("warnings", []),
                 "data_source": data_source,
                 "volume_data": volume_data_status,
+                "score_detail": score_detail,
             })
 
         industries = sorted(set(
@@ -560,11 +587,13 @@ class IndustryLeaderboardService:
 
     def _compute_trend_composite(
         self, candidates: List[Dict], indicators: Dict[str, dict], regime: str
-    ) -> Dict[str, float]:
-        """趋势综合维度：MA 排列 + MACD 柱力度 + ADX 趋势强度。"""
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """趋势综合维度：MA 排列 + MACD 柱力度 + ADX 趋势强度。返回 (scores, details)。"""
         scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
         is_trending = regime == REGIME_TRENDING
         is_ranging = regime == REGIME_RANGING
+        dim_max = 28 if is_trending else 22
 
         for c in candidates:
             sym = c["ts_code"]
@@ -579,71 +608,105 @@ class IndustryLeaderboardService:
             ma60 = ind.get("ma60", 0)
             macd_dif = ind.get("macd_dif", 0)
             macd_dea = ind.get("macd_dea", 0)
-            macd_hist = ind.get("macd", 0)  # DIF-DEA
+            macd_hist = ind.get("macd", 0)
             adx = ind.get("adx", 0)
-            pdi = ind.get("pdi", 0)
-            mdi = ind.get("mdi", 0)
 
             # MA 排列层级 (趋势市 0-10, 震荡市 0-8)
             ma_max = 10 if is_trending else 8
             ma_score = 0
+            ma_reason = "MA均线不满足多头排列条件"
             if ma5 > ma10 > ma20 > ma60 and ma5 > 0 and ma60 > 0:
                 ma_score = ma_max
+                ma_reason = "MA5>MA10>MA20>MA60，多头排列完美"
             elif ma5 > ma10 > ma20 and ma5 > 0 and ma20 > 0:
                 ma_score = ma_max * 0.8
+                ma_reason = "MA5>MA10>MA20，短期多头排列良好"
             elif ma5 > ma20 and ma5 > 0 and ma20 > 0:
                 ma_score = ma_max * 0.5
+                ma_reason = "MA5>MA20，短期站上中线，排列一般"
             elif ma5 < ma20 and ma5 > 0 and ma20 > 0:
                 ma_score = 0
+                ma_reason = "MA5<MA20，短期下穿中线，排列偏空"
 
             # MACD 柱力度 (趋势市 0-10, 震荡市 0-7)
             macd_max = 10 if is_trending else 7
             macd_score = 0
+            macd_reason = ""
             if macd_dif > macd_dea:
-                # 柱状体扩大中
                 if macd_hist > 0:
                     macd_score = macd_max * (0.7 + 0.3 * min(abs(macd_hist) / max(abs(macd_dif), 0.001), 1))
+                    macd_reason = "MACD柱状体扩大中，多头动能强"
                 else:
                     macd_score = macd_max * 0.3
+                    macd_reason = "MACD金叉但柱状体未扩大，动能偏弱"
             else:
                 macd_score = max(0, macd_max * 0.2)
+                macd_reason = "MACD死叉状态，动能不足"
 
             # ADX 趋势强度 (趋势市 0-8, 震荡市 0-7)
             adx_max = 8 if is_trending else 7
+            adx_score: float = 0
             if adx > 40:
                 adx_score = adx_max
+                adx_reason = f"ADX={adx:.0f}，处于强趋势区间"
             elif adx >= 25:
                 adx_score = adx_max * (adx - 25) / 15 * 0.5 + adx_max * 0.5
+                adx_reason = f"ADX={adx:.0f}，处于中等趋势区间"
             elif adx >= 15:
                 adx_score = adx_max * 0.3 * (adx - 15) / 10
+                adx_reason = f"ADX={adx:.0f}，趋势偏弱"
             else:
                 adx_score = 0
+                adx_reason = f"ADX={adx:.0f}，无明显趋势"
+
+            sub_scores = [
+                {"label": "MA排列层级", "score": round(ma_score, 1), "max": ma_max, "reason": ma_reason},
+                {"label": "MACD柱力度", "score": round(macd_score, 1), "max": macd_max, "reason": macd_reason},
+                {"label": "ADX趋势强度", "score": round(adx_score, 1), "max": adx_max, "reason": adx_reason},
+            ]
 
             score = ma_score + macd_score + adx_score
 
             # 趋势启动加分 (趋势市: ADX>25 + MACD 金叉 ≤5日)
+            trend_boost = 0
             if is_trending and adx > 25:
                 if macd_dif > macd_dea and macd_dif - macd_dea < abs(macd_hist) * 2:
-                    score += 2
+                    trend_boost = 2
+                    score += trend_boost
+                    sub_scores.append({"label": "趋势启动", "score": float(trend_boost), "max": 2, "reason": "ADX>25且MACD近期金叉，趋势启动信号"})
 
             # 震荡市折扣
             if is_ranging:
+                discount_applied = False
                 if adx < 15:
                     score *= 0.6
+                    discount_applied = True
                 elif adx < 20:
                     score *= 0.8
+                    discount_applied = True
+                if discount_applied:
+                    adx_reason += "，震荡市ADX低，得分折扣"
 
-            scores[sym] = max(0, min(score, 28 if is_trending else 22))
+            final_score = max(0, min(score, dim_max))
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "趋势综合",
+                "score": round(final_score, 1),
+                "max": dim_max,
+                "sub_scores": sub_scores,
+            }
 
-        return scores
+        return scores, details
 
     def _compute_volume_price(
         self, candidates: List[Dict], indicators: Dict[str, dict],
         daily_bars: Dict[str, List[dict]], regime: str
-    ) -> Dict[str, float]:
-        """量价配合维度。"""
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """量价配合维度。返回 (scores, details)。"""
         scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
         is_trending = regime == REGIME_TRENDING
+        dim_max = 15 if is_trending else 18
 
         for c in candidates:
             sym = c["ts_code"]
@@ -656,7 +719,8 @@ class IndustryLeaderboardService:
 
             # 量价趋势匹配度 (趋势市 0-7, 震荡市 0-8)
             match_max = 7 if is_trending else 8
-            match_score = 0
+            match_score: float = 0
+            match_reason = ""
             if len(bars) >= 10:
                 recent = bars[-10:]
                 up_vols = [b["vol"] for b in recent if b.get("pct_chg", 0) > 0]
@@ -665,22 +729,28 @@ class IndustryLeaderboardService:
                     ratio = sum(up_vols) / sum(down_vols)
                     if ratio > 1.5:
                         match_score = match_max
+                        match_reason = f"上涨放量/下跌缩量比={ratio:.2f}，量价配合优异"
                     elif ratio > 1.0:
                         match_score = match_max * 0.6
+                        match_reason = f"上涨放量/下跌缩量比={ratio:.2f}，量价配合良好"
                     elif ratio > 0.8:
                         match_score = match_max * 0.3
+                        match_reason = f"上涨放量/下跌缩量比={ratio:.2f}，量价配合一般"
                     else:
                         match_score = match_max * 0.1
+                        match_reason = f"上涨放量/下跌缩量比={ratio:.2f}，量价配合不佳"
                 elif up_vols:
                     match_score = match_max * 0.7
+                    match_reason = "近10日仅上涨日有成交记录"
             else:
-                # 降级：用 volume_ratio 估算
                 vr = ind.get("volume_ratio", 1.0)
                 match_score = match_max * min(vr / 2.0, 1.0) * 0.7
+                match_reason = f"使用量比={vr:.1f}估算量价匹配，数据降级"
 
             # 突破放量比 (趋势市 0-5, 震荡市 0-6)
             breakout_max = 5 if is_trending else 6
-            breakout_score = 0
+            breakout_score: float = 0
+            breakout_reason = ""
             if len(bars) >= 20 and ind.get("ma20", 0) > 0:
                 avg_vol_20 = sum(b["vol"] for b in bars[-20:]) / 20
                 today_vol = bars[-1]["vol"] if bars else ind.get("vol", 0)
@@ -690,14 +760,22 @@ class IndustryLeaderboardService:
                     ratio = today_vol / avg_vol_20
                     if ratio > 2.0:
                         breakout_score = breakout_max
+                        breakout_reason = f"突破MA20时放量{ratio:.1f}倍，强烈突破信号"
                     elif ratio > 1.5:
                         breakout_score = breakout_max * 0.7
+                        breakout_reason = f"突破MA20时放量{ratio:.1f}倍，温和突破"
                     elif ratio > 1.0:
                         breakout_score = breakout_max * 0.3
+                        breakout_reason = f"突破MA20时放量{ratio:.1f}倍，突破弱"
+                else:
+                    breakout_reason = "未有效突破MA20"
+            else:
+                breakout_reason = "数据不足(需20日线数据)"
 
             # 缩量回调健康度 (趋势市 0-3, 震荡市 0-4)
             pullback_max = 3 if is_trending else 4
-            pullback_score = 0
+            pullback_score: float = 0
+            pullback_reason = ""
             if len(bars) >= 20 and ind.get("close", 0) > 0:
                 avg_vol_20 = sum(b["vol"] for b in bars[-20:]) / 20
                 today_vol = bars[-1]["vol"] if bars else ind.get("vol", 0)
@@ -706,21 +784,42 @@ class IndustryLeaderboardService:
                     ratio = today_vol / avg_vol_20
                     if ratio < 0.7:
                         pullback_score = pullback_max
+                        pullback_reason = f"缩量回调{ratio:.1f}倍均量，回调健康"
                     elif ratio < 1.0:
                         pullback_score = pullback_max * 0.5
+                        pullback_reason = f"回调量比{ratio:.1f}，缩量一般"
+                else:
+                    pullback_reason = "今日上涨或无回调"
+            else:
+                pullback_reason = "数据不足(需20日线数据)"
 
             score = match_score + breakout_score + pullback_score
-            scores[sym] = max(0, min(score, 15 if is_trending else 18))
+            final_score = max(0, min(score, dim_max))
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "量价配合",
+                "score": round(final_score, 1),
+                "max": dim_max,
+                "sub_scores": [
+                    {"label": "量价匹配度", "score": round(match_score, 1), "max": match_max, "reason": match_reason},
+                    {"label": "突破放量比", "score": round(breakout_score, 1), "max": breakout_max, "reason": breakout_reason},
+                    {"label": "缩量回调健康度", "score": round(pullback_score, 1), "max": pullback_max, "reason": pullback_reason},
+                ],
+            }
 
-        return scores
+        return scores, details
 
     def _compute_industry_relative_strength(
         self, candidates: List[Dict], quotes: Dict[str, dict],
         daily_bars: Dict[str, List[dict]], regime: str
-    ) -> Dict[str, float]:
-        """行业相对强度维度。"""
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """行业相对强度维度。返回 (scores, details)。"""
         scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
         is_trending = regime == REGIME_TRENDING
+        dim_max = 17 if is_trending else 20
+        sub_5d_max = 6 if is_trending else 7
+        contrib_max = 4 if is_trending else 6
 
         # 按行业分组
         by_industry: Dict[str, List[Dict]] = {}
@@ -743,21 +842,26 @@ class IndustryLeaderboardService:
             excess_1d = stock_pct - peer_avg_pct
 
             # 1日超额收益 (0-7)
-            sub_1d = 0
+            sub_1d: float = 0
+            reason_1d = ""
             if excess_1d > 2:
                 sub_1d = 7
+                reason_1d = f"当日超额{excess_1d:+.1f}%，远超行业均值"
             elif excess_1d > 1:
                 sub_1d = 5
+                reason_1d = f"当日超额{excess_1d:+.1f}%，显著跑赢行业"
             elif excess_1d > 0:
                 sub_1d = 3
+                reason_1d = f"当日超额{excess_1d:+.1f}%，略超行业"
             elif excess_1d > -1:
                 sub_1d = 1
+                reason_1d = f"当日超额{excess_1d:+.1f}%，与行业持平"
             else:
-                sub_1d = 0
+                reason_1d = f"当日超额{excess_1d:+.1f}%，跑输行业"
 
             # 5日累计超额 (趋势市 0-6, 震荡市 0-7)
-            sub_5d_max = 6 if is_trending else 7
-            sub_5d = 0
+            sub_5d: float = 0
+            reason_5d = ""
             bars = daily_bars.get(sym, [])
             if len(bars) >= 5:
                 stock_5d = sum(b.get("pct_chg", 0) for b in bars[-5:])
@@ -769,37 +873,64 @@ class IndustryLeaderboardService:
                 excess_5d = stock_5d - peer_5d_avg
                 if excess_5d > 5:
                     sub_5d = sub_5d_max
+                    reason_5d = f"5日累计超额{excess_5d:+.1f}%，持续领跑行业"
                 elif excess_5d > 2:
                     sub_5d = sub_5d_max * 0.6
+                    reason_5d = f"5日累计超额{excess_5d:+.1f}%，跑赢行业"
                 elif excess_5d > 0:
                     sub_5d = sub_5d_max * 0.3
+                    reason_5d = f"5日累计超额{excess_5d:+.1f}%，略超行业"
+                else:
+                    reason_5d = "5日涨幅未跑赢行业均值"
+            else:
+                reason_5d = "5日数据不足"
 
             # 成交额贡献度 (趋势市 0-4, 震荡市 0-6)
-            contrib_max = 4 if is_trending else 6
-            sub_contrib = 0
+            sub_contrib: float = 0
+            reason_contrib = ""
             my_amount = q.get("amount", 0)
             total_amount = sum(quotes.get(p["ts_code"], {}).get("amount", 0) for p in peers)
             if total_amount > 0:
                 share = my_amount / total_amount
                 if share > 0.5:
                     sub_contrib = contrib_max
+                    reason_contrib = f"成交额占行业{share:.0%}，行业龙头地位显著"
                 elif share > 0.3:
                     sub_contrib = contrib_max * 0.7
+                    reason_contrib = f"成交额占行业{share:.0%}，行业主力品种"
                 elif share > 0.2:
                     sub_contrib = contrib_max * 0.4
+                    reason_contrib = f"成交额占行业{share:.0%}，行业活跃品种"
+                else:
+                    reason_contrib = f"成交额占行业{share:.0%}，关注度一般"
+            else:
+                reason_contrib = "行业成交额数据不足"
 
             score = sub_1d + sub_5d + sub_contrib
-            scores[sym] = max(0, min(score, 17 if is_trending else 20))
+            final_score = max(0, min(score, dim_max))
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "行业相对强度",
+                "score": round(final_score, 1),
+                "max": dim_max,
+                "sub_scores": [
+                    {"label": "1日超额收益", "score": round(sub_1d, 1), "max": 7, "reason": reason_1d},
+                    {"label": "5日累计超额", "score": round(sub_5d, 1), "max": sub_5d_max, "reason": reason_5d},
+                    {"label": "成交额贡献度", "score": round(sub_contrib, 1), "max": contrib_max, "reason": reason_contrib},
+                ],
+            }
 
-        return scores
+        return scores, details
 
     def _compute_price_residual(
         self, candidates: List[Dict], quotes: Dict[str, dict],
         indicators: Dict[str, dict], regime: str
-    ) -> Dict[str, float]:
-        """价格残差维度（风险指标）。"""
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """价格残差维度（风险指标）。返回 (scores, details)。"""
         scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
         is_trending = regime == REGIME_TRENDING
+        dim_max = 15 if is_trending else 18
 
         for c in candidates:
             sym = c["ts_code"]
@@ -815,50 +946,71 @@ class IndustryLeaderboardService:
 
             # MA20 乖离率倒U型 (趋势市 0-6, 震荡市 0-8)
             dev_max = 6 if is_trending else 8
-            dev_score = 0
+            dev_score: float = 0
+            dev_reason = ""
+            dev_optimal_low = 3 if is_trending else 2
+            dev_optimal_high = 10 if is_trending else 8
             if ma20 > 0 and close > 0:
                 deviation = abs(close - ma20) / ma20 * 100
-                dev_optimal_low = 3 if is_trending else 2
-                dev_optimal_high = 10 if is_trending else 8
                 if dev_optimal_low <= deviation <= dev_optimal_high:
                     dev_score = dev_max
+                    dev_reason = f"乖离率{deviation:.1f}%，处于{dev_optimal_low}-{dev_optimal_high}%最优区间"
                 elif deviation < dev_optimal_low:
                     dev_score = dev_max * (deviation / dev_optimal_low)
+                    dev_reason = f"乖离率{deviation:.1f}%，偏离过小，趋势力度不足"
                 elif deviation < 15:
                     dev_score = dev_max * (15 - deviation) / (15 - dev_optimal_high)
+                    dev_reason = f"乖离率{deviation:.1f}%，偏高但尚可接受"
                 else:
                     dev_score = 0
+                    dev_reason = f"乖离率{deviation:.1f}%，严重偏离均线"
+            else:
+                dev_reason = "MA20或价格数据不足"
 
-            # 相对行业超额涨幅 (趋势市 0-6, 震荡市 0-7)
+            # 超额涨幅 (趋势市 0-6, 震荡市 0-7)
             excess_max = 6 if is_trending else 7
-            # 用候选人所在行业的均值（由调用方提前算好）
             stock_pct = q.get("change_pct", 0)
-            excess_score = 0
+            excess_score: float = 0
+            excess_reason = ""
             if stock_pct > 2:
                 excess_score = excess_max
+                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能强劲"
             elif stock_pct > 1:
                 excess_score = excess_max * 0.7
+                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能良好"
             elif stock_pct > 0:
                 excess_score = excess_max * 0.4
+                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能一般"
             else:
-                excess_score = 0
+                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能不足"
 
             # 非尾盘拉升验证 (0-3)
-            tail_score = 3  # 默认满分（无尾盘拉升证据）
+            tail_score: float = 3
+            tail_reason = "未检测到尾盘拉升迹象"
             open_p = q.get("open", 0)
             high_p = q.get("high", 0)
             pre_close = q.get("pre_close", 0)
             if close > pre_close and open_p > 0 and high_p > 0:
-                total_gain = close - pre_close
-                # 简单估算：如果收盘接近最高，可能尾盘拉升
                 close_pct_of_range = (close - open_p) / max(high_p - open_p, 0.01)
-                if close_pct_of_range > 0.9 and total_gain > 0:
-                    tail_score = 1  # 疑似尾盘拉升
+                if close_pct_of_range > 0.9:
+                    tail_score = 1
+                    tail_reason = "疑似尾盘拉升(收盘价接近最高价)"
 
             score = dev_score + excess_score + tail_score
-            scores[sym] = max(0, min(score, 15 if is_trending else 18))
+            final_score = max(0, min(score, dim_max))
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "价格残差",
+                "score": round(final_score, 1),
+                "max": dim_max,
+                "sub_scores": [
+                    {"label": "MA20乖离率", "score": round(dev_score, 1), "max": dev_max, "reason": dev_reason},
+                    {"label": "超额涨幅", "score": round(excess_score, 1), "max": excess_max, "reason": excess_reason},
+                    {"label": "尾盘拉升验证", "score": round(tail_score, 1), "max": 3, "reason": tail_reason},
+                ],
+            }
 
-        return scores
+        return scores, details
 
     # ── 1.8 Round 2 资金补算 ─────────────────────────────────
 
@@ -918,17 +1070,18 @@ class IndustryLeaderboardService:
 
     def _compute_capital_persistence(
         self, candidates: List[Dict], moneyflows: Dict[str, dict], regime: str
-    ) -> Dict[str, float]:
-        """资金持续性维度得分（仅 Top10）。"""
-        scores: Dict[str, float] = {}
+    ) -> Tuple[Dict[str, Optional[float]], Dict[str, dict]]:
+        """资金持续性维度得分（仅 Top10）。返回 (scores, details)，无数据时 score 为 None。"""
+        scores: Dict[str, Optional[float]] = {}
+        details: Dict[str, dict] = {}
         is_trending = regime == REGIME_TRENDING
+        dim_max = 25 if is_trending else 22
 
         for c in candidates:
             sym = c["ts_code"]
             mf = moneyflows.get(sym)
 
             if not mf:
-                # 接口不可用，保持中性分
                 scores[sym] = None
                 continue
 
@@ -936,23 +1089,29 @@ class IndustryLeaderboardService:
             main_abs_max = 10 if is_trending else 8
             main_net = mf.get("main_net", 0)
             market_cap = c.get("market_cap", 0) or 1
-            flow_ratio = main_net / (market_cap * 1e8) if market_cap > 0 else 0  # market_cap is in 亿
+            flow_ratio = main_net / (market_cap * 1e8) if market_cap > 0 else 0
             if flow_ratio > 0.003:
                 main_score = main_abs_max
+                main_reason = f"主力净流入/流通市值={flow_ratio:.4f}，大资金净流入"
             elif flow_ratio > 0:
                 main_score = main_abs_max * flow_ratio / 0.003
+                main_reason = f"主力净流入/流通市值={flow_ratio:.4f}，温和净流入"
             else:
                 main_score = 0
+                main_reason = "主力净流出或零流入"
 
             # 主力净占比 (趋势市 0-8, 震荡市 0-7)
             pct_max = 8 if is_trending else 7
-            main_pct = float(mf.get("main_pct", "0").replace("%", ""))
+            main_pct = float(str(mf.get("main_pct", "0")).replace("%", ""))
             if main_pct > 10:
                 pct_score = pct_max
+                pct_reason = f"主力净占比{main_pct:.1f}%，主力高度控盘"
             elif main_pct > 0:
                 pct_score = pct_max * main_pct / 10
+                pct_reason = f"主力净占比{main_pct:.1f}%，主力偏多"
             else:
                 pct_score = 0
+                pct_reason = f"主力净占比{main_pct:.1f}%，主力偏空"
 
             # 5日累计主力净流入 / 流通市值 (0-7)
             d5_max = 7
@@ -960,15 +1119,29 @@ class IndustryLeaderboardService:
             d5_ratio = d5_main_net / (market_cap * 1e8) if market_cap > 0 else 0
             if d5_ratio > 0.005:
                 d5_score = d5_max
+                d5_reason = f"5日累计流入/市值={d5_ratio:.4f}，持续大额流入"
             elif d5_ratio > 0:
                 d5_score = d5_max * d5_ratio / 0.005
+                d5_reason = f"5日累计流入/市值={d5_ratio:.4f}，持续流入"
             else:
                 d5_score = 0
+                d5_reason = "5日主力净流出或零流入"
 
             score = main_score + pct_score + d5_score
-            scores[sym] = max(0, min(score, 25 if is_trending else 22))
+            final_score = max(0, min(score, dim_max))
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "资金持续性",
+                "score": round(final_score, 1),
+                "max": dim_max,
+                "sub_scores": [
+                    {"label": "主力净流入/市值", "score": round(main_score, 1), "max": main_abs_max, "reason": main_reason},
+                    {"label": "主力净占比", "score": round(pct_score, 1), "max": pct_max, "reason": pct_reason},
+                    {"label": "5日累计流入/市值", "score": round(d5_score, 1), "max": d5_max, "reason": d5_reason},
+                ],
+            }
 
-        return scores
+        return scores, details
 
     # ── 1.9 硬过滤 ──────────────────────────────────────────
 

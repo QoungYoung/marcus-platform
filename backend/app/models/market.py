@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Market data models."""
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel
 
 
@@ -308,6 +308,22 @@ class RealtimeIndicatorResponse(BaseModel):
 
 # ── 行业龙头排行 ──
 
+class ScoreDetailSubItem(BaseModel):
+    """评分维度子项"""
+    label: str = ""       # 子项名称，如 "MA排列层级"
+    score: float = 0      # 子项得分
+    max: float = 0        # 子项满分
+    reason: str = ""      # 加分原因（中文）
+
+
+class ScoreDetailDimension(BaseModel):
+    """单个评分维度的完整明细"""
+    label: str = ""                                   # 维度名称，如 "趋势综合"
+    score: float = 0                                  # 维度总得分
+    max: float = 0                                    # 维度满分
+    sub_scores: List[ScoreDetailSubItem] = []
+
+
 class LeaderboardItem(BaseModel):
     """行业龙头排行单条"""
     symbol: str                                # ts_code, e.g. "000001.SZ"
@@ -327,6 +343,7 @@ class LeaderboardItem(BaseModel):
     warnings: List[str] = []                   # untradeable / high_pe / overheat / dimension_floor
     data_source: str = "tencent"               # tencent / tushare
     volume_data: str = "full"                  # full / degraded
+    score_detail: Dict[str, ScoreDetailDimension] = {}
 
 
 class LeaderboardResponse(BaseModel):
