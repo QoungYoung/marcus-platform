@@ -514,44 +514,95 @@ export default function IndustryLeaderboardPage() {
         </div>
       </div>
 
-      {/* ── 评分详情弹窗 ── */}
+      {/* ── 战斗参数弹窗 ── */}
       {modalItem && modalItem.score_detail && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title-row">
-                <span className="modal-stock-name">{modalItem.name}</span>
-                <span className="modal-stock-symbol">{modalItem.symbol.split('.')[0]}</span>
-                <span className={tierTagClass(getTier(modalItem.composite_score).key)}>
-                  {getTier(modalItem.composite_score).label}
-                </span>
+        <div className="bp-overlay" onClick={closeModal}>
+          <div className="bp-panel" onClick={(e) => e.stopPropagation()}>
+            {/* 四角锁定框 */}
+            <span className="bp-corner bp-corner--tl" />
+            <span className="bp-corner bp-corner--tr" />
+            <span className="bp-corner bp-corner--bl" />
+            <span className="bp-corner bp-corner--br" />
+
+            {/* 扫描线 */}
+            <div className="bp-scanline" />
+
+            {/* 头部 HUD */}
+            <div className="bp-header">
+              <div className="bp-header-top">
+                <span className="bp-hud-label">TARGET ANALYSIS</span>
+                <span className="bp-hud-id">ID::{modalItem.symbol.split('.')[0]}</span>
               </div>
-              <button className="modal-close" onClick={closeModal}><X size={18} /></button>
-            </div>
-            <div className="detail-grid">
-              {Object.entries(modalItem.score_detail).map(([key, dim]) => (
-                <div key={key} className="detail-dim">
-                  <div className="detail-dim-head">
-                    <span className="detail-dim-icon">{DIM_ICONS[dim.label] || '·'}</span>
-                    <span className="detail-dim-label">{dim.label}</span>
-                    <span className="detail-dim-score">{dim.score.toFixed(1)}<i>/ {dim.max}</i></span>
-                  </div>
-                  <div className="detail-dim-bar">
-                    <div className="detail-dim-fill" style={{ width: `${pct(dim.score, dim.max)}%` }} />
-                  </div>
-                  <div className="detail-subs">
-                    {dim.sub_scores.map((sub, si) => (
-                      <div key={si} className="detail-sub">
-                        <div className="detail-sub-head">
-                          <span>{sub.label}</span>
-                          <span className="detail-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
-                        </div>
-                        <p className="detail-sub-reason">{sub.reason}</p>
-                      </div>
-                    ))}
-                  </div>
+              <div className="bp-header-main">
+                <div className="bp-target-name">{modalItem.name}</div>
+                <div className="bp-header-right">
+                  <span className={`bp-threat bp-threat--${getTier(modalItem.composite_score).key}`}>
+                    THREAT · {getTier(modalItem.composite_score).label}
+                  </span>
+                  <button className="bp-close" onClick={closeModal}>
+                    <X size={16} />
+                    <span>ESC</span>
+                  </button>
                 </div>
-              ))}
+              </div>
+              <div className="bp-header-bar">
+                <div className="bp-header-bar-label">COMPOSITE SCORE</div>
+                <div className="bp-header-bar-track">
+                  <div
+                    className="bp-header-bar-fill"
+                    style={{
+                      width: `${modalItem.composite_score}%`,
+                      background: `var(--bp-accent, ${getTier(modalItem.composite_score).color})`,
+                      boxShadow: `0 0 12px ${getTier(modalItem.composite_score).color}66`,
+                    }}
+                  />
+                </div>
+                <div className="bp-header-bar-val" style={{ color: getTier(modalItem.composite_score).color }}>
+                  {modalItem.composite_score.toFixed(1)}
+                </div>
+              </div>
+            </div>
+
+            {/* 参数网格 */}
+            <div className="bp-grid">
+              {Object.entries(modalItem.score_detail).map(([key, dim]) => {
+                const dimPct = pct(dim.score, dim.max);
+                return (
+                  <div key={key} className="bp-module">
+                    <div className="bp-module-head">
+                      <span className="bp-module-icon">{DIM_ICONS[dim.label] || '·'}</span>
+                      <span className="bp-module-label">{dim.label}</span>
+                      <span className="bp-module-score">
+                        {dim.score.toFixed(1)}<i>/ {dim.max}</i>
+                      </span>
+                    </div>
+                    <div className="bp-module-bar">
+                      <div
+                        className="bp-module-fill"
+                        style={{
+                          width: `${dimPct}%`,
+                          boxShadow: dimPct > 75 ? '0 0 10px var(--bp-glow)' : 'none',
+                        }}
+                      />
+                      <div className="bp-module-bar-tick" style={{ left: '25%' }} />
+                      <div className="bp-module-bar-tick" style={{ left: '50%' }} />
+                      <div className="bp-module-bar-tick" style={{ left: '75%' }} />
+                    </div>
+                    <div className="bp-subs">
+                      {dim.sub_scores.map((sub, si) => (
+                        <div key={si} className="bp-sub">
+                          <div className="bp-sub-head">
+                            <span className="bp-sub-dot" />
+                            <span>{sub.label}</span>
+                            <span className="bp-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
+                          </div>
+                          <p className="bp-sub-reason">{sub.reason}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
