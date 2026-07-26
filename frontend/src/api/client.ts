@@ -4,7 +4,7 @@ const API_BASE = '/api/v1'
 
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 30000,
+  timeout: 60000,
 })
 
 // Portfolio APIs
