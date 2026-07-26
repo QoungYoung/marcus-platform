@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw, TrendingUp, BarChart3, AlertTriangle, Ban } from 'lucide-react';
 import { marketApi } from '../api/client';
@@ -6,6 +6,20 @@ import '../styles/agent-theme.css';
 import '../styles/industry-leaderboard.css';
 
 // ── 类型 ──
+interface ScoreDetailSubItem {
+  label: string;
+  score: number;
+  max: number;
+  reason: string;
+}
+
+interface ScoreDetailDimension {
+  label: string;
+  score: number;
+  max: number;
+  sub_scores: ScoreDetailSubItem[];
+}
+
 interface LeaderboardItem {
   symbol: string;
   name: string;
@@ -24,6 +38,7 @@ interface LeaderboardItem {
   warnings: string[];
   data_source: string;
   volume_data: string;
+  score_detail?: Record<string, ScoreDetailDimension>;
 }
 
 interface LeaderboardResponse {
@@ -97,6 +112,11 @@ export default function IndustryLeaderboardPage() {
   const [sortBy, setSortBy] = useState<SortKey>('composite_score');
   const [filterIndustry, setFilterIndustry] = useState('');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+
+  const handleRowClick = (symbol: string) => {
+    setExpandedSymbol(expandedSymbol === symbol ? null : symbol);
+  };
 
   const fetchData = useCallback(async (refresh = false) => {
     try {
@@ -254,52 +274,87 @@ export default function IndustryLeaderboardPage() {
               Array.from({ length: 10 }).map((_, i) => <SkeletonRow key={i} idx={i} />)
             ) : (
               (data?.items || []).map((item, idx) => (
-                <tr key={item.symbol} className="lb-row">
-                  <td className="col-rank">{idx + 1}</td>
-                  <td className="col-name">
-                    <div className="lb-stock-name">
-                      <span className="lb-stock-symbol">{item.symbol.split('.')[0]}</span>
-                      <span className="lb-stock-cname">{item.name}</span>
-                    </div>
-                    <div className="lb-stock-warnings">
-                      {item.warnings.includes('untradeable') && (
-                        <span className="lb-warn-tag untradeable"><Ban size={10} /> 一字板</span>
+                <React.Fragment key={item.symbol}>
+                  <tr
+                    className={`lb-row ${expandedSymbol === item.symbol ? 'lb-row--active' : ''}`}
+                    onClick={() => handleRowClick(item.symbol)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td className="col-rank">{idx + 1}</td>
+                    <td className="col-name">
+                      <div className="lb-stock-name">
+                        <span className="lb-stock-symbol">{item.symbol.split('.')[0]}</span>
+                        <span className="lb-stock-cname">{item.name}</span>
+                      </div>
+                      <div className="lb-stock-warnings">
+                        {item.warnings.includes('untradeable') && (
+                          <span className="lb-warn-tag untradeable"><Ban size={10} /> 一字板</span>
+                        )}
+                        {item.warnings.includes('overheat') && (
+                          <span className="lb-warn-tag overheat"><AlertTriangle size={10} /> 过热</span>
+                        )}
+                        {item.warnings.includes('high_pe') && (
+                          <span className="lb-warn-tag high-pe"><AlertTriangle size={10} /> 高PE</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="col-industry">{item.industry}</td>
+                    <td className="col-pct" style={{ color: item.change_pct >= 0 ? RED : GREEN }}>
+                      {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
+                    </td>
+                    <td className="col-amount">{fmtAmount(item.turnover_amount)}</td>
+                    <td className="col-score">
+                      <span
+                        className="lb-score-badge"
+                        style={{ backgroundColor: scoreColor(item.composite_score) }}
+                      >
+                        {item.composite_score.toFixed(1)}
+                      </span>
+                    </td>
+                    <td className="col-score dim">{item.trend_score.toFixed(1)}</td>
+                    <td className="col-score dim">
+                      {item.capital_score.toFixed(1)}
+                      {item.capital_data === 'neutral' && (
+                        <span className="lb-capital-hint" title="非Top10，资金分取中性值">~</span>
                       )}
-                      {item.warnings.includes('overheat') && (
-                        <span className="lb-warn-tag overheat"><AlertTriangle size={10} /> 过热</span>
+                      {item.capital_data === 'unavailable' && (
+                        <span className="lb-capital-hint" title="东方财富接口不可用">!</span>
                       )}
-                      {item.warnings.includes('high_pe') && (
-                        <span className="lb-warn-tag high-pe"><AlertTriangle size={10} /> 高PE</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="col-industry">{item.industry}</td>
-                  <td className="col-pct" style={{ color: item.change_pct >= 0 ? RED : GREEN }}>
-                    {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
-                  </td>
-                  <td className="col-amount">{fmtAmount(item.turnover_amount)}</td>
-                  <td className="col-score">
-                    <span
-                      className="lb-score-badge"
-                      style={{ backgroundColor: scoreColor(item.composite_score) }}
-                    >
-                      {item.composite_score.toFixed(1)}
-                    </span>
-                  </td>
-                  <td className="col-score dim">{item.trend_score.toFixed(1)}</td>
-                  <td className="col-score dim">
-                    {item.capital_score.toFixed(1)}
-                    {item.capital_data === 'neutral' && (
-                      <span className="lb-capital-hint" title="非Top10，资金分取中性值">~</span>
-                    )}
-                    {item.capital_data === 'unavailable' && (
-                      <span className="lb-capital-hint" title="东方财富接口不可用">!</span>
-                    )}
-                  </td>
-                  <td className="col-score dim">{item.volume_price_score.toFixed(1)}</td>
-                  <td className="col-score dim">{item.industry_relative_score.toFixed(1)}</td>
-                  <td className="col-score dim">{item.price_residual_score.toFixed(1)}</td>
-                </tr>
+                    </td>
+                    <td className="col-score dim">{item.volume_price_score.toFixed(1)}</td>
+                    <td className="col-score dim">{item.industry_relative_score.toFixed(1)}</td>
+                    <td className="col-score dim">{item.price_residual_score.toFixed(1)}</td>
+                  </tr>
+                  {expandedSymbol === item.symbol && item.score_detail && (
+                    <tr className="lb-detail-row">
+                      <td colSpan={11} className="lb-detail-cell">
+                        <div className="lb-detail-grid">
+                          {Object.entries(item.score_detail).map(([key, dim]) => (
+                            <div key={key} className="lb-detail-card">
+                              <div className="lb-detail-card-header">
+                                <span className="lb-detail-card-label">{dim.label}</span>
+                                <span className="lb-detail-card-score" style={{ color: scoreColor((dim.score / dim.max) * 100) }}>
+                                  {dim.score.toFixed(1)} / {dim.max}
+                                </span>
+                              </div>
+                              <div className="lb-detail-card-subs">
+                                {dim.sub_scores.map((sub, si) => (
+                                  <div key={si} className="lb-detail-sub-row">
+                                    <div className="lb-detail-sub-header">
+                                      <span className="lb-detail-sub-label">{sub.label}</span>
+                                      <span className="lb-detail-sub-score">{sub.score.toFixed(1)} / {sub.max.toFixed(1)}</span>
+                                    </div>
+                                    <div className="lb-detail-sub-reason">{sub.reason}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))
             )}
           </tbody>

@@ -296,9 +296,105 @@
   100% { background-position: -200% 0; }
 }
 
+/* ── 展开行高亮 ── */
+.lb-row--active {
+  background: rgba(52, 152, 219, 0.08) !important;
+}
+
+.lb-row--active td {
+  border-bottom-color: rgba(52, 152, 219, 0.2);
+}
+
+/* ── 详情行 ── */
+.lb-detail-row {
+  background: rgba(26, 29, 39, 0.6);
+}
+
+.lb-detail-row:hover {
+  background: rgba(26, 29, 39, 0.6) !important;
+}
+
+.lb-detail-cell {
+  padding: 16px 20px !important;
+  border-bottom: 2px solid rgba(52, 152, 219, 0.15) !important;
+}
+
+/* ── 详情网格 ── */
+.lb-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+
+.lb-detail-card {
+  background: var(--agent-card, #1a1d27);
+  border: 1px solid var(--agent-border, #2a2e38);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.lb-detail-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(42, 46, 56, 0.6);
+}
+
+.lb-detail-card-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--agent-text-primary, #e8eaed);
+}
+
+.lb-detail-card-score {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 子项 ── */
+.lb-detail-card-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lb-detail-sub-row {
+  font-size: 11px;
+}
+
+.lb-detail-sub-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.lb-detail-sub-label {
+  color: var(--agent-text-secondary, #8e9297);
+}
+
+.lb-detail-sub-score {
+  color: var(--agent-text-secondary, #888);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+
+.lb-detail-sub-reason {
+  color: var(--agent-text-primary, #c0c4cc);
+  line-height: 1.5;
+}
+
 /* ── 响应式 ── */
 @media (max-width: 1200px) {
   .col-industry { display: none; }
+  .lb-detail-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 768px) {
+  .lb-detail-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 900px) {
