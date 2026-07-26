@@ -299,8 +299,8 @@ class IndustryLeaderboardService:
             c["industry"] for c in self._get_industry_candidates()
         ))
 
-        # 最近 20 个交易日列表（前端时间线用）
-        trading_days = self._get_recent_trading_days(20, as_of_date=date)
+        # 最近 20 个交易日列表（前端时间线用，始终基于最新交易日）
+        trading_days = self._get_recent_trading_days(20)
 
         result = {
             "items": items,
@@ -739,37 +739,65 @@ class IndustryLeaderboardService:
         return daily_bars, status
 
     def _historical_moneyflow(self, top10_symbols: List[str], date: str) -> Dict[str, dict]:
-        """从 Tushare moneyflow 表获取指定日期的资金流向（仅 Top10）。"""
+        """从 Tushare moneyflow 日频接口获取指定日期 + 前5日累计资金流向（仅 Top10）。"""
         moneyflows: Dict[str, dict] = {}
+        ref_date = datetime.strptime(date, "%Y%m%d")
+        start_date = (ref_date - timedelta(days=12)).strftime("%Y%m%d")  # 留足余量覆盖5个交易日
         try:
             pro = _get_tushare_pro()
             for ts_code in top10_symbols:
-                df = pro.moneyflow(ts_code=ts_code, start_date=date, end_date=date)
-                if df is None or df.empty:
-                    continue
-                row = df.iloc[0]
-                code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
-                # 使用 net_mf_amount (万元) 作为主力净流入的近似
-                net_amount = float(row.get("net_mf_amount", 0) or 0)
-                buy_lg = float(row.get("buy_lg_amount", 0) or 0)
-                sell_lg = float(row.get("sell_lg_amount", 0) or 0)
-                buy_elg = float(row.get("buy_elg_amount", 0) or 0)
-                sell_elg = float(row.get("sell_elg_amount", 0) or 0)
-                main_net = (buy_lg + buy_elg - sell_lg - sell_elg) * 10000  # 万元→元
-                moneyflows[ts_code] = {
-                    "symbol": code,
-                    "name": "",
-                    "price": 0,
-                    "change_pct": "0",
-                    "turnover_rate": "0",
-                    "main_net": main_net,
-                    "main_pct": "0",  # Tushare moneyflow 无百分比
-                    "d5_main_net": 0,
-                    "d5_main_pct": "0",
-                }
-                time.sleep(0.1)  # QPS 限制
+                try:
+                    df = pro.moneyflow(ts_code=ts_code, start_date=start_date, end_date=date)
+                    if df is None or df.empty:
+                        continue
+                    df = df.sort_values("trade_date")
+
+                    # 当日行
+                    day_rows = df[df["trade_date"] == date]
+                    if day_rows.empty:
+                        continue
+                    row = day_rows.iloc[-1]
+                    code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
+
+                    buy_lg = float(row.get("buy_lg_amount", 0) or 0)      # 大单买入金额(万元)
+                    sell_lg = float(row.get("sell_lg_amount", 0) or 0)    # 大单卖出金额(万元)
+                    buy_elg = float(row.get("buy_elg_amount", 0) or 0)    # 特大单买入金额(万元)
+                    sell_elg = float(row.get("sell_elg_amount", 0) or 0)  # 特大单卖出金额(万元)
+                    main_net = (buy_lg + buy_elg - sell_lg - sell_elg) * 10000  # 万元→元
+
+                    # 计算主力净占比：主力净额 / 主力总成交额
+                    main_total = (buy_lg + sell_lg + buy_elg + sell_elg)
+                    if main_total > 0:
+                        main_pct = round((buy_lg + buy_elg - sell_lg - sell_elg) / main_total * 100, 2)
+                    else:
+                        main_pct = 0.0
+
+                    # 5日累计主力净流入（从查询结果中取 date 之前最近5个交易日）
+                    pre_rows = df[df["trade_date"] < date].tail(5)
+                    d5_main_net = 0.0
+                    for _, pr in pre_rows.iterrows():
+                        d5_buy_lg = float(pr.get("buy_lg_amount", 0) or 0)
+                        d5_sell_lg = float(pr.get("sell_lg_amount", 0) or 0)
+                        d5_buy_elg = float(pr.get("buy_elg_amount", 0) or 0)
+                        d5_sell_elg = float(pr.get("sell_elg_amount", 0) or 0)
+                        d5_main_net += (d5_buy_lg + d5_buy_elg - d5_sell_lg - d5_sell_elg) * 10000
+
+                    moneyflows[ts_code] = {
+                        "symbol": code,
+                        "name": "",
+                        "price": 0,
+                        "change_pct": "0",
+                        "turnover_rate": "0",
+                        "main_net": main_net,
+                        "main_pct": str(main_pct),
+                        "d5_main_net": d5_main_net,
+                        "d5_main_pct": "0",
+                    }
+                    time.sleep(0.12)  # QPS 限制
+                except Exception as e:
+                    logger.warning(f"[Leaderboard] _historical_moneyflow failed for {ts_code}: {e}")
         except Exception as e:
-            logger.warning(f"[Leaderboard] _historical_moneyflow failed: {e}")
+            logger.warning(f"[Leaderboard] _historical_moneyflow overall failed: {e}")
         return moneyflows
 
     # ── 前瞻收益验证 ─────────────────────────────────────────
