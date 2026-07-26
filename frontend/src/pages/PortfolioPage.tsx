@@ -468,586 +468,494 @@ export default function PortfolioPage() {
   return (
     <div className="cp-page">
       <canvas ref={canvasRef} id="cp-bg-canvas" />
-      {/* ═══ 行情 Ticker ═══ */}
-      {!loadingTickers && tickers.length > 0 && (
-        <div className="cp-ticker-bar">
-          {tickers.map(tk => (
-            <div key={tk.name} className="cp-ticker-item">
-              <span className="cp-ticker-name">{tk.name}</span>
-              <span className="cp-ticker-price">{tk.price.toFixed(2)}</span>
-              <span className={`cp-ticker-pct ${tk.change_pct >= 0 ? 'up' : 'down'}`}>
-                {tk.change_pct >= 0 ? '+' : ''}{tk.change_pct.toFixed(2)}%
-              </span>
-            </div>
-          ))}
+
+      {/* ══════════ STATUS BAR — Row 1 ══════════ */}
+      <div className="cp-status-bar">
+        <div className="cp-status-sys">
+          <span className="cp-status-dot" />
+          SYS:ONLINE
         </div>
-      )}
-      {loadingTickers && <SkeletonTicker />}
-
-      {/* ═══ 头部 ═══ */}
-      <header className="cp-header">
-        <div className="cp-header-left">
-          <div className="cp-header-icon"><i className="fas fa-wallet" /></div>
-          <div>
-            <h1 className="cp-header-title">{t('portfolio.title')}</h1>
-            <div className="cp-header-meta">
-              <span className="cp-live-dot" />
-              <span className="cp-update-time">{t('common.refresh')}: {lastUpdate.toLocaleTimeString()}</span>
-            </div>
+        <div className="cp-status-divider" />
+        {!loadingTickers && tickers.length > 0 && (
+          <div className="cp-status-ticker">
+            {tickers.map(tk => (
+              <div key={tk.name} className="cp-status-ticker-item">
+                <span className="cp-status-ticker-name">{tk.name}</span>
+                <span className="cp-status-ticker-price">{tk.price.toFixed(2)}</span>
+                <span className={`cp-status-ticker-pct ${tk.change_pct >= 0 ? 'up' : 'down'}`}>
+                  {tk.change_pct >= 0 ? '+' : ''}{tk.change_pct.toFixed(2)}%
+                </span>
+              </div>
+            ))}
           </div>
-        </div>
-        <button className="cp-refresh-btn" onClick={refreshSummary} title="刷新资产">
-          <i className={`fas fa-sync-alt ${loadingSummary ? 'fa-spin' : ''}`} />
-        </button>
-      </header>
+        )}
+        {loadingTickers && <div style={{ flex: 1 }}><Skel w={200} h={12} /></div>}
+        <span className="cp-status-time">{lastUpdate.toLocaleTimeString()}</span>
+      </div>
 
-      {/* ═══ 概览组：资产 + 风险 ═══ */}
-      <div className="cp-section-group">
-
-      {/* ═══ 资产 Hero 卡片 ═══ */}
-      {loadingSummary ? <SkeletonHero /> : summary && (
-        <div className="cp-hero-card">
-          <div className="cp-hero-left">
-            <div className="cp-hero-label">{t('portfolio.totalAsset')}</div>
-            <div className="cp-hero-value">¥{fmtMoney(totalAsset)}</div>
-            <div className="cp-hero-label" style={{ marginTop: 12 }}>{t('portfolio.totalPnL')}</div>
-            <div className={`cp-hero-pnl ${totalPnl >= 0 ? 'up' : 'down'}`}>
-              {totalPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(totalPnl))}
+      {/* ══════════ STRATEGIC RESOURCES — Left Column ══════════ */}
+      <div className="cp-strategic">
+        <div className="cp-strategic-panel">
+          <div className="cp-strategic-label">◆ Strategic Resources</div>
+          {loadingSummary ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <Skel w={140} h={28} /><Skel w={100} h={18} /><Skel w="100%" h={1} /><Skel w={80} h={14} /><Skel w={100} h={14} />
             </div>
-            <div className={`cp-hero-change ${totalPnl >= 0 ? 'up' : 'down'}`}>
-              <i className={`fas fa-caret-${totalPnl >= 0 ? 'up' : 'down'}`} />
-              {total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%
-            </div>
-            <div className={`cp-hero-change ${weekTotal >= 0 ? 'up' : 'down'}`} style={{ marginTop: 8, display: 'block' }}>
-              <span style={{ fontWeight: 500, marginRight: 4 }}>本周盈亏</span>
-              {weekTotal >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(weekTotal))}
-              <span style={{ fontWeight: 400, fontSize: 11, opacity: 0.8, marginLeft: 4 }}>
-                (已实现<span style={{ color: weekRealized >= 0 ? 'var(--agent-up, #2ecc71)' : 'var(--agent-down, #e74c3c)' }}>{weekRealized >= 0 ? '+' : ''}{fmtMoneyShort(Math.abs(weekRealized))}</span>
-                {' / '}浮盈<span style={{ color: weekFloat >= 0 ? 'var(--agent-up, #2ecc71)' : 'var(--agent-down, #e74c3c)' }}>{weekFloat >= 0 ? '+' : ''}{fmtMoneyShort(Math.abs(weekFloat))}</span>)
-              </span>
-            </div>
-          </div>
-          <div className="cp-hero-right">
-            <div className="cp-hero-kpi">
-              <div className="cp-hero-kpi-label">{t('portfolio.availableCash')}</div>
-              <div className="cp-hero-kpi-value">¥{fmtMoney(cash)}</div>
+          ) : summary && (
+            <>
+              <div className="cp-strategic-value">¥{fmtMoney(totalAsset)}</div>
+              <div className={`cp-strategic-sub ${totalPnl >= 0 ? 'up' : 'down'}`}>
+                {totalPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(totalPnl))}
+                <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--cc-text-dim)', marginLeft: 6 }}>
+                  {total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%
+                </span>
+              </div>
+              <div className="cp-strategic-divider" />
+              <div className="cp-strategic-row">
+                <span className="cp-strategic-row-label">可用资金</span>
+                <span className="cp-strategic-row-value">¥{fmtMoney(cash)}</span>
+              </div>
+              <div className="cp-strategic-row">
+                <span className="cp-strategic-row-label">持仓市值</span>
+                <span className="cp-strategic-row-value">¥{fmtMoney(posVal)}</span>
+              </div>
+              <div className="cp-strategic-row">
+                <span className="cp-strategic-row-label">已实现盈亏</span>
+                <span className={`cp-strategic-row-value ${realizedPnl >= 0 ? 'up' : 'down'}`}>
+                  {realizedPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(realizedPnl))}</span>
+              </div>
+              <div className="cp-strategic-row">
+                <span className="cp-strategic-row-label">浮动盈亏</span>
+                <span className={`cp-strategic-row-value ${floatPnl >= 0 ? 'up' : 'down'}`}>
+                  {floatPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(floatPnl))}</span>
+              </div>
               {frozen > 0 && (
-                <div className="cp-hero-kpi-sub" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                  <span style={{ color: 'var(--agent-warn, #f0b90b)', fontSize: 10 }}>
-                    <i className="fas fa-lock" style={{ marginRight: 3 }} />
-                    {t('portfolio.frozenCash')}: ¥{fmtMoney(frozen)}
-                  </span>
-                  <button className="cp-unfreeze-btn" onClick={handleUnfreeze} disabled={unfreezing}
-                    title={t('portfolio.unfreezeFunds')}>
-                    {unfreezing ? <><i className="fas fa-spinner fa-spin" style={{ fontSize: 9 }} /> 解冻中</>
-                      : <><i className="fas fa-unlock" style={{ fontSize: 9 }} /> {t('portfolio.unfreezeFunds')}</>}
+                <div className="cp-strategic-row">
+                  <span className="cp-strategic-row-label" style={{ color: 'var(--cc-amber)' }}>冻结资金</span>
+                  <span className="cp-strategic-row-value" style={{ color: 'var(--cc-amber)' }}>¥{fmtMoney(frozen)}</span>
+                  <button className="cp-icon-btn" onClick={handleUnfreeze} disabled={unfreezing}
+                    title={t('portfolio.unfreezeFunds')} style={{ marginLeft: 6, width: 20, height: 20, fontSize: 8 }}>
+                    <i className={`fas fa-${unfreezing ? 'spinner fa-spin' : 'unlock'}`} />
                   </button>
                 </div>
               )}
-            </div>
-            <HeroKpi label={t('portfolio.positionValue')} value={`¥${fmtMoney(posVal)}`} sub={`${posRatio.toFixed(1)}%`} />
-            <HeroKpi label={t('portfolio.realizedPnL')} value={`${realizedPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(realizedPnl))}`} trend={realizedPnl >= 0 ? 'up' : 'down'} />
-            <HeroKpi label={t('portfolio.floatingPnL')} value={`${floatPnl >= 0 ? '+' : ''}¥${fmtMoneyShort(Math.abs(floatPnl))}`} trend={floatPnl >= 0 ? 'up' : 'down'} />
-          </div>
-        </div>
-      )}
-
-      {/* ═══ 绩效指标卡片行 ═══ */}
-      {summary && (
-        <div className="cp-metrics-row">
-          <div className="cp-metric-card">
-            <div className="cp-metric-label">夏普比率</div>
-            <div className="cp-metric-value">{sharpeRatio != null ? sharpeRatio.toFixed(2) : 'N/A'}</div>
-            <div className="cp-metric-sub">{sharpeRatio != null ? (sharpeRatio > 1 ? '优秀' : sharpeRatio > 0.5 ? '良好' : '一般') : '需要更多数据'}</div>
-          </div>
-          <div className="cp-metric-card">
-            <div className="cp-metric-label">本月收益</div>
-            <div className={`cp-metric-value ${(monthlyReturns[0]?.returnPct ?? 0) >= 0 ? 'up' : 'down'}`}>
-              {monthlyReturns[0] != null ? `${monthlyReturns[0].returnPct >= 0 ? '+' : ''}${monthlyReturns[0].returnPct.toFixed(2)}%` : 'N/A'}
-            </div>
-            <div className="cp-metric-sub">{monthlyReturns[0]?.period ?? '—'}</div>
-          </div>
-          <div className="cp-metric-card">
-            <div className="cp-metric-label">本季收益</div>
-            <div className={`cp-metric-value ${(quarterlyReturns[0]?.returnPct ?? 0) >= 0 ? 'up' : 'down'}`}>
-              {quarterlyReturns[0] != null ? `${quarterlyReturns[0].returnPct >= 0 ? '+' : ''}${quarterlyReturns[0].returnPct.toFixed(2)}%` : 'N/A'}
-            </div>
-            <div className="cp-metric-sub">{quarterlyReturns[0]?.period ?? '—'}</div>
-          </div>
-          <div className="cp-metric-card">
-            <div className="cp-metric-label">今日 vs 沪深300</div>
-            {benchmarkDelta ? (
-              <>
-                <div className={`cp-metric-value ${benchmarkDelta.label === 'outperform' ? 'up' : benchmarkDelta.label === 'underperform' ? 'down' : ''}`}>
-                  {benchmarkDelta.label === 'outperform' ? '跑赢' : benchmarkDelta.label === 'underperform' ? '跑输' : '持平'}
-                  <span style={{ fontSize: 12, marginLeft: 4 }}>
-                    {benchmarkDelta.delta >= 0 ? '+' : ''}{benchmarkDelta.delta.toFixed(2)}%
-                  </span>
+              <div className="cp-ratio-gauge">
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--cc-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  <span>仓位率</span><span style={{ fontFamily: 'var(--font-display)', fontWeight: 600, color: 'var(--cc-text)' }}>{posRatio.toFixed(0)}%</span>
                 </div>
-                <div className="cp-metric-sub">沪深300 {hs300?.change_pct != null ? `${hs300.change_pct >= 0 ? '+' : ''}${hs300.change_pct.toFixed(2)}%` : '—'}</div>
-              </>
-            ) : (
-              <>
-                <div className="cp-metric-value" style={{ color: 'var(--agent-text-dim)' }}>—</div>
-                <div className="cp-metric-sub">等待指数数据</div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ═══ 风险仪表 4 连 ═══ */}
-      {loadingSummary ? <SkeletonRisk /> : summary && (
-        <div className="cp-risk-strip">
-          <RiskCard icon="fa-gauge-high" label={t('portfolio.positionRatio')}
-            value={`${posRatio.toFixed(0)}%`}
-            sub={posRatio > 80 ? '重仓' : posRatio > 50 ? '中性' : '轻仓'}
-            level={posRatio > 80 ? 'danger' : posRatio > 50 ? 'warn' : 'safe'} />
-          <RiskCard icon="fa-arrow-trend-down" label="最大回撤"
-            value={`-${maxDrawdown.toFixed(1)}%`} sub="历史最大"
-            level={maxDrawdown > 15 ? 'danger' : maxDrawdown > 8 ? 'warn' : 'safe'} />
-          <RiskCard icon="fa-bullseye" label={t('analytics.winRate')}
-            value={`${win_rate.toFixed(1)}%`} sub={`${positions.length} 只持仓`}
-            level={win_rate > 60 ? 'safe' : win_rate > 40 ? 'warn' : 'danger'} />
-          <RiskCard icon="fa-wave-square" label="年化波动"
-            value={`${volatility.toFixed(1)}%`} sub="60日滚动"
-            level={volatility > 25 ? 'danger' : volatility > 15 ? 'warn' : 'safe'} />
-        </div>
-      )}
-      </div>
-
-      {/* ═══ 止损监控卡片 ═══ */}
-      <div className="cp-section-group">
-      {loadingStopLoss ? <SkeletonSL /> : stopLoss && (
-        <div className="cp-sl-strip">
-          <div className="cp-sl-card" onClick={() => setSlExpanded(e => !e)} style={{ cursor: 'pointer' }}>
-            <div className="cp-sl-indicator">
-              <span className={`cp-sl-dot ${stopLoss.running && stopLoss.thread_alive ? 'live' : 'dead'}`} />
-              <span className="cp-sl-status-text">
-                {stopLoss.interval_seconds === 0 ? 'API 不可达' : stopLoss.running && stopLoss.thread_alive ? '运行中' : '已停止'}
-              </span>
-              {stopLoss.is_morning_volatility && <span className="cp-sl-tag warn">早盘冷静期</span>}
-              {!stopLoss.is_trading_time && <span className="cp-sl-tag muted">非交易时段</span>}
-              <button className={`cp-sl-toggle ${stopLoss.running && stopLoss.thread_alive ? 'on' : 'off'}`}
-                onClick={handleToggleSL} disabled={slToggling}
-                title={stopLoss.running && stopLoss.thread_alive ? '停止监控' : '启动监控'}>
-                <i className={`fas fa-${slToggling ? 'spinner fa-spin' : stopLoss.running && stopLoss.thread_alive ? 'stop' : 'play'}`} />
-              </button>
-              <button className="cp-refresh-btn" onClick={(e) => { e.stopPropagation(); refreshStopLoss(); }}
-                title="刷新止损" style={{ marginLeft: 4 }}>
-                <i className={`fas fa-sync-alt ${loadingStopLoss ? 'fa-spin' : ''}`} style={{ fontSize: 10 }} />
-              </button>
-            </div>
-            <div className="cp-sl-metrics">
-              <div className={`cp-sl-metric ${stopLoss.triggered_count > 0 ? 'danger' : 'safe'}`}>
-                <span className="cp-sl-metric-val">{stopLoss.triggered_count}</span>
-                <span className="cp-sl-metric-label">已触发</span>
+                <div className="cp-ratio-gauge-bar">
+                  <div className={`cp-ratio-gauge-fill ${posRatio > 80 ? 'danger' : posRatio > 50 ? 'warn' : 'safe'}`}
+                    style={{ width: `${Math.min(posRatio, 100)}%` }} />
+                </div>
               </div>
-              <div className="cp-sl-metric">
-                <span className="cp-sl-metric-val">{stopLoss.position_count}</span>
-                <span className="cp-sl-metric-label">监控中</span>
+              <div className="cp-perf-mini">
+                <div className="cp-perf-item">
+                  <div className="cp-perf-item-val">{sharpeRatio != null ? sharpeRatio.toFixed(2) : '—'}</div>
+                  <div className="cp-perf-item-label">夏普比率</div>
+                </div>
+                <div className="cp-perf-item">
+                  <div className={`cp-perf-item-val ${(monthlyReturns[0]?.returnPct ?? 0) >= 0 ? 'up' : 'down'}`}>
+                    {monthlyReturns[0] != null ? `${monthlyReturns[0].returnPct >= 0 ? '+' : ''}${monthlyReturns[0].returnPct.toFixed(1)}%` : '—'}
+                  </div>
+                  <div className="cp-perf-item-label">本月收益</div>
+                </div>
+                <div className="cp-perf-item">
+                  <div className={`cp-perf-item-val ${(quarterlyReturns[0]?.returnPct ?? 0) >= 0 ? 'up' : 'down'}`}>
+                    {quarterlyReturns[0] != null ? `${quarterlyReturns[0].returnPct >= 0 ? '+' : ''}${quarterlyReturns[0].returnPct.toFixed(1)}%` : '—'}
+                  </div>
+                  <div className="cp-perf-item-label">本季收益</div>
+                </div>
+                <div className="cp-perf-item">
+                  <div className={`cp-perf-item-val ${benchmarkDelta?.label === 'outperform' ? 'up' : benchmarkDelta?.label === 'underperform' ? 'down' : ''}`}>
+                    {benchmarkDelta ? `${benchmarkDelta.delta >= 0 ? '+' : ''}${benchmarkDelta.delta.toFixed(1)}%` : '—'}
+                  </div>
+                  <div className="cp-perf-item-label">vs 沪深300</div>
+                </div>
               </div>
-              <div className="cp-sl-metric">
-                <span className="cp-sl-metric-val">{stopLoss.today_stops_count}</span>
-                <span className="cp-sl-metric-label">今日止损</span>
+              <div style={{ fontSize: 9, color: 'var(--cc-text-dim)', marginTop: 8, textAlign: 'center' }}>
+                本周 {weekTotal >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(weekTotal))}
+                {' '}(已实现 <span style={{ color: weekRealized >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>{weekRealized >= 0 ? '+' : ''}{fmtMoneyShort(Math.abs(weekRealized))}</span>
+                {' '}/ 浮盈 <span style={{ color: weekFloat >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>{weekFloat >= 0 ? '+' : ''}{fmtMoneyShort(Math.abs(weekFloat))}</span>)
               </div>
-              <div className="cp-sl-metric">
-                <span className="cp-sl-metric-val">{stopLoss.interval_seconds}s</span>
-                <span className="cp-sl-metric-label">扫描间隔</span>
-              </div>
-            </div>
-            <div style={{ fontSize: 10, color: A, textAlign: 'center', marginTop: 4 }}>
-              <i className={`fas fa-chevron-${slExpanded ? 'up' : 'down'}`} /> {slExpanded ? '收起' : '展开'}持仓距离
-            </div>
-          </div>
-          {slExpanded && stopLoss.positions.length > 0 && (
-            <div className="cp-sl-detail">
-              <table className="cp-sl-table">
-                <thead><tr>
-                  <th>代码</th><th>名称</th><th className="right">成本价</th><th className="right">现价</th><th className="right">浮盈</th>
-                  <th className="right">距离%</th><th className="right">最近规则</th><th className="right">风险</th>
-                </tr></thead>
-                <tbody>
-                  {stopLoss.positions.map(p => {
-                    const danger = p.nearest_trigger?.danger_level || 'no_rules';
-                    const ruleLabels: Record<string, string> = {
-                      rul0a_break_low: '破底', rul0b_cost_stop: '成本',
-                      rul1_sector: '行业', rul2_iron: '铁律2', rul3_dynamic: '动态',
-                    };
-                    const ruleLabel = ruleLabels[p.nearest_trigger?.rule || ''] || p.nearest_trigger?.rule || '';
-                    return (
-                      <tr key={p.symbol} className={danger === 'triggered' ? 'sl-row-danger' : danger === 'critical' ? 'sl-row-critical' : ''}>
-                        <td className="mono bold">{p.symbol}</td>
-                        <td className="dim">{p.name || p.symbol}</td>
-                        <td className="num mono right">¥{p.avg_price.toFixed(2)}</td>
-                        <td className="num mono right">¥{p.current_price.toFixed(2)}</td>
-                        <td className={`num right ${p.float_pnl_pct >= 0 ? 'pnl-up' : 'pnl-down'}`}>
-                          {p.float_pnl_pct >= 0 ? '+' : ''}{p.float_pnl_pct.toFixed(2)}%</td>
-                        <td className="num mono right">
-                          {p.nearest_trigger?.distance_pct != null
-                            ? `${p.nearest_trigger.distance_pct >= 0 ? '+' : ''}${p.nearest_trigger.distance_pct.toFixed(2)}%` : '-'}</td>
-                        <td className="num dim right">{ruleLabel}</td>
-                        <td className="num right">
-                          <span className={`cp-sl-badge ${danger}`}>
-                            {danger === 'triggered' ? '触发' : danger === 'critical' ? '危急' : danger === 'warning' ? '警告' : danger === 'caution' ? '关注' : '安全'}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            </>
           )}
         </div>
-      )}
       </div>
 
-      {/* ═══ 分析组：图表 + 持仓 + 交易 ═══ */}
-      <div className="cp-section-group">
-
-      {/* ═══ 图表行 ═══ */}
-      <div className="cp-row-charts">
-        {/* 每日盈亏柱状图 */}
-        <div className="cp-panel" style={{ minHeight: 280 }}>
-          <div className="cp-panel-header">
-            <i className="fas fa-chart-bar" />
-            <span className="cp-panel-title">{t('portfolio.dailyPnL')}</span>
-            <button className="cp-refresh-btn" onClick={refreshEquity} title="刷新" style={{ marginLeft: 'auto' }}>
-              <i className={`fas fa-sync-alt ${loadingEquity ? 'fa-spin' : ''}`} />
-            </button>
+      {/* ══════════ MAIN VIEW — Center Column (Battlefield Map) ══════════ */}
+      <div className="cp-main-view">
+        <div className="cp-battlefield">
+          <div className="cp-battlefield-scanline" />
+          <div className="cp-battlefield-header">
+            <span className="cp-battlefield-title">◆ Strategic Overview</span>
+            <div className="cp-battlefield-actions">
+              <button className="cp-icon-btn" onClick={refreshEquity} title="刷新">
+                <i className={`fas fa-sync-alt ${loadingEquity ? 'fa-spin' : ''}`} />
+              </button>
+            </div>
           </div>
-          <div className="cp-panel-body" style={{ padding: '4px 8px 8px' }}>
-            {loadingEquity ? <SkeletonBlock h={220} /> : dailyPnlData.length === 0 ? (
-              <div className="cp-empty" style={{ height: 220 }}><i className="fas fa-chart-bar" /><span>{t('common.noData')}</span></div>
-            ) : (
-              <div className="cp-chart-h240">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={dailyPnlData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={G} />
-                    <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(dailyPnlData.length / 6) - 1)} />
-                    <YAxis stroke={A} fontSize={10} tickLine={false} tickFormatter={(v: number) => fmtMoneyShort(v)} width={50} />
-                    <Tooltip content={<PTip />} />
-                    <Bar dataKey="pnl" radius={[1, 1, 0, 0]} onClick={handleBarClick} cursor="pointer">
-                      {dailyPnlData.map((entry, i) => (
-                        <Cell key={i} fill={entry.pnl >= 0 ? GREEN : RED} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+          <div className="cp-battlefield-chart">
+            {loadingEquity ? <Skel w="100%" h="100%" /> : equityCurve.length === 0 ? (
+              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--cc-text-dim)' }}>
+                <i className="fas fa-chart-line" style={{ marginRight: 8 }} />{t('common.noData')}
               </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dailyPnlData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
+                  <XAxis dataKey="date" stroke={A} fontSize={10} tickLine={false} interval={Math.max(0, Math.floor(dailyPnlData.length / 6) - 1)} />
+                  <YAxis stroke={A} fontSize={10} tickLine={false} tickFormatter={(v: number) => fmtMoneyShort(v)} width={50} />
+                  <Tooltip content={<PTip />} />
+                  <Bar dataKey="pnl" radius={[1, 1, 0, 0]} onClick={handleBarClick} cursor="pointer">
+                    {dailyPnlData.map((entry, i) => (
+                      <Cell key={i} fill={entry.pnl >= 0 ? GREEN : RED} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             )}
           </div>
         </div>
-
-        {/* 持仓环形图 */}
-        <div className="cp-panel" style={{ minHeight: 280 }}>
-          <div className="cp-panel-header">
-            <i className="fas fa-chart-pie" />
-            <span className="cp-panel-title">{t('portfolio.assetAllocation')}</span>
+        <div className="cp-daily-strip">
+          <div className="cp-daily-strip-header">
+            <span className="cp-daily-strip-title">◆ Asset Allocation</span>
           </div>
-          <div className="cp-panel-body" style={{ padding: '8px 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {loadingSummary ? <SkeletonBlock h={200} /> : (
-              <>
-                <div style={{ position: 'relative', height: 180 }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {loadingSummary ? <Skel w="100%" h="100%" /> : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, height: '100%' }}>
+                <div style={{ position: 'relative', width: 90, height: 90, flexShrink: 0 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie data={ringData} cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2} dataKey="value" stroke="none">
+                      <Pie data={ringData} cx="50%" cy="50%" innerRadius={28} outerRadius={40} paddingAngle={2} dataKey="value" stroke="none">
                         {ringData.map((_, i) => <PieCell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} fillOpacity={0.85} />)}
                       </Pie>
-                      <Tooltip content={<PieTip />} />
                     </PieChart>
                   </ResponsiveContainer>
-                  <div className="cp-ring-center">
-                    <div className="cp-ring-center-val">¥{fmtMoney(posVal)}</div>
-                    <div className="cp-ring-center-label">持仓市值</div>
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                    <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 10, color: 'var(--cc-text)' }}>¥{fmtMoneyShort(posVal)}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', justifyContent: 'center' }}>
-                  {ringData.slice(0, 6).map((item, i) => (
+                <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '3px 12px' }}>
+                  {ringData.slice(0, 5).map((item, i) => (
                     <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 2, background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0 }} />
-                      <span style={{ color: 'var(--agent-text-dim)' }}>{item.name}</span>
+                      <span style={{ width: 7, height: 7, borderRadius: 1, background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0 }} />
+                      <span style={{ color: 'var(--cc-text-secondary)' }}>{item.name}</span>
                     </div>
                   ))}
                 </div>
-              </>
+              </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* ═══ 持仓表格 + 交易记录 ═══ */}
-      <div className="cp-row-2col">
-        <div className="cp-panel">
-          <div className="cp-panel-header">
-            <i className="fas fa-table" />
-            <span className="cp-panel-title">{t('portfolio.positions')} ({positions.length})</span>
-            <button className="cp-refresh-btn" onClick={refreshMoneyflow} title="刷新资金流" style={{ marginLeft: 'auto' }}>
-              <i className={`fas fa-coins ${loadingFlow ? 'fa-spin' : ''}`} />
-            </button>
-            <button className="cp-refresh-btn" onClick={refreshSummary} title="刷新持仓">
-              <i className={`fas fa-sync-alt ${loadingSummary ? 'fa-spin' : ''}`} />
-            </button>
-          </div>
-          {/* 资金流汇总条 */}
-          {flowSummary && (
-            <div className="cp-flow-summary">
-              <i className="fas fa-chart-waterfall" />
-              {flowSummary.inflow > 0 && flowSummary.outflow > 0 ? (
-                <span><span className="cp-flow-in">{flowSummary.inflow}只流入</span> / <span className="cp-flow-out">{flowSummary.outflow}只流出</span></span>
-              ) : flowSummary.outflow === 0 ? (
-                <span className="cp-flow-in">主力全部流入</span>
-              ) : flowSummary.inflow === 0 ? (
-                <span className="cp-flow-out">主力全部流出</span>
-              ) : null}
+      {/* ══════════ UNIT DEPLOYMENT — Right Column ══════════ */}
+      <div className="cp-deployment">
+        <div className="cp-deployment-panel">
+          <div className="cp-deployment-header">
+            <span className="cp-deployment-title">◆ Unit Deployment</span>
+            <span className="cp-deployment-count">{positions.length} UNITS</span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+              {flowSummary && (
+                <span style={{ fontSize: 9, color: 'var(--cc-text-dim)' }}>
+                  {flowSummary.inflow > 0 && <span style={{ color: 'var(--cc-green)' }}>{flowSummary.inflow}↑</span>}
+                  {flowSummary.inflow > 0 && flowSummary.outflow > 0 && ' / '}
+                  {flowSummary.outflow > 0 && <span style={{ color: 'var(--cc-red)' }}>{flowSummary.outflow}↓</span>}
+                </span>
+              )}
+              <button className="cp-icon-btn" onClick={refreshSummary} title="刷新">
+                <i className={`fas fa-sync-alt ${loadingSummary ? 'fa-spin' : ''}`} />
+              </button>
             </div>
-          )}
-          <div className="cp-table-wrap" style={{ maxHeight: 340 }}>
-            {loadingSummary ? <SkeletonTable rows={5} /> : (
-              <table className="cp-table">
-                <thead><tr>
-                  <th>{t('portfolio.symbol')}</th><th>{t('portfolio.name')}</th>
-                  <th className="right">{t('portfolio.volume')}</th><th className="right">{t('portfolio.avgPrice')}</th>
-                  <th className="right">{t('portfolio.currentPrice')}</th>
-                  <th className="right">{t('portfolio.todayPnL')}</th>
-                  <th className={`right sortable ${sortKey === 'floating_pnl' ? 'sorted' : ''}`} onClick={() => handleSort('floating_pnl')}>
-                    {t('portfolio.floatingPnL')} {sortKey === 'floating_pnl' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                  <th className={`right sortable ${sortKey === 'floating_pnl_pct' ? 'sorted' : ''}`} onClick={() => handleSort('floating_pnl_pct')}>
-                    {t('portfolio.profitRate')} {sortKey === 'floating_pnl_pct' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                  <th className={`right sortable ${sortKey === 'market_value' ? 'sorted' : ''}`} onClick={() => handleSort('market_value')}>
-                    {t('portfolio.marketValue')} {sortKey === 'market_value' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                  <th className={`right sortable ${sortKey === 'weight' ? 'sorted' : ''}`} onClick={() => handleSort('weight')}>
-                    {t('portfolio.weight')} {sortKey === 'weight' && <i className={`fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                  <th className="center">资金流</th>
-                  <th className="center">操作</th>
-                </tr></thead>
-                <tbody>
-                  {sortedPositions.length === 0 ? (
-                    <tr><td colSpan={13}><div className="cp-empty"><i className="fas fa-chart-pie" /><span>{t('portfolio.noPositions')}</span></div></td></tr>
-                  ) : sortedPositions.flatMap(pos => {
-                    const isUp = (pos.floating_pnl || 0) >= 0;
-                    const weight = totalAsset > 0 ? (pos.market_value / totalAsset) * 100 : 0;
-                    const isHeavy = weight > 30; const isWarn = weight > 20 && weight <= 30;
-                    const pnlPct = pos.floating_pnl_pct || 0;
-                    const pnlMag = Math.abs(pnlPct) > 5 ? 'strong' : Math.abs(pnlPct) < 2 ? 'mild' : '';
-                    const flow = moneyflowMap[pos.symbol];
-                    const flowLabel = !flow ? '—' : (flow.main_net || 0) > (pos.market_value * 0.01) ? '主力流入' : (flow.main_net || 0) < -(pos.market_value * 0.01) ? '主力流出' : '平衡';
-                    const flowClass = flowLabel === '主力流入' ? 'in' : flowLabel === '主力流出' ? 'out' : 'neutral';
-                    const isExpanded = expandedTradeSymbol === pos.symbol;
-
-                    const rows = [
-                      <tr key={pos.symbol} className={`${isHeavy ? 'risk-high' : isWarn ? 'risk-warn' : ''} ${isExpanded ? 'trade-expanded' : ''}`}>
-                        <td className="symbol mono">{pos.symbol}</td>
-                        <td className="bold">{cleanStockName(pos.name, pos.symbol)}</td>
-                        <td className="num mono dim">{pos.volume.toLocaleString()}</td>
-                        <td className="num mono">¥{(pos.avg_price || 0).toFixed(2)}</td>
-                        <td className="num mono">¥{(pos.current_price || 0).toFixed(2)}</td>
-                        <td className={`num mono ${(pos.today_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>
-                          {(pos.today_pnl || 0) >= 0 ? '+' : ''}¥{fmtMoney(Math.abs(pos.today_pnl || 0))}</td>
-                        <td className={`num mono ${isUp ? 'pnl-up' : 'pnl-down'}`}>{isUp ? '+' : ''}¥{fmtMoney(Math.abs(pos.floating_pnl || 0))}</td>
-                        <td className="num"><span className={`cp-pnl-tag ${isUp ? 'up' : 'down'} ${pnlMag ? `pnl-${pnlMag}-${isUp ? 'up' : 'down'}` : ''}`}>{isUp ? '+' : ''}{pnlPct.toFixed(2)}%</span></td>
-                        <td className="num mono bold">¥{fmtMoney(pos.market_value)}</td>
-                        <td className="num">
-                          <span className={`cp-wt-tag ${isHeavy ? 'danger' : isWarn ? 'warn' : ''}`}>{weight.toFixed(1)}%</span></td>
-                        <td className="num center">
-                          <span className={`cp-flow-badge ${flowClass}`}>{flowLabel}</span></td>
-                        <td className="num center">
-                          <div className="cp-trade-actions">
-                            <button className="cp-trade-btn buy" title="买入" onClick={() => openTradePanel(pos.symbol, '买', pos.current_price, 0)}>+</button>
-                            <button className="cp-trade-btn sell" title="卖出" onClick={() => openTradePanel(pos.symbol, '卖', pos.current_price, pos.volume)}>−</button>
-                          </div>
-                        </td>
-                      </tr>,
-                    ];
-
-                    // 内联交易面板
-                    if (isExpanded) {
-                      rows.push(
-                        <tr key={`${pos.symbol}-trade`} className="cp-trade-panel-row">
-                          <td colSpan={13} className="cp-trade-panel-cell">
-                            <div className="cp-trade-panel">
-                              <span className={`cp-trade-panel-dir ${tradeForm.direction === '买' ? 'buy' : 'sell'}`}>{tradeForm.direction === '买' ? '买入' : '卖出'} {pos.symbol} {cleanStockName(pos.name, pos.symbol)}</span>
-                              <div className="cp-trade-panel-fields">
-                                <label>价格 <input type="number" className="cp-trade-input" value={tradeForm.price || ''} onChange={e => setTradeForm(f => ({ ...f, price: parseFloat(e.target.value) || 0 }))} step="0.01" min="0" /></label>
-                                <label>数量(股) <input type="number" className="cp-trade-input" value={tradeForm.volume || ''} onChange={e => setTradeForm(f => ({ ...f, volume: parseInt(e.target.value) || 0 }))} step="100" min="0" /></label>
-                                <label>理由 <input type="text" className="cp-trade-input" value={tradeForm.reason} onChange={e => setTradeForm(f => ({ ...f, reason: e.target.value }))} placeholder="选填" /></label>
-                              </div>
-                              {tradeError && <div className="cp-trade-error"><i className="fas fa-exclamation-circle" /> {tradeError}</div>}
-                              <div className="cp-trade-panel-actions">
-                                <button className="cp-trade-submit" onClick={handleTradeSubmit} disabled={tradeSubmitting}>
-                                  {tradeSubmitting ? <><i className="fas fa-spinner fa-spin" /> 提交中</> : '确认下单'}
-                                </button>
-                                <button className="cp-trade-cancel" onClick={() => { setExpandedTradeSymbol(null); setTradeError(null); }}>取消</button>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    }
-
-                    return rows;
-                  })}
-                </tbody>
-              </table>
-            )}
           </div>
-        </div>
-
-        {/* 近期交易 */}
-        <div className="cp-panel">
-          <div className="cp-panel-header">
-            <i className="fas fa-exchange-alt" />
-            <span className="cp-panel-title">近期交易</span>
-            <button className="cp-refresh-btn" onClick={refreshTrades} title="刷新交易" style={{ marginLeft: 'auto' }}>
-              <i className={`fas fa-sync-alt ${loadingTrades ? 'fa-spin' : ''}`} />
-            </button>
-          </div>
-          <div className="cp-panel-body" style={{ padding: '8px 12px' }}>
-            {loadingTrades ? <SkeletonList n={5} /> : recentTrades.length === 0 ? (
-              <div className="cp-empty"><i className="fas fa-history" /><span>暂无交易记录</span></div>
-            ) : (
-              <div className="cp-trade-list">
-                {recentTrades.map((tr, i) => {
-                  const isBuy = (tr.direction || '').includes('买') || (tr.direction || '').toLowerCase().includes('buy');
-                  return (
-                    <div key={tr.order_id || i} className="cp-trade-item">
-                      <span className={`cp-trade-dir ${isBuy ? 'buy' : 'sell'}`}>{isBuy ? '买' : '卖'}</span>
-                      <span className="cp-trade-name">{tr.name || tr.symbol}</span>
-                      <span className="cp-trade-detail">¥{tr.price?.toFixed(2)} × {tr.volume}</span>
-                      <span className="cp-trade-time">{tr.created_at ? new Date(tr.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
-                    </div>
-                  );
-                })}
+          <div className="cp-deployment-scroll">
+            {loadingSummary ? (
+              Array.from({ length: 5 }).map((_, i) => <Skel key={i} w="100%" h={52} />)
+            ) : sortedPositions.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 20, color: 'var(--cc-text-dim)' }}>
+                <i className="fas fa-cube" style={{ fontSize: 20, marginBottom: 8, display: 'block' }} />
+                {t('portfolio.noPositions')}
               </div>
+            ) : (
+              sortedPositions.map(pos => {
+                const isUp = (pos.floating_pnl || 0) >= 0;
+                const weight = totalAsset > 0 ? (pos.market_value / totalAsset) * 100 : 0;
+                const isHeavy = weight > 30;
+                const pnlPct = pos.floating_pnl_pct || 0;
+                const flow = moneyflowMap[pos.symbol];
+                const flowLabel = !flow ? '—' : (flow.main_net || 0) > (pos.market_value * 0.01) ? '主力流入' : (flow.main_net || 0) < -(pos.market_value * 0.01) ? '主力流出' : '平衡';
+                const flowClass = flowLabel === '主力流入' ? 'in' : flowLabel === '主力流出' ? 'out' : 'neutral';
+                const isExpanded = expandedTradeSymbol === pos.symbol;
+
+                return (
+                  <div key={pos.symbol}>
+                    <div className={`cp-unit-card ${isUp ? 'pnl-up' : 'pnl-down'} ${isExpanded ? 'trade-expanded' : ''}`}
+                      onClick={() => openTradePanel(pos.symbol, isUp ? '卖' : '买', pos.current_price, isUp ? pos.volume : 0)}>
+                      <div className="cp-unit-top">
+                        <span className="cp-unit-symbol">{pos.symbol}</span>
+                        <span className={`cp-unit-pnl ${isUp ? 'up' : 'down'}`}>
+                          {isUp ? '+' : ''}{pnlPct.toFixed(2)}%
+                        </span>
+                      </div>
+                      <div className="cp-unit-mid">
+                        <span>{cleanStockName(pos.name, pos.symbol)}</span>
+                        <span className={`cp-unit-weight ${isHeavy ? 'cp-unit-weight-heavy' : ''}`}>
+                          {weight.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="cp-unit-bottom">
+                        <span className="cp-unit-shares">
+                          {pos.volume.toLocaleString()}股 · ¥{(pos.current_price || 0).toFixed(2)}
+                        </span>
+                        <span className={`cp-unit-flow ${flowClass}`}>{flowLabel}</span>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="cp-unit-trade-panel" onClick={e => e.stopPropagation()}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--cc-blue)', fontFamily: 'var(--font-display)' }}>
+                          {tradeForm.direction === '买' ? 'BUY' : 'SELL'} {pos.symbol} {cleanStockName(pos.name, pos.symbol)}
+                        </div>
+                        <div className="cp-unit-trade-row">
+                          <input type="number" className="cp-unit-trade-input" placeholder="价格"
+                            value={tradeForm.price || ''} onChange={e => setTradeForm(f => ({ ...f, price: parseFloat(e.target.value) || 0 }))}
+                            step="0.01" min="0" style={{ flex: 1 }} />
+                          <input type="number" className="cp-unit-trade-input" placeholder="数量"
+                            value={tradeForm.volume || ''} onChange={e => setTradeForm(f => ({ ...f, volume: parseInt(e.target.value) || 0 }))}
+                            step="100" min="0" style={{ flex: 1 }} />
+                        </div>
+                        <input type="text" className="cp-unit-trade-input" placeholder="理由 (选填)"
+                          value={tradeForm.reason} onChange={e => setTradeForm(f => ({ ...f, reason: e.target.value }))} />
+                        {tradeError && <div className="cp-unit-trade-error"><i className="fas fa-exclamation-circle" /> {tradeError}</div>}
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button className="cp-unit-trade-btn buy" onClick={handleTradeSubmit} disabled={tradeSubmitting}
+                            style={{ flex: 1 }}>
+                            {tradeSubmitting ? <i className="fas fa-spinner fa-spin" /> : '确认下单'}
+                          </button>
+                          <button className="cp-unit-trade-btn cancel"
+                            onClick={() => { setExpandedTradeSymbol(null); setTradeError(null); }}>取消</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
       </div>
 
-      {/* ═══ 行业集中度 + 个股盈亏贡献 ═══ */}
-      <div className="cp-row-charts">
-        {/* 个股盈亏贡献排名 */}
-        <div className="cp-panel">
-          <div className="cp-panel-header">
-            <i className="fas fa-ranking-star" />
-            <span className="cp-panel-title">个股盈亏贡献 (30日)</span>
-            <button className="cp-refresh-btn" onClick={refreshBreakdowns} title="刷新贡献数据" style={{ marginLeft: 'auto' }}>
-              <i className={`fas fa-sync-alt ${loadingBreakdowns ? 'fa-spin' : ''}`} />
+      {/* ══════════ THREAT ASSESSMENT STRIP — Row 3 ══════════ */}
+      <div className="cp-threat-strip">
+        {loadingSummary ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="cp-threat-card" style={{ opacity: 0.5 }}>
+              <Skel w={36} h={36} br="50%" />
+              <div style={{ flex: 1 }}><Skel w={50} h={10} /><Skel w={40} h={16} /></div>
+            </div>
+          ))
+        ) : summary && (
+          <>
+            <ThreatCard icon="fa-gauge-high" label="仓位率" value={`${posRatio.toFixed(0)}%`}
+              sub={posRatio > 80 ? '重仓部署' : posRatio > 50 ? '标准配置' : '轻仓待命'}
+              level={posRatio > 80 ? 'danger' : posRatio > 50 ? 'warn' : 'safe'} />
+            <ThreatCard icon="fa-arrow-trend-down" label="最大回撤" value={`-${maxDrawdown.toFixed(1)}%`}
+              sub="历史极值" level={maxDrawdown > 15 ? 'danger' : maxDrawdown > 8 ? 'warn' : 'safe'} />
+            <ThreatCard icon="fa-bullseye" label="胜率" value={`${win_rate.toFixed(1)}%`}
+              sub={`${positions.length} 个作战单位`} level={win_rate > 60 ? 'safe' : win_rate > 40 ? 'warn' : 'danger'} />
+            <ThreatCard icon="fa-wave-square" label="年化波动" value={`${volatility.toFixed(1)}%`}
+              sub="60日滚动" level={volatility > 25 ? 'danger' : volatility > 15 ? 'warn' : 'safe'} />
+          </>
+        )}
+      </div>
+
+      {/* ══════════ BOTTOM ZONE — Row 4 ══════════ */}
+      <div className="cp-bottom-zone">
+        {/* Defense System (Stop Loss) */}
+        <div className="cp-bottom-panel">
+          <div className="cp-bottom-header">
+            <span className="cp-bottom-title">◆ Defense System</span>
+            <button className="cp-icon-btn" onClick={refreshStopLoss} title="刷新">
+              <i className={`fas fa-sync-alt ${loadingStopLoss ? 'fa-spin' : ''}`} />
             </button>
           </div>
-          <div className="cp-panel-body" style={{ padding: '0' }}>
-            {loadingBreakdowns ? (
-              <SkeletonTable rows={10} />
-            ) : pnlContributions.length === 0 ? (
-              <div className="cp-empty" style={{ height: 200 }}>
-                <i className="fas fa-chart-bar" />
-                <span>暂无盈亏明细数据</span>
-              </div>
-            ) : (
+          <div className="cp-bottom-body">
+            {loadingStopLoss ? <Skel w="100%" h={80} /> : stopLoss && (
               <>
-                <table className="cp-table cp-contribution-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 40 }}>#</th>
-                      <th className={`sortable ${contribSortKey === 'symbol' ? 'sorted' : ''}`} onClick={() => { setContribSortKey('symbol'); setContribSortDir(prev => contribSortKey === 'symbol' ? (prev === 'asc' ? 'desc' : 'asc') : 'desc'); setContributionPage(1); }}>
-                        代码{contribSortKey === 'symbol' && <i className={`fas fa-sort-${contribSortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                      <th className={`sortable ${contribSortKey === 'name' ? 'sorted' : ''}`} onClick={() => { setContribSortKey('name'); setContribSortDir(prev => contribSortKey === 'name' ? (prev === 'asc' ? 'desc' : 'asc') : 'desc'); setContributionPage(1); }}>
-                        名称{contribSortKey === 'name' && <i className={`fas fa-sort-${contribSortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                      <th className={`right sortable ${contribSortKey === 'totalPnl' ? 'sorted' : ''}`} onClick={() => { setContribSortKey('totalPnl'); setContribSortDir(prev => contribSortKey === 'totalPnl' ? (prev === 'asc' ? 'desc' : 'asc') : 'desc'); setContributionPage(1); }}>
-                        30日贡献{contribSortKey === 'totalPnl' && <i className={`fas fa-sort-${contribSortDir === 'desc' ? 'down' : 'up'}`} style={{ fontSize: 9 }} />}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {contributionPageItems.map((item, i) => {
-                      const rank = (contributionPage - 1) * CONTRIB_PAGE_SIZE + i + 1;
-                      return (
-                        <tr key={item.symbol}>
-                          <td className="cp-contrib-rank">{rank}</td>
-                          <td className="cp-contrib-code">{item.symbol}</td>
-                          <td className="cp-contrib-name">{item.name || item.symbol}</td>
-                          <td className={`right cp-contrib-pnl ${item.totalPnl >= 0 ? 'pnl-up' : 'pnl-down'}`}>
-                            {item.totalPnl >= 0 ? '+' : ''}¥{item.totalPnl.toLocaleString()}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {contributionPageCount > 1 && (
-                  <div className="cp-contrib-pager">
-                    <button disabled={contributionPage <= 1} onClick={() => setContributionPage(p => p - 1)}>
-                      <i className="fas fa-chevron-left" />
-                    </button>
-                    <span>{contributionPage} / {contributionPageCount}</span>
-                    <button disabled={contributionPage >= contributionPageCount} onClick={() => setContributionPage(p => p + 1)}>
-                      <i className="fas fa-chevron-right" />
-                    </button>
+                <div className="cp-defense-status">
+                  <div className="cp-defense-indicator">
+                    <span className={`cp-defense-dot ${stopLoss.running && stopLoss.thread_alive ? 'live' : 'dead'}`} />
+                    <span className="cp-defense-text">
+                      {stopLoss.interval_seconds === 0 ? 'API 不可达' : stopLoss.running && stopLoss.thread_alive ? 'ACTIVE' : 'STANDBY'}
+                    </span>
                   </div>
+                  <div className="cp-defense-tags">
+                    {stopLoss.is_morning_volatility && <span className="cp-defense-tag warn">早盘冷静期</span>}
+                    {!stopLoss.is_trading_time && <span className="cp-defense-tag muted">非交易时段</span>}
+                  </div>
+                  <button className={`cp-defense-toggle ${stopLoss.running && stopLoss.thread_alive ? 'on' : 'off'}`}
+                    onClick={handleToggleSL} disabled={slToggling}>
+                    <i className={`fas fa-${slToggling ? 'spinner fa-spin' : stopLoss.running && stopLoss.thread_alive ? 'shield-halved' : 'play'}`} />
+                    {' '}{stopLoss.running && stopLoss.thread_alive ? 'SHIELD ON' : 'SHIELD OFF'}
+                  </button>
+                </div>
+                <div className="cp-defense-metrics">
+                  <div className={`cp-defense-metric ${stopLoss.triggered_count > 0 ? 'danger' : ''}`}>
+                    <div className={`cp-defense-metric-val ${stopLoss.triggered_count > 0 ? 'danger' : ''}`}>{stopLoss.triggered_count}</div>
+                    <div className="cp-defense-metric-label">已触发</div>
+                  </div>
+                  <div className="cp-defense-metric">
+                    <div className="cp-defense-metric-val">{stopLoss.position_count}</div>
+                    <div className="cp-defense-metric-label">监控中</div>
+                  </div>
+                  <div className="cp-defense-metric">
+                    <div className="cp-defense-metric-val">{stopLoss.today_stops_count}</div>
+                    <div className="cp-defense-metric-label">今日止损</div>
+                  </div>
+                  <div className="cp-defense-metric">
+                    <div className="cp-defense-metric-val">{stopLoss.interval_seconds}s</div>
+                    <div className="cp-defense-metric-label">扫描间隔</div>
+                  </div>
+                </div>
+                <div className="cp-defense-detail" onClick={() => setSlExpanded(e => !e)}>
+                  <i className={`fas fa-chevron-${slExpanded ? 'up' : 'down'}`} /> {slExpanded ? '收起' : '展开'}单位距离详情
+                </div>
+                {slExpanded && stopLoss.positions.length > 0 && (
+                  <table className="cp-table-mini" style={{ marginTop: 6 }}>
+                    <thead><tr>
+                      <th>代码</th><th>名称</th><th>浮盈</th><th>距离%</th><th>规则</th><th>风险</th>
+                    </tr></thead>
+                    <tbody>
+                      {stopLoss.positions.slice(0, 6).map(p => {
+                        const danger = p.nearest_trigger?.danger_level || 'no_rules';
+                        const ruleLabels: Record<string, string> = {
+                          rul0a_break_low: '破底', rul0b_cost_stop: '成本',
+                          rul1_sector: '行业', rul2_iron: '铁律2', rul3_dynamic: '动态',
+                        };
+                        return (
+                          <tr key={p.symbol}>
+                            <td style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 10 }}>{p.symbol}</td>
+                            <td style={{ fontSize: 10 }}>{p.name || p.symbol}</td>
+                            <td style={{ color: p.float_pnl_pct >= 0 ? 'var(--cc-green)' : 'var(--cc-red)', fontFamily: 'var(--font-display)', fontSize: 10 }}>
+                              {p.float_pnl_pct >= 0 ? '+' : ''}{p.float_pnl_pct.toFixed(1)}%</td>
+                            <td style={{ fontFamily: 'var(--font-display)', fontSize: 10 }}>
+                              {p.nearest_trigger?.distance_pct != null ? `${p.nearest_trigger.distance_pct.toFixed(1)}%` : '-'}</td>
+                            <td style={{ fontSize: 10 }}>{ruleLabels[p.nearest_trigger?.rule || ''] || p.nearest_trigger?.rule || ''}</td>
+                            <td style={{ fontSize: 10, color: danger === 'triggered' ? 'var(--cc-red)' : danger === 'critical' ? 'var(--cc-amber)' : 'var(--cc-text-dim)' }}>
+                              {danger === 'triggered' ? '触发' : danger === 'critical' ? '危急' : danger === 'warning' ? '警告' : '安全'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 )}
               </>
             )}
           </div>
         </div>
 
-        {/* 行业集中度 */}
-        <div className="cp-panel">
-          <div className="cp-panel-header">
-            <i className="fas fa-layer-group" />
-            <span className="cp-panel-title">行业集中度</span>
+        {/* Intel Center (Contribution + Sector) */}
+        <div className="cp-bottom-panel">
+          <div className="cp-bottom-header">
+            <span className="cp-bottom-title">◆ Intel Center</span>
+            <button className="cp-icon-btn" onClick={refreshBreakdowns} title="刷新">
+              <i className={`fas fa-sync-alt ${loadingBreakdowns ? 'fa-spin' : ''}`} />
+            </button>
           </div>
-          <div className="cp-panel-body" style={{ padding: '12px 16px' }}>
-            {sectorData && sectorData.sectors && sectorData.sectors.length > 0 ? (
-              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-                <div style={{ width: 160, height: 160, flexShrink: 0 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={sectorData.sectors} cx="50%" cy="50%" innerRadius={36} outerRadius={64} paddingAngle={2} dataKey="weight_pct" nameKey="name" stroke="none">
-                        {sectorData.sectors.map((_, i) => (
-                          <PieCell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} fillOpacity={0.85} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={({ active, payload }: any) => {
-                        if (!active || !payload?.length) return null;
-                        const d = payload[0]?.payload;
-                        return <div className="cp-tip-box"><div className="cp-tip-label">{d?.name}</div><div className="cp-tip-row"><span className="l">权重</span><span className="v">{d?.weight_pct}%</span></div><div className="cp-tip-row"><span className="l">持仓数</span><span className="v">{d?.stock_count}只</span></div></div>;
-                      }} />
-                    </PieChart>
-                  </ResponsiveContainer>
+          <div className="cp-bottom-body">
+            {loadingBreakdowns ? <Skel w="100%" h={80} /> : (
+              <>
+                <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--cc-text-dim)', marginBottom: 4 }}>
+                  个股盈亏贡献 (30日)
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ marginBottom: 6 }}>
-                    <span className={`cp-sector-level ${sectorData.concentration_level === '集中' ? 'danger' : sectorData.concentration_level === '适中' ? 'warn' : 'safe'}`}>
-                      {sectorData.concentration_level}
+                {contributionPageItems.slice(0, 5).map((item, i) => (
+                  <div key={item.symbol} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: 10 }}>
+                    <span className="cp-intel-rank">{(contributionPage - 1) * CONTRIB_PAGE_SIZE + i + 1}</span>
+                    <span className="cp-intel-symbol">{item.symbol}</span>
+                    <span className="cp-intel-name">{item.name || item.symbol}</span>
+                    <span className={`cp-intel-pnl ${item.totalPnl >= 0 ? 'up' : 'down'}`}>
+                      {item.totalPnl >= 0 ? '+' : ''}¥{item.totalPnl.toLocaleString()}
                     </span>
-                    {sectorData.max_sector && (
-                      <span style={{ fontSize: 11, color: 'var(--agent-text-dim)', marginLeft: 8 }}>
-                        最大: {sectorData.max_sector.name} ({sectorData.max_sector.weight_pct}%)
-                      </span>
-                    )}
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {sectorData.sectors.slice(0, 6).map(s => (
-                      <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-                        <span style={{ width: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--agent-text-secondary)' }}>{s.name}</span>
-                        <div style={{ flex: 1, height: 6, background: 'var(--agent-bg-hover)', borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${Math.min(s.weight_pct, 100)}%`, background: s.weight_pct > 50 ? 'var(--agent-red)' : s.weight_pct > 30 ? 'var(--agent-gold)' : 'var(--agent-green)', borderRadius: 3, transition: 'width 0.3s ease' }} />
+                ))}
+                {contributionPageCount > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 4, fontSize: 10 }}>
+                    <button className="cp-icon-btn" style={{ width: 20, height: 20, fontSize: 8 }}
+                      disabled={contributionPage <= 1} onClick={() => setContributionPage(p => p - 1)}>
+                      <i className="fas fa-chevron-left" />
+                    </button>
+                    <span style={{ color: 'var(--cc-text-dim)', fontFamily: 'var(--font-display)' }}>{contributionPage}/{contributionPageCount}</span>
+                    <button className="cp-icon-btn" style={{ width: 20, height: 20, fontSize: 8 }}
+                      disabled={contributionPage >= contributionPageCount} onClick={() => setContributionPage(p => p + 1)}>
+                      <i className="fas fa-chevron-right" />
+                    </button>
+                  </div>
+                )}
+                <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--cc-text-dim)', marginTop: 8, marginBottom: 4 }}>
+                  行业集中度
+                </div>
+                {sectorData && sectorData.sectors ? (
+                  <>
+                    {sectorData.sectors.slice(0, 4).map(s => (
+                      <div key={s.name} className="cp-sector-row">
+                        <span className="cp-sector-name">{s.name}</span>
+                        <div className="cp-sector-bar-track">
+                          <div className="cp-sector-bar-fill" style={{
+                            width: `${Math.min(s.weight_pct, 100)}%`,
+                            background: s.weight_pct > 50 ? 'var(--cc-red)' : s.weight_pct > 30 ? 'var(--cc-amber)' : 'var(--cc-green)',
+                          }} />
                         </div>
-                        <span style={{ width: 40, textAlign: 'right', fontFamily: 'var(--font-display)', fontSize: 10, color: 'var(--agent-text-dim)' }}>{s.weight_pct}%</span>
+                        <span className="cp-sector-pct">{s.weight_pct}%</span>
                       </div>
                     ))}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="cp-empty" style={{ height: 160 }}>
-                <i className="fas fa-layer-group" />
-                <span>暂无行业数据</span>
-              </div>
+                    {sectorData.concentration_level && (
+                      <div style={{ fontSize: 9, color: 'var(--cc-text-dim)', marginTop: 2 }}>
+                        集中度: <span style={{
+                          color: sectorData.concentration_level === '集中' ? 'var(--cc-red)' : sectorData.concentration_level === '适中' ? 'var(--cc-amber)' : 'var(--cc-green)',
+                          fontWeight: 600,
+                        }}>{sectorData.concentration_level}</span>
+                        {sectorData.max_sector && ` · 最大: ${sectorData.max_sector.name} (${sectorData.max_sector.weight_pct}%)`}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 10, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 8 }}>暂无行业数据</div>
+                )}
+              </>
             )}
           </div>
         </div>
-      </div>
 
+        {/* Mission Log (Recent Trades) */}
+        <div className="cp-bottom-panel">
+          <div className="cp-bottom-header">
+            <span className="cp-bottom-title">◆ Mission Log</span>
+            <button className="cp-icon-btn" onClick={refreshTrades} title="刷新">
+              <i className={`fas fa-sync-alt ${loadingTrades ? 'fa-spin' : ''}`} />
+            </button>
+          </div>
+          <div className="cp-bottom-body">
+            {loadingTrades ? (
+              Array.from({ length: 5 }).map((_, i) => <Skel key={i} w="100%" h={18} />)
+            ) : recentTrades.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 16, color: 'var(--cc-text-dim)', fontSize: 10 }}>
+                <i className="fas fa-history" style={{ display: 'block', fontSize: 16, marginBottom: 4 }} />
+                暂无作战记录
+              </div>
+            ) : (
+              recentTrades.map((tr, i) => {
+                const isBuy = (tr.direction || '').includes('买') || (tr.direction || '').toLowerCase().includes('buy');
+                return (
+                  <div key={tr.order_id || i} className="cp-mission-item">
+                    <span className={`cp-mission-dir ${isBuy ? 'buy' : 'sell'}`}>{isBuy ? 'BUY' : 'SELL'}</span>
+                    <span className="cp-mission-name">{tr.name || tr.symbol}</span>
+                    <span className="cp-mission-detail">¥{tr.price?.toFixed(2)} × {tr.volume}</span>
+                    <span className="cp-mission-time">{tr.created_at ? new Date(tr.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ═══ FAB ═══ */}
@@ -1060,21 +968,21 @@ export default function PortfolioPage() {
       {/* ═══ 日盈亏弹窗 ═══ */}
       {modalDate && (
         <div className="cp-modal-overlay" onClick={() => { setModalDate(null); setModalData(null); }}>
-          <div className="cp-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+          <div className="cp-modal" onClick={e => e.stopPropagation()}>
             <span className="cp-modal-corner cp-modal-corner--tl" />
             <span className="cp-modal-corner cp-modal-corner--tr" />
             <span className="cp-modal-corner cp-modal-corner--bl" />
             <span className="cp-modal-corner cp-modal-corner--br" />
             <div className="cp-modal-scanline" />
             <div className="cp-modal-header">
-              <span>{modalDate} 个股盈亏明细</span>
+              <span>{modalDate} 作战报告</span>
               <button className="cp-modal-close" onClick={() => { setModalDate(null); setModalData(null); }}>
                 <i className="fas fa-times" />
               </button>
             </div>
-            <div className="cp-modal-body" style={{ padding: '12px 16px' }}>
+            <div className="cp-modal-body">
               {modalLoading ? (
-                <div style={{ textAlign: 'center', padding: 24, color: 'var(--agent-text-dim)' }}>
+                <div style={{ textAlign: 'center', padding: 24, color: 'var(--cc-text-dim)' }}>
                   <i className="fas fa-spinner fa-spin" /> 加载中...
                 </div>
               ) : modalData ? (
@@ -1082,17 +990,17 @@ export default function PortfolioPage() {
                   <div style={{ fontSize: 13, marginBottom: 10, display: 'flex', gap: 16 }}>
                     <span>日盈亏 <span style={{ color: modalData.daily_pnl >= 0 ? GREEN : RED, fontWeight: 700 }}>
                       {modalData.daily_pnl >= 0 ? '+' : ''}¥{Math.abs(modalData.daily_pnl).toFixed(0)}</span></span>
-                    <span style={{ fontSize: 11, color: 'var(--agent-text-dim)' }}>
+                    <span style={{ fontSize: 11, color: 'var(--cc-text-dim)' }}>
                       已实现 <span style={{ color: modalData.realized_total >= 0 ? GREEN : RED }}>{modalData.realized_total >= 0 ? '+' : ''}¥{Math.abs(modalData.realized_total).toFixed(0)}</span>
                     </span>
-                    <span style={{ fontSize: 11, color: 'var(--agent-text-dim)' }}>
+                    <span style={{ fontSize: 11, color: 'var(--cc-text-dim)' }}>
                       浮盈变动 <span style={{ color: modalData.float_total >= 0 ? GREEN : RED }}>{modalData.float_total >= 0 ? '+' : ''}¥{Math.abs(modalData.float_total).toFixed(0)}</span>
                     </span>
                   </div>
                   {modalData.stocks.length > 0 ? (
-                    <table className="cp-table" style={{ fontSize: 11 }}>
+                    <table className="cp-table-mini" style={{ fontSize: 11 }}>
                       <thead><tr>
-                        <th>代码</th><th>名称</th><th className="right">持仓</th><th className="right">收盘价</th><th className="right">涨跌</th><th className="right">浮盈变动</th><th className="right">已实现</th>
+                        <th>代码</th><th>名称</th><th>持仓</th><th>收盘价</th><th>涨跌</th><th>浮盈变动</th><th>已实现</th>
                       </tr></thead>
                       <tbody>
                         {modalData.stocks.map(s => {
@@ -1100,24 +1008,27 @@ export default function PortfolioPage() {
                           const isSold = s.volume === 0;
                           return (
                             <tr key={s.symbol} style={{ opacity: isSold ? 0.55 : 1 }}>
-                              <td className="mono bold">{s.symbol}</td>
-                              <td className="dim" style={{ fontSize: 10 }}>{s.name || '-'}</td>
-                              <td className="num dim">{isSold ? <span style={{color: 'var(--agent-text-dim)', fontSize: 9}}>已卖出</span> : `${s.volume}股`}</td>
-                              <td className="num mono">{s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : '-'}</td>
-                              <td className={`num ${chgPct >= 0 ? 'pnl-up' : 'pnl-down'}`}>{s.close_price > 0 && s.prev_close > 0 ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '-'}</td>
-                              <td className={`num mono ${(s.float_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>{(s.float_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.float_pnl || 0).toFixed(0)}</td>
-                              <td className={`num mono ${(s.realized_pnl || 0) >= 0 ? 'pnl-up' : 'pnl-down'}`}>{(s.realized_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.realized_pnl || 0).toFixed(0)}</td>
+                              <td style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>{s.symbol}</td>
+                              <td style={{ fontSize: 10 }}>{s.name || '-'}</td>
+                              <td style={{ fontSize: 10 }}>{isSold ? <span style={{ color: 'var(--cc-text-dim)' }}>已卖出</span> : `${s.volume}股`}</td>
+                              <td style={{ fontFamily: 'var(--font-display)', fontSize: 10 }}>{s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : '-'}</td>
+                              <td style={{ color: chgPct >= 0 ? 'var(--cc-green)' : 'var(--cc-red)', fontFamily: 'var(--font-display)', fontSize: 10 }}>
+                                {s.close_price > 0 && s.prev_close > 0 ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '-'}</td>
+                              <td style={{ fontFamily: 'var(--font-display)', fontSize: 10, color: (s.float_pnl || 0) >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>
+                                {(s.float_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.float_pnl || 0).toFixed(0)}</td>
+                              <td style={{ fontFamily: 'var(--font-display)', fontSize: 10, color: (s.realized_pnl || 0) >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>
+                                {(s.realized_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.realized_pnl || 0).toFixed(0)}</td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
                   ) : (
-                    <div style={{ fontSize: 11, color: 'var(--agent-text-dim)', textAlign: 'center', padding: 16 }}>当日无持仓数据</div>
+                    <div style={{ fontSize: 11, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 16 }}>当日无持仓数据</div>
                   )}
                 </>
               ) : (
-                <div style={{ fontSize: 11, color: 'var(--agent-text-dim)', textAlign: 'center', padding: 16 }}>加载失败</div>
+                <div style={{ fontSize: 11, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 16 }}>加载失败</div>
               )}
             </div>
           </div>
@@ -1136,27 +1047,19 @@ export default function PortfolioPage() {
 
 // ══════════════════ 子组件 ══════════════════
 
-function HeroKpi({ label, value, sub, trend }: { label: string; value: string; sub?: string; trend?: 'up' | 'down' }) {
-  return (
-    <div className="cp-hero-kpi">
-      <div className="cp-hero-kpi-label">{label}</div>
-      <div className={`cp-hero-kpi-value ${trend === 'up' ? 'up' : trend === 'down' ? 'down' : ''}`}>{value}</div>
-      {sub && <div className="cp-hero-kpi-sub">{sub}</div>}
-    </div>
-  );
-}
-
-function RiskCard({ icon, label, value, sub, level }: {
+function ThreatCard({ icon, label, value, sub, level }: {
   icon: string; label: string; value: string; sub: string;
   level: 'safe' | 'warn' | 'danger';
 }) {
   return (
-    <div className={`cp-risk-card ${level}`}>
-      <i className={`fas ${icon} cp-risk-icon`} />
-      <div className="cp-risk-info">
-        <div className="cp-risk-label">{label}</div>
-        <div className="cp-risk-value">{value}</div>
-        <div className="cp-risk-sub">{sub}</div>
+    <div className={`cp-threat-card ${level}`}>
+      <div className={`cp-threat-icon ${level}`}>
+        <i className={`fas ${icon}`} />
+      </div>
+      <div className="cp-threat-info">
+        <div className="cp-threat-label">{label}</div>
+        <div className="cp-threat-value">{value}</div>
+        <div className="cp-threat-sub">{sub}</div>
       </div>
     </div>
   );
@@ -1271,96 +1174,8 @@ function usePortfolioBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
 
 // ══════════════════ 骨架屏组件 ══════════════════
 
-function Skel({ w, h = 14, br = 6 }: { w: number | string; h?: number; br?: number | string }) {
+function Skel({ w, h = 14, br = 6 }: { w: number | string; h?: number | string; br?: number | string }) {
   return <div className="cp-skel" style={{ width: w, height: h, borderRadius: br }} />;
-}
-
-function SkeletonTicker() {
-  return (
-    <div className="cp-ticker-bar" style={{ gap: 18 }}>
-      {[1, 2, 3, 4, 5, 6].map(i => (
-        <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Skel w={32} h={12} /><Skel w={48} h={12} /><Skel w={44} h={12} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SkeletonHero() {
-  return (
-    <div className="cp-hero-card" style={{ opacity: 0.6 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <Skel w={80} h={12} />
-        <Skel w={180} h={32} br={8} />
-        <Skel w={120} h={14} />
-      </div>
-      <div className="cp-hero-right" style={{ gap: 12 }}>
-        {[1, 2, 3, 4].map(i => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <Skel w={48} h={10} /><Skel w={72} h={18} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SkeletonRisk() {
-  return (
-    <div className="cp-risk-strip">
-      {[1, 2, 3, 4].map(i => (
-        <div key={i} className="cp-risk-card" style={{ opacity: 0.5 }}>
-          <Skel w={64} h={64} br="50%" />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-            <Skel w={48} h={10} /><Skel w={56} h={18} /><Skel w={40} h={10} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SkeletonSL() {
-  return (
-    <div className="cp-sl-card" style={{ opacity: 0.5, padding: '12px 16px' }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}><Skel w={8} h={8} br="50%" /><Skel w={48} h={12} /></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
-        {[1, 2, 3, 4].map(i => <Skel key={i} w="100%" h={44} br={8} />)}
-      </div>
-    </div>
-  );
-}
-
-function SkeletonBlock({ h = 240 }: { h?: number }) {
-  return <div style={{ width: '100%', height: h, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-    <Skel w="90%" h={h - 20} br={10} />
-  </div>;
-}
-
-function SkeletonTable({ rows = 5 }: { rows?: number }) {
-  return (
-    <table className="cp-table" style={{ opacity: 0.5 }}>
-      <thead><tr>{Array.from({ length: 10 }).map((_, i) => <th key={i}><Skel w={48} h={10} /></th>)}</tr></thead>
-      <tbody>
-        {Array.from({ length: rows }).map((_, r) => (
-          <tr key={r}>{Array.from({ length: 10 }).map((_, c) => <td key={c}><Skel w={40 + Math.round(Math.random() * 30)} h={12} /></td>)}</tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function SkeletonList({ n = 5 }: { n?: number }) {
-  return (
-    <div className="cp-trade-list">
-      {Array.from({ length: n }).map((_, i) => (
-        <div key={i} className="cp-trade-item" style={{ opacity: 0.5, gap: 10 }}>
-          <Skel w={24} h={18} br={5} /><Skel w={72} h={12} /><Skel w={80} h={12} /><Skel w={40} h={12} />
-        </div>
-      ))}
-    </div>
-  );
 }
 
 // ══════════════════ Tooltip ══════════════════
