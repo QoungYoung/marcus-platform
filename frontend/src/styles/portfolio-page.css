@@ -205,17 +205,15 @@
 }
 
 .cp-strategic-panel::before {
-  top: 0; left: 0;
+  top: 4px; left: 4px;
   border-top: 2px solid var(--cc-blue);
   border-left: 2px solid var(--cc-blue);
-  border-radius: 2px 0 0 0;
 }
 
 .cp-strategic-panel::after {
-  bottom: 0; right: 0;
+  bottom: 4px; right: 4px;
   border-bottom: 2px solid var(--cc-blue);
   border-right: 2px solid var(--cc-blue);
-  border-radius: 0 0 2px 0;
 }
 
 .cp-strategic-label {
@@ -373,17 +371,15 @@
 }
 
 .cp-battlefield::before {
-  top: 0; left: 0;
+  top: 4px; left: 4px;
   border-top: 2px solid var(--cc-blue);
   border-left: 2px solid var(--cc-blue);
-  border-radius: 2px 0 0 0;
 }
 
 .cp-battlefield::after {
-  bottom: 0; right: 0;
+  bottom: 4px; right: 4px;
   border-bottom: 2px solid var(--cc-blue);
   border-right: 2px solid var(--cc-blue);
-  border-radius: 0 0 2px 0;
 }
 
 /* Scanning line overlay */
@@ -499,7 +495,7 @@
 .cp-deployment-panel::before {
   content: '';
   position: absolute;
-  top: 0; right: 0;
+  top: 4px; right: 4px;
   width: 18px; height: 18px;
   border-top: 2px solid var(--cc-blue);
   border-right: 2px solid var(--cc-blue);
@@ -1131,7 +1127,78 @@
 }
 
 /* ═══════════════════════════════════════════════════════
-   MODAL — HUD Battle Report
+   INLINE BATTLE REPORT — slides open below battlefield
+   ═══════════════════════════════════════════════════════ */
+.cp-battle-report {
+  background: var(--cc-paper);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--cc-border-strong);
+  border-radius: var(--cc-radius-lg);
+  padding: 12px 16px;
+  max-height: 220px;
+  overflow-y: auto;
+  animation: cc-slide-down 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+@keyframes cc-slide-down {
+  from { opacity: 0; transform: translateY(-8px); max-height: 0; }
+  to { opacity: 1; transform: translateY(0); max-height: 220px; }
+}
+
+.cp-battle-report-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+
+.cp-battle-report-date {
+  font-family: var(--font-display, 'JetBrains Mono', monospace);
+  font-weight: 700;
+  color: var(--cc-text);
+}
+
+.cp-battle-report-summary {
+  display: flex;
+  gap: 16px;
+  font-size: 10px;
+  color: var(--cc-text-dim);
+}
+
+.cp-battle-report-summary span {
+  font-family: var(--font-display, 'JetBrains Mono', monospace);
+}
+
+.cp-battle-report-close {
+  margin-left: auto;
+  width: 22px; height: 22px;
+  border: 1px solid var(--cc-border);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
+  color: var(--cc-text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+
+.cp-battle-report-close:hover {
+  background: rgba(192, 57, 43, 0.08);
+  color: var(--cc-red);
+  border-color: var(--cc-red);
+}
+
+.cp-battle-report::-webkit-scrollbar { width: 3px; }
+.cp-battle-report::-webkit-scrollbar-track { background: transparent; }
+.cp-battle-report::-webkit-scrollbar-thumb { background: rgba(45, 140, 240, 0.15); border-radius: 10px; }
+
+/* ═══════════════════════════════════════════════════════
+   MODAL — HUD Battle Report (legacy, kept for other uses)
    ═══════════════════════════════════════════════════════ */
 .cp-modal-overlay {
   position: fixed;

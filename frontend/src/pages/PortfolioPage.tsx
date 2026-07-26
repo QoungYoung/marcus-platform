@@ -647,6 +647,65 @@ export default function PortfolioPage() {
             )}
           </div>
         </div>
+
+        {/* Inline Battle Report — slides open below charts */}
+        {modalDate && (
+          <div className="cp-battle-report">
+            {modalLoading ? (
+              <div style={{ textAlign: 'center', padding: 16, color: 'var(--cc-text-dim)' }}>
+                <i className="fas fa-spinner fa-spin" /> 加载中...
+              </div>
+            ) : modalData ? (
+              <>
+                <div className="cp-battle-report-header">
+                  <span className="cp-battle-report-date">{modalDate} 作战报告</span>
+                  <div className="cp-battle-report-summary">
+                    <span>日盈亏 <span style={{ color: modalData.daily_pnl >= 0 ? GREEN : RED, fontWeight: 700 }}>
+                      {modalData.daily_pnl >= 0 ? '+' : ''}¥{Math.abs(modalData.daily_pnl).toFixed(0)}</span></span>
+                    <span>已实现 <span style={{ color: modalData.realized_total >= 0 ? GREEN : RED }}>
+                      {modalData.realized_total >= 0 ? '+' : ''}¥{Math.abs(modalData.realized_total).toFixed(0)}</span></span>
+                    <span>浮盈变动 <span style={{ color: modalData.float_total >= 0 ? GREEN : RED }}>
+                      {modalData.float_total >= 0 ? '+' : ''}¥{Math.abs(modalData.float_total).toFixed(0)}</span></span>
+                  </div>
+                  <button className="cp-battle-report-close" onClick={() => { setModalDate(null); setModalData(null); }}>
+                    <i className="fas fa-times" />
+                  </button>
+                </div>
+                {modalData.stocks.length > 0 ? (
+                  <table className="cp-table-mini">
+                    <thead><tr>
+                      <th>代码</th><th>名称</th><th>持仓</th><th>收盘价</th><th>涨跌</th><th>浮盈变动</th><th>已实现</th>
+                    </tr></thead>
+                    <tbody>
+                      {modalData.stocks.map(s => {
+                        const chgPct = s.prev_close > 0 ? ((s.close_price / s.prev_close - 1) * 100) : 0;
+                        const isSold = s.volume === 0;
+                        return (
+                          <tr key={s.symbol} style={{ opacity: isSold ? 0.55 : 1 }}>
+                            <td style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>{s.symbol}</td>
+                            <td style={{ fontSize: 10 }}>{s.name || '-'}</td>
+                            <td style={{ fontSize: 10 }}>{isSold ? <span style={{ color: 'var(--cc-text-dim)' }}>已卖出</span> : `${s.volume}股`}</td>
+                            <td style={{ fontFamily: 'var(--font-display)', fontSize: 10 }}>{s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : '-'}</td>
+                            <td style={{ color: chgPct >= 0 ? 'var(--cc-green)' : 'var(--cc-red)', fontFamily: 'var(--font-display)', fontSize: 10 }}>
+                              {s.close_price > 0 && s.prev_close > 0 ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '-'}</td>
+                            <td style={{ fontFamily: 'var(--font-display)', fontSize: 10, color: (s.float_pnl || 0) >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>
+                              {(s.float_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.float_pnl || 0).toFixed(0)}</td>
+                            <td style={{ fontFamily: 'var(--font-display)', fontSize: 10, color: (s.realized_pnl || 0) >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>
+                              {(s.realized_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.realized_pnl || 0).toFixed(0)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ fontSize: 11, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 12 }}>当日无持仓数据</div>
+                )}
+              </>
+            ) : (
+              <div style={{ fontSize: 11, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 12 }}>加载失败</div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ══════════ UNIT DEPLOYMENT — Right Column ══════════ */}
@@ -964,76 +1023,6 @@ export default function PortfolioPage() {
           <i className={`fas fa-${fabOpen ? 'times' : 'ellipsis'}`} />
         </button>
       </div>
-
-      {/* ═══ 日盈亏弹窗 ═══ */}
-      {modalDate && (
-        <div className="cp-modal-overlay" onClick={() => { setModalDate(null); setModalData(null); }}>
-          <div className="cp-modal" onClick={e => e.stopPropagation()}>
-            <span className="cp-modal-corner cp-modal-corner--tl" />
-            <span className="cp-modal-corner cp-modal-corner--tr" />
-            <span className="cp-modal-corner cp-modal-corner--bl" />
-            <span className="cp-modal-corner cp-modal-corner--br" />
-            <div className="cp-modal-scanline" />
-            <div className="cp-modal-header">
-              <span>{modalDate} 作战报告</span>
-              <button className="cp-modal-close" onClick={() => { setModalDate(null); setModalData(null); }}>
-                <i className="fas fa-times" />
-              </button>
-            </div>
-            <div className="cp-modal-body">
-              {modalLoading ? (
-                <div style={{ textAlign: 'center', padding: 24, color: 'var(--cc-text-dim)' }}>
-                  <i className="fas fa-spinner fa-spin" /> 加载中...
-                </div>
-              ) : modalData ? (
-                <>
-                  <div style={{ fontSize: 13, marginBottom: 10, display: 'flex', gap: 16 }}>
-                    <span>日盈亏 <span style={{ color: modalData.daily_pnl >= 0 ? GREEN : RED, fontWeight: 700 }}>
-                      {modalData.daily_pnl >= 0 ? '+' : ''}¥{Math.abs(modalData.daily_pnl).toFixed(0)}</span></span>
-                    <span style={{ fontSize: 11, color: 'var(--cc-text-dim)' }}>
-                      已实现 <span style={{ color: modalData.realized_total >= 0 ? GREEN : RED }}>{modalData.realized_total >= 0 ? '+' : ''}¥{Math.abs(modalData.realized_total).toFixed(0)}</span>
-                    </span>
-                    <span style={{ fontSize: 11, color: 'var(--cc-text-dim)' }}>
-                      浮盈变动 <span style={{ color: modalData.float_total >= 0 ? GREEN : RED }}>{modalData.float_total >= 0 ? '+' : ''}¥{Math.abs(modalData.float_total).toFixed(0)}</span>
-                    </span>
-                  </div>
-                  {modalData.stocks.length > 0 ? (
-                    <table className="cp-table-mini" style={{ fontSize: 11 }}>
-                      <thead><tr>
-                        <th>代码</th><th>名称</th><th>持仓</th><th>收盘价</th><th>涨跌</th><th>浮盈变动</th><th>已实现</th>
-                      </tr></thead>
-                      <tbody>
-                        {modalData.stocks.map(s => {
-                          const chgPct = s.prev_close > 0 ? ((s.close_price / s.prev_close - 1) * 100) : 0;
-                          const isSold = s.volume === 0;
-                          return (
-                            <tr key={s.symbol} style={{ opacity: isSold ? 0.55 : 1 }}>
-                              <td style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>{s.symbol}</td>
-                              <td style={{ fontSize: 10 }}>{s.name || '-'}</td>
-                              <td style={{ fontSize: 10 }}>{isSold ? <span style={{ color: 'var(--cc-text-dim)' }}>已卖出</span> : `${s.volume}股`}</td>
-                              <td style={{ fontFamily: 'var(--font-display)', fontSize: 10 }}>{s.close_price > 0 ? `¥${s.close_price.toFixed(2)}` : '-'}</td>
-                              <td style={{ color: chgPct >= 0 ? 'var(--cc-green)' : 'var(--cc-red)', fontFamily: 'var(--font-display)', fontSize: 10 }}>
-                                {s.close_price > 0 && s.prev_close > 0 ? `${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%` : '-'}</td>
-                              <td style={{ fontFamily: 'var(--font-display)', fontSize: 10, color: (s.float_pnl || 0) >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>
-                                {(s.float_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.float_pnl || 0).toFixed(0)}</td>
-                              <td style={{ fontFamily: 'var(--font-display)', fontSize: 10, color: (s.realized_pnl || 0) >= 0 ? 'var(--cc-green)' : 'var(--cc-red)' }}>
-                                {(s.realized_pnl || 0) >= 0 ? '+' : ''}¥{Math.abs(s.realized_pnl || 0).toFixed(0)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <div style={{ fontSize: 11, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 16 }}>当日无持仓数据</div>
-                  )}
-                </>
-              ) : (
-                <div style={{ fontSize: 11, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 16 }}>加载失败</div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ═══ 错误提示 ═══ */}
       {error && (
