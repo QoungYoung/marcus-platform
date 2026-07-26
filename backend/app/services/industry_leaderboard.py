@@ -13,8 +13,10 @@ import os
 import sqlite3
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -195,41 +197,51 @@ class IndustryLeaderboardService:
         # 排序
         candidates.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
 
-        # 1.8 Round 2: Top 10 资金补算
-        top10 = candidates[:10]
+        # 1.8 Round 2: 资金补算
+        # 历史模式：多线程一次性获取 limit 内所有股票的资金流，省掉补漏阶段
+        # 实时模式：仅 Top10（东方财富接口串行调用，避免超时）
         if is_historical:
-            moneyflows = self._historical_moneyflow([c["ts_code"] for c in top10], date)
+            n_capital = min(limit, len(candidates))
+            top_n = candidates[:n_capital]
+            moneyflows = self._historical_moneyflow([c["ts_code"] for c in top_n], date)
+            capital_scores, cap_details = self._compute_capital_persistence(top_n, moneyflows, regime)
+            for c in top_n:
+                sym = c["ts_code"]
+                new_cap = capital_scores.get(sym)
+                if new_cap is not None and moneyflows.get(sym):
+                    c["capital_score"] = round(new_cap, 1)
+                    c["capital_data"] = "available"
+                elif new_cap is not None:
+                    c["capital_score"] = round(new_cap, 1)
+                    c["capital_data"] = "unavailable"
+            logger.info(f"[Leaderboard] Round2(historical): {n_capital} stocks, "
+                        f"available={sum(1 for c in top_n if c.get('capital_data')=='available')}, "
+                        f"moneyflows={len(moneyflows)}")
         else:
+            top10 = candidates[:10]
             moneyflows = self._fetch_top10_moneyflow([c["ts_code"] for c in top10])
-        capital_scores, cap_details = self._compute_capital_persistence(top10, moneyflows, regime)
+            capital_scores, cap_details = self._compute_capital_persistence(top10, moneyflows, regime)
+            for c in top10:
+                sym = c["ts_code"]
+                new_cap = capital_scores.get(sym)
+                if new_cap is not None and moneyflows.get(sym):
+                    c["capital_score"] = round(new_cap, 1)
+                    c["capital_data"] = "available"
+                elif new_cap is not None:
+                    c["capital_score"] = round(new_cap, 1)
+                    c["capital_data"] = "unavailable"
 
-        logger.info(f"[Leaderboard] Round2: moneyflows={len(moneyflows)}, capital_scores={len(capital_scores)}, "
-                    f"top10_ts_codes={[c['ts_code'] for c in top10]}")
-
-        for c in top10:
-            sym = c["ts_code"]
-            new_cap = capital_scores.get(sym)
-            if new_cap is not None and moneyflows.get(sym):
-                c["capital_score"] = round(new_cap, 1)
-                c["capital_data"] = "available"
-            elif new_cap is not None:
-                c["capital_score"] = round(new_cap, 1)
-                c["capital_data"] = "unavailable"
-
-        logger.info(f"[Leaderboard] Round2 result: available={sum(1 for c in top10 if c.get('capital_data')=='available')}, "
-                    f"unavailable={sum(1 for c in top10 if c.get('capital_data')=='unavailable')}, "
-                    f"neutral={sum(1 for c in top10 if c.get('capital_data')=='neutral')}")
-
-        # Top10 重排序
-        for c in top10:
-            c["composite_score"] = round(
-                c["trend_score"] * w["trend"] * 100 / 28 +
-                c["volume_price_score"] * w["volume_price"] * 100 / 15 +
-                c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
-                c["price_residual_score"] * w["price_residual"] * 100 / 15 +
-                c["capital_score"] * w["capital"] * 100 / 25,
-                1
-            )
+        # 重算综合分并重排（仅更新过资金分的股票）
+        for c in candidates:
+            if c.get("capital_data") in ("available", "unavailable"):
+                c["composite_score"] = round(
+                    c["trend_score"] * w["trend"] * 100 / 28 +
+                    c["volume_price_score"] * w["volume_price"] * 100 / 15 +
+                    c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
+                    c["price_residual_score"] * w["price_residual"] * 100 / 15 +
+                    c["capital_score"] * w["capital"] * 100 / 25,
+                    1
+                )
         candidates.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
 
         # 行业筛选
@@ -249,40 +261,6 @@ class IndustryLeaderboardService:
         sort_field = score_map.get(sort_by, "composite_score")
         candidates.sort(key=lambda x: x.get(sort_field, 0), reverse=True)
         candidates = candidates[:limit]
-
-        # 1.9 资金补漏：最终 top-N 中不在原始 top10 的股票，补算历史资金流
-        if is_historical:
-            need_capital = [c for c in candidates if c.get("capital_data", "neutral") == "neutral"]
-            if need_capital:
-                logger.info(f"[Leaderboard] Capital补漏: {len(need_capital)} stocks need capital data")
-                extra_mf = self._historical_moneyflow([c["ts_code"] for c in need_capital], date)
-                extra_scores, extra_details = self._compute_capital_persistence(need_capital, extra_mf, regime)
-                for c in need_capital:
-                    sym = c["ts_code"]
-                    new_cap = extra_scores.get(sym)
-                    if new_cap is not None and extra_mf.get(sym):
-                        c["capital_score"] = round(new_cap, 1)
-                        c["capital_data"] = "available"
-                        # 汇总到 cap_details 供后续组装使用
-                        if sym in extra_details:
-                            cap_details[sym] = extra_details[sym]
-                    elif new_cap is not None:
-                        c["capital_score"] = round(new_cap, 1)
-                        c["capital_data"] = "unavailable"
-                # 重算综合分并重排
-                for c in need_capital:
-                    if c.get("capital_data") in ("available", "unavailable"):
-                        c["composite_score"] = round(
-                            c["trend_score"] * w["trend"] * 100 / 28 +
-                            c["volume_price_score"] * w["volume_price"] * 100 / 15 +
-                            c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
-                            c["price_residual_score"] * w["price_residual"] * 100 / 15 +
-                            c["capital_score"] * w["capital"] * 100 / 25,
-                            1
-                        )
-                candidates.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
-                logger.info(f"[Leaderboard] Capital补漏: completed, "
-                            f"updated={sum(1 for c in need_capital if c.get('capital_data') in ('available','unavailable'))}/{len(need_capital)}")
 
         # 构建响应
         items = []
@@ -779,71 +757,69 @@ class IndustryLeaderboardService:
 
         return daily_bars, status
 
-    def _historical_moneyflow(self, top10_symbols: List[str], date: str) -> Dict[str, dict]:
-        """从 Tushare moneyflow 日频接口获取指定日期 + 前5日累计资金流向（仅 Top10）。"""
+    def _historical_moneyflow(self, symbols: List[str], date: str) -> Dict[str, dict]:
+        """从 Tushare moneyflow 日频接口获取指定日期 + 前5日累计资金流向（多线程）。"""
+        if not symbols:
+            return {}
         moneyflows: Dict[str, dict] = {}
         ref_date = datetime.strptime(date, "%Y%m%d")
-        start_date = (ref_date - timedelta(days=12)).strftime("%Y%m%d")  # 留足余量覆盖5个交易日
-        try:
-            pro = _get_tushare_pro()
-            for ts_code in top10_symbols:
-                try:
-                    df = pro.moneyflow(ts_code=ts_code, start_date=start_date, end_date=date)
-                    if df is None or df.empty:
-                        logger.warning(f"[Leaderboard] _historical_moneyflow {ts_code}: no data")
-                        continue
-                    df = df.sort_values("trade_date")
-                    # 统一转为字符串比较，兼容 tushare 不同版本返回 int/str 的差异
-                    df["_td_str"] = df["trade_date"].astype(str)
+        start_date = (ref_date - timedelta(days=12)).strftime("%Y%m%d")
 
-                    # 当日行
-                    day_rows = df[df["_td_str"] == date]
-                    if day_rows.empty:
-                        logger.warning(f"[Leaderboard] _historical_moneyflow {ts_code}: date {date} not in data, available={df['_td_str'].tolist()}")
-                        continue
-                    row = day_rows.iloc[-1]
-                    code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
+        def _fetch_one(ts_code: str) -> Optional[Tuple[str, dict]]:
+            """单个股票的资金流查询（每个线程独立创建 tushare 连接）。"""
+            try:
+                pro = _get_tushare_pro()
+                df = pro.moneyflow(ts_code=ts_code, start_date=start_date, end_date=date)
+                if df is None or df.empty:
+                    logger.warning(f"[Leaderboard] _historical_moneyflow {ts_code}: no data")
+                    return None
+                df = df.sort_values("trade_date")
+                df["_td_str"] = df["trade_date"].astype(str)
 
-                    buy_lg = float(row.get("buy_lg_amount", 0) or 0)      # 大单买入金额(万元)
-                    sell_lg = float(row.get("sell_lg_amount", 0) or 0)    # 大单卖出金额(万元)
-                    buy_elg = float(row.get("buy_elg_amount", 0) or 0)    # 特大单买入金额(万元)
-                    sell_elg = float(row.get("sell_elg_amount", 0) or 0)  # 特大单卖出金额(万元)
-                    main_net = (buy_lg + buy_elg - sell_lg - sell_elg) * 10000  # 万元→元
+                day_rows = df[df["_td_str"] == date]
+                if day_rows.empty:
+                    logger.warning(f"[Leaderboard] _historical_moneyflow {ts_code}: date {date} not in data")
+                    return None
+                row = day_rows.iloc[-1]
+                code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ")
 
-                    # 计算主力净占比：主力净额 / 主力总成交额
-                    main_total = (buy_lg + sell_lg + buy_elg + sell_elg)
-                    if main_total > 0:
-                        main_pct = round((buy_lg + buy_elg - sell_lg - sell_elg) / main_total * 100, 2)
-                    else:
-                        main_pct = 0.0
+                buy_lg = float(row.get("buy_lg_amount", 0) or 0)
+                sell_lg = float(row.get("sell_lg_amount", 0) or 0)
+                buy_elg = float(row.get("buy_elg_amount", 0) or 0)
+                sell_elg = float(row.get("sell_elg_amount", 0) or 0)
+                main_net = (buy_lg + buy_elg - sell_lg - sell_elg) * 10000
 
-                    # 5日累计主力净流入（从查询结果中取 date 之前最近5个交易日）
-                    pre_rows = df[df["_td_str"] < date].tail(5)
-                    d5_main_net = 0.0
-                    for _, pr in pre_rows.iterrows():
-                        d5_buy_lg = float(pr.get("buy_lg_amount", 0) or 0)
-                        d5_sell_lg = float(pr.get("sell_lg_amount", 0) or 0)
-                        d5_buy_elg = float(pr.get("buy_elg_amount", 0) or 0)
-                        d5_sell_elg = float(pr.get("sell_elg_amount", 0) or 0)
-                        d5_main_net += (d5_buy_lg + d5_buy_elg - d5_sell_lg - d5_sell_elg) * 10000
+                main_total = (buy_lg + sell_lg + buy_elg + sell_elg)
+                main_pct = round((buy_lg + buy_elg - sell_lg - sell_elg) / main_total * 100, 2) if main_total > 0 else 0.0
 
-                    moneyflows[ts_code] = {
-                        "symbol": code,
-                        "name": "",
-                        "price": 0,
-                        "change_pct": "0",
-                        "turnover_rate": "0",
-                        "main_net": main_net,
-                        "main_pct": str(main_pct),
-                        "d5_main_net": d5_main_net,
-                        "d5_main_pct": "0",
-                    }
-                    time.sleep(0.12)  # QPS 限制
-                except Exception as e:
-                    logger.warning(f"[Leaderboard] _historical_moneyflow failed for {ts_code}: {e}")
-            logger.info(f"[Leaderboard] _historical_moneyflow: got data for {len(moneyflows)}/{len(top10_symbols)} top10 stocks")
-        except Exception as e:
-            logger.warning(f"[Leaderboard] _historical_moneyflow overall failed: {e}")
+                pre_rows = df[df["_td_str"] < date].tail(5)
+                d5_main_net = 0.0
+                for _, pr in pre_rows.iterrows():
+                    d5_buy_lg = float(pr.get("buy_lg_amount", 0) or 0)
+                    d5_sell_lg = float(pr.get("sell_lg_amount", 0) or 0)
+                    d5_buy_elg = float(pr.get("buy_elg_amount", 0) or 0)
+                    d5_sell_elg = float(pr.get("sell_elg_amount", 0) or 0)
+                    d5_main_net += (d5_buy_lg + d5_buy_elg - d5_sell_lg - d5_sell_elg) * 10000
+
+                return ts_code, {
+                    "symbol": code, "name": "", "price": 0, "change_pct": "0",
+                    "turnover_rate": "0", "main_net": main_net, "main_pct": str(main_pct),
+                    "d5_main_net": d5_main_net, "d5_main_pct": "0",
+                }
+            except Exception as e:
+                logger.warning(f"[Leaderboard] _historical_moneyflow failed for {ts_code}: {e}")
+                return None
+
+        # 线程池并发，max_workers=5 控制 QPS
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_fetch_one, ts_code): ts_code for ts_code in symbols}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    ts_code, data = result
+                    moneyflows[ts_code] = data
+
+        logger.info(f"[Leaderboard] _historical_moneyflow: got data for {len(moneyflows)}/{len(symbols)} stocks")
         return moneyflows
 
     # ── 前瞻收益验证 ─────────────────────────────────────────
