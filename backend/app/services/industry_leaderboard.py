@@ -203,6 +203,9 @@ class IndustryLeaderboardService:
             moneyflows = self._fetch_top10_moneyflow([c["ts_code"] for c in top10])
         capital_scores, cap_details = self._compute_capital_persistence(top10, moneyflows, regime)
 
+        logger.info(f"[Leaderboard] Round2: moneyflows={len(moneyflows)}, capital_scores={len(capital_scores)}, "
+                    f"top10_ts_codes={[c['ts_code'] for c in top10]}")
+
         for c in top10:
             sym = c["ts_code"]
             new_cap = capital_scores.get(sym)
@@ -212,6 +215,10 @@ class IndustryLeaderboardService:
             elif new_cap is not None:
                 c["capital_score"] = round(new_cap, 1)
                 c["capital_data"] = "unavailable"
+
+        logger.info(f"[Leaderboard] Round2 result: available={sum(1 for c in top10 if c.get('capital_data')=='available')}, "
+                    f"unavailable={sum(1 for c in top10 if c.get('capital_data')=='unavailable')}, "
+                    f"neutral={sum(1 for c in top10 if c.get('capital_data')=='neutral')}")
 
         # Top10 重排序
         for c in top10:
