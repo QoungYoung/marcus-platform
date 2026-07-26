@@ -305,8 +305,26 @@ class IndustryLeaderboardService:
             return f"{tx_sym[2:]}.SH"
         return f"{tx_sym[2:]}.SZ"
 
+    @staticmethod
+    def _is_trading_time() -> bool:
+        """判断当前是否在 A 股交易时段（周一至周五 9:30-11:30 / 13:00-15:00 北京时间）。"""
+        import pytz
+        try:
+            now = datetime.now(pytz.timezone("Asia/Shanghai"))
+        except Exception:
+            now = datetime.now()
+        if now.weekday() >= 5:
+            return False
+        t = now.hour * 100 + now.minute
+        return (930 <= t <= 1130) or (1300 <= t <= 1500)
+
     def _fetch_realtime_quotes_batch(self, symbols: List[str]) -> Tuple[Dict[str, dict], str]:
-        """腾讯 qt.gtimg.cn 批量获取实时行情。返回 (quotes_dict, data_source)。"""
+        """腾讯 qt.gtimg.cn 批量获取实时行情（非交易时段降级为日频）。返回 (quotes_dict, data_source)。"""
+        # 非交易时段直接降级为日频，避免腾讯返回空数据
+        if not self._is_trading_time():
+            logger.info("[Leaderboard] Non-trading hours, using daily fallback for quotes")
+            return self._fallback_quotes_from_daily(symbols), "tushare_daily"
+
         tx_symbols = [self._ts_code_to_tencent_symbol(s) for s in symbols]
         quotes: Dict[str, dict] = {}
 
