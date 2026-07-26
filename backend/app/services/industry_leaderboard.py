@@ -343,8 +343,9 @@ class IndustryLeaderboardService:
                 "market_cap": r.get("market_cap", 0),
             })
 
-        # 2. 获取当日市值数据
+        # 2. 获取当日市值数据 + PE/PB/股息（一次API调用覆盖两个用途）
         historical_mcap: Dict[str, float] = {}
+        historical_finance: Dict[str, dict] = {}  # ts_code → {pe_ttm, pb, dv_ttm}
         try:
             pro = _get_tushare_pro()
             end_dt = datetime.strptime(date, "%Y%m%d")
@@ -366,7 +367,12 @@ class IndustryLeaderboardService:
                     latest = group.iloc[-1]
                     total_mv = float(latest.get("total_mv", 0) or 0)
                     if total_mv > 0:
-                        historical_mcap[str(ts_code)] = total_mv  # 万元 → 元
+                        historical_mcap[str(ts_code)] = total_mv
+                    pe = float(latest.get("pe_ttm", 0) or 0)
+                    pb = float(latest.get("pb", 0) or 0)
+                    dv = float(latest.get("dv_ttm", 0) or 0)
+                    if pe > 0 or pb > 0 or dv > 0:
+                        historical_finance[str(ts_code)] = {"pe_ttm": pe, "pb": pb, "dv_ttm": dv}
         except Exception as e:
             logger.warning(f"[Leaderboard] daily_basic failed for historical cap: {e}")
 
@@ -400,6 +406,9 @@ class IndustryLeaderboardService:
         for ind, stocks in industry_map.items():
             stocks.sort(key=lambda x: x.get("market_cap") or 0, reverse=True)
             candidates.extend(stocks[:3])
+
+        # 缓存 daily_basic 财务数据（PE/PB/股息），避免 _compute_valuation_anchor 二次调用
+        self._finance_cache = historical_finance
 
         return candidates, survivorship_bias
 
@@ -1895,39 +1904,62 @@ class IndustryLeaderboardService:
             ind_name = c.get("industry", "其他")
             by_industry.setdefault(ind_name, []).append(c)
 
-        # 从 daily_basic 获取 PE/PB/股息率 数据
+        # 获取 PE/PB/股息率：优先复用 _get_industry_candidates_historical 的缓存
         pe_map: Dict[str, float] = {}
         pb_map: Dict[str, float] = {}
         dv_map: Dict[str, float] = {}
+        finance_cache = getattr(self, "_finance_cache", None) or {}
         symbols = [c["ts_code"] for c in candidates]
         ref_date = date or datetime.now().strftime("%Y%m%d")
-        try:
-            pro = _get_tushare_pro()
-            start_dt = datetime.strptime(ref_date, "%Y%m%d") - timedelta(days=10)
-            for i in range(0, len(symbols), 100):
-                batch = ",".join(symbols[i:i + 100])
-                df = pro.daily_basic(ts_code=batch,
-                                     start_date=start_dt.strftime("%Y%m%d"),
-                                     end_date=ref_date)
-                if df is None or df.empty:
-                    continue
-                df = df.sort_values("trade_date")
-                for ts_code, group in df.groupby("ts_code"):
-                    group = group[group["trade_date"] <= ref_date]
-                    if group.empty:
+
+        # 尝试从缓存中读取
+        cache_hits = 0
+        for c in candidates:
+            sym = c["ts_code"]
+            fc = finance_cache.get(sym, {})
+            pe = fc.get("pe_ttm", 0) or 0
+            pb = fc.get("pb", 0) or 0
+            dv = fc.get("dv_ttm", 0) or 0
+            if pe > 0 or pb > 0 or dv > 0:
+                if pe > 0:
+                    pe_map[sym] = pe
+                if pb > 0:
+                    pb_map[sym] = pb
+                if dv > 0:
+                    dv_map[sym] = dv
+                cache_hits += 1
+
+        # 缓存未命中时才调用 daily_basic
+        if cache_hits < len(candidates) * 0.5:
+            logger.info(f"[Leaderboard] Finance cache hits={cache_hits}/{len(candidates)}, "
+                        f"falling back to daily_basic")
+            try:
+                pro = _get_tushare_pro()
+                start_dt = datetime.strptime(ref_date, "%Y%m%d") - timedelta(days=10)
+                for i in range(0, len(symbols), 100):
+                    batch = ",".join(symbols[i:i + 100])
+                    df = pro.daily_basic(ts_code=batch,
+                                         start_date=start_dt.strftime("%Y%m%d"),
+                                         end_date=ref_date)
+                    if df is None or df.empty:
                         continue
-                    latest = group.iloc[-1]
-                    pe = float(latest.get("pe_ttm", 0) or 0)
-                    pb = float(latest.get("pb", 0) or 0)
-                    dv = float(latest.get("dv_ttm", 0) or 0)
-                    if pe > 0:
-                        pe_map[str(ts_code)] = pe
-                    if pb > 0:
-                        pb_map[str(ts_code)] = pb
-                    if dv > 0:
-                        dv_map[str(ts_code)] = dv
-        except Exception as e:
-            logger.warning(f"[Leaderboard] daily_basic PE/PB fetch failed: {e}")
+                    df = df.sort_values("trade_date")
+                    for ts_code, group in df.groupby("ts_code"):
+                        group = group[group["trade_date"] <= ref_date]
+                        if group.empty:
+                            continue
+                        latest = group.iloc[-1]
+                        pe = float(latest.get("pe_ttm", 0) or 0)
+                        pb = float(latest.get("pb", 0) or 0)
+                        dv = float(latest.get("dv_ttm", 0) or 0)
+                        if pe > 0:
+                            pe_map[str(ts_code)] = pe
+                        if pb > 0:
+                            pb_map[str(ts_code)] = pb
+                        if dv > 0:
+                            dv_map[str(ts_code)] = dv
+            except Exception as e:
+                logger.warning(f"[Leaderboard] daily_basic PE/PB fetch failed: {e}")
 
         # Fallback: try indicator's pe_ttm
         for c in candidates:
