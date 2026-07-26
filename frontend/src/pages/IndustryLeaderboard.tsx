@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RefreshCw, TrendingUp, BarChart3, AlertTriangle, Ban, ChevronDown, Zap, Star, Diamond, Shield, Circle } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Ban, ChevronDown } from 'lucide-react';
 import { marketApi } from '../api/client';
 import '../styles/agent-theme.css';
 import '../styles/industry-leaderboard.css';
@@ -62,39 +62,36 @@ const SORT_LABELS: Record<SortKey, string> = {
   change_pct: '涨跌幅',
 };
 
-const REGIME_LABELS: Record<string, { label: string; className: string }> = {
-  trending: { label: '趋势市', className: 'regime-trending' },
-  ranging: { label: '震荡市', className: 'regime-ranging' },
-  transitional: { label: '过渡期', className: 'regime-transitional' },
+const REGIME_LABELS: Record<string, { label: string }> = {
+  trending: { label: '趋势市' },
+  ranging: { label: '震荡市' },
+  transitional: { label: '过渡期' },
 };
 
-// ── 品级系统 ──
-type Tier = 'mythic' | 'legendary' | 'epic' | 'rare' | 'common';
+// ── 品级系统 (DNA extracted) ──
+const TIER_COLORS: Record<string, { label: string; color: string; minScore: number }> = {
+  mythic:    { label: '神话', color: '#c6922e', minScore: 80 },
+  legendary: { label: '传说', color: '#8a4fc0', minScore: 65 },
+  epic:      { label: '史诗', color: '#d4743e', minScore: 50 },
+  rare:      { label: '稀有', color: '#3d8cc7', minScore: 35 },
+  common:    { label: '普通', color: '#6b7280', minScore: 0 },
+};
 
-interface TierConfig {
-  key: Tier;
-  label: string;
-  minScore: number;
-  icon: React.FC<{ size?: number }>;
-  className: string;
-}
-
-const TIERS: TierConfig[] = [
-  { key: 'mythic',    label: '神话', minScore: 80, icon: ({ size = 16 }) => <Diamond size={size} />, className: 'tier-mythic' },
-  { key: 'legendary', label: '传说', minScore: 65, icon: ({ size = 16 }) => <Star size={size} />,   className: 'tier-legendary' },
-  { key: 'epic',      label: '史诗', minScore: 50, icon: ({ size = 16 }) => <Zap size={size} />,    className: 'tier-epic' },
-  { key: 'rare',      label: '稀有', minScore: 35, icon: ({ size = 16 }) => <Shield size={size} />, className: 'tier-rare' },
-  { key: 'common',    label: '普通', minScore: 0,  icon: ({ size = 16 }) => <Circle size={size} />, className: 'tier-common' },
-];
-
-function getTier(score: number): TierConfig {
-  for (const t of TIERS) {
-    if (score >= t.minScore) return t;
+function getTier(score: number) {
+  for (const [key, t] of Object.entries(TIER_COLORS)) {
+    if (score >= t.minScore) return { key, ...t };
   }
-  return TIERS[TIERS.length - 1];
+  return { key: 'common', ...TIER_COLORS.common };
 }
 
-// score to 0-100 normalized for bar widths
+function tierTagClass(key: string) {
+  return `tier-tag tag-${key}`;
+}
+
+function tierCardClass(key: string) {
+  return `rank-card tier-${key}`;
+}
+
 function pct(score: number, max: number): number {
   return Math.min(100, Math.max(0, (score / max) * 100));
 }
@@ -106,36 +103,184 @@ function fmtAmount(val: number): string {
   return val.toLocaleString();
 }
 
-const GREEN = '#2ecc71';
-const RED = '#e74c3c';
-
 // ── 骨架屏 ──
-function SkeletonRow({ idx }: { idx: number }) {
+function SkeletonCard({ idx }: { idx: number }) {
   return (
-    <div className="lb-card lb-skeleton-card" style={{ animationDelay: `${idx * 0.06}s` }}>
-      <div className="lb-card-rank"><div className="lb-skeleton-circle" /></div>
-      <div className="lb-card-body">
-        <div className="lb-skeleton" style={{ width: '30%', height: 16 }} />
-        <div className="lb-skeleton" style={{ width: '50%', height: 12, marginTop: 6 }} />
+    <div className="rank-card tier-common skeleton-card" style={{ animationDelay: `${idx * 0.06}s` }}>
+      <div className="rank-num"><div className="skel-circle" /></div>
+      <div className="avatar-sq"><div className="skel-block" /></div>
+      <div className="info-area">
+        <div className="skel-line" style={{ width: '40%' }} />
+        <div className="skel-line" style={{ width: '65%', marginTop: 4 }} />
       </div>
-      <div className="lb-card-scores">
-        <div className="lb-skeleton" style={{ width: 60, height: 20 }} />
+      <div className="score-area">
+        <div className="skel-line" style={{ width: 50, height: 18, marginLeft: 'auto' }} />
       </div>
+      <div className="tier-tag tag-common"><div className="skel-line" style={{ width: 28, height: 12 }} /></div>
     </div>
   );
 }
 
-// ── 维度名称映射 ──
+// ── 维度图标 ──
 const DIM_ICONS: Record<string, string> = {
-  '趋势综合': '📈',
-  '量价配合': '📊',
-  '行业相对强度': '🏭',
-  '价格残差': '💹',
-  '资金持续性': '💰',
+  '趋势综合': '↑',
+  '量价配合': '↕',
+  '行业相对强度': '◎',
+  '价格残差': '◇',
+  '资金持续性': '◆',
 };
 
+// ══════════════════════════════════════════════════════════════
+//  背景 Canvas
+// ══════════════════════════════════════════════════════════════
+function useBackgroundCanvas(canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let w = 0, h = 0;
+    let animId = 0;
+    let time = 0;
+
+    function resize() {
+      w = Math.max(1, window.innerWidth);
+      h = Math.max(1, window.innerHeight);
+      canvas!.width = w;
+      canvas!.height = h;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 粒子
+    const particles: { x: number; y: number; size: number; sx: number; sy: number; alpha: number }[] = [];
+    for (let i = 0; i < 80; i++) {
+      particles.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        size: Math.random() * 2.5 + 0.8,
+        sx: (Math.random() - 0.5) * 0.25,
+        sy: (Math.random() - 0.5) * 0.25,
+        alpha: Math.random() * 0.4 + 0.1,
+      });
+    }
+
+    // 光环
+    const halos = [
+      { x: 0.15, y: 0.10, r: 180, speed: 0.004, phase: 0 },
+      { x: 0.85, y: 0.20, r: 140, speed: -0.005, phase: 1.2 },
+      { x: 0.50, y: 0.85, r: 200, speed: 0.003, phase: 2.5 },
+      { x: 0.08, y: 0.75, r: 120, speed: -0.006, phase: 0.8 },
+      { x: 0.92, y: 0.70, r: 100, speed: 0.007, phase: 1.8 },
+    ];
+
+    function draw() {
+      ctx!.clearRect(0, 0, w, h);
+
+      // 光环
+      const minDim = Math.min(w, h);
+      for (const hd of halos) {
+        const r = hd.r * minDim / 800;
+        if (!isFinite(r) || r <= 0) continue;
+        const cx = hd.x * w;
+        const cy = hd.y * h;
+        const angle = time * hd.speed + hd.phase;
+
+        ctx!.save();
+        ctx!.translate(cx, cy);
+        ctx!.rotate(angle);
+
+        const r0 = Math.max(0.1, r * 0.2);
+        const r1 = Math.max(0.1, r);
+        const grad = ctx!.createRadialGradient(0, 0, r0, 0, 0, r1);
+        grad.addColorStop(0, 'rgba(45,140,240,0)');
+        grad.addColorStop(0.7, 'rgba(45,140,240,0.04)');
+        grad.addColorStop(1, 'rgba(45,140,240,0.12)');
+        ctx!.beginPath();
+        ctx!.arc(0, 0, r1, 0, Math.PI * 2);
+        ctx!.fillStyle = grad;
+        ctx!.fill();
+
+        if (r * 0.7 > 0.5) {
+          ctx!.beginPath();
+          ctx!.arc(0, 0, r * 0.7, 0, Math.PI * 2);
+          ctx!.strokeStyle = 'rgba(45,140,240,0.15)';
+          ctx!.lineWidth = 1.5;
+          ctx!.stroke();
+        }
+
+        if (r * 0.45 > 0.5) {
+          ctx!.beginPath();
+          ctx!.arc(0, 0, r * 0.45, 0, Math.PI * 2);
+          ctx!.strokeStyle = 'rgba(45,140,240,0.08)';
+          ctx!.lineWidth = 1;
+          ctx!.setLineDash([6, 8]);
+          ctx!.stroke();
+          ctx!.setLineDash([]);
+        }
+
+        const dotR = r * 0.55;
+        if (dotR > 2) {
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2 + time * 0.02;
+            ctx!.beginPath();
+            ctx!.arc(Math.cos(a) * dotR, Math.sin(a) * dotR, 2, 0, Math.PI * 2);
+            ctx!.fillStyle = 'rgba(45,140,240,0.2)';
+            ctx!.fill();
+          }
+        }
+        ctx!.restore();
+      }
+
+      // 粒子
+      for (const p of particles) {
+        p.x += p.sx;
+        p.y += p.sy;
+        if (p.x < 0 || p.x > w) p.sx *= -1;
+        if (p.y < 0 || p.y > h) p.sy *= -1;
+        ctx!.beginPath();
+        ctx!.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx!.fillStyle = `rgba(45,140,240,${p.alpha})`;
+        ctx!.fill();
+      }
+
+      // 连接线
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 120) {
+            ctx!.beginPath();
+            ctx!.moveTo(particles[i].x, particles[i].y);
+            ctx!.lineTo(particles[j].x, particles[j].y);
+            ctx!.strokeStyle = `rgba(45,140,240,${(1 - dist / 120) * 0.08})`;
+            ctx!.lineWidth = 0.6;
+            ctx!.stroke();
+          }
+        }
+      }
+
+      time += 0.01;
+      animId = requestAnimationFrame(draw);
+    }
+
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener('resize', resize);
+    };
+  }, [canvasRef]);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  主组件
+// ══════════════════════════════════════════════════════════════
 export default function IndustryLeaderboardPage() {
   const { t } = useTranslation();
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [data, setData] = useState<LeaderboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -143,6 +288,17 @@ export default function IndustryLeaderboardPage() {
   const [filterIndustry, setFilterIndustry] = useState('');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+  const [entranceDone, setEntranceDone] = useState(false);
+
+  useBackgroundCanvas(canvasRef);
+
+  // 入场动画
+  useEffect(() => {
+    if (!loading && data?.items.length) {
+      const timer = setTimeout(() => setEntranceDone(true), 100 + data.items.length * 60 + 500);
+      return () => clearTimeout(timer);
+    }
+  }, [loading, data?.items.length]);
 
   const handleRowClick = (symbol: string) => {
     setExpandedSymbol(expandedSymbol === symbol ? null : symbol);
@@ -159,6 +315,7 @@ export default function IndustryLeaderboardPage() {
       });
       setData(resp.data as LeaderboardResponse);
       setLastUpdate(new Date());
+      setEntranceDone(false);
     } catch (e: any) {
       setError(e?.message || 'Failed to fetch leaderboard');
     } finally {
@@ -176,221 +333,222 @@ export default function IndustryLeaderboardPage() {
     return () => clearInterval(timer);
   }, [fetchData]);
 
-  const handleSort = (key: SortKey) => {
-    setSortBy(key);
-  };
-
-  const handleRefresh = () => {
-    setLoading(true);
-    fetchData(true);
-  };
+  const handleSort = (key: SortKey) => setSortBy(key);
+  const handleRefresh = () => { setLoading(true); fetchData(true); };
 
   const regime = data?.market_regime || 'transitional';
-  const regimeInfo = REGIME_LABELS[regime] || REGIME_LABELS.transitional;
+  const regimeLabel = REGIME_LABELS[regime]?.label || '过渡期';
+
+  const now = new Date();
+  const timeStr = `${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
 
   return (
     <div className="ba-page">
-      {/* ── 背景装饰 ── */}
-      <div className="ba-bg-grid" />
-      <div className="ba-bg-glow ba-bg-glow--top" />
-      <div className="ba-bg-glow ba-bg-glow--bottom" />
+      {/* 背景 Canvas */}
+      <canvas ref={canvasRef} id="bgCanvas" />
 
-      {/* ── 顶部导航栏 ── */}
-      <header className="ba-header">
-        <div className="ba-header-left">
-          <div className="ba-logo">
-            <div className="ba-logo-icon">
-              <BarChart3 size={20} />
-            </div>
-            <div className="ba-logo-text">
-              <span className="ba-logo-title">行业龙头排行</span>
-              <span className="ba-logo-sub">SECTOR LEADERBOARD</span>
-            </div>
+      {/* 主容器 */}
+      <div className="main-container">
+        {/* ── 标题 ── */}
+        <div className="header-section">
+          <div className="header-accent-line">
+            <span className="accent-dash" />
+            <span className="header-label">SECTOR · TACTICAL DATA</span>
+            <span className="accent-dash" />
           </div>
-          <div className={`ba-regime ${regimeInfo.className}`}>
-            <span className="ba-regime-dot" />
-            {regimeInfo.label}
+          <h1 className="header-title">
+            行业龙头<span className="ba-icon" />排行榜
+          </h1>
+          <div className="header-sub">
+            —— 实时战术数据 · 五阶品级 ——
+            <span className="header-regime">【{regimeLabel}】</span>
           </div>
           {data?.volume_data === 'degraded' && (
-            <span className="ba-badge ba-badge--warn">量价降级</span>
+            <span className="header-degraded">量价降级</span>
           )}
           {data?.data_source === 'tushare' && (
-            <span className="ba-badge ba-badge--warn">Tushare源</span>
+            <span className="header-degraded">Tushare源</span>
           )}
+          <hr className="divider-hr" />
         </div>
 
-        <div className="ba-header-right">
-          <div className="ba-tier-legend">
-            {TIERS.map((tier) => (
-              <span key={tier.key} className={`ba-tier-tag ${tier.className}`}>
-                <tier.icon size={12} />
-                {tier.label}
-              </span>
-            ))}
+        {/* ── 工具栏 ── */}
+        <div className="toolbar">
+          <div className="toolbar-left">
+            <div className="tier-legend">
+              {Object.entries(TIER_COLORS).map(([key, t]) => (
+                <span key={key} className={tierTagClass(key)}>{t.label}</span>
+              ))}
+            </div>
           </div>
-          <select
-            className="ba-select"
-            value={filterIndustry}
-            onChange={(e) => setFilterIndustry(e.target.value)}
-          >
-            <option value="">全部行业</option>
-            {(data?.industries_covered || []).map((ind) => (
-              <option key={ind} value={ind}>{ind}</option>
-            ))}
-          </select>
-          <button className="ba-btn" onClick={handleRefresh} disabled={loading}>
-            <RefreshCw size={15} className={loading ? 'ba-spin' : ''} />
-            刷新
-          </button>
+          <div className="toolbar-right">
+            <select
+              className="ba-select"
+              value={filterIndustry}
+              onChange={(e) => setFilterIndustry(e.target.value)}
+            >
+              <option value="">全部行业</option>
+              {(data?.industries_covered || []).map((ind) => (
+                <option key={ind} value={ind}>{ind}</option>
+              ))}
+            </select>
+            <button className="ba-btn" onClick={handleRefresh} disabled={loading}>
+              <RefreshCw size={14} className={loading ? 'ba-spin' : ''} />
+              刷新
+            </button>
+          </div>
         </div>
-      </header>
 
-      {/* ── 排序栏 ── */}
-      <div className="ba-sort-bar">
-        <div className="ba-sort-left">
-          {lastUpdate && (
-            <span className="ba-meta">
-              更新于 {lastUpdate.toLocaleTimeString()} · {data?.items.length || 0} 条结果
-              {data?.data_source === 'tushare' ? ' · 腾讯数据源不可用，已降级' : ''}
-            </span>
-          )}
-        </div>
-        <div className="ba-sort-tabs">
+        {/* ── 排序栏 ── */}
+        <div className="sort-bar">
           {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
             <button
               key={key}
-              className={`ba-sort-tab ${sortBy === key ? 'active' : ''}`}
+              className={`sort-tab ${sortBy === key ? 'active' : ''}`}
               onClick={() => handleSort(key)}
             >
               {SORT_LABELS[key]}
-              {sortBy === key && <ChevronDown size={12} className="ba-sort-arrow" />}
             </button>
           ))}
         </div>
-      </div>
 
-      {/* ── 错误 ── */}
-      {error && (
-        <div className="ba-error">
-          <AlertTriangle size={16} /> {error}
-        </div>
-      )}
+        {/* ── 错误 ── */}
+        {error && (
+          <div className="ba-error">
+            <AlertTriangle size={15} /> {error}
+          </div>
+        )}
 
-      {/* ── 排行榜列表 ── */}
-      <div className="ba-leaderboard">
-        {loading && !data ? (
-          Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} idx={i} />)
-        ) : (
-          (data?.items || []).map((item, idx) => {
-            const tier = getTier(item.composite_score);
-            const isExpanded = expandedSymbol === item.symbol;
-            return (
-              <React.Fragment key={item.symbol}>
-                <div
-                  className={`ba-card ${tier.className} ${isExpanded ? 'ba-card--expanded' : ''}`}
-                  onClick={() => handleRowClick(item.symbol)}
-                >
-                  {/* 排名区 */}
-                  <div className="ba-card-rank">
-                    <div className="ba-rank-badge">
-                      <span className="ba-rank-num">{idx + 1}</span>
-                      <tier.icon size={14} />
-                    </div>
-                    <span className={`ba-tier-label ${tier.className}`}>{tier.label}</span>
-                  </div>
+        {/* ── 排行榜列表 ── */}
+        <div className="ranking-list">
+          {loading && !data ? (
+            Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} idx={i} />)
+          ) : (
+            (data?.items || []).map((item, idx) => {
+              const tier = getTier(item.composite_score);
+              const isExpanded = expandedSymbol === item.symbol;
+              const stockChar = item.name.charAt(0);
+              const delay = 80 + idx * 60;
 
-                  {/* 主体信息 */}
-                  <div className="ba-card-body">
-                    <div className="ba-card-name-row">
-                      <span className="ba-card-symbol">{item.symbol.split('.')[0]}</span>
-                      <span className="ba-card-cname">{item.name}</span>
-                      <span className="ba-card-industry">{item.industry}</span>
-                    </div>
-                    <div className="ba-card-meta-row">
-                      <span className="ba-card-amount">成交 {fmtAmount(item.turnover_amount)}</span>
-                      {item.warnings.includes('untradeable') && (
-                        <span className="ba-warn ba-warn--lock"><Ban size={10} /> 一字板</span>
-                      )}
-                      {item.warnings.includes('overheat') && (
-                        <span className="ba-warn ba-warn--hot"><AlertTriangle size={10} /> 过热</span>
-                      )}
-                      {item.warnings.includes('high_pe') && (
-                        <span className="ba-warn ba-warn--pe"><AlertTriangle size={10} /> 高PE</span>
-                      )}
-                      {item.capital_data === 'neutral' && (
-                        <span className="ba-warn ba-warn--info">资金中性</span>
-                      )}
-                      {item.capital_data === 'unavailable' && (
-                        <span className="ba-warn ba-warn--info">资金不可用</span>
-                      )}
-                    </div>
-                  </div>
+              return (
+                <React.Fragment key={item.symbol}>
+                  <div
+                    className={`${tierCardClass(tier.key)} ${isExpanded ? 'expanded' : ''}`}
+                    style={{
+                      opacity: entranceDone ? undefined : 0,
+                      transform: entranceDone ? undefined : 'translateY(18px)',
+                      animationDelay: `${delay}ms`,
+                    }}
+                    onClick={() => handleRowClick(item.symbol)}
+                  >
+                    <div className="rank-num">{idx + 1}</div>
 
-                  {/* 分数区 */}
-                  <div className="ba-card-scores">
-                    <div className="ba-card-change" style={{ color: item.change_pct >= 0 ? RED : GREEN }}>
-                      {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
+                    <div
+                      className="avatar-sq"
+                      style={{ background: `${tier.color}18`, color: tier.color, borderColor: `${tier.color}30` }}
+                    >
+                      {stockChar}
                     </div>
-                    <div className="ba-score-bar-wrap">
-                      <div
-                        className={`ba-score-bar ${tier.className}`}
-                        style={{ width: `${item.composite_score}%` }}
-                      />
+
+                    <div className="info-area">
+                      <div className="char-name">
+                        {item.name}
+                        <span className="char-symbol">{item.symbol.split('.')[0]}</span>
+                      </div>
+                      <div className="char-detail">
+                        {item.industry} · 成交 {fmtAmount(item.turnover_amount)}
+                        {item.warnings.includes('untradeable') && (
+                          <span className="warn-tag warn-lock"><Ban size={9} /> 一字板</span>
+                        )}
+                        {item.warnings.includes('overheat') && (
+                          <span className="warn-tag warn-hot"><AlertTriangle size={9} /> 过热</span>
+                        )}
+                        {item.warnings.includes('high_pe') && (
+                          <span className="warn-tag warn-pe"><AlertTriangle size={9} /> 高PE</span>
+                        )}
+                        {item.capital_data === 'neutral' && (
+                          <span className="warn-tag warn-neutral">资金中性</span>
+                        )}
+                        {item.capital_data === 'unavailable' && (
+                          <span className="warn-tag warn-neutral">资金N/A</span>
+                        )}
+                      </div>
                     </div>
-                    <div className={`ba-score-main ${tier.className}`}>
-                      {item.composite_score.toFixed(1)}
+
+                    <div className="score-area">
+                      <div className="score-change" style={{ color: item.change_pct >= 0 ? '#e74c3c' : '#2ecc71' }}>
+                        {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
+                      </div>
+                      <div className="score-bar-wrap">
+                        <div
+                          className="score-bar-fill"
+                          style={{ width: `${item.composite_score}%`, background: tier.color }}
+                        />
+                      </div>
+                      <div className="score-value" style={{ color: tier.color }}>
+                        {item.composite_score.toFixed(1)}
+                      </div>
+                      <div className="score-subs">
+                        <span title="趋势">{item.trend_score.toFixed(1)}</span>
+                        <span title="资金">{item.capital_score.toFixed(1)}</span>
+                        <span title="量价">{item.volume_price_score.toFixed(1)}</span>
+                        <span title="强度">{item.industry_relative_score.toFixed(1)}</span>
+                        <span title="价格">{item.price_residual_score.toFixed(1)}</span>
+                      </div>
                     </div>
-                    <div className="ba-score-subs">
-                      <span className="ba-sub-score" title="趋势">{item.trend_score.toFixed(1)}</span>
-                      <span className="ba-sub-score" title="资金">{item.capital_score.toFixed(1)}</span>
-                      <span className="ba-sub-score" title="量价">{item.volume_price_score.toFixed(1)}</span>
-                      <span className="ba-sub-score" title="强度">{item.industry_relative_score.toFixed(1)}</span>
-                      <span className="ba-sub-score" title="价格">{item.price_residual_score.toFixed(1)}</span>
-                    </div>
+
+                    <span className={tierTagClass(tier.key)}>{tier.label}</span>
+
                     <ChevronDown
-                      size={16}
-                      className={`ba-expand-arrow ${isExpanded ? 'ba-expand-arrow--open' : ''}`}
+                      size={14}
+                      className={`expand-arrow ${isExpanded ? 'expand-arrow--open' : ''}`}
                     />
                   </div>
-                </div>
 
-                {/* 展开详情面板 */}
-                {isExpanded && item.score_detail && (
-                  <div className="ba-detail-panel">
-                    <div className="ba-detail-inner">
-                      {Object.entries(item.score_detail).map(([key, dim]) => (
-                        <div key={key} className="ba-detail-dim">
-                          <div className="ba-detail-dim-head">
-                            <span className="ba-detail-dim-icon">{DIM_ICONS[dim.label] || '◆'}</span>
-                            <span className="ba-detail-dim-label">{dim.label}</span>
-                            <span className="ba-detail-dim-score">{dim.score.toFixed(1)} <i>/ {dim.max}</i></span>
-                          </div>
-                          <div className="ba-detail-dim-bar">
-                            <div
-                              className="ba-detail-dim-fill"
-                              style={{ width: `${pct(dim.score, dim.max)}%` }}
-                            />
-                          </div>
-                          <div className="ba-detail-subs">
-                            {dim.sub_scores.map((sub, si) => (
-                              <div key={si} className="ba-detail-sub">
-                                <div className="ba-detail-sub-head">
-                                  <span className="ba-detail-sub-label">{sub.label}</span>
-                                  <span className="ba-detail-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
+                  {/* ── 展开详情 ── */}
+                  {isExpanded && item.score_detail && (
+                    <div className="detail-panel">
+                      <div className="detail-grid">
+                        {Object.entries(item.score_detail).map(([key, dim]) => (
+                          <div key={key} className="detail-dim">
+                            <div className="detail-dim-head">
+                              <span className="detail-dim-icon">{DIM_ICONS[dim.label] || '·'}</span>
+                              <span className="detail-dim-label">{dim.label}</span>
+                              <span className="detail-dim-score">{dim.score.toFixed(1)}<i>/ {dim.max}</i></span>
+                            </div>
+                            <div className="detail-dim-bar">
+                              <div className="detail-dim-fill" style={{ width: `${pct(dim.score, dim.max)}%` }} />
+                            </div>
+                            <div className="detail-subs">
+                              {dim.sub_scores.map((sub, si) => (
+                                <div key={si} className="detail-sub">
+                                  <div className="detail-sub-head">
+                                    <span>{sub.label}</span>
+                                    <span className="detail-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
+                                  </div>
+                                  <p className="detail-sub-reason">{sub.reason}</p>
                                 </div>
-                                <p className="ba-detail-sub-reason">{sub.reason}</p>
-                              </div>
-                            ))}
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </React.Fragment>
-            );
-          })
-        )}
+                  )}
+                </React.Fragment>
+              );
+            })
+          )}
+        </div>
+
+        {/* ── 底部 ── */}
+        <div className="footer-note">
+          <span>DATA UPDATED</span>
+          <span className="footer-dot" />
+          <span>{lastUpdate ? lastUpdate.toLocaleTimeString() : '--'}</span>
+          <span className="footer-dot" />
+          <span>MARCUS · SECTOR LEADERBOARD</span>
+        </div>
       </div>
     </div>
   );
