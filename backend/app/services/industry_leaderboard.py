@@ -66,23 +66,12 @@ REGIME_TRENDING = "trending"
 REGIME_RANGING = "ranging"
 REGIME_TRANSITIONAL = "transitional"
 
-# ── 权重方案 ──
+# ── 权重方案（3维：趋势质量 + 估值锚定 + 反转信号）──
+# 权重源自3维搜索 Top 1（全样本 cor=0.0832）
 WEIGHTS = {
-    REGIME_TRENDING: {
-        "trend": 0.28, "volume_price": 0.15,
-        "industry_relative": 0.17, "price_residual": 0.15, "capital": 0.17,
-        "overbought": 0.08,
-    },
-    REGIME_RANGING: {
-        "trend": 0.22, "volume_price": 0.18,
-        "industry_relative": 0.20, "price_residual": 0.18, "capital": 0.14,
-        "overbought": 0.08,
-    },
-    REGIME_TRANSITIONAL: {
-        "trend": 0.25, "volume_price": 0.165,
-        "industry_relative": 0.185, "price_residual": 0.165, "capital": 0.155,
-        "overbought": 0.08,
-    },
+    REGIME_TRENDING:     {"trend": 0.11, "valuation": 0.71, "reversal": 0.18},
+    REGIME_RANGING:      {"trend": 0.11, "valuation": 0.71, "reversal": 0.18},
+    REGIME_TRANSITIONAL: {"trend": 0.11, "valuation": 0.71, "reversal": 0.18},
 }
 
 
@@ -122,11 +111,16 @@ class IndustryLeaderboardService:
 
         logger.info(f"[Leaderboard] Round 1: fetching ~330 candidates + 3 batch APIs (historical={is_historical})...")
 
-        # 1.2 候选股筛选
-        candidates = self._get_industry_candidates()
+        # 1.2 候选股筛选（历史模式使用时间感知选择）
+        survivorship_bias = False
+        if is_historical:
+            candidates, survivorship_bias = self._get_industry_candidates_historical(date)
+        else:
+            candidates = self._get_industry_candidates()
+
         if not candidates:
             return {"items": [], "market_regime": REGIME_TRANSITIONAL, "industries_covered": [],
-                    "data_source": "tencent", "volume_data": "full",
+                    "data_source": "tencent", "volume_data": "full", "survivorship_bias": survivorship_bias,
                     "trading_days": [], "updated_at": datetime.now().isoformat()}
 
         symbols = [c["ts_code"] for c in candidates]
@@ -165,36 +159,33 @@ class IndustryLeaderboardService:
         candidates, excluded = self._apply_hard_filters(candidates, quotes, indicators)
         logger.info(f"[Leaderboard] After hard filters: {len(candidates)} candidates (excluded {len(excluded)})")
 
-        # 1.7 Round 1 五维评分
+        # 1.7 Round 1 三维评分（趋势质量 + 估值锚定 + 反转信号）
         w = WEIGHTS[regime] if regime in WEIGHTS else WEIGHTS[REGIME_TRANSITIONAL]
         trend_scores, trend_details = self._compute_trend_composite(candidates, indicators, regime)
-        volume_scores, vol_details = self._compute_volume_price(candidates, indicators, daily_bars, regime)
-        industry_scores, ind_details = self._compute_industry_relative_strength(candidates, quotes, daily_bars, regime)
-        residual_scores, res_details = self._compute_price_residual(candidates, quotes, indicators, regime)
-        overbought_scores, overbought_details = self._compute_overbought_risk(candidates, indicators)
+        valuation_scores, valuation_details = self._compute_valuation_anchor(candidates, indicators, date=date)
+        reversal_scores, reversal_details = self._compute_reversal_signal(candidates, indicators, daily_bars)
 
-        # 资金维度先取中性分
-        capital_max = 25 if regime == REGIME_TRENDING else 22
-        capital_neutral = capital_max * 0.5
+        TREND_MAX = 28
+        VAL_MAX = 10
+        REV_MAX = 10
 
-        # 计算综合分
-        OVERBOUGHT_MAX = 10
         for c in candidates:
             sym = c["ts_code"]
             c["trend_score"] = round(trend_scores.get(sym, 0), 1)
-            c["volume_price_score"] = round(volume_scores.get(sym, 0), 1)
-            c["industry_relative_score"] = round(industry_scores.get(sym, 0), 1)
-            c["price_residual_score"] = round(residual_scores.get(sym, 0), 1)
-            c["overbought_score"] = round(overbought_scores.get(sym, 0), 1)
-            c["capital_score"] = round(capital_neutral, 1)
+            c["valuation_score"] = round(valuation_scores.get(sym, 0), 1)
+            c["reversal_score"] = round(reversal_scores.get(sym, 0), 1)
+            # 已弃用维度，保持向后兼容
+            c["volume_price_score"] = 0
+            c["industry_relative_score"] = 0
+            c["price_residual_score"] = 0
+            c["risk_score"] = 0
+            c["overbought_score"] = 0
+            c["capital_score"] = 0
             c["capital_data"] = "neutral"
             c["composite_score"] = round(
-                c["trend_score"] * w["trend"] * 100 / 28 +
-                c["volume_price_score"] * w["volume_price"] * 100 / 15 +
-                c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
-                c["price_residual_score"] * w["price_residual"] * 100 / 15 +
-                c["overbought_score"] * w["overbought"] * 100 / OVERBOUGHT_MAX +
-                c["capital_score"] * w["capital"] * 100 / 25,
+                c["trend_score"] * w["trend"] * 100 / TREND_MAX +
+                c["valuation_score"] * w["valuation"] * 100 / VAL_MAX +
+                c["reversal_score"] * w["reversal"] * 100 / REV_MAX,
                 1
             )
 
@@ -202,54 +193,6 @@ class IndustryLeaderboardService:
         self._apply_penalties(candidates, indicators)
 
         # 排序
-        candidates.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
-
-        # 1.8 Round 2: 资金补算
-        # 历史模式：多线程一次性获取 limit 内所有股票的资金流，省掉补漏阶段
-        # 实时模式：仅 Top10（东方财富接口串行调用，避免超时）
-        if is_historical:
-            n_capital = min(limit, len(candidates))
-            top_n = candidates[:n_capital]
-            moneyflows = self._historical_moneyflow([c["ts_code"] for c in top_n], date)
-            capital_scores, cap_details = self._compute_capital_persistence(top_n, moneyflows, regime)
-            for c in top_n:
-                sym = c["ts_code"]
-                new_cap = capital_scores.get(sym)
-                if new_cap is not None and moneyflows.get(sym):
-                    c["capital_score"] = round(new_cap, 1)
-                    c["capital_data"] = "available"
-                elif new_cap is not None:
-                    c["capital_score"] = round(new_cap, 1)
-                    c["capital_data"] = "unavailable"
-            logger.info(f"[Leaderboard] Round2(historical): {n_capital} stocks, "
-                        f"available={sum(1 for c in top_n if c.get('capital_data')=='available')}, "
-                        f"moneyflows={len(moneyflows)}")
-        else:
-            top10 = candidates[:10]
-            moneyflows = self._fetch_top10_moneyflow([c["ts_code"] for c in top10])
-            capital_scores, cap_details = self._compute_capital_persistence(top10, moneyflows, regime)
-            for c in top10:
-                sym = c["ts_code"]
-                new_cap = capital_scores.get(sym)
-                if new_cap is not None and moneyflows.get(sym):
-                    c["capital_score"] = round(new_cap, 1)
-                    c["capital_data"] = "available"
-                elif new_cap is not None:
-                    c["capital_score"] = round(new_cap, 1)
-                    c["capital_data"] = "unavailable"
-
-        # 重算综合分并重排（仅更新过资金分的股票）
-        for c in candidates:
-            if c.get("capital_data") in ("available", "unavailable"):
-                c["composite_score"] = round(
-                    c["trend_score"] * w["trend"] * 100 / 28 +
-                    c["volume_price_score"] * w["volume_price"] * 100 / 15 +
-                    c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
-                    c["price_residual_score"] * w["price_residual"] * 100 / 15 +
-                    c["overbought_score"] * w["overbought"] * 100 / OVERBOUGHT_MAX +
-                    c["capital_score"] * w["capital"] * 100 / 25,
-                    1
-                )
         candidates.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
 
         # 行业筛选
@@ -260,11 +203,8 @@ class IndustryLeaderboardService:
         score_map = {
             "composite_score": "composite_score",
             "trend_score": "trend_score",
-            "volume_price_score": "volume_price_score",
-            "industry_relative_score": "industry_relative_score",
-            "price_residual_score": "price_residual_score",
-            "overbought_score": "overbought_score",
-            "capital_score": "capital_score",
+            "valuation_score": "valuation_score",
+            "reversal_score": "reversal_score",
             "change_pct": "change_pct",
         }
         sort_field = score_map.get(sort_by, "composite_score")
@@ -276,31 +216,11 @@ class IndustryLeaderboardService:
         for c in candidates:
             sym = c["ts_code"]
             q = quotes.get(sym, {})
-            cap_data = c.get("capital_data", "neutral")
-            cap_score = c.get("capital_score", 0)
 
-            # 组装资金维度明细
-            if cap_data == "available" and sym in cap_details:
-                cap_detail = cap_details[sym]
-            else:
-                cap_reason = "非Top10股票，资金分取中性值(max*0.5)，未使用东方财富实时数据" if cap_data == "neutral" else "东方财富接口不可用，资金分取中性值(max*0.5)"
-                cap_detail = {
-                    "label": "资金持续性",
-                    "score": round(cap_score, 1),
-                    "max": capital_max,
-                    "sub_scores": [
-                        {"label": "数据说明", "score": round(cap_score, 1), "max": capital_max, "reason": cap_reason},
-                    ],
-                }
-
-            # 组装 score_detail
             score_detail = {
                 "trend": trend_details.get(sym, {}),
-                "volume_price": vol_details.get(sym, {}),
-                "industry_relative": ind_details.get(sym, {}),
-                "price_residual": res_details.get(sym, {}),
-                "overbought": overbought_details.get(sym, {}),
-                "capital": cap_detail,
+                "valuation": valuation_details.get(sym, {}),
+                "reversal": reversal_details.get(sym, {}),
             }
 
             items.append({
@@ -308,17 +228,20 @@ class IndustryLeaderboardService:
                 "name": c["name"],
                 "industry": c["industry"],
                 "market_cap": c.get("market_cap", 0),
-                "overbought_score": c.get("overbought_score", 0),
                 "change_pct": q.get("change_pct", 0),
                 "turnover_rate": q.get("turnover_rate", 0),
                 "turnover_amount": q.get("amount", 0),
                 "composite_score": c.get("composite_score", 0),
                 "trend_score": c.get("trend_score", 0),
-                "volume_price_score": c.get("volume_price_score", 0),
-                "industry_relative_score": c.get("industry_relative_score", 0),
-                "price_residual_score": c.get("price_residual_score", 0),
-                "capital_score": cap_score,
-                "capital_data": cap_data,
+                "valuation_score": c.get("valuation_score", 0),
+                "reversal_score": c.get("reversal_score", 0),
+                "overbought_score": 0,
+                "risk_score": 0,
+                "volume_price_score": 0,
+                "industry_relative_score": 0,
+                "price_residual_score": 0,
+                "capital_score": 0,
+                "capital_data": "neutral",
                 "warnings": c.get("warnings", []),
                 "data_source": data_source,
                 "volume_data": volume_data_status,
@@ -338,7 +261,13 @@ class IndustryLeaderboardService:
             "industries_covered": industries,
             "data_source": data_source,
             "volume_data": volume_data_status,
+            "survivorship_bias": survivorship_bias,
             "trading_days": trading_days,
+            "score_families": {
+                "trend_quality": {"dimensions": ["trend_score"], "weight": w["trend"]},
+                "fundamental_anchor": {"dimensions": ["valuation_score"], "weight": w["valuation"]},
+                "reversal_signal": {"dimensions": ["reversal_score"], "weight": w["reversal"]},
+            },
             "updated_at": datetime.now().isoformat(),
         }
 
@@ -374,6 +303,105 @@ class IndustryLeaderboardService:
             candidates.extend(stocks[:3])
 
         return candidates
+
+    # ── 1.2b 历史候选股筛选（时间感知） ─────────────────────────
+
+    def _get_industry_candidates_historical(self, date: str) -> Tuple[List[Dict], bool]:
+        """时间感知的历史候选股筛选：从 daily_basic 获取指定日期的市值前 3 名。
+
+        Returns:
+            (candidates, survivorship_bias): 候选股列表和是否退化为当前快照的标志。
+        """
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+        survivorship_bias = False
+
+        # 1. 从 stock_pool 获取行业映射和基本信息
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT ts_code, symbol, name, industry, market_cap
+                FROM stock_pool
+                WHERE is_st = 0 AND market_cap > 0 AND industry IS NOT NULL AND industry != ''
+            """)
+            pool_rows = [dict(r) for r in cursor.fetchall()]
+        finally:
+            conn.close()
+
+        if not pool_rows:
+            return [], True
+
+        # 行业名 → ts_code → {name, symbol}
+        industry_map: Dict[str, List[Dict]] = {}
+        for r in pool_rows:
+            ind = r.get("industry", "") or "其他"
+            industry_map.setdefault(ind, []).append({
+                "ts_code": r["ts_code"],
+                "symbol": r["symbol"],
+                "name": r["name"],
+                "industry": ind,
+                "market_cap": r.get("market_cap", 0),
+            })
+
+        # 2. 获取当日市值数据
+        historical_mcap: Dict[str, float] = {}
+        try:
+            pro = _get_tushare_pro()
+            end_dt = datetime.strptime(date, "%Y%m%d")
+            start_dt = end_dt - timedelta(days=5)
+            symbols = [r["ts_code"] for r in pool_rows]
+
+            for i in range(0, len(symbols), 100):
+                batch = ",".join(symbols[i:i + 100])
+                df = pro.daily_basic(ts_code=batch,
+                                     start_date=start_dt.strftime("%Y%m%d"),
+                                     end_date=date)
+                if df is None or df.empty:
+                    continue
+                df = df.sort_values("trade_date")
+                for ts_code, group in df.groupby("ts_code"):
+                    group = group[group["trade_date"] <= date]
+                    if group.empty:
+                        continue
+                    latest = group.iloc[-1]
+                    total_mv = float(latest.get("total_mv", 0) or 0)
+                    if total_mv > 0:
+                        historical_mcap[str(ts_code)] = total_mv  # 万元 → 元
+        except Exception as e:
+            logger.warning(f"[Leaderboard] daily_basic failed for historical cap: {e}")
+
+        # 3. 有足够市值数据时使用历史市值，否则退化为当前快照
+        coverage = len(historical_mcap) / max(len(pool_rows), 1)
+        if coverage < 0.5:
+            logger.warning(
+                f"[Leaderboard] Historical mcap coverage {coverage:.0%}, "
+                f"falling back to stock_pool snapshot"
+            )
+            survivorship_bias = True
+            for ind, stocks in industry_map.items():
+                for s in stocks:
+                    s["market_cap"] = s.get("market_cap", 0)
+        else:
+            n_updated = 0
+            for ind, stocks in industry_map.items():
+                for s in stocks:
+                    hm = historical_mcap.get(s["ts_code"])
+                    if hm is not None and hm > 0:
+                        s["market_cap"] = hm
+                        n_updated += 1
+            survivorship_bias = n_updated < len(pool_rows) * 0.5
+            logger.info(
+                f"[Leaderboard] Historical mcap: {n_updated}/{len(pool_rows)} stocks "
+                f"(coverage {n_updated / max(len(pool_rows), 1):.0%})"
+            )
+
+        # 4. 按行业取市值前 3
+        candidates = []
+        for ind, stocks in industry_map.items():
+            stocks.sort(key=lambda x: x.get("market_cap") or 0, reverse=True)
+            candidates.extend(stocks[:3])
+
+        return candidates, survivorship_bias
 
     # ── 1.3 腾讯实时行情批量 ─────────────────────────────────
 
@@ -864,7 +892,7 @@ class IndustryLeaderboardService:
                 return None
 
         # 线程池并发，max_workers=5 控制 QPS
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {pool.submit(_fetch_one, ts_code): ts_code for ts_code in symbols}
             for future in as_completed(futures):
                 result = future.result()
@@ -1352,18 +1380,37 @@ class IndustryLeaderboardService:
 
     def _compute_price_residual(
         self, candidates: List[Dict], quotes: Dict[str, dict],
-        indicators: Dict[str, dict], regime: str
+        indicators: Dict[str, dict], daily_bars: Dict[str, List[dict]], regime: str
     ) -> Tuple[Dict[str, float], Dict[str, dict]]:
-        """价格残差维度（风险指标）。返回 (scores, details)。"""
+        """价格残差维度（真残差）。用行业残差收益替代绝对涨幅。
+
+        子项：(1) MA20乖离率倒U型 (2) 行业残差收益=个股收益率-行业均值收益率 (3) 尾盘验证。
+        返回 (scores, details)。
+        """
+        import numpy as np
+
         scores: Dict[str, float] = {}
         details: Dict[str, dict] = {}
         is_trending = regime == REGIME_TRENDING
         dim_max = 15 if is_trending else 18
 
+        # 按行业分组
+        by_industry: Dict[str, List[Dict]] = {}
+        for c in candidates:
+            ind_name = c.get("industry", "其他")
+            by_industry.setdefault(ind_name, []).append(c)
+
+        # 计算每个行业的当日均值收益率
+        industry_avg_pct: Dict[str, float] = {}
+        for ind_name, peers in by_industry.items():
+            peer_pcts = [quotes.get(p["ts_code"], {}).get("change_pct", 0) for p in peers]
+            industry_avg_pct[ind_name] = sum(peer_pcts) / len(peer_pcts) if peer_pcts else 0
+
         for c in candidates:
             sym = c["ts_code"]
             q = quotes.get(sym, {})
             ind = indicators.get(sym, {})
+            ind_name = c.get("industry", "其他")
 
             if not q:
                 scores[sym] = 0
@@ -1395,22 +1442,27 @@ class IndustryLeaderboardService:
             else:
                 dev_reason = "MA20或价格数据不足"
 
-            # 超额涨幅 (趋势市 0-6, 震荡市 0-7)
-            excess_max = 6 if is_trending else 7
+            # 残差收益 = 个股收益 - 行业均值收益 (趋势市 0-6, 震荡市 0-7)
+            residual_max = 6 if is_trending else 7
             stock_pct = q.get("change_pct", 0)
-            excess_score: float = 0
-            excess_reason = ""
-            if stock_pct > 2:
-                excess_score = excess_max
-                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能强劲"
-            elif stock_pct > 1:
-                excess_score = excess_max * 0.7
-                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能良好"
-            elif stock_pct > 0:
-                excess_score = excess_max * 0.4
-                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能一般"
+            ind_avg = industry_avg_pct.get(ind_name, 0)
+            residual_return = stock_pct - ind_avg
+            residual_score: float = 0
+            residual_reason = ""
+            if residual_return > 2:
+                residual_score = residual_max
+                residual_reason = f"行业残差+{residual_return:+.1f}%，超额收益显著"
+            elif residual_return > 1:
+                residual_score = residual_max * 0.7
+                residual_reason = f"行业残差+{residual_return:+.1f}%，跑赢行业"
+            elif residual_return > 0:
+                residual_score = residual_max * 0.4
+                residual_reason = f"行业残差+{residual_return:+.1f}%，略超行业"
+            elif residual_return > -1:
+                residual_score = residual_max * 0.2
+                residual_reason = f"行业残差{residual_return:+.1f}%，与行业持平"
             else:
-                excess_reason = f"当日涨幅{stock_pct:+.1f}%，动能不足"
+                residual_reason = f"行业残差{residual_return:+.1f}%，跑输行业"
 
             # 非尾盘拉升验证 (0-3)
             tail_score: float = 3
@@ -1424,7 +1476,7 @@ class IndustryLeaderboardService:
                     tail_score = 1
                     tail_reason = "疑似尾盘拉升(收盘价接近最高价)"
 
-            score = dev_score + excess_score + tail_score
+            score = dev_score + residual_score + tail_score
             final_score = max(0, min(score, dim_max))
             scores[sym] = final_score
             details[sym] = {
@@ -1433,7 +1485,8 @@ class IndustryLeaderboardService:
                 "max": dim_max,
                 "sub_scores": [
                     {"label": "MA20乖离率", "score": round(dev_score, 1), "max": dev_max, "reason": dev_reason},
-                    {"label": "超额涨幅", "score": round(excess_score, 1), "max": excess_max, "reason": excess_reason},
+                    {"label": "行业残差收益", "score": round(residual_score, 1), "max": residual_max,
+                     "reason": residual_reason},
                     {"label": "尾盘拉升验证", "score": round(tail_score, 1), "max": 3, "reason": tail_reason},
                 ],
             }
@@ -1577,7 +1630,7 @@ class IndustryLeaderboardService:
         self, candidates: List[Dict], quotes: Dict[str, dict],
         indicators: Optional[Dict[str, dict]] = None
     ) -> Tuple[List[Dict], List[Dict]]:
-        """硬过滤：日成交额<1亿排除、一字板标记不可交易、PE>200标记风险。"""
+        """硬过滤：涨跌停排除、日成交额<1亿排除、一字板标记、PE>200标记。"""
         kept = []
         excluded = []
 
@@ -1586,19 +1639,31 @@ class IndustryLeaderboardService:
             q = quotes.get(sym, {})
             ind = (indicators or {}).get(sym, {})
 
+            change_pct = q.get("change_pct", 0)
+
+            # 涨跌停 → 排除（买不到或卖不掉，不具备交易条件）
+            if change_pct >= 9.8:
+                c["_exclude_reason"] = f"涨停({change_pct:+.1f}%)"
+                excluded.append(c)
+                continue
+            if change_pct <= -9.8:
+                c["_exclude_reason"] = f"跌停({change_pct:+.1f}%)"
+                excluded.append(c)
+                continue
+
             # 日成交额 < 1亿 → 排除
             amount = q.get("amount", 0)
             if amount > 0 and amount < 1e8:
+                c["_exclude_reason"] = f"成交额过低({amount/1e4:.0f}万)"
                 excluded.append(c)
                 continue
 
             c.setdefault("warnings", [])
 
-            # 一字板涨停检测
+            # 一字板涨停检测（开盘=最高=收盘，非一字板涨停已被排除，此处仅标记一字板）
             open_p = q.get("open", 0)
             high_p = q.get("high", 0)
             close_p = q.get("price", 0)
-            change_pct = q.get("change_pct", 0)
             if (open_p == high_p == close_p and open_p > 0 and change_pct > 9.5):
                 c["warnings"].append("untradeable")
 
@@ -1693,34 +1758,411 @@ class IndustryLeaderboardService:
 
         return scores, details
 
-    # ── 1.11 惩罚系数 ────────────────────────────────────────
+    # ── 1.10b 风险评分（替代超买风险）───────────────────────────
 
-    def _apply_penalties(self, candidates: List[Dict], indicators: Dict[str, dict]):
-        """维度地板惩罚 + 过热预警。"""
+    def _compute_risk_score(
+        self, candidates: List[Dict], indicators: Dict[str, dict]
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """连续型风险评分：RSI6 z-score + Bollinger %B + 短期反转概率。
+
+        得分 0-10，越高越健康（越不过热）。替代原来的二值超买检测。
+        """
+        import numpy as np
+
+        scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
+        dim_max = 10
+
+        # 收集每日截面 RSI/Bollinger 用于 z-score 归一化
+        rsi6_vals: List[float] = []
+        bb_vals: List[float] = []
+        rev_vals: List[float] = []
+        sym_list: List[str] = []
+        close_vals: Dict[str, float] = {}
+
+        # 第一遍：计算原始值
         for c in candidates:
             sym = c["ts_code"]
             ind = indicators.get(sym, {})
+            if not ind:
+                continue
 
-            # 维度地板惩罚：任一维度 < 20% 满分 → 总分 × 0.7
-            dims = [
-                ("trend_score", 28),
-                ("volume_price_score", 15),
-                ("industry_relative_score", 17),
-                ("price_residual_score", 15),
-            ]
-            for field, max_val in dims:
-                val = c.get(field, 0)
-                if val < max_val * 0.2:
-                    c["composite_score"] = round(c.get("composite_score", 0) * 0.7, 1)
-                    c.setdefault("warnings", []).append("dimension_floor")
-                    break
-
-            # 过热预警：RSI6 > 90 + 乖离 > 15%
-            rsi = ind.get("rsi6", 0)
+            rsi6 = ind.get("rsi6", 50)
             close = ind.get("close", 0)
+            closes_hist = ind.get("closes_hist", [])
+            rsi6s_hist = ind.get("rsi6s_hist", [])
+
+            # -- RSI6 z-score: 相对自身历史的偏离 --
+            if len(rsi6s_hist) >= 10:
+                rsi_mean = np.mean(rsi6s_hist[:-1])
+                rsi_std = np.std(rsi6s_hist[:-1], ddof=1)
+                if rsi_std > 0:
+                    rsi_zscore = (rsi6 - rsi_mean) / rsi_std
+                else:
+                    rsi_zscore = 0
+            else:
+                rsi_zscore = (rsi6 - 50) / 15  # 默认: 50为基准, ~15为典型std
+            rsi_raw = max(0, 4 - (rsi_zscore + 2) / 1.5 * 4)  # z-score越高→分越低
+            rsi_raw = max(0, min(4, rsi_raw))
+
+            # -- Bollinger %B 位置 --
             ma20 = ind.get("ma20", 0)
-            if rsi > 90 and ma20 > 0 and close > 0:
-                deviation = abs(close - ma20) / ma20 * 100
-                if deviation > 15:
-                    c["price_residual_score"] = max(0, c.get("price_residual_score", 0) - 3)
-                    c.setdefault("warnings", []).append("overheat")
+            if ma20 > 0 and len(closes_hist) >= 20:
+                std20 = np.std(closes_hist[-20:], ddof=1)
+                upper = ma20 + 2 * std20
+                lower = ma20 - 2 * std20
+                if upper > lower:
+                    bb_pct = (close - lower) / (upper - lower)
+                else:
+                    bb_pct = 0.5
+            else:
+                bb_pct = 0.5
+            # %B > 0.8 → risk; %B < 0.2 → healthy (mean-reversion buying opportunity)
+            bb_raw = 3.0 * (1.0 - min(1, max(0, (bb_pct - 0.2) / 0.6)))  # scaled 0-3
+
+            # -- 短期反转概率 --
+            rev_raw = 3.0  # default: neutral
+            if len(closes_hist) >= 5 and ma20 > 0:
+                pct_5d = (close - closes_hist[-5]) / closes_hist[-5] * 100 if closes_hist[-5] > 0 else 0
+                daily_pcts = [(closes_hist[i] - closes_hist[i - 1]) / closes_hist[i - 1] * 100
+                              for i in range(1, min(len(closes_hist), 20))]
+                if len(daily_pcts) >= 5:
+                    std_daily = np.std(daily_pcts, ddof=1)
+                    if std_daily > 0:
+                        extreme_ratio = abs(pct_5d) / (std_daily * np.sqrt(5))
+                        # > 2σ → high reversal risk → low score
+                        if extreme_ratio > 2.0:
+                            rev_raw = max(0, 3.0 * (2.0 / max(extreme_ratio, 0.5)))
+                        elif extreme_ratio > 1.5:
+                            rev_raw = 1.5
+                        else:
+                            rev_raw = 3.0
+
+            rsi6_vals.append(rsi_raw)
+            bb_vals.append(bb_raw)
+            rev_vals.append(rev_raw)
+            sym_list.append(sym)
+            close_vals[sym] = close
+
+        # 第二遍：截面归一化并输出
+        def _cross_section_norm(raw_list: List[float], max_pts: float) -> List[float]:
+            arr = np.array(raw_list)
+            cs_min = np.percentile(arr, 5)
+            cs_max = np.percentile(arr, 95)
+            if cs_max - cs_min < 0.01:
+                return [max_pts * 0.5] * len(raw_list)
+            normalized = (arr - cs_min) / (cs_max - cs_min) * max_pts
+            return [round(max(0, min(max_pts, v)), 1) for v in normalized]
+
+        rsi_norm = _cross_section_norm(rsi6_vals, 4.0)
+        bb_norm = _cross_section_norm(bb_vals, 3.0)
+        rev_norm = _cross_section_norm(rev_vals, 3.0)
+
+        for i, sym in enumerate(sym_list):
+            score = rsi_norm[i] + bb_norm[i] + rev_norm[i]
+            final_score = round(max(0, min(dim_max, score)), 1)
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "风险评分",
+                "score": final_score,
+                "max": dim_max,
+                "sub_scores": [
+                    {"label": "RSI6健康度", "score": rsi_norm[i], "max": 4.0,
+                     "reason": "RSI6 z-score归一化，越低风险越高分"},
+                    {"label": "布林带位置", "score": bb_norm[i], "max": 3.0,
+                     "reason": "价格相对布林带位置，远离上轨得高分"},
+                    {"label": "短期反转概率", "score": rev_norm[i], "max": 3.0,
+                     "reason": "5日涨幅偏离度，偏离小得高分"},
+                ],
+            }
+
+        return scores, details
+
+    # ── 1.10c 估值锚定 ────────────────────────────────────────
+
+    def _compute_valuation_anchor(
+        self, candidates: List[Dict], indicators: Dict[str, dict],
+        date: Optional[str] = None
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """估值锚定维度：PE分位数 + PB分位数 + 股息率。得分 0-10。"""
+        scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
+        dim_max = 10
+
+        # 按行业分组
+        by_industry: Dict[str, List[Dict]] = {}
+        for c in candidates:
+            ind_name = c.get("industry", "其他")
+            by_industry.setdefault(ind_name, []).append(c)
+
+        # 从 daily_basic 获取 PE/PB 数据
+        pe_map: Dict[str, float] = {}
+        pb_map: Dict[str, float] = {}
+        symbols = [c["ts_code"] for c in candidates]
+        ref_date = date or datetime.now().strftime("%Y%m%d")
+        try:
+            pro = _get_tushare_pro()
+            start_dt = datetime.strptime(ref_date, "%Y%m%d") - timedelta(days=10)
+            for i in range(0, len(symbols), 100):
+                batch = ",".join(symbols[i:i + 100])
+                df = pro.daily_basic(ts_code=batch,
+                                     start_date=start_dt.strftime("%Y%m%d"),
+                                     end_date=ref_date)
+                if df is None or df.empty:
+                    continue
+                df = df.sort_values("trade_date")
+                for ts_code, group in df.groupby("ts_code"):
+                    group = group[group["trade_date"] <= ref_date]
+                    if group.empty:
+                        continue
+                    latest = group.iloc[-1]
+                    pe = float(latest.get("pe_ttm", 0) or 0)
+                    pb = float(latest.get("pb", 0) or 0)
+                    if pe > 0:
+                        pe_map[str(ts_code)] = pe
+                    if pb > 0:
+                        pb_map[str(ts_code)] = pb
+        except Exception as e:
+            logger.warning(f"[Leaderboard] daily_basic PE/PB fetch failed: {e}")
+
+        # Fallback: try indicator's pe_ttm
+        for c in candidates:
+            sym = c["ts_code"]
+            if pe_map.get(sym, 0) <= 0:
+                ind = indicators.get(sym, {})
+                pe = ind.get("pe_ttm", 0)
+                if pe > 0:
+                    pe_map[sym] = pe
+
+        # 全局PE中位数（用于小行业fallback）
+        all_pe = [v for v in pe_map.values() if v > 0]
+        global_pe_median = sorted(all_pe)[len(all_pe) // 2] if all_pe else 15
+
+        for c in candidates:
+            sym = c["ts_code"]
+            ind_name = c.get("industry", "其他")
+            peers = by_industry.get(ind_name, [])
+            peer_syms = [p["ts_code"] for p in peers]
+
+            # PE百分位 (0-5 pts, 越低越好)
+            pe = pe_map.get(sym, 0)
+            pe_score: float = 2.5  # default median
+            pe_reason = ""
+            if pe > 0:
+                if len(peer_syms) >= 3:
+                    peer_pes = sorted([pe_map.get(s, 0) for s in peer_syms if pe_map.get(s, 0) > 0])
+                else:
+                    peer_pes = sorted(all_pe)
+                if len(peer_pes) >= 2:
+                    pe_rank = sum(1 for p in peer_pes if p < pe) / len(peer_pes)
+                    if pe_rank < 0.25:
+                        pe_score = 5
+                        pe_reason = f"PE={pe:.1f}，行业后25%分位(低估值)"
+                    elif pe_rank < 0.5:
+                        pe_score = 3.5
+                        pe_reason = f"PE={pe:.1f}，行业中低分位"
+                    elif pe_rank < 0.75:
+                        pe_score = 2
+                        pe_reason = f"PE={pe:.1f}，行业中高分位"
+                    else:
+                        pe_score = 0.5
+                        pe_reason = f"PE={pe:.1f}，行业前25%分位(高估值)"
+                else:
+                    pe_reason = f"PE={pe:.1f}，行业样本不足"
+            else:
+                pe_score = 2.5
+                pe_reason = "PE数据缺失，取中位分"
+
+            # PB百分位 (0-3 pts, 越低越好)
+            pb = pb_map.get(sym, 0)
+            pb_score: float = 1.5  # default median
+            pb_reason = ""
+            if pb > 0:
+                if len(peer_syms) >= 3:
+                    peer_pbs = sorted([pb_map.get(s, 0) for s in peer_syms if pb_map.get(s, 0) > 0])
+                else:
+                    all_pbs = [v for v in pb_map.values() if v > 0]
+                    peer_pbs = sorted(all_pbs)
+                if len(peer_pbs) >= 2:
+                    pb_rank = sum(1 for p in peer_pbs if p < pb) / len(peer_pbs)
+                    if pb_rank < 0.25:
+                        pb_score = 3
+                        pb_reason = f"PB={pb:.2f}，行业后25%分位(低估值)"
+                    elif pb_rank < 0.5:
+                        pb_score = 2
+                        pb_reason = f"PB={pb:.2f}，行业中低分位"
+                    elif pb_rank < 0.75:
+                        pb_score = 1
+                        pb_reason = f"PB={pb:.2f}，行业中高分位"
+                    else:
+                        pb_score = 0
+                        pb_reason = f"PB={pb:.2f}，行业前25%分位(高估值)"
+                else:
+                    pb_reason = f"PB={pb:.2f}，行业样本不足"
+            else:
+                pb_score = 1.5
+                pb_reason = "PB数据缺失，取中位分"
+
+            # 股息率 (0-2 pts)
+            div_score: float = 0
+            div_reason = "股息率数据暂不可用，取0分"
+
+            score = pe_score + pb_score + div_score
+            final_score = round(max(0, min(dim_max, score)), 1)
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "估值锚定",
+                "score": final_score,
+                "max": dim_max,
+                "sub_scores": [
+                    {"label": "PE分位评分", "score": round(pe_score, 1), "max": 5.0, "reason": pe_reason},
+                    {"label": "PB分位评分", "score": round(pb_score, 1), "max": 3.0, "reason": pb_reason},
+                    {"label": "股息率评分", "score": round(div_score, 1), "max": 2.0, "reason": div_reason},
+                ],
+            }
+
+        return scores, details
+
+    # ── 1.10d 反转信号 ────────────────────────────────────────
+
+    def _compute_reversal_signal(
+        self, candidates: List[Dict], indicators: Dict[str, dict],
+        daily_bars: Dict[str, List[dict]]
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """反转/均值回复捕捉维度：恐慌放量 + 布林下轨穿透 + 质量过滤。得分 0-10。
+
+        仅对通过质量过滤的股票评分，避免接飞刀。
+        """
+        import numpy as np
+
+        scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
+        dim_max = 10
+
+        # 行业市值中位数（用于质量过滤）
+        by_industry: Dict[str, List[Dict]] = {}
+        for c in candidates:
+            ind_name = c.get("industry", "其他")
+            by_industry.setdefault(ind_name, []).append(c)
+
+        industry_median_cap: Dict[str, float] = {}
+        for ind_name, peers in by_industry.items():
+            caps = sorted([p.get("market_cap", 0) or 0 for p in peers])
+            industry_median_cap[ind_name] = caps[len(caps) // 2] if caps else 0
+
+        for c in candidates:
+            sym = c["ts_code"]
+            ind = indicators.get(sym, {})
+            bars = daily_bars.get(sym, [])
+            ind_name = c.get("industry", "其他")
+
+            if not ind or not bars:
+                scores[sym] = 0
+                continue
+
+            # --- 质量过滤 ---
+            mkt_cap = c.get("market_cap", 0) or 0
+            median_cap = industry_median_cap.get(ind_name, mkt_cap)
+            close = ind.get("close", 0)
+            closes_hist = ind.get("closes_hist", [])
+
+            ret_20d = 0.0
+            if len(closes_hist) >= 20 and closes_hist[-20] > 0:
+                ret_20d = (close - closes_hist[-20]) / closes_hist[-20] * 100
+
+            quality_pass = mkt_cap >= median_cap and ret_20d > -20
+            quality_reason = ""
+            if not quality_pass:
+                if mkt_cap < median_cap:
+                    quality_reason = f"市值{mkt_cap:.0f}亿<行业中位数{median_cap:.0f}亿，不满足质量过滤"
+                else:
+                    quality_reason = f"20日收益{ret_20d:+.1f}%<-20%，疑似崩盘股，不接飞刀"
+                scores[sym] = 0
+                details[sym] = {
+                    "label": "反转信号",
+                    "score": 0,
+                    "max": dim_max,
+                    "sub_scores": [
+                        {"label": "质量过滤", "score": 0, "max": 2.0, "reason": quality_reason},
+                    ],
+                }
+                continue
+
+            # --- 恐慌放量 (0-4 pts) ---
+            cap_score: float = 0
+            cap_reason = ""
+            if len(bars) >= 20:
+                avg_vol_20 = sum(b["vol"] for b in bars[-20:]) / 20
+                avg_vol_5 = sum(b["vol"] for b in bars[-5:]) / 5
+                ret_5d = 0.0
+                if len(closes_hist) >= 5 and closes_hist[-5] > 0:
+                    ret_5d = (close - closes_hist[-5]) / closes_hist[-5] * 100
+                if avg_vol_20 > 0:
+                    vol_ratio = avg_vol_5 / avg_vol_20
+                    if vol_ratio > 2.0 and ret_5d < -5:
+                        cap_score = 4
+                        cap_reason = f"5日放量{vol_ratio:.1f}倍+跌幅{ret_5d:+.1f}%，恐慌性抛售"
+                    elif vol_ratio > 1.5 and ret_5d < -3:
+                        cap_score = 2
+                        cap_reason = f"5日放量{vol_ratio:.1f}倍+跌幅{ret_5d:+.1f}%，轻度恐慌"
+                    elif vol_ratio > 1.0 and ret_5d < 0:
+                        cap_score = 1
+                        cap_reason = "放量下跌但未达恐慌阈值"
+                    else:
+                        cap_reason = "无恐慌放量信号"
+                else:
+                    cap_reason = "成交量数据不足"
+            else:
+                cap_reason = "日线数据不足"
+
+            # --- 均值回复距离 (0-4 pts) ---
+            mr_score: float = 0
+            mr_reason = ""
+            ma20 = ind.get("ma20", 0)
+            if ma20 > 0 and close > 0 and len(closes_hist) >= 20:
+                std20 = np.std(closes_hist[-20:], ddof=1)
+                if std20 > 0:
+                    z_below = (ma20 - close) / std20
+                    if z_below > 2:
+                        mr_score = 4
+                        mr_reason = f"价格低于MA20 {z_below:.1f}σ，深度超卖"
+                    elif z_below > 1:
+                        mr_score = 2
+                        mr_reason = f"价格低于MA20 {z_below:.1f}σ，中度超卖"
+                    elif z_below > 0:
+                        mr_score = 1
+                        mr_reason = "价格略低于MA20"
+                    else:
+                        mr_reason = "价格高于MA20，无均值回复机会"
+                else:
+                    mr_reason = "波动率数据不足"
+            else:
+                mr_reason = "MA20或日线数据不足"
+
+            score = cap_score + mr_score + 2.0  # quality filter bonus = 2
+            final_score = round(max(0, min(dim_max, score)), 1)
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "反转信号",
+                "score": final_score,
+                "max": dim_max,
+                "sub_scores": [
+                    {"label": "质量过滤", "score": 2.0, "max": 2.0, "reason": "通过：市值≥中位数且20日收益>-20%"},
+                    {"label": "恐慌放量", "score": round(cap_score, 1), "max": 4.0, "reason": cap_reason},
+                    {"label": "均值回复距离", "score": round(mr_score, 1), "max": 4.0, "reason": mr_reason},
+                ],
+            }
+
+        return scores, details
+
+    # ── 1.11 惩罚系数 ────────────────────────────────────────
+
+    def _apply_penalties(self, candidates: List[Dict], indicators: Dict[str, dict]):
+        """维度地板惩罚 + 过热预警（3维体系）。"""
+        for c in candidates:
+            sym = c["ts_code"]
+
+            # 维度地板惩罚：trend_score < 20% 满分 → 总分 × 0.7
+            if c.get("trend_score", 0) < 28 * 0.2:
+                c["composite_score"] = round(c.get("composite_score", 0) * 0.7, 1)
+                c.setdefault("warnings", []).append("dimension_floor")
