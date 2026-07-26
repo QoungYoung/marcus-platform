@@ -69,19 +69,19 @@ REGIME_TRANSITIONAL = "transitional"
 # ── 权重方案 ──
 WEIGHTS = {
     REGIME_TRENDING: {
-        "trend": 0.26, "volume_price": 0.14,
-        "industry_relative": 0.16, "price_residual": 0.14, "capital": 0.15,
-        "overbought": 0.08, "tech_divergence": 0.07,
+        "trend": 0.28, "volume_price": 0.15,
+        "industry_relative": 0.17, "price_residual": 0.15, "capital": 0.17,
+        "overbought": 0.08,
     },
     REGIME_RANGING: {
-        "trend": 0.20, "volume_price": 0.17,
-        "industry_relative": 0.19, "price_residual": 0.17, "capital": 0.12,
-        "overbought": 0.08, "tech_divergence": 0.07,
+        "trend": 0.22, "volume_price": 0.18,
+        "industry_relative": 0.20, "price_residual": 0.18, "capital": 0.14,
+        "overbought": 0.08,
     },
     REGIME_TRANSITIONAL: {
-        "trend": 0.23, "volume_price": 0.15,
-        "industry_relative": 0.17, "price_residual": 0.15, "capital": 0.14,
-        "overbought": 0.08, "tech_divergence": 0.08,
+        "trend": 0.25, "volume_price": 0.165,
+        "industry_relative": 0.185, "price_residual": 0.165, "capital": 0.155,
+        "overbought": 0.08,
     },
 }
 
@@ -172,7 +172,6 @@ class IndustryLeaderboardService:
         industry_scores, ind_details = self._compute_industry_relative_strength(candidates, quotes, daily_bars, regime)
         residual_scores, res_details = self._compute_price_residual(candidates, quotes, indicators, regime)
         overbought_scores, overbought_details = self._compute_overbought_risk(candidates, indicators)
-        tech_div_scores, tech_div_details = self._compute_tech_divergence_risk(candidates, indicators, daily_bars)
 
         # 资金维度先取中性分
         capital_max = 25 if regime == REGIME_TRENDING else 22
@@ -180,7 +179,6 @@ class IndustryLeaderboardService:
 
         # 计算综合分
         OVERBOUGHT_MAX = 10
-        TECHDIV_MAX = 10
         for c in candidates:
             sym = c["ts_code"]
             c["trend_score"] = round(trend_scores.get(sym, 0), 1)
@@ -188,7 +186,6 @@ class IndustryLeaderboardService:
             c["industry_relative_score"] = round(industry_scores.get(sym, 0), 1)
             c["price_residual_score"] = round(residual_scores.get(sym, 0), 1)
             c["overbought_score"] = round(overbought_scores.get(sym, 0), 1)
-            c["tech_divergence_score"] = round(tech_div_scores.get(sym, 0), 1)
             c["capital_score"] = round(capital_neutral, 1)
             c["capital_data"] = "neutral"
             c["composite_score"] = round(
@@ -197,7 +194,6 @@ class IndustryLeaderboardService:
                 c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
                 c["price_residual_score"] * w["price_residual"] * 100 / 15 +
                 c["overbought_score"] * w["overbought"] * 100 / OVERBOUGHT_MAX +
-                c["tech_divergence_score"] * w["tech_divergence"] * 100 / TECHDIV_MAX +
                 c["capital_score"] * w["capital"] * 100 / 25,
                 1
             )
@@ -251,7 +247,6 @@ class IndustryLeaderboardService:
                     c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
                     c["price_residual_score"] * w["price_residual"] * 100 / 15 +
                     c["overbought_score"] * w["overbought"] * 100 / OVERBOUGHT_MAX +
-                    c["tech_divergence_score"] * w["tech_divergence"] * 100 / TECHDIV_MAX +
                     c["capital_score"] * w["capital"] * 100 / 25,
                     1
                 )
@@ -269,7 +264,6 @@ class IndustryLeaderboardService:
             "industry_relative_score": "industry_relative_score",
             "price_residual_score": "price_residual_score",
             "overbought_score": "overbought_score",
-            "tech_divergence_score": "tech_divergence_score",
             "capital_score": "capital_score",
             "change_pct": "change_pct",
         }
@@ -306,7 +300,6 @@ class IndustryLeaderboardService:
                 "industry_relative": ind_details.get(sym, {}),
                 "price_residual": res_details.get(sym, {}),
                 "overbought": overbought_details.get(sym, {}),
-                "tech_divergence": tech_div_details.get(sym, {}),
                 "capital": cap_detail,
             }
 
@@ -316,7 +309,6 @@ class IndustryLeaderboardService:
                 "industry": c["industry"],
                 "market_cap": c.get("market_cap", 0),
                 "overbought_score": c.get("overbought_score", 0),
-                "tech_divergence_score": c.get("tech_divergence_score", 0),
                 "change_pct": q.get("change_pct", 0),
                 "turnover_rate": q.get("turnover_rate", 0),
                 "turnover_amount": q.get("amount", 0),
@@ -1694,142 +1686,6 @@ class IndustryLeaderboardService:
             scores[sym] = final_score
             details[sym] = {
                 "label": "超买风险",
-                "score": round(final_score, 1),
-                "max": dim_max,
-                "sub_scores": sub_scores,
-            }
-
-        return scores, details
-
-    def _compute_tech_divergence_risk(
-        self, candidates: List[Dict], indicators: Dict[str, dict], daily_bars: Dict[str, List[dict]]
-    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
-        """技术指标背离风险维度（纯负向）：MACD红柱缩量 + RSI顶背离 + 量价背离 + KDJ J>100 + 布林上轨外。
-
-        对齐止损监控规则2.5阈值：<3信号不扣分，仅记录:
-          - 0-2 信号 → 0 分（不扣分，背离信号不足）
-          - 3 信号 → -7 分（中度背离，止损监控减仓线）
-          - 4-5 信号 → -10 分（重度背离，止损监控清仓线）
-
-        得分范围: -10 ~ 0, max = 10
-        """
-        scores: Dict[str, float] = {}
-        details: Dict[str, dict] = {}
-        dim_max = 10
-
-        for c in candidates:
-            sym = c["ts_code"]
-            ind = indicators.get(sym, {})
-            bars = daily_bars.get(sym, [])
-            if not bars:
-                bars = []
-
-            closes_hist = ind.get("closes_hist", [])
-            macd_difs = ind.get("macd_difs_hist", [])
-            macd_deas = ind.get("macd_deas_hist", [])
-            rsi6s = ind.get("rsi6s_hist", [])
-            kdj_ks = ind.get("kdj_ks_hist", [])
-            kdj_ds = ind.get("kdj_ds_hist", [])
-            boll_uppers = ind.get("boll_uppers_hist", [])
-
-            current_close = ind.get("close", 0)
-            if current_close <= 0 and closes_hist:
-                current_close = closes_hist[-1]
-
-            signals = [False] * 5
-            signal_reasons = [""] * 5  # indexed by signal position 0-4
-
-            # ── 信号①: MACD红柱连续缩量 ──
-            if len(macd_difs) >= 5 and len(macd_deas) >= 5:
-                hist_bars = [2.0 * (d - e) for d, e in zip(macd_difs, macd_deas)]
-                if len(hist_bars) >= 4 and len(closes_hist) >= 4:
-                    bar_latest = hist_bars[-1]
-                    bar_prev = hist_bars[-2]
-                    bar_pprev = hist_bars[-3]
-                    if bar_latest > 0 and bar_prev > 0:
-                        # Two consecutive shrinking days
-                        shrinking = bar_latest < bar_prev if bar_pprev <= 0 else bar_latest < bar_prev < bar_pprev
-                        price_rising = closes_hist[-1] > closes_hist[-4]
-                        if shrinking and price_rising:
-                            signals[0] = True
-                            signal_reasons[0] = (
-                                f"MACD红柱缩量(bar:{bar_latest:.4f}<{bar_prev:.4f}<{bar_pprev:.4f})"
-                            )
-
-            # ── 信号②: RSI顶背离 ──
-            if len(closes_hist) >= 20 and len(rsi6s) >= 20:
-                peak_idx = closes_hist.index(max(closes_hist))
-                if peak_idx < len(closes_hist) - 1:
-                    peak_close = closes_hist[peak_idx]
-                    peak_rsi = rsi6s[peak_idx]
-                    cur_rsi = rsi6s[-1]
-                    if current_close >= peak_close * 0.99 and cur_rsi < peak_rsi * 0.95:
-                        signals[1] = True
-                        signal_reasons[1] = (
-                            f"RSI顶背离(价{current_close:.2f}≈前高{peak_close:.2f}, "
-                            f"RSI{cur_rsi:.1f}<前高RSI{peak_rsi:.1f})"
-                        )
-
-            # ── 信号③: 量价背离 ──
-            vols = [b.get("vol", 0) for b in bars]
-            if len(vols) >= 10 and len(closes_hist) >= 6:
-                vol_5d = sum(vols[-5:]) / 5
-                vol_prev = sum(vols[-10:-5]) / 5
-                if vol_prev > 0:
-                    price_up = current_close > closes_hist[-6]
-                    if price_up and vol_5d < vol_prev * 0.8:
-                        signals[2] = True
-                        signal_reasons[2] = (
-                            f"量价背离(近5日均量{vol_5d/1e6:.1f}M"
-                            f"<前5日均量{vol_prev/1e6:.1f}M×0.8)"
-                        )
-
-            # ── 信号④: KDJ J > 100 ──
-            kdj_k = ind.get("kdj_k", 0)
-            kdj_d = ind.get("kdj_d", 0)
-            kdj_j = ind.get("kdj_j", 0)
-            if kdj_j <= 0 and kdj_k > 0 and kdj_d > 0:
-                kdj_j = 3.0 * kdj_k - 2.0 * kdj_d
-            if kdj_j > 100:
-                signals[3] = True
-                signal_reasons[3] = f"KDJ J={kdj_j:.1f}>100"
-
-            # ── 信号⑤: 布林上轨外 ──
-            if boll_uppers and boll_uppers[-1] > 0 and current_close > boll_uppers[-1]:
-                signals[4] = True
-                signal_reasons[4] = (
-                    f"布林上轨外(现价{current_close:.2f}>上轨{boll_uppers[-1]:.2f})"
-                )
-
-            # ── 评分（对齐止损监控规则2.5：≥3信号才减仓）──
-            signal_count = sum(signals)
-            if signal_count >= 4:
-                final_score = -10.0
-            elif signal_count == 3:
-                final_score = -7.0
-            else:
-                final_score = 0.0  # 0-2 信号不扣分，仅记录
-
-            sub_scores = []
-            signal_names = [
-                "MACD红柱缩量", "RSI顶背离", "量价背离", "KDJ J>100", "布林上轨外",
-            ]
-            for i, name in enumerate(signal_names):
-                triggered = signals[i]
-                reason = signal_reasons[i] if triggered else f"{name}未触发，正常"
-                # 0-2 信号不扣分，子项显示0分但标注触发状态
-                if triggered and signal_count < 3:
-                    reason += "（信号不足3个，不扣分）"
-                sub_scores.append({
-                    "label": name,
-                    "score": -2.0 if (triggered and signal_count >= 3) else 0.0,
-                    "max": 2.0,
-                    "reason": reason,
-                })
-
-            scores[sym] = final_score
-            details[sym] = {
-                "label": "技术背离风险",
                 "score": round(final_score, 1),
                 "max": dim_max,
                 "sub_scores": sub_scores,
