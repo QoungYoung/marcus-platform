@@ -250,6 +250,40 @@ class IndustryLeaderboardService:
         candidates.sort(key=lambda x: x.get(sort_field, 0), reverse=True)
         candidates = candidates[:limit]
 
+        # 1.9 资金补漏：最终 top-N 中不在原始 top10 的股票，补算历史资金流
+        if is_historical:
+            need_capital = [c for c in candidates if c.get("capital_data", "neutral") == "neutral"]
+            if need_capital:
+                logger.info(f"[Leaderboard] Capital补漏: {len(need_capital)} stocks need capital data")
+                extra_mf = self._historical_moneyflow([c["ts_code"] for c in need_capital], date)
+                extra_scores, extra_details = self._compute_capital_persistence(need_capital, extra_mf, regime)
+                for c in need_capital:
+                    sym = c["ts_code"]
+                    new_cap = extra_scores.get(sym)
+                    if new_cap is not None and extra_mf.get(sym):
+                        c["capital_score"] = round(new_cap, 1)
+                        c["capital_data"] = "available"
+                        # 汇总到 cap_details 供后续组装使用
+                        if sym in extra_details:
+                            cap_details[sym] = extra_details[sym]
+                    elif new_cap is not None:
+                        c["capital_score"] = round(new_cap, 1)
+                        c["capital_data"] = "unavailable"
+                # 重算综合分并重排
+                for c in need_capital:
+                    if c.get("capital_data") in ("available", "unavailable"):
+                        c["composite_score"] = round(
+                            c["trend_score"] * w["trend"] * 100 / 28 +
+                            c["volume_price_score"] * w["volume_price"] * 100 / 15 +
+                            c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
+                            c["price_residual_score"] * w["price_residual"] * 100 / 15 +
+                            c["capital_score"] * w["capital"] * 100 / 25,
+                            1
+                        )
+                candidates.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
+                logger.info(f"[Leaderboard] Capital补漏: completed, "
+                            f"updated={sum(1 for c in need_capital if c.get('capital_data') in ('available','unavailable'))}/{len(need_capital)}")
+
         # 构建响应
         items = []
         for c in candidates:
