@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -129,6 +129,8 @@ export default function PortfolioPage() {
   const [unfreezing, setUnfreezing] = useState(false);
   const [slExpanded, setSlExpanded] = useState(false);
   const [slToggling, setSlToggling] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  usePortfolioBackground(canvasRef);
 
   // ── 资金流 ──
   const [moneyflowMap, setMoneyflowMap] = useState<Record<string, MoneyflowRow>>({});
@@ -465,6 +467,7 @@ export default function PortfolioPage() {
 
   return (
     <div className="cp-page">
+      <canvas ref={canvasRef} id="cp-bg-canvas" />
       {/* ═══ 行情 Ticker ═══ */}
       {!loadingTickers && tickers.length > 0 && (
         <div className="cp-ticker-bar">
@@ -1058,6 +1061,11 @@ export default function PortfolioPage() {
       {modalDate && (
         <div className="cp-modal-overlay" onClick={() => { setModalDate(null); setModalData(null); }}>
           <div className="cp-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <span className="cp-modal-corner cp-modal-corner--tl" />
+            <span className="cp-modal-corner cp-modal-corner--tr" />
+            <span className="cp-modal-corner cp-modal-corner--bl" />
+            <span className="cp-modal-corner cp-modal-corner--br" />
+            <div className="cp-modal-scanline" />
             <div className="cp-modal-header">
               <span>{modalDate} 个股盈亏明细</span>
               <button className="cp-modal-close" onClick={() => { setModalDate(null); setModalData(null); }}>
@@ -1152,6 +1160,113 @@ function RiskCard({ icon, label, value, sub, level }: {
       </div>
     </div>
   );
+}
+
+// ══════════════════ Canvas 背景 ══════════════════
+function usePortfolioBackground(canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let w = 0, h = 0, animId = 0, time = 0;
+
+    function resize() {
+      w = Math.max(1, window.innerWidth);
+      h = Math.max(1, window.innerHeight);
+      canvas!.width = w;
+      canvas!.height = h;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const particles: { x: number; y: number; size: number; sx: number; sy: number; alpha: number }[] = [];
+    for (let i = 0; i < 50; i++) {
+      particles.push({
+        x: Math.random() * w, y: Math.random() * h,
+        size: Math.random() * 2 + 0.5,
+        sx: (Math.random() - 0.5) * 0.2,
+        sy: (Math.random() - 0.5) * 0.2,
+        alpha: Math.random() * 0.3 + 0.08,
+      });
+    }
+
+    const halos = [
+      { x: 0.15, y: 0.08, r: 160, speed: 0.003, phase: 0 },
+      { x: 0.85, y: 0.25, r: 120, speed: -0.004, phase: 1.2 },
+      { x: 0.50, y: 0.80, r: 180, speed: 0.002, phase: 2.5 },
+      { x: 0.08, y: 0.70, r: 100, speed: -0.005, phase: 0.8 },
+    ];
+
+    function draw() {
+      ctx!.clearRect(0, 0, w, h);
+      const minDim = Math.min(w, h);
+
+      for (const hd of halos) {
+        const r = hd.r * minDim / 800;
+        if (!isFinite(r) || r <= 0) continue;
+        const cx = hd.x * w, cy = hd.y * h;
+        const angle = time * hd.speed + hd.phase;
+        ctx!.save();
+        ctx!.translate(cx, cy);
+        ctx!.rotate(angle);
+        const r0 = Math.max(0.1, r * 0.2), r1 = Math.max(0.1, r);
+        const grad = ctx!.createRadialGradient(0, 0, r0, 0, 0, r1);
+        grad.addColorStop(0, 'rgba(240,185,11,0)');
+        grad.addColorStop(0.7, 'rgba(240,185,11,0.03)');
+        grad.addColorStop(1, 'rgba(240,185,11,0.08)');
+        ctx!.beginPath();
+        ctx!.arc(0, 0, r1, 0, Math.PI * 2);
+        ctx!.fillStyle = grad;
+        ctx!.fill();
+        if (r * 0.5 > 0.5) {
+          ctx!.beginPath();
+          ctx!.arc(0, 0, r * 0.5, 0, Math.PI * 2);
+          ctx!.strokeStyle = 'rgba(240,185,11,0.1)';
+          ctx!.lineWidth = 1;
+          ctx!.stroke();
+        }
+        ctx!.restore();
+      }
+
+      for (const p of particles) {
+        p.x += p.sx; p.y += p.sy;
+        if (p.x < 0 || p.x > w) p.sx *= -1;
+        if (p.y < 0 || p.y > h) p.sy *= -1;
+        ctx!.beginPath();
+        ctx!.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx!.fillStyle = `rgba(240,185,11,${p.alpha})`;
+        ctx!.fill();
+      }
+
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 100) {
+            ctx!.beginPath();
+            ctx!.moveTo(particles[i].x, particles[i].y);
+            ctx!.lineTo(particles[j].x, particles[j].y);
+            ctx!.strokeStyle = `rgba(240,185,11,${(1 - dist / 100) * 0.06})`;
+            ctx!.lineWidth = 0.5;
+            ctx!.stroke();
+          }
+        }
+      }
+
+      time += 0.008;
+      animId = requestAnimationFrame(draw);
+    }
+
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener('resize', resize);
+    };
+  }, [canvasRef]);
 }
 
 // ══════════════════ 骨架屏组件 ══════════════════
