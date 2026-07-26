@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RefreshCw, AlertTriangle, Ban, ChevronDown } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Ban, X, Info } from 'lucide-react';
 import { marketApi } from '../api/client';
 import '../styles/agent-theme.css';
 import '../styles/industry-leaderboard.css';
@@ -287,7 +287,7 @@ export default function IndustryLeaderboardPage() {
   const [sortBy, setSortBy] = useState<SortKey>('composite_score');
   const [filterIndustry, setFilterIndustry] = useState('');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+  const [modalItem, setModalItem] = useState<LeaderboardItem | null>(null);
   const [entranceDone, setEntranceDone] = useState(false);
 
   useBackgroundCanvas(canvasRef);
@@ -300,9 +300,8 @@ export default function IndustryLeaderboardPage() {
     }
   }, [loading, data?.items.length]);
 
-  const handleRowClick = (symbol: string) => {
-    setExpandedSymbol(expandedSymbol === symbol ? null : symbol);
-  };
+  const openModal = (item: LeaderboardItem) => setModalItem(item);
+  const closeModal = () => setModalItem(null);
 
   const fetchData = useCallback(async (refresh = false) => {
     try {
@@ -426,116 +425,80 @@ export default function IndustryLeaderboardPage() {
           ) : (
             (data?.items || []).map((item, idx) => {
               const tier = getTier(item.composite_score);
-              const isExpanded = expandedSymbol === item.symbol;
               const stockChar = item.name.charAt(0);
               const delay = 80 + idx * 60;
 
               return (
-                <React.Fragment key={item.symbol}>
+                <div
+                  key={item.symbol}
+                  className={tierCardClass(tier.key)}
+                  style={{
+                    opacity: entranceDone ? undefined : 0,
+                    transform: entranceDone ? undefined : 'translateY(18px)',
+                    animationDelay: `${delay}ms`,
+                  }}
+                  onClick={() => openModal(item)}
+                >
+                  <div className="rank-num">{idx + 1}</div>
+
                   <div
-                    className={`${tierCardClass(tier.key)} ${isExpanded ? 'expanded' : ''}`}
-                    style={{
-                      opacity: entranceDone ? undefined : 0,
-                      transform: entranceDone ? undefined : 'translateY(18px)',
-                      animationDelay: `${delay}ms`,
-                    }}
-                    onClick={() => handleRowClick(item.symbol)}
+                    className="avatar-sq"
+                    style={{ background: `${tier.color}18`, color: tier.color, borderColor: `${tier.color}30` }}
                   >
-                    <div className="rank-num">{idx + 1}</div>
-
-                    <div
-                      className="avatar-sq"
-                      style={{ background: `${tier.color}18`, color: tier.color, borderColor: `${tier.color}30` }}
-                    >
-                      {stockChar}
-                    </div>
-
-                    <div className="info-area">
-                      <div className="char-name">
-                        {item.name}
-                        <span className="char-symbol">{item.symbol.split('.')[0]}</span>
-                      </div>
-                      <div className="char-detail">
-                        {item.industry} · 成交 {fmtAmount(item.turnover_amount)}
-                        {item.warnings.includes('untradeable') && (
-                          <span className="warn-tag warn-lock"><Ban size={9} /> 一字板</span>
-                        )}
-                        {item.warnings.includes('overheat') && (
-                          <span className="warn-tag warn-hot"><AlertTriangle size={9} /> 过热</span>
-                        )}
-                        {item.warnings.includes('high_pe') && (
-                          <span className="warn-tag warn-pe"><AlertTriangle size={9} /> 高PE</span>
-                        )}
-                        {item.capital_data === 'neutral' && (
-                          <span className="warn-tag warn-neutral">资金中性</span>
-                        )}
-                        {item.capital_data === 'unavailable' && (
-                          <span className="warn-tag warn-neutral">资金N/A</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="score-area">
-                      <div className="score-change" style={{ color: item.change_pct >= 0 ? '#e74c3c' : '#2ecc71' }}>
-                        {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
-                      </div>
-                      <div className="score-bar-wrap">
-                        <div
-                          className="score-bar-fill"
-                          style={{ width: `${item.composite_score}%`, background: tier.color }}
-                        />
-                      </div>
-                      <div className="score-value" style={{ color: tier.color }}>
-                        {item.composite_score.toFixed(1)}
-                      </div>
-                      <div className="score-subs">
-                        <span title="趋势">{item.trend_score.toFixed(1)}</span>
-                        <span title="资金">{item.capital_score.toFixed(1)}</span>
-                        <span title="量价">{item.volume_price_score.toFixed(1)}</span>
-                        <span title="强度">{item.industry_relative_score.toFixed(1)}</span>
-                        <span title="价格">{item.price_residual_score.toFixed(1)}</span>
-                      </div>
-                    </div>
-
-                    <span className={tierTagClass(tier.key)}>{tier.label}</span>
-
-                    <ChevronDown
-                      size={14}
-                      className={`expand-arrow ${isExpanded ? 'expand-arrow--open' : ''}`}
-                    />
+                    {stockChar}
                   </div>
 
-                  {/* ── 展开详情 ── */}
-                  {isExpanded && item.score_detail && (
-                    <div className="detail-panel">
-                      <div className="detail-grid">
-                        {Object.entries(item.score_detail).map(([key, dim]) => (
-                          <div key={key} className="detail-dim">
-                            <div className="detail-dim-head">
-                              <span className="detail-dim-icon">{DIM_ICONS[dim.label] || '·'}</span>
-                              <span className="detail-dim-label">{dim.label}</span>
-                              <span className="detail-dim-score">{dim.score.toFixed(1)}<i>/ {dim.max}</i></span>
-                            </div>
-                            <div className="detail-dim-bar">
-                              <div className="detail-dim-fill" style={{ width: `${pct(dim.score, dim.max)}%` }} />
-                            </div>
-                            <div className="detail-subs">
-                              {dim.sub_scores.map((sub, si) => (
-                                <div key={si} className="detail-sub">
-                                  <div className="detail-sub-head">
-                                    <span>{sub.label}</span>
-                                    <span className="detail-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
-                                  </div>
-                                  <p className="detail-sub-reason">{sub.reason}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                  <div className="info-area">
+                    <div className="char-name">
+                      {item.name}
+                      <span className="char-symbol">{item.symbol.split('.')[0]}</span>
                     </div>
-                  )}
-                </React.Fragment>
+                    <div className="char-detail">
+                      {item.industry} · 成交 {fmtAmount(item.turnover_amount)}
+                      {item.warnings.includes('untradeable') && (
+                        <span className="warn-tag warn-lock"><Ban size={9} /> 一字板</span>
+                      )}
+                      {item.warnings.includes('overheat') && (
+                        <span className="warn-tag warn-hot"><AlertTriangle size={9} /> 过热</span>
+                      )}
+                      {item.warnings.includes('high_pe') && (
+                        <span className="warn-tag warn-pe"><AlertTriangle size={9} /> 高PE</span>
+                      )}
+                      {item.capital_data === 'neutral' && (
+                        <span className="warn-tag warn-neutral">资金中性</span>
+                      )}
+                      {item.capital_data === 'unavailable' && (
+                        <span className="warn-tag warn-neutral">资金N/A</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="score-area">
+                    <div className="score-change" style={{ color: item.change_pct >= 0 ? '#e74c3c' : '#2ecc71' }}>
+                      {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
+                    </div>
+                    <div className="score-bar-wrap">
+                      <div
+                        className="score-bar-fill"
+                        style={{ width: `${item.composite_score}%`, background: tier.color }}
+                      />
+                    </div>
+                    <div className="score-value" style={{ color: tier.color }}>
+                      {item.composite_score.toFixed(1)}
+                    </div>
+                    <div className="score-subs">
+                      <span title="趋势">{item.trend_score.toFixed(1)}</span>
+                      <span title="资金">{item.capital_score.toFixed(1)}</span>
+                      <span title="量价">{item.volume_price_score.toFixed(1)}</span>
+                      <span title="强度">{item.industry_relative_score.toFixed(1)}</span>
+                      <span title="价格">{item.price_residual_score.toFixed(1)}</span>
+                    </div>
+                  </div>
+
+                  <span className={tierTagClass(tier.key)}>{tier.label}</span>
+
+                  <Info size={14} className="card-info-icon" />
+                </div>
               );
             })
           )}
@@ -550,6 +513,49 @@ export default function IndustryLeaderboardPage() {
           <span>MARCUS · SECTOR LEADERBOARD</span>
         </div>
       </div>
+
+      {/* ── 评分详情弹窗 ── */}
+      {modalItem && modalItem.score_detail && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-row">
+                <span className="modal-stock-name">{modalItem.name}</span>
+                <span className="modal-stock-symbol">{modalItem.symbol.split('.')[0]}</span>
+                <span className={tierTagClass(getTier(modalItem.composite_score).key)}>
+                  {getTier(modalItem.composite_score).label}
+                </span>
+              </div>
+              <button className="modal-close" onClick={closeModal}><X size={18} /></button>
+            </div>
+            <div className="detail-grid">
+              {Object.entries(modalItem.score_detail).map(([key, dim]) => (
+                <div key={key} className="detail-dim">
+                  <div className="detail-dim-head">
+                    <span className="detail-dim-icon">{DIM_ICONS[dim.label] || '·'}</span>
+                    <span className="detail-dim-label">{dim.label}</span>
+                    <span className="detail-dim-score">{dim.score.toFixed(1)}<i>/ {dim.max}</i></span>
+                  </div>
+                  <div className="detail-dim-bar">
+                    <div className="detail-dim-fill" style={{ width: `${pct(dim.score, dim.max)}%` }} />
+                  </div>
+                  <div className="detail-subs">
+                    {dim.sub_scores.map((sub, si) => (
+                      <div key={si} className="detail-sub">
+                        <div className="detail-sub-head">
+                          <span>{sub.label}</span>
+                          <span className="detail-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
+                        </div>
+                        <p className="detail-sub-reason">{sub.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

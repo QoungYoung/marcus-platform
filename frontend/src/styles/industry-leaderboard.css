@@ -338,12 +338,6 @@
   border-color: rgba(45, 140, 240, 0.25);
 }
 
-.rank-card.expanded {
-  border-radius: 6px 6px 0 0;
-  border-bottom-color: transparent;
-  background: rgba(255, 255, 255, 0.92);
-}
-
 /* ── 排名数字 ── */
 .rank-num {
   flex-shrink: 0;
@@ -507,32 +501,115 @@
   color: #5a6070;
 }
 
-/* ── 展开箭头 ── */
-.expand-arrow {
+/* ── 详情信息图标 ── */
+.card-info-icon {
   flex-shrink: 0;
   color: #b0b8c4;
-  transition: transform 0.25s ease;
+  transition: color 0.2s;
 }
 
-.expand-arrow--open {
-  transform: rotate(180deg);
+.rank-card:hover .card-info-icon {
   color: #2d8cf0;
 }
 
 /* ══════════════════════════════════════════════════════════════
-   详情面板
+   详情弹窗
    ══════════════════════════════════════════════════════════════ */
-.detail-panel {
-  background: rgba(255, 255, 255, 0.6);
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 14, 22, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: overlayIn 0.2s ease;
+  padding: 20px;
+}
+
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-content {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 10px;
+  border: 1px solid rgba(45, 140, 240, 0.15);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.15), 0 4px 16px rgba(0, 0, 0, 0.08);
+  max-width: 820px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  animation: modalIn 0.3s cubic-bezier(0.25, 0.8, 0.25, 1.2);
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(24px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  position: sticky;
+  top: 0;
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(45, 140, 240, 0.12);
-  border-top: none;
-  border-radius: 0 0 6px 6px;
-  margin-top: -8px;
-  margin-bottom: 4px;
-  overflow: hidden;
+  border-radius: 10px 10px 0 0;
+  z-index: 2;
 }
+
+.modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-stock-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1a1d24;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.modal-stock-symbol {
+  font-size: 0.65rem;
+  color: #8e94a2;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.03);
+  color: #5a6070;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.modal-close:hover {
+  background: rgba(231, 76, 60, 0.08);
+  border-color: rgba(231, 76, 60, 0.2);
+  color: #c0392b;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   详情面板 (复用弹窗内网格/维度/子项)
+   ══════════════════════════════════════════════════════════════ */
 
 .detail-grid {
   display: grid;
@@ -740,6 +817,5 @@
   .score-value { font-size: 0.72rem; }
   .score-change { font-size: 0.65rem; }
   .detail-grid { grid-template-columns: 1fr; }
-  .expand-arrow { display: none; }
   .header-title { font-size: 1.1rem; }
 }
