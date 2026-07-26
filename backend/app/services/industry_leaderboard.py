@@ -378,39 +378,101 @@ class IndustryLeaderboardService:
 
     # ── 1.4 Tushare 技术指标批量 ─────────────────────────────
 
+    @staticmethod
+    def _calc_ma(closes: List[float]) -> Dict[str, float]:
+        """从收盘价列表计算 MA5/10/20/60（closes 从旧到新）。"""
+        n = len(closes)
+        return {
+            "ma5": round(sum(closes[-5:]) / 5, 2) if n >= 5 else 0,
+            "ma10": round(sum(closes[-10:]) / 10, 2) if n >= 10 else 0,
+            "ma20": round(sum(closes[-20:]) / 20, 2) if n >= 20 else 0,
+            "ma60": round(sum(closes[-60:]) / 60, 2) if n >= 60 else 0,
+        }
+
+    @staticmethod
+    def _calc_adx(highs: List[float], lows: List[float], closes: List[float], period: int = 14):
+        """从 OHLCV 数组计算 ADX(14) / PDI / MDI（数组从旧到新）。返回 (adx, pdi, mdi)。"""
+        n = len(closes)
+        if n < period + 2:
+            return 0.0, 0.0, 0.0
+
+        tr_list, plus_dm_list, minus_dm_list = [], [], []
+        for i in range(1, n):
+            tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+            tr_list.append(tr)
+            up_move = highs[i] - highs[i - 1]
+            down_move = lows[i - 1] - lows[i]
+            plus_dm = up_move if up_move > down_move and up_move > 0 else 0.0
+            minus_dm = down_move if down_move > up_move and down_move > 0 else 0.0
+            plus_dm_list.append(plus_dm)
+            minus_dm_list.append(minus_dm)
+
+        def _wilder_smooth(series: List[float], p: int) -> List[float]:
+            atr = sum(series[:p]) / p
+            result = [atr]
+            for i in range(p, len(series)):
+                atr = (atr * (p - 1) + series[i]) / p
+                result.append(atr)
+            return result
+
+        atr_vals = _wilder_smooth(tr_list, period)
+        spdm_vals = _wilder_smooth(plus_dm_list, period)
+        smdm_vals = _wilder_smooth(minus_dm_list, period)
+
+        dx_list = []
+        for j in range(len(atr_vals)):
+            a = atr_vals[j]
+            pdi = 100 * spdm_vals[j] / a if a > 0 else 0
+            mdi = 100 * smdm_vals[j] / a if a > 0 else 0
+            dx = 100 * abs(pdi - mdi) / (pdi + mdi) if (pdi + mdi) > 0 else 0
+            dx_list.append(dx)
+
+        adx = sum(dx_list[:period]) / period
+        for i in range(period, len(dx_list)):
+            adx = (adx * (period - 1) + dx_list[i]) / period
+
+        pdi_latest = 100 * spdm_vals[-1] / atr_vals[-1] if atr_vals[-1] > 0 else 0
+        mdi_latest = 100 * smdm_vals[-1] / atr_vals[-1] if atr_vals[-1] > 0 else 0
+        return round(adx, 2), round(pdi_latest, 2), round(mdi_latest, 2)
+
     def _fetch_indicators_batch(self, symbols: List[str]) -> Dict[str, dict]:
-        """Tushare stk_factor_pro 批量获取 MA/MACD/ADX/RSI/PE。"""
+        """Tushare stk_factor 批量获取 MACD/KDJ/RSI + 手工计算 MA/ADX。"""
         indicators: Dict[str, dict] = {}
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=100)).strftime("%Y%m%d")  # ~70 trading days
+
         try:
             pro = _get_tushare_pro()
             for i in range(0, len(symbols), 100):
                 batch = ",".join(symbols[i:i + 100])
-                df = pro.stk_factor_pro(ts_code=batch, limit=len(symbols[i:i + 100]))
+                df = pro.stk_factor(ts_code=batch, start_date=start_date, end_date=end_date)
                 if df is None or df.empty:
                     continue
-                for _, row in df.iterrows():
-                    ts_code = str(row["ts_code"])
-                    indicators[ts_code] = {
-                        "trade_date": str(row.get("trade_date", "")),
-                        "close": float(row.get("close_qfq", 0) or row.get("close", 0) or 0),
-                        "ma5": float(row.get("ma_qfq_5", 0) or row.get("ma5", 0) or 0),
-                        "ma10": float(row.get("ma_qfq_10", 0) or row.get("ma10", 0) or 0),
-                        "ma20": float(row.get("ma_qfq_20", 0) or row.get("ma20", 0) or 0),
-                        "ma60": float(row.get("ma_qfq_60", 0) or row.get("ma60", 0) or 0),
-                        "macd_dif": float(row.get("macd_dif_qfq", 0) or row.get("macd_dif", 0) or 0),
-                        "macd_dea": float(row.get("macd_dea_qfq", 0) or row.get("macd_dea", 0) or 0),
-                        "macd": float(row.get("macd_qfq", 0) or row.get("macd", 0) or 0),
-                        "adx": float(row.get("dmi_adx_qfq", 0) or row.get("dmi_adx", 0) or 0),
-                        "pdi": float(row.get("dmi_pdi_qfq", 0) or row.get("dmi_pdi", 0) or 0),
-                        "mdi": float(row.get("dmi_mdi_qfq", 0) or row.get("dmi_mdi", 0) or 0),
-                        "rsi6": float(row.get("rsi_qfq_6", 0) or row.get("rsi_6", 0) or 0),
-                        "pe_ttm": float(row.get("pe_ttm", 0) or 0),
-                        "vol": float(row.get("vol", 0) or 0),
-                        "amount": float(row.get("amount", 0) or 0),
-                        "volume_ratio": float(row.get("volume_ratio", 0) or 0),
+                df = df.sort_values("trade_date")
+                for ts_code, group in df.groupby("ts_code"):
+                    group = group.reset_index(drop=True)
+                    latest = group.iloc[-1]
+                    closes = [float(v) for v in group["close_qfq"].values if v and float(v) > 0]
+                    highs = [float(v) for v in group["high_qfq"].values if v and float(v) > 0]
+                    lows = [float(v) for v in group["low_qfq"].values if v and float(v) > 0]
+                    ma = self._calc_ma(closes)
+                    adx, pdi, mdi = self._calc_adx(highs, lows, closes)
+                    indicators[str(ts_code)] = {
+                        "trade_date": str(latest.get("trade_date", "")),
+                        "close": float(latest.get("close_qfq", 0) or latest.get("close", 0) or 0),
+                        "ma5": ma["ma5"], "ma10": ma["ma10"], "ma20": ma["ma20"], "ma60": ma["ma60"],
+                        "macd_dif": float(latest.get("macd_dif", 0) or 0),
+                        "macd_dea": float(latest.get("macd_dea", 0) or 0),
+                        "macd": float(latest.get("macd", 0) or 0),
+                        "adx": adx, "pdi": pdi, "mdi": mdi,
+                        "rsi6": float(latest.get("rsi_6", 0) or 0),
+                        "pe_ttm": 0,  # stk_factor 无 PE，留给后续扩展
+                        "vol": float(latest.get("vol", 0) or 0),
+                        "amount": float(latest.get("amount", 0) or 0),
+                        "volume_ratio": float(latest.get("volume_ratio", 0) or 0),
                     }
         except Exception as e:
-            logger.error(f"[Leaderboard] stk_factor_pro batch failed: {e}")
+            logger.error(f"[Leaderboard] stk_factor batch failed: {e}")
         return indicators
 
     # ── 1.5 Tushare 日线批量 ─────────────────────────────────
@@ -456,16 +518,19 @@ class IndustryLeaderboardService:
         """从上证综指 000001.SH 的 ADX + MA5/MA20 判别市场状态。"""
         try:
             pro = _get_tushare_pro()
-            df = pro.stk_factor_pro(ts_code="000001.SH", limit=5)
+            end_date = datetime.now().strftime("%Y%m%d")
+            start_date = (datetime.now() - timedelta(days=100)).strftime("%Y%m%d")
+            df = pro.stk_factor(ts_code="000001.SH", start_date=start_date, end_date=end_date)
             if df is None or df.empty:
                 return REGIME_TRANSITIONAL
+            df = df.sort_values("trade_date")
+            closes = [float(v) for v in df["close_qfq"].values if v and float(v) > 0]
+            highs = [float(v) for v in df["high_qfq"].values if v and float(v) > 0]
+            lows = [float(v) for v in df["low_qfq"].values if v and float(v) > 0]
+            ma = self._calc_ma(closes)
+            adx, _, _ = self._calc_adx(highs, lows, closes)
 
-            row = df.iloc[0]
-            adx = float(row.get("dmi_adx_qfq", 0) or 0)
-            ma5 = float(row.get("ma_qfq_5", 0) or 0)
-            ma20 = float(row.get("ma_qfq_20", 0) or 0)
-
-            if adx > 25 and ma5 > ma20:
+            if adx > 25 and ma["ma5"] > ma["ma20"]:
                 return REGIME_TRENDING
             elif adx < 20:
                 return REGIME_RANGING
