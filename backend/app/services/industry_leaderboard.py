@@ -70,15 +70,18 @@ REGIME_TRANSITIONAL = "transitional"
 WEIGHTS = {
     REGIME_TRENDING: {
         "trend": 0.28, "volume_price": 0.15,
-        "industry_relative": 0.17, "price_residual": 0.15, "capital": 0.25,
+        "industry_relative": 0.17, "price_residual": 0.15, "capital": 0.20,
+        "overbought": 0.05,
     },
     REGIME_RANGING: {
         "trend": 0.22, "volume_price": 0.18,
-        "industry_relative": 0.20, "price_residual": 0.18, "capital": 0.22,
+        "industry_relative": 0.20, "price_residual": 0.18, "capital": 0.17,
+        "overbought": 0.05,
     },
     REGIME_TRANSITIONAL: {
         "trend": 0.25, "volume_price": 0.165,
-        "industry_relative": 0.185, "price_residual": 0.165, "capital": 0.235,
+        "industry_relative": 0.185, "price_residual": 0.165, "capital": 0.185,
+        "overbought": 0.05,
     },
 }
 
@@ -162,24 +165,27 @@ class IndustryLeaderboardService:
         candidates, excluded = self._apply_hard_filters(candidates, quotes, indicators)
         logger.info(f"[Leaderboard] After hard filters: {len(candidates)} candidates (excluded {len(excluded)})")
 
-        # 1.7 Round 1 四维评分
+        # 1.7 Round 1 五维评分
         w = WEIGHTS[regime] if regime in WEIGHTS else WEIGHTS[REGIME_TRANSITIONAL]
         trend_scores, trend_details = self._compute_trend_composite(candidates, indicators, regime)
         volume_scores, vol_details = self._compute_volume_price(candidates, indicators, daily_bars, regime)
         industry_scores, ind_details = self._compute_industry_relative_strength(candidates, quotes, daily_bars, regime)
         residual_scores, res_details = self._compute_price_residual(candidates, quotes, indicators, regime)
+        overbought_scores, overbought_details = self._compute_overbought_risk(candidates, indicators)
 
         # 资金维度先取中性分
         capital_max = 25 if regime == REGIME_TRENDING else 22
         capital_neutral = capital_max * 0.5
 
         # 计算综合分
+        OVERBOUGHT_MAX = 10
         for c in candidates:
             sym = c["ts_code"]
             c["trend_score"] = round(trend_scores.get(sym, 0), 1)
             c["volume_price_score"] = round(volume_scores.get(sym, 0), 1)
             c["industry_relative_score"] = round(industry_scores.get(sym, 0), 1)
             c["price_residual_score"] = round(residual_scores.get(sym, 0), 1)
+            c["overbought_score"] = round(overbought_scores.get(sym, 0), 1)
             c["capital_score"] = round(capital_neutral, 1)
             c["capital_data"] = "neutral"
             c["composite_score"] = round(
@@ -187,6 +193,7 @@ class IndustryLeaderboardService:
                 c["volume_price_score"] * w["volume_price"] * 100 / 15 +
                 c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
                 c["price_residual_score"] * w["price_residual"] * 100 / 15 +
+                c["overbought_score"] * w["overbought"] * 100 / OVERBOUGHT_MAX +
                 c["capital_score"] * w["capital"] * 100 / 25,
                 1
             )
@@ -239,6 +246,7 @@ class IndustryLeaderboardService:
                     c["volume_price_score"] * w["volume_price"] * 100 / 15 +
                     c["industry_relative_score"] * w["industry_relative"] * 100 / 17 +
                     c["price_residual_score"] * w["price_residual"] * 100 / 15 +
+                    c["overbought_score"] * w["overbought"] * 100 / OVERBOUGHT_MAX +
                     c["capital_score"] * w["capital"] * 100 / 25,
                     1
                 )
@@ -255,6 +263,7 @@ class IndustryLeaderboardService:
             "volume_price_score": "volume_price_score",
             "industry_relative_score": "industry_relative_score",
             "price_residual_score": "price_residual_score",
+            "overbought_score": "overbought_score",
             "capital_score": "capital_score",
             "change_pct": "change_pct",
         }
@@ -290,6 +299,7 @@ class IndustryLeaderboardService:
                 "volume_price": vol_details.get(sym, {}),
                 "industry_relative": ind_details.get(sym, {}),
                 "price_residual": res_details.get(sym, {}),
+                "overbought": overbought_details.get(sym, {}),
                 "capital": cap_detail,
             }
 
@@ -298,6 +308,7 @@ class IndustryLeaderboardService:
                 "name": c["name"],
                 "industry": c["industry"],
                 "market_cap": c.get("market_cap", 0),
+                "overbought_score": c.get("overbought_score", 0),
                 "change_pct": q.get("change_pct", 0),
                 "turnover_rate": q.get("turnover_rate", 0),
                 "turnover_amount": q.get("amount", 0),
@@ -558,6 +569,9 @@ class IndustryLeaderboardService:
                         "macd": float(latest.get("macd", 0) or 0),
                         "adx": adx, "pdi": pdi, "mdi": mdi,
                         "rsi6": float(latest.get("rsi_6", 0) or 0),
+                        "kdj_k": float(latest.get("kdj_k", 0) or 0),
+                        "kdj_d": float(latest.get("kdj_d", 0) or 0),
+                        "kdj_j": float(latest.get("kdj_j", 0) or 0),
                         "pe_ttm": 0,  # stk_factor 无 PE，留给后续扩展
                         "vol": float(latest.get("vol", 0) or 0),
                         "amount": float(latest.get("amount", 0) or 0),
@@ -707,6 +721,9 @@ class IndustryLeaderboardService:
                         "macd": float(latest.get("macd", 0) or 0),
                         "adx": adx, "pdi": pdi, "mdi": mdi,
                         "rsi6": float(latest.get("rsi_6", 0) or 0),
+                        "kdj_k": float(latest.get("kdj_k", 0) or 0),
+                        "kdj_d": float(latest.get("kdj_d", 0) or 0),
+                        "kdj_j": float(latest.get("kdj_j", 0) or 0),
                         "pe_ttm": 0,
                         "vol": float(latest.get("vol", 0) or 0),
                         "amount": float(latest.get("amount", 0) or 0),
@@ -1558,7 +1575,68 @@ class IndustryLeaderboardService:
 
         return kept, excluded
 
-    # ── 1.10 惩罚系数 ────────────────────────────────────────
+    # ── 1.10 超买风险 ─────────────────────────────────────────────
+
+    def _compute_overbought_risk(
+        self, candidates: List[Dict], indicators: Dict[str, dict]
+    ) -> Tuple[Dict[str, float], Dict[str, dict]]:
+        """超买风险维度（纯负向）：RSI6 超买 + KDJ-J 极度超买扣分。
+
+        得分范围: -10 (极度超买) ~ 0 (健康)，max = 10。
+        """
+        scores: Dict[str, float] = {}
+        details: Dict[str, dict] = {}
+        dim_max = 10
+
+        for c in candidates:
+            sym = c["ts_code"]
+            ind = indicators.get(sym, {})
+            rsi6 = ind.get("rsi6", 0)
+            kdj_j = ind.get("kdj_j", 0)
+
+            sub_scores = []
+            total_penalty = 0.0
+
+            # RSI6 超买检测: >70 开始扣分，>85 严重
+            if rsi6 > 70:
+                rsi_penalty = min(5.0, (rsi6 - 70) / 15 * 5.0)  # 70→0, 85→-5
+                total_penalty += rsi_penalty
+                sub_scores.append({
+                    "label": "RSI6超买", "score": -rsi_penalty, "max": 5.0,
+                    "reason": f"RSI6={rsi6:.1f}，超过70进入超买区，追高风险",
+                })
+            else:
+                sub_scores.append({
+                    "label": "RSI6正常", "score": 0.0, "max": 5.0,
+                    "reason": f"RSI6={rsi6:.1f}，未超买",
+                })
+
+            # KDJ-J 极度超买: >100 扣分
+            if kdj_j > 100:
+                j_penalty = min(5.0, (kdj_j - 100) / 20 * 5.0)  # 100→0, 120→-5
+                total_penalty += j_penalty
+                sub_scores.append({
+                    "label": "KDJ-J超买", "score": -j_penalty, "max": 5.0,
+                    "reason": f"KDJ-J={kdj_j:.1f}，超过100极度超买，大概率回调",
+                })
+            else:
+                sub_scores.append({
+                    "label": "KDJ-J正常", "score": 0.0, "max": 5.0,
+                    "reason": f"KDJ-J={kdj_j:.1f}，未超买",
+                })
+
+            final_score = -total_penalty
+            scores[sym] = final_score
+            details[sym] = {
+                "label": "超买风险",
+                "score": round(final_score, 1),
+                "max": dim_max,
+                "sub_scores": sub_scores,
+            }
+
+        return scores, details
+
+    # ── 1.11 惩罚系数 ────────────────────────────────────────
 
     def _apply_penalties(self, candidates: List[Dict], indicators: Dict[str, dict]):
         """维度地板惩罚 + 过热预警。"""

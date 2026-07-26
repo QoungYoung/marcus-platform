@@ -338,6 +338,7 @@ class LeaderboardItem(BaseModel):
     volume_price_score: float = 0              # 量价配合分
     industry_relative_score: float = 0          # 行业相对强度分
     price_residual_score: float = 0            # 价格残差分
+    overbought_score: float = 0                # 超买风险分 (<=0, 越小越超买)
     capital_score: float = 0                   # 资金持续性分
     capital_data: str = "neutral"              # available / unavailable / neutral
     warnings: List[str] = []                   # untradeable / high_pe / overheat / dimension_floor
