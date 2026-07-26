@@ -308,11 +308,9 @@ class IndustryLeaderboardService:
     @staticmethod
     def _is_trading_time() -> bool:
         """判断当前是否在 A 股交易时段（周一至周五 9:30-11:30 / 13:00-15:00 北京时间）。"""
-        import pytz
-        try:
-            now = datetime.now(pytz.timezone("Asia/Shanghai"))
-        except Exception:
-            now = datetime.now()
+        from datetime import timezone, timedelta
+        cst = timezone(timedelta(hours=8))
+        now = datetime.now(cst)
         if now.weekday() >= 5:
             return False
         t = now.hour * 100 + now.minute
