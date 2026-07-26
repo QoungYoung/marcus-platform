@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RefreshCw, TrendingUp, BarChart3, AlertTriangle, Ban } from 'lucide-react';
+import { RefreshCw, TrendingUp, BarChart3, AlertTriangle, Ban, ChevronDown, Zap, Star, Diamond, Shield, Circle } from 'lucide-react';
 import { marketApi } from '../api/client';
 import '../styles/agent-theme.css';
 import '../styles/industry-leaderboard.css';
@@ -68,8 +68,36 @@ const REGIME_LABELS: Record<string, { label: string; className: string }> = {
   transitional: { label: '过渡期', className: 'regime-transitional' },
 };
 
-const GREEN = '#2ecc71';
-const RED = '#e74c3c';
+// ── 品级系统 ──
+type Tier = 'mythic' | 'legendary' | 'epic' | 'rare' | 'common';
+
+interface TierConfig {
+  key: Tier;
+  label: string;
+  minScore: number;
+  icon: React.FC<{ size?: number }>;
+  className: string;
+}
+
+const TIERS: TierConfig[] = [
+  { key: 'mythic',    label: '神话', minScore: 80, icon: ({ size = 16 }) => <Diamond size={size} />, className: 'tier-mythic' },
+  { key: 'legendary', label: '传说', minScore: 65, icon: ({ size = 16 }) => <Star size={size} />,   className: 'tier-legendary' },
+  { key: 'epic',      label: '史诗', minScore: 50, icon: ({ size = 16 }) => <Zap size={size} />,    className: 'tier-epic' },
+  { key: 'rare',      label: '稀有', minScore: 35, icon: ({ size = 16 }) => <Shield size={size} />, className: 'tier-rare' },
+  { key: 'common',    label: '普通', minScore: 0,  icon: ({ size = 16 }) => <Circle size={size} />, className: 'tier-common' },
+];
+
+function getTier(score: number): TierConfig {
+  for (const t of TIERS) {
+    if (score >= t.minScore) return t;
+  }
+  return TIERS[TIERS.length - 1];
+}
+
+// score to 0-100 normalized for bar widths
+function pct(score: number, max: number): number {
+  return Math.min(100, Math.max(0, (score / max) * 100));
+}
 
 // ── 工具 ──
 function fmtAmount(val: number): string {
@@ -78,31 +106,33 @@ function fmtAmount(val: number): string {
   return val.toLocaleString();
 }
 
-function scoreColor(score: number): string {
-  if (score >= 80) return 'var(--score-hot)';
-  if (score >= 60) return 'var(--score-warm)';
-  if (score >= 40) return 'var(--score-neutral)';
-  if (score >= 20) return 'var(--score-cool)';
-  return 'var(--score-cold)';
-}
+const GREEN = '#2ecc71';
+const RED = '#e74c3c';
 
 // ── 骨架屏 ──
 function SkeletonRow({ idx }: { idx: number }) {
   return (
-    <tr className="lb-skeleton-row" style={{ animationDelay: `${idx * 0.05}s` }}>
-      <td><div className="lb-skeleton" /></td>
-      <td><div className="lb-skeleton" style={{ width: '80%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '70%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '50%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '60%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '60%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '50%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '60%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '60%' }} /></td>
-      <td><div className="lb-skeleton" style={{ width: '60%' }} /></td>
-    </tr>
+    <div className="lb-card lb-skeleton-card" style={{ animationDelay: `${idx * 0.06}s` }}>
+      <div className="lb-card-rank"><div className="lb-skeleton-circle" /></div>
+      <div className="lb-card-body">
+        <div className="lb-skeleton" style={{ width: '30%', height: 16 }} />
+        <div className="lb-skeleton" style={{ width: '50%', height: 12, marginTop: 6 }} />
+      </div>
+      <div className="lb-card-scores">
+        <div className="lb-skeleton" style={{ width: 60, height: 20 }} />
+      </div>
+    </div>
   );
 }
+
+// ── 维度名称映射 ──
+const DIM_ICONS: Record<string, string> = {
+  '趋势综合': '📈',
+  '量价配合': '📊',
+  '行业相对强度': '🏭',
+  '价格残差': '💹',
+  '资金持续性': '💰',
+};
 
 export default function IndustryLeaderboardPage() {
   const { t } = useTranslation();
@@ -136,13 +166,11 @@ export default function IndustryLeaderboardPage() {
     }
   }, [sortBy, filterIndustry]);
 
-  // 首次加载
   useEffect(() => {
     setLoading(true);
     fetchData(false);
   }, [fetchData]);
 
-  // 5 分钟自动刷新
   useEffect(() => {
     const timer = setInterval(() => fetchData(true), 300000);
     return () => clearInterval(timer);
@@ -161,30 +189,47 @@ export default function IndustryLeaderboardPage() {
   const regimeInfo = REGIME_LABELS[regime] || REGIME_LABELS.transitional;
 
   return (
-    <div className="lb-page">
-      {/* ── 页头 ── */}
-      <div className="lb-header">
-        <div className="lb-header-left">
-          <h1 className="lb-title">
-            <BarChart3 size={24} />
-            行业龙头排行
-          </h1>
-          <span className={`lb-regime ${regimeInfo.className}`}>
-            <TrendingUp size={14} />
+    <div className="ba-page">
+      {/* ── 背景装饰 ── */}
+      <div className="ba-bg-grid" />
+      <div className="ba-bg-glow ba-bg-glow--top" />
+      <div className="ba-bg-glow ba-bg-glow--bottom" />
+
+      {/* ── 顶部导航栏 ── */}
+      <header className="ba-header">
+        <div className="ba-header-left">
+          <div className="ba-logo">
+            <div className="ba-logo-icon">
+              <BarChart3 size={20} />
+            </div>
+            <div className="ba-logo-text">
+              <span className="ba-logo-title">行业龙头排行</span>
+              <span className="ba-logo-sub">SECTOR LEADERBOARD</span>
+            </div>
+          </div>
+          <div className={`ba-regime ${regimeInfo.className}`}>
+            <span className="ba-regime-dot" />
             {regimeInfo.label}
-          </span>
+          </div>
           {data?.volume_data === 'degraded' && (
-            <span className="lb-degraded-badge">量价降级</span>
+            <span className="ba-badge ba-badge--warn">量价降级</span>
           )}
           {data?.data_source === 'tushare' && (
-            <span className="lb-degraded-badge">Tushare源</span>
+            <span className="ba-badge ba-badge--warn">Tushare源</span>
           )}
         </div>
 
-        <div className="lb-header-right">
-          {/* 行业筛选 */}
+        <div className="ba-header-right">
+          <div className="ba-tier-legend">
+            {TIERS.map((tier) => (
+              <span key={tier.key} className={`ba-tier-tag ${tier.className}`}>
+                <tier.icon size={12} />
+                {tier.label}
+              </span>
+            ))}
+          </div>
           <select
-            className="lb-industry-select"
+            className="ba-select"
             value={filterIndustry}
             onChange={(e) => setFilterIndustry(e.target.value)}
           >
@@ -193,172 +238,159 @@ export default function IndustryLeaderboardPage() {
               <option key={ind} value={ind}>{ind}</option>
             ))}
           </select>
-
-          <button className="lb-refresh-btn" onClick={handleRefresh} disabled={loading}>
-            <RefreshCw size={16} className={loading ? 'spinning' : ''} />
+          <button className="ba-btn" onClick={handleRefresh} disabled={loading}>
+            <RefreshCw size={15} className={loading ? 'ba-spin' : ''} />
             刷新
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* ── 最后更新 ── */}
-      {lastUpdate && (
-        <div className="lb-meta">
-          更新于 {lastUpdate.toLocaleTimeString()} · {data?.items.length || 0} 条结果
-          {data?.data_source === 'tushare' ? ' · 腾讯数据源不可用，已降级' : ''}
+      {/* ── 排序栏 ── */}
+      <div className="ba-sort-bar">
+        <div className="ba-sort-left">
+          {lastUpdate && (
+            <span className="ba-meta">
+              更新于 {lastUpdate.toLocaleTimeString()} · {data?.items.length || 0} 条结果
+              {data?.data_source === 'tushare' ? ' · 腾讯数据源不可用，已降级' : ''}
+            </span>
+          )}
         </div>
-      )}
+        <div className="ba-sort-tabs">
+          {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+            <button
+              key={key}
+              className={`ba-sort-tab ${sortBy === key ? 'active' : ''}`}
+              onClick={() => handleSort(key)}
+            >
+              {SORT_LABELS[key]}
+              {sortBy === key && <ChevronDown size={12} className="ba-sort-arrow" />}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── 错误 ── */}
       {error && (
-        <div className="lb-error">
+        <div className="ba-error">
           <AlertTriangle size={16} /> {error}
         </div>
       )}
 
-      {/* ── 表格 ── */}
-      <div className="lb-table-wrap">
-        <table className="lb-table">
-          <thead>
-            <tr>
-              <th className="col-rank">#</th>
-              <th className="col-name">股票</th>
-              <th className="col-industry">行业</th>
-              <th
-                className={`col-pct sortable ${sortBy === 'change_pct' ? 'active' : ''}`}
-                onClick={() => handleSort('change_pct')}
-              >
-                涨跌幅{sortBy === 'change_pct' ? ' ▾' : ''}
-              </th>
-              <th className="col-amount">成交额</th>
-              <th
-                className={`col-score sortable ${sortBy === 'composite_score' ? 'active' : ''}`}
-                onClick={() => handleSort('composite_score')}
-              >
-                综合分{sortBy === 'composite_score' ? ' ▾' : ''}
-              </th>
-              <th
-                className={`col-score sortable ${sortBy === 'trend_score' ? 'active' : ''}`}
-                onClick={() => handleSort('trend_score')}
-              >
-                趋势{sortBy === 'trend_score' ? ' ▾' : ''}
-              </th>
-              <th
-                className={`col-score sortable ${sortBy === 'capital_score' ? 'active' : ''}`}
-                onClick={() => handleSort('capital_score')}
-              >
-                资金{sortBy === 'capital_score' ? ' ▾' : ''}
-              </th>
-              <th
-                className={`col-score sortable ${sortBy === 'volume_price_score' ? 'active' : ''}`}
-                onClick={() => handleSort('volume_price_score')}
-              >
-                量价{sortBy === 'volume_price_score' ? ' ▾' : ''}
-              </th>
-              <th
-                className={`col-score sortable ${sortBy === 'industry_relative_score' ? 'active' : ''}`}
-                onClick={() => handleSort('industry_relative_score')}
-              >
-                行业强度{sortBy === 'industry_relative_score' ? ' ▾' : ''}
-              </th>
-              <th
-                className={`col-score sortable ${sortBy === 'price_residual_score' ? 'active' : ''}`}
-                onClick={() => handleSort('price_residual_score')}
-              >
-                价格{sortBy === 'price_residual_score' ? ' ▾' : ''}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && !data ? (
-              Array.from({ length: 10 }).map((_, i) => <SkeletonRow key={i} idx={i} />)
-            ) : (
-              (data?.items || []).map((item, idx) => (
-                <React.Fragment key={item.symbol}>
-                  <tr
-                    className={`lb-row ${expandedSymbol === item.symbol ? 'lb-row--active' : ''}`}
-                    onClick={() => handleRowClick(item.symbol)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td className="col-rank">{idx + 1}</td>
-                    <td className="col-name">
-                      <div className="lb-stock-name">
-                        <span className="lb-stock-symbol">{item.symbol.split('.')[0]}</span>
-                        <span className="lb-stock-cname">{item.name}</span>
-                      </div>
-                      <div className="lb-stock-warnings">
-                        {item.warnings.includes('untradeable') && (
-                          <span className="lb-warn-tag untradeable"><Ban size={10} /> 一字板</span>
-                        )}
-                        {item.warnings.includes('overheat') && (
-                          <span className="lb-warn-tag overheat"><AlertTriangle size={10} /> 过热</span>
-                        )}
-                        {item.warnings.includes('high_pe') && (
-                          <span className="lb-warn-tag high-pe"><AlertTriangle size={10} /> 高PE</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="col-industry">{item.industry}</td>
-                    <td className="col-pct" style={{ color: item.change_pct >= 0 ? RED : GREEN }}>
-                      {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
-                    </td>
-                    <td className="col-amount">{fmtAmount(item.turnover_amount)}</td>
-                    <td className="col-score">
-                      <span
-                        className="lb-score-badge"
-                        style={{ backgroundColor: scoreColor(item.composite_score) }}
-                      >
-                        {item.composite_score.toFixed(1)}
-                      </span>
-                    </td>
-                    <td className="col-score dim">{item.trend_score.toFixed(1)}</td>
-                    <td className="col-score dim">
-                      {item.capital_score.toFixed(1)}
+      {/* ── 排行榜列表 ── */}
+      <div className="ba-leaderboard">
+        {loading && !data ? (
+          Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} idx={i} />)
+        ) : (
+          (data?.items || []).map((item, idx) => {
+            const tier = getTier(item.composite_score);
+            const isExpanded = expandedSymbol === item.symbol;
+            return (
+              <React.Fragment key={item.symbol}>
+                <div
+                  className={`ba-card ${tier.className} ${isExpanded ? 'ba-card--expanded' : ''}`}
+                  onClick={() => handleRowClick(item.symbol)}
+                >
+                  {/* 排名区 */}
+                  <div className="ba-card-rank">
+                    <div className="ba-rank-badge">
+                      <span className="ba-rank-num">{idx + 1}</span>
+                      <tier.icon size={14} />
+                    </div>
+                    <span className={`ba-tier-label ${tier.className}`}>{tier.label}</span>
+                  </div>
+
+                  {/* 主体信息 */}
+                  <div className="ba-card-body">
+                    <div className="ba-card-name-row">
+                      <span className="ba-card-symbol">{item.symbol.split('.')[0]}</span>
+                      <span className="ba-card-cname">{item.name}</span>
+                      <span className="ba-card-industry">{item.industry}</span>
+                    </div>
+                    <div className="ba-card-meta-row">
+                      <span className="ba-card-amount">成交 {fmtAmount(item.turnover_amount)}</span>
+                      {item.warnings.includes('untradeable') && (
+                        <span className="ba-warn ba-warn--lock"><Ban size={10} /> 一字板</span>
+                      )}
+                      {item.warnings.includes('overheat') && (
+                        <span className="ba-warn ba-warn--hot"><AlertTriangle size={10} /> 过热</span>
+                      )}
+                      {item.warnings.includes('high_pe') && (
+                        <span className="ba-warn ba-warn--pe"><AlertTriangle size={10} /> 高PE</span>
+                      )}
                       {item.capital_data === 'neutral' && (
-                        <span className="lb-capital-hint" title="非Top10，资金分取中性值">~</span>
+                        <span className="ba-warn ba-warn--info">资金中性</span>
                       )}
                       {item.capital_data === 'unavailable' && (
-                        <span className="lb-capital-hint" title="东方财富接口不可用">!</span>
+                        <span className="ba-warn ba-warn--info">资金不可用</span>
                       )}
-                    </td>
-                    <td className="col-score dim">{item.volume_price_score.toFixed(1)}</td>
-                    <td className="col-score dim">{item.industry_relative_score.toFixed(1)}</td>
-                    <td className="col-score dim">{item.price_residual_score.toFixed(1)}</td>
-                  </tr>
-                  {expandedSymbol === item.symbol && item.score_detail && (
-                    <tr className="lb-detail-row">
-                      <td colSpan={11} className="lb-detail-cell">
-                        <div className="lb-detail-grid">
-                          {Object.entries(item.score_detail).map(([key, dim]) => (
-                            <div key={key} className="lb-detail-card">
-                              <div className="lb-detail-card-header">
-                                <span className="lb-detail-card-label">{dim.label}</span>
-                                <span className="lb-detail-card-score" style={{ color: scoreColor((dim.score / dim.max) * 100) }}>
-                                  {dim.score.toFixed(1)} / {dim.max}
-                                </span>
+                    </div>
+                  </div>
+
+                  {/* 分数区 */}
+                  <div className="ba-card-scores">
+                    <div className="ba-card-change" style={{ color: item.change_pct >= 0 ? RED : GREEN }}>
+                      {item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%
+                    </div>
+                    <div className="ba-score-bar-wrap">
+                      <div
+                        className={`ba-score-bar ${tier.className}`}
+                        style={{ width: `${item.composite_score}%` }}
+                      />
+                    </div>
+                    <div className={`ba-score-main ${tier.className}`}>
+                      {item.composite_score.toFixed(1)}
+                    </div>
+                    <div className="ba-score-subs">
+                      <span className="ba-sub-score" title="趋势">{item.trend_score.toFixed(1)}</span>
+                      <span className="ba-sub-score" title="资金">{item.capital_score.toFixed(1)}</span>
+                      <span className="ba-sub-score" title="量价">{item.volume_price_score.toFixed(1)}</span>
+                      <span className="ba-sub-score" title="强度">{item.industry_relative_score.toFixed(1)}</span>
+                      <span className="ba-sub-score" title="价格">{item.price_residual_score.toFixed(1)}</span>
+                    </div>
+                    <ChevronDown
+                      size={16}
+                      className={`ba-expand-arrow ${isExpanded ? 'ba-expand-arrow--open' : ''}`}
+                    />
+                  </div>
+                </div>
+
+                {/* 展开详情面板 */}
+                {isExpanded && item.score_detail && (
+                  <div className="ba-detail-panel">
+                    <div className="ba-detail-inner">
+                      {Object.entries(item.score_detail).map(([key, dim]) => (
+                        <div key={key} className="ba-detail-dim">
+                          <div className="ba-detail-dim-head">
+                            <span className="ba-detail-dim-icon">{DIM_ICONS[dim.label] || '◆'}</span>
+                            <span className="ba-detail-dim-label">{dim.label}</span>
+                            <span className="ba-detail-dim-score">{dim.score.toFixed(1)} <i>/ {dim.max}</i></span>
+                          </div>
+                          <div className="ba-detail-dim-bar">
+                            <div
+                              className="ba-detail-dim-fill"
+                              style={{ width: `${pct(dim.score, dim.max)}%` }}
+                            />
+                          </div>
+                          <div className="ba-detail-subs">
+                            {dim.sub_scores.map((sub, si) => (
+                              <div key={si} className="ba-detail-sub">
+                                <div className="ba-detail-sub-head">
+                                  <span className="ba-detail-sub-label">{sub.label}</span>
+                                  <span className="ba-detail-sub-score">{sub.score.toFixed(1)}/{sub.max.toFixed(1)}</span>
+                                </div>
+                                <p className="ba-detail-sub-reason">{sub.reason}</p>
                               </div>
-                              <div className="lb-detail-card-subs">
-                                {dim.sub_scores.map((sub, si) => (
-                                  <div key={si} className="lb-detail-sub-row">
-                                    <div className="lb-detail-sub-header">
-                                      <span className="lb-detail-sub-label">{sub.label}</span>
-                                      <span className="lb-detail-sub-score">{sub.score.toFixed(1)} / {sub.max.toFixed(1)}</span>
-                                    </div>
-                                    <div className="lb-detail-sub-reason">{sub.reason}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
                         </div>
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
-              ))
-            )}
-          </tbody>
-        </table>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })
+        )}
       </div>
     </div>
   );
