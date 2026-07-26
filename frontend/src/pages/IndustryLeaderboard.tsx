@@ -581,11 +581,11 @@ export default function IndustryLeaderboardPage() {
                 return (
                   <>
                     <div className="bp-stat-row bp-stat-row--top">
-                      {topRow.map(([key, dim]) => {
+                      {topRow.map(([key, dim], idx) => {
                         const dimPct = pct(dim.score, dim.max);
                         const rank = getStatRank(dimPct);
                         return (
-                          <div key={key} className="bp-stat-card bp-stat-card--large">
+                          <div key={key} className="bp-stat-card bp-stat-card--large" style={{ animationDelay: `${idx * 0.08}s` }}>
                             <div className="bp-stat-card-inner">
                               <div className="bp-stat-top">
                                 <div className="bp-stat-info">
@@ -639,11 +639,11 @@ export default function IndustryLeaderboardPage() {
                       })}
                     </div>
                     <div className="bp-stat-row bp-stat-row--bottom">
-                      {bottomRow.map(([key, dim]) => {
+                      {bottomRow.map(([key, dim], idx) => {
                         const dimPct = pct(dim.score, dim.max);
                         const rank = getStatRank(dimPct);
                         return (
-                          <div key={key} className="bp-stat-card bp-stat-card--small">
+                          <div key={key} className="bp-stat-card bp-stat-card--small" style={{ animationDelay: `${(idx + 2) * 0.08}s` }}>
                             <div className="bp-stat-card-inner">
                               <div className="bp-stat-top">
                                 <div className="bp-stat-info">
