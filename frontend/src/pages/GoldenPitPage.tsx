@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -318,22 +318,23 @@ function TrendChart({ trendData }: { trendData: TrendData | null }) {
     <div className="gp-chart">
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--agent-border)" />
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(17,137,249,0.10)" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: 'var(--agent-text-secondary)' }}
+            tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
             tickFormatter={(v) => v.slice(5)}
           />
           <YAxis
             domain={[0.2, 0.9]}
-            tick={{ fontSize: 10, fill: 'var(--agent-text-secondary)' }}
+            tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
           />
           <Tooltip
             contentStyle={{
-              background: 'var(--agent-bg-deep)',
-              border: '1px solid var(--agent-border)',
+              background: 'rgba(255,255,255,0.95)',
+              border: '1px solid rgba(231,231,231,0.75)',
               borderRadius: 8,
               fontSize: 12,
+              boxShadow: '0 4px 16px rgba(167,216,234,0.4)',
             }}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -369,6 +370,8 @@ export default function GoldenPitPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showChart, setShowChart] = useState(true);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useGoldenPitBackground(canvasRef);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -452,6 +455,7 @@ export default function GoldenPitPage() {
 
   return (
     <div className="golden-pit-page">
+      <canvas ref={canvasRef} id="gp-bg-canvas" />
       <div className="gp-header">
         <div>
           <h1 className="gp-title">黄金坑监测</h1>
@@ -493,4 +497,106 @@ export default function GoldenPitPage() {
       )}
     </div>
   );
+}
+
+function useGoldenPitBackground(canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let w = 0, h = 0, animId = 0, time = 0;
+
+    function resize() {
+      w = Math.max(1, window.innerWidth);
+      h = Math.max(1, window.innerHeight);
+      canvas!.width = w;
+      canvas!.height = h;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const particles: { x: number; y: number; size: number; sx: number; sy: number; alpha: number; tint: number }[] = [];
+    for (let i = 0; i < 40; i++) {
+      particles.push({
+        x: Math.random() * w, y: Math.random() * h,
+        size: Math.random() * 1.8 + 0.4,
+        sx: (Math.random() - 0.5) * 0.15,
+        sy: (Math.random() - 0.5) * 0.15,
+        alpha: Math.random() * 0.25 + 0.06,
+        tint: Math.random(),
+      });
+    }
+
+    const halos = [
+      { x: 0.50, y: 0.12, r: 140, speed: 0.004, phase: 0 },
+      { x: 0.80, y: 0.30, r: 100, speed: -0.003, phase: 1.5 },
+      { x: 0.20, y: 0.75, r: 160, speed: 0.002, phase: 2.8 },
+    ];
+
+    function draw() {
+      ctx!.clearRect(0, 0, w, h);
+      const minDim = Math.min(w, h);
+
+      for (const hd of halos) {
+        const r = hd.r * minDim / 800;
+        if (!isFinite(r) || r <= 0) continue;
+        const cx = hd.x * w, cy = hd.y * h;
+        const angle = time * hd.speed + hd.phase;
+        ctx!.save();
+        ctx!.translate(cx, cy);
+        ctx!.rotate(angle);
+        const r0 = Math.max(0.1, r * 0.2), r1 = Math.max(0.1, r);
+        const grad = ctx!.createRadialGradient(0, 0, r0, 0, 0, r1);
+        grad.addColorStop(0, 'rgba(17,137,249,0)');
+        grad.addColorStop(0.7, 'rgba(17,137,249,0.02)');
+        grad.addColorStop(1, 'rgba(17,137,249,0.05)');
+        ctx!.beginPath();
+        ctx!.arc(0, 0, r1, 0, Math.PI * 2);
+        ctx!.fillStyle = grad;
+        ctx!.fill();
+        ctx!.restore();
+      }
+
+      for (const p of particles) {
+        p.x += p.sx; p.y += p.sy;
+        if (p.x < 0 || p.x > w) p.sx *= -1;
+        if (p.y < 0 || p.y > h) p.sy *= -1;
+        ctx!.beginPath();
+        ctx!.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        const r = p.tint < 0.3 ? 17 : p.tint < 0.6 ? 167 : 17;
+        const g = p.tint < 0.3 ? 137 : p.tint < 0.6 ? 216 : 137;
+        const b = p.tint < 0.3 ? 249 : p.tint < 0.6 ? 234 : 249;
+        ctx!.fillStyle = `rgba(${r},${g},${b},${p.alpha})`;
+        ctx!.fill();
+      }
+
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 90) {
+            ctx!.beginPath();
+            ctx!.moveTo(particles[i].x, particles[i].y);
+            ctx!.lineTo(particles[j].x, particles[j].y);
+            ctx!.strokeStyle = `rgba(17,137,249,${(1 - dist / 90) * 0.04})`;
+            ctx!.lineWidth = 0.5;
+            ctx!.stroke();
+          }
+        }
+      }
+
+      time += 0.007;
+      animId = requestAnimationFrame(draw);
+    }
+
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener('resize', resize);
+    };
+  }, [canvasRef]);
 }
