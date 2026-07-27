@@ -171,34 +171,37 @@ class StopLossMonitor:
 
     def status(self) -> Dict[str, Any]:
         """获取监控器运行状态详情（含持仓止损距离）。"""
-        positions = []
+        # 1. 以 DB 为准获取完整持仓列表，确保不遗漏任何持仓
+        positions_map: Dict[str, dict] = {}
         try:
-            positions = self.get_position_stop_distances()
+            from app.api.portfolio import calculate_positions_from_db
+            basic_positions, _account, _realized, _winrate = calculate_positions_from_db()
+            for p in basic_positions:
+                positions_map[p["symbol"]] = {
+                    "symbol": p["symbol"],
+                    "name": p.get("name", ""),
+                    "avg_price": round(p.get("avg_price", 0), 2),
+                    "current_price": 0,
+                    "volume": p.get("volume", 0),
+                    "float_pnl_pct": 0,
+                    "t1_locked": False,
+                    "daily_stops_used": self.today_stops.get(p["symbol"], 0),
+                    "nearest_trigger": {"rule": None, "distance_pct": None, "danger_level": "no_data"},
+                    "rule_distances": {},
+                }
         except Exception:
             pass
 
-        # 如果止损距离计算返回空（executor data_dir 不对等），
-        # 回退到直接从 trades.db 读基础持仓（与 /api/v1/portfolio 同源）
-        if not positions:
-            try:
-                from app.api.portfolio import calculate_positions_from_db
-                basic_positions, _account, _realized, _winrate = calculate_positions_from_db()
-                # 转换为前端兼容的格式（虽然缺少止损字段）
-                for p in basic_positions:
-                    positions.append({
-                        "symbol": p["symbol"],
-                        "name": p.get("name", ""),
-                        "avg_price": round(p.get("avg_price", 0), 2),
-                        "current_price": 0,
-                        "volume": p.get("volume", 0),
-                        "float_pnl_pct": 0,
-                        "t1_locked": False,
-                        "daily_stops_used": 0,
-                        "nearest_trigger": {"rule": None, "distance_pct": None, "danger_level": "no_data"},
-                        "rule_distances": {},
-                    })
-            except Exception:
-                pass
+        # 2. 尝试计算止损距离，合并到持仓数据中
+        try:
+            stop_positions = self.get_position_stop_distances()
+            for sp in stop_positions:
+                sym = sp.get("symbol", "")
+                positions_map[sym] = sp  # 有止损数据则覆盖基础数据
+        except Exception:
+            pass
+
+        positions = list(positions_map.values())
 
         return {
             "running": self.running,
@@ -1226,7 +1229,7 @@ class StopLossMonitor:
             return []
 
         start_time = time.time()
-        deadline = start_time + 10  # 总超时 10 秒
+        deadline = start_time + 30  # 总超时 30 秒（多持仓 + Tushare API 慢时需更多时间）
 
         try:
             positions = self.executor.get_positions()
