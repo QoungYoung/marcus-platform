@@ -119,10 +119,9 @@ def _request_post_json(api_key: str, path: str, body: Optional[Dict] = None, tim
     except (ValueError, UnicodeDecodeError) as exc:
         raise ArkvolServiceError("ArkVol 返回数据无法解析") from exc
 
-    if not isinstance(payload, dict) or payload.get("code") != 0:
-        raw_msg = payload.get("msg", "") if isinstance(payload, dict) else ""
-        detail = f"code={payload.get('code')}" if isinstance(payload, dict) else "非JSON"
-        raise ArkvolServiceError(raw_msg or f"ArkVol POST 返回异常 ({detail})")
+    # ai-summary 返回数据无 {code, msg, data} 包装，直接返回
+    if not isinstance(payload, dict):
+        raise ArkvolServiceError("ArkVol POST 响应格式异常")
     return payload
 
 
