@@ -120,7 +120,9 @@ def _request_post_json(api_key: str, path: str, body: Optional[Dict] = None, tim
         raise ArkvolServiceError("ArkVol 返回数据无法解析") from exc
 
     if not isinstance(payload, dict) or payload.get("code") != 0:
-        raise ArkvolServiceError(payload.get("msg", "ArkVol 数据查询失败") if isinstance(payload, dict) else "响应格式错误")
+        raw_msg = payload.get("msg", "") if isinstance(payload, dict) else ""
+        detail = f"code={payload.get('code')}" if isinstance(payload, dict) else "非JSON"
+        raise ArkvolServiceError(raw_msg or f"ArkVol POST 返回异常 ({detail})")
     return payload
 
 
