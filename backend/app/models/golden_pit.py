@@ -19,4 +19,6 @@ class GoldenPitSnapshot(Base):
     percentile = Column(Float, nullable=True)
     status = Column(String(20), nullable=False, default="normal")
     decline_rate_5d = Column(Float, nullable=True)
+    change_5 = Column(Float, nullable=True)
+    change_20 = Column(Float, nullable=True)
     created_at = Column(String(20), nullable=False)

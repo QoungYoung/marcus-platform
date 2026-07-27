@@ -19,6 +19,8 @@ interface IndexStatus {
   percentile: number;
   status: 'normal' | 'warning' | 'golden_pit';
   decline_rate: number;
+  change_5?: number;
+  change_20?: number;
   trend?: 'declining' | 'bottoming' | 'recovering';
   turning_point_confirmed?: boolean;
   days_rising?: number;
@@ -253,7 +255,12 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
         {idx.status === 'warning' && idx.days_to_pit && (
           <span>预计 {idx.eta_date} 入坑 ({idx.days_to_pit}天)</span>
         )}
-        {idx.status === 'normal' && idx.decline_rate !== 0 && (
+        {idx.change_5 != null && idx.change_5 !== 0 && (
+          <span style={{ color: idx.change_5 > 0 ? '#27AE60' : '#C0392B' }}>
+            5日{idx.change_5 > 0 ? '反弹' : '下跌'} {idx.change_5 > 0 ? '+' : ''}{idx.change_5.toFixed(3)}
+          </span>
+        )}
+        {idx.change_5 == null && idx.decline_rate !== 0 && (
           <span>日跌 {idx.decline_rate > 0 ? '+' : ''}{idx.decline_rate.toFixed(3)}</span>
         )}
         {idx.close > 0 && (

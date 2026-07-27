@@ -340,7 +340,10 @@ class GoldenPitService:
             current_greed = float(sorted_series[-1].get("greed", 0)) if sorted_series else 0.0
 
             percentile = self._calculate_percentile(current_greed, sorted_series)
-            decline_rate = self._calculate_decline_rate(sorted_series)
+            # 用 ArkVol 的 change_5 替代本地计算的 decline_rate
+            change_5 = snap.get("change_5", 0) or 0
+            change_20 = snap.get("change_20", 0) or 0
+            decline_rate = round(-change_5, 4)
 
             pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
             entry_pct = cfg.get("entry_pct", PERCENTILE_WARNING)
@@ -359,6 +362,8 @@ class GoldenPitService:
                 data_source="arkvol", sorted_series=sorted_series,
                 as_of=as_of,
             )
+            index_info["change_5"] = round(change_5, 4)
+            index_info["change_20"] = round(change_20, 4)
             result.append(index_info)
 
         return result
@@ -469,6 +474,8 @@ class GoldenPitService:
                         sorted_series=sorted_series,
                         as_of=today,
                     )
+                    index_info["change_5"] = snap.change_5
+                    index_info["change_20"] = snap.change_20
                     indices.append(index_info)
             finally:
                 db.close()
@@ -564,6 +571,8 @@ class GoldenPitService:
                         percentile=idx.get("percentile"),
                         status=idx["status"],
                         decline_rate_5d=idx.get("decline_rate"),
+                        change_5=idx.get("change_5"),
+                        change_20=idx.get("change_20"),
                         created_at=now,
                     )
                     db.add(snap)
