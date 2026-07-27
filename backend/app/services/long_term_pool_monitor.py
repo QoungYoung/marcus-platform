@@ -156,8 +156,8 @@ class LongTermPoolMonitor:
             if not is_trade:
                 logger.info(f"[长期池] 非交易日: {reason}")
             return is_trade
-        except Exception:
-            logger.warning("[长期池] 交易日判定API不可用，降级为允许交易")
+        except Exception as e:
+            logger.warning(f"[长期池] 交易日判定API不可用，降级为允许交易: {e}")
             return True  # API 不可用时默认视为交易日（已在顶部拦截周末）
 
     def _is_morning_volatility(self) -> bool:
