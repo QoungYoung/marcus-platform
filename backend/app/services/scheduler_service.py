@@ -330,7 +330,8 @@ class SchedulerService:
             'auto_trade_late_morning',
             'auto_trade_afternoon', 'auto_trade_closing',
             'daily_review', 'weekly_reflect',
-            'golden_pit_morning', 'golden_pit_intraday', 'golden_pit_snapshot',
+            'golden_pit_morning', 'golden_pit_snapshot',
+            'golden_pit_dca',
         }
         if task_id in TRADE_DAY_ONLY_TASKS:
             try:
@@ -361,6 +362,7 @@ class SchedulerService:
             'auto_trade_afternoon':   ('午后', 12*60+55, 15*60+5),
             'auto_trade_closing':     ('尾盘', 12*60+55, 15*60+5),
             'daily_review':           ('复盘', 15*60,  18*60),
+            'golden_pit_dca':         ('盘中', 9*60+30, 11*60+35),
         }
         if manual:
             if task_id in TASK_TIME_WINDOWS:
@@ -579,6 +581,23 @@ class SchedulerService:
                 execution.status = JobStatus.FAILED.value
                 execution.error = f"{str(e)}\n{traceback.format_exc()}"
                 logger.error(f"[{execution_id}] Golden pit task failed: {e}")
+            finally:
+                execution.finished_at = datetime.now()
+                self._save_execution_log(execution)
+                self._send_notifications(task, execution)
+            return
+
+        # === 黄金坑 DCA 自动定投任务 ===
+        if task.type == 'golden_pit_dca':
+            try:
+                output = self._execute_golden_pit_dca_task(task, execution_id)
+                execution.status = JobStatus.SUCCESS.value
+                execution.output = output
+                execution.return_code = 0
+            except Exception as e:
+                execution.status = JobStatus.FAILED.value
+                execution.error = f"{str(e)}\n{traceback.format_exc()}"
+                logger.error(f"[{execution_id}] Golden pit DCA task failed: {e}")
             finally:
                 execution.finished_at = datetime.now()
                 self._save_execution_log(execution)
@@ -1293,23 +1312,21 @@ class SchedulerService:
         return reply
 
     def _execute_golden_pit_task(self, task: TaskConfig, execution_id: str) -> str:
-        """执行黄金坑监控/预警/快照任务。"""
+        """执行黄金坑盘前报告/快照任务。"""
         from app.services.golden_pit_service import GoldenPitService
         service = GoldenPitService()
 
         if task.id == "golden_pit_morning":
             status = service.get_status()
             report = service.format_morning_report(status)
+
+            # 日频数据，盘前一次检查阈值穿越（对比昨日快照）
+            alerts = service.check_threshold_crossings(status=status)
+            if alerts:
+                report += "\n\n⚠️ 阈值穿越预警:\n" + "\n\n".join(alerts)
+
             logger.info(f"[{execution_id}] Golden pit morning report generated")
             return report
-
-        elif task.id == "golden_pit_intraday":
-            alerts = service.check_threshold_crossings()
-            if alerts:
-                logger.info(f"[{execution_id}] Golden pit intraday: {len(alerts)} threshold crossing(s)")
-                return "\n\n".join(alerts)
-            logger.debug(f"[{execution_id}] Golden pit intraday: no threshold crossings")
-            return "无阈值穿越"
 
         elif task.id == "golden_pit_snapshot":
             snapshots = service.save_daily_snapshot()
@@ -1318,6 +1335,15 @@ class SchedulerService:
             return f"已保存 {count} 条黄金坑快照"
 
         return f"未知的 golden_pit 任务: {task.id}"
+
+    def _execute_golden_pit_dca_task(self, task: TaskConfig, execution_id: str) -> str:
+        """执行黄金坑 DCA 自动定投任务。"""
+        from app.services.golden_pit_dca_service import execute_golden_pit_dca
+
+        logger.info(f"[{execution_id}] 开始黄金坑 DCA 定投检查")
+        result = execute_golden_pit_dca()
+        logger.info(f"[{execution_id}] 黄金坑 DCA 定投完成")
+        return result
 
     def _on_job_executed(self, event):
         """任务执行成功回调"""

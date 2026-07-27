@@ -12,24 +12,81 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import requests
+
 from app.services.arkvol_service import ArkvolService, ArkvolServiceError
 
 logger = logging.getLogger(__name__)
 
+PI_SERVER_BASE = "http://81.70.44.68/api/v1"
+
 # ── 跟踪的 A 股宽基指数 ──
+# data_source 说明:
+#   "arkvol"   → 从 ArkVol alla 系列获取 greed + close（6 大宽基）
+#   "pi_server"→ 从 Pi Server /etf/kline/{etf_code} 获取 K 线，用价格分位作为 greed 代理
+# signal_quality 和 expected_returns 来自 backtest_v6 (P10 expanding-window percentile)
+# 注意: pi_server 来源的指数无回测数据，signal_quality 为 inferred
+# ── 指数分级体系 (基于 v6 回测) ──
+# tier 说明:
+#   core      → 必做: 回测 Win%=100%, 20d Avg>10%, 满仓权重最高
+#   satellite → 选做: 回测 Win%>=67%, 弹性大, 小仓位配置
+#   defense   → 可选: 信号有效但笔数少(2笔), 大市值防御
+#   drop      → 放弃: 信号太弱, 收益不如货币基金
+#   watch     → 观察: 无回测数据/价格分位替代, 仅作预警信号
+# position_weight: 在组合中的建议仓位占比
 CHINA_INDICES: Dict[str, Dict[str, Any]] = {
-    "510050": {"name": "上证50",   "priority": 6},
-    "510300": {"name": "沪深300",  "priority": 5},
-    "510500": {"name": "中证500",  "priority": 4},
-    "588000": {"name": "科创50",   "priority": 3},
-    "159845": {"name": "中证1000", "priority": 2},
-    "159915": {"name": "创业板指", "priority": 1},
+    # ── 核心 (必做) ──
+    "588000": {"name": "科创50",   "priority": 4, "data_source": "arkvol",  "tier": "core",
+               "signal_quality": "strong", "exp_15d": 10.2, "exp_20d": 15.9, "position_weight": 0.40},
+    "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "core",
+               "signal_quality": "strong", "exp_15d": 7.9,  "exp_20d": 10.2, "position_weight": 0.35},
+    # ── 卫星 (选做) ──
+    "159845": {"name": "中证1000", "priority": 3, "data_source": "arkvol",  "tier": "satellite",
+               "signal_quality": "good",   "exp_15d": 4.6,  "exp_20d": 5.0,  "position_weight": 0.15},
+    "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
+               "signal_quality": "good",   "exp_15d": 3.9,  "exp_20d": 6.5,  "position_weight": 0.10},
+    # ── 防御 (可选) ──
+    "510300": {"name": "沪深300",  "priority": 6, "data_source": "arkvol",  "tier": "defense",
+               "signal_quality": "good",   "exp_15d": 4.8,  "exp_20d": 6.9,  "position_weight": 0.10},
+    # ── 放弃 ──
+    "510050": {"name": "上证50",   "priority": 7, "data_source": "arkvol",  "tier": "drop",
+               "signal_quality": "weak",   "exp_15d": 1.3,  "exp_20d": 1.2,  "position_weight": 0.0},
+    # ── 观察 (仅预警) ──
+    "562660": {"name": "中证2000", "priority": 1, "data_source": "pi_server", "tier": "watch", "etf_code": "SH562660",
+               "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0},
 }
 
-GREED_WARNING = 0.40
-GREED_GOLDEN_PIT = 0.35
+# 仓位分级: 拐点确认度 → 仓位比例 (单次定投占 max_total 的比例)
+POSITION_TIERS = {
+    "pre_turn":   0.03,   # 拐点前: 单次≤3%, 累计≤15%
+    "turning":    0.50,   # 拐点确认 (连续2天回升): 50%
+    "accelerate": 0.75,   # 加速 (连续3天回升): 75%
+    "full":       1.00,   # 满仓 (连续4+天回升): 100%
+}
+PRE_TURN_CUMULATIVE_CAP = 0.15  # 拐点前累计上限
+
+# 拐点检测: 连续 N 天贪婪值回升→拐点确认
+TURNING_CONSECUTIVE_DAYS = 2   # 连续回升天数 → 拐点确认
+
+# 假信号过滤参数
+FAKE_SIGNAL_REBOUND_DAYS = 2   # N天内反弹回P10以上 → 假信号
+SIGNAL_CLUSTER_DAYS = 5         # N天内多个信号 → 合并，取最低greed日
+
+# 保留绝对阈值作为参考值（仅科创50/上证50曾触发）
+GREED_ABSOLUTE_WARNING = 0.40
+GREED_ABSOLUTE_PIT = 0.35
+
+# 核心信号阈值: 用 expanding-window percentile (每个指数自己的历史分位)
+PERCENTILE_GOLDEN_PIT = 5    # <= P5  → 黄金坑确认（信号最强）
+PERCENTILE_WARNING = 10      # <= P10 → 预警（信号有效）
+
 PIT_WINDOW_DAYS = 15
-PIT_MIDPOINT_DAYS = (7, 8)
+
+SIGNAL_QUALITY_LABEL = {
+    "strong": "信号强 (Win% >= 80%, Avg 15d > 5%)",
+    "good":   "信号有效 (Win% >= 60%, Avg 15d > 3%)",
+    "weak":   "信号弱 (不建议单独使用)",
+}
 
 STATUS_MAP = {
     "normal":     {"label": "正常",    "color": "#22c55e"},
@@ -69,31 +126,114 @@ class GoldenPitService:
         self._last_known_greed: Dict[str, float] = {}  # 用于盘中阈值穿越检测
 
     # ═══════════════════════════════════════════════════════════════
+    # Data fetching helpers
+    # ═══════════════════════════════════════════════════════════════
+
+    def _fetch_pi_server_kline(self, etf_code: str, limit: int = 250) -> List[Dict]:
+        """从 Pi Server 获取 ETF 日K线数据，统一为 {date, close} 格式。"""
+        url = f"{PI_SERVER_BASE}/etf/kline/{etf_code}"
+        try:
+            resp = requests.get(url, params={"limit": limit}, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Pi server 返回 klines 字段: [{timestamp, open, high, low, close, volume, amount, change_pct}]
+                bars = data.get("klines") or data.get("bars") or data.get("data") or []
+                # 归一化字段名: timestamp(YYYYMMDD) → date(YYYY-MM-DD)
+                normalized = []
+                for b in bars:
+                    ts = b.get("timestamp") or b.get("date") or b.get("trade_date", "")
+                    if len(ts) == 8:
+                        ts = f"{ts[:4]}-{ts[4:6]}-{ts[6:]}"
+                    normalized.append({
+                        "date": ts,
+                        "close": float(b.get("close", 0)),
+                        "open": float(b.get("open", 0)) if "open" in b else 0.0,
+                        "high": float(b.get("high", 0)) if "high" in b else 0.0,
+                        "low": float(b.get("low", 0)) if "low" in b else 0.0,
+                    })
+                return sorted(normalized, key=lambda x: x.get("date", ""))
+            logger.warning("Pi Server ETF kline 返回 %s: %s", resp.status_code, resp.text[:200])
+            return []
+        except Exception as e:
+            logger.warning("获取 Pi Server ETF kline 失败 (%s): %s", etf_code, e)
+            return []
+
+    @staticmethod
+    def _calculate_price_percentile(current_price: float, closes: List[float]) -> float:
+        """计算当前价格在滚动窗口中的分位数 (0-100)。
+
+        分位越低表示价格越接近区间低点（越恐慌）。
+        """
+        if not closes or len(closes) < 5:
+            return 50.0
+        count_below = sum(1 for c in closes if c <= current_price)
+        return round(count_below / len(closes) * 100, 1)
+
+    @staticmethod
+    def _price_based_greed(current_price: float, closes: List[float]) -> float:
+        """从价格位置合成 greed 代理值 (0-1 尺度)。
+
+        0 = 处于滚动窗口最低价（极端恐慌/黄金坑）
+        1 = 处于滚动窗口最高价（极端贪婪）
+        """
+        if not closes or len(closes) < 5:
+            return 0.50
+        min_p = min(closes)
+        max_p = max(closes)
+        if max_p <= min_p:
+            return 0.50
+        return round((current_price - min_p) / (max_p - min_p), 4)
+
+    @staticmethod
+    def _price_decline_rate(closes: List[float], window: int = 5) -> float:
+        """从价格计算 N 日平均跌幅（正值=下跌）。"""
+        if len(closes) < window + 1:
+            return 0.0
+        recent = closes[-window - 1:]
+        if len(recent) < 2:
+            return 0.0
+        total_decline = recent[0] - recent[-1]
+        return round(total_decline / recent[0] / window, 4) if recent[0] != 0 else 0.0
+
+    # ═══════════════════════════════════════════════════════════════
     # Public API
     # ═══════════════════════════════════════════════════════════════
 
     def get_status(self) -> Dict[str, Any]:
         """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。"""
         alla_data = self._arkvol.fetch_page("alla")
-        indices = self._extract_china_indices(alla_data)
         as_of = alla_data.get("as_of", "")
+
+        # 并行获取 ArkVol 指数和 Pi Server 指数数据
+        arkvol_indices: List[Dict[str, Any]] = []
+        pi_server_indices: List[Dict[str, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            f_arkvol = executor.submit(self._extract_arkvol_indices, alla_data)
+            f_pi = executor.submit(self._extract_pi_server_indices, as_of)
+            arkvol_indices = f_arkvol.result()
+            pi_server_indices = f_pi.result()
+
+        # 合并并按 priority 排序 (priority 小的先出现)
+        all_indices = arkvol_indices + pi_server_indices
+        all_indices.sort(key=lambda x: x["priority"])
 
         # 并行获取三重确认所需数据
         confirmation = {}
         prediction = None
         with ThreadPoolExecutor(max_workers=2) as executor:
-            f_conf = executor.submit(self._compute_triple_confirmation, indices)
-            f_pred = executor.submit(self._predict_next_entry, indices)
+            f_conf = executor.submit(self._compute_triple_confirmation, all_indices)
+            f_pred = executor.submit(self._predict_next_entry, all_indices)
             confirmation = f_conf.result()
             prediction = f_pred.result()
 
-        window = self._detect_golden_pit_window(indices)
-        summary = self._build_v2_summary(indices, window, confirmation, prediction)
+        window = self._detect_golden_pit_window(all_indices)
+        summary = self._build_v2_summary(all_indices, window, confirmation, prediction)
 
         return {
             "as_of": as_of,
             "golden_pit_window": window,
-            "indices": indices,
+            "indices": all_indices,
             "triple_confirmation": confirmation,
             "prediction": prediction,
             "summary": summary,
@@ -103,24 +243,41 @@ class GoldenPitService:
         """获取历史贪婪值趋势数据，用于前端折线图。"""
         alla_data = self._arkvol.fetch_page("alla")
         series_data = alla_data.get("original_page_data", {}).get("series", {}).get("data", {})
-        if not series_data:
-            return {"as_of": alla_data.get("as_of", ""), "series": {}, "indices": {}}
+        as_of = alla_data.get("as_of", "")
 
-        index_names = {code: cfg["name"] for code, cfg in CHINA_INDICES.items()}
         result_series: Dict[str, List[Dict]] = {}
         result_indices: Dict[str, str] = {}
 
-        for code, name in index_names.items():
+        for code, cfg in CHINA_INDICES.items():
             if index != "all" and code != index:
                 continue
-            raw = series_data.get(code, [])
-            if raw:
-                sorted_data = sorted(raw, key=lambda x: x.get("date", ""))
-                result_series[code] = sorted_data[-days:] if len(sorted_data) > days else sorted_data
-                result_indices[code] = name
+
+            ds = cfg.get("data_source", "arkvol")
+            if ds == "arkvol":
+                raw = series_data.get(code, [])
+                if raw:
+                    sorted_data = sorted(raw, key=lambda x: x.get("date", ""))
+                    result_series[code] = sorted_data[-days:] if len(sorted_data) > days else sorted_data
+                    result_indices[code] = cfg["name"]
+            elif ds == "pi_server":
+                etf_code = cfg.get("etf_code", "")
+                if etf_code:
+                    bars = self._fetch_pi_server_kline(etf_code, limit=days + 30)
+                    if bars:
+                        closes_120 = [float(b.get("close", 0)) for b in bars[-120:]] if len(bars) >= 120 else [float(b.get("close", 0)) for b in bars]
+                        series = [
+                            {
+                                "date": b.get("date", ""),
+                                "greed": self._price_based_greed(float(b.get("close", 0)), closes_120),
+                                "close": float(b.get("close", 0)),
+                            }
+                            for b in bars
+                        ]
+                        result_series[code] = series[-days:] if len(series) > days else series
+                        result_indices[code] = cfg["name"]
 
         return {
-            "as_of": alla_data.get("as_of", ""),
+            "as_of": as_of or datetime.now().strftime("%Y-%m-%d"),
             "series": result_series,
             "indices": result_indices,
         }
@@ -212,37 +369,83 @@ class GoldenPitService:
 
         lines = [f"📊 黄金坑盘前报告 — {as_of}", "━━━━━━━━━━━━━━━━━━━", ""]
 
-        # 按 priority 排序显示
-        sorted_indices = sorted(indices, key=lambda x: x["priority"])
+        # 按 tier 分组显示
+        tier_order = ["core", "satellite", "defense", "watch", "drop"]
+        tier_labels = {
+            "core": "🏆 核心 (必做)", "satellite": "📡 卫星 (选做)",
+            "defense": "🛡 防御 (可选)", "watch": "👀 观察 (仅预警)", "drop": "❌ 放弃",
+        }
+        tier_icons = {"golden_pit": "🔴", "warning": "🟠", "normal": "🟢"}
+
         pit_count = 0
-        for idx in sorted_indices:
-            icon = {"golden_pit": "🔴", "warning": "🟠", "normal": "🟢"}.get(idx["status"], "⚪")
-            detail = ""
-            if idx["status"] == "golden_pit" and idx.get("entry_date"):
-                pit_count += 1
-                detail = f" ({idx['entry_date']}入坑，第{idx.get('days_in_pit', '?')}天)"
-            elif idx["status"] == "warning" and idx.get("days_to_pit"):
-                detail = f" (预计{idx['eta_date']}入坑)"
-            elif idx.get("decline_rate"):
-                detail = f" (日跌{idx['decline_rate']:.3f})"
-            lines.append(f"{icon} {idx['index_name']:6s} {idx['greed']:.2f}  {STATUS_MAP[idx['status']]['label']}{detail}")
+        for tier_name in tier_order:
+            tier_indices = [i for i in indices if i.get("tier") == tier_name]
+            if not tier_indices:
+                continue
+            tier_indices.sort(key=lambda x: x["priority"])
+            lines.append(tier_labels.get(tier_name, tier_name))
+
+            for idx in tier_indices:
+                icon = tier_icons.get(idx["status"], "⚪")
+                detail = ""
+                if idx["status"] == "golden_pit" and idx.get("entry_date"):
+                    pit_count += 1
+                    detail = f" ({idx['entry_date']}入坑，第{idx.get('days_in_pit', '?')}天)"
+                    if idx.get("absolute_triggered"):
+                        detail += " ★双重确认"
+                elif idx["status"] == "warning":
+                    dw = idx.get("days_in_warning", 0)
+                    if dw > 0:
+                        detail = f" (P10第{dw}天"
+                        if idx.get("days_to_pit"):
+                            detail += f"，预计{idx['eta_date']}入坑"
+                        if idx.get("is_fake_signal"):
+                            detail += " ⚠假信号风险"
+                        detail += ")"
+                elif idx.get("decline_rate"):
+                    detail = f" (日跌{idx['decline_rate']:.3f})"
+
+                # 趋势方向
+                trend_icon = {"declining": "↓", "bottoming": "→", "recovering": "↑"}.get(
+                    idx.get("trend", ""), "")
+                trend_label = {"declining": "跌", "bottoming": "底", "recovering": "升"}.get(
+                    idx.get("trend", ""), "")
+
+                # 信号质量 + 仓位建议
+                sq = idx.get("signal_quality", "")
+                sq_short = {"strong": "强", "good": "中", "weak": "弱", "inferred": "?"}.get(sq, "")
+                ds_tag = "[价]" if idx.get("data_source") == "pi_server_price" else ""
+                pos_label = ""
+                if idx.get("position_tier_label") and idx.get("tier") not in ("drop", "watch"):
+                    pos_label = f" → {idx['position_tier_label']}"
+
+                lines.append(
+                    f"{icon} {idx['index_name']:6s} {idx['greed']:.2f}  "
+                    f"P{idx['percentile']:.0f} {trend_icon}{trend_label} "
+                    f"{STATUS_MAP[idx['status']]['label']}{detail}"
+                    f"  [{sq_short}]{ds_tag}{pos_label}"
+                )
+            lines.append("")
 
         lines.append("")
 
-        if window["active"]:
+        phase = window.get("phase", "idle")
+        if phase == "buying":
+            rising = window.get("turning_leader_rising", 0)
             lines.append(
-                f"📍 窗口：第{window['current_day']}/{PIT_WINDOW_DAYS}天  "
-                f"转折点:{window['midpoint_date']}  出口:{window['exit_date']}"
+                f"📍 买入窗口：{window['leading_index']}拐点确认 "
+                f"({window['start_date']}起, 第{window['current_day']}天, 已回升{rising}天)"
             )
-            # 进度条
-            progress_pct = min(100, int(window["current_day"] / PIT_WINDOW_DAYS * 100))
-            bar_len = 20
-            filled = max(1, int(bar_len * progress_pct / 100))
-            bar = "█" * filled + "░" * (bar_len - filled)
-            midpoint_pos = int(bar_len * PIT_MIDPOINT_DAYS[0] / PIT_WINDOW_DAYS)
-            lines.append(f"   {bar}  {progress_pct}%")
+            lines.append(f"   拐点确认: {window['turning_count']}个指数  加仓节奏: 50%→75%→100%")
+        elif phase == "waiting":
+            pit_count = window.get("pit_count", 0)
+            warn_count = window.get("warning_count", 0)
+            lines.append(
+                f"📍 黄金坑信号活跃 ({pit_count}在坑/{warn_count}预警)  "
+                f"领先:{window['leading_index']}  |  等待拐点确认"
+            )
         else:
-            lines.append("📍 当前无活跃黄金坑窗口")
+            lines.append("📍 当前无黄金坑信号")
 
         lines.append("")
 
@@ -256,53 +459,67 @@ class GoldenPitService:
 
         if pred and pred.get("next_index"):
             lines.append(f"💡 预测: {pred['next_index']} 预计 {pred['eta_days']} 天后入坑 ({pred['eta_date']})")
-        elif window["active"]:
-            lines.append("💡 转折点附近可大额定投，窗口末期小额定投")
+
+        turning_count = sum(1 for i in indices if i.get("turning_point_confirmed"))
+        pre_count = sum(1 for i in indices if i.get("position_tier") == "pre_turn")
+        if phase != "idle":
+            if turning_count > 0:
+                lines.append(f"💡 拐点已确认 ({turning_count}个指数): 快速加仓 50%→75%→100%")
+            elif pre_count > 0:
+                lines.append(f"💡 拐点前 ({pre_count}个指数): 轻仓累积, 等待贪婪值连续回升确认拐点")
 
         return "\n".join(lines)
 
-    def check_threshold_crossings(self) -> List[str]:
-        """检测阈值穿越，返回需要推送的预警消息列表。"""
-        status = self.get_status()
+    def check_threshold_crossings(self, status: Optional[Dict[str, Any]] = None) -> List[str]:
+        """检测阈值穿越，返回需要推送的预警消息列表。
+
+        Args:
+            status: 可选，传入已有的 status 避免重复 API 调用。不传则自动获取。
+        """
+        if status is None:
+            status = self.get_status()
         indices = status["indices"]
         alerts = []
 
-        # 加载昨日快照用于对比
-        prev_greed = self._load_previous_greed()
+        # 加载昨日快照用于对比 (percentile 值)
+        prev_percentile = self._load_previous_percentile()
 
         for idx in indices:
             code = idx["fund_code"]
-            current = idx["greed"]
-            prev = prev_greed.get(code) or self._last_known_greed.get(code)
+            current_pct = idx["percentile"]
+            prev_pct = prev_percentile.get(code)
 
-            # 更新内存记录
-            self._last_known_greed[code] = current
-
-            if prev is None:
+            if prev_pct is None:
                 continue
 
-            # 检测 0.40 预警线穿越
-            if current < GREED_WARNING <= prev:
+            # 检测 P10 预警线穿越 (percentile 从 >10 变为 <=10)
+            if current_pct > PERCENTILE_WARNING and prev_pct <= PERCENTILE_WARNING:
+                continue  # 反弹中，不预警
+            if prev_pct > PERCENTILE_WARNING and current_pct <= PERCENTILE_WARNING:
+                ds_tag = " [价格分位]" if idx.get("data_source") == "pi_server_price" else ""
                 alerts.append(
-                    f"⚠️ {idx['index_name']} 贪婪值 {current:.2f} 跌破0.40预警线\n"
-                    f"   📉 日跌速：{idx.get('decline_rate', 0):.3f}  "
-                    f"预计 {idx.get('eta_date', '?')} 跌破0.35入坑"
+                    f"⚠️ {idx['index_name']} 进入预警区 (分位 {idx['percentile']:.0f}%){ds_tag}\n"
+                    f"   📉 'greed': {idx['greed']:.4f}  "
+                    f"预计 {idx.get('eta_date', '?')} 进入黄金坑"
                 )
 
-            # 检测 0.35 黄金坑确认
-            if current < GREED_GOLDEN_PIT <= prev:
+            # 检测 P5 黄金坑确认 (percentile 从 >5 变为 <=5)
+            if prev_pct > PERCENTILE_GOLDEN_PIT and current_pct <= PERCENTILE_GOLDEN_PIT:
                 window = status["golden_pit_window"]
+                abs_note = " [双重确认]" if idx.get("absolute_triggered") else ""
+                ds_tag = " [价格分位]" if idx.get("data_source") == "pi_server_price" else ""
                 alerts.append(
-                    f"🔴 {idx['index_name']} 贪婪值 {current:.2f} 进入黄金坑！\n"
+                    f"🔴 {idx['index_name']} 进入黄金坑！(分位 {idx['percentile']:.0f}%){abs_note}{ds_tag}\n"
                     f"   📍 窗口：{window['start_date']} - {window['exit_date']}（{PIT_WINDOW_DAYS}交易日）\n"
                     f"   📍 转折点预计：{window['midpoint_date']}\n"
-                    f"   💡 建议关注 {idx['index_name']} 相关ETF定投机会"
+                    f"   📍 信号质量：{SIGNAL_QUALITY_LABEL.get(idx.get('signal_quality', ''), '未知')}\n"
+                    f"   💡 回测预期：15天 +{idx.get('expected_15d', '?')}% | 20天 +{idx.get('expected_20d', '?')}%"
                 )
 
         return alerts
 
-    def _load_previous_greed(self) -> Dict[str, float]:
-        """从数据库加载上一个交易日的贪婪值。"""
+    def _load_previous_percentile(self) -> Dict[str, float]:
+        """从数据库加载上一个交易日的分位值。"""
         try:
             from app.database import SessionLocal
             from app.models.golden_pit import GoldenPitSnapshot
@@ -315,7 +532,6 @@ class GoldenPitService:
                     .filter(GoldenPitSnapshot.date == yesterday)
                     .all()
                 )
-                # 如果昨天没数据，尝试前天
                 if not rows:
                     two_days_ago = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
                     rows = (
@@ -323,7 +539,7 @@ class GoldenPitService:
                         .filter(GoldenPitSnapshot.date == two_days_ago)
                         .all()
                     )
-                return {r.fund_code: r.greed_value for r in rows}
+                return {r.fund_code: (r.percentile or 50.0) for r in rows}
             finally:
                 db.close()
         except Exception:
@@ -333,14 +549,16 @@ class GoldenPitService:
     # 内部计算方法
     # ═══════════════════════════════════════════════════════════════
 
-    def _extract_china_indices(self, alla_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """从 alla 页面数据中提取 6 个 A 股宽基指数的当前状态和历史 series。"""
+    def _extract_arkvol_indices(self, alla_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """从 ArkVol alla 数据提取贪婪值驱动的指数状态。"""
+        arkvol_codes = {code for code, cfg in CHINA_INDICES.items() if cfg.get("data_source") == "arkvol"}
+
         # 当前快照
         items = alla_data.get("items", [])
         current_map: Dict[str, Dict] = {}
         for item in items:
             code = item.get("fund_code", "")
-            if code in CHINA_INDICES:
+            if code in arkvol_codes:
                 current_map[code] = {
                     "greed": float(item.get("greed", 0)),
                     "close": float(item.get("close", 0)),
@@ -350,12 +568,12 @@ class GoldenPitService:
         series_data = alla_data.get("original_page_data", {}).get("series", {}).get("data", {})
 
         result = []
-        for code, cfg in CHINA_INDICES.items():
+        for code in arkvol_codes:
+            cfg = CHINA_INDICES[code]
             current = current_map.get(code, {})
             greed = current.get("greed", 0.0)
             close = current.get("close", 0.0)
 
-            # 从 series 计算百分位和跌速
             raw_series = series_data.get(code, [])
             sorted_series = sorted(raw_series, key=lambda x: x.get("date", ""))
 
@@ -363,38 +581,250 @@ class GoldenPitService:
             decline_rate = self._calculate_decline_rate(sorted_series)
 
             status = "normal"
-            if greed < GREED_GOLDEN_PIT:
+            if percentile <= PERCENTILE_GOLDEN_PIT:
                 status = "golden_pit"
-            elif greed < GREED_WARNING:
+            elif percentile <= PERCENTILE_WARNING:
                 status = "warning"
 
-            index_info = {
-                "fund_code": code,
-                "index_name": cfg["name"],
-                "priority": cfg["priority"],
-                "greed": round(greed, 4),
-                "close": round(close, 4),
-                "percentile": round(percentile, 1),
-                "status": status,
-                "decline_rate": round(decline_rate, 4),
-                "days_to_pit": None,
-                "eta_date": None,
-                "entry_date": None,
-                "days_in_pit": None,
-            }
+            absolute_triggered = greed < GREED_ABSOLUTE_PIT
+            data_source = "arkvol_greed"
 
-            # 如果在预警区，预测何时入坑
-            if status == "warning" and decline_rate > 0.001:
-                gap = greed - GREED_GOLDEN_PIT
-                days_to = max(1, round(gap / decline_rate))
-                index_info["days_to_pit"] = days_to
-                index_info["eta_date"] = _add_trading_days(
-                    alla_data.get("as_of", datetime.now().strftime("%Y-%m-%d")), days_to
-                )
-
+            index_info = self._build_index_info(
+                code=code, cfg=cfg, value=greed, close=close,
+                percentile=percentile, decline_rate=decline_rate,
+                status=status, absolute_triggered=absolute_triggered,
+                data_source=data_source, sorted_series=sorted_series,
+                as_of=alla_data.get("as_of", ""),
+            )
             result.append(index_info)
 
         return result
+
+    def _extract_pi_server_indices(self, as_of: str) -> List[Dict[str, Any]]:
+        """从 Pi Server ETF K 线数据提取价格分位驱动的指数状态。"""
+        pi_codes = {code: cfg for code, cfg in CHINA_INDICES.items() if cfg.get("data_source") == "pi_server"}
+        if not pi_codes:
+            return []
+
+        result = []
+        for code, cfg in pi_codes.items():
+            etf_code = cfg.get("etf_code", "")
+            if not etf_code:
+                continue
+
+            bars = self._fetch_pi_server_kline(etf_code, limit=250)
+            if not bars or len(bars) < 10:
+                logger.warning("Pi Server %s K线数据不足，跳过", etf_code)
+                continue
+
+            # 用最近 120 根 bar 做滚动窗口
+            window_bars = bars[-120:]
+            closes_120 = [float(b.get("close", 0)) for b in window_bars]
+            current_price = closes_120[-1] if closes_120 else 0.0
+            current_close = closes_120[-1] if closes_120 else 0.0
+
+            # 从价格位置计算分位和合成 greed
+            percentile = self._calculate_price_percentile(current_price, closes_120)
+            synthetic_greed = self._price_based_greed(current_price, closes_120)
+            decline_rate = self._price_decline_rate(closes_120)
+
+            status = "normal"
+            if percentile <= PERCENTILE_GOLDEN_PIT:
+                status = "golden_pit"
+            elif percentile <= PERCENTILE_WARNING:
+                status = "warning"
+
+            absolute_triggered = synthetic_greed < GREED_ABSOLUTE_PIT
+            data_source = "pi_server_price"
+
+            # 构建一个与 ArkVol series 兼容的 sorted_series (用价格代替 greed)
+            sorted_series = [
+                {"date": b.get("date", ""), "greed": self._price_based_greed(
+                    float(b.get("close", 0)), closes_120
+                ), "close": float(b.get("close", 0))}
+                for b in bars
+            ]
+
+            index_info = self._build_index_info(
+                code=code, cfg=cfg, value=synthetic_greed, close=current_close,
+                percentile=percentile, decline_rate=decline_rate,
+                status=status, absolute_triggered=absolute_triggered,
+                data_source=data_source, sorted_series=sorted_series,
+                as_of=as_of,
+            )
+            # 标记没有回测数据
+            index_info["expected_15d"] = None
+            index_info["expected_20d"] = None
+            result.append(index_info)
+
+        return result
+
+    def _build_index_info(
+        self,
+        code: str,
+        cfg: Dict[str, Any],
+        value: float,
+        close: float,
+        percentile: float,
+        decline_rate: float,
+        status: str,
+        absolute_triggered: bool,
+        data_source: str,
+        sorted_series: List[Dict],
+        as_of: str,
+    ) -> Dict[str, Any]:
+        """构建统一的指数状态字典，含 Day 1 检测和仓位分级。"""
+        tier = cfg.get("tier", "drop")
+        position_weight = cfg.get("position_weight", 0.0)
+        today_str = as_of or datetime.now().strftime("%Y-%m-%d")
+
+        index_info = {
+            "fund_code": code,
+            "index_name": cfg["name"],
+            "priority": cfg["priority"],
+            "tier": tier,
+            "position_weight": position_weight,
+            "greed": round(value, 4),
+            "close": round(close, 4),
+            "percentile": round(percentile, 1),
+            "status": status,
+            "decline_rate": round(decline_rate, 4),
+            "absolute_triggered": absolute_triggered,
+            "data_source": data_source,
+            "signal_quality": cfg.get("signal_quality", "unknown"),
+            "expected_15d": cfg.get("exp_15d"),
+            "expected_20d": cfg.get("exp_20d"),
+            # Day 1 检测字段
+            "p10_entry_date": None,
+            "days_in_warning": 0,
+            "is_fake_signal": False,
+            "is_first_p10_cross": False,
+            # 趋势检测字段
+            "trend": "declining",
+            "days_rising": 0,
+            "turning_point_confirmed": False,
+            "turning_start_date": None,
+            "last_change": 0.0,
+            # 仓位分级
+            "position_tier": None,
+            "position_tier_label": None,
+            "days_to_pit": None,
+            "eta_date": None,
+            "entry_date": None,
+            "days_in_pit": None,
+        }
+
+        # ── Day 1 检测: 用 expanding-window 找 P10 首次穿越日 ──
+        if sorted_series and len(sorted_series) >= 60:
+            p10_entry_date, days_in_warning, is_first_cross = self._detect_p10_entry(
+                sorted_series, today_str
+            )
+            index_info["p10_entry_date"] = p10_entry_date
+            index_info["days_in_warning"] = days_in_warning
+            index_info["is_first_p10_cross"] = is_first_cross
+
+            # 假信号检测: 曾破P10但已反弹, 且从未到P5
+            if status == "normal" and p10_entry_date and days_in_warning <= FAKE_SIGNAL_REBOUND_DAYS:
+                index_info["is_fake_signal"] = True
+
+            # ── 趋势检测 + 仓位分级 ──
+            if status in ("golden_pit", "warning"):
+                trend = self._detect_trend(sorted_series)
+                index_info["trend"] = trend["trend"]
+                index_info["days_rising"] = trend["days_rising"]
+                index_info["turning_point_confirmed"] = trend["turning_confirmed"]
+                index_info["last_change"] = trend["last_change"]
+
+                if trend["turning_confirmed"]:
+                    # 拐点起始日 = 第一天的回升日期
+                    if trend["days_rising"] < len(sorted_series):
+                        idx_turn = len(sorted_series) - trend["days_rising"] - 1
+                        index_info["turning_start_date"] = sorted_series[max(0, idx_turn)].get("date", "")
+                    if trend["days_rising"] >= 4:
+                        index_info["position_tier"] = "full"
+                        index_info["position_tier_label"] = "100% (拐点+4天回升)"
+                    elif trend["days_rising"] >= 3:
+                        index_info["position_tier"] = "accelerate"
+                        index_info["position_tier_label"] = "75% (拐点+3天回升)"
+                    else:
+                        index_info["position_tier"] = "turning"
+                        index_info["position_tier_label"] = "50% (拐点确认)"
+                else:
+                    index_info["position_tier"] = "pre_turn"
+                    index_info["position_tier_label"] = "轻仓 (拐点前 ≤3%/累计≤15%)"
+            elif tier in ("drop", "watch"):
+                index_info["position_tier"] = None
+                index_info["position_tier_label"] = "跳过 (不入金)"
+
+        # ── ETA 预测 (预警区 → 黄金坑) ──
+        if status == "warning" and decline_rate > 0.0001 and percentile > PERCENTILE_GOLDEN_PIT:
+            sorted_vals = sorted([float(s.get("greed", 0)) for s in sorted_series])
+            p5_val = sorted_vals[max(0, int(len(sorted_vals) * 0.05))]
+            gap = value - p5_val
+            if gap > 0:
+                days_to = max(1, round(gap / decline_rate))
+                index_info["days_to_pit"] = days_to
+                index_info["eta_date"] = _add_trading_days(today_str, days_to)
+
+        # ── 黄金坑入坑日期回测 ──
+        if status == "golden_pit" and sorted_series:
+            sorted_vals = sorted([float(s.get("greed", 0)) for s in sorted_series])
+            p5_val = sorted_vals[max(0, int(len(sorted_vals) * 0.05))]
+            reversed_series = list(reversed(sorted_series))
+            entry_date = None
+            for s in reversed_series:
+                if float(s.get("greed", 0)) > p5_val:
+                    break
+                entry_date = s.get("date", "")
+            if entry_date:
+                index_info["entry_date"] = entry_date
+                index_info["days_in_pit"] = _trading_days_between(entry_date, today_str) + 1
+
+        return index_info
+
+    def _detect_p10_entry(
+        self, sorted_series: List[Dict], today_str: str
+    ) -> tuple:
+        """用 expanding-window 检测当前是否在 P10 信号中，以及 Day 1 是哪天。
+
+        只返回当前活跃的 P10 信号（即当前 percentile 仍在 P10 内）。
+        如果当前已反弹出 P10，返回 (None, 0, False)。
+
+        Returns:
+            (p10_entry_date, days_in_warning, is_first_cross)
+        """
+        greeds = [float(s.get("greed", 0)) for s in sorted_series]
+        dates = [s.get("date", "") for s in sorted_series]
+
+        if len(greeds) < 60:
+            return (None, 0, False)
+
+        # 先判断当前是否在 P10 内
+        current_pct = self._calculate_percentile(greeds[-1], sorted_series[:-1])
+        if current_pct > PERCENTILE_WARNING:
+            return (None, 0, False)
+
+        # 往回找到最近一次从 P10 上方穿越到 P10 下方的日期
+        # 从今天往前找，找到第一个 > P10 的日期，其后一天就是 Day 1
+        entry_idx = None
+        for i in range(len(greeds) - 1, 59, -1):
+            pct_i = self._calculate_percentile(greeds[i], sorted_series[:i])
+            if pct_i > PERCENTILE_WARNING:
+                entry_idx = i + 1  # 穿越日 = 回到P10上方的下一天
+                break
+
+        if entry_idx is None:
+            # 从未出过 P10（不太可能但处理一下）
+            entry_idx = 60
+
+        if entry_idx >= len(greeds):
+            return (None, 0, False)
+
+        p10_entry_date = dates[entry_idx]
+        days_in = _trading_days_between(p10_entry_date, today_str) + 1
+        is_first_cross = days_in <= FAKE_SIGNAL_REBOUND_DAYS + 1
+
+        return (p10_entry_date, days_in, is_first_cross)
 
     def _calculate_percentile(self, current_greed: float, series: List[Dict]) -> float:
         """计算当前贪婪值在自身历史中的分位数（越低越恐慌）。"""
@@ -417,45 +847,102 @@ class GoldenPitService:
         total_decline = greeds[0] - greeds[-1]
         return round(total_decline / window, 4)
 
+    @staticmethod
+    def _detect_trend(sorted_series: List[Dict]) -> Dict[str, Any]:
+        """检测贪婪值趋势方向，判断是否已过拐点。
+
+        拐点 = 贪婪值从连续下降转为连续回升。连续 2 天回升确认拐点。
+
+        Returns:
+            trend: "declining" | "bottoming" | "recovering"
+            days_rising: 连续回升天数
+            turning_confirmed: 是否已确认拐点
+        """
+        if len(sorted_series) < 5:
+            return {"trend": "declining", "days_rising": 0,
+                    "turning_confirmed": False, "last_change": 0.0}
+
+        greeds = [float(s.get("greed", 0)) for s in sorted_series]
+
+        days_rising = 0
+        for i in range(len(greeds) - 1, 0, -1):
+            if greeds[i] > greeds[i - 1]:
+                days_rising += 1
+            else:
+                break
+
+        last_change = round(greeds[-1] - greeds[-2], 4) if len(greeds) >= 2 else 0.0
+
+        if days_rising >= TURNING_CONSECUTIVE_DAYS:
+            return {"trend": "recovering", "days_rising": days_rising,
+                    "turning_confirmed": True, "last_change": last_change}
+        elif days_rising == 1:
+            return {"trend": "bottoming", "days_rising": 1,
+                    "turning_confirmed": False, "last_change": last_change}
+        else:
+            return {"trend": "declining", "days_rising": 0,
+                    "turning_confirmed": False, "last_change": last_change}
+
     def _detect_golden_pit_window(self, indices: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """检测是否有活跃的黄金坑窗口。首个跌破 0.35 的指数开窗。"""
-        pit_indices = [i for i in indices if i["status"] == "golden_pit"]
+        """检测黄金坑窗口。
 
-        if not pit_indices:
-            return {
-                "active": False,
-                "start_date": None,
-                "leading_index": None,
-                "current_day": 0,
-                "midpoint_date": None,
-                "exit_date": None,
-            }
+        窗口定义:
+          - waiting: 有指数在黄金坑/预警中，但拐点未确认 → 轻仓等待
+          - buying:  至少一个指数拐点确认 → 窗口开启，加仓买入
+          - idle:    无信号
+        窗口从第一个指数拐点确认日开始，关闭条件是所有指数贪婪值回升到合理位置。
+        """
+        today_str = datetime.now().strftime("%Y-%m-%d")
 
-        # 以最早进入黄金坑的指数为准
-        pit_indices.sort(key=lambda x: x.get("entry_date") or "9999")
-        leader = pit_indices[0]
+        tradeable = [i for i in indices if i.get("tier") in ("core", "satellite", "defense")]
 
-        start_date = leader.get("entry_date") or datetime.now().strftime("%Y-%m-%d")
-        current_day = _trading_days_between(start_date, datetime.now().strftime("%Y-%m-%d")) + 1
-        current_day = max(1, min(PIT_WINDOW_DAYS, current_day))
+        turning = [i for i in tradeable if i.get("turning_point_confirmed")]
+        signals = [i for i in tradeable if i["status"] in ("warning", "golden_pit")]
 
-        midpoint_start = _add_trading_days(start_date, PIT_MIDPOINT_DAYS[0])
-        midpoint_end = _add_trading_days(start_date, PIT_MIDPOINT_DAYS[1])
-        exit_date = _add_trading_days(start_date, PIT_WINDOW_DAYS)
+        pit_count = sum(1 for i in signals if i["status"] == "golden_pit")
+        warning_count = sum(1 for i in signals if i["status"] == "warning")
 
-        # 记录各指数的入坑日和坑内天数
-        for idx in pit_indices:
-            idx["entry_date"] = idx.get("entry_date") or start_date
-            idx["days_in_pit"] = _trading_days_between(idx["entry_date"], datetime.now().strftime("%Y-%m-%d")) + 1
-
-        return {
-            "active": True,
-            "start_date": start_date,
-            "leading_index": leader["index_name"],
-            "current_day": current_day,
-            "midpoint_date": f"{midpoint_start} - {midpoint_end}",
-            "exit_date": exit_date,
+        base = {
+            "phase": "idle",
+            "start_date": None,
+            "leading_index": None,
+            "leading_tier": None,
+            "current_day": 0,
+            "pit_count": pit_count,
+            "warning_count": warning_count,
+            "turning_count": len(turning),
         }
+
+        if turning:
+            turning.sort(key=lambda x: x.get("turning_start_date") or "9999")
+            leader = turning[0]
+            start_date = leader.get("turning_start_date")
+            current_day = _trading_days_between(start_date, today_str) + 1 if start_date else 1
+            return {
+                **base,
+                "active": True,
+                "phase": "buying",
+                "start_date": start_date,
+                "leading_index": leader["index_name"],
+                "leading_tier": leader.get("tier"),
+                "current_day": max(1, current_day),
+                "turning_leader_rising": leader.get("days_rising", 0),
+            }
+        elif signals:
+            signals.sort(key=lambda x: x.get("p10_entry_date") or "9999")
+            return {
+                **base,
+                "active": False,
+                "phase": "waiting",
+                "leading_index": signals[0]["index_name"],
+                "leading_tier": signals[0].get("tier"),
+            }
+        else:
+            return {
+                **base,
+                "active": False,
+                "phase": "idle",
+            }
 
     def _compute_triple_confirmation(self, indices: List[Dict[str, Any]]) -> Dict[str, Any]:
         """三重确认状态。"""
@@ -474,13 +961,17 @@ class GoldenPitService:
         except Exception as e:
             layer1 = {"label": "蛋糕理论", "status": f"数据不可用: {e}", "confirmed": False}
 
-        # Layer 2: 宽基贪婪
+        # Layer 2: 宽基贪婪 — 至少一个指数的 percentile <= P5
         pit_names = [i["index_name"] for i in indices if i["status"] == "golden_pit"]
         warning_names = [i["index_name"] for i in indices if i["status"] == "warning"]
+        # 双重确认：percentile <= P5 且绝对阈值也触发
+        double_confirm = [i["index_name"] for i in indices if i["status"] == "golden_pit" and i.get("absolute_triggered")]
         layer2_confirmed = len(pit_names) > 0
         layer2_status = f"{len(pit_names)}个在黄金坑" if pit_names else f"{len(warning_names)}个预警"
         if pit_names:
             layer2_status += f" ({', '.join(pit_names)})"
+        if double_confirm:
+            layer2_status += f" | 双重确认: {', '.join(double_confirm)}"
         layer2 = {
             "label": "宽基贪婪",
             "status": layer2_status,
@@ -499,7 +990,7 @@ class GoldenPitService:
                 for item in items:
                     greed = item.get("greed")
                     name = item.get("etf_name") or item.get("index_name") or item.get("name", "")
-                    if greed is not None and float(greed) < GREED_GOLDEN_PIT:
+                    if greed is not None and float(greed) < GREED_ABSOLUTE_PIT:
                         extreme_sectors.append(name)
                 if extreme_sectors:
                     layer3 = {"label": "细分板块", "status": f"{len(extreme_sectors)}个板块已入黄金坑", "confirmed": True}
@@ -540,24 +1031,19 @@ class GoldenPitService:
         pit_indices = [i for i in indices if i["status"] == "golden_pit"]
         warning_indices = [i for i in indices if i["status"] == "warning"]
 
-        if window["active"]:
-            parts.append(f"当前处于黄金坑窗口第{window['current_day']}/{PIT_WINDOW_DAYS}天。")
-            parts.append(f"入口:{window['start_date']}，领先指数:{window['leading_index']}。")
-            parts.append(f"转折点预计:{window['midpoint_date']}，出口:{window['exit_date']}。")
-
-            if window["current_day"] <= PIT_MIDPOINT_DAYS[0]:
-                parts.append("当前处于大额定投期，建议加速建仓。")
-            elif window["current_day"] <= PIT_MIDPOINT_DAYS[1]:
-                parts.append("当前处于转折点附近，可能是最佳买点。")
-            else:
-                parts.append("窗口进入后半段，建议小额定投。")
+        phase = window.get("phase", "idle")
+        if phase == "buying":
+            rising = window.get("turning_leader_rising", 0)
+            parts.append(f"买入窗口已开启: {window['leading_index']}拐点确认，{window['start_date']}起第{window['current_day']}天。")
+            parts.append(f"拐点确认{window['turning_count']}个指数，已回升{rising}天，加仓节奏50%→75%→100%。")
+            strong = [i["index_name"] for i in pit_indices if i.get("signal_quality") == "strong"]
+            if strong:
+                parts.append(f"强信号: {', '.join(strong)}（回测Win%≥80%），优先加仓。")
+        elif phase == "waiting":
+            parts.append(f"黄金坑信号活跃（{window['pit_count']}在坑/{window['warning_count']}预警），等待拐点确认。")
+            parts.append("拐点前轻仓累积(单次≤3%/累计≤15%)，关注贪婪值何时开始连续回升。")
         else:
-            parts.append("当前无活跃黄金坑窗口。")
-            if warning_indices:
-                names = "、".join(i["index_name"] for i in warning_indices)
-                parts.append(f"{names}处于预警区，密切关注是否跌破{GREED_GOLDEN_PIT}。")
-            else:
-                parts.append("各宽基指数情绪正常，暂无底部信号。")
+            parts.append("当前无黄金坑信号，各宽基指数情绪正常。")
 
         if prediction and prediction.get("next_index"):
             parts.append(f"预测: {prediction['next_index']} 预计 {prediction['eta_days']} 天后进入黄金坑。")
@@ -578,11 +1064,12 @@ class GoldenPitService:
         """v1 兼容: 返回简化综合评分。"""
         status = self.get_status()
         indices = status["indices"]
-        # 将 per-index 状态转为综合评分: 按最差状态 + 平均贪婪值转换
+        # 将 per-index 状态转为综合评分: 按最差状态 + 最低 percentile 转换
         pit_count = sum(1 for i in indices if i["status"] == "golden_pit")
         warn_count = sum(1 for i in indices if i["status"] == "warning")
-        avg_greed = sum(i["greed"] for i in indices) / len(indices) if indices else 0.5
-        inverted = max(0, min(100, (1 - avg_greed) * 100))
+        min_pct = min((i["percentile"] for i in indices), default=50.0)
+        # 评分 = 100 - 最低分位，最低分位越低分数越高
+        inverted = max(0, min(100, round(100 - min_pct, 1)))
 
         factors = [
             {
@@ -597,11 +1084,23 @@ class GoldenPitService:
             }
         ]
 
+        # 按信号最强的指数的信号质量确定颜色深度
+        strong_pit = sum(1 for i in indices if i["status"] == "golden_pit" and i.get("signal_quality") == "strong")
+        double_confirmed = sum(1 for i in indices if i["status"] == "golden_pit" and i.get("absolute_triggered"))
+
         return {
             "score": round(inverted, 1),
             "level": "golden_pit" if pit_count > 0 else ("alert" if warn_count > 0 else "normal"),
-            "level_label": "黄金坑区域" if pit_count > 0 else ("预警区域" if warn_count > 0 else "正常区域"),
-            "level_color": "#ef4444" if pit_count > 0 else ("#f97316" if warn_count > 0 else "#22c55e"),
+            "level_label": (
+                f"黄金坑区域 ({pit_count}个指数, {double_confirmed}个双重确认)"
+                if pit_count > 0
+                else ("预警区域" if warn_count > 0 else "正常区域")
+            ),
+            "level_color": (
+                "#dc2626" if double_confirmed > 0
+                else ("#ef4444" if pit_count > 0
+                      else ("#f97316" if warn_count > 0 else "#22c55e"))
+            ),
             "as_of": status["as_of"],
             "factors": factors,
             "summary": status["summary"],

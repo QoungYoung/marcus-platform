@@ -297,27 +297,12 @@ tasks:
   - daily_review
 - id: golden_pit_morning
   name: 黄金坑盘前报告
-  description: 8:50 盘前生成黄金坑状态报告并推送到QQ
+  description: 8:50 盘前生成黄金坑状态报告+阈值穿越检测，推送到QQ
   enabled: true
   type: golden_pit
   schedule:
     type: cron
     expr: 50 8 * * 1-5
-    timezone: Asia/Shanghai
-  notifications:
-    on_success: true
-    on_failure: true
-    channels:
-    - qqbot
-  depends_on: []
-- id: golden_pit_intraday
-  name: 黄金坑盘中阈值监控
-  description: 10:00/11:00/14:00 检查贪婪值是否跨越0.40或0.35阈值
-  enabled: true
-  type: golden_pit
-  schedule:
-    type: cron
-    expr: 0 10,11,14 * * 1-5
     timezone: Asia/Shanghai
   notifications:
     on_success: true
@@ -336,6 +321,21 @@ tasks:
     timezone: Asia/Shanghai
   notifications:
     on_success: false
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: golden_pit_dca
+  name: 黄金坑DCA自动定投
+  description: 10:05 检查黄金坑窗口状态，对处于黄金坑的宽基ETF按策略自动定投买入
+  enabled: true
+  type: golden_pit_dca
+  schedule:
+    type: cron
+    expr: 5 10 * * 1-5
+    timezone: Asia/Shanghai
+  notifications:
+    on_success: true
     on_failure: true
     channels:
     - qqbot
