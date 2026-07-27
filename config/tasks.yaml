@@ -325,6 +325,21 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: golden_pit_sync_pre_market
+  name: 黄金坑盘前同步
+  description: 9:00 盘前同步贪婪指数到数据库，确保开盘后 /status 走 DB 读取
+  enabled: true
+  type: golden_pit
+  schedule:
+    type: cron
+    expr: 0 9 * * 1-5
+    timezone: Asia/Shanghai
+  notifications:
+    on_success: false
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
 - id: golden_pit_dca
   name: 黄金坑DCA自动定投
   description: 10:05 检查黄金坑窗口状态，对处于黄金坑的宽基ETF按策略自动定投买入

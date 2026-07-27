@@ -330,7 +330,7 @@ class SchedulerService:
             'auto_trade_late_morning',
             'auto_trade_afternoon', 'auto_trade_closing',
             'daily_review', 'weekly_reflect',
-            'golden_pit_morning', 'golden_pit_snapshot',
+            'golden_pit_morning', 'golden_pit_snapshot', 'golden_pit_sync_pre_market',
             'golden_pit_dca',
         }
         if task_id in TRADE_DAY_ONLY_TASKS:
@@ -1328,7 +1328,7 @@ class SchedulerService:
             logger.info(f"[{execution_id}] Golden pit morning report generated")
             return report
 
-        elif task.id == "golden_pit_snapshot":
+        elif task.id in ("golden_pit_snapshot", "golden_pit_sync_pre_market"):
             snapshots = service.save_daily_snapshot()
             count = len(snapshots) if snapshots else 0
             logger.info(f"[{execution_id}] Golden pit snapshot saved: {count} records")
