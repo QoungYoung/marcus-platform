@@ -5,9 +5,15 @@ Fibonacci retracement & daily K-channel (牛股计算器策略).
 """
 import json
 import logging
+import sys
 from datetime import datetime, timedelta
-from typing import Optional
 from pathlib import Path
+from typing import Optional
+
+# 确保项目根目录在 sys.path 中，使 `from core.xxx` 延迟导入可用
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 logger = logging.getLogger(__name__)
 
