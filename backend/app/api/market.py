@@ -592,7 +592,7 @@ async def get_stock_moneyflow(
             df = df.sort_values('trade_date', ascending=False)
             row = df.iloc[0]
             logger.info(f"[moneyflow] Tushare 降级: {ts_code}, trade_date={row.get('trade_date')}, "
-                        f"net_mf_amount={row.get('net_mf_amount')}, columns={list(df.columns)}")
+                        f"net_amount={row.get('net_amount')}, columns={list(df.columns)}")
             def _f(col: str, default=0.0) -> float:
                 v = row.get(col)
                 return float(v) if v is not None and v != '' else default
@@ -606,8 +606,8 @@ async def get_stock_moneyflow(
             md_net = (_f("buy_lg_amount") - _f("sell_lg_amount")) * 10000
             sm_net = (_f("buy_md_amount") - _f("sell_md_amount")) * 10000
             xs_net = (_f("buy_sm_amount") - _f("sell_sm_amount")) * 10000
-            # net_mf_amount 优先，不存在则用买卖差额计算
-            main_net_raw = row.get("net_mf_amount")
+            # net_amount 优先，不存在则用买卖差额计算
+            main_net_raw = row.get("net_amount")
             if main_net_raw is None or main_net_raw == '':
                 main_net = lg_net + md_net  # 主力=超大单+大单净额
             else:
