@@ -18,7 +18,7 @@ from app.services.arkvol_service import ArkvolService, ArkvolServiceError
 
 logger = logging.getLogger(__name__)
 
-PI_SERVER_BASE = "http://81.70.44.68/api/v1"
+PI_SERVER_BASE = "http://localhost:8000/api/v1"
 
 # ── 跟踪的 A 股宽基指数 ──
 # data_source 说明:
@@ -152,7 +152,7 @@ class GoldenPitService:
         """从 Pi Server 获取 ETF 日K线数据，统一为 {date, close} 格式。"""
         url = f"{PI_SERVER_BASE}/etf/kline/{etf_code}"
         try:
-            resp = requests.get(url, params={"limit": limit}, timeout=15)
+            resp = requests.get(url, params={"period": "day", "count": -limit}, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 # Pi server 返回 klines 字段: [{timestamp, open, high, low, close, volume, amount, change_pct}]
