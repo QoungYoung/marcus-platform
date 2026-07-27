@@ -264,33 +264,30 @@ class GoldenPitService:
         return self._get_status_from_api()
 
     def _get_status_from_api(self) -> Dict[str, Any]:
-        """从 ArkVol API 获取完整状态。"""
-        # 并行获取 3 个 ArkVol API（alla, global-capital-flow, alla-tech），全部带缓存
+        """从 ArkVol API 获取完整状态。使用 ai-summary (POST, 轻量) 替代 alla (GET, 重型)。"""
         with ThreadPoolExecutor(max_workers=3) as executor:
-            f_alla = executor.submit(self._cached_fetch, "alla")
+            f_ai = executor.submit(self._arkvol.fetch_ai_summary)
             f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
             f_tech = executor.submit(self._cached_fetch, "alla-tech")
-            alla_data = f_alla.result()
+            ai_data = f_ai.result()
             gcf_data = f_gcf.result()
             tech_data = f_tech.result()
 
-        as_of = alla_data.get("as_of", "")
+        as_of = ai_data.get("asof", "")
 
-        # 并行处理指数数据
-        arkvol_indices: List[Dict[str, Any]] = []
+        # 从 ai-summary snapshot 提取指数数据（替代 _extract_arkvol_indices）
+        arkvol_indices = self._extract_from_ai_summary(ai_data)
+
+        # Pi Server 指数并行
         pi_server_indices: List[Dict[str, Any]] = []
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            f_arkvol = executor.submit(self._extract_arkvol_indices, alla_data)
+        with ThreadPoolExecutor(max_workers=1) as executor:
             f_pi = executor.submit(self._extract_pi_server_indices, as_of)
-            arkvol_indices = f_arkvol.result()
             pi_server_indices = f_pi.result()
 
-        # 合并并按 priority 排序
         all_indices = arkvol_indices + pi_server_indices
         all_indices.sort(key=lambda x: x["priority"])
 
-        # 三重确认 + 预测（使用已获取的数据，不再调 API）
+        # 三重确认 + 预测
         with ThreadPoolExecutor(max_workers=2) as executor:
             f_conf = executor.submit(self._compute_triple_confirmation, all_indices, gcf_data, tech_data)
             f_pred = executor.submit(self._predict_next_entry, all_indices)
@@ -298,7 +295,11 @@ class GoldenPitService:
             prediction = f_pred.result()
 
         window = self._detect_golden_pit_window(all_indices)
-        summary = self._build_v2_summary(all_indices, window, confirmation, prediction)
+
+        # 优先用 AI 摘要结论，拼接本地分析
+        ai_conclusion = ai_data.get("conclusion", "")
+        local_summary = self._build_v2_summary(all_indices, window, confirmation, prediction)
+        summary = ai_conclusion + "\n\n——\n" + local_summary if ai_conclusion else local_summary
 
         return {
             "as_of": as_of,
@@ -309,14 +310,57 @@ class GoldenPitService:
             "summary": summary,
         }
 
+    def _extract_from_ai_summary(self, ai_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """从 ai-summary 返回的 snapshot 数组重建指数状态。"""
+        arkvol_codes = {code for code, cfg in CHINA_INDICES.items() if cfg.get("data_source") == "arkvol"}
+        snapshot_list = ai_data.get("snapshot", [])
+        as_of = ai_data.get("asof", "")
+
+        result = []
+        for snap in snapshot_list:
+            code = snap.get("fund_code", "")
+            if code not in arkvol_codes:
+                continue
+            cfg = CHINA_INDICES[code]
+
+            history = snap.get("history", [])
+            sorted_series = sorted(history, key=lambda x: x.get("date", ""))
+            current_greed = float(sorted_series[-1].get("greed", 0)) if sorted_series else 0.0
+
+            percentile = self._calculate_percentile(current_greed, sorted_series)
+            decline_rate = self._calculate_decline_rate(sorted_series)
+
+            pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
+            entry_pct = cfg.get("entry_pct", PERCENTILE_WARNING)
+            status = "normal"
+            if percentile <= pit_pct:
+                status = "golden_pit"
+            elif percentile <= entry_pct:
+                status = "warning"
+
+            absolute_triggered = current_greed < GREED_ABSOLUTE_PIT
+
+            index_info = self._build_index_info(
+                code=code, cfg=cfg, value=current_greed, close=0,
+                percentile=percentile, decline_rate=decline_rate,
+                status=status, absolute_triggered=absolute_triggered,
+                data_source="arkvol", sorted_series=sorted_series,
+                as_of=as_of,
+            )
+            result.append(index_info)
+
+        return result
+
     def get_history(self, index: str = "all", days: int = 60) -> Dict[str, Any]:
-        """获取历史贪婪值趋势数据，用于前端折线图。"""
-        alla_data = self._cached_fetch("alla")
-        series_data = alla_data.get("original_page_data", {}).get("series", {}).get("data", {})
-        as_of = alla_data.get("as_of", "")
+        """获取历史贪婪值趋势数据，用于前端折线图。优先使用 ai-summary。"""
+        ai_data = self._arkvol.fetch_ai_summary()
+        as_of = ai_data.get("asof", datetime.now().strftime("%Y-%m-%d"))
+        snapshot_list = ai_data.get("snapshot", [])
 
         result_series: Dict[str, List[Dict]] = {}
         result_indices: Dict[str, str] = {}
+
+        snap_map = {s.get("fund_code", ""): s for s in snapshot_list}
 
         for code, cfg in CHINA_INDICES.items():
             if index != "all" and code != index:
@@ -324,9 +368,10 @@ class GoldenPitService:
 
             ds = cfg.get("data_source", "arkvol")
             if ds == "arkvol":
-                raw = series_data.get(code, [])
-                if raw:
-                    sorted_data = sorted(raw, key=lambda x: x.get("date", ""))
+                snap = snap_map.get(code)
+                if snap:
+                    history = snap.get("history", [])
+                    sorted_data = sorted(history, key=lambda x: x.get("date", ""))
                     result_series[code] = sorted_data[-days:] if len(sorted_data) > days else sorted_data
                     result_indices[code] = cfg["name"]
             elif ds == "pi_server":
@@ -347,7 +392,7 @@ class GoldenPitService:
                         result_indices[code] = cfg["name"]
 
         return {
-            "as_of": as_of or datetime.now().strftime("%Y-%m-%d"),
+            "as_of": as_of,
             "series": result_series,
             "indices": result_indices,
         }

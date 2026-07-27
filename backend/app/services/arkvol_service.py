@@ -25,6 +25,10 @@ PAGE_ENDPOINTS = {
     "low-52w-leverage": "/api/data/low-52w-leverage",
 }
 
+POST_ENDPOINTS = {
+    "ai-summary": "/api/funds-greed/alla/ai-summary",
+}
+
 
 class ArkvolServiceError(RuntimeError):
     pass
@@ -87,6 +91,39 @@ def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
     return payload
 
 
+def _request_post_json(api_key: str, path: str, body: Optional[Dict] = None, timeout: int = 30) -> Dict[str, Any]:
+    """POST 请求，用于 ai-summary 等端点。"""
+    url = f"{ARKVOL_BASE_URL}{path}"
+    data = json.dumps(body or {}).encode("utf-8")
+    req = Request(url, data=data, headers={
+        "X-API-Key": api_key,
+        "X-Arkvol-Skill-Version": "0.3.1",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }, method="POST")
+
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            body_raw = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            body_raw = {}
+        msg = body_raw.get("msg", "")
+        if exc.code in (401, 403):
+            raise ArkvolServiceError(msg or f"ArkVol API Key 无效或无权访问 (HTTP {exc.code})") from exc
+        raise ArkvolServiceError(msg or f"ArkVol 返回 HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise ArkvolServiceError(f"无法连接 ArkVol: {exc.reason}") from exc
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ArkvolServiceError("ArkVol 返回数据无法解析") from exc
+
+    if not isinstance(payload, dict) or payload.get("code") != 0:
+        raise ArkvolServiceError(payload.get("msg", "ArkVol 数据查询失败") if isinstance(payload, dict) else "响应格式错误")
+    return payload
+
+
 class ArkvolService:
     """ArkVol 数据服务单例。"""
 
@@ -100,7 +137,7 @@ class ArkvolService:
         return self._api_key
 
     def fetch_page(self, page_id: str) -> Dict[str, Any]:
-        """获取指定页面的完整数据。"""
+        """获取指定页面的完整数据（GET）。"""
         if page_id not in PAGE_ENDPOINTS:
             raise ArkvolServiceError(f"未知页面: {page_id}，可用: {list(PAGE_ENDPOINTS)}")
         endpoint = f"{PAGE_ENDPOINTS[page_id]}?view=full"
@@ -108,4 +145,13 @@ class ArkvolService:
         data = payload.get("data", {})
         if not isinstance(data, dict):
             raise ArkvolServiceError("ArkVol 返回数据格式异常")
+        return data
+
+    def fetch_ai_summary(self) -> Dict[str, Any]:
+        """获取 AI 摘要（POST，轻量，不返回历史 series）。"""
+        endpoint = POST_ENDPOINTS["ai-summary"]
+        payload = _request_post_json(self.api_key, endpoint)
+        data = payload.get("data", {})
+        if not isinstance(data, dict):
+            raise ArkvolServiceError("ArkVol ai-summary 返回数据格式异常")
         return data
