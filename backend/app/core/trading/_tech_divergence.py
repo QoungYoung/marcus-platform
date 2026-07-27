@@ -14,9 +14,16 @@ then evaluates the 5 divergence signals with today's estimated + yesterday's con
 """
 
 import logging
+import sys
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# 确保项目根目录在 sys.path 中，使 `from core.realtime_indicators` 等延迟导入可用
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 logger = logging.getLogger(__name__)
 
