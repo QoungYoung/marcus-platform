@@ -47,6 +47,15 @@ from app.core.trading._60min_analysis import evaluate_60min_stop
 
 logger = logging.getLogger(__name__)
 
+# 适配本地/Docker: 探测包含 core/utils/trade_day_utils.py 的项目根目录
+_p = Path(__file__).resolve().parent
+for _ in range(5):
+    if (_p / "core" / "utils" / "trade_day_utils.py").exists():
+        if str(_p) not in sys.path:
+            sys.path.insert(0, str(_p))
+        break
+    _p = _p.parent
+
 # ── K线数据缓存（避免频繁 Tushare API 调用导致超时）──
 # 缓存 key: ts_code → (timestamp, high, low, close)
 # TTL: 120 秒（足够覆盖一次扫描周期，第二次请求命中缓存）

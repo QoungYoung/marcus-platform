@@ -26,6 +26,15 @@ from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
+# 适配本地/Docker: 探测包含 core/utils/trade_day_utils.py 的项目根目录
+_p = Path(__file__).resolve().parent
+for _ in range(5):
+    if (_p / "core" / "utils" / "trade_day_utils.py").exists():
+        if str(_p) not in sys.path:
+            sys.path.insert(0, str(_p))
+        break
+    _p = _p.parent
+
 
 class CandidatePoolMonitor:
     """候选池实时监控器 — daemon 线程，30 秒轮询"""

@@ -20,8 +20,13 @@ from app.config import get_settings
 
 # Ensure skills directories are in sys.path before any imports
 settings = get_settings()
-# Add platform root and core directory
-platform_root = Path(__file__).parent.parent.parent
+# 自适应探测项目根目录（兼容本地 mancus-platform/ 和 Docker /app/ 两种结构）
+# 注意：不能用 core/__init__.py 检测，因为 backend/app/core/__init__.py 也会命中
+platform_root = Path(__file__).resolve().parent
+for _ in range(5):
+    if (platform_root / "core" / "utils" / "trade_day_utils.py").exists():
+        break
+    platform_root = platform_root.parent
 core_dir = platform_root / "core"
 if str(platform_root) not in sys.path:
     sys.path.insert(0, str(platform_root))
@@ -34,7 +39,7 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
-from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool
+from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
 from app.services.scheduler_service import scheduler_service
@@ -262,6 +267,7 @@ app.include_router(backtest.router, prefix="/api/v1")
 app.include_router(pool.router, prefix="/api/v1")
 app.include_router(lt_pool.router, prefix="/api/v1")
 app.include_router(monitor_log_router, prefix="/api/v1")
+app.include_router(direction.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():
