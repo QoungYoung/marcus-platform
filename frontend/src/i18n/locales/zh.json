@@ -24,7 +24,13 @@
     "agent": "AI助手",
     "calculator": "牛股计算器",
     "monitor": "监控日志",
-    "leaderboard": "龙头排行"
+    "leaderboard": "龙头排行",
+    "goldenPit": "黄金坑"
+  },
+  "goldenPit": {
+    "title": "指数黄金坑预测",
+    "subtitle": "多因子情绪共振底部检测",
+    "errorHint": "请确认已配置 ArkVol API Key（环境变量 ARKVOL_API_KEY 或 ~/.arkvol/arkvol-entry.json）"
   },
   "portfolio": {
     "title": "账户概览",

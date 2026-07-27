@@ -123,6 +123,12 @@ export const reflectApi = {
   getSession: (id: string) => api.get(`/panel/reflect/sessions/${id}`),
 }
 
+// Golden Pit APIs
+export const goldenPitApi = {
+  getScore: () => api.get('/golden-pit/score'),
+  getFactors: () => api.get('/golden-pit/factors'),
+}
+
 // Health check
 export const healthApi = {
   check: () => api.get('/health'),

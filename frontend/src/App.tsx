@@ -11,6 +11,7 @@ import TradingAgentPage from './pages/TradingAgentPage'
 import BullCalculatorPage from './pages/BullCalculatorPage'
 import MonitorLogPage from './pages/MonitorLogPage'
 import IndustryLeaderboardPage from './pages/IndustryLeaderboard'
+import GoldenPitPage from './pages/GoldenPitPage'
 
 function App() {
   return (
@@ -29,6 +30,7 @@ function App() {
           <Route path="calculator" element={<BullCalculatorPage />} />
           <Route path="monitor" element={<MonitorLogPage />} />
           <Route path="industry-leaderboard" element={<IndustryLeaderboardPage />} />
+          <Route path="golden-pit" element={<GoldenPitPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

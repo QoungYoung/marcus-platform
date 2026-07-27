@@ -24,7 +24,13 @@
     "agent": "AI Agent",
     "calculator": "Bull Calculator",
     "monitor": "Monitor Log",
-    "leaderboard": "Leaderboard"
+    "leaderboard": "Leaderboard",
+    "goldenPit": "Golden Pit"
+  },
+  "goldenPit": {
+    "title": "Index Golden Pit Detection",
+    "subtitle": "Multi-Factor Sentiment Bottom Detection",
+    "errorHint": "Please configure ArkVol API Key (env ARKVOL_API_KEY or ~/.arkvol/arkvol-entry.json)"
   },
   "portfolio": {
     "title": "Portfolio Overview",
