@@ -149,10 +149,7 @@ class ArkvolService:
         return data
 
     def fetch_ai_summary(self) -> Dict[str, Any]:
-        """获取 AI 摘要（POST，轻量，不返回历史 series）。"""
-        endpoint = POST_ENDPOINTS["ai-summary"]
-        payload = _request_post_json(self.api_key, endpoint)
-        data = payload.get("data", {})
-        if not isinstance(data, dict):
-            raise ArkvolServiceError("ArkVol ai-summary 返回数据格式异常")
-        return data
+        """获取 AI 摘要（POST，轻量，不返回历史 series）。
+        ai-summary 直接返回 {asof, conclusion, snapshot}，无 {code, msg, data} 包装。
+        """
+        return _request_post_json(self.api_key, POST_ENDPOINTS["ai-summary"])
