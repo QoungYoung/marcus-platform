@@ -8,6 +8,7 @@
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -141,10 +142,22 @@ class GoldenPitService:
     def __init__(self, arkvol: Optional[ArkvolService] = None):
         self._arkvol = arkvol or ArkvolService()
         self._last_known_greed: Dict[str, float] = {}  # 用于盘中阈值穿越检测
+        self._cache: Dict[str, tuple] = {}  # page_id → (data, timestamp)
 
     # ═══════════════════════════════════════════════════════════════
     # Data fetching helpers
     # ═══════════════════════════════════════════════════════════════
+
+    def _cached_fetch(self, page_id: str, ttl: int = 300) -> Dict[str, Any]:
+        """带 TTL 缓存的 ArkVol API 调用，避免每次请求都打外部 API。"""
+        now = time.time()
+        if page_id in self._cache:
+            data, ts = self._cache[page_id]
+            if now - ts < ttl:
+                return data
+        data = self._arkvol.fetch_page(page_id)
+        self._cache[page_id] = (data, now)
+        return data
 
     @staticmethod
     def _fetch_pi_server_kline(etf_code: str, limit: int = 250) -> List[Dict]:
@@ -242,28 +255,34 @@ class GoldenPitService:
 
     def get_status(self) -> Dict[str, Any]:
         """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。"""
-        alla_data = self._arkvol.fetch_page("alla")
+        # 并行获取 3 个 ArkVol API（alla, global-capital-flow, alla-tech），全部带缓存
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            f_alla = executor.submit(self._cached_fetch, "alla")
+            f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
+            f_tech = executor.submit(self._cached_fetch, "alla-tech")
+            alla_data = f_alla.result()
+            gcf_data = f_gcf.result()
+            tech_data = f_tech.result()
+
         as_of = alla_data.get("as_of", "")
 
-        # 并行获取 ArkVol 指数和 Pi Server 指数数据
+        # 并行处理指数数据
         arkvol_indices: List[Dict[str, Any]] = []
         pi_server_indices: List[Dict[str, Any]] = []
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             f_arkvol = executor.submit(self._extract_arkvol_indices, alla_data)
             f_pi = executor.submit(self._extract_pi_server_indices, as_of)
             arkvol_indices = f_arkvol.result()
             pi_server_indices = f_pi.result()
 
-        # 合并并按 priority 排序 (priority 小的先出现)
+        # 合并并按 priority 排序
         all_indices = arkvol_indices + pi_server_indices
         all_indices.sort(key=lambda x: x["priority"])
 
-        # 并行获取三重确认所需数据
-        confirmation = {}
-        prediction = None
+        # 三重确认 + 预测（使用已获取的数据，不再调 API）
         with ThreadPoolExecutor(max_workers=2) as executor:
-            f_conf = executor.submit(self._compute_triple_confirmation, all_indices)
+            f_conf = executor.submit(self._compute_triple_confirmation, all_indices, gcf_data, tech_data)
             f_pred = executor.submit(self._predict_next_entry, all_indices)
             confirmation = f_conf.result()
             prediction = f_pred.result()
@@ -282,7 +301,7 @@ class GoldenPitService:
 
     def get_history(self, index: str = "all", days: int = 60) -> Dict[str, Any]:
         """获取历史贪婪值趋势数据，用于前端折线图。"""
-        alla_data = self._arkvol.fetch_page("alla")
+        alla_data = self._cached_fetch("alla")
         series_data = alla_data.get("original_page_data", {}).get("series", {}).get("data", {})
         as_of = alla_data.get("as_of", "")
 
@@ -1078,16 +1097,19 @@ class GoldenPitService:
                 "phase": "idle",
             }
 
-    def _compute_triple_confirmation(self, indices: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """三重确认状态。"""
+    def _compute_triple_confirmation(
+        self, indices: List[Dict[str, Any]],
+        gcf_data: Optional[Dict[str, Any]] = None,
+        tech_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """三重确认状态。可传入预取的 API 数据避免重复请求。"""
         # Layer 1: 蛋糕理论 — 全球资金流向
         layer1 = {"label": "蛋糕理论", "status": "未知", "confirmed": False}
         try:
-            gcf = self._arkvol.fetch_page("global-capital-flow")
+            gcf = gcf_data or {}
             score = gcf.get("sentiment_score")
             if score is not None:
                 score = float(score)
-                # A股资金外流处历史低位时得分高(反转)，< 30 表示风险偏好极低
                 if score < 30:
                     layer1 = {"label": "蛋糕理论", "status": "A股资金外流处历史低位", "confirmed": True}
                 else:
@@ -1095,10 +1117,9 @@ class GoldenPitService:
         except Exception as e:
             layer1 = {"label": "蛋糕理论", "status": f"数据不可用: {e}", "confirmed": False}
 
-        # Layer 2: 宽基贪婪 — 至少一个指数的 percentile <= P5
+        # Layer 2: 宽基贪婪
         pit_names = [i["index_name"] for i in indices if i["status"] == "golden_pit"]
         warning_names = [i["index_name"] for i in indices if i["status"] == "warning"]
-        # 双重确认：percentile <= P5 且绝对阈值也触发
         double_confirm = [i["index_name"] for i in indices if i["status"] == "golden_pit" and i.get("absolute_triggered")]
         layer2_confirmed = len(pit_names) > 0
         layer2_status = f"{len(pit_names)}个在黄金坑" if pit_names else f"{len(warning_names)}个预警"
@@ -1116,10 +1137,9 @@ class GoldenPitService:
         # Layer 3: 细分板块
         layer3 = {"label": "细分板块", "status": "未知", "confirmed": False}
         try:
-            tech = self._arkvol.fetch_page("alla-tech")
+            tech = tech_data or {}
             items = tech.get("items", [])
             if items:
-                # 检查板块贪婪极端值: 有任意板块 greed < 0.35
                 extreme_sectors = []
                 for item in items:
                     greed = item.get("greed")
