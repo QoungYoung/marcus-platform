@@ -46,6 +46,7 @@ def init_db():
     import app.models.system_state  # noqa: F401
     import app.models.paper_trade  # noqa: F401
     import app.models.position_add_log  # noqa: F401
+    import app.models.golden_pit  # noqa: F401
     Base.metadata.create_all(bind=engine)
     # ── Schema 补丁：给已存在的表加新列（避免 SQLAlchemy create_all 漏 ALTER） ──
     _apply_schema_patches()

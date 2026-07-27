@@ -330,6 +330,7 @@ class SchedulerService:
             'auto_trade_late_morning',
             'auto_trade_afternoon', 'auto_trade_closing',
             'daily_review', 'weekly_reflect',
+            'golden_pit_morning', 'golden_pit_intraday', 'golden_pit_snapshot',
         }
         if task_id in TRADE_DAY_ONLY_TASKS:
             try:
@@ -565,6 +566,23 @@ class SchedulerService:
                             )
                 except Exception:
                     pass
+            return
+
+        # === 黄金坑监控任务 ===
+        if task.type == 'golden_pit':
+            try:
+                output = self._execute_golden_pit_task(task, execution_id)
+                execution.status = JobStatus.SUCCESS.value
+                execution.output = output
+                execution.return_code = 0
+            except Exception as e:
+                execution.status = JobStatus.FAILED.value
+                execution.error = f"{str(e)}\n{traceback.format_exc()}"
+                logger.error(f"[{execution_id}] Golden pit task failed: {e}")
+            finally:
+                execution.finished_at = datetime.now()
+                self._save_execution_log(execution)
+                self._send_notifications(task, execution)
             return
 
         try:
@@ -1273,6 +1291,33 @@ class SchedulerService:
         self._save_weekly_reflect(start_date, end_date, reply, stance, position_limit, reason_str)
 
         return reply
+
+    def _execute_golden_pit_task(self, task: TaskConfig, execution_id: str) -> str:
+        """执行黄金坑监控/预警/快照任务。"""
+        from app.services.golden_pit_service import GoldenPitService
+        service = GoldenPitService()
+
+        if task.id == "golden_pit_morning":
+            status = service.get_status()
+            report = service.format_morning_report(status)
+            logger.info(f"[{execution_id}] Golden pit morning report generated")
+            return report
+
+        elif task.id == "golden_pit_intraday":
+            alerts = service.check_threshold_crossings()
+            if alerts:
+                logger.info(f"[{execution_id}] Golden pit intraday: {len(alerts)} threshold crossing(s)")
+                return "\n\n".join(alerts)
+            logger.debug(f"[{execution_id}] Golden pit intraday: no threshold crossings")
+            return "无阈值穿越"
+
+        elif task.id == "golden_pit_snapshot":
+            snapshots = service.save_daily_snapshot()
+            count = len(snapshots) if snapshots else 0
+            logger.info(f"[{execution_id}] Golden pit snapshot saved: {count} records")
+            return f"已保存 {count} 条黄金坑快照"
+
+        return f"未知的 golden_pit 任务: {task.id}"
 
     def _on_job_executed(self, event):
         """任务执行成功回调"""

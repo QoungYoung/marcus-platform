@@ -61,6 +61,7 @@ def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
     url = f"{ARKVOL_BASE_URL}{path}"
     req = Request(url, headers={
         "X-API-Key": api_key,
+        "X-Arkvol-Skill-Version": "0.3.1",
         "Accept": "application/json",
     }, method="GET")
 

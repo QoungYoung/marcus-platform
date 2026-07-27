@@ -127,6 +127,11 @@ export const reflectApi = {
 export const goldenPitApi = {
   getScore: () => api.get('/golden-pit/score'),
   getFactors: () => api.get('/golden-pit/factors'),
+  getStatus: () => api.get('/golden-pit/status'),
+  getHistory: (index?: string, days?: number) =>
+    api.get('/golden-pit/history', { params: { index: index || 'all', days: days || 60 } }),
+  getSnapshots: (days?: number) =>
+    api.get('/golden-pit/snapshots', { params: { days: days || 30 } }),
 }
 
 // Health check

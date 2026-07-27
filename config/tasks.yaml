@@ -195,7 +195,7 @@ tasks:
   depends_on: []
 - id: daily_snapshot
   name: 每日净值快照
-  description: 15:01 收盘后抓取实时市价计算总资产并持久化到 daily_snapshot 表
+  description: 15:01 收盘后抓取实时市价计算总资产并持久化到 PostgreSQL paper_daily_snapshot 表
   enabled: true
   schedule:
     type: cron
@@ -295,3 +295,48 @@ tasks:
     - qqbot
   depends_on:
   - daily_review
+- id: golden_pit_morning
+  name: 黄金坑盘前报告
+  description: 8:50 盘前生成黄金坑状态报告并推送到QQ
+  enabled: true
+  type: golden_pit
+  schedule:
+    type: cron
+    expr: 50 8 * * 1-5
+    timezone: Asia/Shanghai
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: golden_pit_intraday
+  name: 黄金坑盘中阈值监控
+  description: 10:00/11:00/14:00 检查贪婪值是否跨越0.40或0.35阈值
+  enabled: true
+  type: golden_pit
+  schedule:
+    type: cron
+    expr: 0 10,11,14 * * 1-5
+    timezone: Asia/Shanghai
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: golden_pit_snapshot
+  name: 黄金坑日快照
+  description: 15:30 收盘后保存每日快照到数据库
+  enabled: true
+  type: golden_pit
+  schedule:
+    type: cron
+    expr: 30 15 * * 1-5
+    timezone: Asia/Shanghai
+  notifications:
+    on_success: false
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
