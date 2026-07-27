@@ -13,11 +13,21 @@ interface IndexStatus {
   fund_code: string;
   index_name: string;
   priority: number;
+  tier?: string;
   greed: number;
   close: number;
   percentile: number;
   status: 'normal' | 'warning' | 'golden_pit';
   decline_rate: number;
+  trend?: 'declining' | 'bottoming' | 'recovering';
+  turning_point_confirmed?: boolean;
+  days_rising?: number;
+  position_tier?: string | null;
+  position_tier_label?: string | null;
+  exit_signal?: string | null;
+  exit_reason?: string;
+  signal_quality?: string;
+  data_source?: string;
   days_to_pit: number | null;
   eta_date: string | null;
   entry_date: string | null;
@@ -26,9 +36,14 @@ interface IndexStatus {
 
 interface GoldenPitWindow {
   active: boolean;
+  phase?: 'idle' | 'waiting' | 'buying';
   start_date: string | null;
   leading_index: string | null;
+  leading_tier?: string | null;
   current_day: number;
+  pit_count?: number;
+  warning_count?: number;
+  turning_count?: number;
   midpoint_date: string | null;
   exit_date: string | null;
 }
@@ -97,53 +112,105 @@ function Skeleton() {
   );
 }
 
+function ResonanceBadge({ pitCount }: { pitCount: number }) {
+  let label: string;
+  let color: string;
+  if (pitCount >= 4) { label = `${pitCount}指共振 1.3x`; color = '#22c55e'; }
+  else if (pitCount >= 3) { label = `${pitCount}指共振 1.2x`; color = '#22c55e'; }
+  else if (pitCount >= 2) { label = `${pitCount}指共振 1.0x`; color = '#94a3b8'; }
+  else if (pitCount >= 1) { label = `${pitCount}指共振 0.6x`; color = '#f97316'; }
+  else { return null; }
+  return (
+    <span className="gp-resonance-badge" style={{ background: color, color: '#fff', padding: '1px 8px', borderRadius: 10, fontSize: '0.75rem', marginLeft: 8 }}>
+      {label}
+    </span>
+  );
+}
+
 function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
-  if (!w.active) {
+  const phase = w.phase || 'idle';
+  const pitCount = w.pit_count || 0;
+
+  if (phase === 'idle') {
     return (
       <div className="gp-timeline inactive">
-        <span className="gp-timeline-status">📍 当前无活跃黄金坑窗口</span>
+        <span className="gp-timeline-status">📍 当前无黄金坑信号</span>
       </div>
     );
   }
 
-  const pct = Math.min(100, Math.round((w.current_day / 15) * 100));
-  const midpointPos = Math.round((7 / 15) * 100);
-
-  return (
-    <div className="gp-timeline active">
-      <div className="gp-timeline-header">
-        <span className="gp-timeline-badge">🔴 黄金坑进行中</span>
-        <span className="gp-timeline-leading">领先指数: {w.leading_index}</span>
-      </div>
-      <div className="gp-timeline-dates">
-        <span>入口: {w.start_date}</span>
-        <span className="gp-timeline-current">第 {w.current_day}/15 天</span>
-        <span>转折点: {w.midpoint_date}</span>
-        <span>出口: {w.exit_date}</span>
-      </div>
-      <div className="gp-timeline-bar-wrap">
-        <div className="gp-timeline-bar">
-          <div className="gp-timeline-fill" style={{ width: `${pct}%` }} />
-          <div className="gp-timeline-midpoint" style={{ left: `${midpointPos}%` }} />
+  if (phase === 'waiting') {
+    return (
+      <div className="gp-timeline waiting">
+        <div className="gp-timeline-header">
+          <span className="gp-timeline-badge">🟠 等待拐点确认</span>
+          <span className="gp-timeline-leading">领先: {w.leading_index} ({w.leading_tier})</span>
+          <ResonanceBadge pitCount={pitCount} />
+        </div>
+        <div className="gp-timeline-dates">
+          <span>{pitCount}个指数在坑 / {w.warning_count || 0}个预警</span>
+          {w.start_date && <span>首个信号: {w.start_date}</span>}
+        </div>
+        <div className="gp-timeline-status-text">
+          拐点前轻仓累积 (单次≤3%/累计≤15%)，等待贪婪值连续回升
         </div>
       </div>
-      <div className="gp-timeline-labels">
-        <span>大额定投期</span>
-        <span className="gp-timeline-midlabel">转折点</span>
-        <span>小额定投</span>
+    );
+  }
+
+  return (
+    <div className="gp-timeline buying">
+      <div className="gp-timeline-header">
+        <span className="gp-timeline-badge">🔴 买入窗口</span>
+        <span className="gp-timeline-leading">
+          {w.leading_index} 拐点确认 (第{w.current_day}天)
+        </span>
+        <ResonanceBadge pitCount={pitCount} />
+      </div>
+      <div className="gp-timeline-dates">
+        <span>拐点: {w.start_date}</span>
+        <span>已确认: {w.turning_count || 0}个指数</span>
+        <span>回升: {w.current_day}天</span>
+      </div>
+      <div className="gp-timeline-status-text">
+        加仓节奏: 50% → 75% → 100%
       </div>
     </div>
   );
 }
 
+const TREND_ICONS: Record<string, string> = {
+  declining: '↓',
+  bottoming: '→',
+  recovering: '↑',
+};
+
+const TREND_COLORS: Record<string, string> = {
+  declining: '#ef4444',
+  bottoming: '#f97316',
+  recovering: '#22c55e',
+};
+
+const EXIT_LABELS: Record<string, string> = {
+  half_exit: '\u{1F7E1} 减持 50%',
+  full_exit: '\u{1F534} 清仓',
+  stop_profit: '\u{1F7E0} 止盈',
+};
+
 function IndexStatusCard({ idx }: { idx: IndexStatus }) {
   const color = STATUS_COLORS[idx.status];
   const greedPct = Math.round(idx.greed * 100);
+  const trendIcon = idx.trend ? TREND_ICONS[idx.trend] : '';
+  const trendColor = idx.trend ? TREND_COLORS[idx.trend] : '';
+  const exitLabel = idx.exit_signal ? EXIT_LABELS[idx.exit_signal] : '';
+  const sqLabel = idx.signal_quality === 'strong' ? '⭐' : idx.signal_quality === 'good' ? '✅' : '';
 
   return (
     <div className={`gp-index-card ${idx.status}`} style={{ borderColor: color }}>
       <div className="gp-index-card-top">
-        <span className="gp-index-name">{idx.index_name}</span>
+        <span className="gp-index-name">
+          {sqLabel} {idx.index_name}
+        </span>
         <span className="gp-index-badge" style={{ background: color }}>
           {STATUS_LABELS[idx.status]}
         </span>
@@ -151,6 +218,11 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
       <div className="gp-index-greed">
         <span className="gp-index-value" style={{ color }}>{idx.greed.toFixed(4)}</span>
         <span className="gp-index-percentile">P{idx.percentile.toFixed(1)}</span>
+        {trendIcon && (
+          <span className="gp-index-trend" style={{ color: trendColor, marginLeft: 8 }}>
+            {trendIcon}
+          </span>
+        )}
       </div>
       <div className="gp-index-bar-wrap">
         <div className="gp-index-bar">
@@ -174,6 +246,16 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           <span className="gp-index-close">¥{idx.close.toFixed(2)}</span>
         )}
       </div>
+      {idx.position_tier_label && idx.tier !== 'drop' && idx.tier !== 'watch' && (
+        <div className="gp-index-position" style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 4 }}>
+          {idx.position_tier_label}
+        </div>
+      )}
+      {exitLabel && (
+        <div className="gp-index-exit" style={{ fontSize: '0.75rem', color: '#f97316', marginTop: 2, fontWeight: 600 }}>
+          {exitLabel}: {idx.exit_reason}
+        </div>
+      )}
     </div>
   );
 }

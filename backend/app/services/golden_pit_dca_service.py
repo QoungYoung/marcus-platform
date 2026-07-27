@@ -202,6 +202,82 @@ def _place_buy_order(etf_code: str, amount: float, reason: str) -> Tuple[bool, s
         return False, str(e)
 
 
+def _place_sell_order(etf_code: str, shares: int, reason: str) -> Tuple[bool, str]:
+    """通过交易 API 下限价卖单（限价 × 0.98 以保证成交）。"""
+    try:
+        quote_url = f"{TRADE_API_BASE}/market/quote/{etf_code}"
+        quote_resp = requests.get(quote_url, timeout=10)
+        current_price = None
+        if quote_resp.status_code == 200:
+            quote_data = quote_resp.json()
+            current_price = quote_data.get("current") or quote_data.get("last_close")
+
+        if not current_price or current_price <= 0:
+            logger.warning("无法获取 %s 当前价格，跳过卖出", etf_code)
+            return False, "无法获取当前价格"
+
+        if shares < 100:
+            logger.warning("%s 卖出股数 %d 不足 1 手，跳过", etf_code, shares)
+            return False, f"股数不足: {shares} < 100"
+
+        limit_price = round(current_price * 0.98, 2)
+
+        trade_url = f"{TRADE_API_BASE}/trades"
+        trade_data = {
+            "symbol": etf_code,
+            "side": "sell",
+            "price": limit_price,
+            "volume": shares,
+            "reason": reason,
+        }
+        trade_resp = requests.post(trade_url, json=trade_data, timeout=30)
+
+        if trade_resp.status_code == 200:
+            result = trade_resp.json()
+            status = result.get("status", "")
+            if status in ("filled", "partial", "submitted"):
+                order_id = result.get("order_id", "")
+                logger.info("黄金坑 DCA 卖出 %s: %d股 @%.2f, order=%s", etf_code, shares, limit_price, order_id)
+                return True, order_id
+            else:
+                msg = result.get("message") or result.get("reason") or status
+                logger.warning("黄金坑 DCA 卖出 %s 失败: %s", etf_code, msg)
+                return False, msg or "unknown"
+        else:
+            return False, f"HTTP {trade_resp.status_code}"
+    except Exception as e:
+        logger.error("黄金坑 DCA 卖出 %s 异常: %s", etf_code, e)
+        return False, str(e)
+
+
+def _get_holding_shares(etf_code: str) -> int:
+    """查询当前持有的 ETF 股数。"""
+    try:
+        from app.database import SessionLocal
+        from app.models.paper_trade import PaperPosition
+        import re
+
+        db = SessionLocal()
+        try:
+            pos = (
+                db.query(PaperPosition)
+                .filter(PaperPosition.symbol == etf_code)
+                .first()
+            )
+            if not pos:
+                code = re.sub(r'^(SH|SZ|BJ)', '', etf_code)
+                pos = (
+                    db.query(PaperPosition)
+                    .filter(PaperPosition.symbol == code)
+                    .first()
+                )
+            return pos.volume if pos else 0
+        finally:
+            db.close()
+    except Exception:
+        return 0
+
+
 def _record_dca_log(
     fund_code: str,
     window_start: str,
@@ -238,6 +314,30 @@ def _record_dca_log(
         logger.warning("记录 DCA 日志失败: %s", e)
 
 
+def _resonance_multiplier(indices: List[Dict]) -> float:
+    """多指数共振系数: 入坑指数越多，信号越可靠，仓位越高。
+
+    golden_pit (P5 内) 指数计数:
+      4+ → 1.3x (强共振)
+      3  → 1.2x
+      2  → 1.0x (标准)
+      1  → 0.6x (弱共振，单兵作战)
+    """
+    pit_count = sum(
+        1 for i in indices
+        if i.get("tier") in ("core", "satellite", "defense")
+        and i["status"] == "golden_pit"
+    )
+    if pit_count >= 4:
+        return 1.3
+    elif pit_count >= 3:
+        return 1.2
+    elif pit_count >= 2:
+        return 1.0
+    else:
+        return 0.6
+
+
 def execute_golden_pit_dca() -> str:
     """
     黄金坑 DCA 定投主逻辑 v4 — 趋势驱动仓位管理。
@@ -257,7 +357,7 @@ def execute_golden_pit_dca() -> str:
     Returns:
         执行结果摘要字符串。
     """
-    from app.services.golden_pit_service import GoldenPitService, POSITION_TIERS
+    from app.services.golden_pit_service import GoldenPitService, POSITION_TIERS, CHINA_INDICES
 
     # 1. 获取黄金坑状态
     try:
@@ -311,6 +411,56 @@ def execute_golden_pit_dca() -> str:
     skipped_count = 0
     total_invested_today = 0.0
 
+    # ── 退出信号检查: 对已持仓 ETF 检查是否需要卖出 ──
+    for idx in indices:
+        exit_signal = idx.get("exit_signal")
+        if not exit_signal:
+            continue
+        fund_code = idx["fund_code"]
+        cfg = config_by_fund.get(fund_code)
+        if not cfg:
+            continue
+        etf_code = cfg["etf_code"]
+        holding = _get_holding_shares(etf_code)
+        if holding < 100:
+            continue
+
+        if exit_signal in ("full_exit", "stop_profit"):
+            sell_shares = holding
+        elif exit_signal == "half_exit":
+            sell_shares = int(holding / 2 / 100) * 100
+        else:
+            continue
+
+        if sell_shares < 100:
+            continue
+
+        sell_reason = (
+            f"[黄金坑DCA 退出] {idx['index_name']} {idx.get('exit_reason', '')} "
+            f"greed={idx['greed']:.4f} P{idx['percentile']:.0f}"
+        )
+        success, order_id = _place_sell_order(etf_code, sell_shares, sell_reason)
+
+        _record_dca_log(
+            fund_code=fund_code,
+            window_start=window_start,
+            buy_day=current_day,
+            etf_code=etf_code,
+            amount=0,
+            strategy=f"exit/{exit_signal}",
+            order_id=order_id if success else "",
+            status="filled" if success else "failed",
+        )
+
+        exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟠"}.get(exit_signal, "")
+        if success:
+            results.append(
+                f"{exit_icon} 退出 {idx['index_name']} {etf_code}: "
+                f"卖出 {sell_shares}股 [{exit_signal}]"
+            )
+        else:
+            results.append(f"❌ 退出 {idx['index_name']} {etf_code}: 卖出失败 - {order_id}")
+
     for idx in tradeable:
         fund_code = idx["fund_code"]
         cfg = config_by_fund.get(fund_code)
@@ -349,6 +499,11 @@ def execute_golden_pit_dca() -> str:
         days_rising = idx.get("days_rising", 0)
         trend = idx.get("trend", "declining")
 
+        # 获取分指数参数
+        index_params = CHINA_INDICES.get(fund_code, {})
+        pos_mult = index_params.get("position_multiplier", 1.0)
+        idx_pre_turn_cap = index_params.get("pre_turn_cap", PRE_TURN_CUMULATIVE_CAP)
+
         # 累计已投
         total_invested = sum(
             _get_day_amount(fund_code, window_start, d) for d in executed_days
@@ -360,40 +515,44 @@ def execute_golden_pit_dca() -> str:
             continue
 
         if not turning_confirmed:
-            # ── 拐点前: 轻仓累积, 单次≤3%, 累计≤15% ──
-            pre_turn_max = max_total * PRE_TURN_CUMULATIVE_CAP
+            # ── 拐点前: 轻仓累积, 单次≤3%, 累计由分指数参数决定 ──
+            pre_turn_max = max_total * idx_pre_turn_cap
             if total_invested >= pre_turn_max:
-                logger.info("%s: 拐点前累计已达上限 %.0f(15%%), 等待拐点确认",
-                            fund_code, pre_turn_max)
+                logger.info("%s: 拐点前累计已达上限 %.0f(%.0f%%), 等待拐点确认",
+                            fund_code, pre_turn_max, idx_pre_turn_cap * 100)
                 skipped_count += 1
                 continue
-            tier_multiplier = POSITION_TIERS.get("pre_turn", 0.03)
+            tier_multiplier = POSITION_TIERS.get("pre_turn", 0.03) * pos_mult
             daily_amount = min(max_total * tier_multiplier, pre_turn_max - total_invested)
             position_tier = "pre_turn"
         else:
-            # ── 拐点后: 快速加仓, 50%→75%→100% ──
+            # ── 拐点后: 快速加仓, 50%→75%→100%, 应用分指数倍率 ──
             if days_rising >= 4:
-                tier_multiplier = POSITION_TIERS.get("full", 1.00)
+                tier_multiplier = POSITION_TIERS.get("full", 1.00) * pos_mult
                 position_tier = "full"
             elif days_rising >= 3:
-                tier_multiplier = POSITION_TIERS.get("accelerate", 0.75)
+                tier_multiplier = POSITION_TIERS.get("accelerate", 0.75) * pos_mult
                 position_tier = "accelerate"
             else:
-                tier_multiplier = POSITION_TIERS.get("turning", 0.50)
+                tier_multiplier = POSITION_TIERS.get("turning", 0.50) * pos_mult
                 position_tier = "turning"
             daily_amount = max_total * tier_multiplier
             daily_amount = min(daily_amount, remaining)
+
+        # 共振系数
+        resonance = _resonance_multiplier(indices)
+        daily_amount = min(daily_amount * resonance, max_total - total_invested)
 
         etf_code = cfg["etf_code"]
         reason = (
             f"[黄金坑DCA v4] {idx['index_name']} "
             f"tier={idx.get('tier')} trend={trend} pos={position_tier}({tier_multiplier*100:.0f}%) "
-            f"day{current_day}/{PIT_WINDOW_DAYS} greed={idx['greed']:.4f}"
+            f"resonance={resonance}x day{current_day}/{PIT_WINDOW_DAYS} greed={idx['greed']:.4f}"
         )
 
         logger.info(
-            "黄金坑 DCA: %s day=%d trend=%s amount=%.0f tier=%s x%.0f%%",
-            etf_code, current_day, trend, daily_amount, position_tier, tier_multiplier * 100,
+            "黄金坑 DCA: %s day=%d trend=%s amount=%.0f tier=%s x%.0f%% resonance=%.1fx",
+            etf_code, current_day, trend, daily_amount, position_tier, tier_multiplier * 100, resonance,
         )
         success, order_id = _place_buy_order(etf_code, daily_amount, reason)
 
@@ -423,12 +582,15 @@ def execute_golden_pit_dca() -> str:
     skipped_drop = sum(1 for i in indices if i.get("tier") in ("drop", "watch") and i["status"] != "normal")
     turning_count = window.get("turning_count", 0)
     pre_turn_count = len(tradeable) - turning_count
+    pit_count = window.get("pit_count", 0)
     phase = window.get("phase", "idle")
     phase_label = {"buying": "买入窗口", "waiting": "等待拐点"}.get(phase, phase)
+    resonance = _resonance_multiplier(indices)
     summary_lines = [
         f"黄金坑 DCA v4 (趋势驱动) — {today_str}",
         f"阶段: {phase_label} | 领先: {window.get('leading_index', 'N/A')}",
         f"可交易: {len(tradeable)} | 拐点已确认: {turning_count} | 拐点前: {pre_turn_count}",
+        f"共振: {pit_count}指数入坑 → {resonance:.1f}x 仓位系数",
         f"执行: {executed_count}笔 ¥{total_invested_today:.0f} | 跳过: {skipped_count}笔",
         f"放弃/watch: {skipped_drop}个指数不入金",
         "",

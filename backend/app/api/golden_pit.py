@@ -222,11 +222,17 @@ async def get_dca_status():
                 .all()
             )
 
+            from app.services.golden_pit_dca_service import _resonance_multiplier
+
             result = {
                 "as_of": status_data.get("as_of", ""),
                 "window_active": window.get("active", False),
+                "window_phase": window.get("phase", "idle"),
                 "current_day": current_day,
                 "window_start": window_start,
+                "pit_count": window.get("pit_count", 0),
+                "turning_count": window.get("turning_count", 0),
+                "resonance_multiplier": _resonance_multiplier(indices),
                 "etfs": [],
             }
 

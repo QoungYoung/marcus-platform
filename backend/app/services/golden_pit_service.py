@@ -36,24 +36,43 @@ PI_SERVER_BASE = "http://81.70.44.68/api/v1"
 # position_weight: 在组合中的建议仓位占比
 CHINA_INDICES: Dict[str, Dict[str, Any]] = {
     # ── 核心 (必做) ──
+    # 科创50: Win% 100%, 20d Avg +15.9%, 高弹性快反弹 → 激进参数
     "588000": {"name": "科创50",   "priority": 4, "data_source": "arkvol",  "tier": "core",
-               "signal_quality": "strong", "exp_15d": 10.2, "exp_20d": 15.9, "position_weight": 0.40},
+               "signal_quality": "strong", "exp_15d": 10.2, "exp_20d": 15.9, "position_weight": 0.40,
+               "entry_pct": 15, "pit_pct": 8, "turning_days": 1,
+               "position_multiplier": 1.2, "pre_turn_cap": 0.20},
+    # 中证500: Win% 100%, 20d Avg +10.2%, 中高弹性 → 偏激进参数
     "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "core",
-               "signal_quality": "strong", "exp_15d": 7.9,  "exp_20d": 10.2, "position_weight": 0.35},
+               "signal_quality": "strong", "exp_15d": 7.9,  "exp_20d": 10.2, "position_weight": 0.35,
+               "entry_pct": 12, "pit_pct": 6, "turning_days": 1,
+               "position_multiplier": 1.1, "pre_turn_cap": 0.18},
     # ── 卫星 (选做) ──
+    # 中证1000: Win% 67%, 20d Avg +5.0%, 中等弹性 → 标准参数
     "159845": {"name": "中证1000", "priority": 3, "data_source": "arkvol",  "tier": "satellite",
-               "signal_quality": "good",   "exp_15d": 4.6,  "exp_20d": 5.0,  "position_weight": 0.15},
+               "signal_quality": "good",   "exp_15d": 4.6,  "exp_20d": 5.0,  "position_weight": 0.15,
+               "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
+               "position_multiplier": 1.0, "pre_turn_cap": 0.15},
+    # 创业板指: Win% 67%, 20d Avg +6.5%, 中等弹性 → 标准参数
     "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
-               "signal_quality": "good",   "exp_15d": 3.9,  "exp_20d": 6.5,  "position_weight": 0.10},
+               "signal_quality": "good",   "exp_15d": 3.9,  "exp_20d": 6.5,  "position_weight": 0.10,
+               "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
+               "position_multiplier": 1.0, "pre_turn_cap": 0.15},
     # ── 防御 (可选) ──
+    # 沪深300: Win% 67%, 20d Avg +6.9%, 低弹性慢恢复 → 偏保守参数 (P5→P8, v7 回测校准)
     "510300": {"name": "沪深300",  "priority": 6, "data_source": "arkvol",  "tier": "defense",
-               "signal_quality": "good",   "exp_15d": 4.8,  "exp_20d": 6.9,  "position_weight": 0.10},
+               "signal_quality": "good",   "exp_15d": 4.8,  "exp_20d": 6.9,  "position_weight": 0.10,
+               "entry_pct": 8, "pit_pct": 4, "turning_days": 2,
+               "position_multiplier": 0.8, "pre_turn_cap": 0.12},
     # ── 放弃 ──
     "510050": {"name": "上证50",   "priority": 7, "data_source": "arkvol",  "tier": "drop",
-               "signal_quality": "weak",   "exp_15d": 1.3,  "exp_20d": 1.2,  "position_weight": 0.0},
+               "signal_quality": "weak",   "exp_15d": 1.3,  "exp_20d": 1.2,  "position_weight": 0.0,
+               "entry_pct": 5, "pit_pct": 3, "turning_days": 2,
+               "position_multiplier": 0.0, "pre_turn_cap": 0.0},
     # ── 观察 (仅预警) ──
     "562660": {"name": "中证2000", "priority": 1, "data_source": "pi_server", "tier": "watch", "etf_code": "SH562660",
-               "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0},
+               "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0,
+               "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
+               "position_multiplier": 0.0, "pre_turn_cap": 0.0},
 }
 
 # 仓位分级: 拐点确认度 → 仓位比例 (单次定投占 max_total 的比例)
@@ -468,6 +487,15 @@ class GoldenPitService:
             elif pre_count > 0:
                 lines.append(f"💡 拐点前 ({pre_count}个指数): 轻仓累积, 等待贪婪值连续回升确认拐点")
 
+        # 退出信号
+        exit_indices = [i for i in indices if i.get("exit_signal")]
+        if exit_indices:
+            lines.append("")
+            lines.append("🚪 退出信号:")
+            for ei in exit_indices:
+                icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟠"}.get(ei["exit_signal"], "⚪")
+                lines.append(f"  {icon} {ei['index_name']}: {ei['exit_reason']}")
+
         return "\n".join(lines)
 
     def check_threshold_crossings(self, status: Optional[Dict[str, Any]] = None) -> List[str]:
@@ -580,10 +608,12 @@ class GoldenPitService:
             percentile = self._calculate_percentile(greed, sorted_series)
             decline_rate = self._calculate_decline_rate(sorted_series)
 
+            pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
+            entry_pct = cfg.get("entry_pct", PERCENTILE_WARNING)
             status = "normal"
-            if percentile <= PERCENTILE_GOLDEN_PIT:
+            if percentile <= pit_pct:
                 status = "golden_pit"
-            elif percentile <= PERCENTILE_WARNING:
+            elif percentile <= entry_pct:
                 status = "warning"
 
             absolute_triggered = greed < GREED_ABSOLUTE_PIT
@@ -628,10 +658,12 @@ class GoldenPitService:
             synthetic_greed = self._price_based_greed(current_price, closes_120)
             decline_rate = self._price_decline_rate(closes_120)
 
+            pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
+            entry_pct = cfg.get("entry_pct", PERCENTILE_WARNING)
             status = "normal"
-            if percentile <= PERCENTILE_GOLDEN_PIT:
+            if percentile <= pit_pct:
                 status = "golden_pit"
-            elif percentile <= PERCENTILE_WARNING:
+            elif percentile <= entry_pct:
                 status = "warning"
 
             absolute_triggered = synthetic_greed < GREED_ABSOLUTE_PIT
@@ -708,16 +740,21 @@ class GoldenPitService:
             # 仓位分级
             "position_tier": None,
             "position_tier_label": None,
+            # 退出信号
+            "exit_signal": None,
+            "exit_reason": "",
+            # ETA
             "days_to_pit": None,
             "eta_date": None,
             "entry_date": None,
             "days_in_pit": None,
         }
 
-        # ── Day 1 检测: 用 expanding-window 找 P10 首次穿越日 ──
+        # ── Day 1 检测: 用 expanding-window 找首次穿越日 ──
+        entry_pct = cfg.get("entry_pct", PERCENTILE_WARNING)
         if sorted_series and len(sorted_series) >= 60:
             p10_entry_date, days_in_warning, is_first_cross = self._detect_p10_entry(
-                sorted_series, today_str
+                sorted_series, today_str, entry_pct=entry_pct
             )
             index_info["p10_entry_date"] = p10_entry_date
             index_info["days_in_warning"] = days_in_warning
@@ -729,7 +766,8 @@ class GoldenPitService:
 
             # ── 趋势检测 + 仓位分级 ──
             if status in ("golden_pit", "warning"):
-                trend = self._detect_trend(sorted_series)
+                td = cfg.get("turning_days", TURNING_CONSECUTIVE_DAYS)
+                trend = self._detect_trend(sorted_series, turning_days=td)
                 index_info["trend"] = trend["trend"]
                 index_info["days_rising"] = trend["days_rising"]
                 index_info["turning_point_confirmed"] = trend["turning_confirmed"]
@@ -756,8 +794,18 @@ class GoldenPitService:
                 index_info["position_tier"] = None
                 index_info["position_tier_label"] = "跳过 (不入金)"
 
+            # ── 退出信号检测 ──
+            exit_info = self._detect_exit_signal(
+                sorted_series,
+                index_info["turning_point_confirmed"],
+                index_info["percentile"],
+            )
+            index_info["exit_signal"] = exit_info["signal"]
+            index_info["exit_reason"] = exit_info["reason"]
+
         # ── ETA 预测 (预警区 → 黄金坑) ──
-        if status == "warning" and decline_rate > 0.0001 and percentile > PERCENTILE_GOLDEN_PIT:
+        pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
+        if status == "warning" and decline_rate > 0.0001 and percentile > pit_pct:
             sorted_vals = sorted([float(s.get("greed", 0)) for s in sorted_series])
             p5_val = sorted_vals[max(0, int(len(sorted_vals) * 0.05))]
             gap = value - p5_val
@@ -783,12 +831,12 @@ class GoldenPitService:
         return index_info
 
     def _detect_p10_entry(
-        self, sorted_series: List[Dict], today_str: str
+        self, sorted_series: List[Dict], today_str: str, entry_pct: int = PERCENTILE_WARNING
     ) -> tuple:
-        """用 expanding-window 检测当前是否在 P10 信号中，以及 Day 1 是哪天。
+        """用 expanding-window 检测当前是否在预警信号中，以及 Day 1 是哪天。
 
-        只返回当前活跃的 P10 信号（即当前 percentile 仍在 P10 内）。
-        如果当前已反弹出 P10，返回 (None, 0, False)。
+        只返回当前活跃的信号（即当前 percentile 仍在 entry_pct 内）。
+        如果当前已反弹出预警区，返回 (None, 0, False)。
 
         Returns:
             (p10_entry_date, days_in_warning, is_first_cross)
@@ -799,18 +847,18 @@ class GoldenPitService:
         if len(greeds) < 60:
             return (None, 0, False)
 
-        # 先判断当前是否在 P10 内
+        # 先判断当前是否在预警内
         current_pct = self._calculate_percentile(greeds[-1], sorted_series[:-1])
-        if current_pct > PERCENTILE_WARNING:
+        if current_pct > entry_pct:
             return (None, 0, False)
 
-        # 往回找到最近一次从 P10 上方穿越到 P10 下方的日期
-        # 从今天往前找，找到第一个 > P10 的日期，其后一天就是 Day 1
+        # 往回找到最近一次从预警上方穿越到下方的日期
+        # 从今天往前找，找到第一个 > entry_pct 的日期，其后一天就是 Day 1
         entry_idx = None
         for i in range(len(greeds) - 1, 59, -1):
             pct_i = self._calculate_percentile(greeds[i], sorted_series[:i])
-            if pct_i > PERCENTILE_WARNING:
-                entry_idx = i + 1  # 穿越日 = 回到P10上方的下一天
+            if pct_i > entry_pct:
+                entry_idx = i + 1  # 穿越日 = 回到预警上方的下一天
                 break
 
         if entry_idx is None:
@@ -848,16 +896,19 @@ class GoldenPitService:
         return round(total_decline / window, 4)
 
     @staticmethod
-    def _detect_trend(sorted_series: List[Dict]) -> Dict[str, Any]:
+    def _detect_trend(sorted_series: List[Dict], turning_days: int = None) -> Dict[str, Any]:
         """检测贪婪值趋势方向，判断是否已过拐点。
 
-        拐点 = 贪婪值从连续下降转为连续回升。连续 2 天回升确认拐点。
+        拐点 = 贪婪值从连续下降转为连续回升。连续 N 天回升确认拐点。
 
         Returns:
             trend: "declining" | "bottoming" | "recovering"
             days_rising: 连续回升天数
             turning_confirmed: 是否已确认拐点
         """
+        if turning_days is None:
+            turning_days = TURNING_CONSECUTIVE_DAYS
+
         if len(sorted_series) < 5:
             return {"trend": "declining", "days_rising": 0,
                     "turning_confirmed": False, "last_change": 0.0}
@@ -873,15 +924,76 @@ class GoldenPitService:
 
         last_change = round(greeds[-1] - greeds[-2], 4) if len(greeds) >= 2 else 0.0
 
-        if days_rising >= TURNING_CONSECUTIVE_DAYS:
+        if days_rising >= turning_days:
             return {"trend": "recovering", "days_rising": days_rising,
                     "turning_confirmed": True, "last_change": last_change}
-        elif days_rising == 1:
-            return {"trend": "bottoming", "days_rising": 1,
+        elif days_rising == turning_days - 1 and turning_days >= 2:
+            return {"trend": "bottoming", "days_rising": days_rising,
                     "turning_confirmed": False, "last_change": last_change}
+        elif days_rising >= 1 and turning_days == 1:
+            return {"trend": "recovering", "days_rising": days_rising,
+                    "turning_confirmed": True, "last_change": last_change}
         else:
             return {"trend": "declining", "days_rising": 0,
                     "turning_confirmed": False, "last_change": last_change}
+
+    @staticmethod
+    def _detect_exit_signal(
+        sorted_series: List[Dict],
+        turning_confirmed: bool,
+        percentile: float,
+    ) -> Dict[str, Any]:
+        """检测退出信号。
+
+        只在拐点确认后才发出退出信号（拐点前不退出）。
+        退出规则:
+          - P30 → half_exit (卖一半)
+          - P50 → full_exit (全清)
+          - 拐点后连续2天回落且曾回到P30 → stop_profit (止盈保护)
+
+        Returns:
+            {signal: null|"half_exit"|"full_exit"|"stop_profit", reason: str}
+        """
+        result = {"signal": None, "reason": ""}
+
+        if not turning_confirmed:
+            return result
+
+        if len(sorted_series) < 5:
+            return result
+
+        greeds = [float(s.get("greed", 0)) for s in sorted_series]
+
+        # P50 全清退出
+        if percentile >= 50:
+            result["signal"] = "full_exit"
+            result["reason"] = f"贪婪值回升至 P{percentile:.0f}，建议清仓"
+            return result
+
+        # P30 卖一半
+        if percentile >= 30:
+            result["signal"] = "half_exit"
+            result["reason"] = f"贪婪值回升至 P{percentile:.0f}，建议减持 50%"
+            return result
+
+        # 拐点后连续回落 → 止盈
+        days_declining = 0
+        for i in range(len(greeds) - 1, 0, -1):
+            if greeds[i] < greeds[i - 1]:
+                days_declining += 1
+            else:
+                break
+        if days_declining >= 2:
+            # 检查是否曾回升到 P30 以上（有利润可保护）
+            max_greed = max(greeds[-10:]) if len(greeds) >= 10 else max(greeds)
+            all_vals = sorted(greeds)
+            max_pct = sum(1 for g in all_vals if g <= max_greed) / len(all_vals) * 100
+            if max_pct >= 30:
+                result["signal"] = "stop_profit"
+                result["reason"] = f"拐点后连续{days_declining}天回落（曾回升至P{max_pct:.0f}），建议止盈"
+                return result
+
+        return result
 
     def _detect_golden_pit_window(self, indices: List[Dict[str, Any]]) -> Dict[str, Any]:
         """检测黄金坑窗口。
