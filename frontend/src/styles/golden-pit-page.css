@@ -47,9 +47,9 @@
     radial-gradient(ellipse 60% 50% at 20% 70%, rgba(17, 137, 249, 0.06), transparent 50%),
     radial-gradient(ellipse 50% 40% at 80% 50%, rgba(167, 216, 234, 0.18), transparent 50%),
     linear-gradient(180deg, #edf3f8 0%, #dce6f0 30%, #c8d8e8 100%);
-  max-width: none;
-  margin: 0;
-  padding: 8px 10px 40px;
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 24px 10px 40px;
   font-family: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   font-size: 12px;
   color: var(--gp-text-secondary);
@@ -285,7 +285,7 @@
    ═══════════════════════════════════════════════════════ */
 .gp-index-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 10px;
 }
 
@@ -646,7 +646,7 @@
 
 .gp-skeleton-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 10px;
 }
 
@@ -677,7 +677,6 @@
    RESPONSIVE
    ═══════════════════════════════════════════════════════ */
 @media (max-width: 860px) {
-  .gp-index-grid { grid-template-columns: repeat(2, 1fr); }
   .gp-bottom-row { grid-template-columns: 1fr; }
   .gp-timeline-dates { flex-wrap: wrap; gap: 4px 12px; }
   .gp-timeline-header { flex-direction: column; align-items: flex-start; }
@@ -685,7 +684,6 @@
 
 @media (max-width: 540px) {
   .golden-pit-page { padding: 6px 8px 32px; }
-  .gp-index-grid { grid-template-columns: 1fr; }
   .gp-header { padding: 10px 14px; }
   .gp-timeline { padding: 12px 14px; }
   .gp-index-card { padding: 12px 14px; }
