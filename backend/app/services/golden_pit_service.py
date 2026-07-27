@@ -159,6 +159,18 @@ class GoldenPitService:
         self._cache[page_id] = (data, now)
         return data
 
+    def _cached_ai_summary(self, ttl: int = 7200) -> Dict[str, Any]:
+        """带 TTL 缓存的 ai-summary 调用。"""
+        cache_key = "ai-summary"
+        now = time.time()
+        if cache_key in self._cache:
+            data, ts = self._cache[cache_key]
+            if now - ts < ttl:
+                return data
+        data = self._arkvol.fetch_ai_summary()
+        self._cache[cache_key] = (data, now)
+        return data
+
     @staticmethod
     def _fetch_pi_server_kline(etf_code: str, limit: int = 250) -> List[Dict]:
         """通过 Tushare 获取 ETF 日K线，统一为 {date, close} 格式。"""
@@ -266,7 +278,7 @@ class GoldenPitService:
     def _get_status_from_api(self) -> Dict[str, Any]:
         """从 ArkVol API 获取完整状态。使用 ai-summary (POST, 轻量) 替代 alla (GET, 重型)。"""
         with ThreadPoolExecutor(max_workers=3) as executor:
-            f_ai = executor.submit(self._arkvol.fetch_ai_summary)
+            f_ai = executor.submit(self._cached_ai_summary)
             f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
             f_tech = executor.submit(self._cached_fetch, "alla-tech")
             ai_data = f_ai.result()
@@ -353,7 +365,7 @@ class GoldenPitService:
 
     def get_history(self, index: str = "all", days: int = 60) -> Dict[str, Any]:
         """获取历史贪婪值趋势数据，用于前端折线图。优先使用 ai-summary。"""
-        ai_data = self._arkvol.fetch_ai_summary()
+        ai_data = self._cached_ai_summary()
         as_of = ai_data.get("asof", datetime.now().strftime("%Y-%m-%d"))
         snapshot_list = ai_data.get("snapshot", [])
 
