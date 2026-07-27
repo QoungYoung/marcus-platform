@@ -12,18 +12,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-import requests
 
 from app.services.arkvol_service import ArkvolService, ArkvolServiceError
 
 logger = logging.getLogger(__name__)
 
-PI_SERVER_BASE = "http://localhost:8000/api/v1"
 
 # ── 跟踪的 A 股宽基指数 ──
 # data_source 说明:
 #   "arkvol"   → 从 ArkVol alla 系列获取 greed + close（6 大宽基）
-#   "pi_server"→ 从 Pi Server /etf/kline/{etf_code} 获取 K 线，用价格分位作为 greed 代理
+#   "pi_server"→ 从 Tushare fund_daily 获取 K 线，用价格分位作为 greed 代理
 # signal_quality 和 expected_returns 来自 backtest_v6 (P10 expanding-window percentile)
 # 注意: pi_server 来源的指数无回测数据，signal_quality 为 inferred
 # ── 指数分级体系 (基于 v6 回测) ──
@@ -148,33 +146,57 @@ class GoldenPitService:
     # Data fetching helpers
     # ═══════════════════════════════════════════════════════════════
 
-    def _fetch_pi_server_kline(self, etf_code: str, limit: int = 250) -> List[Dict]:
-        """从 Pi Server 获取 ETF 日K线数据，统一为 {date, close} 格式。"""
-        url = f"{PI_SERVER_BASE}/etf/kline/{etf_code}"
+    @staticmethod
+    def _fetch_pi_server_kline(etf_code: str, limit: int = 250) -> List[Dict]:
+        """通过 Tushare 获取 ETF 日K线，统一为 {date, close} 格式。"""
+        from datetime import datetime as dt, timedelta
+        from app.core.trading._api_config import get_tushare_pro
+
         try:
-            resp = requests.get(url, params={"period": "day", "count": -limit}, timeout=15)
-            if resp.status_code == 200:
-                data = resp.json()
-                # Pi server 返回 klines 字段: [{timestamp, open, high, low, close, volume, amount, change_pct}]
-                bars = data.get("klines") or data.get("bars") or data.get("data") or []
-                # 归一化字段名: timestamp(YYYYMMDD) → date(YYYY-MM-DD)
-                normalized = []
-                for b in bars:
-                    ts = b.get("timestamp") or b.get("date") or b.get("trade_date", "")
-                    if len(ts) == 8:
-                        ts = f"{ts[:4]}-{ts[4:6]}-{ts[6:]}"
-                    normalized.append({
-                        "date": ts,
-                        "close": float(b.get("close", 0)),
-                        "open": float(b.get("open", 0)) if "open" in b else 0.0,
-                        "high": float(b.get("high", 0)) if "high" in b else 0.0,
-                        "low": float(b.get("low", 0)) if "low" in b else 0.0,
-                    })
-                return sorted(normalized, key=lambda x: x.get("date", ""))
-            logger.warning("Pi Server ETF kline 返回 %s: %s", resp.status_code, resp.text[:200])
-            return []
+            pro = get_tushare_pro()
+            if pro is None:
+                logger.warning("Tushare pro 不可用，无法获取 %s K线", etf_code)
+                return []
+
+            # 符号标准化：SH562660 → 562660.SH
+            s = etf_code.strip().upper()
+            if s.startswith("SH"):
+                ts_code = f"{s[2:]}.SH"
+            elif s.startswith("SZ"):
+                ts_code = f"{s[2:]}.SZ"
+            elif s.startswith("159") or s.startswith("16"):
+                ts_code = f"{s}.SZ"
+            else:
+                ts_code = f"{s}.SH"
+
+            end_date = dt.now().strftime("%Y%m%d")
+            start_date = (dt.now() - timedelta(days=limit * 2)).strftime("%Y%m%d")
+
+            df = pro.fund_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+
+            if df is None or df.empty:
+                ts_code_sz = f"{s[2:]}.SZ" if s.startswith("SH") else f"{s[2:]}.SH"
+                if ts_code_sz != ts_code:
+                    df = pro.fund_daily(ts_code=ts_code_sz, start_date=start_date, end_date=end_date)
+
+            if df is None or df.empty:
+                return []
+
+            df = df.sort_values("trade_date", ascending=True)
+            normalized = []
+            for _, row in df.iterrows():
+                ts = str(row["trade_date"])
+                normalized.append({
+                    "date": f"{ts[:4]}-{ts[4:6]}-{ts[6:]}",
+                    "close": float(row["close"]),
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                })
+
+            return normalized[-limit:] if len(normalized) > limit else normalized
         except Exception as e:
-            logger.warning("获取 Pi Server ETF kline 失败 (%s): %s", etf_code, e)
+            logger.warning("Tushare ETF kline 获取失败 (%s): %s", etf_code, e)
             return []
 
     @staticmethod
