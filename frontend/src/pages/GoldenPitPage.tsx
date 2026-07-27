@@ -26,6 +26,8 @@ interface IndexStatus {
   days_rising?: number;
   position_tier?: string | null;
   position_tier_label?: string | null;
+  position_weight?: number;
+  position_multiplier?: number;
   exit_signal?: string | null;
   exit_reason?: string;
   signal_quality?: string;
@@ -220,12 +222,18 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
   const trendColor = idx.trend ? TREND_COLORS[idx.trend] : '';
   const exitLabel = idx.exit_signal ? EXIT_LABELS[idx.exit_signal] : '';
   const sqLabel = idx.signal_quality === 'strong' ? '⭐' : idx.signal_quality === 'good' ? '✅' : '';
+  const weightPct = (idx.position_weight != null && idx.position_weight > 0)
+    ? `${(idx.position_weight * 100).toFixed(0)}%`
+    : '';
 
   return (
     <div className={`gp-index-card ${idx.status}`} style={{ borderColor: color }}>
       <div className="gp-index-card-top">
         <span className="gp-index-name">
           {sqLabel} {idx.index_name}
+          {weightPct && (
+            <span className="gp-index-weight" title="仓位上限"> 上限{weightPct}</span>
+          )}
         </span>
         <span className="gp-index-badge" style={{ background: color }}>
           {STATUS_LABELS[idx.status]}
