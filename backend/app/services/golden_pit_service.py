@@ -254,7 +254,17 @@ class GoldenPitService:
     # ═══════════════════════════════════════════════════════════════
 
     def get_status(self) -> Dict[str, Any]:
-        """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。"""
+        """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。
+
+        优先从 DB 快照读取（每日 15:30 定时落库），无数据时回退 ArkVol API。
+        """
+        db_result = self._get_status_from_db()
+        if db_result is not None:
+            return db_result
+        return self._get_status_from_api()
+
+    def _get_status_from_api(self) -> Dict[str, Any]:
+        """从 ArkVol API 获取完整状态。"""
         # 并行获取 3 个 ArkVol API（alla, global-capital-flow, alla-tech），全部带缓存
         with ThreadPoolExecutor(max_workers=3) as executor:
             f_alla = executor.submit(self._cached_fetch, "alla")
@@ -342,6 +352,99 @@ class GoldenPitService:
             "indices": result_indices,
         }
 
+    def _reconstruct_series_from_db(self, db, fund_code: str, days: int = 120) -> List[Dict]:
+        """从 DB 快照重建 sorted_series，格式兼容 _build_index_info。"""
+        from app.models.golden_pit import GoldenPitSnapshot
+
+        rows = (
+            db.query(GoldenPitSnapshot)
+            .filter(GoldenPitSnapshot.fund_code == fund_code)
+            .order_by(GoldenPitSnapshot.date.desc())
+            .limit(days)
+            .all()
+        )
+        rows = list(reversed(rows))
+        return [
+            {"date": r.date, "greed": r.greed_value, "close": r.close_price or 0}
+            for r in rows
+        ]
+
+    def _get_status_from_db(self) -> Optional[Dict[str, Any]]:
+        """尝试从 DB 快照重建完整状态。今天数据不存在或历史不足 60 天时返回 None。"""
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        try:
+            from app.database import SessionLocal
+            from app.models.golden_pit import GoldenPitSnapshot
+
+            db = SessionLocal()
+            try:
+                today_snaps = (
+                    db.query(GoldenPitSnapshot)
+                    .filter(GoldenPitSnapshot.date == today)
+                    .all()
+                )
+                if not today_snaps:
+                    return None
+
+                snap_map = {s.fund_code: s for s in today_snaps}
+
+                indices = []
+                for code, cfg in CHINA_INDICES.items():
+                    snap = snap_map.get(code)
+                    if not snap:
+                        continue
+
+                    sorted_series = self._reconstruct_series_from_db(db, code)
+                    if len(sorted_series) < 60:
+                        logger.info("DB 快照历史不足 (%s: %d天)，回退 API", code, len(sorted_series))
+                        return None
+
+                    index_info = self._build_index_info(
+                        code=code, cfg=cfg,
+                        value=snap.greed_value,
+                        close=snap.close_price or 0,
+                        percentile=snap.percentile or 50.0,
+                        decline_rate=snap.decline_rate_5d or 0.0,
+                        status=snap.status,
+                        absolute_triggered=(snap.greed_value or 0) < GREED_ABSOLUTE_PIT,
+                        data_source=cfg.get("data_source", "arkvol"),
+                        sorted_series=sorted_series,
+                        as_of=today,
+                    )
+                    indices.append(index_info)
+            finally:
+                db.close()
+
+            if not indices:
+                return None
+
+            indices.sort(key=lambda x: x["priority"])
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
+                f_tech = executor.submit(self._cached_fetch, "alla-tech")
+                gcf_data = f_gcf.result()
+                tech_data = f_tech.result()
+
+            confirmation = self._compute_triple_confirmation(indices, gcf_data, tech_data)
+            prediction = self._predict_next_entry(indices)
+            window = self._detect_golden_pit_window(indices)
+            summary = self._build_v2_summary(indices, window, confirmation, prediction)
+
+            return {
+                "as_of": today,
+                "golden_pit_window": window,
+                "indices": indices,
+                "triple_confirmation": confirmation,
+                "prediction": prediction,
+                "summary": summary,
+                "_source": "db",
+            }
+        except Exception as e:
+            logger.warning("从 DB 重建黄金坑状态失败，回退 API: %s", e)
+            return None
+
     def get_snapshots(self, days: int = 30) -> List[Dict[str, Any]]:
         """从数据库读取历史快照。"""
         try:
@@ -382,13 +485,18 @@ class GoldenPitService:
             from app.database import SessionLocal
             from app.models.golden_pit import GoldenPitSnapshot
 
-            status = self.get_status()
+            status = self._get_status_from_api()
             today = status["as_of"] or datetime.now().strftime("%Y-%m-%d")
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             db = SessionLocal()
             snapshots = []
             try:
+                # 删除当天已有记录，避免重复（幂等）
+                db.query(GoldenPitSnapshot).filter(
+                    GoldenPitSnapshot.date == today
+                ).delete()
+
                 for idx in status["indices"]:
                     snap = GoldenPitSnapshot(
                         date=today,
