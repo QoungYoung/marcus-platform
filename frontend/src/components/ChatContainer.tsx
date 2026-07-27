@@ -1292,7 +1292,12 @@ const getGoldenPitDcaStatusTool = {
     lines.push(`## 📊 黄金坑 DCA 定投状态 — ${d.as_of}`);
     lines.push('');
     if (!d.window_active) {
-      lines.push('📍 当前无活跃黄金坑窗口，DCA 定投暂停。');
+      const ph = d.window_phase || 'idle';
+      if (ph === 'waiting') {
+        lines.push('📍 黄金坑已出现，等待贪婪值回升确认拐点 — DCA 轻仓累积中');
+      } else {
+        lines.push('📍 当前无黄金坑信号，DCA 定投暂停');
+      }
     } else {
       lines.push(`### 🔴 窗口活跃: 第 ${d.current_day}/15 天 (起始: ${d.window_start})`);
       lines.push('');

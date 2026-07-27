@@ -501,8 +501,8 @@ class GoldenPitService:
             pit_count = window.get("pit_count", 0)
             warn_count = window.get("warning_count", 0)
             lines.append(
-                f"📍 黄金坑信号活跃 ({pit_count}在坑/{warn_count}预警)  "
-                f"领先:{window['leading_index']}  |  等待拐点确认"
+                f"📍 {pit_count}个指数已入黄金坑 ({warn_count}个预警)  "
+                f"领先:{window['leading_index']}  |  等待贪婪值回升确认拐点"
             )
         else:
             lines.append("📍 当前无黄金坑信号")
@@ -1194,8 +1194,8 @@ class GoldenPitService:
             if strong:
                 parts.append(f"强信号: {', '.join(strong)}（回测Win%≥80%），优先加仓。")
         elif phase == "waiting":
-            parts.append(f"黄金坑信号活跃（{window['pit_count']}在坑/{window['warning_count']}预警），等待拐点确认。")
-            parts.append("拐点前轻仓累积(单次≤3%/累计≤15%)，关注贪婪值何时开始连续回升。")
+            parts.append(f"黄金坑信号：{window['pit_count']}个指数已入坑/{window['warning_count']}个预警，但贪婪值仍在下跌中。")
+            parts.append("黄金坑≠买入窗口。需等待贪婪值连续回升（拐点确认）后，才会开启买入窗口。当前仅轻仓累积(单次≤3%/累计≤15%)。")
         else:
             parts.append("当前无黄金坑信号，各宽基指数情绪正常。")
 

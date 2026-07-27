@@ -143,16 +143,23 @@ function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
     return (
       <div className="gp-timeline waiting">
         <div className="gp-timeline-header">
-          <span className="gp-timeline-badge">🟠 等待拐点确认</span>
+          <span className="gp-timeline-badge">🟠 已入坑 · 等待回升确认</span>
           <span className="gp-timeline-leading">领先: {w.leading_index} ({w.leading_tier})</span>
           <ResonanceBadge pitCount={pitCount} />
         </div>
         <div className="gp-timeline-dates">
-          <span>{pitCount}个指数在坑 / {w.warning_count || 0}个预警</span>
-          {w.start_date && <span>首个信号: {w.start_date}</span>}
+          <span>{pitCount}个指数已在黄金坑 / {w.warning_count || 0}个预警</span>
+          {w.start_date && <span>首个入坑: {w.start_date}</span>}
         </div>
         <div className="gp-timeline-status-text">
-          拐点前轻仓累积 (单次≤3%/累计≤15%)，等待贪婪值连续回升
+          贪婪值仍在下跌中，需等待连续回升确认拐点后开启买入窗口
+        </div>
+        <div className="gp-timeline-stages">
+          <span className="gp-stage done">① 入坑</span>
+          <span className="gp-stage-arrow">→</span>
+          <span className="gp-stage active">② 拐点确认</span>
+          <span className="gp-stage-arrow">→</span>
+          <span className="gp-stage pending">③ 买入窗口</span>
         </div>
       </div>
     );
@@ -174,6 +181,13 @@ function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
       </div>
       <div className="gp-timeline-status-text">
         加仓节奏: 50% → 75% → 100%
+      </div>
+      <div className="gp-timeline-stages">
+        <span className="gp-stage done">① 入坑</span>
+        <span className="gp-stage-arrow">→</span>
+        <span className="gp-stage done">② 拐点确认</span>
+        <span className="gp-stage-arrow">→</span>
+        <span className="gp-stage active">③ 买入窗口</span>
       </div>
     </div>
   );

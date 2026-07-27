@@ -225,6 +225,38 @@
   line-height: 1.6;
 }
 
+/* ── Stage indicator (入坑 → 拐点 → 买入) ── */
+.gp-timeline-stages {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.gp-stage {
+  padding: 3px 10px;
+  border-radius: 12px;
+  letter-spacing: 0.02em;
+}
+.gp-stage.done {
+  color: #27AE60;
+  background: rgba(39, 174, 96, 0.10);
+}
+.gp-stage.active {
+  color: #d4a407;
+  background: rgba(212, 164, 7, 0.12);
+  box-shadow: 0 0 8px rgba(212, 164, 7, 0.15);
+}
+.gp-stage.pending {
+  color: #999;
+  background: rgba(0, 0, 0, 0.04);
+}
+.gp-stage-arrow {
+  color: #ccc;
+  font-size: 11px;
+}
+
 /* ── Resonance Badge ── */
 .gp-resonance-badge {
   display: inline-flex;
