@@ -148,8 +148,8 @@ class GoldenPitService:
     # Data fetching helpers
     # ═══════════════════════════════════════════════════════════════
 
-    def _cached_fetch(self, page_id: str, ttl: int = 300) -> Dict[str, Any]:
-        """带 TTL 缓存的 ArkVol API 调用，避免每次请求都打外部 API。"""
+    def _cached_fetch(self, page_id: str, ttl: int = 7200) -> Dict[str, Any]:
+        """带 TTL 缓存的 ArkVol API 调用。数据每日更新一次，默认缓存 2 小时。"""
         now = time.time()
         if page_id in self._cache:
             data, ts = self._cache[page_id]
