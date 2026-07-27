@@ -39,7 +39,7 @@
 /* ── Page Base ── */
 .golden-pit-page {
   position: relative;
-  height: 100%;
+  flex: 1;
   overflow-y: auto;
   overflow-x: clip;
   background:
@@ -47,12 +47,15 @@
     radial-gradient(ellipse 60% 50% at 20% 70%, rgba(17, 137, 249, 0.06), transparent 50%),
     radial-gradient(ellipse 50% 40% at 80% 50%, rgba(167, 216, 234, 0.18), transparent 50%),
     linear-gradient(180deg, #edf3f8 0%, #dce6f0 30%, #c8d8e8 100%);
-  max-width: 1060px;
-  margin: 0 auto;
-  padding: 24px 10px 40px;
   font-family: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   font-size: 12px;
   color: var(--gp-text-secondary);
+}
+
+.gp-content {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 24px 10px 40px;
 }
 
 .golden-pit-page::-webkit-scrollbar { width: 4px; }

@@ -420,11 +420,13 @@ export default function GoldenPitPage() {
   if (loading && !status) {
     return (
       <div className="golden-pit-page">
-        <div className="gp-header">
-          <h1 className="gp-title">黄金坑监测</h1>
-          <p className="gp-subtitle">宽基指数情绪三重确认底部检测</p>
+        <div className="gp-content">
+          <div className="gp-header">
+            <h1 className="gp-title">黄金坑监测</h1>
+            <p className="gp-subtitle">宽基指数情绪三重确认底部检测</p>
+          </div>
+          <Skeleton />
         </div>
-        <Skeleton />
       </div>
     );
   }
@@ -432,10 +434,11 @@ export default function GoldenPitPage() {
   if (error && !status) {
     return (
       <div className="golden-pit-page">
-        <div className="gp-header">
-          <h1 className="gp-title">黄金坑监测</h1>
-        </div>
-        <div className="gp-error">
+        <div className="gp-content">
+          <div className="gp-header">
+            <h1 className="gp-title">黄金坑监测</h1>
+          </div>
+          <div className="gp-error">
           <AlertTriangle size={48} />
           <p>数据获取失败</p>
           <p className="gp-error-detail">{error}</p>
@@ -444,6 +447,7 @@ export default function GoldenPitPage() {
             <RefreshCw size={16} /> 重试
           </button>
         </div>
+        </div>
       </div>
     );
   }
@@ -451,14 +455,16 @@ export default function GoldenPitPage() {
   if (!status) {
     return (
       <div className="golden-pit-page">
-        <div className="gp-header">
-          <h1 className="gp-title">黄金坑监测</h1>
-        </div>
-        <div className="gp-error">
-          <p>暂无数据</p>
-          <button className="gp-retry-btn" onClick={fetchData}>
-            <RefreshCw size={16} /> 刷新
-          </button>
+        <div className="gp-content">
+          <div className="gp-header">
+            <h1 className="gp-title">黄金坑监测</h1>
+          </div>
+          <div className="gp-error">
+            <p>暂无数据</p>
+            <button className="gp-retry-btn" onClick={fetchData}>
+              <RefreshCw size={16} /> 刷新
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -470,7 +476,8 @@ export default function GoldenPitPage() {
   return (
     <div className="golden-pit-page">
       <canvas ref={canvasRef} id="gp-bg-canvas" />
-      <div className="gp-header">
+      <div className="gp-content">
+        <div className="gp-header">
         <div>
           <h1 className="gp-title">黄金坑监测</h1>
           <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
@@ -509,6 +516,7 @@ export default function GoldenPitPage() {
           <p>{summary}</p>
         </div>
       )}
+      </div>
     </div>
   );
 }
