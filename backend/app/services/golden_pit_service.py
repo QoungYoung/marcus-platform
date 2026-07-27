@@ -68,7 +68,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "entry_pct": 5, "pit_pct": 3, "turning_days": 2,
                "position_multiplier": 0.0, "pre_turn_cap": 0.0},
     # ── 观察 (仅预警) ──
-    "562660": {"name": "中证2000", "priority": 1, "data_source": "pi_server", "tier": "watch", "etf_code": "SH562660",
+    "562660": {"name": "中证2000", "priority": 1, "data_source": "arkvol", "tier": "watch",
                "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0,
                "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
                "position_multiplier": 0.0, "pre_turn_cap": 0.0},
