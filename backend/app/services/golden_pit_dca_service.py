@@ -108,7 +108,7 @@ def _get_executed_days(fund_code: str, window_start: str) -> set:
                 .filter(
                     GoldenPitDCALog.fund_code == fund_code,
                     GoldenPitDCALog.window_start == window_start,
-                    GoldenPitDCALog.status == "filled",
+                    GoldenPitDCALog.status.in_(("filled", "notified")),
                 )
                 .all()
             )
@@ -416,8 +416,8 @@ def execute_golden_pit_dca() -> str:
             f"[黄金坑DCA 退出] {idx['index_name']} {idx.get('exit_reason', '')} "
             f"greed={idx['greed']:.4f} P{idx['percentile']:.0f}"
         )
-        success, order_id = _place_sell_order(etf_code, sell_shares, sell_reason)
 
+        # 仅通知，不实际下单
         _record_dca_log(
             fund_code=fund_code,
             window_start=window_start,
@@ -425,18 +425,15 @@ def execute_golden_pit_dca() -> str:
             etf_code=etf_code,
             amount=0,
             strategy=f"exit/{exit_signal}",
-            order_id=order_id if success else "",
-            status="filled" if success else "failed",
+            order_id="",
+            status="notified",
         )
 
         exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟠"}.get(exit_signal, "")
-        if success:
-            results.append(
-                f"{exit_icon} 退出 {idx['index_name']} {etf_code}: "
-                f"卖出 {sell_shares}股 [{exit_signal}]"
-            )
-        else:
-            results.append(f"❌ 退出 {idx['index_name']} {etf_code}: 卖出失败 - {order_id}")
+        results.append(
+            f"{exit_icon} 退出信号 {idx['index_name']} {etf_code}: "
+            f"建议卖出 {sell_shares}股 [{exit_signal}]"
+        )
 
     for idx in tradeable:
         fund_code = idx["fund_code"]
@@ -531,9 +528,8 @@ def execute_golden_pit_dca() -> str:
             "黄金坑 DCA: %s day=%d trend=%s amount=%.0f tier=%s x%.0f%% resonance=%.1fx",
             etf_code, current_day, trend, daily_amount, position_tier, tier_multiplier * 100, resonance,
         )
-        success, order_id = _place_buy_order(etf_code, daily_amount, reason)
 
-        # 记录日志
+        # 仅通知，不实际下单。记录日志用于累计仓位追踪
         _record_dca_log(
             fund_code=fund_code,
             window_start=window_start,
@@ -541,19 +537,16 @@ def execute_golden_pit_dca() -> str:
             etf_code=etf_code,
             amount=daily_amount,
             strategy=f"{idx.get('tier')}/{position_tier}/{trend}",
-            order_id=order_id if success else "",
-            status="filled" if success else "failed",
+            order_id="",
+            status="notified",
         )
 
-        if success:
-            executed_count += 1
-            total_invested_today += daily_amount
-            results.append(
-                f"✅ {idx['index_name']} {etf_code}: "
-                f"¥{daily_amount:.0f} [{idx.get('tier')}/{position_tier}] (第{current_day}天)"
-            )
-        else:
-            results.append(f"❌ {idx['index_name']} {etf_code}: 买入失败 - {order_id}")
+        executed_count += 1
+        total_invested_today += daily_amount
+        results.append(
+            f"📢 {idx['index_name']} {etf_code}: "
+            f"¥{daily_amount:.0f} [{idx.get('tier')}/{position_tier}] (第{current_day}天)"
+        )
 
     # 4. 摘要
     skipped_drop = sum(1 for i in indices if i.get("tier") in ("drop", "watch") and i["status"] != "normal")
@@ -564,21 +557,22 @@ def execute_golden_pit_dca() -> str:
     phase_label = {"buying": "买入窗口", "waiting": "等待拐点"}.get(phase, phase)
     resonance = _resonance_multiplier(indices)
     summary_lines = [
-        f"黄金坑 DCA v4 (趋势驱动) — {today_str}",
+        f"黄金坑 DCA v4 (趋势驱动 · 仅通知) — {today_str}",
         f"阶段: {phase_label} | 领先: {window.get('leading_index', 'N/A')}",
         f"可交易: {len(tradeable)} | 拐点已确认: {turning_count} | 拐点前: {pre_turn_count}",
         f"共振: {pit_count}指数入坑 → {resonance:.1f}x 仓位系数",
-        f"执行: {executed_count}笔 ¥{total_invested_today:.0f} | 跳过: {skipped_count}笔",
+        f"通知: {executed_count}笔 ¥{total_invested_today:.0f} | 跳过: {skipped_count}笔",
         f"放弃/watch: {skipped_drop}个指数不入金",
         "",
     ]
     if results:
         summary_lines.extend(results)
     else:
-        summary_lines.append("本日无符合条件的定投")
+        summary_lines.append("本日无符合条件的定投通知")
     summary_lines.append("")
 
     # 仓位建议 (趋势驱动)
+    summary_lines.append("⚠️ 仅通知模式: 未实际下单，仓位累计已记录。")
     if pre_turn_count > 0 and turning_count == 0:
         summary_lines.append("💡 拐点前: 轻仓累积(单次≤3%/累计≤15%), 等待贪婪值连续回升。")
     elif turning_count > 0 and pre_turn_count > 0:
@@ -603,7 +597,7 @@ def _get_day_amount(fund_code: str, window_start: str, buy_day: int) -> float:
                     GoldenPitDCALog.fund_code == fund_code,
                     GoldenPitDCALog.window_start == window_start,
                     GoldenPitDCALog.buy_day == buy_day,
-                    GoldenPitDCALog.status == "filled",
+                    GoldenPitDCALog.status.in_(("filled", "notified")),
                 )
                 .all()
             )
