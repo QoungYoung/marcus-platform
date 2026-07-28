@@ -648,16 +648,45 @@ export default function PortfolioPage() {
                     </span>
                   )}
                 </div>
-                {gpSignal.leading_index && (
+                {gpSignal.leading_index && gpSignal.leading_greed != null && (() => {
+                  const greed = gpSignal.leading_greed;
+                  const panicLine = 0.35;
+                  const safeCeil = 0.50;
+                  const rawPct = ((safeCeil - greed) / (safeCeil - panicLine)) * 100;
+                  const dangerPct = Math.max(0, Math.min(100, rawPct));
+                  const level = greed <= panicLine ? 'panic' : greed <= 0.40 ? 'warn' : 'safe';
+                  const levelLabel = level === 'panic' ? '黄金坑' : level === 'warn' ? '预警' : '安全';
+                  const levelColor = level === 'panic' ? 'var(--cc-red)' : level === 'warn' ? 'var(--cc-amber)' : 'var(--cc-green)';
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 1 }}>
+                        <span style={{ color: 'var(--cc-text-dim)' }}>领先: {gpSignal.leading_index}</span>
+                        <span style={{ color: levelColor, fontWeight: 600, fontFamily: 'var(--font-display)' }}>
+                          {greed.toFixed(4)}
+                        </span>
+                      </div>
+                      <div style={{ position: 'relative', height: 6, background: 'rgba(17,137,249,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{
+                          position: 'absolute', top: 0, right: 0,
+                          width: `${dangerPct}%`, height: '100%',
+                          borderRadius: '0 3px 3px 0',
+                          background: `linear-gradient(90deg, var(--cc-green), var(--cc-amber) 50%, var(--cc-red))`,
+                          transition: 'width 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+                        }} />
+                        <span style={{ position: 'absolute', top: -1, left: `${((0.40 - panicLine) / (safeCeil - panicLine)) * 100}%`, width: 1, height: 8, background: 'var(--cc-amber)', opacity: 0.5, transform: 'translateX(-50%)' }} />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 2 }}>
+                        <span style={{ color: levelColor, fontWeight: 600 }}>{levelLabel}</span>
+                        <span>恐慌线 0.35</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+                {gpSignal.leading_index && gpSignal.leading_greed == null && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 2 }}>
                     <span style={{ color: 'var(--cc-text-dim)' }}>领先指数</span>
                     <span style={{ color: 'var(--cc-text)', fontWeight: 600, fontFamily: 'var(--font-display)' }}>
                       {gpSignal.leading_index}
-                      {gpSignal.leading_greed != null && (
-                        <span style={{ marginLeft: 6, color: gpSignal.leading_greed < 0.35 ? 'var(--cc-red)' : gpSignal.leading_greed < 0.40 ? 'var(--cc-amber)' : 'var(--cc-green)' }}>
-                          {gpSignal.leading_greed.toFixed(4)}
-                        </span>
-                      )}
                     </span>
                   </div>
                 )}
