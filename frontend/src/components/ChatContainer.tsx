@@ -866,8 +866,14 @@ const getLatestScanReportTool = {
       lines.push('');
     }
     if (data.report) {
+      // 全球宏观闸门状态检测 — 关闭时红色高亮警告
+      const reportText: string = data.report.slice(0, 3000);
+      if (reportText.includes('🔒 全球宏观')) {
+        lines.push('> ⛔ **全球流动性闸门关闭** — 所有买入操作受限，详见报告中 🔒 全球宏观 行');
+        lines.push('');
+      }
       lines.push('📝 系统扫描报告:');
-      lines.push(data.report.slice(0, 3000));
+      lines.push(reportText);
     }
     return { content: [{ type: 'text', text: lines.join('\n') }], details: data };
   },
@@ -1291,6 +1297,23 @@ const getGoldenPitDcaStatusTool = {
     const lines: string[] = [];
     lines.push(`## 📊 黄金坑 DCA 定投状态 — ${d.as_of}`);
     lines.push('');
+
+    // ── 全球宏观信息行 ──
+    const gm = d.global_macro || {};
+    if (gm.liquidity_gate) {
+      const gateIcon = gm.liquidity_gate === 'closed' ? '🔒' : '🔓';
+      const coefPct = gm.global_macro_coefficient != null ? `${(gm.global_macro_coefficient * 100).toFixed(0)}%` : '—';
+      lines.push(`### ${gateIcon} 全球宏观 | 闸门: ${gm.liquidity_gate === 'closed' ? '**关闭**' : '开启'} | 仓位系数: ${coefPct} | 情绪: ${gm.sentiment_score?.toFixed(0) ?? '—'} (${gm.sentiment_label ?? '—'})`);
+      if (gm.summary) lines.push(`> ${gm.summary}`);
+      lines.push('');
+    }
+
+    // ── 闸门关闭警告横幅 ──
+    if (gm.liquidity_gate === 'closed') {
+      lines.push('> ⛔ **全球流动性闸门关闭** — 所有买入操作已跳过，等待闸门重新开启');
+      lines.push('');
+    }
+
     if (!d.window_active) {
       const ph = d.window_phase || 'idle';
       if (ph === 'waiting') {

@@ -30,6 +30,8 @@ interface IndexStatus {
   position_multiplier?: number;
   exit_signal?: string | null;
   exit_reason?: string;
+  turning_validation?: string;
+  turning_validation_reason?: string;
   signal_quality?: string;
   data_source?: string;
   days_to_pit: number | null;
@@ -66,6 +68,15 @@ interface Prediction {
   decline_rate: number;
 }
 
+interface GlobalMacro {
+  liquidity_gate: string;
+  sentiment_score: number;
+  sentiment_label: string;
+  global_trend: string;
+  global_macro_coefficient: number;
+  summary: string;
+}
+
 interface GoldenPitStatus {
   as_of: string;
   golden_pit_window: GoldenPitWindow;
@@ -77,6 +88,7 @@ interface GoldenPitStatus {
   };
   prediction: Prediction | null;
   summary: string;
+  global_macro: GlobalMacro;
 }
 
 interface TrendData {
@@ -215,6 +227,68 @@ const EXIT_LABELS: Record<string, string> = {
   stop_profit: '\u{1F7E0} 止盈',
 };
 
+const GLOBAL_TREND_LABELS: Record<string, string> = {
+  bullish: '看涨',
+  declining: '下行',
+  flat: '平稳',
+  unknown: '未知',
+};
+
+const GLOBAL_TREND_COLORS: Record<string, string> = {
+  bullish: '#27AE60',
+  declining: '#C0392B',
+  flat: '#94a3b8',
+  unknown: '#94a3b8',
+};
+
+function GlobalMacroCard({ macro }: { macro: GlobalMacro }) {
+  const gateOpen = macro.liquidity_gate === 'open';
+  const trendLabel = GLOBAL_TREND_LABELS[macro.global_trend] || macro.global_trend;
+  const trendColor = GLOBAL_TREND_COLORS[macro.global_trend] || '#94a3b8';
+  const coefPct = Math.round(macro.global_macro_coefficient * 100);
+
+  return (
+    <div className={`gp-macro-card ${gateOpen ? 'gate-open' : 'gate-closed'}`}>
+      <div className="gp-macro-item gate">
+        <span className="gp-macro-icon">{gateOpen ? '\u{1F513}' : '\u{1F512}'}</span>
+        <div className="gp-macro-text">
+          <span className="gp-macro-label">流动性闸门</span>
+          <span className={`gp-macro-value ${gateOpen ? 'text-green' : 'text-red'}`}>
+            {gateOpen ? '开启' : '关闭'}
+          </span>
+        </div>
+      </div>
+      <div className="gp-macro-item">
+        <span className="gp-macro-icon">📊</span>
+        <div className="gp-macro-text">
+          <span className="gp-macro-label">情绪指数</span>
+          <span className="gp-macro-value">{macro.sentiment_score.toFixed(0)}</span>
+          <span className="gp-macro-sub" style={{ color: macro.sentiment_score <= 20 ? '#C0392B' : macro.sentiment_score >= 80 ? '#27AE60' : 'var(--gp-text-dim)' }}>
+            {macro.sentiment_label}
+          </span>
+        </div>
+      </div>
+      <div className="gp-macro-item">
+        <span className="gp-macro-icon">🌍</span>
+        <div className="gp-macro-text">
+          <span className="gp-macro-label">全球趋势</span>
+          <span className="gp-macro-value" style={{ color: trendColor }}>{trendLabel}</span>
+        </div>
+      </div>
+      <div className="gp-macro-item">
+        <span className="gp-macro-icon">⚖️</span>
+        <div className="gp-macro-text">
+          <span className="gp-macro-label">仓位系数</span>
+          <span className={`gp-macro-value ${coefPct < 100 ? 'text-amber' : ''}`}>
+            {coefPct}%
+          </span>
+        </div>
+      </div>
+      <div className="gp-macro-summary">{macro.summary}</div>
+    </div>
+  );
+}
+
 function IndexStatusCard({ idx }: { idx: IndexStatus }) {
   const color = STATUS_COLORS[idx.status];
   const greedPct = Math.round(idx.greed * 100);
@@ -225,11 +299,16 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
   const weightPct = (idx.position_weight != null && idx.position_weight > 0)
     ? `${(idx.position_weight * 100).toFixed(0)}%`
     : '';
+  const isDivergent = idx.turning_validation === 'divergent';
+  const isGlobalExit = idx.exit_reason?.startsWith('全球');
 
   return (
     <div className={`gp-index-card ${idx.status}`} style={{ borderColor: color }}>
       <div className="gp-index-card-top">
         <span className="gp-index-name">
+          {isDivergent && (
+            <span className="gp-divergent-icon" title={idx.turning_validation_reason || '全球趋势背离'}>{'⚠️'}</span>
+          )}
           {sqLabel} {idx.index_name}
           {weightPct && (
             <span className="gp-index-weight" title="仓位上限"> 上限{weightPct}</span>
@@ -239,6 +318,9 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           {STATUS_LABELS[idx.status]}
         </span>
       </div>
+      {isDivergent && idx.turning_validation_reason && (
+        <div className="gp-divergent-reason">{idx.turning_validation_reason}</div>
+      )}
       <div className="gp-index-greed">
         <span className="gp-index-value" style={{ color }}>{idx.greed.toFixed(4)}</span>
         <span className="gp-index-percentile">P{idx.percentile.toFixed(1)}</span>
@@ -272,7 +354,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           <span>日跌 {idx.decline_rate > 0 ? '+' : ''}{idx.decline_rate.toFixed(3)}</span>
         )}
         {idx.close > 0 && (
-          <span className="gp-index-close">¥{idx.close.toFixed(2)}</span>
+          <span className="gp-index-close">{'¥'}{idx.close.toFixed(2)}</span>
         )}
       </div>
       {idx.position_tier_label && idx.tier !== 'drop' && idx.tier !== 'watch' && (
@@ -281,8 +363,10 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
         </div>
       )}
       {exitLabel && (
-        <div className="gp-index-exit" style={{ fontSize: '0.75rem', color: '#f97316', marginTop: 2, fontWeight: 600 }}>
-          {exitLabel}: {idx.exit_reason}
+        <div className={`gp-index-exit ${isGlobalExit ? 'global-exit' : 'aq-exit'}`}>
+          <span className="gp-exit-source">{isGlobalExit ? '🌍 宏观' : '🇨🇳 A股'}</span>
+          <span className="gp-exit-label">{exitLabel}</span>
+          <span className="gp-exit-reason">{idx.exit_reason}</span>
         </div>
       )}
     </div>
@@ -485,7 +569,7 @@ export default function GoldenPitPage() {
     );
   }
 
-  const { golden_pit_window: window, indices, triple_confirmation: conf, prediction, summary, as_of } = status;
+  const { golden_pit_window: window, indices, triple_confirmation: conf, prediction, summary, as_of, global_macro } = status;
   const sortedIndices = [...indices].sort((a, b) => a.priority - b.priority);
 
   return (
@@ -503,6 +587,8 @@ export default function GoldenPitPage() {
       </div>
 
       <GoldenPitTimeline window={window} />
+
+      {global_macro && <GlobalMacroCard macro={global_macro} />}
 
       <div className="gp-section">
         <h3 className="gp-section-title">宽基指数状态</h3>
