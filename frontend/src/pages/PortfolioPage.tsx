@@ -134,10 +134,12 @@ export default function PortfolioPage() {
 
   // ── 黄金坑信号 ──
   const [gpSignal, setGpSignal] = useState<{
-    phase: string; pit_count: number; warning_count: number; turning_count: number;
-    leading_index: string | null; leading_greed: number | null;
+    phase: string; pit_count: number; warning_count: number;
+    min_greed: number | null; min_greed_index: string | null;
     position_tier_label: string | null; as_of: string;
+    panic_count: number;
   } | null>(null);
+  const [gpError, setGpError] = useState(false);
   const [loadingGp, setLoadingGp] = useState(true);
 
   // ── 资金流 ──
@@ -209,25 +211,35 @@ export default function PortfolioPage() {
 
   const refreshGoldenPit = useCallback(async () => {
     setLoadingGp(true);
+    setGpError(false);
     try {
       const res = await goldenPitApi.getStatus();
-      if (res.data?.code === 0) {
-        const d = res.data.data;
-        const gw = d.golden_pit_window || {};
-        const leading = d.indices?.find((i: any) => i.fund_code === gw.leading_index);
+      const data = res.data?.data || res.data;
+      if (data?.indices?.length > 0) {
+        const gw = data.golden_pit_window || {};
+        const indices = data.indices as any[];
+        // 找贪婪值最低的指数 — 它最接近恐慌线
+        let minIdx = indices[0];
+        for (const idx of indices) {
+          if ((idx.greed ?? 1) < (minIdx.greed ?? 1)) minIdx = idx;
+        }
+        const phase = gw.phase || (gw.active ? 'waiting' : 'idle');
         setGpSignal({
-          phase: gw.phase || 'idle',
-          pit_count: gw.pit_count || d.indices?.filter((i: any) => i.status === 'golden_pit').length || 0,
-          warning_count: gw.warning_count || d.indices?.filter((i: any) => i.status === 'warning').length || 0,
-          turning_count: gw.turning_count || 0,
-          leading_index: gw.leading_index || null,
-          leading_greed: leading?.greed ?? null,
-          position_tier_label: leading?.position_tier_label || null,
-          as_of: d.as_of || '',
+          phase,
+          pit_count: indices.filter((i: any) => i.status === 'golden_pit').length,
+          warning_count: indices.filter((i: any) => i.status === 'warning').length,
+          min_greed: minIdx?.greed ?? null,
+          min_greed_index: minIdx?.index_name || minIdx?.fund_code || null,
+          position_tier_label: minIdx?.position_tier_label || null,
+          as_of: data.as_of || '',
+          panic_count: gw.pit_count ?? indices.filter((i: any) => i.status === 'golden_pit').length,
         });
+      } else {
+        setGpError(true);
       }
-    } catch { /* 静默失败 */ }
-    finally { setLoadingGp(false); }
+    } catch {
+      setGpError(true);
+    } finally { setLoadingGp(false); }
   }, []);
 
   // ── 首次并行加载 ──
@@ -614,102 +626,88 @@ export default function PortfolioPage() {
         </div>
 
         {/* Golden Pit Signal — 黄金坑底部信号 */}
-        {loadingGp ? (
-          <div className="cp-strategic-panel" style={{ marginTop: 8 }}>
-            <div className="cp-strategic-label">◆ Golden Pit Signal</div>
+        <div className="cp-strategic-panel" style={{ marginTop: 8 }}>
+          <div className="cp-strategic-label">◆ Golden Pit Signal</div>
+          {loadingGp ? (
             <Skel w="100%" h={40} />
-          </div>
-        ) : gpSignal && (
-          <div className="cp-strategic-panel" style={{ marginTop: 8 }}>
-            <div className="cp-strategic-label">◆ Golden Pit Signal</div>
-            {gpSignal.phase === 'idle' ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94a3b8', flexShrink: 0 }} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cc-text)' }}>无信号</span>
-                <span style={{ fontSize: 10, color: 'var(--cc-text-dim)' }}>
-                  {gpSignal.warning_count > 0 ? `${gpSignal.warning_count}预警` : '静默'}
-                </span>
-              </div>
-            ) : (
+          ) : gpError || !gpSignal ? (
+            <div style={{ fontSize: 10, color: 'var(--cc-text-dim)', textAlign: 'center', padding: '8px 0' }}>
+              <i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />
+              信号获取失败
+            </div>
+          ) : gpSignal.min_greed == null ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94a3b8', flexShrink: 0 }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cc-text)' }}>无信号</span>
+              <span style={{ fontSize: 10, color: 'var(--cc-text-dim)' }}>
+                {gpSignal.warning_count > 0 ? `${gpSignal.warning_count}预警` : '静默'}
+              </span>
+            </div>
+          ) : (() => {
+            const greed = gpSignal.min_greed;
+            const panicLine = 0.35;
+            const safeCeil = 0.50;
+            const rawPct = ((safeCeil - greed) / (safeCeil - panicLine)) * 100;
+            const dangerPct = Math.max(0, Math.min(100, rawPct));
+            const level = greed <= panicLine ? 'panic' : greed <= 0.40 ? 'warn' : 'greedy';
+            const levelLabel = level === 'panic' ? '恐慌' : level === 'warn' ? '预警' : '贪婪';
+            const levelColor = level === 'panic' ? 'var(--cc-red)' : level === 'warn' ? 'var(--cc-amber)' : 'var(--cc-green)';
+            return (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 6 }}>
                   <span style={{ width: 8, height: 8, borderRadius: '50%',
-                    background: gpSignal.phase === 'buying' ? 'var(--cc-red)' : 'var(--cc-amber)',
-                    boxShadow: gpSignal.phase === 'buying'
-                      ? '0 0 8px rgba(192,57,43,0.5)' : '0 0 8px rgba(212,164,7,0.4)',
+                    background: level === 'panic' ? 'var(--cc-red)' : level === 'warn' ? 'var(--cc-amber)' : 'var(--cc-green)',
+                    boxShadow: level === 'panic'
+                      ? '0 0 8px rgba(192,57,43,0.5)' : level === 'warn'
+                      ? '0 0 8px rgba(212,164,7,0.4)' : 'none',
                     flexShrink: 0 }} />
                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cc-text)' }}>
-                    {gpSignal.phase === 'buying' ? '买入窗口' : '等待拐点'}
+                    {levelLabel}
                   </span>
-                  {gpSignal.pit_count >= 3 && (
+                  {gpSignal.panic_count >= 3 && (
                     <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--cc-green)',
                       background: 'rgba(39,174,96,0.12)', padding: '1px 6px', borderRadius: 10 }}>
-                      {gpSignal.pit_count}指共振
+                      {gpSignal.panic_count}指共振
                     </span>
                   )}
                 </div>
-                {gpSignal.leading_index && gpSignal.leading_greed != null && (() => {
-                  const greed = gpSignal.leading_greed;
-                  const panicLine = 0.35;
-                  const safeCeil = 0.50;
-                  const rawPct = ((safeCeil - greed) / (safeCeil - panicLine)) * 100;
-                  const dangerPct = Math.max(0, Math.min(100, rawPct));
-                  const level = greed <= panicLine ? 'panic' : greed <= 0.40 ? 'warn' : 'safe';
-                  const levelLabel = level === 'panic' ? '恐慌' : level === 'warn' ? '预警' : '贪婪';
-                  const levelColor = level === 'panic' ? 'var(--cc-red)' : level === 'warn' ? 'var(--cc-amber)' : 'var(--cc-green)';
-                  return (
-                    <div style={{ marginTop: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 1 }}>
-                        <span style={{ color: 'var(--cc-text-dim)' }}>领先: {gpSignal.leading_index}</span>
-                        <span style={{ color: levelColor, fontWeight: 600, fontFamily: 'var(--font-display)' }}>
-                          {greed.toFixed(4)}
-                        </span>
-                      </div>
-                      <div style={{ position: 'relative', height: 6, background: 'rgba(17,137,249,0.06)', borderRadius: 3, overflow: 'hidden' }}>
-                        <div style={{
-                          position: 'absolute', top: 0, left: 0,
-                          width: `${dangerPct}%`, height: '100%',
-                          borderRadius: '3px 0 0 3px',
-                          background: `linear-gradient(90deg, #27AE60 0%, #d4a407 55%, #8B0000 100%)`,
-                          transition: 'width 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
-                        }} />
-                        <span style={{ position: 'absolute', top: -1, left: `${((0.40 - panicLine) / (safeCeil - panicLine)) * 100}%`, width: 1, height: 8, background: 'var(--cc-amber)', opacity: 0.5, transform: 'translateX(-50%)' }} />
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 2 }}>
-                        <span style={{ color: 'var(--cc-green)' }}>贪婪 0.50</span>
-                        <span style={{ color: levelColor, fontWeight: 700, fontSize: 9 }}>{levelLabel}</span>
-                        <span style={{ color: '#8B0000' }}>恐慌 0.35</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-                {gpSignal.leading_index && gpSignal.leading_greed == null && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 2 }}>
-                    <span style={{ color: 'var(--cc-text-dim)' }}>领先指数</span>
-                    <span style={{ color: 'var(--cc-text)', fontWeight: 600, fontFamily: 'var(--font-display)' }}>
-                      {gpSignal.leading_index}
-                    </span>
-                  </div>
-                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 1 }}>
+                  <span style={{ color: 'var(--cc-text-dim)' }}>
+                    最低: {gpSignal.min_greed_index}
+                  </span>
+                  <span style={{ color: levelColor, fontWeight: 600, fontFamily: 'var(--font-display)' }}>
+                    {greed.toFixed(4)}
+                  </span>
+                </div>
+                <div style={{ position: 'relative', height: 6, background: 'rgba(17,137,249,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    position: 'absolute', top: 0, left: 0,
+                    width: `${dangerPct}%`, height: '100%',
+                    borderRadius: '3px 0 0 3px',
+                    background: `linear-gradient(90deg, #27AE60 0%, #d4a407 55%, #8B0000 100%)`,
+                    transition: 'width 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+                  }} />
+                  <span style={{ position: 'absolute', top: -1, left: `${((0.40 - panicLine) / (safeCeil - panicLine)) * 100}%`, width: 1, height: 8, background: 'var(--cc-amber)', opacity: 0.5, transform: 'translateX(-50%)' }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 2 }}>
+                  <span style={{ color: 'var(--cc-green)' }}>贪婪 0.50</span>
+                  <span style={{ color: levelColor, fontWeight: 700, fontSize: 9 }}>{levelLabel}</span>
+                  <span style={{ color: '#8B0000' }}>恐慌 0.35</span>
+                </div>
                 {gpSignal.position_tier_label && (
                   <div style={{ fontSize: 10, color: 'var(--cc-blue)', fontWeight: 600, marginTop: 4 }}>
                     {gpSignal.position_tier_label}
                   </div>
                 )}
-                {gpSignal.phase === 'buying' && gpSignal.turning_count > 0 && (
-                  <div style={{ fontSize: 9, color: 'var(--cc-text-dim)', marginTop: 4 }}>
-                    已确认 {gpSignal.turning_count} 指数 · 回升中
-                  </div>
-                )}
               </>
-            )}
-            {gpSignal.as_of && (
-              <div style={{ fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 6, textAlign: 'right' }}>
-                {gpSignal.as_of}
-              </div>
-            )}
-          </div>
-        )}
+            );
+          })()}
+          {gpSignal?.as_of && (
+            <div style={{ fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 6, textAlign: 'right' }}>
+              {gpSignal.as_of}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ══════════ MAIN VIEW — Center Column (Battlefield Map) ══════════ */}
