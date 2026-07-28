@@ -570,23 +570,21 @@ class StopLossMonitor:
                 return is_panic
 
         try:
-            import urllib.request, json, ssl
-            ctx = ssl.create_default_context()
-            url = 'http://localhost:8000/api/v1/market/moneyflow-mkt'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                inner = data.get('data', {})
-                # net_amount 单位为万元，300亿 = 3,000,000 万元，净流出为负值
-                net_amount = inner.get('net_amount', 0)
+            from core.utils.em_sector_flow import get_market_moneyflow_realtime
+            data = get_market_moneyflow_realtime()
+            if data:
+                inner = data.get('combined', {})
+                # main_net 单位为万元，300亿 = 3,000,000 万元，净流出为负值
+                net_amount = inner.get('main_net', 0)
                 is_panic = net_amount < -3000000
                 self._market_panic_cache = (time.time(), is_panic)
                 if is_panic:
                     logger.info(
                         f"[StopLoss] 🔴 极端恐慌日检测: 全市场主力净流出 "
-                        f"{inner.get('net_amount_fmt', str(net_amount))}"
+                        f"{inner.get('main_net_fmt', str(net_amount))}"
                     )
                 return is_panic
+            return False
         except Exception as e:
             logger.debug(f"[StopLoss] 大盘资金流获取失败: {e}")
             return False
@@ -598,23 +596,13 @@ class StopLossMonitor:
             主力净流入（亿元），正值为流入、负值为流出。失败返回 None。
         """
         try:
-            import urllib.request, json, ssl, concurrent.futures
-
-            def _fetch():
-                ctx = ssl.create_default_context()
-                url = f'http://localhost:8000/api/v1/market/moneyflow/{symbol}'
-                req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-                with urllib.request.urlopen(req, context=ctx, timeout=3) as resp:
-                    data = json.loads(resp.read().decode('utf-8'))
-                    # main_net 单位为元，转换为亿元
-                    main_net_yuan = data.get('main_net', 0) or 0
-                    return round(main_net_yuan / 1e8, 4)
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_fetch)
-                return future.result(timeout=2)
-        except concurrent.futures.TimeoutError:
-            logger.debug(f"[StopLoss] 个股资金流超时 {symbol}")
+            from app.api.market import _query_stock_flow, _normalize_to_ts_code
+            ts_code = _normalize_to_ts_code(symbol)
+            data = _query_stock_flow(ts_code)
+            if data:
+                # main_net 单位为元，转换为亿元
+                main_net_yuan = data.get('main_net', 0) or 0
+                return round(main_net_yuan / 1e8, 4)
             return None
         except Exception as e:
             logger.debug(f"[StopLoss] 个股资金流获取失败 {symbol}: {e}")
@@ -664,21 +652,16 @@ class StopLossMonitor:
                 if time.time() - ts < 60 and target_sector in flow_map:
                     return flow_map[target_sector]
 
-            import urllib.request, json, ssl
-            ctx = ssl.create_default_context()
-            url = 'http://localhost:8000/api/v1/market/concept-fund-flow?sort_by=main_net&limit=50'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                items = data.get('data', [])
-                flow_map = {}
-                for item in items:
-                    name = item.get('name', '')
-                    # main_net 单位为万元 → 转亿元
-                    mn = item.get('main_net', 0) or 0
-                    flow_map[name] = round(float(mn) / 10000, 4)
-                self._sector_flow_cache = (time.time(), flow_map)
-                return flow_map.get(target_sector)
+            from core.utils.em_sector_flow import get_sector_flow
+            items = get_sector_flow("concept", sort_by="main_net", top_n=50, use_cache=True)
+            flow_map = {}
+            for item in (items or []):
+                name = item.get('name', '')
+                # main_net 单位为万元 → 转亿元
+                mn = item.get('main_net', 0) or 0
+                flow_map[name] = round(float(mn) / 10000, 4)
+            self._sector_flow_cache = (time.time(), flow_map)
+            return flow_map.get(target_sector)
         except Exception as e:
             logger.debug(f"[StopLoss] 板块资金流获取失败 {symbol}: {e}")
             return None
@@ -1202,17 +1185,11 @@ class StopLossMonitor:
 
     def _get_market_change_pct(self) -> float:
         try:
-            import urllib.request, ssl
-            ctx = ssl.create_default_context()
-            url = 'http://localhost:8000/api/v1/market/indices'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                indices = data.get('indices', [])
-                for idx in indices:
-                    name = idx.get('name', '')
-                    if '上证' in name or 'shanghai' in name.lower():
-                        return float(idx.get('change_pct', 0))
+            from core.xueqiu_engine import XueqiuEngine
+            engine = XueqiuEngine()
+            quote = engine.get_stock_quote("SH000001")
+            if quote:
+                return float(quote.get('percent', 0))
         except Exception as e:
             logger.debug(f"[StopLoss] 获取大盘指数失败: {e}")
         return 0.0

@@ -625,16 +625,14 @@ class PositionTierMonitor:
                 return names
 
         try:
-            import urllib.request, ssl, json as _json
-            ctx = ssl.create_default_context()
-            url = f'http://localhost:8000/api/v1/market/concept-fund-flow?limit={top_n}&sort_by={sort_by}'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = _json.loads(resp.read().decode('utf-8'))
-                sectors = data.get('sectors', []) or data.get('concepts', [])
-                names = {s.get('name', '') for s in sectors if s.get('name')}
-                self._trend_cache[cache_key] = (time.time(), names)
-                return names
+            from core.utils.em_sector_flow import get_top_inflow_sectors, get_top_change_sectors
+            if sort_by == 'main_net':
+                sectors = get_top_inflow_sectors("concept", top_n=top_n, use_cache=True)
+            else:
+                sectors = get_top_change_sectors("concept", top_n=top_n, use_cache=True)
+            names = {s.get('name', '') for s in (sectors or []) if s.get('name')}
+            self._trend_cache[cache_key] = (time.time(), names)
+            return names
         except Exception as e:
             logger.debug(f"[加仓] 获取 TOP10 概念 ({sort_by}) 失败: {e}")
             # 如果有旧缓存，降级使用
@@ -1154,45 +1152,38 @@ class PositionTierMonitor:
 
     def _fetch_sector_flow(self, symbol: str) -> tuple:
         """
-        从概念板块资金流 API 获取该标的所属板块的主力净流入。
-        
+        从概念板块资金流直接获取该标的所属板块的主力净流入（不走 HTTP 回环）。
+
         Returns:
             (sector_net_inflow: float, sector_name: str)
         """
         try:
-            import urllib.request, ssl, json as _json
-            ctx = ssl.create_default_context()
-            url = 'http://localhost:8000/api/v1/market/concept-fund-flow?limit=30&sort_by=main_net'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = _json.loads(resp.read().decode('utf-8'))
-                concepts = data.get('concepts', [])
-                for concept in concepts:
-                    stocks = concept.get('stocks', [])
-                    if isinstance(stocks, list):
-                        for s in stocks:
-                            s_code = s.get('symbol', '') if isinstance(s, dict) else str(s)
-                            if symbol in s_code or s_code in symbol:
-                                return concept.get('main_net', 0), concept.get('name', '')
+            concept_names = self._get_stock_concept_names(symbol)
+            if not concept_names:
+                return 0, ''
+
+            from core.utils.em_sector_flow import get_sector_flow_by_name
+            for name in concept_names:
+                sector = get_sector_flow_by_name(name)
+                if sector:
+                    # main_net 单位为万元
+                    return sector.get('main_net', 0), sector.get('name', '')
         except Exception:
             pass
         return 0, ''
 
     def _fetch_moneyflow_today(self, symbol: str) -> float:
         """
-        获取个股当日主力净流入金额。
-        通过 /api/v1/market/moneyflow 接口获取，5 分钟缓存。
+        获取个股当日主力净流入金额（直接调用底层函数，不走 HTTP 回环）。
 
         Returns:
             当日主力净流入（元）
         """
         try:
-            import urllib.request, ssl, json as _json
-            ctx = ssl.create_default_context()
-            url = f'http://localhost:8000/api/v1/market/moneyflow/{symbol}'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = _json.loads(resp.read().decode('utf-8'))
+            from app.api.market import _query_stock_flow, _normalize_to_ts_code
+            ts_code = _normalize_to_ts_code(symbol)
+            data = _query_stock_flow(ts_code)
+            if data:
                 return float(data.get('main_net', 0))
         except Exception:
             pass
@@ -1209,13 +1200,11 @@ class PositionTierMonitor:
         - 北交所 (8xxxxx/4xxxxx): 30%
         """
         try:
-            import urllib.request, ssl, json as _json
-            ctx = ssl.create_default_context()
-            url = f'http://localhost:8000/api/v1/market/quote/{symbol}'
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                data = _json.loads(resp.read().decode('utf-8'))
-                change_pct = float(data.get('percent', 0) or 0)
+            from core.xueqiu_engine import XueqiuEngine
+            engine = XueqiuEngine()
+            quote = engine.get_stock_quote(symbol)
+            if quote:
+                change_pct = float(quote.get('percent', 0) or 0)
                 if change_pct <= 0:
                     return False, f'涨幅{change_pct:.1f}%'
 
