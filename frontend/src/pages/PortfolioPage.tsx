@@ -655,7 +655,7 @@ export default function PortfolioPage() {
                   const rawPct = ((safeCeil - greed) / (safeCeil - panicLine)) * 100;
                   const dangerPct = Math.max(0, Math.min(100, rawPct));
                   const level = greed <= panicLine ? 'panic' : greed <= 0.40 ? 'warn' : 'safe';
-                  const levelLabel = level === 'panic' ? '黄金坑' : level === 'warn' ? '预警' : '安全';
+                  const levelLabel = level === 'panic' ? '恐慌' : level === 'warn' ? '预警' : '贪婪';
                   const levelColor = level === 'panic' ? 'var(--cc-red)' : level === 'warn' ? 'var(--cc-amber)' : 'var(--cc-green)';
                   return (
                     <div style={{ marginTop: 4 }}>
@@ -667,17 +667,18 @@ export default function PortfolioPage() {
                       </div>
                       <div style={{ position: 'relative', height: 6, background: 'rgba(17,137,249,0.06)', borderRadius: 3, overflow: 'hidden' }}>
                         <div style={{
-                          position: 'absolute', top: 0, right: 0,
+                          position: 'absolute', top: 0, left: 0,
                           width: `${dangerPct}%`, height: '100%',
-                          borderRadius: '0 3px 3px 0',
-                          background: `linear-gradient(90deg, var(--cc-green), var(--cc-amber) 50%, var(--cc-red))`,
+                          borderRadius: '3px 0 0 3px',
+                          background: `linear-gradient(90deg, #27AE60 0%, #d4a407 55%, #8B0000 100%)`,
                           transition: 'width 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
                         }} />
                         <span style={{ position: 'absolute', top: -1, left: `${((0.40 - panicLine) / (safeCeil - panicLine)) * 100}%`, width: 1, height: 8, background: 'var(--cc-amber)', opacity: 0.5, transform: 'translateX(-50%)' }} />
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 2 }}>
-                        <span style={{ color: levelColor, fontWeight: 600 }}>{levelLabel}</span>
-                        <span>恐慌线 0.35</span>
+                        <span style={{ color: 'var(--cc-green)' }}>贪婪 0.50</span>
+                        <span style={{ color: levelColor, fontWeight: 700, fontSize: 9 }}>{levelLabel}</span>
+                        <span style={{ color: '#8B0000' }}>恐慌 0.35</span>
                       </div>
                     </div>
                   );
