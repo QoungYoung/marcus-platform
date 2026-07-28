@@ -756,15 +756,19 @@ class MarcusVNPyExecutor:
                 'available': account['available_cash']
             }
 
-        # 通过完整订单流程执行
+        # 通过完整订单流程执行，bridge 不可用时回退 paper engine
+        order_id = None
+        used_bridge = False
         if self.bridge:
             order_id = self.bridge.send_order(symbol, "买入", price, volume, reason)
-        else:
+            if order_id:
+                used_bridge = True
+        if not order_id and self.engine:
             order_id = self.engine.buy(symbol, price, volume, reason)
         if not order_id:
             return {'status': 'failed', 'reason': 'VN.PY 买入失败'}
 
-        if not self.bridge:
+        if not used_bridge:
             match_ok = self.engine.match_order(order_id, price)
             if not match_ok:
                 self.engine.cancel_order(order_id)
@@ -821,15 +825,19 @@ class MarcusVNPyExecutor:
         avg_cost = pos.get('avg_price', 0) if pos else 0
         profit = (price - avg_cost) * volume if avg_cost > 0 else 0.0
         
-        # 执行卖出
+        # 执行卖出，bridge 不可用时回退 paper engine
+        order_id = None
+        used_bridge = False
         if self.bridge:
             order_id = self.bridge.send_order(symbol, "卖出", price, volume, reason)
-        else:
+            if order_id:
+                used_bridge = True
+        if not order_id and self.engine:
             order_id = self.engine.sell(symbol, price, volume, reason)
         if not order_id:
             return {'status': 'failed', 'reason': 'VN.PY 卖出失败'}
 
-        if not self.bridge:
+        if not used_bridge:
             self.engine.match_order(order_id, price)
         
         # 记录交易日志

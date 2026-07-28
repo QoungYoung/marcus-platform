@@ -85,8 +85,11 @@ def _apply_schema_patches():
         ("backtest_tasks", "thinking_level", "VARCHAR(20) DEFAULT 'high'"),
         ("golden_pit_snapshots", "change_5", "FLOAT DEFAULT NULL"),
         ("golden_pit_snapshots", "change_20", "FLOAT DEFAULT NULL"),
+    ]
+    # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
+    alter_patches = [
         # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
-        ("golden_pit_dca_log", "strategy", "VARCHAR(50) NOT NULL DEFAULT ''"),
+        ("golden_pit_dca_log", "strategy", "VARCHAR(50)"),
     ]
     try:
         inspector = inspect(engine)
@@ -102,5 +105,18 @@ def _apply_schema_patches():
                 sql = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {ddl}"
                 conn.execute(text(sql))
                 print(f"[DB] PATCH: {table}.{col} ADD ({ddl})")
+            for table, col, new_type in alter_patches:
+                if table not in existing_tables:
+                    continue
+                cols = {c["name"]: c for c in inspector.get_columns(table)}
+                if col not in cols:
+                    continue
+                current_type = str(cols[col]["type"]).upper()
+                # 只当当前类型不同时才 ALTER
+                if new_type.upper() in current_type:
+                    continue
+                sql = f"ALTER TABLE {table} ALTER COLUMN {col} TYPE {new_type}"
+                conn.execute(text(sql))
+                print(f"[DB] PATCH: {table}.{col} ALTER TYPE → {new_type}")
     except Exception as e:
         print(f"[DB] PATCH warn: {e}")
