@@ -31,6 +31,18 @@ sys.path.insert(0, str(MARCUS_INTEGRATION_DIR))
 from paper_engine import PaperTradingEngine
 from app.core.trading.vnpy_bridge import VNPyBridge
 
+# 模块级 bridge 引用，供调度任务等非 HTTP 上下文使用
+_bridge_instance = None
+
+
+def set_bridge(bridge):
+    global _bridge_instance
+    _bridge_instance = bridge
+
+
+def get_bridge():
+    return _bridge_instance
+
 
 def parse_float_chinese(value):
     """解析中文数字格式 (带逗号、括号等后缀)"""

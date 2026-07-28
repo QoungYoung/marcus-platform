@@ -13,16 +13,15 @@
 """
 
 import logging
+import sys
+import os
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple
-
-import requests
 
 logger = logging.getLogger(__name__)
 
 PIT_WINDOW_DAYS = 15
 PRE_TURN_CUMULATIVE_CAP = 0.15   # 拐点前累计上限 (占 max_total 比例)
-TRADE_API_BASE = "http://127.0.0.1:8000/api/v1"
 
 
 def _strategy_weights(strategy: str) -> List[float]:
@@ -148,103 +147,81 @@ def _already_holding(etf_code: str) -> bool:
         return False
 
 
-def _place_buy_order(etf_code: str, amount: float, reason: str) -> Tuple[bool, str]:
-    """通过交易 API 下限价买入单（限价 × 1.02 以保证成交）。"""
+def _get_quote(etf_code: str) -> Optional[Dict[str, Any]]:
+    """直接调用 XueqiuEngine 获取实时报价。"""
     try:
-        # 先获取当前价格 (GET /market/quote/{symbol} 返回 QuoteResponse)
-        quote_url = f"{TRADE_API_BASE}/market/quote/{etf_code}"
-        quote_resp = requests.get(quote_url, timeout=10)
-        current_price = None
-        if quote_resp.status_code == 200:
-            quote_data = quote_resp.json()
-            # QuoteResponse 直接返回字段，没有 code/data 包装
-            current_price = quote_data.get("current") or quote_data.get("last_close")
+        from workspace_detector import XUEQIU_DIR
+        sys.path.insert(0, str(XUEQIU_DIR))
+        from xueqiu_engine import XueqiuEngine
+        engine = XueqiuEngine(config_file=str(XUEQIU_DIR / "config.json"))
+        return engine.get_stock_quote(etf_code)
+    except Exception as e:
+        logger.warning("获取 %s 实时报价失败: %s", etf_code, e)
+        return None
 
+
+def _get_executor():
+    """获取交易执行器，优先 VN.PY bridge，否则回退 PaperTradingEngine。"""
+    from app.core.trading.marcus_trade import MarcusVNPyExecutor, get_bridge
+    return MarcusVNPyExecutor(bridge=get_bridge())
+
+
+def _place_buy_order(etf_code: str, amount: float, reason: str) -> Tuple[bool, str]:
+    """直接调用 MarcusVNPyExecutor 下限价买入单（限价 × 1.02 以保证成交）。"""
+    try:
+        quote = _get_quote(etf_code)
+        if not quote:
+            return False, "无法获取当前价格"
+        current_price = quote.get("current") or quote.get("last_close")
         if not current_price or current_price <= 0:
-            logger.warning("无法获取 %s 当前价格，跳过定投", etf_code)
             return False, "无法获取当前价格"
 
-        # 计算买入股数（100 股整数倍）
         shares = int(amount / current_price / 100) * 100
         if shares < 100:
-            logger.warning("%s 定投金额 %.0f 不足买入 1 手，跳过", etf_code, amount)
             return False, f"金额不足: {amount:.0f} < 1手({current_price * 100:.0f})"
 
-        # 限价单: 当前价 × 1.02 以保证成交
         limit_price = round(current_price * 1.02, 2)
+        executor = _get_executor()
+        result = executor.buy(symbol=etf_code, price=limit_price, volume=shares, reason=reason)
 
-        trade_url = f"{TRADE_API_BASE}/trades"
-        trade_data = {
-            "symbol": etf_code,
-            "side": "buy",
-            "price": limit_price,
-            "volume": shares,
-            "reason": reason,
-        }
-        trade_resp = requests.post(trade_url, json=trade_data, timeout=30)
-
-        if trade_resp.status_code == 200:
-            result = trade_resp.json()
-            # TradeResponse: { order_id, status, symbol, direction, price, volume, ... }
-            status = result.get("status", "")
-            if status in ("filled", "partial", "submitted"):
-                order_id = result.get("order_id", "")
-                logger.info("黄金坑 DCA 买入 %s: %d股 @%.2f, order=%s", etf_code, shares, limit_price, order_id)
-                return True, order_id
-            else:
-                msg = result.get("message") or result.get("reason") or status
-                logger.warning("黄金坑 DCA 买入 %s 失败: %s", etf_code, msg)
-                return False, msg or "unknown"
+        if result.get("status") == "executed":
+            order_id = result.get("order_id", "")
+            logger.info("黄金坑 DCA 买入 %s: %d股 @%.2f, order=%s", etf_code, shares, limit_price, order_id)
+            return True, order_id
         else:
-            return False, f"HTTP {trade_resp.status_code}"
+            msg = result.get("reason", result.get("status", "unknown"))
+            logger.warning("黄金坑 DCA 买入 %s 失败: %s", etf_code, msg)
+            return False, msg
     except Exception as e:
         logger.error("黄金坑 DCA 买入 %s 异常: %s", etf_code, e)
         return False, str(e)
 
 
 def _place_sell_order(etf_code: str, shares: int, reason: str) -> Tuple[bool, str]:
-    """通过交易 API 下限价卖单（限价 × 0.98 以保证成交）。"""
+    """直接调用 MarcusVNPyExecutor 下限价卖单（限价 × 0.98 以保证成交）。"""
     try:
-        quote_url = f"{TRADE_API_BASE}/market/quote/{etf_code}"
-        quote_resp = requests.get(quote_url, timeout=10)
-        current_price = None
-        if quote_resp.status_code == 200:
-            quote_data = quote_resp.json()
-            current_price = quote_data.get("current") or quote_data.get("last_close")
-
+        quote = _get_quote(etf_code)
+        if not quote:
+            return False, "无法获取当前价格"
+        current_price = quote.get("current") or quote.get("last_close")
         if not current_price or current_price <= 0:
-            logger.warning("无法获取 %s 当前价格，跳过卖出", etf_code)
             return False, "无法获取当前价格"
 
         if shares < 100:
-            logger.warning("%s 卖出股数 %d 不足 1 手，跳过", etf_code, shares)
             return False, f"股数不足: {shares} < 100"
 
         limit_price = round(current_price * 0.98, 2)
+        executor = _get_executor()
+        result = executor.sell(symbol=etf_code, price=limit_price, volume=shares, reason=reason)
 
-        trade_url = f"{TRADE_API_BASE}/trades"
-        trade_data = {
-            "symbol": etf_code,
-            "side": "sell",
-            "price": limit_price,
-            "volume": shares,
-            "reason": reason,
-        }
-        trade_resp = requests.post(trade_url, json=trade_data, timeout=30)
-
-        if trade_resp.status_code == 200:
-            result = trade_resp.json()
-            status = result.get("status", "")
-            if status in ("filled", "partial", "submitted"):
-                order_id = result.get("order_id", "")
-                logger.info("黄金坑 DCA 卖出 %s: %d股 @%.2f, order=%s", etf_code, shares, limit_price, order_id)
-                return True, order_id
-            else:
-                msg = result.get("message") or result.get("reason") or status
-                logger.warning("黄金坑 DCA 卖出 %s 失败: %s", etf_code, msg)
-                return False, msg or "unknown"
+        if result.get("status") == "executed":
+            order_id = result.get("order_id", "")
+            logger.info("黄金坑 DCA 卖出 %s: %d股 @%.2f, order=%s", etf_code, shares, limit_price, order_id)
+            return True, order_id
         else:
-            return False, f"HTTP {trade_resp.status_code}"
+            msg = result.get("reason", result.get("status", "unknown"))
+            logger.warning("黄金坑 DCA 卖出 %s 失败: %s", etf_code, msg)
+            return False, msg
     except Exception as e:
         logger.error("黄金坑 DCA 卖出 %s 异常: %s", etf_code, e)
         return False, str(e)

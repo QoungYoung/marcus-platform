@@ -100,7 +100,8 @@ async def lifespan(app: FastAPI):
         app.state.vnpy_bridge = None
         print(f"[Main] 使用 legacy paper engine (ENGINE_BACKEND=paper)")
 
-    from app.core.trading.marcus_trade import MarcusVNPyExecutor
+    from app.core.trading.marcus_trade import MarcusVNPyExecutor, set_bridge
+    set_bridge(bridge)  # 供调度任务(DCA等)直接调用，避免 HTTP 回环死锁
 
     scheduler_service.start()
     print(f"Scheduler started - {len(scheduler_service.tasks)} tasks loaded")

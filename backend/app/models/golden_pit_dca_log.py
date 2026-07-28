@@ -16,7 +16,7 @@ class GoldenPitDCALog(Base):
     buy_day = Column(Integer, nullable=False, comment="窗口第几天买入")
     etf_code = Column(String(10), nullable=False, comment="ETF 交易代码")
     amount = Column(Float, nullable=False, comment="本次买入金额")
-    strategy = Column(String(20), nullable=False, comment="使用的策略名称")
+    strategy = Column(String(50), nullable=False, comment="使用的策略名称")
     order_id = Column(String(50), nullable=True, comment="交易系统订单号")
     status = Column(String(20), nullable=False, default="filled", comment="filled / failed")
     created_at = Column(String(20), nullable=False, comment="创建时间")

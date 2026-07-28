@@ -85,6 +85,8 @@ def _apply_schema_patches():
         ("backtest_tasks", "thinking_level", "VARCHAR(20) DEFAULT 'high'"),
         ("golden_pit_snapshots", "change_5", "FLOAT DEFAULT NULL"),
         ("golden_pit_snapshots", "change_20", "FLOAT DEFAULT NULL"),
+        # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
+        ("golden_pit_dca_log", "strategy", "VARCHAR(50) NOT NULL DEFAULT ''"),
     ]
     try:
         inspector = inspect(engine)
