@@ -365,6 +365,22 @@ def execute_golden_pit_dca() -> str:
         window.get("turning_count", 0),
     )
 
+    # 全球宏观数据
+    global_macro = status.get("global_macro", {})
+    macro_coef = global_macro.get("global_macro_coefficient", 1.0)
+    liquidity_gate = global_macro.get("liquidity_gate", "open")
+
+    # ── 流动性闸门硬停止 ──
+    if liquidity_gate == "closed":
+        gate_msg = (
+            f"黄金坑 DCA v4 (趋势驱动 · 仅通知) — {today_str}\n"
+            f"🔒 全球流动性闸门关闭 (sentiment_score={global_macro.get('sentiment_score', 'N/A')})\n"
+            f"   原因: {global_macro.get('summary', '')}\n"
+            f"   所有买入已跳过，等待闸门重新开启。"
+        )
+        logger.warning("黄金坑 DCA: 全球流动性闸门关闭，跳过所有买入")
+        return gate_msg
+
     # 2. 读取 ETF 配置
     etf_configs = _get_etf_configs()
     if not etf_configs:
@@ -517,16 +533,21 @@ def execute_golden_pit_dca() -> str:
         resonance = _resonance_multiplier(indices)
         daily_amount = min(daily_amount * resonance, max_total - total_invested)
 
+        # 全球宏观系数
+        daily_amount *= macro_coef
+        daily_amount = min(daily_amount, max_total - total_invested)
+
         etf_code = cfg["etf_code"]
         reason = (
             f"[黄金坑DCA v4] {idx['index_name']} "
             f"tier={idx.get('tier')} trend={trend} pos={position_tier}({tier_multiplier*100:.0f}%) "
-            f"resonance={resonance}x day{current_day}/{PIT_WINDOW_DAYS} greed={idx['greed']:.4f}"
+            f"resonance={resonance:.1f}x macro={macro_coef:.1f}x "
+            f"day{current_day}/{PIT_WINDOW_DAYS} greed={idx['greed']:.4f}"
         )
 
         logger.info(
-            "黄金坑 DCA: %s day=%d trend=%s amount=%.0f tier=%s x%.0f%% resonance=%.1fx",
-            etf_code, current_day, trend, daily_amount, position_tier, tier_multiplier * 100, resonance,
+            "黄金坑 DCA: %s day=%d trend=%s amount=%.0f tier=%s x%.0f%% resonance=%.1fx macro=%.1fx",
+            etf_code, current_day, trend, daily_amount, position_tier, tier_multiplier * 100, resonance, macro_coef,
         )
 
         # 仅通知，不实际下单。记录日志用于累计仓位追踪
@@ -556,11 +577,12 @@ def execute_golden_pit_dca() -> str:
     phase = window.get("phase", "idle")
     phase_label = {"buying": "买入窗口", "waiting": "等待拐点"}.get(phase, phase)
     resonance = _resonance_multiplier(indices)
+    gate_info = f"🔒闸门关闭" if liquidity_gate == "closed" else f"🔓闸门开启"
     summary_lines = [
         f"黄金坑 DCA v4 (趋势驱动 · 仅通知) — {today_str}",
         f"阶段: {phase_label} | 领先: {window.get('leading_index', 'N/A')}",
         f"可交易: {len(tradeable)} | 拐点已确认: {turning_count} | 拐点前: {pre_turn_count}",
-        f"共振: {pit_count}指数入坑 → {resonance:.1f}x 仓位系数",
+        f"共振: {pit_count}指数入坑 → {resonance:.1f}x | 宏观: {macro_coef:.1f}x | {gate_info}",
         f"通知: {executed_count}笔 ¥{total_invested_today:.0f} | 跳过: {skipped_count}笔",
         f"放弃/watch: {skipped_drop}个指数不入金",
         "",
@@ -579,6 +601,14 @@ def execute_golden_pit_dca() -> str:
         summary_lines.append(f"💡 部分拐点确认: {turning_count}个指数已回升加仓, {pre_turn_count}个仍在等待。")
     elif turning_count > 0:
         summary_lines.append(f"💡 拐点已确认: {turning_count}个指数快速加仓中 (50%→75%→100%)。")
+
+    # 全球宏观提示
+    if macro_coef < 1.0:
+        summary_lines.append(f"🌍 全球宏观系数 {macro_coef:.1f}x: 仓位已下调 ({global_macro.get('summary', '')})")
+    divergent = [i for i in indices if i.get("turning_validation") == "divergent"]
+    if divergent:
+        names = ", ".join(i["index_name"] for i in divergent)
+        summary_lines.append(f"⚠️ 全球趋势背离: {names} 仓位已限制在拐点前水平")
 
     return "\n".join(summary_lines)
 

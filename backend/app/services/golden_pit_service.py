@@ -284,6 +284,7 @@ class GoldenPitService:
             ai_data = f_ai.result()
             gcf_data = f_gcf.result()
             tech_data = f_tech.result()
+            global_macro = self._parse_global_macro_overlay(gcf_data)
 
         as_of = ai_data.get("asof", "")
 
@@ -298,6 +299,9 @@ class GoldenPitService:
 
         all_indices = arkvol_indices + pi_server_indices
         all_indices.sort(key=lambda x: x["priority"])
+
+        # ── 全球宏观后处理 ──
+        self._apply_global_macro_to_indices(all_indices, global_macro)
 
         # 三重确认 + 预测
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -320,6 +324,7 @@ class GoldenPitService:
             "triple_confirmation": confirmation,
             "prediction": prediction,
             "summary": summary,
+            "global_macro": global_macro,
         }
 
     def _extract_from_ai_summary(self, ai_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -490,6 +495,10 @@ class GoldenPitService:
                 f_tech = executor.submit(self._cached_fetch, "alla-tech")
                 gcf_data = f_gcf.result()
                 tech_data = f_tech.result()
+                global_macro = self._parse_global_macro_overlay(gcf_data)
+
+            # ── 全球宏观后处理 ──
+            self._apply_global_macro_to_indices(indices, global_macro)
 
             confirmation = self._compute_triple_confirmation(indices, gcf_data, tech_data)
             prediction = self._predict_next_entry(indices)
@@ -503,6 +512,7 @@ class GoldenPitService:
                 "triple_confirmation": confirmation,
                 "prediction": prediction,
                 "summary": summary,
+                "global_macro": global_macro,
                 "_source": "db",
             }
         except Exception as e:
@@ -690,6 +700,17 @@ class GoldenPitService:
         lines.append(f"{'☑' if l1['confirmed'] else '☐'} 蛋糕理论: {l1['status']}")
         lines.append(f"{'☑' if l2['confirmed'] else '☐'} 宽基确认: {l2['status']}")
         lines.append(f"{'☑' if l3['confirmed'] else '☐'} 细分板块: {l3['status']}")
+
+        # 全球宏观
+        gm = status.get("global_macro", {})
+        if gm:
+            gate_icon = "🔒" if gm.get("liquidity_gate") == "closed" else "🔓"
+            lines.append(f"{gate_icon} 全球宏观: {gm.get('summary', '')}")
+            # 背离警告
+            divergent = [i for i in indices if i.get("turning_validation") == "divergent"]
+            if divergent:
+                names = ", ".join(i["index_name"] for i in divergent)
+                lines.append(f"⚠️ 全球趋势背离: {names} 仓位已限制在拐点前水平")
 
         if pred and pred.get("next_index"):
             lines.append(f"💡 预测: {pred['next_index']} 预计 {pred['eta_days']} 天后入坑 ({pred['eta_date']})")
@@ -1270,6 +1291,122 @@ class GoldenPitService:
                 "active": False,
                 "phase": "idle",
             }
+
+    # ═══════════════════════════════════════════════════════════════
+    # Global macro overlay
+    # ═══════════════════════════════════════════════════════════════
+
+    def _parse_global_macro_overlay(self, gcf_data: Dict[str, Any]) -> Dict[str, Any]:
+        """从 global-capital-flow 数据解析宏观叠加层。
+
+        Returns:
+            liquidity_gate, sentiment_score, sentiment_label,
+            global_trend, global_macro_coefficient, summary
+        """
+        score = float(gcf_data.get("sentiment_score", 50))
+        label = str(gcf_data.get("sentiment_label", "未知"))
+
+        liquidity_gate = "closed" if score <= 20 else "open"
+
+        if score <= 20:
+            macro_coef = 0.0
+        elif score <= 35:
+            macro_coef = 0.5
+        elif score <= 75:
+            macro_coef = 1.0
+        else:
+            macro_coef = 0.8
+
+        global_trend = self._compute_global_trend(gcf_data)
+
+        trend_labels = {"rising": "回升中", "declining": "下降中", "flat": "持平", "unknown": "未知"}
+        summary = (
+            f"全球风险偏好: {label}({score:.0f}), "
+            f"闸门: {'关闭' if liquidity_gate == 'closed' else '开启'}, "
+            f"趋势: {trend_labels.get(global_trend, '未知')}, "
+            f"仓位系数: {macro_coef:.1f}x"
+        )
+
+        return {
+            "liquidity_gate": liquidity_gate,
+            "sentiment_score": score,
+            "sentiment_label": label,
+            "global_trend": global_trend,
+            "global_macro_coefficient": macro_coef,
+            "summary": summary,
+        }
+
+    def _compute_global_trend(self, gcf_data: Dict[str, Any]) -> str:
+        """从 GCF 数据计算全球风险偏好趋势方向。"""
+        series_list = gcf_data.get("series", [])
+        if not series_list:
+            series_list = gcf_data.get("original_page_data", {}).get("series", [])
+        if not series_list:
+            series_list = gcf_data.get("original_page_data", {}).get("series", {}).get("data", [])
+        if not series_list:
+            return "unknown"
+
+        scores = []
+        if isinstance(series_list, list):
+            for item in series_list[-5:]:
+                if isinstance(item, dict):
+                    s = item.get("sentiment_score") or item.get("score") or item.get("value")
+                    if s is not None:
+                        scores.append(float(s))
+        elif isinstance(series_list, dict):
+            for _key, items in series_list.items():
+                if isinstance(items, list) and len(items) >= 5:
+                    scores = [
+                        float(it.get("sentiment_score", it.get("score", it.get("value", 0))))
+                        for it in items[-5:]
+                    ]
+                    break
+
+        if len(scores) < 3:
+            return "unknown"
+
+        recent = scores[-5:]
+        rising = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i - 1])
+        declining = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i - 1])
+
+        if rising >= 3:
+            return "rising"
+        elif declining >= 3:
+            return "declining"
+        else:
+            return "flat"
+
+    def _apply_global_macro_to_indices(
+        self, indices: List[Dict[str, Any]], global_macro: Dict[str, Any]
+    ) -> None:
+        """将全球宏观数据应用到各指数: 拐点验证 + 宏观退出信号。"""
+        global_trend = global_macro.get("global_trend", "unknown")
+        global_score = global_macro.get("sentiment_score", 50)
+
+        for idx in indices:
+            turning_confirmed = idx.get("turning_point_confirmed", False)
+
+            # ── 拐点验证: 全球趋势背离时 cap 仓位 ──
+            if turning_confirmed and global_trend in ("declining", "flat", "unknown"):
+                idx["turning_validation"] = "divergent"
+                idx["turning_validation_reason"] = (
+                    f"全球风险偏好趋势{global_trend}，"
+                    f"A股拐点可能为假信号，仓位限制在拐点前水平"
+                )
+                if idx.get("position_tier") not in (None, "pre_turn"):
+                    idx["position_tier"] = "pre_turn"
+                    idx["position_tier_label"] = "轻仓 (拐点前 · 全球趋势背离)"
+            elif turning_confirmed:
+                idx["turning_validation"] = "validated"
+
+            # ── 宏观退出: 全球极度贪婪 → 提前止盈 ──
+            if turning_confirmed and global_score > 80:
+                existing = idx.get("exit_signal")
+                if existing not in ("full_exit", "half_exit"):
+                    idx["exit_signal"] = "half_exit"
+                    idx["exit_reason"] = (
+                        f"全球风险偏好极度贪婪({global_score:.0f})，建议减持50%"
+                    )
 
     def _compute_triple_confirmation(
         self, indices: List[Dict[str, Any]],

@@ -233,6 +233,7 @@ async def get_dca_status():
                 "pit_count": window.get("pit_count", 0),
                 "turning_count": window.get("turning_count", 0),
                 "resonance_multiplier": _resonance_multiplier(indices),
+                "global_macro": status_data.get("global_macro", {}),
                 "etfs": [],
             }
 

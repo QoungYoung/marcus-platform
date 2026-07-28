@@ -1,5 +1,7 @@
-## ADDED Requirements
+## Purpose
 
+Define per-index parameters for golden pit strategy: entry/exit thresholds, position sizing multipliers, resonance coefficients, and the global macro coefficient overlay for position sizing.
+## Requirements
 ### Requirement: Per-index entry and exit thresholds
 Each tracked broad-market index SHALL have its own configuration for entry percentile threshold, exit percentile thresholds, and turning point confirmation days, replacing global constants where applicable.
 
@@ -46,3 +48,17 @@ The DCA execution service SHALL apply a resonance multiplier to order amounts ba
 #### Scenario: No resonance effect in idle phase
 - **WHEN** the golden pit window phase is "idle"
 - **THEN** the resonance multiplier SHALL be 1.0 (no effect, DCA is already skipped)
+
+### Requirement: Global macro coefficient in position sizing
+Each index's position sizing calculation SHALL incorporate a `global_macro_coefficient` multiplier derived from the global capital flow sentiment score, applied after the existing resonance multiplier. This coefficient SHALL be computed once per DCA execution cycle and applied uniformly to all indices.
+
+#### Scenario: Global coefficient applies after resonance
+- **WHEN** the DCA service calculates an order amount for any index
+- **THEN** the effective amount SHALL be `max_total × tier_pct × position_multiplier × resonance × global_macro_coefficient`
+- **THEN** the coefficient SHALL NOT cause the cumulative investment to exceed `max_total_amount`
+
+#### Scenario: Coefficient range validation
+- **WHEN** the global_macro_coefficient is computed
+- **THEN** its value SHALL be in the range [0, 1.5]
+- **THEN** values outside this range SHALL be clamped
+
