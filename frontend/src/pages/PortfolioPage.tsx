@@ -6,7 +6,7 @@ import {
   BarChart, Bar, Cell,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi, tradesApi, schedulerApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi } from '../api/client';
 import {
   computeSharpeRatio, computeMonthlyReturns, computeQuarterlyReturns,
   computeBenchmarkDelta, aggregatePnlContributions,
@@ -132,6 +132,14 @@ export default function PortfolioPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   usePortfolioBackground(canvasRef);
 
+  // ── 黄金坑信号 ──
+  const [gpSignal, setGpSignal] = useState<{
+    phase: string; pit_count: number; warning_count: number; turning_count: number;
+    leading_index: string | null; leading_greed: number | null;
+    position_tier_label: string | null; as_of: string;
+  } | null>(null);
+  const [loadingGp, setLoadingGp] = useState(true);
+
   // ── 资金流 ──
   const [moneyflowMap, setMoneyflowMap] = useState<Record<string, MoneyflowRow>>({});
   const [loadingFlow, setLoadingFlow] = useState(false);
@@ -199,6 +207,29 @@ export default function PortfolioPage() {
     } catch { flushSync(() => { setStopLoss({ running: false } as StopLossStatus); setLoadingStopLoss(false); }); }
   }, []);
 
+  const refreshGoldenPit = useCallback(async () => {
+    setLoadingGp(true);
+    try {
+      const res = await goldenPitApi.getStatus();
+      if (res.data?.code === 0) {
+        const d = res.data.data;
+        const gw = d.golden_pit_window || {};
+        const leading = d.indices?.find((i: any) => i.fund_code === gw.leading_index);
+        setGpSignal({
+          phase: gw.phase || 'idle',
+          pit_count: gw.pit_count || d.indices?.filter((i: any) => i.status === 'golden_pit').length || 0,
+          warning_count: gw.warning_count || d.indices?.filter((i: any) => i.status === 'warning').length || 0,
+          turning_count: gw.turning_count || 0,
+          leading_index: gw.leading_index || null,
+          leading_greed: leading?.greed ?? null,
+          position_tier_label: leading?.position_tier_label || null,
+          as_of: d.as_of || '',
+        });
+      }
+    } catch { /* 静默失败 */ }
+    finally { setLoadingGp(false); }
+  }, []);
+
   // ── 首次并行加载 ──
   useEffect(() => {
     refreshSummary();
@@ -206,6 +237,7 @@ export default function PortfolioPage() {
     refreshEquity();
     refreshTrades();
     refreshStopLoss();
+    refreshGoldenPit();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -580,6 +612,74 @@ export default function PortfolioPage() {
             </>
           )}
         </div>
+
+        {/* Golden Pit Signal — 黄金坑底部信号 */}
+        {loadingGp ? (
+          <div className="cp-strategic-panel" style={{ marginTop: 8 }}>
+            <div className="cp-strategic-label">◆ Golden Pit Signal</div>
+            <Skel w="100%" h={40} />
+          </div>
+        ) : gpSignal && (
+          <div className="cp-strategic-panel" style={{ marginTop: 8 }}>
+            <div className="cp-strategic-label">◆ Golden Pit Signal</div>
+            {gpSignal.phase === 'idle' ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94a3b8', flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cc-text)' }}>无信号</span>
+                <span style={{ fontSize: 10, color: 'var(--cc-text-dim)' }}>
+                  {gpSignal.warning_count > 0 ? `${gpSignal.warning_count}预警` : '静默'}
+                </span>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%',
+                    background: gpSignal.phase === 'buying' ? 'var(--cc-red)' : 'var(--cc-amber)',
+                    boxShadow: gpSignal.phase === 'buying'
+                      ? '0 0 8px rgba(192,57,43,0.5)' : '0 0 8px rgba(212,164,7,0.4)',
+                    flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cc-text)' }}>
+                    {gpSignal.phase === 'buying' ? '买入窗口' : '等待拐点'}
+                  </span>
+                  {gpSignal.pit_count >= 3 && (
+                    <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--cc-green)',
+                      background: 'rgba(39,174,96,0.12)', padding: '1px 6px', borderRadius: 10 }}>
+                      {gpSignal.pit_count}指共振
+                    </span>
+                  )}
+                </div>
+                {gpSignal.leading_index && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 2 }}>
+                    <span style={{ color: 'var(--cc-text-dim)' }}>领先指数</span>
+                    <span style={{ color: 'var(--cc-text)', fontWeight: 600, fontFamily: 'var(--font-display)' }}>
+                      {gpSignal.leading_index}
+                      {gpSignal.leading_greed != null && (
+                        <span style={{ marginLeft: 6, color: gpSignal.leading_greed < 0.35 ? 'var(--cc-red)' : gpSignal.leading_greed < 0.40 ? 'var(--cc-amber)' : 'var(--cc-green)' }}>
+                          {gpSignal.leading_greed.toFixed(4)}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
+                {gpSignal.position_tier_label && (
+                  <div style={{ fontSize: 10, color: 'var(--cc-blue)', fontWeight: 600, marginTop: 4 }}>
+                    {gpSignal.position_tier_label}
+                  </div>
+                )}
+                {gpSignal.phase === 'buying' && gpSignal.turning_count > 0 && (
+                  <div style={{ fontSize: 9, color: 'var(--cc-text-dim)', marginTop: 4 }}>
+                    已确认 {gpSignal.turning_count} 指数 · 回升中
+                  </div>
+                )}
+              </>
+            )}
+            {gpSignal.as_of && (
+              <div style={{ fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 6, textAlign: 'right' }}>
+                {gpSignal.as_of}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ══════════ MAIN VIEW — Center Column (Battlefield Map) ══════════ */}
