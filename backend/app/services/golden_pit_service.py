@@ -67,6 +67,18 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "signal_quality": "weak",   "exp_15d": 1.3,  "exp_20d": 1.2,  "position_weight": 0.0,
                "entry_pct": 5, "pit_pct": 3, "turning_days": 2,
                "position_multiplier": 0.0, "pre_turn_cap": 0.0},
+    # ── 海外 (核心) ──
+    # 道琼斯指数: Win% 87.5%, 20d Avg +3.49%, 高胜率 → 核心参数 (2026-07 backtest)
+    "513400": {"name": "道琼斯指数", "priority": 8, "data_source": "arkvol", "tier": "core",
+               "signal_quality": "strong", "exp_15d": 2.5, "exp_20d": 3.5, "position_weight": 0.25,
+               "entry_pct": 10, "pit_pct": 5, "turning_days": 1,
+               "position_multiplier": 1.2, "pre_turn_cap": 0.20},
+    # ── 港股 (防御) ──
+    # 恒生指数: Win% 72.7%, 20d Avg +1.30%, 类似沪深300 → 防御参数 (2026-07 backtest)
+    "513600": {"name": "恒生指数", "priority": 9, "data_source": "arkvol", "tier": "defense",
+               "signal_quality": "good", "exp_15d": 1.0, "exp_20d": 1.3, "position_weight": 0.10,
+               "entry_pct": 10, "pit_pct": 5, "turning_days": 1,
+               "position_multiplier": 0.8, "pre_turn_cap": 0.12},
     # ── 观察 (仅预警) ──
     "562660": {"name": "中证2000", "priority": 1, "data_source": "arkvol", "tier": "watch",
                "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0,
@@ -1485,7 +1497,19 @@ class GoldenPitService:
         for mid, m in inflows:
             parts.append(f"{m['name']}连续{m['consecutive_days']}日流入({m['cumulative_pp']:+.1f}pp)")
 
-        return {"markets": markets, "summary": "; ".join(parts) if parts else ""}
+        # 构建份额变化曲线（最近 60 个交易日）
+        share_history = []
+        for d, shares in dates_series[-60:]:
+            entry = {"date": d}
+            for mid, val in shares.items():
+                entry[mid] = round(float(val), 2)
+            share_history.append(entry)
+
+        return {
+            "markets": markets,
+            "summary": "; ".join(parts) if parts else "",
+            "share_history": share_history,
+        }
 
     def _apply_global_macro_to_indices(
         self, indices: List[Dict[str, Any]], global_macro: Dict[str, Any]
