@@ -68,6 +68,20 @@ interface Prediction {
   decline_rate: number;
 }
 
+interface MarketFlow {
+  name: string;
+  direction: string;
+  direction_label: string;
+  consecutive_days: number;
+  cumulative_pp: number;
+  current_share?: number;
+}
+
+interface CapitalFlow {
+  markets: Record<string, MarketFlow>;
+  summary: string;
+}
+
 interface GlobalMacro {
   liquidity_gate: string;
   sentiment_score: number;
@@ -75,6 +89,7 @@ interface GlobalMacro {
   global_trend: string;
   global_macro_coefficient: number;
   summary: string;
+  capital_flow?: CapitalFlow;
 }
 
 interface GoldenPitStatus {
@@ -241,50 +256,94 @@ const GLOBAL_TREND_COLORS: Record<string, string> = {
   unknown: '#94a3b8',
 };
 
+const MARKET_ORDER = ['a_share', 'united_states', 'japan', 'south_korea', 'hong_kong'];
+
 function GlobalMacroCard({ macro }: { macro: GlobalMacro }) {
   const gateOpen = macro.liquidity_gate === 'open';
   const trendLabel = GLOBAL_TREND_LABELS[macro.global_trend] || macro.global_trend;
   const trendColor = GLOBAL_TREND_COLORS[macro.global_trend] || '#94a3b8';
   const coefPct = Math.round(macro.global_macro_coefficient * 100);
+  const cf = macro.capital_flow;
 
   return (
     <div className={`gp-macro-card ${gateOpen ? 'gate-open' : 'gate-closed'}`}>
-      <div className="gp-macro-item gate">
-        <span className="gp-macro-icon">{gateOpen ? '\u{1F513}' : '\u{1F512}'}</span>
-        <div className="gp-macro-text">
-          <span className="gp-macro-label">流动性闸门</span>
-          <span className={`gp-macro-value ${gateOpen ? 'text-green' : 'text-red'}`}>
-            {gateOpen ? '开启' : '关闭'}
-          </span>
+      <div className="gp-macro-top-row">
+        <div className="gp-macro-item gate">
+          <span className="gp-macro-icon">{gateOpen ? '\u{1F513}' : '\u{1F512}'}</span>
+          <div className="gp-macro-text">
+            <span className="gp-macro-label">流动性闸门</span>
+            <span className={`gp-macro-value ${gateOpen ? 'text-green' : 'text-red'}`}>
+              {gateOpen ? '开启' : '关闭'}
+            </span>
+          </div>
         </div>
-      </div>
-      <div className="gp-macro-item">
-        <span className="gp-macro-icon">📊</span>
-        <div className="gp-macro-text">
-          <span className="gp-macro-label">情绪指数</span>
-          <span className="gp-macro-value">{macro.sentiment_score.toFixed(0)}</span>
-          <span className="gp-macro-sub" style={{ color: macro.sentiment_score <= 20 ? '#C0392B' : macro.sentiment_score >= 80 ? '#27AE60' : 'var(--gp-text-dim)' }}>
-            {macro.sentiment_label}
-          </span>
+        <div className="gp-macro-item">
+          <span className="gp-macro-icon">{'\u{1F4CA}'}</span>
+          <div className="gp-macro-text">
+            <span className="gp-macro-label">情绪指数</span>
+            <span className="gp-macro-value">{macro.sentiment_score.toFixed(0)}</span>
+            <span className="gp-macro-sub" style={{ color: macro.sentiment_score <= 20 ? '#C0392B' : macro.sentiment_score >= 80 ? '#27AE60' : 'var(--gp-text-dim)' }}>
+              {macro.sentiment_label}
+            </span>
+          </div>
         </div>
-      </div>
-      <div className="gp-macro-item">
-        <span className="gp-macro-icon">🌍</span>
-        <div className="gp-macro-text">
-          <span className="gp-macro-label">全球趋势</span>
-          <span className="gp-macro-value" style={{ color: trendColor }}>{trendLabel}</span>
+        <div className="gp-macro-item">
+          <span className="gp-macro-icon">{'\u{1F30D}'}</span>
+          <div className="gp-macro-text">
+            <span className="gp-macro-label">全球趋势</span>
+            <span className="gp-macro-value" style={{ color: trendColor }}>{trendLabel}</span>
+          </div>
         </div>
-      </div>
-      <div className="gp-macro-item">
-        <span className="gp-macro-icon">⚖️</span>
-        <div className="gp-macro-text">
-          <span className="gp-macro-label">仓位系数</span>
-          <span className={`gp-macro-value ${coefPct < 100 ? 'text-amber' : ''}`}>
-            {coefPct}%
-          </span>
+        <div className="gp-macro-item">
+          <span className="gp-macro-icon">{'\u{2696}'}</span>
+          <div className="gp-macro-text">
+            <span className="gp-macro-label">仓位系数</span>
+            <span className={`gp-macro-value ${coefPct < 100 ? 'text-amber' : ''}`}>
+              {coefPct}%
+            </span>
+          </div>
         </div>
+        <div className="gp-macro-summary">{macro.summary}</div>
       </div>
-      <div className="gp-macro-summary">{macro.summary}</div>
+
+      {cf && cf.markets && (
+        <div className="gp-capital-flow">
+          <div className="gp-capital-flow-header">
+            <span className="gp-macro-label">全球资金流向</span>
+          </div>
+          <div className="gp-flow-markets">
+            {MARKET_ORDER.map((key) => {
+              const m = cf.markets[key];
+              if (!m) return null;
+              const isInflow = m.direction === 'inflow';
+              const ppAbs = Math.abs(m.cumulative_pp);
+              const ppColor = isInflow ? '#27AE60' : '#C0392B';
+              const barWidth = Math.min(100, Math.max(8, ppAbs * 10));
+              return (
+                <div key={key} className="gp-flow-market-chip">
+                  <span className="gp-flow-market-name">{m.name}</span>
+                  <span className="gp-flow-direction" style={{ color: isInflow ? '#27AE60' : '#C0392B' }}>
+                    {isInflow ? '↑' : '↓'}{m.direction_label}
+                  </span>
+                  <span className="gp-flow-days">{m.consecutive_days}日</span>
+                  <div className="gp-flow-bar-wrap">
+                    <div
+                      className="gp-flow-bar"
+                      style={{ width: `${barWidth}%`, background: ppColor }}
+                    />
+                  </div>
+                  <span className="gp-flow-pp" style={{ color: ppColor }}>
+                    {isInflow ? '+' : '-'}{ppAbs.toFixed(1)}pp
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {cf.summary && (
+            <div className="gp-flow-summary">{cf.summary}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

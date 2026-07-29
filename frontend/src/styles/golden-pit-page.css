@@ -426,7 +426,7 @@
    ═══════════════════════════════════════════════════════ */
 .gp-macro-card {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 0;
   margin-bottom: 10px;
   padding: 12px 18px;
@@ -436,12 +436,17 @@
   border: 1px solid var(--gp-border);
   border-radius: var(--gp-radius-lg);
   box-shadow: 2px 4px 12px var(--gp-sky-glow);
-  flex-wrap: wrap;
 }
 
 .gp-macro-card.gate-closed {
   border-color: rgba(192, 57, 43, 0.35);
   box-shadow: 2px 4px 12px var(--gp-sky-glow), 0 0 18px rgba(192, 57, 43, 0.12);
+}
+
+.gp-macro-top-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .gp-macro-item {
@@ -506,6 +511,93 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ── Capital Flow Section ── */
+.gp-capital-flow {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--gp-border);
+}
+
+.gp-capital-flow-header {
+  margin-bottom: 8px;
+}
+
+.gp-capital-flow-header .gp-macro-label {
+  font-size: 10px;
+}
+
+.gp-flow-markets {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gp-flow-market-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: var(--gp-glass);
+  border: 1px solid var(--gp-border);
+  border-radius: var(--gp-radius);
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: 220px;
+}
+
+.gp-flow-market-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gp-text);
+  flex-shrink: 0;
+}
+
+.gp-flow-direction {
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.gp-flow-days {
+  font-size: 10px;
+  color: var(--gp-text-dim);
+  flex-shrink: 0;
+}
+
+.gp-flow-bar-wrap {
+  flex: 1;
+  min-width: 24px;
+  height: 3px;
+  background: rgba(17, 137, 249, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.gp-flow-bar {
+  height: 100%;
+  border-radius: 2px;
+  min-width: 2px;
+  transition: width 0.4s ease;
+}
+
+.gp-flow-pp {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  flex-shrink: 0;
+}
+
+.gp-flow-summary {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--gp-text-dim);
+  line-height: 1.5;
+  padding: 4px 8px;
+  background: var(--gp-blue-pale);
+  border-radius: var(--gp-radius);
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -842,10 +934,12 @@
   .gp-bottom-row { grid-template-columns: 1fr; }
   .gp-timeline-dates { flex-wrap: wrap; gap: 4px 12px; }
   .gp-timeline-header { flex-direction: column; align-items: flex-start; }
-  .gp-macro-card { flex-direction: column; align-items: stretch; }
+  .gp-macro-top-row { flex-direction: column; align-items: stretch; }
   .gp-macro-item { border-right: none; border-bottom: 1px solid var(--gp-border); padding: 8px 0; }
   .gp-macro-item:last-of-type { border-bottom: none; }
   .gp-macro-summary { margin-left: 0; max-width: none; }
+  .gp-flow-markets { flex-direction: column; }
+  .gp-flow-market-chip { max-width: none; }
 }
 
 @media (max-width: 540px) {
