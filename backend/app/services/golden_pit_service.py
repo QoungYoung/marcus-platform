@@ -1341,44 +1341,46 @@ class GoldenPitService:
         }
 
     def _compute_global_trend(self, gcf_data: Dict[str, Any]) -> str:
-        """从 GCF 数据计算全球风险偏好趋势方向。"""
+        """从 GCF 数据计算全球风险偏好趋势方向。
+
+        优先用 items 中各市场的 momentum_5 均值（已由 API 预计算），
+        其次从 series 提取 A 股 share 占比序列推断趋势。
+        """
+        # 方案 1: items 中每个市场有 momentum_5 字段，取各市场均值
+        items = gcf_data.get("items", [])
+        if items:
+            momentums = [
+                it.get("momentum_5", 0) or 0
+                for it in items
+                if it.get("eligible")
+            ]
+            if momentums:
+                avg = sum(momentums) / len(momentums)
+                if avg > 0.02:
+                    return "rising"
+                elif avg < -0.02:
+                    return "declining"
+                else:
+                    return "flat"
+
+        # 方案 2: 从 series 提取 A 股 share 占比近 5 天趋势
         series_list = gcf_data.get("series", [])
-        if not series_list:
-            series_list = gcf_data.get("original_page_data", {}).get("series", [])
-        if not series_list:
-            series_list = gcf_data.get("original_page_data", {}).get("series", {}).get("data", [])
-        if not series_list:
-            return "unknown"
-
-        scores = []
-        if isinstance(series_list, list):
+        if series_list and len(series_list) >= 5:
+            a_shares = []
             for item in series_list[-5:]:
-                if isinstance(item, dict):
-                    s = item.get("sentiment_score") or item.get("score") or item.get("value")
-                    if s is not None:
-                        scores.append(float(s))
-        elif isinstance(series_list, dict):
-            for _key, items in series_list.items():
-                if isinstance(items, list) and len(items) >= 5:
-                    scores = [
-                        float(it.get("sentiment_score", it.get("score", it.get("value", 0))))
-                        for it in items[-5:]
-                    ]
-                    break
+                shares = item.get("shares", {})
+                a_shares.append(float(shares.get("a_share", 0)))
+            if len(a_shares) >= 3:
+                rising = sum(1 for i in range(1, len(a_shares)) if a_shares[i] > a_shares[i - 1])
+                declining = sum(1 for i in range(1, len(a_shares)) if a_shares[i] < a_shares[i - 1])
+                if rising >= 3:
+                    return "rising"
+                elif declining >= 3:
+                    return "declining"
+                else:
+                    return "flat"
 
-        if len(scores) < 3:
-            return "unknown"
-
-        recent = scores[-5:]
-        rising = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i - 1])
-        declining = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i - 1])
-
-        if rising >= 3:
-            return "rising"
-        elif declining >= 3:
-            return "declining"
-        else:
-            return "flat"
+        return "unknown"
 
     def _apply_global_macro_to_indices(
         self, indices: List[Dict[str, Any]], global_macro: Dict[str, Any]
