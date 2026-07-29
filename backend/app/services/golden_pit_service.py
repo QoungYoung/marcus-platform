@@ -1051,8 +1051,12 @@ class GoldenPitService:
                 index_info["eta_date"] = _add_trading_days(today_str, days_to)
 
         # ── 黄金坑入坑日期回测 ──
+        # 使用最近 250 天滚动窗口计算 P5，避免 expanding window 导致
+        # 阈值每天漂移、入坑日期来回跳动的问题。
         if status == "golden_pit" and sorted_series:
-            sorted_vals = sorted([float(s.get("greed", 0)) for s in sorted_series])
+            ref_window = min(250, len(sorted_series))
+            ref_series = sorted_series[-ref_window:]
+            sorted_vals = sorted([float(s.get("greed", 0)) for s in ref_series])
             p5_val = sorted_vals[max(0, int(len(sorted_vals) * 0.05))]
             reversed_series = list(reversed(sorted_series))
             entry_date = None
