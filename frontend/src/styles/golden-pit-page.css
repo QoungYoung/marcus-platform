@@ -773,6 +773,62 @@
 
 .gp-chart { min-height: 200px; }
 
+/* ── Chart Index Filters ── */
+.gp-chart-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.gp-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--gp-glass);
+  border: 1px solid var(--gp-border);
+  border-radius: 12px;
+  color: var(--gp-text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.gp-filter-chip:hover {
+  background: var(--gp-glass-hover);
+  color: var(--gp-text);
+}
+
+.gp-filter-chip.active {
+  background: var(--gp-paper-strong);
+  color: var(--gp-text);
+  font-weight: 600;
+}
+
+.gp-filter-all {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+
+.gp-filter-all.active {
+  background: rgba(17, 137, 249, 0.08);
+  border-color: var(--gp-blue-glow);
+  color: var(--gp-blue);
+}
+
+.gp-filter-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
 .gp-chart-empty {
   display: flex;
   align-items: center;

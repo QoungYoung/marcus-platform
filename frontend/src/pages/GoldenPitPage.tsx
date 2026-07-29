@@ -459,7 +459,12 @@ function TripleConfirmation({ conf, prediction }: {
   );
 }
 
-function TrendChart({ trendData }: { trendData: TrendData | null }) {
+function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
+  trendData: TrendData | null;
+  visibleCodes: Set<string>;
+  onToggleCode: (code: string) => void;
+  onToggleAll: () => void;
+}) {
   if (!trendData || !trendData.series || Object.keys(trendData.series).length === 0) {
     return (
       <div className="gp-chart">
@@ -469,11 +474,14 @@ function TrendChart({ trendData }: { trendData: TrendData | null }) {
     );
   }
 
-  // Merge all series by date
-  const codes = Object.keys(trendData.series);
-  const dateMap: Record<string, Record<string, number | string>> = {};
+  const allCodes = Object.keys(trendData.series);
+  const activeCodes = allCodes.filter((c) => visibleCodes.has(c));
+  const allSelected = activeCodes.length === allCodes.length;
+  const noneSelected = activeCodes.length === 0;
 
-  codes.forEach((code) => {
+  // Merge all series by date
+  const dateMap: Record<string, Record<string, number | string>> = {};
+  activeCodes.forEach((code) => {
     const series = trendData.series[code];
     if (!series) return;
     series.forEach((point) => {
@@ -488,44 +496,72 @@ function TrendChart({ trendData }: { trendData: TrendData | null }) {
 
   return (
     <div className="gp-chart">
-      <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(17,137,249,0.10)" />
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
-            tickFormatter={(v) => v.slice(5)}
-          />
-          <YAxis
-            domain={[0.2, 0.9]}
-            tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
-          />
-          <Tooltip
-            contentStyle={{
-              background: 'rgba(255,255,255,0.95)',
-              border: '1px solid rgba(231,231,231,0.75)',
-              borderRadius: 8,
-              fontSize: 12,
-              boxShadow: '0 4px 16px rgba(167,216,234,0.4)',
-            }}
-          />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
-          <ReferenceLine y={0.35} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5} />
-          <ReferenceLine y={0.40} stroke="#f97316" strokeDasharray="4 4" strokeWidth={1} />
-          {codes.map((code, i) => (
-            <Line
+      <div className="gp-chart-filters">
+        <button
+          className={`gp-filter-chip gp-filter-all ${allSelected ? 'active' : ''}`}
+          onClick={onToggleAll}
+        >
+          {allSelected ? '取消全选' : '全选'}
+        </button>
+        {allCodes.map((code, i) => {
+          const name = trendData.indices[code] || code;
+          const color = INDEX_COLORS[i % INDEX_COLORS.length];
+          const active = visibleCodes.has(code);
+          return (
+            <button
               key={code}
-              type="monotone"
-              dataKey={code}
-              name={trendData.indices[code] || code}
-              stroke={INDEX_COLORS[i % INDEX_COLORS.length]}
-              strokeWidth={1.5}
-              dot={false}
-              activeDot={{ r: 3 }}
+              className={`gp-filter-chip ${active ? 'active' : ''}`}
+              onClick={() => onToggleCode(code)}
+              style={active ? { borderColor: color, color } : undefined}
+            >
+              <span className="gp-filter-dot" style={{ background: active ? color : '#ccc' }} />
+              {name}
+            </button>
+          );
+        })}
+      </div>
+      {noneSelected ? (
+        <div className="gp-chart-empty">请选择至少一个指数</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(17,137,249,0.10)" />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+              tickFormatter={(v) => v.slice(5)}
             />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
+            <YAxis
+              domain={[0.2, 0.9]}
+              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+            />
+            <Tooltip
+              contentStyle={{
+                background: 'rgba(255,255,255,0.95)',
+                border: '1px solid rgba(231,231,231,0.75)',
+                borderRadius: 8,
+                fontSize: 12,
+                boxShadow: '0 4px 16px rgba(167,216,234,0.4)',
+              }}
+            />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <ReferenceLine y={0.35} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5} />
+            <ReferenceLine y={0.40} stroke="#f97316" strokeDasharray="4 4" strokeWidth={1} />
+            {activeCodes.map((code, i) => (
+              <Line
+                key={code}
+                type="monotone"
+                dataKey={code}
+                name={trendData.indices[code] || code}
+                stroke={INDEX_COLORS[allCodes.indexOf(code) % INDEX_COLORS.length]}
+                strokeWidth={1.5}
+                dot={false}
+                activeDot={{ r: 3 }}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
       <div className="gp-chart-legend-custom">
         <span className="gp-legend-item"><span className="gp-legend-dot" style={{ background: '#ef4444' }} /> 0.35 黄金坑线</span>
         <span className="gp-legend-item"><span className="gp-legend-dot" style={{ background: '#f97316' }} /> 0.40 预警线</span>
@@ -542,6 +578,7 @@ export default function GoldenPitPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showChart, setShowChart] = useState(true);
+  const [visibleCodes, setVisibleCodes] = useState<Set<string>>(new Set());
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
 
@@ -559,7 +596,11 @@ export default function GoldenPitPage() {
         setError(statusRes.data?.msg || '获取数据失败');
       }
       if (historyRes.data?.code === 0) {
-        setTrendData(historyRes.data.data);
+        const td = historyRes.data.data;
+        setTrendData(td);
+        if (td?.series) {
+          setVisibleCodes((prev) => prev.size === 0 ? new Set(Object.keys(td.series)) : prev);
+        }
       }
     } catch (e: any) {
       const msg = e?.response?.data?.msg || e?.message || '网络请求失败';
@@ -666,7 +707,27 @@ export default function GoldenPitPage() {
             {showChart ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
             <h3 className="gp-section-title" style={{ margin: 0 }}>贪婪值趋势</h3>
           </button>
-          {showChart && <TrendChart trendData={trendData} />}
+          {showChart && (
+            <TrendChart
+              trendData={trendData}
+              visibleCodes={visibleCodes}
+              onToggleCode={(code) => {
+                setVisibleCodes((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(code)) next.delete(code); else next.add(code);
+                  return next;
+                });
+              }}
+              onToggleAll={() => {
+                setVisibleCodes((prev) => {
+                  if (!trendData?.series) return prev;
+                  const all = Object.keys(trendData.series);
+                  const allSelected = all.every((c) => prev.has(c));
+                  return allSelected ? new Set() : new Set(all);
+                });
+              }}
+            />
+          )}
         </div>
       </div>
 
