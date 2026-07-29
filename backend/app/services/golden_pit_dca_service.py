@@ -605,6 +605,9 @@ def execute_golden_pit_dca() -> str:
     # 全球宏观提示
     if macro_coef < 1.0:
         summary_lines.append(f"🌍 全球宏观系数 {macro_coef:.1f}x: 仓位已下调 ({global_macro.get('summary', '')})")
+    cf = global_macro.get("capital_flow", {})
+    if cf.get("summary"):
+        summary_lines.append(f"💰 资金流向: {cf['summary']}")
     divergent = [i for i in indices if i.get("turning_validation") == "divergent"]
     if divergent:
         names = ", ".join(i["index_name"] for i in divergent)

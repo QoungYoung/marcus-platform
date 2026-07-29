@@ -706,6 +706,10 @@ class GoldenPitService:
         if gm:
             gate_icon = "🔒" if gm.get("liquidity_gate") == "closed" else "🔓"
             lines.append(f"{gate_icon} 全球宏观: {gm.get('summary', '')}")
+            # 资金持续流向
+            cf = gm.get("capital_flow", {})
+            if cf.get("summary"):
+                lines.append(f"💰 资金流向: {cf['summary']}")
             # 背离警告
             divergent = [i for i in indices if i.get("turning_validation") == "divergent"]
             if divergent:
@@ -1322,6 +1326,7 @@ class GoldenPitService:
             macro_coef = 0.8
 
         global_trend = self._compute_global_trend(gcf_data)
+        capital_flow = self._compute_capital_flow_persistence(gcf_data)
 
         trend_labels = {"rising": "回升中", "declining": "下降中", "flat": "持平", "unknown": "未知"}
         summary = (
@@ -1337,6 +1342,7 @@ class GoldenPitService:
             "sentiment_label": label,
             "global_trend": global_trend,
             "global_macro_coefficient": macro_coef,
+            "capital_flow": capital_flow,
             "summary": summary,
         }
 
@@ -1381,6 +1387,105 @@ class GoldenPitService:
                     return "flat"
 
         return "unknown"
+
+    def _compute_capital_flow_persistence(
+        self, gcf_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """从 series.shares 计算各市场资金持续流向。
+
+        Returns:
+            {markets: {id: {name, direction, consecutive_days, cumulative_pp}}, summary: str}
+        """
+        items = gcf_data.get("items", [])
+        series_list = gcf_data.get("series", [])
+
+        if not series_list or len(series_list) < 3:
+            return {"markets": {}, "summary": ""}
+
+        # 构建 market id → 显示名 映射
+        name_map = {it["id"]: it.get("name", it["id"]) for it in items if it.get("id")}
+
+        # 从 series 提取各市场每日 share 值
+        dates_series = [
+            (s.get("date", ""), s.get("shares", {}))
+            for s in series_list
+            if isinstance(s.get("shares"), dict)
+        ]
+        if len(dates_series) < 3:
+            return {"markets": {}, "summary": ""}
+
+        market_ids = list(dates_series[-1][1].keys())
+        markets = {}
+
+        for mid in market_ids:
+            # 提取该市场最近 60 天的 share 序列
+            shares_seq = [
+                (d, float(shares.get(mid, 0)))
+                for d, shares in dates_series[-60:]
+            ]
+            if len(shares_seq) < 3:
+                continue
+
+            # 从最新日开始向前，统计连续同向天数和累计变化
+            latest_share = shares_seq[-1][1]
+            direction = None
+            consecutive_days = 0
+            cumulative_pp = 0.0
+
+            for i in range(len(shares_seq) - 1, 0, -1):
+                curr = shares_seq[i][1]
+                prev = shares_seq[i - 1][1]
+                # 忽略 0 值
+                if curr == 0 and prev == 0:
+                    continue
+                change = curr - prev
+
+                day_direction = "inflow" if change > 0.0001 else ("outflow" if change < -0.0001 else "flat")
+
+                if day_direction == "flat":
+                    break
+
+                if direction is None:
+                    direction = day_direction
+
+                if day_direction != direction:
+                    break
+
+                consecutive_days += 1
+                cumulative_pp += change
+
+            if direction is None:
+                direction = "flat"
+
+            direction_label = {"inflow": "流入", "outflow": "流出", "flat": "持平"}
+            markets[mid] = {
+                "name": name_map.get(mid, mid),
+                "current_share": round(latest_share, 2),
+                "direction": direction,
+                "direction_label": direction_label.get(direction, "持平"),
+                "consecutive_days": consecutive_days,
+                "cumulative_pp": round(cumulative_pp, 2),
+            }
+
+        # 生成摘要: 先流出再流入
+        outflows = [
+            (mid, m) for mid, m in markets.items()
+            if m["direction"] == "outflow" and m["consecutive_days"] >= 2
+        ]
+        inflows = [
+            (mid, m) for mid, m in markets.items()
+            if m["direction"] == "inflow" and m["consecutive_days"] >= 2
+        ]
+        outflows.sort(key=lambda x: x[1]["consecutive_days"], reverse=True)
+        inflows.sort(key=lambda x: x[1]["consecutive_days"], reverse=True)
+
+        parts = []
+        for mid, m in outflows:
+            parts.append(f"{m['name']}连续{m['consecutive_days']}日流出({m['cumulative_pp']:+.1f}pp)")
+        for mid, m in inflows:
+            parts.append(f"{m['name']}连续{m['consecutive_days']}日流入({m['cumulative_pp']:+.1f}pp)")
+
+        return {"markets": markets, "summary": "; ".join(parts) if parts else ""}
 
     def _apply_global_macro_to_indices(
         self, indices: List[Dict[str, Any]], global_macro: Dict[str, Any]
