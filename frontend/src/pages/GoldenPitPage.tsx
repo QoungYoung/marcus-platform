@@ -579,6 +579,7 @@ export default function GoldenPitPage() {
   const [error, setError] = useState<string | null>(null);
   const [showChart, setShowChart] = useState(true);
   const [visibleCodes, setVisibleCodes] = useState<Set<string>>(new Set());
+  const [headerCollapsed, setHeaderCollapsed] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
 
@@ -676,15 +677,24 @@ export default function GoldenPitPage() {
     <div className="golden-pit-page">
       <canvas ref={canvasRef} id="gp-bg-canvas" />
       <div className="gp-content">
-        <div className="gp-header">
-        <div>
-          <h1 className="gp-title">黄金坑监测</h1>
-          <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
+        <div className={`gp-header ${headerCollapsed ? 'collapsed' : ''}`}>
+          <button
+            className="gp-header-toggle"
+            onClick={() => setHeaderCollapsed(!headerCollapsed)}
+            title={headerCollapsed ? '展开' : '收起'}
+          >
+            <h1 className="gp-title">黄金坑监测</h1>
+            {headerCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+          </button>
+          {!headerCollapsed && (
+            <>
+              <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
+              <button className="gp-refresh-btn" onClick={fetchData} title="刷新数据">
+                <RefreshCw size={16} />
+              </button>
+            </>
+          )}
         </div>
-        <button className="gp-refresh-btn" onClick={fetchData} title="刷新数据">
-          <RefreshCw size={16} />
-        </button>
-      </div>
 
       <GoldenPitTimeline window={window} />
 

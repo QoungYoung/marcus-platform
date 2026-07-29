@@ -105,6 +105,37 @@
   border: 1px solid var(--gp-border);
   border-radius: var(--gp-radius);
   box-shadow: 2px 4px 12px var(--gp-sky-glow);
+  transition: padding 0.2s ease;
+}
+
+.gp-header.collapsed {
+  padding: 8px 14px;
+  align-items: center;
+}
+
+.gp-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: var(--gp-text-dim);
+  transition: color 0.15s;
+  width: 100%;
+}
+
+.gp-header.collapsed .gp-header-toggle {
+  width: auto;
+}
+
+.gp-header-toggle:hover {
+  color: var(--gp-blue);
+}
+
+.gp-header-toggle .gp-title {
+  cursor: pointer;
 }
 
 .gp-title {
@@ -113,6 +144,11 @@
   margin: 0 0 2px;
   color: var(--gp-text);
   letter-spacing: 0.02em;
+}
+
+.gp-header.collapsed .gp-title {
+  font-size: 14px;
+  margin: 0;
 }
 
 .gp-subtitle {
