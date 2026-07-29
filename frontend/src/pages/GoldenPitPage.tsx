@@ -80,6 +80,7 @@ interface MarketFlow {
 interface CapitalFlow {
   markets: Record<string, MarketFlow>;
   summary: string;
+  share_history?: { date: string; [market: string]: number | string }[];
 }
 
 interface GlobalMacro {
@@ -570,6 +571,126 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
   );
 }
 
+const SHARE_MARKET_NAMES: Record<string, string> = {
+  a_share: 'A股',
+  hong_kong: '港股',
+  us: '美国',
+  japan: '日本',
+  south_korea: '韩国',
+  united_states: '美国',
+};
+
+function ShareHistoryChart({ shareHistory, visibleCodes, onToggleCode, onToggleAll }: {
+  shareHistory: { date: string; [market: string]: number | string }[];
+  visibleCodes: Set<string>;
+  onToggleCode: (code: string) => void;
+  onToggleAll: () => void;
+}) {
+  if (!shareHistory || shareHistory.length === 0) {
+    return (
+      <div className="gp-chart">
+        <h3 className="gp-section-title">全球资金份额</h3>
+        <div className="gp-chart-empty">暂无份额历史数据</div>
+      </div>
+    );
+  }
+
+  // Extract market keys from the first row (exclude 'date')
+  const firstRow = shareHistory[0];
+  const allCodes = Object.keys(firstRow).filter((k) => k !== 'date');
+  const activeCodes = allCodes.filter((c) => visibleCodes.has(c));
+  const allSelected = activeCodes.length === allCodes.length;
+  const noneSelected = activeCodes.length === 0;
+
+  // Sort by date ascending
+  const chartData = [...shareHistory].sort(
+    (a, b) => (a.date as string).localeCompare(b.date as string)
+  );
+
+  // Compute Y domain from visible series
+  let yMin = 100, yMax = 0;
+  chartData.forEach((row) => {
+    activeCodes.forEach((code) => {
+      const v = Number(row[code]);
+      if (!isNaN(v)) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); }
+    });
+  });
+  const pad = Math.max(2, (yMax - yMin) * 0.1);
+  yMin = Math.floor(yMin - pad);
+  yMax = Math.ceil(yMax + pad);
+
+  return (
+    <div className="gp-chart">
+      <div className="gp-chart-filters">
+        <button
+          className={`gp-filter-chip gp-filter-all ${allSelected ? 'active' : ''}`}
+          onClick={onToggleAll}
+        >
+          {allSelected ? '取消全选' : '全选'}
+        </button>
+        {allCodes.map((code, i) => {
+          const name = SHARE_MARKET_NAMES[code] || code;
+          const color = INDEX_COLORS[i % INDEX_COLORS.length];
+          const active = visibleCodes.has(code);
+          return (
+            <button
+              key={code}
+              className={`gp-filter-chip ${active ? 'active' : ''}`}
+              onClick={() => onToggleCode(code)}
+              style={active ? { borderColor: color, color } : undefined}
+            >
+              <span className="gp-filter-dot" style={{ background: active ? color : '#ccc' }} />
+              {name}
+            </button>
+          );
+        })}
+      </div>
+      {noneSelected ? (
+        <div className="gp-chart-empty">请选择至少一个市场</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(17,137,249,0.10)" />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+              tickFormatter={(v) => v.slice(5)}
+            />
+            <YAxis
+              domain={[yMin, yMax]}
+              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+              tickFormatter={(v) => `${v}%`}
+            />
+            <Tooltip
+              contentStyle={{
+                background: 'rgba(255,255,255,0.95)',
+                border: '1px solid rgba(231,231,231,0.75)',
+                borderRadius: 8,
+                fontSize: 12,
+                boxShadow: '0 4px 16px rgba(167,216,234,0.4)',
+              }}
+              formatter={(value: number, name: string) => [`${value.toFixed(2)}%`, SHARE_MARKET_NAMES[name] || name]}
+            />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            {activeCodes.map((code, i) => (
+              <Line
+                key={code}
+                type="monotone"
+                dataKey={code}
+                name={SHARE_MARKET_NAMES[code] || code}
+                stroke={INDEX_COLORS[allCodes.indexOf(code) % INDEX_COLORS.length]}
+                strokeWidth={1.5}
+                dot={false}
+                activeDot={{ r: 3 }}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──
 
 export default function GoldenPitPage() {
@@ -579,6 +700,8 @@ export default function GoldenPitPage() {
   const [error, setError] = useState<string | null>(null);
   const [showChart, setShowChart] = useState(true);
   const [visibleCodes, setVisibleCodes] = useState<Set<string>>(new Set());
+  const [chartTab, setChartTab] = useState<'greed' | 'share'>('greed');
+  const [shareVisibleCodes, setShareVisibleCodes] = useState<Set<string>>(new Set());
   const [headerCollapsed, setHeaderCollapsed] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
@@ -592,7 +715,19 @@ export default function GoldenPitPage() {
         goldenPitApi.getHistory('all', 60),
       ]);
       if (statusRes.data?.code === 0) {
-        setStatus(statusRes.data.data);
+        const s = statusRes.data.data;
+        setStatus(s);
+        // Initialize share visible codes from share_history on first load
+        const sh = s?.global_macro?.capital_flow?.share_history;
+        if (sh?.length > 0) {
+          setShareVisibleCodes((prev) => {
+            if (prev.size === 0) {
+              const keys = Object.keys(sh[0]).filter((k) => k !== 'date');
+              return new Set(keys);
+            }
+            return prev;
+          });
+        }
       } else {
         setError(statusRes.data?.msg || '获取数据失败');
       }
@@ -713,11 +848,29 @@ export default function GoldenPitPage() {
         <TripleConfirmation conf={conf} prediction={prediction} />
 
         <div className="gp-chart-section">
-          <button className="gp-chart-toggle" onClick={() => setShowChart(!showChart)}>
-            {showChart ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            <h3 className="gp-section-title" style={{ margin: 0 }}>贪婪值趋势</h3>
-          </button>
-          {showChart && (
+          <div className="gp-chart-top-bar">
+            <button className="gp-chart-toggle" onClick={() => setShowChart(!showChart)}>
+              {showChart ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              <h3 className="gp-section-title" style={{ margin: 0 }}>
+                {chartTab === 'greed' ? '贪婪值趋势' : '全球资金份额'}
+              </h3>
+            </button>
+            <div className="gp-chart-tabs">
+              <button
+                className={`gp-chart-tab ${chartTab === 'greed' ? 'active' : ''}`}
+                onClick={() => setChartTab('greed')}
+              >
+                贪婪值
+              </button>
+              <button
+                className={`gp-chart-tab ${chartTab === 'share' ? 'active' : ''}`}
+                onClick={() => setChartTab('share')}
+              >
+                资金份额
+              </button>
+            </div>
+          </div>
+          {showChart && chartTab === 'greed' && (
             <TrendChart
               trendData={trendData}
               visibleCodes={visibleCodes}
@@ -732,6 +885,28 @@ export default function GoldenPitPage() {
                 setVisibleCodes((prev) => {
                   if (!trendData?.series) return prev;
                   const all = Object.keys(trendData.series);
+                  const allSelected = all.every((c) => prev.has(c));
+                  return allSelected ? new Set() : new Set(all);
+                });
+              }}
+            />
+          )}
+          {showChart && chartTab === 'share' && (
+            <ShareHistoryChart
+              shareHistory={global_macro?.capital_flow?.share_history || []}
+              visibleCodes={shareVisibleCodes}
+              onToggleCode={(code) => {
+                setShareVisibleCodes((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(code)) next.delete(code); else next.add(code);
+                  return next;
+                });
+              }}
+              onToggleAll={() => {
+                setShareVisibleCodes((prev) => {
+                  const sh = global_macro?.capital_flow?.share_history;
+                  if (!sh || sh.length === 0) return prev;
+                  const all = Object.keys(sh[0]).filter((k) => k !== 'date');
                   const allSelected = all.every((c) => prev.has(c));
                   return allSelected ? new Set() : new Set(all);
                 });
