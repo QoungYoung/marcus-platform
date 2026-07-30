@@ -457,6 +457,36 @@
   margin-top: 4px;
 }
 
+.gp-index-strategy {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: #94a3b8;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.gp-strategy-entry,
+.gp-strategy-exit {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.gp-strategy-entry::before {
+  content: '↓';
+  margin-right: 3px;
+  color: #C0392B;
+  font-size: 11px;
+}
+
+.gp-strategy-exit::before {
+  content: '↑';
+  margin-right: 3px;
+  color: #27AE60;
+  font-size: 11px;
+}
+
 /* ═══════════════════════════════════════════════════════
    GLOBAL MACRO CARD
    ═══════════════════════════════════════════════════════ */

@@ -30,6 +30,8 @@ interface IndexStatus {
   position_multiplier?: number;
   exit_signal?: string | null;
   exit_reason?: string;
+  entry_strategy?: string;
+  exit_strategy?: string;
   turning_validation?: string;
   turning_validation_reason?: string;
   signal_quality?: string;
@@ -418,6 +420,12 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           <span className="gp-index-close">{'¥'}{idx.close.toFixed(2)}</span>
         )}
       </div>
+      {(idx.entry_strategy || idx.exit_strategy) && (
+        <div className="gp-index-strategy">
+          {idx.entry_strategy && <span className="gp-strategy-entry">入场: {idx.entry_strategy}</span>}
+          {idx.exit_strategy && <span className="gp-strategy-exit">出场: {idx.exit_strategy}</span>}
+        </div>
+      )}
       {idx.position_tier_label && idx.tier !== 'drop' && idx.tier !== 'watch' && (
         <div className="gp-index-position" style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 4 }}>
           {idx.position_tier_label}
