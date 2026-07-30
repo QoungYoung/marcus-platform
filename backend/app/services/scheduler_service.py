@@ -811,9 +811,18 @@ class SchedulerService:
                     f"时间: {execution.finished_at.strftime('%H:%M:%S')}" if execution.finished_at else "",
                 ]
                 if execution.output:
-                    output_preview = execution.output[:500]
-                    if len(execution.output) > 500:
-                        output_preview += "\n... (已截断)"
+                    # golden_pit_dca: 从 JSON 中提取 summary_text 作为友好回退
+                    output_preview = execution.output
+                    if task.type == 'golden_pit_dca':
+                        try:
+                            data = json.loads(execution.output)
+                            output_preview = data.get("summary_text", execution.output[:500])
+                        except Exception:
+                            output_preview = execution.output[:500]
+                    else:
+                        output_preview = execution.output[:500]
+                    if len(output_preview) > 500:
+                        output_preview = output_preview[:500] + "\n... (已截断)"
                     lines.append(f"\n输出:\n{output_preview}")
                 if execution.error:
                     lines.append(f"\n错误: {execution.error[:300]}")
@@ -894,7 +903,42 @@ class SchedulerService:
         try:
             # 根据任务类型生成不同的分析指令
             prev_review_context = ""  # 默认为空，仅盘前分支使用
-            if '盘前' in task_name:
+            if '黄金坑' in task_name and 'DCA' in task_name:
+                report_guide = (
+                    "报告结构：将以下 JSON 数据整理为专业的黄金坑 DCA 定投报告。\n"
+                    "\n"
+                    "**必须包含以下板块**：\n"
+                    "\n"
+                    "1. **持仓明细表**（从 holdings 字段提取）：\n"
+                    "   表格列：指数 | 代码 | 持仓(股) | 成本价 | 现价 | 市值 | 盈亏% | 持天数 | 层级\n"
+                    "   若无持仓则注明「当前无黄金坑持仓」\n"
+                    "\n"
+                    "2. **退出信号**（从 exit_signals 字段提取，如有）：\n"
+                    "   标注信号类型：🔴全仓退出 / 🟡半仓退出 / 🟠止盈\n"
+                    "   说明退出原因和当前贪婪分位\n"
+                    "\n"
+                    "3. **买入候选表**（从 buy_candidates 字段提取）：\n"
+                    "   表格列：指数 | 代码 | 层级 | 仓位阶段 | 建议金额 | 已投/上限 | 趋势 | 升天数 | 贪婪分位\n"
+                    "   每个候选下方用一句话说明加仓理由（趋势、共振、宏观因素）\n"
+                    "\n"
+                    "4. **窗口概览**：阶段、领先指数、窗口天数、共振系数、宏观系数\n"
+                    "\n"
+                    "5. **操作建议**：基于当前数据的下一步建议\n"
+                    "\n"
+                    "格式要求：用简洁的 Markdown 表格，控制在 800 字以内。"
+                    "数据中的金额单位是元，展示时保留整数。百分比保留 1 位小数。"
+                )
+                prompt = (
+                    f"以下是 {task_name} 的执行结果（JSON 格式）。\n"
+                    f"请基于「黄金坑 DCA 定投策略」对此数据进行分析，"
+                    f"整合为专业的定投报告。\n"
+                    f"{report_guide}\n"
+                    f"最后，用单独一行给出你的策略判断：\n"
+                    f"SIGNAL: <green|yellow|red> POSITION:<0-100> REASON:<一句话理由>\n"
+                    f"其中 green=积极加仓 yellow=谨慎加仓 red=暂停加仓。"
+                    f"\n\n=== 任务输出 ===\n{output}"
+                )
+            elif '盘前' in task_name:
                 report_guide = (
                     "报告结构：隔夜外盘 → A50/汇率 → 板块催化 → 今日展望。"
                 )
@@ -1338,12 +1382,13 @@ class SchedulerService:
 
     def _execute_golden_pit_dca_task(self, task: TaskConfig, execution_id: str) -> str:
         """执行黄金坑 DCA 自动定投任务。"""
+        import json as _json
         from app.services.golden_pit_dca_service import execute_golden_pit_dca
 
         logger.info(f"[{execution_id}] 开始黄金坑 DCA 定投检查")
         result = execute_golden_pit_dca()
         logger.info(f"[{execution_id}] 黄金坑 DCA 定投完成")
-        return result
+        return _json.dumps(result, ensure_ascii=False, default=str)
 
     def _on_job_executed(self, event):
         """任务执行成功回调"""

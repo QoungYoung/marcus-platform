@@ -46,6 +46,8 @@ services:
       DATABASE_URL: postgresql://marcus:${DB_PASSWORD:-marcus123}@postgres:5432/marcus_trading
       EASTMONEY_COOKIE: ${EASTMONEY_COOKIE}
       EM_PROXY_URL: http://81.70.44.68:8199
+      QT_QPA_PLATFORM: offscreen
+      ENGINE_BACKEND: vnpy
     ports:
       - "8000:8000"
     volumes:

@@ -352,6 +352,7 @@ tasks:
   notifications:
     on_success: true
     on_failure: true
+    pi_analysis: true
     channels:
     - qqbot
   depends_on: []

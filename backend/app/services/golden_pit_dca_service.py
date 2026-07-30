@@ -12,7 +12,9 @@
   - triangle:     三角（第 7-8 天最多）
 """
 
+import json
 import logging
+import re
 import sys
 import os
 from datetime import datetime, date
@@ -291,6 +293,154 @@ def _record_dca_log(
         logger.warning("记录 DCA 日志失败: %s", e)
 
 
+def _get_holdings_detail() -> List[Dict[str, Any]]:
+    """查询所有黄金坑 ETF 的持仓明细（FIFO 成本 + 实时价格 + 盈亏）。"""
+    from app.database import SessionLocal
+    from app.models.paper_trade import PaperTrade, PaperPosition
+    from app.services.golden_pit_service import CHINA_INDICES
+    from sqlalchemy import func
+
+    db = SessionLocal()
+    try:
+        # 构建 ETF code → (index_name, tier, fund_code) 映射
+        etf_configs = _get_etf_configs()
+        etf_map: Dict[str, Dict] = {}  # etf_code → {index_name, tier, fund_code}
+        gp_symbols: set = set()
+        for cfg in etf_configs:
+            code = cfg["fund_code"]
+            if code not in CHINA_INDICES:
+                continue
+            ec = cfg["etf_code"]
+            ec_no = re.sub(r'^(SH|SZ|BJ)', '', ec)
+            info = {
+                "index_name": CHINA_INDICES[code]["name"],
+                "tier": CHINA_INDICES[code].get("tier", ""),
+                "fund_code": code,
+            }
+            etf_map[ec] = info
+            etf_map[ec_no] = info
+            gp_symbols.add(ec)
+            gp_symbols.add(ec_no)
+
+        pos_rows = db.query(PaperPosition).all()
+        held_symbols = []
+        for pos in pos_rows:
+            sym = pos.symbol
+            sym_no_prefix = re.sub(r'^(SH|SZ|BJ)', '', sym)
+            if sym in gp_symbols or sym_no_prefix in gp_symbols:
+                held_symbols.append(sym)
+
+        if not held_symbols:
+            return []
+
+        # FIFO 重放计算持仓量+成本
+        trades = (
+            db.query(PaperTrade)
+            .filter(
+                PaperTrade.symbol.in_(held_symbols),
+                (PaperTrade.voided == 0) | (PaperTrade.voided == None),
+            )
+            .order_by(
+                func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),
+                PaperTrade.id,
+            )
+            .all()
+        )
+
+        # 按 symbol 组织 FIFO lots
+        lots_map: Dict[str, List[Dict]] = {}
+        for t in trades:
+            sym = t.symbol
+            if t.direction == '买入':
+                entry_date = t.trade_date or (t.created_at[:10] if t.created_at else '')
+                lots_map.setdefault(sym, []).append({
+                    'price': t.price, 'volume': t.volume, 'entry_date': entry_date
+                })
+            elif t.direction == '卖出':
+                lots = lots_map.get(sym, [])
+                remaining = t.volume
+                i = 0
+                while remaining > 0 and i < len(lots):
+                    used = min(lots[i]['volume'], remaining)
+                    lots[i]['volume'] -= used
+                    remaining -= used
+                    if lots[i]['volume'] == 0:
+                        lots.pop(i)
+                    else:
+                        i += 1
+
+        # 构建持仓详情
+        holdings = []
+        for sym in held_symbols:
+            lots = lots_map.get(sym, [])
+            if not lots:
+                continue
+            total_vol = sum(l['volume'] for l in lots)
+            if total_vol < 100:
+                continue
+            avg_cost = sum(l['price'] * l['volume'] for l in lots) / total_vol
+            entry_dates = [l['entry_date'] for l in lots if l.get('entry_date')]
+            first_entry = min(entry_dates) if entry_dates else ''
+
+            # 获取实时价格
+            quote = _get_quote(sym)
+            current_price = None
+            change_pct = 0.0
+            if quote:
+                current_price = quote.get("current") or quote.get("last_close")
+                change_pct = quote.get("change_pct", 0.0)
+
+            if not current_price or current_price <= 0:
+                continue
+
+            market_value = total_vol * current_price
+            cost_value = total_vol * avg_cost
+            float_pnl = market_value - cost_value
+            float_pnl_pct = (current_price / avg_cost - 1) * 100 if avg_cost > 0 else 0
+
+            # 匹配指数名称
+            matched = etf_map.get(sym) or etf_map.get(re.sub(r'^(SH|SZ|BJ)', '', sym)) or {}
+            index_name = matched.get("index_name", "")
+            fund_code = matched.get("fund_code", "")
+            tier = matched.get("tier", "")
+
+            # 计算持仓天数
+            days_held = 0
+            if first_entry:
+                try:
+                    entry_dt = datetime.strptime(first_entry, "%Y-%m-%d")
+                    days_held = (datetime.now() - entry_dt).days
+                except ValueError:
+                    pass
+
+            holdings.append({
+                "index_name": index_name or sym,
+                "fund_code": fund_code,
+                "etf_code": sym,
+                "shares": total_vol,
+                "avg_cost": round(avg_cost, 3),
+                "current_price": round(current_price, 3),
+                "market_value": round(market_value, 2),
+                "float_pnl": round(float_pnl, 2),
+                "float_pnl_pct": round(float_pnl_pct, 2),
+                "change_pct": round(change_pct, 2),
+                "entry_date": first_entry,
+                "days_held": days_held,
+                "tier": tier,
+            })
+
+        # 按 tier 排序: core > satellite > defense
+        tier_order = {"core": 0, "satellite": 1, "defense": 2}
+        holdings.sort(key=lambda h: (tier_order.get(h["tier"], 9), h["index_name"]))
+        return holdings
+
+    except Exception as e:
+        logger.warning("获取持仓明细失败: %s", e)
+        return []
+    finally:
+        db.close()
+
+
 def _resonance_multiplier(indices: List[Dict]) -> float:
     """多指数共振系数: 入坑指数越多，信号越可靠，仓位越高。
 
@@ -315,7 +465,7 @@ def _resonance_multiplier(indices: List[Dict]) -> float:
         return 0.6
 
 
-def execute_golden_pit_dca() -> str:
+def execute_golden_pit_dca() -> Dict[str, Any]:
     """
     黄金坑 DCA 定投主逻辑 v4 — 趋势驱动仓位管理。
 
@@ -332,7 +482,7 @@ def execute_golden_pit_dca() -> str:
     跳过 drop(放弃) 和 watch(仅观察) 级别的指数。
 
     Returns:
-        执行结果摘要字符串。
+        结构化 dict，包含 holdings/exit_signals/buy_candidates/skipped/summary_text 等字段。
     """
     from app.services.golden_pit_service import GoldenPitService, POSITION_TIERS, CHINA_INDICES
 
@@ -351,7 +501,17 @@ def execute_golden_pit_dca() -> str:
 
     phase = window.get("phase", "idle")
     if phase == "idle":
-        return f"[{as_of}] 无黄金坑信号，跳过 DCA 定投"
+        return {
+            "as_of": as_of,
+            "phase": "idle",
+            "phase_label": "无信号",
+            "summary_text": f"[{as_of}] 无黄金坑信号，跳过 DCA 定投",
+            "holdings": _get_holdings_detail(),
+            "exit_signals": [],
+            "buy_candidates": [],
+            "skipped": [],
+            "stats": {},
+        }
 
     current_day = window.get("current_day", 0)
     window_start = window.get("start_date", "")
@@ -379,12 +539,32 @@ def execute_golden_pit_dca() -> str:
             f"   所有买入已跳过，等待闸门重新开启。"
         )
         logger.warning("黄金坑 DCA: 全球流动性闸门关闭，跳过所有买入")
-        return gate_msg
+        return {
+            "as_of": as_of,
+            "phase": phase,
+            "phase_label": "买入窗口",
+            "summary_text": gate_msg,
+            "holdings": _get_holdings_detail(),
+            "exit_signals": [],
+            "buy_candidates": [],
+            "skipped": [],
+            "stats": {"liquidity_gate": "closed", "macro_coef": macro_coef},
+        }
 
     # 2. 读取 ETF 配置
     etf_configs = _get_etf_configs()
     if not etf_configs:
-        return "无启用的黄金坑 ETF 配置"
+        return {
+            "as_of": as_of,
+            "phase": phase,
+            "phase_label": "买入窗口",
+            "summary_text": "无启用的黄金坑 ETF 配置",
+            "holdings": _get_holdings_detail(),
+            "exit_signals": [],
+            "buy_candidates": [],
+            "skipped": [],
+            "stats": {},
+        }
 
     config_by_fund = {c["fund_code"]: c for c in etf_configs}
 
@@ -569,7 +749,7 @@ def execute_golden_pit_dca() -> str:
             f"¥{daily_amount:.0f} [{idx.get('tier')}/{position_tier}] (第{current_day}天)"
         )
 
-    # 4. 摘要
+    # 4. 构建结构化结果
     skipped_drop = sum(1 for i in indices if i.get("tier") in ("drop", "watch") and i["status"] != "normal")
     turning_count = window.get("turning_count", 0)
     pre_turn_count = len(tradeable) - turning_count
@@ -578,6 +758,8 @@ def execute_golden_pit_dca() -> str:
     phase_label = {"buying": "买入窗口", "waiting": "等待拐点"}.get(phase, phase)
     resonance = _resonance_multiplier(indices)
     gate_info = f"🔒闸门关闭" if liquidity_gate == "closed" else f"🔓闸门开启"
+
+    # 传统文本摘要（Pi 不可用时的 fallback）
     summary_lines = [
         f"黄金坑 DCA v4 (趋势驱动 · 仅通知) — {today_str}",
         f"阶段: {phase_label} | 领先: {window.get('leading_index', 'N/A')}",
@@ -593,8 +775,6 @@ def execute_golden_pit_dca() -> str:
         summary_lines.append("本日无符合条件的定投通知")
     summary_lines.append("")
 
-    # 仓位建议 (趋势驱动)
-    summary_lines.append("⚠️ 仅通知模式: 未实际下单，仓位累计已记录。")
     if pre_turn_count > 0 and turning_count == 0:
         summary_lines.append("💡 拐点前: 轻仓累积(单次≤3%/累计≤15%), 等待贪婪值连续回升。")
     elif turning_count > 0 and pre_turn_count > 0:
@@ -602,18 +782,145 @@ def execute_golden_pit_dca() -> str:
     elif turning_count > 0:
         summary_lines.append(f"💡 拐点已确认: {turning_count}个指数快速加仓中 (50%→75%→100%)。")
 
-    # 全球宏观提示
     if macro_coef < 1.0:
         summary_lines.append(f"🌍 全球宏观系数 {macro_coef:.1f}x: 仓位已下调 ({global_macro.get('summary', '')})")
     cf = global_macro.get("capital_flow", {})
     if cf.get("summary"):
         summary_lines.append(f"💰 资金流向: {cf['summary']}")
-    divergent = [i for i in indices if i.get("turning_validation") == "divergent"]
-    if divergent:
-        names = ", ".join(i["index_name"] for i in divergent)
-        summary_lines.append(f"⚠️ 全球趋势背离: {names} 仓位已限制在拐点前水平")
+    divergent_names = [i["index_name"] for i in indices if i.get("turning_validation") == "divergent"]
+    if divergent_names:
+        summary_lines.append(f"⚠️ 全球趋势背离: {', '.join(divergent_names)} 仓位已限制在拐点前水平")
 
-    return "\n".join(summary_lines)
+    summary_text = "\n".join(summary_lines)
+
+    # 构建 buy_candidates 结构化列表
+    buy_candidates = []
+    for i, idx in enumerate(tradeable):
+        fund_code = idx["fund_code"]
+        cfg = config_by_fund.get(fund_code)
+        if not cfg:
+            continue
+        max_total = cfg["max_total_amount"]
+        total_invested = sum(
+            _get_day_amount(fund_code, window_start, d)
+            for d in _get_executed_days(fund_code, window_start)
+        )
+        remaining = max_total - total_invested
+        turning_confirmed = idx.get("turning_point_confirmed", False)
+        days_rising = idx.get("days_rising", 0)
+        trend = idx.get("trend", "declining")
+
+        if not turning_confirmed:
+            position_tier = "pre_turn"
+            tier_multiplier = 0.03
+        elif days_rising >= 4:
+            position_tier = "full"
+            tier_multiplier = 1.0
+        elif days_rising >= 3:
+            position_tier = "accelerate"
+            tier_multiplier = 0.75
+        else:
+            position_tier = "turning"
+            tier_multiplier = 0.50
+
+        index_params = CHINA_INDICES.get(fund_code, {})
+        pos_mult = index_params.get("position_multiplier", 1.0)
+        tier_multiplier *= pos_mult
+        daily_amount = min(max_total * tier_multiplier, remaining) if turning_confirmed else min(
+            max_total * 0.03 * pos_mult,
+            max_total * index_params.get("pre_turn_cap", 0.15) - total_invested
+        )
+        daily_amount = min(daily_amount * resonance, remaining)
+        daily_amount *= macro_coef
+        daily_amount = min(daily_amount, remaining)
+
+        buy_candidates.append({
+            "index_name": idx["index_name"],
+            "fund_code": fund_code,
+            "etf_code": cfg["etf_code"],
+            "tier": idx.get("tier", ""),
+            "status": idx["status"],
+            "position_tier": position_tier,
+            "daily_amount": round(daily_amount, 0),
+            "max_total": max_total,
+            "total_invested": round(total_invested, 0),
+            "remaining": round(remaining, 0),
+            "trend": trend,
+            "days_rising": days_rising,
+            "days_in_pit": idx.get("days_in_pit") or idx.get("days_in_warning") or 0,
+            "greed": idx.get("greed", 0),
+            "percentile": idx.get("percentile", 0),
+            "turning_confirmed": turning_confirmed,
+            "reason": (
+                f"trend={trend} pos={position_tier}({tier_multiplier*100:.0f}%) "
+                f"resonance={resonance:.1f}x macro={macro_coef:.1f}x day{current_day}"
+            ),
+        })
+
+    # 构建 skipped 列表
+    skipped_list = []
+    for idx in indices:
+        if idx.get("tier") in ("drop", "watch") and idx["status"] != "normal":
+            fund_code = idx["fund_code"]
+            cfg = config_by_fund.get(fund_code)
+            skipped_list.append({
+                "index_name": idx["index_name"],
+                "fund_code": fund_code,
+                "etf_code": cfg["etf_code"] if cfg else "",
+                "tier": idx.get("tier", ""),
+                "status": idx["status"],
+                "reason": f"tier={idx.get('tier')}, 不入金",
+            })
+
+    return {
+        "as_of": as_of,
+        "today": today_str,
+        "phase": phase,
+        "phase_label": phase_label,
+        "window_day": current_day,
+        "window_start": window_start,
+        "leading_index": window.get("leading_index", ""),
+        "resonance": {
+            "pit_count": pit_count,
+            "multiplier": resonance,
+        },
+        "macro": {
+            "coefficient": macro_coef,
+            "liquidity_gate": liquidity_gate,
+            "summary": global_macro.get("summary", ""),
+            "capital_flow_summary": cf.get("summary", "") if cf else "",
+        },
+        "holdings": _get_holdings_detail(),
+        "exit_signals": [
+            {
+                "index_name": i["index_name"],
+                "etf_code": config_by_fund.get(i["fund_code"], {}).get("etf_code", ""),
+                "fund_code": i["fund_code"],
+                "signal": i.get("exit_signal"),
+                "reason": i.get("exit_reason", ""),
+                "greed": i.get("greed", 0),
+                "percentile": i.get("percentile", 0),
+            }
+            for i in indices
+            if i.get("exit_signal")
+            and config_by_fund.get(i["fund_code"])
+            and _get_holding_shares(config_by_fund[i["fund_code"]]["etf_code"]) >= 100
+        ],
+        "buy_candidates": buy_candidates,
+        "skipped": skipped_list,
+        "stats": {
+            "tradeable_count": len(tradeable),
+            "turning_count": turning_count,
+            "pre_turn_count": pre_turn_count,
+            "executed_count": executed_count,
+            "total_invested_today": round(total_invested_today, 0),
+            "skipped_count": skipped_count,
+            "skipped_drop": skipped_drop,
+            "divergent": divergent_names,
+        },
+        "tips": summary_lines[-6:] if len(summary_lines) > 6 else summary_lines[3:],
+        "summary_text": summary_text,
+    }
 
 
 def _get_day_amount(fund_code: str, window_start: str, buy_day: int) -> float:

@@ -116,7 +116,20 @@ ETF_CONFIGS = [
         "max_total_amount": 40000.0,
         "require_absolute_threshold": False,
         "min_days_in_pit": 0,
-        "notes": "P10 相对阈值触发。高胜率(87.5%)，20天均值+3.49%，信号少但质量极高，类似科创50级别。",
+        "notes": "P10 相对阈值触发。美股V型反弹, 无需拐点确认。胜率87.5%, 20天均值+3.5%, 信号少但质量极高, 类似科创50级别。",
+    },
+    {
+        "fund_code": "159632",
+        "index_name": "纳斯达克指数",
+        "etf_code": "SZ159632",
+        "etf_name": "华安纳斯达克100ETF",
+        "priority": 10,
+        "strategy": "uniform_5",
+        "daily_amount": 4000.0,
+        "max_total_amount": 40000.0,
+        "require_absolute_threshold": False,
+        "min_days_in_pit": 0,
+        "notes": "P8 相对阈值触发。美股V型反弹, 无需拐点确认。胜率67%, 20天均值+5.01%, 类似道琼斯级别, 核心配置。",
     },
     {
         "fund_code": "513600",
@@ -129,7 +142,7 @@ ETF_CONFIGS = [
         "max_total_amount": 30000.0,
         "require_absolute_threshold": False,
         "min_days_in_pit": 0,
-        "notes": "P10 相对阈值触发。胜率72.7%，20天均值+1.30%，类似沪深300级别，防御配置。",
+        "notes": "P8 相对阈值触发。胜率66%, 20天均值+2.7%, 类似沪深300级别, 防御配置。",
     },
 ]
 
@@ -155,7 +168,7 @@ def seed():
                 print(f"[INSERT] {cfg['fund_code']} {cfg['index_name']}")
 
         db.commit()
-        print("\nDone. 共 6 条 ETF 配置已写入 golden_pit_etf_config 表。")
+        print(f"\nDone. 共 {len(ETF_CONFIGS)} 条 ETF 配置已写入 golden_pit_etf_config 表。")
 
         # 打印当前配置
         print("\n" + "=" * 80)
