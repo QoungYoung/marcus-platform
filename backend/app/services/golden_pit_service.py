@@ -181,6 +181,27 @@ STATUS_MAP = {
 }
 
 
+def _trend_label(trend: str, factor: float) -> str:
+    """生成通俗中文趋势标签。"""
+    name_map = {
+        "declining": "下跌中",
+        "bottoming": "初步企稳",
+        "turning": "拐点确认",
+        "accelerating": "趋势加速",
+        "full": "强势上涨",
+    }
+    name = name_map.get(trend, trend)
+    if factor <= 0.15:
+        return f"{name} · 仅投{int(factor * 100)}%试探"
+    elif factor < 1.0:
+        return f"{name} · 半速建仓({int(factor * 100)}%)"
+    elif factor >= 1.5:
+        return f"{name} · 全速建仓"
+    elif factor > 1.0:
+        return f"{name} · 加速建仓({int(factor * 100)}%)"
+    return f"{name} · 标准节奏"
+
+
 def get_trend_factor(trend: str, days_rising: int, fund_code: str = "",
                      current_greed: float = 0.0, entry_greed: float = 999.0) -> float:
     """根据趋势状态返回仓位调节因子, 支持分指数覆盖。
@@ -1122,6 +1143,8 @@ class GoldenPitService:
             "dca_fallback": cfg.get("dca_fallback", 10),
             "trend_factors": cfg.get("trend_factors"),
             "position_multiplier": cfg.get("position_multiplier", 1.0),
+            # 趋势标签 (DCA v5 展示用)
+            "trend_label": "—",
             # Day 1 检测字段
             "p10_entry_date": None,
             "days_in_warning": 0,
@@ -1185,25 +1208,27 @@ class GoldenPitService:
                         index_info["turning_start_date"] = sorted_series[max(0, idx_turn)].get("date", "")
                     if trend["days_rising"] >= 4:
                         index_info["position_tier"] = "full"
-                        index_info["position_tier_label"] = "×1.5x 加速满仓 (拐点+4天回升)"
+                        index_info["position_tier_label"] = "强势上涨"
                     elif trend["days_rising"] >= 3:
                         index_info["position_tier"] = "accelerate"
-                        index_info["position_tier_label"] = "×1.2x 加速建仓 (拐点+3天回升)"
+                        index_info["position_tier_label"] = "趋势加速"
                     else:
                         index_info["position_tier"] = "turning"
-                        index_info["position_tier_label"] = "×1.0x 标准建仓 (拐点确认)"
+                        index_info["position_tier_label"] = "拐点确认"
                 else:
                     index_info["position_tier"] = "pre_turn"
-                    index_info["position_tier_label"] = "×0.1~0.5x 减速建仓 (拐点前)"
+                    index_info["position_tier_label"] = "跌势未止"
 
                 # 计算当前趋势因子 (DCA v5 展示用)
-                index_info["trend_factor"] = round(get_trend_factor(
+                trend_factor = get_trend_factor(
                     trend=index_info.get("trend", "declining"),
                     days_rising=index_info.get("days_rising", 0),
                     fund_code=code,
                     current_greed=index_info.get("greed", 0.0),
                     entry_greed=index_info.get("entry_greed") or 999.0,
-                ), 2)
+                )
+                index_info["trend_factor"] = round(trend_factor, 2)
+                index_info["trend_label"] = _trend_label(index_info.get("trend", "declining"), trend_factor)
 
             elif tier in ("drop", "watch"):
                 index_info["position_tier"] = None
@@ -1757,7 +1782,7 @@ class GoldenPitService:
                 )
                 if idx.get("position_tier") not in (None, "pre_turn"):
                     idx["position_tier"] = "pre_turn"
-                    idx["position_tier_label"] = "轻仓 (拐点前 · 全球趋势背离)"
+                    idx["position_tier_label"] = "全球背离 · 暂缓建仓"
             elif turning_confirmed:
                 idx["turning_validation"] = "validated"
 

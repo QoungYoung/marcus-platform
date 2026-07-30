@@ -279,6 +279,7 @@ async def get_dca_status():
                     "enabled": cfg.enabled,
                     "trend": idx.get("trend", "") if idx else "",
                     "trend_factor": idx.get("trend_factor") if idx else None,
+                    "trend_label": idx.get("trend_label", "") if idx else "",
                     "schedule_day": current_day,
                 })
 

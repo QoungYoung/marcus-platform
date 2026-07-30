@@ -1331,9 +1331,9 @@ const getGoldenPitDcaStatusTool = {
           const statusIcon = etf.status === 'golden_pit' ? '🔴' : etf.status === 'warning' ? '🟠' : '🟢';
           const executedStr = etf.executed_days?.length ? etf.executed_days.join(',') : '-';
           const dcaLabel = etf.strategy || etf.dca_strategy || '—';
-          const trendInfo = etf.trend_factor != null
+          const trendInfo = etf.trend_label || (etf.trend_factor != null
             ? `${etf.trend || '—'} ×${etf.trend_factor}x`
-            : '—';
+            : '—');
           lines.push(`| ${etf.etf_code} ${etf.index_name} | ${statusIcon} ${etf.status} | ${dcaLabel} | ¥${etf.daily_amount} | ${trendInfo} | ¥${etf.total_invested} | ¥${etf.remaining} | ${executedStr} |`);
         }
       }

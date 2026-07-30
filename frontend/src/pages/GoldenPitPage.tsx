@@ -35,6 +35,7 @@ interface IndexStatus {
   dca_strategy?: string;
   dca_weight?: number;
   trend_factor?: number;
+  trend_label?: string;
   schedule_day?: number;
   prev_greed?: number | null;
   signal_trigger_greed?: number | null;
@@ -435,9 +436,9 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
       )}
       {idx.position_tier_label && idx.tier !== 'drop' && idx.tier !== 'watch' && (
         <div className="gp-index-position" style={{ fontSize: '0.75rem', marginTop: 4 }}>
-          {idx.trend_factor != null ? (
-            <span style={{ color: idx.trend_factor >= 1.0 ? '#27AE60' : idx.trend_factor >= 0.5 ? '#f59e0b' : '#ef4444' }}>
-              趋势: {idx.trend || 'declining'} ×{idx.trend_factor?.toFixed(1)}x{idx.trend_factor > 1.0 ? ' 加速中' : idx.trend_factor < 0.5 ? ' 减速中' : ''}
+          {idx.trend_label ? (
+            <span style={{ color: (idx.trend_factor ?? 0) >= 1.0 ? '#27AE60' : (idx.trend_factor ?? 0) >= 0.5 ? '#f59e0b' : '#ef4444' }}>
+              {idx.trend_label}
             </span>
           ) : (
             <span style={{ color: '#94a3b8' }}>{idx.position_tier_label}</span>
