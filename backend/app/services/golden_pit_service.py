@@ -35,55 +35,70 @@ logger = logging.getLogger(__name__)
 # position_weight: 在组合中的建议仓位占比
 CHINA_INDICES: Dict[str, Dict[str, Any]] = {
     # ── 核心 (必做) ──
-    # 科创50: Win% 100%, 20d Avg +15.9%, 高弹性快反弹 → 激进参数
+    # 科创50: Win% 90%, 20d Avg +8.5%, 高弹性快反弹 → P60全仓退出 (全量回测校准)
     "588000": {"name": "科创50",   "priority": 4, "data_source": "arkvol",  "tier": "core",
-               "signal_quality": "strong", "exp_15d": 10.2, "exp_20d": 15.9, "position_weight": 0.40,
-               "entry_pct": 15, "pit_pct": 8, "turning_days": 1,
-               "position_multiplier": 1.2, "pre_turn_cap": 0.20},
-    # 中证500: Win% 100%, 20d Avg +10.2%, 中高弹性 → 偏激进参数
-    "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "core",
-               "signal_quality": "strong", "exp_15d": 7.9,  "exp_20d": 10.2, "position_weight": 0.35,
-               "entry_pct": 12, "pit_pct": 6, "turning_days": 1,
-               "position_multiplier": 1.1, "pre_turn_cap": 0.18},
+               "signal_quality": "strong", "exp_15d": 5.5, "exp_20d": 8.5, "position_weight": 0.40,
+               "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "position_multiplier": 1.2, "pre_turn_cap": 0.20,
+               "exit_full_pct": 60, "exit_half_pct": 60, "exit_fallback_days": 60},
+    # 中证500: Win% 66%, 20d Avg +1.8%, 信号密度高 → 降级为satellite (全量回测校准)
+    "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "satellite",
+               "signal_quality": "good", "exp_15d": 1.2,  "exp_20d": 1.8, "position_weight": 0.15,
+               "entry_pct": 8, "pit_pct": 4, "turning_days": 0,
+               "position_multiplier": 0.9, "pre_turn_cap": 0.12,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60},
     # ── 卫星 (选做) ──
-    # 中证1000: Win% 67%, 20d Avg +5.0%, 中等弹性 → 标准参数
+    # 中证1000: Win% 66%, 20d Avg +4.1%, 中等弹性 → 标准参数 (全量回测校准)
     "159845": {"name": "中证1000", "priority": 3, "data_source": "arkvol",  "tier": "satellite",
-               "signal_quality": "good",   "exp_15d": 4.6,  "exp_20d": 5.0,  "position_weight": 0.15,
-               "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
-               "position_multiplier": 1.0, "pre_turn_cap": 0.15},
-    # 创业板指: Win% 67%, 20d Avg +6.5%, 中等弹性 → 标准参数
+               "signal_quality": "good",   "exp_15d": 2.5,  "exp_20d": 4.1,  "position_weight": 0.15,
+               "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "position_multiplier": 1.0, "pre_turn_cap": 0.15,
+               "exit_full_pct": 70, "exit_half_pct": 70, "exit_fallback_days": 60},
+    # 创业板指: Win% 66%, 20d Avg +2.2%, 中高弹性 → 标准参数 (全量回测校准)
     "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
-               "signal_quality": "good",   "exp_15d": 3.9,  "exp_20d": 6.5,  "position_weight": 0.10,
-               "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
-               "position_multiplier": 1.0, "pre_turn_cap": 0.15},
+               "signal_quality": "good",   "exp_15d": 1.5,  "exp_20d": 2.2,  "position_weight": 0.10,
+               "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "position_multiplier": 1.0, "pre_turn_cap": 0.15,
+               "exit_full_pct": 80, "exit_half_pct": 80, "exit_fallback_days": 60},
     # ── 防御 (可选) ──
-    # 沪深300: Win% 67%, 20d Avg +6.9%, 低弹性慢恢复 → 偏保守参数 (P5→P8, v7 回测校准)
+    # 沪深300: Win% 81%, 40d Avg +2.8%, 低弹性慢恢复 → 深度阈值触发 (全量回测校准)
     "510300": {"name": "沪深300",  "priority": 6, "data_source": "arkvol",  "tier": "defense",
-               "signal_quality": "good",   "exp_15d": 4.8,  "exp_20d": 6.9,  "position_weight": 0.10,
-               "entry_pct": 8, "pit_pct": 4, "turning_days": 2,
-               "position_multiplier": 0.8, "pre_turn_cap": 0.12},
-    # ── 放弃 ──
+               "signal_quality": "good",   "exp_15d": 1.0,  "exp_20d": 1.5,  "position_weight": 0.10,
+               "entry_pct": 5, "pit_pct": 3, "turning_days": 2,
+               "position_multiplier": 0.8, "pre_turn_cap": 0.12,
+               "exit_full_pct": 80, "exit_half_pct": 80, "exit_fallback_days": 50},
+    # ── 放弃 (全量回测确认: 信号太弱) ──
     "510050": {"name": "上证50",   "priority": 7, "data_source": "arkvol",  "tier": "drop",
                "signal_quality": "weak",   "exp_15d": 1.3,  "exp_20d": 1.2,  "position_weight": 0.0,
                "entry_pct": 5, "pit_pct": 3, "turning_days": 2,
-               "position_multiplier": 0.0, "pre_turn_cap": 0.0},
+               "position_multiplier": 0.0, "pre_turn_cap": 0.0,
+               "exit_full_pct": 80, "exit_half_pct": 80, "exit_fallback_days": 50},
     # ── 海外 (核心) ──
-    # 道琼斯指数: Win% 87.5%, 20d Avg +3.49%, 高胜率 → 核心参数 (2026-07 backtest)
+    # 道琼斯指数: Win% 87.5%, 20d Avg +3.5%, 高胜率, 无需拐点确认 → 核心参数 (全量回测校准)
     "513400": {"name": "道琼斯指数", "priority": 8, "data_source": "arkvol", "tier": "core",
                "signal_quality": "strong", "exp_15d": 2.5, "exp_20d": 3.5, "position_weight": 0.25,
-               "entry_pct": 10, "pit_pct": 5, "turning_days": 1,
-               "position_multiplier": 1.2, "pre_turn_cap": 0.20},
+               "entry_pct": 10, "pit_pct": 5, "turning_days": 0,
+               "position_multiplier": 1.2, "pre_turn_cap": 0.20,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 40},
+    # 纳斯达克: Win% 67%, 20d Avg +5.0%, 美股V型反弹, 无需拐点确认 → 核心参数 (全量回测校准)
+    "159632": {"name": "纳斯达克", "priority": 10, "data_source": "arkvol", "tier": "core",
+               "signal_quality": "strong", "exp_15d": 4.4, "exp_20d": 5.0, "position_weight": 0.25,
+               "entry_pct": 8, "pit_pct": 4, "turning_days": 0,
+               "position_multiplier": 1.2, "pre_turn_cap": 0.20,
+               "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 40},
     # ── 港股 (防御) ──
-    # 恒生指数: Win% 72.7%, 20d Avg +1.30%, 类似沪深300 → 防御参数 (2026-07 backtest)
+    # 恒生指数: Win% 66%, 20d Avg +2.7%, 类似沪深300级别 → 防御参数 (全量回测校准)
     "513600": {"name": "恒生指数", "priority": 9, "data_source": "arkvol", "tier": "defense",
-               "signal_quality": "good", "exp_15d": 1.0, "exp_20d": 1.3, "position_weight": 0.10,
-               "entry_pct": 10, "pit_pct": 5, "turning_days": 1,
-               "position_multiplier": 0.8, "pre_turn_cap": 0.12},
+               "signal_quality": "good", "exp_15d": 1.5, "exp_20d": 2.7, "position_weight": 0.10,
+               "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "position_multiplier": 0.8, "pre_turn_cap": 0.12,
+               "exit_full_pct": 60, "exit_half_pct": 30, "exit_fallback_days": 20},
     # ── 观察 (仅预警) ──
     "562660": {"name": "中证2000", "priority": 1, "data_source": "arkvol", "tier": "watch",
                "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0,
                "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
-               "position_multiplier": 0.0, "pre_turn_cap": 0.0},
+               "position_multiplier": 0.0, "pre_turn_cap": 0.0,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60},
 }
 
 # 仓位分级: 拐点确认度 → 仓位比例 (单次定投占 max_total 的比例)
@@ -244,7 +259,7 @@ class GoldenPitService:
         """
         if not closes or len(closes) < 5:
             return 50.0
-        count_below = sum(1 for c in closes if c <= current_price)
+        count_below = sum(1 for c in closes if c < current_price)
         return round(count_below / len(closes) * 100, 1)
 
     @staticmethod
@@ -346,8 +361,10 @@ class GoldenPitService:
         as_of = ai_data.get("asof", "")
 
         result = []
+        seen_codes = set()
         for snap in snapshot_list:
-            code = snap.get("fund_code", "")
+            code = str(snap.get("fund_code", ""))
+            seen_codes.add(code)
             if code not in arkvol_codes:
                 continue
             cfg = CHINA_INDICES[code]
@@ -382,6 +399,10 @@ class GoldenPitService:
             index_info["change_5"] = round(change_5, 4)
             index_info["change_20"] = round(change_20, 4)
             result.append(index_info)
+
+        missing = arkvol_codes - seen_codes
+        if missing:
+            logger.warning("ai-summary 未返回以下基金代码 (已配置但缺失): %s", missing)
 
         return result
 
@@ -936,9 +957,6 @@ class GoldenPitService:
                 data_source=data_source, sorted_series=sorted_series,
                 as_of=as_of,
             )
-            # 标记没有回测数据
-            index_info["expected_15d"] = None
-            index_info["expected_20d"] = None
             result.append(index_info)
 
         return result
@@ -1046,11 +1064,15 @@ class GoldenPitService:
                 index_info["position_tier"] = None
                 index_info["position_tier_label"] = "跳过 (不入金)"
 
-            # ── 退出信号检测 ──
+            # ── 退出信号检测 (per-index 参数) ──
+            exit_full_pct = cfg.get("exit_full_pct", 50)
+            exit_half_pct = cfg.get("exit_half_pct", 30)
             exit_info = self._detect_exit_signal(
                 sorted_series,
                 index_info["turning_point_confirmed"],
                 index_info["percentile"],
+                exit_full_pct=exit_full_pct,
+                exit_half_pct=exit_half_pct,
             )
             index_info["exit_signal"] = exit_info["signal"]
             index_info["exit_reason"] = exit_info["reason"]
@@ -1067,22 +1089,25 @@ class GoldenPitService:
                 index_info["eta_date"] = _add_trading_days(today_str, days_to)
 
         # ── 黄金坑入坑日期回测 ──
-        # 使用最近 250 天滚动窗口计算 P5，避免 expanding window 导致
-        # 阈值每天漂移、入坑日期来回跳动的问题。
-        if status == "golden_pit" and sorted_series:
-            ref_window = min(250, len(sorted_series))
-            ref_series = sorted_series[-ref_window:]
-            sorted_vals = sorted([float(s.get("greed", 0)) for s in ref_series])
-            p5_val = sorted_vals[max(0, int(len(sorted_vals) * 0.05))]
-            reversed_series = list(reversed(sorted_series))
-            entry_date = None
-            for s in reversed_series:
-                if float(s.get("greed", 0)) > p5_val:
+        # 用 expanding-window percentile 回溯，与状态判定逻辑一致
+        # （状态用 _calculate_percentile 判 P5，入坑日期也用同样的方法回溯）
+        if status == "golden_pit" and sorted_series and len(sorted_series) >= 60:
+            pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
+            greeds = [float(s.get("greed", 0)) for s in sorted_series]
+            dates = [s.get("date", "") for s in sorted_series]
+            # 从今天往前找，找到第一个 percentile > pit_pct 的日期，其后一天就是 Day 1
+            entry_idx = None
+            for i in range(len(greeds) - 1, 59, -1):
+                pct_i = self._calculate_percentile(greeds[i], sorted_series[:i])
+                if pct_i > pit_pct:
+                    entry_idx = i + 1
                     break
-                entry_date = s.get("date", "")
-            if entry_date:
-                index_info["entry_date"] = entry_date
-                index_info["days_in_pit"] = _trading_days_between(entry_date, today_str) + 1
+            if entry_idx is None:
+                entry_idx = 60
+            if entry_idx < len(greeds):
+                index_info["entry_date"] = dates[entry_idx]
+                # 用实际数据点计数，避免 _trading_days_between 近似导致的卡顿
+                index_info["days_in_pit"] = len(greeds) - entry_idx
 
         return index_info
 
@@ -1137,7 +1162,7 @@ class GoldenPitService:
         greeds = sorted([float(s.get("greed", 0)) for s in series])
         if not greeds or len(greeds) < 2:
             return 50.0
-        count_below = sum(1 for g in greeds if g <= current_greed)
+        count_below = sum(1 for g in greeds if g < current_greed)
         return round(count_below / len(greeds) * 100, 1)
 
     def _calculate_decline_rate(self, series: List[Dict], window: int = 5) -> float:
@@ -1198,14 +1223,16 @@ class GoldenPitService:
         sorted_series: List[Dict],
         turning_confirmed: bool,
         percentile: float,
+        exit_full_pct: int = 50,
+        exit_half_pct: int = 30,
     ) -> Dict[str, Any]:
-        """检测退出信号。
+        """检测退出信号（全量回测校准 per-index 参数）。
 
         只在拐点确认后才发出退出信号（拐点前不退出）。
         退出规则:
-          - P30 → half_exit (卖一半)
-          - P50 → full_exit (全清)
-          - 拐点后连续2天回落且曾回到P30 → stop_profit (止盈保护)
+          - percentile >= exit_full_pct → full_exit (清仓)
+          - percentile >= exit_half_pct → half_exit (卖一半)
+          - 拐点后连续2天回落且曾回到 exit_half_pct → stop_profit (止盈保护)
 
         Returns:
             {signal: null|"half_exit"|"full_exit"|"stop_profit", reason: str}
@@ -1220,19 +1247,19 @@ class GoldenPitService:
 
         greeds = [float(s.get("greed", 0)) for s in sorted_series]
 
-        # P50 全清退出
-        if percentile >= 50:
+        # 全清退出 (per-index threshold)
+        if percentile >= exit_full_pct:
             result["signal"] = "full_exit"
-            result["reason"] = f"贪婪值回升至 P{percentile:.0f}，建议清仓"
+            result["reason"] = f"贪婪值回升至 P{percentile:.0f}≥P{exit_full_pct}，建议清仓"
             return result
 
-        # P30 卖一半
-        if percentile >= 30:
+        # 减半退出 (per-index threshold)
+        if percentile >= exit_half_pct:
             result["signal"] = "half_exit"
-            result["reason"] = f"贪婪值回升至 P{percentile:.0f}，建议减持 50%"
+            result["reason"] = f"贪婪值回升至 P{percentile:.0f}≥P{exit_half_pct}，建议减持 50%"
             return result
 
-        # 拐点后连续回落 → 止盈
+        # 拐点后连续回落 → 止盈保护
         days_declining = 0
         for i in range(len(greeds) - 1, 0, -1):
             if greeds[i] < greeds[i - 1]:
@@ -1240,13 +1267,14 @@ class GoldenPitService:
             else:
                 break
         if days_declining >= 2:
-            # 检查是否曾回升到 P30 以上（有利润可保护）
             max_greed = max(greeds[-10:]) if len(greeds) >= 10 else max(greeds)
             all_vals = sorted(greeds)
             max_pct = sum(1 for g in all_vals if g <= max_greed) / len(all_vals) * 100
-            if max_pct >= 30:
+            if max_pct >= exit_half_pct:
                 result["signal"] = "stop_profit"
-                result["reason"] = f"拐点后连续{days_declining}天回落（曾回升至P{max_pct:.0f}），建议止盈"
+                result["reason"] = (
+                    f"拐点后连续{days_declining}天回落（曾回升至P{max_pct:.0f}≥P{exit_half_pct}），建议止盈"
+                )
                 return result
 
         return result
