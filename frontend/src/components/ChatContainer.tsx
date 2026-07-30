@@ -1325,13 +1325,16 @@ const getGoldenPitDcaStatusTool = {
       lines.push(`### 🔴 窗口活跃: 第 ${d.current_day}/15 天 (起始: ${d.window_start})`);
       lines.push('');
       if (d.etfs?.length) {
-        lines.push('| ETF | 状态 | 策略 | 日投 | 已投入 | 剩余 | 已执行天 | 待执行天 |');
-        lines.push('|-----|------|------|------|--------|------|----------|----------|');
+        lines.push('| ETF | 状态 | DCA策略 | 日投 | 趋势因子 | 已投入 | 剩余 | 已执行天 |');
+        lines.push('|-----|------|---------|------|----------|--------|------|----------|');
         for (const etf of d.etfs) {
           const statusIcon = etf.status === 'golden_pit' ? '🔴' : etf.status === 'warning' ? '🟠' : '🟢';
           const executedStr = etf.executed_days?.length ? etf.executed_days.join(',') : '-';
-          const pendingStr = etf.pending_days?.length ? etf.pending_days.join(',') : '-';
-          lines.push(`| ${etf.etf_code} ${etf.index_name} | ${statusIcon} ${etf.status} | ${etf.strategy} | ¥${etf.daily_amount} | ¥${etf.total_invested} | ¥${etf.remaining} | ${executedStr} | ${pendingStr} |`);
+          const dcaLabel = etf.strategy || etf.dca_strategy || '—';
+          const trendInfo = etf.trend_factor != null
+            ? `${etf.trend || '—'} ×${etf.trend_factor}x`
+            : '—';
+          lines.push(`| ${etf.etf_code} ${etf.index_name} | ${statusIcon} ${etf.status} | ${dcaLabel} | ¥${etf.daily_amount} | ${trendInfo} | ¥${etf.total_invested} | ¥${etf.remaining} | ${executedStr} |`);
         }
       }
       lines.push('');

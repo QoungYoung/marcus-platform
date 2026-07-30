@@ -61,6 +61,61 @@ def _strategy_weights(strategy: str) -> List[float]:
         return [1.0 / 10] * 10 + [0.0] * 5
 
 
+def _encode_strategy(dca_strategy: str, trend: str, trend_factor: float,
+                     brake_type: str = "") -> str:
+    """编码 DCA 日志 strategy 字段: dca策略/趋势状态/因子[/制动类型]"""
+    parts = [dca_strategy, trend, f"{trend_factor:.1f}x"]
+    if brake_type:
+        parts.append(brake_type)
+    return "/".join(parts)
+
+
+def _trend_state_label(days_rising: int) -> str:
+    """趋势状态 → 可读标签 (用于日志和前端展示)。"""
+    if days_rising >= 4:
+        return "full"
+    elif days_rising >= 3:
+        return "accelerate"
+    elif days_rising >= 2:
+        return "turning"
+    elif days_rising >= 1:
+        return "bottoming"
+    else:
+        return "declining"
+
+
+def _get_prev_greed(fund_code: str, indices: List[Dict]) -> Optional[float]:
+    """获取该指数前一交易日的贪婪值 (用于飞刀保护)。"""
+    for idx in indices:
+        if idx.get("fund_code") == fund_code:
+            return idx.get("prev_greed")
+    return None
+
+
+def _check_window_reset_count(fund_code: str, window_start: str) -> int:
+    """查询当前窗口已被重置的次数。"""
+    try:
+        from app.database import SessionLocal
+        from app.models.golden_pit_dca_log import GoldenPitDCALog
+
+        db = SessionLocal()
+        try:
+            count = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.fund_code == fund_code,
+                    GoldenPitDCALog.window_start == window_start,
+                    GoldenPitDCALog.strategy.contains("window_reset"),
+                )
+                .count()
+            )
+            return count
+        finally:
+            db.close()
+    except Exception:
+        return 0
+
+
 def _get_etf_configs() -> List[Dict[str, Any]]:
     """从数据库读取启用的 ETF 配置。"""
     try:
@@ -266,8 +321,10 @@ def _record_dca_log(
     strategy: str,
     order_id: str,
     status: str,
+    schedule_day: int = None,
+    trend_factor: float = None,
 ):
-    """记录 DCA 执行日志到数据库。"""
+    """记录 DCA 执行日志到数据库 (v5: 新增 schedule_day/trend_factor)。"""
     try:
         from app.database import SessionLocal
         from app.models.golden_pit_dca_log import GoldenPitDCALog
@@ -284,6 +341,8 @@ def _record_dca_log(
                 order_id=order_id,
                 status=status,
                 created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                schedule_day=schedule_day,
+                trend_factor=trend_factor,
             )
             db.add(log)
             db.commit()
@@ -467,24 +526,33 @@ def _resonance_multiplier(indices: List[Dict]) -> float:
 
 def execute_golden_pit_dca() -> Dict[str, Any]:
     """
-    黄金坑 DCA 定投主逻辑 v4 — 趋势驱动仓位管理。
+    黄金坑 DCA 定投主逻辑 v5 — DCA基准权重 × 趋势调节因子。
 
     阶段:
-      waiting — 黄金坑信号活跃但拐点未确认 → 轻仓累积
-      buying  — 拐点确认 → 按回升天数分级加仓
+      waiting — 黄金坑信号活跃但拐点未确认 → DCA基准×趋势减速因子
+      buying  — 拐点确认 → DCA基准×趋势加速因子
 
     仓位逻辑:
-      拐点前 (greed仍在下降):
-        → 轻仓累积: 单次 ≤ max_total * 3%, 累计 ≤ max_total * 15%
-      拐点确认 (greed连续2天回升):
-        → 2天 (turning): 50% → 3天 (accelerate): 75% → 4+天 (full): 100%
+      daily_amount = max_total × dca_weight[day] × trend_factor × pos_mult × resonance × macro_coef
+
+      DCA 基准权重 (来自回测, 分指数):
+        lump_entry = [100%, 0, 0, ...]
+        uniform_3  = [33%, 33%, 33%, 0, ...]
+
+      趋势调节因子 (根据实时趋势状态):
+        declining(0.1x) → bottoming(0.5x) → turning(1.0x) → accelerating(1.2x) → full(1.5x)
+
+      安全制动:
+        假信号 (greed ≥ entry_greed) → 暂停, 标记 aborted
+        飞刀保护 (单日跌幅 > 2pp) → 跳过当日
+        累计硬截断 (total ≥ max_total) → 停止
 
     跳过 drop(放弃) 和 watch(仅观察) 级别的指数。
 
     Returns:
         结构化 dict，包含 holdings/exit_signals/buy_candidates/skipped/summary_text 等字段。
     """
-    from app.services.golden_pit_service import GoldenPitService, POSITION_TIERS, CHINA_INDICES
+    from app.services.golden_pit_service import GoldenPitService, CHINA_INDICES, get_trend_factor
 
     # 1. 获取黄金坑状态
     try:
@@ -623,6 +691,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             strategy=f"exit/{exit_signal}",
             order_id="",
             status="notified",
+            schedule_day=current_day, trend_factor=0.0,
         )
 
         exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟠", "fallback_exit": "⏰"}.get(exit_signal, "")
@@ -663,16 +732,24 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             skipped_count += 1
             continue
 
-        # ── 分级仓位计算 v4 (纯趋势驱动) ──
+        # ── 仓位计算 v5: DCA基准权重 × 趋势调节因子 ──
         max_total = cfg["max_total_amount"]
         turning_confirmed = idx.get("turning_point_confirmed", False)
         days_rising = idx.get("days_rising", 0)
         trend = idx.get("trend", "declining")
 
-        # 获取分指数参数
         index_params = CHINA_INDICES.get(fund_code, {})
         pos_mult = index_params.get("position_multiplier", 1.0)
-        idx_pre_turn_cap = index_params.get("pre_turn_cap", PRE_TURN_CUMULATIVE_CAP)
+        dca_strategy = index_params.get("dca_strategy", "uniform_10")
+        dca_fallback = index_params.get("dca_fallback", 10)
+        entry_greed = index_params.get("entry_greed", 0.50)
+        current_greed = idx.get("greed", 0.0)
+
+        schedule_day = current_day  # 窗口内第几天, 对应 DCA 权重索引
+
+        # DCA 基准权重: 回测优化的固定时间表
+        dca_weights = _strategy_weights(dca_strategy)
+        dca_weight = dca_weights[min(schedule_day, PIT_WINDOW_DAYS - 1)]
 
         # 累计已投
         total_invested = sum(
@@ -684,50 +761,98 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             skipped_count += 1
             continue
 
-        if not turning_confirmed:
-            # ── 拐点前: 轻仓累积, 单次≤3%, 累计由分指数参数决定 ──
-            pre_turn_max = max_total * idx_pre_turn_cap
-            if total_invested >= pre_turn_max:
-                logger.info("%s: 拐点前累计已达上限 %.0f(%.0f%%), 等待拐点确认",
-                            fund_code, pre_turn_max, idx_pre_turn_cap * 100)
-                skipped_count += 1
-                continue
-            tier_multiplier = POSITION_TIERS.get("pre_turn", 0.03) * pos_mult
-            daily_amount = min(max_total * tier_multiplier, pre_turn_max - total_invested)
-            position_tier = "pre_turn"
-        else:
-            # ── 拐点后: 快速加仓, 50%→75%→100%, 应用分指数倍率 ──
-            if days_rising >= 4:
-                tier_multiplier = POSITION_TIERS.get("full", 1.00) * pos_mult
-                position_tier = "full"
-            elif days_rising >= 3:
-                tier_multiplier = POSITION_TIERS.get("accelerate", 0.75) * pos_mult
-                position_tier = "accelerate"
-            else:
-                tier_multiplier = POSITION_TIERS.get("turning", 0.50) * pos_mult
-                position_tier = "turning"
-            daily_amount = max_total * tier_multiplier
-            daily_amount = min(daily_amount, remaining)
+        # DCA 窗口超时兜底: 超过 fallback 天数且还有剩余额度 → 强制完成
+        if dca_weight == 0.0 and schedule_day >= dca_fallback and remaining > 0:
+            dca_active_days = sum(1 for w in dca_weights if w > 0)
+            remaining_slots = max(dca_active_days - len(executed_days), 1)
+            dca_weight = min(remaining / max_total / remaining_slots, 1.0)
+            logger.info("%s: DCA窗口超时(day%d>fallback%d), 兜底权重=%.2f",
+                        fund_code, schedule_day, dca_fallback, dca_weight)
+        elif dca_weight == 0.0:
+            logger.info("%s: DCA权重为0(day%d), 等待窗口推进或兜底触发",
+                        fund_code, schedule_day)
+            skipped_count += 1
+            continue
 
-        # 共振系数
+        # 趋势调节因子: 替代硬编码的 POSITION_TIERS
+        trend_factor = get_trend_factor(
+            trend=trend, days_rising=days_rising,
+            fund_code=fund_code,
+            current_greed=current_greed, entry_greed=entry_greed,
+        )
+
+        # ── 二次信号检测: 贪婪创新低 → 重置 DCA 窗口 ──
+        signal_trigger_greed = idx.get("signal_trigger_greed")
+        if (signal_trigger_greed is not None and signal_trigger_greed > 0
+                and current_greed < signal_trigger_greed * 0.95
+                and schedule_day > 0):
+            # 检查是否已重置过 (最多1次)
+            has_reset = _check_window_reset_count(fund_code, window_start) > 0
+            if not has_reset:
+                logger.info("%s: 二次信号检测 greed=%.4f < trigger=%.4f ×0.95, 重置schedule_day=0",
+                            fund_code, current_greed, signal_trigger_greed)
+                _record_dca_log(
+                    fund_code=fund_code, window_start=window_start,
+                    buy_day=current_day, etf_code=cfg["etf_code"],
+                    amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "window_reset"),
+                    order_id="", status="safety_brake",
+                    schedule_day=schedule_day, trend_factor=trend_factor,
+                )
+                schedule_day = 0
+                dca_weights = _strategy_weights(dca_strategy)
+                dca_weight = dca_weights[0]
+
+        # ── 安全制动 1: 假信号检测 ──
+        if entry_greed > 0 and current_greed >= entry_greed:
+            logger.info("%s: 假信号暂停 (greed=%.4f >= entry_greed=%.4f)",
+                        fund_code, current_greed, entry_greed)
+            _record_dca_log(
+                fund_code=fund_code, window_start=window_start,
+                buy_day=current_day, etf_code=cfg["etf_code"],
+                amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "fake_signal"),
+                order_id="", status="aborted",
+                schedule_day=schedule_day, trend_factor=trend_factor,
+            )
+            skipped_count += 1
+            continue
+
+        # ── 安全制动 2: 飞刀保护 (单日跌幅>2个百分点) ──
+        prev_greed = _get_prev_greed(fund_code, indices)
+        if prev_greed is not None and (prev_greed - current_greed) > 0.02:
+            logger.info("%s: 飞刀保护 (greed跌幅=%.4f > 2pp), 跳过当日买入",
+                        fund_code, prev_greed - current_greed)
+            _record_dca_log(
+                fund_code=fund_code, window_start=window_start,
+                buy_day=current_day, etf_code=cfg["etf_code"],
+                amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "falling_knife"),
+                order_id="", status="safety_brake",
+                schedule_day=schedule_day, trend_factor=trend_factor,
+            )
+            skipped_count += 1
+            continue
+
+        # 仓位叠加: max_total × dca_weight × trend_factor × pos_mult × resonance × macro_coef
         resonance = _resonance_multiplier(indices)
-        daily_amount = min(daily_amount * resonance, max_total - total_invested)
+        daily_amount = max_total * dca_weight * trend_factor * pos_mult * resonance * macro_coef
 
-        # 全球宏观系数
-        daily_amount *= macro_coef
-        daily_amount = min(daily_amount, max_total - total_invested)
+        # ── 安全制动 3: 累计硬截断 ──
+        daily_amount = min(daily_amount, remaining)
+
+        # 趋势状态标签(用于日志和展示)
+        position_tier = _trend_state_label(days_rising)
 
         etf_code = cfg["etf_code"]
         reason = (
-            f"[黄金坑DCA v4] {idx['index_name']} "
-            f"tier={idx.get('tier')} trend={trend} pos={position_tier}({tier_multiplier*100:.0f}%) "
-            f"resonance={resonance:.1f}x macro={macro_coef:.1f}x "
-            f"day{current_day}/{PIT_WINDOW_DAYS} greed={idx['greed']:.4f}"
+            f"[黄金坑DCA v5] {idx['index_name']} "
+            f"dca={dca_strategy}(w{dca_weight:.2f}) trend={trend} f={trend_factor:.1f}x "
+            f"pos_mult={pos_mult:.1f}x resonance={resonance:.1f}x macro={macro_coef:.1f}x "
+            f"day{schedule_day}/{dca_fallback} greed={current_greed:.4f}"
         )
 
         logger.info(
-            "黄金坑 DCA: %s day=%d trend=%s amount=%.0f tier=%s x%.0f%% resonance=%.1fx macro=%.1fx",
-            etf_code, current_day, trend, daily_amount, position_tier, tier_multiplier * 100, resonance, macro_coef,
+            "黄金坑 DCA: %s day=%d dca=%s(w%.2f) trend=%s(f%.1f) amount=%.0f resonance=%.1fx macro=%.1fx",
+            etf_code, schedule_day, dca_strategy, dca_weight, trend, trend_factor,
+            daily_amount, resonance, macro_coef,
         )
 
         # 仅通知，不实际下单。记录日志用于累计仓位追踪
@@ -737,16 +862,17 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             buy_day=current_day,
             etf_code=etf_code,
             amount=daily_amount,
-            strategy=f"{idx.get('tier')}/{position_tier}/{trend}",
+            strategy=_encode_strategy(dca_strategy, trend, trend_factor),
             order_id="",
             status="notified",
+            schedule_day=schedule_day, trend_factor=trend_factor,
         )
 
         executed_count += 1
         total_invested_today += daily_amount
         results.append(
             f"📢 {idx['index_name']} {etf_code}: "
-            f"¥{daily_amount:.0f} [{idx.get('tier')}/{position_tier}] (第{current_day}天)"
+            f"¥{daily_amount:.0f} [{dca_strategy}/{position_tier}] (第{schedule_day}天)"
         )
 
     # 4. 构建结构化结果
@@ -761,7 +887,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
 
     # 传统文本摘要（Pi 不可用时的 fallback）
     summary_lines = [
-        f"黄金坑 DCA v4 (趋势驱动 · 仅通知) — {today_str}",
+        f"黄金坑 DCA v5 (DCA基准·趋势调节 · 仅通知) — {today_str}",
         f"阶段: {phase_label} | 领先: {window.get('leading_index', 'N/A')}",
         f"可交易: {len(tradeable)} | 拐点已确认: {turning_count} | 拐点前: {pre_turn_count}",
         f"共振: {pit_count}指数入坑 → {resonance:.1f}x | 宏观: {macro_coef:.1f}x | {gate_info}",
@@ -776,11 +902,11 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
     summary_lines.append("")
 
     if pre_turn_count > 0 and turning_count == 0:
-        summary_lines.append("💡 拐点前: 轻仓累积(单次≤3%/累计≤15%), 等待贪婪值连续回升。")
+        summary_lines.append("💡 趋势未确认: DCA基准×0.1~0.5x减速建仓, 等待贪婪值连续回升。")
     elif turning_count > 0 and pre_turn_count > 0:
-        summary_lines.append(f"💡 部分拐点确认: {turning_count}个指数已回升加仓, {pre_turn_count}个仍在等待。")
+        summary_lines.append(f"💡 部分拐点确认: {turning_count}个指数已回升(DCA×1.0~1.5x加速), {pre_turn_count}个仍在等待。")
     elif turning_count > 0:
-        summary_lines.append(f"💡 拐点已确认: {turning_count}个指数快速加仓中 (50%→75%→100%)。")
+        summary_lines.append(f"💡 拐点已确认: {turning_count}个指数 DCA×1.0~1.5x加速加仓中。")
 
     if macro_coef < 1.0:
         summary_lines.append(f"🌍 全球宏观系数 {macro_coef:.1f}x: 仓位已下调 ({global_macro.get('summary', '')})")
@@ -789,7 +915,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
         summary_lines.append(f"💰 资金流向: {cf['summary']}")
     divergent_names = [i["index_name"] for i in indices if i.get("turning_validation") == "divergent"]
     if divergent_names:
-        summary_lines.append(f"⚠️ 全球趋势背离: {', '.join(divergent_names)} 仓位已限制在拐点前水平")
+        summary_lines.append(f"⚠️ 全球趋势背离: {', '.join(divergent_names)} 仓位已限制在 declining 因子水平")
 
     summary_text = "\n".join(summary_lines)
 
@@ -801,6 +927,12 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
         if not cfg:
             continue
         max_total = cfg["max_total_amount"]
+        index_params = CHINA_INDICES.get(fund_code, {})
+        pos_mult = index_params.get("position_multiplier", 1.0)
+        dca_strategy = index_params.get("dca_strategy", "uniform_10")
+        entry_greed = index_params.get("entry_greed", 0.50)
+        current_greed = idx.get("greed", 0.0)
+
         total_invested = sum(
             _get_day_amount(fund_code, window_start, d)
             for d in _get_executed_days(fund_code, window_start)
@@ -810,29 +942,18 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
         days_rising = idx.get("days_rising", 0)
         trend = idx.get("trend", "declining")
 
-        if not turning_confirmed:
-            position_tier = "pre_turn"
-            tier_multiplier = 0.03
-        elif days_rising >= 4:
-            position_tier = "full"
-            tier_multiplier = 1.0
-        elif days_rising >= 3:
-            position_tier = "accelerate"
-            tier_multiplier = 0.75
-        else:
-            position_tier = "turning"
-            tier_multiplier = 0.50
-
-        index_params = CHINA_INDICES.get(fund_code, {})
-        pos_mult = index_params.get("position_multiplier", 1.0)
-        tier_multiplier *= pos_mult
-        daily_amount = min(max_total * tier_multiplier, remaining) if turning_confirmed else min(
-            max_total * 0.03 * pos_mult,
-            max_total * index_params.get("pre_turn_cap", 0.15) - total_invested
+        schedule_day = current_day
+        dca_weights = _strategy_weights(dca_strategy)
+        dca_weight = dca_weights[min(schedule_day, PIT_WINDOW_DAYS - 1)]
+        trend_factor = get_trend_factor(
+            trend=trend, days_rising=days_rising,
+            fund_code=fund_code,
+            current_greed=current_greed, entry_greed=entry_greed,
         )
-        daily_amount = min(daily_amount * resonance, remaining)
-        daily_amount *= macro_coef
+
+        daily_amount = max_total * dca_weight * trend_factor * pos_mult * resonance * macro_coef
         daily_amount = min(daily_amount, remaining)
+        position_tier = _trend_state_label(days_rising)
 
         buy_candidates.append({
             "index_name": idx["index_name"],
@@ -841,6 +962,10 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             "tier": idx.get("tier", ""),
             "status": idx["status"],
             "position_tier": position_tier,
+            "dca_strategy": dca_strategy,
+            "dca_weight": round(dca_weight, 3),
+            "trend_factor": round(trend_factor, 2),
+            "schedule_day": schedule_day,
             "daily_amount": round(daily_amount, 0),
             "max_total": max_total,
             "total_invested": round(total_invested, 0),
@@ -852,8 +977,8 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             "percentile": idx.get("percentile", 0),
             "turning_confirmed": turning_confirmed,
             "reason": (
-                f"trend={trend} pos={position_tier}({tier_multiplier*100:.0f}%) "
-                f"resonance={resonance:.1f}x macro={macro_coef:.1f}x day{current_day}"
+                f"dca={dca_strategy}(w{dca_weight:.2f}) trend={trend}(f{trend_factor:.1f}) "
+                f"resonance={resonance:.1f}x macro={macro_coef:.1f}x day{schedule_day}"
             ),
         })
 

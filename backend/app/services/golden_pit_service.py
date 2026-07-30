@@ -46,7 +46,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.348, "entry_greed": 0.400, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.2, "pre_turn_cap": 0.20,
-               "dca_strategy": "lump_entry",
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 80, "exit_half_pct": 40, "exit_fallback_days": 20},
     # 中证500: adjCAGR +16.2%, Win 72%, 29 trades, Stability 0.74 (satellite→core)
     "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "core",
@@ -54,7 +54,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.345, "entry_greed": 0.395, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.2, "pre_turn_cap": 0.20,
-               "dca_strategy": "lump_entry",
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20},
     # ═══ 卫星 (选做) — 高收益但波动大或历史短 ═══
     # 中证1000: adjCAGR +44.5%, Win 47%, 53 trades, Stability 0.52
@@ -63,7 +63,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.391, "entry_greed": 0.440, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.12,
-               "dca_strategy": "uniform_3",
+               "dca_strategy": "uniform_3", "dca_fallback": 15,
+               "trend_factors": {"declining": 0.15, "full": 1.3},
                "exit_full_pct": 80, "exit_half_pct": 30, "exit_fallback_days": 20},
     # 创业板指: adjCAGR +22.6%, Win 58%, 43 trades, Stability 0.52
     "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
@@ -71,7 +72,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.328, "entry_greed": 0.380, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.12,
-               "dca_strategy": "lump_entry",
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 70, "exit_half_pct": 70, "exit_fallback_days": 20},
     # 道琼斯指数: adjCAGR +11.8%, Win 79%, 14 trades, Stability 0.91, 仅575天数据 (core→satellite)
     "513400": {"name": "道琼斯指数", "priority": 8, "data_source": "arkvol", "tier": "satellite",
@@ -79,7 +80,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": False, "entry_pct": 10, "pit_pct": 3,
                "pit_greed": 0.380, "entry_greed": 0.494, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.15,
-               "dca_strategy": "lump_entry",
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10},
     # ═══ 防御 (可选) — 稳定但收益偏低或参数敏感 ═══
     # 沪深300: adjCAGR +11.0%, Win 63%, 35 trades, Stability 0.63
@@ -88,7 +89,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 5, "pit_pct": 3,
                "pit_greed": 0.357, "entry_greed": 0.410, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.12,
-               "dca_strategy": "lump_entry",
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20},
     # 纳斯达克: adjCAGR +11.9%, Win 89%, 36 trades, Stability 0.30 ⚠️参数极度敏感 (core→defense)
     "159632": {"name": "纳斯达克", "priority": 10, "data_source": "arkvol", "tier": "defense",
@@ -96,7 +97,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 4,
                "pit_greed": 0.512, "entry_greed": 0.560, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.08,
-               "dca_strategy": "lump_entry",
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 60},
     # 恒生指数: adjCAGR +10.5%, Win 67%, 30 trades, Stability 0.80
     "513600": {"name": "恒生指数", "priority": 9, "data_source": "arkvol", "tier": "defense",
@@ -104,7 +105,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 5,
                "pit_greed": 0.368, "entry_greed": 0.420, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.12,
-               "dca_strategy": "uniform_3",
+               "dca_strategy": "uniform_3", "dca_fallback": 15,
+               "trend_factors": {"declining": 0.10, "full": 1.3},
                "exit_full_pct": 60, "exit_half_pct": 30, "exit_fallback_days": 60},
     # ═══ 放弃 (回测确认: 年化过低) ═══
     # 上证50: adjCAGR +5.1%, Win 52%, 54 trades, Stability 0.97 — 收益不如货基
@@ -113,6 +115,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 5, "pit_pct": 3,
                "pit_greed": 0.403, "entry_greed": 0.450, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.0, "pre_turn_cap": 0.0,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10},
     # ═══ 观察 (仅预警) ═══
     "562660": {"name": "中证2000", "priority": 1, "data_source": "arkvol", "tier": "watch",
@@ -130,6 +133,20 @@ POSITION_TIERS = {
     "full":       1.00,   # 满仓 (连续4+天回升): 100%
 }
 PRE_TURN_CUMULATIVE_CAP = 0.15  # 拐点前累计上限
+
+# ── DCA 趋势调节因子 (全局默认) ──
+# 趋势状态 → 仓位乘数, 与 DCA 基准权重相乘
+# 分指数可在 CHINA_INDICES 中通过 trend_factors 字段覆盖
+DEFAULT_TREND_FACTORS: Dict[str, float] = {
+    "declining":    0.10,   # 贪婪仍在下降 → 飞刀减速
+    "bottoming":    0.50,   # 首次回升 1 天 → 初步试探
+    "turning":      1.00,   # 连续回升 2 天 → 标准节奏
+    "accelerating": 1.20,   # 连续回升 3 天 → 加快速度
+    "full":         1.50,   # 连续回升 4+ 天 → 快速满仓
+}
+
+# 加速阈值保护: greed 回升到此比例以上时, 趋势因子上限=1.0 (防止追高)
+TREND_ACCELERATION_CAP_RATIO = 1.0  # greed / entry_greed >= 1.0 时禁止加速
 
 # 拐点检测: 连续 N 天贪婪值回升→拐点确认
 TURNING_CONSECUTIVE_DAYS = 2   # 连续回升天数 → 拐点确认
@@ -162,6 +179,45 @@ STATUS_MAP = {
     "warning":    {"label": "预警",    "color": "#f97316"},
     "golden_pit": {"label": "黄金坑",  "color": "#ef4444"},
 }
+
+
+def get_trend_factor(trend: str, days_rising: int, fund_code: str = "",
+                     current_greed: float = 0.0, entry_greed: float = 999.0) -> float:
+    """根据趋势状态返回仓位调节因子, 支持分指数覆盖。
+
+    趋势状态映射 (全局默认):
+      declining    (days_rising=0) → 0.10x
+      bottoming    (days_rising=1) → 0.50x
+      turning      (days_rising=2) → 1.00x
+      accelerating (days_rising=3) → 1.20x
+      full         (days_rising≥4) → 1.50x
+
+    加速阈值保护: 当 current_greed >= entry_greed 时, 因子上限=1.0
+    """
+    # 确定趋势状态键
+    if days_rising >= 4:
+        state_key = "full"
+    elif days_rising >= 3:
+        state_key = "accelerating"
+    elif days_rising >= 2:
+        state_key = "turning"
+    elif days_rising >= 1:
+        state_key = "bottoming"
+    else:
+        state_key = "declining"
+
+    # 读取分指数覆盖或全局默认
+    if fund_code and fund_code in CHINA_INDICES:
+        idx_trend_factors = CHINA_INDICES[fund_code].get("trend_factors", {})
+        factor = idx_trend_factors.get(state_key, DEFAULT_TREND_FACTORS.get(state_key, 1.0))
+    else:
+        factor = DEFAULT_TREND_FACTORS.get(state_key, 1.0)
+
+    # 加速阈值保护: greed 已回到 entry_greed 以上 → 禁止加速
+    if current_greed > 0 and entry_greed > 0 and current_greed >= entry_greed:
+        factor = min(factor, 1.0)
+
+    return factor
 
 
 def _trading_days_between(start_date: str, end_date: str) -> int:
@@ -1042,6 +1098,7 @@ class GoldenPitService:
             "tier": tier,
             "position_weight": position_weight,
             "greed": round(value, 4),
+            "prev_greed": round(float(sorted_series[-2].get("greed", 0)), 4) if len(sorted_series) >= 2 else None,
             "close": round(close, 4),
             "percentile": round(percentile, 1),
             "status": status,
@@ -1060,6 +1117,11 @@ class GoldenPitService:
             "exit_full_pct": cfg.get("exit_full_pct"),
             "exit_half_pct": cfg.get("exit_half_pct"),
             "exit_fallback_days": cfg.get("exit_fallback_days"),
+            # DCA 策略参数 (v5)
+            "dca_strategy": cfg.get("dca_strategy", "uniform_10"),
+            "dca_fallback": cfg.get("dca_fallback", 10),
+            "trend_factors": cfg.get("trend_factors"),
+            "position_multiplier": cfg.get("position_multiplier", 1.0),
             # Day 1 检测字段
             "p10_entry_date": None,
             "days_in_warning": 0,
@@ -1068,6 +1130,8 @@ class GoldenPitService:
             # 趋势检测字段
             "trend": "declining",
             "days_rising": 0,
+            "prev_greed": None,
+            "signal_trigger_greed": None,  # DCA二次信号检测用: 信号触发日的贪婪值
             "turning_point_confirmed": False,
             "turning_start_date": None,
             "last_change": 0.0,
@@ -1100,6 +1164,11 @@ class GoldenPitService:
             if status == "normal" and p10_entry_date and days_in_warning <= FAKE_SIGNAL_REBOUND_DAYS:
                 index_info["is_fake_signal"] = True
 
+            # 二次信号检测用: 最近30天窗口内的最低贪婪值 (新低>5%触发重置)
+            if sorted_series and len(sorted_series) >= 2:
+                window_greeds = [float(s.get("greed", 0)) for s in sorted_series[-30:]]
+                index_info["signal_trigger_greed"] = round(min(window_greeds), 4)
+
             # ── 趋势检测 + 仓位分级 ──
             if status in ("golden_pit", "warning"):
                 td = cfg.get("turning_days", TURNING_CONSECUTIVE_DAYS)
@@ -1116,16 +1185,26 @@ class GoldenPitService:
                         index_info["turning_start_date"] = sorted_series[max(0, idx_turn)].get("date", "")
                     if trend["days_rising"] >= 4:
                         index_info["position_tier"] = "full"
-                        index_info["position_tier_label"] = "100% (拐点+4天回升)"
+                        index_info["position_tier_label"] = "×1.5x 加速满仓 (拐点+4天回升)"
                     elif trend["days_rising"] >= 3:
                         index_info["position_tier"] = "accelerate"
-                        index_info["position_tier_label"] = "75% (拐点+3天回升)"
+                        index_info["position_tier_label"] = "×1.2x 加速建仓 (拐点+3天回升)"
                     else:
                         index_info["position_tier"] = "turning"
-                        index_info["position_tier_label"] = "50% (拐点确认)"
+                        index_info["position_tier_label"] = "×1.0x 标准建仓 (拐点确认)"
                 else:
                     index_info["position_tier"] = "pre_turn"
-                    index_info["position_tier_label"] = "轻仓 (拐点前 ≤3%/累计≤15%)"
+                    index_info["position_tier_label"] = "×0.1~0.5x 减速建仓 (拐点前)"
+
+                # 计算当前趋势因子 (DCA v5 展示用)
+                index_info["trend_factor"] = round(get_trend_factor(
+                    trend=index_info.get("trend", "declining"),
+                    days_rising=index_info.get("days_rising", 0),
+                    fund_code=code,
+                    current_greed=index_info.get("greed", 0.0),
+                    entry_greed=index_info.get("entry_greed", 0.50),
+                ), 2)
+
             elif tier in ("drop", "watch"):
                 index_info["position_tier"] = None
                 index_info["position_tier_label"] = "跳过 (不入金)"

@@ -32,6 +32,13 @@ interface IndexStatus {
   exit_reason?: string;
   entry_strategy?: string;
   exit_strategy?: string;
+  dca_strategy?: string;
+  dca_weight?: number;
+  trend_factor?: number;
+  schedule_day?: number;
+  prev_greed?: number | null;
+  signal_trigger_greed?: number | null;
+  dca_fallback?: number;
   turning_validation?: string;
   turning_validation_reason?: string;
   signal_quality?: string;
@@ -427,8 +434,24 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
         </div>
       )}
       {idx.position_tier_label && idx.tier !== 'drop' && idx.tier !== 'watch' && (
-        <div className="gp-index-position" style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 4 }}>
-          {idx.position_tier_label}
+        <div className="gp-index-position" style={{ fontSize: '0.75rem', marginTop: 4 }}>
+          {idx.trend_factor != null ? (
+            <span style={{ color: idx.trend_factor >= 1.0 ? '#27AE60' : idx.trend_factor >= 0.5 ? '#f59e0b' : '#ef4444' }}>
+              趋势: {idx.trend || 'declining'} ×{idx.trend_factor?.toFixed(1)}x{idx.trend_factor > 1.0 ? ' 加速中' : idx.trend_factor < 0.5 ? ' 减速中' : ''}
+            </span>
+          ) : (
+            <span style={{ color: '#94a3b8' }}>{idx.position_tier_label}</span>
+          )}
+          {idx.dca_strategy && (
+            <span style={{ color: '#94a3b8', marginLeft: 8 }}>
+              DCA: {idx.dca_strategy === 'lump_entry' ? '一次性' : idx.dca_strategy === 'uniform_3' ? '3日分批' : idx.dca_strategy}
+            </span>
+          )}
+          {idx.schedule_day != null && (
+            <span style={{ color: '#94a3b8', marginLeft: 8 }}>
+              窗口第{idx.schedule_day}天
+            </span>
+          )}
         </div>
       )}
       {exitLabel && (

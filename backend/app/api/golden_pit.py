@@ -268,6 +268,7 @@ async def get_dca_status():
                     "etf_code": cfg.etf_code,
                     "status": idx_status,
                     "strategy": strategy,
+                    "dca_strategy": idx.get("dca_strategy", strategy) if idx else strategy,
                     "daily_amount": cfg.daily_amount,
                     "max_total_amount": cfg.max_total_amount,
                     "total_invested": round(total_invested, 2),
@@ -276,6 +277,9 @@ async def get_dca_status():
                     "pending_days": pending_days,
                     "planned_days": planned_days,
                     "enabled": cfg.enabled,
+                    "trend": idx.get("trend", "") if idx else "",
+                    "trend_factor": idx.get("trend_factor") if idx else None,
+                    "schedule_day": current_day,
                 })
 
             return {"code": 0, "data": result}
