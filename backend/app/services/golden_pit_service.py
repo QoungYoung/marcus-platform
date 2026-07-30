@@ -1020,7 +1020,7 @@ class GoldenPitService:
             "days_in_pit": None,
         }
 
-        # ── Day 1 检测: 用 expanding-window 找首次穿越日 ──
+        # ── Day 1 检测: 用全量序列固定阈值找首次穿越日 ──
         entry_pct = cfg.get("entry_pct", PERCENTILE_WARNING)
         if sorted_series and len(sorted_series) >= 60:
             p10_entry_date, days_in_warning, is_first_cross = self._detect_p10_entry(
@@ -1089,24 +1089,29 @@ class GoldenPitService:
                 index_info["eta_date"] = _add_trading_days(today_str, days_to)
 
         # ── 黄金坑入坑日期回测 ──
-        # 用 expanding-window percentile 回溯，与状态判定逻辑一致
-        # （状态用 _calculate_percentile 判 P5，入坑日期也用同样的方法回溯）
+        # 用全量序列计算固定贪婪阈值，与状态判定的 _calculate_percentile 逻辑一致。
+        # 不逐点重算分位：expanding-window 会在窗口大小变化时导致同一贪婪值
+        # 的分位数漂移，造成所有指数的 entry_date 在同一天"重置"为第1天。
         if status == "golden_pit" and sorted_series and len(sorted_series) >= 60:
             pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
             greeds = [float(s.get("greed", 0)) for s in sorted_series]
             dates = [s.get("date", "") for s in sorted_series]
-            # 从今天往前找，找到第一个 percentile > pit_pct 的日期，其后一天就是 Day 1
+
+            # 全量序列 P(pit_pct) 贪婪阈值：与状态判定共用同一分布
+            all_sorted = sorted(greeds)
+            threshold_idx = max(0, int(len(all_sorted) * pit_pct / 100) - 1)
+            pit_threshold = all_sorted[min(threshold_idx, len(all_sorted) - 1)]
+
+            # 从今天往前找：贪婪值 > 阈值 = 不在坑内，其后一天就是 Day 1
             entry_idx = None
             for i in range(len(greeds) - 1, 59, -1):
-                pct_i = self._calculate_percentile(greeds[i], sorted_series[:i])
-                if pct_i > pit_pct:
+                if greeds[i] > pit_threshold:
                     entry_idx = i + 1
                     break
             if entry_idx is None:
                 entry_idx = 60
             if entry_idx < len(greeds):
                 index_info["entry_date"] = dates[entry_idx]
-                # 用实际数据点计数，避免 _trading_days_between 近似导致的卡顿
                 index_info["days_in_pit"] = len(greeds) - entry_idx
 
         return index_info
@@ -1114,7 +1119,7 @@ class GoldenPitService:
     def _detect_p10_entry(
         self, sorted_series: List[Dict], today_str: str, entry_pct: int = PERCENTILE_WARNING
     ) -> tuple:
-        """用 expanding-window 检测当前是否在预警信号中，以及 Day 1 是哪天。
+        """检测当前是否在预警信号中，以及 Day 1 是哪天。
 
         只返回当前活跃的信号（即当前 percentile 仍在 entry_pct 内）。
         如果当前已反弹出预警区，返回 (None, 0, False)。
@@ -1128,22 +1133,21 @@ class GoldenPitService:
         if len(greeds) < 60:
             return (None, 0, False)
 
-        # 先判断当前是否在预警内
-        current_pct = self._calculate_percentile(greeds[-1], sorted_series[:-1])
-        if current_pct > entry_pct:
+        # 先判断当前是否在预警内（用全量序列固定阈值，不逐点重算分位）
+        all_sorted = sorted(greeds)
+        threshold_idx = max(0, int(len(all_sorted) * entry_pct / 100) - 1)
+        entry_threshold = all_sorted[min(threshold_idx, len(all_sorted) - 1)]
+        if greeds[-1] > entry_threshold:
             return (None, 0, False)
 
-        # 往回找到最近一次从预警上方穿越到下方的日期
-        # 从今天往前找，找到第一个 > entry_pct 的日期，其后一天就是 Day 1
+        # 往回找到最近一次贪婪值高于阈值的位置，其后一天就是 Day 1
         entry_idx = None
         for i in range(len(greeds) - 1, 59, -1):
-            pct_i = self._calculate_percentile(greeds[i], sorted_series[:i])
-            if pct_i > entry_pct:
-                entry_idx = i + 1  # 穿越日 = 回到预警上方的下一天
+            if greeds[i] > entry_threshold:
+                entry_idx = i + 1
                 break
 
         if entry_idx is None:
-            # 从未出过 P10（不太可能但处理一下）
             entry_idx = 60
 
         if entry_idx >= len(greeds):
