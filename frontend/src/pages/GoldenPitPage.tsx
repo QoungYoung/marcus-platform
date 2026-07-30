@@ -241,6 +241,7 @@ const EXIT_LABELS: Record<string, string> = {
   half_exit: '\u{1F7E1} 减持 50%',
   full_exit: '\u{1F534} 清仓',
   stop_profit: '\u{1F7E0} 止盈',
+  fallback_exit: '⏰ 兜底退出',
 };
 
 const GLOBAL_TREND_LABELS: Record<string, string> = {

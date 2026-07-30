@@ -598,7 +598,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
         if holding < 100:
             continue
 
-        if exit_signal in ("full_exit", "stop_profit"):
+        if exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
             sell_shares = holding
         elif exit_signal == "half_exit":
             sell_shares = int(holding / 2 / 100) * 100
@@ -625,7 +625,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             status="notified",
         )
 
-        exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟠"}.get(exit_signal, "")
+        exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟠", "fallback_exit": "⏰"}.get(exit_signal, "")
         results.append(
             f"{exit_icon} 退出信号 {idx['index_name']} {etf_code}: "
             f"建议卖出 {sell_shares}股 [{exit_signal}]"

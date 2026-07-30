@@ -1098,6 +1098,22 @@ class GoldenPitService:
             index_info["exit_signal"] = exit_info["signal"]
             index_info["exit_reason"] = exit_info["reason"]
 
+            # ── 兜底退出: 拐点确认后超过 exit_fallback_days 天，强制清仓 ──
+            if (index_info["exit_signal"] is None
+                    and index_info["turning_point_confirmed"]
+                    and index_info["turning_start_date"]):
+                fallback = cfg.get("exit_fallback_days")
+                if fallback:
+                    days_since_turn = _trading_days_between(
+                        index_info["turning_start_date"], today_str
+                    )
+                    if days_since_turn >= fallback:
+                        index_info["exit_signal"] = "fallback_exit"
+                        index_info["exit_reason"] = (
+                            f"拐点确认{index_info['turning_start_date']}后已过"
+                            f"{days_since_turn}天≥{fallback}天兜底线，强制退出"
+                        )
+
         # ── ETA 预测 (预警区 → 黄金坑) ──
         pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
         if status == "warning" and decline_rate > 0.0001 and percentile > pit_pct:
