@@ -1097,9 +1097,11 @@ class GoldenPitService:
             greeds = [float(s.get("greed", 0)) for s in sorted_series]
             dates = [s.get("date", "") for s in sorted_series]
 
-            # 全量序列 P(pit_pct) 贪婪阈值：与状态判定共用同一分布
+            # 全量序列 P(pit_pct) 贪婪阈值：与 _calculate_percentile 的
+            # 严格小于计数保持一致。all_sorted[k] 有 k 个元素 < 它，
+            # 百分位 = k/len*100。P(pit_pct) 边界 = all_sorted[int(len*pit_pct/100)]
             all_sorted = sorted(greeds)
-            threshold_idx = max(0, int(len(all_sorted) * pit_pct / 100) - 1)
+            threshold_idx = int(len(all_sorted) * pit_pct / 100)
             pit_threshold = all_sorted[min(threshold_idx, len(all_sorted) - 1)]
 
             # 从今天往前找：贪婪值 > 阈值 = 不在坑内，其后一天就是 Day 1
@@ -1133,9 +1135,9 @@ class GoldenPitService:
         if len(greeds) < 60:
             return (None, 0, False)
 
-        # 先判断当前是否在预警内（用全量序列固定阈值，不逐点重算分位）
+        # 全量序列 P(entry_pct) 阈值，与 _calculate_percentile 严格小于计数一致
         all_sorted = sorted(greeds)
-        threshold_idx = max(0, int(len(all_sorted) * entry_pct / 100) - 1)
+        threshold_idx = int(len(all_sorted) * entry_pct / 100)
         entry_threshold = all_sorted[min(threshold_idx, len(all_sorted) - 1)]
         if greeds[-1] > entry_threshold:
             return (None, 0, False)
