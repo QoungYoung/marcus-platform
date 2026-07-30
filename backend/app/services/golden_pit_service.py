@@ -202,6 +202,17 @@ def _trend_label(trend: str, factor: float) -> str:
     return f"{name} · 标准节奏"
 
 
+def _compute_resonance(pit_count: int) -> float:
+    """根据黄金坑指数数量计算共振乘数。"""
+    if pit_count >= 4:
+        return 1.3
+    elif pit_count >= 3:
+        return 1.2
+    elif pit_count >= 2:
+        return 1.0
+    return 0.6
+
+
 def get_trend_factor(trend: str, days_rising: int, fund_code: str = "",
                      current_greed: float = 0.0, entry_greed: float = 999.0) -> float:
     """根据趋势状态返回仓位调节因子, 支持分指数覆盖。
@@ -1530,6 +1541,7 @@ class GoldenPitService:
             "pit_count": pit_count,
             "warning_count": warning_count,
             "turning_count": len(turning),
+            "resonance_multiplier": _compute_resonance(pit_count),
         }
 
         if turning:

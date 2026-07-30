@@ -60,6 +60,7 @@ interface GoldenPitWindow {
   pit_count?: number;
   warning_count?: number;
   turning_count?: number;
+  resonance_multiplier?: number;
   midpoint_date: string | null;
   exit_date: string | null;
 }
@@ -265,15 +266,13 @@ function Skeleton() {
   );
 }
 
-function ResonanceBadge({ pitCount }: { pitCount: number }) {
+function ResonanceBadge({ pitCount, multiplier }: { pitCount: number; multiplier?: number }) {
   if (pitCount < 1) return null;
-  let label: string;
+  const m = multiplier ?? (pitCount >= 4 ? 1.3 : pitCount >= 3 ? 1.2 : pitCount >= 2 ? 1.0 : 0.6);
   let cls = 'gp-res-pill';
-  if (pitCount >= 4) { label = `${pitCount}指共振 1.3x`; }
-  else if (pitCount >= 3) { label = `${pitCount}指共振 1.2x`; }
-  else if (pitCount >= 2) { label = `${pitCount}指共振 1.0x`; cls += ' muted'; }
-  else { label = `${pitCount}指共振 0.6x`; cls += ' warn'; }
-  return <span className={cls}>{label}</span>;
+  if (pitCount < 2) cls += ' warn';
+  else if (pitCount < 3) cls += ' muted';
+  return <span className={cls}>{pitCount}指共振 {m.toFixed(1)}x</span>;
 }
 
 function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
@@ -312,7 +311,7 @@ function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
           <div className="gp-tl-lead-en">WAITING · PIVOT CONFIRMATION</div>
         </div>
         <div className="gp-tl-right">
-          <ResonanceBadge pitCount={pitCount} />
+          <ResonanceBadge pitCount={pitCount} multiplier={w.resonance_multiplier} />
         </div>
       </section>
     );
@@ -339,7 +338,7 @@ function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
         <div className="gp-tl-lead-en">PIVOT CONFIRMED · DAY {w.current_day}</div>
       </div>
       <div className="gp-tl-right">
-        <ResonanceBadge pitCount={pitCount} />
+        <ResonanceBadge pitCount={pitCount} multiplier={w.resonance_multiplier} />
         <div className="gp-tl-back">回升: <b>{w.current_day}天</b> · 已确认: <b>{w.turning_count || 0}</b>个指数</div>
       </div>
     </section>
@@ -672,7 +671,7 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
             />
             <ReferenceLine
               y={0.35} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
-              label={{ value: '0.35 黄金坑线', position: 'insideBottomLeft', fontSize: 9, fill: '#e5484d' }}
+              label={{ value: '0.35 黄金坑线', position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
             />
             <ReferenceLine
               y={0.40} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
@@ -956,12 +955,19 @@ export default function GoldenPitPage() {
             {global_macro && <MacroOverview macro={global_macro} />}
             <TripleConfirmation conf={conf} prediction={prediction} />
             <div className="gp-status-pill">
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                <circle cx="7" cy="7" r="6" stroke="#fff" strokeWidth="1.6" />
-                <path d="M4.5 7l1.8 1.8L9.8 5.4" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              已确认: {window.turning_count || 0}个信号数
-              <span className="en">OK</span>
+              {(() => {
+                const confirmed = [conf.layer1.confirmed, conf.layer2.confirmed, conf.layer3.confirmed].filter(Boolean).length;
+                return (
+                  <>
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                      <circle cx="7" cy="7" r="6" stroke="#fff" strokeWidth="1.6" />
+                      <path d="M4.5 7l1.8 1.8L9.8 5.4" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    三重确认: {confirmed}/3 层
+                    <span className="en">OK</span>
+                  </>
+                );
+              })()}
             </div>
           </aside>
 
