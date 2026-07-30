@@ -46,6 +46,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.348, "entry_greed": 0.400, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.2, "pre_turn_cap": 0.20,
+               "dca_strategy": "lump_entry",
                "exit_full_pct": 80, "exit_half_pct": 40, "exit_fallback_days": 20},
     # 中证500: adjCAGR +16.2%, Win 72%, 29 trades, Stability 0.74 (satellite→core)
     "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "core",
@@ -53,6 +54,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.345, "entry_greed": 0.395, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.2, "pre_turn_cap": 0.20,
+               "dca_strategy": "lump_entry",
                "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20},
     # ═══ 卫星 (选做) — 高收益但波动大或历史短 ═══
     # 中证1000: adjCAGR +44.5%, Win 47%, 53 trades, Stability 0.52
@@ -61,6 +63,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.391, "entry_greed": 0.440, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.12,
+               "dca_strategy": "uniform_3",
                "exit_full_pct": 80, "exit_half_pct": 30, "exit_fallback_days": 20},
     # 创业板指: adjCAGR +22.6%, Win 58%, 43 trades, Stability 0.52
     "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
@@ -68,6 +71,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.328, "entry_greed": 0.380, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.12,
+               "dca_strategy": "lump_entry",
                "exit_full_pct": 70, "exit_half_pct": 70, "exit_fallback_days": 20},
     # 道琼斯指数: adjCAGR +11.8%, Win 79%, 14 trades, Stability 0.91, 仅575天数据 (core→satellite)
     "513400": {"name": "道琼斯指数", "priority": 8, "data_source": "arkvol", "tier": "satellite",
@@ -75,6 +79,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": False, "entry_pct": 10, "pit_pct": 3,
                "pit_greed": 0.380, "entry_greed": 0.494, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.15,
+               "dca_strategy": "lump_entry",
                "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10},
     # ═══ 防御 (可选) — 稳定但收益偏低或参数敏感 ═══
     # 沪深300: adjCAGR +11.0%, Win 63%, 35 trades, Stability 0.63
@@ -83,6 +88,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 5, "pit_pct": 3,
                "pit_greed": 0.357, "entry_greed": 0.410, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.12,
+               "dca_strategy": "lump_entry",
                "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20},
     # 纳斯达克: adjCAGR +11.9%, Win 89%, 36 trades, Stability 0.30 ⚠️参数极度敏感 (core→defense)
     "159632": {"name": "纳斯达克", "priority": 10, "data_source": "arkvol", "tier": "defense",
@@ -90,6 +96,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 4,
                "pit_greed": 0.512, "entry_greed": 0.560, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.08,
+               "dca_strategy": "lump_entry",
                "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 60},
     # 恒生指数: adjCAGR +10.5%, Win 67%, 30 trades, Stability 0.80
     "513600": {"name": "恒生指数", "priority": 9, "data_source": "arkvol", "tier": "defense",
@@ -97,6 +104,7 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 5,
                "pit_greed": 0.368, "entry_greed": 0.420, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.12,
+               "dca_strategy": "uniform_3",
                "exit_full_pct": 60, "exit_half_pct": 30, "exit_fallback_days": 60},
     # ═══ 放弃 (回测确认: 年化过低) ═══
     # 上证50: adjCAGR +5.1%, Win 52%, 54 trades, Stability 0.97 — 收益不如货基
@@ -181,6 +189,20 @@ def _add_trading_days(date_str: str, trading_days: int) -> str:
 
 def _describe_entry_strategy(cfg: Dict[str, Any]) -> str:
     """生成入场策略的人类可读描述。"""
+    # DCA 分配方式
+    dca = cfg.get("dca_strategy", "lump_entry")
+    dca_label = {
+        "lump_entry": "一次性打入",
+        "uniform_3": "前3天分批",
+        "uniform_5": "前5天分批",
+        "uniform_7": "前7天分批",
+        "uniform_10": "前10天分批",
+        "uniform_15": "前15天分批",
+        "front_loaded": "递减加权",
+        "back_loaded": "递增加权",
+        "triangle": "三角加权",
+    }.get(dca, dca)
+
     if cfg.get("use_fixed_greed"):
         pit = cfg.get("pit_greed")
         entry = cfg.get("entry_greed")
@@ -192,11 +214,12 @@ def _describe_entry_strategy(cfg: Dict[str, Any]) -> str:
             desc += f" 滞后{offset}天入场"
         else:
             desc += " 当天入场"
+        desc += f" · {dca_label}"
         return desc
     else:
         pit_pct = cfg.get("pit_pct", 5)
         entry_pct = cfg.get("entry_pct", 10)
-        return f"滚动百分位 P{pit_pct}入坑 P{entry_pct}预警"
+        return f"滚动百分位 P{pit_pct}入坑 P{entry_pct}预警 · {dca_label}"
 
 
 def _describe_exit_strategy(cfg: Dict[str, Any]) -> str:
