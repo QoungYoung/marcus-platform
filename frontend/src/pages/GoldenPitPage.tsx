@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, Legend,
+  ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import { goldenPitApi } from '../api/client';
 import '../styles/golden-pit-page.css';
@@ -126,9 +126,9 @@ interface TrendData {
 // ── Constants ──
 
 const STATUS_COLORS: Record<string, string> = {
-  normal: '#22c55e',
-  warning: '#f97316',
-  golden_pit: '#ef4444',
+  normal: '#27a06b',
+  warning: '#c98a12',
+  golden_pit: '#e5484d',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -137,7 +137,118 @@ const STATUS_LABELS: Record<string, string> = {
   golden_pit: '黄金坑',
 };
 
-const INDEX_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6'];
+// 与整体蓝色科幻主题协调的序列色板
+const INDEX_COLORS = ['#2f7cd3', '#e5484d', '#c98a12', '#27a06b', '#7c5cd6', '#0e9db8'];
+
+const TREND_ICONS: Record<string, string> = {
+  declining: '↓',
+  bottoming: '→',
+  recovering: '↑',
+};
+
+const TREND_COLORS: Record<string, string> = {
+  declining: '#e5484d',
+  bottoming: '#c98a12',
+  recovering: '#27a06b',
+};
+
+const EXIT_LABELS: Record<string, string> = {
+  half_exit: '减持 50%',
+  full_exit: '清仓',
+  stop_profit: '止盈',
+  fallback_exit: '兜底退出',
+};
+
+const GLOBAL_TREND_LABELS: Record<string, string> = {
+  bullish: '看涨',
+  declining: '下行',
+  flat: '平稳',
+  unknown: '未知',
+};
+
+const GLOBAL_TREND_COLORS: Record<string, string> = {
+  bullish: '#27a06b',
+  declining: '#e5484d',
+  flat: '#93a9c0',
+  unknown: '#93a9c0',
+};
+
+const MARKET_ORDER = ['a_share', 'united_states', 'japan', 'south_korea', 'hong_kong'];
+
+// ── Inline SVG icons (sci-fi line style, no emoji) ──
+
+function IconValve() {
+  return (
+    <svg className="gp-stat-icon" width="24" height="24" viewBox="0 0 26 26" fill="none">
+      <circle cx="13" cy="13" r="9" stroke="#2f7cd3" strokeWidth="2" />
+      <path d="M13 7v6l4 3" stroke="#2f7cd3" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconSentiment() {
+  return (
+    <svg className="gp-stat-icon" width="24" height="24" viewBox="0 0 26 26" fill="none">
+      <rect x="4" y="14" width="4" height="8" fill="#e5484d" />
+      <rect x="10" y="10" width="4" height="12" fill="#c98a12" />
+      <rect x="16" y="13" width="4" height="9" fill="#2f7cd3" />
+    </svg>
+  );
+}
+
+function IconTrend({ color }: { color: string }) {
+  return (
+    <svg className="gp-stat-icon" width="24" height="24" viewBox="0 0 26 26" fill="none">
+      <circle cx="13" cy="13" r="9" stroke={color} strokeWidth="2" />
+      <path d="M8 11l3 3 3-3 4 4" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconPosition() {
+  return (
+    <svg className="gp-stat-icon" width="24" height="24" viewBox="0 0 26 26" fill="none">
+      <path d="M13 5l9 16H4l9-16z" stroke="#27a06b" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M13 12v5" stroke="#27a06b" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconStar() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 13 13" style={{ verticalAlign: '-1px', marginRight: 3 }}>
+      <path d="M6.5 1l1.6 3.4 3.7.5-2.7 2.6.7 3.7-3.3-1.8-3.3 1.8.7-3.7L.7 4.9l3.7-.5z" fill="#c98a12" />
+    </svg>
+  );
+}
+
+function IconGood() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 13 13" style={{ verticalAlign: '-1px', marginRight: 3 }}>
+      <circle cx="6.5" cy="6.5" r="5.5" fill="none" stroke="#27a06b" strokeWidth="1.5" />
+      <path d="M4 6.6l1.7 1.7L9 5" stroke="#27a06b" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconWarn() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 13 13" style={{ verticalAlign: '-1px', marginRight: 3 }}>
+      <path d="M6.5 1.2L12 11H1z" fill="none" stroke="#c98a12" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M6.5 5v3" stroke="#c98a12" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="6.5" cy="9.6" r=".8" fill="#c98a12" />
+    </svg>
+  );
+}
+
+function IconBulb() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" style={{ flex: 'none', marginTop: 1 }}>
+      <path d="M7 1.5a4 4 0 0 1 4 4c0 1.5-.8 2.4-1.5 3.2-.3.4-.5.8-.5 1.3H5c0-.5-.2-.9-.5-1.3C3.8 7.9 3 7 3 5.5a4 4 0 0 1 4-4z" stroke="#c98a12" strokeWidth="1.3" />
+      <path d="M5.5 11.5h3M6 13h2" stroke="#c98a12" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 // ── Sub-components ──
 
@@ -155,18 +266,14 @@ function Skeleton() {
 }
 
 function ResonanceBadge({ pitCount }: { pitCount: number }) {
+  if (pitCount < 1) return null;
   let label: string;
-  let color: string;
-  if (pitCount >= 4) { label = `${pitCount}指共振 1.3x`; color = '#22c55e'; }
-  else if (pitCount >= 3) { label = `${pitCount}指共振 1.2x`; color = '#22c55e'; }
-  else if (pitCount >= 2) { label = `${pitCount}指共振 1.0x`; color = '#94a3b8'; }
-  else if (pitCount >= 1) { label = `${pitCount}指共振 0.6x`; color = '#f97316'; }
-  else { return null; }
-  return (
-    <span className="gp-resonance-badge" style={{ background: color, color: '#fff', padding: '1px 8px', borderRadius: 10, fontSize: '0.75rem', marginLeft: 8 }}>
-      {label}
-    </span>
-  );
+  let cls = 'gp-res-pill';
+  if (pitCount >= 4) { label = `${pitCount}指共振 1.3x`; }
+  else if (pitCount >= 3) { label = `${pitCount}指共振 1.2x`; }
+  else if (pitCount >= 2) { label = `${pitCount}指共振 1.0x`; cls += ' muted'; }
+  else { label = `${pitCount}指共振 0.6x`; cls += ' warn'; }
+  return <span className={cls}>{label}</span>;
 }
 
 function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
@@ -175,188 +282,189 @@ function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
 
   if (phase === 'idle') {
     return (
-      <div className="gp-timeline inactive">
-        <span className="gp-timeline-status">📍 当前无黄金坑信号</span>
-      </div>
+      <section className="gp-panel gp-timeline inactive">
+        <span className="gp-dot blue" />
+        <span className="gp-timeline-status">当前无黄金坑信号</span>
+      </section>
     );
   }
 
   if (phase === 'waiting') {
     return (
-      <div className="gp-timeline waiting">
-        <div className="gp-timeline-header">
-          <span className="gp-timeline-badge">🟠 已入坑 · 等待回升确认</span>
-          <span className="gp-timeline-leading">领先: {w.leading_index} ({w.leading_tier})</span>
+      <section className="gp-panel gp-timeline waiting">
+        <div className="gp-tl-left">
+          <div className="gp-tl-title"><span className="gp-dot amber" />已入坑 · 等待回升确认</div>
+          <div className="gp-tl-meta">
+            {w.start_date && <span>首个入坑: <b>{w.start_date}</b></span>}
+            <span><b>{pitCount}</b> 个指数已在黄金坑 / <b>{w.warning_count || 0}</b> 个预警</span>
+          </div>
+          <div className="gp-tl-status">贪婪值仍在下跌中，需等待连续回升确认拐点后开启买入窗口</div>
+          <div className="gp-stages">
+            <span className="gp-stage done"><i>1</i>入坑</span>
+            <span className="gp-stage-arrow">→</span>
+            <span className="gp-stage active"><i>2</i>拐点确认</span>
+            <span className="gp-stage-arrow">→</span>
+            <span className="gp-stage pending"><i>3</i>买入窗口</span>
+          </div>
+        </div>
+        <div className="gp-tl-mid">
+          <div className="gp-tl-lead">领先: {w.leading_index}{w.leading_tier ? ` (${w.leading_tier})` : ''}</div>
+          <div className="gp-tl-lead-en">WAITING · PIVOT CONFIRMATION</div>
+        </div>
+        <div className="gp-tl-right">
           <ResonanceBadge pitCount={pitCount} />
         </div>
-        <div className="gp-timeline-dates">
-          <span>{pitCount}个指数已在黄金坑 / {w.warning_count || 0}个预警</span>
-          {w.start_date && <span>首个入坑: {w.start_date}</span>}
-        </div>
-        <div className="gp-timeline-status-text">
-          贪婪值仍在下跌中，需等待连续回升确认拐点后开启买入窗口
-        </div>
-        <div className="gp-timeline-stages">
-          <span className="gp-stage done">① 入坑</span>
-          <span className="gp-stage-arrow">→</span>
-          <span className="gp-stage active">② 拐点确认</span>
-          <span className="gp-stage-arrow">→</span>
-          <span className="gp-stage pending">③ 买入窗口</span>
-        </div>
-      </div>
+      </section>
     );
   }
 
   return (
-    <div className="gp-timeline buying">
-      <div className="gp-timeline-header">
-        <span className="gp-timeline-badge">🔴 买入窗口</span>
-        <span className="gp-timeline-leading">
-          {w.leading_index} 拐点确认 (第{w.current_day}天)
-        </span>
+    <section className="gp-panel gp-timeline buying">
+      <div className="gp-tl-left">
+        <div className="gp-tl-title"><span className="gp-dot red" />买入窗口</div>
+        <div className="gp-tl-meta">
+          <span>拐点: <b>{w.start_date}</b></span>
+          <span>加仓节奏: <span className="gold">50% → 75% → 100%</span></span>
+        </div>
+        <div className="gp-stages">
+          <span className="gp-stage done"><i>1</i>入坑</span>
+          <span className="gp-stage-arrow">→</span>
+          <span className="gp-stage done"><i>2</i>拐点确认</span>
+          <span className="gp-stage-arrow">→</span>
+          <span className="gp-stage active"><i>3</i>买入窗口</span>
+        </div>
+      </div>
+      <div className="gp-tl-mid">
+        <div className="gp-tl-lead">{w.leading_index} <em>拐点确认</em>（第{w.current_day}天）</div>
+        <div className="gp-tl-lead-en">PIVOT CONFIRMED · DAY {w.current_day}</div>
+      </div>
+      <div className="gp-tl-right">
         <ResonanceBadge pitCount={pitCount} />
+        <div className="gp-tl-back">回升: <b>{w.current_day}天</b> · 已确认: <b>{w.turning_count || 0}</b>个指数</div>
       </div>
-      <div className="gp-timeline-dates">
-        <span>拐点: {w.start_date}</span>
-        <span>已确认: {w.turning_count || 0}个指数</span>
-        <span>回升: {w.current_day}天</span>
-      </div>
-      <div className="gp-timeline-status-text">
-        加仓节奏: 50% → 75% → 100%
-      </div>
-      <div className="gp-timeline-stages">
-        <span className="gp-stage done">① 入坑</span>
-        <span className="gp-stage-arrow">→</span>
-        <span className="gp-stage done">② 拐点确认</span>
-        <span className="gp-stage-arrow">→</span>
-        <span className="gp-stage active">③ 买入窗口</span>
-      </div>
-    </div>
+    </section>
   );
 }
 
-const TREND_ICONS: Record<string, string> = {
-  declining: '↓',
-  bottoming: '→',
-  recovering: '↑',
-};
-
-const TREND_COLORS: Record<string, string> = {
-  declining: '#ef4444',
-  bottoming: '#f97316',
-  recovering: '#22c55e',
-};
-
-const EXIT_LABELS: Record<string, string> = {
-  half_exit: '\u{1F7E1} 减持 50%',
-  full_exit: '\u{1F534} 清仓',
-  stop_profit: '\u{1F7E0} 止盈',
-  fallback_exit: '⏰ 兜底退出',
-};
-
-const GLOBAL_TREND_LABELS: Record<string, string> = {
-  bullish: '看涨',
-  declining: '下行',
-  flat: '平稳',
-  unknown: '未知',
-};
-
-const GLOBAL_TREND_COLORS: Record<string, string> = {
-  bullish: '#27AE60',
-  declining: '#C0392B',
-  flat: '#94a3b8',
-  unknown: '#94a3b8',
-};
-
-const MARKET_ORDER = ['a_share', 'united_states', 'japan', 'south_korea', 'hong_kong'];
-
-function GlobalMacroCard({ macro }: { macro: GlobalMacro }) {
+function MacroOverview({ macro }: { macro: GlobalMacro }) {
   const gateOpen = macro.liquidity_gate === 'open';
   const trendLabel = GLOBAL_TREND_LABELS[macro.global_trend] || macro.global_trend;
-  const trendColor = GLOBAL_TREND_COLORS[macro.global_trend] || '#94a3b8';
+  const trendColor = GLOBAL_TREND_COLORS[macro.global_trend] || '#93a9c0';
   const coefPct = Math.round(macro.global_macro_coefficient * 100);
-  const cf = macro.capital_flow;
+  const sentimentColor = macro.sentiment_score <= 20 ? '#e5484d' : macro.sentiment_score >= 80 ? '#27a06b' : 'var(--gp-muted)';
 
   return (
-    <div className={`gp-macro-card ${gateOpen ? 'gate-open' : 'gate-closed'}`}>
-      <div className="gp-macro-top-row">
-        <div className="gp-macro-item gate">
-          <span className="gp-macro-icon">{gateOpen ? '\u{1F513}' : '\u{1F512}'}</span>
-          <div className="gp-macro-text">
-            <span className="gp-macro-label">流动性闸门</span>
-            <span className={`gp-macro-value ${gateOpen ? 'text-green' : 'text-red'}`}>
-              {gateOpen ? '开启' : '关闭'}
-            </span>
-          </div>
-        </div>
-        <div className="gp-macro-item">
-          <span className="gp-macro-icon">{'\u{1F4CA}'}</span>
-          <div className="gp-macro-text">
-            <span className="gp-macro-label">情绪指数</span>
-            <span className="gp-macro-value">{macro.sentiment_score.toFixed(0)}</span>
-            <span className="gp-macro-sub" style={{ color: macro.sentiment_score <= 20 ? '#C0392B' : macro.sentiment_score >= 80 ? '#27AE60' : 'var(--gp-text-dim)' }}>
-              {macro.sentiment_label}
-            </span>
-          </div>
-        </div>
-        <div className="gp-macro-item">
-          <span className="gp-macro-icon">{'\u{1F30D}'}</span>
-          <div className="gp-macro-text">
-            <span className="gp-macro-label">全球趋势</span>
-            <span className="gp-macro-value" style={{ color: trendColor }}>{trendLabel}</span>
-          </div>
-        </div>
-        <div className="gp-macro-item">
-          <span className="gp-macro-icon">{'\u{2696}'}</span>
-          <div className="gp-macro-text">
-            <span className="gp-macro-label">仓位系数</span>
-            <span className={`gp-macro-value ${coefPct < 100 ? 'text-amber' : ''}`}>
-              {coefPct}%
-            </span>
-          </div>
-        </div>
-        <div className="gp-macro-summary">{macro.summary}</div>
+    <section className="gp-panel gp-overview">
+      <div className="gp-panel-head">
+        <span className="gp-tick" /><h2>看板概览</h2><span className="gp-en">OVERVIEW</span>
       </div>
+      <div className="gp-stat-grid">
+        <div className="gp-stat">
+          <div className="gp-stat-lab">流动性阀门 <span className="gp-stat-idx">01</span></div>
+          <div className={`gp-stat-val ${gateOpen ? '' : 'red'}`}>{gateOpen ? '开启' : '关闭'}</div>
+          <IconValve />
+        </div>
+        <div className="gp-stat">
+          <div className="gp-stat-lab">情绪指数 <span className="gp-stat-idx">02</span></div>
+          <div className="gp-stat-val">{macro.sentiment_score.toFixed(0)}<small style={{ color: sentimentColor }}>{macro.sentiment_label}</small></div>
+          <IconSentiment />
+        </div>
+        <div className="gp-stat">
+          <div className="gp-stat-lab">全球趋势 <span className="gp-stat-idx">03</span></div>
+          <div className="gp-stat-val" style={{ color: trendColor }}>{trendLabel}</div>
+          <IconTrend color={trendColor} />
+        </div>
+        <div className="gp-stat">
+          <div className="gp-stat-lab">仓位系数 <span className="gp-stat-idx">04</span></div>
+          <div className={`gp-stat-val ${coefPct < 100 ? 'amber' : ''}`}>{coefPct}<small>%</small></div>
+          <IconPosition />
+        </div>
+      </div>
+      {macro.summary && <div className="gp-overview-note">{macro.summary}</div>}
+    </section>
+  );
+}
 
-      {cf && cf.markets && (
-        <div className="gp-capital-flow">
-          <div className="gp-capital-flow-header">
-            <span className="gp-macro-label">全球资金流向</span>
+function TripleConfirmation({ conf, prediction }: {
+  conf: GoldenPitStatus['triple_confirmation'];
+  prediction: Prediction | null;
+}) {
+  const layers = [conf.layer1, conf.layer2, conf.layer3];
+
+  return (
+    <section className="gp-panel gp-confirmation">
+      <div className="gp-panel-head">
+        <span className="gp-tick" /><h2>三重确认</h2><span className="gp-en">TRIPLE CHECK</span>
+      </div>
+      <div className="gp-confirm-list">
+        {layers.map((layer, i) => (
+          <div key={layer.label} className={`gp-confirm-row ${layer.confirmed ? 'confirmed' : ''}`}>
+            <span className="gp-confirm-box">
+              {layer.confirmed && (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M1.5 5.2l2.3 2.3L8.5 2.6" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+            </span>
+            <div className="gp-confirm-text">
+              <span className="gp-confirm-label">{layer.label}</span>
+              <span className="gp-confirm-status">{layer.status}</span>
+            </div>
+            <span className="gp-confirm-idx">L{i + 1}</span>
           </div>
-          <div className="gp-flow-markets">
-            {MARKET_ORDER.map((key) => {
-              const m = cf.markets[key];
-              if (!m) return null;
-              const isInflow = m.direction === 'inflow';
-              const ppAbs = Math.abs(m.cumulative_pp);
-              const ppColor = isInflow ? '#27AE60' : '#C0392B';
-              const barWidth = Math.min(100, Math.max(8, ppAbs * 10));
-              return (
-                <div key={key} className="gp-flow-market-chip">
-                  <span className="gp-flow-market-name">{m.name}</span>
-                  <span className="gp-flow-direction" style={{ color: isInflow ? '#27AE60' : '#C0392B' }}>
-                    {isInflow ? '↑' : '↓'}{m.direction_label}
-                  </span>
-                  <span className="gp-flow-days">{m.consecutive_days}日</span>
-                  <div className="gp-flow-bar-wrap">
-                    <div
-                      className="gp-flow-bar"
-                      style={{ width: `${barWidth}%`, background: ppColor }}
-                    />
-                  </div>
-                  <span className="gp-flow-pp" style={{ color: ppColor }}>
-                    {isInflow ? '+' : '-'}{ppAbs.toFixed(1)}pp
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          {cf.summary && (
-            <div className="gp-flow-summary">{cf.summary}</div>
-          )}
+        ))}
+      </div>
+      {prediction && (
+        <div className="gp-prediction">
+          <IconBulb />
+          <span>预测: {prediction.next_index} 预计 {prediction.eta_days} 天后入坑 ({prediction.eta_date})</span>
         </div>
       )}
-    </div>
+    </section>
+  );
+}
+
+function CapitalFlowPanel({ macro }: { macro: GlobalMacro }) {
+  const cf = macro.capital_flow;
+  if (!cf || !cf.markets) return null;
+  const gateOpen = macro.liquidity_gate === 'open';
+  const trendLabel = GLOBAL_TREND_LABELS[macro.global_trend] || macro.global_trend;
+
+  return (
+    <section className="gp-panel gp-flow">
+      <div className="gp-panel-head">
+        <span className="gp-tick" /><h2>全球资金流向</h2><span className="gp-en">CAPITAL FLOW</span>
+        <span className="gp-flow-risk">
+          全球风险偏好: <b>{macro.sentiment_label}({macro.sentiment_score.toFixed(0)})</b> · 阀门: <b>{gateOpen ? '开启' : '关闭'}</b> · 趋势: <b>{trendLabel}</b>
+        </span>
+      </div>
+      <div className="gp-flow-markets">
+        {MARKET_ORDER.map((key) => {
+          const m = cf.markets[key];
+          if (!m) return null;
+          const isInflow = m.direction === 'inflow';
+          const ppAbs = Math.abs(m.cumulative_pp);
+          const ppColor = isInflow ? '#27a06b' : '#e5484d';
+          const barWidth = Math.min(100, Math.max(8, ppAbs * 10));
+          return (
+            <div key={key} className="gp-flow-market-chip">
+              <span className="gp-flow-market-name">{m.name}</span>
+              <span className="gp-flow-direction" style={{ color: ppColor }}>
+                {isInflow ? '↑' : '↓'}{m.direction_label}
+              </span>
+              <span className="gp-flow-days">{m.consecutive_days}日</span>
+              <div className="gp-flow-bar-wrap">
+                <div className="gp-flow-bar" style={{ width: `${barWidth}%`, background: ppColor }} />
+              </div>
+              <span className="gp-flow-pp" style={{ color: ppColor }}>
+                {isInflow ? '+' : '-'}{ppAbs.toFixed(1)}pp
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {cf.summary && <div className="gp-flow-summary">{cf.summary}</div>}
+    </section>
   );
 }
 
@@ -366,7 +474,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
   const trendIcon = idx.trend ? TREND_ICONS[idx.trend] : '';
   const trendColor = idx.trend ? TREND_COLORS[idx.trend] : '';
   const exitLabel = idx.exit_signal ? EXIT_LABELS[idx.exit_signal] : '';
-  const sqLabel = idx.signal_quality === 'strong' ? '⭐' : idx.signal_quality === 'good' ? '✅' : '';
+  const sqIcon = idx.signal_quality === 'strong' ? <IconStar /> : idx.signal_quality === 'good' ? <IconGood /> : null;
   const weightPct = (idx.position_weight != null && idx.position_weight > 0)
     ? `${(idx.position_weight * 100).toFixed(0)}%`
     : '';
@@ -374,15 +482,15 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
   const isGlobalExit = idx.exit_reason?.startsWith('全球');
 
   return (
-    <div className={`gp-index-card ${idx.status}`} style={{ borderColor: color }}>
+    <div className={`gp-index-card ${idx.status}`}>
       <div className="gp-index-card-top">
         <span className="gp-index-name">
           {isDivergent && (
-            <span className="gp-divergent-icon" title={idx.turning_validation_reason || '全球趋势背离'}>{'⚠️'}</span>
+            <span className="gp-divergent-icon" title={idx.turning_validation_reason || '全球趋势背离'}><IconWarn /></span>
           )}
-          {sqLabel} {idx.index_name}
+          {sqIcon}{idx.index_name}
           {weightPct && (
-            <span className="gp-index-weight" title="仓位上限"> 上限{weightPct}</span>
+            <span className="gp-index-weight" title="仓位上限">上限{weightPct}</span>
           )}
         </span>
         <span className="gp-index-badge" style={{ background: color }}>
@@ -396,7 +504,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
         <span className="gp-index-value" style={{ color }}>{idx.greed.toFixed(4)}</span>
         <span className="gp-index-percentile">P{idx.percentile.toFixed(1)}</span>
         {trendIcon && (
-          <span className="gp-index-trend" style={{ color: trendColor, marginLeft: 8 }}>
+          <span className="gp-index-trend" style={{ color: trendColor }}>
             {trendIcon}
           </span>
         )}
@@ -417,7 +525,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           <span>预计 {idx.eta_date} 入坑 ({idx.days_to_pit}天)</span>
         )}
         {idx.change_5 != null && idx.change_5 !== 0 && (
-          <span style={{ color: idx.change_5 > 0 ? '#27AE60' : '#C0392B' }}>
+          <span style={{ color: idx.change_5 > 0 ? '#27a06b' : '#e5484d' }}>
             5日{idx.change_5 > 0 ? '反弹' : '下跌'} {idx.change_5 > 0 ? '+' : ''}{idx.change_5.toFixed(3)}
           </span>
         )}
@@ -425,7 +533,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           <span>日跌 {idx.decline_rate > 0 ? '+' : ''}{idx.decline_rate.toFixed(3)}</span>
         )}
         {idx.close > 0 && (
-          <span className="gp-index-close">{'¥'}{idx.close.toFixed(2)}</span>
+          <span className="gp-index-close">¥{idx.close.toFixed(2)}</span>
         )}
       </div>
       {(idx.entry_strategy || idx.exit_strategy) && (
@@ -435,21 +543,17 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
         </div>
       )}
       {idx.position_tier_label && idx.tier !== 'drop' && idx.tier !== 'watch' && (
-        <div className="gp-index-position" style={{ fontSize: '0.75rem', marginTop: 4 }}>
-          {idx.trend_label ? (
-            <span style={{ color: (idx.trend_factor ?? 0) >= 1.0 ? '#27AE60' : (idx.trend_factor ?? 0) >= 0.5 ? '#f59e0b' : '#ef4444' }}>
-              {idx.trend_label}
-            </span>
-          ) : (
-            <span style={{ color: '#94a3b8' }}>{idx.position_tier_label}</span>
-          )}
+        <div className="gp-index-position">
+          <span style={{ color: (idx.trend_factor ?? 0) >= 1.0 ? '#27a06b' : (idx.trend_factor ?? 0) >= 0.5 ? '#c98a12' : '#e5484d' }}>
+            {idx.trend_label || idx.position_tier_label}
+          </span>
           {idx.dca_strategy && (
-            <span style={{ color: '#94a3b8', marginLeft: 8 }}>
+            <span style={{ color: '#93a9c0', marginLeft: 8 }}>
               DCA: {idx.dca_strategy === 'lump_entry' ? '一次性' : idx.dca_strategy === 'uniform_3' ? '3日分批' : idx.dca_strategy}
             </span>
           )}
           {idx.schedule_day != null && (
-            <span style={{ color: '#94a3b8', marginLeft: 8 }}>
+            <span style={{ color: '#93a9c0', marginLeft: 8 }}>
               窗口第{idx.schedule_day}天
             </span>
           )}
@@ -457,7 +561,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
       )}
       {exitLabel && (
         <div className={`gp-index-exit ${isGlobalExit ? 'global-exit' : 'aq-exit'}`}>
-          <span className="gp-exit-source">{isGlobalExit ? '🌍 宏观' : '🇨🇳 A股'}</span>
+          <span className="gp-exit-source">{isGlobalExit ? '宏观' : 'A股'}</span>
           <span className="gp-exit-label">{exitLabel}</span>
           <span className="gp-exit-reason">{idx.exit_reason}</span>
         </div>
@@ -466,29 +570,22 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
   );
 }
 
-function TripleConfirmation({ conf, prediction }: {
-  conf: GoldenPitStatus['triple_confirmation'];
-  prediction: Prediction | null;
-}) {
-  const layers = [conf.layer1, conf.layer2, conf.layer3];
+// ── Charts ──
 
+function GpChartTooltip({ active, payload, label, digits = 4, suffix = '' }: any) {
+  if (!active || !payload || payload.length === 0) return null;
   return (
-    <div className="gp-confirmation">
-      <h3 className="gp-section-title">三重确认</h3>
-      {layers.map((layer) => (
-        <div key={layer.label} className={`gp-confirm-row ${layer.confirmed ? 'confirmed' : ''}`}>
-          <span className="gp-confirm-icon">{layer.confirmed ? '☑' : '☐'}</span>
-          <div className="gp-confirm-text">
-            <span className="gp-confirm-label">{layer.label}</span>
-            <span className="gp-confirm-status">{layer.status}</span>
-          </div>
+    <div className="gp-tooltip">
+      <div className="gp-tooltip-title">{label}</div>
+      {payload.map((p: any) => (
+        <div key={String(p.dataKey)} className="gp-tooltip-row">
+          <span className="gp-tooltip-dot" style={{ background: p.stroke || p.color }} />
+          <span className="gp-tooltip-name">{p.name}</span>
+          <span className="gp-tooltip-val">
+            {typeof p.value === 'number' ? p.value.toFixed(digits) : p.value}{suffix}
+          </span>
         </div>
       ))}
-      {prediction && (
-        <div className="gp-prediction">
-          💡 预测: {prediction.next_index} 预计 {prediction.eta_days} 天后入坑 ({prediction.eta_date})
-        </div>
-      )}
     </div>
   );
 }
@@ -500,12 +597,7 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
   onToggleAll: () => void;
 }) {
   if (!trendData || !trendData.series || Object.keys(trendData.series).length === 0) {
-    return (
-      <div className="gp-chart">
-        <h3 className="gp-section-title">贪婪值趋势</h3>
-        <div className="gp-chart-empty">暂无历史数据</div>
-      </div>
-    );
+    return <div className="gp-chart-empty">暂无历史数据</div>;
   }
 
   const allCodes = Object.keys(trendData.series);
@@ -548,7 +640,7 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
               onClick={() => onToggleCode(code)}
               style={active ? { borderColor: color, color } : undefined}
             >
-              <span className="gp-filter-dot" style={{ background: active ? color : '#ccc' }} />
+              <span className="gp-filter-dot" style={{ background: active ? color : '#c9d8e8' }} />
               {name}
             </button>
           );
@@ -558,48 +650,49 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
         <div className="gp-chart-empty">请选择至少一个指数</div>
       ) : (
         <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(17,137,249,0.10)" />
+          <LineChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#d4e7f9" vertical={false} />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+              tick={{ fontSize: 10, fill: '#6b86a3', fontFamily: 'Rajdhani, sans-serif' }}
               tickFormatter={(v) => v.slice(5)}
+              axisLine={{ stroke: '#d4e7f9' }}
+              tickLine={false}
             />
             <YAxis
               domain={[0.2, 0.9]}
-              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+              tick={{ fontSize: 10, fill: '#6b86a3', fontFamily: 'Rajdhani, sans-serif' }}
+              axisLine={false}
+              tickLine={false}
+              width={34}
             />
             <Tooltip
-              contentStyle={{
-                background: 'rgba(255,255,255,0.95)',
-                border: '1px solid rgba(231,231,231,0.75)',
-                borderRadius: 8,
-                fontSize: 12,
-                boxShadow: '0 4px 16px rgba(167,216,234,0.4)',
-              }}
+              content={(props: any) => <GpChartTooltip {...props} digits={4} />}
+              cursor={{ stroke: '#a8cdee', strokeDasharray: '4 3' }}
             />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
-            <ReferenceLine y={0.35} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5} />
-            <ReferenceLine y={0.40} stroke="#f97316" strokeDasharray="4 4" strokeWidth={1} />
-            {activeCodes.map((code, i) => (
+            <ReferenceLine
+              y={0.35} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
+              label={{ value: '0.35 黄金坑线', position: 'insideBottomLeft', fontSize: 9, fill: '#e5484d' }}
+            />
+            <ReferenceLine
+              y={0.40} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
+              label={{ value: '0.40 预警线', position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
+            />
+            {activeCodes.map((code) => (
               <Line
                 key={code}
                 type="monotone"
                 dataKey={code}
                 name={trendData.indices[code] || code}
                 stroke={INDEX_COLORS[allCodes.indexOf(code) % INDEX_COLORS.length]}
-                strokeWidth={1.5}
+                strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 3 }}
+                activeDot={{ r: 3, strokeWidth: 1.5, stroke: '#fff' }}
               />
             ))}
           </LineChart>
         </ResponsiveContainer>
       )}
-      <div className="gp-chart-legend-custom">
-        <span className="gp-legend-item"><span className="gp-legend-dot" style={{ background: '#ef4444' }} /> 0.35 黄金坑线</span>
-        <span className="gp-legend-item"><span className="gp-legend-dot" style={{ background: '#f97316' }} /> 0.40 预警线</span>
-      </div>
     </div>
   );
 }
@@ -620,12 +713,7 @@ function ShareHistoryChart({ shareHistory, visibleCodes, onToggleCode, onToggleA
   onToggleAll: () => void;
 }) {
   if (!shareHistory || shareHistory.length === 0) {
-    return (
-      <div className="gp-chart">
-        <h3 className="gp-section-title">全球资金份额</h3>
-        <div className="gp-chart-empty">暂无份额历史数据</div>
-      </div>
-    );
+    return <div className="gp-chart-empty">暂无份额历史数据</div>;
   }
 
   // Extract market keys from the first row (exclude 'date')
@@ -672,7 +760,7 @@ function ShareHistoryChart({ shareHistory, visibleCodes, onToggleCode, onToggleA
               onClick={() => onToggleCode(code)}
               style={active ? { borderColor: color, color } : undefined}
             >
-              <span className="gp-filter-dot" style={{ background: active ? color : '#ccc' }} />
+              <span className="gp-filter-dot" style={{ background: active ? color : '#c9d8e8' }} />
               {name}
             </button>
           );
@@ -682,39 +770,37 @@ function ShareHistoryChart({ shareHistory, visibleCodes, onToggleCode, onToggleA
         <div className="gp-chart-empty">请选择至少一个市场</div>
       ) : (
         <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(17,137,249,0.10)" />
+          <LineChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#d4e7f9" vertical={false} />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+              tick={{ fontSize: 10, fill: '#6b86a3', fontFamily: 'Rajdhani, sans-serif' }}
               tickFormatter={(v) => v.slice(5)}
+              axisLine={{ stroke: '#d4e7f9' }}
+              tickLine={false}
             />
             <YAxis
               domain={[yMin, yMax]}
-              tick={{ fontSize: 10, fill: 'var(--gp-text-dim)' }}
+              tick={{ fontSize: 10, fill: '#6b86a3', fontFamily: 'Rajdhani, sans-serif' }}
               tickFormatter={(v) => `${v}%`}
+              axisLine={false}
+              tickLine={false}
+              width={38}
             />
             <Tooltip
-              contentStyle={{
-                background: 'rgba(255,255,255,0.95)',
-                border: '1px solid rgba(231,231,231,0.75)',
-                borderRadius: 8,
-                fontSize: 12,
-                boxShadow: '0 4px 16px rgba(167,216,234,0.4)',
-              }}
-              formatter={(value: number, name: string) => [`${value.toFixed(2)}%`, SHARE_MARKET_NAMES[name] || name]}
+              content={(props: any) => <GpChartTooltip {...props} digits={2} suffix="%" />}
+              cursor={{ stroke: '#a8cdee', strokeDasharray: '4 3' }}
             />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
-            {activeCodes.map((code, i) => (
+            {activeCodes.map((code) => (
               <Line
                 key={code}
                 type="monotone"
                 dataKey={code}
                 name={SHARE_MARKET_NAMES[code] || code}
                 stroke={INDEX_COLORS[allCodes.indexOf(code) % INDEX_COLORS.length]}
-                strokeWidth={1.5}
+                strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 3 }}
+                activeDot={{ r: 3, strokeWidth: 1.5, stroke: '#fff' }}
               />
             ))}
           </LineChart>
@@ -790,7 +876,7 @@ export default function GoldenPitPage() {
       <div className="golden-pit-page">
         <div className="gp-content">
           <div className="gp-header">
-            <h1 className="gp-title">黄金坑监测</h1>
+            <h1 className="gp-title">黄金坑监测<span className="gp-title-en">GOLDEN PIT MONITOR</span></h1>
             <p className="gp-subtitle">宽基指数情绪三重确认底部检测</p>
           </div>
           <Skeleton />
@@ -804,7 +890,7 @@ export default function GoldenPitPage() {
       <div className="golden-pit-page">
         <div className="gp-content">
           <div className="gp-header">
-            <h1 className="gp-title">黄金坑监测</h1>
+            <h1 className="gp-title">黄金坑监测<span className="gp-title-en">GOLDEN PIT MONITOR</span></h1>
           </div>
           <div className="gp-error">
           <AlertTriangle size={48} />
@@ -825,7 +911,7 @@ export default function GoldenPitPage() {
       <div className="golden-pit-page">
         <div className="gp-content">
           <div className="gp-header">
-            <h1 className="gp-title">黄金坑监测</h1>
+            <h1 className="gp-title">黄金坑监测<span className="gp-title-en">GOLDEN PIT MONITOR</span></h1>
           </div>
           <div className="gp-error">
             <p>暂无数据</p>
@@ -851,7 +937,7 @@ export default function GoldenPitPage() {
             onClick={() => setHeaderCollapsed(!headerCollapsed)}
             title={headerCollapsed ? '展开' : '收起'}
           >
-            <h1 className="gp-title">黄金坑监测</h1>
+            <h1 className="gp-title">黄金坑监测<span className="gp-title-en">GOLDEN PIT MONITOR</span></h1>
             {headerCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
           </button>
           {!headerCollapsed && (
@@ -864,97 +950,116 @@ export default function GoldenPitPage() {
           )}
         </div>
 
-      <GoldenPitTimeline window={window} />
-
-      {global_macro && <GlobalMacroCard macro={global_macro} />}
-
-      <div className="gp-section">
-        <h3 className="gp-section-title">宽基指数状态</h3>
-        <div className="gp-index-grid">
-          {sortedIndices.map((idx) => (
-            <IndexStatusCard key={idx.fund_code} idx={idx} />
-          ))}
-        </div>
-      </div>
-
-      <div className="gp-bottom-row">
-        <TripleConfirmation conf={conf} prediction={prediction} />
-
-        <div className="gp-chart-section">
-          <div className="gp-chart-top-bar">
-            <button className="gp-chart-toggle" onClick={() => setShowChart(!showChart)}>
-              {showChart ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              <h3 className="gp-section-title" style={{ margin: 0 }}>
-                {chartTab === 'greed' ? '贪婪值趋势' : '全球资金份额'}
-              </h3>
-            </button>
-            <div className="gp-chart-tabs">
-              <button
-                className={`gp-chart-tab ${chartTab === 'greed' ? 'active' : ''}`}
-                onClick={() => setChartTab('greed')}
-              >
-                贪婪值
-              </button>
-              <button
-                className={`gp-chart-tab ${chartTab === 'share' ? 'active' : ''}`}
-                onClick={() => setChartTab('share')}
-              >
-                资金份额
-              </button>
+        <div className="gp-layout">
+          {/* ── 左侧栏：看板概览 + 三重确认 + 状态条 ── */}
+          <aside className="gp-sidebar">
+            {global_macro && <MacroOverview macro={global_macro} />}
+            <TripleConfirmation conf={conf} prediction={prediction} />
+            <div className="gp-status-pill">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                <circle cx="7" cy="7" r="6" stroke="#fff" strokeWidth="1.6" />
+                <path d="M4.5 7l1.8 1.8L9.8 5.4" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              已确认: {window.turning_count || 0}个信号数
+              <span className="en">OK</span>
             </div>
-          </div>
-          {showChart && chartTab === 'greed' && (
-            <TrendChart
-              trendData={trendData}
-              visibleCodes={visibleCodes}
-              onToggleCode={(code) => {
-                setVisibleCodes((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(code)) next.delete(code); else next.add(code);
-                  return next;
-                });
-              }}
-              onToggleAll={() => {
-                setVisibleCodes((prev) => {
-                  if (!trendData?.series) return prev;
-                  const all = Object.keys(trendData.series);
-                  const allSelected = all.every((c) => prev.has(c));
-                  return allSelected ? new Set() : new Set(all);
-                });
-              }}
-            />
-          )}
-          {showChart && chartTab === 'share' && (
-            <ShareHistoryChart
-              shareHistory={global_macro?.capital_flow?.share_history || []}
-              visibleCodes={shareVisibleCodes}
-              onToggleCode={(code) => {
-                setShareVisibleCodes((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(code)) next.delete(code); else next.add(code);
-                  return next;
-                });
-              }}
-              onToggleAll={() => {
-                setShareVisibleCodes((prev) => {
-                  const sh = global_macro?.capital_flow?.share_history;
-                  if (!sh || sh.length === 0) return prev;
-                  const all = Object.keys(sh[0]).filter((k) => k !== 'date');
-                  const allSelected = all.every((c) => prev.has(c));
-                  return allSelected ? new Set() : new Set(all);
-                });
-              }}
-            />
-          )}
-        </div>
-      </div>
+          </aside>
 
-      {summary && (
-        <div className="gp-summary">
-          <h3 className="gp-section-title">AI 解读</h3>
-          <p>{summary}</p>
+          {/* ── 右侧主区 ── */}
+          <main className="gp-main">
+            <GoldenPitTimeline window={window} />
+
+            {global_macro && <CapitalFlowPanel macro={global_macro} />}
+
+            <section className="gp-panel gp-section">
+              <div className="gp-panel-head">
+                <span className="gp-tick" /><h2>宽基指数状态</h2><span className="gp-en">SECTOR STATUS</span>
+              </div>
+              <div className="gp-index-grid">
+                {sortedIndices.map((idx) => (
+                  <IndexStatusCard key={idx.fund_code} idx={idx} />
+                ))}
+              </div>
+            </section>
+
+            <section className="gp-panel gp-chart-section">
+              <div className="gp-panel-head">
+                <span className="gp-tick" />
+                <button className="gp-chart-toggle" onClick={() => setShowChart(!showChart)}>
+                  <h2>{chartTab === 'greed' ? '贪婪值趋势' : '全球资金份额'}</h2>
+                  {showChart ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+                <span className="gp-en">{chartTab === 'greed' ? 'GREED TREND' : 'CAPITAL SHARE'}</span>
+                <div className="gp-chart-tabs">
+                  <button
+                    className={`gp-chart-tab ${chartTab === 'greed' ? 'active' : ''}`}
+                    onClick={() => setChartTab('greed')}
+                  >
+                    贪婪值
+                  </button>
+                  <button
+                    className={`gp-chart-tab ${chartTab === 'share' ? 'active' : ''}`}
+                    onClick={() => setChartTab('share')}
+                  >
+                    资金份额
+                  </button>
+                </div>
+              </div>
+              {showChart && chartTab === 'greed' && (
+                <TrendChart
+                  trendData={trendData}
+                  visibleCodes={visibleCodes}
+                  onToggleCode={(code) => {
+                    setVisibleCodes((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(code)) next.delete(code); else next.add(code);
+                      return next;
+                    });
+                  }}
+                  onToggleAll={() => {
+                    setVisibleCodes((prev) => {
+                      if (!trendData?.series) return prev;
+                      const all = Object.keys(trendData.series);
+                      const allSelected = all.every((c) => prev.has(c));
+                      return allSelected ? new Set() : new Set(all);
+                    });
+                  }}
+                />
+              )}
+              {showChart && chartTab === 'share' && (
+                <ShareHistoryChart
+                  shareHistory={global_macro?.capital_flow?.share_history || []}
+                  visibleCodes={shareVisibleCodes}
+                  onToggleCode={(code) => {
+                    setShareVisibleCodes((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(code)) next.delete(code); else next.add(code);
+                      return next;
+                    });
+                  }}
+                  onToggleAll={() => {
+                    setShareVisibleCodes((prev) => {
+                      const sh = global_macro?.capital_flow?.share_history;
+                      if (!sh || sh.length === 0) return prev;
+                      const all = Object.keys(sh[0]).filter((k) => k !== 'date');
+                      const allSelected = all.every((c) => prev.has(c));
+                      return allSelected ? new Set() : new Set(all);
+                    });
+                  }}
+                />
+              )}
+            </section>
+
+            {summary && (
+              <section className="gp-panel gp-summary">
+                <div className="gp-panel-head">
+                  <span className="gp-tick" /><h2>AI 解读</h2><span className="gp-en">AI INSIGHT</span>
+                </div>
+                <p>{summary}</p>
+              </section>
+            )}
+          </main>
         </div>
-      )}
       </div>
     </div>
   );
@@ -1010,9 +1115,9 @@ function useGoldenPitBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
         ctx!.rotate(angle);
         const r0 = Math.max(0.1, r * 0.2), r1 = Math.max(0.1, r);
         const grad = ctx!.createRadialGradient(0, 0, r0, 0, 0, r1);
-        grad.addColorStop(0, 'rgba(17,137,249,0)');
-        grad.addColorStop(0.7, 'rgba(17,137,249,0.02)');
-        grad.addColorStop(1, 'rgba(17,137,249,0.05)');
+        grad.addColorStop(0, 'rgba(47,124,211,0)');
+        grad.addColorStop(0.7, 'rgba(47,124,211,0.02)');
+        grad.addColorStop(1, 'rgba(47,124,211,0.05)');
         ctx!.beginPath();
         ctx!.arc(0, 0, r1, 0, Math.PI * 2);
         ctx!.fillStyle = grad;
@@ -1026,9 +1131,9 @@ function useGoldenPitBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
         if (p.y < 0 || p.y > h) p.sy *= -1;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        const r = p.tint < 0.3 ? 17 : p.tint < 0.6 ? 167 : 17;
-        const g = p.tint < 0.3 ? 137 : p.tint < 0.6 ? 216 : 137;
-        const b = p.tint < 0.3 ? 249 : p.tint < 0.6 ? 234 : 249;
+        const r = p.tint < 0.3 ? 47 : p.tint < 0.6 ? 167 : 47;
+        const g = p.tint < 0.3 ? 124 : p.tint < 0.6 ? 216 : 124;
+        const b = p.tint < 0.3 ? 211 : p.tint < 0.6 ? 234 : 211;
         ctx!.fillStyle = `rgba(${r},${g},${b},${p.alpha})`;
         ctx!.fill();
       }
@@ -1042,7 +1147,7 @@ function useGoldenPitBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
             ctx!.beginPath();
             ctx!.moveTo(particles[i].x, particles[i].y);
             ctx!.lineTo(particles[j].x, particles[j].y);
-            ctx!.strokeStyle = `rgba(17,137,249,${(1 - dist / 90) * 0.04})`;
+            ctx!.strokeStyle = `rgba(47,124,211,${(1 - dist / 90) * 0.04})`;
             ctx!.lineWidth = 0.5;
             ctx!.stroke();
           }
