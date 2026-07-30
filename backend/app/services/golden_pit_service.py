@@ -33,64 +33,82 @@ logger = logging.getLogger(__name__)
 #   drop      → 放弃: 信号太弱, 收益不如货币基金
 #   watch     → 观察: 无回测数据/价格分位替代, 仅作预警信号
 # position_weight: 在组合中的建议仓位占比
+# ── 固定贪婪阈值说明 ──
+# pit_greed / entry_greed: 全量回测校准的固定贪婪值 (基于 funds-greed/alla/series?range=full)
+#   当配置了 pit_greed 时，直接用当前贪婪值与固定阈值比较判定状态，
+#   不再使用 expanding-window percentile (消除 Px 漂移)。
+#   pit_greed: 低于此值 → 黄金坑 (golden_pit)
+#   entry_greed: 低于此值 → 预警 (warning)，取 pit_greed × 1.3
+#   entry_offset: 跌破 pit_greed 后第 N 天为最优入场点 (0=当天)
+# 数据来源: scripts/calibrate_pit_threshold.py 全量回测 (2020-2026)
 CHINA_INDICES: Dict[str, Dict[str, Any]] = {
     # ── 核心 (必做) ──
-    # 科创50: Win% 90%, 20d Avg +8.5%, 高弹性快反弹 → P60全仓退出 (全量回测校准)
+    # 科创50: 1366天回测, greed≤0.195 买入持有30天 Win100% Avg+19.4%
     "588000": {"name": "科创50",   "priority": 4, "data_source": "arkvol",  "tier": "core",
                "signal_quality": "strong", "exp_15d": 5.5, "exp_20d": 8.5, "position_weight": 0.40,
                "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "pit_greed": 0.195, "entry_greed": 0.254, "entry_offset": 0,
                "position_multiplier": 1.2, "pre_turn_cap": 0.20,
                "exit_full_pct": 60, "exit_half_pct": 60, "exit_fallback_days": 60},
-    # 中证500: Win% 66%, 20d Avg +1.8%, 信号密度高 → 降级为satellite (全量回测校准)
+    # 中证500: 1595天回测, greed≤0.280 买入持有30天 Win100% Avg+13.0%
     "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "satellite",
                "signal_quality": "good", "exp_15d": 1.2,  "exp_20d": 1.8, "position_weight": 0.15,
                "entry_pct": 8, "pit_pct": 4, "turning_days": 0,
+               "pit_greed": 0.280, "entry_greed": 0.364, "entry_offset": 1,
                "position_multiplier": 0.9, "pre_turn_cap": 0.12,
                "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60},
     # ── 卫星 (选做) ──
-    # 中证1000: Win% 66%, 20d Avg +4.1%, 中等弹性 → 标准参数 (全量回测校准)
+    # 中证1000: 1271天回测, greed≤0.215 买入持有30天 Win100% Avg+20.3%
     "159845": {"name": "中证1000", "priority": 3, "data_source": "arkvol",  "tier": "satellite",
                "signal_quality": "good",   "exp_15d": 2.5,  "exp_20d": 4.1,  "position_weight": 0.15,
                "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "pit_greed": 0.215, "entry_greed": 0.280, "entry_offset": 4,
                "position_multiplier": 1.0, "pre_turn_cap": 0.15,
                "exit_full_pct": 70, "exit_half_pct": 70, "exit_fallback_days": 60},
-    # 创业板指: Win% 66%, 20d Avg +2.2%, 中高弹性 → 标准参数 (全量回测校准)
+    # 创业板指: 1595天回测, greed≤0.235 买入持有30天 Win100% Avg+16.0%
     "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
                "signal_quality": "good",   "exp_15d": 1.5,  "exp_20d": 2.2,  "position_weight": 0.10,
                "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "pit_greed": 0.235, "entry_greed": 0.305, "entry_offset": 4,
                "position_multiplier": 1.0, "pre_turn_cap": 0.15,
                "exit_full_pct": 80, "exit_half_pct": 80, "exit_fallback_days": 60},
     # ── 防御 (可选) ──
-    # 沪深300: Win% 81%, 40d Avg +2.8%, 低弹性慢恢复 → 深度阈值触发 (全量回测校准)
+    # 沪深300: 1595天回测, greed≤0.300 买入持有30天 Win75% Avg+9.9%
     "510300": {"name": "沪深300",  "priority": 6, "data_source": "arkvol",  "tier": "defense",
                "signal_quality": "good",   "exp_15d": 1.0,  "exp_20d": 1.5,  "position_weight": 0.10,
                "entry_pct": 5, "pit_pct": 3, "turning_days": 2,
+               "pit_greed": 0.300, "entry_greed": 0.390, "entry_offset": 4,
                "position_multiplier": 0.8, "pre_turn_cap": 0.12,
                "exit_full_pct": 80, "exit_half_pct": 80, "exit_fallback_days": 50},
     # ── 放弃 (全量回测确认: 信号太弱) ──
+    # 上证50: 1595天回测, greed≤0.275 买入持有30天 Win100% Avg+7.1%
     "510050": {"name": "上证50",   "priority": 7, "data_source": "arkvol",  "tier": "drop",
                "signal_quality": "weak",   "exp_15d": 1.3,  "exp_20d": 1.2,  "position_weight": 0.0,
                "entry_pct": 5, "pit_pct": 3, "turning_days": 2,
+               "pit_greed": 0.275, "entry_greed": 0.358, "entry_offset": 1,
                "position_multiplier": 0.0, "pre_turn_cap": 0.0,
                "exit_full_pct": 80, "exit_half_pct": 80, "exit_fallback_days": 50},
     # ── 海外 (核心) ──
-    # 道琼斯指数: Win% 87.5%, 20d Avg +3.5%, 高胜率, 无需拐点确认 → 核心参数 (全量回测校准)
+    # 道琼斯指数: 575天回测, greed≤0.380 买入持有15天 Win100% Avg+5.2%
     "513400": {"name": "道琼斯指数", "priority": 8, "data_source": "arkvol", "tier": "core",
                "signal_quality": "strong", "exp_15d": 2.5, "exp_20d": 3.5, "position_weight": 0.25,
                "entry_pct": 10, "pit_pct": 5, "turning_days": 0,
+               "pit_greed": 0.380, "entry_greed": 0.494, "entry_offset": 0,
                "position_multiplier": 1.2, "pre_turn_cap": 0.20,
                "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 40},
-    # 纳斯达克: Win% 67%, 20d Avg +5.0%, 美股V型反弹, 无需拐点确认 → 核心参数 (全量回测校准)
+    # 纳斯达克: 945天回测, greed≤0.395 买入持有30天 Win100% Avg+10.5%
     "159632": {"name": "纳斯达克", "priority": 10, "data_source": "arkvol", "tier": "core",
                "signal_quality": "strong", "exp_15d": 4.4, "exp_20d": 5.0, "position_weight": 0.25,
                "entry_pct": 8, "pit_pct": 4, "turning_days": 0,
+               "pit_greed": 0.395, "entry_greed": 0.514, "entry_offset": 0,
                "position_multiplier": 1.2, "pre_turn_cap": 0.20,
                "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 40},
     # ── 港股 (防御) ──
-    # 恒生指数: Win% 66%, 20d Avg +2.7%, 类似沪深300级别 → 防御参数 (全量回测校准)
+    # 恒生指数: 1595天回测, greed≤0.305 买入持有30天 Win100% Avg+23.3%
     "513600": {"name": "恒生指数", "priority": 9, "data_source": "arkvol", "tier": "defense",
                "signal_quality": "good", "exp_15d": 1.5, "exp_20d": 2.7, "position_weight": 0.10,
                "entry_pct": 8, "pit_pct": 4, "turning_days": 1,
+               "pit_greed": 0.305, "entry_greed": 0.397, "entry_offset": 2,
                "position_multiplier": 0.8, "pre_turn_cap": 0.12,
                "exit_full_pct": 60, "exit_half_pct": 30, "exit_fallback_days": 20},
     # ── 观察 (仅预警) ──
@@ -124,6 +142,9 @@ GREED_ABSOLUTE_PIT = 0.35
 # 核心信号阈值: 用 expanding-window percentile (每个指数自己的历史分位)
 PERCENTILE_GOLDEN_PIT = 5    # <= P5  → 黄金坑确认（信号最强）
 PERCENTILE_WARNING = 10      # <= P10 → 预警（信号有效）
+
+# 百分位计算窗口: 只取最近 N 天，避免 expanding-window 导致 Px 贪婪阈值漂移
+PERCENTILE_WINDOW_DAYS = 500
 
 PIT_WINDOW_DAYS = 15
 
@@ -1089,18 +1110,15 @@ class GoldenPitService:
                 index_info["eta_date"] = _add_trading_days(today_str, days_to)
 
         # ── 黄金坑入坑日期回测 ──
-        # 用全量序列计算固定贪婪阈值，与状态判定的 _calculate_percentile 逻辑一致。
-        # 不逐点重算分位：expanding-window 会在窗口大小变化时导致同一贪婪值
-        # 的分位数漂移，造成所有指数的 entry_date 在同一天"重置"为第1天。
+        # 用滚动窗口计算固定 P(pit_pct) 贪婪阈值，与 _calculate_percentile 逻辑一致。
         if status == "golden_pit" and sorted_series and len(sorted_series) >= 60:
             pit_pct = cfg.get("pit_pct", PERCENTILE_GOLDEN_PIT)
             greeds = [float(s.get("greed", 0)) for s in sorted_series]
             dates = [s.get("date", "") for s in sorted_series]
 
-            # 全量序列 P(pit_pct) 贪婪阈值：与 _calculate_percentile 的
-            # 严格小于计数保持一致。all_sorted[k] 有 k 个元素 < 它，
-            # 百分位 = k/len*100。P(pit_pct) 边界 = all_sorted[int(len*pit_pct/100)]
-            all_sorted = sorted(greeds)
+            # 滚动窗口 P(pit_pct) 贪婪阈值，与 _calculate_percentile 窗口一致
+            window_greeds = greeds[-PERCENTILE_WINDOW_DAYS:] if len(greeds) > PERCENTILE_WINDOW_DAYS else greeds
+            all_sorted = sorted(window_greeds)
             threshold_idx = int(len(all_sorted) * pit_pct / 100)
             pit_threshold = all_sorted[min(threshold_idx, len(all_sorted) - 1)]
 
@@ -1133,8 +1151,9 @@ class GoldenPitService:
         if len(greeds) < 60:
             return (None, 0, False)
 
-        # 全量序列 P(entry_pct) 阈值，与 _calculate_percentile 严格小于计数一致
-        all_sorted = sorted(greeds)
+        # 滚动窗口 P(entry_pct) 阈值，与 _calculate_percentile 窗口一致
+        window_greeds = greeds[-PERCENTILE_WINDOW_DAYS:] if len(greeds) > PERCENTILE_WINDOW_DAYS else greeds
+        all_sorted = sorted(window_greeds)
         threshold_idx = int(len(all_sorted) * entry_pct / 100)
         entry_threshold = all_sorted[min(threshold_idx, len(all_sorted) - 1)]
         if greeds[-1] > entry_threshold:
@@ -1156,11 +1175,19 @@ class GoldenPitService:
 
         return (p10_entry_date, days_in, is_first_cross)
 
-    def _calculate_percentile(self, current_greed: float, series: List[Dict]) -> float:
-        """计算当前贪婪值在自身历史中的分位数（越低越恐慌）。"""
+    def _calculate_percentile(self, current_greed: float, series: List[Dict], window: int = None) -> float:
+        """计算当前贪婪值在自身历史中的分位数（越低越恐慌）。
+
+        使用滚动窗口而非 expanding-window：窗口大小恒定 (默认500天)，
+        Px 对应的贪婪阈值不会随数据累积而漂移。
+        """
+        if window is None:
+            window = PERCENTILE_WINDOW_DAYS
         if not series:
             return 50.0
-        greeds = sorted([float(s.get("greed", 0)) for s in series])
+        # 只取最近 window 天，避免 expanding-window 漂移
+        window_series = series[-window:] if len(series) > window else series
+        greeds = sorted([float(s.get("greed", 0)) for s in window_series])
         if not greeds or len(greeds) < 2:
             return 50.0
         count_below = sum(1 for g in greeds if g < current_greed)
