@@ -214,7 +214,7 @@ def get_trend_factor(trend: str, days_rising: int, fund_code: str = "",
         factor = DEFAULT_TREND_FACTORS.get(state_key, 1.0)
 
     # 加速阈值保护: greed 已回到 entry_greed 以上 → 禁止加速
-    if current_greed > 0 and entry_greed > 0 and current_greed >= entry_greed:
+    if current_greed > 0 and entry_greed is not None and entry_greed > 0 and current_greed >= entry_greed:
         factor = min(factor, 1.0)
 
     return factor
@@ -1202,7 +1202,7 @@ class GoldenPitService:
                     days_rising=index_info.get("days_rising", 0),
                     fund_code=code,
                     current_greed=index_info.get("greed", 0.0),
-                    entry_greed=index_info.get("entry_greed", 0.50),
+                    entry_greed=index_info.get("entry_greed") or 999.0,
                 ), 2)
 
             elif tier in ("drop", "watch"):
