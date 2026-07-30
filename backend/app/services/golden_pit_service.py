@@ -1105,13 +1105,11 @@ class GoldenPitService:
             pit_threshold = all_sorted[min(threshold_idx, len(all_sorted) - 1)]
 
             # 从今天往前找：贪婪值 > 阈值 = 不在坑内，其后一天就是 Day 1
-            entry_idx = None
-            for i in range(len(greeds) - 1, 59, -1):
+            entry_idx = 0  # 默认：全部历史数据都在坑内
+            for i in range(len(greeds) - 1, -1, -1):
                 if greeds[i] > pit_threshold:
                     entry_idx = i + 1
                     break
-            if entry_idx is None:
-                entry_idx = 60
             if entry_idx < len(greeds):
                 index_info["entry_date"] = dates[entry_idx]
                 index_info["days_in_pit"] = len(greeds) - entry_idx
@@ -1143,14 +1141,11 @@ class GoldenPitService:
             return (None, 0, False)
 
         # 往回找到最近一次贪婪值高于阈值的位置，其后一天就是 Day 1
-        entry_idx = None
-        for i in range(len(greeds) - 1, 59, -1):
+        entry_idx = 0  # 默认：全部历史数据都在预警区内
+        for i in range(len(greeds) - 1, -1, -1):
             if greeds[i] > entry_threshold:
                 entry_idx = i + 1
                 break
-
-        if entry_idx is None:
-            entry_idx = 60
 
         if entry_idx >= len(greeds):
             return (None, 0, False)
