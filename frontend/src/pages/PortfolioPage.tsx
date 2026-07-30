@@ -140,6 +140,7 @@ export default function PortfolioPage() {
     panic_count: number;
     pit_threshold: number;
     warn_threshold: number;
+    max_entry_greed: number;
   } | null>(null);
   const [gpError, setGpError] = useState(false);
   const [loadingGp, setLoadingGp] = useState(true);
@@ -231,6 +232,7 @@ export default function PortfolioPage() {
         const allEntryGreeds = indices.map((i: any) => i.entry_greed).filter((v: any) => v != null) as number[];
         const pitThreshold = allPitGreeds.length > 0 ? Math.min(...allPitGreeds) : 0.35;
         const warnThreshold = allEntryGreeds.length > 0 ? Math.min(...allEntryGreeds) : 0.40;
+        const maxEntryGreed = allEntryGreeds.length > 0 ? Math.max(...allEntryGreeds) : 0.50;
         setGpSignal({
           phase,
           pit_count: indices.filter((i: any) => i.status === 'golden_pit').length,
@@ -242,6 +244,7 @@ export default function PortfolioPage() {
           panic_count: gw.pit_count ?? indices.filter((i: any) => i.status === 'golden_pit').length,
           pit_threshold: pitThreshold,
           warn_threshold: warnThreshold,
+          max_entry_greed: maxEntryGreed,
         });
       } else {
         setGpError(true);
@@ -656,7 +659,7 @@ export default function PortfolioPage() {
             const greed = gpSignal.min_greed;
             const panicLine = gpSignal.pit_threshold;
             const warnLine = gpSignal.warn_threshold;
-            const safeCeil = Math.max(warnLine + 0.10, 0.50);
+            const safeCeil = Math.max(gpSignal.max_entry_greed + 0.10, 0.50);
             const rawPct = ((safeCeil - greed) / (safeCeil - panicLine)) * 100;
             const dangerPct = Math.max(0, Math.min(100, rawPct));
             const level = greed <= panicLine ? 'panic' : greed <= warnLine ? 'warn' : 'greedy';

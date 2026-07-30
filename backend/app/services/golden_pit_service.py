@@ -240,6 +240,22 @@ def _display_config() -> Dict[str, Any]:
             "golden_pit": STATUS_MAP["golden_pit"]["label"],
         },
         "strategy_labels": dict(STRATEGY_LABELS),
+        "exit_labels": {
+            "half_exit": "减持 50%",
+            "full_exit": "清仓",
+            "stop_profit": "止盈",
+            "fallback_exit": "兜底退出",
+        },
+        "trend_icons": {
+            "declining": "↓",
+            "bottoming": "→",
+            "recovering": "↑",
+        },
+        "trend_colors": {
+            "declining": "#e5484d",
+            "bottoming": "#c98a12",
+            "recovering": "#27a06b",
+        },
     }
 
 

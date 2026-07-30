@@ -133,6 +133,9 @@ interface DisplayConfig {
   status_colors: Record<string, string>;
   status_labels: Record<string, string>;
   strategy_labels: Record<string, string>;
+  exit_labels: Record<string, string>;
+  trend_icons: Record<string, string>;
+  trend_colors: Record<string, string>;
 }
 
 let _cachedDisplayConfig: DisplayConfig | null = null;
@@ -150,6 +153,9 @@ async function fetchDisplayConfig(): Promise<DisplayConfig> {
     status_colors: { normal: '#27a06b', warning: '#c98a12', golden_pit: '#e5484d' },
     status_labels: { normal: '正常', warning: '预警', golden_pit: '黄金坑' },
     strategy_labels: {},
+    exit_labels: { half_exit: '减持 50%', full_exit: '清仓', stop_profit: '止盈', fallback_exit: '兜底退出' },
+    trend_icons: { declining: '↓', bottoming: '→', recovering: '↑' },
+    trend_colors: { declining: '#e5484d', bottoming: '#c98a12', recovering: '#27a06b' },
   };
 }
 
@@ -162,24 +168,6 @@ function useDisplayConfig() {
 // 与整体蓝色科幻主题协调的序列色板
 const INDEX_COLORS = ['#2f7cd3', '#e5484d', '#c98a12', '#27a06b', '#7c5cd6', '#0e9db8'];
 
-const TREND_ICONS: Record<string, string> = {
-  declining: '↓',
-  bottoming: '→',
-  recovering: '↑',
-};
-
-const TREND_COLORS: Record<string, string> = {
-  declining: '#e5484d',
-  bottoming: '#c98a12',
-  recovering: '#27a06b',
-};
-
-const EXIT_LABELS: Record<string, string> = {
-  half_exit: '减持 50%',
-  full_exit: '清仓',
-  stop_profit: '止盈',
-  fallback_exit: '兜底退出',
-};
 
 const GLOBAL_TREND_LABELS: Record<string, string> = {
   bullish: '看涨',
@@ -288,12 +276,11 @@ function Skeleton() {
 }
 
 function ResonanceBadge({ pitCount, multiplier }: { pitCount: number; multiplier?: number }) {
-  if (pitCount < 1) return null;
-  const m = multiplier ?? (pitCount >= 4 ? 1.3 : pitCount >= 3 ? 1.2 : pitCount >= 2 ? 1.0 : 0.6);
+  if (pitCount < 1 || multiplier == null) return null;
   let cls = 'gp-res-pill';
   if (pitCount < 2) cls += ' warn';
   else if (pitCount < 3) cls += ' muted';
-  return <span className={cls}>{pitCount}指共振 {m.toFixed(1)}x</span>;
+  return <span className={cls}>{pitCount}指共振 {multiplier.toFixed(1)}x</span>;
 }
 
 function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
@@ -491,11 +478,14 @@ function CapitalFlowPanel({ macro }: { macro: GlobalMacro }) {
 function IndexStatusCard({ idx, displayConfig }: { idx: IndexStatus; displayConfig: DisplayConfig | null }) {
   const statusColors = displayConfig?.status_colors || { normal: '#27a06b', warning: '#c98a12', golden_pit: '#e5484d' };
   const statusLabels = displayConfig?.status_labels || { normal: '正常', warning: '预警', golden_pit: '黄金坑' };
+  const trendIcons = displayConfig?.trend_icons || { declining: '↓', bottoming: '→', recovering: '↑' };
+  const trendColors = displayConfig?.trend_colors || { declining: '#e5484d', bottoming: '#c98a12', recovering: '#27a06b' };
+  const exitLabels = displayConfig?.exit_labels || { half_exit: '减持 50%', full_exit: '清仓', stop_profit: '止盈', fallback_exit: '兜底退出' };
   const color = statusColors[idx.status];
   const greedPct = Math.round(idx.greed * 100);
-  const trendIcon = idx.trend ? TREND_ICONS[idx.trend] : '';
-  const trendColor = idx.trend ? TREND_COLORS[idx.trend] : '';
-  const exitLabel = idx.exit_signal ? EXIT_LABELS[idx.exit_signal] : '';
+  const trendIcon = idx.trend ? trendIcons[idx.trend] : '';
+  const trendColor = idx.trend ? trendColors[idx.trend] : '';
+  const exitLabel = idx.exit_signal ? exitLabels[idx.exit_signal] : '';
   const sqIcon = idx.signal_quality === 'strong' ? <IconStar /> : idx.signal_quality === 'good' ? <IconGood /> : null;
   const weightPct = (idx.position_weight != null && idx.position_weight > 0)
     ? `${(idx.position_weight * 100).toFixed(0)}%`
@@ -612,11 +602,13 @@ function GpChartTooltip({ active, payload, label, digits = 4, suffix = '' }: any
   );
 }
 
-function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
+function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPitGreed, minEntryGreed }: {
   trendData: TrendData | null;
   visibleCodes: Set<string>;
   onToggleCode: (code: string) => void;
   onToggleAll: () => void;
+  minPitGreed?: number;
+  minEntryGreed?: number;
 }) {
   if (!trendData || !trendData.series || Object.keys(trendData.series).length === 0) {
     return <div className="gp-chart-empty">暂无历史数据</div>;
@@ -670,7 +662,20 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
       </div>
       {noneSelected ? (
         <div className="gp-chart-empty">请选择至少一个指数</div>
-      ) : (
+      ) : (() => {
+        // Dynamic YAxis domain based on data range and per-index thresholds
+        let dataMin = 1.0, dataMax = 0.0;
+        chartData.forEach((row: any) => {
+          activeCodes.forEach((code) => {
+            const v = row[code];
+            if (typeof v === 'number') { dataMin = Math.min(dataMin, v); dataMax = Math.max(dataMax, v); }
+          });
+        });
+        const pitRef = minPitGreed ?? 0.35;
+        const entryRef = minEntryGreed ?? 0.40;
+        const yMin = Math.max(0.15, Math.min(pitRef - 0.05, dataMin));
+        const yMax = Math.min(0.95, Math.max(dataMax + 0.05, 0.50));
+        return (
         <ResponsiveContainer width="100%" height={260}>
           <LineChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#d4e7f9" vertical={false} />
@@ -682,7 +687,7 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
               tickLine={false}
             />
             <YAxis
-              domain={[0.2, 0.9]}
+              domain={[yMin, yMax]}
               tick={{ fontSize: 10, fill: '#6b86a3', fontFamily: 'Rajdhani, sans-serif' }}
               axisLine={false}
               tickLine={false}
@@ -693,12 +698,12 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
               cursor={{ stroke: '#a8cdee', strokeDasharray: '4 3' }}
             />
             <ReferenceLine
-              y={0.35} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
-              label={{ value: '参考线 (0.35)', position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
+              y={pitRef} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
+              label={{ value: `参考线 (${pitRef.toFixed(3)})`, position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
             />
             <ReferenceLine
-              y={0.40} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
-              label={{ value: '参考线 (0.40)', position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
+              y={entryRef} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
+              label={{ value: `参考线 (${entryRef.toFixed(3)})`, position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
             />
             {activeCodes.map((code) => (
               <Line
@@ -714,7 +719,8 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
             ))}
           </LineChart>
         </ResponsiveContainer>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -1055,6 +1061,8 @@ export default function GoldenPitPage() {
                       return allSelected ? new Set() : new Set(all);
                     });
                   }}
+                  minPitGreed={sortedIndices.length > 0 ? Math.min(...sortedIndices.map(i => i.pit_greed).filter((v): v is number => v != null)) : undefined}
+                  minEntryGreed={sortedIndices.length > 0 ? Math.min(...sortedIndices.map(i => i.entry_greed).filter((v): v is number => v != null)) : undefined}
                 />
               )}
               {showChart && chartTab === 'share' && (
