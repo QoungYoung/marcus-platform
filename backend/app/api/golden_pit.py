@@ -6,7 +6,9 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
-from app.services.golden_pit_service import GoldenPitService, ArkvolServiceError
+from app.services.golden_pit_service import (
+    GoldenPitService, ArkvolServiceError, _strategy_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +271,7 @@ async def get_dca_status():
                     "status": idx_status,
                     "strategy": strategy,
                     "dca_strategy": idx.get("dca_strategy", strategy) if idx else strategy,
+                    "dca_label": idx.get("dca_label", _strategy_label(strategy)) if idx else _strategy_label(strategy),
                     "daily_amount": cfg.daily_amount,
                     "max_total_amount": cfg.max_total_amount,
                     "total_invested": round(total_invested, 2),
@@ -291,6 +294,15 @@ async def get_dca_status():
             status_code=500,
             content={"code": 1, "msg": str(exc), "data": None},
         )
+
+
+# ── 前端展示配置 ──
+
+@router.get("/display-config")
+async def get_display_config():
+    """返回前端展示所需的统一配置（颜色、标签、策略名等）。"""
+    from app.services.golden_pit_service import _display_config
+    return {"code": 0, "data": _display_config()}
 
 
 # ── v1 backward-compat endpoints ──

@@ -132,6 +132,7 @@ export const goldenPitApi = {
     api.get('/golden-pit/history', { params: { index: index || 'all', days: days || 60 } }),
   getSnapshots: (days?: number) =>
     api.get('/golden-pit/snapshots', { params: { days: days || 30 } }),
+  getDisplayConfig: () => api.get('/golden-pit/display-config'),
 }
 
 // Health check

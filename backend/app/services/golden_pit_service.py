@@ -202,6 +202,19 @@ def _trend_label(trend: str, factor: float) -> str:
     return f"{name} · 标准节奏"
 
 
+STRATEGY_LABELS: Dict[str, str] = {
+    "uniform_3": "3日等权", "uniform_5": "5日等权", "uniform_7": "7日等权",
+    "uniform_10": "10日等权", "uniform_15": "15日等权",
+    "front_loaded": "前重后轻", "back_loaded": "前轻后重",
+    "triangle": "三角加权", "lump_entry": "一次性建仓",
+}
+
+
+def _strategy_label(strategy: str) -> str:
+    """DCA 策略代码 → 中文标签。"""
+    return STRATEGY_LABELS.get(strategy, strategy)
+
+
 def _compute_resonance(pit_count: int) -> float:
     """根据黄金坑指数数量计算共振乘数。"""
     if pit_count >= 4:
@@ -211,6 +224,23 @@ def _compute_resonance(pit_count: int) -> float:
     elif pit_count >= 2:
         return 1.0
     return 0.6
+
+
+def _display_config() -> Dict[str, Any]:
+    """返回前端展示所需的统一配置元数据。"""
+    return {
+        "status_colors": {
+            "normal": STATUS_MAP["normal"]["color"],
+            "warning": STATUS_MAP["warning"]["color"],
+            "golden_pit": STATUS_MAP["golden_pit"]["color"],
+        },
+        "status_labels": {
+            "normal": STATUS_MAP["normal"]["label"],
+            "warning": STATUS_MAP["warning"]["label"],
+            "golden_pit": STATUS_MAP["golden_pit"]["label"],
+        },
+        "strategy_labels": dict(STRATEGY_LABELS),
+    }
 
 
 def get_trend_factor(trend: str, days_rising: int, fund_code: str = "",
@@ -1151,6 +1181,7 @@ class GoldenPitService:
             "exit_fallback_days": cfg.get("exit_fallback_days"),
             # DCA 策略参数 (v5)
             "dca_strategy": cfg.get("dca_strategy", "uniform_10"),
+            "dca_label": _strategy_label(cfg.get("dca_strategy", "uniform_10")),
             "dca_fallback": cfg.get("dca_fallback", 10),
             "trend_factors": cfg.get("trend_factors"),
             "position_multiplier": cfg.get("position_multiplier", 1.0),

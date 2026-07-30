@@ -1330,7 +1330,7 @@ const getGoldenPitDcaStatusTool = {
         for (const etf of d.etfs) {
           const statusIcon = etf.status === 'golden_pit' ? '🔴' : etf.status === 'warning' ? '🟠' : '🟢';
           const executedStr = etf.executed_days?.length ? etf.executed_days.join(',') : '-';
-          const dcaLabel = etf.strategy || etf.dca_strategy || '—';
+          const dcaLabel = etf.dca_label || etf.dca_strategy || etf.strategy || '—';
           const trendInfo = etf.trend_label || (etf.trend_factor != null
             ? `${etf.trend || '—'} ×${etf.trend_factor}x`
             : '—');
@@ -1368,11 +1368,15 @@ const getGoldenPitEtfConfigsTool = {
     }
     lines.push('');
     lines.push('### 策略说明');
+    lines.push('- **uniform_15**: 前15日等权重定投');
     lines.push('- **uniform_10**: 前10日等权重定投（综合最优）');
     lines.push('- **uniform_7**: 前7日等权重定投');
     lines.push('- **uniform_5**: 前5日等权重定投');
-    lines.push('- **front_loaded**: 递减定投（前几天多投）');
-    lines.push('- **triangle**: 三角定投（转折点附近最多）');
+    lines.push('- **uniform_3**: 前3日等权重定投');
+    lines.push('- **front_loaded**: 前重后轻（前几天多投）');
+    lines.push('- **back_loaded**: 前轻后重（后几天多投）');
+    lines.push('- **triangle**: 三角加权（转折点附近最多）');
+    lines.push('- **lump_entry**: 一次性建仓');
     lines.push('');
     lines.push('### 触发条件');
     lines.push('- **绝对0.35**: 仅当贪婪值跌破 0.35 时触发（科创50、上证50）');

@@ -33,10 +33,13 @@ interface IndexStatus {
   entry_strategy?: string;
   exit_strategy?: string;
   dca_strategy?: string;
+  dca_label?: string;
   dca_weight?: number;
   trend_factor?: number;
   trend_label?: string;
   schedule_day?: number;
+  pit_greed?: number;
+  entry_greed?: number;
   prev_greed?: number | null;
   signal_trigger_greed?: number | null;
   dca_fallback?: number;
@@ -124,19 +127,37 @@ interface TrendData {
   indices: Record<string, string>;
 }
 
-// ── Constants ──
+// ── Display Config (fetched from backend) ──
 
-const STATUS_COLORS: Record<string, string> = {
-  normal: '#27a06b',
-  warning: '#c98a12',
-  golden_pit: '#e5484d',
-};
+interface DisplayConfig {
+  status_colors: Record<string, string>;
+  status_labels: Record<string, string>;
+  strategy_labels: Record<string, string>;
+}
 
-const STATUS_LABELS: Record<string, string> = {
-  normal: '正常',
-  warning: '预警',
-  golden_pit: '黄金坑',
-};
+let _cachedDisplayConfig: DisplayConfig | null = null;
+
+async function fetchDisplayConfig(): Promise<DisplayConfig> {
+  if (_cachedDisplayConfig) return _cachedDisplayConfig;
+  try {
+    const res = await goldenPitApi.getDisplayConfig();
+    if (res.data?.code === 0 && res.data?.data) {
+      _cachedDisplayConfig = res.data.data as DisplayConfig;
+      return _cachedDisplayConfig;
+    }
+  } catch { /* fallback to defaults */ }
+  return {
+    status_colors: { normal: '#27a06b', warning: '#c98a12', golden_pit: '#e5484d' },
+    status_labels: { normal: '正常', warning: '预警', golden_pit: '黄金坑' },
+    strategy_labels: {},
+  };
+}
+
+function useDisplayConfig() {
+  const [config, setConfig] = useState<DisplayConfig | null>(_cachedDisplayConfig);
+  useEffect(() => { fetchDisplayConfig().then(setConfig); }, []);
+  return config;
+}
 
 // 与整体蓝色科幻主题协调的序列色板
 const INDEX_COLORS = ['#2f7cd3', '#e5484d', '#c98a12', '#27a06b', '#7c5cd6', '#0e9db8'];
@@ -467,8 +488,10 @@ function CapitalFlowPanel({ macro }: { macro: GlobalMacro }) {
   );
 }
 
-function IndexStatusCard({ idx }: { idx: IndexStatus }) {
-  const color = STATUS_COLORS[idx.status];
+function IndexStatusCard({ idx, displayConfig }: { idx: IndexStatus; displayConfig: DisplayConfig | null }) {
+  const statusColors = displayConfig?.status_colors || { normal: '#27a06b', warning: '#c98a12', golden_pit: '#e5484d' };
+  const statusLabels = displayConfig?.status_labels || { normal: '正常', warning: '预警', golden_pit: '黄金坑' };
+  const color = statusColors[idx.status];
   const greedPct = Math.round(idx.greed * 100);
   const trendIcon = idx.trend ? TREND_ICONS[idx.trend] : '';
   const trendColor = idx.trend ? TREND_COLORS[idx.trend] : '';
@@ -493,7 +516,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           )}
         </span>
         <span className="gp-index-badge" style={{ background: color }}>
-          {STATUS_LABELS[idx.status]}
+          {statusLabels[idx.status]}
         </span>
       </div>
       {isDivergent && idx.turning_validation_reason && (
@@ -548,7 +571,7 @@ function IndexStatusCard({ idx }: { idx: IndexStatus }) {
           </span>
           {idx.dca_strategy && (
             <span style={{ color: '#93a9c0', marginLeft: 8 }}>
-              DCA: {idx.dca_strategy === 'lump_entry' ? '一次性' : idx.dca_strategy === 'uniform_3' ? '3日分批' : idx.dca_strategy}
+              DCA: {idx.dca_label || idx.dca_strategy}
             </span>
           )}
           {idx.schedule_day != null && (
@@ -671,11 +694,11 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll }: {
             />
             <ReferenceLine
               y={0.35} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
-              label={{ value: '0.35 黄金坑线', position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
+              label={{ value: '参考线 (0.35)', position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
             />
             <ReferenceLine
               y={0.40} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
-              label={{ value: '0.40 预警线', position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
+              label={{ value: '参考线 (0.40)', position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
             />
             {activeCodes.map((code) => (
               <Line
@@ -823,6 +846,8 @@ export default function GoldenPitPage() {
   const [headerCollapsed, setHeaderCollapsed] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
+
+  const displayConfig = useDisplayConfig();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -983,7 +1008,7 @@ export default function GoldenPitPage() {
               </div>
               <div className="gp-index-grid">
                 {sortedIndices.map((idx) => (
-                  <IndexStatusCard key={idx.fund_code} idx={idx} />
+                  <IndexStatusCard key={idx.fund_code} idx={idx} displayConfig={displayConfig} />
                 ))}
               </div>
             </section>

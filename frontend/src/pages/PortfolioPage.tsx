@@ -138,6 +138,8 @@ export default function PortfolioPage() {
     min_greed: number | null; min_greed_index: string | null;
     position_tier_label: string | null; as_of: string;
     panic_count: number;
+    pit_threshold: number;
+    warn_threshold: number;
   } | null>(null);
   const [gpError, setGpError] = useState(false);
   const [loadingGp, setLoadingGp] = useState(true);
@@ -224,6 +226,11 @@ export default function PortfolioPage() {
           if ((idx.greed ?? 1) < (minIdx.greed ?? 1)) minIdx = idx;
         }
         const phase = gw.phase || (gw.active ? 'waiting' : 'idle');
+        // Extract per-index thresholds
+        const allPitGreeds = indices.map((i: any) => i.pit_greed).filter((v: any) => v != null) as number[];
+        const allEntryGreeds = indices.map((i: any) => i.entry_greed).filter((v: any) => v != null) as number[];
+        const pitThreshold = allPitGreeds.length > 0 ? Math.min(...allPitGreeds) : 0.35;
+        const warnThreshold = allEntryGreeds.length > 0 ? Math.min(...allEntryGreeds) : 0.40;
         setGpSignal({
           phase,
           pit_count: indices.filter((i: any) => i.status === 'golden_pit').length,
@@ -233,6 +240,8 @@ export default function PortfolioPage() {
           position_tier_label: minIdx?.position_tier_label || null,
           as_of: data.as_of || '',
           panic_count: gw.pit_count ?? indices.filter((i: any) => i.status === 'golden_pit').length,
+          pit_threshold: pitThreshold,
+          warn_threshold: warnThreshold,
         });
       } else {
         setGpError(true);
@@ -645,11 +654,12 @@ export default function PortfolioPage() {
             </div>
           ) : (() => {
             const greed = gpSignal.min_greed;
-            const panicLine = 0.35;
-            const safeCeil = 0.50;
+            const panicLine = gpSignal.pit_threshold;
+            const warnLine = gpSignal.warn_threshold;
+            const safeCeil = Math.max(warnLine + 0.10, 0.50);
             const rawPct = ((safeCeil - greed) / (safeCeil - panicLine)) * 100;
             const dangerPct = Math.max(0, Math.min(100, rawPct));
-            const level = greed <= panicLine ? 'panic' : greed <= 0.40 ? 'warn' : 'greedy';
+            const level = greed <= panicLine ? 'panic' : greed <= warnLine ? 'warn' : 'greedy';
             const levelLabel = level === 'panic' ? '恐慌' : level === 'warn' ? '预警' : '贪婪';
             const levelColor = level === 'panic' ? 'var(--cc-red)' : level === 'warn' ? 'var(--cc-amber)' : 'var(--cc-green)';
             return (
@@ -687,12 +697,12 @@ export default function PortfolioPage() {
                     background: `linear-gradient(90deg, #27AE60 0%, #d4a407 55%, #8B0000 100%)`,
                     transition: 'width 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
                   }} />
-                  <span style={{ position: 'absolute', top: -1, left: `${((0.40 - panicLine) / (safeCeil - panicLine)) * 100}%`, width: 1, height: 8, background: 'var(--cc-amber)', opacity: 0.5, transform: 'translateX(-50%)' }} />
+                  <span style={{ position: 'absolute', top: -1, left: `${((warnLine - panicLine) / (safeCeil - panicLine)) * 100}%`, width: 1, height: 8, background: 'var(--cc-amber)', opacity: 0.5, transform: 'translateX(-50%)' }} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 2 }}>
-                  <span style={{ color: 'var(--cc-green)' }}>贪婪 0.50</span>
+                  <span>各指数阈值: pit≤{panicLine.toFixed(3)}</span>
                   <span style={{ color: levelColor, fontWeight: 700, fontSize: 9 }}>{levelLabel}</span>
-                  <span style={{ color: '#8B0000' }}>恐慌 0.35</span>
+                  <span>warn≤{warnLine.toFixed(3)}</span>
                 </div>
                 {gpSignal.position_tier_label && (
                   <div style={{ fontSize: 10, color: 'var(--cc-blue)', fontWeight: 600, marginTop: 4 }}>
