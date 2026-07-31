@@ -1591,16 +1591,25 @@ class GoldenPitService:
             "resonance_multiplier": _compute_resonance(pit_count),
         }
 
+        # 统一计算窗口起始日: 取所有信号中最早的 entry_date/eta_date
+        # 保证 waiting→buying 阶段切换时 window_start 不变，DCA 日志不会丢失
+        all_signals = signals + [t for t in turning if t not in signals]
+        candidate_dates = []
+        for s in all_signals:
+            d = s.get("entry_date") or s.get("eta_date")
+            if d:
+                candidate_dates.append(d)
+        window_start = min(candidate_dates) if candidate_dates else today_str
+        current_day = _trading_days_between(window_start, today_str) + 1 if window_start else 1
+
         if turning:
             turning.sort(key=lambda x: x.get("turning_start_date") or "9999")
             leader = turning[0]
-            start_date = leader.get("turning_start_date")
-            current_day = _trading_days_between(start_date, today_str) + 1 if start_date else 1
             return {
                 **base,
                 "active": True,
                 "phase": "buying",
-                "start_date": start_date,
+                "start_date": window_start,
                 "leading_index": leader["index_name"],
                 "leading_tier": leader.get("tier"),
                 "current_day": max(1, current_day),
@@ -1608,13 +1617,6 @@ class GoldenPitService:
             }
         elif signals:
             signals.sort(key=lambda x: x.get("p10_entry_date") or "9999")
-            # 以最早入坑/预警日期作为窗口起始，确保 DCA 日志有有效的 window_start
-            candidate_dates = []
-            for s in signals:
-                d = s.get("entry_date") or s.get("eta_date")
-                if d:
-                    candidate_dates.append(d)
-            window_start = min(candidate_dates) if candidate_dates else today_str
             return {
                 **base,
                 "active": False,
@@ -1622,6 +1624,7 @@ class GoldenPitService:
                 "start_date": window_start,
                 "leading_index": signals[0]["index_name"],
                 "leading_tier": signals[0].get("tier"),
+                "current_day": max(1, current_day),
             }
         else:
             return {

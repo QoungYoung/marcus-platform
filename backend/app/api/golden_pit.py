@@ -212,7 +212,7 @@ async def get_dca_status():
         status_data = _get_service().get_status()
         window = status_data.get("golden_pit_window", {})
         indices = status_data.get("indices", [])
-        current_day = window.get("current_day", 0) if window.get("active") else 0
+        current_day = window.get("current_day", 0) if window.get("start_date") else 0
         window_start = window.get("start_date", "")
 
         db = SessionLocal()
