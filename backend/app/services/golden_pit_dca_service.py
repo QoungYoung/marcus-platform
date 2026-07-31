@@ -329,6 +329,10 @@ def _record_dca_log(
         from app.database import SessionLocal
         from app.models.golden_pit_dca_log import GoldenPitDCALog
 
+        if not window_start:
+            window_start = datetime.now().strftime("%Y-%m-%d")
+            logger.warning("DCA 日志: window_start 为空, 回退为今天 %s", window_start)
+
         db = SessionLocal()
         try:
             log = GoldenPitDCALog(

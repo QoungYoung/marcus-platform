@@ -1608,10 +1608,18 @@ class GoldenPitService:
             }
         elif signals:
             signals.sort(key=lambda x: x.get("p10_entry_date") or "9999")
+            # 以最早入坑/预警日期作为窗口起始，确保 DCA 日志有有效的 window_start
+            candidate_dates = []
+            for s in signals:
+                d = s.get("entry_date") or s.get("eta_date")
+                if d:
+                    candidate_dates.append(d)
+            window_start = min(candidate_dates) if candidate_dates else today_str
             return {
                 **base,
                 "active": False,
                 "phase": "waiting",
+                "start_date": window_start,
                 "leading_index": signals[0]["index_name"],
                 "leading_tier": signals[0].get("tier"),
             }
