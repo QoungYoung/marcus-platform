@@ -73,15 +73,15 @@ def _encode_strategy(dca_strategy: str, trend: str, trend_factor: float,
 def _trend_state_label(days_rising: int) -> str:
     """趋势状态 → 可读标签 (用于日志和前端展示)。"""
     if days_rising >= 4:
-        return "full"
+        return "强势上涨"
     elif days_rising >= 3:
-        return "accelerate"
+        return "趋势加速"
     elif days_rising >= 2:
-        return "turning"
+        return "拐点确认"
     elif days_rising >= 1:
-        return "bottoming"
+        return "触底回升"
     else:
-        return "declining"
+        return "跌势未止"
 
 
 def _get_prev_greed(fund_code: str, indices: List[Dict]) -> Optional[float]:
