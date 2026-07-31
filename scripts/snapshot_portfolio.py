@@ -15,8 +15,16 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Support both local dev (app inside PROJECT_ROOT/backend/)
+# and Docker deployment (backend contents copied to PROJECT_ROOT/)
+for candidate in [PROJECT_ROOT / "backend", PROJECT_ROOT]:
+    if (candidate / "app").is_dir():
+        sys.path.insert(0, str(candidate))
+        break
+else:
+    sys.path.insert(0, str(PROJECT_ROOT / "backend"))  # fallback
 
 from app.api.portfolio import save_daily_snapshot  # noqa: E402
 
