@@ -1381,12 +1381,24 @@ class SchedulerService:
         return f"未知的 golden_pit 任务: {task.id}"
 
     def _execute_golden_pit_dca_task(self, task: TaskConfig, execution_id: str) -> str:
-        """执行黄金坑 DCA 自动定投任务。"""
+        """执行黄金坑 DCA 自动定投任务。
+
+        根据 task.id 推导 time_slot:
+          - "morning" → 仅执行 buy_time 在早盘窗口 (09:35-09:40) 的指数
+          - "afternoon" → 仅执行 buy_time 在尾盘窗口 (14:15-14:55) 的指数
+          - None → 全量执行 (向后兼容旧版 golden_pit_dca)
+        """
         import json as _json
         from app.services.golden_pit_dca_service import execute_golden_pit_dca
 
-        logger.info(f"[{execution_id}] 开始黄金坑 DCA 定投检查")
-        result = execute_golden_pit_dca()
+        time_slot = None
+        if "morning" in task.id:
+            time_slot = "morning"
+        elif "afternoon" in task.id:
+            time_slot = "afternoon"
+
+        logger.info(f"[{execution_id}] 开始黄金坑 DCA 定投检查 (time_slot={time_slot or 'all'})")
+        result = execute_golden_pit_dca(time_slot=time_slot)
         logger.info(f"[{execution_id}] 黄金坑 DCA 定投完成")
         return _json.dumps(result, ensure_ascii=False, default=str)
 

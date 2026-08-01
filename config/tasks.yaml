@@ -340,14 +340,30 @@ tasks:
     channels:
     - qqbot
   depends_on: []
-- id: golden_pit_dca
-  name: 黄金坑DCA自动定投
-  description: 10:05 检查黄金坑窗口状态，对处于黄金坑的宽基ETF按策略自动定投买入
+- id: golden_pit_dca_morning
+  name: 黄金坑DCA定投 (早盘)
+  description: 09:36 执行早盘买入批次的指数 (buy_time 在 09:35-09:40 窗口)
   enabled: true
   type: golden_pit_dca
   schedule:
     type: cron
-    expr: 5 10 * * 1-5
+    expr: 36 9 * * 1-5
+    timezone: Asia/Shanghai
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: golden_pit_dca_afternoon
+  name: 黄金坑DCA定投 (尾盘)
+  description: 14:44 执行尾盘买入批次的指数 (buy_time 在 14:15-14:55 窗口)
+  enabled: true
+  type: golden_pit_dca
+  schedule:
+    type: cron
+    expr: 44 14 * * 1-5
     timezone: Asia/Shanghai
   notifications:
     on_success: true

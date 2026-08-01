@@ -47,7 +47,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "pit_greed": 0.348, "entry_greed": 0.400, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.2, "pre_turn_cap": 0.20,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 80, "exit_half_pct": 40, "exit_fallback_days": 20},
+               "exit_full_pct": 80, "exit_half_pct": 40, "exit_fallback_days": 20,
+               "buy_time": "14:44", "buy_time_pit": "09:37"},
     # 中证500: adjCAGR +16.2%, Win 72%, 29 trades, Stability 0.74 (satellite→core)
     "510500": {"name": "中证500",  "priority": 5, "data_source": "arkvol",  "tier": "core",
                "signal_quality": "strong", "exp_15d": 4.0, "exp_20d": 6.0, "position_weight": 0.20,
@@ -55,7 +56,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "pit_greed": 0.345, "entry_greed": 0.395, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.2, "pre_turn_cap": 0.20,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20},
+               "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20,
+               "buy_time": "09:36"},
     # ═══ 卫星 (选做) — 高收益但波动大或历史短 ═══
     # 中证1000: adjCAGR +44.5%, Win 47%, 53 trades, Stability 0.52
     "159845": {"name": "中证1000", "priority": 3, "data_source": "arkvol",  "tier": "satellite",
@@ -65,7 +67,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.12,
                "dca_strategy": "uniform_3", "dca_fallback": 15,
                "trend_factors": {"declining": 0.15, "full": 1.3},
-               "exit_full_pct": 80, "exit_half_pct": 30, "exit_fallback_days": 20},
+               "exit_full_pct": 80, "exit_half_pct": 30, "exit_fallback_days": 20,
+               "buy_time": "09:36", "buy_time_pit": "14:44"},
     # 创业板指: adjCAGR +22.6%, Win 58%, 43 trades, Stability 0.52
     "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
                "signal_quality": "good",   "exp_15d": 3.0, "exp_20d": 4.5, "position_weight": 0.15,
@@ -73,7 +76,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "pit_greed": 0.328, "entry_greed": 0.380, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.12,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 70, "exit_half_pct": 70, "exit_fallback_days": 20},
+               "exit_full_pct": 70, "exit_half_pct": 70, "exit_fallback_days": 20,
+               "buy_time": "09:36"},
     # 道琼斯指数: adjCAGR +11.8%, Win 79%, 14 trades, Stability 0.91, 仅575天数据 (core→satellite)
     "513400": {"name": "道琼斯指数", "priority": 8, "data_source": "arkvol", "tier": "satellite",
                "signal_quality": "strong", "exp_15d": 2.5, "exp_20d": 3.5, "position_weight": 0.10,
@@ -81,7 +85,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "pit_greed": 0.380, "entry_greed": 0.494, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 1.0, "pre_turn_cap": 0.15,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10},
+               "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10,
+               "buy_time": "09:36"},
     # ═══ 防御 (可选) — 稳定但收益偏低或参数敏感 ═══
     # 沪深300: adjCAGR +11.0%, Win 63%, 35 trades, Stability 0.63
     "510300": {"name": "沪深300",  "priority": 6, "data_source": "arkvol",  "tier": "defense",
@@ -90,7 +95,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "pit_greed": 0.357, "entry_greed": 0.410, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.12,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20},
+               "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 20,
+               "buy_time": "09:36"},
     # 纳斯达克: adjCAGR +11.9%, Win 89%, 36 trades, Stability 0.30 ⚠️参数极度敏感 (core→defense)
     "159632": {"name": "纳斯达克", "priority": 10, "data_source": "arkvol", "tier": "defense",
                "signal_quality": "strong", "exp_15d": 2.0, "exp_20d": 3.0, "position_weight": 0.06,
@@ -98,7 +104,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "pit_greed": 0.512, "entry_greed": 0.560, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.08,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 60},
+               "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 60,
+               "buy_time": "09:37", "buy_time_pit": "14:15"},
     # 恒生指数: adjCAGR +10.5%, Win 67%, 30 trades, Stability 0.80
     "513600": {"name": "恒生指数", "priority": 9, "data_source": "arkvol", "tier": "defense",
                "signal_quality": "good", "exp_15d": 1.5, "exp_20d": 2.5, "position_weight": 0.06,
@@ -107,7 +114,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "turning_days": 1, "position_multiplier": 0.8, "pre_turn_cap": 0.12,
                "dca_strategy": "uniform_3", "dca_fallback": 15,
                "trend_factors": {"declining": 0.10, "full": 1.3},
-               "exit_full_pct": 60, "exit_half_pct": 30, "exit_fallback_days": 60},
+               "exit_full_pct": 60, "exit_half_pct": 30, "exit_fallback_days": 60,
+               "buy_time": "09:36"},
     # ═══ 放弃 (回测确认: 年化过低) ═══
     # 上证50: adjCAGR +5.1%, Win 52%, 54 trades, Stability 0.97 — 收益不如货基
     "510050": {"name": "上证50",   "priority": 7, "data_source": "arkvol",  "tier": "drop",
@@ -116,13 +124,15 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "pit_greed": 0.403, "entry_greed": 0.450, "entry_offset": 0,
                "turning_days": 1, "position_multiplier": 0.0, "pre_turn_cap": 0.0,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10},
+               "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10,
+               "buy_time": "09:36"},
     # ═══ 观察 (仅预警) ═══
     "562660": {"name": "中证2000", "priority": 1, "data_source": "arkvol", "tier": "watch",
                "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0,
                "use_fixed_greed": False, "entry_pct": 10, "pit_pct": 5, "turning_days": 2,
                "position_multiplier": 0.0, "pre_turn_cap": 0.0,
-               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60},
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60,
+               "buy_time": "09:36"},
 }
 
 # 仓位分级: 拐点确认度 → 仓位比例 (单次定投占 max_total 的比例)

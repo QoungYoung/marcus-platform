@@ -62,11 +62,13 @@ def _strategy_weights(strategy: str) -> List[float]:
 
 
 def _encode_strategy(dca_strategy: str, trend: str, trend_factor: float,
-                     brake_type: str = "") -> str:
-    """编码 DCA 日志 strategy 字段: dca策略/趋势状态/因子[/制动类型]"""
+                     brake_type: str = "", buy_time: str = "") -> str:
+    """编码 DCA 日志 strategy 字段: dca策略/趋势状态/因子[/制动类型][/time=HH:MM]"""
     parts = [dca_strategy, trend, f"{trend_factor:.1f}x"]
     if brake_type:
         parts.append(brake_type)
+    if buy_time:
+        parts.append(f"time={buy_time}")
     return "/".join(parts)
 
 
@@ -84,12 +86,122 @@ def _trend_state_label(days_rising: int) -> str:
         return "跌势未止"
 
 
+def _get_buy_time(fund_code: str, days_in_pit: int = 0) -> str:
+    """获取指数当前的目标买入时间 (HH:MM)。
+
+    黄金坑日 (days_in_pit > 0) 优先使用 buy_time_pit，否则使用 buy_time。
+    若均未配置，回退到系统默认值 09:36。
+    """
+    from app.services.golden_pit_service import CHINA_INDICES
+    cfg = CHINA_INDICES.get(fund_code, {})
+    is_pit_day = days_in_pit > 0
+    if is_pit_day and cfg.get("buy_time_pit"):
+        return cfg["buy_time_pit"]
+    return cfg.get("buy_time", "09:36")
+
+
+def _time_matches_slot(target_time: str, slot: str) -> bool:
+    """检查目标买入时间是否落入当前批次的时间窗口。
+
+    早盘窗口: 09:35-09:40
+    尾盘窗口: 14:15-14:55
+    """
+    if not target_time or len(target_time) < 5:
+        return True
+    try:
+        h, m = int(target_time[:2]), int(target_time[3:5])
+    except ValueError:
+        return True
+    minutes = h * 60 + m
+
+    if slot == "morning":
+        return 9 * 60 + 35 <= minutes <= 9 * 60 + 40
+    elif slot == "afternoon":
+        return 14 * 60 + 15 <= minutes <= 14 * 60 + 55
+    return True
+
+
 def _get_prev_greed(fund_code: str, indices: List[Dict]) -> Optional[float]:
     """获取该指数前一交易日的贪婪值 (用于飞刀保护)。"""
     for idx in indices:
         if idx.get("fund_code") == fund_code:
             return idx.get("prev_greed")
     return None
+
+
+def _check_lump_reversal(fund_code: str, schedule_day: int, dca_strategy: str,
+                         window_start: str, current_greed: float) -> Tuple[bool, str]:
+    """检测 lump_entry 执行后 3 天内是否出现连续 2 天贪婪下降的反转模式。
+
+    Returns (should_reverse, reason).
+    """
+    if dca_strategy != "lump_entry":
+        return False, ""
+    if schedule_day < 1 or schedule_day > 3:
+        return False, ""
+
+    # 检查 day 0 是否有实际买入
+    try:
+        from app.database import SessionLocal
+        from app.models.golden_pit_dca_log import GoldenPitDCALog
+        from app.models.golden_pit import GoldenPitSnapshot
+
+        db = SessionLocal()
+        try:
+            day0_buy = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.fund_code == fund_code,
+                    GoldenPitDCALog.window_start == window_start,
+                    GoldenPitDCALog.schedule_day == 0,
+                    GoldenPitDCALog.amount > 0,
+                )
+                .first()
+            )
+            if not day0_buy:
+                return False, ""
+
+            # 检查是否已经触发过反转
+            already_reversed = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.fund_code == fund_code,
+                    GoldenPitDCALog.window_start == window_start,
+                    GoldenPitDCALog.strategy.contains("lump_reversal"),
+                )
+                .first()
+            )
+            if already_reversed:
+                return False, ""
+
+            # 查询最近 4 个交易日的 snapshot greed 值
+            snapshots = (
+                db.query(GoldenPitSnapshot)
+                .filter(GoldenPitSnapshot.fund_code == fund_code)
+                .order_by(GoldenPitSnapshot.date.desc())
+                .limit(4)
+                .all()
+            )
+            if len(snapshots) < 3:
+                return False, ""
+
+            greeds = [s.greed for s in snapshots]  # 最新在前: [today, yesterday, day-2, day-3]
+
+            # 检测连续 2 天下降: today < yesterday AND yesterday < day-2
+            if len(greeds) >= 3:
+                if greeds[0] < greeds[1] and greeds[1] < greeds[2]:
+                    logger.info(
+                        "%s: lump_entry 反转检测触发 (greed序列: %.4f→%.4f→%.4f, day%d)",
+                        fund_code, greeds[2], greeds[1], greeds[0], schedule_day,
+                    )
+                    return True, f"greed={greeds[2]:.4f}→{greeds[1]:.4f}→{greeds[0]:.4f}"
+
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("%s: lump_entry 反转检测查询失败: %s", fund_code, e)
+
+    return False, ""
 
 
 def _check_window_reset_count(fund_code: str, window_start: str) -> int:
@@ -528,7 +640,7 @@ def _resonance_multiplier(indices: List[Dict]) -> float:
         return 0.6
 
 
-def execute_golden_pit_dca() -> Dict[str, Any]:
+def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
     """
     黄金坑 DCA 定投主逻辑 v5 — DCA基准权重 × 趋势调节因子。
 
@@ -552,6 +664,9 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
         累计硬截断 (total ≥ max_total) → 停止
 
     跳过 drop(放弃) 和 watch(仅观察) 级别的指数。
+
+    Args:
+        time_slot: 时间批次 ("morning" / "afternoon"), None 表示不筛选 (向后兼容)
 
     Returns:
         结构化 dict，包含 holdings/exit_signals/buy_candidates/skipped/summary_text 等字段。
@@ -651,6 +766,15 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
     tier_order = {"core": 0, "satellite": 1, "defense": 2}
     tradeable.sort(key=lambda x: (tier_order.get(x.get("tier"), 9), x["priority"]))
 
+    # ── 分时过滤: time_slot 非空时仅保留 buy_time 匹配当前批次的指数 ──
+    if time_slot:
+        tradeable = [
+            i for i in tradeable
+            if _time_matches_slot(
+                _get_buy_time(i["fund_code"], i.get("days_in_pit") or 0), time_slot
+            )
+        ]
+
     results = []
     executed_count = 0
     skipped_count = 0
@@ -709,6 +833,8 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
         cfg = config_by_fund.get(fund_code)
         if not cfg:
             continue
+
+        buy_time = _get_buy_time(fund_code, idx.get("days_in_pit") or 0)
 
         # 绝对阈值双重确认
         if cfg["require_absolute_threshold"] and not idx.get("absolute_triggered"):
@@ -798,7 +924,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
                 _record_dca_log(
                     fund_code=fund_code, window_start=window_start,
                     buy_day=current_day, etf_code=cfg["etf_code"],
-                    amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "window_reset"),
+                    amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "window_reset", buy_time),
                     order_id="", status="safety_brake",
                     schedule_day=schedule_day, trend_factor=trend_factor,
                 )
@@ -813,7 +939,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             _record_dca_log(
                 fund_code=fund_code, window_start=window_start,
                 buy_day=current_day, etf_code=cfg["etf_code"],
-                amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "fake_signal"),
+                amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "fake_signal", buy_time),
                 order_id="", status="aborted",
                 schedule_day=schedule_day, trend_factor=trend_factor,
             )
@@ -828,12 +954,37 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             _record_dca_log(
                 fund_code=fund_code, window_start=window_start,
                 buy_day=current_day, etf_code=cfg["etf_code"],
-                amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "falling_knife"),
+                amount=0, strategy=_encode_strategy(dca_strategy, trend, trend_factor, "falling_knife", buy_time),
                 order_id="", status="safety_brake",
                 schedule_day=schedule_day, trend_factor=trend_factor,
             )
             skipped_count += 1
             continue
+
+        # ── 安全制动 3: 一次性打入反转保护 (仅 lump_entry 策略) ──
+        should_reverse, reversal_reason = _check_lump_reversal(
+            fund_code=fund_code, schedule_day=schedule_day,
+            dca_strategy=dca_strategy, window_start=window_start,
+            current_greed=current_greed,
+        )
+        if should_reverse:
+            logger.info("%s: lump_entry 反转保护触发, 切换为 uniform_5", fund_code)
+            dca_strategy = "uniform_5"
+            dca_weights = _strategy_weights(dca_strategy)
+            dca_weight = dca_weights[min(schedule_day, PIT_WINDOW_DAYS - 1)]
+            _record_dca_log(
+                fund_code=fund_code, window_start=window_start,
+                buy_day=current_day, etf_code=cfg["etf_code"],
+                amount=0,
+                strategy=_encode_strategy("uniform_5", trend, trend_factor, f"lump_reversal/{reversal_reason}", buy_time),
+                order_id="", status="safety_brake",
+                schedule_day=schedule_day, trend_factor=trend_factor,
+            )
+            # 切换后如果当天权重为0, 继续正常执行(后续天会按 uniform_5 走)
+            if dca_weight == 0.0:
+                logger.info("%s: 反转后 uniform_5 day%d 权重=0, 等待后续执行", fund_code, schedule_day)
+                skipped_count += 1
+                continue
 
         # 仓位叠加: max_total × dca_weight × trend_factor × pos_mult × resonance × macro_coef
         resonance = _resonance_multiplier(indices)
@@ -866,7 +1017,7 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
             buy_day=current_day,
             etf_code=etf_code,
             amount=daily_amount,
-            strategy=_encode_strategy(dca_strategy, trend, trend_factor),
+            strategy=_encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time),
             order_id="",
             status="notified",
             schedule_day=schedule_day, trend_factor=trend_factor,
@@ -920,6 +1071,19 @@ def execute_golden_pit_dca() -> Dict[str, Any]:
     divergent_names = [i["index_name"] for i in indices if i.get("turning_validation") == "divergent"]
     if divergent_names:
         summary_lines.append(f"⚠️ 全球趋势背离: {', '.join(divergent_names)} 仓位已限制在 declining 因子水平")
+
+    # ── 深度入坑告警: 任一指数连续入坑 ≥30 天 ──
+    deep_pit_warnings = []
+    for idx in indices:
+        days_in = idx.get("days_in_pit") or idx.get("days_in_warning") or 0
+        if days_in >= 30:
+            deep_pit_warnings.append(
+                f"⚠️ 深度入坑告警: {idx['index_name']} 已连续入坑 {days_in} 天 "
+                f"(贪婪={idx.get('greed', 0):.4f}), 建议人工复核参数"
+            )
+    if deep_pit_warnings:
+        summary_lines.append("")
+        summary_lines.extend(deep_pit_warnings)
 
     summary_text = "\n".join(summary_lines)
 
