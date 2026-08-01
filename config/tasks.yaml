@@ -199,7 +199,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: 1 15 * * 1-5
+    expr: 1 15 * * mon-fri
     timezone: Asia/Shanghai
   script:
     path: scripts/snapshot_portfolio.py
@@ -302,7 +302,7 @@ tasks:
   type: golden_pit
   schedule:
     type: cron
-    expr: 50 8 * * 1-5
+    expr: 50 8 * * mon-fri
     timezone: Asia/Shanghai
   notifications:
     on_success: true
@@ -317,7 +317,7 @@ tasks:
   type: golden_pit
   schedule:
     type: cron
-    expr: 30 15 * * 1-5
+    expr: 30 15 * * mon-fri
     timezone: Asia/Shanghai
   notifications:
     on_success: false
@@ -332,7 +332,7 @@ tasks:
   type: golden_pit
   schedule:
     type: cron
-    expr: 0 9 * * 1-5
+    expr: 0 9 * * mon-fri
     timezone: Asia/Shanghai
   notifications:
     on_success: false
@@ -347,7 +347,7 @@ tasks:
   type: golden_pit_dca
   schedule:
     type: cron
-    expr: 36 9 * * 1-5
+    expr: 36 9 * * mon-fri
     timezone: Asia/Shanghai
   notifications:
     on_success: true
@@ -363,7 +363,7 @@ tasks:
   type: golden_pit_dca
   schedule:
     type: cron
-    expr: 44 14 * * 1-5
+    expr: 44 14 * * mon-fri
     timezone: Asia/Shanghai
   notifications:
     on_success: true
