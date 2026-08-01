@@ -98,7 +98,7 @@ export default function BacktestPage() {
   const [formEnd, setFormEnd] = useState('');
   const [formCapital, setFormCapital] = useState(1000000);
   const [formIncludeChiNext, setFormIncludeChiNext] = useState(false);
-  const [formModel, setFormModel] = useState('deepseek-v4-pro');
+  const [formModel, setFormModel] = useState('deepseek-v4-flash');
   const [formThinkingLevel, setFormThinkingLevel] = useState('high');
   const [viewMode, setViewMode] = useState<'progress' | 'results'>('progress');
 
@@ -240,7 +240,7 @@ export default function BacktestPage() {
       setFormName(''); setFormStart(''); setFormEnd('');
       setFormCapital(1000000);
       setFormIncludeChiNext(false);
-      setFormModel('deepseek-v4-pro');
+      setFormModel('deepseek-v4-flash');
       setFormThinkingLevel('high');
       await loadTasks();
       setSelectedTaskId(res.data.task_id);
@@ -555,7 +555,7 @@ export default function BacktestPage() {
                     {task.status === 'running' && ` · ${task.completed_days}/${task.total_days}天`}
                   </div>
                   <div className="bt-task-item-meta" style={{ fontSize: 11, opacity: 0.7 }}>
-                    {task.model || 'deepseek-v4-pro'}
+                    {task.model || 'deepseek-v4-flash'}
                     {task.thinking_level ? ` · ${task.thinking_level === 'high' ? '高思考' : task.thinking_level === 'medium' ? '中思考' : '低思考'}` : ''}
                   </div>
                   {task.status === 'running' && (
@@ -622,7 +622,7 @@ export default function BacktestPage() {
                       <label className="bt-label" style={{ display: 'block', marginBottom: 4 }}>AI 模型</label>
                       <select className="bt-input" style={{ width: '100%', cursor: 'pointer' }}
                         value={formModel} onChange={e => setFormModel(e.target.value)}>
-                        <option value="deepseek-v4-pro">DeepSeek v4 Pro (高精度)</option>
+                        <option value="deepseek-v4-flash">DeepSeek v4 Flash (快速)</option>
                         <option value="deepseek-v4-flash">DeepSeek v4 Flash (快速)</option>
                       </select>
                     </div>

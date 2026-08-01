@@ -81,7 +81,7 @@ def _apply_schema_patches():
         ("backtest_trades", "is_t0_violation", "BOOLEAN DEFAULT FALSE"),
         ("backtest_trades", "t0_violation_note", "VARCHAR(200) DEFAULT ''"),
         # 2026-06: 回测模型可配置化
-        ("backtest_tasks", "model_name", "VARCHAR(50) DEFAULT 'deepseek-v4-pro'"),
+        ("backtest_tasks", "model_name", "VARCHAR(50) DEFAULT 'deepseek-v4-flash'"),
         ("backtest_tasks", "thinking_level", "VARCHAR(20) DEFAULT 'high'"),
         ("golden_pit_snapshots", "change_5", "FLOAT DEFAULT NULL"),
         ("golden_pit_snapshots", "change_20", "FLOAT DEFAULT NULL"),

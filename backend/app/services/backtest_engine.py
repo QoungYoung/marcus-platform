@@ -6,12 +6,15 @@ AI 交易回测引擎 - 模拟真实交易日，调用 DeepSeek 做决策，沙�
 import asyncio
 import json
 import math
+import os
 import uuid
 import logging
 import sys
 import threading
 from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List, Callable, Any
+
+BACKTEST_DEFAULT_MODEL = os.environ.get("BACKTEST_DEFAULT_MODEL", "deepseek-v4-flash")
 
 import pandas as pd
 
@@ -79,7 +82,7 @@ class BacktestEngine:
     async def run(self, task_id: str, start_date: date, end_date: date,
                   initial_capital: float, on_event: Callable = None,
                   include_chinext: bool = True,
-                  model_name: str = "deepseek-v4-pro",
+                  model_name: str = BACKTEST_DEFAULT_MODEL,
                   thinking_level: str = "high"):
         """运行回测，进度写入全局 _stream_queues[task_id]"""
         print(f"\n[Engine] ====== START {task_id[:8]} {start_date}~{end_date} model={model_name} think={thinking_level} ======", flush=True)
@@ -1126,7 +1129,7 @@ class BacktestEngine:
                     payload = json.dumps({
                         "message": full_prompt, "session_id": session_id,
                         "mode": "trade",
-                        "model": getattr(self, "_model_name", "deepseek-v4-pro"),
+                        "model": getattr(self, "_model_name", BACKTEST_DEFAULT_MODEL),
                         "thinking_level": getattr(self, "_thinking_level", "high"),
                     }).encode("utf-8")
                     req = urllib.request.Request(

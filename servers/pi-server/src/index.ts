@@ -45,7 +45,8 @@ import { CHAT_TOOLS, TRADE_TOOLS, REFLECT_TOOLS, BACKTEST_ONLY_TOOLS, setBacktes
 // ===== 配置 =====
 const PORT = parseInt(process.env.PI_SERVER_PORT || '3001', 10);
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
-const DEEPSEEK_MODEL = (process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash') as 'deepseek-v4-flash' | 'deepseek-v4-pro';
+const DEEPSEEK_MODEL = (process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash') as 'deepseek-v4-flash';
+const DEEPSEEK_TRADE_MODEL = (process.env.DEEPSEEK_TRADE_MODEL || 'deepseek-v4-flash') as 'deepseek-v4-flash';
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || '';
 const MARCUS_API_URL = process.env.MARCUS_API_URL || 'http://localhost:8000/api/v1';
 const SESSIONS_DIR = resolve(__dirname, '..', 'sessions');
@@ -1143,7 +1144,7 @@ function getOrCreateAgent(sessionId: string, mode: string, modelOverride?: strin
   } else {
     // 默认: trade → v4-pro+high, chat → DEEPSEEK_MODEL+medium
     const isHighThinking = mode === 'trade';
-    modelId = isHighThinking ? 'deepseek-v4-pro' : DEEPSEEK_MODEL;
+    modelId = isHighThinking ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL;
     thinkingLevel = isHighThinking ? 'high' : 'medium';
   }
   const model = getModel('deepseek', modelId as any);
@@ -1680,7 +1681,7 @@ fetchPromptsFromAPI();
 server.listen(PORT, () => {
   console.log(`🚀 Marcus Pi Server 已启动: http://localhost:${PORT}`);
   console.log(`   聊天模型: deepseek/${DEEPSEEK_MODEL}`);
-  console.log(`   交易模型: deepseek/deepseek-v4-pro (最高思考)`);
+  console.log(`   交易模型: deepseek/deepseek-v4-flash`);
   const panelCount = PANEL_MEMBERS.length;
   console.log(`   反思模式: 专家组群聊 (${panelCount} 位专家 × 多模型)`);
   PANEL_MEMBERS.forEach(m => {

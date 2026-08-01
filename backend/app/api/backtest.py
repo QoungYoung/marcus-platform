@@ -6,6 +6,7 @@ Backtest API - AI 交易回测系统
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import date, datetime
@@ -27,6 +28,8 @@ router = APIRouter(prefix="/backtest", tags=["Backtest"])
 
 logger = logging.getLogger(__name__)
 
+BACKTEST_DEFAULT_MODEL = os.environ.get("BACKTEST_DEFAULT_MODEL", "deepseek-v4-flash")
+
 
 # ── Pydantic Schemas ──
 
@@ -36,7 +39,7 @@ class CreateBacktestRequest(BaseModel):
     end_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="结束日期 YYYY-MM-DD")
     initial_capital: float = Field(1_000_000, ge=10000, description="初始资金")
     include_chinext: bool = Field(False, description="是否包含创业板股票(300/301开头)")
-    model: Optional[str] = Field("deepseek-v4-pro", description="AI模型: deepseek-v4-pro / deepseek-v4-flash")
+    model: Optional[str] = Field(BACKTEST_DEFAULT_MODEL, description="AI模型: deepseek-v4-pro / deepseek-v4-flash")
     thinking_level: Optional[str] = Field("high", description="思考等级: high / medium / low")
 
 
@@ -83,7 +86,7 @@ def _task_to_dict(task: BacktestTask) -> dict:
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
         "error_message": task.error_message,
         "created_at": task.created_at.isoformat() if task.created_at else "",
-        "model": getattr(task, "model_name", "deepseek-v4-pro") or "deepseek-v4-pro",
+        "model": getattr(task, "model_name", BACKTEST_DEFAULT_MODEL) or BACKTEST_DEFAULT_MODEL,
         "thinking_level": getattr(task, "thinking_level", "high") or "high",
     }
 
@@ -104,7 +107,7 @@ async def create_backtest(req: CreateBacktestRequest):
             end_date=date.fromisoformat(req.end_date),
             initial_capital=req.initial_capital,
             include_chinext=req.include_chinext,
-            model_name=req.model or "deepseek-v4-pro",
+            model_name=req.model or BACKTEST_DEFAULT_MODEL,
             thinking_level=req.thinking_level or "high",
             status="pending",
         )
@@ -1896,7 +1899,7 @@ async def _run_backtest_async(task_id: str, on_event_callback=None):
         end_date = task.end_date
         initial_capital = task.initial_capital
         include_chinext = getattr(task, "include_chinext", True) or True
-        model_name = getattr(task, "model_name", "deepseek-v4-pro") or "deepseek-v4-pro"
+        model_name = getattr(task, "model_name", BACKTEST_DEFAULT_MODEL) or BACKTEST_DEFAULT_MODEL
         thinking_level = getattr(task, "thinking_level", "high") or "high"
     finally:
         db.close()
