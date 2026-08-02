@@ -2,7 +2,7 @@
 """黄金坑 ETF 配置初始化 / 更新脚本。
 
 将 6 个 A 股宽基指数 → ETF 映射写入 golden_pit_etf_config 表。
-同时生成 trades.db 的 sector_config INSERT 语句供手动同步。
+同时生成 PostgreSQL 的 sector_config INSERT 语句供手动同步。
 
 用法:
   cd backend
@@ -181,25 +181,29 @@ def seed():
                   f"max={r.max_total_amount:.0f} "
                   f"abs_only={r.require_absolute_threshold} enabled={r.enabled}")
 
-        # ── 生成 trades.db sector_config 同步 SQL ──
+        # ── 生成 PostgreSQL sector_config 同步 SQL ──
         print("\n" + "=" * 80)
-        print("trades.db sector_config 同步 SQL (在服务器上执行):")
+        print("PostgreSQL sector_config 同步 SQL (在服务器上执行):")
         print("=" * 80)
         for cfg in ETF_CONFIGS:
             sector_key = f"golden_pit_{cfg['fund_code']}"
             sql = (
-                f"INSERT OR REPLACE INTO sector_config "
+                f"INSERT INTO sector_config "
                 f"(sector_key, name, indices, etfs, weight, stocks, updated_at, etf_codes) "
                 f"VALUES ("
                 f"'{sector_key}', "
                 f"'{cfg['index_name']}黄金坑', "
-                f"'[\"{cfg['index_name']}\"]', "
-                f"'[\"{cfg['etf_name']}\"]', "
+                f"'[\"{cfg['index_name']}\"']', "
+                f"'[\"{cfg['etf_name']}\"']', "
                 f"0.5, "
                 f"'[]', "
-                f"datetime('now'), "
-                f"'[\"{cfg['etf_code']}\"]'"
-                f");"
+                f"NOW(), "
+                f"'[\"{cfg['etf_code']}\"']'"
+                f") "
+                f"ON CONFLICT (sector_key) DO UPDATE SET "
+                f"name = EXCLUDED.name, indices = EXCLUDED.indices, etfs = EXCLUDED.etfs, "
+                f"weight = EXCLUDED.weight, stocks = EXCLUDED.stocks, "
+                f"etf_codes = EXCLUDED.etf_codes, updated_at = EXCLUDED.updated_at;"
             )
             print(f"  {sql}")
 

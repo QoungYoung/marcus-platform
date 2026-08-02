@@ -574,7 +574,7 @@ class PositionTierMonitor:
     # ── 概念板块 TOP10 辅助方法 ──
 
     def _get_stock_concept_names(self, symbol: str) -> set:
-        """查询 stock_pool.db 获取股票所属的所有概念板块名称，带当日缓存"""
+        """查询 PostgreSQL stock_concept_map 获取股票所属的所有概念板块名称，带当日缓存"""
         today = datetime.now().strftime('%Y-%m-%d')
         cached = self._stock_concepts_cache.get(symbol)
         if cached:
@@ -583,23 +583,8 @@ class PositionTierMonitor:
                 return names
 
         try:
-            from app.api.indicator import _normalize_to_ts_code
-            import sqlite3
-            ts_code = _normalize_to_ts_code(symbol)
-            pool_db = self.log_dir / "stock_pool.db"
-            if not pool_db.exists():
-                logger.warning(f"[加仓] stock_pool.db 不存在，无法获取 {symbol} 的概念板块")
-                return set()
-
-            conn = sqlite3.connect(str(pool_db))
-            cursor = conn.cursor()
-            bare_code = ts_code.split('.')[0] if '.' in ts_code else ts_code
-            cursor.execute(
-                "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
-                (f"%{bare_code}%",)
-            )
-            names = {row[0] for row in cursor.fetchall()}
-            conn.close()
+            from app.services.market_reference import get_stock_concepts
+            names = get_stock_concepts(symbol)
             self._stock_concepts_cache[symbol] = (names, today)
             return names
         except Exception as e:

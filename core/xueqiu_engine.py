@@ -857,15 +857,29 @@ class XueqiuEngine:
         print(f"[OK] ETF板块池同步完成，共{total_count}只")
         return total_count
 
+    def _pg_conn(self):
+        """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
+        import psycopg2
+        url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+        return psycopg2.connect(url)
+
+
     def _save_etf_pool_item(self, symbol: str, data: dict):
-        """保存ETF到板块池"""
+        """保存ETF到板块池（PostgreSQL）"""
         try:
-            conn = sqlite3.connect(self.db_file)
+            conn = self._pg_conn()
             cursor = conn.cursor()
 
             cursor.execute('''
-                INSERT OR REPLACE INTO etf_pool (symbol, name, sector, catalyst_type, priority, data, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO etf_pool (symbol, name, sector, catalyst_type, priority, data, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    sector = EXCLUDED.sector,
+                    catalyst_type = EXCLUDED.catalyst_type,
+                    priority = EXCLUDED.priority,
+                    data = EXCLUDED.data,
+                    updated_at = EXCLUDED.updated_at
             ''', (
                 symbol,
                 data.get('name', ''),
@@ -880,10 +894,9 @@ class XueqiuEngine:
             conn.close()
         except Exception as e:
             print(f"[WARN] 保存ETF池失败：{symbol} - {e}")
-
     def get_etf_pool_from_db(self, sector: Optional[str] = None, limit: int = 100) -> List[dict]:
         """
-        从数据库获取ETF板块池
+        从数据库获取ETF板块池（PostgreSQL）
 
         Args:
             sector: 板块筛选（可选）
@@ -893,28 +906,34 @@ class XueqiuEngine:
             ETF列表
         """
         try:
-            conn = sqlite3.connect(self.db_file)
-            conn.row_factory = sqlite3.Row
+            conn = self._pg_conn()
             cursor = conn.cursor()
 
             if sector:
-                cursor.execute('SELECT * FROM etf_pool WHERE sector = ? ORDER BY priority LIMIT ?',
+                cursor.execute('SELECT symbol, name, sector, catalyst_type, priority, data, updated_at FROM etf_pool WHERE sector = %s ORDER BY priority LIMIT %s',
                              (sector, limit))
             else:
-                cursor.execute('SELECT * FROM etf_pool ORDER BY priority LIMIT ?', (limit,))
+                cursor.execute('SELECT symbol, name, sector, catalyst_type, priority, data, updated_at FROM etf_pool ORDER BY priority LIMIT %s', (limit,))
 
             rows = cursor.fetchall()
             conn.close()
 
             result = []
             for row in rows:
+                raw_data = row[5]
+                if isinstance(raw_data, dict):
+                    parsed_data = raw_data
+                elif raw_data:
+                    parsed_data = json.loads(raw_data)
+                else:
+                    parsed_data = {}
                 item = {
-                    'symbol': row['symbol'],
-                    'name': row['name'],
-                    'sector': row['sector'],
-                    'catalyst_type': row['catalyst_type'],
-                    'priority': row['priority'],
-                    'data': json.loads(row['data']) if row['data'] else {}
+                    'symbol': row[0],
+                    'name': row[1],
+                    'sector': row[2],
+                    'catalyst_type': row[3],
+                    'priority': row[4],
+                    'data': parsed_data
                 }
                 result.append(item)
 
@@ -925,7 +944,7 @@ class XueqiuEngine:
             return []
 
     # ========== 缓存管理 ==========
-    
+
     def _get_from_cache(self, table: str, symbol: str) -> Optional[Any]:
         """从缓存读取数据"""
         try:

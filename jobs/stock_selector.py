@@ -7,10 +7,17 @@ Marcus 简易选股器 — 从 hot_concepts + stock_concept_map 快速出候选�
 
 import sys
 import json
-import sqlite3
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parents[1]
+
+def _pg_conn():
+    """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
+    import os
+    import psycopg2
+    url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+    return psycopg2.connect(url)
+
 
 def main():
     hot_concepts = json.loads(sys.argv[1]) if len(sys.argv) > 1 else []
@@ -23,36 +30,32 @@ def main():
         print(json.dumps([]))
         return
 
-    db = WORKSPACE / "data" / "stock_pool.db"
-    if not db.exists():
-        print(json.dumps([]))
-        return
-
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
+    conn = _pg_conn()
+    cursor = conn.cursor()
 
     candidates = []
     seen = set()
 
     for concept in hot_concepts[:5]:
-        rows = conn.execute('''
+        cursor.execute('''
             SELECT p.ts_code, p.symbol, p.name, p.market_cap
             FROM stock_pool p
             JOIN stock_concept_map m ON p.ts_code = m.ts_code
-            WHERE m.concept_name = ? AND p.is_st = 0
+            WHERE m.concept_name = %s AND p.is_st = 0
             ORDER BY p.market_cap DESC
             LIMIT 5
-        ''', (concept,)).fetchall()
+        ''', (concept,))
+        rows = cursor.fetchall()
 
         for r in rows:
-            sym = r['symbol']
+            sym = r[1]
             if sym in seen:
                 continue
             seen.add(sym)
             candidates.append({
                 'symbol': sym,
-                'name': r['name'],
-                'market_cap': r['market_cap'],
+                'name': r[2],
+                'market_cap': r[3],
                 'concept': concept,
             })
 

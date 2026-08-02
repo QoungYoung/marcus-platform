@@ -987,31 +987,9 @@ class LocalDataProvider:
         sector_type: "concept" → stock_concept_map 表, "industry" → stock_pool.industry 字段
         返回: ["000001.SZ", "600519.SH", ...]
         """
-        import sqlite3
-        pool_db = self.DATA_ROOT.parent.parent / "stock_pool.db"
-        if not pool_db.exists():
-            return []
+        from app.services.market_reference import get_component_stocks as _get_components
         try:
-            conn = sqlite3.connect(str(pool_db))
-            cur = conn.cursor()
-            if sector_type == "concept":
-                cur.execute("""
-                    SELECT p.ts_code FROM stock_pool p
-                    JOIN stock_concept_map m ON p.ts_code = m.ts_code
-                    WHERE m.concept_name = ? AND p.is_st = 0
-                    ORDER BY p.market_cap DESC
-                    LIMIT ?
-                """, (sector_name, limit))
-            else:  # industry
-                cur.execute("""
-                    SELECT ts_code FROM stock_pool
-                    WHERE industry = ? AND is_st = 0
-                    ORDER BY market_cap DESC
-                    LIMIT ?
-                """, (sector_name, limit))
-            stocks = [row[0] for row in cur.fetchall()]
-            conn.close()
-            return stocks
+            return _get_components(sector_name, sector_type=sector_type, limit=limit)
         except Exception:
             return []
 

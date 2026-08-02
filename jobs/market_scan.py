@@ -1248,6 +1248,13 @@ def assess_candidates(passed_list: list) -> dict:
 
 # ============= 节点E：持仓相关性预警（纯规则，零 AI 调用） =============
 
+def _pg_conn():
+    """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
+    import os
+    import psycopg2
+    url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+    return psycopg2.connect(url)
+
 def check_correlation(existing_positions: list, candidate_symbol: str, sector_warnings: list = None) -> dict:
     """
     纯规则检查：候选股与现有持仓是否存在行业相关性过载。
@@ -1267,19 +1274,17 @@ def check_correlation(existing_positions: list, candidate_symbol: str, sector_wa
         return {'warning': False, 'level': '', 'reason': ''}
 
     try:
-        import sqlite3
-        db = WORKSPACE / "data" / "stock_pool.db"
-        if not db.exists():
-            return {'warning': False, 'level': '', 'reason': ''}
-
-        conn = sqlite3.connect(str(db))
+        import psycopg2
+        conn = _pg_conn()
+        cursor = conn.cursor()
 
         # 查候选股的行业
         short = candidate_symbol[2:] if candidate_symbol.startswith(('SH', 'SZ')) else candidate_symbol
-        row = conn.execute(
-            "SELECT industry FROM stock_pool WHERE symbol = ? OR symbol = ? LIMIT 1",
+        cursor.execute(
+            "SELECT industry FROM stock_pool WHERE symbol = %s OR symbol = %s LIMIT 1",
             (candidate_symbol, short)
-        ).fetchone()
+        )
+        row = cursor.fetchone()
         cand_industry = row[0] if row and row[0] else None
         if not cand_industry:
             conn.close()
@@ -1290,10 +1295,11 @@ def check_correlation(existing_positions: list, candidate_symbol: str, sector_wa
         for pos in existing_positions:
             sym = pos.get('symbol', '')
             short2 = sym[2:] if sym.startswith(('SH', 'SZ')) else sym
-            r2 = conn.execute(
-                "SELECT industry FROM stock_pool WHERE symbol = ? OR symbol = ? LIMIT 1",
+            cursor.execute(
+                "SELECT industry FROM stock_pool WHERE symbol = %s OR symbol = %s LIMIT 1",
                 (sym, short2)
-            ).fetchone()
+            )
+            r2 = cursor.fetchone()
             if r2 and r2[0] == cand_industry:
                 same_industry_positions.append(sym)
 
@@ -2454,20 +2460,19 @@ def generate_scan_report():
             print(f"[概念行情] ⚠️ Tushare也失败: {e2}", file=sys.stderr)
 
     def _get_stock_name(sym: str) -> str:
-        """两层名称 lookup：stock_pool.db（主力）→ Xueqiu（兜底）→ symbol 本身"""
-        # Layer 1: stock_pool.db（ms级，覆盖全A股 3459 只，含科创板+创业板+北交所）
+        """两层名称 lookup：PostgreSQL stock_pool（主力）→ Xueqiu（兜底）→ symbol 本身"""
+        # Layer 1: PostgreSQL stock_pool（ms级，覆盖全A股 3459 只，含科创板+创业板+北交所）
         try:
-            import sqlite3 as _sq3
-            pool_db = WORKSPACE / "data" / "stock_pool.db"
-            if pool_db.exists():
-                _conn = _sq3.connect(str(pool_db))
-                _row = _conn.execute(
-                    "SELECT name FROM stock_pool WHERE symbol = ? OR symbol = ? LIMIT 1",
-                    (sym, sym[2:])  # 兼容 SH600570 和 600570
-                ).fetchone()
-                _conn.close()
-                if _row:
-                    return _row[0]
+            _conn = _pg_conn()
+            _cur = _conn.cursor()
+            _cur.execute(
+                "SELECT name FROM stock_pool WHERE symbol = %s OR symbol = %s LIMIT 1",
+                (sym, sym[2:])  # 兼容 SH600570 和 600570
+            )
+            _row = _cur.fetchone()
+            _conn.close()
+            if _row:
+                return _row[0]
         except Exception:
             pass
         # Layer 2: Xueqiu 兜底

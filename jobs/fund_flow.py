@@ -58,19 +58,24 @@ def _symbol_to_ts_code(symbol: str) -> str:
     return symbol
 
 
+def _pg_conn():
+    """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
+    import os
+    import psycopg2
+    url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+    return psycopg2.connect(url)
+
 def _lookup_industry(symbol: str) -> str:
-    """从 stock_pool.db 查股票行业分类，查不到返回 '其他'"""
+    """从 PostgreSQL stock_pool 查股票行业分类，查不到返回 '其他'"""
     try:
-        import sqlite3
-        db = Path(__file__).parent.parent / "data" / "stock_pool.db"
-        if not db.exists():
-            return "其他"
-        conn = sqlite3.connect(str(db))
+        conn = _pg_conn()
+        cursor = conn.cursor()
         short = symbol[2:] if symbol.startswith(("SH", "SZ")) else symbol
-        row = conn.execute(
-            "SELECT industry FROM stock_pool WHERE symbol = ? OR symbol = ? LIMIT 1",
+        cursor.execute(
+            "SELECT industry FROM stock_pool WHERE symbol = %s OR symbol = %s LIMIT 1",
             (symbol, short)
-        ).fetchone()
+        )
+        row = cursor.fetchone()
         conn.close()
         if row and row[0]:
             return row[0]

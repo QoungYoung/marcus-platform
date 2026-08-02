@@ -278,19 +278,9 @@ class IndustryLeaderboardService:
     # ── 1.2 候选股筛选 ──────────────────────────────────────
 
     def _get_industry_candidates(self) -> List[Dict]:
-        """从 stock_pool.db 查询每行业市值前 3 名，排除 ST/退市。"""
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT ts_code, symbol, name, industry, market_cap
-                FROM stock_pool
-                WHERE is_st = 0 AND market_cap > 0 AND industry IS NOT NULL AND industry != ''
-            """)
-            rows = [dict(r) for r in cursor.fetchall()]
-        finally:
-            conn.close()
+        """从 PostgreSQL stock_pool 表查询每行业市值前 3 名，排除 ST/退市。"""
+        from app.services.market_reference import get_all_stock_pool
+        rows = get_all_stock_pool()
 
         by_industry: Dict[str, list] = {}
         for r in rows:
@@ -312,21 +302,11 @@ class IndustryLeaderboardService:
         Returns:
             (candidates, survivorship_bias): 候选股列表和是否退化为当前快照的标志。
         """
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
+        from app.services.market_reference import get_all_stock_pool
         survivorship_bias = False
 
-        # 1. 从 stock_pool 获取行业映射和基本信息
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT ts_code, symbol, name, industry, market_cap
-                FROM stock_pool
-                WHERE is_st = 0 AND market_cap > 0 AND industry IS NOT NULL AND industry != ''
-            """)
-            pool_rows = [dict(r) for r in cursor.fetchall()]
-        finally:
-            conn.close()
+        # 1. 从 PostgreSQL stock_pool 表获取行业映射和基本信息
+        pool_rows = get_all_stock_pool()
 
         if not pool_rows:
             return [], True
@@ -1018,17 +998,11 @@ class IndustryLeaderboardService:
                     sparkline_closes.append(round(float(closed.loc[td, "close"]), 2))
                     sparkline_dates.append(td)
 
-            # Get stock name from stock_pool
+            # Get stock name from PostgreSQL stock_pool table
             name = ""
             try:
-                conn = sqlite3.connect(self._db_path)
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM stock_pool WHERE ts_code = ?", (symbol,))
-                row = cursor.fetchone()
-                if row:
-                    name = row["name"]
-                conn.close()
+                from app.services.market_reference import get_stock_name_by_ts_code
+                name = get_stock_name_by_ts_code(symbol) or ""
             except Exception:
                 pass
 

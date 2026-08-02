@@ -45,36 +45,15 @@ async def get_news(
         # Extract numeric code: "SZ000063" → "000063", or plain "000063"
         code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
 
-        # Look up stock name from stock_pool.db
+        # Look up stock name from PostgreSQL stock_pool table
         stock_name = code  # fallback
-        pool_db = settings.data_dir / "stock_pool.db"
-        if pool_db.exists():
-            try:
-                pool_conn = sqlite3.connect(str(pool_db))
-                pool_conn.row_factory = sqlite3.Row
-                pool_curs = pool_conn.cursor()
-                pool_curs.execute(
-                    "SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?",
-                    (code, f"SH{code}")
-                )
-                row = pool_curs.fetchone()
-                if not row:
-                    pool_curs.execute(
-                        "SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?",
-                        (code, f"SZ{code}")
-                    )
-                    row = pool_curs.fetchone()
-                if not row:
-                    pool_curs.execute(
-                        "SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?",
-                        (code, f"BJ{code}")
-                    )
-                    row = pool_curs.fetchone()
-                if row and row["name"]:
-                    stock_name = row["name"].strip()
-                pool_conn.close()
-            except Exception:
-                pass
+        try:
+            from app.services.market_reference import get_stock_name
+            resolved = get_stock_name(symbol)
+            if resolved:
+                stock_name = resolved
+        except Exception:
+            pass
 
         # Match by keyword (company name) OR in title
         where_clause = "WHERE (keyword LIKE ? OR title LIKE ? OR keyword = ?)"

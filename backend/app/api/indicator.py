@@ -969,60 +969,42 @@ async def check_stop_profit(symbol: str):
                 pass
 
         # 查股票所属概念
-        ts_code = _normalize_to_ts_code(symbol)
-        bare = ts_code.split('.')[0]
-        settings = get_settings()
-        pool_db = settings.data_dir / "stock_pool.db"
-        if pool_db.exists():
-            conn = sqlite3.connect(str(pool_db))
-            cur = conn.execute(
-                "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
-                (f"%{bare}%",)
-            )
-            stock_concepts = {row[0] for row in cur.fetchall()}
-            conn.close()
-            in_main_line = bool(stock_concepts & top_concepts)
+        from app.services.market_reference import get_stock_concepts
+        stock_concepts = get_stock_concepts(symbol)
+        in_main_line = bool(stock_concepts & top_concepts)
 
-            # 震荡市额外：概念排名
-            concept_rank_today = 9999
-            concept_rank_3d_avg = 9999.0
-            if is_oscillation:
-                concept_rank_today, concept_rank_3d_avg = _get_concept_ranks(symbol)
+        # 震荡市额外：概念排名
+        concept_rank_today = 9999
+        concept_rank_3d_avg = 9999.0
+        if is_oscillation:
+            concept_rank_today, concept_rank_3d_avg = _get_concept_ranks(symbol)
 
-            checks['main_line'] = {
-                'stock_concepts': sorted(stock_concepts)[:10],
-                'top_concepts': sorted(top_concepts),
-                'in_main_line': in_main_line,
-                'concept_rank_today': concept_rank_today,
-                'concept_rank_3d_avg': concept_rank_3d_avg,
-                'relaxed_pass': (in_main_line or concept_rank_today <= 10 or concept_rank_3d_avg <= 15),
-            }
+        checks['main_line'] = {
+            'stock_concepts': sorted(stock_concepts)[:10],
+            'top_concepts': sorted(top_concepts),
+            'in_main_line': in_main_line,
+            'concept_rank_today': concept_rank_today,
+            'concept_rank_3d_avg': concept_rank_3d_avg,
+            'relaxed_pass': (in_main_line or concept_rank_today <= 10 or concept_rank_3d_avg <= 15),
+        }
 
-            if is_oscillation:
-                if in_main_line:
-                    reasons.append(f'仍在主线(震荡市: {", ".join(sorted(stock_concepts & top_concepts)[:3])})')
-                elif concept_rank_today <= 10:
-                    reasons.append(f'概念排名今日第{concept_rank_today}(震荡市)')
-                elif concept_rank_3d_avg <= 15:
-                    reasons.append(f'概念3日均排名第{concept_rank_3d_avg}(震荡市放宽)')
-                else:
-                    reasons.append(f'概念排名靠后(今日第{concept_rank_today}, 3日均{concept_rank_3d_avg})')
+        if is_oscillation:
+            if in_main_line:
+                reasons.append(f'仍在主线(震荡市: {", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+            elif concept_rank_today <= 10:
+                reasons.append(f'概念排名今日第{concept_rank_today}(震荡市)')
+            elif concept_rank_3d_avg <= 15:
+                reasons.append(f'概念3日均排名第{concept_rank_3d_avg}(震荡市放宽)')
             else:
-                if top_concepts:
-                    if in_main_line:
-                        reasons.append(f'仍在主线({", ".join(sorted(stock_concepts & top_concepts)[:3])})')
-                    else:
-                        reasons.append('已脱离当日主线')
-                else:
-                    reasons.append('主线数据不可用（无概念排行数据）')
+                reasons.append(f'概念排名靠后(今日第{concept_rank_today}, 3日均{concept_rank_3d_avg})')
         else:
-            checks['main_line'] = {
-                'error': 'stock_pool.db 不存在',
-                'concept_rank_today': 9999,
-                'concept_rank_3d_avg': 9999.0,
-                'relaxed_pass': False,
-            }
-            reasons.append('主线数据不可用')
+            if top_concepts:
+                if in_main_line:
+                    reasons.append(f'仍在主线({", ".join(sorted(stock_concepts & top_concepts)[:3])})')
+                else:
+                    reasons.append('已脱离当日主线')
+            else:
+                reasons.append('主线数据不可用（无概念排行数据）')
     except Exception as e:
         checks['main_line'] = {'error': str(e), 'relaxed_pass': False}
         reasons.append('主线检查异常')
@@ -1230,23 +1212,9 @@ def _get_concept_ranks(symbol: str) -> tuple:
         - rank_today: 1-based best rank among stock's concepts today (lower=better), 9999 if no data
         - rank_3d_avg: Average best rank over up to 3 trading days, 9999.0 if no data
     """
-    import sqlite3
+    from app.services.market_reference import get_stock_concepts
 
-    settings = get_settings()
-    pool_db = settings.data_dir / "stock_pool.db"
-    stock_concepts: set[str] = set()
-
-    # 1. 获取股票所属概念
-    if pool_db.exists():
-        ts_code = _normalize_to_ts_code(symbol)
-        bare = ts_code.split('.')[0]
-        conn = sqlite3.connect(str(pool_db))
-        cur = conn.execute(
-            "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ?",
-            (f"%{bare}%",)
-        )
-        stock_concepts = {row[0] for row in cur.fetchall()}
-        conn.close()
+    stock_concepts: set[str] = set(get_stock_concepts(symbol))
 
     if not stock_concepts:
         return 9999, 9999.0

@@ -33,33 +33,19 @@ _SELL_FEE_RATE = 0.0015  # 佣金 0.05% + 印花税 0.1%
 
 
 def get_stock_name(symbol: str) -> str:
-    """Get stock name from symbol, query stock_pool.db for Chinese name."""
+    """Get stock name from symbol, query PostgreSQL stock_pool table."""
     if symbol in _stock_name_cache:
         return _stock_name_cache[symbol]
 
-    # Try to get from stock_pool.db
-    pool_db = settings.data_dir / "stock_pool.db"
-    if pool_db.exists():
-        try:
-            conn = sqlite3.connect(str(pool_db))
-            conn.row_factory = sqlite3.Row
-            curs = conn.cursor()
-
-            # Extract numeric code from symbol (e.g., "SH600519" -> "600519")
-            code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
-
-            curs.execute("SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?",
-                                (code, symbol))
-            row = curs.fetchone()
-            conn.close()
-
-            if row and row['name']:
-                # Clean the name - remove any remaining code prefix
-                name = row['name'].strip()
-                _stock_name_cache[symbol] = name
-                return name
-        except Exception as e:
-            print(f"Error querying stock name: {e}")
+    # Try to get from PostgreSQL stock_pool table
+    try:
+        from app.services.market_reference import get_stock_name as _pg_get_stock_name
+        name = _pg_get_stock_name(symbol)
+        if name:
+            _stock_name_cache[symbol] = name
+            return name
+    except Exception as e:
+        print(f"Error querying stock name: {e}")
 
     # Fallback to symbol
     _stock_name_cache[symbol] = symbol
@@ -485,7 +471,7 @@ def save_daily_snapshot(target_date: str = None) -> dict:
 def _compute_sector_concentration(positions: list, total_position_value: float) -> dict | None:
     """计算行业集中度（申万行业分类）。
 
-    从 stock_pool.db 的 stock_pool.industry 查询每个持仓股的申万行业，
+    从 PostgreSQL stock_pool 表的 industry 查询每个持仓股的申万行业，
     聚合各行业的市值权重。每只股票只属于一个行业，无需均分。
 
     Returns: dict with sectors, max_sector, concentration_level
@@ -493,14 +479,8 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
     if not positions or total_position_value <= 0:
         return None
 
-    pool_db = settings.data_dir / "stock_pool.db"
-    if not pool_db.exists():
-        return None
-
     try:
-        conn = sqlite3.connect(str(pool_db))
-        conn.row_factory = sqlite3.Row
-        curs = conn.cursor()
+        from app.services.market_reference import get_stock_industry
 
         # 收集所有持仓股的申万行业
         industry_values: dict[str, float] = {}
@@ -514,22 +494,9 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
                 else 0
             )
 
-            # SH600519 → 600519.SH
-            if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ'):
-                exchange = symbol[:2]
-                code = symbol[2:]
-                ts_code = f"{code}.{exchange}"
-            else:
-                ts_code = symbol
-
-            curs.execute("SELECT industry FROM stock_pool WHERE ts_code = ?", (ts_code,))
-            row = curs.fetchone()
-
-            industry = row['industry'] if row and row['industry'] else "其他"
+            industry = get_stock_industry(symbol) or "其他"
             industry_values[industry] = industry_values.get(industry, 0.0) + market_value
             industry_stocks.setdefault(industry, set()).add(symbol)
-
-        conn.close()
 
         if not industry_values:
             return None

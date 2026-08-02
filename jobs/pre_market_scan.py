@@ -560,12 +560,11 @@ def analyze_overnight_news() -> dict:
 
 class SectorConfigManager:
     """
-    板块配置管理器（非硬编码，数据存储在 trades.db）
+    板块配置管理器（非硬编码，数据存储在 PostgreSQL）
     首次加载时从 DEFAULT_SECTOR_LINKAGE 种子数据，之后读写 DB。
     """
 
     _instance = None
-    _db_path = None
     _cache = None
 
     def __new__(cls):
@@ -574,54 +573,63 @@ class SectorConfigManager:
         return cls._instance
 
     def __init__(self):
-        if SectorConfigManager._db_path is None:
-            SectorConfigManager._db_path = (
-                Path(__file__).resolve().parents[1]
-                / "data" / "trades.db"
-            )
         if SectorConfigManager._cache is None:
             self._load_or_seed()
 
     def _conn(self):
-        import sqlite3
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(str(self._db_path))
+        import os
+        import psycopg2
+        url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+        return psycopg2.connect(url)
 
     def _load_or_seed(self):
         import json
-        import sqlite3
         conn = self._conn()
+        cursor = conn.cursor()
         try:
-            rows = conn.execute("SELECT sector_key, name, indices, etfs, weight, stocks, etf_codes FROM sector_config").fetchall()
+            cursor.execute("SELECT sector_key, name, indices, etfs, weight, stocks, etf_codes FROM sector_config")
+            rows = cursor.fetchall()
             if not rows:
                 # 首次：种子 DEFAULT_SECTOR_LINKAGE
                 now = datetime.now().isoformat()
                 for key, cfg in DEFAULT_SECTOR_LINKAGE.items():
                     conn.execute(
-                        "INSERT OR REPLACE INTO sector_config "
+                        "INSERT INTO sector_config "
                         "(sector_key, name, indices, etfs, weight, stocks, etf_codes, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (sector_key) DO UPDATE SET "
+                        "name = EXCLUDED.name, indices = EXCLUDED.indices, etfs = EXCLUDED.etfs, "
+                        "weight = EXCLUDED.weight, stocks = EXCLUDED.stocks, "
+                        "etf_codes = EXCLUDED.etf_codes, updated_at = EXCLUDED.updated_at",
                         (key, cfg['name'], json.dumps(cfg['indices']),
                          json.dumps(cfg['etfs']), cfg['weight'],
                          json.dumps(cfg['stocks']),
                          json.dumps(cfg.get('etf_codes', [])), now))
                 conn.commit()
                 print(f"[板块配置] 首次加载，已种子 {len(DEFAULT_SECTOR_LINKAGE)} 个板块")
-                rows = conn.execute(
+                cursor.execute(
                     "SELECT sector_key, name, indices, etfs, weight, stocks, etf_codes FROM sector_config"
-                ).fetchall()
+                )
+                rows = cursor.fetchall()
         finally:
             conn.close()
+
+        def _parse_json(v):
+            if v is None:
+                return []
+            if isinstance(v, (dict, list)):
+                return v
+            return json.loads(v)
 
         cache = {}
         for row in rows:
             cache[row[0]] = {
                 'name': row[1],
-                'indices': json.loads(row[2]),
-                'etfs': json.loads(row[3]),
+                'indices': _parse_json(row[2]),
+                'etfs': _parse_json(row[3]),
                 'weight': row[4],
-                'stocks': json.loads(row[5]),
-                'etf_codes': json.loads(row[6]) if row[6] else [],
+                'stocks': _parse_json(row[5]),
+                'etf_codes': _parse_json(row[6]),
             }
         SectorConfigManager._cache = cache
 
@@ -634,14 +642,14 @@ class SectorConfigManager:
         return SectorConfigManager._cache.items()
 
     def update_stocks(self, key: str, stocks: list):
-        """动态更新板块成分股（写入 DB）"""
+        """动态更新板块成分股（写入 PostgreSQL）"""
         import json
-        import sqlite3
         if key in SectorConfigManager._cache:
             SectorConfigManager._cache[key]['stocks'] = stocks
             conn = self._conn()
-            conn.execute(
-                "UPDATE sector_config SET stocks = ?, updated_at = ? WHERE sector_key = ?",
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE sector_config SET stocks = %s, updated_at = %s WHERE sector_key = %s",
                 (json.dumps(stocks), datetime.now().isoformat(), key)
             )
             conn.commit()

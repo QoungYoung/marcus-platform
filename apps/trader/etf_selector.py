@@ -15,8 +15,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.workspace_detector import WORKSPACE, XUEQIU_DIR, AKSHARE_DIR, DATA_DIR
 from core.xueqiu_engine import XueqiuEngine
 
-import sqlite3
 
+
+def _pg_conn():
+    """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
+    import os
+    import psycopg2
+    url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+    return psycopg2.connect(url)
 
 def load_etf_pool() -> dict:
     """读取 etf_pool.json，返回完整配置"""
@@ -44,18 +50,18 @@ def get_sector_news_score(sector: str) -> float:
     if not news_db.exists():
         return 25.0  # 无数据返回默认值
 
-    # 读取板块内股票（从 stock_pool.db 获取板块成分）
-    pool_db = WORKSPACE / "data" / "stock_pool.db"
-    codes = []
-    if pool_db.exists():
-        conn = sqlite3.connect(str(pool_db))
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute(
-            "SELECT symbol FROM stock_pool WHERE industry = ? LIMIT 50",
+    # 读取板块内股票（从 PostgreSQL stock_pool 获取板块成分）
+    try:
+        conn = _pg_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT symbol FROM stock_pool WHERE industry = %s LIMIT 50",
             (sector,)
         )
-        codes = [row['symbol'] for row in cur.fetchall()]
+        codes = [row[0] for row in cur.fetchall()]
         conn.close()
+    except Exception:
+        pass
 
     if not codes:
         # 无成分股数据时，用板块名直接查 news.db

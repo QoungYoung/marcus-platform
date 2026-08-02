@@ -143,31 +143,20 @@ async def get_stock_quote(symbol: str):
         rsr = None
         bare_code = symbol[2:] if symbol.startswith(("SH", "SZ", "BJ")) else symbol
         try:
-            import sqlite3
-            pool_db = settings.data_dir / "stock_pool.db"
-            if pool_db.exists():
-                conn = sqlite3.connect(str(pool_db))
-                curs = conn.cursor()
-                # 查找该股票所属的首要概念板块
-                curs.execute(
-                    "SELECT concept_name FROM stock_concept_map WHERE ts_code LIKE ? LIMIT 1",
-                    (f"%{bare_code}%",)
-                )
-                row = curs.fetchone()
-                if row:
-                    concept_name = row[0]
-                    # 从概念资金流数据中获取板块涨幅
-                    try:
-                        from utils.em_sector_flow import get_sector_flow_by_name
-                        sector = get_sector_flow_by_name(concept_name, sector_type="concept", use_cache=True)
-                        if sector and sector.get("pct_change", 0) != 0:
-                            sector_pct = sector["pct_change"]
-                            stock_pct = quote.get("percent", 0)
-                            if sector_pct != 0:
-                                rsr = round(stock_pct / sector_pct, 2)
-                    except Exception:
-                        pass
-                conn.close()
+            from app.services.market_reference import get_first_concept
+            concept_name = get_first_concept(bare_code)
+            if concept_name:
+                # 从概念资金流数据中获取板块涨幅
+                try:
+                    from utils.em_sector_flow import get_sector_flow_by_name
+                    sector = get_sector_flow_by_name(concept_name, sector_type="concept", use_cache=True)
+                    if sector and sector.get("pct_change", 0) != 0:
+                        sector_pct = sector["pct_change"]
+                        stock_pct = quote.get("percent", 0)
+                        if sector_pct != 0:
+                            rsr = round(stock_pct / sector_pct, 2)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -250,7 +239,7 @@ async def get_global_market():
 async def search_market(q: str = Query(..., min_length=1, description="搜索关键词(代码或名称)")):
     """
     搜索股票和ETF，用于聊天 @提及 功能。
-    股票从 stock_pool.db 动态查询，ETF 从 cache.db 查询。
+    股票从 PostgreSQL stock_pool 表动态查询，ETF 从 PostgreSQL etf_pool 表查询。
     """
     import sqlite3
     from app.config import get_settings
@@ -270,52 +259,30 @@ async def search_market(q: str = Query(..., min_length=1, description="搜索关
         if q_lower in idx["symbol"].lower() or q_lower in idx["name"].lower():
             results.append(idx)
 
-    # 1. 搜索 A 股股票（从 stock_pool.db，全 A 股约 5000+ 只）
+    # 1. 搜索 A 股股票（从 PostgreSQL stock_pool 表，全 A 股约 5000+ 只）
     try:
-        pool_db = settings.data_dir / "stock_pool.db"
-        if pool_db.exists():
-            conn = sqlite3.connect(str(pool_db))
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            # LIKE 模糊匹配 symbol 或 name，排除 ST 股，按市值降序
-            cursor.execute(
-                "SELECT symbol, name, industry, market, market_cap FROM stock_pool "
-                "WHERE is_st = 0 AND (lower(symbol) LIKE ? OR lower(name) LIKE ?) "
-                "ORDER BY market_cap DESC LIMIT 30",
-                (f"%{q_lower}%", f"%{q_lower}%")
-            )
-            for row in cursor.fetchall():
-                sym = row["symbol"]
-                # 构造交易所前缀格式（6开头→SH, 0/3/8开头→SZ）
-                if sym.startswith("6"):
-                    full_sym = f"SH{sym}"
-                else:
-                    full_sym = f"SZ{sym}"
-                results.append({
-                    "symbol": full_sym,
-                    "name": row["name"],
-                    "type": "stock",
-                    "industry": row["industry"] or "",
-                    "market_cap": row["market_cap"] or 0,
-                })
-            conn.close()
+        from app.services.market_reference import search_stocks
+        for row in search_stocks(q_lower, limit=30):
+            sym = row["symbol"]
+            # 构造交易所前缀格式（6开头→SH, 0/3/8开头→SZ）
+            if sym.startswith("6"):
+                full_sym = f"SH{sym}"
+            else:
+                full_sym = f"SZ{sym}"
+            results.append({
+                "symbol": full_sym,
+                "name": row["name"],
+                "type": "stock",
+                "industry": row["industry"] or "",
+                "market_cap": row["market_cap"] or 0,
+            })
     except Exception as e:
         print(f"Stock pool search failed: {e}")
 
-    # 2. 搜索 ETF 池（从 cache.db，指定 data_dir 为项目 data 目录避免相对路径问题）
+    # 2. 搜索 ETF 池（从 PostgreSQL etf_pool 表）
     try:
-        sys_path = str(settings.xueqiu_dir)
-        if sys_path not in __import__('sys').path:
-            __import__('sys').path.insert(0, sys_path)
-        from xueqiu_engine import XueqiuEngine
-
-        import os as _os
-        engine = XueqiuEngine(
-            config_file=str(settings.xueqiu_dir / "config.json"),
-            data_dir=str(settings.data_dir),  # 显式指定为项目 data/ 目录
-        )
-        print(f"[ETF搜索] data_dir={settings.data_dir}, db_file={engine.db_file}, exists={_os.path.exists(engine.db_file)}")
-        etf_list = engine.get_etf_pool_from_db(limit=500)
+        from app.services.market_reference import get_etf_pool
+        etf_list = get_etf_pool(limit=500)
         print(f"[ETF搜索] 读取到 {len(etf_list)} 只 ETF，匹配关键词='{q}'")
 
         for etf in etf_list:
@@ -828,7 +795,7 @@ async def get_stock_pro_bar(
         raise HTTPException(status_code=500, detail=f"获取pro_bar行情失败: {str(e)}")
 
 
-# ========== 概念板块 API (数据源: stock_pool.db) ==========
+# ========== 概念板块 API (数据源: PostgreSQL stock_pool) ==========
 
 @router.get("/concept")
 async def get_concept_mapping(
@@ -841,79 +808,21 @@ async def get_concept_mapping(
     - 不传 concept: 返回所有概念板块列表（名称+成分股数量）
     - 传 concept: 返回该概念下的所有成分股详情（ts_code/symbol/name/market_cap）
     
-    数据源: stock_pool.db (sectors + stock_concept_map + stock_pool)
+    数据源: PostgreSQL (sectors + stock_concept_map + stock_pool)
     """
-    import sqlite3
-    from pathlib import Path
-    
+    from app.services.market_reference import get_concepts, get_concept_stocks
+
     try:
-        # 找到 stock_pool.db
-        pool_db = Path(__file__).parent.parent.parent / "data" / "stock_pool.db"
-        if not pool_db.exists():
-            return {"error": "stock_pool.db 不存在", "concepts": [], "stocks": [], "total": 0}
-        
-        conn = sqlite3.connect(str(pool_db))
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
         if not concept:
             # 列出所有概念板块
-            cursor.execute(
-                "SELECT sector_name, stock_count FROM sectors "
-                "WHERE sector_type = 'concept' "
-                "ORDER BY stock_count DESC LIMIT ?",
-                (limit,)
-            )
-            rows = cursor.fetchall()
-            total_cursor = conn.execute(
-                "SELECT COUNT(*) FROM sectors WHERE sector_type = 'concept'"
-            )
-            total = total_cursor.fetchone()[0]
-            conn.close()
-            
+            data = get_concepts(limit=limit)
             return {
-                "concepts": [{"sector_name": r["sector_name"], "stock_count": r["stock_count"]} for r in rows],
-                "total": total,
+                "concepts": data["concepts"],
+                "total": data["total"],
             }
         else:
             # 查询某一概念下的股票
-            cursor.execute(
-                "SELECT p.ts_code, p.symbol, p.name, p.market_cap "
-                "FROM stock_concept_map m "
-                "JOIN stock_pool p ON p.ts_code = m.ts_code "
-                "WHERE m.concept_name = ? "
-                "ORDER BY p.market_cap DESC LIMIT ?",
-                (concept.strip(), limit)
-            )
-            rows = cursor.fetchall()
-            
-            # 同时获取概念信息
-            cursor.execute(
-                "SELECT sector_name, stock_count FROM sectors WHERE sector_name = ?",
-                (concept.strip(),)
-            )
-            concept_row = cursor.fetchone()
-            
-            conn.close()
-            
-            return {
-                "concept": concept,
-                "stock_count": concept_row["stock_count"] if concept_row else 0,
-                "stocks": [
-                    {
-                        "ts_code": r["ts_code"],
-                        "symbol": r["symbol"],
-                        "name": r["name"],
-                        "market_cap": r["market_cap"] or 0,
-                    }
-                    for r in rows
-                ],
-                "concepts": [
-                    {"sector_name": concept_row["sector_name"], "stock_count": concept_row["stock_count"]}
-                ] if concept_row else [],
-                "total": 1 if concept_row else 0,
-            }
-    
+            return get_concept_stocks(concept.strip(), limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询概念板块失败: {str(e)}")
 
@@ -2350,7 +2259,7 @@ async def get_top_movers(
 ):
     """
     获取涨跌榜数据。
-    数据源: Tushare daily_basic，从 stock_pool.db 补充股票名称。
+    数据源: Tushare daily_basic，从 PostgreSQL stock_pool 表补充股票名称。
     """
     try:
         from app.config import get_settings
@@ -2392,22 +2301,12 @@ async def get_top_movers(
         else:  # active
             df = df.sort_values("amount", ascending=False).head(limit)
 
-        # 从 stock_pool.db 获取股票名称
+        # 从 PostgreSQL stock_pool 表获取股票名称
         name_map = {}
         try:
-            pool_db = settings.data_dir / "stock_pool.db"
-            if pool_db.exists():
-                conn = sqlite3.connect(str(pool_db))
-                cursor = conn.cursor()
-                ts_codes = [str(c) for c in df["ts_code"].tolist()]
-                placeholders = ",".join(["?"] * len(ts_codes))
-                cursor.execute(
-                    f"SELECT ts_code, name FROM stock_pool WHERE ts_code IN ({placeholders})",
-                    ts_codes
-                )
-                for row in cursor.fetchall():
-                    name_map[row[0]] = row[1]
-                conn.close()
+            from app.services.market_reference import get_stock_names_by_ts_codes
+            ts_codes = [str(c) for c in df["ts_code"].tolist()]
+            name_map = get_stock_names_by_ts_codes(ts_codes)
         except Exception:
             pass
 

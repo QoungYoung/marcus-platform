@@ -72,50 +72,60 @@ class StockPoolManager:
         self.db_path = db_path or str(DB_FILE)
         self._init_database()
 
+    def _pg_conn(self):
+        """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
+        import os
+        import psycopg2
+        from urllib.parse import urlparse
+        url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+        return psycopg2.connect(url)
+
     def _init_database(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._pg_conn()
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS stock_pool (
-                ts_code TEXT PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                name TEXT NOT NULL,
-                area TEXT,
-                industry TEXT,
-                market TEXT,
-                list_date TEXT,
+                ts_code VARCHAR(20) PRIMARY KEY,
+                symbol VARCHAR(20) NOT NULL,
+                name VARCHAR(50) NOT NULL,
+                area VARCHAR(20),
+                industry VARCHAR(50),
+                market VARCHAR(10),
+                list_date VARCHAR(10),
                 is_st INTEGER DEFAULT 0,
-                market_cap REAL DEFAULT 0,
-                updated_at TEXT
+                market_cap DOUBLE PRECISION DEFAULT 0,
+                updated_at VARCHAR(30),
+                board VARCHAR(20)
             )
         ''')
-        
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sectors (
-                sector_name TEXT UNIQUE NOT NULL,
-                sector_type TEXT NOT NULL,
+                id SERIAL PRIMARY KEY,
+                sector_name VARCHAR(50) UNIQUE NOT NULL,
+                sector_type VARCHAR(20) NOT NULL,
                 stock_count INTEGER DEFAULT 0,
-                updated_at TEXT
+                updated_at VARCHAR(30)
             )
         ''')
-        
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS stock_concept_map (
-                ts_code TEXT NOT NULL,
-                concept_name TEXT NOT NULL,
+                ts_code VARCHAR(20) NOT NULL,
+                concept_name VARCHAR(50) NOT NULL,
                 PRIMARY KEY (ts_code, concept_name)
             )
         ''')
-        
+
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_stock_concept ON stock_concept_map(concept_name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_industry ON stock_pool(industry)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_market ON stock_pool(market)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_is_st ON stock_pool(is_st)')
-        
+
         conn.commit()
         conn.close()
-        print(f"[股票池管理] ✓ 数据库初始化：{self.db_path}")
+        print(f"[股票池管理] ✓ 数据库初始化（PostgreSQL）：{self.db_path}")
 
     def update_stock_pool(self, min_market_cap: float = 0, exclude_st: bool = False) -> int:
         """
@@ -132,7 +142,7 @@ class StockPoolManager:
         print(f"  - 最小市值：{min_market_cap}亿")
         print(f"  - 排除 ST: {exclude_st}")
         
-        conn = sqlite3.connect(self.db_path)
+        conn = self._pg_conn()
         cursor = conn.cursor()
         
         try:
@@ -198,25 +208,32 @@ class StockPoolManager:
                 list_date = row['list_date'] if pd.notna(row.get('list_date')) else ''
                 
                 cursor.execute('''
-                    INSERT OR REPLACE INTO stock_pool 
+                    INSERT INTO stock_pool 
                     (ts_code, symbol, name, area, industry, market, list_date, is_st, market_cap, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (ts_code, symbol, name, area, industry, 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ts_code) DO UPDATE SET
+                        symbol = EXCLUDED.symbol, name = EXCLUDED.name, area = EXCLUDED.area,
+                        industry = EXCLUDED.industry, market = EXCLUDED.market,
+                        list_date = EXCLUDED.list_date, is_st = EXCLUDED.is_st,
+                        market_cap = EXCLUDED.market_cap, updated_at = EXCLUDED.updated_at
+                ''', (ts_code, symbol, name, area, industry,
                       market, list_date, is_st, market_cap, now))
-                
+
                 updated_count += 1
-            
+
             # 更新板块统计
             cursor.execute('''
                 SELECT industry, COUNT(*) as cnt FROM stock_pool 
                 WHERE is_st = 0 GROUP BY industry
             ''')
             sectors = cursor.fetchall()
-            
+
             for sector_name, count in sectors:
                 cursor.execute('''
-                    INSERT OR REPLACE INTO sectors (sector_name, sector_type, stock_count, updated_at)
-                    VALUES (?, 'industry', ?, ?)
+                    INSERT INTO sectors (sector_name, sector_type, stock_count, updated_at)
+                    VALUES (%s, 'industry', %s, %s)
+                    ON CONFLICT (sector_name) DO UPDATE SET
+                        stock_count = EXCLUDED.stock_count, updated_at = EXCLUDED.updated_at
                 ''', (sector_name, count, now))
             
             conn.commit()
@@ -280,7 +297,7 @@ class StockPoolManager:
             print(f"  - 获取到 {len(df_concepts)} 个概念板块")
 
             # Step 2: 遍历每个概念，获取成分股
-            conn = sqlite3.connect(self.db_path)
+            conn = self._pg_conn()
             cursor = conn.cursor()
             now = datetime.now().isoformat()
 
@@ -305,16 +322,19 @@ class StockPoolManager:
 
                     # 写入概念板块
                     cursor.execute('''
-                        INSERT OR REPLACE INTO sectors (sector_name, sector_type, stock_count, updated_at)
-                        VALUES (?, 'concept', ?, ?)
+                        INSERT INTO sectors (sector_name, sector_type, stock_count, updated_at)
+                        VALUES (%s, 'concept', %s, %s)
+                        ON CONFLICT (sector_name) DO UPDATE SET
+                            stock_count = EXCLUDED.stock_count, updated_at = EXCLUDED.updated_at
                     ''', (concept_name, member_count, now))
 
-                    # 写入成分股映射
-                    for _, member in df_members.iterrows():
-                        cursor.execute('''
-                            INSERT OR IGNORE INTO stock_concept_map (ts_code, concept_name)
-                            VALUES (?, ?)
-                        ''', (member['con_code'], concept_name))
+                    # 写入成分股映射（批量）
+                    member_rows = [(m['con_code'], concept_name) for _, m in df_members.iterrows()]
+                    cursor.executemany('''
+                        INSERT INTO stock_concept_map (ts_code, concept_name)
+                        VALUES (%s, %s)
+                        ON CONFLICT (ts_code, concept_name) DO NOTHING
+                    ''', member_rows)
 
                     concept_count += 1
                     total_mappings += member_count
@@ -353,17 +373,17 @@ class StockPoolManager:
         Returns:
             股票列表
         """
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
+        import psycopg2.extras
+        conn = self._pg_conn()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
         if sector:
             cursor.execute('''
                 SELECT p.ts_code, p.symbol, p.name, p.area, p.industry, p.market, 
                        p.list_date, p.is_st, p.market_cap, p.updated_at
                 FROM stock_pool p
                 JOIN stock_concept_map m ON p.ts_code = m.ts_code
-                WHERE m.concept_name = ? AND p.is_st = 0 AND p.market_cap >= ?
+                WHERE m.concept_name = %s AND p.is_st = 0 AND p.market_cap >= %s
                 ORDER BY p.market_cap DESC
             ''', (sector, min_market_cap))
         else:
@@ -371,43 +391,43 @@ class StockPoolManager:
                 SELECT ts_code, symbol, name, area, industry, market, 
                        list_date, is_st, market_cap, updated_at
                 FROM stock_pool 
-                WHERE is_st = 0 AND market_cap >= ?
+                WHERE is_st = 0 AND market_cap >= %s
                 ORDER BY market_cap DESC
             ''', (min_market_cap,))
-        
+
         rows = cursor.fetchall()
         conn.close()
-        
+
         return [dict(row) for row in rows]
 
     def get_sectors(self) -> List[Dict]:
         """获取所有板块列表"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
+        import psycopg2.extras
+        conn = self._pg_conn()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
         cursor.execute('''
             SELECT sector_name, sector_type, stock_count, updated_at 
             FROM sectors 
             ORDER BY stock_count DESC
         ''')
-        
+
         rows = cursor.fetchall()
         conn.close()
-        
+
         return [dict(row) for row in rows]
 
     def get_stocks_by_sector(self, sector_name: str, limit: int = 50) -> List[Dict]:
         """获取指定板块的股票"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._pg_conn()
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             SELECT ts_code, symbol, name, market_cap 
             FROM stock_pool 
-            WHERE industry = ? AND is_st = 0 
+            WHERE industry = %s AND is_st = 0 
             ORDER BY market_cap DESC 
-            LIMIT ?
+            LIMIT %s
         ''', (sector_name, limit))
         rows = cursor.fetchall()
         conn.close()
@@ -419,16 +439,16 @@ class StockPoolManager:
 
     def get_stocks_by_concept(self, concept_name: str, limit: int = 50) -> List[Dict]:
         """获取指定概念的股票"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._pg_conn()
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             SELECT p.ts_code, p.symbol, p.name, p.market_cap
             FROM stock_pool p
             JOIN stock_concept_map m ON p.ts_code = m.ts_code
-            WHERE m.concept_name = ? AND p.is_st = 0
+            WHERE m.concept_name = %s AND p.is_st = 0
             ORDER BY p.market_cap DESC
-            LIMIT ?
+            LIMIT %s
         ''', (concept_name, limit))
         rows = cursor.fetchall()
         conn.close()
@@ -440,18 +460,18 @@ class StockPoolManager:
 
     def get_pool_stats(self) -> Dict:
         """获取股票池统计信息"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._pg_conn()
         cursor = conn.cursor()
-        
+
         cursor.execute('SELECT COUNT(*) FROM stock_pool WHERE is_st = 0')
         total = cursor.fetchone()[0]
-        
+
         cursor.execute('SELECT COUNT(*) FROM sectors')
         sector_count = cursor.fetchone()[0]
-        
+
         cursor.execute('SELECT MAX(updated_at) FROM stock_pool')
         last_update = cursor.fetchone()[0] or ''
-        
+
         conn.close()
         
         return {
@@ -464,7 +484,7 @@ class StockPoolManager:
 # === ETF 板块池更新（模块级函数，可被外部 import）===
 
 def update_etf_pool() -> int:
-    """同步 ETF 板块池到 cache.db（通过雪球 API）"""
+    """同步 ETF 板块池到 PostgreSQL etf_pool（通过雪球 API）"""
     print("=" * 60)
     print("[ETF板块池更新] 开始执行...")
     print("=" * 60)

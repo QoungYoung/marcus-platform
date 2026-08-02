@@ -24,26 +24,18 @@ _stock_name_cache = {}
 
 
 def _get_stock_name(symbol: str) -> str:
-    """Lookup stock name from stock_pool.db."""
+    """Lookup stock name from PostgreSQL stock_pool table."""
     if symbol in _stock_name_cache:
         return _stock_name_cache[symbol]
 
-    pool_db = settings.data_dir / "stock_pool.db"
-    if pool_db.exists():
-        try:
-            conn = sqlite3.connect(str(pool_db))
-            conn.row_factory = sqlite3.Row
-            curs = conn.cursor()
-            code = symbol[2:] if len(symbol) > 4 and symbol[:2] in ('SH', 'SZ', 'BJ') else symbol
-            curs.execute("SELECT name FROM stock_pool WHERE symbol = ? OR ts_code = ?", (code, symbol))
-            row = curs.fetchone()
-            conn.close()
-            if row and row['name']:
-                name = row['name'].strip()
-                _stock_name_cache[symbol] = name
-                return name
-        except Exception:
-            pass
+    try:
+        from app.services.market_reference import get_stock_name
+        name = get_stock_name(symbol)
+        if name:
+            _stock_name_cache[symbol] = name
+            return name
+    except Exception:
+        pass
 
     _stock_name_cache[symbol] = symbol
     return symbol
