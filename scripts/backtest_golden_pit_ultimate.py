@@ -363,7 +363,10 @@ def simulate_dca(
     empty = {"trades": 0, "cagr": 0.0, "adj_cagr": 0.0, "win_rate": 0.0, "score": -999,
              "signals_found": 0, "details": [], "trades_per_year": 0.0,
              "capital_efficiency": 0.0, "avg_return": 0.0, "median_return": 0.0,
-             "sharpe": 0.0, "max_drawdown": 0.0, "profit_factor": 0.0,
+             "sharpe": 0.0, "max_drawdown": 0.0,
+             "mae_mean": 0.0, "mae_median": 0.0, "mae_min": 0.0, "mae_max": 0.0,
+             "mae_distribution": {},
+             "profit_factor": 0.0,
              "calendar_span": 0, "max_concurrent": 0}
     if len(signals) == 0:
         return empty
@@ -407,6 +410,7 @@ def simulate_dca(
         exit_date_idx = buy_start + PIT_WINDOW_DAYS  # default: last DCA day
         exit_type_used = "fallback"
         total_ret = 0.0
+        min_close = avg_entry  # track lowest close since entry for MAE
 
         # For trailing stop: track peak greed percentile since buy_start
         peak_pct = np.nanmax(pct[buy_start:buy_start + 1])
@@ -422,6 +426,10 @@ def simulate_dca(
 
             cur_pct = pct[j]
             holding_days = j - buy_start  # calendar days since first buy
+
+            # Track lowest close since entry for MAE
+            if closes[j] > 0 and not np.isnan(closes[j]) and closes[j] < min_close:
+                min_close = closes[j]
 
             # Update trailing peak
             if not np.isnan(cur_pct) and cur_pct > peak_pct:
@@ -513,8 +521,12 @@ def simulate_dca(
             exit_date_idx = min(buy_start + MAX_HOLD, n - 1)
             total_ret = (closes[exit_date_idx] - avg_entry) / avg_entry
             exit_type_used = "fallback"
+            # Track min close through safety exit
+            if closes[exit_date_idx] > 0 and not np.isnan(closes[exit_date_idx]) and closes[exit_date_idx] < min_close:
+                min_close = closes[exit_date_idx]
 
         hold_cal_days = exit_date_idx - buy_start
+        max_adverse_excursion = (min_close / avg_entry - 1) if avg_entry > 0 else 0
 
         trades.append({
             "entry_date_idx": buy_start,
@@ -522,6 +534,7 @@ def simulate_dca(
             "avg_entry_price": round(avg_entry, 4),
             "exit_price": round(float(closes[exit_date_idx]), 4),
             "return": round(float(total_ret), 4),
+            "max_adverse_excursion": round(float(max_adverse_excursion), 4),
             "holding_days": hold_cal_days,
             "exit_signal": exit_type_used,
             "signal_strength": round(strength, 4),
@@ -580,6 +593,22 @@ def simulate_dca(
     # Max drawdown per trade
     max_dd = float(np.min(returns))
 
+    # ── Intra-trade MAE (Maximum Adverse Excursion) ──
+    maes = np.array([t.get("max_adverse_excursion", 0) for t in trades])
+    mae_mean = float(np.mean(maes))
+    mae_median = float(np.median(maes))
+    mae_min = float(np.min(maes))
+    mae_max = float(np.max(maes))
+
+    # MAE distribution buckets
+    mae_distribution = {
+        "p5": int(np.sum(maes < -0.05)),
+        "p10": int(np.sum(maes < -0.10)),
+        "p15": int(np.sum(maes < -0.15)),
+        "p20": int(np.sum(maes < -0.20)),
+        "p30": int(np.sum(maes < -0.30)),
+    }
+
     # Profit factor
     profits = returns[returns > 0].sum()
     losses = abs(returns[returns < 0].sum())
@@ -617,6 +646,11 @@ def simulate_dca(
         "median_return": round(med_ret, 4),
         "sharpe": round(sharpe, 4),
         "max_drawdown": round(max_dd, 4),
+        "mae_mean": round(mae_mean, 4),
+        "mae_median": round(mae_median, 4),
+        "mae_min": round(mae_min, 4),
+        "mae_max": round(mae_max, 4),
+        "mae_distribution": mae_distribution,
         "profit_factor": round(profit_factor, 4),
         "trades_per_year": round(trades_per_year, 2),
         "capital_efficiency": round(cap_efficiency, 4),
