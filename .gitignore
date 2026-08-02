@@ -55,3 +55,36 @@ docker/data/
 *.tmp
 temp/
 data/backtest/
+
+# Local tooling / agent config
+.claude/
+.claude-plugin/
+.codebuddy/
+.codex/
+skills/
+CLAUDE.md
+
+# Backtest scratch & spec
+scripts/backtest_*.py
+scripts/merge_backtest_data.py
+scripts/test_dark_track_backtest.py
+openspec/specs/backtest/
+
+# Generated data & analysis outputs
+data/*.csv
+data/*.pkl
+data/*.db-journal
+data/arkvol/
+ArkVol/
+
+# Root-level generated artifacts
+/*.json
+/*.csv
+/*.txt
+/*.png
+/*.html
+/*.docx
+/*.pkl
+
+# Personal documents
+/项目经历简历.md

@@ -1,0 +1,24 @@
+schema: spec-driven
+
+context: |
+  Tech stack:
+    Backend: Python 3.11+, FastAPI, uvicorn, SQLAlchemy (PostgreSQL), APScheduler
+    Frontend: React 18, TypeScript 5, Vite 5, Tailwind CSS 4, Zustand, Recharts
+    AI: DeepSeek API (deepseek-chat), langgraph
+    Database: PostgreSQL 16 (primary), SQLite (trades.db, stock_pool.db)
+    Deployment: Docker Compose (4 services: postgres, backend, piserver, frontend)
+    Market APIs: tushare, pysnowball, akshare, curl_cffi
+
+  Conventions:
+    API routes under /api/v1/ with FastAPI tags
+    Services run as daemon threads with 30s polling intervals
+    Configuration via pydantic-settings BaseSettings from .env
+    Trade execution wrapped through MarcusVNPyExecutor -> VNPy paper engine
+    Pi Server (Node.js) handles expert panel group chat, proxied through /panel
+
+  Domain:
+    A-share quantitative trading platform
+    4 background monitors: StopLoss, PositionTier, CandidatePool, LongTermPool
+    AI-powered backtest engine with DeepSeek-driven trade decisions
+    Real-time market data from multiple Chinese brokers
+    QQ Bot integration for trade notifications
