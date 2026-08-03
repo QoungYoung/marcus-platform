@@ -1398,7 +1398,6 @@ function extractReplyText(messages: any[]): string {
   for (let i = lastUserIdx + 1; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role !== 'assistant') continue;
-    // 跳过纯 tool_calls 消息（没有文本内容）
     if (typeof msg.content === 'string' && msg.content.length > 0) {
       parts.push(msg.content);
     } else if (Array.isArray(msg.content)) {
@@ -1406,7 +1405,20 @@ function extractReplyText(messages: any[]): string {
         .filter((c: any) => c.type === 'text')
         .map((c: any) => c.text)
         .join('\n');
-      if (text) parts.push(text);
+      if (text) {
+        parts.push(text);
+      } else {
+        // 回退：某些模型（如 deepseek-v4-flash）在启用 thinking 时
+        // 可能把全部输出放在 thinking block 中，text block 为空
+        const thinking = msg.content
+          .filter((c: any) => c.type === 'thinking')
+          .map((c: any) => c.thinking)
+          .join('\n');
+        if (thinking) {
+          parts.push(thinking);
+          console.log(`[PiServer] ⚠️ 从 thinking block 回退提取回复 (${thinking.length} 字)`);
+        }
+      }
     }
   }
 
