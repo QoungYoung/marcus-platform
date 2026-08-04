@@ -681,18 +681,26 @@ class GoldenPitService:
         ]
 
     def _get_status_from_db(self) -> Optional[Dict[str, Any]]:
-        """尝试从 DB 快照重建完整状态。今天数据不存在或历史不足 60 天时返回 None。"""
-        today = datetime.now().strftime("%Y-%m-%d")
-
+        """尝试从 DB 快照重建完整状态。最新快照不存在或历史不足 60 天时返回 None。"""
         try:
             from app.database import SessionLocal
             from app.models.golden_pit import GoldenPitSnapshot
 
             db = SessionLocal()
             try:
+                # 查询 DB 中最新的快照日期（而非 today），避免与 save_daily_snapshot 的 as_of 日期不匹配
+                latest_date_row = (
+                    db.query(GoldenPitSnapshot.date)
+                    .order_by(GoldenPitSnapshot.date.desc())
+                    .first()
+                )
+                if not latest_date_row:
+                    return None
+                latest_date = latest_date_row[0]
+
                 today_snaps = (
                     db.query(GoldenPitSnapshot)
-                    .filter(GoldenPitSnapshot.date == today)
+                    .filter(GoldenPitSnapshot.date == latest_date)
                     .all()
                 )
                 if not today_snaps:
@@ -721,7 +729,7 @@ class GoldenPitService:
                         absolute_triggered=(snap.greed_value or 0) < GREED_ABSOLUTE_PIT,
                         data_source=cfg.get("data_source", "arkvol"),
                         sorted_series=sorted_series,
-                        as_of=today,
+                        as_of=latest_date,
                     )
                     index_info["change_5"] = snap.change_5
                     index_info["change_20"] = snap.change_20
@@ -750,7 +758,7 @@ class GoldenPitService:
             summary = self._build_v2_summary(indices, window, confirmation, prediction)
 
             return {
-                "as_of": today,
+                "as_of": latest_date,
                 "golden_pit_window": window,
                 "indices": indices,
                 "triple_confirmation": confirmation,
