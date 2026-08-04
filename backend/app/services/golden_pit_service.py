@@ -1615,11 +1615,15 @@ class GoldenPitService:
         if turning:
             turning.sort(key=lambda x: x.get("turning_start_date") or "9999")
             leader = turning[0]
+            turning_start = leader.get("turning_start_date")
+            days_since_turning = _trading_days_between(turning_start, today_str) + 1 if turning_start else 0
             return {
                 **base,
                 "active": True,
                 "phase": "buying",
                 "start_date": window_start,
+                "turning_start_date": turning_start,
+                "days_since_turning": max(1, days_since_turning),
                 "leading_index": leader["index_name"],
                 "leading_tier": leader.get("tier"),
                 "current_day": max(1, current_day),

@@ -57,6 +57,8 @@ interface GoldenPitWindow {
   active: boolean;
   phase?: 'idle' | 'waiting' | 'buying';
   start_date: string | null;
+  turning_start_date?: string | null;
+  days_since_turning?: number;
   leading_index: string | null;
   leading_tier?: string | null;
   current_day: number;
@@ -66,6 +68,7 @@ interface GoldenPitWindow {
   resonance_multiplier?: number;
   midpoint_date: string | null;
   exit_date: string | null;
+  turning_leader_rising?: number;
 }
 
 interface TripleLayer {
@@ -330,7 +333,7 @@ function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
       <div className="gp-tl-left">
         <div className="gp-tl-title"><span className="gp-dot red" />买入窗口</div>
         <div className="gp-tl-meta">
-          <span>拐点: <b>{w.start_date}</b></span>
+          <span>拐点: <b>{w.turning_start_date || w.start_date}</b></span>
           <span>加仓节奏: <span className="gold">50% → 75% → 100%</span></span>
         </div>
         <div className="gp-stages">
@@ -342,12 +345,12 @@ function GoldenPitTimeline({ window: w }: { window: GoldenPitWindow }) {
         </div>
       </div>
       <div className="gp-tl-mid">
-        <div className="gp-tl-lead">{w.leading_index} <em>拐点确认</em>（第{w.current_day}天）</div>
-        <div className="gp-tl-lead-en">PIVOT CONFIRMED · DAY {w.current_day}</div>
+        <div className="gp-tl-lead">{w.leading_index} <em>拐点确认</em>（第{w.turning_leader_rising || w.current_day}天）</div>
+        <div className="gp-tl-lead-en">PIVOT CONFIRMED · DAY {w.turning_leader_rising || w.current_day}</div>
       </div>
       <div className="gp-tl-right">
         <ResonanceBadge pitCount={pitCount} multiplier={w.resonance_multiplier} />
-        <div className="gp-tl-back">回升: <b>{w.current_day}天</b> · 已确认: <b>{w.turning_count || 0}</b>个指数</div>
+        <div className="gp-tl-back">回升: <b>{w.turning_leader_rising || w.current_day}天</b> · 已确认: <b>{w.turning_count || 0}</b>个指数</div>
       </div>
     </section>
   );
