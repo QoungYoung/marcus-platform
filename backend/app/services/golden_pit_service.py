@@ -817,8 +817,8 @@ class GoldenPitService:
             self._cache.pop("alla-tech", None)
 
             status = self._get_status_from_api()
-            # 快照日期始终使用当前日期，不依赖 API 的 asof 字段（可能滞后）
-            today = datetime.now().strftime("%Y-%m-%d")
+            # as_of 反映数据的实际交易日，datetime.now() 仅作兜底
+            today = status["as_of"] or datetime.now().strftime("%Y-%m-%d")
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             db = SessionLocal()
