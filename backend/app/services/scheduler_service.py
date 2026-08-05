@@ -1174,7 +1174,24 @@ class SchedulerService:
         )
 
         if result.get('error') and not result.get('pi_raw_reply'):
-            raise RuntimeError(result['error'])
+            # 收集完整的上下文用于诊断
+            ctx_info = []
+            for key in (
+                'market_regime', 'style_regime', 'hard_blocked', 'block_reason',
+                'drawdown_pct', 'consecutive_losses', 'regime_violation',
+                'pi_stance', 'pi_position_limit', 'pi_raw_reply',
+            ):
+                val = result.get(key)
+                if val is not None:
+                    ctx_info.append(f"  {key}: {val}")
+            scan_len = len(result.get('scan_report_text', ''))
+            portfolio_len = len(result.get('portfolio_json', ''))
+            ctx_info.append(f"  scan_report: {scan_len} chars")
+            ctx_info.append(f"  portfolio: {portfolio_len} chars")
+
+            full_error = f"{result['error']}\n\nGraph State:\n" + "\n".join(ctx_info)
+            logger.error(f"[{execution_id}] Pi trade failed:\n{full_error}")
+            raise RuntimeError(full_error)
 
         return result['pi_raw_reply']
 

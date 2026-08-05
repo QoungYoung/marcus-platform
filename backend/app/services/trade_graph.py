@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import ssl
+import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -709,12 +710,13 @@ def _check_consecutive_losses() -> int:
         return 0
 
 
-def _call_pi(prompt: str, task_id: str, timeout: int = 600) -> str:
-    """调用 Pi Server /chat 端点"""
+def _call_pi(prompt: str, task_id: str, timeout: int = 600) -> dict:
+    """调用 Pi Server /chat 端点，返回 {reply, elapsed_ms, session_id, http_status}"""
     pi_url = _get_pi_server_url()
+    session_id = f"pi_trade_{task_id}_{datetime.now().strftime('%Y%m%d')}"
     payload = json.dumps({
         "message": prompt,
-        "session_id": f"pi_trade_{task_id}_{datetime.now().strftime('%Y%m%d')}",
+        "session_id": session_id,
         "mode": "trade",
     }).encode("utf-8")
 
@@ -724,10 +726,39 @@ def _call_pi(prompt: str, task_id: str, timeout: int = 600) -> str:
         method="POST",
     )
     ctx = ssl.create_default_context()
-    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-        return data.get("reply", "")
-    return ""
+
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+            raw_body = resp.read().decode("utf-8")
+            elapsed = (time.time() - t0) * 1000
+            data = json.loads(raw_body)
+            return {
+                "reply": data.get("reply", ""),
+                "elapsed_ms": data.get("elapsed_ms", int(elapsed)),
+                "session_id": session_id,
+                "http_status": resp.status,
+            }
+    except urllib.error.HTTPError as e:
+        elapsed = (time.time() - t0) * 1000
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        logger.error(
+            f"[Pi] HTTP {e.code} from {pi_url} ({elapsed:.0f}ms)\n"
+            f"     session={session_id}\n"
+            f"     body={error_body[:500]}"
+        )
+        raise  # re-raise to be caught by node_call_pi_decision
+    except Exception as e:
+        elapsed = (time.time() - t0) * 1000
+        logger.error(
+            f"[Pi] 连接失败 {pi_url} ({elapsed:.0f}ms): {e}\n"
+            f"     session={session_id}"
+        )
+        raise
 
 
 def _parse_signal(reply: str) -> tuple:
@@ -943,13 +974,23 @@ def node_call_pi_decision(state: TradeState) -> dict:
     )
 
     try:
-        reply = _call_pi(prompt, state['task_id'])
+        pi_result = _call_pi(prompt, state['task_id'])
     except Exception as e:
         logger.error(f"[{eid}] [Graph] Pi 调用异常: {e}")
         return {"error": f"Pi Server 调用失败: {e}"}
 
+    reply = pi_result.get("reply", "")
     if not reply or reply == '(无回复)':
-        return {"error": "Pi 未返回有效交易报告"}
+        diag = (
+            f"Pi 未返回有效交易报告\n"
+            f"  Pi Server: {_get_pi_server_url()}\n"
+            f"  Session: {pi_result.get('session_id', 'N/A')}\n"
+            f"  HTTP Status: {pi_result.get('http_status', 'N/A')}\n"
+            f"  Server Elapsed: {pi_result.get('elapsed_ms', 'N/A')}ms\n"
+            f"  Reply Preview: {reply[:200] if reply else '(empty)'}"
+        )
+        logger.error(f"[{eid}] [Graph] {diag}")
+        return {"error": diag}
 
     logger.info(f"[{eid}] [Graph] ✓ Pi 回复 ({len(reply)} chars)")
     return {"pi_raw_reply": reply}
