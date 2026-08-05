@@ -1561,7 +1561,18 @@ const server = http.createServer(async (req, res) => {
 
       const reply = extractReplyText(agent.state.messages);
       const elapsed = Date.now() - startTime;
-      
+
+      // 异常检测：正常 LLM 调用至少需要几秒，如果 < 1s 说明 prompt() 未实际调用模型
+      // 此时缓存 agent 已处于脏状态，必须清除，防止下次执行复用到它
+      if (elapsed < 1000 || reply === '(无回复)') {
+        const modeSessions = getModeSessions(chatMode);
+        modeSessions.delete(sessionId);
+        console.log(
+          `[PiServer] ⚠️ 异常回复 [${chatMode}][${sessionId.slice(-8)}] (${elapsed}ms, ${reply.length} chars) → 已清除缓存 agent\n`
+          + `  Agent state messages count: ${agent.state.messages?.length || 0}`
+        );
+      }
+
       console.log(`[PiServer] <-- 回复 [${chatMode}][${sessionId.slice(-8)}] (${elapsed}ms): ${reply.slice(0, 100)}`);
 
       jsonResponse(res, 200, {

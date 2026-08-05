@@ -713,7 +713,8 @@ def _check_consecutive_losses() -> int:
 def _call_pi(prompt: str, task_id: str, timeout: int = 600) -> dict:
     """调用 Pi Server /chat 端点，返回 {reply, elapsed_ms, session_id, http_status}"""
     pi_url = _get_pi_server_url()
-    session_id = f"pi_trade_{task_id}_{datetime.now().strftime('%Y%m%d')}"
+    # 每次执行使用唯一 session，避免复用缓存 agent 的脏状态
+    session_id = f"pi_trade_{task_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     payload = json.dumps({
         "message": prompt,
         "session_id": session_id,
