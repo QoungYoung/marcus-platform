@@ -1538,6 +1538,13 @@ const server = http.createServer(async (req, res) => {
 
       // === chat / trade 模式：单 Agent ===
       const agent = getOrCreateAgent(sessionId, chatMode, modelOverride, thinkingOverride);
+      const msgCountBefore = (agent.state.messages as any[])?.length || 0;
+      console.log(
+        `[PiServer] agent ready [${chatMode}][${sessionId.slice(-8)}] `
+        + `model=${(agent.state.model as any)?.id || '?'} `
+        + `msgs=${msgCountBefore} `
+        + `apiKey=${DEEPSEEK_API_KEY ? 'yes' : 'MISSING'}`
+      );
 
       const lockKey = `${chatMode}:${sessionId}`;
       const prevLock = locks.get(lockKey);
@@ -1551,7 +1558,12 @@ const server = http.createServer(async (req, res) => {
       locks.set(lockKey, newLock);
 
       try {
+        console.log(`[PiServer] → prompt() 开始 [${chatMode}][${sessionId.slice(-8)}] msgLen=${cleanMessage.length}`);
         await (agent as any).prompt(cleanMessage);
+        console.log(`[PiServer] ← prompt() 完成 [${chatMode}][${sessionId.slice(-8)}] msgs=${(agent.state.messages as any[])?.length}`);
+      } catch (e: any) {
+        console.error(`[PiServer] prompt() 异常 [${chatMode}][${sessionId.slice(-8)}]:`, e?.message || e);
+        throw e; // re-throw → 外层 catch 返回 500
       } finally {
         setBacktestContext(null);
         resolveLock!();
@@ -1567,9 +1579,14 @@ const server = http.createServer(async (req, res) => {
       if (elapsed < 1000 || reply === '(无回复)') {
         const modeSessions = getModeSessions(chatMode);
         modeSessions.delete(sessionId);
+        const msgSample = (agent.state.messages as any[])
+          ?.slice(-2)
+          ?.map((m: any) => `${m.role}[${typeof m.content === 'string' ? m.content.length : Array.isArray(m.content) ? m.content.map((c: any) => c.type).join(',') : '?'}]`)
+          ?.join(' → ') || 'none';
         console.log(
           `[PiServer] ⚠️ 异常回复 [${chatMode}][${sessionId.slice(-8)}] (${elapsed}ms, ${reply.length} chars) → 已清除缓存 agent\n`
-          + `  Agent state messages count: ${agent.state.messages?.length || 0}`
+          + `  msgs before→after: ${msgCountBefore}→${(agent.state.messages as any[])?.length}\n`
+          + `  last msgs: ${msgSample}`
         );
       }
 
