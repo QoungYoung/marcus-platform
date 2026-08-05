@@ -811,8 +811,14 @@ class GoldenPitService:
             from app.database import SessionLocal
             from app.models.golden_pit import GoldenPitSnapshot
 
+            # 清除缓存，确保盘前同步拿到最新 API 数据
+            self._cache.pop("ai-summary", None)
+            self._cache.pop("global-capital-flow", None)
+            self._cache.pop("alla-tech", None)
+
             status = self._get_status_from_api()
-            today = status["as_of"] or datetime.now().strftime("%Y-%m-%d")
+            # 快照日期始终使用当前日期，不依赖 API 的 asof 字段（可能滞后）
+            today = datetime.now().strftime("%Y-%m-%d")
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             db = SessionLocal()
