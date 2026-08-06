@@ -42,6 +42,9 @@ class PaperPosition(Base):
     __tablename__ = "paper_positions"
 
     symbol = Column(String(16), primary_key=True)
+    volume = Column(Integer, default=0)
+    frozen = Column(Integer, default=0)
+    avg_price = Column(Float, default=0.0)
     entry_date = Column(Text, nullable=False)
     highest_price = Column(Float, default=0.0)
     updated_at = Column(Text, nullable=False)

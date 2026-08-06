@@ -88,6 +88,10 @@ def _apply_schema_patches():
         # 2026-07: DCA v5 窗口进度追踪
         ("golden_pit_dca_log", "schedule_day", "INTEGER DEFAULT NULL"),
         ("golden_pit_dca_log", "trend_factor", "FLOAT DEFAULT NULL"),
+        # 2026-08: VN.PY paper account 持仓列缺失导致无持仓报错
+        ("paper_positions", "volume", "INTEGER DEFAULT 0"),
+        ("paper_positions", "frozen", "INTEGER DEFAULT 0"),
+        ("paper_positions", "avg_price", "DOUBLE PRECISION DEFAULT 0"),
     ]
     # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
     alter_patches = [

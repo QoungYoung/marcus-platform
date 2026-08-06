@@ -402,7 +402,10 @@ class PaperTradingEngine:
                 symbol TEXT PRIMARY KEY,
                 entry_date TEXT NOT NULL,
                 highest_price DOUBLE PRECISION DEFAULT 0.0,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                volume INTEGER DEFAULT 0,
+                frozen INTEGER DEFAULT 0,
+                avg_price DOUBLE PRECISION DEFAULT 0.0
             )
         ''')
         cursor.execute('''

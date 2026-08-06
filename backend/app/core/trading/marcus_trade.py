@@ -111,10 +111,12 @@ class MarcusVNPyExecutor:
         return self.engine.get_trades(limit=limit)
 
     def _get_positions_list(self) -> list:
-        """跨后端统一获取持仓"""
+        """跨后端统一获取持仓（优先从 VN.PY bridge，回退到 PG 计算）"""
         if self.bridge:
-            return self.bridge.get_positions()
-        return self.engine.get_positions()
+            positions = self.bridge.get_positions()
+            if positions:
+                return positions
+        return self.get_positions_from_db()
 
     def _get_pg_conn(self):
         """跨后端统一获取 PostgreSQL 连接"""
