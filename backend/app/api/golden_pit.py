@@ -42,7 +42,7 @@ async def get_golden_pit_status():
 @router.get("/history")
 async def get_golden_pit_history(
     index: str = Query("all", description="基金代码, 'all' 返回全部A股宽基"),
-    days: int = Query(60, ge=1, le=365, description="返回天数"),
+    days: int = Query(60, ge=1, le=2000, description="返回天数"),
 ):
     """获取历史贪婪值趋势数据，用于前端折线图。"""
     try:

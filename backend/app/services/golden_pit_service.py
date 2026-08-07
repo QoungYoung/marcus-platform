@@ -646,51 +646,49 @@ class GoldenPitService:
         return result
 
     def get_history(self, index: str = "all", days: int = 60) -> Dict[str, Any]:
-        """获取历史贪婪值趋势数据，用于前端折线图。优先使用 ai-summary。"""
-        ai_data = self._cached_ai_summary()
-        as_of = ai_data.get("asof", datetime.now().strftime("%Y-%m-%d"))
-        snapshot_list = ai_data.get("snapshot", [])
+        """从 DB 快照表获取历史贪婪值趋势数据，用于前端折线图。"""
+        from app.database import SessionLocal
+        from app.models.golden_pit import GoldenPitSnapshot
 
-        result_series: Dict[str, List[Dict]] = {}
-        result_indices: Dict[str, str] = {}
+        db = SessionLocal()
+        try:
+            result_series: Dict[str, List[Dict]] = {}
+            result_indices: Dict[str, str] = {}
 
-        snap_map = {s.get("fund_code", ""): s for s in snapshot_list}
+            for code, cfg in CHINA_INDICES.items():
+                if index != "all" and code != index:
+                    continue
 
-        for code, cfg in CHINA_INDICES.items():
-            if index != "all" and code != index:
-                continue
+                rows = (
+                    db.query(GoldenPitSnapshot)
+                    .filter(GoldenPitSnapshot.fund_code == code)
+                    .order_by(GoldenPitSnapshot.date.asc())
+                    .all()
+                )
+                if not rows:
+                    continue
 
-            ds = cfg.get("data_source", "arkvol")
-            if ds == "arkvol":
-                arkvol_lookup = cfg.get("arkvol_code", code)
-                snap = snap_map.get(arkvol_lookup)
-                if snap:
-                    history = snap.get("history", [])
-                    sorted_data = sorted(history, key=lambda x: x.get("date", ""))
-                    result_series[code] = sorted_data[-days:] if len(sorted_data) > days else sorted_data
-                    result_indices[code] = cfg["name"]
-            elif ds == "pi_server":
-                etf_code = cfg.get("etf_code", "")
-                if etf_code:
-                    bars = self._fetch_pi_server_kline(etf_code, limit=days + 30)
-                    if bars:
-                        closes_120 = [float(b.get("close", 0)) for b in bars[-120:]] if len(bars) >= 120 else [float(b.get("close", 0)) for b in bars]
-                        series = [
-                            {
-                                "date": b.get("date", ""),
-                                "greed": self._price_based_greed(float(b.get("close", 0)), closes_120),
-                                "close": float(b.get("close", 0)),
-                            }
-                            for b in bars
-                        ]
-                        result_series[code] = series[-days:] if len(series) > days else series
-                        result_indices[code] = cfg["name"]
+                series = [
+                    {
+                        "date": r.date,
+                        "greed": round(r.greed_value, 4),
+                        "close": round(r.close_price, 4) if r.close_price else 0,
+                    }
+                    for r in rows
+                ]
+                result_series[code] = series[-days:] if len(series) > days else series
+                result_indices[code] = cfg["name"]
 
-        return {
-            "as_of": as_of,
-            "series": result_series,
-            "indices": result_indices,
-        }
+            latest_dates = {r["date"] for s in result_series.values() for r in s}
+            as_of = max(latest_dates) if latest_dates else datetime.now().strftime("%Y-%m-%d")
+
+            return {
+                "as_of": as_of,
+                "series": result_series,
+                "indices": result_indices,
+            }
+        finally:
+            db.close()
 
     def _reconstruct_series_from_db(self, db, fund_code: str, days: int = 120) -> List[Dict]:
         """从 DB 快照重建 sorted_series，格式兼容 _build_index_info。"""
@@ -834,8 +832,84 @@ class GoldenPitService:
             logger.warning("读取黄金坑快照失败: %s", e)
             return []
 
+    def sync_full_series_to_db(self) -> int:
+        """从 ArkVol 全量接口拉取历史序列，批量写入 GoldenPitSnapshot。
+
+        每日盘前调用，确保 DB 中始终有完整历史（日频更新）。查询已有的
+        (date, fund_code) 对去重，只插入新记录。
+        """
+        try:
+            from app.database import SessionLocal
+            from app.models.golden_pit import GoldenPitSnapshot
+
+            full_data = self._arkvol.fetch_full_series()
+            series_data = full_data.get("data", {})
+            if not series_data:
+                logger.warning("ArkVol 全量 series 返回空数据")
+                return 0
+
+            arkvol_map = self._arkvol_code_map()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            db = SessionLocal()
+            total_inserted = 0
+            try:
+                for arkvol_code, rows in series_data.items():
+                    config_key = arkvol_map.get(arkvol_code)
+                    if config_key is None:
+                        continue
+                    cfg = CHINA_INDICES[config_key]
+                    index_name = cfg["name"]
+
+                    dates = [r.get("date", "") for r in rows if r.get("date")]
+                    if not dates:
+                        continue
+
+                    # 查询已存在的 (date, fund_code) 对，避免重复插入
+                    existing = set(
+                        row[0] for row in
+                        db.query(GoldenPitSnapshot.date)
+                        .filter(
+                            GoldenPitSnapshot.fund_code == config_key,
+                            GoldenPitSnapshot.date.in_(dates),
+                        )
+                        .all()
+                    )
+
+                    new_rows = []
+                    for row in rows:
+                        date = row.get("date", "")
+                        if not date or date in existing:
+                            continue
+                        new_rows.append({
+                            "date": date,
+                            "fund_code": config_key,
+                            "index_name": index_name,
+                            "greed_value": float(row.get("greed", 0)),
+                            "close_price": float(row.get("close", 0)) if row.get("close") else None,
+                            "status": "normal",
+                            "created_at": now,
+                        })
+
+                    if new_rows:
+                        db.execute(
+                            GoldenPitSnapshot.__table__.insert(),
+                            new_rows,
+                        )
+                        total_inserted += len(new_rows)
+
+                db.commit()
+                logger.info("全量历史序列已同步: %d 条新增, %d 个指数",
+                            total_inserted, len(series_data))
+            finally:
+                db.close()
+            return total_inserted
+        except Exception as e:
+            logger.error("同步全量历史序列失败: %s", e)
+            return 0
+
     def save_daily_snapshot(self) -> List[Any]:
-        """保存每日快照到数据库。"""
+        """保存每日快照到数据库。先同步全量历史序列，再写入当天状态快照。"""
         try:
             from app.database import SessionLocal
             from app.models.golden_pit import GoldenPitSnapshot
@@ -845,8 +919,11 @@ class GoldenPitService:
             self._cache.pop("global-capital-flow", None)
             self._cache.pop("alla-tech", None)
 
+            # 1. 同步全量历史序列（日频更新，增量写入）
+            self.sync_full_series_to_db()
+
+            # 2. 写入当天带状态/百分位的快照
             status = self._get_status_from_api()
-            # as_of 反映数据的实际交易日，datetime.now() 仅作兜底
             today = status["as_of"] or datetime.now().strftime("%Y-%m-%d")
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

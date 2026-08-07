@@ -29,6 +29,8 @@ POST_ENDPOINTS = {
     "ai-summary": "/api/funds-greed/alla/ai-summary",
 }
 
+FULL_SERIES_ENDPOINT = "/api/funds-greed/alla/series?range=full"
+
 
 class ArkvolServiceError(RuntimeError):
     pass
@@ -153,3 +155,35 @@ class ArkvolService:
         ai-summary 直接返回 {asof, conclusion, snapshot}，无 {code, msg, data} 包装。
         """
         return _request_post_json(self.api_key, POST_ENDPOINTS["ai-summary"])
+
+    def fetch_full_series(self) -> Dict[str, Any]:
+        """获取全量历史序列（GET，日频更新）。
+        返回 {success, from_cache, start_date, data: {fund_code: [{date, greed, close}]}}。
+        全量接口无 {code, msg, data} 包装，使用独立请求逻辑。
+        """
+        url = f"{ARKVOL_BASE_URL}{FULL_SERIES_ENDPOINT}"
+        req = Request(url, headers={
+            "X-API-Key": self.api_key,
+            "Accept": "application/json",
+        }, method="GET")
+
+        try:
+            with urlopen(req, timeout=60) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except HTTPError as exc:
+            try:
+                body = json.loads(exc.read().decode("utf-8"))
+            except Exception:
+                body = {}
+            msg = body.get("msg", "")
+            if exc.code in (401, 403):
+                raise ArkvolServiceError(msg or f"ArkVol API Key 无效或无权访问 (HTTP {exc.code})") from exc
+            raise ArkvolServiceError(msg or f"ArkVol 返回 HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise ArkvolServiceError(f"无法连接 ArkVol: {exc.reason}") from exc
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ArkvolServiceError("ArkVol 返回数据无法解析") from exc
+
+        if not isinstance(payload, dict) or not payload.get("success"):
+            raise ArkvolServiceError("ArkVol 全量 series 返回异常")
+        return payload
