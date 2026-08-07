@@ -898,10 +898,6 @@ export default function GoldenPitPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  useEffect(() => {
-    fetchData();
   }, [historyDays]);
 
   useEffect(() => {
