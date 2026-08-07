@@ -330,8 +330,7 @@ class SchedulerService:
             'auto_trade_late_morning',
             'auto_trade_afternoon', 'auto_trade_closing',
             'daily_review', 'weekly_reflect',
-            'golden_pit_morning', 'golden_pit_snapshot', 'golden_pit_sync_pre_market',
-            'golden_pit_dca',
+            'golden_pit_morning', 'golden_pit_dca',
         }
         if task_id in TRADE_DAY_ONLY_TASKS:
             try:
