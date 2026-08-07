@@ -126,6 +126,18 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "dca_strategy": "lump_entry", "dca_fallback": 5,
                "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 10,
                "buy_time": "09:36"},
+    # ═══ 卫星 (选做) — 海外指数 ═══
+    # 韩国KOSPI: ArkVol 贪婪值来自 019455, ETF 交易代码 513310
+    # adjCAGR +21%, Win 92%, 12 trades (pit=0.42), 仅660天数据 → satellite
+    "513310": {"name": "韩国KOSPI", "priority": 11, "data_source": "arkvol", "tier": "satellite",
+               "arkvol_code": "019455",
+               "signal_quality": "good", "exp_15d": 8.0, "exp_20d": 12.0, "position_weight": 0.10,
+               "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
+               "pit_greed": 0.380, "entry_greed": 0.440, "entry_offset": 0,
+               "turning_days": 0, "position_multiplier": 1.0, "pre_turn_cap": 0.08,
+               "dca_strategy": "lump_entry", "dca_fallback": 15,
+               "exit_full_pct": 60, "exit_half_pct": 99, "exit_fallback_days": 40,
+               "buy_time": "09:36"},
     # ═══ 观察 (仅预警) ═══
     "562660": {"name": "中证2000", "priority": 1, "data_source": "arkvol", "tier": "watch",
                "signal_quality": "inferred", "exp_15d": None, "exp_20d": None, "position_weight": 0.0,
@@ -571,20 +583,36 @@ class GoldenPitService:
             "global_macro": global_macro,
         }
 
+    @staticmethod
+    def _arkvol_code_map() -> Dict[str, str]:
+        """构建 ArkVol fund_code → CHINA_INDICES key 的映射。
+
+        支持 arkvol_code 字段: 当配置中 data_source="arkvol" 且指定了 arkvol_code 时，
+        ArkVol API 返回的 fund_code 与 CHINA_INDICES 的 key 不同，需要映射。
+        例如: 513310 (ETF) → ArkVol 019455 (韩国指数)
+        """
+        mapping = {}
+        for key, cfg in CHINA_INDICES.items():
+            if cfg.get("data_source") == "arkvol":
+                arkvol_key = cfg.get("arkvol_code", key)
+                mapping[arkvol_key] = key
+        return mapping
+
     def _extract_from_ai_summary(self, ai_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """从 ai-summary 返回的 snapshot 数组重建指数状态。"""
-        arkvol_codes = {code for code, cfg in CHINA_INDICES.items() if cfg.get("data_source") == "arkvol"}
+        arkvol_map = self._arkvol_code_map()  # ArkVol fund_code → config key
         snapshot_list = ai_data.get("snapshot", [])
         as_of = ai_data.get("asof", "")
 
         result = []
         seen_codes = set()
         for snap in snapshot_list:
-            code = str(snap.get("fund_code", ""))
-            seen_codes.add(code)
-            if code not in arkvol_codes:
+            snap_code = str(snap.get("fund_code", ""))
+            seen_codes.add(snap_code)
+            if snap_code not in arkvol_map:
                 continue
-            cfg = CHINA_INDICES[code]
+            config_key = arkvol_map[snap_code]
+            cfg = CHINA_INDICES[config_key]
 
             history = snap.get("history", [])
             sorted_series = sorted(history, key=lambda x: x.get("date", ""))
@@ -601,7 +629,7 @@ class GoldenPitService:
             absolute_triggered = current_greed < GREED_ABSOLUTE_PIT
 
             index_info = self._build_index_info(
-                code=code, cfg=cfg, value=current_greed, close=0,
+                code=config_key, cfg=cfg, value=current_greed, close=0,
                 percentile=percentile, decline_rate=decline_rate,
                 status=status, absolute_triggered=absolute_triggered,
                 data_source="arkvol", sorted_series=sorted_series,
@@ -611,7 +639,7 @@ class GoldenPitService:
             index_info["change_20"] = round(change_20, 4)
             result.append(index_info)
 
-        missing = arkvol_codes - seen_codes
+        missing = set(arkvol_map.keys()) - seen_codes
         if missing:
             logger.warning("ai-summary 未返回以下基金代码 (已配置但缺失): %s", missing)
 
@@ -634,7 +662,8 @@ class GoldenPitService:
 
             ds = cfg.get("data_source", "arkvol")
             if ds == "arkvol":
-                snap = snap_map.get(code)
+                arkvol_lookup = cfg.get("arkvol_code", code)
+                snap = snap_map.get(arkvol_lookup)
                 if snap:
                     history = snap.get("history", [])
                     sorted_data = sorted(history, key=lambda x: x.get("date", ""))
@@ -1077,15 +1106,19 @@ class GoldenPitService:
 
     def _extract_arkvol_indices(self, alla_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """从 ArkVol alla 数据提取贪婪值驱动的指数状态。"""
-        arkvol_codes = {code for code, cfg in CHINA_INDICES.items() if cfg.get("data_source") == "arkvol"}
+        # 构建映射: ArkVol fund_code → (config_key, config)
+        arkvol_map = self._arkvol_code_map()
+        config_by_arkvol = {}
+        for arkvol_key, config_key in arkvol_map.items():
+            config_by_arkvol[arkvol_key] = (config_key, CHINA_INDICES[config_key])
 
         # 当前快照
         items = alla_data.get("items", [])
         current_map: Dict[str, Dict] = {}
         for item in items:
-            code = item.get("fund_code", "")
-            if code in arkvol_codes:
-                current_map[code] = {
+            arkvol_code = item.get("fund_code", "")
+            if arkvol_code in arkvol_map:
+                current_map[arkvol_code] = {
                     "greed": float(item.get("greed", 0)),
                     "close": float(item.get("close", 0)),
                 }
@@ -1094,13 +1127,12 @@ class GoldenPitService:
         series_data = alla_data.get("original_page_data", {}).get("series", {}).get("data", {})
 
         result = []
-        for code in arkvol_codes:
-            cfg = CHINA_INDICES[code]
-            current = current_map.get(code, {})
+        for arkvol_code, (config_key, cfg) in config_by_arkvol.items():
+            current = current_map.get(arkvol_code, {})
             greed = current.get("greed", 0.0)
             close = current.get("close", 0.0)
 
-            raw_series = series_data.get(code, [])
+            raw_series = series_data.get(arkvol_code, [])
             sorted_series = sorted(raw_series, key=lambda x: x.get("date", ""))
 
             percentile = self._calculate_percentile(greed, sorted_series)
@@ -1112,7 +1144,7 @@ class GoldenPitService:
             data_source = "arkvol_greed"
 
             index_info = self._build_index_info(
-                code=code, cfg=cfg, value=greed, close=close,
+                code=config_key, cfg=cfg, value=greed, close=close,
                 percentile=percentile, decline_rate=decline_rate,
                 status=status, absolute_triggered=absolute_triggered,
                 data_source=data_source, sorted_series=sorted_series,
