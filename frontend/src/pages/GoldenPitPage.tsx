@@ -851,6 +851,7 @@ export default function GoldenPitPage() {
   const [showChart, setShowChart] = useState(true);
   const [visibleCodes, setVisibleCodes] = useState<Set<string>>(new Set());
   const [chartTab, setChartTab] = useState<'greed' | 'share'>('greed');
+  const [historyDays, setHistoryDays] = useState(60);
   const [shareVisibleCodes, setShareVisibleCodes] = useState<Set<string>>(new Set());
   const [headerCollapsed, setHeaderCollapsed] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -858,13 +859,14 @@ export default function GoldenPitPage() {
 
   const displayConfig = useDisplayConfig();
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (days?: number) => {
+    const d = days ?? historyDays;
     setLoading(true);
     setError(null);
     try {
       const [statusRes, historyRes] = await Promise.all([
         goldenPitApi.getStatus(),
-        goldenPitApi.getHistory('all', 60),
+        goldenPitApi.getHistory('all', d),
       ]);
       if (statusRes.data?.code === 0) {
         const s = statusRes.data.data;
@@ -900,7 +902,11 @@ export default function GoldenPitPage() {
 
   useEffect(() => {
     fetchData();
-    const timer = setInterval(fetchData, 5 * 60 * 1000);
+  }, [historyDays]);
+
+  useEffect(() => {
+    fetchData();
+    const timer = setInterval(() => fetchData(), 5 * 60 * 1000);
     return () => clearInterval(timer);
   }, [fetchData]);
 
@@ -930,7 +936,7 @@ export default function GoldenPitPage() {
           <p>数据获取失败</p>
           <p className="gp-error-detail">{error}</p>
           <p className="gp-error-hint">请确认已配置 ArkVol API Key（环境变量 ARKVOL_API_KEY 或 ~/.arkvol/arkvol-entry.json）</p>
-          <button className="gp-retry-btn" onClick={fetchData}>
+          <button className="gp-retry-btn" onClick={() => fetchData()}>
             <RefreshCw size={16} /> 重试
           </button>
         </div>
@@ -948,7 +954,7 @@ export default function GoldenPitPage() {
           </div>
           <div className="gp-error">
             <p>暂无数据</p>
-            <button className="gp-retry-btn" onClick={fetchData}>
+            <button className="gp-retry-btn" onClick={() => fetchData()}>
               <RefreshCw size={16} /> 刷新
             </button>
           </div>
@@ -976,7 +982,7 @@ export default function GoldenPitPage() {
           {!headerCollapsed && (
             <>
               <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
-              <button className="gp-refresh-btn" onClick={fetchData} title="刷新数据">
+              <button className="gp-refresh-btn" onClick={() => fetchData()} title="刷新数据">
                 <RefreshCw size={16} />
               </button>
             </>
@@ -1046,7 +1052,43 @@ export default function GoldenPitPage() {
                 </div>
               </div>
               {showChart && chartTab === 'greed' && (
-                <TrendChart
+                <>
+                  <div className="gp-range-controls">
+                    <div className="gp-range-quick">
+                      {[30, 90, 180, 365, 2000].map((d) => (
+                        <button
+                          key={d}
+                          className={`gp-range-chip ${historyDays === d ? 'active' : ''}`}
+                          onClick={() => setHistoryDays(d)}
+                        >
+                          {d >= 2000 ? '全部' : `${d}天`}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="gp-range-slider-wrap">
+                      <input
+                        type="range"
+                        className="gp-range-slider"
+                        min={14}
+                        max={2000}
+                        step={1}
+                        value={historyDays}
+                        onChange={(e) => setHistoryDays(Number(e.target.value))}
+                      />
+                      <span className="gp-range-label">
+                        {historyDays >= 2000 ? '全部数据' : `最近 ${historyDays} 天`}
+                        {trendData?.series && Object.values(trendData.series)[0] && (
+                          <span className="gp-range-hint">
+                            {' '}· {(() => {
+                              const s = Object.values(trendData.series)[0];
+                              return `${s[0]?.date || '?'} ~ ${s[s.length-1]?.date || '?'}`;
+                            })()}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                  <TrendChart
                   trendData={trendData}
                   visibleCodes={visibleCodes}
                   onToggleCode={(code) => {
@@ -1067,6 +1109,7 @@ export default function GoldenPitPage() {
                   minPitGreed={sortedIndices.length > 0 ? Math.min(...sortedIndices.map(i => i.pit_greed).filter((v): v is number => v != null)) : undefined}
                   minEntryGreed={sortedIndices.length > 0 ? Math.min(...sortedIndices.map(i => i.entry_greed).filter((v): v is number => v != null)) : undefined}
                 />
+                </>
               )}
               {showChart && chartTab === 'share' && (
                 <ShareHistoryChart
