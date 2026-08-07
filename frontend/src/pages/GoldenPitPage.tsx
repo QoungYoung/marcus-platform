@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine,
+  ResponsiveContainer, ReferenceLine, Brush,
 } from 'recharts';
 import { goldenPitApi } from '../api/client';
 import '../styles/golden-pit-page.css';
@@ -679,7 +679,7 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
         const yMin = Math.max(0.15, Math.min(pitRef - 0.05, dataMin));
         const yMax = Math.min(0.95, Math.max(dataMax + 0.05, 0.50));
         return (
-        <ResponsiveContainer width="100%" height={260}>
+        <ResponsiveContainer width="100%" height={300}>
           <LineChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#d4e7f9" vertical={false} />
             <XAxis
@@ -720,6 +720,13 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
                 activeDot={{ r: 3, strokeWidth: 1.5, stroke: '#fff' }}
               />
             ))}
+            <Brush
+              dataKey="date"
+              height={28}
+              stroke="#2f7cd3"
+              fill="rgba(47,124,211,0.06)"
+              tickFormatter={(v: string) => v.slice(5)}
+            />
           </LineChart>
         </ResponsiveContainer>
         );
@@ -1049,40 +1056,16 @@ export default function GoldenPitPage() {
               </div>
               {showChart && chartTab === 'greed' && (
                 <>
-                  <div className="gp-range-controls">
-                    <div className="gp-range-quick">
-                      {[30, 90, 180, 365, 2000].map((d) => (
-                        <button
-                          key={d}
-                          className={`gp-range-chip ${historyDays === d ? 'active' : ''}`}
-                          onClick={() => setHistoryDays(d)}
-                        >
-                          {d >= 2000 ? '全部' : `${d}天`}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="gp-range-slider-wrap">
-                      <input
-                        type="range"
-                        className="gp-range-slider"
-                        min={14}
-                        max={2000}
-                        step={1}
-                        value={historyDays}
-                        onChange={(e) => setHistoryDays(Number(e.target.value))}
-                      />
-                      <span className="gp-range-label">
-                        {historyDays >= 2000 ? '全部数据' : `最近 ${historyDays} 天`}
-                        {trendData?.series && Object.values(trendData.series)[0] && (
-                          <span className="gp-range-hint">
-                            {' '}· {(() => {
-                              const s = Object.values(trendData.series)[0];
-                              return `${s[0]?.date || '?'} ~ ${s[s.length-1]?.date || '?'}`;
-                            })()}
-                          </span>
-                        )}
-                      </span>
-                    </div>
+                  <div className="gp-range-quick">
+                    {[30, 90, 180, 365, 2000].map((d) => (
+                      <button
+                        key={d}
+                        className={`gp-range-chip ${historyDays === d ? 'active' : ''}`}
+                        onClick={() => setHistoryDays(d)}
+                      >
+                        {d >= 2000 ? '全部' : `${d}天`}
+                      </button>
+                    ))}
                   </div>
                   <TrendChart
                   trendData={trendData}

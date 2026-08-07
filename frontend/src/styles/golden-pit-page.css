@@ -1025,22 +1025,12 @@
   min-height: 120px;
 }
 
-/* ── 时间范围控件 ── */
-.gp-range-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px 4px;
-  flex-wrap: wrap;
-}
-
+/* ── 时间范围快捷切换 ── */
 .gp-range-quick {
   display: flex;
   gap: 3px;
-  background: rgba(47, 124, 211, 0.06);
-  border: 1px solid var(--gp-line-soft);
-  border-radius: 5px;
-  padding: 2px;
+  padding: 6px 12px 0;
+  background: none;
   flex: none;
 }
 
@@ -1049,69 +1039,21 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--gp-muted);
-  background: none;
-  border: none;
-  border-radius: 4px;
+  background: rgba(47, 124, 211, 0.04);
+  border: 1px solid var(--gp-line-soft);
+  border-radius: 5px;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
 }
 
-.gp-range-chip:hover { color: var(--gp-ink); }
+.gp-range-chip:hover { color: var(--gp-ink); border-color: var(--gp-blue-soft); }
 
 .gp-range-chip.active {
-  background: #fff;
-  color: var(--gp-blue);
-  box-shadow: 0 1px 3px rgba(47, 124, 211, 0.18);
-}
-
-.gp-range-slider-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 160px;
-}
-
-.gp-range-slider {
-  flex: 1;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: var(--gp-line-soft);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-
-.gp-range-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
   background: var(--gp-blue);
-  border: 2px solid #fff;
-  box-shadow: 0 1px 4px rgba(47, 124, 211, 0.35);
-  cursor: pointer;
-  transition: transform 0.1s;
-}
-
-.gp-range-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
-}
-
-.gp-range-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--gp-muted);
-  white-space: nowrap;
-  flex: none;
-}
-
-.gp-range-hint {
-  color: var(--gp-faint);
-  font-weight: 400;
+  border-color: var(--gp-blue);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(47, 124, 211, 0.3);
 }
 
 /* ── 筛选胶囊 ── */
