@@ -51,6 +51,8 @@ interface IndexStatus {
   eta_date: string | null;
   entry_date: string | null;
   days_in_pit: number | null;
+  arkvol_greed?: number | null;
+  price_percentile?: number | null;
 }
 
 interface GoldenPitWindow {
@@ -139,6 +141,7 @@ interface DisplayConfig {
   exit_labels: Record<string, string>;
   trend_icons: Record<string, string>;
   trend_colors: Record<string, string>;
+  tier_labels: Record<string, string>;
 }
 
 let _cachedDisplayConfig: DisplayConfig | null = null;
@@ -159,6 +162,7 @@ async function fetchDisplayConfig(): Promise<DisplayConfig> {
     exit_labels: { half_exit: '减持 50%', full_exit: '清仓', stop_profit: '止盈', fallback_exit: '兜底退出' },
     trend_icons: { declining: '↓', bottoming: '→', recovering: '↑' },
     trend_colors: { declining: '#e5484d', bottoming: '#c98a12', recovering: '#27a06b' },
+    tier_labels: { core: '核心', satellite: '卫星', defense: '防御', defense_rotation: '防御轮动', semi_boost: '半导体增强', watch: '观察', drop: '放弃' },
   };
 }
 
@@ -170,6 +174,9 @@ function useDisplayConfig() {
 
 // 与整体蓝色科幻主题协调的序列色板
 const INDEX_COLORS = ['#2f7cd3', '#e5484d', '#c98a12', '#27a06b', '#7c5cd6', '#0e9db8'];
+
+// 板块级指数（防御轮动 + 半导体增强），展示在宽基指数状态下方
+const SECTOR_TIERS = new Set(['defense_rotation', 'semi_boost']);
 
 
 const GLOBAL_TREND_LABELS: Record<string, string> = {
@@ -478,7 +485,7 @@ function CapitalFlowPanel({ macro }: { macro: GlobalMacro }) {
   );
 }
 
-function IndexStatusCard({ idx, displayConfig }: { idx: IndexStatus; displayConfig: DisplayConfig | null }) {
+function IndexStatusCard({ idx, displayConfig, tierLabel }: { idx: IndexStatus; displayConfig: DisplayConfig | null; tierLabel?: string }) {
   const statusColors = displayConfig?.status_colors || { normal: '#27a06b', warning: '#c98a12', golden_pit: '#e5484d' };
   const statusLabels = displayConfig?.status_labels || { normal: '正常', warning: '预警', golden_pit: '黄金坑' };
   const trendIcons = displayConfig?.trend_icons || { declining: '↓', bottoming: '→', recovering: '↑' };
@@ -504,6 +511,7 @@ function IndexStatusCard({ idx, displayConfig }: { idx: IndexStatus; displayConf
             <span className="gp-divergent-icon" title={idx.turning_validation_reason || '全球趋势背离'}><IconWarn /></span>
           )}
           {sqIcon}{idx.index_name}
+          {tierLabel && <span className="gp-index-tier">{tierLabel}</span>}
           {weightPct && (
             <span className="gp-index-weight" title="仓位上限">上限{weightPct}</span>
           )}
@@ -857,9 +865,10 @@ export default function GoldenPitPage() {
   const [error, setError] = useState<string | null>(null);
   const [showChart, setShowChart] = useState(true);
   const [visibleCodes, setVisibleCodes] = useState<Set<string>>(new Set());
-  const [chartTab, setChartTab] = useState<'greed' | 'share'>('greed');
+  const [chartTab, setChartTab] = useState<'greed' | 'sector' | 'share'>('greed');
   const [historyDays, setHistoryDays] = useState(60);
   const [shareVisibleCodes, setShareVisibleCodes] = useState<Set<string>>(new Set());
+  const [sectorVisibleCodes, setSectorVisibleCodes] = useState<Set<string>>(new Set());
   const [headerCollapsed, setHeaderCollapsed] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
@@ -875,12 +884,14 @@ export default function GoldenPitPage() {
         goldenPitApi.getStatus(),
         goldenPitApi.getHistory('all', d),
       ]);
+      let sectorCodes: string[] = [];
       if (statusRes.data?.code === 0) {
-        const s = statusRes.data.data;
+        const s = statusRes.data.data as GoldenPitStatus;
         setStatus(s);
+        sectorCodes = (s?.indices ?? []).filter((i) => SECTOR_TIERS.has(i.tier ?? '')).map((i) => i.fund_code);
         // Initialize share visible codes from share_history on first load
         const sh = s?.global_macro?.capital_flow?.share_history;
-        if (sh?.length > 0) {
+        if (sh && sh.length > 0) {
           setShareVisibleCodes((prev) => {
             if (prev.size === 0) {
               const keys = Object.keys(sh[0]).filter((k) => k !== 'date');
@@ -896,7 +907,9 @@ export default function GoldenPitPage() {
         const td = historyRes.data.data;
         setTrendData(td);
         if (td?.series) {
-          setVisibleCodes((prev) => prev.size === 0 ? new Set(Object.keys(td.series)) : prev);
+          const sectorSet = new Set(sectorCodes);
+          setVisibleCodes((prev) => prev.size === 0 ? new Set(Object.keys(td.series).filter((c) => !sectorSet.has(c))) : prev);
+          setSectorVisibleCodes((prev) => prev.size === 0 ? sectorSet : prev);
         }
       }
     } catch (e: any) {
@@ -968,6 +981,41 @@ export default function GoldenPitPage() {
 
   const { golden_pit_window: window, indices, triple_confirmation: conf, prediction, summary, as_of, global_macro } = status;
   const sortedIndices = [...indices].sort((a, b) => a.priority - b.priority);
+  const sectorIndices = sortedIndices.filter((i) => SECTOR_TIERS.has(i.tier ?? ''));
+  const broadIndices = sortedIndices.filter((i) => !SECTOR_TIERS.has(i.tier ?? ''));
+  const sectorCodeSet = new Set(sectorIndices.map((i) => i.fund_code));
+
+  // 贪婪趋势数据按宽基/板块拆分（板块序列同样来自 /golden-pit/history 的 all 数据）
+  const filterTrend = (keep: (code: string) => boolean): TrendData | null =>
+    trendData ? {
+      ...trendData,
+      series: Object.fromEntries(Object.entries(trendData.series).filter(([code]) => keep(code))),
+      indices: Object.fromEntries(Object.entries(trendData.indices).filter(([code]) => keep(code))),
+    } : null;
+  const broadTrendData = filterTrend((code) => !sectorCodeSet.has(code));
+  const sectorTrendData = filterTrend((code) => sectorCodeSet.has(code));
+
+  const minOf = (list: IndexStatus[], key: 'pit_greed' | 'entry_greed') => list.length > 0
+    ? Math.min(...list.map((i) => i[key]).filter((v): v is number => v != null))
+    : undefined;
+  const broadMinPit = minOf(broadIndices, 'pit_greed');
+  const broadMinEntry = minOf(broadIndices, 'entry_greed');
+  const sectorMinPit = minOf(sectorIndices, 'pit_greed');
+  const sectorMinEntry = minOf(sectorIndices, 'entry_greed');
+
+  const rangeQuick = (
+    <div className="gp-range-quick">
+      {[30, 90, 180, 365, 2000].map((d) => (
+        <button
+          key={d}
+          className={`gp-range-chip ${historyDays === d ? 'active' : ''}`}
+          onClick={() => setHistoryDays(d)}
+        >
+          {d >= 2000 ? '全部' : `${d}天`}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="golden-pit-page">
@@ -1022,29 +1070,53 @@ export default function GoldenPitPage() {
 
             <section className="gp-panel gp-section">
               <div className="gp-panel-head">
-                <span className="gp-tick" /><h2>宽基指数状态</h2><span className="gp-en">SECTOR STATUS</span>
+                <span className="gp-tick" /><h2>宽基指数状态</h2><span className="gp-en">BROAD INDEX STATUS</span>
               </div>
               <div className="gp-index-grid">
-                {sortedIndices.map((idx) => (
+                {broadIndices.map((idx) => (
                   <IndexStatusCard key={idx.fund_code} idx={idx} displayConfig={displayConfig} />
                 ))}
               </div>
             </section>
 
+            {sectorIndices.length > 0 && (
+              <section className="gp-panel gp-section">
+                <div className="gp-panel-head">
+                  <span className="gp-tick" /><h2>板块指数状态</h2><span className="gp-en">SECTOR ROTATION</span>
+                </div>
+                <div className="gp-index-grid">
+                  {sectorIndices.map((idx) => (
+                    <IndexStatusCard
+                      key={idx.fund_code}
+                      idx={idx}
+                      displayConfig={displayConfig}
+                      tierLabel={displayConfig?.tier_labels?.[idx.tier ?? '']}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
             <section className="gp-panel gp-chart-section">
               <div className="gp-panel-head">
                 <span className="gp-tick" />
                 <button className="gp-chart-toggle" onClick={() => setShowChart(!showChart)}>
-                  <h2>{chartTab === 'greed' ? '贪婪值趋势' : '全球资金份额'}</h2>
+                  <h2>{chartTab === 'greed' ? '贪婪值趋势' : chartTab === 'sector' ? '板块贪婪值趋势' : '全球资金份额'}</h2>
                   {showChart ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
-                <span className="gp-en">{chartTab === 'greed' ? 'GREED TREND' : 'CAPITAL SHARE'}</span>
+                <span className="gp-en">{chartTab === 'greed' ? 'GREED TREND' : chartTab === 'sector' ? 'SECTOR GREED TREND' : 'CAPITAL SHARE'}</span>
                 <div className="gp-chart-tabs">
                   <button
                     className={`gp-chart-tab ${chartTab === 'greed' ? 'active' : ''}`}
                     onClick={() => setChartTab('greed')}
                   >
                     贪婪值
+                  </button>
+                  <button
+                    className={`gp-chart-tab ${chartTab === 'sector' ? 'active' : ''}`}
+                    onClick={() => setChartTab('sector')}
+                  >
+                    板块
                   </button>
                   <button
                     className={`gp-chart-tab ${chartTab === 'share' ? 'active' : ''}`}
@@ -1056,38 +1128,54 @@ export default function GoldenPitPage() {
               </div>
               {showChart && chartTab === 'greed' && (
                 <>
-                  <div className="gp-range-quick">
-                    {[30, 90, 180, 365, 2000].map((d) => (
-                      <button
-                        key={d}
-                        className={`gp-range-chip ${historyDays === d ? 'active' : ''}`}
-                        onClick={() => setHistoryDays(d)}
-                      >
-                        {d >= 2000 ? '全部' : `${d}天`}
-                      </button>
-                    ))}
-                  </div>
+                  {rangeQuick}
                   <TrendChart
-                  trendData={trendData}
-                  visibleCodes={visibleCodes}
-                  onToggleCode={(code) => {
-                    setVisibleCodes((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(code)) next.delete(code); else next.add(code);
-                      return next;
-                    });
-                  }}
-                  onToggleAll={() => {
-                    setVisibleCodes((prev) => {
-                      if (!trendData?.series) return prev;
-                      const all = Object.keys(trendData.series);
-                      const allSelected = all.every((c) => prev.has(c));
-                      return allSelected ? new Set() : new Set(all);
-                    });
-                  }}
-                  minPitGreed={sortedIndices.length > 0 ? Math.min(...sortedIndices.map(i => i.pit_greed).filter((v): v is number => v != null)) : undefined}
-                  minEntryGreed={sortedIndices.length > 0 ? Math.min(...sortedIndices.map(i => i.entry_greed).filter((v): v is number => v != null)) : undefined}
-                />
+                    trendData={broadTrendData}
+                    visibleCodes={visibleCodes}
+                    onToggleCode={(code) => {
+                      setVisibleCodes((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(code)) next.delete(code); else next.add(code);
+                        return next;
+                      });
+                    }}
+                    onToggleAll={() => {
+                      setVisibleCodes((prev) => {
+                        if (!broadTrendData?.series) return prev;
+                        const all = Object.keys(broadTrendData.series);
+                        const allSelected = all.every((c) => prev.has(c));
+                        return allSelected ? new Set() : new Set(all);
+                      });
+                    }}
+                    minPitGreed={broadMinPit}
+                    minEntryGreed={broadMinEntry}
+                  />
+                </>
+              )}
+              {showChart && chartTab === 'sector' && (
+                <>
+                  {rangeQuick}
+                  <TrendChart
+                    trendData={sectorTrendData}
+                    visibleCodes={sectorVisibleCodes}
+                    onToggleCode={(code) => {
+                      setSectorVisibleCodes((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(code)) next.delete(code); else next.add(code);
+                        return next;
+                      });
+                    }}
+                    onToggleAll={() => {
+                      setSectorVisibleCodes((prev) => {
+                        if (!sectorTrendData?.series) return prev;
+                        const all = Object.keys(sectorTrendData.series);
+                        const allSelected = all.every((c) => prev.has(c));
+                        return allSelected ? new Set() : new Set(all);
+                      });
+                    }}
+                    minPitGreed={sectorMinPit}
+                    minEntryGreed={sectorMinEntry}
+                  />
                 </>
               )}
               {showChart && chartTab === 'share' && (

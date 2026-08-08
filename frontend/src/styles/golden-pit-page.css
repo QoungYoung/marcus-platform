@@ -803,6 +803,19 @@
   flex: none;
 }
 
+.gp-index-tier {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gp-blue);
+  background: rgba(47, 124, 211, 0.08);
+  border: 1px solid rgba(47, 124, 211, 0.22);
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
 .gp-index-weight {
   font-size: 10px;
   color: var(--gp-faint);
