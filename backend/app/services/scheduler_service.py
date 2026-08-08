@@ -1373,8 +1373,8 @@ class SchedulerService:
 
     def _execute_golden_pit_task(self, task: TaskConfig, execution_id: str) -> str:
         """执行黄金坑盘前报告/快照任务。"""
-        from app.services.golden_pit_service import GoldenPitService
-        service = GoldenPitService()
+        from app.services.golden_pit_service import get_golden_pit_service
+        service = get_golden_pit_service()
 
         if task.id == "golden_pit_morning":
             status = service.get_status()

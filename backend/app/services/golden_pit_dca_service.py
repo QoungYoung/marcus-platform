@@ -671,11 +671,11 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
     Returns:
         结构化 dict，包含 holdings/exit_signals/buy_candidates/skipped/summary_text 等字段。
     """
-    from app.services.golden_pit_service import GoldenPitService, CHINA_INDICES, get_trend_factor
+    from app.services.golden_pit_service import get_golden_pit_service, CHINA_INDICES, get_trend_factor
 
     # 1. 获取黄金坑状态
     try:
-        gp_service = GoldenPitService()
+        gp_service = get_golden_pit_service()
         status = gp_service.get_status()
     except Exception as e:
         msg = f"获取黄金坑状态失败: {e}"

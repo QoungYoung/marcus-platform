@@ -7,21 +7,15 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from app.services.golden_pit_service import (
-    GoldenPitService, ArkvolServiceError, _strategy_label,
+    GoldenPitService, ArkvolServiceError, _strategy_label, get_golden_pit_service,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/golden-pit", tags=["golden-pit"])
 
-_service = None
-
-
 def _get_service() -> GoldenPitService:
-    global _service
-    if _service is None:
-        _service = GoldenPitService()
-    return _service
+    return get_golden_pit_service()
 
 
 # ── v2 endpoints ──
