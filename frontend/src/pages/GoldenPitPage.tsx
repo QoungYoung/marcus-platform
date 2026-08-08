@@ -613,14 +613,16 @@ function GpChartTooltip({ active, payload, label, digits = 4, suffix = '' }: any
   );
 }
 
-function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPitGreed, minEntryGreed }: {
+function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPitGreed, minEntryGreed, groupLabel }: {
   trendData: TrendData | null;
   visibleCodes: Set<string>;
   onToggleCode: (code: string) => void;
   onToggleAll: () => void;
   minPitGreed?: number;
   minEntryGreed?: number;
+  groupLabel?: string;
 }) {
+  const [legendOpen, setLegendOpen] = useState(true);
   if (!trendData || !trendData.series || Object.keys(trendData.series).length === 0) {
     return <div className="gp-chart-empty">暂无历史数据</div>;
   }
@@ -647,30 +649,42 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
 
   return (
     <div className="gp-chart">
-      <div className="gp-chart-filters">
+      <div className="gp-legend-bar">
+        <span className="gp-legend-title">
+          {groupLabel || '指数'}
+          <em>{activeCodes.length}/{allCodes.length}</em>
+        </span>
         <button
-          className={`gp-filter-chip gp-filter-all ${allSelected ? 'active' : ''}`}
+          className={`gp-legend-action ${allSelected ? 'all' : ''}`}
           onClick={onToggleAll}
         >
-          {allSelected ? '取消全选' : '全选'}
+          {allSelected ? '清空' : '全选'}
         </button>
-        {allCodes.map((code, i) => {
-          const name = trendData.indices[code] || code;
-          const color = INDEX_COLORS[i % INDEX_COLORS.length];
-          const active = visibleCodes.has(code);
-          return (
-            <button
-              key={code}
-              className={`gp-filter-chip ${active ? 'active' : ''}`}
-              onClick={() => onToggleCode(code)}
-              style={active ? { borderColor: color, color } : undefined}
-            >
-              <span className="gp-filter-dot" style={{ background: active ? color : '#c9d8e8' }} />
-              {name}
-            </button>
-          );
-        })}
+        <button className="gp-legend-fold" onClick={() => setLegendOpen(!legendOpen)}>
+          {legendOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          {legendOpen ? '收起图例' : '展开图例'}
+        </button>
       </div>
+      {legendOpen && (
+        <div className="gp-chart-filters">
+          {allCodes.map((code, i) => {
+            const name = trendData.indices[code] || code;
+            const color = INDEX_COLORS[i % INDEX_COLORS.length];
+            const active = visibleCodes.has(code);
+            return (
+              <button
+                key={code}
+                className={`gp-filter-chip ${active ? 'active' : ''}`}
+                onClick={() => onToggleCode(code)}
+                style={active ? { borderColor: color, color } : undefined}
+              >
+                <span className="gp-filter-dot" style={{ background: active ? color : '#c9d8e8' }} />
+                {name}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {noneSelected ? (
         <div className="gp-chart-empty">请选择至少一个指数</div>
       ) : (() => {
@@ -869,6 +883,8 @@ export default function GoldenPitPage() {
   const [historyDays, setHistoryDays] = useState(60);
   const [shareVisibleCodes, setShareVisibleCodes] = useState<Set<string>>(new Set());
   const [sectorVisibleCodes, setSectorVisibleCodes] = useState<Set<string>>(new Set());
+  const [broadOpen, setBroadOpen] = useState(true);
+  const [sectorOpen, setSectorOpen] = useState(true);
   const [headerCollapsed, setHeaderCollapsed] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
@@ -1071,29 +1087,43 @@ export default function GoldenPitPage() {
             <section className="gp-panel gp-section">
               <div className="gp-panel-head">
                 <span className="gp-tick" /><h2>宽基指数状态</h2><span className="gp-en">BROAD INDEX STATUS</span>
+                <span className="gp-count">{broadIndices.length}</span>
+                <button className="gp-fold-btn" onClick={() => setBroadOpen(!broadOpen)} title={broadOpen ? '收起' : '展开'}>
+                  {broadOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  {broadOpen ? '收起' : '展开'}
+                </button>
               </div>
-              <div className="gp-index-grid">
-                {broadIndices.map((idx) => (
-                  <IndexStatusCard key={idx.fund_code} idx={idx} displayConfig={displayConfig} />
-                ))}
-              </div>
+              {broadOpen && (
+                <div className="gp-index-grid">
+                  {broadIndices.map((idx) => (
+                    <IndexStatusCard key={idx.fund_code} idx={idx} displayConfig={displayConfig} />
+                  ))}
+                </div>
+              )}
             </section>
 
             {sectorIndices.length > 0 && (
               <section className="gp-panel gp-section">
                 <div className="gp-panel-head">
                   <span className="gp-tick" /><h2>板块指数状态</h2><span className="gp-en">SECTOR ROTATION</span>
+                  <span className="gp-count">{sectorIndices.length}</span>
+                  <button className="gp-fold-btn" onClick={() => setSectorOpen(!sectorOpen)} title={sectorOpen ? '收起' : '展开'}>
+                    {sectorOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    {sectorOpen ? '收起' : '展开'}
+                  </button>
                 </div>
-                <div className="gp-index-grid">
-                  {sectorIndices.map((idx) => (
-                    <IndexStatusCard
-                      key={idx.fund_code}
-                      idx={idx}
-                      displayConfig={displayConfig}
-                      tierLabel={displayConfig?.tier_labels?.[idx.tier ?? '']}
-                    />
-                  ))}
-                </div>
+                {sectorOpen && (
+                  <div className="gp-index-grid">
+                    {sectorIndices.map((idx) => (
+                      <IndexStatusCard
+                        key={idx.fund_code}
+                        idx={idx}
+                        displayConfig={displayConfig}
+                        tierLabel={displayConfig?.tier_labels?.[idx.tier ?? '']}
+                      />
+                    ))}
+                  </div>
+                )}
               </section>
             )}
 
@@ -1105,7 +1135,9 @@ export default function GoldenPitPage() {
                   {showChart ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
                 <span className="gp-en">{chartTab === 'greed' ? 'GREED TREND' : chartTab === 'sector' ? 'SECTOR GREED TREND' : 'CAPITAL SHARE'}</span>
-                <div className="gp-chart-tabs">
+                <div className="gp-head-right">
+                  {chartTab !== 'share' && rangeQuick}
+                  <div className="gp-chart-tabs">
                   <button
                     className={`gp-chart-tab ${chartTab === 'greed' ? 'active' : ''}`}
                     onClick={() => setChartTab('greed')}
@@ -1124,12 +1156,13 @@ export default function GoldenPitPage() {
                   >
                     资金份额
                   </button>
+                  </div>
                 </div>
               </div>
               {showChart && chartTab === 'greed' && (
                 <>
-                  {rangeQuick}
                   <TrendChart
+                    groupLabel="宽基指数"
                     trendData={broadTrendData}
                     visibleCodes={visibleCodes}
                     onToggleCode={(code) => {
@@ -1154,8 +1187,8 @@ export default function GoldenPitPage() {
               )}
               {showChart && chartTab === 'sector' && (
                 <>
-                  {rangeQuick}
                   <TrendChart
+                    groupLabel="板块指数"
                     trendData={sectorTrendData}
                     visibleCodes={sectorVisibleCodes}
                     onToggleCode={(code) => {

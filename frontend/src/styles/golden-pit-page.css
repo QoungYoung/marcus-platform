@@ -1038,11 +1038,116 @@
   min-height: 120px;
 }
 
+/* ── 图表头部右侧：日期范围 + 页签 ── */
+.gp-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex: none;
+}
+
+.gp-head-right .gp-chart-tabs { margin-left: 0; }
+
+/* ── 图例控制条：分组名称 + 全选/清空 + 收起/展开 ── */
+.gp-legend-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 8px;
+  border-bottom: 1px dashed var(--gp-line-soft);
+  margin-bottom: 8px;
+}
+
+.gp-legend-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--gp-ink);
+}
+
+.gp-legend-title em {
+  font-style: normal;
+  font-family: var(--gp-en);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gp-faint);
+}
+
+.gp-legend-action,
+.gp-legend-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gp-muted);
+  background: rgba(47, 124, 211, 0.05);
+  border: 1px solid var(--gp-line-soft);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.gp-legend-action:hover,
+.gp-legend-fold:hover {
+  color: var(--gp-blue);
+  border-color: var(--gp-blue-soft);
+}
+
+.gp-legend-action.all {
+  color: var(--gp-blue);
+  border-color: var(--gp-blue);
+  background: rgba(47, 124, 211, 0.08);
+}
+
+.gp-legend-fold { margin-left: auto; }
+
+/* ── 状态区块收起/展开 ── */
+.gp-count {
+  font-family: var(--gp-en);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--gp-blue);
+  background: rgba(47, 124, 211, 0.10);
+  border: 1px solid rgba(47, 124, 211, 0.25);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 16px;
+}
+
+.gp-fold-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gp-muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.gp-fold-btn:hover {
+  color: var(--gp-blue);
+  border-color: var(--gp-line);
+  background: rgba(47, 124, 211, 0.05);
+}
+
 /* ── 时间范围快捷切换 ── */
 .gp-range-quick {
   display: flex;
   gap: 3px;
-  padding: 6px 12px 0;
+  padding: 0;
   background: none;
   flex: none;
 }
