@@ -687,9 +687,10 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
       const pit = th.pit_greed_threshold ?? th.pit_greed ?? (th.pit_pct != null ? pctValue(soloSeries, th.pit_pct) : null);
       const entry = th.entry_greed_threshold ?? th.entry_greed ?? (th.entry_pct != null ? pctValue(soloSeries, th.entry_pct) : null);
       const exit = th.exit_greed_threshold ?? (th.exit_full_pct != null ? pctValue(soloSeries, th.exit_full_pct) : null);
-      if (pit != null) soloLines.push({ key: 'pit', value: pit, label: `入场线 ${pit.toFixed(3)}`, color: '#e5484d', pos: 'insideBottomRight' });
-      if (entry != null) soloLines.push({ key: 'entry', value: entry, label: `预警线 ${entry.toFixed(3)}`, color: '#c98a12', pos: 'insideRight' });
-      if (exit != null) soloLines.push({ key: 'exit', value: exit, label: `出场线 ${exit.toFixed(3)}`, color: '#2f7cd3', pos: 'insideTopRight' });
+      const pctTxt = (p?: number) => (p != null ? ` (P${p})` : '');
+      if (pit != null) soloLines.push({ key: 'pit', value: pit, label: `入场线 ${pit.toFixed(3)}${pctTxt(th.pit_pct)}`, color: '#e5484d', pos: 'insideBottomRight' });
+      if (entry != null) soloLines.push({ key: 'entry', value: entry, label: `预警线 ${entry.toFixed(3)}${pctTxt(th.entry_pct)}`, color: '#c98a12', pos: 'insideRight' });
+      if (exit != null) soloLines.push({ key: 'exit', value: exit, label: `出场线 ${exit.toFixed(3)}${pctTxt(th.exit_full_pct)}`, color: '#2f7cd3', pos: 'insideTopRight' });
     }
   }
   soloLines.sort((a, b) => a.value - b.value);
@@ -1088,17 +1089,14 @@ export default function GoldenPitPage() {
     return vals.length > 0 ? Math.min(...vals) : undefined;
   };
   // 聚合参考线取各指数真实入场/预警阈值最小值；防御轮动为价格分位信号，不参与贪婪图参考线
-  const greedMapped = (list: IndexStatus[]) => list.filter((i) => i.tier !== 'defense_rotation');
-  const broadMinPit = minOf(greedMapped(broadIndices), 'pit_greed_threshold') ?? minOf(broadIndices, 'pit_greed');
-  const broadMinEntry = minOf(greedMapped(broadIndices), 'entry_greed_threshold') ?? minOf(broadIndices, 'entry_greed');
-  const sectorMinPit = minOf(greedMapped(sectorIndices), 'pit_greed_threshold');
-  const sectorMinEntry = minOf(greedMapped(sectorIndices), 'entry_greed_threshold');
+  const broadMinPit = minOf(broadIndices, 'pit_greed_threshold') ?? minOf(broadIndices, 'pit_greed');
+  const broadMinEntry = minOf(broadIndices, 'entry_greed_threshold') ?? minOf(broadIndices, 'entry_greed');
+  const sectorMinPit = minOf(sectorIndices, 'pit_greed_threshold');
+  const sectorMinEntry = minOf(sectorIndices, 'entry_greed_threshold');
 
   // 单指数参考线阈值（防御轮动为价格分位信号，不映射到贪婪图）
   const thresholdsByCode = (list: IndexStatus[]) => Object.fromEntries(
-    list
-      .filter((i) => i.tier !== 'defense_rotation')
-      .map((i) => [i.fund_code, {
+    list.map((i) => [i.fund_code, {
         pit_pct: i.pit_pct, entry_pct: i.entry_pct, exit_full_pct: i.exit_full_pct,
         pit_greed: i.pit_greed, entry_greed: i.entry_greed,
         pit_greed_threshold: i.pit_greed_threshold, entry_greed_threshold: i.entry_greed_threshold,

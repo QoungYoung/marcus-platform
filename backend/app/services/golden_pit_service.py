@@ -400,17 +400,29 @@ class GoldenPitService:
 
             # 补全防御/半导体标的（DB 快照尚未积累历史时，实时从 API 构建，保证 DCA 门控与展示完整）
             existing_codes = {i["fund_code"] for i in indices}
-            if any(c not in existing_codes for c in DEFENSE_INDICES) or any(
-                c not in existing_codes for c in SEMI_BOOST_INDICES
-            ):
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    f_tech_extra = executor.submit(self._extract_tech_indices, latest_date)
-                    f_def_extra = executor.submit(self._extract_defense_indices, latest_date)
-                    for item in f_tech_extra.result() + f_def_extra.result():
-                        if item["fund_code"] not in existing_codes:
-                            indices.append(item)
-                            existing_codes.add(item["fund_code"])
-                indices.sort(key=lambda x: x["priority"])
+            tech_missing = any(c not in existing_codes for c in SEMI_BOOST_INDICES)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                f_def_extra = executor.submit(self._extract_defense_indices, latest_date)
+                f_tech_extra = executor.submit(self._extract_tech_indices, latest_date) if tech_missing else None
+                def_extra = f_def_extra.result()
+                tech_extra = f_tech_extra.result() if f_tech_extra else []
+            def_map = {i["fund_code"]: i for i in def_extra}
+            for item in tech_extra:
+                if item["fund_code"] not in existing_codes:
+                    indices.append(item)
+                    existing_codes.add(item["fund_code"])
+            for item in def_extra:
+                if item["fund_code"] not in existing_codes:
+                    indices.append(item)
+                    existing_codes.add(item["fund_code"])
+            # ????????????? ArkVol ????????????
+            for item in indices:
+                ex = def_map.get(item["fund_code"])
+                if ex:
+                    item["pit_greed_threshold"] = ex["pit_greed_threshold"]
+                    item["entry_greed_threshold"] = ex["entry_greed_threshold"]
+                    item["exit_greed_threshold"] = ex["exit_greed_threshold"]
+            indices.sort(key=lambda x: x["priority"])
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
@@ -580,6 +592,7 @@ class GoldenPitService:
             decline_rate = _price_decline_rate(closes)
 
             arkvol_greed = None
+            arkvol_series = None
             arkvol_code = cfg.get("arkvol_code", "")
             if arkvol_code:
                 try:
@@ -611,6 +624,12 @@ class GoldenPitService:
             )
             index_info["arkvol_greed"] = round(arkvol_greed, 4) if arkvol_greed is not None else None
             index_info["price_percentile"] = round(percentile, 1)
+            # ????????? ArkVol ????????????????????????
+            if arkvol_series:
+                pit_ref, entry_ref, exit_ref = self._arkvol_ref_lines(arkvol_series, cfg)
+                index_info["pit_greed_threshold"] = pit_ref
+                index_info["entry_greed_threshold"] = entry_ref
+                index_info["exit_greed_threshold"] = exit_ref
             return index_info
 
         with ThreadPoolExecutor(max_workers=3) as executor:
@@ -878,6 +897,24 @@ class GoldenPitService:
             return None
         idx = min(int(len(svals) * pct_val / 100), len(svals) - 1)
         return round(svals[idx], 4)
+
+    @staticmethod
+    def _arkvol_ref_lines(arkvol_series: List[Dict], cfg: Dict[str, Any]) -> tuple:
+        """???????????? ArkVol ????????????
+
+        ?????????GoldenPitSnapshot ???????? ArkVol ?????
+        ??????????? P(pit_pct)/P(entry_pct)/P(exit_full_pct) ???????
+        """
+        pit = GoldenPitService._rolling_percentile_value(
+            arkvol_series, cfg.get("pit_pct"), PERCENTILE_GOLDEN_PIT
+        )
+        entry = GoldenPitService._rolling_percentile_value(
+            arkvol_series, cfg.get("entry_pct"), PERCENTILE_WARNING
+        )
+        exit_ = GoldenPitService._rolling_percentile_value(
+            arkvol_series, cfg.get("exit_full_pct"), 50
+        )
+        return pit, entry, exit_
 
     def _detect_golden_pit_window(self, indices: List[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[str, Any]:
         """检测黄金坑窗口。
