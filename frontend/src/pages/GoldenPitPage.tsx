@@ -40,6 +40,12 @@ interface IndexStatus {
   schedule_day?: number;
   pit_greed?: number;
   entry_greed?: number;
+  pit_pct?: number;
+  entry_pct?: number;
+  exit_full_pct?: number;
+  pit_greed_threshold?: number;
+  entry_greed_threshold?: number;
+  exit_greed_threshold?: number;
   prev_greed?: number | null;
   signal_trigger_greed?: number | null;
   dca_fallback?: number;
@@ -629,7 +635,7 @@ function GpChartTooltip({ active, payload, label, digits = 4, suffix = '' }: any
   );
 }
 
-function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPitGreed, minEntryGreed, groupLabel }: {
+function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPitGreed, minEntryGreed, groupLabel, thresholds }: {
   trendData: TrendData | null;
   visibleCodes: Set<string>;
   onToggleCode: (code: string) => void;
@@ -637,6 +643,7 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
   minPitGreed?: number;
   minEntryGreed?: number;
   groupLabel?: string;
+  thresholds?: Record<string, { pit_pct?: number; entry_pct?: number; exit_full_pct?: number; pit_greed?: number; entry_greed?: number; pit_greed_threshold?: number; entry_greed_threshold?: number; exit_greed_threshold?: number }>;
 }) {
   const [legendOpen, setLegendOpen] = useState(true);
   if (!trendData || !trendData.series || Object.keys(trendData.series).length === 0) {
@@ -662,6 +669,32 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
   const chartData = Object.values(dateMap).sort(
     (a, b) => (a.date as string).localeCompare(b.date as string)
   );
+
+  // 单指数视图：用该指数自己的阈值画 入场/预警/出场 参考线
+  const soloCode = activeCodes.length === 1 ? activeCodes[0] : null;
+  const soloSeries = soloCode ? (trendData.series[soloCode] ?? []).map((p) => p.greed) : [];
+  const pctValue = (values: number[], pct: number): number | null => {
+    if (values.length === 0) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor((pct / 100) * sorted.length)));
+    return sorted[idx];
+  };
+  const soloLines: { key: string; value: number; label: string; color: string; pos: 'insideBottomRight' | 'insideRight' | 'insideTopRight' }[] = [];
+  if (soloCode && soloSeries.length >= 20) {
+    const th = thresholds?.[soloCode];
+    if (th) {
+      // ????????????????? 500 ????????????????????????????
+      const pit = th.pit_greed_threshold ?? th.pit_greed ?? (th.pit_pct != null ? pctValue(soloSeries, th.pit_pct) : null);
+      const entry = th.entry_greed_threshold ?? th.entry_greed ?? (th.entry_pct != null ? pctValue(soloSeries, th.entry_pct) : null);
+      const exit = th.exit_greed_threshold ?? (th.exit_full_pct != null ? pctValue(soloSeries, th.exit_full_pct) : null);
+      if (pit != null) soloLines.push({ key: 'pit', value: pit, label: `入场线 ${pit.toFixed(3)}`, color: '#e5484d', pos: 'insideBottomRight' });
+      if (entry != null) soloLines.push({ key: 'entry', value: entry, label: `预警线 ${entry.toFixed(3)}`, color: '#c98a12', pos: 'insideRight' });
+      if (exit != null) soloLines.push({ key: 'exit', value: exit, label: `出场线 ${exit.toFixed(3)}`, color: '#2f7cd3', pos: 'insideTopRight' });
+    }
+  }
+  soloLines.sort((a, b) => a.value - b.value);
+  const linePositions = ['insideBottomRight', 'insideRight', 'insideTopRight'] as const;
+  soloLines.forEach((ln, i) => { ln.pos = linePositions[Math.min(i, linePositions.length - 1)]; });
 
   return (
     <div className="gp-chart">
@@ -714,8 +747,9 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
         });
         const pitRef = minPitGreed ?? 0.35;
         const entryRef = minEntryGreed ?? 0.40;
-        const yMin = Math.max(0.15, Math.min(pitRef - 0.05, dataMin));
-        const yMax = Math.min(0.95, Math.max(dataMax + 0.05, 0.50));
+        const refValues = soloLines.length > 0 ? soloLines.map((l) => l.value) : [pitRef, entryRef];
+        const yMin = Math.max(0.15, Math.min(dataMin, ...refValues) - 0.05);
+        const yMax = Math.min(0.95, Math.max(dataMax + 0.05, ...refValues, 0.50));
         return (
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
@@ -738,14 +772,29 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
               content={(props: any) => <GpChartTooltip {...props} digits={4} />}
               cursor={{ stroke: '#a8cdee', strokeDasharray: '4 3' }}
             />
-            <ReferenceLine
-              y={pitRef} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
-              label={{ value: `参考线 (${pitRef.toFixed(3)})`, position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
-            />
-            <ReferenceLine
-              y={entryRef} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
-              label={{ value: `参考线 (${entryRef.toFixed(3)})`, position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
-            />
+            {soloLines.length > 0 ? (
+              soloLines.map((ln) => (
+                <ReferenceLine
+                  key={ln.key}
+                  y={ln.value}
+                  stroke={ln.color}
+                  strokeDasharray="5 4"
+                  strokeWidth={1.2}
+                  label={{ value: ln.label, position: ln.pos, fontSize: 9, fill: ln.color }}
+                />
+              ))
+            ) : (
+              <>
+                <ReferenceLine
+                  y={pitRef} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
+                  label={{ value: `参考线 (${pitRef.toFixed(3)})`, position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
+                />
+                <ReferenceLine
+                  y={entryRef} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
+                  label={{ value: `参考线 (${entryRef.toFixed(3)})`, position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
+                />
+              </>
+            )}
             {activeCodes.map((code) => (
               <Line
                 key={code}
@@ -1027,13 +1076,28 @@ export default function GoldenPitPage() {
   const broadTrendData = filterTrend((code) => !sectorCodeSet.has(code));
   const sectorTrendData = filterTrend((code) => sectorCodeSet.has(code));
 
-  const minOf = (list: IndexStatus[], key: 'pit_greed' | 'entry_greed') => list.length > 0
-    ? Math.min(...list.map((i) => i[key]).filter((v): v is number => v != null))
-    : undefined;
+  const minOf = (list: IndexStatus[], key: 'pit_greed' | 'entry_greed') => {
+    const vals = list.map((i) => i[key]).filter((v): v is number => v != null);
+    return vals.length > 0 ? Math.min(...vals) : undefined;
+  };
   const broadMinPit = minOf(broadIndices, 'pit_greed');
   const broadMinEntry = minOf(broadIndices, 'entry_greed');
   const sectorMinPit = minOf(sectorIndices, 'pit_greed');
   const sectorMinEntry = minOf(sectorIndices, 'entry_greed');
+
+  // 单指数参考线阈值（防御轮动为价格分位信号，不映射到贪婪图）
+  const thresholdsByCode = (list: IndexStatus[]) => Object.fromEntries(
+    list
+      .filter((i) => i.tier !== 'defense_rotation')
+      .map((i) => [i.fund_code, {
+        pit_pct: i.pit_pct, entry_pct: i.entry_pct, exit_full_pct: i.exit_full_pct,
+        pit_greed: i.pit_greed, entry_greed: i.entry_greed,
+        pit_greed_threshold: i.pit_greed_threshold, entry_greed_threshold: i.entry_greed_threshold,
+        exit_greed_threshold: i.exit_greed_threshold,
+      }]),
+  );
+  const broadThresholds = thresholdsByCode(broadIndices);
+  const sectorThresholds = thresholdsByCode(sectorIndices);
 
   const rangeQuick = (
     <div className="gp-range-quick">
@@ -1179,6 +1243,7 @@ export default function GoldenPitPage() {
                 <>
                   <TrendChart
                     groupLabel="宽基指数"
+                    thresholds={broadThresholds}
                     trendData={broadTrendData}
                     visibleCodes={visibleCodes}
                     onToggleCode={(code) => {
@@ -1205,6 +1270,7 @@ export default function GoldenPitPage() {
                 <>
                   <TrendChart
                     groupLabel="板块指数"
+                    thresholds={sectorThresholds}
                     trendData={sectorTrendData}
                     visibleCodes={sectorVisibleCodes}
                     onToggleCode={(code) => {

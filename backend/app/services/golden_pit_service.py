@@ -842,7 +842,42 @@ class GoldenPitService:
                 index_info["entry_date"] = dates[entry_idx]
                 index_info["days_in_pit"] = len(greeds) - entry_idx
 
+        # ?? ??????????????????????????? ? 500 ??????????
+        fixed_pit = cfg.get("pit_greed") if cfg.get("use_fixed_greed") else None
+        fixed_entry = cfg.get("entry_greed") if cfg.get("use_fixed_greed") else None
+        index_info["pit_greed_threshold"] = (
+            round(float(fixed_pit), 4) if fixed_pit is not None
+            else self._rolling_percentile_value(sorted_series, cfg.get("pit_pct"), PERCENTILE_GOLDEN_PIT)
+        )
+        index_info["entry_greed_threshold"] = (
+            round(float(fixed_entry), 4) if fixed_entry is not None
+            else self._rolling_percentile_value(sorted_series, cfg.get("entry_pct"), PERCENTILE_WARNING)
+        )
+        index_info["exit_greed_threshold"] = self._rolling_percentile_value(
+            sorted_series, cfg.get("exit_full_pct"), 50
+        )
+
         return index_info
+
+    @staticmethod
+    def _rolling_percentile_value(
+        sorted_series: List[Dict], pct: Optional[int], default_pct: int
+    ) -> Optional[float]:
+        """????? P(pct) ???????? _calculate_percentile/?????????
+
+        use_fixed_greed=False ?????????/??/??????
+        """
+        if not sorted_series:
+            return None
+        vals = [float(s.get("greed", 0)) for s in sorted_series]
+        if len(vals) > PERCENTILE_WINDOW_DAYS:
+            vals = vals[-PERCENTILE_WINDOW_DAYS:]
+        pct_val = pct if pct is not None else default_pct
+        svals = sorted(vals)
+        if not svals:
+            return None
+        idx = min(int(len(svals) * pct_val / 100), len(svals) - 1)
+        return round(svals[idx], 4)
 
     def _detect_golden_pit_window(self, indices: List[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[str, Any]:
         """检测黄金坑窗口。
