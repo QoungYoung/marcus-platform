@@ -385,7 +385,7 @@ class GoldenPitService:
                         decline_rate=snap.decline_rate_5d or 0.0,
                         status=snap.status,
                         absolute_triggered=(snap.greed_value or 0) < GREED_ABSOLUTE_PIT,
-                        data_source=cfg.get("data_source", "arkvol"),
+                        data_source=("defense_price" if cfg.get("tier") == "defense_rotation" else cfg.get("data_source", "arkvol")),
                         sorted_series=sorted_series,
                         as_of=latest_date,
                     )

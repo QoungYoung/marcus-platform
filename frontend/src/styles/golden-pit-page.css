@@ -879,6 +879,28 @@
 
 .gp-index-close { font-variant-numeric: tabular-nums; }
 
+.gp-src-chip {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  line-height: 15px;
+}
+
+.gp-src-chip.price {
+  color: var(--gp-blue);
+  background: rgba(47, 124, 211, 0.08);
+  border: 1px solid rgba(47, 124, 211, 0.22);
+}
+
+.gp-src-chip.tech {
+  color: #7c5cd6;
+  background: rgba(124, 92, 214, 0.08);
+  border: 1px solid rgba(124, 92, 214, 0.25);
+}
+
 .gp-index-position {
   font-size: 10.5px;
   color: var(--gp-muted);

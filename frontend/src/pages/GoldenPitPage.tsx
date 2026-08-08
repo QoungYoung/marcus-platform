@@ -547,13 +547,29 @@ function IndexStatusCard({ idx, displayConfig, tierLabel }: { idx: IndexStatus; 
         {idx.status === 'warning' && idx.days_to_pit && (
           <span>预计 {idx.eta_date} 入坑 ({idx.days_to_pit}天)</span>
         )}
+        {idx.tier === 'defense_rotation' && (
+          <span className="gp-src-chip price" title="入坑/撤场信号以价格分位为准">价格分位信号</span>
+        )}
+        {idx.tier === 'semi_boost' && (
+          <span className="gp-src-chip tech" title="贪婪值来自 ArkVol 科技贪婪接口">ArkVol贪婪</span>
+        )}
         {idx.change_5 != null && idx.change_5 !== 0 && (
           <span style={{ color: idx.change_5 > 0 ? '#27a06b' : '#e5484d' }}>
             5日{idx.change_5 > 0 ? '反弹' : '下跌'} {idx.change_5 > 0 ? '+' : ''}{idx.change_5.toFixed(3)}
           </span>
         )}
         {idx.change_5 == null && idx.decline_rate !== 0 && (
-          <span>日跌 {idx.decline_rate > 0 ? '+' : ''}{idx.decline_rate.toFixed(3)}</span>
+          <span style={{ color: idx.decline_rate > 0 ? '#e5484d' : '#27a06b' }}>
+            {idx.tier === 'defense_rotation'
+              ? (() => {
+                  const pct = Math.abs(idx.decline_rate * 100);
+                  const pctStr = pct >= 0.1 ? pct.toFixed(1) : pct.toFixed(2);
+                  return idx.decline_rate > 0 ? `价格日跌 ${pctStr}%` : `价格日涨 ${pctStr}%`;
+                })()
+              : (idx.decline_rate > 0
+                  ? `贪婪日降 +${idx.decline_rate.toFixed(3)}`
+                  : `贪婪日升 ${(-idx.decline_rate).toFixed(3)}`)}
+          </span>
         )}
         {idx.close > 0 && (
           <span className="gp-index-close">¥{idx.close.toFixed(2)}</span>
