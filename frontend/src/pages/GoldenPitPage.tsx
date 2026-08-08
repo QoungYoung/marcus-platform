@@ -745,11 +745,14 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
             if (typeof v === 'number') { dataMin = Math.min(dataMin, v); dataMax = Math.max(dataMax, v); }
           });
         });
-        const pitRef = minPitGreed ?? 0.35;
-        const entryRef = minEntryGreed ?? 0.40;
-        const refValues = soloLines.length > 0 ? soloLines.map((l) => l.value) : [pitRef, entryRef];
-        const yMin = Math.max(0.15, Math.min(dataMin, ...refValues) - 0.05);
-        const yMax = Math.min(0.95, Math.max(dataMax + 0.05, ...refValues, 0.50));
+        const pitRef = minPitGreed;
+        const entryRef = minEntryGreed;
+        const showAggRefs = activeCodes.length > 1 && (pitRef != null || entryRef != null);
+        const refValues = soloLines.length > 0
+          ? soloLines.map((l) => l.value)
+          : (showAggRefs ? [pitRef, entryRef].filter((v): v is number => v != null) : []);
+        const yMin = Math.max(0.15, (refValues.length > 0 ? Math.min(dataMin, ...refValues) : dataMin) - 0.05);
+        const yMax = Math.min(0.95, Math.max(dataMax + 0.05, ...(refValues.length > 0 ? refValues : [0.50])));
         return (
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
@@ -783,18 +786,22 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
                   label={{ value: ln.label, position: ln.pos, fontSize: 9, fill: ln.color }}
                 />
               ))
-            ) : (
+            ) : showAggRefs ? (
               <>
-                <ReferenceLine
-                  y={pitRef} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
-                  label={{ value: `参考线 (${pitRef.toFixed(3)})`, position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
-                />
-                <ReferenceLine
-                  y={entryRef} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
-                  label={{ value: `参考线 (${entryRef.toFixed(3)})`, position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
-                />
+                {pitRef != null && (
+                  <ReferenceLine
+                    y={pitRef} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
+                    label={{ value: `参考线 (${pitRef.toFixed(3)})`, position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
+                  />
+                )}
+                {entryRef != null && (
+                  <ReferenceLine
+                    y={entryRef} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
+                    label={{ value: `参考线 (${entryRef.toFixed(3)})`, position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
+                  />
+                )}
               </>
-            )}
+            ) : null}
             {activeCodes.map((code) => (
               <Line
                 key={code}
@@ -1076,14 +1083,16 @@ export default function GoldenPitPage() {
   const broadTrendData = filterTrend((code) => !sectorCodeSet.has(code));
   const sectorTrendData = filterTrend((code) => sectorCodeSet.has(code));
 
-  const minOf = (list: IndexStatus[], key: 'pit_greed' | 'entry_greed') => {
+  const minOf = (list: IndexStatus[], key: 'pit_greed' | 'entry_greed' | 'pit_greed_threshold' | 'entry_greed_threshold') => {
     const vals = list.map((i) => i[key]).filter((v): v is number => v != null);
     return vals.length > 0 ? Math.min(...vals) : undefined;
   };
-  const broadMinPit = minOf(broadIndices, 'pit_greed');
-  const broadMinEntry = minOf(broadIndices, 'entry_greed');
-  const sectorMinPit = minOf(sectorIndices, 'pit_greed');
-  const sectorMinEntry = minOf(sectorIndices, 'entry_greed');
+  // 聚合参考线取各指数真实入场/预警阈值最小值；防御轮动为价格分位信号，不参与贪婪图参考线
+  const greedMapped = (list: IndexStatus[]) => list.filter((i) => i.tier !== 'defense_rotation');
+  const broadMinPit = minOf(greedMapped(broadIndices), 'pit_greed_threshold') ?? minOf(broadIndices, 'pit_greed');
+  const broadMinEntry = minOf(greedMapped(broadIndices), 'entry_greed_threshold') ?? minOf(broadIndices, 'entry_greed');
+  const sectorMinPit = minOf(greedMapped(sectorIndices), 'pit_greed_threshold');
+  const sectorMinEntry = minOf(greedMapped(sectorIndices), 'entry_greed_threshold');
 
   // 单指数参考线阈值（防御轮动为价格分位信号，不映射到贪婪图）
   const thresholdsByCode = (list: IndexStatus[]) => Object.fromEntries(
