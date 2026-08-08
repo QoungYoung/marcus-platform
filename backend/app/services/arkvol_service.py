@@ -93,6 +93,35 @@ def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
     return payload
 
 
+def _request_raw_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
+    """GET 请求（success 包装），用于 funds-greed/fund 与 tech-hardware-greed 等非 {code,msg,data} 接口。"""
+    url = f"{ARKVOL_BASE_URL}{path}"
+    req = Request(url, headers={
+        "X-API-Key": api_key,
+        "X-Arkvol-Skill-Version": "0.3.1",
+        "Accept": "application/json",
+    }, method="GET")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            body = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            body = {}
+        msg = body.get("msg", "")
+        if exc.code in (401, 403):
+            raise ArkvolServiceError(msg or f"ArkVol API Key 无效或无权访问 (HTTP {exc.code})") from exc
+        raise ArkvolServiceError(msg or f"ArkVol 返回 HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise ArkvolServiceError(f"无法连接 ArkVol: {exc.reason}") from exc
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ArkvolServiceError("ArkVol 返回数据无法解析") from exc
+    if not isinstance(payload, dict) or not payload.get("success"):
+        raise ArkvolServiceError("ArkVol raw series 返回异常")
+    return payload
+
+
 def _request_post_json(api_key: str, path: str, body: Optional[Dict] = None, timeout: int = 30) -> Dict[str, Any]:
     """POST 请求，用于 ai-summary 等端点。"""
     url = f"{ARKVOL_BASE_URL}{path}"
@@ -187,3 +216,19 @@ class ArkvolService:
         if not isinstance(payload, dict) or not payload.get("success"):
             raise ArkvolServiceError("ArkVol 全量 series 返回异常")
         return payload
+
+    def fetch_fund_series(self, fund_code: str, days: int = 365) -> Dict[str, Any]:
+        """获取单只基金的贪婪历史序列（GET）。
+
+        返回 {success, fund_code, data: [{date, greed, close}]}。
+        用于防御组合标的（009052/014028/020412/020741/017193）贪婪快照。
+        """
+        return _request_raw_json(self.api_key, f"/api/funds-greed/fund/{fund_code}?days={days}", timeout=60)
+
+    def fetch_tech_greed(self, days: int = 365) -> Dict[str, Any]:
+        """获取半导体/科技板块贪婪序列（GET）。
+
+        返回 {success, data: {fund_code: [{date, greed, close}]}}。
+        覆盖 588200（科创芯片）/512480（半导体）等 9 只科技 ETF。
+        """
+        return _request_raw_json(self.api_key, f"/api/tech-hardware-greed/series?days={days}", timeout=60)

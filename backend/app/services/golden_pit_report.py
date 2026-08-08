@@ -26,10 +26,11 @@ def format_morning_report(status: Dict[str, Any]) -> str:
     lines = [f"📊 黄金坑盘前报告 — {as_of}", "━━━━━━━━━━━━━━━━━━━", ""]
 
     # 按 tier 分组显示
-    tier_order = ["core", "satellite", "defense", "watch", "drop"]
+    tier_order = ["core", "satellite", "defense", "semi_boost", "defense_rotation", "watch", "drop"]
     tier_labels = {
         "core": "🏆 核心 (必做)", "satellite": "📡 卫星 (选做)",
-        "defense": "🛡 防御 (可选)", "watch": "👀 观察 (仅预警)", "drop": "❌ 放弃",
+        "defense": "🛡 防御 (可选)", "semi_boost": "🔬 半导体增强 (坑内10%)",
+        "defense_rotation": "🛡 防御轮动 (撤场承接)", "watch": "👀 观察 (仅预警)", "drop": "❌ 放弃",
     }
     tier_icons = {"golden_pit": "🔴", "warning": "🟠", "normal": "🟢"}
 
@@ -173,22 +174,26 @@ def check_threshold_crossings(service, status: Optional[Dict[str, Any]] = None) 
         if prev_pct is None:
             continue
 
-        # 检测 P10 预警线穿越 (percentile 从 >10 变为 <=10)
-        if current_pct > PERCENTILE_WARNING and prev_pct <= PERCENTILE_WARNING:
+        # 各标的自身阈值（防御/半导体与成长指数不同，回测校准）
+        entry_pct = idx.get("entry_pct") or PERCENTILE_WARNING
+        pit_pct = idx.get("pit_pct") or PERCENTILE_GOLDEN_PIT
+
+        # 检测预警线穿越 (percentile 从 >entry 变为 <=entry)
+        if current_pct > entry_pct and prev_pct <= entry_pct:
             continue  # 反弹中，不预警
-        if prev_pct > PERCENTILE_WARNING and current_pct <= PERCENTILE_WARNING:
-            ds_tag = " [价格分位]" if idx.get("data_source") == "pi_server_price" else ""
+        if prev_pct > entry_pct and current_pct <= entry_pct:
+            ds_tag = " [价格分位]" if idx.get("data_source") in ("pi_server_price", "defense_price") else ""
             alerts.append(
                 f"⚠️ {idx['index_name']} 进入预警区 (分位 {idx['percentile']:.0f}%){ds_tag}\n"
                 f"   📉 'greed': {idx['greed']:.4f}  "
                 f"预计 {idx.get('eta_date', '?')} 进入黄金坑"
             )
 
-        # 检测 P5 黄金坑确认 (percentile 从 >5 变为 <=5)
-        if prev_pct > PERCENTILE_GOLDEN_PIT and current_pct <= PERCENTILE_GOLDEN_PIT:
+        # 检测黄金坑确认 (percentile 从 >pit 变为 <=pit)
+        if prev_pct > pit_pct and current_pct <= pit_pct:
             window = status["golden_pit_window"]
             abs_note = " [双重确认]" if idx.get("absolute_triggered") else ""
-            ds_tag = " [价格分位]" if idx.get("data_source") == "pi_server_price" else ""
+            ds_tag = " [价格分位]" if idx.get("data_source") in ("pi_server_price", "defense_price") else ""
             alerts.append(
                 f"🔴 {idx['index_name']} 进入黄金坑！(分位 {idx['percentile']:.0f}%){abs_note}{ds_tag}\n"
                 f"   📍 窗口：{window['start_date']} - {window['exit_date']}（{PIT_WINDOW_DAYS}交易日）\n"

@@ -111,6 +111,104 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "buy_time": "09:36"},
 }
 
+# ═══ 防御组合（撤场资金承接，独立信号）═══
+# 信号源: 250日滚动价格分位（回测校准 2017-2026）；ArkVol 贪婪（009052/014028/020412/020741/017193）仅作展示与快照
+DEFENSE_INDICES: Dict[str, Dict[str, Any]] = {
+    # 红利: P20 入坑 / P40 撤场 (20日 +2.45%, 胜率 77%)
+    "510880": {"name": "红利", "priority": 21, "data_source": "arkvol", "tier": "defense_rotation",
+               "arkvol_code": "009052", "etf_code": "SH510880",
+               "signal_quality": "strong", "exp_15d": 1.5, "exp_20d": 2.5, "position_weight": 0.25,
+               "use_fixed_greed": False, "entry_pct": 25, "pit_pct": 20,
+               "entry_enabled": True,
+               "turning_days": 1, "position_multiplier": 0.8,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
+               "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 60,
+               "buy_time": "09:36"},
+    # 银行: P10 入坑 / P40 撤场
+    "512800": {"name": "银行", "priority": 22, "data_source": "arkvol", "tier": "defense_rotation",
+               "arkvol_code": "014028", "etf_code": "SH512800",
+               "signal_quality": "good", "exp_15d": 1.0, "exp_20d": 1.8, "position_weight": 0.25,
+               "use_fixed_greed": False, "entry_pct": 15, "pit_pct": 10,
+               "entry_enabled": True,
+               "turning_days": 1, "position_multiplier": 0.8,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
+               "exit_full_pct": 40, "exit_half_pct": 40, "exit_fallback_days": 60,
+               "buy_time": "09:36"},
+    # 黄金: P15 入坑 / P50 撤场
+    "518880": {"name": "黄金", "priority": 23, "data_source": "arkvol", "tier": "defense_rotation",
+               "arkvol_code": "020412", "etf_code": "SH518880",
+               "signal_quality": "weak", "exp_15d": 0.8, "exp_20d": 1.5, "position_weight": 0.25,
+               "use_fixed_greed": False, "entry_pct": 20, "pit_pct": 15,
+               "entry_enabled": True,
+               "turning_days": 1, "position_multiplier": 0.8,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60,
+               "buy_time": "09:36"},
+    # 国债: P10 入坑 / P50 撤场
+    "511010": {"name": "国债", "priority": 24, "data_source": "arkvol", "tier": "defense_rotation",
+               "arkvol_code": "020741", "etf_code": "SH511010",
+               "signal_quality": "weak", "exp_15d": 0.5, "exp_20d": 1.0, "position_weight": 0.25,
+               "use_fixed_greed": False, "entry_pct": 15, "pit_pct": 10,
+               "entry_enabled": True,
+               "turning_days": 1, "position_multiplier": 0.8,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60,
+               "buy_time": "09:36"},
+    # 有色: 不触发入坑信号（入坑后继续下跌，仅作组合成分）
+    "512400": {"name": "有色", "priority": 25, "data_source": "arkvol", "tier": "defense_rotation",
+               "arkvol_code": "017193", "etf_code": "SH512400",
+               "signal_quality": "weak", "exp_15d": 0.5, "exp_20d": 1.0, "position_weight": 0.0,
+               "use_fixed_greed": False, "entry_pct": 1, "pit_pct": 1,
+               "entry_enabled": False,
+               "turning_days": 1, "position_multiplier": 0.5,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
+               "exit_full_pct": 99, "exit_half_pct": 99, "exit_fallback_days": 60,
+               "buy_time": "09:36"},
+}
+
+# ═══ 半导体增强（坑内 10% 增强仓位，ArkVol tech-hardware-greed 信号）═══
+SEMI_BOOST_INDICES: Dict[str, Dict[str, Any]] = {
+    # 科创芯片: P5 入坑 / P10 预警（ArkVol tech-hardware-greed）
+    "588200": {"name": "科创芯片", "priority": 31, "data_source": "arkvol_tech", "tier": "semi_boost",
+               "arkvol_code": "588200", "etf_code": "SH588200",
+               "signal_quality": "good", "exp_15d": 4.0, "exp_20d": 6.0, "position_weight": 0.10,
+               "use_fixed_greed": False, "entry_pct": 10, "pit_pct": 5,
+               "turning_days": 1, "position_multiplier": 1.0,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 20,
+               "buy_time": "09:36"},
+    # 半导体: P5 入坑 / P10 预警（ArkVol tech-hardware-greed）
+    "512480": {"name": "半导体", "priority": 32, "data_source": "arkvol_tech", "tier": "semi_boost",
+               "arkvol_code": "512480", "etf_code": "SH512480",
+               "signal_quality": "good", "exp_15d": 4.0, "exp_20d": 6.0, "position_weight": 0.10,
+               "use_fixed_greed": False, "entry_pct": 10, "pit_pct": 5,
+               "turning_days": 1, "position_multiplier": 1.0,
+               "dca_strategy": "lump_entry", "dca_fallback": 5,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 20,
+               "buy_time": "09:36"},
+}
+
+# 坑内仓位分配: 指数自身 90% + 科创芯片 5% + 半导体 5%（512480 实测最优：+117%/Calmar 0.88，80/10/10 降至 0.73）
+PIT_POSITION_SPLIT: Dict[str, float] = {"index": 0.90, "588200": 0.05, "512480": 0.05}
+
+# 撤场后防御承接组合（等权五标的：红利/银行/黄金/国债/有色）
+# 轮动回测 2020-12~2026-07: 五标的 +131%/回撤-16.7% 全面优于四标的 +88%/-17.1%；有色入坑信号弱，仅作组合成分
+DEFENSE_TAKEOVER_WEIGHTS: Dict[str, float] = {
+    "510880": 0.20, "512800": 0.20, "518880": 0.20, "511010": 0.20, "512400": 0.20,
+}
+
+# 全部指数配置索引（成长 + 防御 + 半导体增强），供统一查询
+ALL_INDEX_CONFIGS: Dict[str, Dict[str, Any]] = {}
+ALL_INDEX_CONFIGS.update(CHINA_INDICES)
+ALL_INDEX_CONFIGS.update(DEFENSE_INDICES)
+ALL_INDEX_CONFIGS.update(SEMI_BOOST_INDICES)
+
+
+def get_index_config(fund_code: str) -> Dict[str, Any]:
+    """按 fund_code 返回任意指数/标的最新的配置。"""
+    return ALL_INDEX_CONFIGS.get(fund_code, {})
+
+
 # 仓位分级: 拐点确认度 → 仓位比例 (单次定投占 max_total 的比例)
 POSITION_TIERS = {
     "pre_turn":   0.03,   # 拐点前: 单次≤3%, 累计≤15%
@@ -225,6 +323,11 @@ def _display_config() -> Dict[str, Any]:
             "golden_pit": STATUS_MAP["golden_pit"]["label"],
         },
         "strategy_labels": dict(STRATEGY_LABELS),
+        "tier_labels": {
+            "core": "核心", "satellite": "卫星", "defense": "防御",
+            "defense_rotation": "防御轮动", "semi_boost": "半导体增强",
+            "watch": "观察", "drop": "放弃",
+        },
         "exit_labels": {
             "half_exit": "减持 50%",
             "full_exit": "清仓",
@@ -269,9 +372,10 @@ def get_trend_factor(trend: str, days_rising: int, fund_code: str = "",
     else:
         state_key = "declining"
 
-    # 读取分指数覆盖或全局默认
-    if fund_code and fund_code in CHINA_INDICES:
-        idx_trend_factors = CHINA_INDICES[fund_code].get("trend_factors", {})
+    # 读取分指数覆盖或全局默认（成长 + 防御 + 半导体增强）
+    idx_cfg = ALL_INDEX_CONFIGS.get(fund_code, {})
+    if fund_code and idx_cfg:
+        idx_trend_factors = idx_cfg.get("trend_factors", {})
         factor = idx_trend_factors.get(state_key, DEFAULT_TREND_FACTORS.get(state_key, 1.0))
     else:
         factor = DEFAULT_TREND_FACTORS.get(state_key, 1.0)

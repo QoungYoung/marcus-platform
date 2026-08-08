@@ -19,7 +19,10 @@ from app.services.arkvol_service import ArkvolService, ArkvolServiceError
 logger = logging.getLogger(__name__)
 
 from app.services.golden_pit_config import (
+    ALL_INDEX_CONFIGS,
     CHINA_INDICES,
+    DEFENSE_INDICES,
+    SEMI_BOOST_INDICES,
     FAKE_SIGNAL_REBOUND_DAYS,
     GREED_ABSOLUTE_PIT,
     PERCENTILE_GOLDEN_PIT,
@@ -41,6 +44,7 @@ from app.services.golden_pit_config import (
 )
 from app.services.golden_pit_indicators import (
     _add_trading_days,
+    _calculate_decline_rate,
     _calculate_percentile,
     _calculate_price_percentile,
     _detect_exit_signal,
@@ -62,6 +66,7 @@ class GoldenPitService:
         self._arkvol = arkvol or ArkvolService()
         self._last_known_greed: Dict[str, float] = {}  # 用于盘中阈值穿越检测
         self._cache: Dict[str, tuple] = {}  # page_id → (data, timestamp)
+        self._kline_cache: Dict[str, tuple] = {}  # etf_code → (bars, timestamp)
 
     # ═══════════════════════════════════════════════════════════════
     # Data fetching helpers
@@ -89,6 +94,43 @@ class GoldenPitService:
         data = self._arkvol.fetch_ai_summary()
         self._cache[cache_key] = (data, now)
         return data
+
+    def _cached_tech_greed(self, ttl: int = 7200) -> Dict[str, Any]:
+        """带 TTL 缓存的 tech-hardware-greed 调用（588200/512480 等科技 ETF 贪婪）。"""
+        cache_key = "tech-hardware-greed"
+        now = time.time()
+        if cache_key in self._cache:
+            data, ts = self._cache[cache_key]
+            if now - ts < ttl:
+                return data
+        data = self._arkvol.fetch_tech_greed()
+        self._cache[cache_key] = (data, now)
+        return data
+
+    def _cached_fund_series(self, fund_code: str, ttl: int = 7200) -> List[Dict]:
+        """带 TTL 缓存的单基金贪婪序列（防御标的展示用）。"""
+        cache_key = f"fund-series:{fund_code}"
+        now = time.time()
+        if cache_key in self._cache:
+            data, ts = self._cache[cache_key]
+            if now - ts < ttl:
+                return data
+        payload = self._arkvol.fetch_fund_series(fund_code)
+        series = payload.get("data", []) if isinstance(payload, dict) else []
+        self._cache[cache_key] = (series, now)
+        return series
+
+    def _cached_pi_kline(self, etf_code: str, limit: int = 250, ttl: int = 7200) -> List[Dict]:
+        """带 TTL 缓存的 ETF 日K线（防御标的价格分位用）。"""
+        cache_key = f"kline:{etf_code}"
+        now = time.time()
+        if cache_key in self._kline_cache:
+            bars, ts = self._kline_cache[cache_key]
+            if now - ts < ttl:
+                return bars
+        bars = self._fetch_pi_server_kline(etf_code, limit=limit)
+        self._kline_cache[cache_key] = (bars, now)
+        return bars
 
     @staticmethod
     def _fetch_pi_server_kline(etf_code: str, limit: int = 250) -> List[Dict]:
@@ -175,7 +217,14 @@ class GoldenPitService:
             f_pi = executor.submit(self._extract_pi_server_indices, as_of)
             pi_server_indices = f_pi.result()
 
-        all_indices = arkvol_indices + pi_server_indices
+        # 半导体增强 + 防御组合并行
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_tech = executor.submit(self._extract_tech_indices, as_of)
+            f_def = executor.submit(self._extract_defense_indices, as_of)
+            tech_indices = f_tech.result()
+            defense_indices = f_def.result()
+
+        all_indices = arkvol_indices + pi_server_indices + tech_indices + defense_indices
         all_indices.sort(key=lambda x: x["priority"])
 
         # ── 全球宏观后处理 ──
@@ -300,8 +349,8 @@ class GoldenPitService:
 
                 snap_map = {s.fund_code: s for s in today_snaps}
 
-                # 批量读取历史序列 (一次 IN 查询 + 内存分组)
-                db_codes = [code for code in CHINA_INDICES if code in snap_map]
+                # 批量读取历史序列 (一次 IN 查询 + 内存分组)；含成长/防御/半导体增强
+                db_codes = [code for code in ALL_INDEX_CONFIGS if code in snap_map]
                 all_rows = (
                     db.query(GoldenPitSnapshot)
                     .filter(GoldenPitSnapshot.fund_code.in_(db_codes))
@@ -313,7 +362,7 @@ class GoldenPitService:
                     series_by_code.setdefault(r.fund_code, []).append(r)
 
                 indices = []
-                for code, cfg in CHINA_INDICES.items():
+                for code, cfg in ALL_INDEX_CONFIGS.items():
                     snap = snap_map.get(code)
                     if not snap:
                         continue
@@ -332,7 +381,7 @@ class GoldenPitService:
                         code=code, cfg=cfg,
                         value=snap.greed_value,
                         close=snap.close_price or 0,
-                        percentile=snap.percentile or 50.0,
+                        percentile=snap.percentile if snap.percentile is not None else 50.0,
                         decline_rate=snap.decline_rate_5d or 0.0,
                         status=snap.status,
                         absolute_triggered=(snap.greed_value or 0) < GREED_ABSOLUTE_PIT,
@@ -349,7 +398,19 @@ class GoldenPitService:
             if not indices:
                 return None
 
-            indices.sort(key=lambda x: x["priority"])
+            # 补全防御/半导体标的（DB 快照尚未积累历史时，实时从 API 构建，保证 DCA 门控与展示完整）
+            existing_codes = {i["fund_code"] for i in indices}
+            if any(c not in existing_codes for c in DEFENSE_INDICES) or any(
+                c not in existing_codes for c in SEMI_BOOST_INDICES
+            ):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    f_tech_extra = executor.submit(self._extract_tech_indices, latest_date)
+                    f_def_extra = executor.submit(self._extract_defense_indices, latest_date)
+                    for item in f_tech_extra.result() + f_def_extra.result():
+                        if item["fund_code"] not in existing_codes:
+                            indices.append(item)
+                            existing_codes.add(item["fund_code"])
+                indices.sort(key=lambda x: x["priority"])
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
@@ -464,6 +525,109 @@ class GoldenPitService:
 
         return result
 
+    def _extract_tech_indices(self, as_of: str) -> List[Dict[str, Any]]:
+        """从 ArkVol tech-hardware-greed 接口构建半导体增强标的（588200/512480）状态。"""
+        try:
+            tech_data = self._cached_tech_greed()
+        except Exception as e:
+            logger.warning("获取 tech-hardware-greed 失败: %s", e)
+            return []
+        data = tech_data.get("data", {}) or {}
+        result = []
+        for code, cfg in SEMI_BOOST_INDICES.items():
+            rows = data.get(cfg.get("arkvol_code", code), [])
+            if not rows:
+                logger.warning("tech-hardware-greed 未返回 %s (%s)，跳过", code, cfg.get("name"))
+                continue
+            sorted_series = sorted(rows, key=lambda x: str(x.get("date", "")))
+            current_greed = float(sorted_series[-1].get("greed", 0))
+            closes = [float(r.get("close", 0)) for r in sorted_series if r.get("close")]
+            percentile = _calculate_percentile(current_greed, sorted_series)
+            status = _determine_status(cfg, current_greed, percentile)
+            index_info = self._build_index_info(
+                code=code, cfg=cfg, value=current_greed,
+                close=closes[-1] if closes else 0,
+                percentile=percentile,
+                decline_rate=_calculate_decline_rate(sorted_series),
+                status=status,
+                absolute_triggered=current_greed < GREED_ABSOLUTE_PIT,
+                data_source="arkvol_tech", sorted_series=sorted_series,
+                as_of=as_of,
+            )
+            result.append(index_info)
+        return result
+
+    def _extract_defense_indices(self, as_of: str) -> List[Dict[str, Any]]:
+        """构建防御组合标的状态：250日价格分位信号 + ArkVol 贪婪展示。
+
+        入坑/撤场以价格分位为准（回测校准阈值），ArkVol 贪婪仅作展示字段。
+        """
+        result = []
+
+        def _build_one(code: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            etf_code = cfg.get("etf_code", "")
+            bars = self._cached_pi_kline(etf_code, limit=250) if etf_code else []
+            if not bars or len(bars) < 10:
+                logger.warning("防御标的 %s K线数据不足，跳过", etf_code)
+                return None
+            window_bars = bars[-250:]
+            closes = [float(b.get("close", 0)) for b in window_bars if b.get("close")]
+            if not closes:
+                return None
+            current_price = closes[-1]
+            percentile = _calculate_price_percentile(current_price, closes)
+            synthetic_greed = _price_based_greed(current_price, closes)
+            decline_rate = _price_decline_rate(closes)
+
+            arkvol_greed = None
+            arkvol_code = cfg.get("arkvol_code", "")
+            if arkvol_code:
+                try:
+                    arkvol_series = self._cached_fund_series(arkvol_code)
+                    if arkvol_series:
+                        arkvol_greed = float(arkvol_series[-1].get("greed", 0))
+                except Exception as e:
+                    logger.warning("防御标的 %s ArkVol 贪婪获取失败: %s", arkvol_code, e)
+
+            status = _determine_status(cfg, synthetic_greed, percentile)
+            if not cfg.get("entry_enabled", True):
+                status = "normal"
+
+            # 价格合成贪婪序列（趋势/退出信号复用同一状态机）
+            sorted_series = [
+                {"date": b.get("date", ""),
+                 "greed": _price_based_greed(float(b.get("close", 0)), closes),
+                 "close": float(b.get("close", 0))}
+                for b in bars
+            ]
+            index_info = self._build_index_info(
+                code=code, cfg=cfg,
+                value=arkvol_greed if arkvol_greed is not None else synthetic_greed,
+                close=current_price, percentile=percentile,
+                decline_rate=decline_rate, status=status,
+                absolute_triggered=False,
+                data_source="defense_price", sorted_series=sorted_series,
+                as_of=as_of,
+            )
+            index_info["arkvol_greed"] = round(arkvol_greed, 4) if arkvol_greed is not None else None
+            index_info["price_percentile"] = round(percentile, 1)
+            return index_info
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(_build_one, code, cfg): code
+                for code, cfg in DEFENSE_INDICES.items()
+            }
+            for fut in as_completed(futures):
+                try:
+                    item = fut.result()
+                    if item is not None:
+                        result.append(item)
+                except Exception as e:
+                    logger.warning("构建防御标的状态失败 (%s): %s", futures[fut], e)
+        result.sort(key=lambda x: x["priority"])
+        return result
+
     def _build_index_info(
         self,
         code: str,
@@ -507,6 +671,8 @@ class GoldenPitService:
             "entry_offset": cfg.get("entry_offset", 0),
             "pit_greed": cfg.get("pit_greed"),
             "entry_greed": cfg.get("entry_greed"),
+            "pit_pct": cfg.get("pit_pct"),
+            "entry_pct": cfg.get("entry_pct"),
             "exit_full_pct": cfg.get("exit_full_pct"),
             "exit_half_pct": cfg.get("exit_half_pct"),
             "exit_fallback_days": cfg.get("exit_fallback_days"),

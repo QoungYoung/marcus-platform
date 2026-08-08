@@ -22,6 +22,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from app.services.golden_pit_config import (
+    CHINA_INDICES,
+    DEFENSE_INDICES,
+    DEFENSE_TAKEOVER_WEIGHTS,
+    PIT_POSITION_SPLIT,
+    SEMI_BOOST_INDICES,
+)
+
 PIT_WINDOW_DAYS = 15
 PRE_TURN_CUMULATIVE_CAP = 0.15   # 拐点前累计上限 (占 max_total 比例)
 
@@ -472,7 +480,7 @@ def _get_holdings_detail() -> List[Dict[str, Any]]:
     """查询所有黄金坑 ETF 的持仓明细（FIFO 成本 + 实时价格 + 盈亏）。"""
     from app.database import SessionLocal
     from app.models.paper_trade import PaperTrade, PaperPosition
-    from app.services.golden_pit_service import CHINA_INDICES
+    from app.services.golden_pit_config import ALL_INDEX_CONFIGS
     from sqlalchemy import func
 
     db = SessionLocal()
@@ -483,13 +491,13 @@ def _get_holdings_detail() -> List[Dict[str, Any]]:
         gp_symbols: set = set()
         for cfg in etf_configs:
             code = cfg["fund_code"]
-            if code not in CHINA_INDICES:
+            if code not in ALL_INDEX_CONFIGS:
                 continue
             ec = cfg["etf_code"]
             ec_no = re.sub(r'^(SH|SZ|BJ)', '', ec)
             info = {
-                "index_name": CHINA_INDICES[code]["name"],
-                "tier": CHINA_INDICES[code].get("tier", ""),
+                "index_name": ALL_INDEX_CONFIGS[code]["name"],
+                "tier": ALL_INDEX_CONFIGS[code].get("tier", ""),
                 "fund_code": code,
             }
             etf_map[ec] = info
@@ -604,8 +612,9 @@ def _get_holdings_detail() -> List[Dict[str, Any]]:
                 "tier": tier,
             })
 
-        # 按 tier 排序: core > satellite > defense
-        tier_order = {"core": 0, "satellite": 1, "defense": 2}
+        # 按 tier 排序: core > satellite > defense > 半导体增强 > 防御轮动
+        tier_order = {"core": 0, "satellite": 1, "defense": 2,
+                      "semi_boost": 3, "defense_rotation": 4}
         holdings.sort(key=lambda h: (tier_order.get(h["tier"], 9), h["index_name"]))
         return holdings
 
@@ -828,6 +837,65 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             f"建议卖出 {sell_shares}股 [{exit_signal}]"
         )
 
+        # ── 撤场后防御承接: 全清退出后资金按防御组合等权配置 ──
+        if exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
+            quote = _get_quote(etf_code)
+            price = None
+            if quote:
+                price = quote.get("current") or quote.get("last_close")
+            if price and price > 0:
+                freed_capital = sell_shares * price
+                for d_code, d_weight in DEFENSE_TAKEOVER_WEIGHTS.items():
+                    d_cfg = DEFENSE_INDICES.get(d_code, {})
+                    d_etf = d_cfg.get("etf_code", "")
+                    if not d_etf:
+                        continue
+                    _record_dca_log(
+                        fund_code=d_code,
+                        window_start=today_str,
+                        buy_day=0,
+                        etf_code=d_etf,
+                        amount=freed_capital * d_weight,
+                        strategy=f"defense_rotation/{d_code}",
+                        order_id="",
+                        status="notified",
+                        schedule_day=0, trend_factor=0.0,
+                    )
+                results.append(
+                    f"🛡 防御承接: {idx['index_name']} 撤场资金 ¥{freed_capital:.0f} "
+                    f"→ 红利/银行/黄金/国债 等权"
+                )
+
+        # ── 防御标的自身撤场 → 再平衡至其余防御标的 ──
+        if idx.get("tier") == "defense_rotation" and exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
+            quote = _get_quote(etf_code)
+            price = None
+            if quote:
+                price = quote.get("current") or quote.get("last_close")
+            if price and price > 0:
+                freed_capital = sell_shares * price
+                remaining = {c: w for c, w in DEFENSE_TAKEOVER_WEIGHTS.items() if c != fund_code}
+                total_w = sum(remaining.values()) or 1.0
+                for d_code, d_weight in remaining.items():
+                    d_cfg = DEFENSE_INDICES.get(d_code, {})
+                    d_etf = d_cfg.get("etf_code", "")
+                    if not d_etf:
+                        continue
+                    _record_dca_log(
+                        fund_code=d_code,
+                        window_start=today_str,
+                        buy_day=0,
+                        etf_code=d_etf,
+                        amount=freed_capital * d_weight / total_w,
+                        strategy=f"defense_rebalance/{d_code}",
+                        order_id="",
+                        status="notified",
+                        schedule_day=0, trend_factor=0.0,
+                    )
+                results.append(
+                    f"🛡 防御再平衡: {idx['index_name']} 撤出 → 其余防御标的"
+                )
+
     for idx in tradeable:
         fund_code = idx["fund_code"]
         cfg = config_by_fund.get(fund_code)
@@ -1010,24 +1078,56 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             daily_amount, resonance, macro_coef,
         )
 
-        # 仅通知，不实际下单。记录日志用于累计仓位追踪
-        _record_dca_log(
-            fund_code=fund_code,
-            window_start=window_start,
-            buy_day=current_day,
-            etf_code=etf_code,
-            amount=daily_amount,
-            strategy=_encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time),
-            order_id="",
-            status="notified",
-            schedule_day=schedule_day, trend_factor=trend_factor,
-        )
+        # ── 坑内仓位拆分: 指数自身 80% + 588200 10% + 512480 10% ──
+        # 增强标的自身未入坑（normal）或数据缺失时，对应部分回退指数自身
+        semi_by_code = {i["fund_code"]: i for i in indices if i.get("tier") == "semi_boost"}
+        index_weight = PIT_POSITION_SPLIT.get("index", 1.0)
+        legs = [("index", etf_code, daily_amount * index_weight)]
+        fallback_notes = []
+        for s_code, s_weight in (
+            ("588200", PIT_POSITION_SPLIT.get("588200", 0.0)),
+            ("512480", PIT_POSITION_SPLIT.get("512480", 0.0)),
+        ):
+            s_amount = daily_amount * s_weight
+            if s_amount <= 0:
+                continue
+            s_idx = semi_by_code.get(s_code)
+            can_buy = s_idx is not None and s_idx.get("status") in ("golden_pit", "warning")
+            if not can_buy:
+                legs[0] = (legs[0][0], legs[0][1], legs[0][2] + s_amount)
+                fallback_notes.append(
+                    f"{SEMI_BOOST_INDICES.get(s_code, {}).get('name', s_code)}未入坑→回退指数"
+                )
+                continue
+            s_etf = SEMI_BOOST_INDICES.get(s_code, {}).get("etf_code", "")
+            if s_etf:
+                legs.append((s_code, s_etf, s_amount))
+
+        for leg_key, leg_etf, leg_amount in legs:
+            if leg_amount <= 0:
+                continue
+            if leg_key == "index":
+                leg_strategy = _encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time)
+            else:
+                leg_strategy = _encode_strategy("split10", trend, trend_factor, buy_time=buy_time) + f"/{leg_key}"
+            _record_dca_log(
+                fund_code=fund_code,
+                window_start=window_start,
+                buy_day=current_day,
+                etf_code=leg_etf,
+                amount=leg_amount,
+                strategy=leg_strategy,
+                order_id="",
+                status="notified",
+                schedule_day=schedule_day, trend_factor=trend_factor,
+            )
 
         executed_count += 1
         total_invested_today += daily_amount
         results.append(
             f"📢 {idx['index_name']} {etf_code}: "
             f"¥{daily_amount:.0f} [{dca_strategy}/{position_tier}] (第{schedule_day}天)"
+            + (f" | {'; '.join(fallback_notes)}" if fallback_notes else "")
         )
 
     # 4. 构建结构化结果
