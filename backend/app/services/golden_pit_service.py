@@ -791,36 +791,37 @@ class GoldenPitService:
                 index_info["position_tier"] = None
                 index_info["position_tier_label"] = "跳过 (不入金)"
 
-            # ── 退出信号检测 (per-index 参数) ──
-            exit_full_pct = cfg.get("exit_full_pct", 50)
-            exit_half_pct = cfg.get("exit_half_pct", 30)
-            exit_info = _detect_exit_signal(
-                sorted_series,
-                index_info["turning_point_confirmed"],
-                index_info["percentile"],
-                exit_full_pct=exit_full_pct,
-                exit_half_pct=exit_half_pct,
-                exit_down_days=cfg.get("exit_down_days", 0),
-                turn_started=bool(index_info.get("turning_start_date")),
-            )
-            index_info["exit_signal"] = exit_info["signal"]
-            index_info["exit_reason"] = exit_info["reason"]
+            if tier != "defense_rotation":  # 防御轮动为永久持有模式，不因自身P分位单独止盈
+                # ── 退出信号检测 (per-index 参数) ──
+                exit_full_pct = cfg.get("exit_full_pct", 50)
+                exit_half_pct = cfg.get("exit_half_pct", 30)
+                exit_info = _detect_exit_signal(
+                    sorted_series,
+                    index_info["turning_point_confirmed"],
+                    index_info["percentile"],
+                    exit_full_pct=exit_full_pct,
+                    exit_half_pct=exit_half_pct,
+                    exit_down_days=cfg.get("exit_down_days", 0),
+                    turn_started=bool(index_info.get("turning_start_date")),
+                )
+                index_info["exit_signal"] = exit_info["signal"]
+                index_info["exit_reason"] = exit_info["reason"]
 
-            # ── 兜底退出: 拐点确认后超过 exit_fallback_days 天，强制清仓 ──
-            if (index_info["exit_signal"] is None
-                    and index_info["turning_point_confirmed"]
-                    and index_info["turning_start_date"]):
-                fallback = cfg.get("exit_fallback_days")
-                if fallback:
-                    days_since_turn = _trading_days_between(
-                        index_info["turning_start_date"], today_str
-                    )
-                    if days_since_turn >= fallback:
-                        index_info["exit_signal"] = "fallback_exit"
-                        index_info["exit_reason"] = (
-                            f"拐点确认{index_info['turning_start_date']}后已过"
-                            f"{days_since_turn}天≥{fallback}天兜底线，强制退出"
+                # ── 兜底退出: 拐点确认后超过 exit_fallback_days 天，强制清仓 ──
+                if (index_info["exit_signal"] is None
+                        and index_info["turning_point_confirmed"]
+                        and index_info["turning_start_date"]):
+                    fallback = cfg.get("exit_fallback_days")
+                    if fallback:
+                        days_since_turn = _trading_days_between(
+                            index_info["turning_start_date"], today_str
                         )
+                        if days_since_turn >= fallback:
+                            index_info["exit_signal"] = "fallback_exit"
+                            index_info["exit_reason"] = (
+                                f"拐点确认{index_info['turning_start_date']}后已过"
+                                f"{days_since_turn}天≥{fallback}天兜底线，强制退出"
+                            )
 
         # ── ETA 预测 (预警区 → 黄金坑) ──
         # 基准与状态判定一致: use_fixed_greed → 固定 pit_greed; 否则 → 滚动窗口 P(pit_pct)

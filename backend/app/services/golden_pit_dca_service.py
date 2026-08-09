@@ -533,6 +533,75 @@ def _record_dca_log(
         logger.warning("记录 DCA 日志失败: %s", e)
 
 
+def _sell_defense_on_reentry(source_code: str, today_str: str) -> List[str]:
+    """宽基重新入场时，卖出其撤场时轮入的防御持仓（永久持有模式，仅通知/记账）。
+
+    防重复：防御承接批次以 (d_code, window_start) 标识；卖出记录
+    strategy="exit/defense_reentry/{d_code}" 且 window_start 与批次一致，已卖出批次自动跳过。
+    旧格式 defense_rotation/{d_code}（无来源）无法关联，保留历史记录不处理。
+    """
+    try:
+        from app.database import SessionLocal
+        from app.models.golden_pit_dca_log import GoldenPitDCALog
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.strategy.like(f"defense_rotation/{source_code}/%"),
+                    GoldenPitDCALog.status.in_(("filled", "notified")),
+                    GoldenPitDCALog.amount > 0,
+                )
+                .all()
+            )
+            sold_rows = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.strategy.like("exit/defense_reentry/%"),
+                    GoldenPitDCALog.status.in_(("filled", "notified")),
+                )
+                .all()
+            )
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("查询防御承接持仓失败 (%s): %s", source_code, e)
+        return []
+
+    sold_keys = {(r.fund_code, r.window_start or "") for r in sold_rows}
+    batches: Dict[Tuple[str, str], List[Any]] = {}
+    for r in rows:
+        parts = (r.strategy or "").split("/")
+        if len(parts) < 3:
+            continue  # 旧格式无来源，跳过
+        d_code = parts[2]
+        key = (d_code, r.window_start or "")
+        if key in sold_keys:
+            continue
+        b = batches.setdefault(key, [r.etf_code, 0.0])
+        b[1] += r.amount
+
+    msgs = []
+    for (d_code, ws), (d_etf, amount) in batches.items():
+        if amount <= 0 or not d_etf:
+            continue
+        _record_dca_log(
+            fund_code=d_code,
+            window_start=ws or today_str,
+            buy_day=0,
+            etf_code=d_etf,
+            amount=amount,
+            strategy=f"exit/defense_reentry/{d_code}",
+            order_id="",
+            status="notified",
+            schedule_day=0, trend_factor=0.0,
+        )
+        d_name = DEFENSE_INDICES.get(d_code, {}).get("name", d_code)
+        msgs.append(f"🛡 防御取出: {d_name}({d_etf}) 卖出 ¥{amount:.0f}（{source_code} 重新入场，赎回资金回补）")
+    return msgs
+
+
 def _get_holdings_detail() -> List[Dict[str, Any]]:
     """查询所有黄金坑 ETF 的持仓明细（FIFO 成本 + 实时价格 + 盈亏）。"""
     from app.database import SessionLocal
@@ -855,6 +924,9 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         cfg = config_by_fund.get(fund_code)
         if not cfg:
             continue
+        # 防御轮动为永久持有模式：不因自身 P 分位单独止盈，持有至宽基重新入场时卖出
+        if idx.get("tier") == "defense_rotation":
+            continue
         etf_code = cfg["etf_code"]
         holding = _get_holding_shares(etf_code)
         sim_amount = _get_simulated_position_amount(etf_code)
@@ -919,41 +991,19 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                         buy_day=0,
                         etf_code=d_etf,
                         amount=freed_capital * d_weight,
-                        strategy=f"defense_rotation/{d_code}",
+                        strategy=f"defense_rotation/{fund_code}/{d_code}",
                         order_id="",
                         status="notified",
                         schedule_day=0, trend_factor=0.0,
                     )
+                defense_names = "/".join(
+                    DEFENSE_INDICES.get(c, {}).get("name", c) for c in DEFENSE_TAKEOVER_WEIGHTS
+                )
                 results.append(
                     f"🛡 防御承接: {idx['index_name']} 撤场资金 ¥{freed_capital:.0f} "
-                    f"→ 红利/银行/黄金/国债 等权"
+                    f"→ {defense_names} 等权（持有至宽基重新入场）"
                 )
 
-        # ── 防御标的自身撤场 → 再平衡至其余防御标的(仅记录) ──
-        if idx.get("tier") == "defense_rotation" and exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
-            freed_capital = sell_amount if sell_amount > 0 else sell_shares * price
-            if freed_capital > 0:
-                remaining = {c: w for c, w in DEFENSE_TAKEOVER_WEIGHTS.items() if c != fund_code}
-                total_w = sum(remaining.values()) or 1.0
-                for d_code, d_weight in remaining.items():
-                    d_cfg = DEFENSE_INDICES.get(d_code, {})
-                    d_etf = d_cfg.get("etf_code", "")
-                    if not d_etf:
-                        continue
-                    _record_dca_log(
-                        fund_code=d_code,
-                        window_start=today_str,
-                        buy_day=0,
-                        etf_code=d_etf,
-                        amount=freed_capital * d_weight / total_w,
-                        strategy=f"defense_rebalance/{d_code}",
-                        order_id="",
-                        status="notified",
-                        schedule_day=0, trend_factor=0.0,
-                    )
-                results.append(
-                    f"🛡 防御再平衡: {idx['index_name']} 撤出 → 其余防御标的"
-                )
     for idx in tradeable:
         fund_code = idx["fund_code"]
         cfg = config_by_fund.get(fund_code)
@@ -987,6 +1037,11 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             logger.info("%s: 第 %d 天已执行，跳过", fund_code, current_day)
             skipped_count += 1
             continue
+
+        # ── 永久持有: 宽基重新入场 → 卖出其撤场时轮入的防御持仓(仅通知/记账) ──
+        reentry_msgs = _sell_defense_on_reentry(fund_code, today_str)
+        if reentry_msgs:
+            results.extend(reentry_msgs)
 
         # ── 仓位计算 v5: DCA基准权重 × 趋势调节因子 ──
         max_total = cfg["max_total_amount"]

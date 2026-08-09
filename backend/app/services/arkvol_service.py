@@ -221,7 +221,7 @@ class ArkvolService:
         """获取单只基金的贪婪历史序列（GET）。
 
         返回 {success, fund_code, data: [{date, greed, close}]}。
-        用于防御组合标的（009052/014028/020412/020741/017193）贪婪快照。
+        用于防御组合标的（014028/020412/020741/017193）贪婪快照。
         """
         return _request_raw_json(self.api_key, f"/api/funds-greed/fund/{fund_code}?days={days}", timeout=60)
 

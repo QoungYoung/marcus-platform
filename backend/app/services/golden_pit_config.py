@@ -111,13 +111,13 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "buy_time": "09:36"},
 }
 
-# ═══ 防御组合（撤场资金承接，独立信号）═══
-# 信号源: 250日滚动价格分位（回测校准 2017-2026）；ArkVol 贪婪（009052/014028/020412/020741/017193）仅作展示与快照
+# ═══ 防御组合（撤场资金承接，永久持有模式）═══
+# 信号源: 250日滚动价格分位（回测校准 2017-2026）；银行/黄金/国债/有色 ArkVol 贪婪仅作展示与快照；中证红利以价格分位为准
 DEFENSE_INDICES: Dict[str, Dict[str, Any]] = {
-    # 红利: P20 入坑 / P40 撤场 (20日 +2.45%, 胜率 77%)
-    "510880": {"name": "红利", "priority": 21, "data_source": "arkvol", "tier": "defense_rotation",
-               "arkvol_code": "009052", "etf_code": "SH510880",
-               "signal_quality": "strong", "exp_15d": 1.5, "exp_20d": 2.5, "position_weight": 0.25,
+    # 中证红利: 随宽基撤场等权轮入，持有至宽基重新入场时卖出（永久持有，无独立波段止盈）
+    "515080": {"name": "中证红利", "priority": 21, "data_source": "defense_price", "tier": "defense_rotation",
+               "etf_code": "SH515080",
+               "signal_quality": "strong", "exp_15d": 1.5, "exp_20d": 2.5, "position_weight": 0.20,
                "use_fixed_greed": False, "entry_pct": 25, "pit_pct": 20,
                "entry_enabled": True,
                "turning_days": 1, "position_multiplier": 0.8,
@@ -193,10 +193,10 @@ SEMI_BOOST_INDICES: Dict[str, Dict[str, Any]] = {
 # 坑内仓位分配: 指数自身 90% + 科创芯片 5% + 半导体 5%（512480 实测最优：+117%/Calmar 0.88，80/10/10 降至 0.73）
 PIT_POSITION_SPLIT: Dict[str, float] = {"index": 0.90, "588200": 0.05, "512480": 0.05}
 
-# 撤场后防御承接组合（等权五标的：红利/银行/黄金/国债/有色）
-# 轮动回测 2020-12~2026-07: 五标的 +131%/回撤-16.7% 全面优于四标的 +88%/-17.1%；有色入坑信号弱，仅作组合成分
+# 撤场后防御承接组合（等权五标的：中证红利/银行/黄金/国债/有色）——永久持有模式
+# 轮动回测 2020-11~2026-07（515080 替换 510880 + 持有至宽基重新入场）: 组合 CAGR 12.7% vs 波段 7.85%，回撤 -23.9% vs -21.0%
 DEFENSE_TAKEOVER_WEIGHTS: Dict[str, float] = {
-    "510880": 0.20, "512800": 0.20, "518880": 0.20, "511010": 0.20, "512400": 0.20,
+    "515080": 0.20, "512800": 0.20, "518880": 0.20, "511010": 0.20, "512400": 0.20,
 }
 
 # 全部指数配置索引（成长 + 防御 + 半导体增强），供统一查询
@@ -415,6 +415,8 @@ def _add_trading_days(date_str: str, trading_days: int) -> str:
 def _describe_entry_strategy(cfg: Dict[str, Any]) -> str:
     """生成入场策略的人类可读描述。"""
     # DCA 分配方式
+    if cfg.get("tier") == "defense_rotation":
+        return "随宽基撤场等权轮入（不单独判断入坑）"
     dca = cfg.get("dca_strategy", "lump_entry")
     dca_label = {
         "lump_entry": "一次性打入",
@@ -449,6 +451,8 @@ def _describe_entry_strategy(cfg: Dict[str, Any]) -> str:
 
 def _describe_exit_strategy(cfg: Dict[str, Any]) -> str:
     """生成出场策略的人类可读描述。"""
+    if cfg.get("tier") == "defense_rotation":
+        return "持有至宽基重新入场时卖出（无独立止盈）"
     fallback = cfg.get("exit_fallback_days", 60)
 
     # 二次拐点向下离场（半导体增强）
