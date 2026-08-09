@@ -157,6 +157,34 @@ class TestDetectExitSignal(unittest.TestCase):
         res = _detect_exit_signal(series, True, 10.0, exit_full_pct=80, exit_half_pct=40)
         self.assertIsNone(res["signal"])
 
+    def test_down_turn_exit_after_turn(self):
+        # 已确认过拐点(0.33)后连续 3 天回落 → 二次拐点向下清仓
+        series = make_series([0.20, 0.21, 0.22, 0.31, 0.33, 0.32, 0.30, 0.28])
+        res = _detect_exit_signal(series, False, 10.0, exit_full_pct=80, exit_half_pct=40,
+                                  exit_down_days=3, turn_started=True)
+        self.assertEqual(res["signal"], "full_exit")
+        self.assertIn("二次拐点", res["reason"])
+
+    def test_down_turn_no_exit_before_first_turn(self):
+        # 尚未确认过拐点(入场前的初始下跌) → 不触发二次拐点离场
+        series = make_series([0.50, 0.45, 0.40, 0.35, 0.30])
+        res = _detect_exit_signal(series, False, 10.0, exit_full_pct=80, exit_half_pct=40,
+                                  exit_down_days=3, turn_started=False)
+        self.assertIsNone(res["signal"])
+
+    def test_down_turn_short_decline_no_exit(self):
+        # 仅连续 2 天回落，不足 3 天 → 不触发
+        series = make_series([0.20, 0.21, 0.22, 0.31, 0.33, 0.32, 0.30])
+        res = _detect_exit_signal(series, False, 10.0, exit_full_pct=80, exit_half_pct=40,
+                                  exit_down_days=3, turn_started=True)
+        self.assertIsNone(res["signal"])
+
+    def test_down_turn_disabled_by_default(self):
+        # 未配置 exit_down_days → 走原有 P 分位退出逻辑，不受影响
+        series = make_series([0.50, 0.45, 0.40, 0.35, 0.30])
+        res = _detect_exit_signal(series, False, 10.0, exit_full_pct=80, exit_half_pct=40)
+        self.assertIsNone(res["signal"])
+
 
 class TestDetectP10Entry(unittest.TestCase):
     def test_fixed_threshold_crossing(self):

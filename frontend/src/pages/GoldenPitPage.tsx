@@ -32,6 +32,7 @@ interface IndexStatus {
   exit_reason?: string;
   entry_strategy?: string;
   exit_strategy?: string;
+  exit_mode?: string;
   dca_strategy?: string;
   dca_label?: string;
   dca_weight?: number;
@@ -643,7 +644,7 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
   minPitGreed?: number;
   minEntryGreed?: number;
   groupLabel?: string;
-  thresholds?: Record<string, { pit_pct?: number; entry_pct?: number; exit_full_pct?: number; pit_greed?: number; entry_greed?: number; pit_greed_threshold?: number; entry_greed_threshold?: number; exit_greed_threshold?: number }>;
+  thresholds?: Record<string, { pit_pct?: number; entry_pct?: number; exit_full_pct?: number; pit_greed?: number; entry_greed?: number; pit_greed_threshold?: number; entry_greed_threshold?: number; exit_greed_threshold?: number; exit_mode?: string }>;
 }) {
   const [legendOpen, setLegendOpen] = useState(true);
   if (!trendData || !trendData.series || Object.keys(trendData.series).length === 0) {
@@ -690,7 +691,8 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
       const pctTxt = (p?: number) => (p != null ? ` (P${p})` : '');
       if (pit != null) soloLines.push({ key: 'pit', value: pit, label: `入场线 ${pit.toFixed(3)}${pctTxt(th.pit_pct)}`, color: '#e5484d', pos: 'insideBottomRight' });
       if (entry != null) soloLines.push({ key: 'entry', value: entry, label: `预警线 ${entry.toFixed(3)}${pctTxt(th.entry_pct)}`, color: '#c98a12', pos: 'insideRight' });
-      if (exit != null) soloLines.push({ key: 'exit', value: exit, label: `出场线 ${exit.toFixed(3)}${pctTxt(th.exit_full_pct)}`, color: '#2f7cd3', pos: 'insideTopRight' });
+      // 二次拐点离场模式: 出场不依赖 P 分位，不画 P 出场线（出场策略见 exit_strategy 文案）
+      if (exit != null && th.exit_mode !== 'down_turn') soloLines.push({ key: 'exit', value: exit, label: `出场线 ${exit.toFixed(3)}${pctTxt(th.exit_full_pct)}`, color: '#2f7cd3', pos: 'insideTopRight' });
     }
   }
   soloLines.sort((a, b) => a.value - b.value);
@@ -1097,7 +1099,7 @@ export default function GoldenPitPage() {
   // 单指数参考线阈值（防御轮动为价格分位信号，不映射到贪婪图）
   const thresholdsByCode = (list: IndexStatus[]) => Object.fromEntries(
     list.map((i) => [i.fund_code, {
-        pit_pct: i.pit_pct, entry_pct: i.entry_pct, exit_full_pct: i.exit_full_pct,
+        pit_pct: i.pit_pct, entry_pct: i.entry_pct, exit_full_pct: i.exit_full_pct, exit_mode: i.exit_mode,
         pit_greed: i.pit_greed, entry_greed: i.entry_greed,
         pit_greed_threshold: i.pit_greed_threshold, entry_greed_threshold: i.entry_greed_threshold,
         exit_greed_threshold: i.exit_greed_threshold,

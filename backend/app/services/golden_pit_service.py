@@ -695,6 +695,8 @@ class GoldenPitService:
             "exit_full_pct": cfg.get("exit_full_pct"),
             "exit_half_pct": cfg.get("exit_half_pct"),
             "exit_fallback_days": cfg.get("exit_fallback_days"),
+            "exit_mode": cfg.get("exit_mode"),
+            "exit_down_days": cfg.get("exit_down_days"),
             # DCA 策略参数 (v5)
             "dca_strategy": cfg.get("dca_strategy", "uniform_10"),
             "dca_label": _strategy_label(cfg.get("dca_strategy", "uniform_10")),
@@ -798,6 +800,8 @@ class GoldenPitService:
                 index_info["percentile"],
                 exit_full_pct=exit_full_pct,
                 exit_half_pct=exit_half_pct,
+                exit_down_days=cfg.get("exit_down_days", 0),
+                turn_started=bool(index_info.get("turning_start_date")),
             )
             index_info["exit_signal"] = exit_info["signal"]
             index_info["exit_reason"] = exit_info["reason"]

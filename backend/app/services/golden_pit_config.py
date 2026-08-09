@@ -168,23 +168,25 @@ DEFENSE_INDICES: Dict[str, Dict[str, Any]] = {
 
 # ═══ 半导体增强（坑内 10% 增强仓位，ArkVol tech-hardware-greed 信号）═══
 SEMI_BOOST_INDICES: Dict[str, Dict[str, Any]] = {
-    # 科创芯片: P5 入坑 / P10 预警（ArkVol tech-hardware-greed）
+    # 科创芯片: P30 预警 / P5 入坑；二次拐点向下离场（连续3天回落清仓，兜底60天）
     "588200": {"name": "科创芯片", "priority": 31, "data_source": "arkvol_tech", "tier": "semi_boost",
                "arkvol_code": "588200", "etf_code": "SH588200",
                "signal_quality": "good", "exp_15d": 4.0, "exp_20d": 6.0, "position_weight": 0.10,
-               "use_fixed_greed": False, "entry_pct": 10, "pit_pct": 5,
+               "use_fixed_greed": False, "entry_pct": 30, "pit_pct": 5,
+               "exit_mode": "down_turn", "exit_down_days": 3,
                "turning_days": 1, "position_multiplier": 1.0,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 20,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60,
                "buy_time": "09:36"},
-    # 半导体: P5 入坑 / P10 预警（ArkVol tech-hardware-greed）
+    # 半导体: P30 预警 / P5 入坑；二次拐点向下离场（连续3天回落清仓，兜底60天）
     "512480": {"name": "半导体", "priority": 32, "data_source": "arkvol_tech", "tier": "semi_boost",
                "arkvol_code": "512480", "etf_code": "SH512480",
                "signal_quality": "good", "exp_15d": 4.0, "exp_20d": 6.0, "position_weight": 0.10,
-               "use_fixed_greed": False, "entry_pct": 10, "pit_pct": 5,
+               "use_fixed_greed": False, "entry_pct": 30, "pit_pct": 5,
+               "exit_mode": "down_turn", "exit_down_days": 3,
                "turning_days": 1, "position_multiplier": 1.0,
                "dca_strategy": "lump_entry", "dca_fallback": 5,
-               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 20,
+               "exit_full_pct": 50, "exit_half_pct": 50, "exit_fallback_days": 60,
                "buy_time": "09:36"},
 }
 
@@ -447,9 +449,15 @@ def _describe_entry_strategy(cfg: Dict[str, Any]) -> str:
 
 def _describe_exit_strategy(cfg: Dict[str, Any]) -> str:
     """生成出场策略的人类可读描述。"""
+    fallback = cfg.get("exit_fallback_days", 60)
+
+    # 二次拐点向下离场（半导体增强）
+    if cfg.get("exit_mode") == "down_turn":
+        down_days = cfg.get("exit_down_days", 3)
+        return f"二次拐点离场: 连续{down_days}天回落清仓 兜底{fallback}天"
+
     exit_full = cfg.get("exit_full_pct", 50)
     exit_half = cfg.get("exit_half_pct", 50)
-    fallback = cfg.get("exit_fallback_days", 60)
 
     if exit_full == 99 and exit_half == 99:
         return f"固定持有 {fallback}天"

@@ -224,11 +224,15 @@ def _detect_exit_signal(
     percentile: float,
     exit_full_pct: int = 50,
     exit_half_pct: int = 30,
+    exit_down_days: int = 0,
+    turn_started: bool = False,
 ) -> Dict[str, Any]:
     """检测退出信号（全量回测校准 per-index 参数）。
 
     只在拐点确认后才发出退出信号（拐点前不退出）。
     退出规则:
+      - 二次拐点向下离场 (exit_down_days>0 且已确认过拐点):
+        贪婪连续回落 >= exit_down_days 天 → full_exit (清仓)
       - percentile >= exit_full_pct → full_exit (清仓)
       - percentile >= exit_half_pct → half_exit (卖一半)
       - 拐点后连续2天回落且曾回到 exit_half_pct → stop_profit (止盈保护)
@@ -238,13 +242,28 @@ def _detect_exit_signal(
     """
     result = {"signal": None, "reason": ""}
 
-    if not turning_confirmed:
-        return result
-
     if len(sorted_series) < 5:
         return result
 
     greeds = [float(s.get("greed", 0)) for s in sorted_series]
+
+    # 二次拐点向下离场: 历史上已确认过拐点(已入场)后, 贪婪连续 N 天回落 → 清仓
+    if exit_down_days and exit_down_days > 0 and turn_started:
+        days_declining = 0
+        for i in range(len(greeds) - 1, 0, -1):
+            if greeds[i] < greeds[i - 1]:
+                days_declining += 1
+            else:
+                break
+        if days_declining >= exit_down_days:
+            result["signal"] = "full_exit"
+            result["reason"] = (
+                f"二次拐点向下确认: 贪婪连续{days_declining}天回落，建议清仓"
+            )
+            return result
+
+    if not turning_confirmed:
+        return result
 
     # 全清退出 (per-index threshold)
     if percentile >= exit_full_pct:
