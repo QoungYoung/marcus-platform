@@ -748,7 +748,7 @@ class GoldenPitService:
                 index_info["signal_trigger_greed"] = round(min(window_greeds), 4)
 
             # ── 趋势检测 + 仓位分级 ──
-            if status in ("golden_pit", "warning"):
+            if tier not in ("drop", "watch"):
                 td = cfg.get("turning_days", TURNING_CONSECUTIVE_DAYS)
                 trend = _detect_trend(sorted_series, turning_days=td)
                 index_info["trend"] = trend["trend"]
@@ -785,7 +785,7 @@ class GoldenPitService:
                 index_info["trend_factor"] = round(trend_factor, 2)
                 index_info["trend_label"] = _trend_label(index_info.get("trend", "declining"), trend_factor)
 
-            elif tier in ("drop", "watch"):
+            else:
                 index_info["position_tier"] = None
                 index_info["position_tier_label"] = "跳过 (不入金)"
 

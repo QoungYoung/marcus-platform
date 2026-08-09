@@ -163,6 +163,7 @@ def _check_lump_reversal(fund_code: str, schedule_day: int, dca_strategy: str,
                     GoldenPitDCALog.window_start == window_start,
                     GoldenPitDCALog.schedule_day == 0,
                     GoldenPitDCALog.amount > 0,
+                    GoldenPitDCALog.strategy.notlike("exit/%"),
                 )
                 .first()
             )
@@ -286,6 +287,7 @@ def _get_executed_days(fund_code: str, window_start: str) -> set:
                     GoldenPitDCALog.fund_code == fund_code,
                     GoldenPitDCALog.window_start == window_start,
                     GoldenPitDCALog.status.in_(("filled", "notified")),
+                    GoldenPitDCALog.strategy.notlike("exit/%"),
                 )
                 .all()
             )
@@ -318,6 +320,61 @@ def _already_holding(etf_code: str) -> bool:
                     .first()
                 )
             return pos is not None
+        finally:
+            db.close()
+    except Exception:
+        return False
+
+
+def _get_simulated_position_amount(etf_code: str) -> float:
+    """Simulated position from DCA logs: buy(filled/notified) minus sell(exit/)."""
+    try:
+        from app.database import SessionLocal
+        from app.models.golden_pit_dca_log import GoldenPitDCALog
+        import re as _re
+
+        code_no = _re.sub(r'^(SH|SZ|BJ)', '', etf_code)
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.etf_code.in_([etf_code, code_no]),
+                    GoldenPitDCALog.status.in_(("filled", "notified")),
+                )
+                .all()
+            )
+        finally:
+            db.close()
+        total = 0.0
+        for r in rows:
+            if r.strategy and r.strategy.startswith("exit/"):
+                total -= r.amount
+            else:
+                total += r.amount
+        return max(total, 0.0)
+    except Exception:
+        return 0.0
+
+
+def _has_exit_notice(fund_code: str) -> bool:
+    """True if an exit notice was already recorded for this fund today."""
+    try:
+        from app.database import SessionLocal
+        from app.models.golden_pit_dca_log import GoldenPitDCALog
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.fund_code == fund_code,
+                    GoldenPitDCALog.strategy.startswith("exit/"),
+                )
+                .all()
+            )
+            return any((r.created_at or "").startswith(today) for r in rows)
         finally:
             db.close()
     except Exception:
@@ -789,7 +846,7 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
     skipped_count = 0
     total_invested_today = 0.0
 
-    # ── 退出信号检查: 对已持仓 ETF 检查是否需要卖出 ──
+    # ── 退出信号检查: 对已持仓(真实/模拟)ETF 检查是否需要卖出(仅通知) ──
     for idx in indices:
         exit_signal = idx.get("exit_signal")
         if not exit_signal:
@@ -800,51 +857,57 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             continue
         etf_code = cfg["etf_code"]
         holding = _get_holding_shares(etf_code)
-        if holding < 100:
+        sim_amount = _get_simulated_position_amount(etf_code)
+        if holding < 100 and sim_amount < 100:
+            continue
+        if _has_exit_notice(fund_code):
             continue
 
+        quote = _get_quote(etf_code)
+        price = None
+        if quote:
+            price = quote.get("current") or quote.get("last_close")
+        if not price or price <= 0:
+            continue
+
+        sim_shares = int(sim_amount / price / 100) * 100
+        total_shares = max(holding, sim_shares)
+
         if exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
-            sell_shares = holding
+            sell_shares = total_shares
+            sell_amount = sim_amount
         elif exit_signal == "half_exit":
-            sell_shares = int(holding / 2 / 100) * 100
+            sell_shares = int(total_shares / 2 / 100) * 100
+            sell_amount = sim_amount * 0.5
         else:
             continue
 
         if sell_shares < 100:
             continue
 
-        sell_reason = (
-            f"[黄金坑DCA 退出] {idx['index_name']} {idx.get('exit_reason', '')} "
-            f"greed={idx['greed']:.4f} P{idx['percentile']:.0f}"
-        )
-
-        # 仅通知，不实际下单
+        # 仅通知，不实际下单；按模拟持仓金额记录卖出
         _record_dca_log(
             fund_code=fund_code,
             window_start=window_start,
             buy_day=current_day,
             etf_code=etf_code,
-            amount=0,
+            amount=sell_amount,
             strategy=f"exit/{exit_signal}",
             order_id="",
             status="notified",
             schedule_day=current_day, trend_factor=0.0,
         )
 
-        exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟠", "fallback_exit": "⏰"}.get(exit_signal, "")
+        exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟢", "fallback_exit": "🔔"}.get(exit_signal, "")
         results.append(
             f"{exit_icon} 退出信号 {idx['index_name']} {etf_code}: "
-            f"建议卖出 {sell_shares}股 [{exit_signal}]"
+            f"建议卖出 {sell_shares}股 约¥{sell_amount:.0f} [{exit_signal}]"
         )
 
-        # ── 撤场后防御承接: 全清退出后资金按防御组合等权配置 ──
+        # ── 撤场后防御承接: 全清退出后资金按防御组合等权配置(仅记录) ──
         if exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
-            quote = _get_quote(etf_code)
-            price = None
-            if quote:
-                price = quote.get("current") or quote.get("last_close")
-            if price and price > 0:
-                freed_capital = sell_shares * price
+            freed_capital = sell_amount if sell_amount > 0 else sell_shares * price
+            if freed_capital > 0:
                 for d_code, d_weight in DEFENSE_TAKEOVER_WEIGHTS.items():
                     d_cfg = DEFENSE_INDICES.get(d_code, {})
                     d_etf = d_cfg.get("etf_code", "")
@@ -866,14 +929,10 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                     f"→ 红利/银行/黄金/国债 等权"
                 )
 
-        # ── 防御标的自身撤场 → 再平衡至其余防御标的 ──
+        # ── 防御标的自身撤场 → 再平衡至其余防御标的(仅记录) ──
         if idx.get("tier") == "defense_rotation" and exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
-            quote = _get_quote(etf_code)
-            price = None
-            if quote:
-                price = quote.get("current") or quote.get("last_close")
-            if price and price > 0:
-                freed_capital = sell_shares * price
+            freed_capital = sell_amount if sell_amount > 0 else sell_shares * price
+            if freed_capital > 0:
                 remaining = {c: w for c, w in DEFENSE_TAKEOVER_WEIGHTS.items() if c != fund_code}
                 total_w = sum(remaining.values()) or 1.0
                 for d_code, d_weight in remaining.items():
@@ -895,7 +954,6 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                 results.append(
                     f"🛡 防御再平衡: {idx['index_name']} 撤出 → 其余防御标的"
                 )
-
     for idx in tradeable:
         fund_code = idx["fund_code"]
         cfg = config_by_fund.get(fund_code)
@@ -1331,6 +1389,7 @@ def _get_day_amount(fund_code: str, window_start: str, buy_day: int) -> float:
                     GoldenPitDCALog.window_start == window_start,
                     GoldenPitDCALog.buy_day == buy_day,
                     GoldenPitDCALog.status.in_(("filled", "notified")),
+                    GoldenPitDCALog.strategy.notlike("exit/%"),
                 )
                 .all()
             )

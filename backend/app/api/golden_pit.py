@@ -245,6 +245,7 @@ async def get_dca_status():
                         GoldenPitDCALog.fund_code == cfg.fund_code,
                         GoldenPitDCALog.window_start == window_start,
                         GoldenPitDCALog.status.in_(("filled", "notified")),
+                        GoldenPitDCALog.strategy.notlike("exit/%"),
                     )
                     .all()
                 )
