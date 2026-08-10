@@ -68,3 +68,13 @@
 - 选筹门槛: 需 `mf5_norm > 0`（资金逆势流入）且 `oversold120 < 0`（超跌中），有效板块数 ≥ `SECTOR_MIN_VALID`(4)，否则空仓等待板块信号。
 - 运行时配置存 PostgreSQL `golden_pit_sector_config` 表（黄金坑页面→配置按钮弹窗修改，GET/PUT `/golden-pit/sector-config`），保存后即时生效无需重启；`.env`（`GOLDEN_PIT_SECTOR_SPLIT_ENABLED` 等）仅作首次种子默认值来源。false 时 588000/159915 维持宽基直接买入（回滚路径）；true 后只买选中板块 ETF。
 - 相关变更: `openspec/changes/split-golden-pit-broad-to-sector-etfs/`（proposal/specs/design/tasks）。
+
+
+## greed 信号模式上线说明（add-sector-greed-selection）
+
+- 选筹信号模式由 `signal_mode` 配置控制：`greed`（默认，超跌+板块贪婪）或 `moneyflow`（超跌+中信二级5日资金流，旧逻辑回滚）。`.env` 的 `GOLDEN_PIT_SECTOR_SIGNAL_MODE` 为默认值，运行时经 PostgreSQL `golden_pit_sector_config` 表动态覆盖（黄金坑页面配置弹窗，string 类型）。
+- greed 信号口径（与 `scripts/backtest_sector_greed_500d.py` 一致）: 有效信号 = `oversold120 < 0`（超跌中）且当日板块贪婪可查；`combo = -(rank(greed,升序) + rank(oversold120,升序))`，按 combo 降序取 TOP N（默认 2），权重归一化与单板块上限逻辑与 moneyflow 共用。
+- 贪婪数据源: arkvol `funds-greed/fund`，`SECTOR_ETF_POOL` 每板块配置 `greed_code`（场内 ETF 直接用 6 位代码；消费电子/新能源动力系统/生物医药/机械/军工 用场外代表基金 018301/015528/018396/026130/022243）。贪婪历史经服务内缓存（TTL 7200s）。
+- 数据降级: 单板块贪婪接口异常/空值/当日无贪婪值 → 该板块剔除，不阻断其他板块；有效板块数 < `min_valid`(4) → 空仓等待（DCA 跳过买入，schedule_day 不递增）。arkvol 登录态失效时可将 `signal_mode` 切回 `moneyflow` 即时回滚。
+- 已知差异: 贪婪历史 2025-01 起（更早无数据）；机械代表基金 026130 仅 2026-03 起；生产超跌用 pi-server K 线、回测用 tushare `fund_daily`，两源收盘价存在小幅偏差，可能影响板块间排序。
+- 相关变更: `openspec/changes/add-sector-greed-selection/`（proposal/specs/design/tasks）。

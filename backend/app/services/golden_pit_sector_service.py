@@ -34,6 +34,7 @@ from app.services.golden_pit_config import (
     SECTOR_MF_MA_DAYS,
     SECTOR_MIN_VALID,
     SECTOR_OVS_DAYS,
+    SECTOR_SIGNAL_MODE,
     SECTOR_TOP_N,
 )
 
@@ -102,6 +103,10 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "exit_down_days": {
         "label": "板块退出回落天数", "description": "板块ETF二次拐点: 连续回落天数",
         "value_type": "number", "sort_order": 10, "default": SECTOR_EXIT_DOWN_DAYS,
+    },
+    "signal_mode": {
+        "label": "板块信号模式", "description": "greed=超跌+板块贪婪；moneyflow=超跌+资金流（回滚）",
+        "value_type": "string", "sort_order": 11, "default": SECTOR_SIGNAL_MODE,
     },
 }
 
@@ -188,6 +193,8 @@ def get_sector_config() -> Dict[str, Any]:
         try:
             if vtype == "bool":
                 cfg[key] = str(raw).strip().lower() in ("1", "true", "yes", "on")
+            elif vtype == "string":
+                cfg[key] = str(raw).strip()
             else:
                 cfg[key] = float(raw)
         except (ValueError, TypeError):
@@ -240,6 +247,9 @@ def update_sector_config(values: Dict[str, Any]) -> Dict[str, Any]:
             if vtype == "bool":
                 val = bool(raw) if isinstance(raw, bool) else str(raw).strip().lower() in ("1", "true", "yes", "on")
                 row.config_value = "true" if val else "false"
+            elif vtype == "string":
+                val = str(raw).strip()
+                row.config_value = val
             else:
                 val = float(raw)
                 row.config_value = str(val)
@@ -307,6 +317,36 @@ def _fetch_etf_kline(etf_code: str, limit: int = 300) -> List[Dict[str, Any]]:
     return bars
 
 
+def _load_sector_greed_map() -> Dict[str, Dict[str, float]]:
+    """加载板块贪婪历史 {etf6位: {date: greed}}（arkvol funds-greed/fund，TTL 7200s）。"""
+    cached = _cache_get("sector_greed_map", 7200)
+    if cached is not None:
+        return cached
+    from app.services.arkvol_service import ArkvolService
+    svc = ArkvolService()
+    out: Dict[str, Dict[str, float]] = {}
+    for sector, entry in SECTOR_ETF_POOL.items():
+        code = entry.get("greed_code")
+        if not code:
+            continue
+        etf6 = entry["etf_code"][2:]
+        try:
+            payload = svc.fetch_fund_series(code, days=2000)
+        except Exception as e:
+            logger.warning("板块贪婪加载失败 %s(%s): %s", sector, code, e)
+            continue
+        data = (payload.get("data") or []) if isinstance(payload, dict) else []
+        g: Dict[str, float] = {}
+        for r in data:
+            d = r.get("date")
+            if d and r.get("greed") is not None:
+                g[str(d)] = float(r["greed"])
+        if g:
+            out[etf6] = g
+    _cache_set("sector_greed_map", out)
+    return out
+
+
 def _compute_signal(
     pool_key: str,
     entry: Dict[str, Any],
@@ -357,6 +397,45 @@ def _compute_signal(
     }
 
 
+def _compute_signal_greed(
+    pool_key: str,
+    entry: Dict[str, Any],
+    greed_map: Dict[str, Dict[str, float]],
+    as_of: str,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """greed 模式单板块信号：超跌中(oversold120<0)且当日贪婪可查。数据不足返回 None。"""
+    cfg = cfg or get_sector_config()
+    ovs_days = int(cfg.get("ovs_days", SECTOR_OVS_DAYS))
+
+    etf6 = entry["etf_code"][2:]
+    g = greed_map.get(etf6, {}).get(as_of)
+    if g is None:
+        return None
+
+    kline = _fetch_etf_kline(entry["etf_code"], limit=ovs_days + 80)
+    if len(kline) < ovs_days + 1:
+        return None
+    closes = [float(b["close"]) for b in kline if b.get("close")]
+    if len(closes) < ovs_days + 1:
+        return None
+    high120 = max(closes[-ovs_days:])
+    last_close = closes[-1]
+    if high120 <= 0:
+        return None
+    oversold120 = last_close / high120 - 1.0
+    if oversold120 >= 0:
+        return None
+
+    return {
+        "sector": pool_key,
+        "name": entry["name"],
+        "etf_code": entry["etf_code"],
+        "greed": round(g, 4),
+        "oversold120": round(oversold120, 4),
+    }
+
+
 def _rank_combo(valid: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """按回测口径计算 combo: -(rank(mf5_norm,降序) + rank(oversold,升序))。"""
     mf_ranks = {
@@ -369,6 +448,21 @@ def _rank_combo(valid: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     }
     for s in valid:
         s["combo"] = round(-(mf_ranks[s["sector"]] + ovs_ranks[s["sector"]]), 4)
+    return valid
+
+
+def _rank_combo_greed(valid: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """greed 模式 combo: -(rank(greed,升序=恐慌) + rank(oversold120,升序=超跌))。"""
+    g_ranks = {
+        s["sector"]: i + 1
+        for i, s in enumerate(sorted(valid, key=lambda x: x["greed"]))
+    }
+    ovs_ranks = {
+        s["sector"]: i + 1
+        for i, s in enumerate(sorted(valid, key=lambda x: x["oversold120"]))
+    }
+    for s in valid:
+        s["combo"] = round(-(g_ranks[s["sector"]] + ovs_ranks[s["sector"]]), 4)
     return valid
 
 
@@ -421,7 +515,11 @@ def select_sectors(
     top_n: Optional[int] = None,
     enabled: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """主入口: 对板块池计算 combo 信号并选出 TOP N 板块组合。
+    """主入口: 按当前 signal_mode 对板块池计算 combo 信号并选出 TOP N 板块组合。
+
+    greed 模式（默认）: 有效信号 = 超跌中(oversold120<0)且板块贪婪可查，
+    combo = -(rank(greed 升序) + rank(oversold120 升序))；
+    moneyflow 模式（回滚）: 走既有「超跌 + 中信二级5日资金流」逻辑。
 
     Args:
         as_of: 数据截止日（默认今天）。dry-run 可与回测窗口对齐。
@@ -429,7 +527,8 @@ def select_sectors(
         enabled: 覆盖 GOLDEN_PIT_SECTOR_SPLIT_ENABLED（默认取配置）。
 
     Returns:
-        {"as_of", "enabled", "selected": [{sector,name,etf_code,combo,mf5_norm,oversold120,weight}],
+        {"as_of", "enabled", "signal_mode",
+         "selected": [{sector,name,etf_code,combo,(greed|mf5_norm),oversold120,weight}],
          "all": [...], "empty_reason"}
     """
     as_of = as_of or datetime.now().strftime("%Y-%m-%d")
@@ -438,8 +537,9 @@ def select_sectors(
     top_n = int(top_n or cfg.get("top_n", SECTOR_TOP_N))
     max_weight = float(cfg.get("max_weight", SECTOR_MAX_WEIGHT))
     min_valid = int(cfg.get("min_valid", SECTOR_MIN_VALID))
+    signal_mode = str(cfg.get("signal_mode", SECTOR_SIGNAL_MODE)).strip().lower()
 
-    cache_key = f"selection:{as_of}:{top_n}"
+    cache_key = f"selection:{as_of}:{top_n}:{signal_mode}"
     cached = _cache_get(cache_key, 900)
     if cached is not None:
         cached["enabled"] = is_enabled
@@ -447,32 +547,42 @@ def select_sectors(
 
     if not SECTOR_ETF_POOL:
         return {
-            "as_of": as_of, "enabled": is_enabled, "selected": [], "all": [],
+            "as_of": as_of, "enabled": is_enabled, "signal_mode": signal_mode,
+            "selected": [], "all": [],
             "empty_reason": "SECTOR_ETF_POOL 未配置",
         }
 
-    flow_df = _load_industry_flow_df()
     valid = []
-    for pool_key, entry in SECTOR_ETF_POOL.items():
-        sig = _compute_signal(pool_key, entry, flow_df, as_of, cfg)
-        if sig:
-            valid.append(sig)
+    if signal_mode == "greed":
+        greed_map = _load_sector_greed_map()
+        for pool_key, entry in SECTOR_ETF_POOL.items():
+            sig = _compute_signal_greed(pool_key, entry, greed_map, as_of, cfg)
+            if sig:
+                valid.append(sig)
+    else:
+        flow_df = _load_industry_flow_df()
+        for pool_key, entry in SECTOR_ETF_POOL.items():
+            sig = _compute_signal(pool_key, entry, flow_df, as_of, cfg)
+            if sig:
+                valid.append(sig)
 
     if len(valid) < min_valid:
         result = {
-            "as_of": as_of, "enabled": is_enabled, "selected": [], "all": valid,
+            "as_of": as_of, "enabled": is_enabled, "signal_mode": signal_mode,
+            "selected": [], "all": valid,
             "empty_reason": f"有效信号板块数 {len(valid)} < {min_valid}，空仓等待板块信号",
         }
         _cache_set(cache_key, result)
         return result
 
-    valid = _rank_combo(valid)
+    valid = _rank_combo_greed(valid) if signal_mode == "greed" else _rank_combo(valid)
     valid.sort(key=lambda x: x["combo"], reverse=True)
     selected = _normalize_weights(valid[:top_n], max_weight)
 
     result = {
         "as_of": as_of,
         "enabled": is_enabled,
+        "signal_mode": signal_mode,
         "selected": selected,
         "all": valid,
         "empty_reason": "" if selected else "combo 信号均未过门槛，空仓等待板块信号",
@@ -482,14 +592,20 @@ def select_sectors(
 
 
 def format_selection(selection: Dict[str, Any]) -> str:
-    """选筹结果 → 可读文本（报告/日志用）。"""
+    """选筹结果 → 可读文本（报告/日志用），兼容 greed / moneyflow 两种信号维度。"""
     if not selection.get("selected"):
         reason = selection.get("empty_reason", "无信号")
         return f"🧭 板块拆分: 空仓等待（{reason}）"
-    parts = [
-        f"{s['name']}({s['sector']}) {s['weight'] * 100:.0f}% combo={s['combo']} "
-        f"mf5={s['mf5_norm']:.2f} ovs={s['oversold120'] * 100:.1f}%"
-        for s in selection["selected"]
-    ]
+    parts = []
+    for s in selection["selected"]:
+        if "greed" in s:
+            dim = f"greed={s['greed']:.2f}"
+        else:
+            dim = f"mf5={s['mf5_norm']:.2f}"
+        parts.append(
+            f"{s['name']}({s['sector']}) {s['weight'] * 100:.0f}% combo={s['combo']} "
+            f"{dim} ovs={s['oversold120'] * 100:.1f}%"
+        )
     mode = "执行" if selection.get("enabled") else "展示(dry-run)"
-    return f"🧭 板块拆分[{mode}]: " + " | ".join(parts)
+    signal = selection.get("signal_mode", "moneyflow")
+    return f"🧭 板块拆分[{mode}/{signal}]: " + " | ".join(parts)

@@ -289,6 +289,35 @@ class GoldenPitService:
                 mapping[arkvol_key] = key
         return mapping
 
+    @staticmethod
+    def _load_full_series(fund_code: str) -> List[Dict[str, Any]]:
+        """从 DB 快照表加载该指数全量贪婪历史（date/greed），供 500 天滚动分位计算。
+
+        ai-summary 仅返回约 64 天 history，滚动分位窗口不足；
+        以 DB golden_pit_snapshots 全量序列补齐（每日盘前 sync 更新）。
+        """
+        try:
+            from app.database import SessionLocal
+            from app.models.golden_pit import GoldenPitSnapshot
+
+            db = SessionLocal()
+            try:
+                rows = (
+                    db.query(GoldenPitSnapshot)
+                    .filter(GoldenPitSnapshot.fund_code == fund_code)
+                    .order_by(GoldenPitSnapshot.date.asc())
+                    .all()
+                )
+                return [
+                    {"date": r.date, "greed": float(r.greed_value)}
+                    for r in rows
+                ]
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("加载 %s 全量贪婪历史失败: %s", fund_code, e)
+            return []
+
     def _extract_from_ai_summary(self, ai_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """从 ai-summary 返回的 snapshot 数组重建指数状态。"""
         arkvol_map = self._arkvol_code_map()  # ArkVol fund_code → config key
@@ -306,7 +335,17 @@ class GoldenPitService:
             cfg = CHINA_INDICES[config_key]
 
             history = snap.get("history", [])
-            sorted_series = sorted(history, key=lambda x: x.get("date", ""))
+            ai_series = sorted(history, key=lambda x: x.get("date", ""))
+            # ai-summary 仅返回约 64 天 history；生产分位需滚动 500 天窗口。
+            # 用 DB 全量快照补齐历史后再计算 percentile（无前视：按日期合并，ai 最新值覆盖同一天）。
+            full_series = self._load_full_series(config_key)
+            if full_series:
+                merged = {s["date"]: float(s["greed"]) for s in full_series}
+                for s in ai_series:
+                    merged[s["date"]] = float(s.get("greed", 0))
+                sorted_series = [{"date": d, "greed": g} for d, g in sorted(merged.items())]
+            else:
+                sorted_series = ai_series
             current_greed = float(sorted_series[-1].get("greed", 0)) if sorted_series else 0.0
 
             percentile = _calculate_percentile(current_greed, sorted_series)
@@ -397,11 +436,15 @@ class GoldenPitService:
                         for r in code_rows
                     ]
 
+                    # 快照 percentile 可能是 ai-summary 64 天旧口径；用 DB 全量序列重算 500 天滚动分位
+                    _pct_recalc = _calculate_percentile(
+                        float(snap.greed_value or 0), sorted_series
+                    )
                     index_info = self._build_index_info(
                         code=code, cfg=cfg,
                         value=snap.greed_value,
                         close=snap.close_price or 0,
-                        percentile=snap.percentile if snap.percentile is not None else 50.0,
+                        percentile=_pct_recalc,
                         decline_rate=snap.decline_rate_5d or 0.0,
                         status=snap.status,
                         absolute_triggered=(snap.greed_value or 0) < GREED_ABSOLUTE_PIT,
