@@ -86,6 +86,27 @@ def format_morning_report(status: Dict[str, Any]) -> str:
 
     lines.append("")
 
+    # ── 板块拆分（guide_only 宽基选筹摘要）──
+    sector_sel = status.get("sector_selection")
+    guide_active = [
+        i for i in indices
+        if i.get("guide_only") and i["status"] in ("golden_pit", "warning")
+    ]
+    if sector_sel is not None and guide_active:
+        mode = "执行" if status.get("sector_split_enabled") else "展示(dry-run)"
+        lines.append(f"🧭 板块拆分[{mode}]（guide_only 宽基: " +
+                     "/".join(i["index_name"] for i in guide_active) + "）")
+        selected = sector_sel.get("selected", [])
+        if selected:
+            for s in selected:
+                lines.append(
+                    f"   · {s['name']} ({s['sector']}) {s['weight'] * 100:.0f}%  "
+                    f"combo={s['combo']} mf5={s['mf5_norm']:.2f} ovs={s['oversold120'] * 100:.1f}%"
+                )
+        else:
+            lines.append(f"   · 等待板块信号（{sector_sel.get('empty_reason', '无信号')}）")
+        lines.append("")
+
     phase = window.get("phase", "idle")
     if phase == "buying":
         rising = window.get("turning_leader_rising", 0)
@@ -228,6 +249,10 @@ def build_v2_summary(indices, window, confirmation, prediction) -> str:
 
     if prediction and prediction.get("next_index"):
         parts.append(f"预测: {prediction['next_index']} 预计 {prediction['eta_days']} 天后进入黄金坑。")
+
+    guide_only = [i["index_name"] for i in indices if i.get("guide_only") and i["status"] in ("golden_pit", "warning")]
+    if guide_only:
+        parts.append(f"板块拆分: {'、'.join(guide_only)} 仅作择时指导，坑内资金按板块 ETF 组合选筹配置（见选筹摘要）。")
 
     layers_ok = sum(1 for k in ["layer1", "layer2", "layer3"] if confirmation[k]["confirmed"])
     if layers_ok == 3:

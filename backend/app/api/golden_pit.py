@@ -3,7 +3,7 @@
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Body
 from fastapi.responses import JSONResponse
 
 from app.services.golden_pit_service import (
@@ -60,6 +60,48 @@ async def get_golden_pit_snapshots(
     except Exception as exc:
         return JSONResponse(
             status_code=502,
+            content={"code": 1, "msg": str(exc), "data": None},
+        )
+
+
+# ── 板块拆分运行时配置 endpoints ──
+
+@router.get("/sector-config")
+async def get_sector_config_api():
+    """获取黄金坑板块拆分配置项列表（供页面配置弹窗）。"""
+    try:
+        from app.services.golden_pit_sector_service import list_sector_config
+        return {"code": 0, "data": list_sector_config()}
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"code": 1, "msg": str(exc), "data": None},
+        )
+
+
+@router.put("/sector-config")
+async def update_sector_config_api(
+    body: dict = Body(..., description="{\"values\": {config_key: value}}"),
+):
+    """批量更新黄金坑板块拆分配置（即时生效，无需重启）。"""
+    try:
+        from app.services.golden_pit_sector_service import update_sector_config
+        values = (body or {}).get("values") or {}
+        if not isinstance(values, dict) or not values:
+            return JSONResponse(
+                status_code=400,
+                content={"code": 1, "msg": "values 不能为空", "data": None},
+            )
+        cfg = update_sector_config(values)
+        return {"code": 0, "data": cfg}
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"code": 1, "msg": str(exc), "data": None},
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
             content={"code": 1, "msg": str(exc), "data": None},
         )
 

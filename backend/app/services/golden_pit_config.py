@@ -1,11 +1,17 @@
 # -*- coding: utf-8 -*-
-"""黄金坑配置与参数 — 指数分级、阈值、DCA 参数与展示配置。"""
+"""黄金坑配置与参数 — 指数分级、阈值、DCA 参数与展示配置。
+
+板块拆分(guide_only): 588000/159915 仅作择时指导，坑内资金由 SECTOR_ETF_POOL
+按 combo 信号(超跌+资金流)动态选筹配置；GOLDEN_PIT_SECTOR_SPLIT_ENABLED 灰度开关
+控制 dry-run 展示 / 实际执行；开关与参数均从仓库根目录 .env 读取（经 app.config.Settings）。"""
 from typing import Any, Dict, Optional
+from app.config import get_settings
 
 CHINA_INDICES: Dict[str, Dict[str, Any]] = {
     # ═══ 核心 (必做) — 高胜率+高收益+高稳定性 ═══
     # 科创50: adjCAGR +15.9%, Win 73%, 52 trades, Stability 0.74
-    "588000": {"name": "科创50",   "priority": 4, "data_source": "arkvol",  "tier": "core",
+    # 科创50: 宽基仅作黄金坑择时指导(guide_only)，不直接买入，坑内资金拆分至板块 ETF 组合
+    "588000": {"name": "科创50",   "priority": 4, "guide_only": True, "data_source": "arkvol",  "tier": "core",
                "signal_quality": "strong", "exp_15d": 5.5, "exp_20d": 8.5, "position_weight": 0.20,
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.348, "entry_greed": 0.400, "entry_offset": 0,
@@ -34,7 +40,8 @@ CHINA_INDICES: Dict[str, Dict[str, Any]] = {
                "exit_full_pct": 80, "exit_half_pct": 30, "exit_fallback_days": 20,
                "buy_time": "09:36", "buy_time_pit": "14:44"},
     # 创业板指: adjCAGR +22.6%, Win 58%, 43 trades, Stability 0.52
-    "159915": {"name": "创业板指", "priority": 2, "data_source": "arkvol",  "tier": "satellite",
+    # 创业板指: 宽基仅作黄金坑择时指导(guide_only)，不直接买入，坑内资金拆分至板块 ETF 组合
+    "159915": {"name": "创业板指", "priority": 2, "guide_only": True, "data_source": "arkvol",  "tier": "satellite",
                "signal_quality": "good",   "exp_15d": 3.0, "exp_20d": 4.5, "position_weight": 0.15,
                "use_fixed_greed": True, "entry_pct": 8, "pit_pct": 3,
                "pit_greed": 0.328, "entry_greed": 0.380, "entry_offset": 0,
@@ -167,6 +174,7 @@ DEFENSE_INDICES: Dict[str, Dict[str, Any]] = {
 }
 
 # ═══ 半导体增强（坑内 10% 增强仓位，ArkVol tech-hardware-greed 信号）═══
+# 注意: 该机制仅对非 guide_only 宽基生效；588000/159915 拆分后由 SECTOR_ETF_POOL 选筹替代
 SEMI_BOOST_INDICES: Dict[str, Dict[str, Any]] = {
     # 科创芯片: P30 预警 / P5 入坑；二次拐点向下离场（连续3天回落清仓，兜底60天）
     "588200": {"name": "科创芯片", "priority": 31, "data_source": "arkvol_tech", "tier": "semi_boost",
@@ -191,7 +199,37 @@ SEMI_BOOST_INDICES: Dict[str, Dict[str, Any]] = {
 }
 
 # 坑内仓位分配: 指数自身 90% + 科创芯片 5% + 半导体 5%（512480 实测最优：+117%/Calmar 0.88，80/10/10 降至 0.73）
+# 注意: 仅对非 guide_only 宽基生效（588000/159915 由 SECTOR_ETF_POOL 动态配置替代）
 PIT_POSITION_SPLIT: Dict[str, float] = {"index": 0.90, "588200": 0.05, "512480": 0.05}
+
+# ═══ 黄金坑板块拆分（guide_only 宽基 → 板块 ETF 组合）═══
+# 588000/159915 仅作择时指导，坑内资金按 combo 信号(超跌 oversold120 + 中信二级5日资金流 mf5_norm)动态选筹
+# 板块池: 中信板块名 → 代表 ETF（flow_name 为 moneyflow_ind_dc 中的中信二级行业名）
+SECTOR_ETF_POOL: Dict[str, Dict[str, Any]] = {
+    "半导体":       {"name": "半导体ETF国联安", "etf_code": "SH512480", "flow_name": "半导体"},
+    "科创芯片":     {"name": "科创芯片ETF",     "etf_code": "SH588200", "flow_name": "半导体"},
+    "通信设备":     {"name": "通信设备ETF国泰", "etf_code": "SH515880", "flow_name": "通信设备"},
+    "计算机":       {"name": "计算机ETF国泰",   "etf_code": "SH512720", "flow_name": "计算机"},
+    "软件":         {"name": "软件ETF",          "etf_code": "SZ159852", "flow_name": "软件开发"},
+    "消费电子":     {"name": "消费电子ETF华夏", "etf_code": "SZ159732", "flow_name": "消费电子"},
+    "新能源动力系统": {"name": "新能源车ETF华夏", "etf_code": "SH515030", "flow_name": "电池"},
+    "生物医药":     {"name": "医药卫生ETF汇添富", "etf_code": "SZ159929", "flow_name": "医药生物"},
+    "机械":         {"name": "机械设备ETF富国", "etf_code": "SZ159886", "flow_name": "专用设备"},
+    "军工":         {"name": "军工ETF国泰",     "etf_code": "SH512660", "flow_name": "国防军工"},
+}
+
+# 板块拆分选筹参数（来自 .env，经 app.config.Settings 加载；改 .env 后需重启 backend 生效）
+_settings = get_settings()
+GOLDEN_PIT_SECTOR_SPLIT_ENABLED: bool = _settings.GOLDEN_PIT_SECTOR_SPLIT_ENABLED  # 灰度开关: false=dry-run 展示选筹; true=板块 ETF 下单（588000/159915 不再直接买入）
+SECTOR_TOP_N: int = _settings.GOLDEN_PIT_SECTOR_TOP_N                            # 坑内选筹 TOP N 板块
+SECTOR_MAX_WEIGHT: float = _settings.GOLDEN_PIT_SECTOR_MAX_WEIGHT                # 单板块权重上限（归一化后截断）
+COMBO_W_OVS: float = _settings.GOLDEN_PIT_SECTOR_COMBO_W_OVS                     # combo 超跌分权重
+COMBO_W_MF: float = _settings.GOLDEN_PIT_SECTOR_COMBO_W_MF                       # combo 资金流分权重
+SECTOR_OVS_DAYS: int = _settings.GOLDEN_PIT_SECTOR_OVS_DAYS                      # 超跌窗口（距N日高点回撤）
+SECTOR_MF_DAYS: int = _settings.GOLDEN_PIT_SECTOR_MF_DAYS                        # 资金流累计窗口（日）
+SECTOR_MF_MA_DAYS: int = _settings.GOLDEN_PIT_SECTOR_MF_MA_DAYS                  # 资金流均值窗口（日）
+SECTOR_MIN_VALID: int = _settings.GOLDEN_PIT_SECTOR_MIN_VALID                    # 有效信号板块数下限（不足则空仓等待）
+SECTOR_EXIT_DOWN_DAYS: int = _settings.GOLDEN_PIT_SECTOR_EXIT_DOWN_DAYS          # 板块ETF二次拐点退出: 连续回落天数
 
 # 撤场后防御承接组合（等权五标的：中证红利/银行/黄金/国债/有色）——永久持有模式
 # 轮动回测 2020-11~2026-07（515080 替换 510880 + 持有至宽基重新入场）: 组合 CAGR 12.7% vs 波段 7.85%，回撤 -23.9% vs -21.0%

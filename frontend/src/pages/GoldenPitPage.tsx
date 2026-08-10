@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Settings, X } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, Brush,
@@ -137,6 +137,15 @@ interface TrendData {
   as_of: string;
   series: Record<string, { date: string; greed: number; close: number }[]>;
   indices: Record<string, string>;
+}
+
+interface SectorConfigItem {
+  config_key: string;
+  value: string | number | boolean;
+  label: string;
+  description: string;
+  value_type: 'bool' | 'number';
+  sort_order: number;
 }
 
 // ── Display Config (fetched from backend) ──
@@ -961,6 +970,10 @@ export default function GoldenPitPage() {
   const [broadOpen, setBroadOpen] = useState(true);
   const [sectorOpen, setSectorOpen] = useState(true);
   const [headerCollapsed, setHeaderCollapsed] = useState(true);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configItems, setConfigItems] = useState<SectorConfigItem[]>([]);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configMsg, setConfigMsg] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
 
@@ -1010,6 +1023,51 @@ export default function GoldenPitPage() {
       setLoading(false);
     }
   }, [historyDays]);
+
+  const openConfig = useCallback(async () => {
+    setConfigMsg(null);
+    try {
+      const res = await goldenPitApi.getSectorConfig();
+      if (res.data?.code === 0 && Array.isArray(res.data?.data)) {
+        setConfigItems(res.data.data as SectorConfigItem[]);
+        setConfigOpen(true);
+      } else {
+        setConfigMsg(res.data?.msg || '加载配置失败');
+      }
+    } catch (e: any) {
+      setConfigMsg(e?.response?.data?.msg || e?.message || '加载配置失败');
+    }
+  }, []);
+
+  const closeConfig = useCallback(() => {
+    if (!configSaving) setConfigOpen(false);
+  }, [configSaving]);
+
+  const onConfigItemChange = useCallback((key: string, value: string | number | boolean) => {
+    setConfigItems((prev) => prev.map((it) => (it.config_key === key ? { ...it, value } : it)));
+  }, []);
+
+  const saveConfig = useCallback(async () => {
+    setConfigSaving(true);
+    setConfigMsg(null);
+    try {
+      const values: Record<string, string | number | boolean> = {};
+      for (const it of configItems) {
+        values[it.config_key] = it.value_type === 'bool' ? !!it.value : Number(it.value);
+      }
+      const res = await goldenPitApi.updateSectorConfig(values);
+      if (res.data?.code === 0) {
+        setConfigOpen(false);
+        fetchData();
+      } else {
+        setConfigMsg(res.data?.msg || '保存失败');
+      }
+    } catch (e: any) {
+      setConfigMsg(e?.response?.data?.msg || e?.message || '保存失败');
+    } finally {
+      setConfigSaving(false);
+    }
+  }, [configItems, fetchData]);
 
   useEffect(() => {
     fetchData();
@@ -1138,9 +1196,14 @@ export default function GoldenPitPage() {
           {!headerCollapsed && (
             <>
               <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
-              <button className="gp-refresh-btn" onClick={() => fetchData()} title="刷新数据">
-                <RefreshCw size={16} />
-              </button>
+              <div className="gp-header-actions">
+                <button className="gp-refresh-btn" onClick={() => fetchData()} title="刷新数据">
+                  <RefreshCw size={16} />
+                </button>
+                <button className="gp-config-btn" onClick={openConfig} title="板块拆分配置">
+                  <Settings size={16} />
+                </button>
+              </div>
             </>
           )}
         </div>
@@ -1337,6 +1400,58 @@ export default function GoldenPitPage() {
           </main>
         </div>
       </div>
+      {configOpen && (
+        <div className="gp-config-overlay" onClick={closeConfig}>
+          <div className="gp-config-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="gp-config-head">
+              <div className="gp-config-title">
+                <h3>板块拆分配置</h3>
+                <p>科创50/创业板 拆分为板块 ETF 的运行时参数，保存后即时生效</p>
+              </div>
+              <button className="gp-config-close" onClick={closeConfig} title="关闭">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="gp-config-body">
+              {configItems.map((item) => (
+                <div className="gp-config-row" key={item.config_key}>
+                  <div className="gp-config-info">
+                    <span className="gp-config-label">{item.label}</span>
+                    <span className="gp-config-desc">{item.description}</span>
+                  </div>
+                  {item.value_type === 'bool' ? (
+                    <label className="gp-config-switch">
+                      <input
+                        type="checkbox"
+                        checked={!!item.value}
+                        onChange={(e) => onConfigItemChange(item.config_key, e.target.checked)}
+                      />
+                      <span className="gp-config-switch-track" />
+                    </label>
+                  ) : (
+                    <input
+                      type="number"
+                      className="gp-config-input"
+                      value={String(item.value)}
+                      step="any"
+                      onChange={(e) => onConfigItemChange(item.config_key, e.target.value)}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="gp-config-foot">
+              <span className="gp-config-msg">{configMsg}</span>
+              <button className="gp-config-cancel" onClick={closeConfig} disabled={configSaving}>
+                取消
+              </button>
+              <button className="gp-config-save" onClick={saveConfig} disabled={configSaving}>
+                {configSaving ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

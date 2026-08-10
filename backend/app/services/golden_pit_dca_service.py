@@ -27,8 +27,10 @@ from app.services.golden_pit_config import (
     DEFENSE_INDICES,
     DEFENSE_TAKEOVER_WEIGHTS,
     PIT_POSITION_SPLIT,
+    SECTOR_EXIT_DOWN_DAYS,
     SEMI_BOOST_INDICES,
 )
+from app.services import golden_pit_sector_service as _sector
 
 PIT_WINDOW_DAYS = 15
 PRE_TURN_CUMULATIVE_CAP = 0.15   # 拐点前累计上限 (占 max_total 比例)
@@ -379,6 +381,101 @@ def _has_exit_notice(fund_code: str) -> bool:
             db.close()
     except Exception:
         return False
+
+
+def _get_sector_holdings(fund_code: str) -> List[Dict[str, Any]]:
+    """查询 guide_only 宽基名下的板块 ETF 模拟持仓（buy 减 exit）。"""
+    try:
+        from app.database import SessionLocal
+        from app.models.golden_pit_dca_log import GoldenPitDCALog
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.fund_code == fund_code,
+                    GoldenPitDCALog.status.in_(("filled", "notified")),
+                )
+                .all()
+            )
+        finally:
+            db.close()
+        totals: Dict[str, float] = {}
+        for r in rows:
+            if r.strategy and r.strategy.startswith("exit/"):
+                totals[r.etf_code] = totals.get(r.etf_code, 0.0) - r.amount
+            else:
+                totals[r.etf_code] = totals.get(r.etf_code, 0.0) + r.amount
+        return [
+            {"etf_code": code, "amount": round(max(amt, 0.0), 2)}
+            for code, amt in totals.items() if amt > 100
+        ]
+    except Exception:
+        return []
+
+
+def _check_sector_down_turn(etf_code: str, down_days: Optional[int] = None) -> bool:
+    """板块 ETF 二次拐点: 最近 N 日收盘连续回落（价格驱动）。"""
+    try:
+        from app.services.golden_pit_service import GoldenPitService
+        bars = GoldenPitService._fetch_pi_server_kline(etf_code, limit=40)
+        closes = [float(b["close"]) for b in bars if b.get("close")]
+        n = down_days or int(_sector.get_sector_config().get("exit_down_days", SECTOR_EXIT_DOWN_DAYS))
+        if len(closes) < n + 1:
+            return False
+        return all(closes[-i] < closes[-i - 1] for i in range(1, n + 1))
+    except Exception:
+        return False
+
+
+def _build_buy_legs(
+    fund_code: str,
+    indices: List[Dict],
+    daily_amount: float,
+    as_of: str,
+    etf_code: str,
+) -> Tuple[List[Tuple[str, str, float]], List[str], str]:
+    """坑内仓位拆分。
+
+    guide_only 宽基(板块拆分启用): 全部资金 → 选中板块 ETF 组合（宽基本身不下单）；
+    组合为空时返回 empty_reason（调用方跳过当日买入）。
+    其他宽基: 保留 PIT_POSITION_SPLIT 90/5/5 拆分（增强标的不满足时回退指数自身）。
+
+    Returns:
+        (legs, fallback_notes, empty_reason) — empty_reason 非空表示无板块可买。
+    """
+    s_cfg = _sector.get_sector_config()
+    if CHINA_INDICES.get(fund_code, {}).get("guide_only") and s_cfg.get("enabled"):
+        selection = _sector.select_sectors(as_of=as_of)
+        selected = selection.get("selected", [])
+        if not selected:
+            return [], [], selection.get("empty_reason", "无信号")
+        legs = [(s["sector"], s["etf_code"], daily_amount * s["weight"]) for s in selected]
+        return legs, [], ""
+    semi_by_code = {i["fund_code"]: i for i in indices if i.get("tier") == "semi_boost"}
+    index_weight = PIT_POSITION_SPLIT.get("index", 1.0)
+    legs = [("index", etf_code, daily_amount * index_weight)]
+    fallback_notes = []
+    for s_code, s_weight in (
+        ("588200", PIT_POSITION_SPLIT.get("588200", 0.0)),
+        ("512480", PIT_POSITION_SPLIT.get("512480", 0.0)),
+    ):
+        s_amount = daily_amount * s_weight
+        if s_amount <= 0:
+            continue
+        s_idx = semi_by_code.get(s_code)
+        can_buy = s_idx is not None and s_idx.get("status") in ("golden_pit", "warning")
+        if not can_buy:
+            legs[0] = (legs[0][0], legs[0][1], legs[0][2] + s_amount)
+            fallback_notes.append(
+                f"{SEMI_BOOST_INDICES.get(s_code, {}).get('name', s_code)}未入坑→回退指数"
+            )
+            continue
+        s_etf = SEMI_BOOST_INDICES.get(s_code, {}).get("etf_code", "")
+        if s_etf:
+            legs.append((s_code, s_etf, s_amount))
+    return legs, fallback_notes, ""
 
 
 def _get_quote(etf_code: str) -> Optional[Dict[str, Any]]:
@@ -927,6 +1024,58 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         # 防御轮动为永久持有模式：不因自身 P 分位单独止盈，持有至宽基重新入场时卖出
         if idx.get("tier") == "defense_rotation":
             continue
+        # guide_only 宽基: 退出信号 → 组合级清仓对应板块 ETF（不对宽基本身下单）
+        if CHINA_INDICES.get(fund_code, {}).get("guide_only") and _sector.get_sector_config().get("enabled"):
+            sector_holdings = _get_sector_holdings(fund_code)
+            if not sector_holdings:
+                continue
+            if _has_exit_notice(fund_code):
+                continue
+            sell_ratio = 1.0 if exit_signal in ("full_exit", "stop_profit", "fallback_exit") else (
+                0.5 if exit_signal == "half_exit" else 0.0
+            )
+            if sell_ratio <= 0:
+                continue
+            freed_capital = 0.0
+            for sh in sector_holdings:
+                sell_amount = sh["amount"] * sell_ratio
+                if sell_amount < 100:
+                    continue
+                freed_capital += sell_amount
+                _record_dca_log(
+                    fund_code=fund_code, window_start=window_start,
+                    buy_day=current_day, etf_code=sh["etf_code"],
+                    amount=round(sell_amount, 2), strategy=f"exit/{exit_signal}/sector",
+                    order_id="", status="notified",
+                    schedule_day=current_day, trend_factor=0.0,
+                )
+            exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟢", "fallback_exit": "🔔"}.get(exit_signal, "")
+            results.append(
+                f"{exit_icon} 退出信号 {idx['index_name']} (组合级): "
+                f"建议清仓板块 ETF ¥{freed_capital:.0f} [{exit_signal}]"
+            )
+            if sell_ratio >= 1.0 and freed_capital > 0:
+                for d_code, d_weight in DEFENSE_TAKEOVER_WEIGHTS.items():
+                    d_cfg = DEFENSE_INDICES.get(d_code, {})
+                    d_etf = d_cfg.get("etf_code", "")
+                    if not d_etf:
+                        continue
+                    _record_dca_log(
+                        fund_code=d_code, window_start=today_str,
+                        buy_day=0, etf_code=d_etf,
+                        amount=round(freed_capital * d_weight, 2),
+                        strategy=f"defense_rotation/{fund_code}/{d_code}",
+                        order_id="", status="notified",
+                        schedule_day=0, trend_factor=0.0,
+                    )
+                defense_names = "/".join(
+                    DEFENSE_INDICES.get(c, {}).get("name", c) for c in DEFENSE_TAKEOVER_WEIGHTS
+                )
+                results.append(
+                    f"🛡 防御承接: {idx['index_name']} 撤场资金 ¥{freed_capital:.0f} "
+                    f"→ {defense_names} 等权（持有至宽基重新入场）"
+                )
+            continue
         etf_code = cfg["etf_code"]
         holding = _get_holding_shares(etf_code)
         sim_amount = _get_simulated_position_amount(etf_code)
@@ -1003,6 +1152,26 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                     f"🛡 防御承接: {idx['index_name']} 撤场资金 ¥{freed_capital:.0f} "
                     f"→ {defense_names} 等权（持有至宽基重新入场）"
                 )
+
+    # ── 板块 ETF 独立二次拐点退出（价格驱动, 仅通知）──
+    if _sector.get_sector_config().get("enabled"):
+        for idx in [i for i in indices if i.get("guide_only")]:
+            if _has_exit_notice(idx["fund_code"]):
+                continue
+            for sh in _get_sector_holdings(idx["fund_code"]):
+                if _check_sector_down_turn(sh["etf_code"]):
+                    _record_dca_log(
+                        fund_code=idx["fund_code"], window_start=window_start,
+                        buy_day=current_day, etf_code=sh["etf_code"],
+                        amount=sh["amount"], strategy=f"exit/down_turn/{sh['etf_code']}",
+                        order_id="", status="notified",
+                        schedule_day=current_day, trend_factor=0.0,
+                    )
+                    results.append(
+                        f"🔻 板块二次拐点 {sh['etf_code']}: 连续"
+                        f"{int(_sector.get_sector_config().get('exit_down_days', SECTOR_EXIT_DOWN_DAYS))}天回落, "
+                        f"建议清仓 ¥{sh['amount']:.0f}"
+                    )
 
     for idx in tradeable:
         fund_code = idx["fund_code"]
@@ -1191,38 +1360,34 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             daily_amount, resonance, macro_coef,
         )
 
-        # ── 坑内仓位拆分: 指数自身 80% + 588200 10% + 512480 10% ──
-        # 增强标的自身未入坑（normal）或数据缺失时，对应部分回退指数自身
-        semi_by_code = {i["fund_code"]: i for i in indices if i.get("tier") == "semi_boost"}
-        index_weight = PIT_POSITION_SPLIT.get("index", 1.0)
-        legs = [("index", etf_code, daily_amount * index_weight)]
-        fallback_notes = []
-        for s_code, s_weight in (
-            ("588200", PIT_POSITION_SPLIT.get("588200", 0.0)),
-            ("512480", PIT_POSITION_SPLIT.get("512480", 0.0)),
-        ):
-            s_amount = daily_amount * s_weight
-            if s_amount <= 0:
-                continue
-            s_idx = semi_by_code.get(s_code)
-            can_buy = s_idx is not None and s_idx.get("status") in ("golden_pit", "warning")
-            if not can_buy:
-                legs[0] = (legs[0][0], legs[0][1], legs[0][2] + s_amount)
-                fallback_notes.append(
-                    f"{SEMI_BOOST_INDICES.get(s_code, {}).get('name', s_code)}未入坑→回退指数"
-                )
-                continue
-            s_etf = SEMI_BOOST_INDICES.get(s_code, {}).get("etf_code", "")
-            if s_etf:
-                legs.append((s_code, s_etf, s_amount))
+        # ── 坑内仓位拆分（_build_buy_legs: guide_only→板块ETF / 其他→90/5/5）──
+        legs, fallback_notes, empty_reason = _build_buy_legs(
+            fund_code, indices, daily_amount, as_of, etf_code
+        )
+        if empty_reason:
+            _record_dca_log(
+                fund_code=fund_code, window_start=window_start,
+                buy_day=current_day, etf_code=cfg["etf_code"],
+                amount=0,
+                strategy=_encode_strategy(dca_strategy, trend, trend_factor, "sector_empty", buy_time),
+                order_id="", status="safety_brake",
+                schedule_day=schedule_day, trend_factor=trend_factor,
+            )
+            skipped_count += 1
+            results.append(
+                f"🧭 {idx['index_name']}: 板块选筹为空, 跳过当日买入 ({empty_reason})"
+            )
+            continue
 
         for leg_key, leg_etf, leg_amount in legs:
             if leg_amount <= 0:
                 continue
             if leg_key == "index":
                 leg_strategy = _encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time)
-            else:
+            elif leg_key in ("588200", "512480"):
                 leg_strategy = _encode_strategy("split10", trend, trend_factor, buy_time=buy_time) + f"/{leg_key}"
+            else:
+                leg_strategy = _encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time) + f"/sector/{leg_key}"
             _record_dca_log(
                 fund_code=fund_code,
                 window_start=window_start,
@@ -1237,8 +1402,12 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
 
         executed_count += 1
         total_invested_today += daily_amount
+        if CHINA_INDICES.get(fund_code, {}).get("guide_only") and _sector.get_sector_config().get("enabled"):
+            target_desc = "板块ETF(" + "+".join(f"{leg_etf} {leg_amount:.0f}" for _, leg_etf, leg_amount in legs) + ")"
+        else:
+            target_desc = etf_code
         results.append(
-            f"📢 {idx['index_name']} {etf_code}: "
+            f"📢 {idx['index_name']} {target_desc}: "
             f"¥{daily_amount:.0f} [{dca_strategy}/{position_tier}] (第{schedule_day}天)"
             + (f" | {'; '.join(fallback_notes)}" if fallback_notes else "")
         )
@@ -1297,6 +1466,14 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
     if deep_pit_warnings:
         summary_lines.append("")
         summary_lines.extend(deep_pit_warnings)
+
+    # ── 板块拆分选筹摘要（guide_only 宽基活跃时展示）──
+    if _sector.get_sector_config().get("enabled") and any(
+        CHINA_INDICES.get(i["fund_code"], {}).get("guide_only") for i in tradeable
+    ):
+        sel = _sector.select_sectors(as_of=as_of)
+        summary_lines.append(_sector.format_selection(sel))
+        summary_lines.append("")
 
     summary_text = "\n".join(summary_lines)
 

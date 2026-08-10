@@ -134,6 +134,9 @@ export const goldenPitApi = {
   getSnapshots: (days?: number) =>
     api.get('/golden-pit/snapshots', { params: { days: days || 30 } }),
   getDisplayConfig: () => api.get('/golden-pit/display-config'),
+  getSectorConfig: () => api.get('/golden-pit/sector-config'),
+  updateSectorConfig: (values: Record<string, string | number | boolean>) =>
+    api.put('/golden-pit/sector-config', { values }),
 }
 
 // Health check

@@ -57,6 +57,7 @@ from app.services.golden_pit_indicators import (
 )
 from app.services import golden_pit_repository as _repository
 from app.services import golden_pit_report as _report
+from app.services import golden_pit_sector_service as _sector
 
 
 class GoldenPitService:
@@ -185,6 +186,23 @@ class GoldenPitService:
             logger.warning("Tushare ETF kline 获取失败 (%s): %s", etf_code, e)
             return []
 
+    def _attach_sector_split(self, status: Dict[str, Any], as_of: str) -> None:
+        """附加板块拆分选筹摘要（guide_only 宽基用）。失败不影响主状态。"""
+        try:
+            selection = _sector.select_sectors(as_of=as_of)
+        except Exception as e:
+            logger.warning("板块拆分选筹失败: %s", e)
+            selection = {"as_of": as_of, "enabled": _sector.get_sector_config().get("enabled"),
+                         "selected": [], "all": [], "empty_reason": f"选筹服务异常: {e}"}
+        status["sector_split_enabled"] = _sector.get_sector_config().get("enabled")
+        status["sector_selection"] = selection
+        for idx in status.get("indices", []):
+            if idx.get("guide_only"):
+                idx["sector_summary"] = {
+                    "selected": selection.get("selected", []),
+                    "empty_reason": selection.get("empty_reason", ""),
+                }
+
     def get_status(self) -> Dict[str, Any]:
         """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。
 
@@ -244,7 +262,7 @@ class GoldenPitService:
         local_summary = _report.build_v2_summary(all_indices, window, confirmation, prediction)
         summary = ai_conclusion + "\n\n——\n" + local_summary if ai_conclusion else local_summary
 
-        return {
+        status = {
             "as_of": as_of,
             "golden_pit_window": window,
             "indices": all_indices,
@@ -253,6 +271,8 @@ class GoldenPitService:
             "summary": summary,
             "global_macro": global_macro,
         }
+        self._attach_sector_split(status, as_of)
+        return status
 
     @staticmethod
     def _arkvol_code_map() -> Dict[str, str]:
@@ -439,7 +459,7 @@ class GoldenPitService:
             window = self._detect_golden_pit_window(indices)
             summary = _report.build_v2_summary(indices, window, confirmation, prediction)
 
-            return {
+            status = {
                 "as_of": latest_date,
                 "golden_pit_window": window,
                 "indices": indices,
@@ -449,6 +469,8 @@ class GoldenPitService:
                 "global_macro": global_macro,
                 "_source": "db",
             }
+            self._attach_sector_split(status, latest_date)
+            return status
         except Exception as e:
             logger.warning("从 DB 重建黄金坑状态失败，回退 API: %s", e)
             return None
@@ -670,6 +692,7 @@ class GoldenPitService:
         index_info = {
             "fund_code": code,
             "index_name": cfg["name"],
+            "guide_only": cfg.get("guide_only", False),
             "priority": cfg["priority"],
             "tier": tier,
             "position_weight": position_weight,

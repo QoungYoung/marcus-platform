@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     FRONTEND_PORT: int = 3000
 
+    # Golden Pit Sector Split (黄金坑板块拆分: 588000/159915 仅作择时指导, 坑内资金配置板块 ETF)
+    GOLDEN_PIT_SECTOR_SPLIT_ENABLED: bool = False   # 灰度开关: false=dry-run 展示选筹; true=板块 ETF 下单(宽基不再直接买入)
+    GOLDEN_PIT_SECTOR_TOP_N: int = 2                # 坑内选筹 TOP N 板块
+    GOLDEN_PIT_SECTOR_MAX_WEIGHT: float = 0.5       # 单板块权重上限(归一化后截断)
+    GOLDEN_PIT_SECTOR_COMBO_W_OVS: float = 0.5      # combo 超跌分权重
+    GOLDEN_PIT_SECTOR_COMBO_W_MF: float = 0.5       # combo 资金流分权重
+    GOLDEN_PIT_SECTOR_OVS_DAYS: int = 120           # 超跌窗口(距N日高点回撤)
+    GOLDEN_PIT_SECTOR_MF_DAYS: int = 5              # 资金流累计窗口(日)
+    GOLDEN_PIT_SECTOR_MF_MA_DAYS: int = 20          # 资金流均值窗口(日)
+    GOLDEN_PIT_SECTOR_MIN_VALID: int = 4            # 有效信号板块数下限(不足则空仓等待)
+    GOLDEN_PIT_SECTOR_EXIT_DOWN_DAYS: int = 3       # 板块ETF二次拐点退出: 连续回落天数
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",
         case_sensitive=True,
