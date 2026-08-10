@@ -1026,11 +1026,12 @@ export default function GoldenPitPage() {
 
   const openConfig = useCallback(async () => {
     setConfigMsg(null);
+    setConfigItems([]);
+    setConfigOpen(true); // 点击后立即打开弹窗，再加载数据
     try {
       const res = await goldenPitApi.getSectorConfig();
       if (res.data?.code === 0 && Array.isArray(res.data?.data)) {
         setConfigItems(res.data.data as SectorConfigItem[]);
-        setConfigOpen(true);
       } else {
         setConfigMsg(res.data?.msg || '加载配置失败');
       }
@@ -1194,18 +1195,16 @@ export default function GoldenPitPage() {
             {headerCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
           </button>
           {!headerCollapsed && (
-            <>
-              <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
-              <div className="gp-header-actions">
-                <button className="gp-refresh-btn" onClick={() => fetchData()} title="刷新数据">
-                  <RefreshCw size={16} />
-                </button>
-                <button className="gp-config-btn" onClick={openConfig} title="板块拆分配置">
-                  <Settings size={16} />
-                </button>
-              </div>
-            </>
+            <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
           )}
+          <div className="gp-header-actions">
+            <button className="gp-refresh-btn" onClick={() => fetchData()} title="刷新数据">
+              <RefreshCw size={16} />
+            </button>
+            <button className="gp-config-btn" onClick={openConfig} title="板块拆分配置">
+              <Settings size={16} />
+            </button>
+          </div>
         </div>
 
         <div className="gp-layout">
