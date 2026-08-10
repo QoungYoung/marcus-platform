@@ -1157,6 +1157,27 @@ function getModeSessions(mode: string): Map<string, Agent> {
   return sessions.get(mode)!;
 }
 
+/**
+ * 根据 DEEPSEEK_API_HOST 选择 DeepSeek 模型（仅影响 deepseek 系列）：
+ * - 未配置或 api.deepseek.com → pi-ai 内置 deepseek provider
+ * - OpenCode 网关 (opencode.ai/zen/go) → pi-ai 内置 opencode-go provider（https://opencode.ai/zen/go/v1）
+ * - 其他兼容网关 → 克隆 deepseek 模型并覆盖 baseUrl 到 https://<host>/v1
+ */
+function resolveModel(provider: string, modelId: string): Model<any> {
+  const host = (process.env.DEEPSEEK_API_HOST || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const isDeepSeek = provider === 'deepseek' || provider === 'opencode-go';
+  if (!isDeepSeek || !host || host === 'api.deepseek.com') {
+    return getModel(provider as any, modelId as any);
+  }
+  const openCodeModel = getModel('opencode-go', modelId as any);
+  if (openCodeModel) {
+    return openCodeModel;
+  }
+  const base = getModel('deepseek', modelId as any);
+  const baseUrl = `https://${host}${host.endsWith('/v1') ? '' : '/v1'}`;
+  return { ...base, baseUrl };
+}
+
 function getOrCreateAgent(sessionId: string, mode: string, modelOverride?: string, thinkingLevelOverride?: string): Agent {
   // reflect 模式不走此路径
   if (mode === 'reflect') {
@@ -1190,7 +1211,7 @@ function getOrCreateAgent(sessionId: string, mode: string, modelOverride?: strin
     modelId = isHighThinking ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL;
     thinkingLevel = isHighThinking ? 'high' : 'medium';
   }
-  const model = getModel('deepseek', modelId as any);
+  const model = resolveModel('deepseek', modelId);
 
   const savedMessages = loadSession(sessionId);
 
@@ -1219,7 +1240,7 @@ function getOrCreateAgent(sessionId: string, mode: string, modelOverride?: strin
 /** 为指定 PanelMember 创建一个孤立 Agent（不存入 sessions，讨论完即释放） */
 function createPanelAgent(member: PanelMember, sessionId: string, panelMode: PanelMode = 'review'): Agent {
   const model = member.customModel
-    || getModel(member.provider as any, member.modelId as any);
+    || resolveModel(member.provider, member.modelId);
 
   return new Agent({
     initialState: {
@@ -1767,8 +1788,10 @@ fetchPromptsFromAPI();
 
 server.listen(PORT, () => {
   console.log(`🚀 Marcus Pi Server 已启动: http://localhost:${PORT}`);
-  console.log(`   聊天模型: deepseek/${DEEPSEEK_MODEL}`);
-  console.log(`   交易模型: deepseek/deepseek-v4-flash`);
+  const chatModel = resolveModel('deepseek', DEEPSEEK_MODEL);
+  const tradeModel = resolveModel('deepseek', DEEPSEEK_TRADE_MODEL);
+  console.log(`   聊天模型: ${chatModel.provider}/${DEEPSEEK_MODEL} (${chatModel.baseUrl})`);
+  console.log(`   交易模型: ${tradeModel.provider}/${DEEPSEEK_TRADE_MODEL} (${tradeModel.baseUrl})`);
   const panelCount = PANEL_MEMBERS.length;
   console.log(`   反思模式: 专家组群聊 (${panelCount} 位专家 × 多模型)`);
   PANEL_MEMBERS.forEach(m => {
