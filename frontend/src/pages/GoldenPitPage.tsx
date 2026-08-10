@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Settings, X } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -1399,7 +1400,7 @@ export default function GoldenPitPage() {
           </main>
         </div>
       </div>
-      {configOpen && (
+      {configOpen && createPortal(
         <div className="gp-config-overlay" onClick={closeConfig}>
           <div className="gp-config-modal" onClick={(e) => e.stopPropagation()}>
             <div className="gp-config-head">
@@ -1449,7 +1450,8 @@ export default function GoldenPitPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
