@@ -194,7 +194,7 @@ class StockPoolManager:
                 if len(daily_basic) > 0:
                     match = daily_basic[daily_basic['ts_code'] == ts_code]
                     if len(match) > 0:
-                        market_cap = match.iloc[0].get('total_mv', 0) / 10000  # 万→亿
+                        market_cap = float(match.iloc[0].get('total_mv', 0)) / 10000  # 万→亿
                 
                 # 市值过滤
                 if market_cap < min_market_cap:
