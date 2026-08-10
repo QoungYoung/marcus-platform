@@ -1474,6 +1474,127 @@ const getGoldenPitDcaLogsTool = {
   },
 };
 
+const getGoldenPitStatusTool = {
+  name: 'get_golden_pit_status',
+  label: '黄金坑状态',
+  description: '获取黄金坑评分总览：逐指数状态（golden_pit/warning）、窗口、三重确认、预测与全球宏观摘要。回答"现在有黄金坑吗/哪些指数在坑里/黄金坑窗口"等问题',
+  parameters: Type.Object({}),
+  async execute(_toolCallId: string, _params: unknown, _signal: AbortSignal | undefined) {
+    const res = await fetch(`${MARCUS_API}/golden-pit/status`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.code !== 0) throw new Error(data.msg || '获取黄金坑状态失败');
+    const d = data.data;
+    const lines: string[] = [];
+    lines.push(`## 📡 黄金坑状态 — ${d.as_of || ''}`);
+    lines.push('');
+
+    const win = d.golden_pit_window || {};
+    const phaseMap: Record<string, string> = {
+      active: '🟢 窗口活跃',
+      waiting: '🟡 等待拐点',
+      idle: '⚪ 无信号',
+    };
+    const phaseLabel = phaseMap[win.phase] || win.phase || '--';
+    lines.push(`### ${phaseLabel} | 坑内指数: ${win.pit_count ?? 0} | 拐点确认: ${win.turning_count ?? 0} | 第 ${win.current_day ?? 0}/15 天${win.start_date ? ` (起始 ${win.start_date})` : ''}`);
+    lines.push('');
+
+    const indices = (d.indices || []).filter((i: any) => i.status === 'golden_pit' || i.status === 'warning');
+    if (indices.length > 0) {
+      lines.push('| 指数 | 状态 | 贪婪值 | 分位 | 入坑/预警天数 | 趋势 | 信号质量 |');
+      lines.push('|------|------|--------|------|--------------|------|----------|');
+      for (const i of indices) {
+        const icon = i.status === 'golden_pit' ? '🔴' : '🟠';
+        const days = i.status === 'golden_pit' ? (i.days_in_pit ?? '--') : (i.days_in_warning ?? '--');
+        const pct = i.percentile != null ? `${i.percentile.toFixed(1)}%` : '--';
+        lines.push(`| ${i.index_name} | ${icon} ${i.status} | ${i.greed ?? '--'} | ${pct} | ${days} | ${i.trend || '--'} | ${i.signal_quality || '--'} |`);
+      }
+      lines.push('');
+    } else {
+      lines.push('当前无黄金坑/预警指数。');
+      lines.push('');
+    }
+
+    const conf = d.triple_confirmation || {};
+    const layers = ['layer1', 'layer2', 'layer3'];
+    const confOk = layers.filter((k) => conf[k]?.confirmed).length;
+    if (confOk > 0 || layers.some((k) => conf[k])) {
+      lines.push(`### 三重确认: ${confOk}/3`);
+      for (const k of layers) {
+        const layer = conf[k];
+        if (!layer) continue;
+        lines.push(`- ${layer.label || k}: ${layer.confirmed ? '✅' : '❌'} ${layer.status || ''}`);
+      }
+      lines.push('');
+    }
+
+    const pred = d.prediction;
+    if (pred?.next_index) {
+      lines.push(`🔮 预测: ${pred.next_index} 预计 ${pred.eta_days ?? '--'} 天后进入黄金坑${pred.eta_date ? ` (${pred.eta_date})` : ''}`);
+      lines.push('');
+    }
+
+    const gm = d.global_macro || {};
+    if (gm.liquidity_gate || gm.summary) {
+      const gateLabel = gm.liquidity_gate === 'closed' ? '🔴 关闭' : gm.liquidity_gate === 'open' ? '🟢 开启' : (gm.liquidity_gate || '--');
+      const coef = gm.global_macro_coefficient != null ? ` | 仓位系数: ${(gm.global_macro_coefficient * 100).toFixed(0)}%` : '';
+      lines.push(`### 全球宏观 | 流动性闸门: ${gateLabel}${coef}`);
+      if (gm.summary) lines.push(`> ${gm.summary}`);
+      lines.push('');
+    }
+
+    if (d.summary) {
+      lines.push('### 摘要');
+      lines.push(d.summary);
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: d };
+  },
+};
+
+const getGoldenPitHistoryTool = {
+  name: 'get_golden_pit_history',
+  label: '黄金坑历史',
+  description: '获取宽基指数贪婪值历史走势（DB 快照，日频）。index 传基金代码（如 510300/588000/159845）或 all 返回全部；days 控制返回天数（1-2000，默认 60）',
+  parameters: Type.Object({
+    index: Type.Optional(Type.String({ description: '基金代码，如 510300、588000、159845；默认 all 返回全部' })),
+    days: Type.Optional(Type.Number({ description: '返回天数，1-2000，默认 60' })),
+  }),
+  async execute(_toolCallId: string, params: { index?: string; days?: number }, _signal: AbortSignal | undefined) {
+    const query = new URLSearchParams();
+    query.set('index', params.index || 'all');
+    if (params.days) query.set('days', String(params.days));
+    const res = await fetch(`${MARCUS_API}/golden-pit/history?${query.toString()}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+    if (data.code !== 0) throw new Error(data.msg || '获取黄金坑历史失败');
+    const d = data.data;
+    const series = d.series || {};
+    const names = d.indices || {};
+    const lines: string[] = [];
+    lines.push(`## 📈 黄金坑贪婪值历史 — ${d.as_of || ''}`);
+    lines.push('');
+    const codes = Object.keys(series);
+    if (codes.length === 0) {
+      lines.push('暂无历史数据（需先同步黄金坑快照）。');
+    } else {
+      for (const code of codes) {
+        const s = series[code] || [];
+        if (s.length === 0) continue;
+        const latest = s[s.length - 1];
+        const first = s[0];
+        const min = Math.min(...s.map((p: any) => p.greed));
+        const max = Math.max(...s.map((p: any) => p.greed));
+        const change = latest.greed - first.greed;
+        const sign = change >= 0 ? '+' : '';
+        lines.push(`### ${names[code] || code} (${code})`);
+        lines.push(`- 当前贪婪值: ${latest.greed} (${latest.date}) | ${s.length} 个交易日 | 区间 ${min.toFixed(2)} ~ ${max.toFixed(2)} | 期间变化 ${sign}${change.toFixed(2)}`);
+        lines.push('');
+      }
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: d };
+  },
+};
+
 function _formatCandidateDiag(c: any): string[] {
   const lines: string[] = [];
   const icon = c.can_entry ? '✅' : '❌';
@@ -1782,6 +1903,11 @@ const chatTools: AgentTool[] = [
   createTool(updateLTCandidateTool),
   createTool(getPositionAddConditionsTool),
   createTool(getCandidateEntryConditionsTool),
+  createTool(getGoldenPitStatusTool),
+  createTool(getGoldenPitHistoryTool),
+  createTool(getGoldenPitDcaStatusTool),
+  createTool(getGoldenPitDcaLogsTool),
+  createTool(getGoldenPitEtfConfigsTool),
 ];
 
 // 复盘模式工具（聊天工具 + 扫描报告 + Pi 历史 + 交易历史）
@@ -1816,6 +1942,7 @@ const COLLAPSIBLE_TOOLS = [
   'get_latest_scan_report', 'get_pi_analysis_history', 'get_trade_history',
   'list_lt_candidates', 'add_lt_candidate', 'remove_lt_candidate', 'update_lt_candidate',
   'get_position_add_conditions', 'get_candidate_entry_conditions',
+  'get_golden_pit_status', 'get_golden_pit_history', 'get_golden_pit_dca_status', 'get_golden_pit_dca_logs', 'get_golden_pit_etf_configs',
 ];
 
 // 中文工具名映射
@@ -1850,6 +1977,11 @@ const TOOL_LABELS: Record<string, string> = {
   update_lt_candidate: '更新长期候选',
   get_position_add_conditions: '加仓条件检查',
   get_candidate_entry_conditions: '建仓条件检查',
+  get_golden_pit_status: '黄金坑状态',
+  get_golden_pit_history: '黄金坑贪婪值历史',
+  get_golden_pit_dca_status: '黄金坑DCA状态',
+  get_golden_pit_dca_logs: '黄金坑DCA日志',
+  get_golden_pit_etf_configs: '黄金坑ETF配置',
 };
 
 const makeCollapsibleRenderer = (toolName: string) => ({

@@ -35,6 +35,10 @@ const Type = {
     type: 'number' as const,
     ...opts,
   }),
+  Boolean: (opts?: { description?: string }) => ({
+    type: 'boolean' as const,
+    ...opts,
+  }),
   Optional: (inner: any) => ({ ...inner, optional: true }),
 };
 
@@ -2270,6 +2274,297 @@ export const getIntradayMinTool = {
   },
 };
 
+// ===== 黄金坑工具 =====
+
+export const getGoldenPitStatusTool = {
+  name: 'get_golden_pit_status',
+  label: '黄金坑状态',
+  description: '获取黄金坑评分总览：逐指数状态（golden_pit/warning）、窗口、三重确认、预测与全球宏观摘要。回答"现在有黄金坑吗/哪些指数在坑里/黄金坑窗口"等问题',
+  parameters: Type.Object({}),
+  async execute(_toolCallId: string, _params: unknown, _signal?: AbortSignal) {
+    const data = await apiFetch('/golden-pit/status');
+    if (data.code !== 0) throw new Error(data.msg || '获取黄金坑状态失败');
+    const d = data.data;
+    const lines: string[] = [];
+    lines.push(`## 📡 黄金坑状态 — ${d.as_of || ''}`);
+    lines.push('');
+
+    const win = d.golden_pit_window || {};
+    const phaseMap: Record<string, string> = {
+      active: '🟢 窗口活跃',
+      waiting: '🟡 等待拐点',
+      idle: '⚪ 无信号',
+    };
+    const phaseLabel = phaseMap[win.phase] || win.phase || '--';
+    lines.push(`### ${phaseLabel} | 坑内指数: ${win.pit_count ?? 0} | 拐点确认: ${win.turning_count ?? 0} | 第 ${win.current_day ?? 0}/15 天${win.start_date ? ` (起始 ${win.start_date})` : ''}`);
+    lines.push('');
+
+    const indices = (d.indices || []).filter((i: any) => i.status === 'golden_pit' || i.status === 'warning');
+    if (indices.length > 0) {
+      lines.push('| 指数 | 状态 | 贪婪值 | 分位 | 入坑/预警天数 | 趋势 | 信号质量 |');
+      lines.push('|------|------|--------|------|--------------|------|----------|');
+      for (const i of indices) {
+        const icon = i.status === 'golden_pit' ? '🔴' : '🟠';
+        const days = i.status === 'golden_pit' ? (i.days_in_pit ?? '--') : (i.days_in_warning ?? '--');
+        const pct = i.percentile != null ? `${i.percentile.toFixed(1)}%` : '--';
+        lines.push(`| ${i.index_name} | ${icon} ${i.status} | ${i.greed ?? '--'} | ${pct} | ${days} | ${i.trend || '--'} | ${i.signal_quality || '--'} |`);
+      }
+      lines.push('');
+    } else {
+      lines.push('当前无黄金坑/预警指数。');
+      lines.push('');
+    }
+
+    const conf = d.triple_confirmation || {};
+    const layers = ['layer1', 'layer2', 'layer3'];
+    const confOk = layers.filter((k) => conf[k]?.confirmed).length;
+    if (confOk > 0 || layers.some((k) => conf[k])) {
+      lines.push(`### 三重确认: ${confOk}/3`);
+      for (const k of layers) {
+        const layer = conf[k];
+        if (!layer) continue;
+        lines.push(`- ${layer.label || k}: ${layer.confirmed ? '✅' : '❌'} ${layer.status || ''}`);
+      }
+      lines.push('');
+    }
+
+    const pred = d.prediction;
+    if (pred?.next_index) {
+      lines.push(`🔮 预测: ${pred.next_index} 预计 ${pred.eta_days ?? '--'} 天后进入黄金坑${pred.eta_date ? ` (${pred.eta_date})` : ''}`);
+      lines.push('');
+    }
+
+    const gm = d.global_macro || {};
+    if (gm.liquidity_gate || gm.summary) {
+      const gateLabel = gm.liquidity_gate === 'closed' ? '🔴 关闭' : gm.liquidity_gate === 'open' ? '🟢 开启' : (gm.liquidity_gate || '--');
+      const coef = gm.global_macro_coefficient != null ? ` | 仓位系数: ${(gm.global_macro_coefficient * 100).toFixed(0)}%` : '';
+      lines.push(`### 全球宏观 | 流动性闸门: ${gateLabel}${coef}`);
+      if (gm.summary) lines.push(`> ${gm.summary}`);
+      lines.push('');
+    }
+
+    if (d.summary) {
+      lines.push('### 摘要');
+      lines.push(d.summary);
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: d };
+  },
+};
+
+export const getGoldenPitHistoryTool = {
+  name: 'get_golden_pit_history',
+  label: '黄金坑历史',
+  description: '获取宽基指数贪婪值历史走势（DB 快照，日频）。index 传基金代码（如 510300/588000/159845）或 all 返回全部；days 控制返回天数（1-2000，默认 60）',
+  parameters: Type.Object({
+    index: Type.Optional(Type.String({ description: '基金代码，如 510300、588000、159845；默认 all 返回全部' })),
+    days: Type.Optional(Type.Number({ description: '返回天数，1-2000，默认 60' })),
+  }),
+  async execute(_toolCallId: string, params: { index?: string; days?: number }, _signal?: AbortSignal) {
+    const query = new URLSearchParams();
+    query.set('index', params.index || 'all');
+    if (params.days) query.set('days', String(params.days));
+    const data = await apiFetch(`/golden-pit/history?${query.toString()}`);
+    if (data.code !== 0) throw new Error(data.msg || '获取黄金坑历史失败');
+    const d = data.data;
+    const series = d.series || {};
+    const names = d.indices || {};
+    const lines: string[] = [];
+    lines.push(`## 📈 黄金坑贪婪值历史 — ${d.as_of || ''}`);
+    lines.push('');
+    const codes = Object.keys(series);
+    if (codes.length === 0) {
+      lines.push('暂无历史数据（需先同步黄金坑快照）。');
+    } else {
+      for (const code of codes) {
+        const s = series[code] || [];
+        if (s.length === 0) continue;
+        const latest = s[s.length - 1];
+        const first = s[0];
+        const min = Math.min(...s.map((p: any) => p.greed));
+        const max = Math.max(...s.map((p: any) => p.greed));
+        const change = latest.greed - first.greed;
+        const sign = change >= 0 ? '+' : '';
+        lines.push(`### ${names[code] || code} (${code})`);
+        lines.push(`- 当前贪婪值: ${latest.greed} (${latest.date}) | ${s.length} 个交易日 | 区间 ${min.toFixed(2)} ~ ${max.toFixed(2)} | 期间变化 ${sign}${change.toFixed(2)}`);
+        lines.push('');
+      }
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: d };
+  },
+};
+
+export const getGoldenPitDcaStatusTool = {
+  name: 'get_golden_pit_dca_status',
+  label: '黄金坑DCA状态',
+  description: '查看黄金坑DCA自动定投当前状态：窗口是否活跃、每个ETF的执行进度（已投天数/待投天数/累计金额/剩余额度）',
+  parameters: Type.Object({}),
+  async execute(_toolCallId: string, _params: unknown, _signal?: AbortSignal) {
+    const data = await apiFetch('/golden-pit/dca/status');
+    if (data.code !== 0) throw new Error(data.msg || '获取失败');
+    const d = data.data;
+    const lines: string[] = [];
+    lines.push(`## 📊 黄金坑 DCA 定投状态 — ${d.as_of}`);
+    lines.push('');
+
+    const gm = d.global_macro || {};
+    if (gm.liquidity_gate) {
+      const gateIcon = gm.liquidity_gate === 'closed' ? '🔴' : '🟢';
+      const coefPct = gm.global_macro_coefficient != null ? `${(gm.global_macro_coefficient * 100).toFixed(0)}%` : '—';
+      lines.push(`### ${gateIcon} 全球宏观 | 闸门: ${gm.liquidity_gate === 'closed' ? '**关闭**' : '开启'} | 仓位系数: ${coefPct} | 情绪: ${gm.sentiment_score?.toFixed(0) ?? '—'} (${gm.sentiment_label ?? '—'})`);
+      if (gm.summary) lines.push(`> ${gm.summary}`);
+      lines.push('');
+    }
+
+    if (gm.liquidity_gate === 'closed') {
+      lines.push('> 🛑 **全球流动性闸门关闭** — 所有买入操作已跳过，等待闸门重新开启');
+      lines.push('');
+    }
+
+    if (!d.window_active) {
+      const ph = d.window_phase || 'idle';
+      if (ph === 'waiting') {
+        lines.push('📷 黄金坑已出现，等待贪婪值回升确认拐点 — DCA 轻仓累积中');
+      } else {
+        lines.push('📷 当前无黄金坑信号，DCA 定投暂停');
+      }
+    } else {
+      lines.push(`### 🔴 窗口活跃: 第 ${d.current_day}/15 天 (起始: ${d.window_start})`);
+      lines.push('');
+      if (d.etfs?.length) {
+        lines.push('| ETF | 状态 | DCA策略 | 日投 | 趋势因子 | 已投入 | 剩余 | 已执行天 |');
+        lines.push('|-----|------|---------|------|----------|--------|------|----------|');
+        for (const etf of d.etfs) {
+          const statusIcon = etf.status === 'golden_pit' ? '🔴' : etf.status === 'warning' ? '🟠' : '🟢';
+          const executedStr = etf.executed_days?.length ? etf.executed_days.join(',') : '-';
+          const dcaLabel = etf.dca_label || etf.dca_strategy || etf.strategy || '—';
+          const trendInfo = etf.trend_label || (etf.trend_factor != null
+            ? `${etf.trend || '—'} ×${etf.trend_factor}x`
+            : '—');
+          lines.push(`| ${etf.etf_code} ${etf.index_name} | ${statusIcon} ${etf.status} | ${dcaLabel} | ¥${etf.daily_amount} | ${trendInfo} | ¥${etf.total_invested} | ¥${etf.remaining} | ${executedStr} |`);
+        }
+      }
+      lines.push('');
+      lines.push('> 💡 已执行天 = 已完成定投买入的窗口天数');
+      lines.push('> 💡 待执行天 = 策略定投日但尚未执行的天数（会在后续交易日自动执行）');
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: d };
+  },
+};
+
+export const getGoldenPitEtfConfigsTool = {
+  name: 'get_golden_pit_etf_configs',
+  label: '黄金坑ETF配置',
+  description: '查看所有黄金坑ETF定投配置：策略类型、日投金额、总上限、触发条件、启用状态',
+  parameters: Type.Object({}),
+  async execute(_toolCallId: string, _params: unknown, _signal?: AbortSignal) {
+    const data = await apiFetch('/golden-pit/etf-configs');
+    if (data.code !== 0) throw new Error(data.msg || '获取失败');
+    const configs = data.data || [];
+    const lines: string[] = [];
+    lines.push('## ⚙️ 黄金坑 ETF 定投配置');
+    lines.push('');
+    lines.push('| 指数 | ETF | 策略 | 日投金额 | 总上限 | 阈值要求 | 启用 |');
+    lines.push('|------|-----|------|----------|--------|----------|------|');
+    for (const cfg of configs) {
+      const threshold = cfg.require_absolute_threshold ? '绝对0.35' : 'P10相对';
+      const enabled = cfg.enabled ? '✅' : '⛔';
+      lines.push(`| ${cfg.index_name} | ${cfg.etf_code} | ${cfg.strategy} | ¥${cfg.daily_amount} | ¥${cfg.max_total_amount} | ${threshold} | ${enabled} |`);
+    }
+    lines.push('');
+    lines.push('### 策略说明');
+    lines.push('- **uniform_15**: 前15日等权重定投');
+    lines.push('- **uniform_10**: 前10日等权重定投（综合最优）');
+    lines.push('- **uniform_7**: 前7日等权重定投');
+    lines.push('- **uniform_5**: 前5日等权重定投');
+    lines.push('- **uniform_3**: 前3日等权重定投');
+    lines.push('- **front_loaded**: 递减（前几天多投）');
+    lines.push('- **triangle**: 三角（第7-8天最多）');
+    lines.push('- **lump_entry**: 首日一次性投入');
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: configs };
+  },
+};
+
+export const updateGoldenPitEtfConfigTool = {
+  name: 'update_golden_pit_etf_config',
+  label: '调整黄金坑ETF配置',
+  description: '调整指定宽基ETF的定投配置：启用/暂停、修改策略、日投金额、总上限。⚠️ 修改后影响后续自动定投买入，需用户明确确认。fund_code: 510050/510300/510500/588000/159845/159915',
+  parameters: Type.Object({
+    fund_code: Type.String({ description: '基金代码，如 588000(科创50)、510050(上证50)' }),
+    enabled: Type.Optional(Type.Boolean({ description: '是否启用自动定投' })),
+    strategy: Type.Optional(Type.String({ description: '定投策略: uniform_3/5/7/10/15, front_loaded, triangle, lump_entry' })),
+    daily_amount: Type.Optional(Type.Number({ description: '每次定投金额（元）' })),
+    max_total_amount: Type.Optional(Type.Number({ description: '单窗口最大投入总额（元）' })),
+  }),
+  async execute(_toolCallId: string, params: any, _signal?: AbortSignal) {
+    const body: Record<string, any> = {};
+    if (params.enabled !== undefined) body.enabled = params.enabled;
+    if (params.strategy) body.strategy = params.strategy;
+    if (params.daily_amount) body.daily_amount = params.daily_amount;
+    if (params.max_total_amount) body.max_total_amount = params.max_total_amount;
+
+    const data = await apiFetch(`/golden-pit/etf-configs/${params.fund_code}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (data.code !== 0) throw new Error(data.msg || '更新失败');
+    const updated = data.data?.updated || [];
+    const lines: string[] = [];
+    lines.push('## ✅ ETF 配置已更新');
+    lines.push(`- fund_code: ${params.fund_code}`);
+    lines.push(`- 已更新: ${updated.join(', ')}`);
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: data.data };
+  },
+};
+
+export const getGoldenPitDcaLogsTool = {
+  name: 'get_golden_pit_dca_logs',
+  label: '黄金坑DCA日志',
+  description: '查看黄金坑DCA定投执行历史记录：哪天买了哪个ETF、金额、策略、是否成交',
+  parameters: Type.Object({
+    days: Type.Optional(Type.Number({ description: '查询最近N天，默认30' })),
+    fund_code: Type.Optional(Type.String({ description: '筛选基金代码，空则全部' })),
+  }),
+  async execute(_toolCallId: string, params: { days?: number; fund_code?: string }, _signal?: AbortSignal) {
+    const query = new URLSearchParams();
+    if (params.days) query.set('days', String(params.days));
+    if (params.fund_code) query.set('fund_code', params.fund_code);
+    const data = await apiFetch(`/golden-pit/dca/logs?${query.toString()}`);
+    if (data.code !== 0) throw new Error(data.msg || '获取失败');
+    const logs = data.data || [];
+    const lines: string[] = [];
+    lines.push(`## 📝 黄金坑 DCA 执行日志 (最近${params.days || 30}天)`);
+    lines.push('');
+    if (!logs.length) {
+      lines.push('暂无执行记录');
+    } else {
+      lines.push('| 时间 | 指数 | ETF | 窗口天 | 金额 | 策略 | 状态 |');
+      lines.push('|------|------|-----|--------|------|------|------|');
+      for (const log of logs) {
+        const statusIcon = log.status === 'filled' ? '✅' : '⏳';
+        lines.push(`| ${log.created_at?.slice(0, 16) || '-'} | ${log.fund_code} | ${log.etf_code} | 第${log.buy_day}天 | ¥${log.amount} | ${log.strategy} | ${statusIcon} ${log.status} |`);
+      }
+
+      const filledLogs = logs.filter((l: any) => l.status === 'filled');
+      if (filledLogs.length > 0) {
+        const totalAmount = filledLogs.reduce((sum: number, l: any) => sum + l.amount, 0);
+        const byCode: Record<string, number> = {};
+        for (const l of filledLogs) {
+          byCode[l.fund_code] = (byCode[l.fund_code] || 0) + l.amount;
+        }
+        lines.push('');
+        lines.push('### 累计统计');
+        lines.push(`- 总成交笔数: ${filledLogs.length}`);
+        lines.push(`- 总投入金额: ¥${totalAmount.toLocaleString()}`);
+        for (const [code, amt] of Object.entries(byCode)) {
+          lines.push(`  - ${code}: ¥${amt.toLocaleString()}`);
+        }
+      }
+    }
+    return { content: [{ type: 'text', text: lines.join('\n') }], details: logs };
+  },
+};
+
 // ===== 工具分组 =====
 // 聊天模式（只读，QQ 聊天使用）
 export const CHAT_TOOLS = [
@@ -2303,11 +2598,17 @@ export const CHAT_TOOLS = [
   updateLTCandidateTool,
   getPositionAddConditionsTool,
   getCandidateEntryConditionsTool,
+  getGoldenPitStatusTool,
+  getGoldenPitHistoryTool,
+  getGoldenPitDcaStatusTool,
+  getGoldenPitDcaLogsTool,
+  getGoldenPitEtfConfigsTool,
 ];
 
 // 交易模式（全工具，自动交易使用）
 export const TRADE_TOOLS = [
   ...CHAT_TOOLS,
+  updateGoldenPitEtfConfigTool,
   // 交易执行工具
   placeOrderTool,
   getOrdersTool,

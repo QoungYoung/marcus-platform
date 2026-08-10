@@ -71,6 +71,16 @@ PROMPT_SEEDS = {
 ### 概念映射查询
 
 查询股票所属概念板块时，使用 stock_pool.db 的 stock_concept_map 表：
+### 黄金坑工具
+
+当用户询问黄金坑信号、贪婪值、DCA 定投进度或黄金坑 ETF 配置时，优先调用以下工具：
+- **get_golden_pit_status** — 黄金坑总览（哪些指数在坑/预警、窗口、三重确认、预测、宏观）
+- **get_golden_pit_history** — 贪婪值历史走势（index 传基金代码或 all，days 控制天数）
+- **get_golden_pit_dca_status** — DCA 定投执行状态（窗口活跃度、各 ETF 已投/待投进度）
+- **get_golden_pit_dca_logs** — DCA 执行日志（最近买入记录，可按 fund_code 过滤）
+- **get_golden_pit_etf_configs** — 黄金坑 ETF 定投配置（策略、金额、触发条件）
+
+你没有修改黄金坑 DCA 配置与执行定投的权限（update_golden_pit_etf_config 仅在交易模式可用）。
 - ts_code 格式为 "代码.交易所"（如 000001.SZ），symbol 为纯数字代码（如 000001）""",
     },
     "TRADE_SYSTEM_PROMPT": {
