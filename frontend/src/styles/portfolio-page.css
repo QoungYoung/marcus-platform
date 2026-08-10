@@ -1449,3 +1449,138 @@
   .cp-threat-dot.danger,
   .cp-skel { animation: none; }
 }
+
+
+/* ═══════════════════════════════════════════════════════
+   资金调整弹窗
+   ═══════════════════════════════════════════════════════ */
+.cp-cap-modal {
+  width: 420px;
+}
+
+.cp-cap-mode-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.cp-cap-mode-row button {
+  flex: 1;
+  padding: 7px 0;
+  font-size: 12px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--cc-text-dim);
+  border: 1px solid var(--cc-line);
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.cp-cap-mode-row button:hover {
+  border-color: var(--cc-blue-soft);
+  color: var(--cc-blue);
+}
+
+.cp-cap-mode-row button.active {
+  background: var(--cc-blue);
+  color: #fff;
+  border-color: var(--cc-blue);
+  box-shadow: 0 0 10px var(--cc-blue-glow);
+}
+
+.cp-cap-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--cc-text-dim);
+  margin: 10px 0 5px;
+}
+
+.cp-cap-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: var(--font-display);
+  background: var(--cc-paper);
+  color: var(--cc-text);
+  border: 1px solid var(--cc-line);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.cp-cap-input:focus {
+  border-color: var(--cc-blue);
+  box-shadow: 0 0 8px var(--cc-blue-glow);
+}
+
+.cp-cap-input:disabled {
+  opacity: 0.6;
+}
+
+.cp-cap-hint {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--cc-text-dim);
+}
+
+.cp-cap-preview {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--cc-blue);
+}
+
+.cp-cap-error {
+  margin-top: 10px;
+  padding: 7px 9px;
+  font-size: 11px;
+  color: var(--cc-red);
+  background: rgba(229, 72, 77, 0.08);
+  border: 1px solid rgba(229, 72, 77, 0.25);
+  border-radius: 4px;
+}
+
+.cp-cap-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.cp-cap-btn {
+  padding: 7px 16px;
+  font-size: 12px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--cc-text-dim);
+  border: 1px solid var(--cc-line);
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.cp-cap-btn:hover {
+  border-color: var(--cc-blue-soft);
+  color: var(--cc-blue);
+}
+
+.cp-cap-btn.primary {
+  background: var(--cc-blue);
+  border-color: var(--cc-blue);
+  color: #fff;
+}
+
+.cp-cap-btn.primary:hover {
+  box-shadow: 0 0 12px var(--cc-blue-glow);
+  filter: brightness(1.08);
+}
+
+.cp-cap-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

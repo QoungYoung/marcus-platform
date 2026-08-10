@@ -65,6 +65,12 @@ class DailyStockPnl(BaseModel):
     realized_pnl: float = 0.0    # 当日卖出已实现盈亏
 
 
+class CapitalAdjustRequest(BaseModel):
+    """手动资金调整请求（amount > 0 为入金，< 0 为出金）"""
+    amount: float
+    note: str = ""
+
+
 class DailyPnlBreakdown(BaseModel):
     """单日盈亏明细"""
     date: str

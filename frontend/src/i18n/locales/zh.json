@@ -71,7 +71,24 @@
     "unfreezeFunds": "解冻资金",
     "unfreezeConfirm": "确定要解冻所有冻结资金吗？这将把冻结资金全部转为可用资金，并取消所有卡住的订单。",
     "unfreezeSuccess": "解冻成功",
-    "unfreezeFailed": "解冻失败"
+    "unfreezeFailed": "解冻失败",
+    "adjustCapital": "资金调整",
+    "capitalMode": {
+      "set": "设置总资产",
+      "deposit": "入金",
+      "withdraw": "出金"
+    },
+    "capitalAmountLabel": "金额（元）",
+    "capitalNoteLabel": "备注",
+    "capitalNotePlaceholder": "可选，如：转入本金 / 修正误差",
+    "capitalPreview": "调整后总资产",
+    "capitalInvalidAmount": "请输入大于 0 的有效金额",
+    "capitalNoChange": "调整金额为 0，无需调整",
+    "capitalSuccess": "资金调整成功，可用资金",
+    "capitalFailed": "资金调整失败",
+    "capitalConfirm": "确认调整",
+    "capitalCancel": "取消",
+    "capitalSubmitting": "提交中..."
   },
   "trading": {
     "title": "交易",
