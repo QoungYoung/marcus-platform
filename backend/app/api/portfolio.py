@@ -2,6 +2,7 @@
 """
 Portfolio API endpoints.
 """
+import math
 import sys
 import sqlite3
 from datetime import datetime, timedelta
@@ -13,8 +14,8 @@ from sqlalchemy import func
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models.account import AccountResponse, PositionResponse, PortfolioSummary, EquityPoint, DailyPnlBreakdown, DailyStockPnl
-from app.models.paper_trade import PaperAccountInfo, PaperTrade, PaperDailySnapshot, PaperOrder
+from app.models.account import AccountResponse, PositionResponse, PortfolioSummary, EquityPoint, DailyPnlBreakdown, DailyStockPnl, CapitalAdjustRequest
+from app.models.paper_trade import PaperAccountInfo, PaperTrade, PaperDailySnapshot, PaperOrder, PaperCapitalAdjustment
 
 settings = get_settings()
 
@@ -332,6 +333,12 @@ def save_daily_snapshot(target_date: str = None) -> dict:
                 ((PaperTrade.trade_date == None) & (func.substr(PaperTrade.created_at, 1, 10) <= target_date))
             ).scalar() or 0
         )
+
+        capital_adjustments = float(
+            db.query(func.coalesce(func.sum(PaperCapitalAdjustment.amount), 0)).filter(
+                func.substr(PaperCapitalAdjustment.created_at, 1, 10) <= target_date
+            ).scalar() or 0
+        )
     finally:
         db.close()
 
@@ -366,6 +373,9 @@ def save_daily_snapshot(target_date: str = None) -> dict:
                     lots.pop(i)
                 else:
                     i += 1
+
+    # 手动资金调整（入金/出金）叠加到回放现金
+    available_cash += capital_adjustments
 
     position_list = []
     for sym, lots in positions_lots.items():
@@ -764,6 +774,50 @@ async def unfreeze_funds():
         db.close()
 
 
+
+@router.post("/adjust-capital")
+async def adjust_capital(req: CapitalAdjustRequest):
+    """手动调整可用资金（入金为正，出金为负），用于修正总资产。
+
+    调整会记录到 paper_capital_adjustments，并在每日快照与权益曲线回放中生效。
+    """
+    if not math.isfinite(req.amount) or abs(req.amount) < 0.005:
+        raise HTTPException(status_code=400, detail="调整金额必须是非零数字")
+
+    db = SessionLocal()
+    try:
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        if not acct:
+            raise HTTPException(status_code=404, detail="账户信息不存在")
+
+        current_cash = float(acct.available_cash or 0)
+        new_cash = current_cash + req.amount
+        if new_cash < 0:
+            raise HTTPException(status_code=400, detail=f"可用资金不足，当前可用 ¥{current_cash:,.2f}，无法出金 ¥{abs(req.amount):,.2f}")
+
+        acct.available_cash = new_cash
+        acct.updated_at = datetime.now().isoformat()
+        db.add(PaperCapitalAdjustment(
+            amount=round(req.amount, 2),
+            balance_after=round(new_cash, 2),
+            note=(req.note or "")[:200],
+            created_at=datetime.now().isoformat(),
+        ))
+        db.commit()
+        return {
+            "success": True,
+            "amount": round(req.amount, 2),
+            "available_cash": round(new_cash, 2),
+            "message": f"资金调整成功，可用资金 ¥{new_cash:,.2f}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"资金调整失败: {str(e)}")
+    finally:
+        db.close()
+
+
 @router.post("/daily-snapshot")
 async def trigger_daily_snapshot(date: str = Query(None, description="Target date YYYY-MM-DD, defaults to today")):
     """Manually trigger a daily portfolio snapshot.
@@ -799,6 +853,12 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
         snapshots = {}
         for snap in db.query(PaperDailySnapshot).order_by(PaperDailySnapshot.trade_date).all():
             snapshots[snap.trade_date] = snap.total_asset
+
+        adjustments_by_date: dict[str, float] = {}
+        for adj in db.query(PaperCapitalAdjustment).order_by(PaperCapitalAdjustment.created_at).all():
+            d = (adj.created_at or '')[:10]
+            if d:
+                adjustments_by_date[d] = adjustments_by_date.get(d, 0) + float(adj.amount or 0)
     finally:
         db.close()
 
@@ -827,12 +887,14 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
     # ── 逐日重放交易，计算每日权益 ──
     available_cash = initial_capital
     positions = {}
+    adj_accum = 0.0
 
     for d in sorted_dates:
         if d >= start_date.strftime("%Y-%m-%d"):
             break
         for t in trades_by_date.get(d, []):
             available_cash, positions = _apply_trade(t, available_cash, positions)
+        adj_accum += adjustments_by_date.get(d, 0)
 
     yesterday = today - timedelta(days=1)
     result = []
@@ -843,6 +905,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
         for t in trades_by_date.get(date_str, []):
             available_cash, positions = _apply_trade(t, available_cash, positions)
+        adj_accum += adjustments_by_date.get(date_str, 0)
 
         if date_str in snapshots:
             equity = snapshots[date_str]
@@ -859,7 +922,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
                     if not price:
                         price = sum(l['price'] * l['volume'] for l in lots) / total_vol
                     position_value += price * total_vol
-            equity = available_cash + position_value
+            equity = available_cash + adj_accum + position_value
         elif date_str not in trades_by_date and prev_equity is not None:
             # 非交易日且无快照：权益不变（避免成本估值与市价估值跳变）
             equity = prev_equity
@@ -869,7 +932,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
                 for lots in positions.values()
                 for l in lots
             )
-            equity = available_cash + position_value
+            equity = available_cash + adj_accum + position_value
 
         daily_pnl = round(equity - prev_equity, 2) if prev_equity is not None else 0.0
         prev_equity = equity

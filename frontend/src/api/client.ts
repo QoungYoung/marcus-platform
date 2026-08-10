@@ -15,6 +15,7 @@ export const portfolioApi = {
   getDailyPnlBreakdown: (days = 30) => api.get('/portfolio/daily-pnl-breakdown', { params: { days } }),
   getDailyPnlBreakdownByDate: (date: string) => api.get('/portfolio/daily-pnl-breakdown/date', { params: { date } }),
   unfreeze: () => api.post('/portfolio/unfreeze'),
+  adjustCapital: (data: { amount: number; note?: string }) => api.post('/portfolio/adjust-capital', data),
 }
 
 // Trade APIs

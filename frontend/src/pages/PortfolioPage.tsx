@@ -137,6 +137,13 @@ export default function PortfolioPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [fabOpen, setFabOpen] = useState(false);
   const [unfreezing, setUnfreezing] = useState(false);
+  // ── 资金调整 ──
+  const [capOpen, setCapOpen] = useState(false);
+  const [capMode, setCapMode] = useState<'set' | 'deposit' | 'withdraw'>('set');
+  const [capAmount, setCapAmount] = useState('');
+  const [capNote, setCapNote] = useState('');
+  const [capError, setCapError] = useState<string | null>(null);
+  const [capSubmitting, setCapSubmitting] = useState(false);
   const [slExpanded, setSlExpanded] = useState(false);
   const [slToggling, setSlToggling] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -374,6 +381,49 @@ export default function PortfolioPage() {
   const cash = summary?.account?.available_cash || 0;
   const totalAsset = summary?.account?.total_asset || 0;
 
+  // ── 资金调整 ──
+  const capPreview = useMemo(() => {
+    const num = Number(capAmount);
+    if (!capAmount.trim() || !Number.isFinite(num) || num <= 0) return totalAsset;
+    if (capMode === 'set') return num;
+    return totalAsset + (capMode === 'deposit' ? num : -num);
+  }, [capAmount, capMode, totalAsset]);
+
+  const handleCapitalSubmit = useCallback(async () => {
+    setCapError(null);
+    const num = Number(capAmount);
+    if (!capAmount.trim() || !Number.isFinite(num) || num <= 0) {
+      setCapError(t('portfolio.capitalInvalidAmount'));
+      return;
+    }
+    let amount = num;
+    if (capMode === 'withdraw') amount = -num;
+    else if (capMode === 'set') amount = num - totalAsset;
+    if (Math.abs(amount) < 0.005) {
+      setCapError(t('portfolio.capitalNoChange'));
+      return;
+    }
+    setCapSubmitting(true);
+    try {
+      const res = await portfolioApi.adjustCapital({ amount, note: capNote.trim() || undefined });
+      if (res.data?.success) {
+        setCapOpen(false);
+        setCapAmount('');
+        setCapNote('');
+        setCapError(null);
+        await refreshSummary();
+        alert(t('portfolio.capitalSuccess') + ': ¥' + Number(res.data.available_cash ?? 0).toLocaleString());
+      } else {
+        setCapError((res.data?.message as string) || t('portfolio.capitalFailed'));
+      }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setCapError(detail || (err instanceof Error ? err.message : t('portfolio.capitalFailed')));
+    } finally {
+      setCapSubmitting(false);
+    }
+  }, [capAmount, capMode, capNote, totalAsset, t, refreshSummary]);
+
   // ── 快捷交易 ──
   const openTradePanel = useCallback((symbol: string, direction: '买' | '卖', currentPrice: number, volume: number) => {
     if (expandedTradeSymbol === symbol) {
@@ -569,7 +619,13 @@ export default function PortfolioPage() {
               </div>
             ) : summary && (
               <>
-                <div className="cp-strategic-value">¥{fmtMoney(totalAsset)}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div className="cp-strategic-value">¥{fmtMoney(totalAsset)}</div>
+                  <button className="cp-icon-btn" onClick={() => { setCapMode('set'); setCapAmount(''); setCapNote(''); setCapError(null); setCapOpen(true); }}
+                    title={t('portfolio.adjustCapital')} style={{ width: 22, height: 22, fontSize: 9 }}>
+                    <i className="fas fa-pen" />
+                  </button>
+                </div>
                 <div className={`cp-strategic-sub ${totalPnl >= 0 ? 'up' : 'down'}`}>
                   {totalPnl >= 0 ? '+' : ''}¥{fmtMoneyShort(Math.abs(totalPnl))}
                   <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--cc-text-dim)', marginLeft: 6 }}>
@@ -1168,6 +1224,79 @@ export default function PortfolioPage() {
             ) : (
               <div style={{ fontSize: 14, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 16 }}>加载失败</div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 资金调整弹窗 */}
+      {capOpen && (
+        <div
+          className="cp-modal-overlay"
+          onClick={() => { if (!capSubmitting) setCapOpen(false); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 210 }}
+        >
+          <div className="cp-hud-report cp-cap-modal" onClick={e => e.stopPropagation()}>
+            <span className="cp-hud-report-scanline" />
+            <span className="cp-hud-report-corner cp-hud-report-corner--tl" />
+            <span className="cp-hud-report-corner cp-hud-report-corner--tr" />
+            <span className="cp-hud-report-corner cp-hud-report-corner--bl" />
+            <span className="cp-hud-report-corner cp-hud-report-corner--br" />
+            <div className="cp-hud-report-header">
+              <span className="cp-hud-report-date">{t('portfolio.adjustCapital')}</span>
+              <div className="cp-hud-report-summary">
+                <span>{t('portfolio.totalAsset')}: ¥{fmtMoney(totalAsset)}</span>
+                <span>{t('portfolio.availableCash')}: ¥{fmtMoney(cash)}</span>
+              </div>
+              <button className="cp-hud-report-close" onClick={() => { if (!capSubmitting) setCapOpen(false); }}>
+                <i className="fas fa-times" />
+              </button>
+            </div>
+            <div style={{ position: 'relative', zIndex: 2 }}>
+              <div className="cp-cap-mode-row">
+                {(['set', 'deposit', 'withdraw'] as const).map(m => (
+                  <button key={m} className={capMode === m ? 'active' : ''} onClick={() => { setCapMode(m); setCapError(null); }}>
+                    {t('portfolio.capitalMode.' + m)}
+                  </button>
+                ))}
+              </div>
+              <label className="cp-cap-label">{t('portfolio.capitalAmountLabel')}</label>
+              <input
+                className="cp-cap-input"
+                type="number"
+                min="0"
+                step="1000"
+                placeholder="0"
+                value={capAmount}
+                onChange={e => { setCapAmount(e.target.value); setCapError(null); }}
+                disabled={capSubmitting}
+                autoFocus
+              />
+              <div className="cp-cap-hint">
+                <span>{t('portfolio.capitalPreview')}:</span>
+                <span className="cp-cap-preview">¥{fmtMoney(capPreview)}</span>
+              </div>
+              <label className="cp-cap-label">{t('portfolio.capitalNoteLabel')}</label>
+              <input
+                className="cp-cap-input"
+                type="text"
+                maxLength={200}
+                placeholder={t('portfolio.capitalNotePlaceholder')}
+                value={capNote}
+                onChange={e => setCapNote(e.target.value)}
+                disabled={capSubmitting}
+              />
+              {capError && (
+                <div className="cp-cap-error"><i className="fas fa-exclamation-circle" /> {capError}</div>
+              )}
+              <div className="cp-cap-actions">
+                <button className="cp-cap-btn" onClick={() => setCapOpen(false)} disabled={capSubmitting}>
+                  {t('portfolio.capitalCancel')}
+                </button>
+                <button className="cp-cap-btn primary" onClick={handleCapitalSubmit} disabled={capSubmitting}>
+                  {capSubmitting ? <><i className="fas fa-spinner fa-spin" /> {t('portfolio.capitalSubmitting')}</> : t('portfolio.capitalConfirm')}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -77,6 +77,17 @@ class PaperDailySnapshot(Base):
     created_at = Column(Text, nullable=False)
 
 
+class PaperCapitalAdjustment(Base):
+    """手动资金调整记录（入金为正，出金为负），用于修正总资产"""
+    __tablename__ = "paper_capital_adjustments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    amount = Column(Float, nullable=False)
+    balance_after = Column(Float, nullable=False, default=0)
+    note = Column(String(200), default="")
+    created_at = Column(Text, nullable=False)
+
+
 class LongTermCandidate(Base):
     """长期观察候选池 — 从 SQLite trades.db 迁移到 PostgreSQL"""
     __tablename__ = "long_term_candidates"

@@ -69,7 +69,24 @@
     "unfreezeFunds": "Unfreeze Funds",
     "unfreezeConfirm": "Are you sure you want to unfreeze all frozen funds? This will move all frozen cash to available cash and cancel any stuck orders.",
     "unfreezeSuccess": "Funds unfrozen successfully",
-    "unfreezeFailed": "Failed to unfreeze funds"
+    "unfreezeFailed": "Failed to unfreeze funds",
+    "adjustCapital": "Adjust Capital",
+    "capitalMode": {
+      "set": "Set Total Asset",
+      "deposit": "Deposit",
+      "withdraw": "Withdraw"
+    },
+    "capitalAmountLabel": "Amount (¥)",
+    "capitalNoteLabel": "Note",
+    "capitalNotePlaceholder": "Optional, e.g. deposit principal / fix drift",
+    "capitalPreview": "Total asset after",
+    "capitalInvalidAmount": "Please enter a valid amount greater than 0",
+    "capitalNoChange": "Adjustment amount is 0, nothing to change",
+    "capitalSuccess": "Capital adjusted, available cash",
+    "capitalFailed": "Failed to adjust capital",
+    "capitalConfirm": "Confirm",
+    "capitalCancel": "Cancel",
+    "capitalSubmitting": "Submitting..."
   },
   "trading": {
     "title": "Trading",
