@@ -105,14 +105,57 @@ function saveSession(sessionId: string, messages: any[]) {
   }
 }
 
+/**
+ * 清理会话历史中的"孤立" toolResult：
+ * 若 toolResult 前缺少带对应 tool_calls 的 assistant 消息（例如会话文件以 tool 结果开头，
+ * 或前一条 assistant 因 stopReason=error/aborted 被 pi-agent-core 丢弃），OpenAI 兼容接口
+ * （含 DeepSeek）会直接 400 拒绝整个请求：
+ *   "Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"
+ * 表现为 <1s 空回复（无回复）。加载会话时清理可保证恢复的会话始终可发送。
+ */
+function sanitizeSessionHistory(messages: any[]): any[] {
+  const out: any[] = [];
+  let pendingToolCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant') {
+      // 与 pi-agent-core 一致：error/aborted 的 assistant 回合在重建请求时会被跳过，
+      // 其后的 toolResult 会变成孤立 tool 消息，因此这里同样不保留。
+      if (msg.stopReason === 'error' || msg.stopReason === 'aborted') {
+        pendingToolCallIds = new Set();
+        continue;
+      }
+      pendingToolCallIds = new Set(
+        (Array.isArray(msg.content) ? msg.content : [])
+          .filter((c: any) => c.type === 'toolCall' && c.id)
+          .map((c: any) => c.id)
+      );
+      out.push(msg);
+    } else if (msg.role === 'toolResult') {
+      if (msg.toolCallId && pendingToolCallIds.has(msg.toolCallId)) {
+        pendingToolCallIds.delete(msg.toolCallId);
+        out.push(msg);
+      } else {
+        console.log(`[PiServer] ⚠️ 丢弃孤立 toolResult (${msg.toolCallId || '?'})：缺少前置 assistant tool_calls`);
+      }
+    } else {
+      out.push(msg);
+    }
+  }
+  return out;
+}
+
 function loadSession(sessionId: string): any[] {
   try {
     const file = resolve(SESSIONS_DIR, `${sessionId.replace(/[<>:"/\\|?*]/g, '_')}.json`);
     if (existsSync(file)) {
       const data = JSON.parse(readFileSync(file, 'utf-8'));
       if (Array.isArray(data) && data.length > 0) {
-        console.log(`[PiServer] 恢复会话 [${sessionId.slice(-16)}]: ${data.length} 条消息`);
-        return data;
+        const sanitized = sanitizeSessionHistory(data);
+        if (sanitized.length !== data.length) {
+          console.log(`[PiServer] 会话历史已清理 [${sessionId.slice(-16)}]: ${data.length} → ${sanitized.length} 条消息`);
+        }
+        console.log(`[PiServer] 恢复会话 [${sessionId.slice(-16)}]: ${sanitized.length} 条消息`);
+        return sanitized;
       }
     } else {
       // 会话文件不存在 — 可能是首次对话或 session_id 不匹配
@@ -1583,10 +1626,14 @@ const server = http.createServer(async (req, res) => {
           ?.slice(-2)
           ?.map((m: any) => `${m.role}[${typeof m.content === 'string' ? m.content.length : Array.isArray(m.content) ? m.content.map((c: any) => c.type).join(',') : '?'}]`)
           ?.join(' → ') || 'none';
+        // 把模型层被吞掉的错误（如 DeepSeek 400 拒绝 tool 消息）打出来，便于定位空回复根因
+        const lastAssistant = [...(agent.state.messages as any[])].reverse().find((m: any) => m.role === 'assistant');
+        const lastError = lastAssistant?.errorMessage ? `\n  last error: ${lastAssistant.errorMessage}` : '';
         console.log(
           `[PiServer] ⚠️ 异常回复 [${chatMode}][${sessionId.slice(-8)}] (${elapsed}ms, ${reply.length} chars) → 已清除缓存 agent\n`
           + `  msgs before→after: ${msgCountBefore}→${(agent.state.messages as any[])?.length}\n`
           + `  last msgs: ${msgSample}`
+          + lastError
         );
       }
 
