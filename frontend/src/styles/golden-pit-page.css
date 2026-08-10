@@ -265,6 +265,16 @@
 
 /* ── Sector config modal ── */
 .gp-config-overlay {
+  /* Portal 到 body 后脱离 .golden-pit-page，需在此重新声明弹窗用到的 CSS 变量 */
+  --gp-blue: #2f7cd3;
+  --gp-blue-soft: #7fb2e5;
+  --gp-line: #a8cdee;
+  --gp-line-soft: #d4e7f9;
+  --gp-ink: #16324f;
+  --gp-muted: #6b86a3;
+  --gp-panel: rgba(255, 255, 255, 0.92);
+  --gp-radius: 5px;
+  --gp-red: #e5484d;
   position: fixed;
   top: 0;
   right: 0;
