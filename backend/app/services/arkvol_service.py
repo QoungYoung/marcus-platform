@@ -63,13 +63,52 @@ def _read_api_key() -> str:
     )
 
 
-def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
-    url = f"{ARKVOL_BASE_URL}{path}"
-    req = Request(url, headers={
+def _read_cookie() -> str:
+    """读取 ArkVol 登录 Cookie（可选）。
+
+    funds-greed / ai-summary / tech-hardware-greed 等接口自 2026-08 起要求登录态，
+    API Key 仅对 /api/data/* 基础接口有效。可通过环境变量 ARKVOL_COOKIE 或
+    ~/.arkvol/arkvol-entry.json 的 cookie 字段提供。
+    """
+    env_cookie = os.environ.get("ARKVOL_COOKIE", "").strip()
+    if env_cookie:
+        return env_cookie
+
+    config_paths = [
+        Path.home() / ".arkvol" / "arkvol-entry.json",
+        Path(os.environ.get("ARKVOL_CONFIG", "")) if os.environ.get("ARKVOL_CONFIG") else None,
+    ]
+    for cfg_path in config_paths:
+        if cfg_path is None or not cfg_path.is_file():
+            continue
+        try:
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+            cookie = payload.get("cookie", "") if isinstance(payload, dict) else ""
+            if cookie.strip():
+                return cookie.strip()
+        except (OSError, ValueError) as exc:
+            logger.warning("读取 ArkVol 配置 Cookie 失败 %s: %s", cfg_path, exc)
+
+    return ""
+
+
+def _build_headers(api_key: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    headers = {
         "X-API-Key": api_key,
         "X-Arkvol-Skill-Version": "0.3.1",
         "Accept": "application/json",
-    }, method="GET")
+    }
+    cookie = _read_cookie()
+    if cookie:
+        headers["Cookie"] = cookie
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
+    url = f"{ARKVOL_BASE_URL}{path}"
+    req = Request(url, headers=_build_headers(api_key), method="GET")
 
     try:
         with urlopen(req, timeout=timeout) as resp:
@@ -96,11 +135,7 @@ def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
 def _request_raw_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
     """GET 请求（success 包装），用于 funds-greed/fund 与 tech-hardware-greed 等非 {code,msg,data} 接口。"""
     url = f"{ARKVOL_BASE_URL}{path}"
-    req = Request(url, headers={
-        "X-API-Key": api_key,
-        "X-Arkvol-Skill-Version": "0.3.1",
-        "Accept": "application/json",
-    }, method="GET")
+    req = Request(url, headers=_build_headers(api_key), method="GET")
     try:
         with urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
@@ -126,12 +161,7 @@ def _request_post_json(api_key: str, path: str, body: Optional[Dict] = None, tim
     """POST 请求，用于 ai-summary 等端点。"""
     url = f"{ARKVOL_BASE_URL}{path}"
     data = json.dumps(body or {}).encode("utf-8")
-    req = Request(url, data=data, headers={
-        "X-API-Key": api_key,
-        "X-Arkvol-Skill-Version": "0.3.1",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }, method="POST")
+    req = Request(url, data=data, headers=_build_headers(api_key, {"Content-Type": "application/json"}), method="POST")
 
     try:
         with urlopen(req, timeout=timeout) as resp:
@@ -191,10 +221,7 @@ class ArkvolService:
         全量接口无 {code, msg, data} 包装，使用独立请求逻辑。
         """
         url = f"{ARKVOL_BASE_URL}{FULL_SERIES_ENDPOINT}"
-        req = Request(url, headers={
-            "X-API-Key": self.api_key,
-            "Accept": "application/json",
-        }, method="GET")
+        req = Request(url, headers=_build_headers(self.api_key), method="GET")
 
         try:
             with urlopen(req, timeout=60) as resp:
