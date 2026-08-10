@@ -2694,6 +2694,12 @@ export const REFLECT_TOOLS = [
   // 数据库查询
   readDbTableTool,
   getDbSchemaTool,
+  // 黄金坑（只读）
+  getGoldenPitStatusTool,
+  getGoldenPitHistoryTool,
+  getGoldenPitDcaStatusTool,
+  getGoldenPitDcaLogsTool,
+  getGoldenPitEtfConfigsTool,
 ];
 
 // 向后兼容
