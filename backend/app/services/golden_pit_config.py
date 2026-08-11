@@ -222,6 +222,19 @@ SECTOR_ETF_POOL: Dict[str, Dict[str, Any]] = {
     "军工":         {"name": "军工ETF国泰",     "etf_code": "SH512660", "flow_name": "国防军工",   "greed_code": "022243"},
 }
 
+# tech7 板块池（生产默认, pool_source=tech7）: arkvol tech-hardware-greed/series 覆盖的 7 只场内科技 ETF
+# 回测（生产500天分位口径, 2025起5个板块窗口）: 超额 +5.86% 5/5 胜率, 优于 SECTOR_ETF_POOL(+3.21% 3/5)
+# 已剔除: 159227 航天航空(军工属性错配/贪婪2025-06起), 588080 科创50ETF(与宽基588000同源)
+TECH_SECTOR_POOL: Dict[str, Dict[str, Any]] = {
+    "创业板50": {"name": "创业板50ETF华安",   "etf_code": "SZ159949"},
+    "半导体":   {"name": "半导体ETF国联安",   "etf_code": "SH512480"},
+    "人工智能": {"name": "人工智能ETF平安",   "etf_code": "SH512930"},
+    "5G通信":   {"name": "5G通信ETF华夏",     "etf_code": "SH515050"},
+    "大数据":   {"name": "大数据ETF富国",     "etf_code": "SH515400"},
+    "通信设备": {"name": "通信设备ETF国泰",   "etf_code": "SH515880"},
+    "科创芯片": {"name": "科创芯片ETF嘉实",   "etf_code": "SH588200"},
+}
+
 # 板块拆分选筹参数（来自 .env，经 app.config.Settings 加载；改 .env 后需重启 backend 生效）
 _settings = get_settings()
 GOLDEN_PIT_SECTOR_SPLIT_ENABLED: bool = _settings.GOLDEN_PIT_SECTOR_SPLIT_ENABLED  # 灰度开关: false=dry-run 展示选筹; true=板块 ETF 下单（588000/159915 不再直接买入）
@@ -235,6 +248,7 @@ SECTOR_MF_MA_DAYS: int = _settings.GOLDEN_PIT_SECTOR_MF_MA_DAYS                 
 SECTOR_MIN_VALID: int = _settings.GOLDEN_PIT_SECTOR_MIN_VALID                    # 有效信号板块数下限（不足则空仓等待）
 SECTOR_EXIT_DOWN_DAYS: int = _settings.GOLDEN_PIT_SECTOR_EXIT_DOWN_DAYS          # 板块ETF二次拐点退出: 连续回落天数
 SECTOR_SIGNAL_MODE: str = _settings.GOLDEN_PIT_SECTOR_SIGNAL_MODE                # 选筹信号模式: greed=超跌+板块贪婪 / moneyflow=超跌+资金流
+SECTOR_POOL_SOURCE: str = _settings.GOLDEN_PIT_SECTOR_POOL_SOURCE                  # 板块选筹池来源: tech7=场内科技7只(默认) / prod10=原10板块(回滚)
 
 # 撤场后防御承接组合（等权五标的：中证红利/银行/黄金/国债/有色）——永久持有模式
 # 轮动回测 2020-11~2026-07（515080 替换 510880 + 持有至宽基重新入场）: 组合 CAGR 12.7% vs 波段 7.85%，回撤 -23.9% vs -21.0%

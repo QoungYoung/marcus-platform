@@ -76,5 +76,44 @@
 - greed 信号口径（与 `scripts/backtest_sector_greed_500d.py` 一致）: 有效信号 = `oversold120 < 0`（超跌中）且当日板块贪婪可查；`combo = -(rank(greed,升序) + rank(oversold120,升序))`，按 combo 降序取 TOP N（默认 2），权重归一化与单板块上限逻辑与 moneyflow 共用。
 - 贪婪数据源: arkvol `funds-greed/fund`，`SECTOR_ETF_POOL` 每板块配置 `greed_code`（场内 ETF 直接用 6 位代码；消费电子/新能源动力系统/生物医药/机械/军工 用场外代表基金 018301/015528/018396/026130/022243）。贪婪历史经服务内缓存（TTL 7200s）。
 - 数据降级: 单板块贪婪接口异常/空值/当日无贪婪值 → 该板块剔除，不阻断其他板块；有效板块数 < `min_valid`(4) → 空仓等待（DCA 跳过买入，schedule_day 不递增）。arkvol 登录态失效时可将 `signal_mode` 切回 `moneyflow` 即时回滚。
-- 已知差异: 贪婪历史 2025-01 起（更早无数据）；机械代表基金 026130 仅 2026-03 起；生产超跌用 pi-server K 线、回测用 tushare `fund_daily`，两源收盘价存在小幅偏差，可能影响板块间排序。
+- 已知差异: 贪婪历史 2025-01 起（更早无数据）；机械代表基金 026130 仅 2026-03 起；超跌 K 线生产与回测同为 tushare `fund_daily`（`_fetch_pi_server_kline` 为历史命名，实际调 tushare），但生产函数固定以当前日期为截止、不按 `as_of` 截断：实时运行（as_of=当日）与回测一致，复选历史窗口时 K 线含未来数据（前视），可能影响板块间排序。
 - 相关变更: `openspec/changes/add-sector-greed-selection/`（proposal/specs/design/tasks）。
+
+
+## tech7 选筹池上线说明（adopt-tech7-sector-selection）
+
+- 生产默认选筹池由 10 板块 `SECTOR_ETF_POOL` 切换为 tech7 7 只场内科技 ETF（`pool_source=tech7`）：创业板50(159949)、半导体(512480)、人工智能(512930)、5G通信(515050)、大数据(515400)、通信设备(515880)、科创芯片(588200)；`SECTOR_ETF_POOL` 保留供 `pool_source=prod10` 回滚与 moneyflow 模式使用。
+- 板块贪婪数据源由 `funds-greed/fund` 切换为 arkvol `tech-hardware-greed/series`（`fetch_tech_greed(days=2000)`，7 只全覆盖、更新至当日，服务内缓存 TTL 7200s）；512480/515880/588200 与旧池重叠，tech7 下统一用 tech-hardware 贪婪，避免双源混用导致跨源排序失真。
+- 信号机制不变：有效信号 = `oversold120 < 0` 且当日贪婪可查；`combo = -(rank(greed,升序) + rank(oversold120,升序))`；TOP N（默认 2）+ 权重归一化 + `max_weight` 截断；`min_valid` 不足回退宽基、坑内拐点日选筹成功切回板块；出场规则（P70/P80 全仓、P40 半仓、兜底 20/25 天、板块连 3 日回落提前卖）不变。
+- 配置：`golden_pit_sector_config` 新增 `pool_source`（string，默认 `tech7`，可 DB 动态覆盖）；`.env` 可用 `GOLDEN_PIT_SECTOR_POOL_SOURCE` 设默认值；`moneyflow` 模式固定使用 `SECTOR_ETF_POOL`（依赖中信二级行业资金流映射）。
+
+### 回测对比（生产 500 天分位口径，2025 起 5 个板块窗口）
+
+| 选筹池 | 贪婪源 | 板块窗口 | 平均超额 | 胜率(超额>0) | 说明 |
+|---|---:|---:|---:|---:|---|
+| 生产池 prod10（10 板块） | funds-greed | 5 | +3.21% | 3/5 | add-sector-greed-selection 期间既有结论 |
+| **tech7（7 只场内科技 ETF，生产采用）** | tech-hardware | 5 | **+5.86%** | **5/5** | 本次 `_tech9_prod_sel.py` 复跑确认 |
+| 合并池（10+7 只中选筹） | 双源 | 5 | +4.62% | 4/5 | `_pool_merge_backtest.py` 既有结论 |
+
+- tech7 各窗口明细（与 `data/backtest/_tech9_prod_sel.py` 一致）：
+  - 科创50 2025-01-02：创业板50+大数据 +16.8%（宽基 +6.5%，超额 +10.4%）
+  - 科创50 2025-06-23：大数据+半导体 +1.9%（宽基 +1.5%，超额 +0.5%）
+  - 科创50 2026-03-23：通信设备+半导体 +29.2%（宽基 +22.9%，超额 +6.3%）
+  - 创业板 2025-01-02：创业板50+大数据 +19.6%（宽基 +9.2%，超额 +10.4%）
+  - 创业板 2025-04-09：5G通信+通信设备 +9.4%（宽基 +7.7%，超额 +1.7%）
+  - 分宽基口径：科创50 3 窗平均 +15.99%（超额 +5.72%、3/3）；创业板 2 窗平均 +14.52%（超额 +6.07%、2/2）
+- 2026-08-10 未平仓两坑（科创50 2026-08-06 买入 / 创业板 2026-08-04 买入）当前选中 人工智能+5G通信（与生产 `select_sectors` 冒烟一致）。
+
+### 已知差异与剔除标的
+
+- tech-hardware 贪婪历史自 2025-01 起（更早无数据），因此 tech7 窗口样本仅 2025 年以来 5 个，结论方向性而非统计显著；生产灰度观察 1-2 个坑再确认。
+- 已剔除 159227 航天航空：军工属性与黄金坑宽基（科创/创业板）错配，且贪婪数据 2025-06 起覆盖不全；已剔除 588080 科创50ETF：与宽基 588000 同源，选筹无分散意义。
+- 原池 7 只（计算机 512720、软件 159852、消费电子 159732、新能源动力系统 515030、生物医药 159929、机械 159886、军工 512660）不再参与默认选筹，其中停更问题（计算机/软件贪婪停于 2026-07-09）随 tech7 切换不再影响生产。
+- 超跌 K 线生产与回测同为 tushare `fund_daily`（函数名 `_fetch_pi_server_kline` 是历史遗留，与 LLM Pi Server 服务无关）；生产不按 `as_of` 截断，复选历史窗口时取到截至当日的 K 线（前视），超跌排序与回测的历史时点可能不同；实时运行无此问题（沿用既有已知差异，监控即可）。
+
+### 部署与回滚
+
+1. 代码/配置部署：`TECH_SECTOR_POOL` 与 `pool_source` 默认 `tech7` 已落地；确认 `golden_pit_sector_config` 表存在 `pool_source=tech7`（缺失时服务启动会按默认值种子写入）。
+2. 重启 backend 后验证：`GET /golden-pit/status` 的 `sector_selection.pool_source=tech7`，且 08-10 选中 人工智能+5G通信（不再空仓）。
+3. 回滚：配置表 `pool_source=prod10`（或 `.env` `GOLDEN_PIT_SECTOR_POOL_SOURCE=prod10` 后重启），恢复原 10 板块 + funds-greed；紧急时还可 `signal_mode=moneyflow` 双重回滚。
+4. 相关变更：`openspec/changes/adopt-tech7-sector-selection/`（proposal/specs/design/tasks）。

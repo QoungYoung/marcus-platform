@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     GOLDEN_PIT_SECTOR_MIN_VALID: int = 4            # 有效信号板块数下限(不足则空仓等待)
     GOLDEN_PIT_SECTOR_EXIT_DOWN_DAYS: int = 3       # 板块ETF二次拐点退出: 连续回落天数
     GOLDEN_PIT_SECTOR_SIGNAL_MODE: str = "greed"    # 板块选筹信号模式: greed=超跌+板块贪婪; moneyflow=超跌+资金流(回滚)
+    GOLDEN_PIT_SECTOR_POOL_SOURCE: str = "tech7"   # 板块选筹池来源: tech7=7只场内科技ETF(tech-hardware贪婪,默认); prod10=原10板块(funds-greed,回滚)
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",

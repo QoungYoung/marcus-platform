@@ -34,8 +34,10 @@ from app.services.golden_pit_config import (
     SECTOR_MF_MA_DAYS,
     SECTOR_MIN_VALID,
     SECTOR_OVS_DAYS,
+    SECTOR_POOL_SOURCE,
     SECTOR_SIGNAL_MODE,
     SECTOR_TOP_N,
+    TECH_SECTOR_POOL,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,6 +109,10 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "signal_mode": {
         "label": "板块信号模式", "description": "greed=超跌+板块贪婪；moneyflow=超跌+资金流（回滚）",
         "value_type": "string", "sort_order": 11, "default": SECTOR_SIGNAL_MODE,
+    },
+    "pool_source": {
+        "label": "板块选筹池", "description": "tech7=7只场内科技ETF(tech-hardware贪婪,默认)；prod10=原10板块(funds-greed,回滚)",
+        "value_type": "string", "sort_order": 12, "default": SECTOR_POOL_SOURCE,
     },
 }
 
@@ -347,6 +353,32 @@ def _load_sector_greed_map() -> Dict[str, Dict[str, float]]:
     return out
 
 
+def _load_tech_greed_map() -> Dict[str, Dict[str, float]]:
+    """加载 tech7 池贪婪历史 {etf6: {date: greed}}（arkvol tech-hardware-greed/series，TTL 7200s）。"""
+    cached = _cache_get("sector_tech_greed_map", 7200)
+    if cached is not None:
+        return cached
+    from app.services.arkvol_service import ArkvolService
+    svc = ArkvolService()
+    try:
+        payload = svc.fetch_tech_greed(days=2000)
+    except Exception as e:
+        logger.warning("tech-hardware 贪婪加载失败: %s", e)
+        return {}
+    data = (payload.get("data") or {}) if isinstance(payload, dict) else {}
+    out: Dict[str, Dict[str, float]] = {}
+    for code, arr in data.items():
+        g: Dict[str, float] = {}
+        for r in arr or []:
+            d = r.get("date")
+            if d and r.get("greed") is not None:
+                g[str(d)] = float(r["greed"])
+        if g:
+            out[str(code)] = g
+    _cache_set("sector_tech_greed_map", out)
+    return out
+
+
 def _compute_signal(
     pool_key: str,
     entry: Dict[str, Any],
@@ -538,30 +570,36 @@ def select_sectors(
     max_weight = float(cfg.get("max_weight", SECTOR_MAX_WEIGHT))
     min_valid = int(cfg.get("min_valid", SECTOR_MIN_VALID))
     signal_mode = str(cfg.get("signal_mode", SECTOR_SIGNAL_MODE)).strip().lower()
+    # pool_source 仅在 greed 模式生效: tech7=场内科技7只(tech-hardware贪婪, 默认); prod10=原10板块(funds-greed, 回滚)
+    # moneyflow 模式固定使用 SECTOR_ETF_POOL（依赖中信二级行业资金流映射）
+    pool_source = str(cfg.get("pool_source", SECTOR_POOL_SOURCE)).strip().lower()
+    use_tech_pool = signal_mode == "greed" and pool_source == "tech7"
+    pool = TECH_SECTOR_POOL if use_tech_pool else SECTOR_ETF_POOL
 
-    cache_key = f"selection:{as_of}:{top_n}:{signal_mode}"
+    cache_key = f"selection:{as_of}:{top_n}:{signal_mode}:{pool_source}"
     cached = _cache_get(cache_key, 900)
     if cached is not None:
         cached["enabled"] = is_enabled
         return cached
 
-    if not SECTOR_ETF_POOL:
+    if not pool:
+        pool_name = "TECH_SECTOR_POOL" if use_tech_pool else "SECTOR_ETF_POOL"
         return {
             "as_of": as_of, "enabled": is_enabled, "signal_mode": signal_mode,
-            "selected": [], "all": [],
-            "empty_reason": "SECTOR_ETF_POOL 未配置",
+            "pool_source": pool_source, "selected": [], "all": [],
+            "empty_reason": f"{pool_name} 未配置",
         }
 
     valid = []
     if signal_mode == "greed":
-        greed_map = _load_sector_greed_map()
-        for pool_key, entry in SECTOR_ETF_POOL.items():
+        greed_map = _load_tech_greed_map() if use_tech_pool else _load_sector_greed_map()
+        for pool_key, entry in pool.items():
             sig = _compute_signal_greed(pool_key, entry, greed_map, as_of, cfg)
             if sig:
                 valid.append(sig)
     else:
         flow_df = _load_industry_flow_df()
-        for pool_key, entry in SECTOR_ETF_POOL.items():
+        for pool_key, entry in pool.items():
             sig = _compute_signal(pool_key, entry, flow_df, as_of, cfg)
             if sig:
                 valid.append(sig)
@@ -569,7 +607,7 @@ def select_sectors(
     if len(valid) < min_valid:
         result = {
             "as_of": as_of, "enabled": is_enabled, "signal_mode": signal_mode,
-            "selected": [], "all": valid,
+            "pool_source": pool_source, "selected": [], "all": valid,
             "empty_reason": f"有效信号板块数 {len(valid)} < {min_valid}，空仓等待板块信号",
         }
         _cache_set(cache_key, result)
@@ -583,6 +621,7 @@ def select_sectors(
         "as_of": as_of,
         "enabled": is_enabled,
         "signal_mode": signal_mode,
+        "pool_source": pool_source,
         "selected": selected,
         "all": valid,
         "empty_reason": "" if selected else "combo 信号均未过门槛，空仓等待板块信号",

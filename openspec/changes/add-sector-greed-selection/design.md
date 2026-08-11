@@ -54,3 +54,8 @@ greed 模式任一步骤失败（接口异常、空数据、当日无贪婪值�
 
 - 前端黄金坑配置弹窗是否需要在本次支持 string 类型渲染 `signal_mode`（当前弹窗仅 bool/number）
 - 是否需要对 greedy 模式增加贪婪硬门槛（如 greed < 阈值），当前仅作为排序维度
+
+
+## Supersession Note（2026-08-11）
+
+默认板块选筹池已被 `adopt-tech7-sector-selection` 变更接管：生产 `pool_source=tech7`（7 只场内科技 ETF + arkvol `tech-hardware-greed/series`），替代默认的 `SECTOR_ETF_POOL`(10 板块) + `funds-greed/fund`。本变更的 funds-greed 路径保留作为 `pool_source=prod10` 回滚选项；`signal_mode=greed/moneyflow` 语义不变。
