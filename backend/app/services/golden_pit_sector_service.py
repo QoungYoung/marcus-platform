@@ -15,6 +15,7 @@ combo 信号（超跌 oversold120 + 中信二级 5 日资金流 mf5_norm）动�
 配置来源: 默认值来自 .env（golden_pit_config 模块级常量），运行时覆盖来自
 PostgreSQL golden_pit_sector_config 表（黄金坑页面配置弹窗）。
 """
+import json
 import logging
 import time
 from datetime import datetime
@@ -26,6 +27,7 @@ import pandas as pd
 from app.services.golden_pit_config import (
     COMBO_W_MF,
     COMBO_W_OVS,
+    DCA_CARRIER_DEFAULTS,
     GOLDEN_PIT_SECTOR_SPLIT_ENABLED,
     SECTOR_ETF_POOL,
     SECTOR_EXIT_DOWN_DAYS,
@@ -114,7 +116,60 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "label": "板块选筹池", "description": "tech7=7只场内科技ETF(tech-hardware贪婪,默认)；prod10=原10板块(funds-greed,回滚)",
         "value_type": "string", "sort_order": 12, "default": SECTOR_POOL_SOURCE,
     },
+    "dca_carrier_enabled": {
+        "label": "DCA 执行载体启用", "description": "false=dry-run 展示目标载体；true=按载体配置买入（fixed_combo/broad）",
+        "value_type": "bool", "sort_order": 13, "default": False,
+    },
+    "dca_carrier_588000": {
+        "label": "科创50 DCA 载体", "description": "JSON: {\"mode\":\"sector_selection\"|\"fixed_combo\"|\"broad\",\"codes\":[{\"code\":\"588200\",\"weight\":0.5},...]}",
+        "value_type": "json", "sort_order": 14, "default": json.dumps(DCA_CARRIER_DEFAULTS["588000"], ensure_ascii=False),
+    },
+    "dca_carrier_159915": {
+        "label": "创业板指 DCA 载体", "description": "JSON: {\"mode\":\"sector_selection\"|\"fixed_combo\"|\"broad\",\"codes\":[{\"code\":\"159949\",\"weight\":1.0}]}",
+        "value_type": "json", "sort_order": 15, "default": json.dumps(DCA_CARRIER_DEFAULTS["159915"], ensure_ascii=False),
+    },
 }
+
+
+DCA_CARRIER_MODES = ("sector_selection", "fixed_combo", "broad")
+
+
+def parse_dca_carrier(raw: Any, default_mode: str = "sector_selection") -> Dict[str, Any]:
+    """解析 dca_carrier_<fund> JSON；非法或缺失回退 sector_selection 并记录原因。
+
+    返回 {"mode", "codes"(可选), "reason"(回退时)}；fixed_combo 要求 codes 非空且权重和为 1。
+    """
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        try:
+            data = json.loads(raw) if (isinstance(raw, str) and raw.strip()) else {}
+        except (ValueError, TypeError):
+            logger.warning("DCA 载体配置 JSON 非法, 回退 sector_selection: %s", raw)
+            return {"mode": "sector_selection", "reason": "invalid_json"}
+    mode = data.get("mode") or default_mode
+    if mode not in DCA_CARRIER_MODES:
+        logger.warning("DCA 载体配置 mode 未知(%s), 回退 sector_selection", mode)
+        return {"mode": "sector_selection", "reason": "unknown_mode"}
+    codes = data.get("codes") or []
+    if mode == "fixed_combo":
+        if not codes:
+            logger.warning("DCA 载体 fixed_combo 缺少 codes, 回退 sector_selection")
+            return {"mode": "sector_selection", "reason": "empty_codes"}
+        weight_sum = 0.0
+        for c in codes:
+            try:
+                w = float(c.get("weight", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                w = -1.0
+            if w < 0 or not c.get("code"):
+                logger.warning("DCA 载体 fixed_combo 标的/权重非法: %s", c)
+                return {"mode": "sector_selection", "reason": "invalid_member"}
+            weight_sum += w
+        if abs(weight_sum - 1.0) > 1e-6:
+            logger.warning("DCA 载体 fixed_combo 权重和=%.2f, 回退 sector_selection", weight_sum)
+            return {"mode": "sector_selection", "reason": f"weight_sum={weight_sum:.2f}"}
+    return {"mode": mode, "codes": codes}
 
 
 def _load_sector_config_rows() -> List[Dict[str, Any]]:
@@ -181,10 +236,9 @@ def get_sector_config() -> Dict[str, Any]:
     if cached is not None:
         return cached
 
+    # 无条件 seed（内部仅补缺失键），确保已有配置的部署也会补入新配置项
+    _seed_sector_config_defaults()
     rows = _load_sector_config_rows()
-    if not rows:
-        _seed_sector_config_defaults()
-        rows = _load_sector_config_rows()
 
     cfg: Dict[str, Any] = {}
     by_key = {r["config_key"]: r for r in rows}
@@ -199,12 +253,17 @@ def get_sector_config() -> Dict[str, Any]:
         try:
             if vtype == "bool":
                 cfg[key] = str(raw).strip().lower() in ("1", "true", "yes", "on")
-            elif vtype == "string":
+            elif vtype in ("string", "json"):
                 cfg[key] = str(raw).strip()
             else:
                 cfg[key] = float(raw)
         except (ValueError, TypeError):
             cfg[key] = default
+    cfg["dca_carriers"] = {
+        fc: parse_dca_carrier(cfg.get(f"dca_carrier_{fc}"),
+                              DCA_CARRIER_DEFAULTS.get(fc, {}).get("mode", "sector_selection"))
+        for fc in DCA_CARRIER_DEFAULTS
+    }
     _cache_set("sector_config", cfg)
     return cfg
 
@@ -253,6 +312,13 @@ def update_sector_config(values: Dict[str, Any]) -> Dict[str, Any]:
             if vtype == "bool":
                 val = bool(raw) if isinstance(raw, bool) else str(raw).strip().lower() in ("1", "true", "yes", "on")
                 row.config_value = "true" if val else "false"
+            elif vtype == "json":
+                if isinstance(raw, str):
+                    json.loads(raw)  # 校验
+                    val = raw.strip()
+                else:
+                    val = json.dumps(raw, ensure_ascii=False)
+                row.config_value = val
             elif vtype == "string":
                 val = str(raw).strip()
                 row.config_value = val

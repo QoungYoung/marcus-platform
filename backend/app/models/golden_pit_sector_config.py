@@ -12,7 +12,7 @@ class GoldenPitSectorConfig(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     config_key = Column(String(60), nullable=False, unique=True, comment="配置键")
-    config_value = Column(String(100), nullable=False, default="", comment="配置值（字符串存储）")
+    config_value = Column(Text, nullable=False, default="", comment="配置值（字符串存储；JSON 载体配置可能超 100 字符）")
     label = Column(String(80), nullable=False, default="", comment="展示名称")
     description = Column(Text, nullable=True, comment="说明")
     value_type = Column(String(20), nullable=False, default="number", comment="类型: bool / number")

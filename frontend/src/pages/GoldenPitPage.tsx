@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Settings, X } from 'lucide-react';
 import {
@@ -132,6 +132,9 @@ interface GoldenPitStatus {
   prediction: Prediction | null;
   summary: string;
   global_macro: GlobalMacro;
+  sector_selection?: {
+    carrier?: SectorSelectionCarrier;
+  };
 }
 
 interface TrendData {
@@ -145,8 +148,20 @@ interface SectorConfigItem {
   value: string | number | boolean;
   label: string;
   description: string;
-  value_type: 'bool' | 'number';
+  value_type: 'bool' | 'number' | 'string' | 'json';
   sort_order: number;
+}
+
+interface DcaCarrierTarget {
+  fund_code: string;
+  mode: string;
+  codes: { code: string; weight: number }[];
+}
+
+interface SectorSelectionCarrier {
+  enabled: boolean;
+  targets: DcaCarrierTarget[];
+  note: string;
 }
 
 // ── Display Config (fetched from backend) ──
@@ -1055,7 +1070,9 @@ export default function GoldenPitPage() {
     try {
       const values: Record<string, string | number | boolean> = {};
       for (const it of configItems) {
-        values[it.config_key] = it.value_type === 'bool' ? !!it.value : Number(it.value);
+        if (it.value_type === 'bool') values[it.config_key] = !!it.value;
+        else if (it.value_type === 'string' || it.value_type === 'json') values[it.config_key] = String(it.value);
+        else values[it.config_key] = Number(it.value);
       }
       const res = await goldenPitApi.updateSectorConfig(values);
       if (res.data?.code === 0) {
@@ -1413,31 +1430,64 @@ export default function GoldenPitPage() {
               </button>
             </div>
             <div className="gp-config-body">
-              {configItems.map((item) => (
-                <div className="gp-config-row" key={item.config_key}>
-                  <div className="gp-config-info">
-                    <span className="gp-config-label">{item.label}</span>
-                    <span className="gp-config-desc">{item.description}</span>
-                  </div>
-                  {item.value_type === 'bool' ? (
-                    <label className="gp-config-switch">
-                      <input
-                        type="checkbox"
-                        checked={!!item.value}
-                        onChange={(e) => onConfigItemChange(item.config_key, e.target.checked)}
-                      />
-                      <span className="gp-config-switch-track" />
-                    </label>
-                  ) : (
-                    <input
-                      type="number"
-                      className="gp-config-input"
-                      value={String(item.value)}
-                      step="any"
-                      onChange={(e) => onConfigItemChange(item.config_key, e.target.value)}
-                    />
-                  )}
+              {status?.sector_selection?.carrier && (
+                <div className="gp-config-carrier-preview">
+                  <b>DCA 执行载体：</b>{status.sector_selection.carrier.note}
+                  <br />
+                  {status.sector_selection.carrier.targets.map((t) => (
+                    <span key={t.fund_code}>
+                      {t.fund_code} → {t.mode}
+                      {t.codes && t.codes.length > 0 ? `（${t.codes.map((c) => `${c.code} ${Math.round(c.weight * 100)}%`).join(' + ')}）` : ''}
+                      {'　'}
+                    </span>
+                  ))}
                 </div>
+              )}
+              {configItems.map((item) => (
+                <Fragment key={item.config_key}>
+                  {item.config_key === 'dca_carrier_enabled' && (
+                    <div className="gp-config-divider">DCA 执行载体</div>
+                  )}
+                  <div className="gp-config-row">
+                    <div className="gp-config-info">
+                      <span className="gp-config-label">{item.label}</span>
+                      <span className="gp-config-desc">{item.description}</span>
+                    </div>
+                    {item.value_type === 'bool' ? (
+                      <label className="gp-config-switch">
+                        <input
+                          type="checkbox"
+                          checked={!!item.value}
+                          onChange={(e) => onConfigItemChange(item.config_key, e.target.checked)}
+                        />
+                        <span className="gp-config-switch-track" />
+                      </label>
+                    ) : item.value_type === 'json' ? (
+                      <textarea
+                        className="gp-config-textarea"
+                        value={String(item.value)}
+                        spellCheck={false}
+                        onChange={(e) => onConfigItemChange(item.config_key, e.target.value)}
+                      />
+                    ) : item.value_type === 'string' ? (
+                      <input
+                        type="text"
+                        className="gp-config-input"
+                        style={{ textAlign: 'left', width: 180 }}
+                        value={String(item.value)}
+                        onChange={(e) => onConfigItemChange(item.config_key, e.target.value)}
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        className="gp-config-input"
+                        value={String(item.value)}
+                        step="any"
+                        onChange={(e) => onConfigItemChange(item.config_key, e.target.value)}
+                      />
+                    )}
+                  </div>
+                </Fragment>
               ))}
             </div>
             <div className="gp-config-foot">

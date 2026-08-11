@@ -250,6 +250,18 @@ SECTOR_EXIT_DOWN_DAYS: int = _settings.GOLDEN_PIT_SECTOR_EXIT_DOWN_DAYS         
 SECTOR_SIGNAL_MODE: str = _settings.GOLDEN_PIT_SECTOR_SIGNAL_MODE                # 选筹信号模式: greed=超跌+板块贪婪 / moneyflow=超跌+资金流
 SECTOR_POOL_SOURCE: str = _settings.GOLDEN_PIT_SECTOR_POOL_SOURCE                  # 板块选筹池来源: tech7=场内科技7只(默认) / prod10=原10板块(回滚)
 
+# ═══ DCA 执行载体（guide_only 宽基: 坑内资金买入对象, 灰度开关 dca_carrier_enabled）═══
+# 回测（生产500天分位出入场 + 生产DCA形态, data/backtest/_dca_elastic_hist.py）:
+#   科创50 信号 8 窗口: 588200 科创芯片 +19.23% / 512480 半导体 +18.08% / tech7等权 +14.15% / 宽基 +11.84%
+#   创业板 信号 6 窗口: 159949 创业板50 +16.41% / 宽基 +14.85%（硬科技ETF普遍跑输, 因创业板坑由权重板块驱动）
+# mode: sector_selection=板块选筹(现状) / fixed_combo=固定高弹性ETF组合 / broad=宽基本身(对照/回滚)
+# 灰度已开启(2026-08-11): 588000 → fixed_combo 588200+512480 等权; 159915 → fixed_combo 159949
+# 回滚: golden_pit_sector_config 置 dca_carrier_enabled=false 即恢复板块选筹
+DCA_CARRIER_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "588000": {"mode": "fixed_combo", "codes": [{"code": "588200", "weight": 0.5}, {"code": "512480", "weight": 0.5}]},
+    "159915": {"mode": "fixed_combo", "codes": [{"code": "159949", "weight": 1.0}]},
+}
+
 # 撤场后防御承接组合（等权五标的：中证红利/银行/黄金/国债/有色）——永久持有模式
 # 轮动回测 2020-11~2026-07（515080 替换 510880 + 持有至宽基重新入场）: 组合 CAGR 12.7% vs 波段 7.85%，回撤 -23.9% vs -21.0%
 DEFENSE_TAKEOVER_WEIGHTS: Dict[str, float] = {

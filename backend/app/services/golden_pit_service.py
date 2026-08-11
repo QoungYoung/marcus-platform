@@ -196,6 +196,16 @@ class GoldenPitService:
                          "selected": [], "all": [], "empty_reason": f"选筹服务异常: {e}"}
         status["sector_split_enabled"] = _sector.get_sector_config().get("enabled")
         status["sector_selection"] = selection
+        s_cfg = _sector.get_sector_config()
+        carrier_enabled = bool(s_cfg.get("dca_carrier_enabled"))
+        status["sector_selection"]["carrier"] = {
+            "enabled": carrier_enabled,
+            "targets": [
+                {"fund_code": fc, "mode": c.get("mode"), "codes": c.get("codes", [])}
+                for fc, c in s_cfg.get("dca_carriers", {}).items()
+            ],
+            "note": "灰度开启, 按载体配置执行" if carrier_enabled else "dry-run 未生效（展示目标载体, 下单仍按板块选筹）",
+        }
         for idx in status.get("indices", []):
             if idx.get("guide_only"):
                 idx["sector_summary"] = {

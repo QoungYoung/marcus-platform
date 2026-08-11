@@ -416,6 +416,53 @@
   box-shadow: 0 0 0 2px rgba(47, 124, 211, 0.15);
 }
 
+.gp-config-textarea {
+  width: 300px;
+  height: 72px;
+  flex: none;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  color: var(--gp-ink);
+  background: #fff;
+  border: 1px solid var(--gp-line);
+  border-radius: 4px;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.gp-config-textarea:focus {
+  border-color: var(--gp-blue);
+  box-shadow: 0 0 0 2px rgba(47, 124, 211, 0.15);
+}
+
+.gp-config-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--gp-line-soft);
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--gp-blue);
+  letter-spacing: 0.05em;
+}
+
+.gp-config-carrier-preview {
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  background: rgba(47, 124, 211, 0.06);
+  border: 1px dashed var(--gp-blue);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--gp-ink);
+  line-height: 1.6;
+}
+
+.gp-config-carrier-preview b { color: var(--gp-blue); }
+
 .gp-config-switch {
   position: relative;
   flex: none;

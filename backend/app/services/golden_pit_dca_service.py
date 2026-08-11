@@ -429,6 +429,29 @@ def _check_sector_down_turn(etf_code: str, down_days: Optional[int] = None) -> b
         return False
 
 
+def _normalize_carrier_etf_code(code: str) -> str:
+    """6 位 ETF 代码 → SH/SZ 前缀格式（5xxxxx=上交所, 1xxxxx=深交所）。"""
+    code = (code or "").strip()
+    if code[:2] in ("SH", "SZ", "BJ"):
+        return code
+    if code[:1] == "5":
+        return f"SH{code}"
+    if code[:1] == "1":
+        return f"SZ{code}"
+    return code
+
+
+def _carrier_active(fund_code: str) -> Optional[Dict[str, Any]]:
+    """返回生效的 DCA 载体配置（灰度开启且模式为 fixed_combo/broad），否则 None。"""
+    s_cfg = _sector.get_sector_config()
+    if not s_cfg.get("dca_carrier_enabled"):
+        return None
+    carrier = s_cfg.get("dca_carriers", {}).get(fund_code, {})
+    if carrier.get("mode") in ("fixed_combo", "broad"):
+        return carrier
+    return None
+
+
 def _build_buy_legs(
     fund_code: str,
     indices: List[Dict],
@@ -446,6 +469,19 @@ def _build_buy_legs(
         (legs, fallback_notes, empty_reason) — empty_reason 非空表示无板块可买。
     """
     s_cfg = _sector.get_sector_config()
+    carrier = _carrier_active(fund_code)
+    if carrier:
+        if carrier["mode"] == "broad":
+            return [("carrier:broad", etf_code, daily_amount)], [], ""
+        legs = []
+        for c in carrier.get("codes", []):
+            code = c.get("code", "")
+            weight = float(c.get("weight", 0.0) or 0.0)
+            amount = daily_amount * weight
+            if amount <= 0:
+                continue
+            legs.append((f"carrier:{code}", _normalize_carrier_etf_code(code), amount))
+        return legs, [], ""
     if CHINA_INDICES.get(fund_code, {}).get("guide_only") and s_cfg.get("enabled"):
         selection = _sector.select_sectors(as_of=as_of)
         selected = selection.get("selected", [])
@@ -1154,8 +1190,11 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                 )
 
     # ── 板块 ETF 独立二次拐点退出（价格驱动, 仅通知）──
+    # fixed_combo/broad 载体按宽基窗口退出，不启用板块连跌（与回测口径一致）
     if _sector.get_sector_config().get("enabled"):
         for idx in [i for i in indices if i.get("guide_only")]:
+            if _carrier_active(idx["fund_code"]):
+                continue
             if _has_exit_notice(idx["fund_code"]):
                 continue
             for sh in _get_sector_holdings(idx["fund_code"]):
@@ -1382,7 +1421,9 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         for leg_key, leg_etf, leg_amount in legs:
             if leg_amount <= 0:
                 continue
-            if leg_key == "index":
+            if leg_key.startswith("carrier:"):
+                leg_strategy = _encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time) + f"/carrier/{leg_key[8:]}"
+            elif leg_key == "index":
                 leg_strategy = _encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time)
             elif leg_key in ("588200", "512480"):
                 leg_strategy = _encode_strategy("split10", trend, trend_factor, buy_time=buy_time) + f"/{leg_key}"
@@ -1402,7 +1443,10 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
 
         executed_count += 1
         total_invested_today += daily_amount
-        if CHINA_INDICES.get(fund_code, {}).get("guide_only") and _sector.get_sector_config().get("enabled"):
+        carrier = _carrier_active(fund_code)
+        if carrier:
+            target_desc = "载体ETF(" + "+".join(f"{leg_etf} {leg_amount:.0f}" for _, leg_etf, leg_amount in legs) + ")"
+        elif CHINA_INDICES.get(fund_code, {}).get("guide_only") and _sector.get_sector_config().get("enabled"):
             target_desc = "板块ETF(" + "+".join(f"{leg_etf} {leg_amount:.0f}" for _, leg_etf, leg_amount in legs) + ")"
         else:
             target_desc = etf_code
