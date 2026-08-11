@@ -2215,7 +2215,7 @@ export const updateLTCandidateTool = {
 export const getIntradayMinTool = {
   name: 'get_intraday_min',
   label: '实时分钟K线',
-  description: '【实时·盘中分钟K线】获取多只股票今日实时分钟K线（1/5/15/30/60分钟可选）。数据源：Tushare rt_min（实时分钟行情）。支持批量查询（逗号分隔多个代码），单次最多10只股票。震荡市行情下用于监控多只持仓的日内走势、识别盘中趋势变化、寻找精确入场/离场点。返回每只股票的开/高/低/收/量/额序列+日内摘要（最新价/日内高低/涨跌幅/累计成交额）。60min频率额外返回indicators字段：mas(MA5/MA10/MA20/MA30/MA60)+macd(DIF/DEA/BAR)，用于震荡市60分钟趋势判断',
+  description: '【实时·盘中分钟K线】获取多只股票今日实时分钟K线（1/5/15/30/60分钟可选）。数据源：Tushare rt_min（实时分钟行情）。支持批量查询（逗号分隔多个代码），单次最多10只股票。震荡市行情下用于监控多只持仓的日内走势、识别盘中趋势变化、寻找精确入场/离场点。返回每只股票的开/高/低/收/量/额序列+日内摘要（最新价/日内高低/涨跌幅/累计成交额）。60min频率额外返回indicators字段：mas(MA5/MA10/MA20/MA30/MA60)+macd(DIF/DEA/BAR)，用于震荡市60分钟趋势判断。早盘首根60分钟K线未完成时（如9:35）自动用1分钟实时K线合成当前K线，indicators含last_bar_partial标记，开盘后即可计算MA10/MA30',
   parameters: Type.Object({
     symbols: Type.String({ description: '股票代码，逗号分隔，如 000001.SZ,600519.SH,300750.SZ。支持带或不带交易所后缀' }),
     freq: Type.Optional(Type.String({ description: 'K线周期: 1min/5min/15min/30min/60min，默认 1min' })),

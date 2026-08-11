@@ -121,6 +121,88 @@ def _fetch_60min_bars_today(ts_code: str) -> Optional[List[dict]]:
         return None
 
 
+def _get_60min_slot_label(now: Optional[datetime] = None) -> Optional[str]:
+    """返回当前时刻所属 A 股 60 分钟 K 线分桶标签（该桶的收盘时间）。
+
+    A 股 60 分钟线分桶：09:30-10:30 / 10:30-11:30 / 13:00-14:00 / 14:00-15:00。
+    盘中未完成的分桶同样返回其收盘时间标签，用于合成当前 60 分钟 K 线。
+    午休（11:30-13:00）与开盘前返回 None。
+    """
+    now = now or datetime.now()
+    h, m = now.hour, now.minute
+    label_date = now.strftime('%Y-%m-%d')
+    if (h, m) < (9, 30):
+        return None
+    if (h, m) < (10, 30):
+        return f"{label_date} 10:30:00"
+    if (h, m) < (11, 30):
+        return f"{label_date} 11:30:00"
+    if (h, m) < (13, 0):
+        return None
+    if (h, m) < (14, 0):
+        return f"{label_date} 14:00:00"
+    if (h, m) <= (15, 0):
+        return f"{label_date} 15:00:00"
+    return None
+
+
+def build_partial_60min_bar(ts_code: str, now: Optional[datetime] = None) -> Optional[dict]:
+    """盘中用 1 分钟实时 K 线合成当前未完成的 60 分钟 K 线。
+
+    早盘 9:30-10:30 之间 rt_min_daily 的 60min 接口还没有第一根完成 K 线，
+    此时用同一标的的 1min 实时数据聚合出「进行中」的 60 分钟 K 线，
+    使 MA10/MA30 等指标在开盘后即可计算。
+
+    Returns:
+        {"time": 分桶收盘时间, "open"/"close"/"high"/"low"/"vol"/"amount": ...,
+         "partial": True} 或 None（非交易时段 / 无数据 / 获取失败）。
+    """
+    try:
+        slot_label = _get_60min_slot_label(now)
+        if not slot_label:
+            return None
+        raw = _call_rt_min_daily_raw([ts_code], "1min")
+        if not raw:
+            return None
+        fields = raw.get("fields", [])
+        items = raw.get("items", [])
+        if not fields or not items:
+            return None
+        col_map = {name: idx for idx, name in enumerate(fields)}
+        slot_start = (
+            datetime.strptime(slot_label, '%Y-%m-%d %H:%M:%S') - timedelta(hours=1)
+        ).strftime('%Y-%m-%d %H:%M:%S')
+        amount_idx = col_map.get("amount")
+        bucket_bars = []
+        for row in items:
+            t = str(row[col_map.get("trade_time", 1)])
+            if slot_start < t <= slot_label:
+                amount = float(row[amount_idx]) if amount_idx is not None else 0.0
+                bucket_bars.append({
+                    "open": float(row[col_map.get("open", 2)]),
+                    "close": float(row[col_map.get("close", 3)]),
+                    "high": float(row[col_map.get("high", 4)]),
+                    "low": float(row[col_map.get("low", 5)]),
+                    "vol": float(row[col_map.get("vol", 6)]),
+                    "amount": amount,
+                })
+        if not bucket_bars:
+            return None
+        return {
+            "time": slot_label,
+            "open": bucket_bars[0]["open"],
+            "close": bucket_bars[-1]["close"],
+            "high": max(b["high"] for b in bucket_bars),
+            "low": min(b["low"] for b in bucket_bars),
+            "vol": sum(b["vol"] for b in bucket_bars),
+            "amount": sum(b["amount"] for b in bucket_bars),
+            "partial": True,
+        }
+    except Exception as e:
+        logger.debug(f"[60min] 合成当前60分钟K线失败 {ts_code}: {e}")
+        return None
+
+
 def _fetch_60min_bars_history(ts_code: str, days: int = 30) -> Optional[List[dict]]:
     """从 stk_mins 获取历史60分钟K线（主代理，用于计算 MA10/MA30 等）"""
     try:
@@ -152,22 +234,31 @@ def _fetch_60min_bars_history(ts_code: str, days: int = 30) -> Optional[List[dic
         return None
 
 
-def _fetch_60min_bars_merged(ts_code: str) -> Optional[List[dict]]:
-    """获取历史+今日60分钟K线，合并去重（今日 rt_min_daily 覆盖历史同时间）"""
+def _fetch_60min_bars_merged(ts_code: str, today_bars: Optional[List[dict]] = None,
+                             include_partial: bool = True) -> Optional[List[dict]]:
+    """获取历史+今日60分钟K线，合并去重（今日 rt_min_daily 覆盖历史同时间）。
+
+    早盘首根60分钟K线未完成时（如 9:35），rt_min_daily 的 60min 可能为空，
+    此时用 1 分钟实时K线合成「进行中」的60分钟K线补充，保证 MA 可计算。
+    """
     hist_bars = _fetch_60min_bars_history(ts_code)
-    today_bars = _fetch_60min_bars_today(ts_code)
+    if today_bars is None:
+        today_bars = _fetch_60min_bars_today(ts_code) or []
 
-    if not hist_bars and not today_bars:
-        return None
-
-    merged = {}
+    merged: Dict[str, dict] = {}
     if hist_bars:
         for b in hist_bars:
             merged[b["time"]] = b
-    if today_bars:
-        for b in today_bars:
-            merged[b["time"]] = b  # 当日数据覆盖历史同时间
+    for b in today_bars:
+        merged[b["time"]] = b  # 当日数据覆盖历史同时间
 
+    if include_partial:
+        partial = build_partial_60min_bar(ts_code)
+        if partial:
+            merged[partial["time"]] = partial  # 进行中分桶补充/覆盖
+
+    if not merged:
+        return None
     result = sorted(merged.values(), key=lambda b: b["time"])
     return result if result else None
 
@@ -592,7 +683,8 @@ def get_60min_ma_values(ts_code: str, cache_ttl: int = 120) -> Dict[str, float]:
     """
     获取60分钟K线的 MA10 和 MA30 值。
 
-    合并今日 rt_min_daily + 历史 stk_mins 数据计算。
+    合并今日 rt_min_daily + 历史 stk_mins 数据计算；早盘首根60分钟K线
+    未完成时用 1 分钟实时K线合成当前K线，开盘后即可计算。
     2分钟缓存，避免频繁 Tushare 调用。
 
     Returns:
@@ -606,32 +698,10 @@ def get_60min_ma_values(ts_code: str, cache_ttl: int = 120) -> Dict[str, float]:
             return result
 
     try:
-        raw = _call_rt_min_daily_raw([ts_code], "60min")
-        if not raw:
+        # 历史 + 当日 + 盘中合成K线合并；早盘 60min 首根K线未完成时同样可算
+        all_bars = _fetch_60min_bars_merged(ts_code)
+        if not all_bars:
             return {}
-
-        fields = raw.get("fields", [])
-        items = raw.get("items", [])
-        col_map = {name: idx for idx, name in enumerate(fields)}
-
-        today_bars = []
-        for row in items:
-            today_bars.append({
-                "time": str(row[col_map.get("trade_time", 1)]),
-                "close": float(row[col_map.get("close", 3)]),
-            })
-
-        if not today_bars:
-            return {}
-
-        hist_bars = _fetch_60min_bars_history(ts_code)
-        if hist_bars:
-            merged = {b["time"]: b for b in hist_bars}
-            for b in today_bars:
-                merged[b["time"]] = b
-            all_bars = sorted(merged.values(), key=lambda b: b["time"])
-        else:
-            all_bars = today_bars
 
         closes = [b["close"] for b in all_bars]
         n = len(closes)

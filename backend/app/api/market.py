@@ -2641,6 +2641,18 @@ async def get_intraday_min(
                         break
 
             bars.sort(key=lambda b: b["time"])  # API 返回降序，转为升序
+
+            # ── 60分钟级别：盘中当前分桶K线未完成时（如早盘9:35），用1分钟实时K线合成补充 ──
+            if freq == "60min":
+                try:
+                    from app.core.trading._60min_analysis import build_partial_60min_bar
+                    partial_bar = build_partial_60min_bar(code)
+                    if partial_bar and not any(b["time"] == partial_bar["time"] for b in bars):
+                        bars.append(partial_bar)
+                        bars.sort(key=lambda b: b["time"])
+                except Exception as e:
+                    logger.debug(f"[intraday-min] 60分钟分桶合成跳过 {code}: {e}")
+
             summary = None
             if bars:
                 latest = bars[-1]
@@ -2648,7 +2660,7 @@ async def get_intraday_min(
                 day_low = min(b["low"] for b in bars)
                 day_vol = sum(b["vol"] for b in bars)
                 day_amount = sum(b["amount"] for b in bars)
-                first_close = bars[0]["close"] if bars else latest["close"]
+                first_close = bars[0]["open"] if bars else latest["close"]
                 change_pct = ((latest["close"] - first_close) / first_close * 100) if first_close else 0
                 summary = {
                     "latest_price": latest["close"],
@@ -2660,36 +2672,35 @@ async def get_intraday_min(
                     "bar_count": len(bars),
                 }
 
-            # ── 60分钟级别：补充历史数据计算 MA 指标 ──
+            # ── 60分钟级别：补充历史数据计算 MA 指标（早盘首根K线未完成时也可算） ──
             indicators = None
-            if freq == "60min" and bars:
+            if freq == "60min":
                 try:
                     from app.core.trading._60min_analysis import (
-                        _fetch_60min_bars_history, _sma, _calc_macd,
+                        _fetch_60min_bars_merged, _sma, _calc_macd,
                     )
-                    hist_bars = _fetch_60min_bars_history(code)
-                    if hist_bars:
-                        merged = {b["time"]: b for b in hist_bars}
-                        for b in bars:
-                            merged[b["time"]] = b
-                        all_bars = sorted(merged.values(), key=lambda b: b["time"])
-                    else:
-                        all_bars = bars
-                    closes = [b["close"] for b in all_bars]
-                    n = len(closes)
-                    mas = {}
-                    for period in [5, 10, 20, 30, 60]:
-                        if n >= period:
-                            mas[f"ma{period}"] = round(_sma(closes, period)[-1], 4)
-                    macd = _calc_macd(closes) if n >= 26 else None
-                    if mas or macd:
-                        indicators = {"mas": mas, "bar_count": n}
-                        if macd:
-                            indicators["macd"] = {
-                                "dif": round(macd["dif_latest"], 4),
-                                "dea": round(macd["dea_latest"], 4),
-                                "bar": round(macd["bar_latest"], 4),
+                    all_bars = _fetch_60min_bars_merged(code, today_bars=bars, include_partial=False)
+                    if all_bars:
+                        closes = [b["close"] for b in all_bars]
+                        n = len(closes)
+                        mas = {}
+                        for period in [5, 10, 20, 30, 60]:
+                            if n >= period:
+                                mas[f"ma{period}"] = round(_sma(closes, period)[-1], 4)
+                        macd = _calc_macd(closes) if n >= 26 else None
+                        if mas or macd:
+                            indicators = {
+                                "mas": mas,
+                                "bar_count": n,
+                                "last_bar_time": all_bars[-1]["time"],
+                                "last_bar_partial": bool(all_bars[-1].get("partial")),
                             }
+                            if macd:
+                                indicators["macd"] = {
+                                    "dif": round(macd["dif_latest"], 4),
+                                    "dea": round(macd["dea_latest"], 4),
+                                    "bar": round(macd["bar_latest"], 4),
+                                }
                 except Exception as e:
                     logger.debug(f"[intraday-min] MA计算跳过 {code}: {e}")
 

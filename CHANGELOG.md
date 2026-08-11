@@ -4,6 +4,11 @@
 
 ---
 
+## [1.5.4] — 2026-08-11（早盘 60 分钟 MA 可用性修复）
+
+- **`backend/app/core/trading/_60min_analysis.py`**：新增 `build_partial_60min_bar`，盘中用 1 分钟实时 K 线合成当前未完成的 60 分钟 K 线；`_fetch_60min_bars_merged` / `get_60min_ma_values` 在早盘首根 60 分钟 K 线未完成时不再返回空。
+- **`backend/app/api/market.py`**：`get_intraday_min(freq='60min')` 早盘（如 9:35）即可返回 MA5/10/20/30/60 与 MACD，indicators 新增 `last_bar_time` / `last_bar_partial` 标记。
+
 ## [1.5.3] — 2026-06-27（跨窗口候选池 + 监控器对齐 + 轮询错峰）
 
 本次更新构建了跨窗口候选池机制，将前序窗口被"时机性"拒绝的标的自动入池，由独立的守护线程实时监控并在回调到位后自动建仓。同时统一了三个监控器的生命周期管理和轮询节奏。
