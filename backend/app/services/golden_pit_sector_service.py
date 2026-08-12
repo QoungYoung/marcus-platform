@@ -20,7 +20,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -116,6 +116,10 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "label": "板块选筹池", "description": "tech7=7只场内科技ETF(tech-hardware贪婪,默认)；prod10=原10板块(funds-greed,回滚)",
         "value_type": "string", "sort_order": 12, "default": SECTOR_POOL_SOURCE,
     },
+    "entry_greed_cap": {
+        "label": "入场贪婪分位上限", "description": "greed模式选筹: 250日贪婪分位>上限的过热板块不追(回测结论: 入场贪婪过滤)",
+        "value_type": "number", "sort_order": 13, "default": 0.95,
+    },
     "dca_carrier_enabled": {
         "label": "DCA 执行载体启用", "description": "false=dry-run 展示目标载体；true=按载体配置买入（fixed_combo/broad）",
         "value_type": "bool", "sort_order": 13, "default": False,
@@ -127,6 +131,22 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "dca_carrier_159915": {
         "label": "创业板指 DCA 载体", "description": "JSON: {\"mode\":\"sector_selection\"|\"fixed_combo\"|\"broad\",\"codes\":[{\"code\":\"159949\",\"weight\":1.0}]}",
         "value_type": "json", "sort_order": 15, "default": json.dumps(DCA_CARRIER_DEFAULTS["159915"], ensure_ascii=False),
+    },
+    "hold_until_exit": {
+        "label": "持仓保留(只截新入)", "description": "true=已持仓板块未触发退出前保留在目标组合, 仅新候选按 TOP N 截断(回测只截新入)",
+        "value_type": "bool", "sort_order": 16, "default": False,
+    },
+    "fallback_broad": {
+        "label": "选筹失败回退宽基", "description": "true=板块选筹为空时买入宽基本身ETF(信号恢复自动切回板块), false=跳过当日买入",
+        "value_type": "bool", "sort_order": 17, "default": False,
+    },
+    "regime_mode": {
+        "label": "牛熊选筹模式", "description": "auto=按科技趋势腿激活数切换; oversold=固定超跌(贪婪)选筹; trend=固定趋势(动量)选筹; bh=宽基躺平",
+        "value_type": "string", "sort_order": 18, "default": "oversold",
+    },
+    "regime_trend_threshold": {
+        "label": "趋势腿激活阈值", "description": "regime_mode=auto 时: 趋势腿激活数>=阈值切趋势(动量)选筹, 否则超跌选筹",
+        "value_type": "number", "sort_order": 19, "default": 5,
     },
 }
 
@@ -505,11 +525,20 @@ def _compute_signal_greed(
     """greed 模式单板块信号：超跌中(oversold120<0)且当日贪婪可查。数据不足返回 None。"""
     cfg = cfg or get_sector_config()
     ovs_days = int(cfg.get("ovs_days", SECTOR_OVS_DAYS))
+    greed_cap = float(cfg.get("entry_greed_cap", 0.95))  # 入场贪婪分位上限（过热不追）
 
     etf6 = entry["etf_code"][2:]
     g = greed_map.get(etf6, {}).get(as_of)
     if g is None:
         return None
+
+    # 入场贪婪过滤（回测结论: 别在贪婪分位接近100%时追新仓）: 250日分位 > cap 的过热板块跳过
+    hist = sorted((d, v) for d, v in greed_map.get(etf6, {}).items() if v is not None)
+    if len(hist) >= 20 and greed_cap < 1.0:
+        recent = [v for _, v in hist[-250:]]
+        pct = sum(1 for v in recent if v <= g) / len(recent)
+        if pct > greed_cap:
+            return None
 
     kline = _fetch_etf_kline(entry["etf_code"], limit=ovs_days + 80)
     if len(kline) < ovs_days + 1:
@@ -564,12 +593,12 @@ def _rank_combo_greed(valid: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return valid
 
 
-def _normalize_weights(selected: List[Dict[str, Any]], max_weight: float) -> List[Dict[str, Any]]:
-    """按 combo 分数归一化权重，单板块上限截断，超额按其余板块比例再分配。"""
+def _normalize_weights(selected: List[Dict[str, Any]], max_weight: float, score_key: str = "combo") -> List[Dict[str, Any]]:
+    """按 score_key（默认 combo）分数归一化权重，单板块上限截断，超额按其余板块比例再分配。"""
     if not selected:
         return selected
-    min_combo = min(s["combo"] for s in selected)
-    raw = [s["combo"] - min_combo + 1.0 for s in selected]
+    min_score = min(s[score_key] for s in selected)
+    raw = [s[score_key] - min_score + 1.0 for s in selected]
     total = sum(raw)
     for s, r in zip(selected, raw):
         s["weight"] = r / total if total > 0 else 1.0 / len(selected)
@@ -608,26 +637,81 @@ def _normalize_weights(selected: List[Dict[str, Any]], max_weight: float) -> Lis
     return selected
 
 
+def _compute_signal_momentum(
+    pool_key: str,
+    entry: Dict[str, Any],
+    as_of: str,
+) -> Optional[Dict[str, Any]]:
+    """趋势模式信号: 20 日动量（close[d]/close[d-20]-1）。数据不足返回 None。"""
+    kline = _fetch_etf_kline(entry["etf_code"], limit=120)
+    closes = [float(b["close"]) for b in kline if b.get("close")]
+    if len(closes) < 21:
+        return None
+    momentum = closes[-1] / closes[-21] - 1.0
+    return {
+        "sector": pool_key,
+        "name": entry["name"],
+        "etf_code": entry["etf_code"],
+        "momentum": round(momentum, 4),
+    }
+
+
+def resolve_regime_mode(
+    cfg: Optional[Dict[str, Any]] = None,
+    tech_status: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    """解析选筹模式: auto 按科技趋势腿激活数切换 trend/oversold；显式值直接返回；异常按 oversold 兜底。
+
+    Returns:
+        (mode, reason): mode ∈ {"oversold", "trend", "bh"}。
+    """
+    cfg = cfg or get_sector_config()
+    mode = str(cfg.get("regime_mode", "oversold")).strip().lower()
+    if mode not in ("auto", "oversold", "trend", "bh"):
+        logger.warning("regime_mode 未知(%s), 回退 oversold", mode)
+        return "oversold", "regime_mode 非法, 兜底超跌选筹"
+    if mode != "auto":
+        label = {"oversold": "超跌(贪婪)选筹", "trend": "趋势(动量)选筹", "bh": "宽基躺平"}.get(mode, mode)
+        return mode, f"配置固定为{label}"
+    threshold = int(cfg.get("regime_trend_threshold", 5))
+    if tech_status is None:
+        try:
+            from app.services.golden_pit_tech_status import get_tech_status
+            tech_status = get_tech_status()
+        except Exception as e:
+            logger.warning("auto 模式读取科技现状失败, 兜底 oversold: %s", e)
+            return "oversold", "科技现状读取失败, 兜底超跌选筹"
+    trend_up = int((tech_status or {}).get("trend_up_count", 0))
+    total = int((tech_status or {}).get("total_count", 0))
+    if trend_up >= threshold:
+        return "trend", f"趋势腿激活 {trend_up}/{total} ≥ {threshold}"
+    return "oversold", f"趋势腿激活 {trend_up}/{total} < {threshold}"
+
+
 def select_sectors(
     as_of: Optional[str] = None,
     top_n: Optional[int] = None,
     enabled: Optional[bool] = None,
+    holdings: Optional[List[str]] = None,
+    mode: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """主入口: 按当前 signal_mode 对板块池计算 combo 信号并选出 TOP N 板块组合。
+    """主入口: 按当前 signal_mode 与选筹模式对板块池计算信号并选出 TOP N 板块组合。
 
-    greed 模式（默认）: 有效信号 = 超跌中(oversold120<0)且板块贪婪可查，
+    oversold 模式（默认）: 有效信号 = 超跌中(oversold120<0)且板块贪婪可查，
     combo = -(rank(greed 升序) + rank(oversold120 升序))；
-    moneyflow 模式（回滚）: 走既有「超跌 + 中信二级5日资金流」逻辑。
+    moneyflow 模式（回滚）: 走既有「超跌 + 中信二级5日资金流」逻辑；
+    trend 模式: 按 20 日动量（close[d]/close[d-20]-1）降序取 TOP N，不设超跌门槛。
 
     Args:
         as_of: 数据截止日（默认今天）。dry-run 可与回测窗口对齐。
         top_n: 覆盖 SECTOR_TOP_N。
         enabled: 覆盖 GOLDEN_PIT_SECTOR_SPLIT_ENABLED（默认取配置）。
+        holdings: 当前板块持仓（6位或带 SH/SZ 前缀 ETF 代码）；hold_until_exit 开启时保留。
+        mode: 选筹模式覆盖（oversold/trend）；None 时按 regime_mode 配置解析（auto 读取科技现状）。
 
     Returns:
-        {"as_of", "enabled", "signal_mode",
-         "selected": [{sector,name,etf_code,combo,(greed|mf5_norm),oversold120,weight}],
-         "all": [...], "empty_reason"}
+        {"as_of", "enabled", "signal_mode", "pool_source", "regime_mode", "regime_reason",
+         "selected": [...], "all": [...], "empty_reason"}
     """
     as_of = as_of or datetime.now().strftime("%Y-%m-%d")
     cfg = get_sector_config()
@@ -635,29 +719,61 @@ def select_sectors(
     top_n = int(top_n or cfg.get("top_n", SECTOR_TOP_N))
     max_weight = float(cfg.get("max_weight", SECTOR_MAX_WEIGHT))
     min_valid = int(cfg.get("min_valid", SECTOR_MIN_VALID))
+    hold_until_exit = bool(cfg.get("hold_until_exit", False))
     signal_mode = str(cfg.get("signal_mode", SECTOR_SIGNAL_MODE)).strip().lower()
-    # pool_source 仅在 greed 模式生效: tech7=场内科技7只(tech-hardware贪婪, 默认); prod10=原10板块(funds-greed, 回滚)
-    # moneyflow 模式固定使用 SECTOR_ETF_POOL（依赖中信二级行业资金流映射）
     pool_source = str(cfg.get("pool_source", SECTOR_POOL_SOURCE)).strip().lower()
     use_tech_pool = signal_mode == "greed" and pool_source == "tech7"
     pool = TECH_SECTOR_POOL if use_tech_pool else SECTOR_ETF_POOL
 
-    cache_key = f"selection:{as_of}:{top_n}:{signal_mode}:{pool_source}"
+    if mode:
+        regime_mode = str(mode).strip().lower()
+        regime_reason = "调用方指定"
+    else:
+        regime_mode, regime_reason = resolve_regime_mode(cfg)
+    if regime_mode not in ("oversold", "trend"):
+        regime_mode = "oversold"
+
+    holdings = [h for h in (holdings or []) if isinstance(h, str) and h.strip()]
+    hold_set = {
+        h.strip()[-6:] if h.strip()[:2] in ("SH", "SZ", "BJ") else h.strip()
+        for h in holdings
+    }
+
+    cache_key = (
+        f"selection:{as_of}:{top_n}:{signal_mode}:{pool_source}:{regime_mode}"
+        f":{','.join(sorted(hold_set)) if hold_set else '-'}"
+    )
     cached = _cache_get(cache_key, 900)
     if cached is not None:
         cached["enabled"] = is_enabled
         return cached
 
+    def _finalize(selected, valid, empty_reason):
+        result = {
+            "as_of": as_of,
+            "enabled": is_enabled,
+            "signal_mode": signal_mode,
+            "pool_source": pool_source,
+            "regime_mode": regime_mode,
+            "regime_reason": regime_reason,
+            "selected": selected,
+            "all": valid,
+            "empty_reason": empty_reason,
+        }
+        _cache_set(cache_key, result)
+        return result
+
     if not pool:
         pool_name = "TECH_SECTOR_POOL" if use_tech_pool else "SECTOR_ETF_POOL"
-        return {
-            "as_of": as_of, "enabled": is_enabled, "signal_mode": signal_mode,
-            "pool_source": pool_source, "selected": [], "all": [],
-            "empty_reason": f"{pool_name} 未配置",
-        }
+        return _finalize([], [], f"{pool_name} 未配置")
 
     valid = []
-    if signal_mode == "greed":
+    if regime_mode == "trend":
+        for pool_key, entry in pool.items():
+            sig = _compute_signal_momentum(pool_key, entry, as_of)
+            if sig:
+                valid.append(sig)
+    elif signal_mode == "greed":
         greed_map = _load_tech_greed_map() if use_tech_pool else _load_sector_greed_map()
         for pool_key, entry in pool.items():
             sig = _compute_signal_greed(pool_key, entry, greed_map, as_of, cfg)
@@ -670,47 +786,66 @@ def select_sectors(
             if sig:
                 valid.append(sig)
 
-    if len(valid) < min_valid:
-        result = {
-            "as_of": as_of, "enabled": is_enabled, "signal_mode": signal_mode,
-            "pool_source": pool_source, "selected": [], "all": valid,
-            "empty_reason": f"有效信号板块数 {len(valid)} < {min_valid}，空仓等待板块信号",
-        }
-        _cache_set(cache_key, result)
-        return result
+    # 持仓保留（只截新入）: 已持仓板块保留, 不参与 TOP N 截断；无持仓时维持原 min_valid 门控
+    held = [s for s in valid if s["etf_code"][-6:] in hold_set] if hold_until_exit and hold_set else []
 
-    valid = _rank_combo_greed(valid) if signal_mode == "greed" else _rank_combo(valid)
-    valid.sort(key=lambda x: x["combo"], reverse=True)
-    selected = _normalize_weights(valid[:top_n], max_weight)
+    if len(valid) < min_valid and not held:
+        return _finalize(
+            [], valid,
+            f"有效信号板块数 {len(valid)} < {min_valid}，空仓等待板块信号",
+        )
 
-    result = {
-        "as_of": as_of,
-        "enabled": is_enabled,
-        "signal_mode": signal_mode,
-        "pool_source": pool_source,
-        "selected": selected,
-        "all": valid,
-        "empty_reason": "" if selected else "combo 信号均未过门槛，空仓等待板块信号",
-    }
-    _cache_set(cache_key, result)
-    return result
+    if regime_mode == "trend":
+        valid.sort(key=lambda x: x["momentum"], reverse=True)
+        for s in valid:
+            s["combo"] = round(s["momentum"], 4)  # 归一化复用 combo 槽位（trend 语义=动量）
+    elif signal_mode == "greed":
+        valid = _rank_combo_greed(valid)
+        valid.sort(key=lambda x: x["combo"], reverse=True)
+    else:
+        valid = _rank_combo(valid)
+        valid.sort(key=lambda x: x["combo"], reverse=True)
+
+    # 只截新入: 持仓保留 ∪ 新候选 TOP N
+    if held:
+        new_candidates = [s for s in valid if s["etf_code"][-6:] not in hold_set]
+        selected = _normalize_weights(held + new_candidates[:top_n], max_weight, score_key="combo")
+        if not selected:
+            return _finalize([], valid, "combo 信号均未过门槛，空仓等待板块信号")
+        empty_reason = (
+            f"持仓保留 {len(held)} 只, 新候选截断 TOP {top_n}"
+            if len(valid) < min_valid else ""
+        )
+        return _finalize(selected, valid, empty_reason)
+
+    selected = _normalize_weights(valid[:top_n], max_weight, score_key="combo")
+    return _finalize(
+        selected, valid,
+        "" if selected else "combo 信号均未过门槛，空仓等待板块信号",
+    )
 
 
 def format_selection(selection: Dict[str, Any]) -> str:
-    """选筹结果 → 可读文本（报告/日志用），兼容 greed / moneyflow 两种信号维度。"""
+    """选筹结果 → 可读文本（报告/日志用），兼容 greed / moneyflow / trend 三种信号维度。"""
+    regime = selection.get("regime_mode", "")
+    regime_txt = f"/{regime}" if regime else ""
     if not selection.get("selected"):
         reason = selection.get("empty_reason", "无信号")
-        return f"🧭 板块拆分: 空仓等待（{reason}）"
+        return f"🧭 板块拆分{regime_txt}: 空仓等待（{reason}）"
     parts = []
     for s in selection["selected"]:
-        if "greed" in s:
+        if "momentum" in s:
+            dim = f"mom20={s['momentum'] * 100:.1f}%"
+        elif "greed" in s:
             dim = f"greed={s['greed']:.2f}"
         else:
             dim = f"mf5={s['mf5_norm']:.2f}"
+        ovs_txt = f" ovs={s['oversold120'] * 100:.1f}%" if "oversold120" in s else ""
         parts.append(
             f"{s['name']}({s['sector']}) {s['weight'] * 100:.0f}% combo={s['combo']} "
-            f"{dim} ovs={s['oversold120'] * 100:.1f}%"
+            f"{dim}{ovs_txt}"
         )
     mode = "执行" if selection.get("enabled") else "展示(dry-run)"
     signal = selection.get("signal_mode", "moneyflow")
-    return f"🧭 板块拆分[{mode}/{signal}]: " + " | ".join(parts)
+    return f"🧭 板块拆分[{mode}/{signal}{regime_txt}]: " + " | ".join(parts)
+

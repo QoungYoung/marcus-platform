@@ -143,6 +143,39 @@ interface TrendData {
   indices: Record<string, string>;
 }
 
+interface TechStatusItem {
+  code: string;
+  name: string;
+  etf_code: string;
+  tier: 'broad' | 'sector';
+  close: number;
+  trend: '多' | '空' | '震荡' | '数据不足';
+  ma20: number | null;
+  ma20_slope: number | null;
+  greed: number | null;
+  percentile: number | null;
+  chg5: number | null;
+  chg20: number | null;
+  chg60: number | null;
+  dd60: number | null;
+  as_of: string | null;
+}
+
+interface TechStatus {
+  as_of: string | null;
+  verdict: string;
+  verdict_desc: string;
+  trend_up_count: number;
+  trend_down_count: number;
+  total_count: number;
+  oversold_count: number;
+  avg_percentile: number | null;
+  oversold_pct_threshold: number;
+  broad: TechStatusItem[];
+  sectors: TechStatusItem[];
+  summary: string;
+}
+
 interface SectorConfigItem {
   config_key: string;
   value: string | number | boolean;
@@ -972,6 +1005,84 @@ function ShareHistoryChart({ shareHistory, visibleCodes, onToggleCode, onToggleA
 
 // ── Main page ──
 
+function TrendChip({ trend }: { trend: string }) {
+  const cls = trend === '多' ? 'tech-bull' : trend === '空' ? 'tech-bear' : 'tech-flat';
+  return <span className={`gp-tech-trend ${cls}`}>{trend}</span>;
+}
+
+function TechStatusPanel({ tech, sectorConfig }: { tech: TechStatus | null; sectorConfig: SectorConfigItem[] }) {
+  if (!tech) return null;
+  // 生效选筹模式（与后端 resolve_regime_mode 口径一致: auto 按趋势腿激活数>=阈值切 trend）
+  const regimeMode = String(sectorConfig.find((c) => c.config_key === 'regime_mode')?.value ?? 'oversold');
+  const regimeThreshold = Number(sectorConfig.find((c) => c.config_key === 'regime_trend_threshold')?.value ?? 5);
+  const effectiveMode = regimeMode === 'auto'
+    ? ((tech.trend_up_count ?? 0) >= regimeThreshold ? 'trend' : 'oversold')
+    : regimeMode;
+  const regimeLabels: Record<string, string> = {
+    oversold: '超跌(贪婪)选筹',
+    trend: '趋势(动量)选筹',
+    bh: '宽基躺平',
+    auto: '自动',
+  };
+  const regimeLabel = (m: string) => regimeLabels[m] ?? m;
+  const modeTxt = regimeMode === 'auto'
+    ? `${regimeLabel('auto')} → ${regimeLabel(effectiveMode)}`
+    : regimeLabel(effectiveMode);
+  const vCls =
+    tech.verdict.includes('牛') ? 'tech-bull' :
+    tech.verdict.includes('熊') ? 'tech-bear' : 'tech-flat';
+  const fmt = (v: number | null, pct = true, digits = 1) => {
+    if (v == null || Number.isNaN(v)) return '—';
+    return `${pct ? (v >= 0 ? '+' : '') + (v * 100).toFixed(digits) + '%' : v.toFixed(digits)}`;
+  };
+  const rows = [...tech.broad, ...tech.sectors];
+  return (
+    <section className="gp-panel gp-section gp-tech-status">
+      <div className="gp-panel-head">
+        <span className="gp-tick" /><h2>牛熊判断 · 科技现状</h2><span className="gp-en">TECH REGIME</span>
+        <span className={`gp-tech-verdict ${vCls}`}>{tech.verdict}</span>
+        {tech.as_of && <span className="gp-tech-asof">K线截至 {tech.as_of}</span>}
+      </div>
+      <p className="gp-tech-summary">{tech.summary}</p>
+      <div className="gp-tech-stats">
+        <div className="gp-tech-stat"><b>{tech.trend_up_count}</b><span>趋势腿激活(MA20多头)</span></div>
+        <div className="gp-tech-stat"><b>{tech.trend_down_count}</b><span>空头排列</span></div>
+        <div className="gp-tech-stat"><b>{tech.oversold_count}</b><span>贪婪超跌区(&le;{tech.oversold_pct_threshold})</span></div>
+        <div className="gp-tech-stat"><b>{tech.avg_percentile != null ? (tech.avg_percentile * 100).toFixed(0) + '%' : '—'}</b><span>贪婪250日分位均值</span></div>
+        <div className="gp-tech-stat gp-tech-regime"><b>{modeTxt}</b><span>生效选筹模式(regime)</span></div>
+      </div>
+      <div className="gp-tech-table-wrap">
+        <table className="gp-tech-table">
+          <thead>
+            <tr>
+              <th>标的</th><th>趋势</th><th>MA20</th><th>贪婪值</th><th>250日分位</th>
+              <th>5日</th><th>20日</th><th>60日</th><th>距60日高</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((it) => (
+              <tr key={it.code}>
+                <td className="gp-tech-name">
+                  {it.name}
+                  {it.tier === 'broad' && <span className="gp-tech-tag">宽基</span>}
+                </td>
+                <td><TrendChip trend={it.trend} /></td>
+                <td>{it.ma20 != null ? it.ma20.toFixed(3) : '—'}</td>
+                <td>{it.greed != null ? it.greed.toFixed(3) : '—'}</td>
+                <td>{it.percentile != null ? (it.percentile * 100).toFixed(0) + '%' : '—'}</td>
+                <td className={it.chg5 != null && it.chg5 >= 0 ? 'tech-up' : 'tech-down'}>{fmt(it.chg5)}</td>
+                <td className={it.chg20 != null && it.chg20 >= 0 ? 'tech-up' : 'tech-down'}>{fmt(it.chg20)}</td>
+                <td className={it.chg60 != null && it.chg60 >= 0 ? 'tech-up' : 'tech-down'}>{fmt(it.chg60)}</td>
+                <td className={it.dd60 != null && it.dd60 >= 0 ? 'tech-up' : 'tech-down'}>{fmt(it.dd60)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function GoldenPitPage() {
   const [status, setStatus] = useState<GoldenPitStatus | null>(null);
   const [trendData, setTrendData] = useState<TrendData | null>(null);
@@ -990,6 +1101,7 @@ export default function GoldenPitPage() {
   const [configItems, setConfigItems] = useState<SectorConfigItem[]>([]);
   const [configSaving, setConfigSaving] = useState(false);
   const [configMsg, setConfigMsg] = useState<string | null>(null);
+  const [techStatus, setTechStatus] = useState<TechStatus | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
 
@@ -1000,9 +1112,11 @@ export default function GoldenPitPage() {
     setLoading(true);
     setError(null);
     try {
-      const [statusRes, historyRes] = await Promise.all([
+      const [statusRes, historyRes, techRes, sectorCfgRes] = await Promise.all([
         goldenPitApi.getStatus(),
         goldenPitApi.getHistory('all', d),
+        goldenPitApi.getTechStatus(),
+        goldenPitApi.getSectorConfig(),
       ]);
       let sectorCodes: string[] = [];
       if (statusRes.data?.code === 0) {
@@ -1022,6 +1136,12 @@ export default function GoldenPitPage() {
         }
       } else {
         setError(statusRes.data?.msg || '获取数据失败');
+      }
+      if (techRes.data?.code === 0 && techRes.data?.data) {
+        setTechStatus(techRes.data.data as TechStatus);
+      }
+      if (sectorCfgRes.data?.code === 0 && Array.isArray(sectorCfgRes.data?.data)) {
+        setConfigItems(sectorCfgRes.data.data as SectorConfigItem[]);
       }
       if (historyRes.data?.code === 0) {
         const td = historyRes.data.data;
@@ -1250,6 +1370,7 @@ export default function GoldenPitPage() {
           {/* ── 右侧主区 ── */}
           <main className="gp-main">
             <GoldenPitTimeline window={window} />
+            <TechStatusPanel tech={techStatus} sectorConfig={configItems} />
 
             {global_macro && <CapitalFlowPanel macro={global_macro} />}
 

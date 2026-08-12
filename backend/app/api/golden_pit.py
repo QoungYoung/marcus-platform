@@ -106,6 +106,21 @@ async def update_sector_config_api(
         )
 
 
+# ── 科技牛熊判断 & 现状 endpoints ──
+
+@router.get("/tech-status")
+async def get_tech_status_api(as_of: str = Query(None, description="数据截止日 YYYY-MM-DD（默认最新）")):
+    """获取科技板块牛熊判断 + tech7/宽基现状（趋势腿MA20 + 贪婪250日分位）。"""
+    try:
+        from app.services.golden_pit_tech_status import get_tech_status
+        return {"code": 0, "data": get_tech_status(as_of=as_of)}
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"code": 1, "msg": str(exc), "data": None},
+        )
+
+
 # ── DCA ETF 配置 & 执行日志 endpoints ──
 
 @router.get("/etf-configs")

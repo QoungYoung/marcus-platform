@@ -211,6 +211,7 @@ class TestBuildBuyLegs(unittest.TestCase):
         }
         with mock.patch.object(dca, "_sector") as m_sector:
             m_sector.get_sector_config.return_value = {"enabled": True}
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
             m_sector.select_sectors.return_value = sel
             legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
         self.assertEqual(reason, "")
@@ -224,6 +225,7 @@ class TestBuildBuyLegs(unittest.TestCase):
         sel = {"selected": [], "empty_reason": "有效信号板块数 1 < 4，空仓等待板块信号"}
         with mock.patch.object(dca, "_sector") as m_sector:
             m_sector.get_sector_config.return_value = {"enabled": True}
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
             m_sector.select_sectors.return_value = sel
             legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
         self.assertEqual(legs, [])
@@ -435,5 +437,198 @@ class TestSectorConfigStringMode(unittest.TestCase):
 
 
 
+class TestResolveRegimeMode(unittest.TestCase):
+    """regime_mode 解析: 显式值 / auto 阈值边界 / 非法兜底。"""
+
+    def test_explicit_modes(self):
+        for mode, expected in (("oversold", "oversold"), ("trend", "trend"), ("bh", "bh")):
+            out = svc.resolve_regime_mode({"regime_mode": mode})
+            self.assertEqual(out[0], expected)
+
+    def test_auto_threshold_boundary(self):
+        cfg = {"regime_mode": "auto", "regime_trend_threshold": 5}
+        self.assertEqual(
+            svc.resolve_regime_mode(cfg, {"trend_up_count": 5, "total_count": 9})[0], "trend"
+        )
+        self.assertEqual(
+            svc.resolve_regime_mode(cfg, {"trend_up_count": 4, "total_count": 9})[0], "oversold"
+        )
+
+    def test_invalid_mode_falls_back_oversold(self):
+        out = svc.resolve_regime_mode({"regime_mode": "quantum"})
+        self.assertEqual(out[0], "oversold")
+        self.assertIn("非法", out[1])
+
+    def test_auto_without_tech_status_falls_back_on_error(self):
+        cfg = {"regime_mode": "auto", "regime_trend_threshold": 5}
+        with mock.patch("app.services.golden_pit_tech_status.get_tech_status",
+                        side_effect=Exception("boom")):
+            out = svc.resolve_regime_mode(cfg)
+        self.assertEqual(out[0], "oversold")
+        self.assertIn("读取失败", out[1])
+
+
+class TestSelectSectorsTrend(unittest.TestCase):
+    """趋势(动量)模式: 20 日动量降序 TOP N，不设超跌门槛。"""
+
+    def setUp(self):
+        svc._cache.clear()
+        self._cfg_patch = mock.patch.object(
+            svc, "get_sector_config",
+            return_value={"signal_mode": "greed", "pool_source": "prod10", "regime_mode": "trend"},
+        )
+        self._cfg_patch.start()
+        self.addCleanup(self._cfg_patch.stop)
+        self.pool = {
+            "A": {"name": "A", "etf_code": "SH111111"},
+            "B": {"name": "B", "etf_code": "SH222222"},
+            "C": {"name": "C", "etf_code": "SH333333"},
+        }
+
+    def test_trend_ranks_by_momentum(self):
+        mom = {
+            "A": {"sector": "A", "name": "A", "etf_code": "SH111111", "momentum": 0.05},
+            "B": {"sector": "B", "name": "B", "etf_code": "SH222222", "momentum": 0.12},
+            "C": {"sector": "C", "name": "C", "etf_code": "SH333333", "momentum": 0.01},
+        }
+        with mock.patch.object(svc, "SECTOR_ETF_POOL", self.pool), \
+             mock.patch.object(svc, "SECTOR_MIN_VALID", 2), \
+             mock.patch.object(svc, "_compute_signal_momentum",
+                               side_effect=lambda k, e, a: mom.get(k)):
+            res = svc.select_sectors(as_of="2026-06-01", top_n=2, mode="trend")
+        self.assertEqual(res["regime_mode"], "trend")
+        self.assertEqual([s["sector"] for s in res["selected"]], ["B", "A"])
+        self.assertAlmostEqual(sum(s["weight"] for s in res["selected"]), 1.0, places=4)
+        self.assertIn("momentum", res["selected"][0])
+
+
+class TestSelectSectorsHoldUntilExit(unittest.TestCase):
+    """只截新入: 持仓保留 ∪ 新候选 TOP N。"""
+
+    def setUp(self):
+        svc._cache.clear()
+        self._cfg_patch = mock.patch.object(
+            svc, "get_sector_config",
+            return_value={"signal_mode": "moneyflow", "hold_until_exit": True},
+        )
+        self._cfg_patch.start()
+        self.addCleanup(self._cfg_patch.stop)
+        self.signals = {
+            "A": {"sector": "A", "name": "A", "etf_code": "SH111111", "mf5_norm": 5.0, "oversold120": -0.30},
+            "B": {"sector": "B", "name": "B", "etf_code": "SH222222", "mf5_norm": 2.0, "oversold120": -0.10},
+            "E": {"sector": "E", "name": "E", "etf_code": "SH555555", "mf5_norm": 1.5, "oversold120": -0.20},
+            "F": {"sector": "F", "name": "F", "etf_code": "SH666666", "mf5_norm": 1.2, "oversold120": -0.15},
+        }
+        self.pool = {
+            k: {"name": v["name"], "etf_code": v["etf_code"], "flow_name": k}
+            for k, v in self.signals.items()
+        }
+
+    def test_held_sector_kept_beyond_top_n(self):
+        def fake_compute(pool_key, entry, flow_df, as_of, cfg=None):
+            return self.signals.get(pool_key)
+
+        with mock.patch.object(svc, "SECTOR_ETF_POOL", self.pool), \
+             mock.patch.object(svc, "SECTOR_MIN_VALID", 4), \
+             mock.patch.object(svc, "_compute_signal", side_effect=fake_compute):
+            res = svc.select_sectors(as_of="2026-06-01", top_n=2, holdings=["SH222222"])
+        sectors = [s["sector"] for s in res["selected"]]
+        self.assertIn("B", sectors)  # 持仓保留（按 combo 排名第3, 无保留会被截掉）
+        self.assertEqual(len(sectors), 3)  # B + 新候选 TOP2 (A, E)
+        self.assertAlmostEqual(sum(s["weight"] for s in res["selected"]), 1.0, places=4)
+
+    def test_no_holdings_unchanged(self):
+        def fake_compute(pool_key, entry, flow_df, as_of, cfg=None):
+            return self.signals.get(pool_key)
+
+        with mock.patch.object(svc, "SECTOR_ETF_POOL", self.pool), \
+             mock.patch.object(svc, "SECTOR_MIN_VALID", 4), \
+             mock.patch.object(svc, "_compute_signal", side_effect=fake_compute):
+            res = svc.select_sectors(as_of="2026-06-01", top_n=2)
+        self.assertEqual([s["sector"] for s in res["selected"]], ["A", "E"])
+
+
+class TestBuildBuyLegsFallbackRegime(unittest.TestCase):
+    """fallback_broad 回退宽基 + 信号恢复切回 + regime=bh。"""
+
+    def setUp(self):
+        from app.services import golden_pit_dca_service as dca
+        self.dca = dca
+        dca._sector_fallback_state.clear()
+
+    def test_fallback_broad_returns_broad_leg(self):
+        dca = self.dca
+        empty_sel = {"selected": [], "empty_reason": "有效信号板块数 1 < 4，空仓等待板块信号"}
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = {
+                "enabled": True, "fallback_broad": True, "hold_until_exit": False,
+            }
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
+            m_sector.select_sectors.return_value = empty_sel
+            legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(reason, "")
+        self.assertEqual(legs, [("index", "SH588000", 10000.0)])
+        self.assertTrue(any("回退宽基" in n for n in notes))
+
+    def test_fallback_disabled_keeps_skip(self):
+        dca = self.dca
+        empty_sel = {"selected": [], "empty_reason": "有效信号板块数 1 < 4，空仓等待板块信号"}
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = {
+                "enabled": True, "fallback_broad": False, "hold_until_exit": False,
+            }
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
+            m_sector.select_sectors.return_value = empty_sel
+            legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(legs, [])
+        self.assertIn("空仓", reason)
+
+    def test_signal_recovery_switch_back(self):
+        dca = self.dca
+        empty_sel = {"selected": [], "empty_reason": "无信号"}
+        good_sel = {
+            "selected": [{"sector": "半导体", "etf_code": "SH512480", "weight": 1.0}],
+            "empty_reason": "",
+        }
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = {
+                "enabled": True, "fallback_broad": True, "hold_until_exit": False,
+            }
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
+            m_sector.select_sectors.side_effect = [empty_sel, good_sel]
+            _, notes1, _ = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+            legs2, notes2, reason2 = dca._build_buy_legs("588000", [], 10000.0, "2026-06-02", "SH588000")
+        self.assertTrue(any("回退宽基" in n for n in notes1))
+        self.assertEqual(legs2[0][1], "SH512480")
+        self.assertTrue(any("切回板块" in n for n in notes2))
+
+    def test_regime_bh_returns_broad_leg(self):
+        dca = self.dca
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = {"enabled": True}
+            m_sector.resolve_regime_mode.return_value = ("bh", "配置固定为宽基躺平")
+            legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(reason, "")
+        self.assertEqual(legs, [("index", "SH588000", 10000.0)])
+        self.assertTrue(any("bh" in n for n in notes))
+
+    def test_hold_until_exit_passes_holdings(self):
+        dca = self.dca
+        with mock.patch.object(dca, "_sector") as m_sector, \
+             mock.patch.object(dca, "_get_sector_holdings",
+                               return_value=[{"etf_code": "SH512480", "amount": 5000.0}]):
+            m_sector.get_sector_config.return_value = {
+                "enabled": True, "hold_until_exit": True, "fallback_broad": False,
+            }
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
+            m_sector.select_sectors.return_value = {
+                "selected": [{"sector": "半导体", "etf_code": "SH512480", "weight": 1.0}],
+                "empty_reason": "",
+            }
+            dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(m_sector.select_sectors.call_args.kwargs["holdings"], ["SH512480"])
+
+
 if __name__ == "__main__":
     unittest.main()
+

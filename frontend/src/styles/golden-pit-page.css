@@ -1781,3 +1781,44 @@
   .gp-dot.amber::after,
   .shimmer { animation: none; }
 }
+
+/* ── 牛熊判断 · 科技现状 ── */
+.gp-tech-status .gp-panel-head { align-items: center; }
+.gp-tech-verdict {
+  margin-left: 10px; padding: 3px 12px; border-radius: 12px;
+  font-size: 13px; font-weight: 700; color: #fff;
+}
+.gp-tech-bull { background: #e05b4d; }
+.gp-tech-bear { background: #3aa76d; }
+.gp-tech-flat { background: #d99a2b; }
+.gp-tech-asof { margin-left: auto; font-size: 11px; color: #8a93a6; }
+.gp-tech-summary { margin: 8px 0 10px; font-size: 12px; line-height: 1.6; color: #aab3c5; }
+.gp-tech-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.gp-tech-stat {
+  flex: 1 1 130px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07);
+  border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 2px;
+}
+.gp-tech-stat b { font-size: 20px; color: #fff; }
+.gp-tech-stat span { font-size: 11px; color: #8a93a6; }
+.gp-tech-stat.gp-tech-regime { border-color: rgba(124,92,214,.45); background: rgba(124,92,214,.10); }
+.gp-tech-stat.gp-tech-regime b { font-size: 15px; color: #cfc4ff; white-space: nowrap; }
+.gp-tech-table-wrap { overflow-x: auto; border: 1px solid rgba(255,255,255,.07); border-radius: 8px; }
+.gp-tech-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.gp-tech-table th {
+  text-align: left; padding: 8px 10px; color: #8a93a6; font-weight: 600;
+  border-bottom: 1px solid rgba(255,255,255,.08); white-space: nowrap;
+  background: rgba(255,255,255,.03);
+}
+.gp-tech-table td { padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.04); white-space: nowrap; }
+.gp-tech-table tr:last-child td { border-bottom: none; }
+.gp-tech-name { font-weight: 600; color: #dfe5ef; }
+.gp-tech-tag {
+  margin-left: 6px; font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  background: rgba(90,140,255,.18); color: #8ab4ff; vertical-align: 1px;
+}
+.gp-tech-trend { padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; color: #fff; }
+.gp-tech-trend.tech-bull { background: rgba(224,91,77,.85); }
+.gp-tech-trend.tech-bear { background: rgba(58,167,109,.85); }
+.gp-tech-trend.tech-flat { background: rgba(217,154,43,.85); }
+.gp-tech-table .tech-up { color: #ef7d6f; }
+.gp-tech-table .tech-down { color: #58c08a; }

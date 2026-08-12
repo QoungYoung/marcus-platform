@@ -33,6 +33,8 @@ from app.services.golden_pit_config import (
 from app.services import golden_pit_sector_service as _sector
 
 PIT_WINDOW_DAYS = 15
+# 板块选筹回退宽基状态: fund_code -> 最近一次回退日期（用于『信号恢复切回』标注）
+_sector_fallback_state: Dict[str, str] = {}
 PRE_TURN_CUMULATIVE_CAP = 0.15   # 拐点前累计上限 (占 max_total 比例)
 
 
@@ -483,12 +485,33 @@ def _build_buy_legs(
             legs.append((f"carrier:{code}", _normalize_carrier_etf_code(code), amount))
         return legs, [], ""
     if CHINA_INDICES.get(fund_code, {}).get("guide_only") and s_cfg.get("enabled"):
-        selection = _sector.select_sectors(as_of=as_of)
+        regime_mode, regime_reason = _sector.resolve_regime_mode(s_cfg)
+        if regime_mode == "bh":
+            return [("index", etf_code, daily_amount)], [f"regime=bh 宽基躺平（{regime_reason}）"], ""
+        holdings: List[str] = []
+        if s_cfg.get("hold_until_exit"):
+            holdings = [
+                h.get("etf_code", "") for h in _get_sector_holdings(fund_code)
+                if h.get("etf_code")
+            ]
+        selection = _sector.select_sectors(as_of=as_of, holdings=holdings, mode=regime_mode)
         selected = selection.get("selected", [])
-        if not selected:
-            return [], [], selection.get("empty_reason", "无信号")
-        legs = [(s["sector"], s["etf_code"], daily_amount * s["weight"]) for s in selected]
-        return legs, [], ""
+        notes: List[str] = []
+        if regime_mode:
+            notes.append(f"regime={regime_mode}（{regime_reason}）")
+        if selected:
+            if _sector_fallback_state.pop(fund_code, None):
+                notes.append("板块信号恢复, 切回板块选筹")
+            if selection.get("empty_reason"):
+                notes.append(selection["empty_reason"])
+            legs = [(s["sector"], s["etf_code"], daily_amount * s["weight"]) for s in selected]
+            return legs, notes, ""
+        if s_cfg.get("fallback_broad"):
+            _sector_fallback_state[fund_code] = as_of
+            reason = selection.get("empty_reason", "无信号")
+            notes.append(f"选筹失败回退宽基（{reason}）")
+            return [("index", etf_code, daily_amount)], notes, ""
+        return [], [], selection.get("empty_reason", "无信号")
     semi_by_code = {i["fund_code"]: i for i in indices if i.get("tier") == "semi_boost"}
     index_weight = PIT_POSITION_SPLIT.get("index", 1.0)
     legs = [("index", etf_code, daily_amount * index_weight)]
@@ -1515,7 +1538,8 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
     if _sector.get_sector_config().get("enabled") and any(
         CHINA_INDICES.get(i["fund_code"], {}).get("guide_only") for i in tradeable
     ):
-        sel = _sector.select_sectors(as_of=as_of)
+        sel_mode, _ = _sector.resolve_regime_mode()
+        sel = _sector.select_sectors(as_of=as_of, mode=sel_mode)
         summary_lines.append(_sector.format_selection(sel))
         summary_lines.append("")
 
