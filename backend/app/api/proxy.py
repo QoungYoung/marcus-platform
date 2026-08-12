@@ -105,14 +105,38 @@ async def proxy_openai(path: str, request: Request):
             return JSONResponse(err_json, status_code=upstream.status_code)
 
         async def event_stream():
+            done_sent = False
+            finish_sent = False
             try:
-                async for chunk in upstream.aiter_bytes():
-                    yield chunk
+                async for raw in upstream.aiter_lines():
+                    line = raw.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        done_sent = True
+                        yield b"data: [DONE]\n\n"
+                        break
+                    yield (f"data: {data}\n\n").encode("utf-8")
+                    if not finish_sent:
+                        try:
+                            obj = json.loads(data)
+                        except ValueError:
+                            continue
+                        for choice in obj.get("choices") or []:
+                            if isinstance(choice, dict) and choice.get("finish_reason"):
+                                finish_sent = True
             except httpx.ReadError:
-                # 上游提前关闭连接视为流正常结束（SSE 无明确 EOF 标记）
+                # 上游提前关闭连接视为流结束（SSE 无明确 EOF 标记）
                 pass
             finally:
                 await upstream.aclose()
+            # 上游若未给 finish_reason / [DONE]（如 Console Go 流式直接断连），
+            # 补标准收尾事件，否则前端报 "Stream ended without finish_reason"
+            if not finish_sent:
+                yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+            if not done_sent:
+                yield b"data: [DONE]\n\n"
 
         return StreamingResponse(
             event_stream(),
