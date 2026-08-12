@@ -39,7 +39,7 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
-from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit
+from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
 from app.services.scheduler_service import scheduler_service
@@ -270,6 +270,7 @@ app.include_router(lt_pool.router, prefix="/api/v1")
 app.include_router(monitor_log_router, prefix="/api/v1")
 app.include_router(direction.router, prefix="/api/v1")
 app.include_router(golden_pit.router, prefix="/api/v1")
+app.include_router(proxy.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():

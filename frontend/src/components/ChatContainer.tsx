@@ -2227,7 +2227,7 @@ const generateAISessionTitle = async (messages: any[], apiKey: string, host = DE
   if (!apiKey || !userText.trim()) return fallback();
 
   try {
-    const res = await fetch(`${proxyBaseUrl(host)}/chat/completions`, {
+    const res = await fetch(`${PROXY_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2275,33 +2275,30 @@ const generateSessionTitle = (messages: any[]): string => {
 const DEFAULT_DEEPSEEK_HOST = 'api.deepseek.com';
 
 /**
- * 归一化代理 baseUrl，确保以 /v1 结尾。
- * pi-ai 用 OpenAI SDK 在 baseUrl 之后拼接 /chat/completions；
- * 当 host 带路径前缀（如 opencode.ai/zen/go）时，若不显式带 /v1，
- * 会请求到 https://opencode.ai/zen/go/chat/completions 而 404。
+ * 同源代理基地址。浏览器直连外部模型网关会被 CORS 拦截（如 opencode.ai
+ * 不返回 Access-Control-Allow-Origin），因此聊天与模型列表统一走后端
+ * /api/v1/proxy 转发；上游地址由后端 DEEPSEEK_API_HOST 决定，并补
+ * User-Agent 绕过 Cloudflare。host 仅用于展示名称。
  */
-function proxyBaseUrl(host: string): string {
-  const base = `https://${host.replace(/\/+$/, '')}`;
-  return base.endsWith('/v1') ? base : `${base}/v1`;
-}
+const PROXY_BASE = '/api/v1/proxy';
 
 /** 基于代理地址构建聊天模型对象（覆盖 pi-ai 静态注册表中的 baseUrl） */
-function buildChatModel(modelId: string, host: string) {
+function buildChatModel(modelId: string, _host: string) {
   const template = getModel('deepseek', 'deepseek-v4-flash') || getModel('deepseek', 'deepseek-v4-pro');
   const known = getModel('deepseek', modelId as any);
   return {
     ...(known || template),
     id: modelId,
     name: modelId,
-    baseUrl: proxyBaseUrl(host),
+    baseUrl: PROXY_BASE,
   };
 }
 
-/** 从代理地址拉取模型列表（OpenAI 兼容 /v1/models） */
-async function fetchProxyModels(host: string, apiKey: string): Promise<string[]> {
+/** 从代理地址拉取模型列表（经后端 /api/v1/proxy/models 转发） */
+async function fetchProxyModels(_host: string, apiKey: string): Promise<string[]> {
   if (!apiKey) return [];
   try {
-    const res = await fetch(`${proxyBaseUrl(host)}/models`, {
+    const res = await fetch(`${PROXY_BASE}/models`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     });
     if (!res.ok) return [];
@@ -2324,7 +2321,7 @@ async function registerProxyProvider(store: CustomProvidersStore, host: string, 
       id: 'marcus-proxy',
       name: `Marcus 代理 (${host})`,
       type: 'openai-completions',
-      baseUrl: proxyBaseUrl(host),
+      baseUrl: PROXY_BASE,
       apiKey: apiKey || undefined,
       models,
     });

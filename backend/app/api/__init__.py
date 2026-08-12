@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.api import portfolio, trades, market, news, strategy
+from app.api import portfolio, trades, market, news, strategy, proxy
 
 settings = get_settings()
 
@@ -35,6 +35,7 @@ app.include_router(trades.router, prefix=settings.API_V1_PREFIX)
 app.include_router(market.router, prefix=settings.API_V1_PREFIX)
 app.include_router(news.router, prefix=settings.API_V1_PREFIX)
 app.include_router(strategy.router, prefix=settings.API_V1_PREFIX)
+app.include_router(proxy.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")
