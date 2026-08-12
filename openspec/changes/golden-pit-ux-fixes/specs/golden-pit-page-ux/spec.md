@@ -105,3 +105,14 @@ Transitions in the Golden Pit page stylesheet SHALL target only the properties b
 #### Scenario: 样式审查无 transition:all
 - **WHEN** the page stylesheet is reviewed
 - **THEN** no `transition: all` rule remains and each transition lists explicit properties
+
+### Requirement: 牛熊判断标的列表默认收起
+The tech-status panel SHALL render its "标的" table collapsed by default, keeping the verdict, summary, and stats visible. A fold button in the panel header SHALL expand/collapse the table, and SHALL expose an accessible label plus `aria-expanded`.
+
+#### Scenario: 默认收起
+- **WHEN** the tech-status panel renders
+- **THEN** the "标的" table is collapsed and the fold button reads "展开"
+
+#### Scenario: 展开/收起切换
+- **WHEN** the user activates the fold button
+- **THEN** the table toggles visibility and the button label/`aria-expanded` update accordingly

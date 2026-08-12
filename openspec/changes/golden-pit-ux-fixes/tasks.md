@@ -31,3 +31,8 @@
 - [x] 5.1 `useGoldenPitBackground` 检测 `prefers-reduced-motion: reduce`：命中则绘制一帧静态画面后停止，不启动 rAF；resize 时重绘静态帧
 - [x] 5.2 （可选，低优）Rajdhani woff2（500/600/700，OFL）自托管到 `frontend/src/assets/fonts/`，`@font-face { font-display: swap }`，移除 CSS `@import`
 - [ ] 5.3 验证收尾：`npm run build`（tsc + vite）与 `npm run lint` 通过；手动检查清单——键盘走查全部按钮/开关、弹窗 Esc 与焦点归还、DevTools 模拟 reduced-motion 静态帧、断网模拟刷新失败 banner、1440/640px 两种宽度视觉回归
+
+## 6. 牛熊判断标的列表默认收起
+
+- [x] 6.1 `TechStatusPanel` 新增 `techTableOpen`（默认 `false`，hooks 置于 early-return 之前）；面板头加折叠按钮（复用 `gp-fold-btn`、`aria-expanded`、可读 `aria-label`），"标的"表格仅在展开态渲染；CSS 修正按钮与 as-of 的间距
+- [ ] 6.2 浏览器手检：默认收起态下 verdict/summary/stats 仍可见、展开后完整标的列表渲染、按钮焦点环可见

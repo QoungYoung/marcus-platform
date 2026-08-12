@@ -1030,6 +1030,7 @@ function TrendChip({ trend }: { trend: string }) {
 }
 
 function TechStatusPanel({ tech, sectorConfig, carrier }: { tech: TechStatus | null; sectorConfig: SectorConfigItem[]; carrier?: SectorSelectionCarrier | null }) {
+  const [techTableOpen, setTechTableOpen] = useState(false);
   if (!tech) return null;
   // 生效选筹模式（与后端 resolve_regime_mode 口径一致: auto 按趋势腿激活数>=阈值切 trend）
   const regimeMode = String(sectorConfig.find((c) => c.config_key === 'regime_mode')?.value ?? 'oversold');
@@ -1068,6 +1069,16 @@ function TechStatusPanel({ tech, sectorConfig, carrier }: { tech: TechStatus | n
         <span className="gp-tick" /><h2>牛熊判断 · 科技现状</h2><span className="gp-en">TECH REGIME</span>
         <span className={`gp-tech-verdict ${vCls}`}>{tech.verdict}</span>
         {tech.as_of && <span className="gp-tech-asof">K线截至 {tech.as_of}</span>}
+        <button
+          className="gp-fold-btn"
+          onClick={() => setTechTableOpen(!techTableOpen)}
+          title={techTableOpen ? '收起' : '展开'}
+          aria-label={techTableOpen ? '收起牛熊标的列表' : '展开牛熊标的列表'}
+          aria-expanded={techTableOpen}
+        >
+          {techTableOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          {techTableOpen ? '收起' : '展开'}
+        </button>
       </div>
       <p className="gp-tech-summary">{tech.summary}</p>
       <div className="gp-tech-stats">
@@ -1077,8 +1088,9 @@ function TechStatusPanel({ tech, sectorConfig, carrier }: { tech: TechStatus | n
         <div className="gp-tech-stat"><b>{tech.avg_percentile != null ? (tech.avg_percentile * 100).toFixed(0) + '%' : '—'}</b><span>贪婪250日分位均值</span></div>
         <div className="gp-tech-stat gp-tech-regime"><b>{modeTxt}{carrierTxt ? ` → ${carrierTxt}` : ''}</b><span>生效模式 → 执行载体</span></div>
       </div>
-      <div className="gp-tech-table-wrap">
-        <table className="gp-tech-table">
+      {techTableOpen && (
+        <div className="gp-tech-table-wrap">
+          <table className="gp-tech-table">
           <thead>
             <tr>
               <th>标的</th><th>趋势</th><th>MA20</th><th>贪婪值</th><th>250日分位</th>
@@ -1102,9 +1114,10 @@ function TechStatusPanel({ tech, sectorConfig, carrier }: { tech: TechStatus | n
                 <td className={it.dd60 != null && it.dd60 >= 0 ? 'tech-up' : 'tech-down'}>{fmt(it.dd60)}</td>
               </tr>
             ))}
-          </tbody>
-        </table>
-      </div>
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

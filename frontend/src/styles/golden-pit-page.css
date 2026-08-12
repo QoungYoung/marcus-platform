@@ -1851,6 +1851,7 @@
 
 /* ── 牛熊判断 · 科技现状 ── */
 .gp-tech-status .gp-panel-head { align-items: center; }
+.gp-tech-status .gp-panel-head .gp-fold-btn { margin-left: 8px; }
 .gp-tech-verdict {
   margin-left: 10px; padding: 3px 12px; border-radius: 12px;
   font-size: 13px; font-weight: 700; color: #fff;
