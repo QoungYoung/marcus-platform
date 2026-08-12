@@ -2227,7 +2227,7 @@ const generateAISessionTitle = async (messages: any[], apiKey: string, host = DE
   if (!apiKey || !userText.trim()) return fallback();
 
   try {
-    const res = await fetch(`https://${host}/v1/chat/completions`, {
+    const res = await fetch(`${proxyBaseUrl(host)}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2274,6 +2274,17 @@ const generateSessionTitle = (messages: any[]): string => {
 
 const DEFAULT_DEEPSEEK_HOST = 'api.deepseek.com';
 
+/**
+ * 归一化代理 baseUrl，确保以 /v1 结尾。
+ * pi-ai 用 OpenAI SDK 在 baseUrl 之后拼接 /chat/completions；
+ * 当 host 带路径前缀（如 opencode.ai/zen/go）时，若不显式带 /v1，
+ * 会请求到 https://opencode.ai/zen/go/chat/completions 而 404。
+ */
+function proxyBaseUrl(host: string): string {
+  const base = `https://${host.replace(/\/+$/, '')}`;
+  return base.endsWith('/v1') ? base : `${base}/v1`;
+}
+
 /** 基于代理地址构建聊天模型对象（覆盖 pi-ai 静态注册表中的 baseUrl） */
 function buildChatModel(modelId: string, host: string) {
   const template = getModel('deepseek', 'deepseek-v4-flash') || getModel('deepseek', 'deepseek-v4-pro');
@@ -2282,7 +2293,7 @@ function buildChatModel(modelId: string, host: string) {
     ...(known || template),
     id: modelId,
     name: modelId,
-    baseUrl: `https://${host}`,
+    baseUrl: proxyBaseUrl(host),
   };
 }
 
@@ -2290,7 +2301,7 @@ function buildChatModel(modelId: string, host: string) {
 async function fetchProxyModels(host: string, apiKey: string): Promise<string[]> {
   if (!apiKey) return [];
   try {
-    const res = await fetch(`https://${host}/v1/models`, {
+    const res = await fetch(`${proxyBaseUrl(host)}/models`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     });
     if (!res.ok) return [];
@@ -2313,7 +2324,7 @@ async function registerProxyProvider(store: CustomProvidersStore, host: string, 
       id: 'marcus-proxy',
       name: `Marcus 代理 (${host})`,
       type: 'openai-completions',
-      baseUrl: `https://${host}`,
+      baseUrl: proxyBaseUrl(host),
       apiKey: apiKey || undefined,
       models,
     });
