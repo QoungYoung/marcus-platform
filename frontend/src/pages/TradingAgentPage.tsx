@@ -335,6 +335,15 @@ export default function TradingAgentPage() {
             padding: 10px;
           }
         }
+
+        @media (max-width: 480px) {
+          .chat-wrapper {
+            padding: 6px;
+          }
+          .agent-page-layout {
+            background: var(--agent-bg-main);
+          }
+        }
       `}</style>
     </div>
   );

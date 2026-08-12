@@ -43,7 +43,7 @@ export default function TopNav() {
       </div>
 
       {/* 中间：导航菜单 */}
-      <nav className="top-nav-menu">
+      <nav className="top-nav-menu" aria-label="主导航" style={{ scrollbarWidth: 'none' }}>
         {navItems.map(({ path, labelKey, icon: Icon }) => (
           <Link
             key={path}

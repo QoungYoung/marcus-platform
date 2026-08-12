@@ -2,6 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import * as echarts from 'echarts';
 import { marketApi } from '../api/client';
 
+/* ═══════════════════════════════════════════════════════
+ * Hallmark · macrostructure: Instrument-panel candlestick (light sci-fi academy)
+ * theme: Blue Archive · accent #2f7cd3 · studied-DNA: golden-pit-page.css
+ * GP tokens: ink #16324f · muted #57718e · line #a8cdee / #d4e7f9
+ * up #e5484d (涨) · down #27a06b (跌) · gold #c98a12 · EN micro labels: Rajdhani
+ * ═══════════════════════════════════════════════════════ */
+
 interface KlineBar {
   trade_date: string;
   open: number;
@@ -24,11 +31,18 @@ interface Props {
   className?: string;
 }
 
-const UP_COLOR = '#ef4444';
-const DOWN_COLOR = '#00c882';
-const BG_COLOR = '#0f1117';
-const GRID_COLOR = '#1e2233';
-const TEXT_COLOR = '#6b7280';
+// ── Golden Pit / Blue Archive 风格色板（与 golden-pit-page.css 对齐）──
+const UP_COLOR = '#e5484d';      // gp-red · 涨
+const DOWN_COLOR = '#27a06b';    // gp-green · 跌
+const BG_COLOR = 'transparent';  // 融入宿主面板，不自带底色
+const LINE_COLOR = '#a8cdee';    // gp-line · 坐标轴线
+const GRID_COLOR = '#d4e7f9';    // gp-line-soft · 网格虚线
+const TEXT_COLOR = '#57718e';    // gp-muted · 刻度/次要文字
+const INK_COLOR = '#16324f';     // gp-ink · 主文字
+const BLUE_COLOR = '#2f7cd3';    // gp-blue · 主强调色
+const GOLD_COLOR = '#c98a12';    // gp-gold · MA5
+const VIOLET_COLOR = '#7c5cd6';  // 紫色 · MA20（与 regime 强调一致）
+const EN_FONT = "'Rajdhani', 'Microsoft YaHei', sans-serif";
 
 function calcMA(data: number[], period: number): (number | null)[] {
   const result: (number | null)[] = [];
@@ -130,6 +144,7 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
           color: '#fff',
           fontSize: 10,
           fontWeight: 'bold',
+          fontFamily: EN_FONT,
           position: isBuy ? 'top' : 'bottom',
           offset: [0, isBuy ? -6 : 6],
         },
@@ -138,32 +153,46 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
       else sellPoints.push(point);
     }
 
+    const tipRow = (label: string, value: string, color?: string) =>
+      `<div style="display:flex;align-items:center;gap:6px;padding:1.5px 0;">` +
+      `<span style="color:${TEXT_COLOR}">${label}</span>` +
+      `<span style="margin-left:auto;padding-left:14px;font-family:${EN_FONT};font-weight:700;color:${color || INK_COLOR};">${value}</span>` +
+      `</div>`;
+
     return {
       backgroundColor: BG_COLOR,
       animation: false,
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'cross' },
-        backgroundColor: 'rgba(20,22,30,0.95)',
-        borderColor: GRID_COLOR,
-        textStyle: { color: '#e5e7eb', fontSize: 12, fontFamily: 'monospace' },
+        backgroundColor: '#fff',
+        borderColor: LINE_COLOR,
+        borderWidth: 1,
+        borderRadius: 5,
+        padding: [8, 10],
+        extraCssText: 'box-shadow:0 6px 18px rgba(31,90,150,0.18);',
+        textStyle: { color: INK_COLOR, fontSize: 11 },
         formatter: (params: any[]) => {
           const k = params.find((p: any) => p.seriesName === 'K线');
           if (!k) return '';
           const d = k.data;
-          return [
-            `<div class="text-gray-400 mb-1">${k.axisValue}</div>`,
-            `<span class="text-gray-500">开 </span><span>${d[1].toFixed(2)}</span>`,
-            `<span class="text-gray-500"> 收 </span><span class="${d[2] >= d[1] ? 'text-red-400' : 'text-emerald-400'}">${d[2].toFixed(2)}</span>`,
-            `<span class="text-gray-500"> 高 </span><span>${d[4].toFixed(2)}</span>`,
-            `<span class="text-gray-500"> 低 </span><span>${d[3].toFixed(2)}</span>`,
-            `<span class="text-gray-500"> 幅 </span><span>${((d[2] - d[1]) / d[1] * 100).toFixed(2)}%</span>`,
-          ].join('&nbsp;&nbsp;');
+          const up = d[2] >= d[1];
+          const valColor = up ? UP_COLOR : DOWN_COLOR;
+          const chg = ((d[2] - d[1]) / d[1] * 100).toFixed(2);
+          return (
+            `<div style="font-family:${EN_FONT};font-weight:700;letter-spacing:1px;color:${INK_COLOR};` +
+            `border-bottom:1px dashed ${GRID_COLOR};padding-bottom:4px;margin-bottom:5px;font-size:12px;">${k.axisValue}</div>` +
+            tipRow('开', d[1].toFixed(2)) +
+            tipRow('收', d[2].toFixed(2), valColor) +
+            tipRow('高', d[4].toFixed(2)) +
+            tipRow('低', d[3].toFixed(2)) +
+            tipRow('幅', `${chg}%`, valColor)
+          );
         },
       },
       axisPointer: {
         link: [{ xAxisIndex: 'all' }],
-        label: { backgroundColor: '#1f2937' },
+        label: { backgroundColor: BLUE_COLOR, color: '#fff' },
       },
       grid: [
         { left: 56, right: 16, top: 16, height: '55%' },
@@ -174,16 +203,16 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
           type: 'category',
           data: dates,
           gridIndex: 0,
-          axisLine: { lineStyle: { color: GRID_COLOR } },
+          axisLine: { lineStyle: { color: LINE_COLOR } },
           axisTick: { show: false },
-          axisLabel: { color: TEXT_COLOR, fontSize: 10 },
+          axisLabel: { color: TEXT_COLOR, fontSize: 10, fontFamily: EN_FONT },
           splitLine: { show: false },
         },
         {
           type: 'category',
           data: dates,
           gridIndex: 1,
-          axisLine: { lineStyle: { color: GRID_COLOR } },
+          axisLine: { lineStyle: { color: LINE_COLOR } },
           axisTick: { show: false },
           axisLabel: { show: false },
           splitLine: { show: false },
@@ -197,7 +226,7 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
           splitNumber: 5,
           axisLine: { show: false },
           axisTick: { show: false },
-          axisLabel: { color: TEXT_COLOR, fontSize: 10 },
+          axisLabel: { color: TEXT_COLOR, fontSize: 10, fontFamily: EN_FONT },
           splitLine: { lineStyle: { color: GRID_COLOR, type: 'dashed' } },
           position: 'left',
         },
@@ -223,11 +252,15 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
           xAxisIndex: [0, 1],
           bottom: 4,
           height: 20,
-          borderColor: GRID_COLOR,
-          backgroundColor: 'rgba(30,34,51,0.5)',
-          fillerColor: 'rgba(59,130,246,0.15)',
-          handleStyle: { color: '#3b82f6', borderColor: '#3b82f6' },
-          textStyle: { color: TEXT_COLOR, fontSize: 10 },
+          borderColor: LINE_COLOR,
+          backgroundColor: 'rgba(47,124,211,0.06)',
+          fillerColor: 'rgba(47,124,211,0.18)',
+          handleStyle: { color: BLUE_COLOR, borderColor: BLUE_COLOR },
+          textStyle: { color: TEXT_COLOR, fontSize: 10, fontFamily: EN_FONT },
+          dataBackground: {
+            lineStyle: { color: '#7fb2e5' },
+            areaStyle: { color: 'rgba(47,124,211,0.10)' },
+          },
         },
       ],
       series: [
@@ -258,7 +291,7 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
           yAxisIndex: 0,
           smooth: false,
           symbol: 'none',
-          lineStyle: { color: '#f59e0b', width: 1 },
+          lineStyle: { color: GOLD_COLOR, width: 1 },
         },
         {
           name: 'MA10',
@@ -268,7 +301,7 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
           yAxisIndex: 0,
           smooth: false,
           symbol: 'none',
-          lineStyle: { color: '#8b5cf6', width: 1 },
+          lineStyle: { color: BLUE_COLOR, width: 1 },
         },
         {
           name: 'MA20',
@@ -278,7 +311,7 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
           yAxisIndex: 0,
           smooth: false,
           symbol: 'none',
-          lineStyle: { color: '#06b6d4', width: 1 },
+          lineStyle: { color: VIOLET_COLOR, width: 1 },
         },
         {
           name: '成交量',
@@ -314,18 +347,18 @@ export default function KlineChart({ symbol, trades = [], height = 340, classNam
     <div className={`relative ${className}`}>
       {/* 始终渲染 chart 容器，确保 containerRef 在 mount 时就能绑定 */}
       <div ref={containerRef} style={{ width: '100%', height }} />
-      {/* 无 symbol / error / loading 用覆盖层展示 */}
+      {/* 无 symbol / error / loading 用覆盖层展示（浅色 GP 面板风格） */}
       {(!symbol || symbol.length < 6) ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-dark-200 rounded-lg">
-          <span className="text-xs text-gray-600">输入股票代码后显示K线</span>
+        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/70 border border-[#d4e7f9]">
+          <span className="text-xs" style={{ color: '#57718e' }}>输入股票代码后显示K线</span>
         </div>
       ) : error ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-dark-200 rounded-lg">
-          <span className="text-xs text-red-400">{error}</span>
+        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/70 border border-[#f3b6b8]">
+          <span className="text-xs" style={{ color: '#e5484d' }}>{error}</span>
         </div>
       ) : loading ? (
-        <div className="absolute inset-0 flex items-center justify-center z-10 bg-dark-200/60 rounded-lg">
-          <div className="text-xs text-gray-500 animate-pulse">加载K线...</div>
+        <div className="absolute inset-0 flex items-center justify-center z-10 rounded-lg bg-white/70">
+          <div className="text-xs animate-pulse" style={{ color: '#57718e' }}>加载K线...</div>
         </div>
       ) : null}
     </div>

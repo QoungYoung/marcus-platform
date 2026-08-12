@@ -40,5 +40,19 @@
     "theme": "Midnight (technical)",
     "enrichment": "none",
     "brief": "Marcus Platform · portfolio dashboard · technical mood"
+  },
+  {
+    "date": "2026-08-12",
+    "macrostructure": "Edge-rail nav + Drawer chat (mobile-first app shell)",
+    "theme": "Marcus Agent (dark #0b0e14 + gold #f0b90b)",
+    "enrichment": "none",
+    "brief": "AI 助手页 + 全局顶部导航移动端 UX 重设 — 顶部菜单改为可横向滑动轨道（原 overflow:hidden 裁切导致无法进入 AI 助手）；ChatContainer 会话面板改为移动端抽屉（sheet），行情条与控制栏单行滑动，支持 safe-area"
+  },
+  {
+    "date": "2026-08-12",
+    "macrostructure": "Instrument-panel candlestick (light sci-fi academy)",
+    "theme": "Blue Archive (Golden Pit DNA) · accent #2f7cd3 · studied-DNA: golden-pit-page.css",
+    "enrichment": "none",
+    "brief": "KlineChart 与黄金坑页 DNA 对齐 — 去除深色底（#0f1117 裁切成透明融入面板），网格改 #d4e7f9 虚线、坐标轴 #a8cdee，刻度/次要文字 #57718e、主文字 #16324f，涨 #e5484d / 跌 #27a06b，MA5 金 #c98a12 / MA10 蓝 #2f7cd3 / MA20 紫 #7c5cd6，tooltip 白卡 + Rajdhani EN 微标 + 蓝色阴影，dataZoom 蓝色系，覆盖层改浅色 GP 面板风格"
   }
 ]

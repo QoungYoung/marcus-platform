@@ -2515,6 +2515,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   const [reflectLoading, setReflectLoading] = useState(false);
   const [modelList, setModelList] = useState<string[]>([modelRef.current, 'deepseek-v4-pro']);
   const [selectedModel, setSelectedModel] = useState<string>(modelRef.current);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Keep modeRef in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -2554,6 +2555,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   }, []);
 
   const switchToSession = useCallback(async (targetSessionId: string) => {
+    setDrawerOpen(false);
     if (targetSessionId === sessionIdRef.current) {
       return;
     }
@@ -3377,6 +3379,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
   // Save tab preference to localStorage
   const handleTabSwitch = useCallback((tab: 'chat' | 'group_chat') => {
+    setDrawerOpen(false);
     setTabView(tab);
     localStorage.setItem('marcus_chat_mode', tab === 'group_chat' ? 'reflect' : 'chat');
   }, []);
@@ -3394,6 +3397,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
   // Switch to a reflect session (backend or IndexedDB)
   const switchToReflectSession = useCallback(async (item: ReflectGroup['sessions'][0]) => {
+    setDrawerOpen(false);
     if (!agentRef.current || !sessionsRef.current) return;
 
     if (item.source === 'indexeddb' && item.dbSession) {
@@ -3458,6 +3462,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
 
   // Create a new reflect session
   const createNewReflectSession = useCallback(() => {
+    setDrawerOpen(false);
     const newId = generateUUID();
     sessionIdRef.current = newId;
     localStorage.setItem('marcus_session_id', newId);
@@ -3486,10 +3491,15 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   }, [refreshSessionList]);
 
   return (
-    <div style={chatContainerStyle}>
+    <div className="mc-chat-root" style={chatContainerStyle}>
       <style>{sessionPanelCss}</style>
+      <style>{mobileCss}</style>
+      {/* 移动端抽屉遮罩 */}
+      {drawerOpen && (
+        <div className="mc-drawer-backdrop" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
+      )}
       {/* 左侧：常驻会话面板 */}
-      <div style={sessionPanelStyle}>
+      <div className={'mc-session-panel' + (drawerOpen ? ' mc-drawer-open' : '')} style={sessionPanelStyle}>
         {/* 面板头部 — Tab Switcher */}
         <div style={sessionPanelHeaderStyle}>
           <div style={{ display: 'flex', gap: '4px', flex: 1 }}>
@@ -3734,9 +3744,9 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
       </div>
 
       {/* 右侧：聊天主区域 */}
-      <div style={chatMainStyle}>
+      <div className="mc-chat-main" style={chatMainStyle}>
         {/* Market Ticker + Session Tools */}
-        <div className="market-ticker" style={{ ...tickerStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="market-ticker mc-ticker" style={{ ...tickerStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', flex: 1 }}>
           {indices.length > 0 ? (
             indices.slice(0, 4).map((idx, i) => (
@@ -3764,10 +3774,21 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           )}
           </div>
           {/* Mode Toggle + Session tools */}
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, marginLeft: '12px' }}>
+          <div className="mc-header-controls" style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, marginLeft: '12px' }}>
+            {/* 移动端：打开会话抽屉 */}
+            <button
+              className="mc-menu-btn"
+              onClick={() => setDrawerOpen(true)}
+              title="会话列表"
+              aria-label="打开会话列表"
+              style={{ ...toolBtnStyle, fontSize: '15px', color: 'var(--agent-text-secondary)' }}
+            >
+              <i className="fas fa-bars"></i>
+            </button>
             {/* 模型选择（来自代理地址模型列表） */}
             {mode === 'chat' && (
               <select
+                className="mc-model-select"
                 value={selectedModel}
                 onChange={e => handleModelChange(e.target.value)}
                 title="选择对话模型（列表来自代理地址 /v1/models）"
@@ -3837,6 +3858,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             {/* 新建会话 */}
             <button
               onClick={() => {
+                setDrawerOpen(false);
                 // 保存当前会话元数据后再新建
                 const sid = sessionIdRef.current;
                 if (sid && sessionsRef.current && agentRef.current) {
@@ -3891,7 +3913,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             border: '1px solid rgba(240,185,11,0.2)',
             borderRadius: '12px',
             boxShadow: 'var(--agent-shadow-popup)',
-            width: '320px',
+            width: 'min(320px, calc(100vw - 24px))',
             maxHeight: '300px',
             overflow: 'hidden',
             display: 'flex',
@@ -3969,6 +3991,81 @@ const sessionPanelCss = `
   .session-export-btn { opacity: 0; }
   .session-item-row:hover .session-delete-btn { opacity: 1; }
   .session-item-row:hover .session-export-btn { opacity: 1; }
+`;
+
+// 移动端响应式：抽屉会话面板 + 可滑动行情条 + 单行控制栏
+const mobileCss = `
+/* Hallmark · agent chat mobile · structure: drawer chat (sheet) + swipeable ticker + single-line control rail */
+.mc-chat-root { position: relative; }
+.mc-menu-btn { display: none; }
+.mc-drawer-backdrop { display: none; }
+
+@media (max-width: 47.99rem) {
+  .mc-menu-btn { display: flex !important; }
+  .mc-session-panel {
+    position: fixed !important;
+    top: 56px;
+    left: 0;
+    bottom: 0;
+    width: min(84vw, 320px) !important;
+    min-width: min(84vw, 320px) !important;
+    z-index: 220;
+    transform: translateX(-105%);
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+    box-shadow: 16px 0 48px rgba(0, 0, 0, 0.5);
+    border-right: 1px solid var(--agent-gold-border);
+  }
+  .mc-session-panel.mc-drawer-open { transform: translateX(0); }
+  .mc-drawer-backdrop {
+    display: block !important;
+    position: fixed;
+    inset: 56px 0 0 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    z-index: 210;
+  }
+  .mc-chat-root { border-radius: 18px; }
+  .mc-chat-main { width: 100%; }
+
+  /* 行情条：单行可滑动（类 marquee） */
+  .mc-ticker {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+    padding: 8px 12px !important;
+  }
+  .mc-ticker > div:first-child {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(90deg, #000 88%, transparent 100%);
+    padding-bottom: 2px;
+  }
+  .mc-ticker > div:first-child::-webkit-scrollbar { display: none; }
+
+  /* 控制栏：单行可滑动 */
+  .mc-header-controls {
+    margin-left: 0 !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mc-header-controls::-webkit-scrollbar { display: none; }
+  .mc-model-select { max-width: 116px; }
+}
+
+@media (max-width: 29.99rem) {
+  .mc-chat-root { border-radius: 14px; }
+  .mc-model-select { max-width: 104px; }
+  #trading-agent-container message-editor {
+    padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
+  }
+  #trading-agent-container message-list {
+    padding: 10px !important;
+  }
+}
 `;
 
 // Styles
