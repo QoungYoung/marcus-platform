@@ -74,6 +74,13 @@ async def proxy_openai(path: str, request: Request):
             payload = json.loads(body or b"{}")
         except ValueError:
             payload = {}
+        # Console Go 等上游只认 system/user/assistant/tool，不支持 OpenAI 的
+        # developer role，统一降级为 system，否则上游 400 反序列化失败。
+        if isinstance(payload.get("messages"), list):
+            for msg in payload["messages"]:
+                if isinstance(msg, dict) and msg.get("role") == "developer":
+                    msg["role"] = "system"
+            body = json.dumps(payload).encode("utf-8")
         is_stream = bool(payload.get("stream"))
 
         if not is_stream:
