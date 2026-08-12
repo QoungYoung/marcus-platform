@@ -198,13 +198,28 @@ class GoldenPitService:
         status["sector_selection"] = selection
         s_cfg = _sector.get_sector_config()
         carrier_enabled = bool(s_cfg.get("dca_carrier_enabled"))
+        regime_mode, regime_reason = _sector.resolve_regime_mode(s_cfg)
+        targets = []
+        for fc, c in s_cfg.get("dca_carriers", {}).items():
+            rc = _sector.resolve_carrier(fc, s_cfg)
+            if rc:
+                targets.append({
+                    "fund_code": fc, "mode": rc["mode"], "codes": rc.get("codes", []),
+                    "reason": rc.get("reason", ""),
+                })
+            else:
+                targets.append({
+                    "fund_code": fc, "mode": c.get("mode"), "codes": c.get("codes", []),
+                    "reason": "regime_carrier_enabled=false（5.4 静态载体）",
+                })
         status["sector_selection"]["carrier"] = {
             "enabled": carrier_enabled,
-            "targets": [
-                {"fund_code": fc, "mode": c.get("mode"), "codes": c.get("codes", [])}
-                for fc, c in s_cfg.get("dca_carriers", {}).items()
-            ],
-            "note": "灰度开启, 按载体配置执行" if carrier_enabled else "dry-run 未生效（展示目标载体, 下单仍按板块选筹）",
+            "regime_carrier_enabled": bool(s_cfg.get("regime_carrier_enabled")),
+            "regime_mode": regime_mode,
+            "regime_reason": regime_reason,
+            "targets": targets,
+            "note": "regime 决定载体已开启" if s_cfg.get("regime_carrier_enabled") else
+                    ("灰度开启, 按载体配置执行" if carrier_enabled else "dry-run 未生效（展示目标载体, 下单仍按板块选筹）"),
         }
         for idx in status.get("indices", []):
             if idx.get("guide_only"):

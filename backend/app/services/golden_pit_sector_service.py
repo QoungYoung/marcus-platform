@@ -148,6 +148,14 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "label": "趋势腿激活阈值", "description": "regime_mode=auto 时: 趋势腿激活数>=阈值切趋势(动量)选筹, 否则超跌选筹",
         "value_type": "number", "sort_order": 19, "default": 5,
     },
+    "regime_carrier_enabled": {
+        "label": "Regime 决定载体", "description": "true=按牛熊状态自动选执行载体: oversold→板块选筹, trend→固定高弹性组合, bh→宽基; false=保持5.4静态载体优先级",
+        "value_type": "bool", "sort_order": 20, "default": False,
+    },
+    "hold_bear_pct_threshold": {
+        "label": "熊市保护贪婪分位", "description": "hold_until_exit 熊市保护: regime=oversold 且宽基贪婪250日分位<=阈值时保留持仓、暂停新增候选",
+        "value_type": "number", "sort_order": 21, "default": 0.2,
+    },
 }
 
 
@@ -688,6 +696,60 @@ def resolve_regime_mode(
     return "oversold", f"趋势腿激活 {trend_up}/{total} < {threshold}"
 
 
+def resolve_carrier(
+    fund_code: str,
+    cfg: Optional[Dict[str, Any]] = None,
+    tech_status: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """解析执行载体（regime → carrier 映射）。
+
+    `regime_carrier_enabled=true` 时:
+      oversold -> sector_selection（动态选筹, 含 hold_until_exit / fallback）
+      trend    -> fixed_combo（复用 dca_carrier_<fund> codes; codes 缺失回退 broad）
+      bh       -> broad（宽基躺平）
+    关闭时返回 {}（DCA 层走 5.4 静态优先级 _carrier_active）。
+
+    Returns:
+        {"mode": "sector_selection"|"fixed_combo"|"broad", "codes": [...], "reason": str} 或 {}
+    """
+    cfg = cfg or get_sector_config()
+    if not cfg.get("regime_carrier_enabled"):
+        return {}
+    regime_mode, regime_reason = resolve_regime_mode(cfg, tech_status)
+    if regime_mode == "bh":
+        return {"mode": "broad", "codes": [], "reason": f"regime=bh（{regime_reason}）"}
+    if regime_mode == "trend":
+        carrier = cfg.get("dca_carriers", {}).get(fund_code, {})
+        codes = (carrier.get("codes") or []) if carrier.get("mode") == "fixed_combo" else []
+        if codes:
+            return {"mode": "fixed_combo", "codes": codes, "reason": f"regime=trend（{regime_reason}）→ 高弹性组合"}
+        return {"mode": "broad", "codes": [], "reason": f"regime=trend（{regime_reason}）无 fixed_combo codes, 回退宽基"}
+    return {"mode": "sector_selection", "codes": [], "reason": f"regime=oversold（{regime_reason}）→ 动态选筹"}
+
+
+def _broad_greed_bearish(threshold: float) -> Optional[bool]:
+    """宽基贪婪 250 日分位是否处于低位（任一 guide_only 宽基 <= threshold）。
+
+    复用 golden_pit_tech_status._percentile / _load_broad_greed；数据缺失返回 None（跳过保护）。
+    """
+    try:
+        from app.services.golden_pit_tech_status import _load_broad_greed, _percentile
+        series_map = _load_broad_greed()
+        pcts = []
+        for code in ("588000", "159915"):
+            series = series_map.get(code, {})
+            if series:
+                p = _percentile(series)
+                if p is not None:
+                    pcts.append(p)
+        if not pcts:
+            return None
+        return min(pcts) <= threshold
+    except Exception as e:
+        logger.warning("宽基贪婪分位读取失败, 跳过熊市保护: %s", e)
+        return None
+
+
 def select_sectors(
     as_of: Optional[str] = None,
     top_n: Optional[int] = None,
@@ -789,6 +851,13 @@ def select_sectors(
     # 持仓保留（只截新入）: 已持仓板块保留, 不参与 TOP N 截断；无持仓时维持原 min_valid 门控
     held = [s for s in valid if s["etf_code"][-6:] in hold_set] if hold_until_exit and hold_set else []
 
+    # 熊市保护: oversold + 宽基贪婪分位低位 → 只保留持仓, 暂停新增候选（防只截新入熊市拖累）
+    bear_protect = False
+    if held and regime_mode == "oversold":
+        bear_th = float(cfg.get("hold_bear_pct_threshold", 0.2))
+        if bear_th < 1.0:
+            bear_protect = _broad_greed_bearish(bear_th) is True
+
     if len(valid) < min_valid and not held:
         return _finalize(
             [], valid,
@@ -806,13 +875,18 @@ def select_sectors(
         valid = _rank_combo(valid)
         valid.sort(key=lambda x: x["combo"], reverse=True)
 
-    # 只截新入: 持仓保留 ∪ 新候选 TOP N
+    # 只截新入: 持仓保留 ∪ 新候选 TOP N（熊市保护时新候选=0）
     if held:
-        new_candidates = [s for s in valid if s["etf_code"][-6:] not in hold_set]
+        if bear_protect:
+            new_candidates: List[Dict[str, Any]] = []
+        else:
+            new_candidates = [s for s in valid if s["etf_code"][-6:] not in hold_set]
         selected = _normalize_weights(held + new_candidates[:top_n], max_weight, score_key="combo")
         if not selected:
             return _finalize([], valid, "combo 信号均未过门槛，空仓等待板块信号")
         empty_reason = (
+            f"熊市保护: 保留持仓 {len(held)} 只, 暂停新增候选"
+            if bear_protect else
             f"持仓保留 {len(held)} 只, 新候选截断 TOP {top_n}"
             if len(valid) < min_valid else ""
         )

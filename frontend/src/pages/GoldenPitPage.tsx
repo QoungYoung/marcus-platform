@@ -189,10 +189,14 @@ interface DcaCarrierTarget {
   fund_code: string;
   mode: string;
   codes: { code: string; weight: number }[];
+  reason?: string;
 }
 
 interface SectorSelectionCarrier {
   enabled: boolean;
+  regime_carrier_enabled?: boolean;
+  regime_mode?: string;
+  regime_reason?: string;
   targets: DcaCarrierTarget[];
   note: string;
 }
@@ -1010,7 +1014,7 @@ function TrendChip({ trend }: { trend: string }) {
   return <span className={`gp-tech-trend ${cls}`}>{trend}</span>;
 }
 
-function TechStatusPanel({ tech, sectorConfig }: { tech: TechStatus | null; sectorConfig: SectorConfigItem[] }) {
+function TechStatusPanel({ tech, sectorConfig, carrier }: { tech: TechStatus | null; sectorConfig: SectorConfigItem[]; carrier?: SectorSelectionCarrier | null }) {
   if (!tech) return null;
   // 生效选筹模式（与后端 resolve_regime_mode 口径一致: auto 按趋势腿激活数>=阈值切 trend）
   const regimeMode = String(sectorConfig.find((c) => c.config_key === 'regime_mode')?.value ?? 'oversold');
@@ -1028,6 +1032,13 @@ function TechStatusPanel({ tech, sectorConfig }: { tech: TechStatus | null; sect
   const modeTxt = regimeMode === 'auto'
     ? `${regimeLabel('auto')} → ${regimeLabel(effectiveMode)}`
     : regimeLabel(effectiveMode);
+  // 执行载体（来自 /golden-pit/status sector_selection.carrier）
+  const carrierModeLabels: Record<string, string> = { sector_selection: '板块选筹', fixed_combo: '高弹性组合', broad: '宽基' };
+  let carrierTxt = '';
+  if (carrier?.targets?.length) {
+    const modes = [...new Set(carrier.targets.map((t) => t.mode))].map((m) => carrierModeLabels[m] ?? m);
+    carrierTxt = carrier.regime_carrier_enabled ? modes.join('+') : `${modes.join('+')}(静态)`;
+  }
   const vCls =
     tech.verdict.includes('牛') ? 'tech-bull' :
     tech.verdict.includes('熊') ? 'tech-bear' : 'tech-flat';
@@ -1049,7 +1060,7 @@ function TechStatusPanel({ tech, sectorConfig }: { tech: TechStatus | null; sect
         <div className="gp-tech-stat"><b>{tech.trend_down_count}</b><span>空头排列</span></div>
         <div className="gp-tech-stat"><b>{tech.oversold_count}</b><span>贪婪超跌区(&le;{tech.oversold_pct_threshold})</span></div>
         <div className="gp-tech-stat"><b>{tech.avg_percentile != null ? (tech.avg_percentile * 100).toFixed(0) + '%' : '—'}</b><span>贪婪250日分位均值</span></div>
-        <div className="gp-tech-stat gp-tech-regime"><b>{modeTxt}</b><span>生效选筹模式(regime)</span></div>
+        <div className="gp-tech-stat gp-tech-regime"><b>{modeTxt}{carrierTxt ? ` → ${carrierTxt}` : ''}</b><span>生效模式 → 执行载体</span></div>
       </div>
       <div className="gp-tech-table-wrap">
         <table className="gp-tech-table">
@@ -1370,7 +1381,7 @@ export default function GoldenPitPage() {
           {/* ── 右侧主区 ── */}
           <main className="gp-main">
             <GoldenPitTimeline window={window} />
-            <TechStatusPanel tech={techStatus} sectorConfig={configItems} />
+            <TechStatusPanel tech={techStatus} sectorConfig={configItems} carrier={status?.sector_selection?.carrier} />
 
             {global_macro && <CapitalFlowPanel macro={global_macro} />}
 

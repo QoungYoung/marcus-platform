@@ -530,7 +530,8 @@ class TestSelectSectorsHoldUntilExit(unittest.TestCase):
 
         with mock.patch.object(svc, "SECTOR_ETF_POOL", self.pool), \
              mock.patch.object(svc, "SECTOR_MIN_VALID", 4), \
-             mock.patch.object(svc, "_compute_signal", side_effect=fake_compute):
+             mock.patch.object(svc, "_compute_signal", side_effect=fake_compute), \
+             mock.patch.object(svc, "_broad_greed_bearish", return_value=False):
             res = svc.select_sectors(as_of="2026-06-01", top_n=2, holdings=["SH222222"])
         sectors = [s["sector"] for s in res["selected"]]
         self.assertIn("B", sectors)  # 持仓保留（按 combo 排名第3, 无保留会被截掉）
@@ -543,7 +544,8 @@ class TestSelectSectorsHoldUntilExit(unittest.TestCase):
 
         with mock.patch.object(svc, "SECTOR_ETF_POOL", self.pool), \
              mock.patch.object(svc, "SECTOR_MIN_VALID", 4), \
-             mock.patch.object(svc, "_compute_signal", side_effect=fake_compute):
+             mock.patch.object(svc, "_compute_signal", side_effect=fake_compute), \
+             mock.patch.object(svc, "_broad_greed_bearish", return_value=False):
             res = svc.select_sectors(as_of="2026-06-01", top_n=2)
         self.assertEqual([s["sector"] for s in res["selected"]], ["A", "E"])
 
@@ -555,6 +557,7 @@ class TestBuildBuyLegsFallbackRegime(unittest.TestCase):
         from app.services import golden_pit_dca_service as dca
         self.dca = dca
         dca._sector_fallback_state.clear()
+        dca._carrier_state.clear()
 
     def test_fallback_broad_returns_broad_leg(self):
         dca = self.dca
@@ -568,7 +571,7 @@ class TestBuildBuyLegsFallbackRegime(unittest.TestCase):
             legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
         self.assertEqual(reason, "")
         self.assertEqual(legs, [("index", "SH588000", 10000.0)])
-        self.assertTrue(any("回退宽基" in n for n in notes))
+        self.assertTrue(any("回退" in n for n in notes))
 
     def test_fallback_disabled_keeps_skip(self):
         dca = self.dca
@@ -598,7 +601,7 @@ class TestBuildBuyLegsFallbackRegime(unittest.TestCase):
             m_sector.select_sectors.side_effect = [empty_sel, good_sel]
             _, notes1, _ = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
             legs2, notes2, reason2 = dca._build_buy_legs("588000", [], 10000.0, "2026-06-02", "SH588000")
-        self.assertTrue(any("回退宽基" in n for n in notes1))
+        self.assertTrue(any("回退" in n for n in notes1))
         self.assertEqual(legs2[0][1], "SH512480")
         self.assertTrue(any("切回板块" in n for n in notes2))
 
@@ -627,6 +630,175 @@ class TestBuildBuyLegsFallbackRegime(unittest.TestCase):
             }
             dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
         self.assertEqual(m_sector.select_sectors.call_args.kwargs["holdings"], ["SH512480"])
+
+
+class TestResolveCarrier(unittest.TestCase):
+    """regime → 载体映射: 关闭返回空 / 显式映射 / auto 阈值 / codes 缺失回退。"""
+
+    def _cfg(self, regime="oversold", carriers=None, enabled=True):
+        return {
+            "regime_carrier_enabled": enabled,
+            "regime_mode": regime,
+            "regime_trend_threshold": 5,
+            "dca_carriers": carriers or {
+                "588000": {"mode": "fixed_combo", "codes": [{"code": "588200", "weight": 0.5}]},
+            },
+        }
+
+    def test_disabled_returns_empty(self):
+        self.assertEqual(svc.resolve_carrier("588000", self._cfg(enabled=False)), {})
+
+    def test_oversold_maps_sector_selection(self):
+        out = svc.resolve_carrier("588000", self._cfg("oversold"))
+        self.assertEqual(out["mode"], "sector_selection")
+
+    def test_trend_maps_fixed_combo_with_codes(self):
+        out = svc.resolve_carrier("588000", self._cfg("trend"))
+        self.assertEqual(out["mode"], "fixed_combo")
+        self.assertEqual(out["codes"][0]["code"], "588200")
+
+    def test_trend_without_codes_falls_back_broad(self):
+        cfg = self._cfg("trend", carriers={"588000": {"mode": "sector_selection", "codes": []}})
+        out = svc.resolve_carrier("588000", cfg)
+        self.assertEqual(out["mode"], "broad")
+
+    def test_bh_maps_broad(self):
+        out = svc.resolve_carrier("588000", self._cfg("bh"))
+        self.assertEqual(out["mode"], "broad")
+
+    def test_auto_threshold_boundary(self):
+        cfg = self._cfg("auto")
+        st_trend = {"trend_up_count": 5, "total_count": 9}
+        st_ovs = {"trend_up_count": 4, "total_count": 9}
+        self.assertEqual(svc.resolve_carrier("588000", cfg, st_trend)["mode"], "fixed_combo")
+        self.assertEqual(svc.resolve_carrier("588000", cfg, st_ovs)["mode"], "sector_selection")
+
+
+class TestSelectSectorsBearProtection(unittest.TestCase):
+    """熊市保护: oversold + 宽基贪婪分位低位 → 保留持仓、暂停新增候选。"""
+
+    def setUp(self):
+        svc._cache.clear()
+        self._cfg_patch = mock.patch.object(
+            svc, "get_sector_config",
+            return_value={"signal_mode": "moneyflow", "hold_until_exit": True, "hold_bear_pct_threshold": 0.2},
+        )
+        self._cfg_patch.start()
+        self.addCleanup(self._cfg_patch.stop)
+        self.signals = {
+            "A": {"sector": "A", "name": "A", "etf_code": "SH111111", "mf5_norm": 5.0, "oversold120": -0.30},
+            "B": {"sector": "B", "name": "B", "etf_code": "SH222222", "mf5_norm": 2.0, "oversold120": -0.10},
+            "E": {"sector": "E", "name": "E", "etf_code": "SH555555", "mf5_norm": 1.5, "oversold120": -0.20},
+            "F": {"sector": "F", "name": "F", "etf_code": "SH666666", "mf5_norm": 1.2, "oversold120": -0.15},
+        }
+        self.pool = {
+            k: {"name": v["name"], "etf_code": v["etf_code"], "flow_name": k}
+            for k, v in self.signals.items()
+        }
+
+    def _run(self, bearish):
+        def fake_compute(pool_key, entry, flow_df, as_of, cfg=None):
+            return self.signals.get(pool_key)
+
+        with mock.patch.object(svc, "SECTOR_ETF_POOL", self.pool), \
+             mock.patch.object(svc, "SECTOR_MIN_VALID", 4), \
+             mock.patch.object(svc, "_compute_signal", side_effect=fake_compute), \
+             mock.patch.object(svc, "_broad_greed_bearish", return_value=bearish):
+            return svc.select_sectors(as_of="2026-06-01", top_n=2, holdings=["SH222222"])
+
+    def test_bear_protect_pauses_new_candidates(self):
+        res = self._run(True)
+        sectors = [s["sector"] for s in res["selected"]]
+        self.assertEqual(sectors, ["B"])  # 仅持仓保留
+        self.assertIn("熊市保护", res["empty_reason"])
+
+    def test_no_bear_protection_keeps_new_candidates(self):
+        res = self._run(False)
+        sectors = [s["sector"] for s in res["selected"]]
+        self.assertIn("B", sectors)
+        self.assertIn("A", sectors)  # 新候选恢复
+
+
+class TestBuildBuyLegsRegimeCarrier(unittest.TestCase):
+    """regime 决定载体: fixed_combo/broad 静态腿 + 三级 fallback + 软切换标注。"""
+
+    def setUp(self):
+        from app.services import golden_pit_dca_service as dca
+        self.dca = dca
+        dca._sector_fallback_state.clear()
+        dca._carrier_state.clear()
+
+    def test_regime_carrier_fixed_combo_legs(self):
+        dca = self.dca
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = {"enabled": True}
+            m_sector.resolve_carrier.return_value = {
+                "mode": "fixed_combo", "reason": "regime=trend（趋势腿激活 5/9 ≥ 5）→ 高弹性组合",
+                "codes": [{"code": "588200", "weight": 0.5}, {"code": "512480", "weight": 0.5}],
+            }
+            legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(reason, "")
+        self.assertEqual(len(legs), 2)
+        self.assertEqual(legs[0][1], "SH588200")
+        self.assertAlmostEqual(legs[0][2], 5000.0)
+        self.assertTrue(any("fixed_combo" in n for n in notes))
+
+    def test_regime_carrier_broad_legs(self):
+        dca = self.dca
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = {"enabled": True}
+            m_sector.resolve_carrier.return_value = {
+                "mode": "broad", "reason": "regime=bh（配置固定为宽基躺平）", "codes": [],
+            }
+            legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(legs, [("index", "SH588000", 10000.0)])
+        self.assertTrue(any("broad" in n for n in notes))
+
+    def test_fallback_level1_fixed_combo(self):
+        dca = self.dca
+        s_cfg = {
+            "enabled": True, "fallback_broad": True, "hold_until_exit": False,
+            "dca_carriers": {"588000": {"mode": "fixed_combo", "codes": [{"code": "588200", "weight": 1.0}]}},
+        }
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = s_cfg
+            m_sector.resolve_carrier.return_value = {}
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
+            m_sector.select_sectors.return_value = {
+                "selected": [], "empty_reason": "有效信号板块数 1 < 4，空仓等待板块信号",
+            }
+            legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(reason, "")
+        self.assertEqual(legs, [("carrier:588200", "SH588200", 10000.0)])
+        self.assertTrue(any("回退层级1" in n for n in notes))
+
+    def test_fallback_level2_broad(self):
+        dca = self.dca
+        with mock.patch.object(dca, "_sector") as m_sector:
+            m_sector.get_sector_config.return_value = {
+                "enabled": True, "fallback_broad": True, "hold_until_exit": False,
+            }
+            m_sector.resolve_carrier.return_value = {}
+            m_sector.resolve_regime_mode.return_value = ("oversold", "配置固定为超跌(贪婪)选筹")
+            m_sector.select_sectors.return_value = {
+                "selected": [], "empty_reason": "无信号",
+            }
+            legs, notes, reason = dca._build_buy_legs("588000", [], 10000.0, "2026-06-01", "SH588000")
+        self.assertEqual(legs, [("index", "SH588000", 10000.0)])
+        self.assertTrue(any("回退层级2" in n for n in notes))
+
+    def test_carrier_switch_annotation(self):
+        dca = self.dca
+        n1 = dca._carrier_switch_note("588000", "2026-06-01", "sector_selection")
+        n2 = dca._carrier_switch_note("588000", "2026-06-02", "fixed_combo", "regime=trend")
+        self.assertEqual(n1, [])
+        self.assertEqual(len(n2), 1)
+        self.assertIn("载体切换", n2[0])
+        self.assertIn("sector_selection", n2[0])
+        self.assertIn("fixed_combo", n2[0])
+        # 同日重复调用不重复标注
+        n3 = dca._carrier_switch_note("588000", "2026-06-02", "fixed_combo")
+        self.assertEqual(n3, [])
 
 
 if __name__ == "__main__":

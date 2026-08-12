@@ -35,6 +35,8 @@ from app.services import golden_pit_sector_service as _sector
 PIT_WINDOW_DAYS = 15
 # 板块选筹回退宽基状态: fund_code -> 最近一次回退日期（用于『信号恢复切回』标注）
 _sector_fallback_state: Dict[str, str] = {}
+# 载体切换状态: fund_code -> {carrier, as_of}（相邻交易日载体不同则标注切换）
+_carrier_state: Dict[str, Dict[str, str]] = {}
 PRE_TURN_CUMULATIVE_CAP = 0.15   # 拐点前累计上限 (占 max_total 比例)
 
 
@@ -443,6 +445,15 @@ def _normalize_carrier_etf_code(code: str) -> str:
     return code
 
 
+def _carrier_switch_note(fund_code: str, as_of: str, cur: str, reason: str = "") -> List[str]:
+    """载体切换标注: 相邻交易日载体不同才标注（切换日不清仓, 仅新增资金按新载体）。"""
+    prev = _carrier_state.get(fund_code)
+    _carrier_state[fund_code] = {"carrier": cur, "as_of": as_of}
+    if prev and prev.get("as_of") != as_of and prev.get("carrier") != cur:
+        return [f"载体切换：{prev['carrier']} → {cur}" + (f"（{reason}）" if reason else "")]
+    return []
+
+
 def _carrier_active(fund_code: str) -> Optional[Dict[str, Any]]:
     """返回生效的 DCA 载体配置（灰度开启且模式为 fixed_combo/broad），否则 None。"""
     s_cfg = _sector.get_sector_config()
@@ -471,10 +482,19 @@ def _build_buy_legs(
         (legs, fallback_notes, empty_reason) — empty_reason 非空表示无板块可买。
     """
     s_cfg = _sector.get_sector_config()
-    carrier = _carrier_active(fund_code)
-    if carrier:
-        if carrier["mode"] == "broad":
-            return [("carrier:broad", etf_code, daily_amount)], [], ""
+    # ── 载体解析: regime 驱动（regime_carrier_enabled=true）优先, 否则 5.4 静态优先级 ──
+    resolved_carrier = _sector.resolve_carrier(fund_code, s_cfg)
+    carrier = resolved_carrier if resolved_carrier else _carrier_active(fund_code)
+    carrier_mode = carrier.get("mode") if carrier else None
+    is_regime_carrier = bool(carrier.get("reason")) if carrier else False
+
+    # ── 静态载体（broad / fixed_combo）直接构建腿 ──
+    if carrier_mode in ("broad", "fixed_combo"):
+        notes: List[str] = [f"载体={carrier_mode}（{carrier['reason']}）"] if is_regime_carrier else []
+        if carrier_mode == "broad":
+            key = "carrier:broad" if not is_regime_carrier else "index"
+            notes += _carrier_switch_note(fund_code, as_of, "broad", carrier.get("reason", "")) if is_regime_carrier else []
+            return [(key, etf_code, daily_amount)], notes, ""
         legs = []
         for c in carrier.get("codes", []):
             code = c.get("code", "")
@@ -483,11 +503,17 @@ def _build_buy_legs(
             if amount <= 0:
                 continue
             legs.append((f"carrier:{code}", _normalize_carrier_etf_code(code), amount))
-        return legs, [], ""
+        if not legs:
+            return [("index", etf_code, daily_amount)], notes + ["fixed_combo 无有效标的, 回退宽基"], ""
+        notes += _carrier_switch_note(fund_code, as_of, "fixed_combo", carrier.get("reason", "")) if is_regime_carrier else []
+        return legs, notes, ""
+
+    # ── 动态选筹（guide_only + 板块拆分启用; regime 载体 sector_selection 或 5.4 回退路径）──
     if CHINA_INDICES.get(fund_code, {}).get("guide_only") and s_cfg.get("enabled"):
         regime_mode, regime_reason = _sector.resolve_regime_mode(s_cfg)
         if regime_mode == "bh":
-            return [("index", etf_code, daily_amount)], [f"regime=bh 宽基躺平（{regime_reason}）"], ""
+            notes = [f"regime=bh 宽基躺平（{regime_reason}）"]
+            return [("index", etf_code, daily_amount)], notes, ""
         holdings: List[str] = []
         if s_cfg.get("hold_until_exit"):
             holdings = [
@@ -496,20 +522,35 @@ def _build_buy_legs(
             ]
         selection = _sector.select_sectors(as_of=as_of, holdings=holdings, mode=regime_mode)
         selected = selection.get("selected", [])
-        notes: List[str] = []
-        if regime_mode:
-            notes.append(f"regime={regime_mode}（{regime_reason}）")
+        notes: List[str] = [f"regime={regime_mode}（{regime_reason}）"]
         if selected:
             if _sector_fallback_state.pop(fund_code, None):
                 notes.append("板块信号恢复, 切回板块选筹")
             if selection.get("empty_reason"):
                 notes.append(selection["empty_reason"])
+            notes += _carrier_switch_note(fund_code, as_of, "sector_selection", regime_reason)
             legs = [(s["sector"], s["etf_code"], daily_amount * s["weight"]) for s in selected]
             return legs, notes, ""
         if s_cfg.get("fallback_broad"):
             _sector_fallback_state[fund_code] = as_of
             reason = selection.get("empty_reason", "无信号")
-            notes.append(f"选筹失败回退宽基（{reason}）")
+            notes.append(f"选筹失败回退（{reason}）")
+            # 三级回退链: 第一级 fixed_combo 高弹性组合 → 第二级 宽基本身
+            combo = s_cfg.get("dca_carriers", {}).get(fund_code, {})
+            if combo.get("mode") == "fixed_combo" and combo.get("codes"):
+                legs = []
+                for c in combo["codes"]:
+                    code = c.get("code", "")
+                    weight = float(c.get("weight", 0.0) or 0.0)
+                    amount = daily_amount * weight
+                    if amount <= 0:
+                        continue
+                    legs.append((f"carrier:{code}", _normalize_carrier_etf_code(code), amount))
+                if legs:
+                    notes.append("回退层级1: fixed_combo 高弹性组合")
+                    return legs, notes, ""
+                notes.append("fixed_combo 无有效标的, 继续回退")
+            notes.append("回退层级2: 宽基")
             return [("index", etf_code, daily_amount)], notes, ""
         return [], [], selection.get("empty_reason", "无信号")
     semi_by_code = {i["fund_code"]: i for i in indices if i.get("tier") == "semi_boost"}
