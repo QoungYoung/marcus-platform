@@ -2279,8 +2279,10 @@ const DEFAULT_DEEPSEEK_HOST = 'api.deepseek.com';
  * 不返回 Access-Control-Allow-Origin），因此聊天与模型列表统一走后端
  * /api/v1/proxy 转发；上游地址由后端 DEEPSEEK_API_HOST 决定，并补
  * User-Agent 绕过 Cloudflare。host 仅用于展示名称。
+ * 必须带 location.origin：pi-ai 的 OpenAI SDK 用 new URL(baseUrl) 构造
+ * 请求，相对路径会抛 "Failed to construct 'URL': Invalid URL"。
  */
-const PROXY_BASE = '/api/v1/proxy';
+const PROXY_BASE = `${window.location.origin}/api/v1/proxy`;
 
 /** 基于代理地址构建聊天模型对象（覆盖 pi-ai 静态注册表中的 baseUrl） */
 function buildChatModel(modelId: string, _host: string) {
