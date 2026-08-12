@@ -247,6 +247,13 @@ const INDEX_COLORS = ['#2f7cd3', '#e5484d', '#c98a12', '#27a06b', '#7c5cd6', '#0
 // 板块级指数（防御轮动 + 半导体增强），展示在宽基指数状态下方
 const SECTOR_TIERS = new Set(['defense_rotation', 'semi_boost']);
 
+// 徽章底色加深版，保证 10px 白字满足 AA 对比度（>=4.5:1）
+const BADGE_COLORS: Record<string, string> = {
+  normal: '#1d7a4e',
+  warning: '#8a650b',
+  golden_pit: '#c23a3f',
+};
+
 
 const GLOBAL_TREND_LABELS: Record<string, string> = {
   bullish: '看涨',
@@ -515,6 +522,13 @@ function CapitalFlowPanel({ macro }: { macro: GlobalMacro }) {
   if (!cf || !cf.markets) return null;
   const gateOpen = macro.liquidity_gate === 'open';
   const trendLabel = GLOBAL_TREND_LABELS[macro.global_trend] || macro.global_trend;
+  const flowMaxAbs = Math.max(
+    1,
+    ...MARKET_ORDER.map((key) => {
+      const m = cf.markets[key];
+      return m ? Math.abs(m.cumulative_pp) : 0;
+    })
+  );
 
   return (
     <section className="gp-panel gp-flow">
@@ -531,7 +545,7 @@ function CapitalFlowPanel({ macro }: { macro: GlobalMacro }) {
           const isInflow = m.direction === 'inflow';
           const ppAbs = Math.abs(m.cumulative_pp);
           const ppColor = isInflow ? '#27a06b' : '#e5484d';
-          const barWidth = Math.min(100, Math.max(8, ppAbs * 10));
+          const barWidth = Math.max(8, Math.round((ppAbs / flowMaxAbs) * 100));
           return (
             <div key={key} className="gp-flow-market-chip">
               <span className="gp-flow-market-name">{m.name}</span>
@@ -571,6 +585,7 @@ function IndexStatusCard({ idx, displayConfig, tierLabel }: { idx: IndexStatus; 
     : '';
   const isDivergent = idx.turning_validation === 'divergent';
   const isGlobalExit = idx.exit_reason?.startsWith('全球');
+  const badgeColor = BADGE_COLORS[idx.status] || color;
 
   return (
     <div className={`gp-index-card ${idx.status}`}>
@@ -585,7 +600,7 @@ function IndexStatusCard({ idx, displayConfig, tierLabel }: { idx: IndexStatus; 
             <span className="gp-index-weight" title="仓位上限">上限{weightPct}</span>
           )}
         </span>
-        <span className="gp-index-badge" style={{ background: color }}>
+        <span className="gp-index-badge" style={{ background: badgeColor }}>
           {statusLabels[idx.status]}
         </span>
       </div>
@@ -846,8 +861,8 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
                   key={ln.key}
                   y={ln.value}
                   stroke={ln.color}
-                  strokeDasharray="5 4"
-                  strokeWidth={1.2}
+                  strokeDasharray="4 4"
+                  strokeWidth={1.5}
                   label={{ value: ln.label, position: ln.pos, fontSize: 9, fill: ln.color }}
                 />
               ))
@@ -855,13 +870,13 @@ function TrendChart({ trendData, visibleCodes, onToggleCode, onToggleAll, minPit
               <>
                 {pitRef != null && (
                   <ReferenceLine
-                    y={pitRef} stroke="#e5484d" strokeDasharray="5 4" strokeWidth={1.2}
+                    y={pitRef} stroke="#e5484d" strokeDasharray="4 4" strokeWidth={1.5}
                     label={{ value: `参考线 (${pitRef.toFixed(3)})`, position: 'insideBottomRight', fontSize: 9, fill: '#e5484d' }}
                   />
                 )}
                 {entryRef != null && (
                   <ReferenceLine
-                    y={entryRef} stroke="#c98a12" strokeDasharray="5 4" strokeWidth={1}
+                    y={entryRef} stroke="#c98a12" strokeDasharray="4 4" strokeWidth={1.5}
                     label={{ value: `参考线 (${entryRef.toFixed(3)})`, position: 'insideTopLeft', fontSize: 9, fill: '#c98a12' }}
                   />
                 )}
@@ -1113,6 +1128,13 @@ export default function GoldenPitPage() {
   const [configSaving, setConfigSaving] = useState(false);
   const [configMsg, setConfigMsg] = useState<string | null>(null);
   const [techStatus, setTechStatus] = useState<TechStatus | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const statusRef = useRef<GoldenPitStatus | null>(null);
+  const configTriggerRef = useRef<HTMLButtonElement>(null);
+  const configModalRef = useRef<HTMLDivElement>(null);
+  const configCloseRef = useRef<HTMLButtonElement>(null);
+  const configSavingRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useGoldenPitBackground(canvasRef);
 
@@ -1120,20 +1142,26 @@ export default function GoldenPitPage() {
 
   const fetchData = useCallback(async (days?: number) => {
     const d = days ?? historyDays;
-    setLoading(true);
+    const hadStatus = !!statusRef.current;
+    if (hadStatus) setRefreshing(true);
+    else setLoading(true);
     setError(null);
+    setRefreshError(null);
     try {
-      const [statusRes, historyRes, techRes, sectorCfgRes] = await Promise.all([
+      const [statusRes, historyRes, techRes, sectorCfgRes] = await Promise.allSettled([
         goldenPitApi.getStatus(),
         goldenPitApi.getHistory('all', d),
         goldenPitApi.getTechStatus(),
         goldenPitApi.getSectorConfig(),
       ]);
-      let sectorCodes: string[] = [];
-      if (statusRes.data?.code === 0) {
-        const s = statusRes.data.data as GoldenPitStatus;
+      const failures: string[] = [];
+      let statusFailed = false;
+      let statusMsg = '获取数据失败';
+      if (statusRes.status === 'fulfilled' && statusRes.value.data?.code === 0) {
+        const s = statusRes.value.data.data as GoldenPitStatus;
         setStatus(s);
-        sectorCodes = (s?.indices ?? []).filter((i) => SECTOR_TIERS.has(i.tier ?? '')).map((i) => i.fund_code);
+        statusRef.current = s;
+        const sectorCodes = (s?.indices ?? []).filter((i) => SECTOR_TIERS.has(i.tier ?? '')).map((i) => i.fund_code);
         // Initialize share visible codes from share_history on first load
         const sh = s?.global_macro?.capital_flow?.share_history;
         if (sh && sh.length > 0) {
@@ -1145,29 +1173,50 @@ export default function GoldenPitPage() {
             return prev;
           });
         }
-      } else {
-        setError(statusRes.data?.msg || '获取数据失败');
-      }
-      if (techRes.data?.code === 0 && techRes.data?.data) {
-        setTechStatus(techRes.data.data as TechStatus);
-      }
-      if (sectorCfgRes.data?.code === 0 && Array.isArray(sectorCfgRes.data?.data)) {
-        setConfigItems(sectorCfgRes.data.data as SectorConfigItem[]);
-      }
-      if (historyRes.data?.code === 0) {
-        const td = historyRes.data.data;
-        setTrendData(td);
-        if (td?.series) {
-          const sectorSet = new Set(sectorCodes);
-          setVisibleCodes((prev) => prev.size === 0 ? new Set(Object.keys(td.series).filter((c) => !sectorSet.has(c))) : prev);
-          setSectorVisibleCodes((prev) => prev.size === 0 ? sectorSet : prev);
+        if (historyRes.status === 'fulfilled' && historyRes.value.data?.code === 0) {
+          const td = historyRes.value.data.data;
+          setTrendData(td);
+          if (td?.series) {
+            const sectorSet = new Set(sectorCodes);
+            setVisibleCodes((prev) => prev.size === 0 ? new Set(Object.keys(td.series).filter((c) => !sectorSet.has(c))) : prev);
+            setSectorVisibleCodes((prev) => prev.size === 0 ? sectorSet : prev);
+          }
+        } else {
+          failures.push('历史数据');
         }
+      } else {
+        statusFailed = true;
+        statusMsg = statusRes.status === 'fulfilled' ? (statusRes.value.data?.msg || '获取数据失败') : '网络请求失败';
+      }
+      if (techRes.status === 'fulfilled' && techRes.value.data?.code === 0 && techRes.value.data?.data) {
+        setTechStatus(techRes.value.data.data as TechStatus);
+      } else {
+        failures.push('技术面数据');
+      }
+      if (sectorCfgRes.status === 'fulfilled' && sectorCfgRes.value.data?.code === 0 && Array.isArray(sectorCfgRes.value.data?.data)) {
+        setConfigItems(sectorCfgRes.value.data.data as SectorConfigItem[]);
+      }
+      if (statusFailed) {
+        if (hadStatus) {
+          setRefreshError(`刷新失败，展示上次成功数据（更新于 ${statusRef.current?.as_of ?? '—'}）`);
+        } else {
+          setError(statusMsg);
+        }
+      } else if (failures.length > 0) {
+        setRefreshError(hadStatus
+          ? `数据部分更新失败：${failures.join('、')}不可用，图表保留上次数据`
+          : `数据部分不可用：${failures.join('、')}`);
       }
     } catch (e: any) {
       const msg = e?.response?.data?.msg || e?.message || '网络请求失败';
-      setError(msg);
+      if (hadStatus) {
+        setRefreshError(`刷新失败，展示上次成功数据（更新于 ${statusRef.current?.as_of ?? '—'}）`);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [historyDays]);
 
@@ -1188,8 +1237,11 @@ export default function GoldenPitPage() {
   }, []);
 
   const closeConfig = useCallback(() => {
-    if (!configSaving) setConfigOpen(false);
-  }, [configSaving]);
+    if (!configSavingRef.current) {
+      setConfigOpen(false);
+      configTriggerRef.current?.focus();
+    }
+  }, []);
 
   const onConfigItemChange = useCallback((key: string, value: string | number | boolean) => {
     setConfigItems((prev) => prev.map((it) => (it.config_key === key ? { ...it, value } : it)));
@@ -1197,6 +1249,7 @@ export default function GoldenPitPage() {
 
   const saveConfig = useCallback(async () => {
     setConfigSaving(true);
+    configSavingRef.current = true;
     setConfigMsg(null);
     try {
       const values: Record<string, string | number | boolean> = {};
@@ -1208,6 +1261,7 @@ export default function GoldenPitPage() {
       const res = await goldenPitApi.updateSectorConfig(values);
       if (res.data?.code === 0) {
         setConfigOpen(false);
+        configTriggerRef.current?.focus();
         fetchData();
       } else {
         setConfigMsg(res.data?.msg || '保存失败');
@@ -1216,8 +1270,44 @@ export default function GoldenPitPage() {
       setConfigMsg(e?.response?.data?.msg || e?.message || '保存失败');
     } finally {
       setConfigSaving(false);
+      configSavingRef.current = false;
     }
   }, [configItems, fetchData]);
+
+  // 弹窗：聚焦、Esc 关闭、Tab 圈定、背景滚动锁定
+  useEffect(() => {
+    if (!configOpen) return;
+    configCloseRef.current?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeConfig();
+      } else if (e.key === 'Tab') {
+        const modal = configModalRef.current;
+        if (!modal) return;
+        const focusables = modal.querySelectorAll<HTMLElement>(
+          'button, input, textarea, select, [href], [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [configOpen, closeConfig]);
 
   useEffect(() => {
     fetchData();
@@ -1339,6 +1429,7 @@ export default function GoldenPitPage() {
             className="gp-header-toggle"
             onClick={() => setHeaderCollapsed(!headerCollapsed)}
             title={headerCollapsed ? '展开' : '收起'}
+            aria-label={headerCollapsed ? '展开页头' : '收起页头'}
           >
             <h1 className="gp-title">黄金坑监测<span className="gp-title-en">GOLDEN PIT MONITOR</span></h1>
             {headerCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
@@ -1346,15 +1437,33 @@ export default function GoldenPitPage() {
           {!headerCollapsed && (
             <p className="gp-subtitle">宽基指数情绪三重确认底部检测 · 更新于 {as_of}</p>
           )}
+          {headerCollapsed && (
+            <span className="gp-header-asof">更新于 {as_of}</span>
+          )}
           <div className="gp-header-actions">
-            <button className="gp-refresh-btn" onClick={() => fetchData()} title="刷新数据">
-              <RefreshCw size={16} />
+            <button
+              className="gp-refresh-btn"
+              onClick={() => fetchData()}
+              title="刷新数据"
+              aria-label="刷新数据"
+              disabled={refreshing}
+            >
+              <RefreshCw size={16} className={refreshing ? 'gp-spin' : ''} />
             </button>
-            <button className="gp-config-btn" onClick={openConfig} title="板块拆分配置">
+            <button className="gp-config-btn" onClick={openConfig} title="板块拆分配置" aria-label="板块拆分配置" ref={configTriggerRef}>
               <Settings size={16} />
             </button>
           </div>
         </div>
+        {refreshError && (
+          <div className="gp-refresh-banner" role="alert">
+            <AlertTriangle size={14} />
+            <span>{refreshError}</span>
+            <button className="gp-refresh-banner-close" onClick={() => setRefreshError(null)} aria-label="关闭提示">
+              <X size={12} />
+            </button>
+          </div>
+        )}
 
         <div className="gp-layout">
           {/* ── 左侧栏：看板概览 + 三重确认 + 状态条 ── */}
@@ -1389,7 +1498,7 @@ export default function GoldenPitPage() {
               <div className="gp-panel-head">
                 <span className="gp-tick" /><h2>宽基指数状态</h2><span className="gp-en">BROAD INDEX STATUS</span>
                 <span className="gp-count">{broadIndices.length}</span>
-                <button className="gp-fold-btn" onClick={() => setBroadOpen(!broadOpen)} title={broadOpen ? '收起' : '展开'}>
+                <button className="gp-fold-btn" onClick={() => setBroadOpen(!broadOpen)} title={broadOpen ? '收起' : '展开'} aria-label={broadOpen ? '收起宽基指数状态' : '展开宽基指数状态'}>
                   {broadOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                   {broadOpen ? '收起' : '展开'}
                 </button>
@@ -1408,7 +1517,7 @@ export default function GoldenPitPage() {
                 <div className="gp-panel-head">
                   <span className="gp-tick" /><h2>板块指数状态</h2><span className="gp-en">SECTOR ROTATION</span>
                   <span className="gp-count">{sectorIndices.length}</span>
-                  <button className="gp-fold-btn" onClick={() => setSectorOpen(!sectorOpen)} title={sectorOpen ? '收起' : '展开'}>
+                  <button className="gp-fold-btn" onClick={() => setSectorOpen(!sectorOpen)} title={sectorOpen ? '收起' : '展开'} aria-label={sectorOpen ? '收起板块指数状态' : '展开板块指数状态'}>
                     {sectorOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                     {sectorOpen ? '收起' : '展开'}
                   </button>
@@ -1551,13 +1660,20 @@ export default function GoldenPitPage() {
       </div>
       {configOpen && createPortal(
         <div className="gp-config-overlay" onClick={closeConfig}>
-          <div className="gp-config-modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="gp-config-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gp-config-title"
+            ref={configModalRef}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="gp-config-head">
               <div className="gp-config-title">
-                <h3>板块拆分配置</h3>
+                <h3 id="gp-config-title">板块拆分配置</h3>
                 <p>科创50/创业板 拆分为板块 ETF 的运行时参数，保存后即时生效</p>
               </div>
-              <button className="gp-config-close" onClick={closeConfig} title="关闭">
+              <button className="gp-config-close" onClick={closeConfig} title="关闭" aria-label="关闭" ref={configCloseRef}>
                 <X size={16} />
               </button>
             </div>
@@ -1647,12 +1763,15 @@ function useGoldenPitBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
     if (!ctx) return;
 
     let w = 0, h = 0, animId = 0, time = 0;
+    let ready = false;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     function resize() {
       w = Math.max(1, window.innerWidth);
       h = Math.max(1, window.innerHeight);
       canvas!.width = w;
       canvas!.height = h;
+      if (reducedMotion && ready) drawFrame();
     }
     window.addEventListener('resize', resize);
     resize();
@@ -1675,7 +1794,7 @@ function useGoldenPitBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
       { x: 0.20, y: 0.75, r: 160, speed: 0.002, phase: 2.8 },
     ];
 
-    function draw() {
+    function drawFrame() {
       ctx!.clearRect(0, 0, w, h);
       const minDim = Math.min(w, h);
 
@@ -1728,11 +1847,20 @@ function useGoldenPitBackground(canvasRef: React.RefObject<HTMLCanvasElement | n
         }
       }
 
-      time += 0.007;
-      animId = requestAnimationFrame(draw);
     }
 
-    draw();
+    function animate() {
+      drawFrame();
+      time += 0.007;
+      animId = requestAnimationFrame(animate);
+    }
+
+    ready = true;
+    if (reducedMotion) {
+      drawFrame();
+    } else {
+      animate();
+    }
 
     return () => {
       cancelAnimationFrame(animId);
