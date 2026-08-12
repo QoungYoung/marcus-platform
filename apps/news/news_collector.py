@@ -252,7 +252,8 @@ def _ai_analyze_combined_batch(news_items: list) -> dict:
 
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {DEEPSEEK_API_KEY}'
+            'Authorization': f'Bearer {DEEPSEEK_API_KEY}',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
         }
 
         data = json.dumps(request_body).encode('utf-8')
@@ -332,7 +333,8 @@ A 股细分行业包括：{industry_str}
         
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {DEEPSEEK_API_KEY}'
+            'Authorization': f'Bearer {DEEPSEEK_API_KEY}',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
         }
         
         data = json.dumps(request_body).encode('utf-8')

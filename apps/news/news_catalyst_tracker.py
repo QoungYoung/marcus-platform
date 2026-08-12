@@ -806,7 +806,11 @@ def batch_get_stock_news_with_ai(codes: List[str]) -> Dict[str, Dict]:
             _req = _urllib.Request(
                 f'https://{_api_host}/v1/chat/completions',
                 data=_data,
-                headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {_api_key}'},
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {_api_key}',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+                },
                 method='POST'
             )
             _t0 = _time.time()
@@ -905,7 +909,11 @@ def batch_get_stock_news_with_ai(codes: List[str]) -> Dict[str, Dict]:
         req = _urllib.Request(
             f'https://{api_host}/v1/chat/completions',
             data=data,
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {api_key}',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+            },
             method='POST'
         )
         start = time_module.time()
