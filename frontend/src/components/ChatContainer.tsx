@@ -2207,7 +2207,7 @@ const buildReflectGroups = (backendSessions: any[], localSessions: SessionMeta[]
   return sorted;
 };
 
-const generateAISessionTitle = async (messages: any[], apiKey: string): Promise<string> => {
+const generateAISessionTitle = async (messages: any[], apiKey: string, host = DEFAULT_DEEPSEEK_HOST, model = 'deepseek-chat'): Promise<string> => {
   // 收集前 2 条用户消息作为上下文
   const userMessages = messages
     .filter((m: any) => m.role === 'user')
@@ -2227,14 +2227,14 @@ const generateAISessionTitle = async (messages: any[], apiKey: string): Promise<
   if (!apiKey || !userText.trim()) return fallback();
 
   try {
-    const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    const res = await fetch(`https://${host}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model,
         messages: [
           {
             role: 'system',
@@ -2271,6 +2271,56 @@ const generateSessionTitle = (messages: any[]): string => {
   const cleaned = content.replace(/\n/g, ' ').trim();
   return cleaned.length > 30 ? cleaned.slice(0, 30) + '...' : (cleaned || '新会话');
 };
+
+const DEFAULT_DEEPSEEK_HOST = 'api.deepseek.com';
+
+/** 基于代理地址构建聊天模型对象（覆盖 pi-ai 静态注册表中的 baseUrl） */
+function buildChatModel(modelId: string, host: string) {
+  const template = getModel('deepseek', 'deepseek-v4-flash') || getModel('deepseek', 'deepseek-v4-pro');
+  const known = getModel('deepseek', modelId as any);
+  return {
+    ...(known || template),
+    id: modelId,
+    name: modelId,
+    baseUrl: `https://${host}`,
+  };
+}
+
+/** 从代理地址拉取模型列表（OpenAI 兼容 /v1/models） */
+async function fetchProxyModels(host: string, apiKey: string): Promise<string[]> {
+  if (!apiKey) return [];
+  try {
+    const res = await fetch(`https://${host}/v1/models`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data?.data || []).map((m: any) => m.id).filter(Boolean);
+  } catch (e) {
+    console.log('拉取模型列表失败:', e);
+    return [];
+  }
+}
+
+/** 将代理注册为 pi-web-ui 内置自定义 Provider，使设置弹窗里也能选择代理模型 */
+async function registerProxyProvider(store: CustomProvidersStore, host: string, apiKey: string, modelIds: string[]) {
+  try {
+    const models = modelIds.map(id => ({
+      ...buildChatModel(id, host),
+      provider: 'marcus-proxy',
+    }));
+    await store.set({
+      id: 'marcus-proxy',
+      name: `Marcus 代理 (${host})`,
+      type: 'openai-completions',
+      baseUrl: `https://${host}`,
+      apiKey: apiKey || undefined,
+      models,
+    });
+  } catch (e) {
+    console.log('注册代理 Provider 失败:', e);
+  }
+}
 
 const formatSessionTime = (isoStr: string): string => {
   if (!isoStr) return '';
@@ -2451,6 +2501,8 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   const sessionsRef = useRef<SessionsStore | null>(null);
   const agentRef = useRef<Agent | null>(null);
   const apiKeyRef = useRef<string>('');
+  const proxyHostRef = useRef<string>(DEFAULT_DEEPSEEK_HOST);
+  const modelRef = useRef<string>(localStorage.getItem('marcus_chat_model') || 'deepseek-v4-flash');
   const tradeStatusRef = useRef<TradeStatus | null>(null);
   const [mode, setMode] = useState<ChatMode>((localStorage.getItem('marcus_chat_mode') || 'chat') as ChatMode);
   const modeRef = useRef<ChatMode>(mode);
@@ -2461,6 +2513,8 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   );
   const [backendReflectSessions, setBackendReflectSessions] = useState<any[]>([]);
   const [reflectLoading, setReflectLoading] = useState(false);
+  const [modelList, setModelList] = useState<string[]>([modelRef.current, 'deepseek-v4-pro']);
+  const [selectedModel, setSelectedModel] = useState<string>(modelRef.current);
 
   // Keep modeRef in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -2523,7 +2577,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
       });
       // 仅首次对话时后台异步触发 AI 标题更新
       if (isFirstExchange && messagesSnapshot.length > 0) {
-        generateAISessionTitle(messagesSnapshot, apiKeyRef.current)
+        generateAISessionTitle(messagesSnapshot, apiKeyRef.current, proxyHostRef.current, modelRef.current)
           .then(aiTitle => {
             if (aiTitle && aiTitle !== fallbackTitle) {
               sessionsRef.current?.saveSession(currentSid, stateForSave, undefined, aiTitle).catch(() => {});
@@ -2839,6 +2893,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
       refreshSessionList();
 
       let apiKey = '';
+      let proxyHost = DEFAULT_DEEPSEEK_HOST;
       if (configRes?.ok) {
         try {
           const config = await configRes.json();
@@ -2848,15 +2903,40 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
             // 不 await，异步写 IndexedDB
             providerKeys.set('deepseek', apiKey).catch(() => {});
           }
+          if (config.deepseek_api_host) proxyHost = config.deepseek_api_host;
+          proxyHostRef.current = proxyHost;
+          // 后端默认模型仅在用户未手动选择过时生效
+          if (config.deepseek_model && !localStorage.getItem('marcus_chat_model')) {
+            modelRef.current = config.deepseek_model;
+            setSelectedModel(config.deepseek_model);
+          }
         } catch (e) {
           console.log('Parse config error:', e);
         }
       }
 
+      // 从代理地址拉取模型列表（异步，失败则用静态兜底）
+      fetchProxyModels(proxyHost, apiKey).then(async ids => {
+        if (!ids.length) return;
+        setModelList(ids);
+        let nextModel = modelRef.current;
+        if (!ids.includes(nextModel)) {
+          nextModel = ids[0];
+          modelRef.current = nextModel;
+          setSelectedModel(nextModel);
+          localStorage.setItem('marcus_chat_model', nextModel);
+        }
+        if (agentRef.current) {
+          agentRef.current.state.model = buildChatModel(nextModel, proxyHostRef.current);
+        }
+        // 注册为内置自定义 Provider，设置弹窗里也能选代理模型
+        await registerProxyProvider(customProviders, proxyHost, apiKey, ids);
+      });
+
       const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
       setAppStorage(storage);
 
-      const model = getModel('deepseek', 'deepseek-v4-flash');
+      const model = buildChatModel(modelRef.current, proxyHostRef.current);
 
       const agent = new Agent({
         initialState: {
@@ -3064,7 +3144,7 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
                 // 仅首次对话时异步调用 AI 生成更精准的标题
                 if (isFirstExchange && messagesSnapshot.length > 0) {
                   try {
-                    const aiTitle = await generateAISessionTitle(messagesSnapshot, apiKeyRef.current);
+                    const aiTitle = await generateAISessionTitle(messagesSnapshot, apiKeyRef.current, proxyHostRef.current, modelRef.current);
                     if (aiTitle && aiTitle !== fallbackTitle) {
                       sessionsRef.current!.saveSession(sid, stateForSave, undefined, aiTitle).catch(() => {});
                       updateSessionMeta(sid, { title: aiTitle });
@@ -3299,6 +3379,17 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
   const handleTabSwitch = useCallback((tab: 'chat' | 'group_chat') => {
     setTabView(tab);
     localStorage.setItem('marcus_chat_mode', tab === 'group_chat' ? 'reflect' : 'chat');
+  }, []);
+
+  // 切换聊天模型（模型列表来自代理地址）
+  const handleModelChange = useCallback((modelId: string) => {
+    setSelectedModel(modelId);
+    modelRef.current = modelId;
+    localStorage.setItem('marcus_chat_model', modelId);
+    if (agentRef.current) {
+      agentRef.current.state.model = buildChatModel(modelId, proxyHostRef.current);
+      console.log(`[模型] 切换为: ${modelId}`);
+    }
   }, []);
 
   // Switch to a reflect session (backend or IndexedDB)
@@ -3674,6 +3765,29 @@ export default function ChatContainer({ onStockSelect }: { onStockSelect?: (stoc
           </div>
           {/* Mode Toggle + Session tools */}
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, marginLeft: '12px' }}>
+            {/* 模型选择（来自代理地址模型列表） */}
+            {mode === 'chat' && (
+              <select
+                value={selectedModel}
+                onChange={e => handleModelChange(e.target.value)}
+                title="选择对话模型（列表来自代理地址 /v1/models）"
+                style={{
+                  ...toolBtnStyle,
+                  fontSize: '11px',
+                  padding: '3px 8px',
+                  borderRadius: '12px',
+                  color: 'var(--agent-text-primary)',
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  maxWidth: '150px',
+                  cursor: 'pointer',
+                }}
+              >
+                {modelList.map(id => (
+                  <option key={id} value={id}>{id}</option>
+                ))}
+              </select>
+            )}
             {/* 模式切换按钮 */}
             <button
               onClick={() => {

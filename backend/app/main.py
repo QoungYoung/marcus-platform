@@ -288,6 +288,8 @@ async def get_config():
     """返回非敏感配置信息供前端使用"""
     return {
         "deepseek_api_key": settings.DEEPSEEK_API_KEY or None,
+        "deepseek_api_host": settings.DEEPSEEK_API_HOST or None,
+        "deepseek_model": settings.DEEPSEEK_MODEL or None,
         "xueqiu_token": settings.XUEQIU_TOKEN or None,
     }
 
