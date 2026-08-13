@@ -331,6 +331,11 @@ class _DcaRunMocks:
         self.has_exit = mock.patch.object(dca, "_has_exit_notice", return_value=False)
         self.holding_shares = mock.patch.object(dca, "_get_holding_shares", return_value=1000)
         self.sim_amount = mock.patch.object(dca, "_get_simulated_position_amount", return_value=10000.0)
+        # 行业轨在单测中禁用（生产 DB 已开启 enabled+execute，避免测试真实联网/写状态文件）
+        self.industry_track = mock.patch.object(dca, "_run_industry_track", return_value={
+            "monitor": {"as_of": "2026-08-13", "enabled": False, "industries": [], "cash_pool": {}, "notes": []},
+            "lines": [], "active": False, "dry_run": True,
+        })
 
     def __enter__(self):
         self._patches = []
@@ -339,7 +344,7 @@ class _DcaRunMocks:
         for p in (self.gp, self.trend, self.index_params, self.etf_configs, self.executed_days,
                   self.day_amount, self.window_reset, self.lump, self.already, self.legs,
                   self.buy, self.sell, self.rec, self.reentry, self.holdings, self.quote,
-                  self.has_exit, self.holding_shares, self.sim_amount):
+                  self.has_exit, self.holding_shares, self.sim_amount, self.industry_track):
             started = p.start()
             self._patches.append(p)
             if p is self.gp:

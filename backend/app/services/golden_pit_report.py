@@ -238,7 +238,7 @@ def check_threshold_crossings(service, status: Optional[Dict[str, Any]] = None) 
     return alerts
 
 
-def build_v2_summary(indices, window, confirmation, prediction) -> str:
+def build_v2_summary(indices, window, confirmation, prediction, industry_monitor=None) -> str:
     """生成 v2 自然语言解读。"""
     parts = []
 
@@ -246,14 +246,20 @@ def build_v2_summary(indices, window, confirmation, prediction) -> str:
     warning_indices = [i for i in indices if i["status"] == "warning"]
 
     # ── 全行业监测 + 资金池（industry_monitor, 默认 dry-run）──
-    ind_mon = status.get("industry_monitor")
-    if ind_mon and ind_mon.get("enabled"):
+    if industry_monitor is None:
+        try:
+            from app.services.golden_pit_industry_service import get_industry_config, industry_monitor_snapshot
+            if get_industry_config().get("enabled"):
+                industry_monitor = industry_monitor_snapshot()
+        except Exception as e:  # noqa: BLE001 - 报告附加失败不影响主报告
+            logger.warning("行业监测快照获取失败: %s", e)
+    if industry_monitor and industry_monitor.get("enabled"):
         try:
             from app.services.golden_pit_industry_service import format_monitor_text
-            txt = format_monitor_text(ind_mon)
+            txt = format_monitor_text(industry_monitor)
             if txt and txt != "（全行业监测无数据）":
-                lines.append(txt)
-                lines.append("")
+                parts.append(txt)
+                parts.append("")
         except Exception as e:  # noqa: BLE001 - 报告附加失败不影响主报告
             logger.warning("行业监测报告块生成失败: %s", e)
 
