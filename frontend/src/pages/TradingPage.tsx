@@ -215,6 +215,7 @@ export default function TradingPage() {
       setVoidTarget(null);
       setVoidReason('');
       fetchHistory();
+      fetchAccount();
     } catch (err: any) {
       showToast('error', err.response?.data?.detail || '撤回失败');
     } finally {
@@ -227,6 +228,7 @@ export default function TradingPage() {
       await tradesApi.unvoidTrade(tradeId, activeAccount);
       showToast('success', `交易 #${tradeId} 已恢复`);
       fetchHistory();
+      fetchAccount();
     } catch (err: any) {
       showToast('error', err.response?.data?.detail || '恢复失败');
     }

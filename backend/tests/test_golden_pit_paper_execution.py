@@ -526,5 +526,95 @@ class TestGoldenPitRealOrders(_PGTestCase):
         self.assertEqual(gp_trades, 1)
 
 
+class TestVoidTradeCashRefund(_PGTestCase):
+    """5.3 撤回/恢复成交的资金反向结算：撤回买入退钱、恢复买入扣款（防止资金被吞）。"""
+
+    def _buy_via_executor(self, executor, symbol="SH510300", price=2.0, volume=500):
+        from app.database import SessionLocal
+        from app.models.paper_trade import PaperTrade
+
+        result = executor.buy(symbol=symbol, price=price, volume=volume, reason="void-test")
+        self.assertEqual(result.get("status"), "executed", result)
+        db = SessionLocal()
+        try:
+            trade = (
+                db.query(PaperTrade)
+                .filter(PaperTrade.account_id == "golden_pit",
+                        PaperTrade.orderid == result["order_id"])
+                .first()
+            )
+        finally:
+            db.close()
+        self.assertIsNotNone(trade)
+        return trade.id
+
+    def _cash(self):
+        return self._cash_executor().get_account()["available_cash"]
+
+    @staticmethod
+    def _cash_executor():
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        return MarcusVNPyExecutor(account_id="golden_pit")
+
+    def test_void_buy_refunds_cash_and_unvoid_deducts(self):
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+
+        executor = MarcusVNPyExecutor(account_id="golden_pit")
+        cash_before = executor.get_account()["available_cash"]
+        trade_id = self._buy_via_executor(executor)
+
+        cash_after_buy = self._cash()
+        self.assertAlmostEqual(cash_before - cash_after_buy, 2.0 * 500 * 1.0005, places=2)
+
+        res = self._cash_executor()
+        r = res.void_trade(trade_id, "unit-test-void")
+        self.assertTrue(r["success"], r)
+        self.assertAlmostEqual(self._cash(), cash_before, places=2)
+
+        r = res.unvoid_trade(trade_id)
+        self.assertTrue(r["success"], r)
+        self.assertAlmostEqual(self._cash(), cash_after_buy, places=2)
+
+    def test_void_sell_deducts_proceeds_and_unvoid_restores(self):
+        from datetime import datetime
+        from app.core.trading.marcus_trade import MarcusVNPyExecutor
+        from app.database import SessionLocal
+        from app.models.paper_trade import PaperAccountInfo, PaperTrade
+
+        executor = MarcusVNPyExecutor(account_id="golden_pit")
+        self._buy_via_executor(executor, symbol="SH512480", price=1.0, volume=1000)
+
+        db = SessionLocal()
+        try:
+            acct = (
+                db.query(PaperAccountInfo)
+                .filter(PaperAccountInfo.account_id == "golden_pit")
+                .first()
+            )
+            proceeds = 1.2 * 1000 * (1 - 0.0015)
+            acct.available_cash = float(acct.available_cash) + proceeds
+            trade = PaperTrade(
+                orderid="GP990001", account_id="golden_pit", symbol="SH512480",
+                direction="卖出", price=1.2, volume=1000, amount=1200.0,
+                profit=199.2, created_at=datetime.now().isoformat(),
+                trade_date="2026-08-01", voided=0, reason="void-test-sell",
+            )
+            db.add(trade)
+            db.commit()
+            sell_id = trade.id
+        finally:
+            db.close()
+
+        cash_before_void = self._cash()
+        r = self._cash_executor().void_trade(sell_id, "unit-test-void-sell")
+        self.assertTrue(r["success"], r)
+        self.assertAlmostEqual(cash_before_void - self._cash(), proceeds, places=2)
+
+        r = self._cash_executor().unvoid_trade(sell_id)
+        self.assertTrue(r["success"], r)
+        self.assertAlmostEqual(self._cash(), cash_before_void, places=2)
+
+
 if __name__ == "__main__":
+
     unittest.main()

@@ -1144,8 +1144,48 @@ class MarcusVNPyExecutor:
         
         return trades[-limit:]
     
+    def _reverse_trade_cash(self, cur, direction, symbol, price, volume, is_void):
+        """撤回/恢复成交时反向结算可用资金（与 paper_engine 成交口径一致）。
+
+        - 买入成交实际消耗：price*volume*(1+买入佣金 0.05%)（A股含手续费）；
+        - 卖出成交实际回款：price*volume*(1-费率 0.15%)（佣金 0.05% + 印花税 0.1%）。
+
+        撤回（软删除）时：
+          - 买入 → 退回本金 + 买入佣金（持仓由 FIFO 重放自动剔除）；
+          - 卖出 → 扣回净回款（持仓由 FIFO 重放自动恢复）。
+        恢复（unvoid）时执行反向操作。
+
+        Returns: 调整后的 available_cash
+        """
+        from datetime import datetime as _dt
+
+        symbol = (symbol or "").upper()
+        if direction == "买入":
+            if symbol.startswith(("SH", "SZ")):
+                cash_delta = price * volume * (1 + self._BUY_COMMISSION)
+            else:
+                cash_delta = price * volume * 100 * 0.1  # 期货保证金口径
+            sign = 1 if is_void else -1  # 撤回买入 → 退款；恢复买入 → 扣款
+        else:
+            cash_delta = price * volume * (1 - self._SELL_FEE_RATE)
+            sign = -1 if is_void else 1  # 撤回卖出 → 扣回回款；恢复卖出 → 回款
+
+        cur.execute(
+            "SELECT available_cash FROM paper_account_info WHERE account_id = %s FOR UPDATE",
+            (self.account_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return 0.0
+        available = float(row[0] or 0) + sign * cash_delta
+        cur.execute(
+            "UPDATE paper_account_info SET available_cash = %s, updated_at = %s WHERE account_id = %s",
+            (available, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), self.account_id)
+        )
+        return available
+
     def void_trade(self, trade_id: int, reason: str) -> dict:
-        """撤回一笔成交（软删除，不计入持仓）"""
+        """撤回一笔成交（软删除，不计入持仓；同时反向结算资金，避免资金被吞）"""
         from datetime import datetime as _dt
 
         conn = self._get_pg_conn()
@@ -1165,18 +1205,22 @@ class MarcusVNPyExecutor:
                 "UPDATE paper_trades SET voided = 1, void_reason = %s, voided_at = %s WHERE id = %s AND account_id = %s",
                 (reason, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), trade_id, self.account_id)
             )
+            new_cash = self._reverse_trade_cash(
+                cur, row[2], row[1], float(row[3]), int(row[4]), is_void=True
+            )
             conn.commit()
             print(
-                f"[交易撤回] ✅ #{trade_id} {row[1]} {row[2]} {row[4]}股 @ {row[3]} | 原因: {reason}",
+                f"[交易撤回] ✅ #{trade_id} {row[1]} {row[2]} {row[4]}股 @ {row[3]} | 原因: {reason} | 可用资金: {new_cash:,.2f}",
                 file=sys.stderr
             )
             return {"success": True, "trade_id": trade_id, "symbol": row[1],
-                    "direction": row[2], "volume": row[4], "reason": reason}
+                    "direction": row[2], "volume": row[4], "reason": reason,
+                    "available_cash": round(new_cash, 2)}
         finally:
             conn.close()
 
     def unvoid_trade(self, trade_id: int) -> dict:
-        """恢复一笔已撤回的成交"""
+        """恢复一笔已撤回的成交（同时反向结算资金）"""
         conn = self._get_pg_conn()
         try:
             cur = conn.cursor()
@@ -1194,13 +1238,17 @@ class MarcusVNPyExecutor:
                 "UPDATE paper_trades SET voided = 0, void_reason = NULL, voided_at = NULL WHERE id = %s AND account_id = %s",
                 (trade_id, self.account_id)
             )
+            new_cash = self._reverse_trade_cash(
+                cur, row[2], row[1], float(row[3]), int(row[4]), is_void=False
+            )
             conn.commit()
             print(
-                f"[交易恢复] ✅ #{trade_id} {row[1]} {row[2]} {row[4]}股 @ {row[3]} 已恢复",
+                f"[交易恢复] ✅ #{trade_id} {row[1]} {row[2]} {row[4]}股 @ {row[3]} 已恢复 | 可用资金: {new_cash:,.2f}",
                 file=sys.stderr
             )
             return {"success": True, "trade_id": trade_id, "symbol": row[1],
-                    "direction": row[2], "volume": row[4]}
+                    "direction": row[2], "volume": row[4],
+                    "available_cash": round(new_cash, 2)}
         finally:
             conn.close()
 
