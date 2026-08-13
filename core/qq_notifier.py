@@ -13,6 +13,7 @@ import json
 import os
 import ssl
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -53,6 +54,21 @@ GATEWAY_WS_URL = f"{GATEWAY_BASE_URL}/gateway"
 # ---- Token cache ----
 _cached_token: Optional[str] = None
 _token_expires_at: float = 0
+
+# ---- msg_seq 管理 ----
+# QQ 开放平台按 (openid, msg_seq) 对消息去重，复用同一 msg_seq 会返回
+# 40054005「消息被去重，请检查请求msgseq」；因此对每个 openid 使用单调递增序列号。
+_msg_seq_map: dict = {}
+_msg_seq_lock = threading.Lock()
+
+
+def _next_msg_seq(openid: str) -> int:
+    """返回该 openid 单调递增的 msg_seq，跨进程重启后以当前时间戳续接。"""
+    with _msg_seq_lock:
+        seq = _msg_seq_map.get(openid, int(time.time()))
+        seq += 1
+        _msg_seq_map[openid] = seq
+        return seq
 
 
 def get_access_token() -> Optional[str]:
@@ -129,7 +145,7 @@ def send_c2c_message(openid: str, content: str, msg_id: str = "", event_id: str 
         # Passive reply: include msg_id or event_id for better rate limits
         if msg_id:
             body["msg_id"] = msg_id
-            body["msg_seq"] = 1
+            body["msg_seq"] = _next_msg_seq(openid)
         if event_id:
             body["event_id"] = event_id
 
@@ -351,7 +367,7 @@ class QQBotClient:
             }
             if msg_id:
                 payload["msg_id"] = msg_id
-                payload["msg_seq"] = 1
+                payload["msg_seq"] = _next_msg_seq(openid)
             if event_id:
                 payload["event_id"] = event_id
 
