@@ -106,6 +106,8 @@ def _apply_schema_patches():
     alter_patches = [
         # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
         ("golden_pit_dca_log", "strategy", "VARCHAR(50)"),
+        # 2026-08-13: 全行业轨 DCA 日志 fund_code=industry/<id> 超 VARCHAR(10)
+        ("golden_pit_dca_log", "fund_code", "VARCHAR(30)"),
         # 2026-08: 板块配置值改为 TEXT，容纳 dca_carrier JSON（fixed_combo 双标的大于 100 字符）
         ("golden_pit_sector_config", "config_value", "TEXT"),
     ]

@@ -55,6 +55,7 @@ DEFENSE_CODES = ["515080", "512800", "518880", "511010", "512400"]
 # 统一进出场参数（design.md D6: 不做行业个性化，差异仅通过 priority 表达）
 INDUSTRY_DEFAULTS: Dict[str, Any] = {
     "enabled": False,
+    "execute": False,          # true 且 enabled: 行业轨真实下单（模拟盘灰度期）；false: 仅 dry-run 计划
     "cash_min_pct": 0.20,
     "pit_pct": 0.15,          # 250 日贪婪分位阈值
     "drawdown_pct": 0.20,     # 60 日高点回撤阈值
@@ -93,6 +94,7 @@ def get_industry_config() -> Dict[str, Any]:
         from app.services.golden_pit_sector_service import get_sector_config as _sc
         sc = _sc()
         cfg["enabled"] = bool(sc.get("industry_pool_enabled", cfg["enabled"]))
+        cfg["execute"] = bool(sc.get("industry_execute", cfg["execute"]))
         for k in ("cash_min_pct", "pit_pct", "drawdown_pct", "entry_cap", "max_total_pct"):
             v = sc.get(f"industry_{k}") if k not in ("enabled",) else None
             if k == "cash_min_pct":
@@ -239,10 +241,14 @@ def drawdown_n(px: Dict[str, float], as_of: str, lookback: int = 60) -> float:
 
 def industry_signal(ind: Dict[str, Any], greed_map: Dict[str, float], px: Dict[str, float],
                     as_of: str, pit_pct: float, drawdown_pct: float, entry_cap: float) -> Dict[str, Any]:
-    """计算单个行业当日信号（纯函数，可单测）。"""
+    """计算单个行业当日信号（纯函数，可单测）。
+
+    贪婪值取 as_of 当日或最近可用值（arkvol 序列滞后一天）；贪婪历史<20 天仅价格触发。
+    """
     gc = ind.get("greed_code", "")
-    g = greed_map.get(as_of) if greed_map else None
-    hist = sorted(v for k, v in greed_map.items() if k <= as_of) if greed_map else []
+    items = sorted((k, v) for k, v in (greed_map or {}).items() if k <= as_of)
+    hist = [v for _, v in items]
+    g = items[-1][1] if items else None
     pct = percentile_250(hist, g) if g is not None and len(hist) >= 20 else None
     dd = drawdown_n(px, as_of)
     overheat = (pct is not None and pct > entry_cap)
@@ -297,6 +303,11 @@ def _save_state(state: Dict[str, Any]) -> None:
         logger.warning("保存行业窗口状态失败: %s", e)
 
 
+def save_industry_state(state: Dict[str, Any]) -> None:
+    """保存行业窗口状态（execute 模式成交后由调用方落盘，避免未成交先推进）。"""
+    _save_state(state)
+
+
 def _trading_days_between(px: Dict[str, float], a: str, b: str) -> int:
     days = [x for x in sorted(px) if a <= x <= b]
     return max(0, len(days) - 1)
@@ -312,6 +323,21 @@ def advance_industry_windows(as_of: str, signals: Dict[str, Dict[str, Any]], px:
     """
     if state is None:
         state = _load_state()
+    # 当日幂等: 同一天已推进过（execute 或 dry-run）则重放今日记录，不重复推进/重复下单
+    if state.get("last_as_of") == as_of:
+        today = state.get("today", {})
+        return {
+            "windows": state.get("windows", {}),
+            "plans": today.get("plans", []),
+            "allocations": today.get("allocations", []),
+            "exits": today.get("exits", []),
+            "cut_items": today.get("cut_items", []),
+            "planned_total": today.get("planned_total", 0.0),
+            "actual_total": today.get("actual_total", 0.0),
+            "notes": today.get("notes", []),
+            "state": state,
+            "replayed": True,
+        }
     windows: Dict[str, Dict[str, Any]] = state.get("windows", {})
     max_total = nav * float(cfg["max_total_pct"])
     plans: List[Dict[str, Any]] = []
@@ -415,6 +441,7 @@ def advance_industry_windows(as_of: str, signals: Dict[str, Dict[str, Any]], px:
             reason = "TP" if tp else ("SL" if sl else "TO")
             ret = (pxd - avg) / avg
             exits.append({"id": iid, "name": INDUSTRY_BY_ID.get(iid, {}).get("name", iid),
+                          "etf_code": etf, "qty": round(w.get("qty", 0.0), 4),
                           "start": w["win_start"], "end": as_of, "ret": ret,
                           "invested": w["invested"], "reason": reason, "win_day": w["win_day"]})
             w["status"] = "exited"
@@ -428,29 +455,48 @@ def advance_industry_windows(as_of: str, signals: Dict[str, Dict[str, Any]], px:
         state.setdefault("exited", []).extend(exits)
         state["exited"] = state["exited"][-200:]
     state["last_as_of"] = as_of
+    state["today"] = {
+        "as_of": as_of,
+        "plans": [dict(p) for p in plans],
+        "allocations": res.get("allocations", []),
+        "exits": exits,
+        "cut_items": res.get("cut_items", []),
+        "planned_total": res.get("total_planned", 0.0),
+        "actual_total": res.get("total_actual", 0.0),
+        "notes": notes,
+    }
     if execute is False:
         _save_state(state)
 
     return {
         "windows": {k: v for k, v in windows.items()},
         "plans": plans,
+        "allocations": res.get("allocations", []),
         "exits": exits,
-        "cut_items": res["cut_items"],
-        "planned_total": res["total_planned"],
-        "actual_total": res["total_actual"],
+        "cut_items": res.get("cut_items", []),
+        "planned_total": res.get("total_planned", 0.0),
+        "actual_total": res.get("total_actual", 0.0),
         "notes": notes,
         "state": state,
     }
 
 
-def industry_monitor_snapshot(as_of: Optional[str] = None) -> Dict[str, Any]:
-    """全行业监测快照（industries[] + cash_pool），供 status 接口与前端面板。失败返回空结构。"""
+def industry_monitor_snapshot(as_of: Optional[str] = None, advance: Optional[bool] = None) -> Dict[str, Any]:
+    """全行业监测快照（industries[] + cash_pool），供 status 接口与前端面板。失败返回空结构。
+
+    advance=None: 执行模式(industry_execute=true)下只读不推进（窗口由 DCA 任务推进），
+                  否则 dry-run 模拟推进（当日幂等，重复调用重放今日记录）。
+    advance 显式传入可覆盖。
+    """
     try:
         as_of = as_of or datetime.now().strftime("%Y-%m-%d")
-        snap_cached = _cache_get("industry_snap", 120)
+        cfg = get_industry_config()
+        execute_mode = bool(cfg.get("enabled")) and bool(cfg.get("execute"))
+        do_advance = bool(cfg.get("enabled")) and (advance if advance is not None else (not execute_mode))
+        cache_key = f"industry_snap:{do_advance}"
+        snap_cached = _cache_get(cache_key, 120)
         if snap_cached and snap_cached.get("as_of") == as_of:
             return snap_cached
-        cfg = get_industry_config()
         greed = load_industry_greed()
         px = load_industry_px()
         acct = _account_summary()
@@ -474,8 +520,23 @@ def industry_monitor_snapshot(as_of: Optional[str] = None) -> Dict[str, Any]:
                 "actual_amount": 0.0, "total_invested": 0.0,
             })
 
-        # 窗口进度与当日计划（dry-run 推进）
-        adv = advance_industry_windows(as_of, signals, px, cfg.get("pool", []), cfg, nav)
+        if do_advance:
+            # 窗口进度与当日计划（dry-run 模拟推进；当日幂等）
+            adv = advance_industry_windows(as_of, signals, px, cfg.get("pool", []), cfg, nav)
+        else:
+            # 执行模式只读视图：读取已落盘状态，今日记录由 DCA 任务写入
+            state = _load_state()
+            today = state.get("today", {}) if state.get("last_as_of") == as_of else {}
+            adv = {
+                "windows": state.get("windows", {}),
+                "plans": today.get("plans", []),
+                "allocations": today.get("allocations", []),
+                "exits": today.get("exits", []),
+                "cut_items": today.get("cut_items", []),
+                "planned_total": today.get("planned_total", 0.0),
+                "actual_total": today.get("actual_total", 0.0),
+                "notes": today.get("notes", []),
+            }
         win_by_id = {k: v for k, v in adv["windows"].items()}
         plan_by_id = {p["id"]: p for p in adv["plans"]}
         actual_by_id = {a["id"]: a["actual"] for a in adv["allocations"]} if "allocations" in adv else {}
@@ -501,11 +562,12 @@ def industry_monitor_snapshot(as_of: Optional[str] = None) -> Dict[str, Any]:
             "actual_total": round(adv["actual_total"], 2),
             "cut_items": adv["cut_items"][:10],
             "enabled": bool(cfg["enabled"]),
-            "dry_run": True,
+            "execute": execute_mode,
+            "dry_run": not execute_mode,
         }
         result = {"as_of": as_of, "enabled": bool(cfg["enabled"]), "industries": industries, "cash_pool": cash_pool,
                   "notes": adv["notes"]}
-        _cache_set("industry_snap", result)
+        _cache_set(cache_key, result)
         return result
     except Exception as e:  # noqa: BLE001
         logger.warning("全行业监测快照生成失败: %s", e)

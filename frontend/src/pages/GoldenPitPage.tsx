@@ -221,6 +221,7 @@ interface CashPoolView {
   actual_total: number;
   cut_items: CashPoolCutItem[];
   enabled?: boolean;
+  execute?: boolean;
   dry_run?: boolean;
 }
 
@@ -609,7 +610,7 @@ function IndustryMonitorPanel({ monitor }: { monitor: IndustryMonitor | null }) 
         <span className="gp-en">INDUSTRY POOL</span>
         <span className={`gp-ind-badge ${monitor.enabled ? 'on' : 'off'}`}>
           {monitor.enabled ? '已启用' : '已关闭'}
-          {monitor.cash_pool?.dry_run ? ' · dry-run' : ''}
+          {monitor.cash_pool?.dry_run ? ' · dry-run' : monitor.cash_pool?.execute ? ' · 执行中' : ''}
         </span>
         <span className="gp-count">{inPitCount}/{monitor.industries.length} 入坑</span>
         <button className="gp-fold-btn" onClick={() => setOpen(!open)} title={open ? '收起' : '展开'} aria-label={open ? '收起全行业监测' : '展开全行业监测'}>

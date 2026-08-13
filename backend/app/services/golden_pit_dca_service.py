@@ -1121,22 +1121,32 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
     as_of = status.get("as_of", "")
 
     phase = window.get("phase", "idle")
+    current_day = window.get("current_day", 0)
+    window_start = window.get("start_date", "")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # 全球宏观数据
+    global_macro = status.get("global_macro", {})
+    macro_coef = global_macro.get("global_macro_coefficient", 1.0)
+    liquidity_gate = global_macro.get("liquidity_gate", "open")
+
     if phase == "idle":
+        ind_track = _run_industry_track(as_of, today_str, gate_open=(liquidity_gate != "closed"))
+        summary = f"[{as_of}] 无黄金坑信号，跳过指数级 DCA"
+        if ind_track["lines"]:
+            summary += "\n" + "\n".join(ind_track["lines"])
         return {
             "as_of": as_of,
             "phase": "idle",
             "phase_label": "无信号",
-            "summary_text": f"[{as_of}] 无黄金坑信号，跳过 DCA 定投",
+            "summary_text": summary,
             "holdings": _get_holdings_detail(),
             "exit_signals": [],
             "buy_candidates": [],
             "skipped": [],
             "stats": {},
+            "industry_monitor": ind_track["monitor"],
         }
-
-    current_day = window.get("current_day", 0)
-    window_start = window.get("start_date", "")
-    today_str = datetime.now().strftime("%Y-%m-%d")
 
     logger.info(
         "黄金坑 DCA: phase=%s day=%d, start=%s, leading=%s(%s), pit=%d, warning=%d, turning=%d",
@@ -1145,11 +1155,6 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         window.get("pit_count", 0), window.get("warning_count", 0),
         window.get("turning_count", 0),
     )
-
-    # 全球宏观数据
-    global_macro = status.get("global_macro", {})
-    macro_coef = global_macro.get("global_macro_coefficient", 1.0)
-    liquidity_gate = global_macro.get("liquidity_gate", "open")
 
     # ── 流动性闸门硬停止 ──
     if liquidity_gate == "closed":
@@ -1160,6 +1165,9 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             f"   所有买入已跳过，等待闸门重新开启。"
         )
         logger.warning("黄金坑 DCA: 全球流动性闸门关闭，跳过所有买入")
+        ind_track = _run_industry_track(as_of, today_str, gate_open=False)
+        if ind_track["lines"]:
+            gate_msg += "\n" + "\n".join(ind_track["lines"])
         return {
             "as_of": as_of,
             "phase": phase,
@@ -1170,21 +1178,27 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             "buy_candidates": [],
             "skipped": [],
             "stats": {"liquidity_gate": "closed", "macro_coef": macro_coef},
+            "industry_monitor": ind_track["monitor"],
         }
 
     # 2. 读取 ETF 配置
     etf_configs = _get_etf_configs()
     if not etf_configs:
+        ind_track = _run_industry_track(as_of or today_str, today_str, gate_open=(liquidity_gate != "closed"))
+        summary = "无启用的黄金坑 ETF 配置"
+        if ind_track["lines"]:
+            summary += "\n" + "\n".join(ind_track["lines"])
         return {
             "as_of": as_of,
             "phase": phase,
             "phase_label": "买入窗口",
-            "summary_text": "无启用的黄金坑 ETF 配置",
+            "summary_text": summary,
             "holdings": _get_holdings_detail(),
             "exit_signals": [],
             "buy_candidates": [],
             "skipped": [],
             "stats": {},
+            "industry_monitor": ind_track["monitor"],
         }
 
     config_by_fund = {c["fund_code"]: c for c in etf_configs}
@@ -1666,6 +1680,11 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             + (f" | {'; '.join(fallback_notes)}" if fallback_notes else "")
         )
 
+    # ── 全行业轨（enabled+execute 真实下单 / 默认 dry-run 计划；闸门关闭仅监测）──
+    ind_track = _run_industry_track(as_of or today_str, today_str, gate_open=(liquidity_gate != "closed"))
+    if ind_track["lines"]:
+        results.extend(ind_track["lines"])
+
     # 4. 构建结构化结果
     skipped_drop = sum(1 for i in indices if i.get("tier") in ("drop", "watch") and i["status"] != "normal")
     turning_count = window.get("turning_count", 0)
@@ -1858,8 +1877,166 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         },
         "tips": summary_lines[-6:] if len(summary_lines) > 6 else summary_lines[3:],
         "summary_text": summary_text,
-        "industry_monitor": _build_industry_monitor(as_of or today_str),
+        "industry_monitor": ind_track["monitor"],
     }
+
+
+def _run_industry_track(as_of: str, today_str: str, gate_open: bool = True) -> Dict[str, Any]:
+    """全行业轨：dry-run 计划 / 真实下单（enabled+execute+闸门开启）+ 监测视图。
+
+    返回 {"monitor": Dict, "lines": List[str], "active": bool, "dry_run": bool}。
+    行业轨异常不影响指数级 DCA（仅记录日志并回退空结构）。
+    当日幂等：advance_industry_windows 同一天已推进则重放今日记录，不会重复下单。
+    """
+    try:
+        from app.services.golden_pit_industry_service import (
+            INDUSTRY_BY_ID, _account_summary, advance_industry_windows,
+            get_industry_config, industry_signal, load_industry_greed,
+            load_industry_px, save_industry_state,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("行业轨模块加载失败: %s", e)
+        return {"monitor": _build_industry_monitor(as_of), "lines": [], "active": False, "dry_run": True}
+
+    try:
+        cfg = get_industry_config()
+        if not cfg.get("enabled"):
+            return {"monitor": _build_industry_monitor(as_of), "lines": [], "active": False, "dry_run": True}
+
+        pool: List[Dict[str, Any]] = cfg.get("pool", [])
+        execute = bool(cfg.get("execute")) and gate_open
+        greed = load_industry_greed()
+        px = load_industry_px()
+        acct = _account_summary()
+        nav = acct.get("cash", acct.get("initial_capital", 250000.0))
+
+        signals: Dict[str, Dict[str, Any]] = {}
+        for ind in pool:
+            iid = ind["id"]
+            try:
+                signals[iid] = industry_signal(
+                    ind, greed.get(ind.get("greed_code", ""), {}),
+                    px.get(ind.get("etf_code", ""), {}), as_of,
+                    float(cfg["pit_pct"]), float(cfg["drawdown_pct"]), float(cfg["entry_cap"]),
+                )
+            except Exception:  # noqa: BLE001 - 单行业信号失败不阻断
+                signals[iid] = {"greed": None, "greed_pct": None, "drawdown": 0.0, "in_pit": False, "overheat": False}
+
+        adv = advance_industry_windows(as_of, signals, px, pool, cfg, nav, execute=execute)
+        lines: List[str] = []
+        replayed = bool(adv.get("replayed"))
+
+        if execute and not replayed:
+            # ── 买入: 资金池裁决后的实际金额（按 priority 分配）──
+            win_by_id = {k: v for k, v in adv["windows"].items()}
+            for alloc in adv.get("allocations", []):
+                iid = alloc["id"]
+                actual = float(alloc.get("actual", 0.0))
+                if actual < 1e-6:
+                    continue
+                ind = INDUSTRY_BY_ID.get(iid) or next((x for x in pool if x.get("id") == iid), None)
+                if not ind:
+                    continue
+                etf = _normalize_carrier_etf_code(str(ind.get("etf_code", "")))
+                w = win_by_id.get(iid) or {}
+                reason = f"[黄金坑行业DCA] {ind.get('name', iid)} priority={ind.get('priority', 99)}"
+                ok, order_info = _place_buy_order(etf, actual, reason)
+                _record_dca_log(
+                    fund_code=f"industry/{iid}",
+                    window_start=w.get("win_start") or today_str,
+                    buy_day=max(0, int(w.get("win_day", 1)) - 1),
+                    etf_code=etf,
+                    amount=round(actual, 2),
+                    strategy=f"industry/{iid}",
+                    order_id=order_info if ok else "",
+                    status="filled" if ok else "failed",
+                    schedule_day=0, trend_factor=0.0,
+                )
+                if ok:
+                    lines.append(f"🏭 {ind.get('name', iid)} {etf}: 行业定投 ¥{actual:.0f} (order: {order_info})")
+                else:
+                    # 买入失败: 回滚该窗口 invested 并滚入 leftover，避免资金虚计
+                    if w:
+                        w["invested"] = max(0.0, float(w.get("invested", 0.0)) - actual)
+                        w["leftover"] = float(w.get("leftover", 0.0)) + actual
+                    lines.append(f"❌ {ind.get('name', iid)} {etf}: 买入未成交 ({order_info})，额度滚动次日")
+
+            # ── 卖出: 出场窗口全仓 ──
+            for ex in adv.get("exits", []):
+                iid = ex["id"]
+                etf = _normalize_carrier_etf_code(str(ex.get("etf_code", "")))
+                qty = float(ex.get("qty", 0.0) or 0.0)
+                shares = int(qty / 100) * 100
+                ind_name = ex.get("name", iid)
+                reason = f"[黄金坑行业DCA出场] {ind_name} {ex.get('reason', '')}"
+                if shares < 100:
+                    lines.append(f"⚠️ {ind_name} 出场[{ex.get('reason')}] 份额不足100股({qty:.0f}股), 跳过卖单")
+                    continue
+                ok, order_info = _place_sell_order(etf, shares, reason)
+                _record_dca_log(
+                    fund_code=f"industry/{iid}",
+                    window_start=ex.get("start") or today_str,
+                    buy_day=max(0, int(ex.get("win_day", 0))),
+                    etf_code=etf,
+                    amount=round(float(ex.get("invested", 0.0)), 2),
+                    strategy=f"exit/industry/{ex.get('reason', 'exit')}",
+                    order_id=order_info if ok else "",
+                    status="filled" if ok else "failed",
+                    schedule_day=0, trend_factor=0.0,
+                )
+                if ok:
+                    lines.append(f"🏁 {ind_name} {etf}: 出场[{ex.get('reason')}] 收益{float(ex.get('ret', 0)) * 100:+.2f}% 卖出{shares}股 (order: {order_info})")
+                else:
+                    lines.append(f"❌ {ind_name} 出场卖出未成交 ({order_info})")
+
+            save_industry_state(adv["state"])
+        elif not execute:
+            lines.extend(adv.get("notes", [])[-5:])
+            if adv.get("cut_items"):
+                lines.append(f"⏳ 资金池裁剪: {len(adv['cut_items'])}项 现金不足滚动次日")
+
+        # ── 监测视图（与快照同构）──
+        win_by_id = {k: v for k, v in adv["windows"].items()}
+        plan_by_id = {p["id"]: p for p in adv.get("plans", [])}
+        actual_by_id = {a["id"]: a["actual"] for a in adv.get("allocations", [])} if "allocations" in adv else {}
+        industries_view: List[Dict[str, Any]] = []
+        for ind in pool:
+            iid = ind["id"]
+            sig = signals.get(iid, {})
+            w = win_by_id.get(iid)
+            p = plan_by_id.get(iid)
+            industries_view.append({
+                "id": iid, "name": ind.get("name"), "greed_code": ind.get("greed_code"),
+                "etf_code": ind.get("etf_code"), "priority": ind.get("priority", 99),
+                "close": px.get(ind.get("etf_code", ""), {}).get(as_of),
+                "greed": sig.get("greed"), "greed_pct": sig.get("greed_pct"),
+                "drawdown": round(float(sig.get("drawdown", 0.0)), 4),
+                "in_pit": bool(sig.get("in_pit")), "overheat": bool(sig.get("overheat")),
+                "window_day": (w or {}).get("win_day", 0),
+                "planned_amount": round(float((p or {}).get("amount", 0.0)), 2),
+                "actual_amount": round(float(actual_by_id.get(iid, 0.0)), 2),
+                "total_invested": round(float((w or {}).get("invested", 0.0)), 2),
+            })
+        cash_floor = nav * float(cfg["cash_min_pct"])
+        cash_pool = {
+            "total_nav": round(nav, 2),
+            "cash": round(acct.get("cash", nav), 2),
+            "cash_min_pct": float(cfg["cash_min_pct"]),
+            "cash_floor": round(cash_floor, 2),
+            "available_cash": round(max(0.0, nav - cash_floor), 2),
+            "planned_total": round(float(adv.get("planned_total", 0.0)), 2),
+            "actual_total": round(float(adv.get("actual_total", 0.0)), 2),
+            "cut_items": adv.get("cut_items", [])[:10],
+            "enabled": True,
+            "execute": execute,
+            "dry_run": not execute,
+        }
+        monitor = {"as_of": as_of, "enabled": True, "industries": industries_view,
+                   "cash_pool": cash_pool, "notes": adv.get("notes", [])}
+        return {"monitor": monitor, "lines": lines, "active": True, "dry_run": not execute}
+    except Exception as e:  # noqa: BLE001 - 行业轨失败不影响指数级 DCA
+        logger.warning("行业轨执行失败: %s", e)
+        return {"monitor": _build_industry_monitor(as_of), "lines": [], "active": False, "dry_run": True}
 
 
 def _build_industry_monitor(as_of: str) -> Dict[str, Any]:

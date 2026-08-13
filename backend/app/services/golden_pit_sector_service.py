@@ -215,6 +215,11 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "description": "JSON 行业清单 [{\"id\",\"name\",\"greed_code\",\"etf_code\",\"priority\",\"max_total_pct\",\"min_days_in_pit\"}]；缺省回退内置 24 行业",
         "value_type": "json", "sort_order": 31, "default": "[]",
     },
+    "industry_execute": {
+        "label": "行业轨真实下单",
+        "description": "true 且 industry_pool_enabled=true: 行业 DCA 按资金池裁决真实下单（模拟盘）；false: 仅 dry-run 计划/展示",
+        "value_type": "bool", "sort_order": 36, "default": False,
+    },
     "cash_min_pct": {
         "label": "行业池现金下限",
         "description": "资金池保留现金占净值比例（0~1），高于此才分配行业定投",

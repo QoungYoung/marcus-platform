@@ -11,7 +11,7 @@ class GoldenPitDCALog(Base):
     __tablename__ = "golden_pit_dca_log"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    fund_code = Column(String(10), nullable=False, index=True, comment="宽基指数代码")
+    fund_code = Column(String(30), nullable=False, index=True, comment="宽基指数代码 / industry/<id>")
     window_start = Column(String(10), nullable=False, index=True, comment="黄金坑窗口起始日期")
     buy_day = Column(Integer, nullable=False, comment="窗口第几天买入")
     etf_code = Column(String(10), nullable=False, comment="ETF 交易代码")

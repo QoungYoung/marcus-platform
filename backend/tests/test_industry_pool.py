@@ -21,6 +21,17 @@ class TestIndustrySignal(unittest.TestCase):
         sig = industry_signal(ind, greed, px, "2026-01-06", 0.15, 0.20, 0.85)
         self.assertFalse(sig["in_pit"])
 
+    def test_greed_lag_uses_latest_available(self):
+        """arkvol 序列滞后一天: as_of 无当日贪婪时取最近可用值，不退化纯价格触发。"""
+        ind = INDUSTRY_POOL[0]
+        greed = {f"2025-12-{d:02d}": 0.1 for d in range(1, 26)}
+        greed["2026-01-05"] = 0.05  # 最近可用（序列滞后）
+        px = {"2025-11-01": 1.0, "2026-01-06": 0.75}  # 回撤 -25%
+        sig = industry_signal(ind, greed, px, "2026-01-06", 0.15, 0.20, 0.85)
+        self.assertEqual(sig["greed"], 0.05)
+        self.assertIsNotNone(sig["greed_pct"])
+        self.assertTrue(sig["in_pit"])
+
     def test_price_only_when_greed_history_short(self):
         ind = INDUSTRY_POOL[0]
         greed = {}  # 无贪婪历史 -> 仅价格触发
@@ -120,11 +131,57 @@ class TestWindowAdvance(unittest.TestCase):
         r = None
         for d in dates:
             r = advance_industry_windows(d, sig(d), px, pool, cfg, 250000.0, state)
-        # 窗口完成(win_day>=3)后价格翻倍 -> TP
-        px[etf]["2026-01-08"] = 2.0
-        r = advance_industry_windows("2026-01-08", sig("2026-01-08"), px, pool, cfg, 250000.0, state)
+        # 窗口完成(win_day>=3)后，新一天价格翻倍 -> TP（当日幂等: 同日不再重算）
+        px[etf]["2026-01-09"] = 2.0
+        r = advance_industry_windows("2026-01-09", sig("2026-01-09"), px, pool, cfg, 250000.0, state)
         self.assertEqual(len(r["exits"]), 1)
         self.assertEqual(r["exits"][0]["reason"], "TP")
+
+    def test_daily_idempotent_replay(self):
+        """同一天重复推进 -> 重放今日记录，不重复投资/不推进窗口。"""
+        cfg = dict(max_total_pct=0.12, cash_min_pct=0.20, pit_pct=0.15, drawdown_pct=0.20,
+                   entry_cap=0.85, min_days=1, win_days=15, tp_pct=0.15,
+                   time_exit_days=60, stop_loss=0.10)
+        pool = [INDUSTRY_POOL[0]]
+        iid = pool[0]["id"]
+        etf = pool[0]["etf_code"]
+        px = {etf: {"2026-01-05": 1.0, "2026-01-06": 1.0}}
+        state = {"windows": {}, "exited": [], "last_as_of": None}
+
+        def sig(day):
+            return {iid: {"in_pit": True, "greed_pct": 0.1, "drawdown": -0.3}}
+
+        advance_industry_windows("2026-01-05", sig("2026-01-05"), px, pool, cfg, 250000.0, state)
+        r2 = advance_industry_windows("2026-01-05", sig("2026-01-05"), px, pool, cfg, 250000.0, state)
+        self.assertTrue(r2.get("replayed"))
+        w = state["windows"][iid]
+        self.assertEqual(w["invested"], 6000.0)  # 未重复投资
+        self.assertEqual(w["win_day"], 1)
+        self.assertEqual(state["last_as_of"], "2026-01-05")
+
+    def test_execute_advances_and_exit_carries_qty(self):
+        """execute=True: 推进并返回可下单指令（出场含 etf_code/qty），状态由调用方落盘。"""
+        cfg = dict(max_total_pct=0.12, cash_min_pct=0.20, pit_pct=0.15, drawdown_pct=0.20,
+                   entry_cap=0.85, min_days=1, win_days=2, tp_pct=0.15,
+                   time_exit_days=60, stop_loss=0.10)
+        pool = [INDUSTRY_POOL[0]]
+        iid = pool[0]["id"]
+        etf = pool[0]["etf_code"]
+        dates = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        px = {etf: {d: 1.0 for d in dates}}
+        state = {"windows": {}, "exited": [], "last_as_of": None}
+
+        def sig(day):
+            return {iid: {"in_pit": True, "greed_pct": 0.1, "drawdown": -0.3}}
+
+        for d in dates:
+            advance_industry_windows(d, sig(d), px, pool, cfg, 250000.0, state, execute=True)
+        px[etf]["2026-01-08"] = 2.0
+        r = advance_industry_windows("2026-01-08", sig("2026-01-08"), px, pool, cfg, 250000.0, state, execute=True)
+        self.assertEqual(len(r["exits"]), 1)
+        self.assertEqual(r["exits"][0]["etf_code"], etf)
+        self.assertGreater(r["exits"][0]["qty"], 0)
+        self.assertFalse(r.get("replayed"))
 
 
 if __name__ == "__main__":
