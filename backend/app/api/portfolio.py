@@ -117,17 +117,20 @@ def get_realtime_prices(symbols: list) -> dict:
     return _stock_price_cache
 
 
-def calculate_positions_from_db():
+def calculate_positions_from_db(account: str = "stock"):
     """Calculate current positions from PostgreSQL paper_trades using FIFO replay.
 
     available_cash 直接从 paper_account_info 读取（PostgreSQL FOR UPDATE 行锁保证一致性）。
+
+    Args:
+        account: 账户标识（默认 stock）
 
     Returns:
         (position_list, account, realized_pnl, win_rate)
     """
     db = SessionLocal()
     try:
-        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         if not acct:
             return [], {"available_cash": 0, "initial_capital": 1000000, "frozen_cash": 0}, 0, 0
 
@@ -136,6 +139,7 @@ def calculate_positions_from_db():
         frozen_cash = float(acct.frozen_cash or 0)
 
         trades = db.query(PaperTrade).filter(
+            PaperTrade.account_id == account,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         ).order_by(
             func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),
@@ -144,16 +148,19 @@ def calculate_positions_from_db():
 
         realized_pnl = float(
             db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                PaperTrade.account_id == account,
                 PaperTrade.direction == '卖出',
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None)
             ).scalar() or 0
         )
 
         total_sells = db.query(func.count()).filter(
+            PaperTrade.account_id == account,
             PaperTrade.direction == '卖出',
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         ).scalar() or 0
         wins = db.query(func.count()).filter(
+            PaperTrade.account_id == account,
             PaperTrade.direction == '卖出',
             PaperTrade.profit > 0,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
@@ -297,7 +304,7 @@ def _get_tushare_close_prices(symbols: list, trade_date: str) -> dict:
     return result
 
 
-def save_daily_snapshot(target_date: str = None) -> dict:
+def save_daily_snapshot(target_date: str = None, account: str = "stock") -> dict:
     """Compute and persist a daily portfolio snapshot to PostgreSQL paper_daily_snapshot.
 
     Uses FIFO trade replay to determine positions up to target_date,
@@ -310,13 +317,14 @@ def save_daily_snapshot(target_date: str = None) -> dict:
 
     db = SessionLocal()
     try:
-        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         if not acct:
             return {'success': False, 'error': 'No account_info found'}
         initial_cap = float(acct.initial_capital)
         frozen_cash = float(acct.frozen_cash or 0)
 
         trades = db.query(PaperTrade).filter(
+            PaperTrade.account_id == account,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None),
             (PaperTrade.trade_date <= target_date) |
             ((PaperTrade.trade_date == None) & (func.substr(PaperTrade.created_at, 1, 10) <= target_date))
@@ -327,6 +335,7 @@ def save_daily_snapshot(target_date: str = None) -> dict:
 
         realized_pnl = float(
             db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                PaperTrade.account_id == account,
                 PaperTrade.direction == '卖出',
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None),
                 (PaperTrade.trade_date <= target_date) |
@@ -336,6 +345,7 @@ def save_daily_snapshot(target_date: str = None) -> dict:
 
         capital_adjustments = float(
             db.query(func.coalesce(func.sum(PaperCapitalAdjustment.amount), 0)).filter(
+                PaperCapitalAdjustment.account_id == account,
                 func.substr(PaperCapitalAdjustment.created_at, 1, 10) <= target_date
             ).scalar() or 0
         )
@@ -431,7 +441,10 @@ def save_daily_snapshot(target_date: str = None) -> dict:
     # ── Upsert into PostgreSQL ──
     db = SessionLocal()
     try:
-        snap = db.query(PaperDailySnapshot).filter(PaperDailySnapshot.trade_date == target_date).first()
+        snap = db.query(PaperDailySnapshot).filter(
+            PaperDailySnapshot.account_id == account,
+            PaperDailySnapshot.trade_date == target_date,
+        ).first()
         if snap:
             snap.total_asset = total_asset
             snap.available_cash = available_cash
@@ -445,6 +458,7 @@ def save_daily_snapshot(target_date: str = None) -> dict:
             snap.created_at = datetime.now().isoformat()
         else:
             db.add(PaperDailySnapshot(
+                account_id=account,
                 trade_date=target_date,
                 total_asset=total_asset,
                 available_cash=available_cash,
@@ -545,9 +559,9 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
 
 
 @router.get("", response_model=PortfolioSummary)
-async def get_portfolio():
+async def get_portfolio(account: str = Query("stock", description="账户标识")):
     """Get full portfolio summary."""
-    position_list, account, realized_pnl, win_rate = calculate_positions_from_db()
+    position_list, account_info, realized_pnl, win_rate = calculate_positions_from_db(account)
 
     # Fetch real-time prices from Xueqiu
     symbols = [p['symbol'] for p in position_list]
@@ -618,9 +632,9 @@ async def get_portfolio():
             days_since_high=hwm.get('days_since_high'),
         ))
 
-    available_cash = account.get('available_cash', 0)
-    initial_capital = account.get('initial_capital', 1000000)
-    total_asset = available_cash + account.get('frozen_cash', 0) + total_position_value
+    available_cash = account_info.get('available_cash', 0)
+    initial_capital = account_info.get('initial_capital', 1000000)
+    total_asset = available_cash + account_info.get('frozen_cash', 0) + total_position_value
     total_float_pnl = sum(p.floating_pnl for p in positions)
 
     # ── 本周持仓盈亏 ──
@@ -637,7 +651,7 @@ async def get_portfolio():
     account_response = AccountResponse(
         initial_capital=initial_capital,
         available_cash=available_cash,
-        frozen_cash=account.get('frozen_cash', 0),
+        frozen_cash=account_info.get('frozen_cash', 0),
         position_value=total_position_value,
         total_asset=total_asset,
         realized_pnl=realized_pnl,
@@ -662,9 +676,9 @@ async def get_portfolio():
 
 
 @router.get("/positions", response_model=list[PositionResponse])
-async def get_positions():
+async def get_positions(account: str = Query("stock", description="账户标识")):
     """Get current positions only."""
-    position_list, _ = calculate_positions_from_db()[:2]
+    position_list, _ = calculate_positions_from_db(account)[:2]
     symbols = [p['symbol'] for p in position_list]
     prices = get_realtime_prices(symbols) if symbols else {}
 
@@ -715,7 +729,7 @@ async def get_positions():
 
 
 @router.post("/unfreeze")
-async def unfreeze_funds():
+async def unfreeze_funds(account: str = Query("stock", description="账户标识")):
     """Manually unfreeze all frozen funds.
 
     Used when trading exceptions cause funds to be incorrectly frozen.
@@ -723,7 +737,7 @@ async def unfreeze_funds():
     """
     db = SessionLocal()
     try:
-        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         if not acct:
             raise HTTPException(status_code=404, detail="账户信息不存在")
 
@@ -741,11 +755,13 @@ async def unfreeze_funds():
             }
 
         stuck_count = db.query(PaperOrder).filter(
+            PaperOrder.account_id == account,
             PaperOrder.status.in_(['提交中', '未成交'])
         ).count()
 
         if stuck_count > 0:
             db.query(PaperOrder).filter(
+                PaperOrder.account_id == account,
                 PaperOrder.status.in_(['提交中', '未成交'])
             ).update(
                 {PaperOrder.status: '已撤销', PaperOrder.updated_at: datetime.now().isoformat()},
@@ -776,7 +792,7 @@ async def unfreeze_funds():
 
 
 @router.post("/adjust-capital")
-async def adjust_capital(req: CapitalAdjustRequest):
+async def adjust_capital(req: CapitalAdjustRequest, account: str = Query("stock", description="账户标识")):
     """手动调整可用资金（入金为正，出金为负），用于修正总资产。
 
     调整会记录到 paper_capital_adjustments，并在每日快照与权益曲线回放中生效。
@@ -786,7 +802,7 @@ async def adjust_capital(req: CapitalAdjustRequest):
 
     db = SessionLocal()
     try:
-        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         if not acct:
             raise HTTPException(status_code=404, detail="账户信息不存在")
 
@@ -798,6 +814,7 @@ async def adjust_capital(req: CapitalAdjustRequest):
         acct.available_cash = new_cash
         acct.updated_at = datetime.now().isoformat()
         db.add(PaperCapitalAdjustment(
+            account_id=account,
             amount=round(req.amount, 2),
             balance_after=round(new_cash, 2),
             note=(req.note or "")[:200],
@@ -819,20 +836,22 @@ async def adjust_capital(req: CapitalAdjustRequest):
 
 
 @router.post("/daily-snapshot")
-async def trigger_daily_snapshot(date: str = Query(None, description="Target date YYYY-MM-DD, defaults to today")):
+async def trigger_daily_snapshot(date: str = Query(None, description="Target date YYYY-MM-DD, defaults to today"),
+                                 account: str = Query("stock", description="账户标识")):
     """Manually trigger a daily portfolio snapshot.
 
     Computes current positions and total_asset (valued at market prices for today,
     at cost for historical dates) and persists to PostgreSQL paper_daily_snapshot.
     """
-    result = save_daily_snapshot(target_date=date)
+    result = save_daily_snapshot(target_date=date, account=account)
     if not result.get('success'):
         raise HTTPException(status_code=500, detail=result.get('error', 'Snapshot failed'))
     return result
 
 
 @router.get("/equity-history", response_model=list[EquityPoint])
-async def get_equity_history(days: int = Query(60, ge=1, le=365)):
+async def get_equity_history(days: int = Query(60, ge=1, le=365),
+                             account: str = Query("stock", description="账户标识")):
     """
     Get daily equity curve = available_cash + position_value on each day.
 
@@ -843,19 +862,24 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 
     db = SessionLocal()
     try:
-        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         initial_capital = float(acct.initial_capital) if acct else 1000000.0
 
         all_trades = db.query(PaperTrade).filter(
+            PaperTrade.account_id == account,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         ).order_by(PaperTrade.trade_date, PaperTrade.id).all()
 
         snapshots = {}
-        for snap in db.query(PaperDailySnapshot).order_by(PaperDailySnapshot.trade_date).all():
+        for snap in db.query(PaperDailySnapshot).filter(
+            PaperDailySnapshot.account_id == account
+        ).order_by(PaperDailySnapshot.trade_date).all():
             snapshots[snap.trade_date] = snap.total_asset
 
         adjustments_by_date: dict[str, float] = {}
-        for adj in db.query(PaperCapitalAdjustment).order_by(PaperCapitalAdjustment.created_at).all():
+        for adj in db.query(PaperCapitalAdjustment).filter(
+            PaperCapitalAdjustment.account_id == account
+        ).order_by(PaperCapitalAdjustment.created_at).all():
             d = (adj.created_at or '')[:10]
             if d:
                 adjustments_by_date[d] = adjustments_by_date.get(d, 0) + float(adj.amount or 0)
@@ -880,7 +904,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
         start_date = min_trade_date
 
     today_str = today.strftime("%Y-%m-%d")
-    current_positions, _account, _realized, _winrate = calculate_positions_from_db()
+    current_positions, _account, _realized, _winrate = calculate_positions_from_db(account)
     symbols = [p['symbol'] for p in current_positions]
     realtime_prices = get_realtime_prices(symbols) if symbols else {}
 
@@ -950,6 +974,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365)):
 async def get_daily_pnl_breakdown(
     days: int = Query(30, ge=1, le=60),
     sort_dir: str = Query("desc", regex="^(asc|desc)$"),
+    account: str = Query("stock", description="账户标识"),
 ):
     """
     每日盈亏明细 — 含个股贡献分解 (Tushare 历史收盘价)。
@@ -959,10 +984,11 @@ async def get_daily_pnl_breakdown(
 
     db = SessionLocal()
     try:
-        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         initial_capital = float(acct.initial_capital) if acct else 100000.0
 
         all_trades = db.query(PaperTrade).filter(
+            PaperTrade.account_id == account,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         ).order_by(
             func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),
@@ -1116,16 +1142,18 @@ async def get_daily_pnl_breakdown(
 
 
 @router.get("/daily-pnl-breakdown/date", response_model=DailyPnlBreakdown)
-async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Target date YYYY-MM-DD")):
+async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Target date YYYY-MM-DD"),
+                                          account: str = Query("stock", description="账户标识")):
     """获取指定日期的个股盈亏明细（懒加载用）"""
     from datetime import datetime as dt, timedelta
 
     db = SessionLocal()
     try:
-        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+        acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         initial_capital = float(acct.initial_capital) if acct else 100000.0
 
         all_trades = db.query(PaperTrade).filter(
+            PaperTrade.account_id == account,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         ).order_by(
             func.coalesce(PaperTrade.trade_date, func.substr(PaperTrade.created_at, 1, 10)),

@@ -210,6 +210,35 @@
   flex: none;
 }
 
+.cp-status-account {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.cp-account-select {
+  background: #fff;
+  border: 1px solid var(--cc-line-soft);
+  border-radius: 4px;
+  color: var(--cc-text);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.cp-account-select:hover {
+  border-color: var(--cc-blue-soft);
+}
+
+.cp-status-account-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cc-text-dim);
+}
+
 .cp-status-ticker {
   display: flex;
   gap: 12px;

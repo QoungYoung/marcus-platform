@@ -185,23 +185,25 @@ def _read_portfolio() -> str:
 
         db = SessionLocal()
         try:
-            acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.id == 1).first()
+            acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == 'stock').first()
             initial_cap = float(acct.initial_capital) if acct else 100000.0
             # 现金从 paper_account_info 直接读取（paper engine 维护，含佣金/费用调整后的准确值）
             available_cash = float(acct.available_cash) if acct else (initial_cap - 0)
 
-            # 当前持仓标的元数据
-            pos_rows = db.query(PaperPosition).all()
+            # 当前持仓标的元数据（stock 账户）
+            pos_rows = db.query(PaperPosition).filter(PaperPosition.account_id == 'stock').all()
             held_symbols = {r.symbol: r for r in pos_rows}
 
-            # 全部非撤回成交
+            # 全部非撤回成交（stock 账户）
             trades = db.query(PaperTrade).filter(
+                PaperTrade.account_id == 'stock',
                 PaperTrade.volume > 0,
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None)
             ).order_by(PaperTrade.created_at).all()
 
             total_profit = float(
                 db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                    PaperTrade.account_id == 'stock',
                     (PaperTrade.voided == 0) | (PaperTrade.voided == None)
                 ).scalar() or 0
             )
@@ -692,6 +694,7 @@ def _check_consecutive_losses() -> int:
         db = SessionLocal()
         try:
             rows = db.query(PaperTrade.profit).filter(
+                PaperTrade.account_id == 'stock',
                 PaperTrade.direction == '卖出',
                 PaperTrade.volume > 0,
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None)

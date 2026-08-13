@@ -63,10 +63,15 @@ def parse_float_chinese(value):
 class MarcusVNPyExecutor:
     """Marcus × VN.PY 交易执行器"""
     
-    def __init__(self, bridge: VNPyBridge = None):
+    def __init__(self, bridge: VNPyBridge = None, engine: PaperTradingEngine = None,
+                 account_id: str = "stock"):
         self.data_dir = str(DATA_DIR)
-        self.bridge = bridge  # VN.PY bridge (primary when available)
-        self.engine = PaperTradingEngine(data_dir=self.data_dir) if bridge is None else None
+        self.account_id = account_id
+        self.bridge = bridge  # VN.PY bridge (仅 stock 账户使用)
+        # 显式传入 engine 优先；否则无 bridge 时自建按账户引擎
+        self.engine = engine if engine is not None else (
+            PaperTradingEngine(data_dir=self.data_dir, account_id=self.account_id)
+            if bridge is None else None)
         self.trade_log_path = DATA_DIR / "marcus_trades.jsonl"
         self.risk_log_path = DATA_DIR / "marcus_risk.jsonl"
         
@@ -105,13 +110,17 @@ class MarcusVNPyExecutor:
         return set(self._get_today_buy_volumes().keys())
 
     def _get_trades_list(self, symbol: str = None, limit: int = 10000) -> list:
-        """跨后端统一获取成交记录"""
+        """跨后端统一获取成交记录（engine 优先，bridge 仅 stock 账户）"""
+        if self.engine is not None:
+            return self.engine.get_trades(symbol=symbol, limit=limit)
         if self.bridge:
             return self.bridge.get_trades(symbol=symbol, limit=limit)
-        return self.engine.get_trades(limit=limit)
+        return []
 
     def _get_positions_list(self) -> list:
-        """跨后端统一获取持仓（优先从 VN.PY bridge，回退到 PG 计算）"""
+        """跨后端统一获取持仓（engine 优先，bridge 仅 stock 账户）"""
+        if self.engine is not None:
+            return self.get_positions_from_db()
         if self.bridge:
             positions = self.bridge.get_positions()
             if positions:
@@ -119,10 +128,12 @@ class MarcusVNPyExecutor:
         return self.get_positions_from_db()
 
     def _get_pg_conn(self):
-        """跨后端统一获取 PostgreSQL 连接"""
+        """跨后端统一获取 PostgreSQL 连接（engine 优先）"""
+        if self.engine is not None:
+            return self.engine._get_pg_conn()
         if self.bridge:
             return self.bridge._get_pg_conn()
-        return self.engine._get_pg_conn()
+        return None
 
     def _get_today_buy_volumes(self) -> dict:
         """查询 PostgreSQL 获取今日买入的股票代码→股数映射（用于 T+1 拦截）
@@ -431,6 +442,55 @@ class MarcusVNPyExecutor:
         available_cash 直接从 PostgreSQL account_info 表读取，
         SELECT ... FOR UPDATE 行锁已保证并发一致性。
         """
+        if self.engine is not None:
+            raw = self.engine.get_account_info()
+            initial_capital = parse_float_chinese(raw.get('初始资金', 1000000))
+            available_cash = parse_float_chinese(raw.get('可用资金', 0))
+            frozen_cash = parse_float_chinese(raw.get('冻结资金', 0))
+
+            # 已实现盈亏 — 从 PostgreSQL paper_trades 查询（已按账户过滤）
+            profit_summary = self.engine.get_profit_summary()
+            realized_pnl = profit_summary.get('总盈亏', 0)
+
+            # 持仓成本与市值
+            positions = self.engine.get_positions()
+            total_cost = sum(pos['volume'] * pos['avg_price'] for pos in positions)
+
+            try:
+                from xueqiu_engine import XueqiuEngine
+                xq_config = str(XUEQIU_DIR / "config.json")
+                xueqiu = XueqiuEngine(config_file=xq_config)
+                position_value = 0
+                for pos in positions:
+                    try:
+                        quote = xueqiu.get_stock_quote(pos['symbol'], use_cache=False)
+                        if quote:
+                            current_price = quote.get('current', pos['avg_price'])
+                            position_value += current_price * pos['volume']
+                        else:
+                            position_value += pos['avg_price'] * pos['volume']
+                    except Exception:
+                        position_value += pos['avg_price'] * pos['volume']
+            except Exception as e:
+                print(f"[警告] 获取实时价格失败：{e}")
+                position_value = total_cost
+
+            total_asset = available_cash + frozen_cash + position_value
+            total_pnl = total_asset - initial_capital
+            derived_float_pnl = total_pnl - realized_pnl
+
+            return {
+                'initial_capital': initial_capital,
+                'available_cash': available_cash,
+                'frozen_cash': frozen_cash,
+                'position_value': position_value,
+                'total_asset': total_asset,
+                'total_profit': f"{total_pnl:+,.2f} ({total_pnl/initial_capital*100:+.2f}%)",
+                'position_count': len(positions),
+                'float_pnl': derived_float_pnl,
+                'realized_pnl': realized_pnl
+            }
+
         if self.bridge:
             bridge_acct = self.bridge.get_account()
             if bridge_acct:
@@ -1092,8 +1152,8 @@ class MarcusVNPyExecutor:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT id, symbol, direction, price, volume, voided FROM paper_trades WHERE id = %s",
-                (trade_id,)
+                "SELECT id, symbol, direction, price, volume, voided FROM paper_trades WHERE id = %s AND account_id = %s",
+                (trade_id, self.account_id)
             )
             row = cur.fetchone()
             if not row:
@@ -1102,8 +1162,8 @@ class MarcusVNPyExecutor:
                 return {"success": False, "error": f"交易 {trade_id} 已被撤回"}
 
             cur.execute(
-                "UPDATE paper_trades SET voided = 1, void_reason = %s, voided_at = %s WHERE id = %s",
-                (reason, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), trade_id)
+                "UPDATE paper_trades SET voided = 1, void_reason = %s, voided_at = %s WHERE id = %s AND account_id = %s",
+                (reason, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), trade_id, self.account_id)
             )
             conn.commit()
             print(
@@ -1121,8 +1181,8 @@ class MarcusVNPyExecutor:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT id, symbol, direction, price, volume, voided FROM paper_trades WHERE id = %s",
-                (trade_id,)
+                "SELECT id, symbol, direction, price, volume, voided FROM paper_trades WHERE id = %s AND account_id = %s",
+                (trade_id, self.account_id)
             )
             row = cur.fetchone()
             if not row:
@@ -1131,8 +1191,8 @@ class MarcusVNPyExecutor:
                 return {"success": False, "error": f"交易 {trade_id} 未被撤回"}
 
             cur.execute(
-                "UPDATE paper_trades SET voided = 0, void_reason = NULL, voided_at = NULL WHERE id = %s",
-                (trade_id,)
+                "UPDATE paper_trades SET voided = 0, void_reason = NULL, voided_at = NULL WHERE id = %s AND account_id = %s",
+                (trade_id, self.account_id)
             )
             conn.commit()
             print(
@@ -1152,7 +1212,8 @@ class MarcusVNPyExecutor:
             cur.execute(
                 "SELECT id, symbol, direction, price, volume, amount, profit, "
                 "created_at, trade_date, void_reason, voided_at "
-                "FROM paper_trades WHERE voided = 1 ORDER BY voided_at DESC"
+                "FROM paper_trades WHERE voided = 1 AND account_id = %s ORDER BY voided_at DESC",
+                (self.account_id,)
             )
             cols = [desc[0] for desc in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]

@@ -6,7 +6,7 @@ import {
   BarChart, Bar, Cell,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi, accountsApi } from '../api/client';
 import {
   computeSharpeRatio, computeMonthlyReturns, computeQuarterlyReturns,
   computeBenchmarkDelta, aggregatePnlContributions,
@@ -114,6 +114,10 @@ function PanelHead({ title, en, children }: { title: string; en: string; childre
 export default function PortfolioPage() {
   const { t } = useTranslation();
 
+  // ── 多账户状态 ──
+  const [accounts, setAccounts] = useState<{ account_id: string; name: string; module?: string; initial_capital: number; available_cash: number }[]>([]);
+  const [activeAccount, setActiveAccount] = useState('stock');
+
   // ── 分片异步状态 ──
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [tickers, setTickers] = useState<IndexTicker[]>([]);
@@ -173,10 +177,10 @@ export default function PortfolioPage() {
   const [tradeSubmitting, setTradeSubmitting] = useState(false);
 
   // ── 各模块独立 fetch（flushSync 确保 React 18 不批量合并，每个模块加载后即时渲染） ──
-  const refreshSummary = useCallback(async () => {
+  const refreshSummary = useCallback(async (acct: string = 'stock') => {
     setLoadingSummary(true);
     try {
-      const res = await portfolioApi.getSummary();
+      const res = await portfolioApi.getSummary(acct);
       flushSync(() => { setSummary(res.data); setError(null); setLoadingSummary(false); });
     } catch (err: unknown) {
       flushSync(() => { setError((err as Error).message); setLoadingSummary(false); });
@@ -198,20 +202,20 @@ export default function PortfolioPage() {
     } catch { flushSync(() => setLoadingTickers(false)); }
   }, []);
 
-  const refreshEquity = useCallback(async () => {
+  const refreshEquity = useCallback(async (acct: string = 'stock') => {
     setLoadingEquity(true);
     try {
-      const equityRes = await portfolioApi.getEquityHistory(60);
+      const equityRes = await portfolioApi.getEquityHistory(60, acct);
       if (equityRes.data && Array.isArray(equityRes.data) && equityRes.data.length > 0) {
         flushSync(() => { setRealEquity(equityRes.data); setLoadingEquity(false); });
       } else { flushSync(() => setLoadingEquity(false)); }
     } catch { flushSync(() => setLoadingEquity(false)); }
   }, []);
 
-  const refreshTrades = useCallback(async () => {
+  const refreshTrades = useCallback(async (acct: string = 'stock') => {
     setLoadingTrades(true);
     try {
-      const res = await tradesApi.getHistory({ limit: 8 });
+      const res = await tradesApi.getHistory({ limit: 8, account: acct });
       const trades = res.data?.trades || res.data?.data || [];
       flushSync(() => { setRecentTrades(Array.isArray(trades) ? trades.slice(0, 8) : []); setLoadingTrades(false); });
     } catch { flushSync(() => setLoadingTrades(false)); }
@@ -271,12 +275,25 @@ export default function PortfolioPage() {
     } finally { setLoadingGp(false); }
   }, []);
 
+  // ── 账户列表（供切换器使用）──
+  useEffect(() => {
+    accountsApi.list().then(res => {
+      if (Array.isArray(res.data) && res.data.length > 0) setAccounts(res.data);
+    }).catch(() => { /* 静默失败，保持默认 stock */ });
+  }, []);
+
+  // ── 切换账户后重载 summary/positions/equity/trades/breakdowns ──
+  useEffect(() => {
+    refreshSummary(activeAccount);
+    refreshEquity(activeAccount);
+    refreshTrades(activeAccount);
+    refreshBreakdowns(activeAccount);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAccount]);
+
   // ── 首次并行加载 ──
   useEffect(() => {
-    refreshSummary();
     refreshTickers();
-    refreshEquity();
-    refreshTrades();
     refreshStopLoss();
     refreshGoldenPit();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -285,10 +302,10 @@ export default function PortfolioPage() {
   const [loadingBreakdowns, setLoadingBreakdowns] = useState(true);
 
   // ── 30日盈亏明细（贡献排名用）──
-  const refreshBreakdowns = useCallback(async () => {
+  const refreshBreakdowns = useCallback(async (acct: string = 'stock') => {
     setLoadingBreakdowns(true);
     try {
-      const res = await portfolioApi.getDailyPnlBreakdown(30);
+      const res = await portfolioApi.getDailyPnlBreakdown(30, acct);
       if (Array.isArray(res.data)) setBreakdowns(res.data);
     } catch { /* 静默失败 */ }
     finally { setLoadingBreakdowns(false); }
@@ -355,17 +372,17 @@ export default function PortfolioPage() {
     if (!window.confirm(t('portfolio.unfreezeConfirm'))) return;
     setUnfreezing(true);
     try {
-      const res = await portfolioApi.unfreeze();
+      const res = await portfolioApi.unfreeze(activeAccount);
       if (res.data?.success) {
         alert(t('portfolio.unfreezeSuccess') + `: ¥${(res.data.unfrozen_amount || 0).toLocaleString()}`);
-        await refreshSummary();
+        await refreshSummary(activeAccount);
       } else {
         alert(t('portfolio.unfreezeFailed') + ': ' + (res.data?.message || ''));
       }
     } catch (err: unknown) {
       alert(t('portfolio.unfreezeFailed') + ': ' + (err instanceof Error ? err.message : String(err)));
     } finally { setUnfreezing(false); }
-  }, [unfreezing, t, refreshSummary]);
+  }, [unfreezing, t, activeAccount, refreshSummary]);
 
   // ── 排序 ──
   const handleSort = useCallback((key: SortKey) => {
@@ -405,13 +422,13 @@ export default function PortfolioPage() {
     }
     setCapSubmitting(true);
     try {
-      const res = await portfolioApi.adjustCapital({ amount, note: capNote.trim() || undefined });
+      const res = await portfolioApi.adjustCapital({ amount, note: capNote.trim() || undefined }, activeAccount);
       if (res.data?.success) {
         setCapOpen(false);
         setCapAmount('');
         setCapNote('');
         setCapError(null);
-        await refreshSummary();
+        await refreshSummary(activeAccount);
         alert(t('portfolio.capitalSuccess') + ': ¥' + Number(res.data.available_cash ?? 0).toLocaleString());
       } else {
         setCapError((res.data?.message as string) || t('portfolio.capitalFailed'));
@@ -422,7 +439,7 @@ export default function PortfolioPage() {
     } finally {
       setCapSubmitting(false);
     }
-  }, [capAmount, capMode, capNote, totalAsset, t, refreshSummary]);
+  }, [capAmount, capMode, capNote, totalAsset, t, activeAccount, refreshSummary]);
 
   // ── 快捷交易 ──
   const openTradePanel = useCallback((symbol: string, direction: '买' | '卖', currentPrice: number, volume: number) => {
@@ -453,17 +470,18 @@ export default function PortfolioPage() {
         price: tradeForm.price,
         volume: tradeForm.volume,
         reason: tradeForm.reason || undefined,
+        account: activeAccount,
       });
       setExpandedTradeSymbol(null);
       setTradeError(null);
-      await refreshSummary();
+      await refreshSummary(activeAccount);
     } catch (err: unknown) {
       setTradeError((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
         || (err instanceof Error ? err.message : '交易失败'));
     } finally {
       setTradeSubmitting(false);
     }
-  }, [expandedTradeSymbol, tradeForm, positions, refreshSummary]);
+  }, [expandedTradeSymbol, tradeForm, positions, activeAccount, refreshSummary]);
 
   const equityCurve: EquityPoint[] = useMemo(() => {
     return realEquity.map(p => ({ date: p.date.slice(5), value: p.equity }));
@@ -486,11 +504,11 @@ export default function PortfolioPage() {
     setModalLoading(true);
     setModalData(null);
     try {
-      const res = await portfolioApi.getDailyPnlBreakdownByDate(date);
+      const res = await portfolioApi.getDailyPnlBreakdownByDate(date, activeAccount);
       setModalData(res.data);
     } catch { /* ignore */ }
     finally { setModalLoading(false); }
-  }, []);
+  }, [activeAccount]);
   const volatility = useMemo(() => {
     const returns = equityCurve.slice(1).map((p, i) => (p.value - equityCurve[i].value) / equityCurve[i].value);
     const mean = returns.reduce((a, b) => a + b, 0) / (returns.length || 1);
@@ -591,6 +609,23 @@ export default function PortfolioPage() {
           SYS:ONLINE
         </div>
         <div className="cp-status-divider" />
+        <div className="cp-status-account" title={t('portfolio.switchAccount')}>
+          {accounts.length > 0 ? (
+            <select
+              className="cp-account-select"
+              value={activeAccount}
+              onChange={e => setActiveAccount(e.target.value)}
+            >
+              {accounts.map(a => (
+                <option key={a.account_id} value={a.account_id}>
+                  {a.name || a.account_id} · {a.account_id}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="cp-status-account-name">账户：{activeAccount === 'stock' ? '股票任务' : activeAccount}</span>
+          )}
+        </div>
         {!loadingTickers && tickers.length > 0 && (
           <div className="cp-status-ticker">
             {tickers.map(tk => (
@@ -782,7 +817,7 @@ export default function PortfolioPage() {
           <div className="cp-battlefield">
             <div className="cp-battlefield-scanline" />
             <PanelHead title="战略收益概览" en="STRATEGIC OVERVIEW">
-              <button className="cp-icon-btn" onClick={refreshEquity} title="刷新">
+              <button className="cp-icon-btn" onClick={() => refreshEquity(activeAccount)} title="刷新">
                 <i className={`fas fa-sync-alt ${loadingEquity ? 'fa-spin' : ''}`} />
               </button>
             </PanelHead>
@@ -964,7 +999,7 @@ export default function PortfolioPage() {
             {/* 情报中心 */}
             <div className="cp-bottom-panel">
               <PanelHead title="情报中心" en="INTEL CENTER">
-                <button className="cp-icon-btn" onClick={refreshBreakdowns} title="刷新">
+                <button className="cp-icon-btn" onClick={() => refreshBreakdowns(activeAccount)} title="刷新">
                   <i className={`fas fa-sync-alt ${loadingBreakdowns ? 'fa-spin' : ''}`} />
                 </button>
               </PanelHead>
@@ -1031,7 +1066,7 @@ export default function PortfolioPage() {
             {/* 任务日志 */}
             <div className="cp-bottom-panel">
               <PanelHead title="任务日志" en="MISSION LOG">
-                <button className="cp-icon-btn" onClick={refreshTrades} title="刷新">
+                <button className="cp-icon-btn" onClick={() => refreshTrades(activeAccount)} title="刷新">
                   <i className={`fas fa-sync-alt ${loadingTrades ? 'fa-spin' : ''}`} />
                 </button>
               </PanelHead>
@@ -1072,7 +1107,7 @@ export default function PortfolioPage() {
                   {flowSummary.outflow > 0 && <span style={{ color: 'var(--cc-red)' }}>{flowSummary.outflow}↓</span>}
                 </span>
               )}
-              <button className="cp-icon-btn" onClick={refreshSummary} title="刷新">
+              <button className="cp-icon-btn" onClick={() => refreshSummary(activeAccount)} title="刷新">
                 <i className={`fas fa-sync-alt ${loadingSummary ? 'fa-spin' : ''}`} />
               </button>
             </PanelHead>

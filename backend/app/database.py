@@ -3,6 +3,8 @@
 SQLAlchemy database engine & session management.
 Uses synchronous SQLAlchemy — consistent with the existing codebase pattern.
 """
+from datetime import datetime
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.config import get_settings
@@ -94,6 +96,9 @@ def _apply_schema_patches():
         ("paper_positions", "frozen", "INTEGER DEFAULT 0"),
         ("paper_positions", "avg_price", "DOUBLE PRECISION DEFAULT 0"),
     ]
+    # ── 2026-08: 多账户模拟盘隔离（paper_accounts 注册表 + 6 张 paper 表 account_id 维度） ──
+    _apply_paper_account_migration()
+
     # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
     alter_patches = [
         # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
@@ -130,3 +135,73 @@ def _apply_schema_patches():
                 print(f"[DB] PATCH: {table}.{col} ALTER TYPE → {new_type}")
     except Exception as e:
         print(f"[DB] PATCH warn: {e}")
+
+
+def _apply_paper_account_migration():
+    """多账户隔离的幂等迁移：paper 表加 account_id、重建复合主键、建注册表并播种。"""
+    from sqlalchemy import text, inspect
+
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+
+        # 1) 各账本表增加 account_id 列（存量数据默认归入 stock 账户）
+        account_col_tables = [
+            "paper_orders", "paper_trades", "paper_positions",
+            "paper_daily_snapshot", "paper_capital_adjustments",
+        ]
+        with engine.begin() as conn:
+            for t in account_col_tables:
+                if t not in tables:
+                    continue
+                conn.execute(text(
+                    f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'"
+                ))
+            # 2) paper_account_info：id → account_id 主键
+            if "paper_account_info" in tables:
+                conn.execute(text("ALTER TABLE paper_account_info DROP CONSTRAINT IF EXISTS paper_account_info_pkey"))
+                conn.execute(text("ALTER TABLE paper_account_info DROP COLUMN IF EXISTS id"))
+                conn.execute(text("ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS account_id VARCHAR(16)"))
+                conn.execute(text("UPDATE paper_account_info SET account_id = 'stock' WHERE account_id IS NULL"))
+                conn.execute(text("ALTER TABLE paper_account_info ALTER COLUMN account_id SET NOT NULL"))
+                conn.execute(text("ALTER TABLE paper_account_info ADD PRIMARY KEY (account_id)"))
+            # 3) paper_positions：symbol 主键 → (account_id, symbol) 复合主键
+            if "paper_positions" in tables:
+                conn.execute(text("ALTER TABLE paper_positions DROP CONSTRAINT IF EXISTS paper_positions_pkey"))
+                conn.execute(text("ALTER TABLE paper_positions ADD PRIMARY KEY (account_id, symbol)"))
+            # 4) paper_daily_snapshot：trade_date 主键 → (account_id, trade_date) 复合主键
+            if "paper_daily_snapshot" in tables:
+                conn.execute(text("ALTER TABLE paper_daily_snapshot DROP CONSTRAINT IF EXISTS paper_daily_snapshot_pkey"))
+                conn.execute(text("ALTER TABLE paper_daily_snapshot ADD PRIMARY KEY (account_id, trade_date)"))
+            # 5) 账户索引
+            for t, idx in [
+                ("paper_orders", "idx_paper_orders_account"),
+                ("paper_trades", "idx_paper_trades_account"),
+                ("paper_capital_adjustments", "idx_paper_capital_account"),
+            ]:
+                if t in tables:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx} ON {t} (account_id)"))
+            # 6) 注册表 + 种子
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS paper_accounts ("
+                " account_id VARCHAR(16) PRIMARY KEY,"
+                " name VARCHAR(50) NOT NULL,"
+                " module VARCHAR(50) DEFAULT '',"
+                " initial_capital DOUBLE PRECISION NOT NULL,"
+                " enabled INTEGER DEFAULT 1,"
+                " created_at TEXT NOT NULL)"
+            ))
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(text(
+                "INSERT INTO paper_accounts (account_id, name, module, initial_capital, enabled, created_at) "
+                "SELECT 'stock', '股票模拟账户', 'stock_trading', 1000000, 1, :now "
+                "WHERE NOT EXISTS (SELECT 1 FROM paper_accounts WHERE account_id = 'stock')"
+            ), {"now": now})
+            conn.execute(text(
+                "INSERT INTO paper_accounts (account_id, name, module, initial_capital, enabled, created_at) "
+                "SELECT 'golden_pit', '黄金坑 ETF 模拟账户', 'golden_pit_dca', 200000, 1, :now "
+                "WHERE NOT EXISTS (SELECT 1 FROM paper_accounts WHERE account_id = 'golden_pit')"
+            ), {"now": now})
+            print("[DB] PATCH: paper 多账户迁移完成 (paper_accounts + account_id 维度)")
+    except Exception as e:
+        print(f"[DB] PATCH warn (paper multi-account): {e}")

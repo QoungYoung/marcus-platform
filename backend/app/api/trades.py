@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models.paper_trade import PaperTrade
+from app.models.paper_trade import PaperAccount
 from app.models.trade import TradeRequest, TradeResponse, OrderResponse, TradeHistoryResponse, VoidRequest, VoidResponse
 
 settings = get_settings()
@@ -41,6 +42,32 @@ def _get_stock_name(symbol: str) -> str:
     return symbol
 
 
+def _validate_account(account: str) -> None:
+    """校验账户是否存在且启用，未知账户返回 400。"""
+    db = SessionLocal()
+    try:
+        ok = db.query(PaperAccount).filter(
+            PaperAccount.account_id == account,
+            PaperAccount.enabled == 1,
+        ).first()
+    finally:
+        db.close()
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"未知账户: {account}")
+
+
+def _make_executor(request: Request, account: str = "stock"):
+    """按账户创建执行器：stock 走 VN.PY bridge，其他账户走 PaperTradingEngine 直连。"""
+    from app.core.trading.marcus_trade import MarcusVNPyExecutor
+    bridge = getattr(request.app.state, 'vnpy_bridge', None)
+    if account == "stock":
+        return MarcusVNPyExecutor(bridge=bridge, account_id=account)
+    from paper_engine import PaperTradingEngine
+    from workspace_detector import DATA_DIR
+    engine = PaperTradingEngine(data_dir=str(DATA_DIR), account_id=account)
+    return MarcusVNPyExecutor(engine=engine, account_id=account)
+
+
 @router.post("", response_model=TradeResponse)
 async def execute_trade(trade: TradeRequest, request: Request):
     """
@@ -56,10 +83,8 @@ async def execute_trade(trade: TradeRequest, request: Request):
     - 'VN.PY 撮合失败，资金已解冻' (match failure, funds unfrozen)
     """
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-
-        bridge = getattr(request.app.state, 'vnpy_bridge', None)
-        executor = MarcusVNPyExecutor(bridge=bridge)
+        _validate_account(trade.account)
+        executor = _make_executor(request, trade.account)
 
         if trade.side.lower() == "buy":
             result = executor.buy(
@@ -143,11 +168,13 @@ async def get_trade_history(
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     limit: int = Query(20, ge=1, le=100, description="Number of records"),
     page: int = Query(1, ge=1, description="Page number"),
+    account: str = Query("stock", description="账户标识"),
 ):
     """Get trade history from PostgreSQL."""
     db = SessionLocal()
     try:
         query = db.query(PaperTrade).filter(
+            PaperTrade.account_id == account,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         )
         if symbol:
@@ -191,19 +218,20 @@ async def get_pending_orders(
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     status: Optional[str] = Query(None, description="Filter by status: 提交中/未成交/部分成交/已撤销"),
     limit: int = Query(50, ge=1, le=200),
+    account: str = Query("stock", description="账户标识"),
 ):
     """
     Get pending/active orders from the paper trading engine.
     Used by Pi agent to check order status before making new trades.
     """
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        bridge = getattr(request.app.state, 'vnpy_bridge', None)
-        executor = MarcusVNPyExecutor(bridge=bridge)
-        if bridge:
-            orders = bridge.get_orders(symbol=symbol, status=status, limit=limit)
-        else:
+        executor = _make_executor(request, account)
+        if executor.engine is not None:
             orders = executor.engine.get_orders(symbol=symbol, status=status, limit=limit)
+        elif executor.bridge:
+            orders = executor.bridge.get_orders(symbol=symbol, status=status, limit=limit)
+        else:
+            orders = []
         return {
             "orders": orders,
             "count": len(orders),
@@ -214,11 +242,14 @@ async def get_pending_orders(
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
-async def get_trade(order_id: str):
+async def get_trade(order_id: str, account: str = Query("stock", description="账户标识")):
     """Get specific trade by order ID from PostgreSQL."""
     db = SessionLocal()
     try:
-        row = db.query(PaperTrade).filter(PaperTrade.orderid == order_id).first()
+        row = db.query(PaperTrade).filter(
+            PaperTrade.orderid == order_id,
+            PaperTrade.account_id == account,
+        ).first()
         if not row:
             raise HTTPException(status_code=404, detail="Trade not found")
 
@@ -239,12 +270,10 @@ async def get_trade(order_id: str):
 
 
 @router.get("/voided")
-async def get_voided_trades(request: Request):
+async def get_voided_trades(request: Request, account: str = Query("stock", description="账户标识")):
     """Get all voided (cancelled) trades."""
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        bridge = getattr(request.app.state, 'vnpy_bridge', None)
-        executor = MarcusVNPyExecutor(bridge=bridge)
+        executor = _make_executor(request, account)
         trades = executor.get_voided_trades()
         for t in trades:
             t["name"] = _get_stock_name(t["symbol"])
@@ -254,12 +283,11 @@ async def get_voided_trades(request: Request):
 
 
 @router.post("/{trade_id}/void", response_model=VoidResponse)
-async def void_trade(trade_id: int, body: VoidRequest, request: Request):
+async def void_trade(trade_id: int, body: VoidRequest, request: Request,
+                     account: str = Query("stock", description="账户标识")):
     """Void a trade (soft-delete, excluded from position calculation)."""
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        bridge = getattr(request.app.state, 'vnpy_bridge', None)
-        executor = MarcusVNPyExecutor(bridge=bridge)
+        executor = _make_executor(request, account)
         result = executor.void_trade(trade_id, body.reason)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["error"])
@@ -271,12 +299,11 @@ async def void_trade(trade_id: int, body: VoidRequest, request: Request):
 
 
 @router.post("/{trade_id}/unvoid", response_model=VoidResponse)
-async def unvoid_trade(trade_id: int, request: Request):
+async def unvoid_trade(trade_id: int, request: Request,
+                       account: str = Query("stock", description="账户标识")):
     """Restore a voided trade."""
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        bridge = getattr(request.app.state, 'vnpy_bridge', None)
-        executor = MarcusVNPyExecutor(bridge=bridge)
+        executor = _make_executor(request, account)
         result = executor.unvoid_trade(trade_id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["error"])
@@ -288,15 +315,14 @@ async def unvoid_trade(trade_id: int, request: Request):
 
 
 @router.delete("/{order_id}/cancel")
-async def cancel_order(order_id: str, request: Request):
+async def cancel_order(order_id: str, request: Request,
+                       account: str = Query("stock", description="账户标识")):
     """
     Cancel a pending order by order ID.
     Only orders with status '提交中' or '未成交' can be cancelled.
     """
     try:
-        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-        bridge = getattr(request.app.state, 'vnpy_bridge', None)
-        executor = MarcusVNPyExecutor(bridge=bridge)
+        executor = _make_executor(request, account)
         if executor.engine:
             success = executor.engine.cancel_order(order_id)
         else:

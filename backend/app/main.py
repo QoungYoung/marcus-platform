@@ -39,6 +39,7 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
+from app.api import accounts
 from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
@@ -108,7 +109,7 @@ async def lifespan(app: FastAPI):
 
     # 启动止损监控器（自动关联 MarcusVNPyExecutor）
     try:
-        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
+        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
         started = start_monitor(executor=executor)
         if started:
             print(f"[Main] ✅ 止损监控已启动 (bridge={'vnpy' if bridge else 'paper'})")
@@ -119,7 +120,7 @@ async def lifespan(app: FastAPI):
 
     # 启动加仓层级监控器（与止损监控并行）
     try:
-        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
+        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
         started = start_tier_monitor(executor=executor)
         if started:
             print(f"[Main] ✅ 加仓层级监控已启动")
@@ -130,7 +131,7 @@ async def lifespan(app: FastAPI):
 
     # 启动候选池监控器（与止损/加仓监控并行，30s轮询自动建仓）
     try:
-        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
+        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
         started = start_pool_monitor(executor=executor)
         if started:
             print(f"[Main] ✅ 候选池监控已启动")
@@ -141,7 +142,7 @@ async def lifespan(app: FastAPI):
 
     # 启动长期观察候选池监控器（5分钟轮询，无过期，日上限5笔）
     try:
-        executor_lt = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge)
+        executor_lt = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
         started = start_lt_pool_monitor(executor=executor_lt)
         if started:
             print(f"[Main] ✅ 长期候选池监控已启动")
@@ -251,6 +252,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(accounts.router, prefix="/api/v1")
 app.include_router(portfolio.router, prefix="/api/v1")
 app.include_router(trades.router, prefix="/api/v1")
 app.include_router(market.router, prefix="/api/v1")

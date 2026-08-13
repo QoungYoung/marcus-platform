@@ -7,22 +7,27 @@ const api = axios.create({
   timeout: 60000,
 })
 
+// Account APIs
+export const accountsApi = {
+  list: () => api.get('/accounts'),
+}
+
 // Portfolio APIs
 export const portfolioApi = {
-  getSummary: () => api.get('/portfolio'),
-  getPositions: () => api.get('/portfolio/positions'),
-  getEquityHistory: (days = 60) => api.get('/portfolio/equity-history', { params: { days } }),
-  getDailyPnlBreakdown: (days = 30) => api.get('/portfolio/daily-pnl-breakdown', { params: { days } }),
-  getDailyPnlBreakdownByDate: (date: string) => api.get('/portfolio/daily-pnl-breakdown/date', { params: { date } }),
-  unfreeze: () => api.post('/portfolio/unfreeze'),
-  adjustCapital: (data: { amount: number; note?: string }) => api.post('/portfolio/adjust-capital', data),
+  getSummary: (account = 'stock') => api.get('/portfolio', { params: { account } }),
+  getPositions: (account = 'stock') => api.get('/portfolio/positions', { params: { account } }),
+  getEquityHistory: (days = 60, account = 'stock') => api.get('/portfolio/equity-history', { params: { days, account } }),
+  getDailyPnlBreakdown: (days = 30, account = 'stock') => api.get('/portfolio/daily-pnl-breakdown', { params: { days, account } }),
+  getDailyPnlBreakdownByDate: (date: string, account = 'stock') => api.get('/portfolio/daily-pnl-breakdown/date', { params: { date, account } }),
+  unfreeze: (account = 'stock') => api.post('/portfolio/unfreeze', null, { params: { account } }),
+  adjustCapital: (data: { amount: number; note?: string }, account = 'stock') => api.post('/portfolio/adjust-capital', data, { params: { account } }),
 }
 
 // Trade APIs
 export const tradesApi = {
-  execute: (data: { symbol: string; side: string; price: number; volume: number; reason?: string }) =>
+  execute: (data: { symbol: string; side: string; price: number; volume: number; reason?: string; account?: string }) =>
     api.post('/trades', data),
-  getHistory: (params?: { symbol?: string; limit?: number; page?: number }) =>
+  getHistory: (params?: { symbol?: string; limit?: number; page?: number; account?: string }) =>
     api.get('/trades', { params }),
   getTrade: (orderId: string) => api.get(`/trades/${orderId}`),
   voidTrade: (tradeId: number, reason: string) =>

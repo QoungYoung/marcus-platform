@@ -317,13 +317,19 @@ def _already_holding(etf_code: str) -> bool:
             code = re.sub(r'^(SH|SZ|BJ)', '', etf_code)
             pos = (
                 db.query(PaperPosition)
-                .filter(PaperPosition.symbol == etf_code)
+                .filter(
+                    PaperPosition.account_id == 'golden_pit',
+                    PaperPosition.symbol == etf_code,
+                )
                 .first()
             )
             if not pos and code != etf_code:
                 pos = (
                     db.query(PaperPosition)
-                    .filter(PaperPosition.symbol == code)
+                    .filter(
+                        PaperPosition.account_id == 'golden_pit',
+                        PaperPosition.symbol == code,
+                    )
                     .first()
                 )
             return pos is not None
@@ -610,9 +616,9 @@ def _get_quote(etf_code: str) -> Optional[Dict[str, Any]]:
 
 
 def _get_executor():
-    """获取交易执行器，优先 VN.PY bridge，否则回退 PaperTradingEngine。"""
-    from app.core.trading.marcus_trade import MarcusVNPyExecutor, get_bridge
-    return MarcusVNPyExecutor(bridge=get_bridge())
+    """获取 golden_pit 账户交易执行器（直连 PaperTradingEngine，与 stock 账户隔离）。"""
+    from app.core.trading.marcus_trade import MarcusVNPyExecutor
+    return MarcusVNPyExecutor(account_id="golden_pit")
 
 
 def _place_buy_order(etf_code: str, amount: float, reason: str) -> Tuple[bool, str]:
@@ -676,6 +682,57 @@ def _place_sell_order(etf_code: str, shares: int, reason: str) -> Tuple[bool, st
         return False, str(e)
 
 
+def _amount_to_sell_shares(etf_code: str, amount: float) -> int:
+    """按现价把退出金额换算为 100 股整数倍（不足一手返回 0）。"""
+    quote = _get_quote(etf_code)
+    if not quote:
+        return 0
+    price = quote.get("current") or quote.get("last_close")
+    if not price or price <= 0:
+        return 0
+    return int(amount / price / 100) * 100
+
+
+def _execute_exit_sell(
+    fund_code: str,
+    window_start: str,
+    buy_day: int,
+    etf_code: str,
+    amount: float,
+    strategy: str,
+    shares: int,
+    schedule_day: int,
+) -> Tuple[bool, str]:
+    """执行退出卖单并落盘（filled/failed），返回 (成功?, order_id/失败原因)。"""
+    if shares < 100:
+        _record_dca_log(
+            fund_code=fund_code, window_start=window_start,
+            buy_day=buy_day, etf_code=etf_code,
+            amount=round(amount, 2), strategy=strategy,
+            order_id="", status="failed",
+            schedule_day=schedule_day, trend_factor=0.0,
+        )
+        return False, f"金额不足一手: {shares}股"
+    ok, order_info = _place_sell_order(etf_code, shares, strategy)
+    if ok:
+        _record_dca_log(
+            fund_code=fund_code, window_start=window_start,
+            buy_day=buy_day, etf_code=etf_code,
+            amount=round(amount, 2), strategy=strategy,
+            order_id=order_info, status="filled",
+            schedule_day=schedule_day, trend_factor=0.0,
+        )
+        return True, order_info
+    _record_dca_log(
+        fund_code=fund_code, window_start=window_start,
+        buy_day=buy_day, etf_code=etf_code,
+        amount=round(amount, 2), strategy=strategy,
+        order_id="", status="failed",
+        schedule_day=schedule_day, trend_factor=0.0,
+    )
+    return False, order_info
+
+
 def _get_holding_shares(etf_code: str) -> int:
     """查询当前持有的 ETF 股数。"""
     try:
@@ -687,14 +744,20 @@ def _get_holding_shares(etf_code: str) -> int:
         try:
             pos = (
                 db.query(PaperPosition)
-                .filter(PaperPosition.symbol == etf_code)
+                .filter(
+                    PaperPosition.account_id == 'golden_pit',
+                    PaperPosition.symbol == etf_code,
+                )
                 .first()
             )
             if not pos:
                 code = re.sub(r'^(SH|SZ|BJ)', '', etf_code)
                 pos = (
                     db.query(PaperPosition)
-                    .filter(PaperPosition.symbol == code)
+                    .filter(
+                        PaperPosition.account_id == 'golden_pit',
+                        PaperPosition.symbol == code,
+                    )
                     .first()
                 )
             return pos.volume if pos else 0
@@ -778,6 +841,13 @@ def _sell_defense_on_reentry(source_code: str, today_str: str) -> List[str]:
                 )
                 .all()
             )
+            today_rows = (
+                db.query(GoldenPitDCALog)
+                .filter(
+                    GoldenPitDCALog.strategy.like("exit/defense_reentry/%"),
+                )
+                .all()
+            )
         finally:
             db.close()
     except Exception as e:
@@ -785,6 +855,12 @@ def _sell_defense_on_reentry(source_code: str, today_str: str) -> List[str]:
         return []
 
     sold_keys = {(r.fund_code, r.window_start or "") for r in sold_rows}
+    # 当日已尝试卖出（含 failed）不再重试，次日再评估
+    today_attempted = {
+        (r.fund_code, r.window_start or "")
+        for r in today_rows
+        if (r.created_at or "").startswith(today_str)
+    }
     batches: Dict[Tuple[str, str], List[Any]] = {}
     for r in rows:
         parts = (r.strategy or "").split("/")
@@ -792,7 +868,7 @@ def _sell_defense_on_reentry(source_code: str, today_str: str) -> List[str]:
             continue  # 旧格式无来源，跳过
         d_code = parts[2]
         key = (d_code, r.window_start or "")
-        if key in sold_keys:
+        if key in sold_keys or key in today_attempted:
             continue
         b = batches.setdefault(key, [r.etf_code, 0.0])
         b[1] += r.amount
@@ -801,19 +877,22 @@ def _sell_defense_on_reentry(source_code: str, today_str: str) -> List[str]:
     for (d_code, ws), (d_etf, amount) in batches.items():
         if amount <= 0 or not d_etf:
             continue
-        _record_dca_log(
+        shares = _amount_to_sell_shares(d_etf, amount)
+        ok, order_info = _execute_exit_sell(
             fund_code=d_code,
             window_start=ws or today_str,
             buy_day=0,
             etf_code=d_etf,
             amount=amount,
             strategy=f"exit/defense_reentry/{d_code}",
-            order_id="",
-            status="notified",
-            schedule_day=0, trend_factor=0.0,
+            shares=shares,
+            schedule_day=0,
         )
         d_name = DEFENSE_INDICES.get(d_code, {}).get("name", d_code)
-        msgs.append(f"🛡 防御取出: {d_name}({d_etf}) 卖出 ¥{amount:.0f}（{source_code} 重新入场，赎回资金回补）")
+        if ok:
+            msgs.append(f"🛡 防御取出: {d_name}({d_etf}) 卖出 ¥{amount:.0f}（{source_code} 重新入场，赎回资金回补）(order: {order_info})")
+        else:
+            msgs.append(f"❌ 防御取出未成交: {d_name}({d_etf}) ¥{amount:.0f}（{order_info}）")
     return msgs
 
 
@@ -846,7 +925,11 @@ def _get_holdings_detail() -> List[Dict[str, Any]]:
             gp_symbols.add(ec)
             gp_symbols.add(ec_no)
 
-        pos_rows = db.query(PaperPosition).all()
+        pos_rows = (
+            db.query(PaperPosition)
+            .filter(PaperPosition.account_id == 'golden_pit')
+            .all()
+        )
         held_symbols = []
         for pos in pos_rows:
             sym = pos.symbol
@@ -861,6 +944,7 @@ def _get_holdings_detail() -> List[Dict[str, Any]]:
         trades = (
             db.query(PaperTrade)
             .filter(
+                PaperTrade.account_id == 'golden_pit',
                 PaperTrade.symbol.in_(held_symbols),
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None),
             )
@@ -1155,23 +1239,35 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             if sell_ratio <= 0:
                 continue
             freed_capital = 0.0
+            exit_filled = []
+            exit_failed = []
             for sh in sector_holdings:
                 sell_amount = sh["amount"] * sell_ratio
                 if sell_amount < 100:
                     continue
-                freed_capital += sell_amount
-                _record_dca_log(
+                shares = _amount_to_sell_shares(sh["etf_code"], sell_amount)
+                ok, order_info = _execute_exit_sell(
                     fund_code=fund_code, window_start=window_start,
                     buy_day=current_day, etf_code=sh["etf_code"],
-                    amount=round(sell_amount, 2), strategy=f"exit/{exit_signal}/sector",
-                    order_id="", status="notified",
-                    schedule_day=current_day, trend_factor=0.0,
+                    amount=sell_amount, strategy=f"exit/{exit_signal}/sector",
+                    shares=shares, schedule_day=current_day,
                 )
+                if ok:
+                    freed_capital += sell_amount
+                    exit_filled.append((sh["etf_code"], order_info))
+                else:
+                    exit_failed.append(f"{sh['etf_code']}（{order_info}）")
             exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟢", "fallback_exit": "🔔"}.get(exit_signal, "")
-            results.append(
-                f"{exit_icon} 退出信号 {idx['index_name']} (组合级): "
-                f"建议清仓板块 ETF ¥{freed_capital:.0f} [{exit_signal}]"
-            )
+            if exit_failed:
+                results.append(
+                    f"❌ 退出信号 {idx['index_name']} (组合级) 卖单未成交: " + "；".join(exit_failed)
+                )
+            if exit_filled:
+                order_text = "；".join(f"{c}#{o}" for c, o in exit_filled)
+                results.append(
+                    f"{exit_icon} 退出信号 {idx['index_name']} (组合级): "
+                    f"已卖出板块 ETF ¥{freed_capital:.0f} [{exit_signal}] (order: {order_text})"
+                )
             if sell_ratio >= 1.0 and freed_capital > 0:
                 for d_code, d_weight in DEFENSE_TAKEOVER_WEIGHTS.items():
                     d_cfg = DEFENSE_INDICES.get(d_code, {})
@@ -1224,27 +1320,32 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         if sell_shares < 100:
             continue
 
-        # 仅通知，不实际下单；按模拟持仓金额记录卖出
-        _record_dca_log(
+        # 真实落单: 卖出 golden_pit 账户持仓，成功记 filled，失败降级为通知
+        ok, order_info = _execute_exit_sell(
             fund_code=fund_code,
             window_start=window_start,
             buy_day=current_day,
             etf_code=etf_code,
             amount=sell_amount,
             strategy=f"exit/{exit_signal}",
-            order_id="",
-            status="notified",
-            schedule_day=current_day, trend_factor=0.0,
+            shares=sell_shares,
+            schedule_day=current_day,
         )
 
         exit_icon = {"half_exit": "🟡", "full_exit": "🔴", "stop_profit": "🟢", "fallback_exit": "🔔"}.get(exit_signal, "")
-        results.append(
-            f"{exit_icon} 退出信号 {idx['index_name']} {etf_code}: "
-            f"建议卖出 {sell_shares}股 约¥{sell_amount:.0f} [{exit_signal}]"
-        )
+        if ok:
+            results.append(
+                f"{exit_icon} 退出信号 {idx['index_name']} {etf_code}: "
+                f"已卖出 {sell_shares}股 约¥{sell_amount:.0f} [{exit_signal}] (order: {order_info})"
+            )
+        else:
+            results.append(
+                f"❌ 退出信号 {idx['index_name']} {etf_code}: "
+                f"卖出未成交 ({order_info})"
+            )
 
-        # ── 撤场后防御承接: 全清退出后资金按防御组合等权配置(仅记录) ──
-        if exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
+        # ── 撤场后防御承接: 卖出成功后资金按防御组合等权配置(仅记录) ──
+        if ok and exit_signal in ("full_exit", "stop_profit", "fallback_exit"):
             freed_capital = sell_amount if sell_amount > 0 else sell_shares * price
             if freed_capital > 0:
                 for d_code, d_weight in DEFENSE_TAKEOVER_WEIGHTS.items():
@@ -1284,19 +1385,25 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                     # fixed_combo(carrier) 腿按宽基窗口退出, 不做板块连跌（与回测口径一致）
                     continue
                 if _check_sector_down_turn(sh["etf_code"]):
-                    _record_dca_log(
+                    shares = _amount_to_sell_shares(sh["etf_code"], sh["amount"])
+                    ok, order_info = _execute_exit_sell(
                         fund_code=idx["fund_code"], window_start=window_start,
                         buy_day=current_day, etf_code=sh["etf_code"],
                         amount=sh["amount"], strategy=f"exit/down_turn/{sh['etf_code']}",
-                        order_id="", status="notified",
-                        schedule_day=current_day, trend_factor=0.0,
+                        shares=shares, schedule_day=current_day,
                     )
-                    results.append(
-                        f"🔻 板块二次拐点 {sh['etf_code']}: 连续"
-                        f"{int(_sector.get_sector_params(sh['etf_code']).get('exit_down_days')
-                              or _sector.get_sector_config().get('exit_down_days', SECTOR_EXIT_DOWN_DAYS))}天回落, "
-                        f"建议清仓 ¥{sh['amount']:.0f}"
-                    )
+                    if ok:
+                        results.append(
+                            f"🔻 板块二次拐点 {sh['etf_code']}: 连续"
+                            f"{int(_sector.get_sector_params(sh['etf_code']).get('exit_down_days')
+                                  or _sector.get_sector_config().get('exit_down_days', SECTOR_EXIT_DOWN_DAYS))}天回落, "
+                            f"已清仓 ¥{sh['amount']:.0f} (order: {order_info})"
+                        )
+                    else:
+                        results.append(
+                            f"❌ 板块二次拐点 {sh['etf_code']}: "
+                            f"卖出未成交 ({order_info})"
+                        )
 
     for idx in tradeable:
         fund_code = idx["fund_code"]
@@ -1515,17 +1622,34 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                 leg_strategy = _encode_strategy("split10", trend, trend_factor, buy_time=buy_time) + f"/{leg_key}"
             else:
                 leg_strategy = _encode_strategy(dca_strategy, trend, trend_factor, buy_time=buy_time) + f"/sector/{leg_key}"
-            _record_dca_log(
-                fund_code=fund_code,
-                window_start=window_start,
-                buy_day=current_day,
-                etf_code=leg_etf,
-                amount=leg_amount,
-                strategy=leg_strategy,
-                order_id="",
-                status="notified",
-                schedule_day=schedule_day, trend_factor=trend_factor,
-            )
+            ok, order_info = _place_buy_order(leg_etf, leg_amount, reason)
+            if ok:
+                _record_dca_log(
+                    fund_code=fund_code,
+                    window_start=window_start,
+                    buy_day=current_day,
+                    etf_code=leg_etf,
+                    amount=leg_amount,
+                    strategy=leg_strategy,
+                    order_id=order_info,
+                    status="filled",
+                    schedule_day=schedule_day, trend_factor=trend_factor,
+                )
+            else:
+                _record_dca_log(
+                    fund_code=fund_code,
+                    window_start=window_start,
+                    buy_day=current_day,
+                    etf_code=leg_etf,
+                    amount=leg_amount,
+                    strategy=leg_strategy,
+                    order_id="",
+                    status="failed",
+                    schedule_day=schedule_day, trend_factor=trend_factor,
+                )
+                results.append(
+                    f"❌ {idx['index_name']} {leg_etf}: 买入未成交 ({order_info})"
+                )
 
         executed_count += 1
         total_invested_today += daily_amount

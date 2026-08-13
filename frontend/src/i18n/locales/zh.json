@@ -88,7 +88,8 @@
     "capitalFailed": "资金调整失败",
     "capitalConfirm": "确认调整",
     "capitalCancel": "取消",
-    "capitalSubmitting": "提交中..."
+    "capitalSubmitting": "提交中...",
+    "switchAccount": "切换模拟盘账户"
   },
   "trading": {
     "title": "交易",

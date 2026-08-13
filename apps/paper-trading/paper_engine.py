@@ -147,14 +147,19 @@ class PaperTradingEngine:
         # 无法识别，保持原样（可能是期货代码等）
         return symbol
 
-    def __init__(self, data_dir: str = "./data", initial_capital: float = 1000000.0):
+    def __init__(self, data_dir: str = "./data", initial_capital: float = 1000000.0,
+                 account_id: str = "stock"):
         """
         初始化模拟账户
 
         Args:
             data_dir: 数据目录（兼容旧接口，PostgreSQL 模式下仅用于 account.json 回退）
             initial_capital: 初始资金（仅首次创建账户时有效）
+            account_id: 模拟盘账户标识（多账户隔离，默认 stock）
         """
+        self.account_id = account_id
+        # 订单号前缀：每个账户独立（stock=ORD, golden_pit=GP）
+        self.order_prefix = {"stock": "ORD", "golden_pit": "GP"}.get(account_id, "ORD")
         self.data_dir = os.path.expanduser(data_dir)
         os.makedirs(self.data_dir, exist_ok=True)
         self.db_file = os.path.join(self.data_dir, "trades.db")  # 保留用于迁移
@@ -181,7 +186,8 @@ class PaperTradingEngine:
             cursor = conn.cursor()
             cursor.execute(
                 'SELECT initial_capital, available_cash, frozen_cash, order_counter '
-                'FROM paper_account_info WHERE id=1'
+                'FROM paper_account_info WHERE account_id = %s',
+                (self.account_id,)
             )
             row = cursor.fetchone()
             conn.close()
@@ -213,14 +219,30 @@ class PaperTradingEngine:
             print(f"[OK] 账户数据从 account.json 迁移至 PostgreSQL，可用资金：{self.available_cash:,.2f}")
             print(f"[OK] 持仓从 PostgreSQL 读取: {len(self.positions)} 只")
         else:
-            # 创建新账户
+            # 创建新账户（资金优先取 paper_accounts 注册表配置）
+            reg_capital = None
+            try:
+                conn = self._get_pg_conn()
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT initial_capital FROM paper_accounts WHERE account_id = %s',
+                    (self.account_id,)
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    reg_capital = float(row[0])
+            except Exception:
+                reg_capital = None
+            if reg_capital is not None:
+                initial_capital = reg_capital
             self.initial_capital = initial_capital
             self.available_cash = initial_capital
             self.frozen_cash = 0.0
             self.positions = {}
             self.order_counter = 0
             self._save_account()
-            print(f"[OK] 已创建新账户，初始资金：{initial_capital:,.2f}")
+            print(f"[OK] 已创建新账户 {self.account_id}，初始资金：{initial_capital:,.2f}")
     
     def _load_positions_from_db(self) -> dict:
         """从 PostgreSQL 读取持仓（FIFO 计算）"""
@@ -232,15 +254,19 @@ class PaperTradingEngine:
 
             # 从 paper_positions 表读取 entry_date 和 highest_price
             pos_meta = {}
-            cursor.execute('SELECT symbol, entry_date, highest_price FROM paper_positions')
+            cursor.execute(
+                'SELECT symbol, entry_date, highest_price FROM paper_positions WHERE account_id = %s',
+                (self.account_id,)
+            )
             for row in cursor.fetchall():
                 pos_meta[row[0]] = {'entry_date': row[1], 'highest_price': float(row[2] or 0)}
 
             # 获取所有交易记录（与 portfolio.calculate_positions_from_db 保持一致）
             cursor.execute(
                 'SELECT symbol, direction, price, volume FROM paper_trades '
-                'WHERE voided = 0 OR voided IS NULL '
-                'ORDER BY COALESCE(trade_date, created_at::date::text), id'
+                'WHERE (voided = 0 OR voided IS NULL) AND account_id = %s '
+                'ORDER BY COALESCE(trade_date, created_at::date::text), id',
+                (self.account_id,)
             )
             trades = cursor.fetchall()
 
@@ -296,7 +322,10 @@ class PaperTradingEngine:
         cursor = conn.cursor()
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        cursor.execute('SELECT highest_price FROM paper_positions WHERE symbol = %s', (symbol,))
+        cursor.execute(
+            'SELECT highest_price FROM paper_positions WHERE account_id = %s AND symbol = %s',
+            (self.account_id, symbol)
+        )
         row = cursor.fetchone()
 
         if row:
@@ -305,18 +334,21 @@ class PaperTradingEngine:
 
             if entry_date is not None:
                 cursor.execute(
-                    'UPDATE paper_positions SET entry_date = %s, highest_price = %s, updated_at = %s WHERE symbol = %s',
-                    (entry_date, new_high, now, symbol)
+                    'UPDATE paper_positions SET entry_date = %s, highest_price = %s, updated_at = %s '
+                    'WHERE account_id = %s AND symbol = %s',
+                    (entry_date, new_high, now, self.account_id, symbol)
                 )
             else:
                 cursor.execute(
-                    'UPDATE paper_positions SET highest_price = %s, updated_at = %s WHERE symbol = %s',
-                    (new_high, now, symbol)
+                    'UPDATE paper_positions SET highest_price = %s, updated_at = %s '
+                    'WHERE account_id = %s AND symbol = %s',
+                    (new_high, now, self.account_id, symbol)
                 )
         else:
             cursor.execute(
-                'INSERT INTO paper_positions (symbol, entry_date, highest_price, updated_at) VALUES (%s, %s, %s, %s)',
-                (symbol, entry_date or datetime.now().strftime('%Y-%m-%d'),
+                'INSERT INTO paper_positions (account_id, symbol, entry_date, highest_price, updated_at) '
+                'VALUES (%s, %s, %s, %s, %s)',
+                (self.account_id, symbol, entry_date or datetime.now().strftime('%Y-%m-%d'),
                  highest_price if highest_price is not None else 0.0, now)
             )
 
@@ -328,7 +360,10 @@ class PaperTradingEngine:
         try:
             conn = self._get_pg_conn()
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM paper_positions WHERE symbol = %s', (symbol,))
+            cursor.execute(
+                'DELETE FROM paper_positions WHERE account_id = %s AND symbol = %s',
+                (self.account_id, symbol)
+            )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -340,19 +375,24 @@ class PaperTradingEngine:
             conn = self._get_pg_conn()
             cursor = conn.cursor()
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            # 锁定行再 upsert，保证并发安全
-            cursor.execute('SELECT id FROM paper_account_info WHERE id = 1 FOR UPDATE')
+            # 锁定行再 upsert，保证并发安全（按账户行锁）
+            cursor.execute(
+                'SELECT account_id FROM paper_account_info WHERE account_id = %s FOR UPDATE',
+                (self.account_id,)
+            )
             if cursor.fetchone():
                 cursor.execute(
                     'UPDATE paper_account_info SET initial_capital = %s, available_cash = %s, '
-                    'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE id = 1',
-                    (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now)
+                    'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE account_id = %s',
+                    (self.initial_capital, self.available_cash, self.frozen_cash,
+                     self.order_counter, now, self.account_id)
                 )
             else:
                 cursor.execute(
-                    'INSERT INTO paper_account_info (id, initial_capital, available_cash, frozen_cash, order_counter, updated_at) '
-                    'VALUES (1, %s, %s, %s, %s, %s)',
-                    (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now)
+                    'INSERT INTO paper_account_info (account_id, initial_capital, available_cash, frozen_cash, order_counter, updated_at) '
+                    'VALUES (%s, %s, %s, %s, %s, %s)',
+                    (self.account_id, self.initial_capital, self.available_cash,
+                     self.frozen_cash, self.order_counter, now)
                 )
             conn.commit()
             conn.close()
@@ -364,10 +404,11 @@ class PaperTradingEngine:
         conn = self._get_pg_conn()
         cursor = conn.cursor()
 
-        # PostgreSQL DDL — 5 张表
+        # PostgreSQL DDL — 5 张账本表（多账户：全部带 account_id）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS paper_orders (
                 orderid TEXT PRIMARY KEY,
+                account_id VARCHAR(16) NOT NULL DEFAULT 'stock',
                 symbol TEXT NOT NULL,
                 direction TEXT NOT NULL,
                 price DOUBLE PRECISION NOT NULL,
@@ -383,6 +424,7 @@ class PaperTradingEngine:
             CREATE TABLE IF NOT EXISTS paper_trades (
                 id SERIAL PRIMARY KEY,
                 orderid TEXT NOT NULL,
+                account_id VARCHAR(16) NOT NULL DEFAULT 'stock',
                 symbol TEXT NOT NULL,
                 direction TEXT NOT NULL,
                 price DOUBLE PRECISION NOT NULL,
@@ -399,18 +441,20 @@ class PaperTradingEngine:
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS paper_positions (
-                symbol TEXT PRIMARY KEY,
+                account_id VARCHAR(16) NOT NULL DEFAULT 'stock',
+                symbol TEXT NOT NULL,
                 entry_date TEXT NOT NULL,
                 highest_price DOUBLE PRECISION DEFAULT 0.0,
                 updated_at TEXT NOT NULL,
                 volume INTEGER DEFAULT 0,
                 frozen INTEGER DEFAULT 0,
-                avg_price DOUBLE PRECISION DEFAULT 0.0
+                avg_price DOUBLE PRECISION DEFAULT 0.0,
+                PRIMARY KEY (account_id, symbol)
             )
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS paper_account_info (
-                id INTEGER PRIMARY KEY,
+                account_id VARCHAR(16) PRIMARY KEY,
                 initial_capital DOUBLE PRECISION NOT NULL,
                 available_cash DOUBLE PRECISION NOT NULL,
                 frozen_cash DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -420,7 +464,8 @@ class PaperTradingEngine:
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS paper_daily_snapshot (
-                trade_date TEXT PRIMARY KEY,
+                account_id VARCHAR(16) NOT NULL DEFAULT 'stock',
+                trade_date TEXT NOT NULL,
                 total_asset DOUBLE PRECISION NOT NULL,
                 available_cash DOUBLE PRECISION NOT NULL,
                 frozen_cash DOUBLE PRECISION DEFAULT 0,
@@ -430,16 +475,56 @@ class PaperTradingEngine:
                 float_pnl DOUBLE PRECISION DEFAULT 0,
                 total_pnl DOUBLE PRECISION DEFAULT 0,
                 initial_capital DOUBLE PRECISION NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (account_id, trade_date)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS paper_accounts (
+                account_id VARCHAR(16) PRIMARY KEY,
+                name VARCHAR(50) NOT NULL,
+                module VARCHAR(50) DEFAULT '',
+                initial_capital DOUBLE PRECISION NOT NULL,
+                enabled INTEGER DEFAULT 1,
                 created_at TEXT NOT NULL
             )
         ''')
+        # 种子注册表：stock / golden_pit
+        cursor.execute(
+            'INSERT INTO paper_accounts (account_id, name, module, initial_capital, enabled, created_at) '
+            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (account_id) DO NOTHING',
+            ('stock', '股票任务', 'stock', 1000000.0, 1, datetime.now().isoformat())
+        )
+        cursor.execute(
+            'INSERT INTO paper_accounts (account_id, name, module, initial_capital, enabled, created_at) '
+            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (account_id) DO NOTHING',
+            ('golden_pit', '黄金坑 DCA', 'golden_pit', 200000.0, 1, datetime.now().isoformat())
+        )
+        # 幂等迁移：存量表补 account_id 列（默认 stock），重建复合主键
+        cursor.execute("ALTER TABLE paper_orders ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+        cursor.execute("ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+        cursor.execute("ALTER TABLE IF EXISTS paper_capital_adjustments ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+        cursor.execute("ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+        cursor.execute('ALTER TABLE paper_positions DROP CONSTRAINT IF EXISTS paper_positions_pkey')
+        cursor.execute('ALTER TABLE paper_positions ADD PRIMARY KEY (account_id, symbol)')
+        cursor.execute("ALTER TABLE paper_daily_snapshot ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+        cursor.execute('ALTER TABLE paper_daily_snapshot DROP CONSTRAINT IF EXISTS paper_daily_snapshot_pkey')
+        cursor.execute('ALTER TABLE paper_daily_snapshot ADD PRIMARY KEY (account_id, trade_date)')
+        cursor.execute("ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS account_id VARCHAR(16)")
+        cursor.execute('ALTER TABLE paper_account_info DROP CONSTRAINT IF EXISTS paper_account_info_pkey')
+        cursor.execute('ALTER TABLE paper_account_info DROP COLUMN IF EXISTS id')
+        cursor.execute("UPDATE paper_account_info SET account_id = 'stock' WHERE account_id IS NULL")
+        cursor.execute('ALTER TABLE paper_account_info ALTER COLUMN account_id SET NOT NULL')
+        cursor.execute('ALTER TABLE paper_account_info ADD PRIMARY KEY (account_id)')
 
         # 索引
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades (symbol)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_time ON paper_trades (created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_dir_date ON paper_trades (direction, created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_account ON paper_trades (account_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_orders_symbol ON paper_orders (symbol)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_orders_status ON paper_orders (status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_orders_account ON paper_orders (account_id)')
 
         conn.commit()
         conn.close()
@@ -511,11 +596,14 @@ class PaperTradingEngine:
         try:
             conn = self._get_pg_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT MAX(orderid) FROM paper_orders WHERE orderid LIKE 'ORD%'")
+            cursor.execute(
+                'SELECT MAX(orderid) FROM paper_orders WHERE account_id = %s AND orderid LIKE %s',
+                (self.account_id, self.order_prefix + '%')
+            )
             result = cursor.fetchone()[0]
             conn.close()
             if result:
-                max_id = int(result.replace('ORD', ''))
+                max_id = int(result.replace(self.order_prefix, ''))
                 if self.order_counter <= max_id:
                     self.order_counter = max_id + 1
         except:
@@ -523,7 +611,7 @@ class PaperTradingEngine:
         
         # 创建订单
         self.order_counter += 1
-        order_id = f"ORD{self.order_counter:06d}"
+        order_id = f"{self.order_prefix}{self.order_counter:06d}"
         order = Order(
             orderid=order_id,
             symbol=symbol,
@@ -574,18 +662,21 @@ class PaperTradingEngine:
         try:
             conn = self._get_pg_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT MAX(orderid) FROM paper_orders WHERE orderid LIKE 'ORD%'")
+            cursor.execute(
+                'SELECT MAX(orderid) FROM paper_orders WHERE account_id = %s AND orderid LIKE %s',
+                (self.account_id, self.order_prefix + '%')
+            )
             result = cursor.fetchone()[0]
             conn.close()
             if result:
-                max_id = int(result.replace('ORD', ''))
+                max_id = int(result.replace(self.order_prefix, ''))
                 if self.order_counter <= max_id:
                     self.order_counter = max_id + 1
         except:
             pass
         
         self.order_counter += 1
-        order_id = f"ORD{self.order_counter:06d}"
+        order_id = f"{self.order_prefix}{self.order_counter:06d}"
         order = Order(
             orderid=order_id,
             symbol=symbol,
@@ -607,7 +698,12 @@ class PaperTradingEngine:
         conn = self._get_pg_conn()
         cursor = conn.cursor()
 
-        cursor.execute('SELECT * FROM paper_orders WHERE orderid = %s', (order_id,))
+        cursor.execute(
+            'SELECT orderid, symbol, direction, price, volume, status, traded, '
+            'created_at, updated_at, reason, account_id '
+            'FROM paper_orders WHERE orderid = %s AND account_id = %s',
+            (order_id, self.account_id)
+        )
         row = cursor.fetchone()
 
         if not row:
@@ -623,8 +719,8 @@ class PaperTradingEngine:
 
         # 更新订单状态
         cursor.execute(
-            'UPDATE paper_orders SET status = %s, updated_at = %s WHERE orderid = %s',
-            (OrderStatus.CANCELLED.value, datetime.now().isoformat(), order_id)
+            'UPDATE paper_orders SET status = %s, updated_at = %s WHERE orderid = %s AND account_id = %s',
+            (OrderStatus.CANCELLED.value, datetime.now().isoformat(), order_id, self.account_id)
         )
         
         conn.commit()
@@ -664,11 +760,19 @@ class PaperTradingEngine:
         conn = self._get_pg_conn()
         cursor = conn.cursor()
 
-        # 锁定账户行，保证整个 match_order 期间无并发写
-        cursor.execute('SELECT id FROM paper_account_info WHERE id = 1 FOR UPDATE')
+        # 锁定账户行，保证整个 match_order 期间无并发写（按账户行）
+        cursor.execute(
+            'SELECT account_id FROM paper_account_info WHERE account_id = %s FOR UPDATE',
+            (self.account_id,)
+        )
 
         # 获取订单
-        cursor.execute('SELECT * FROM paper_orders WHERE orderid = %s', (order_id,))
+        cursor.execute(
+            'SELECT orderid, symbol, direction, price, volume, status, traded, '
+            'created_at, updated_at, reason, account_id '
+            'FROM paper_orders WHERE orderid = %s AND account_id = %s',
+            (order_id, self.account_id)
+        )
         row = cursor.fetchone()
 
         if not row:
@@ -690,8 +794,8 @@ class PaperTradingEngine:
         order.updated_at = datetime.now().isoformat()
 
         cursor.execute(
-            'UPDATE paper_orders SET status = %s, traded = %s, updated_at = %s WHERE orderid = %s',
-            (order.status, order.traded, order.updated_at, order_id)
+            'UPDATE paper_orders SET status = %s, traded = %s, updated_at = %s WHERE orderid = %s AND account_id = %s',
+            (order.status, order.traded, order.updated_at, order_id, self.account_id)
         )
         
         # 更新持仓
@@ -726,27 +830,30 @@ class PaperTradingEngine:
             if not pos.entry_date:
                 pos.entry_date = datetime.now().strftime('%Y-%m-%d')
             now_meta = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('SELECT highest_price FROM paper_positions WHERE symbol = %s', (order.symbol,))
+            cursor.execute(
+                'SELECT highest_price FROM paper_positions WHERE account_id = %s AND symbol = %s',
+                (self.account_id, order.symbol)
+            )
             meta_row = cursor.fetchone()
             if meta_row:
                 current_high = float(meta_row[0] or 0)
                 new_high = fill_price if fill_price > current_high else current_high
                 cursor.execute(
-                    'UPDATE paper_positions SET entry_date = %s, highest_price = %s, updated_at = %s WHERE symbol = %s',
-                    (pos.entry_date, new_high, now_meta, order.symbol)
+                    'UPDATE paper_positions SET entry_date = %s, highest_price = %s, volume = %s, avg_price = %s, frozen = %s, updated_at = %s WHERE account_id = %s AND symbol = %s',
+                    (pos.entry_date, new_high, pos.volume, pos.avg_price, pos.frozen, now_meta, self.account_id, order.symbol)
                 )
             else:
                 cursor.execute(
-                    'INSERT INTO paper_positions (symbol, entry_date, highest_price, updated_at) VALUES (%s, %s, %s, %s)',
-                    (order.symbol, pos.entry_date, fill_price, now_meta)
+                    'INSERT INTO paper_positions (account_id, symbol, entry_date, highest_price, volume, avg_price, frozen, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
+                    (self.account_id, order.symbol, pos.entry_date, fill_price, pos.volume, pos.avg_price, pos.frozen, now_meta)
                 )
 
             # 记录成交
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute(
-                'INSERT INTO paper_trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
-                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                (order_id, order.symbol, order.direction, fill_price, order.volume,
+                'INSERT INTO paper_trades (orderid, account_id, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                (order_id, self.account_id, order.symbol, order.direction, fill_price, order.volume,
                  fill_price * order.volume, 0, datetime.now().isoformat(), td, getattr(order, 'reason', ''))
             )
 
@@ -756,17 +863,17 @@ class PaperTradingEngine:
             date_val = self._trade_date or (order.created_at if hasattr(order, 'created_at') and order.created_at else datetime.now().isoformat())
 
             cursor.execute(
-                'SELECT price, volume FROM paper_trades WHERE symbol = %s AND direction = %s '
+                'SELECT price, volume FROM paper_trades WHERE account_id = %s AND symbol = %s AND direction = %s '
                 'AND (voided = 0 OR voided IS NULL) '
                 'ORDER BY COALESCE(trade_date, created_at::date::text), id',
-                (order.symbol, Direction.LONG.value)
+                (self.account_id, order.symbol, Direction.LONG.value)
             )
             buy_trades = cursor.fetchall()
             cursor.execute(
-                'SELECT price, volume FROM paper_trades WHERE symbol = %s AND direction = %s '
+                'SELECT price, volume FROM paper_trades WHERE account_id = %s AND symbol = %s AND direction = %s '
                 'AND (voided = 0 OR voided IS NULL) '
                 'ORDER BY COALESCE(trade_date, created_at::date::text), id',
-                (order.symbol, Direction.SHORT.value)
+                (self.account_id, order.symbol, Direction.SHORT.value)
             )
             sell_trades = cursor.fetchall()
 
@@ -799,8 +906,8 @@ class PaperTradingEngine:
                     f"FIFO 可用 {available_to_sell} (同日多次卖出或回放重放所致)"
                 )
                 cursor.execute(
-                    'UPDATE paper_orders SET status = %s, updated_at = %s WHERE orderid = %s',
-                    (OrderStatus.SUBMITTING.value, datetime.now().isoformat(), order_id)
+                    'UPDATE paper_orders SET status = %s, updated_at = %s WHERE orderid = %s AND account_id = %s',
+                    (OrderStatus.SUBMITTING.value, datetime.now().isoformat(), order_id, self.account_id)
                 )
                 conn.commit()
                 conn.close()
@@ -845,22 +952,31 @@ class PaperTradingEngine:
             # 记录成交
             td = self._trade_date or datetime.now().strftime('%Y-%m-%d')
             cursor.execute(
-                'INSERT INTO paper_trades (orderid, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
-                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                (order_id, order.symbol, order.direction, fill_price, order.volume,
+                'INSERT INTO paper_trades (orderid, account_id, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                (order_id, self.account_id, order.symbol, order.direction, fill_price, order.volume,
                  fill_price * order.volume, net_profit, datetime.now().isoformat(), td, getattr(order, 'reason', ''))
             )
 
             if pos.volume == 0:
-                cursor.execute('DELETE FROM paper_positions WHERE symbol = %s', (order.symbol,))
+                cursor.execute(
+                    'DELETE FROM paper_positions WHERE account_id = %s AND symbol = %s',
+                    (self.account_id, order.symbol)
+                )
                 del self.positions[order.symbol]
+            else:
+                cursor.execute(
+                    'UPDATE paper_positions SET volume = %s, avg_price = %s, frozen = %s, updated_at = %s WHERE account_id = %s AND symbol = %s',
+                    (pos.volume, pos.avg_price, pos.frozen, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), self.account_id, order.symbol)
+                )
 
         # 在同一事务内更新账户状态（行已由开头的 FOR UPDATE 锁定）
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cursor.execute(
             'UPDATE paper_account_info SET initial_capital = %s, available_cash = %s, '
-            'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE id = 1',
-            (self.initial_capital, self.available_cash, self.frozen_cash, self.order_counter, now)
+            'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE account_id = %s',
+            (self.initial_capital, self.available_cash, self.frozen_cash,
+             self.order_counter, now, self.account_id)
         )
 
         conn.commit()
@@ -941,8 +1057,8 @@ class PaperTradingEngine:
         conn = self._get_pg_conn()
         cursor = conn.cursor()
 
-        query = 'SELECT * FROM paper_orders WHERE 1=1'
-        params = []
+        query = 'SELECT * FROM paper_orders WHERE account_id = %s'
+        params = [self.account_id]
 
         if symbol:
             query += ' AND symbol = %s'
@@ -967,8 +1083,8 @@ class PaperTradingEngine:
         conn = self._get_pg_conn()
         cursor = conn.cursor()
 
-        query = 'SELECT * FROM paper_trades WHERE 1=1'
-        params = []
+        query = 'SELECT * FROM paper_trades WHERE account_id = %s'
+        params = [self.account_id]
 
         if symbol:
             query += ' AND symbol = %s'
@@ -989,12 +1105,16 @@ class PaperTradingEngine:
         conn = self._get_pg_conn()
         cursor = conn.cursor()
 
-        cursor.execute('SELECT COALESCE(SUM(profit), 0) FROM paper_trades')
+        cursor.execute(
+            'SELECT COALESCE(SUM(profit), 0) FROM paper_trades WHERE account_id = %s',
+            (self.account_id,)
+        )
         total_profit = cursor.fetchone()[0] or 0
 
         cursor.execute(
             'SELECT symbol, COALESCE(SUM(profit), 0), COUNT(*) '
-            'FROM paper_trades GROUP BY symbol ORDER BY 2 DESC'
+            'FROM paper_trades WHERE account_id = %s GROUP BY symbol ORDER BY 2 DESC',
+            (self.account_id,)
         )
         by_symbol = cursor.fetchall()
         
@@ -1010,7 +1130,7 @@ class PaperTradingEngine:
         """获取总交易次数"""
         conn = self._get_pg_conn()
         cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM paper_trades')
+        cursor.execute('SELECT COUNT(*) FROM paper_trades WHERE account_id = %s', (self.account_id,))
         count = cursor.fetchone()[0]
         conn.close()
         return count
@@ -1020,9 +1140,9 @@ class PaperTradingEngine:
         conn = self._get_pg_conn()
         cursor = conn.cursor()
         cursor.execute(
-            'INSERT INTO paper_orders (orderid, symbol, direction, price, volume, status, traded, created_at, updated_at, reason) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-            (order.orderid, order.symbol, order.direction, order.price, order.volume,
+            'INSERT INTO paper_orders (orderid, account_id, symbol, direction, price, volume, status, traded, created_at, updated_at, reason) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            (order.orderid, self.account_id, order.symbol, order.direction, order.price, order.volume,
              order.status, order.traded, order.created_at, order.updated_at, getattr(order, 'reason', ''))
         )
         conn.commit()

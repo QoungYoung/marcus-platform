@@ -403,7 +403,7 @@ class SchedulerService:
                 if monitor.executor is None:
                     try:
                         from app.core.trading.marcus_trade import MarcusVNPyExecutor
-                        monitor.executor = MarcusVNPyExecutor()
+                        monitor.executor = MarcusVNPyExecutor(account_id="stock")
                         logger.info(f"[{execution_id}] 🔗 止损监控器已绑定交易执行器")
                     except Exception as e:
                         logger.warning(f"[{execution_id}] ⚠️ 止损监控器无法绑定执行器: {e}")
@@ -416,7 +416,7 @@ class SchedulerService:
                 try:
                     from app.services.candidate_pool_monitor import get_candidate_pool_monitor
                     from app.core.trading.marcus_trade import MarcusVNPyExecutor
-                    pool_monitor = get_candidate_pool_monitor(executor=MarcusVNPyExecutor())
+                    pool_monitor = get_candidate_pool_monitor(executor=MarcusVNPyExecutor(account_id="stock"))
                     if not pool_monitor.is_running():
                         pool_monitor.start()
                         logger.info(f"[{execution_id}] 🟢 候选池监控已随首个交易任务启动")
@@ -428,7 +428,7 @@ class SchedulerService:
                 try:
                     from app.services.position_tier_monitor import get_position_tier_monitor
                     from app.core.trading.marcus_trade import MarcusVNPyExecutor
-                    tier_monitor = get_position_tier_monitor(executor=MarcusVNPyExecutor())
+                    tier_monitor = get_position_tier_monitor(executor=MarcusVNPyExecutor(account_id="stock"))
                     if not tier_monitor.is_running():
                         tier_monitor.start()
                         logger.info(f"[{execution_id}] 🟢 加仓层级监控已随首个交易任务启动")
@@ -475,7 +475,7 @@ class SchedulerService:
                 # 每次扫描结束后记录全市场主力净流出
                 try:
                     from app.core.trading.marcus_trade import MarcusVNPyExecutor
-                    executor = MarcusVNPyExecutor()
+                    executor = MarcusVNPyExecutor(account_id="stock")
                     outflow = executor._get_market_outflow_billion()
                     scan_result = executor.record_market_outflow_scan(outflow)
                     

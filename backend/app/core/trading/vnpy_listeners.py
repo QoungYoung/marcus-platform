@@ -112,19 +112,22 @@ def _sync_order(pg_params: dict, params: tuple) -> None:
     try:
         conn = _get_conn(pg_params)
         cur = conn.cursor()
-        cur.execute("SELECT orderid FROM paper_orders WHERE orderid = %s", (orderid,))
+        cur.execute(
+            "SELECT orderid FROM paper_orders WHERE orderid = %s AND account_id = 'stock'",
+            (orderid,),
+        )
         if cur.fetchone():
             cur.execute(
                 "UPDATE paper_orders SET status = %s, traded = %s, "
-                "updated_at = %s WHERE orderid = %s",
+                "updated_at = %s WHERE orderid = %s AND account_id = 'stock'",
                 (status, traded, now, orderid),
             )
         else:
             cur.execute(
                 "INSERT INTO paper_orders "
-                "(orderid, symbol, direction, price, volume, status, "
+                "(orderid, account_id, symbol, direction, price, volume, status, "
                 "traded, created_at, updated_at, reason) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "VALUES (%s, 'stock', %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (orderid, symbol, direction, price, volume, status,
                  traded, now, now, reason),
             )
@@ -174,7 +177,7 @@ def _sync_trade(pg_params: dict, params: tuple) -> None:
         cur = conn.cursor()
         cur.execute(
             "SELECT id FROM paper_trades WHERE orderid = %s AND symbol = %s "
-            "AND direction = %s AND price = %s AND volume = %s",
+            "AND direction = %s AND price = %s AND volume = %s AND account_id = 'stock'",
             (orderid, symbol, direction, price, volume),
         )
         if cur.fetchone():
@@ -182,9 +185,9 @@ def _sync_trade(pg_params: dict, params: tuple) -> None:
             return
         cur.execute(
             "INSERT INTO paper_trades "
-            "(orderid, symbol, direction, price, volume, amount, profit, "
+            "(orderid, account_id, symbol, direction, price, volume, amount, profit, "
             "created_at, trade_date, reason) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "VALUES (%s, 'stock', %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (orderid, symbol, direction, price, volume, amount,
              0, now, trade_date, ''),
         )
@@ -225,14 +228,14 @@ def _sync_account(pg_params: dict, params: tuple) -> None:
         cur = conn.cursor()
         cur.execute(
             "UPDATE paper_account_info SET available_cash = %s, "
-            "frozen_cash = %s, updated_at = %s WHERE id = 1",
+            "frozen_cash = %s, updated_at = %s WHERE account_id = 'stock'",
             (balance, frozen, now),
         )
         if cur.rowcount == 0:
             cur.execute(
                 "INSERT INTO paper_account_info "
-                "(id, initial_capital, available_cash, frozen_cash, updated_at) "
-                "VALUES (1, %s, %s, %s, %s)",
+                "(account_id, initial_capital, available_cash, frozen_cash, updated_at) "
+                "VALUES ('stock', %s, %s, %s, %s)",
                 (balance, balance, frozen, now),
             )
         conn.commit()
@@ -280,25 +283,31 @@ def _sync_position(pg_params: dict, params: tuple) -> None:
         conn = _get_conn(pg_params)
         cur = conn.cursor()
         if volume <= 0:
-            cur.execute("DELETE FROM paper_positions WHERE symbol = %s", (symbol,))
+            cur.execute(
+                "DELETE FROM paper_positions WHERE account_id = 'stock' AND symbol = %s",
+                (symbol,),
+            )
             conn.commit()
             conn.close()
             return
-        cur.execute("SELECT symbol FROM paper_positions WHERE symbol = %s", (symbol,))
+        cur.execute(
+            "SELECT symbol FROM paper_positions WHERE account_id = 'stock' AND symbol = %s",
+            (symbol,),
+        )
         if cur.fetchone():
             cur.execute(
                 "UPDATE paper_positions SET volume = %s, frozen = %s, "
                 "avg_price = %s, "
                 "highest_price = GREATEST(COALESCE(highest_price, 0), %s), "
-                "updated_at = %s WHERE symbol = %s",
+                "updated_at = %s WHERE account_id = 'stock' AND symbol = %s",
                 (volume, frozen, price, price, now, symbol),
             )
         else:
             cur.execute(
                 "INSERT INTO paper_positions "
-                "(symbol, entry_date, highest_price, updated_at, "
+                "(account_id, symbol, entry_date, highest_price, updated_at, "
                 "volume, frozen, avg_price) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "VALUES ('stock', %s, %s, %s, %s, %s, %s, %s)",
                 (symbol, today, price, now, volume, frozen, price),
             )
         conn.commit()

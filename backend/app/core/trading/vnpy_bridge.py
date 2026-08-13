@@ -564,7 +564,7 @@ class VNPyBridge:
             cur = conn.cursor()
             cur.execute(
                 "SELECT initial_capital, available_cash, frozen_cash "
-                "FROM paper_account_info WHERE id=1"
+                "FROM paper_account_info WHERE account_id = 'stock'"
             )
             row = cur.fetchone()
             conn.close()
@@ -617,7 +617,7 @@ class VNPyBridge:
             cur = conn.cursor()
             cur.execute(
                 "SELECT initial_capital, available_cash, frozen_cash "
-                "FROM paper_account_info WHERE id=1"
+                "FROM paper_account_info WHERE account_id = 'stock'"
             )
             row = cur.fetchone()
             conn.close()
@@ -644,7 +644,8 @@ class VNPyBridge:
             cur = conn.cursor()
             cur.execute(
                 "SELECT symbol, volume, frozen, avg_price, entry_date, highest_price "
-                "FROM paper_positions WHERE volume > 0 AND coalesce(frozen, 0) >= 0"
+                "FROM paper_positions WHERE account_id = 'stock' "
+                "AND volume > 0 AND coalesce(frozen, 0) >= 0"
             )
             result = []
             for row in cur.fetchall():
@@ -668,7 +669,8 @@ class VNPyBridge:
             cur = conn.cursor()
             cur.execute(
                 "SELECT COALESCE(SUM(profit), 0) FROM paper_trades "
-                "WHERE (voided = 0 OR voided IS NULL) AND direction = '卖出'"
+                "WHERE account_id = 'stock' "
+                "AND (voided = 0 OR voided IS NULL) AND direction = '卖出'"
             )
             row = cur.fetchone()
             conn.close()
@@ -685,7 +687,8 @@ class VNPyBridge:
                 cur.execute(
                     "SELECT id, orderid, symbol, direction, price, volume, amount, "
                     "profit, created_at, trade_date, reason "
-                    "FROM paper_trades WHERE (voided = 0 OR voided IS NULL) "
+                    "FROM paper_trades WHERE account_id = 'stock' "
+                    "AND (voided = 0 OR voided IS NULL) "
                     "AND symbol = %s ORDER BY id DESC LIMIT %s",
                     (symbol, limit),
                 )
@@ -693,7 +696,8 @@ class VNPyBridge:
                 cur.execute(
                     "SELECT id, orderid, symbol, direction, price, volume, amount, "
                     "profit, created_at, trade_date, reason "
-                    "FROM paper_trades WHERE (voided = 0 OR voided IS NULL) "
+                    "FROM paper_trades WHERE account_id = 'stock' "
+                    "AND (voided = 0 OR voided IS NULL) "
                     "ORDER BY id DESC LIMIT %s",
                     (limit,),
                 )
@@ -712,7 +716,7 @@ class VNPyBridge:
             sql = (
                 "SELECT orderid, symbol, direction, price, volume, status, "
                 "traded, created_at, updated_at, reason "
-                "FROM paper_orders WHERE 1=1"
+                "FROM paper_orders WHERE account_id = 'stock'"
             )
             params = []
             if symbol:

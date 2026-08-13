@@ -1,13 +1,29 @@
 # -*- coding: utf-8 -*-
 """Paper trading engine tables migrated from SQLite to PostgreSQL."""
+from datetime import datetime
 from sqlalchemy import Column, String, Integer, Float, Text, DateTime
+
 from app.database import Base
+
+
+class PaperAccount(Base):
+    """模拟盘账户注册表 — 多账户隔离的入口。"""
+
+    __tablename__ = "paper_accounts"
+
+    account_id = Column(String(16), primary_key=True)
+    name = Column(String(50), nullable=False)
+    module = Column(String(50), default="")
+    initial_capital = Column(Float, nullable=False)
+    enabled = Column(Integer, default=1)
+    created_at = Column(Text, nullable=False)
 
 
 class PaperOrder(Base):
     __tablename__ = "paper_orders"
 
     orderid = Column(String(32), primary_key=True)
+    account_id = Column(String(16), nullable=False, default="stock", index=True)
     symbol = Column(String(16), nullable=False, index=True)
     direction = Column(String(8), nullable=False)
     price = Column(Float, nullable=False)
@@ -24,6 +40,7 @@ class PaperTrade(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     orderid = Column(String(32), nullable=False)
+    account_id = Column(String(16), nullable=False, default="stock", index=True)
     symbol = Column(String(16), nullable=False, index=True)
     direction = Column(String(8), nullable=False)
     price = Column(Float, nullable=False)
@@ -41,6 +58,7 @@ class PaperTrade(Base):
 class PaperPosition(Base):
     __tablename__ = "paper_positions"
 
+    account_id = Column(String(16), primary_key=True)
     symbol = Column(String(16), primary_key=True)
     volume = Column(Integer, default=0)
     frozen = Column(Integer, default=0)
@@ -53,7 +71,7 @@ class PaperPosition(Base):
 class PaperAccountInfo(Base):
     __tablename__ = "paper_account_info"
 
-    id = Column(Integer, primary_key=True)
+    account_id = Column(String(16), primary_key=True)
     initial_capital = Column(Float, nullable=False)
     available_cash = Column(Float, nullable=False)
     frozen_cash = Column(Float, nullable=False, default=0)
@@ -64,6 +82,7 @@ class PaperAccountInfo(Base):
 class PaperDailySnapshot(Base):
     __tablename__ = "paper_daily_snapshot"
 
+    account_id = Column(String(16), primary_key=True)
     trade_date = Column(Text, primary_key=True)
     total_asset = Column(Float, nullable=False)
     available_cash = Column(Float, nullable=False)
@@ -82,6 +101,7 @@ class PaperCapitalAdjustment(Base):
     __tablename__ = "paper_capital_adjustments"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String(16), nullable=False, default="stock", index=True)
     amount = Column(Float, nullable=False)
     balance_after = Column(Float, nullable=False, default=0)
     note = Column(String(200), default="")

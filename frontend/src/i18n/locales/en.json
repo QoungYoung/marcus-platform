@@ -86,7 +86,8 @@
     "capitalFailed": "Failed to adjust capital",
     "capitalConfirm": "Confirm",
     "capitalCancel": "Cancel",
-    "capitalSubmitting": "Submitting..."
+    "capitalSubmitting": "Submitting...",
+    "switchAccount": "Switch paper account"
   },
   "trading": {
     "title": "Trading",

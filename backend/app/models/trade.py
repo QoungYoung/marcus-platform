@@ -11,6 +11,7 @@ class TradeRequest(BaseModel):
     price: float
     volume: int
     reason: Optional[str] = ""
+    account: str = "stock"  # 模拟盘账户标识（默认 stock）
 
 
 class TradeResponse(BaseModel):
