@@ -267,8 +267,11 @@ class SchedulerService:
             logger.info("Scheduler stopped")
 
     def _get_workspace_path(self) -> Path:
-        """获取 workspace 路径"""
-        return Path(self.workspace)
+        """获取 workspace 路径（API/Worker 分离后，未加载 tasks.yaml 时退回 settings）"""
+        if self.workspace:
+            return Path(self.workspace)
+        from app.config import get_settings
+        return Path(get_settings().workspace_path)
 
     def _add_job(self, task: TaskConfig):
         """添加任务到调度器"""
@@ -1507,12 +1510,53 @@ class SchedulerService:
 
     def get_execution_log(self, execution_id: str) -> Optional[str]:
         """获取执行详细日志文件路径"""
-        for task_id_dir in (self._get_workspace_path() / "logs").iterdir():
+        log_dir = self._get_workspace_path() / "logs"
+        if not log_dir.exists():
+            return None
+        for task_id_dir in log_dir.iterdir():
             if task_id_dir.is_dir():
                 log_file = task_id_dir / f"{execution_id}.json"
                 if log_file.exists():
                     return str(log_file)
         return None
+
+    def read_executions_from_disk(self, task_id: str, limit: int = 20) -> List[Dict]:
+        """直接从 JSONL 日志读取执行历史（跨进程安全，供 API 进程读取 worker 写入的日志）。
+
+        与内存版 get_task_executions 等价，但每次重新扫描磁盘，不依赖进程内缓存。
+        """
+        rows: List[Dict] = []
+        log_dir = self._get_workspace_path() / "logs"
+        if not log_dir.exists():
+            return rows
+        for log_file in sorted(log_dir.glob("scheduler_*.jsonl"), reverse=True):
+            try:
+                with open(log_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            if data.get("task_id") != task_id:
+                                continue
+                            rows.append({
+                                "id": data.get("execution_id", ""),
+                                "task_id": task_id,
+                                "task_name": data.get("task_name", ""),
+                                "status": data.get("status", ""),
+                                "started_at": data.get("started_at", ""),
+                                "finished_at": data.get("finished_at"),
+                                "output": (data.get("output") or "")[:500],
+                                "error": (data.get("error") or "")[:200],
+                                "return_code": data.get("return_code", 0),
+                            })
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+        rows.sort(key=lambda x: x["started_at"], reverse=True)
+        return rows[:limit]
 
     def _get_last_execution(self, task_id: str) -> Optional[JobExecution]:
         """获取任务最后执行记录"""

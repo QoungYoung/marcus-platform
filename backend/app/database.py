@@ -99,6 +99,9 @@ def _apply_schema_patches():
     # ── 2026-08: 多账户模拟盘隔离（paper_accounts 注册表 + 6 张 paper 表 account_id 维度） ──
     _apply_paper_account_migration()
 
+    # ── 2026-08: API/Worker 拆分控制通道 ──
+    _apply_worker_control_migration()
+
     # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
     alter_patches = [
         # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
@@ -135,6 +138,44 @@ def _apply_schema_patches():
                 print(f"[DB] PATCH: {table}.{col} ALTER TYPE → {new_type}")
     except Exception as e:
         print(f"[DB] PATCH warn: {e}")
+
+
+def _apply_worker_control_migration():
+    """API/Worker 拆分：worker_status（状态快照）+ worker_commands（控制命令）。"""
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS worker_status (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    pid INTEGER,
+                    hostname TEXT DEFAULT '',
+                    heartbeat TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    snapshot JSONB NOT NULL DEFAULT '{}'::jsonb
+                )
+                """
+            ))
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS worker_commands (
+                    id BIGSERIAL PRIMARY KEY,
+                    cmd TEXT NOT NULL,
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    result JSONB,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    done_at TIMESTAMPTZ
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_worker_commands_status ON worker_commands (status, id)"
+            ))
+        print("[DB] PATCH: worker_status / worker_commands 创建完成")
+    except Exception as e:
+        print(f"[DB] PATCH warn (worker tables): {e}")
 
 
 def _apply_paper_account_migration():

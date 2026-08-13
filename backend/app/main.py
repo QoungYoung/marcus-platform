@@ -43,12 +43,6 @@ from app.api import accounts
 from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
-from app.services.scheduler_service import scheduler_service
-from app.services.qqbot_service import qqbot_service, get_qqbot_service
-from app.services.stop_loss_monitor import get_monitor_status, start_monitor, stop_monitor as stop_sl_monitor
-from app.services.position_tier_monitor import start_tier_monitor, stop_tier_monitor, get_tier_status
-from app.services.candidate_pool_monitor import start_pool_monitor, stop_pool_monitor
-from app.services.long_term_pool_monitor import start_lt_pool_monitor, stop_lt_pool_monitor
 from app.database import init_db
 from app.services.prompt_service import seed_prompts
 from app.db.prompt_seeds import PROMPT_SEEDS
@@ -102,54 +96,7 @@ async def lifespan(app: FastAPI):
         print(f"[Main] 使用 legacy paper engine (ENGINE_BACKEND=paper)")
 
     from app.core.trading.marcus_trade import MarcusVNPyExecutor, set_bridge
-    set_bridge(bridge)  # 供调度任务(DCA等)直接调用，避免 HTTP 回环死锁
-
-    scheduler_service.start()
-    print(f"Scheduler started - {len(scheduler_service.tasks)} tasks loaded")
-
-    # 启动止损监控器（自动关联 MarcusVNPyExecutor）
-    try:
-        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
-        started = start_monitor(executor=executor)
-        if started:
-            print(f"[Main] ✅ 止损监控已启动 (bridge={'vnpy' if bridge else 'paper'})")
-        else:
-            print(f"[Main] ⚠️ 止损监控启动返回 False（可能已在运行）")
-    except Exception as e:
-        print(f"[Main] ⚠️ 止损监控启动失败: {e}")
-
-    # 启动加仓层级监控器（与止损监控并行）
-    try:
-        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
-        started = start_tier_monitor(executor=executor)
-        if started:
-            print(f"[Main] ✅ 加仓层级监控已启动")
-        else:
-            print(f"[Main] ⚠️ 加仓层级监控启动返回 False（可能已在运行）")
-    except Exception as e:
-        print(f"[Main] ⚠️ 加仓层级监控启动失败: {e}")
-
-    # 启动候选池监控器（与止损/加仓监控并行，30s轮询自动建仓）
-    try:
-        executor = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
-        started = start_pool_monitor(executor=executor)
-        if started:
-            print(f"[Main] ✅ 候选池监控已启动")
-        else:
-            print(f"[Main] ⚠️ 候选池监控启动返回 False（可能已在运行）")
-    except Exception as e:
-        print(f"[Main] ⚠️ 候选池监控启动失败: {e}")
-
-    # 启动长期观察候选池监控器（5分钟轮询，无过期，日上限5笔）
-    try:
-        executor_lt = MarcusVNPyExecutor(bridge=app.state.vnpy_bridge, account_id="stock")
-        started = start_lt_pool_monitor(executor=executor_lt)
-        if started:
-            print(f"[Main] ✅ 长期候选池监控已启动")
-        else:
-            print(f"[Main] ⚠️ 长期候选池监控启动返回 False（可能已在运行）")
-    except Exception as e:
-        print(f"[Main] ⚠️ 长期候选池监控启动失败: {e}")
+    set_bridge(bridge)  # 供 API 手动交易/查询执行器使用（调度任务已移至 worker 进程）
 
     # 预热 PostgreSQL 连接池（Paper trading 已迁移至 PostgreSQL）
     try:
@@ -182,55 +129,17 @@ async def lifespan(app: FastAPI):
             print(f"[Main] ⚠️ K线缓存预热失败（非致命）: {e}")
     asyncio.create_task(_warm_kline_cache())
 
-    # 启动 QQ Bot 监听器
-    if settings.QQ_BOT_ENABLED:
-        print(f"[Main] 启动 QQ Bot 服务...")
-        qqbot_service.set_pi_server_url(settings.PI_SERVER_URL)
-        if settings.QQ_BOT_RECIPIENT:
-            qqbot_service.set_default_recipient(settings.QQ_BOT_RECIPIENT)
-        # 在后台任务中启动 QQ Bot（不阻塞 lifespan）
-        asyncio.create_task(qqbot_service.start(default_recipient=settings.QQ_BOT_RECIPIENT))
-        print(f"[Main] QQ Bot 服务已调度启动")
-
-        # 将 QQ 通知功能注入调度器
-        from app.services.qqbot_service import send_qq_notification
-        scheduler_service.set_qq_notifier(send_qq_notification, settings.QQ_BOT_RECIPIENT)
-    else:
-        print(f"[Main] QQ Bot 未启用（设置 QQ_BOT_ENABLED=true 以启用）")
+    print("[Main] ✅ API 进程就绪（调度/监控/QQ Bot 已拆分到 worker 进程）")
 
     yield
-    # Shutdown
-    scheduler_service.stop()
-    try:
-        stop_sl_monitor()
-        print("[Main] 止损监控已停止")
-    except Exception:
-        pass
-    try:
-        stop_tier_monitor()
-        print("[Main] 加仓层级监控已停止")
-    except Exception:
-        pass
-    try:
-        stop_pool_monitor()
-        print("[Main] 候选池监控已停止")
-    except Exception:
-        pass
-    try:
-        stop_lt_pool_monitor()
-        print("[Main] 长期候选池监控已停止")
-    except Exception:
-        pass
-    if settings.QQ_BOT_ENABLED:
-        await qqbot_service.stop()
-    # Stop VN.PY bridge
+    # Shutdown — 调度/监控/QQ Bot 由 worker 进程负责；这里只停 bridge
     if app.state.vnpy_bridge is not None:
         try:
             app.state.vnpy_bridge.stop()
             print("[Main] VN.PY Bridge 已停止")
         except Exception:
             pass
-    print("Scheduler and QQ Bot stopped")
+    print("API process stopped")
 
 
 app = FastAPI(
@@ -298,33 +207,25 @@ async def get_config():
 
 @app.get("/api/v1/health")
 async def health_check():
-    """Health check endpoint."""
-    try:
-        monitor = get_monitor_status()
-    except Exception:
-        monitor = {"error": "unavailable"}
-    try:
-        tier = get_tier_status()
-    except Exception:
-        tier = {"error": "unavailable"}
-    try:
-        from app.services.candidate_pool_monitor import get_pool_monitor_status
-        pool_monitor = get_pool_monitor_status()
-    except Exception:
-        pool_monitor = {"error": "unavailable"}
-    try:
-        from app.services.long_term_pool_monitor import get_lt_pool_monitor_status
-        lt_pool_monitor = get_lt_pool_monitor_status()
-    except Exception:
-        lt_pool_monitor = {"error": "unavailable"}
+    """Health check endpoint（调度/监控状态来自 worker 进程快照）。"""
+    from app.services.worker_control import read_status
+    st = read_status()
+    snap = st.get("snapshot", {}) if st.get("online") else {}
+    offline = {"running": False, "error": "worker offline"}
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "scheduler": scheduler_service.get_scheduler_status(),
-        "stop_loss_monitor": monitor,
-        "position_tier_monitor": tier,
-        "candidate_pool_monitor": pool_monitor,
-        "long_term_pool_monitor": lt_pool_monitor,
+        "scheduler": snap.get("scheduler") or offline,
+        "stop_loss_monitor": snap.get("stop_loss_monitor") or {"running": False},
+        "position_tier_monitor": snap.get("tier_monitor") or {"running": False},
+        "candidate_pool_monitor": snap.get("candidate_pool_monitor") or {"running": False},
+        "long_term_pool_monitor": snap.get("long_term_pool_monitor") or {"running": False},
+        "worker": {
+            "online": st.get("online"),
+            "pid": st.get("pid"),
+            "hostname": st.get("hostname"),
+            "age_seconds": st.get("age_seconds"),
+        },
     }
 
 

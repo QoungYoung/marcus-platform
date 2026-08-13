@@ -32,7 +32,15 @@
 
 ### 前端
 - Vite + React：`cd frontend; npm run build`（tsc + vite build），产物 `frontend/dist`（提交进 git）。
-- 云服务器拉取 git 即部署 dist；后端在云服务器 8000 运行，本地一般不启动后端。
+- 云服务器拉取 git 即部署 dist；本地一般不启动后端。
+
+### 进程拆分（API / Worker）
+- **必须同时启动两个进程**，否则 API 显示 worker 离线、调度/监控不工作：
+  - API：`cd backend; python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`（只做 HTTP）
+  - Worker：`cd backend; python -m app.worker_main`（跑 APScheduler 任务 + 止损/加仓/候选池/长期池监控 + QQ Bot）
+- 控制通道在 PostgreSQL：`worker_status`（worker 每 5s 发布状态快照，API 只读）、`worker_commands`（API 写命令，worker 轮询执行）；表由 `database.py::_apply_worker_control_migration` 幂等创建。
+- `/api/v1/scheduler/*` 状态类接口读快照、控制类接口（trigger/enable/disable/start/stop/监控启停）写命令；调度执行历史从 `logs/scheduler_*.jsonl` 直读（`scheduler_service.read_executions_from_disk`）。
+- 改造原因：19 个调度任务（自动交易最长 8 分钟、周度反思 12 分钟等）+ 监控线程与 HTTP 同进程共享 GIL，导致接口偶发 3-20s 卡顿；拆分后重活全部在 worker 进程。
 
 ### 数据源
 - Tushare：除实时行情外均可使用（日线、历史分钟线 `etf_mins` 等）；调用时注意控制请求频次（如 `time.sleep(0.6)`）避免限流。

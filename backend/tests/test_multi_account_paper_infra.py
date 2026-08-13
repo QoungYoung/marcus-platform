@@ -87,8 +87,9 @@ def setUpModule():
     import app.api.accounts as accounts_api
     import app.api.portfolio as portfolio_api
     import app.api.trades as trades_api
+    import app.services.worker_control as worker_control_mod
 
-    for _mod in (trades_api, portfolio_api, accounts_api):
+    for _mod in (trades_api, portfolio_api, accounts_api, worker_control_mod):
         _mod.SessionLocal = db_mod.SessionLocal
 
 
@@ -283,6 +284,90 @@ class TestApiAccountScope(_PGTestCase):
     def test_equity_history_scoped(self):
         res = self.client.get("/api/v1/portfolio/equity-history", params={"account": "golden_pit"})
         self.assertEqual(res.status_code, 200)
+
+
+class TestWorkerControlChannel(_PGTestCase):
+    """8.5 worker 控制通道：状态快照发布/读取 + 命令收发 + 离线判定。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from app.services import worker_control as wc
+        wc.ensure_tables()
+
+    def _clear_status(self):
+        from app.services import worker_control as wc
+        from sqlalchemy import text
+        db = wc.SessionLocal()
+        try:
+            db.execute(text("DELETE FROM worker_status"))
+            db.commit()
+        finally:
+            db.close()
+
+    def test_status_roundtrip(self):
+        from app.services import worker_control as wc
+        wc.publish_status({"scheduler": {"running": True}, "tasks": [{"id": "t1"}]})
+        st = wc.read_status()
+        self.assertTrue(st["online"])
+        self.assertEqual(st["snapshot"]["scheduler"], {"running": True})
+        self.assertEqual(st["snapshot"]["tasks"], [{"id": "t1"}])
+        self.assertIsNotNone(st["pid"])
+
+    def test_command_roundtrip(self):
+        from app.services import worker_control as wc
+        res = wc.send_command("scheduler.trigger", {"task_id": "x"})
+        self.assertTrue(res["success"])
+        cmds = wc.take_commands()
+        self.assertEqual(len(cmds), 1)
+        self.assertEqual(cmds[0]["cmd"], "scheduler.trigger")
+        self.assertEqual(cmds[0]["payload"], {"task_id": "x"})
+        wc.finish_command(cmds[0]["id"], True, {"success": True})
+        # 已领取的命令不应被再次领取
+        self.assertEqual(wc.take_commands(), [])
+
+    def test_offline_before_first_publish(self):
+        from app.services import worker_control as wc
+        self._clear_status()
+        st = wc.read_status()
+        self.assertFalse(st["online"])
+        self.assertEqual(st["snapshot"], {})
+
+
+class TestSchedulerApiOffline(_PGTestCase):
+    """8.6 worker 离线时调度 API 返回离线标记而非报错。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from app.api.scheduler import router as scheduler_router
+        from app.services import worker_control as wc
+        from sqlalchemy import text
+
+        db = wc.SessionLocal()
+        try:
+            db.execute(text("DELETE FROM worker_status"))
+            db.commit()
+        finally:
+            db.close()
+
+        app = FastAPI()
+        app.include_router(scheduler_router, prefix="/api/v1")
+        cls.client = TestClient(app)
+
+    def test_status_returns_offline(self):
+        res = self.client.get("/api/v1/scheduler/status")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertIn("running", body)
+        self.assertFalse(body.get("online", True))
+
+    def test_tasks_empty_without_worker(self):
+        res = self.client.get("/api/v1/scheduler/tasks")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["tasks"], [])
 
 
 if __name__ == "__main__":

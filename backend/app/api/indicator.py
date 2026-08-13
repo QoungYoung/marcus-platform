@@ -3141,9 +3141,9 @@ def _build_tier_gates_tushare(symbol: str, cur_price: float, avg_price: float,
     missing_conditions = []
     gates = []
 
-    # ── 层级评估 ──
-    from app.services.position_tier_monitor import get_position_tier_monitor
-    monitor = get_position_tier_monitor()
+    # ── 层级评估（evaluate_position_tier 为无状态方法，可直接实例化调用） ──
+    from app.services.position_tier_monitor import PositionTierMonitor
+    monitor = PositionTierMonitor(executor=None)
     try:
         evaluation = monitor.evaluate_position_tier(symbol, float_pnl_pct, current_tier)
     except Exception:
@@ -3356,13 +3356,22 @@ async def position_add_conditions_live(symbol: str = Query(None)):
     逐只检查当前持仓的层级评估和门控状态，返回缺失条件清单。
     非交易时段仍可查询，但会标注数据可能滞后。
     """
-    from app.services.position_tier_monitor import get_position_tier_monitor
+    from app.services.position_tier_monitor import PositionTierMonitor
+    from app.services.worker_control import read_status
 
     trading = _get_trading_period()
 
-    monitor = get_position_tier_monitor()
-    tier_status = monitor.get_tier_status()
-    positions = tier_status.get("positions", [])
+    # API/Worker 拆分后：加仓监控状态由 worker 进程维护，这里读快照
+    _st = read_status()
+    _snap = _st.get("snapshot", {}) if _st.get("online") else {}
+    _tier = _snap.get("tier_monitor") or {}
+    positions = _tier.get("positions", [])
+    account = _snap.get("stock_account") or {}
+    monitor = PositionTierMonitor(executor=None)
+    monitor.today_adds = {
+        p.get("symbol", ""): int(p.get("today_adds") or 0)
+        for p in positions
+    }
 
     if symbol:
         # 兼容带/不带交易所前缀的代码格式（SZ002714 ↔ 002714）
@@ -3376,8 +3385,6 @@ async def position_add_conditions_live(symbol: str = Query(None)):
         }
 
     try:
-        executor = monitor.executor
-        account = executor.get_account() if executor else {}
         total_asset = float(account.get("total_asset", 100000))
     except Exception:
         total_asset = 100000

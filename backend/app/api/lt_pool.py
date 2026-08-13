@@ -181,10 +181,12 @@ async def update_candidate(symbol: str, req: UpdateLTCandidateRequest):
 
 @router.get("/monitor/status")
 async def get_monitor_status():
-    """获取长期候选池监控器状态"""
-    from app.services.long_term_pool_monitor import get_lt_pool_monitor_status
+    """获取长期候选池监控器状态（API/Worker 拆分后读 worker 快照）"""
+    from app.services.worker_control import read_status
 
-    status = get_lt_pool_monitor_status()
+    st = read_status()
+    snap = st.get("snapshot", {}) if st.get("online") else {}
+    status = snap.get("long_term_pool_monitor") or {"running": False, "error": "worker offline"}
     return {
         "monitor": status,
         "timestamp": datetime.now().isoformat(),
