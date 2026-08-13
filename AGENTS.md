@@ -34,9 +34,9 @@
 - Vite + React：`cd frontend; npm run build`（tsc + vite build），产物 `frontend/dist`（提交进 git）。
 - 云服务器拉取 git 即部署 dist；后端在云服务器 8000 运行，本地一般不启动后端。
 
-### 数据源（勿再用 Tushare）
-- Tushare token 当前不可用（直连/代理均失败），不要再测。
-- 真实行情价格用东财 K 线：`push2his.eastmoney.com/api/qt/stock/kline/get`，参数 `klt=101&fqt=1`；secid 规则：SH 代码 5/6 开头 → `1.x`，SZ → `0.x`；close 在返回 `klines` 每行的第 3 位。
+### 数据源
+- Tushare：除实时行情外均可使用（日线、历史分钟线 `etf_mins` 等）；调用时注意控制请求频次（如 `time.sleep(0.6)`）避免限流。
+- 实时行情：Tushare 不提供实时报价，用东财接口取实时价（如 `push2his.eastmoney.com/api/qt/stock/kline/get`，参数 `klt=101&fqt=1`）；secid 规则：SH 代码 5/6 开头 → `1.x`，SZ → `0.x`；close 在返回 `klines` 每行的第 3 位。
 
 ### git / 行尾
 - 仓库规范行尾 LF；`core.autocrlf=true` 检出会把 LF→CRLF（正常现象）。
