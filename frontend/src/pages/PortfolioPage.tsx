@@ -6,7 +6,8 @@ import {
   BarChart, Bar, Cell,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi, accountsApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi } from '../api/client';
+import { useAccountStore } from '../store/accountStore';
 import {
   computeSharpeRatio, computeMonthlyReturns, computeQuarterlyReturns,
   computeBenchmarkDelta, aggregatePnlContributions,
@@ -115,8 +116,13 @@ export default function PortfolioPage() {
   const { t } = useTranslation();
 
   // ── 多账户状态 ──
-  const [accounts, setAccounts] = useState<{ account_id: string; name: string; module?: string; initial_capital: number; available_cash: number }[]>([]);
-  const [activeAccount, setActiveAccount] = useState('stock');
+  const accounts = useAccountStore((s) => s.accounts);
+  const activeAccount = useAccountStore((s) => s.activeAccount);
+  const loadAccounts = useAccountStore((s) => s.loadAccounts);
+  const activeAccountName = useMemo(
+    () => accounts.find((a) => a.account_id === activeAccount)?.name || (activeAccount === 'stock' ? '股票任务' : activeAccount),
+    [accounts, activeAccount]
+  );
 
   // ── 分片异步状态 ──
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
@@ -275,12 +281,10 @@ export default function PortfolioPage() {
     } finally { setLoadingGp(false); }
   }, []);
 
-  // ── 账户列表（供切换器使用）──
+  // ── 账户列表（顶部导航栏全局加载，这里仅确保已加载）──
   useEffect(() => {
-    accountsApi.list().then(res => {
-      if (Array.isArray(res.data) && res.data.length > 0) setAccounts(res.data);
-    }).catch(() => { /* 静默失败，保持默认 stock */ });
-  }, []);
+    loadAccounts();
+  }, [loadAccounts]);
 
   // ── 切换账户后重载 summary/positions/equity/trades/breakdowns ──
   useEffect(() => {
@@ -609,22 +613,8 @@ export default function PortfolioPage() {
           SYS:ONLINE
         </div>
         <div className="cp-status-divider" />
-        <div className="cp-status-account" title={t('portfolio.switchAccount')}>
-          {accounts.length > 0 ? (
-            <select
-              className="cp-account-select"
-              value={activeAccount}
-              onChange={e => setActiveAccount(e.target.value)}
-            >
-              {accounts.map(a => (
-                <option key={a.account_id} value={a.account_id}>
-                  {a.name || a.account_id} · {a.account_id}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="cp-status-account-name">账户：{activeAccount === 'stock' ? '股票任务' : activeAccount}</span>
-          )}
+        <div className="cp-status-account">
+          <span className="cp-status-account-name">账户：{activeAccountName}</span>
         </div>
         {!loadingTickers && tickers.length > 0 && (
           <div className="cp-status-ticker">

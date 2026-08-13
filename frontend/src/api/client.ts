@@ -30,11 +30,11 @@ export const tradesApi = {
   getHistory: (params?: { symbol?: string; limit?: number; page?: number; account?: string }) =>
     api.get('/trades', { params }),
   getTrade: (orderId: string) => api.get(`/trades/${orderId}`),
-  voidTrade: (tradeId: number, reason: string) =>
-    api.post(`/trades/${tradeId}/void`, { reason }),
-  unvoidTrade: (tradeId: number) =>
-    api.post(`/trades/${tradeId}/unvoid`),
-  getVoidedTrades: () => api.get('/trades/voided'),
+  voidTrade: (tradeId: number, reason: string, account = 'stock') =>
+    api.post(`/trades/${tradeId}/void`, { reason }, { params: { account } }),
+  unvoidTrade: (tradeId: number, account = 'stock') =>
+    api.post(`/trades/${tradeId}/unvoid`, null, { params: { account } }),
+  getVoidedTrades: (account = 'stock') => api.get('/trades/voided', { params: { account } }),
 }
 
 // Market APIs

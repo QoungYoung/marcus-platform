@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { LayoutDashboard, BarChart3, TrendingUp, Newspaper, PieChart, Wrench, Calculator, CalendarClock, Bot, FileSearch, Crown, Gem, Sun, Moon } from 'lucide-react';
 import clsx from 'clsx';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { useThemeStore } from '../store/themeStore';
+import { useAccountStore } from '../store/accountStore';
 
 const navItems = [
   { path: '/portfolio', labelKey: 'nav.portfolio', icon: LayoutDashboard },
@@ -25,6 +27,14 @@ export default function TopNav() {
   const location = useLocation();
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
+  const accounts = useAccountStore((s) => s.accounts);
+  const activeAccount = useAccountStore((s) => s.activeAccount);
+  const setActiveAccount = useAccountStore((s) => s.setActiveAccount);
+  const loadAccounts = useAccountStore((s) => s.loadAccounts);
+
+  useEffect(() => {
+    loadAccounts();
+  }, [loadAccounts]);
 
   return (
     <header className="top-nav">
@@ -59,8 +69,23 @@ export default function TopNav() {
         ))}
       </nav>
 
-      {/* 右侧：主题切换 + 语言切换 + 状态 */}
+      {/* 右侧：账户切换 + 主题切换 + 语言切换 + 状态 */}
       <div className="top-nav-right">
+        {/* 模拟盘账户切换（全局，所有页面共享） */}
+        <select
+          className="top-nav-account-select"
+          value={activeAccount}
+          onChange={(e) => setActiveAccount(e.target.value)}
+          title="切换模拟盘账户"
+          aria-label="切换模拟盘账户"
+        >
+          {accounts.map((a) => (
+            <option key={a.account_id} value={a.account_id}>
+              {a.name || a.account_id}
+            </option>
+          ))}
+        </select>
+
         {/* 深色/浅色模式切换 */}
         <button
           className="theme-toggle-btn"

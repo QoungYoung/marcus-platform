@@ -768,6 +768,27 @@
   flex-shrink: 0;
 }
 
+/* 顶部栏全局账户切换 */
+.top-nav-account-select {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--topnav-border);
+  border-radius: 8px;
+  color: var(--topnav-link-color);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 8px;
+  cursor: pointer;
+  outline: none;
+  max-width: 170px;
+}
+.top-nav-account-select:hover {
+  color: var(--topnav-link-active-color);
+}
+.top-nav-account-select option {
+  background: var(--topnav-bg);
+  color: var(--topnav-link-color);
+}
+
 .top-nav-status {
   display: flex;
   align-items: center;

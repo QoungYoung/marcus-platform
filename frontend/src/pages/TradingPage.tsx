@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { tradesApi, portfolioApi, strategyApi, marketApi } from '../api/client';
+import { useAccountStore } from '../store/accountStore';
 import KlineChart from '../components/KlineChart';
 import type { AxiosError } from 'axios';
 
@@ -65,11 +66,20 @@ export default function TradingPage() {
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
+  // ── 全局账户（顶部导航栏切换）──
+  const activeAccount = useAccountStore((s) => s.activeAccount);
+  const accounts = useAccountStore((s) => s.accounts);
+  const activeAccountName = useMemo(
+    () => accounts.find((a) => a.account_id === activeAccount)?.name || (activeAccount === 'stock' ? '股票任务' : activeAccount),
+    [accounts, activeAccount]
+  );
+
   useEffect(() => {
     fetchHistory();
     fetchAccount();
     fetchPiStatus();
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAccount]);
 
   // ── 输入股票代码后自动获取实时价格 ──
   useEffect(() => {
@@ -97,7 +107,7 @@ export default function TradingPage() {
 
   const fetchAccount = async () => {
     try {
-      const res = await portfolioApi.getSummary();
+      const res = await portfolioApi.getSummary(activeAccount);
       const a = res.data.account;
       if (!a) return;
       setAccount({
@@ -154,7 +164,7 @@ export default function TradingPage() {
   const fetchHistory = async () => {
     try {
       setHistoryLoading(true);
-      const res = await tradesApi.getHistory({ limit: 100 });
+      const res = await tradesApi.getHistory({ limit: 100, account: activeAccount });
       setHistory(res.data.trades || []);
     } catch (err) {
       console.error('Failed to fetch history:', err);
@@ -176,6 +186,7 @@ export default function TradingPage() {
         price: parseFloat(price),
         volume: parseInt(volume),
         reason,
+        account: activeAccount,
       });
       setResult(res.data);
       if (res.data.status === 'executed') {
@@ -198,7 +209,7 @@ export default function TradingPage() {
     if (!voidTarget || !voidReason.trim()) return;
     setVoidingId(voidTarget.id);
     try {
-      await tradesApi.voidTrade(voidTarget.id, voidReason.trim());
+      await tradesApi.voidTrade(voidTarget.id, voidReason.trim(), activeAccount);
       showToast('success', `${voidTarget.symbol} ${voidTarget.direction} 已撤回`);
       setShowVoidDialog(false);
       setVoidTarget(null);
@@ -213,7 +224,7 @@ export default function TradingPage() {
 
   const handleUnvoid = async (tradeId: number) => {
     try {
-      await tradesApi.unvoidTrade(tradeId);
+      await tradesApi.unvoidTrade(tradeId, activeAccount);
       showToast('success', `交易 #${tradeId} 已恢复`);
       fetchHistory();
     } catch (err: any) {
@@ -634,7 +645,7 @@ export default function TradingPage() {
           {/* 账户快照卡片 */}
           <div className="bg-dark-200 rounded-xl border border-gray-800 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-800 bg-dark-100/50">
-              <h3 className="text-sm font-semibold">账户快照</h3>
+              <h3 className="text-sm font-semibold">账户快照 · {activeAccountName}</h3>
             </div>
             <div className="p-4 space-y-3">
               {account ? (
