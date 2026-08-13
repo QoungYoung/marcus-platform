@@ -80,66 +80,70 @@ async def proxy_openai(path: str, request: Request):
             for msg in payload["messages"]:
                 if isinstance(msg, dict) and msg.get("role") == "developer":
                     msg["role"] = "system"
-            body = json.dumps(payload).encode("utf-8")
         is_stream = bool(payload.get("stream"))
+        if is_stream:
+            # Console Go 上游对数据中心出口 IP 的 SSE 流式常返回空流（零 chunk），
+            # 而非流式 JSON 正常（本地直连正常、服务器直连被掐）。强制以非流式
+            # 取完整结果，再在代理层模拟 SSE 分块发给前端，对前端完全透明。
+            payload["stream"] = False
+        body = json.dumps(payload).encode("utf-8")
+
+        resp = await client.post(url, headers=headers, content=body)
+        try:
+            data = resp.json()
+        except ValueError:
+            return Response(content=resp.content, status_code=resp.status_code,
+                            media_type=resp.headers.get("content-type", "application/json"))
+        if resp.status_code != 200:
+            return JSONResponse(data, status_code=resp.status_code)
 
         if not is_stream:
-            resp = await client.post(url, headers=headers, content=body)
-            try:
-                return JSONResponse(resp.json(), status_code=resp.status_code)
-            except ValueError:
-                return Response(content=resp.content, status_code=resp.status_code,
-                                media_type=resp.headers.get("content-type", "application/json"))
+            return JSONResponse(data, status_code=resp.status_code)
 
-        # 流式：原样透传上游 SSE 字节流
-        upstream_req = client.build_request("POST", url, headers=headers, content=body)
-        upstream = await client.send(upstream_req, stream=True)
+        # ── 模拟 SSE 流式响应 ──
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        content = message.get("content") or ""
+        reasoning = message.get("reasoning_content") or ""
+        if not content and reasoning:
+            # content 被思维链吃光时退而显示思维链，避免前端空白
+            content = reasoning
+        tool_calls = message.get("tool_calls")
+        finish_reason = choice.get("finish_reason") or ("tool_calls" if tool_calls else "stop")
+        created = data.get("created", 0)
+        model = data.get("model", "")
+        chunk_id = data.get("id", "chatcmpl-proxy")
 
-        if upstream.status_code != 200:
-            err_body = await upstream.aread()
-            await upstream.aclose()
-            try:
-                err_json = json.loads(err_body)
-            except ValueError:
-                err_json = {"detail": err_body.decode("utf-8", "replace")}
-            return JSONResponse(err_json, status_code=upstream.status_code)
+        def sse_chunk(delta: dict, finish: Optional[str]) -> bytes:
+            obj = {
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish, "logprobs": None}],
+            }
+            return ("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8")
 
-        async def event_stream():
-            done_sent = False
-            finish_sent = False
-            try:
-                async for raw in upstream.aiter_lines():
-                    line = raw.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        done_sent = True
-                        yield b"data: [DONE]\n\n"
-                        break
-                    yield (f"data: {data}\n\n").encode("utf-8")
-                    if not finish_sent:
-                        try:
-                            obj = json.loads(data)
-                        except ValueError:
-                            continue
-                        for choice in obj.get("choices") or []:
-                            if isinstance(choice, dict) and choice.get("finish_reason"):
-                                finish_sent = True
-            except httpx.ReadError:
-                # 上游提前关闭连接视为流结束（SSE 无明确 EOF 标记）
-                pass
-            finally:
-                await upstream.aclose()
-            # 上游若未给 finish_reason / [DONE]（如 Console Go 流式直接断连），
-            # 补标准收尾事件，否则前端报 "Stream ended without finish_reason"
-            if not finish_sent:
-                yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
-            if not done_sent:
-                yield b"data: [DONE]\n\n"
+        async def simulated_stream():
+            yield sse_chunk({"role": "assistant", "content": ""}, None)
+            if tool_calls:
+                for tc in tool_calls:
+                    fn = tc.get("function") or {}
+                    yield sse_chunk({"tool_calls": [{
+                        "index": tc.get("index", 0),
+                        "id": tc.get("id"),
+                        "type": tc.get("type") or "function",
+                        "function": {"name": fn.get("name") or "", "arguments": fn.get("arguments") or ""},
+                    }]}, None)
+            if content:
+                step = 24
+                for i in range(0, len(content), step):
+                    yield sse_chunk({"content": content[i:i + step]}, None)
+            yield sse_chunk({}, finish_reason)
+            yield b"data: [DONE]\n\n"
 
         return StreamingResponse(
-            event_stream(),
+            simulated_stream(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
