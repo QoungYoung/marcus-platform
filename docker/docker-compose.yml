@@ -1,5 +1,26 @@
 # Marcus AI Trading Platform - Docker Compose Configuration
 
+# backend / worker 共用：环境变量 + 挂载（调度/监控/QQ Bot 已拆分到 worker 进程）
+x-backend-common: &backend-common
+  env_file:
+    - ../.env
+  environment:
+    TZ: Asia/Shanghai
+    MARCUS_WORKSPACE: /app
+    PI_SERVER_URL: http://piserver:3001/chat
+    DATABASE_URL: postgresql://marcus:${DB_PASSWORD:-marcus123}@postgres:5432/marcus_trading
+    EASTMONEY_COOKIE: ${EASTMONEY_COOKIE}
+    EM_PROXY_URL: http://81.70.44.68:8199
+    QT_QPA_PLATFORM: offscreen
+    ENGINE_BACKEND: vnpy
+  volumes:
+    - ../data:/app/data
+    - ../apps:/app/apps:ro
+    - ../config:/app/config
+    - ../logs:/app/logs
+    - ../memory:/app/memory
+    - /etc/localtime:/etc/localtime:ro
+
 services:
   # PostgreSQL Database
   postgres:
@@ -27,40 +48,54 @@ services:
       timeout: 5s
       retries: 10
 
-  # Backend API
+  # Backend API（纯 HTTP；调度/监控/QQ Bot 已移至 worker 服务）
   backend:
-    deploy:
-      resources:
-        limits:
-          memory: 512M
     build:
       context: ..
       dockerfile: docker/Dockerfile.backend
     container_name: marcus-backend
-    env_file:
-      - ../.env
-    environment:
-      TZ: Asia/Shanghai
-      MARCUS_WORKSPACE: /app
-      PI_SERVER_URL: http://piserver:3001/chat
-      DATABASE_URL: postgresql://marcus:${DB_PASSWORD:-marcus123}@postgres:5432/marcus_trading
-      EASTMONEY_COOKIE: ${EASTMONEY_COOKIE}
-      EM_PROXY_URL: http://81.70.44.68:8199
-      QT_QPA_PLATFORM: offscreen
-      ENGINE_BACKEND: vnpy
+    <<: *backend-common
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     ports:
       - "8000:8000"
-    volumes:
-      - ../data:/app/data
-      - ../apps:/app/apps:ro
-      - ../config:/app/config
-      - ../logs:/app/logs
-      - ../memory:/app/memory
-      - /etc/localtime:/etc/localtime:ro
     depends_on:
       postgres:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Worker 进程（调度任务 + 止损/加仓/候选池/长期候选池监控 + QQ Bot 通知）
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: marcus-worker
+    <<: *backend-common
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m app.worker_main
+    healthcheck:
+      # 心跳在 worker_status 表；read_status().online 为 false 即视为不健康
+      test: ["CMD-SHELL", "python -c \"from app.services.worker_control import read_status; import sys; sys.exit(0 if read_status().get('online') else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # Pi Server (Pi Agent HTTP Server)
   piserver:
@@ -84,7 +119,8 @@ services:
     volumes:
       - ../servers/pi-server/sessions:/app/sessions
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
   # Frontend (本地预构建 dist，Dockerfile 只 COPY 到 nginx)

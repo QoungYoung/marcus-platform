@@ -528,11 +528,12 @@ CREATE TABLE news (
 ## 12. Docker 部署
 
 ### docker-compose.yml
-定义4个服务：
-1. **postgres**: PostgreSQL 15 数据库
-2. **redis**: Redis 7 缓存
-3. **backend**: FastAPI 后端 (端口8000)
-4. **frontend**: Nginx 前端 (端口3000)
+定义5个服务：
+1. **postgres**: PostgreSQL 16 数据库
+2. **backend**: FastAPI 纯 HTTP API (端口8000)
+3. **worker**: 调度任务 + 各监控器 + QQ Bot 通知（`python -m app.worker_main`）
+4. **piserver**: Pi Agent HTTP 服务 (端口3001)
+5. **frontend**: Nginx 前端 (端口80，使用本地预构建 dist)
 
 ### 启动命令
 ```bash

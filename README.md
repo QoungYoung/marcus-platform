@@ -185,7 +185,10 @@ docker-compose ps
 docker-compose logs -f
 ```
 
-Docker 会启动 3 个容器：`backend`、`piserver`、`frontend`。
+Docker 会启动 5 个容器：`postgres`、`backend`（纯 HTTP API）、`worker`（调度任务 + 各监控器 + QQ Bot 通知）、`piserver`、`frontend`。
+
+> 进程拆分后，调度/监控/QQ Bot 由独立的 `worker` 容器运行（`python -m app.worker_main`）；
+> 后端 `/api/v1/health` 中的 `worker.online` 反映 worker 心跳，`worker` 容器异常时调度与监控会停止工作。
 
 ---
 
