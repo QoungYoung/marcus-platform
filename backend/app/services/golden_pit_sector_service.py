@@ -205,6 +205,36 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "label": "熊市保护贪婪分位", "description": "hold_until_exit 熊市保护: regime=oversold 且宽基贪婪250日分位<=阈值时保留持仓、暂停新增候选",
         "value_type": "number", "sort_order": 21, "default": 0.2,
     },
+    "industry_pool_enabled": {
+        "label": "全行业监测启用",
+        "description": "true=全行业 DCA 触发与资金池裁决生效（默认 dry-run 展示计划/实际）；false=仅指数级 DCA（安全默认）",
+        "value_type": "bool", "sort_order": 30, "default": False,
+    },
+    "industry_pool": {
+        "label": "全行业池",
+        "description": "JSON 行业清单 [{\"id\",\"name\",\"greed_code\",\"etf_code\",\"priority\",\"max_total_pct\",\"min_days_in_pit\"}]；缺省回退内置 24 行业",
+        "value_type": "json", "sort_order": 31, "default": "[]",
+    },
+    "cash_min_pct": {
+        "label": "行业池现金下限",
+        "description": "资金池保留现金占净值比例（0~1），高于此才分配行业定投",
+        "value_type": "number", "sort_order": 32, "default": 0.2,
+    },
+    "industry_pit_pct": {
+        "label": "行业贪婪分位阈值",
+        "description": "250日贪婪分位<=阈值视为入坑条件之一（统一参数，不做行业个性化）",
+        "value_type": "number", "sort_order": 33, "default": 0.15,
+    },
+    "industry_drawdown_pct": {
+        "label": "行业回撤阈值",
+        "description": "60日高点回撤>=阈值视为入坑条件之一",
+        "value_type": "number", "sort_order": 34, "default": 0.20,
+    },
+    "industry_entry_cap": {
+        "label": "行业过热过滤",
+        "description": "贪婪分位>cap 不追新仓",
+        "value_type": "number", "sort_order": 35, "default": 0.85,
+    },
     "sector_params": {
         "label": "板块个性化参数",
         "description": "JSON: {etf6: {ovs_days, entry_greed_cap, exit_down_days}}（按板块覆盖全局超跌窗口/贪婪分位上限/连跌退出天数，集中管理）",
@@ -237,6 +267,16 @@ for _idx, (_code, _defaults) in enumerate(ENTRY_EXIT_DEFAULTS.items()):
         "sort_order": 24 + _idx,
         "default": json.dumps(_defaults, ensure_ascii=False),
     }
+
+
+SECTOR_CONFIG_DEFAULTS["industry_pool"]["default"] = "[]"
+try:
+    from app.services.golden_pit_industry_service import INDUSTRY_POOL as _INDUSTRY_POOL
+    SECTOR_CONFIG_DEFAULTS["industry_pool"]["default"] = json.dumps(
+        [{k: i[k] for k in ("id", "name", "greed_code", "etf_code", "priority", "max_total_pct", "min_days_in_pit")} for i in _INDUSTRY_POOL],
+        ensure_ascii=False)
+except Exception:  # noqa: BLE001 - 循环依赖/未就绪时保持空，运行时回退内置
+    pass
 
 
 DCA_CARRIER_MODES = ("sector_selection", "fixed_combo", "broad")

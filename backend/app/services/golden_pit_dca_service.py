@@ -1858,7 +1858,23 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         },
         "tips": summary_lines[-6:] if len(summary_lines) > 6 else summary_lines[3:],
         "summary_text": summary_text,
+        "industry_monitor": _build_industry_monitor(as_of or today_str),
     }
+
+
+def _build_industry_monitor(as_of: str) -> Dict[str, Any]:
+    """行业轨（dry-run 计划 + 资金池视图）；industry_pool_enabled=true 时生成，默认关闭返回空结构。"""
+    try:
+        from app.services.golden_pit_industry_service import get_industry_config, industry_monitor_snapshot
+        cfg = get_industry_config()
+        if not cfg.get("enabled"):
+            return {"as_of": as_of, "enabled": False, "industries": [], "cash_pool": {}, "notes": [],
+                    "dry_run": True, "reason": "industry_pool_enabled=false"}
+        return industry_monitor_snapshot(as_of)
+    except Exception as e:  # noqa: BLE001 - 行业轨失败不影响指数级 DCA
+        logger.warning("行业轨 dry-run 计划生成失败: %s", e)
+        return {"as_of": as_of, "enabled": False, "industries": [], "cash_pool": {}, "notes": [],
+                "dry_run": True, "error": str(e)}
 
 
 def _get_day_amount(fund_code: str, window_start: str, buy_day: int) -> float:

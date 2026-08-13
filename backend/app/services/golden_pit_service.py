@@ -187,6 +187,18 @@ class GoldenPitService:
             logger.warning("Tushare ETF kline 获取失败 (%s): %s", etf_code, e)
             return []
 
+    def _attach_industry_monitor(self, status: Dict[str, Any], as_of: str) -> None:
+        """附加全行业监测 + 资金池视图（industries[] / cash_pool）。失败不影响主状态。"""
+        try:
+            from app.services.golden_pit_industry_service import industry_monitor_snapshot
+            snap = industry_monitor_snapshot(as_of)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("全行业监测快照失败: %s", e)
+            snap = {"as_of": as_of, "enabled": False, "industries": [], "cash_pool": {}, "notes": [], "error": str(e)}
+        status["industry_monitor"] = snap
+        if snap.get("industries"):
+            status["industry_monitor"]["in_pit_count"] = sum(1 for i in snap["industries"] if i.get("in_pit"))
+
     def _attach_sector_split(self, status: Dict[str, Any], as_of: str) -> None:
         """附加板块拆分选筹摘要（guide_only 宽基用）。失败不影响主状态。"""
         try:
@@ -298,6 +310,7 @@ class GoldenPitService:
             "global_macro": global_macro,
         }
         self._attach_sector_split(status, as_of)
+        self._attach_industry_monitor(status, as_of)
         return status
 
     @staticmethod
@@ -540,6 +553,7 @@ class GoldenPitService:
                 "_source": "db",
             }
             self._attach_sector_split(status, latest_date)
+            self._attach_industry_monitor(status, latest_date)
             return status
         except Exception as e:
             logger.warning("从 DB 重建黄金坑状态失败，回退 API: %s", e)

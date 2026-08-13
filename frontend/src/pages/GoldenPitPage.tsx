@@ -135,6 +135,7 @@ interface GoldenPitStatus {
   sector_selection?: {
     carrier?: SectorSelectionCarrier;
   };
+  industry_monitor?: IndustryMonitor;
 }
 
 interface TrendData {
@@ -183,6 +184,55 @@ interface SectorConfigItem {
   description: string;
   value_type: 'bool' | 'number' | 'string' | 'json';
   sort_order: number;
+}
+
+interface IndustryMonitorItem {
+  id: string;
+  name: string;
+  greed_code: string;
+  etf_code: string;
+  priority: number;
+  close: number | null;
+  greed: number | null;
+  greed_pct: number | null;
+  drawdown: number;
+  in_pit: boolean;
+  overheat?: boolean;
+  window_day: number;
+  planned_amount: number;
+  actual_amount: number;
+  total_invested: number;
+}
+
+interface CashPoolCutItem {
+  id: string;
+  skipped: number;
+  priority: number;
+  reason?: string;
+}
+
+interface CashPoolView {
+  total_nav: number;
+  cash: number;
+  cash_min_pct: number;
+  cash_floor: number;
+  available_cash: number;
+  planned_total: number;
+  actual_total: number;
+  cut_items: CashPoolCutItem[];
+  enabled?: boolean;
+  dry_run?: boolean;
+}
+
+interface IndustryMonitor {
+  as_of: string;
+  enabled: boolean;
+  in_pit_count?: number;
+  industries: IndustryMonitorItem[];
+  cash_pool: CashPoolView;
+  notes: string[];
+  error?: string;
+  reason?: string;
 }
 
 interface DcaCarrierTarget {
@@ -511,6 +561,127 @@ function TripleConfirmation({ conf, prediction }: {
         <div className="gp-prediction">
           <IconBulb />
           <span>预测: {prediction.next_index} 预计 {prediction.eta_days} 天后入坑 ({prediction.eta_date})</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CashPoolBar({ cp }: { cp: CashPoolView }) {
+  if (!cp || !cp.total_nav) return null;
+  const pct = (v: number) => `${(cp.total_nav ? (v / cp.total_nav) * 100 : 0).toFixed(1)}%`;
+  return (
+    <div className="gp-pool-bar">
+      <div className="gp-pool-item"><b>净值</b><span>¥{(cp.total_nav ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</span></div>
+      <div className="gp-pool-item"><b>现金</b><span>¥{(cp.cash ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</span></div>
+      <div className="gp-pool-item"><b>可用(扣{Math.round((cp.cash_min_pct ?? 0) * 100)}%下限)</b><span>¥{(cp.available_cash ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</span></div>
+      <div className="gp-pool-item"><b>今日计划</b><span>¥{(cp.planned_total ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</span></div>
+      <div className="gp-pool-item"><b>实际分配</b><span>¥{(cp.actual_total ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</span></div>
+      <div className="gp-pool-item"><b>被裁剪</b><span>{(cp.cut_items?.length ?? 0)} 项</span></div>
+      <div className="gp-pool-note">利用 {pct(cp.available_cash ?? 0)} / 现金 {pct(cp.cash ?? 0)}</div>
+    </div>
+  );
+}
+
+function IndustryMonitorPanel({ monitor }: { monitor: IndustryMonitor | null }) {
+  const [open, setOpen] = useState(true);
+  const [filter, setFilter] = useState<'all' | 'in_pit' | 'monitor'>('all');
+  if (!monitor) return null;
+
+  const inPitCount = monitor.in_pit_count ?? monitor.industries.filter((i) => i.in_pit).length;
+  const rows = (filter === 'in_pit' ? monitor.industries.filter((i) => i.in_pit)
+    : filter === 'monitor' ? monitor.industries.filter((i) => !i.in_pit)
+    : monitor.industries).slice().sort((a, b) =>
+      Number(b.in_pit) - Number(a.in_pit) || a.priority - b.priority);
+
+  const greedTone = (pct: number | null) => {
+    if (pct == null) return 'gp-greed-na';
+    if (pct <= 0.15) return 'gp-greed-pit';
+    if (pct <= 0.3) return 'gp-greed-warn';
+    return 'gp-greed-ok';
+  };
+
+  return (
+    <section className="gp-panel gp-section">
+      <div className="gp-panel-head">
+        <span className="gp-tick" />
+        <h2>全行业监测 · 资金池</h2>
+        <span className="gp-en">INDUSTRY POOL</span>
+        <span className={`gp-ind-badge ${monitor.enabled ? 'on' : 'off'}`}>
+          {monitor.enabled ? '已启用' : '已关闭'}
+          {monitor.cash_pool?.dry_run ? ' · dry-run' : ''}
+        </span>
+        <span className="gp-count">{inPitCount}/{monitor.industries.length} 入坑</span>
+        <button className="gp-fold-btn" onClick={() => setOpen(!open)} title={open ? '收起' : '展开'} aria-label={open ? '收起全行业监测' : '展开全行业监测'}>
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          {open ? '收起' : '展开'}
+        </button>
+      </div>
+      {open && (
+        <div className="gp-industry-body">
+          {monitor.error && <div className="gp-industry-error">⚠ {monitor.error}</div>}
+          {!monitor.enabled && (
+            <div className="gp-industry-empty">
+              全行业监测已关闭（golden_pit_sector_config → industry_pool_enabled=false）。现有指数级黄金坑 DCA 不受影响。
+            </div>
+          )}
+          {monitor.enabled && monitor.industries.length === 0 && (
+            <div className="gp-industry-empty">暂无行业数据</div>
+          )}
+          <CashPoolBar cp={monitor.cash_pool} />
+          <div className="gp-industry-filters">
+            {([['all', '全部'], ['in_pit', '入坑中'], ['monitor', '监测中']] as const).map(([k, label]) => (
+              <button key={k} className={`gp-range-chip ${filter === k ? 'active' : ''}`} onClick={() => setFilter(k)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="gp-industry-table-wrap">
+            <table className="gp-industry-table">
+              <thead>
+                <tr>
+                  <th>行业</th><th>贪婪分位</th><th>60日回撤</th><th>状态</th><th>DCA窗口</th><th>今日计划→实际</th><th>累计投入</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((i) => (
+                  <tr key={i.id} className={i.in_pit ? 'gp-ind-row-pit' : ''}>
+                    <td>
+                      <span className="gp-ind-name">{i.name}</span>
+                      <span className="gp-ind-pri">P{i.priority}</span>
+                    </td>
+                    <td>
+                      {i.greed_pct != null ? (
+                        <span className="gp-greed-cell">
+                          <span className={`gp-greed-bar ${greedTone(i.greed_pct)}`} style={{ width: `${Math.min(100, i.greed_pct * 100)}%` }} />
+                          <em>{i.greed_pct.toFixed(2)}</em>
+                        </span>
+                      ) : <span className="gp-greed-na">—</span>}
+                    </td>
+                    <td className={i.drawdown <= -0.2 ? 'gp-dd-pit' : ''}>{(i.drawdown * 100).toFixed(1)}%</td>
+                    <td>
+                      {i.in_pit ? <span className="gp-inpit-badge">入坑</span>
+                        : i.overheat ? <span className="gp-overheat-badge">过热</span> : <span className="gp-monitor-badge">监测</span>}
+                    </td>
+                    <td>{i.window_day > 0 ? `第${i.window_day}天` : '—'}</td>
+                    <td>¥{i.planned_amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} → ¥{i.actual_amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</td>
+                    <td>¥{i.total_invested.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {monitor.cash_pool?.cut_items && monitor.cash_pool.cut_items.length > 0 && (
+            <div className="gp-cut-list">
+              <b>资金池裁剪（低优先级让位）：</b>
+              {monitor.cash_pool.cut_items.map((c) => (
+                <span key={c.id} className="gp-cut-item">{c.id} 跳过¥{c.skipped.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}(P{c.priority})</span>
+              ))}
+            </div>
+          )}
+          {monitor.notes && monitor.notes.length > 0 && (
+            <div className="gp-industry-notes">{monitor.notes.slice(-5).map((n) => <div key={n}>{n}</div>)}</div>
+          )}
         </div>
       )}
     </section>
@@ -1507,6 +1678,8 @@ export default function GoldenPitPage() {
 
             {global_macro && <CapitalFlowPanel macro={global_macro} />}
 
+            <IndustryMonitorPanel monitor={status?.industry_monitor ?? null} />
+
             <section className="gp-panel gp-section">
               <div className="gp-panel-head">
                 <span className="gp-tick" /><h2>宽基指数状态</h2><span className="gp-en">BROAD INDEX STATUS</span>
@@ -1708,6 +1881,9 @@ export default function GoldenPitPage() {
                 <Fragment key={item.config_key}>
                   {item.config_key === 'dca_carrier_enabled' && (
                     <div className="gp-config-divider">DCA 执行载体</div>
+                  )}
+                  {item.config_key === 'industry_pool_enabled' && (
+                    <div className="gp-config-divider">全行业监测 · 资金池</div>
                   )}
                   <div className="gp-config-row">
                     <div className="gp-config-info">

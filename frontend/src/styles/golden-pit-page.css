@@ -1890,3 +1890,39 @@
 .gp-tech-trend.tech-flat { background: #8f6b0c; }
 .gp-tech-table .tech-up { color: #c93a2d; }
 .gp-tech-table .tech-down { color: #1d7f52; }
+/* ── 全行业监测 · 资金池 ── */
+.gp-ind-badge { margin-left: 10px; font-size: 11px; padding: 2px 10px; border-radius: 10px; font-weight: 600; }
+.gp-ind-badge.on { background: rgba(29, 124, 82, 0.15); color: #1d7a4e; }
+.gp-ind-badge.off { background: rgba(180, 180, 180, 0.15); color: var(--gp-muted); }
+.gp-industry-body { padding: 4px 2px; }
+.gp-industry-empty { padding: 14px 10px; color: var(--gp-muted); font-size: 12px; border: 1px dashed var(--gp-line-soft); border-radius: 8px; margin-bottom: 8px; }
+.gp-industry-error { padding: 10px; color: #c8422f; font-size: 12px; }
+.gp-pool-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--gp-line-soft); border-radius: 8px; background: rgba(47, 124, 211, 0.04); }
+.gp-pool-item { display: flex; flex-direction: column; padding: 2px 10px; border-right: 1px solid var(--gp-line-soft); min-width: 88px; }
+.gp-pool-item:last-of-type { border-right: none; }
+.gp-pool-item b { font-size: 11px; color: var(--gp-muted); font-weight: 600; }
+.gp-pool-item span { font-size: 13px; color: var(--gp-ink); font-weight: 700; margin-top: 2px; }
+.gp-pool-note { font-size: 11px; color: var(--gp-muted); margin-left: auto; }
+.gp-industry-filters { display: flex; gap: 6px; margin-bottom: 8px; }
+.gp-industry-table-wrap { overflow-x: auto; border: 1px solid var(--gp-line-soft); border-radius: 8px; }
+.gp-industry-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.gp-industry-table th { text-align: left; padding: 8px 10px; color: var(--gp-muted); font-weight: 600; border-bottom: 1px solid var(--gp-line-soft); white-space: nowrap; background: rgba(47, 124, 211, 0.05); }
+.gp-industry-table td { padding: 7px 10px; border-bottom: 1px solid var(--gp-line-soft); white-space: nowrap; }
+.gp-industry-table tr:last-child td { border-bottom: none; }
+.gp-industry-table tr.gp-ind-row-pit { background: rgba(229, 72, 77, 0.06); }
+.gp-ind-name { font-weight: 600; color: var(--gp-ink); }
+.gp-ind-pri { margin-left: 6px; font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(47, 124, 211, 0.12); color: #2564ae; }
+.gp-greed-cell { display: inline-flex; align-items: center; gap: 6px; min-width: 110px; }
+.gp-greed-bar { display: inline-block; height: 6px; border-radius: 3px; background: #27a06b; min-width: 2px; }
+.gp-greed-bar.gp-greed-pit { background: #e5484d; }
+.gp-greed-bar.gp-greed-warn { background: #c98a12; }
+.gp-greed-cell em { font-style: normal; font-size: 11px; color: var(--gp-muted); }
+.gp-greed-na { color: var(--gp-muted); font-size: 11px; }
+.gp-dd-pit { color: #e5484d; font-weight: 600; }
+.gp-inpit-badge { padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 700; color: #fff; background: #e5484d; }
+.gp-overheat-badge { padding: 1px 8px; border-radius: 9px; font-size: 11px; color: #8f6b0c; background: rgba(201, 138, 18, 0.15); }
+.gp-monitor-badge { padding: 1px 8px; border-radius: 9px; font-size: 11px; color: var(--gp-muted); background: rgba(180, 180, 180, 0.12); }
+.gp-cut-list { margin-top: 8px; padding: 8px 10px; border: 1px dashed rgba(201, 138, 18, 0.5); border-radius: 8px; font-size: 11px; color: #8f6b0c; }
+.gp-cut-item { margin-right: 12px; }
+.gp-industry-notes { margin-top: 8px; font-size: 11px; color: var(--gp-muted); }
+.gp-industry-notes div { padding: 1px 0; }

@@ -107,6 +107,18 @@ def format_morning_report(status: Dict[str, Any]) -> str:
             lines.append(f"   · 等待板块信号（{sector_sel.get('empty_reason', '无信号')}）")
         lines.append("")
 
+    # ── 全行业监测 + 资金池（industry_monitor, 默认 dry-run）──
+    ind_mon = status.get("industry_monitor")
+    if ind_mon and ind_mon.get("enabled"):
+        try:
+            from app.services.golden_pit_industry_service import format_monitor_text
+            txt = format_monitor_text(ind_mon)
+            if txt and txt != "（全行业监测无数据）":
+                lines.append(txt)
+                lines.append("")
+        except Exception as e:  # noqa: BLE001 - 报告附加失败不影响主报告
+            logger.warning("行业监测报告块生成失败: %s", e)
+
     phase = window.get("phase", "idle")
     if phase == "buying":
         rising = window.get("turning_leader_rising", 0)
@@ -232,6 +244,18 @@ def build_v2_summary(indices, window, confirmation, prediction) -> str:
 
     pit_indices = [i for i in indices if i["status"] == "golden_pit"]
     warning_indices = [i for i in indices if i["status"] == "warning"]
+
+    # ── 全行业监测 + 资金池（industry_monitor, 默认 dry-run）──
+    ind_mon = status.get("industry_monitor")
+    if ind_mon and ind_mon.get("enabled"):
+        try:
+            from app.services.golden_pit_industry_service import format_monitor_text
+            txt = format_monitor_text(ind_mon)
+            if txt and txt != "（全行业监测无数据）":
+                lines.append(txt)
+                lines.append("")
+        except Exception as e:  # noqa: BLE001 - 报告附加失败不影响主报告
+            logger.warning("行业监测报告块生成失败: %s", e)
 
     phase = window.get("phase", "idle")
     if phase == "buying":
