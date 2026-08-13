@@ -6,8 +6,11 @@
 greed（默认，超跌+板块贪婪 arkvol funds-greed）或 moneyflow（超跌+中信二级5日资金流，旧逻辑可回滚）。
 GOLDEN_PIT_SECTOR_SPLIT_ENABLED 灰度开关控制 dry-run 展示 / 实际执行；
 开关与参数均从仓库根目录 .env 读取（经 app.config.Settings）。"""
+import logging
 from typing import Any, Dict, Optional
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 CHINA_INDICES: Dict[str, Dict[str, Any]] = {
     # ═══ 核心 (必做) — 高胜率+高收益+高稳定性 ═══
@@ -278,6 +281,48 @@ ALL_INDEX_CONFIGS.update(SEMI_BOOST_INDICES)
 def get_index_config(fund_code: str) -> Dict[str, Any]:
     """按 fund_code 返回任意指数/标的最新的配置。"""
     return ALL_INDEX_CONFIGS.get(fund_code, {})
+
+
+# 出入场参数覆盖键: pgsql golden_pit_sector_config.entry_exit_<fund_code> JSON 可覆盖（集中管理）
+ENTRY_EXIT_OVERRIDE_KEYS = (
+    "use_fixed_greed", "pit_greed", "entry_greed", "entry_offset",
+    "pit_pct", "entry_pct", "entry_enabled",
+    "exit_full_pct", "exit_half_pct", "exit_fallback_days",
+    "turning_days", "exit_mode", "exit_down_days",
+)
+
+
+def get_effective_index_config(fund_code: str) -> Dict[str, Any]:
+    """返回指数配置：CHINA_INDICES 硬编码为基线，叠加 pgsql golden_pit_sector_config
+    表 entry_exit_<fund_code> JSON 的出入场参数覆盖（与板块拆分配置同表集中管理）。"""
+    cfg = dict(ALL_INDEX_CONFIGS.get(fund_code, {}))
+    try:
+        from app.services import golden_pit_sector_service as _sector
+        over = _sector.get_index_entry_exit(fund_code)
+        for k in ENTRY_EXIT_OVERRIDE_KEYS:
+            if k in over:
+                cfg[k] = over[k]
+    except Exception as e:  # noqa: BLE001 - 配置读取失败不阻断主流程
+        logger.warning("读取 %s 出入场配置覆盖失败: %s", fund_code, e)
+    return cfg
+
+
+def build_entry_exit_defaults(overrides: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
+    """提取全部指数的出入场参数字段（供 pgsql golden_pit_sector_config 集中管理 seed）。
+
+    overrides: {fund_code: {field: value}} 已优化指数用生产确认参数覆盖默认。
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for code, cfg in ALL_INDEX_CONFIGS.items():
+        d = {k: cfg[k] for k in ENTRY_EXIT_OVERRIDE_KEYS if k in cfg}
+        if d:
+            out[code] = d
+    for code, ov in (overrides or {}).items():
+        if code in out:
+            out[code].update(ov)
+        else:
+            out[code] = dict(ov)
+    return out
 
 
 # 仓位分级: 拐点确认度 → 仓位比例 (单次定投占 max_total 的比例)

@@ -29,6 +29,7 @@ from app.services.golden_pit_config import (
     PIT_POSITION_SPLIT,
     SECTOR_EXIT_DOWN_DAYS,
     SEMI_BOOST_INDICES,
+    get_effective_index_config,
 )
 from app.services import golden_pit_sector_service as _sector
 
@@ -388,7 +389,10 @@ def _has_exit_notice(fund_code: str) -> bool:
 
 
 def _get_sector_holdings(fund_code: str) -> List[Dict[str, Any]]:
-    """查询 guide_only 宽基名下的板块 ETF 模拟持仓（buy 减 exit）。"""
+    """查询 guide_only 宽基名下的板块 ETF 模拟持仓（buy 减 exit）。
+
+    返回项含 carrier 标记: 该 etf 活跃持仓是否全部来自 fixed_combo(carrier) 载体
+    （板块连跌退出据此跳过 carrier 腿，carrier 只按宽基窗口退出）。"""
     try:
         from app.database import SessionLocal
         from app.models.golden_pit_dca_log import GoldenPitDCALog
@@ -406,15 +410,28 @@ def _get_sector_holdings(fund_code: str) -> List[Dict[str, Any]]:
         finally:
             db.close()
         totals: Dict[str, float] = {}
+        carrier_totals: Dict[str, float] = {}
         for r in rows:
             if r.strategy and r.strategy.startswith("exit/"):
                 totals[r.etf_code] = totals.get(r.etf_code, 0.0) - r.amount
+                if "/carrier/" in r.strategy:
+                    carrier_totals[r.etf_code] = carrier_totals.get(r.etf_code, 0.0) - r.amount
             else:
                 totals[r.etf_code] = totals.get(r.etf_code, 0.0) + r.amount
-        return [
-            {"etf_code": code, "amount": round(max(amt, 0.0), 2)}
-            for code, amt in totals.items() if amt > 100
-        ]
+                if "/carrier/" in r.strategy:
+                    carrier_totals[r.etf_code] = carrier_totals.get(r.etf_code, 0.0) + r.amount
+        out = []
+        for code, amt in totals.items():
+            if amt <= 100:
+                continue
+            active = max(amt, 0.0)
+            c_active = max(carrier_totals.get(code, 0.0), 0.0)
+            out.append({
+                "etf_code": code,
+                "amount": round(active, 2),
+                "carrier": c_active >= active - 1e-6,  # 活跃持仓全部来自 fixed_combo(carrier) 载体
+            })
+        return out
     except Exception:
         return []
 
@@ -425,7 +442,8 @@ def _check_sector_down_turn(etf_code: str, down_days: Optional[int] = None) -> b
         from app.services.golden_pit_service import GoldenPitService
         bars = GoldenPitService._fetch_pi_server_kline(etf_code, limit=40)
         closes = [float(b["close"]) for b in bars if b.get("close")]
-        n = down_days or int(_sector.get_sector_config().get("exit_down_days", SECTOR_EXIT_DOWN_DAYS))
+        n = down_days or int(_sector.get_sector_params(etf_code).get("exit_down_days")
+                             or _sector.get_sector_config().get("exit_down_days", SECTOR_EXIT_DOWN_DAYS))
         if len(closes) < n + 1:
             return False
         return all(closes[-i] < closes[-i - 1] for i in range(1, n + 1))
@@ -1262,6 +1280,9 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
             if _has_exit_notice(idx["fund_code"]):
                 continue
             for sh in _get_sector_holdings(idx["fund_code"]):
+                if sh.get("carrier"):
+                    # fixed_combo(carrier) 腿按宽基窗口退出, 不做板块连跌（与回测口径一致）
+                    continue
                 if _check_sector_down_turn(sh["etf_code"]):
                     _record_dca_log(
                         fund_code=idx["fund_code"], window_start=window_start,
@@ -1272,7 +1293,8 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                     )
                     results.append(
                         f"🔻 板块二次拐点 {sh['etf_code']}: 连续"
-                        f"{int(_sector.get_sector_config().get('exit_down_days', SECTOR_EXIT_DOWN_DAYS))}天回落, "
+                        f"{int(_sector.get_sector_params(sh['etf_code']).get('exit_down_days')
+                              or _sector.get_sector_config().get('exit_down_days', SECTOR_EXIT_DOWN_DAYS))}天回落, "
                         f"建议清仓 ¥{sh['amount']:.0f}"
                     )
 
@@ -1321,7 +1343,7 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         days_rising = idx.get("days_rising", 0)
         trend = idx.get("trend", "declining")
 
-        index_params = CHINA_INDICES.get(fund_code, {})
+        index_params = get_effective_index_config(fund_code)
         pos_mult = index_params.get("position_multiplier", 1.0)
         dca_strategy = index_params.get("dca_strategy", "uniform_10")
         dca_fallback = index_params.get("dca_fallback", 10)
@@ -1594,7 +1616,7 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
         if not cfg:
             continue
         max_total = cfg["max_total_amount"]
-        index_params = CHINA_INDICES.get(fund_code, {})
+        index_params = get_effective_index_config(fund_code)
         pos_mult = index_params.get("position_multiplier", 1.0)
         dca_strategy = index_params.get("dca_strategy", "uniform_10")
         entry_greed = index_params.get("entry_greed", 0.50)

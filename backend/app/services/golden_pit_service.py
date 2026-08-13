@@ -40,6 +40,7 @@ from app.services.golden_pit_config import (
     _display_config,
     _strategy_label,
     _trend_label,
+    get_effective_index_config,
     get_trend_factor,
 )
 from app.services.golden_pit_indicators import (
@@ -357,7 +358,7 @@ class GoldenPitService:
             if snap_code not in arkvol_map:
                 continue
             config_key = arkvol_map[snap_code]
-            cfg = CHINA_INDICES[config_key]
+            cfg = get_effective_index_config(config_key)
 
             history = snap.get("history", [])
             ai_series = sorted(history, key=lambda x: x.get("date", ""))
@@ -446,7 +447,8 @@ class GoldenPitService:
                     series_by_code.setdefault(r.fund_code, []).append(r)
 
                 indices = []
-                for code, cfg in ALL_INDEX_CONFIGS.items():
+                for code in ALL_INDEX_CONFIGS:
+                    cfg = get_effective_index_config(code)
                     snap = snap_map.get(code)
                     if not snap:
                         continue
@@ -577,7 +579,10 @@ class GoldenPitService:
 
     def _extract_pi_server_indices(self, as_of: str) -> List[Dict[str, Any]]:
         """从 Pi Server ETF K 线数据提取价格分位驱动的指数状态。"""
-        pi_codes = {code: cfg for code, cfg in CHINA_INDICES.items() if cfg.get("data_source") == "pi_server"}
+        pi_codes = {
+            code: get_effective_index_config(code)
+            for code, cfg in CHINA_INDICES.items() if cfg.get("data_source") == "pi_server"
+        }
         if not pi_codes:
             return []
 
@@ -636,7 +641,8 @@ class GoldenPitService:
             return []
         data = tech_data.get("data", {}) or {}
         result = []
-        for code, cfg in SEMI_BOOST_INDICES.items():
+        for code in SEMI_BOOST_INDICES:
+            cfg = get_effective_index_config(code)
             rows = data.get(cfg.get("arkvol_code", code), [])
             if not rows:
                 logger.warning("tech-hardware-greed 未返回 %s (%s)，跳过", code, cfg.get("name"))
@@ -724,8 +730,8 @@ class GoldenPitService:
 
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
-                executor.submit(_build_one, code, cfg): code
-                for code, cfg in DEFENSE_INDICES.items()
+                executor.submit(_build_one, code, get_effective_index_config(code)): code
+                for code in DEFENSE_INDICES
             }
             for fut in as_completed(futures):
                 try:

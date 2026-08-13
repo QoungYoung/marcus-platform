@@ -25,7 +25,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from app.services.golden_pit_config import (
+    ALL_INDEX_CONFIGS,
     COMBO_W_MF,
+    build_entry_exit_defaults,
     COMBO_W_OVS,
     DCA_CARRIER_DEFAULTS,
     GOLDEN_PIT_SECTOR_SPLIT_ENABLED,
@@ -65,6 +67,53 @@ def _cache_set(key: str, value: Any) -> None:
 # ═══════════════════════════════════════════════════════════
 # 配置读写（PostgreSQL golden_pit_sector_config 表）
 # ═══════════════════════════════════════════════════════════
+
+# 已优化指数: 回测确认的备选参数优先（生产已落地，pgsql 集中管理）
+ENTRY_EXIT_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "588000": {
+        "use_fixed_greed": True,
+        "pit_greed": 0.28, "entry_greed": 0.33, "entry_offset": 0,
+        "exit_full_pct": 85, "exit_half_pct": 40, "exit_fallback_days": 20,
+        "turning_days": 1,
+    },
+    "159915": {
+        "use_fixed_greed": True,
+        "pit_greed": 0.30, "entry_greed": 0.35, "entry_offset": 0,
+        "exit_full_pct": 75, "exit_half_pct": 70, "exit_fallback_days": 30,
+        "turning_days": 1,
+    },
+}
+# 全部指数出入场参数默认（588000/159915=回测备选；其余从 ALL_INDEX_CONFIGS 硬编码提取；运行值在 pgsql 表集中管理）
+ENTRY_EXIT_DEFAULTS: Dict[str, Dict[str, Any]] = build_entry_exit_defaults(ENTRY_EXIT_OVERRIDES)
+
+# ── 板块个性化参数（tech7 + 非科技板块每板块一套 ovs_days/entry_greed_cap/exit_down_days）──
+# 覆盖池: TECH_SECTOR_POOL(7) ∪ SECTOR_ETF_POOL(10)，主键=etf6；默认=全局值；
+# 运行值在 pgsql sector_params JSON 集中管理，可按板块在弹窗调整。
+# 回测调优(2026-08-13, data/backtest/_sector_params_tune.py v2): 样本=2025起4个板块窗口(3个唯一),
+# 超跌窗口/贪婪上限在该样本无区分度(保持全局默认 120/0.95), 有效杠杆=连跌退出天数:
+#   512930 人工智能/515050 5G: 2026-04 坑中 2 连跌即撤, 规避 -56%~-68% 崩段 (exit3→exit2)
+#   588200 科创芯片: 2026-04 需容忍 4 连跌, 否则提前卖丢 +44.8% 主升 (exit3→exit4)
+#   159949 创业板50: 5 连跌容忍, 2026-04 持有到段末 (+10.3%→+19.6%)
+#   159929 生物医药/512660 军工: 4 连跌容忍, 避免浅回调被震出 (exit3→exit4)
+SECTOR_PARAM_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "159949": {"exit_down_days": 5},
+    "512930": {"exit_down_days": 2},
+    "515050": {"exit_down_days": 2},
+    "588200": {"exit_down_days": 4},
+    "159929": {"exit_down_days": 4},
+    "512660": {"exit_down_days": 4},
+}
+SECTOR_PARAM_DEFAULTS: Dict[str, Dict[str, Any]] = {}
+for _pk, _e in list(TECH_SECTOR_POOL.items()) + list(SECTOR_ETF_POOL.items()):
+    _etf6 = _e["etf_code"][2:]
+    if _etf6 in SECTOR_PARAM_DEFAULTS:
+        continue
+    SECTOR_PARAM_DEFAULTS[_etf6] = {
+        "ovs_days": int(SECTOR_OVS_DAYS),
+        "entry_greed_cap": 0.95,
+        "exit_down_days": int(SECTOR_EXIT_DOWN_DAYS),
+    }
+    SECTOR_PARAM_DEFAULTS[_etf6].update(SECTOR_PARAM_OVERRIDES.get(_etf6, {}))
 
 SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "enabled": {
@@ -156,7 +205,38 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "label": "熊市保护贪婪分位", "description": "hold_until_exit 熊市保护: regime=oversold 且宽基贪婪250日分位<=阈值时保留持仓、暂停新增候选",
         "value_type": "number", "sort_order": 21, "default": 0.2,
     },
+    "sector_params": {
+        "label": "板块个性化参数",
+        "description": "JSON: {etf6: {ovs_days, entry_greed_cap, exit_down_days}}（按板块覆盖全局超跌窗口/贪婪分位上限/连跌退出天数，集中管理）",
+        "value_type": "json", "sort_order": 24,
+        "default": json.dumps(SECTOR_PARAM_DEFAULTS, ensure_ascii=False),
+    },
+    "entry_exit_588000": {
+        "label": "科创50 出入场参数",
+        "description": 'JSON 覆盖出入场参数（集中管理）: {"use_fixed_greed":true,"pit_greed":0.28,"entry_greed":0.33,"exit_full_pct":85,"exit_half_pct":40,"exit_fallback_days":20}',
+        "value_type": "json", "sort_order": 22,
+        "default": json.dumps(ENTRY_EXIT_DEFAULTS["588000"], ensure_ascii=False),
+    },
+    "entry_exit_159915": {
+        "label": "创业板指 出入场参数",
+        "description": 'JSON 覆盖出入场参数（集中管理）: {"use_fixed_greed":true,"pit_greed":0.30,"entry_greed":0.35,"exit_full_pct":75,"exit_half_pct":70,"exit_fallback_days":30}',
+        "value_type": "json", "sort_order": 23,
+        "default": json.dumps(ENTRY_EXIT_DEFAULTS["159915"], ensure_ascii=False),
+    },
 }
+
+# 其余指数出入场参数集中管理（entry_exit_<fund_code> JSON，与板块拆分同表；弹窗可改）
+for _idx, (_code, _defaults) in enumerate(ENTRY_EXIT_DEFAULTS.items()):
+    if _code in ("588000", "159915"):
+        continue
+    _name = ALL_INDEX_CONFIGS.get(_code, {}).get("name", _code)
+    SECTOR_CONFIG_DEFAULTS[f"entry_exit_{_code}"] = {
+        "label": f"{_name} 出入场参数",
+        "description": f"JSON 覆盖出入场参数（集中管理，默认=CHINA_INDICES/回测优化值）: {json.dumps(_defaults, ensure_ascii=False)}",
+        "value_type": "json",
+        "sort_order": 24 + _idx,
+        "default": json.dumps(_defaults, ensure_ascii=False),
+    }
 
 
 DCA_CARRIER_MODES = ("sector_selection", "fixed_combo", "broad")
@@ -294,6 +374,38 @@ def get_sector_config() -> Dict[str, Any]:
     }
     _cache_set("sector_config", cfg)
     return cfg
+
+
+def get_index_entry_exit(fund_code: str) -> Dict[str, Any]:
+    """返回 <fund_code> 的出入场参数覆盖（golden_pit_sector_config 表 entry_exit_<fund_code>，集中管理）。"""
+    key = f"entry_exit_{fund_code}"
+    raw = get_sector_config().get(key)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        logger.warning("%s JSON 非法, 忽略覆盖: %s", key, raw)
+        return {}
+
+
+def get_sector_params(etf_code: str) -> Dict[str, Any]:
+    """返回板块个性化参数（pgsql sector_params JSON 覆盖默认；etf_code 支持 6 位或 SH/SZ 前缀）。"""
+    etf6 = (etf_code or "").strip()
+    if etf6[:2] in ("SH", "SZ", "BJ"):
+        etf6 = etf6[2:]
+    defaults = dict(SECTOR_PARAM_DEFAULTS.get(etf6, {}))
+    raw = get_sector_config().get("sector_params")
+    over: Dict[str, Any] = {}
+    if raw:
+        try:
+            data = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+            over = data.get(etf6, {}) if isinstance(data, dict) else {}
+        except (ValueError, TypeError):
+            logger.warning("sector_params JSON 非法: %s", raw)
+    defaults.update(over or {})
+    return defaults
 
 
 def list_sector_config() -> List[Dict[str, Any]]:
@@ -532,8 +644,9 @@ def _compute_signal_greed(
 ) -> Optional[Dict[str, Any]]:
     """greed 模式单板块信号：超跌中(oversold120<0)且当日贪婪可查。数据不足返回 None。"""
     cfg = cfg or get_sector_config()
-    ovs_days = int(cfg.get("ovs_days", SECTOR_OVS_DAYS))
-    greed_cap = float(cfg.get("entry_greed_cap", 0.95))  # 入场贪婪分位上限（过热不追）
+    params = get_sector_params(entry["etf_code"])  # 板块个性化参数（默认=全局值）
+    ovs_days = int(params.get("ovs_days") or cfg.get("ovs_days", SECTOR_OVS_DAYS))
+    greed_cap = float(params.get("entry_greed_cap") or cfg.get("entry_greed_cap", 0.95))  # 入场贪婪分位上限（过热不追）
 
     etf6 = entry["etf_code"][2:]
     g = greed_map.get(etf6, {}).get(as_of)
@@ -541,7 +654,11 @@ def _compute_signal_greed(
         return None
 
     # 入场贪婪过滤（回测结论: 别在贪婪分位接近100%时追新仓）: 250日分位 > cap 的过热板块跳过
-    hist = sorted((d, v) for d, v in greed_map.get(etf6, {}).items() if v is not None)
+    # 分位仅用 <= as_of 的历史（避免历史 as_of/dry-run 前视未来贪婪；实时 as_of=今天 行为不变）
+    hist = sorted(
+        (d, v) for d, v in greed_map.get(etf6, {}).items()
+        if v is not None and d <= as_of
+    )
     if len(hist) >= 20 and greed_cap < 1.0:
         recent = [v for _, v in hist[-250:]]
         pct = sum(1 for v in recent if v <= g) / len(recent)
