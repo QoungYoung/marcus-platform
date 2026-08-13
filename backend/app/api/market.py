@@ -63,7 +63,7 @@ def _fmt_net_amount(wan: float) -> str:
 
 
 @router.get("/indices", response_model=IndicesResponse)
-async def get_market_indices():
+def get_market_indices():
     """
     Get major market indices.
     Data source: Xueqiu (Snowball) API.
@@ -115,7 +115,7 @@ async def get_market_indices():
 
 
 @router.get("/quote/{symbol}", response_model=QuoteResponse)
-async def get_stock_quote(symbol: str):
+def get_stock_quote(symbol: str):
     """
     Get real-time quote for a specific stock.
     Data source: Xueqiu (Snowball) API.
@@ -333,7 +333,7 @@ def _normalize_to_ts_code(symbol: str) -> str:
 
 
 @router.get("/kline/{symbol}", response_model=KlineResponse)
-async def get_stock_kline(
+def get_stock_kline(
     symbol: str,
     start_date: Optional[str] = Query(None, description="开始日期 YYYYMMDD，默认90天前"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYYMMDD，默认今天"),
@@ -491,7 +491,7 @@ def _query_stock_flow(ts_code: str) -> Optional[dict]:
 
 
 @router.get("/moneyflow/{symbol}", response_model=ThsMoneyflowResponse)
-async def get_stock_moneyflow(
+def get_stock_moneyflow(
     symbol: str,
 ):
     """
@@ -618,7 +618,7 @@ async def get_stock_moneyflow(
 # ========== 技术面因子 API (数据源: Tushare stk_factor_pro) ==========
 
 @router.get("/technical/{symbol}", response_model=TechnicalResponse)
-async def get_stock_technical(
+def get_stock_technical(
     symbol: str,
     start_date: Optional[str] = Query(None, description="开始日期 YYYYMMDD，默认90天前"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYYMMDD，默认今天"),
@@ -709,7 +709,7 @@ async def get_stock_technical(
 # ========== pro_bar 通用行情 API (数据源: Tushare pro_bar) ==========
 
 @router.get("/pro-bar/{symbol}", response_model=ProBarResponse)
-async def get_stock_pro_bar(
+def get_stock_pro_bar(
     symbol: str,
     start_date: Optional[str] = Query(None, description="开始日期 YYYYMMDD，默认90天前"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYYMMDD，默认今天"),
@@ -830,7 +830,7 @@ async def get_concept_mapping(
 # ========== 概念板块行情 API (数据源: 东财 push2 实时 + Tushare moneyflow_ind_dc 兜底) ==========
 
 @router.get("/concept-fund-flow")
-async def get_concept_fund_flow(
+def get_concept_fund_flow(
     limit: int = Query(15, ge=1, le=100, description="返回数量上限"),
     sort_by: str = Query("pct_change", description="排序字段: pct_change(涨幅) / main_net(主力净流入)"),
 ):
@@ -1075,7 +1075,7 @@ async def get_concept_fund_flow(
 # ========== 概念板块 5 日资金流向聚合 API (暗线·持续性维度) ==========
 
 @router.get("/concept-fund-flow-5d")
-async def get_concept_fund_flow_5d(
+def get_concept_fund_flow_5d(
     days: int = Query(5, ge=3, le=20, description="回溯交易日天数"),
     limit: int = Query(30, ge=1, le=100, description="返回数量上限"),
 ):
@@ -1477,7 +1477,7 @@ async def get_moneyflow_mkt(
 # ========== 市场宽度 API (数据源: Tushare limit_list_d + daily_basic) ==========
 
 @router.get("/breadth")
-async def get_market_breadth():
+def get_market_breadth():
     """
     获取市场宽度数据（涨跌家数 / 涨跌停家数 / 成交额）。
     数据源: Tushare limit_list_d + daily_basic。
@@ -1863,7 +1863,7 @@ def _compute_style_rotation(pro, start_date: str, start_date_10d: str,
 
 
 @router.get("/market-diagnosis")
-async def get_market_diagnosis():
+def get_market_diagnosis():
     """
     市场状态诊断仪表盘 V2.0。
 
@@ -2253,7 +2253,7 @@ async def get_market_state():
 # ========== 涨跌榜 API (数据源: Tushare daily_basic) ==========
 
 @router.get("/top-movers")
-async def get_top_movers(
+def get_top_movers(
     type: str = Query("gainers", description="类型: gainers(涨幅榜) / losers(跌幅榜) / active(活跃榜)"),
     limit: int = Query(10, ge=1, le=50, description="返回数量"),
 ):

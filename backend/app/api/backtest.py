@@ -244,7 +244,7 @@ async def list_backtest_tasks(
 
 
 @router.get("/{task_id}")
-async def get_backtest_detail(task_id: str):
+def get_backtest_detail(task_id: str):
     """获取回测任务详情（含指标摘要）"""
     db = SessionLocal()
     try:
@@ -1930,7 +1930,7 @@ class SandboxOrderRequest(BaseModel):
 
 
 @router.get("/{task_id}/sandbox/account")
-async def get_sandbox_account(task_id: str, trade_date: str = Query(None)):
+def get_sandbox_account(task_id: str, trade_date: str = Query(None)):
     """获取沙盒账户状态（优先从 PaperTradingEngine 实时查，回退 PG）"""
     from app.services.backtest_engine import backtest_engine
     engine = backtest_engine._engines.get(task_id)
@@ -1959,7 +1959,7 @@ async def get_sandbox_account(task_id: str, trade_date: str = Query(None)):
 
 
 @router.get("/{task_id}/sandbox/positions")
-async def get_sandbox_positions(task_id: str, trade_date: str = Query(None)):
+def get_sandbox_positions(task_id: str, trade_date: str = Query(None)):
     """获取沙盒持仓（供 Pi 回测工具调用）
     包含 T+1 锁定状态：locked / last_buy_date / unlock_date / reason
     """
@@ -2022,7 +2022,7 @@ async def get_sandbox_positions(task_id: str, trade_date: str = Query(None)):
 
 
 @router.post("/{task_id}/sandbox/order")
-async def place_sandbox_order(task_id: str, req: SandboxOrderRequest):
+def place_sandbox_order(task_id: str, req: SandboxOrderRequest):
     """在沙盒账户中下单（通过真实 PaperTradingEngine）
 
     ⚠️ 反未来函数: 实际成交价不由 Pi 传的 price 决定, 而由 phase_time 对应的
@@ -2237,7 +2237,7 @@ async def place_sandbox_order(task_id: str, req: SandboxOrderRequest):
 
 
 @router.get("/{task_id}/sandbox/orders")
-async def get_sandbox_orders(task_id: str,
+def get_sandbox_orders(task_id: str,
                                symbol: str = Query(None),
                                status: str = Query(None),
                                limit: int = Query(50, ge=1, le=200)):
@@ -3323,7 +3323,7 @@ async def get_sandbox_realtime_sector_pct(task_id: str,
 
 
 @router.get("/{task_id}/sandbox/concept-mapping")
-async def get_sandbox_concept_mapping(task_id: str,
+def get_sandbox_concept_mapping(task_id: str,
                                        trade_date: str = Query(None),
                                        concept_name: str = Query(None),
                                        symbol: str = Query(None),
@@ -3481,7 +3481,7 @@ async def get_sandbox_concept_mapping(task_id: str,
 
 
 @router.get("/{task_id}/sandbox/indices")
-async def get_sandbox_indices(task_id: str,
+def get_sandbox_indices(task_id: str,
                                 trade_date: str = Query(None),
                                 phase_time: str = Query(None, description="Pi 调用时刻 HH:MM（用于反查未来函数）")):
     """回测模式下的市场指数
@@ -3986,11 +3986,11 @@ async def calc_position_sandbox(task_id: str, req: dict):
     try:
         engine = BacktestPaperEngine(task_id, initial_capital=task.initial_capital or 1000000)
         # 走 get_account() 拿标准 dict（BacktestPaperEngine 没有 available_cash/frozen_cash 直接属性）
-        acc = engine.get_account(day_df=None)  # 用 avg_price 估值（不引入未来行情）
+        acc = await asyncio.to_thread(engine.get_account, day_df=None)  # 用 avg_price 估值（不引入未来行情）
         available_cash = float(acc.get("available_cash", 0))
         frozen_cash = float(acc.get("frozen_cash", 0))
         # 取持仓列表（BacktestPaperEngine.get_positions() 返回标准 dict 列表）
-        position_list = engine.get_positions()
+        position_list = await asyncio.to_thread(engine.get_positions)
         position_value = 0.0
         for pos in position_list:
             sym = pos.get("symbol") or ""
@@ -4062,7 +4062,7 @@ async def calc_position_sandbox(task_id: str, req: dict):
     # ── 5. 大盘指数涨跌幅 (sandbox/indices, 已含未来函数防护: 非交易日自动降级) ──
     index_pct = 0.0
     try:
-        ires = await get_sandbox_indices(task_id=task_id, trade_date=trade_date_str)
+        ires = await asyncio.to_thread(get_sandbox_indices, task_id=task_id, trade_date=trade_date_str)
         for idx in ires.get("indices", []):
             if idx.get("symbol") == "000001.SH":  # 上证指数
                 index_pct = float(idx.get("change_pct", 0))
@@ -4253,7 +4253,7 @@ async def calc_position_sandbox(task_id: str, req: dict):
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/{task_id}/sandbox/position-add-conditions")
-async def position_add_conditions(
+def position_add_conditions(
     task_id: str,
     symbol: str = Query(None, description="指定标的，不传则检查全部持仓"),
     phase_time: str = Query(None, description="阶段时间 HH:MM，用于获取盘中价格"),
@@ -4448,7 +4448,7 @@ async def position_add_conditions(
 
 
 @router.get("/{task_id}/sandbox/candidate-entry-conditions")
-async def candidate_entry_conditions(
+def candidate_entry_conditions(
     task_id: str,
     symbol: str = Query(None, description="指定标的，不传则检查全部候选池标的"),
     phase_time: str = Query(None, description="阶段时间 HH:MM"),

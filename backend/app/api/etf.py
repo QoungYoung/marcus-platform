@@ -25,7 +25,7 @@ def _get_xueqiu_engine():
 
 
 @router.post("/sync")
-async def sync_etf_pool(pages: int = 5):
+def sync_etf_pool(pages: int = 5):
     """
     同步ETF板块池数据从雪球API到数据库
     """
@@ -51,7 +51,7 @@ async def sync_etf_pool_tushare():
 
 
 @router.get("/list")
-async def get_etf_list(sector: Optional[str] = None, limit: int = 100):
+def get_etf_list(sector: Optional[str] = None, limit: int = 100):
     """
     获取 ETF 板块池列表（从数据库查询）
     """
@@ -79,7 +79,7 @@ async def get_etf_list(sector: Optional[str] = None, limit: int = 100):
 
 
 @router.get("/quotes")
-async def get_etf_quotes(symbols: Optional[str] = None, top_n: int = 12):
+def get_etf_quotes(symbols: Optional[str] = None, top_n: int = 12):
     """
     获取 ETF 实时行情
 
@@ -127,7 +127,7 @@ async def get_etf_quotes(symbols: Optional[str] = None, top_n: int = 12):
 
 
 @router.get("/candidates")
-async def get_etf_candidates(
+def get_etf_candidates(
     top_n: int = 5,
     market_stance: str = "yellow",
     hot_sectors: Optional[str] = None,
@@ -229,7 +229,7 @@ async def get_etf_candidates(
 
 
 @router.get("/sectors/hot")
-async def get_hot_sectors(limit: int = 5):
+def get_hot_sectors(limit: int = 5):
     """
     获取热点板块（按 ETF 配置的优先级排序）
     """
@@ -270,7 +270,7 @@ async def get_hot_sectors(limit: int = 5):
 
 
 @router.get("/quote/{symbol}")
-async def get_single_etf_quote(symbol: str):
+def get_single_etf_quote(symbol: str):
     """
     获取单只 ETF 实时行情
     """
@@ -301,7 +301,7 @@ async def get_single_etf_quote(symbol: str):
 
 
 @router.get("/detail/{symbol}")
-async def get_etf_detail(symbol: str):
+def get_etf_detail(symbol: str):
     """
     获取ETF详细信息
     """
@@ -321,7 +321,7 @@ async def get_etf_detail(symbol: str):
 
 
 @router.get("/kline/{symbol}")
-async def get_etf_kline(
+def get_etf_kline(
     symbol: str,
     period: str = "day",
     count: int = -284,

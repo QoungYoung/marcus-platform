@@ -3,6 +3,7 @@
 Technical indicator API endpoints.
 Fibonacci retracement & daily K-channel (牛股计算器策略).
 """
+import asyncio
 import json
 import logging
 import sys
@@ -276,7 +277,7 @@ async def calculate_fibonacci(req: FibonacciRequest):
 
 
 @router.get("/daily-channel/{symbol}", response_model=DailyChannelResponse)
-async def calculate_daily_channel(
+def calculate_daily_channel(
     symbol: str,
     avg_price: Optional[float] = Query(None, description="分时均价（不传则从行情自动获取）"),
 ):
@@ -376,7 +377,7 @@ def _count_trading_days_since(date_str: str) -> int:
 
 
 @router.post("/advice", response_model=TradeAdviceResponse)
-async def get_trade_advice(req: TradeAdviceRequest):
+def get_trade_advice(req: TradeAdviceRequest):
     """
     获取完整的操作建议（牛股计算器决策树）。
 
@@ -656,7 +657,7 @@ async def get_realtime_indicators(
     # ── 并行获取所有数据源 ──
 
     # 1. 腾讯实时行情
-    async def _fetch_realtime_quote():
+    def _fetch_realtime_quote():
         try:
             from xueqiu_engine import XueqiuEngine
             engine = XueqiuEngine(config_file=xueqiu_config)
@@ -666,7 +667,7 @@ async def get_realtime_indicators(
             return None
 
     # 2. Tushare 历史日K线（≥35条，用于 MACD 初始化 + 滚动窗口）
-    async def _fetch_daily_bars():
+    def _fetch_daily_bars():
         try:
             from datetime import datetime as dt, timedelta
             pro = _get_tushare_pro()
@@ -680,7 +681,7 @@ async def get_realtime_indicators(
         return None
 
     # 3. Tushare stk_factor_pro 最近 5 条（用于构建 PrevIndicators 锚点）
-    async def _fetch_stk_factor():
+    def _fetch_stk_factor():
         try:
             from datetime import datetime as dt, timedelta
             pro = _get_tushare_pro()
@@ -702,9 +703,9 @@ async def get_realtime_indicators(
         return None
 
     quote, daily_df, factor_df = await asyncio.gather(
-        _fetch_realtime_quote(),
-        _fetch_daily_bars(),
-        _fetch_stk_factor(),
+        asyncio.to_thread(_fetch_realtime_quote),
+        asyncio.to_thread(_fetch_daily_bars),
+        asyncio.to_thread(_fetch_stk_factor),
     )
 
     # ── 构建 historical（最近 N 日盘后确认指标）──
@@ -909,7 +910,7 @@ async def check_stop_profit(symbol: str):
     # 2. 资金检查
     try:
         from app.api.market import get_stock_moneyflow as _get_mf
-        mf_response = await _get_mf(symbol=symbol)
+        mf_response = await asyncio.to_thread(_get_mf, symbol=symbol)
         main_net = float(mf_response.main_net) if hasattr(mf_response, 'main_net') else 0
         d5_main_net = float(mf_response.d5_main_net) if hasattr(mf_response, 'd5_main_net') else 0
         checks['moneyflow'] = {
@@ -1032,7 +1033,7 @@ async def check_stop_profit(symbol: str):
 # ──────────────────────── 建仓前安全垫检查 ────────────────────────
 
 @router.get("/safety-margin/{symbol}", response_model=SafetyMarginResponse)
-async def check_safety_margin(
+def check_safety_margin(
     symbol: str,
     entry_price: float = Query(..., gt=0, description="计划建仓价格"),
 ):
@@ -1494,7 +1495,7 @@ def calculate_position_quantity(
 
 
 @router.post("/calc-position", response_model=CalcPositionResponse)
-async def calc_position(req: CalcPositionRequest):
+def calc_position(req: CalcPositionRequest):
     """
     仓位计算工具 — 根据信号强度、产业链角色、加仓层级、市场立场，
     综合计算建议仓位数量、止损价位和风险验证。
@@ -1609,7 +1610,7 @@ async def calc_position(req: CalcPositionRequest):
     index_pct = 0.0
     try:
         from app.api.market import get_market_indices as _get_indices
-        indices_response = await _get_indices()
+        indices_response = _get_indices()
         indices = indices_response.indices if hasattr(indices_response, 'indices') else []
         # 取上证指数涨跌幅为主要参考
         for idx in indices:
@@ -2207,7 +2208,7 @@ async def check_entry_filters(req: EntryCheckRequest):
             _sys.path.insert(0, str(settings.workspace_path / "core"))
         from xueqiu_engine import XueqiuEngine
         engine = XueqiuEngine(config_file=xueqiu_config)
-        quote = engine.get_stock_quote(xq_symbol)
+        quote = await asyncio.to_thread(engine.get_stock_quote, xq_symbol)
         if quote:
             current_price = float(quote.get("current", 0))
             stock_name = quote.get("name", "")
@@ -2241,7 +2242,7 @@ async def check_entry_filters(req: EntryCheckRequest):
     moneyflow_data = None
     try:
         from app.api.market import get_stock_moneyflow as _get_mf
-        mf_response = await _get_mf(symbol=req.symbol)
+        mf_response = await asyncio.to_thread(_get_mf, symbol=req.symbol)
         moneyflow_data = mf_response
     except Exception as e:
         logger.warning(f"获取资金流向失败: {e}")
@@ -2279,7 +2280,7 @@ async def check_entry_filters(req: EntryCheckRequest):
         pro = get_tushare_pro()
         k_start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
         k_end = datetime.now().strftime("%Y%m%d")
-        kline_df = ts.pro_bar(api=pro, ts_code=ts_code, start_date=k_start, end_date=k_end, adj='qfq', freq='D')
+        kline_df = await asyncio.to_thread(ts.pro_bar, api=pro, ts_code=ts_code, start_date=k_start, end_date=k_end, adj='qfq', freq='D')
         if kline_df is not None and not kline_df.empty:
             kline_df = kline_df.sort_values("trade_date", ascending=False).head(5)
             for _, row in kline_df.iterrows():
@@ -2723,7 +2724,7 @@ async def check_entry_filters(req: EntryCheckRequest):
 # ──────────────────────── 主营业务构成 ────────────────────────
 
 @router.get("/fina-mainbz/{symbol}")
-async def get_fina_mainbz(
+def get_fina_mainbz(
     symbol: str,
     period: Optional[str] = Query(None, description="报告期 YYYYMMDD，如 20231231，默认最近报告期"),
     limit: int = Query(10, ge=1, le=50, description="返回条数上限"),
@@ -2804,7 +2805,7 @@ async def get_fina_mainbz(
 # ──────────────────────── 业绩快报 ────────────────────────
 
 @router.get("/express/{symbol}")
-async def get_express(
+def get_express(
     symbol: str,
     period: Optional[str] = Query(None, description="报告期 YYYYMMDD，如 20231231，默认最近报告期"),
     limit: int = Query(5, ge=1, le=50, description="返回条数上限"),
