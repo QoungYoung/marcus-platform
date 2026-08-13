@@ -3,7 +3,7 @@
 - [x] 1.1 新增 `paper_accounts` 注册表模型（account_id、name、module、initial_capital、enabled、created_at）并接入 `backend/app/models/paper_trade.py`
 - [x] 1.2 为 6 张 paper 表（paper_account_info/paper_positions/paper_orders/paper_trades/paper_daily_snapshot/paper_capital_adjustments）增加 `account_id` 字段，默认 `'stock'`
 - [x] 1.3 将 `paper_positions` 主键改为 `(account_id, symbol)`、`paper_daily_snapshot` 主键改为 `(account_id, trade_date)`
-- [x] 1.4 编写幂等启动迁移（ALTER TABLE ADD COLUMN IF NOT EXISTS + 复合主键重建 + 注册表种子 upsert：stock、golden_pit 初始资金 200000）
+- [x] 1.4 编写幂等启动迁移（ALTER TABLE ADD COLUMN IF NOT EXISTS + 复合主键重建 + 注册表种子 upsert：stock、golden_pit 初始资金 250000）
 - [x] 1.5 为 paper_orders/paper_trades 增加 `account_id` 索引
 
 ## 2. 引擎层（PaperTradingEngine）

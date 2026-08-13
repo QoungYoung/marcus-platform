@@ -6,7 +6,7 @@
 
 - 新增账户注册表 `paper_accounts`（account_id、模块归属、初始资金、启用状态），作为多账户入口。
 - 全部 paper 表（`paper_account_info` / `paper_positions` / `paper_orders` / `paper_trades` / `paper_daily_snapshot` / `paper_capital_adjustments`）增加 `account_id` 维度；positions 主键改为 `(account_id, symbol)`，快照主键改为 `(account_id, trade_date)`。
-- 默认账户 `stock`（存量数据零迁移，行为不变），黄金坑账户 `golden_pit`（初始资金 200,000）。
+- 默认账户 `stock`（存量数据零迁移，行为不变），黄金坑账户 `golden_pit`（初始资金 250,000）。
 - `PaperTradingEngine` / `MarcusVNPyExecutor` 支持 `account_id` 参数，所有 SQL 与风控（现金、回撤、连亏、单笔仓位、T+1）按账户隔离。
 - vnpy bridge 保持股票账户单例不变；非股票账户走 `PaperTradingEngine` 直连 PostgreSQL。
 - `/api/v1/trades` 增加 `account` 字段（默认 `stock`）；`/api/v1/portfolio` 增加 `account` 参数，FIFO 重放、快照、资金调整按账户过滤。

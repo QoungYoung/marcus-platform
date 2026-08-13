@@ -199,7 +199,7 @@ def _apply_paper_account_migration():
             ), {"now": now})
             conn.execute(text(
                 "INSERT INTO paper_accounts (account_id, name, module, initial_capital, enabled, created_at) "
-                "SELECT 'golden_pit', '黄金坑 ETF 模拟账户', 'golden_pit_dca', 200000, 1, :now "
+                "SELECT 'golden_pit', '黄金坑 ETF 模拟账户', 'golden_pit_dca', 250000, 1, :now "
                 "WHERE NOT EXISTS (SELECT 1 FROM paper_accounts WHERE account_id = 'golden_pit')"
             ), {"now": now})
             print("[DB] PATCH: paper 多账户迁移完成 (paper_accounts + account_id 维度)")

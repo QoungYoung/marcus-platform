@@ -7,7 +7,7 @@
 **Goals:**
 - 建立通用多账户底座：账户注册表 + 账本按 `account_id` 隔离。
 - 存量 `stock` 账户行为完全不变（默认账户、零数据迁移）。
-- 黄金坑获得独立账户（初始资金 200,000），风控（回撤/连亏/仓位）按账户独立。
+- 黄金坑获得独立账户（初始资金 250,000），风控（回撤/连亏/仓位）按账户独立。
 - 交易/组合 API 与 Portfolio 页面支持账户维度与切换。
 - 为做 T agent 预留"注册新账户即可用"的扩展点。
 
@@ -22,7 +22,7 @@
 ### D1: 账户标识用字符串 `account_id`，注册表 `paper_accounts`
 用可读字符串（`stock` / `golden_pit` / `t_agent`）而非自增整数，便于 agent 代码直接引用、日志可读、前端展示。
 - 备选：整数 id 关联注册表 → 代码中到处查表，可读性差，弃用。
-- `paper_accounts` 字段：`account_id (PK)`, `name`, `module`, `initial_capital`, `enabled`, `created_at`。种子数据：`stock`（现有资金）、`golden_pit`（200,000）。
+- `paper_accounts` 字段：`account_id (PK)`, `name`, `module`, `initial_capital`, `enabled`, `created_at`。种子数据：`stock`（现有资金）、`golden_pit`（250,000）。
 
 ### D2: 6 张 paper 表加 `account_id` 列，不做分库分表
 `paper_positions` 主键 → `(account_id, symbol)`；`paper_daily_snapshot` 主键 → `(account_id, trade_date)`；其余表加 `account_id` 索引列（默认 `'stock'`）。
@@ -51,7 +51,7 @@ vnpy `PaperAccountApp` 内部是单账户模型，多实例需多 Qt 事件循�
 1. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'`（6 张表）。
 2. 重建 `paper_positions` / `paper_daily_snapshot` 主键为复合主键（若原主键存在则 drop 后重建）。
 3. 建 `paper_accounts` 并 upsert 种子行（`stock`、`golden_pit`）。
-4. 新账户的 `paper_account_info` 行由引擎首次使用时自动创建（初始资金 200,000）。
+4. 新账户的 `paper_account_info` 行由引擎首次使用时自动创建（初始资金 250,000）。
 回滚：删除 `golden_pit` 注册行 + 相关账本行即可退回单账户行为，`stock` 不受影响。
 
 ## Risks / Trade-offs

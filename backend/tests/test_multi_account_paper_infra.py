@@ -2,7 +2,7 @@
 """多账户模拟盘隔离测试（需本地 PostgreSQL；未启动时自动跳过）。
 
 覆盖：
-- 8.1 迁移幂等性：重复执行不报错、注册表种子（stock / golden_pit 20 万）、复合主键
+- 8.1 迁移幂等性：重复执行不报错、注册表种子（stock / golden_pit 25 万）、复合主键
 - 8.2 多账户隔离：同 symbol 持仓互不覆盖、现金独立、订单前缀独立
 - 8.3 trades / portfolio / accounts API 的 account 参数（默认 stock、golden_pit、未知账户 400）
 - 8.4 由现有测试套件覆盖（本模块不重复）
@@ -132,7 +132,7 @@ class TestMigrationIdempotency(_PGTestCase):
         account_map = {r[0]: float(r[1]) for r in rows}
         self.assertIn("stock", account_map)
         self.assertIn("golden_pit", account_map)
-        self.assertEqual(account_map["golden_pit"], 200000.0)
+        self.assertEqual(account_map["golden_pit"], 250000.0)
 
         inspector = inspect(db_mod.engine)
         for table in ["paper_orders", "paper_trades", "paper_positions",
@@ -246,7 +246,7 @@ class TestApiAccountScope(_PGTestCase):
         self.assertIn("stock", ids)
         self.assertIn("golden_pit", ids)
         golden = next(a for a in data if a["account_id"] == "golden_pit")
-        self.assertEqual(golden["initial_capital"], 200000.0)
+        self.assertEqual(golden["initial_capital"], 250000.0)
 
     def test_unknown_account_rejected(self):
         res = self.client.post("/api/v1/trades", json={

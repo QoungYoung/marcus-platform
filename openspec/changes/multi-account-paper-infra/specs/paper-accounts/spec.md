@@ -6,7 +6,7 @@
 #### Scenario: 注册默认账户
 - **WHEN** 系统初始化模拟盘数据
 - **THEN** 注册表 SHALL 包含 `stock` 账户（股票任务，初始资金为现有账户资金）
-- **THEN** 注册表 SHALL 包含 `golden_pit` 账户（黄金坑 DCA，初始资金 200,000）
+- **THEN** 注册表 SHALL 包含 `golden_pit` 账户（黄金坑 DCA，初始资金 250,000）
 
 #### Scenario: 查询全部账户
 - **WHEN** 调用账户列表接口

@@ -1,6 +1,6 @@
 ## Context
 
-黄金坑 DCA 主流程 `execute_golden_pit_dca`（`backend/app/services/golden_pit_dca_service.py`）目前是"仅通知"模式：买入腿与退出信号只写 `golden_pit_dca_log`（`status="notified"`）并生成 QQ 通知文本，`_place_buy_order` / `_place_sell_order`（L618/L649）已实现下单能力但全库无调用点。`golden-pit-exit` 规范已要求退出卖单记录 `filled`/`failed`，代码与规范存在偏差。前置变更 `multi-account-paper-infra` 提供 `account_id` 执行器与 `golden_pit` 独立账户（初始资金 200,000），本变更在其上接线。
+黄金坑 DCA 主流程 `execute_golden_pit_dca`（`backend/app/services/golden_pit_dca_service.py`）目前是"仅通知"模式：买入腿与退出信号只写 `golden_pit_dca_log`（`status="notified"`）并生成 QQ 通知文本，`_place_buy_order` / `_place_sell_order`（L618/L649）已实现下单能力但全库无调用点。`golden-pit-exit` 规范已要求退出卖单记录 `filled`/`failed`，代码与规范存在偏差。前置变更 `multi-account-paper-infra` 提供 `account_id` 执行器与 `golden_pit` 独立账户（初始资金 250,000），本变更在其上接线。
 
 ## Goals / Non-Goals
 
@@ -56,5 +56,5 @@
 - [黄金坑与股票共用同一 paper engine 代码路径，接线引入回归] → 执行器按 account 隔离 + 测试覆盖"stock 账户无新写入"断言。
 - [失败状态堆积导致重复尝试] → `failed` 不参与去重是刻意的（次日重试），用 `_has_exit_notice` 防同日重复卖出；买入侧以 `_get_executed_days` + 当日日志兜底。
 - [现价获取失败导致无法换算股数] → 沿用现有 `_get_quote` 失败即返回原因，降级 `failed`/通知，不硬塞。
-- [golden_pit 账户资金不足（20 万上限）] → 买入腿失败记录 `failed` + 资金不足原因，通知人工介入；不调整股票账户。
+- [golden_pit 账户资金不足（25 万上限）] → 买入腿失败记录 `failed` + 资金不足原因，通知人工介入；不调整股票账户。
 - [前置 change 未完成时无法接线] → 本变更明确依赖 `multi-account-paper-infra` 的 `account_id` 执行器能力，实施顺序先 infra 后本变更。
