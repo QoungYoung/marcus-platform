@@ -27,6 +27,57 @@ _stock_name_cache = {}
 # Stock price cache (short TTL)
 _stock_price_cache = {}
 _price_cache_time = 0
+# Tushare 历史日线收盘价缓存（历史数据不变，缓存 1 小时，避免页面每次加载重复打 Tushare）
+_tushare_close_cache: dict = {}
+_tushare_close_by_date_cache: dict = {}
+_TUSHARE_CLOSE_TTL: float = 3600.0
+
+
+def _cached_daily_closes(pro, ts_code: str, start_date: str, end_date: str) -> dict:
+    """获取 ts_code 在 [start_date, end_date] 的 {YYYYMMDD: close}，带 TTL 缓存。"""
+    import time as _time
+    key = (ts_code, start_date, end_date)
+    now = _time.time()
+    cached = _tushare_close_cache.get(key)
+    if cached and now - cached[0] < _TUSHARE_CLOSE_TTL:
+        return cached[1]
+    try:
+        df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date,
+                       fields="ts_code,trade_date,close")
+    except Exception:
+        return {}
+    m = {}
+    if df is not None and not df.empty:
+        for _, row in df.iterrows():
+            m[str(row["trade_date"])] = float(row["close"])
+    _tushare_close_cache[key] = (now, m)
+    return m
+
+
+def _cached_close_by_date(pro, symbols: list, date_str: str) -> dict:
+    """获取 symbols 在指定交易日的收盘价 {symbol: close}，带 TTL 缓存。"""
+    import time as _time
+    codes = tuple(sorted({_normalize_to_ts_code(s) for s in symbols}))
+    if not codes:
+        return {}
+    key = (codes, date_str.replace("-", ""))
+    now = _time.time()
+    cached = _tushare_close_by_date_cache.get(key)
+    if cached and now - cached[0] < _TUSHARE_CLOSE_TTL:
+        return cached[1]
+    try:
+        df = pro.daily(ts_code=",".join(codes), trade_date=key[1], fields="ts_code,close")
+    except Exception:
+        return {}
+    result = {}
+    if df is not None and not df.empty:
+        code_to_sym = {_normalize_to_ts_code(s): s for s in symbols}
+        for _, row in df.iterrows():
+            sym = code_to_sym.get(str(row["ts_code"]))
+            if sym:
+                result[sym] = float(row["close"])
+    _tushare_close_by_date_cache[key] = (now, result)
+    return result
 
 # 费率常量（与 paper_engine.py 保持一致）
 _BUY_COMMISSION = 0.0005
@@ -559,7 +610,7 @@ def _compute_sector_concentration(positions: list, total_position_value: float) 
 
 
 @router.get("", response_model=PortfolioSummary)
-async def get_portfolio(account: str = Query("stock", description="账户标识")):
+def get_portfolio(account: str = Query("stock", description="账户标识")):
     """Get full portfolio summary."""
     position_list, account_info, realized_pnl, win_rate = calculate_positions_from_db(account)
 
@@ -676,7 +727,7 @@ async def get_portfolio(account: str = Query("stock", description="账户标识"
 
 
 @router.get("/positions", response_model=list[PositionResponse])
-async def get_positions(account: str = Query("stock", description="账户标识")):
+def get_positions(account: str = Query("stock", description="账户标识")):
     """Get current positions only."""
     position_list, _ = calculate_positions_from_db(account)[:2]
     symbols = [p['symbol'] for p in position_list]
@@ -836,7 +887,7 @@ async def adjust_capital(req: CapitalAdjustRequest, account: str = Query("stock"
 
 
 @router.post("/daily-snapshot")
-async def trigger_daily_snapshot(date: str = Query(None, description="Target date YYYY-MM-DD, defaults to today"),
+def trigger_daily_snapshot(date: str = Query(None, description="Target date YYYY-MM-DD, defaults to today"),
                                  account: str = Query("stock", description="账户标识")):
     """Manually trigger a daily portfolio snapshot.
 
@@ -850,7 +901,7 @@ async def trigger_daily_snapshot(date: str = Query(None, description="Target dat
 
 
 @router.get("/equity-history", response_model=list[EquityPoint])
-async def get_equity_history(days: int = Query(60, ge=1, le=365),
+def get_equity_history(days: int = Query(60, ge=1, le=365),
                              account: str = Query("stock", description="账户标识")):
     """
     Get daily equity curve = available_cash + position_value on each day.
@@ -971,7 +1022,7 @@ async def get_equity_history(days: int = Query(60, ge=1, le=365),
 
 
 @router.get("/daily-pnl-breakdown", response_model=list[DailyPnlBreakdown])
-async def get_daily_pnl_breakdown(
+def get_daily_pnl_breakdown(
     days: int = Query(30, ge=1, le=60),
     sort_dir: str = Query("desc", regex="^(asc|desc)$"),
     account: str = Query("stock", description="账户标识"),
@@ -1027,17 +1078,8 @@ async def get_daily_pnl_breakdown(
         ts_start = start_date.strftime("%Y%m%d")
         ts_end = today.strftime("%Y%m%d")
         for sym in all_stocks:
-            ts_code = _normalize_to_ts_code(sym)
-            try:
-                df = pro.daily(
-                    ts_code=ts_code, start_date=ts_start, end_date=ts_end,
-                    fields="ts_code,trade_date,close",
-                )
-                if df is not None and not df.empty:
-                    for _, row in df.iterrows():
-                        close_cache[(sym, str(row["trade_date"]))] = float(row["close"])
-            except Exception:
-                pass
+            for d, c in _cached_daily_closes(pro, _normalize_to_ts_code(sym), ts_start, ts_end).items():
+                close_cache[(sym, d)] = c
     except Exception as e:
         print(f"[daily-pnl-breakdown] Tushare fetch failed: {e}", flush=True)
 
@@ -1142,7 +1184,7 @@ async def get_daily_pnl_breakdown(
 
 
 @router.get("/daily-pnl-breakdown/date", response_model=DailyPnlBreakdown)
-async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Target date YYYY-MM-DD"),
+def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Target date YYYY-MM-DD"),
                                           account: str = Query("stock", description="账户标识")):
     """获取指定日期的个股盈亏明细（懒加载用）"""
     from datetime import datetime as dt, timedelta
@@ -1198,25 +1240,8 @@ async def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Ta
         held = [s for s, lots in positions.items() if sum(l["volume"] for l in lots) > 0]
 
         def _fetch_close_for_date(symbols: list, date_str: str) -> dict[str, float]:
-            """获取指定日期的收盘价，无数据则返回空"""
-            result: dict[str, float] = {}
-            if not symbols:
-                return result
-            try:
-                df = pro.daily(
-                    ts_code=",".join([_normalize_to_ts_code(s) for s in symbols]),
-                    trade_date=date_str.replace("-", ""),
-                    fields="ts_code,close",
-                )
-                if df is not None and not df.empty:
-                    for _, row in df.iterrows():
-                        for sym in symbols:
-                            if _normalize_to_ts_code(sym) == row["ts_code"]:
-                                result[sym] = float(row["close"])
-                                break
-            except Exception:
-                pass
-            return result
+            """获取指定日期的收盘价，无数据则返回空（带 TTL 缓存）"""
+            return _cached_close_by_date(pro, symbols, date_str)
 
         # 1) 尝试获取当日收盘价
         close_prices = _fetch_close_for_date(held, date)

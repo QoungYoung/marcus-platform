@@ -129,6 +129,18 @@ async def lifespan(app: FastAPI):
             print(f"[Main] ⚠️ K线缓存预热失败（非致命）: {e}")
     asyncio.create_task(_warm_kline_cache())
 
+    # 预热 daily-pnl-breakdown 的 Tushare 收盘价缓存（后台线程，避免首次打开账户页耗时）
+    async def _warm_breakdown_cache():
+        await asyncio.sleep(15)
+        try:
+            from app.api.portfolio import get_daily_pnl_breakdown
+            for acct in ("stock", "golden_pit"):
+                await asyncio.to_thread(get_daily_pnl_breakdown, days=30, sort_dir="desc", account=acct)
+            print("[Main] ✅ daily-pnl-breakdown 缓存预热完成")
+        except Exception as e:
+            print(f"[Main] ⚠️ daily-pnl-breakdown 缓存预热失败（非致命）: {e}")
+    asyncio.create_task(_warm_breakdown_cache())
+
     print("[Main] ✅ API 进程就绪（调度/监控/QQ Bot 已拆分到 worker 进程）")
 
     yield
