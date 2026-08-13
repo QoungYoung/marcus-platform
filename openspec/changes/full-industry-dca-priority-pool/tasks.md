@@ -1,13 +1,13 @@
 ﻿## 1. 数据与配置层
 
-- [ ] 1.1 在 `golden_pit_config.py` 新增 `INDUSTRY_POOL`（首版 ~15-20 个有贪婪+收益代理的 A 股行业：id/名称/greed_code/proxy_type/etf_code|nav_code/priority/max_total/min_days_in_pit）与行业贪婪历史加载（复用 `funds-greed/fund/{code}`）
+- [ ] 1.1 在 `golden_pit_config.py` 新增 `INDUSTRY_POOL`（首版 24 个有贪婪+场内 ETF 收益代理的 A 股行业：id/名称/greed_code/proxy_type/etf_code|nav_code/priority/max_total/min_days_in_pit）与行业贪婪历史加载（复用 `funds-greed/fund/{code}`）
 - [ ] 1.2 `golden_pit_sector_config` 新增配置键：`industry_pool_enabled`(bool)、`industry_pool`(json)、`cash_min_pct`(number 默认0.2)、`industry_pit_pct`(0.15)、`industry_drawdown_pct`(0.20)、`industry_entry_cap`(0.85)；seed + 弹窗可改
 - [ ] 1.3 `golden_pit_etf_config` 支持行业行（fund_code=`industry_<id>`，etf/nav 代理，max_total/priority 复用）；行业收益序列加载（tushare `fund_daily`/`fund_nav`，TTL 缓存）
 
 ## 2. 信号与资金池裁决
 
 - [ ] 2.1 行业信号计算：250 日贪婪分位 + N 日超跌（双条件 AND；贪婪历史<20 天仅价格触发；分位>entry_cap 过热过滤）——纯函数 + 单测
-- [ ] 2.2 资金池裁决纯函数 `ration(plans, available_cash)`：按 (tier, priority, weight) 比例分配/裁剪，返回 {actual, cut_items}——单测覆盖并发超现金/现金充足/现金下限
+- [ ] 2.2 资金池裁决纯函数 `ration(plans, available_cash)`：按 (tier, priority) 从高到低逐个分配计划金额，额度滚动次日，返回 {actual, cut_items}——单测覆盖并发超现金/现金充足/现金下限
 - [ ] 2.3 坑间资金流转：行业出场→防御承接（复用 `DEFENSE_TAKEOVER_WEIGHTS`）；新坑现金不足→按防御持仓比例赎回回补（扩展 `_sell_defense_on_reentry`）
 
 ## 3. DCA 调度接入
@@ -23,6 +23,6 @@
 
 ## 5. 验证与上线
 
-- [x] 5.1 回测复验：全行业 DCA+优先级+防御承接组合收益 vs 科创50 躺平/现有 tech7（data/backtest/_industry_pool_backtest.py），样本 2025-01~2026-08；基准参数 +36.14%（MDD -9.3%，24 坑，胜率 54%），跑赢沪深300(+21.5%)/24行业等权(+7.0%)/防御(+1.9%)，跑输科创50 躺平(+81.7%)；激进参数（回撤15%+止盈10%+止损5%）+55.84%（详见 design.md Backtest Validation）
+- [x] 5.1 回测复验：全行业 DCA+优先级+防御承接组合收益 vs 科创50 躺平/现有 tech7（data/backtest/_industry_pool_backtest.py），样本 2025-01~2026-08；基准参数 +36.14%（MDD -9.3%，24 坑，胜率 54%），跑赢沪深300(+21.5%)/24行业等权(+7.0%)/防御(+1.9%)，跑输科创50 躺平(+81.7%)；激进参数（回撤15%+止盈10%+止损5%）+55.84%；分行业 tp×stop 敏感性扫描结论：9/24 行业无完成坑参数无效、有坑行业区间差仅 1-6pp（噪音级）→ 维持统一参数 + 优先级裁决（详见 design.md D6 / 分行业参数敏感性）
 - [ ] 5.2 dry-run 一周：输出计划 vs 实际比对，检查裁决边界（并发、现金耗尽、防御回补）
 - [ ] 5.3 灰度：`industry_pool_enabled=true`（行业 max_total 低额起步），异常一键关停回滚；文档更新
