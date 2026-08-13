@@ -75,6 +75,22 @@ def get_stock_name(symbol: str) -> Optional[str]:
             ).first()
             if row and row.name:
                 name = row.name.strip()
+            if not name:
+                # ETF 名称回退：etf_pool（symbol 带 SH/SZ 前缀）→ golden_pit_etf_config（etf_code）
+                sym_upper = symbol.strip().upper()
+                candidates = [sym_upper, "SH" + code, "SZ" + code, "BJ" + code]
+                etf_row = db.query(EtfPool.name).filter(
+                    EtfPool.symbol.in_(candidates)
+                ).first()
+                if etf_row and etf_row.name:
+                    name = etf_row.name.strip()
+            if not name:
+                from app.models.golden_pit_etf_config import GoldenPitETFConfig
+                cfg_row = db.query(GoldenPitETFConfig.etf_name).filter(
+                    GoldenPitETFConfig.etf_code.in_(candidates)
+                ).first()
+                if cfg_row and cfg_row.etf_name:
+                    name = cfg_row.etf_name.strip()
         finally:
             db.close()
     except Exception:

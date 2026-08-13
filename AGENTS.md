@@ -37,6 +37,7 @@
 ### 数据源
 - Tushare：除实时行情外均可使用（日线、历史分钟线 `etf_mins` 等）；调用时注意控制请求频次（如 `time.sleep(0.6)`）避免限流。
 - 实时行情：Tushare 不提供实时报价，用东财接口取实时价（如 `push2his.eastmoney.com/api/qt/stock/kline/get`，参数 `klt=101&fqt=1`）；secid 规则：SH 代码 5/6 开头 → `1.x`，SZ → `0.x`；close 在返回 `klines` 每行的第 3 位。
+- ETF 池基础信息刷新：`POST /api/v1/etf/sync-tushare`（`backend/app/services/etf_pool_sync.py`，走 Tushare `etf_basic` 全量 upsert，保留东财行情快照）。
 
 ### git / 行尾
 - 仓库规范行尾 LF；`core.autocrlf=true` 检出会把 LF→CRLF（正常现象）。

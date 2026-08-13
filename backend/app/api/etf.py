@@ -37,6 +37,19 @@ async def sync_etf_pool(pages: int = 5):
         raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
 
 
+@router.post("/sync-tushare")
+async def sync_etf_pool_tushare():
+    """
+    用 Tushare etf_basic 全量刷新 ETF 池基础信息（名称等），保留已有行情快照。
+    """
+    try:
+        from app.services.etf_pool_sync import sync_etf_pool_from_tushare
+        result = sync_etf_pool_from_tushare()
+        return {"code": 0, **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Tushare ETF sync failed: {str(e)}")
+
+
 @router.get("/list")
 async def get_etf_list(sector: Optional[str] = None, limit: int = 100):
     """
