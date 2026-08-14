@@ -1,0 +1,34 @@
+# Marcus Platform DSH Server Dockerfile
+# 用 DeepSeek Harness (DSH) 替代 Pi Server 的常驻 Agent HTTP 服务
+# Build: docker build -f docker/Dockerfile.dsh -t marcus-dsh .
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# 国内镜像加速
+RUN npm config set registry https://registry.npmmirror.com
+
+# 全局安装 dsh CLI（bundles: dsh-base 等随主包依赖解析）
+RUN npm install -g @deepseek-ai/dsh@0.1.0-rc.6
+
+# pnpm 供 dsh plugin 管理 profile 插件
+RUN npm install -g pnpm@9
+
+# 初始化 service profile（bundles = dsh-base）并安装额外插件
+# 注意：dsh-host-webserver / dsh-code-runtime / dsh-agent-teams 不在主包依赖中，需显式安装
+RUN dsh plugin --profile service add @deepseek-ai/dsh-host-webserver@0.1.0-rc.6 \
+ && dsh plugin --profile service add @deepseek-ai/dsh-code-runtime-worker-thread@0.1.0-rc.6 \
+ && dsh plugin --profile service add github:NanmiCoder/dsh-agent-teams
+
+# 覆盖 service profile 的用户 patch（webserver host 0.0.0.0 + code-runtime + persona）
+COPY docker/dsh/service.cordis.patch.yml /root/.dsh/profiles/service/cordis.patch.yml
+
+# 会话/技能目录
+RUN mkdir -p /app/sessions /app/skills
+
+# Expose HTTP port (Pi Server 兼容契约)
+EXPOSE 3001
+
+# 常驻启动 service profile
+CMD ["dsh", "--profile", "service"]

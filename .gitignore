@@ -91,3 +91,9 @@ ArkVol/
 # Personal documents
 /项目经历简历.md
 backend/data/
+
+# agent 技能目录（openspec/hallmark 等生成物与机器本地标记，不提交）
+.agents/
+
+# DSH temp tooling
+.dsh-tmp/
