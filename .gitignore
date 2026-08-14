@@ -61,7 +61,9 @@ data/backtest/
 .claude-plugin/
 .codebuddy/
 .codex/
-skills/
+skills/*
+!skills/marcus-panel-tools/
+!skills/marcus-panel-tools/**
 CLAUDE.md
 
 # Backtest scratch & spec
