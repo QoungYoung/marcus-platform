@@ -1,10 +1,10 @@
 ## 1. Spike：DSH 容器化可行性验证
 
-- [ ] 1.1 构建最小 DSH profile（dsh-base + dsh-host-webserver，webserver `host: 0.0.0.0`），验证 Linux 容器内可启动、无 GUI 依赖
-- [ ] 1.2 验证 DeepSeek 模型路由（dsh-llm-pi-ai 配置 DEEPSEEK_API_KEY）在容器内发起一次 agent 回合成功
-- [ ] 1.3 验证容器内 Linux 工具栈（bash 沙盒）可用，`marcus-panel-tools` skill 装入 profile 后可加载
-- [ ] 1.4 验证容器端口暴露与同 compose 网络内其他容器（nginx/backend）可达
-- [ ] 1.5 记录 DSH 镜像构建方式（固定版本安装 vs vendored）与最小 Dockerfile 基线，写入仓库 `docker/`
+- [x] 1.1 构建最小 DSH profile（dsh-base + dsh-host-webserver，webserver `host: 0.0.0.0`），验证 Linux 容器内可启动、无 GUI 依赖（✅ spike5 常驻运行，HTTP 404，node22+dsh0.1.0-rc.6）
+- [x] 1.2 验证 DeepSeek 模型路由（dsh-llm-pi-ai 配置 DEEPSEEK_API_KEY）在容器内发起一次 agent 回合成功（✅ headless 回合"1+1等于2"；实际用 dsh-llm-deepseek + baseURL=OpenCode 网关）
+- [x] 1.3 验证容器内 Linux 工具栈（bash 沙盒）可用，`marcus-panel-tools` skill 装入 profile 后可加载（✅ skill 可见可读；fs 工具正常；bash 需沙箱后端配置——服务端不需要，bridge 走 Node fetch）
+- [x] 1.4 验证容器端口暴露与同 compose 网络内其他容器（nginx/backend）可达（✅ docker_default 网络互通，backend HTTP 200）
+- [x] 1.5 记录 DSH 镜像构建方式（固定版本安装 vs vendored）与最小 Dockerfile 基线，写入仓库 `docker/`（✅ `docker/Dockerfile.dsh` + `docker/dsh/README.md`）
 
 ## 2. dsh-marcus-bridge 插件（HTTP 桥接层）
 

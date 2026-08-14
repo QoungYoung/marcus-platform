@@ -1,27 +1,60 @@
 # Marcus Platform DSH Server Dockerfile
 # 用 DeepSeek Harness (DSH) 替代 Pi Server 的常驻 Agent HTTP 服务
 # Build: docker build -f docker/Dockerfile.dsh -t marcus-dsh .
+#
+# 构建策略（服务器国际出口慢，全走国内源）：
+#   - 基础镜像 node:20-slim（服务器本地已有，避免从 Docker Hub 拉取 200MB）
+#   - 删除 node20 残留后，从 npmmirror 下载 node22 官方二进制完整覆盖
+#     （DSH loader 需要 node:module.stripTypeScriptTypes，Node >=22.18；
+#       npmmirror 实测 15MB/s，5 秒拉完 30MB；npm 也随之换成 22 配套版）
+#   - apt 工具链走阿里云源；npm 走 npmmirror（环境变量方式）
+#   - agent-teams 从本地 tarball 安装（GitHub 国际出口慢，本地 6.1MB 打包上传）
 
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
-# 国内镜像加速
-RUN npm config set registry https://registry.npmmirror.com
+# 1) node-pty 等原生模块需要编译工具链（node-gyp）
+#    阿里云源加速（HTTP 避免基础镜像证书问题）；xz-utils 解压 node tar.xz
+RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null; \
+    apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ git ca-certificates curl xz-utils \
+ && rm -rf /var/lib/apt/lists/*
 
-# 全局安装 dsh CLI（bundles: dsh-base 等随主包依赖解析）
-RUN npm install -g @deepseek-ai/dsh@0.1.0-rc.6
+# 2) 干净的 Node 22：删掉 node20 全部残留（含旧 npm），完整解压 node22 官方 tar
+#    （避免新旧 npm/node 混用导致的 Class extends undefined 崩溃）
+RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/bin/node /usr/local/include/node /usr/local/share/man/man1/node.1 \
+ && curl -fsSL -o /tmp/node22.tar.xz https://npmmirror.com/mirrors/node/v22.20.0/node-v22.20.0-linux-x64.tar.xz \
+ && tar -xJf /tmp/node22.tar.xz -C /usr/local --strip-components=1 \
+ && rm -f /tmp/node22.tar.xz \
+ && node --version && npm --version
 
-# pnpm 供 dsh plugin 管理 profile 插件
-RUN npm install -g pnpm@9
+# 3) 国内 npm 镜像加速（环境变量，避免构建环境差异）
+ENV npm_config_registry=https://registry.npmmirror.com
 
-# 初始化 service profile（bundles = dsh-base）并安装额外插件
-# 注意：dsh-host-webserver / dsh-code-runtime / dsh-agent-teams 不在主包依赖中，需显式安装
-RUN dsh plugin --profile service add @deepseek-ai/dsh-host-webserver@0.1.0-rc.6 \
- && dsh plugin --profile service add @deepseek-ai/dsh-code-runtime-worker-thread@0.1.0-rc.6 \
- && dsh plugin --profile service add github:NanmiCoder/dsh-agent-teams
+# 4) 全局安装 dsh CLI（bundles: dsh-base 等随主包依赖解析）+ pnpm9（node 20/22 兼容）
+RUN npm install -g @deepseek-ai/dsh@0.1.0-rc.6 pnpm@9
 
-# 覆盖 service profile 的用户 patch（webserver host 0.0.0.0 + code-runtime + persona）
+# 5) 手工初始化 service profile（manifest 声明 bundles=[dsh-base]）
+RUN mkdir -p /root/.dsh/profiles/service \
+ && printf '{\n  "name": "dsh-profile-service",\n  "private": true,\n  "dependencies": {},\n  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base"] } }\n}\n' > /root/.dsh/profiles/service/package.json \
+ && printf 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n' > /root/.dsh/profiles/service/pnpm-workspace.yaml \
+ && printf '# service profile patch\n[]\n' > /root/.dsh/profiles/service/cordis.patch.yml
+
+# 6) 安装 registry 插件（host-webserver / code-runtime）
+RUN cd /root/.dsh/profiles/service \
+ && pnpm add @deepseek-ai/dsh-host-webserver@0.1.0-rc.6 @deepseek-ai/dsh-code-runtime-worker-thread@0.1.0-rc.6 --ignore-workspace-root-check 2>&1 | tail -3
+
+# 7) agent-teams 本地 tarball 手动解包（声明 dsh.bundle，加入 bundles 层；
+#    pnpm add 会因 peerDeps 的 UI 包缺失中断，服务端不需要 UI）
+COPY docker/dsh/dsh-agent-teams-0.1.0.tgz /tmp/dsh-agent-teams-0.1.0.tgz
+RUN mkdir -p /root/.dsh/profiles/service/node_modules/dsh-agent-teams \
+ && tar -xzf /tmp/dsh-agent-teams-0.1.0.tgz -C /root/.dsh/profiles/service/node_modules/dsh-agent-teams --strip-components=1 \
+ && rm -f /tmp/dsh-agent-teams-0.1.0.tgz \
+ && node -e "const fs=require('fs');const p='/root/.dsh/profiles/service/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.dsh.profile.bundles=['@deepseek-ai/dsh-base','dsh-agent-teams'];fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');console.log('bundles:',JSON.stringify(j.dsh.profile.bundles));"
+
+# 8) 覆盖 service profile 的用户 patch（webserver host 0.0.0.0 + code-runtime + persona）
 COPY docker/dsh/service.cordis.patch.yml /root/.dsh/profiles/service/cordis.patch.yml
 
 # 会话/技能目录
