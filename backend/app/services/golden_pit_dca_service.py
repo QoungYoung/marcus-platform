@@ -1407,10 +1407,12 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
                         shares=shares, schedule_day=current_day,
                     )
                     if ok:
+                        exit_days = int(
+                            _sector.get_sector_params(sh["etf_code"]).get("exit_down_days")
+                            or _sector.get_sector_config().get("exit_down_days", SECTOR_EXIT_DOWN_DAYS)
+                        )
                         results.append(
-                            f"🔻 板块二次拐点 {sh['etf_code']}: 连续"
-                            f"{int(_sector.get_sector_params(sh['etf_code']).get('exit_down_days')
-                                  or _sector.get_sector_config().get('exit_down_days', SECTOR_EXIT_DOWN_DAYS))}天回落, "
+                            f"🔻 板块二次拐点 {sh['etf_code']}: 连续{exit_days}天回落, "
                             f"已清仓 ¥{sh['amount']:.0f} (order: {order_info})"
                         )
                     else:
