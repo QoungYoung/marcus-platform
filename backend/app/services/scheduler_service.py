@@ -21,6 +21,7 @@ import uuid
 from app.config import get_settings
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.base import STATE_STOPPED, STATE_RUNNING, STATE_PAUSED
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.jobstores.memory import MemoryJobStore
@@ -229,17 +230,21 @@ class SchedulerService:
         self.start()
 
     def start(self):
-        """启动调度器"""
-        if self.scheduler.running:
+        """启动调度器（stop 后可安全重启，不重建 executor）"""
+        if self.scheduler.state == STATE_RUNNING:
             logger.info("Scheduler already running")
             return
+        was_paused = self.scheduler.state == STATE_PAUSED
 
         # Add jobs from config
         for task_id, task in self.tasks.items():
             if task.enabled:
                 self._add_job(task)
 
-        self.scheduler.start()
+        if was_paused:
+            self.scheduler.resume()
+        else:
+            self.scheduler.start()
         
         # ── 启动时关键模组健康检查 ──
         monitor = _get_monitor()
@@ -260,11 +265,17 @@ class SchedulerService:
         logger.info(f"Scheduler started with {len(self.tasks)} tasks")
 
     def stop(self):
-        """停止调度器"""
-        if self.scheduler.running:
-            self.scheduler.pause()  # 先暂停，防止新任务触发
-            self.scheduler.shutdown(wait=True)  # 等待已提交任务完成
-            logger.info("Scheduler stopped")
+        """停止调度器（只暂停+清空任务，不 shutdown，保证可安全重新 start）"""
+        if self.scheduler.state == STATE_STOPPED:
+            return
+        self.scheduler.pause()  # 先暂停，防止新任务触发
+        # 清空任务，等待下次 start 重新注册（避免重启后残留/重复任务）
+        for job in list(self.scheduler.get_jobs()):
+            try:
+                self.scheduler.remove_job(job.id)
+            except Exception:
+                pass
+        logger.info("Scheduler stopped")
 
     def _get_workspace_path(self) -> Path:
         """获取 workspace 路径（API/Worker 分离后，未加载 tasks.yaml 时退回 settings）"""
@@ -1728,7 +1739,7 @@ class SchedulerService:
     def get_scheduler_status(self) -> Dict:
         """获取调度器状态"""
         return {
-            'running': self.scheduler.running,
+            'running': self.scheduler.state == STATE_RUNNING,
             'task_count': len(self.tasks),
             'enabled_count': sum(1 for t in self.tasks.values() if t.enabled),
             'jobs_count': len(self.scheduler.get_jobs()),

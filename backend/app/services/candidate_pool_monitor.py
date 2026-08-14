@@ -240,7 +240,7 @@ class CandidatePoolMonitor:
 
         # ── 已在持仓中？跳过 ──
         try:
-            positions = self.executor.engine.get_positions() if self.executor else {}
+            positions = self.executor.get_positions() if self.executor else {}
             held_symbols = {p.get('symbol', '') for p in positions} if isinstance(positions, list) else set()
             if symbol in held_symbols:
                 return False
