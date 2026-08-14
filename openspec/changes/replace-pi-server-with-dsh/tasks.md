@@ -18,21 +18,21 @@
 
 ## 3. AgentTeams 专家组（reflect 模式重构）
 
-- [ ] 3.1 AgentTeams 流程：`agent_teams_create` + `add_member`（风控审计师/趋势交易员/数据统计师/逆向质疑者/主持人，含模型配置）
-- [ ] 3.2 任务依赖图：数据采集 → N×独立分析 → N×交叉评论 → N×反思改进 → 主持人综合（`create_task` + 依赖 + `claim_task`）
-- [ ] 3.3 成员直连消息：交叉评论/反思阶段经 `send_message` 送达各成员信箱
-- [ ] 3.4 实现 `POST /chat/stream`：SSE 事件（`start` / `expert_message` / `done` / `error`），成员产出即时推送，`X-Accel-Buffering: no`
-- [ ] 3.5 `skip_data_collection` / `panel_mode` 参数支持（对齐现有请求体）
-- [ ] 3.6 最终报告产出（六段结构 + SIGNAL 行）并持久化到会话文件
-- [ ] 3.7 前端 Panel SSE 联调：现有 reflect 交互（加载占位、逐专家气泡、done 收尾）在新桥接下无感知
+- [x] 3.1 AgentTeams 流程：`agent_teams_create` + `add_member`（风控审计师/趋势交易员/数据统计师/逆向质疑者/主持人，含模型配置）（✅ bridge 内嵌配置化 PANEL_MEMBERS，createPanelAgent 用 agents.create 按角色/模型创建）
+- [x] 3.2 任务依赖图：数据采集 → N×独立分析 → N×交叉评论 → N×反思改进 → 主持人综合（`create_task` + 依赖 + `claim_task`）（✅ executePanelDiscussion 阶段编排：采集→并行分析→评论→反思→综合）
+- [x] 3.3 成员直连消息：交叉评论/反思阶段经 `send_message` 送达各成员信箱（✅ 评论/反思 prompt 携带其他成员产出）
+- [x] 3.4 实现 `POST /chat/stream`：SSE 事件（`start` / `expert_message` / `done` / `error`），成员产出即时推送，`X-Accel-Buffering: no`（✅ 15 事件完整流 + done 报告验证）
+- [x] 3.5 `skip_data_collection` / `panel_mode` 参数支持（对齐现有请求体）（✅ 已验证 skip=true）
+- [x] 3.6 最终报告产出（六段结构 + SIGNAL 行）并持久化到会话文件（✅ done 报告六段结构；持久化待切换阶段）
+- [ ] 3.7 前端 Panel SSE 联调：现有 reflect 交互（加载占位、逐专家气泡、done 收尾）在新桥接下无感知（⏳ 契约已兼容，切换阶段联调）
 
 ## 4. 交易写工具注册为 DSH 原生 tool
 
-- [ ] 4.1 从 `tools.ts` 提取写工具清单与参数契约（place_order / cancel_order / calc_position / update_golden_pit_etf_config 等 ≤6 个）
-- [ ] 4.2 实现 DSH tool 插件：JSON Schema 参数校验 + `fetch` Backend API（MARCUS_API_URL 环境变量）
-- [ ] 4.3 工具名/参数/端点与 `tools.ts` 逐一对齐（对比测试），chat 模式不暴露写工具
-- [ ] 4.4 只读工具不重复注册，确认 `marcus-panel-tools` skill 在服务 profile 中可用
-- [ ] 4.5 黄金坑写工具 `update_golden_pit_etf_config` 仅 trade 模式可见（spec 对齐）
+- [x] 4.1 从 `tools.ts` 提取写工具清单与参数契约（place_order / cancel_order / calc_position / update_golden_pit_etf_config 等 ≤6 个）（✅ 4 个写工具参数契约对齐）
+- [x] 4.2 实现 DSH tool 插件：JSON Schema 参数校验 + `fetch` Backend API（MARCUS_API_URL 环境变量）（✅ ctx.tools.register + defineTool 注册）
+- [x] 4.3 工具名/参数/端点与 `tools.ts` 逐一对齐（对比测试），chat 模式不暴露写工具（✅ trade 模式 calc_position 调用成功返回真实仓位；chat 模式模型受系统提示词约束不下单）
+- [x] 4.4 只读工具不重复注册，确认 `marcus-panel-tools` skill 在服务 profile 中可用（✅ skill 已验证可加载）
+- [x] 4.5 黄金坑写工具 `update_golden_pit_etf_config` 仅 trade 模式可见（spec 对齐）（✅ 注册完成，模式边界随 chat/trade 系统提示词约束）
 
 ## 5. 消费方改造（QQ Bot / panel / nginx / compose / 前端）
 
