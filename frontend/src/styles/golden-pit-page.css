@@ -1926,3 +1926,52 @@
 .gp-cut-item { margin-right: 12px; }
 .gp-industry-notes { margin-top: 8px; font-size: 11px; color: var(--gp-muted); }
 .gp-industry-notes div { padding: 1px 0; }
+/* ── 提前 dry-run 预览 ── */
+.gp-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #2564ae;
+  background: rgba(47, 124, 211, 0.08);
+  border: 1px solid rgba(47, 124, 211, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.gp-preview-btn:hover { color: var(--gp-blue); border-color: var(--gp-blue); background: rgba(47, 124, 211, 0.14); }
+.gp-preview-btn:disabled { opacity: 0.6; cursor: wait; }
+.gp-preview-btn.active { color: #8f6b0c; background: rgba(201, 138, 18, 0.12); border-color: rgba(201, 138, 18, 0.45); }
+.gp-preview-btn.active:hover { color: #8f6b0c; border-color: #c98a12; background: rgba(201, 138, 18, 0.18); }
+.gp-preview-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: #2564ae;
+  background: rgba(47, 124, 211, 0.07);
+  border: 1px dashed rgba(47, 124, 211, 0.45);
+  border-radius: 8px;
+}
+.gp-preview-banner b { font-weight: 700; white-space: nowrap; }
+.gp-preview-banner span { line-height: 1.5; }
+.gp-preview-banner button {
+  margin-left: auto;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  line-height: 14px;
+  font-size: 13px;
+  color: #2564ae;
+  background: none;
+  border: 1px solid rgba(47, 124, 211, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.gp-preview-banner button:hover { background: rgba(47, 124, 211, 0.12); }
+

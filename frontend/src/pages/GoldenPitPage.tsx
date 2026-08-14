@@ -234,6 +234,7 @@ interface IndustryMonitor {
   notes: string[];
   error?: string;
   reason?: string;
+  preview?: boolean;
 }
 
 interface DcaCarrierTarget {
@@ -587,13 +588,34 @@ function CashPoolBar({ cp }: { cp: CashPoolView }) {
 function IndustryMonitorPanel({ monitor }: { monitor: IndustryMonitor | null }) {
   const [open, setOpen] = useState(true);
   const [filter, setFilter] = useState<'all' | 'in_pit' | 'monitor'>('all');
+  const [preview, setPreview] = useState<IndustryMonitor | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   if (!monitor) return null;
 
+  const view = preview ?? monitor;
   const inPitCount = monitor.in_pit_count ?? monitor.industries.filter((i) => i.in_pit).length;
-  const rows = (filter === 'in_pit' ? monitor.industries.filter((i) => i.in_pit)
-    : filter === 'monitor' ? monitor.industries.filter((i) => !i.in_pit)
-    : monitor.industries).slice().sort((a, b) =>
+  const rows = (filter === 'in_pit' ? view.industries.filter((i) => i.in_pit)
+    : filter === 'monitor' ? view.industries.filter((i) => !i.in_pit)
+    : view.industries).slice().sort((a, b) =>
       Number(b.in_pit) - Number(a.in_pit) || a.priority - b.priority);
+
+  const runPreview = async () => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const res = await goldenPitApi.getIndustryPreview();
+      if (res.data?.code === 0 && res.data?.data) {
+        setPreview(res.data.data as IndustryMonitor);
+      } else {
+        setPreviewError(res.data?.msg || '预览失败');
+      }
+    } catch (e: any) {
+      setPreviewError(e?.response?.data?.msg || e?.message || '网络请求失败');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
 
   const greedTone = (pct: number | null) => {
     if (pct == null) return 'gp-greed-na';
@@ -613,6 +635,25 @@ function IndustryMonitorPanel({ monitor }: { monitor: IndustryMonitor | null }) 
           {monitor.cash_pool?.dry_run ? ' · dry-run' : monitor.cash_pool?.execute ? ' · 执行中' : ''}
         </span>
         <span className="gp-count">{inPitCount}/{monitor.industries.length} 入坑</span>
+        {monitor.cash_pool?.execute && !preview && (
+          <button
+            className="gp-preview-btn"
+            onClick={runPreview}
+            disabled={previewLoading}
+            title="提前 dry-run 模拟今日窗口推进与资金池分配（不落单、不写状态）"
+          >
+            {previewLoading ? '预览中…' : '提前预览'}
+          </button>
+        )}
+        {monitor.cash_pool?.execute && preview && (
+          <button
+            className="gp-preview-btn active"
+            onClick={() => { setPreview(null); setPreviewError(null); }}
+            title="退出预览，回到实际执行视图"
+          >
+            实际视图
+          </button>
+        )}
         <button className="gp-fold-btn" onClick={() => setOpen(!open)} title={open ? '收起' : '展开'} aria-label={open ? '收起全行业监测' : '展开全行业监测'}>
           {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           {open ? '收起' : '展开'}
@@ -621,6 +662,14 @@ function IndustryMonitorPanel({ monitor }: { monitor: IndustryMonitor | null }) 
       {open && (
         <div className="gp-industry-body">
           {monitor.error && <div className="gp-industry-error">⚠ {monitor.error}</div>}
+          {preview && (
+            <div className="gp-preview-banner">
+              <b>🔍 提前 dry-run 预览</b>
+              <span>仅模拟推进今日窗口与资金池分配，<b>不落单、不写状态</b>。09:36 DCA 任务实际执行以落盘结果为准。</span>
+              <button onClick={() => { setPreview(null); setPreviewError(null); }} aria-label="关闭预览">×</button>
+            </div>
+          )}
+          {previewError && <div className="gp-industry-error">⚠ {previewError}</div>}
           {!monitor.enabled && (
             <div className="gp-industry-empty">
               全行业监测已关闭（golden_pit_sector_config → industry_pool_enabled=false）。现有指数级黄金坑 DCA 不受影响。
@@ -629,7 +678,7 @@ function IndustryMonitorPanel({ monitor }: { monitor: IndustryMonitor | null }) 
           {monitor.enabled && monitor.industries.length === 0 && (
             <div className="gp-industry-empty">暂无行业数据</div>
           )}
-          <CashPoolBar cp={monitor.cash_pool} />
+          <CashPoolBar cp={view.cash_pool} />
           <div className="gp-industry-filters">
             {([['all', '全部'], ['in_pit', '入坑中'], ['monitor', '监测中']] as const).map(([k, label]) => (
               <button key={k} className={`gp-range-chip ${filter === k ? 'active' : ''}`} onClick={() => setFilter(k)}>
@@ -672,16 +721,16 @@ function IndustryMonitorPanel({ monitor }: { monitor: IndustryMonitor | null }) 
               </tbody>
             </table>
           </div>
-          {monitor.cash_pool?.cut_items && monitor.cash_pool.cut_items.length > 0 && (
+          {view.cash_pool?.cut_items && view.cash_pool.cut_items.length > 0 && (
             <div className="gp-cut-list">
               <b>资金池裁剪（低优先级让位）：</b>
-              {monitor.cash_pool.cut_items.map((c) => (
+              {view.cash_pool.cut_items.map((c) => (
                 <span key={c.id} className="gp-cut-item">{c.id} 跳过¥{c.skipped.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}(P{c.priority})</span>
               ))}
             </div>
           )}
-          {monitor.notes && monitor.notes.length > 0 && (
-            <div className="gp-industry-notes">{monitor.notes.slice(-5).map((n) => <div key={n}>{n}</div>)}</div>
+          {view.notes && view.notes.length > 0 && (
+            <div className="gp-industry-notes">{view.notes.slice(-5).map((n) => <div key={n}>{n}</div>)}</div>
           )}
         </div>
       )}

@@ -142,6 +142,7 @@ export const goldenPitApi = {
   getSectorConfig: () => api.get('/golden-pit/sector-config'),
   updateSectorConfig: (values: Record<string, string | number | boolean>) =>
     api.put('/golden-pit/sector-config', { values }),
+  getIndustryPreview: () => api.get('/golden-pit/industry-preview'),
   getTechStatus: (as_of?: string) =>
     api.get('/golden-pit/tech-status', { params: as_of ? { as_of } : {} }),
 }

@@ -20,6 +20,26 @@ def _get_service() -> GoldenPitService:
 
 # ── v2 endpoints ──
 
+@router.get("/industry-preview")
+async def get_industry_preview(as_of: Optional[str] = Query(None, description="回放指定日期，默认今天")):
+    """全行业监测提前 dry-run 预览：模拟推进今日窗口与资金池分配，不落单、不写状态。
+
+    执行模式(industry_execute=true)下 status 只读落盘结果，09:36 DCA 任务运行前今日计划为 0；
+    本接口用 advance=True 强制 dry-run 推进，返回"如果现在执行会是什么计划"的预览视图。
+    """
+    try:
+        from app.services.golden_pit_industry_service import industry_monitor_snapshot
+        snap = industry_monitor_snapshot(as_of=as_of, advance=True)
+        snap["preview"] = True
+        snap["reason"] = "preview"
+        return {"code": 0, "data": snap}
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"code": 1, "msg": str(exc), "data": None},
+        )
+
+
 @router.get("/status")
 async def get_golden_pit_status():
     """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。"""
