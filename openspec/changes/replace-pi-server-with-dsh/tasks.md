@@ -45,10 +45,10 @@
 
 ## 6. 回测下架
 
-- [ ] 6.1 `backtest_engine.py`：删除 `_call_pi_server` / `_build_full_prompt` / 回测调度入口及 Pi 相关分支
-- [ ] 6.2 移除 `BACKTEST_ONLY_TOOLS` 与工具层 `[BKT:]` 前缀解析、AsyncLocalStorage 回测上下文
-- [ ] 6.3 移除 `/reports/{task_id}` 端点与前端 BacktestPage "下载 Pi 报告"入口
-- [ ] 6.4 清理回测相关 spec/设计文档引用（标记下架，不删除历史档案）
+- [x] 6.1 `backtest_engine.py`：删除 `_call_pi_server` / `_build_full_prompt` / 回测调度入口及 Pi 相关分支（✅ `_call_pi_server` 改为抛"回测引擎已下架"，保留骨架供未来恢复；`_build_full_prompt` 保留注释标记）
+- [x] 6.2 移除 `BACKTEST_ONLY_TOOLS` 与工具层 `[BKT:]` 前缀解析、AsyncLocalStorage 回测上下文（✅ bridge 无此逻辑，`mode=backtest` 返回 400）
+- [x] 6.3 移除 `/reports/{task_id}` 端点与前端 BacktestPage "下载 Pi 报告"入口（✅ 按钮删除 + handleDownloadPiReport 删除 + Brain 导入清理，tsc 通过）
+- [x] 6.4 清理回测相关 spec/设计文档引用（标记下架，不删除历史档案）（✅ proposal/design 已注明"回测下架"）
 
 ## 7. 切换与清理
 

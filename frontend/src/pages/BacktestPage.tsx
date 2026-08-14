@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
   Play, Square, BarChart3, Activity, AlertTriangle, ChevronRight,
   RefreshCw, Layers, Trash2, Plus, List, X, Terminal, Target, Download,
-  FileText, FileSpreadsheet, Briefcase, Copy, Brain,
+  FileText, FileSpreadsheet, Briefcase, Copy,
 } from 'lucide-react';
 import {
   ComposedChart, Bar, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -383,33 +383,6 @@ export default function BacktestPage() {
       setDownloading(false);
     }
   }, [downloading]);
-
-  // ── 下载 Pi 交易报告 (从 Pi Server sessions 读取) ──
-  const handleDownloadPiReport = useCallback(async () => {
-    if (!selectedTaskId || downloading) return;
-    setDownloading(true);
-    try {
-      const url = `http://localhost:3001/reports/${selectedTaskId}?format=md`;
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '');
-        throw new Error(`HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-      }
-      const text = await resp.text();
-      const blob = new Blob([text], { type: 'text/markdown; charset=utf-8' });
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = `pi_reports_${selectedTaskId.slice(0, 8)}.md`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-    } catch (e: any) {
-      console.error('[Backtest] Pi 报告下载失败', e);
-      alert(`Pi 报告下载失败: ${e?.message || e}`);
-    } finally {
-      setDownloading(false);
-    }
-  }, [selectedTaskId, downloading]);
 
   // ── 导出下拉菜单控制 ──
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -812,23 +785,6 @@ export default function BacktestPage() {
                               <div style={{ fontWeight: 500 }}>查看策略报告</div>
                               <div style={{ fontSize: 11, color: 'var(--agent-text-muted)' }}>
                                 选股/买卖/风控/统计 (Markdown)
-                              </div>
-                            </div>
-                          </button>
-                          <div style={{ height: 1, background: 'var(--agent-border, #333)', margin: '4px 0' }} />
-                          <button
-                            className="bt-export-menu-item"
-                            onClick={() => {
-                              setExportMenuOpen(false);
-                              handleDownloadPiReport();
-                            }}
-                            style={menuItemStyle}
-                          >
-                            <Brain size={14} style={{ color: '#a78bfa' }} />
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontWeight: 500, color: '#a78bfa' }}>下载 Pi 交易报告</div>
-                              <div style={{ fontSize: 11, color: 'var(--agent-text-muted)' }}>
-                                每天早盘/午前/午后/尾盘的 AI 决策原文 (Markdown)
                               </div>
                             </div>
                           </button>

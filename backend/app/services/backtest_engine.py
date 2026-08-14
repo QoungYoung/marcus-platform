@@ -1100,7 +1100,7 @@ class BacktestEngine:
             f"- 严格遵守风控纪律，单只股票仓位不超过15%"
         )
 
-    # ── Pi Server 调用 ──
+    # ── Pi Server 调用（已下架：回测引擎停用，Pi Server 被 DSH 容器替代）──
 
     def _build_full_prompt(self, task_id: str, trade_date, phase_id: str,
                            phase_time: str, base_prompt: str) -> str:
@@ -1112,45 +1112,13 @@ class BacktestEngine:
         return context_prefix + base_prompt
 
     async def _call_pi_server(self, task_id: str, trade_date, full_prompt: str) -> str:
-        """调用 Pi Server（线程池 + 3 次重试，避免启动时序问题）"""
-        import urllib.request
-        import ssl as _ssl
+        """调用 Pi Server（已下架）。
 
-        pi_url = self.settings.PI_SERVER_URL
-        date_str = trade_date.isoformat() if hasattr(trade_date, 'isoformat') else str(trade_date)
-        session_id = f"backtest_{task_id}_{date_str.replace('-', '')}"
-
-        logger.info(f"[Engine] 发送 Pi 请求: {len(full_prompt)} 字符 → {pi_url}")
-
-        last_error = None
-        for attempt in range(3):
-            try:
-                def _sync_call():
-                    payload = json.dumps({
-                        "message": full_prompt, "session_id": session_id,
-                        "mode": "trade",
-                        "model": getattr(self, "_model_name", BACKTEST_DEFAULT_MODEL),
-                        "thinking_level": getattr(self, "_thinking_level", "high"),
-                    }).encode("utf-8")
-                    req = urllib.request.Request(
-                        pi_url, data=payload,
-                        headers={"Content-Type": "application/json"}, method="POST")
-                    ctx = _ssl.create_default_context()
-                    with urllib.request.urlopen(req, context=ctx, timeout=300) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
-                        return data.get("reply", "")
-
-                loop = asyncio.get_event_loop()
-                reply = await loop.run_in_executor(None, _sync_call)
-                logger.info(f"[Engine] Pi 响应: {len(reply)} 字符")
-                return reply
-            except Exception as e:
-                last_error = str(e)
-                if attempt < 2:
-                    wait = (attempt + 1) * 3
-                    logger.warning(f"[Engine] Pi 调用失败 (重试 {attempt+1}/3, {wait}s 后): {last_error}")
-                    await asyncio.sleep(wait)
-        raise RuntimeError(f"Pi Server 3次重试均失败: {last_error}")
+        回测引擎整体停用（见 openspec change replace-pi-server-with-dsh）：
+        Pi Server 已被 DSH 容器替代，回测沙盒路由（[BKT:] 前缀）不再支持。
+        保留函数骨架供未来恢复回测时重新实现（届时改走 DSH 容器端点）。
+        """
+        raise RuntimeError("回测引擎已下架（Pi Server 被 DSH 替代，回测模式不再支持）")
 
     def _fallback_decision(self, prompt: str) -> str:
         """无 Pi Server 时的基于规则模拟决策"""
