@@ -13,6 +13,7 @@ x-backend-common: &backend-common
     EM_PROXY_URL: http://81.70.44.68:8199
     QT_QPA_PLATFORM: offscreen
     ENGINE_BACKEND: vnpy
+    MARCUS_API_URL: http://backend:8000/api/v1
   volumes:
     - ../data:/app/data
     - ../apps:/app/apps:ro
@@ -87,6 +88,8 @@ services:
           memory: 512M
     depends_on:
       postgres:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     command: python -m app.worker_main
     healthcheck:

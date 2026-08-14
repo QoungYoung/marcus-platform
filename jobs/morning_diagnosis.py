@@ -119,11 +119,23 @@ def format_message(data: dict) -> str:
     return "\n".join(lines)
 
 
+def api_base_url() -> str:
+    """获取 API 基础地址。
+
+    优先使用 MARCUS_API_URL（docker 部署下 worker 容器用它指向 backend 服务），
+    否则回退到本机 localhost（裸机双进程部署）。
+    """
+    url = os.environ.get("MARCUS_API_URL", "").strip().rstrip("/")
+    if url:
+        return url
+    api_port = os.environ.get("API_PORT", "8000")
+    return f"http://localhost:{api_port}/api/v1"
+
+
 def main():
     _load_env()
 
-    api_port = os.environ.get("API_PORT", "8000")
-    url = f"http://localhost:{api_port}/api/v1/market/market-diagnosis"
+    url = f"{api_base_url()}/market/market-diagnosis"
 
     try:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
