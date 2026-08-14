@@ -1,0 +1,12 @@
+{
+  "name": "dsh-dsh-marcus-bridge",
+  "version": "0.1.0",
+  "description": "Pi Server 兼容的 HTTP 桥接：POST /chat（chat/trade 模式）、POST /chat/stream（SSE 专家组预留）、GET /health、POST /reset，session_id → DSH Agent 映射 + per-session 锁。",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  }
+}

@@ -1,6 +1,6 @@
 # Marcus service profile patch — 无 GUI 的常驻 DSH 服务（替代 Pi Server）
 # 叠加在 dsh-base 之上：插入 webserver（host 0.0.0.0）与 code-runtime，
-# dsh-marcus-bridge 插件在此注册 /chat 端点（见 tasks 2.x）。
+# dsh-marcus-bridge 插件在此注册 /chat /health /reset 端点。
 
 - id: system-prompt
   config:
@@ -27,3 +27,7 @@
       config:
         host: '0.0.0.0'
         port: !!js parseInt(process.env.PI_SERVER_PORT || '3001', 10)
+
+    # Marcus 桥接插件：POST /chat /health /reset（Pi Server 兼容契约）
+    - id: dsh-marcus-bridge
+      name: dsh-dsh-marcus-bridge

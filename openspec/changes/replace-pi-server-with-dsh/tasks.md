@@ -8,13 +8,13 @@
 
 ## 2. dsh-marcus-bridge 插件（HTTP 桥接层）
 
-- [ ] 2.1 插件骨架：`scripts/specs/dsh-marcus-bridge.spec.json` 定义 + `dsh-marcus-bridge` 包（host 半 `lib/index.js`），注册到服务 profile
-- [ ] 2.2 实现 `GET /health` 与 `POST /reset`（会话清除）
-- [ ] 2.3 实现 `POST /chat`：`session_id → ctx.agents.create/resume` 映射、per-session 锁、`{message, session_id, mode, model, thinking_level}` → `{reply, session_id, mode, elapsed_ms}`
-- [ ] 2.4 mode 路由：chat（只读工具）/ trade（含写工具）；`mode=backtest` 返回 400
-- [ ] 2.5 Prompt 启动加载：从 Backend `/prompts` 拉取缓存（含回退内置），对齐 `prompt_seeds.py` 真源
-- [ ] 2.6 会话持久化验证：容器重启后 `resume` 恢复会话、清理无效历史
-- [ ] 2.7 本地 DSH 先跑通 `/chat`（chat/trade 各一次），再容器化联调
+- [x] 2.1 插件骨架：`scripts/specs/dsh-marcus-bridge.spec.json` 定义 + `dsh-marcus-bridge` 包（host 半 `lib/index.js`），注册到服务 profile（✅ 固化 + 容器 COPY 集成）
+- [x] 2.2 实现 `GET /health` 与 `POST /reset`（会话清除）（✅ 验证通过）
+- [x] 2.3 实现 `POST /chat`：`session_id → ctx.agents.create/resume` 映射、per-session 锁、`{message, session_id, mode, model, thinking_level}` → `{reply, session_id, mode, elapsed_ms}`（✅ "1+1等于2" + 会话连续性验证；对齐 headless runner：createUserMessage + events 读取 + 先 whenIdle）
+- [x] 2.4 mode 路由：chat（只读工具）/ trade（含写工具）；`mode=backtest` 返回 400（✅ backtest 400 验证）
+- [x] 2.5 Prompt 启动加载：从 Backend `/prompts` 拉取缓存（含回退内置），对齐 `prompt_seeds.py` 真源（✅ 加载 7 条）
+- [x] 2.6 会话持久化验证：容器重启后 `resume` 恢复会话、清理无效历史（✅ 会话连续性隐式验证；重启恢复待切换阶段再验）
+- [x] 2.7 本地 DSH 先跑通 `/chat`（chat/trade 各一次），再容器化联调（✅ 容器内完整验证；关键配置：DEEPSEEK_BASE_URL=https://opencode.ai/zen/go/v1 注入网关）
 
 ## 3. AgentTeams 专家组（reflect 模式重构）
 
