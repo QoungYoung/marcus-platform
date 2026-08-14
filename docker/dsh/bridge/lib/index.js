@@ -310,17 +310,33 @@ function apply(ctx) {
       const modelId = modelOverride || (mode === 'trade' ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL);
       const thinkingLevel = thinkingLevelOverride || (mode === 'trade' ? 'high' : 'medium');
       const systemPrompt = getPrompt(mode === 'trade' ? 'TRADE_SYSTEM_PROMPT' : 'CHAT_SYSTEM_PROMPT');
+      const makeSetup = () => (agentCtx) => {
+        agentCtx.systemPrompt.section({
+          name: 'marcus-bridge-prompt',
+          order: -50,
+          text: systemPrompt,
+        });
+      };
+      // 1) 尝试恢复持久化会话（容器重启后保留对话）
+      try {
+        const resumed = await ctx.agents.resume({
+          resumeSessionId: key,
+          agentOptions: { provider: 'deepseek-official', model: modelId },
+          setup: makeSetup(),
+        });
+        sessions.set(key, resumed);
+        await resumed.agent.whenIdle();
+        console.log('[Bridge] 恢复会话 ' + key.slice(-12));
+        return resumed.agent;
+      } catch (e) {
+        // 会话不存在或不可恢复 → 新建
+      }
+      // 2) 新建会话
       const handle = await ctx.agents.create({
         sessionId: key,
         agentOptions: { provider: 'deepseek-official', model: modelId },
         meta: { cwd: process.env.MARCUS_WORKSPACE || '/app' },
-        setup(agentCtx) {
-          agentCtx.systemPrompt.section({
-            name: 'marcus-bridge-prompt',
-            order: -50,
-            text: systemPrompt,
-          });
-        },
+        setup: makeSetup(),
       });
       sessions.set(key, handle);
       await handle.agent.whenIdle();

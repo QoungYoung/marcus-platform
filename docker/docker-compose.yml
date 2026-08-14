@@ -124,6 +124,8 @@ services:
       - "3001:3001"
     volumes:
       - ../data:/app/data
+      # DSH 会话持久化（重启后恢复对话）
+      - dsh-data:/root/.dsh
     depends_on:
       backend:
         condition: service_healthy
@@ -147,3 +149,4 @@ services:
 
 volumes:
   pgdata:
+  dsh-data:
