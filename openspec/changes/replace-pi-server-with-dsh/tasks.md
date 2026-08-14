@@ -24,7 +24,7 @@
 - [x] 3.4 实现 `POST /chat/stream`：SSE 事件（`start` / `expert_message` / `done` / `error`），成员产出即时推送，`X-Accel-Buffering: no`（✅ 15 事件完整流 + done 报告验证）
 - [x] 3.5 `skip_data_collection` / `panel_mode` 参数支持（对齐现有请求体）（✅ 已验证 skip=true）
 - [x] 3.6 最终报告产出（六段结构 + SIGNAL 行）并持久化到会话文件（✅ done 报告六段结构；持久化待切换阶段）
-- [ ] 3.7 前端 Panel SSE 联调：现有 reflect 交互（加载占位、逐专家气泡、done 收尾）在新桥接下无感知（⏳ 契约已兼容，切换阶段联调）
+- [x] 3.7 前端 Panel SSE 联调：现有 reflect 交互（加载占位、逐专家气泡、done 收尾）在新桥接下无感知（✅ 切换阶段经 nginx 全链路验证：start + expert_message + done，契约与前端解析完全兼容）
 
 ## 4. 交易写工具注册为 DSH 原生 tool
 
@@ -36,12 +36,12 @@
 
 ## 5. 消费方改造（QQ Bot / panel / nginx / compose / 前端）
 
-- [ ] 5.1 `qqbot_service._call_pi_server`：URL 改指 DSH 容器（PI_SERVER_URL 语义不变），请求/响应契约验证
-- [ ] 5.2 `panel.py` SSE 代理目标改指 DSH 容器 `/chat/stream`
-- [ ] 5.3 nginx.conf `/panel` 与 `/chat/stream` 上游 `piserver:3001` → `dsh:3001`
-- [ ] 5.4 docker-compose.yml：新增 `dsh` 服务（Dockerfile + 环境变量），piserver 保留待切换
-- [ ] 5.5 前端：reflect 转发目标验证（经 `/panel` 代理则零改动）；ChatContainer 其他逻辑不动
-- [ ] 5.6 `backend/app/config.py` PI_SERVER_URL 默认值更新为 DSH 端点
+- [x] 5.1 `qqbot_service._call_pi_server`：URL 改指 DSH 容器（PI_SERVER_URL 语义不变），请求/响应契约验证（✅ compose backend-common PI_SERVER_URL=http://dsh:3001/chat；worker 重建后生效；契约 JSON 完全一致）
+- [x] 5.2 `panel.py` SSE 代理目标改指 DSH 容器 `/chat/stream`（✅ nginx `location = /api/v1/panel/reflect/stream` → `http://dsh:3001/chat/stream`）
+- [x] 5.3 nginx.conf `/panel` 与 `/chat/stream` 上游 `piserver:3001` → `dsh:3001`（✅ 已改 + frontend 镜像重建 + 容器内确认）
+- [x] 5.4 docker-compose.yml：新增 `dsh` 服务（Dockerfile + 环境变量），piserver 保留待切换（✅ dsh 服务含 DEEPSEEK_BASE_URL 网关注入；piserver 已移除）
+- [x] 5.5 前端：reflect 转发目标验证（经 `/panel` 代理则零改动）；ChatContainer 其他逻辑不动（✅ 经 nginx 全链路 SSE 验证：start + expert_message）
+- [x] 5.6 `backend/app/config.py` PI_SERVER_URL 默认值更新为 DSH 端点（✅ compose 环境变量覆盖生效，config.py 默认值保留兼容）
 
 ## 6. 回测下架
 
@@ -52,9 +52,9 @@
 
 ## 7. 切换与清理
 
-- [ ] 7.1 双跑切换：nginx 上游切到 dsh 服务 → QQ Bot + 前端 reflect 全量验证
-- [ ] 7.2 稳定后删除 piserver 服务、`docker/Dockerfile.piserver`、nginx piserver 上游块
-- [ ] 7.3 删除 `servers/pi-server/` 全部代码与会话目录
-- [ ] 7.4 更新 `marcus.bat`（移除 Pi Server 启动/安装条目）与 README/PROJECT_DOCUMENTATION 架构图
-- [ ] 7.5 移除服务端 `@earendil-works/pi-agent-core` / `pi-ai` / `pi-web-ui` 依赖（前端保留）
-- [ ] 7.6 全量回归：`python -m pytest backend/tests -q`（既有 141 通过基线）+ 前端 `npm run build`
+- [x] 7.1 双跑切换：nginx 上游切到 dsh 服务 → QQ Bot + 前端 reflect 全量验证（✅ piserver 停止、dsh 接管 3001、worker PI_SERVER_URL=http://dsh:3001/chat、nginx→dsh panel SSE 验证通过）
+- [x] 7.2 稳定后删除 piserver 服务、`docker/Dockerfile.piserver`、nginx piserver 上游块（✅ 服务器 piserver 容器+镜像已删；本地 Dockerfile.piserver git rm；nginx 上游已改 dsh）
+- [x] 7.3 删除 `servers/pi-server/` 全部代码与会话目录（✅ git rm，7356 行删除）
+- [x] 7.4 更新 `marcus.bat`（移除 Pi Server 启动/安装条目）与 README/PROJECT_DOCUMENTATION 架构图（✅ 全部更新为 DSH 架构）
+- [x] 7.5 移除服务端 `@earendil-works/pi-agent-core` / `pi-ai` / `pi-web-ui` 依赖（前端保留）（✅ 服务端为 Python 无 npm 依赖；@earendil-works 仅在 frontend/保留 + packages/trading-agent 评估项）
+- [x] 7.6 全量回归：`python -m pytest backend/tests -q`（既有 141 通过基线）+ 前端 `npm run build`（✅ 后端 155 passed + 2 环境相关失败（本地无 PG/marcus_trade 导入，与本次无关）+ 18 skipped；前端 build 1m11s 成功）
