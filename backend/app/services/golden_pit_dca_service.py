@@ -529,6 +529,16 @@ def _build_buy_legs(
             legs.append((f"carrier:{code}", _normalize_carrier_etf_code(code), amount))
         if not legs:
             return [("index", etf_code, daily_amount)], notes + ["fixed_combo 无有效标的, 回退宽基"], ""
+        # 载体只买最优一只: 多候选ETF按性价比评分(超跌+贪婪/趋势动量)选最优, 全仓买入
+        if bool(s_cfg.get("carrier_best_only", False)) and len(legs) > 1:
+            best_code, best_reason = _sector.best_carrier_code(
+                [str(c.get("code", "")) for c in carrier.get("codes", [])], as_of, s_cfg)
+            if best_code:
+                notes.append(f"载体只买最优: {best_code}（{best_reason}）")
+                notes += _carrier_switch_note(fund_code, as_of, f"fixed_combo:{best_code}",
+                                              carrier.get("reason", "")) if is_regime_carrier else []
+                return [(f"carrier:{best_code}", _normalize_carrier_etf_code(best_code), daily_amount)], notes, ""
+            notes.append("载体最优评分数据不足, 回退等权组合")
         notes += _carrier_switch_note(fund_code, as_of, "fixed_combo", carrier.get("reason", "")) if is_regime_carrier else []
         return legs, notes, ""
 

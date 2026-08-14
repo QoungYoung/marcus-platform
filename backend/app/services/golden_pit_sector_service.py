@@ -201,6 +201,10 @@ SECTOR_CONFIG_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "label": "Regime 决定载体", "description": "true=按牛熊状态自动选执行载体: oversold→板块选筹, trend→固定高弹性组合, bh→宽基; false=保持5.4静态载体优先级",
         "value_type": "bool", "sort_order": 20, "default": False,
     },
+    "carrier_best_only": {
+        "label": "载体只买最优一只", "description": "true=fixed_combo 多候选ETF只买性价比最高一只(超跌+贪婪/趋势动量评分), false=按配置权重等权买入全部候选",
+        "value_type": "bool", "sort_order": 21, "default": True,
+    },
     "hold_bear_pct_threshold": {
         "label": "熊市保护贪婪分位", "description": "hold_until_exit 熊市保护: regime=oversold 且宽基贪婪250日分位<=阈值时保留持仓、暂停新增候选",
         "value_type": "number", "sort_order": 21, "default": 0.2,
@@ -910,6 +914,67 @@ def _broad_greed_bearish(threshold: float) -> Optional[bool]:
     except Exception as e:
         logger.warning("宽基贪婪分位读取失败, 跳过熊市保护: %s", e)
         return None
+
+
+def best_carrier_code(
+    codes: List[str],
+    as_of: str,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[str], str]:
+    """fixed_combo 载体候选 ETF 性价比评分，返回 (最优 etf6, 理由)。
+
+    评分维度与板块选筹一致:
+      regime=trend   → 20 日动量最高（追强势）
+      regime=oversold → greed 模式 combo=超跌+贪婪（恐慌最深=性价比最高）; moneyflow 模式 combo=超跌+资金流
+    候选数据不足（未超跌/贪婪缺失）返回 (None, reason)，调用方回退等权组合。
+    """
+    cfg = cfg or get_sector_config()
+    if not codes:
+        return None, "无候选"
+    pool: Dict[str, Dict[str, Any]] = {}
+    for _pk, _e in list(TECH_SECTOR_POOL.items()) + list(SECTOR_ETF_POOL.items()):
+        pool[_e["etf_code"][2:]] = {"pool_key": _pk, "entry": _e}
+    scored: List[Dict[str, Any]] = []
+    regime_mode, regime_reason = resolve_regime_mode(cfg)
+    signal_mode = str(cfg.get("signal_mode", SECTOR_SIGNAL_MODE)).strip().lower()
+    use_tech_pool = signal_mode == "greed" and str(cfg.get("pool_source", SECTOR_POOL_SOURCE)).strip().lower() == "tech7"
+    for code in codes:
+        c6 = (code or "").strip()
+        if c6[:2] in ("SH", "SZ", "BJ"):
+            c6 = c6[2:]
+        hit = pool.get(c6)
+        if not hit:
+            continue
+        pk, entry = hit["pool_key"], hit["entry"]
+        if regime_mode == "trend":
+            sig = _compute_signal_momentum(pk, entry, as_of)
+            if sig:
+                scored.append({"code": c6, "score": sig["momentum"], "dim": "动量"})
+        elif signal_mode == "greed":
+            greed_map = _load_tech_greed_map() if use_tech_pool else _load_sector_greed_map()
+            sig = _compute_signal_greed(pk, entry, greed_map, as_of, cfg)
+            if sig:
+                sig["_code"] = c6
+                scored.append(sig)
+        else:
+            flow_df = _load_industry_flow_df()
+            sig = _compute_signal(pk, entry, flow_df, as_of, cfg)
+            if sig:
+                sig["_code"] = c6
+                scored.append(sig)
+    if not scored:
+        return None, f"候选评分数据不足（regime={regime_mode}: {regime_reason}）"
+    if regime_mode == "trend":
+        best = max(scored, key=lambda x: x["score"])
+        return best["code"], f"{best['dim']}最优 score={best['score']:.4f}（regime=trend）"
+    if signal_mode == "greed":
+        scored = _rank_combo_greed(scored)
+        dim = "超跌+贪婪"
+    else:
+        scored = _rank_combo(scored)
+        dim = "超跌+资金流"
+    best = max(scored, key=lambda x: x["combo"])
+    return best["_code"], f"{dim}最优 combo={best['combo']:.4f}（regime={regime_mode}）"
 
 
 def select_sectors(

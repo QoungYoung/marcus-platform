@@ -72,6 +72,79 @@ def _cfg(extra=None):
     return c
 
 
+class TestCarrierBestOnly(unittest.TestCase):
+    def test_best_carrier_code_picks_deepest_oversold(self):
+        cfg = _cfg({"signal_mode": "greed", "pool_source": "tech7"})
+        with mock.patch.object(svc, "resolve_regime_mode", return_value=("oversold", "mock")):
+            with mock.patch.object(svc, "_load_tech_greed_map", return_value={}):
+                with mock.patch.object(svc, "_compute_signal_greed") as csg:
+                    csg.side_effect = [
+                        {"sector": "科创芯片", "name": "x", "etf_code": "SH588200", "greed": 0.10, "oversold120": -0.30},
+                        {"sector": "半导体", "name": "y", "etf_code": "SH512480", "greed": 0.05, "oversold120": -0.35},
+                    ]
+                    code, reason = svc.best_carrier_code(["588200", "512480"], "2026-08-14", cfg)
+        # 512480 贪婪更低且超跌更深 → combo 更高
+        self.assertEqual(code, "512480")
+        self.assertIn("超跌+贪婪", reason)
+
+    def test_best_carrier_code_trend_uses_momentum(self):
+        cfg = _cfg({"signal_mode": "greed", "pool_source": "tech7"})
+        with mock.patch.object(svc, "resolve_regime_mode", return_value=("trend", "mock")):
+            with mock.patch.object(svc, "_compute_signal_momentum") as csm:
+                csm.side_effect = [
+                    {"sector": "科创芯片", "name": "x", "etf_code": "SH588200", "momentum": 0.12},
+                    {"sector": "半导体", "name": "y", "etf_code": "SH512480", "momentum": 0.08},
+                ]
+                code, reason = svc.best_carrier_code(["588200", "512480"], "2026-08-14", cfg)
+        self.assertEqual(code, "588200")
+        self.assertIn("动量", reason)
+
+    def test_best_carrier_code_no_data_returns_none(self):
+        cfg = _cfg({"signal_mode": "greed", "pool_source": "tech7"})
+        with mock.patch.object(svc, "resolve_regime_mode", return_value=("oversold", "mock")):
+            with mock.patch.object(svc, "_load_tech_greed_map", return_value={}):
+                with mock.patch.object(svc, "_compute_signal_greed", return_value=None):
+                    code, reason = svc.best_carrier_code(["588200", "512480"], "2026-08-14", cfg)
+        self.assertIsNone(code)
+        self.assertIn("数据不足", reason)
+
+    def test_fixed_combo_best_only_single_leg(self):
+        cfg = _cfg({
+            "dca_carrier_enabled": True,
+            "carrier_best_only": True,
+            "dca_carriers": {
+                "588000": {"mode": "fixed_combo", "codes": [{"code": "588200", "weight": 0.5}, {"code": "512480", "weight": 0.5}]},
+                "159915": {"mode": "sector_selection", "codes": []},
+            },
+        })
+        with mock.patch.object(dca._sector, "get_sector_config", return_value=cfg):
+            with mock.patch.object(dca._sector, "best_carrier_code", return_value=("512480", "超跌+贪婪最优")) as bc:
+                with mock.patch.object(dca._sector, "select_sectors") as sel:
+                    legs, notes, empty = dca._build_buy_legs("588000", [], 8000.0, "2026-08-11", "SH588000")
+        self.assertEqual(empty, "")
+        self.assertEqual(legs, [("carrier:512480", "SH512480", 8000.0)])
+        self.assertTrue(any("载体只买最优" in n for n in notes))
+        bc.assert_called_once()
+        sel.assert_not_called()
+
+    def test_fixed_combo_best_only_fallback_equal_weights(self):
+        cfg = _cfg({
+            "dca_carrier_enabled": True,
+            "carrier_best_only": True,
+            "dca_carriers": {
+                "588000": {"mode": "fixed_combo", "codes": [{"code": "588200", "weight": 0.5}, {"code": "512480", "weight": 0.5}]},
+                "159915": {"mode": "sector_selection", "codes": []},
+            },
+        })
+        with mock.patch.object(dca._sector, "get_sector_config", return_value=cfg):
+            with mock.patch.object(dca._sector, "best_carrier_code", return_value=(None, "候选评分数据不足")):
+                with mock.patch.object(dca._sector, "select_sectors") as sel:
+                    legs, notes, empty = dca._build_buy_legs("588000", [], 8000.0, "2026-08-11", "SH588000")
+        self.assertEqual(empty, "")
+        self.assertEqual(legs, [("carrier:588200", "SH588200", 4000.0), ("carrier:512480", "SH512480", 4000.0)])
+        sel.assert_not_called()
+
+
 class TestBuildBuyLegsCarrier(unittest.TestCase):
     def test_disabled_keeps_sector_selection(self):
         with mock.patch.object(dca._sector, "get_sector_config", return_value=_cfg()):
