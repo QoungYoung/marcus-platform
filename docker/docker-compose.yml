@@ -7,7 +7,7 @@ x-backend-common: &backend-common
   environment:
     TZ: Asia/Shanghai
     MARCUS_WORKSPACE: /app
-    PI_SERVER_URL: http://piserver:3001/chat
+    PI_SERVER_URL: http://dsh:3001/chat
     DATABASE_URL: postgresql://marcus:${DB_PASSWORD:-marcus123}@postgres:5432/marcus_trading
     EASTMONEY_COOKIE: ${EASTMONEY_COOKIE}
     EM_PROXY_URL: http://81.70.44.68:8199
@@ -100,16 +100,16 @@ services:
       retries: 3
       start_period: 30s
 
-  # Pi Server (Pi Agent HTTP Server)
-  piserver:
+  # DSH Server (DeepSeek Harness 常驻服务，替代 Pi Server)
+  dsh:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
     build:
       context: ..
-      dockerfile: docker/Dockerfile.piserver
-    container_name: marcus-piserver
+      dockerfile: docker/Dockerfile.dsh
+    container_name: marcus-dsh
     env_file:
       - ../.env
     environment:
@@ -117,10 +117,13 @@ services:
       NODE_ENV: production
       PI_SERVER_PORT: "3001"
       MARCUS_API_URL: http://backend:8000/api/v1
+      MARCUS_WORKSPACE: /app
+      # DeepSeek 端点：服务器 key 走 OpenCode 网关（.env 的 DEEPSEEK_API_HOST，如 opencode.ai/zen/go）
+      DEEPSEEK_BASE_URL: https://${DEEPSEEK_API_HOST:-opencode.ai/zen/go}/v1
     ports:
       - "3001:3001"
     volumes:
-      - ../servers/pi-server/sessions:/app/sessions
+      - ../data:/app/data
     depends_on:
       backend:
         condition: service_healthy
@@ -140,7 +143,7 @@ services:
       - "80:80"
     depends_on:
       - backend
-      - piserver
+      - dsh
 
 volumes:
   pgdata:
