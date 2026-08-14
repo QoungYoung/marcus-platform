@@ -159,6 +159,26 @@ class TestWindowAdvance(unittest.TestCase):
         self.assertEqual(w["win_day"], 1)
         self.assertEqual(state["last_as_of"], "2026-01-05")
 
+    def test_same_day_double_advance_does_not_early_buy(self):
+        """同日重复推进（并发/重复调用）不重复累加 pit_days → 第 1 天不提前开窗买入。"""
+        cfg = dict(max_total_pct=0.12, cash_min_pct=0.20, pit_pct=0.15, drawdown_pct=0.20,
+                   entry_cap=0.85, min_days=2, win_days=15, tp_pct=0.15,
+                   time_exit_days=60, stop_loss=0.10)
+        pool = [INDUSTRY_POOL[0]]
+        iid = pool[0]["id"]
+        px = {pool[0]["etf_code"]: {"2026-01-05": 1.0}}
+        sig = {iid: {"in_pit": True, "greed_pct": 0.1, "drawdown": -0.3}}
+        # 模拟: 早盘某次推进已落盘 pit_days=1 + last_advance=当日，随后执行推进读到同一状态
+        state = {"windows": {iid: {"win_start": "2026-01-05", "pit_days": 1, "win_day": 0,
+                                   "invested": 0.0, "leftover": 0.0, "qty": 0.0, "cost": 0.0,
+                                   "status": "signal", "max_total": 30000, "last_advance": "2026-01-05"}},
+                 "exited": [], "last_as_of": None}
+        r = advance_industry_windows("2026-01-05", sig, px, pool, cfg, 250000.0, state)
+        w = r["windows"][iid]
+        self.assertEqual(w["pit_days"], 1)          # 未重复累加
+        self.assertEqual(w["status"], "signal")      # 不提前开窗
+        self.assertEqual(r["plans"], [])             # 第 1 天无计划
+
     def test_execute_advances_and_exit_carries_qty(self):
         """execute=True: 推进并返回可下单指令（出场含 etf_code/qty），状态由调用方落盘。"""
         cfg = dict(max_total_pct=0.12, cash_min_pct=0.20, pit_pct=0.15, drawdown_pct=0.20,

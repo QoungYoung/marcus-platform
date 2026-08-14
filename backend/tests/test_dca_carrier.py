@@ -3,9 +3,11 @@
 载体配置解析/校验/回退、ETF 代码归一化、_build_buy_legs 载体分支与灰度开关行为。"""
 import unittest
 from unittest import mock
+from unittest.mock import MagicMock
 
 from app.services.golden_pit_config import DCA_CARRIER_DEFAULTS
 from app.services import golden_pit_dca_service as dca
+from app.services import golden_pit_industry_service as ind_svc
 from app.services import golden_pit_sector_service as svc
 
 
@@ -143,6 +145,38 @@ class TestCarrierBestOnly(unittest.TestCase):
         self.assertEqual(empty, "")
         self.assertEqual(legs, [("carrier:588200", "SH588200", 4000.0), ("carrier:512480", "SH512480", 4000.0)])
         sel.assert_not_called()
+
+
+class TestIndustryTrackGuard(unittest.TestCase):
+    def test_skip_orders_when_today_already_executed(self):
+        """今日已有 industry/* 日志时，重复执行只提示跳过，不再下单/写日志。"""
+        cfg = {"enabled": True, "execute": True,
+               "pool": [{"id": "semicon", "name": "半导体", "greed_code": "512480",
+                         "etf_code": "512480", "priority": 1}],
+               "pit_pct": 0.15, "drawdown_pct": 0.20, "entry_cap": 0.85,
+               "cash_min_pct": 0.20, "max_total_pct": 0.12}
+        px = {"512480": {"2026-08-14": 1.0}}
+        adv = {
+            "windows": {}, "plans": [], "exits": [], "cut_items": [],
+            "allocations": [{"id": "semicon", "actual": 1000.0, "priority": 1}],
+            "planned_total": 1000.0, "actual_total": 1000.0,
+            "notes": [], "state": {"windows": {}},
+        }
+        with mock.patch.object(ind_svc, "get_industry_config", return_value=cfg), \
+             mock.patch.object(ind_svc, "load_industry_greed", return_value={}), \
+             mock.patch.object(ind_svc, "load_industry_px", return_value=px), \
+             mock.patch.object(ind_svc, "_account_summary", return_value={"cash": 50000.0}), \
+             mock.patch.object(ind_svc, "advance_industry_windows", return_value=adv), \
+             mock.patch.object(dca, "_industry_track_has_records_today", return_value=True), \
+             mock.patch("app.database.SessionLocal", return_value=MagicMock()), \
+             mock.patch.object(dca, "_place_buy_order") as buy, \
+             mock.patch.object(dca, "_place_sell_order") as sell, \
+             mock.patch.object(dca, "_record_dca_log") as rec:
+            out = dca._run_industry_track("2026-08-14", "2026-08-14", gate_open=True)
+        buy.assert_not_called()
+        sell.assert_not_called()
+        rec.assert_not_called()
+        self.assertTrue(any("跳过重复下单" in l for l in out["lines"]))
 
 
 class TestBuildBuyLegsCarrier(unittest.TestCase):

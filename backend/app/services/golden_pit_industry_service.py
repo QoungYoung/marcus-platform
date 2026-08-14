@@ -346,7 +346,7 @@ def advance_industry_windows(as_of: str, signals: Dict[str, Dict[str, Any]], px:
     cut_items: List[Dict[str, Any]] = []
     today_exit_ids = set()
 
-    # 1) 未入坑重置 + in_pit 累积
+    # 1) 未入坑重置 + in_pit 累积（同日重复推进不重复计数: last_advance 守卫）
     in_pit_ids = {iid for iid, sig in signals.items() if sig["in_pit"]}
     for iid, w in list(windows.items()):
         if w.get("status") in ("exited", "closed"):
@@ -362,15 +362,17 @@ def advance_industry_windows(as_of: str, signals: Dict[str, Dict[str, Any]], px:
             continue
         w = windows.get(iid)
         if w and w.get("status") not in ("exited", "closed"):
-            if sig["in_pit"]:
+            if sig["in_pit"] and w.get("last_advance") != as_of:
                 w["pit_days"] = w.get("pit_days", 0) + 1
+                w["last_advance"] = as_of
             continue
         if not sig["in_pit"]:
             continue
         # 无窗口/已关闭: 重新计数
         if w is None or w.get("status") in ("exited", "closed"):
             w = {"win_start": as_of, "pit_days": 1, "win_day": 0, "invested": 0.0,
-                 "leftover": 0.0, "qty": 0.0, "cost": 0.0, "status": "signal", "max_total": max_total}
+                 "leftover": 0.0, "qty": 0.0, "cost": 0.0, "status": "signal",
+                 "max_total": max_total, "last_advance": as_of}
             windows[iid] = w
             continue
     for iid, w in list(windows.items()):
@@ -465,9 +467,6 @@ def advance_industry_windows(as_of: str, signals: Dict[str, Dict[str, Any]], px:
         "actual_total": res.get("total_actual", 0.0),
         "notes": notes,
     }
-    if execute is False:
-        _save_state(state)
-
     return {
         "windows": {k: v for k, v in windows.items()},
         "plans": plans,

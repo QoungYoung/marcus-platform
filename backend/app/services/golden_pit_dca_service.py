@@ -1893,12 +1893,34 @@ def execute_golden_pit_dca(time_slot: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def _industry_track_has_records_today(today_str: str) -> bool:
+    """今日是否已产生行业轨 DCA 记录（filled/failed 均计），防并发/重复任务重复下单。"""
+    try:
+        from sqlalchemy import func
+        from app.database import SessionLocal
+        from app.models.golden_pit_dca_log import GoldenPitDCALog
+
+        db = SessionLocal()
+        try:
+            n = db.query(GoldenPitDCALog).filter(
+                GoldenPitDCALog.fund_code.like("industry/%"),
+                func.date(GoldenPitDCALog.created_at) == today_str,
+            ).count()
+            return n > 0
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("行业轨今日记录检查失败: %s", e)
+        return False
+
+
 def _run_industry_track(as_of: str, today_str: str, gate_open: bool = True) -> Dict[str, Any]:
     """全行业轨：dry-run 计划 / 真实下单（enabled+execute+闸门开启）+ 监测视图。
 
     返回 {"monitor": Dict, "lines": List[str], "active": bool, "dry_run": bool}。
     行业轨异常不影响指数级 DCA（仅记录日志并回退空结构）。
-    当日幂等：advance_industry_windows 同一天已推进则重放今日记录，不会重复下单。
+    当日幂等：advance_industry_windows 同一天已推进则重放今日记录；
+    真实下单额外加 DB 咨询锁 + 今日 industry/* 日志守卫，多进程并发/重复任务也不会重复买入。
     """
     try:
         from app.services.golden_pit_industry_service import (
@@ -1939,69 +1961,89 @@ def _run_industry_track(as_of: str, today_str: str, gate_open: bool = True) -> D
         replayed = bool(adv.get("replayed"))
 
         if execute and not replayed:
-            # ── 买入: 资金池裁决后的实际金额（按 priority 分配）──
-            win_by_id = {k: v for k, v in adv["windows"].items()}
-            for alloc in adv.get("allocations", []):
-                iid = alloc["id"]
-                actual = float(alloc.get("actual", 0.0))
-                if actual < 1e-6:
-                    continue
-                ind = INDUSTRY_BY_ID.get(iid) or next((x for x in pool if x.get("id") == iid), None)
-                if not ind:
-                    continue
-                etf = _normalize_carrier_etf_code(str(ind.get("etf_code", "")))
-                w = win_by_id.get(iid) or {}
-                reason = f"[黄金坑行业DCA] {ind.get('name', iid)} priority={ind.get('priority', 99)}"
-                ok, order_info = _place_buy_order(etf, actual, reason)
-                _record_dca_log(
-                    fund_code=f"industry/{iid}",
-                    window_start=w.get("win_start") or today_str,
-                    buy_day=max(0, int(w.get("win_day", 1)) - 1),
-                    etf_code=etf,
-                    amount=round(actual, 2),
-                    strategy=f"industry/{iid}",
-                    order_id=order_info if ok else "",
-                    status="filled" if ok else "failed",
-                    schedule_day=0, trend_factor=0.0,
-                )
-                if ok:
-                    lines.append(f"🏭 {ind.get('name', iid)} {etf}: 行业定投 ¥{actual:.0f} (order: {order_info})")
+            # ── 防并发重复下单: DB 咨询锁串行化 + 今日 industry/* 日志守卫 ──
+            lock_db = None
+            try:
+                from app.database import SessionLocal as _SL
+                from sqlalchemy import text as _text
+                lock_db = _SL()
+                conn = lock_db.connection()
+                conn.execute(_text("SELECT pg_advisory_lock(:k)"), {"k": 83921101})
+                if _industry_track_has_records_today(today_str):
+                    lines.append("⏭️ 行业轨今日已执行过，跳过重复下单（防并发重复买入）")
                 else:
-                    # 买入失败: 回滚该窗口 invested 并滚入 leftover，避免资金虚计
-                    if w:
-                        w["invested"] = max(0.0, float(w.get("invested", 0.0)) - actual)
-                        w["leftover"] = float(w.get("leftover", 0.0)) + actual
-                    lines.append(f"❌ {ind.get('name', iid)} {etf}: 买入未成交 ({order_info})，额度滚动次日")
+                    # ── 买入: 资金池裁决后的实际金额（按 priority 分配）──
+                    win_by_id = {k: v for k, v in adv["windows"].items()}
+                    for alloc in adv.get("allocations", []):
+                        iid = alloc["id"]
+                        actual = float(alloc.get("actual", 0.0))
+                        if actual < 1e-6:
+                            continue
+                        ind = INDUSTRY_BY_ID.get(iid) or next((x for x in pool if x.get("id") == iid), None)
+                        if not ind:
+                            continue
+                        etf = _normalize_carrier_etf_code(str(ind.get("etf_code", "")))
+                        w = win_by_id.get(iid) or {}
+                        reason = f"[黄金坑行业DCA] {ind.get('name', iid)} priority={ind.get('priority', 99)}"
+                        ok, order_info = _place_buy_order(etf, actual, reason)
+                        _record_dca_log(
+                            fund_code=f"industry/{iid}",
+                            window_start=w.get("win_start") or today_str,
+                            buy_day=max(0, int(w.get("win_day", 1)) - 1),
+                            etf_code=etf,
+                            amount=round(actual, 2),
+                            strategy=f"industry/{iid}",
+                            order_id=order_info if ok else "",
+                            status="filled" if ok else "failed",
+                            schedule_day=0, trend_factor=0.0,
+                        )
+                        if ok:
+                            lines.append(f"🏭 {ind.get('name', iid)} {etf}: 行业定投 ¥{actual:.0f} (order: {order_info})")
+                        else:
+                            # 买入失败: 回滚该窗口 invested 并滚入 leftover，避免资金虚计
+                            if w:
+                                w["invested"] = max(0.0, float(w.get("invested", 0.0)) - actual)
+                                w["leftover"] = float(w.get("leftover", 0.0)) + actual
+                            lines.append(f"❌ {ind.get('name', iid)} {etf}: 买入未成交 ({order_info})，额度滚动次日")
 
-            # ── 卖出: 出场窗口全仓 ──
-            for ex in adv.get("exits", []):
-                iid = ex["id"]
-                etf = _normalize_carrier_etf_code(str(ex.get("etf_code", "")))
-                qty = float(ex.get("qty", 0.0) or 0.0)
-                shares = int(qty / 100) * 100
-                ind_name = ex.get("name", iid)
-                reason = f"[黄金坑行业DCA出场] {ind_name} {ex.get('reason', '')}"
-                if shares < 100:
-                    lines.append(f"⚠️ {ind_name} 出场[{ex.get('reason')}] 份额不足100股({qty:.0f}股), 跳过卖单")
-                    continue
-                ok, order_info = _place_sell_order(etf, shares, reason)
-                _record_dca_log(
-                    fund_code=f"industry/{iid}",
-                    window_start=ex.get("start") or today_str,
-                    buy_day=max(0, int(ex.get("win_day", 0))),
-                    etf_code=etf,
-                    amount=round(float(ex.get("invested", 0.0)), 2),
-                    strategy=f"exit/industry/{ex.get('reason', 'exit')}",
-                    order_id=order_info if ok else "",
-                    status="filled" if ok else "failed",
-                    schedule_day=0, trend_factor=0.0,
-                )
-                if ok:
-                    lines.append(f"🏁 {ind_name} {etf}: 出场[{ex.get('reason')}] 收益{float(ex.get('ret', 0)) * 100:+.2f}% 卖出{shares}股 (order: {order_info})")
-                else:
-                    lines.append(f"❌ {ind_name} 出场卖出未成交 ({order_info})")
+                    # ── 卖出: 出场窗口全仓 ──
+                    for ex in adv.get("exits", []):
+                        iid = ex["id"]
+                        etf = _normalize_carrier_etf_code(str(ex.get("etf_code", "")))
+                        qty = float(ex.get("qty", 0.0) or 0.0)
+                        shares = int(qty / 100) * 100
+                        ind_name = ex.get("name", iid)
+                        reason = f"[黄金坑行业DCA出场] {ind_name} {ex.get('reason', '')}"
+                        if shares < 100:
+                            lines.append(f"⚠️ {ind_name} 出场[{ex.get('reason')}] 份额不足100股({qty:.0f}股), 跳过卖单")
+                            continue
+                        ok, order_info = _place_sell_order(etf, shares, reason)
+                        _record_dca_log(
+                            fund_code=f"industry/{iid}",
+                            window_start=ex.get("start") or today_str,
+                            buy_day=max(0, int(ex.get("win_day", 0))),
+                            etf_code=etf,
+                            amount=round(float(ex.get("invested", 0.0)), 2),
+                            strategy=f"exit/industry/{ex.get('reason', 'exit')}",
+                            order_id=order_info if ok else "",
+                            status="filled" if ok else "failed",
+                            schedule_day=0, trend_factor=0.0,
+                        )
+                        if ok:
+                            lines.append(f"🏁 {ind_name} {etf}: 出场[{ex.get('reason')}] 收益{float(ex.get('ret', 0)) * 100:+.2f}% 卖出{shares}股 (order: {order_info})")
+                        else:
+                            lines.append(f"❌ {ind_name} 出场卖出未成交 ({order_info})")
 
-            save_industry_state(adv["state"])
+                    save_industry_state(adv["state"])
+            finally:
+                if lock_db is not None:
+                    try:
+                        conn = lock_db.connection()
+                        conn.execute(_text("SELECT pg_advisory_unlock(:k)"), {"k": 83921101})
+                    except Exception:  # noqa: BLE001
+                        pass
+                    finally:
+                        lock_db.close()
         elif not execute:
             lines.extend(adv.get("notes", [])[-5:])
             if adv.get("cut_items"):
