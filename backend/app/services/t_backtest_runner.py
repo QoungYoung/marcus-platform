@@ -420,6 +420,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
 
     # 1) 预取（幂等续拉）
     try:
+        from datetime import datetime as _dt, timedelta as _td
         from app.services import t_backtest_data as btd
         days = btd.resolve_trade_days(start, end)
         gaps = []
@@ -428,15 +429,16 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
             r = btd.prefetch_m5(s, days, task_dir, is_index=False)
             gaps.extend(r.get("gaps", []))
             # 标的日线需覆盖建仓规则所需历史（趋势/风险 ≥40 根）：起始日前推 60 天
-            from datetime import datetime as _dt, timedelta as _td
             try:
                 ext_start = (_dt.strptime(start, "%Y-%m-%d") - _td(days=60)).strftime("%Y-%m-%d")
             except (ValueError, TypeError):
                 ext_start = start
             d = btd.prefetch_stock_daily([s], ext_start, end, task_dir)
             gaps.extend(d.get("gaps", []))
-        # 全市场滚动扫描（rolling_scan）：预取全市场列表的日线（粗筛/精筛用），
-        # 再对粗筛活跃池预取 m5（建仓标的从中产生，m5 必须可用）
+        # 全市场滚动扫描（rolling_scan）：先实时粗筛活跃池（限 300 只）→ 只对活跃池
+        # 预取日线+m5（全市场 5000+ 只日线串行预取不可行）。粗筛用生产实时行情
+        # （活跃度近似，窗口期内波动特征以预取日线为准，无价格前视——粗筛只决定
+        # 候选范围，打分/建仓全部用 as_of 历史日线）。
         rolling_scan = bool(task.get("rolling_scan", False))
         if rolling_scan and is_combined:
             try:
@@ -444,11 +446,16 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 all_syms = _fetch_all_a_symbols()
                 all_codes = [r["symbol"] for r in (all_syms or [])]
                 task["_all_symbols"] = all_codes
-                print(f"[t-backtest] rolling_scan 全市场列表 {len(all_codes)} 只")
-                # 日线预取：粗筛需要近 5 日成交额/振幅 + 精筛需要 40 根趋势 → 预取窗口
+                print(f"[t-backtest] rolling_scan 全市场列表 {len(all_codes)} 只，实时粗筛活跃池")
+                active = _coarse_filter_active(all_syms, max_batches=6, batch_size=50)  # ≤300 只
+                active_codes = [a[2:] if a[:2] in ("sh", "sz") else a for a in active]
+                task["_all_symbols"] = all_codes
+                task["_scan_pool"] = active_codes
+                print(f"[t-backtest] rolling_scan 粗筛活跃池 {len(active_codes)} 只，预取日线+m5")
+                # 日线预取（活跃池）：粗筛近 5 日 + 精筛 40 根趋势 → 起始日前推 70 天
                 _ext = (_dt.strptime(start, "%Y-%m-%d") - _td(days=70)).strftime("%Y-%m-%d")
                 _n = 0
-                for code in all_codes:
+                for code in active_codes:
                     try:
                         d2 = btd.prefetch_stock_daily([code], _ext, end, task_dir)
                         gaps.extend(d2.get("gaps", []))
@@ -456,20 +463,10 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                     except Exception as _e:
                         print(f"[t-backtest] rolling_scan 日线预取失败 {code}: {str(_e)[:60]}")
                 print(f"[t-backtest] rolling_scan 日线预取完成（{_n} 只）")
-                # 粗筛活跃池（历史日线口径，as_of=窗口首日前一交易日）→ 预取 m5
-                try:
-                    from app.services import t_build as _tb
-                    as_of0 = (_dt.strptime(start, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
-                    hist = _tb.scan_t_candidates_historical(
-                        all_codes, str(task_dir), as_of=as_of0,
-                        quality_fn=_tb._quality_from_daily, limit=50)
-                    active_codes = [c["symbol"] for c in hist if c.get("symbol")]
-                    print(f"[t-backtest] rolling_scan 粗筛活跃池 {len(active_codes)} 只，预取 m5")
-                    for code in active_codes:
-                        r = btd.prefetch_m5(code, days, task_dir, is_index=False)
-                        gaps.extend(r.get("gaps", []))
-                except Exception as e:
-                    print(f"[t-backtest] rolling_scan m5 预取失败: {e}")
+                # m5 预取（活跃池，建仓标的从中产生）
+                for code in active_codes:
+                    r = btd.prefetch_m5(code, days, task_dir, is_index=False)
+                    gaps.extend(r.get("gaps", []))
             except Exception as e:
                 print(f"[t-backtest] rolling_scan 全市场列表失败: {e}")
                 rolling_scan = False

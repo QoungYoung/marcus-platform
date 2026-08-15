@@ -1112,6 +1112,7 @@ class TCombinedBacktestEngine:
         self.rolling_build = bool(task.get("rolling_build", False))  # 每日滚动建仓（对齐实盘 daily_auto）
         self.rolling_scan = bool(task.get("rolling_scan", False))    # 滚动建仓+全市场历史扫描补充
         self._all_symbols: Optional[List[str]] = task.get("_all_symbols") or None
+        self._scan_pool: Optional[List[str]] = task.get("_scan_pool") or None
         self.net_asset = float(task.get("net_asset", 200000.0))
         self.build_limit_ratio = float(task.get("build_limit_ratio", 0.55))
         self.conditions = task.get("conditions") or []
@@ -1349,13 +1350,13 @@ class TCombinedBacktestEngine:
             if getattr(self, "rolling_scan", False):
                 try:
                     from app.services import t_build as _tb
-                    _all = self._all_symbols
-                    if not _all:
+                    _pool = self._scan_pool or self._all_symbols
+                    if not _pool:
                         _raw = _tb._fetch_all_a_symbols()
-                        _all = [r["symbol"] for r in (_raw or [])]
-                        self._all_symbols = _all
+                        _pool = [r["symbol"] for r in (_raw or [])]
+                        self._all_symbols = _pool
                     scan_cands = _tb.scan_t_candidates_historical(
-                        _all, self.data_dir, as_of=trade_day,
+                        _pool, self.data_dir, as_of=trade_day,
                         quality_fn=_tb._quality_from_daily, limit=20)
                     scan_syms = [c["symbol"] for c in scan_cands if c.get("pass_gate")]
                     cand_syms = list(dict.fromkeys(cand_syms + scan_syms))
