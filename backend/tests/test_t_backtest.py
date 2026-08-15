@@ -329,7 +329,9 @@ class TestEngineCore(unittest.TestCase):
         }
         r = TBacktestEngine(task, str(self.cache)).run()
         blocked = [e for e in r["events"] if e.get("type") == "blocked"]
-        self.assertTrue(any("可卖量不足" in str(e.get("data", {}).get("reason", "")) for e in blocked),
+        self.assertTrue(any(("无可用底仓" in str(e.get("data", {}).get("reason", ""))
+                             or "可卖量不足" in str(e.get("data", {}).get("reason", "")))
+                            for e in blocked),
                         "底仓耗尽后应拦截 0 股卖单")
         trades = [e["data"]["trade"] for e in r["events"] if e.get("type") == "trade" and e.get("data", {}).get("trade")]
         self.assertTrue(all(t["volume"] > 0 for t in trades), "不应存在 0 股成交")

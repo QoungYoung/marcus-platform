@@ -664,6 +664,18 @@ class TBacktestEngine:
         summary["triggers"] += 1
         trigger_kind = cond.get("trigger_kind", "low_buy")
         side = "buy" if trigger_kind in ("low_buy", "panic_vibrate") else "sell"
+        # 卖腿无底仓短路：高抛/止损触达但可卖底仓为 0 → 直接 blocked（不唤醒 AI，
+        # 避免 LLM 反复"无券可卖"放弃刷屏；规则模式同样短路）
+        if side == "sell" and ledger.sellable() <= 0:
+            summary["blocked"] += 1
+            self.events.append({"type": "blocked", "data": {
+                "trigger": {"symbol": self.symbol, "event_type": trigger_kind,
+                            "trigger_price": cond.get("target_price"),
+                            "quote_price": float(bar["close"]),
+                            "trade_day": trade_day, "bar_time": str(bar["time"])},
+                "reason": "无可用底仓（可卖 0 股），卖腿跳过",
+            }})
+            return
         current = float(bar["close"])
         slippage = 0.001
         trigger = {
@@ -837,8 +849,11 @@ class TBacktestEngine:
         # 成交价：止损限价（未跳空）或开盘价（跳空击穿）
         open_ = float(bar["open"])
         exec_price = min(open_, stop_price) if open_ > 0 else stop_price
-        volume = ledger.sellable()
-        volume = (volume // 100) * 100
+        # 卖量：减半仓（对齐 P0-3 spec：-3% 减半，保留底仓继续做T；全卖会
+        # 导致后续高抛天天触发但无券可卖，AI 反复"无底仓"放弃刷屏）
+        sellable = ledger.sellable()
+        half = (sellable // 2 // 100) * 100
+        volume = half if half >= 100 else (sellable // 100) * 100
         if volume <= 0:
             return
         trigger = {
@@ -1022,15 +1037,35 @@ def caliber_notes() -> List[str]:
 # 组合回测引擎（多标的多日：Agent 选股建仓模拟 → 各自做T → 组合汇总）
 # ────────────────────────────────────────────────────────────────
 
-def _default_t_conditions(avg_price: float) -> List[Dict[str, Any]]:
+def _amp_median_from_m5(m5: List[dict]) -> Optional[float]:
+    """从预取 m5 计算标的近 6 日日内振幅中位（%），供动态条件/止损使用。"""
+    try:
+        from app.services.t_pool import _calc_daily_amplitudes, _median
+        if not m5:
+            return None
+        amps = _calc_daily_amplitudes(m5)
+        # 近 6 日（m5 缓存按时间升序，取最后 6 个交易日）
+        by_day: Dict[str, List[dict]] = {}
+        for b in m5:
+            by_day.setdefault(_day_key(b["time"]), []).append(b)
+        days = sorted(by_day.keys())[-6:]
+        recent = [b for b in m5 if _day_key(b["time"]) in days]
+        amps = _calc_daily_amplitudes(recent)
+        return _median(amps) if amps else None
+    except Exception:
+        return None
+
+
+def _default_t_conditions(avg_price: float, amp_med: Optional[float] = None) -> List[Dict[str, Any]]:
     """建仓后自动生成做T条件（双条件：低吸 + 高抛回补）。
 
-    阈值按波动率自适应（amp_med 缺省用下限）：高抛 = 成本×(1+max(1.5%, amp×0.6))、
-    低吸 = 成本×(1−max(2.0%, amp×0.6))、止损 = 成本×(1−3%)（绑定建仓成本）。
-    回测规则模式无 m5 振幅时走下限（1.5%/2.0%/3.0%）。
+    阈值按波动率自适应：高抛 = 成本×(1+max(1.5%, amp×0.6))、
+    低吸 = 成本×(1−max(2.0%, amp×0.6))、止损 = 成本×(1−max(3%, amp×0.40))
+    （动态止损对齐 marcus stop_loss_monitor 振幅自适应口径）。
+    amp_med 缺省时用下限（1.5%/2.0%/3.0%）。
     """
     from app.services.t_pool import build_t_conditions
-    return build_t_conditions(avg_price)
+    return build_t_conditions(avg_price, amp_med)
 
 
 class TCombinedBacktestEngine:
@@ -1182,7 +1217,8 @@ class TCombinedBacktestEngine:
         for b in built:
             if cancel_event is not None and cancel_event.is_set():
                 break
-            conds = self.conditions or _default_t_conditions(b["price"])
+            conds = self.conditions or _default_t_conditions(
+                b["price"], _amp_median_from_m5(m5_map.get(b["symbol"], [])))
             sub_asset = b["price"] * b["shares"]   # 该标的预算 = 建仓支出
             sub_task = {
                 "symbol": b["symbol"], "init_shares": b["shares"],
@@ -1333,7 +1369,8 @@ class TCombinedBacktestEngine:
         for b in builds:
             if cancel_event is not None and cancel_event.is_set():
                 break
-            conds = self.conditions or _default_t_conditions(b["price"])
+            conds = self.conditions or _default_t_conditions(
+                b["price"], _amp_median_from_m5(m5_map.get(b["symbol"], [])))
             sub_asset = b["price"] * b["shares"]
             sub_task = {
                 "symbol": b["symbol"], "init_shares": b["shares"],

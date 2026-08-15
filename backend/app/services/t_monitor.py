@@ -490,7 +490,10 @@ class TMonitor:
                 db.close()
             if done:
                 return
-            volume = (sellable // 100) * 100
+            # 卖量：减半仓（-3% 止损语义，保留底仓继续做T；全卖会导致后续高抛
+            # 触发但无券可卖，AI 反复"无底仓"放弃）
+            half = (sellable // 2 // 100) * 100
+            volume = half if half >= 100 else (sellable // 100) * 100
             if volume <= 0:
                 return
             gw = gateway_execute(symbol, "sell", current, volume,

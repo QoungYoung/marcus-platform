@@ -37,7 +37,12 @@ MAX_AMP_PCT = 10.0            # 上限（%，>10% 妖票硬拒——波动过野
 AMP_SCALE = 0.6               # 条件阈值 = 振幅中位 × 0.6
 MIN_HIGH_SELL_PCT = 1.5       # 高抛触发价下限（成本+1.5%）
 MIN_LOW_BUY_PCT = 2.0         # 低吸触发价下限（成本−2%）
-STOP_LOSS_PCT = 3.0           # 止损价（绑定持仓成本，−3%）
+# 动态止损（对齐 marcus stop_loss_monitor._check_cost_stop 振幅自适应）：
+#   有 HWM（做T持仓有高抛条件≈曾兑现）→ 止损 = max(3%, 振幅×0.40)
+#   无 HWM → max(6%, 振幅×0.50)
+# 做T止损取有 HWM 档（底仓+高抛闭环已有盈利兑现机制），下限 3% 防超低波标的止损过窄
+STOP_LOSS_PCT_MIN = 3.0       # 止损下限（%）
+STOP_LOSS_AMP_FACTOR = 0.40   # 止损 = 振幅中位 × 0.40（对齐 marcus 有 HWM 档）
 
 
 # ────────────────────────────────────────────────────────────────
@@ -220,14 +225,15 @@ def build_t_conditions(cost: float, amp_med: Optional[float] = None) -> List[Dic
     阈值公式（与 docs/t-optimization-plan.md P0-1/P2-1 一致）：
         high_sell = cost × (1 + max(1.5%, amp_med × 0.6))
         low_buy    = cost × (1 − max(2.0%, amp_med × 0.6))
-        stop       = cost × (1 − 3.0%)（绑定成本，不再 target×0.97 漂移）
+        stop       = cost × (1 − max(3.0%, amp_med × 0.40))  # 动态止损（marcus 振幅自适应口径）
     """
     amp = float(amp_med or 0.0)
     high_pct = max(MIN_HIGH_SELL_PCT, amp * AMP_SCALE)
     low_pct = max(MIN_LOW_BUY_PCT, amp * AMP_SCALE)
+    stop_pct = max(STOP_LOSS_PCT_MIN, amp * STOP_LOSS_AMP_FACTOR)
     sell_target = round(cost * (1 + high_pct / 100), 2)
     target = round(cost * (1 - low_pct / 100), 2)
-    stop = round(cost * (1 - STOP_LOSS_PCT / 100), 2)
+    stop = round(cost * (1 - stop_pct / 100), 2)
     base = {
         "vol_ratio_thresh": 1.5,
         "stabilize_level": "not_new_low",

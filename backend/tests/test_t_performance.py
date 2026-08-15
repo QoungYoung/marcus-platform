@@ -152,6 +152,22 @@ class TestDualConditions(unittest.TestCase):
         high = next(c for c in conds if c["trigger_kind"] == "high_sell_then_buy_back")
         self.assertEqual(high["sell_target_price"], round(10.0 * 1.015, 2))
 
+    def test_stop_loss_dynamic_by_amplitude(self):
+        """动态止损（对齐 marcus stop_loss_monitor）：止损 = max(3%, 振幅×0.40)。"""
+        from app.services.t_pool import build_t_conditions
+        # 振幅 10% → 止损 4%（10×0.4）
+        conds = build_t_conditions(10.0, amp_med=10.0)
+        high = next(c for c in conds if c["trigger_kind"] == "high_sell_then_buy_back")
+        self.assertEqual(high["stop_loss_price"], round(10.0 * 0.96, 2))
+        # 振幅 8% → 止损 3.2%（8×0.4）
+        conds = build_t_conditions(10.0, amp_med=8.0)
+        high = next(c for c in conds if c["trigger_kind"] == "high_sell_then_buy_back")
+        self.assertEqual(high["stop_loss_price"], round(10.0 * 0.968, 2))
+        # 振幅 5% → max(3, 2.0)=3% 下限
+        conds = build_t_conditions(10.0, amp_med=5.0)
+        high = next(c for c in conds if c["trigger_kind"] == "high_sell_then_buy_back")
+        self.assertEqual(high["stop_loss_price"], round(10.0 * 0.97, 2))
+
     def test_backtest_default_conditions_dual(self):
         from app.services.t_backtest import _default_t_conditions
         conds = _default_t_conditions(10.0)
