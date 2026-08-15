@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { LayoutDashboard, BarChart3, TrendingUp, Newspaper, PieChart, Wrench, Calculator, CalendarClock, Bot, FileSearch, Crown, Gem, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, BarChart3, TrendingUp, Newspaper, PieChart, Wrench, Calculator, CalendarClock, Bot, FileSearch, Crown, Gem, Sun, Moon, RefreshCcw } from 'lucide-react';
 import clsx from 'clsx';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { useThemeStore } from '../store/themeStore';
@@ -20,6 +20,7 @@ const navItems = [
   { path: '/monitor', labelKey: 'nav.monitor', icon: FileSearch },
   { path: '/industry-leaderboard', labelKey: 'nav.leaderboard', icon: Crown },
   { path: '/golden-pit', labelKey: 'nav.goldenPit', icon: Gem },
+  { path: '/t-account', labelKey: 'nav.tAccount', icon: RefreshCcw },
 ];
 
 export default function TopNav() {

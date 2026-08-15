@@ -63,6 +63,24 @@ class Settings(BaseSettings):
     GOLDEN_PIT_SECTOR_SIGNAL_MODE: str = "greed"    # 板块选筹信号模式: greed=超跌+板块贪婪; moneyflow=超跌+资金流(回滚)
     GOLDEN_PIT_SECTOR_POOL_SOURCE: str = "tech7"   # 板块选筹池来源: tech7=7只场内科技ETF(tech-hardware贪婪,默认); prod10=原10板块(funds-greed,回滚)
 
+    # ── 做T系统（t_account） ──
+    T_ACCOUNT_ENABLED: bool = True              # 做T总开关
+    T_ACCOUNT_INITIAL_CAPITAL: float = 200000   # 做T账户初始资金
+    BRZE_URL: str = "https://tu.brze.top"       # brze tushare 代理
+    BRZE_TOKEN: str = ""                        # brze token（.env 配置）
+    T_MONITOR_INTERVAL: int = 30                # TMonitor 周期（秒）
+    T_MONITOR_INITIAL_OFFSET: int = 20          # 错峰启动偏移（秒）
+    T_MONITOR_MAX_WORKERS: int = 5              # 并发取价上限
+    T_MONITOR_CORE_MAX: int = 20                # 核心底仓数量上限
+    T_SLIPPAGE_PCT: float = 0.001               # 滑点参数化假设（simulated slippage estimate）
+    T_MAX_SINGLE_ORDER_PCT: float = 0.05        # 单笔 ≤ 净值 5%
+    T_DAILY_LOSS_BREAKER_PCT: float = 0.02      # 日亏 2% 熔断
+    T_DAILY_LOSS_WARN_PCT: float = 0.01         # 日亏 1% 预警
+    T_MAX_DAILY_TURNOVER_RATIO: float = 3.0     # 日回转额 ≤ 3×净值
+    T_FLOOR_LOWER_RATIO: float = 0.5            # 底仓保留下限（市值/成本）
+    T_STOP_LOSS_PCT: float = 0.03               # 做T止损 -3%
+    T_EOD_TIME: str = "14:45"                   # 尾盘归平开始时间
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",
         case_sensitive=True,

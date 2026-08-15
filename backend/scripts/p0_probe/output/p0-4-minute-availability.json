@@ -1,0 +1,86 @@
+{
+  "probe": "p0-4-minute-availability",
+  "time": "2026-08-14T22:50:50.625531",
+  "tencent": {
+    "m1": {
+      "ok": 20,
+      "total": 20,
+      "rate": 100.0,
+      "lat_avg_ms": 209.0,
+      "lat_max_ms": 236.0,
+      "depth_avg": 500,
+      "depth_max": 500
+    },
+    "m5": {
+      "ok": 20,
+      "total": 20,
+      "rate": 100.0,
+      "lat_avg_ms": 199.0,
+      "lat_max_ms": 247.0,
+      "depth_avg": 320,
+      "depth_max": 320
+    },
+    "m15": {
+      "ok": 20,
+      "total": 20,
+      "rate": 100.0,
+      "lat_avg_ms": 197.0,
+      "lat_max_ms": 223.0,
+      "depth_avg": 320,
+      "depth_max": 320
+    },
+    "m60": {
+      "ok": 20,
+      "total": 20,
+      "rate": 100.0,
+      "lat_avg_ms": 193.0,
+      "lat_max_ms": 226.0,
+      "depth_avg": 320,
+      "depth_max": 320
+    }
+  },
+  "sina": {
+    "m5": {
+      "ok": 20,
+      "total": 20,
+      "rate": 100.0,
+      "lat_avg_ms": 203.0,
+      "lat_max_ms": 255.0,
+      "depth_avg": 300
+    },
+    "m15": {
+      "ok": 20,
+      "total": 20,
+      "rate": 100.0,
+      "lat_avg_ms": 209.0,
+      "lat_max_ms": 253.0,
+      "depth_avg": 300
+    },
+    "m60": {
+      "ok": 20,
+      "total": 20,
+      "rate": 100.0,
+      "lat_avg_ms": 247.0,
+      "lat_max_ms": 524.0,
+      "depth_avg": 300
+    }
+  },
+  "index": {
+    "sh000300": {
+      "bars": 100,
+      "first": "2026-07-13 10:30:00",
+      "last": "2026-08-14 15:00:00"
+    },
+    "sh000001": {
+      "bars": 100,
+      "first": "2026-07-13 10:30:00",
+      "last": "2026-08-14 15:00:00"
+    },
+    "sz399001": {
+      "bars": 100,
+      "first": "2026-07-13 10:30:00",
+      "last": "2026-08-14 15:00:00"
+    }
+  },
+  "note": "tushare stk_mins 不可用（见报告）；腾讯/新浪为免费替代源"
+}

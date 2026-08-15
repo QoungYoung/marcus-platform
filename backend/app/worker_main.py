@@ -94,6 +94,18 @@ def _start_services(settings):
     from app.services.long_term_pool_monitor import start_lt_pool_monitor
     start_lt_pool_monitor(executor=executor)
 
+    # 做T监控器（t_account 专用，30s 轮询 + 错峰启动）
+    from app.services.t_monitor import start_t_monitor
+    start_t_monitor()
+
+    # 做T建仓服务（盘后次日条件生成 + 日频再平衡，60s 低频）
+    from app.services.t_build import start_t_build_service
+    start_t_build_service()
+
+    # 做T回测任务执行（worker 侧轮询 pending，重活不阻塞 API）
+    from app.services.t_backtest_runner import start_t_backtest_worker
+    start_t_backtest_worker()
+
     # 预热 PostgreSQL 连接池
     try:
         from app.database import SessionLocal
@@ -138,6 +150,16 @@ def _stock_account_summary() -> dict:
     }
 
 
+def _t_monitor_status() -> dict:
+    """做T监控器状态（容错：模块未就绪时返回离线）。"""
+    try:
+        from app.services.t_monitor import get_t_monitor_status
+        return get_t_monitor_status()
+    except Exception as e:
+        print(f"[Worker] t_monitor 状态获取失败: {e}", file=sys.stderr)
+        return {"running": False, "error": str(e)}
+
+
 def _publish_loop():
     """周期性把调度器/监控器状态写入 worker_status，供 API 读取。"""
     from app.services.worker_control import publish_status
@@ -157,6 +179,7 @@ def _publish_loop():
                 "tier_monitor": get_tier_status(),
                 "candidate_pool_monitor": get_pool_monitor_status(),
                 "long_term_pool_monitor": get_lt_pool_monitor_status(),
+                "t_monitor": _t_monitor_status(),
                 "stock_account": _stock_account_summary(),
             }
             publish_status(snapshot)
@@ -201,6 +224,19 @@ def _handle_command(cmd: str, payload: dict) -> dict:
     if cmd == "monitor.tier.stop":
         stop_tier_monitor()
         return {"success": True, "message": "加仓层级监控已停止"}
+    if cmd == "monitor.t.start":
+        from app.services.t_monitor import start_t_monitor
+        ok = start_t_monitor()
+        return {"success": bool(ok), "message": "做T监控已启动" if ok else "启动失败"}
+    if cmd == "monitor.t.stop":
+        from app.services.t_monitor import stop_t_monitor
+        stop_t_monitor()
+        return {"success": True, "message": "做T监控已停止"}
+    if cmd == "t.stop_all":
+        from app.services.t_db import set_stop_all
+        flag = bool(payload.get("flag", True))
+        set_stop_all(flag, payload.get("reason", "manual"))
+        return {"success": True, "message": "做T STOP_ALL 已" + ("开启" if flag else "关闭")}
     return {"success": False, "error": f"unknown command: {cmd}"}
 
 

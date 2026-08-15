@@ -2220,8 +2220,25 @@ async def check_entry_filters(req: EntryCheckRequest):
             avg_price = quote.get("avg_price")
             # 估算量比（volume / avg_volume，简化用换手率参照）
             if volume_ratio is None and turnover_rate > 0:
-                # 粗略估算：量比 ≈ 换手率 / 历史日均换手率(约2%)
-                volume_ratio = round(turnover_rate / 2.0, 2) if turnover_rate > 0 else None
+                # 盘中量比时段归一（2026-08 修正：旧公式 turnover_rate/2.0 固定除历史日均，
+                # 早盘/高开天然高累计换手被误判放量）
+                # 量比 = [当前累计换手 × (240/已开盘连续分钟)] / 近N日同刻均值（缺省 2%）
+                try:
+                    from datetime import datetime as _dt
+                    _now = _dt.now()
+                    _hm = _now.hour * 100 + _now.minute
+                    _opened = 0
+                    if 930 <= _hm <= 1130:
+                        _opened = (_now.hour - 9) * 60 + _now.minute - 30
+                    elif 1300 <= _hm <= 1500:
+                        _opened = 120 + (_now.hour - 13) * 60 + _now.minute
+                    if _opened > 0:
+                        _scaled = turnover_rate * (240.0 / _opened)
+                        volume_ratio = round(_scaled / 2.0, 2)
+                    else:
+                        volume_ratio = round(turnover_rate / 2.0, 2)
+                except Exception:
+                    volume_ratio = round(turnover_rate / 2.0, 2)
     except Exception as e:
         logger.warning(f"获取行情失败: {e}")
 

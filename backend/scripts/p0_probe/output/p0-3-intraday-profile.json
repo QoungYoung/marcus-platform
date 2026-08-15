@@ -1,0 +1,98 @@
+{
+  "time": "2026-08-14T22:49:54.822087",
+  "per_symbol": {
+    "sh600519": {
+      "days": 7,
+      "bucket_sum": {
+        "mid": 23.257,
+        "late": 8.427,
+        "early": 16.18
+      },
+      "bucket_count": {
+        "mid": 164,
+        "late": 84,
+        "early": 72
+      }
+    },
+    "sz300750": {
+      "days": 7,
+      "bucket_sum": {
+        "mid": 23.989,
+        "late": 7.852,
+        "early": 17.422
+      },
+      "bucket_count": {
+        "mid": 164,
+        "late": 84,
+        "early": 72
+      }
+    },
+    "sz002594": {
+      "days": 7,
+      "bucket_sum": {
+        "mid": 17.078,
+        "late": 6.569,
+        "early": 15.858
+      },
+      "bucket_count": {
+        "mid": 164,
+        "late": 84,
+        "early": 72
+      }
+    },
+    "sz300059": {
+      "days": 7,
+      "bucket_sum": {
+        "mid": 24.133,
+        "late": 9.35,
+        "early": 18.164
+      },
+      "bucket_count": {
+        "mid": 164,
+        "late": 84,
+        "early": 72
+      }
+    },
+    "sh600036": {
+      "days": 7,
+      "bucket_sum": {
+        "mid": 25.99,
+        "late": 11.591,
+        "early": 17.723
+      },
+      "bucket_count": {
+        "mid": 164,
+        "late": 84,
+        "early": 72
+      }
+    },
+    "sh601166": {
+      "days": 7,
+      "bucket_sum": {
+        "mid": 25.088,
+        "late": 12.253,
+        "early": 16.885
+      },
+      "bucket_count": {
+        "mid": 164,
+        "late": 84,
+        "early": 72
+      }
+    }
+  },
+  "bucket_summary": {
+    "mid": {
+      "n": 984,
+      "mean": 0.1418
+    },
+    "late": {
+      "n": 504,
+      "mean": 0.1112
+    },
+    "early": {
+      "n": 432,
+      "mean": 0.2366
+    }
+  },
+  "note": "样本为近6个交易日m5线；时段桶 early<=10:30, mid 10:30-14:00, late>=14:00"
+}

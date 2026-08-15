@@ -99,6 +99,15 @@ def _apply_schema_patches():
     # ── 2026-08: 多账户模拟盘隔离（paper_accounts 注册表 + 6 张 paper 表 account_id 维度） ──
     _apply_paper_account_migration()
 
+    # ── 2026-08: 做T专用账户（t account + 五张 t_* 表） ──
+    _apply_t_account_migration()
+
+    # ── 2026-08: 做T底仓建仓（t_build_events 审计 + t_build_params 参数） ──
+    _apply_t_build_migration()
+
+    # ── 2026-08: 做T回测（t_backtest_* 任务/事件/成交/权益/指标） ──
+    _apply_t_backtest_migration()
+
     # ── 2026-08: API/Worker 拆分控制通道 ──
     _apply_worker_control_migration()
 
@@ -248,3 +257,328 @@ def _apply_paper_account_migration():
             print("[DB] PATCH: paper 多账户迁移完成 (paper_accounts + account_id 维度)")
     except Exception as e:
         print(f"[DB] PATCH warn (paper multi-account): {e}")
+
+
+def _apply_t_account_migration():
+    """做T专用账户迁移（幂等）：注册 t 账户 + 建 t_conditions/t_triggers/t_regime_state/t_daily_state/t_risk_state 五张表。
+
+    对齐 _apply_paper_account_migration 范式：account_id 维度隔离、幂等可重跑。
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            # 1) t 账户注册进 paper_accounts（独立资金，与 stock/golden_pit 隔离）
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(text(
+                "INSERT INTO paper_accounts (account_id, name, module, initial_capital, enabled, created_at) "
+                "SELECT 't', '做T专用账户', 't_account_trading', 200000, 1, :now "
+                "WHERE NOT EXISTS (SELECT 1 FROM paper_accounts WHERE account_id = 't')"
+            ), {"now": now})
+
+            # 2) t_conditions — 做T条件注册表（条件元组 + 状态机 + regime_gate）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_conditions (
+                    id BIGSERIAL PRIMARY KEY,
+                    account_id VARCHAR(16) NOT NULL DEFAULT 't',
+                    symbol VARCHAR(16) NOT NULL,
+                    trade_date VARCHAR(8) NOT NULL,
+                    trigger_kind VARCHAR(20) NOT NULL DEFAULT 'low_buy',
+                    target_price DOUBLE PRECISION,
+                    reinform_price DOUBLE PRECISION,
+                    vol_ratio_thresh DOUBLE PRECISION,
+                    benchmark_turnover_profile JSONB,
+                    stabilize_level VARCHAR(20),
+                    sell_target_price DOUBLE PRECISION,
+                    stop_loss_price DOUBLE PRECISION,
+                    time_stop_open VARCHAR(8),
+                    time_stop_close VARCHAR(8),
+                    start_time VARCHAR(8),
+                    end_time VARCHAR(8),
+                    armed INTEGER DEFAULT 1,
+                    armed_at TIMESTAMP,
+                    last_triggered_at TIMESTAMP,
+                    trigger_count_today INTEGER DEFAULT 0,
+                    regime_gate VARCHAR(12) DEFAULT 'ALLOWED',
+                    expression JSONB,
+                    status VARCHAR(16) DEFAULT 'active',
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    UNIQUE (account_id, symbol, trigger_kind, trade_date)
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_conditions_active ON t_conditions (account_id, status, trade_date)"
+            ))
+
+            # 3) t_triggers — 做T触发事件流（状态机 + snapshot + 原子消费）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_triggers (
+                    id BIGSERIAL PRIMARY KEY,
+                    account_id VARCHAR(16) NOT NULL DEFAULT 't',
+                    condition_id BIGINT,
+                    symbol VARCHAR(16) NOT NULL,
+                    event_type VARCHAR(20) NOT NULL DEFAULT 'low_buy',
+                    trigger_price DOUBLE PRECISION,
+                    quote_price DOUBLE PRECISION,
+                    suggest_bid_price DOUBLE PRECISION,
+                    suggest_ask_price DOUBLE PRECISION,
+                    slippage_budget DOUBLE PRECISION,
+                    snapshot JSONB,
+                    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                    mode VARCHAR(12) NOT NULL DEFAULT 'auto',
+                    reason VARCHAR(256),
+                    claimed_by VARCHAR(64),
+                    claimed_at TIMESTAMP,
+                    executed_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    UNIQUE (condition_id, created_at)
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_triggers_pending ON t_triggers (account_id, status, id)"
+            ))
+
+            # 4) t_regime_state — 环境闸门状态（每交易日 1 行）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_regime_state (
+                    trade_date VARCHAR(8) PRIMARY KEY,
+                    regime VARCHAR(10) NOT NULL DEFAULT 'ACTIVE',
+                    daily_source VARCHAR(30) DEFAULT 'market_diagnosis',
+                    updated_at_daily TIMESTAMP,
+                    intraday_lowbias BOOLEAN DEFAULT FALSE,
+                    intraday_index_drop DOUBLE PRECISION DEFAULT 0,
+                    intraday_updated TIMESTAMP,
+                    gate_low_buy VARCHAR(12) NOT NULL DEFAULT 'ALLOWED',
+                    gate_high_sell VARCHAR(12) NOT NULL DEFAULT 'ALLOWED',
+                    gate_interpret_sign INTEGER DEFAULT 1
+                )
+                """
+            ))
+
+            # 5) t_daily_state — 做T日级账本（累计回转额/净回转头寸/熔断）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_daily_state (
+                    account_id VARCHAR(16) NOT NULL DEFAULT 't',
+                    trade_date VARCHAR(8) NOT NULL,
+                    daily_turnover_amount DOUBLE PRECISION DEFAULT 0,
+                    net_turnover_shares INTEGER DEFAULT 0,
+                    realized_pnl DOUBLE PRECISION DEFAULT 0,
+                    buy_count INTEGER DEFAULT 0,
+                    sell_count INTEGER DEFAULT 0,
+                    risk_breaker BOOLEAN DEFAULT FALSE,
+                    breaker_reason VARCHAR(256),
+                    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+                    PRIMARY KEY (account_id, trade_date)
+                )
+                """
+            ))
+
+            # 6) t_risk_state — 做T全局风控状态（STOP_ALL/连续亏损/档位）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_risk_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    stop_all BOOLEAN DEFAULT FALSE,
+                    regime VARCHAR(10) DEFAULT 'ACTIVE',
+                    consecutive_losses INTEGER DEFAULT 0,
+                    manual_lock BOOLEAN DEFAULT FALSE,
+                    lock_reason VARCHAR(256),
+                    updated_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "INSERT INTO t_risk_state (id, stop_all, regime, consecutive_losses) "
+                "SELECT 1, FALSE, 'ACTIVE', 0 WHERE NOT EXISTS (SELECT 1 FROM t_risk_state WHERE id = 1)"
+            ))
+
+            # 7) 自由表达式列补丁（幂等：已有表补 expression 列）
+            conn.execute(text(
+                "ALTER TABLE t_conditions ADD COLUMN IF NOT EXISTS expression JSONB"
+            ))
+            # 8) trigger_kind 扩宽（VARCHAR(20)→50，Agent 自由命名条件类型）
+            conn.execute(text(
+                "ALTER TABLE t_conditions ALTER COLUMN trigger_kind TYPE VARCHAR(50)"
+            ))
+
+        print("[DB] PATCH: 做T账户迁移完成 (t account + t_conditions/t_triggers/t_regime_state/t_daily_state/t_risk_state)")
+    except Exception as e:
+        print(f"[DB] PATCH warn (t account tables): {e}")
+
+
+def _apply_t_build_migration():
+    """做T底仓建仓迁移（幂等）：t_build_events 建仓审计表 + t_build_params 建仓参数表。
+
+    对齐 _apply_t_account_migration 范式：account_id='t' 维度、幂等可重跑。
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            # 1) t_build_events — 底仓建仓审计/状态流（独立于 t_triggers 做T事件流）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_build_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    account_id VARCHAR(16) NOT NULL DEFAULT 't',
+                    symbol VARCHAR(16) NOT NULL,
+                    event_type VARCHAR(32) NOT NULL DEFAULT 'build_position',
+                    side VARCHAR(8) NOT NULL DEFAULT 'buy',
+                    price DOUBLE PRECISION,
+                    volume INTEGER,
+                    amount DOUBLE PRECISION,
+                    executed_price DOUBLE PRECISION,
+                    decision_source VARCHAR(16) NOT NULL DEFAULT 'agent',
+                    reason VARCHAR(512),
+                    regime VARCHAR(10),
+                    gateway_result JSONB,
+                    position_before JSONB,
+                    position_after JSONB,
+                    status VARCHAR(16) NOT NULL DEFAULT 'pending_confirmation',
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_build_events_symbol ON t_build_events (account_id, symbol, created_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_build_events_status ON t_build_events (account_id, status, id)"
+            ))
+
+            # 2) t_build_params — 建仓策略参数（分档初值，P4 敏感度扫描后固化）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_build_params (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    params_json JSONB NOT NULL DEFAULT '{}',
+                    updated_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "INSERT INTO t_build_params (id, params_json) "
+                "SELECT 1, '{}' WHERE NOT EXISTS (SELECT 1 FROM t_build_params WHERE id = 1)"
+            ))
+
+        print("[DB] PATCH: 做T建仓迁移完成 (t_build_events + t_build_params)")
+    except Exception as e:
+        print(f"[DB] PATCH warn (t build tables): {e}")
+
+
+def _apply_t_backtest_migration():
+    """做T回测迁移（幂等，对齐 _apply_t_build_migration 范式）：
+    t_backtest_tasks / t_backtest_events / t_backtest_trades /
+    t_backtest_equity_snapshots / t_backtest_metrics。
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            # 1) 任务
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_backtest_tasks (
+                    id BIGSERIAL PRIMARY KEY,
+                    symbol VARCHAR(16) NOT NULL,
+                    start_date VARCHAR(10),
+                    end_date VARCHAR(10),
+                    init_shares INTEGER NOT NULL DEFAULT 1000,
+                    init_price DOUBLE PRECISION,
+                    net_asset DOUBLE PRECISION NOT NULL DEFAULT 200000,
+                    review_mode VARCHAR(10) NOT NULL DEFAULT 'llm',
+                    conditions_json JSONB NOT NULL DEFAULT '[]',
+                    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    error_message VARCHAR(1024),
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_backtest_tasks_status ON t_backtest_tasks (status, id)"
+            ))
+            # 2) 事件流（触发/复核/拦截/缺口）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_backtest_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    task_id BIGINT NOT NULL,
+                    event_type VARCHAR(32) NOT NULL,
+                    trade_day VARCHAR(10),
+                    bar_time VARCHAR(24),
+                    data_json JSONB,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_backtest_events_task ON t_backtest_events (task_id, id)"
+            ))
+            # 3) 成交明细
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_backtest_trades (
+                    id BIGSERIAL PRIMARY KEY,
+                    task_id BIGINT NOT NULL,
+                    symbol VARCHAR(16) NOT NULL,
+                    side VARCHAR(8) NOT NULL,
+                    price DOUBLE PRECISION,
+                    volume INTEGER,
+                    realized_pnl DOUBLE PRECISION DEFAULT 0,
+                    fees DOUBLE PRECISION DEFAULT 0,
+                    trigger_time VARCHAR(24),
+                    exec_time VARCHAR(24),
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_backtest_trades_task ON t_backtest_trades (task_id, id)"
+            ))
+            # 4) 权益曲线
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_backtest_equity_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    task_id BIGINT NOT NULL,
+                    trade_date VARCHAR(10) NOT NULL,
+                    total_asset DOUBLE PRECISION,
+                    realized_pnl DOUBLE PRECISION DEFAULT 0,
+                    position INTEGER,
+                    close DOUBLE PRECISION,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_backtest_equity_task ON t_backtest_equity_snapshots (task_id, trade_date)"
+            ))
+            # 5) 指标报告（JSONB）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_backtest_metrics (
+                    id BIGSERIAL PRIMARY KEY,
+                    task_id BIGINT NOT NULL,
+                    metrics_json JSONB NOT NULL DEFAULT '{}',
+                    caliber_notes JSONB NOT NULL DEFAULT '[]',
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_t_backtest_metrics_task ON t_backtest_metrics (task_id)"
+            ))
+
+        print("[DB] PATCH: 做T回测迁移完成 (t_backtest_tasks/events/trades/equity_snapshots/metrics)")
+    except Exception as e:
+        print(f"[DB] PATCH warn (t backtest tables): {e}")

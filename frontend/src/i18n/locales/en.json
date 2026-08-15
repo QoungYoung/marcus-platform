@@ -25,7 +25,8 @@
     "calculator": "Bull Calculator",
     "monitor": "Monitor Log",
     "leaderboard": "Leaderboard",
-    "goldenPit": "Golden Pit"
+    "goldenPit": "Golden Pit",
+    "tAccount": "T+0"
   },
   "goldenPit": {
     "title": "Index Golden Pit Detection",

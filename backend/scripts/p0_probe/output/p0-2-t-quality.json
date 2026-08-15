@@ -1,0 +1,205 @@
+{
+  "time": "2026-08-14T22:49:43.029691",
+  "results": {
+    "active:sh600519": {
+      "symbol": "sh600519",
+      "days": 7,
+      "oc_median": 0.40364963503649304,
+      "oc_mean": 0.3804190176982244,
+      "turnover_median": 22,
+      "turnover_mean": 21.285714285714285,
+      "spread_median": 20.78497999999991,
+      "spread_positive_days": 7
+    },
+    "active:sz300750": {
+      "symbol": "sz300750",
+      "days": 7,
+      "oc_median": 0.39950980392156626,
+      "oc_mean": 0.43817499869479537,
+      "turnover_median": 26,
+      "turnover_mean": 23.428571428571427,
+      "spread_median": 7.251240000000012,
+      "spread_positive_days": 7
+    },
+    "active:sz002594": {
+      "symbol": "sz002594",
+      "days": 7,
+      "oc_median": 0.44444444444443215,
+      "oc_mean": 0.41668679663016295,
+      "turnover_median": 23,
+      "turnover_mean": 21.428571428571427,
+      "spread_median": 1.6180079999999966,
+      "spread_positive_days": 7
+    },
+    "active:sh688981": {
+      "symbol": "sh688981",
+      "days": 7,
+      "oc_median": 0.4280078895463492,
+      "oc_mean": 0.4014417814984194,
+      "turnover_median": 23,
+      "turnover_mean": 21.857142857142858,
+      "spread_median": 5.023915999999994,
+      "spread_positive_days": 7
+    },
+    "active:sz300059": {
+      "symbol": "sz300059",
+      "days": 7,
+      "oc_median": 0.18749999999998473,
+      "oc_mean": 0.2765816326530604,
+      "turnover_median": 18,
+      "turnover_mean": 19.714285714285715,
+      "spread_median": 0.2097,
+      "spread_positive_days": 7
+    },
+    "active:sz002475": {
+      "symbol": "sz002475",
+      "days": 7,
+      "oc_median": 0.47940074906367053,
+      "oc_mean": 0.45416014769743884,
+      "turnover_median": 24,
+      "turnover_mean": 22.285714285714285,
+      "spread_median": 2.2073,
+      "spread_positive_days": 7
+    },
+    "active:sh601012": {
+      "symbol": "sh601012",
+      "days": 7,
+      "oc_median": 0.41860465116279033,
+      "oc_mean": 0.541167124079159,
+      "turnover_median": 17,
+      "turnover_mean": 16.714285714285715,
+      "spread_median": 0.18972400000000042,
+      "spread_positive_days": 7
+    },
+    "active:sz000858": {
+      "symbol": "sz000858",
+      "days": 7,
+      "oc_median": 0.3768115942028969,
+      "oc_mean": 0.46163130637929833,
+      "turnover_median": 21,
+      "turnover_mean": 19.428571428571427,
+      "spread_median": 1.1485719999999977,
+      "spread_positive_days": 7
+    },
+    "active:sh601888": {
+      "symbol": "sh601888",
+      "days": 7,
+      "oc_median": 0.5333333333333333,
+      "oc_mean": 0.5802243229603012,
+      "turnover_median": 22,
+      "turnover_mean": 20.857142857142858,
+      "spread_median": 0.8888839999999997,
+      "spread_positive_days": 7
+    },
+    "active:sz002304": {
+      "symbol": "sz002304",
+      "days": 7,
+      "oc_median": 0.33333333333334386,
+      "oc_mean": 0.42788895089780105,
+      "turnover_median": 18,
+      "turnover_mean": 18.285714285714285,
+      "spread_median": 0.699112000000002,
+      "spread_positive_days": 7
+    },
+    "stable:sh600900": {
+      "symbol": "sh600900",
+      "days": 7,
+      "oc_median": 0.5757575757575826,
+      "oc_mean": 0.4614562470626931,
+      "turnover_median": 20,
+      "turnover_mean": 18.857142857142858,
+      "spread_median": 0.2896039999999983,
+      "spread_positive_days": 7
+    },
+    "stable:sh601166": {
+      "symbol": "sh601166",
+      "days": 7,
+      "oc_median": 0.43478260869565755,
+      "oc_mean": 0.47616397713651704,
+      "turnover_median": 17,
+      "turnover_mean": 18.571428571428573,
+      "spread_median": 0.18972400000000042,
+      "spread_positive_days": 7
+    },
+    "stable:sz000001": {
+      "symbol": "sz000001",
+      "days": 7,
+      "oc_median": 0.31250000000000416,
+      "oc_mean": 0.4787698412698396,
+      "turnover_median": 17,
+      "turnover_mean": 17.857142857142858,
+      "spread_median": 0.10982000000000036,
+      "spread_positive_days": 7
+    },
+    "stable:sh600036": {
+      "symbol": "sh600036",
+      "days": 7,
+      "oc_median": 0.6250000000000022,
+      "oc_mean": 0.45009239827740744,
+      "turnover_median": 24,
+      "turnover_mean": 22.714285714285715,
+      "spread_median": 0.3794959999999946,
+      "spread_positive_days": 7
+    },
+    "stable:sh601398": {
+      "symbol": "sh601398",
+      "days": 7,
+      "oc_median": 0.5000000000000089,
+      "oc_mean": 0.5113378684807262,
+      "turnover_median": 17,
+      "turnover_mean": 17.285714285714285,
+      "spread_median": 0.05987999999999964,
+      "spread_positive_days": 7
+    },
+    "stable:sz000333": {
+      "symbol": "sz000333",
+      "days": 7,
+      "oc_median": 0.5919999999999959,
+      "oc_mean": 0.5075448372383278,
+      "turnover_median": 23,
+      "turnover_mean": 22.142857142857142,
+      "spread_median": 1.018727999999988,
+      "spread_positive_days": 7
+    },
+    "stable:sh600028": {
+      "symbol": "sh600028",
+      "days": 7,
+      "oc_median": 0.3636363636363629,
+      "oc_mean": 0.47881880024737133,
+      "turnover_median": 20,
+      "turnover_mean": 18.714285714285715,
+      "spread_median": 0.04989199999999986,
+      "spread_positive_days": 7
+    },
+    "stable:sh601988": {
+      "symbol": "sh601988",
+      "days": 7,
+      "oc_median": 0.6249999999999972,
+      "oc_mean": 0.6038291074005372,
+      "turnover_median": 18,
+      "turnover_mean": 17.285714285714285,
+      "spread_median": 0.04989199999999986,
+      "spread_positive_days": 7
+    },
+    "stable:sz002415": {
+      "symbol": "sz002415",
+      "days": 7,
+      "oc_median": 0.3396226415094373,
+      "oc_mean": 0.3902751416730617,
+      "turnover_median": 26,
+      "turnover_mean": 22.571428571428573,
+      "spread_median": 0.9188480000000009,
+      "spread_positive_days": 7
+    },
+    "stable:sh600276": {
+      "symbol": "sh600276",
+      "days": 7,
+      "oc_median": 0.5728155339805852,
+      "oc_mean": 0.5111773214202541,
+      "turnover_median": 20,
+      "turnover_mean": 19.285714285714285,
+      "spread_median": 1.5580800000000015,
+      "spread_positive_days": 7
+    }
+  }
+}
