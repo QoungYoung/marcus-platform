@@ -121,7 +121,13 @@ class TBacktestLedger:
         return trade
 
     def end_of_day(self):
-        """收盘结转：底仓 = 底仓 - 当日已卖 + 当日买回（买回 T+1 次日可卖），成本加权更新。"""
+        """收盘结转：底仓 = 底仓 - 当日已卖 + 当日买回（买回 T+1 次日可卖），成本加权更新。
+
+        成本加权口径：当日卖出的部分已按卖出价实现盈亏（do_sell 已计 realized_pnl），
+        不再参与成本结转——新成本 = (剩余底仓市值 + 买回成本) / 新底仓股数。
+        此前公式用 base_shares（含已卖）作分子导致卖出日成本虚高（如 200股@37.03
+        高抛卖100@39.4买回100@38.6 后成本被算成 56.35 而非 ~37.8）。
+        """
         sold = self.sold_today
         bought = self.bought_today
         new_base = self.base_shares - sold + bought
@@ -131,8 +137,8 @@ class TBacktestLedger:
                 t["price"] * t["volume"] for t in self.trades
                 if t["side"] == "buy" and t.get("settled") is not True
             )
-            # 新成本 = (原底仓市值 + 买回成本) / 新底仓
-            new_cost = (old_cost * self.base_shares + buy_amount) / new_base
+            # 新成本 = (剩余底仓市值 + 买回成本) / 新底仓（已卖部分已实现盈亏，不结转）
+            new_cost = (old_cost * max(self.base_shares - sold, 0) + buy_amount) / new_base
             self.cost_price = round(new_cost, 4)
             self.cost_drift += (self.cost_price - old_cost)
             for t in self.trades:

@@ -295,6 +295,22 @@ class TestEngineCore(unittest.TestCase):
         self.assertEqual(ledger.bought_today, 0)
         self.assertGreater(ledger.realized_pnl, 0)
 
+    def test_ledger_cost_not_inflated_after_roundtrip(self):
+        """高抛卖+买回闭环后成本不应虚高（已卖部分实现盈亏不结转成本）。
+
+        回归：旧公式 (old_cost×base + buy_amount)/new_base 在卖出日把成本抬高，
+        200股@37.03 高抛卖100@39.4 买回100@38.6 被算成 56.35（应 ~37.8）。
+        """
+        from app.services.t_backtest import TBacktestLedger
+        ledger = TBacktestLedger("X", 200, 37.03, 200000.0)
+        ledger.do_sell(39.4, 100)   # 高抛 100
+        ledger.do_buy(38.6, 100)    # 买回 100
+        ledger.end_of_day()
+        self.assertEqual(ledger.base_shares, 200)
+        # 新成本 = (37.03×100 + 38.6×100) / 200 ≈ 37.82（不得虚高到 50+）
+        self.assertLess(ledger.cost_price, 40.0, f"成本被虚高: {ledger.cost_price}")
+        self.assertAlmostEqual(ledger.cost_price, (37.03 * 100 + 38.6 * 100) / 200, delta=0.05)
+
     def test_ledger_consecutive_losses(self):
         from app.services.t_backtest import TBacktestLedger
         ledger = TBacktestLedger("X", 1000, 10.0, 200000.0)
