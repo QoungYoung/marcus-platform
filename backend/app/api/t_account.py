@@ -260,6 +260,15 @@ def t_build_scan_results(trade_date: Optional[str] = None):
         db.close()
 
 
+@router.get("/ai/actions")
+def t_ai_actions(trade_date: Optional[str] = None, symbol: Optional[str] = None, limit: int = 50):
+    """AI 主导做T决策审计列表（t_ai_actions）。"""
+    from app.services import t_db
+    actions = t_db.list_ai_actions(trade_date=trade_date or None,
+                                   symbol=symbol or None, limit=limit)
+    return {"actions": actions, "count": len(actions)}
+
+
 # ────────────────────────────────────────────────────────────────
 # 底仓建仓（t-position-building）：选股 / 建仓 / 衔接 / 再平衡 / 审计 / 调额
 # ────────────────────────────────────────────────────────────────

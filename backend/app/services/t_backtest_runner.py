@@ -297,6 +297,7 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
     """按 review_mode 构造复核回调：
     - llm：POST bridge /backtest/review（回测会话沙盒），失败降级规则（返回 None → 引擎规则模式）
     - rule：None（引擎内 _rule_review）
+    回测复核响应升级为 AI 决策语义（action: exec/wait/abandon，兼容旧 decision:auto|human）。
     """
     if task.get("review_mode", "llm") != "llm":
         return None
@@ -317,8 +318,12 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
-        decision = "auto" if body.get("decision") == "auto" else "human"
-        return {"decision": decision, "reason": str(body.get("reason") or "")[:500]}
+        # AI 决策动作：exec / wait / abandon（兼容旧 decision:auto→exec, human→wait）
+        action = str(body.get("action") or "")
+        if action not in ("exec", "wait", "abandon"):
+            action = "exec" if body.get("decision") == "auto" else "wait"
+        return {"action": action, "decision": "auto" if action == "exec" else "human",
+                "reason": str(body.get("reason") or "")[:500]}
 
     return review
 

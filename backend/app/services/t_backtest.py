@@ -463,7 +463,7 @@ class TBacktestEngine:
         equity_curve: List[Dict[str, Any]] = []
         summary: Dict[str, Any] = {
             "triggers": 0, "reviews": 0, "executed": 0, "blocked": 0,
-            "escalated_human": 0, "data_gaps": 0,
+            "escalated_human": 0, "data_gaps": 0, "ai_wait": 0, "ai_abandon": 0,
         }
 
         total_days = len(self.trade_days)
@@ -619,13 +619,20 @@ class TBacktestEngine:
         }
         self.events.append({"type": "trigger", "data": trigger})
 
-        # 复核：规则模式（无 DB 纯规则）或 LLM（review_fn）
-        decision, reason = self._review(trigger, regime, ledger, summary)
+        # 复核：规则模式（无 DB 纯规则）或 LLM（review_fn）→ AI 决策动作
+        action, reason = self._review(trigger, regime, ledger, summary)
         self.events.append({"type": "review", "data": {
-            "trigger_id": len(self.events), "decision": decision,
+            "trigger_id": len(self.events), "action": action,
             "reason": reason, "mode": "llm" if self.review_fn else "rule",
         }})
-        if decision == "human":
+        if action == "wait":
+            summary["ai_wait"] += 1
+            self.events.append({"type": "ai_wait", "data": {
+                "trigger": trigger, "reason": reason,
+            }})
+            return
+        if action == "abandon":
+            summary["ai_abandon"] += 1
             summary["escalated_human"] += 1
             self.events.append({"type": "escalated", "data": {
                 "trigger": trigger, "reason": reason,
@@ -736,7 +743,11 @@ class TBacktestEngine:
 
     def _review(self, trigger: Dict[str, Any], regime: Dict[str, Any],
                 ledger: TBacktestLedger, summary: Dict[str, Any]):
-        """复核决策：LLM（review_fn）或规则（无 DB 纯规则，对齐 classify_escalation 6 类语义）。"""
+        """复核决策：LLM（review_fn）→ AI 决策动作（exec/wait/abandon）；规则（无 DB 纯规则）。
+
+        返回 (action, reason)，action ∈ exec/wait/abandon。
+        规则模式对齐 classify_escalation 语义：auto→exec、human→abandon（回测中不撮合）。
+        """
         summary["reviews"] += 1
         if self.review_fn is not None:
             try:
@@ -745,28 +756,34 @@ class TBacktestEngine:
                     "regime": regime,
                     "rule_hint": _rule_review(trigger, regime, ledger),
                 })
-                decision = "auto" if r.get("decision") == "auto" else "human"
-                return decision, str(r.get("reason") or "LLM 复核")
+                action = str(r.get("action") or "")
+                if action not in ("exec", "wait", "abandon"):
+                    # 兼容旧语义：decision auto→exec、human→wait（保守）
+                    action = "exec" if r.get("decision") == "auto" else "wait"
+                return action, str(r.get("reason") or "LLM 决策")
             except Exception as e:
-                return "human", f"复核异常(视为升级): {str(e)[:120]}"
-        return _rule_review(trigger, regime, ledger)
+                return "wait", f"决策异常(保守等待): {str(e)[:120]}"
+        action, reason = _rule_review(trigger, regime, ledger)
+        return action, reason
 
 
 def _rule_review(trigger: Dict[str, Any], regime: Dict[str, Any],
                  ledger: TBacktestLedger) -> tuple:
     """无 DB 规则复核（回测专用，对齐 classify_escalation 6 类语义）：
-    regime 极端 / 连续触风控 / 无底仓低吸 / 接近日亏预警线 → human；否则 auto。"""
+    regime 极端 / 连续触风控 / 无底仓低吸 / 接近日亏预警线 → abandon（回测中不撮合）；
+    否则 exec。返回 (action, reason)，action ∈ exec/abandon。
+    """
     side = "buy" if trigger.get("event_type") in ("low_buy", "panic_vibrate") else "sell"
     if regime.get("regime") == "HALT":
-        return "human", "regime=HALT 极端市况强制人工"
+        return "abandon", "regime=HALT 极端市况"
     if ledger.consecutive_losses >= 2:
-        return "human", "连续触犯风控，强制人工+临时禁自动"
+        return "abandon", "连续触犯风控，强制放弃"
     if side == "buy" and ledger.sellable() <= 0:
-        return "human", "无底仓标的低吸（新开仓风险）"
+        return "abandon", "无底仓标的低吸（新开仓风险）"
     pnl_pct = ledger.realized_pnl / ledger.net_asset * 100 if ledger.net_asset else 0.0
     if pnl_pct <= -1.0:
-        return "human", f"接近日亏预警线（{pnl_pct:.2f}%）需复核"
-    return "auto", ""
+        return "abandon", f"接近日亏预警线（{pnl_pct:.2f}%）"
+    return "exec", ""
 
 
 def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
@@ -807,6 +824,8 @@ def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
         "executed_count": summary.get("executed", 0),
         "blocked_count": summary.get("blocked", 0),
         "escalated_human_count": summary.get("escalated_human", 0),
+        "ai_wait_count": summary.get("ai_wait", 0),
+        "ai_abandon_count": summary.get("ai_abandon", 0),
         "data_gap_count": summary.get("data_gaps", 0),
         "execution_rate_pct": round(summary.get("executed", 0) / summary.get("triggers", 1) * 100, 2)
         if summary.get("triggers") else 0.0,
@@ -1051,6 +1070,8 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
     executed = sum(r.get("metrics", {}).get("executed_count", 0) for r in per_symbol)
     blocked = sum(r.get("metrics", {}).get("blocked_count", 0) for r in per_symbol)
     escalated = sum(r.get("metrics", {}).get("escalated_human_count", 0) for r in per_symbol)
+    ai_wait = sum(r.get("metrics", {}).get("ai_wait_count", 0) for r in per_symbol)
+    ai_abandon = sum(r.get("metrics", {}).get("ai_abandon_count", 0) for r in per_symbol)
     realized = sum(r.get("ledger", {}).get("realized_pnl", 0) for r in per_symbol)
     sells = [t for r in per_symbol for t in r.get("ledger", {}).get("trades", []) if t.get("side") == "sell"]
     wins = [t for t in sells if t.get("realized_pnl", 0) > 0]
@@ -1066,6 +1087,8 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
         "executed_count": executed,
         "blocked_count": blocked,
         "escalated_human_count": escalated,
+        "ai_wait_count": ai_wait,
+        "ai_abandon_count": ai_abandon,
         "realized_pnl": round(realized, 2),
         "win_rate_pct": round(win_rate, 2),
         "max_drawdown_pct": round(max_dd, 2),

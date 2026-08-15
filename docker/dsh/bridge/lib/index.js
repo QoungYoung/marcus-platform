@@ -182,6 +182,35 @@ function apply(ctx) {
         },
       }));
       register(defineTool({
+        name: 'list_t_ai_actions',
+        description: '查询做T AI 决策审计（t_ai_actions）：最近 N 条决策（exec/wait/abandon/update_condition/build/review），含理由与网关结果。AI 决策前/复盘时查最近决策，判断是否连续未实质改善。',
+        parameters: {
+          symbol: { type: 'string', description: '可选按代码过滤，如 SH600519' },
+          trade_date: { type: 'string', description: '可选按日期过滤 YYYY-MM-DD，默认今天' },
+          limit: { type: 'number', description: '返回条数（默认10）' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const qs = new URLSearchParams({ limit: String(args.limit || 10) });
+          if (args.symbol) qs.set('symbol', args.symbol);
+          if (args.trade_date) qs.set('trade_date', args.trade_date);
+          const data = await apiFetch('/t/ai/actions?' + qs);
+          const acts = data.actions || [];
+          if (acts.length === 0) return { ok: true, text: '📭 暂无 AI 决策记录' };
+          const lines = ['🤖 最近 AI 决策（' + acts.length + ' 条）：', ''];
+          acts.forEach((a) => {
+            const out = a.output || {};
+            const gw = a.gateway_result || {};
+            const reason = (out.reason || gw.reason || '') || '';
+            const gwStatus = gw.status ? (' | 网关: ' + gw.status) : '';
+            lines.push('• ' + (a.created_at || '').slice(0, 19) + ' ' + (a.symbol || '') + ' [' + (a.action_type || '') + ']' + gwStatus);
+            if (reason) lines.push('    ' + reason.slice(0, 120));
+          });
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
         name: 'run_t_backtest',
         description: '发起做T监控条件历史回测（m5 粒度，单标的多日，防前视）。验证监控条件（表达式/阈值）在历史上触发得准不准、赚不赚钱。参数：symbol、start_date、end_date、conditions（监控条件数组，含 trigger_kind/target_price/vol_ratio_thresh/expression 等）、init_shares（初始底仓股数，默认1000）、review_mode（llm=真实LLM复核/rule=纯规则对照，默认llm）。返回任务 id；任务异步执行，完成后可再调用传入 task_id 查询报告。',
         parameters: {
@@ -220,7 +249,7 @@ function apply(ctx) {
           return { ok: true, text: '✅ 做T回测任务已创建 #' + data.task_id + '\n标的: ' + args.symbol + ' | ' + args.start_date + '~' + args.end_date + ' | 条件 ' + conds.length + ' 条\n执行中可稍后传入 task_id 查询报告' };
         },
       }));
-      console.log('[Bridge] 写工具注册完成（place_order/cancel_order/calc_position/update_golden_pit_etf_config/list_t_fields/create_t_condition/list_t_conditions/run_t_backtest）');
+      console.log('[Bridge] 写工具注册完成（place_order/cancel_order/calc_position/update_golden_pit_etf_config/list_t_fields/create_t_condition/list_t_conditions/list_t_ai_actions/run_t_backtest）');
 
       // ═══ 做T底仓建仓工具（t-position-building，走 t 专用后端端点，不直触下单）═══
       register(defineTool({
@@ -703,19 +732,19 @@ function apply(ctx) {
               // 回测复核会话（沙盒）：key = backtest:t-backtest-{taskId}，与生产会话隔离
               const agent = await getOrCreateAgent('t-backtest-' + task_id, 'backtest', null, null);
               const prompt = [
-                '请复核以下做T触发事件，判断应执行（auto）还是升级人工（human）。',
+                '请对以下做T触发事件做出决策：执行（exec）、等待（wait）还是放弃（abandon）。',
                 '',
                 '标的: ' + (symbol || trigger.symbol || ''),
                 '触发: ' + JSON.stringify(trigger, null, 1),
                 'regime: ' + JSON.stringify(regime || {}, null, 1),
                 '规则预判(供参考): ' + JSON.stringify(rule_hint || {}, null, 1),
                 '',
-                '判定要点：量价合理性、regime 档位、可卖底仓、风控状态、触发与目标价的价差空间。',
-                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"decision":"auto|human","reason":"一句话理由"}',
+                '判定要点：量价合理性、regime 档位、可卖底仓、风控状态、连续命中次数、触发与目标价的价差空间。',
+                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon","reason":"一句话理由"}',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
               const parsed = parseDecision(reply);
-              console.log('[Bridge] /backtest/review task#' + task_id + ' → ' + parsed.decision + ' (' + parsed.reason.slice(0, 60) + ')');
+              console.log('[Bridge] /backtest/review task#' + task_id + ' → ' + (parsed.action || parsed.decision) + ' (' + parsed.reason.slice(0, 60) + ')');
               json(res, 200, parsed);
             } catch (e) {
               console.error('[Bridge] /backtest/review error:', e);
@@ -728,20 +757,30 @@ function apply(ctx) {
       return () => { for (const d of all) d(); };
     });
 
-    // ── 回测复核：解析 LLM JSON 决策（容忍 ```json 包裹与前后噪声）──
+    // ── 回测复核：解析 LLM 决策 JSON（action: exec|wait|abandon；兼容旧 decision:auto|human）──
     function parseDecision(reply) {
-      if (!reply) return { decision: 'human', reason: '空回复' };
+      if (!reply) return { action: 'wait', reason: '空回复' };
       const text = String(reply).trim();
-      const m = text.match(/\{[^{}]*"decision"\s*:\s*"(auto|human)"[^{}]*\}/);
-      if (m) {
+      // 新格式：{"action": "exec|wait|abandon", ...}
+      const ma = text.match(/\{[^{}]*"action"\s*:\s*"(exec|wait|abandon)"[^{}]*\}/);
+      if (ma) {
         try {
-          const obj = JSON.parse(m[0]);
-          return { decision: obj.decision === 'auto' ? 'auto' : 'human', reason: String(obj.reason || '') };
+          const obj = JSON.parse(ma[0]);
+          return { action: obj.action, reason: String(obj.reason || '') };
+        } catch (e) { /* fallthrough */ }
+      }
+      // 兼容旧格式：{"decision": "auto|human"}
+      const md = text.match(/\{[^{}]*"decision"\s*:\s*"(auto|human)"[^{}]*\}/);
+      if (md) {
+        try {
+          const obj = JSON.parse(md[0]);
+          return { action: obj.decision === 'auto' ? 'exec' : 'wait', reason: String(obj.reason || '') };
         } catch (e) { /* fallthrough */ }
       }
       // 无 JSON：按文本关键词兜底
-      if (/auto|执行|放行/.test(text) && !/human|人工|升级/.test(text)) return { decision: 'auto', reason: text.slice(0, 120) };
-      return { decision: 'human', reason: text.slice(0, 120) };
+      if (/exec|执行|放行|auto/.test(text)) return { action: 'exec', reason: text.slice(0, 120) };
+      if (/abandon|放弃/.test(text)) return { action: 'abandon', reason: text.slice(0, 120) };
+      return { action: 'wait', reason: text.slice(0, 120) };
     }
 
     // ── 内置回退 Prompt（启动时从 Backend 拉取后覆盖）──
@@ -749,13 +788,32 @@ function apply(ctx) {
     const FALLBACK_PROMPTS = {
       CHAT_SYSTEM_PROMPT: '你是 Marcus — 短线右侧交易专家。你可以查询行情、板块、资金流、技术指标等数据帮助用户了解市场状况。',
       TRADE_SYSTEM_PROMPT: '你是 Marcus — 短线右侧交易专家（trade 模式）。你可以查询数据并执行交易操作。',
+      T_BUILD_SYSTEM_PROMPT: [
+        '## 做T底仓建仓工作流指引（t-agent 会话附加）',
+        '做T = 用"已有底仓"做 T+0 高抛低吸回转。**底仓是弹药**。',
+        '你是**做T决策主体**：选股、操作、监控条件（定时器）发布与复盘均由你决定；',
+        '系统规则只负责条件命中检测、唤醒你、网关风控兜底与审计。',
+        '',
+        '被条件命中唤醒时输出一行 JSON（不要 markdown 代码块、不要其他文字）：',
+        '{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", "condition": {...}}',
+        '- exec：按建议价执行（仍经网关风控，可能被拒）',
+        '- wait：量价/regime 存疑，等待（冷却后重新武装）',
+        '- abandon：放弃本次触发（追高/信号矛盾）',
+        '- update_condition：触发价偏离或连续命中未实质改善——更新监控条件（必须附 condition）',
+        '',
+        '建仓：scan_t_candidates 选股（候选池优先，空则全市场扫描）→ get_floor_overview →',
+        'build_t_position（ai_led 首开自动放行；单笔≤净值5%、总底仓≤净值55%；冷静期/午后不自动建）。',
+        '连续命中告警（consecutive_hit_alert=true）时必须给出 update_condition 或冷却，否则系统自动冷却。',
+        '硬约束：仅 t 账户；STOP_ALL/日亏熔断/HALT 禁自动；T+1 当日禁卖；单票当日 1 批；所有下单经网关（ai_led 不豁免）。',
+      ].join('\n'),
     };
-    // 回测复核会话系统提示（沙盒：只做决策，禁止交易/写操作）
+    // 回测复核会话系统提示（沙盒：AI 决策 exec/wait/abandon，禁止交易/写操作）
     const BACKTEST_REVIEW_PROMPT = [
-      '你是做T回测复核 Agent（沙盒模式）。你只对触发事件做 auto/human 复核决策，不执行任何交易，也不调用任何工具。',
+      '你是做T回测决策 Agent（沙盒模式）。你只对触发事件做 exec/wait/abandon 决策，不执行任何交易，也不调用任何工具。',
       '你的工具已被沙盒隔离：生产写工具（下单/撤单/建仓等）对你不可见。',
-      '每次收到触发上下文，输出一行 JSON：{"decision":"auto|human","reason":"一句话理由"}。',
-      'auto = 按建议价执行；human = 升级人工复核（量价存疑、regime 极端、风控接近、无底仓、连续亏损等）。',
+      '每次收到触发上下文，输出一行 JSON：{"action":"exec|wait|abandon","reason":"一句话理由"}。',
+      'exec = 按建议价执行（回放中撮合）；wait = 量价/regime 存疑等待；abandon = 放弃（追高/信号矛盾）。',
+      '判定要点：量价合理性、regime 档位、可卖底仓、风控状态、连续命中次数、触发与目标价价差空间。',
     ].join('\n');
     // 沙盒 deny 名单：回测复核会话禁用的生产写工具
     const BACKTEST_DENY_TOOLS = [

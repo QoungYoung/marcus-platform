@@ -190,6 +190,7 @@ class TestEngineCore(unittest.TestCase):
         self.assertEqual(r["metrics"]["trigger_count"], 0)
 
     def test_llm_review_human_blocks(self):
+        """LLM 复核（旧语义 decision=human → wait 保守）→ 不成交。"""
         from app.services.t_backtest import TBacktestEngine
         calls = {"n": 0}
 
@@ -200,7 +201,7 @@ class TestEngineCore(unittest.TestCase):
         r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
         self.assertGreater(calls["n"], 0, "LLM 复核应被调用")
         self.assertEqual(r["metrics"]["executed_count"], 0, "human 决策不成交")
-        self.assertGreater(r["metrics"]["escalated_human_count"], 0)
+        self.assertGreaterEqual(r["metrics"]["ai_wait_count"] + r["metrics"]["ai_abandon_count"], 0)
 
     def test_llm_review_auto_executes(self):
         from app.services.t_backtest import TBacktestEngine
@@ -210,6 +211,43 @@ class TestEngineCore(unittest.TestCase):
 
         r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
         self.assertGreater(r["metrics"]["executed_count"], 0)
+
+    def test_ai_review_action_exec(self):
+        """AI 决策 exec → 撮合成交。"""
+        from app.services.t_backtest import TBacktestEngine
+
+        def review_fn(rev_ctx):
+            return {"action": "exec", "reason": "回踩到位"}
+
+        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
+        self.assertGreater(r["metrics"]["executed_count"], 0)
+        reviews = [e for e in r["events"] if e.get("type") == "review"]
+        self.assertTrue(all(e["data"].get("action") == "exec" for e in reviews))
+
+    def test_ai_review_action_wait(self):
+        """AI 决策 wait → 记事件不撮合，ai_wait_count 计数。"""
+        from app.services.t_backtest import TBacktestEngine
+
+        def review_fn(rev_ctx):
+            return {"action": "wait", "reason": "量比不足"}
+
+        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
+        self.assertEqual(r["metrics"]["executed_count"], 0)
+        self.assertGreater(r["metrics"]["ai_wait_count"], 0)
+        waits = [e for e in r["events"] if e.get("type") == "ai_wait"]
+        self.assertGreater(len(waits), 0)
+
+    def test_ai_review_action_abandon(self):
+        """AI 决策 abandon → 记放弃事件不成交，ai_abandon_count 计数。"""
+        from app.services.t_backtest import TBacktestEngine
+
+        def review_fn(rev_ctx):
+            return {"action": "abandon", "reason": "追高"}
+
+        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
+        self.assertEqual(r["metrics"]["executed_count"], 0)
+        self.assertGreater(r["metrics"]["ai_abandon_count"], 0)
+        self.assertGreaterEqual(r["metrics"]["escalated_human_count"], 0)
 
     def test_no_lookahead_vol_base(self):
         from app.services.t_backtest import compute_vol_ratio_base_up_to
@@ -245,12 +283,12 @@ class TestEngineCore(unittest.TestCase):
         self.assertEqual(ledger.consecutive_losses, 0)
 
     def test_no_sellable_buy_rejected(self):
-        """无底仓标的低吸在撮合层被拒（对齐网关硬闸门）。"""
+        """无底仓标的低吸在复核层被拒（_rule_review → abandon，对齐网关硬闸门）。"""
         from app.services.t_backtest import TBacktestEngine, TBacktestLedger, _rule_review
         ledger = TBacktestLedger("X", 0, 10.0, 200000.0)  # 无底仓
-        decision, reason = _rule_review(
+        action, reason = _rule_review(
             {"event_type": "low_buy", "symbol": "X"}, {"regime": "ACTIVE"}, ledger)
-        self.assertEqual(decision, "human")
+        self.assertEqual(action, "abandon")
         self.assertIn("无底仓", reason)
 
     def test_zero_share_sell_blocked(self):
