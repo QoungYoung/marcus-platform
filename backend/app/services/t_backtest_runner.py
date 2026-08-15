@@ -420,25 +420,62 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         if is_combined:
             from app.services.t_backtest import TCombinedBacktestEngine
             engine = TCombinedBacktestEngine(task, str(task_dir), review_fn=review_fn)
-            result = engine.run(cancel_event)
         else:
             from app.services.t_backtest import TBacktestEngine
             engine = TBacktestEngine(task, str(task_dir), review_fn=review_fn)
-            result = engine.run(cancel_event)
+
+        # 实时进度：逐日更新 progress 列 + 增量落库事件/权益（前端轮询即可看到进展）
+        live = {"events": 0, "equity": 0}
+
+        def _progress(done, total, events_delta=None, equity_point=None):
+            try:
+                pct = round(done / total * 100) if total else 100
+                update_task_status(task_id, "running", progress=max(0, min(100, pct)))
+            except Exception as e:
+                print(f"[t-backtest] 进度更新失败: {e}")
+            if events_delta:
+                try:
+                    save_events(task_id, events_delta)
+                    live["events"] += len(events_delta)
+                except Exception as e:
+                    print(f"[t-backtest] 实时事件落库失败: {e}")
+            if equity_point:
+                try:
+                    save_equity(task_id, [equity_point])
+                    live["equity"] += 1
+                except Exception as e:
+                    print(f"[t-backtest] 实时权益落库失败: {e}")
+
+        result = engine.run(cancel_event, progress_cb=_progress)
     except Exception as e:
         print(f"[t-backtest] 回放失败 #{task_id}: {e}")
         update_task_status(task_id, "failed", error_message=f"回放异常: {e}")
         return {"status": "failed", "error": str(e)}
 
-    # 3) 落库（组合模式：聚合各标的 events/trades/equity + 组合明细入 metrics）
+    # 3) 落库（实时进度已增量写 events/equity；此处补剩余增量 + trades/metrics）
     if is_combined:
         all_events: List[Dict[str, Any]] = []
         all_trades: List[Dict[str, Any]] = []
         for r in result.get("per_symbol", []):
             all_events.extend(r.get("events", []))
             all_trades.extend(r.get("ledger", {}).get("trades", []))
-        save_events(task_id, all_events)
+        # 事件已实时落库（组合引擎透传子引擎事件），仅补剩余
+        remain = all_events[live["events"]:]
+        if remain:
+            save_events(task_id, remain)
         save_trades(task_id, all_trades)
+        # 组合权益曲线是聚合结果，实时阶段只落了各标的部分快照——直接覆盖为组合曲线
+        try:
+            from sqlalchemy import text as _text
+            db = SessionLocal()
+            try:
+                db.execute(_text("DELETE FROM t_backtest_equity_snapshots WHERE task_id = :id"),
+                           {"id": task_id})
+                db.commit()
+            finally:
+                db.close()
+        except Exception:
+            pass
         save_equity(task_id, result.get("equity_curve", []))
         portfolio = dict(result.get("portfolio") or {})
         portfolio["build_decisions"] = result.get("build_decisions", [])
@@ -450,9 +487,14 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         } for r in result.get("per_symbol", [])]
         save_metrics(task_id, portfolio, result.get("caliber_notes", []))
     else:
-        save_events(task_id, result.get("events", []))
+        all_events = result.get("events", [])
+        remain = all_events[live["events"]:]
+        if remain:
+            save_events(task_id, remain)
         save_trades(task_id, result.get("ledger", {}).get("trades", []))
-        save_equity(task_id, result.get("equity_curve", []))
+        curve = result.get("equity_curve", [])
+        if live["equity"] < len(curve):
+            save_equity(task_id, curve[live["equity"]:])
         save_metrics(task_id, result.get("metrics", {}), result.get("caliber_notes", []))
 
     if result.get("status") == "completed":

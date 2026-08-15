@@ -138,6 +138,37 @@
 .tbt-task-main { font-size: 12px; color: var(--gp-ink); font-weight: 600; }
 .tbt-task-meta { font-size: 11px; color: var(--gp-faint); }
 .tbt-task-err { font-size: 11px; color: var(--gp-red); }
+
+/* ── Progress (live) ── */
+.tbt-progress { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.tbt-progress-bar {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: rgba(47, 124, 211, 0.12);
+  overflow: hidden;
+}
+.tbt-progress-fill {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--gp-blue), #5ea5e8);
+  transition: width 0.6s ease;
+}
+.tbt-progress-pct { font-size: 11px; font-weight: 600; color: var(--gp-blue); min-width: 38px; text-align: right; }
+.tbt-progress-lg { margin: var(--space-3) 0; }
+.tbt-progress-lg .tbt-progress-bar { height: 10px; border-radius: 5px; }
+.tbt-progress-lg .tbt-progress-pct { font-size: 13px; min-width: 44px; }
+
+/* ── Live panel ── */
+.tbt-live { display: flex; flex-direction: column; gap: var(--space-3); }
+.tbt-ev {
+  display: inline-block; font-size: 10px; font-weight: 600;
+  padding: 1px 6px; border-radius: 8px; white-space: nowrap;
+  background: rgba(87, 113, 142, 0.12); color: var(--gp-muted);
+}
+.tbt-ev-trade { background: rgba(39, 160, 107, 0.12); color: var(--gp-green); }
+.tbt-ev-blocked { background: rgba(229, 72, 77, 0.12); color: var(--gp-red); }
+.tbt-ev-review { background: rgba(47, 124, 211, 0.12); color: var(--gp-blue); }
+.tbt-ev-trigger { background: rgba(201, 138, 18, 0.12); color: var(--gp-gold); }
+.tbt-ev-data_gap, .tbt-ev-eval_error { background: rgba(229, 72, 77, 0.14); color: var(--gp-red); }
+.tbt-ev-cancelled { background: rgba(87, 113, 142, 0.2); color: var(--gp-muted); }
 .tbt-status {
   font-size: 11px;
   font-weight: 600;

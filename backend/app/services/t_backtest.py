@@ -446,7 +446,13 @@ class TBacktestEngine:
             self.init_price = float(self.m5[0]["open"])
 
     # ── 主循环 ──
-    def run(self, cancel_event: Optional[Any] = None) -> Dict[str, Any]:
+    def run(self, cancel_event: Optional[Any] = None,
+            progress_cb: Optional[callable] = None) -> Dict[str, Any]:
+        """回放主循环。
+
+        progress_cb(done_days, total_days, events_delta, equity_point)：每个交易日收盘后调用，
+        供实时进度/事件流展示（events_delta = 当日新增事件，equity_point = 当日权益快照，可为 None）。
+        """
         self._load()
         if not self.m5:
             return {"status": "failed", "error": "标的 m5 数据为空", "events": self.events}
@@ -460,7 +466,9 @@ class TBacktestEngine:
             "escalated_human": 0, "data_gaps": 0,
         }
 
+        total_days = len(self.trade_days)
         for day_idx, trade_day in enumerate(self.trade_days):
+            day_events_start = len(self.events)
             if cancel_event is not None and cancel_event.is_set():
                 self.events.append({"type": "cancelled", "trade_day": trade_day})
                 break
@@ -536,13 +544,20 @@ class TBacktestEngine:
             ledger.end_of_day()
             last_close = float(day_bars[-1]["close"])
             ledger.update_equity_track(last_close)
-            equity_curve.append({
+            equity_point = {
                 "trade_date": trade_day,
                 "total_asset": round(ledger.equity(last_close), 2),
                 "realized_pnl": round(ledger.realized_pnl, 2),
                 "position": ledger.total_shares(),
                 "close": last_close,
-            })
+            }
+            equity_curve.append(equity_point)
+            if progress_cb is not None:
+                try:
+                    progress_cb(day_idx + 1, total_days,
+                                self.events[day_events_start:], equity_point)
+                except Exception as e:
+                    print(f"[t-backtest] progress_cb 异常: {e}")
 
         # 汇总
         result = {
@@ -854,7 +869,13 @@ class TCombinedBacktestEngine:
         self.start_date = str(task.get("start_date") or "")
         self.end_date = str(task.get("end_date") or "")
 
-    def run(self, cancel_event: Optional[Any] = None) -> Dict[str, Any]:
+    def run(self, cancel_event: Optional[Any] = None,
+            progress_cb: Optional[callable] = None) -> Dict[str, Any]:
+        """组合回放主循环。
+
+        progress_cb(done_units, total_units, events_delta, equity_point)：
+        进度单位 = 建仓阶段每标的 1 单位 + 做T阶段每标的天数；事件增量透传子引擎当日事件。
+        """
         from pathlib import Path
         from app.services.t_backtest_data import (load_index_daily, load_m5,
                                                   load_stock_daily)
@@ -873,11 +894,26 @@ class TCombinedBacktestEngine:
         if not trade_days:
             return {"status": "failed", "error": "无标的 m5 数据", "build_decisions": [], "per_symbol": []}
 
+        # 进度单位：建仓阶段每标的 1 单位 + 做T阶段各标的天数（built 确定后精算，见下方）
+        total_units = len(self.symbols) + sum(
+            len({_day_key(b["time"]) for b in bars}) for bars in m5_map.values() if bars)
+        done_units = 0
+
+        def _report_progress(events_delta=None, equity_point=None):
+            if progress_cb is not None:
+                try:
+                    progress_cb(done_units, total_units,
+                                events_delta or [], equity_point)
+                except Exception as e:
+                    print(f"[t-backtest] 组合 progress_cb 异常: {e}")
+
         # 建仓阶段（窗口期初，T-1 及以前日线防前视）
         build_decisions: List[Dict[str, Any]] = []
         built: List[Dict[str, Any]] = []   # {symbol, price(建仓价), shares, cost, quality_score}
         allocated_value = 0.0
         for sym in self.symbols:
+            done_units += 1
+            _report_progress()
             if cancel_event is not None and cancel_event.is_set():
                 break
             if not self.build_mode:
@@ -939,10 +975,17 @@ class TCombinedBacktestEngine:
                     "per_symbol": [], "equity_curve": [], "caliber_notes": caliber_notes() + [
                         "建仓口径: t_build 规则模拟（build_score≥门槛 ∧ 趋势闸门 ∧ 资金≤净值×55%），建仓价=窗口首日开盘；可T质量分用历史日线近似（_quality_from_daily）"]}
 
+        # 精算总单位：只有实际建仓的标的进入做T阶段
+        total_units = len(self.symbols) + sum(
+            len({_day_key(x["time"]) for x in m5_map.get(bb["symbol"], []) if x})
+            for bb in built)
+
         # 做T阶段：逐标的实例化单标的引擎（net_asset = 该标的建仓支出，避免组合资金重复计算）
         per_symbol: List[Dict[str, Any]] = []
         cash = self.net_asset - sum(b["price"] * b["shares"] for b in built)
         total_asset_by_day: Dict[str, float] = {}
+        # 做T进度累计：建仓阶段已占 len(symbols) 单位，做T阶段每个标的占其交易日数
+        done_units = len(self.symbols)
         for b in built:
             if cancel_event is not None and cancel_event.is_set():
                 break
@@ -955,13 +998,30 @@ class TCombinedBacktestEngine:
             }
             eng = TBacktestEngine(sub_task, str(d), review_fn=self.review_fn,
                                   slippage=self.slippage, fee_rate=self.fee_rate)
-            r = eng.run(cancel_event)
+            sub_days = len({_day_key(x["time"]) for x in m5_map.get(b["symbol"], []) if x})
+            base_units = done_units  # 本标的起始单位（含建仓 + 之前标的已回放天数）
+
+            def _sub_progress(done, _total, events_delta=None, _eq=None):
+                # 子引擎进度映射到组合单位：base_units + 当前标的已完成天数
+                frac = (done / _total) * sub_days if _total else sub_days
+                cur_units = base_units + frac
+                if progress_cb is not None:
+                    try:
+                        progress_cb(round(cur_units, 2), total_units,
+                                    events_delta or [], None)
+                    except Exception as e:
+                        print(f"[t-backtest] 组合子引擎 progress_cb 异常: {e}")
+
+            r = eng.run(cancel_event, progress_cb=_sub_progress if progress_cb else None)
+            done_units += sub_days
             r["build"] = {k: b[k] for k in ("symbol", "price", "shares", "source") if k in b}
             per_symbol.append(r)
             # 组合权益 = 闲置现金 + Σ(标的总资产)（标的 total_asset 以建仓支出为基数）
             for pt in r.get("equity_curve", []):
                 day = pt["trade_date"]
                 total_asset_by_day[day] = total_asset_by_day.get(day, cash) + pt["total_asset"]
+
+        _report_progress()
 
         # 组合权益曲线（按交易日升序）
         equity_curve = [{"trade_date": day, "total_asset": round(v, 2)}

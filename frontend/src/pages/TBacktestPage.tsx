@@ -18,6 +18,14 @@ interface BtTask {
   error_message?: string;
   created_at?: string;
   conditions_json?: any[];
+  progress?: number;
+}
+
+interface BtEvent {
+  event_type: string;
+  trade_day: string;
+  bar_time: string;
+  data?: any;
 }
 
 interface BtMetrics {
@@ -58,6 +66,8 @@ export default function TBacktestPage() {
   const [tasks, setTasks] = useState<BtTask[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [report, setReport] = useState<BtMetrics | null>(null);
+  const [liveEvents, setLiveEvents] = useState<BtEvent[]>([]);
+  const [liveProgress, setLiveProgress] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -86,13 +96,43 @@ export default function TBacktestPage() {
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
+  // 实时轮询：有 pending/running 任务时每 3s 刷新任务列表
+  useEffect(() => {
+    const hasLive = tasks.some((t) => t.status === 'pending' || t.status === 'running');
+    if (!hasLive) return;
+    const timer = window.setInterval(() => { loadTasks(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [tasks, loadTasks]);
+
+  // 选中任务：running → 轮询详情（进度）+ 事件流；完成 → 加载报告
   useEffect(() => {
     let alive = true;
-    if (selectedId == null) { setReport(null); return; }
-    tBacktestApi.report(selectedId)
-      .then((r) => { if (alive) setReport(r.data as BtMetrics); })
-      .catch(() => { if (alive) setReport(null); });
-    return () => { alive = false; };
+    let timer: number | undefined;
+    if (selectedId == null) { setReport(null); setLiveEvents([]); setLiveProgress(null); return; }
+    const sel = tasks.find((t) => t.id === selectedId);
+    const refresh = () => {
+      tBacktestApi.detail(selectedId)
+        .then((r: any) => {
+          if (!alive) return;
+          const d = r.data;
+          const p = Number(d?.task?.progress ?? 0);
+          setLiveProgress(d?.task?.status === 'running' || d?.task?.status === 'pending' ? p : null);
+          if (d?.task?.status === 'running' || d?.task?.status === 'pending') {
+            tBacktestApi.events(selectedId, 300)
+              .then((er: any) => { if (alive) setLiveEvents((er.data as any)?.events || []); })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+      tBacktestApi.report(selectedId)
+        .then((r) => { if (alive) setReport(r.data as BtMetrics); })
+        .catch(() => { if (alive) setReport(null); });
+    };
+    refresh();
+    if (sel && (sel.status === 'pending' || sel.status === 'running')) {
+      timer = window.setInterval(refresh, 3000);
+    }
+    return () => { alive = false; if (timer) window.clearInterval(timer); };
   }, [selectedId, tasks]);
 
   const loadCandidates = async () => {
@@ -205,6 +245,14 @@ export default function TBacktestPage() {
                   <span className="tbt-task-meta">
                     {fmtDay(t.start_date)} → {fmtDay(t.end_date)} · {t.review_mode === 'llm' ? 'LLM复核' : '规则复核'}
                   </span>
+                  {(t.status === 'running' || t.status === 'pending') && (
+                    <span className="tbt-progress">
+                      <span className="tbt-progress-bar">
+                        <span className="tbt-progress-fill" style={{ width: `${Math.max(2, Math.min(100, t.progress ?? 0))}%` }} />
+                      </span>
+                      <span className="tbt-progress-pct">{t.status === 'running' ? `${t.progress ?? 0}%` : '排队中'}</span>
+                    </span>
+                  )}
                   {t.status === 'failed' && <span className="tbt-task-err">{t.error_message}</span>}
                   {t.status === 'running' || t.status === 'pending' ? (
                     <button className="tbt-btn tbt-btn-mini" onClick={(e) => { e.stopPropagation(); cancelTask(t.id); }}>取消</button>
@@ -435,7 +483,47 @@ export default function TBacktestPage() {
 
           {selectedId != null && !report && (
             <section className="tbt-panel">
-              <div className="tbt-empty-report">任务 #{selectedId} 报告尚未生成（{STATUS_LABEL[tasks.find((t) => t.id === selectedId)?.status || ''] || '状态未知'}），稍后刷新</div>
+              {liveProgress != null ? (
+                <div className="tbt-live">
+                  <div className="tbt-panel-head">
+                    <span>实时进展 #{selectedId}</span>
+                    <span className="tbt-status is-running">回测中 {liveProgress}%</span>
+                  </div>
+                  <div className="tbt-progress tbt-progress-lg">
+                    <span className="tbt-progress-bar">
+                      <span className="tbt-progress-fill" style={{ width: `${Math.max(2, Math.min(100, liveProgress))}%` }} />
+                    </span>
+                    <span className="tbt-progress-pct">{liveProgress}%</span>
+                  </div>
+                  {liveEvents.length > 0 && (
+                    <div className="tbt-table-wrap">
+                      <h4>实时事件流（{liveEvents.length}）</h4>
+                      <table className="tbt-table">
+                        <thead><tr><th>类型</th><th>交易日</th><th>时间</th><th>内容</th></tr></thead>
+                        <tbody>
+                          {liveEvents.slice(-50).reverse().map((ev, i) => {
+                            const d = ev.data || {};
+                            const trig = d.trigger || {};
+                            const detail = d.reason || d.decision || (trig.event_type ? `触发 ${trig.event_type} @ ${trig.trigger_price}` : '') || JSON.stringify(d).slice(0, 80);
+                            return (
+                              <tr key={i}>
+                                <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
+                                <td>{ev.trade_day}</td>
+                                <td>{ev.bar_time || ''}</td>
+                                <td className="tbt-cell-reason">{String(detail)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="tbt-empty-report">
+                  任务 #{selectedId} 报告尚未生成（{STATUS_LABEL[tasks.find((t) => t.id === selectedId)?.status || ''] || '状态未知'}），稍后刷新
+                </div>
+              )}
             </section>
           )}
         </main>
