@@ -548,6 +548,9 @@ def _apply_t_backtest_migration():
             conn.execute(text(
                 "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS rolling_build BOOLEAN NOT NULL DEFAULT FALSE"
             ))
+            conn.execute(text(
+                "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS rolling_scan BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
             # 2) 事件流（触发/复核/拦截/缺口）
             conn.execute(text(
                 """

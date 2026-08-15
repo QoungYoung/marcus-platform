@@ -32,10 +32,12 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 review_mode: str = "llm", symbols: Optional[List[str]] = None,
                 build_mode: bool = False, build_limit_ratio: float = 0.55,
                 select_source: str = "manual", select_limit: int = 10,
-                rolling_build: bool = False) -> Optional[int]:
+                rolling_build: bool = False,
+                rolling_scan: bool = False) -> Optional[int]:
     """创建回测任务（status=pending）。组合模式：symbols 列表或 select_source 自动选股。
 
     rolling_build=True：每日滚动建仓（对齐实盘 daily_auto：盘后扫描 → 次日建仓）。
+    rolling_scan=True：滚动建仓 + 全市场历史扫描补充（回测版 scan_t_candidates_historical）。
     """
     try:
         db = SessionLocal()
@@ -46,10 +48,10 @@ def create_task(symbol: str, start_date: str, end_date: str,
                     symbol, start_date, end_date, init_shares, init_price,
                     net_asset, review_mode, conditions_json, symbols_json,
                     build_mode, build_limit_ratio, select_source, select_limit,
-                    rolling_build
+                    rolling_build, rolling_scan
                 ) VALUES (:symbol, :start, :end, :shares, :price, :asset, :mode, :conds,
                           :symbols, :build_mode, :build_limit, :sel_src, :sel_lim,
-                          :rolling_build)
+                          :rolling_build, :rolling_scan)
                 RETURNING id
                 """
             ), {
@@ -62,6 +64,7 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 "sel_src": select_source if select_source in ("manual", "pool", "scan") else "manual",
                 "sel_lim": int(select_limit),
                 "rolling_build": bool(rolling_build),
+                "rolling_scan": bool(rolling_scan),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -429,6 +432,44 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 ext_start = start
             d = btd.prefetch_stock_daily([s], ext_start, end, task_dir)
             gaps.extend(d.get("gaps", []))
+        # 全市场滚动扫描（rolling_scan）：预取全市场列表的日线（粗筛/精筛用），
+        # 再对粗筛活跃池预取 m5（建仓标的从中产生，m5 必须可用）
+        rolling_scan = bool(task.get("rolling_scan", False))
+        if rolling_scan and is_combined:
+            try:
+                from app.services.t_build import _fetch_all_a_symbols, _coarse_filter_active
+                all_syms = _fetch_all_a_symbols()
+                all_codes = [r["symbol"] for r in (all_syms or [])]
+                task["_all_symbols"] = all_codes
+                print(f"[t-backtest] rolling_scan 全市场列表 {len(all_codes)} 只")
+                # 日线预取：粗筛需要近 5 日成交额/振幅 + 精筛需要 40 根趋势 → 预取窗口
+                _ext = (_dt.strptime(start, "%Y-%m-%d") - _td(days=70)).strftime("%Y-%m-%d")
+                _n = 0
+                for code in all_codes:
+                    try:
+                        d2 = btd.prefetch_stock_daily([code], _ext, end, task_dir)
+                        gaps.extend(d2.get("gaps", []))
+                        _n += 1
+                    except Exception as _e:
+                        print(f"[t-backtest] rolling_scan 日线预取失败 {code}: {str(_e)[:60]}")
+                print(f"[t-backtest] rolling_scan 日线预取完成（{_n} 只）")
+                # 粗筛活跃池（历史日线口径，as_of=窗口首日前一交易日）→ 预取 m5
+                try:
+                    from app.services import t_build as _tb
+                    as_of0 = (_dt.strptime(start, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
+                    hist = _tb.scan_t_candidates_historical(
+                        all_codes, str(task_dir), as_of=as_of0,
+                        quality_fn=_tb._quality_from_daily, limit=50)
+                    active_codes = [c["symbol"] for c in hist if c.get("symbol")]
+                    print(f"[t-backtest] rolling_scan 粗筛活跃池 {len(active_codes)} 只，预取 m5")
+                    for code in active_codes:
+                        r = btd.prefetch_m5(code, days, task_dir, is_index=False)
+                        gaps.extend(r.get("gaps", []))
+                except Exception as e:
+                    print(f"[t-backtest] rolling_scan m5 预取失败: {e}")
+            except Exception as e:
+                print(f"[t-backtest] rolling_scan 全市场列表失败: {e}")
+                rolling_scan = False
         if not btd.SKIP_INDEX_M5:
             for key, ts in (("hs300", "000300.SH"), ("sh", "000001.SH"), ("sz", "399001.SZ")):
                 r = btd.prefetch_m5(key, days, task_dir, is_index=True, ts_code=ts)

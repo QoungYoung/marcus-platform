@@ -467,6 +467,7 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
       + 趋势闸门 + 风险惩罚），单次 ≤50 票（1s 节流）。粗筛结果当日缓存，不重复拉全市场。
     - 日频低频：调用方（Agent/前端）不应高频触发；缓存保证重复调用不重复网络请求。
     - as_of: 回测用截止日（日线历史化）；quality_override_fn: 回测质量分函数（防前视）。
+    - 回测全市场扫描请用 scan_t_candidates_historical（历史日线粗筛，无实时行情依赖）。
     """
     if source == "user":
         raise ValueError("user 来源需显式传入 symbols")
@@ -492,6 +493,80 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
         except Exception as e:
             print(f"[t-build] 扫描 {sym} 失败: {e}")
         time.sleep(1.0)  # 1s 节流（分钟线/日线限流）
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results
+
+
+def scan_t_candidates_historical(symbols: List[str],
+                                 data_dir: str, as_of: str,
+                                 quality_fn: Optional[callable] = None,
+                                 limit: int = 20) -> List[Dict[str, Any]]:
+    """回测版全市场扫描：候选列表（stock_basic 过滤后）→ 历史日线粗筛（as_of 前近 5 日
+    成交额/振幅，防前视）→ 精筛（build_score as_of 历史化 + quality_fn 注入历史质量分）。
+
+    与生产 scan_t_candidates 对齐：粗筛（成交额≥8亿 ∧ 振幅∈[1%,10%]）→ 精筛打分排序。
+    唯一区别：粗筛数据源为回测缓存日线（load_stock_daily），无实时行情/网络依赖。
+
+    Args:
+        symbols: 全市场候选 symbol 列表（已过滤 ST/北交所/次新）
+        data_dir: 回测缓存目录（stock_daily 子目录）
+        as_of: 截止日（YYYY-MM-DD；粗筛/打分只用 ≤ as_of 的日线）
+        quality_fn: 回测质量分函数 fn(bars) -> {score, pass_gate, reasons}
+                    （如 _quality_from_daily）；None 时用 _quality_from_daily
+        limit: 返回候选上限（粗筛后按成交额降序取前 limit 精筛）
+    """
+    from app.services.t_backtest_data import load_stock_daily
+    from pathlib import Path
+    d = Path(data_dir)
+    as_of8 = str(as_of).replace("-", "")
+    # 1) 历史粗筛：近 5 日成交额均值 ≥8亿 ∧ 近 5 日振幅均值 ∈[1%,10%]
+    coarse: List[Dict[str, float]] = []
+    for sym in symbols:
+        try:
+            bars = load_stock_daily(sym, d, as_of=as_of)
+        except Exception:
+            continue
+        if not bars or len(bars) < 5:
+            continue
+        recent = [b for b in bars if str(b.get("trade_date", "")).replace("-", "") <= as_of8][-5:]
+        if len(recent) < 3:
+            continue
+        amounts, amps = [], []
+        for i in range(1, len(recent)):
+            b = recent[i]
+            prev_close = float(b.get("pre_close") or b.get("close") or 0)
+            if prev_close <= 0:
+                continue
+            amps.append((float(b["high"]) - float(b["low"])) / prev_close * 100)
+            amounts.append(float(b.get("amount") or 0) * 1000)  # tushare 千元 → 元
+        if not amps:
+            continue
+        avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
+        avg_amp = sum(amps) / len(amps)
+        if avg_amount >= SCAN_COARSE_MIN_AMOUNT and SCAN_COARSE_AMPLITUDE[0] <= avg_amp <= SCAN_COARSE_AMPLITUDE[1]:
+            coarse.append({"symbol": sym, "amount": avg_amount})
+    coarse.sort(key=lambda x: x["amount"], reverse=True)
+    print(f"[t-build] 回测粗筛活跃池: {len(coarse)}/{len(symbols)} 只（历史日线 as_of={as_of}）")
+    # 2) 精筛：build_score as_of 历史化 + 质量分注入（防前视）
+    results = []
+    for c in coarse[:max(limit, SCAN_MAX_DAILY)]:
+        sym = c["symbol"]
+        try:
+            bars_daily = load_stock_daily(sym, d, as_of=as_of)
+            if not bars_daily or len(bars_daily) < 25:
+                continue
+            daily_bars_t = [{"date": b["trade_date"], "open": b["open"], "close": b["close"],
+                             "high": b["high"], "low": b["low"], "vol": b["vol"], "amount": b["amount"]}
+                            for b in bars_daily]
+            if quality_fn is not None:
+                quality = quality_fn(daily_bars_t)
+            else:
+                quality = _quality_from_daily(daily_bars_t)
+            r = build_score(sym, source="scan", as_of=as_of,
+                            quality_override=quality, bars=daily_bars_t)
+            results.append(r)
+        except Exception as e:
+            print(f"[t-build] 回测扫描 {sym} 失败: {e}")
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
 

@@ -1110,6 +1110,8 @@ class TCombinedBacktestEngine:
         self.symbols: List[str] = task.get("symbols") or []
         self.build_mode = bool(task.get("build_mode", False))
         self.rolling_build = bool(task.get("rolling_build", False))  # 每日滚动建仓（对齐实盘 daily_auto）
+        self.rolling_scan = bool(task.get("rolling_scan", False))    # 滚动建仓+全市场历史扫描补充
+        self._all_symbols: Optional[List[str]] = task.get("_all_symbols") or None
         self.net_asset = float(task.get("net_asset", 200000.0))
         self.build_limit_ratio = float(task.get("build_limit_ratio", 0.55))
         self.conditions = task.get("conditions") or []
@@ -1334,11 +1336,26 @@ class TCombinedBacktestEngine:
             next_day = trade_days[idx + 1] if idx + 1 < len(trade_days) else None
             if next_day is None:
                 break  # 窗口末日不建仓（无做T日）
-            # 候选 = 固定传入候选（self.symbols）中未建仓的。
-            # 注：不做全市场 scan 补充——scan_t_candidates 用实时行情打分有前视风险，
-            # 且回测 m5 缓存仅覆盖传入标的（scan 标的无 m5 无法建仓）。
-            # 实盘对齐：候选池由盘后 daily_auto_select 维护，回测以传入列表模拟其逐日滚动。
-            for sym in self.symbols:
+            # 当日候选：
+            #   - 固定候选（self.symbols）中未建仓的（对齐实盘候选池）
+            #   - rolling_scan 时补充全市场历史扫描（对齐实盘 daily_auto_select 全市场扫描）
+            cand_syms: List[str] = list(self.symbols)
+            if getattr(self, "rolling_scan", False):
+                try:
+                    from app.services import t_build as _tb
+                    _all = self._all_symbols
+                    if not _all:
+                        _raw = _tb._fetch_all_a_symbols()
+                        _all = [r["symbol"] for r in (_raw or [])]
+                        self._all_symbols = _all
+                    scan_cands = _tb.scan_t_candidates_historical(
+                        _all, self.data_dir, as_of=trade_day,
+                        quality_fn=_tb._quality_from_daily, limit=20)
+                    scan_syms = [c["symbol"] for c in scan_cands if c.get("pass_gate")]
+                    cand_syms = list(dict.fromkeys(cand_syms + scan_syms))
+                except Exception as e:
+                    print(f"[t-backtest] 滚动建仓全市场扫描失败: {e}")
+            for sym in cand_syms:
                 if any(b["symbol"] == sym for b in builds):
                     continue  # 已建仓
                 bars_daily = load_stock_daily(sym, d, as_of=trade_day)
@@ -1358,6 +1375,16 @@ class TCombinedBacktestEngine:
                                             "reasons": r["reasons"] or ["打分未达标"]})
                     continue
                 next_bars = [b for b in m5_map.get(sym, []) if _day_key(b["time"]) == next_day]
+                # rolling_scan 新标的 m5 可能不在 m5_map（runner 已预取到缓存目录）
+                if not next_bars:
+                    try:
+                        from app.services.t_backtest_data import load_m5
+                        _m5 = load_m5(sym, d)
+                        if _m5:
+                            m5_map[sym] = _m5
+                            next_bars = [b for b in _m5 if _day_key(b["time"]) == next_day]
+                    except Exception:
+                        pass
                 price = float(next_bars[0]["open"]) if next_bars else 0.0
                 if price <= 0:
                     build_decisions.append({"symbol": sym, "decision": "rejected",
