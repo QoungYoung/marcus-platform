@@ -4,9 +4,9 @@
 数据源（见 design.md D3）：
 - 标的/指数分钟线：brze tushare 代理 `stk_mins` / `index_min`，按 trade_date 逐日拉取
   （单次调用行数有上限，逐日天然规避；卖家要求单线程串行 + 间隔≥1s，见 t_data_sources._brze_rate_limit）
-- 指数日线：tushare 直连 `index_daily` 主源（项目统一入口 get_tushare_pro，.env TUSHARE_TOKEN），
+- 指数日线：tushare 直连 `index_daily` 主源（项目统一入口 get_tushare_pro，.env TUSHARE_TOKEN/TUSHARE_API_URL=gyzcloud 代理），
   降级东财（免费 klt=101）→ brze（regime L1 近似 / 昨收基准）
-- 交易日历：brze `trade_cal`（SSE，is_open=1）
+- 交易日历：gyzcloud 代理 `trade_cal`（.env 配置，主源）→ 降级 brze → 工作日近似
 
 缓存布局（data/t_backtest/{task_id}/）：
 - m5/{symbol}.json          → [{time, open, close, high, low, vol, amount}, ...]（全部交易日合并，按时间升序）
@@ -45,8 +45,30 @@ SKIP_INDEX_M5 = True
 # 交易日历
 # ────────────────────────────────────────────────────────────────
 
-def resolve_trade_days(start_date: str, end_date: str) -> List[str]:
-    """返回 [start, end] 内的 A 股交易日（YYYYMMDD，升序）。失败降级工作日近似。"""
+def _fetch_trade_cal_gyzcloud(start_date: str, end_date: str) -> Optional[List[str]]:
+    """gyzcloud 代理 trade_cal（.env TUSHARE_TOKEN/TUSHARE_API_URL，主源）。
+
+    brze trade_cal 曾返回 "tenant key expired"，故交易日历改走 gyzcloud（150次/分钟限频，串行+间隔 0.4s）。
+    """
+    try:
+        from app.core.trading._api_config import get_tushare_pro
+        _brze_rate_limit()  # 复用全局串行/冷却（与 brze 共用，避免并发调用）
+        pro = get_tushare_pro()
+        df = pro.trade_cal(
+            exchange="SSE",
+            start_date=start_date.replace("-", ""),
+            end_date=end_date.replace("-", ""),
+        )
+        if df is not None and len(df) > 0:
+            days = [str(r["cal_date"]) for _, r in df.iterrows() if int(r.get("is_open", 0)) == 1]
+            return sorted(days)
+    except Exception as e:
+        print(f"[t-backtest-data] gyzcloud trade_cal 失败: {e}")
+    return None
+
+
+def _fetch_trade_cal_brze(start_date: str, end_date: str) -> Optional[List[str]]:
+    """brze 代理 trade_cal（降级通道）。"""
     try:
         _brze_rate_limit()
         pro = _get_brze_pro()
@@ -59,7 +81,19 @@ def resolve_trade_days(start_date: str, end_date: str) -> List[str]:
             days = [str(r["cal_date"]) for _, r in df.iterrows() if int(r.get("is_open", 0)) == 1]
             return sorted(days)
     except Exception as e:
-        print(f"[t-backtest-data] trade_cal 失败: {e}")
+        print(f"[t-backtest-data] brze trade_cal 失败: {e}")
+    return None
+
+
+def resolve_trade_days(start_date: str, end_date: str) -> List[str]:
+    """返回 [start, end] 内的 A 股交易日（YYYYMMDD，升序）。
+
+    主源 gyzcloud 代理 trade_cal（.env 配置）→ 降级 brze → 最后工作日近似。
+    """
+    for fn in (_fetch_trade_cal_gyzcloud, _fetch_trade_cal_brze):
+        days = fn(start_date, end_date)
+        if days:
+            return days
     # 降级：周一至周五近似（不含节假日）
     out = []
     d = datetime.strptime(start_date, "%Y-%m-%d")
