@@ -373,6 +373,90 @@ class TestEngineCore(unittest.TestCase):
         self.assertTrue(len(buybacks) > 0 or len(buyback_blocked) > 0,
                         "买回腿必须走网关（成交或被拒），不得静默")
 
+    def test_ai_update_condition_applies(self):
+        """AI update_condition → 条件目标价更新（当日剩余 bar 与后续交易日生效）→ 事件记录。"""
+        from app.services.t_backtest import TBacktestEngine
+        calls = {"n": 0}
+
+        def review_fn(rev_ctx):
+            calls["n"] += 1
+            # 首次触发给 update_condition（把低吸目标价拉高），后续 exec
+            if calls["n"] == 1:
+                return {"action": "update_condition", "reason": "目标价过低够不着",
+                        "condition": {"trigger_kind": "low_buy", "target_price": 10.1,
+                                      "stop_loss_price": 9.2}}
+            return {"action": "exec", "reason": "到位"}
+
+        task = {
+            "symbol": self.symbol, "init_shares": 1000, "init_price": 10.0,
+            "net_asset": 200000.0,
+            "conditions": [{
+                "id": 1, "trigger_kind": "low_buy", "target_price": 9.9,
+                "stop_loss_price": 9.0, "vol_ratio_thresh": 0.0, "armed": 1,
+            }],
+        }
+        r = TBacktestEngine(task, str(self.cache), review_fn=review_fn).run()
+        updates = [e for e in r["events"] if e.get("type") == "condition_update"]
+        self.assertGreater(len(updates), 0, "AI update_condition 应记录事件")
+        self.assertGreaterEqual(r["metrics"].get("ai_condition_update_count", 0), 1)
+        # 条件更新后仍可 exec（update 不撮合，但后续触发正常撮合）
+        self.assertGreater(r["metrics"]["executed_count"], 0, "更新后触发应可成交")
+
+    def test_ai_update_condition_missing_cond_conservative(self):
+        """update_condition 缺 condition → 保守等待（不崩溃、不撮合）。"""
+        from app.services.t_backtest import TBacktestEngine
+
+        def review_fn(rev_ctx):
+            return {"action": "update_condition", "reason": "无 condition"}
+
+        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
+        self.assertEqual(r["metrics"]["executed_count"], 0)
+        self.assertGreaterEqual(r["metrics"].get("ai_condition_update_count", 0), 0)
+
+    def test_gen_t_conditions_ai_fallback_rule(self):
+        """LLM 模式 AI 条件生成：bridge 不可达（返回 None）→ 回退规则公式（结构完整）。"""
+        from app.services.t_backtest import _gen_t_conditions
+        with patch("app.services.t_bridge.generate_conditions", return_value=None):
+            conds = _gen_t_conditions(review_fn=lambda x: {}, symbol="TEST", price=10.0,
+                                      amp_med=5.0)
+        kinds = {c["trigger_kind"] for c in conds}
+        self.assertIn("low_buy", kinds)
+        self.assertIn("high_sell_then_buy_back", kinds)
+        for c in conds:
+            self.assertGreater(c["target_price"], 0)
+            self.assertIn("stop_loss_price", c)
+        # 低吸 < 成本 < 高抛
+        low = next(c for c in conds if c["trigger_kind"] == "low_buy")
+        high = next(c for c in conds if c["trigger_kind"] == "high_sell_then_buy_back")
+        self.assertLess(low["target_price"], 10.0)
+        self.assertGreater(high["target_price"], 10.0)
+
+    def test_gen_t_conditions_ai_result_used(self):
+        """LLM 模式 AI 条件生成：bridge 返回 AI 条件 → 直接采用（并补齐 stop_loss_price）。"""
+        from app.services.t_backtest import _gen_t_conditions
+        ai_conds = [
+            {"trigger_kind": "low_buy", "target_price": 9.5, "sell_target_price": 10.3,
+             "vol_ratio_thresh": 1.5, "stabilize_level": "not_new_low"},
+            {"trigger_kind": "high_sell_then_buy_back", "target_price": 10.6,
+             "sell_target_price": 10.6, "vol_ratio_thresh": 1.2},
+        ]
+        with patch("app.services.t_bridge.generate_conditions",
+                   return_value={"conditions": ai_conds, "source": "ai", "reason": "AI 生成"}):
+            conds = _gen_t_conditions(review_fn=lambda x: {}, symbol="TEST", price=10.0,
+                                      amp_med=5.0)
+        self.assertEqual(len(conds), 2)
+        # AI 漏给 stop_loss_price → 按规则补齐
+        self.assertTrue(all(c.get("stop_loss_price", 0) > 0 for c in conds),
+                        "AI 条件缺失止损价应补齐")
+
+    def test_gen_t_conditions_rule_mode_no_ai_call(self):
+        """规则模式（review_fn=None）→ 不调用 bridge，直接用规则公式。"""
+        from app.services.t_backtest import _gen_t_conditions
+        with patch("app.services.t_bridge.generate_conditions") as mock_gen:
+            conds = _gen_t_conditions(review_fn=None, symbol="TEST", price=10.0, amp_med=5.0)
+            mock_gen.assert_not_called()
+        self.assertEqual(len(conds), 2)
+
 
 # ────────────────────────────────────────────────────────────────
 # DB 链路（需 PostgreSQL）

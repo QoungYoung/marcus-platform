@@ -1058,8 +1058,10 @@ def build_t_position(symbol: str, price: float, volume: Optional[int] = None,
 # ────────────────────────────────────────────────────────────────
 
 def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
-    """为刚建仓标的生成次日（D+1）t_conditions（双条件：低吸 + 高抛回补，复用 build_t_conditions）。
+    """为刚建仓标的生成次日（D+1）t_conditions（双条件：低吸 + 高抛回补）。
 
+    AI 自主条件模式（AI 主导闭环）：优先 POST bridge /conditions/generate 让 AI 设定
+    触发价/量比/止损；桥不可达或解析失败回退规则公式 build_t_conditions。
     建仓当日不生成当日条件（sellable=0 无法触发）；次日该标的进 live 池后可做T。
     振幅用近 6 日 m5 日振幅中位自适应；无 m5 数据时用下限阈值。
     """
@@ -1078,8 +1080,23 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
             amp_med = _median(amps) if amps else None
         except Exception:
             amp_med = None
+        # ① AI 自主设定条件（失败回退规则公式）
+        conds: Optional[List[Dict[str, Any]]] = None
+        cond_source = "rule"
+        try:
+            from app.services.t_bridge import generate_conditions
+            res = generate_conditions(symbol, avg_price, amp_med=amp_med,
+                                      session_id=f"t-agent-{symbol}")
+            if res and res.get("conditions"):
+                conds = res["conditions"]
+                cond_source = res.get("source", "ai")
+        except Exception as e:
+            print(f"[t-build] AI 条件生成异常 {symbol}: {e}（回退规则公式）")
+            conds = None
+        if not conds:
+            conds = build_t_conditions(avg_price, amp_med)
         ok = True
-        for cond in build_t_conditions(avg_price, amp_med):
+        for cond in conds:
             cond = {
                 **cond,
                 "account_id": ACCOUNT_T,
@@ -1089,6 +1106,9 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
             cid = t_db.upsert_condition(cond)
             if cid is None:
                 ok = False
+        print(f"[t-build] 次日条件生成 {symbol}（{cond_source}）："
+              + "; ".join(f"{c.get('trigger_kind')}@{c.get('target_price')}"
+                          for c in conds))
         return ok
     except Exception as e:
         print(f"[t-build] 次日条件生成失败 {symbol}: {e}")

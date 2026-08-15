@@ -341,12 +341,14 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
-        # AI 决策动作：exec / wait / abandon（兼容旧 decision:auto→exec, human→wait）
+        # AI 决策动作：exec / wait / abandon / update_condition
+        # （兼容旧 decision:auto→exec, human→wait）
         action = str(body.get("action") or "")
-        if action not in ("exec", "wait", "abandon"):
+        if action not in ("exec", "wait", "abandon", "update_condition"):
             action = "exec" if body.get("decision") == "auto" else "wait"
         return {"action": action, "decision": "auto" if action == "exec" else "human",
-                "reason": str(body.get("reason") or "")[:500]}
+                "reason": str(body.get("reason") or "")[:500],
+                "condition": body.get("condition") if action == "update_condition" else None}
 
     return review
 

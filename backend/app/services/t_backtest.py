@@ -11,6 +11,7 @@
 数据流（防前视）：评估点只使用 bar_time <= tick 的历史数据；日线基准只用 trade_date < T 的数据。
 """
 from datetime import datetime
+import json
 from typing import Any, Dict, List, Optional
 
 from app.services.t_expr import evaluate_expression, expression_summary
@@ -489,7 +490,7 @@ class TBacktestEngine:
         summary: Dict[str, Any] = {
             "triggers": 0, "reviews": 0, "executed": 0, "blocked": 0,
             "escalated_human": 0, "data_gaps": 0, "ai_wait": 0, "ai_abandon": 0,
-            "stop_losses": 0,
+            "stop_losses": 0, "ai_condition_updates": 0,
         }
 
         total_days = len(self.trade_days)
@@ -589,7 +590,7 @@ class TBacktestEngine:
                         day_trigger_count[cid] = day_trigger_count.get(cid, 0) + 1
                         c["last_triggered_at"] = tick_dt
                         self._handle_trigger(c, bar, day_bars, i, snapshot, regime, ledger,
-                                             trade_day, summary, cancel_event)
+                                             trade_day, summary, cancel_event, day_conds)
                         # 高抛成交后当日 disarm（T+0 闭环一轮 → 次日条件重建时重新武装），
                         # 防止多次触发把可卖底仓快速耗尽后继续触发
                         if tkind in ("high_sell_then_buy_back", "high_sell"):
@@ -699,7 +700,8 @@ class TBacktestEngine:
     def _handle_trigger(self, cond: Dict[str, Any], bar: dict, day_bars: List[dict],
                         bar_idx: int, snapshot: Dict[str, Any], regime: Dict[str, Any],
                         ledger: TBacktestLedger, trade_day: str,
-                        summary: Dict[str, Any], cancel_event: Optional[Any]):
+                        summary: Dict[str, Any], cancel_event: Optional[Any],
+                        day_conds: Optional[List[Dict[str, Any]]] = None):
         summary["triggers"] += 1
         trigger_kind = cond.get("trigger_kind", "low_buy")
         side = "buy" if trigger_kind in ("low_buy", "panic_vibrate") else "sell"
@@ -735,11 +737,22 @@ class TBacktestEngine:
         self.events.append({"type": "trigger", "data": trigger})
 
         # 复核：规则模式（无 DB 纯规则）或 LLM（review_fn）→ AI 决策动作
-        action, reason = self._review(trigger, regime, ledger, summary)
+        action, reason, cond_update = self._review(trigger, regime, ledger, summary)
         self.events.append({"type": "review", "data": {
             "trigger_id": len(self.events), "action": action,
             "reason": reason, "mode": "llm" if self.review_fn else "rule",
         }})
+        if action == "update_condition":
+            # AI 自主调整监控条件（P0-5：条件与行情脱节时由 AI 更新目标价/止损，
+            # 当日剩余 bar 与后续交易日立即生效）
+            summary["ai_condition_updates"] += 1
+            summary["ai_wait"] += 1
+            self._apply_condition_update(cond_update or {}, day_conds)
+            self.events.append({"type": "condition_update", "data": {
+                "trigger": trigger, "update": cond_update or {},
+                "reason": reason,
+            }})
+            return
         if action == "wait":
             summary["ai_wait"] += 1
             self.events.append({"type": "ai_wait", "data": {
@@ -941,9 +954,9 @@ class TBacktestEngine:
 
     def _review(self, trigger: Dict[str, Any], regime: Dict[str, Any],
                 ledger: TBacktestLedger, summary: Dict[str, Any]):
-        """复核决策：LLM（review_fn）→ AI 决策动作（exec/wait/abandon）；规则（无 DB 纯规则）。
-
-        返回 (action, reason)，action ∈ exec/wait/abandon。
+        """复核决策：LLM（review_fn）→ AI 决策动作（exec/wait/abandon/update_condition）；
+        规则（无 DB 纯规则）。返回 (action, reason, cond_update)，
+        action ∈ exec/wait/abandon/update_condition，cond_update 仅 update_condition 时非空。
         规则模式对齐 classify_escalation 语义：auto→exec、human→abandon（回测中不撮合）。
         """
         summary["reviews"] += 1
@@ -966,14 +979,50 @@ class TBacktestEngine:
                     "position": position,
                 })
                 action = str(r.get("action") or "")
-                if action not in ("exec", "wait", "abandon"):
+                cond_update: Optional[Dict[str, Any]] = None
+                if action == "update_condition":
+                    cond_update = r.get("condition") if isinstance(r.get("condition"), dict) else None
+                    if not cond_update:
+                        return "wait", "update_condition 缺 condition（保守等待）", None
+                elif action not in ("exec", "wait", "abandon"):
                     # 兼容旧语义：decision auto→exec、human→wait（保守）
                     action = "exec" if r.get("decision") == "auto" else "wait"
-                return action, str(r.get("reason") or "LLM 决策")
+                return action, str(r.get("reason") or "LLM 决策"), cond_update
             except Exception as e:
-                return "wait", f"决策异常(保守等待): {str(e)[:120]}"
+                return "wait", f"决策异常(保守等待): {str(e)[:120]}", None
         action, reason = _rule_review(trigger, regime, ledger)
-        return action, reason
+        return action, reason, None
+
+    def _apply_condition_update(self, cond_update: Dict[str, Any],
+                                day_conds: Optional[List[Dict[str, Any]]] = None):
+        """AI update_condition 落地：按 trigger_kind 更新条件参数（目标价/止损/量比/企稳），
+        当日剩余 bar（day_conds）与后续交易日（self.conditions）同步生效。"""
+        kind = str(cond_update.get("trigger_kind") or "")
+        if not kind:
+            return
+        # 允许更新的字段白名单（防 AI 写入无意义字段）
+        updatable = ("target_price", "sell_target_price", "stop_loss_price",
+                     "vol_ratio_thresh", "stabilize_level", "time_window")
+        patch = {k: v for k, v in cond_update.items()
+                 if k in updatable and v is not None and v != ""}
+        if not patch:
+            return
+        targets = list(self.conditions) + [c for c in (day_conds or [])]
+        seen = set()
+        for c in targets:
+            if c.get("trigger_kind") != kind:
+                continue
+            cid = c.get("id") or c.get("_bt_index", 0)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            for k, v in patch.items():
+                c[k] = v
+            # 更新后重新武装（清除冷却/当日触发计数由 day_trigger_count 独立管理）
+            c["armed"] = 1
+            c["last_triggered_at"] = None
+        print(f"[t-backtest] AI 调整条件 {self.symbol} {kind}: "
+              f"{json.dumps(patch, ensure_ascii=False)}")
 
 
 def _rule_review(trigger: Dict[str, Any], regime: Dict[str, Any],
@@ -1058,6 +1107,7 @@ def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
         "ai_exec_count": ai_exec_total,
         "ai_exec_avg_pct": round(sum(ai_exec_pcts) / len(ai_exec_pcts), 3) if ai_exec_pcts else None,
         "stop_loss_count": summary.get("stop_losses", 0),
+        "ai_condition_update_count": summary.get("ai_condition_updates", 0),
         "data_gap_count": summary.get("data_gaps", 0),
         "execution_rate_pct": round(summary.get("executed", 0) / summary.get("triggers", 1) * 100, 2)
         if summary.get("triggers") else 0.0,
@@ -1114,6 +1164,29 @@ def _default_t_conditions(avg_price: float, amp_med: Optional[float] = None) -> 
     """
     from app.services.t_pool import build_t_conditions
     return build_t_conditions(avg_price, amp_med)
+
+
+def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
+                      amp_med: Optional[float] = None) -> List[Dict[str, Any]]:
+    """回测建仓条件生成：LLM 模式（review_fn 存在）→ AI 自主设定条件（bridge /conditions/generate，
+    带缓存）；桥不可达/解析失败回退规则公式 _default_t_conditions。规则模式直接用公式。"""
+    if review_fn is not None:
+        try:
+            from app.services.t_bridge import generate_conditions
+            res = generate_conditions(symbol, price, amp_med=amp_med,
+                                      session_id="t-backtest-conds")
+            if res and res.get("conditions"):
+                conds = res["conditions"]
+                # 兜底：AI 漏给 stop_loss_price 时按规则补（双条件止损须一致且低于成本）
+                for c in conds:
+                    if not c.get("stop_loss_price"):
+                        c["stop_loss_price"] = round(
+                            price * (1 - max(0.03, (amp_med or 3.0) / 100 * 0.55)), 2)
+                print(f"[t-backtest] AI 条件生成 {symbol}（{res.get('source')}）")
+                return conds
+        except Exception as e:
+            print(f"[t-backtest] AI 条件生成失败 {symbol}: {e}（回退规则公式）")
+    return _default_t_conditions(price, amp_med)
 
 
 class TCombinedBacktestEngine:
@@ -1274,8 +1347,9 @@ class TCombinedBacktestEngine:
         for b in built:
             if cancel_event is not None and cancel_event.is_set():
                 break
-            conds = self.conditions or _default_t_conditions(
-                b["price"], _amp_median_from_m5(m5_map.get(b["symbol"], [])))
+            conds = self.conditions or _gen_t_conditions(
+                self.review_fn, b["symbol"], b["price"],
+                _amp_median_from_m5(m5_map.get(b["symbol"], [])))
             sub_asset = b["price"] * b["shares"]   # 该标的预算 = 建仓支出
             sub_task = {
                 "symbol": b["symbol"], "init_shares": b["shares"],
@@ -1480,8 +1554,9 @@ class TCombinedBacktestEngine:
         for b in builds:
             if cancel_event is not None and cancel_event.is_set():
                 break
-            conds = self.conditions or _default_t_conditions(
-                b["price"], _amp_median_from_m5(m5_map.get(b["symbol"], [])))
+            conds = self.conditions or _gen_t_conditions(
+                self.review_fn, b["symbol"], b["price"],
+                _amp_median_from_m5(m5_map.get(b["symbol"], [])))
             sub_asset = b["price"] * b["shares"]
             sub_task = {
                 "symbol": b["symbol"], "init_shares": b["shares"],
@@ -1591,6 +1666,9 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
         "escalated_human_count": escalated,
         "ai_wait_count": ai_wait,
         "ai_abandon_count": ai_abandon,
+        "ai_condition_update_count": sum(
+            r.get("metrics", {}).get("ai_condition_update_count", 0) or 0
+            for r in per_symbol),
         "ai_exec_count": sum(r.get("metrics", {}).get("ai_exec_count", 0) or 0 for r in per_symbol),
         "ai_exec_win_rate_pct": _combine_ai_exec_win_rate(per_symbol),
         "realized_pnl": round(realized, 2),

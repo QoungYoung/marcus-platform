@@ -268,3 +268,77 @@ def fallback_poll_loop(stop_event):
         except Exception as e:
             print(f"[t-bridge] 兜底轮询异常: {e}")
         time.sleep(FALLBACK_POLL_INTERVAL)
+
+
+# ────────────────────────────────────────────────────────────────
+# AI 条件生成（AI 自主设定触发条件，系统条件命中后唤醒 AI 决策）
+# ────────────────────────────────────────────────────────────────
+
+# 条件生成结果缓存：key = (symbol, round(cost, 2), amp_med) → (conditions, source)
+# 同一建仓参数不重复唤醒 LLM（滚动建仓每日多标的时显著降低 LLM 调用量）
+_cond_gen_cache: Dict[tuple, tuple] = {}
+# 允许 AI 生成条件关闭（灾难回退开关）
+AI_CONDITIONS_ENABLED = True
+
+
+def _bridge_base_url() -> str:
+    """bridge 服务基址（去掉 /chat 路径段）——与 t_backtest_runner.bridge_base_url 同源。"""
+    try:
+        settings = get_settings()
+        raw = getattr(settings, "PI_SERVER_URL", "http://127.0.0.1:3001/chat").rstrip("/")
+    except Exception:
+        raw = "http://127.0.0.1:3001/chat"
+    scheme_sep = raw.find("://")
+    if scheme_sep >= 0:
+        rest = raw[scheme_sep + 3:]
+        host = rest.split("/", 1)[0]
+        return raw[:scheme_sep + 3] + host
+    return raw.rsplit("/", 1)[0] if "/" in raw else raw
+
+
+def generate_conditions(symbol: str, cost: float, amp_med: Optional[float] = None,
+                        trend: Optional[dict] = None, regime: Optional[dict] = None,
+                        context: Optional[dict] = None, session_id: Optional[str] = None,
+                        use_cache: bool = True) -> Optional[Dict[str, Any]]:
+    """AI 自主设定做T双条件（低吸 + 高抛回补）→ POST bridge /conditions/generate。
+
+    返回 {"conditions": [...], "source": "ai"|"fallback", "reason": ...}；
+    桥不可达 / AI 解析失败 / 开关关闭 → None（调用方回退规则公式 build_t_conditions）。
+    """
+    if not AI_CONDITIONS_ENABLED:
+        return None
+    cache_key = (symbol, round(float(cost), 2), round(float(amp_med), 3) if amp_med else None)
+    if use_cache and cache_key in _cond_gen_cache:
+        return dict(_cond_gen_cache[cache_key])  # 浅拷贝（conditions 列表引用可读）
+    payload = {
+        "symbol": symbol,
+        "cost": float(cost),
+        "amp_med": amp_med,
+        "trend": trend,
+        "regime": regime,
+        "context": context,
+        "session_id": session_id,
+    }
+    try:
+        req = urllib.request.Request(
+            _bridge_base_url() + "/conditions/generate",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        conditions = body.get("conditions") or []
+        source = body.get("source") or "ai"
+        if not conditions:
+            return None
+        result = {"conditions": conditions, "source": source,
+                  "reason": body.get("reason") or "AI 生成"}
+        if use_cache:
+            _cond_gen_cache[cache_key] = result
+        print(f"[t-bridge] AI 条件生成 {symbol} → {len(conditions)} 条 (source={source}, "
+              f"cost={cost})")
+        return result
+    except Exception as e:
+        print(f"[t-bridge] AI 条件生成失败 {symbol}: {e}（回退规则公式）")
+        return None

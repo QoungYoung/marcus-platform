@@ -903,7 +903,7 @@ function apply(ctx) {
                 ? ('持仓: 可卖' + pos.sellable + '股 总持仓' + pos.volume + '股 成本' + (pos.avg_price ?? '-') + ' 已实现盈亏' + (pos.realized_pnl ?? 0) + ' 当日回转' + (pos.day_turnover ?? 0))
                 : '持仓: （无回测持仓快照）';
               const prompt = [
-                '请对以下做T触发事件做出决策：执行（exec）、等待（wait）还是放弃（abandon）。',
+                '请对以下做T触发事件做出决策：执行（exec）、等待（wait）、放弃（abandon）或调整条件（update_condition）。',
                 '',
                 '标的: ' + (symbol || trigger.symbol || ''),
                 '触发: ' + JSON.stringify(trigger, null, 1),
@@ -913,7 +913,8 @@ function apply(ctx) {
                 '',
                 '判定要点：量价合理性、regime 档位、可卖底仓（以上方持仓快照为准，勿引用外部账户）、风控状态、连续命中次数、触发与目标价的价差空间。',
                 '盈亏比导向：高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——有可卖底仓时触达高抛价应倾向 exec；低吸买腿需确认价差覆盖成本且非追跌。',
-                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon","reason":"一句话理由"}',
+                'update_condition：当触发价与当前行情明显脱节（如连续命中无改善、目标价永远够不着）时，给出调整后的条件参数；必须附 condition 对象。',
+                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}（condition 仅 update_condition 时必填，含 trigger_kind/target_price/stop_loss_price 等）',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
               const parsed = parseDecision(reply);
@@ -925,35 +926,143 @@ function apply(ctx) {
             }
           },
         }),
+        ctx.webServer.register({
+          kind: 'exact',
+          path: '/conditions/generate',
+          async handler(req, res) {
+            if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' }); res.end(); return; }
+            if (req.method !== 'POST') { json(res, 405, { error: 'Method Not Allowed' }); return; }
+            try {
+              const body = JSON.parse(await readBody(req));
+              const { symbol, cost, amp_med, trend, regime, context, session_id } = body;
+              if (!symbol || !cost) { json(res, 400, { error: '缺少 symbol / cost' }); return; }
+              // 条件生成会话：生产 key=t-agent-{symbol}（与决策会话一致），回测 key=backtest:t-backtest-{taskId}
+              const agent = await getOrCreateAgent(session_id || ('t-agent-' + symbol), 'backtest', null, null);
+              const prompt = [
+                '你是做T条件设定者：为刚建仓的标的自主设定【低吸+高抛回补】双触发条件（触发价、量比、企稳、时段、止损），让系统在条件命中时唤醒你决策。',
+                '',
+                '标的: ' + symbol,
+                '持仓成本: ' + cost,
+                '近6日振幅中位(%): ' + (amp_med ?? '未知'),
+                '趋势: ' + (trend ? JSON.stringify(trend) : '未知'),
+                'regime: ' + (regime ? JSON.stringify(regime) : '未知'),
+                '参考上下文: ' + (context ? JSON.stringify(context, null, 1) : '（无）'),
+                '',
+                '规则参考（可偏离，但需合理）：低吸=成本×(1−max(2%,振幅×0.75))、高抛=成本×(1+max(1.5%,振幅×0.75))、止损=成本×(1−max(3%,振幅×0.55))。',
+                '设定要点：',
+                '① 高抛触发价应高于成本且可及（振幅足够大时留出兑现空间；趋势向上可略放宽）',
+                '② 低吸触发价应低于成本（回踩买点），不可高于现价',
+                '③ 止损价必须低于成本（防深跌），且不被正常波动击穿（结合振幅）',
+                '④ vol_ratio_thresh（量比阈值，1.0~3.0）与 stabilize_level（not_new_low/other）可调',
+                '⑤ 输出【两条条件】的数组（不要 markdown 代码块、不要其他文字）：',
+                '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"reason":"一句话"}]',
+                '价格保留两位小数；stop_loss_price 两条条件一致。',
+              ].join('\n');
+              const reply = await runAgentTurn(agent, prompt);
+              const parsed = parseConditions(reply, cost);
+              console.log('[Bridge] /conditions/generate ' + symbol + ' → ' + JSON.stringify(parsed));
+              json(res, 200, parsed);
+            } catch (e) {
+              console.error('[Bridge] /conditions/generate error:', e);
+              json(res, 500, { error: e.message || '内部错误' });
+            }
+          },
+        }),
       ];
       const all = [...disposers, ...panelDisposers];
       return () => { for (const d of all) d(); };
     });
 
+    // ── AI 条件生成：解析 AI 输出的双条件 JSON 数组，容错兜底 ──
+    function parseConditions(reply, cost) {
+      const fallback = [];  // 兜底由调用方（后端）按规则公式生成
+      if (!reply) return { conditions: fallback, source: 'fallback', reason: '空回复' };
+      const text = String(reply).trim();
+      // 提取 JSON 数组
+      const mArr = text.match(/\[\s*\{[\s\S]*\}\s*\]/);
+      if (!mArr) return { conditions: fallback, source: 'fallback', reason: '无 JSON 数组: ' + text.slice(0, 120) };
+      try {
+        const arr = JSON.parse(mArr[0]);
+        if (!Array.isArray(arr) || arr.length === 0) return { conditions: fallback, source: 'fallback', reason: '空数组' };
+        const conditions = [];
+        for (const c of arr) {
+          const kind = String(c.trigger_kind || '');
+          if (kind !== 'low_buy' && kind !== 'high_sell_then_buy_back') continue;
+          const tp = Number(c.target_price);
+          const st = Number(c.stop_loss_price);
+          if (!tp || tp <= 0) continue;
+          const cond = {
+            trigger_kind: kind,
+            target_price: round2(tp),
+            sell_target_price: round2(Number(c.sell_target_price) || tp),
+            stop_loss_price: round2(st > 0 ? st : Number(cost) * 0.97),
+            vol_ratio_thresh: Number(c.vol_ratio_thresh) > 0 ? Number(c.vol_ratio_thresh) : 1.5,
+            stabilize_level: c.stabilize_level || 'not_new_low',
+            armed: 1,
+            status: 'active',
+            reason: String(c.reason || '') ,
+          };
+          conditions.push(cond);
+        }
+        if (conditions.length === 0) return { conditions: fallback, source: 'fallback', reason: '无有效条件' };
+        return { conditions, source: 'ai', reason: 'AI 生成' };
+      } catch (e) {
+        return { conditions: fallback, source: 'fallback', reason: '解析失败: ' + e.message };
+      }
+    }
+
+    function round2(v) { return Math.round(v * 100) / 100; }
+
     // ── 回测复核：解析 LLM 决策 JSON（action: exec|wait|abandon；兼容旧 decision:auto|human）──
     function parseDecision(reply) {
       if (!reply) return { action: 'wait', reason: '空回复' };
       const text = String(reply).trim();
-      // 新格式：{"action": "exec|wait|abandon", ...}
-      const ma = text.match(/\{[^{}]*"action"\s*:\s*"(exec|wait|abandon)"[^{}]*\}/);
-      if (ma) {
-        try {
-          const obj = JSON.parse(ma[0]);
-          return { action: obj.action, reason: String(obj.reason || '') };
-        } catch (e) { /* fallthrough */ }
-      }
-      // 兼容旧格式：{"decision": "auto|human"}
-      const md = text.match(/\{[^{}]*"decision"\s*:\s*"(auto|human)"[^{}]*\}/);
-      if (md) {
-        try {
-          const obj = JSON.parse(md[0]);
-          return { action: obj.decision === 'auto' ? 'exec' : 'wait', reason: String(obj.reason || '') };
-        } catch (e) { /* fallthrough */ }
+      // 提取首个平衡 JSON 对象（支持嵌套 condition 对象）
+      const obj = extractJsonObject(text);
+      if (obj) {
+        // 新格式：{"action": "exec|wait|abandon|update_condition", ...}
+        const action = obj.action || '';
+        if (action === 'exec' || action === 'wait' || action === 'abandon' || action === 'update_condition') {
+          return { action, reason: String(obj.reason || ''), condition: obj.condition || null };
+        }
+        // 兼容旧格式：{"decision": "auto|human"}
+        if (obj.decision === 'auto') return { action: 'exec', reason: String(obj.reason || '') };
+        if (obj.decision === 'human') return { action: 'wait', reason: String(obj.reason || '') };
       }
       // 无 JSON：按文本关键词兜底
+      if (/update_condition|调整条件|update.*condition/.test(text)) return { action: 'update_condition', reason: text.slice(0, 120) };
       if (/exec|执行|放行|auto/.test(text)) return { action: 'exec', reason: text.slice(0, 120) };
       if (/abandon|放弃/.test(text)) return { action: 'abandon', reason: text.slice(0, 120) };
       return { action: 'wait', reason: text.slice(0, 120) };
+    }
+
+    // ── 提取首个平衡 JSON 对象（跳过 markdown 代码块围栏）──
+    function extractJsonObject(text) {
+      const t = String(text).replace(/```json|```/g, '');
+      let start = -1;
+      for (let i = 0; i < t.length; i++) {
+        if (t[i] === '{') { start = i; break; }
+      }
+      if (start < 0) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < t.length; i++) {
+        const ch = t[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === '\\') esc = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            try { return JSON.parse(t.slice(start, i + 1)); } catch (e) { return null; }
+          }
+        }
+      }
+      return null;
     }
 
     // ── 内置回退 Prompt（启动时从 Backend 拉取后覆盖）──
@@ -983,12 +1092,12 @@ function apply(ctx) {
         '硬约束：仅 t 账户；STOP_ALL/日亏熔断/HALT 禁自动；T+1 当日禁卖；单票当日 1 批；所有下单经网关（ai_led 不豁免）。',
       ].join('\n'),
     };
-    // 回测复核会话系统提示（沙盒：AI 决策 exec/wait/abandon，禁止交易/写操作）
+    // 回测复核会话系统提示（沙盒：AI 决策 exec/wait/abandon/update_condition，禁止交易/写操作）
     const BACKTEST_REVIEW_PROMPT = [
-      '你是做T回测决策 Agent（沙盒模式）。你只对触发事件做 exec/wait/abandon 决策，不执行任何交易，也不调用任何工具。',
+      '你是做T回测决策 Agent（沙盒模式）。你只对触发事件做 exec/wait/abandon/update_condition 决策，不执行任何交易，也不调用任何工具。',
       '你的工具已被沙盒隔离：生产写工具（下单/撤单/建仓等）对你不可见。',
-      '每次收到触发上下文，输出一行 JSON：{"action":"exec|wait|abandon","reason":"一句话理由"}。',
-      'exec = 按建议价执行（回放中撮合）；wait = 量价/regime 存疑等待；abandon = 放弃（追高/信号矛盾）。',
+      '每次收到触发上下文，输出一行 JSON：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}。',
+      'exec = 按建议价执行（回放中撮合）；wait = 量价/regime 存疑等待；abandon = 放弃（追高/信号矛盾）；update_condition = 条件与行情脱节时调整（必须附 condition 对象，含 trigger_kind/target_price/stop_loss_price）。',
       '判定要点：量价合理性、regime 档位、可卖底仓、风控状态、连续命中次数、触发与目标价价差空间。',
     ].join('\n');
     // 沙盒 deny 名单：回测复核会话禁用的生产写工具
