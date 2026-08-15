@@ -563,8 +563,9 @@ class TAiLedTest(_PGTestCase):
                                     input_snapshot={"trigger": {"suggest_bid_price": 10.0}},
                                     output={"side": "buy"},
                                     gateway_result={"status": "success", "price": 10.0})
-        fake_bars = [{"time": f"2026-08-15 10:{m:02d}:00", "open": 10.0, "close": 10.05,
-                      "high": 10.1, "low": 9.99} for m in range(5, 35, 5)]
+        fake_bars = [{"time": f"2026-08-15 10:{m:02d}:00", "open": 10.0, "close": 10.05 + 0.02 * k,
+                      "high": 10.1 + 0.02 * k, "low": 9.99}
+                     for k, m in enumerate(range(5, 35, 5))]
         with patch("app.services.t_data_sources.fetch_tencent_mkline", return_value=fake_bars):
             r = t_ai_agent.record_outcome(symbol="SH600000", trade_date="2026-08-15")
         self.assertGreaterEqual(r["filled"], 1)

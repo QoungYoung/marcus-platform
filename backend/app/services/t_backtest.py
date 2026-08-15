@@ -423,6 +423,7 @@ class TBacktestEngine:
         self.init_price = float(task.get("init_price", 0) or 0)
         self.net_asset = float(task.get("net_asset", 200000.0))
         self.conditions: List[Dict[str, Any]] = task.get("conditions", [])
+        self.start_trade_day = str(task.get("start_trade_day") or "")  # 滚动建仓：从该日起回放（含）
         self.events: List[Dict[str, Any]] = []   # 触发/复核/拦截/缺口全事件流
         self._pending_buyback: Optional[Dict[str, Any]] = None  # high_sell_then_buy_back 买回挂单
         self._ai_fills: List[Dict[str, Any]] = []  # AI 决策成交记录（outcome 回填用）
@@ -440,11 +441,17 @@ class TBacktestEngine:
             ts: load_index_daily(ts, d)
             for ts in ("000300.SH", "000001.SH", "399001.SZ")
         }
-        # 交易日（8 位 YYYYMMDD，与指数日线对齐）
+        # 交易日（8 位 YYYYMMDD，与指数日线对齐）；滚动建仓时只回放 start_trade_day 起
         self.trade_days = sorted({_day_key(b["time"]) for b in self.m5})
-        # 初始价缺省：回测首日首根 open
+        if self.start_trade_day:
+            self.trade_days = [d for d in self.trade_days if d >= self.start_trade_day]
+        # 初始价缺省：回测首日首根 open（start_trade_day 存在时取该日）
         if not self.init_price and self.m5:
-            self.init_price = float(self.m5[0]["open"])
+            if self.start_trade_day:
+                first_bars = [b for b in self.m5 if _day_key(b["time"]) == self.start_trade_day]
+                self.init_price = float(first_bars[0]["open"]) if first_bars else float(self.m5[0]["open"])
+            else:
+                self.init_price = float(self.m5[0]["open"])
 
     # ── 主循环 ──
     def run(self, cancel_event: Optional[Any] = None,
@@ -619,6 +626,7 @@ class TBacktestEngine:
                 "trade_day": f["trade_day"],
             })
         return outcomes
+
 
     # ── 条件护栏（armed/冷却/单日触发上限）──
     def _cond_gate(self, cond: Dict[str, Any], now: datetime,
@@ -948,6 +956,7 @@ class TCombinedBacktestEngine:
         self.fee_rate = fee_rate
         self.symbols: List[str] = task.get("symbols") or []
         self.build_mode = bool(task.get("build_mode", False))
+        self.rolling_build = bool(task.get("rolling_build", False))  # 每日滚动建仓（对齐实盘 daily_auto）
         self.net_asset = float(task.get("net_asset", 200000.0))
         self.build_limit_ratio = float(task.get("build_limit_ratio", 0.55))
         self.conditions = task.get("conditions") or []
@@ -978,6 +987,11 @@ class TCombinedBacktestEngine:
                 trade_days = sorted({_day_key(b["time"]) for b in bars}) or trade_days
         if not trade_days:
             return {"status": "failed", "error": "无标的 m5 数据", "build_decisions": [], "per_symbol": []}
+
+        # 每日滚动建仓模式（对齐实盘 daily_auto_select/daily_auto_build）：
+        # 每个交易日盘后用 as_of=当日 的日线对候选池打分 → 次日开盘建仓 → 子引擎从建仓日起回放。
+        if self.rolling_build and self.build_mode:
+            return self._run_rolling_build(trade_days, m5_map, cancel_event, progress_cb)
 
         # 进度单位：建仓阶段每标的 1 单位 + 做T阶段各标的天数（built 确定后精算，见下方）
         total_units = len(self.symbols) + sum(
@@ -1129,6 +1143,151 @@ class TCombinedBacktestEngine:
             ],
         }
 
+
+    def _run_rolling_build(self, trade_days: List[str], m5_map: Dict[str, List[dict]],
+                           cancel_event: Optional[Any], progress_cb: Optional[callable]) -> Dict[str, Any]:
+        """每日滚动建仓：逐日盘后打分 → 次日开盘建仓 → 各标的从建仓日起做T。
+
+        对齐实盘节奏：daily_auto_select(盘后扫描) → daily_auto_build(次日建仓)。
+        防前视：每日打分只用 as_of=当日（含）以前日线；建仓价 = 次日开盘价。
+        """
+        from pathlib import Path
+        from app.services.t_backtest_data import load_stock_daily
+        from app.services import t_build
+
+        d = Path(self.data_dir)
+        build_decisions: List[Dict[str, Any]] = []
+        # 每个标的记录建仓日与成本（用于组合权益基准）
+        builds: List[Dict[str, Any]] = []   # {symbol, price, shares, build_day, source}
+        allocated_value = 0.0
+        total_units = len(self.symbols) + sum(
+            len({_day_key(b["time"]) for b in bars}) for bars in m5_map.values() if bars)
+        done_units = 0
+
+        def _report_progress(events_delta=None, equity_point=None):
+            if progress_cb is not None:
+                try:
+                    progress_cb(done_units, total_units, events_delta or [], equity_point)
+                except Exception as e:
+                    print(f"[t-backtest] 滚动组合 progress_cb 异常: {e}")
+
+        for idx, trade_day in enumerate(trade_days):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            done_units += 1
+            _report_progress()
+            # 盘后（当日收盘后）对未建仓标的打分，as_of=当日（防前视）
+            next_day = trade_days[idx + 1] if idx + 1 < len(trade_days) else None
+            for sym in self.symbols:
+                if any(b["symbol"] == sym for b in builds):
+                    continue  # 已建仓
+                bars_daily = load_stock_daily(sym, d, as_of=trade_day)
+                if len(bars_daily) < 25:
+                    build_decisions.append({"symbol": sym, "decision": "rejected",
+                                            "reasons": ["日线不足"], "as_of": trade_day})
+                    continue
+                daily_bars_t = [{"date": b["trade_date"], "open": b["open"], "close": b["close"],
+                                 "high": b["high"], "low": b["low"], "vol": b["vol"], "amount": b["amount"]}
+                                for b in bars_daily]
+                quality = t_build._quality_from_daily(daily_bars_t)
+                r = t_build.build_score(sym, source="pool", as_of=trade_day,
+                                        quality_override=quality, bars=daily_bars_t)
+                if not r["pass_gate"]:
+                    build_decisions.append({"symbol": sym, "decision": "rejected",
+                                            "score": r["score"], "as_of": trade_day,
+                                            "reasons": r["reasons"] or ["打分未达标"]})
+                    continue
+                # 次日建仓（无次日则窗口末建仓不参与做T——跳过）
+                if next_day is None:
+                    build_decisions.append({"symbol": sym, "decision": "rejected",
+                                            "score": r["score"], "as_of": trade_day,
+                                            "reasons": ["窗口末日达标无做T日"]})
+                    continue
+                next_bars = [b for b in m5_map.get(sym, []) if _day_key(b["time"]) == next_day]
+                price = float(next_bars[0]["open"]) if next_bars else 0.0
+                if price <= 0:
+                    build_decisions.append({"symbol": sym, "decision": "rejected",
+                                            "score": r["score"], "as_of": trade_day,
+                                            "reasons": ["次日开盘价不可用"]})
+                    continue
+                # 规模（注入组合已分配资金，防止超净值55%）
+                sizing = t_build.build_sizing(sym, price, net_asset=self.net_asset,
+                                              total_floor_value=allocated_value,
+                                              symbol_value=0.0, regime="ACTIVE")
+                if not sizing["pass"]:
+                    build_decisions.append({"symbol": sym, "decision": "rejected",
+                                            "score": r["score"], "as_of": trade_day,
+                                            "reasons": [sizing["reason"] or "规模校验不过"]})
+                    continue
+                shares = sizing["suggest_volume"]
+                if shares <= 0:
+                    continue
+                builds.append({"symbol": sym, "price": price, "shares": shares,
+                               "build_day": next_day, "source": "rolling_build",
+                               "score": r["score"], "trend": r["trend"]})
+                allocated_value += price * shares
+                build_decisions.append({"symbol": sym, "decision": "built", "price": price,
+                                        "shares": shares, "score": r["score"],
+                                        "build_day": next_day, "reasons": r["reasons"] or []})
+                print(f"[t-backtest] 滚动建仓 {sym} @ {price} x{shares} 于 {next_day}")
+
+        # 各标的从建仓日起做T（子引擎 start_trade_day）
+        per_symbol: List[Dict[str, Any]] = []
+        cash = self.net_asset - sum(b["price"] * b["shares"] for b in builds)
+        total_asset_by_day: Dict[str, float] = {}
+        base_units = len(self.symbols)
+        for b in builds:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            conds = self.conditions or _default_t_conditions(b["price"])
+            sub_asset = b["price"] * b["shares"]
+            sub_task = {
+                "symbol": b["symbol"], "init_shares": b["shares"],
+                "init_price": b["price"], "net_asset": sub_asset,
+                "conditions": conds, "start_trade_day": b["build_day"],
+            }
+            eng = TBacktestEngine(sub_task, str(d), review_fn=self.review_fn,
+                                  slippage=self.slippage, fee_rate=self.fee_rate)
+            sub_days = len({_day_key(x["time"]) for x in m5_map.get(b["symbol"], []) if x
+                            and _day_key(x["time"]) >= b["build_day"]})
+            done_start = base_units
+
+            def _sub_progress(done, _total, events_delta=None, _eq=None):
+                frac = (done / _total) * sub_days if _total else sub_days
+                if progress_cb is not None:
+                    try:
+                        progress_cb(round(done_start + frac, 2), total_units,
+                                    events_delta or [], None)
+                    except Exception as e:
+                        print(f"[t-backtest] 滚动子引擎 progress_cb 异常: {e}")
+
+            r = eng.run(cancel_event, progress_cb=_sub_progress if progress_cb else None)
+            base_units += sub_days
+            r["build"] = {k: b[k] for k in ("symbol", "price", "shares", "source", "build_day") if k in b}
+            per_symbol.append(r)
+            # 组合权益：净值 + Σ(各标的相对建仓日盈亏)（现金→持仓不改变总权益）
+            sub_curve = r.get("equity_curve", [])
+            base_total = sub_curve[0]["total_asset"] if sub_curve else sub_asset
+            for pt in sub_curve:
+                day = pt["trade_date"]
+                delta = pt["total_asset"] - base_total
+                total_asset_by_day[day] = total_asset_by_day.get(day, self.net_asset) + delta
+
+        _report_progress()
+        equity_curve = [{"trade_date": day, "total_asset": round(v, 2)}
+                        for day, v in sorted(total_asset_by_day.items())]
+        combined = _combine_metrics(per_symbol, builds, equity_curve, self.net_asset)
+        return {
+            "status": "completed",
+            "portfolio": combined,
+            "build_decisions": build_decisions,
+            "per_symbol": per_symbol,
+            "equity_curve": equity_curve,
+            "caliber_notes": caliber_notes() + [
+                "建仓口径: 每日滚动建仓（对齐实盘 daily_auto：盘后用 as_of=当日 日线打分，"
+                "次日开盘建仓；build_score≥门槛 ∧ 趋势闸门 ∧ 资金≤净值×55%），子引擎从建仓日起回放做T",
+            ],
+        }
 
 def _combine_ai_exec_win_rate(per_symbol: List[Dict[str, Any]]) -> Optional[float]:
     """组合 exec 胜率：按各标的成交数加权（win_rate × count 求和 / count 求和）。"""

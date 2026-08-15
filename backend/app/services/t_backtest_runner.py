@@ -31,8 +31,12 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 init_price: Optional[float] = None, net_asset: float = 200000.0,
                 review_mode: str = "llm", symbols: Optional[List[str]] = None,
                 build_mode: bool = False, build_limit_ratio: float = 0.55,
-                select_source: str = "manual", select_limit: int = 10) -> Optional[int]:
-    """创建回测任务（status=pending）。组合模式：symbols 列表或 select_source 自动选股。"""
+                select_source: str = "manual", select_limit: int = 10,
+                rolling_build: bool = False) -> Optional[int]:
+    """创建回测任务（status=pending）。组合模式：symbols 列表或 select_source 自动选股。
+
+    rolling_build=True：每日滚动建仓（对齐实盘 daily_auto：盘后扫描 → 次日建仓）。
+    """
     try:
         db = SessionLocal()
         try:
@@ -41,9 +45,11 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 INSERT INTO t_backtest_tasks (
                     symbol, start_date, end_date, init_shares, init_price,
                     net_asset, review_mode, conditions_json, symbols_json,
-                    build_mode, build_limit_ratio, select_source, select_limit
+                    build_mode, build_limit_ratio, select_source, select_limit,
+                    rolling_build
                 ) VALUES (:symbol, :start, :end, :shares, :price, :asset, :mode, :conds,
-                          :symbols, :build_mode, :build_limit, :sel_src, :sel_lim)
+                          :symbols, :build_mode, :build_limit, :sel_src, :sel_lim,
+                          :rolling_build)
                 RETURNING id
                 """
             ), {
@@ -55,6 +61,7 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 "build_mode": bool(build_mode), "build_limit": float(build_limit_ratio),
                 "sel_src": select_source if select_source in ("manual", "pool", "scan") else "manual",
                 "sel_lim": int(select_limit),
+                "rolling_build": bool(rolling_build),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -428,6 +435,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     task["symbols"] = symbols
     task["build_mode"] = build_mode
     task["build_limit_ratio"] = build_limit_ratio
+    task["rolling_build"] = bool(task.get("rolling_build", False))
     review_fn = build_review_fn(task)
     if review_fn is None and task.get("review_mode", "llm") == "llm":
         print(f"[t-backtest] ⚠️ LLM 复核不可用（bridge 未就绪），任务 #{task_id} 降级规则模式")

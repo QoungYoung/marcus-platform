@@ -132,6 +132,29 @@ class TestCombinedEngine(unittest.TestCase):
             self.assertIn(k, p, f"组合报告缺指标 {k}")
         self.assertTrue(any("建仓口径" in n for n in r["caliber_notes"]), "口径声明含建仓说明")
 
+    def test_rolling_build_daily_scans(self):
+        """每日滚动建仓：逐日盘后打分 → 次日建仓；子引擎从建仓日起回放。"""
+        from app.services.t_backtest import TCombinedBacktestEngine
+        task = self._task(build_mode=True)
+        task["rolling_build"] = True
+        r = TCombinedBacktestEngine(task, str(self.cache)).run()
+        self.assertEqual(r["status"], "completed")
+        built = [d for d in r["build_decisions"] if d["decision"] == "built"]
+        self.assertGreaterEqual(len(built), 1, "滚动模式应有标的达标建仓")
+        self.assertTrue(all(b.get("build_day") for b in built), "建仓决策应含 build_day")
+        self.assertEqual(len(r["per_symbol"]), len(built), "做T标的数 = 滚动建仓数")
+        self.assertTrue(len(r["equity_curve"]) > 0, "权益曲线非空")
+        p = r["portfolio"]
+        self.assertEqual(p["initial_asset"], 200000.0, "组合初始净值 20 万")
+        first_equity = r["equity_curve"][0]["total_asset"]
+        self.assertLess(abs(first_equity - 200000.0) / 200000.0, 0.05,
+                        f"首日组合权益应≈净值（实际 {first_equity}）")
+        for pr in r["per_symbol"]:
+            bd = pr.get("build", {}).get("build_day")
+            if bd:
+                self.assertGreaterEqual(pr["window"].split("~")[0], bd,
+                                        "子引擎窗口应从建仓日起")
+
 
 class TestTBuildParametric(unittest.TestCase):
     def test_build_sizing_injection(self):

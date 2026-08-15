@@ -140,6 +140,7 @@ export default function TBacktestPage() {
   const [endDate, setEndDate] = useState('');
   const [condTemplate, setCondTemplate] = useState('auto');
   const [buildMode, setBuildMode] = useState(true);
+  const [rollingBuild, setRollingBuild] = useState(false);
   const [netAsset, setNetAsset] = useState('200000');
   const [reviewMode, setReviewMode] = useState<'llm' | 'rule'>('rule');
 
@@ -258,6 +259,7 @@ export default function TBacktestPage() {
         select_source: selectSource,
         select_limit: Number(selectLimit) || 10,
         build_mode: buildMode,
+        rolling_build: rollingBuild,
         build_limit_ratio: 0.55,
         start_date: startDate,
         end_date: endDate,
@@ -495,6 +497,14 @@ export default function TBacktestPage() {
                 <span className="tbt-switch-track" />
                 <span className="tbt-switch-label">建仓模拟（Agent 选股：build_score + 趋势闸门，资金 ≤ 净值×55%）</span>
               </label>
+
+              {buildMode && (
+                <label className="tbt-switch">
+                  <input type="checkbox" checked={rollingBuild} onChange={(e) => setRollingBuild(e.target.checked)} />
+                  <span className="tbt-switch-track" />
+                  <span className="tbt-switch-label">每日滚动建仓（对齐实盘：每天盘后扫描 → 次日建仓新标的，持续进票做T）</span>
+                </label>
+              )}
 
               <button className="tbt-btn tbt-btn-primary tbt-submit" onClick={submit} disabled={loading}>
                 {loading ? '创建中…' : '开始回测'}

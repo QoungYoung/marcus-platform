@@ -56,6 +56,7 @@ def t_backtest_create(body: dict):
         build_limit_ratio=float(body.get("build_limit_ratio", 0.55)),
         select_source=select_source,
         select_limit=select_limit,
+        rolling_build=bool(body.get("rolling_build", False)),
     )
     if not task_id:
         raise HTTPException(status_code=500, detail="任务创建失败")
