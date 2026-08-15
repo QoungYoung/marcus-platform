@@ -452,6 +452,25 @@ def _apply_t_build_migration():
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_t_build_events_status ON t_build_events (account_id, status, id)"
             ))
+            # 3) t_build_scan_results — 每日自动选股结果（盘后选股 → 次日自动建仓候选）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_build_scan_results (
+                    id BIGSERIAL PRIMARY KEY,
+                    trade_date VARCHAR(10) NOT NULL,
+                    symbol VARCHAR(16) NOT NULL,
+                    score DOUBLE PRECISION,
+                    reasons JSONB NOT NULL DEFAULT '[]',
+                    trend VARCHAR(256),
+                    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                    built_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_build_scan_date ON t_build_scan_results (trade_date, status)"
+            ))
 
             # 2) t_build_params — 建仓策略参数（分档初值，P4 敏感度扫描后固化）
             conn.execute(text(

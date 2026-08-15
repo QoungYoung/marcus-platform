@@ -34,6 +34,6 @@
 
 ## 6. 测试与部署
 
-- [ ] 6.1 `backend/tests/test_t_combined_backtest.py`：组合编排/建仓模拟防前视/资金上限分配/组合权益汇总/报告结构/候选池缺省
-- [ ] 6.2 全量回归（新增用例 + 既有 t 用例）
-- [ ] 6.3 提交推送 + 服务器部署（compose up --build backend worker frontend；dsh 无改动）+ 页面验证
+- [x] 6.1 `backend/tests/test_t_combined_backtest.py`：组合编排/建仓模拟防前视/资金上限分配/组合权益汇总/报告结构/候选池缺省
+- [x] 6.2 全量回归（新增用例 + 既有 t 用例）
+- [x] 6.3 提交推送 + 服务器部署（compose up --build backend worker frontend；dsh 无改动）+ 页面验证

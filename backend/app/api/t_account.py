@@ -228,6 +228,38 @@ def t_daily_reset():
     return {"success": ok}
 
 
+@router.get("/build/scan-results")
+def t_build_scan_results(trade_date: Optional[str] = None):
+    """每日自动选股结果（盘后选股写入，次日盘中执行建仓）。
+
+    返回 t_build_scan_results 表中某交易日（默认今天）的候选，按分数降序。
+    """
+    import json as _json
+    from datetime import datetime as _dt
+    from sqlalchemy import text as _text
+    td = trade_date or _dt.now().strftime("%Y-%m-%d")
+    db = SessionLocal()
+    try:
+        rows = db.execute(_text(
+            "SELECT id, trade_date, symbol, score, reasons, trend, status, built_at "
+            "FROM t_build_scan_results WHERE trade_date = :td ORDER BY score DESC"
+        ), {"td": td}).mappings().all()
+        out = []
+        for r in rows:
+            try:
+                reasons = _json.loads(r["reasons"]) if isinstance(r["reasons"], str) else (r["reasons"] or [])
+            except (ValueError, TypeError):
+                reasons = []
+            out.append({
+                "id": r["id"], "trade_date": r["trade_date"], "symbol": r["symbol"],
+                "score": r["score"], "reasons": reasons, "trend": r["trend"],
+                "status": r["status"], "built_at": str(r["built_at"]) if r["built_at"] else None,
+            })
+        return {"trade_date": td, "results": out}
+    finally:
+        db.close()
+
+
 # ────────────────────────────────────────────────────────────────
 # 底仓建仓（t-position-building）：选股 / 建仓 / 衔接 / 再平衡 / 审计 / 调额
 # ────────────────────────────────────────────────────────────────

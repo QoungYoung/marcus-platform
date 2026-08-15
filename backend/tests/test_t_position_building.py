@@ -383,5 +383,119 @@ class TestBuildScan(_PGTestCase):
             self.assertIsInstance(cands, list)
 
 
+class TestDailyAutoSelectBuild(_PGTestCase):
+    """每日自动选股 → 次日自动建仓闭环（t_build_scan_results 表驱动）。"""
+
+    def setUp(self):
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            db.execute(text("DELETE FROM t_build_scan_results"))
+            db.commit()
+        finally:
+            db.close()
+        from app.services import t_build
+        self.tb = t_build
+
+    def _insert_pending(self, trade_date, symbol="SH600000", score=0.8):
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "INSERT INTO t_build_scan_results (trade_date, symbol, score, reasons, trend, status) "
+                "VALUES (:td, :sym, :score, '[]', 'trend-ok', 'pending')"
+            ), {"td": trade_date, "sym": symbol, "score": score})
+            db.commit()
+        finally:
+            db.close()
+
+    def _count_rows(self, trade_date=None, status=None):
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            sql = "SELECT count(*) AS n FROM t_build_scan_results WHERE 1=1"
+            params = {}
+            if trade_date:
+                sql += " AND trade_date = :td"
+                params["td"] = trade_date
+            if status:
+                sql += " AND status = :st"
+                params["st"] = status
+            return int(db.execute(text(sql), params).scalar())
+        finally:
+            db.close()
+
+    def test_select_writes_pending_rows(self):
+        from unittest.mock import patch
+        with patch.object(self.tb, "scan_t_candidates", return_value=[
+                {"symbol": "SH600000", "pass_gate": True, "score": 0.85,
+                 "reasons": ["回踩充分"], "trend": {"note": "多头"}},
+                {"symbol": "SZ000001", "pass_gate": True, "score": 0.72,
+                 "reasons": ["量比正常"], "trend": {"note": "震荡"}},
+                {"symbol": "SH600001", "pass_gate": False, "score": 0.3, "reasons": [], "trend": {}},
+            ]), patch.object(self.tb, "_next_trade_date", return_value="2099-01-05"):
+            rows = self.tb.daily_auto_select(limit=5)
+        self.assertEqual(len(rows), 2)  # 只有达标写入
+        self.assertEqual(self._count_rows(trade_date="2099-01-05", status="pending"), 2)
+        syms = {r["symbol"] for r in rows}
+        self.assertEqual(syms, {"SH600000", "SZ000001"})
+
+    def test_select_idempotent(self):
+        from unittest.mock import patch
+        cand = {"symbol": "SH600000", "pass_gate": True, "score": 0.8,
+                "reasons": ["ok"], "trend": {"note": "多头"}}
+        with patch.object(self.tb, "scan_t_candidates", return_value=[cand]), \
+             patch.object(self.tb, "_next_trade_date", return_value="2099-01-05"):
+            self.tb.daily_auto_select(limit=5)
+            self.tb.daily_auto_select(limit=5)
+        self.assertEqual(self._count_rows(trade_date="2099-01-05"), 1)  # 幂等不重复
+
+    def test_build_success_marks_built(self):
+        from datetime import datetime
+        from unittest.mock import patch
+        today = datetime.now().strftime("%Y-%m-%d")
+        self._insert_pending(today, "SH600000")
+        quote = {"current": 10.2}
+        with patch.object(self.tb, "confirm_build_timing",
+                          return_value=(True, "回踩 2.1%", quote)), \
+             patch.object(self.tb, "build_t_position", return_value={
+                 "status": "success", "reason": "成交"}):
+            results = self.tb.daily_auto_build()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["action"], "built")
+        self.assertEqual(self._count_rows(today, "built"), 1)
+        self.assertEqual(self._count_rows(today, "pending"), 0)
+
+    def test_build_human_confirm_skipped(self):
+        from datetime import datetime
+        from unittest.mock import patch
+        today = datetime.now().strftime("%Y-%m-%d")
+        self._insert_pending(today, "SH600000")
+        quote = {"current": 10.2}
+        with patch.object(self.tb, "confirm_build_timing",
+                          return_value=(True, "回踩 2.1%", quote)), \
+             patch.object(self.tb, "build_t_position", return_value={
+                 "status": "human_confirm", "reason": "升级人工（B1 首开）"}):
+            results = self.tb.daily_auto_build()
+        self.assertEqual(results[0]["action"], "skipped")
+        self.assertIn("升级人工", results[0]["reason"])
+        self.assertEqual(self._count_rows(today, "skipped"), 1)
+
+    def test_build_timing_not_ready_waits(self):
+        from datetime import datetime
+        from unittest.mock import patch
+        today = datetime.now().strftime("%Y-%m-%d")
+        self._insert_pending(today, "SH600000")
+        with patch.object(self.tb, "confirm_build_timing",
+                          return_value=(False, "未回踩（距高点回撤 0.3%）", None)):
+            results = self.tb.daily_auto_build()
+        self.assertEqual(results[0]["action"], "wait")
+        self.assertIn("未回踩", results[0]["reason"])
+        self.assertEqual(self._count_rows(today, "pending"), 1)  # 保持 pending 下次再试
+
+
 if __name__ == "__main__":
     unittest.main()

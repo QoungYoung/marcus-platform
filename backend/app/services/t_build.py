@@ -625,12 +625,14 @@ def _stabilize_not_new_low(symbol: str, current: float) -> Tuple[bool, str]:
 # ────────────────────────────────────────────────────────────────
 
 def classify_build_escalation(symbol: str, amount: float, regime: str,
-                              decision_source: str = "agent") -> Tuple[str, str]:
+                              decision_source: str = "agent",
+                              allow_first_open: bool = False) -> Tuple[str, str]:
     """建仓升级分类 → (mode, reason)。mode ∈ auto / human_confirm / blocked。
 
     B1 首开新标的=human；B2 单笔超标准档=human；B3 HALT=blocked（含人工）；
     B4 CAUTIOUS 自动=human；B5 连续亏损期=human+禁自动；B6 近跌停=human；
     B7 日亏预警=-human；B8 当日累计触犯建仓风控≥2=human。
+    allow_first_open=True（每日自动选股来源）：跳过 B1 首开（仍保留 B2-B8 全部风控）。
     """
     p = _params()
     risk = t_db.get_risk_state() or {}
@@ -658,10 +660,11 @@ def classify_build_escalation(symbol: str, amount: float, regime: str,
     if amount > std_single:
         return "human_confirm", f"单笔金额 {amount:.0f} 超标准档上限 {std_single:.0f}，需人工"
 
-    # B1：首开新标的（t 账户从未持有）
-    ledger = get_sellable_ledger()
-    if symbol not in ledger:
-        return "human_confirm", "首次建仓新标的（首开风险），需人工确认"
+    # B1：首开新标的（t 账户从未持有）——每日自动选股来源可跳过
+    if not allow_first_open:
+        ledger = get_sellable_ledger()
+        if symbol not in ledger:
+            return "human_confirm", "首次建仓新标的（首开风险），需人工确认"
 
     # B6：近跌停
     q = fetch_tencent_quote([_normalize(symbol)]).get(_normalize(symbol)) or {}
@@ -691,7 +694,7 @@ def validate_build_position(symbol: str, price: float, volume: int,
     result: Dict[str, Any] = {"pass": False, "mode": "blocked", "level": "hard", "reason": "", "warn": []}
     try:
         # 0) 账户白名单
-        if decision_source not in ("agent", "human"):
+        if decision_source not in ("agent", "human", "daily_auto"):
             result["reason"] = "非法决策来源"
             return result
 
@@ -704,13 +707,16 @@ def validate_build_position(symbol: str, price: float, volume: int,
         # 2) regime 门
         regime_state = compute_regime()
         regime = regime_state.get("regime", "ACTIVE")
-        mode, up_reason = classify_build_escalation(symbol, price * volume, regime, decision_source)
+        allow_first_open = decision_source == "daily_auto"
+        mode, up_reason = classify_build_escalation(symbol, price * volume, regime,
+                                                    decision_source,
+                                                    allow_first_open=allow_first_open)
         if mode == "blocked":
             result["reason"] = up_reason
             return result
 
         # 3) 时段护栏（自动建仓强制；人工建仓仅非交易时段拒）
-        if decision_source == "agent":
+        if decision_source in ("agent", "daily_auto"):
             ok, why = _is_trading_minute_allowed()
             if not ok:
                 result["reason"] = why
@@ -750,8 +756,8 @@ def validate_build_position(symbol: str, price: float, volume: int,
             result["reason"] = "单票当日已建仓，分批须跨日"
             return result
 
-        # 7) 人工升级分流
-        if mode == "human_confirm" and decision_source == "agent" and not force_human:
+        # 7) 人工升级分流（daily_auto 遇 human_confirm 同样升级，不自动放行）
+        if mode == "human_confirm" and decision_source in ("agent", "daily_auto") and not force_human:
             result.update({"pass": True, "mode": "human_confirm", "level": "gate", "reason": up_reason})
             return result
         if force_human and decision_source == "human" and mode == "human_confirm":
@@ -938,6 +944,135 @@ def auto_gen_conditions_for_live_pool() -> int:
 
 
 # ────────────────────────────────────────────────────────────────
+# 每日自动选股闭环（盘后选股 → 次日盘中自动建仓 → 做T）
+# ────────────────────────────────────────────────────────────────
+
+DEFAULT_AUTO_SELECT_LIMIT = 5      # 每日自动选股数量上限
+DEFAULT_AUTO_BUILD_ENABLED = True  # 次日自动建仓开关（走网关风控，仅放开 B1 首开）
+
+
+def _next_trade_date() -> str:
+    """下一交易日（YYYY-MM-DD，brze trade_cal 不可用时工作日近似）。"""
+    try:
+        from app.services.t_backtest_data import resolve_trade_days
+        from datetime import date, timedelta
+        days = resolve_trade_days(
+            (date.today() + timedelta(days=1)).strftime("%Y-%m-%d"),
+            (date.today() + timedelta(days=5)).strftime("%Y-%m-%d"))
+        return (days[0][:4] + "-" + days[0][4:6] + "-" + days[0][6:8]) if days else \
+            (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+    except Exception as e:
+        print(f"[t-build] 下一交易日计算失败: {e}")
+        from datetime import date, timedelta
+        return (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def daily_auto_select(limit: int = DEFAULT_AUTO_SELECT_LIMIT) -> List[Dict[str, Any]]:
+    """盘后自动选股：全市场扫描 → 达标标的写入 t_build_scan_results（trade_date=下一交易日）。
+
+    返回写入的候选列表。防前视：精筛用 as_of=今日的日线（趋势/风险用当日及以前数据）。
+    """
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        cands = scan_t_candidates(limit=limit, source="scan", as_of=datetime.now().strftime("%Y-%m-%d"))
+        passed = [c for c in cands if c.get("symbol") and c.get("pass_gate")]
+        if not passed:
+            print("[t-build] 每日自动选股: 无达标标的")
+            return []
+        next_td = _next_trade_date()
+        rows = []
+        db = SessionLocal()
+        try:
+            for c in passed:
+                sym = _normalize(c["symbol"]).upper()
+                # 幂等：同日同标的已存在则跳过
+                exists = db.execute(text(
+                    "SELECT 1 FROM t_build_scan_results WHERE trade_date=:td AND symbol=:sym"
+                ), {"td": next_td, "sym": sym}).fetchone()
+                if exists:
+                    continue
+                row = db.execute(text(
+                    "INSERT INTO t_build_scan_results (trade_date, symbol, score, reasons, trend, status) "
+                    "VALUES (:td, :sym, :score, :reasons, :trend, 'pending') RETURNING id"
+                ), {
+                    "td": next_td, "sym": sym,
+                    "score": float(c.get("score") or 0),
+                    "reasons": json.dumps(c.get("reasons") or [], ensure_ascii=False),
+                    "trend": str((c.get("trend") or {}).get("note") or "")[:250],
+                }).fetchone()
+                rows.append({"id": row[0], "symbol": sym, "score": c.get("score")})
+            db.commit()
+        finally:
+            db.close()
+        print(f"[t-build] 每日自动选股完成: 达标 {len(passed)} 只，写入 {len(rows)} 条（{next_td} 执行）")
+        return rows
+    except Exception as e:
+        print(f"[t-build] 每日自动选股失败: {e}")
+        return []
+
+
+def daily_auto_build() -> List[Dict[str, Any]]:
+    """盘中处理今日 pending 建仓候选：时机确认 → 自动建仓（decision_source=daily_auto，仅放开 B1）。
+
+    安全阀：confirm_build_timing（回踩/量比/企稳）+ validate_build_position 全链
+    （熔断/regime/时段/涨跌停/三档资金/日上限/单票上限）；human_confirm 候选标记 skipped。
+    """
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        today = datetime.now().strftime("%Y-%m-%d")
+        results: List[Dict[str, Any]] = []
+        db = SessionLocal()
+        try:
+            rows = db.execute(text(
+                "SELECT * FROM t_build_scan_results WHERE trade_date=:td AND status='pending' ORDER BY score DESC"
+            ), {"td": today}).mappings().all()
+            for r in rows:
+                sym = str(r["symbol"])
+                # 时机确认（盘中实时：回踩/量比/企稳）
+                ok, why, quote = confirm_build_timing(sym)
+                if not ok:
+                    results.append({"symbol": sym, "action": "wait", "reason": f"时机未确认: {why}"})
+                    continue
+                price = float((quote or {}).get("current") or 0)
+                if price <= 0:
+                    results.append({"symbol": sym, "action": "skip", "reason": "实时价不可用"})
+                    db.execute(text(
+                        "UPDATE t_build_scan_results SET status='skipped', built_at=now() WHERE id=:id"),
+                        {"id": r["id"]})
+                    continue
+                out = build_t_position(sym, price, decision_source="daily_auto",
+                                       reason="每日自动选股自动建仓")
+                if out.get("status") == "success":
+                    db.execute(text(
+                        "UPDATE t_build_scan_results SET status='built', built_at=now() WHERE id=:id"),
+                        {"id": r["id"]})
+                    results.append({"symbol": sym, "action": "built", "price": price,
+                                    "reason": out.get("reason") or "建仓成交"})
+                elif out.get("status") == "human_confirm":
+                    db.execute(text(
+                        "UPDATE t_build_scan_results SET status='skipped', built_at=now() WHERE id=:id"),
+                        {"id": r["id"]})
+                    results.append({"symbol": sym, "action": "skipped",
+                                    "reason": f"升级人工（{out.get('reason')}）"})
+                else:
+                    results.append({"symbol": sym, "action": "wait",
+                                    "reason": f"建仓被拒: {out.get('reason')}"})
+            db.commit()
+        finally:
+            db.close()
+        done = [r for r in results if r["action"] in ("built", "skipped")]
+        if done:
+            print(f"[t-build] 每日自动建仓: {len(done)}/{len(results)} 处理完成 - "
+                  + "; ".join(f"{r['symbol']}:{r['action']}" for r in done[:5]))
+        return results
+    except Exception as e:
+        print(f"[t-build] 每日自动建仓失败: {e}")
+        return []
+
+
+# ────────────────────────────────────────────────────────────────
 # 底仓再平衡
 # ────────────────────────────────────────────────────────────────
 
@@ -1016,14 +1151,20 @@ class TBuildService:
                 eod = str(p.get("eod_scan_time", "15:05"))
                 eod_hm = int(eod.replace(":", ""))
                 hm = now.hour * 100 + now.minute
-                # 盘后 15:05-15:10 生成次日条件（含当日建仓标的）
+                # 盘后 15:05-15:10 生成次日条件（含当日建仓标的）+ 每日自动选股（写次日候选）
                 if hm == eod_hm and now.weekday() < 5:
                     conds = auto_gen_conditions_for_live_pool()
                     # 当日建仓标的的 D+1 条件已在 build_gateway_execute 内生成
-                    self._status["last_result"] = f"盘后条件补生成 {conds} 条"
+                    auto_n = 0
+                    if DEFAULT_AUTO_BUILD_ENABLED:
+                        auto_n = len(daily_auto_select(DEFAULT_AUTO_SELECT_LIMIT))
+                    self._status["last_result"] = (
+                        f"盘后条件补生成 {conds} 条；自动选股候选 {auto_n} 条（次日执行）")
                     self._status["last_round"] = now.strftime("%Y-%m-%d %H:%M:%S")
-                # 日频再平衡评估（每 30min 一次，避开盘前）
-                if 920 <= hm <= 1455 and hm % 30 < 5:
+                # 盘中：每日自动建仓（处理今日候选）+ 日频再平衡评估（每 30min 一次）
+                if 930 <= hm <= 1445 and hm % 30 < 5:
+                    if DEFAULT_AUTO_BUILD_ENABLED:
+                        daily_auto_build()
                     acts = rebalance_floors()
                     if acts:
                         self._status["last_result"] = f"再平衡评估 {len(acts)} 项: " + "; ".join(

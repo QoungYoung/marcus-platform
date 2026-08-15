@@ -97,3 +97,6 @@ backend/data/
 
 # DSH temp tooling
 .dsh-tmp/
+
+# Agent teams runtime state
+.agent-teams/
