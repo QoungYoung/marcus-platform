@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { tBacktestApi } from '../api/client';
+import { tAiApi, tBacktestApi } from '../api/client';
 import '../styles/t-backtest-page.css';
 
 interface BtTask {
@@ -68,6 +68,7 @@ export default function TBacktestPage() {
   const [report, setReport] = useState<BtMetrics | null>(null);
   const [liveEvents, setLiveEvents] = useState<BtEvent[]>([]);
   const [liveProgress, setLiveProgress] = useState<number | null>(null);
+  const [aiActions, setAiActions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -95,6 +96,15 @@ export default function TBacktestPage() {
   }, []);
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
+
+  // AI 决策审计（实时轮询：随任务列表刷新节奏）
+  const loadAiActions = useCallback(async () => {
+    try {
+      const r = await tAiApi.actions({ limit: 20 });
+      setAiActions((r.data as any)?.actions || []);
+    } catch { /* 面板静默失败 */ }
+  }, []);
+  useEffect(() => { loadAiActions(); }, [loadAiActions, tasks]);
 
   // 实时轮询：有 pending/running 任务时每 3s 刷新任务列表
   useEffect(() => {
@@ -260,6 +270,32 @@ export default function TBacktestPage() {
                 </button>
               </li>
             ))}
+          </ul>
+
+          {/* ── AI 决策记录（ai_led 审计） ── */}
+          <div className="tbt-panel-head tbt-panel-head-sub">
+            <span>🤖 AI 决策记录</span>
+            <span className="tbt-count">{aiActions.length}</span>
+          </div>
+          <ul className="tbt-task-list">
+            {aiActions.length === 0 && <li className="tbt-empty">暂无 AI 决策 — 做T Agent 唤醒后产生</li>}
+            {aiActions.slice(0, 15).map((a) => {
+              const out = a.output || {};
+              const gw = a.gateway_result || {};
+              const reason = out.reason || gw.reason || '';
+              const gwOk = gw.status === 'success' ? '✅' : gw.status ? '⛔' : '';
+              return (
+                <li key={a.id} className="tbt-ai-action">
+                  <span className="tbt-ai-top">
+                    <b>{a.symbol}</b>
+                    <span className="tbt-ai-type">{a.action_type}</span>
+                    <span className="tbt-ai-gw">{gwOk}</span>
+                  </span>
+                  <span className="tbt-ai-meta">{(a.created_at || '').slice(5, 16)}</span>
+                  {reason && <span className="tbt-ai-reason">{String(reason).slice(0, 90)}</span>}
+                </li>
+              );
+            })}
           </ul>
         </aside>
 

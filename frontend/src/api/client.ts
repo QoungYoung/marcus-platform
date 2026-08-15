@@ -117,6 +117,12 @@ export const tBacktestApi = {
   candidates: (limit = 10) => api.get('/t/backtest/candidates', { params: { limit } }),
 }
 
+// 做T AI 主导 APIs（决策审计 / 选股结果）
+export const tAiApi = {
+  actions: (params?: { trade_date?: string; symbol?: string; limit?: number }) =>
+    api.get('/t/ai/actions', { params }),
+}
+
 // Scheduler APIs
 export const schedulerApi = {  getStatus: () => api.get('/scheduler/status'),
   getTasks: () => api.get('/scheduler/tasks'),

@@ -169,6 +169,24 @@
 .tbt-ev-trigger { background: rgba(201, 138, 18, 0.12); color: var(--gp-gold); }
 .tbt-ev-data_gap, .tbt-ev-eval_error { background: rgba(229, 72, 77, 0.14); color: var(--gp-red); }
 .tbt-ev-cancelled { background: rgba(87, 113, 142, 0.2); color: var(--gp-muted); }
+
+/* ── AI 决策记录 ── */
+.tbt-panel-head-sub { margin-top: var(--space-4); }
+.tbt-ai-action {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 6px 8px; border-radius: var(--gp-radius);
+  border: 1px solid var(--gp-line-soft);
+  background: rgba(47, 124, 211, 0.04);
+}
+.tbt-ai-top { display: flex; align-items: center; gap: 6px; }
+.tbt-ai-top b { font-size: 12px; color: var(--gp-ink); }
+.tbt-ai-type {
+  font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 8px;
+  background: rgba(47, 124, 211, 0.12); color: var(--gp-blue);
+}
+.tbt-ai-gw { margin-left: auto; font-size: 11px; }
+.tbt-ai-meta { font-size: 10px; color: var(--gp-faint); }
+.tbt-ai-reason { font-size: 11px; color: var(--gp-muted); line-height: 1.35; }
 .tbt-status {
   font-size: 11px;
   font-weight: 600;
