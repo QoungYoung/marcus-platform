@@ -503,13 +503,15 @@ export default function TBacktestPage() {
                         <tbody>
                           {liveEvents.slice(-50).reverse().map((ev, i) => {
                             const d = ev.data || {};
-                            const trig = d.trigger || {};
-                            const detail = d.reason || d.decision || (trig.event_type ? `触发 ${trig.event_type} @ ${trig.trigger_price}` : '') || JSON.stringify(d).slice(0, 80);
+                            // API 返回完整事件对象（{type, data:{...}}），兼容平铺/嵌套两种结构
+                            const inner = d.data && typeof d.data === 'object' ? d.data : d;
+                            const trig = inner.trigger || {};
+                            const detail = inner.reason || inner.decision || (trig.event_type ? `触发 ${trig.event_type} @ ${trig.trigger_price}` : '') || JSON.stringify(inner).slice(0, 80);
                             return (
                               <tr key={i}>
                                 <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
-                                <td>{ev.trade_day}</td>
-                                <td>{ev.bar_time || ''}</td>
+                                <td>{ev.trade_day || inner.trade_day || ''}</td>
+                                <td>{ev.bar_time || inner.bar_time || ''}</td>
                                 <td className="tbt-cell-reason">{String(detail)}</td>
                               </tr>
                             );

@@ -204,7 +204,9 @@ def t_backtest_events(task_id: int, limit: int = 500):
             out = []
             for r in rows:
                 try:
-                    data = json.loads(r["data_json"] or "{}")
+                    # data_json 为 JSONB：SQLAlchemy 已反序列化为 dict/list，兼容 str 双保险
+                    raw = r["data_json"]
+                    data = raw if isinstance(raw, (dict, list)) else json.loads(raw or "{}")
                 except (ValueError, TypeError):
                     data = {}
                 out.append({
