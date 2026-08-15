@@ -318,6 +318,7 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
             "trigger": rev_ctx.get("trigger", {}),
             "regime": rev_ctx.get("regime", {}),
             "rule_hint": rev_ctx.get("rule_hint", {}),
+            "position": rev_ctx.get("position", {}),
         }
         req = urllib.request.Request(
             url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

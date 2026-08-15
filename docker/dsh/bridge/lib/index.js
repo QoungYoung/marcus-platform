@@ -4,6 +4,27 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 const name = "dsh-marcus-bridge";
 const inject = ["webServer","agents","tools"];
 
+// ═══ 可选全局出站代理（web_search / LLM 出站 fetch 共用 undici 全局 dispatcher）═══
+// 容器内设 DSH_PROXY_URL（HTTP CONNECT 代理，如 http://user:pass@host:port）后生效；
+// HTTP_PROXY/HTTPS_PROXY 可单独覆盖；NO_PROXY 排除内网（backend/postgres 等 docker 服务名）。
+// Node 22 内置 undici（EnvHttpProxyAgent 自 undici 6.19）；解析失败自动降级直连。
+async function setupGlobalProxy() {
+  const proxyUrl = process.env.DSH_PROXY_URL;
+  if (!proxyUrl) return;
+  try {
+    const { setGlobalDispatcher, EnvHttpProxyAgent } = await import('undici');
+    setGlobalDispatcher(new EnvHttpProxyAgent({
+      httpProxy: process.env.HTTP_PROXY || proxyUrl,
+      httpsProxy: process.env.HTTPS_PROXY || proxyUrl,
+      noProxy: process.env.NO_PROXY || '127.0.0.1,localhost,backend,postgres,frontend',
+    }));
+    console.log('[Bridge] 出站代理已启用: ' + proxyUrl);
+  } catch (e) {
+    console.warn('[Bridge] 出站代理初始化失败，继续直连: ' + e.message);
+  }
+}
+setupGlobalProxy();
+
 function apply(ctx) {
 
     // ═══ 交易写工具原生注册（JSON Schema 强校验，仅 trade 模式可见）═══
@@ -873,10 +894,14 @@ function apply(ctx) {
             if (req.method !== 'POST') { json(res, 405, { error: 'Method Not Allowed' }); return; }
             try {
               const body = JSON.parse(await readBody(req));
-              const { task_id, symbol, trigger, regime, rule_hint } = body;
+              const { task_id, symbol, trigger, regime, rule_hint, position } = body;
               if (!task_id || !trigger) { json(res, 400, { error: '缺少 task_id / trigger' }); return; }
               // 回测复核会话（沙盒）：key = backtest:t-backtest-{taskId}，与生产会话隔离
               const agent = await getOrCreateAgent('t-backtest-' + task_id, 'backtest', null, null);
+              const pos = position || {};
+              const posLine = (pos.sellable !== undefined && pos.volume !== undefined)
+                ? ('持仓: 可卖' + pos.sellable + '股 总持仓' + pos.volume + '股 成本' + (pos.avg_price ?? '-') + ' 已实现盈亏' + (pos.realized_pnl ?? 0) + ' 当日回转' + (pos.day_turnover ?? 0))
+                : '持仓: （无回测持仓快照）';
               const prompt = [
                 '请对以下做T触发事件做出决策：执行（exec）、等待（wait）还是放弃（abandon）。',
                 '',
@@ -884,8 +909,10 @@ function apply(ctx) {
                 '触发: ' + JSON.stringify(trigger, null, 1),
                 'regime: ' + JSON.stringify(regime || {}, null, 1),
                 '规则预判(供参考): ' + JSON.stringify(rule_hint || {}, null, 1),
+                posLine,
                 '',
-                '判定要点：量价合理性、regime 档位、可卖底仓、风控状态、连续命中次数、触发与目标价的价差空间。',
+                '判定要点：量价合理性、regime 档位、可卖底仓（以上方持仓快照为准，勿引用外部账户）、风控状态、连续命中次数、触发与目标价的价差空间。',
+                '盈亏比导向：高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——有可卖底仓时触达高抛价应倾向 exec；低吸买腿需确认价差覆盖成本且非追跌。',
                 '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon","reason":"一句话理由"}',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);

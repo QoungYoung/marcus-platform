@@ -886,10 +886,21 @@ class TBacktestEngine:
         summary["reviews"] += 1
         if self.review_fn is not None:
             try:
+                # 注入回测账本实时持仓（LLM 决策依据：可卖底仓/持仓量/成本——
+                # 此前 AI 只能看 DB 真实账户（回测沙盒为空）→ 高抛"无底仓可卖"误放弃）
+                position = {
+                    "symbol": self.symbol,
+                    "sellable": ledger.sellable(),
+                    "volume": ledger.total_shares(),
+                    "avg_price": ledger.cost_price,
+                    "realized_pnl": round(ledger.realized_pnl, 2),
+                    "day_turnover": round(ledger.day_turnover, 2),
+                }
                 r = self.review_fn({
                     "trigger": trigger,
                     "regime": regime,
                     "rule_hint": _rule_review(trigger, regime, ledger),
+                    "position": position,
                 })
                 action = str(r.get("action") or "")
                 if action not in ("exec", "wait", "abandon"):
