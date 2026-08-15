@@ -1319,7 +1319,19 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
     sells = [t for r in per_symbol for t in r.get("ledger", {}).get("trades", []) if t.get("side") == "sell"]
     wins = [t for t in sells if t.get("realized_pnl", 0) > 0]
     win_rate = len(wins) / len(sells) * 100 if sells else 0.0
-    max_dd = max((r.get("ledger", {}).get("max_drawdown_pct", 0) or 0) for r in per_symbol) if per_symbol else 0.0
+    # 组合最大回撤：基于组合权益曲线（非单标的最大值——单标的深跌不代表组合）
+    max_dd = 0.0
+    if equity_curve:
+        peak = equity_curve[0]["total_asset"]
+        for p in equity_curve:
+            v = p["total_asset"]
+            if v > peak:
+                peak = v
+            if peak > 0:
+                dd = (peak - v) / peak * 100
+                if dd > max_dd:
+                    max_dd = dd
+    max_dd = round(max_dd, 2)
     return {
         "symbols": len(built),
         "built_count": len(built),
