@@ -61,8 +61,10 @@ BUILD_PARAMS_DEFAULT = {
     "max_daily_manual": 5,           # 人工建仓 日上限（笔）
     "max_symbols_being_built": 5,    # 同日排队/在途建仓标的数上限
     # 规模（占 t 净值比例，保守/标准/激进）
-    "single_order_pct": {"cons": 0.04, "std": 0.05, "agg": 0.08},
-    "per_symbol_cap": {"cons": 0.08, "std": 0.12, "agg": 0.18},
+    # 迭代#48（AI自由跑）：单笔 0.05→0.10 翻倍——#47 报告显示 000636 涨22%但仓位仅4.4%净值，
+    # 单笔5%上限卡死建仓规模，高收益标的贡献被摊薄（综合+0.83% vs 个股+22%）；总底仓上限不变仍防集中
+    "single_order_pct": {"cons": 0.06, "std": 0.10, "agg": 0.12},
+    "per_symbol_cap": {"cons": 0.10, "std": 0.15, "agg": 0.18},
     "total_floor_cap": {"cons": 0.40, "std": 0.55, "agg": 0.70},
     "max_floor_symbols": 10,         # 组合标的数宽松上限（实际受总量上限约束）
     "min_absolute_floor": 20000,     # 单票底仓做T划算下限（元）

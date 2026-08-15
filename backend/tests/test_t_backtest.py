@@ -457,6 +457,33 @@ class TestEngineCore(unittest.TestCase):
             mock_gen.assert_not_called()
         self.assertEqual(len(conds), 2)
 
+    def test_gateway_free_run_switches(self):
+        """AI 自由跑开关：T_BUY_TIER_LIMIT_ENABLED=0 → 买腿≤可卖底仓全额（L1 不收缩）；
+        T_TURNOVER_LIMIT_ENABLED=0 → 日回转额超限不拦截。"""
+        import app.services.t_gateway as gw
+        with patch.object(gw, "T_BUY_TIER_LIMIT_ENABLED", False):
+            self.assertEqual(gw._max_buy_volume("X", "L1", {"X": {"sellable": 100}}), 100,
+                             "关闭档位上限后 L1 应放行全额")
+        with patch.object(gw, "T_BUY_TIER_LIMIT_ENABLED", True):
+            self.assertEqual(gw._max_buy_volume("X", "L1", {"X": {"sellable": 100}}), 50,
+                             "默认 L1 档买腿≤可卖×0.5")
+
+    def test_gateway_turnover_switch(self):
+        """关闭日回转额上限后超限买腿放行（其余校验不受影响）。"""
+        import app.services.t_gateway as gw
+        ctx = {
+            "regime": "ACTIVE", "quote": None, "ledger": {"X": {"sellable": 100}},
+            "net_asset": 200000.0,
+            "daily": {"realized_pnl": 0.0, "daily_turnover_amount": 600000.0},
+            "risk": {}, "sell_in_transit": False, "trigger_status": "pending",
+        }
+        with patch.object(gw, "T_TURNOVER_LIMIT_ENABLED", False):
+            r = gw.validate_order_at("X", "buy", 10.0, 100, ctx)
+            self.assertNotIn("回转额", r.get("reason", ""), "关闭后不应拦回转额")
+        with patch.object(gw, "T_TURNOVER_LIMIT_ENABLED", True):
+            r = gw.validate_order_at("X", "buy", 10.0, 100, ctx)
+            self.assertIn("回转额", r.get("reason", ""), "默认应拦回转额")
+
 
 # ────────────────────────────────────────────────────────────────
 # DB 链路（需 PostgreSQL）

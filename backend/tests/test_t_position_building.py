@@ -204,9 +204,9 @@ class TestSizing(_PGTestCase):
             s = t_build.build_sizing("SH600000", 10.0)
             self.assertTrue(s["pass"])
             self.assertEqual(s["tier"], "std")
-            # 标准档：单笔 ≤ 5% 净值 = 10000；建议股数 = 10000/10/100*100 = 1000
-            self.assertEqual(s["suggest_volume"], 1000)
-            self.assertAlmostEqual(s["single_max_amount"], 10000.0, delta=0.01)
+            # 标准档：单笔 ≤ 10% 净值 = 20000（迭代#48 翻倍提仓位）；建议股数 = 20000/10/100*100 = 2000
+            self.assertEqual(s["suggest_volume"], 2000)
+            self.assertAlmostEqual(s["single_max_amount"], 20000.0, delta=0.01)
 
     def test_total_floor_cap_rejects(self):
         from app.services import t_build
@@ -215,7 +215,7 @@ class TestSizing(_PGTestCase):
                  "regime": "ACTIVE", "gate_low_buy": "ALLOWED", "gate_high_sell": "ALLOWED",
                  "interpret_sign": 1, "index_drop": 0.0}), \
              patch.object(t_build, "_positions_value", return_value=(110000.0, {})):
-            # 总底仓 11 万 + 本笔 1 万 = 12 万 > 55%×20万=11万 → 拒
+            # 总底仓 11 万 + 本笔 2 万 = 13 万 > 55%×20万=11万 → 拒
             s = t_build.build_sizing("SH600000", 10.0)
             self.assertFalse(s["pass"])
             self.assertIn("总底仓超上限", s["reason"])

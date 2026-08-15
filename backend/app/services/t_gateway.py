@@ -26,6 +26,10 @@ T_STOP_GUARD_ENABLED = os.getenv("T_STOP_GUARD_ENABLED", "1") != "0"
 BASE_LOSS_HALF_PCT = 3.0      # 底仓浮亏 −3% 减半仓
 BASE_LOSS_CLEAR_PCT = 5.0     # 底仓浮亏 −5% 清仓+当日锁定
 MAX_DAILY_BUY_LEGS = 2        # 单标单日低吸（买腿成交）次数上限
+# 买腿分档上限开关（L1 档买腿≤可卖底仓×0.5）——关闭后买腿≤可卖底仓全额（AI 自由跑用）
+T_BUY_TIER_LIMIT_ENABLED = os.getenv("T_BUY_TIER_LIMIT_ENABLED", "1") != "0"
+# 日回转额上限开关（日累计回转额≤3×净值）——关闭后不做回转额拦截（AI 自由跑用）
+T_TURNOVER_LIMIT_ENABLED = os.getenv("T_TURNOVER_LIMIT_ENABLED", "1") != "0"
 
 # ── 参数（P4 敏感度扫描标定，当前保守档初值） ──
 MAX_SINGLE_ORDER_PCT = 0.05        # 单笔 ≤ 净值 5%（建议层）
@@ -205,13 +209,18 @@ def _floor_tier(regime: str, near_limit_down: bool) -> str:
 
 
 def _max_buy_volume(symbol: str, tier: str, ledger: Optional[dict] = None) -> int:
-    """按分档计算买腿上限（股数）。ledger 可注入（回测账本），默认实时账本。"""
+    """按分档计算买腿上限（股数）。ledger 可注入（回测账本），默认实时账本。
+
+    T_BUY_TIER_LIMIT_ENABLED=0（AI 自由跑）：忽略档位收缩，买腿 ≤ 可卖底仓全额。
+    """
     if ledger is None:
         ledger = get_sellable_ledger()
     item = ledger.get(symbol)
     if not item:
         return 0
     sellable = item["sellable"]
+    if not T_BUY_TIER_LIMIT_ENABLED:
+        return sellable
     if tier == TIER_L0:
         return 0
     if tier == TIER_L1:
@@ -349,9 +358,11 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
             result["level"] = "ledger"
             result["reason"] = f"日亏损熔断（{pnl_pct:.2f}%）"
             return result
-        # 日回转额上限（主指标）——止损卖腿豁免（止血离场必须执行）
+        # 日回转额上限（主指标）——止损卖腿豁免（止血离场必须执行）；
+        # T_TURNOVER_LIMIT_ENABLED=0（AI 自由跑）跳过
         turnover = float(daily.get("daily_turnover_amount") or 0)
-        if turnover + price * volume > net_asset * MAX_DAILY_TURNOVER_RATIO \
+        if T_TURNOVER_LIMIT_ENABLED \
+                and turnover + price * volume > net_asset * MAX_DAILY_TURNOVER_RATIO \
                 and not (side == "sell" and is_stop_loss):
             result["level"] = "ledger"
             result["reason"] = "当日累计回转额超上限"

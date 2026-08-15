@@ -281,7 +281,8 @@ class TestBaseLossGuard(unittest.TestCase):
         from app.services.t_build import _params
         p = _params()
         cap = p["per_symbol_cap"]
-        self.assertEqual(cap, {"cons": 0.08, "std": 0.12, "agg": 0.18})
+        # 迭代#48（AI自由跑提仓位）：std 0.12→0.15、cons 0.08→0.10（agg 0.18 不变）
+        self.assertEqual(cap, {"cons": 0.10, "std": 0.15, "agg": 0.18})
 
     def test_stop_loss_exempt_from_daily_loss_breaker(self):
         """止损卖腿豁免日亏损熔断（止血必须执行）；买腿仍被熔断拦截。"""
