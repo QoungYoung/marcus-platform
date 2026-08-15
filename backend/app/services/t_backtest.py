@@ -771,7 +771,13 @@ class TBacktestEngine:
             volume = max(int(sellable * 0.3), 100) if sellable > 0 else 100
             volume = (volume // 100) * 100
         else:
+            # 高抛卖量 ≤ 可卖底仓 30%（min 100 股），且底仓充足(>200股)时保留至少 100 股
+            # （迭代#38：防卖飞踏空；小底仓仍可全卖做T）
+            max_sell = sellable
+            if sellable > 200:
+                max_sell = max(sellable - 100, 0)
             volume = max(int(sellable * 0.3), 100) if sellable > 0 else 0
+            volume = min(volume, max_sell)
             volume = (volume // 100) * 100
         if volume <= 0:
             self.events.append({"type": "blocked", "data": {
@@ -794,11 +800,12 @@ class TBacktestEngine:
             trade = ledger.do_buy(exec_price, volume, self.slippage, self.fee_rate)
         else:
             trade = ledger.do_sell(exec_price, volume, self.slippage, self.fee_rate)
-            # T+0 闭环：高抛成交后挂买回单（high_sell_then_buy_back 语义，复归价 = 卖价×(1-0.4%)）
+            # T+0 闭环：高抛成交后挂买回单（复归价 = 卖价×(1-0.2%)，迭代#38：
+            # 0.996→0.998 放宽回补价，减少上涨趋势中卖飞踏空）
             if trigger.get("event_type") == "high_sell_then_buy_back":
                 self._pending_buyback = {
                     "volume": volume,
-                    "limit": round(exec_price * 0.996, 3),
+                    "limit": round(exec_price * 0.998, 3),
                     "symbol": self.symbol,
                 }
         summary["executed"] += 1
