@@ -529,7 +529,8 @@ export default function TBacktestPage() {
                 <div className="tbt-metric"><span className="tbt-metric-label">建仓标的</span><b>{metrics.built_count ?? metrics.symbols ?? '—'}</b></div>
                 <div className="tbt-metric"><span className="tbt-metric-label">触发次数</span><b>{metrics.trigger_count ?? 0}</b></div>
                 <div className="tbt-metric"><span className="tbt-metric-label">成交次数</span><b>{metrics.executed_count ?? 0}</b></div>
-                <div className="tbt-metric"><span className="tbt-metric-label">胜率</span><b>{fmtPct(metrics.win_rate_pct)}</b></div>
+                <div className="tbt-metric"><span className="tbt-metric-label">卖出胜率</span><b>{metrics.total_sell_trades ? `${fmtPct(metrics.win_rate_pct)} (${metrics.winning_trades ?? metrics.total_sell_trades}/${metrics.total_sell_trades}笔)` : '—'}</b></div>
+                <div className="tbt-metric"><span className="tbt-metric-label">止损次数</span><b>{metrics.stop_loss_count ?? 0}</b></div>
                 <div className="tbt-metric"><span className="tbt-metric-label">最大回撤</span><b>{fmtPct(metrics.max_drawdown_pct)}</b></div>
                 <div className="tbt-metric"><span className="tbt-metric-label">已实现盈亏</span><b>{fmtMoney(metrics.realized_pnl)}</b></div>
                 <div className="tbt-metric"><span className="tbt-metric-label">AI执行胜率</span><b>{metrics.ai_exec_count != null ? `${fmtPct(metrics.ai_exec_win_rate_pct)} (${metrics.ai_exec_count}笔)` : '—'}</b></div>
