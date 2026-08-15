@@ -95,7 +95,16 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                           or (trigger or {}).get("suggest_ask_price")
                           or (context or {}).get("price") or 0)
             side = "buy" if (trigger or {}).get("event_type") in ("low_buy", "panic_vibrate", "custom_buy") else "sell"
-            volume = int((context or {}).get("volume") or 100)
+            # 量：优先 context.volume；否则按可卖底仓 30% 推导（对齐做T单笔惯例，最小 100 股）
+            volume = int((context or {}).get("volume") or 0)
+            if volume <= 0:
+                try:
+                    from app.services.t_gateway import get_sellable_ledger
+                    item = get_sellable_ledger().get(symbol) or {}
+                    sellable = int(item.get("sellable") or 0)
+                    volume = max(int(sellable * 0.3), 100) if sellable > 0 else 100
+                except Exception:
+                    volume = 100
             volume = (volume // 100) * 100 or 100
             if price <= 0:
                 gw = {"status": "rejected", "reason": "无有效价格（AI 决策未携带价格）"}

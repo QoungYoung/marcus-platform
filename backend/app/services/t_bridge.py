@@ -87,11 +87,12 @@ def _consecutive_hits(condition_id: Optional[int], symbol: str) -> int:
         return 0
 
 
-def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> bool:
+def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optional[str]:
     """Worker 命中后主动唤醒做T Agent（POST /chat，附触发上下文）。
 
     AI 主导模式：唤醒语义为"决策"而非"复核"——AI 自主看盘后决定
     exec（执行）/ wait（等待）/ abandon（放弃）/ update_condition（调整条件）。
+    返回 AI 回复文本（/chat 响应 reply 字段）；失败返回 None（调用方降级）。
     """
     symbol = trigger.get("symbol", "")
     ctx = dict(context or {})
@@ -134,11 +135,31 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> bool:
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read().decode("utf-8")
-        print(f"[t-bridge] 唤醒 Agent 成功: {symbol} ({len(body)} bytes) decision_mode=ai_led")
-        return True
+        # 解析 AI 回复（reply 字段）
+        try:
+            reply = str(json.loads(body).get("reply") or "") if body else ""
+        except (ValueError, TypeError):
+            reply = body or ""
+        print(f"[t-bridge] 唤醒 Agent 成功: {symbol} ({len(body)} bytes) decision_mode=ai_led "
+              f"reply_len={len(reply)}")
+        return reply or None
     except Exception as e:
         print(f"[t-bridge] 唤醒 Agent 失败（降级轮询兜底）: {e}")
-        return False
+        return None
+
+
+def wake_and_decide(trigger: Dict[str, Any], context: Optional[dict] = None,
+                    session_id: Optional[str] = None) -> Dict[str, Any]:
+    """AI 主导闭环：唤醒 AI → 取回复 → handle_ai_decision 路由（exec/wait/abandon/update_condition）→ 审计。
+
+    唤醒失败（桥不可达）返回 {"status": "wake_failed"}，由调用方走降级（agent_review_and_execute 标记）。
+    """
+    reply = wake_agent(trigger, context=context)
+    if not reply:
+        return {"status": "wake_failed", "reason": "AI 唤醒失败（桥不可达）"}
+    from app.services.t_ai_agent import handle_ai_decision
+    sid = session_id or f"t-agent-{trigger.get('symbol', '')}"
+    return handle_ai_decision(trigger, context, reply, session_id=sid)
 
 
 def agent_review_and_execute(trigger: Dict[str, Any]) -> Dict[str, Any]:

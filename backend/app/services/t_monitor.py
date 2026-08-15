@@ -396,13 +396,21 @@ class TMonitor:
             )
             print(f"[TMonitor] 触发写入 #{trig_id} {cond['symbol']} {trigger_kind} "
                   f"mode={mode} consec_hits={consecutive_hits} @ {current}")
-            # 主动唤醒 Agent（桥不可达由 t_bridge 降级轮询兜底）
+            # AI 主导闭环：唤醒 AI → 决策路由（exec/wait/abandon/update_condition）→ 审计
             try:
-                from app.services.t_bridge import wake_agent
+                from app.services.t_bridge import wake_and_decide
                 trig["id"] = trig_id
-                wake_agent(trig, context={"regime": regime_state.get("regime"), "mode": mode})
+                decision = wake_and_decide(trig, context={
+                    "regime": regime_state.get("regime"), "mode": mode,
+                })
+                print(f"[TMonitor] AI 决策 #{trig_id}: {decision.get('status')} "
+                      f"action={decision.get('action', '')} reason={str(decision.get('reason', ''))[:60]}")
+                if decision.get("status") == "wake_failed":
+                    # 桥不可达 → 降级标记（agent_review_and_execute 只标记不自动下单）
+                    from app.services.t_bridge import agent_review_and_execute
+                    agent_review_and_execute(trig)
             except Exception as e:
-                print(f"[TMonitor] 唤醒失败（降级兜底）: {e}")
+                print(f"[TMonitor] AI 决策失败（降级兜底）: {e}")
 
     def _consecutive_hits(self, condition_id: Optional[int], symbol: str) -> int:
         """同条件当日连续命中计数：从最新 t_triggers 往前数连续 ai_decided/await_retry/pending。"""

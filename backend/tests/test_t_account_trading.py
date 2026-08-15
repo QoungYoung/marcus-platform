@@ -482,6 +482,56 @@ class TAiLedTest(_PGTestCase):
         # 从最新往前：executed 中断 → 0（最新已 executed）
         self.assertEqual(_consecutive_hits(7, "600519"), 0)
 
+    def test_wake_and_decide_wait_route(self):
+        """闭环：唤醒成功（AI 回复 wait）→ handle_ai_decision 路由 → 审计 + 事件 await_retry。"""
+        from app.services import t_bridge, t_db
+        from app.services.t_ai_agent import AI_ACTIONS
+        trig_id = self._make_trigger()
+        # 模拟 /chat 返回 AI 决策 JSON
+        fake_resp = json.dumps({"reply": '{"action": "wait", "reason": "量比不足"}'}).encode("utf-8")
+        with patch("app.services.t_bridge.urllib.request.urlopen") as m_open:
+            m_open.return_value.__enter__.return_value.read.return_value = fake_resp
+            with patch("app.services.t_bridge._bridge_url", return_value="http://x/chat"):
+                r = t_bridge.wake_and_decide(
+                    {"id": trig_id, "symbol": "600519", "condition_id": 1,
+                     "event_type": "low_buy", "suggest_bid_price": 99.4},
+                    context={"symbol": "600519"})
+        self.assertEqual(r["action"], "wait")
+        acts = t_db.list_ai_actions(symbol="600519")
+        self.assertGreaterEqual(len(acts), 1)
+        rows = t_db.list_triggers(status="await_retry")
+        self.assertTrue(any(x["id"] == trig_id for x in rows))
+
+    def test_wake_and_decide_exec_routes_gateway(self):
+        """闭环：AI 回复 exec → 网关执行（mock 网关 → 拒绝路径也走通）。"""
+        from app.services import t_bridge, t_db
+        trig_id = self._make_trigger()
+        fake_resp = json.dumps({"reply": '{"action": "exec", "reason": "回踩到位"}'}).encode("utf-8")
+        with patch("app.services.t_bridge.urllib.request.urlopen") as m_open:
+            m_open.return_value.__enter__.return_value.read.return_value = fake_resp
+            with patch("app.services.t_bridge._bridge_url", return_value="http://x/chat"):
+                with patch("app.services.t_gateway.gateway_execute", return_value={
+                        "status": "rejected", "reason": "mock 网关拒绝"}):
+                    r = t_bridge.wake_and_decide(
+                        {"id": trig_id, "symbol": "600519", "condition_id": 1,
+                         "event_type": "low_buy", "suggest_bid_price": 99.4},
+                        context={"symbol": "600519", "volume": 200})
+        self.assertEqual(r["action"], "exec")
+        self.assertEqual(r["status"], "rejected")
+        self.assertIn("mock 网关拒绝", r["gateway"]["reason"])
+
+    def test_wake_and_decide_failure_fallback(self):
+        """闭环：唤醒失败（urlopen 抛异常）→ wake_failed，不落审计不自动下单。"""
+        from app.services import t_bridge, t_db
+        trig_id = self._make_trigger()
+        with patch("app.services.t_bridge.urllib.request.urlopen", side_effect=OSError("conn refused")):
+            r = t_bridge.wake_and_decide(
+                {"id": trig_id, "symbol": "600519", "condition_id": 1,
+                 "event_type": "low_buy", "suggest_bid_price": 99.4},
+                context={})
+        self.assertEqual(r["status"], "wake_failed")
+        self.assertEqual(t_db.list_ai_actions(symbol="600519"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
