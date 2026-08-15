@@ -142,9 +142,9 @@ class TestDualConditions(unittest.TestCase):
         conds = build_t_conditions(10.0, amp_med=6.0)
         high = next(c for c in conds if c["trigger_kind"] == "high_sell_then_buy_back")
         low = next(c for c in conds if c["trigger_kind"] == "low_buy")
-        # 振幅 6% × 0.6 = 3.6% > 下限
-        self.assertEqual(high["sell_target_price"], round(10.0 * 1.036, 2))
-        self.assertEqual(low["target_price"], round(10.0 * 0.964, 2))
+        # 振幅 6% × 0.75 = 4.5% > 下限
+        self.assertEqual(high["sell_target_price"], round(10.0 * 1.045, 2))
+        self.assertEqual(low["target_price"], round(10.0 * 0.955, 2))
 
     def test_no_amp_uses_floor(self):
         from app.services.t_pool import build_t_conditions

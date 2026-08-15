@@ -231,6 +231,11 @@ def _fetch_daily_bars_eastmoney(symbol: str, count: int = 40, as_of: Optional[st
 def trend_gate(symbol: str, bars: Optional[List[dict]] = None, as_of: Optional[str] = None) -> Tuple[bool, str]:
     """个股趋势闸门：20 日均线方向 + 均线排列，单边下行排除（乘性闸门）。
 
+    迭代 #37：000426/000533/000066 建仓时 MA5>MA10（短期反弹）但 MA20 仍下行
+    （中期弱势），窗口期 -8%~-13% 被止损。新增中期趋势硬要求：
+    MA20 方向必须向上或走平（ma20 ≥ ma20_prev），否则拒绝——做T标的须在
+    中期上升通道，短期回踩才安全（右侧思维）。
+
     bars 可外部传入（build_score 已拉取时避免重复请求）。数据不可得时放行（记 warn），
     由回踩企稳 + 人工升级兜底。as_of 截止防前视（bars 未传时内部拉取用）。
     """
@@ -246,6 +251,9 @@ def trend_gate(symbol: str, bars: Optional[List[dict]] = None, as_of: Optional[s
     down = ma20 < ma20_prev and ma5 < ma10 < ma20
     if down:
         return False, f"单边下行（MA5 {ma5:.2f} < MA10 {ma10:.2f} < MA20 {ma20:.2f}）"
+    # 中期趋势硬要求：MA20 下行（且非单边下行形态）→ 拒绝（反弹陷阱过滤）
+    if ma20 < ma20_prev * 0.995:
+        return False, f"中期趋势向下（MA20 {ma20:.2f} < 前值 {ma20_prev:.2f}）"
     return True, f"MA20 方向正常（{ma20:.2f}）"
 
 
