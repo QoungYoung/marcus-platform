@@ -173,6 +173,27 @@
 .tbt-field input:disabled, .tbt-field select:disabled { background: #eef4fb; color: var(--gp-faint); cursor: not-allowed; }
 .tbt-symbol-row { display: flex; gap: var(--space-2); }
 .tbt-symbol-row input { flex: 1; }
+.tbt-radio-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.tbt-radio {
+  border: 1px solid var(--gp-line);
+  background: #fff;
+  color: var(--gp-ink-2);
+  border-radius: var(--gp-radius);
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.tbt-radio:hover { border-color: var(--gp-blue); background: rgba(47, 124, 211, 0.05); }
+.tbt-radio:focus-visible { outline: 2px solid var(--gp-blue); outline-offset: 1px; }
+.tbt-radio:active { background: rgba(47, 124, 211, 0.12); }
+.tbt-radio.is-on {
+  background: linear-gradient(135deg, #2f7cd3, #1c5fae);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.tbt-symbol-hint { font-size: 11px; color: var(--gp-faint); line-height: 1.6; }
 .tbt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .tbt-chip {
   display: inline-flex;

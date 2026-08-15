@@ -30,8 +30,9 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 conditions: List[Dict[str, Any]], init_shares: int = 1000,
                 init_price: Optional[float] = None, net_asset: float = 200000.0,
                 review_mode: str = "llm", symbols: Optional[List[str]] = None,
-                build_mode: bool = False, build_limit_ratio: float = 0.55) -> Optional[int]:
-    """创建回测任务（status=pending）。组合模式：symbols 列表 + build_mode。"""
+                build_mode: bool = False, build_limit_ratio: float = 0.55,
+                select_source: str = "manual", select_limit: int = 10) -> Optional[int]:
+    """创建回测任务（status=pending）。组合模式：symbols 列表或 select_source 自动选股。"""
     try:
         db = SessionLocal()
         try:
@@ -40,9 +41,9 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 INSERT INTO t_backtest_tasks (
                     symbol, start_date, end_date, init_shares, init_price,
                     net_asset, review_mode, conditions_json, symbols_json,
-                    build_mode, build_limit_ratio
+                    build_mode, build_limit_ratio, select_source, select_limit
                 ) VALUES (:symbol, :start, :end, :shares, :price, :asset, :mode, :conds,
-                          :symbols, :build_mode, :build_limit)
+                          :symbols, :build_mode, :build_limit, :sel_src, :sel_lim)
                 RETURNING id
                 """
             ), {
@@ -52,6 +53,8 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 "conds": json.dumps(conditions, ensure_ascii=False),
                 "symbols": json.dumps(symbols or [], ensure_ascii=False),
                 "build_mode": bool(build_mode), "build_limit": float(build_limit_ratio),
+                "sel_src": select_source if select_source in ("manual", "pool", "scan") else "manual",
+                "sel_lim": int(select_limit),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -339,18 +342,30 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     start = task.get("start_date") or ""
     end = task.get("end_date") or ""
 
-    # 组合模式：候选列表 = symbols 或 做T候选池
+    # 组合模式：候选列表 = symbols 或 自动选股（select_source: manual/pool/scan）
     is_combined = bool(build_mode) or (len(symbols) > 0 and symbol in ("", "combined"))
-    if is_combined and not symbols:
+    select_source = str(task.get("select_source") or ("manual" if symbols else "pool"))
+    select_limit = int(task.get("select_limit") or 10)
+    if is_combined and not symbols and select_source in ("pool", "scan"):
         try:
             from app.services.t_build import scan_t_candidates
-            cands = scan_t_candidates(limit=10, source="pool")
-            symbols = [c.get("symbol") for c in cands if c.get("symbol")]
+            # 自动选股（防前视）：精筛用 as_of=窗口首日前一交易日的日线（趋势/风险历史化）
+            from datetime import datetime as _dt, timedelta as _td
+            try:
+                as_of = (_dt.strptime(start, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                as_of = None
+            cands = scan_t_candidates(limit=select_limit, source=select_source, as_of=as_of)
+            symbols = [c.get("symbol") for c in cands
+                       if c.get("symbol") and c.get("pass_gate")]
             if not symbols:
-                update_task_status(task_id, "failed", error_message="候选池为空")
-                return {"status": "failed", "error": "候选池为空"}
+                update_task_status(task_id, "failed", error_message="自动选股无达标标的")
+                return {"status": "failed", "error": f"自动选股({select_source})无达标标的"}
+            print(f"[t-backtest] 自动选股({select_source}) 达标 {len(symbols)} 只: {symbols[:10]}")
         except Exception as e:
-            print(f"[t-backtest] 候选池获取失败: {e}")
+            print(f"[t-backtest] 自动选股失败: {e}")
+            update_task_status(task_id, "failed", error_message=f"自动选股失败: {e}")
+            return {"status": "failed", "error": f"自动选股失败: {e}"}
     if is_combined:
         symbol = "combined"
 

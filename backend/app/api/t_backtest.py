@@ -28,9 +28,12 @@ def t_backtest_create(body: dict):
     """
     symbols = body.get("symbols") or []
     build_mode = bool(body.get("build_mode", False))
-    symbol = body.get("symbol") or ("combined" if (symbols or build_mode) else "")
+    # 自动选股：select_source=pool（做T候选池）/scan（全市场扫描）；symbols 为空且选择自动时启用
+    select_source = str(body.get("select_source") or ("manual" if symbols else "pool"))
+    select_limit = int(body.get("select_limit") or 10)
+    symbol = body.get("symbol") or ("combined" if (symbols or build_mode or select_source in ("pool", "scan")) else "")
     if not symbol:
-        raise HTTPException(status_code=400, detail="缺少 symbol（单标的）或 symbols（组合）")
+        raise HTTPException(status_code=400, detail="缺少 symbol（单标的）或 symbols/select_source（组合）")
     conditions = body.get("conditions") or []
     if not isinstance(conditions, list):
         raise HTTPException(status_code=400, detail="conditions 必须为数组")
@@ -51,10 +54,12 @@ def t_backtest_create(body: dict):
         symbols=symbols,
         build_mode=build_mode,
         build_limit_ratio=float(body.get("build_limit_ratio", 0.55)),
+        select_source=select_source,
+        select_limit=select_limit,
     )
     if not task_id:
         raise HTTPException(status_code=500, detail="任务创建失败")
-    mode = "combined" if (symbols or build_mode) else "single"
+    mode = "combined" if (symbols or build_mode or select_source in ("pool", "scan")) else "single"
     return {"success": True, "task_id": task_id, "status": "pending", "mode": mode}
 
 

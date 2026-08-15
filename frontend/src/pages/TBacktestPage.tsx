@@ -66,6 +66,8 @@ export default function TBacktestPage() {
   // 创建表单
   const [symbolInput, setSymbolInput] = useState('');
   const [symbols, setSymbols] = useState<string[]>([]);
+  const [selectSource, setSelectSource] = useState<'manual' | 'pool' | 'scan'>('manual');
+  const [selectLimit, setSelectLimit] = useState('10');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [condTemplate, setCondTemplate] = useState('auto');
@@ -129,13 +131,15 @@ export default function TBacktestPage() {
 
   const submit = async () => {
     setError(''); setMsg('');
-    if (symbols.length === 0) { setError('请至少添加一个标的'); return; }
+    if (selectSource === 'manual' && symbols.length === 0) { setError('手动模式请至少添加一个标的（或改用自动选股）'); return; }
     if (!startDate || !endDate) { setError('请选择回测日期范围'); return; }
     setLoading(true);
     try {
       const r = await tBacktestApi.create({
         symbol: 'combined',
-        symbols,
+        symbols: selectSource === 'manual' ? symbols : [],
+        select_source: selectSource,
+        select_limit: Number(selectLimit) || 10,
         build_mode: buildMode,
         build_limit_ratio: 0.55,
         start_date: startDate,
@@ -221,46 +225,82 @@ export default function TBacktestPage() {
             <div className="tbt-panel-head"><span>新建回测</span><span className="tbt-hint">组合模式：建仓规则选股 → 各自做T → 组合收益</span></div>
             <div className="tbt-form">
               <div className="tbt-field tbt-field-wide">
-                <label>候选标的</label>
-                <div className="tbt-symbol-row">
-                  <input
-                    value={symbolInput}
-                    placeholder="输入代码如 600519，回车添加"
-                    onChange={(e) => setSymbolInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && symbolInput.trim()) {
-                        setSymbols((p) => Array.from(new Set([...p, symbolInput.trim().toUpperCase()])));
-                        setSymbolInput('');
-                      }
-                    }}
-                  />
-                  <button type="button" className="tbt-btn tbt-btn-outline" onClick={loadCandidates}>从候选池加载</button>
-                </div>
-                <div className="tbt-chips">
-                  {symbols.map((s) => (
-                    <span key={s} className="tbt-chip">
-                      {s}
-                      <button type="button" aria-label={`移除 ${s}`} onClick={() => setSymbols((p) => p.filter((x) => x !== s))}>×</button>
-                    </span>
+                <label>选股方式</label>
+                <div className="tbt-radio-row">
+                  {([
+                    ['manual', '手动输入'],
+                    ['pool', '自动 · 做T候选池'],
+                    ['scan', '自动 · 全市场扫描'],
+                  ] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      className={`tbt-radio ${selectSource === val ? 'is-on' : ''}`}
+                      onClick={() => setSelectSource(val)}
+                    >
+                      {label}
+                    </button>
                   ))}
-                  {symbols.length === 0 && <span className="tbt-chip-hint">未添加 — 可使用"从候选池加载"或手动输入</span>}
                 </div>
-                {candidates.length > 0 && (
-                  <div className="tbt-cand">
-                    <span className="tbt-cand-title">候选池（可T质量分）</span>
-                    {candidates.map((c) => (
-                      <button
-                        key={c.symbol}
-                        type="button"
-                        className={`tbt-cand-item ${c.pass_gate ? 'is-pass' : ''}`}
-                        onClick={() => setSymbols((p) => Array.from(new Set([...p, c.symbol])))}
-                      >
-                        {c.symbol} · {fmtPct(c.score * 100)} {c.pass_gate ? '✓' : `✗ ${(c.reasons || []).join(',')}`}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <div className="tbt-symbol-hint">
+                  {selectSource === 'manual'
+                    ? '手动添加标的（支持"从候选池加载"快速选择）'
+                    : selectSource === 'pool'
+                      ? '自动从做T候选池选股（可T质量打分达标，精筛用回测期前历史日线防前视）'
+                      : '全市场扫描选股（stock_basic 粗筛 → 精筛，首跑约 1-2 分钟；粗筛活跃度用当前数据，精筛打分历史化）'}
+                </div>
               </div>
+
+              {selectSource === 'manual' && (
+                <div className="tbt-field tbt-field-wide">
+                  <label>候选标的</label>
+                  <div className="tbt-symbol-row">
+                    <input
+                      value={symbolInput}
+                      placeholder="输入代码如 600519，回车添加"
+                      onChange={(e) => setSymbolInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && symbolInput.trim()) {
+                          setSymbols((p) => Array.from(new Set([...p, symbolInput.trim().toUpperCase()])));
+                          setSymbolInput('');
+                        }
+                      }}
+                    />
+                    <button type="button" className="tbt-btn tbt-btn-outline" onClick={loadCandidates}>从候选池加载</button>
+                  </div>
+                  <div className="tbt-chips">
+                    {symbols.map((s) => (
+                      <span key={s} className="tbt-chip">
+                        {s}
+                        <button type="button" aria-label={`移除 ${s}`} onClick={() => setSymbols((p) => p.filter((x) => x !== s))}>×</button>
+                      </span>
+                    ))}
+                    {symbols.length === 0 && <span className="tbt-chip-hint">未添加 — 可使用"从候选池加载"或手动输入</span>}
+                  </div>
+                  {candidates.length > 0 && (
+                    <div className="tbt-cand">
+                      <span className="tbt-cand-title">候选池（可T质量分）</span>
+                      {candidates.map((c) => (
+                        <button
+                          key={c.symbol}
+                          type="button"
+                          className={`tbt-cand-item ${c.pass_gate ? 'is-pass' : ''}`}
+                          onClick={() => setSymbols((p) => Array.from(new Set([...p, c.symbol])))}
+                        >
+                          {c.symbol} · {fmtPct(c.score * 100)} {c.pass_gate ? '✓' : `✗ ${(c.reasons || []).join(',')}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {selectSource !== 'manual' && (
+                <div className="tbt-field">
+                  <label>选股数量</label>
+                  <input type="number" value={selectLimit} min="1" max="20" onChange={(e) => setSelectLimit(e.target.value)} />
+                </div>
+              )}
 
               <div className="tbt-field">
                 <label>开始日期</label>

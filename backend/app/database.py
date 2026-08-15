@@ -517,6 +517,12 @@ def _apply_t_backtest_migration():
             conn.execute(text(
                 "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS build_limit_ratio DOUBLE PRECISION NOT NULL DEFAULT 0.55"
             ))
+            conn.execute(text(
+                "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS select_source VARCHAR(8) NOT NULL DEFAULT 'manual'"
+            ))
+            conn.execute(text(
+                "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS select_limit INTEGER NOT NULL DEFAULT 10"
+            ))
             # 2) 事件流（触发/复核/拦截/缺口）
             conn.execute(text(
                 """
