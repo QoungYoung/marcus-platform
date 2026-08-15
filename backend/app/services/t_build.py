@@ -272,14 +272,15 @@ def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
     avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
     # 振幅贡献：3%~7% 最可T → +0.2；<1% 或 >12% → -0.2
     amp_score = 0.2 if 3.0 <= avg_amp <= 7.0 else (-0.2 if avg_amp < 1.0 or avg_amp > 12.0 else 0.0)
-    # 流动性贡献：成交额 ≥ 8 亿 → +0.2；< 2 亿 → -0.2
-    liq_score = 0.2 if avg_amount >= 8e8 else (-0.2 if avg_amount < 2e8 else 0.0)
+    # 流动性贡献：成交额 ≥ 8 亿 → +0.2；< 2 亿 → -0.2（tushare daily.amount 单位千元，×1000 转元）
+    avg_amount_yuan = avg_amount * 1000
+    liq_score = 0.2 if avg_amount_yuan >= 8e8 else (-0.2 if avg_amount_yuan < 2e8 else 0.0)
     score = round(max(0.0, min(0.5 + amp_score + liq_score, 1.0)), 4)
     reasons = []
     if amp_score < 0:
         reasons.append(f"振幅不适宜（{avg_amp:.1f}%）")
     if liq_score < 0:
-        reasons.append(f"流动性不足（日均 {avg_amount / 1e8:.1f} 亿）")
+        reasons.append(f"流动性不足（日均 {avg_amount_yuan / 1e8:.1f} 亿）")
     return {"score": score, "pass_gate": score >= 0.5, "reasons": reasons}
 
 
