@@ -41,6 +41,6 @@
 
 ## 8. 集成与部署
 
-- [ ] 8.1 全量回归：`pytest backend/tests -q`（重点 t_* 套件）
-- [ ] 8.2 服务器部署：backend/worker + dsh（bridge 变更 docker cp 进卷）+ FORCE_RESEED_PROMPTS；验证 /t/ai/actions quality、唤醒上下文含历史结果
-- [ ] 8.3 端到端验证：跑 1 个月回测（6 月），对比反馈前后 exec 胜率/abandon 正确率；确认 outcome 落库与质量指标输出
+- [x] 8.1 全量回归：`pytest backend/tests -q`（重点 t_* 套件）
+- [x] 8.2 服务器部署：backend/worker + dsh（bridge 变更 docker cp 进卷）+ FORCE_RESEED_PROMPTS；验证 /t/ai/actions quality、唤醒上下文含历史结果
+- [x] 8.3 端到端验证：跑 1 个月回测（6 月），对比反馈前后 exec 胜率/abandon 正确率；确认 outcome 落库与质量指标输出
