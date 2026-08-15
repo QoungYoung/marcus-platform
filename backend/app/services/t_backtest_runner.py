@@ -355,13 +355,20 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 as_of = (_dt.strptime(start, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
             except (ValueError, TypeError):
                 as_of = None
-            cands = scan_t_candidates(limit=select_limit, source=select_source, as_of=as_of)
+            source = select_source
+            cands = scan_t_candidates(limit=select_limit, source=source, as_of=as_of)
             symbols = [c.get("symbol") for c in cands
                        if c.get("symbol") and c.get("pass_gate")]
+            # 候选池空 → 降级全市场扫描（保证自动选股可用）
+            if not symbols and source == "pool":
+                print("[t-backtest] 候选池为空，降级全市场扫描自动选股")
+                cands = scan_t_candidates(limit=select_limit, source="scan", as_of=as_of)
+                symbols = [c.get("symbol") for c in cands
+                           if c.get("symbol") and c.get("pass_gate")]
             if not symbols:
                 update_task_status(task_id, "failed", error_message="自动选股无达标标的")
-                return {"status": "failed", "error": f"自动选股({select_source})无达标标的"}
-            print(f"[t-backtest] 自动选股({select_source}) 达标 {len(symbols)} 只: {symbols[:10]}")
+                return {"status": "failed", "error": f"自动选股({source})无达标标的"}
+            print(f"[t-backtest] 自动选股({source}) 达标 {len(symbols)} 只: {symbols[:10]}")
         except Exception as e:
             print(f"[t-backtest] 自动选股失败: {e}")
             update_task_status(task_id, "failed", error_message=f"自动选股失败: {e}")
