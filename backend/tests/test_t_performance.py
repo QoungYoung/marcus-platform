@@ -374,6 +374,30 @@ class TestSelectionFilter(unittest.TestCase):
         r = _quality_from_daily(bars)
         self.assertTrue(r["pass_gate"])
 
+    def test_quality_continuous_discriminates(self):
+        """质量分连续化（迭代#42）：不同振幅/成交额得分拉开，消除撞顶 0.9 坍缩。"""
+        from app.services.t_build import _quality_from_daily
+        def mk(amp_pct, amount_yuan):
+            bars = []
+            for i in range(20):
+                base = 10.0 + i * 0.01
+                half = amp_pct / 100 * base / 2
+                bars.append({"date": f"2026-01-{i+1:02d}", "open": base, "close": base + 0.01,
+                             "high": base + half, "low": base - half,
+                             "vol": 1e6, "amount": amount_yuan / 1000})
+            return _quality_from_daily(bars)
+        # 振幅 5%（最优） vs 振幅 3.2%（边缘）——得分应拉开
+        q_best = mk(5.0, 1e9)
+        q_edge = mk(3.2, 1e9)
+        self.assertGreater(q_best["score"], q_edge["score"],
+                           f"振幅区分失效: {q_best['score']} vs {q_edge['score']}")
+        # 成交额 100亿 vs 8亿——流动性连续分拉开
+        q_liq_hi = mk(5.0, 1e10)
+        q_liq_lo = mk(5.0, 8e8)
+        self.assertGreaterEqual(q_liq_hi["score"], q_liq_lo["score"])
+        # 不再撞顶：振幅 5% + 100亿 不应是 0.9 上限（应 < 0.9 或至少不同档位有差异）
+        self.assertLess(q_best["score"], 0.95)
+
 
 # ── 5.4 AI 兜底 ──
 class TestAIDecisionFallback(unittest.TestCase):

@@ -15,6 +15,7 @@
 - 参数：分档初值存 t_build_params，P4 ±30% 敏感度扫描后固化。
 """
 import json
+import math
 import threading
 import time
 from datetime import datetime
@@ -300,14 +301,27 @@ def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
         return {"score": 0.0, "pass_gate": False, "reasons": ["无有效日线"]}
     avg_amp = sum(amps) / len(amps)
     avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
-    # 振幅贡献：3%~7% 最可T → +0.2；7%~10% → +0.1；<3% 或 >10% → 硬拒（对齐生产硬门槛）
+    # 振幅贡献（迭代#42：二元档→连续三角函数，消除质量分撞顶 0.9 的坍缩）：
+    #   3%~7% 最可T → 0.2；7%→10% 线性衰减到 0.1；3% 边缘 → 0.1；
+    #   <3% 或 >10% → 硬拒（对齐生产硬门槛）
     if avg_amp < MIN_AMP_PCT or avg_amp > MAX_AMP_PCT:
         return {"score": 0.0, "pass_gate": False,
                 "reasons": [f"振幅不适宜（{avg_amp:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）"]}
-    amp_score = 0.2 if 3.0 <= avg_amp <= 7.0 else 0.1
-    # 流动性贡献：成交额 ≥ 8 亿 → +0.2；< 2 亿 → -0.2（tushare daily.amount 单位千元，×1000 转元）
+    if avg_amp <= 5.0:
+        amp_score = 0.1 + 0.1 * (avg_amp - MIN_AMP_PCT) / (5.0 - MIN_AMP_PCT)  # 3→0.1, 5→0.2
+    elif avg_amp <= 7.0:
+        amp_score = 0.2  # 5~7 最优平台
+    else:
+        amp_score = 0.2 - 0.1 * (avg_amp - 7.0) / (MAX_AMP_PCT - 7.0)  # 7→0.2, 10→0.1
+    # 流动性贡献（迭代#42：三档→log 连续分）：成交额越高分越高，8亿→0.2 基准
+    # （tushare daily.amount 单位千元，×1000 转元）
     avg_amount_yuan = avg_amount * 1000
-    liq_score = 0.2 if avg_amount_yuan >= 8e8 else (-0.2 if avg_amount_yuan < 2e8 else 0.0)
+    if avg_amount_yuan >= 8e8:
+        liq_score = 0.2 + 0.1 * min(math.log10(avg_amount_yuan / 8e8) / 2.0, 1.0)  # 8亿→0.2, 800亿→0.3
+    elif avg_amount_yuan >= 2e8:
+        liq_score = 0.1 + 0.1 * (avg_amount_yuan - 2e8) / 6e8  # 2亿→0.1, 8亿→0.2
+    else:
+        liq_score = -0.2
     score = round(max(0.0, min(0.5 + amp_score + liq_score, 1.0)), 4)
     reasons = []
     if liq_score < 0:
