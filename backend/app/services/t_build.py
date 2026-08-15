@@ -535,8 +535,17 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
     if total_floor_value + single_max > total_max:
         reasons.append(f"总底仓超上限（{total_floor_value:.0f} + 本笔 > {total_max:.0f}）")
 
-    suggest_volume = 0
+    # 高价股保底：单笔上限 = max(净值×单笔%, 100股×价格)（A股最小交易单位 100 股），
+    # 但仍受单标上限（净值×15%）约束——茅台(1300元)也能建 100 股，避免"建议股数不足 100"泛滥。
     if price > 0 and not reasons:
+        suggest_volume = int(single_max / price / 100) * 100
+        if suggest_volume < 100:
+            # 保底 100 股：若 100 股金额未超单标上限则放行
+            if price * 100 <= per_symbol_max:
+                suggest_volume = 100
+            else:
+                reasons.append(f"高价股 100 股超单标上限（{price*100:.0f} > {per_symbol_max:.0f}）")
+    elif price > 0:
         suggest_volume = int(single_max / price / 100) * 100
 
     return {
