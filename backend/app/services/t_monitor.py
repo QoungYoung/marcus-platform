@@ -497,7 +497,8 @@ class TMonitor:
             if volume <= 0:
                 return
             gw = gateway_execute(symbol, "sell", current, volume,
-                                 reason="止损离场（stop_loss）", decision_source="ai_led")
+                                 reason="止损离场（stop_loss）", decision_source="ai_led",
+                                 is_stop_loss=True)
             print(f"[TMonitor] 止损触发 {symbol} @ {current} x{volume}: {gw.get('status')}")
             # 冻结该标的全部条件（当日不再触发低吸/高抛）
             for c in conds or []:

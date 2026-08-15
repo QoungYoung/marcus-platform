@@ -283,6 +283,32 @@ class TestBaseLossGuard(unittest.TestCase):
         cap = p["per_symbol_cap"]
         self.assertEqual(cap, {"cons": 0.08, "std": 0.12, "agg": 0.18})
 
+    def test_stop_loss_exempt_from_daily_loss_breaker(self):
+        """止损卖腿豁免日亏损熔断（止血必须执行）；买腿仍被熔断拦截。"""
+        from app.services.t_gateway import validate_order_at
+        base_ctx = {
+            "regime": "ACTIVE",
+            "quote": {"current": 9.8, "change_pct": -2.0},
+            "ledger": {"X": {"sellable": 1000, "volume": 1000, "avg_price": 10.0}},
+            "net_asset": 200000.0,
+            "daily": {"realized_pnl": -6500.0, "daily_turnover_amount": 0.0},  # -3.25% 已触发熔断
+            "daily_buy_legs": 0,
+            "risk": {},
+            "sell_in_transit": False,
+            "trigger_status": "pending",
+            "cost_ratio_ok": True,
+        }
+        # 买腿被熔断拦截
+        r = validate_order_at("X", "buy", 9.8, 100, dict(base_ctx))
+        self.assertFalse(r["pass"])
+        self.assertIn("日亏损熔断", r["reason"])
+        # 止损卖腿放行
+        r = validate_order_at("X", "sell", 9.8, 100, dict(base_ctx), is_stop_loss=True)
+        self.assertTrue(r["pass"])
+        # 普通卖腿（高抛）也放行
+        r = validate_order_at("X", "sell", 9.8, 100, dict(base_ctx))
+        self.assertTrue(r["pass"])
+
 
 # ── 4.5 选股硬过滤 ──
 class TestSelectionFilter(unittest.TestCase):

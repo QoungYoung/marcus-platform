@@ -245,7 +245,8 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                       trigger_id: Optional[int] = None,
                       reason: str = "",
                       decision_source: str = "agent",
-                      allow_human_override: bool = False) -> Dict[str, Any]:
+                      allow_human_override: bool = False,
+                      is_stop_loss: bool = False) -> Dict[str, Any]:
     """做T下单网关校验（三阶 + 二段断言）——状态全注入版（回测与实盘共用）。
 
     与 validate_order 行为完全一致，仅把实时依赖改为从 ctx 读取：
@@ -340,16 +341,18 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                 result["level"] = "ledger"
                 result["reason"] = "卖出在途，禁止启动买腿（半边腿未落定）"
                 return result
-        # 日亏损熔断（第二阶重复确认）
+        # 日亏损熔断（第二阶重复确认）——只拦买腿（防继续加仓/开仓放大亏损），
+        # 不拦卖腿：止损/高抛离场是止血动作，必须放行（否则深跌时无法止损）
         realized = float(daily.get("realized_pnl") or 0)
         pnl_pct = realized / net_asset * 100 if net_asset else 0.0
-        if pnl_pct <= -DAILY_LOSS_BREAKER_PCT * 100:
+        if side == "buy" and pnl_pct <= -DAILY_LOSS_BREAKER_PCT * 100:
             result["level"] = "ledger"
             result["reason"] = f"日亏损熔断（{pnl_pct:.2f}%）"
             return result
-        # 日回转额上限（主指标）
+        # 日回转额上限（主指标）——止损卖腿豁免（止血离场必须执行）
         turnover = float(daily.get("daily_turnover_amount") or 0)
-        if turnover + price * volume > net_asset * MAX_DAILY_TURNOVER_RATIO:
+        if turnover + price * volume > net_asset * MAX_DAILY_TURNOVER_RATIO \
+                and not (side == "sell" and is_stop_loss):
             result["level"] = "ledger"
             result["reason"] = "当日累计回转额超上限"
             return result
@@ -390,7 +393,8 @@ def validate_order(symbol: str, side: str, price: float, volume: int,
                    condition_id: Optional[int] = None,
                    trigger_id: Optional[int] = None,
                    reason: str = "",
-                   decision_source: str = "agent") -> Dict[str, Any]:
+                   decision_source: str = "agent",
+                   is_stop_loss: bool = False) -> Dict[str, Any]:
     """做T下单网关校验（实时路径）——构造实时 ctx 后委托 validate_order_at。"""
     quote = self_quote(symbol)
     regime_state = compute_regime()
@@ -405,7 +409,8 @@ def validate_order(symbol: str, side: str, price: float, volume: int,
     }
     return validate_order_at(symbol, side, price, volume, ctx,
                              condition_id=condition_id, trigger_id=trigger_id,
-                             reason=reason, decision_source=decision_source)
+                             reason=reason, decision_source=decision_source,
+                             is_stop_loss=is_stop_loss)
 
 
 def self_quote(symbol: str) -> Optional[dict]:
@@ -562,11 +567,13 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     condition_id: Optional[int] = None,
                     trigger_id: Optional[int] = None,
                     reason: str = "",
-                    decision_source: str = "agent") -> Dict[str, Any]:
+                    decision_source: str = "agent",
+                    is_stop_loss: bool = False) -> Dict[str, Any]:
     """做T下单唯一入口：网关校验通过才调用执行器撮合。
 
     三权分立：Agent/AI 决策后提交 → 本网关（唯一放行者）→ MarcusVNPyExecutor(account_id='t')。
     decision_source: agent（触发复核路径）/ ai_led（AI 主动决策，无触发事件也可下单）。
+    is_stop_loss: 止损离场卖腿——豁免日亏损熔断/回转额上限（止血动作必须执行）。
     执行器失败/被拒 → 更新 t_triggers 为 blocked + 审计。
     """
     from app.core.trading.marcus_trade import MarcusVNPyExecutor
@@ -576,7 +583,8 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     # 1) 校验
     check = validate_order(symbol, side, price, volume,
                            condition_id=condition_id, trigger_id=trigger_id,
-                           reason=reason, decision_source=decision_source)
+                           reason=reason, decision_source=decision_source,
+                           is_stop_loss=is_stop_loss)
     if not check["pass"]:
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "blocked", reason=check["reason"])

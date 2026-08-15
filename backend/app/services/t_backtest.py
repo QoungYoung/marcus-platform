@@ -55,6 +55,7 @@ class TBacktestLedger:
         self.bought_today = 0
         self.buy_legs_today = 0  # 当日买腿成交次数（低吸加仓上限用）
         self.realized_pnl = 0.0
+        self.day_realized_pnl = 0.0  # 当日已实现盈亏（日亏损熔断用，收盘重置）
         self.day_turnover = 0.0
         self.trades: List[Dict[str, Any]] = []
         # 初始现金 = 净值 - 底仓市值（成本价计）
@@ -90,6 +91,7 @@ class TBacktestLedger:
         fees = gross * (fee_rate + slippage)
         realized = gross - cost - fees
         self.realized_pnl += realized
+        self.day_realized_pnl += realized
         self.sold_today += vol
         self.day_turnover += gross
         self.cash += gross - fees
@@ -140,6 +142,7 @@ class TBacktestLedger:
         self.sold_today = 0
         self.bought_today = 0
         self.buy_legs_today = 0
+        self.day_realized_pnl = 0.0
 
     def equity(self, price: float) -> float:
         """按当前价估值总资产。"""
@@ -781,7 +784,7 @@ class TBacktestEngine:
             "quote": {"current": quote_price, "change_pct": 0.0},
             "ledger": ledger.quote_ledger(),
             "net_asset": self.net_asset,
-            "daily": {"realized_pnl": ledger.realized_pnl,
+            "daily": {"realized_pnl": ledger.day_realized_pnl,
                       "daily_turnover_amount": ledger.day_turnover},
             "daily_buy_legs": ledger.buy_legs_today,
             "risk": {},
@@ -869,7 +872,7 @@ class TBacktestEngine:
         self.events.append({"type": "trigger", "data": trigger})
         ctx = self._gateway_ctx(regime, ledger, exec_price)
         check = validate_order_at(self.symbol, "sell", exec_price, volume, ctx,
-                                  reason="t-backtest-stop-loss")
+                                  reason="t-backtest-stop-loss", is_stop_loss=True)
         if not check["pass"]:
             self.events.append({"type": "blocked", "data": {
                 "trigger": trigger, "reason": f"止损被网关拒绝: {check['reason']}",
