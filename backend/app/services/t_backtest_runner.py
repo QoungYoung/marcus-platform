@@ -385,7 +385,10 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     is_combined = bool(build_mode) or (len(symbols) > 0 and symbol in ("", "combined"))
     select_source = str(task.get("select_source") or ("manual" if symbols else "pool"))
     select_limit = int(task.get("select_limit") or 10)
-    if is_combined and not symbols and select_source in ("pool", "scan"):
+    rolling_scan = bool(task.get("rolling_scan", False))
+    # rolling_scan：候选由引擎每日历史全市场扫描产生（回测版 scan_t_candidates_historical），
+    # 不在此处做实时自动选股（生产 scan_t_candidates 用实时行情，有前视风险）
+    if is_combined and not symbols and select_source in ("pool", "scan") and not rolling_scan:
         try:
             from app.services.t_build import scan_t_candidates
             # 自动选股（防前视）：精筛用 as_of=窗口首日前一交易日的日线（趋势/风险历史化）

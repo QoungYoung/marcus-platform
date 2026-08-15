@@ -1132,7 +1132,7 @@ class TCombinedBacktestEngine:
 
         d = Path(self.data_dir)
         self.index_daily = {ts: load_index_daily(ts, d) for ts in ("000300.SH", "000001.SH", "399001.SZ")}
-        # 交易日（从首个有数据的标的 m5 推导）
+        # 交易日：优先从标的 m5 推导；rolling_scan（symbols 为空）时用指数日线推导
         trade_days: List[str] = []
         m5_map: Dict[str, List[dict]] = {}
         for sym in self.symbols:
@@ -1140,6 +1140,12 @@ class TCombinedBacktestEngine:
             m5_map[sym] = bars
             if bars:
                 trade_days = sorted({_day_key(b["time"]) for b in bars}) or trade_days
+        if not trade_days and self.rolling_scan:
+            for ts_bars in self.index_daily.values():
+                if ts_bars:
+                    trade_days = sorted({str(b["trade_date"]).replace("-", "") for b in ts_bars})
+                    if trade_days:
+                        break
         if not trade_days:
             return {"status": "failed", "error": "无标的 m5 数据", "build_decisions": [], "per_symbol": []}
 
