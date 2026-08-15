@@ -35,10 +35,10 @@ from app.services.t_regime import compute_regime
 
 BUILD_PARAMS_DEFAULT = {
     # 选股
-    "cand_score_min": 0.55,          # 候选短名单门槛
+    "cand_score_min": 0.65,          # 候选短名单门槛（0.55→0.65；user 来源放宽到 0.60 见 build_score）
     "build_score_min": 0.60,         # 可建仓门槛
     "build_score_weights": {"quality": 0.8, "trend": 0.1, "source": 0.05, "risk": -0.05},
-    "trend_gate": True,              # 个股趋势闸门（20 日线方向）
+    "trend_gate": True,              # 个股趋势闸门（20 日线方向，硬排除）
     # 时机
     "quiet_end": "09:45",            # 冷静期结束（9:30-9:45 不自动建仓）
     "afternoon_ban_from": "13:00",   # 午后禁自动建仓
@@ -50,7 +50,7 @@ BUILD_PARAMS_DEFAULT = {
     "max_symbols_being_built": 5,    # 同日排队/在途建仓标的数上限
     # 规模（占 t 净值比例，保守/标准/激进）
     "single_order_pct": {"cons": 0.04, "std": 0.05, "agg": 0.08},
-    "per_symbol_cap": {"cons": 0.10, "std": 0.15, "agg": 0.20},
+    "per_symbol_cap": {"cons": 0.08, "std": 0.12, "agg": 0.18},
     "total_floor_cap": {"cons": 0.40, "std": 0.55, "agg": 0.70},
     "max_floor_symbols": 10,         # 组合标的数宽松上限（实际受总量上限约束）
     "min_absolute_floor": 20000,     # 单票底仓做T划算下限（元）
@@ -252,9 +252,13 @@ def trend_gate(symbol: str, bars: Optional[List[dict]] = None, as_of: Optional[s
 def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
     """历史日线简化可T质量分（回测建仓模拟专用，防前视；生产仍用 calc_t_quality 实时）。
 
-    用近 20 日日线：平均振幅（(high-low)/pre_close，5% 附近最可T）+ 平均成交额流动性（≥8 亿）。
-    返回 {score(0-1), pass_gate, reasons}，权重对齐 calc_t_quality 的量纲（0.5 基准 ± 贡献）。
+    用近 20 日日线：平均振幅（(high-low)/pre_close）+ 平均成交额流动性（≥8 亿）。
+    振幅口径与生产 calc_t_quality 对齐（P0 审查：硬性振幅下限 MIN_AMP_PCT=3 / MAX=10，
+    <3% 或 >10% 直接 pass_gate=False，杜绝 000001/600900 类低波标的穿透）：
+        3≤amp≤7 → +0.2；7~10 → +0.1；<3 或 >10 → 硬拒（pass_gate=False）
+    返回 {score(0-1), pass_gate, reasons}。
     """
+    from app.services.t_pool import MAX_AMP_PCT, MIN_AMP_PCT
     if not bars or len(bars) < 5:
         return {"score": 0.0, "pass_gate": False, "reasons": ["日线不足"]}
     recent = bars[-20:]
@@ -270,15 +274,16 @@ def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
         return {"score": 0.0, "pass_gate": False, "reasons": ["无有效日线"]}
     avg_amp = sum(amps) / len(amps)
     avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
-    # 振幅贡献：3%~7% 最可T → +0.2；<1% 或 >12% → -0.2
-    amp_score = 0.2 if 3.0 <= avg_amp <= 7.0 else (-0.2 if avg_amp < 1.0 or avg_amp > 12.0 else 0.0)
+    # 振幅贡献：3%~7% 最可T → +0.2；7%~10% → +0.1；<3% 或 >10% → 硬拒（对齐生产硬门槛）
+    if avg_amp < MIN_AMP_PCT or avg_amp > MAX_AMP_PCT:
+        return {"score": 0.0, "pass_gate": False,
+                "reasons": [f"振幅不适宜（{avg_amp:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）"]}
+    amp_score = 0.2 if 3.0 <= avg_amp <= 7.0 else 0.1
     # 流动性贡献：成交额 ≥ 8 亿 → +0.2；< 2 亿 → -0.2（tushare daily.amount 单位千元，×1000 转元）
     avg_amount_yuan = avg_amount * 1000
     liq_score = 0.2 if avg_amount_yuan >= 8e8 else (-0.2 if avg_amount_yuan < 2e8 else 0.0)
     score = round(max(0.0, min(0.5 + amp_score + liq_score, 1.0)), 4)
     reasons = []
-    if amp_score < 0:
-        reasons.append(f"振幅不适宜（{avg_amp:.1f}%）")
     if liq_score < 0:
         reasons.append(f"流动性不足（日均 {avg_amount_yuan / 1e8:.1f} 亿）")
     return {"score": score, "pass_gate": score >= 0.5, "reasons": reasons}
@@ -308,7 +313,7 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
     if bars is None:
         bars = _fetch_daily_bars(symbol, count=40, as_of=as_of)
 
-    # 趋势闸门（乘性）
+    # 趋势闸门（硬排除：趋势不达标直接拒，不再只乘性扣分——P0 审查"逆势做T=接飞刀"）
     trend_ok, trend_note = trend_gate(symbol, bars=bars, as_of=as_of)
     trend_add = 0.1 if trend_ok else 0.0
 
@@ -349,7 +354,8 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
     return {
         "symbol": symbol,
         "score": score,
-        "pass_gate": pass_quality and trend_ok and score >= float(p["cand_score_min"]),
+        "pass_gate": pass_quality and trend_ok and score >= (
+            float(p["cand_score_min"]) if source != "user" else 0.60),
         "quality": q,
         "trend": {"ok": trend_ok, "note": trend_note},
         "risk_penalty": risk_penalty,
@@ -909,36 +915,38 @@ def build_t_position(symbol: str, price: float, volume: Optional[int] = None,
 # ────────────────────────────────────────────────────────────────
 
 def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
-    """为刚建仓标的生成次日（D+1）t_conditions（复用 generate_conditions_for_live_pool 模板）。
+    """为刚建仓标的生成次日（D+1）t_conditions（双条件：低吸 + 高抛回补，复用 build_t_conditions）。
 
     建仓当日不生成当日条件（sellable=0 无法触发）；次日该标的进 live 池后可做T。
+    振幅用近 6 日 m5 日振幅中位自适应；无 m5 数据时用下限阈值。
     """
     try:
         from datetime import date, timedelta
         tomorrow = (date.today() + timedelta(days=1)).strftime("%Y%m%d")
         if avg_price <= 0:
             return False
-        target = round(avg_price * 0.98, 2)
-        cond = {
-            "account_id": ACCOUNT_T,
-            "symbol": _normalize(symbol).upper(),
-            "trigger_kind": "low_buy",
-            "trade_date": tomorrow,
-            "target_price": target,
-            "reinform_price": round(target * 1.004, 2),
-            "sell_target_price": round(avg_price * 1.015, 2),
-            "stop_loss_price": round(target * 0.97, 2),
-            "vol_ratio_thresh": 1.5,
-            "stabilize_level": "not_new_low",
-            "time_stop_close": "14:45",
-            "start_time": "09:30",
-            "end_time": "14:45",
-            "regime_gate": "ALLOWED",
-            "status": "active",
-            "armed": 1,
-        }
-        cid = t_db.upsert_condition(cond)
-        return cid is not None
+        from app.services.t_pool import build_t_conditions
+        amp_med = None
+        try:
+            from app.services.t_pool import _calc_daily_amplitudes, _median
+            from app.services.t_data_sources import fetch_minute_bars
+            bars = fetch_minute_bars(symbol, freq="m5", count=320)
+            amps = _calc_daily_amplitudes(bars) if bars else []
+            amp_med = _median(amps) if amps else None
+        except Exception:
+            amp_med = None
+        ok = True
+        for cond in build_t_conditions(avg_price, amp_med):
+            cond = {
+                **cond,
+                "account_id": ACCOUNT_T,
+                "symbol": _normalize(symbol).upper(),
+                "trade_date": tomorrow,
+            }
+            cid = t_db.upsert_condition(cond)
+            if cid is None:
+                ok = False
+        return ok
     except Exception as e:
         print(f"[t-build] 次日条件生成失败 {symbol}: {e}")
         return False

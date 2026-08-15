@@ -23,13 +23,21 @@ ACCOUNT_T = "t"
 # 参数初值（P4 敏感度扫描后固化）
 SLIPPAGE_TICKS = 2.5          # 双边滑点（最小报价单位），20-60 元中价股 2-5 tick
 FEE_PCT = 0.001               # 手续费（万1 + 印花税近似）
-MIN_T_SPREAD = 0.0            # 可T价差空间硬门槛（>0）
+MIN_T_SPREAD = 0.5            # 可T价差空间硬门槛（%，原 0.0 过松——2% 振幅标的价差仍 >0 穿透）
 OC_LOW = 0.45                 # O-C 回归度 ≤0.45 加分（双向可T）
 OC_HIGH = 0.55                # ≥0.55 减分（单边倾向）
 TURNOVER_LOW = 1.0            # 换手率适中区间下限 %
 TURNOVER_HIGH = 12.0          # 上限 %（高换手剔除，配合下跌市出货判断）
 MIN_AMOUNT = 5e8              # 成交额下限（5 亿，元）
 POOL_FLOOR_RATIO = 0.5        # 底仓保留下限：底仓市值 ≥ 持仓成本的 50%（P4 标定）
+# 选股硬性振幅门槛（P0 审查：_quality_from_daily 1%~3% 区间不惩罚导致 000001/600900 穿透）
+MIN_AMP_PCT = 3.0             # 近 20 日振幅中位下限（%，<3% 硬拒——价差连手续费都难覆盖）
+MAX_AMP_PCT = 10.0            # 上限（%，>10% 妖票硬拒——波动过野风险不可控）
+# 做T条件波动率自适应（P0 审查：固定 1.5% 高抛在低振幅标的上永远到不了）
+AMP_SCALE = 0.6               # 条件阈值 = 振幅中位 × 0.6
+MIN_HIGH_SELL_PCT = 1.5       # 高抛触发价下限（成本+1.5%）
+MIN_LOW_BUY_PCT = 2.0         # 低吸触发价下限（成本−2%）
+STOP_LOSS_PCT = 3.0           # 止损价（绑定持仓成本，−3%）
 
 
 # ────────────────────────────────────────────────────────────────
@@ -84,7 +92,9 @@ def calc_t_quality(symbol: str, quote: Optional[dict] = None) -> Dict[str, Any]:
     # 6) 硬门槛
     reasons = []
     if spread <= MIN_T_SPREAD:
-        reasons.append("可T价差空间≤0（价差不覆盖成本）")
+        reasons.append(f"可T价差空间≤{MIN_T_SPREAD}（价差不覆盖成本）")
+    if amp_median is not None and (amp_median < MIN_AMP_PCT or amp_median > MAX_AMP_PCT):
+        reasons.append(f"振幅不适宜（{amp_median:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）")
     if amount > 0 and amount < MIN_AMOUNT:
         reasons.append(f"成交额不足（{amount / 1e8:.1f}亿 < 5亿）")
     if turnover > 0 and (turnover < TURNOVER_LOW or turnover > TURNOVER_HIGH):
@@ -195,6 +205,59 @@ def _median(vals: List[float]) -> float:
 
 
 # ────────────────────────────────────────────────────────────────
+# 做T条件生成（双条件：低吸 + 高抛回补，波动率自适应）——生产/回测共用
+# ────────────────────────────────────────────────────────────────
+
+def build_t_conditions(cost: float, amp_med: Optional[float] = None) -> List[Dict[str, Any]]:
+    """生成做T双条件：low_buy（低吸）+ high_sell_then_buy_back（高抛回补）。
+
+    Args:
+        cost: 持仓成本价（建仓价/加权成本；回测用 init_price）
+        amp_med: 近 6 日 m5 日振幅中位数（%）；None/0 时用下限阈值（保守）
+    Returns:
+        [low_buy 条件 dict, high_sell 条件 dict]——不含 account_id/symbol/trade_date，
+        由调用方补全（生产 upsert 需 account_id/symbol；建仓衔接需 trade_date=次日）。
+    阈值公式（与 docs/t-optimization-plan.md P0-1/P2-1 一致）：
+        high_sell = cost × (1 + max(1.5%, amp_med × 0.6))
+        low_buy    = cost × (1 − max(2.0%, amp_med × 0.6))
+        stop       = cost × (1 − 3.0%)（绑定成本，不再 target×0.97 漂移）
+    """
+    amp = float(amp_med or 0.0)
+    high_pct = max(MIN_HIGH_SELL_PCT, amp * AMP_SCALE)
+    low_pct = max(MIN_LOW_BUY_PCT, amp * AMP_SCALE)
+    sell_target = round(cost * (1 + high_pct / 100), 2)
+    target = round(cost * (1 - low_pct / 100), 2)
+    stop = round(cost * (1 - STOP_LOSS_PCT / 100), 2)
+    base = {
+        "vol_ratio_thresh": 1.5,
+        "stabilize_level": "not_new_low",
+        "time_stop_close": "14:45",
+        "start_time": "09:30",
+        "end_time": "14:45",
+        "regime_gate": "ALLOWED",
+        "status": "active",
+        "armed": 1,
+    }
+    low_buy = {
+        **base,
+        "trigger_kind": "low_buy",
+        "target_price": target,
+        "reinform_price": round(target * 1.004, 2),
+        "sell_target_price": sell_target,
+        "stop_loss_price": stop,
+    }
+    high_sell = {
+        **base,
+        "trigger_kind": "high_sell_then_buy_back",
+        "target_price": sell_target,          # 高抛触发价（现价 ≥ 此价触发）
+        "sell_target_price": sell_target,
+        "stop_loss_price": stop,
+        "reinform_price": round(sell_target * 0.996, 2),  # 回补价 = 高抛成交×0.996
+    }
+    return [low_buy, high_sell]
+
+
+# ────────────────────────────────────────────────────────────────
 # 三层池
 # ────────────────────────────────────────────────────────────────
 
@@ -252,6 +315,7 @@ def compute_three_tier_pool(regime: str = "ACTIVE") -> Dict[str, Dict[str, Any]]
                 "round_trip": q["round_trip"],
                 "volume": pos["volume"],
                 "avg_price": pos["avg_price"],
+                "amp_median": q["factors"].get("amp_median"),
                 "tier": "live",
             }
         else:
@@ -300,8 +364,9 @@ def _load_candidate_symbols() -> List[str]:
 def generate_conditions_for_live_pool(regime: str = "ACTIVE") -> List[Dict[str, Any]]:
     """为做T实盘池标的生成 t_conditions 条件元组（仅 account_id='t' 且有底仓标的）。
 
-    条件：低吸触发价 = 支撑位（前低/均价*0.98 近似），复归价 = 触发价*(1+0.4%)，
-    量比阈值按可T质量默认，企稳确认 stabilize_level='not_new_low'，卖出目标/止损随条件写入。
+    双条件（build_t_conditions）：low_buy（低吸）+ high_sell_then_buy_back（高抛回补），
+    阈值按标的近 6 日 m5 振幅中位自适应；量比阈值按可T质量默认，企稳确认
+    stabilize_level='not_new_low'，止损绑定持仓成本。
     """
     pool = compute_three_tier_pool(regime=regime)
     created = []
@@ -309,28 +374,14 @@ def generate_conditions_for_live_pool(regime: str = "ACTIVE") -> List[Dict[str, 
         avg_price = float(info.get("avg_price", 0) or 0)
         if avg_price <= 0:
             continue
-        target = round(avg_price * 0.98, 2)          # 低吸触发价：成本价 -2%（支撑位近似）
-        reinform = round(target * 1.004, 2)          # 复归价：触发价 +0.4%
-        sell_target = round(avg_price * 1.015, 2)    # 高抛目标：成本价 +1.5%
-        stop_loss = round(target * 0.97, 2)          # 止损：触发价 -3%
-        cond = {
-            "account_id": ACCOUNT_T,
-            "symbol": symbol,
-            "trigger_kind": "low_buy",
-            "target_price": target,
-            "reinform_price": reinform,
-            "vol_ratio_thresh": 1.5,
-            "stabilize_level": "not_new_low",
-            "sell_target_price": sell_target,
-            "stop_loss_price": stop_loss,
-            "time_stop_close": "14:45",
-            "start_time": "09:30",
-            "end_time": "14:45",
-            "regime_gate": "ALLOWED",
-            "status": "active",
-            "armed": 1,
-        }
-        cid = t_db.upsert_condition(cond)
-        if cid:
-            created.append({"condition_id": cid, **cond})
+        amp_med = info.get("amp_median")
+        conds = build_t_conditions(avg_price, amp_med)
+        for cond in conds:
+            cond = {**cond,
+                    "account_id": ACCOUNT_T,
+                    "symbol": symbol,
+                    "trade_date": None}
+            cid = t_db.upsert_condition(cond)
+            if cid:
+                created.append({"condition_id": cid, **cond})
     return created

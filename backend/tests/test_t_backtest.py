@@ -181,7 +181,10 @@ class TestEngineCore(unittest.TestCase):
         r = TBacktestEngine(self.task, str(self.cache)).run()
         self.assertGreater(r["metrics"]["trigger_count"], 0, "历史低价应触发低吸")
         self.assertGreater(r["metrics"]["executed_count"], 0, "auto 复核应成交")
-        self.assertEqual(r["metrics"]["execution_rate_pct"], 100.0)
+        # 低吸加仓次数上限（≤2 次/日，P0 风控）会拦截第 3 笔起——执行率不再强制 100%
+        blocked = [e for e in r["events"] if e.get("type") == "blocked"]
+        self.assertTrue(any("低吸加仓次数超限" in str(e.get("data", {}).get("reason", "")) for e in blocked),
+                        "第 3 笔低吸应被加仓次数上限拦截")
 
     def test_no_trigger_without_price_hit(self):
         from app.services.t_backtest import TBacktestEngine

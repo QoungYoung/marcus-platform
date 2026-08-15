@@ -25,10 +25,12 @@ def _today() -> str:
 def _parse_ai_decision(reply: str) -> Dict[str, Any]:
     """从 AI 文本中解析决策 JSON：{"action": "exec|wait|abandon|update_condition", "reason": "...", "condition": {...}}。
 
-    容忍 ```json 包裹与前后噪声；解析失败回退 wait（保守）。
+    容忍 ```json 包裹与前后噪声；解析失败返回 action=rule_fallback（由 handle_ai_decision
+    按规则评审生成默认动作，reason 标注 [rule_fallback]——不再一律 wait 保守等待，
+    避免高抛兑现/合理买点被解析失败卡死，P3-2）。
     """
     if not reply:
-        return {"action": "wait", "reason": "空回复（保守等待）"}
+        return {"action": "rule_fallback", "reason": "空回复（规则兜底）"}
     text = str(reply).strip()
     m = None
     import re
@@ -44,19 +46,19 @@ def _parse_ai_decision(reply: str) -> Dict[str, Any]:
             return {"action": "exec", "reason": text[:200]}
         if any(k in text for k in ("放弃", "abandon", "不执行")):
             return {"action": "abandon", "reason": text[:200]}
-        return {"action": "wait", "reason": text[:200]}
+        return {"action": "rule_fallback", "reason": f"无 JSON 无法解析（规则兜底）: {text[:200]}"}
     try:
         obj = json.loads(m)
-        action = str(obj.get("action") or "wait")
+        action = str(obj.get("action") or "rule_fallback")
         if action not in AI_ACTIONS:
-            action = "wait"
+            action = "rule_fallback"
         return {
             "action": action,
             "reason": str(obj.get("reason") or "")[:500],
             "condition": obj.get("condition") if isinstance(obj.get("condition"), dict) else None,
         }
     except (ValueError, TypeError):
-        return {"action": "wait", "reason": f"解析失败（保守等待）: {text[:120]}"}
+        return {"action": "rule_fallback", "reason": f"解析失败（规则兜底）: {text[:120]}"}
 
 
 def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict[str, Any]],
@@ -87,6 +89,25 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
     result: Dict[str, Any] = {"status": "decided", "action": action, "reason": reason,
                               "action_id": action_id}
     trigger_id = (trigger or {}).get("id")
+    # 规则兜底（P3-2）：解析失败/异常时按触发方向给规则默认动作——
+    # 高抛卖腿（兑现离场）在非 BLOCKED regime 默认 exec；低吸买腿默认 wait（保守不追）；
+    # reason 标注 [rule_fallback]，审计可归因。
+    if action == "rule_fallback":
+        ev_type = (trigger or {}).get("event_type") or ""
+        regime = (context or {}).get("regime") or "ACTIVE"
+        if ev_type in ("high_sell_then_buy_back", "high_sell"):
+            if regime == "BLOCKED":
+                action, reason = "wait", "[rule_fallback] 高抛兜底 wait（regime 禁卖）"
+            else:
+                action, reason = "exec", "[rule_fallback] 高抛兜底 exec（兑现离场）"
+        else:
+            if regime == "HALT":
+                action, reason = "abandon", "[rule_fallback] 低吸兜底 abandon（regime=HALT）"
+            else:
+                action, reason = "wait", "[rule_fallback] 低吸兜底 wait（保守等待）"
+        result["action"] = action
+        result["reason"] = reason
+        result["fallback"] = True
     if action == "exec":
         # 执行：经网关（ai_led 档位，不豁免风控）
         try:

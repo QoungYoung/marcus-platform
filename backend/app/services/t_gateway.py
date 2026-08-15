@@ -9,6 +9,7 @@
 - 可卖底仓分档 L0-L3；异常升级 6 类清单；STOP_ALL/日亏熔断；孤儿单处置；滑点/价差过滤
 """
 from datetime import datetime, timedelta
+import os
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import text
@@ -19,6 +20,12 @@ from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
 from app.services.t_regime import compute_regime
 
 ACCOUNT_T = "t"
+
+# 底仓风控开关（灰度用；默认开）
+T_STOP_GUARD_ENABLED = os.getenv("T_STOP_GUARD_ENABLED", "1") != "0"
+BASE_LOSS_HALF_PCT = 3.0      # 底仓浮亏 −3% 减半仓
+BASE_LOSS_CLEAR_PCT = 5.0     # 底仓浮亏 −5% 清仓+当日锁定
+MAX_DAILY_BUY_LEGS = 2        # 单标单日低吸（买腿成交）次数上限
 
 # ── 参数（P4 敏感度扫描标定，当前保守档初值） ──
 MAX_SINGLE_ORDER_PCT = 0.05        # 单笔 ≤ 净值 5%（建议层）
@@ -237,7 +244,8 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                       condition_id: Optional[int] = None,
                       trigger_id: Optional[int] = None,
                       reason: str = "",
-                      decision_source: str = "agent") -> Dict[str, Any]:
+                      decision_source: str = "agent",
+                      allow_human_override: bool = False) -> Dict[str, Any]:
     """做T下单网关校验（三阶 + 二段断言）——状态全注入版（回测与实盘共用）。
 
     与 validate_order 行为完全一致，仅把实时依赖改为从 ctx 读取：
@@ -299,10 +307,25 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                 return result
 
         # ── 第二阶：账本（确定性规则） ──
+        # 底仓风控（独立于做T止损）：浮亏 ≤ −3% 减半 / ≤ −5% 清仓锁定（开关可关，人工覆盖可放行）
+        if T_STOP_GUARD_ENABLED and not allow_human_override:
+            guard = _base_loss_guard(symbol, side, quote, ledger)
+            if guard["action"] != "pass":
+                result["level"] = "ledger"
+                result["reason"] = guard["reason"]
+                return result
         # 可卖底仓分档 + 买腿上限
         near_limit = bool(quote and _near_limit_down(quote))
         tier = _floor_tier(regime, near_limit)
         if side == "buy":
+            # 低吸加仓次数上限（单标单日买腿成交 ≤ MAX_DAILY_BUY_LEGS）
+            buy_legs = ctx.get("daily_buy_legs")
+            if buy_legs is None:
+                buy_legs = _daily_buy_legs(symbol)
+            if buy_legs >= MAX_DAILY_BUY_LEGS:
+                result["level"] = "ledger"
+                result["reason"] = f"低吸加仓次数超限（当日已 {buy_legs} 笔 ≥ {MAX_DAILY_BUY_LEGS}）"
+                return result
             max_buy = _max_buy_volume(symbol, tier, ledger)
             if max_buy <= 0:
                 result["level"] = "ledger"
@@ -410,6 +433,49 @@ def _near_limit_down(quote: dict) -> bool:
         return chg <= -8.0  # 接近跌停（8% 内）视为高风险区
     except (TypeError, ValueError):
         return False
+
+
+def _base_loss_guard(symbol: str, side: str, quote: Optional[dict],
+                     ledger: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    """底仓浮亏风控（独立于做T止损，P0-3）：买腿/建仓前先评估标的浮亏。
+
+    - 浮亏 ≤ −5%：blocked（清仓锁定，禁止再买/加仓）
+    - 浮亏 ≤ −3%：blocked 且提示先减半（卖 50%）再考虑买腿
+    - 其余放行（返回 action=pass）
+    现价缺失时放行（保守：不因数据缺失误伤）。
+    """
+    if side != "buy":
+        return {"action": "pass", "reason": ""}
+    item = (ledger or {}).get(symbol) or {}
+    avg = float(item.get("avg_price") or 0)
+    current = float((quote or {}).get("current") or 0)
+    if avg <= 0 or current <= 0:
+        return {"action": "pass", "reason": ""}
+    pnl_pct = (current - avg) / avg * 100
+    if pnl_pct <= -BASE_LOSS_CLEAR_PCT:
+        return {"action": "block", "reason": f"底仓浮亏 {pnl_pct:.1f}%（≤−{BASE_LOSS_CLEAR_PCT:.0f}% 清仓锁定，禁买）"}
+    if pnl_pct <= -BASE_LOSS_HALF_PCT:
+        return {"action": "block", "reason": f"底仓浮亏 {pnl_pct:.1f}%（≤−{BASE_LOSS_HALF_PCT:.0f}% 先减半仓再考虑）"}
+    return {"action": "pass", "reason": ""}
+
+
+def _daily_buy_legs(symbol: str) -> int:
+    """单标当日低吸（买腿）成交次数：paper_trades 当日买入笔数（t 账户）。"""
+    try:
+        db = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            n = db.execute(text(
+                "SELECT COUNT(*) FROM paper_trades "
+                "WHERE account_id = 't' AND direction = '买入' AND voided = 0 "
+                "AND substr(created_at, 1, 10) = :today AND symbol = :sym"
+            ), {"today": today, "sym": symbol}).scalar()
+            return int(n or 0)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-gate] 低吸次数查询失败: {e}")
+        return 0
 
 
 def _cost_ratio_ok(symbol: str, price: float) -> bool:

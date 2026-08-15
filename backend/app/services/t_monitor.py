@@ -102,6 +102,14 @@ class TMonitor:
         symbols = list({c["symbol"] for c in conditions})[:MAX_CORE_SYMBOLS]
         quotes = self._fetch_quotes_concurrent(symbols)
 
+        # 3.5) 止损扫描（持仓标的现价 ≤ stop_loss_price → 止损卖腿，独立于条件触发）
+        try:
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger
+            ledger = get_sellable_ledger()
+        except Exception as e:
+            print(f"[TMonitor] 止损扫描初始化失败: {e}")
+            ledger = {}
+
         # 4) 逐条件判断（表达式优先；无表达式回退默认复合确认逻辑）
         written = 0
         for cond in conditions:
@@ -110,6 +118,8 @@ class TMonitor:
             if not quote or not quote.get("current"):
                 continue
             try:
+                # 止损前置检查（每标的每轮一次：现价 ≤ 止损价 且 当日未止损过）
+                self._check_stop_loss(symbol, quote, ledger)
                 # 构建该标的字段快照（供表达式求值）
                 snapshot = self._build_snapshot(cond, quote, regime_state)
                 if self._evaluate_condition(cond, quote, regime_state, snapshot):
@@ -439,6 +449,60 @@ class TMonitor:
                 db.close()
         except Exception:
             return 0
+
+    def _check_stop_loss(self, symbol: str, quote: dict, ledger: dict):
+        """止损扫描（生产）：持仓标的现价 ≤ stop_loss_price → 止损卖腿（reason=stop_loss）。
+
+        - 每标的每轮一次（符号条件共享同一止损价，取条件表中非零止损价）
+        - 当日已止损过（t_triggers 含当日 stop_loss 事件）则跳过，防止重复卖
+        - 卖量 = 可卖底仓全部（止损离场），走网关 ai_led 档位（不豁免风控）
+        - 止损后冻结该标的全部条件（armed=0）
+        """
+        try:
+            from app.services import t_db
+            from app.services.t_gateway import gateway_execute
+            item = (ledger or {}).get(symbol) or {}
+            sellable = int(item.get("sellable", 0) or 0)
+            if sellable <= 0:
+                return
+            current = float(quote.get("current", 0) or 0)
+            if current <= 0:
+                return
+            stop_price = None
+            conds = t_db.list_active_conditions(symbol=symbol)
+            for c in conds or []:
+                sp = float(c.get("stop_loss_price") or 0)
+                if sp > 0:
+                    stop_price = sp
+                    break
+            if not stop_price or current > stop_price:
+                return
+            # 当日已止损过则跳过
+            from sqlalchemy import text
+            from app.database import SessionLocal
+            db = SessionLocal()
+            try:
+                done = db.execute(text(
+                    "SELECT 1 FROM t_triggers WHERE symbol = :sym AND event_type = 'stop_loss' "
+                    "AND created_at::date = CURRENT_DATE LIMIT 1"
+                ), {"sym": symbol}).scalar()
+            finally:
+                db.close()
+            if done:
+                return
+            volume = (sellable // 100) * 100
+            if volume <= 0:
+                return
+            gw = gateway_execute(symbol, "sell", current, volume,
+                                 reason="止损离场（stop_loss）", decision_source="ai_led")
+            print(f"[TMonitor] 止损触发 {symbol} @ {current} x{volume}: {gw.get('status')}")
+            # 冻结该标的全部条件（当日不再触发低吸/高抛）
+            for c in conds or []:
+                cid = c.get("id")
+                if cid:
+                    t_db.update_condition_state(cid, armed=0)
+        except Exception as e:
+            print(f"[TMonitor] 止损扫描异常 {symbol}: {e}")
 
 
 # ── 单例管理（对齐 candidate_pool_monitor 模式） ──

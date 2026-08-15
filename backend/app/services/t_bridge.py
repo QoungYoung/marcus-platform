@@ -140,7 +140,8 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"建议买价={trigger.get('suggest_bid_price')} 建议卖价={trigger.get('suggest_ask_price')} "
         f"事件#{trigger.get('id')} 条件#{trigger.get('condition_id')}。"
     )
-    if hit_alert:
+    # 高抛卖腿是兑现利润的正向动作：连续命中告警不适用于高抛（高抛越多越好）
+    if hit_alert and trigger.get("event_type") != "high_sell_then_buy_back":
         msg += (f"⚠️ 该条件已连续命中 {consec} 次且未见实质改善——你必须给出明确的"
                 f"调整条件或冷却动作（update_condition），否则该条件将被系统自动冷却。")
     msg += (
@@ -165,18 +166,26 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         msg += "\n".join(lines) + "\n"
     st = ctx.get("symbol_t_stats") or {}
     if st and st.get("total_decisions"):
+        win_rate = st.get("exec_win_rate_pct")
         msg += (
             f"【{symbol} 做T历史统计】决策 {st.get('total_decisions')} 次 | "
-            f"exec {st.get('exec_count')} 次 胜率 {st.get('exec_win_rate_pct')}% "
+            f"exec {st.get('exec_count')} 次 胜率 {win_rate}% "
             f"均幅 {st.get('exec_avg_pct')}% | "
             f"abandon {st.get('abandon_count')} 次 正确率 {st.get('abandon_correct_rate_pct')}% | "
             f"wait {st.get('wait_count')} 次 转exec {st.get('wait_to_exec_rate_pct')}%\n"
         )
+        # 高胜率标的重触发放开（P3-3）：>55% 放开冷却；<40% 提示减仓
+        if win_rate is not None and win_rate > 55:
+            msg += f"【提示】该标的 exec 胜率 {win_rate}% > 55%，属于高胜率标的——允许连续命中继续触发（不强制冷却）。\n"
+        elif win_rate is not None and win_rate < 40:
+            msg += f"【警告】该标的 exec 胜率 {win_rate}% < 40%，历史表现差——建议减仓或收紧触发。\n"
     msg += (
-        "【决策 checklist】① 价差盈亏比：触发价 vs 现价 vs 目标价空间是否足够覆盖成本；"
-        "② 弹药：可卖底仓与浮盈浮亏（亏损接近-3%止损则优先保守）；"
-        "③ 历史模式：该标的低吸后历史走向/exec 胜率（如上）；"
-        "④ 连续命中：是否已达告警阈值需调整条件。"
+        "【决策 checklist】① 盈亏比：现价距目标价是否 ≥0.5% 且覆盖成本（滑点+手续费）；"
+        "目标收益空间 / 潜在回撤空间 ≥1.2 才 exec；"
+        "② 高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——触及时应倾向 exec 卖出兑现，"
+        "而非担心卖飞继续等待；③ 弹药：可卖底仓与浮盈浮亏（低吸触及时若亏损接近-3%止损线才保守）；"
+        "④ 历史模式：该标的低吸后历史走向/exec 胜率（如上）；"
+        "⑤ 连续命中：低吸条件已达告警阈值可调整，高抛不适用冷却。"
         f"上下文: {json.dumps(ctx, ensure_ascii=False, default=str)[:1000]}"
     )
     payload = {

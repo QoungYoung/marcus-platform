@@ -310,13 +310,26 @@ class TestBuildScore(_PGTestCase):
     def test_build_score_source_mark(self):
         from app.services import t_build
         from app.services import t_pool
+        # 新门槛（P0 审查）：pool/scan 0.65、user 0.60——mock 高质量分应通过
         with patch.object(t_build, "_fetch_daily_bars", return_value=self._rising_bars()), \
              patch.object(t_pool, "calc_t_quality", return_value={
-                 "score": 0.7, "pass_gate": True, "reasons": []}):
+                 "score": 0.8, "pass_gate": True, "reasons": []}):
             r = t_build.build_score("SH600000", source="user")
             self.assertEqual(r["source"], "user")
             self.assertTrue(r["pass_gate"])
-            self.assertGreaterEqual(r["score"], 0.55)
+            self.assertGreaterEqual(r["score"], 0.60)
+
+    def test_build_score_higher_threshold_scan(self):
+        """扫描来源门槛 0.65：0.6 分标的被拒（原 0.55 门槛可通过）。"""
+        from app.services import t_build
+        from app.services import t_pool
+        with patch.object(t_build, "_fetch_daily_bars", return_value=self._rising_bars()), \
+             patch.object(t_pool, "calc_t_quality", return_value={
+                 "score": 0.65, "pass_gate": True, "reasons": []}):
+            r = t_build.build_score("SH600000", source="scan")
+            # 0.8×0.65+0.1×0.1+0 = 0.53 < 0.65 → 拒
+            self.assertFalse(r["pass_gate"])
+            self.assertLess(r["score"], 0.65)
 
 
 class TestBuildScan(_PGTestCase):

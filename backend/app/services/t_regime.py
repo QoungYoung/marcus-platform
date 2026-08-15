@@ -169,7 +169,7 @@ def check_gate(trigger_kind: str = "low_buy", regime_state: Optional[dict] = Non
     Returns: {"allowed": bool, "mode": "auto"|"human_confirm"|"blocked", "regime": str}
     """
     st = regime_state or compute_regime()
-    if trigger_kind == "high_sell":
+    if trigger_kind in ("high_sell", "high_sell_then_buy_back"):
         gate = st.get("gate_high_sell", "ALLOWED")
     else:  # low_buy 及默认
         gate = st.get("gate_low_buy", "ALLOWED")

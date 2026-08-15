@@ -53,6 +53,7 @@ class TBacktestLedger:
         self.net_asset = float(net_asset)
         self.sold_today = 0
         self.bought_today = 0
+        self.buy_legs_today = 0  # 当日买腿成交次数（低吸加仓上限用）
         self.realized_pnl = 0.0
         self.day_turnover = 0.0
         self.trades: List[Dict[str, Any]] = []
@@ -107,6 +108,7 @@ class TBacktestLedger:
         gross = price * vol
         fees = gross * (fee_rate + slippage)
         self.bought_today += vol
+        self.buy_legs_today += 1
         self.day_turnover += gross
         self.cash -= gross + fees
         trade = {
@@ -137,6 +139,7 @@ class TBacktestLedger:
         self.base_shares = max(new_base, 0)
         self.sold_today = 0
         self.bought_today = 0
+        self.buy_legs_today = 0
 
     def equity(self, price: float) -> float:
         """按当前价估值总资产。"""
@@ -423,6 +426,10 @@ class TBacktestEngine:
         self.init_price = float(task.get("init_price", 0) or 0)
         self.net_asset = float(task.get("net_asset", 200000.0))
         self.conditions: List[Dict[str, Any]] = task.get("conditions", [])
+        # 条件无 id 时补 _bt_index（双条件生成器产出的条件无 DB id，须可区分计数）
+        for _i, _c in enumerate(self.conditions):
+            if not _c.get("id"):
+                _c["_bt_index"] = _i + 1
         self.start_trade_day = str(task.get("start_trade_day") or "")  # 滚动建仓：从该日起回放（含）
         self.events: List[Dict[str, Any]] = []   # 触发/复核/拦截/缺口全事件流
         self._pending_buyback: Optional[Dict[str, Any]] = None  # high_sell_then_buy_back 买回挂单
@@ -472,6 +479,7 @@ class TBacktestEngine:
         summary: Dict[str, Any] = {
             "triggers": 0, "reviews": 0, "executed": 0, "blocked": 0,
             "escalated_human": 0, "data_gaps": 0, "ai_wait": 0, "ai_abandon": 0,
+            "stop_losses": 0,
         }
 
         total_days = len(self.trade_days)
@@ -516,6 +524,9 @@ class TBacktestEngine:
                                         trade_day, prev_trade_day, tick_dt)
                 # 0) 先处理高抛后买回挂单（T+0 闭环买腿，走网关规则）
                 self._process_buyback(day_bars, i, regime, ledger, summary)
+                # 0.5) 止损检查（bar 最低价 ≤ 止损价 → 止损卖腿，冻结当日条件）
+                self._process_stop_loss(day_bars, i, regime, ledger, summary,
+                                        day_conds, trade_day)
                 bars_up_to = day_bars[: i + 1]
 
                 # 触发判定（复用 evaluate_condition_at：表达式 + 通用护栏 + 默认逻辑）
@@ -760,6 +771,7 @@ class TBacktestEngine:
             "net_asset": self.net_asset,
             "daily": {"realized_pnl": ledger.realized_pnl,
                       "daily_turnover_amount": ledger.day_turnover},
+            "daily_buy_legs": ledger.buy_legs_today,
             "risk": {},
             "sell_in_transit": False,
             "trigger_status": "pending",
@@ -799,6 +811,71 @@ class TBacktestEngine:
             "next_bar": str(next_bar["time"]),
         }})
 
+    def _process_stop_loss(self, day_bars: List[dict], bar_idx: int,
+                           regime: Dict[str, Any], ledger: TBacktestLedger,
+                           summary: Dict[str, Any], day_conds: List[Dict[str, Any]],
+                           trade_day: str):
+        """止损撮合（mark-to-market）：持仓存在且 bar 最低价 ≤ 止损价 → 卖出可卖底仓止损。
+
+        成交价取 min(bar 开盘, 止损价)（止损单按限价成交近似，跳空击穿按开盘价）；
+        止损后当日该标的高抛/低吸条件冻结（armed=0），计入 realized_pnl。
+        """
+        if ledger.sellable() <= 0:
+            return
+        stop_price = None
+        for c in day_conds:
+            sp = float(c.get("stop_loss_price") or 0)
+            if sp > 0:
+                stop_price = sp
+                break
+        if not stop_price:
+            return
+        bar = day_bars[bar_idx]
+        bar_low = float(bar["low"])
+        if bar_low > stop_price:
+            return
+        # 成交价：止损限价（未跳空）或开盘价（跳空击穿）
+        open_ = float(bar["open"])
+        exec_price = min(open_, stop_price) if open_ > 0 else stop_price
+        volume = ledger.sellable()
+        volume = (volume // 100) * 100
+        if volume <= 0:
+            return
+        trigger = {
+            "symbol": self.symbol,
+            "condition_id": None,
+            "event_type": "stop_loss",
+            "trigger_price": stop_price,
+            "quote_price": bar_low,
+            "mode": "ALLOWED",
+            "trade_day": trade_day,
+            "bar_time": str(bar["time"]),
+        }
+        self.events.append({"type": "trigger", "data": trigger})
+        ctx = self._gateway_ctx(regime, ledger, exec_price)
+        check = validate_order_at(self.symbol, "sell", exec_price, volume, ctx,
+                                  reason="t-backtest-stop-loss")
+        if not check["pass"]:
+            self.events.append({"type": "blocked", "data": {
+                "trigger": trigger, "reason": f"止损被网关拒绝: {check['reason']}",
+            }})
+            summary["blocked"] += 1
+            return
+        trade = ledger.do_sell(exec_price, volume, self.slippage, self.fee_rate)
+        summary["executed"] += 1
+        summary["stop_losses"] = summary.get("stop_losses", 0) + 1
+        self.events.append({"type": "trade", "data": {
+            "trigger": trigger, "trade": trade, "exec_price": round(exec_price, 3),
+            "next_bar": str(bar["time"]), "reason": "stop_loss",
+        }})
+        # 止损后冻结当日条件（高抛/低吸均不再触发）
+        for c in day_conds:
+            c["armed"] = 0
+        # 高抛挂单作废（止损离场）
+        self._pending_buyback = None
+        print(f"[t-backtest] 止损触发 {self.symbol} @ {exec_price} x{volume} "
+              f"(bar 最低 {bar_low}) 于 {trade_day}")
+
     def _review(self, trigger: Dict[str, Any], regime: Dict[str, Any],
                 ledger: TBacktestLedger, summary: Dict[str, Any]):
         """复核决策：LLM（review_fn）→ AI 决策动作（exec/wait/abandon）；规则（无 DB 纯规则）。
@@ -830,8 +907,14 @@ def _rule_review(trigger: Dict[str, Any], regime: Dict[str, Any],
     """无 DB 规则复核（回测专用，对齐 classify_escalation 6 类语义）：
     regime 极端 / 连续触风控 / 无底仓低吸 / 接近日亏预警线 → abandon（回测中不撮合）；
     否则 exec。返回 (action, reason)，action ∈ exec/abandon。
+
+    买卖腿区分（P0-2）：高抛卖腿是兑现离场动作，HALT/CAUTIOUS 下仍应 exec；
+    只有低吸买腿在 HALT（及连续风控/日亏预警）下 abandon。
     """
     side = "buy" if trigger.get("event_type") in ("low_buy", "panic_vibrate") else "sell"
+    if side == "sell":
+        # 高抛/止损卖腿：兑现离场，极端市况不拦（反而应离场）；无底仓由撮合层 0 股拦截
+        return "exec", "高抛兑现（卖腿）"
     if regime.get("regime") == "HALT":
         return "abandon", "regime=HALT 极端市况"
     if ledger.consecutive_losses >= 2:
@@ -900,6 +983,7 @@ def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
         "ai_exec_win_rate_pct": round(ai_exec_win / ai_exec_total * 100, 2) if ai_exec_total else None,
         "ai_exec_count": ai_exec_total,
         "ai_exec_avg_pct": round(sum(ai_exec_pcts) / len(ai_exec_pcts), 3) if ai_exec_pcts else None,
+        "stop_loss_count": summary.get("stop_losses", 0),
         "data_gap_count": summary.get("data_gaps", 0),
         "execution_rate_pct": round(summary.get("executed", 0) / summary.get("triggers", 1) * 100, 2)
         if summary.get("triggers") else 0.0,
@@ -928,15 +1012,14 @@ def caliber_notes() -> List[str]:
 # ────────────────────────────────────────────────────────────────
 
 def _default_t_conditions(avg_price: float) -> List[Dict[str, Any]]:
-    """建仓后自动生成做T条件（对齐 auto_gen_conditions_for_build 参数：低吸×0.98/复归+0.4%/高抛+1.5%/止损-3%）。"""
-    target = round(avg_price * 0.98, 2)
-    sell_target = round(avg_price * 1.015, 2)
-    stop = round(target * 0.97, 2)
-    return [{
-        "id": 1, "trigger_kind": "low_buy", "target_price": target,
-        "vol_ratio_thresh": 1.5, "stabilize_level": "not_new_low",
-        "sell_target_price": sell_target, "stop_loss_price": stop, "armed": 1,
-    }]
+    """建仓后自动生成做T条件（双条件：低吸 + 高抛回补）。
+
+    阈值按波动率自适应（amp_med 缺省用下限）：高抛 = 成本×(1+max(1.5%, amp×0.6))、
+    低吸 = 成本×(1−max(2.0%, amp×0.6))、止损 = 成本×(1−3%)（绑定建仓成本）。
+    回测规则模式无 m5 振幅时走下限（1.5%/2.0%/3.0%）。
+    """
+    from app.services.t_pool import build_t_conditions
+    return build_t_conditions(avg_price)
 
 
 class TCombinedBacktestEngine:
