@@ -96,7 +96,235 @@ function apply(ctx) {
           return { ok: true, text: '已更新 ' + args.fund_code + ' 定投配置: ' + JSON.stringify(body) };
         },
       }));
-      console.log('[Bridge] 写工具注册完成（place_order/cancel_order/calc_position/update_golden_pit_etf_config）');
+
+      // ═══ 做T（T+0）自由表达式监控条件工具 ═══
+      register(defineTool({
+        name: 'list_t_fields',
+        description: '查询做T自由表达式监控可用的全部数据字段（行情/量比/分钟线/技术指标/环境/持仓/指数）。Agent 编写监控条件前先查此表，用字段名写表达式。',
+        parameters: {
+          category: { type: 'string', description: '可选过滤: quote(行情)/vol_ratio(量比)/minute(分钟线)/tech(技术指标)/regime(环境)/position(持仓)/index(指数)。不填返回全部' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const data = await apiFetch('/t/fields');
+          let fields = data.fields || [];
+          if (args.category) {
+            const prefix = args.category + '.';
+            fields = fields.filter((f) => f.field.startsWith(prefix));
+          }
+          const lines = ['📊 做T可监控字段（' + fields.length + ' 个）：', ''];
+          fields.forEach((f) => {
+            lines.push('• ' + f.field + ' — ' + f.description + ' (' + f.type + ')');
+          });
+          if (fields.length === 0) {
+            lines.push('（无匹配字段，category 可选: quote/vol_ratio/minute/tech/regime/position/index）');
+          }
+          lines.push('');
+          lines.push('表达式示例: {"and":[{"field":"quote.change_pct","op":"<=","value":-1.5},{"field":"vol_ratio","op":">=","value":1.5},{"field":"tech.macd_golden_cross","op":"==","value":true}]}');
+          lines.push('支持操作符: and/or/not, > >= < <= == != in not_in between');
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'create_t_condition',
+        description: '创建/更新一条做T自由表达式监控条件。Agent 可用 list_t_fields 查询的任意字段组合触发条件；表达式只控制触发时机，触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）。',
+        parameters: {
+          symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、SZ000001' },
+          expression: { type: 'object', additionalProperties: true, required: true, description: '触发条件表达式 JSON，形如 {"and":[{"field":"quote.current","op":"<=","value":98},{"field":"vol_ratio","op":">=","value":1.5}]}。字段名用 list_t_fields 查询；op 支持 > >= < <= == != in not_in between；组合用 and/or/not' },
+          trigger_kind: { type: 'string', description: '条件类型标识（默认 custom），如 low_buy/high_sell/custom_tech' },
+          sell_target_price: { type: 'number', description: '高抛止盈目标价（元）' },
+          stop_loss_price: { type: 'number', description: '止损价（元）' },
+          vol_ratio_thresh: { type: 'number', description: '量比阈值（默认 1.5，仅无 expression 时用默认逻辑）' },
+          regime_gate: { type: 'string', description: '环境闸门 ALLOWED/MANUAL_ONLY/BLOCKED（默认 ALLOWED）' },
+          reason: { type: 'string', description: '创建理由（必填，至少10字）' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const body = {
+            symbol: args.symbol,
+            trigger_kind: args.trigger_kind || 'custom',
+            expression: args.expression,
+            regime_gate: args.regime_gate || 'ALLOWED',
+          };
+          if (args.sell_target_price !== undefined) body.sell_target_price = args.sell_target_price;
+          if (args.stop_loss_price !== undefined) body.stop_loss_price = args.stop_loss_price;
+          if (args.vol_ratio_thresh !== undefined) body.vol_ratio_thresh = args.vol_ratio_thresh;
+          const data = await apiFetch('/t/conditions', { method: 'POST', body: JSON.stringify(body) });
+          return {
+            ok: true,
+            text: '✅ 做T监控条件已创建\n条件ID: ' + data.condition_id + '\n标的: ' + args.symbol + '\n表达式: ' + (data.expression_summary || JSON.stringify(args.expression)) + '\n说明: 触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）；开盘后 TMonitor 每 30s 评估',
+          };
+        },
+      }));
+
+      register(defineTool({
+        name: 'list_t_conditions',
+        description: '查看当前做T监控条件列表（含表达式摘要/armed 状态/今日触发次数）。',
+        parameters: {
+          symbol: { type: 'string', description: '可选按代码过滤' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const q = args.symbol ? ('?symbol=' + encodeURIComponent(args.symbol)) : '';
+          const data = await apiFetch('/t/conditions' + q);
+          const conds = data.conditions || [];
+          if (conds.length === 0) return { ok: true, text: '📭 暂无做T监控条件。可用 create_t_condition 创建（字段先查 list_t_fields）。' };
+          const lines = ['📋 当前做T监控条件（' + conds.length + ' 条）：', ''];
+          conds.forEach((c) => {
+            const exprSummary = (c.expression && c.expression_summary) ? c.expression_summary : JSON.stringify(c.expression || '');
+            const armed = c.armed === 1 ? '🟢 armed' : '⛔ 冷却/已触发';
+            lines.push('#' + c.id + ' ' + c.symbol + ' [' + c.trigger_kind + '] ' + armed + ' 触发' + (c.trigger_count_today || 0) + '次');
+            lines.push('   expr: ' + (exprSummary || '默认逻辑'));
+            if (c.sell_target_price) lines.push('   高抛目标: ' + c.sell_target_price + ' | 止损: ' + c.stop_loss_price);
+          });
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+      register(defineTool({
+        name: 'run_t_backtest',
+        description: '发起做T监控条件历史回测（m5 粒度，单标的多日，防前视）。验证监控条件（表达式/阈值）在历史上触发得准不准、赚不赚钱。参数：symbol、start_date、end_date、conditions（监控条件数组，含 trigger_kind/target_price/vol_ratio_thresh/expression 等）、init_shares（初始底仓股数，默认1000）、review_mode（llm=真实LLM复核/rule=纯规则对照，默认llm）。返回任务 id；任务异步执行，完成后可再调用传入 task_id 查询报告。',
+        parameters: {
+          symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、600519' },
+          start_date: { type: 'string', required: true, description: '回测起始日 YYYY-MM-DD' },
+          end_date: { type: 'string', required: true, description: '回测截止日 YYYY-MM-DD' },
+          conditions: { type: 'array', required: true, description: '监控条件数组。每条含 trigger_kind(low_buy/high_sell/panic_vibrate/high_sell_then_buy_back/custom)、target_price(低吸触发价)、sell_target_price(高抛目标)、stop_loss_price、vol_ratio_thresh(量比阈值,0关闭)、expression(自由表达式JSON,可省)、stabilize_level、armed(默认1)。expression 示例 {"and":[{"field":"quote.current","op":"<=","value":98},{"field":"vol_ratio","op":">=","value":1.5}]}' },
+          init_shares: { type: 'number', description: '初始假设底仓股数（默认1000，成本=回测首日价）' },
+          review_mode: { type: 'string', description: 'llm(默认,真实LLM复核) 或 rule(纯规则对照)' },
+          task_id: { type: 'number', description: '传入已创建任务的 id 时查询该任务报告' },
+        },
+        output: textOut(),
+        async execute(args) {
+          if (args.task_id) {
+            const detail = await apiFetch('/t/backtest/' + args.task_id);
+            const task = detail.task || {};
+            const m = (detail.metrics || {}).metrics || {};
+            const lines = ['📊 做T回测任务 #' + args.task_id + ' | ' + (task.symbol || '') + ' | ' + (task.status || '')];
+            if (task.status === 'completed' && m.total_return_pct !== undefined) {
+              lines.push('总收益: ' + m.total_return_pct + '% | 胜率: ' + m.win_rate_pct + '% | 触发: ' + m.trigger_count + ' | 成交: ' + m.executed_count + ' | 拦截: ' + m.blocked_count + ' | 升级人工: ' + m.escalated_human_count);
+              lines.push('最大回撤: ' + m.max_drawdown_pct + '% | 买入持有对比: ' + m.buy_hold_return_pct + '% | 成交率: ' + m.execution_rate_pct + '%');
+              lines.push('口径差异与完整报告见 /api/v1/t/backtest/' + args.task_id + '/report');
+            } else if (task.status === 'running' || task.status === 'pending') {
+              lines.push('⏳ 任务执行中，稍后传入 task_id 查询结果');
+            } else if (task.status === 'failed') {
+              lines.push('❌ 失败: ' + (task.error_message || '未知错误'));
+            }
+            return { ok: true, text: lines.join('\n') };
+          }
+          const conds = Array.isArray(args.conditions) ? args.conditions : [];
+          const data = await apiFetch('/t/backtest', { method: 'POST', body: JSON.stringify({
+            symbol: args.symbol, start_date: args.start_date, end_date: args.end_date,
+            conditions: conds, init_shares: args.init_shares || 1000,
+            review_mode: args.review_mode || 'llm',
+          }) });
+          return { ok: true, text: '✅ 做T回测任务已创建 #' + data.task_id + '\n标的: ' + args.symbol + ' | ' + args.start_date + '~' + args.end_date + ' | 条件 ' + conds.length + ' 条\n执行中可稍后传入 task_id 查询报告' };
+        },
+      }));
+      console.log('[Bridge] 写工具注册完成（place_order/cancel_order/calc_position/update_golden_pit_etf_config/list_t_fields/create_t_condition/list_t_conditions/run_t_backtest）');
+
+      // ═══ 做T底仓建仓工具（t-position-building，走 t 专用后端端点，不直触下单）═══
+      register(defineTool({
+        name: 'scan_t_candidates',
+        description: '扫描做T底仓建仓候选短名单（基于可T质量打分+趋势闸门+风险惩罚）。底仓=T+0弹药，建仓前必查。返回按打分降序的候选与通过状态。',
+        parameters: {
+          source: { type: 'string', description: '候选来源: pool(既有候选池)/scan(全市场粗筛)。用户指定标的请用 POST /t/build/scan' },
+          limit: { type: 'number', description: '返回条数上限（默认20）' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const qs = new URLSearchParams({ source: args.source || 'pool', limit: String(args.limit || 20) });
+          const data = await apiFetch('/t/build/candidates?' + qs);
+          const cands = data.candidates || [];
+          if (cands.length === 0) return { ok: true, text: '📭 暂无建仓候选（来源: ' + data.source + '）。可调 POST /t/build/scan 传入用户指定标的。' };
+          const lines = ['🎯 做T底仓建仓候选（' + cands.length + ' 只，来源: ' + data.source + '）：', ''];
+          cands.forEach((c) => {
+            const pass = c.pass_gate ? '✅' : '⛔';
+            lines.push(pass + ' ' + c.symbol + ' build_score=' + c.score.toFixed(2) + ' (门槛0.55)');
+            lines.push('   可T质量: ' + (c.quality && c.quality.score !== undefined ? c.quality.score.toFixed(2) : 'N/A') + ' | 趋势: ' + ((c.trend && c.trend.note) || 'N/A'));
+            if (c.reasons && c.reasons.length) lines.push('   说明: ' + c.reasons.join('；'));
+          });
+          lines.push('');
+          lines.push('建仓规则: 首开新标的需人工确认；单笔≤净值5%；总底仓≤净值55%；冷静期9:45后/午后禁建；单票当日单批。');
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'build_t_position',
+        description: '做T底仓建仓（走独立建仓网关校验：熔断/规模/regime/时段/封板/人工升级）。底仓=做T弹药，建仓成交后次日自动生成做T条件。首开新标的或超阈值将升级人工确认。',
+        parameters: {
+          symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、SZ000001' },
+          price: { type: 'number', required: true, description: '委托价格（元）' },
+          volume: { type: 'number', description: '股数（默认按单笔≤净值5%自动计算，100的整数倍）' },
+          reason: { type: 'string', required: true, description: '建仓理由（必填，至少10字，说明选股依据）' },
+          skip_timing: { type: 'boolean', description: '跳过回踩/量比/企稳时机确认（仅人工决策时用，默认false）' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const data = await apiFetch('/t/build/position', { method: 'POST', body: JSON.stringify({
+            symbol: args.symbol, price: args.price, volume: args.volume, reason: args.reason,
+            decision_source: 'agent', skip_timing: !!args.skip_timing,
+          }) });
+          if (data.status === 'human_confirm') {
+            return { ok: true, text: '👤 建仓已升级人工确认（事件 #' + data.event_id + '）\n原因: ' + (data.reason || '') + '\n请在 TAccount 页面或 POST /t/build/events/' + data.event_id + '/confirm 处理。' };
+          }
+          if (data.status === 'success') {
+            return { ok: true, text: '✅ 底仓建仓成交\n标的: ' + args.symbol + ' | 价格: ' + (data.price || args.price) + ' | 数量: ' + (data.volume || args.volume) + '股\n事件: #' + data.event_id + '（次日自动生成做T条件）' };
+          }
+          return { ok: false, text: '❌ 建仓被拒: ' + (data.reason || '未知原因') + (data.level ? ' (level=' + data.level + ')' : '') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'auto_gen_conditions',
+        description: '为做T实盘池/当日建仓标的补生成次日(trade_date=D+1)做T监控条件（低吸=成本×0.98/复归+0.4%/高抛+1.5%/止损-3%）。盘后任务自动执行，也可手动触发。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const data = await apiFetch('/t/build/auto-gen', { method: 'POST' });
+          return { ok: true, text: '✅ 次日做T条件补生成完成: ' + (data.created || 0) + ' 条' };
+        },
+      }));
+
+      register(defineTool({
+        name: 'rebalance_floors',
+        description: '底仓再平衡评估：跌破保留下限(市值<成本50%)的标的转只监控禁高抛；可T质量退化标的降级；评估达标可补建的标的。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const data = await apiFetch('/t/build/rebalance', { method: 'POST' });
+          const acts = data.actions || [];
+          if (acts.length === 0) return { ok: true, text: '✅ 底仓健康，无需再平衡动作' };
+          const lines = ['🔄 底仓再平衡评估（' + acts.length + ' 项）：', ''];
+          acts.forEach((a) => {
+            lines.push('• ' + a.symbol + ' [' + a.action + '] ' + a.reason);
+          });
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_floor_overview',
+        description: '做T底仓总览：t账户净值、当前底仓市值、三档上限(单笔/单标/总底仓)、regime档位、建仓服务状态。建仓与再平衡前必查。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const data = await apiFetch('/t/build/overview');
+          const svc = data.service || {};
+          return { ok: true, text: [
+            '🏦 做T底仓总览（' + data.account_id + '）',
+            'regime: ' + data.regime + '（档位: ' + data.tier + '）',
+            '净值: ' + Number(data.net_asset || 0).toLocaleString(),
+            '当前底仓市值: ' + Number(data.total_floor_value || 0).toLocaleString(),
+            '总底仓上限: ' + Number(data.total_floor_cap || 0).toLocaleString() + '（' + (data.net_asset ? Math.round(data.total_floor_value / data.net_asset * 100) : 0) + '%）',
+            '单标上限: ' + Number(data.per_symbol_cap || 0).toLocaleString(),
+            '单笔上限: ' + Number(data.single_order_cap || 0).toLocaleString(),
+            '组合标的上限: ' + (data.max_floor_symbols || '-'),
+            '建仓服务: ' + (svc.running ? '🟢 运行中' : '⚪ 未启动') + (svc.last_result ? ' | ' + svc.last_result : ''),
+          ].join('\n') };
+        },
+      }));
+      console.log('[Bridge] 做T底仓建仓工具注册完成（scan_t_candidates/build_t_position/auto_gen_conditions/rebalance_floors/get_floor_overview）');
     }
     registerWriteTools();
 
@@ -303,19 +531,47 @@ function apply(ctx) {
       return parts.length > 0 ? parts.join('\n\n') : '(无回复)';
     }
 
-    // ── 会话 → Agent 映射（chat / trade 模式），存 handle（含 dispose）──
+    // ── 会话 → Agent 映射（chat / trade / backtest 模式），存 handle（含 dispose）──
     async function getOrCreateAgent(sessionId, mode, modelOverride, thinkingLevelOverride) {
       const key = mode + ':' + sessionId;
       if (sessions.has(key)) return sessions.get(key).agent;
       const modelId = modelOverride || (mode === 'trade' ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL);
       const thinkingLevel = thinkingLevelOverride || (mode === 'trade' ? 'high' : 'medium');
       const systemPrompt = getPrompt(mode === 'trade' ? 'TRADE_SYSTEM_PROMPT' : 'CHAT_SYSTEM_PROMPT');
+      // 做T会话（t-agent-*）附加底仓建仓工作流指引
+      const isTAgentSession = String(sessionId || '').includes('t-agent-');
+      const tBuildPrompt = isTAgentSession ? getPrompt('T_BUILD_SYSTEM_PROMPT') : '';
+      // 回测复核会话（t-backtest-*）：沙盒隔离（design 5.2）——只做 auto/human 决策，
+      // 通过 tools.restrict 拒绝生产写工具，绝不触达真实交易通道
+      const isBacktestReview = mode === 'backtest';
       const makeSetup = () => (agentCtx) => {
         agentCtx.systemPrompt.section({
           name: 'marcus-bridge-prompt',
           order: -50,
           text: systemPrompt,
         });
+        if (tBuildPrompt) {
+          agentCtx.systemPrompt.section({
+            name: 'marcus-t-build-prompt',
+            order: -49,
+            text: tBuildPrompt,
+          });
+        }
+        if (isBacktestReview) {
+          agentCtx.systemPrompt.section({
+            name: 'marcus-backtest-review',
+            order: -48,
+            text: BACKTEST_REVIEW_PROMPT,
+          });
+          try {
+            if (agentCtx.tools && typeof agentCtx.tools.restrict === 'function') {
+              agentCtx.tools.restrict({ deny: BACKTEST_DENY_TOOLS });
+              console.log('[Bridge] 回测复核会话已隔离生产写工具（restrict deny）');
+            }
+          } catch (e) {
+            console.warn('[Bridge] 回测工具隔离失败: ' + e.message);
+          }
+        }
       };
       // 1) 尝试恢复持久化会话（容器重启后保留对话）
       try {
@@ -412,7 +668,7 @@ function apply(ctx) {
               if (!message) { json(res, 400, { error: '缺少 message 参数' }); return; }
               const sessionId = session_id || 'default';
               const chatMode = mode || 'chat';
-              if (chatMode === 'backtest') { json(res, 400, { error: '回测模式已下架' }); return; }
+              if (chatMode === 'backtest') { json(res, 501, { error: '回测复核请使用 POST /backtest/review（回测会话沙盒）' }); return; }
               if (chatMode === 'reflect') { json(res, 501, { error: 'reflect 模式请使用 POST /chat/stream' }); return; }
               const lockKey = chatMode + ':' + sessionId;
               const prev = locks.get(lockKey);
@@ -434,10 +690,59 @@ function apply(ctx) {
             }
           },
         }),
+        ctx.webServer.register({
+          kind: 'exact',
+          path: '/backtest/review',
+          async handler(req, res) {
+            if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' }); res.end(); return; }
+            if (req.method !== 'POST') { json(res, 405, { error: 'Method Not Allowed' }); return; }
+            try {
+              const body = JSON.parse(await readBody(req));
+              const { task_id, symbol, trigger, regime, rule_hint } = body;
+              if (!task_id || !trigger) { json(res, 400, { error: '缺少 task_id / trigger' }); return; }
+              // 回测复核会话（沙盒）：key = backtest:t-backtest-{taskId}，与生产会话隔离
+              const agent = await getOrCreateAgent('t-backtest-' + task_id, 'backtest', null, null);
+              const prompt = [
+                '请复核以下做T触发事件，判断应执行（auto）还是升级人工（human）。',
+                '',
+                '标的: ' + (symbol || trigger.symbol || ''),
+                '触发: ' + JSON.stringify(trigger, null, 1),
+                'regime: ' + JSON.stringify(regime || {}, null, 1),
+                '规则预判(供参考): ' + JSON.stringify(rule_hint || {}, null, 1),
+                '',
+                '判定要点：量价合理性、regime 档位、可卖底仓、风控状态、触发与目标价的价差空间。',
+                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"decision":"auto|human","reason":"一句话理由"}',
+              ].join('\n');
+              const reply = await runAgentTurn(agent, prompt);
+              const parsed = parseDecision(reply);
+              console.log('[Bridge] /backtest/review task#' + task_id + ' → ' + parsed.decision + ' (' + parsed.reason.slice(0, 60) + ')');
+              json(res, 200, parsed);
+            } catch (e) {
+              console.error('[Bridge] /backtest/review error:', e);
+              json(res, 500, { error: e.message || '内部错误' });
+            }
+          },
+        }),
       ];
       const all = [...disposers, ...panelDisposers];
       return () => { for (const d of all) d(); };
     });
+
+    // ── 回测复核：解析 LLM JSON 决策（容忍 ```json 包裹与前后噪声）──
+    function parseDecision(reply) {
+      if (!reply) return { decision: 'human', reason: '空回复' };
+      const text = String(reply).trim();
+      const m = text.match(/\{[^{}]*"decision"\s*:\s*"(auto|human)"[^{}]*\}/);
+      if (m) {
+        try {
+          const obj = JSON.parse(m[0]);
+          return { decision: obj.decision === 'auto' ? 'auto' : 'human', reason: String(obj.reason || '') };
+        } catch (e) { /* fallthrough */ }
+      }
+      // 无 JSON：按文本关键词兜底
+      if (/auto|执行|放行/.test(text) && !/human|人工|升级/.test(text)) return { decision: 'auto', reason: text.slice(0, 120) };
+      return { decision: 'human', reason: text.slice(0, 120) };
+    }
 
     // ── 内置回退 Prompt（启动时从 Backend 拉取后覆盖）──
     const promptCache = new Map();
@@ -445,6 +750,19 @@ function apply(ctx) {
       CHAT_SYSTEM_PROMPT: '你是 Marcus — 短线右侧交易专家。你可以查询行情、板块、资金流、技术指标等数据帮助用户了解市场状况。',
       TRADE_SYSTEM_PROMPT: '你是 Marcus — 短线右侧交易专家（trade 模式）。你可以查询数据并执行交易操作。',
     };
+    // 回测复核会话系统提示（沙盒：只做决策，禁止交易/写操作）
+    const BACKTEST_REVIEW_PROMPT = [
+      '你是做T回测复核 Agent（沙盒模式）。你只对触发事件做 auto/human 复核决策，不执行任何交易，也不调用任何工具。',
+      '你的工具已被沙盒隔离：生产写工具（下单/撤单/建仓等）对你不可见。',
+      '每次收到触发上下文，输出一行 JSON：{"decision":"auto|human","reason":"一句话理由"}。',
+      'auto = 按建议价执行；human = 升级人工复核（量价存疑、regime 极端、风控接近、无底仓、连续亏损等）。',
+    ].join('\n');
+    // 沙盒 deny 名单：回测复核会话禁用的生产写工具
+    const BACKTEST_DENY_TOOLS = [
+      'place_order', 'cancel_order', 'calc_position',
+      'update_golden_pit_etf_config', 'create_t_condition',
+      'list_t_fields', 'list_t_conditions', 'run_t_backtest',
+    ];
 
     async function fetchPromptsFromAPI(retries = 3, delayMs = 5000) {
       for (let i = 0; i < retries; i++) {

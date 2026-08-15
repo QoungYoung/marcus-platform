@@ -55,3 +55,21 @@ docker run -d --name marcus-dsh -p 3001:3001 \
 - ✅ 1.2 headless 模式真实 LLM 回合成功（"1+1等于2"，deepseek-official → OpenCode 网关）
 - ✅ 1.3 marcus-panel-tools skill 可见可读；fs 工具正常
 - ✅ 1.4 docker_default 网络互通（backend HTTP 200）
+
+## dsh-t-compaction（做T会话专用上下文压缩）
+
+对 `t-agent-*` 会话（bridge 映射为 `chat:t-agent-{symbol}`）的自动/手动压缩使用
+「股票投资信息优先」的结构化摘要指令（标的持仓 / t_conditions / t_triggers / regime /
+技术指标 / 决策执行 / 风控状态 / 用户意图 / 下一步）；其余会话保持 DSH 默认摘要。
+
+- **机制**：`BasicCompactionEngine.summarize()` 是官方「唯一可覆盖钩子」（源码注释
+  "Override this sole hook for a template or remote summarizer"），所有压缩路径
+  （pre-step 压力 / context-overflow / /compact）最终都经 `regionDependencies()` 的
+  `this.summarize(...)` 动态分发；插件 `inject: ['compaction']` 拿到引擎实例后按会话
+  打补丁，无需重注册 compaction 服务。见 `t-compaction/lib/index.js` 头部注释。
+- **安装（服务端）**：`Dockerfile.dsh` 第 8b 步 COPY 进 profile node_modules，
+  `service.cordis.patch.yml` 注册行；本地 GUI 同法放入 `~/.dsh/profiles/node_modules/`
+  并在 `web/cordis.patch.yml` 加行，重启生效。
+- **验证**：`t-compaction/verify.profile.mjs`（15 项断言：t-agent 走做T指令 /
+  普通会话回退默认 / 非引擎实例防御跳过）。运行：把该文件拷到 profile 根后
+  `cd <profiles-root> && node verify-t-compaction.mjs`（已实测全过）。

@@ -1,0 +1,12 @@
+{
+  "name": "dsh-t-compaction",
+  "version": "0.1.0",
+  "description": "做T专用上下文压缩：对 t-agent-* 会话使用股票投资信息优先的摘要指令，其他会话保持 DSH 默认摘要。",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  }
+}

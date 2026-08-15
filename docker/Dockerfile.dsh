@@ -61,7 +61,11 @@ RUN mkdir -p /root/.dsh/profiles/service/node_modules/dsh-agent-teams \
 COPY docker/dsh/bridge/package.json /root/.dsh/profiles/service/node_modules/dsh-dsh-marcus-bridge/package.json
 COPY docker/dsh/bridge/lib/index.js /root/.dsh/profiles/service/node_modules/dsh-dsh-marcus-bridge/lib/index.js
 
-# 9) 覆盖 service profile 的用户 patch（webserver host 0.0.0.0 + code-runtime + bridge）
+# 8b) dsh-t-compaction 插件（做T会话专用上下文压缩：股票投资信息优先摘要）
+COPY docker/dsh/t-compaction/package.json /root/.dsh/profiles/service/node_modules/dsh-t-compaction/package.json
+COPY docker/dsh/t-compaction/lib/index.js /root/.dsh/profiles/service/node_modules/dsh-t-compaction/lib/index.js
+
+# 9) 覆盖 service profile 的用户 patch（webserver host 0.0.0.0 + code-runtime + bridge + t-compaction）
 COPY docker/dsh/service.cordis.patch.yml /root/.dsh/profiles/service/cordis.patch.yml
 
 # 会话/技能目录

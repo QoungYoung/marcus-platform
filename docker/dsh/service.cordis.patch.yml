@@ -31,3 +31,7 @@
     # Marcus 桥接插件：POST /chat /health /reset（Pi Server 兼容契约）
     - id: dsh-marcus-bridge
       name: dsh-dsh-marcus-bridge
+
+    # 做T会话专用上下文压缩：t-agent-* 会话用股票投资信息优先的摘要指令
+    - id: dsh-t-compaction
+      name: dsh-t-compaction
