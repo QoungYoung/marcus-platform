@@ -353,7 +353,153 @@ function apply(ctx) {
           ].join('\n') };
         },
       }));
+
+      // ═══ 只读行情/持仓/指标查询工具（AI 主导决策的"眼睛"：自主看盘用）═══
+      register(defineTool({
+        name: 'get_stock_quote',
+        description: '查个股实时行情（当前价/涨跌幅/开高低/成交量额/换手/振幅/日内价格分位）。AI 决策前必查现价与量能。',
+        parameters: { symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、SZ000001、600519' } },
+        output: textOut(),
+        async execute(args) {
+          const data = await apiFetch('/market/quote/' + encodeURIComponent(args.symbol));
+          return { ok: true, text: [
+            '📈 ' + (data.name || args.symbol) + ' 实时行情',
+            '现价: ' + data.current + ' | 涨跌: ' + data.change + '（' + data.percent + '%）',
+            '昨收: ' + data.last_close + ' | 今开: ' + (data.open ?? '-'),
+            '最高: ' + (data.high ?? '-') + ' | 最低: ' + (data.low ?? '-'),
+            '成交量: ' + (data.volume ?? '-') + ' | 成交额: ' + (data.amount ?? '-'),
+            '换手率: ' + (data.turnover_rate ?? '-') + ' | 振幅: ' + (data.amplitude ?? '-'),
+            '日内分位: ' + (data.intraday_percentile ?? '-'),
+          ].join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_portfolio_positions',
+        description: '查看账户持仓（含持仓量/可卖/成本/现价/浮动盈亏/市值）。决策前必查当前持仓与可卖数量。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const data = await apiFetch('/portfolio/positions');
+          const list = Array.isArray(data) ? data : (data.positions || data.list || []);
+          if (!Array.isArray(list) || list.length === 0) return { ok: true, text: '📭 当前无持仓' };
+          const lines = ['💼 当前持仓（' + list.length + ' 只）：', ''];
+          list.forEach((p) => {
+            const sellable = p.sellable ?? p.available ?? '-';
+            lines.push('• ' + (p.symbol || '') + ' ' + (p.name || '') + ' 持仓' + (p.volume ?? '-') + '股 可卖' + sellable + ' 成本' + (p.avg_price ?? '-') + ' 现价' + (p.current_price ?? p.last_price ?? '-') + ' 浮盈' + (p.floating_pnl_pct ?? p.pnl_pct ?? '-') + '%');
+          });
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_t_realtime_indicators',
+        description: '查个股实时技术指标（MA/MACD/KDJ/RSI）。判断趋势/超买超卖/金叉死叉用。',
+        parameters: { symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、600519' } },
+        output: textOut(),
+        async execute(args) {
+          const data = await apiFetch('/indicator/realtime/' + encodeURIComponent(args.symbol));
+          const rt = data.realtime || data;
+          return { ok: true, text: [
+            '📊 ' + (data.symbol || args.symbol) + ' 实时技术指标',
+            '现价: ' + (data.current_price ?? rt.current_price ?? '-'),
+            'MACD: DIF ' + (rt.macd_dif ?? '-') + ' DEA ' + (rt.macd_dea ?? '-') + ' BAR ' + (rt.macd_bar ?? '-'),
+            'KDJ: K ' + (rt.kdj_k ?? '-') + ' D ' + (rt.kdj_d ?? '-') + ' J ' + (rt.kdj_j ?? '-'),
+            'RSI6: ' + (rt.rsi_6 ?? '-') + ' | RSI12: ' + (rt.rsi_12 ?? '-') + ' | RSI24: ' + (rt.rsi_24 ?? '-'),
+          ].join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_stock_moneyflow',
+        description: '查个股资金流向（主力/大单/中单/小单净流入及占比）。验证主力动向用。',
+        parameters: { symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、600519' } },
+        output: textOut(),
+        async execute(args) {
+          const data = await apiFetch('/market/moneyflow/' + encodeURIComponent(args.symbol));
+          return { ok: true, text: [
+            '💰 ' + (data.name || args.symbol) + ' 资金流向',
+            '现价: ' + (data.price ?? '-') + ' | 涨跌: ' + (data.change_pct ?? '-'),
+            '主力净流入: ' + (data.main_net ?? '-') + '（' + (data.main_pct ?? '-') + '%）',
+            '大单: ' + (data.lg_net ?? '-') + '（' + (data.lg_pct ?? '-') + '%）',
+            '中单: ' + (data.md_net ?? '-') + ' | 小单: ' + (data.sm_net ?? '-'),
+          ].join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_market_state',
+        description: '查大盘环境状态（市场诊断：指数涨跌/涨跌家数/量能/市场情绪）。判断 regime 与整体环境用。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const data = await apiFetch('/market/market-state');
+          const ind = data.indicators || {};
+          return { ok: true, text: [
+            '🌐 市场状态（' + (data.trade_date || '') + '）',
+            '状态: ' + (data.label || data.state || '未知'),
+            '建议: ' + (data.suggestion || '-'),
+            ind && Object.keys(ind).length ? ('指标: ' + JSON.stringify(ind).slice(0, 400)) : '（今日尚未执行盘前诊断）',
+          ].join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_stock_technical',
+        description: '查个股技术面（MACD/KDJ/RSI/均线等完整技术指标历史序列）。深度技术分析用。',
+        parameters: { symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、600519' } },
+        output: textOut(),
+        async execute(args) {
+          const data = await apiFetch('/market/technical/' + encodeURIComponent(args.symbol));
+          return { ok: true, text: '🔬 ' + (data.symbol || args.symbol) + ' 技术面（' + (data.count ?? 0) + ' 期）\n' + JSON.stringify(data.data || data, null, 1).slice(0, 600) };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_intraday_minute',
+        description: '查个股分钟K线（1/5/15/30/60分钟，可指定日期）。观察日内走势/量能/分时企稳用。',
+        parameters: {
+          symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、600519' },
+          freq: { type: 'string', description: '周期 1/5/15/30/60 分钟（默认5）' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const freq = args.freq || '5';
+          const data = await apiFetch('/market/kline/' + encodeURIComponent(args.symbol) + '?freq=' + freq);
+          const bars = data.klines || [];
+          if (!Array.isArray(bars) || bars.length === 0) return { ok: true, text: '📭 无分钟K线数据' };
+          const lines = ['⏱️ ' + (data.symbol || args.symbol) + ' ' + freq + '分钟K线（最近 ' + bars.length + ' 根，倒序）：', ''];
+          bars.slice(0, 12).forEach((b) => {
+            lines.push('• ' + (b.trade_date || b.time || b.day || '') + ' O' + (b.open ?? '-') + ' H' + (b.high ?? '-') + ' L' + (b.low ?? '-') + ' C' + (b.close ?? '-') + ' V' + (b.vol ?? b.volume ?? '-'));
+          });
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_t_candidates_summary',
+        description: '做T候选扫描摘要：候选池/全市场扫描的可T质量候选短名单（build_score/趋势/理由）。AI 选股时用（pool 优先，scan 补充）。',
+        parameters: {
+          source: { type: 'string', description: '候选来源 pool（默认，做T候选池）或 scan（全市场扫描）' },
+          limit: { type: 'number', description: '返回条数（默认10）' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const qs = new URLSearchParams({ source: args.source || 'pool', limit: String(args.limit || 10) });
+          const data = await apiFetch('/t/build/candidates?' + qs);
+          const cands = data.candidates || [];
+          if (cands.length === 0) return { ok: true, text: '📭 无建仓候选（来源: ' + data.source + '）' };
+          const lines = ['🎯 做T建仓候选（' + cands.length + ' 只，来源: ' + data.source + '）：', ''];
+          cands.forEach((c) => {
+            const pass = c.pass_gate ? '✅' : '⛔';
+            lines.push(pass + ' ' + c.symbol + ' build_score=' + (c.score ?? 'N/A') + '（门槛0.55）');
+            if (c.reasons && c.reasons.length) lines.push('   说明: ' + c.reasons.join('；'));
+          });
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
       console.log('[Bridge] 做T底仓建仓工具注册完成（scan_t_candidates/build_t_position/auto_gen_conditions/rebalance_floors/get_floor_overview）');
+      console.log('[Bridge] 只读查询工具注册完成（get_stock_quote/get_portfolio_positions/get_t_realtime_indicators/get_stock_moneyflow/get_market_state/get_stock_technical/get_intraday_minute/get_t_candidates_summary）');
     }
     registerWriteTools();
 
@@ -800,6 +946,9 @@ function apply(ctx) {
         '- wait：量价/regime 存疑，等待（冷却后重新武装）',
         '- abandon：放弃本次触发（追高/信号矛盾）',
         '- update_condition：触发价偏离或连续命中未实质改善——更新监控条件（必须附 condition）',
+        '',
+        '自主看盘：唤醒快照外可调用查询工具——get_stock_quote(实时行情)/get_t_realtime_indicators(技术指标)',
+        '/get_intraday_minute(分钟K线)/get_portfolio_positions(持仓)/get_stock_moneyflow(资金流)/get_market_state(大盘)。',
         '',
         '建仓：scan_t_candidates 选股（候选池优先，空则全市场扫描）→ get_floor_overview →',
         'build_t_position（ai_led 首开自动放行；单笔≤净值5%、总底仓≤净值55%；冷静期/午后不自动建）。',

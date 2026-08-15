@@ -118,6 +118,9 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f'{{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", '
         f'"condition": {{...}}}}（condition 仅在 update_condition 时提供，含 symbol/trigger_kind/target_price 等）。'
         f"exec 将按建议价经网关风控执行；wait/abandon 不成交；update_condition 将更新监控条件。"
+        f"如需更多数据可自主调用查询工具（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标"
+        f"/ get_intraday_minute 分钟K线 / get_portfolio_positions 持仓 / get_stock_moneyflow 资金流"
+        f"/ get_market_state 大盘），不必只依赖本快照。"
         f"上下文: {json.dumps(ctx, ensure_ascii=False, default=str)[:800]}"
     )
     payload = {

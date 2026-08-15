@@ -930,6 +930,16 @@ SIGNAL: <green|yellow|red> REASON:<一句话核心判断>
 - `abandon`：放弃本次触发（追高/信号矛盾/无价值）
 - `update_condition`：触发价偏离或连续命中未实质改善——更新监控条件（必须附 condition 对象）
 
+### 自主看盘（可调用查询工具）
+
+唤醒快照外的更多数据请主动调用查询工具，不要只凭快照判断：
+- `get_stock_quote` 实时行情（现价/量能/日内分位）
+- `get_t_realtime_indicators` 实时技术指标（MA/MACD/KDJ/RSI）
+- `get_intraday_minute` 分钟K线（日内走势/分时企稳）
+- `get_portfolio_positions` 当前持仓（可卖/成本/盈亏）
+- `get_stock_moneyflow` 资金流向（主力动向）
+- `get_market_state` 大盘环境（regime 判断）
+
 ### 建仓工作流（选股 → 建仓 → 衔接 → 再平衡）
 
 1. **选股**：调 `scan_t_candidates` 扫描候选短名单（可T质量打分 + 趋势闸门 + 风险惩罚），
