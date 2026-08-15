@@ -363,7 +363,12 @@ def _load_candidate_symbols() -> List[str]:
     try:
         from app.services.candidate_pool import get_candidate_pool
         pool = get_candidate_pool()
-        cands = pool.ready() if hasattr(pool, "ready") else pool.candidates
+        if hasattr(pool, "get_ready"):
+            cands = pool.get_ready()
+        elif hasattr(pool, "ready"):
+            cands = pool.ready()
+        else:
+            cands = pool._data.get("candidates", []) if hasattr(pool, "_data") else []
         return [str(item.get("symbol") or item) for item in (cands or [])[:20] if item]
     except Exception as e:
         print(f"[t-build] 候选池读取失败: {e}")
