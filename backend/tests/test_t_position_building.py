@@ -320,16 +320,38 @@ class TestBuildScore(_PGTestCase):
             self.assertGreaterEqual(r["score"], 0.60)
 
     def test_build_score_higher_threshold_scan(self):
-        """扫描来源门槛 0.65：0.6 分标的被拒（原 0.55 门槛可通过）。"""
+        """扫描来源门槛 0.65：quality 0.65 + 弱趋势（trend_score≈0）→ 总分不足被拒。"""
         from app.services import t_build
         from app.services import t_pool
-        with patch.object(t_build, "_fetch_daily_bars", return_value=self._rising_bars()), \
+        with patch.object(t_build, "_fetch_daily_bars", return_value=self._falling_bars()), \
              patch.object(t_pool, "calc_t_quality", return_value={
                  "score": 0.65, "pass_gate": True, "reasons": []}):
             r = t_build.build_score("SH600000", source="scan")
-            # 0.8×0.65+0.1×0.1+0 = 0.53 < 0.65 → 拒
+            # 弱趋势（trend_gate 可能过但 trend_score≈0）：0.55×0.65 + 0.35×0 = 0.3575 < 0.65 → 拒
             self.assertFalse(r["pass_gate"])
             self.assertLess(r["score"], 0.65)
+
+    def test_build_score_continuous_trend_discriminates(self):
+        """P0-1 连续趋势分：同 quality 下强多趋势 vs 弱势横盘得分拉开（根治 0.73 坍缩）。"""
+        from app.services import t_build
+        from app.services import t_pool
+        # 上升趋势 bars（MA5>MA10>MA20 且 MA20 向上）→ trend_score 高
+        with patch.object(t_build, "_fetch_daily_bars", return_value=self._rising_bars()), \
+             patch.object(t_pool, "calc_t_quality", return_value={
+                 "score": 0.9, "pass_gate": True, "reasons": []}):
+            r_up = t_build.build_score("SH600000", source="scan")
+        # 横盘 bars（构造近 25 日 close 平走）→ trend_score 低
+        flat = [{"date": f"2026-01-{i+1:02d}", "open": 10.0, "close": 10.0,
+                 "high": 10.1, "low": 9.9, "vol": 1e6} for i in range(40)]
+        with patch.object(t_build, "_fetch_daily_bars", return_value=flat), \
+             patch.object(t_pool, "calc_t_quality", return_value={
+                 "score": 0.9, "pass_gate": True, "reasons": []}):
+            r_flat = t_build.build_score("SH600000", source="scan")
+        # 强多趋势得分应显著高于横盘（区分度恢复）
+        self.assertGreater(r_up["score"], r_flat["score"],
+                           f"趋势区分失效: up={r_up['score']} flat={r_flat['score']}")
+        self.assertGreater(r_up["score"], 0.65)
+        self.assertLess(r_flat["score"], 0.65)
 
 
 class TestBuildScan(_PGTestCase):

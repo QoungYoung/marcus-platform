@@ -37,8 +37,16 @@ BUILD_PARAMS_DEFAULT = {
     # 选股
     "cand_score_min": 0.65,          # 候选短名单门槛（0.55→0.65；user 来源放宽到 0.60 见 build_score）
     "build_score_min": 0.60,         # 可建仓门槛
-    "build_score_weights": {"quality": 0.8, "trend": 0.1, "source": 0.05, "risk": -0.05},
+    # 权重（P0-1 打分坍缩根治：quality 0.8→0.55、trend 0.1→0.35——趋势从二值变连续后
+    # 提权重才有区分度；source/risk 不变）
+    "build_score_weights": {"quality": 0.55, "trend": 0.35, "source": 0.05, "risk": -0.05},
     "trend_gate": True,              # 个股趋势闸门（20 日线方向，硬排除）
+    # 连续趋势分参数（t3 P0-1）：MA20 斜率归一化基准 + MA5/MA20 发散档位
+    "trend_slope_ref": 0.15,         # MA20 5日斜率（%/日）记 1.0 的基准（如 +0.15%/日）
+    "trend_align_min": 0.0,          # MA5-MA20 偏离(%) ≤0（死叉/贴线）记 0
+    "trend_align_ref": 1.5,          # 偏离 ≥1.5% 记 1.0（强多头）
+    # 反弹陷阱硬拒（t3 P1-1）：MA20 微向下 + MA5 过冲偏离超过该值 → 拒绝
+    "trend_overstretch": 3.0,
     # 时机
     "quiet_end": "09:45",            # 冷静期结束（9:30-9:45 不自动建仓）
     "afternoon_ban_from": "13:00",   # 午后禁自动建仓
@@ -254,6 +262,16 @@ def trend_gate(symbol: str, bars: Optional[List[dict]] = None, as_of: Optional[s
     # 中期趋势硬要求：MA20 下行（且非单边下行形态）→ 拒绝（反弹陷阱过滤）
     if ma20 < ma20_prev * 0.995:
         return False, f"中期趋势向下（MA20 {ma20:.2f} < 前值 {ma20_prev:.2f}）"
+    # 反弹陷阱（t3 P1-1）：MA20 微向下/横盘 + MA5 短期过冲偏离 MA20 过大 →
+    # "短期强、中期转弱"的反转入场点（000066 类建仓即损）
+    try:
+        overstretch = float(_params().get("trend_overstretch", 3.0))
+    except Exception:
+        overstretch = 3.0
+    if ma20 < ma20_prev and ma20 > 0:
+        spread = (ma5 - ma20) / ma20 * 100
+        if spread > overstretch:
+            return False, f"反弹陷阱（MA20 转弱 + MA5 过冲 {spread:.1f}% 偏离 MA20）"
     return True, f"MA20 方向正常（{ma20:.2f}）"
 
 
@@ -323,7 +341,28 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
 
     # 趋势闸门（硬排除：趋势不达标直接拒，不再只乘性扣分——P0 审查"逆势做T=接飞刀"）
     trend_ok, trend_note = trend_gate(symbol, bars=bars, as_of=as_of)
-    trend_add = 0.1 if trend_ok else 0.0
+    # 连续趋势分（P0-1 打分坍缩根治，AgentTeams t3）：二值 trend_add → 连续 trend_score，
+    # 由 MA20 斜率 + MA5/MA20 发散度合成（只影响排序分，pass_gate 仍用二值 trend_ok）
+    trend_score = 0.0
+    if trend_ok and bars and len(bars) >= 25:
+        try:
+            closes = [float(b["close"]) for b in bars]
+            ma5 = sum(closes[-5:]) / 5
+            ma10 = sum(closes[-10:]) / 10
+            ma20 = sum(closes[-20:]) / 20
+            ma20_prev = sum(closes[-25:-5]) / 20
+            # (1) MA20 斜率项：5 日 MA20 变化率（%/日），归一化到 [0,1]
+            slope20 = (ma20 - ma20_prev) / ma20_prev * 100 if ma20_prev > 0 else 0.0
+            slope_score = max(0.0, min(slope20 / float(p.get("trend_slope_ref", 0.15)), 1.0))
+            # (2) MA5/MA20 多头发散项：偏离越大越强，归一化到 [0,1]
+            spread = (ma5 - ma20) / ma20 * 100 if ma20 > 0 else 0.0
+            align_min = float(p.get("trend_align_min", 0.0))
+            align_ref = float(p.get("trend_align_ref", 1.5))
+            align_score = max(0.0, min((spread - align_min) / max(align_ref - align_min, 1e-9), 1.0))
+            trend_score = round(0.5 * slope_score + 0.5 * align_score, 4)
+        except (ValueError, TypeError, ZeroDivisionError):
+            trend_score = 0.0
+    trend_add = trend_score
 
     # 风险惩罚（简化：近 5 日隔夜跳空均值 > 3% 记 -0.1；涨跌停频率 > 10% 记 -0.1）
     risk_penalty = 0.0
@@ -365,7 +404,7 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
         "pass_gate": pass_quality and trend_ok and score >= (
             float(p["cand_score_min"]) if source != "user" else 0.60),
         "quality": q,
-        "trend": {"ok": trend_ok, "note": trend_note},
+        "trend": {"ok": trend_ok, "note": trend_note, "score": trend_score},
         "risk_penalty": risk_penalty,
         "source": source,
         "reasons": reasons,
@@ -395,7 +434,7 @@ def _load_candidate_symbols() -> List[str]:
 # ────────────────────────────────────────────────────────────────
 
 SCAN_COARSE_MIN_AMOUNT = 8e8      # 粗筛：近端成交额 ≥ 8 亿（与 calc_t_quality 流动性口径一致）
-SCAN_COARSE_AMPLITUDE = (1.0, 10.0)  # 粗筛：振幅区间（排除死票/妖票）
+SCAN_COARSE_AMPLITUDE = (3.0, 10.0)  # 粗筛：振幅区间（t3 P1-2：对齐精筛硬门槛 [3,10]，减少无效精筛）
 SCAN_MAX_DAILY = 50               # 精筛单次上限（票/日，1s 节流）
 _SCAN_CACHE: Dict[str, Any] = {"date": "", "symbols": [], "active": []}
 

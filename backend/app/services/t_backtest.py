@@ -1386,6 +1386,9 @@ class TCombinedBacktestEngine:
                     cand_syms = list(dict.fromkeys(cand_syms + scan_syms))
                 except Exception as e:
                     print(f"[t-backtest] 滚动建仓全市场扫描失败: {e}")
+            # 当日候选打分（P0-2 节奏修复：先全量打分收集 pending，按 score 降序，
+            # 受 max_daily_auto/max_symbols_being_built 停建——对齐生产 daily_auto_build）
+            pending: List[Dict[str, Any]] = []
             for sym in cand_syms:
                 if any(b["symbol"] == sym for b in builds):
                     continue  # 已建仓
@@ -1422,6 +1425,23 @@ class TCombinedBacktestEngine:
                                             "score": r["score"], "as_of": trade_day,
                                             "reasons": ["次日开盘价不可用"]})
                     continue
+                pending.append({"symbol": sym, "score": float(r["score"] or 0),
+                                "price": price, "next_bars": next_bars,
+                                "r": r, "daily_bars_t": daily_bars_t})
+            # 按 score 降序（区分度恢复后排序才有意义——P0-1 连续趋势分）
+            pending.sort(key=lambda x: x["score"], reverse=True)
+            # 当日建仓上限（对齐生产）：max_daily_auto=3 / max_symbols_being_built=5
+            try:
+                _bp = t_build._params()
+                max_daily = int(_bp.get("max_daily_auto", 3))
+                max_symbols = int(_bp.get("max_symbols_being_built", 5))
+            except Exception:
+                max_daily, max_symbols = 3, 5
+            daily_built = 0
+            for cand in pending:
+                if daily_built >= max_daily or len(builds) >= max_symbols:
+                    break  # 当日已满/在途已满，其余次日重新打分
+                sym, price, r = cand["symbol"], cand["price"], cand["r"]
                 # 规模（注入组合已分配资金，防止超净值55%）
                 sizing = t_build.build_sizing(sym, price, net_asset=self.net_asset,
                                               total_floor_value=allocated_value,
@@ -1438,10 +1458,14 @@ class TCombinedBacktestEngine:
                                "build_day": next_day, "source": "rolling_build",
                                "score": r["score"], "trend": r["trend"]})
                 allocated_value += price * shares
+                daily_built += 1
+                # P1-3：build_decisions 落盘 trend/quality 完整字段（归因可复现）
                 build_decisions.append({"symbol": sym, "decision": "built", "price": price,
                                         "shares": shares, "score": r["score"],
-                                        "build_day": next_day, "reasons": r["reasons"] or []})
-                print(f"[t-backtest] 滚动建仓 {sym} @ {price} x{shares} 于 {next_day}")
+                                        "build_day": next_day, "reasons": r["reasons"] or [],
+                                        "trend": r["trend"], "quality": (r.get("quality") or {}).get("score")})
+                print(f"[t-backtest] 滚动建仓 {sym} @ {price} x{shares} 于 {next_day} "
+                      f"(score={r['score']} trend={r['trend'].get('score')})")
 
         # 各标的从建仓日起做T（子引擎 start_trade_day）
         per_symbol: List[Dict[str, Any]] = []
