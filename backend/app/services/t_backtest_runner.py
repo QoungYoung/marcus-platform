@@ -363,7 +363,13 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         for s in syms:
             r = btd.prefetch_m5(s, days, task_dir, is_index=False)
             gaps.extend(r.get("gaps", []))
-            d = btd.prefetch_stock_daily([s], start, end, task_dir)
+            # 标的日线需覆盖建仓规则所需历史（趋势/风险 ≥40 根）：起始日前推 60 天
+            from datetime import datetime as _dt, timedelta as _td
+            try:
+                ext_start = (_dt.strptime(start, "%Y-%m-%d") - _td(days=60)).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                ext_start = start
+            d = btd.prefetch_stock_daily([s], ext_start, end, task_dir)
             gaps.extend(d.get("gaps", []))
         if not btd.SKIP_INDEX_M5:
             for key, ts in (("hs300", "000300.SH"), ("sh", "000001.SH"), ("sz", "399001.SZ")):
