@@ -346,8 +346,10 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 def _to_ts_code(symbol: str) -> str:
-    """股票代码 → tushare 格式（600519.SH / 000001.SZ）。"""
+    """股票代码 → tushare 格式（600519.SH / 000001.SZ），兼容腾讯格式（sz000636 / sh600519）。"""
     s = symbol.strip().upper()
+    if s.startswith(("SH", "SZ")):
+        s = s[2:]
     if "." in s:
         return s
     return s + (".SH" if s.startswith(("6", "9", "5")) else ".SZ")
