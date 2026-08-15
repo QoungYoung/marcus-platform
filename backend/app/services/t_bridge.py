@@ -24,10 +24,10 @@ _agent_session: Dict[str, str] = {}
 
 
 def _bridge_url() -> str:
-    """bridge /chat 地址（PI_SERVER_URL 或默认）。"""
+    """bridge /chat 地址（PI_SERVER_URL 已含 /chat 路径段，直接使用，勿重复拼接）。"""
     try:
         settings = get_settings()
-        return getattr(settings, "PI_SERVER_URL", "http://127.0.0.1:3001/chat").rstrip("/") + "/chat"
+        return getattr(settings, "PI_SERVER_URL", "http://127.0.0.1:3001/chat").rstrip("/")
     except Exception:
         return "http://127.0.0.1:3001/chat"
 

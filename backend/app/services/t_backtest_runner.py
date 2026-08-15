@@ -273,13 +273,24 @@ def get_metrics(task_id: int) -> Optional[Dict[str, Any]]:
 # ────────────────────────────────────────────────────────────────
 
 def bridge_base_url() -> str:
-    """bridge 地址（与 t_bridge._bridge_url 同源）。"""
+    """bridge 基址（与 t_bridge._bridge_url 同源）。
+
+    PI_SERVER_URL 形如 http://dsh:3001/chat（已含 /chat 路径段），
+    基址 = 去掉末尾路径段 → http://dsh:3001（各端点如 /backtest/review /chat 挂在其下）。
+    """
     try:
         from app.config import get_settings
         settings = get_settings()
-        return getattr(settings, "PI_SERVER_URL", "http://127.0.0.1:3001").rstrip("/")
+        raw = getattr(settings, "PI_SERVER_URL", "http://127.0.0.1:3001/chat").rstrip("/")
     except Exception:
-        return "http://127.0.0.1:3001"
+        raw = "http://127.0.0.1:3001/chat"
+    # 去掉末尾路径段（/chat）得到服务基址
+    scheme_sep = raw.find("://")
+    if scheme_sep >= 0:
+        rest = raw[scheme_sep + 3:]
+        host = rest.split("/", 1)[0]
+        return raw[:scheme_sep + 3] + host
+    return raw.rsplit("/", 1)[0] if "/" in raw else raw
 
 
 def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
