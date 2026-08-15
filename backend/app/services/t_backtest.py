@@ -1409,16 +1409,21 @@ class TCombinedBacktestEngine:
                                             "reasons": r["reasons"] or ["打分未达标"]})
                     continue
                 next_bars = [b for b in m5_map.get(sym, []) if _day_key(b["time"]) == next_day]
-                # rolling_scan 新标的 m5 可能不在 m5_map（runner 已预取到缓存目录）
+                # 选出来后实时补拉 m5（用户反馈优化）：缓存缺失时 worker 环境直接
+                # prefetch_m5 拉取并落盘缓存（回放仍零网络、确定性不变）。
+                # 彻底消除"次日开盘价不可用"误拒（此前预取猜测覆盖不全）。
                 if not next_bars:
                     try:
-                        from app.services.t_backtest_data import load_m5
+                        from app.services.t_backtest_data import load_m5, prefetch_m5
                         _m5 = load_m5(sym, d)
+                        if not _m5 and self.rolling_scan:
+                            prefetch_m5(sym, trade_days, d, is_index=False)
+                            _m5 = load_m5(sym, d)
                         if _m5:
                             m5_map[sym] = _m5
                             next_bars = [b for b in _m5 if _day_key(b["time"]) == next_day]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[t-backtest] 滚动建仓 m5 补拉失败 {sym}: {str(e)[:80]}")
                 price = float(next_bars[0]["open"]) if next_bars else 0.0
                 if price <= 0:
                     build_decisions.append({"symbol": sym, "decision": "rejected",
