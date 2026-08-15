@@ -443,6 +443,7 @@ class TBacktestEngine:
         self.events: List[Dict[str, Any]] = []   # 触发/复核/拦截/缺口全事件流
         self._pending_buyback: Optional[Dict[str, Any]] = None  # high_sell_then_buy_back 买回挂单
         self._ai_fills: List[Dict[str, Any]] = []  # AI 决策成交记录（outcome 回填用）
+        self._stopped_out: bool = False            # 止损离场标志（止损后不再触发做T）
 
     # ── 数据加载（回放期零网络）──
     def _load(self):
@@ -524,6 +525,20 @@ class TBacktestEngine:
 
             # 当日触发计数（单条件上限）
             day_trigger_count: Dict[int, int] = {}
+
+            # 止损离场后：该标的后续交易日不再做T（#36 迭代：避免多次止损反复离场）
+            if self._stopped_out:
+                ledger.end_of_day()
+                last_close = float(day_bars[-1]["close"])
+                ledger.update_equity_track(last_close)
+                equity_curve.append({
+                    "trade_date": trade_day,
+                    "total_asset": round(ledger.equity(last_close), 2),
+                    "realized_pnl": round(ledger.realized_pnl, 2),
+                    "position": ledger.total_shares(),
+                    "close": last_close,
+                })
+                continue
 
             for i, bar in enumerate(day_bars):
                 if cancel_event is not None and cancel_event.is_set():
@@ -907,9 +922,11 @@ class TBacktestEngine:
             "trigger": trigger, "trade": trade, "exec_price": round(exec_price, 3),
             "next_bar": str(bar["time"]), "reason": "stop_loss",
         }})
-        # 止损后冻结当日条件（高抛/低吸均不再触发）
+        # 止损后冻结当日条件（高抛/低吸均不再触发）+ 标记止损离场（后续交易日不再触发，
+        # 避免多次止损反复离场——#36 迭代：000063/000034 止损 3 次拖累）
         for c in day_conds:
             c["armed"] = 0
+        self._stopped_out = True
         # 高抛挂单作废（止损离场）
         self._pending_buyback = None
         print(f"[t-backtest] 止损触发 {self.symbol} @ {exec_price} x{volume} "
