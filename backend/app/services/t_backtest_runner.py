@@ -320,12 +320,16 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         return {"status": "failed", "error": "任务不存在"}
 
     try:
-        conditions = json.loads(task.get("conditions_json") or "[]")
-    except (ValueError, TypeError):
+        conditions = _loads_maybe(task.get("conditions_json"))
+        if not isinstance(conditions, list):
+            conditions = []
+    except Exception:
         conditions = []
     try:
-        symbols = json.loads(task.get("symbols_json") or "[]")
-    except (ValueError, TypeError):
+        symbols = _loads_maybe(task.get("symbols_json"))
+        if not isinstance(symbols, list):
+            symbols = []
+    except Exception:
         symbols = []
     build_mode = bool(task.get("build_mode", False))
     build_limit_ratio = float(task.get("build_limit_ratio") or 0.55)
