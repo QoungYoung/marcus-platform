@@ -14,6 +14,8 @@ x-backend-common: &backend-common
     QT_QPA_PLATFORM: offscreen
     ENGINE_BACKEND: vnpy
     MARCUS_API_URL: http://backend:8000/api/v1
+    # 无 tty 下 stdout 块缓冲会吞掉 print 日志（TMonitor/t-build/回测等启动行不显示）
+    PYTHONUNBUFFERED: "1"
   volumes:
     - ../data:/app/data
     - ../apps:/app/apps:ro
