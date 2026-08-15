@@ -25,24 +25,24 @@ Marcus 是一个基于 AI 的 A 股模拟交易平台，提供从行情分析、
          │                  │
          ▼                  ▼
 ┌─────────────┐    ┌──────────────┐    ┌──────────────┐
-│  Frontend   │    │  Pi Server   │    │   Backend    │
-│ React/Vite  │───▶│  Pi Agent    │───▶│   FastAPI    │
-│  :5173      │    │  :3001       │    │   :8000      │
-│ Tailwind    │    │  Tool Call   │    │   QQ Bot     │
+│  Frontend   │    │  DSH 服务    │    │   Backend    │
+│ React/Vite  │───▶│ DeepSeek     │───▶│   FastAPI    │
+│  :5173      │    │ Harness :3001│    │   :8000      │
+│ Tailwind    │    │ Agent/工具   │    │   QQ Bot     │
 └─────────────┘    └──────────────┘    └──────┬───────┘
                                                │
                                     ┌──────────┴───────┐
-                                    │   SQLite / Redis   │
-                                    │     （可选）         │
+                                    │   PostgreSQL      │
+                                    │   (主存储)         │
                                     └────────────────────┘
 ```
 
-**三大核心服务：**
+**核心服务：**
 
 | 服务 | 技术栈 | 端口 | 说明 |
 |------|--------|------|------|
 | **Backend** | Python 3.12 + FastAPI | `8000` | REST API、QQ Bot、任务调度、交易引擎 |
-| **Pi Server** | Node.js + TypeScript | `3001` | Pi Agent 桥接，Function Calling 工具调用 |
+| **DSH 服务** | DeepSeek Harness（Node.js 容器） | `3001` | AI 桥接（替代原 Pi Server），/chat + 专家组群聊 + 工具调用 |
 | **Frontend** | React 18 + Vite | `5173` | 仪表盘 UI，8 个功能页面 |
 
 ---
@@ -136,23 +136,22 @@ pip install -r requirements.txt
 cd ../frontend
 npm install
 
-# Pi Server
-cd ../servers/pi-server
+# Frontend
+cd ../frontend
 npm install
 ```
 
 **4. 启动服务**
 
 ```bash
-# 终端 1：Pi Server
-cd servers/pi-server
-npx tsx src/index.ts
+# DSH 服务（替代原 Pi Server，容器运行）
+docker compose -f docker/docker-compose.yml up -d dsh
 
-# 终端 2：Backend
+# 终端 1：Backend
 cd backend
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# 终端 3：Frontend
+# 终端 2：Frontend
 cd frontend
 npm run dev
 ```
@@ -163,7 +162,7 @@ npm run dev
 |------|------|
 | 前端仪表盘 | http://localhost:5173 |
 | 后端 API 文档 | http://localhost:8000/docs |
-| Pi Server 健康检查 | http://localhost:3001/health |
+| DSH 服务健康检查 | http://localhost:3001/health |
 
 ---
 
@@ -185,7 +184,7 @@ docker-compose ps
 docker-compose logs -f
 ```
 
-Docker 会启动 5 个容器：`postgres`、`backend`（纯 HTTP API）、`worker`（调度任务 + 各监控器 + QQ Bot 通知）、`piserver`、`frontend`。
+Docker 会启动 5 个容器：`postgres`、`backend`（纯 HTTP API）、`worker`（调度任务 + 各监控器 + QQ Bot 通知）、`dsh`（DeepSeek Harness，替代原 piserver）、`frontend`。
 
 > 进程拆分后，调度/监控/QQ Bot 由独立的 `worker` 容器运行（`python -m app.worker_main`）；
 > 后端 `/api/v1/health` 中的 `worker.online` 反映 worker 心跳，`worker` 容器异常时调度与监控会停止工作。
@@ -282,15 +281,12 @@ marcus-platform/
 │   │   ├── api/client.ts       # Axios 封装
 │   │   └── i18n/               # 国际化 (中/英)
 │   └── vite.config.ts
-├── servers/pi-server/          # Pi Agent 服务
-│   └── src/
-│       ├── index.ts            # HTTP 服务器入口
-│       └── tools.ts            # Function Calling 工具
 ├── docker/                     # Docker 配置
 │   ├── docker-compose.yml
 │   ├── Dockerfile.backend
-│   ├── Dockerfile.piserver
+│   ├── Dockerfile.dsh          # DSH 服务（替代原 Pi Server）
 │   ├── Dockerfile.frontend
+│   ├── dsh/                    # DSH profile/patch/bridge 插件
 │   └── nginx.conf
 ├── config/
 │   └── tasks.yaml              # 调度任务配置

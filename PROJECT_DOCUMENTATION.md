@@ -532,7 +532,7 @@ CREATE TABLE news (
 1. **postgres**: PostgreSQL 16 数据库
 2. **backend**: FastAPI 纯 HTTP API (端口8000)
 3. **worker**: 调度任务 + 各监控器 + QQ Bot 通知（`python -m app.worker_main`）
-4. **piserver**: Pi Agent HTTP 服务 (端口3001)
+4. **dsh**: DeepSeek Harness 常驻服务 (端口3001，替代原 piserver；`POST /chat` + `/chat/stream` 专家组 + `/health` + `/reset`)
 5. **frontend**: Nginx 前端 (端口80，使用本地预构建 dist)
 
 ### 启动命令
