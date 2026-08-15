@@ -1398,8 +1398,13 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
     escalated = sum(r.get("metrics", {}).get("escalated_human_count", 0) for r in per_symbol)
     ai_wait = sum(r.get("metrics", {}).get("ai_wait_count", 0) for r in per_symbol)
     ai_abandon = sum(r.get("metrics", {}).get("ai_abandon_count", 0) for r in per_symbol)
+    stop_losses = sum(r.get("metrics", {}).get("stop_loss_count", 0) for r in per_symbol)
     realized = sum(r.get("ledger", {}).get("realized_pnl", 0) for r in per_symbol)
-    sells = [t for r in per_symbol for t in r.get("ledger", {}).get("trades", []) if t.get("side") == "sell"]
+    # 卖出明细从事件流提取（ledger.summary 不含 trades）
+    sells = [e.get("data", {}).get("trade") for r in per_symbol
+             for e in (r.get("events") or []) if e.get("type") == "trade"
+             and e.get("data", {}).get("trade", {}).get("side") == "sell"]
+    sells = [t for t in sells if t]
     wins = [t for t in sells if t.get("realized_pnl", 0) > 0]
     win_rate = len(wins) / len(sells) * 100 if sells else 0.0
     # 组合最大回撤：基于组合权益曲线（非单标的最大值——单标的深跌不代表组合）
@@ -1431,6 +1436,7 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
         "ai_exec_win_rate_pct": _combine_ai_exec_win_rate(per_symbol),
         "realized_pnl": round(realized, 2),
         "win_rate_pct": round(win_rate, 2),
+        "stop_loss_count": stop_losses,
         "max_drawdown_pct": round(max_dd, 2),
         "per_symbol_return": {r.get("symbol", "?"): round(r.get("metrics", {}).get("total_return_pct", 0), 2)
                               for r in per_symbol},
