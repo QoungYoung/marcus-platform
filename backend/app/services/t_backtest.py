@@ -597,10 +597,12 @@ class TBacktestEngine:
                     break
             if start_idx is None or start_idx + 1 >= len(day_bars):
                 continue
-            window = day_bars[start_idx + 1: start_idx + 7]
+            # 评估窗口：成交 bar 之后 6~12 根（30-60 分钟，低吸反弹周期）
+            window = day_bars[start_idx + 1: start_idx + 13]
             if len(window) < 3:
                 continue
-            entry = f["fill_price"]
+            # entry 用成交 bar 的 close（市场走向基准，不含滑点成本）
+            entry = float(day_bars[start_idx].get("close") or 0) or f["fill_price"]
             exit_price = float(window[-1]["close"] or 0)
             pct = (exit_price - entry) / entry * 100 if entry else 0.0
             high = max(float(b.get("high") or 0) for b in window)
@@ -609,7 +611,8 @@ class TBacktestEngine:
             hit_target = high >= entry * 1.01 if side == "buy" else low <= entry * 0.99
             hit_stop = low <= entry * 0.985 if side == "buy" else high >= entry * 1.015
             outcomes.append({
-                "symbol": f["symbol"], "side": side, "fill_price": round(entry, 3),
+                "symbol": f["symbol"], "side": side, "fill_price": round(f["fill_price"], 3),
+                "entry_price": round(entry, 3),
                 "exit_price": round(exit_price, 3), "bars_after": len(window),
                 "direction": "up" if pct >= 0 else "down", "pct_change": round(pct, 3),
                 "hit_target": bool(hit_target), "hit_stop": bool(hit_stop),
@@ -1098,10 +1101,15 @@ class TCombinedBacktestEngine:
             done_units += sub_days
             r["build"] = {k: b[k] for k in ("symbol", "price", "shares", "source") if k in b}
             per_symbol.append(r)
-            # 组合权益 = 闲置现金 + Σ(标的总资产)（标的 total_asset 以建仓支出为基数）
-            for pt in r.get("equity_curve", []):
+            # 组合权益 = 闲置现金 + Σ(建仓成本 + 子引擎盈亏累计)
+            # 子引擎 net_asset=sub_asset 满仓模型，equity_curve 首日 = 建仓市值（成本基准），
+            # 后续日 = 首日 + 市值/做T盈亏变化；组合以建仓成本为基准叠加，首日权益=净值。
+            sub_curve = r.get("equity_curve", [])
+            base_total = sub_curve[0]["total_asset"] if sub_curve else sub_asset
+            for pt in sub_curve:
                 day = pt["trade_date"]
-                total_asset_by_day[day] = total_asset_by_day.get(day, cash) + pt["total_asset"]
+                delta = pt["total_asset"] - base_total  # 相对建仓日的累计盈亏
+                total_asset_by_day[day] = total_asset_by_day.get(day, cash) + sub_asset + delta
 
         _report_progress()
 

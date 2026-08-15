@@ -437,10 +437,12 @@ def _assess_outcome(symbol: str, side: str, fill_price: float,
         if start_idx is None:
             # 未精确匹配：取当日最后一根之前（保守：从倒数 lookahead 根起算不可靠 → 返回 None）
             return None
-        window = day_bars[start_idx + 1: start_idx + 1 + lookahead_bars]
+        # 评估窗口：成交 bar 之后 6~12 根（30-60 分钟）
+        window = day_bars[start_idx + 1: start_idx + 1 + max(lookahead_bars, 12)]
         if len(window) < 3:
             return None
-        entry = fill_price
+        # entry 用成交 bar 的 close（市场走向基准，不含滑点成本）
+        entry = float(day_bars[start_idx].get("close") or 0) or fill_price
         exit_price = float(window[-1]["close"] or 0)
         pct = (exit_price - entry) / entry * 100 if entry else 0.0
         high = max(float(b.get("high") or 0) for b in window)
@@ -449,7 +451,8 @@ def _assess_outcome(symbol: str, side: str, fill_price: float,
         hit_target = high >= entry * 1.01 if side == "buy" else low <= entry * 0.99
         hit_stop = low <= entry * 0.985 if side == "buy" else high >= entry * 1.015
         return {
-            "kind": "exec", "side": side, "fill_price": round(entry, 3),
+            "kind": "exec", "side": side, "fill_price": round(fill_price, 3),
+            "entry_price": round(entry, 3),
             "exit_price": round(exit_price, 3), "bars_after": len(window),
             "direction": "up" if pct >= 0 else "down",
             "pct_change": round(pct, 3), "hit_target": bool(hit_target),
