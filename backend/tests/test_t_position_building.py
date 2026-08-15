@@ -497,5 +497,79 @@ class TestDailyAutoSelectBuild(_PGTestCase):
         self.assertEqual(self._count_rows(today, "pending"), 1)  # 保持 pending 下次再试
 
 
+class TestAiLedBuildGateway(_PGTestCase):
+    """AI 主导（ai_led）建仓与回转网关档位（decision_source 扩展）。"""
+
+    def setUp(self):
+        from app.services import t_build
+        self.tb = t_build
+        self.patches = [
+            patch.object(self.tb, "compute_regime", return_value={
+                "regime": "ACTIVE", "gate_low_buy": "ALLOWED", "gate_high_sell": "ALLOWED",
+                "interpret_sign": 1, "index_drop": 0.0}),
+            patch.object(self.tb, "_is_trading_minute_allowed", return_value=(True, "")),
+            patch.object(self.tb, "fetch_tencent_quote", side_effect=lambda syms: _fake_quote()),
+        ]
+        for p in self.patches:
+            p.start()
+        self.addCleanup(self._stop_patches)
+
+    def _stop_patches(self):
+        for p in self.patches:
+            p.stop()
+
+    def test_ai_led_first_open_auto_passes(self):
+        """ai_led 首开：与 daily_auto 同档跳过 B1，其余全链保留 → auto 放行。"""
+        from app.services.t_build import validate_build_position
+        r = validate_build_position("SH600000", 10.0, 1000, reason="ai test", decision_source="ai_led")
+        self.assertTrue(r["pass"])
+        self.assertEqual(r["mode"], "auto")
+
+    def test_ai_led_agent_first_open_still_human(self):
+        """agent 首开仍升级人工（ai_led 才放开 B1）。"""
+        from app.services.t_build import validate_build_position
+        r = validate_build_position("SH600000", 10.0, 1000, reason="agent test", decision_source="agent")
+        self.assertEqual(r["mode"], "human_confirm")
+
+    def test_ai_led_stop_all_rejects(self):
+        """ai_led 不豁免熔断：STOP_ALL 时拒绝。"""
+        from app.services import t_db
+        from app.services.t_build import validate_build_position
+        t_db.set_stop_all(True, "test-stop")
+        try:
+            r = validate_build_position("SH600000", 10.0, 1000, reason="test", decision_source="ai_led")
+            self.assertFalse(r["pass"])
+            self.assertIn("熔断", r["reason"])
+        finally:
+            t_db.set_stop_all(False, "")
+
+    def test_ai_led_halt_rejects(self):
+        """ai_led 不豁免 HALT。"""
+        from app.services.t_build import validate_build_position
+        with patch.object(self.tb, "compute_regime", return_value={
+                "regime": "HALT", "gate_low_buy": "BLOCKED", "gate_high_sell": "ALLOWED",
+                "interpret_sign": -1, "index_drop": -3.0}):
+            r = validate_build_position("SH600000", 10.0, 1000, reason="test", decision_source="ai_led")
+            self.assertFalse(r["pass"])
+            self.assertIn("HALT", r["reason"])
+
+    def test_ai_led_gateway_validate_accepts_source(self):
+        """validate_order_at 接受 ai_led（同档风控），且 ai_led 主动买卖无 trigger 也走完整校验。"""
+        from app.services.t_gateway import validate_order_at
+        # 无底仓卖出（裸空）→ ai_led 同样拒绝（不豁免）
+        ctx = {"regime": "ACTIVE", "quote": _fake_quote()["sh600000"], "ledger": {},
+               "net_asset": 200000.0, "daily": {}, "risk": {}}
+        r = validate_order_at("SH600000", "sell", 10.0, 100, ctx, decision_source="ai_led")
+        self.assertFalse(r["pass"])
+        self.assertIn("裸空", r["reason"])
+        # 有底仓 + 买腿超档 → ai_led 拒绝
+        ctx2 = {"regime": "ACTIVE", "quote": _fake_quote()["sh600000"],
+                "ledger": {"SH600000": {"sellable": 100, "volume": 100, "avg_price": 10.0}},
+                "net_asset": 200000.0, "daily": {}, "risk": {}}
+        r2 = validate_order_at("SH600000", "buy", 10.0, 500, ctx2, decision_source="ai_led")
+        self.assertFalse(r2["pass"])
+        self.assertIn("档位", r2["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

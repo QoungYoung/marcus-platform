@@ -108,6 +108,9 @@ def _apply_schema_patches():
     # ── 2026-08: 做T回测（t_backtest_* 任务/事件/成交/权益/指标） ──
     _apply_t_backtest_migration()
 
+    # ── 2026-08: AI 主导做T（t_ai_actions 审计 + t_conditions 发布者/会话） ──
+    _apply_ai_led_migration()
+
     # ── 2026-08: API/Worker 拆分控制通道 ──
     _apply_worker_control_migration()
 
@@ -617,3 +620,43 @@ def _apply_t_backtest_migration():
         print("[DB] PATCH: 做T回测迁移完成 (t_backtest_tasks/events/trades/equity_snapshots/metrics)")
     except Exception as e:
         print(f"[DB] PATCH warn (t backtest tables): {e}")
+
+
+def _apply_ai_led_migration():
+    """AI 主导做T迁移（幂等）：t_ai_actions 决策审计表 + t_conditions 发布者/会话列。"""
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            # 1) t_ai_actions — AI 决策审计（每步决策可追溯）
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_ai_actions (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_id VARCHAR(64),
+                    trade_date VARCHAR(10) NOT NULL,
+                    symbol VARCHAR(16) NOT NULL,
+                    action_type VARCHAR(24) NOT NULL,
+                    input_snapshot JSONB NOT NULL DEFAULT '{}',
+                    output JSONB NOT NULL DEFAULT '{}',
+                    gateway_result JSONB,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_ai_actions_date_symbol ON t_ai_actions (trade_date, symbol)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_ai_actions_session ON t_ai_actions (session_id, created_at)"
+            ))
+            # 2) t_conditions — 发布者与会话（条件即定时器归属）
+            conn.execute(text(
+                "ALTER TABLE t_conditions ADD COLUMN IF NOT EXISTS publisher VARCHAR(16) NOT NULL DEFAULT 'rule'"
+            ))
+            conn.execute(text(
+                "ALTER TABLE t_conditions ADD COLUMN IF NOT EXISTS session_id VARCHAR(64)"
+            ))
+
+        print("[DB] PATCH: AI 主导做T迁移完成 (t_ai_actions + t_conditions publisher/session_id)")
+    except Exception as e:
+        print(f"[DB] PATCH warn (ai_led tables): {e}")

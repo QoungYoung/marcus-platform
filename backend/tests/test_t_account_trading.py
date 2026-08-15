@@ -10,6 +10,7 @@
 - 可卖额度账本原子性：卖腿扣减、买腿回补
 - regime 三态切换：硬保险丝→HALT、日内前哨→CAUTIOUS、正常→ACTIVE
 """
+import json
 import os
 import sys
 import unittest
@@ -376,6 +377,110 @@ class TVolumeRatioTest(_PGTestCase):
         with patch("app.services.t_monitor.datetime") as m_dt:
             m_dt.now.return_value = datetime(2026, 8, 14, 10, 0, 0)
             self.assertTrue(m._evaluate_condition(cond, quote, regime))
+
+
+class TAiLedTest(_PGTestCase):
+    """AI 主导做T：决策解析、审计落库、触发状态流转、连续命中计数、唤醒 payload。"""
+
+    def setUp(self):
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        db = SessionLocal()
+        try:
+            db.execute(text("DELETE FROM t_ai_actions"))
+            db.execute(text("DELETE FROM t_triggers"))
+            db.execute(text("DELETE FROM t_conditions"))
+            db.commit()
+        finally:
+            db.close()
+
+    def _make_trigger(self, status="pending"):
+        from app.services import t_db
+        trig_id = t_db.insert_trigger({
+            "condition_id": 1, "symbol": "600519", "event_type": "low_buy",
+            "trigger_price": 100.0, "quote_price": 99.5,
+            "suggest_bid_price": 99.4, "suggest_ask_price": 99.6,
+            "slippage_budget": 0.001, "mode": "auto",
+        })
+        return trig_id
+
+    def test_ai_decision_wait_marks_await_retry(self):
+        """AI 决策 wait → 事件 await_retry + 审计落库。"""
+        from app.services import t_ai_agent, t_db
+        trig_id = self._make_trigger()
+        trig = t_db.get_trigger_by_id(trig_id) if hasattr(t_db, "get_trigger_by_id") else \
+            {"id": trig_id, "symbol": "600519", "condition_id": 1,
+             "event_type": "low_buy", "suggest_bid_price": 99.4}
+        r = t_ai_agent.handle_ai_decision(
+            trig, {"symbol": "600519"},
+            '{"action": "wait", "reason": "量比不足"}', session_id="t-agent-600519")
+        self.assertEqual(r["action"], "wait")
+        acts = t_db.list_ai_actions(symbol="600519")
+        self.assertEqual(len(acts), 1)
+        self.assertEqual(acts[0]["action_type"], "ai_wait")
+
+    def test_ai_decision_abandon_cancels_trigger(self):
+        """AI 决策 abandon → 事件 cancelled。"""
+        from app.services import t_ai_agent, t_db
+        trig_id = self._make_trigger()
+        t_ai_agent.handle_ai_decision(
+            {"id": trig_id, "symbol": "600519", "condition_id": 1,
+             "event_type": "low_buy", "suggest_bid_price": 99.4},
+            {}, '{"action": "abandon", "reason": "追高"}')
+        rows = t_db.list_triggers(status="cancelled")
+        self.assertTrue(any(r["id"] == trig_id for r in rows))
+
+    def test_ai_decision_update_condition(self):
+        """AI 决策 update_condition → 新条件写入（publisher=ai）。"""
+        from app.services import t_ai_agent, t_db
+        trig_id = self._make_trigger()
+        r = t_ai_agent.handle_ai_decision(
+            {"id": trig_id, "symbol": "600519", "condition_id": 1,
+             "event_type": "low_buy", "suggest_bid_price": 99.4},
+            {}, json.dumps({"action": "update_condition", "reason": "触发价偏离",
+                            "condition": {"symbol": "600519", "trigger_kind": "low_buy",
+                                          "target_price": 98.0}}))
+        self.assertIsNotNone(r.get("condition_id"))
+        conds = t_db.list_active_conditions(symbol="600519")
+        self.assertEqual(conds[0]["publisher"], "ai")
+
+    def test_wake_agent_payload_has_decision_mode(self):
+        """唤醒 payload 含 decision_mode=ai_led + 连续命中上下文。"""
+        from app.services import t_bridge
+        captured = {}
+        with patch("app.services.t_bridge.urllib.request.urlopen") as m_open:
+            m_open.return_value.__enter__.return_value.read.return_value = b"{}"
+            with patch("app.services.t_bridge._bridge_url", return_value="http://x/chat"):
+                t_bridge.wake_agent(
+                    {"id": 1, "symbol": "600519", "event_type": "low_buy",
+                     "trigger_price": 100, "quote_price": 99.5,
+                     "suggest_bid_price": 99.4, "suggest_ask_price": 99.6,
+                     "condition_id": 1},
+                    context={"regime": "ACTIVE"})
+            req = m_open.call_args[0][0]
+            body = json.loads(req.data.decode())
+            captured = body
+        self.assertEqual(captured.get("decision_mode"), "ai_led")
+        self.assertIn("你是做T决策者", captured.get("message", ""))
+        self.assertIn("exec|wait|abandon|update_condition", captured.get("message", ""))
+
+    def test_consecutive_hits_counts(self):
+        """连续命中计数：pending/ai_decided/await_retry 连续计数，executed 中断。"""
+        from app.services import t_db
+        from app.services.t_bridge import _consecutive_hits
+        for st in ("pending", "ai_decided", "await_retry"):
+            t_db.insert_trigger({
+                "condition_id": 7, "symbol": "600519", "event_type": "low_buy",
+                "trigger_price": 100.0, "quote_price": 99.5, "mode": "auto"})
+        t_db.insert_trigger({
+            "condition_id": 7, "symbol": "600519", "event_type": "low_buy",
+            "trigger_price": 100.0, "quote_price": 99.5, "mode": "auto"})
+        # 最新一条 executed → 中断
+        rows = t_db.list_triggers(limit=10)
+        last = max(r["id"] for r in rows)
+        t_db.update_trigger_status(last, "executed")
+        # 从最新往前：executed 中断 → 0（最新已 executed）
+        self.assertEqual(_consecutive_hits(7, "600519"), 0)
 
 
 if __name__ == "__main__":

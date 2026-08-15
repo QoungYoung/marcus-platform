@@ -236,7 +236,8 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                       ctx: Dict[str, Any],
                       condition_id: Optional[int] = None,
                       trigger_id: Optional[int] = None,
-                      reason: str = "") -> Dict[str, Any]:
+                      reason: str = "",
+                      decision_source: str = "agent") -> Dict[str, Any]:
     """做T下单网关校验（三阶 + 二段断言）——状态全注入版（回测与实盘共用）。
 
     与 validate_order 行为完全一致，仅把实时依赖改为从 ctx 读取：
@@ -249,6 +250,9 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
         sell_in_transit: bool   卖出在途锁（回测由账本判定）
         trigger_status: Optional[str]  触发事件状态（回测由回测事件表提供；None 时查 t_triggers）
         cost_ratio_ok: Optional[bool]  价差/成本比预判（None 时内部调 _cost_ratio_ok）
+
+    decision_source: agent/ai_led（ai_led 与 agent 同档风控，不豁免任何校验；
+    区别仅在于 ai_led 允许无触发事件的主动买卖——孤儿单校验仅在 trigger_id 给定时生效）。
     """
     result = {"pass": False, "mode": "blocked", "level": "hard", "reason": "", "warn": []}
     try:
@@ -362,7 +366,8 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
 def validate_order(symbol: str, side: str, price: float, volume: int,
                    condition_id: Optional[int] = None,
                    trigger_id: Optional[int] = None,
-                   reason: str = "") -> Dict[str, Any]:
+                   reason: str = "",
+                   decision_source: str = "agent") -> Dict[str, Any]:
     """做T下单网关校验（实时路径）——构造实时 ctx 后委托 validate_order_at。"""
     quote = self_quote(symbol)
     regime_state = compute_regime()
@@ -376,7 +381,8 @@ def validate_order(symbol: str, side: str, price: float, volume: int,
         "sell_in_transit": is_sell_in_transit(symbol) if side == "buy" else False,
     }
     return validate_order_at(symbol, side, price, volume, ctx,
-                             condition_id=condition_id, trigger_id=trigger_id, reason=reason)
+                             condition_id=condition_id, trigger_id=trigger_id,
+                             reason=reason, decision_source=decision_source)
 
 
 def self_quote(symbol: str) -> Optional[dict]:
@@ -489,10 +495,12 @@ def classify_escalation(symbol: str, side: str, trigger: Optional[dict] = None,
 def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     condition_id: Optional[int] = None,
                     trigger_id: Optional[int] = None,
-                    reason: str = "") -> Dict[str, Any]:
+                    reason: str = "",
+                    decision_source: str = "agent") -> Dict[str, Any]:
     """做T下单唯一入口：网关校验通过才调用执行器撮合。
 
-    三权分立：Agent 复核后提交 → 本网关（唯一放行者）→ MarcusVNPyExecutor(account_id='t')。
+    三权分立：Agent/AI 决策后提交 → 本网关（唯一放行者）→ MarcusVNPyExecutor(account_id='t')。
+    decision_source: agent（触发复核路径）/ ai_led（AI 主动决策，无触发事件也可下单）。
     执行器失败/被拒 → 更新 t_triggers 为 blocked + 审计。
     """
     from app.core.trading.marcus_trade import MarcusVNPyExecutor
@@ -501,7 +509,8 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
 
     # 1) 校验
     check = validate_order(symbol, side, price, volume,
-                           condition_id=condition_id, trigger_id=trigger_id, reason=reason)
+                           condition_id=condition_id, trigger_id=trigger_id,
+                           reason=reason, decision_source=decision_source)
     if not check["pass"]:
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "blocked", reason=check["reason"])

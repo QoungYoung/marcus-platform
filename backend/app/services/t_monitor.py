@@ -356,6 +356,8 @@ class TMonitor:
         slippage = 0.001
         gate = check_gate(trigger_kind, regime_state)
         mode = "human_confirm" if gate["mode"] == "human_confirm" else "auto"
+        # 连续命中计数（同条件当日连续命中未实质改善 → 唤醒时提示 AI 调整/冷却）
+        consecutive_hits = self._consecutive_hits(cond.get("id"), cond["symbol"])
 
         trig = {
             "account_id": "t",
@@ -379,6 +381,7 @@ class TMonitor:
                 "amplitude": quote.get("amplitude"),
                 "expression_summary": _expr_summary(cond.get("expression")),
                 "fields": snapshot or {},   # 触发时刻字段快照（Agent 决策直接用，不再重复取价）
+                "consecutive_hits": consecutive_hits,   # AI 主导：连续命中计数
             },
             "mode": mode,
         }
@@ -391,7 +394,8 @@ class TMonitor:
                 last_triggered_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 trigger_count_today=int(cond.get("trigger_count_today") or 0) + 1,
             )
-            print(f"[TMonitor] 触发写入 #{trig_id} {cond['symbol']} {trigger_kind} mode={mode} @ {current}")
+            print(f"[TMonitor] 触发写入 #{trig_id} {cond['symbol']} {trigger_kind} "
+                  f"mode={mode} consec_hits={consecutive_hits} @ {current}")
             # 主动唤醒 Agent（桥不可达由 t_bridge 降级轮询兜底）
             try:
                 from app.services.t_bridge import wake_agent
@@ -399,6 +403,34 @@ class TMonitor:
                 wake_agent(trig, context={"regime": regime_state.get("regime"), "mode": mode})
             except Exception as e:
                 print(f"[TMonitor] 唤醒失败（降级兜底）: {e}")
+
+    def _consecutive_hits(self, condition_id: Optional[int], symbol: str) -> int:
+        """同条件当日连续命中计数：从最新 t_triggers 往前数连续 ai_decided/await_retry/pending。"""
+        if not condition_id:
+            return 0
+        try:
+            from sqlalchemy import text
+            from app.database import SessionLocal
+            db = SessionLocal()
+            try:
+                rows = db.execute(text(
+                    "SELECT status FROM t_triggers "
+                    "WHERE condition_id = :cid AND symbol = :sym "
+                    "AND created_at::date = CURRENT_DATE "
+                    "ORDER BY id DESC LIMIT 10"
+                ), {"cid": condition_id, "sym": symbol}).mappings().all()
+                n = 0
+                for r in rows:
+                    st = r.get("status")
+                    if st in ("pending", "ai_decided", "await_retry"):
+                        n += 1
+                    else:
+                        break
+                return n
+            finally:
+                db.close()
+        except Exception:
+            return 0
 
 
 # ── 单例管理（对齐 candidate_pool_monitor 模式） ──

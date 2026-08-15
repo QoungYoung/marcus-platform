@@ -1,24 +1,26 @@
 # -*- coding: utf-8 -*-
-"""做T系统 · Worker 主动唤醒 + Agent 复核决策桥接。
+"""做T系统 · Worker 主动唤醒 + Agent 决策桥接。
 
-依据 final-t-plan.md §④/§⑥ 与 spec t-monitor-trigger / t-execution-risk：
+依据 final-t-plan.md §④/§⑥ 与 spec t-monitor-trigger / t-execution-risk / t-ai-agentic：
 - Worker 命中后主动 POST bridge /chat 唤醒做T Agent（附触发上下文），Agent 不轮询
-- 桥不可达降级低频轮询兜底；Worker 永不直接下单
-- Agent 复核决策：读 t_triggers 快照 + 合理性判断（默认自动、异常升级 6 类）
+- AI 主导模式：AI 是唯一决策主体，唤醒后自主看盘决策（exec/wait/abandon/update_condition）
+- 桥不可达降级低频轮询兜底（只标记事件待处理，不自动下单）；Worker 永不直接下单
 """
 import json
 import time
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.config import get_settings
 from app.services import t_db
-from app.services.t_gateway import classify_escalation, gateway_execute
+from app.services.t_gateway import classify_escalation
 from app.services.t_regime import compute_regime
 
 # 唤醒降级轮询（桥不可达兜底）
 FALLBACK_POLL_INTERVAL = 30.0
 # 本地条件单（卖出端秒级）在网关内通过 t_conditions 价位判断承载（见 t_monitor）
+# AI 主导模式下连续命中未实质改善的阈值（≥N 次提示 AI 调整/冷却条件）
+AI_CONSECUTIVE_HIT_ALERT = 3
 
 _agent_session: Dict[str, str] = {}
 
@@ -32,20 +34,96 @@ def _bridge_url() -> str:
         return "http://127.0.0.1:3001/chat"
 
 
+def _position_summary(symbol: str) -> Dict[str, Any]:
+    """持仓摘要（唤醒上下文用）：可卖底仓/持仓量/成本/浮动盈亏。"""
+    try:
+        from app.services.t_gateway import get_sellable_ledger
+        ledger = get_sellable_ledger()
+        item = ledger.get(symbol) or {}
+        return {
+            "symbol": symbol,
+            "sellable": item.get("sellable", 0),
+            "volume": item.get("volume", 0),
+            "avg_price": item.get("avg_price"),
+            "pnl_pct": item.get("pnl_pct"),
+        }
+    except Exception as e:
+        return {"symbol": symbol, "error": str(e)[:100]}
+
+
+def _recent_decisions(symbol: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """最近 N 次 AI 决策（t_ai_actions 倒序），唤醒上下文供 AI 判断"连续未实质改善"。"""
+    try:
+        return t_db.list_ai_actions(symbol=symbol, limit=limit)
+    except Exception:
+        return []
+
+
+def _consecutive_hits(condition_id: Optional[int], symbol: str) -> int:
+    """同条件当日连续命中计数（t_triggers 最近事件，按条件+标的统计）。"""
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            rows = db.execute(text(
+                "SELECT status, created_at FROM t_triggers "
+                "WHERE condition_id = :cid AND symbol = :sym "
+                "AND created_at::date = CURRENT_DATE "
+                "ORDER BY id DESC LIMIT 10"
+            ), {"cid": condition_id, "sym": symbol}).mappings().all()
+            n = 0
+            for r in rows:
+                # 连续：从最新往前数，遇到 executed/blocked/cancelled 则中断计数
+                st = r.get("status")
+                if st in ("await_retry", "ai_decided", "pending"):
+                    n += 1
+                else:
+                    break
+            return n
+        finally:
+            db.close()
+    except Exception:
+        return 0
+
+
 def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> bool:
-    """Worker 命中后主动唤醒做T Agent（POST /chat，附触发上下文）。"""
+    """Worker 命中后主动唤醒做T Agent（POST /chat，附触发上下文）。
+
+    AI 主导模式：唤醒语义为"决策"而非"复核"——AI 自主看盘后决定
+    exec（执行）/ wait（等待）/ abandon（放弃）/ update_condition（调整条件）。
+    """
     symbol = trigger.get("symbol", "")
+    ctx = dict(context or {})
+    # 增强上下文：持仓摘要 + 最近决策 + 连续命中计数（供 AI 判断"连续未实质改善"）
+    ctx.setdefault("position", _position_summary(symbol))
+    ctx.setdefault("recent_decisions", _recent_decisions(symbol))
+    consec = _consecutive_hits(trigger.get("condition_id"), symbol)
+    ctx["consecutive_hits"] = consec
+    hit_alert = consec >= AI_CONSECUTIVE_HIT_ALERT
+    ctx["consecutive_hit_alert"] = hit_alert
+
+    msg = (
+        f"【做T触发】{symbol} {trigger.get('event_type', 'low_buy')} "
+        f"触发价={trigger.get('trigger_price')} 现价={trigger.get('quote_price')} "
+        f"建议买价={trigger.get('suggest_bid_price')} 建议卖价={trigger.get('suggest_ask_price')} "
+        f"事件#{trigger.get('id')} 条件#{trigger.get('condition_id')}。"
+    )
+    if hit_alert:
+        msg += (f"⚠️ 该条件已连续命中 {consec} 次且未见实质改善——你必须给出明确的"
+                f"调整条件或冷却动作（update_condition），否则该条件将被系统自动冷却。")
+    msg += (
+        f"你是做T决策者：请检查量价合理性、regime、可卖底仓与最近决策，输出决策 JSON："
+        f'{{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", '
+        f'"condition": {{...}}}}（condition 仅在 update_condition 时提供，含 symbol/trigger_kind/target_price 等）。'
+        f"exec 将按建议价经网关风控执行；wait/abandon 不成交；update_condition 将更新监控条件。"
+        f"上下文: {json.dumps(ctx, ensure_ascii=False, default=str)[:800]}"
+    )
     payload = {
-        "message": (
-            f"【做T触发】{symbol} {trigger.get('event_type', 'low_buy')} "
-            f"触发价={trigger.get('trigger_price')} 现价={trigger.get('quote_price')} "
-            f"建议买价={trigger.get('suggest_bid_price')} 建议卖价={trigger.get('suggest_ask_price')} "
-            f"事件#{trigger.get('id')} 条件#{trigger.get('condition_id')}。"
-            f"请复核该做T触发：检查量价合理性、当前 regime、可卖底仓，决定 auto 执行或升级人工。"
-            f"上下文: {json.dumps(context or {}, ensure_ascii=False)[:500]}"
-        ),
+        "message": msg,
         "session_id": _agent_session.setdefault(symbol, f"t-agent-{symbol}"),
-        "mode": "chat",
+        "mode": "trade",
+        "decision_mode": "ai_led",
     }
     try:
         req = urllib.request.Request(
@@ -54,9 +132,9 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> bool:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read().decode("utf-8")
-        print(f"[t-bridge] 唤醒 Agent 成功: {symbol} ({len(body)} bytes)")
+        print(f"[t-bridge] 唤醒 Agent 成功: {symbol} ({len(body)} bytes) decision_mode=ai_led")
         return True
     except Exception as e:
         print(f"[t-bridge] 唤醒 Agent 失败（降级轮询兜底）: {e}")
@@ -64,48 +142,33 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> bool:
 
 
 def agent_review_and_execute(trigger: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 复核决策入口（由 bridge /chat 或降级轮询调用）。
+    """AI 决策降级通道（桥不可达兜底调用）。
 
-    流程：读快照 → 合理性判断 → 异常升级分类 → 默认自动走网关 / 升级 human_confirm。
-    Worker 永不直接下单：真正下单永远经 gateway_execute（唯一放行者）。
+    AI 主导模式下此路径仅做合理性标记：异常升级分类命中则置 human_confirm；
+    否则标记 ai_decided 等待 AI 下次唤醒处理，绝不自动下单（与 AI 主导语义一致）。
     """
     trigger_id = int(trigger.get("id") or 0)
     symbol = trigger.get("symbol", "")
     side = "buy" if trigger.get("event_type") in ("low_buy", "panic_vibrate") else "sell"
     regime = compute_regime().get("regime", "ACTIVE")
 
-    # 1) 异常升级分类
+    # 1) 异常升级分类（与 AI 决策共享的硬性升级）
     escalation, why = classify_escalation(symbol, side, trigger=trigger, regime=regime)
     if escalation == "human":
         t_db.update_trigger_status(trigger_id, "human_confirm", reason=why)
         return {"status": "human_confirm", "trigger_id": trigger_id, "reason": why}
 
-    # 2) 建议价
-    price = float(trigger.get("suggest_bid_price") or trigger.get("quote_price") or 0)
-    if price <= 0:
-        t_db.update_trigger_status(trigger_id, "blocked", reason="无有效建议价")
-        return {"status": "blocked", "reason": "无有效建议价"}
-
-    # 3) 量（低吸：取可卖底仓对应用量；简化：单笔 1/3 可卖底仓，受网关分档约束）
-    from app.services.t_gateway import get_sellable_ledger
-    ledger = get_sellable_ledger()
-    item = ledger.get(symbol)
-    volume = max(int((item["sellable"] if item else 0) * 0.3), 100) if item else 100
-    volume = (volume // 100) * 100
-
-    # 4) 网关执行（唯一放行者）
-    result = gateway_execute(
-        symbol=symbol, side=side, price=price, volume=volume,
-        condition_id=trigger.get("condition_id"), trigger_id=trigger_id,
-        reason=f"做T触发#{trigger_id}",
-    )
-    return result
+    # 2) AI 主导：桥不可达 → 标记待 AI 下次唤醒，不自动下单
+    t_db.update_trigger_status(trigger_id, "ai_decided",
+                               reason="桥不可达降级：标记待 AI 唤醒决策（不自动下单）")
+    return {"status": "ai_decided", "trigger_id": trigger_id,
+            "reason": "AI 主导降级：仅标记不自动下单"}
 
 
 def fallback_poll_loop(stop_event):
     """桥不可达时的低频轮询兜底：消费 pending 事件 → agent_review_and_execute。
 
-    Worker 永不直接下单（执行仍经网关）；本函数仅作为唤醒桥不可达时的兜底通道。
+    AI 主导模式下兜底仅标记事件（human_confirm / ai_decided），不自动下单。
     """
     while not stop_event.is_set():
         try:

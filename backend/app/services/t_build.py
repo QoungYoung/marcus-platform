@@ -694,7 +694,7 @@ def validate_build_position(symbol: str, price: float, volume: int,
     result: Dict[str, Any] = {"pass": False, "mode": "blocked", "level": "hard", "reason": "", "warn": []}
     try:
         # 0) 账户白名单
-        if decision_source not in ("agent", "human", "daily_auto"):
+        if decision_source not in ("agent", "human", "daily_auto", "ai_led"):
             result["reason"] = "非法决策来源"
             return result
 
@@ -707,7 +707,7 @@ def validate_build_position(symbol: str, price: float, volume: int,
         # 2) regime 门
         regime_state = compute_regime()
         regime = regime_state.get("regime", "ACTIVE")
-        allow_first_open = decision_source == "daily_auto"
+        allow_first_open = decision_source in ("daily_auto", "ai_led")
         mode, up_reason = classify_build_escalation(symbol, price * volume, regime,
                                                     decision_source,
                                                     allow_first_open=allow_first_open)
@@ -716,7 +716,7 @@ def validate_build_position(symbol: str, price: float, volume: int,
             return result
 
         # 3) 时段护栏（自动建仓强制；人工建仓仅非交易时段拒）
-        if decision_source in ("agent", "daily_auto"):
+        if decision_source in ("agent", "daily_auto", "ai_led"):
             ok, why = _is_trading_minute_allowed()
             if not ok:
                 result["reason"] = why
@@ -756,8 +756,8 @@ def validate_build_position(symbol: str, price: float, volume: int,
             result["reason"] = "单票当日已建仓，分批须跨日"
             return result
 
-        # 7) 人工升级分流（daily_auto 遇 human_confirm 同样升级，不自动放行）
-        if mode == "human_confirm" and decision_source in ("agent", "daily_auto") and not force_human:
+        # 7) 人工升级分流（daily_auto/ai_led 遇 human_confirm 同样升级，不自动放行）
+        if mode == "human_confirm" and decision_source in ("agent", "daily_auto", "ai_led") and not force_human:
             result.update({"pass": True, "mode": "human_confirm", "level": "gate", "reason": up_reason})
             return result
         if force_human and decision_source == "human" and mode == "human_confirm":
@@ -814,7 +814,7 @@ def build_gateway_execute(symbol: str, price: float, volume: int,
                                 reason=f"{check['reason']}（level={check.get('level')}）")
         return {"status": "rejected", "reason": check["reason"], "level": check.get("level"), "mode": check.get("mode")}
 
-    if check["mode"] == "human_confirm" and decision_source == "agent" and not force_human:
+    if check["mode"] == "human_confirm" and decision_source in ("agent", "daily_auto", "ai_led") and not force_human:
         # 升级人工：事件保持 pending_confirmation，等待人工确认端点放行
         t_db.update_build_event(ev_id, status="human_confirm",
                                 reason=check.get("reason") or "人工确认")

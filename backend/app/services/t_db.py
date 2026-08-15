@@ -44,14 +44,16 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                     benchmark_turnover_profile, stabilize_level,
                     sell_target_price, stop_loss_price,
                     time_stop_open, time_stop_close, start_time, end_time,
-                    regime_gate, status, armed, expression
+                    regime_gate, status, armed, expression,
+                    publisher, session_id
                 ) VALUES (
                     :account_id, :symbol, :trade_date, :trigger_kind,
                     :target_price, :reinform_price, :vol_ratio_thresh,
                     :benchmark_turnover_profile, :stabilize_level,
                     :sell_target_price, :stop_loss_price,
                     :time_stop_open, :time_stop_close, :start_time, :end_time,
-                    :regime_gate, :status, :armed, :expression
+                    :regime_gate, :status, :armed, :expression,
+                    :publisher, :session_id
                 )
                 ON CONFLICT (account_id, symbol, trigger_kind, trade_date)
                 DO UPDATE SET
@@ -69,7 +71,9 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                     regime_gate = EXCLUDED.regime_gate,
                     status = EXCLUDED.status,
                     armed = EXCLUDED.armed,
-                    expression = EXCLUDED.expression
+                    expression = EXCLUDED.expression,
+                    publisher = EXCLUDED.publisher,
+                    session_id = EXCLUDED.session_id
                 RETURNING id
                 """
             )
@@ -93,6 +97,8 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                 "status": cond.get("status", "active"),
                 "armed": 1 if cond.get("armed", 1) else 0,
                 "expression": _to_jsonb(cond.get("expression")),
+                "publisher": cond.get("publisher", "rule"),
+                "session_id": cond.get("session_id"),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -115,7 +121,7 @@ def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[st
                 "sell_target_price, stop_loss_price, "
                 "time_stop_open, time_stop_close, start_time, end_time, "
                 "armed, armed_at, last_triggered_at, trigger_count_today, "
-                "regime_gate, expression, status "
+                "regime_gate, expression, status, publisher, session_id "
                 "FROM t_conditions WHERE status = 'active' AND trade_date = :trade_date"
             )
             params: Dict[str, Any] = {"trade_date": trade_date or _today()}
@@ -688,3 +694,71 @@ def _to_jsonb(obj: Any) -> Any:
         import json as _json
         return _json.dumps(obj, ensure_ascii=False)
     return obj
+
+
+# ────────────────────────────────────────────────────────────────
+# t_ai_actions（AI 主导做T决策审计）
+# ────────────────────────────────────────────────────────────────
+
+def insert_ai_action(session_id: Optional[str], trade_date: str, symbol: str,
+                     action_type: str, input_snapshot: Optional[dict] = None,
+                     output: Optional[dict] = None,
+                     gateway_result: Optional[dict] = None) -> Optional[int]:
+    """写入一条 AI 决策审计（幂等可追溯）。"""
+    try:
+        db = SessionLocal()
+        try:
+            row = db.execute(text(
+                "INSERT INTO t_ai_actions (session_id, trade_date, symbol, action_type, "
+                "input_snapshot, output, gateway_result) "
+                "VALUES (:sid, :td, :sym, :atype, :inp, :out, :gw) RETURNING id"
+            ), {
+                "sid": session_id, "td": trade_date, "sym": symbol, "atype": action_type,
+                "inp": _to_jsonb(input_snapshot or {}),
+                "out": _to_jsonb(output or {}),
+                "gw": _to_jsonb(gateway_result) if gateway_result is not None else None,
+            }).fetchone()
+            db.commit()
+            return row[0] if row else None
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-db] insert_ai_action 失败: {e}")
+        return None
+
+
+def list_ai_actions(trade_date: Optional[str] = None, symbol: Optional[str] = None,
+                    limit: int = 100) -> List[Dict[str, Any]]:
+    """查询 AI 决策审计（按日期/标的过滤，倒序）。"""
+    try:
+        db = SessionLocal()
+        try:
+            sql = "SELECT * FROM t_ai_actions WHERE 1=1"
+            params: Dict[str, Any] = {}
+            if trade_date:
+                sql += " AND trade_date = :td"
+                params["td"] = trade_date
+            if symbol:
+                sql += " AND symbol = :sym"
+                params["sym"] = symbol
+            sql += " ORDER BY id DESC LIMIT :lim"
+            params["lim"] = limit
+            rows = db.execute(text(sql), params).mappings().all()
+            out = []
+            for r in rows:
+                import json as _json
+                d = dict(r)
+                for k in ("input_snapshot", "output", "gateway_result"):
+                    v = d.get(k)
+                    if isinstance(v, str):
+                        try:
+                            d[k] = _json.loads(v)
+                        except (ValueError, TypeError):
+                            pass
+                out.append(d)
+            return out
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-db] list_ai_actions 失败: {e}")
+        return []
