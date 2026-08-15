@@ -359,11 +359,12 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
 
 
 def _load_candidate_symbols() -> List[str]:
-    """候选来源：stock 候选池（前 20）+ 用户指定（外部入参）。"""
+    """候选来源：stock 候选池（ready 状态，前 20）+ 用户指定（外部入参）。"""
     try:
         from app.services.candidate_pool import get_candidate_pool
         pool = get_candidate_pool()
-        return [str(item.get("symbol") or item) for item in pool.pool[:20] if item]
+        cands = pool.ready() if hasattr(pool, "ready") else pool.candidates
+        return [str(item.get("symbol") or item) for item in (cands or [])[:20] if item]
     except Exception as e:
         print(f"[t-build] 候选池读取失败: {e}")
         return []

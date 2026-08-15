@@ -656,6 +656,10 @@ def _apply_ai_led_migration():
             conn.execute(text(
                 "ALTER TABLE t_conditions ADD COLUMN IF NOT EXISTS session_id VARCHAR(64)"
             ))
+            # 3) t_build_events.status — pending_confirmation(20字符) 超 VARCHAR(16)，加长
+            conn.execute(text(
+                "ALTER TABLE t_build_events ALTER COLUMN status TYPE VARCHAR(32)"
+            ))
 
         print("[DB] PATCH: AI 主导做T迁移完成 (t_ai_actions + t_conditions publisher/session_id)")
     except Exception as e:
