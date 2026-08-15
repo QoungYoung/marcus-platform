@@ -535,6 +535,17 @@ class TBacktestEngine:
                 # 触发判定（复用 evaluate_condition_at：表达式 + 通用护栏 + 默认逻辑）
                 hit_any = False
                 for c in day_conds:
+                    tkind = c.get("trigger_kind", "low_buy")
+                    # 无底仓预拦截：做T条件必须依托底仓——
+                    #   卖腿：sellable=0 不评估（T+0 当日买回次日才可卖，sellable 会递减）
+                    #   买腿：total_shares=0 不评估（低吸=有底仓加仓，无持仓属新开仓走建仓流程），
+                    #         避免"持仓0股无弹药"反复唤醒 AI 放弃刷屏
+                    if tkind in ("high_sell_then_buy_back", "high_sell"):
+                        if ledger.sellable() <= 0:
+                            continue
+                    elif tkind in ("low_buy", "panic_vibrate"):
+                        if ledger.total_shares() <= 0:
+                            continue
                     try:
                         snapshot = build_snapshot_at(
                             self.symbol, bars_up_to, trade_day, regime, ledger,
@@ -558,6 +569,10 @@ class TBacktestEngine:
                         c["last_triggered_at"] = tick_dt
                         self._handle_trigger(c, bar, day_bars, i, snapshot, regime, ledger,
                                              trade_day, summary, cancel_event)
+                        # 高抛成交后当日 disarm（T+0 闭环一轮 → 次日条件重建时重新武装），
+                        # 防止多次触发把可卖底仓快速耗尽后继续触发
+                        if tkind in ("high_sell_then_buy_back", "high_sell"):
+                            c["armed"] = 0
                         break  # 同一 tick 只处理第一个命中条件（对齐实盘轮询语义）
                 if not hit_any:
                     pass
@@ -1311,6 +1326,12 @@ class TCombinedBacktestEngine:
             _report_progress()
             # 盘后（当日收盘后）对未建仓标的打分，as_of=当日（防前视）
             next_day = trade_days[idx + 1] if idx + 1 < len(trade_days) else None
+            if next_day is None:
+                break  # 窗口末日不建仓（无做T日）
+            # 候选 = 固定传入候选（self.symbols）中未建仓的。
+            # 注：不做全市场 scan 补充——scan_t_candidates 用实时行情打分有前视风险，
+            # 且回测 m5 缓存仅覆盖传入标的（scan 标的无 m5 无法建仓）。
+            # 实盘对齐：候选池由盘后 daily_auto_select 维护，回测以传入列表模拟其逐日滚动。
             for sym in self.symbols:
                 if any(b["symbol"] == sym for b in builds):
                     continue  # 已建仓
@@ -1329,12 +1350,6 @@ class TCombinedBacktestEngine:
                     build_decisions.append({"symbol": sym, "decision": "rejected",
                                             "score": r["score"], "as_of": trade_day,
                                             "reasons": r["reasons"] or ["打分未达标"]})
-                    continue
-                # 次日建仓（无次日则窗口末建仓不参与做T——跳过）
-                if next_day is None:
-                    build_decisions.append({"symbol": sym, "decision": "rejected",
-                                            "score": r["score"], "as_of": trade_day,
-                                            "reasons": ["窗口末日达标无做T日"]})
                     continue
                 next_bars = [b for b in m5_map.get(sym, []) if _day_key(b["time"]) == next_day]
                 price = float(next_bars[0]["open"]) if next_bars else 0.0

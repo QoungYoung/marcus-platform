@@ -117,6 +117,21 @@ class TMonitor:
             quote = quotes.get(_normalize_symbol(symbol))
             if not quote or not quote.get("current"):
                 continue
+            # 无底仓预拦截（与回测一致）：做T条件必须依托底仓——
+            #   卖腿：sellable=0 不触发（T+0 当日买回次日才可卖）
+            #   买腿：持仓 0 不触发（低吸=有底仓加仓；无持仓属新开仓走建仓流程），
+            #         避免"无弹药"反复唤醒 AI 放弃刷屏
+            try:
+                pos_item = (ledger or {}).get(symbol) or {}
+                cond_kind = cond.get("trigger_kind", "low_buy")
+                if cond_kind in ("high_sell_then_buy_back", "high_sell") \
+                        and int(pos_item.get("sellable", 0) or 0) <= 0:
+                    continue
+                if cond_kind in ("low_buy", "panic_vibrate") \
+                        and int(pos_item.get("volume", 0) or 0) <= 0:
+                    continue
+            except Exception:
+                pass
             try:
                 # 止损前置检查（每标的每轮一次：现价 ≤ 止损价 且 当日未止损过）
                 self._check_stop_loss(symbol, quote, ledger)

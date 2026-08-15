@@ -315,9 +315,9 @@ class TestEngineCore(unittest.TestCase):
         self.assertIn("无底仓", reason)
 
     def test_zero_share_sell_blocked(self):
-        """底仓耗尽后继续触发 → 0 股卖单被拦截（不产生无意义成交）。"""
+        """底仓耗尽后卖腿预拦截：无底仓时不触发高抛（不产生无意义成交/刷屏）。"""
         from app.services.t_backtest import TBacktestEngine
-        # 100 股底仓 + 宽松高抛阈值（首日必触发，卖光后后续触发被 0 股拦截）
+        # 100 股底仓 + 宽松高抛阈值（首日必触发，卖光后无底仓预拦截不再触发）
         high_target = 9.0
         task = {
             "symbol": self.symbol, "init_shares": 100, "init_price": 10.0,
@@ -328,13 +328,12 @@ class TestEngineCore(unittest.TestCase):
             }],
         }
         r = TBacktestEngine(task, str(self.cache)).run()
-        blocked = [e for e in r["events"] if e.get("type") == "blocked"]
-        self.assertTrue(any(("无可用底仓" in str(e.get("data", {}).get("reason", ""))
-                             or "可卖量不足" in str(e.get("data", {}).get("reason", "")))
-                            for e in blocked),
-                        "底仓耗尽后应拦截 0 股卖单")
         trades = [e["data"]["trade"] for e in r["events"] if e.get("type") == "trade" and e.get("data", {}).get("trade")]
         self.assertTrue(all(t["volume"] > 0 for t in trades), "不应存在 0 股成交")
+        # 底仓耗尽后（卖光）无触发——不再有无意义的高抛触发事件
+        sells = [t for t in trades if t["side"] == "sell"]
+        self.assertGreater(len(sells), 0, "应有高抛成交")
+        self.assertLessEqual(len(sells), 1, "卖光后不应继续触发高抛（预拦截）")
 
     def test_buyback_after_sell_goes_through_gateway(self):
         """high_sell_then_buy_back 成交后挂买回单，买回腿走网关（无底仓被拒 = 风控生效）。"""

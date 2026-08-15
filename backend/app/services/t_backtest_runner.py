@@ -168,13 +168,25 @@ def save_events(task_id: int, events: List[Dict[str, Any]]):
             for ev in events:
                 ev_copy = {k: v for k, v in ev.items() if k != "data"}
                 data = ev.get("data")
+                if not isinstance(data, dict):
+                    data = {}
+                # trade_day 提取：顶层 → data.trade_day → data.trigger.trade_day
+                day = (ev.get("trade_day")
+                       or data.get("trade_day")
+                       or (data.get("trigger") or {}).get("trade_day")
+                       if isinstance(data, dict) else None)
+                # bar_time 提取：顶层 → data.bar_time → data.trigger.bar_time → data.next_bar
+                bt = (ev.get("bar_time")
+                      or data.get("bar_time")
+                      or (data.get("trigger") or {}).get("bar_time")
+                      or data.get("next_bar")
+                      if isinstance(data, dict) else None)
                 db.execute(text(
                     "INSERT INTO t_backtest_events (task_id, event_type, trade_day, bar_time, data_json) "
                     "VALUES (:task, :etype, :day, :bt, :data)"
                 ), {
                     "task": task_id, "etype": ev.get("type", ev_copy.get("type", "event")),
-                    "day": ev.get("trade_day") or (data or {}).get("trade_day") if isinstance(data, dict) else None,
-                    "bt": (data or {}).get("bar_time") if isinstance(data, dict) else None,
+                    "day": day, "bt": bt,
                     "data": json.dumps(ev, ensure_ascii=False),
                 })
             db.commit()
