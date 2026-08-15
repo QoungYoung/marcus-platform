@@ -126,17 +126,27 @@ export default function TBacktestPage() {
           if (!alive) return;
           const d = r.data;
           const p = Number(d?.task?.progress ?? 0);
-          setLiveProgress(d?.task?.status === 'running' || d?.task?.status === 'pending' ? p : null);
-          if (d?.task?.status === 'running' || d?.task?.status === 'pending') {
+          const st = d?.task?.status;
+          setLiveProgress(st === 'running' || st === 'pending' ? p : null);
+          if (st === 'running' || st === 'pending') {
+            // 运行中：只拉事件流，不请求 report（未完成 report 返回 409）
             tBacktestApi.events(selectedId, 300)
               .then((er: any) => { if (alive) setLiveEvents((er.data as any)?.events || []); })
               .catch(() => {});
+          } else if (st === 'completed') {
+            // 完成：拉报告 + 事件流
+            tBacktestApi.report(selectedId)
+              .then((rr) => { if (alive) setReport(rr.data as BtMetrics); })
+              .catch(() => { if (alive) setReport(null); });
+            tBacktestApi.events(selectedId, 300)
+              .then((er: any) => { if (alive) setLiveEvents((er.data as any)?.events || []); })
+              .catch(() => {});
+          } else {
+            // failed/cancelled：清报告
+            setReport(null);
           }
         })
         .catch(() => {});
-      tBacktestApi.report(selectedId)
-        .then((r) => { if (alive) setReport(r.data as BtMetrics); })
-        .catch(() => { if (alive) setReport(null); });
     };
     refresh();
     if (sel && (sel.status === 'pending' || sel.status === 'running')) {
