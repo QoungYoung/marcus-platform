@@ -154,16 +154,33 @@ def t_backtest_delete(task_id: int):
 
 @router.get("/{task_id}/report")
 def t_backtest_report(task_id: int):
-    """指标报告 + 口径差异声明。"""
+    """指标报告 + 口径差异声明（组合模式含 build_decisions/per_symbol 明细）+ 权益曲线。"""
     task = runner.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"任务 #{task_id} 不存在")
     metrics = runner.get_metrics(task_id)
     if not metrics:
         raise HTTPException(status_code=409, detail="任务尚未完成或报告未生成")
+    # 权益曲线（组合/单标的共用 t_backtest_equity_snapshots）
+    equity_curve = []
+    try:
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            rows = db.execute(_text(
+                "SELECT trade_date, total_asset FROM t_backtest_equity_snapshots "
+                "WHERE task_id = :id ORDER BY trade_date"
+            ), {"id": task_id}).mappings().all()
+            equity_curve = [dict(r) for r in rows]
+        finally:
+            db.close()
+    except Exception:
+        pass
     return {
         "task_id": task_id, "symbol": task.get("symbol"),
         "status": task.get("status"), **metrics,
+        "equity_curve": equity_curve,
     }
 
 

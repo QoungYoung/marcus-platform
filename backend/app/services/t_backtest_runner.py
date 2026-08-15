@@ -402,7 +402,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         update_task_status(task_id, "failed", error_message=f"回放异常: {e}")
         return {"status": "failed", "error": str(e)}
 
-    # 3) 落库（组合模式：聚合各标的 events/trades/equity）
+    # 3) 落库（组合模式：聚合各标的 events/trades/equity + 组合明细入 metrics）
     if is_combined:
         all_events: List[Dict[str, Any]] = []
         all_trades: List[Dict[str, Any]] = []
@@ -412,7 +412,15 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         save_events(task_id, all_events)
         save_trades(task_id, all_trades)
         save_equity(task_id, result.get("equity_curve", []))
-        save_metrics(task_id, result.get("portfolio", {}), result.get("caliber_notes", []))
+        portfolio = dict(result.get("portfolio") or {})
+        portfolio["build_decisions"] = result.get("build_decisions", [])
+        portfolio["per_symbol"] = [{
+            "symbol": r.get("symbol"),
+            "build": r.get("build"),
+            "metrics": r.get("metrics", {}),
+            "ledger": r.get("ledger", {}),
+        } for r in result.get("per_symbol", [])]
+        save_metrics(task_id, portfolio, result.get("caliber_notes", []))
     else:
         save_events(task_id, result.get("events", []))
         save_trades(task_id, result.get("ledger", {}).get("trades", []))
@@ -420,7 +428,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         save_metrics(task_id, result.get("metrics", {}), result.get("caliber_notes", []))
 
     if result.get("status") == "completed":
-        update_task_status(task_id, "completed", progress=100)
+        update_task_status(task_id, "completed", progress=100, error_message="")
     else:
         update_task_status(task_id, "failed", error_message=result.get("error"))
     return result

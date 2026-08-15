@@ -932,11 +932,12 @@ class TCombinedBacktestEngine:
                                     "shares": shares, "score": r["score"], "reasons": r["reasons"]})
 
         if not built:
-            return {"status": "completed", "build_decisions": build_decisions,
-                    "per_symbol": [], "equity_curve": [], "metrics": {
-                        "total_return_pct": 0.0, "trigger_count": 0, "executed_count": 0,
-                        "note": "建仓阶段无标的达标，组合未建仓",
-                    }, "caliber_notes": caliber_notes() + ["建仓口径: t_build 规则模拟（build_score≥门槛 ∧ 趋势闸门 ∧ 资金≤净值×55%），建仓价=窗口首日开盘；可T质量分用历史日线近似（_quality_from_daily）"]}
+            empty_portfolio = _combine_metrics([], [], [], self.net_asset)
+            empty_portfolio["note"] = "建仓阶段无标的达标，组合未建仓"
+            return {"status": "completed", "portfolio": empty_portfolio,
+                    "build_decisions": build_decisions,
+                    "per_symbol": [], "equity_curve": [], "caliber_notes": caliber_notes() + [
+                        "建仓口径: t_build 规则模拟（build_score≥门槛 ∧ 趋势闸门 ∧ 资金≤净值×55%），建仓价=窗口首日开盘；可T质量分用历史日线近似（_quality_from_daily）"]}
 
         # 做T阶段：逐标的实例化单标的引擎（net_asset = 该标的建仓支出，避免组合资金重复计算）
         per_symbol: List[Dict[str, Any]] = []

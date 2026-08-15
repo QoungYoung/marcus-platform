@@ -23,6 +23,7 @@ interface BtTask {
 interface BtMetrics {
   metrics: Record<string, any>;
   caliber_notes: string[];
+  equity_curve?: { trade_date: string; total_asset: number }[];
 }
 
 interface Candidate {
@@ -161,10 +162,9 @@ export default function TBacktestPage() {
 
   const metrics = report?.metrics || {};
   const portfolio = metrics.per_symbol_return ? metrics : null; // 组合模式
-  const curve = (metrics as any).equity_curve;
-  const perSymbol = (report as any)?.per_symbol;
-  const buildDecisions = (report as any)?.build_decisions;
-  const equity = (report as any)?.equity_curve || curve;
+  const perSymbol = metrics.per_symbol || [];
+  const buildDecisions = metrics.build_decisions || [];
+  const equity = report?.equity_curve || [];
 
   return (
     <div className="tbt-page">
