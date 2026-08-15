@@ -16,6 +16,21 @@
     # 与 headless 一致：Code Mode 作为核心执行能力
     mode: !!js process.env.DSH_TOOLS_MODE
 
+# 文件沙箱：桥接会话默认 workspace-write（工作区 /app + /tmp 可写），
+# 覆盖 dsh-base 的 read-only 兜底；审批保持 ask（headless 下越权升级会失败关闭，属预期安全行为）
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: /app
+
+# web_search：走 OpenCode 网关（Anthropic 兼容 /v1/messages + web_search_20250305 server tool，已实测可用），
+# key 复用网关 key（DEEPSEEK_API_KEY，服务器 .env 已注入，无需新 key）；
+# 端点默认网关，可用 DEEPSEEK_SEARCH_BASE_URL 覆盖（如切回 DeepSeek 官方 https://api.deepseek.com/anthropic/v1）
+- id: web-search-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseURL: !!js process.env.DEEPSEEK_SEARCH_BASE_URL ?? 'https://opencode.ai/zen/go/v1'
+
 - insert:
     # Code Mode 执行能力（无浏览器环境，与 headless 相同）
     - id: code-runtime

@@ -49,6 +49,35 @@ docker run -d --name marcus-dsh -p 3001:3001 \
 - 3001 端口当前被现役 `marcus-piserver` 占用，切换前需先停旧服务（任务 7.1 双跑切换）。
 - skill：`/app/.agents/skills/marcus-panel-tools` 需挂载或 COPY（Spike 1.3 验证可见可读）。
 
+## 出站代理（可选）
+
+web_search / LLM 的 HTTP 请求走原生 `fetch`，**不读** `HTTP_PROXY`/`HTTPS_PROXY`（Node 22
+无 `--use-env-proxy`）。如需走代理，bridge 插件已内置 undici 全局 dispatcher（`EnvHttpProxyAgent`）：
+
+```bash
+docker run ... \
+  -e DSH_PROXY_URL=http://proxy-host:port \   # HTTP CONNECT 代理（可带 user:pass）
+  -e NO_PROXY=127.0.0.1,localhost,backend,postgres,frontend \
+  marcus-dsh:latest
+```
+
+- 设置后进程内所有出站（web_search → OpenCode 网关、聊天 → OpenCode 网关、bridge → backend）
+  统一走代理；`NO_PROXY` 务必包含 `backend` 等内网服务名，否则 bridge 调 backend 也会绕代理。
+- 日志确认：`docker logs marcus-dsh` 出现 `[Bridge] 出站代理已启用: ...`。
+- 不设 `DSH_PROXY_URL` 时行为不变（直连）。
+
+## web_search 端点（当前默认走 OpenCode 网关）
+
+`service.cordis.patch.yml` 把 `web-search-deepseek` 端点指到 OpenCode 网关
+（`https://opencode.ai/zen/go/v1`，Anthropic 兼容 `/v1/messages` + `web_search_20250305`
+server tool，已在本地实测返回原生 `web_search_tool_result` 结构），key 复用网关
+`DEEPSEEK_API_KEY`——与聊天同 key、同通道，无需额外配置。
+
+- 覆盖端点：设 `DEEPSEEK_SEARCH_BASE_URL`（如切回 DeepSeek 官方
+  `https://api.deepseek.com/anthropic/v1`，此时 `DEEPSEEK_API_KEY` 需为平台 key）。
+- 注意：OpenAI 风格 `/v1/chat/completions` 的 web_search 工具类型网关不支持
+  （实测 400：`unknown variant web_search, expected function`），必须走 Anthropic 端点。
+
 ## 验证结论（Spike 1.1-1.4）
 
 - ✅ 1.1 容器常驻启动，webserver 监听 0.0.0.0:3001（HTTP 404 = 无业务路由，bridge 插件会加）

@@ -120,6 +120,8 @@ services:
       PI_SERVER_PORT: "3001"
       MARCUS_API_URL: http://backend:8000/api/v1
       MARCUS_WORKSPACE: /app
+      # DSH 文件沙箱：workspace-write（/app 工作区 + /tmp 可写），否则桥接会话只读
+      DSH_PERMISSION_MODE: workspace-write
       # DeepSeek 端点：服务器 key 走 OpenCode 网关（.env 的 DEEPSEEK_API_HOST，如 opencode.ai/zen/go）
       DEEPSEEK_BASE_URL: https://${DEEPSEEK_API_HOST:-opencode.ai/zen/go}/v1
     ports:
