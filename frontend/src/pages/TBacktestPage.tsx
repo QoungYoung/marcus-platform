@@ -75,23 +75,15 @@ function EventDetailTable({ events, title }: { events: BtEvent[]; title?: string
           <tbody>
             {rows.map((ev, i) => {
               const d = ev.data || {};
-              // API 返回完整事件对象（{type, data:{...}}），兼容平铺/嵌套两种结构
-              const inner = (d.data && typeof d.data === 'object' && d.data.type) ? d.data : d;
-              const trig = inner.trigger || inner.data?.trigger || {};
-              const sym = trig.symbol || inner.symbol || ev.symbol || '';
-              // 价格：按事件类型取触发价/成交价/建议价
-              let price = '';
-              const t = ev.event_type;
-              if (t === 'trade') {
-                const tr = inner.trade || inner.data?.trade || {};
-                price = tr.price != null ? String(tr.price) : (tr.exec_price != null ? String(tr.exec_price) : '');
-              } else if (t === 'review' || t === 'escalated' || t === 'ai_wait') {
-                price = trig.quote_price != null ? String(trig.quote_price) : (trig.trigger_price != null ? String(trig.trigger_price) : '');
-              } else {
-                price = trig.quote_price != null ? String(trig.quote_price) : (trig.trigger_price != null ? String(trig.trigger_price) : '');
-              }
+              // API 返回 {data: {实际内容}, type: ...}，实际内容在 d.data；兼容平铺结构
+              const inner = (d.data && typeof d.data === 'object') ? d.data : d;
+              const trig = inner.trigger || {};
+              const sym = inner.symbol || trig.symbol || ev.symbol || '';
+              // 价格：trigger/交易/复核事件的内容顶层有 quote_price/exec_price/trigger_price
+              const price = inner.quote_price ?? inner.exec_price ?? trig.quote_price ?? trig.trigger_price ?? inner.trigger_price ?? '';
               // 内容：reason/decision/action/触发摘要
               let detail = '';
+              const t = ev.event_type;
               if (t === 'review') {
                 const act = inner.action || '—';
                 detail = `${act === 'exec' ? '✅执行' : act === 'wait' ? '⏳等待' : act === 'abandon' ? '⛔放弃' : act}：${inner.reason || ''}`;
@@ -102,10 +94,10 @@ function EventDetailTable({ events, title }: { events: BtEvent[]; title?: string
               } else if (t === 'blocked') {
                 detail = `拦截：${inner.reason || ''}`;
               } else if (t === 'trade') {
-                const tr = inner.trade || inner.data?.trade || {};
+                const tr = inner.trade || {};
                 detail = `${tr.side === 'buy' ? '买入' : '卖出'} ${tr.volume ?? ''}股 @ ${tr.price ?? ''}${tr.realized_pnl != null ? ` 盈亏${Number(tr.realized_pnl).toFixed(2)}` : ''}`;
               } else if (t === 'trigger') {
-                detail = `${trig.event_type || ''} 触发价=${trig.trigger_price ?? ''}`;
+                detail = `${inner.event_type || trig.event_type || ''} 触发价=${trig.trigger_price ?? inner.trigger_price ?? ''}`;
               } else {
                 detail = inner.reason || inner.decision || '';
               }
