@@ -462,18 +462,28 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                     gaps.extend(d2.get("gaps", []))
                 except Exception as e:
                     print(f"[t-backtest] rolling_scan 批量日线预取失败: {e}")
-                # m5 预取：用窗口首日前一交易日的历史日线扫描，取 top 达标候选预取 m5
-                # （m5 逐股逐日请求昂贵；只预取大概率建仓的标的，控制预取时长）
+                # m5 预取（迭代修复"次日开盘价不可用"）：对窗口内每个交易日跑历史扫描，
+                # 收集所有 pass_gate 标的的并集 → 对并集预取 m5。
+                # 此前只预取窗口首日的 top30，导致每日滚动扫描选出的新标的
+                # （如 000767 score0.84）无 m5 缓存被"次日开盘价不可用"误拒。
                 try:
                     from app.services import t_build as _tb
-                    _asof0 = (_dt.strptime(start, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
-                    _hist = _tb.scan_t_candidates_historical(
-                        active_codes, str(task_dir), as_of=_asof0,
-                        quality_fn=_tb._quality_from_daily, limit=30)
-                    _m5_codes = [c["symbol"] for c in _hist if c.get("symbol") and c.get("pass_gate")]
+                    _m5_codes: List[str] = []
+                    for _td_ in days:  # days = 窗口交易日（YYYYMMDD）
+                        try:
+                            _asof = f"{_td_[:4]}-{_td_[4:6]}-{_td_[6:8]}"
+                            _hist = _tb.scan_t_candidates_historical(
+                                active_codes, str(task_dir), as_of=_asof,
+                                quality_fn=_tb._quality_from_daily, limit=20)
+                            for c in _hist:
+                                if c.get("symbol") and c.get("pass_gate") \
+                                        and c["symbol"] not in _m5_codes:
+                                    _m5_codes.append(c["symbol"])
+                        except Exception as _e:
+                            print(f"[t-backtest] rolling_scan 日扫描失败 {_td_}: {str(_e)[:60]}")
                     if not _m5_codes:
                         _m5_codes = active_codes[:30]
-                    print(f"[t-backtest] rolling_scan 预取 m5 候选 {len(_m5_codes)} 只")
+                    print(f"[t-backtest] rolling_scan 全窗口扫描达标并集 {len(_m5_codes)} 只，预取 m5")
                     for code in _m5_codes:
                         r = btd.prefetch_m5(code, days, task_dir, is_index=False)
                         gaps.extend(r.get("gaps", []))

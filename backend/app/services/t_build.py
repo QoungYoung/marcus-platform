@@ -43,9 +43,12 @@ BUILD_PARAMS_DEFAULT = {
     "build_score_weights": {"quality": 0.55, "trend": 0.35, "source": 0.05, "risk": -0.05},
     "trend_gate": True,              # 个股趋势闸门（20 日线方向，硬排除）
     # 连续趋势分参数（t3 P0-1）：MA20 斜率归一化基准 + MA5/MA20 发散档位
-    "trend_slope_ref": 0.15,         # MA20 5日斜率（%/日）记 1.0 的基准（如 +0.15%/日）
+    # 迭代#43：基准 0.15/1.5 过小导致 4~15%/日 斜率全部饱和 1.0 → 调 2.0/10.0，
+    # 让真实趋势强弱拉开；斜率 > 8%/日 视为过热（连续大涨追高风险）扣分
+    "trend_slope_ref": 2.0,          # MA20 5日斜率（%/日）记 1.0 的基准（如 +2%/日）
     "trend_align_min": 0.0,          # MA5-MA20 偏离(%) ≤0（死叉/贴线）记 0
-    "trend_align_ref": 1.5,          # 偏离 ≥1.5% 记 1.0（强多头）
+    "trend_align_ref": 10.0,         # 偏离 ≥10% 记 1.0（强多头）
+    "trend_overheat": 8.0,           # MA20 斜率 >8%/日 视为过热（扣分惩罚）
     # 反弹陷阱硬拒（t3 P1-1）：MA20 微向下 + MA5 过冲偏离超过该值 → 拒绝
     "trend_overstretch": 3.0,
     # 时机
@@ -367,11 +370,15 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
             ma20_prev = sum(closes[-25:-5]) / 20
             # (1) MA20 斜率项：5 日 MA20 变化率（%/日），归一化到 [0,1]
             slope20 = (ma20 - ma20_prev) / ma20_prev * 100 if ma20_prev > 0 else 0.0
-            slope_score = max(0.0, min(slope20 / float(p.get("trend_slope_ref", 0.15)), 1.0))
+            slope_score = max(0.0, min(slope20 / float(p.get("trend_slope_ref", 2.0)), 1.0))
+            # 过热惩罚（迭代#43）：斜率 > 阈值 时衰减（连续大涨后追高风险，000811/000066 类）
+            overheat = float(p.get("trend_overheat", 8.0))
+            if slope20 > overheat:
+                slope_score *= max(0.0, 1.0 - (slope20 - overheat) / overheat)
             # (2) MA5/MA20 多头发散项：偏离越大越强，归一化到 [0,1]
             spread = (ma5 - ma20) / ma20 * 100 if ma20 > 0 else 0.0
             align_min = float(p.get("trend_align_min", 0.0))
-            align_ref = float(p.get("trend_align_ref", 1.5))
+            align_ref = float(p.get("trend_align_ref", 10.0))
             align_score = max(0.0, min((spread - align_min) / max(align_ref - align_min, 1e-9), 1.0))
             trend_score = round(0.5 * slope_score + 0.5 * align_score, 4)
         except (ValueError, TypeError, ZeroDivisionError):
