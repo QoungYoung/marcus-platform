@@ -187,6 +187,11 @@
 .tbt-ai-gw { margin-left: auto; font-size: 11px; }
 .tbt-ai-meta { font-size: 10px; color: var(--gp-faint); }
 .tbt-ai-reason { font-size: 11px; color: var(--gp-muted); line-height: 1.35; }
+
+/* ── 事件明细滚动表 ── */
+.tbt-events-scroll { max-height: 380px; overflow-y: auto; border: 1px solid var(--gp-line-soft); border-radius: var(--gp-radius); }
+.tbt-events-scroll .tbt-table { margin: 0; }
+.tbt-events-scroll thead th { position: sticky; top: 0; background: var(--gp-bg, #fff); z-index: 1; }
 .tbt-status {
   font-size: 11px;
   font-weight: 600;

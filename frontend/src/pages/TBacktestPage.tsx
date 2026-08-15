@@ -25,6 +25,7 @@ interface BtEvent {
   event_type: string;
   trade_day: string;
   bar_time: string;
+  symbol?: string;
   data?: any;
 }
 
@@ -60,6 +61,70 @@ function fmtMoney(v?: number) {
 function fmtDay(d?: string) {
   if (!d) return '';
   return d.slice(0, 10);
+}
+
+// 事件明细表：统一渲染（运行中实时 + 完成后全量），提取价格/决策/理由等关键字段
+function EventDetailTable({ events, title }: { events: BtEvent[]; title?: string }) {
+  const rows = events.slice(-120).reverse();
+  return (
+    <div className="tbt-table-wrap">
+      {title && <h4>{title}（{events.length}）</h4>}
+      <div className="tbt-events-scroll">
+        <table className="tbt-table">
+          <thead><tr><th>类型</th><th>交易日</th><th>时间</th><th>标的</th><th>价格</th><th>决策/内容</th></tr></thead>
+          <tbody>
+            {rows.map((ev, i) => {
+              const d = ev.data || {};
+              // API 返回完整事件对象（{type, data:{...}}），兼容平铺/嵌套两种结构
+              const inner = (d.data && typeof d.data === 'object' && d.data.type) ? d.data : d;
+              const trig = inner.trigger || inner.data?.trigger || {};
+              const sym = trig.symbol || inner.symbol || ev.symbol || '';
+              // 价格：按事件类型取触发价/成交价/建议价
+              let price = '';
+              const t = ev.event_type;
+              if (t === 'trade') {
+                const tr = inner.trade || inner.data?.trade || {};
+                price = tr.price != null ? String(tr.price) : (tr.exec_price != null ? String(tr.exec_price) : '');
+              } else if (t === 'review' || t === 'escalated' || t === 'ai_wait') {
+                price = trig.quote_price != null ? String(trig.quote_price) : (trig.trigger_price != null ? String(trig.trigger_price) : '');
+              } else {
+                price = trig.quote_price != null ? String(trig.quote_price) : (trig.trigger_price != null ? String(trig.trigger_price) : '');
+              }
+              // 内容：reason/decision/action/触发摘要
+              let detail = '';
+              if (t === 'review') {
+                const act = inner.action || '—';
+                detail = `${act === 'exec' ? '✅执行' : act === 'wait' ? '⏳等待' : act === 'abandon' ? '⛔放弃' : act}：${inner.reason || ''}`;
+              } else if (t === 'escalated') {
+                detail = `升级人工：${inner.reason || ''}`;
+              } else if (t === 'ai_wait') {
+                detail = `AI等待：${inner.reason || ''}`;
+              } else if (t === 'blocked') {
+                detail = `拦截：${inner.reason || ''}`;
+              } else if (t === 'trade') {
+                const tr = inner.trade || inner.data?.trade || {};
+                detail = `${tr.side === 'buy' ? '买入' : '卖出'} ${tr.volume ?? ''}股 @ ${tr.price ?? ''}${tr.realized_pnl != null ? ` 盈亏${Number(tr.realized_pnl).toFixed(2)}` : ''}`;
+              } else if (t === 'trigger') {
+                detail = `${trig.event_type || ''} 触发价=${trig.trigger_price ?? ''}`;
+              } else {
+                detail = inner.reason || inner.decision || '';
+              }
+              return (
+                <tr key={`${ev.event_type}-${i}`}>
+                  <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
+                  <td>{ev.trade_day || inner.trade_day || ''}</td>
+                  <td>{ev.bar_time || inner.bar_time || ''}</td>
+                  <td>{sym}</td>
+                  <td>{price}</td>
+                  <td className="tbt-cell-reason">{String(detail).slice(0, 160)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 export default function TBacktestPage() {
@@ -518,6 +583,10 @@ export default function TBacktestPage() {
                 </div>
               )}
 
+              {liveEvents.length > 0 && (
+                <EventDetailTable events={liveEvents} title="事件明细（触发/决策/成交/拦截全记录）" />
+              )}
+
               {report.caliber_notes && report.caliber_notes.length > 0 && (
                 <details className="tbt-notes">
                   <summary>口径差异声明（{report.caliber_notes.length} 条）</summary>
@@ -542,29 +611,7 @@ export default function TBacktestPage() {
                     <span className="tbt-progress-pct">{liveProgress}%</span>
                   </div>
                   {liveEvents.length > 0 && (
-                    <div className="tbt-table-wrap">
-                      <h4>实时事件流（{liveEvents.length}）</h4>
-                      <table className="tbt-table">
-                        <thead><tr><th>类型</th><th>交易日</th><th>时间</th><th>内容</th></tr></thead>
-                        <tbody>
-                          {liveEvents.slice(-50).reverse().map((ev, i) => {
-                            const d = ev.data || {};
-                            // API 返回完整事件对象（{type, data:{...}}），兼容平铺/嵌套两种结构
-                            const inner = d.data && typeof d.data === 'object' ? d.data : d;
-                            const trig = inner.trigger || {};
-                            const detail = inner.reason || inner.decision || (trig.event_type ? `触发 ${trig.event_type} @ ${trig.trigger_price}` : '') || JSON.stringify(inner).slice(0, 80);
-                            return (
-                              <tr key={i}>
-                                <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
-                                <td>{ev.trade_day || inner.trade_day || ''}</td>
-                                <td>{ev.bar_time || inner.bar_time || ''}</td>
-                                <td className="tbt-cell-reason">{String(detail)}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                    <EventDetailTable events={liveEvents} title="实时事件流" />
                   )}
                 </div>
               ) : (
