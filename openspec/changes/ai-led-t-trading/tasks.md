@@ -47,6 +47,6 @@
 
 ## 8. 集成与部署
 
-- [ ] 8.1 全量回归：`pytest backend/tests -q`（重点 t_* 套件）
-- [ ] 8.2 服务器部署：compose 重建 backend/worker + dsh（bridge 变更需 `docker cp` 进 dsh-data 卷或重建）；验证 /health、/chat、TMonitor 唤醒链
-- [ ] 8.3 端到端验证：模拟一次条件命中 → AI 决策 → 网关执行 → t_ai_actions 审计落库；收盘复盘入口输出报告
+- [x] 8.1 全量回归：`pytest backend/tests -q`（重点 t_* 套件）
+- [x] 8.2 服务器部署：compose 重建 backend/worker + dsh（bridge 变更需 `docker cp` 进 dsh-data 卷或重建）；验证 /health、/chat、TMonitor 唤醒链
+- [x] 8.3 端到端验证：模拟一次条件命中 → AI 决策 → 网关执行 → t_ai_actions 审计落库；收盘复盘入口输出报告
