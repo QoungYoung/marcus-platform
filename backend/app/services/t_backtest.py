@@ -425,6 +425,7 @@ class TBacktestEngine:
         self.conditions: List[Dict[str, Any]] = task.get("conditions", [])
         self.events: List[Dict[str, Any]] = []   # 触发/复核/拦截/缺口全事件流
         self._pending_buyback: Optional[Dict[str, Any]] = None  # high_sell_then_buy_back 买回挂单
+        self._ai_fills: List[Dict[str, Any]] = []  # AI 决策成交记录（outcome 回填用）
 
     # ── 数据加载（回放期零网络）──
     def _load(self):
@@ -560,6 +561,7 @@ class TBacktestEngine:
                     print(f"[t-backtest] progress_cb 异常: {e}")
 
         # 汇总
+        ai_outcomes = self._compute_fill_outcomes()
         result = {
             "status": "completed",
             "symbol": self.symbol,
@@ -569,11 +571,51 @@ class TBacktestEngine:
             "equity_curve": equity_curve,
             "summary": summary,
             "events": self.events,
+            "ai_outcomes": ai_outcomes,
             "metrics": compute_metrics(ledger, equity_curve, summary,
-                                       init_price=self.init_price, init_shares=self.init_shares),
+                                       init_price=self.init_price, init_shares=self.init_shares,
+                                       ai_outcomes=ai_outcomes),
             "caliber_notes": caliber_notes(),
         }
         return result
+
+    def _compute_fill_outcomes(self) -> List[Dict[str, Any]]:
+        """回测 outcome：对每笔 AI 成交，用该标的全量 m5 计算成交后 6 根 bar 走向（防前视）。"""
+        if not self._ai_fills:
+            return []
+        bars_by_day: Dict[str, List[dict]] = {}
+        for b in self.m5:
+            bars_by_day.setdefault(_day_key(b["time"]), []).append(b)
+        outcomes: List[Dict[str, Any]] = []
+        for f in self._ai_fills:
+            day_bars = bars_by_day.get(f["trade_day"], [])
+            # 定位成交 bar（bar_time 匹配或按时间排序后第一个 ≥ fill 的 bar）
+            start_idx = None
+            for i, b in enumerate(day_bars):
+                if str(b.get("time", "")) >= f["bar_time"]:
+                    start_idx = i
+                    break
+            if start_idx is None or start_idx + 1 >= len(day_bars):
+                continue
+            window = day_bars[start_idx + 1: start_idx + 7]
+            if len(window) < 3:
+                continue
+            entry = f["fill_price"]
+            exit_price = float(window[-1]["close"] or 0)
+            pct = (exit_price - entry) / entry * 100 if entry else 0.0
+            high = max(float(b.get("high") or 0) for b in window)
+            low = min(float(b.get("low") or 0) for b in window)
+            side = f["side"]
+            hit_target = high >= entry * 1.01 if side == "buy" else low <= entry * 0.99
+            hit_stop = low <= entry * 0.985 if side == "buy" else high >= entry * 1.015
+            outcomes.append({
+                "symbol": f["symbol"], "side": side, "fill_price": round(entry, 3),
+                "exit_price": round(exit_price, 3), "bars_after": len(window),
+                "direction": "up" if pct >= 0 else "down", "pct_change": round(pct, 3),
+                "hit_target": bool(hit_target), "hit_stop": bool(hit_stop),
+                "trade_day": f["trade_day"],
+            })
+        return outcomes
 
     # ── 条件护栏（armed/冷却/单日触发上限）──
     def _cond_gate(self, cond: Dict[str, Any], now: datetime,
@@ -691,6 +733,11 @@ class TBacktestEngine:
             "trigger": trigger, "trade": trade, "exec_price": round(exec_price, 3),
             "next_bar": str(next_bar["time"]),
         }})
+        # 记录成交（供 outcome 回填：成交后 6 根 bar 走向，防前视只用成交后）
+        self._ai_fills.append({
+            "symbol": self.symbol, "side": side, "fill_price": exec_price,
+            "trade_day": trade_day, "bar_time": str(next_bar["time"]),
+        })
 
     def _gateway_ctx(self, regime: Dict[str, Any], ledger: TBacktestLedger,
                      quote_price: float) -> Dict[str, Any]:
@@ -788,8 +835,8 @@ def _rule_review(trigger: Dict[str, Any], regime: Dict[str, Any],
 
 def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
                     summary: Dict[str, Any], init_price: float,
-                    init_shares: int) -> Dict[str, Any]:
-    """回测指标：收益/胜率/闭环率/回撤/基准对比/滑点实测。"""
+                    init_shares: int, ai_outcomes: Optional[List[dict]] = None) -> Dict[str, Any]:
+    """回测指标：收益/胜率/闭环率/回撤/基准对比/滑点实测 + AI 决策质量（exec 胜率）。"""
     final_asset = equity_curve[-1]["total_asset"] if equity_curve else ledger.net_asset
     total_return = (final_asset - ledger.net_asset) / ledger.net_asset * 100 if ledger.net_asset else 0.0
     trades = ledger.trades
@@ -807,6 +854,19 @@ def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
         last_close = equity_curve[-1].get("close", 0) or 0
         if last_close > 0:
             bh_return = (last_close - init_price) / init_price * 100
+
+    # AI 决策质量（基于 outcome，方向归一：低吸买涨/高抛卖跌）
+    ai_exec_win = ai_exec_total = 0
+    ai_exec_pcts: List[float] = []
+    if ai_outcomes:
+        for oc in ai_outcomes:
+            side = oc.get("side", "buy")
+            pct = float(oc.get("pct_change") or 0)
+            norm = -pct if side == "sell" else pct
+            ai_exec_total += 1
+            ai_exec_pcts.append(norm)
+            if norm > 0:
+                ai_exec_win += 1
 
     return {
         "total_return_pct": round(total_return, 2),
@@ -826,6 +886,9 @@ def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
         "escalated_human_count": summary.get("escalated_human", 0),
         "ai_wait_count": summary.get("ai_wait", 0),
         "ai_abandon_count": summary.get("ai_abandon", 0),
+        "ai_exec_win_rate_pct": round(ai_exec_win / ai_exec_total * 100, 2) if ai_exec_total else None,
+        "ai_exec_count": ai_exec_total,
+        "ai_exec_avg_pct": round(sum(ai_exec_pcts) / len(ai_exec_pcts), 3) if ai_exec_pcts else None,
         "data_gap_count": summary.get("data_gaps", 0),
         "execution_rate_pct": round(summary.get("executed", 0) / summary.get("triggers", 1) * 100, 2)
         if summary.get("triggers") else 0.0,
@@ -1059,6 +1122,19 @@ class TCombinedBacktestEngine:
         }
 
 
+def _combine_ai_exec_win_rate(per_symbol: List[Dict[str, Any]]) -> Optional[float]:
+    """组合 exec 胜率：按各标的成交数加权（win_rate × count 求和 / count 求和）。"""
+    total_count = sum(r.get("metrics", {}).get("ai_exec_count", 0) or 0 for r in per_symbol)
+    if not total_count:
+        return None
+    weighted = sum(
+        (r.get("metrics", {}).get("ai_exec_win_rate_pct", 0) or 0)
+        * (r.get("metrics", {}).get("ai_exec_count", 0) or 0)
+        for r in per_symbol
+    )
+    return round(weighted / total_count, 2)
+
+
 def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any]],
                      equity_curve: List[dict], net_asset: float) -> Dict[str, Any]:
     """组合指标汇总：总收益/触发与成交/建仓数/胜率（合并全部成交）。"""
@@ -1089,6 +1165,8 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
         "escalated_human_count": escalated,
         "ai_wait_count": ai_wait,
         "ai_abandon_count": ai_abandon,
+        "ai_exec_count": sum(r.get("metrics", {}).get("ai_exec_count", 0) or 0 for r in per_symbol),
+        "ai_exec_win_rate_pct": _combine_ai_exec_win_rate(per_symbol),
         "realized_pnl": round(realized, 2),
         "win_rate_pct": round(win_rate, 2),
         "max_drawdown_pct": round(max_dd, 2),

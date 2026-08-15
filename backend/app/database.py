@@ -649,6 +649,10 @@ def _apply_ai_led_migration():
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_t_ai_actions_session ON t_ai_actions (session_id, created_at)"
             ))
+            # 4) t_ai_actions.outcome — 决策结果回填（成交价/后续走向/实际盈亏，成交后写入）
+            conn.execute(text(
+                "ALTER TABLE t_ai_actions ADD COLUMN IF NOT EXISTS outcome JSONB"
+            ))
             # 2) t_conditions — 发布者与会话（条件即定时器归属）
             conn.execute(text(
                 "ALTER TABLE t_conditions ADD COLUMN IF NOT EXISTS publisher VARCHAR(16) NOT NULL DEFAULT 'rule'"

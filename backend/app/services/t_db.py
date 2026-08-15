@@ -703,20 +703,22 @@ def _to_jsonb(obj: Any) -> Any:
 def insert_ai_action(session_id: Optional[str], trade_date: str, symbol: str,
                      action_type: str, input_snapshot: Optional[dict] = None,
                      output: Optional[dict] = None,
-                     gateway_result: Optional[dict] = None) -> Optional[int]:
-    """写入一条 AI 决策审计（幂等可追溯）。"""
+                     gateway_result: Optional[dict] = None,
+                     outcome: Optional[dict] = None) -> Optional[int]:
+    """写入一条 AI 决策审计（幂等可追溯）。outcome 为成交后回填的结果（可稍后 update）。"""
     try:
         db = SessionLocal()
         try:
             row = db.execute(text(
                 "INSERT INTO t_ai_actions (session_id, trade_date, symbol, action_type, "
-                "input_snapshot, output, gateway_result) "
-                "VALUES (:sid, :td, :sym, :atype, :inp, :out, :gw) RETURNING id"
+                "input_snapshot, output, gateway_result, outcome) "
+                "VALUES (:sid, :td, :sym, :atype, :inp, :out, :gw, :oc) RETURNING id"
             ), {
                 "sid": session_id, "td": trade_date, "sym": symbol, "atype": action_type,
                 "inp": _to_jsonb(input_snapshot or {}),
                 "out": _to_jsonb(output or {}),
                 "gw": _to_jsonb(gateway_result) if gateway_result is not None else None,
+                "oc": _to_jsonb(outcome) if outcome is not None else None,
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -725,6 +727,25 @@ def insert_ai_action(session_id: Optional[str], trade_date: str, symbol: str,
     except Exception as e:
         print(f"[t-db] insert_ai_action 失败: {e}")
         return None
+
+
+def update_ai_action_outcome(action_id: Optional[int], outcome: Dict[str, Any]) -> bool:
+    """回填决策结果（成交后）：outcome JSONB。"""
+    if not action_id:
+        return False
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "UPDATE t_ai_actions SET outcome = :oc WHERE id = :id"
+            ), {"oc": _to_jsonb(outcome), "id": action_id})
+            db.commit()
+            return True
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-db] update_ai_action_outcome 失败: {e}")
+        return False
 
 
 def list_ai_actions(trade_date: Optional[str] = None, symbol: Optional[str] = None,
@@ -748,7 +769,7 @@ def list_ai_actions(trade_date: Optional[str] = None, symbol: Optional[str] = No
             for r in rows:
                 import json as _json
                 d = dict(r)
-                for k in ("input_snapshot", "output", "gateway_result"):
+                for k in ("input_snapshot", "output", "gateway_result", "outcome"):
                     v = d.get(k)
                     if isinstance(v, str):
                         try:

@@ -940,6 +940,15 @@ SIGNAL: <green|yellow|red> REASON:<一句话核心判断>
 - `get_stock_moneyflow` 资金流向（主力动向）
 - `get_market_state` 大盘环境（regime 判断）
 
+### 决策参考历史结果（反馈闭环）
+
+唤醒上下文的 `recent_decisions` 含该标的最近决策**及成交结果（outcome）**，`symbol_t_stats`
+含该标的做T历史统计（exec 胜率/abandon 正确率/低吸后走向）。**必须参考**：
+- 若 exec 历史胜率低或该价位低吸后多次下跌 → 保守（wait/abandon）
+- 若放弃后多次继续跌 → 你的 abandon 判断正确，坚持；反之错杀则考虑执行
+- 决策 checklist：① 价差盈亏比（触发价 vs 现价 vs 目标价是否覆盖成本）② 弹药（可卖底仓/浮盈浮亏，
+  接近 -3% 止损优先保守）③ 历史模式（上）④ 连续命中（告警则调整/冷却）
+
 ### 建仓工作流（选股 → 建仓 → 衔接 → 再平衡）
 
 1. **选股**：调 `scan_t_candidates` 扫描候选短名单（可T质量打分 + 趋势闸门 + 风险惩罚），

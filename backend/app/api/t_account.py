@@ -262,11 +262,14 @@ def t_build_scan_results(trade_date: Optional[str] = None):
 
 @router.get("/ai/actions")
 def t_ai_actions(trade_date: Optional[str] = None, symbol: Optional[str] = None, limit: int = 50):
-    """AI 主导做T决策审计列表（t_ai_actions）。"""
+    """AI 主导做T决策审计列表（t_ai_actions）+ 决策质量聚合。"""
     from app.services import t_db
+    from app.services.t_ai_agent import decision_quality
     actions = t_db.list_ai_actions(trade_date=trade_date or None,
                                    symbol=symbol or None, limit=limit)
-    return {"actions": actions, "count": len(actions)}
+    quality = decision_quality(symbol=symbol or None, trade_date=trade_date or None,
+                               actions=actions)
+    return {"actions": actions, "count": len(actions), "quality": quality}
 
 
 # ────────────────────────────────────────────────────────────────

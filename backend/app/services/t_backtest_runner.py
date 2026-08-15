@@ -513,11 +513,47 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
             save_equity(task_id, curve[live["equity"]:])
         save_metrics(task_id, result.get("metrics", {}), result.get("caliber_notes", []))
 
+    # 回测 AI 决策审计 + outcome 落库（供决策质量统计：exec 胜率/abandon 正确率）
+    _persist_backtest_ai_outcomes(task_id, result, is_combined)
+
     if result.get("status") == "completed":
         update_task_status(task_id, "completed", progress=100, error_message="")
     else:
         update_task_status(task_id, "failed", error_message=result.get("error"))
     return result
+
+
+def _persist_backtest_ai_outcomes(task_id: int, result: Dict[str, Any], is_combined: bool):
+    """把回测 AI 决策的成交结果（ai_outcomes）写入 t_ai_actions（ai_exec + outcome）。
+
+    回测 review 事件里 action=exec 的触发即 AI 决策成交；outcome 来自引擎 _compute_fill_outcomes。
+    用于 exec 胜率/abandon 正确率统计（与实盘同口径）。
+    """
+    try:
+        from datetime import date
+        from app.services import t_db
+        outcomes = []
+        if is_combined:
+            for r in result.get("per_symbol", []):
+                outcomes.extend(r.get("ai_outcomes", []))
+        else:
+            outcomes = result.get("ai_outcomes", [])
+        if not outcomes:
+            return
+        td = date.today().strftime("%Y-%m-%d")
+        # 回测事件流中 action=exec 的 review → 关联 outcome（按 symbol+fill 时间顺序）
+        for oc in outcomes:
+            sym = oc.get("symbol", "")
+            t_db.insert_ai_action(
+                session_id=f"t-backtest-{task_id}", trade_date=td, symbol=sym,
+                action_type="ai_exec",
+                input_snapshot={"source": "backtest", "task_id": task_id},
+                output={"reason": "回测 AI 决策成交", "side": oc.get("side")},
+                gateway_result={"status": "success", "price": oc.get("fill_price")},
+                outcome=oc,
+            )
+    except Exception as e:
+        print(f"[t-backtest] 回测 outcome 落库失败: {e}")
 
 
 # ────────────────────────────────────────────────────────────────

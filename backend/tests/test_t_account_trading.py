@@ -532,6 +532,76 @@ class TAiLedTest(_PGTestCase):
         self.assertEqual(r["status"], "wake_failed")
         self.assertEqual(t_db.list_ai_actions(symbol="600519"), [])
 
+    def test_wake_payload_has_historical_context(self):
+        """唤醒 payload 含历史决策结果与标的做T统计（反馈闭环上下文）。"""
+        from app.services import t_bridge, t_db
+        # 预置一条带 outcome 的 exec 决策
+        t_db.insert_ai_action("t-agent-600519", "2026-08-15", "600519", "ai_exec",
+                              output={"reason": "回踩"}, gateway_result={"status": "success"},
+                              outcome={"side": "buy", "pct_change": 0.85})
+        fake_resp = json.dumps({"reply": "ok"}).encode("utf-8")
+        with patch("app.services.t_bridge.urllib.request.urlopen") as m_open:
+            m_open.return_value.__enter__.return_value.read.return_value = fake_resp
+            with patch("app.services.t_bridge._bridge_url", return_value="http://x/chat"):
+                t_bridge.wake_agent(
+                    {"id": 1, "symbol": "600519", "event_type": "low_buy",
+                     "trigger_price": 100, "quote_price": 99.5,
+                     "suggest_bid_price": 99.4, "suggest_ask_price": 99.6,
+                     "condition_id": 1})
+            req = m_open.call_args[0][0]
+            body = json.loads(req.data.decode())
+            message = body.get("message", "")
+        self.assertIn("历史决策参考", message)
+        self.assertIn("做T历史统计", message)
+        self.assertIn("决策 checklist", message)
+        self.assertIn("✅", message)  # outcome 摘要 ✅+0.85%
+
+    def test_record_outcome_backfills(self):
+        """outcome 回填：mock 后续 bar → 未回填的 exec 成交记录获得 outcome（方向归一）。"""
+        from app.services import t_ai_agent, t_db
+        aid = t_db.insert_ai_action("t-oc", "2026-08-15", "SH600000", "ai_exec",
+                                    input_snapshot={"trigger": {"suggest_bid_price": 10.0}},
+                                    output={"side": "buy"},
+                                    gateway_result={"status": "success", "price": 10.0})
+        fake_bars = [{"time": f"2026-08-15 10:{m:02d}:00", "open": 10.0, "close": 10.05,
+                      "high": 10.1, "low": 9.99} for m in range(5, 35, 5)]
+        with patch("app.services.t_data_sources.fetch_tencent_mkline", return_value=fake_bars):
+            r = t_ai_agent.record_outcome(symbol="SH600000", trade_date="2026-08-15")
+        self.assertGreaterEqual(r["filled"], 1)
+        acts = t_db.list_ai_actions(symbol="SH600000")
+        oc = acts[0].get("outcome") or {}
+        self.assertEqual(oc.get("kind"), "exec")
+        self.assertGreater(oc.get("pct_change", 0), 0)  # 买涨 → 正
+        self.assertEqual(oc.get("direction"), "up")
+
+    def test_decision_quality_metrics(self):
+        """决策质量统计：exec 胜率（方向归一）、abandon 正确率、wait 转化。"""
+        from app.services import t_ai_agent, t_db
+        # exec: 低吸买 2 笔（+1% 赢 / -2% 输），高抛卖 1 笔（后续跌 +1.5% 归一后赢）
+        t_db.insert_ai_action("t-q", "2026-08-15", "SH600000", "ai_exec",
+                              output={"reason": "a"}, gateway_result={"status": "success"},
+                              outcome={"side": "buy", "pct_change": 1.0})
+        t_db.insert_ai_action("t-q", "2026-08-15", "SH600000", "ai_exec",
+                              output={"reason": "b"}, gateway_result={"status": "success"},
+                              outcome={"side": "buy", "pct_change": -2.0})
+        t_db.insert_ai_action("t-q", "2026-08-15", "SH600000", "ai_exec",
+                              output={"reason": "c"}, gateway_result={"status": "success"},
+                              outcome={"side": "sell", "pct_change": -1.5})  # 高抛后续跌 → 归一 +1.5 赢
+        # abandon: 低吸放弃后继续跌 = 正确；高抛放弃后继续跌 = 错杀
+        t_db.insert_ai_action("t-q", "2026-08-15", "SH600000", "ai_abandon",
+                              output={"reason": "d"}, outcome={"side": "buy", "pct_change": -0.8})
+        t_db.insert_ai_action("t-q", "2026-08-15", "SH600000", "ai_abandon",
+                              output={"reason": "e"}, outcome={"side": "sell", "pct_change": -1.2})
+        # wait: SH600000 先 wait 后有 exec → 转化
+        t_db.insert_ai_action("t-q", "2026-08-15", "SH600000", "ai_wait", output={"reason": "f"})
+        q = t_ai_agent.decision_quality(symbol="SH600000")
+        self.assertEqual(q["exec"]["count"], 3)
+        self.assertEqual(q["exec"]["win"], 2)   # +1 赢, -2 输, sell 归一 +1.5 赢
+        self.assertEqual(q["exec_win_rate_pct"], 66.67)
+        self.assertEqual(q["abandon"]["correct"], 1)  # buy 放弃后续跌 = 正确
+        self.assertEqual(q["abandon_correct_rate_pct"], 50.0)
+        self.assertEqual(q["wait_to_exec_rate_pct"], 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()

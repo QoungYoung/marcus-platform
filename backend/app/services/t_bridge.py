@@ -51,12 +51,41 @@ def _position_summary(symbol: str) -> Dict[str, Any]:
         return {"symbol": symbol, "error": str(e)[:100]}
 
 
-def _recent_decisions(symbol: str, limit: int = 3) -> List[Dict[str, Any]]:
-    """最近 N 次 AI 决策（t_ai_actions 倒序），唤醒上下文供 AI 判断"连续未实质改善"。"""
+def _recent_decisions(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """最近 N 次 AI 决策（t_ai_actions 倒序，含 outcome 结果摘要），唤醒上下文供 AI 参考历史判断。"""
     try:
         return t_db.list_ai_actions(symbol=symbol, limit=limit)
     except Exception:
         return []
+
+
+def _symbol_t_stats(symbol: str) -> Dict[str, Any]:
+    """该标的做T历史统计（供 AI 决策参考）：低吸触发后走向、exec 胜率、abandon 正确率。"""
+    try:
+        from app.services.t_ai_agent import decision_quality
+        q = decision_quality(symbol=symbol)
+        return {
+            "total_decisions": q.get("total", 0),
+            "exec_count": q.get("exec", {}).get("count", 0),
+            "exec_win_rate_pct": q.get("exec_win_rate_pct"),
+            "exec_avg_pct": q.get("exec", {}).get("avg_pct"),
+            "abandon_count": q.get("abandon", {}).get("count", 0),
+            "abandon_correct_rate_pct": q.get("abandon_correct_rate_pct"),
+            "wait_count": q.get("wait", {}).get("count", 0),
+            "wait_to_exec_rate_pct": q.get("wait_to_exec_rate_pct"),
+        }
+    except Exception as e:
+        return {"error": str(e)[:100]}
+
+
+def _outcome_summary(oc: Dict[str, Any]) -> str:
+    """outcome 摘要（供唤醒上下文展示）：✅+0.85% / ⛔-1.5%。"""
+    try:
+        pct = float(oc.get("pct_change") or 0)
+        direction = "✅" if pct > 0 else "⛔"
+        return f"{direction}{pct:+.2f}%"
+    except (TypeError, ValueError):
+        return ""
 
 
 def _consecutive_hits(condition_id: Optional[int], symbol: str) -> int:
@@ -96,9 +125,10 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     """
     symbol = trigger.get("symbol", "")
     ctx = dict(context or {})
-    # 增强上下文：持仓摘要 + 最近决策 + 连续命中计数（供 AI 判断"连续未实质改善"）
+    # 增强上下文：持仓摘要 + 最近决策（含结果） + 标的做T历史统计 + 连续命中计数
     ctx.setdefault("position", _position_summary(symbol))
     ctx.setdefault("recent_decisions", _recent_decisions(symbol))
+    ctx.setdefault("symbol_t_stats", _symbol_t_stats(symbol))
     consec = _consecutive_hits(trigger.get("condition_id"), symbol)
     ctx["consecutive_hits"] = consec
     hit_alert = consec >= AI_CONSECUTIVE_HIT_ALERT
@@ -121,7 +151,33 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"如需更多数据可自主调用查询工具（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标"
         f"/ get_intraday_minute 分钟K线 / get_portfolio_positions 持仓 / get_stock_moneyflow 资金流"
         f"/ get_market_state 大盘），不必只依赖本快照。"
-        f"上下文: {json.dumps(ctx, ensure_ascii=False, default=str)[:800]}"
+    )
+    # 历史模式段：最近决策结果 + 标的做T统计（决策 checklist 依据）
+    recents = ctx.get("recent_decisions") or []
+    if recents:
+        lines = ["【历史决策参考（最近 " + str(len(recents)) + " 次，含结果）】"]
+        for r in recents[:5]:
+            at = r.get("action_type", "")
+            oc = r.get("outcome") or {}
+            oc_sum = _outcome_summary(oc) if oc else "（无结果）"
+            rs = ((r.get("output") or {}).get("reason") or "")[:60]
+            lines.append(f"- {at} {oc_sum} {rs}")
+        msg += "\n".join(lines) + "\n"
+    st = ctx.get("symbol_t_stats") or {}
+    if st and st.get("total_decisions"):
+        msg += (
+            f"【{symbol} 做T历史统计】决策 {st.get('total_decisions')} 次 | "
+            f"exec {st.get('exec_count')} 次 胜率 {st.get('exec_win_rate_pct')}% "
+            f"均幅 {st.get('exec_avg_pct')}% | "
+            f"abandon {st.get('abandon_count')} 次 正确率 {st.get('abandon_correct_rate_pct')}% | "
+            f"wait {st.get('wait_count')} 次 转exec {st.get('wait_to_exec_rate_pct')}%\n"
+        )
+    msg += (
+        "【决策 checklist】① 价差盈亏比：触发价 vs 现价 vs 目标价空间是否足够覆盖成本；"
+        "② 弹药：可卖底仓与浮盈浮亏（亏损接近-3%止损则优先保守）；"
+        "③ 历史模式：该标的低吸后历史走向/exec 胜率（如上）；"
+        "④ 连续命中：是否已达告警阈值需调整条件。"
+        f"上下文: {json.dumps(ctx, ensure_ascii=False, default=str)[:1000]}"
     )
     payload = {
         "message": msg,

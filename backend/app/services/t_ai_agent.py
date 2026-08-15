@@ -242,6 +242,11 @@ def ai_daily_review(session_id: Optional[str] = None, trade_date: Optional[str] 
     wake_fn: 唤醒回调（默认 None 时仅汇总，不实际唤醒——由调用方注入 bridge 唤醒）。
     """
     td = trade_date or _today()
+    # 先回填当日 AI exec 成交的 outcome（收盘统一评估后续行情）
+    try:
+        record_outcome(trade_date=td)
+    except Exception as e:
+        print(f"[t-ai-agent] 收盘 outcome 回填失败: {e}")
     actions = t_db.list_ai_actions(trade_date=td, limit=500)
     if not actions:
         return {"status": "no_actions", "trade_date": td, "summary": {}}
@@ -306,6 +311,194 @@ def _build_review_brief(actions: List[Dict[str, Any]]) -> str:
         ts = str(a.get("created_at") or "")[:19]
         lines.append(f"- [{ts}] {sym} {at} | {reason}")
     return "\n".join(lines)
+
+
+# ────────────────────────────────────────────────────────────────
+# 决策质量统计（exec 胜率 / abandon 正确率 / wait 转化）
+# ────────────────────────────────────────────────────────────────
+
+def _direction_normalized(oc: Dict[str, Any], side: Optional[str] = None) -> Optional[float]:
+    """方向归一：低吸/买（side='buy'）看后续涨为正、高抛/卖看后续跌为正。
+
+    返回归一后的 pct_change（>0 = 决策正确方向）；无法判断返回 None。
+    """
+    try:
+        pct = float(oc.get("pct_change") or 0)
+    except (TypeError, ValueError):
+        return None
+    side = side or oc.get("side")
+    if side == "sell":
+        return -pct  # 高抛：后续跌为正
+    return pct      # 低吸/买/未知：后续涨为正
+
+
+def decision_quality(symbol: Optional[str] = None, trade_date: Optional[str] = None,
+                     actions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """AI 决策质量指标：exec 胜率、abandon 正确率、wait 转化、分布与平均盈亏。
+
+    基于已回填 outcome 的记录统计（方向归一：低吸买涨/高抛卖跌）。
+    """
+    if actions is None:
+        actions = t_db.list_ai_actions(trade_date=trade_date or None,
+                                       symbol=symbol or None, limit=1000)
+    stats: Dict[str, Any] = {
+        "total": len(actions),
+        "exec": {"count": 0, "win": 0, "loss": 0, "avg_pct": 0.0},
+        "wait": {"count": 0, "to_exec": 0},
+        "abandon": {"count": 0, "correct": 0, "wrong": 0},
+        "update_condition": 0, "build": 0,
+        "exec_win_rate_pct": None, "abandon_correct_rate_pct": None,
+        "wait_to_exec_rate_pct": None,
+    }
+    exec_pcts: List[float] = []
+    # wait 后同标的后续是否转 exec（简化：wait 记录 + 该标的后续存在 exec）
+    wait_syms: Dict[str, bool] = {}
+    exec_syms: set = set()
+
+    for a in actions:
+        at = a.get("action_type", "")
+        sym = a.get("symbol") or ""
+        oc = a.get("outcome") or {}
+        if at == "ai_exec":
+            stats["exec"]["count"] += 1
+            exec_syms.add(sym)
+            norm = _direction_normalized(oc)
+            if norm is None:
+                continue
+            exec_pcts.append(norm)
+            if norm > 0:
+                stats["exec"]["win"] += 1
+            else:
+                stats["exec"]["loss"] += 1
+        elif at == "ai_wait":
+            stats["wait"]["count"] += 1
+            wait_syms[sym] = True
+        elif at == "ai_abandon":
+            stats["abandon"]["count"] += 1
+            norm = _direction_normalized(oc)
+            if norm is None:
+                continue
+            # 放弃正确 = 后续走向对"不做"有利（低吸放弃后继续跌 = 正确）
+            if norm < 0:
+                stats["abandon"]["correct"] += 1
+            else:
+                stats["abandon"]["wrong"] += 1
+        elif at == "ai_update_condition":
+            stats["update_condition"] += 1
+        elif at == "ai_build":
+            stats["build"] += 1
+
+    if exec_pcts:
+        stats["exec"]["avg_pct"] = round(sum(exec_pcts) / len(exec_pcts), 3)
+        stats["exec_win_rate_pct"] = round(
+            stats["exec"]["win"] / stats["exec"]["count"] * 100, 2) if stats["exec"]["count"] else None
+    ab_total = stats["abandon"]["correct"] + stats["abandon"]["wrong"]
+    if ab_total:
+        stats["abandon_correct_rate_pct"] = round(
+            stats["abandon"]["correct"] / ab_total * 100, 2)
+    # wait 转化：wait 出现的标的后续有 exec（简化近似）
+    if wait_syms:
+        to_exec = sum(1 for s in wait_syms if s in exec_syms)
+        stats["wait"]["to_exec"] = to_exec
+        stats["wait_to_exec_rate_pct"] = round(to_exec / len(wait_syms) * 100, 2)
+    return stats
+
+
+# ────────────────────────────────────────────────────────────────
+# outcome 回填（成交后评估后续行情，实盘收盘统一执行）
+# ────────────────────────────────────────────────────────────────
+
+def _assess_outcome(symbol: str, side: str, fill_price: float,
+                    trade_day: Optional[str] = None,
+                    lookahead_bars: int = 6) -> Optional[Dict[str, Any]]:
+    """成交后评估：拉该标的当日 m5，统计成交后 lookahead_bars 根的实际走向。
+
+    返回 outcome dict（防前视：只用成交 bar 之后的 bar）；数据不足返回 None。
+    """
+    try:
+        from datetime import datetime, timedelta
+        from app.services import t_data_sources as _tds
+        day = trade_day or date.today().strftime("%Y-%m-%d")
+        bars = _tds.fetch_tencent_mkline(_tds._normalize_symbol(symbol), freq="m5", count=320) or []
+        # 过滤当日 bar，定位成交时刻之后
+        day_bars = [b for b in bars if str(b.get("time", ""))[:10] == day]
+        if not day_bars:
+            return None
+        # 找成交价附近第一根 bar（成交 bar 之后；容差 ±1.5% 吸收撮合价差）
+        start_idx = None
+        for i, b in enumerate(day_bars):
+            try:
+                if float(b.get("close") or 0) <= fill_price * 1.015 and \
+                   float(b.get("close") or 0) >= fill_price * 0.985:
+                    start_idx = i
+                    break
+            except (TypeError, ValueError):
+                continue
+        if start_idx is None:
+            # 未精确匹配：取当日最后一根之前（保守：从倒数 lookahead 根起算不可靠 → 返回 None）
+            return None
+        window = day_bars[start_idx + 1: start_idx + 1 + lookahead_bars]
+        if len(window) < 3:
+            return None
+        entry = fill_price
+        exit_price = float(window[-1]["close"] or 0)
+        pct = (exit_price - entry) / entry * 100 if entry else 0.0
+        high = max(float(b.get("high") or 0) for b in window)
+        low = min(float(b.get("low") or 0) for b in window)
+        # 目标/止损近似：低吸目标 = 成交价×1.01，止损 = 成交价×0.985
+        hit_target = high >= entry * 1.01 if side == "buy" else low <= entry * 0.99
+        hit_stop = low <= entry * 0.985 if side == "buy" else high >= entry * 1.015
+        return {
+            "kind": "exec", "side": side, "fill_price": round(entry, 3),
+            "exit_price": round(exit_price, 3), "bars_after": len(window),
+            "direction": "up" if pct >= 0 else "down",
+            "pct_change": round(pct, 3), "hit_target": bool(hit_target),
+            "hit_stop": bool(hit_stop), "assessed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    except Exception as e:
+        print(f"[t-ai-agent] outcome 评估失败 {symbol}: {str(e)[:120]}")
+        return None
+
+
+def record_outcome(symbol: Optional[str] = None, trade_date: Optional[str] = None) -> Dict[str, Any]:
+    """回填 AI exec 成交记录的 outcome（当日未回填的 ai_exec 且网关成功）。
+
+    由收盘复盘（ai_daily_review）统一调用；也可按标的单独触发。
+    """
+    td = trade_date or _today()
+    actions = t_db.list_ai_actions(trade_date=td, symbol=symbol or None, limit=500)
+    filled = 0
+    skipped = 0
+    for a in actions:
+        if a.get("action_type") != "ai_exec":
+            continue
+        if a.get("outcome"):
+            continue  # 已回填
+        gw = a.get("gateway_result") or {}
+        if gw.get("status") != "success":
+            skipped += 1
+            continue
+        sym = a.get("symbol") or ""
+        # 成交价：gateway_result 或 input_snapshot 中取
+        fill_price = float(gw.get("price") or 0)
+        if fill_price <= 0:
+            inp = a.get("input_snapshot") or {}
+            trig = (inp.get("trigger") or {}).get("suggest_bid_price") \
+                or (inp.get("trigger") or {}).get("suggest_ask_price") or 0
+            fill_price = float(trig or 0)
+        if fill_price <= 0:
+            skipped += 1
+            continue
+        out = a.get("output") or {}
+        side = "sell" if str(out.get("side") or "") == "sell" else "buy"
+        oc = _assess_outcome(sym, side, fill_price, trade_day=td)
+        if oc is None:
+            skipped += 1
+            continue
+        t_db.update_ai_action_outcome(a.get("id"), oc)
+        filled += 1
+    print(f"[t-ai-agent] outcome 回填: {filled} 条完成, {skipped} 条跳过（{td}）")
+    return {"filled": filled, "skipped": skipped, "trade_date": td}
 
 
 # ────────────────────────────────────────────────────────────────

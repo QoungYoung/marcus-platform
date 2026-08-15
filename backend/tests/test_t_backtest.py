@@ -224,6 +224,26 @@ class TestEngineCore(unittest.TestCase):
         reviews = [e for e in r["events"] if e.get("type") == "review"]
         self.assertTrue(all(e["data"].get("action") == "exec" for e in reviews))
 
+    def test_ai_outcomes_computed_after_fill(self):
+        """回测 outcome：成交后计算（防前视：只用成交 bar 之后），exec 胜率入 metrics。"""
+        from app.services.t_backtest import TBacktestEngine
+
+        def review_fn(rev_ctx):
+            return {"action": "exec", "reason": "回踩到位"}
+
+        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
+        outcomes = r.get("ai_outcomes", [])
+        self.assertGreater(len(outcomes), 0, "成交后应有 outcome")
+        oc = outcomes[0]
+        # 防前视：outcome 只用成交后的 bar（bars_after ≥ 3）
+        self.assertGreaterEqual(oc.get("bars_after", 0), 3)
+        self.assertIn(oc.get("direction"), ("up", "down"))
+        self.assertIn("pct_change", oc)
+        self.assertIn("fill_price", oc)
+        # metrics 含 exec 胜率（值可为 None 若方向归一后无正负，但 count>0）
+        self.assertGreater(r["metrics"].get("ai_exec_count", 0), 0)
+        self.assertIn("ai_exec_win_rate_pct", r["metrics"])
+
     def test_ai_review_action_wait(self):
         """AI 决策 wait → 记事件不撮合，ai_wait_count 计数。"""
         from app.services.t_backtest import TBacktestEngine
