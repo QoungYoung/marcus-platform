@@ -37,6 +37,8 @@ INDEX_TS_CODES = {
 M5_FREQ = "5min"
 _RETRIES = 3
 _SLEEP_S = 3.0
+# brze index_min 已知无权限（探针验证）——跳过指数 m5 预取，regime 走日线收盘口径（见 t_backtest.caliber_notes）
+SKIP_INDEX_M5 = True
 
 
 # ────────────────────────────────────────────────────────────────
@@ -320,6 +322,60 @@ def load_index_daily(ts_code: str, cache_dir: Path) -> List[dict]:
         except (ValueError, OSError):
             return []
     return []
+
+
+# ────────────────────────────────────────────────────────────────
+# 标的日线（建仓规则 as_of 用，tushare daily）
+# ────────────────────────────────────────────────────────────────
+
+def prefetch_stock_daily(symbols: List[str], start_date: str, end_date: str,
+                         cache_dir: Path) -> Dict[str, Any]:
+    """预取标的日线（tushare daily，跨日单次调用）。落 stock_daily/{symbol}.json。"""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    result: Dict[str, Any] = {}
+    gaps: List[Dict[str, Any]] = []
+    for sym in symbols:
+        try:
+            from app.core.trading._api_config import get_tushare_pro
+            _brze_rate_limit()
+            pro = get_tushare_pro()
+            df = pro.daily(
+                ts_code=_to_ts_code(sym),
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+            )
+            if df is None or len(df) == 0:
+                gaps.append({"type": "stock_daily", "key": sym, "trade_date": "", "reason": "无数据"})
+                continue
+            bars = [{
+                "trade_date": str(r["trade_date"]),
+                "open": float(r["open"]), "close": float(r["close"]),
+                "high": float(r["high"]), "low": float(r["low"]),
+                "vol": float(r.get("vol", 0) or 0), "amount": float(r.get("amount", 0) or 0),
+            } for _, r in df.iterrows()]
+            bars.sort(key=lambda b: b["trade_date"])
+            result[sym] = bars
+            out = cache_dir / "stock_daily" / f"{sym}.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(bars, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            print(f"[t-backtest-data] 标的日线失败 {sym}: {str(e)[:120]}")
+            gaps.append({"type": "stock_daily", "key": sym, "trade_date": "", "reason": str(e)[:100]})
+    return {"fetched": len(result), "gaps": gaps}
+
+
+def load_stock_daily(symbol: str, cache_dir: Path, as_of: Optional[str] = None) -> List[dict]:
+    """读取标的日线缓存（升序）。as_of（YYYYMMDD）时只返回 trade_date ≤ as_of 的数据（防前视）。"""
+    p = cache_dir / "stock_daily" / f"{symbol}.json"
+    if not p.exists():
+        return []
+    try:
+        bars = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    if as_of:
+        bars = [b for b in bars if str(b["trade_date"]).replace("-", "") <= as_of.replace("-", "")]
+    return bars
 
 
 def write_gaps(cache_dir: Path, gaps: List[Dict[str, Any]]):

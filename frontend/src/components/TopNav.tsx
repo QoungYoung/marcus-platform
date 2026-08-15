@@ -21,6 +21,7 @@ const navItems = [
   { path: '/industry-leaderboard', labelKey: 'nav.leaderboard', icon: Crown },
   { path: '/golden-pit', labelKey: 'nav.goldenPit', icon: Gem },
   { path: '/t-account', labelKey: 'nav.tAccount', icon: RefreshCcw },
+  { path: '/t-backtest', labelKey: 'nav.tBacktest', icon: PieChart },
 ];
 
 export default function TopNav() {

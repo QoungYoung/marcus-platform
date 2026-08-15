@@ -29,8 +29,9 @@ DATA_ROOT = Path("data/t_backtest")
 def create_task(symbol: str, start_date: str, end_date: str,
                 conditions: List[Dict[str, Any]], init_shares: int = 1000,
                 init_price: Optional[float] = None, net_asset: float = 200000.0,
-                review_mode: str = "llm") -> Optional[int]:
-    """创建回测任务（status=pending）。"""
+                review_mode: str = "llm", symbols: Optional[List[str]] = None,
+                build_mode: bool = False, build_limit_ratio: float = 0.55) -> Optional[int]:
+    """创建回测任务（status=pending）。组合模式：symbols 列表 + build_mode。"""
     try:
         db = SessionLocal()
         try:
@@ -38,8 +39,10 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 """
                 INSERT INTO t_backtest_tasks (
                     symbol, start_date, end_date, init_shares, init_price,
-                    net_asset, review_mode, conditions_json
-                ) VALUES (:symbol, :start, :end, :shares, :price, :asset, :mode, :conds)
+                    net_asset, review_mode, conditions_json, symbols_json,
+                    build_mode, build_limit_ratio
+                ) VALUES (:symbol, :start, :end, :shares, :price, :asset, :mode, :conds,
+                          :symbols, :build_mode, :build_limit)
                 RETURNING id
                 """
             ), {
@@ -47,6 +50,8 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 "shares": init_shares, "price": init_price,
                 "asset": net_asset, "mode": review_mode,
                 "conds": json.dumps(conditions, ensure_ascii=False),
+                "symbols": json.dumps(symbols or [], ensure_ascii=False),
+                "build_mode": bool(build_mode), "build_limit": float(build_limit_ratio),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -309,7 +314,7 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
 # ────────────────────────────────────────────────────────────────
 
 def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]:
-    """执行一个回测任务：预取 → 回放 → 落库。返回任务结果。"""
+    """执行一个回测任务：预取 → 回放（单标的或组合）→ 落库。返回任务结果。"""
     task = get_task(task_id)
     if not task:
         return {"status": "failed", "error": "任务不存在"}
@@ -318,22 +323,48 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         conditions = json.loads(task.get("conditions_json") or "[]")
     except (ValueError, TypeError):
         conditions = []
+    try:
+        symbols = json.loads(task.get("symbols_json") or "[]")
+    except (ValueError, TypeError):
+        symbols = []
+    build_mode = bool(task.get("build_mode", False))
+    build_limit_ratio = float(task.get("build_limit_ratio") or 0.55)
 
     task_dir = DATA_ROOT / f"task_{task_id}"
     symbol = task["symbol"]
     start = task.get("start_date") or ""
     end = task.get("end_date") or ""
 
+    # 组合模式：候选列表 = symbols 或 做T候选池
+    is_combined = bool(build_mode) or (len(symbols) > 0 and symbol in ("", "combined"))
+    if is_combined and not symbols:
+        try:
+            from app.services.t_build import scan_t_candidates
+            cands = scan_t_candidates(limit=10, source="pool")
+            symbols = [c.get("symbol") for c in cands if c.get("symbol")]
+            if not symbols:
+                update_task_status(task_id, "failed", error_message="候选池为空")
+                return {"status": "failed", "error": "候选池为空"}
+        except Exception as e:
+            print(f"[t-backtest] 候选池获取失败: {e}")
+    if is_combined:
+        symbol = "combined"
+
     # 1) 预取（幂等续拉）
     try:
         from app.services import t_backtest_data as btd
         days = btd.resolve_trade_days(start, end)
         gaps = []
-        s = btd.prefetch_m5(symbol, days, task_dir, is_index=False)
-        gaps.extend(s.get("gaps", []))
-        for key, ts in (("hs300", "000300.SH"), ("sh", "000001.SH"), ("sz", "399001.SZ")):
-            r = btd.prefetch_m5(key, days, task_dir, is_index=True, ts_code=ts)
+        syms = symbols if is_combined else [symbol]
+        for s in syms:
+            r = btd.prefetch_m5(s, days, task_dir, is_index=False)
             gaps.extend(r.get("gaps", []))
+            d = btd.prefetch_stock_daily([s], start, end, task_dir)
+            gaps.extend(d.get("gaps", []))
+        if not btd.SKIP_INDEX_M5:
+            for key, ts in (("hs300", "000300.SH"), ("sh", "000001.SH"), ("sz", "399001.SZ")):
+                r = btd.prefetch_m5(key, days, task_dir, is_index=True, ts_code=ts)
+                gaps.extend(r.get("gaps", []))
         d = btd.prefetch_index_daily(list(btd.INDEX_TS_CODES.values()), start, end, task_dir)
         gaps.extend(d.get("gaps", []))
         btd.write_gaps(task_dir, gaps)
@@ -346,23 +377,43 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     update_task_status(task_id, "running")
     task["conditions"] = conditions
     task["review_mode"] = task.get("review_mode", "llm")
+    task["symbols"] = symbols
+    task["build_mode"] = build_mode
+    task["build_limit_ratio"] = build_limit_ratio
     review_fn = build_review_fn(task)
     if review_fn is None and task.get("review_mode", "llm") == "llm":
         print(f"[t-backtest] ⚠️ LLM 复核不可用（bridge 未就绪），任务 #{task_id} 降级规则模式")
 
-    engine = TBacktestEngine(task, str(task_dir), review_fn=review_fn)
     try:
-        result = engine.run(cancel_event)
+        if is_combined:
+            from app.services.t_backtest import TCombinedBacktestEngine
+            engine = TCombinedBacktestEngine(task, str(task_dir), review_fn=review_fn)
+            result = engine.run(cancel_event)
+        else:
+            from app.services.t_backtest import TBacktestEngine
+            engine = TBacktestEngine(task, str(task_dir), review_fn=review_fn)
+            result = engine.run(cancel_event)
     except Exception as e:
         print(f"[t-backtest] 回放失败 #{task_id}: {e}")
         update_task_status(task_id, "failed", error_message=f"回放异常: {e}")
         return {"status": "failed", "error": str(e)}
 
-    # 3) 落库
-    save_events(task_id, result.get("events", []))
-    save_trades(task_id, result.get("ledger", {}).get("trades", []))
-    save_equity(task_id, result.get("equity_curve", []))
-    save_metrics(task_id, result.get("metrics", {}), result.get("caliber_notes", []))
+    # 3) 落库（组合模式：聚合各标的 events/trades/equity）
+    if is_combined:
+        all_events: List[Dict[str, Any]] = []
+        all_trades: List[Dict[str, Any]] = []
+        for r in result.get("per_symbol", []):
+            all_events.extend(r.get("events", []))
+            all_trades.extend(r.get("ledger", {}).get("trades", []))
+        save_events(task_id, all_events)
+        save_trades(task_id, all_trades)
+        save_equity(task_id, result.get("equity_curve", []))
+        save_metrics(task_id, result.get("portfolio", {}), result.get("caliber_notes", []))
+    else:
+        save_events(task_id, result.get("events", []))
+        save_trades(task_id, result.get("ledger", {}).get("trades", []))
+        save_equity(task_id, result.get("equity_curve", []))
+        save_metrics(task_id, result.get("metrics", {}), result.get("caliber_notes", []))
 
     if result.get("status") == "completed":
         update_task_status(task_id, "completed", progress=100)

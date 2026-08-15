@@ -813,3 +813,201 @@ def caliber_notes() -> List[str]:
         "初始底仓: 固定假设（默认 1000 股 @ 回测首日价，实盘为持仓成本）",
         "LLM 复核: 回测会话为沙盒环境，决策落库；规则模式可对照",
     ]
+
+
+# ────────────────────────────────────────────────────────────────
+# 组合回测引擎（多标的多日：Agent 选股建仓模拟 → 各自做T → 组合汇总）
+# ────────────────────────────────────────────────────────────────
+
+def _default_t_conditions(avg_price: float) -> List[Dict[str, Any]]:
+    """建仓后自动生成做T条件（对齐 auto_gen_conditions_for_build 参数：低吸×0.98/复归+0.4%/高抛+1.5%/止损-3%）。"""
+    target = round(avg_price * 0.98, 2)
+    sell_target = round(avg_price * 1.015, 2)
+    stop = round(target * 0.97, 2)
+    return [{
+        "id": 1, "trigger_kind": "low_buy", "target_price": target,
+        "vol_ratio_thresh": 1.5, "stabilize_level": "not_new_low",
+        "sell_target_price": sell_target, "stop_loss_price": stop, "armed": 1,
+    }]
+
+
+class TCombinedBacktestEngine:
+    """组合回测：建仓阶段（t_build 规则历史化）→ 逐标的 TBacktestEngine → 组合权益汇总。
+
+    数据源全部来自预取缓存（m5/指数日线/标的日线），回放期零网络。
+    """
+
+    def __init__(self, task: Dict[str, Any], data_dir: str,
+                 review_fn: Optional[callable] = None,
+                 slippage: float = DEFAULT_SLIPPAGE,
+                 fee_rate: float = DEFAULT_FEE_RATE):
+        self.task = task
+        self.data_dir = data_dir
+        self.review_fn = review_fn
+        self.slippage = slippage
+        self.fee_rate = fee_rate
+        self.symbols: List[str] = task.get("symbols") or []
+        self.build_mode = bool(task.get("build_mode", False))
+        self.net_asset = float(task.get("net_asset", 200000.0))
+        self.build_limit_ratio = float(task.get("build_limit_ratio", 0.55))
+        self.conditions = task.get("conditions") or []
+        self.start_date = str(task.get("start_date") or "")
+        self.end_date = str(task.get("end_date") or "")
+
+    def run(self, cancel_event: Optional[Any] = None) -> Dict[str, Any]:
+        from pathlib import Path
+        from app.services.t_backtest_data import (load_index_daily, load_m5,
+                                                  load_stock_daily)
+        from app.services import t_build
+
+        d = Path(self.data_dir)
+        self.index_daily = {ts: load_index_daily(ts, d) for ts in ("000300.SH", "000001.SH", "399001.SZ")}
+        # 交易日（从首个有数据的标的 m5 推导）
+        trade_days: List[str] = []
+        m5_map: Dict[str, List[dict]] = {}
+        for sym in self.symbols:
+            bars = load_m5(sym, d)
+            m5_map[sym] = bars
+            if bars:
+                trade_days = sorted({_day_key(b["time"]) for b in bars}) or trade_days
+        if not trade_days:
+            return {"status": "failed", "error": "无标的 m5 数据", "build_decisions": [], "per_symbol": []}
+
+        # 建仓阶段（窗口期初，T-1 及以前日线防前视）
+        build_decisions: List[Dict[str, Any]] = []
+        built: List[Dict[str, Any]] = []   # {symbol, price(建仓价), shares, cost, quality_score}
+        allocated_value = 0.0
+        for sym in self.symbols:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            if not self.build_mode:
+                # 非建仓模式：全部按固定底仓参与做T（默认 1000 股 @ 首日价）
+                first_bars = [b for b in m5_map.get(sym, []) if _day_key(b["time"]) == trade_days[0]]
+                price = float(first_bars[0]["open"]) if first_bars else 0.0
+                shares = int(self.task.get("init_shares", DEFAULT_INIT_SHARES))
+                built.append({"symbol": sym, "price": price, "shares": shares,
+                              "cost": price, "source": "fixed_hold"})
+                build_decisions.append({"symbol": sym, "decision": "fixed_hold",
+                                        "price": price, "shares": shares, "reasons": ["非建仓模式固定底仓"]})
+                continue
+            # 建仓规则模拟（防前视：as_of = 首日前一交易日）
+            as_of = trade_days[0]
+            bars_daily = load_stock_daily(sym, d, as_of=as_of)
+            if len(bars_daily) < 25:
+                build_decisions.append({"symbol": sym, "decision": "rejected", "reasons": ["日线不足"]})
+                continue
+            daily_bars_t = [{"date": b["trade_date"], "open": b["open"], "close": b["close"],
+                             "high": b["high"], "low": b["low"], "vol": b["vol"], "amount": b["amount"]}
+                            for b in bars_daily]
+            quality = t_build._quality_from_daily(daily_bars_t)
+            r = t_build.build_score(sym, source="pool", as_of=as_of,
+                                    quality_override=quality, bars=daily_bars_t)
+            if not r["pass_gate"]:
+                build_decisions.append({"symbol": sym, "decision": "rejected",
+                                        "score": r["score"], "reasons": r["reasons"] or ["打分未达标"]})
+                continue
+            # 建仓价 = 窗口首日开盘价
+            first_bars = [b for b in m5_map.get(sym, []) if _day_key(b["time"]) == trade_days[0]]
+            price = float(first_bars[0]["open"]) if first_bars else 0.0
+            if price <= 0:
+                build_decisions.append({"symbol": sym, "decision": "rejected", "reasons": ["首日价不可用"]})
+                continue
+            # 规模（注入组合状态：净值/已分配/未持有）
+            sizing = t_build.build_sizing(sym, price, net_asset=self.net_asset,
+                                          total_floor_value=allocated_value,
+                                          symbol_value=0.0, regime="ACTIVE")
+            if not sizing["pass"]:
+                build_decisions.append({"symbol": sym, "decision": "rejected",
+                                        "score": r["score"], "reasons": [sizing["reason"] or "规模校验不过"]})
+                continue
+            shares = sizing["suggest_volume"]
+            if shares <= 0:
+                build_decisions.append({"symbol": sym, "decision": "rejected", "reasons": ["建议股数不足"]})
+                continue
+            built.append({"symbol": sym, "price": price, "shares": shares,
+                          "cost": price, "source": "build_rule",
+                          "score": r["score"], "trend": r["trend"]})
+            allocated_value += price * shares
+            build_decisions.append({"symbol": sym, "decision": "built", "price": price,
+                                    "shares": shares, "score": r["score"], "reasons": r["reasons"]})
+
+        if not built:
+            return {"status": "completed", "build_decisions": build_decisions,
+                    "per_symbol": [], "equity_curve": [], "metrics": {
+                        "total_return_pct": 0.0, "trigger_count": 0, "executed_count": 0,
+                        "note": "建仓阶段无标的达标，组合未建仓",
+                    }, "caliber_notes": caliber_notes() + ["建仓口径: t_build 规则模拟（build_score≥门槛 ∧ 趋势闸门 ∧ 资金≤净值×55%），建仓价=窗口首日开盘；可T质量分用历史日线近似（_quality_from_daily）"]}
+
+        # 做T阶段：逐标的实例化单标的引擎（net_asset = 该标的建仓支出，避免组合资金重复计算）
+        per_symbol: List[Dict[str, Any]] = []
+        cash = self.net_asset - sum(b["price"] * b["shares"] for b in built)
+        total_asset_by_day: Dict[str, float] = {}
+        for b in built:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            conds = self.conditions or _default_t_conditions(b["price"])
+            sub_asset = b["price"] * b["shares"]   # 该标的预算 = 建仓支出
+            sub_task = {
+                "symbol": b["symbol"], "init_shares": b["shares"],
+                "init_price": b["price"], "net_asset": sub_asset,
+                "conditions": conds,
+            }
+            eng = TBacktestEngine(sub_task, str(d), review_fn=self.review_fn,
+                                  slippage=self.slippage, fee_rate=self.fee_rate)
+            r = eng.run(cancel_event)
+            r["build"] = {k: b[k] for k in ("symbol", "price", "shares", "source") if k in b}
+            per_symbol.append(r)
+            # 组合权益 = 闲置现金 + Σ(标的总资产)（标的 total_asset 以建仓支出为基数）
+            for pt in r.get("equity_curve", []):
+                day = pt["trade_date"]
+                total_asset_by_day[day] = total_asset_by_day.get(day, cash) + pt["total_asset"]
+
+        # 组合权益曲线（按交易日升序）
+        equity_curve = [{"trade_date": day, "total_asset": round(v, 2)}
+                        for day, v in sorted(total_asset_by_day.items())]
+        combined = _combine_metrics(per_symbol, built, equity_curve, self.net_asset)
+
+        return {
+            "status": "completed",
+            "portfolio": combined,
+            "build_decisions": build_decisions,
+            "per_symbol": per_symbol,
+            "equity_curve": equity_curve,
+            "caliber_notes": caliber_notes() + [
+                "建仓口径: t_build 规则模拟（build_score≥门槛 ∧ 趋势闸门 ∧ 资金≤净值×55%），建仓价=窗口首日开盘；可T质量分用历史日线近似（_quality_from_daily）",
+            ],
+        }
+
+
+def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any]],
+                     equity_curve: List[dict], net_asset: float) -> Dict[str, Any]:
+    """组合指标汇总：总收益/触发与成交/建仓数/胜率（合并全部成交）。"""
+    total_return = 0.0
+    if equity_curve:
+        last = equity_curve[-1]["total_asset"]
+        total_return = (last - net_asset) / net_asset * 100 if net_asset else 0.0
+    triggers = sum(r.get("metrics", {}).get("trigger_count", 0) for r in per_symbol)
+    executed = sum(r.get("metrics", {}).get("executed_count", 0) for r in per_symbol)
+    blocked = sum(r.get("metrics", {}).get("blocked_count", 0) for r in per_symbol)
+    escalated = sum(r.get("metrics", {}).get("escalated_human_count", 0) for r in per_symbol)
+    realized = sum(r.get("ledger", {}).get("realized_pnl", 0) for r in per_symbol)
+    sells = [t for r in per_symbol for t in r.get("ledger", {}).get("trades", []) if t.get("side") == "sell"]
+    wins = [t for t in sells if t.get("realized_pnl", 0) > 0]
+    win_rate = len(wins) / len(sells) * 100 if sells else 0.0
+    max_dd = max((r.get("ledger", {}).get("max_drawdown_pct", 0) or 0) for r in per_symbol) if per_symbol else 0.0
+    return {
+        "symbols": len(built),
+        "built_count": len(built),
+        "initial_asset": round(net_asset, 2),
+        "final_asset": round(equity_curve[-1]["total_asset"], 2) if equity_curve else round(net_asset, 2),
+        "total_return_pct": round(total_return, 2),
+        "trigger_count": triggers,
+        "executed_count": executed,
+        "blocked_count": blocked,
+        "escalated_human_count": escalated,
+        "realized_pnl": round(realized, 2),
+        "win_rate_pct": round(win_rate, 2),
+        "max_drawdown_pct": round(max_dd, 2),
+        "per_symbol_return": {r.get("symbol", "?"): round(r.get("metrics", {}).get("total_return_pct", 0), 2)
+                              for r in per_symbol},
+    }

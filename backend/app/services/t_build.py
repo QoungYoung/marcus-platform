@@ -144,10 +144,11 @@ _daily_last_call_ts: float = 0.0
 _daily_call_lock = threading.Lock()
 
 
-def _fetch_daily_bars_tushare(symbol: str, count: int = 40) -> Optional[List[dict]]:
+def _fetch_daily_bars_tushare(symbol: str, count: int = 40, as_of: Optional[str] = None) -> Optional[List[dict]]:
     """Tushare daily 日线（走 .env TUSHARE_TOKEN + TUSHARE_API_URL 代理，规避东财限流）。
 
-    返回 {date, open, close, high, low, vol, amount}，按日期升序（取最近 count 根）；失败返回 None。
+    返回 {date, open, close, high, low, vol, amount}，按日期升序（取最近 count 根且 ≤ as_of）；失败返回 None。
+    as_of: YYYY-MM-DD 截止日（回测用，防前视；None = 实时今天）。
     """
     global _daily_last_call_ts
     try:
@@ -159,8 +160,8 @@ def _fetch_daily_bars_tushare(symbol: str, count: int = 40) -> Optional[List[dic
                 time.sleep(wait)
             _daily_last_call_ts = time.time()
         pro = get_tushare_pro()
-        end = date.today().strftime("%Y%m%d")
-        start = (date.today() - timedelta(days=count * 2 + 20)).strftime("%Y%m%d")
+        end = (as_of or date.today().strftime("%Y-%m-%d")).replace("-", "")
+        start = (datetime.strptime(end, "%Y%m%d") - timedelta(days=count * 2 + 20)).strftime("%Y%m%d")
         df = pro.daily(ts_code=_to_ts_code(symbol), start_date=start, end_date=end)
         if df is None or len(df) == 0:
             return None
@@ -185,22 +186,23 @@ def _fetch_daily_bars_tushare(symbol: str, count: int = 40) -> Optional[List[dic
         return None
 
 
-def _fetch_daily_bars(symbol: str, count: int = 40) -> Optional[List[dict]]:
-    """统一日线入口：Tushare daily 主源（.env 配置），失败降级东财 push2his。"""
-    bars = _fetch_daily_bars_tushare(symbol, count=count)
+def _fetch_daily_bars(symbol: str, count: int = 40, as_of: Optional[str] = None) -> Optional[List[dict]]:
+    """统一日线入口：Tushare daily 主源（.env 配置），失败降级东财 push2his。as_of 截止防前视。"""
+    bars = _fetch_daily_bars_tushare(symbol, count=count, as_of=as_of)
     if bars:
         return bars
-    return _fetch_daily_bars_eastmoney(symbol, count=count)
+    return _fetch_daily_bars_eastmoney(symbol, count=count, as_of=as_of)
 
 
-def _fetch_daily_bars_eastmoney(symbol: str, count: int = 40) -> Optional[List[dict]]:
-    """东财日线 K 线（klt=101，Tushare 失败时的降级源）；失败返回 None。"""
+def _fetch_daily_bars_eastmoney(symbol: str, count: int = 40, as_of: Optional[str] = None) -> Optional[List[dict]]:
+    """东财日线 K 线（klt=101，Tushare 失败时的降级源）；失败返回 None。as_of 截止防前视。"""
     import urllib.request
     secid = _normalize(symbol)
     market = "1" if secid.startswith(("sh",)) else "0"
+    end = (as_of or "20500101").replace("-", "")
     url = ("https://push2his.eastmoney.com/api/qt/stock/kline/get"
            f"?secid={market}.{secid[2:]}&klt=101&fqt=1&fields1=f1,f2,f3,f4,f5,f6"
-           "&fields2=f51,f52,f53,f54,f55,f56,f57&end=20500101&lmt=" + str(count))
+           f"&fields2=f51,f52,f53,f54,f55,f56,f57&end={end}&lmt=" + str(count))
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -210,6 +212,8 @@ def _fetch_daily_bars_eastmoney(symbol: str, count: int = 40) -> Optional[List[d
         for line in klines:
             parts = line.split(",")
             if len(parts) < 6:
+                continue
+            if as_of and parts[0].replace("-", "") > end:
                 continue
             try:
                 bars.append({
@@ -224,14 +228,14 @@ def _fetch_daily_bars_eastmoney(symbol: str, count: int = 40) -> Optional[List[d
         return None
 
 
-def trend_gate(symbol: str, bars: Optional[List[dict]] = None) -> Tuple[bool, str]:
+def trend_gate(symbol: str, bars: Optional[List[dict]] = None, as_of: Optional[str] = None) -> Tuple[bool, str]:
     """个股趋势闸门：20 日均线方向 + 均线排列，单边下行排除（乘性闸门）。
 
     bars 可外部传入（build_score 已拉取时避免重复请求）。数据不可得时放行（记 warn），
-    由回踩企稳 + 人工升级兜底。
+    由回踩企稳 + 人工升级兜底。as_of 截止防前视（bars 未传时内部拉取用）。
     """
     if bars is None:
-        bars = _fetch_daily_bars(symbol, count=40)
+        bars = _fetch_daily_bars(symbol, count=40, as_of=as_of)
     if not bars or len(bars) < 25:
         return True, "日线数据不足，闸门放行"
     closes = [b["close"] for b in bars]
@@ -245,23 +249,66 @@ def trend_gate(symbol: str, bars: Optional[List[dict]] = None) -> Tuple[bool, st
     return True, f"MA20 方向正常（{ma20:.2f}）"
 
 
-def build_score(symbol: str, source: str = "user") -> Dict[str, Any]:
+def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
+    """历史日线简化可T质量分（回测建仓模拟专用，防前视；生产仍用 calc_t_quality 实时）。
+
+    用近 20 日日线：平均振幅（(high-low)/pre_close，5% 附近最可T）+ 平均成交额流动性（≥8 亿）。
+    返回 {score(0-1), pass_gate, reasons}，权重对齐 calc_t_quality 的量纲（0.5 基准 ± 贡献）。
+    """
+    if not bars or len(bars) < 5:
+        return {"score": 0.0, "pass_gate": False, "reasons": ["日线不足"]}
+    recent = bars[-20:]
+    amps, amounts = [], []
+    for i in range(1, len(recent)):
+        b = recent[i]
+        prev_close = recent[i - 1]["close"]
+        if prev_close <= 0:
+            continue
+        amps.append((float(b["high"]) - float(b["low"])) / prev_close * 100)
+        amounts.append(float(b.get("amount") or 0))
+    if not amps:
+        return {"score": 0.0, "pass_gate": False, "reasons": ["无有效日线"]}
+    avg_amp = sum(amps) / len(amps)
+    avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
+    # 振幅贡献：3%~7% 最可T → +0.2；<1% 或 >12% → -0.2
+    amp_score = 0.2 if 3.0 <= avg_amp <= 7.0 else (-0.2 if avg_amp < 1.0 or avg_amp > 12.0 else 0.0)
+    # 流动性贡献：成交额 ≥ 8 亿 → +0.2；< 2 亿 → -0.2
+    liq_score = 0.2 if avg_amount >= 8e8 else (-0.2 if avg_amount < 2e8 else 0.0)
+    score = round(max(0.0, min(0.5 + amp_score + liq_score, 1.0)), 4)
+    reasons = []
+    if amp_score < 0:
+        reasons.append(f"振幅不适宜（{avg_amp:.1f}%）")
+    if liq_score < 0:
+        reasons.append(f"流动性不足（日均 {avg_amount / 1e8:.1f} 亿）")
+    return {"score": score, "pass_gate": score >= 0.5, "reasons": reasons}
+
+
+def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
+                quality_override: Optional[Dict[str, Any]] = None,
+                bars: Optional[List[dict]] = None) -> Dict[str, Any]:
     """建仓打分：quality（calc_t_quality 四维）+ 趋势 + 来源 + 风险惩罚。
 
+    as_of: YYYY-MM-DD 截止日（回测用，日线趋势/风险历史化防前视；None = 实时）。
+    quality_override: 回测传入的历史质量分（_quality_from_daily 结果）；None 时生产用 calc_t_quality。
+    bars: 日线注入（回测用缓存数据，零网络）；None 时内部拉取（as_of 截止）。
     返回 {score, pass_gate, reasons, quality, trend, source}。
     """
     from app.services.t_pool import calc_t_quality
     p = _params()
     w = p["build_score_weights"]
-    q = calc_t_quality(symbol) or {}
+    if quality_override is not None:
+        q = quality_override
+    else:
+        q = calc_t_quality(symbol) or {}
     quality_score = float(q.get("score") or 0)
     pass_quality = bool(q.get("pass_gate"))
 
-    # 日线单次拉取，供趋势闸门 + 风险惩罚共用（避免重复请求）
-    bars = _fetch_daily_bars(symbol, count=40)
+    # 日线单次拉取，供趋势闸门 + 风险惩罚共用（避免重复请求）；as_of 截止防前视
+    if bars is None:
+        bars = _fetch_daily_bars(symbol, count=40, as_of=as_of)
 
     # 趋势闸门（乘性）
-    trend_ok, trend_note = trend_gate(symbol, bars=bars)
+    trend_ok, trend_note = trend_gate(symbol, bars=bars, as_of=as_of)
     trend_add = 0.1 if trend_ok else 0.0
 
     # 风险惩罚（简化：近 5 日隔夜跳空均值 > 3% 记 -0.1；涨跌停频率 > 10% 记 -0.1）
@@ -398,12 +445,15 @@ def _coarse_filter_active(symbols: List[Dict[str, str]], max_batches: int = 6,
     return [a["symbol"] for a in active]
 
 
-def scan_t_candidates(limit: int = 20, source: str = "pool") -> List[Dict[str, Any]]:
+def scan_t_candidates(limit: int = 20, source: str = "pool",
+                      as_of: Optional[str] = None,
+                      quality_override_fn: Optional[callable] = None) -> List[Dict[str, Any]]:
     """扫描建仓候选短名单（来源：user 指定列表 / pool 候选池 / scan 全市场粗筛）。
 
     - scan：stock_basic 全市场列表 → 日频粗筛（成交额/振幅，当日缓存）→ 精筛（calc_t_quality
       + 趋势闸门 + 风险惩罚），单次 ≤50 票（1s 节流）。粗筛结果当日缓存，不重复拉全市场。
     - 日频低频：调用方（Agent/前端）不应高频触发；缓存保证重复调用不重复网络请求。
+    - as_of: 回测用截止日（日线历史化）；quality_override_fn: 回测质量分函数（防前视）。
     """
     if source == "user":
         raise ValueError("user 来源需显式传入 symbols")
@@ -423,7 +473,8 @@ def scan_t_candidates(limit: int = 20, source: str = "pool") -> List[Dict[str, A
     results = []
     for sym in symbols[:limit]:
         try:
-            r = build_score(sym, source=source)
+            quality = quality_override_fn(sym) if quality_override_fn else None
+            r = build_score(sym, source=source, as_of=as_of, quality_override=quality)
             results.append(r)
         except Exception as e:
             print(f"[t-build] 扫描 {sym} 失败: {e}")
@@ -436,16 +487,23 @@ def scan_t_candidates(limit: int = 20, source: str = "pool") -> List[Dict[str, A
 # 建仓规模计算
 # ────────────────────────────────────────────────────────────────
 
-def build_sizing(symbol: str, price: float) -> Dict[str, Any]:
+def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
+                 total_floor_value: Optional[float] = None,
+                 symbol_value: Optional[float] = None,
+                 regime: str = "ACTIVE") -> Dict[str, Any]:
     """建仓规模计算：按当前 regime 档位给出单笔/单标/总底仓上限与建议股数。
 
+    生产（不传注入参数）：net/total_floor_value/symbol_value 取 t 账户实时状态，regime 实时。
+    回测（组合引擎注入）：net_asset=组合净值、total_floor_value=组合已分配建仓市值、
+    symbol_value=该标的是否已建仓、regime=历史档位——规则同源，数据历史化。
     返回 {tier, net_asset, single_max_amount, per_symbol_max_amount, total_floor_max,
           current_floor_value, symbol_value, suggest_volume, reasons, pass}。
     """
     p = _params()
-    regime = compute_regime().get("regime", "ACTIVE")
+    if regime == "REALTIME":
+        regime = compute_regime().get("regime", "ACTIVE")
     tier = REGIME_TIER.get(regime, "std")
-    net = t_net_asset()
+    net = net_asset if net_asset is not None else t_net_asset()
     if net <= 0:
         return {"pass": False, "reason": "t 账户净值不可用", "tier": tier}
 
@@ -453,10 +511,12 @@ def build_sizing(symbol: str, price: float) -> Dict[str, Any]:
     per_symbol_pct = p["per_symbol_cap"].get(tier, 0.15)
     total_pct = p["total_floor_cap"].get(tier, 0.55)
 
-    total_floor_value, _ = _positions_value()
-    ledger = get_sellable_ledger()
-    item = ledger.get(_normalize(symbol).upper()) or ledger.get(symbol) or {}
-    symbol_value = float(item.get("volume") or 0) * float(item.get("avg_price") or 0)
+    if total_floor_value is None:
+        total_floor_value, _ = _positions_value()
+    if symbol_value is None:
+        ledger = get_sellable_ledger()
+        item = ledger.get(_normalize(symbol).upper()) or ledger.get(symbol) or {}
+        symbol_value = float(item.get("volume") or 0) * float(item.get("avg_price") or 0)
 
     single_max = net * single_pct
     per_symbol_max = net * per_symbol_pct

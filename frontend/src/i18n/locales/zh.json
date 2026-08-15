@@ -26,7 +26,7 @@
     "monitor": "监控日志",
     "leaderboard": "龙头排行",
     "goldenPit": "黄金坑",
-    "tAccount": "做T"
+    "tAccount": "做T账户", "tBacktest": "做T回测"
   },
   "goldenPit": {
     "title": "指数黄金坑预测",

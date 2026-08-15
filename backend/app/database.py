@@ -507,6 +507,16 @@ def _apply_t_backtest_migration():
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_t_backtest_tasks_status ON t_backtest_tasks (status, id)"
             ))
+            # 组合回测扩展列（add-t-combined-backtest）
+            conn.execute(text(
+                "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS symbols_json JSONB NOT NULL DEFAULT '[]'"
+            ))
+            conn.execute(text(
+                "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS build_mode BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.execute(text(
+                "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS build_limit_ratio DOUBLE PRECISION NOT NULL DEFAULT 0.55"
+            ))
             # 2) 事件流（触发/复核/拦截/缺口）
             conn.execute(text(
                 """

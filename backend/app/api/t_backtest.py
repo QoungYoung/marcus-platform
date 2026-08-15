@@ -16,23 +16,24 @@ router = APIRouter(prefix="/t/backtest", tags=["t-backtest"])
 
 @router.post("")
 def t_backtest_create(body: dict):
-    """创建回测任务。
+    """创建回测任务（支持单标的与组合模式）。
 
     body: {
-        symbol: "SH600519" | "600519",
-        start_date: "2026-07-01",
-        end_date: "2026-08-14",
-        conditions: [ {trigger_kind/target_price/vol_ratio_thresh/expression/...}, ... ],
-        init_shares: 1000 (默认), init_price: float (默认回测首日价),
-        net_asset: 200000 (默认), review_mode: "llm"|"rule" (默认 llm)
+        symbol: "SH600519" | "600519"（组合模式可省略/combined）,
+        symbols: ["600519", "000001", ...]（组合模式候选列表，空则用做T候选池）,
+        build_mode: true（组合建仓模拟）| false,
+        build_limit_ratio: 0.55（建仓资金上限比例）,
+        start_date/end_date/conditions/init_shares/init_price/net_asset/review_mode
     }
     """
-    symbol = body.get("symbol")
+    symbols = body.get("symbols") or []
+    build_mode = bool(body.get("build_mode", False))
+    symbol = body.get("symbol") or ("combined" if (symbols or build_mode) else "")
     if not symbol:
-        raise HTTPException(status_code=400, detail="缺少 symbol")
+        raise HTTPException(status_code=400, detail="缺少 symbol（单标的）或 symbols（组合）")
     conditions = body.get("conditions") or []
-    if not isinstance(conditions, list) or len(conditions) == 0:
-        raise HTTPException(status_code=400, detail="conditions 必须为非空数组（至少一条监控条件）")
+    if not isinstance(conditions, list):
+        raise HTTPException(status_code=400, detail="conditions 必须为数组")
     start = body.get("start_date") or ""
     end = body.get("end_date") or ""
     if not start or not end:
@@ -47,10 +48,30 @@ def t_backtest_create(body: dict):
         init_price=body.get("init_price"),
         net_asset=float(body.get("net_asset", 200000.0)),
         review_mode=review_mode,
+        symbols=symbols,
+        build_mode=build_mode,
+        build_limit_ratio=float(body.get("build_limit_ratio", 0.55)),
     )
     if not task_id:
         raise HTTPException(status_code=500, detail="任务创建失败")
-    return {"success": True, "task_id": task_id, "status": "pending"}
+    mode = "combined" if (symbols or build_mode) else "single"
+    return {"success": True, "task_id": task_id, "status": "pending", "mode": mode}
+
+
+@router.get("/candidates")
+def t_backtest_candidates(limit: int = 10):
+    """做T建仓候选池查询（供页面"自动候选池"选择，含可T质量分）。"""
+    try:
+        from app.services.t_build import scan_t_candidates
+        cands = scan_t_candidates(limit=limit, source="pool")
+        out = [{
+            "symbol": c.get("symbol"), "score": c.get("score"),
+            "pass_gate": c.get("pass_gate"), "reasons": c.get("reasons"),
+            "trend": (c.get("trend") or {}).get("note", ""),
+        } for c in cands]
+        return {"candidates": out}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"候选池查询失败: {e}")
 
 
 @router.get("/tasks")

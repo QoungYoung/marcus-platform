@@ -100,9 +100,24 @@ export const backtestApi = {
   },
 }
 
+// 做T回测 APIs（t-backtest，单标的 + 组合）
+export const tBacktestApi = {
+  create: (data: {
+    symbol?: string; symbols?: string[]; build_mode?: boolean; build_limit_ratio?: number;
+    start_date: string; end_date: string; conditions?: any[]; init_shares?: number;
+    net_asset?: number; review_mode?: 'llm' | 'rule';
+  }) => api.post('/t/backtest', data),
+  list: (limit = 50) => api.get('/t/backtest/tasks', { params: { limit } }),
+  detail: (taskId: number) => api.get(`/t/backtest/${taskId}`),
+  start: (taskId: number) => api.post(`/t/backtest/${taskId}/start`),
+  cancel: (taskId: number) => api.post(`/t/backtest/${taskId}/cancel`),
+  report: (taskId: number) => api.get(`/t/backtest/${taskId}/report`),
+  events: (taskId: number, limit = 500) => api.get(`/t/backtest/${taskId}/events`, { params: { limit } }),
+  candidates: (limit = 10) => api.get('/t/backtest/candidates', { params: { limit } }),
+}
+
 // Scheduler APIs
-export const schedulerApi = {
-  getStatus: () => api.get('/scheduler/status'),
+export const schedulerApi = {  getStatus: () => api.get('/scheduler/status'),
   getTasks: () => api.get('/scheduler/tasks'),
   getTask: (taskId: string) => api.get(`/scheduler/tasks/${taskId}`),
   getTaskExecutions: (taskId: string, limit?: number) =>
