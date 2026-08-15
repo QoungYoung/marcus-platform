@@ -41,6 +41,6 @@
 ## 6. 回测验证与部署
 
 - [x] 6.1 rule 模式参数矩阵快跑：选股组合（cand_score_min × MIN_AMP_PCT）× 条件组合（amp_scale × min_high_sell × stop_pct），记录 total_return / realized_pnl / sell 闭环笔数 / max_drawdown
-- [ ] 6.2 LLM 精选窗口：best 组合跑 2-4 个历史窗口，对比改造前后 ai_exec_win_rate / abandon / realized_pnl / [rule_fallback] 占比
+- [x] 6.2 LLM 精选窗口：best 组合跑 2-4 个历史窗口，对比改造前后 ai_exec_win_rate / abandon / realized_pnl / [rule_fallback] 占比
 - [x] 6.3 全量回归：backend/tests 通过（含 t 相关既有用例）
 - [x] 6.4 部署：docker compose up -d --build backend worker（+frontend 如涉及）；DSH prompt 变更 FORCE_RESEED_PROMPTS=true
