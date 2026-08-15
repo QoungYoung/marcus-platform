@@ -349,13 +349,21 @@ export default function TBacktestPage() {
             {aiActions.slice(0, 15).map((a) => {
               const out = a.output || {};
               const gw = a.gateway_result || {};
+              const oc = a.outcome || {};
               const reason = out.reason || gw.reason || '';
               const gwOk = gw.status === 'success' ? '✅' : gw.status ? '⛔' : '';
+              // outcome 摘要：✅+0.85% / ⛔-1.5%
+              let ocSum = '';
+              if (oc && oc.pct_change != null) {
+                const pct = Number(oc.pct_change);
+                ocSum = `${pct >= 0 ? '✅' : '⛔'}${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+              }
               return (
                 <li key={a.id} className="tbt-ai-action">
                   <span className="tbt-ai-top">
                     <b>{a.symbol}</b>
                     <span className="tbt-ai-type">{a.action_type}</span>
+                    {ocSum && <span className="tbt-ai-oc">{ocSum}</span>}
                     <span className="tbt-ai-gw">{gwOk}</span>
                   </span>
                   <span className="tbt-ai-meta">{(a.created_at || '').slice(5, 16)}</span>
@@ -514,6 +522,8 @@ export default function TBacktestPage() {
                 <div className="tbt-metric"><span className="tbt-metric-label">胜率</span><b>{fmtPct(metrics.win_rate_pct)}</b></div>
                 <div className="tbt-metric"><span className="tbt-metric-label">最大回撤</span><b>{fmtPct(metrics.max_drawdown_pct)}</b></div>
                 <div className="tbt-metric"><span className="tbt-metric-label">已实现盈亏</span><b>{fmtMoney(metrics.realized_pnl)}</b></div>
+                <div className="tbt-metric"><span className="tbt-metric-label">AI执行胜率</span><b>{metrics.ai_exec_count != null ? `${fmtPct(metrics.ai_exec_win_rate_pct)} (${metrics.ai_exec_count}笔)` : '—'}</b></div>
+                <div className="tbt-metric"><span className="tbt-metric-label">AI等待/放弃</span><b>{metrics.ai_wait_count ?? 0}/{metrics.ai_abandon_count ?? 0}</b></div>
               </div>
 
               {equity && equity.length > 0 && (

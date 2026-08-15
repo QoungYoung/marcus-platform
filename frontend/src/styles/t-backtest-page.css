@@ -185,6 +185,11 @@
   background: rgba(47, 124, 211, 0.12); color: var(--gp-blue);
 }
 .tbt-ai-gw { margin-left: auto; font-size: 11px; }
+.tbt-ai-oc {
+  font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 6px;
+  background: rgba(39, 160, 107, 0.12); color: var(--gp-green);
+}
+.tbt-ai-oc:not(:empty) { background: rgba(229, 72, 77, 0.12); color: var(--gp-red); }
 .tbt-ai-meta { font-size: 10px; color: var(--gp-faint); }
 .tbt-ai-reason { font-size: 11px; color: var(--gp-muted); line-height: 1.35; }
 
