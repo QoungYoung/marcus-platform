@@ -398,6 +398,67 @@ def prefetch_stock_daily(symbols: List[str], start_date: str, end_date: str,
     return {"fetched": len(result), "gaps": gaps}
 
 
+def prefetch_all_daily_by_trade_date(trade_days: List[str], cache_dir: Path,
+                                     symbol_filter: Optional[set] = None) -> Dict[str, Any]:
+    """按交易日批量预取全市场日线（pro.daily(trade_date=...) 单次返回当日全市场）。
+
+    替代逐股拉取（5000+ 次请求 → 交易日数次请求），供 rolling_scan 全市场扫描使用。
+    落盘 stock_daily/{symbol}.json（升序合并，幂等：已存在且含该日则跳过该日）。
+
+    Args:
+        trade_days: YYYYMMDD 交易日列表
+        cache_dir: 回测缓存目录
+        symbol_filter: 可选，只保留这些 symbol 的日线（如粗筛活跃池）；None=全市场
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    from app.core.trading._api_config import get_tushare_pro
+    pro = get_tushare_pro()
+    fetched = 0
+    gaps: List[Dict[str, Any]] = []
+    for td in trade_days:
+        try:
+            df = pro.daily(trade_date=td)
+        except Exception as e:
+            print(f"[t-backtest-data] 全市场日线失败 {td}: {str(e)[:100]}")
+            gaps.append({"type": "stock_daily", "key": "*", "trade_date": td, "reason": str(e)[:80]})
+            continue
+        if df is None or len(df) == 0:
+            continue
+        # 按股票聚合到文件（每只股票 append 当日行）
+        by_sym: Dict[str, List[dict]] = {}
+        for _, r in df.iterrows():
+            code = str(r["ts_code"] or "")
+            sym = code.split(".")[0] if "." in code else code
+            if symbol_filter is not None and sym not in symbol_filter:
+                continue
+            by_sym.setdefault(sym, []).append({
+                "trade_date": str(r["trade_date"]),
+                "open": float(r["open"]), "close": float(r["close"]),
+                "high": float(r["high"]), "low": float(r["low"]),
+                "vol": float(r.get("vol", 0) or 0),
+                "amount": float(r.get("amount", 0) or 0),
+                "pre_close": float(r.get("pre_close", 0) or 0),
+            })
+        for sym, bars in by_sym.items():
+            out = cache_dir / "stock_daily" / f"{sym}.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            existing: List[dict] = []
+            if out.exists():
+                try:
+                    existing = json.loads(out.read_text(encoding="utf-8"))
+                except (ValueError, OSError):
+                    existing = []
+            # 幂等合并（按 trade_date 去重）
+            seen = {str(b["trade_date"]) for b in existing}
+            new = [b for b in bars if str(b["trade_date"]) not in seen]
+            if new:
+                merged = sorted(existing + new, key=lambda b: str(b["trade_date"]))
+                out.write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+                fetched += 1
+        print(f"[t-backtest-data] 全市场日线 {td}: {len(by_sym)} 只")
+    return {"fetched": fetched, "gaps": gaps}
+
+
 def load_stock_daily(symbol: str, cache_dir: Path, as_of: Optional[str] = None) -> List[dict]:
     """读取标的日线缓存（升序）。as_of（YYYYMMDD）时只返回 trade_date ≤ as_of 的数据（防前视）。"""
     p = cache_dir / "stock_daily" / f"{symbol}.json"

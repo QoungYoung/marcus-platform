@@ -435,10 +435,10 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 ext_start = start
             d = btd.prefetch_stock_daily([s], ext_start, end, task_dir)
             gaps.extend(d.get("gaps", []))
-        # 全市场滚动扫描（rolling_scan）：先实时粗筛活跃池（限 300 只）→ 只对活跃池
-        # 预取日线+m5（全市场 5000+ 只日线串行预取不可行）。粗筛用生产实时行情
-        # （活跃度近似，窗口期内波动特征以预取日线为准，无价格前视——粗筛只决定
-        # 候选范围，打分/建仓全部用 as_of 历史日线）。
+        # 全市场滚动扫描（rolling_scan）：实时粗筛活跃池（限 300 只）→ 批量预取
+        # 活跃池日线（按交易日批量，pro.daily(trade_date=...)）+ m5。
+        # 粗筛用生产实时行情（活跃度近似，只决定候选范围）；打分/建仓全部用
+        # as_of 历史日线（无价格前视）。
         rolling_scan = bool(task.get("rolling_scan", False))
         if rolling_scan and is_combined:
             try:
@@ -449,24 +449,36 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 print(f"[t-backtest] rolling_scan 全市场列表 {len(all_codes)} 只，实时粗筛活跃池")
                 active = _coarse_filter_active(all_syms, max_batches=6, batch_size=50)  # ≤300 只
                 active_codes = [a[2:] if a[:2] in ("sh", "sz") else a for a in active]
-                task["_all_symbols"] = all_codes
                 task["_scan_pool"] = active_codes
-                print(f"[t-backtest] rolling_scan 粗筛活跃池 {len(active_codes)} 只，预取日线+m5")
-                # 日线预取（活跃池）：粗筛近 5 日 + 精筛 40 根趋势 → 起始日前推 70 天
-                _ext = (_dt.strptime(start, "%Y-%m-%d") - _td(days=70)).strftime("%Y-%m-%d")
-                _n = 0
-                for code in active_codes:
-                    try:
-                        d2 = btd.prefetch_stock_daily([code], _ext, end, task_dir)
-                        gaps.extend(d2.get("gaps", []))
-                        _n += 1
-                    except Exception as _e:
-                        print(f"[t-backtest] rolling_scan 日线预取失败 {code}: {str(_e)[:60]}")
-                print(f"[t-backtest] rolling_scan 日线预取完成（{_n} 只）")
-                # m5 预取（活跃池，建仓标的从中产生）
-                for code in active_codes:
-                    r = btd.prefetch_m5(code, days, task_dir, is_index=False)
-                    gaps.extend(r.get("gaps", []))
+                print(f"[t-backtest] rolling_scan 粗筛活跃池 {len(active_codes)} 只，批量预取日线+m5")
+                # 日线预取（按交易日批量，覆盖建仓规则历史 70 天 + 窗口期）
+                try:
+                    _ext8 = (_dt.strptime(start, "%Y-%m-%d") - _td(days=70)).strftime("%Y%m%d")
+                    _end8 = end.replace("-", "")
+                    _all_days = btd.resolve_trade_days(
+                        f"{_ext8[:4]}-{_ext8[4:6]}-{_ext8[6:8]}", end)
+                    _filter = set(active_codes)
+                    d2 = btd.prefetch_all_daily_by_trade_date(_all_days, task_dir, symbol_filter=_filter)
+                    gaps.extend(d2.get("gaps", []))
+                except Exception as e:
+                    print(f"[t-backtest] rolling_scan 批量日线预取失败: {e}")
+                # m5 预取：用窗口首日前一交易日的历史日线扫描，取 top 达标候选预取 m5
+                # （m5 逐股逐日请求昂贵；只预取大概率建仓的标的，控制预取时长）
+                try:
+                    from app.services import t_build as _tb
+                    _asof0 = (_dt.strptime(start, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
+                    _hist = _tb.scan_t_candidates_historical(
+                        active_codes, str(task_dir), as_of=_asof0,
+                        quality_fn=_tb._quality_from_daily, limit=30)
+                    _m5_codes = [c["symbol"] for c in _hist if c.get("symbol") and c.get("pass_gate")]
+                    if not _m5_codes:
+                        _m5_codes = active_codes[:30]
+                    print(f"[t-backtest] rolling_scan 预取 m5 候选 {len(_m5_codes)} 只")
+                    for code in _m5_codes:
+                        r = btd.prefetch_m5(code, days, task_dir, is_index=False)
+                        gaps.extend(r.get("gaps", []))
+                except Exception as e:
+                    print(f"[t-backtest] rolling_scan m5 预取失败: {e}")
             except Exception as e:
                 print(f"[t-backtest] rolling_scan 全市场列表失败: {e}")
                 rolling_scan = False
