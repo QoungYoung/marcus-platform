@@ -594,10 +594,14 @@ class TBacktestEngine:
                         c["last_triggered_at"] = tick_dt
                         self._handle_trigger(c, bar, day_bars, i, snapshot, regime, ledger,
                                              trade_day, summary, cancel_event, day_conds)
-                        # 高抛成交后当日 disarm（T+0 闭环一轮 → 次日条件重建时重新武装），
-                        # 防止多次触发把可卖底仓快速耗尽后继续触发
-                        if tkind in ("high_sell_then_buy_back", "high_sell"):
-                            c["armed"] = 0
+                        # 消费式条件（迭代#56，用户需求）：触发后条件即销毁——
+                        # 从当日剩余 bar 的评估中移除，不再冷却复用；
+                        # 后续由 AI 重新评估设定新条件（update_condition 语义=重建）。
+                        # 高抛/低吸均消费；止损冻结路径（_stopped_out）不受影响。
+                        try:
+                            day_conds.remove(c)
+                        except ValueError:
+                            pass
                         break  # 同一 tick 只处理第一个命中条件（对齐实盘轮询语义）
                 if not hit_any:
                     pass
@@ -1002,8 +1006,10 @@ class TBacktestEngine:
 
     def _apply_condition_update(self, cond_update: Dict[str, Any],
                                 day_conds: Optional[List[Dict[str, Any]]] = None):
-        """AI update_condition 落地：按 trigger_kind 更新条件参数（目标价/止损/量比/企稳），
-        当日剩余 bar（day_conds）与后续交易日（self.conditions）同步生效。"""
+        """AI update_condition 落地：消费式语义（迭代#56，用户需求）——
+        原条件触发后已消费，AI 给出的新条件 = **重建**一条新条件（新增到
+        day_conds 与 self.conditions，带新 _bt_index），当日剩余 bar 与
+        后续交易日生效；不再原地 patch 已消费条件。"""
         kind = str(cond_update.get("trigger_kind") or "")
         if not kind:
             return
@@ -1014,21 +1020,28 @@ class TBacktestEngine:
                  if k in updatable and v is not None and v != ""}
         if not patch:
             return
-        targets = list(self.conditions) + [c for c in (day_conds or [])]
-        seen = set()
-        for c in targets:
-            if c.get("trigger_kind") != kind:
-                continue
-            cid = c.get("id") or c.get("_bt_index", 0)
-            if cid in seen:
-                continue
-            seen.add(cid)
-            for k, v in patch.items():
-                c[k] = v
-            # 更新后重新武装（清除冷却/当日触发计数由 day_trigger_count 独立管理）
-            c["armed"] = 1
-            c["last_triggered_at"] = None
-        print(f"[t-backtest] AI 调整条件 {self.symbol} {kind}: "
+        # 重建新条件（沿用原条件模板 + AI patch；id 置 None → 引擎补新 _bt_index）
+        template = None
+        for c in list(self.conditions) + list(day_conds or []):
+            if c.get("trigger_kind") == kind:
+                template = c
+                break
+        new_cond = dict(template or {})
+        new_cond.pop("id", None)
+        new_cond.pop("_bt_index", None)
+        new_cond.pop("last_triggered_at", None)
+        for k, v in patch.items():
+            new_cond[k] = v
+        new_cond["armed"] = 1
+        # 注入 day_conds（当日剩余 bar 生效）与 self.conditions（后续交易日生效）
+        if day_conds is not None:
+            day_conds.append(new_cond)
+        self.conditions.append(new_cond)
+        # 补 _bt_index（引擎按 id 缺失时用 _bt_index 区分计数）
+        if not new_cond.get("id"):
+            new_cond["_bt_index"] = max(
+                [int(c.get("_bt_index") or 0) for c in self.conditions] + [0]) + 1
+        print(f"[t-backtest] AI 重建条件 {self.symbol} {kind}: "
               f"{json.dumps(patch, ensure_ascii=False)}")
 
 

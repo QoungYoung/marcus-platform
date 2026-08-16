@@ -994,8 +994,8 @@ function apply(ctx) {
                 'get_intraday_minute 分钟K线 / get_stock_moneyflow 资金流 / get_market_state 大盘）。',
                 '高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——有可卖底仓时触达高抛价应倾向 exec；',
                 '低吸买腿需确认非恐慌追跌（区分温和回踩 vs 放量下跌创新低）。',
-                '连续命中无改善时用 update_condition 调整目标价（必须附 condition 对象），或输出 wait 注明"等待冷却"——',
-                '严禁只把 target_price 往现价方向微调制造下一轮触发。',
+                '【消费式条件】本次触发后该条件已销毁——如需继续做T请用 update_condition 附新 condition 重建',
+                '（当日剩余 bar 生效），不重建则本标的当日不再触发；严禁编造已销毁条件继续触发。',
                 '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}（condition 仅 update_condition 时必填）',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
@@ -1230,7 +1230,9 @@ function apply(ctx) {
       '你的工具已被沙盒隔离：生产写工具（下单/撤单/建仓等）对你不可见；只读查询工具可用。',
       '【默认动作 = exec】触发已命中监控条件并通过规则预筛，默认执行。仅当存在客观证据时 wait/abandon：',
       '① 现价与目标价脱节（>1%）；② 跌破止损；③ regime 禁自动；④ 恐慌放量追跌。信息不足 ≠ wait，可调查询工具补数。',
-      '高抛卖腿是兑现正向动作倾向 exec；低吸需区分温和回踩 vs 恐慌追跌。连续命中用 update_condition（必须附 condition）或 wait"等待冷却"，严禁只调 target_price 制造触发。',
+      '【消费式条件】本次触发后该条件已销毁——如需继续做T，请在决策时评估重建：',
+      '用 update_condition 附新 condition（重建新条件），不重建则本标的当日不再触发。',
+      '高抛卖腿是兑现正向动作倾向 exec；低吸需区分温和回踩 vs 恐慌追跌。',
       '每次输出一行 JSON：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}。',
     ].join('\n');
     // 沙盒 deny 名单：回测复核会话禁用的生产写工具

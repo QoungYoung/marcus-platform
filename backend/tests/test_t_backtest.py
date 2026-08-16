@@ -181,10 +181,12 @@ class TestEngineCore(unittest.TestCase):
         r = TBacktestEngine(self.task, str(self.cache)).run()
         self.assertGreater(r["metrics"]["trigger_count"], 0, "历史低价应触发低吸")
         self.assertGreater(r["metrics"]["executed_count"], 0, "auto 复核应成交")
-        # 低吸加仓次数上限（≤2 次/日，P0 风控）会拦截第 3 笔起——执行率不再强制 100%
-        blocked = [e for e in r["events"] if e.get("type") == "blocked"]
-        self.assertTrue(any("低吸加仓次数超限" in str(e.get("data", {}).get("reason", "")) for e in blocked),
-                        "第 3 笔低吸应被加仓次数上限拦截")
+        # 消费式条件（迭代#56）：同一条条件在**同一天**内触发后即销毁，不冷却复用；
+        # 跨日重建（次日 day_conds 重新初始化）允许再次触发
+        triggers = [e for e in r["events"] if e.get("type") == "trigger"]
+        pairs = [(e["data"].get("trade_day"), e["data"].get("condition_id")) for e in triggers]
+        self.assertEqual(len(pairs), len(set(pairs)),
+                         f"消费式条件当日不应重复触发: {pairs}")
 
     def test_no_trigger_without_price_hit(self):
         from app.services.t_backtest import TBacktestEngine

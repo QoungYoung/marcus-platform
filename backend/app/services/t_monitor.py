@@ -412,10 +412,13 @@ class TMonitor:
         }
         trig_id = t_db.insert_trigger(trig)
         if trig_id:
-            # 状态机：触发后置 armed=0，计数 +1
+            # 消费式条件（迭代#56，用户需求）：触发后条件即销毁（consumed），
+            # 不再冷却复用——由 AI 重新评估设定新条件（update_condition 语义=重建）。
+            # 状态机：置 consumed + 计数 +1（保留计数供审计）
             t_db.update_condition_state(
                 cond.get("id"),
                 armed=0,
+                status="consumed",
                 last_triggered_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 trigger_count_today=int(cond.get("trigger_count_today") or 0) + 1,
             )
