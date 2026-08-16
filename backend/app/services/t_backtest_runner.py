@@ -809,10 +809,32 @@ def backtest_poll_loop(stop_event: Any):
             time.sleep(_POLL_INTERVAL)
 
 
+def _requeue_stale_running_tasks() -> None:
+    """worker 启动时：把遗留 running 的回测任务重置为 pending。
+
+    单 worker 部署——本进程刚启动说明之前执行该任务的进程一定已中断，
+    遗留 running 必须恢复为 pending 才能被重新领取（否则会一直假死卡在 xx%）。
+    """
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "UPDATE t_backtest_tasks SET status = 'pending', progress = 0 "
+                "WHERE status = 'running'"
+            ))
+            db.commit()
+        finally:
+            db.close()
+        print("[t-backtest] ✅ 遗留 running 任务已重置为 pending（部署/重启后自动恢复）")
+    except Exception as e:
+        print(f"[t-backtest] ⚠️ 重置遗留任务失败: {e}")
+
+
 def start_t_backtest_worker() -> bool:
-    """启动回测任务执行线程（worker 进程调用）。"""
+    """启动回测任务执行线程（worker 进程调用）。启动前先恢复遗留 running 任务。"""
     try:
         import threading
+        _requeue_stale_running_tasks()
         stop_event = threading.Event()
         t = threading.Thread(target=backtest_poll_loop, args=(stop_event,),
                              daemon=True, name="t-backtest-worker")

@@ -1608,6 +1608,8 @@ class TCombinedBacktestEngine:
             if cancel_event is not None and cancel_event.is_set():
                 break
             done_units += 1
+            # 当日实时事件：建仓决策/盘后扫描汇总（前端时间明细实时追加，扫描段不再空白）
+            day_events: List[Dict[str, Any]] = []
             _report_progress()
             # 盘后（当日收盘后）对未建仓标的打分，as_of=当日（防前视）
             next_day = trade_days[idx + 1] if idx + 1 < len(trade_days) else None
@@ -1715,8 +1717,34 @@ class TCombinedBacktestEngine:
                                         "shares": shares, "score": r["score"],
                                         "build_day": next_day, "reasons": r["reasons"] or [],
                                         "trend": r["trend"], "quality": (r.get("quality") or {}).get("score")})
+                day_events.append({
+                    "type": "build_decision",
+                    "trade_day": trade_day,
+                    "data": {
+                        "decision": "built",
+                        "symbol": sym,
+                        "price": price,
+                        "shares": shares,
+                        "build_day": next_day,
+                        "score": r["score"],
+                        "reasons": r["reasons"] or [],
+                    },
+                })
                 print(f"[t-backtest] 滚动建仓 {sym} @ {price} x{shares} 于 {next_day} "
                       f"(score={r['score']} trend={r['trend'].get('score')})")
+            # 当日盘后扫描汇总事件（无建仓也上报，让 50%→回放 阶段有时间明细）
+            day_events.append({
+                "type": "rolling_scan",
+                "trade_day": trade_day,
+                "data": {
+                    "as_of": trade_day,
+                    "build_day": next_day,
+                    "built_count": daily_built,
+                    "built_symbols": [b["symbol"] for b in builds if b.get("build_day") == next_day],
+                    "pending_count": len(pending),
+                },
+            })
+            _report_progress(events_delta=day_events)
 
         # 各标的从建仓日起做T（子引擎 start_trade_day）
         per_symbol: List[Dict[str, Any]] = []

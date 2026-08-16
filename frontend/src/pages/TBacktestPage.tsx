@@ -159,6 +159,7 @@ const EVENT_TYPE_LABEL: Record<string, string> = {
   trigger: '触发', trade: '成交', review: 'AI复核', blocked: '拦截',
   condition_rebuild: '条件重建', escalated: '升级人工', ai_wait: 'AI等待',
   stop_loss: '止损', cancelled: '取消', data_gap: '数据缺口', eval_error: '评估异常',
+  build_decision: '建仓决策', rolling_scan: '盘后扫描',
 };
 
 function fmtDayNice(day: string): string {
@@ -215,6 +216,15 @@ function describeEvent(ev: BtEvent) {
     action = '止损卖出';
     tone = 'down';
     note = `触发价=${trig.trigger_price ?? inner.trigger_price ?? ''}`;
+  } else if (t === 'build_decision') {
+    const bd = String(inner.build_day ?? '');
+    action = `建仓 ${sym} ${inner.shares ?? ''}股`;
+    note = `@ ${inner.price ?? ''} · 次日(${bd.slice(4, 6)}-${bd.slice(6, 8)})生效 · score=${inner.score ?? ''}`;
+    tone = 'up';
+  } else if (t === 'rolling_scan') {
+    action = '盘后扫描';
+    const bs = (inner.built_symbols || []).join('/');
+    note = `达标 ${inner.pending_count ?? 0} 只 · 建仓 ${inner.built_count ?? 0} 只${bs ? `：${bs}` : ''}`;
   } else {
     action = typeLabel;
     note = String(inner.reason || inner.decision || '');
