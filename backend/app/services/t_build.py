@@ -283,66 +283,40 @@ def trend_gate(symbol: str, bars: Optional[List[dict]] = None, as_of: Optional[s
 
 
 def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
-    """历史日线简化可T质量分（回测建仓模拟专用，防前视；生产仍用 calc_t_quality 实时）。
+    """回测可T质量分：与生产 calc_t_quality **同一公式、同一硬门槛**（统一代码路径）。
 
-    用近 20 日日线：平均振幅（(high-low)/pre_close）+ 平均成交额流动性（≥8 亿）。
-    振幅口径与生产 calc_t_quality 对齐（P0 审查：硬性振幅下限 MIN_AMP_PCT=3 / MAX=10，
-    <3% 或 >10% 直接 pass_gate=False，杜绝 000001/600900 类低波标的穿透）：
-        3≤amp≤7 → +0.2；7~10 → +0.1；<3 或 >10 → 硬拒（pass_gate=False）
-    返回 {score(0-1), pass_gate, reasons}。
+    生产用实时 m5/m1 分钟线 + 实时行情；回测没有当日分钟缓存，用 as_of 历史日线
+    近似同一组输入（口径差异由 caliber_notes 声明）：
+      - 振幅：近 6 日日线 (high-low)/pre_close 的中位（生产为近 6 日 m5 日振幅中位）
+      - OC 回归度：近 6 日 |收盘-开盘|/日内振幅 的中位
+      - 往返度：无分钟数据 → 0（该项不计分）
+      - 流动性：近 6 日成交额均值（tushare 千元 → 元），换手率未知 → 跳过换手率门槛
+    硬门槛与生产一致：价差>0.5、振幅∈[3,10]、成交额≥5亿。
+    返回 {score, pass_gate, reasons, ...}（与 calc_t_quality 同构）。
     """
-    from app.services.t_pool import MAX_AMP_PCT, MIN_AMP_PCT
+    from app.services.t_pool import _median, _quality_from_ohlcv
     if not bars or len(bars) < 5:
         return {"score": 0.0, "pass_gate": False, "reasons": ["日线不足"]}
-    recent = bars[-20:]
-    amps, amounts = [], []
+    recent = bars[-6:]
+    amps, ocs, amounts = [], [], []
     for i in range(1, len(recent)):
         b = recent[i]
         prev_close = recent[i - 1]["close"]
         if prev_close <= 0:
             continue
-        amps.append((float(b["high"]) - float(b["low"])) / prev_close * 100)
+        high, low = float(b["high"]), float(b["low"])
+        amps.append((high - low) / prev_close * 100)
+        rng = high - low
+        if rng > 0:
+            ocs.append(abs(float(b["close"]) - float(b["open"])) / rng)
         amounts.append(float(b.get("amount") or 0))
     if not amps:
         return {"score": 0.0, "pass_gate": False, "reasons": ["无有效日线"]}
-    avg_amp = sum(amps) / len(amps)
-    avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
-    # 启动票豁免（迭代#55，t1 漏选分析）：近 20 日平均振幅 <3% 硬拒会误杀"启动前夜"——
-    # 000725 案例（20 日均振幅 2.5% 被拒，窗口实际 +23.4%，启动后振幅放大到 5-15%）。
-    # 若近 5 日振幅已 ≥MIN（近期放量启动迹象）→ 不硬拒，给低分（0.4）进入候选，
-    # 由趋势/风险维度继续把关；平均 <3% 且近 5 日仍 <3% 才硬拒。
-    recent5_amp = sum(amps[-5:]) / 5 if len(amps) >= 5 else avg_amp
-    if avg_amp < MIN_AMP_PCT:
-        # 豁免需近 5 日振幅在 [MIN, MAX] 内（启动迹象且非妖票）
-        if MIN_AMP_PCT <= recent5_amp <= MAX_AMP_PCT:
-            return {"score": 0.4, "pass_gate": True,
-                    "reasons": [f"近20日均振幅 {avg_amp:.1f}% 偏低但近5日已放大至 "
-                                f"{recent5_amp:.1f}%（启动迹象，降分放行）"]}
-        return {"score": 0.0, "pass_gate": False,
-                "reasons": [f"振幅不适宜（{avg_amp:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）"]}
-    if avg_amp > MAX_AMP_PCT:
-        return {"score": 0.0, "pass_gate": False,
-                "reasons": [f"振幅不适宜（{avg_amp:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）"]}
-    if avg_amp <= 5.0:
-        amp_score = 0.1 + 0.1 * (avg_amp - MIN_AMP_PCT) / (5.0 - MIN_AMP_PCT)  # 3→0.1, 5→0.2
-    elif avg_amp <= 7.0:
-        amp_score = 0.2  # 5~7 最优平台
-    else:
-        amp_score = 0.2 - 0.1 * (avg_amp - 7.0) / (MAX_AMP_PCT - 7.0)  # 7→0.2, 10→0.1
-    # 流动性贡献（迭代#42：三档→log 连续分）：成交额越高分越高，8亿→0.2 基准
-    # （tushare daily.amount 单位千元，×1000 转元）
-    avg_amount_yuan = avg_amount * 1000
-    if avg_amount_yuan >= 8e8:
-        liq_score = 0.2 + 0.1 * min(math.log10(avg_amount_yuan / 8e8) / 2.0, 1.0)  # 8亿→0.2, 800亿→0.3
-    elif avg_amount_yuan >= 2e8:
-        liq_score = 0.1 + 0.1 * (avg_amount_yuan - 2e8) / 6e8  # 2亿→0.1, 8亿→0.2
-    else:
-        liq_score = -0.2
-    score = round(max(0.0, min(0.5 + amp_score + liq_score, 1.0)), 4)
-    reasons = []
-    if liq_score < 0:
-        reasons.append(f"流动性不足（日均 {avg_amount_yuan / 1e8:.1f} 亿）")
-    return {"score": score, "pass_gate": score >= 0.5, "reasons": reasons}
+    amp_median = _median(amps)
+    oc = _median(ocs) if ocs else 1.0
+    amount = (sum(amounts) / len(amounts)) * 1000 if amounts else 0.0  # 千元 → 元
+    price = float(recent[-1]["close"] or 0)
+    return _quality_from_ohlcv(amp_median, oc, 0, amount, 0.0, price)
 
 
 def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,

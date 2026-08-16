@@ -50,11 +50,64 @@ STOP_LOSS_AMP_FACTOR = 0.55   # 止损 = 振幅中位 × 0.55（迭代 #36 后 0
 
 
 # ────────────────────────────────────────────────────────────────
-# 可T质量打分
+# 可T质量打分（生产/回测共用同一核心）
 # ────────────────────────────────────────────────────────────────
 
+def _quality_from_ohlcv(amp_median: Optional[float], oc: float, round_trip: int,
+                        amount: float, turnover: float, price: float,
+                        symbol: str = "") -> Dict[str, Any]:
+    """可T质量打分核心（生产 calc_t_quality 与回测 _quality_from_daily 共用）。
+
+    唯一区别是输入数据源：生产用实时 m5/m1 分钟线 + 实时行情；
+    回测用 as_of 历史日线近似（无分钟线时 round_trip=0、换手率未知=跳过）。
+
+    Args:
+        amp_median: 近端日振幅中位（%，m5 或日线口径）
+        oc: O-C 回归度（0~1，越小双向可T越强）
+        round_trip: 日内往返次数（无分钟数据传 0 → 该项不计分）
+        amount: 成交额（元；0=未知 → 跳过流动性硬门槛）
+        turnover: 换手率（%；0=未知 → 跳过换手率硬门槛）
+        price: 现价（滑点成本基准）
+    """
+    tick = 0.01
+    slippage_cost = (SLIPPAGE_TICKS * tick * 2 + FEE_PCT * price) / price * 100 if price else 0.5
+    spread = round(amp_median - 2 * slippage_cost, 3) if amp_median is not None else 0.0
+    spread_score = min(spread / 2.0, 1.0) if spread > 0 else 0.0
+    oc_score = 1.0 if oc <= OC_LOW else (0.5 if oc <= OC_HIGH else 0.0)
+    rt_score = min(round_trip / 20.0, 1.0) if round_trip > 0 else 0.0
+    liq = _liquidity_score(amount, turnover)
+    score = round(0.4 * spread_score + 0.3 * oc_score + 0.15 * rt_score + 0.15 * liq, 3)
+
+    reasons = []
+    if spread <= MIN_T_SPREAD:
+        reasons.append(f"可T价差空间≤{MIN_T_SPREAD}（价差不覆盖成本）")
+    if amp_median is not None and (amp_median < MIN_AMP_PCT or amp_median > MAX_AMP_PCT):
+        reasons.append(f"振幅不适宜（{amp_median:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）")
+    if amount > 0 and amount < MIN_AMOUNT:
+        reasons.append(f"成交额不足（{amount / 1e8:.1f}亿 < {MIN_AMOUNT / 1e8:.0f}亿）")
+    if turnover > 0 and (turnover < TURNOVER_LOW or turnover > TURNOVER_HIGH):
+        reasons.append(f"换手率不适中（{turnover:.1f}%）")
+
+    return {
+        "symbol": symbol,
+        "spread": spread,
+        "oc_regression": round(oc, 3),
+        "round_trip": round_trip,
+        "score": score,
+        "factors": {
+            "amp_median": round(amp_median, 3) if amp_median is not None else None,
+            "slippage_cost": round(slippage_cost, 4),
+            "liquidity": liq,
+            "amount": amount,
+            "turnover": turnover,
+        },
+        "pass_gate": not reasons,
+        "reasons": reasons,
+    }
+
+
 def calc_t_quality(symbol: str, quote: Optional[dict] = None) -> Dict[str, Any]:
-    """计算单标可T质量三代理 + 打分。
+    """计算单标可T质量三代理 + 打分（生产实时口径；与回测 _quality_from_daily 同一核心）。
 
     Args:
         symbol: 股票代码（如 600519 / 000001.SZ）
@@ -76,9 +129,6 @@ def calc_t_quality(symbol: str, quote: Optional[dict] = None) -> Dict[str, Any]:
     else:
         amp_median = float(quote.get("amplitude", 3.0) or 3.0)  # 降级用当日振幅
     price = float(quote.get("current", 0) or 0)
-    tick = 0.01 if price and price >= 10 else 0.01
-    slippage_cost = (SLIPPAGE_TICKS * tick * 2 + FEE_PCT * price) / price * 100 if price else 0.5
-    spread = round(amp_median - 2 * slippage_cost, 3)
 
     # 2) O-C 回归度：|收-开| / 日内振幅（分钟线按日聚合）
     oc = _calc_oc_regression(bars) if bars else float(quote.get("amplitude", 0) or 0)
@@ -87,44 +137,13 @@ def calc_t_quality(symbol: str, quote: Optional[dict] = None) -> Dict[str, Any]:
     m1_bars = fetch_minute_bars(symbol, freq="m1", count=480)
     round_trip = _calc_round_trip(m1_bars) if m1_bars else _calc_round_trip(bars)
 
-    # 4) 流动性
+    # 4) 流动性（统一核心内部计算 _liquidity_score）
     amount = float(quote.get("amount", 0) or 0) * 10000  # 腾讯 amount 是万元
     turnover = float(quote.get("turnover_rate", 0) or 0)
-    liq = _liquidity_score(amount, turnover)
 
-    # 5) 打分（加权，P4 标定）
-    spread_score = min(spread / 2.0, 1.0) if spread > 0 else 0.0
-    oc_score = 1.0 if oc <= OC_LOW else (0.5 if oc <= OC_HIGH else 0.0)
-    rt_score = min(round_trip / 20.0, 1.0) if round_trip > 0 else 0.0
-    score = round(0.4 * spread_score + 0.3 * oc_score + 0.15 * rt_score + 0.15 * liq, 3)
-
-    # 6) 硬门槛
-    reasons = []
-    if spread <= MIN_T_SPREAD:
-        reasons.append(f"可T价差空间≤{MIN_T_SPREAD}（价差不覆盖成本）")
-    if amp_median is not None and (amp_median < MIN_AMP_PCT or amp_median > MAX_AMP_PCT):
-        reasons.append(f"振幅不适宜（{amp_median:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）")
-    if amount > 0 and amount < MIN_AMOUNT:
-        reasons.append(f"成交额不足（{amount / 1e8:.1f}亿 < 5亿）")
-    if turnover > 0 and (turnover < TURNOVER_LOW or turnover > TURNOVER_HIGH):
-        reasons.append(f"换手率不适中（{turnover:.1f}%）")
-
-    return {
-        "symbol": symbol,
-        "spread": spread,
-        "oc_regression": round(oc, 3),
-        "round_trip": round_trip,
-        "score": score,
-        "factors": {
-            "amp_median": round(amp_median, 3) if daily_amps else None,
-            "slippage_cost": round(slippage_cost, 4),
-            "liquidity": liq,
-            "amount": amount,
-            "turnover": turnover,
-        },
-        "pass_gate": not reasons,
-        "reasons": reasons,
-    }
+    # 5) 打分（加权，P4 标定）——统一核心，与回测 _quality_from_daily 同公式同门槛
+    return _quality_from_ohlcv(amp_median, oc, round_trip, amount, turnover,
+                               price, symbol=symbol)
 
 
 def _calc_daily_amplitudes(bars: List[dict]) -> List[float]:
