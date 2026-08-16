@@ -160,6 +160,7 @@ const EVENT_TYPE_LABEL: Record<string, string> = {
   condition_rebuild: '条件重建', escalated: '升级人工', ai_wait: 'AI等待',
   stop_loss: '止损', cancelled: '取消', data_gap: '数据缺口', eval_error: '评估异常',
   build_decision: '建仓决策', rolling_scan: '盘后扫描',
+  auto_select: '自动选股', auto_select_done: '选股完成',
 };
 
 function fmtDayNice(day: string): string {
@@ -225,6 +226,14 @@ function describeEvent(ev: BtEvent) {
     action = '盘后扫描';
     const bs = (inner.built_symbols || []).join('/');
     note = `达标 ${inner.pending_count ?? 0} 只 · 建仓 ${inner.built_count ?? 0} 只${bs ? `：${bs}` : ''}`;
+  } else if (t === 'auto_select') {
+    action = `自动选股${inner.source ? ' · ' + inner.source : ''}`;
+    const as = (inner.symbols || []).join('/');
+    note = `${inner.as_of ?? ''} · 扫描 ${inner.scanned ?? 0} 只 · 达标 ${inner.passed ?? 0} 只${as ? `：${as}` : ''}`;
+  } else if (t === 'auto_select_done') {
+    action = `选股完成（${inner.count ?? 0} 只）`;
+    const sd = String(inner.selected_start ?? '');
+    note = `${sd ? sd.slice(0, 4) + '-' + sd.slice(4, 6) + '-' + sd.slice(6, 8) : ''} · ${(inner.symbols || []).join('/')}`;
   } else {
     action = typeLabel;
     note = String(inner.reason || inner.decision || '');

@@ -377,12 +377,14 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
 def auto_select_symbols_rolling(select_source: str, select_limit: int,
                                 start_date: str, end_date: str,
                                 progress_cb: Optional[callable] = None,
-                                aggregate: bool = False) -> tuple:
+                                aggregate: bool = False,
+                                event_cb: Optional[callable] = None) -> tuple:
     """自动选股（逐日滚动）：从回测窗口首日起按交易日顺序扫描，某日无达标标的自动顺延次日。
 
     用户需求：当天没有选股标的时不再直接失败，滚动到下一个有达标标的的交易日。
     progress_cb(i, n)：每扫描一个交易日回调一次（i 从 0 起），供 run_task 上报实时进度
     （自动选股可能耗时数分钟，不能让前端一直停在 0%）。
+    event_cb(events)：每扫完一个交易日回调一次（list 事件，供实时落库到时间明细）。
     aggregate=True（每日滚动建仓任务）：不只在第一个有标的的交易日停下，而是继续扫完
     窗口，取全部达标标的的并集（≤ select_limit 只）——滚动引擎会逐日重打分，
     只有 1 只候选会白白浪费掉后续几天才达标的标的。
@@ -455,6 +457,23 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
             except Exception as e:
                 last_err = e
                 print(f"[t-backtest] 降级全市场扫描失败 as_of={as_of}: {e}（顺延下一交易日）")
+        # 实时事件：本交易日扫描结果（前端时间明细从 0% 就开始追加）
+        if event_cb is not None:
+            try:
+                event_cb([{
+                    "type": "auto_select",
+                    "trade_day": d,
+                    "data": {
+                        "as_of": as_of,
+                        "source": source,
+                        "scanned": len(cands),
+                        "passed": len(syms),
+                        "symbols": syms[:20],
+                        "error": str(last_err)[:120] if last_err else "",
+                    },
+                }])
+            except Exception:
+                pass
         if syms:
             print(f"[t-backtest] 自动选股({source}) as_of={as_of} 达标 {len(syms)} 只: {syms[:10]}")
             if selected_start is None:
@@ -527,13 +546,28 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 pass
         symbols, selected_start, _scan_err = auto_select_symbols_rolling(
             select_source, select_limit, start, end, progress_cb=_sel_progress,
-            aggregate=bool(task.get("rolling_build", False)))
+            aggregate=bool(task.get("rolling_build", False)),
+            event_cb=lambda evs: save_events(task_id, evs))
         if not symbols:
             err = f"自动选股({select_source})在回测区间内无达标标的（已逐日顺延扫描）"
             if _scan_err is not None:
                 err += f"；{_scan_err}"
             update_task_status(task_id, "failed", error_message=err)
             return {"status": "failed", "error": err}
+        # 选股完成汇总事件
+        try:
+            save_events(task_id, [{
+                "type": "auto_select_done",
+                "trade_day": (selected_start or start.replace("-", "")),
+                "data": {
+                    "source": select_source,
+                    "count": len(symbols),
+                    "symbols": symbols[:20],
+                    "selected_start": selected_start,
+                },
+            }])
+        except Exception as e:
+            print(f"[t-backtest] 选股完成事件落库失败: {e}")
         # 顺延命中：窗口起始日滚动到第一个有达标标的的交易日（同步落库，报告/前端展示一致）
         if selected_start and selected_start != start.replace("-", ""):
             new_start = f"{selected_start[:4]}-{selected_start[4:6]}-{selected_start[6:8]}"
