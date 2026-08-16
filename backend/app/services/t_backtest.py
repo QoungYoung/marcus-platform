@@ -561,12 +561,15 @@ class TBacktestEngine:
                     # 无底仓预拦截：做T条件必须依托底仓——
                     #   卖腿：sellable=0 不评估（T+0 当日买回次日才可卖，sellable 会递减）
                     #   买腿：total_shares=0 不评估（低吸=有底仓加仓，无持仓属新开仓走建仓流程），
-                    #         避免"持仓0股无弹药"反复唤醒 AI 放弃刷屏
+                    #         避免"持仓0股无弹药"反复唤醒 AI 放弃刷屏。
+                    #   自由跑（T_BUY_TIER_LIMIT_ENABLED=0）：买腿放行——卖出清仓后
+                    #   允许重新建仓再 T（用户#49：低吸 4 次触发全被"无底仓"预拦截吃掉）
+                    free_run = _free_run_enabled()
                     if tkind in ("high_sell_then_buy_back", "high_sell"):
                         if ledger.sellable() <= 0:
                             continue
                     elif tkind in ("low_buy", "panic_vibrate"):
-                        if ledger.total_shares() <= 0:
+                        if ledger.total_shares() <= 0 and not free_run:
                             continue
                     try:
                         snapshot = build_snapshot_at(
@@ -781,7 +784,11 @@ class TBacktestEngine:
         # 数量：低吸按可卖底仓 30%（对齐 t_bridge 默认），最小 100 股
         sellable = ledger.sellable()
         if side == "buy":
-            volume = max(int(sellable * 0.3), 100) if sellable > 0 else 100
+            if sellable > 0:
+                volume = max(int(sellable * 0.3), 100)
+            else:
+                # 自由跑：卖出清仓后低吸 = 重新建仓（min 100 股，A股最小单位）
+                volume = 100
             volume = (volume // 100) * 100
         else:
             # 高抛卖量 ≤ 可卖底仓 30%（min 100 股），且底仓充足(>200股)时保留至少 100 股
@@ -1042,7 +1049,8 @@ def _rule_review(trigger: Dict[str, Any], regime: Dict[str, Any],
         return "abandon", "regime=HALT 极端市况"
     if ledger.consecutive_losses >= 2:
         return "abandon", "连续触犯风控，强制放弃"
-    if side == "buy" and ledger.sellable() <= 0:
+    # 无底仓标的低吸：默认放弃（新开仓风险）；自由跑时放行——卖出清仓后可重新建仓再 T
+    if side == "buy" and ledger.sellable() <= 0 and not _free_run_enabled():
         return "abandon", "无底仓标的低吸（新开仓风险）"
     pnl_pct = ledger.realized_pnl / ledger.net_asset * 100 if ledger.net_asset else 0.0
     if pnl_pct <= -1.0:
@@ -1152,6 +1160,19 @@ def _amp_median_from_m5(m5: List[dict]) -> Optional[float]:
         return _median(amps) if amps else None
     except Exception:
         return None
+
+
+def _free_run_enabled() -> bool:
+    """AI 自由跑模式（与实盘网关开关同源）：档位上限+回转额上限均关闭时为自由跑。
+
+    自由跑语义：卖出清仓后允许重新建仓再 T（低吸买腿不再要求有底仓）、
+    买腿不设档位上限、日回转额不限（AI 自主决策，网关只做硬风控兜底）。
+    """
+    try:
+        import app.services.t_gateway as gw
+        return not gw.T_BUY_TIER_LIMIT_ENABLED and not gw.T_TURNOVER_LIMIT_ENABLED
+    except Exception:
+        return False
 
 
 def _default_t_conditions(avg_price: float, amp_med: Optional[float] = None) -> List[Dict[str, Any]]:

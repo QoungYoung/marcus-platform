@@ -330,6 +330,34 @@ class TestEngineCore(unittest.TestCase):
         self.assertEqual(action, "abandon")
         self.assertIn("无底仓", reason)
 
+    def test_free_run_rebuild_after_sellout(self):
+        """自由跑：卖出清仓后低吸可重新建仓再 T（无底仓不再预拦截/复核放弃）。"""
+        import app.services.t_gateway as gw
+        from app.services.t_backtest import (TBacktestEngine, TBacktestLedger,
+                                             _rule_review, _free_run_enabled)
+        self.assertTrue(hasattr(gw, "T_BUY_TIER_LIMIT_ENABLED"))
+        # 开关关闭 = 自由跑
+        with patch.object(gw, "T_BUY_TIER_LIMIT_ENABLED", False), \
+             patch.object(gw, "T_TURNOVER_LIMIT_ENABLED", False):
+            self.assertTrue(_free_run_enabled())
+            ledger = TBacktestLedger("X", 0, 10.0, 200000.0)  # 无底仓
+            action, reason = _rule_review(
+                {"event_type": "low_buy", "symbol": "X"}, {"regime": "ACTIVE"}, ledger)
+            self.assertEqual(action, "exec", "自由跑无底仓低吸应放行")
+            # 网关：无底仓低吸放行 + 买腿不限量
+            ctx = {
+                "regime": "ACTIVE", "quote": None,
+                "ledger": {"X": {"sellable": 0, "volume": 0, "avg_price": 10.0}},
+                "net_asset": 200000.0,
+                "daily": {"realized_pnl": 0.0, "daily_turnover_amount": 0.0},
+                "daily_buy_legs": 0, "risk": {}, "sell_in_transit": False,
+                "trigger_status": "pending", "cost_ratio_ok": True,
+            }
+            r = gw.validate_order_at("X", "buy", 9.5, 100, ctx)
+            self.assertTrue(r["pass"], f"自由跑无底仓低吸应过网关: {r.get('reason')}")
+            self.assertEqual(gw._max_buy_volume("X", "L1", {"X": {"sellable": 0}}),
+                             max(0, 10 ** 9), "自由跑买腿不限档位上限")
+
     def test_zero_share_sell_blocked(self):
         """底仓耗尽后卖腿预拦截：无底仓时不触发高抛（不产生无意义成交/刷屏）。"""
         from app.services.t_backtest import TBacktestEngine
@@ -458,12 +486,14 @@ class TestEngineCore(unittest.TestCase):
         self.assertEqual(len(conds), 2)
 
     def test_gateway_free_run_switches(self):
-        """AI 自由跑开关：T_BUY_TIER_LIMIT_ENABLED=0 → 买腿≤可卖底仓全额（L1 不收缩）；
+        """AI 自由跑开关：T_BUY_TIER_LIMIT_ENABLED=0 → 买腿不限档位上限（卖出后可重建仓）；
         T_TURNOVER_LIMIT_ENABLED=0 → 日回转额超限不拦截。"""
         import app.services.t_gateway as gw
         with patch.object(gw, "T_BUY_TIER_LIMIT_ENABLED", False):
-            self.assertEqual(gw._max_buy_volume("X", "L1", {"X": {"sellable": 100}}), 100,
-                             "关闭档位上限后 L1 应放行全额")
+            self.assertEqual(gw._max_buy_volume("X", "L1", {"X": {"sellable": 100}}),
+                             10 ** 9, "关闭档位上限后买腿不限量")
+            self.assertEqual(gw._max_buy_volume("X", "L0", {"X": {"sellable": 100}}),
+                             10 ** 9, "L0 档同样放行（自由跑）")
         with patch.object(gw, "T_BUY_TIER_LIMIT_ENABLED", True):
             self.assertEqual(gw._max_buy_volume("X", "L1", {"X": {"sellable": 100}}), 50,
                              "默认 L1 档买腿≤可卖×0.5")

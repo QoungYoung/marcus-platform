@@ -211,16 +211,15 @@ def _floor_tier(regime: str, near_limit_down: bool) -> str:
 def _max_buy_volume(symbol: str, tier: str, ledger: Optional[dict] = None) -> int:
     """按分档计算买腿上限（股数）。ledger 可注入（回测账本），默认实时账本。
 
-    T_BUY_TIER_LIMIT_ENABLED=0（AI 自由跑）：忽略档位收缩，买腿 ≤ 可卖底仓全额。
+    T_BUY_TIER_LIMIT_ENABLED=0（AI 自由跑）：不设档位上限——卖出后允许重新建仓再 T，
+    买腿数量由单笔额度/总仓位约束（建议层）兜底，返回极大值放行。
     """
     if ledger is None:
         ledger = get_sellable_ledger()
     item = ledger.get(symbol)
-    if not item:
-        return 0
-    sellable = item["sellable"]
+    sellable = item["sellable"] if item else 0
     if not T_BUY_TIER_LIMIT_ENABLED:
-        return sellable
+        return max(sellable, 10**9)  # 自由跑：不限量（上限由单笔/总仓位约束）
     if tier == TIER_L0:
         return 0
     if tier == TIER_L1:
@@ -298,8 +297,9 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                 result["reason"] = "无足够可卖底仓（裸空拦截）"
                 return result
         elif side == "buy":
-            # 低吸买腿必须已有底仓（禁止无底仓建仓式做T）
-            if symbol not in ledger:
+            # 低吸买腿必须已有底仓（禁止无底仓建仓式做T）——
+            # 自由跑（T_BUY_TIER_LIMIT_ENABLED=0）时放行：允许卖出清仓后重新建仓再 T
+            if symbol not in ledger and T_BUY_TIER_LIMIT_ENABLED:
                 result["reason"] = "无底仓标的禁止做T低吸（新开仓走独立建仓流程）"
                 return result
         # 4) 跌停禁买 / 涨停禁卖
