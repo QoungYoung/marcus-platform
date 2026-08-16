@@ -145,7 +145,7 @@
 /* ── Body: Session Ledger（mobile-first：台账在前，会话栏在后） ── */
 .tbt-body {
   display: grid;
-  grid-template-areas: 'desk' 'rail';
+  grid-template-areas: 'desk' 'rail' 'right';
   gap: var(--space-4);
   max-width: 1500px;
   margin: 0 auto;
@@ -154,7 +154,8 @@
 }
 .tbt-rail { grid-area: rail; min-width: 0; }
 .tbt-desk { grid-area: desk; min-width: 0; }
-.tbt-body.is-rail-closed { grid-template-areas: 'desk'; grid-template-columns: minmax(0, 1fr); }
+.tbt-right { grid-area: right; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.tbt-body.is-rail-closed { grid-template-areas: 'desk' 'right'; grid-template-columns: minmax(0, 1fr); }
 .tbt-body.is-rail-closed .tbt-rail { display: none; }
 
 /* ── Panels ── */
@@ -633,19 +634,19 @@
 @media (min-width: 56rem) {
   .tbt-header { padding: var(--space-5) var(--space-4) var(--space-3); }
   .tbt-body {
-    grid-template-areas: 'rail desk';
-    grid-template-columns: 288px minmax(0, 1fr);
+    grid-template-areas: 'rail desk right';
+    grid-template-columns: 288px minmax(0, 1fr) minmax(240px, 300px);
     padding: 0 var(--space-4) 36px;
   }
   .tbt-body.is-rail-closed {
-    grid-template-areas: 'desk';
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'desk right';
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
   }
 }
 
 /* ── ≥ 90rem（~1440px）：宽屏松弛 ── */
 @media (min-width: 90rem) {
-  .tbt-body { grid-template-columns: 300px minmax(0, 1fr); }
+  .tbt-body { grid-template-columns: 300px minmax(0, 1fr) minmax(260px, 320px); }
   .tbt-sub { font-size: 13px; }
 }
 

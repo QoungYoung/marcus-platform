@@ -594,7 +594,7 @@ export default function TBacktestPage() {
           </div>
         </aside>
 
-        {/* ── 台账工作台：参数 / AI 决策 / 实时 / 报告 ── */}
+        {/* ── 台账工作台：参数 / 实时 / 报告 ── */}
         <main className="tbt-desk">
           {error && <div className="tbt-alert tbt-alert-err" role="alert">{error}</div>}
           {msg && <div className="tbt-alert" role="status">{msg}</div>}
@@ -623,48 +623,6 @@ export default function TBacktestPage() {
               </div>
             )}
           </section>
-
-          {/* AI 决策记录：仅选中任务时展示（该任务回测产生的 AI 决策审计） */}
-          {selectedId != null && (
-            <section className="tbt-panel">
-              <div className="tbt-panel-head">
-                <span>🤖 AI 决策记录 · 任务 #{selectedId}</span>
-                <span className="tbt-count">{aiActions.length}</span>
-              </div>
-              <ul className="tbt-ai-list">
-                {aiActions.length === 0 && (
-                  <li className="tbt-empty">该任务暂无 AI 决策记录 — 回测完成时将 AI 成交审计写入该任务会话</li>
-                )}
-                {aiActions.slice(0, 15).map((a) => {
-                  const out = a.output || {};
-                  const gw = a.gateway_result || {};
-                  const oc = a.outcome || {};
-                  const reason = out.reason || gw.reason || '';
-                  const gwOk = gw.status === 'success' ? '✅' : gw.status ? '⛔' : '';
-                  // outcome 摘要：✅+0.85% / ⛔-1.5%
-                  let ocSum = '';
-                  let ocClass = '';
-                  if (oc && oc.pct_change != null) {
-                    const pct = Number(oc.pct_change);
-                    ocSum = `${pct >= 0 ? '✅' : '⛔'}${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
-                    ocClass = pct >= 0 ? 'is-up' : 'is-down';
-                  }
-                  return (
-                    <li key={a.id} className="tbt-ai-action">
-                      <span className="tbt-ai-top">
-                        <b>{a.symbol}</b>
-                        <span className="tbt-ai-type">{a.action_type}</span>
-                        {ocSum && <span className={`tbt-ai-oc ${ocClass}`}>{ocSum}</span>}
-                        <span className="tbt-ai-gw">{gwOk}</span>
-                      </span>
-                      <span className="tbt-ai-meta">{(a.created_at || '').slice(5, 16)}</span>
-                      {reason && <span className="tbt-ai-reason">{String(reason).slice(0, 90)}</span>}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          )}
 
           {/* 报告 */}
           {selectedId != null && report && (
@@ -833,6 +791,50 @@ export default function TBacktestPage() {
             </section>
           )}
         </main>
+
+        {/* AI 决策记录：最右侧栏，仅选中任务时展示 */}
+        {selectedId != null && (
+          <aside className="tbt-right" aria-label="AI 决策记录">
+          <section className="tbt-panel">
+              <div className="tbt-panel-head">
+                <span>🤖 AI 决策记录 · 任务 #{selectedId}</span>
+                <span className="tbt-count">{aiActions.length}</span>
+              </div>
+              <ul className="tbt-ai-list">
+                {aiActions.length === 0 && (
+                  <li className="tbt-empty">该任务暂无 AI 决策记录 — 回测完成时将 AI 成交审计写入该任务会话</li>
+                )}
+                {aiActions.slice(0, 15).map((a) => {
+                  const out = a.output || {};
+                  const gw = a.gateway_result || {};
+                  const oc = a.outcome || {};
+                  const reason = out.reason || gw.reason || '';
+                  const gwOk = gw.status === 'success' ? '✅' : gw.status ? '⛔' : '';
+                  // outcome 摘要：✅+0.85% / ⛔-1.5%
+                  let ocSum = '';
+                  let ocClass = '';
+                  if (oc && oc.pct_change != null) {
+                    const pct = Number(oc.pct_change);
+                    ocSum = `${pct >= 0 ? '✅' : '⛔'}${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+                    ocClass = pct >= 0 ? 'is-up' : 'is-down';
+                  }
+                  return (
+                    <li key={a.id} className="tbt-ai-action">
+                      <span className="tbt-ai-top">
+                        <b>{a.symbol}</b>
+                        <span className="tbt-ai-type">{a.action_type}</span>
+                        {ocSum && <span className={`tbt-ai-oc ${ocClass}`}>{ocSum}</span>}
+                        <span className="tbt-ai-gw">{gwOk}</span>
+                      </span>
+                      <span className="tbt-ai-meta">{(a.created_at || '').slice(5, 16)}</span>
+                      {reason && <span className="tbt-ai-reason">{String(reason).slice(0, 90)}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+            </aside>
+        )}
       </div>
 
       {/* ── 新建任务弹窗 ── */}
