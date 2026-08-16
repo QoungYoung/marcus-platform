@@ -103,7 +103,7 @@ export const backtestApi = {
 // 做T回测 APIs（t-backtest，单标的 + 组合 + 自动选股）
 export const tBacktestApi = {
   create: (data: {
-    symbol?: string; symbols?: string[]; build_mode?: boolean; rolling_build?: boolean; build_limit_ratio?: number;
+    symbol?: string; symbols?: string[]; build_mode?: boolean; rolling_build?: boolean; relax_mode?: boolean; build_limit_ratio?: number;
     select_source?: 'manual' | 'pool' | 'scan'; select_limit?: number;
     start_date: string; end_date: string; conditions?: any[]; init_shares?: number;
     net_asset?: number; review_mode?: 'llm' | 'rule';
