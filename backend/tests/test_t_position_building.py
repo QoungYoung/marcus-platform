@@ -310,26 +310,26 @@ class TestBuildScore(_PGTestCase):
     def test_build_score_source_mark(self):
         from app.services import t_build
         from app.services import t_pool
-        # 新门槛（P0 审查）：pool/scan 0.65、user 0.60——mock 高质量分应通过
+        # 新门槛（迭代#53）：pool/scan 0.78、user 0.65（人工指定放宽）——mock 高质量分应通过
         with patch.object(t_build, "_fetch_daily_bars", return_value=self._rising_bars()), \
              patch.object(t_pool, "calc_t_quality", return_value={
                  "score": 0.8, "pass_gate": True, "reasons": []}):
             r = t_build.build_score("SH600000", source="user")
             self.assertEqual(r["source"], "user")
             self.assertTrue(r["pass_gate"])
-            self.assertGreaterEqual(r["score"], 0.60)
+            self.assertGreaterEqual(r["score"], 0.65)
 
     def test_build_score_higher_threshold_scan(self):
-        """扫描来源门槛 0.65：quality 0.65 + 弱趋势（trend_score≈0）→ 总分不足被拒。"""
+        """扫描来源门槛 0.78：quality 0.65 + 弱趋势（trend_score≈0）→ 总分不足被拒。"""
         from app.services import t_build
         from app.services import t_pool
         with patch.object(t_build, "_fetch_daily_bars", return_value=self._falling_bars()), \
              patch.object(t_pool, "calc_t_quality", return_value={
                  "score": 0.65, "pass_gate": True, "reasons": []}):
             r = t_build.build_score("SH600000", source="scan")
-            # 弱趋势（trend_gate 可能过但 trend_score≈0）：0.55×0.65 + 0.35×0 = 0.3575 < 0.65 → 拒
+            # 弱趋势（trend_gate 可能过但 trend_score≈0）：0.55×0.65 + 0.35×0 = 0.3575 < 0.78 → 拒
             self.assertFalse(r["pass_gate"])
-            self.assertLess(r["score"], 0.65)
+            self.assertLess(r["score"], 0.78)
 
     def test_build_score_continuous_trend_discriminates(self):
         """P0-1 连续趋势分：同 quality 下强多趋势 vs 弱势横盘得分拉开（根治 0.73 坍缩）。"""

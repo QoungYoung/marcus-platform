@@ -36,8 +36,9 @@ from app.services.t_regime import compute_regime
 
 BUILD_PARAMS_DEFAULT = {
     # 选股
-    "cand_score_min": 0.65,          # 候选短名单门槛（0.55→0.65；user 来源放宽到 0.60 见 build_score）
-    "build_score_min": 0.60,         # 可建仓门槛
+    "cand_score_min": 0.78,          # 候选短名单门槛（迭代#53：0.65→0.78——68样本相关分析
+                                     # 显示 score<0.77 全部亏损(9/9)，0.77+ 才开始有正期望）
+    "build_score_min": 0.78,         # 可建仓门槛（同#53 上调；user 来源放宽到 0.70 见 build_score）
     # 权重（P0-1 打分坍缩根治：quality 0.8→0.55、trend 0.1→0.35——趋势从二值变连续后
     # 提权重才有区分度；source/risk 不变）
     "build_score_weights": {"quality": 0.55, "trend": 0.35, "source": 0.05, "risk": -0.05},
@@ -425,7 +426,7 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
         "symbol": symbol,
         "score": score,
         "pass_gate": pass_quality and trend_ok and score >= (
-            float(p["cand_score_min"]) if source != "user" else 0.60),
+            float(p["cand_score_min"]) if source != "user" else 0.65),
         "quality": q,
         "trend": {"ok": trend_ok, "note": trend_note, "score": trend_score},
         "risk_penalty": risk_penalty,

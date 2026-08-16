@@ -49,7 +49,8 @@ def _make_fixture(symbols=("AAA", "BBB", "CCC"), days=("20260810", "20260811", "
         base_d = datetime(2026, 6, 20)
         for i in range(40):
             d = (base_d + timedelta(days=i)).strftime("%Y%m%d")
-            px = 9.5 + i * 0.02
+            # 迭代#53 门槛 0.78：上涨斜率 0.02→0.15/天（40 天 +15%），保证合成标的过新门槛
+            px = 9.5 + i * 0.15
             daily.append({"trade_date": d, "open": round(px - 0.01, 2), "close": round(px, 2),
                           "high": round(px + 0.25, 2), "low": round(px - 0.25, 2),
                           "vol": 1e6, "amount": 1e9})
