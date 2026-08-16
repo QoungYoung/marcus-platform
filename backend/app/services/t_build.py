@@ -476,7 +476,8 @@ def _load_candidate_symbols() -> List[str]:
 SCAN_COARSE_MIN_AMOUNT = 8e8      # 粗筛：近端成交额 ≥ 8 亿（与 calc_t_quality 流动性口径一致）
 SCAN_COARSE_AMPLITUDE = (3.0, 10.0)  # 粗筛：振幅区间（t3 P1-2：对齐精筛硬门槛 [3,10]，减少无效精筛）
 SCAN_MAX_DAILY = 50               # 精筛单次上限（票/日，1s 节流）
-_SCAN_CACHE: Dict[str, Any] = {"date": "", "symbols": [], "active": []}
+# 粗筛缓存：key = "{日期}:{抽样规模}"（full=全市场），生产(默认 6 批)与回测(全市场)分开缓存
+_SCAN_CACHE: Dict[str, Any] = {}
 
 
 def _fetch_all_a_symbols() -> List[Dict[str, str]]:
@@ -522,10 +523,12 @@ def _coarse_filter_active(symbols: List[Dict[str, str]], max_batches: int = 6,
                           batch_size: int = 50) -> List[str]:
     """日频粗筛：腾讯 qt 批量拉成交额/振幅，保留 成交额≥8亿 ∧ 振幅∈[1%,10%]，按成交额降序。
 
-    返回活跃票 symbol 列表（腾讯格式 sh600519）。max_batches×batch_size 限制单次网络量。
+    返回活跃票 symbol 列表（腾讯格式 sh600519）。max_batches×batch_size 限制单次网络量；
+    max_batches=None 时扫描全市场（回测用，避免"只抽前 300 只"把大票漏在抽样窗口外）。
     """
     active: List[Dict[str, float]] = []
-    for i in range(0, min(len(symbols), max_batches * batch_size), batch_size):
+    limit_n = len(symbols) if max_batches is None else min(len(symbols), max_batches * batch_size)
+    for i in range(0, limit_n, batch_size):
         batch = symbols[i:i + batch_size]
         norm = [_normalize_symbol(r["symbol"]) for r in batch]
         try:
@@ -548,7 +551,8 @@ def _coarse_filter_active(symbols: List[Dict[str, str]], max_batches: int = 6,
 def scan_t_candidates(limit: int = 20, source: str = "pool",
                       as_of: Optional[str] = None,
                       quality_override_fn: Optional[callable] = None,
-                      bars_fn: Optional[callable] = None) -> List[Dict[str, Any]]:
+                      bars_fn: Optional[callable] = None,
+                      coarse_max_batches: int = 6) -> List[Dict[str, Any]]:
     """扫描建仓候选短名单（来源：user 指定列表 / pool 候选池 / scan 全市场粗筛）。
 
     - scan：stock_basic 全市场列表 → 日频粗筛（成交额/振幅，当日缓存）→ 精筛（calc_t_quality
@@ -559,25 +563,35 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
       传入后精筛质量分用历史日线（as_of）口径，而不是实时 calc_t_quality。
     - bars_fn(sym): 回测日线注入（与 quality_override_fn 配套，避免 build_score 重复拉取；
       返回 {date, open, close, high, low, vol, amount} 列表，或 None）。
+    - coarse_max_batches: 全市场粗筛抽样批数（默认 6×50=300 只，控制生产网络量）；
+      回测传 None 扫全市场，避免大票落在抽样窗口外被漏掉（粗筛口径仍为实时近似）。
     - 回测全市场扫描请用 scan_t_candidates_historical（历史日线粗筛，无实时行情依赖）。
     """
     if source == "user":
         raise ValueError("user 来源需显式传入 symbols")
     if source == "scan":
         today = datetime.now().strftime("%Y-%m-%d")
-        if _SCAN_CACHE.get("date") != today or not _SCAN_CACHE.get("active"):
+        # 缓存按 日+抽样规模 隔离：生产默认 6 批（网络量可控），回测 None=全市场
+        cache_key = f"{today}:{'full' if coarse_max_batches is None else f'b{coarse_max_batches}'}"
+        cached = _SCAN_CACHE.get(cache_key)
+        if not cached or not cached.get("active"):
             all_syms = _fetch_all_a_symbols()
             if not all_syms:
                 return []
-            active = _coarse_filter_active(all_syms)
-            _SCAN_CACHE.update({"date": today, "symbols": all_syms, "active": active})
-        symbols = _SCAN_CACHE["active"][:max(limit, SCAN_MAX_DAILY)]
+            active = _coarse_filter_active(all_syms, max_batches=coarse_max_batches)
+            cached = {"symbols": all_syms, "active": active}
+            _SCAN_CACHE[cache_key] = cached
+        symbols = cached["active"][:max(limit, SCAN_MAX_DAILY)]
     else:
         symbols = _load_candidate_symbols()
     if not symbols:
         return []
+    # 回测全市场模式（coarse_max_batches=None）：按 SCAN_MAX_DAILY 精筛上限打分，
+    # 而不是只打分"成交额前 limit 名"——否则中际旭创/东山精密等大票虽进池，
+    # 000603 这类中小达标票（成交额排名靠后）反而永远轮不到打分。生产保持原样。
+    score_n = max(limit, SCAN_MAX_DAILY) if coarse_max_batches is None else limit
     results = []
-    for sym in symbols[:limit]:
+    for sym in symbols[:score_n]:
         try:
             bars = bars_fn(sym) if bars_fn else None
             quality = quality_override_fn(sym, bars) if quality_override_fn else None
@@ -588,7 +602,7 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
             print(f"[t-build] 扫描 {sym} 失败: {e}")
         time.sleep(1.0)  # 1s 节流（分钟线/日线限流）
     results.sort(key=lambda x: x["score"], reverse=True)
-    return results
+    return results[:max(limit, 1)]
 
 
 def scan_t_candidates_historical(symbols: List[str],

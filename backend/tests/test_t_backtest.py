@@ -625,6 +625,26 @@ class TestAutoSelectRolling(unittest.TestCase):
         self.assertIsNone(day)
         self.assertIsNone(err)
 
+    def test_aggregate_collects_union_across_days(self):
+        """滚动建仓（aggregate=True）：不因首日有标的就停下，收集全窗口达标并集（≤limit）。"""
+        from app.services import t_backtest_runner as runner
+
+        def fake_scan(limit, source, as_of, **kw):
+            if as_of == "2026-08-09":  # 对应候选日 20260810
+                return [{"symbol": "AAA", "pass_gate": True, "score": 0.8}]
+            if as_of == "2026-08-10":  # 对应候选日 20260811
+                return [{"symbol": "BBB", "pass_gate": True, "score": 0.85}]
+            return []
+
+        with patch("app.services.t_backtest_data.resolve_trade_days",
+                   return_value=["20260810", "20260811", "20260812"]):
+            with patch("app.services.t_build.scan_t_candidates", side_effect=fake_scan):
+                syms, day, err = runner.auto_select_symbols_rolling(
+                    "scan", 10, "2026-08-10", "2026-08-12", aggregate=True)
+        self.assertEqual(syms, ["AAA", "BBB"], "应收集跨日达标并集")
+        self.assertEqual(day, "20260810", "起始日仍取第一个有标的的交易日")
+        self.assertIsNone(err)
+
 
 # ────────────────────────────────────────────────────────────────
 # DB 链路（需 PostgreSQL）
