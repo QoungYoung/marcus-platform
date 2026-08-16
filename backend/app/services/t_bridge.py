@@ -142,14 +142,20 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     )
     # 高抛卖腿是兑现利润的正向动作：连续命中告警不适用于高抛（高抛越多越好）
     if hit_alert and trigger.get("event_type") != "high_sell_then_buy_back":
-        msg += (f"⚠️ 该条件已连续命中 {consec} 次且未见实质改善——你必须给出明确的"
-                f"调整条件或冷却动作（update_condition），否则该条件将被系统自动冷却。")
+        msg += (f"⚠️ 该条件已连续命中 {consec} 次且未见实质改善——你必须二选一："
+                f"① 输出 update_condition 附新的合理条件；② 输出 wait 注明『连续命中，等待冷却』。"
+                f"严禁只把 target_price 往现价方向微调制造下一轮触发。")
     msg += (
-        f"你是做T决策者：请检查量价合理性、regime、可卖底仓与最近决策，输出决策 JSON："
+        f"你是做T决策者：本次触发已命中你的监控条件并通过系统规则预筛——**默认动作=exec（执行）**。"
+        f"仅当存在客观证据时才 wait/abandon，且 reason 必须写明具体证据："
+        f"① 现价与目标价/建议价脱节（差>1%）；② 已跌破止损；③ regime 禁自动；④ 恐慌放量追跌（量比骤升+创新低）。"
+        f"信息不足不等于 wait——若快照缺现价/量能，请先调用查询工具补数再判。"
+        f"输出决策 JSON："
         f'{{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", '
         f'"condition": {{...}}}}（condition 仅在 update_condition 时提供，含 symbol/trigger_kind/target_price 等）。'
-        f"exec 将按建议价经网关风控执行；wait/abandon 不成交；update_condition 将更新监控条件。"
-        f"如需更多数据可自主调用查询工具（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标"
+        f"exec 将按触发快照的『建议价』执行（低吸用建议买价、高抛用建议卖价），数量由系统按可卖底仓自动裁定；"
+        f"你不需要也不应自定价量，decision 只表达『是否放行』。如需改价，请用 update_condition 改写条件后让系统重新触发。"
+        f"如需更多数据可调用查询工具（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标"
         f"/ get_intraday_minute 分钟K线 / get_portfolio_positions 持仓 / get_stock_moneyflow 资金流"
         f"/ get_market_state 大盘），不必只依赖本快照。"
     )
@@ -180,13 +186,14 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         elif win_rate is not None and win_rate < 40:
             msg += f"【警告】该标的 exec 胜率 {win_rate}% < 40%，历史表现差——建议减仓或收紧触发。\n"
     msg += (
-        "【决策 checklist】① 盈亏比：现价距目标价是否 ≥0.5% 且覆盖成本（滑点+手续费）；"
-        "目标收益空间 / 潜在回撤空间 ≥1.2 才 exec；"
+        "【决策 checklist】① 价差/盈亏比（参考，非决定项）：现价距建议价应有 ≥0.2% 价差（网关建议层阈值），"
+        "滑点+手续费不应吃光价差——网关仍会做最终风控（裸空/跌停/熔断/可卖底仓/单笔5%/回转额），"
+        "你不需要比网关更严，系统一旦命中条件默认价差已够做；"
         "② 高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——触及时应倾向 exec 卖出兑现，"
-        "而非担心卖飞继续等待；③ 弹药：可卖底仓与浮盈浮亏（低吸触及时若亏损接近-3%止损线才保守）；"
-        "④ 历史模式：该标的低吸后历史走向/exec 胜率（如上）；"
-        "⑤ 连续命中：低吸条件已达告警阈值可调整，高抛不适用冷却。"
-        f"上下文: {json.dumps(ctx, ensure_ascii=False, default=str)[:1000]}"
+        "而非担心卖飞继续等待；③ 弹药：可卖底仓与浮盈浮亏（低吸触及时若亏损接近止损线才保守）；"
+        "④ 历史模式：该标的低吸后历史走向/exec 胜率（仅作趋势参考，不作为否决依据——"
+        "不要因为之前 wait 过就继续 wait）；"
+        "⑤ 连续命中：低吸条件已达告警阈值可调整或等待冷却，高抛不适用冷却。"
     )
     payload = {
         "message": msg,

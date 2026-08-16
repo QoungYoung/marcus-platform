@@ -72,20 +72,31 @@ def delete_prompt(db: Session, name: str) -> bool:
 
 def seed_prompts(db: Session, prompts_data: Dict[str, Dict[str, str]]) -> int:
     """
-    初始化 prompts 表（幂等：只插入不存在的）。
-    返回本次新插入的数量。
+    初始化 prompts 表（幂等且自愈：只插入不存在的；内容签名变化时覆盖更新）。
+
+    迭代#54 P0（t2 工具分析）：旧版幂等"只插入不覆盖"导致新种子从未生效——
+    生产 DB 的 T_BUILD_SYSTEM_PROMPT 停在 934 字符旧版（无"自主看盘"查询工具段），
+    AI 不知道有 get_stock_quote 等 6 个查询工具，10/22 工具零调用。
+    现在种子内容与 DB 不一致时自动覆写（版本 +1）。
+    返回本次变更数量（插入 + 更新）。
     """
     count = 0
     for name, data in prompts_data.items():
         existing = db.query(Prompt).filter(Prompt.name == name).first()
+        content = data["content"]
         if not existing:
             prompt = Prompt(
                 name=name,
                 label=data.get("label", name),
-                content=data["content"],
+                content=content,
                 version=1,
             )
             db.add(prompt)
+            count += 1
+        elif existing.content != content:
+            existing.content = content
+            existing.version += 1
+            existing.updated_at = datetime.utcnow()
             count += 1
     if count > 0:
         db.commit()

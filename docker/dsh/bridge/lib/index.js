@@ -736,7 +736,18 @@ function apply(ctx) {
       const systemPrompt = getPrompt(mode === 'trade' ? 'TRADE_SYSTEM_PROMPT' : 'CHAT_SYSTEM_PROMPT');
       // 做T会话（t-agent-*）附加底仓建仓工作流指引
       const isTAgentSession = String(sessionId || '').includes('t-agent-');
-      const tBuildPrompt = isTAgentSession ? getPrompt('T_BUILD_SYSTEM_PROMPT') : '';
+      // 条件生成会话（conditions 模式）：不注入 T_BUILD/BACKTEST_REVIEW，避免三重角色冲突
+      // （迭代#54 P1：此前误用 backtest 模式 → 注入"只做 exec/wait 决策"的复核提示 +
+      //  deny 写工具，与"输出双条件数组"语义冲突，LLM 条件生成大量落规则兜底）
+      const isConditionsMode = mode === 'conditions';
+      const tBuildPrompt = (isTAgentSession && !isConditionsMode) ? getPrompt('T_BUILD_SYSTEM_PROMPT') : '';
+      // 做T会话工具名错位修复（迭代#54 P2，t2 工具分析）：TRADE/CHAT_SYSTEM_PROMPT 是
+      // legacy agent.py 旧注册表（get_quote/get_portfolio 等），bridge 实际注册
+      // get_stock_quote/get_portfolio_positions 等新名——做T会话若注入 legacy 工具表，
+      // AI 按旧名调用会被 unknown tool 拒绝（backtest-999 实录）。做T会话基础提示
+      // 直接用 T_BUILD_SYSTEM_PROMPT（工具名与 bridge 注册一致），不叠加 legacy 表。
+      const isTrade = mode === 'trade';
+      const tBuildFull = getPrompt('T_BUILD_SYSTEM_PROMPT');
       // 回测复核会话（t-backtest-*）：沙盒隔离（design 5.2）——只做 auto/human 决策，
       // 通过 tools.restrict 拒绝生产写工具，绝不触达真实交易通道
       const isBacktestReview = mode === 'backtest';
@@ -744,9 +755,9 @@ function apply(ctx) {
         agentCtx.systemPrompt.section({
           name: 'marcus-bridge-prompt',
           order: -50,
-          text: systemPrompt,
+          text: (isTrade && isTAgentSession) ? tBuildFull : systemPrompt,
         });
-        if (tBuildPrompt) {
+        if (tBuildPrompt && !(isTrade && isTAgentSession)) {
           agentCtx.systemPrompt.section({
             name: 'marcus-t-build-prompt',
             order: -49,
@@ -903,7 +914,7 @@ function apply(ctx) {
                 ? ('持仓: 可卖' + pos.sellable + '股 总持仓' + pos.volume + '股 成本' + (pos.avg_price ?? '-') + ' 已实现盈亏' + (pos.realized_pnl ?? 0) + ' 当日回转' + (pos.day_turnover ?? 0))
                 : '持仓: （无回测持仓快照）';
               const prompt = [
-                '请对以下做T触发事件做出决策：执行（exec）、等待（wait）、放弃（abandon）或调整条件（update_condition）。',
+                '请对以下做T触发事件做出决策：exec（执行，默认）、wait（等待）、abandon（放弃）或 update_condition（调整条件）。',
                 '',
                 '标的: ' + (symbol || trigger.symbol || ''),
                 '触发: ' + JSON.stringify(trigger, null, 1),
@@ -911,10 +922,16 @@ function apply(ctx) {
                 '规则预判(供参考): ' + JSON.stringify(rule_hint || {}, null, 1),
                 posLine,
                 '',
-                '判定要点：量价合理性、regime 档位、可卖底仓（以上方持仓快照为准，勿引用外部账户）、风控状态、连续命中次数、触发与目标价的价差空间。',
-                '盈亏比导向：高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——有可卖底仓时触达高抛价应倾向 exec；低吸买腿需确认价差覆盖成本且非追跌。',
-                'update_condition：当触发价与当前行情明显脱节（如连续命中无改善、目标价永远够不着）时，给出调整后的条件参数；必须附 condition 对象。',
-                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}（condition 仅 update_condition 时必填，含 trigger_kind/target_price/stop_loss_price 等）',
+                '【默认动作 = exec】本次触发已命中监控条件并通过系统规则预筛，默认执行。',
+                '仅当存在客观证据时才 wait/abandon，且 reason 必须写明具体证据：',
+                '① 现价与目标价/建议价脱节（差 >1%）；② 已跌破止损价；③ regime 禁自动；④ 恐慌放量追跌（量比骤升+创新低）。',
+                '信息不足 ≠ wait：可调用查询工具补数（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标 /',
+                'get_intraday_minute 分钟K线 / get_stock_moneyflow 资金流 / get_market_state 大盘）。',
+                '高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——有可卖底仓时触达高抛价应倾向 exec；',
+                '低吸买腿需确认非恐慌追跌（区分温和回踩 vs 放量下跌创新低）。',
+                '连续命中无改善时用 update_condition 调整目标价（必须附 condition 对象），或输出 wait 注明"等待冷却"——',
+                '严禁只把 target_price 往现价方向微调制造下一轮触发。',
+                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}（condition 仅 update_condition 时必填）',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
               const parsed = parseDecision(reply);
@@ -936,8 +953,9 @@ function apply(ctx) {
               const body = JSON.parse(await readBody(req));
               const { symbol, cost, amp_med, trend, regime, context, session_id } = body;
               if (!symbol || !cost) { json(res, 400, { error: '缺少 symbol / cost' }); return; }
-              // 条件生成会话：生产 key=t-agent-{symbol}（与决策会话一致），回测 key=backtest:t-backtest-{taskId}
-              const agent = await getOrCreateAgent(session_id || ('t-agent-' + symbol), 'backtest', null, null);
+              // 条件生成会话：独立 conditions 模式（迭代#54 P1：不再误用 backtest 沙盒，
+              // 避免 BACKTEST_REVIEW_PROMPT 注入 + deny 写工具污染条件生成语义）
+              const agent = await getOrCreateAgent(session_id || ('t-agent-' + symbol), 'conditions', null, null);
               const prompt = [
                 '你是做T条件设定者：为刚建仓的标的自主设定【低吸+高抛回补】双触发条件（触发价、量比、企稳、时段、止损），让系统在条件命中时唤醒你决策。',
                 '',
@@ -959,7 +977,7 @@ function apply(ctx) {
                 '价格保留两位小数；stop_loss_price 两条条件一致。',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
-              const parsed = parseConditions(reply, cost);
+              const parsed = parseConditions(reply, cost, symbol, amp_med);
               console.log('[Bridge] /conditions/generate ' + symbol + ' → ' + JSON.stringify(parsed));
               json(res, 200, parsed);
             } catch (e) {
@@ -974,7 +992,9 @@ function apply(ctx) {
     });
 
     // ── AI 条件生成：解析 AI 输出的双条件 JSON 数组，容错兜底 ──
-    function parseConditions(reply, cost) {
+    // 迭代#54 P6/P8：条件统一 schema——补 symbol 注入、止损钳制（可更紧不可更宽）、
+    // 价格校验；产出可直接喂 upsert_condition（后端在落库前还会做规则止损兜底）
+    function parseConditions(reply, cost, symbol, ampMed) {
       const fallback = [];  // 兜底由调用方（后端）按规则公式生成
       if (!reply) return { conditions: fallback, source: 'fallback', reason: '空回复' };
       const text = String(reply).trim();
@@ -984,6 +1004,8 @@ function apply(ctx) {
       try {
         const arr = JSON.parse(mArr[0]);
         if (!Array.isArray(arr) || arr.length === 0) return { conditions: fallback, source: 'fallback', reason: '空数组' };
+        // 规则止损下限（迭代#52：AI 放宽止损→坏标的扛单多亏；可更紧不可更宽）
+        const ruleStop = round2(Number(cost) * (1 - Math.max(0.03, (Number(ampMed) || 3.0) / 100 * 0.55)));
         const conditions = [];
         for (const c of arr) {
           const kind = String(c.trigger_kind || '');
@@ -991,11 +1013,13 @@ function apply(ctx) {
           const tp = Number(c.target_price);
           const st = Number(c.stop_loss_price);
           if (!tp || tp <= 0) continue;
+          const stop = st > 0 ? Math.max(st, ruleStop) : ruleStop;
           const cond = {
             trigger_kind: kind,
+            symbol: String(c.symbol || symbol || ''),
             target_price: round2(tp),
-            sell_target_price: round2(Number(c.sell_target_price) || tp),
-            stop_loss_price: round2(st > 0 ? st : Number(cost) * 0.97),
+            sell_target_price: round2(Number(c.sell_target_price) > 0 ? c.sell_target_price : tp),
+            stop_loss_price: round2(stop),
             vol_ratio_thresh: Number(c.vol_ratio_thresh) > 0 ? Number(c.vol_ratio_thresh) : 1.5,
             stabilize_level: c.stabilize_level || 'not_new_low',
             armed: 1,
@@ -1078,27 +1102,35 @@ function apply(ctx) {
         '',
         '被条件命中唤醒时输出一行 JSON（不要 markdown 代码块、不要其他文字）：',
         '{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", "condition": {...}}',
-        '- exec：按建议价执行（仍经网关风控，可能被拒）',
-        '- wait：量价/regime 存疑，等待（冷却后重新武装）',
-        '- abandon：放弃本次触发（追高/信号矛盾）',
-        '- update_condition：触发价偏离或连续命中未实质改善——更新监控条件（必须附 condition）',
+        '- exec：**默认动作**。触发已命中你的监控条件并通过网关规则预筛，默认执行（按建议价经网关，可能被拒）',
+        '- wait：仅在存在客观证据时（现价与目标脱节>1% / 跌破止损 / regime 禁自动 / 恐慌放量追跌），reason 必须写明证据',
+        '- abandon：放弃本次触发（追高/信号矛盾，同样需写明证据）',
+        '- update_condition：触发价与行情明显脱节或连续命中未改善——更新监控条件（必须附完整 condition 对象）',
         '',
-        '自主看盘：唤醒快照外可调用查询工具——get_stock_quote(实时行情)/get_t_realtime_indicators(技术指标)',
-        '/get_intraday_minute(分钟K线)/get_portfolio_positions(持仓)/get_stock_moneyflow(资金流)/get_market_state(大盘)。',
+        '连续命中告警（consecutive_hit_alert=true）时二选一：① 输出 update_condition 附新条件；',
+        '② 输出 wait 并注明"连续命中，等待冷却"（让系统自动冷却）。',
+        '严禁在没有新事实时只把 target_price 往现价方向微调制造下一轮触发。',
+        '',
+        '自主看盘（可调用查询工具，决策前按需调用，不必全调）：',
+        '- 行情：get_stock_quote(实时行情) / get_intraday_minute(分钟K线) / get_stock_moneyflow(资金流)',
+        '- 技术面：get_t_realtime_indicators(MA/MACD/KDJ/RSI) / get_stock_technical(深度技术)',
+        '- 大盘：get_market_state(大盘/regime)',
+        '- 持仓/条件自检：get_portfolio_positions(持仓) / list_t_conditions(当前监控条件) / list_t_ai_actions(最近决策审计)',
+        '【硬约束】快照缺现价/量能时必须调用 get_stock_quote / get_t_realtime_indicators 补数，禁止仅凭自述理由放行 exec。',
         '',
         '建仓：scan_t_candidates 选股（候选池优先，空则全市场扫描）→ get_floor_overview →',
         'build_t_position（ai_led 首开自动放行；单笔≤净值5%、总底仓≤净值55%；冷静期/午后不自动建）。',
-        '连续命中告警（consecutive_hit_alert=true）时必须给出 update_condition 或冷却，否则系统自动冷却。',
         '硬约束：仅 t 账户；STOP_ALL/日亏熔断/HALT 禁自动；T+1 当日禁卖；单票当日 1 批；所有下单经网关（ai_led 不豁免）。',
       ].join('\n'),
     };
     // 回测复核会话系统提示（沙盒：AI 决策 exec/wait/abandon/update_condition，禁止交易/写操作）
     const BACKTEST_REVIEW_PROMPT = [
-      '你是做T回测决策 Agent（沙盒模式）。你只对触发事件做 exec/wait/abandon/update_condition 决策，不执行任何交易，也不调用任何工具。',
-      '你的工具已被沙盒隔离：生产写工具（下单/撤单/建仓等）对你不可见。',
-      '每次收到触发上下文，输出一行 JSON：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}。',
-      'exec = 按建议价执行（回放中撮合）；wait = 量价/regime 存疑等待；abandon = 放弃（追高/信号矛盾）；update_condition = 条件与行情脱节时调整（必须附 condition 对象，含 trigger_kind/target_price/stop_loss_price）。',
-      '判定要点：量价合理性、regime 档位、可卖底仓、风控状态、连续命中次数、触发与目标价价差空间。',
+      '你是做T回测决策 Agent（沙盒模式）。只对触发事件做 exec/wait/abandon/update_condition 决策，不执行任何交易。',
+      '你的工具已被沙盒隔离：生产写工具（下单/撤单/建仓等）对你不可见；只读查询工具可用。',
+      '【默认动作 = exec】触发已命中监控条件并通过规则预筛，默认执行。仅当存在客观证据时 wait/abandon：',
+      '① 现价与目标价脱节（>1%）；② 跌破止损；③ regime 禁自动；④ 恐慌放量追跌。信息不足 ≠ wait，可调查询工具补数。',
+      '高抛卖腿是兑现正向动作倾向 exec；低吸需区分温和回踩 vs 恐慌追跌。连续命中用 update_condition（必须附 condition）或 wait"等待冷却"，严禁只调 target_price 制造触发。',
+      '每次输出一行 JSON：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}。',
     ].join('\n');
     // 沙盒 deny 名单：回测复核会话禁用的生产写工具
     const BACKTEST_DENY_TOOLS = [

@@ -22,6 +22,44 @@ def _today() -> str:
     return date.today().strftime("%Y-%m-%d")
 
 
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """提取首个平衡 JSON 对象（支持嵌套 condition 对象，对齐 bridge parseDecision）。
+
+    迭代#54 P8：旧正则 {[^{}]*} 无法匹配嵌套 condition → update_condition 实盘解析
+    必失败落 rule_fallback，条件更新实盘从未生效。
+    """
+    t = str(text).replace("```json", "").replace("```", "")
+    start = t.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(t)):
+        ch = t[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(t[start:i + 1])
+                    return obj if isinstance(obj, dict) else None
+                except (ValueError, TypeError):
+                    return None
+    return None
+
+
 def _parse_ai_decision(reply: str) -> Dict[str, Any]:
     """从 AI 文本中解析决策 JSON：{"action": "exec|wait|abandon|update_condition", "reason": "...", "condition": {...}}。
 
@@ -32,23 +70,8 @@ def _parse_ai_decision(reply: str) -> Dict[str, Any]:
     if not reply:
         return {"action": "rule_fallback", "reason": "空回复（规则兜底）"}
     text = str(reply).strip()
-    m = None
-    import re
-    for pat in (r'\{[^{}]*"action"\s*:\s*"[^"]*"[^{}]*\}',
-                r'```(?:json)?\s*(\{.*?\})\s*```', r'(\{.*\})'):
-        mm = re.search(pat, text, re.DOTALL)
-        if mm:
-            m = mm.group(1) if mm.lastindex else mm.group(0)
-            break
-    if not m:
-        # 无 JSON：按关键词兜底
-        if any(k in text for k in ("执行", "放行", "exec")):
-            return {"action": "exec", "reason": text[:200]}
-        if any(k in text for k in ("放弃", "abandon", "不执行")):
-            return {"action": "abandon", "reason": text[:200]}
-        return {"action": "rule_fallback", "reason": f"无 JSON 无法解析（规则兜底）: {text[:200]}"}
-    try:
-        obj = json.loads(m)
+    obj = _extract_json_object(text)
+    if obj is not None:
         action = str(obj.get("action") or "rule_fallback")
         if action not in AI_ACTIONS:
             action = "rule_fallback"
@@ -57,8 +80,12 @@ def _parse_ai_decision(reply: str) -> Dict[str, Any]:
             "reason": str(obj.get("reason") or "")[:500],
             "condition": obj.get("condition") if isinstance(obj.get("condition"), dict) else None,
         }
-    except (ValueError, TypeError):
-        return {"action": "rule_fallback", "reason": f"解析失败（规则兜底）: {text[:120]}"}
+    # 无 JSON：按关键词兜底
+    if any(k in text for k in ("执行", "放行", "exec")):
+        return {"action": "exec", "reason": text[:200]}
+    if any(k in text for k in ("放弃", "abandon", "不执行")):
+        return {"action": "abandon", "reason": text[:200]}
+    return {"action": "rule_fallback", "reason": f"无 JSON 无法解析（规则兜底）: {text[:200]}"}
 
 
 def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict[str, Any]],

@@ -416,6 +416,28 @@ class TestAIDecisionFallback(unittest.TestCase):
         r = _parse_ai_decision('{"action": "exec", "reason": "ok"}')
         self.assertEqual(r["action"], "exec")
 
+    def test_update_condition_nested_json_parsed(self):
+        """迭代#54 P8：嵌套 condition 对象必须能解析（旧正则 {[^{}]*} 会截断 →
+        update_condition 实盘解析必失败落 rule_fallback，条件更新从未生效）。"""
+        from app.services.t_ai_agent import _parse_ai_decision
+        reply = ('{"action": "update_condition", "reason": "高抛目标脱节", '
+                 '"condition": {"symbol": "X", "trigger_kind": "high_sell_then_buy_back", '
+                 '"target_price": 10.5, "stop_loss_price": 9.5}}')
+        r = _parse_ai_decision(reply)
+        self.assertEqual(r["action"], "update_condition")
+        self.assertIsNotNone(r["condition"])
+        self.assertEqual(r["condition"]["target_price"], 10.5)
+        self.assertEqual(r["condition"]["trigger_kind"], "high_sell_then_buy_back")
+
+    def test_update_condition_with_markdown_fence(self):
+        """```json 围栏 + 嵌套 condition 也能解析。"""
+        from app.services.t_ai_agent import _parse_ai_decision
+        reply = ('```json\n{"action": "update_condition", "reason": "x", '
+                 '"condition": {"symbol": "X", "trigger_kind": "low_buy", "target_price": 9.8}}\n```')
+        r = _parse_ai_decision(reply)
+        self.assertEqual(r["action"], "update_condition")
+        self.assertEqual(r["condition"]["target_price"], 9.8)
+
     def test_handle_fallback_high_sell_execs(self):
         """高抛触发 + 解析失败 → 兜底 exec（兑现离场），reason 含 [rule_fallback]。"""
         from app.services.t_ai_agent import handle_ai_decision
@@ -441,6 +463,61 @@ class TestAIDecisionFallback(unittest.TestCase):
                 {"regime": "ACTIVE"}, "乱码")
         self.assertEqual(r["action"], "wait")
         self.assertIn("[rule_fallback]", r["reason"])
+
+
+class _PGTestCase(unittest.TestCase):
+    """prompt seed 测试的 PG 基座（复用 test_t_performance 的测试库生命周期）。"""
+    @classmethod
+    def setUpClass(cls):
+        if not PG_AVAILABLE:
+            raise unittest.SkipTest("PostgreSQL 不可用")
+
+    @classmethod
+    def tearDownClass(cls):
+        pass
+
+
+class TestPromptSeedSelfHeal(_PGTestCase):
+    """迭代#54 P0（t2 工具分析）：seed_prompts 内容签名变化时覆盖更新旧版。"""
+
+    def test_seed_overwrites_stale_content(self):
+        from app.services.prompt_service import seed_prompts, upsert_prompt
+        from app.models.prompt import Prompt
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            # 先种一个"旧版"（模拟 DB 残留 934 字符旧 T_BUILD）
+            upsert_prompt(db, "T_BUILD_SYSTEM_PROMPT", "旧版内容-无自主看盘段")
+            # 再 seed 新版 → 应覆盖旧版（内容签名不同）
+            n = seed_prompts(db, {
+                "T_BUILD_SYSTEM_PROMPT": {"label": "做T", "content": "新版内容-含自主看盘工具段"},
+            })
+            self.assertEqual(n, 1, "内容变化应触发覆盖更新")
+            p = db.query(Prompt).filter(Prompt.name == "T_BUILD_SYSTEM_PROMPT").first()
+            self.assertEqual(p.content, "新版内容-含自主看盘工具段")
+            self.assertEqual(p.version, 2, "覆盖更新应升版本")
+            # 幂等：再 seed 相同内容不重复更新
+            n2 = seed_prompts(db, {
+                "T_BUILD_SYSTEM_PROMPT": {"label": "做T", "content": "新版内容-含自主看盘工具段"},
+            })
+            self.assertEqual(n2, 0, "内容相同应幂等跳过")
+        finally:
+            db.close()
+
+    def test_seed_inserts_missing(self):
+        from app.services.prompt_service import seed_prompts
+        from app.models.prompt import Prompt
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            n = seed_prompts(db, {"TEST_NEW_PROMPT": {"label": "t", "content": "新"}})
+            self.assertEqual(n, 1)
+            p = db.query(Prompt).filter(Prompt.name == "TEST_NEW_PROMPT").first()
+            self.assertIsNotNone(p)
+            db.delete(p)
+            db.commit()
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":
