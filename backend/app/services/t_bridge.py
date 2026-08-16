@@ -333,7 +333,7 @@ def generate_conditions(symbol: str, cost: float, amp_med: Optional[float] = Non
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=45) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         conditions = body.get("conditions") or []
         source = body.get("source") or "ai"

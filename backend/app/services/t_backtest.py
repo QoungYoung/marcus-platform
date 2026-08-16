@@ -1199,8 +1199,10 @@ def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
     if review_fn is not None:
         try:
             from app.services.t_bridge import generate_conditions
+            # 会话按标的隔离（迭代#54：#53/#54 全部标的共用 session_id="t-backtest-conds"
+            # → bridge 同一会话复读首标的条件，5 个标的全拿到 000620 的价位 3.56）
             res = generate_conditions(symbol, price, amp_med=amp_med,
-                                      session_id="t-backtest-conds")
+                                      session_id=f"t-backtest-conds-{symbol}")
             if res and res.get("conditions"):
                 conds = res["conditions"]
                 # 规则止损下限（可更紧、不可更宽）：止损价不得低于规则值

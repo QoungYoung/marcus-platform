@@ -994,20 +994,21 @@ function apply(ctx) {
     // ── AI 条件生成：解析 AI 输出的双条件 JSON 数组，容错兜底 ──
     // 迭代#54 P6/P8：条件统一 schema——补 symbol 注入、止损钳制（可更紧不可更宽）、
     // 价格校验；产出可直接喂 upsert_condition（后端在落库前还会做规则止损兜底）
+    // 迭代#54b：提取改用平衡括号扫描（旧贪婪正则 /\[\s*\{[\s\S]*\}\s*\]/ 在 AI 回复
+    // 带 markdown 围栏/解释文字时截断或跨对象误配 → 全部 fallback）
     function parseConditions(reply, cost, symbol, ampMed) {
       const fallback = [];  // 兜底由调用方（后端）按规则公式生成
       if (!reply) return { conditions: fallback, source: 'fallback', reason: '空回复' };
       const text = String(reply).trim();
-      // 提取 JSON 数组
-      const mArr = text.match(/\[\s*\{[\s\S]*\}\s*\]/);
-      if (!mArr) return { conditions: fallback, source: 'fallback', reason: '无 JSON 数组: ' + text.slice(0, 120) };
+      const arr = extractJsonArray(text);
+      if (!arr) return { conditions: fallback, source: 'fallback', reason: '无 JSON 数组: ' + text.slice(0, 120) };
       try {
-        const arr = JSON.parse(mArr[0]);
-        if (!Array.isArray(arr) || arr.length === 0) return { conditions: fallback, source: 'fallback', reason: '空数组' };
+        const arr2 = Array.isArray(arr) ? arr : JSON.parse(arr);
+        if (!Array.isArray(arr2) || arr2.length === 0) return { conditions: fallback, source: 'fallback', reason: '空数组' };
         // 规则止损下限（迭代#52：AI 放宽止损→坏标的扛单多亏；可更紧不可更宽）
         const ruleStop = round2(Number(cost) * (1 - Math.max(0.03, (Number(ampMed) || 3.0) / 100 * 0.55)));
         const conditions = [];
-        for (const c of arr) {
+        for (const c of arr2) {
           const kind = String(c.trigger_kind || '');
           if (kind !== 'low_buy' && kind !== 'high_sell_then_buy_back') continue;
           const tp = Number(c.target_price);
@@ -1033,6 +1034,35 @@ function apply(ctx) {
       } catch (e) {
         return { conditions: fallback, source: 'fallback', reason: '解析失败: ' + e.message };
       }
+    }
+
+    // ── 提取首个平衡 JSON 数组（跳过 markdown 代码块围栏与前后文字）──
+    function extractJsonArray(text) {
+      const t = String(text).replace(/```json|```/g, '');
+      let start = -1;
+      for (let i = 0; i < t.length; i++) {
+        if (t[i] === '[') { start = i; break; }
+      }
+      if (start < 0) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < t.length; i++) {
+        const ch = t[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === '\\') esc = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === '[') depth++;
+        else if (ch === ']') {
+          depth--;
+          if (depth === 0) {
+            try { return JSON.parse(t.slice(start, i + 1)); } catch (e) { return null; }
+          }
+        }
+      }
+      return null;
     }
 
     function round2(v) { return Math.round(v * 100) / 100; }
