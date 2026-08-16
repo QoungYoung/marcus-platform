@@ -1033,7 +1033,7 @@ function apply(ctx) {
             if (req.method !== 'POST') { json(res, 405, { error: 'Method Not Allowed' }); return; }
             try {
               const body = JSON.parse(await readBody(req));
-              const { symbol, cost, amp_med, trend, regime, context, session_id, quote_price } = body;
+              const { symbol, cost, amp_med, trend, regime, context, session_id, quote_price, rebuild_ctx } = body;
               if (!symbol || !cost) { json(res, 400, { error: '缺少 symbol / cost' }); return; }
               // 条件生成会话：独立 conditions 模式（迭代#54 P1：不再误用 backtest 沙盒，
               // 避免 BACKTEST_REVIEW_PROMPT 注入 + deny 写工具污染条件生成语义）
@@ -1052,6 +1052,10 @@ function apply(ctx) {
                 '趋势: ' + (trend ? JSON.stringify(trend) : '未知'),
                 'regime: ' + (regime ? JSON.stringify(regime) : '未知'),
                 '参考上下文: ' + (context ? JSON.stringify(context, null, 1) : '（无）'),
+                (rebuild_ctx ? ('【上次触发（本次重建原因）】' + JSON.stringify(rebuild_ctx) +
+                  '——新条件必须**移动**：高抛目标价必须 > 上次触发价和现价（只有价格继续涨才触发），' +
+                  '低吸目标价必须 < 上次触发价和现价（只有回踩才触发），止损 < 现价；严禁重复设定与上次相同的触发价。')
+                  : ''),
                 '',
                 '规则参考（可偏离，但需合理）：低吸=成本×(1−max(2%,振幅×0.75))、高抛=成本×(1+max(1.5%,振幅×0.75))、止损=成本×(1−max(3%,振幅×0.55))。',
                 '设定要点：',

@@ -882,10 +882,17 @@ class TBacktestEngine:
             amp_med = _amp_median_from_m5(self.m5)
             # 移动基准：现价（重建时价格已变，条件随行情移动）；无现价回退成本
             base_price = quote_price if quote_price and quote_price > 0 else ledger.cost_price
+            # 重建上下文（迭代#57c）：告诉 AI 刚触发过什么价位的什么条件，
+            # 让它设"上次触发价有利侧"的移动条件（高抛在上次触发价上方、
+            # 低吸在下方），避免 AI 因不知道历史而重复设同价
+            rebuild_ctx = {
+                "last_trigger_kind": consumed_kind,
+                "last_trigger_price": quote_price,
+            }
             new_conds = _gen_t_conditions(
                 self.review_fn, self.symbol, base_price,
                 amp_med=amp_med, task_id=self.task.get("id"), use_cache=False,
-                quote_price=quote_price)
+                quote_price=quote_price, rebuild_ctx=rebuild_ctx)
             if new_conds:
                 # 只重建被消费的类型（consumed_kind），避免未消费类型被重复重建
                 # （如高抛消费后只重建高抛，低吸条件若还在则不动）
@@ -1300,7 +1307,8 @@ def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
                       amp_med: Optional[float] = None,
                       task_id: Optional[Any] = None,
                       use_cache: bool = True,
-                      quote_price: Optional[float] = None) -> List[Dict[str, Any]]:
+                      quote_price: Optional[float] = None,
+                      rebuild_ctx: Optional[dict] = None) -> List[Dict[str, Any]]:
     """回测建仓条件生成：LLM 模式（review_fn 存在）→ AI 自主设定条件（bridge /conditions/generate，
     带缓存）；桥不可达/解析失败回退规则公式 _default_t_conditions。规则模式直接用公式。
 
@@ -1323,7 +1331,8 @@ def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
             # 避免缓存命中返回相同条件导致"消费→重建相同→再触发"死循环
             res = generate_conditions(symbol, price, amp_med=amp_med,
                                       session_id=session_id, use_cache=use_cache,
-                                      quote_price=quote_price)
+                                      quote_price=quote_price,
+                                      rebuild_ctx=rebuild_ctx)
             if res and res.get("conditions"):
                 conds = res["conditions"]
                 # 止损钳制（迭代#52 下限 + 迭代#56c 上限）：
