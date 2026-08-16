@@ -449,6 +449,7 @@ class TBacktestEngine:
         self._daily_rebuilds: int = 0
         self._max_daily_rebuilds: int = int(task.get("max_daily_condition_rebuilds", 8))
         self._summary: Optional[Dict[str, Any]] = None
+        self._stop_warned: set = set()  # 盘中止损预警去重（(trade_day, stop_price)）
 
     # ── 数据加载（回放期零网络）──
     def _load(self):
@@ -1017,6 +1018,7 @@ class TBacktestEngine:
         bar_low = float(bar["low"])
         if bar_low > stop_price:
             return
+        is_last_bar = bar_idx >= len(day_bars) - 1
         # 假跌破守卫（add-fake-breakdown-stop-guard）：收盘确认/收回幅度/企稳/缩量/支撑位
         try:
             from app.services import t_build as _tb
@@ -1032,15 +1034,35 @@ class TBacktestEngine:
         except Exception as _e:
             print(f"[t-backtest] 假跌破守卫异常 {self.symbol}: {str(_e)[:100]}（降级原止损）")
             _verdict = {"action": "stop", "reason": "守卫异常降级"}
+        _reason = str(_verdict.get("reason") or "")
+        if "假跌破" in _reason:
+            _etype = "fake_breakdown"
+        elif "企稳" in _reason:
+            _etype = "stabilised_cancel"
+        else:
+            _etype = "stop_warning"
+        if not is_last_bar:
+            # 盘中：只预警不执行（日线收盘确认）。假跌破/企稳才重置止损基准
+            _etype2 = _etype if _verdict.get("reset_stop") else "stop_warning"
+            key = (trade_day, round(stop_price, 2))
+            if key not in self._stop_warned:
+                self._stop_warned.add(key)
+                self.events.append({"type": _etype2, "trade_day": trade_day, "data": {
+                    "trigger": {"symbol": self.symbol, "event_type": "stop_loss",
+                                "trigger_price": stop_price,
+                                "quote_price": float(bar["close"]),
+                                "trade_day": trade_day, "bar_time": str(bar["time"])},
+                    "reason": _reason,
+                    "reset_stop": _verdict.get("reset_stop"),
+                }})
+            if _verdict.get("reset_stop"):
+                for c in day_conds:
+                    sp = float(c.get("stop_loss_price") or 0)
+                    if sp > 0:
+                        c["stop_loss_price"] = round(float(_verdict["reset_stop"]), 4)
+            return
+        # 末日 bar（日线收盘确认）：hold → 跳过并重置基准；stop → 按当日收盘价成交
         if _verdict.get("action") == "hold":
-            # 跳过本次止损：按原因落事件类型 + 重置止损基准（防同价位反复插针）
-            _reason = str(_verdict.get("reason") or "")
-            if "假跌破" in _reason:
-                _etype = "fake_breakdown"
-            elif "企稳" in _reason:
-                _etype = "stabilised_cancel"
-            else:
-                _etype = "stop_warning"
             self.events.append({"type": _etype, "trade_day": trade_day, "data": {
                 "trigger": {"symbol": self.symbol, "event_type": "stop_loss",
                             "trigger_price": stop_price,
@@ -1055,9 +1077,8 @@ class TBacktestEngine:
                     if sp > 0:
                         c["stop_loss_price"] = round(float(_verdict["reset_stop"]), 4)
             return
-        # 成交价：止损限价（未跳空）或开盘价（跳空击穿）
-        open_ = float(bar["open"])
-        exec_price = min(open_, stop_price) if open_ > 0 else stop_price
+        # 收盘确认止损：按当日收盘价成交（守卫口径）
+        exec_price = float(bar["close"])
         # 卖量：减半仓（对齐 P0-3 spec：-3% 减半，保留底仓继续做T；全卖会
         # 导致后续高抛天天触发但无券可卖，AI 反复"无底仓"放弃刷屏）
         sellable = ledger.sellable()
