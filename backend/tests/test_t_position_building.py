@@ -353,6 +353,36 @@ class TestBuildScore(_PGTestCase):
         self.assertGreater(r_up["score"], 0.65)
         self.assertLess(r_flat["score"], 0.65)
 
+    def test_trend_inflection_boost(self):
+        """迭代#55 拐点识别：横盘后近3日动量转正（启动初期）→ trend_score 提升；
+        纯横盘（动量未启动）不误提升。"""
+        from app.services import t_build
+        from app.services import t_pool
+        # 横盘后 5 日快速拉升（mom3 = (11.4-9.9)/9.9 ≈ +15% > 1.5% → 拐点提升）
+        spike = []
+        for i in range(40):
+            if i < 35:
+                px = 10.0 + (i % 3) * 0.02
+            else:
+                px = 10.0 + (i - 34) * 0.35
+            spike.append({"date": f"2026-01-{i+1:02d}", "open": round(px - 0.02, 2),
+                          "close": round(px, 2), "high": round(px + 0.15, 2),
+                          "low": round(px - 0.15, 2), "vol": 1e6})
+        # 纯横盘（无启动）
+        flat = [{"date": f"2026-01-{i+1:02d}", "open": 10.0, "close": 10.0,
+                 "high": 10.1, "low": 9.9, "vol": 1e6} for i in range(40)]
+        qmock = {"score": 0.9, "pass_gate": True, "reasons": []}
+        with patch.object(t_build, "_fetch_daily_bars", return_value=spike), \
+             patch.object(t_pool, "calc_t_quality", return_value=qmock):
+            r_spike = t_build.build_score("SH600000", source="scan")
+        with patch.object(t_build, "_fetch_daily_bars", return_value=flat), \
+             patch.object(t_pool, "calc_t_quality", return_value=qmock):
+            r_flat = t_build.build_score("SH600000", source="scan")
+        t_spike = r_spike["trend"]["score"]
+        t_flat = r_flat["trend"]["score"]
+        self.assertGreater(t_spike, 0.45, f"启动迹象应提升趋势分: spike={t_spike}")
+        self.assertLess(t_flat, 0.1, f"纯横盘不应被拐点误提升: flat={t_flat}")
+
 
 class TestBuildScan(_PGTestCase):
     """全市场扫描（stock_basic + 粗筛 + 精筛，mock 数据源）。"""

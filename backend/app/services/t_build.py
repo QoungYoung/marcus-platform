@@ -307,10 +307,20 @@ def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
         return {"score": 0.0, "pass_gate": False, "reasons": ["无有效日线"]}
     avg_amp = sum(amps) / len(amps)
     avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
-    # 振幅贡献（迭代#42：二元档→连续三角函数，消除质量分撞顶 0.9 的坍缩）：
-    #   3%~7% 最可T → 0.2；7%→10% 线性衰减到 0.1；3% 边缘 → 0.1；
-    #   <3% 或 >10% → 硬拒（对齐生产硬门槛）
-    if avg_amp < MIN_AMP_PCT or avg_amp > MAX_AMP_PCT:
+    # 启动票豁免（迭代#55，t1 漏选分析）：近 20 日平均振幅 <3% 硬拒会误杀"启动前夜"——
+    # 000725 案例（20 日均振幅 2.5% 被拒，窗口实际 +23.4%，启动后振幅放大到 5-15%）。
+    # 若近 5 日振幅已 ≥MIN（近期放量启动迹象）→ 不硬拒，给低分（0.4）进入候选，
+    # 由趋势/风险维度继续把关；平均 <3% 且近 5 日仍 <3% 才硬拒。
+    recent5_amp = sum(amps[-5:]) / 5 if len(amps) >= 5 else avg_amp
+    if avg_amp < MIN_AMP_PCT:
+        # 豁免需近 5 日振幅在 [MIN, MAX] 内（启动迹象且非妖票）
+        if MIN_AMP_PCT <= recent5_amp <= MAX_AMP_PCT:
+            return {"score": 0.4, "pass_gate": True,
+                    "reasons": [f"近20日均振幅 {avg_amp:.1f}% 偏低但近5日已放大至 "
+                                f"{recent5_amp:.1f}%（启动迹象，降分放行）"]}
+        return {"score": 0.0, "pass_gate": False,
+                "reasons": [f"振幅不适宜（{avg_amp:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）"]}
+    if avg_amp > MAX_AMP_PCT:
         return {"score": 0.0, "pass_gate": False,
                 "reasons": [f"振幅不适宜（{avg_amp:.1f}%，需 {MIN_AMP_PCT}~{MAX_AMP_PCT}%）"]}
     if avg_amp <= 5.0:
@@ -384,6 +394,12 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
             align_ref = float(p.get("trend_align_ref", 10.0))
             align_score = max(0.0, min((spread - align_min) / max(align_ref - align_min, 1e-9), 1.0))
             trend_score = round(0.5 * slope_score + 0.5 * align_score, 4)
+            # (3) 拐点识别（迭代#55，t1 漏选分析）：MA20 斜率弱但近 3 日动量刚转正的
+            # "启动初期"票——000510 案例（趋势分 0.29 → 总分 0.59 漏选，窗口实际 +18.7%）。
+            # 近 3 日收盘动量 > +1.5% 视为启动迹象，趋势分下限 0.45（不强扣 0.35 权重）
+            mom3 = (closes[-1] - closes[-4]) / closes[-4] * 100 if closes[-4] > 0 else 0.0
+            if mom3 > 1.5 and trend_score < 0.45:
+                trend_score = round(min(0.45 + (mom3 - 1.5) / 10.0, 0.65), 4)
         except (ValueError, TypeError, ZeroDivisionError):
             trend_score = 0.0
     trend_add = trend_score

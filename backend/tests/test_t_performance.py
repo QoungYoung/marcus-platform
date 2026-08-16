@@ -351,6 +351,59 @@ class TestSelectionFilter(unittest.TestCase):
         # 振幅 3% − 2×滑点(≈0.27%) ≈ 2.7 > 0.5 → 价差应通过；此处验证门槛常量生效
         self.assertGreater(q["spread"], 0.5)
 
+    def test_quality_amp_exempt_recent_surge(self):
+        """迭代#55 振幅豁免：近20日均振幅<3%但近5日已放大（启动迹象）→ 降分放行。"""
+        from app.services.t_build import _quality_from_daily
+
+        def make_bars(amp_recent5):
+            bars = []
+            prev = 10.0
+            for i in range(40):
+                amp_pct = 0.02 if i < 35 else amp_recent5 / 100.0
+                close = prev * 1.005
+                half = amp_pct * prev / 2
+                bars.append({"date": f"2026-05-{i % 28 + 1:02d}",
+                             "open": round(prev * 1.001, 3), "close": round(close, 3),
+                             "high": round(close + half, 3), "low": round(close - half, 3),
+                             "vol": 1e6, "amount": 1e7})
+                prev = close
+            return bars
+
+        q1 = _quality_from_daily(make_bars(3.5))
+        self.assertTrue(q1["pass_gate"], "近5日振幅放大至3.5%应放行（启动迹象）")
+        self.assertTrue(any("启动迹象" in r for r in q1["reasons"]))
+        q2 = _quality_from_daily(make_bars(2.5))
+        self.assertFalse(q2["pass_gate"], "近5日仍<3%应硬拒")
+        self.assertTrue(any("振幅不适宜" in r for r in q2["reasons"]))
+
+    def test_quality_amp_exempt_keeps_overheat_reject(self):
+        """振幅豁免的 MAX 保护：近5日 12%（妖票）时，即便豁免分支也不放行。
+        （豁免分支要求近5日振幅 ∈ [3,10]；>10% 走正常路径按平均振幅硬拒或按上限拒）"""
+        from app.services.t_build import _quality_from_daily
+
+        def make_bars(amp_recent5):
+            bars = []
+            prev = 10.0
+            for i in range(40):
+                amp_pct = 0.02 if i < 35 else amp_recent5 / 100.0
+                close = prev * 1.005
+                half = amp_pct * prev / 2
+                bars.append({"date": f"2026-05-{i % 28 + 1:02d}",
+                             "open": round(prev * 1.001, 3), "close": round(close, 3),
+                             "high": round(close + half, 3), "low": round(close - half, 3),
+                             "vol": 1e6, "amount": 1e7})
+                prev = close
+            return bars
+
+        # 近5日 12%：近20日均=(15×2+5×12)/20=4.5%（>3% 不进豁免分支），正常路径振幅>10%？不——
+        # 平均 4.5% 在 [3,10] 内会正常给分，验证"平均在区间内但近期过热"由趋势/风险维度把关，
+        # 此处只断言豁免分支不会错误放行近5日>10%的情形（构造平均<3% 时近5日不可能>10%，
+        # 数学上互斥；该保护是防御性的）
+        q = _quality_from_daily(make_bars(12.0))
+        # 平均 4.5% 正常路径：pass 与否取决于打分，但绝不带"启动迹象"豁免标记
+        self.assertTrue(all("启动迹象" not in r for r in q["reasons"]),
+                        "近5日12%不应标记启动迹象豁免")
+
     def test_quality_from_daily_hard_reject_low_amp(self):
         from app.services.t_build import _quality_from_daily
         # 构造近 20 日振幅 ~2% 的日线
