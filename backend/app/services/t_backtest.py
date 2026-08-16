@@ -1190,7 +1190,12 @@ def _default_t_conditions(avg_price: float, amp_med: Optional[float] = None) -> 
 def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
                       amp_med: Optional[float] = None) -> List[Dict[str, Any]]:
     """回测建仓条件生成：LLM 模式（review_fn 存在）→ AI 自主设定条件（bridge /conditions/generate，
-    带缓存）；桥不可达/解析失败回退规则公式 _default_t_conditions。规则模式直接用公式。"""
+    带缓存）；桥不可达/解析失败回退规则公式 _default_t_conditions。规则模式直接用公式。
+
+    止损钳制（迭代#52：#51 报告 AI 把止损放宽到 -6%/-4.8%，坏标的扛单多亏一倍）：
+    AI 生成的 stop_loss_price 不得低于规则值 price×(1−max(3%, amp×0.55))——
+    AI 可收紧止损，不可放宽（止损下限由系统兜底，防 AI 过度乐观扛单）。
+    """
     if review_fn is not None:
         try:
             from app.services.t_bridge import generate_conditions
@@ -1198,12 +1203,17 @@ def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
                                       session_id="t-backtest-conds")
             if res and res.get("conditions"):
                 conds = res["conditions"]
-                # 兜底：AI 漏给 stop_loss_price 时按规则补（双条件止损须一致且低于成本）
+                # 规则止损下限（可更紧、不可更宽）：止损价不得低于规则值
+                # （min 语义反了——越低越宽；取 max 才是不放宽）
+                rule_stop = round(price * (1 - max(0.03, (amp_med or 3.0) / 100 * 0.55)), 2)
                 for c in conds:
-                    if not c.get("stop_loss_price"):
-                        c["stop_loss_price"] = round(
-                            price * (1 - max(0.03, (amp_med or 3.0) / 100 * 0.55)), 2)
-                print(f"[t-backtest] AI 条件生成 {symbol}（{res.get('source')}）")
+                    sp = c.get("stop_loss_price")
+                    if not sp:
+                        c["stop_loss_price"] = rule_stop
+                    else:
+                        c["stop_loss_price"] = round(max(float(sp), rule_stop), 2)
+                print(f"[t-backtest] AI 条件生成 {symbol}（{res.get('source')}）"
+                      f" 止损钳制≤{rule_stop}")
                 return conds
         except Exception as e:
             print(f"[t-backtest] AI 条件生成失败 {symbol}: {e}（回退规则公式）")

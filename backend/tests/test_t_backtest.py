@@ -477,6 +477,36 @@ class TestEngineCore(unittest.TestCase):
         self.assertTrue(all(c.get("stop_loss_price", 0) > 0 for c in conds),
                         "AI 条件缺失止损价应补齐")
 
+    def test_gen_t_conditions_stop_clamped(self):
+        """止损钳制（迭代#52）：AI 止损价不得低于规则值（可更紧、不可更宽）。
+        price=10 amp=5% → 规则止损 = 10×(1−max(3%, 5%×0.55)) = 10×0.97 = 9.7；
+        AI 给 9.4（-6%）→ 钳到 9.7；AI 给 9.8（-2%，更紧）→ 保留。"""
+        from app.services.t_backtest import _gen_t_conditions
+        # AI 放宽止损（9.4 < 规则 9.7）→ 钳到 9.7
+        wide = [
+            {"trigger_kind": "low_buy", "target_price": 9.5, "stop_loss_price": 9.4},
+            {"trigger_kind": "high_sell_then_buy_back", "target_price": 10.6,
+             "stop_loss_price": 9.4},
+        ]
+        with patch("app.services.t_bridge.generate_conditions",
+                   return_value={"conditions": wide, "source": "ai", "reason": "AI 生成"}):
+            conds = _gen_t_conditions(review_fn=lambda x: {}, symbol="TEST", price=10.0,
+                                      amp_med=5.0)
+        for c in conds:
+            self.assertEqual(c["stop_loss_price"], 9.7, "放宽的止损应钳到规则值 9.7")
+        # AI 收紧止损（9.8 > 规则 9.7）→ 保留 AI 值
+        tight = [
+            {"trigger_kind": "low_buy", "target_price": 9.5, "stop_loss_price": 9.8},
+            {"trigger_kind": "high_sell_then_buy_back", "target_price": 10.6,
+             "stop_loss_price": 9.8},
+        ]
+        with patch("app.services.t_bridge.generate_conditions",
+                   return_value={"conditions": tight, "source": "ai", "reason": "AI 生成"}):
+            conds = _gen_t_conditions(review_fn=lambda x: {}, symbol="TEST", price=10.0,
+                                      amp_med=5.0)
+        for c in conds:
+            self.assertEqual(c["stop_loss_price"], 9.8, "更紧的止损应保留 AI 值")
+
     def test_gen_t_conditions_rule_mode_no_ai_call(self):
         """规则模式（review_fn=None）→ 不调用 bridge，直接用规则公式。"""
         from app.services.t_backtest import _gen_t_conditions

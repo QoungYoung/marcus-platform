@@ -1097,6 +1097,15 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
             conds = None
         if not conds:
             conds = build_t_conditions(avg_price, amp_med)
+        # 止损钳制（迭代#52：#51 报告 AI 把止损放宽到 -6%/-4.8%，坏标的扛单多亏一倍）：
+        # AI 生成的 stop_loss_price 不得低于规则值（可更紧、不可更宽），止损下限系统兜底
+        rule_stop = round(avg_price * (1 - max(0.03, (amp_med or 3.0) / 100 * 0.55)), 2)
+        for c in conds:
+            sp = c.get("stop_loss_price")
+            if not sp:
+                c["stop_loss_price"] = rule_stop
+            else:
+                c["stop_loss_price"] = round(max(float(sp), rule_stop), 2)
         ok = True
         for cond in conds:
             cond = {
