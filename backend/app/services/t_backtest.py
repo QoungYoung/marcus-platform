@@ -1841,6 +1841,10 @@ def _combine_metrics(per_symbol: List[Dict[str, Any]], built: List[Dict[str, Any
         "ai_condition_update_count": sum(
             r.get("metrics", {}).get("ai_condition_update_count", 0) or 0
             for r in per_symbol),
+        # 消费式条件重建次数（迭代#57c：组合聚合缺失导致 #63/#65 报告 rebuild=None）
+        "condition_rebuild_count": sum(
+            r.get("metrics", {}).get("condition_rebuild_count", 0) or 0
+            for r in per_symbol),
         "ai_exec_count": sum(r.get("metrics", {}).get("ai_exec_count", 0) or 0 for r in per_symbol),
         "ai_exec_win_rate_pct": _combine_ai_exec_win_rate(per_symbol),
         "realized_pnl": round(realized, 2),
