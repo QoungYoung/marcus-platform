@@ -1,5 +1,12 @@
 [
   {
+    "date": "2026-08-12",
+    "macrostructure": "Session Ledger (mobile-first: desk-first grid areas + collapsible rail)",
+    "theme": "Blue Archive (brand preserved) · accent #2f7cd3 · --tb-* locked tokens",
+    "enrichment": "none",
+    "brief": "做T回测页重设计（tone: calm-precise）— 修复嵌套按钮/AI收益徽章CSS bug；接入后端 start/delete（重跑/删除任务）；事件流改时间正序+跟随最新；表单可折叠+提交后收起并自动选中新任务；报告头牌指标层级(收益/胜率/回撤)；AI决策独立15s轮询；移动端台账在前会话栏在后；全 token 化(#fff/rgba/hex 全部入 token 块)"
+  },
+  {
     "date": "2026-07-26",
     "macrostructure": "Tactical Overview (single-column monitoring dashboard)",
     "theme": "Blue Archive Official · studied-DNA: bluearchive-cn.com · accent #1189F9 · sky-glow #a7d8ea",

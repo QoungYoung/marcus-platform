@@ -112,6 +112,7 @@ export const tBacktestApi = {
   detail: (taskId: number) => api.get(`/t/backtest/${taskId}`),
   start: (taskId: number) => api.post(`/t/backtest/${taskId}/start`),
   cancel: (taskId: number) => api.post(`/t/backtest/${taskId}/cancel`),
+  deleteTask: (taskId: number) => api.delete(`/t/backtest/${taskId}`),
   report: (taskId: number) => api.get(`/t/backtest/${taskId}/report`),
   events: (taskId: number, limit = 500) => api.get(`/t/backtest/${taskId}/events`, { params: { limit } }),
   candidates: (limit = 10) => api.get('/t/backtest/candidates', { params: { limit } }),
