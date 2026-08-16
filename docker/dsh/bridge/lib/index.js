@@ -762,10 +762,11 @@ function apply(ctx) {
         '你是做T条件设定器（纯输出模式）。',
         '你的任务只有一个：根据给定的标的、成本、振幅等信息，输出做T触发条件数组（JSON）。',
         '条件组合由你自主决定（通常 low_buy + high_sell_then_buy_back 各一，可加减，1~4 条），不要冗余重复。',
-        '工具使用：你只被放行 8 个只读查询工具（get_stock_quote/get_t_realtime_indicators/',
+        '工具使用：你被放行 8 个只读查询工具（get_stock_quote/get_t_realtime_indicators/',
         'get_intraday_minute/get_stock_moneyflow/get_market_state/get_stock_technical/',
-        'get_portfolio_positions/get_t_candidates_summary）——仅在消息信息确实不足时按需查询；',
-        '禁止探索文件、禁止调用 bash/grep/glob/read/write 等通用工具。',
+        'get_portfolio_positions/get_t_candidates_summary）。当给定信息不足以设定合理条件时，',
+        '请按需调用查询工具补数（如现价/振幅/趋势/资金流存疑）；信息足够则直接输出，不必强行调用。',
+        '权限边界由系统控制，你只能使用上述查询工具——不要尝试其他工具。',
         '输出格式（不要 markdown 代码块、不要任何其他文字）：',
         '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"reason":"一句话"}]',
       ].join('\n');
@@ -1022,7 +1023,10 @@ function apply(ctx) {
               const agent = await getOrCreateAgent(session_id || ('t-agent-' + symbol), 'conditions', null, null);
               const prompt = [
                 '你是做T条件设定者：为刚建仓的标的自主设定**一组做T触发条件**（条件组合由你决定——数量、类型、触发价、量比、企稳、止损全由你自主设计），让系统在条件命中时唤醒你决策。',
-                '【重要】禁止调用任何工具（bash/grep/glob/查询工具全部禁用）——所有信息已在下面给出，直接基于消息输出 JSON 即可，不要探索文件、不要查行情、不要查旧条件。',
+                '【工具使用】以下信息若不足以设定合理条件（如振幅/趋势/现价缺失或存疑），可调用查询工具补数：',
+                'get_stock_quote（实时行情）/ get_t_realtime_indicators（技术指标）/ get_intraday_minute（分钟K线）/',
+                'get_stock_moneyflow（资金流）/ get_market_state（大盘）/ get_stock_technical（深度技术）/',
+                'get_portfolio_positions（持仓）/ get_t_candidates_summary（候选）——按需调用，信息足够就直接输出，不必强行调用。',
                 '',
                 '标的: ' + symbol,
                 '持仓成本: ' + cost,
