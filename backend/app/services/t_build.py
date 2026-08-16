@@ -38,6 +38,7 @@ BUILD_PARAMS_DEFAULT = {
     # 选股
     "cand_score_min": 0.78,          # 候选短名单门槛（迭代#53：0.65→0.78——68样本相关分析
                                      # 显示 score<0.77 全部亏损(9/9)，0.77+ 才开始有正期望）
+    "cand_score_min_relax": 0.72,    # 震荡市模式（仅回测）门槛：放宽趋势闸门后下行票总分约0.73，降到0.72可入池
     "build_score_min": 0.78,         # 可建仓门槛（同#53 上调；user 来源放宽到 0.70 见 build_score）
     # 权重（P0-1 打分坍缩根治：quality 0.8→0.55、trend 0.1→0.35——趋势从二值变连续后
     # 提权重才有区分度；source/risk 不变）
@@ -321,12 +322,14 @@ def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
 
 def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
                 quality_override: Optional[Dict[str, Any]] = None,
-                bars: Optional[List[dict]] = None) -> Dict[str, Any]:
+                bars: Optional[List[dict]] = None,
+                relax: bool = False) -> Dict[str, Any]:
     """建仓打分：quality（calc_t_quality 四维）+ 趋势 + 来源 + 风险惩罚。
 
     as_of: YYYY-MM-DD 截止日（回测用，日线趋势/风险历史化防前视；None = 实时）。
     quality_override: 回测传入的历史质量分（_quality_from_daily 结果）；None 时生产用 calc_t_quality。
     bars: 日线注入（回测用缓存数据，零网络）；None 时内部拉取（as_of 截止）。
+    relax: 震荡市模式（仅回测）：跳过趋势闸门硬拒（趋势分仍计入）+ 门槛用 cand_score_min_relax。
     返回 {score, pass_gate, reasons, quality, trend, source}。
     """
     from app.services.t_pool import calc_t_quality
@@ -344,7 +347,11 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
         bars = _fetch_daily_bars(symbol, count=40, as_of=as_of)
 
     # 趋势闸门（硬排除：趋势不达标直接拒，不再只乘性扣分——P0 审查"逆势做T=接飞刀"）
-    trend_ok, trend_note = trend_gate(symbol, bars=bars, as_of=as_of)
+    if relax:
+        # 震荡市模式（仅回测）：不拦单边下行/中期趋势向下/反弹陷阱，趋势分仍计入总分
+        trend_ok, trend_note = True, "震荡市模式（趋势闸门放宽）"
+    else:
+        trend_ok, trend_note = trend_gate(symbol, bars=bars, as_of=as_of)
     # 连续趋势分（P0-1 打分坍缩根治，AgentTeams t3）：二值 trend_add → 连续 trend_score，
     # 由 MA20 斜率 + MA5/MA20 发散度合成（只影响排序分，pass_gate 仍用二值 trend_ok）
     trend_score = 0.0
@@ -412,11 +419,12 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
     if not pass_quality:
         reasons.append("可T质量不达标")
 
+    min_score = float(p.get("cand_score_min_relax", 0.72)) if relax else float(p["cand_score_min"])
     return {
         "symbol": symbol,
         "score": score,
         "pass_gate": pass_quality and trend_ok and score >= (
-            float(p["cand_score_min"]) if source != "user" else 0.65),
+            min_score if source != "user" else 0.65),
         "quality": q,
         "trend": {"ok": trend_ok, "note": trend_note, "score": trend_score},
         "risk_penalty": risk_penalty,
@@ -527,7 +535,8 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
                       quality_override_fn: Optional[callable] = None,
                       bars_fn: Optional[callable] = None,
                       coarse_max_batches: int = 6,
-                      score_max: Optional[int] = None) -> List[Dict[str, Any]]:
+                      score_max: Optional[int] = None,
+                      relax: bool = False) -> List[Dict[str, Any]]:
     """扫描建仓候选短名单（来源：user 指定列表 / pool 候选池 / scan 全市场粗筛）。
 
     - scan：stock_basic 全市场列表 → 日频粗筛（成交额/振幅，当日缓存）→ 精筛（calc_t_quality
@@ -542,6 +551,7 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
       回测传 None 扫全市场，避免大票落在抽样窗口外被漏掉（粗筛口径仍为实时近似）。
     - score_max: 精筛打分数量上限（None = 默认：回测全市场模式打满 SCAN_MAX_DAILY，
       其余打 limit 只）。daily_auto_select 传 SCAN_MAX_DAILY(50)，与回测精筛口径对齐。
+    - relax: 震荡市模式（仅回测）：透传给 build_score 放宽趋势闸门+门槛。
     - 回测全市场扫描请用 scan_t_candidates_historical（历史日线粗筛，无实时行情依赖）。
     """
     if source == "user":
@@ -576,7 +586,7 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
             bars = bars_fn(sym) if bars_fn else None
             quality = quality_override_fn(sym, bars) if quality_override_fn else None
             r = build_score(sym, source=source, as_of=as_of,
-                            quality_override=quality, bars=bars)
+                            quality_override=quality, bars=bars, relax=relax)
             results.append(r)
         except Exception as e:
             print(f"[t-build] 扫描 {sym} 失败: {e}")
@@ -588,7 +598,8 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
 def scan_t_candidates_historical(symbols: List[str],
                                  data_dir: str, as_of: str,
                                  quality_fn: Optional[callable] = None,
-                                 limit: int = 20) -> List[Dict[str, Any]]:
+                                 limit: int = 20,
+                                 relax: bool = False) -> List[Dict[str, Any]]:
     """回测版全市场扫描：候选列表（stock_basic 过滤后）→ 历史日线粗筛（as_of 前近 5 日
     成交额/振幅，防前视）→ 精筛（build_score as_of 历史化 + quality_fn 注入历史质量分）。
 
@@ -651,7 +662,7 @@ def scan_t_candidates_historical(symbols: List[str],
             else:
                 quality = _quality_from_daily(daily_bars_t)
             r = build_score(sym, source="scan", as_of=as_of,
-                            quality_override=quality, bars=daily_bars_t)
+                            quality_override=quality, bars=daily_bars_t, relax=relax)
             results.append(r)
         except Exception as e:
             print(f"[t-build] 回测扫描 {sym} 失败: {e}")

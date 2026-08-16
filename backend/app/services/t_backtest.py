@@ -1379,6 +1379,7 @@ class TCombinedBacktestEngine:
         self.build_mode = bool(task.get("build_mode", False))
         self.rolling_build = bool(task.get("rolling_build", False))  # 每日滚动建仓（对齐实盘 daily_auto）
         self.rolling_scan = bool(task.get("rolling_scan", False))    # 滚动建仓+全市场历史扫描补充
+        self.relax_mode = bool(task.get("relax_mode", False))       # 震荡市模式（仅回测）：放宽趋势闸门+门槛
         self._all_symbols: Optional[List[str]] = task.get("_all_symbols") or None
         self._scan_pool: Optional[List[str]] = task.get("_scan_pool") or None
         self.net_asset = float(task.get("net_asset", 200000.0))
@@ -1466,7 +1467,8 @@ class TCombinedBacktestEngine:
                             for b in bars_daily]
             quality = t_build._quality_from_daily(daily_bars_t)
             r = t_build.build_score(sym, source="pool", as_of=as_of,
-                                    quality_override=quality, bars=daily_bars_t)
+                                    quality_override=quality, bars=daily_bars_t,
+                                    relax=self.relax_mode)
             if not r["pass_gate"]:
                 build_decisions.append({"symbol": sym, "decision": "rejected",
                                         "score": r["score"], "reasons": r["reasons"] or ["打分未达标"]})
@@ -1629,7 +1631,8 @@ class TCombinedBacktestEngine:
                         self._all_symbols = _pool
                     scan_cands = _tb.scan_t_candidates_historical(
                         _pool, self.data_dir, as_of=trade_day,
-                        quality_fn=_tb._quality_from_daily, limit=20)
+                        quality_fn=_tb._quality_from_daily, limit=20,
+                        relax=self.relax_mode)
                     scan_syms = [c["symbol"] for c in scan_cands if c.get("pass_gate")]
                     cand_syms = list(dict.fromkeys(cand_syms + scan_syms))
                 except Exception as e:
@@ -1650,7 +1653,8 @@ class TCombinedBacktestEngine:
                                 for b in bars_daily]
                 quality = t_build._quality_from_daily(daily_bars_t)
                 r = t_build.build_score(sym, source="pool", as_of=trade_day,
-                                        quality_override=quality, bars=daily_bars_t)
+                                        quality_override=quality, bars=daily_bars_t,
+                                        relax=self.relax_mode)
                 if not r["pass_gate"]:
                     build_decisions.append({"symbol": sym, "decision": "rejected",
                                             "score": r["score"], "as_of": trade_day,

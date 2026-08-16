@@ -36,11 +36,13 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 build_mode: bool = False, build_limit_ratio: float = 0.55,
                 select_source: str = "manual", select_limit: int = 10,
                 rolling_build: bool = False,
-                rolling_scan: bool = False) -> Optional[int]:
+                rolling_scan: bool = False,
+                relax_mode: bool = False) -> Optional[int]:
     """创建回测任务（status=pending）。组合模式：symbols 列表或 select_source 自动选股。
 
     rolling_build=True：每日滚动建仓（对齐实盘 daily_auto：盘后扫描 → 次日建仓）。
     rolling_scan=True：滚动建仓 + 全市场历史扫描补充（回测版 scan_t_candidates_historical）。
+    relax_mode=True：震荡市模式（仅回测）——放宽趋势闸门 + 门槛 0.72。
     """
     try:
         db = SessionLocal()
@@ -51,10 +53,10 @@ def create_task(symbol: str, start_date: str, end_date: str,
                     symbol, start_date, end_date, init_shares, init_price,
                     net_asset, review_mode, conditions_json, symbols_json,
                     build_mode, build_limit_ratio, select_source, select_limit,
-                    rolling_build, rolling_scan
+                    rolling_build, rolling_scan, relax_mode
                 ) VALUES (:symbol, :start, :end, :shares, :price, :asset, :mode, :conds,
                           :symbols, :build_mode, :build_limit, :sel_src, :sel_lim,
-                          :rolling_build, :rolling_scan)
+                          :rolling_build, :rolling_scan, :relax_mode)
                 RETURNING id
                 """
             ), {
@@ -68,6 +70,7 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 "sel_lim": int(select_limit),
                 "rolling_build": bool(rolling_build),
                 "rolling_scan": bool(rolling_scan),
+                "relax_mode": bool(relax_mode),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -378,7 +381,8 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                                 start_date: str, end_date: str,
                                 progress_cb: Optional[callable] = None,
                                 aggregate: bool = False,
-                                event_cb: Optional[callable] = None) -> tuple:
+                                event_cb: Optional[callable] = None,
+                                relax: bool = False) -> tuple:
     """自动选股（逐日滚动）：从回测窗口首日起按交易日顺序扫描，某日无达标标的自动顺延次日。
 
     用户需求：当天没有选股标的时不再直接失败，滚动到下一个有达标标的的交易日。
@@ -437,7 +441,8 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
             cands = scan_t_candidates(limit=select_limit, source=source, as_of=as_of,
                                       quality_override_fn=_hist_quality,
                                       bars_fn=_hist_bars,
-                                      coarse_max_batches=None)  # 回测扫全市场，不抽样前300
+                                      coarse_max_batches=None,  # 回测扫全市场，不抽样前300
+                                      relax=relax)
         except Exception as e:
             last_err = e
             print(f"[t-backtest] 自动选股失败 as_of={as_of}: {e}（顺延下一交易日）")
@@ -451,7 +456,8 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                 cands = scan_t_candidates(limit=select_limit, source="scan", as_of=as_of,
                                           quality_override_fn=_hist_quality,
                                           bars_fn=_hist_bars,
-                                          coarse_max_batches=None)
+                                          coarse_max_batches=None,
+                                          relax=relax)
                 syms = [c.get("symbol") for c in cands
                         if c.get("symbol") and c.get("pass_gate")]
             except Exception as e:
@@ -531,6 +537,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     select_source = str(task.get("select_source") or ("manual" if symbols else "pool"))
     select_limit = int(task.get("select_limit") or 10)
     rolling_scan = bool(task.get("rolling_scan", False))
+    relax_mode = bool(task.get("relax_mode", False))
     # rolling_scan：候选由引擎每日历史全市场扫描产生（回测版 scan_t_candidates_historical），
     # 不在此处做实时自动选股（生产 scan_t_candidates 用实时行情，有前视风险）
     if is_combined and not symbols and select_source in ("pool", "scan") and not rolling_scan:
@@ -547,7 +554,8 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         symbols, selected_start, _scan_err = auto_select_symbols_rolling(
             select_source, select_limit, start, end, progress_cb=_sel_progress,
             aggregate=bool(task.get("rolling_build", False)),
-            event_cb=lambda evs: save_events(task_id, evs))
+            event_cb=lambda evs: save_events(task_id, evs),
+            relax=relax_mode)
         if not symbols:
             err = f"自动选股({select_source})在回测区间内无达标标的（已逐日顺延扫描）"
             if _scan_err is not None:
@@ -652,7 +660,8 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                             _asof = f"{_td_[:4]}-{_td_[4:6]}-{_td_[6:8]}"
                             _hist = _tb.scan_t_candidates_historical(
                                 active_codes, str(task_dir), as_of=_asof,
-                                quality_fn=_tb._quality_from_daily, limit=20)
+                                quality_fn=_tb._quality_from_daily, limit=20,
+                                relax=relax_mode)
                             for c in _hist:
                                 if c.get("symbol") and c.get("pass_gate") \
                                         and c["symbol"] not in _m5_codes:
@@ -692,6 +701,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     task["build_mode"] = build_mode
     task["build_limit_ratio"] = build_limit_ratio
     task["rolling_build"] = bool(task.get("rolling_build", False))
+    task["relax_mode"] = relax_mode
     review_fn = build_review_fn(task)
     if review_fn is None and task.get("review_mode", "llm") == "llm":
         print(f"[t-backtest] ⚠️ LLM 复核不可用（bridge 未就绪），任务 #{task_id} 降级规则模式")
