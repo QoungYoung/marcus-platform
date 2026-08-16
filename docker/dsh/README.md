@@ -94,11 +94,19 @@ server tool，已在本地实测返回原生 `web_search_tool_result` 结构）�
 - **机制**：`BasicCompactionEngine.summarize()` 是官方「唯一可覆盖钩子」（源码注释
   "Override this sole hook for a template or remote summarizer"），所有压缩路径
   （pre-step 压力 / context-overflow / /compact）最终都经 `regionDependencies()` 的
-  `this.summarize(...)` 动态分发；插件 `inject: ['compaction']` 拿到引擎实例后按会话
-  打补丁，无需重注册 compaction 服务。见 `t-compaction/lib/index.js` 头部注释。
+  `this.summarize(...)` 动态分发；插件拿到引擎实例后按会话打补丁，无需重注册
+  compaction 服务。见 `t-compaction/lib/index.js` 头部注释。
+- **非阻塞设计（重要）**：插件**不再** `inject: ['compaction']`。apply 时探测式取引擎，
+  组合无 host 级 compaction（如 web profile）时警告并跳过，**永不阻塞 dsh 启动**。
+  做T压缩仅在组合提供 host 级 compaction（如 service profile）时生效。
+- **升级 dsh 版本后的风险**：若新版把 service profile 的 host 级 compaction 也移进
+  preset 域，做T压缩会静默失效（启动不再报错）。升级后检查日志是否出现
+  `[t-compaction] ⚠️ 未找到 compaction 服务`；出现即需把 dsh-t-compaction 行移入
+  对应 agent preset 的 compaction 隔离域。Dockerfile 钉死 `@deepseek-ai/dsh@0.1.0-rc.6`，
+  不会自动升级。
 - **安装（服务端）**：`Dockerfile.dsh` 第 8b 步 COPY 进 profile node_modules，
   `service.cordis.patch.yml` 注册行；本地 GUI 同法放入 `~/.dsh/profiles/node_modules/`
   并在 `web/cordis.patch.yml` 加行，重启生效。
-- **验证**：`t-compaction/verify.profile.mjs`（15 项断言：t-agent 走做T指令 /
-  普通会话回退默认 / 非引擎实例防御跳过）。运行：把该文件拷到 profile 根后
-  `cd <profiles-root> && node verify-t-compaction.mjs`（已实测全过）。
+- **验证**：`t-compaction/verify.profile.mjs`（16 项断言：t-agent 走做T指令 /
+  普通会话回退默认 / 非引擎实例防御跳过 / 无引擎非阻塞）。运行：把该文件拷到 profile
+  根后 `cd <profiles-root> && node verify-t-compaction.mjs`（已实测全过）。

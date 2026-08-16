@@ -23,7 +23,7 @@ function assert(cond, msg) {
 
 console.log('插件导出: name=' + name + ' inject=' + JSON.stringify(inject));
 assert(name === 'dsh-t-compaction', 'name 正确');
-assert(Array.isArray(inject) && inject.includes('compaction'), 'inject 依赖 compaction 服务');
+assert(Array.isArray(inject) && !inject.includes('compaction'), 'inject 不再依赖 compaction（非阻塞设计：组合无 host 级引擎时跳过而非阻塞启动）');
 
 // ── 构造真实 BasicCompactionEngine 实例（mock ctx，仅构造所需）──
 const mockCtx = {
@@ -98,6 +98,22 @@ console.log('场景3: 非 BasicCompactionEngine 实例跳过补丁（防御分�
   console.warn = oldWarn;
   assert(warned === true, '输出跳过警告');
   assert(typeof fake.summarize === 'function', 'fake 引擎未被补丁破坏');
+}
+
+console.log('场景4: 无 compaction 服务时非阻塞（不抛错，仅警告）——保证 dsh 启动不受影响');
+{
+  let warned = false;
+  const oldWarn = console.warn;
+  console.warn = (m) => { warned = true; };
+  let threw = false;
+  try {
+    apply({ get: () => undefined });
+  } catch (error) {
+    threw = true;
+  }
+  console.warn = oldWarn;
+  assert(threw === false, '无引擎时 apply 不抛错');
+  assert(warned === true, '输出"未找到 compaction 服务"警告');
 }
 
 console.log(failures === 0 ? '\n全部通过 ✅' : `\n${failures} 项失败 ❌`);

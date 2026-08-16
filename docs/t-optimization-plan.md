@@ -384,6 +384,32 @@ grep×6/glob×2/list_t_conditions/get_stock_quote，工具调用耗掉大半 →
 
 ---
 
+## v23：触发条件消费式（触发即销毁，AI 重建）（迭代#56，用户需求）
+
+用户需求："触发条件是消费式的，触发后就销毁了，由 AI 重新评估触发条件"。
+
+### 语义变更
+
+| 项 | 旧（冷却复用） | 新（消费式） |
+|---|---|---|
+| 条件触发后 | armed=0，冷却后重新武装复用 | **销毁（consumed）**，当日不再评估 |
+| 再次触发 | 同一条件冷却结束再触发 | 需 AI 重建新条件（update_condition=重建 / create_t_condition 发布） |
+| update_condition | 原地 patch 已触发条件 | **重建一条新条件**（新 _bt_index，注入 day_conds + self.conditions） |
+| 跨日 | 条件次日重建 | 不变（day_conds 每日重新初始化） |
+
+### 落地
+
+- **回测引擎**（t_backtest）：触发命中后 `day_conds.remove(c)`（消费），当日剩余 bar 不再评估；
+  `_apply_condition_update` 升级为"重建新条件"（模板 + AI patch，补新 _bt_index）
+- **生产监控**（t_monitor）：触发写入后条件 `status='consumed'`（+armed=0+计数），
+  `list_active_conditions` 只查 active → 消费后不再评估
+- **提示词**：wake_agent / /backtest/review / BACKTEST_REVIEW_PROMPT 增加消费式说明——
+  "触发后条件已销毁，继续做T需 update_condition 重建或 create_t_condition 发布，
+  不重建则当日不再触发；严禁编造已销毁条件继续触发"
+- **测试**：test_trigger_and_execute 改断言"当日同条件不重复触发（跨日允许）"
+
+---
+
 ## v20：AI 条件止损钳制（迭代#52，AI 收益 vs 规则差异归因）
 
 > 用户质疑：#50 rule +4.95% > #51 llm +3.85%，"是哪些操作导致收益下降"；

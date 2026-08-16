@@ -207,8 +207,15 @@ function updatePatch(spec, remove) {
 		return 'row removed';
 	}
 	if (patchHasRow(text, spec.id)) return 'row present';
-	// Append at end, after any trailing blank lines.
-	text = text.replace(/\s+$/, '') + '\n\n' + block;
+	// Default empty patch layer (`[]` or blank) — replace it with the block so the
+	// file stays a single valid top-level YAML array (appending after `[]` would
+	// mix flow and block sequences and fail to parse).
+	const trimmed = text.trim();
+	if (trimmed === '' || trimmed === '[]') {
+		text = block.replace(/\n+$/, '\n');
+	} else {
+		text = text.replace(/\s+$/, '') + '\n\n' + block;
+	}
 	writeFileSync(PATCH_FILE, text, 'utf8');
 	return 'row added';
 }

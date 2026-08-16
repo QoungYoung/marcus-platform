@@ -21,8 +21,13 @@ import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic';
 import { BlockAssembler, LlmError, contentHasImage, createUserMessage } from '@deepseek-ai/dsh-llm';
 
 const name = 'dsh-t-compaction';
-/** 依赖 compaction 服务：保证 apply 时 ctx.compaction（BasicCompactionEngine 实例）已就绪 */
-const inject = ['compaction'];
+/**
+ * 非阻塞设计：不再 `inject: ['compaction']`（那会让组合在 host 级没有
+ * compaction 服务的 profile（如 web）里启动失败）。改为 apply 时探测：
+ * 有引擎就打补丁，没有就警告并跳过——永不阻塞启动。做T压缩仅在组合确实
+ * 提供 host 级 compaction（如 docker service profile）时生效。
+ */
+const inject = [];
 
 /** 做T 会话识别：t_bridge.py 用 `t-agent-{symbol}`，bridge /chat 键为 `chat:t-agent-{symbol}` */
 const T_AGENT_MARKER = 't-agent-';
@@ -169,9 +174,15 @@ async function summarizeWithTInstruction(engine, input, agent, signal) {
 }
 
 function apply(ctx) {
-  const engine = ctx.compaction;
+  // 探测式取引擎：兼容两种注入面（cordis ctx.get 或属性直挂），拿不到就
+  // 警告并跳过——做T压缩降级为不生效，但 dsh 启动不受影响。
+  const engine = typeof ctx.get === 'function' ? (ctx.get('compaction') ?? ctx.compaction) : ctx.compaction;
+  if (engine === undefined) {
+    console.warn('[t-compaction] ⚠️ 未找到 compaction 服务（组合未提供 host 级引擎），跳过做T摘要覆盖——如需启用，请确认组合包含 compaction-basic');
+    return;
+  }
   if (!(engine instanceof BasicCompactionEngine)) {
-    console.warn('[t-compaction] ⚠️ ctx.compaction 不是 BasicCompactionEngine 实例，跳过做T摘要覆盖');
+    console.warn('[t-compaction] ⚠️ compaction 不是 BasicCompactionEngine 实例，跳过做T摘要覆盖');
     return;
   }
   if (patchedEngines.has(engine)) {
