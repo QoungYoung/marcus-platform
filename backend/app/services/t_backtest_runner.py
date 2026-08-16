@@ -37,7 +37,8 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 select_source: str = "manual", select_limit: int = 10,
                 rolling_build: bool = False,
                 rolling_scan: bool = False,
-                relax_mode: bool = False) -> Optional[int]:
+                relax_mode: bool = False,
+                sector_params: Optional[Dict[str, Any]] = None) -> Optional[int]:
     """创建回测任务（status=pending）。组合模式：symbols 列表或 select_source 自动选股。
 
     rolling_build=True：每日滚动建仓（对齐实盘 daily_auto：盘后扫描 → 次日建仓）。
@@ -53,10 +54,10 @@ def create_task(symbol: str, start_date: str, end_date: str,
                     symbol, start_date, end_date, init_shares, init_price,
                     net_asset, review_mode, conditions_json, symbols_json,
                     build_mode, build_limit_ratio, select_source, select_limit,
-                    rolling_build, rolling_scan, relax_mode
+                    rolling_build, rolling_scan, relax_mode, sector_params_json
                 ) VALUES (:symbol, :start, :end, :shares, :price, :asset, :mode, :conds,
                           :symbols, :build_mode, :build_limit, :sel_src, :sel_lim,
-                          :rolling_build, :rolling_scan, :relax_mode)
+                          :rolling_build, :rolling_scan, :relax_mode, :sector_params)
                 RETURNING id
                 """
             ), {
@@ -71,6 +72,7 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 "rolling_build": bool(rolling_build),
                 "rolling_scan": bool(rolling_scan),
                 "relax_mode": bool(relax_mode),
+                "sector_params": json.dumps(sector_params or {}, ensure_ascii=False),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -87,7 +89,16 @@ def get_task(task_id: int) -> Optional[Dict[str, Any]]:
         try:
             row = db.execute(text("SELECT * FROM t_backtest_tasks WHERE id = :id"),
                              {"id": task_id}).mappings().first()
-            return dict(row) if row else None
+            d = dict(row) if row else None
+            if d is not None:
+                sp = d.get("sector_params_json")
+                if isinstance(sp, str):
+                    try:
+                        sp = json.loads(sp or "{}")
+                    except (ValueError, TypeError):
+                        sp = {}
+                d["sector_params"] = sp if isinstance(sp, dict) else {}
+            return d
         finally:
             db.close()
     except Exception as e:
@@ -102,7 +113,18 @@ def list_tasks(limit: int = 50) -> List[Dict[str, Any]]:
             rows = db.execute(text(
                 "SELECT * FROM t_backtest_tasks ORDER BY id DESC LIMIT :lim"
             ), {"lim": limit}).mappings().all()
-            return [dict(r) for r in rows]
+            out = []
+            for r in rows:
+                d = dict(r)
+                sp = d.get("sector_params_json")
+                if isinstance(sp, str):
+                    try:
+                        sp = json.loads(sp or "{}")
+                    except (ValueError, TypeError):
+                        sp = {}
+                d["sector_params"] = sp if isinstance(sp, dict) else {}
+                out.append(d)
+            return out
         finally:
             db.close()
     except Exception as e:
@@ -382,7 +404,9 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                                 progress_cb: Optional[callable] = None,
                                 aggregate: bool = False,
                                 event_cb: Optional[callable] = None,
-                                relax: bool = False) -> tuple:
+                                relax: bool = False,
+                                cache_dir: Optional[str] = None,
+                                sector_params: Optional[Dict[str, Any]] = None) -> tuple:
     """自动选股（逐日滚动）：从回测窗口首日起按交易日顺序扫描，某日无达标标的自动顺延次日。
 
     用户需求：当天没有选股标的时不再直接失败，滚动到下一个有达标标的的交易日。
@@ -403,6 +427,27 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
     from app.services.t_backtest_data import resolve_trade_days
     from app.services.t_build import (scan_t_candidates, _fetch_daily_bars,
                                       _quality_from_daily)
+
+    # 行业数据（add-sector-rotation）：缓存目录可用时按 as_of 计算行业强度/过滤
+    from pathlib import Path as _Path
+    _ind_map = None
+    if cache_dir:
+        try:
+            from app.services.t_backtest_data import load_industry_map, industry_context_for
+            _ind_map = load_industry_map(_Path(cache_dir))
+        except Exception as _e:
+            print(f"[t-backtest] 行业映射加载失败: {_e}（行业因子/过滤降级）")
+            _ind_map = None
+    _excluded: List[dict] = []
+    _excl_sent = 0
+
+    def _industry_dim(sym: str):
+        if not cache_dir or not _ind_map:
+            return None
+        try:
+            return industry_context_for(sym, as_of, _Path(cache_dir), map_cache=_ind_map)
+        except Exception:
+            return None
 
     cand_days: List[str] = []
     try:
@@ -442,7 +487,9 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                                       quality_override_fn=_hist_quality,
                                       bars_fn=_hist_bars,
                                       coarse_max_batches=None,  # 回测扫全市场，不抽样前300
-                                      relax=relax)
+                                      industry_fn=_industry_dim,
+                                      excluded=_excluded,
+                                      params_override=sector_params)
         except Exception as e:
             last_err = e
             print(f"[t-backtest] 自动选股失败 as_of={as_of}: {e}（顺延下一交易日）")
@@ -457,7 +504,9 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                                           quality_override_fn=_hist_quality,
                                           bars_fn=_hist_bars,
                                           coarse_max_batches=None,
-                                          relax=relax)
+                                          industry_fn=_industry_dim,
+                                          excluded=_excluded,
+                                          params_override=sector_params)
                 syms = [c.get("symbol") for c in cands
                         if c.get("symbol") and c.get("pass_gate")]
             except Exception as e:
@@ -480,6 +529,19 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                 }])
             except Exception:
                 pass
+        # 行业过滤事件（add-sector-rotation）：被剔除的候选带行业与 5 日涨幅
+        if event_cb is not None and _excl_sent < len(_excluded):
+            try:
+                new_excl = _excluded[_excl_sent:]
+                _excl_sent = len(_excluded)
+                event_cb([{
+                    "type": "sector_excluded",
+                    "trade_day": d,
+                    "data": {"count": len(new_excl), "items": new_excl[-20:]},
+                }])
+            except Exception:
+                pass
+
         if syms:
             print(f"[t-backtest] 自动选股({source}) as_of={as_of} 达标 {len(syms)} 只: {syms[:10]}")
             if selected_start is None:
@@ -551,11 +613,24 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 update_task_status(task_id, "running", progress=min(pct, 8))
             except Exception:
                 pass
+        # 行业数据预取（add-sector-rotation）：自动选股前拉取行业日线与归属映射（幂等），
+        # 供 scan 行业强度因子/强势过滤使用；失败时降级（不过滤、中性强度）。
+        from datetime import datetime as _dtx, timedelta as _tdx
+        from app.services import t_backtest_data as _btd_x
+        try:
+            _days_x = _btd_x.resolve_trade_days(start, end)
+            _btd_x.prefetch_industry_daily(_days_x, task_dir)
+            _btd_x.prefetch_industry_map(task_dir)
+        except Exception as _ie:
+            print(f"[t-backtest] 行业数据预取失败: {_ie}（行业因子/过滤降级）")
+
         symbols, selected_start, _scan_err = auto_select_symbols_rolling(
             select_source, select_limit, start, end, progress_cb=_sel_progress,
             aggregate=bool(task.get("rolling_build", False)),
             event_cb=lambda evs: save_events(task_id, evs),
-            relax=relax_mode)
+            relax=relax_mode,
+            cache_dir=str(task_dir),
+            sector_params=(task.get("sector_params") or {}))
         if not symbols:
             err = f"自动选股({select_source})在回测区间内无达标标的（已逐日顺延扫描）"
             if _scan_err is not None:

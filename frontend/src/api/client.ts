@@ -105,6 +105,8 @@ export const tBacktestApi = {
   create: (data: {
     symbol?: string; symbols?: string[]; build_mode?: boolean; rolling_build?: boolean; relax_mode?: boolean; build_limit_ratio?: number;
     select_source?: 'manual' | 'pool' | 'scan'; select_limit?: number;
+    industry_strength_weight?: number; sector_filter_enabled?: boolean; sector_filter_min_pct?: number;
+    rotation_enabled?: boolean; rotation_cooldown_days?: number;
     start_date: string; end_date: string; conditions?: any[]; init_shares?: number;
     net_asset?: number; review_mode?: 'llm' | 'rule';
   }) => api.post('/t/backtest', data),

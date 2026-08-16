@@ -48,6 +48,12 @@ BUILD_PARAMS_DEFAULT = {
     "stop_support_proximity_pct": 1.5,  # 止损价距前期低点/筹码成本峰 ≤ 该百分比 → 支撑位感知
     # 权重（P0-1 打分坍缩根治：quality 0.8→0.55、trend 0.1→0.35——趋势从二值变连续后
     # 提权重才有区分度；source/risk 不变）
+    # 板块轮动增强（add-sector-rotation）：行业强度因子/强势过滤/轮动换仓
+    "industry_strength_weight": 0.3,   # 行业强度并入总评分权重（0=关因子，1=纯行业；logistic 标准化）
+    "sector_filter_enabled": True,     # 行业强势过滤总开关（排除所属行业近5日涨幅 ≤ 门槛的候选）
+    "sector_filter_min_pct": 0.0,      # 行业近5日累计涨幅门槛（%），≤ 门槛排除
+    "rotation_enabled": False,         # 滚动回测轮动换仓（高切低，默认关；参数化验证后再开）
+    "rotation_cooldown_days": 2,       # 换仓冷却期（交易日）
     "build_score_weights": {"quality": 0.55, "trend": 0.35, "source": 0.05, "risk": -0.05},
     "trend_gate": True,              # 个股趋势闸门（20 日线方向，硬排除）
     # 连续趋势分参数（t3 P0-1）：MA20 斜率归一化基准 + MA5/MA20 发散档位
@@ -83,6 +89,15 @@ BUILD_PARAMS_DEFAULT = {
 
 # regime → 参数档位
 REGIME_TIER = {"ACTIVE": "std", "CAUTIOUS": "cons", "HALT": "cons"}
+
+
+def clamp01(x: Any) -> float:
+    """夹取到 [0,1]（行业强度/权重用）。"""
+    try:
+        v = float(x)
+    except (ValueError, TypeError):
+        return 0.5
+    return max(0.0, min(v, 1.0))
 
 
 def _params() -> Dict[str, Any]:
@@ -329,7 +344,9 @@ def _quality_from_daily(bars: Optional[List[dict]]) -> Dict[str, Any]:
 def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
                 quality_override: Optional[Dict[str, Any]] = None,
                 bars: Optional[List[dict]] = None,
-                relax: bool = False) -> Dict[str, Any]:
+                relax: bool = False,
+                industry: Optional[Dict[str, Any]] = None,
+                 params_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """建仓打分：quality（calc_t_quality 四维）+ 趋势 + 来源 + 风险惩罚。
 
     as_of: YYYY-MM-DD 截止日（回测用，日线趋势/风险历史化防前视；None = 实时）。
@@ -339,7 +356,8 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
     返回 {score, pass_gate, reasons, quality, trend, source}。
     """
     from app.services.t_pool import calc_t_quality
-    p = _params()
+    _p0 = _params()
+    p = {**_p0, **(params_override or {})}
     w = p["build_score_weights"]
     if quality_override is not None:
         q = quality_override
@@ -414,10 +432,19 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
     source_add = {"user": 0.05, "pool": 0.0, "scan": 0.0}.get(source, 0.0)
     raw = (w["quality"] * quality_score + w["trend"] * trend_add
            + w["source"] * source_add - w["risk"] * risk_penalty)
+    # 行业强度因子（add-sector-rotation）：final = (1-w)*原分 + w*行业强度
+    reasons = list(q.get("reasons") or [])
+    industry_weight = float(p.get("industry_strength_weight", 0.0))
+    industry_w = clamp01(industry_weight)
+    if industry_w > 0 and industry is not None:
+        ind_score = clamp01(float(industry.get("strength") or 0.5))
+        raw = (1.0 - industry_w) * raw + industry_w * ind_score
+        ind_name = str(industry.get("name") or "?")
+        ind_pct5d = float(industry.get("pct_5d") or 0.0) if industry.get("pct_5d") is not None else 0.0
+        reasons.append(f"行业[{ind_name}]强度 {ind_score:.2f}（w={industry_w:.2f}, 5日{ind_pct5d:.2f}%）")
     # 归一化到 0-1 量纲（quality_score 理论 0-1）
     score = round(max(0.0, min(raw, 1.0)), 4)
 
-    reasons = list(q.get("reasons") or [])
     if not trend_ok:
         reasons.append(trend_note)
     if risk_penalty > 0:
@@ -435,6 +462,7 @@ def build_score(symbol: str, source: str = "user", as_of: Optional[str] = None,
         "trend": {"ok": trend_ok, "note": trend_note, "score": trend_score},
         "risk_penalty": risk_penalty,
         "source": source,
+        "industry": industry,
         "reasons": reasons,
     }
 
@@ -542,7 +570,10 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
                       bars_fn: Optional[callable] = None,
                       coarse_max_batches: int = 6,
                       score_max: Optional[int] = None,
-                      relax: bool = False) -> List[Dict[str, Any]]:
+                      relax: bool = False,
+                      industry_fn: Optional[callable] = None,
+                      excluded: Optional[List[dict]] = None,
+                                 params_override: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """扫描建仓候选短名单（来源：user 指定列表 / pool 候选池 / scan 全市场粗筛）。
 
     - scan：stock_basic 全市场列表 → 日频粗筛（成交额/振幅，当日缓存）→ 精筛（calc_t_quality
@@ -587,12 +618,26 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
     else:
         score_n = max(limit, SCAN_MAX_DAILY) if coarse_max_batches is None else limit
     results = []
+    _bp = {**_params(), **(params_override or {})}  # 行业过滤参数（任务级可覆盖，避免每票查 DB）
     for sym in symbols[:score_n]:
         try:
             bars = bars_fn(sym) if bars_fn else None
             quality = quality_override_fn(sym, bars) if quality_override_fn else None
+            ind = industry_fn(sym) if industry_fn else None
             r = build_score(sym, source=source, as_of=as_of,
-                            quality_override=quality, bars=bars, relax=relax)
+                            quality_override=quality, bars=bars, relax=relax,
+                            industry=ind,
+                            params_override=params_override)
+            if ind is not None and bool(_bp.get("sector_filter_enabled", True)):
+                ind_pct = ind.get("pct_5d")
+                if ind_pct is not None and float(ind_pct) <= float(_bp.get("sector_filter_min_pct", 0.0)):
+                    r["sector_excluded"] = True
+                    if excluded is not None:
+                        excluded.append({"symbol": sym, "industry": ind.get("name"),
+                                         "pct_5d": float(ind_pct), "as_of": str(as_of)})
+                    ind_name = str(ind.get("name") or "?")
+                    print(f"[t-build] 行业过滤剔除 {sym}（{ind_name} 5日{float(ind_pct):.2f}%）")
+                    continue
             results.append(r)
         except Exception as e:
             print(f"[t-build] 扫描 {sym} 失败: {e}")
@@ -605,7 +650,10 @@ def scan_t_candidates_historical(symbols: List[str],
                                  data_dir: str, as_of: str,
                                  quality_fn: Optional[callable] = None,
                                  limit: int = 20,
-                                 relax: bool = False) -> List[Dict[str, Any]]:
+                                 relax: bool = False,
+                                 industry_fn: Optional[callable] = None,
+                                 excluded: Optional[List[dict]] = None,
+                                 params_override: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """回测版全市场扫描：候选列表（stock_basic 过滤后）→ 历史日线粗筛（as_of 前近 5 日
     成交额/振幅，防前视）→ 精筛（build_score as_of 历史化 + quality_fn 注入历史质量分）。
 
@@ -653,6 +701,7 @@ def scan_t_candidates_historical(symbols: List[str],
     coarse.sort(key=lambda x: x["amount"], reverse=True)
     print(f"[t-build] 回测粗筛活跃池: {len(coarse)}/{len(symbols)} 只（历史日线 as_of={as_of}）")
     # 2) 精筛：build_score as_of 历史化 + 质量分注入（防前视）
+    _bp = {**_params(), **(params_override or {})}  # 行业过滤参数（任务级可覆盖）
     results = []
     for c in coarse[:max(limit, SCAN_MAX_DAILY)]:
         sym = c["symbol"]
@@ -667,8 +716,19 @@ def scan_t_candidates_historical(symbols: List[str],
                 quality = quality_fn(daily_bars_t)
             else:
                 quality = _quality_from_daily(daily_bars_t)
+            ind = industry_fn(sym) if industry_fn else None
             r = build_score(sym, source="scan", as_of=as_of,
-                            quality_override=quality, bars=daily_bars_t, relax=relax)
+                            quality_override=quality, bars=daily_bars_t, relax=relax,
+                            industry=ind,
+                            params_override=params_override)
+            if ind is not None and _bp.get("sector_filter_enabled", True):
+                ind_pct = ind.get("pct_5d")
+                if ind_pct is not None and float(ind_pct) <= float(_bp.get("sector_filter_min_pct", 0.0)):
+                    r["sector_excluded"] = True
+                    if excluded is not None:
+                        excluded.append({"symbol": sym, "industry": ind.get("name"),
+                                         "pct_5d": float(ind_pct), "as_of": str(as_of)})
+                    continue
             results.append(r)
         except Exception as e:
             print(f"[t-build] 回测扫描 {sym} 失败: {e}")
@@ -1225,9 +1285,15 @@ def daily_auto_select(limit: int = DEFAULT_AUTO_SELECT_LIMIT) -> List[Dict[str, 
     try:
         from sqlalchemy import text
         from app.database import SessionLocal
+        _bp = _params()
+        ind_fn = None
+        if bool(_bp.get("sector_filter_enabled", True)):
+            from app.services import t_backtest_data as _tbd
+            ind_fn = (lambda sym: _tbd.industry_strength_live(sym))
         cands = scan_t_candidates(limit=limit, source="scan",
                                  as_of=datetime.now().strftime("%Y-%m-%d"),
-                                 score_max=SCAN_MAX_DAILY)  # 与回测精筛口径对齐（≤50 只打分）
+                                 score_max=SCAN_MAX_DAILY,  # 与回测精筛口径对齐（≤50 只打分）
+                                 industry_fn=ind_fn)
         passed = [c for c in cands if c.get("symbol") and c.get("pass_gate")]
         if not passed:
             print("[t-build] 每日自动选股: 无达标标的")

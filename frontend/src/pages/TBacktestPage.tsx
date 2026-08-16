@@ -15,6 +15,7 @@ interface BtTask {
   build_mode?: boolean;
   rolling_build?: boolean;
   relax_mode?: boolean;
+  sector_params?: any;
   build_limit_ratio?: number;
   select_source?: string;
   select_limit?: number;
@@ -163,6 +164,7 @@ const EVENT_TYPE_LABEL: Record<string, string> = {
   build_decision: '建仓决策', rolling_scan: '盘后扫描',
   auto_select: '自动选股', auto_select_done: '选股完成',
   stop_warning: '止损预警', fake_breakdown: '假跌破跳过', stabilised_cancel: '企稳取消',
+  sector_excluded: '行业过滤剔除', sector_switch: '轮动换仓',
 };
 
 function fmtDayNice(day: string): string {
@@ -381,6 +383,11 @@ export default function TBacktestPage() {
   const [buildMode, setBuildMode] = useState(true);
   const [rollingBuild, setRollingBuild] = useState(false);
   const [relaxMode, setRelaxMode] = useState(false);
+  const [sectorFilterEnabled, setSectorFilterEnabled] = useState(true);
+  const [industryStrengthWeight, setIndustryStrengthWeight] = useState('0.3');
+  const [rotationEnabled, setRotationEnabled] = useState(false);
+  const [rotationCooldown, setRotationCooldown] = useState('2');
+  const [sectorFilterMinPct, setSectorFilterMinPct] = useState('0');
   const [netAsset, setNetAsset] = useState('200000');
   const [reviewMode, setReviewMode] = useState<'llm' | 'rule'>('rule');
 
@@ -561,6 +568,11 @@ export default function TBacktestPage() {
         build_mode: buildMode,
         rolling_build: rollingBuild,
         relax_mode: relaxMode,
+        industry_strength_weight: Number(industryStrengthWeight) || 0.3,
+        sector_filter_enabled: sectorFilterEnabled,
+        sector_filter_min_pct: Number(sectorFilterMinPct) || 0,
+        rotation_enabled: rotationEnabled,
+        rotation_cooldown_days: Number(rotationCooldown) || 2,
         build_limit_ratio: 0.55,
         start_date: startDate,
         end_date: endDate,
@@ -657,6 +669,12 @@ export default function TBacktestPage() {
     }
     if (sel.relax_mode) {
       selParams.push({ label: '选股口径', value: '震荡市（放宽趋势闸门 + 门槛 0.72）' });
+    }
+    if (sel.sector_params) {
+      const sp = sel.sector_params as any;
+      if (sp.rotation_enabled) selParams.push({ label: '轮动换仓', value: `开（冷却 ${sp.rotation_cooldown_days ?? 2} 日）` });
+      if (sp.sector_filter_enabled === false) selParams.push({ label: '行业过滤', value: '关' });
+      if (sp.industry_strength_weight != null && Number(sp.industry_strength_weight) > 0) selParams.push({ label: '行业强度权重', value: String(sp.industry_strength_weight) });
     }
     if (!sel.build_mode) {
       selParams.push({ label: '初始股数', value: sel.init_shares != null ? `${sel.init_shares} 股` : '—' });
@@ -1179,6 +1197,24 @@ export default function TBacktestPage() {
                     <span className="tbt-switch-track" />
                     <span className="tbt-switch-label">震荡市模式（仅回测：放宽趋势闸门 + 门槛 0.72，中际旭创/东山精密类可入池）</span>
                   </label>
+                  <label className="tbt-switch">
+                    <input type="checkbox" checked={sectorFilterEnabled} onChange={(e) => setSectorFilterEnabled(e.target.checked)} />
+                    <span className="tbt-switch-track" />
+                    <span className="tbt-switch-label">行业强势过滤（排除所属申万一级行业近5日涨幅 ≤ 门槛的候选）</span>
+                  </label>
+                  <label className="tbt-switch">
+                    <input type="checkbox" checked={rotationEnabled} onChange={(e) => setRotationEnabled(e.target.checked)} />
+                    <span className="tbt-switch-track" />
+                    <span className="tbt-switch-label">轮动换仓（高切低：持仓行业转弱/质量转弱 → 次日开盘卖出，换入强势行业内候选）</span>
+                  </label>
+                  <div className="tbt-row">
+                    <span className="tbt-label">行业强度权重</span>
+                    <input type="number" min={0} max={1} step={0.1} value={industryStrengthWeight} onChange={(e) => setIndustryStrengthWeight(e.target.value)} className="tbt-input tbt-input-sm" />
+                    <span className="tbt-label">行业门槛(%)</span>
+                    <input type="number" step={0.5} value={sectorFilterMinPct} onChange={(e) => setSectorFilterMinPct(e.target.value)} className="tbt-input tbt-input-sm" />
+                    <span className="tbt-label">冷却(日)</span>
+                    <input type="number" min={1} value={rotationCooldown} onChange={(e) => setRotationCooldown(e.target.value)} className="tbt-input tbt-input-sm" />
+                  </div>
                 </>
               )}
 

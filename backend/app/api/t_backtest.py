@@ -44,6 +44,14 @@ def t_backtest_create(body: dict):
     review_mode = body.get("review_mode", "llm")
     if review_mode not in ("llm", "rule"):
         raise HTTPException(status_code=400, detail="review_mode 必须为 llm 或 rule")
+    # 板块轮动增强（add-sector-rotation）：任务级行业因子/过滤/轮动参数（可选，缺省用全局默认）
+    sector_params = {k: v for k, v in {
+        "industry_strength_weight": body.get("industry_strength_weight"),
+        "sector_filter_enabled": body.get("sector_filter_enabled"),
+        "sector_filter_min_pct": body.get("sector_filter_min_pct"),
+        "rotation_enabled": body.get("rotation_enabled"),
+        "rotation_cooldown_days": body.get("rotation_cooldown_days"),
+    }.items() if v is not None}
 
     task_id = runner.create_task(
         symbol=symbol, start_date=start, end_date=end, conditions=conditions,
@@ -59,6 +67,7 @@ def t_backtest_create(body: dict):
         rolling_build=bool(body.get("rolling_build", False)),
         rolling_scan=bool(body.get("rolling_scan", False)),
         relax_mode=bool(body.get("relax_mode", False)),
+        sector_params=sector_params,
     )
     if not task_id:
         raise HTTPException(status_code=500, detail="任务创建失败")

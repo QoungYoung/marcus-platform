@@ -441,6 +441,7 @@ class TBacktestEngine:
             if not _c.get("id"):
                 _c["_bt_index"] = _i + 1
         self.start_trade_day = str(task.get("start_trade_day") or "")  # 滚动建仓：从该日起回放（含）
+        self.end_trade_day = str(task.get("end_trade_day") or "")     # 轮动换仓：回放到该日止（含）
         self.events: List[Dict[str, Any]] = []   # 触发/复核/拦截/缺口全事件流
         self._pending_buyback: Optional[Dict[str, Any]] = None  # high_sell_then_buy_back 买回挂单
         self._ai_fills: List[Dict[str, Any]] = []  # AI 决策成交记录（outcome 回填用）
@@ -472,6 +473,8 @@ class TBacktestEngine:
         self.trade_days = sorted({_day_key(b["time"]) for b in self.m5})
         if self.start_trade_day:
             self.trade_days = [d for d in self.trade_days if d >= self.start_trade_day]
+        if self.end_trade_day:
+            self.trade_days = [d for d in self.trade_days if d <= self.end_trade_day]
         # 初始价缺省：回测首日首根 open（start_trade_day 存在时取该日）
         if not self.init_price and self.m5:
             if self.start_trade_day:
@@ -1670,6 +1673,36 @@ class TCombinedBacktestEngine:
                 except Exception as e:
                     print(f"[t-backtest] 滚动组合 progress_cb 异常: {e}")
 
+        # 轮动换仓上下文（add-sector-rotation）：行业映射/强度（惰性加载，回测缓存口径）
+        _rot_ind_map: Optional[Dict[str, Any]] = None
+        try:
+            from app.services.t_backtest_data import load_industry_map
+            _rot_ind_map = load_industry_map(d) or None
+        except Exception:
+            _rot_ind_map = None
+        _sp = (self.task.get("sector_params") or {})
+        _rot_enabled = False
+        _rot_cooldown = 2
+        _rot_min_pct = 0.0
+        _rot_min_score = 0.78
+        try:
+            _rot_enabled = bool(_sp.get("rotation_enabled", t_build._params().get("rotation_enabled", False)))
+            _rot_cooldown = int(_sp.get("rotation_cooldown_days", t_build._params().get("rotation_cooldown_days", 2)) or 2)
+            _rot_min_pct = float(_sp.get("sector_filter_min_pct", float(t_build._params().get("sector_filter_min_pct", 0.0))) or 0.0)
+            _rot_min_score = float(_sp.get("cand_score_min", float(t_build._params().get("cand_score_min", 0.78))) or 0.78)
+        except Exception:
+            pass
+            pass
+
+        def _rot_ind(sym: str) -> Optional[Dict[str, Any]]:
+            if not _rot_ind_map:
+                return None
+            try:
+                from app.services.t_backtest_data import industry_context_for
+                return industry_context_for(sym, trade_day, d, map_cache=_rot_ind_map)
+            except Exception:
+                return None
+
         for idx, trade_day in enumerate(trade_days):
             if cancel_event is not None and cancel_event.is_set():
                 break
@@ -1696,7 +1729,9 @@ class TCombinedBacktestEngine:
                     scan_cands = _tb.scan_t_candidates_historical(
                         _pool, self.data_dir, as_of=trade_day,
                         quality_fn=_tb._quality_from_daily, limit=20,
-                        relax=self.relax_mode)
+                        relax=self.relax_mode,
+                        industry_fn=_rot_ind, excluded=None,
+                        params_override=_sp)
                     scan_syms = [c["symbol"] for c in scan_cands if c.get("pass_gate")]
                     cand_syms = list(dict.fromkeys(cand_syms + scan_syms))
                 except Exception as e:
@@ -1716,9 +1751,11 @@ class TCombinedBacktestEngine:
                                  "high": b["high"], "low": b["low"], "vol": b["vol"], "amount": b["amount"]}
                                 for b in bars_daily]
                 quality = t_build._quality_from_daily(daily_bars_t)
+                ind_c = _rot_ind(sym)
                 r = t_build.build_score(sym, source="pool", as_of=trade_day,
                                         quality_override=quality, bars=daily_bars_t,
-                                        relax=self.relax_mode)
+                                        relax=self.relax_mode, industry=ind_c,
+                                        params_override=_sp)
                 if not r["pass_gate"]:
                     build_decisions.append({"symbol": sym, "decision": "rejected",
                                             "score": r["score"], "as_of": trade_day,
@@ -1800,6 +1837,92 @@ class TCombinedBacktestEngine:
                 })
                 print(f"[t-backtest] 滚动建仓 {sym} @ {price} x{shares} 于 {next_day} "
                       f"(score={r['score']} trend={r['trend'].get('score')})")
+            # ── 轮动换仓判定与执行（add-sector-rotation：高切低，rotation_enabled 默认关） ──
+            if _rot_enabled and next_day is not None:
+                holds = [b for b in builds
+                         if b.get("build_day", "") < next_day and not b.get("sold_day")]
+                sell_plans: List[Dict[str, Any]] = []
+                for hb in holds:
+                    if idx - int(hb.get("rot_idx", 0)) < _rot_cooldown:
+                        continue  # 冷却期内不判定（保守，避免高频换仓）
+                    h_ind = _rot_ind(hb["symbol"])
+                    h_pct = (h_ind or {}).get("pct_5d")
+                    reason = None
+                    if h_ind is not None and h_pct is not None and float(h_pct) <= _rot_min_pct:
+                        reason = f"行业转弱（{h_ind.get('name')} 5日{float(h_pct):.2f}%）"
+                    else:
+                        # 质量转弱：用 as_of=当日 日线重算（防前视）
+                        try:
+                            _bdh = load_stock_daily(hb["symbol"], d, as_of=trade_day)
+                            if len(_bdh) >= 25:
+                                _bdh_t = [{"date": b["trade_date"], "open": b["open"], "close": b["close"],
+                                           "high": b["high"], "low": b["low"], "vol": b["vol"],
+                                           "amount": b["amount"]} for b in _bdh]
+                                _qh = t_build._quality_from_daily(_bdh_t)
+                                _rh = t_build.build_score(hb["symbol"], source="pool", as_of=trade_day,
+                                                          quality_override=_qh, bars=_bdh_t,
+                                                          relax=self.relax_mode, industry=h_ind,
+                                                          params_override=_sp)
+                                if (float(_rh.get("score") or 1.0) < _rot_min_score
+                                        and (h_ind is None or float((h_ind or {}).get("pct_5d") or 100.0) > _rot_min_pct)):
+                                    reason = f"质量转弱（score {_rh['score']:.2f} < {_rot_min_score}）"
+                        except Exception as _re:
+                            print(f"[t-backtest] 轮动质量判定失败 {hb['symbol']}: {_re}")
+                    if reason:
+                        sell_plans.append({"b": hb, "reason": reason})
+                # T+1 开盘执行卖出（复用现有开盘价口径）
+                freed_total = 0.0
+                sold_this: List[Dict[str, Any]] = []
+                for sp in sell_plans:
+                    hb = sp["b"]
+                    nb = [x for x in m5_map.get(hb["symbol"], []) if _day_key(x["time"]) == next_day]
+                    if not nb:
+                        continue
+                    sell_price = float(nb[0]["open"])
+                    if sell_price <= 0:
+                        continue
+                    hb["sold_day"] = next_day
+                    hb["sell_price"] = sell_price
+                    hb["sell_reason"] = sp["reason"]
+                    freed = sell_price * hb["shares"] * (1 - self.fee_rate - self.slippage)
+                    freed_total += freed
+                    allocated_value -= hb["price"] * hb["shares"]
+                    sold_this.append(hb)
+                    day_events.append({"type": "sector_switch", "trade_day": trade_day,
+                                       "data": {"action": "sell", "symbol": hb["symbol"],
+                                                "sell_day": next_day, "price": round(sell_price, 3),
+                                                "shares": hb["shares"], "reason": sp["reason"]}})
+                    print(f"[t-backtest] 轮动换仓卖出 {hb['symbol']} @ {sell_price} x{hb['shares']} 于 {next_day}（{sp['reason']}）")
+                # 换入：pending 中行业强度高于被卖出标的且未持有的最高分（高切低）
+                if sold_this and pending:
+                    _sold_str = 0.0
+                    for hb in sold_this:
+                        _hi = _rot_ind(hb["symbol"])
+                        _sold_str = max(_sold_str, float((_hi or {}).get("strength") or 0.0))
+                    held_syms = {b["symbol"] for b in builds}
+                    cand_ok = [cd for cd in pending
+                               if cd["symbol"] not in held_syms
+                               and float((((cd.get("r") or {}).get("industry") or {}).get("strength") or 0.0)) > _sold_str]
+                    if cand_ok:
+                        pick = max(cand_ok, key=lambda x: x["score"])
+                        n_bars = [x for x in m5_map.get(pick["symbol"], []) if _day_key(x["time"]) == next_day]
+                        if n_bars:
+                            buy_price = float(n_bars[0]["open"])
+                            if buy_price > 0:
+                                shares = int(freed_total / buy_price)
+                                if shares > 0:
+                                    builds.append({"symbol": pick["symbol"], "price": buy_price,
+                                                   "shares": shares, "build_day": next_day,
+                                                   "source": "rotation", "rot_idx": idx,
+                                                   "score": pick["score"],
+                                                   "trend": (pick.get("r") or {}).get("trend")})
+                                    allocated_value += buy_price * shares
+                                    day_events.append({"type": "sector_switch", "trade_day": trade_day,
+                                                       "data": {"action": "buy_in", "symbol": pick["symbol"],
+                                                                "buy_day": next_day, "price": round(buy_price, 3),
+                                                                "shares": shares, "score": pick["score"]}})
+                                    print(f"[t-backtest] 轮动换仓买入 {pick['symbol']} @ {buy_price} x{shares} 于 {next_day}")
+
             # 当日盘后扫描汇总事件（无建仓也上报，让 50%→回放 阶段有时间明细）
             day_events.append({
                 "type": "rolling_scan",
@@ -1830,7 +1953,7 @@ class TCombinedBacktestEngine:
             sub_task = {
                 "symbol": b["symbol"], "init_shares": b["shares"],
                 "init_price": b["price"], "net_asset": sub_asset,
-                "conditions": conds, "start_trade_day": b["build_day"],
+"conditions": conds, "start_trade_day": b["build_day"], "end_trade_day": b.get("sold_day"),
             }
             eng = TBacktestEngine(sub_task, str(d), review_fn=self.review_fn,
                                   slippage=self.slippage, fee_rate=self.fee_rate)
@@ -1858,6 +1981,19 @@ class TCombinedBacktestEngine:
                 day = pt["trade_date"]
                 delta = pt["total_asset"] - base_total
                 total_asset_by_day[day] = total_asset_by_day.get(day, self.net_asset) + delta
+            # 轮动卖出实现收益（add-sector-rotation）：卖出价与子引擎最后收盘估值的差
+            if b.get("sold_day") and sub_curve and r.get("equity_curve"):
+                try:
+                    _sold_total = float(sub_curve[-1]["total_asset"])
+                    _freed = float(b["sell_price"]) * int(b["shares"]) * (1 - self.fee_rate - self.slippage)
+                    _diff = _freed - _sold_total
+                    if abs(_diff) > 0.001:
+                        _sd = str(sub_curve[-1]["trade_date"])
+                        total_asset_by_day[_sd] = total_asset_by_day.get(_sd, self.net_asset) + _diff
+                except Exception as _se:
+                    b_sym = str(b.get("symbol") or "?")
+                    print(f"[t-backtest] 轮动卖出补差失败 {b_sym}: {_se}")
+
 
         _report_progress()
         equity_curve = [{"trade_date": day, "total_asset": round(v, 2)}

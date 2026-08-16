@@ -18,6 +18,7 @@
 日线基准只用 trade_date < T 的数据（由回放引擎保证，本模块只保证落盘与读取接口）。
 """
 import json
+import math
 import os
 import threading
 import time
@@ -608,6 +609,261 @@ def write_gaps(cache_dir: Path, gaps: List[Dict[str, Any]]):
 # ────────────────────────────────────────────────────────────────
 # 探针（数据可得性验证，tasks 1.1）
 # ────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────
+# 行业数据（add-sector-rotation）：申万一级 L1 sw_daily 预取/缓存/强度
+# ────────────────────────────────────────────────────────────────
+
+_SW_STRENGTH_SIGMA = 1.0   # logistic 尺度（%）：5日累计 +5% → 0.993、0 → 0.5、-5% → 0.007（避免 0.04 过早饱和）
+_LIVE_INDUSTRY_CACHE: Dict[str, Any] = {}
+
+
+def _fetch_sw_l1_classify() -> List[Dict[str, str]]:
+    """申万一级行业清单（index_classify L1）→ [(index_code, name), ...]。"""
+    from app.core.trading._api_config import get_tushare_pro
+    _brze_rate_limit()
+    pro = get_tushare_pro()
+    df = pro.index_classify(level="L1", src="SW2021")
+    out: List[Dict[str, str]] = []
+    if df is not None and len(df) > 0:
+        for _, r in df.iterrows():
+            out.append({"index_code": str(r["index_code"]), "name": str(r["industry_name"])})
+    return out
+
+
+def prefetch_industry_daily(trade_days: List[str], cache_dir: Path,
+                            lead_days: int = 7) -> Dict[str, Any]:
+    """预取申万一级行业日线（sw_daily，31 个 L1 行业）。
+
+    - 按 ts_code × 区间逐行业拉取，逐行业间隔 ≥0.35s 限速
+    - 落盘 industry_daily/{yyyymmdd}.json = {industry_name: {index_code, pct_change, close}}
+    - 幂等：已存在且含该日则跳过（防重复任务重拉）
+    - lead_days: 区间向前额外覆盖的自然日（行业近 5 日涨幅需要窗口前数据）
+    """
+    from app.core.trading._api_config import get_tushare_pro
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if not trade_days:
+        return {"fetched": 0, "gaps": []}
+    pro = get_tushare_pro()
+    start, end = trade_days[0], trade_days[-1]
+    try:
+        s0 = datetime.strptime(start, "%Y%m%d") - timedelta(days=lead_days * 2)
+        start = s0.strftime("%Y%m%d")
+    except (ValueError, TypeError):
+        pass
+    industries = _fetch_sw_l1_classify()
+    if not industries:
+        return {"fetched": 0, "gaps": [{"type": "industry_daily", "key": "*",
+                                        "trade_date": "", "reason": "行业清单不可用"}]}
+    fetched, gaps = 0, []
+    agg: Dict[str, Dict[str, dict]] = {}  # trade_date -> {industry_name: rec}
+    for it in industries:
+        code, name = it["index_code"], it["name"]
+        try:
+            _brze_rate_limit()
+            df = pro.sw_daily(ts_code=code, start_date=start, end_date=end)
+        except Exception as e:
+            print(f"[t-backtest-data] 行业日线失败 {name}({code}): {str(e)[:100]}")
+            gaps.append({"type": "industry_daily", "key": code,
+                         "trade_date": "", "reason": str(e)[:80]})
+            continue
+        if df is None or len(df) == 0:
+            continue
+        for _, r in df.iterrows():
+            td = str(r["trade_date"])
+            agg.setdefault(td, {})[name] = {
+                "index_code": code,
+                "pct_change": float(r.get("pct_change") or 0.0),
+                "close": float(r.get("close") or 0.0),
+            }
+        time.sleep(0.35)
+    for td, recs in agg.items():
+        out = cache_dir / "industry_daily" / f"{td}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        existing: Dict[str, dict] = {}
+        if out.exists():
+            try:
+                existing = json.loads(out.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                existing = {}
+        if set(existing.keys()) >= set(recs.keys()):
+            continue  # 该日已完整
+        merged = dict(existing)
+        merged.update(recs)
+        out.write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+        fetched += 1
+    print(f"[t-backtest-data] 行业日线预取完成: {len(agg)} 个交易日, {len(industries)} 行业, gaps={len(gaps)}")
+    return {"fetched": fetched, "gaps": gaps}
+
+
+def load_industry_daily(trade_date: str, cache_dir: Path) -> Dict[str, dict]:
+    """读取单日全行业行情 {industry_name: {index_code, pct_change, close}}（空 dict = 缺失）。"""
+    p = cache_dir / "industry_daily" / (str(trade_date).replace("-", "") + ".json")
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return {}
+    return {}
+
+
+def prefetch_industry_map(cache_dir: Path) -> Dict[str, Any]:
+    """拉取 index_member_all 全市场成分 → ts_code → 申万 L1，落盘 industry_map.json。
+
+    已实测（2026-08-16）：index_member_all 单次返回全市场约 5895 行，每行含
+    l1_code/l1_name/ts_code——无需逐行业拉取，一次构建全量映射（design D2 主路径）。
+    """
+    from app.core.trading._api_config import get_tushare_pro
+    _brze_rate_limit()
+    pro = get_tushare_pro()
+    df = pro.index_member_all()
+    mapping: Dict[str, Dict[str, str]] = {}
+    if df is not None and len(df) > 0:
+        for _, r in df.iterrows():
+            ts = str(r.get("ts_code") or "")
+            l1 = str(r.get("l1_code") or "")
+            if ts and l1:
+                mapping[ts] = {"l1_code": l1, "l1_name": str(r.get("l1_name") or "")}
+    out = cache_dir / "industry_map.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+    print(f"[t-backtest-data] 行业映射落盘: {len(mapping)} 只（index_member_all 实测可用）")
+    return {"fetched": len(mapping)}
+
+
+def load_industry_map(cache_dir: Path) -> Dict[str, Dict[str, str]]:
+    """读取行业归属映射 {ts_code: {l1_code, l1_name}}。"""
+    p = cache_dir / "industry_map.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return {}
+    return {}
+
+
+def industry_strength_from_pct(pct_5d: Optional[float]) -> Optional[float]:
+    """行业强度标准化（logistic，design D3）：0 → 0.5，+5% → 0.993，-5% → 0.007。"""
+    if pct_5d is None:
+        return None
+    try:
+        x = float(pct_5d) / _SW_STRENGTH_SIGMA
+        return 1.0 / (1.0 + math.exp(-x))
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def industry_5d_pct(industry_name: str, as_of: str, cache_dir: Path) -> Optional[float]:
+    """行业近 5 交易日累计涨幅（防前视：只用 trade_date < as_of 的最近 6 条收盘）。
+
+    数据不足返回 None（调用方按缺失处理：不过滤、强度取中性 0.5）。
+    """
+    as_of8 = str(as_of).replace("-", "")
+    day_dir = cache_dir / "industry_daily"
+    if not day_dir.is_dir():
+        return None
+    closes: List[float] = []
+    for f in sorted(day_dir.glob("*.json")):
+        td = f.stem
+        if td >= as_of8:
+            continue  # 当日及以后不可用（防前视）
+        rec = load_industry_daily(td, cache_dir).get(industry_name)
+        if rec and float(rec.get("close") or 0) > 0:
+            closes.append(float(rec["close"]))
+    if len(closes) < 6:
+        return None
+    six = closes[-6:]
+    prev5 = six[0]
+    if prev5 <= 0:
+        return None
+    return (six[-1] / prev5 - 1.0) * 100.0
+
+def industry_context_for(symbol: str, as_of: str, cache_dir: Path,
+                         map_cache: Optional[Dict[str, Dict[str, str]]] = None) -> Optional[Dict[str, Any]]:
+    """候选的行业上下文（回测缓存口径，防前视，design D3）。
+
+    Returns {name, l1_code, pct_5d, strength} 或 None（无行业/数据不足）。
+    """
+    ts = _to_ts_code(symbol)
+    mapping = map_cache if map_cache is not None else load_industry_map(cache_dir)
+    rec = (mapping or {}).get(ts) or {}
+    name = str(rec.get("l1_name") or "")
+    if not name:
+        return None
+    pct = industry_5d_pct(name, as_of, cache_dir)
+    strength = industry_strength_from_pct(pct) if pct is not None else None
+    return {"name": name, "l1_code": str(rec.get("l1_code") or ""),
+            "pct_5d": pct if pct is not None else 0.0,
+            "strength": strength if strength is not None else 0.5}
+
+
+def _refresh_live_industry_daily(end_date: Optional[str] = None) -> None:
+    """生产实时：拉最近 6 个交易日全行业行情（模块级缓存）。"""
+    end = (end_date or datetime.now()).strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+    days = resolve_trade_days(start, end)[-6:]
+    cache_key = (days[-1] if days else end)
+    if _LIVE_INDUSTRY_CACHE.get("_key") == cache_key:
+        return
+    from app.core.trading._api_config import get_tushare_pro
+    pro = get_tushare_pro()
+    fresh: Dict[str, Dict[str, dict]] = {}
+    for td in days:
+        try:
+            _brze_rate_limit()
+            df = pro.sw_daily(trade_date=td)
+        except Exception as e:
+            print(f"[t-backtest-data] 实时行业日线失败 {td}: {str(e)[:80]}")
+            continue
+        if df is None or len(df) == 0:
+            continue
+        for _, r in df.iterrows():
+            nm = str(r.get("name") or "")
+            if nm:
+                fresh.setdefault(td, {})[nm] = {"pct_change": float(r.get("pct_change") or 0.0),
+                                               "close": float(r.get("close") or 0.0)}
+        time.sleep(0.35)
+    _LIVE_INDUSTRY_CACHE.clear()
+    _LIVE_INDUSTRY_CACHE.update(fresh)
+    _LIVE_INDUSTRY_CACHE["_key"] = cache_key
+
+
+def industry_strength_live(symbol: str) -> Optional[Dict[str, Any]]:
+    """生产实时行业强度（sw_daily 最近 6 交易日 + index_member_all 映射，模块级缓存）。"""
+    ts = _to_ts_code(symbol)
+    name = ""
+    try:
+        from app.core.trading._api_config import get_tushare_pro
+        _brze_rate_limit()
+        pro = get_tushare_pro()
+        df = pro.index_member_all()
+        if df is not None and len(df) > 0:
+            hit = df[df["ts_code"] == ts]
+            if len(hit) > 0:
+                name = str(hit.iloc[0].get("l1_name") or "")
+    except Exception as e:
+        print(f"[t-backtest-data] 实时行业映射失败 {symbol}: {str(e)[:80]}")
+        return None
+    if not name:
+        return None
+    _refresh_live_industry_daily()
+    closes: List[float] = []
+    for td in sorted(_LIVE_INDUSTRY_CACHE.keys()):
+        if td == "_key":
+            continue
+        rec = (_LIVE_INDUSTRY_CACHE.get(td) or {}).get(name)
+        if rec and float(rec.get("close") or 0) > 0:
+            closes.append(float(rec["close"]))
+    if len(closes) < 6:
+        return None
+    prev5 = closes[-6]
+    if prev5 <= 0:
+        return None
+    pct = (closes[-1] / prev5 - 1.0) * 100.0
+    strength = industry_strength_from_pct(pct)
+    return {"name": name, "pct_5d": round(pct, 3),
+            "strength": strength if strength is not None else 0.5}
 
 def run_probe(symbol: str = "600519.SH", trade_days: int = 30,
               end_date: Optional[str] = None) -> Dict[str, Any]:

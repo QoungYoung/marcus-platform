@@ -555,6 +555,10 @@ def _apply_t_backtest_migration():
             conn.execute(text(
                 "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS relax_mode BOOLEAN NOT NULL DEFAULT FALSE"
             ))
+            # 板块轮动增强（add-sector-rotation）：任务级行业因子/过滤/轮动参数
+            conn.execute(text(
+                "ALTER TABLE t_backtest_tasks ADD COLUMN IF NOT EXISTS sector_params_json JSONB NOT NULL DEFAULT '{}'"
+            ))
             # 2) 事件流（触发/复核/拦截/缺口）
             conn.execute(text(
                 """
