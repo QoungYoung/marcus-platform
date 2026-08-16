@@ -509,6 +509,25 @@ class TestEngineCore(unittest.TestCase):
         for c in conds:
             self.assertEqual(c["stop_loss_price"], 9.8, "更紧的止损应保留 AI 值")
 
+    def test_gen_t_conditions_stop_capped_below_cost(self):
+        """止损上限（迭代#56c）：AI 把现价误当成本基准时止损价会高于成本——
+        必须钳到规则值（#61 中 000636 止损 60.07 > 成本 29.6 → 每根 bar 触发止损连卖）。
+        price=10 → cost_cap=9.9；AI 给 12.5（>成本）→ 回退规则值。"""
+        from app.services.t_backtest import _gen_t_conditions
+        bad = [
+            {"trigger_kind": "low_buy", "target_price": 9.5, "stop_loss_price": 12.5},
+            {"trigger_kind": "high_sell_then_buy_back", "target_price": 10.6,
+             "stop_loss_price": 12.5},
+        ]
+        with patch("app.services.t_bridge.generate_conditions",
+                   return_value={"conditions": bad, "source": "ai", "reason": "AI 生成"}):
+            conds = _gen_t_conditions(review_fn=lambda x: {}, symbol="TEST", price=10.0,
+                                      amp_med=5.0)
+        # 规则止损 = 10×(1−max(3%, 5%×0.55)) = 9.7
+        for c in conds:
+            self.assertEqual(c["stop_loss_price"], 9.7,
+                             f"高于成本的止损应钳到规则值: {c['stop_loss_price']}")
+
     def test_gen_t_conditions_rule_mode_no_ai_call(self):
         """规则模式（review_fn=None）→ 不调用 bridge，直接用规则公式。"""
         from app.services.t_backtest import _gen_t_conditions

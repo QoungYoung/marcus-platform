@@ -1016,7 +1016,7 @@ function apply(ctx) {
             if (req.method !== 'POST') { json(res, 405, { error: 'Method Not Allowed' }); return; }
             try {
               const body = JSON.parse(await readBody(req));
-              const { symbol, cost, amp_med, trend, regime, context, session_id } = body;
+              const { symbol, cost, amp_med, trend, regime, context, session_id, quote_price } = body;
               if (!symbol || !cost) { json(res, 400, { error: '缺少 symbol / cost' }); return; }
               // 条件生成会话：独立 conditions 模式（迭代#54 P1：不再误用 backtest 沙盒，
               // 避免 BACKTEST_REVIEW_PROMPT 注入 + deny 写工具污染条件生成语义）
@@ -1029,7 +1029,8 @@ function apply(ctx) {
                 'get_portfolio_positions（持仓）/ get_t_candidates_summary（候选）——按需调用，信息足够就直接输出，不必强行调用。',
                 '',
                 '标的: ' + symbol,
-                '持仓成本: ' + cost,
+                '持仓成本: ' + cost + '（**条件基准 = 成本，不是现价！**）',
+                '现价(若提供): ' + (quote_price ?? '未知'),
                 '近6日振幅中位(%): ' + (amp_med ?? '未知'),
                 '趋势: ' + (trend ? JSON.stringify(trend) : '未知'),
                 'regime: ' + (regime ? JSON.stringify(regime) : '未知'),
@@ -1085,7 +1086,14 @@ function apply(ctx) {
           const tp = Number(c.target_price);
           const st = Number(c.stop_loss_price);
           if (!tp || tp <= 0) continue;
-          const stop = st > 0 ? Math.max(st, ruleStop) : ruleStop;
+          // 止损钳制（迭代#52 下限 + 迭代#56c 上限）：
+          //   - 不得低于规则值（更低=更宽，取 max）
+          //   - **必须低于成本**（止损高于成本=逻辑错误，AI 可能把现价误当成本基准——
+          //     #61 中 000636 止损 60.07 > 成本 29.6 → 每根 bar 触发止损连卖 4 次）
+          //     → 高于成本 99% 直接回退规则值
+          const costCap = round2(Number(cost) * 0.99);
+          let stop = st > 0 ? Math.max(st, ruleStop) : ruleStop;
+          if (stop > costCap) stop = ruleStop;
           const cond = {
             trigger_kind: kind,
             symbol: String(c.symbol || symbol || ''),

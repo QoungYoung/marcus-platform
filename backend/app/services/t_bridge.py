@@ -309,11 +309,13 @@ def _bridge_base_url() -> str:
 def generate_conditions(symbol: str, cost: float, amp_med: Optional[float] = None,
                         trend: Optional[dict] = None, regime: Optional[dict] = None,
                         context: Optional[dict] = None, session_id: Optional[str] = None,
-                        use_cache: bool = True) -> Optional[Dict[str, Any]]:
+                        use_cache: bool = True,
+                        quote_price: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """AI 自主设定做T双条件（低吸 + 高抛回补）→ POST bridge /conditions/generate。
 
     返回 {"conditions": [...], "source": "ai"|"fallback", "reason": ...}；
     桥不可达 / AI 解析失败 / 开关关闭 → None（调用方回退规则公式 build_t_conditions）。
+    quote_price：现价（消费式重建传——防止 AI 把现价误当成本基准设止损，迭代#56c）。
     """
     if not AI_CONDITIONS_ENABLED:
         return None
@@ -328,6 +330,7 @@ def generate_conditions(symbol: str, cost: float, amp_med: Optional[float] = Non
         "regime": regime,
         "context": context,
         "session_id": session_id,
+        "quote_price": quote_price,
     }
     # 重试一次（迭代#55b：#57/#58 中 2/5 条件生成 120s timed out 回退规则——
     # LLM 推理时快时慢（新会话首建+推理可达 3min+），超时后重试通常命中已建会话更快）

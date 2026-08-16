@@ -615,7 +615,8 @@ class TBacktestEngine:
                             pass
                         if action == "exec":
                             self._maybe_rebuild_conditions(
-                                day_conds, ledger, trade_day, tick_dt)
+                                day_conds, ledger, trade_day, tick_dt,
+                                quote_price=float(bar["close"]))
                         break  # 同一 tick 只处理第一个命中条件（对齐实盘轮询语义）
                 if not hit_any:
                     pass
@@ -861,22 +862,29 @@ class TBacktestEngine:
 
     def _maybe_rebuild_conditions(self, day_conds: List[Dict[str, Any]],
                                   ledger: TBacktestLedger, trade_day: str,
-                                  tick_dt: datetime):
+                                  tick_dt: datetime, quote_price: Optional[float] = None):
         """消费式条件自动重建（迭代#56b）：exec 成交后，若当日条件已全部消费
         且仍有持仓 → 自动生成新条件继续做T（AI 重新评估；规则模式用公式）。
 
         仅 exec 后调用——wait（存疑不追）/abandon（放弃）/update_condition
         （AI 已给新条件）不触发重建，避免"wait→重建→再触发"死循环。
         防无限重建：单日重建次数上限（_max_daily_rebuilds，默认 8）。
+        quote_price：当前 bar 现价——传给 AI 条件生成上下文，防止 AI 把现价
+        误当成本基准（迭代#56c：#61 中 000636 AI 按现价 62.73 设止损 60.07，
+        高于成本 29.6 → 每根 bar 触发止损连卖 4 次）。
         """
         if day_conds or self._stopped_out or ledger.total_shares() <= 0:
             return
         if self._daily_rebuilds >= self._max_daily_rebuilds:
             return
         try:
+            # 重建时带上标的振幅中位（amp_med=None 会导致规则止损退化为下限 3%，
+            # 且 AI 条件生成缺振幅上下文——迭代#56c 一并修复）
+            amp_med = _amp_median_from_m5(self.m5)
             new_conds = _gen_t_conditions(
                 self.review_fn, self.symbol, ledger.cost_price,
-                amp_med=None, task_id=self.task.get("id"), use_cache=False)
+                amp_med=amp_med, task_id=self.task.get("id"), use_cache=False,
+                quote_price=quote_price)
             if new_conds:
                 self._daily_rebuilds += 1
                 for nc in new_conds:
@@ -1256,7 +1264,8 @@ def _default_t_conditions(avg_price: float, amp_med: Optional[float] = None) -> 
 def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
                       amp_med: Optional[float] = None,
                       task_id: Optional[Any] = None,
-                      use_cache: bool = True) -> List[Dict[str, Any]]:
+                      use_cache: bool = True,
+                      quote_price: Optional[float] = None) -> List[Dict[str, Any]]:
     """回测建仓条件生成：LLM 模式（review_fn 存在）→ AI 自主设定条件（bridge /conditions/generate，
     带缓存）；桥不可达/解析失败回退规则公式 _default_t_conditions。规则模式直接用公式。
 
@@ -1278,20 +1287,28 @@ def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
             # 消费式重建（迭代#56b）：use_cache=False 强制 AI 重新评估，
             # 避免缓存命中返回相同条件导致"消费→重建相同→再触发"死循环
             res = generate_conditions(symbol, price, amp_med=amp_med,
-                                      session_id=session_id, use_cache=use_cache)
+                                      session_id=session_id, use_cache=use_cache,
+                                      quote_price=quote_price)
             if res and res.get("conditions"):
                 conds = res["conditions"]
-                # 规则止损下限（可更紧、不可更宽）：止损价不得低于规则值
-                # （min 语义反了——越低越宽；取 max 才是不放宽）
+                # 止损钳制（迭代#52 下限 + 迭代#56c 上限）：
+                #   - 不得低于规则值（更低=更宽，取 max）
+                #   - **必须低于成本 99%**（AI 可能把现价误当成本基准——
+                #     #61 中 000636 止损 60.07 > 成本 29.6 → 每根 bar 触发止损连卖）
+                #     → 高于成本 99% 直接回退规则值
                 rule_stop = round(price * (1 - max(0.03, (amp_med or 3.0) / 100 * 0.55)), 2)
+                cost_cap = round(price * 0.99, 2)
                 for c in conds:
                     sp = c.get("stop_loss_price")
                     if not sp:
                         c["stop_loss_price"] = rule_stop
                     else:
-                        c["stop_loss_price"] = round(max(float(sp), rule_stop), 2)
+                        stop = round(max(float(sp), rule_stop), 2)
+                        if stop > cost_cap:
+                            stop = rule_stop
+                        c["stop_loss_price"] = stop
                 print(f"[t-backtest] AI 条件生成 {symbol}（{res.get('source')}）"
-                      f" 止损钳制≤{rule_stop}")
+                      f" 止损钳制[{rule_stop}, {cost_cap}]")
                 return conds
         except Exception as e:
             print(f"[t-backtest] AI 条件生成失败 {symbol}: {e}（回退规则公式）")
