@@ -40,6 +40,12 @@ BUILD_PARAMS_DEFAULT = {
                                      # 显示 score<0.77 全部亏损(9/9)，0.77+ 才开始有正期望）
     "cand_score_min_relax": 0.72,    # 震荡市模式（仅回测）门槛：放宽趋势闸门后下行票总分约0.73，降到0.72可入池
     "build_score_min": 0.78,         # 可建仓门槛（同#53 上调；user 来源放宽到 0.70 见 build_score）
+    # 假跌破守卫（add-fake-breakdown-stop-guard）：止损收盘确认/收回幅度/分钟企稳/缩量/支撑位
+    "stop_close_confirm": True,      # 止损需收盘确认（盘中插针只预警）
+    "stop_recovery_pct": 1.0,        # 收盘相对止损价收回 ≥ 该百分比 → 假跌破，跳过并重置基准
+    "stop_confirm_bars": 5,          # 企稳确认：跌破后连续 N 根 1min 收盘高于止损 → 取消当日止损
+    "stop_volume_filter": True,      # 缩量破位（<近N日均量×0.7）→ 疑似洗盘，需更强确认
+    "stop_support_proximity_pct": 1.5,  # 止损价距前期低点/筹码成本峰 ≤ 该百分比 → 支撑位感知
     # 权重（P0-1 打分坍缩根治：quality 0.8→0.55、trend 0.1→0.35——趋势从二值变连续后
     # 提权重才有区分度；source/risk 不变）
     "build_score_weights": {"quality": 0.55, "trend": 0.35, "source": 0.05, "risk": -0.05},

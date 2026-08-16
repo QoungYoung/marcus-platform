@@ -109,13 +109,14 @@ def resolve_trade_days(start_date: str, end_date: str) -> List[str]:
 # 分钟线预取（brze stk_mins / index_min，逐日）
 # ────────────────────────────────────────────────────────────────
 
-def _fetch_mins_one_day(ts_code: str, trade_date: str, is_index: bool) -> Optional[List[dict]]:
+def _fetch_mins_one_day(ts_code: str, trade_date: str, is_index: bool,
+                        freq: str = M5_FREQ) -> Optional[List[dict]]:
     """拉取单日分钟线（股票 stk_mins / 指数 index_min）。返回 [{time, open, close, high, low, vol, amount}]。"""
     try:
         _brze_rate_limit()
         pro = _get_brze_pro()
-        fn = (lambda: pro.index_min(ts_code=ts_code, freq=M5_FREQ, trade_date=trade_date)) if is_index \
-            else (lambda: pro.stk_mins(ts_code=ts_code, freq=M5_FREQ, trade_date=trade_date))
+        fn = (lambda: pro.index_min(ts_code=ts_code, freq=freq, trade_date=trade_date)) if is_index \
+            else (lambda: pro.stk_mins(ts_code=ts_code, freq=freq, trade_date=trade_date))
         df = brze_call(fn, "index_min" if is_index else "stk_mins")
         if df is None or len(df) == 0:
             return None
@@ -177,6 +178,41 @@ def prefetch_m5(symbol: str, trade_days: List[str], cache_dir: Path,
             print(f"[t-backtest-data] {symbol} {td}: {len(bars)} 根 m5")
         else:
             gaps.append({"type": "index_m5" if is_index else "m5", "key": symbol, "trade_date": td, "reason": "拉取失败/空数据"})
+    return {"fetched": len(trade_days) - len(gaps), "gaps": gaps}
+
+
+def prefetch_m1(symbol: str, trade_days: List[str], cache_dir: Path,
+                ts_code: Optional[str] = None) -> Dict[str, Any]:
+    """预取标的 1 分钟线（brze stk_mins freq=1min，逐日），落盘 m1/{symbol}.json。
+
+    供假跌破守卫的分钟级企稳确认使用；仅对进入做T阶段的标的预取以控制体积。
+    """
+    ts = ts_code or _to_ts_code(symbol)
+    target = cache_dir / "m1" / f"{symbol}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing: Dict[str, List[dict]] = {}
+    if target.exists():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            existing = {}
+    gaps: List[Dict[str, Any]] = []
+    for td in trade_days:
+        day_bars = existing.get(td)
+        if day_bars and len(day_bars) >= 200:  # 全天上限 240，≥200 视为完整
+            continue
+        bars = None
+        for _attempt in range(_RETRIES):
+            bars = _fetch_mins_one_day(ts, td, False, freq="1min")
+            if bars:
+                break
+            time.sleep(_SLEEP_S)
+        if bars:
+            existing[td] = bars
+            target.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+            print(f"[t-backtest-data] {symbol} {td}: {len(bars)} 根 1min")
+        else:
+            gaps.append({"type": "m1", "key": symbol, "trade_date": td, "reason": "拉取失败/空数据"})
     return {"fetched": len(trade_days) - len(gaps), "gaps": gaps}
 
 
@@ -347,6 +383,21 @@ def load_m5(symbol: str, cache_dir: Path) -> List[dict]:
     return []
 
 
+def load_m1(symbol: str, cache_dir: Path) -> List[dict]:
+    """读取标的 1min 缓存，合并全部交易日，按 time 升序。"""
+    p = cache_dir / "m1" / f"{symbol}.json"
+    if p.exists():
+        try:
+            merged: List[dict] = []
+            for day_bars in json.loads(p.read_text(encoding="utf-8")).values():
+                merged.extend(day_bars)
+            merged.sort(key=lambda b: b["time"])
+            return merged
+        except (ValueError, OSError):
+            return []
+    return []
+
+
 def load_index_daily(ts_code: str, cache_dir: Path) -> List[dict]:
     """读取指数日线缓存（升序）。"""
     p = cache_dir / "index_daily" / f"{ts_code}.json"
@@ -388,6 +439,20 @@ def prefetch_stock_daily(symbols: List[str], start_date: str, end_date: str,
                 "vol": float(r.get("vol", 0) or 0), "amount": float(r.get("amount", 0) or 0),
             } for _, r in df.iterrows()]
             bars.sort(key=lambda b: b["trade_date"])
+            # 日换手率（假跌破守卫的缩量/洗盘判据输入；失败不阻断）
+            try:
+                dfb = pro.daily_basic(
+                    ts_code=_to_ts_code(sym),
+                    start_date=start_date.replace("-", ""),
+                    end_date=end_date.replace("-", ""),
+                    fields="trade_date,turnover_rate",
+                )
+                if dfb is not None and len(dfb) > 0:
+                    tr_map = {str(r["trade_date"]): float(r.get("turnover_rate") or 0) for _, r in dfb.iterrows()}
+                    for b in bars:
+                        b["turnover_rate"] = tr_map.get(b["trade_date"], 0.0)
+            except Exception as e:
+                print(f"[t-backtest-data] 日换手率失败 {sym}: {str(e)[:100]}（跳过，守卫生效时用 vol 代理）")
             result[sym] = bars
             out = cache_dir / "stock_daily" / f"{sym}.json"
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -396,6 +461,60 @@ def prefetch_stock_daily(symbols: List[str], start_date: str, end_date: str,
             print(f"[t-backtest-data] 标的日线失败 {sym}: {str(e)[:120]}")
             gaps.append({"type": "stock_daily", "key": sym, "trade_date": "", "reason": str(e)[:100]})
     return {"fetched": len(result), "gaps": gaps}
+
+
+def prefetch_chips(symbols: List[str], start_date: str, end_date: str,
+                   cache_dir: Path) -> Dict[str, Any]:
+    """预取筹码分布（tushare cyq_perf：成本 5/15/50/85/95 分位、获利比例、加权均价）。
+
+    落盘 chips/{symbol}.json（按 trade_date 升序）。供假跌破守卫的支撑位/成本峰感知。
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    result: Dict[str, Any] = {}
+    gaps: List[Dict[str, Any]] = []
+    for sym in symbols:
+        try:
+            from app.core.trading._api_config import get_tushare_pro
+            _brze_rate_limit()
+            pro = get_tushare_pro()
+            df = pro.cyq_perf(
+                ts_code=_to_ts_code(sym),
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+            )
+            if df is None or len(df) == 0:
+                gaps.append({"type": "chips", "key": sym, "trade_date": "", "reason": "无数据"})
+                continue
+            bars = [{
+                "trade_date": str(r["trade_date"]),
+                "cost_5pct": float(r.get("cost_5pct") or 0),
+                "cost_15pct": float(r.get("cost_15pct") or 0),
+                "cost_50pct": float(r.get("cost_50pct") or 0),
+                "cost_85pct": float(r.get("cost_85pct") or 0),
+                "cost_95pct": float(r.get("cost_95pct") or 0),
+                "winner_rate": float(r.get("winner_rate") or 0),
+                "weight_avg": float(r.get("weight_avg") or 0),
+            } for _, r in df.iterrows()]
+            bars.sort(key=lambda b: b["trade_date"])
+            result[sym] = bars
+            out = cache_dir / "chips" / f"{sym}.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(bars, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            print(f"[t-backtest-data] 筹码分布失败 {sym}: {str(e)[:100]}")
+            gaps.append({"type": "chips", "key": sym, "trade_date": "", "reason": str(e)[:100]})
+    return {"fetched": len(result), "gaps": gaps}
+
+
+def load_chips(symbol: str, cache_dir: Path) -> List[dict]:
+    """读取筹码分布缓存（按 trade_date 升序）。"""
+    p = cache_dir / "chips" / f"{symbol}.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return []
+    return []
 
 
 def prefetch_all_daily_by_trade_date(trade_days: List[str], cache_dir: Path,

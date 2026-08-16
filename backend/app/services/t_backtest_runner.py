@@ -620,6 +620,14 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 ext_start = start
             d = btd.prefetch_stock_daily([s], ext_start, end, task_dir)
             gaps.extend(d.get("gaps", []))
+            # 假跌破守卫输入：1min（分钟企稳）+ 筹码分布（支撑位感知）
+            try:
+                _r1 = btd.prefetch_m1(s, days, task_dir)
+                gaps.extend(_r1.get("gaps", []))
+                _rc = btd.prefetch_chips([s], ext_start, end, task_dir)
+                gaps.extend(_rc.get("gaps", []))
+            except Exception as _e:
+                print(f"[t-backtest] 守卫数据预取失败 {s}: {str(_e)[:100]}（守卫生效时降级）")
         update_task_status(task_id, "running", progress=42)
         # 全市场滚动扫描（rolling_scan）：实时粗筛活跃池（限 300 只）→ 批量预取
         # 活跃池日线（按交易日批量，pro.daily(trade_date=...)）+ m5。

@@ -14,6 +14,7 @@ interface BtTask {
   symbols_json?: any;
   build_mode?: boolean;
   rolling_build?: boolean;
+  relax_mode?: boolean;
   build_limit_ratio?: number;
   select_source?: string;
   select_limit?: number;
@@ -161,6 +162,7 @@ const EVENT_TYPE_LABEL: Record<string, string> = {
   stop_loss: '止损', cancelled: '取消', data_gap: '数据缺口', eval_error: '评估异常',
   build_decision: '建仓决策', rolling_scan: '盘后扫描',
   auto_select: '自动选股', auto_select_done: '选股完成',
+  stop_warning: '止损预警', fake_breakdown: '假跌破跳过', stabilised_cancel: '企稳取消',
 };
 
 function fmtDayNice(day: string): string {
@@ -378,6 +380,7 @@ export default function TBacktestPage() {
   const [condTemplate, setCondTemplate] = useState('auto');
   const [buildMode, setBuildMode] = useState(true);
   const [rollingBuild, setRollingBuild] = useState(false);
+  const [relaxMode, setRelaxMode] = useState(false);
   const [netAsset, setNetAsset] = useState('200000');
   const [reviewMode, setReviewMode] = useState<'llm' | 'rule'>('rule');
 
@@ -557,6 +560,7 @@ export default function TBacktestPage() {
         select_limit: Number(selectLimit) || 10,
         build_mode: buildMode,
         rolling_build: rollingBuild,
+        relax_mode: relaxMode,
         build_limit_ratio: 0.55,
         start_date: startDate,
         end_date: endDate,
@@ -650,6 +654,9 @@ export default function TBacktestPage() {
         label: '建仓资金上限',
         value: sel.build_limit_ratio != null ? `${Math.round(Number(sel.build_limit_ratio) * 100)}%` : '55%',
       });
+    }
+    if (sel.relax_mode) {
+      selParams.push({ label: '选股口径', value: '震荡市（放宽趋势闸门 + 门槛 0.72）' });
     }
     if (!sel.build_mode) {
       selParams.push({ label: '初始股数', value: sel.init_shares != null ? `${sel.init_shares} 股` : '—' });
@@ -1161,11 +1168,18 @@ export default function TBacktestPage() {
               </label>
 
               {buildMode && (
-                <label className="tbt-switch">
-                  <input type="checkbox" checked={rollingBuild} onChange={(e) => setRollingBuild(e.target.checked)} />
-                  <span className="tbt-switch-track" />
-                  <span className="tbt-switch-label">每日滚动建仓（对齐实盘：每天盘后扫描 → 次日建仓新标的，持续进票做T）</span>
-                </label>
+                <>
+                  <label className="tbt-switch">
+                    <input type="checkbox" checked={rollingBuild} onChange={(e) => setRollingBuild(e.target.checked)} />
+                    <span className="tbt-switch-track" />
+                    <span className="tbt-switch-label">每日滚动建仓（对齐实盘：每天盘后扫描 → 次日建仓新标的，持续进票做T）</span>
+                  </label>
+                  <label className="tbt-switch">
+                    <input type="checkbox" checked={relaxMode} onChange={(e) => setRelaxMode(e.target.checked)} />
+                    <span className="tbt-switch-track" />
+                    <span className="tbt-switch-label">震荡市模式（仅回测：放宽趋势闸门 + 门槛 0.72，中际旭创/东山精密类可入池）</span>
+                  </label>
+                </>
               )}
 
               <button className="tbt-btn tbt-btn-primary tbt-submit" onClick={submit} disabled={loading}>

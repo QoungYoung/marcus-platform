@@ -453,9 +453,13 @@ class TBacktestEngine:
     # ── 数据加载（回放期零网络）──
     def _load(self):
         from pathlib import Path
-        from app.services.t_backtest_data import load_index_daily, load_m5
+        from app.services.t_backtest_data import (load_chips, load_index_daily,
+                                                  load_m1, load_m5, load_stock_daily)
         d = Path(self.data_dir)
         self.m5 = load_m5(self.symbol, d)
+        self.m1 = load_m1(self.symbol, d)          # 假跌破守卫：分钟企稳确认
+        self.chips = load_chips(self.symbol, d)    # 假跌破守卫：筹码成本峰/支撑位
+        self.stock_daily = load_stock_daily(self.symbol, d)  # 假跌破守卫：前期低点
         self.index_m5 = {
             key: load_m5(key, d) for key in ("hs300", "sh", "sz")
         }
@@ -1013,6 +1017,44 @@ class TBacktestEngine:
         bar_low = float(bar["low"])
         if bar_low > stop_price:
             return
+        # 假跌破守卫（add-fake-breakdown-stop-guard）：收盘确认/收回幅度/企稳/缩量/支撑位
+        try:
+            from app.services import t_build as _tb
+            from app.services.t_stop_loss_guard import evaluate_stop
+            _guard_params = _tb._params()
+            _m1_today = [b for b in getattr(self, "m1", []) if str(b.get("time", "")).startswith(trade_day)]
+            _verdict = evaluate_stop(
+                bar, day_bars, stop_price, _guard_params,
+                m1_today=_m1_today,
+                daily_bars=getattr(self, "stock_daily", None) or [],
+                chips=getattr(self, "chips", None) or [],
+            )
+        except Exception as _e:
+            print(f"[t-backtest] 假跌破守卫异常 {self.symbol}: {str(_e)[:100]}（降级原止损）")
+            _verdict = {"action": "stop", "reason": "守卫异常降级"}
+        if _verdict.get("action") == "hold":
+            # 跳过本次止损：按原因落事件类型 + 重置止损基准（防同价位反复插针）
+            _reason = str(_verdict.get("reason") or "")
+            if "假跌破" in _reason:
+                _etype = "fake_breakdown"
+            elif "企稳" in _reason:
+                _etype = "stabilised_cancel"
+            else:
+                _etype = "stop_warning"
+            self.events.append({"type": _etype, "trade_day": trade_day, "data": {
+                "trigger": {"symbol": self.symbol, "event_type": "stop_loss",
+                            "trigger_price": stop_price,
+                            "quote_price": float(bar["close"]),
+                            "trade_day": trade_day, "bar_time": str(bar["time"])},
+                "reason": _reason,
+                "reset_stop": _verdict.get("reset_stop"),
+            }})
+            if _verdict.get("reset_stop"):
+                for c in day_conds:
+                    sp = float(c.get("stop_loss_price") or 0)
+                    if sp > 0:
+                        c["stop_loss_price"] = round(float(_verdict["reset_stop"]), 4)
+            return
         # 成交价：止损限价（未跳空）或开盘价（跳空击穿）
         open_ = float(bar["open"])
         exec_price = min(open_, stop_price) if open_ > 0 else stop_price
@@ -1251,6 +1293,7 @@ def caliber_notes() -> List[str]:
         "regime L1: 指数日线 MA20/60 近似（实盘依赖 market_diagnosis 当日诊断，历史无此数据）",
         "regime L2/L3: 指数 m5 可用时盘中精确口径；brze index_min 权限受限时降级为指数日线收盘口径（当日收盘涨跌幅判定当日档位）",
         "成交假设: 触发后下一根 m5 close ± 0.1% 滑点（实盘为撮合引擎+滑点预算）",
+        "止损守卫口径（假跌破识别）: 收盘确认+收回幅度+分钟企稳(1min)+缩量+支撑位（筹码cyq_perf/前期低点）；1min/换手/筹码为 tushare/brze 历史数据，实盘用实时 1min 与最近一日筹码；收盘确认命中后仍按 min(开盘,止损) 撮合价口径执行",
         "初始底仓: 固定假设（默认 1000 股 @ 回测首日价，实盘为持仓成本）",
         "LLM 复核: 回测会话为沙盒环境，决策落库；规则模式可对照",
     ]

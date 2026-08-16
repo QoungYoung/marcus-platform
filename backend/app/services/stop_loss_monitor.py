@@ -1570,6 +1570,32 @@ class StopLossMonitor:
             )
             return
 
+        # 假跌破守卫（add-fake-breakdown-stop-guard，实盘侧轻量版）：
+        # 触发后实时价已收回 ≥ stop_recovery_pct → 疑似插针/洗盘，跳过本次止损。
+        # 数据时点：实时行情（腾讯 qt），判定结果记入日志。
+        try:
+            from app.services import t_build as _tb
+            _gp = _tb._params()
+            if _gp.get("stop_close_confirm", True):
+                from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
+                _ns = _normalize_symbol(symbol)
+                _q = fetch_tencent_quote([_ns]).get(_ns) or {}
+                _now = float(_q.get("current") or 0)
+                _rec = float(_gp.get("stop_recovery_pct", 1.0))
+                if _now > 0 and price > 0 and (_now - price) / price * 100 >= _rec:
+                    logger.info(
+                        f"[StopLoss] 🟡 假跌破守卫(实时): {symbol} 触发价{price} 已收回至{_now} "
+                        f"(≥{_rec}%)，跳过本次止损 | {reason}"
+                    )
+                    print(
+                        f"[止损] 🟡 {symbol} 假跌破守卫(实时): 已收回至{_now} ≥{_rec}%，"
+                        f"跳过本次止损 | {reason}",
+                        file=sys.stderr,
+                    )
+                    return
+        except Exception as _e:
+            print(f"[止损] 假跌破守卫异常: {str(_e)[:80]}（继续执行止损）", file=sys.stderr)
+
         # 去重键：清仓用 symbol+price（防同一价格重复触发），减仓用 symbol+ratio（同一减仓比例每日只执行一次）
         if sell_ratio >= 0.99:
             trigger_key = f"{symbol}_{price:.2f}"
