@@ -154,22 +154,101 @@ function CollapseCard({ title, badge, defaultOpen = true, children }: {
   );
 }
 
-// 事件明细卡片：按执行时间降序（最新在顶部），支持收起/展开 + 「跟随最新」
+// ── 事件明细 · 时间轴卡片 ──
+const EVENT_TYPE_LABEL: Record<string, string> = {
+  trigger: '触发', trade: '成交', review: 'AI复核', blocked: '拦截',
+  condition_rebuild: '条件重建', escalated: '升级人工', ai_wait: 'AI等待',
+  stop_loss: '止损', cancelled: '取消', data_gap: '数据缺口', eval_error: '评估异常',
+};
+
+function fmtDayNice(day: string): string {
+  let d = day;
+  if (/^\d{8}$/.test(d)) d = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  const date = new Date(`${d}T00:00:00`);
+  const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()];
+  return Number.isNaN(date.getTime()) ? day : `${d} · ${wd}`;
+}
+function fmtTime(bt?: string): string {
+  if (!bt) return '';
+  const m = String(bt).match(/(\d{2}):(\d{2})(?::(\d{2}))?/);
+  return m ? `${m[1]}:${m[2]}${m[3] ? `:${m[3]}` : ''}` : '';
+}
+
+// 事件卡片语义化：类型/主操作/标的/价格/盈亏/说明/色调
+function describeEvent(ev: BtEvent) {
+  const d = ev.data || {};
+  const inner = (d.data && typeof d.data === 'object') ? d.data : d;
+  const trig = inner.trigger || {};
+  const sym = String(inner.symbol || trig.symbol || ev.symbol || '');
+  const price = String(inner.quote_price ?? inner.exec_price ?? trig.quote_price ?? trig.trigger_price ?? inner.trigger_price ?? '');
+  const t = ev.event_type;
+  const typeLabel = EVENT_TYPE_LABEL[t] || t;
+  const time = fmtTime(ev.bar_time || inner.bar_time);
+  let action = '';
+  let note = '';
+  let pnl: string | null = null;
+  let tone: 'up' | 'down' | 'plain' = 'plain';
+  if (t === 'review') {
+    const act = inner.action || '—';
+    action = act === 'exec' ? '✅ 执行' : act === 'wait' ? '⏳ 等待' : act === 'abandon' ? '⛔ 放弃' : act;
+    note = String(inner.reason || '');
+  } else if (t === 'escalated') {
+    action = '升级人工'; note = String(inner.reason || '');
+  } else if (t === 'ai_wait') {
+    action = 'AI 等待'; note = String(inner.reason || '');
+  } else if (t === 'blocked') {
+    action = '拦截'; note = String(inner.reason || '');
+  } else if (t === 'trade') {
+    const tr = inner.trade || {};
+    const side = tr.side === 'buy' ? 'buy' : 'sell';
+    action = `${side === 'buy' ? '买入' : '卖出'} ${tr.volume ?? ''}股`;
+    note = `@ ${tr.price ?? ''}`;
+    if (tr.realized_pnl != null) {
+      const n = Number(tr.realized_pnl);
+      pnl = `${n >= 0 ? '+' : ''}${n.toFixed(2)}`;
+      tone = side === 'sell' ? (n >= 0 ? 'up' : 'down') : 'plain';
+    }
+  } else if (t === 'trigger') {
+    action = String(inner.event_type || trig.event_type || t);
+    note = `触发价=${trig.trigger_price ?? inner.trigger_price ?? ''}`;
+  } else if (t === 'stop_loss') {
+    action = '止损卖出';
+    tone = 'down';
+    note = `触发价=${trig.trigger_price ?? inner.trigger_price ?? ''}`;
+  } else {
+    action = typeLabel;
+    note = String(inner.reason || inner.decision || '');
+  }
+  return { typeLabel, action, sym, price, pnl, note, tone, time };
+}
+
+// 事件明细卡片：按交易日分组的时间轴 + 卡片滑入，支持收起/展开 + 「跟随最新」
 function EventDetailTable({ events, title }: { events: BtEvent[]; title?: string }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
   const [open, setOpen] = useState(true);
-  // 时间降序：最新在前，取最近 120 条
-  const rows = [...events]
+  // 时间降序（最新在前），取最近 120 条，再按交易日分组
+  const sorted = [...events]
     .sort((a, b) => (eventTimeKey(a) < eventTimeKey(b) ? 1 : eventTimeKey(a) > eventTimeKey(b) ? -1 : 0))
     .slice(0, 120);
+  const groups: { day: string; items: BtEvent[]; pnl: number }[] = [];
+  for (const ev of sorted) {
+    const day = eventDay(ev) || '未知日期';
+    const last = groups[groups.length - 1];
+    const g = last && last.day === day ? last : (groups.push({ day, items: [], pnl: 0 }), groups[groups.length - 1]);
+    g.items.push(ev);
+    const d = ev.data || {};
+    const inner = (d.data && typeof d.data === 'object') ? d.data : d;
+    const tr = inner.trade || {};
+    if (tr.realized_pnl != null) g.pnl += Number(tr.realized_pnl);
+  }
 
   // 跟随最新：降序下最新在顶部，钉在顶部；用户下翻则自动松开
   useEffect(() => {
     if (follow && boxRef.current) {
       boxRef.current.scrollTop = 0;
     }
-  }, [follow, rows.length]);
+  }, [follow, sorted.length]);
 
   const handleScroll = () => {
     const el = boxRef.current;
@@ -202,51 +281,49 @@ function EventDetailTable({ events, title }: { events: BtEvent[]; title?: string
         </div>
       </div>
       {open && (
-        <div className="tbt-events-scroll" ref={boxRef} onScroll={handleScroll}>
-          <table className="tbt-table">
-            <thead><tr><th>类型</th><th>交易日</th><th>时间</th><th>标的</th><th>价格</th><th>决策/内容</th></tr></thead>
-            <tbody>
-              {rows.map((ev, i) => {
-                const d = ev.data || {};
-                // API 返回 {data: {实际内容}, type: ...}，实际内容在 d.data；兼容平铺结构
-                const inner = (d.data && typeof d.data === 'object') ? d.data : d;
-                const trig = inner.trigger || {};
-                const sym = inner.symbol || trig.symbol || ev.symbol || '';
-                // 价格：trigger/交易/复核事件的内容顶层有 quote_price/exec_price/trigger_price
-                const price = inner.quote_price ?? inner.exec_price ?? trig.quote_price ?? trig.trigger_price ?? inner.trigger_price ?? '';
-                // 内容：reason/decision/action/触发摘要
-                let detail = '';
-                const t = ev.event_type;
-                if (t === 'review') {
-                  const act = inner.action || '—';
-                  detail = `${act === 'exec' ? '✅执行' : act === 'wait' ? '⏳等待' : act === 'abandon' ? '⛔放弃' : act}：${inner.reason || ''}`;
-                } else if (t === 'escalated') {
-                  detail = `升级人工：${inner.reason || ''}`;
-                } else if (t === 'ai_wait') {
-                  detail = `AI等待：${inner.reason || ''}`;
-                } else if (t === 'blocked') {
-                  detail = `拦截：${inner.reason || ''}`;
-                } else if (t === 'trade') {
-                  const tr = inner.trade || {};
-                  detail = `${tr.side === 'buy' ? '买入' : '卖出'} ${tr.volume ?? ''}股 @ ${tr.price ?? ''}${tr.realized_pnl != null ? ` 盈亏${Number(tr.realized_pnl).toFixed(2)}` : ''}`;
-                } else if (t === 'trigger') {
-                  detail = `${inner.event_type || trig.event_type || ''} 触发价=${trig.trigger_price ?? inner.trigger_price ?? ''}`;
-                } else {
-                  detail = inner.reason || inner.decision || '';
-                }
-                return (
-                  <tr key={`${ev.event_type}-${i}`}>
-                    <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
-                    <td>{eventDay(ev)}</td>
-                    <td>{ev.bar_time || inner.bar_time || ''}</td>
-                    <td>{sym}</td>
-                    <td>{price}</td>
-                    <td className="tbt-cell-reason" title={String(detail)}>{String(detail).slice(0, 160)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="tbt-timeline-scroll" ref={boxRef} onScroll={handleScroll}>
+          {groups.length === 0 && <p className="tbt-empty">暂无事件</p>}
+          {groups.map((g) => (
+            <section key={g.day} className="tbt-timeline-day">
+              <header className="tbt-timeline-dayhead">
+                <span className="tbt-timeline-daydate">{fmtDayNice(g.day)}</span>
+                <span className="tbt-timeline-daycount">{g.items.length} 个事件</span>
+                {g.pnl !== 0 && (
+                  <span className={`tbt-timeline-daypnl ${g.pnl >= 0 ? 'is-up' : 'is-down'}`}>
+                    已实现 {g.pnl >= 0 ? '+' : ''}{g.pnl.toFixed(2)}
+                  </span>
+                )}
+              </header>
+              <ol className="tbt-timeline">
+                {g.items.map((ev, i) => {
+                  const d = describeEvent(ev);
+                  return (
+                    <li
+                      key={`${g.day}-${i}`}
+                      className={`tbt-tl-item ${d.tone === 'up' ? 'is-up' : d.tone === 'down' ? 'is-down' : ''}`}
+                      style={{ ['--_delay' as any]: `${Math.min(i, 12) * 45}ms` }}
+                    >
+                      <span className="tbt-tl-dot" aria-hidden="true" />
+                      <div className="tbt-tl-card">
+                        <div className="tbt-tl-top">
+                          <span className={`tbt-tl-type tbt-ev tbt-ev-${ev.event_type}`}>{d.typeLabel}</span>
+                          {d.time && <time className="tbt-tl-time">{d.time}</time>}
+                        </div>
+                        <div className="tbt-tl-main">
+                          <b className="tbt-tl-sym">{d.sym || '—'}</b>
+                          {d.price && <span className="tbt-tl-price">{d.price}</span>}
+                        </div>
+                        <p className="tbt-tl-note">{d.action}{d.note ? ` · ${d.note}` : ''}</p>
+                        {d.pnl != null && (
+                          <span className={`tbt-tl-pnl ${d.tone === 'up' ? 'is-up' : d.tone === 'down' ? 'is-down' : ''}`}>盈亏 {d.pnl}</span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          ))}
         </div>
       )}
     </section>

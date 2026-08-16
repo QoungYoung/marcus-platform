@@ -56,6 +56,7 @@
   --tb-err-bg: #fdf0f0;
   --tb-err-line: #f3b6b8;
   --tb-shadow-card: 0 1px 3px rgba(22, 50, 79, 0.06);
+  --tb-shadow-card-hover: 0 2px 10px rgba(22, 50, 79, 0.1);
   --tb-shadow-knob: 0 1px 2px rgba(22, 50, 79, 0.25);
   --tb-shadow-focus-inner: 0 0 0 2px var(--tb-paper);
   --tb-sky-grad: linear-gradient(160deg, var(--tb-sky-1) 0%, var(--tb-sky-2) 45%, var(--tb-sky-3) 100%);
@@ -714,9 +715,11 @@
   justify-content: center;
   padding: 40px 16px;
   overflow-y: auto;
+  animation: tbt-overlay-in 160ms var(--ease-out) both;
 }
 .tbt-modal {
   width: min(760px, 100%);
+  margin: auto; /* 居中展示；内容超高时退化为顶部对齐并可滚动 */
   background: var(--tb-paper);
   border: 1px solid var(--tb-line);
   border-radius: var(--tb-radius-lg);
@@ -724,6 +727,7 @@
   padding: var(--space-4);
   max-height: calc(100vh - 80px);
   overflow-y: auto;
+  animation: tbt-modal-in 220ms var(--ease-out) both;
 }
 .tbt-modal-head {
   display: flex;
@@ -752,3 +756,139 @@
 .tbt-collapse .tbt-table-wrap { margin-top: 0; }
 .tbt-collapse-head { user-select: none; }
 .tbt-collapse-body { min-width: 0; }
+
+/* Hallmark · component: event-timeline (day-grouped timeline + cards) · genre: modern-minimal · theme: Blue Archive
+ * states: cards hover lift · follow/collapse reuse .tbt-follow/.tbt-btn (default · hover · focus · active)
+ */
+/* ── 事件明细 · 时间轴卡片（按交易日分组，滑入动画） ── */
+.tbt-timeline-scroll {
+  max-height: 480px;
+  overflow: auto;
+  padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.tbt-timeline-day { min-width: 0; }
+.tbt-timeline-dayhead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-1) 0 var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px dashed var(--tb-line-soft);
+  background: var(--tb-paper);
+}
+.tbt-timeline-daydate { font-size: 13px; font-weight: 700; color: var(--tb-ink); }
+.tbt-timeline-daycount { font-size: 11px; color: var(--tb-faint); }
+.tbt-timeline-daypnl {
+  margin-left: auto;
+  font-family: var(--tb-en);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+.tbt-timeline-daypnl.is-up { background: var(--tb-green-12); color: var(--tb-green); }
+.tbt-timeline-daypnl.is-down { background: var(--tb-red-12); color: var(--tb-red); }
+
+.tbt-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 20px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tbt-timeline::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: linear-gradient(var(--tb-line), var(--tb-line-soft));
+}
+.tbt-tl-item { position: relative; min-width: 0; }
+.tbt-tl-dot {
+  position: absolute;
+  left: -20px;
+  top: 15px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--tb-paper);
+  border: 2px solid var(--tb-blue);
+  box-shadow: 0 0 0 3px var(--tb-blue-12);
+}
+.tbt-tl-item.is-up .tbt-tl-dot { border-color: var(--tb-green); box-shadow: 0 0 0 3px var(--tb-green-12); }
+.tbt-tl-item.is-down .tbt-tl-dot { border-color: var(--tb-red); box-shadow: 0 0 0 3px var(--tb-red-12); }
+
+.tbt-tl-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--tb-paper);
+  border: 1px solid var(--tb-line-soft);
+  border-left: 3px solid var(--tb-blue);
+  border-radius: var(--tb-radius);
+  box-shadow: var(--tb-shadow-card);
+  transition: border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+  animation: tbt-card-in 280ms var(--ease-out) both;
+  animation-delay: var(--_delay, 0ms);
+}
+.tbt-tl-card:hover { border-color: var(--tb-line); box-shadow: var(--tb-shadow-card-hover); transform: translateY(-1px); }
+.tbt-tl-card:focus-within { outline: 2px solid var(--tb-blue); outline-offset: 2px; }
+.tbt-tl-card.is-up { border-left-color: var(--tb-green); }
+.tbt-tl-card.is-down { border-left-color: var(--tb-red); }
+.tbt-tl-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.tbt-tl-type {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.tbt-tl-time { font-family: var(--tb-en); font-size: 11px; color: var(--tb-faint); white-space: nowrap; }
+.tbt-tl-main { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); min-width: 0; }
+.tbt-tl-sym { font-size: 13px; font-weight: 700; color: var(--tb-ink); overflow-wrap: anywhere; }
+.tbt-tl-price { font-family: var(--tb-en); font-size: 15px; font-weight: 700; color: var(--tb-ink-2); white-space: nowrap; }
+.tbt-tl-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--tb-muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.tbt-tl-pnl { font-family: var(--tb-en); font-size: 11px; font-weight: 700; align-self: flex-end; }
+.tbt-tl-pnl.is-up { color: var(--tb-green); }
+.tbt-tl-pnl.is-down { color: var(--tb-red); }
+
+@keyframes tbt-card-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes tbt-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes tbt-modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tbt-tl-card, .tbt-modal, .tbt-modal-overlay { animation: none; }
+  .tbt-tl-card:hover { transform: none; }
+}
