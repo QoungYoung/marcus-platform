@@ -699,7 +699,7 @@ export default function TBacktestPage() {
                               style={{ ['--_pct' as any]: `${Math.max(2, Math.min(100, t.progress ?? 0)) / 100}` }}
                             />
                           </span>
-                          <span className="tbt-progress-pct">{t.status === 'running' ? `${t.progress ?? 0}%` : '排队中'}</span>
+                          <span className="tbt-progress-pct">{t.status === 'running' ? `${(t.progress ?? 0) < 50 ? '选股/预取中 ' : '回放中 '}${t.progress ?? 0}%` : '排队中'}</span>
                         </span>
                       )}
                       {t.status === 'failed' && <span className="tbt-task-err">{t.error_message}</span>}
@@ -903,7 +903,7 @@ export default function TBacktestPage() {
                     {sel.status === 'pending' ? (
                       <span className="tbt-status is-pending">排队中</span>
                     ) : (
-                      <span className="tbt-status is-running">回测中 {liveProgress ?? sel.progress ?? 0}%</span>
+                      <span className="tbt-status is-running">{(liveProgress ?? sel.progress ?? 0) < 50 ? '选股/预取中' : '回放中'} {liveProgress ?? sel.progress ?? 0}%</span>
                     )}
                   </div>
                   {sel.status === 'pending' ? (
@@ -916,7 +916,7 @@ export default function TBacktestPage() {
                           style={{ ['--_pct' as any]: `${Math.max(2, Math.min(100, liveProgress ?? sel.progress ?? 0)) / 100}` }}
                         />
                       </span>
-                      <span className="tbt-progress-pct">{liveProgress ?? sel.progress ?? 0}%</span>
+                      <span className="tbt-progress-pct">{(liveProgress ?? sel.progress ?? 0) < 50 ? '选股/预取中 ' : '回放中 '}{liveProgress ?? sel.progress ?? 0}%</span>
                     </div>
                   )}
                   {liveEvents.length > 0 && (

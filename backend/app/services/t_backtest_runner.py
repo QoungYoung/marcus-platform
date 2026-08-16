@@ -375,10 +375,13 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
 # ────────────────────────────────────────────────────────────────
 
 def auto_select_symbols_rolling(select_source: str, select_limit: int,
-                                start_date: str, end_date: str) -> tuple:
+                                start_date: str, end_date: str,
+                                progress_cb: Optional[callable] = None) -> tuple:
     """自动选股（逐日滚动）：从回测窗口首日起按交易日顺序扫描，某日无达标标的自动顺延次日。
 
     用户需求：当天没有选股标的时不再直接失败，滚动到下一个有达标标的的交易日。
+    progress_cb(i, n)：每扫描一个交易日回调一次（i 从 0 起），供 run_task 上报实时进度
+    （自动选股可能耗时数分钟，不能让前端一直停在 0%）。
 
     Returns:
         (symbols, selected_start, last_err)
@@ -401,7 +404,13 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
 
     source = select_source
     last_err: Optional[Exception] = None
-    for d in cand_days[:AUTO_SELECT_MAX_ROLL_DAYS]:
+    total_days = len(cand_days[:AUTO_SELECT_MAX_ROLL_DAYS])
+    for i, d in enumerate(cand_days[:AUTO_SELECT_MAX_ROLL_DAYS]):
+        if progress_cb is not None:
+            try:
+                progress_cb(i, total_days)
+            except Exception:
+                pass
         try:
             as_of = (_dt.strptime(d, "%Y%m%d") - _td(days=1)).strftime("%Y-%m-%d")
         except (ValueError, TypeError):
@@ -476,8 +485,15 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         # 自动选股（防前视）：精筛用 as_of=窗口首日前一交易日的日线（趋势/风险历史化）。
         # 首日无达标标的时逐日顺延（用户需求：当天没有选股标的 → 滚动到下一交易日，
         # 不再直接报"自动选股无达标标的"失败）。
+        def _sel_progress(i: int, n: int) -> None:
+            try:
+                # 自动选股阶段：2% → 8%（按扫描的交易日数均分，避免长时间停在 0%）
+                pct = 2 + round(i / max(n, 1) * 6)
+                update_task_status(task_id, "running", progress=min(pct, 8))
+            except Exception:
+                pass
         symbols, selected_start, _scan_err = auto_select_symbols_rolling(
-            select_source, select_limit, start, end)
+            select_source, select_limit, start, end, progress_cb=_sel_progress)
         if not symbols:
             err = f"自动选股({select_source})在回测区间内无达标标的（已逐日顺延扫描）"
             if _scan_err is not None:
@@ -504,14 +520,21 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     if is_combined:
         symbol = "combined"
 
-    # 1) 预取（幂等续拉）
+    # 1) 预取（幂等续拉）——选股/预取都耗时，这里开始按阶段上报实时进度
+    update_task_status(task_id, "running", progress=10)
     try:
         from datetime import datetime as _dt, timedelta as _td
         from app.services import t_backtest_data as btd
         days = btd.resolve_trade_days(start, end)
         gaps = []
         syms = symbols if is_combined else [symbol]
-        for s in syms:
+        for idx, s in enumerate(syms):
+            # 标的 m5 + 日线预取：10% → 40%（按标的均分）
+            try:
+                pct = 10 + round(idx / max(len(syms), 1) * 30)
+                update_task_status(task_id, "running", progress=pct)
+            except Exception:
+                pass
             r = btd.prefetch_m5(s, days, task_dir, is_index=False)
             gaps.extend(r.get("gaps", []))
             # 标的日线需覆盖建仓规则所需历史（趋势/风险 ≥40 根）：起始日前推 60 天
@@ -521,6 +544,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 ext_start = start
             d = btd.prefetch_stock_daily([s], ext_start, end, task_dir)
             gaps.extend(d.get("gaps", []))
+        update_task_status(task_id, "running", progress=42)
         # 全市场滚动扫描（rolling_scan）：实时粗筛活跃池（限 300 只）→ 批量预取
         # 活跃池日线（按交易日批量，pro.daily(trade_date=...)）+ m5。
         # 粗筛用生产实时行情（活跃度近似，只决定候选范围）；打分/建仓全部用
@@ -578,6 +602,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
             except Exception as e:
                 print(f"[t-backtest] rolling_scan 全市场列表失败: {e}")
                 rolling_scan = False
+        update_task_status(task_id, "running", progress=46)
         if not btd.SKIP_INDEX_M5:
             for key, ts in (("hs300", "000300.SH"), ("sh", "000001.SH"), ("sz", "399001.SZ")):
                 r = btd.prefetch_m5(key, days, task_dir, is_index=True, ts_code=ts)
@@ -585,13 +610,14 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
         d = btd.prefetch_index_daily(list(btd.INDEX_TS_CODES.values()), start, end, task_dir)
         gaps.extend(d.get("gaps", []))
         btd.write_gaps(task_dir, gaps)
+        update_task_status(task_id, "running", progress=50)
     except Exception as e:
         print(f"[t-backtest] 预取失败: {e}")
         update_task_status(task_id, "failed", error_message=f"数据预取失败: {e}")
         return {"status": "failed", "error": f"数据预取失败: {e}"}
 
-    # 2) 回放
-    update_task_status(task_id, "running")
+    # 2) 回放（进度 50% → 100%，逐日更新）
+    update_task_status(task_id, "running", progress=50)
     task["conditions"] = conditions
     task["review_mode"] = task.get("review_mode", "llm")
     task["symbols"] = symbols
@@ -615,7 +641,8 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
 
         def _progress(done, total, events_delta=None, equity_point=None):
             try:
-                pct = round(done / total * 100) if total else 100
+                # 回放阶段进度 = 50% → 100%（选股/预取已占 0-50%）
+                pct = round(50 + done / total * 50) if total else 100
                 update_task_status(task_id, "running", progress=max(0, min(100, pct)))
             except Exception as e:
                 print(f"[t-backtest] 进度更新失败: {e}")
