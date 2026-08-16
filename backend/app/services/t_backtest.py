@@ -892,7 +892,29 @@ class TBacktestEngine:
                 if consumed_kind:
                     new_conds = [c for c in new_conds
                                  if c.get("trigger_kind") == consumed_kind]
+                # 移动条件保护（迭代#57b，用户观点：止损止盈不能连续相同——
+                # 000767 5/22 同一价位 4.865 连卖 4 次 = AI 重建条件按成本算
+                # 触发价 ≤ 现价 → 立即再触发。强制：重建条件触发价必须在
+                # 现价"有利侧"（高抛 > 现价、低吸 < 现价、止损 < 现价），
+                # 否则丢弃（等价格移动后再触发，避免同价反复循环）
+                if quote_price and quote_price > 0:
+                    filtered = []
+                    for nc in new_conds:
+                        k = nc.get("trigger_kind", "")
+                        tp = float(nc.get("target_price") or 0)
+                        sp = float(nc.get("stop_loss_price") or 0)
+                        if k in ("high_sell_then_buy_back", "high_sell"):
+                            if tp > quote_price and (sp <= 0 or sp < quote_price):
+                                filtered.append(nc)
+                        elif k in ("low_buy", "panic_vibrate"):
+                            if tp < quote_price:
+                                filtered.append(nc)
+                        else:
+                            filtered.append(nc)
+                    new_conds = filtered
                 if not new_conds:
+                    # 现价未到有利侧（如刚触发后现价仍高于新高抛目标）→ 本轮回合跳过，
+                    # 条件不武装，等价格进一步移动（单日上限仍计数，防死循环）
                     return
                 self._daily_rebuilds += 1
                 for nc in new_conds:
