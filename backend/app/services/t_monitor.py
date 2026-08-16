@@ -424,24 +424,42 @@ class TMonitor:
             )
             print(f"[TMonitor] 触发写入 #{trig_id} {cond['symbol']} {trigger_kind} "
                   f"mode={mode} consec_hits={consecutive_hits} @ {current}")
-            # AI 主导闭环：唤醒 AI → 决策路由（exec/wait/abandon/update_condition）→ 审计
+            # 自动执行闭环（迭代#57，用户需求）：条件命中自动执行（止损/止盈自动卖出、
+            # 低吸自动买入，volume 优先用 AI 在条件里设定的股数），不再逐次等 AI 决策；
+            # 执行完成后报告 AI 复盘并重建新条件。
             try:
-                from app.services.t_bridge import wake_and_decide
-                trig["id"] = trig_id
-                decision = wake_and_decide(trig, context={
-                    "regime": regime_state.get("regime"), "mode": mode,
-                })
-                print(f"[TMonitor] AI 决策 #{trig_id}: {decision.get('status')} "
-                      f"action={decision.get('action', '')} reason={str(decision.get('reason', ''))[:60]}")
-                if decision.get("status") == "wake_failed":
-                    # 桥不可达 → 降级标记（agent_review_and_execute 只标记不自动下单）
-                    from app.services.t_bridge import agent_review_and_execute
-                    agent_review_and_execute(trig)
-                # 消费式条件自动重建（迭代#56b）：本条件已 consumed，且该标的
-                # 无其他 active 条件且仍有持仓 → AI 重新评估生成新条件（走
-                # AI 条件生成，带成本自适应；失败回退规则公式）。防重复重建：
-                # 检查当日是否已有该标的 pending 重建（t_triggers 有当日 trigger
-                # 且无 active 条件即触发）；上限由 update_condition_state 幂等保护。
+                from app.services.t_gateway import gateway_execute
+                side = "buy" if trigger_kind in ("low_buy", "panic_vibrate") else "sell"
+                cond_vol = int(cond.get("volume") or 0)
+                if cond_vol > 0:
+                    volume = (cond_vol // 100) * 100
+                else:
+                    # 回退规则：低吸 30% 底仓（min 100）；高抛 30%（保留底仓 100）
+                    pos_item = (ledger or {}).get(symbol) or {}
+                    sellable = int(pos_item.get("sellable", 0) or 0)
+                    if side == "buy":
+                        volume = max(int(sellable * 0.3), 100) if sellable > 0 else 100
+                    else:
+                        max_sell = sellable
+                        if sellable > 200:
+                            max_sell = max(sellable - 100, 0)
+                        volume = max(int(sellable * 0.3), 100) if sellable > 0 else 0
+                        volume = min(volume, max_sell)
+                    volume = (volume // 100) * 100
+                if volume > 0:
+                    gw = gateway_execute(symbol, side, current, volume,
+                                         reason=f"条件命中自动执行（{trigger_kind}）",
+                                         decision_source="ai_led",
+                                         condition_id=cond.get("id"))
+                    print(f"[TMonitor] 自动执行 {symbol} {side} {volume}股@{current}: "
+                          f"{gw.get('status')} {str(gw.get('reason') or '')[:40]}")
+                    # 执行结果写入触发事件（供审计/复盘）
+                    t_db.update_trigger_status(
+                        trig_id, "executed",
+                        reason=f"自动执行 {side} {volume}股 @{current}: {gw.get('status')}")
+                # 消费式条件自动重建（迭代#56b/57）：本条件已 consumed，该标的仍有
+                # 持仓且无其他 active 条件 → AI 重新评估生成新条件（移动基准）。
+                # 执行后报告 AI = 调 AI 条件生成（含现价），失败回退规则公式。
                 try:
                     from app.services.t_db import list_active_conditions
                     remain = list_active_conditions(symbol=symbol)
@@ -452,14 +470,17 @@ class TMonitor:
                         if avg_price > 0:
                             from datetime import date
                             today = date.today().strftime("%Y%m%d")
-                            ok = auto_gen_conditions_for_build(symbol, avg_price,
-                                                               trade_date=today)
+                            ok = auto_gen_conditions_for_build(
+                                symbol, avg_price, trade_date=today,
+                                quote_price=current)
                             if ok:
-                                print(f"[TMonitor] 消费式条件自动重建 {symbol}（AI 重新评估，当日）")
+                                print(f"[TMonitor] 消费式条件自动重建 {symbol}（AI 重新评估，当日 @{current}）")
                 except Exception as e:
                     print(f"[TMonitor] 条件自动重建失败 {symbol}: {e}")
             except Exception as e:
-                print(f"[TMonitor] AI 决策失败（降级兜底）: {e}")
+                print(f"[TMonitor] 自动执行失败（降级标记）: {e}")
+                from app.services.t_bridge import agent_review_and_execute
+                agent_review_and_execute(trig)
 
     def _consecutive_hits(self, condition_id: Optional[int], symbol: str) -> int:
         """同条件当日连续命中计数：从最新 t_triggers 往前数连续 ai_decided/await_retry/pending。"""

@@ -324,23 +324,37 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
     if task.get("review_mode", "llm") != "llm":
         return None
     url = bridge_base_url() + "/backtest/review"
-    timeout = 45
+    # 迭代#56c：45s→120s + 重试 1 次——消费式重建后触发增多，LLM 决策
+    # （thinking 推理）时快时慢，45s 超时导致"决策异常(保守等待): timed out"
+    # 高抛兑现被跳过（#62：000021 三天高抛全 wait）
+    timeout = 120
 
     def review(rev_ctx: Dict[str, Any]) -> Dict[str, Any]:
         payload = {
             "task_id": task.get("id"),
-            "symbol": task.get("symbol"),
+            "symbol": rev_ctx.get("trigger", {}).get("symbol") or task.get("symbol"),
             "trigger": rev_ctx.get("trigger", {}),
             "regime": rev_ctx.get("regime", {}),
             "rule_hint": rev_ctx.get("rule_hint", {}),
             "position": rev_ctx.get("position", {}),
         }
-        req = urllib.request.Request(
-            url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        last_err: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                break
+            except Exception as e:
+                last_err = e
+                print(f"[t-backtest] LLM 复核重试 {attempt + 1}/2: {e}")
+        else:
+            # 两次都失败：回退规则决策（保守 wait 会导致高抛兑现丢失——
+            # 由引擎 _review 的异常路径处理，这里抛出让引擎兜底）
+            raise last_err or TimeoutError("LLM 复核失败")
         # AI 决策动作：exec / wait / abandon / update_condition
         # （兼容旧 decision:auto→exec, human→wait）
         action = str(body.get("action") or "")

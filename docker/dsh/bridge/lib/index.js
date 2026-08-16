@@ -972,36 +972,53 @@ function apply(ctx) {
               const body = JSON.parse(await readBody(req));
               const { task_id, symbol, trigger, regime, rule_hint, position } = body;
               if (!task_id || !trigger) { json(res, 400, { error: '缺少 task_id / trigger' }); return; }
-              // 回测复核会话（沙盒）：key = backtest:t-backtest-{taskId}，与生产会话隔离
-              const agent = await getOrCreateAgent('t-backtest-' + task_id, 'backtest', null, null);
-              const pos = position || {};
-              const posLine = (pos.sellable !== undefined && pos.volume !== undefined)
-                ? ('持仓: 可卖' + pos.sellable + '股 总持仓' + pos.volume + '股 成本' + (pos.avg_price ?? '-') + ' 已实现盈亏' + (pos.realized_pnl ?? 0) + ' 当日回转' + (pos.day_turnover ?? 0))
-                : '持仓: （无回测持仓快照）';
-              const prompt = [
-                '请对以下做T触发事件做出决策：exec（执行，默认）、wait（等待）、abandon（放弃）或 update_condition（调整条件）。',
-                '',
-                '标的: ' + (symbol || trigger.symbol || ''),
-                '触发: ' + JSON.stringify(trigger, null, 1),
-                'regime: ' + JSON.stringify(regime || {}, null, 1),
-                '规则预判(供参考): ' + JSON.stringify(rule_hint || {}, null, 1),
-                posLine,
-                '',
-                '【默认动作 = exec】本次触发已命中监控条件并通过系统规则预筛，默认执行。',
-                '仅当存在客观证据时才 wait/abandon，且 reason 必须写明具体证据：',
-                '① 现价与目标价/建议价脱节（差 >1%）；② 已跌破止损价；③ regime 禁自动；④ 恐慌放量追跌（量比骤升+创新低）。',
-                '信息不足 ≠ wait：可调用查询工具补数（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标 /',
-                'get_intraday_minute 分钟K线 / get_stock_moneyflow 资金流 / get_market_state 大盘）。',
-                '高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——有可卖底仓时触达高抛价应倾向 exec；',
-                '低吸买腿需确认非恐慌追跌（区分温和回踩 vs 放量下跌创新低）。',
-                '【消费式条件】本次触发后该条件已销毁——如需继续做T请用 update_condition 附新 condition 重建',
-                '（当日剩余 bar 生效），不重建则本标的当日不再触发；严禁编造已销毁条件继续触发。',
-                '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}（condition 仅 update_condition 时必填）',
-              ].join('\n');
-              const reply = await runAgentTurn(agent, prompt);
-              const parsed = parseDecision(reply);
-              console.log('[Bridge] /backtest/review task#' + task_id + ' → ' + (parsed.action || parsed.decision) + ' (' + parsed.reason.slice(0, 60) + ')');
-              json(res, 200, parsed);
+              // 同 task 复核串行化（迭代#56c：消费式重建后触发增多，同会话并发
+              // followup 排队导致 45s 超时——"决策异常(保守等待): timed out"）
+              const lockKey = 'backtest:' + task_id;
+              const prev = locks.get(lockKey);
+              if (prev) await prev;
+              let release;
+              const lock = new Promise((r) => { release = r; });
+              locks.set(lockKey, lock);
+              try {
+                // 回测复核会话（沙盒）：key = backtest:t-backtest-{taskId}-{symbol}
+                // （迭代#56c：按 task+symbol 隔离——此前同 task 所有标的共享
+                // backtest:t-backtest-{taskId} 一个会话，消费式重建后触发变多，
+                // 同会话 followup 排队导致 45s 超时"决策异常(保守等待)"）
+                const agent = await getOrCreateAgent('t-backtest-' + task_id + '-' + (symbol || ''),
+                                                     'backtest', null, null);
+                const pos = position || {};
+                const posLine = (pos.sellable !== undefined && pos.volume !== undefined)
+                  ? ('持仓: 可卖' + pos.sellable + '股 总持仓' + pos.volume + '股 成本' + (pos.avg_price ?? '-') + ' 已实现盈亏' + (pos.realized_pnl ?? 0) + ' 当日回转' + (pos.day_turnover ?? 0))
+                  : '持仓: （无回测持仓快照）';
+                const prompt = [
+                  '请对以下做T触发事件做出决策：exec（执行，默认）、wait（等待）、abandon（放弃）或 update_condition（调整条件）。',
+                  '',
+                  '标的: ' + (symbol || trigger.symbol || ''),
+                  '触发: ' + JSON.stringify(trigger, null, 1),
+                  'regime: ' + JSON.stringify(regime || {}, null, 1),
+                  '规则预判(供参考): ' + JSON.stringify(rule_hint || {}, null, 1),
+                  posLine,
+                  '',
+                  '【默认动作 = exec】本次触发已命中监控条件并通过系统规则预筛，默认执行。',
+                  '仅当存在客观证据时才 wait/abandon，且 reason 必须写明具体证据：',
+                  '① 现价与目标价/建议价脱节（差 >1%）；② 已跌破止损价；③ regime 禁自动；④ 恐慌放量追跌（量比骤升+创新低）。',
+                  '信息不足 ≠ wait：可调用查询工具补数（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标 /',
+                  'get_intraday_minute 分钟K线 / get_stock_moneyflow 资金流 / get_market_state 大盘）。',
+                  '高抛卖腿（high_sell_then_buy_back）是兑现利润的正向动作——有可卖底仓时触达高抛价应倾向 exec；',
+                  '低吸买腿需确认非恐慌追跌（区分温和回踩 vs 放量下跌创新低）。',
+                  '【消费式条件】本次触发后该条件已销毁——如需继续做T请用 update_condition 附新 condition 重建',
+                  '（当日剩余 bar 生效），不重建则本标的当日不再触发；严禁编造已销毁条件继续触发。',
+                  '只输出一行 JSON（不要 markdown 代码块、不要其他文字）：{"action":"exec|wait|abandon|update_condition","reason":"一句话理由","condition":{}}（condition 仅 update_condition 时必填）',
+                ].join('\n');
+                const reply = await runAgentTurn(agent, prompt);
+                const parsed = parseDecision(reply);
+                console.log('[Bridge] /backtest/review task#' + task_id + ' → ' + (parsed.action || parsed.decision) + ' (' + parsed.reason.slice(0, 60) + ')');
+                json(res, 200, parsed);
+              } finally {
+                release();
+                if (locks.get(lockKey) === lock) locks.delete(lockKey);
+              }
             } catch (e) {
               console.error('[Bridge] /backtest/review error:', e);
               json(res, 500, { error: e.message || '内部错误' });
@@ -1022,7 +1039,7 @@ function apply(ctx) {
               // 避免 BACKTEST_REVIEW_PROMPT 注入 + deny 写工具污染条件生成语义）
               const agent = await getOrCreateAgent(session_id || ('t-agent-' + symbol), 'conditions', null, null);
               const prompt = [
-                '你是做T条件设定者：为刚建仓的标的自主设定**一组做T触发条件**（条件组合由你决定——数量、类型、触发价、量比、企稳、止损全由你自主设计），让系统在条件命中时唤醒你决策。',
+                '你是做T条件设定者：为持仓标的自主设定**一组做T触发条件**（条件组合由你决定——数量、类型、触发价、量比、企稳、止损、**触发后买卖股数**全由你自主设计），让系统在条件命中时**自动执行**（止损/止盈自动卖出、低吸自动买入），执行完成后报告你复盘并重建新条件。',
                 '【工具使用】以下信息若不足以设定合理条件（如振幅/趋势/现价缺失或存疑），可调用查询工具补数：',
                 'get_stock_quote（实时行情）/ get_t_realtime_indicators（技术指标）/ get_intraday_minute（分钟K线）/',
                 'get_stock_moneyflow（资金流）/ get_market_state（大盘）/ get_stock_technical（深度技术）/',
@@ -1038,15 +1055,15 @@ function apply(ctx) {
                 '',
                 '规则参考（可偏离，但需合理）：低吸=成本×(1−max(2%,振幅×0.75))、高抛=成本×(1+max(1.5%,振幅×0.75))、止损=成本×(1−max(3%,振幅×0.55))。',
                 '设定要点：',
-                '① 高抛卖腿（high_sell_then_buy_back）：触发价应高于成本且可及（振幅足够大时留出兑现空间；趋势向上可略放宽）',
-                '② 低吸买腿（low_buy）：触发价应低于成本（回踩买点），不可高于现价',
-                '③ 止损价（stop_loss_price）必须低于成本（防深跌），且不被正常波动击穿（结合振幅）',
+                '① 高抛卖腿（high_sell_then_buy_back）：触发价应高于成本且可及；**volume = 本次触发卖出的股数**（≤可卖底仓，100 的整数倍，建议 30%~50% 底仓，保留底仓继续做T）',
+                '② 低吸买腿（low_buy）：触发价应低于成本（回踩买点）；**volume = 本次触发买入的股数**（100 的整数倍，考虑可用资金）',
+                '③ 止损价（stop_loss_price）必须低于成本（防深跌），且不被正常波动击穿（结合振幅）；止损触发自动卖出 volume 股',
                 '④ vol_ratio_thresh（量比阈值，1.0~3.0）与 stabilize_level（not_new_low/other）可调',
-                '⑤ 条件组合由你决定：通常包含 low_buy + high_sell_then_buy_back 各一条；',
+                '⑤ 条件组合由你决定：通常 low_buy + high_sell_then_buy_back 各一条；',
                 '   若行情需要可加 panic_vibrate（恐慌低吸）等，数量 1~4 条均可，但不要冗余重复',
                 '⑥ 输出【条件数组】（不要 markdown 代码块、不要其他文字），示例：',
-                '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"reason":"一句话"}]',
-                '价格保留两位小数；同一标的各条件的 stop_loss_price 应一致。',
+                '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","volume":300,"reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"volume":300,"reason":"一句话"}]',
+                '价格保留两位小数；volume 为 100 的整数倍；同一标的各条件的 stop_loss_price 应一致。',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
               const parsed = parseConditions(reply, cost, symbol, amp_med);
@@ -1102,6 +1119,8 @@ function apply(ctx) {
             stop_loss_price: round2(stop),
             vol_ratio_thresh: Number(c.vol_ratio_thresh) > 0 ? Number(c.vol_ratio_thresh) : 1.5,
             stabilize_level: c.stabilize_level || 'not_new_low',
+            // 触发后自动执行股数（迭代#57，用户需求）：100 的整数倍；非法/缺省由引擎回退规则
+            volume: (Number(c.volume) > 0) ? Math.floor(Number(c.volume) / 100) * 100 : undefined,
             armed: 1,
             status: 'active',
             reason: String(c.reason || '') ,

@@ -616,7 +616,8 @@ class TBacktestEngine:
                         if action == "exec":
                             self._maybe_rebuild_conditions(
                                 day_conds, ledger, trade_day, tick_dt,
-                                quote_price=float(bar["close"]))
+                                quote_price=float(bar["close"]),
+                                consumed_kind=tkind)
                         break  # 同一 tick 只处理第一个命中条件（对齐实盘轮询语义）
                 if not hit_any:
                     pass
@@ -759,36 +760,25 @@ class TBacktestEngine:
         }
         self.events.append({"type": "trigger", "data": trigger})
 
-        # 复核：规则模式（无 DB 纯规则）或 LLM（review_fn）→ AI 决策动作
-        action, reason, cond_update = self._review(trigger, regime, ledger, summary)
-        self.events.append({"type": "review", "data": {
-            "trigger_id": len(self.events), "action": action,
-            "reason": reason, "mode": "llm" if self.review_fn else "rule",
-        }})
-        if action == "update_condition":
-            # AI 自主调整监控条件（P0-5：条件与行情脱节时由 AI 更新目标价/止损，
-            # 当日剩余 bar 与后续交易日立即生效）
-            summary["ai_condition_updates"] += 1
-            summary["ai_wait"] += 1
-            self._apply_condition_update(cond_update or {}, day_conds)
-            self.events.append({"type": "condition_update", "data": {
-                "trigger": trigger, "update": cond_update or {},
-                "reason": reason,
-            }})
-            return "update_condition"
-        if action == "wait":
-            summary["ai_wait"] += 1
-            self.events.append({"type": "ai_wait", "data": {
-                "trigger": trigger, "reason": reason,
-            }})
-            return "wait"
-        if action == "abandon":
+        # 自动执行闭环（迭代#57，用户需求）：触发后不再逐次等 AI 决策——
+        # 止损/止盈自动卖出、低吸自动买入（volume 优先用 AI 在条件里设定的股数），
+        # 仍走网关风控（日亏熔断/无底仓/档位等硬校验）。
+        # 执行完成后由 _maybe_rebuild_conditions 报告 AI 重建新条件（移动基准）。
+        # 规则风控前置（自动执行也必须过 _rule_review 的 HALT/连亏/日亏预警拦截）
+        rule_action, rule_reason = _rule_review(trigger, regime, ledger)
+        if rule_action != "exec":
             summary["ai_abandon"] += 1
             summary["escalated_human"] += 1
             self.events.append({"type": "escalated", "data": {
-                "trigger": trigger, "reason": reason,
+                "trigger": trigger, "reason": f"自动执行被规则风控拦截: {rule_reason}",
             }})
             return "abandon"
+        action = "auto_exec"  # 标记：自动执行（非 AI 逐次决策）
+        self.events.append({"type": "review", "data": {
+            "trigger_id": len(self.events), "action": action,
+            "reason": "条件命中自动执行（AI 设定条件含股数）",
+            "mode": "llm" if self.review_fn else "rule",
+        }})
 
         # 撮合：下一根 bar close ± 滑点
         next_bar = day_bars[bar_idx + 1] if bar_idx + 1 < len(day_bars) else None
@@ -801,9 +791,16 @@ class TBacktestEngine:
 
         exec_price = float(next_bar["close"]) * (1 + self.slippage) if side == "buy" \
             else float(next_bar["close"]) * (1 - self.slippage)
-        # 数量：低吸按可卖底仓 30%（对齐 t_bridge 默认），最小 100 股
+        # 数量：优先用 AI 在条件里设定的 volume（股数，100 的整数倍）；
+        # 未设定时回退规则：低吸按可卖底仓 30%（min 100），高抛 30%（保留底仓 100）
         sellable = ledger.sellable()
-        if side == "buy":
+        cond_vol = int(cond.get("volume") or 0)
+        if cond_vol > 0:
+            volume = (cond_vol // 100) * 100
+            # 卖腿不超过可卖量
+            if side == "sell" and volume > sellable:
+                volume = (sellable // 100) * 100
+        elif side == "buy":
             if sellable > 0:
                 volume = max(int(sellable * 0.3), 100)
             else:
@@ -824,7 +821,7 @@ class TBacktestEngine:
                 "trigger": trigger, "reason": "可卖量不足（底仓耗尽）",
             }})
             summary["blocked"] += 1
-            return
+            return "blocked"
 
         ctx = self._gateway_ctx(regime, ledger, exec_price)
         check = validate_order_at(self.symbol, side, exec_price, volume, ctx,
@@ -862,30 +859,41 @@ class TBacktestEngine:
 
     def _maybe_rebuild_conditions(self, day_conds: List[Dict[str, Any]],
                                   ledger: TBacktestLedger, trade_day: str,
-                                  tick_dt: datetime, quote_price: Optional[float] = None):
-        """消费式条件自动重建（迭代#56b）：exec 成交后，若当日条件已全部消费
-        且仍有持仓 → 自动生成新条件继续做T（AI 重新评估；规则模式用公式）。
+                                  tick_dt: datetime, quote_price: Optional[float] = None,
+                                  consumed_kind: str = ""):
+        """消费式条件自动重建（迭代#56b）：exec 成交后立即重建该类型条件——
+        用户语义"触发即销毁，AI 重新评估触发条件"：每条条件消费后都重新生成，
+        让做T连续进行（#61 归因：此前要求 day_conds 全空才重建，双条件只消费
+        一条时另一条仍在（价格够不着）→ 该标的当天做T停止）。
 
-        仅 exec 后调用——wait（存疑不追）/abandon（放弃）/update_condition
-        （AI 已给新条件）不触发重建，避免"wait→重建→再触发"死循环。
+        【移动条件】重建基准 = 现价（quote_price）而非成本（迭代#56c，用户观点：
+        止损/止盈条件不可能连续相同——第一次 1.00 止损跌破后，下次止损必须随
+        现价移动（如 0.95 附近），否则重建相同条件会立即再触发形成循环）。
+        quote_price 缺失时回退成本基准。
+
+        仅 exec 后调用——wait/abandon/update_condition 不触发重建。
         防无限重建：单日重建次数上限（_max_daily_rebuilds，默认 8）。
-        quote_price：当前 bar 现价——传给 AI 条件生成上下文，防止 AI 把现价
-        误当成本基准（迭代#56c：#61 中 000636 AI 按现价 62.73 设止损 60.07，
-        高于成本 29.6 → 每根 bar 触发止损连卖 4 次）。
         """
-        if day_conds or self._stopped_out or ledger.total_shares() <= 0:
+        if self._stopped_out or ledger.total_shares() <= 0:
             return
         if self._daily_rebuilds >= self._max_daily_rebuilds:
             return
         try:
-            # 重建时带上标的振幅中位（amp_med=None 会导致规则止损退化为下限 3%，
-            # 且 AI 条件生成缺振幅上下文——迭代#56c 一并修复）
             amp_med = _amp_median_from_m5(self.m5)
+            # 移动基准：现价（重建时价格已变，条件随行情移动）；无现价回退成本
+            base_price = quote_price if quote_price and quote_price > 0 else ledger.cost_price
             new_conds = _gen_t_conditions(
-                self.review_fn, self.symbol, ledger.cost_price,
+                self.review_fn, self.symbol, base_price,
                 amp_med=amp_med, task_id=self.task.get("id"), use_cache=False,
                 quote_price=quote_price)
             if new_conds:
+                # 只重建被消费的类型（consumed_kind），避免未消费类型被重复重建
+                # （如高抛消费后只重建高抛，低吸条件若还在则不动）
+                if consumed_kind:
+                    new_conds = [c for c in new_conds
+                                 if c.get("trigger_kind") == consumed_kind]
+                if not new_conds:
+                    return
                 self._daily_rebuilds += 1
                 for nc in new_conds:
                     nc = dict(nc)
@@ -894,8 +902,8 @@ class TBacktestEngine:
                     day_conds.append(nc)
                 self.events.append({"type": "condition_rebuild", "data": {
                     "trade_day": trade_day, "bar_time": str(tick_dt),
-                    "count": len(new_conds),
-                    "reason": "消费式条件触发后自动重建（AI 重新评估）",
+                    "count": len(new_conds), "consumed_kind": consumed_kind,
+                    "reason": "消费式条件触发后自动重建（AI 重新评估，移动基准）",
                 }})
                 if self._summary is not None:
                     self._summary["condition_rebuilds"] = \
@@ -1060,7 +1068,12 @@ class TBacktestEngine:
                     action = "exec" if r.get("decision") == "auto" else "wait"
                 return action, str(r.get("reason") or "LLM 决策"), cond_update
             except Exception as e:
-                return "wait", f"决策异常(保守等待): {str(e)[:120]}", None
+                # 迭代#56c：LLM 复核异常（超时/网络）→ 回退规则决策而非保守 wait——
+                # _rule_review 区分买卖腿：高抛 exec 兑现（不丢利润）、低吸按风控判断。
+                # 此前一律 wait 导致"决策异常(保守等待): timed out"下高抛连续被跳过
+                # （#62：000021 三天高抛全 wait，+11.8% 缩水）
+                rule_action, rule_reason = _rule_review(trigger, regime, ledger)
+                return rule_action, f"LLM 决策异常，规则兜底({rule_action}): {str(e)[:80]}", None
         action, reason = _rule_review(trigger, regime, ledger)
         return action, reason, None
 

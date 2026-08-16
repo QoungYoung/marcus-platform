@@ -195,18 +195,17 @@ class TestEngineCore(unittest.TestCase):
         self.assertEqual(r["metrics"]["trigger_count"], 0)
 
     def test_llm_review_human_blocks(self):
-        """LLM 复核（旧语义 decision=human → wait 保守）→ 不成交。"""
+        """自动执行闭环（迭代#57）：触发后自动撮合，不再受 review_fn 的 decision 阻挠；
+        review_fn 仅作为"LLM 模式"标记（条件生成走 AI）。"""
         from app.services.t_backtest import TBacktestEngine
-        calls = {"n": 0}
 
         def review_fn(rev_ctx):
-            calls["n"] += 1
             return {"decision": "human", "reason": "量价存疑"}
 
         r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
-        self.assertGreater(calls["n"], 0, "LLM 复核应被调用")
-        self.assertEqual(r["metrics"]["executed_count"], 0, "human 决策不成交")
-        self.assertGreaterEqual(r["metrics"]["ai_wait_count"] + r["metrics"]["ai_abandon_count"], 0)
+        # 自动执行语义：条件命中即撮合（review_fn 不拦截；规则风控除外）
+        self.assertGreater(r["metrics"]["executed_count"], 0,
+                           "自动执行：条件命中即撮合（不再逐次等 AI 决策）")
 
     def test_llm_review_auto_executes(self):
         from app.services.t_backtest import TBacktestEngine
@@ -218,7 +217,7 @@ class TestEngineCore(unittest.TestCase):
         self.assertGreater(r["metrics"]["executed_count"], 0)
 
     def test_ai_review_action_exec(self):
-        """AI 决策 exec → 撮合成交。"""
+        """自动执行闭环：条件命中即撮合，review 事件标记 auto_exec。"""
         from app.services.t_backtest import TBacktestEngine
 
         def review_fn(rev_ctx):
@@ -227,7 +226,8 @@ class TestEngineCore(unittest.TestCase):
         r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
         self.assertGreater(r["metrics"]["executed_count"], 0)
         reviews = [e for e in r["events"] if e.get("type") == "review"]
-        self.assertTrue(all(e["data"].get("action") == "exec" for e in reviews))
+        self.assertTrue(all(e["data"].get("action") == "auto_exec" for e in reviews),
+                        "自动执行语义：review 事件应为 auto_exec")
 
     def test_ai_outcomes_computed_after_fill(self):
         """回测 outcome：成交后计算（防前视：只用成交 bar 之后），exec 胜率入 metrics。"""
@@ -249,30 +249,32 @@ class TestEngineCore(unittest.TestCase):
         self.assertGreater(r["metrics"].get("ai_exec_count", 0), 0)
         self.assertIn("ai_exec_win_rate_pct", r["metrics"])
 
-    def test_ai_review_action_wait(self):
-        """AI 决策 wait → 记事件不撮合，ai_wait_count 计数。"""
+    def test_auto_execute_rule_gate_blocks(self):
+        """自动执行仍受规则风控拦截：无底仓低吸 → 放弃（不撮合）。"""
+        from app.services.t_backtest import TBacktestEngine, TBacktestLedger, _rule_review
+        ledger = TBacktestLedger("X", 0, 10.0, 200000.0)  # 无底仓
+        action, reason = _rule_review(
+            {"event_type": "low_buy", "symbol": "X"}, {"regime": "ACTIVE"}, ledger)
+        self.assertEqual(action, "abandon")
+        self.assertIn("无底仓", reason)
+
+    def test_condition_volume_used(self):
+        """AI 在条件里设定的 volume（触发后自动执行股数）应被采用（迭代#57）。"""
         from app.services.t_backtest import TBacktestEngine
-
-        def review_fn(rev_ctx):
-            return {"action": "wait", "reason": "量比不足"}
-
-        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
-        self.assertEqual(r["metrics"]["executed_count"], 0)
-        self.assertGreater(r["metrics"]["ai_wait_count"], 0)
-        waits = [e for e in r["events"] if e.get("type") == "ai_wait"]
-        self.assertGreater(len(waits), 0)
-
-    def test_ai_review_action_abandon(self):
-        """AI 决策 abandon → 记放弃事件不成交，ai_abandon_count 计数。"""
-        from app.services.t_backtest import TBacktestEngine
-
-        def review_fn(rev_ctx):
-            return {"action": "abandon", "reason": "追高"}
-
-        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
-        self.assertEqual(r["metrics"]["executed_count"], 0)
-        self.assertGreater(r["metrics"]["ai_abandon_count"], 0)
-        self.assertGreaterEqual(r["metrics"]["escalated_human_count"], 0)
+        task = {
+            "symbol": self.symbol, "init_shares": 1000, "init_price": 10.0,
+            "net_asset": 200000.0,
+            "conditions": [{
+                "id": 1, "trigger_kind": "low_buy", "target_price": 9.9,
+                "stop_loss_price": 9.0, "vol_ratio_thresh": 0.0,
+                "volume": 300, "armed": 1,   # AI 设定：触发买入 300 股
+            }],
+        }
+        r = TBacktestEngine(task, str(self.cache)).run()
+        buys = [e["data"]["trade"] for e in r["events"]
+                if e.get("type") == "trade" and e["data"]["trade"]["side"] == "buy"]
+        self.assertGreater(len(buys), 0, "应有低吸成交")
+        self.assertEqual(buys[0]["volume"], 300, "应采用 AI 设定的 volume=300")
 
     def test_no_lookahead_vol_base(self):
         from app.services.t_backtest import compute_vol_ratio_base_up_to
@@ -403,45 +405,30 @@ class TestEngineCore(unittest.TestCase):
         self.assertTrue(len(buybacks) > 0 or len(buyback_blocked) > 0,
                         "买回腿必须走网关（成交或被拒），不得静默")
 
-    def test_ai_update_condition_applies(self):
-        """AI update_condition → 条件目标价更新（当日剩余 bar 与后续交易日生效）→ 事件记录。"""
+    def test_auto_exec_consumes_and_rebuilds(self):
+        """自动执行闭环（迭代#57）：条件命中自动成交 → 条件消费 → 自动重建新条件
+        （LLM 模式走 AI 条件生成 / 规则模式用公式，移动基准）。"""
         from app.services.t_backtest import TBacktestEngine
-        calls = {"n": 0}
-
-        def review_fn(rev_ctx):
-            calls["n"] += 1
-            # 首次触发给 update_condition（把低吸目标价拉高），后续 exec
-            if calls["n"] == 1:
-                return {"action": "update_condition", "reason": "目标价过低够不着",
-                        "condition": {"trigger_kind": "low_buy", "target_price": 10.1,
-                                      "stop_loss_price": 9.2}}
-            return {"action": "exec", "reason": "到位"}
-
+        from unittest.mock import patch as _patch
         task = {
             "symbol": self.symbol, "init_shares": 1000, "init_price": 10.0,
             "net_asset": 200000.0,
             "conditions": [{
                 "id": 1, "trigger_kind": "low_buy", "target_price": 9.9,
-                "stop_loss_price": 9.0, "vol_ratio_thresh": 0.0, "armed": 1,
+                "stop_loss_price": 9.0, "vol_ratio_thresh": 0.0,
+                "volume": 300, "armed": 1,
             }],
         }
-        r = TBacktestEngine(task, str(self.cache), review_fn=review_fn).run()
-        updates = [e for e in r["events"] if e.get("type") == "condition_update"]
-        self.assertGreater(len(updates), 0, "AI update_condition 应记录事件")
-        self.assertGreaterEqual(r["metrics"].get("ai_condition_update_count", 0), 1)
-        # 条件更新后仍可 exec（update 不撮合，但后续触发正常撮合）
-        self.assertGreater(r["metrics"]["executed_count"], 0, "更新后触发应可成交")
-
-    def test_ai_update_condition_missing_cond_conservative(self):
-        """update_condition 缺 condition → 保守等待（不崩溃、不撮合）。"""
-        from app.services.t_backtest import TBacktestEngine
-
-        def review_fn(rev_ctx):
-            return {"action": "update_condition", "reason": "无 condition"}
-
-        r = TBacktestEngine(self.task, str(self.cache), review_fn=review_fn).run()
-        self.assertEqual(r["metrics"]["executed_count"], 0)
-        self.assertGreaterEqual(r["metrics"].get("ai_condition_update_count", 0), 0)
+        with _patch("app.services.t_backtest._gen_t_conditions",
+                    return_value=[{
+                        "trigger_kind": "low_buy", "target_price": 9.7,
+                        "stop_loss_price": 9.2, "vol_ratio_thresh": 1.5,
+                        "volume": 200, "armed": 1,
+                    }]):
+            r = TBacktestEngine(task, str(self.cache)).run()
+        rebuilds = [e for e in r["events"] if e.get("type") == "condition_rebuild"]
+        self.assertGreater(len(rebuilds), 0, "自动成交后应重建新条件")
+        self.assertGreater(r["metrics"].get("condition_rebuild_count", 0), 0)
 
     def test_gen_t_conditions_ai_fallback_rule(self):
         """LLM 模式 AI 条件生成：bridge 不可达（返回 None）→ 回退规则公式（结构完整）。"""

@@ -1077,15 +1077,18 @@ def build_t_position(symbol: str, price: float, volume: Optional[int] = None,
 # ────────────────────────────────────────────────────────────────
 
 def auto_gen_conditions_for_build(symbol: str, avg_price: float,
-                                  trade_date: Optional[str] = None) -> bool:
+                                  trade_date: Optional[str] = None,
+                                  quote_price: Optional[float] = None) -> bool:
     """为刚建仓标的生成 t_conditions（双条件：低吸 + 高抛回补）。
 
     AI 自主条件模式（AI 主导闭环）：优先 POST bridge /conditions/generate 让 AI 设定
-    触发价/量比/止损；桥不可达或解析失败回退规则公式 build_t_conditions。
+    触发价/量比/止损/股数；桥不可达或解析失败回退规则公式 build_t_conditions。
     建仓当日不生成当日条件（sellable=0 无法触发）；次日该标的进 live 池后可做T。
     振幅用近 6 日 m5 日振幅中位自适应；无 m5 数据时用下限阈值。
     trade_date：默认次日（D+1 衔接）；消费式重建（迭代#56b）传当日——盘中条件
     触发消费后即时重建当日新条件。
+    quote_price：现价——消费式重建（迭代#57）传当前价，AI 基于现价设移动条件
+    （止损/止盈随行情移动，不重复相同条件）；并防止 AI 把现价误当成本基准。
     """
     try:
         from datetime import date, timedelta
@@ -1109,10 +1112,12 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float,
         try:
             from app.services.t_bridge import generate_conditions
             # 消费式重建（迭代#56b）：use_cache=False 强制 AI 重新评估，
-            # 避免缓存命中返回相同条件（盘中价格已变，条件应随行情重估）
+            # 避免缓存命中返回相同条件（盘中价格已变，条件应随行情重估）；
+            # quote_price 传现价（迭代#57：AI 设移动条件 + 防误当成本基准）
             res = generate_conditions(symbol, avg_price, amp_med=amp_med,
                                       session_id=f"t-agent-{symbol}",
-                                      use_cache=(trade_date is None))
+                                      use_cache=(trade_date is None),
+                                      quote_price=quote_price)
             if res and res.get("conditions"):
                 conds = res["conditions"]
                 cond_source = res.get("source", "ai")
