@@ -145,12 +145,12 @@ def t_backtest_delete(task_id: int):
         from app.database import SessionLocal
         db = SessionLocal()
         try:
+            # 明细表按 task_id 删除
             for tbl in ("t_backtest_events", "t_backtest_trades",
-                        "t_backtest_equity_snapshots", "t_backtest_metrics",
-                        "t_backtest_tasks"):
+                        "t_backtest_equity_snapshots", "t_backtest_metrics"):
                 db.execute(text(f"DELETE FROM {tbl} WHERE task_id = :id"), {"id": task_id})
-                if tbl == "t_backtest_tasks":
-                    db.execute(text("DELETE FROM t_backtest_tasks WHERE id = :id"), {"id": task_id})
+            # t_backtest_tasks 主键是 id（不是 task_id），单独按 id 删除
+            db.execute(text("DELETE FROM t_backtest_tasks WHERE id = :id"), {"id": task_id})
             db.commit()
         finally:
             db.close()
