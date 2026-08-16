@@ -526,7 +526,8 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
                       as_of: Optional[str] = None,
                       quality_override_fn: Optional[callable] = None,
                       bars_fn: Optional[callable] = None,
-                      coarse_max_batches: int = 6) -> List[Dict[str, Any]]:
+                      coarse_max_batches: int = 6,
+                      score_max: Optional[int] = None) -> List[Dict[str, Any]]:
     """扫描建仓候选短名单（来源：user 指定列表 / pool 候选池 / scan 全市场粗筛）。
 
     - scan：stock_basic 全市场列表 → 日频粗筛（成交额/振幅，当日缓存）→ 精筛（calc_t_quality
@@ -539,6 +540,8 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
       返回 {date, open, close, high, low, vol, amount} 列表，或 None）。
     - coarse_max_batches: 全市场粗筛抽样批数（默认 6×50=300 只，控制生产网络量）；
       回测传 None 扫全市场，避免大票落在抽样窗口外被漏掉（粗筛口径仍为实时近似）。
+    - score_max: 精筛打分数量上限（None = 默认：回测全市场模式打满 SCAN_MAX_DAILY，
+      其余打 limit 只）。daily_auto_select 传 SCAN_MAX_DAILY(50)，与回测精筛口径对齐。
     - 回测全市场扫描请用 scan_t_candidates_historical（历史日线粗筛，无实时行情依赖）。
     """
     if source == "user":
@@ -560,10 +563,13 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
         symbols = _load_candidate_symbols()
     if not symbols:
         return []
-    # 回测全市场模式（coarse_max_batches=None）：按 SCAN_MAX_DAILY 精筛上限打分，
-    # 而不是只打分"成交额前 limit 名"——否则中际旭创/东山精密等大票虽进池，
-    # 000603 这类中小达标票（成交额排名靠后）反而永远轮不到打分。生产保持原样。
-    score_n = max(limit, SCAN_MAX_DAILY) if coarse_max_batches is None else limit
+    # 精筛打分数量：回测全市场模式默认打满 SCAN_MAX_DAILY；生产默认 limit（控制耗时），
+    # 但 daily_auto_select 显式传 score_max=SCAN_MAX_DAILY 与回测对齐——
+    # 否则只看"成交额前 limit 名"，排名靠后的达标票永远轮不到打分。
+    if score_max is not None:
+        score_n = max(limit, int(score_max))
+    else:
+        score_n = max(limit, SCAN_MAX_DAILY) if coarse_max_batches is None else limit
     results = []
     for sym in symbols[:score_n]:
         try:
@@ -1202,7 +1208,9 @@ def daily_auto_select(limit: int = DEFAULT_AUTO_SELECT_LIMIT) -> List[Dict[str, 
     try:
         from sqlalchemy import text
         from app.database import SessionLocal
-        cands = scan_t_candidates(limit=limit, source="scan", as_of=datetime.now().strftime("%Y-%m-%d"))
+        cands = scan_t_candidates(limit=limit, source="scan",
+                                 as_of=datetime.now().strftime("%Y-%m-%d"),
+                                 score_max=SCAN_MAX_DAILY)  # 与回测精筛口径对齐（≤50 只打分）
         passed = [c for c in cands if c.get("symbol") and c.get("pass_gate")]
         if not passed:
             print("[t-build] 每日自动选股: 无达标标的")
