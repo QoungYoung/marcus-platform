@@ -565,7 +565,7 @@ class TestAutoSelectRolling(unittest.TestCase):
 
         calls: list = []
 
-        def fake_scan(limit, source, as_of):
+        def fake_scan(limit, source, as_of, **kw):
             calls.append(as_of)
             if as_of == "2026-08-09":  # 对应候选日 20260810：首日无达标
                 return [{"symbol": "AAA", "pass_gate": False, "score": 0.6}]
@@ -598,7 +598,7 @@ class TestAutoSelectRolling(unittest.TestCase):
     def test_pool_empty_falls_back_to_scan_each_day(self):
         from app.services import t_backtest_runner as runner
 
-        def fake_scan(limit, source, as_of):
+        def fake_scan(limit, source, as_of, **kw):
             if source == "pool":
                 return []  # 候选池为空
             return [{"symbol": "CCC", "pass_gate": True, "score": 0.8}]

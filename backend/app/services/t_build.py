@@ -547,13 +547,18 @@ def _coarse_filter_active(symbols: List[Dict[str, str]], max_batches: int = 6,
 
 def scan_t_candidates(limit: int = 20, source: str = "pool",
                       as_of: Optional[str] = None,
-                      quality_override_fn: Optional[callable] = None) -> List[Dict[str, Any]]:
+                      quality_override_fn: Optional[callable] = None,
+                      bars_fn: Optional[callable] = None) -> List[Dict[str, Any]]:
     """扫描建仓候选短名单（来源：user 指定列表 / pool 候选池 / scan 全市场粗筛）。
 
     - scan：stock_basic 全市场列表 → 日频粗筛（成交额/振幅，当日缓存）→ 精筛（calc_t_quality
       + 趋势闸门 + 风险惩罚），单次 ≤50 票（1s 节流）。粗筛结果当日缓存，不重复拉全市场。
     - 日频低频：调用方（Agent/前端）不应高频触发；缓存保证重复调用不重复网络请求。
-    - as_of: 回测用截止日（日线历史化）；quality_override_fn: 回测质量分函数（防前视）。
+    - as_of: 回测用截止日（日线历史化）。
+    - quality_override_fn(sym, bars): 回测质量分函数（防前视，如 _quality_from_daily）；
+      传入后精筛质量分用历史日线（as_of）口径，而不是实时 calc_t_quality。
+    - bars_fn(sym): 回测日线注入（与 quality_override_fn 配套，避免 build_score 重复拉取；
+      返回 {date, open, close, high, low, vol, amount} 列表，或 None）。
     - 回测全市场扫描请用 scan_t_candidates_historical（历史日线粗筛，无实时行情依赖）。
     """
     if source == "user":
@@ -574,8 +579,10 @@ def scan_t_candidates(limit: int = 20, source: str = "pool",
     results = []
     for sym in symbols[:limit]:
         try:
-            quality = quality_override_fn(sym) if quality_override_fn else None
-            r = build_score(sym, source=source, as_of=as_of, quality_override=quality)
+            bars = bars_fn(sym) if bars_fn else None
+            quality = quality_override_fn(sym, bars) if quality_override_fn else None
+            r = build_score(sym, source=source, as_of=as_of,
+                            quality_override=quality, bars=bars)
             results.append(r)
         except Exception as e:
             print(f"[t-build] 扫描 {sym} 失败: {e}")

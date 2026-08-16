@@ -391,7 +391,8 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
     """
     from datetime import datetime as _dt, timedelta as _td
     from app.services.t_backtest_data import resolve_trade_days
-    from app.services.t_build import scan_t_candidates
+    from app.services.t_build import (scan_t_candidates, _fetch_daily_bars,
+                                      _quality_from_daily)
 
     cand_days: List[str] = []
     try:
@@ -415,19 +416,32 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
             as_of = (_dt.strptime(d, "%Y%m%d") - _td(days=1)).strftime("%Y-%m-%d")
         except (ValueError, TypeError):
             as_of = None
+        # 回测口径：质量分/趋势/风险全部用 as_of 历史日线（防前视，与回放引擎建仓阶段一致）。
+        # 此前精筛用实时 calc_t_quality（今天/最近交易日的振幅、换手、成交额），
+        # 低波动/缩量震荡市里会把历史日期全部误拒（实测 q_pass 1/28 → 历史口径 25/28）。
+        def _hist_quality(sym, bars):
+            return _quality_from_daily(bars)
+
+        def _hist_bars(sym):
+            return _fetch_daily_bars(sym, count=40, as_of=as_of)
+
         try:
-            cands = scan_t_candidates(limit=select_limit, source=source, as_of=as_of)
+            cands = scan_t_candidates(limit=select_limit, source=source, as_of=as_of,
+                                      quality_override_fn=_hist_quality,
+                                      bars_fn=_hist_bars)
         except Exception as e:
             last_err = e
             print(f"[t-backtest] 自动选股失败 as_of={as_of}: {e}（顺延下一交易日）")
             continue
         syms = [c.get("symbol") for c in cands
                 if c.get("symbol") and c.get("pass_gate")]
-        # 候选池空 → 降级全市场扫描（保证自动选股可用）
+        # 候选池空 → 降级全市场扫描（保证自动选股可用，同样用历史口径）
         if not syms and source == "pool":
             print(f"[t-backtest] as_of={as_of} 候选池为空，降级全市场扫描自动选股")
             try:
-                cands = scan_t_candidates(limit=select_limit, source="scan", as_of=as_of)
+                cands = scan_t_candidates(limit=select_limit, source="scan", as_of=as_of,
+                                          quality_override_fn=_hist_quality,
+                                          bars_fn=_hist_bars)
                 syms = [c.get("symbol") for c in cands
                         if c.get("symbol") and c.get("pass_gate")]
             except Exception as e:
