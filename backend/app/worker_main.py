@@ -18,6 +18,7 @@ import sys
 import time
 import threading
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
@@ -161,28 +162,65 @@ def _t_monitor_status() -> dict:
 
 
 def _publish_loop():
-    """周期性把调度器/监控器状态写入 worker_status，供 API 读取。"""
+    """周期性把调度器/监控器状态写入 worker_status，供 API 读取。
+
+    修复：快照构建可能在监控器内部锁上被慢的外部行情请求拖住（东财代理/腾讯
+    接口抖动），导致心跳超过 15s 未更新、API 误判 worker 离线。现在快照构建
+    放到独立子线程并设预算超时——超时或上一轮构建仍在跑时，本轮直接复用上次
+    快照续心跳，发布循环永不被慢 getter 阻塞（也不会堆积线程）。
+    """
+    import queue as _queue
     from app.services.worker_control import publish_status
-    while True:
+
+    SNAPSHOT_BUDGET = 4.0  # 快照构建预算（秒），必须小于发布周期 5s
+
+    def _build_snapshot() -> Dict[str, Any]:
+        from app.services.scheduler_service import scheduler_service
+        from app.services.stop_loss_monitor import get_monitor_status, get_position_distances
+        from app.services.position_tier_monitor import get_tier_status
+        from app.services.candidate_pool_monitor import get_pool_monitor_status
+        from app.services.long_term_pool_monitor import get_lt_pool_monitor_status
+        return {
+            "scheduler": scheduler_service.get_scheduler_status(),
+            "tasks": scheduler_service.get_tasks(),
+            "next_runs": scheduler_service.get_next_runs(),
+            "stop_loss_monitor": get_monitor_status(),
+            "stop_loss_distances": get_position_distances(),
+            "tier_monitor": get_tier_status(),
+            "candidate_pool_monitor": get_pool_monitor_status(),
+            "long_term_pool_monitor": get_lt_pool_monitor_status(),
+            "t_monitor": _t_monitor_status(),
+            "stock_account": _stock_account_summary(),
+        }
+
+    def _build_worker(q: _queue.Queue):
+        """后台构建快照；异常不中断心跳（本轮继续用上次快照，下轮重试）。"""
         try:
-            from app.services.scheduler_service import scheduler_service
-            from app.services.stop_loss_monitor import get_monitor_status, get_position_distances
-            from app.services.position_tier_monitor import get_tier_status
-            from app.services.candidate_pool_monitor import get_pool_monitor_status
-            from app.services.long_term_pool_monitor import get_lt_pool_monitor_status
-            snapshot = {
-                "scheduler": scheduler_service.get_scheduler_status(),
-                "tasks": scheduler_service.get_tasks(),
-                "next_runs": scheduler_service.get_next_runs(),
-                "stop_loss_monitor": get_monitor_status(),
-                "stop_loss_distances": get_position_distances(),
-                "tier_monitor": get_tier_status(),
-                "candidate_pool_monitor": get_pool_monitor_status(),
-                "long_term_pool_monitor": get_lt_pool_monitor_status(),
-                "t_monitor": _t_monitor_status(),
-                "stock_account": _stock_account_summary(),
-            }
-            publish_status(snapshot)
+            q.put(_build_snapshot())
+        except Exception as e:
+            print(f"[Worker] 状态快照构建异常: {e}", file=sys.stderr)
+            q.put(None)
+
+    q: _queue.Queue = _queue.Queue()
+    builder: Optional[threading.Thread] = None
+    last_snapshot: Optional[Dict[str, Any]] = None
+    while True:
+        # 上一轮构建线程仍被慢行情锁拖住 → 不新建线程（防线程堆积），复用上次快照续心跳
+        if builder is not None and builder.is_alive():
+            snapshot = last_snapshot
+        else:
+            builder = threading.Thread(target=_build_worker, args=(q,),
+                                       daemon=True, name="worker-status-snapshot")
+            builder.start()
+            try:
+                got = q.get(timeout=SNAPSHOT_BUDGET)
+            except _queue.Empty:
+                got = None  # 超时：本轮先用上次快照，构建线程完成后其结果下轮被消费
+            snapshot = got if got is not None else last_snapshot
+        if snapshot is not None:
+            last_snapshot = snapshot
+        try:
+            publish_status(snapshot or {"status": "snapshot_pending"})
         except Exception as e:
             print(f"[Worker] 状态快照发布失败: {e}", file=sys.stderr)
         time.sleep(5)
