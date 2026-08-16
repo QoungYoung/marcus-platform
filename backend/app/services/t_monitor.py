@@ -437,6 +437,27 @@ class TMonitor:
                     # 桥不可达 → 降级标记（agent_review_and_execute 只标记不自动下单）
                     from app.services.t_bridge import agent_review_and_execute
                     agent_review_and_execute(trig)
+                # 消费式条件自动重建（迭代#56b）：本条件已 consumed，且该标的
+                # 无其他 active 条件且仍有持仓 → AI 重新评估生成新条件（走
+                # AI 条件生成，带成本自适应；失败回退规则公式）。防重复重建：
+                # 检查当日是否已有该标的 pending 重建（t_triggers 有当日 trigger
+                # 且无 active 条件即触发）；上限由 update_condition_state 幂等保护。
+                try:
+                    from app.services.t_db import list_active_conditions
+                    remain = list_active_conditions(symbol=symbol)
+                    pos_volume = int((ledger or {}).get(symbol, {}).get("volume") or 0)
+                    if not remain and pos_volume > 0:
+                        from app.services.t_build import auto_gen_conditions_for_build
+                        avg_price = float((ledger or {}).get(symbol, {}).get("avg_price") or 0)
+                        if avg_price > 0:
+                            from datetime import date
+                            today = date.today().strftime("%Y%m%d")
+                            ok = auto_gen_conditions_for_build(symbol, avg_price,
+                                                               trade_date=today)
+                            if ok:
+                                print(f"[TMonitor] 消费式条件自动重建 {symbol}（AI 重新评估，当日）")
+                except Exception as e:
+                    print(f"[TMonitor] 条件自动重建失败 {symbol}: {e}")
             except Exception as e:
                 print(f"[TMonitor] AI 决策失败（降级兜底）: {e}")
 

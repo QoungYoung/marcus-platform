@@ -445,6 +445,10 @@ class TBacktestEngine:
         self._pending_buyback: Optional[Dict[str, Any]] = None  # high_sell_then_buy_back 买回挂单
         self._ai_fills: List[Dict[str, Any]] = []  # AI 决策成交记录（outcome 回填用）
         self._stopped_out: bool = False            # 止损离场标志（止损后不再触发做T）
+        # 消费式条件自动重建（迭代#56b）：单日重建上限防无限生成
+        self._daily_rebuilds: int = 0
+        self._max_daily_rebuilds: int = int(task.get("max_daily_condition_rebuilds", 8))
+        self._summary: Optional[Dict[str, Any]] = None
 
     # ── 数据加载（回放期零网络）──
     def _load(self):
@@ -490,8 +494,9 @@ class TBacktestEngine:
         summary: Dict[str, Any] = {
             "triggers": 0, "reviews": 0, "executed": 0, "blocked": 0,
             "escalated_human": 0, "data_gaps": 0, "ai_wait": 0, "ai_abandon": 0,
-            "stop_losses": 0, "ai_condition_updates": 0,
+            "stop_losses": 0, "ai_condition_updates": 0, "condition_rebuilds": 0,
         }
+        self._summary = summary  # 消费式重建计数引用（_maybe_rebuild_conditions 用）
 
         total_days = len(self.trade_days)
         for day_idx, trade_day in enumerate(self.trade_days):
@@ -500,6 +505,8 @@ class TBacktestEngine:
                 self.events.append({"type": "cancelled", "trade_day": trade_day})
                 break
             prev_trade_day = self.trade_days[day_idx - 1] if day_idx > 0 else None
+            # 消费式条件重建计数按日重置（迭代#56b）
+            self._daily_rebuilds = 0
             day_bars = [b for b in self.m5 if _day_key(b["time"]) == trade_day]
             if not day_bars:
                 summary["data_gaps"] += 1
@@ -554,6 +561,7 @@ class TBacktestEngine:
                                         day_conds, trade_day)
                 bars_up_to = day_bars[: i + 1]
 
+                # 0.7) 消费式条件重建判定移到 _maybe_rebuild_conditions（仅 exec 后调用）
                 # 触发判定（复用 evaluate_condition_at：表达式 + 通用护栏 + 默认逻辑）
                 hit_any = False
                 for c in day_conds:
@@ -592,16 +600,22 @@ class TBacktestEngine:
                         cid = c.get("id") or c.get("_bt_index", 0)
                         day_trigger_count[cid] = day_trigger_count.get(cid, 0) + 1
                         c["last_triggered_at"] = tick_dt
-                        self._handle_trigger(c, bar, day_bars, i, snapshot, regime, ledger,
-                                             trade_day, summary, cancel_event, day_conds)
+                        action = self._handle_trigger(
+                            c, bar, day_bars, i, snapshot, regime, ledger,
+                            trade_day, summary, cancel_event, day_conds)
                         # 消费式条件（迭代#56，用户需求）：触发后条件即销毁——
-                        # 从当日剩余 bar 的评估中移除，不再冷却复用；
-                        # 后续由 AI 重新评估设定新条件（update_condition 语义=重建）。
-                        # 高抛/低吸均消费；止损冻结路径（_stopped_out）不受影响。
+                        # 从当日剩余 bar 的评估中移除，不再冷却复用。
+                        # 仅 exec（成交）后自动重建新条件（AI 重新评估）；
+                        # wait/abandon/update_condition 不重建：
+                        #   wait=存疑不追（重建会立刻再触发形成循环）、
+                        #   abandon=放弃本标的、update_condition=AI 已提供新条件
                         try:
                             day_conds.remove(c)
                         except ValueError:
                             pass
+                        if action == "exec":
+                            self._maybe_rebuild_conditions(
+                                day_conds, ledger, trade_day, tick_dt)
                         break  # 同一 tick 只处理第一个命中条件（对齐实盘轮询语义）
                 if not hit_any:
                     pass
@@ -708,7 +722,8 @@ class TBacktestEngine:
                         bar_idx: int, snapshot: Dict[str, Any], regime: Dict[str, Any],
                         ledger: TBacktestLedger, trade_day: str,
                         summary: Dict[str, Any], cancel_event: Optional[Any],
-                        day_conds: Optional[List[Dict[str, Any]]] = None):
+                        day_conds: Optional[List[Dict[str, Any]]] = None) -> str:
+        """返回决策动作：exec/wait/abandon/update_condition/blocked/closed（消费式重建判定用）。"""
         summary["triggers"] += 1
         trigger_kind = cond.get("trigger_kind", "low_buy")
         side = "buy" if trigger_kind in ("low_buy", "panic_vibrate") else "sell"
@@ -723,7 +738,7 @@ class TBacktestEngine:
                             "trade_day": trade_day, "bar_time": str(bar["time"])},
                 "reason": "无可用底仓（可卖 0 股），卖腿跳过",
             }})
-            return
+            return "blocked"
         current = float(bar["close"])
         slippage = 0.001
         trigger = {
@@ -759,20 +774,20 @@ class TBacktestEngine:
                 "trigger": trigger, "update": cond_update or {},
                 "reason": reason,
             }})
-            return
+            return "update_condition"
         if action == "wait":
             summary["ai_wait"] += 1
             self.events.append({"type": "ai_wait", "data": {
                 "trigger": trigger, "reason": reason,
             }})
-            return
+            return "wait"
         if action == "abandon":
             summary["ai_abandon"] += 1
             summary["escalated_human"] += 1
             self.events.append({"type": "escalated", "data": {
                 "trigger": trigger, "reason": reason,
             }})
-            return
+            return "abandon"
 
         # 撮合：下一根 bar close ± 滑点
         next_bar = day_bars[bar_idx + 1] if bar_idx + 1 < len(day_bars) else None
@@ -781,7 +796,7 @@ class TBacktestEngine:
                 "trigger": trigger, "reason": "当日无下一根 bar（收盘触发不撮合）",
             }})
             summary["blocked"] += 1
-            return
+            return "closed"
 
         exec_price = float(next_bar["close"]) * (1 + self.slippage) if side == "buy" \
             else float(next_bar["close"]) * (1 - self.slippage)
@@ -842,6 +857,43 @@ class TBacktestEngine:
             "symbol": self.symbol, "side": side, "fill_price": exec_price,
             "trade_day": trade_day, "bar_time": str(next_bar["time"]),
         })
+        return "exec"
+
+    def _maybe_rebuild_conditions(self, day_conds: List[Dict[str, Any]],
+                                  ledger: TBacktestLedger, trade_day: str,
+                                  tick_dt: datetime):
+        """消费式条件自动重建（迭代#56b）：exec 成交后，若当日条件已全部消费
+        且仍有持仓 → 自动生成新条件继续做T（AI 重新评估；规则模式用公式）。
+
+        仅 exec 后调用——wait（存疑不追）/abandon（放弃）/update_condition
+        （AI 已给新条件）不触发重建，避免"wait→重建→再触发"死循环。
+        防无限重建：单日重建次数上限（_max_daily_rebuilds，默认 8）。
+        """
+        if day_conds or self._stopped_out or ledger.total_shares() <= 0:
+            return
+        if self._daily_rebuilds >= self._max_daily_rebuilds:
+            return
+        try:
+            new_conds = _gen_t_conditions(
+                self.review_fn, self.symbol, ledger.cost_price,
+                amp_med=None, task_id=self.task.get("id"), use_cache=False)
+            if new_conds:
+                self._daily_rebuilds += 1
+                for nc in new_conds:
+                    nc = dict(nc)
+                    nc.setdefault("armed", 1)
+                    nc["last_triggered_at"] = None
+                    day_conds.append(nc)
+                self.events.append({"type": "condition_rebuild", "data": {
+                    "trade_day": trade_day, "bar_time": str(tick_dt),
+                    "count": len(new_conds),
+                    "reason": "消费式条件触发后自动重建（AI 重新评估）",
+                }})
+                if self._summary is not None:
+                    self._summary["condition_rebuilds"] = \
+                        self._summary.get("condition_rebuilds", 0) + 1
+        except Exception as e:
+            print(f"[t-backtest] 条件自动重建失败 {self.symbol}: {e}")
 
     def _gateway_ctx(self, regime: Dict[str, Any], ledger: TBacktestLedger,
                      quote_price: float) -> Dict[str, Any]:
@@ -1129,6 +1181,7 @@ def compute_metrics(ledger: TBacktestLedger, equity_curve: List[dict],
         "ai_exec_avg_pct": round(sum(ai_exec_pcts) / len(ai_exec_pcts), 3) if ai_exec_pcts else None,
         "stop_loss_count": summary.get("stop_losses", 0),
         "ai_condition_update_count": summary.get("ai_condition_updates", 0),
+        "condition_rebuild_count": summary.get("condition_rebuilds", 0),
         "data_gap_count": summary.get("data_gaps", 0),
         "execution_rate_pct": round(summary.get("executed", 0) / summary.get("triggers", 1) * 100, 2)
         if summary.get("triggers") else 0.0,
@@ -1202,7 +1255,8 @@ def _default_t_conditions(avg_price: float, amp_med: Optional[float] = None) -> 
 
 def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
                       amp_med: Optional[float] = None,
-                      task_id: Optional[Any] = None) -> List[Dict[str, Any]]:
+                      task_id: Optional[Any] = None,
+                      use_cache: bool = True) -> List[Dict[str, Any]]:
     """回测建仓条件生成：LLM 模式（review_fn 存在）→ AI 自主设定条件（bridge /conditions/generate，
     带缓存）；桥不可达/解析失败回退规则公式 _default_t_conditions。规则模式直接用公式。
 
@@ -1221,8 +1275,10 @@ def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
         try:
             from app.services.t_bridge import generate_conditions
             session_id = f"t-backtest-conds-{task_id or 0}-{symbol}"
+            # 消费式重建（迭代#56b）：use_cache=False 强制 AI 重新评估，
+            # 避免缓存命中返回相同条件导致"消费→重建相同→再触发"死循环
             res = generate_conditions(symbol, price, amp_med=amp_med,
-                                      session_id=session_id)
+                                      session_id=session_id, use_cache=use_cache)
             if res and res.get("conditions"):
                 conds = res["conditions"]
                 # 规则止损下限（可更紧、不可更宽）：止损价不得低于规则值

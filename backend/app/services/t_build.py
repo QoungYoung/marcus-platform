@@ -1076,17 +1076,21 @@ def build_t_position(symbol: str, price: float, volume: Optional[int] = None,
 # 建仓后次日条件衔接（T+1：建仓当日盘后生成 D+1 条件）
 # ────────────────────────────────────────────────────────────────
 
-def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
-    """为刚建仓标的生成次日（D+1）t_conditions（双条件：低吸 + 高抛回补）。
+def auto_gen_conditions_for_build(symbol: str, avg_price: float,
+                                  trade_date: Optional[str] = None) -> bool:
+    """为刚建仓标的生成 t_conditions（双条件：低吸 + 高抛回补）。
 
     AI 自主条件模式（AI 主导闭环）：优先 POST bridge /conditions/generate 让 AI 设定
     触发价/量比/止损；桥不可达或解析失败回退规则公式 build_t_conditions。
     建仓当日不生成当日条件（sellable=0 无法触发）；次日该标的进 live 池后可做T。
     振幅用近 6 日 m5 日振幅中位自适应；无 m5 数据时用下限阈值。
+    trade_date：默认次日（D+1 衔接）；消费式重建（迭代#56b）传当日——盘中条件
+    触发消费后即时重建当日新条件。
     """
     try:
         from datetime import date, timedelta
-        tomorrow = (date.today() + timedelta(days=1)).strftime("%Y%m%d")
+        if not trade_date:
+            trade_date = (date.today() + timedelta(days=1)).strftime("%Y%m%d")
         if avg_price <= 0:
             return False
         from app.services.t_pool import build_t_conditions
@@ -1104,8 +1108,11 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
         cond_source = "rule"
         try:
             from app.services.t_bridge import generate_conditions
+            # 消费式重建（迭代#56b）：use_cache=False 强制 AI 重新评估，
+            # 避免缓存命中返回相同条件（盘中价格已变，条件应随行情重估）
             res = generate_conditions(symbol, avg_price, amp_med=amp_med,
-                                      session_id=f"t-agent-{symbol}")
+                                      session_id=f"t-agent-{symbol}",
+                                      use_cache=(trade_date is None))
             if res and res.get("conditions"):
                 conds = res["conditions"]
                 cond_source = res.get("source", "ai")
@@ -1129,7 +1136,7 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float) -> bool:
                 **cond,
                 "account_id": ACCOUNT_T,
                 "symbol": _normalize(symbol).upper(),
-                "trade_date": tomorrow,
+                "trade_date": trade_date,
             }
             cid = t_db.upsert_condition(cond)
             if cid is None:
