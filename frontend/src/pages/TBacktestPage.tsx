@@ -1,7 +1,7 @@
 /* Hallmark · macrostructure: Session Ledger · tone: calm-precise · anchor hue: blue (#2f7cd3)
  * theme: Blue Archive (brand preserved) · designed-as-app
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
@@ -104,88 +104,143 @@ function fmtCreated(d?: string) {
   return String(d).replace('T', ' ').slice(0, 16);
 }
 
-// 事件明细表：统一渲染（运行中实时 + 完成后全量），最新在底部 + 「跟随最新」开关
+// 事件时间排序键（交易日 + bar_time，统一为定宽数字串，缺省最小）
+function eventTimeKey(ev: BtEvent): string {
+  const d = ev.data || {};
+  const inner = (d.data && typeof d.data === 'object') ? d.data : d;
+  const day = String(ev.trade_day || inner.trade_day || '');
+  const bt = String(ev.bar_time || inner.bar_time || '');
+  const norm = (s: string) => s.replace(/\D/g, '');
+  return `${norm(day).padStart(8, '0')}.${norm(bt).padStart(14, '0')}`;
+}
+
+const AI_PAGE_SIZE = 10;
+
+// 可折叠卡片：标题 + 右侧操作区，支持收起/展开
+function CollapseCard({ title, badge, defaultOpen = true, children }: {
+  title: ReactNode; badge?: ReactNode; defaultOpen?: boolean; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="tbt-panel tbt-collapse">
+      <div className="tbt-panel-head tbt-collapse-head">
+        <span>{title}</span>
+        <div className="tbt-panel-head-actions">
+          {badge}
+          <button
+            type="button"
+            className="tbt-btn tbt-btn-ghost tbt-collapse-toggle"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? '收起' : '展开'}
+          </button>
+        </div>
+      </div>
+      {open && <div className="tbt-collapse-body">{children}</div>}
+    </section>
+  );
+}
+
+// 事件明细卡片：按执行时间降序（最新在顶部），支持收起/展开 + 「跟随最新」
 function EventDetailTable({ events, title }: { events: BtEvent[]; title?: string }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
-  const rows = events.slice(-120); // 时间正序，保留最近 120 条
+  const [open, setOpen] = useState(true);
+  // 时间降序：最新在前，取最近 120 条
+  const rows = [...events]
+    .sort((a, b) => (eventTimeKey(a) < eventTimeKey(b) ? 1 : eventTimeKey(a) > eventTimeKey(b) ? -1 : 0))
+    .slice(0, 120);
 
-  // 跟随最新：新事件到达时钉在底部；用户上翻则自动松开
+  // 跟随最新：降序下最新在顶部，钉在顶部；用户下翻则自动松开
   useEffect(() => {
     if (follow && boxRef.current) {
-      boxRef.current.scrollTop = boxRef.current.scrollHeight;
+      boxRef.current.scrollTop = 0;
     }
   }, [follow, rows.length]);
 
   const handleScroll = () => {
     const el = boxRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    if (nearBottom !== follow) setFollow(nearBottom);
+    const nearTop = el.scrollTop < 24;
+    if (nearTop !== follow) setFollow(nearTop);
   };
 
   return (
-    <div className="tbt-table-wrap">
-      <div className="tbt-table-head">
-        {title && <h4>{title}（{events.length}）</h4>}
-        <button
-          type="button"
-          className="tbt-follow"
-          aria-pressed={follow}
-          onClick={() => setFollow((v) => !v)}
-        >
-          {follow ? '跟随最新 ✓' : '跟随最新'}
-        </button>
+    <section className="tbt-panel tbt-collapse">
+      <div className="tbt-panel-head tbt-collapse-head">
+        <span>{title || '事件明细'}（{events.length}）</span>
+        <div className="tbt-panel-head-actions">
+          <button
+            type="button"
+            className="tbt-follow"
+            aria-pressed={follow}
+            onClick={() => setFollow((v) => !v)}
+          >
+            {follow ? '跟随最新 ✓' : '跟随最新'}
+          </button>
+          <button
+            type="button"
+            className="tbt-btn tbt-btn-ghost tbt-collapse-toggle"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? '收起' : '展开'}
+          </button>
+        </div>
       </div>
-      <div className="tbt-events-scroll" ref={boxRef} onScroll={handleScroll}>
-        <table className="tbt-table">
-          <thead><tr><th>类型</th><th>交易日</th><th>时间</th><th>标的</th><th>价格</th><th>决策/内容</th></tr></thead>
-          <tbody>
-            {rows.map((ev, i) => {
-              const d = ev.data || {};
-              // API 返回 {data: {实际内容}, type: ...}，实际内容在 d.data；兼容平铺结构
-              const inner = (d.data && typeof d.data === 'object') ? d.data : d;
-              const trig = inner.trigger || {};
-              const sym = inner.symbol || trig.symbol || ev.symbol || '';
-              // 价格：trigger/交易/复核事件的内容顶层有 quote_price/exec_price/trigger_price
-              const price = inner.quote_price ?? inner.exec_price ?? trig.quote_price ?? trig.trigger_price ?? inner.trigger_price ?? '';
-              // 内容：reason/decision/action/触发摘要
-              let detail = '';
-              const t = ev.event_type;
-              if (t === 'review') {
-                const act = inner.action || '—';
-                detail = `${act === 'exec' ? '✅执行' : act === 'wait' ? '⏳等待' : act === 'abandon' ? '⛔放弃' : act}：${inner.reason || ''}`;
-              } else if (t === 'escalated') {
-                detail = `升级人工：${inner.reason || ''}`;
-              } else if (t === 'ai_wait') {
-                detail = `AI等待：${inner.reason || ''}`;
-              } else if (t === 'blocked') {
-                detail = `拦截：${inner.reason || ''}`;
-              } else if (t === 'trade') {
-                const tr = inner.trade || {};
-                detail = `${tr.side === 'buy' ? '买入' : '卖出'} ${tr.volume ?? ''}股 @ ${tr.price ?? ''}${tr.realized_pnl != null ? ` 盈亏${Number(tr.realized_pnl).toFixed(2)}` : ''}`;
-              } else if (t === 'trigger') {
-                detail = `${inner.event_type || trig.event_type || ''} 触发价=${trig.trigger_price ?? inner.trigger_price ?? ''}`;
-              } else {
-                detail = inner.reason || inner.decision || '';
-              }
-              return (
-                <tr key={`${ev.event_type}-${i}`}>
-                  <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
-                  <td>{ev.trade_day || inner.trade_day || ''}</td>
-                  <td>{ev.bar_time || inner.bar_time || ''}</td>
-                  <td>{sym}</td>
-                  <td>{price}</td>
-                  <td className="tbt-cell-reason" title={String(detail)}>{String(detail).slice(0, 160)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      {open && (
+        <div className="tbt-events-scroll" ref={boxRef} onScroll={handleScroll}>
+          <table className="tbt-table">
+            <thead><tr><th>类型</th><th>交易日</th><th>时间</th><th>标的</th><th>价格</th><th>决策/内容</th></tr></thead>
+            <tbody>
+              {rows.map((ev, i) => {
+                const d = ev.data || {};
+                // API 返回 {data: {实际内容}, type: ...}，实际内容在 d.data；兼容平铺结构
+                const inner = (d.data && typeof d.data === 'object') ? d.data : d;
+                const trig = inner.trigger || {};
+                const sym = inner.symbol || trig.symbol || ev.symbol || '';
+                // 价格：trigger/交易/复核事件的内容顶层有 quote_price/exec_price/trigger_price
+                const price = inner.quote_price ?? inner.exec_price ?? trig.quote_price ?? trig.trigger_price ?? inner.trigger_price ?? '';
+                // 内容：reason/decision/action/触发摘要
+                let detail = '';
+                const t = ev.event_type;
+                if (t === 'review') {
+                  const act = inner.action || '—';
+                  detail = `${act === 'exec' ? '✅执行' : act === 'wait' ? '⏳等待' : act === 'abandon' ? '⛔放弃' : act}：${inner.reason || ''}`;
+                } else if (t === 'escalated') {
+                  detail = `升级人工：${inner.reason || ''}`;
+                } else if (t === 'ai_wait') {
+                  detail = `AI等待：${inner.reason || ''}`;
+                } else if (t === 'blocked') {
+                  detail = `拦截：${inner.reason || ''}`;
+                } else if (t === 'trade') {
+                  const tr = inner.trade || {};
+                  detail = `${tr.side === 'buy' ? '买入' : '卖出'} ${tr.volume ?? ''}股 @ ${tr.price ?? ''}${tr.realized_pnl != null ? ` 盈亏${Number(tr.realized_pnl).toFixed(2)}` : ''}`;
+                } else if (t === 'trigger') {
+                  detail = `${inner.event_type || trig.event_type || ''} 触发价=${trig.trigger_price ?? inner.trigger_price ?? ''}`;
+                } else {
+                  detail = inner.reason || inner.decision || '';
+                }
+                return (
+                  <tr key={`${ev.event_type}-${i}`}>
+                    <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
+                    <td>{ev.trade_day || inner.trade_day || ''}</td>
+                    <td>{ev.bar_time || inner.bar_time || ''}</td>
+                    <td>{sym}</td>
+                    <td>{price}</td>
+                    <td className="tbt-cell-reason" title={String(detail)}>{String(detail).slice(0, 160)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
+
 
 export default function TBacktestPage() {
   const [tasks, setTasks] = useState<BtTask[]>([]);
@@ -203,6 +258,7 @@ export default function TBacktestPage() {
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const [dupHint, setDupHint] = useState('');
   const [taskPage, setTaskPage] = useState(0);
+  const [aiPage, setAiPage] = useState(0);
 
   // 创建表单
   const [symbolInput, setSymbolInput] = useState('');
@@ -245,12 +301,19 @@ export default function TBacktestPage() {
   }, []);
   useEffect(() => {
     if (selectedId == null) { aiSeq.current += 1; setAiActions([]); return; }
+    setAiPage(0); // 切换任务回到第一页
     loadAiActions(selectedId);
     const timer = window.setInterval(() => {
       if (!document.hidden) loadAiActions(selectedId);
     }, 15000);
     return () => window.clearInterval(timer);
   }, [selectedId, loadAiActions]);
+
+  // AI 决策分页：列表刷新后钳制当前页码
+  useEffect(() => {
+    const maxPage = Math.max(0, Math.ceil(aiActions.length / AI_PAGE_SIZE) - 1);
+    setAiPage((p) => Math.min(p, maxPage));
+  }, [aiActions.length]);
 
   // 实时轮询：有 pending/running 任务时每 3s 刷新任务列表（后台标签页暂停）
   useEffect(() => {
@@ -447,6 +510,8 @@ export default function TBacktestPage() {
   const sel = tasks.find((t) => t.id === selectedId);
   const totalPages = Math.max(1, Math.ceil(tasks.length / TASK_PAGE_SIZE));
   const pageTasks = tasks.slice(taskPage * TASK_PAGE_SIZE, taskPage * TASK_PAGE_SIZE + TASK_PAGE_SIZE);
+  const aiTotalPages = Math.max(1, Math.ceil(aiActions.length / AI_PAGE_SIZE));
+  const aiPageActions = aiActions.slice(aiPage * AI_PAGE_SIZE, aiPage * AI_PAGE_SIZE + AI_PAGE_SIZE);
 
   // 回测参数（所选任务提交时的参数快照）
   const selParams: { label: string; value: string }[] = [];
@@ -683,45 +748,47 @@ export default function TBacktestPage() {
               )}
 
               {buildDecisions && buildDecisions.length > 0 && (
-                <div className="tbt-table-wrap">
-                  <h4>建仓决策（规则模拟）</h4>
-                  <table className="tbt-table">
-                    <thead><tr><th>标的</th><th>决策</th><th>打分</th><th>建仓价</th><th>股数</th><th>原因</th></tr></thead>
-                    <tbody>
-                      {buildDecisions.map((d: any, i: number) => (
-                        <tr key={i}>
-                          <td>{d.symbol}</td>
-                          <td>{d.decision === 'built' ? '已建仓' : d.decision === 'fixed_hold' ? '固定底仓' : '否决'}</td>
-                          <td>{d.score != null ? d.score.toFixed(2) : '—'}</td>
-                          <td>{d.price ?? '—'}</td>
-                          <td>{d.shares ?? '—'}</td>
-                          <td className="tbt-cell-reason">{(d.reasons || []).join('；') || '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <CollapseCard title="建仓决策（规则模拟）" badge={<span className="tbt-count">{buildDecisions.length}</span>}>
+                  <div className="tbt-table-wrap">
+                    <table className="tbt-table">
+                      <thead><tr><th>标的</th><th>决策</th><th>打分</th><th>建仓价</th><th>股数</th><th>原因</th></tr></thead>
+                      <tbody>
+                        {buildDecisions.map((d: any, i: number) => (
+                          <tr key={i}>
+                            <td>{d.symbol}</td>
+                            <td>{d.decision === 'built' ? '已建仓' : d.decision === 'fixed_hold' ? '固定底仓' : '否决'}</td>
+                            <td>{d.score != null ? d.score.toFixed(2) : '—'}</td>
+                            <td>{d.price ?? '—'}</td>
+                            <td>{d.shares ?? '—'}</td>
+                            <td className="tbt-cell-reason">{(d.reasons || []).join('；') || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CollapseCard>
               )}
 
               {perSymbol && perSymbol.length > 0 && (
-                <div className="tbt-table-wrap">
-                  <h4>标的分项</h4>
-                  <table className="tbt-table">
-                    <thead><tr><th>标的</th><th>建仓</th><th>收益</th><th>触发</th><th>成交</th><th>拦截</th></tr></thead>
-                    <tbody>
-                      {perSymbol.map((r: any, i: number) => (
-                        <tr key={i}>
-                          <td>{r.symbol}</td>
-                          <td>{r.build?.source === 'build_rule' ? '规则建仓' : '固定底仓'}</td>
-                          <td>{fmtPct(r.metrics?.total_return_pct)}</td>
-                          <td>{r.metrics?.trigger_count ?? 0}</td>
-                          <td>{r.metrics?.executed_count ?? 0}</td>
-                          <td>{r.metrics?.blocked_count ?? 0}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <CollapseCard title="标的分项" badge={<span className="tbt-count">{perSymbol.length}</span>}>
+                  <div className="tbt-table-wrap">
+                    <table className="tbt-table">
+                      <thead><tr><th>标的</th><th>建仓</th><th>收益</th><th>触发</th><th>成交</th><th>拦截</th></tr></thead>
+                      <tbody>
+                        {perSymbol.map((r: any, i: number) => (
+                          <tr key={i}>
+                            <td>{r.symbol}</td>
+                            <td>{r.build?.source === 'build_rule' ? '规则建仓' : '固定底仓'}</td>
+                            <td>{fmtPct(r.metrics?.total_return_pct)}</td>
+                            <td>{r.metrics?.trigger_count ?? 0}</td>
+                            <td>{r.metrics?.executed_count ?? 0}</td>
+                            <td>{r.metrics?.blocked_count ?? 0}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CollapseCard>
               )}
 
               {liveEvents.length > 0 && (
@@ -804,7 +871,7 @@ export default function TBacktestPage() {
                 {aiActions.length === 0 && (
                   <li className="tbt-empty">该任务暂无 AI 决策记录 — 回测完成时将 AI 成交审计写入该任务会话</li>
                 )}
-                {aiActions.slice(0, 15).map((a) => {
+                {aiPageActions.map((a) => {
                   const out = a.output || {};
                   const gw = a.gateway_result || {};
                   const oc = a.outcome || {};
@@ -832,6 +899,23 @@ export default function TBacktestPage() {
                   );
                 })}
               </ul>
+              {aiActions.length > AI_PAGE_SIZE && (
+                <div className="tbt-pager">
+                  <button
+                    type="button"
+                    className="tbt-btn tbt-btn-mini"
+                    disabled={aiPage === 0}
+                    onClick={() => setAiPage((p) => Math.max(0, p - 1))}
+                  >‹ 上一页</button>
+                  <span className="tbt-pager-info">{aiPage + 1} / {aiTotalPages} · {aiActions.length} 条</span>
+                  <button
+                    type="button"
+                    className="tbt-btn tbt-btn-mini"
+                    disabled={aiPage >= aiTotalPages - 1}
+                    onClick={() => setAiPage((p) => Math.min(aiTotalPages - 1, p + 1))}
+                  >下一页 ›</button>
+                </div>
+              )}
             </section>
             </aside>
         )}

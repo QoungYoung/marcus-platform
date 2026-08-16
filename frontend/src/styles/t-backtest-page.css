@@ -746,3 +746,9 @@
   padding-top: var(--space-3);
   border-top: 1px solid var(--tb-line-soft);
 }
+
+/* ── 可折叠卡片（建仓决策 / 标的分项 / 事件明细） ── */
+.tbt-collapse + .tbt-collapse { margin-top: var(--space-3); }
+.tbt-collapse .tbt-table-wrap { margin-top: 0; }
+.tbt-collapse-head { user-select: none; }
+.tbt-collapse-body { min-width: 0; }
