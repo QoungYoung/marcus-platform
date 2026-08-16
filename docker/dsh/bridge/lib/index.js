@@ -732,7 +732,10 @@ function apply(ctx) {
       const key = mode + ':' + sessionId;
       if (sessions.has(key)) return sessions.get(key).agent;
       const modelId = modelOverride || (mode === 'trade' ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL);
-      const thinkingLevel = thinkingLevelOverride || (mode === 'trade' ? 'high' : 'medium');
+      // conditions 模式（AI 条件生成）用 low thinking：设定双条件是明确的结构化任务，
+      // 不需要深度推理——medium 推理 1.5-3min 导致回测 120s 超时回退规则（迭代#55b）
+      const thinkingLevel = thinkingLevelOverride || (
+        mode === 'trade' ? 'high' : (mode === 'conditions' ? 'low' : 'medium'));
       const systemPrompt = getPrompt(mode === 'trade' ? 'TRADE_SYSTEM_PROMPT' : 'CHAT_SYSTEM_PROMPT');
       // 做T会话（t-agent-*）附加底仓建仓工作流指引
       const isTAgentSession = String(sessionId || '').includes('t-agent-');
@@ -751,18 +754,56 @@ function apply(ctx) {
       // 回测复核会话（t-backtest-*）：沙盒隔离（design 5.2）——只做 auto/human 决策，
       // 通过 tools.restrict 拒绝生产写工具，绝不触达真实交易通道
       const isBacktestReview = mode === 'backtest';
+      // 条件生成会话（conditions）：纯结构化输出任务——AI 只输出双条件 JSON 数组，
+      // 不需要任何工具。迭代#55b 实测：AI 会调 bash/grep/glob/list_t_conditions 探索
+      // （会话 164s，工具调用耗掉一半，120s 超时回退规则）→ deny 全部工具 + 专用提示
+      const isConditionsMode2 = mode === 'conditions';
+      const CONDITIONS_SYSTEM_PROMPT = [
+        '你是做T条件设定器（纯输出模式）。',
+        '你的任务只有一个：根据给定的标的、成本、振幅等信息，输出做T触发条件数组（JSON）。',
+        '条件组合由你自主决定（通常 low_buy + high_sell_then_buy_back 各一，可加减，1~4 条），不要冗余重复。',
+        '【硬约束】禁止调用任何工具（bash/grep/glob/read/查询工具等全部禁用），不要探索文件、',
+        '不要查历史条件、不要查行情——所有必要信息已在消息中提供，直接基于消息内容输出 JSON。',
+        '输出格式（不要 markdown 代码块、不要任何其他文字）：',
+        '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"reason":"一句话"}]',
+      ].join('\n');
       const makeSetup = () => (agentCtx) => {
         agentCtx.systemPrompt.section({
           name: 'marcus-bridge-prompt',
           order: -50,
-          text: (isTrade && isTAgentSession) ? tBuildFull : systemPrompt,
+          text: isConditionsMode2 ? CONDITIONS_SYSTEM_PROMPT
+            : ((isTrade && isTAgentSession) ? tBuildFull : systemPrompt),
         });
-        if (tBuildPrompt && !(isTrade && isTAgentSession)) {
+        if (tBuildPrompt && !(isTrade && isTAgentSession) && !isConditionsMode2) {
           agentCtx.systemPrompt.section({
             name: 'marcus-t-build-prompt',
             order: -49,
             text: tBuildPrompt,
           });
+        }
+        if (isConditionsMode2) {
+          // 纯输出模式：deny 全部工具（只有输出 JSON 这一个动作）。
+          // 显式列出全部注册工具（含通用 bash/grep/glob/read/web_search），
+          // 避免 '*' 通配不被 restrict 支持时静默失效
+          try {
+            if (agentCtx.tools && typeof agentCtx.tools.restrict === 'function') {
+              agentCtx.tools.restrict({
+                deny: [
+                  'bash', 'grep', 'glob', 'read', 'write', 'edit', 'web_search',
+                  'place_order', 'cancel_order', 'calc_position', 'update_golden_pit_etf_config',
+                  'list_t_fields', 'create_t_condition', 'list_t_conditions', 'list_t_ai_actions',
+                  'run_t_backtest', 'scan_t_candidates', 'build_t_position', 'auto_gen_conditions',
+                  'rebalance_floors', 'get_floor_overview', 'get_stock_quote',
+                  'get_portfolio_positions', 'get_t_realtime_indicators', 'get_stock_moneyflow',
+                  'get_market_state', 'get_stock_technical', 'get_intraday_minute',
+                  'get_t_candidates_summary',
+                ],
+              });
+              console.log('[Bridge] 条件生成会话已禁用全部工具（纯输出模式）');
+            }
+          } catch (e) {
+            console.warn('[Bridge] 条件生成工具隔离失败: ' + e.message);
+          }
         }
         if (isBacktestReview) {
           agentCtx.systemPrompt.section({
@@ -957,7 +998,8 @@ function apply(ctx) {
               // 避免 BACKTEST_REVIEW_PROMPT 注入 + deny 写工具污染条件生成语义）
               const agent = await getOrCreateAgent(session_id || ('t-agent-' + symbol), 'conditions', null, null);
               const prompt = [
-                '你是做T条件设定者：为刚建仓的标的自主设定【低吸+高抛回补】双触发条件（触发价、量比、企稳、时段、止损），让系统在条件命中时唤醒你决策。',
+                '你是做T条件设定者：为刚建仓的标的自主设定**一组做T触发条件**（条件组合由你决定——数量、类型、触发价、量比、企稳、止损全由你自主设计），让系统在条件命中时唤醒你决策。',
+                '【重要】禁止调用任何工具（bash/grep/glob/查询工具全部禁用）——所有信息已在下面给出，直接基于消息输出 JSON 即可，不要探索文件、不要查行情、不要查旧条件。',
                 '',
                 '标的: ' + symbol,
                 '持仓成本: ' + cost,
@@ -968,13 +1010,15 @@ function apply(ctx) {
                 '',
                 '规则参考（可偏离，但需合理）：低吸=成本×(1−max(2%,振幅×0.75))、高抛=成本×(1+max(1.5%,振幅×0.75))、止损=成本×(1−max(3%,振幅×0.55))。',
                 '设定要点：',
-                '① 高抛触发价应高于成本且可及（振幅足够大时留出兑现空间；趋势向上可略放宽）',
-                '② 低吸触发价应低于成本（回踩买点），不可高于现价',
-                '③ 止损价必须低于成本（防深跌），且不被正常波动击穿（结合振幅）',
+                '① 高抛卖腿（high_sell_then_buy_back）：触发价应高于成本且可及（振幅足够大时留出兑现空间；趋势向上可略放宽）',
+                '② 低吸买腿（low_buy）：触发价应低于成本（回踩买点），不可高于现价',
+                '③ 止损价（stop_loss_price）必须低于成本（防深跌），且不被正常波动击穿（结合振幅）',
                 '④ vol_ratio_thresh（量比阈值，1.0~3.0）与 stabilize_level（not_new_low/other）可调',
-                '⑤ 输出【两条条件】的数组（不要 markdown 代码块、不要其他文字）：',
+                '⑤ 条件组合由你决定：通常包含 low_buy + high_sell_then_buy_back 各一条；',
+                '   若行情需要可加 panic_vibrate（恐慌低吸）等，数量 1~4 条均可，但不要冗余重复',
+                '⑥ 输出【条件数组】（不要 markdown 代码块、不要其他文字），示例：',
                 '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"reason":"一句话"}]',
-                '价格保留两位小数；stop_loss_price 两条条件一致。',
+                '价格保留两位小数；同一标的各条件的 stop_loss_price 应一致。',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
               const parsed = parseConditions(reply, cost, symbol, amp_med);

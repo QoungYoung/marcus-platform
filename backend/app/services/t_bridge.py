@@ -326,26 +326,32 @@ def generate_conditions(symbol: str, cost: float, amp_med: Optional[float] = Non
         "context": context,
         "session_id": session_id,
     }
-    try:
-        req = urllib.request.Request(
-            _bridge_base_url() + "/conditions/generate",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        conditions = body.get("conditions") or []
-        source = body.get("source") or "ai"
-        if not conditions:
-            return None
-        result = {"conditions": conditions, "source": source,
-                  "reason": body.get("reason") or "AI 生成"}
-        if use_cache:
-            _cond_gen_cache[cache_key] = result
-        print(f"[t-bridge] AI 条件生成 {symbol} → {len(conditions)} 条 (source={source}, "
-              f"cost={cost})")
-        return result
-    except Exception as e:
-        print(f"[t-bridge] AI 条件生成失败 {symbol}: {e}（回退规则公式）")
-        return None
+    # 重试一次（迭代#55b：#57/#58 中 2/5 条件生成 120s timed out 回退规则——
+    # LLM 推理时快时慢（新会话首建+推理可达 3min+），超时后重试通常命中已建会话更快）
+    last_err: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(
+                _bridge_base_url() + "/conditions/generate",
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            conditions = body.get("conditions") or []
+            source = body.get("source") or "ai"
+            if not conditions:
+                return None
+            result = {"conditions": conditions, "source": source,
+                      "reason": body.get("reason") or "AI 生成"}
+            if use_cache:
+                _cond_gen_cache[cache_key] = result
+            print(f"[t-bridge] AI 条件生成 {symbol} → {len(conditions)} 条 (source={source}, "
+                  f"cost={cost}, attempt={attempt + 1})")
+            return result
+        except Exception as e:
+            last_err = e
+            print(f"[t-bridge] AI 条件生成 {symbol} 第{attempt + 1}次失败: {e}"
+                  f"（重试{'中' if attempt == 0 else '后放弃，回退规则公式'}）")
+    return None
