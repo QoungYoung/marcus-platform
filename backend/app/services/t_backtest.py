@@ -1188,9 +1188,17 @@ def _default_t_conditions(avg_price: float, amp_med: Optional[float] = None) -> 
 
 
 def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
-                      amp_med: Optional[float] = None) -> List[Dict[str, Any]]:
+                      amp_med: Optional[float] = None,
+                      task_id: Optional[Any] = None) -> List[Dict[str, Any]]:
     """回测建仓条件生成：LLM 模式（review_fn 存在）→ AI 自主设定条件（bridge /conditions/generate，
     带缓存）；桥不可达/解析失败回退规则公式 _default_t_conditions。规则模式直接用公式。
+
+    会话隔离（迭代#54b）：session = t-backtest-conds-{task_id}-{symbol}——
+    ① 按标的隔离（此前全部标的共用 t-backtest-conds → bridge 复读首标条件）；
+    ② 按任务隔离（防跨回测任务 resume 旧会话：同一 symbol 多次回测共享
+    conditions:t-backtest-conds-{symbol} 会恢复上一次任务的对话历史，干扰条件设定）。
+    生产 auto_gen_conditions_for_build 用 t-agent-{symbol}（trade 模式，与决策会话同源，
+    条件设定+决策本来就是一个连续会话，合理）。
 
     止损钳制（迭代#52：#51 报告 AI 把止损放宽到 -6%/-4.8%，坏标的扛单多亏一倍）：
     AI 生成的 stop_loss_price 不得低于规则值 price×(1−max(3%, amp×0.55))——
@@ -1199,10 +1207,9 @@ def _gen_t_conditions(review_fn: Optional[callable], symbol: str, price: float,
     if review_fn is not None:
         try:
             from app.services.t_bridge import generate_conditions
-            # 会话按标的隔离（迭代#54：#53/#54 全部标的共用 session_id="t-backtest-conds"
-            # → bridge 同一会话复读首标的条件，5 个标的全拿到 000620 的价位 3.56）
+            session_id = f"t-backtest-conds-{task_id or 0}-{symbol}"
             res = generate_conditions(symbol, price, amp_med=amp_med,
-                                      session_id=f"t-backtest-conds-{symbol}")
+                                      session_id=session_id)
             if res and res.get("conditions"):
                 conds = res["conditions"]
                 # 规则止损下限（可更紧、不可更宽）：止损价不得低于规则值
@@ -1382,7 +1389,8 @@ class TCombinedBacktestEngine:
                 break
             conds = self.conditions or _gen_t_conditions(
                 self.review_fn, b["symbol"], b["price"],
-                _amp_median_from_m5(m5_map.get(b["symbol"], [])))
+                _amp_median_from_m5(m5_map.get(b["symbol"], [])),
+                task_id=self.task.get("id"))
             sub_asset = b["price"] * b["shares"]   # 该标的预算 = 建仓支出
             sub_task = {
                 "symbol": b["symbol"], "init_shares": b["shares"],
@@ -1589,7 +1597,8 @@ class TCombinedBacktestEngine:
                 break
             conds = self.conditions or _gen_t_conditions(
                 self.review_fn, b["symbol"], b["price"],
-                _amp_median_from_m5(m5_map.get(b["symbol"], [])))
+                _amp_median_from_m5(m5_map.get(b["symbol"], [])),
+                task_id=self.task.get("id"))
             sub_asset = b["price"] * b["shares"]
             sub_task = {
                 "symbol": b["symbol"], "init_shares": b["shares"],
