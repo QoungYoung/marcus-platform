@@ -345,3 +345,70 @@ buy_back   = 高抛成交 × (1 − 0.4%)
 
 关 T_STOP_GUARD_ENABLED + 无底仓重建仓放行后：止损卖光/高抛卖光的标的可在低吸触发时
 重新建仓（min 100 股），低吸加仓从 0 笔变为可成交，做T弹药不再被"卖光"打断。
+
+---
+
+## v22/v22b：选股改进 + 条件生成超时根治 + 工具白名单（迭代#55/#55b/#55c）
+
+### 选股改进（t1 漏选分析落地）
+
+1. **趋势拐点识别**（t_build.build_score）：横盘后近 3 日动量转正（>1.5%）→ 趋势分下限 0.45
+   （000636 模式：横盘后单日+9% 启动；合成验证 flat_then_spike trend_sc 0→0.88，纯横盘不误提升）
+2. **振幅启动豁免**（_quality_from_daily）：近 20 日均振幅<3% 但近 5 日已放大至 [3,10] →
+   降分 0.4 放行（000725 模式）；近 5 日仍<3% 或 >10%（妖票）不豁免
+3. **数据验证**：t1 漏选票 05-18 时点 000510(mom3=-16.8%)/000725(近5日2.72%) 确实未启动，
+   事后视角成立——新逻辑对真实启动票生效而非凑数
+
+### 条件生成超时根治（会话轨迹实测）
+
+**根因**：AI 把"设定条件"当探索任务——conditions 会话实测 164s 中调用 bash(失败)/
+grep×6/glob×2/list_t_conditions/get_stock_quote，工具调用耗掉大半 → 120s 超时回退规则
+（#57/#58 中 2/5 标的回退）。
+**修复**：
+- conditions 模式**工具白名单**（allow 8 个只读查询工具）+ 专用系统提示
+  "禁止探索文件/通用工具，直接输出 JSON"
+- 后端 generate_conditions：超时 120s→300s + 失败重试 1 次（重试命中已建会话）
+- conditions 模式 thinking level low（结构化任务无需深度推理）
+- **条件组合 AI 自由设定**：不再限定双条件，1~4 条由 AI 决定（含 panic_vibrate）
+
+### 工具白名单权限控制（用户要求"只能用放行的工具"）
+
+| 会话 | 放行工具 | 禁用 |
+|---|---|---|
+| conditions（条件生成） | 8 查询工具 | 文件/探索/写工具全部 |
+| trade/t-agent（做T决策） | 8 查询 + 条件管理（list_t_conditions/list_t_ai_actions/list_t_fields/create_t_condition）+ 建仓（scan_t_candidates/get_floor_overview/build_t_position/auto_gen_conditions/rebalance_floors） | bash/grep/glob/read/write/edit/web_search、place_order/cancel_order（走网关）、run_t_backtest、update_golden_pit_etf_config、calc_position |
+| backtest（回测复核） | 维持原 deny 写工具 | 写工具 |
+
+实测：白名单后条件生成 164s → **30s**（纯推理直出 JSON），000539 探针 AI 自主输出
+低吸 6.67/高抛 7.29/止损 6.75 组合。
+
+---
+
+## v20：AI 条件止损钳制（迭代#52，AI 收益 vs 规则差异归因）
+
+> 用户质疑：#50 rule +4.95% > #51 llm +3.85%，"是哪些操作导致收益下降"；
+> "选股是必须选出 X 个股票吗？去掉负收益股票收益率更高吧"。
+
+### 归因（#50 vs #51 逐事件对比）
+
+1. **主因 = AI 把止损价放宽**：AI 经 /conditions/generate 给 000066 止损 18.85（-6.0%）、
+   000620 止损 3.19（-4.8%）；规则公式止损 -3% 振幅自适应（19.45/3.25）。rule 破位首日
+   斩仓（000066 -570 / 000620 -618 封顶），llm 扛单到更低位才斩（-1,126 / -986）——
+   坏标的亏损翻倍。000066 期间高抛赚 +450 也填不平多扛的 -556。
+2. **次因 = AI wait 少兑现**：000021 5/20 高抛触发被 AI wait（rule 当天卖 +234），
+   但 AI 随后下调高抛目标 39.89→39 补卖更多，差异仅 30 元。
+3. **反例 000783**：llm 反而好（-2.35% vs -3.27%）——低吸加仓 700 股摊低成本+未在底部止损。
+
+### 选股语义澄清
+
+- **非强制选满**：全市场扫描 → build_score 打分 → `build_score_min=0.60` 门槛过滤 →
+  score 降序取前 max_daily_auto=3/日（在途 max_symbols=5）。窗口内 5 只全过门槛
+  （0.77-0.84 分），其中 3 只负收益——选股模型无法预知未来，事后剔除是幸存者偏差。
+- 系统性改进 = 止损收紧（本迭代）+ 更早离场，而非剔除"看起来最好"的标的。
+
+### 改动（commit 0a70870）
+
+- `t_backtest._gen_t_conditions` / `t_build.auto_gen_conditions_for_build`：
+  AI 生成的 `stop_loss_price` **不得低于规则值 price×(1−max(3%, amp×0.55))**
+  （取 max：止损价更低=更宽，钳到规则下限；AI 可收紧、不可放宽），止损下限系统兜底
+- 测试：AI 放宽 9.4→钳 9.7、AI 收紧 9.8→保留，28 passed
