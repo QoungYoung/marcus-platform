@@ -247,3 +247,101 @@ buy_back   = 高抛成交 × (1 − 0.4%)
 5. **P3-1/2/3**：AI prompt + 解析兜底 + 高胜率放冷。
 
 > 建议 1-3 作为首批落地（结构+选股），4 并行，5 在回测 A/B 验证后落地。
+
+---
+
+## v17：AI 自主设定触发条件（AI 主导闭环收口）
+
+> 用户需求："触发唤醒条件是 AI 设置的还是我们写死的？" → "我要 AI 自己设置条件触发，唤醒自己进行决策"。
+> 本轮把条件生成从"写死的规则公式"升级为"AI 自主设定 + 系统执行命中 + 唤醒 AI 决策"的完整闭环。
+
+### 改动点（已落地，commit fd64455）
+
+1. **bridge 新增 `POST /conditions/generate`**（docker/dsh/bridge/lib/index.js）：
+   - 入参：symbol / cost / amp_med（近6日振幅中位）/ trend / regime / context / session_id
+   - Prompt 引导 AI 输出【双条件数组】：低吸（low_buy）+ 高抛回补（high_sell_then_buy_back），
+     含 target_price / sell_target_price / stop_loss_price / vol_ratio_thresh / stabilize_level / reason
+   - `parseConditions` 容错：无 JSON 数组 / 空数组 / 非法条件 → `source:"fallback"`（后端回退规则公式），
+     价格 round2，stop_loss_price 缺失时按成本×0.97 兜底
+2. **`/backtest/review` 支持 update_condition**：`parseDecision` 改为平衡括号提取 JSON
+   （支持嵌套 condition 对象），动作白名单加 `update_condition`；prompt 与系统提示同步更新
+3. **后端 `t_bridge.generate_conditions`**（t_bridge.py）：POST bridge 的条件生成客户端，
+   带缓存（key=symbol+cost+amp_med，滚动建仓不重复唤醒 LLM）+ `AI_CONDITIONS_ENABLED` 灾难开关；
+   失败返回 None → 调用方回退规则公式
+4. **生产 `t_build.auto_gen_conditions_for_build`**：建仓次日条件优先 AI 生成
+   （session=t-agent-{symbol}，与决策会话一致），失败回退 `build_t_conditions` 规则公式
+5. **回测 `t_backtest`**：
+   - `_gen_t_conditions(review_fn, symbol, price, amp_med)`：LLM 模式（review_fn 存在）→ AI 条件
+     （漏 stop_loss_price 时按规则补齐）；规则模式 → 规则公式，不调桥
+   - `_review` 返回 `(action, reason, cond_update)`；`update_condition` 落地
+     `_apply_condition_update`（按 trigger_kind 白名单字段 patch，当日剩余 bar + 后续交易日生效，
+     重新武装）
+   - metrics 新增 `ai_condition_update_count`（单标的 + 组合）
+6. **测试**（test_t_backtest.py +6 例）：update_condition 应用 / 缺 condition 保守等待 /
+   AI 生成回退规则 / AI 结果采用并补齐止损 / 规则模式不调桥。112 passed
+
+### 设计语义
+
+- **条件 = AI 的"遥控器"**：AI 在建仓后自主设定触发价（低吸/高抛/止损），系统只负责
+  条件命中检测 + 唤醒 + 网关风控兜底；AI 在决策时发现条件脱节可随时 `update_condition` 调整
+- **规则公式是兜底不是主路径**：bridge 不可达 / LLM 解析失败 / 开关关闭时，回退
+  `build_t_conditions`（振幅自适应公式），保证系统永不因 AI 故障停摆
+- **回测闭环**：LLM 模式 = AI 设定条件 + AI 决策 + AI 调整条件全链路；规则模式 = 公式条件 +
+  规则决策，作为对照基线
+
+### 验证
+
+- 服务器部署后 `/conditions/generate` 探针（成本 10.0 / 振幅 5%）→ AI 返回
+  低吸 9.63（-3.7%）/ 高抛 10.38（+3.8%）/ 止损 9.5（-5%），结构合法
+- 同一窗口（2026-05-18~05-29 rolling_scan）对比：#46 rule 基线 vs #47 llm AI 条件，
+  对比 total_return_pct / win_rate_pct / ai_exec_win_rate_pct / ai_condition_update_count
+
+---
+
+## v18/v19：AI 自由跑（关拦截 + 提仓位 + 卖出后可重建仓）
+
+> 用户发现：#47 综合收益仅 +0.83%，但 000636 +22% / 000021 +16%——"两个股票收益率很高，
+> 但是综合收益率很低，是不是仓位太低了"。另发现"没有加仓动作"（低吸 0 笔成交）。
+
+### 诊断（#46/#47 事件流证实）
+
+1. **仓位太低**：single_order_pct=5% → 单笔 ≤1 万/标的，5 标的总建仓 4.4 万 = 净值 22%
+   （total_floor_cap 55% 允许 11 万），000636 只买 300 股（4.4% 净值），涨 22% 也只贡献 1,965 元
+2. **buyback 被网关拦**：CAUTIOUS 时 L1 档买腿 ≤ 可卖底仓×0.5=50 股 < 买回 100 股 →
+   `买腿 100 超过档位 L1 上限 50`；日回转额超限也被拒 → 高抛卖出的筹码买不回来，
+   底仓越卖越少（000636 300→0），后续无弹药
+3. **低吸加仓 0 笔**：low_buy 触发 4 次全被拦——`无底仓预拦截`（卖光后）、
+   `底仓浮亏 -3.9% 先减半仓`（_base_loss_guard）、`L2 禁止低吸`（近跌停）
+
+### 改动（commit c9de456 / 9ad9a35）
+
+1. **网关开关**（t_gateway.py，与 T_STOP_GUARD_ENABLED 同模式环境变量）：
+   - `T_BUY_TIER_LIMIT_ENABLED=0`：买腿不设档位上限（返回极大值，由单笔/总仓位建议层约束）；
+     无底仓低吸放行（卖出清仓后可重新建仓再 T）
+   - `T_TURNOVER_LIMIT_ENABLED=0`：日回转额超限不拦
+   - `T_STOP_GUARD_ENABLED=0`：关 _base_loss_guard（底仓浮亏 -3%/-5% 拦买腿）
+2. **回测引擎**（t_backtest.py）：`_free_run_enabled()` 与网关开关同源；
+   主循环低吸无底仓预拦截、`_rule_review` 无底仓放弃、无底仓买腿成交量
+   （min 100 股新开仓）在自由跑时全部放行——T+1 账本保证当日买入次日才可卖
+3. **仓位参数**（t_build.py BUILD_PARAMS_DEFAULT）：single_order_pct std 0.05→0.10、
+   per_symbol_cap std 0.12→0.15（cons 0.04→0.06 / 0.08→0.10；agg 0.08→0.12 / 0.18 不变）
+
+### 结果（#48 rule / #49 llm，同窗口）
+
+| 指标 | #47 v17 llm | **#48 v18 rule** | **#49 v18 llm** |
+|---|---|---|---|
+| 综合收益 | +0.83% | **+4.95%** | **+4.77%** |
+| realized_pnl | +2,529 | **+6,656** | **+7,287** |
+| 拦截数 | 7 | **0** | 1 |
+| buyback 买回 | 6 | **13** | **14** |
+| 低吸加仓 | 0 | 0 | 0（根因已修，待 v19 验证） |
+| 000636 收益 | +22.08% | **+62.63%** | **+62.52%** |
+
+- 000636 从 +22% → +62.6%：仓位翻倍（8,880→17,760）+ buyback 闭环打通（高抛 8 次全买回，
+  期末留 400 股底仓）——真正的 T+0 回转而非清仓兑现
+- 拦截从 7 降到 0/1，`买回被网关拒绝`刷屏消失
+
+### v19 预期
+
+关 T_STOP_GUARD_ENABLED + 无底仓重建仓放行后：止损卖光/高抛卖光的标的可在低吸触发时
+重新建仓（min 100 股），低吸加仓从 0 笔变为可成交，做T弹药不再被"卖光"打断。
