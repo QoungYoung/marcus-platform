@@ -21,6 +21,9 @@ from app.services.t_backtest import TBacktestEngine, caliber_notes
 
 DATA_ROOT = Path("data/t_backtest")
 
+# 自动选股逐日顺延上限（交易日）：窗口起始段连续无达标标的时，最多向后滚动多少个交易日
+AUTO_SELECT_MAX_ROLL_DAYS = 20
+
 
 # ────────────────────────────────────────────────────────────────
 # DB 读写
@@ -368,6 +371,71 @@ def build_review_fn(task: Dict[str, Any]) -> Optional[callable]:
 
 
 # ────────────────────────────────────────────────────────────────
+# 自动选股（逐日顺延）
+# ────────────────────────────────────────────────────────────────
+
+def auto_select_symbols_rolling(select_source: str, select_limit: int,
+                                start_date: str, end_date: str) -> tuple:
+    """自动选股（逐日滚动）：从回测窗口首日起按交易日顺序扫描，某日无达标标的自动顺延次日。
+
+    用户需求：当天没有选股标的时不再直接失败，滚动到下一个有达标标的的交易日。
+
+    Returns:
+        (symbols, selected_start, last_err)
+        - symbols: 第一个有达标标的的交易日选出的达标代码列表（空 = 全窗口无达标）
+        - selected_start: 命中的交易日（YYYYMMDD）；无命中为 None
+        - last_err: 扫描过程中的最后一次异常（无异常为 None，用于失败信息兜底）
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    from app.services.t_backtest_data import resolve_trade_days
+    from app.services.t_build import scan_t_candidates
+
+    cand_days: List[str] = []
+    try:
+        cand_days = resolve_trade_days(start_date, end_date)
+    except Exception as e:
+        print(f"[t-backtest] 交易日历获取失败: {e}")
+    if not cand_days:
+        # 交易日历不可用：退化为只在原起始日扫描一次（保持旧行为）
+        cand_days = [str(start_date).replace("-", "")]
+
+    source = select_source
+    last_err: Optional[Exception] = None
+    for d in cand_days[:AUTO_SELECT_MAX_ROLL_DAYS]:
+        try:
+            as_of = (_dt.strptime(d, "%Y%m%d") - _td(days=1)).strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            as_of = None
+        try:
+            cands = scan_t_candidates(limit=select_limit, source=source, as_of=as_of)
+        except Exception as e:
+            last_err = e
+            print(f"[t-backtest] 自动选股失败 as_of={as_of}: {e}（顺延下一交易日）")
+            continue
+        syms = [c.get("symbol") for c in cands
+                if c.get("symbol") and c.get("pass_gate")]
+        # 候选池空 → 降级全市场扫描（保证自动选股可用）
+        if not syms and source == "pool":
+            print(f"[t-backtest] as_of={as_of} 候选池为空，降级全市场扫描自动选股")
+            try:
+                cands = scan_t_candidates(limit=select_limit, source="scan", as_of=as_of)
+                syms = [c.get("symbol") for c in cands
+                        if c.get("symbol") and c.get("pass_gate")]
+            except Exception as e:
+                last_err = e
+                print(f"[t-backtest] 降级全市场扫描失败 as_of={as_of}: {e}（顺延下一交易日）")
+        if syms:
+            print(f"[t-backtest] 自动选股({source}) as_of={as_of} 达标 {len(syms)} 只: {syms[:10]}")
+            return syms, d, None
+        print(f"[t-backtest] 自动选股 as_of={as_of} 无达标标的，顺延下一交易日")
+    if len(cand_days) > AUTO_SELECT_MAX_ROLL_DAYS:
+        print(f"[t-backtest] 自动选股顺延已达上限 {AUTO_SELECT_MAX_ROLL_DAYS} 个交易日，放弃")
+        last_err = last_err or RuntimeError(
+            f"顺延已达 {AUTO_SELECT_MAX_ROLL_DAYS} 个交易日上限")
+    return [], None, last_err
+
+
+# ────────────────────────────────────────────────────────────────
 # 执行入口（worker 调用）
 # ────────────────────────────────────────────────────────────────
 
@@ -405,32 +473,34 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     # rolling_scan：候选由引擎每日历史全市场扫描产生（回测版 scan_t_candidates_historical），
     # 不在此处做实时自动选股（生产 scan_t_candidates 用实时行情，有前视风险）
     if is_combined and not symbols and select_source in ("pool", "scan") and not rolling_scan:
-        try:
-            from app.services.t_build import scan_t_candidates
-            # 自动选股（防前视）：精筛用 as_of=窗口首日前一交易日的日线（趋势/风险历史化）
-            from datetime import datetime as _dt, timedelta as _td
+        # 自动选股（防前视）：精筛用 as_of=窗口首日前一交易日的日线（趋势/风险历史化）。
+        # 首日无达标标的时逐日顺延（用户需求：当天没有选股标的 → 滚动到下一交易日，
+        # 不再直接报"自动选股无达标标的"失败）。
+        symbols, selected_start, _scan_err = auto_select_symbols_rolling(
+            select_source, select_limit, start, end)
+        if not symbols:
+            err = f"自动选股({select_source})在回测区间内无达标标的（已逐日顺延扫描）"
+            if _scan_err is not None:
+                err += f"；{_scan_err}"
+            update_task_status(task_id, "failed", error_message=err)
+            return {"status": "failed", "error": err}
+        # 顺延命中：窗口起始日滚动到第一个有达标标的的交易日（同步落库，报告/前端展示一致）
+        if selected_start and selected_start != start.replace("-", ""):
+            new_start = f"{selected_start[:4]}-{selected_start[4:6]}-{selected_start[6:8]}"
+            print(f"[t-backtest] 起始日无达标标的，回测窗口顺延 {start} → {new_start}")
+            start = new_start
             try:
-                as_of = (_dt.strptime(start, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
-            except (ValueError, TypeError):
-                as_of = None
-            source = select_source
-            cands = scan_t_candidates(limit=select_limit, source=source, as_of=as_of)
-            symbols = [c.get("symbol") for c in cands
-                       if c.get("symbol") and c.get("pass_gate")]
-            # 候选池空 → 降级全市场扫描（保证自动选股可用）
-            if not symbols and source == "pool":
-                print("[t-backtest] 候选池为空，降级全市场扫描自动选股")
-                cands = scan_t_candidates(limit=select_limit, source="scan", as_of=as_of)
-                symbols = [c.get("symbol") for c in cands
-                           if c.get("symbol") and c.get("pass_gate")]
-            if not symbols:
-                update_task_status(task_id, "failed", error_message="自动选股无达标标的")
-                return {"status": "failed", "error": f"自动选股({source})无达标标的"}
-            print(f"[t-backtest] 自动选股({source}) 达标 {len(symbols)} 只: {symbols[:10]}")
-        except Exception as e:
-            print(f"[t-backtest] 自动选股失败: {e}")
-            update_task_status(task_id, "failed", error_message=f"自动选股失败: {e}")
-            return {"status": "failed", "error": f"自动选股失败: {e}"}
+                db = SessionLocal()
+                try:
+                    db.execute(text(
+                        "UPDATE t_backtest_tasks SET start_date = :s WHERE id = :id"
+                    ), {"s": new_start, "id": task_id})
+                    db.commit()
+                finally:
+                    db.close()
+            except Exception as e:
+                print(f"[t-backtest] 更新任务起始日失败: {e}")
+        print(f"[t-backtest] 自动选股({select_source}) 达标 {len(symbols)} 只: {symbols[:10]}")
     if is_combined:
         symbol = "combined"
 

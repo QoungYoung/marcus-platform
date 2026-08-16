@@ -554,6 +554,79 @@ class TestEngineCore(unittest.TestCase):
 
 
 # ────────────────────────────────────────────────────────────────
+# 自动选股逐日顺延（首日无达标标的 → 滚动到下一交易日）
+# ────────────────────────────────────────────────────────────────
+
+class TestAutoSelectRolling(unittest.TestCase):
+    """自动选股逐日顺延：当天没有选股标的时不直接失败，滚动到下一个有标的的交易日。"""
+
+    def test_rolls_forward_when_first_day_empty(self):
+        from app.services import t_backtest_runner as runner
+
+        calls: list = []
+
+        def fake_scan(limit, source, as_of):
+            calls.append(as_of)
+            if as_of == "2026-08-09":  # 对应候选日 20260810：首日无达标
+                return [{"symbol": "AAA", "pass_gate": False, "score": 0.6}]
+            return [{"symbol": "BBB", "pass_gate": True, "score": 0.9}]  # 20260811 起达标
+
+        with patch("app.services.t_backtest_data.resolve_trade_days",
+                   return_value=["20260810", "20260811", "20260812"]):
+            with patch("app.services.t_build.scan_t_candidates", side_effect=fake_scan):
+                syms, day, err = runner.auto_select_symbols_rolling(
+                    "pool", 10, "2026-08-10", "2026-08-12")
+        self.assertEqual(syms, ["BBB"])
+        self.assertEqual(day, "20260811", "首日无标的应滚动到下一交易日")
+        self.assertIsNone(err)
+        self.assertEqual(calls, ["2026-08-09", "2026-08-10"],
+                         "首日无标的应顺延到次日再扫描一次")
+
+    def test_first_day_hit_keeps_start(self):
+        from app.services import t_backtest_runner as runner
+
+        with patch("app.services.t_backtest_data.resolve_trade_days",
+                   return_value=["20260810", "20260811"]):
+            with patch("app.services.t_build.scan_t_candidates",
+                       return_value=[{"symbol": "AAA", "pass_gate": True, "score": 0.9}]):
+                syms, day, err = runner.auto_select_symbols_rolling(
+                    "pool", 10, "2026-08-10", "2026-08-11")
+        self.assertEqual(syms, ["AAA"])
+        self.assertEqual(day, "20260810", "首日达标不应顺延")
+        self.assertIsNone(err)
+
+    def test_pool_empty_falls_back_to_scan_each_day(self):
+        from app.services import t_backtest_runner as runner
+
+        def fake_scan(limit, source, as_of):
+            if source == "pool":
+                return []  # 候选池为空
+            return [{"symbol": "CCC", "pass_gate": True, "score": 0.8}]
+
+        with patch("app.services.t_backtest_data.resolve_trade_days",
+                   return_value=["20260810", "20260811"]):
+            with patch("app.services.t_build.scan_t_candidates", side_effect=fake_scan):
+                syms, day, err = runner.auto_select_symbols_rolling(
+                    "pool", 10, "2026-08-10", "2026-08-11")
+        self.assertEqual(syms, ["CCC"])
+        self.assertEqual(day, "20260810", "候选池空降级扫描命中应保留当日")
+        self.assertIsNone(err)
+
+    def test_no_candidates_whole_window_returns_empty(self):
+        from app.services import t_backtest_runner as runner
+
+        with patch("app.services.t_backtest_data.resolve_trade_days",
+                   return_value=["20260810", "20260811", "20260812"]):
+            with patch("app.services.t_build.scan_t_candidates",
+                       return_value=[{"symbol": "AAA", "pass_gate": False, "score": 0.5}]):
+                syms, day, err = runner.auto_select_symbols_rolling(
+                    "pool", 10, "2026-08-10", "2026-08-12")
+        self.assertEqual(syms, [])
+        self.assertIsNone(day)
+        self.assertIsNone(err)
+
+
+# ────────────────────────────────────────────────────────────────
 # DB 链路（需 PostgreSQL）
 # ────────────────────────────────────────────────────────────────
 
