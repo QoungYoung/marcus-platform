@@ -46,6 +46,8 @@
   --tb-gold-12: rgba(201, 138, 18, 0.12);
   --tb-grey-12: rgba(87, 113, 142, 0.12);
   --tb-grey-20: rgba(87, 113, 142, 0.2);
+  --tb-overlay: rgba(22, 50, 79, 0.45);
+  --tb-shadow-modal: 0 16px 48px rgba(22, 50, 79, 0.28);
   --tb-blue-mid: #5ea5e8;
   --tb-sky-1: #dceefc;
   --tb-sky-2: #eef6ff;
@@ -645,4 +647,101 @@
 @media (min-width: 90rem) {
   .tbt-body { grid-template-columns: 300px minmax(0, 1fr); }
   .tbt-sub { font-size: 13px; }
+}
+
+/* Hallmark · component: task-pager + params-grid + create-modal
+ * genre: modern-minimal (tool console) · theme: Blue Archive (page tokens --tb-*)
+ * states: buttons/inputs reuse .tbt-* default · hover · focus-visible · active · disabled
+ */
+/* ── 任务列表分页（每页 5 条） ── */
+.tbt-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding-top: var(--space-2);
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--tb-line-soft);
+}
+.tbt-pager-info { font-size: 11px; color: var(--tb-faint); font-family: var(--tb-en); white-space: nowrap; }
+
+/* ── 回测参数（选中任务时展示提交快照） ── */
+.tbt-params-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+.tbt-param {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  background: var(--tb-blue-05);
+  border: 1px solid var(--tb-line-soft);
+  border-radius: var(--tb-radius);
+  padding: var(--space-2) var(--space-3);
+}
+.tbt-param-label { font-size: 11px; color: var(--tb-faint); }
+.tbt-param-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tb-ink);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.tbt-params-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+  padding: var(--space-5) var(--space-3);
+  color: var(--tb-faint);
+}
+.tbt-params-empty-title { font-size: 14px; font-weight: 600; color: var(--tb-ink); }
+.tbt-params-empty-sub { font-size: 12px; max-width: 46ch; line-height: 1.6; }
+
+/* ── 新建任务弹窗 ── */
+.tbt-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: var(--tb-overlay);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+.tbt-modal {
+  width: min(760px, 100%);
+  background: var(--tb-paper);
+  border: 1px solid var(--tb-line);
+  border-radius: var(--tb-radius-lg);
+  box-shadow: var(--tb-shadow-modal);
+  padding: var(--space-4);
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+.tbt-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--tb-line-soft);
+}
+.tbt-modal-head h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--tb-ink); }
+.tbt-modal-head-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.tbt-modal-close { font-size: 18px; line-height: 1; padding: 2px 8px; }
+.tbt-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--tb-line-soft);
 }

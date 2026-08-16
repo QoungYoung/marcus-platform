@@ -749,8 +749,9 @@ def update_ai_action_outcome(action_id: Optional[int], outcome: Dict[str, Any]) 
 
 
 def list_ai_actions(trade_date: Optional[str] = None, symbol: Optional[str] = None,
+                    session_id: Optional[str] = None,
                     limit: int = 100) -> List[Dict[str, Any]]:
-    """查询 AI 决策审计（按日期/标的过滤，倒序）。"""
+    """查询 AI 决策审计（按日期/标的/会话过滤，倒序）。会话形如 t-backtest-<task_id>。"""
     try:
         db = SessionLocal()
         try:
@@ -762,6 +763,9 @@ def list_ai_actions(trade_date: Optional[str] = None, symbol: Optional[str] = No
             if symbol:
                 sql += " AND symbol = :sym"
                 params["sym"] = symbol
+            if session_id:
+                sql += " AND session_id = :sid"
+                params["sid"] = session_id
             sql += " ORDER BY id DESC LIMIT :lim"
             params["lim"] = limit
             rows = db.execute(text(sql), params).mappings().all()

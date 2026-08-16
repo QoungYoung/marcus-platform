@@ -120,7 +120,7 @@ export const tBacktestApi = {
 
 // 做T AI 主导 APIs（决策审计 / 选股结果）
 export const tAiApi = {
-  actions: (params?: { trade_date?: string; symbol?: string; limit?: number }) =>
+  actions: (params?: { trade_date?: string; symbol?: string; session_id?: string; limit?: number }) =>
     api.get('/t/ai/actions', { params }),
 }
 
