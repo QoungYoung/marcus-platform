@@ -104,14 +104,26 @@ function fmtCreated(d?: string) {
   return String(d).replace('T', ' ').slice(0, 16);
 }
 
-// 事件时间排序键（交易日 + bar_time，统一为定宽数字串，缺省最小）
-function eventTimeKey(ev: BtEvent): string {
+// 事件交易日：顶层 trade_day → data.trade_day → bar_time 前缀（建仓买入等事件无 trade_day）
+function eventDay(ev: BtEvent): string {
   const d = ev.data || {};
   const inner = (d.data && typeof d.data === 'object') ? d.data : d;
   const day = String(ev.trade_day || inner.trade_day || '');
+  if (day) return day;
   const bt = String(ev.bar_time || inner.bar_time || '');
-  const norm = (s: string) => s.replace(/\D/g, '');
-  return `${norm(day).padStart(8, '0')}.${norm(bt).padStart(14, '0')}`;
+  const m = bt.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : '';
+}
+
+// 事件时间排序键：直接用 bar_time 降序；仅有时分秒时补交易日前缀（防跨日错位）
+function eventTimeKey(ev: BtEvent): string {
+  const d = ev.data || {};
+  const inner = (d.data && typeof d.data === 'object') ? d.data : d;
+  let bt = String(ev.bar_time || inner.bar_time || '').trim();
+  if (bt && !/^\d{4}/.test(bt)) {
+    bt = `${eventDay(ev)} ${bt}`;
+  }
+  return bt.replace(/\D/g, '').padStart(16, '0');
 }
 
 const AI_PAGE_SIZE = 10;
@@ -225,7 +237,7 @@ function EventDetailTable({ events, title }: { events: BtEvent[]; title?: string
                 return (
                   <tr key={`${ev.event_type}-${i}`}>
                     <td><span className={`tbt-ev tbt-ev-${ev.event_type}`}>{ev.event_type}</span></td>
-                    <td>{ev.trade_day || inner.trade_day || ''}</td>
+                    <td>{eventDay(ev)}</td>
                     <td>{ev.bar_time || inner.bar_time || ''}</td>
                     <td>{sym}</td>
                     <td>{price}</td>
