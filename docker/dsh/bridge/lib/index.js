@@ -762,8 +762,10 @@ function apply(ctx) {
         '你是做T条件设定器（纯输出模式）。',
         '你的任务只有一个：根据给定的标的、成本、振幅等信息，输出做T触发条件数组（JSON）。',
         '条件组合由你自主决定（通常 low_buy + high_sell_then_buy_back 各一，可加减，1~4 条），不要冗余重复。',
-        '【硬约束】禁止调用任何工具（bash/grep/glob/read/查询工具等全部禁用），不要探索文件、',
-        '不要查历史条件、不要查行情——所有必要信息已在消息中提供，直接基于消息内容输出 JSON。',
+        '工具使用：你只被放行 8 个只读查询工具（get_stock_quote/get_t_realtime_indicators/',
+        'get_intraday_minute/get_stock_moneyflow/get_market_state/get_stock_technical/',
+        'get_portfolio_positions/get_t_candidates_summary）——仅在消息信息确实不足时按需查询；',
+        '禁止探索文件、禁止调用 bash/grep/glob/read/write 等通用工具。',
         '输出格式（不要 markdown 代码块、不要任何其他文字）：',
         '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"reason":"一句话"}]',
       ].join('\n');
@@ -782,27 +784,48 @@ function apply(ctx) {
           });
         }
         if (isConditionsMode2) {
-          // 纯输出模式：deny 全部工具（只有输出 JSON 这一个动作）。
-          // 显式列出全部注册工具（含通用 bash/grep/glob/read/web_search），
-          // 避免 '*' 通配不被 restrict 支持时静默失效
+          // 条件生成：白名单模式（迭代#55c，用户要求"只能用放行的工具"）——
+          // 只放行 8 个只读查询工具（AI 可查行情做参考），禁一切文件/探索/写工具
           try {
             if (agentCtx.tools && typeof agentCtx.tools.restrict === 'function') {
               agentCtx.tools.restrict({
-                deny: [
-                  'bash', 'grep', 'glob', 'read', 'write', 'edit', 'web_search',
-                  'place_order', 'cancel_order', 'calc_position', 'update_golden_pit_etf_config',
-                  'list_t_fields', 'create_t_condition', 'list_t_conditions', 'list_t_ai_actions',
-                  'run_t_backtest', 'scan_t_candidates', 'build_t_position', 'auto_gen_conditions',
-                  'rebalance_floors', 'get_floor_overview', 'get_stock_quote',
-                  'get_portfolio_positions', 'get_t_realtime_indicators', 'get_stock_moneyflow',
-                  'get_market_state', 'get_stock_technical', 'get_intraday_minute',
-                  'get_t_candidates_summary',
+                allow: [
+                  'get_stock_quote', 'get_t_realtime_indicators', 'get_intraday_minute',
+                  'get_stock_moneyflow', 'get_market_state', 'get_stock_technical',
+                  'get_portfolio_positions', 'get_t_candidates_summary',
                 ],
               });
-              console.log('[Bridge] 条件生成会话已禁用全部工具（纯输出模式）');
+              console.log('[Bridge] 条件生成会话已启用白名单（仅 8 个查询工具）');
             }
           } catch (e) {
             console.warn('[Bridge] 条件生成工具隔离失败: ' + e.message);
+          }
+        }
+        if (isTrade && isTAgentSession) {
+          // 做T决策会话（trade/t-agent-*）：白名单模式（迭代#55c）——
+          // 放行：8 查询工具 + 条件管理（list_t_conditions/list_t_ai_actions/list_t_fields/
+          // create_t_condition）+ 建仓工具（scan_t_candidates/get_floor_overview/
+          // build_t_position/auto_gen_conditions/rebalance_floors）。
+          // 禁：bash/grep/glob/read/write/edit/web_search 等通用探索工具、
+          //     place_order/cancel_order（做T走网关不直下）、run_t_backtest（用户主动工具）、
+          //     update_golden_pit_etf_config（无关）、calc_position（做T用 build 网关）。
+          // 注意：allow 名单必须覆盖"做T真正需要"的全部工具，否则 AI 会被静默剥夺能力。
+          try {
+            if (agentCtx.tools && typeof agentCtx.tools.restrict === 'function') {
+              agentCtx.tools.restrict({
+                allow: [
+                  'get_stock_quote', 'get_t_realtime_indicators', 'get_intraday_minute',
+                  'get_stock_moneyflow', 'get_market_state', 'get_stock_technical',
+                  'get_portfolio_positions', 'get_t_candidates_summary',
+                  'list_t_conditions', 'list_t_ai_actions', 'list_t_fields', 'create_t_condition',
+                  'scan_t_candidates', 'get_floor_overview', 'build_t_position',
+                  'auto_gen_conditions', 'rebalance_floors',
+                ],
+              });
+              console.log('[Bridge] 做T决策会话已启用白名单（查询+条件+建仓）');
+            }
+          } catch (e) {
+            console.warn('[Bridge] 做T决策工具隔离失败: ' + e.message);
           }
         }
         if (isBacktestReview) {
