@@ -729,8 +729,14 @@ const SESSION_TTL_MS = 45 * 60 * 1000;  // 会话空闲 TTL：45 分钟回收（
     }
 
     // ── 会话 → Agent 映射（chat / trade / backtest 模式），存 handle（含 dispose）──
+    // 会话键 ASCII 化（修复中文 session_id 导致 DSH agent 空回复 (无回复)：
+    // 中文键在 agent resume/持久化路径异常，followup 后无 assistant 消息）
+    function asciiSessionId(sid) {
+      return String(sid || '').replace(/[^\x20-\x7e]/g, (ch) => '_u' + ch.codePointAt(0).toString(16));
+    }
+
     async function getOrCreateAgent(sessionId, mode, modelOverride, thinkingLevelOverride) {
-      const key = mode + ':' + sessionId;
+      const key = mode + ':' + asciiSessionId(sessionId);
       // 会话 TTL（修复僵尸 agent：长期空闲的 agent 底层运行循环可能退出，
       // followup 不唤醒 → whenIdle 立即返回空 → 盘前扫描收到 (无回复)）
       const nowTs = Date.now();
@@ -965,7 +971,7 @@ const SESSION_TTL_MS = 45 * 60 * 1000;  // 会话空闲 TTL：45 分钟回收（
               const chatMode = mode || 'chat';
               if (chatMode === 'backtest') { json(res, 501, { error: '回测复核请使用 POST /backtest/review（回测会话沙盒）' }); return; }
               if (chatMode === 'reflect') { json(res, 501, { error: 'reflect 模式请使用 POST /chat/stream' }); return; }
-              const lockKey = chatMode + ':' + sessionId;
+              const lockKey = chatMode + ':' + asciiSessionId(sessionId);
               const prev = locks.get(lockKey);
               if (prev) await prev;
               let release;
