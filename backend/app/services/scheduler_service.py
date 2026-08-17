@@ -806,7 +806,7 @@ class SchedulerService:
                 
                 if use_pi and execution.output and execution.status == JobStatus.SUCCESS.value:
                     # 将扫描结果发给 Pi 分析，生成报告
-                    report = self._call_pi_analysis(task.name, execution.output)
+                    report = self._call_pi_analysis(task.name, execution.output, task_id=task.id)
                     if report and report != "(无回复)":
                         try:
                             self._qq_notifier(report, self._qq_recipient)
@@ -910,7 +910,7 @@ class SchedulerService:
             logger.error(f"[pre_market] Failed to read recent pi review: {e}")
             return None
 
-    def _call_pi_analysis(self, task_name: str, output: str) -> str:
+    def _call_pi_analysis(self, task_name: str, output: str, task_id: str = None) -> str:
         """将扫描结果发送给 Pi Server，获取分析报告并写入策略链"""
         import urllib.request, json as _json, ssl, re
         try:
@@ -1020,7 +1020,7 @@ class SchedulerService:
             )
             payload = _json.dumps({
                 "message": prompt,
-                "session_id": f"report_{task_name}_{datetime.now().strftime('%Y%m%d')}"
+                "session_id": f"report_{task_id or task_name}_{datetime.now().strftime('%Y%m%d')}"
             }).encode("utf-8")
 
             pi_url = get_settings().PI_SERVER_URL
