@@ -1074,16 +1074,17 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                   agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
                   reply = await runAgentTurn(agent, message);
                 }
+                let finalSessionId = sessionId;
                 if (!reply || reply === '(无回复)') {
                   // 二次空回复：DSH resume 边界 bug 无法自愈 → fork 迁移（保留历史，新 driver）
                   const migrated = await migrateForkedSession(sessionId, chatMode, model, thinking_level, agent);
                   if (migrated) {
                     agent = migrated.agent;
-                    sessionId = migrated.sessionId;
+                    finalSessionId = migrated.sessionId;
                     reply = await runAgentTurn(agent, message);
                   }
                 }
-                json(res, 200, { reply, session_id: sessionId, mode: chatMode, elapsed_ms: Date.now() - startTime, migrated: String(sessionId).indexOf('_m') > -1 });
+                json(res, 200, { reply, session_id: finalSessionId, mode: chatMode, elapsed_ms: Date.now() - startTime, migrated: String(finalSessionId).indexOf('_m') > -1 });
               } finally {
                 release();
                 if (locks.get(lockKey) === lock) locks.delete(lockKey);
