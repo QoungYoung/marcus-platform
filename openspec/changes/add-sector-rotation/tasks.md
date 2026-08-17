@@ -23,8 +23,8 @@
 ## 4. API 与前端
 
 - [x] 4.1 backend/app/api/t_backtest.py create 请求新增参数：industry_strength_weight、sector_filter_enabled、sector_filter_min_pct、rotation_enabled、rotation_cooldown_days（透传至任务配置与构建）
-- [ ] 4.2 frontend/src/api/client.ts create 类型补齐新参数；TBacktestPage 表单加行业过滤/轮动开关与权重输入，任务详情展示行业强度与 sector_excluded/sector_switch 事件标签
-- [ ] 4.3 重建 frontend/dist 并提交（事件标签与表单随之生效）
+- [x] 4.2 frontend/src/api/client.ts create 类型补齐新参数；TBacktestPage 表单加行业过滤/轮动开关与权重输入，任务详情展示行业强度与 sector_excluded/sector_switch 事件标签
+- [x] 4.3 重建 frontend/dist 并提交（事件标签与表单随之生效）
 
 ## 5. 验证与部署
 

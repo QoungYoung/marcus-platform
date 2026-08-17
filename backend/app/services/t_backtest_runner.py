@@ -613,17 +613,6 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 update_task_status(task_id, "running", progress=min(pct, 8))
             except Exception:
                 pass
-        # 行业数据预取（add-sector-rotation）：自动选股前拉取行业日线与归属映射（幂等），
-        # 供 scan 行业强度因子/强势过滤使用；失败时降级（不过滤、中性强度）。
-        from datetime import datetime as _dtx, timedelta as _tdx
-        from app.services import t_backtest_data as _btd_x
-        try:
-            _days_x = _btd_x.resolve_trade_days(start, end)
-            _btd_x.prefetch_industry_daily(_days_x, task_dir)
-            _btd_x.prefetch_industry_map(task_dir)
-        except Exception as _ie:
-            print(f"[t-backtest] 行业数据预取失败: {_ie}（行业因子/过滤降级）")
-
         symbols, selected_start, _scan_err = auto_select_symbols_rolling(
             select_source, select_limit, start, end, progress_cb=_sel_progress,
             aggregate=bool(task.get("rolling_build", False)),
@@ -673,6 +662,17 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
 
     # 1) 预取（幂等续拉）——选股/预取都耗时，这里开始按阶段上报实时进度
     update_task_status(task_id, "running", progress=10)
+    # 行业数据预取（add-sector-rotation）：自动选股/滚动扫描均需（幂等），
+    # 供行业强度因子、强势过滤、轮动换仓使用；失败时降级（不过滤、中性强度）。
+    from datetime import datetime as _dtx, timedelta as _tdx
+    from app.services import t_backtest_data as _btd_x
+    try:
+        _days_x = _btd_x.resolve_trade_days(start, end)
+        _btd_x.prefetch_industry_daily(_days_x, task_dir)
+        _btd_x.prefetch_industry_map(task_dir)
+    except Exception as _ie:
+        print(f"[t-backtest] 行业数据预取失败: {_ie}（行业因子/过滤降级）")
+
     try:
         from datetime import datetime as _dt, timedelta as _td
         from app.services import t_backtest_data as btd

@@ -59,5 +59,5 @@ final_score = quality × (1 - w) + industry_strength × w，w = industry_strengt
 
 ## Open Questions
 
-- index_member_all 的 tushare 权限实测结果（影响 D2 是否走主路径）；若不可用，名称映射表覆盖不到的标的处理方式已按风险项兜底
+- index_member_all 已实测可用（2026-08-16：单次返回全市场约 5895 行，含 l1_code/l1_name/ts_code）→ D2 走主路径，行业归属直接由 index_member_all 构建（无需名称映射兜底）
 - 生产开闸时机与默认开关状态：需回测对照后与用户确认
