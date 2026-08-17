@@ -895,6 +895,46 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
     }
 
     // ── 读最终回复：等待停稳后从会话投影取最后 assistant 消息 ──
+    // ── 坏会话 fork 迁移（DSH rc.6 resume 边界 bug：多次中断的会话 driver 不启动，
+    //    消息 spliced 后 turn 不 claim → 空回复。fork 保留已完成对话历史，新 driver 可正常跑）──
+    function extractCompletePrefix(events) {
+      // 取最后一个完整 turn/end 之前的平衡前缀（无 open turn/step/dangling tool call）
+      let lastEnd = -1;
+      let depth = 0;
+      for (const ev of events || []) {
+        if (ev.type === 'turn/start') depth += 1;
+        else if (ev.type === 'turn/end') { depth = Math.max(0, depth - 1); if (depth === 0) lastEnd = ev.seq; }
+      }
+      if (lastEnd < 0) return [];
+      return (events || []).filter((ev) => ev.seq <= lastEnd);
+    }
+
+    async function migrateForkedSession(sessionId, mode, model, thinkingLevel, oldAgent) {
+      const oldKey = mode + ':' + asciiSessionId(sessionId);
+      const h = sessions.get(oldKey);
+      if (h) { try { await h.dispose(); } catch (e) { console.warn('[Bridge] 迁移 dispose 失败: ' + e.message); } sessions.delete(oldKey); }
+      locks.delete(oldKey);
+      const newSessionId = asciiSessionId(sessionId) + '_m' + Date.now();
+      const seed = extractCompletePrefix(oldAgent ? oldAgent.session.events : []);
+      const modelId = model || (mode === 'trade' ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL);
+      try {
+        const handle = await ctx.agents.create({
+          sessionId: mode + ':' + newSessionId,
+          agentOptions: { provider: 'deepseek-official', model: modelId },
+          meta: { cwd: process.env.MARCUS_WORKSPACE || '/app' },
+          setup: makeSetup(),
+          ...(seed.length ? { seed } : {}),
+        });
+        handle._ts = Date.now();
+        sessions.set(mode + ':' + newSessionId, handle);
+        console.warn('[Bridge] 会话已 fork 迁移: ' + oldKey.slice(-20) + ' -> ' + newSessionId.slice(-24) + '（seed ' + seed.length + ' 事件）');
+        return { agent: handle.agent, sessionId: newSessionId };
+      } catch (e) {
+        console.error('[Bridge] fork 迁移失败: ' + (e && e.message ? e.message : e));
+        return null;
+      }
+    }
+
     async function runAgentTurn(agent, message) {
       // 修复 resume 后 driver 卡住：cancel 收敛（无活动时 no-op；卡住时 abort 并让
       // driver 回到 idle，随后 followup 才能正常开启 turn）
@@ -1021,7 +1061,16 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                   agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
                   reply = await runAgentTurn(agent, message);
                 }
-                json(res, 200, { reply, session_id: sessionId, mode: chatMode, elapsed_ms: Date.now() - startTime });
+                if (!reply || reply === '(无回复)') {
+                  // 二次空回复：DSH resume 边界 bug 无法自愈 → fork 迁移（保留历史，新 driver）
+                  const migrated = await migrateForkedSession(sessionId, chatMode, model, thinking_level, agent);
+                  if (migrated) {
+                    agent = migrated.agent;
+                    sessionId = migrated.sessionId;
+                    reply = await runAgentTurn(agent, message);
+                  }
+                }
+                json(res, 200, { reply, session_id: sessionId, mode: chatMode, elapsed_ms: Date.now() - startTime, migrated: String(sessionId).indexOf('_m') > -1 });
               } finally {
                 release();
                 if (locks.get(lockKey) === lock) locks.delete(lockKey);

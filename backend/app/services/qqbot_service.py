@@ -139,6 +139,12 @@ class QQBotService:
                 ) as resp:
                     data = await resp.json()
                     if resp.status == 200:
+                        # 会话迁移（bridge fork 后返回新 session_id）：更新映射，
+                        # 后续消息用新会话（保留历史、driver 正常）
+                        new_sid = data.get("session_id")
+                        if new_sid and new_sid != session_id:
+                            self.user_sessions[session_id] = new_sid
+                            print(f"[QQBotService] 会话已迁移: {session_id[:16]}... -> {new_sid[:24]}...", file=sys.stderr)
                         return data.get("reply", "(无回复)")
                     else:
                         return f"Pi Server 错误: {data.get('error', '未知错误')}"
