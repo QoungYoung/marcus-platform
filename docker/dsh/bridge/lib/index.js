@@ -896,6 +896,20 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
 
     // ── 读最终回复：等待停稳后从会话投影取最后 assistant 消息 ──
     async function runAgentTurn(agent, message) {
+      // 清理中断遗留的 pending inbox（dsh 重启/中断后 resume 的会话 turn 不启动：
+      // 事件流只有 agent/inbox/spliced + turn/end 而无 turn/start → 空回复 (无回复)）
+      // 保留会话历史（长期上下文），仅丢弃未消费的残留输入
+      try {
+        if (agent.inbox && agent.inbox.hasPending) {
+          let pendingN = 0;
+          try { pendingN = (agent.inbox.nextTurn?.length || 0) + (agent.inbox.nextStep?.length || 0); } catch (e) {}
+          agent.inbox.clear();
+          console.warn('[Bridge] 清理残留 pending inbox ' + pendingN + ' 条（会话 ' + String(agent.id || '').slice(-16) + '）');
+        }
+      } catch (e) {
+        console.warn('[Bridge] inbox 清理失败: ' + (e && e.message ? e.message : e));
+      }
+
       const firstSeq = agent.session.seq;
       agent.followup(createUserMessage({
         content: [{ type: 'text', text: message }],
