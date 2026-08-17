@@ -807,7 +807,7 @@ class SchedulerService:
                 if use_pi and execution.output and execution.status == JobStatus.SUCCESS.value:
                     # 将扫描结果发给 Pi 分析，生成报告
                     report = self._call_pi_analysis(task.name, execution.output)
-                    if report:
+                    if report and report != "(无回复)":
                         try:
                             self._qq_notifier(report, self._qq_recipient)
                             logger.info(f"QQ Pi-report sent for {task.name}")
@@ -1034,7 +1034,8 @@ class SchedulerService:
             with urllib.request.urlopen(req, context=ctx, timeout=120) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
                 reply = data.get("reply", "")
-                if not reply:
+                if not reply or reply == "(无回复)":
+                    logger.warning(f"Pi analysis empty reply for {task_name}")
                     return ""
 
                 logger.info(f"Pi analysis done for {task_name} ({len(reply)} chars)")
