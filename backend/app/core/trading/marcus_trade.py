@@ -617,8 +617,11 @@ class MarcusVNPyExecutor:
             self._log_risk(risk_data)
             return {'allowed': False, 'reason': '资金不足', 'data': risk_data}
         
-        # 规则 2: 单笔最大仓位 (40%)
-        max_position = account['initial_capital'] * 0.40
+        # 规则 2: 单笔最大仓位 (40%) —— 以当前总资产为基数（含后续转入本金），
+        # 不用初始资金做基数：避免大额入金后（本金=初始10万+转入100万=110万）
+        # 94,100 的单笔被 40%x10万=4 万错误拦截。
+        cap_base = account.get('total_asset') or account.get('initial_capital') or account.get('available_cash') or 0
+        max_position = cap_base * 0.40
         if side == 'buy' and required_cash > max_position:
             # 自动调整到上限（而不是拒绝）
             adjusted_volume = int(max_position / price / 100) * 100  # 100股整数倍

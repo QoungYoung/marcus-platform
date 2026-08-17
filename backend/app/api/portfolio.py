@@ -487,7 +487,8 @@ def save_daily_snapshot(target_date: str = None, account: str = "stock") -> dict
     cost_value = sum(p['avg_price'] * p['volume'] for p in position_list)
     total_asset = available_cash + frozen_cash + position_value
     float_pnl = position_value - cost_value
-    total_pnl = total_asset - initial_cap
+    # 总盈亏 = 总资产 − (初始资金 + 累计入金净额)，资金调整不作为盈亏
+    total_pnl = total_asset - initial_cap - capital_adjustments
 
     # ── Upsert into PostgreSQL ──
     db = SessionLocal()
@@ -697,7 +698,16 @@ def get_portfolio(account: str = Query("stock", description="账户标识")):
         flush=True,
     )
 
-    total_pnl = total_asset - initial_capital
+    # 总盈亏 = 总资产 − (初始资金 + 累计入金/出金净额)，资金调整不作为盈亏
+    try:
+        dbx = SessionLocal()
+        cumulative_flows = float(dbx.query(func.coalesce(func.sum(PaperCapitalAdjustment.amount), 0)).filter(
+            PaperCapitalAdjustment.account_id == account).scalar() or 0)
+        dbx.close()
+    except Exception:
+        cumulative_flows = 0.0
+    principal = initial_capital + cumulative_flows
+    total_pnl = total_asset - principal
 
     account_response = AccountResponse(
         initial_capital=initial_capital,
@@ -720,7 +730,8 @@ def get_portfolio(account: str = Query("stock", description="账户标识")):
     return PortfolioSummary(
         account=account_response,
         total_return=total_pnl,
-        total_return_pct=(total_asset / initial_capital - 1) * 100 if initial_capital > 0 else 0,
+        # 收益率按“本金=初始资金+累计入金净额”计算，资金调整不计入收益
+        total_return_pct=(total_asset / principal - 1) * 100 if principal > 0 else 0,
         win_rate=win_rate,
         sector_concentration=sector_concentration,
     )
