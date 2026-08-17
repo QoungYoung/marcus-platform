@@ -74,10 +74,14 @@ export function computeMonthlyReturns(
   for (const [period, points] of Object.entries(byMonth)) {
     if (points.length < 2) continue;
     const sorted = points.sort((a, b) => a.date.localeCompare(b.date));
-    const first = sorted[0].equity;
-    const last = sorted[sorted.length - 1].equity;
-    if (first <= 0) continue;
-    result.push({ period, returnPct: ((last - first) / first) * 100 });
+    const startEquity = sorted[0].equity;
+    if (startEquity <= 0) continue;
+    // 用剔除资金流后的日盈亏累加：入金/出金不计入盈亏
+    const hasDailyPnl = sorted.some((p) => p.daily_pnl != null);
+    const pnl = hasDailyPnl
+      ? sorted.reduce((sum, p) => sum + (p.daily_pnl ?? 0), 0)
+      : sorted[sorted.length - 1].equity - startEquity;
+    result.push({ period, returnPct: (pnl / startEquity) * 100 });
   }
 
   result.sort((a, b) => b.period.localeCompare(a.period));
@@ -102,10 +106,14 @@ export function computeQuarterlyReturns(
   for (const [period, points] of Object.entries(byQuarter)) {
     if (points.length < 5) continue;
     const sorted = points.sort((a, b) => a.date.localeCompare(b.date));
-    const first = sorted[0].equity;
-    const last = sorted[sorted.length - 1].equity;
-    if (first <= 0) continue;
-    result.push({ period, returnPct: ((last - first) / first) * 100 });
+    const startEquity = sorted[0].equity;
+    if (startEquity <= 0) continue;
+    // 用剔除资金流后的日盈亏累加：入金/出金不计入盈亏
+    const hasDailyPnl = sorted.some((p) => p.daily_pnl != null);
+    const pnl = hasDailyPnl
+      ? sorted.reduce((sum, p) => sum + (p.daily_pnl ?? 0), 0)
+      : sorted[sorted.length - 1].equity - startEquity;
+    result.push({ period, returnPct: (pnl / startEquity) * 100 });
   }
 
   result.sort((a, b) => b.period.localeCompare(a.period));

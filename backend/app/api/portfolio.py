@@ -980,7 +980,8 @@ def get_equity_history(days: int = Query(60, ge=1, le=365),
 
         for t in trades_by_date.get(date_str, []):
             available_cash, positions = _apply_trade(t, available_cash, positions)
-        adj_accum += adjustments_by_date.get(date_str, 0)
+        net_flow_today = adjustments_by_date.get(date_str, 0)
+        adj_accum += net_flow_today
 
         if date_str in snapshots:
             equity = snapshots[date_str]
@@ -999,8 +1000,8 @@ def get_equity_history(days: int = Query(60, ge=1, le=365),
                     position_value += price * total_vol
             equity = available_cash + adj_accum + position_value
         elif date_str not in trades_by_date and prev_equity is not None:
-            # 非交易日且无快照：权益不变（避免成本估值与市价估值跳变）
-            equity = prev_equity
+            # 非交易日且无快照：权益不因估值跳变，但当日资金进出（入金/出金）仍计入权益
+            equity = prev_equity + net_flow_today
         else:
             position_value = sum(
                 l['price'] * l['volume']
@@ -1009,7 +1010,9 @@ def get_equity_history(days: int = Query(60, ge=1, le=365),
             )
             equity = available_cash + adj_accum + position_value
 
-        daily_pnl = round(equity - prev_equity, 2) if prev_equity is not None else 0.0
+        # 日盈亏 = 权益变化 − 当日净资金流（入金/出金不计入盈亏）
+        real_change = (equity - prev_equity - net_flow_today) if prev_equity is not None else 0.0
+        daily_pnl = round(real_change, 2)
         prev_equity = equity
         result.append(EquityPoint(date=date_str, equity=round(equity, 2), daily_pnl=daily_pnl))
 
