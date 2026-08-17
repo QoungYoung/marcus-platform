@@ -681,6 +681,7 @@ function apply(ctx) {
       }),
     ];
 
+const SESSION_TTL_MS = 45 * 60 * 1000;  // 会话空闲 TTL：45 分钟回收（防僵尸 agent）
         const sessions = new Map();
     const locks = new Map();
     const MARCUS_API = process.env.MARCUS_API_URL || 'http://backend:8000/api/v1';
@@ -730,7 +731,19 @@ function apply(ctx) {
     // ── 会话 → Agent 映射（chat / trade / backtest 模式），存 handle（含 dispose）──
     async function getOrCreateAgent(sessionId, mode, modelOverride, thinkingLevelOverride) {
       const key = mode + ':' + sessionId;
-      if (sessions.has(key)) return sessions.get(key).agent;
+      // 会话 TTL（修复僵尸 agent：长期空闲的 agent 底层运行循环可能退出，
+      // followup 不唤醒 → whenIdle 立即返回空 → 盘前扫描收到 (无回复)）
+      const nowTs = Date.now();
+      if (sessions.has(key)) {
+        const h = sessions.get(key);
+        const lastTs = h && h._ts ? h._ts : (h && h.agent && h.agent._lastTs ? h.agent._lastTs : 0);
+        if (lastTs && nowTs - lastTs > SESSION_TTL_MS) {
+          console.warn('[Bridge] 会话超时回收: ' + key + '（空闲 ' + Math.round((nowTs - lastTs) / 60000) + ' 分钟）');
+          try { await h.dispose(); } catch (e) { console.warn('[Bridge] dispose 失败: ' + e.message); }
+          sessions.delete(key);
+        }
+      }
+      if (sessions.has(key)) { sessions.get(key)._ts = Date.now(); return sessions.get(key).agent; }
       const modelId = modelOverride || (mode === 'trade' ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL);
       // conditions 模式（AI 条件生成）用 low thinking：设定双条件是明确的结构化任务，
       // 不需要深度推理——medium 推理 1.5-3min 导致回测 120s 超时回退规则（迭代#55b）
@@ -852,8 +865,8 @@ function apply(ctx) {
           agentOptions: { provider: 'deepseek-official', model: modelId },
           setup: makeSetup(),
         });
-        sessions.set(key, resumed);
-        await resumed.agent.whenIdle();
+      resumed._ts = Date.now();
+      sessions.set(key, resumed);
         console.log('[Bridge] 恢复会话 ' + key.slice(-12));
         return resumed.agent;
       } catch (e) {
@@ -866,8 +879,8 @@ function apply(ctx) {
         meta: { cwd: process.env.MARCUS_WORKSPACE || '/app' },
         setup: makeSetup(),
       });
+      handle._ts = Date.now();
       sessions.set(key, handle);
-      await handle.agent.whenIdle();
       return handle.agent;
     }
 
@@ -893,6 +906,16 @@ function apply(ctx) {
             .join('');
           if (joined !== '') text = joined;
         }
+      }
+      if (!text) {
+        const types = {};
+        let started2 = false;
+        for (const ev of agent.session.events) {
+          if (ev.type === 'turn/start') { started2 = true; continue; }
+          if (!started2) continue;
+          types[ev.type] = (types[ev.type] || 0) + 1;
+        }
+        console.warn('[Bridge] runAgentTurn 空回复，本回合事件分布: ' + JSON.stringify(types));
       }
       return text || '(无回复)';
     }
@@ -949,8 +972,18 @@ function apply(ctx) {
               const lock = new Promise((r) => { release = r; });
               locks.set(lockKey, lock);
               try {
-                const agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
-                const reply = await runAgentTurn(agent, message);
+                let agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
+                let reply = await runAgentTurn(agent, message);
+                if (!reply || reply === '(无回复)') {
+                  // 僵尸/异常会话：销毁重建重试一次（修复盘前扫描收到 (无回复)）
+                  const retryKey = chatMode + ':' + sessionId;
+                  const h = sessions.get(retryKey);
+                  if (h) { try { await h.dispose(); } catch (e) { console.warn('[Bridge] retry dispose 失败: ' + e.message); } sessions.delete(retryKey); }
+                  locks.delete(retryKey);
+                  console.warn('[Bridge] /chat 空回复，销毁重建会话重试: ' + retryKey);
+                  agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
+                  reply = await runAgentTurn(agent, message);
+                }
                 json(res, 200, { reply, session_id: sessionId, mode: chatMode, elapsed_ms: Date.now() - startTime });
               } finally {
                 release();
