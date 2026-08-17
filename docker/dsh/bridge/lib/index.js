@@ -896,6 +896,19 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
 
     // ── 读最终回复：等待停稳后从会话投影取最后 assistant 消息 ──
     async function runAgentTurn(agent, message) {
+      // 修复 resume 后 driver 卡住：cancel 收敛（无活动时 no-op；卡住时 abort 并让
+      // driver 回到 idle，随后 followup 才能正常开启 turn）
+      try {
+        if (agent.cancel) agent.cancel('pre-turn-converge');
+      } catch (e) {
+        console.warn('[Bridge] cancel 收敛失败: ' + (e && e.message ? e.message : e));
+      }
+      try {
+        await agent.whenIdle();
+      } catch (e) {
+        console.warn('[Bridge] 收敛等待失败: ' + (e && e.message ? e.message : e));
+      }
+
       // 清理中断遗留的 pending inbox（dsh 重启/中断后 resume 的会话 turn 不启动：
       // 事件流只有 agent/inbox/spliced + turn/end 而无 turn/start → 空回复 (无回复)）
       // 保留会话历史（长期上下文），仅丢弃未消费的残留输入
