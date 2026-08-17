@@ -264,6 +264,7 @@ def _apply_paper_account_migration():
                 "CREATE TABLE IF NOT EXISTS paper_account_info ("
                 " account_id VARCHAR(16) PRIMARY KEY,"
                 " initial_capital DOUBLE PRECISION NOT NULL,"
+                " seed_initial_capital DOUBLE PRECISION,"
                 " available_cash DOUBLE PRECISION NOT NULL,"
                 " frozen_cash DOUBLE PRECISION NOT NULL DEFAULT 0,"
                 " order_counter INTEGER NOT NULL DEFAULT 0,"
@@ -277,6 +278,13 @@ def _apply_paper_account_migration():
                 "WHERE p.enabled = 1 "
                 "  AND NOT EXISTS (SELECT 1 FROM paper_account_info i WHERE i.account_id = p.account_id)"
             ), {"now": now})
+            # 8) seed_initial_capital：真实历史种子，权益曲线回放用（不被资金调整改动）
+            conn.execute(text(
+                "ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS seed_initial_capital DOUBLE PRECISION"
+            ))
+            conn.execute(text(
+                "UPDATE paper_account_info SET seed_initial_capital = initial_capital WHERE seed_initial_capital IS NULL"
+            ))
             print("[DB] PATCH: paper 多账户迁移完成 (paper_accounts + account_id 维度 + account_info 播种)")
     except Exception as e:
         print(f"[DB] PATCH warn (paper multi-account): {e}")

@@ -15,7 +15,7 @@ from sqlalchemy import func
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models.account import AccountResponse, PositionResponse, PortfolioSummary, EquityPoint, DailyPnlBreakdown, DailyStockPnl, CapitalAdjustRequest
-from app.models.paper_trade import PaperAccountInfo, PaperTrade, PaperDailySnapshot, PaperOrder, PaperCapitalAdjustment
+from app.models.paper_trade import PaperAccountInfo, PaperTrade, PaperDailySnapshot, PaperOrder, PaperCapitalAdjustment, PaperPosition
 
 settings = get_settings()
 
@@ -487,8 +487,7 @@ def save_daily_snapshot(target_date: str = None, account: str = "stock") -> dict
     cost_value = sum(p['avg_price'] * p['volume'] for p in position_list)
     total_asset = available_cash + frozen_cash + position_value
     float_pnl = position_value - cost_value
-    # 总盈亏 = 总资产 − (初始资金 + 累计入金净额)，资金调整不作为盈亏
-    total_pnl = total_asset - initial_cap - capital_adjustments
+    total_pnl = total_asset - initial_cap
 
     # ── Upsert into PostgreSQL ──
     db = SessionLocal()
@@ -698,16 +697,8 @@ def get_portfolio(account: str = Query("stock", description="账户标识")):
         flush=True,
     )
 
-    # 总盈亏 = 总资产 − (初始资金 + 累计入金/出金净额)，资金调整不作为盈亏
-    try:
-        dbx = SessionLocal()
-        cumulative_flows = float(dbx.query(func.coalesce(func.sum(PaperCapitalAdjustment.amount), 0)).filter(
-            PaperCapitalAdjustment.account_id == account).scalar() or 0)
-        dbx.close()
-    except Exception:
-        cumulative_flows = 0.0
-    principal = initial_capital + cumulative_flows
-    total_pnl = total_asset - principal
+    # 总盈亏 = 总资产 − 初始资金（资金调整会把初始资金同步为调整后的总额，故入金/出金不产生盈亏）
+    total_pnl = total_asset - initial_capital
 
     account_response = AccountResponse(
         initial_capital=initial_capital,
@@ -730,8 +721,8 @@ def get_portfolio(account: str = Query("stock", description="账户标识")):
     return PortfolioSummary(
         account=account_response,
         total_return=total_pnl,
-        # 收益率按“本金=初始资金+累计入金净额”计算，资金调整不计入收益
-        total_return_pct=(total_asset / principal - 1) * 100 if principal > 0 else 0,
+        # 收益率按初始资金（资金调整后被同步为调整后总额）计算
+        total_return_pct=(total_asset / initial_capital - 1) * 100 if initial_capital > 0 else 0,
         win_rate=win_rate,
         sector_concentration=sector_concentration,
     )
@@ -874,6 +865,23 @@ async def adjust_capital(req: CapitalAdjustRequest, account: str = Query("stock"
             raise HTTPException(status_code=400, detail=f"可用资金不足，当前可用 ¥{current_cash:,.2f}，无法出金 ¥{abs(req.amount):,.2f}")
 
         acct.available_cash = new_cash
+        # 初始资金同步为“调整后的总资产”（可用+冻结+持仓市值）：
+        # 资金调整后以此为报告本金基线，入金/出金不再产生盈亏
+        pos_rows = db.query(PaperPosition).filter(
+            PaperPosition.account_id == account, PaperPosition.volume > 0).all()
+        syms = [p.symbol for p in pos_rows]
+        try:
+            prices = get_realtime_prices(syms) if syms else {}
+        except Exception:
+            prices = {}
+        pos_mv = 0.0
+        for p in pos_rows:
+            pv = prices.get(p.symbol, {})
+            price = pv.get('price') if isinstance(pv, dict) else pv
+            if not price:
+                price = p.avg_price
+            pos_mv += (p.volume or 0) * (price or p.avg_price or 0)
+        acct.initial_capital = round(new_cash + float(acct.frozen_cash or 0) + pos_mv, 2)
         acct.updated_at = datetime.now().isoformat()
         db.add(PaperCapitalAdjustment(
             account_id=account,
@@ -926,6 +934,9 @@ def get_equity_history(days: int = Query(60, ge=1, le=365),
     try:
         acct = db.query(PaperAccountInfo).filter(PaperAccountInfo.account_id == account).first()
         initial_capital = float(acct.initial_capital) if acct else 1000000.0
+        # 历史回放用的真实种子：资金调整会更新 initial_capital 作为“报告本金基线”，
+        # 但历史权益曲线必须用 seed_initial_capital（真实初始种子）回放，避免被调整后的基线污染。
+        seed_capital = float(acct.seed_initial_capital or 0) if (acct and acct.seed_initial_capital) else initial_capital
 
         all_trades = db.query(PaperTrade).filter(
             PaperTrade.account_id == account,
@@ -971,7 +982,7 @@ def get_equity_history(days: int = Query(60, ge=1, le=365),
     realtime_prices = get_realtime_prices(symbols) if symbols else {}
 
     # ── 逐日重放交易，计算每日权益 ──
-    available_cash = initial_capital
+    available_cash = seed_capital
     positions = {}
     adj_accum = 0.0
 

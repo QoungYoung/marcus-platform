@@ -73,6 +73,7 @@ class PaperAccountInfo(Base):
 
     account_id = Column(String(16), primary_key=True)
     initial_capital = Column(Float, nullable=False)
+    seed_initial_capital = Column(Float, nullable=True)  # 真实历史种子（不被资金调整改动，权益曲线回放用）
     available_cash = Column(Float, nullable=False)
     frozen_cash = Column(Float, nullable=False, default=0)
     order_counter = Column(Integer, nullable=False, default=0)
