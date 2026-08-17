@@ -682,6 +682,7 @@ function apply(ctx) {
     ];
 
 const SESSION_TTL_MS = 45 * 60 * 1000;  // 会话空闲 TTL：45 分钟回收（防僵尸 agent）
+const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上下文：30 天（用户要求保留）
         const sessions = new Map();
     const locks = new Map();
     const MARCUS_API = process.env.MARCUS_API_URL || 'http://backend:8000/api/v1';
@@ -743,7 +744,10 @@ const SESSION_TTL_MS = 45 * 60 * 1000;  // 会话空闲 TTL：45 分钟回收（
       if (sessions.has(key)) {
         const h = sessions.get(key);
         const lastTs = h && h._ts ? h._ts : (h && h.agent && h.agent._lastTs ? h.agent._lastTs : 0);
-        if (lastTs && nowTs - lastTs > SESSION_TTL_MS) {
+        const isReportSession = String(sessionId || '').startsWith('report_');
+        // QQ 对话（chat 模式非 report_）保留长期上下文（用户要求）；report_* 报告会话 45 分钟回收
+        const ttlMs = (mode === 'chat' && !isReportSession) ? SESSION_CHAT_TTL_MS : SESSION_TTL_MS;
+        if (lastTs && nowTs - lastTs > ttlMs) {
           console.warn('[Bridge] 会话超时回收: ' + key + '（空闲 ' + Math.round((nowTs - lastTs) / 60000) + ' 分钟）');
           try { await h.dispose(); } catch (e) { console.warn('[Bridge] dispose 失败: ' + e.message); }
           sessions.delete(key);
