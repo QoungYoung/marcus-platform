@@ -68,7 +68,8 @@ function apply(ctx) {
         async execute(args) {
           const data = await apiFetch('/trades', { method: 'POST', body: JSON.stringify({ symbol: args.symbol, side: args.side, price: args.price, volume: args.volume, reason: args.reason }) });
           const status = data.status === 'executed' ? '✅ 成交' : '❌ 被拒';
-          return { ok: !data.error, text: [status + ' | ' + (args.side === 'buy' ? '买入' : '卖出') + ' ' + args.symbol, '价格: ' + args.price + ' | 数量: ' + args.volume + '股', '金额: ' + (args.price * args.volume).toFixed(2), '订单号: ' + (data.order_id || 'N/A'), '理由: ' + args.reason].join('\n') };
+          const rejectReason = (data.reason || data.message || args.reason || '').toString();
+          return { ok: !data.error, text: [status + ' | ' + (args.side === 'buy' ? '买入' : '卖出') + ' ' + args.symbol, '价格: ' + args.price + ' | 数量: ' + args.volume + '股', '金额: ' + (args.price * args.volume).toFixed(2), '订单号: ' + (data.order_id || 'N/A'), '理由: ' + rejectReason].join('\n') };
         },
       }));
       register(defineTool({

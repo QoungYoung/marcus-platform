@@ -257,7 +257,27 @@ def _apply_paper_account_migration():
                 "SELECT 'golden_pit', '黄金坑 ETF 模拟账户', 'golden_pit_dca', 250000, 1, :now "
                 "WHERE NOT EXISTS (SELECT 1 FROM paper_accounts WHERE account_id = 'golden_pit')"
             ), {"now": now})
-            print("[DB] PATCH: paper 多账户迁移完成 (paper_accounts + account_id 维度)")
+            # 7) paper_account_info 账本表兜底创建 + 从注册表播种：
+            #    消除 VNPyBridge 读取不到账本时落回 10w 默认值、与 calc_position/portfolio
+            #    （读注册表/账本，约 100w+）口径分裂导致的误拒（如 941x100=9.4w 被 40%x10w 拦截）。
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS paper_account_info ("
+                " account_id VARCHAR(16) PRIMARY KEY,"
+                " initial_capital DOUBLE PRECISION NOT NULL,"
+                " available_cash DOUBLE PRECISION NOT NULL,"
+                " frozen_cash DOUBLE PRECISION NOT NULL DEFAULT 0,"
+                " order_counter INTEGER NOT NULL DEFAULT 0,"
+                " updated_at TEXT NOT NULL)"
+            ))
+            conn.execute(text(
+                "INSERT INTO paper_account_info "
+                " (account_id, initial_capital, available_cash, frozen_cash, order_counter, updated_at) "
+                "SELECT p.account_id, p.initial_capital, p.initial_capital, 0, 0, :now "
+                "FROM paper_accounts p "
+                "WHERE p.enabled = 1 "
+                "  AND NOT EXISTS (SELECT 1 FROM paper_account_info i WHERE i.account_id = p.account_id)"
+            ), {"now": now})
+            print("[DB] PATCH: paper 多账户迁移完成 (paper_accounts + account_id 维度 + account_info 播种)")
     except Exception as e:
         print(f"[DB] PATCH warn (paper multi-account): {e}")
 

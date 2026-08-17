@@ -558,7 +558,11 @@ class VNPyBridge:
         return conn
 
     def _load_account_from_pg(self) -> None:
-        """从 PostgreSQL 加载账户现金状态"""
+        """从 PostgreSQL 加载账户现金状态（account_id='stock'）。
+
+        账本（paper_account_info）缺失时回退到注册表（paper_accounts.initial_capital），
+        保证与 calc_position/portfolio 使用同一资金口径，避免执行网关落回 10w 默认值误拒。
+        """
         try:
             conn = self._get_pg_conn()
             cur = conn.cursor()
@@ -567,11 +571,22 @@ class VNPyBridge:
                 "FROM paper_account_info WHERE account_id = 'stock'"
             )
             row = cur.fetchone()
+            if not row:
+                # 口径兜底：注册表为准
+                cur.execute(
+                    "SELECT initial_capital FROM paper_accounts WHERE account_id = 'stock'"
+                )
+                reg = cur.fetchone()
+                conn.close()
+                if reg:
+                    self._initial_capital = float(reg[0])
+                    self._available_cash = float(reg[0])
+                    self._frozen_cash = 0.0
+                return
             conn.close()
-            if row:
-                self._initial_capital = float(row[0])
-                self._available_cash = float(row[1])
-                self._frozen_cash = float(row[2] or 0)
+            self._initial_capital = float(row[0])
+            self._available_cash = float(row[1])
+            self._frozen_cash = float(row[2] or 0)
         except Exception as e:
             logger.warning("[VNPyBridge] 从 PG 加载账户失败: %s", e)
 
@@ -592,7 +607,7 @@ class VNPyBridge:
                 "vt_symbol": vt_symbol,
                 "volume": int(pos["volume"]),
                 "price": float(pos["avg_price"]),
-                "direction": "净",
+                "direction": Direction.NET.value,  # vn.py Direction 枚举值（NET='Net'），中文会导致 load_data 抛 '净' is not a valid Direction
             })
         data_file = data_dir / "paper_account_data.json"
         with open(data_file, "w") as f:
