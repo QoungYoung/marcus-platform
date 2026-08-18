@@ -506,7 +506,11 @@ def day_filter(code: str) -> Tuple[bool, List[str], float]:
 
 
 def _insert_scan_result(symbol: str, name: str, score: float, reasons: List[str], trend: str):
-    """写入 t 建仓扫描结果（source='vrebounce'，仅 t 账户候选）。"""
+    """写入 t 建仓扫描结果（source='vrebounce'，仅 t 账户候选）。
+
+    幂等：先清空当日同 source 的旧候选再插入（扫描结果是当日全量快照），
+    避免同日重复扫描产生重复行（t_build_scan_results 无 (trade_date,symbol,source) 唯一约束）。
+    """
     from sqlalchemy import text
     from app.database import SessionLocal
     today = datetime.now().strftime("%Y-%m-%d")
@@ -514,9 +518,11 @@ def _insert_scan_result(symbol: str, name: str, score: float, reasons: List[str]
         db = SessionLocal()
         try:
             db.execute(text(
+                "DELETE FROM t_build_scan_results WHERE trade_date = :d AND source = 'vrebounce'"
+            ), {"d": today})
+            db.execute(text(
                 "INSERT INTO t_build_scan_results (trade_date, symbol, score, reasons, trend, status, source, created_at) "
-                "VALUES (:d, :sym, :sc, :rs, :tr, 'pending', 'vrebounce', now()) "
-                "ON CONFLICT DO NOTHING"
+                "VALUES (:d, :sym, :sc, :rs, :tr, 'pending', 'vrebounce', now())"
             ), {"d": today, "sym": symbol, "sc": score, "rs": json.dumps(reasons, ensure_ascii=False), "tr": trend})
             db.commit()
         finally:
