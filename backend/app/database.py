@@ -108,6 +108,9 @@ def _apply_schema_patches():
     # ── 2026-08: 做T回测（t_backtest_* 任务/事件/成交/权益/指标） ──
     _apply_t_backtest_migration()
 
+    # ── 2026-08: V反 全市场日线基础数据落库（t_vreb_daily，扫描增量） ──
+    _apply_vreb_daily_migration()
+
     # ── 2026-08: AI 主导做T（t_ai_actions 审计 + t_conditions 发布者/会话） ──
     _apply_ai_led_migration()
 
@@ -528,6 +531,40 @@ def _apply_t_build_migration():
         print("[DB] PATCH: 做T建仓迁移完成 (t_build_events + t_build_params)")
     except Exception as e:
         print(f"[DB] PATCH warn (t build tables): {e}")
+
+
+def _apply_vreb_daily_migration():
+    """V反 全市场日线基础数据落库（幂等）：t_vreb_daily。
+
+    盘后全市场扫描基础数据（近 40 个交易日 OHLCV + 当日市值 + ST 标记）落库，
+    次日扫描只增量拉 1 个交易日，避免每天重复拉 40 天全市场（tushare 调用 80+ 次 -> 2 次）。
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS t_vreb_daily (
+                    ts_code VARCHAR(16) NOT NULL,
+                    trade_date DATE NOT NULL,
+                    open DOUBLE PRECISION,
+                    high DOUBLE PRECISION,
+                    low DOUBLE PRECISION,
+                    close DOUBLE PRECISION,
+                    vol DOUBLE PRECISION,
+                    total_mv DOUBLE PRECISION,
+                    is_st BOOLEAN NOT NULL DEFAULT FALSE,
+                    PRIMARY KEY (ts_code, trade_date)
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_vreb_daily_date ON t_vreb_daily (trade_date)"
+            ))
+        print("[DB] PATCH: V反全市场日线落库表完成 (t_vreb_daily)")
+    except Exception as e:
+        print(f"[DB] PATCH warn (vreb daily): {e}")
 
 
 def _apply_t_backtest_migration():

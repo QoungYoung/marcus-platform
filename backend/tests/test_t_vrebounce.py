@@ -106,6 +106,55 @@ class TestVRebouncePure(unittest.TestCase):
         self.assertGreaterEqual(vb._trading_days_since("2026-08-01"), 0)
 
 
+class TestVRebounceVectorizedScan(unittest.TestCase):
+    """全市场向量化扫描：与 day_filter 同公式 + scan_once 接线（mock DB）。"""
+
+    def _df_from_seq(self, seq):
+        import pandas as pd
+        dates = pd.date_range("2026-01-01", periods=len(seq), freq="D")
+        rows = []
+        for i, b in enumerate(seq):
+            rows.append({"ts_code": "002384.SZ", "trade_date": str(dates[i])[:10],
+                         "open": b["open"], "high": b["high"], "low": b["low"],
+                         "close": b["close"], "vol": b["vol"], "total_mv": 500000.0, "is_st": False})
+        return pd.DataFrame(rows)
+
+    def test_vectorized_matches_day_filter(self):
+        """同一构造数据：向量化结果 == day_filter 单票结果（防两套算法漂移）。"""
+        seq = _vreb_bars()
+        df = self._df_from_seq(seq)
+        cands = vb._vreb_candidates_vectorized(df)
+        self.assertEqual(len(cands), 1)
+        self.assertEqual(cands[0]["symbol"], "SZ002384")
+        # 与 day_filter 对照（同一 bars）
+        with mock.patch.object(vb, "fetch_mcap_yi", return_value=50.0), \
+             mock.patch.object(vb, "fetch_daily_bars", return_value=seq):
+            ok, reasons, score = vb.day_filter("002384")
+        self.assertTrue(ok, reasons)
+        self.assertAlmostEqual(cands[0]["score"], score, delta=0.01)
+
+    def test_vectorized_rejects_overshoot(self):
+        """追高形态（bias20>3%）向量化同样拒绝。"""
+        seq = _overshoot_bars()
+        df = self._df_from_seq(seq)
+        cands = vb._vreb_candidates_vectorized(df)
+        self.assertEqual(len(cands), 0)
+
+    def test_scan_once_writes_candidates(self):
+        """scan_once：mock 数据源后把候选写入 t 候选池（source=vrebounce）。"""
+        seq = _vreb_bars()
+        df = self._df_from_seq(seq)
+        written = []
+        with mock.patch.object(vb, "ensure_market_data", return_value=True), \
+             mock.patch.object(vb, "_load_market_frame", return_value=df), \
+             mock.patch.object(vb, "_insert_scan_result",
+                               side_effect=lambda sym, name, score, reasons, trend: written.append((sym, score))):
+            hits = vb.scan_once()
+        self.assertEqual(hits, ["SZ002384"])
+        self.assertEqual(len(written), 1)
+        self.assertEqual(written[0][0], "SZ002384")
+
+
 class TestVRebounceBuildSizing(unittest.TestCase):
     """vrebounce 独立规模档（monkeypatch 掉 DB 读取）。"""
 

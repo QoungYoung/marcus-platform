@@ -230,6 +230,234 @@ def _kdj_rsi6(seq: List[Dict[str, Any]]) -> Tuple[List[float], List[float]]:
 
 
 # ────────────────────────────────────────────────────────────────
+# 全市场基础数据落库 + 向量化扫描（V反 状态）
+# ────────────────────────────────────────────────────────────────
+def _latest_trade_date(pro) -> Optional[str]:
+    """最近有 daily 数据的交易日（YYYYMMDD），从今天往回最多试探 12 天。"""
+    d = datetime.now()
+    for _ in range(12):
+        ds = d.strftime("%Y%m%d")
+        try:
+            df = pro.daily(trade_date=ds)
+            if df is not None and len(df) > 0:
+                return ds
+        except Exception:
+            pass
+        d -= timedelta(days=1)
+    return None
+
+
+def _trade_dates_between(pro, start: Optional[str], end: str) -> List[str]:
+    """(start, end] 之间的交易日（升序 YYYYMMDD），试探法。start=None 时返回空。"""
+    if not start:
+        return []
+    out = []
+    d = datetime.strptime(end, "%Y%m%d")
+    guard = 0
+    while d.strftime("%Y%m%d") > start and guard < 20:
+        ds = d.strftime("%Y%m%d")
+        if ds > start:
+            try:
+                df = pro.daily(trade_date=ds)
+                if df is not None and len(df) > 0:
+                    out.append(ds)
+            except Exception:
+                pass
+        d -= timedelta(days=1)
+        guard += 1
+    return out[::-1]
+
+
+def _recent_trade_dates(pro, n: int, end: str) -> List[str]:
+    """end 往前 n 个交易日（升序 YYYYMMDD），试探法。"""
+    out = []
+    d = datetime.strptime(end, "%Y%m%d")
+    guard = 0
+    while len(out) < n and guard < 60:
+        ds = d.strftime("%Y%m%d")
+        try:
+            df = pro.daily(trade_date=ds)
+            if df is not None and len(df) > 0:
+                out.append(ds)
+        except Exception:
+            pass
+        d -= timedelta(days=1)
+        guard += 1
+    return out[::-1]
+
+
+def _st_codes(pro) -> set:
+    """当前 ST/*ST 名单（全市场一次调用）。"""
+    try:
+        df = pro.stock_basic(list_status="L", fields="ts_code,name")
+        if df is None or df.empty:
+            return set()
+        return set(df.loc[df["name"].astype(str).str.contains("ST", na=False), "ts_code"])
+    except Exception as e:
+        logger.warning("[t-vrebounce] ST 名单获取失败: %s", str(e)[:80])
+        return set()
+
+
+def _upsert_market(df) -> None:
+    """批量 upsert 全市场日线基础数据到 t_vreb_daily（分批 8000 行）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    rows = []
+    for _, r in df.iterrows():
+        rows.append({
+            "ts": str(r["ts_code"]), "d": str(r["trade_date"])[:10],
+            "o": float(r["open"] or 0), "h": float(r["high"] or 0), "l": float(r["low"] or 0),
+            "c": float(r["close"] or 0), "v": float(r["vol"] or 0),
+            "mv": float(r["total_mv"] or 0), "st": bool(r["is_st"]),
+        })
+    stmt = text(
+        "INSERT INTO t_vreb_daily (ts_code, trade_date, open, high, low, close, vol, total_mv, is_st) "
+        "VALUES (:ts, :d, :o, :h, :l, :c, :v, :mv, :st) "
+        "ON CONFLICT (ts_code, trade_date) DO UPDATE SET "
+        "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close, "
+        "vol=EXCLUDED.vol, total_mv=EXCLUDED.total_mv, is_st=EXCLUDED.is_st"
+    )
+    db = SessionLocal()
+    try:
+        for i in range(0, len(rows), 8000):
+            db.execute(stmt, rows[i:i + 8000])
+        db.commit()
+    finally:
+        db.close()
+
+
+def ensure_market_data(lookback_days: int = 40) -> bool:
+    """全市场日线基础数据增量落库：首次拉近 lookback_days 个交易日，之后只拉新增交易日。
+
+    返回 True 表示数据已是最新（含本次更新成功）。
+    """
+    import pandas as pd
+    pro = _get_pro()
+    latest = _latest_trade_date(pro)
+    if latest is None:
+        logger.warning("[t-vrebounce] 无法确定最近交易日")
+        return False
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        max_d = db.execute(text("SELECT max(trade_date) FROM t_vreb_daily")).scalar()
+        max_d = str(max_d)[:10].replace("-", "") if max_d is not None else None
+    finally:
+        db.close()
+    if max_d and max_d >= latest:
+        return True  # 已最新，无需拉取
+    need = _trade_dates_between(pro, max_d, latest) if max_d else _recent_trade_dates(pro, lookback_days, latest)
+    if not need:
+        return True
+    st_codes = _st_codes(pro)
+    frames = []
+    for ds in need:
+        try:
+            df = pro.daily(trade_date=ds)
+            if df is None or df.empty:
+                continue
+            db2 = pro.daily_basic(trade_date=ds, fields="ts_code,total_mv")
+            mv = db2.set_index("ts_code")["total_mv"] if db2 is not None and len(db2) else pd.Series(dtype=float)
+            sub = df[["ts_code", "trade_date", "open", "high", "low", "close", "vol"]].copy()
+            sub["total_mv"] = sub["ts_code"].map(mv)
+            sub["is_st"] = sub["ts_code"].isin(st_codes)
+            frames.append(sub)
+            time.sleep(0.3)
+        except Exception as e:
+            logger.warning("[t-vrebounce] 基础数据拉取失败 %s: %s", ds, str(e)[:100])
+    if not frames:
+        return False
+    allf = pd.concat(frames, ignore_index=True)
+    _upsert_market(allf)
+    logger.info("[t-vrebounce] 基础数据落库 %d 行（%s..%s）", len(allf), need[0], need[-1])
+    return True
+
+
+def _load_market_frame() -> Optional[Any]:
+    """读 t_vreb_daily 最近 45 个自然日（约 30+ 交易日）全市场数据。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    import pandas as pd
+    db = SessionLocal()
+    try:
+        rows = db.execute(text(
+            "SELECT ts_code, trade_date, open, high, low, close, vol, total_mv, is_st "
+            "FROM t_vreb_daily WHERE trade_date >= (SELECT max(trade_date) - INTERVAL '45 days' FROM t_vreb_daily)"
+        )).mappings().all()
+    finally:
+        db.close()
+    if not rows:
+        return None
+    df = pd.DataFrame([dict(r) for r in rows])
+    df["trade_date"] = df["trade_date"].astype(str).str[:10]
+    return df
+
+
+def _vreb_candidates_vectorized(df) -> List[Dict[str, Any]]:
+    """全市场向量化 V反 筛选（最新交易日，与 day_filter 同公式）：
+    MA20 仍下行 & 15日反弹≥25% & (J≥90 或 RSI6≥65) & bias20≤3% & 非ST & <100亿。
+    返回 [{symbol, score, reasons, trend}]。
+    """
+    latest = df["trade_date"].max()
+    out = []
+    for code, g in df.groupby("ts_code"):
+        g = g.sort_values("trade_date")
+        n = len(g)
+        if n < 30:
+            continue
+        if str(g["trade_date"].iloc[-1])[:10] != str(latest)[:10]:
+            continue
+        close = g["close"].values
+        low = g["low"].values
+        high = g["high"].values
+        t = n - 1
+        if t < 24:
+            continue
+        ma20 = close[t - 19:t + 1].mean()
+        ma20_prev5 = close[t - 24:t - 4].mean()
+        md = ma20 < ma20_prev5
+        lo15 = low[t - 14:t + 1].min()
+        rb = (close[t] / lo15 - 1) if lo15 > 0 else 0.0
+        K = 50.0
+        D = 50.0
+        for i in range(max(0, t - 25), t + 1):
+            lo9 = low[max(0, i - 8):i + 1].min()
+            hi9 = high[max(0, i - 8):i + 1].max()
+            rsv = 0.0 if hi9 == lo9 else (close[i] - lo9) / (hi9 - lo9) * 100
+            K = 2 / 3 * K + 1 / 3 * rsv
+            D = 2 / 3 * D + 1 / 3 * K
+        J = 3 * K - 2 * D
+        ups = dns = 0.0
+        for i in range(t - 5, t + 1):
+            dl = close[i] - close[i - 1]
+            if dl > 0:
+                ups += dl
+            else:
+                dns -= dl
+        r6 = 100 * ups / (ups + dns) if ups + dns > 0 else 50.0
+        ov = (J >= J_OVER) or (r6 >= RSI_OVER)
+        b20 = (close[t] / ma20 - 1) if ma20 > 0 else 99.0
+        if not (md and rb >= REB_MIN and ov and b20 <= BIAS20_MAX):
+            continue
+        if bool(g["is_st"].iloc[t]):
+            continue
+        mv = float(g["total_mv"].iloc[t] or 0)
+        if mv > 0 and mv / 10000.0 >= MCAP_MAX_YI:
+            continue
+        score = 0.5 + (0.2 if ov else 0) + (0.15 if rb >= REB_MIN + 0.05 else 0) + \
+                (0.15 if md else 0) + (0.1 if b20 <= BIAS20_MAX * 0.5 else 0)
+        out.append({
+            "symbol": _normalize(code.split(".")[0]),
+            "score": round(score, 3),
+            "reasons": [],
+            "trend": "vrebounce MA20下行+15日反弹≥%.0f%%+超买" % (REB_MIN * 100),
+        })
+    out.sort(key=lambda x: -x["score"])
+    return out
+
+
+# ────────────────────────────────────────────────────────────────
 # 日频选股入池（V反 状态）
 # ────────────────────────────────────────────────────────────────
 def day_filter(code: str) -> Tuple[bool, List[str], float]:
@@ -298,27 +526,28 @@ def _insert_scan_result(symbol: str, name: str, score: float, reasons: List[str]
 
 
 def scan_once() -> List[str]:
-    """单轮日频扫描：5日涨幅榜 TOP-N -> day_filter -> 入池（只写 t 账户候选）。"""
-    universe = fetch_top_gain(SCAN_MAX_DAILY)
-    if not universe:
-        logger.warning("[t-vrebounce] 涨幅榜为空，跳过本轮扫描（可能数据源异常）")
+    """盘后全市场扫描：基础日线增量落库 -> 向量化 V反 筛选 -> 写 t 候选池。
+
+    不依赖涨幅榜（涨幅榜 TOP 是已暴涨妖股，与 V反 形态错配且漏票）；
+    全市场扫描与回测口径一致，tushare 调用每日仅 1~3 次（增量）。
+    """
+    try:
+        ensure_market_data()
+    except Exception as e:
+        logger.warning("[t-vrebounce] 基础数据更新失败: %s", str(e)[:150])
         return []
+    df = _load_market_frame()
+    if df is None or df.empty:
+        logger.warning("[t-vrebounce] 基础数据为空，跳过扫描")
+        return []
+    cands = _vreb_candidates_vectorized(df)
     hits = []
-    for item in universe:
-        code = item["code"]
-        sym = _normalize(code)
-        try:
-            ok, reasons, score = day_filter(code)
-        except Exception as e:
-            logger.warning("[t-vrebounce] 过滤异常 %s: %s", sym, str(e)[:80])
-            continue
-        if ok:
-            _insert_scan_result(sym, item["name"] or sym, score, reasons,
-                                "vrebounce MA20下行+15日反弹≥%.0f%%+超买" % (REB_MIN * 100))
-            hits.append(sym)
-            logger.info("[t-vrebounce] ✅ %s %s 入 t 候选池（vrebounce）", sym, item.get("name"))
-        time.sleep(SCAN_INTERVAL_S)
-    logger.info("[t-vrebounce] 本轮扫描 %d 只，入池 %d 只", len(universe), len(hits))
+    for c in cands:
+        sym = c["symbol"]
+        _insert_scan_result(sym, sym, c["score"], c["reasons"], c["trend"])
+        hits.append(sym)
+        logger.info("[t-vrebounce] ✅ %s 入 t 候选池（vrebounce, score=%.2f）", sym, c["score"])
+    logger.info("[t-vrebounce] 全市场扫描 %d 只，入池 %d 只", int(df["ts_code"].nunique()), len(hits))
     return hits
 
 
