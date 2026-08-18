@@ -144,6 +144,7 @@ const TRIGGER_KIND_LABEL: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   pending: '待处理', claimed: '已认领', auto_ready: '待执行',
   human_confirm: '待人工', executed: '已执行', blocked: '已拦截', cancelled: '已取消',
+  expired: '已过期',
 };
 
 interface VrebStatus {

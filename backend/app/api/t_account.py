@@ -508,17 +508,25 @@ def t_vrebounce_exit():
 
 @router.get("/vrebounce/candidates")
 def t_vrebounce_candidates(limit: int = 20, days: int = 7):
-    """V反 日频候选列表（t_build_scan_results source='vrebounce'，仅 t 账户）。"""
+    """V反 候选列表：默认只返回最新一个交易日（trade_date=max）的 pending 候选；
+    传 days=0 时返回近 N 天全部（含历史状态，去重按最新）。仅 t 账户。"""
     from sqlalchemy import text
     from app.database import SessionLocal
     db = SessionLocal()
     try:
-        rows = db.execute(text(
-            "SELECT symbol, score, reasons, trend, status, built_at, created_at "
-            "FROM t_build_scan_results WHERE source = 'vrebounce' "
-            "AND created_at >= now() - make_interval(days => :d) "
-            "ORDER BY created_at DESC LIMIT :lim"
-        ), {"d": days, "lim": limit}).mappings().all()
+        if days <= 0:
+            rows = db.execute(text(
+                "SELECT DISTINCT ON (symbol) symbol, score, reasons, trend, status, built_at, trade_date, created_at "
+                "FROM t_build_scan_results WHERE source = 'vrebounce' "
+                "ORDER BY symbol, created_at DESC LIMIT :lim"
+            ), {"lim": limit}).mappings().all()
+        else:
+            rows = db.execute(text(
+                "SELECT symbol, score, reasons, trend, status, built_at, trade_date, created_at "
+                "FROM t_build_scan_results WHERE source = 'vrebounce' "
+                "AND trade_date = (SELECT max(trade_date) FROM t_build_scan_results WHERE source = 'vrebounce') "
+                "AND status = 'pending' ORDER BY score DESC LIMIT :lim"
+            ), {"lim": limit}).mappings().all()
         return {"candidates": [dict(r) for r in rows], "count": len(rows)}
     finally:
         db.close()

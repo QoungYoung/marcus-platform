@@ -542,6 +542,21 @@ def scan_once() -> List[str]:
     except Exception as e:
         logger.warning("[t-vrebounce] 基础数据更新失败: %s", str(e)[:150])
         return []
+    # 过期候选归档：早于今天的 pending 永远不会被盘中建仓（只处理当日），标为 expired
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "UPDATE t_build_scan_results SET status = 'expired' "
+                "WHERE source = 'vrebounce' AND status = 'pending' AND trade_date < :d"
+            ), {"d": datetime.now().strftime("%Y-%m-%d")})
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[t-vrebounce] 过期候选归档失败: %s", str(e)[:100])
     df = _load_market_frame()
     if df is None or df.empty:
         logger.warning("[t-vrebounce] 基础数据为空，跳过扫描")
