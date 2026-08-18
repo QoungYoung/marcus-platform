@@ -474,3 +474,33 @@ def t_trend_break_exit():
     """手动触发短线出场检查（+5%/+8%/-5%/5日，只卖 t 账户）。"""
     from app.services import t_trend_break
     return {"results": t_trend_break.check_exits()}
+
+
+# ── V反 短线（t-vrebounce-short-term，只作用于 t 账户）──
+@router.get("/vrebounce/status")
+def t_vrebounce_status():
+    """做T账户·V反短线监控状态（只作用于 t 账户）。"""
+    from app.services import t_vrebounce
+    return t_vrebounce.get_status()
+
+
+@router.post("/vrebounce/scan")
+def t_vrebounce_scan():
+    """手动触发一轮 V反 日频扫描（只写 t 账户候选）。"""
+    from app.services import t_vrebounce
+    hits = t_vrebounce.scan_once()
+    return {"hits": hits, "count": len(hits)}
+
+
+@router.post("/vrebounce/build")
+def t_vrebounce_build():
+    """手动触发盘中实时复核 + V反 建仓（只动 t 账户资金）。"""
+    from app.services import t_vrebounce
+    return {"results": t_vrebounce.try_build_candidates()}
+
+
+@router.post("/vrebounce/exit-check")
+def t_vrebounce_exit():
+    """手动触发 V反 短线出场检查（+8%/-5%/12交易日，只卖 t 账户）。"""
+    from app.services import t_vrebounce
+    return {"results": t_vrebounce.check_exits()}

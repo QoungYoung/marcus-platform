@@ -1,0 +1,556 @@
+# -*- coding: utf-8 -*-
+"""做T账户·V反短线（t-vrebounce-short-term）。
+
+基于回测验证的 V反 状态（2009-2026 全样本、次日开盘进场、TP8/SL5/超时12日、
+<100亿 市值分桶 PF1.45-1.50、2025+ 样本外 PF1.20-1.43；对比趋势突破同口径 PF~1.05）：
+
+  日频入池：MA20 仍下行（ma20 < 5 日前 ma20）
+            & 15 日低点反弹 ≥25%（close[t]/min(low[t-14..t]) - 1 ≥ 0.25）
+            & 末端超买（KDJ J ≥ 90 或 RSI6 ≥ 65）
+            & 触发日收盘偏离 MA20 ≤ 3%（bias20，防追高——stk_factor_pro 因子分析：
+              失败单共性为反弹过猛/偏离均线过远，全样本 2009-2026 加该过滤 PF 1.38→2.14）
+            & 总市值 < 100 亿
+  -> 盘中实时复核（东财实时价 > 0，可选主力净流入 > 0，默认关）
+  -> build_t_position(build_mode='vrebounce')（只动 t 账户）
+  -> 短线出场（+8% 清仓 / -5% 硬止损 / 持有 12 交易日超时平仓；
+     刻意不做 +5% 减半——回测证明过早兑现盈利拉低 PF，
+     且旧实现按每次扫描反复减半，属缺陷）。
+
+账户隔离：扫描结果只写 t_build_scan_results(source='vrebounce')，
+建仓走 build_t_position（内部固定 account_id='t'），平仓走 gateway_execute(account_id='t')；
+不触碰 stock/golden_pit 资金、持仓或候选池；t 资金不足即跳过，不跨账户划转。
+
+默认关闭灰度：T_VREB_ENABLED=1 才在 worker 注册运行。
+"""
+import os
+import time
+import json
+import math
+import threading
+import logging
+from datetime import datetime, date, timedelta
+from typing import Optional, Dict, Any, List, Tuple
+
+logger = logging.getLogger(__name__)
+
+ENABLED = os.getenv("T_VREB_ENABLED", "0") == "1"
+SCAN_MAX_DAILY = int(os.getenv("VREB_SCAN_DAILY_MAX", "50"))
+SCAN_INTERVAL_S = float(os.getenv("VREB_SCAN_INTERVAL_S", "1"))
+MCAP_MAX_YI = float(os.getenv("VREB_MCAP_MAX_YI", "100"))
+REB_MIN = float(os.getenv("VREB_REB_MIN", "0.25"))       # 15日低点反弹 ≥25%
+REB_DAYS = int(os.getenv("VREB_REB_DAYS", "15"))         # 反弹观察窗口（交易日）
+BIAS20_MAX = float(os.getenv("VREB_BIAS20_MAX", "0.03"))  # 触发日收盘距 MA20 偏离上限（防追高）
+J_OVER = float(os.getenv("VREB_J_OVER", "90"))           # KDJ J 超买阈值
+RSI_OVER = float(os.getenv("VREB_RSI_OVER", "65"))       # RSI6 超买阈值
+TP8 = float(os.getenv("VREB_TP8", "0.08"))
+SL5 = float(os.getenv("VREB_SL5", "0.05"))
+HOLD_DAYS = int(os.getenv("VREB_HOLD_DAYS", "12"))       # 持有 N 交易日超时平仓
+REALTIME_CONFIRM = os.getenv("VREB_REALTIME_CONFIRM", "0") == "1"  # 默认只验价（回测无资金流条件）
+MONITOR_INTERVAL_S = float(os.getenv("VREB_MONITOR_INTERVAL_S", "60"))
+
+_instance = None
+
+# A 股篮子（东财 clist fs）
+_EM_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81"
+
+
+# ────────────────────────────────────────────────────────────────
+# 账户隔离常量
+# ────────────────────────────────────────────────────────────────
+def _account_id() -> str:
+    """V反短线固定只服务做T账户。"""
+    return "t"
+
+
+# ────────────────────────────────────────────────────────────────
+# 数据获取（可测试注入）
+# ────────────────────────────────────────────────────────────────
+def _normalize(code: str) -> str:
+    code = (code or "").strip().upper()
+    if code.startswith(("SH", "SZ", "BJ")):
+        return code
+    if code and code[0] == "6":
+        return "SH" + code
+    if code and code[0] in ("0", "3"):
+        return "SZ" + code
+    return "BJ" + code
+
+
+def _ts_code(code: str) -> str:
+    c = code
+    if code.startswith(("SH", "SZ", "BJ")):
+        c = code[2:]
+    return f"{c}.{'SH' if c and c[0]=='6' else 'SZ'}"
+
+
+def fetch_top_gain(top_n: int = SCAN_MAX_DAILY) -> list:
+    """东财 push2 clist：按 5 日涨幅(f109)降序取 A 股 TOP-N（V反 候选需近期强势反弹）。
+    f109 不可用时回退今日涨幅榜(f3)。"""
+    from core.utils.em_sector_flow import _http_get, _parse_response, EM_PUSH2_URL
+    for fid, fields in (("f109", "f12,f14,f2,f109"), ("f3", "f12,f14,f2,f3")):
+        params = {
+            "fid": fid, "po": "1", "pz": str(min(top_n, 200)), "pn": "1",
+            "np": "1", "fltt": "2", "invt": "2",
+            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
+            "fs": _EM_FS, "fields": fields,
+        }
+        url = EM_PUSH2_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+        try:
+            raw = _http_get(url, timeout=12, referer="https://data.eastmoney.com/zjlx/dpzjlx.html")
+        except Exception as e:
+            logger.warning("[t-vrebounce] 涨幅榜获取失败: %s", e)
+            raw = None
+        if not raw:
+            continue
+        data = _parse_response(raw)
+        dd = data.get("data", {}) if isinstance(data, dict) else {}
+        rows = dd.get("diff") if isinstance(dd, dict) else None
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+        if not rows:
+            continue
+        out = []
+        for r in (rows or []):
+            code = str(r.get("f12") or "").strip()
+            if not code:
+                continue
+            try:
+                gain5 = float(r.get("f109") or 0)
+                price = float(r.get("f2") or 0)
+            except (TypeError, ValueError):
+                gain5, price = 0.0, 0.0
+            out.append({"code": code, "name": str(r.get("f14") or ""),
+                        "price": price, "gain5": gain5})
+        if out:
+            return out
+    return []
+
+
+def _get_pro():
+    from app.core.trading._api_config import get_tushare_pro
+    return get_tushare_pro()
+
+
+def fetch_daily_bars(ts_code: str, start_date: str = "20250101", end_date: str = "") -> list:
+    """日线 qfq（Tushare pro_bar）。异常返回 []。"""
+    if not end_date:
+        end_date = datetime.now().strftime("%Y%m%d")
+    try:
+        pro = _get_pro()
+        df = pro.pro_bar(api=pro, ts_code=ts_code, adj="qfq", asset="E", freq="D",
+                         start_date=start_date, end_date=end_date)
+    except Exception as e:
+        logger.warning("[t-vrebounce] 日线获取失败 %s: %s", ts_code, str(e)[:80])
+        return []
+    if df is None or df.empty:
+        return []
+    df = df.sort_values("trade_date")
+    return [
+        {"date": str(r["trade_date"]), "open": float(r["open"]), "high": float(r["high"]),
+         "low": float(r["low"]), "close": float(r["close"]), "vol": float(r["vol"])}
+        for _, r in df.iterrows()
+    ]
+
+
+def fetch_mcap_yi(ts_code: str) -> Optional[float]:
+    """最新总市值（亿元）；异常返回 None。"""
+    try:
+        pro = _get_pro()
+        df = pro.daily_basic(ts_code=ts_code, fields="ts_code,trade_date,total_mv")
+    except Exception as e:
+        logger.warning("[t-vrebounce] 市值获取失败 %s: %s", ts_code, str(e)[:60])
+        return None
+    if df is None or df.empty:
+        return None
+    row = df.sort_values("trade_date").iloc[-1]
+    mv = float(row.get("total_mv") or 0)  # 万元
+    return mv / 10000.0 if mv > 0 else None
+
+
+def fetch_realtime(code: str) -> Optional[Dict[str, Any]]:
+    """盘中实时复核：东财 stock/get f2(价格) f62(主力净额) f10(量比)。失败返回 None。"""
+    try:
+        from core.utils.em_sector_flow import _http_get, _parse_response
+        c = code[-6:]
+        secid = ("1." if c[0] == "6" else "0.") + c
+        url = ("https://push2.eastmoney.com/api/qt/stock/get?secid=" + secid +
+               "&fields=f2,f10,f62&ut=8dec03ba335b81bf4ebdf7b29ec27d15")
+        raw = _http_get(url, timeout=8, referer="https://quote.eastmoney.com/")
+        if not raw:
+            return None
+        data = _parse_response(raw)
+        d = data.get("data", {}) if isinstance(data, dict) else {}
+        if not isinstance(d, dict):
+            return None
+        price = float(d.get("f2") or 0)
+        main_net = float(d.get("f62") or 0)
+        vol_ratio = float(d.get("f10") or 0)
+        return {"price": price, "main_net": main_net, "vol_ratio": vol_ratio}
+    except Exception as e:
+        logger.warning("[t-vrebounce] 实时复核失败 %s: %s", code, str(e)[:60])
+        return None
+
+
+# ────────────────────────────────────────────────────────────────
+# 指标（与回测同源：KDJ(9) J 值 / RSI6 / MA20）
+# ────────────────────────────────────────────────────────────────
+def _kdj_rsi6(seq: List[Dict[str, Any]]) -> Tuple[List[float], List[float]]:
+    """返回 (J 序列, RSI6 序列)。与 scripts 回测实现一致（K/D 初值 50、RSI 简单均值）。"""
+    n = len(seq)
+    J = [50.0] * n
+    r6 = [None] * n
+    K = 50.0
+    D = 50.0
+    lows = [x["low"] for x in seq]
+    highs = [x["high"] for x in seq]
+    closes = [x["close"] for x in seq]
+    for i in range(n):
+        lo = min(lows[max(0, i - 8):i + 1])
+        hi = max(highs[max(0, i - 8):i + 1])
+        rsv = 0.0 if hi == lo else (closes[i] - lo) / (hi - lo) * 100
+        K = 2 / 3 * K + 1 / 3 * rsv
+        D = 2 / 3 * D + 1 / 3 * K
+        J[i] = 3 * K - 2 * D
+        if i >= 6:
+            ups = dns = 0.0
+            for k in range(i - 5, i + 1):
+                dl = closes[k] - closes[k - 1]
+                if dl > 0:
+                    ups += dl
+                else:
+                    dns -= dl
+            r6[i] = 100 * ups / (ups + dns) if (ups + dns) > 0 else 50.0
+    return J, r6
+
+
+# ────────────────────────────────────────────────────────────────
+# 日频选股入池（V反 状态）
+# ────────────────────────────────────────────────────────────────
+def day_filter(code: str) -> Tuple[bool, List[str], float]:
+    """日频 V反 条件（账户无关纯函数，便于测试）：
+    mcap<100亿 & MA20 仍下行 & 15日低点反弹≥25% & (J≥90 或 RSI6≥65)。
+    """
+    reasons: List[str] = []
+    ts = _ts_code(code)
+    bars = fetch_daily_bars(ts)
+    if len(bars) < REB_DAYS + 25:
+        reasons.append("日线数据不足")
+        return False, reasons, 0.0
+    closes = [b["close"] for b in bars]
+    highs = [b["high"] for b in bars]
+    lows = [b["low"] for b in bars]
+    n = len(closes)
+    ma20 = sum(closes[-20:]) / 20.0
+    ma20_prev5 = sum(closes[-25:-5]) / 20.0
+    lo15 = min(lows[-REB_DAYS:])
+    rb = (closes[-1] / lo15 - 1) if lo15 > 0 else 0.0
+    bias20 = (closes[-1] / ma20 - 1) if ma20 > 0 else 0.0
+    J, r6 = _kdj_rsi6(bars)
+    ov = (J[-1] >= J_OVER) or (r6[-1] is not None and r6[-1] >= RSI_OVER)
+    ok = True
+    if bias20 > BIAS20_MAX:
+        ok = False
+        reasons.append("反弹过猛偏离MA20 %.1f%%（上限%.0f%%，防追高）" % (bias20 * 100, BIAS20_MAX * 100))
+    if ma20 >= ma20_prev5:
+        ok = False
+        reasons.append("MA20 未仍下行")
+    if rb < REB_MIN:
+        ok = False
+        reasons.append("15日低点反弹<%.0f%%（实际%.1f%%）" % (REB_MIN * 100, rb * 100))
+    if not ov:
+        ok = False
+        reasons.append("末端未超买（J=%.0f, RSI6=%s）" % (J[-1], "NA" if r6[-1] is None else "%.0f" % r6[-1]))
+    mcap = fetch_mcap_yi(ts)
+    if mcap is not None and mcap >= MCAP_MAX_YI:
+        ok = False
+        reasons.append("市值>=%.0f亿" % MCAP_MAX_YI)
+    elif mcap is None:
+        reasons.append("市值数据缺失(放行)")
+    score = 0.5 + (0.2 if ov else 0) + (0.15 if rb >= REB_MIN + 0.05 else 0) + \
+            (0.15 if ma20 < ma20_prev5 else 0) + (0.1 if bias20 <= BIAS20_MAX * 0.5 else 0)
+    return ok, reasons, round(score, 3)
+
+
+def _insert_scan_result(symbol: str, name: str, score: float, reasons: List[str], trend: str):
+    """写入 t 建仓扫描结果（source='vrebounce'，仅 t 账户候选）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "INSERT INTO t_build_scan_results (trade_date, symbol, score, reasons, trend, status, source, created_at) "
+                "VALUES (:d, :sym, :sc, :rs, :tr, 'pending', 'vrebounce', now()) "
+                "ON CONFLICT DO NOTHING"
+            ), {"d": today, "sym": symbol, "sc": score, "rs": json.dumps(reasons, ensure_ascii=False), "tr": trend})
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[t-vrebounce] 扫描结果写入失败 %s: %s", symbol, str(e)[:100])
+
+
+def scan_once() -> List[str]:
+    """单轮日频扫描：5日涨幅榜 TOP-N -> day_filter -> 入池（只写 t 账户候选）。"""
+    universe = fetch_top_gain(SCAN_MAX_DAILY)
+    if not universe:
+        logger.warning("[t-vrebounce] 涨幅榜为空，跳过本轮扫描（可能数据源异常）")
+        return []
+    hits = []
+    for item in universe:
+        code = item["code"]
+        sym = _normalize(code)
+        try:
+            ok, reasons, score = day_filter(code)
+        except Exception as e:
+            logger.warning("[t-vrebounce] 过滤异常 %s: %s", sym, str(e)[:80])
+            continue
+        if ok:
+            _insert_scan_result(sym, item["name"] or sym, score, reasons,
+                                "vrebounce MA20下行+15日反弹≥%.0f%%+超买" % (REB_MIN * 100))
+            hits.append(sym)
+            logger.info("[t-vrebounce] ✅ %s %s 入 t 候选池（vrebounce）", sym, item.get("name"))
+        time.sleep(SCAN_INTERVAL_S)
+    logger.info("[t-vrebounce] 本轮扫描 %d 只，入池 %d 只", len(universe), len(hits))
+    return hits
+
+
+# ────────────────────────────────────────────────────────────────
+# 建仓（vrebounce 模式，只动 t 账户）
+# ────────────────────────────────────────────────────────────────
+def _pending_candidates() -> List[Dict[str, Any]]:
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        db = SessionLocal()
+        try:
+            rows = db.execute(text(
+                "SELECT id, symbol, score FROM t_build_scan_results "
+                "WHERE trade_date = :d AND source = 'vrebounce' AND status = 'pending' "
+                "ORDER BY score DESC LIMIT 10"
+            ), {"d": today}).mappings().all()
+            return [dict(r) for r in rows]
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[t-vrebounce] 候选读取失败: %s", str(e)[:100])
+        return []
+
+
+def _mark_candidate(symbol: str, status: str, note: str = ""):
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "UPDATE t_build_scan_results SET status = :st, built_at = now(), trend = :note "
+                "WHERE trade_date = :d AND symbol = :sym AND source = 'vrebounce'"
+            ), {"st": status, "note": (note or "")[:240], "d": today, "sym": symbol})
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[t-vrebounce] 候选状态更新失败 %s: %s", symbol, str(e)[:80])
+
+
+def try_build_candidates() -> List[Dict[str, Any]]:
+    """盘中实时复核候选并建仓（只经 t 建仓网关，account_id='t'）。"""
+    from app.services.t_build import build_t_position
+    results = []
+    for cand in _pending_candidates():
+        sym = cand["symbol"]
+        rt = fetch_realtime(sym)
+        if REALTIME_CONFIRM:
+            if rt is None or rt.get("main_net", 0) <= 0:
+                _mark_candidate(sym, "pending", note="实时复核未通过/数据不可用，等待降级")
+                results.append({"symbol": sym, "status": "wait_realtime"})
+                continue
+        price = (rt or {}).get("price") or 0
+        if price <= 0:
+            results.append({"symbol": sym, "status": "no_price"})
+            continue
+        try:
+            out = build_t_position(sym, price, reason="V反短线建仓（vrebounce）",
+                                   decision_source="ai_led", build_mode="vrebounce")
+            status = out.get("status")
+            _mark_candidate(sym, "executed" if status == "success" else "blocked",
+                            note=str(out.get("reason") or "")[:200])
+            results.append({"symbol": sym, "status": status, "reason": out.get("reason")})
+        except Exception as e:
+            logger.warning("[t-vrebounce] 建仓异常 %s: %s", sym, str(e)[:120])
+            results.append({"symbol": sym, "status": "error", "reason": str(e)[:120]})
+        time.sleep(SCAN_INTERVAL_S)
+    return results
+
+
+# ────────────────────────────────────────────────────────────────
+# 短线出场（+8% 清 / -5% 硬止损 / 12交易日超时；无 +5% 减半）
+# ────────────────────────────────────────────────────────────────
+def _vrebounce_positions() -> List[Dict[str, Any]]:
+    """t 账户中由 vrebounce 建仓的持仓（含成本与建仓日期）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            events = db.execute(text(
+                "SELECT symbol, executed_price, created_at FROM t_build_events "
+                "WHERE account_id = 't' AND event_type = 'build_position' AND status = 'executed' "
+                "AND reason LIKE '%vrebounce%' "
+                "ORDER BY created_at DESC"
+            )).mappings().all()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[t-vrebounce] 建仓事件读取失败: %s", str(e)[:100])
+        return []
+    from app.services.t_gateway import get_sellable_ledger
+    ledger = get_sellable_ledger()
+    out = []
+    for ev in events:
+        sym = ev["symbol"]
+        item = ledger.get(sym)
+        if not item or item.get("sellable", 0) <= 0:
+            continue
+        out.append({
+            "symbol": sym,
+            "volume": int(item["sellable"]),
+            "avg_price": float(ev["executed_price"] or 0),
+            "built_at": str(ev["created_at"])[:10],
+        })
+    return out
+
+
+def _trading_days_since(built_date: str) -> int:
+    """粗略交易日数（周末跳过）。"""
+    try:
+        d0 = date.fromisoformat(built_date)
+    except Exception:
+        return 0
+    cnt = 0
+    cur = d0
+    while cur < date.today():
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            cnt += 1
+    return cnt
+
+
+def check_exits() -> List[Dict[str, Any]]:
+    """短线出场检查（只卖 t 账户，account_id='t'）。"""
+    from app.services.t_gateway import gateway_execute
+    results = []
+    for pos in _vrebounce_positions():
+        sym = pos["symbol"]
+        avg = pos["avg_price"]
+        if avg <= 0:
+            continue
+        rt = fetch_realtime(sym)
+        cur = (rt or {}).get("price") or avg
+        pnl = cur / avg - 1
+        vol = pos["volume"]
+        reason = None
+        is_stop = False
+        if pnl <= -SL5:
+            reason, is_stop = f"vrebounce 止损 -{SL5*100:.0f}%（pnl {pnl*100:.1f}%）", True
+        elif pnl >= TP8:
+            reason = f"vrebounce 止盈 +{TP8*100:.0f}% 清仓"
+        elif _trading_days_since(pos["built_at"]) >= HOLD_DAYS:
+            reason = f"vrebounce 持有{HOLD_DAYS}交易日超时平仓"
+        if not reason or vol < 100:
+            continue
+        try:
+            gw = gateway_execute(sym, "sell", cur, vol,
+                                 reason=reason, decision_source="ai_led",
+                                 is_stop_loss=is_stop)
+            results.append({"symbol": sym, "volume": vol, "pnl_pct": round(pnl * 100, 2),
+                            "reason": reason, "gateway": gw.get("status")})
+        except Exception as e:
+            logger.warning("[t-vrebounce] 平仓异常 %s: %s", sym, str(e)[:120])
+            results.append({"symbol": sym, "reason": reason, "error": str(e)[:120]})
+        time.sleep(SCAN_INTERVAL_S)
+    return results
+
+
+# ────────────────────────────────────────────────────────────────
+# 监控线程（默认关闭灰度）
+# ────────────────────────────────────────────────────────────────
+class VRebounceMonitor:
+    def __init__(self, interval: float = None):
+        self.interval = interval or MONITOR_INTERVAL_S
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._last_scan = None
+        self._scanned_today = ""
+        self._last_results: Dict[str, Any] = {}
+
+    def start(self) -> bool:
+        if not ENABLED:
+            logger.info("[t-vrebounce] 未启用（T_VREB_ENABLED=0），仅登记不运行")
+            return False
+        if self._thread and self._thread.is_alive():
+            return True
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="t-vrebounce")
+        self._thread.start()
+        logger.info("[t-vrebounce] 监控已启动（interval=%ss, account=%s）", self.interval, _account_id())
+        return True
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=self.interval + 5)
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def status(self) -> dict:
+        return {"enabled": ENABLED, "running": self.is_running(), "account": _account_id(),
+                "last_scan": self._last_scan, "last_results": self._last_results}
+
+    def _is_trading_time(self) -> bool:
+        now = datetime.now()
+        if now.weekday() >= 5:
+            return False
+        hm = now.hour * 60 + now.minute
+        return (9 * 60 + 25) <= hm <= (15 * 60)
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                today = date.today().isoformat()
+                if self._scanned_today != today:
+                    self._last_scan = datetime.now().isoformat()
+                    self._last_results["scan"] = scan_once()
+                    self._scanned_today = today
+                if self._is_trading_time():
+                    self._last_results["build"] = try_build_candidates()
+                    self._last_results["exit"] = check_exits()
+            except Exception as e:
+                logger.warning("[t-vrebounce] 主循环异常: %s", str(e)[:150])
+            self._stop.wait(self.interval)
+
+
+def get_monitor(interval: float = None) -> VRebounceMonitor:
+    global _instance
+    if _instance is None:
+        _instance = VRebounceMonitor(interval=interval)
+    return _instance
+
+
+def start_vrebounce_monitor(interval: float = None) -> bool:
+    return get_monitor(interval=interval).start()
+
+
+def stop_vrebounce_monitor() -> None:
+    if _instance:
+        _instance.stop()
+
+
+def get_status() -> dict:
+    if _instance:
+        return _instance.status()
+    return {"enabled": ENABLED, "running": False, "account": _account_id()}

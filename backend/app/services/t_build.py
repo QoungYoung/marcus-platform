@@ -778,7 +778,8 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
     if net <= 0:
         return {"pass": False, "reason": "t 账户净值不可用", "tier": tier}
 
-    if mode == "trend_break":
+    if mode in ("trend_break", "vrebounce"):
+        # 短线档共用（V反 与 趋势突破 同规模口径：单笔30%/单标30%/总60%）
         single_pct = float(p.get("trend_break_single_order_pct", 0.30))
         per_symbol_pct = float(p.get("trend_break_per_symbol_cap", 0.30))
         total_pct = float(p.get("trend_break_total_cap", 0.60))
@@ -1171,8 +1172,8 @@ def build_t_position(symbol: str, price: float, volume: Optional[int] = None,
     if not volume or volume < 100:
         return {"status": "rejected", "reason": "建议股数不足 100 股"}
 
-    if build_mode == "trend_break":
-        skip_timing = True  # 突破建仓不要求回踩企稳
+    if build_mode in ("trend_break", "vrebounce"):
+        skip_timing = True  # 突破/V反 建仓不要求回踩企稳
     if decision_source == "agent" and not skip_timing:
         ok, why, quote = confirm_build_timing(symbol)
         if not ok:

@@ -95,10 +95,12 @@ def _start_services(settings):
     from app.services.long_term_pool_monitor import start_lt_pool_monitor
     start_lt_pool_monitor(executor=executor)
 
-    # 做T账户·趋势突破短线监控（默认关闭灰度，T_TREND_BREAK_ENABLED=1 才启动；
-    # 只作用于 account_id='t'，不触碰 stock/golden_pit）
-    from app.services.t_trend_break import start_trend_break_monitor
-    start_trend_break_monitor()
+    # 做T账户·V反短线监控（默认关闭灰度，T_VREB_ENABLED=1 才启动；
+    # 只作用于 account_id='t'，不触碰 stock/golden_pit。
+    # 旧 trend_break 信号已由回测证伪（次日开盘口径 PF~1.05，样本外不稳），不再注册；
+    # 代码保留在 app.services.t_trend_break 便于回滚）
+    from app.services.t_vrebounce import start_vrebounce_monitor
+    start_vrebounce_monitor()
 
     # 做T监控器（t_account 专用，30s 轮询 + 错峰启动）
     from app.services.t_monitor import start_t_monitor
