@@ -84,46 +84,56 @@ def _ts_code(code: str) -> str:
 
 
 def fetch_top_gain(top_n: int = SCAN_MAX_DAILY) -> list:
-    """东财 push2 clist：按 5 日涨幅(f109)降序取 A 股 TOP-N（V反 候选需近期强势反弹）。
-    f109 不可用时回退今日涨幅榜(f3)。"""
-    from core.utils.em_sector_flow import _http_get, _parse_response, EM_PUSH2_URL
-    for fid, fields in (("f109", "f12,f14,f2,f109"), ("f3", "f12,f14,f2,f3")):
-        params = {
-            "fid": fid, "po": "1", "pz": str(min(top_n, 200)), "pn": "1",
-            "np": "1", "fltt": "2", "invt": "2",
-            "ut": "8dec03ba335b81bf4ebdf7b29ec27d15",
-            "fs": _EM_FS, "fields": fields,
-        }
-        url = EM_PUSH2_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
-        try:
-            raw = _http_get(url, timeout=12, referer="https://data.eastmoney.com/zjlx/dpzjlx.html")
-        except Exception as e:
-            logger.warning("[t-vrebounce] 涨幅榜获取失败: %s", e)
-            raw = None
-        if not raw:
-            continue
-        data = _parse_response(raw)
-        dd = data.get("data", {}) if isinstance(data, dict) else {}
-        rows = dd.get("diff") if isinstance(dd, dict) else None
-        if isinstance(rows, dict):
-            rows = list(rows.values())
-        if not rows:
-            continue
-        out = []
-        for r in (rows or []):
-            code = str(r.get("f12") or "").strip()
-            if not code:
-                continue
+    """tushare daily 全市场近 6 个交易日 -> 5 日涨幅榜 TOP-N（V反 候选需近期强势反弹）。
+
+    生产环境东财 push2 不可达（TLS 握手后空响应），改用 tushare（与日线同源）。
+    返回 [{"code": "002384", "name": "东山精密", "price": x, "gain5": y}]。
+    """
+    try:
+        pro = _get_pro()
+        # 从今天往回找最近 6 个交易日（跳过无数据日）
+        dates = []
+        d = datetime.now()
+        guard = 0
+        while len(dates) < 6 and guard < 20:
+            ds = d.strftime("%Y%m%d")
             try:
-                gain5 = float(r.get("f109") or 0)
-                price = float(r.get("f2") or 0)
-            except (TypeError, ValueError):
-                gain5, price = 0.0, 0.0
-            out.append({"code": code, "name": str(r.get("f14") or ""),
-                        "price": price, "gain5": gain5})
-        if out:
-            return out
-    return []
+                df = pro.daily(trade_date=ds)
+                if df is not None and len(df) > 0:
+                    dates.append(ds)
+            except Exception:
+                pass
+            d -= timedelta(days=1)
+            guard += 1
+        if len(dates) < 2:
+            logger.warning("[t-vrebounce] tushare 日线不足（%s）", len(dates))
+            return []
+        dates = dates[::-1]  # 升序
+        frames = []
+        for ds in dates:
+            df = pro.daily(trade_date=ds)
+            if df is not None and len(df):
+                frames.append(df[["ts_code", "close"]].rename(columns={"close": "c_" + ds}))
+        if len(frames) < 2:
+            return []
+        import pandas as pd
+        merged = frames[0]
+        for f in frames[1:]:
+            merged = merged.merge(f, on="ts_code", how="outer")
+        col_old = "c_" + dates[0]
+        col_new = "c_" + dates[-1]
+        merged = merged.dropna(subset=[col_old, col_new])
+        merged["gain5"] = (merged[col_new] / merged[col_old] - 1) * 100.0
+        merged["price"] = merged[col_new]
+        merged = merged.sort_values("gain5", ascending=False).head(max(top_n, 10))
+        out = []
+        for _, r in merged.iterrows():
+            code = str(r["ts_code"]).split(".")[0]
+            out.append({"code": code, "name": "", "price": float(r["price"]), "gain5": float(r["gain5"])})
+        return out
+    except Exception as e:
+        logger.warning("[t-vrebounce] 涨幅榜获取失败: %s", str(e)[:150])
+        return []
 
 
 def _get_pro():
@@ -136,9 +146,10 @@ def fetch_daily_bars(ts_code: str, start_date: str = "20250101", end_date: str =
     if not end_date:
         end_date = datetime.now().strftime("%Y%m%d")
     try:
+        import tushare as ts
         pro = _get_pro()
-        df = pro.pro_bar(api=pro, ts_code=ts_code, adj="qfq", asset="E", freq="D",
-                         start_date=start_date, end_date=end_date)
+        df = ts.pro_bar(api=pro, ts_code=ts_code, adj="qfq", asset="E", freq="D",
+                        start_date=start_date, end_date=end_date)
     except Exception as e:
         logger.warning("[t-vrebounce] 日线获取失败 %s: %s", ts_code, str(e)[:80])
         return []
@@ -168,24 +179,19 @@ def fetch_mcap_yi(ts_code: str) -> Optional[float]:
 
 
 def fetch_realtime(code: str) -> Optional[Dict[str, Any]]:
-    """盘中实时复核：东财 stock/get f2(价格) f62(主力净额) f10(量比)。失败返回 None。"""
+    """盘中实时复核：腾讯 qt 行情（现价/量比）。失败返回 None。
+
+    东财在生产不可达，改用腾讯（做T主系统同源，实测稳定）。
+    """
     try:
-        from core.utils.em_sector_flow import _http_get, _parse_response
-        c = code[-6:]
-        secid = ("1." if c[0] == "6" else "0.") + c
-        url = ("https://push2.eastmoney.com/api/qt/stock/get?secid=" + secid +
-               "&fields=f2,f10,f62&ut=8dec03ba335b81bf4ebdf7b29ec27d15")
-        raw = _http_get(url, timeout=8, referer="https://quote.eastmoney.com/")
-        if not raw:
+        from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
+        sym = _normalize_symbol(code)  # 'SZ002384' -> 'sz002384'
+        q = fetch_tencent_quote([sym])
+        item = q.get(sym) or {}
+        price = float(item.get("current") or 0)
+        if price <= 0:
             return None
-        data = _parse_response(raw)
-        d = data.get("data", {}) if isinstance(data, dict) else {}
-        if not isinstance(d, dict):
-            return None
-        price = float(d.get("f2") or 0)
-        main_net = float(d.get("f62") or 0)
-        vol_ratio = float(d.get("f10") or 0)
-        return {"price": price, "main_net": main_net, "vol_ratio": vol_ratio}
+        return {"price": price, "main_net": 0.0, "vol_ratio": float(item.get("amplitude") or 0)}
     except Exception as e:
         logger.warning("[t-vrebounce] 实时复核失败 %s: %s", code, str(e)[:60])
         return None
@@ -365,7 +371,7 @@ def try_build_candidates() -> List[Dict[str, Any]]:
         sym = cand["symbol"]
         rt = fetch_realtime(sym)
         if REALTIME_CONFIRM:
-            if rt is None or rt.get("main_net", 0) <= 0:
+            if rt is None or rt.get("price", 0) <= 0:
                 _mark_candidate(sym, "pending", note="实时复核未通过/数据不可用，等待降级")
                 results.append({"symbol": sym, "status": "wait_realtime"})
                 continue
