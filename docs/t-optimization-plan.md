@@ -438,3 +438,13 @@ grep×6/glob×2/list_t_conditions/get_stock_quote，工具调用耗掉大半 →
   AI 生成的 `stop_loss_price` **不得低于规则值 price×(1−max(3%, amp×0.55))**
   （取 max：止损价更低=更宽，钳到规则下限；AI 可收紧、不可放宽），止损下限系统兜底
 - 测试：AI 放宽 9.4→钳 9.7、AI 收紧 9.8→保留，28 passed
+
+## 附：做T账户·趋势突破短线（t-trend-breakout-short-term）
+
+- 独立于主账户回踩池/长期池，全链路只作用于 account_id='t'（不触碰 stock/golden_pit 资金）。
+- 日频入池：主力净流入>0 且 5 日累计>0、市值<100亿、放量突破近20日高点、MA20 转上；盘中实时复核（东财 f62 主力净流入>0 + 量比）。
+- 建仓走 build_t_position(build_mode='trend_break')：跳过回踩时机确认，其余硬风控保留；规模用 trend_break 独立档（单笔<=净值30%、单票30%、总仓60%、并行<=3，25万净值约7.5万/票）。
+- 出场：+5% 减半、+8% 清仓、-5% 硬止损、第5交易日超时平仓；执行经 gateway_execute(account_id='t')。
+- 默认关闭灰度：T_TREND_BREAK_ENABLED=1 才启用；回测脚本：scripts/backtest_trend_break.py（本地 parquet）。
+- 历史回测（2023-2026，3035 例，严格规则口径）：胜率约44%、单笔期望 +0.35%、PF 1.15、平均持有约 2.9 天。
+

@@ -445,3 +445,32 @@ def t_build_params_update(payload: dict):
     from app.services import t_build
     ok = t_db.update_build_params(payload)
     return {"success": ok, "params": t_build._params()}
+
+
+@router.get("/trend-break/status")
+def t_trend_break_status():
+    """做T账户·趋势突破短线监控状态（只作用于 t 账户）。"""
+    from app.services import t_trend_break
+    return t_trend_break.get_status()
+
+
+@router.post("/trend-break/scan")
+def t_trend_break_scan():
+    """手动触发一轮趋势突破日频扫描（只写 t 账户候选）。"""
+    from app.services import t_trend_break
+    hits = t_trend_break.scan_once()
+    return {"hits": hits, "count": len(hits)}
+
+
+@router.post("/trend-break/build")
+def t_trend_break_build():
+    """手动触发盘中实时复核 + trend_break 建仓（只动 t 账户资金）。"""
+    from app.services import t_trend_break
+    return {"results": t_trend_break.try_build_candidates()}
+
+
+@router.post("/trend-break/exit-check")
+def t_trend_break_exit():
+    """手动触发短线出场检查（+5%/+8%/-5%/5日，只卖 t 账户）。"""
+    from app.services import t_trend_break
+    return {"results": t_trend_break.check_exits()}

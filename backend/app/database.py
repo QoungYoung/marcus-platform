@@ -502,6 +502,13 @@ def _apply_t_build_migration():
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_t_build_scan_date ON t_build_scan_results (trade_date, status)"
             ))
+            # source 列：trend_break 日频入池来源标记（隔离于 stock 扫描），幂等
+            conn.execute(text(
+                "ALTER TABLE t_build_scan_results ADD COLUMN IF NOT EXISTS source VARCHAR(16) DEFAULT 'scan'"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_t_build_scan_source ON t_build_scan_results (source, status)"
+            ))
 
             # 2) t_build_params — 建仓策略参数（分档初值，P4 敏感度扫描后固化）
             conn.execute(text(

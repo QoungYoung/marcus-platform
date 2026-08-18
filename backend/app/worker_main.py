@@ -95,6 +95,11 @@ def _start_services(settings):
     from app.services.long_term_pool_monitor import start_lt_pool_monitor
     start_lt_pool_monitor(executor=executor)
 
+    # 做T账户·趋势突破短线监控（默认关闭灰度，T_TREND_BREAK_ENABLED=1 才启动；
+    # 只作用于 account_id='t'，不触碰 stock/golden_pit）
+    from app.services.t_trend_break import start_trend_break_monitor
+    start_trend_break_monitor()
+
     # 做T监控器（t_account 专用，30s 轮询 + 错峰启动）
     from app.services.t_monitor import start_t_monitor
     start_t_monitor()

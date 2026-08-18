@@ -82,6 +82,21 @@ BUILD_PARAMS_DEFAULT = {
     "total_floor_cap": {"cons": 0.40, "std": 0.55, "agg": 0.70},
     "max_floor_symbols": 10,         # 组合标的数宽松上限（实际受总量上限约束）
     "min_absolute_floor": 20000,     # 单票底仓做T划算下限（元）
+    # ── trend_break 短线档（t-trend-breakout-short-term，只用于 t 账户）──
+    "trend_break_single_order_pct": 0.30,   # 单笔 ≤ 净值 30%（25万 → 约7.5万/票）
+    "trend_break_per_symbol_cap": 0.30,     # 单票 ≤ 30%
+    "trend_break_total_cap": 0.60,          # 总仓 ≤ 60%
+    "trend_break_max_symbols": 3,           # 并行 ≤ 3 只
+    "trend_break_mcap_max_yi": 100.0,       # 市值 < 100 亿
+    "trend_break_high_n": 20,               # 突破参照 N 日高点
+    "trend_break_vol_mult": 1.5,            # 放量倍数（近20日均量）
+    "trend_break_tp5": 0.05,                # +5% 减半
+    "trend_break_tp8": 0.08,                # +8% 清仓
+    "trend_break_sl5": 0.05,                # -5% 硬止损
+    "trend_break_hold_days": 5,             # 持有 N 交易日超时平仓
+    "trend_break_scan_daily_max": 50,       # 日扫描上限
+    "trend_break_scan_interval_s": 1.0,     # 逐只节流（秒）
+    "trend_break_realtime_confirm": True,   # 盘中实时复核开关
     # 衔接
     "next_day_cond_gen": True,       # 建仓当日盘后生成次日条件
     "eod_scan_time": "15:05",        # Worker 盘后条件生成扫描时间
@@ -743,12 +758,15 @@ def scan_t_candidates_historical(symbols: List[str],
 def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
                  total_floor_value: Optional[float] = None,
                  symbol_value: Optional[float] = None,
-                 regime: str = "ACTIVE") -> Dict[str, Any]:
-    """建仓规模计算：按当前 regime 档位给出单笔/单标/总底仓上限与建议股数。
+                 regime: str = "ACTIVE",
+                 mode: str = "standard") -> Dict[str, Any]:
+    """建仓规模计算：按当前 regime 档位（或 trend_break 独立档）给出单笔/单标/总底仓上限与建议股数。
 
     生产（不传注入参数）：net/total_floor_value/symbol_value 取 t 账户实时状态，regime 实时。
     回测（组合引擎注入）：net_asset=组合净值、total_floor_value=组合已分配建仓市值、
     symbol_value=该标的是否已建仓、regime=历史档位——规则同源，数据历史化。
+    mode='trend_break' 时使用 trend_break_* 独立规模档（只用于 t 账户短线），
+    不影响 standard 档的 4/5/8% 等既有口径。
     返回 {tier, net_asset, single_max_amount, per_symbol_max_amount, total_floor_max,
           current_floor_value, symbol_value, suggest_volume, reasons, pass}。
     """
@@ -760,9 +778,14 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
     if net <= 0:
         return {"pass": False, "reason": "t 账户净值不可用", "tier": tier}
 
-    single_pct = p["single_order_pct"].get(tier, 0.05)
-    per_symbol_pct = p["per_symbol_cap"].get(tier, 0.15)
-    total_pct = p["total_floor_cap"].get(tier, 0.55)
+    if mode == "trend_break":
+        single_pct = float(p.get("trend_break_single_order_pct", 0.30))
+        per_symbol_pct = float(p.get("trend_break_per_symbol_cap", 0.30))
+        total_pct = float(p.get("trend_break_total_cap", 0.60))
+    else:
+        single_pct = p["single_order_pct"].get(tier, 0.05)
+        per_symbol_pct = p["per_symbol_cap"].get(tier, 0.15)
+        total_pct = p["total_floor_cap"].get(tier, 0.55)
 
     if total_floor_value is None:
         total_floor_value, _ = _positions_value()
@@ -945,7 +968,8 @@ def classify_build_escalation(symbol: str, amount: float, regime: str,
 
 def validate_build_position(symbol: str, price: float, volume: int,
                             reason: str = "", decision_source: str = "agent",
-                            force_human: bool = False) -> Dict[str, Any]:
+                            force_human: bool = False,
+                            build_mode: str = "standard") -> Dict[str, Any]:
     """建仓校验链（独立于做T回转 validate_order）：返回 {pass, mode, level, reason, warn}。
 
     校验项：账户白名单 + check_breakers（STOP_ALL/人工锁/日亏熔断/连续亏损）+
@@ -993,8 +1017,8 @@ def validate_build_position(symbol: str, price: float, volume: int,
                 result["reason"] = "涨停封板禁建仓（追高）"
                 return result
 
-        # 5) 金额/规模（三档上限）
-        sizing = build_sizing(symbol, price)
+        # 5) 金额/规模（三档上限；trend_break 用独立短线档）
+        sizing = build_sizing(symbol, price, mode=build_mode)
         if not sizing["pass"]:
             result["level"] = "ledger"
             result["reason"] = sizing["reason"] or "规模校验不通过"
@@ -1043,7 +1067,8 @@ def validate_build_position(symbol: str, price: float, volume: int,
 def build_gateway_execute(symbol: str, price: float, volume: int,
                           reason: str = "", decision_source: str = "agent",
                           event_id: Optional[int] = None,
-                          force_human: bool = False) -> Dict[str, Any]:
+                          force_human: bool = False,
+                          build_mode: str = "standard") -> Dict[str, Any]:
     """建仓执行唯一入口：建仓校验通过才调用执行器撮合（account_id='t'）。
 
     成功 → 更新日账本（建仓名义额入 daily_turnover_amount，来源 build）→ 更新审计事件。
@@ -1069,7 +1094,8 @@ def build_gateway_execute(symbol: str, price: float, volume: int,
 
     # 1) 校验
     check = validate_build_position(symbol, price, volume, reason=reason,
-                                    decision_source=decision_source, force_human=force_human)
+                                    decision_source=decision_source, force_human=force_human,
+                                    build_mode=build_mode)
     if not check["pass"]:
         t_db.update_build_event(ev_id, status="rejected",
                                 reason=f"{check['reason']}（level={check.get('level')}）")
@@ -1127,27 +1153,34 @@ def _update_build_ledger(symbol: str, price: float, volume: int):
 
 def build_t_position(symbol: str, price: float, volume: Optional[int] = None,
                      reason: str = "", decision_source: str = "agent",
-                     skip_timing: bool = False, force_human: bool = False) -> Dict[str, Any]:
+                     skip_timing: bool = False, force_human: bool = False,
+                     build_mode: str = "standard") -> Dict[str, Any]:
     """建仓高层入口（Agent/API 调用）：触发确认 → 规模 → 升级 → 执行。
 
     - 自动（agent）：要求时机确认通过（回踩∧量比∧企稳）+ 规模计算 + 升级分类。
     - 人工（human）：跳过时机确认（人工已判断），但金额/熔断/时段护栏仍强制。
+    - trend_break：短线突破建仓模式——跳过"回踩低吸"时机确认（突破不需要回踩），
+      其余校验（白名单/熔断/时段/封板/规模/日建仓上限/单票单批）全部保留；
+      规模用 trend_break_* 独立档；仅作用于 account_id='t'。
     """
     if volume is None:
-        sizing = build_sizing(symbol, price)
+        sizing = build_sizing(symbol, price, mode=build_mode)
         if not sizing["pass"]:
             return {"status": "rejected", "reason": sizing["reason"] or "规模校验不通过", **sizing}
         volume = sizing["suggest_volume"]
     if not volume or volume < 100:
         return {"status": "rejected", "reason": "建议股数不足 100 股"}
 
+    if build_mode == "trend_break":
+        skip_timing = True  # 突破建仓不要求回踩企稳
     if decision_source == "agent" and not skip_timing:
         ok, why, quote = confirm_build_timing(symbol)
         if not ok:
             return {"status": "rejected", "reason": f"时机未确认: {why}"}
 
     return build_gateway_execute(symbol, price, volume, reason=reason,
-                                 decision_source=decision_source, force_human=force_human)
+                                 decision_source=decision_source, force_human=force_human,
+                                 build_mode=build_mode)
 
 
 # ────────────────────────────────────────────────────────────────
