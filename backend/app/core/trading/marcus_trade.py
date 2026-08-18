@@ -44,6 +44,19 @@ def get_bridge():
     return _bridge_instance
 
 
+_ACCOUNT_LABELS = {
+    "t": "做T账户",
+    "stock": "股票账户",
+    "golden_pit": "黄金坑",
+}
+
+
+def account_label(account_id: str) -> str:
+    """账户标识（QQ 通知用）：t/stock/golden_pit 显示中文名，其他原样。"""
+    aid = (account_id or "stock").strip()
+    return f"{_ACCOUNT_LABELS.get(aid, aid)}（{aid}）"
+
+
 def parse_float_chinese(value):
     """解析中文数字格式 (带逗号、括号等后缀)"""
     if isinstance(value, (int, float)):
@@ -961,6 +974,7 @@ class MarcusVNPyExecutor:
 
             message = (
                 f"{tag}\n\n"
+                f"账户: {account_label(self.account_id)}\n"
                 f"标的: {stock_name} ({symbol})\n"
                 f"价格: {price:.2f}  |  数量: {volume}股\n"
                 f"金额: {cost:.2f}"
@@ -1013,6 +1027,7 @@ class MarcusVNPyExecutor:
 
             message = (
                 f"{tag}\n\n"
+                f"账户: {account_label(self.account_id)}\n"
                 f"标的: {stock_name} ({symbol})\n"
                 f"价格: {price:.2f}  |  数量: {volume}股\n"
                 f"盈亏: {sign}{profit:.2f}"
