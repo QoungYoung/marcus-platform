@@ -148,16 +148,11 @@ async def add_candidate(req: AddLTCandidateRequest):
 
 @router.delete("/candidates/{symbol:path}")
 async def remove_candidate(symbol: str):
-    """从长期候选池中删除标的"""
-    from app.services.long_term_pool import get_long_term_pool
+    """从长期候选池中删除标的 —— 已禁用：长期候选池不可移除。
 
-    symbol = _normalize_lt_symbol(symbol)
-    pool = get_long_term_pool()
-
-    ok = pool.remove(symbol)
-    if not ok:
-        raise HTTPException(status_code=404, detail=f"{symbol} 不在长期候选池中")
-    return {"symbol": symbol, "status": "removed"}
+    长期候选池为持久监控（含趋势突破自动入池的标的），不允许删除。
+    """
+    raise HTTPException(status_code=400, detail="长期候选池标的不可移除（持久监控）")
 
 
 @router.put("/candidates/{symbol:path}")

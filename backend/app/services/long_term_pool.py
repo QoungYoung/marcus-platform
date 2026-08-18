@@ -110,15 +110,13 @@ class LongTermPool:
             return False
 
     def remove(self, symbol: str) -> bool:
-        try:
-            db = SessionLocal()
-            result = db.query(LongTermCandidate).filter(LongTermCandidate.symbol == symbol).delete()
-            db.commit()
-            db.close()
-            return result > 0
-        except Exception as e:
-            logger.error(f"[长期池] 删除{symbol}失败: {e}")
-            return False
+        """长期候选池不可移除（持久监控）。移除恒返回 False。
+
+        趋势突破等自动入池的标的需长期跟踪，禁止手动/自动删除；
+        唯一允许的状态流转是 active → promoted（建仓后）或 promoted → active（清仓复位）。
+        """
+        logger.warning("[长期池] 拒绝移除 %s（长期候选池不可移除，持久监控）", symbol)
+        return False
 
     def reset_to_active(self, symbol: str) -> bool:
         """清仓后将 promoted 重置为 active，恢复监控"""
