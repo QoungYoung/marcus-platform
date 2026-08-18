@@ -146,8 +146,38 @@ const STATUS_LABEL: Record<string, string> = {
   human_confirm: '待人工', executed: '已执行', blocked: '已拦截', cancelled: '已取消',
 };
 
+interface VrebStatus {
+  enabled?: boolean;
+  running?: boolean;
+  account?: string;
+  last_scan?: string;
+}
+
+interface VrebCandidate {
+  symbol: string;
+  score?: number;
+  reasons?: any;
+  trend?: string;
+  status?: string;
+  created_at?: string;
+}
+
+interface VrebEvent {
+  id: number;
+  symbol: string;
+  event_type: string;
+  side?: string;
+  price?: number;
+  volume?: number;
+  amount?: number;
+  executed_price?: number;
+  status?: string;
+  reason?: string;
+  created_at?: string;
+}
+
 export default function TAccountPage() {
-  const [tab, setTab] = useState<'overview' | 'pool' | 'conditions' | 'triggers' | 'audit' | 'build'>('overview');
+  const [tab, setTab] = useState<'overview' | 'pool' | 'conditions' | 'triggers' | 'audit' | 'build' | 'vreb'>('overview');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -168,6 +198,11 @@ export default function TAccountPage() {
   const [buildEvents, setBuildEvents] = useState<BuildEvent[]>([]);
   const [buildForm, setBuildForm] = useState({ symbol: '', price: '', volume: '', reason: '' });
   const [buildSource, setBuildSource] = useState<'pool' | 'scan'>('pool');
+
+  // V反 短线
+  const [vrebStatus, setVrebStatus] = useState<VrebStatus | null>(null);
+  const [vrebCands, setVrebCands] = useState<VrebCandidate[]>([]);
+  const [vrebEvents, setVrebEvents] = useState<VrebEvent[]>([]);
 
   const fetchJson = async (url: string, opts?: RequestInit) => {
     const res = await fetch(url, opts);
@@ -271,6 +306,25 @@ export default function TAccountPage() {
     }
   }, [buildSource]);
 
+  const loadVreb = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [st, cd, ev] = await Promise.all([
+        fetchJson(API + '/vrebounce/status'),
+        fetchJson(API + '/vrebounce/candidates?limit=20'),
+        fetchJson(API + '/vrebounce/events?limit=20'),
+      ]);
+      setVrebStatus(st);
+      setVrebCands(cd.candidates || []);
+      setVrebEvents(ev.events || []);
+    } catch (e: any) {
+      setError('V反加载失败: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (tab === 'overview') loadOverview();
     if (tab === 'pool') loadPool();
@@ -278,7 +332,8 @@ export default function TAccountPage() {
     if (tab === 'triggers') loadTriggers();
     if (tab === 'audit') loadAudit();
     if (tab === 'build') loadBuild();
-  }, [tab, loadOverview, loadPool, loadConditions, loadTriggers, loadAudit, loadBuild]);
+    if (tab === 'vreb') loadVreb();
+  }, [tab, loadOverview, loadPool, loadConditions, loadTriggers, loadAudit, loadBuild, loadVreb]);
 
   // 操作
   const doPost = async (path: string, body?: any, okMsg?: string) => {
@@ -297,8 +352,9 @@ export default function TAccountPage() {
       if (tab === 'triggers') loadTriggers();
       if (tab === 'audit') loadAudit();
       if (tab === 'build') loadBuild();
+      if (tab === 'vreb') loadVreb();
     } catch (e: any) {
-      setError(`操作失败: ${e.message}`);
+      setError('操作失败: ' + e.message);
     }
   };
 
@@ -356,6 +412,7 @@ export default function TAccountPage() {
     { key: 'conditions', label: '监控条件' },
     { key: 'triggers', label: '触发事件' },
     { key: 'build', label: '底仓建仓' },
+    { key: 'vreb', label: 'V反短线' },
     { key: 'audit', label: '审计' },
   ];
 
@@ -532,6 +589,59 @@ export default function TAccountPage() {
         </div>
       )}
 
+      {/* ── V反 短线（t-vrebounce，只作用于 t 账户）── */}
+      {tab === 'vreb' && (
+        <div className='tac-section'>
+          <div className='tac-toolbar'>
+            <button className='tac-btn' onClick={() => doPost('/vrebounce/scan', null, '已触发全市场扫描')}>手动扫描</button>
+            <button className='tac-btn' onClick={() => doPost('/vrebounce/build', null, '已触发实时复核+建仓')}>手动建仓</button>
+            <button className='tac-btn' onClick={() => doPost('/vrebounce/exit-check', null, '已触发出场检查')}>出场检查</button>
+            <button className='tac-btn' onClick={loadVreb}>刷新</button>
+          </div>
+          <div className='tac-cards'>
+            <div className='tac-card'><div className='tac-card-label'>V反 监控</div><div className='tac-card-value'>{vrebStatus?.enabled ? '🟢 启用' : '⚪ 关闭'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>运行</div><div className='tac-card-value'>{vrebStatus?.running ? '运行中' : '未运行'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>账户</div><div className='tac-card-value'>{vrebStatus?.account ?? '-'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>上次扫描</div><div className='tac-card-value'>{fmtTime(vrebStatus?.last_scan)}</div></div>
+          </div>
+
+          <div className='tac-subtitle'>当日候选（t 账户 · 盘后全市场扫描）</div>
+          <table className='tac-table'>
+            <thead><tr><th>代码</th><th>得分</th><th>状态</th><th>条件</th><th>时间</th></tr></thead>
+            <tbody>
+              {vrebCands.map((c) => (
+                <tr key={c.symbol + (c.created_at || '')}>
+                  <td>{c.symbol}</td>
+                  <td>{c.score?.toFixed(2) ?? '-'}</td>
+                  <td>{c.status ?? '-'}</td>
+                  <td className='tac-muted'>{c.trend ?? ''}</td>
+                  <td className='tac-muted'>{fmtTime(c.created_at)}</td>
+                </tr>
+              ))}
+              {vrebCands.length === 0 && <tr><td colSpan={5} className='tac-empty'>暂无候选</td></tr>}
+            </tbody>
+          </table>
+
+          <div className='tac-subtitle'>建仓/平仓事件（vrebounce）</div>
+          <table className='tac-table'>
+            <thead><tr><th>代码</th><th>类型</th><th>价格</th><th>数量</th><th>状态</th><th>说明</th><th>时间</th></tr></thead>
+            <tbody>
+              {vrebEvents.map((ev) => (
+                <tr key={ev.id}>
+                  <td>{ev.symbol}</td>
+                  <td>{ev.event_type === 'build_position' ? '建仓' : ev.side}</td>
+                  <td>{ev.executed_price ?? ev.price ?? '-'}</td>
+                  <td>{ev.volume}</td>
+                  <td>{ev.status ?? '-'}</td>
+                  <td className='tac-muted'>{(ev.reason || '').slice(0, 40)}</td>
+                  <td className='tac-muted'>{fmtTime(ev.created_at)}</td>
+                </tr>
+              ))}
+              {vrebEvents.length === 0 && <tr><td colSpan={7} className='tac-empty'>暂无事件</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
       {/* ── 审计 ── */}
       {tab === 'audit' && (
         <div className="tac-section">

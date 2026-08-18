@@ -504,3 +504,39 @@ def t_vrebounce_exit():
     """手动触发 V反 短线出场检查（+8%/-5%/12交易日，只卖 t 账户）。"""
     from app.services import t_vrebounce
     return {"results": t_vrebounce.check_exits()}
+
+
+@router.get("/vrebounce/candidates")
+def t_vrebounce_candidates(limit: int = 20, days: int = 7):
+    """V反 日频候选列表（t_build_scan_results source='vrebounce'，仅 t 账户）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        rows = db.execute(text(
+            "SELECT symbol, score, reasons, trend, status, built_at, created_at "
+            "FROM t_build_scan_results WHERE source = 'vrebounce' "
+            "AND created_at >= now() - make_interval(days => :d) "
+            "ORDER BY created_at DESC LIMIT :lim"
+        ), {"d": days, "lim": limit}).mappings().all()
+        return {"candidates": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+@router.get("/vrebounce/events")
+def t_vrebounce_events(limit: int = 20):
+    """V反 建仓/平仓事件（t_build_events reason 含 vrebounce，仅 t 账户）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        rows = db.execute(text(
+            "SELECT id, symbol, event_type, side, price, volume, amount, executed_price, "
+            "decision_source, reason, status, created_at "
+            "FROM t_build_events WHERE account_id = 't' AND reason LIKE '%vrebounce%' "
+            "ORDER BY created_at DESC LIMIT :lim"
+        ), {"lim": limit}).mappings().all()
+        return {"events": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
