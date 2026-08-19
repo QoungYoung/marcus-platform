@@ -271,11 +271,15 @@ def _trade_dates_between(pro, start: Optional[str], end: str) -> List[str]:
 
 
 def _recent_trade_dates(pro, n: int, end: str) -> List[str]:
-    """end 往前 n 个交易日（升序 YYYYMMDD），试探法。"""
+    """end 往前 n 个交易日（升序 YYYYMMDD），试探法。
+
+    guard 上限按 n×1.5 个自然日放宽（65 个交易日约需 91+ 个自然日，60 会截断）。
+    """
     out = []
     d = datetime.strptime(end, "%Y%m%d")
     guard = 0
-    while len(out) < n and guard < 60:
+    guard_max = max(int(n * 1.5) + 10, 100)
+    while len(out) < n and guard < guard_max:
         ds = d.strftime("%Y%m%d")
         try:
             df = pro.daily(trade_date=ds)
