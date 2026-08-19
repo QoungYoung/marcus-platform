@@ -234,62 +234,47 @@ def _kdj_rsi6(seq: List[Dict[str, Any]]) -> Tuple[List[float], List[float]]:
 # ────────────────────────────────────────────────────────────────
 # 全市场基础数据落库 + 向量化扫描（V反 状态）
 # ────────────────────────────────────────────────────────────────
+def _trade_cal_days(pro, start: str, end: str) -> List[str]:
+    """tushare trade_cal 一次拿 [start, end] 的交易日列表（升序 YYYYMMDD）。"""
+    try:
+        df = pro.trade_cal(exchange="SSE", start_date=start, end_date=end, is_open="1")
+        if df is None or df.empty:
+            return []
+        return sorted(str(x) for x in df["cal_date"].tolist())
+    except Exception as e:
+        logger.warning("[t-vrebounce] trade_cal 获取失败: %s", str(e)[:100])
+        return []
+
+
 def _latest_trade_date(pro) -> Optional[str]:
-    """最近有 daily 数据的交易日（YYYYMMDD），从今天往回最多试探 12 天。"""
-    d = datetime.now()
-    for _ in range(12):
-        ds = d.strftime("%Y%m%d")
+    """最近交易日（YYYYMMDD）：trade_cal 取最后一天，再用 daily 确认有数据（盘中当天可能未更新）。"""
+    end = datetime.now().strftime("%Y%m%d")
+    start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+    days = _trade_cal_days(pro, start, end)
+    for ds in reversed(days):
         try:
             df = pro.daily(trade_date=ds)
             if df is not None and len(df) > 0:
                 return ds
         except Exception:
             pass
-        d -= timedelta(days=1)
-    return None
+    return days[-1] if days else None
 
 
 def _trade_dates_between(pro, start: Optional[str], end: str) -> List[str]:
-    """(start, end] 之间的交易日（升序 YYYYMMDD），试探法。start=None 时返回空。"""
+    """(start, end] 之间的交易日（升序 YYYYMMDD）。start=None 时返回空。"""
     if not start:
         return []
-    out = []
-    d = datetime.strptime(end, "%Y%m%d")
-    guard = 0
-    while d.strftime("%Y%m%d") > start and guard < 20:
-        ds = d.strftime("%Y%m%d")
-        if ds > start:
-            try:
-                df = pro.daily(trade_date=ds)
-                if df is not None and len(df) > 0:
-                    out.append(ds)
-            except Exception:
-                pass
-        d -= timedelta(days=1)
-        guard += 1
-    return out[::-1]
+    s = (datetime.strptime(start, "%Y%m%d") - timedelta(days=3)).strftime("%Y%m%d")
+    days = _trade_cal_days(pro, s, end)
+    return [d for d in days if d > start]
 
 
 def _recent_trade_dates(pro, n: int, end: str) -> List[str]:
-    """end 往前 n 个交易日（升序 YYYYMMDD），试探法。
-
-    guard 上限按 n×1.5 个自然日放宽（65 个交易日约需 91+ 个自然日，60 会截断）。
-    """
-    out = []
-    d = datetime.strptime(end, "%Y%m%d")
-    guard = 0
-    guard_max = max(int(n * 1.5) + 10, 100)
-    while len(out) < n and guard < guard_max:
-        ds = d.strftime("%Y%m%d")
-        try:
-            df = pro.daily(trade_date=ds)
-            if df is not None and len(df) > 0:
-                out.append(ds)
-        except Exception:
-            pass
-        d -= timedelta(days=1)
-        guard += 1
-    return out[::-1]
+    """end 往前 n 个交易日（升序 YYYYMMDD），trade_cal 一次获取。"""
+    start = (datetime.strptime(end, "%Y%m%d") - timedelta(days=int(n * 1.5) + 15)).strftime("%Y%m%d")
+    days = _trade_cal_days(pro, start, end)
+    return days[-n:] if len(days) >= n else days
 
 
 def _st_codes(pro) -> set:
@@ -354,7 +339,7 @@ def ensure_market_data(lookback_days: int = 65) -> bool:
             "SELECT count(DISTINCT trade_date) FROM t_vreb_daily")).scalar() or 0
     finally:
         db.close()
-    if n_days > 0 and n_days < lookback_days:
+    if n_days > 0 and n_days < lookback_days - 5:
         # 历史不足（如从 40 天升级到 65 天）：清空重拉，避免漏算 MA60
         db = SessionLocal()
         try:
