@@ -372,12 +372,20 @@ def t_build_event_confirm(event_id: int, action: str = "execute"):
         return {"success": True, "status": "cancelled"}
     if action != "execute":
         raise HTTPException(status_code=400, detail="action 只能为 execute/cancel")
-    # 人工放行：force_human=True 走网关撮合
+    # 人工放行：force_human=True 走网关撮合；保留原建仓档位
+    # （vrebounce/trend_break 短线档单笔上限 30%，与 standard 档 10% 不同）
+    build_mode = "standard"
+    ev_reason = str(ev.get("reason") or "")
+    if "vrebounce" in ev_reason:
+        build_mode = "vrebounce"
+    elif "trend_break" in ev_reason:
+        build_mode = "trend_break"
     result = t_build.build_gateway_execute(
         symbol=ev.get("symbol", ""), price=float(ev.get("price") or 0),
         volume=int(ev.get("volume") or 0),
         reason=ev.get("reason") or "人工确认建仓",
         decision_source="human", event_id=event_id, force_human=True,
+        build_mode=build_mode,
     )
     return result
 
