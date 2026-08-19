@@ -40,6 +40,8 @@ MCAP_MAX_YI = float(os.getenv("VREB_MCAP_MAX_YI", "100"))
 REB_MIN = float(os.getenv("VREB_REB_MIN", "0.25"))       # 15日低点反弹 ≥25%
 REB_DAYS = int(os.getenv("VREB_REB_DAYS", "15"))         # 反弹观察窗口（交易日）
 BIAS20_MAX = float(os.getenv("VREB_BIAS20_MAX", "0.03"))  # 触发日收盘距 MA20 偏离上限（防追高）
+VOLR_MAX = float(os.getenv("VREB_VOLR_MAX", "1.0"))    # 触发日量比上限（缩量企稳，≤1.0 胜率显著更高）
+B60_MAX = float(os.getenv("VREB_B60_MAX", "0.0"))      # 触发日收盘距 MA60 偏离上限（仍在 MA60 下方/附近）
 J_OVER = float(os.getenv("VREB_J_OVER", "90"))           # KDJ J 超买阈值
 RSI_OVER = float(os.getenv("VREB_RSI_OVER", "65"))       # RSI6 超买阈值
 TP8 = float(os.getenv("VREB_TP8", "0.08"))
@@ -326,8 +328,9 @@ def _upsert_market(df) -> None:
         db.close()
 
 
-def ensure_market_data(lookback_days: int = 40) -> bool:
-    """全市场日线基础数据增量落库：首次拉近 lookback_days 个交易日，之后只拉新增交易日。
+def ensure_market_data(lookback_days: int = 65) -> bool:
+    """全市场日线基础数据增量落库：首次拉近 lookback_days 个交易日（≥65 才能算 MA60/b60），
+    之后只拉新增交易日；若库内交易日不足 65 天则清空重拉。
 
     返回 True 表示数据已是最新（含本次更新成功）。
     """
@@ -343,8 +346,20 @@ def ensure_market_data(lookback_days: int = 40) -> bool:
     try:
         max_d = db.execute(text("SELECT max(trade_date) FROM t_vreb_daily")).scalar()
         max_d = str(max_d)[:10].replace("-", "") if max_d is not None else None
+        n_days = db.execute(text(
+            "SELECT count(DISTINCT trade_date) FROM t_vreb_daily")).scalar() or 0
     finally:
         db.close()
+    if n_days > 0 and n_days < lookback_days:
+        # 历史不足（如从 40 天升级到 65 天）：清空重拉，避免漏算 MA60
+        db = SessionLocal()
+        try:
+            db.execute(text("DELETE FROM t_vreb_daily"))
+            db.commit()
+        finally:
+            db.close()
+        max_d = None
+        logger.info("[t-vrebounce] 基础数据历史不足 %d 天，清空重拉（%d 天）", n_days, lookback_days)
     if max_d and max_d >= latest:
         return True  # 已最新，无需拉取
     need = _trade_dates_between(pro, max_d, latest) if max_d else _recent_trade_dates(pro, lookback_days, latest)
@@ -411,11 +426,13 @@ def _vreb_candidates_vectorized(df) -> List[Dict[str, Any]]:
         close = g["close"].values
         low = g["low"].values
         high = g["high"].values
+        vol = g["vol"].values if "vol" in g.columns else None
         t = n - 1
-        if t < 24:
+        if t < 59:
             continue
         ma20 = close[t - 19:t + 1].mean()
         ma20_prev5 = close[t - 24:t - 4].mean()
+        ma60 = close[t - 59:t + 1].mean()
         md = ma20 < ma20_prev5
         lo15 = low[t - 14:t + 1].min()
         rb = (close[t] / lo15 - 1) if lo15 > 0 else 0.0
@@ -438,7 +455,13 @@ def _vreb_candidates_vectorized(df) -> List[Dict[str, Any]]:
         r6 = 100 * ups / (ups + dns) if ups + dns > 0 else 50.0
         ov = (J >= J_OVER) or (r6 >= RSI_OVER)
         b20 = (close[t] / ma20 - 1) if ma20 > 0 else 99.0
-        if not (md and rb >= REB_MIN and ov and b20 <= BIAS20_MAX):
+        b60 = (close[t] / ma60 - 1) if ma60 > 0 else 99.0
+        volr = 99.0
+        if vol is not None and t >= 21:
+            vma = vol[t - 21:t - 1].mean()
+            if vma > 0:
+                volr = vol[t] / vma
+        if not (md and rb >= REB_MIN and ov and b20 <= BIAS20_MAX and b60 <= B60_MAX and volr <= VOLR_MAX):
             continue
         if bool(g["is_st"].iloc[t]):
             continue
@@ -467,24 +490,35 @@ def day_filter(code: str) -> Tuple[bool, List[str], float]:
     reasons: List[str] = []
     ts = _ts_code(code)
     bars = fetch_daily_bars(ts)
-    if len(bars) < REB_DAYS + 25:
+    if len(bars) < 60:
         reasons.append("日线数据不足")
         return False, reasons, 0.0
     closes = [b["close"] for b in bars]
     highs = [b["high"] for b in bars]
     lows = [b["low"] for b in bars]
+    vols = [b["vol"] for b in bars]
     n = len(closes)
     ma20 = sum(closes[-20:]) / 20.0
     ma20_prev5 = sum(closes[-25:-5]) / 20.0
+    ma60 = sum(closes[-60:]) / 60.0
     lo15 = min(lows[-REB_DAYS:])
     rb = (closes[-1] / lo15 - 1) if lo15 > 0 else 0.0
     bias20 = (closes[-1] / ma20 - 1) if ma20 > 0 else 0.0
+    b60 = (closes[-1] / ma60 - 1) if ma60 > 0 else 0.0
+    vol_ma20 = sum(vols[-21:-1]) / 20.0 if len(vols) >= 21 else (sum(vols[:-1]) / max(len(vols) - 1, 1))
+    volr = (vols[-1] / vol_ma20) if vol_ma20 > 0 else 99.0
     J, r6 = _kdj_rsi6(bars)
     ov = (J[-1] >= J_OVER) or (r6[-1] is not None and r6[-1] >= RSI_OVER)
     ok = True
     if bias20 > BIAS20_MAX:
         ok = False
         reasons.append("反弹过猛偏离MA20 %.1f%%（上限%.0f%%，防追高）" % (bias20 * 100, BIAS20_MAX * 100))
+    if b60 > B60_MAX:
+        ok = False
+        reasons.append("收盘高于MA60 %.1f%%（上限%.0f%%）" % (b60 * 100, B60_MAX * 100))
+    if volr > VOLR_MAX:
+        ok = False
+        reasons.append("量比 %.2f 超上限（缩量企稳，上限%.1f）" % (volr, VOLR_MAX))
     if ma20 >= ma20_prev5:
         ok = False
         reasons.append("MA20 未仍下行")

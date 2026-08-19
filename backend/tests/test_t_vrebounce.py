@@ -12,7 +12,7 @@ def _vreb_bars():
     close/MA20 ≈ -1.5%（温和 V反，不追高），J/RSI6 高位。
     """
     seq = []
-    for i in range(30):
+    for i in range(55):
         seq.append({"date": "20260101", "open": 12.5, "high": 12.6,
                     "low": 12.4, "close": 12.5, "vol": 1000.0})
     for i in range(10):
@@ -59,7 +59,7 @@ class TestVRebouncePure(unittest.TestCase):
     def test_day_filter_no_rebound_reject(self, bars, mcap):
         """无 15日反弹 -> 拒绝。"""
         seq = [{"date": "20260101", "open": 10.0, "high": 10.2, "low": 9.8,
-                "close": 10.0, "vol": 1000.0} for _ in range(45)]
+                "close": 10.0, "vol": 1000.0} for _ in range(65)]
         bars.return_value = seq
         ok, reasons, _ = vb.day_filter("002384")
         self.assertFalse(ok)
@@ -79,7 +79,7 @@ class TestVRebouncePure(unittest.TestCase):
     def test_day_filter_ma20_rising_reject(self, bars, mcap):
         """单边上涨（MA20 转上）-> 拒绝（V反 要求 MA20 仍下行）。"""
         seq = []
-        for i in range(45):
+        for i in range(65):
             close = 8.0 + 0.2 * i
             seq.append({"date": "20260101", "open": close, "high": close + 0.2,
                         "low": close - 0.1, "close": close, "vol": 1000.0})
@@ -93,7 +93,7 @@ class TestVRebouncePure(unittest.TestCase):
     def test_day_filter_not_overbought_reject(self, bars, mcap):
         """缓慢下行后企稳（无超买）-> 拒绝。"""
         seq = []
-        for i in range(45):
+        for i in range(65):
             close = 10.0 - 0.02 * i
             seq.append({"date": "20260101", "open": close, "high": close + 0.1,
                         "low": close - 0.1, "close": close, "vol": 1000.0})
@@ -241,6 +241,7 @@ class TestVRebounceRealtimeDegrade(unittest.TestCase):
     def test_realtime_unavailable_defers_build(self):
         """REALTIME_CONFIRM=1：实时复核失败 -> wait_realtime，不建仓。"""
         with mock.patch.object(vb, "REALTIME_CONFIRM", True), \
+             mock.patch.object(vb, "_auto_build_window", return_value=True), \
              mock.patch.object(vb, "_pending_candidates",
                                return_value=[{"id": 1, "symbol": "SZ002384", "score": 1.0}]), \
              mock.patch.object(vb, "fetch_realtime", return_value=None), \
@@ -253,6 +254,7 @@ class TestVRebounceRealtimeDegrade(unittest.TestCase):
     def test_realtime_unavailable_no_confirm_defers_build(self):
         """默认 REALTIME_CONFIRM=0（只验价）：实时价不可用 -> no_price，不盲买。"""
         with mock.patch.object(vb, "REALTIME_CONFIRM", False), \
+             mock.patch.object(vb, "_auto_build_window", return_value=True), \
              mock.patch.object(vb, "_pending_candidates",
                                return_value=[{"id": 1, "symbol": "SZ002384", "score": 1.0}]), \
              mock.patch.object(vb, "fetch_realtime", return_value=None), \
