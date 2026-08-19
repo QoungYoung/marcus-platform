@@ -74,6 +74,22 @@ class TestVRebouncePure(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("偏离" in r for r in reasons))
 
+
+    @mock.patch.object(vb, "fetch_mcap_yi", return_value=50.0)
+    @mock.patch.object(vb, "fetch_daily_bars")
+    def test_day_filter_cci_release(self, bars, mcap):
+        """volr/b60 不满足但 CCI<=-10（深度超卖）-> 放行分支通过。"""
+        seq = _vreb_bars()
+        # 把最后一天放量（volr>1.0），并让最后 14 天收盘压在 14 日均价下方（CCI 低）
+        seq[-1]["vol"] = 3000.0
+        for b in seq[-14:]:
+            b["close"] -= 0.6
+            b["high"] -= 0.6
+            b["low"] -= 0.6
+        bars.return_value = seq
+        ok, reasons, score = vb.day_filter("002384")
+        self.assertTrue(ok, reasons)
+
     @mock.patch.object(vb, "fetch_mcap_yi", return_value=50.0)
     @mock.patch.object(vb, "fetch_daily_bars")
     def test_day_filter_ma20_rising_reject(self, bars, mcap):

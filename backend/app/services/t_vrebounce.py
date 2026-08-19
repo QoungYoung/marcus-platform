@@ -9,6 +9,8 @@
             & 末端超买（KDJ J ≥ 90 或 RSI6 ≥ 65）
             & 触发日收盘偏离 MA20 ≤ 3%（bias20，防追高——stk_factor_pro 因子分析：
               失败单共性为反弹过猛/偏离均线过远，全样本 2009-2026 加该过滤 PF 1.38→2.14）
+            & 放行分支：量比≤1.0 且 收盘≤MA60（缩量企稳+深跌空间）或 CCI≤-10（深度超卖回调）
+              —— 全样本 2009-2026：PF 3.63(287笔) -> OR-cci 4.05(406笔)；跳空滑点口径 3.44
             & 总市值 < 100 亿
   -> 盘中实时复核（东财实时价 > 0，可选主力净流入 > 0，默认关）
   -> build_t_position(build_mode='vrebounce')（只动 t 账户）
@@ -42,6 +44,9 @@ REB_DAYS = int(os.getenv("VREB_REB_DAYS", "15"))         # 反弹观察窗口（
 BIAS20_MAX = float(os.getenv("VREB_BIAS20_MAX", "0.03"))  # 触发日收盘距 MA20 偏离上限（防追高）
 VOLR_MAX = float(os.getenv("VREB_VOLR_MAX", "1.0"))    # 触发日量比上限（缩量企稳，≤1.0 胜率显著更高）
 B60_MAX = float(os.getenv("VREB_B60_MAX", "0.0"))      # 触发日收盘距 MA60 偏离上限（仍在 MA60 下方/附近）
+CCI_RELEASE_MAX = float(os.getenv("VREB_CCI_RELEASE_MAX", "-10.0"))
+# 放行分支：volr/b60 不达标但 CCI≤该值（深度超卖回调中的 V反）仍放行。
+# 全样本 2009-2026：组合 287笔 PF3.63 -> OR-cci 406笔 PF4.05（跳空滑点口径 3.11 -> 3.44）
 J_OVER = float(os.getenv("VREB_J_OVER", "90"))           # KDJ J 超买阈值
 RSI_OVER = float(os.getenv("VREB_RSI_OVER", "65"))       # RSI6 超买阈值
 TP8 = float(os.getenv("VREB_TP8", "0.08"))
@@ -450,7 +455,17 @@ def _vreb_candidates_vectorized(df) -> List[Dict[str, Any]]:
             vma = vol[t - 21:t - 1].mean()
             if vma > 0:
                 volr = vol[t] / vma
-        if not (md and rb >= REB_MIN and ov and b20 <= BIAS20_MAX and b60 <= B60_MAX and volr <= VOLR_MAX):
+        cci = None
+        if t >= 13:
+            tp14 = close[t - 13:t + 1].mean()
+            md14 = sum(abs(close[k] - tp14) for k in range(t - 13, t + 1)) / 14.0
+            if md14 > 0:
+                cci = (close[t] - tp14) / (0.015 * md14)
+        if not (md and rb >= REB_MIN and ov and b20 <= BIAS20_MAX):
+            continue
+        release_combo = (volr <= VOLR_MAX) and (b60 <= B60_MAX)
+        release_cci = (cci is not None) and (cci <= CCI_RELEASE_MAX)
+        if not (release_combo or release_cci):
             continue
         if bool(g["is_st"].iloc[t]):
             continue
@@ -496,18 +511,24 @@ def day_filter(code: str) -> Tuple[bool, List[str], float]:
     b60 = (closes[-1] / ma60 - 1) if ma60 > 0 else 0.0
     vol_ma20 = sum(vols[-21:-1]) / 20.0 if len(vols) >= 21 else (sum(vols[:-1]) / max(len(vols) - 1, 1))
     volr = (vols[-1] / vol_ma20) if vol_ma20 > 0 else 99.0
+    # CCI(14)：深度超卖回调中的 V反 放行分支
+    cci = None
+    if n >= 14:
+        tp14 = sum(closes[-14:]) / 14.0
+        md14 = sum(abs(closes[k] - tp14) for k in range(n - 14, n)) / 14.0
+        if md14 > 0:
+            cci = (closes[-1] - tp14) / (0.015 * md14)
     J, r6 = _kdj_rsi6(bars)
     ov = (J[-1] >= J_OVER) or (r6[-1] is not None and r6[-1] >= RSI_OVER)
     ok = True
     if bias20 > BIAS20_MAX:
         ok = False
         reasons.append("反弹过猛偏离MA20 %.1f%%（上限%.0f%%，防追高）" % (bias20 * 100, BIAS20_MAX * 100))
-    if b60 > B60_MAX:
-        ok = False
-        reasons.append("收盘高于MA60 %.1f%%（上限%.0f%%）" % (b60 * 100, B60_MAX * 100))
-    if volr > VOLR_MAX:
-        ok = False
-        reasons.append("量比 %.2f 超上限（缩量企稳，上限%.1f）" % (volr, VOLR_MAX))
+    release_combo = (volr <= VOLR_MAX) and (b60 <= B60_MAX)
+    release_cci = (cci is not None) and (cci <= CCI_RELEASE_MAX)
+    if not (release_combo or release_cci):
+        reasons.append("未达放行条件（volr=%.2f>b=%.1f%% 且 cci=%s>%.0f）" % (
+            volr, b60 * 100, "NA" if cci is None else "%.1f" % cci, CCI_RELEASE_MAX))
     if ma20 >= ma20_prev5:
         ok = False
         reasons.append("MA20 未仍下行")
