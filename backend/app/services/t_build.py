@@ -970,7 +970,8 @@ def classify_build_escalation(symbol: str, amount: float, regime: str,
 def validate_build_position(symbol: str, price: float, volume: int,
                             reason: str = "", decision_source: str = "agent",
                             force_human: bool = False,
-                            build_mode: str = "standard") -> Dict[str, Any]:
+                            build_mode: str = "standard",
+                            exclude_event_id: Optional[int] = None) -> Dict[str, Any]:
     """建仓校验链（独立于做T回转 validate_order）：返回 {pass, mode, level, reason, warn}。
 
     校验项：账户白名单 + check_breakers（STOP_ALL/人工锁/日亏熔断/连续亏损）+
@@ -1037,7 +1038,8 @@ def validate_build_position(symbol: str, price: float, volume: int,
             result["level"] = "ledger"
             result["reason"] = f"当日建仓笔数已达上限（{cap}）"
             return result
-        if t_db.count_today_builds(symbol=_normalize(symbol).upper()) >= int(p["batch_per_symbol_per_day"]):
+        if t_db.count_today_builds(symbol=_normalize(symbol).upper(),
+                                   exclude_id=exclude_event_id) >= int(p["batch_per_symbol_per_day"]):
             result["level"] = "ledger"
             result["reason"] = "单票当日已建仓，分批须跨日"
             return result
@@ -1096,7 +1098,7 @@ def build_gateway_execute(symbol: str, price: float, volume: int,
     # 1) 校验
     check = validate_build_position(symbol, price, volume, reason=reason,
                                     decision_source=decision_source, force_human=force_human,
-                                    build_mode=build_mode)
+                                    build_mode=build_mode, exclude_event_id=ev_id)
     if not check["pass"]:
         t_db.update_build_event(ev_id, status="rejected",
                                 reason=f"{check['reason']}（level={check.get('level')}）")

@@ -621,8 +621,11 @@ def list_build_events(limit: int = 100, status: Optional[str] = None,
         return []
 
 
-def count_today_builds(symbol: Optional[str] = None) -> int:
-    """当日建仓笔数（不含 rejected/cancelled）；symbol 给定则统计单票当日建仓数。"""
+def count_today_builds(symbol: Optional[str] = None, exclude_id: Optional[int] = None) -> int:
+    """当日建仓笔数（不含 rejected/cancelled）；symbol 给定则统计单票当日建仓数。
+
+    exclude_id：排除指定事件（审计先行的"本次尝试"不应计入单票单批，避免把自己数进去）。
+    """
     try:
         db = SessionLocal()
         try:
@@ -634,6 +637,9 @@ def count_today_builds(symbol: Optional[str] = None) -> int:
             if symbol:
                 sql += " AND symbol = :symbol"
                 params["symbol"] = symbol
+            if exclude_id is not None:
+                sql += " AND id != :eid"
+                params["eid"] = exclude_id
             row = db.execute(text(sql), params).mappings().first()
             return int(row["c"]) if row else 0
         finally:
