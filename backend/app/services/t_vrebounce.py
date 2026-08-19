@@ -613,9 +613,23 @@ def _mark_candidate(symbol: str, status: str, note: str = ""):
         logger.warning("[t-vrebounce] 候选状态更新失败 %s: %s", symbol, str(e)[:80])
 
 
+def _auto_build_window() -> bool:
+    """自动建仓窗口：9:45（冷静期结束）至 13:00（午后禁自动建仓）。"""
+    now = datetime.now()
+    hm = now.hour * 60 + now.minute
+    return (9 * 60 + 45) <= hm <= (13 * 60)
+
+
 def try_build_candidates() -> List[Dict[str, Any]]:
-    """盘中实时复核候选并建仓（只经 t 建仓网关，account_id='t'）。"""
+    """盘中实时复核候选并建仓（只经 t 建仓网关，account_id='t'）。
+
+    仅在自动建仓窗口（9:45-13:00）内尝试；窗口外直接跳过（不误改候选状态）。
+    瞬时性拒绝（非交易时段/封板/熔断等）保持 pending 下轮重试，只有硬失败才落 blocked。
+    """
     from app.services.t_build import build_t_position
+    if not _auto_build_window():
+        logger.info("[t-vrebounce] 非自动建仓窗口（需 9:45-13:00），跳过建仓尝试")
+        return []
     results = []
     for cand in _pending_candidates():
         sym = cand["symbol"]
@@ -633,8 +647,13 @@ def try_build_candidates() -> List[Dict[str, Any]]:
             out = build_t_position(sym, price, reason="V反短线建仓（vrebounce）",
                                    decision_source="ai_led", build_mode="vrebounce")
             status = out.get("status")
-            _mark_candidate(sym, "executed" if status == "success" else "blocked",
-                            note=str(out.get("reason") or "")[:200])
+            if status == "success":
+                _mark_candidate(sym, "executed", note="V反建仓成交")
+            else:
+                reason = str(out.get("reason") or "")
+                transient = any(k in reason for k in
+                                ("非交易时段", "冷静期", "封板", "熔断", "时段", "时机未确认"))
+                _mark_candidate(sym, "pending" if transient else "blocked", note=reason[:200])
             results.append({"symbol": sym, "status": status, "reason": out.get("reason")})
         except Exception as e:
             logger.warning("[t-vrebounce] 建仓异常 %s: %s", sym, str(e)[:120])

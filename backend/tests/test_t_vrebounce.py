@@ -262,6 +262,29 @@ class TestVRebounceRealtimeDegrade(unittest.TestCase):
         self.assertEqual(res[0]["status"], "no_price")
         bld.assert_not_called()
 
+    def test_transient_rejection_keeps_pending(self):
+        """非交易时段等瞬时拒绝 -> 保持 pending（下轮重试），不落 blocked。"""
+        with mock.patch.object(vb, "_auto_build_window", return_value=True), \
+             mock.patch.object(vb, "_pending_candidates",
+                               return_value=[{"id": 1, "symbol": "SZ002384", "score": 1.0}]), \
+             mock.patch.object(vb, "fetch_realtime", return_value={"price": 10.0, "main_net": 0.0}), \
+             mock.patch.object(vb, "_mark_candidate") as mk, \
+             mock.patch("app.services.t_build.build_t_position",
+                        return_value={"status": "rejected", "reason": "非交易时段（level=hard）"}):
+            res = vb.try_build_candidates()
+        self.assertEqual(res[0]["status"], "rejected")
+        mk.assert_called_once_with("SZ002384", "pending", note=mock.ANY)
+
+    def test_outside_build_window_skips(self):
+        """自动建仓窗口外（如 9:25 冷静期）不尝试建仓、不改候选状态。"""
+        with mock.patch.object(vb, "_auto_build_window", return_value=False), \
+             mock.patch.object(vb, "_pending_candidates",
+                               return_value=[{"id": 1, "symbol": "SZ002384", "score": 1.0}]), \
+             mock.patch("app.services.t_build.build_t_position") as bld:
+            res = vb.try_build_candidates()
+        self.assertEqual(res, [])
+        bld.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

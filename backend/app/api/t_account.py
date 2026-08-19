@@ -525,7 +525,8 @@ def t_vrebounce_candidates(limit: int = 20, days: int = 7):
                 "SELECT symbol, score, reasons, trend, status, built_at, trade_date, created_at "
                 "FROM t_build_scan_results WHERE source = 'vrebounce' "
                 "AND trade_date = (SELECT max(trade_date) FROM t_build_scan_results WHERE source = 'vrebounce') "
-                "AND status = 'pending' ORDER BY score DESC LIMIT :lim"
+                "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
+                "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"
             ), {"lim": limit}).mappings().all()
         return {"candidates": [dict(r) for r in rows], "count": len(rows)}
     finally:
