@@ -652,7 +652,8 @@ def try_build_candidates() -> List[Dict[str, Any]]:
             else:
                 reason = str(out.get("reason") or "")
                 transient = any(k in reason for k in
-                                ("非交易时段", "冷静期", "封板", "熔断", "时段", "时机未确认"))
+                                ("非交易时段", "冷静期", "封板", "熔断", "时段", "时机未确认",
+                                 "人工确认", "human_confirm"))
                 _mark_candidate(sym, "pending" if transient else "blocked", note=reason[:200])
             results.append({"symbol": sym, "status": status, "reason": out.get("reason")})
         except Exception as e:
