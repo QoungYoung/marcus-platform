@@ -372,3 +372,23 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: arkvol_checkin
+  name: ArkVol 每日签到
+  description: 每日自动签到 arkvol.com，维持/获取每日免费额度
+  enabled: true
+  schedule:
+    type: cron
+    expr: 5 8 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/arkvol_checkin.py
+    args: []
+  output:
+    log_file: logs/arkvol_checkin_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
