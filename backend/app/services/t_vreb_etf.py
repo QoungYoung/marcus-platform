@@ -199,11 +199,16 @@ def ensure_etf_market_data() -> bool:
     if latest is None:
         logger.warning("[t-vreb-etf] 无法确定最近基金交易日")
         return False
+    # 注意：t_vreb_daily 同时存股票与基金数据，必须按本模块 ETF 池判断基金数据是否最新
+    pool = _etf_pool()
+    ph = ",".join("'" + c + "'" for c in pool) if pool else "''"
     from sqlalchemy import text
     from app.database import SessionLocal
     db = SessionLocal()
     try:
-        max_d = db.execute(text("SELECT max(trade_date) FROM t_vreb_daily")).scalar()
+        max_d = db.execute(text(
+            "SELECT max(trade_date) FROM t_vreb_daily WHERE ts_code IN (" + ph + ")"
+        )).scalar()
         max_d = str(max_d)[:10].replace("-", "") if max_d is not None else None
     finally:
         db.close()
