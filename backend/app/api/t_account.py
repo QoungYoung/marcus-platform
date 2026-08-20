@@ -514,6 +514,36 @@ def t_vrebounce_exit():
     return {"results": t_vrebounce.check_exits()}
 
 
+# ── 科技ETF V反（t-vreb-etf，只作用于 t 账户）──
+@router.get("/vreb-etf/status")
+def t_vreb_etf_status():
+    """做T账户·科技ETF V反监控状态（只作用于 t 账户）。"""
+    from app.services import t_vreb_etf
+    return t_vreb_etf.get_status()
+
+
+@router.post("/vreb-etf/scan")
+def t_vreb_etf_scan():
+    """手动触发一轮科技ETF V反日频扫描（只写 t 账户候选）。"""
+    from app.services import t_vreb_etf
+    hits = t_vreb_etf.scan_once()
+    return {"hits": hits, "count": len(hits)}
+
+
+@router.post("/vreb-etf/build")
+def t_vreb_etf_build():
+    """手动触发盘中实时复核 + 科技ETF V反建仓（只动 t 账户资金）。"""
+    from app.services import t_vreb_etf
+    return {"results": t_vreb_etf.try_build_candidates()}
+
+
+@router.post("/vreb-etf/exit-check")
+def t_vreb_etf_exit():
+    """手动触发科技ETF出场检查（+6%/-4%/8日，只卖 t 账户）。"""
+    from app.services import t_vreb_etf
+    return {"results": t_vreb_etf.check_exits()}
+
+
 @router.get("/vrebounce/candidates")
 def t_vrebounce_candidates(limit: int = 20, days: int = 7):
     """V反 候选列表：默认只返回最新一个交易日（trade_date=max）的 pending 候选；

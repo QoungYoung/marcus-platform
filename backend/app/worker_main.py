@@ -102,6 +102,11 @@ def _start_services(settings):
     from app.services.t_vrebounce import start_vrebounce_monitor
     start_vrebounce_monitor()
 
+    # 做T账户·科技ETF V反短线（默认关闭灰度，T_VREB_ETF_ENABLED=1 才启动；
+    # A股科技ETF T+1 规则，TP6/SL4/8日；只作用于 account_id='t'）
+    from app.services.t_vreb_etf import start_vreb_etf_monitor
+    start_vreb_etf_monitor()
+
     # 做T监控器（t_account 专用，30s 轮询 + 错峰启动）
     from app.services.t_monitor import start_t_monitor
     start_t_monitor()
