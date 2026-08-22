@@ -180,7 +180,7 @@ interface VrebEvent {
 
 export default function TAccountPage() {
   const pageRef = useRef<HTMLDivElement | null>(null);
-  const [tab, setTab] = useState<'overview' | 'pool' | 'conditions' | 'triggers' | 'audit' | 'build' | 'vreb'>('overview');
+  const [tab, setTab] = useState<'overview' | 'pool' | 'conditions' | 'triggers' | 'audit' | 'build' | 'vreb' | 'vreb_etf' | 'mom_etf'>('overview');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -206,6 +206,12 @@ export default function TAccountPage() {
   const [vrebStatus, setVrebStatus] = useState<VrebStatus | null>(null);
   const [vrebCands, setVrebCands] = useState<VrebCandidate[]>([]);
   const [vrebEvents, setVrebEvents] = useState<VrebEvent[]>([]);
+
+  // 科技ETF V反 / 动量趋势
+  const [veStatus, setVeStatus] = useState<VrebStatus | null>(null);
+  const [veCands, setVeCands] = useState<VrebCandidate[]>([]);
+  const [meStatus, setMeStatus] = useState<VrebStatus | null>(null);
+  const [meCands, setMeCands] = useState<VrebCandidate[]>([]);
 
   const fetchJson = async (url: string, opts?: RequestInit) => {
     const res = await fetch(url, opts);
@@ -328,6 +334,30 @@ export default function TAccountPage() {
     }
   }, []);
 
+  const loadVrebEtf = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const [st, cd] = await Promise.all([
+        fetchJson(API + '/vreb-etf/status'),
+        fetchJson(API + '/vreb-etf/candidates?limit=20'),
+      ]);
+      setVeStatus(st); setVeCands(cd.candidates || []);
+    } catch (e: any) { setError('科技ETF V反加载失败: ' + e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  const loadMomEtf = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const [st, cd] = await Promise.all([
+        fetchJson(API + '/mom-etf/status'),
+        fetchJson(API + '/mom-etf/candidates?limit=20'),
+      ]);
+      setMeStatus(st); setMeCands(cd.candidates || []);
+    } catch (e: any) { setError('动量趋势加载失败: ' + e.message); }
+    finally { setLoading(false); }
+  }, []);
+
   useEffect(() => {
     if (tab === 'overview') loadOverview();
     if (tab === 'pool') loadPool();
@@ -336,7 +366,9 @@ export default function TAccountPage() {
     if (tab === 'audit') loadAudit();
     if (tab === 'build') loadBuild();
     if (tab === 'vreb') loadVreb();
-  }, [tab, loadOverview, loadPool, loadConditions, loadTriggers, loadAudit, loadBuild, loadVreb]);
+    if (tab === 'vreb_etf') loadVrebEtf();
+    if (tab === 'mom_etf') loadMomEtf();
+  }, [tab, loadOverview, loadPool, loadConditions, loadTriggers, loadAudit, loadBuild, loadVreb, loadVrebEtf, loadMomEtf]);
 
   // 角色档案式入场动画（GSAP）：Header 下拉 + 内容 stagger 浮现（切 tab 重放）
   useEffect(() => {
@@ -370,6 +402,8 @@ export default function TAccountPage() {
       if (tab === 'audit') loadAudit();
       if (tab === 'build') loadBuild();
       if (tab === 'vreb') loadVreb();
+      if (tab === 'vreb_etf') loadVrebEtf();
+      if (tab === 'mom_etf') loadMomEtf();
     } catch (e: any) {
       setError('操作失败: ' + e.message);
     }
@@ -430,6 +464,8 @@ export default function TAccountPage() {
     { key: 'triggers', label: '触发事件' },
     { key: 'build', label: '底仓建仓' },
     { key: 'vreb', label: 'V反短线' },
+    { key: 'vreb_etf', label: '科技ETF V反' },
+    { key: 'mom_etf', label: '动量趋势' },
     { key: 'audit', label: '审计' },
   ];
 
@@ -660,6 +696,74 @@ export default function TAccountPage() {
           </table>
         </div>
       )}
+      {/* ── 科技ETF V反（t-vreb-etf，只作用于 t 账户）── */}
+      {tab === 'vreb_etf' && (
+        <div className='tac-section'>
+          <div className='tac-toolbar'>
+            <button className='tac-btn' onClick={() => doPost('/vreb-etf/scan', null, '已触发科技ETF扫描')}>手动扫描</button>
+            <button className='tac-btn' onClick={() => doPost('/vreb-etf/build', null, '已触发复核+建仓')}>手动建仓</button>
+            <button className='tac-btn' onClick={() => doPost('/vreb-etf/exit-check', null, '已触发出场检查')}>出场检查</button>
+            <button className='tac-btn' onClick={loadVrebEtf}>刷新</button>
+          </div>
+          <div className='tac-cards'>
+            <div className='tac-card'><div className='tac-card-label'>科技ETF V反</div><div className='tac-card-value'>{veStatus?.enabled ? '🟢 启用' : '⚪ 关闭'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>运行</div><div className='tac-card-value'>{veStatus?.running ? '运行中' : '未运行'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>账户</div><div className='tac-card-value'>{veStatus?.account ?? '-'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>上次扫描</div><div className='tac-card-value'>{fmtTime(veStatus?.last_scan)}</div></div>
+          </div>
+          <div className='tac-subtitle'>当日候选（tech7 池 · 暴跌反弹）</div>
+          <table className='tac-table'>
+            <thead><tr><th>代码</th><th>得分</th><th>状态</th><th>条件</th><th>时间</th></tr></thead>
+            <tbody>
+              {veCands.map((c) => (
+                <tr key={c.symbol + (c.created_at || '')}>
+                  <td>{c.symbol}</td>
+                  <td>{c.score?.toFixed(2) ?? '-'}</td>
+                  <td>{c.status ?? '-'}</td>
+                  <td className='tac-muted'>{c.trend ?? ''}</td>
+                  <td className='tac-muted'>{fmtTime(c.created_at)}</td>
+                </tr>
+              ))}
+              {veCands.length === 0 && <tr><td colSpan={5} className='tac-empty'>暂无候选</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── 动量趋势（t-mom-etf，只作用于 t 账户）── */}
+      {tab === 'mom_etf' && (
+        <div className='tac-section'>
+          <div className='tac-toolbar'>
+            <button className='tac-btn' onClick={() => doPost('/mom-etf/scan', null, '已触发动量扫描')}>手动扫描</button>
+            <button className='tac-btn' onClick={() => doPost('/mom-etf/rebalance', null, '已触发动量调仓')}>手动调仓</button>
+            <button className='tac-btn' onClick={() => doPost('/mom-etf/exit-check', null, '已触发出场合查')}>出场检查</button>
+            <button className='tac-btn' onClick={loadMomEtf}>刷新</button>
+          </div>
+          <div className='tac-cards'>
+            <div className='tac-card'><div className='tac-card-label'>动量趋势</div><div className='tac-card-value'>{meStatus?.enabled ? '🟢 启用' : '⚪ 关闭'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>双周轮动</div><div className='tac-card-value'>{meStatus?.running ? '运行中' : '未运行'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>账户</div><div className='tac-card-value'>{meStatus?.account ?? '-'}</div></div>
+            <div className='tac-card'><div className='tac-card-label'>上次扫描</div><div className='tac-card-value'>{fmtTime(meStatus?.last_scan)}</div></div>
+          </div>
+          <div className='tac-subtitle'>目标组合（20日动量 TOP3 · 贪婪门控）</div>
+          <table className='tac-table'>
+            <thead><tr><th>代码</th><th>得分</th><th>状态</th><th>条件</th><th>时间</th></tr></thead>
+            <tbody>
+              {meCands.map((c) => (
+                <tr key={c.symbol + (c.created_at || '')}>
+                  <td>{c.symbol}</td>
+                  <td>{c.score?.toFixed(2) ?? '-'}</td>
+                  <td>{c.status ?? '-'}</td>
+                  <td className='tac-muted'>{c.trend ?? ''}</td>
+                  <td className='tac-muted'>{fmtTime(c.created_at)}</td>
+                </tr>
+              ))}
+              {meCands.length === 0 && <tr><td colSpan={5} className='tac-empty'>暂无目标组合</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* ── 审计 ── */}
       {tab === 'audit' && (
         <div className="tac-section">
