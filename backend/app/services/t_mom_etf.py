@@ -111,7 +111,7 @@ def _target_portfolio(as_of: str) -> Tuple[List[str], List[str], bool]:
             s["name"], s["mom"] * 100, "NA" if s["greed"] is None else "%.2f" % s["greed"]) for s in selected))
     else:
         reasons.append("无满足目标组合（动量不足或贪婪过热）")
-    return [s["etf6"] for s in selected], reasons, greed_ok
+    return selected, reasons, greed_ok
 
 
 
@@ -183,10 +183,11 @@ def scan_once() -> List[str]:
     if not greed_ok:
         logger.warning("[t-mom-etf] 贪婪数据连续失败达阈值，停止自动调仓（需人工干预）")
     hits = []
-    for etf6 in target:
-        _insert_scan_result(etf6, 0.5, reasons, "mom_etf 动量TOP%d+贪婪门控" % TOP_N)
-        hits.append(_normalize(etf6))
-        logger.info("[t-mom-etf] ✅ %s 入 t 候选池（mom_etf）", etf6)
+    for s in target:
+        score = round(float(s["mom"]) * 100, 2)  # 以实际 20 日动量(%)为得分
+        _insert_scan_result(s["etf6"], score, reasons, "mom_etf 动量TOP%d+贪婪门控" % TOP_N)
+        hits.append(_normalize(s["etf6"]))
+        logger.info("[t-mom-etf] ✅ %s 入 t 候选池（mom_etf, score=%.2f）", s["etf6"], score)
     logger.info("[t-mom-etf] 扫描 %d 只，目标组合 %d 只", len(_get_pool()), len(hits))
     return hits
 
@@ -298,7 +299,7 @@ def try_rebalance(force: bool = False) -> List[Dict[str, Any]]:
     from app.services.t_build import build_t_position
     from app.services.t_data_sources import fetch_tencent_quote, _normalize_symbol
     target, reasons, _ = _target_portfolio(_today())
-    target_syms = {_normalize(e) for e in target}
+    target_syms = {_normalize(x["etf6"]) for x in target}
     results = []
     positions = _mom_positions()
     held_syms = {p["symbol"] for p in positions}

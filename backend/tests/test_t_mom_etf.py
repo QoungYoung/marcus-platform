@@ -27,8 +27,8 @@ class TestMomEtfPure(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(len(target), 3)
         # 第2名(0.95)被剔除 -> 顺延到第4名
-        self.assertEqual(target[0], pool[keys[0]]["etf_code"][2:])
-        self.assertEqual(target[1], pool[keys[2]]["etf_code"][2:])
+        self.assertEqual(target[0]["etf6"], pool[keys[0]]["etf_code"][2:])
+        self.assertEqual(target[1]["etf6"], pool[keys[2]]["etf_code"][2:])
 
     @mock.patch.object(me, "_mom_signal", return_value=None)
     @mock.patch.object(me, "_greed_pct", return_value=None)
