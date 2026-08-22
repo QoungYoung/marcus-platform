@@ -246,3 +246,49 @@
 .tac-input-wide { flex: 1; min-width: 220px; }
 .tac-hint { color: var(--muted, #6b7280); font-size: 12px; margin: 6px 0 12px; line-height: 1.5; }
 .tac-card-sm-value { font-size: 14px; }
+
+/* ── Hallmark · studied-DNA: Blue Archive 角色档案增强 · theme: Blue Archive · gsap 动画 ── */
+.tac-page { position: relative; overflow-x: clip; }
+.tac-page::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0; opacity: 0.45;
+  background-image:
+    linear-gradient(30deg, rgba(47,124,211,0.07) 12%, transparent 12.5%, transparent 87%, rgba(47,124,211,0.07) 87.5%),
+    linear-gradient(150deg, rgba(47,124,211,0.07) 12%, transparent 12.5%, transparent 87%, rgba(47,124,211,0.07) 87.5%),
+    linear-gradient(30deg, rgba(47,124,211,0.07) 12%, transparent 12.5%, transparent 87%, rgba(47,124,211,0.07) 87.5%),
+    linear-gradient(150deg, rgba(47,124,211,0.07) 12%, transparent 12.5%, transparent 87%, rgba(47,124,211,0.07) 87.5%);
+  background-size: 56px 98px; background-position: 0 0, 0 0, 28px 49px, 28px 49px;
+}
+.tac-page > * { position: relative; z-index: 1; }
+.tac-header h2 {
+  font-size: 30px; letter-spacing: 0.02em; line-height: 1.1;
+}
+.tac-header-right { position: relative; z-index: 1; }
+.tac-sign {
+  font-family: 'Segoe Script', 'Brush Script MT', cursive; color: var(--text-primary, #1f2937);
+  opacity: 0.55; font-size: 14px; transform: rotate(-4deg); margin-left: 8px; white-space: nowrap;
+}
+.tac-regime, .tac-breaker, .tac-tab { position: relative; z-index: 2; }
+.tac-tab {
+  font-weight: 700; letter-spacing: 0.02em; transition: transform .2s var(--ease, ease-out), background .2s var(--ease, ease-out);
+}
+.tac-tab:hover { transform: translateY(-1px); }
+.tac-tab.active {
+  clip-path: polygon(12% 0, 88% 0, 100% 22%, 100% 78%, 88% 100%, 12% 100%, 0 78%, 0 22%);
+  background: linear-gradient(135deg, #2f7cd3, #1b5ea8); color: #fff;
+}
+.tac-card {
+  border: 1px solid rgba(47,124,211,0.18); position: relative; overflow: hidden;
+  transition: transform .2s var(--ease, ease-out), box-shadow .2s var(--ease, ease-out);
+}
+.tac-card::after {
+  content: ''; position: absolute; right: -14px; bottom: -14px; width: 34px; height: 34px;
+  background: linear-gradient(135deg, transparent 45%, rgba(47,124,211,0.14) 45%);
+  transform: rotate(45deg);
+}
+.tac-card:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(47,124,211,0.12); }
+.tac-card-value { font-variant-numeric: tabular-nums; }
+.tac-subtitle { position: relative; z-index: 1; letter-spacing: 0.03em; }
+@media (prefers-reduced-motion: reduce) {
+  .tac-tab, .tac-card { transition: none; }
+  .tac-tab:hover, .tac-card:hover { transform: none; }
+}

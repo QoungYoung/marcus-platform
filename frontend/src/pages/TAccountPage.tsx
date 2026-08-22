@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import gsap from 'gsap';
 import '../styles/t-account-page.css';
 
 const API = '/api/v1/t';
@@ -178,6 +179,7 @@ interface VrebEvent {
 }
 
 export default function TAccountPage() {
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<'overview' | 'pool' | 'conditions' | 'triggers' | 'audit' | 'build' | 'vreb'>('overview');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -336,6 +338,20 @@ export default function TAccountPage() {
     if (tab === 'vreb') loadVreb();
   }, [tab, loadOverview, loadPool, loadConditions, loadTriggers, loadAudit, loadBuild, loadVreb]);
 
+  // 角色档案式入场动画（GSAP）：Header 下拉 + 内容 stagger 浮现（切 tab 重放）
+  useEffect(() => {
+    if (!pageRef.current) return;
+    const ctx = gsap.context(() => {
+      gsap.fromTo('.tac-header', { opacity: 0, y: -12 },
+        { opacity: 1, y: 0, duration: 0.45, ease: 'power2.out' });
+      gsap.fromTo(
+        '.tac-section .tac-card, .tac-section .tac-subtitle, .tac-section .tac-toolbar, .tac-section .tac-table',
+        { opacity: 0, y: 16 },
+        { opacity: 1, y: 0, stagger: 0.05, duration: 0.4, ease: 'power2.out', clearProps: 'transform,opacity' });
+    }, pageRef);
+    return () => ctx.revert();
+  }, [tab]);
+
   // 操作
   const doPost = async (path: string, body?: any, okMsg?: string) => {
     setMsg('');
@@ -418,9 +434,10 @@ export default function TAccountPage() {
   ];
 
   return (
-    <div className="tac-page">
+    <div className="tac-page" ref={pageRef}>
       <div className="tac-header">
         <h2>做T账户 · T+0 回转</h2>
+        <span className="tac-sign">Marcus · T-Account</span>
         <div className="tac-header-right">
           {regime && <span className={`tac-regime tac-regime-${regime.regime?.toLowerCase()}`}>{regimeLabel(regime.regime)}</span>}
           {breaker?.triggered && <span className="tac-breaker">⚠️ {breaker.reason}</span>}
