@@ -188,6 +188,7 @@
 .tac-table-tight th { padding:7px 10px; font-size:11px; }
 .tac-table-tight td { padding:8px 10px; }
 .tac-sym { font-weight:700; color:var(--bi-accent); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.tac-name { color:var(--bi-ink); font-weight:600; white-space:nowrap; }
 .tac-sellable { color:var(--bi-accent); }
 .tac-empty { color:var(--bi-ink-soft); text-align:center; padding:18px; }
 .tac-muted { color:var(--bi-ink-soft); }

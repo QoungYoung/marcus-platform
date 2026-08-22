@@ -545,9 +545,11 @@ def t_mom_etf_exit():
 
 
 def _etf_shortline_candidates(source: str, limit: int = 20):
-    """短线候选列表（source 参数化：vreb_etf / mom_etf）。"""
+    """短线候选列表（source 参数化：vreb_etf / mom_etf），回填 ETF 名称。"""
     from sqlalchemy import text
     from app.database import SessionLocal
+    from app.services.golden_pit_config import TECH_SECTOR_POOL
+    name_map = {e["etf_code"]: e["name"] for e in TECH_SECTOR_POOL.values()}
     db = SessionLocal()
     try:
         rows = db.execute(text(
@@ -557,7 +559,12 @@ def _etf_shortline_candidates(source: str, limit: int = 20):
             "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
             "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"
         ), {"src": source, "lim": limit}).mappings().all()
-        return {"candidates": [dict(r) for r in rows], "count": len(rows)}
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["name"] = name_map.get(d.get("symbol"), "")
+            out.append(d)
+        return {"candidates": out, "count": len(out)}
     finally:
         db.close()
 

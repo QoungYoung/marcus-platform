@@ -932,18 +932,19 @@ export default function TAccountPage() {
                     </div>
                     <div className="tac-subtitle">目标组合（20日动量 TOP3 · 贪婪门控）</div>
                     <table className="tac-table">
-                      <thead><tr><th>代码</th><th>得分</th><th>状态</th><th>条件</th><th>时间</th></tr></thead>
+                      <thead><tr><th>代码</th><th>名字</th><th>得分</th><th>状态</th><th>条件</th><th>时间</th></tr></thead>
                       <tbody>
                         {meCands.map((c) => (
                           <tr key={c.symbol + (c.created_at || '')}>
                             <td className="tac-sym">{c.symbol}</td>
+                            <td className="tac-name">{c.name || '-'}</td>
                             <td>{c.score?.toFixed(2) ?? '-'}</td>
-                            <td>{c.status ?? '-'}</td>
+                            <td>{STATUS_LABEL[c.status] || c.status}</td>
                             <td className="tac-muted">{c.trend ?? ''}</td>
                             <td className="tac-muted">{fmtTime(c.created_at)}</td>
                           </tr>
                         ))}
-                        {meCands.length === 0 && <tr><td colSpan={5} className="tac-empty">暂无目标组合</td></tr>}
+                        {meCands.length === 0 && <tr><td colSpan={6} className="tac-empty">暂无目标组合</td></tr>}
                       </tbody>
                     </table>
                   </div>
