@@ -107,6 +107,11 @@ def _start_services(settings):
     from app.services.t_vreb_etf import start_vreb_etf_monitor
     start_vreb_etf_monitor()
 
+    # 做T账户·科技ETF动量趋势（默认关闭灰度，T_MOM_ETF_ENABLED=1 才启动；
+    # 20日动量 TOP3 双周轮动 + arkvol 贪婪门控；只作用于 account_id='t'）
+    from app.services.t_mom_etf import start_mom_etf_monitor
+    start_mom_etf_monitor()
+
     # 做T监控器（t_account 专用，30s 轮询 + 错峰启动）
     from app.services.t_monitor import start_t_monitor
     start_t_monitor()

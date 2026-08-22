@@ -514,6 +514,36 @@ def t_vrebounce_exit():
     return {"results": t_vrebounce.check_exits()}
 
 
+# ── 科技ETF 动量趋势（t-mom-etf，只作用于 t 账户）──
+@router.get("/mom-etf/status")
+def t_mom_etf_status():
+    """做T账户·科技ETF动量趋势监控状态（只作用于 t 账户）。"""
+    from app.services import t_mom_etf
+    return t_mom_etf.get_status()
+
+
+@router.post("/mom-etf/scan")
+def t_mom_etf_scan():
+    """手动触发一轮科技ETF动量趋势扫描（只写 t 账户候选）。"""
+    from app.services import t_mom_etf
+    hits = t_mom_etf.scan_once()
+    return {"hits": hits, "count": len(hits)}
+
+
+@router.post("/mom-etf/rebalance")
+def t_mom_etf_rebalance():
+    """手动触发双周调仓（卖出掉出TOP3、买入新目标，只动 t 账户）。"""
+    from app.services import t_mom_etf
+    return {"results": t_mom_etf.try_rebalance(force=True)}
+
+
+@router.post("/mom-etf/exit-check")
+def t_mom_etf_exit():
+    """手动触发调仓日出场检查（无独立止损，只卖 t 账户）。"""
+    from app.services import t_mom_etf
+    return {"results": t_mom_etf.check_exits()}
+
+
 # ── 科技ETF V反（t-vreb-etf，只作用于 t 账户）──
 @router.get("/vreb-etf/status")
 def t_vreb_etf_status():
