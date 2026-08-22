@@ -37,6 +37,13 @@ def _overshoot_bars():
 class TestVRebouncePure(unittest.TestCase):
     """账户隔离与日频入池纯逻辑（不依赖 DB）。"""
 
+    def setUp(self):
+        self._bull = mock.patch.object(vb, "_bull_state", return_value=True)
+        self._bull.start()
+
+    def tearDown(self):
+        self._bull.stop()
+
     def test_account_isolation_constant(self):
         self.assertEqual(vb._account_id(), "t")
 
@@ -106,6 +113,26 @@ class TestVRebouncePure(unittest.TestCase):
 
     @mock.patch.object(vb, "fetch_mcap_yi", return_value=50.0)
     @mock.patch.object(vb, "fetch_daily_bars")
+    def test_day_filter_nonbull_allows_weak_rebound(self, bars, mcap):
+        """非牛（上证<=MA250）时弱反抽放行（牛熊自适应：非牛不要求超买）。"""
+        # 深跌后反弹 25% 但最近 9 日横盘（J/RSI 不超买）的"弱反抽"形态
+        seq = []
+        for i in range(60):
+            seq.append({"date": "20260101", "open": 12.5, "high": 12.6,
+                        "low": 12.4, "close": 12.5, "vol": 1000.0})
+        for c in (11.6, 10.7, 9.8, 8.9, 8.0, 9.4, 9.7, 9.9):
+            seq.append({"date": "20260101", "open": c - 0.05, "high": c + 0.15,
+                        "low": c - 0.1, "close": c, "vol": 1000.0})
+        for c in (9.85, 9.9, 9.85, 9.9, 9.95, 9.9, 9.9):
+            seq.append({"date": "20260101", "open": c, "high": c + 0.05,
+                        "low": c - 0.05, "close": c, "vol": 1000.0})
+        bars.return_value = seq
+        with mock.patch.object(vb, "_bull_state", return_value=False):
+            ok, reasons, _ = vb.day_filter("002384")
+        self.assertTrue(ok, reasons)
+
+    @mock.patch.object(vb, "fetch_mcap_yi", return_value=50.0)
+    @mock.patch.object(vb, "fetch_daily_bars")
     def test_day_filter_not_overbought_reject(self, bars, mcap):
         """缓慢下行后企稳（无超买）-> 拒绝。"""
         seq = []
@@ -124,6 +151,13 @@ class TestVRebouncePure(unittest.TestCase):
 
 class TestVRebounceVectorizedScan(unittest.TestCase):
     """全市场向量化扫描：与 day_filter 同公式 + scan_once 接线（mock DB）。"""
+
+    def setUp(self):
+        self._bull = mock.patch.object(vb, "_bull_state", return_value=True)
+        self._bull.start()
+
+    def tearDown(self):
+        self._bull.stop()
 
     def _df_from_seq(self, seq):
         import pandas as pd

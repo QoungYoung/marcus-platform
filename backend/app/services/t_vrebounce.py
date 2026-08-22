@@ -54,6 +54,10 @@ SL5 = float(os.getenv("VREB_SL5", "0.05"))
 HOLD_DAYS = int(os.getenv("VREB_HOLD_DAYS", "12"))       # 持有 N 交易日超时平仓
 REALTIME_CONFIRM = os.getenv("VREB_REALTIME_CONFIRM", "0") == "1"  # 默认只验价（回测无资金流条件）
 MONITOR_INTERVAL_S = float(os.getenv("VREB_MONITOR_INTERVAL_S", "60"))
+BULL_ADAPT = os.getenv("VREB_BULL_ADAPT", "1") == "1"
+# 牛熊自适应超买：上证>MA250（牛市）要求超买（动量确认）；
+# 上证<=MA250（非牛）不要求超买（弱反抽更优，历史 PF 2.24 -> 4.00/4.65）。缓存每日一次。
+_bull_cache = {"date": "", "bull": True}
 
 _instance = None
 
@@ -448,6 +452,8 @@ def _vreb_candidates_vectorized(df) -> List[Dict[str, Any]]:
                 dns -= dl
         r6 = 100 * ups / (ups + dns) if ups + dns > 0 else 50.0
         ov = (J >= J_OVER) or (r6 >= RSI_OVER)
+        # 牛熊自适应：牛市要求超买确认；非牛弱反抽放行
+        ov_ok = (not BULL_ADAPT) or ov or (not _bull_state())
         b20 = (close[t] / ma20 - 1) if ma20 > 0 else 99.0
         b60 = (close[t] / ma60 - 1) if ma60 > 0 else 99.0
         volr = 99.0
@@ -461,7 +467,7 @@ def _vreb_candidates_vectorized(df) -> List[Dict[str, Any]]:
             md14 = sum(abs(close[k] - tp14) for k in range(t - 13, t + 1)) / 14.0
             if md14 > 0:
                 cci = (close[t] - tp14) / (0.015 * md14)
-        if not (md and rb >= REB_MIN and ov and b20 <= BIAS20_MAX):
+        if not (md and rb >= REB_MIN and ov_ok and b20 <= BIAS20_MAX):
             continue
         release_combo = (volr <= VOLR_MAX) and (b60 <= B60_MAX)
         release_cci = (cci is not None) and (cci <= CCI_RELEASE_MAX)
@@ -482,6 +488,33 @@ def _vreb_candidates_vectorized(df) -> List[Dict[str, Any]]:
         })
     out.sort(key=lambda x: -x["score"])
     return out
+
+
+# ────────────────────────────────────────────────────────────────
+# 牛熊状态（上证 vs MA250，缓存每日一次）
+# ────────────────────────────────────────────────────────────────
+def _bull_state() -> bool:
+    """上证指数收盘 > MA250 -> 牛市（要求超买确认）；否则非牛（弱反抽放行）。"""
+    global _bull_cache
+    today = date.today().isoformat()
+    if _bull_cache["date"] == today:
+        return _bull_cache["bull"]
+    bull = True
+    try:
+        pro = _get_pro()
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=400)).strftime("%Y%m%d")
+        df = pro.index_daily(ts_code="000001.SH", start_date=start, end_date=end)
+        if df is not None and len(df) >= 251:
+            df = df.sort_values("trade_date")
+            close = [float(x) for x in df["close"].tolist()]
+            ma250 = sum(close[-250:]) / 250.0
+            bull = close[-1] > ma250
+    except Exception as e:
+        logger.warning("[t-vrebounce] 牛熊状态获取失败（默认牛市）: %s", str(e)[:80])
+    _bull_cache = {"date": today, "bull": bull}
+    logger.info("[t-vrebounce] 牛熊状态: %s（上证 vs MA250）", "牛" if bull else "非牛")
+    return bull
 
 
 # ────────────────────────────────────────────────────────────────
@@ -520,6 +553,7 @@ def day_filter(code: str) -> Tuple[bool, List[str], float]:
             cci = (closes[-1] - tp14) / (0.015 * md14)
     J, r6 = _kdj_rsi6(bars)
     ov = (J[-1] >= J_OVER) or (r6[-1] is not None and r6[-1] >= RSI_OVER)
+    ov_required = (not BULL_ADAPT) or _bull_state()
     ok = True
     if bias20 > BIAS20_MAX:
         ok = False
@@ -529,15 +563,15 @@ def day_filter(code: str) -> Tuple[bool, List[str], float]:
     if not (release_combo or release_cci):
         reasons.append("未达放行条件（volr=%.2f>b=%.1f%% 且 cci=%s>%.0f）" % (
             volr, b60 * 100, "NA" if cci is None else "%.1f" % cci, CCI_RELEASE_MAX))
+    if ov_required and not ov:
+        ok = False
+        reasons.append("牛市要求末端超买（J=%.0f, RSI6=%s）" % (J[-1], "NA" if r6[-1] is None else "%.0f" % r6[-1]))
     if ma20 >= ma20_prev5:
         ok = False
         reasons.append("MA20 未仍下行")
     if rb < REB_MIN:
         ok = False
         reasons.append("15日低点反弹<%.0f%%（实际%.1f%%）" % (REB_MIN * 100, rb * 100))
-    if not ov:
-        ok = False
-        reasons.append("末端未超买（J=%.0f, RSI6=%s）" % (J[-1], "NA" if r6[-1] is None else "%.0f" % r6[-1]))
     mcap = fetch_mcap_yi(ts)
     if mcap is not None and mcap >= MCAP_MAX_YI:
         ok = False

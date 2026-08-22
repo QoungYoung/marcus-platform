@@ -26,6 +26,13 @@ def _etf_bars():
 
 class TestVrebEtfPure(unittest.TestCase):
 
+    def setUp(self):
+        self._bull = mock.patch.object(ve, "_bull_state", return_value=True)
+        self._bull.start()
+
+    def tearDown(self):
+        self._bull.stop()
+
     def test_account_isolation(self):
         self.assertEqual(ve._account_id(), "t")
 

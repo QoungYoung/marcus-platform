@@ -45,6 +45,31 @@ HOLD_DAYS = int(os.getenv("VREB_ETF_HOLD_DAYS", "8"))        # 8 交易日超时
 REALTIME_CONFIRM = os.getenv("VREB_ETF_REALTIME_CONFIRM", "0") == "1"
 MONITOR_INTERVAL_S = float(os.getenv("VREB_ETF_MONITOR_INTERVAL_S", "60"))
 LOOKBACK_DAYS = 70  # ≥65 才能算 MA60/b60
+BULL_ADAPT = os.getenv("VREB_ETF_BULL_ADAPT", "1") == "1"
+_bull_cache = {"date": "", "bull": True}
+
+
+def _bull_state() -> bool:
+    """上证 vs MA250：牛市要求超买确认；非牛弱反抽放行（缓存每日一次）。"""
+    global _bull_cache
+    today = date.today().isoformat()
+    if _bull_cache["date"] == today:
+        return _bull_cache["bull"]
+    bull = True
+    try:
+        pro = _get_pro()
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=400)).strftime("%Y%m%d")
+        df = pro.index_daily(ts_code="000001.SH", start_date=start, end_date=end)
+        if df is not None and len(df) >= 251:
+            df = df.sort_values("trade_date")
+            close = [float(x) for x in df["close"].tolist()]
+            bull = close[-1] > sum(close[-250:]) / 250.0
+    except Exception as e:
+        logger.warning("[t-vreb-etf] 牛熊状态获取失败（默认牛市）: %s", str(e)[:80])
+    _bull_cache = {"date": today, "bull": bull}
+    logger.info("[t-vreb-etf] 牛熊状态: %s（上证 vs MA250）", "牛" if bull else "非牛")
+    return bull
 
 _instance = None
 
@@ -300,6 +325,8 @@ def _etf_candidates(df) -> List[Dict[str, Any]]:
                 dns -= dl
         r6 = 100 * ups / (ups + dns) if ups + dns > 0 else 50.0
         ov = (J >= J_OVER) or (r6 >= RSI_OVER)
+        # 牛熊自适应：牛市要求超买确认；非牛弱反抽放行
+        ov_ok = (not BULL_ADAPT) or ov or (not _bull_state())
         b20 = (close[t] / ma20 - 1) if ma20 > 0 else 99.0
         b60 = (close[t] / ma60 - 1) if ma60 > 0 else 99.0
         volr = 99.0
@@ -313,7 +340,7 @@ def _etf_candidates(df) -> List[Dict[str, Any]]:
             md14 = sum(abs(close[k] - tp14) for k in range(t - 13, t + 1)) / 14.0
             if md14 > 0:
                 cci = (close[t] - tp14) / (0.015 * md14)
-        if not (md and rb >= REB_MIN and ov and b20 <= BIAS20_MAX):
+        if not (md and rb >= REB_MIN and ov_ok and b20 <= BIAS20_MAX):
             continue
         release_combo = (volr <= VOLR_MAX) and (b60 <= B60_MAX)
         release_cci = (cci is not None) and (cci <= CCI_RELEASE_MAX)
