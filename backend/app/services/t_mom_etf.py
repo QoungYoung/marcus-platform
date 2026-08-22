@@ -131,9 +131,6 @@ def _insert_scan_result(etf6: str, score: float, reasons: List[str], trend: str)
         db = SessionLocal()
         try:
             db.execute(text(
-                "DELETE FROM t_build_scan_results WHERE trade_date = :d AND source = 'mom_etf'"
-            ), {"d": today})
-            db.execute(text(
                 "INSERT INTO t_build_scan_results (trade_date, symbol, score, reasons, trend, status, source, created_at) "
                 "VALUES (:d, :sym, :sc, :rs, :tr, 'pending', 'mom_etf', now())"
             ), {"d": today, "sym": sym, "sc": score,
@@ -169,6 +166,19 @@ def scan_once() -> List[str]:
     except Exception as e:
         logger.warning("[t-mom-etf] 过期候选归档失败: %s", str(e)[:80])
     as_of = _today()
+    try:
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal as _SL
+        _db = _SL()
+        try:
+            _db.execute(_text(
+                "DELETE FROM t_build_scan_results WHERE trade_date = :d AND source = 'mom_etf'"
+            ), {"d": _today()})
+            _db.commit()
+        finally:
+            _db.close()
+    except Exception as e:
+        logger.warning("[t-mom-etf] 当日候选清理失败: %s", str(e)[:80])
     target, reasons, greed_ok = _target_portfolio(as_of)
     if not greed_ok:
         logger.warning("[t-mom-etf] 贪婪数据连续失败达阈值，停止自动调仓（需人工干预）")

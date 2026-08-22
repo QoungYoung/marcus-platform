@@ -596,9 +596,6 @@ def _insert_scan_result(symbol: str, name: str, score: float, reasons: List[str]
         db = SessionLocal()
         try:
             db.execute(text(
-                "DELETE FROM t_build_scan_results WHERE trade_date = :d AND source = 'vrebounce'"
-            ), {"d": today})
-            db.execute(text(
                 "INSERT INTO t_build_scan_results (trade_date, symbol, score, reasons, trend, status, source, created_at) "
                 "VALUES (:d, :sym, :sc, :rs, :tr, 'pending', 'vrebounce', now())"
             ), {"d": today, "sym": symbol, "sc": score, "rs": json.dumps(reasons, ensure_ascii=False), "tr": trend})
@@ -639,6 +636,19 @@ def scan_once() -> List[str]:
     if df is None or df.empty:
         logger.warning("[t-vrebounce] 基础数据为空，跳过扫描")
         return []
+    try:
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal as _SL
+        _db = _SL()
+        try:
+            _db.execute(_text(
+                "DELETE FROM t_build_scan_results WHERE trade_date = :d AND source = 'vrebounce'"
+            ), {"d": datetime.now().strftime("%Y-%m-%d")})
+            _db.commit()
+        finally:
+            _db.close()
+    except Exception as e:
+        logger.warning("[t-vrebounce] 当日候选清理失败: %s", str(e)[:80])
     cands = _vreb_candidates_vectorized(df)
     hits = []
     for c in cands:
