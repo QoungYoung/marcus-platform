@@ -157,6 +157,7 @@ interface VrebStatus {
 
 interface VrebCandidate {
   symbol: string;
+  name?: string;
   score?: number;
   reasons?: any;
   trend?: string;
@@ -848,17 +849,18 @@ export default function TAccountPage() {
                     </div>
                     <div className="tac-subtitle">当日候选（t 账户 · 盘后全市场扫描）</div>
                     <table className="tac-table tac-table-tight">
-                      <thead><tr><th>代码</th><th>得分</th><th>状态</th><th>条件</th></tr></thead>
+                      <thead><tr><th>代码</th><th>名字</th><th>得分</th><th>状态</th><th>条件</th></tr></thead>
                       <tbody>
                         {vrebCands.map((c) => (
                           <tr key={c.symbol + (c.created_at || '')}>
                             <td className="tac-sym">{c.symbol}</td>
+                            <td className="tac-name">{c.name || '-'}</td>
                             <td>{c.score?.toFixed(2) ?? '-'}</td>
-                            <td>{c.status ?? '-'}</td>
+                            <td>{STATUS_LABEL[c.status ?? ''] || c.status || '-' || c.status}</td>
                             <td className="tac-muted">{c.trend ?? ''}</td>
                           </tr>
                         ))}
-                        {vrebCands.length === 0 && <tr><td colSpan={4} className="tac-empty">暂无候选</td></tr>}
+                        {vrebCands.length === 0 && <tr><td colSpan={5} className="tac-empty">暂无候选</td></tr>}
                       </tbody>
                     </table>
                     <div className="tac-subtitle">建仓/平仓事件</div>
@@ -898,17 +900,18 @@ export default function TAccountPage() {
                     </div>
                     <div className="tac-subtitle">当日候选（tech7 池 · 暴跌反弹）</div>
                     <table className="tac-table tac-table-tight">
-                      <thead><tr><th>代码</th><th>得分</th><th>状态</th><th>条件</th></tr></thead>
+                      <thead><tr><th>代码</th><th>名字</th><th>得分</th><th>状态</th><th>条件</th></tr></thead>
                       <tbody>
                         {veCands.map((c) => (
                           <tr key={c.symbol + (c.created_at || '')}>
                             <td className="tac-sym">{c.symbol}</td>
+                            <td className="tac-name">{c.name || '-'}</td>
                             <td>{c.score?.toFixed(2) ?? '-'}</td>
-                            <td>{c.status ?? '-'}</td>
+                            <td>{STATUS_LABEL[c.status ?? ''] || c.status || '-' || c.status}</td>
                             <td className="tac-muted">{c.trend ?? ''}</td>
                           </tr>
                         ))}
-                        {veCands.length === 0 && <tr><td colSpan={4} className="tac-empty">暂无候选</td></tr>}
+                        {veCands.length === 0 && <tr><td colSpan={5} className="tac-empty">暂无候选</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -939,7 +942,7 @@ export default function TAccountPage() {
                             <td className="tac-sym">{c.symbol}</td>
                             <td className="tac-name">{c.name || '-'}</td>
                             <td>{c.score?.toFixed(2) ?? '-'}</td>
-                            <td>{STATUS_LABEL[c.status] || c.status}</td>
+                            <td>{STATUS_LABEL[c.status ?? ''] || c.status || '-' || c.status}</td>
                             <td className="tac-muted">{c.trend ?? ''}</td>
                             <td className="tac-muted">{fmtTime(c.created_at)}</td>
                           </tr>

@@ -611,6 +611,34 @@ def t_vreb_etf_exit():
     return {"results": t_vreb_etf.check_exits()}
 
 
+import time as _time
+
+_STOCK_NAME_CACHE = {"at": 0.0, "map": {}}
+
+
+def _stock_name_map() -> dict:
+    """全市场股票 ts_code->name 缓存（6h TTL），用于 V反 候选回填中文名称。"""
+    now = _time.time()
+    if _STOCK_NAME_CACHE["map"] and (now - _STOCK_NAME_CACHE["at"]) < 6 * 3600:
+        return _STOCK_NAME_CACHE["map"]
+    try:
+        from app.services.t_vrebounce import _get_pro
+        pro = _get_pro()
+        df = pro.stock_basic(list_status="L", fields="ts_code,name")
+        m = {}
+        for _, r in df.iterrows():
+            tc = str(r["ts_code"])
+            if "." not in tc:
+                continue
+            code, exch = tc.split(".")
+            pre = "SH" if exch == "SH" else ("SZ" if exch == "SZ" else "BJ")
+            m[pre + code] = str(r["name"])
+        _STOCK_NAME_CACHE.update({"at": now, "map": m})
+        return m
+    except Exception:
+        return _STOCK_NAME_CACHE["map"]
+
+
 @router.get("/vrebounce/candidates")
 def t_vrebounce_candidates(limit: int = 20, days: int = 7):
     """V反 候选列表：默认只返回最新一个交易日（trade_date=max）的 pending 候选；
@@ -619,6 +647,7 @@ def t_vrebounce_candidates(limit: int = 20, days: int = 7):
     from app.database import SessionLocal
     db = SessionLocal()
     try:
+        name_map = _stock_name_map()
         if days <= 0:
             rows = db.execute(text(
                 "SELECT DISTINCT ON (symbol) symbol, score, reasons, trend, status, built_at, trade_date, created_at "
@@ -633,7 +662,12 @@ def t_vrebounce_candidates(limit: int = 20, days: int = 7):
                 "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
                 "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"
             ), {"lim": limit}).mappings().all()
-        return {"candidates": [dict(r) for r in rows], "count": len(rows)}
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["name"] = name_map.get(d.get("symbol"), "")
+            out.append(d)
+        return {"candidates": out, "count": len(out)}
     finally:
         db.close()
 
