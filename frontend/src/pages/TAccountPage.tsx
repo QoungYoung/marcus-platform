@@ -201,6 +201,7 @@ export default function TAccountPage() {
   const [buildEvents, setBuildEvents] = useState<BuildEvent[]>([]);
   const [buildForm, setBuildForm] = useState({ symbol: '', price: '', volume: '', reason: '' });
   const [buildSource, setBuildSource] = useState<'pool' | 'scan'>('pool');
+  const [buildAuditOpen, setBuildAuditOpen] = useState(false);
 
   // V反 短线
   const [vrebStatus, setVrebStatus] = useState<VrebStatus | null>(null);
@@ -785,37 +786,47 @@ export default function TAccountPage() {
                       </tbody>
                     </table>
 
-                    <div className="tac-subtitle">建仓审计（独立于做T触发事件流）</div>
-                    <table className="tac-table">
-                      <thead><tr>
-                        <th>#</th><th>代码</th><th>类型</th><th>价格</th><th>数量</th><th>金额</th>
-                        <th>决策</th><th>状态</th><th>原因</th><th>操作</th>
-                      </tr></thead>
-                      <tbody>
-                        {buildEvents.map((ev) => (
-                          <tr key={ev.id}>
-                            <td>{ev.id}</td>
-                            <td className="tac-sym">{ev.symbol}</td>
-                            <td>{ev.event_type === 'capital_adjust' ? '调额' : ev.event_type === 'build_position' ? '建仓' : ev.event_type}</td>
-                            <td>{ev.price ?? '-'}</td>
-                            <td>{ev.volume ?? '-'}</td>
-                            <td>{fmtMoney(ev.amount)}</td>
-                            <td>{ev.decision_source === 'human' ? '人工' : 'Agent'}</td>
-                            <td><span className={`tac-status tac-status-${ev.status}`}>{STATUS_LABEL[ev.status] || ev.status}</span></td>
-                            <td className="tac-muted">{ev.reason || ''}</td>
-                            <td>
-                              {ev.status === 'human_confirm' && (
-                                <>
-                                  <button className="tac-btn tac-btn-sm" onClick={() => confirmBuildEvent(ev.id, 'execute')}>放行</button>
-                                  <button className="tac-btn tac-btn-sm tac-btn-danger" onClick={() => confirmBuildEvent(ev.id, 'cancel')}>取消</button>
-                                </>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                        {buildEvents.length === 0 && <tr><td colSpan={10} className="tac-empty">暂无建仓记录</td></tr>}
-                      </tbody>
-                    </table>
+                    <div className="tac-collapse">
+                      <button className="tac-collapse-head" onClick={() => setBuildAuditOpen(v => !v)} aria-expanded={buildAuditOpen}>
+                        <span className="tac-collapse-title">建仓审计（独立于做T触发事件流）</span>
+                        <span className="tac-collapse-meta">
+                          <span className="tac-collapse-count">{buildEvents.length} 条</span>
+                          <span className={`tac-chevron ${buildAuditOpen ? 'open' : ''}`}>▸</span>
+                        </span>
+                      </button>
+                      {buildAuditOpen && (
+                        <table className="tac-table">
+                          <thead><tr>
+                            <th>#</th><th>代码</th><th>类型</th><th>价格</th><th>数量</th><th>金额</th>
+                            <th>决策</th><th>状态</th><th>原因</th><th>操作</th>
+                          </tr></thead>
+                          <tbody>
+                            {buildEvents.map((ev) => (
+                              <tr key={ev.id}>
+                                <td>{ev.id}</td>
+                                <td className="tac-sym">{ev.symbol}</td>
+                                <td>{ev.event_type === 'capital_adjust' ? '调额' : ev.event_type === 'build_position' ? '建仓' : ev.event_type}</td>
+                                <td>{ev.price ?? '-'}</td>
+                                <td>{ev.volume ?? '-'}</td>
+                                <td>{fmtMoney(ev.amount)}</td>
+                                <td>{ev.decision_source === 'human' ? '人工' : 'Agent'}</td>
+                                <td><span className={`tac-status tac-status-${ev.status}`}>{STATUS_LABEL[ev.status] || ev.status}</span></td>
+                                <td className="tac-muted">{ev.reason || ''}</td>
+                                <td>
+                                  {ev.status === 'human_confirm' && (
+                                    <>
+                                      <button className="tac-btn tac-btn-sm" onClick={() => confirmBuildEvent(ev.id, 'execute')}>放行</button>
+                                      <button className="tac-btn tac-btn-sm tac-btn-danger" onClick={() => confirmBuildEvent(ev.id, 'cancel')}>取消</button>
+                                    </>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                            {buildEvents.length === 0 && <tr><td colSpan={10} className="tac-empty">暂无建仓记录</td></tr>}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
                   </div>
                 </section>
 
@@ -833,7 +844,6 @@ export default function TAccountPage() {
                     <div className="tac-cards tac-cards-sm">
                       <div className="tac-card"><div className="tac-card-label">监控</div><div className="tac-card-value">{vrebStatus?.enabled ? '🟢 启用' : '⚪ 关闭'}</div></div>
                       <div className="tac-card"><div className="tac-card-label">运行</div><div className="tac-card-value">{vrebStatus?.running ? '运行中' : '未运行'}</div></div>
-                      <div className="tac-card"><div className="tac-card-label">账户</div><div className="tac-card-value">{vrebStatus?.account ?? '-'}</div></div>
                       <div className="tac-card"><div className="tac-card-label">上次</div><div className="tac-card-value tac-card-sm-value">{fmtTime(vrebStatus?.last_scan)}</div></div>
                     </div>
                     <div className="tac-subtitle">当日候选（t 账户 · 盘后全市场扫描）</div>
@@ -884,7 +894,6 @@ export default function TAccountPage() {
                     <div className="tac-cards tac-cards-sm">
                       <div className="tac-card"><div className="tac-card-label">监控</div><div className="tac-card-value">{veStatus?.enabled ? '🟢 启用' : '⚪ 关闭'}</div></div>
                       <div className="tac-card"><div className="tac-card-label">运行</div><div className="tac-card-value">{veStatus?.running ? '运行中' : '未运行'}</div></div>
-                      <div className="tac-card"><div className="tac-card-label">账户</div><div className="tac-card-value">{veStatus?.account ?? '-'}</div></div>
                       <div className="tac-card"><div className="tac-card-label">上次</div><div className="tac-card-value tac-card-sm-value">{fmtTime(veStatus?.last_scan)}</div></div>
                     </div>
                     <div className="tac-subtitle">当日候选（tech7 池 · 暴跌反弹）</div>
@@ -919,7 +928,6 @@ export default function TAccountPage() {
                     <div className="tac-cards tac-cards-sm">
                       <div className="tac-card"><div className="tac-card-label">动量</div><div className="tac-card-value">{meStatus?.enabled ? '🟢 启用' : '⚪ 关闭'}</div></div>
                       <div className="tac-card"><div className="tac-card-label">双周轮动</div><div className="tac-card-value">{meStatus?.running ? '运行中' : '未运行'}</div></div>
-                      <div className="tac-card"><div className="tac-card-label">账户</div><div className="tac-card-value">{meStatus?.account ?? '-'}</div></div>
                       <div className="tac-card"><div className="tac-card-label">上次</div><div className="tac-card-value tac-card-sm-value">{fmtTime(meStatus?.last_scan)}</div></div>
                     </div>
                     <div className="tac-subtitle">目标组合（20日动量 TOP3 · 贪婪门控）</div>
