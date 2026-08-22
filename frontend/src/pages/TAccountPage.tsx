@@ -180,7 +180,7 @@ interface VrebEvent {
 
 export default function TAccountPage() {
   const pageRef = useRef<HTMLDivElement | null>(null);
-  const [tab, setTab] = useState<'overview' | 'pool' | 'conditions' | 'triggers' | 'audit' | 'build' | 'vreb' | 'vreb_etf' | 'mom_etf'>('overview');
+  const [tab, setTab] = useState<'dashboard' | 'trade' | 'signal'>('dashboard');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -359,15 +359,9 @@ export default function TAccountPage() {
   }, []);
 
   useEffect(() => {
-    if (tab === 'overview') loadOverview();
-    if (tab === 'pool') loadPool();
-    if (tab === 'conditions') loadConditions();
-    if (tab === 'triggers') loadTriggers();
-    if (tab === 'audit') loadAudit();
-    if (tab === 'build') loadBuild();
-    if (tab === 'vreb') loadVreb();
-    if (tab === 'vreb_etf') loadVrebEtf();
-    if (tab === 'mom_etf') loadMomEtf();
+    if (tab === 'dashboard') { loadOverview(); loadAudit(); }
+    if (tab === 'trade') { loadPool(); loadConditions(); loadTriggers(); }
+    if (tab === 'signal') { loadBuild(); loadVreb(); loadVrebEtf(); loadMomEtf(); }
   }, [tab, loadOverview, loadPool, loadConditions, loadTriggers, loadAudit, loadBuild, loadVreb, loadVrebEtf, loadMomEtf]);
 
   // 角色档案式入场动画（GSAP）：Header 下拉 + 内容 stagger 浮现（切 tab 重放）
@@ -395,15 +389,9 @@ export default function TAccountPage() {
       });
       if (okMsg) setMsg(okMsg);
       // 刷新当前 tab
-      if (tab === 'overview') loadOverview();
-      if (tab === 'pool') loadPool();
-      if (tab === 'conditions') loadConditions();
-      if (tab === 'triggers') loadTriggers();
-      if (tab === 'audit') loadAudit();
-      if (tab === 'build') loadBuild();
-      if (tab === 'vreb') loadVreb();
-      if (tab === 'vreb_etf') loadVrebEtf();
-      if (tab === 'mom_etf') loadMomEtf();
+      if (tab === 'dashboard') { loadOverview(); loadAudit(); }
+      if (tab === 'trade') { loadPool(); loadConditions(); loadTriggers(); }
+      if (tab === 'signal') { loadBuild(); loadVreb(); loadVrebEtf(); loadMomEtf(); }
     } catch (e: any) {
       setError('操作失败: ' + e.message);
     }
@@ -458,15 +446,9 @@ export default function TAccountPage() {
   };
 
   const TABS: { key: typeof tab; label: string }[] = [
-    { key: 'overview', label: '账户总览' },
-    { key: 'pool', label: '三层池' },
-    { key: 'conditions', label: '监控条件' },
-    { key: 'triggers', label: '触发事件' },
-    { key: 'build', label: '底仓建仓' },
-    { key: 'vreb', label: 'V反短线' },
-    { key: 'vreb_etf', label: '科技ETF V反' },
-    { key: 'mom_etf', label: '动量趋势' },
-    { key: 'audit', label: '审计' },
+    { key: 'dashboard', label: '总览看板' },
+    { key: 'trade', label: '做T交易' },
+    { key: 'signal', label: '信号与建仓' },
   ];
 
   return (
@@ -491,7 +473,7 @@ export default function TAccountPage() {
       {loading && <div className="tac-loading">加载中...</div>}
 
       {/* ── 账户总览 ── */}
-      {tab === 'overview' && (
+      {tab === 'dashboard' && (
         <div className="tac-section">
           <div className="tac-cards">
             <div className="tac-card">
@@ -532,7 +514,7 @@ export default function TAccountPage() {
       )}
 
       {/* ── 三层池 ── */}
-      {tab === 'pool' && (
+      {tab === 'trade' && (
         <div className="tac-section">
           <div className="tac-toolbar">
             <button className="tac-btn" onClick={() => doPost('/conditions/generate', null, '已为实盘池生成条件')}>生成监控条件</button>
@@ -567,7 +549,7 @@ export default function TAccountPage() {
       )}
 
       {/* ── 监控条件 ── */}
-      {tab === 'conditions' && (
+      {tab === 'trade' && (
         <div className="tac-section">
           <div className="tac-toolbar">
             <button className="tac-btn" onClick={() => doPost('/conditions/generate', null, '已生成条件')}>生成监控条件</button>
@@ -604,7 +586,7 @@ export default function TAccountPage() {
       )}
 
       {/* ── 触发事件 ── */}
-      {tab === 'triggers' && (
+      {tab === 'trade' && (
         <div className="tac-section">
           <div className="tac-toolbar">
             <button className="tac-btn" onClick={loadTriggers}>刷新</button>
@@ -644,7 +626,7 @@ export default function TAccountPage() {
       )}
 
       {/* ── V反 短线（t-vrebounce，只作用于 t 账户）── */}
-      {tab === 'vreb' && (
+      {tab === 'signal' && (
         <div className='tac-section'>
           <div className='tac-toolbar'>
             <button className='tac-btn' onClick={() => doPost('/vrebounce/scan', null, '已触发全市场扫描')}>手动扫描</button>
@@ -697,7 +679,7 @@ export default function TAccountPage() {
         </div>
       )}
       {/* ── 科技ETF V反（t-vreb-etf，只作用于 t 账户）── */}
-      {tab === 'vreb_etf' && (
+      {tab === 'signal' && (
         <div className='tac-section'>
           <div className='tac-toolbar'>
             <button className='tac-btn' onClick={() => doPost('/vreb-etf/scan', null, '已触发科技ETF扫描')}>手动扫描</button>
@@ -731,7 +713,7 @@ export default function TAccountPage() {
       )}
 
       {/* ── 动量趋势（t-mom-etf，只作用于 t 账户）── */}
-      {tab === 'mom_etf' && (
+      {tab === 'signal' && (
         <div className='tac-section'>
           <div className='tac-toolbar'>
             <button className='tac-btn' onClick={() => doPost('/mom-etf/scan', null, '已触发动量扫描')}>手动扫描</button>
@@ -765,7 +747,7 @@ export default function TAccountPage() {
       )}
 
       {/* ── 审计 ── */}
-      {tab === 'audit' && (
+      {tab === 'dashboard' && (
         <div className="tac-section">
           <div className="tac-toolbar">
             <button className="tac-btn" onClick={loadAudit}>刷新</button>
@@ -819,7 +801,7 @@ export default function TAccountPage() {
       )}
 
       {/* ── 底仓建仓（t-position-building）── */}
-      {tab === 'build' && (
+      {tab === 'signal' && (
         <div className="tac-section">
           <div className="tac-toolbar">
             <button className="tac-btn" onClick={loadBuild}>刷新</button>
