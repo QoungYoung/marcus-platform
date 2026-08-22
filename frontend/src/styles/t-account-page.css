@@ -7,7 +7,9 @@
   --bi-line:rgba(47,124,211,.16); --bi-line-soft:rgba(47,124,211,.09);
   --bi-accent:#2f7cd3; --bi-accent-2:#1b5ea8; --bi-accent-ink:#eaf2fb;
   --bi-ok:#16a34a; --bi-ok-bg:rgba(22,163,74,.10); --bi-warn:#d97706; --bi-warn-bg:rgba(217,119,6,.10);
-  --bi-err:#dc2626; --bi-err-bg:rgba(220,38,38,.10);
+  --bi-err:#dc2626; --bi-err-bg:rgba(220,38,38,.10); --bi-err-border:rgba(220,38,38,.30);
+  --bi-on-accent:#fff; --bi-accent-soft:rgba(47,124,211,.12); --bi-accent-glint:rgba(47,124,211,.14);
+  --bi-accent-glow:rgba(47,124,211,.20); --bi-accent-strong:rgba(47,124,211,.40);
   --bi-font:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
   --bi-font-sign:"Segoe Script","Brush Script MT",cursive;
   --bi-r:14px; --bi-rs:9px; --bi-ease:cubic-bezier(.22,.61,.36,1); --bi-dur:.28s;
@@ -32,7 +34,7 @@
   background:var(--bi-paper); border:1px solid var(--bi-line); border-radius:var(--bi-r); padding:18px 24px;
   margin-bottom:20px; position:relative; overflow:hidden; box-shadow:var(--bi-shadow); }
 .tac-header::after{ content:''; position:absolute; right:-24px; top:-24px; width:72px; height:72px;
-  background:linear-gradient(135deg,transparent 45%,rgba(47,124,211,.14) 45%); transform:rotate(45deg); }
+  background:linear-gradient(135deg,transparent 45%,var(--bi-accent-glint) 45%); transform:rotate(45deg); }
 .tac-header-title{ display:flex; flex-direction:column; gap:2px; }
 .tac-header h2 { margin:0; font-size:27px; font-weight:800; letter-spacing:.01em; line-height:1.1;
   background:linear-gradient(135deg,var(--bi-accent),var(--bi-accent-2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
@@ -42,7 +44,7 @@
 /* 状态旗 */
 .tac-regime, .tac-breaker { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:999px;
   font-size:12px; font-weight:700; }
-.tac-regime { background:rgba(47,124,211,.12); color:var(--bi-accent); }
+.tac-regime { background:var(--bi-accent-soft); color:var(--bi-accent); }
 .tac-regime-halt { background:var(--bi-err-bg); color:var(--bi-err); }
 .tac-regime-cautious { background:var(--bi-warn-bg); color:var(--bi-warn); }
 .tac-breaker { background:var(--bi-err-bg); color:var(--bi-err); }
@@ -53,11 +55,11 @@
   padding:8px 15px; border-radius:var(--bi-rs); cursor:pointer; transition:transform var(--bi-dur) var(--bi-ease),background var(--bi-dur),color var(--bi-dur); }
 .tac-tab:hover { transform:translateY(-1px); background:var(--bi-paper); }
 .tac-tab.active { clip-path:polygon(10% 0,90% 0,100% 20%,100% 80%,90% 100%,10% 100%,0 80%,0 20%);
-  background:linear-gradient(135deg,var(--bi-accent),var(--bi-accent-2)); color:#fff; }
+  background:linear-gradient(135deg,var(--bi-accent),var(--bi-accent-2)); color:var(--bi-on-accent); }
 
 .tac-error, .tac-msg, .tac-loading { padding:10px 14px; border-radius:var(--bi-rs); font-size:13px; margin-bottom:14px; }
 .tac-error { background:var(--bi-err-bg); color:var(--bi-err); }
-.tac-msg { background:rgba(47,124,211,.12); color:var(--bi-accent); }
+.tac-msg { background:var(--bi-accent-soft); color:var(--bi-accent); }
 .tac-loading { background:var(--bi-paper-2); color:var(--bi-ink-soft); }
 
 /* ── 主布局：左身份/风控 rail + 右 12 列画布 ── */
@@ -68,7 +70,7 @@
 .tac-rail-block { background:var(--bi-paper); border:1px solid var(--bi-line); border-radius:var(--bi-r);
   padding:16px 16px; box-shadow:var(--bi-shadow); position:relative; overflow:hidden; }
 .tac-rail-block::after{ content:''; position:absolute; right:-12px; bottom:-12px; width:30px; height:30px;
-  background:linear-gradient(135deg,transparent 45%,rgba(47,124,211,.12) 45%); transform:rotate(45deg); }
+  background:linear-gradient(135deg,transparent 45%,var(--bi-accent-soft) 45%); transform:rotate(45deg); }
 .tac-rail-id { background:linear-gradient(160deg,var(--bi-paper),var(--bi-accent-ink)); }
 .tac-id-eyebrow { font-size:11px; letter-spacing:.14em; color:var(--bi-accent); text-transform:uppercase; font-weight:700; }
 .tac-id-title { margin:6px 0 2px; font-size:22px; font-weight:800; letter-spacing:.01em;
@@ -109,7 +111,7 @@
 .tac-kpi { background:var(--bi-paper); border:1px solid var(--bi-line); border-radius:var(--bi-rs);
   padding:14px 16px; position:relative; overflow:hidden; transition:transform var(--bi-dur) var(--bi-ease),box-shadow var(--bi-dur); }
 .tac-kpi::after{ content:''; position:absolute; right:-12px; top:-12px; width:26px; height:26px;
-  background:linear-gradient(135deg,transparent 45%,rgba(47,124,211,.12) 45%); transform:rotate(45deg); }
+  background:linear-gradient(135deg,transparent 45%,var(--bi-accent-soft) 45%); transform:rotate(45deg); }
 .tac-kpi:hover { transform:translateY(-2px); box-shadow:var(--bi-shadow-lift); }
 .tac-kpi span { display:block; font-size:12px; color:var(--bi-ink-soft); margin-bottom:6px; }
 .tac-kpi b { font-size:21px; font-weight:800; font-variant-numeric:tabular-nums; }
@@ -120,7 +122,7 @@
 /* 三层池 */
 .tac-tier-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .tac-tier { background:var(--bi-paper-2); border:1px solid var(--bi-line); border-radius:var(--bi-rs); padding:12px; }
-.tac-tier-live { border-color:rgba(47,124,211,.4); box-shadow:inset 3px 0 0 var(--bi-accent); }
+.tac-tier-live { border-color:var(--bi-accent-strong); box-shadow:inset 3px 0 0 var(--bi-accent); }
 .tac-tier-candidate { box-shadow:inset 3px 0 0 var(--bi-warn); }
 .tac-tier-watch { box-shadow:inset 3px 0 0 var(--bi-ink-soft); }
 .tac-tier-head { display:flex; justify-content:space-between; align-items:center; gap:8px;
@@ -135,7 +137,7 @@
 .tac-card { background:var(--bi-paper); border:1px solid var(--bi-line); border-radius:var(--bi-r); padding:14px 16px;
   position:relative; overflow:hidden; transition:transform var(--bi-dur) var(--bi-ease),box-shadow var(--bi-dur); }
 .tac-card::after{ content:''; position:absolute; right:-14px; bottom:-14px; width:34px; height:34px;
-  background:linear-gradient(135deg,transparent 45%,rgba(47,124,211,.14) 45%); transform:rotate(45deg); }
+  background:linear-gradient(135deg,transparent 45%,var(--bi-accent-glint) 45%); transform:rotate(45deg); }
 .tac-card:hover { transform:translateY(-3px); box-shadow:var(--bi-shadow-lift); }
 .tac-card-label { font-size:11px; color:var(--bi-ink-soft); letter-spacing:.04em; }
 .tac-card-value { font-size:20px; font-weight:800; font-variant-numeric:tabular-nums; }
@@ -148,11 +150,11 @@
 .tac-btn { border:1px solid var(--bi-line); background:var(--bi-paper); color:var(--bi-accent);
   font:600 13px var(--bi-font); padding:7px 14px; border-radius:var(--bi-rs); cursor:pointer;
   transition:transform var(--bi-dur) var(--bi-ease),background var(--bi-dur),color var(--bi-dur),box-shadow var(--bi-dur); }
-.tac-btn:hover { background:var(--bi-accent); color:#fff; transform:translateY(-1px); box-shadow:0 4px 12px rgba(47,124,211,.2); }
+.tac-btn:hover { background:var(--bi-accent); color:var(--bi-on-accent); transform:translateY(-1px); box-shadow:0 4px 12px var(--bi-accent-glow); }
 .tac-btn:focus-visible { outline:2px solid var(--bi-accent); outline-offset:2px; }
 .tac-btn-sm { padding:4px 10px; font-size:12px; }
-.tac-btn-danger { border-color:rgba(220,38,38,.3); color:var(--bi-err); }
-.tac-btn-danger:hover { background:var(--bi-err); color:#fff; }
+.tac-btn-danger { border-color:var(--bi-err-border); color:var(--bi-err); }
+.tac-btn-danger:hover { background:var(--bi-err); color:var(--bi-on-accent); }
 .tac-input { border:1px solid var(--bi-line); border-radius:var(--bi-rs); padding:8px 12px; font:14px var(--bi-font); background:var(--bi-paper); }
 .tac-input:focus { outline:2px solid var(--bi-accent); }
 .tac-input-wide { min-width:240px; }
@@ -177,7 +179,7 @@
 /* 状态徽章 */
 .tac-status { display:inline-block; padding:2px 8px; border-radius:6px; font-size:12px; font-weight:700; white-space:nowrap; }
 .tac-status-executed,.tac-status-auto_ready { background:var(--bi-ok-bg); color:var(--bi-ok); }
-.tac-status-pending,.tac-status-claimed { background:rgba(47,124,211,.12); color:var(--bi-accent); }
+.tac-status-pending,.tac-status-claimed { background:var(--bi-accent-soft); color:var(--bi-accent); }
 .tac-status-human_confirm { background:var(--bi-warn-bg); color:var(--bi-warn); }
 .tac-status-blocked,.tac-status-cancelled,.tac-status-rejected { background:var(--bi-err-bg); color:var(--bi-err); }
 .tac-status-expired { background:var(--bi-paper-2); color:var(--bi-ink-soft); }
