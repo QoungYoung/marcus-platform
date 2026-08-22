@@ -544,6 +544,36 @@ def t_mom_etf_exit():
     return {"results": t_mom_etf.check_exits()}
 
 
+def _etf_shortline_candidates(source: str, limit: int = 20):
+    """短线候选列表（source 参数化：vreb_etf / mom_etf）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        rows = db.execute(text(
+            "SELECT symbol, score, reasons, trend, status, built_at, trade_date, created_at "
+            "FROM t_build_scan_results WHERE source = :src "
+            "AND trade_date = (SELECT max(trade_date) FROM t_build_scan_results WHERE source = :src) "
+            "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
+            "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"
+        ), {"src": source, "lim": limit}).mappings().all()
+        return {"candidates": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+@router.get("/vreb-etf/candidates")
+def t_vreb_etf_candidates(limit: int = 20):
+    """科技ETF V反 候选列表（t_build_scan_results source='vreb_etf'）。"""
+    return _etf_shortline_candidates("vreb_etf", limit)
+
+
+@router.get("/mom-etf/candidates")
+def t_mom_etf_candidates(limit: int = 20):
+    """科技ETF 动量趋势 目标组合候选（t_build_scan_results source='mom_etf'）。"""
+    return _etf_shortline_candidates("mom_etf", limit)
+
+
 # ── 科技ETF V反（t-vreb-etf，只作用于 t 账户）──
 @router.get("/vreb-etf/status")
 def t_vreb_etf_status():
