@@ -21,9 +21,9 @@
 
 ## 4. 文档与部署
 
-- [ ] 4.1 更新 docs/t-vrebounce-factor-analysis.md：动量趋势章节（回测证据、参数、与 V反 分工）
-- [ ] 4.2 提交（中文 commit）并部署生产（backend/worker 重建；T_MOM_ETF_ENABLED 默认 0 灰度）
-- [ ] 4.3 生产人工触发一次 /t/mom-etf/scan 验证候选与门控输出，观察一周后由用户授权开启（REQ-MOM-014）
+- [x] 4.1 更新 docs/t-vrebounce-factor-analysis.md：动量趋势章节（回测证据、参数、与 V反 分工）
+- [x] 4.2 提交（中文 commit）并部署生产（backend/worker 重建；T_MOM_ETF_ENABLED 默认 0 灰度）
+- [x] 4.3 生产人工触发一次 /t/mom-etf/scan 验证候选与门控输出，观察一周后由用户授权开启（REQ-MOM-014）
 
 ## 5. 验收
 
