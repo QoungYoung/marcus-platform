@@ -171,15 +171,33 @@ class GoldenPitService:
                 return []
 
             df = df.sort_values("trade_date", ascending=True)
+            # qfq 前复权：用 fund_adj 调整因子（按日期 carry-forward，锚定最新期）。
+            # 未复权 fund_daily 在拆股/分红日会造出假动量/假超跌，污染动量趋势与 V反 信号。
+            dates = df["trade_date"].tolist()
+            try:
+                afd = pro.fund_adj(ts_code=ts_code, start_date=start_date, end_date=end_date)
+                af_map = dict(zip(afd["trade_date"], [float(x) for x in afd["adj_factor"]])) if afd is not None and not afd.empty else {}
+            except Exception:
+                af_map = {}
+            carry = []
+            last = None
+            for d in dates:
+                if d in af_map:
+                    last = af_map[d]
+                carry.append(last)
+            af_latest = carry[-1] if carry and carry[-1] is not None else 1.0
+            def _qfq(f):
+                return ((f if f else 1.0) / af_latest) if (af_latest and af_latest > 0) else 1.0
             normalized = []
-            for _, row in df.iterrows():
+            for i, row in df.iterrows():
                 ts = str(row["trade_date"])
+                k = _qfq(carry[i])
                 normalized.append({
                     "date": f"{ts[:4]}-{ts[4:6]}-{ts[6:]}",
-                    "close": float(row["close"]),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
+                    "close": float(row["close"]) * k,
+                    "open": float(row["open"]) * k,
+                    "high": float(row["high"]) * k,
+                    "low": float(row["low"]) * k,
                 })
 
             return normalized[-limit:] if len(normalized) > limit else normalized
