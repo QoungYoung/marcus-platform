@@ -18,7 +18,7 @@
 }
 
 /* 页面级固定三角网格背景 */
-.tac-page { position:relative; overflow-x:clip; padding:22px clamp(12px,3vw,30px) 52px;
+.tac-page { position:relative; flex:1; min-height:0; overflow-y:auto; overflow-x:clip; padding:22px clamp(12px,3vw,30px) 52px;
   max-width:1420px; margin:0 auto; color:var(--bi-ink); font-family:var(--bi-font); }
 .tac-page::before { content:''; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.40;
   background-image:
