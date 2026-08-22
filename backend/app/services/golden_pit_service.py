@@ -189,9 +189,9 @@ class GoldenPitService:
             def _qfq(f):
                 return ((f if f else 1.0) / af_latest) if (af_latest and af_latest > 0) else 1.0
             normalized = []
-            for i, row in df.iterrows():
+            for pos, (_, row) in enumerate(df.iterrows()):
                 ts = str(row["trade_date"])
-                k = _qfq(carry[i])
+                k = _qfq(carry[pos])
                 normalized.append({
                     "date": f"{ts[:4]}-{ts[4:6]}-{ts[6:]}",
                     "close": float(row["close"]) * k,
