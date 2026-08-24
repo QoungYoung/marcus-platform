@@ -32,6 +32,7 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
     cond 支持字段：symbol/trigger_kind/target_price/reinform_price/vol_ratio_thresh/
     benchmark_turnover_profile/stabilize_level/sell_target_price/stop_loss_price/
     time_stop_open/time_stop_close/start_time/end_time/regime_gate/status/armed/expression
+    direction（迭代#58）：custom 等自由类型显式方向 buy|sell；空 = 按 trigger_kind 默认。
     """
     try:
         db = SessionLocal()
@@ -45,7 +46,7 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                     sell_target_price, stop_loss_price,
                     time_stop_open, time_stop_close, start_time, end_time,
                     regime_gate, status, armed, expression,
-                    publisher, session_id
+                    publisher, session_id, direction
                 ) VALUES (
                     :account_id, :symbol, :trade_date, :trigger_kind,
                     :target_price, :reinform_price, :vol_ratio_thresh,
@@ -53,7 +54,7 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                     :sell_target_price, :stop_loss_price,
                     :time_stop_open, :time_stop_close, :start_time, :end_time,
                     :regime_gate, :status, :armed, :expression,
-                    :publisher, :session_id
+                    :publisher, :session_id, :direction
                 )
                 ON CONFLICT (account_id, symbol, trigger_kind, trade_date)
                 DO UPDATE SET
@@ -73,7 +74,8 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                     armed = EXCLUDED.armed,
                     expression = EXCLUDED.expression,
                     publisher = EXCLUDED.publisher,
-                    session_id = EXCLUDED.session_id
+                    session_id = EXCLUDED.session_id,
+                    direction = EXCLUDED.direction
                 RETURNING id
                 """
             )
@@ -99,6 +101,7 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                 "expression": _to_jsonb(cond.get("expression")),
                 "publisher": cond.get("publisher", "rule"),
                 "session_id": cond.get("session_id"),
+                "direction": (cond.get("direction") or "").strip().lower()[:8],
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -121,7 +124,7 @@ def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[st
                 "sell_target_price, stop_loss_price, "
                 "time_stop_open, time_stop_close, start_time, end_time, "
                 "armed, armed_at, last_triggered_at, trigger_count_today, "
-                "regime_gate, expression, status, publisher, session_id "
+                "regime_gate, expression, status, publisher, session_id, direction "
                 "FROM t_conditions WHERE status = 'active' AND trade_date = :trade_date"
             )
             params: Dict[str, Any] = {"trade_date": trade_date or _today()}

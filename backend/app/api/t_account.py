@@ -54,11 +54,15 @@ def t_condition_create(cond: dict):
         "symbol": "600519",
         "trigger_kind": "custom",           # 自定义类型
         "expression": {"and": [{"field": "quote.current", "op": "<=", "value": 98}]},
+        "direction": "buy",                 # 迭代#58：custom 显式方向 buy|sell
+                                            #   （缺省按 trigger_kind：low_buy/panic_vibrate=买，其余=卖）
         "sell_target_price": 101.5,
         "stop_loss_price": 95.0,
         "regime_gate": "ALLOWED"
     }
     无 expression 时回退默认复合确认逻辑（trigger_kind/target_price/vol_ratio_thresh...）。
+    迭代#58：低吸/custom-buy 条件可在标的未建仓时触发建仓（无底仓条件单买入），
+    买入量按建仓规模（单笔上限÷现价）；卖腿（high_sell 等）仍需有可卖底仓。
     """
     # 校验必填
     if not cond.get("symbol"):
@@ -70,6 +74,12 @@ def t_condition_create(cond: dict):
             validate_expression(expr)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"表达式非法: {e}")
+    # 校验方向（迭代#58）：仅接受 buy/sell/空
+    direction = str(cond.get("direction") or "").strip().lower()
+    if direction and direction not in ("buy", "sell"):
+        raise HTTPException(status_code=400, detail="direction 仅支持 buy/sell（或留空按 trigger_kind 默认）")
+    if direction:
+        cond["direction"] = direction
     cond.setdefault("account_id", "t")
     cond.setdefault("trigger_kind", "custom")
     cid = t_db.upsert_condition(cond)
@@ -308,17 +318,27 @@ def t_capital_adjust(amount: float, reason: str = ""):
 
 @router.get("/build/candidates")
 def t_build_candidates(source: str = "pool", limit: int = 20):
-    """扫描建仓候选短名单（source: pool 候选池 / scan 全市场粗筛；user 需显式传 symbols）。"""
+    """扫描建仓候选短名单（source: pool 候选池 / scan 全市场粗筛；user 需显式传 symbols）。
+
+    每个候选附带 hint（suggest_build_volume）：现价 + 建议买入股数/金额（迭代#58，
+    供前端"建议买入"列展示）。
+    """
     from app.services import t_build
     if source == "user":
         raise HTTPException(status_code=400, detail="user 来源需调用 POST /t/build/scan 传入 symbols")
     cands = t_build.scan_t_candidates(limit=limit, source=source)
+    for c in cands:
+        if c.get("symbol"):
+            c["hint"] = t_build.suggest_build_volume(c["symbol"])
     return {"source": source, "candidates": cands, "count": len(cands)}
 
 
 @router.post("/build/scan")
 def t_build_scan(payload: dict):
-    """用户指定标的列表的建仓打分（source=user）。body: {symbols: [...], limit?}"""
+    """用户指定标的列表的建仓打分（source=user）。body: {symbols: [...], limit?}
+
+    每个候选附带 hint（建议买入股数/金额，迭代#58）。
+    """
     from app.services import t_build
     symbols = payload.get("symbols") or []
     if not symbols:
@@ -327,7 +347,9 @@ def t_build_scan(payload: dict):
     results = []
     for sym in symbols[:limit]:
         try:
-            results.append(t_build.build_score(str(sym), source="user"))
+            r = t_build.build_score(str(sym), source="user")
+            r["hint"] = t_build.suggest_build_volume(str(sym))
+            results.append(r)
         except Exception as e:
             results.append({"symbol": str(sym), "score": 0.0, "pass_gate": False, "error": str(e)})
     results.sort(key=lambda x: x.get("score") or 0, reverse=True)

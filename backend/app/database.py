@@ -345,6 +345,11 @@ def _apply_t_account_migration():
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_t_conditions_active ON t_conditions (account_id, status, trade_date)"
             ))
+            # 迭代#58：条件方向字段（custom 等自由类型显式声明 buy/sell；
+            # 空 = 按 trigger_kind 默认：low_buy/panic_vibrate→买，其余→卖）
+            conn.execute(text(
+                "ALTER TABLE t_conditions ADD COLUMN IF NOT EXISTS direction VARCHAR(8) DEFAULT ''"
+            ))
 
             # 3) t_triggers — 做T触发事件流（状态机 + snapshot + 原子消费）
             conn.execute(text(

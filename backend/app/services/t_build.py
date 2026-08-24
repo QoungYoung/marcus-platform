@@ -833,6 +833,39 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
     }
 
 
+def suggest_build_volume(symbol: str, price: Optional[float] = None) -> Dict[str, Any]:
+    """建仓建议买入量摘要（前端候选表展示用，迭代#58）。
+
+    返回 {price, suggest_volume, suggest_amount, tier, pass, single_max_amount,
+    per_symbol_max_amount}；现价不可用或建议股数不足 100 时返回 pass=False 摘要；
+    计算异常返回 {}（不阻塞候选列表）。
+    """
+    try:
+        if not price or price <= 0:
+            from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
+            ns = _normalize_symbol(symbol)
+            q = fetch_tencent_quote([ns])
+            q0 = (q or {}).get(ns) or {}
+            price = float(q0.get("current") or 0)
+        if price <= 0:
+            return {}
+        sz = build_sizing(symbol, price)
+        vol = int(sz.get("suggest_volume") or 0)
+        return {
+            "price": round(price, 3),
+            "suggest_volume": vol if vol >= 100 else 0,
+            "suggest_amount": round(price * vol, 2) if vol >= 100 else 0.0,
+            "tier": sz.get("tier"),
+            "pass": bool(sz.get("pass")),
+            "single_max_amount": sz.get("single_max_amount"),
+            "per_symbol_max_amount": sz.get("per_symbol_max_amount"),
+            "reason": sz.get("reason") or "",
+        }
+    except Exception as e:
+        print(f"[t-build] suggest_build_volume 失败 {symbol}: {e}")
+        return {}
+
+
 # ────────────────────────────────────────────────────────────────
 # 建仓触发确认（回踩 ∧ 量比<2 ∧ 分时企稳）
 # ────────────────────────────────────────────────────────────────

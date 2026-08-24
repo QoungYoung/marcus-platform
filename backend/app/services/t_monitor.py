@@ -117,18 +117,16 @@ class TMonitor:
             quote = quotes.get(_normalize_symbol(symbol))
             if not quote or not quote.get("current"):
                 continue
-            # 无底仓预拦截（与回测一致）：做T条件必须依托底仓——
-            #   卖腿：sellable=0 不触发（T+0 当日买回次日才可卖）
-            #   买腿：持仓 0 不触发（低吸=有底仓加仓；无持仓属新开仓走建仓流程），
-            #         避免"无弹药"反复唤醒 AI 放弃刷屏
+            # 无底仓预拦截：
+            #   卖腿：sellable=0 不触发（T+0 当日买回次日才可卖，卖腿必须有券）
+            #   买腿：迭代#58（用户需求）——无底仓放行触发，等价"条件单建仓"：
+            #     低吸/custom(buy) 命中后按建仓规模买入开仓（量/风控由网关+建仓规模兜底）；
+            #     14:45 后禁新开仓仍由时段门拦截。有底仓时仍是加仓语义（底仓 30%）。
             try:
                 pos_item = (ledger or {}).get(symbol) or {}
                 cond_kind = cond.get("trigger_kind", "low_buy")
                 if cond_kind in ("high_sell_then_buy_back", "high_sell") \
                         and int(pos_item.get("sellable", 0) or 0) <= 0:
-                    continue
-                if cond_kind in ("low_buy", "panic_vibrate") \
-                        and int(pos_item.get("volume", 0) or 0) <= 0:
                     continue
             except Exception:
                 pass
@@ -426,19 +424,29 @@ class TMonitor:
                   f"mode={mode} consec_hits={consecutive_hits} @ {current}")
             # 自动执行闭环（迭代#57，用户需求）：条件命中自动执行（止损/止盈自动卖出、
             # 低吸自动买入，volume 优先用 AI 在条件里设定的股数），不再逐次等 AI 决策；
+            # 迭代#58：无底仓买腿 = 条件单建仓，量按建仓规模（单笔上限÷现价）。
             # 执行完成后报告 AI 复盘并重建新条件。
             try:
                 from app.services.t_gateway import gateway_execute
-                side = "buy" if trigger_kind in ("low_buy", "panic_vibrate") else "sell"
+                side = "buy" if _is_buy_side(cond) else "sell"
                 cond_vol = int(cond.get("volume") or 0)
                 if cond_vol > 0:
                     volume = (cond_vol // 100) * 100
                 else:
-                    # 回退规则：低吸 30% 底仓（min 100）；高抛 30%（保留底仓 100）
+                    # 回退规则：买腿 30% 底仓（min 100）；无底仓 = 建仓规模（单笔上限÷现价）；
+                    # 卖腿 30%（保留底仓 100）
                     pos_item = (ledger or {}).get(symbol) or {}
                     sellable = int(pos_item.get("sellable", 0) or 0)
                     if side == "buy":
-                        volume = max(int(sellable * 0.3), 100) if sellable > 0 else 100
+                        if sellable > 0:
+                            volume = max(int(sellable * 0.3), 100)
+                        else:
+                            try:
+                                from app.services.t_build import build_sizing
+                                sizing = build_sizing(symbol, current)
+                                volume = int(sizing.get("suggest_volume") or 0)
+                            except Exception:
+                                volume = 0
                     else:
                         max_sell = sellable
                         if sellable > 200:
@@ -446,27 +454,44 @@ class TMonitor:
                         volume = max(int(sellable * 0.3), 100) if sellable > 0 else 0
                         volume = min(volume, max_sell)
                     volume = (volume // 100) * 100
+                exec_ok = False
                 if volume > 0:
                     gw = gateway_execute(symbol, side, current, volume,
                                          reason=f"条件命中自动执行（{trigger_kind}）",
                                          decision_source="ai_led",
                                          condition_id=cond.get("id"))
+                    exec_ok = gw.get("status") == "success"
                     print(f"[TMonitor] 自动执行 {symbol} {side} {volume}股@{current}: "
                           f"{gw.get('status')} {str(gw.get('reason') or '')[:40]}")
                     # 执行结果写入触发事件（供审计/复盘）
                     t_db.update_trigger_status(
-                        trig_id, "executed",
+                        trig_id, "executed" if exec_ok else "blocked",
                         reason=f"自动执行 {side} {volume}股 @{current}: {gw.get('status')}")
+                elif volume <= 0:
+                    # 量推导为 0（卖腿无可卖底仓 / 无底仓建仓规模不可用）→ 直接标记，
+                    # 避免孤儿 pending 事件（降级轮询兜底）
+                    t_db.update_trigger_status(
+                        trig_id, "blocked",
+                        reason=f"自动执行量推导为 0（{side}，无可卖底仓或建仓规模不可用）")
                 # 消费式条件自动重建（迭代#56b/57）：本条件已 consumed，该标的仍有
                 # 持仓且无其他 active 条件 → AI 重新评估生成新条件（移动基准）。
                 # 执行后报告 AI = 调 AI 条件生成（含现价），失败回退规则公式。
                 try:
                     from app.services.t_db import list_active_conditions
                     remain = list_active_conditions(symbol=symbol)
-                    pos_volume = int((ledger or {}).get(symbol, {}).get("volume") or 0)
+                    # 成交后刷新持仓（无底仓建仓场景：执行前无持仓/成本）
+                    fresh_item = {}
+                    try:
+                        from app.services.t_gateway import get_sellable_ledger
+                        fresh_item = get_sellable_ledger().get(symbol) or {}
+                    except Exception:
+                        pass
+                    pos_volume = int(fresh_item.get("volume") or 0)
                     if not remain and pos_volume > 0:
                         from app.services.t_build import auto_gen_conditions_for_build
-                        avg_price = float((ledger or {}).get(symbol, {}).get("avg_price") or 0)
+                        avg_price = float(fresh_item.get("avg_price") or 0)
+                        if avg_price <= 0 and exec_ok:
+                            avg_price = float(gw.get("price") or current)  # 无底仓建仓：无历史成本，用成交价
                         if avg_price > 0:
                             from datetime import date
                             today = date.today().strftime("%Y%m%d")
@@ -694,6 +719,22 @@ def _calc_rsi(closes: List[float], period: int = 6) -> float:
 # 纯函数评估集（now 注入，回测与实时共用；TMonitor 方法为薄转发）
 # ────────────────────────────────────────────────────────────────
 
+def _is_buy_side(cond: Dict[str, Any]) -> bool:
+    """条件执行方向（迭代#58）：direction 显式优先；缺省按 trigger_kind 默认。
+
+    - low_buy/panic_vibrate → 买腿
+    - direction=buy/买（custom 等自由类型显式声明）→ 买腿
+    - 其余（high_sell/custom 未声明等）→ 卖腿（保持既有语义，避免未标方向的
+      custom 突然变成买入）
+    """
+    kind = cond.get("trigger_kind", "low_buy")
+    if kind in ("low_buy", "panic_vibrate"):
+        return True
+    d = str(cond.get("direction") or "").strip().lower()
+    if d in ("buy", "买", "买入"):
+        return True
+    return False
+
 def evaluate_condition_at(cond: Dict[str, Any], quote: dict, regime_state: dict,
                           snapshot: Optional[dict], now: datetime) -> bool:
     """条件评估（纯函数）：有 expression 走自由表达式求值；无则回退默认复合确认逻辑。"""
@@ -762,13 +803,15 @@ def evaluate_default_at(cond: Dict[str, Any], quote: dict, regime_state: dict,
             pass
 
     # 3) 价格到位（低吸：current ≤ target；高抛：current ≥ sell_target）
+    # 修复（迭代#58）：high_sell 与 high_sell_then_buy_back 同样检查高抛目标——
+    # 此前仅 high_sell_then_buy_back 有价格门，high_sell 无表达式时量比达标即触发。
     current = float(quote.get("current", 0) or 0)
     target = float(cond.get("target_price") or 0)
     sell_target = float(cond.get("sell_target_price") or 0)
     if trigger_kind in ("low_buy", "panic_vibrate"):
         if target <= 0 or current > target:
             return False
-    elif trigger_kind == "high_sell_then_buy_back":
+    elif trigger_kind in ("high_sell", "high_sell_then_buy_back"):
         if sell_target <= 0 or current < sell_target:
             return False
 

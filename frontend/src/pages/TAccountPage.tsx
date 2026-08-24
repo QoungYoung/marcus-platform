@@ -60,6 +60,7 @@ interface Condition {
   status: string;
   regime_gate: string;
   trigger_count_today: number;
+  direction?: string;   // 迭代#58：custom 等显式 buy/sell；空 = 按 trigger_kind 默认
 }
 
 interface Trigger {
@@ -105,6 +106,17 @@ interface BuildCandidate {
   quality?: { score?: number };
   trend?: { note?: string };
   reasons?: string[];
+  // 迭代#58：建议买入量（build_sizing 摘要，前端"建议买入"列展示）
+  hint?: {
+    price?: number;
+    suggest_volume?: number;
+    suggest_amount?: number;
+    tier?: string;
+    pass?: boolean;
+    single_max_amount?: number;
+    per_symbol_max_amount?: number;
+    reason?: string;
+  };
 }
 
 interface BuildEvent {
@@ -652,7 +664,7 @@ export default function TAccountPage() {
                   <div className="tac-panel-body">
                     <table className="tac-table">
                       <thead><tr>
-                        <th>代码</th><th>类型</th><th>触发价</th><th>复归价</th><th>高抛目标</th><th>止损</th>
+                        <th>代码</th><th>类型</th><th>方向</th><th>触发价</th><th>复归价</th><th>高抛目标</th><th>止损</th>
                         <th>armed</th><th>regime门</th><th>今日触发</th><th>操作</th>
                       </tr></thead>
                       <tbody>
@@ -660,6 +672,7 @@ export default function TAccountPage() {
                           <tr key={c.id}>
                             <td className="tac-sym">{c.symbol}</td>
                             <td>{TRIGGER_KIND_LABEL[c.trigger_kind] || c.trigger_kind}</td>
+                            <td>{c.direction === 'buy' ? '🟢 买' : c.direction === 'sell' ? '🔴 卖' : '按类型'}</td>
                             <td>{c.target_price ?? '-'}</td>
                             <td>{c.reinform_price ?? '-'}</td>
                             <td>{c.sell_target_price ?? '-'}</td>
@@ -674,7 +687,7 @@ export default function TAccountPage() {
                             </td>
                           </tr>
                         ))}
-                        {conditions.length === 0 && <tr><td colSpan={10} className="tac-empty">暂无条件，点击"生成监控条件"</td></tr>}
+                        {conditions.length === 0 && <tr><td colSpan={11} className="tac-empty">暂无条件，点击"生成监控条件"</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -772,18 +785,26 @@ export default function TAccountPage() {
                       <button className="tac-btn" onClick={loadCandidates}>扫描候选</button>
                     </div>
                     <table className="tac-table">
-                      <thead><tr><th>代码</th><th>build_score</th><th>可T质量</th><th>趋势</th><th>说明</th></tr></thead>
+                      <thead><tr><th>代码</th><th>build_score</th><th>可T质量</th><th>趋势</th><th>建议买入</th><th>说明</th></tr></thead>
                       <tbody>
-                        {candidates.map((c) => (
-                          <tr key={c.symbol}>
-                            <td className="tac-sym">{c.symbol}</td>
-                            <td>{c.score?.toFixed(2) ?? '-'} {c.pass_gate ? '✅' : '⛔'}</td>
-                            <td>{c.quality?.score?.toFixed(2) ?? '-'}</td>
-                            <td className="tac-muted">{c.trend?.note ?? '-'}</td>
-                            <td className="tac-muted">{(c.reasons || []).join('；')}</td>
-                          </tr>
-                        ))}
-                        {candidates.length === 0 && <tr><td colSpan={5} className="tac-empty">暂无候选（点击「扫描候选」）</td></tr>}
+                        {candidates.map((c) => {
+                          const h = c.hint;
+                          const hintTxt = h && h.suggest_volume ? `${h.suggest_volume.toLocaleString('zh-CN')}股 ≈ ${fmtMoney(h.suggest_amount)}` : '-';
+                          return (
+                            <tr key={c.symbol}>
+                              <td className="tac-sym">{c.symbol}</td>
+                              <td>{c.score?.toFixed(2) ?? '-'} {c.pass_gate ? '✅' : '⛔'}</td>
+                              <td>{c.quality?.score?.toFixed(2) ?? '-'}</td>
+                              <td className="tac-muted">{c.trend?.note ?? '-'}</td>
+                              <td>
+                                {hintTxt}
+                                {h?.reason ? <span className="tac-muted" title={h.reason}> ⚠️</span> : null}
+                              </td>
+                              <td className="tac-muted">{(c.reasons || []).join('；')}</td>
+                            </tr>
+                          );
+                        })}
+                        {candidates.length === 0 && <tr><td colSpan={6} className="tac-empty">暂无候选（点击「扫描候选」）</td></tr>}
                       </tbody>
                     </table>
 

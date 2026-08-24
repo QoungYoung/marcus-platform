@@ -208,11 +208,15 @@ def _floor_tier(regime: str, near_limit_down: bool) -> str:
     return TIER_L2
 
 
-def _max_buy_volume(symbol: str, tier: str, ledger: Optional[dict] = None) -> int:
+def _max_buy_volume(symbol: str, tier: str, ledger: Optional[dict] = None,
+                    price: Optional[float] = None,
+                    condition_id: Optional[int] = None) -> int:
     """按分档计算买腿上限（股数）。ledger 可注入（回测账本），默认实时账本。
 
     T_BUY_TIER_LIMIT_ENABLED=0（AI 自由跑）：不设档位上限——卖出后允许重新建仓再 T，
     买腿数量由单笔额度/总仓位约束（建议层）兜底，返回极大值放行。
+    迭代#58：无底仓时仅条件单触发路径（condition_id 提供）放行，上限 = 建仓规模
+    建议股数（单笔上限÷现价，含单标/总底仓上限校验）；否则返回 0（禁买）。
     """
     if ledger is None:
         ledger = get_sellable_ledger()
@@ -221,6 +225,17 @@ def _max_buy_volume(symbol: str, tier: str, ledger: Optional[dict] = None) -> in
     if not T_BUY_TIER_LIMIT_ENABLED:
         return max(sellable, 10**9)  # 自由跑：不限量（上限由单笔/总仓位约束）
     if tier == TIER_L0:
+        return 0
+    if sellable <= 0:
+        # 无底仓：条件单建仓（买腿=开仓），上限取建仓规模建议股数
+        if condition_id and price and price > 0:
+            try:
+                from app.services.t_build import build_sizing
+                sz = build_sizing(symbol, price)
+                if sz.get("pass"):
+                    return int(sz.get("suggest_volume") or 0)
+            except Exception:
+                pass
         return 0
     if tier == TIER_L1:
         return int(sellable * 0.5)
@@ -297,10 +312,14 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                 result["reason"] = "无足够可卖底仓（裸空拦截）"
                 return result
         elif side == "buy":
-            # 低吸买腿必须已有底仓（禁止无底仓建仓式做T）——
-            # 自由跑（T_BUY_TIER_LIMIT_ENABLED=0）时放行：允许卖出清仓后重新建仓再 T
-            if symbol not in ledger and T_BUY_TIER_LIMIT_ENABLED:
-                result["reason"] = "无底仓标的禁止做T低吸（新开仓走独立建仓流程）"
+            # 无底仓买入：仅条件单触发路径（condition_id/trigger_id 提供）放行——
+            # 迭代#58（用户需求）：未建仓标的通过监控条件命中直接建仓开仓；
+            # 量受 _max_buy_volume 建仓规模上限（单笔/单标）约束。
+            # 无触发事件的主动裸买（非自由跑）仍拒绝——新开仓走独立建仓流程。
+            no_pos = symbol not in ledger
+            if no_pos and T_BUY_TIER_LIMIT_ENABLED \
+                    and not condition_id and not trigger_id:
+                result["reason"] = "无底仓标的禁止裸买（新开仓走独立建仓流程或发布条件单）"
                 return result
         # 4) 跌停禁买 / 涨停禁卖
         if quote:
@@ -336,7 +355,8 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                 result["level"] = "ledger"
                 result["reason"] = f"低吸加仓次数超限（当日已 {buy_legs} 笔 ≥ {MAX_DAILY_BUY_LEGS}）"
                 return result
-            max_buy = _max_buy_volume(symbol, tier, ledger)
+            max_buy = _max_buy_volume(symbol, tier, ledger, price=price,
+                                      condition_id=condition_id)
             if max_buy <= 0:
                 result["level"] = "ledger"
                 result["reason"] = f"当前档位 {tier} 禁止低吸"
