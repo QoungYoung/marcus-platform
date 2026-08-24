@@ -176,7 +176,21 @@ async function summarizeWithTInstruction(engine, input, agent, signal) {
 function apply(ctx) {
   // 探测式取引擎：兼容两种注入面（cordis ctx.get 或属性直挂），拿不到就
   // 警告并跳过——做T压缩降级为不生效，但 dsh 启动不受影响。
-  const engine = typeof ctx.get === 'function' ? (ctx.get('compaction') ?? ctx.compaction) : ctx.compaction;
+  // ⚠️ 不能直接访问未 inject 的属性（如 ctx.compaction）：cordis ctx 是 proxy，
+  // 未声明 inject 的属性访问会抛 "cannot get property X without inject"
+  // （实测 2026-08-24：docker service profile 无 host compaction 时启动即崩）。
+  // 优先 `ctx.get('compaction')`（未注入时返回 undefined，不抛错）；属性直挂
+  // 探测也在 try/catch 内兜底，任何探测失败都按"无引擎"跳过，绝不阻塞启动。
+  let engine;
+  try {
+    if (typeof ctx?.get === 'function') {
+      engine = ctx.get('compaction');
+    } else if (ctx && 'compaction' in ctx) {
+      engine = ctx.compaction; // 直挂注入面（非 cordis proxy，属性访问安全）
+    }
+  } catch (e) {
+    engine = undefined;
+  }
   if (engine === undefined) {
     console.warn('[t-compaction] ⚠️ 未找到 compaction 服务（组合未提供 host 级引擎），跳过做T摘要覆盖——如需启用，请确认组合包含 compaction-basic');
     return;
