@@ -32,7 +32,7 @@ MONITOR_INTERVAL_S = float(os.getenv("MOM_ETF_MONITOR_INTERVAL_S", "60"))
 
 _instance = None
 _greed_fail_count = 0
-_last_rebalance_date = None  # YYYY-MM-DD（worker 内存；跨重启由 DB 事件日期兜底）
+_last_rebalance_dt = None  # YYYY-MM-DD（worker 内存；跨重启由 DB 事件日期兜底）
 
 
 def _account_id() -> str:
@@ -287,7 +287,7 @@ def try_rebalance(force: bool = False) -> List[Dict[str, Any]]:
 
     仅自动建仓窗口（9:45-13:00）执行；被护栏拦截的调仓次日重试。
     """
-    global _last_rebalance_date
+    global _last_rebalance_dt
     if not (force or _rebalance_due()):
         return []
     now = datetime.now()
@@ -324,7 +324,7 @@ def try_rebalance(force: bool = False) -> List[Dict[str, Any]]:
                                decision_source="ai_led", build_mode="mom_etf")
         results.append({"symbol": sym, "action": "buy", "status": out.get("status"), "reason": out.get("reason")})
         time.sleep(SCAN_INTERVAL_S)
-    _last_rebalance_date = _today()
+    _last_rebalance_dt = _today()
     logger.info("[t-mom-etf] 调仓完成：目标 %s，结果 %d 项", sorted(target_syms), len(results))
     return results
 

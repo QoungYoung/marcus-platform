@@ -484,12 +484,34 @@ def t_trend_break_exit():
     return {"results": t_trend_break.check_exits()}
 
 
+def _t_status_from_worker(key: str, local_getter) -> dict:
+    """优先读 worker 进程发布的状态快照（worker_status），缺失时回退本地模块状态。"""
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            row = db.execute(text("SELECT snapshot FROM worker_status WHERE id = 1")).mappings().first()
+        finally:
+            db.close()
+        snap = (row["snapshot"] if row else None) or {}
+        mons = snap.get("t_monitors") or {}
+        if key in mons:
+            return mons[key]
+    except Exception:
+        pass
+    try:
+        return local_getter()
+    except Exception as e:
+        return {"enabled": False, "running": False, "error": str(e)}
+
+
 # ── V反 短线（t-vrebounce-short-term，只作用于 t 账户）──
 @router.get("/vrebounce/status")
 def t_vrebounce_status():
     """做T账户·V反短线监控状态（只作用于 t 账户）。"""
     from app.services import t_vrebounce
-    return t_vrebounce.get_status()
+    return _t_status_from_worker("vrebounce", t_vrebounce.get_status)
 
 
 @router.post("/vrebounce/scan")
@@ -519,7 +541,7 @@ def t_vrebounce_exit():
 def t_mom_etf_status():
     """做T账户·科技ETF动量趋势监控状态（只作用于 t 账户）。"""
     from app.services import t_mom_etf
-    return t_mom_etf.get_status()
+    return _t_status_from_worker("mom_etf", t_mom_etf.get_status)
 
 
 @router.post("/mom-etf/scan")
@@ -586,7 +608,7 @@ def t_mom_etf_candidates(limit: int = 20):
 def t_vreb_etf_status():
     """做T账户·科技ETF V反监控状态（只作用于 t 账户）。"""
     from app.services import t_vreb_etf
-    return t_vreb_etf.get_status()
+    return _t_status_from_worker("vreb_etf", t_vreb_etf.get_status)
 
 
 @router.post("/vreb-etf/scan")

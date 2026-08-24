@@ -1438,6 +1438,8 @@ def rebalance_floors() -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = []
     try:
         from app.services.t_eod import check_floor_lower
+        floor_res = check_floor_lower()  # 无参新 API：返回 {"blocked": [...], "ok": [...]}
+        below_set = {b.get("symbol") for b in (floor_res or {}).get("blocked", [])}
         ledger = get_sellable_ledger()
         for sym, item in ledger.items():
             symbol = sym
@@ -1446,7 +1448,7 @@ def rebalance_floors() -> List[Dict[str, Any]]:
             if volume <= 0 or avg <= 0:
                 continue
             mv = volume * avg
-            below_floor = check_floor_lower(symbol, mv)  # 市值<成本×0.5 → True
+            below_floor = symbol in below_set  # 市值<成本×50% → True（由 t_eod.check_floor_lower 计算）
             if below_floor:
                 actions.append({
                     "symbol": symbol, "action": "monitor_only",

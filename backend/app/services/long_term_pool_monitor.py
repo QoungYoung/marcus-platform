@@ -320,20 +320,13 @@ class LongTermPoolMonitor:
             from app.api.indicator import calc_position
             from app.models.indicator import CalcPositionRequest
 
-            async def _run_calc():
-                return await calc_position(CalcPositionRequest(
-                    symbol=symbol,
-                    signal_strength="medium",
-                    chain_role=role,
-                    tier="probe",
-                    stance="green",  # 长期池固定用 green（不过滤）
-                ))
-
-            loop = asyncio.new_event_loop()
-            try:
-                pos_result = loop.run_until_complete(_run_calc())
-            finally:
-                loop.close()
+            pos_result = calc_position(CalcPositionRequest(
+                symbol=symbol,
+                signal_strength="medium",
+                chain_role=role,
+                tier="probe",
+                stance="green",  # 长期池固定用 green（不过滤）
+            ))
         except Exception as e:
             logger.warning(f"[长期池] calc_position failed for {symbol}: {e}")
             return False

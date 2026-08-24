@@ -178,6 +178,21 @@ def _t_monitor_status() -> dict:
         return {"running": False, "error": str(e)}
 
 
+def _t_ledger_monitors_status() -> dict:
+    """做T专项监控器（vrebounce/vreb-etf/mom-etf）状态（跨进程供 API 展示）。"""
+    import importlib
+    st: dict = {}
+    for key, mod in (("vrebounce", "app.services.t_vrebounce"),
+                     ("vreb_etf", "app.services.t_vreb_etf"),
+                     ("mom_etf", "app.services.t_mom_etf")):
+        try:
+            m = importlib.import_module(mod)
+            st[key] = m.get_status()
+        except Exception as e:
+            st[key] = {"enabled": False, "running": False, "error": str(e)}
+    return st
+
+
 def _publish_loop():
     """周期性把调度器/监控器状态写入 worker_status，供 API 读取。
 
@@ -207,6 +222,7 @@ def _publish_loop():
             "candidate_pool_monitor": get_pool_monitor_status(),
             "long_term_pool_monitor": get_lt_pool_monitor_status(),
             "t_monitor": _t_monitor_status(),
+            "t_monitors": _t_ledger_monitors_status(),
             "stock_account": _stock_account_summary(),
         }
 
