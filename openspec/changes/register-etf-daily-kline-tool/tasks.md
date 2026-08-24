@@ -13,14 +13,14 @@
 
 ## 3. 部署与冒烟验证
 
-- [ ] 3.1 云服务器重建镜像：`docker build -f docker/Dockerfile.dsh -t marcus-dsh:latest .`
-- [ ] 3.2 重启 `marcus-dsh` 容器（沿用原 `docker run` 参数/env 或 `docker compose up -d dsh`）
-- [ ] 3.3 确认 `docker logs marcus-dsh` 出现「只读查询工具注册完成（…get_etf_kline…）」
-- [ ] 3.4 QQ 链路冒烟：`curl -X POST http://<host>:3001/chat -d '{"message":"查一下 SH510050 最近 5 天日线","session_id":"smoke-etf-1","mode":"chat"}'`，确认回复包含真实日线数据且未走写工具
-- [ ] 3.5 若线上 DB 中 `CHAT_SYSTEM_PROMPT` 已存在（种子仅空库写入），通过 API/管理端更新该 prompt 使工具指引生效，或记录说明接受延迟
-- [ ] 3.6 提交变更（`docker/dsh/bridge/lib/index.js`、`backend/app/db/prompt_seeds.py`），中文 commit message
+- [x] 3.1 云服务器重建镜像：`docker build -f docker/Dockerfile.dsh -t marcus-dsh:latest .`
+- [x] 3.2 重启 `marcus-dsh` 容器（沿用原 `docker run` 参数/env 或 `docker compose up -d dsh`）
+- [x] 3.3 确认 `docker logs marcus-dsh` 出现「只读查询工具注册完成（…get_etf_kline…）」
+- [x] 3.4 QQ 链路冒烟：`curl -X POST http://<host>:3001/chat -d '{"message":"查一下 SH510050 最近 5 天日线","session_id":"smoke-etf-1","mode":"chat"}'`，确认回复包含真实日线数据且未走写工具
+- [x] 3.5 若线上 DB 中 `CHAT_SYSTEM_PROMPT` 已存在（种子仅空库写入），通过 API/管理端更新该 prompt 使工具指引生效，或记录说明接受延迟
+- [x] 3.6 提交变更（`docker/dsh/bridge/lib/index.js`、`backend/app/db/prompt_seeds.py`），中文 commit message
 
 ## 4. 验收对照
 
-- [ ] 4.1 对照 `specs/etf-daily-kline-tool/spec.md` 逐条核对：工具注册、输出格式、chat 可见性、提示词指引均满足
-- [ ] 4.2 QQ 实际聊天会话验证一次 ETF 查询（含无前缀/带前缀代码各一例）
+- [x] 4.1 对照 `specs/etf-daily-kline-tool/spec.md` 逐条核对：工具注册、输出格式、chat 可见性、提示词指引均满足
+- [x] 4.2 QQ 实际聊天会话验证一次 ETF 查询（含无前缀/带前缀代码各一例）
