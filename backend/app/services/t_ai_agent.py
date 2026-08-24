@@ -142,7 +142,20 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
             price = float((trigger or {}).get("suggest_bid_price")
                           or (trigger or {}).get("suggest_ask_price")
                           or (context or {}).get("price") or 0)
-            side = "buy" if (trigger or {}).get("event_type") in ("low_buy", "panic_vibrate", "custom_buy") else "sell"
+            ev = (trigger or {}).get("event_type")
+            side = "buy" if ev in ("low_buy", "panic_vibrate", "custom_buy") else "sell"
+            # custom 等自由类型：触发事件自身无方向，回查条件 direction（迭代#58 与
+            # TMonitor._is_buy_side 对齐，避免 custom-buy 被按卖腿处理）
+            if side == "sell" and ev not in ("high_sell", "high_sell_then_buy_back", "high_only", "stop_loss"):
+                try:
+                    cid = (trigger or {}).get("condition_id")
+                    if cid:
+                        from app.services.t_db import get_condition
+                        c0 = get_condition(cid)
+                        if c0 and str(c0.get("direction") or "").strip().lower() in ("buy", "买", "买入"):
+                            side = "buy"
+                except Exception:
+                    pass
             # 量：优先 context.volume；否则按可卖底仓 30% 推导（对齐做T单笔惯例，最小 100 股）
             volume = int((context or {}).get("volume") or 0)
             if volume <= 0:
@@ -150,7 +163,15 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                     from app.services.t_gateway import get_sellable_ledger
                     item = get_sellable_ledger().get(symbol) or {}
                     sellable = int(item.get("sellable") or 0)
-                    volume = max(int(sellable * 0.3), 100) if sellable > 0 else 100
+                    if sellable > 0:
+                        volume = max(int(sellable * 0.3), 100)
+                    elif side == "buy":
+                        # 无底仓买腿：按建仓规模（与 _write_trigger 对齐）
+                        from app.services.t_build import build_sizing
+                        sz = build_sizing(symbol, price) if price > 0 else {}
+                        volume = int(sz.get("suggest_volume") or 0)
+                    else:
+                        volume = 100
                 except Exception:
                     volume = 100
             volume = (volume // 100) * 100 or 100

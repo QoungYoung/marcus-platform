@@ -150,11 +150,12 @@ function apply(ctx) {
 
       register(defineTool({
         name: 'create_t_condition',
-        description: '创建/更新一条做T自由表达式监控条件。Agent 可用 list_t_fields 查询的任意字段组合触发条件；表达式只控制触发时机，触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）。',
+        description: '创建/更新一条做T自由表达式监控条件。Agent 可用 list_t_fields 查询的任意字段组合触发条件；表达式只控制触发时机，触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）。迭代#58：direction=buy 的买腿条件在标的**未建仓**时命中会按建仓规模（单笔上限÷现价）自动买入建仓；sell 卖腿（含 high_sell）仍需有可卖底仓。',
         parameters: {
           symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、SZ000001' },
           expression: { type: 'object', additionalProperties: true, required: true, description: '触发条件表达式 JSON，形如 {"and":[{"field":"quote.current","op":"<=","value":98},{"field":"vol_ratio","op":">=","value":1.5}]}。字段名用 list_t_fields 查询；op 支持 > >= < <= == != in not_in between；组合用 and/or/not' },
           trigger_kind: { type: 'string', description: '条件类型标识（默认 custom），如 low_buy/high_sell/custom_tech' },
+          direction: { type: 'string', enum: ['buy', 'sell'], description: '执行方向（迭代#58，custom 等自由类型必填）：buy=买腿（未建仓时命中按建仓规模买入建仓），sell=卖腿（需有可卖底仓）。缺省按 trigger_kind 默认：low_buy/panic_vibrate=买，其余=卖' },
           sell_target_price: { type: 'number', description: '高抛止盈目标价（元）' },
           stop_loss_price: { type: 'number', description: '止损价（元）' },
           vol_ratio_thresh: { type: 'number', description: '量比阈值（默认 1.5，仅无 expression 时用默认逻辑）' },
@@ -169,13 +170,14 @@ function apply(ctx) {
             expression: args.expression,
             regime_gate: args.regime_gate || 'ALLOWED',
           };
+          if (args.direction) body.direction = args.direction;
           if (args.sell_target_price !== undefined) body.sell_target_price = args.sell_target_price;
           if (args.stop_loss_price !== undefined) body.stop_loss_price = args.stop_loss_price;
           if (args.vol_ratio_thresh !== undefined) body.vol_ratio_thresh = args.vol_ratio_thresh;
           const data = await apiFetch('/t/conditions', { method: 'POST', body: JSON.stringify(body) });
           return {
             ok: true,
-            text: '✅ 做T监控条件已创建\n条件ID: ' + data.condition_id + '\n标的: ' + args.symbol + '\n表达式: ' + (data.expression_summary || JSON.stringify(args.expression)) + '\n说明: 触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）；开盘后 TMonitor 每 30s 评估',
+            text: '✅ 做T监控条件已创建\n条件ID: ' + data.condition_id + '\n标的: ' + args.symbol + '\n方向: ' + (args.direction === 'buy' ? '买（未建仓时命中按建仓规模买入）' : (args.direction === 'sell' ? '卖' : '按类型默认')) + '\n表达式: ' + (data.expression_summary || JSON.stringify(args.expression)) + '\n说明: 触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）；开盘后 TMonitor 每 30s 评估',
           };
         },
       }));
@@ -196,7 +198,8 @@ function apply(ctx) {
           conds.forEach((c) => {
             const exprSummary = (c.expression && c.expression_summary) ? c.expression_summary : JSON.stringify(c.expression || '');
             const armed = c.armed === 1 ? '🟢 armed' : '⛔ 冷却/已触发';
-            lines.push('#' + c.id + ' ' + c.symbol + ' [' + c.trigger_kind + '] ' + armed + ' 触发' + (c.trigger_count_today || 0) + '次');
+            const dir = c.direction === 'buy' ? '买' : c.direction === 'sell' ? '卖' : '按类型';
+            lines.push('#' + c.id + ' ' + c.symbol + ' [' + c.trigger_kind + '] 方向:' + dir + ' ' + armed + ' 触发' + (c.trigger_count_today || 0) + '次');
             lines.push('   expr: ' + (exprSummary || '默认逻辑'));
             if (c.sell_target_price) lines.push('   高抛目标: ' + c.sell_target_price + ' | 止损: ' + c.stop_loss_price);
           });
@@ -1414,6 +1417,11 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
         '- 大盘：get_market_state(大盘/regime)',
         '- 持仓/条件自检：get_portfolio_positions(持仓) / list_t_conditions(当前监控条件) / list_t_ai_actions(最近决策审计)',
         '【硬约束】快照缺现价/量能时必须调用 get_stock_quote / get_t_realtime_indicators 补数，禁止仅凭自述理由放行 exec。',
+        '',
+        '【迭代#58 条件单建仓】低吸（low_buy）与自定义买方向（custom + direction=buy）监控条件',
+        '在标的**未建仓**时命中也会触发：系统按建仓规模（单笔上限÷现价）自动买入开仓，无需先建底仓；',
+        '14:45 后禁开仓、near-limit/恐慌放量等风控照常。发布自定义条件时用 create_t_condition 的 direction 参数',
+        '显式声明 buy/sell（buy=买腿可建仓，sell=卖腿需有可卖底仓）；缺省按 trigger_kind（low_buy/panic_vibrate=买，其余=卖）。',
         '',
         '建仓：scan_t_candidates 选股（候选池优先，空则全市场扫描）→ get_floor_overview →',
         'build_t_position（ai_led 首开自动放行；单笔≤净值5%、总底仓≤净值55%；冷静期/午后不自动建）。',
