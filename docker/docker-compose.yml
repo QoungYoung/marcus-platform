@@ -123,7 +123,9 @@ services:
       # DSH 文件沙箱：workspace-write（/app 工作区 + /tmp 可写），否则桥接会话只读
       DSH_PERMISSION_MODE: workspace-write
       # DeepSeek 端点：服务器 key 走 OpenCode 网关（.env 的 DEEPSEEK_API_HOST，如 opencode.ai/zen/go）
-      DEEPSEEK_BASE_URL: https://${DEEPSEEK_API_HOST:-opencode.ai/zen/go}/v1
+      DEEPSEEK_BASE_URL: https://api.deepseek.com/v1
+      DEEPSEEK_SEARCH_BASE_URL: https://api.deepseek.com/anthropic/v1
+      DEEPSEEK_MODEL: deepseek-chat
     ports:
       - "3001:3001"
     volumes:
