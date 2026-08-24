@@ -499,6 +499,37 @@ function apply(ctx) {
       }));
 
       register(defineTool({
+        name: 'get_etf_kline',
+        description: '查ETF日线K线（日K，Tushare fund_daily 盘后数据）：日期/开高低收/成交量/涨跌幅。用户询问ETF走势、日K、涨跌趋势时用。仅支持ETF代码，格式可为 510050 / SH510050 / SZ159995（与个股 get_daily_kline 区分；个股日K请用其他工具）。',
+        parameters: {
+          symbol: { type: 'string', required: true, description: 'ETF代码，如 SH510050、510050、SZ159995' },
+          count: { type: 'number', description: '返回最近多少根日线（默认20）' },
+          period: { type: 'string', description: 'K线周期（默认day，走Tushare fund_daily）；其他周期走雪球源' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const period = args.period || 'day';
+          const count = args.count && args.count > 0 ? args.count : 20;
+          let data;
+          try {
+            data = await apiFetch('/etf/kline/' + encodeURIComponent(args.symbol) + '?period=' + encodeURIComponent(period) + '&count=' + count);
+          } catch (e) {
+            return { ok: false, text: '❌ 获取ETF日线失败: ' + (e.message || e) };
+          }
+          const bars = (data && data.klines) || [];
+          if (!Array.isArray(bars) || bars.length === 0) {
+            return { ok: true, text: '📭 无日线数据: ' + args.symbol + '（请确认是ETF代码，如 SH510050）' };
+          }
+          const lines = ['📈 ' + (data.symbol || args.symbol) + ' ETF日线（' + bars.length + ' 根，Tushare fund_daily）：', ''];
+          bars.forEach((b) => {
+            const chg = (b.change_pct !== undefined && b.change_pct !== null) ? (' ' + (b.change_pct > 0 ? '+' : '') + b.change_pct + '%') : '';
+            lines.push('• ' + b.timestamp + ' O' + (b.open ?? '-') + ' H' + (b.high ?? '-') + ' L' + (b.low ?? '-') + ' C' + (b.close ?? '-') + chg);
+          });
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
         name: 'get_t_candidates_summary',
         description: '做T候选扫描摘要：候选池/全市场扫描的可T质量候选短名单（build_score/趋势/理由）。AI 选股时用（pool 优先，scan 补充）。',
         parameters: {
@@ -521,7 +552,7 @@ function apply(ctx) {
         },
       }));
       console.log('[Bridge] 做T底仓建仓工具注册完成（scan_t_candidates/build_t_position/auto_gen_conditions/rebalance_floors/get_floor_overview）');
-      console.log('[Bridge] 只读查询工具注册完成（get_stock_quote/get_portfolio_positions/get_t_realtime_indicators/get_stock_moneyflow/get_market_state/get_stock_technical/get_intraday_minute/get_t_candidates_summary）');
+      console.log('[Bridge] 只读查询工具注册完成（get_stock_quote/get_portfolio_positions/get_t_realtime_indicators/get_stock_moneyflow/get_market_state/get_stock_technical/get_intraday_minute/get_t_candidates_summary/get_etf_kline）');
     }
     registerWriteTools();
 

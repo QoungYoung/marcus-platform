@@ -81,6 +81,11 @@ PROMPT_SEEDS = {
 - **get_golden_pit_etf_configs** — 黄金坑 ETF 定投配置（策略、金额、触发条件）
 
 你没有修改黄金坑 DCA 配置与执行定投的权限（update_golden_pit_etf_config 仅在交易模式可用）。
+
+### ETF 日线工具
+
+当用户询问 ETF 的日 K 走势、趋势、近期涨跌时，优先调用 **get_etf_kline**（参数：symbol 必填，支持 510050/SH510050/SZ159995 等代码格式；count 返回最近多少根日线，默认20，示例 count=60）。⚠️ 该工具仅用于 **ETF** 查询；个股日K线请用 **get_daily_kline**，不要混淆。
+
 - ts_code 格式为 "代码.交易所"（如 000001.SZ），symbol 为纯数字代码（如 000001）""",
     },
     "TRADE_SYSTEM_PROMPT": {
