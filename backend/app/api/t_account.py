@@ -577,7 +577,7 @@ def _etf_shortline_candidates(source: str, limit: int = 20):
         rows = db.execute(text(
             "SELECT symbol, score, reasons, trend, status, built_at, trade_date, created_at "
             "FROM t_build_scan_results WHERE source = :src "
-            "AND trade_date = (SELECT max(trade_date) FROM t_build_scan_results WHERE source = :src) "
+            "AND trade_date = CURRENT_DATE::text "
             "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
             "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"
         ), {"src": source, "lim": limit}).mappings().all()
@@ -663,7 +663,7 @@ def _stock_name_map() -> dict:
 
 @router.get("/vrebounce/candidates")
 def t_vrebounce_candidates(limit: int = 20, days: int = 7):
-    """V反 候选列表：默认只返回最新一个交易日（trade_date=max）的 pending 候选；
+    """V反 候选列表：默认只返回当日（trade_date=CURRENT_DATE）候选；
     传 days=0 时返回近 N 天全部（含历史状态，去重按最新）。仅 t 账户。"""
     from sqlalchemy import text
     from app.database import SessionLocal
@@ -680,7 +680,7 @@ def t_vrebounce_candidates(limit: int = 20, days: int = 7):
             rows = db.execute(text(
                 "SELECT symbol, score, reasons, trend, status, built_at, trade_date, created_at "
                 "FROM t_build_scan_results WHERE source = 'vrebounce' "
-                "AND trade_date = (SELECT max(trade_date) FROM t_build_scan_results WHERE source = 'vrebounce') "
+                "AND trade_date = CURRENT_DATE::text "
                 "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
                 "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"
             ), {"lim": limit}).mappings().all()

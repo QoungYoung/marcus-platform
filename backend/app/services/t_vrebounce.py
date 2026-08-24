@@ -625,7 +625,7 @@ def scan_once() -> List[str]:
         try:
             db.execute(text(
                 "UPDATE t_build_scan_results SET status = 'expired' "
-                "WHERE source = 'vrebounce' AND status = 'pending' AND trade_date < :d"
+                "WHERE source = 'vrebounce' AND status IN ('pending', 'blocked') AND trade_date < :d"
             ), {"d": datetime.now().strftime("%Y-%m-%d")})
             db.commit()
         finally:
