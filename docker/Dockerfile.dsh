@@ -58,15 +58,23 @@ RUN mkdir -p /root/.dsh/profiles/service/node_modules/dsh-agent-teams \
 
 # 8) dsh-marcus-bridge 插件（Pi Server 兼容 HTTP 桥接）
 #    从构建上下文 COPY（由 scripts/specs/dsh-marcus-bridge.spec.json 生成）
-COPY docker/dsh/bridge/package.json /root/.dsh/profiles/service/node_modules/dsh-dsh-marcus-bridge/package.json
-COPY docker/dsh/bridge/lib/index.js /root/.dsh/profiles/service/node_modules/dsh-dsh-marcus-bridge/lib/index.js
+#    ⚠️ 不再 COPY 进 /root/.dsh/profiles/... —— compose 的 dsh-data volume 挂载在
+#    /root/.dsh 会遮蔽镜像内的插件文件（首启后镜像重建无法更新 volume 内文件）。
+#    改为 COPY 到 /opt/dsh-plugins/（volume 外），由 entrypoint.sh 启动时同步覆盖。
+COPY docker/dsh/bridge/package.json /opt/dsh-plugins/dsh-dsh-marcus-bridge/package.json
+COPY docker/dsh/bridge/lib/index.js /opt/dsh-plugins/dsh-dsh-marcus-bridge/lib/index.js
 
 # 8b) dsh-t-compaction 插件（做T会话专用上下文压缩：股票投资信息优先摘要）
-COPY docker/dsh/t-compaction/package.json /root/.dsh/profiles/service/node_modules/dsh-t-compaction/package.json
-COPY docker/dsh/t-compaction/lib/index.js /root/.dsh/profiles/service/node_modules/dsh-t-compaction/lib/index.js
+COPY docker/dsh/t-compaction/package.json /opt/dsh-plugins/dsh-t-compaction/package.json
+COPY docker/dsh/t-compaction/lib/index.js /opt/dsh-plugins/dsh-t-compaction/lib/index.js
 
 # 9) 覆盖 service profile 的用户 patch（webserver host 0.0.0.0 + code-runtime + bridge + t-compaction）
-COPY docker/dsh/service.cordis.patch.yml /root/.dsh/profiles/service/cordis.patch.yml
+#    同样放入 /opt/dsh-plugins/（同步到 volume 中的 profiles/service/）
+COPY docker/dsh/service.cordis.patch.yml /opt/dsh-plugins/cordis.patch.yml
+
+# 9b) 启动入口：先把镜像内最新插件/patch 同步进 volume（/root/.dsh），再 exec dsh
+COPY docker/dsh/entrypoint.sh /opt/dsh-plugins/entrypoint.sh
+RUN chmod +x /opt/dsh-plugins/entrypoint.sh
 
 # 会话/技能目录
 RUN mkdir -p /app/sessions /app/skills
@@ -74,5 +82,5 @@ RUN mkdir -p /app/sessions /app/skills
 # Expose HTTP port (Pi Server 兼容契约)
 EXPOSE 3001
 
-# 常驻启动 service profile
-CMD ["dsh", "--profile", "service"]
+# 常驻启动 service profile（经 entrypoint 同步插件后 exec dsh）
+CMD ["bash", "/opt/dsh-plugins/entrypoint.sh"]

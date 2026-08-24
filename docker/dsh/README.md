@@ -49,6 +49,31 @@ docker run -d --name marcus-dsh -p 3001:3001 \
 - 3001 端口当前被现役 `marcus-piserver` 占用，切换前需先停旧服务（任务 7.1 双跑切换）。
 - skill：`/app/.agents/skills/marcus-panel-tools` 需挂载或 COPY（Spike 1.3 验证可见可读）。
 
+## ⚠️ 插件更新部署（volume 遮蔽坑，2026-08-24 实测）
+
+**根因**：compose 的 `dsh-data` named volume 挂在 `/root/.dsh` 上，会**遮蔽**镜像内
+`/root/.dsh/profiles/...` 的文件——首启后 volume 里的插件/补丁文件以 volume 为准，
+重建镜像时 Dockerfile 的 COPY 不再生效（体积/时间戳保持首启时的旧值）。
+
+**现状修复**：仓库维护的插件（`dsh-marcus-bridge` / `dsh-t-compaction`）与
+`cordis.patch.yml` 已改为 COPY 进镜像内 **`/opt/dsh-plugins/`**（volume 外），
+容器启动经 `docker/dsh/entrypoint.sh` 覆盖同步进 volume 再 `exec dsh`。
+因此**更新插件只需**：
+
+```bash
+# 1. 修改 docker/dsh/bridge/lib/index.js 等仓库文件
+# 2. 在服务器 /opt/marcus-platform 下拉代码后重建并重启：
+cd /opt/marcus-platform/docker
+docker compose build dsh
+docker compose up -d --no-deps --force-recreate dsh
+# 3. 验证新工具/插件已加载（日志应出现对应注册行）：
+docker logs marcus-dsh | grep Bridge
+```
+
+不要手动 `docker cp` 进容器（旧办法，仅作一次性急救）；也不要改 volume 里的文件。
+entrypoint 只同步仓库维护内容，**不动** volume 里的运行时派生文件
+（`cordis.yml`、`pnpm-lock.yaml`、`sessions/` 等），会话持久化不受影响。
+
 ## 出站代理（可选）
 
 web_search / LLM 的 HTTP 请求走原生 `fetch`，**不读** `HTTP_PROXY`/`HTTPS_PROXY`（Node 22
