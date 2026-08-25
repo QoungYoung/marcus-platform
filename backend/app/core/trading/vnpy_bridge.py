@@ -590,10 +590,63 @@ class VNPyBridge:
         except Exception as e:
             logger.warning("[VNPyBridge] 从 PG 加载账户失败: %s", e)
 
-    def _clear_paper_data_files(self) -> None:
-        """清理 VN.PY paper account 持久化文件, 并注入已有持仓"""
+    def _compute_seed_positions_from_trades(self) -> List[dict]:
+        """按 paper_trades 成交流水 FIFO 重放计算当前真实持仓（桥接种子数据源）。
 
-        pg_positions = self._get_positions_from_pg()
+        与 portfolio.calculate_positions_from_db 同口径：持仓以成交流水为准。
+        paper_positions 表在净持仓模式下可能残留已清仓标的（卖出后的 NET
+        持仓事件未被同步），直接用它播种会把幽灵持仓重新注入引擎，
+        导致进程重启后对已清仓标的重复触发止损卖出。
+        """
+        trades = self._query_trades_from_pg(limit=100000)
+        # _query_trades_from_pg 按 id DESC 返回，FIFO 重放必须按 id 正序
+        trades.sort(key=lambda t: t.get("id", 0))
+
+        lots: Dict[str, list] = {}
+        for t in trades:
+            symbol = t.get("symbol", "")
+            direction = t.get("direction", "")
+            price = float(t.get("price", 0) or 0)
+            volume = int(t.get("volume", 0) or 0)
+            if not symbol or volume <= 0:
+                continue
+            if direction == "买入":
+                lots.setdefault(symbol, []).append({"price": price, "volume": volume})
+            elif direction == "卖出":
+                remaining = volume
+                lst = lots.get(symbol, [])
+                i = 0
+                while remaining > 0 and i < len(lst):
+                    used = min(lst[i]["volume"], remaining)
+                    lst[i]["volume"] -= used
+                    remaining -= used
+                    if lst[i]["volume"] == 0:
+                        lst.pop(i)
+                    else:
+                        i += 1
+
+        result = []
+        for symbol, lst in lots.items():
+            total_vol = sum(lot["volume"] for lot in lst)
+            if total_vol > 0:
+                total_cost = sum(lot["price"] * lot["volume"] for lot in lst)
+                result.append({
+                    "symbol": symbol,
+                    "volume": total_vol,
+                    "avg_price": total_cost / total_vol,
+                })
+        return result
+
+    def _clear_paper_data_files(self) -> None:
+        """清理 VN.PY paper account 持久化文件, 并注入已有持仓。
+
+        种子持仓以 paper_trades 成交流水 FIFO 重放为准（见
+        _compute_seed_positions_from_trades），不再信任 paper_positions 表——
+        该表在净持仓模式下可能残留已清仓标的，直接播种会导致
+        进程重启后幽灵持仓复活、触发重复止损卖出。
+        """
+
+        pg_positions = self._compute_seed_positions_from_trades()
         data_dir = Path.home() / ".vntrader"
         data_dir.mkdir(exist_ok=True)
 
@@ -613,8 +666,32 @@ class VNPyBridge:
         with open(data_file, "w") as f:
             json.dump(position_data, f)
         logger.info(
-            "[VNPyBridge] 已写入 %d 条种子持仓", len(position_data)
+            "[VNPyBridge] 已写入 %d 条种子持仓（FIFO 重放口径）", len(position_data)
         )
+
+        # 自愈：按 FIFO 口径清理 paper_positions 残留行（已清仓标的的幽灵持仓）。
+        # 否则 worker 状态快照/其他直读 paper_positions 的路径仍会把这些
+        # 残留计入持仓市值与数量。
+        try:
+            fifo_symbols = {p["symbol"] for p in pg_positions}
+            conn = self._get_pg_conn()
+            cur = conn.cursor()
+            if fifo_symbols:
+                cur.execute(
+                    "DELETE FROM paper_positions WHERE account_id = 'stock' "
+                    "AND symbol NOT IN %s",
+                    (tuple(fifo_symbols),),
+                )
+            else:
+                cur.execute(
+                    "DELETE FROM paper_positions WHERE account_id = 'stock'",
+                )
+            cleaned = cur.rowcount
+            conn.close()
+            if cleaned:
+                logger.info("[VNPyBridge] 已清理 %d 条幽灵持仓行（FIFO 口径）", cleaned)
+        except Exception as e:
+            logger.warning("[VNPyBridge] 清理残留持仓失败: %s", e)
 
         # 写入设置
         setting_file = data_dir / "paper_account_setting.json"
@@ -653,29 +730,39 @@ class VNPyBridge:
         return {}
 
     def _get_positions_from_pg(self) -> List[dict]:
-        """从 PostgreSQL 查持仓"""
+        """从 PostgreSQL 查持仓。
+
+        volume/avg_price 以 paper_trades 成交流水 FIFO 重放为准（与
+        calculate_positions_from_db 同口径），entry_date/highest_price
+        元数据取自 paper_positions。避免残留的 paper_positions 行
+        （净持仓事件未同步删除）造成幽灵持仓。
+        """
+        meta: Dict[str, tuple] = {}
         try:
             conn = self._get_pg_conn()
             cur = conn.cursor()
             cur.execute(
-                "SELECT symbol, volume, frozen, avg_price, entry_date, highest_price "
-                "FROM paper_positions WHERE account_id = 'stock' "
-                "AND volume > 0 AND coalesce(frozen, 0) >= 0"
+                "SELECT symbol, entry_date, highest_price "
+                "FROM paper_positions WHERE account_id = 'stock'"
             )
-            result = []
             for row in cur.fetchall():
-                result.append({
-                    "symbol": row[0],
-                    "volume": int(row[1] or 0),
-                    "frozen": int(row[2] or 0),
-                    "avg_price": float(row[3] or 0),
-                    "entry_date": row[4] or "",
-                    "highest_price": float(row[5] or 0),
-                })
+                meta[row[0]] = (row[1] or "", float(row[2] or 0))
             conn.close()
-            return result
         except Exception:
-            return []
+            pass
+
+        result = []
+        for pos in self._compute_seed_positions_from_trades():
+            entry_date, highest = meta.get(pos["symbol"], ("", 0.0))
+            result.append({
+                "symbol": pos["symbol"],
+                "volume": int(pos["volume"]),
+                "frozen": 0,
+                "avg_price": float(pos["avg_price"]),
+                "entry_date": entry_date,
+                "highest_price": highest,
+            })
+        return result
 
     def _get_realized_pnl_from_pg(self) -> float:
         """从 PostgreSQL 汇总已实现盈亏"""

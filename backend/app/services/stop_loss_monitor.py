@@ -1596,6 +1596,30 @@ class StopLossMonitor:
         except Exception as _e:
             print(f"[止损] 假跌破守卫异常: {str(_e)[:80]}（继续执行止损）", file=sys.stderr)
 
+        # P0 防御：以成交流水 FIFO 口径二次核对持仓，杜绝幽灵持仓重复卖出。
+        # 页面/API 的持仓以 paper_trades FIFO 重放为准（calculate_positions_from_db），
+        # 而本监控器读到的 VN.PY 内存/paper_positions 可能残留已清仓标的——
+        # 卖出前必须与 FIFO 口径一致，避免对已清仓标的反复止损。
+        try:
+            from app.api.portfolio import calculate_positions_from_db
+            account_id = getattr(self.executor, "account_id", None) or "stock"
+            db_positions, _acct, _rp, _wr = calculate_positions_from_db(account=account_id)
+            db_pos = next((p for p in db_positions if p.get("symbol") == symbol), None)
+            db_vol = int(db_pos.get("volume", 0) if db_pos else 0)
+            if db_vol <= 0:
+                logger.warning(f"[StopLoss] ⛔ FIFO 核对无 {symbol} 持仓，跳过止损（疑似幽灵持仓）")
+                print(f"[止损] ⛔ {symbol} FIFO 核对无持仓，跳过（疑似幽灵持仓）| {reason}", file=sys.stderr)
+                return
+            if volume > db_vol:
+                print(
+                    f"[止损] ⚠️ {symbol} 请求卖 {volume} 股 > FIFO 持仓 {db_vol} 股，"
+                    f"按 FIFO 上限执行",
+                    file=sys.stderr,
+                )
+                volume = db_vol
+        except Exception as e:
+            logger.debug(f"[StopLoss] FIFO 核对失败，按原口径继续: {e}")
+
         # 去重键：清仓用 symbol+price（防同一价格重复触发），减仓用 symbol+ratio（同一减仓比例每日只执行一次）
         if sell_ratio >= 0.99:
             trigger_key = f"{symbol}_{price:.2f}"
@@ -1606,6 +1630,42 @@ class StopLossMonitor:
                 print(f"[止损] ⏭️ {symbol} 已触发过 (key={trigger_key})，跳过", file=sys.stderr)
                 return
             self._triggered[trigger_key] = price
+
+        # 持久化去重/上限：进程重启后不绕过"当日同价位已止损"与"单票日 3 次上限"
+        try:
+            from app.database import SessionLocal
+            from app.models.stop_loss_log import StopLossLog
+            from sqlalchemy import func as _sf
+            from datetime import date as _date
+
+            _db = SessionLocal()
+            try:
+                _since = datetime.combine(_date.today(), dtime(0, 0))
+                _same_day = StopLossLog.timestamp >= _since
+                _same_price = _sf.abs(StopLossLog.price - round(price, 2)) < 0.005
+                _dup = _db.query(_sf.count()).filter(
+                    StopLossLog.symbol == symbol,
+                    StopLossLog.executed == 'yes',
+                    _same_day,
+                    _same_price,
+                ).scalar() or 0
+                if _dup > 0:
+                    logger.warning(f"[StopLoss] ⛔ {symbol} 今日已在该价位({price:.2f})止损过，跳过")
+                    print(f"[止损] ⛔ {symbol} 今日 {price:.2f} 价位已止损（持久化去重），跳过", file=sys.stderr)
+                    return
+                _day_count = _db.query(_sf.count()).filter(
+                    StopLossLog.symbol == symbol,
+                    StopLossLog.executed == 'yes',
+                    _same_day,
+                ).scalar() or 0
+                if _day_count >= 3:
+                    logger.warning(f"[StopLoss] {symbol} 今日已止损 {_day_count} 次（持久化），跳过")
+                    print(f"[止损] ⛔ {symbol} 今日已止损{_day_count}次达上限（持久化），跳过", file=sys.stderr)
+                    return
+            finally:
+                _db.close()
+        except Exception as e:
+            logger.debug(f"[StopLoss] 持久化去重查询失败（仅依赖内存态）: {e}")
 
         daily_count = self.today_stops.get(symbol, 0)
         if daily_count >= 3:

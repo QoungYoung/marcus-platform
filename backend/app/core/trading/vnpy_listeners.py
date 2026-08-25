@@ -257,7 +257,12 @@ class PositionEventListener:
         """事件回调 — 只提取数据, 立即返回"""
         try:
             position: PositionData = event.data
-            if position.direction != Direction.LONG:
+            # 净持仓合约(net_position=True)的持仓事件方向为 Direction.NET，
+            # 多空分仓合约才是 LONG/SHORT。只跳过 SHORT：
+            # 若把 NET 也丢弃，卖出后 volume=0 的持仓事件不会同步到
+            # paper_positions，已清仓标的会残留为"幽灵持仓"，
+            # 进程重启播种时被误当真实持仓，导致重复止损卖出。
+            if position.direction == Direction.SHORT:
                 return
             params = (
                 _marcus_symbol(position.symbol, position.exchange),
