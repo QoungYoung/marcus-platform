@@ -635,17 +635,20 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
         return {"status": "rejected", "reason": f"执行异常: {e}"}
 
     # 3) 结果回写
-    ok = result.get("status") == "success" or result.get("status") == "filled"
+    # 执行器成功态为 'executed'（MarcusVNPyExecutor.buy/sell）；gateway 统一对外
+    # 返回稳定 status：成功=success / 失败=rejected（避免 **result 把 status
+    # 覆盖成 executed/failed 导致上游误判——迭代#58e：成交但触发标 blocked）
+    ok = result.get("status") in ("success", "filled", "executed")
     if ok:
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "executed",
                                        executed_price=float(result.get("price", price) or price))
         # 更新日账本
         _update_daily_ledger(symbol, side, price, volume)
-        return {"status": "success", **result}
+        return {**result, "status": "success"}
     if trigger_id:
         t_db.update_trigger_status(trigger_id, "blocked", reason=result.get("reason") or "撮合失败")
-    return {"status": "rejected", "reason": result.get("reason") or "撮合失败", **result}
+    return {**result, "status": "rejected", "reason": result.get("reason") or "撮合失败"}
 
 
 def _update_daily_ledger(symbol: str, side: str, price: float, volume: int):
