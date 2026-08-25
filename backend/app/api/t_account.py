@@ -74,10 +74,22 @@ def t_condition_create(cond: dict):
             validate_expression(expr)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"表达式非法: {e}")
-    # 校验方向（迭代#58）：仅接受 buy/sell/空
+    # 校验方向（迭代#58g）：buy/sell 显式可；
+    # custom 未声明 → 按表达式推断；推断不出（方向不明确）→ 400 强制显式，
+    # 绝不静默默认成卖腿（避免 AI 重建歧义条件、一次次数次纠错）
     direction = str(cond.get("direction") or "").strip().lower()
     if direction and direction not in ("buy", "sell"):
         raise HTTPException(status_code=400, detail="direction 仅支持 buy/sell（或留空按 trigger_kind 默认）")
+    if not direction and str(cond.get("trigger_kind") or "") == "custom":
+        from app.services.t_db import infer_custom_direction
+        inferred = infer_custom_direction(cond.get("expression"))
+        if inferred in ("buy", "sell"):
+            direction = inferred
+            cond["direction"] = inferred
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="custom 条件表达式主方向不明确，必须显式声明 direction=buy 或 direction=sell")
     if direction:
         cond["direction"] = direction
     cond.setdefault("account_id", "t")

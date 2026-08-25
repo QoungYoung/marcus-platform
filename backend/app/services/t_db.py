@@ -74,67 +74,27 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
     benchmark_turnover_profile/stabilize_level/sell_target_price/stop_loss_price/
     time_stop_open/time_stop_close/start_time/end_time/regime_gate/status/armed/expression
     direction（迭代#58）：custom 等自由类型显式方向 buy|sell；空 = 按 trigger_kind 默认。
+
+    迭代#58g（防呆）：冲突更新**只写调用方提供的非 None 字段** + 恒重置
+    status/armed（默认 active/1）。此前全量覆盖——AI/重建条件缺字段时会把
+    既有 expression/direction 等抹成 NULL/默认，造成"一次次纠错"。
     """
     try:
         db = SessionLocal()
         try:
-            sql = text(
-                """
-                INSERT INTO t_conditions (
-                    account_id, symbol, trade_date, trigger_kind,
-                    target_price, reinform_price, vol_ratio_thresh,
-                    benchmark_turnover_profile, stabilize_level,
-                    sell_target_price, stop_loss_price,
-                    time_stop_open, time_stop_close, start_time, end_time,
-                    regime_gate, status, armed, expression,
-                    publisher, session_id, direction
-                ) VALUES (
-                    :account_id, :symbol, :trade_date, :trigger_kind,
-                    :target_price, :reinform_price, :vol_ratio_thresh,
-                    :benchmark_turnover_profile, :stabilize_level,
-                    :sell_target_price, :stop_loss_price,
-                    :time_stop_open, :time_stop_close, :start_time, :end_time,
-                    :regime_gate, :status, :armed, :expression,
-                    :publisher, :session_id, :direction
-                )
-                ON CONFLICT (account_id, symbol, trigger_kind, trade_date)
-                DO UPDATE SET
-                    target_price = EXCLUDED.target_price,
-                    reinform_price = EXCLUDED.reinform_price,
-                    vol_ratio_thresh = EXCLUDED.vol_ratio_thresh,
-                    benchmark_turnover_profile = EXCLUDED.benchmark_turnover_profile,
-                    stabilize_level = EXCLUDED.stabilize_level,
-                    sell_target_price = EXCLUDED.sell_target_price,
-                    stop_loss_price = EXCLUDED.stop_loss_price,
-                    time_stop_open = EXCLUDED.time_stop_open,
-                    time_stop_close = EXCLUDED.time_stop_close,
-                    start_time = EXCLUDED.start_time,
-                    end_time = EXCLUDED.end_time,
-                    regime_gate = EXCLUDED.regime_gate,
-                    status = EXCLUDED.status,
-                    armed = EXCLUDED.armed,
-                    expression = EXCLUDED.expression,
-                    publisher = EXCLUDED.publisher,
-                    session_id = EXCLUDED.session_id,
-                    direction = EXCLUDED.direction
-                RETURNING id
-                """
-            )
-            row = db.execute(sql, {
+            sell_kinds = ("high_sell", "high_sell_then_buy_back", "high_only")
+            values = {
                 "account_id": cond.get("account_id", ACCOUNT_T),
                 "symbol": cond["symbol"],
                 "trade_date": cond.get("trade_date", _today()),
-                "trigger_kind": cond.get("trigger_kind", "low_buy"),
+                "trigger_kind": str(cond.get("trigger_kind") or "low_buy"),
                 "target_price": cond.get("target_price"),
-                # 迭代#58f：低吸类行不承载高抛/复归价（语义归位，避免"低吸有高抛价"；
-                # 止损价保留——止损扫描共用）
-                "reinform_price": _normalize_leg_price(cond, ("high_sell", "high_sell_then_buy_back", "high_only"),
-                                                       "reinform_price"),
+                # 迭代#58f：低吸类行不承载高抛/复归价（语义归位；止损保留共用）
+                "reinform_price": _normalize_leg_price(cond, sell_kinds, "reinform_price"),
                 "vol_ratio_thresh": cond.get("vol_ratio_thresh"),
                 "benchmark_turnover_profile": _to_jsonb(cond.get("benchmark_turnover_profile")),
                 "stabilize_level": cond.get("stabilize_level"),
-                "sell_target_price": _normalize_leg_price(cond, ("high_sell", "high_sell_then_buy_back", "high_only"),
-                                                          "sell_target_price"),
+                "sell_target_price": _normalize_leg_price(cond, sell_kinds, "sell_target_price"),
                 "stop_loss_price": cond.get("stop_loss_price"),
                 "time_stop_open": cond.get("time_stop_open"),
                 "time_stop_close": cond.get("time_stop_close"),
@@ -146,10 +106,30 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                 "expression": _to_jsonb(cond.get("expression")),
                 "publisher": cond.get("publisher", "rule"),
                 "session_id": cond.get("session_id"),
-                # 迭代#58b：custom 无显式 direction 时按表达式主比较方向推断，
-                # 避免重建/Agent 忘带方向把买点条件当卖腿执行
+                # 迭代#58b：custom 无显式 direction 时按表达式主比较方向推断
                 "direction": _resolve_direction(cond),
-            }).fetchone()
+            }
+            all_cols = ["account_id", "symbol", "trade_date", "trigger_kind",
+                        "target_price", "reinform_price", "vol_ratio_thresh",
+                        "benchmark_turnover_profile", "stabilize_level",
+                        "sell_target_price", "stop_loss_price",
+                        "time_stop_open", "time_stop_close", "start_time", "end_time",
+                        "regime_gate", "status", "armed", "expression",
+                        "publisher", "session_id", "direction"]
+            # 冲突更新列：提供的非 None 字段 + 恒有 status/armed（重激活语义）
+            update_cols = [c for c in all_cols
+                           if c in ("status", "armed") or values[c] is not None]
+            set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+            sql = text(
+                f"""
+                INSERT INTO t_conditions ({", ".join(all_cols)})
+                VALUES ({", ".join(":" + c for c in all_cols)})
+                ON CONFLICT (account_id, symbol, trigger_kind, trade_date)
+                DO UPDATE SET {set_clause}
+                RETURNING id
+                """
+            )
+            row = db.execute(sql, values).fetchone()
             db.commit()
             return row[0] if row else None
         finally:

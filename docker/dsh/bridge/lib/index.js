@@ -150,12 +150,12 @@ function apply(ctx) {
 
       register(defineTool({
         name: 'create_t_condition',
-        description: '创建/更新一条做T自由表达式监控条件。Agent 可用 list_t_fields 查询的任意字段组合触发条件；表达式只控制触发时机，触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）。迭代#58：direction=buy 的买腿条件在标的**未建仓**时命中会按建仓规模（单笔上限÷现价）自动买入建仓；sell 卖腿（含 high_sell）仍需有可卖底仓。',
+        description: '创建/更新一条做T监控条件。迭代#58g 规范（防呆，不要再出错来纠）：① 字段按腿归属——low_buy 用 target_price(低吸价)、high_sell/high_sell_then_buy_back 用 sell_target_price(高抛目标)；② direction 必填：custom 必须显式 buy/sell（buy=买腿可无底仓建仓、sell=卖腿需有可卖底仓），low_buy=买、high_sell=卖；③ 低吸不要放高抛价；④ 止损 < 成本；⑤ 表达式字段用 list_t_fields 查。表达式只控触发时机，触发后仍走网关风控',
         parameters: {
           symbol: { type: 'string', required: true, description: '股票代码，如 SH600519、SZ000001' },
           expression: { type: 'object', additionalProperties: true, required: true, description: '触发条件表达式 JSON，形如 {"and":[{"field":"quote.current","op":"<=","value":98},{"field":"vol_ratio","op":">=","value":1.5}]}。字段名用 list_t_fields 查询；op 支持 > >= < <= == != in not_in between；组合用 and/or/not' },
-          trigger_kind: { type: 'string', description: '条件类型标识（默认 custom），如 low_buy/high_sell/custom_tech' },
-          direction: { type: 'string', enum: ['buy', 'sell'], description: '执行方向（迭代#58，custom 等自由类型必填）：buy=买腿（未建仓时命中按建仓规模买入建仓），sell=卖腿（需有可卖底仓）。缺省按 trigger_kind 默认：low_buy/panic_vibrate=买，其余=卖' },
+          trigger_kind: { type: 'string', description: '条件类型（默认 custom）：low_buy(低吸/买)、high_sell(高抛/卖)、high_sell_then_buy_back(高抛接回/卖)、custom(自定义)' },
+          direction: { type: 'string', enum: ['buy', 'sell'], description: '执行方向（迭代#58g，必填）：buy=买腿（未建仓时命中按建仓规模买入建仓），sell=卖腿（需有可卖底仓）。custom 未填会按表达式推断，推断不出则拒绝' },
           sell_target_price: { type: 'number', description: '高抛止盈目标价（元）' },
           stop_loss_price: { type: 'number', description: '止损价（元）' },
           vol_ratio_thresh: { type: 'number', description: '量比阈值（默认 1.5，仅无 expression 时用默认逻辑）' },
@@ -1233,8 +1233,14 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                 '④ vol_ratio_thresh（量比阈值，1.0~3.0）与 stabilize_level（not_new_low/other）可调',
                 '⑤ 条件组合由你决定：通常 low_buy + high_sell_then_buy_back 各一条；',
                 '   若行情需要可加 panic_vibrate（恐慌低吸）等，数量 1~4 条均可，但不要冗余重复',
-                '⑥ 输出【条件数组】（不要 markdown 代码块、不要其他文字），示例：',
-                '[{"trigger_kind":"low_buy","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","volume":300,"reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","target_price":..,"sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"volume":300,"reason":"一句话"}]',
+                '⑥ **输出规范（防呆）**：',
+                '   - low_buy（买腿）：只填 target_price（必须 < 成本，回踩买点）+ vol_ratio_thresh/stabilize_level；**不要填 sell_target_price**（那是卖腿字段）',
+                '   - high_sell_then_buy_back（卖腿）：填 sell_target_price（必须 > 成本）+ target_price 可省略；vol_ratio_thresh/stabilize_level 可省',
+                '   - 止损 stop_loss_price：所有条件统一且 < 成本×0.99',
+                '   - volume：100 整数倍；低吸=计划加仓量、高抛=计划卖出量（≤可卖底仓，保留底仓）',
+                '   - 严禁输出 target=现价/成本 或无意义条件；重建时（rebuild_ctx）新价必须与上次错开（移动基准）',
+                '⑦ 输出【条件数组】（不要 markdown 代码块、不要其他文字），示例：',
+                '[{"trigger_kind":"low_buy","target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"stabilize_level":"..","volume":300,"reason":"一句话"},{"trigger_kind":"high_sell_then_buy_back","sell_target_price":..,"stop_loss_price":..,"vol_ratio_thresh":..,"volume":300,"reason":"一句话"}]',
                 '价格保留两位小数；volume 为 100 的整数倍；同一标的各条件的 stop_loss_price 应一致。',
               ].join('\n');
               const reply = await runAgentTurn(agent, prompt);
@@ -1272,9 +1278,16 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
         for (const c of arr2) {
           const kind = String(c.trigger_kind || '');
           if (kind !== 'low_buy' && kind !== 'high_sell_then_buy_back') continue;
+          const costNum = Number(cost) || 0;
           const tp = Number(c.target_price);
+          const stp = Number(c.sell_target_price) > 0 ? Number(c.sell_target_price) : tp;
           const st = Number(c.stop_loss_price);
           if (!tp || tp <= 0) continue;
+          // 迭代#58g：价格×成本方向校验（AI 把现价当成本/目标设反 → 丢弃，规则兜底）
+          //   低吸 = 买腿：target 必须低于成本（回踩买点）
+          //   高抛 = 卖腿：sell_target 必须高于成本（兑现卖点）
+          if (kind === 'low_buy' && !(costNum > 0 && tp < costNum)) continue;
+          if (kind === 'high_sell_then_buy_back' && !(costNum > 0 && stp > costNum)) continue;
           // 止损钳制（迭代#52 下限 + 迭代#56c 上限）：
           //   - 不得低于规则值（更低=更宽，取 max）
           //   - **必须低于成本**（止损高于成本=逻辑错误，AI 可能把现价误当成本基准——
@@ -1287,7 +1300,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
             trigger_kind: kind,
             symbol: String(c.symbol || symbol || ''),
             target_price: round2(tp),
-            sell_target_price: round2(Number(c.sell_target_price) > 0 ? c.sell_target_price : tp),
+            sell_target_price: round2(stp),
             stop_loss_price: round2(stop),
             vol_ratio_thresh: Number(c.vol_ratio_thresh) > 0 ? Number(c.vol_ratio_thresh) : 1.5,
             stabilize_level: c.stabilize_level || 'not_new_low',
