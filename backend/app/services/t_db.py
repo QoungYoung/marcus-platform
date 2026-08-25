@@ -26,6 +26,47 @@ def _now() -> str:
 # t_conditions
 # ────────────────────────────────────────────────────────────────
 
+def infer_custom_direction(expression: Any) -> str:
+    """custom 条件未显式声明 direction 时的保守推断（迭代#58b）。
+
+    仅对**价格类字段**（quote.current/change_pct/open/high/low/pre_close）的
+    主比较方向推断：< / <= → buy（低吸式），> / >= → sell（高抛式）；
+    and/or/not 组合仅当全部价格子条件同向才推断，否则返回 '' = 保持旧语义=卖。
+    量能/技术/环境类字段（vol_ratio/minute/tech/regime 等）不参与方向推断。
+    兜底场景：AI/Agent 重建条件未带 direction（早晨批量重建曾把方向全部丢成
+    默认卖腿），此推断避免"买点表达式被当卖腿执行"。
+    """
+    _DIR_FIELDS = ("quote.current", "quote.change_pct",
+                   "quote.open", "quote.high", "quote.low", "quote.pre_close")
+    try:
+        def walk(n: Any):
+            if not isinstance(n, dict):
+                return ""
+            # 容器节点：{"and": [...]} / {"or": [...]} / {"not": ...}（键即操作符）
+            for combo in ("and", "or", "not"):
+                if combo in n:
+                    kids = n[combo]
+                    if not isinstance(kids, list):
+                        kids = [kids]
+                    dirs = [walk(k) for k in kids if isinstance(k, dict)]
+                    dirs = [d for d in dirs if d]
+                    if dirs and all(d == dirs[0] for d in dirs):
+                        return dirs[0]
+                    return ""
+            # 叶子节点：{"op": ..., "field": ..., "value": ...}
+            op = str(n.get("op") or "")
+            field = str(n.get("field") or "")
+            is_price = field in _DIR_FIELDS
+            if op in ("<=", "<") and is_price:
+                return "buy"
+            if op in (">=", ">") and is_price:
+                return "sell"
+            return ""
+        return walk(expression)
+    except Exception:
+        return ""
+
+
 def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
     """写入/更新一条做T条件（幂等，按 account+symbol+trigger_kind+trade_date 唯一）。
 
@@ -101,7 +142,9 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                 "expression": _to_jsonb(cond.get("expression")),
                 "publisher": cond.get("publisher", "rule"),
                 "session_id": cond.get("session_id"),
-                "direction": (cond.get("direction") or "").strip().lower()[:8],
+                # 迭代#58b：custom 无显式 direction 时按表达式主比较方向推断，
+                # 避免重建/Agent 忘带方向把买点条件当卖腿执行
+                "direction": _resolve_direction(cond),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -110,6 +153,19 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
     except Exception as e:
         print(f"[t-db] upsert_condition 失败: {e}")
         return None
+
+
+def _resolve_direction(cond: Dict[str, Any]) -> str:
+    """条件方向最终值：显式 direction 优先；custom 缺省按表达式推断；其余按类型默认（空）。
+
+    存储空 = 运行时按 trigger_kind 默认（low_buy/panic_vibrate=买，其余=卖）。
+    """
+    d = (cond.get("direction") or "").strip().lower()[:8]
+    if d in ("buy", "sell"):
+        return d
+    if str(cond.get("trigger_kind") or "") == "custom":
+        return infer_custom_direction(cond.get("expression"))
+    return ""
 
 
 def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None) -> List[Dict[str, Any]]:
