@@ -158,8 +158,10 @@ class PaperTradingEngine:
             account_id: 模拟盘账户标识（多账户隔离，默认 stock）
         """
         self.account_id = account_id
-        # 订单号前缀：每个账户独立（stock=ORD, golden_pit=GP）
-        self.order_prefix = {"stock": "ORD", "golden_pit": "GP"}.get(account_id, "ORD")
+        # 订单号前缀：每个账户独立（stock=ORD, golden_pit=GP, t=T）
+        # paper_orders.orderid 是全局主键——共用前缀会跨账户撞号
+        # （t 落默认 ORD 与 stock 历史 ORD000003 冲突 → buy 静默失败，迭代#58e）
+        self.order_prefix = {"stock": "ORD", "golden_pit": "GP", "t": "T"}.get(account_id, "ORD")
         self.data_dir = os.path.expanduser(data_dir)
         os.makedirs(self.data_dir, exist_ok=True)
         self.db_file = os.path.join(self.data_dir, "trades.db")  # 保留用于迁移
@@ -605,7 +607,8 @@ class PaperTradingEngine:
             if result:
                 max_id = int(result.replace(self.order_prefix, ''))
                 if self.order_counter <= max_id:
-                    self.order_counter = max_id + 1
+                    # 恢复：计数器落后于库内最大号 → 从 max 续起（下面统一 +=1，不跳号）
+                    self.order_counter = max_id
         except:
             pass
         
@@ -671,7 +674,7 @@ class PaperTradingEngine:
             if result:
                 max_id = int(result.replace(self.order_prefix, ''))
                 if self.order_counter <= max_id:
-                    self.order_counter = max_id + 1
+                    self.order_counter = max_id
         except:
             pass
         
