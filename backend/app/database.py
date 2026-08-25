@@ -350,6 +350,18 @@ def _apply_t_account_migration():
             conn.execute(text(
                 "ALTER TABLE t_conditions ADD COLUMN IF NOT EXISTS direction VARCHAR(8) DEFAULT ''"
             ))
+            # 迭代#58c：加宽超长枚举列（VARCHAR(12/20) 装不下 human_confirm=13、
+            # high_sell_then_buy_back=22 → insert 静默失败，挂人工触发/高抛接回触发
+            # 从未真正落库）
+            conn.execute(text(
+                "ALTER TABLE t_triggers ALTER COLUMN mode TYPE VARCHAR(24)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE t_triggers ALTER COLUMN event_type TYPE VARCHAR(24)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE t_conditions ALTER COLUMN trigger_kind TYPE VARCHAR(32)"
+            ))
 
             # 3) t_triggers — 做T触发事件流（状态机 + snapshot + 原子消费）
             conn.execute(text(
