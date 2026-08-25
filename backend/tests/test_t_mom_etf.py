@@ -80,19 +80,50 @@ class TestMomEtfRebalance(unittest.TestCase):
 class TestMomEtfHoldingsAndCadence(unittest.TestCase):
     """持仓识别（实际账本）与双周节律（成交候选）修复。"""
 
-    def test_mom_positions_uses_actual_ledger(self):
-        """已持有识别基于实际可卖账本：非 mom_etf 来源（daily_auto 建的 SH515880）也识别。"""
+    def test_mom_positions_only_owned_and_sellable(self):
+        """换出候选 = mom_etf 已执行候选 ∩ 实际可卖账本（不动其他策略仓位）。"""
         ledger = {
             "SH515880": {"symbol": "SH515880", "volume": 36200, "sellable": 36200, "avg_price": 0.677},
-            "SH515050": {"symbol": "SH515050", "volume": 0, "sellable": 0, "avg_price": 0.0},
+            "SZ159915": {"symbol": "SZ159915", "volume": 20600, "sellable": 20600, "avg_price": 3.39},
         }
         with mock.patch("app.services.t_gateway.get_sellable_ledger", return_value=ledger), \
-             mock.patch("app.database.SessionLocal", side_effect=RuntimeError("db off")):
-            pos = me._mom_positions()  # 事件回填失败 → 退回账本均价
-        self.assertEqual(len(pos), 1)
-        self.assertEqual(pos[0]["symbol"], "SH515880")
+             mock.patch.object(me, "_mom_owned_symbols", return_value={"SH515880"}):
+            pos = me._mom_positions()
+        # 只有 mom_etf 已执行候选的持仓进入换出候选；SZ159915（其他流程建仓）不触碰
+        self.assertEqual([p["symbol"] for p in pos], ["SH515880"])
         self.assertEqual(pos[0]["volume"], 36200)
         self.assertEqual(pos[0]["avg_price"], 0.677)
+
+    def test_mom_positions_excludes_unowned(self):
+        """未标记 mom_etf 执行的持仓不进入换出候选（即使可卖）。"""
+        ledger = {
+            "SZ159915": {"symbol": "SZ159915", "volume": 20600, "sellable": 20600, "avg_price": 3.39},
+        }
+        with mock.patch("app.services.t_gateway.get_sellable_ledger", return_value=ledger), \
+             mock.patch.object(me, "_mom_owned_symbols", return_value={"SH515880"}):
+            pos = me._mom_positions()
+        self.assertEqual(pos, [])
+
+    def test_rebalance_buy_skips_all_held(self):
+        """买入跳过基于完整可卖账本：其他流程建仓的 SH515880 不会被重复买入。"""
+        from datetime import datetime as _dt
+        from app.services import t_mom_etf as me2
+        class _FakeDT(_dt):
+            @classmethod
+            def now(cls, tz=None):
+                return _dt(2026, 8, 25, 10, 30, 0)
+        target = [{"etf6": "515880", "mom": 0.05, "greed": 0.5, "name": "通信设备ETF国泰"}]
+        with mock.patch.object(me2, "datetime", _FakeDT), \
+             mock.patch.object(me2, "_rebalance_due", return_value=True), \
+             mock.patch.object(me2, "_target_portfolio", return_value=(target, ["ok"], True)), \
+             mock.patch.object(me2, "_mom_positions", return_value=[]), \
+             mock.patch("app.services.t_gateway.get_sellable_ledger", return_value={
+                 "SH515880": {"symbol": "SH515880", "volume": 36200,
+                              "sellable": 36200, "avg_price": 0.677}}), \
+             mock.patch("app.services.t_build.build_t_position") as build:
+            res = me2.try_rebalance()
+        self.assertEqual(res, [])  # 已持有 → 不买不卖
+        build.assert_not_called()
 
     def test_last_rebalance_date_reads_executed_candidates(self):
         """节律基准读 scan_results（source=mom_etf, status=executed），与 reason 字段无关。"""
@@ -123,6 +154,7 @@ class TestMomEtfHoldingsAndCadence(unittest.TestCase):
              mock.patch.object(me2, "_rebalance_due", return_value=True), \
              mock.patch.object(me2, "_target_portfolio", return_value=(target, ["ok"], True)), \
              mock.patch.object(me2, "_mom_positions", return_value=[]), \
+             mock.patch("app.services.t_gateway.get_sellable_ledger", return_value={}), \
              mock.patch("app.services.t_data_sources.fetch_tencent_quote",
                         return_value={"sh515880": {"current": 0.677}}), \
              mock.patch("app.services.t_build.build_t_position", return_value={
@@ -148,6 +180,7 @@ class TestMomEtfHoldingsAndCadence(unittest.TestCase):
              mock.patch.object(me2, "_rebalance_due", return_value=True), \
              mock.patch.object(me2, "_target_portfolio", return_value=(target, ["ok"], True)), \
              mock.patch.object(me2, "_mom_positions", return_value=[]), \
+             mock.patch("app.services.t_gateway.get_sellable_ledger", return_value={}), \
              mock.patch("app.services.t_data_sources.fetch_tencent_quote",
                         return_value={"sh515880": {"current": 0}}), \
              mock.patch.object(me2, "_mark_candidates_executed") as mark:

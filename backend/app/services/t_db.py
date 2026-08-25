@@ -673,10 +673,11 @@ def list_build_events(limit: int = 100, status: Optional[str] = None,
 
 
 def count_today_builds(symbol: Optional[str] = None, exclude_id: Optional[int] = None) -> int:
-    """当日建仓笔数（仅已成交 executed）；symbol 给定则统计单票当日建仓数。
+    """当日建仓笔数（仅已成交 executed 的 build_position）；symbol 给定则统计单票当日建仓数。
 
     人工确认已移除：未成交事件（pending/human_confirm/rejected/cancelled）均不消耗
     当日配额，避免升级/待确认事件卡住后毒化全天建仓名额（08-25 生产事故根因）。
+    只统计 event_type='build_position'（资金调额等非建仓事件不占配额）。
 
     exclude_id：排除指定事件（审计先行的"本次尝试"不应计入单票单批，避免把自己数进去）。
     """
@@ -686,6 +687,7 @@ def count_today_builds(symbol: Optional[str] = None, exclude_id: Optional[int] =
             today = datetime.now().strftime("%Y-%m-%d")
             sql = ("SELECT COUNT(*) AS c FROM t_build_events "
                    "WHERE account_id = 't' AND status = 'executed' "
+                   "AND event_type = 'build_position' "
                    "AND to_char(created_at, 'YYYY-MM-DD') = :today")
             params: Dict[str, Any] = {"today": today}
             if symbol:

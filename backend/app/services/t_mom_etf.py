@@ -193,49 +193,48 @@ def scan_once() -> List[str]:
     return hits
 
 
-def _mom_positions() -> List[Dict[str, Any]]:
-    """t 账户当前实际可卖持仓（含其他流程建仓的标的），供轮动换出判断。
-
-    基于 get_sellable_ledger（paper_positions 推算 T+1 可卖），avg_price/built_at
-    优先从最近成交建仓事件回填，否则用账本均价。
-    """
-    from app.services.t_gateway import get_sellable_ledger
-    ledger = get_sellable_ledger()
-    syms = [s for s, it in ledger.items()
-            if it and float(it.get("sellable") or 0) > 0]
-    if not syms:
-        return []
-    # 最近成交事件回填（任意来源；reason 被审计覆盖不影响）
-    meta: Dict[str, Dict[str, Any]] = {}
+def _mom_owned_symbols() -> set:
+    """mom_etf 目标组合内已执行候选的标的（轮动换出只针对这些持仓，避免动其他策略仓位）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
     try:
-        from sqlalchemy import text
-        from app.database import SessionLocal
         db = SessionLocal()
         try:
             rows = db.execute(text(
-                "SELECT DISTINCT ON (symbol) symbol, executed_price, created_at "
-                "FROM t_build_events WHERE account_id = 't' "
-                "AND event_type = 'build_position' AND status = 'executed' "
-                "AND symbol = ANY(:syms) ORDER BY symbol, created_at DESC"
-            ), {"syms": syms}).mappings().all()
-            for r in rows:
-                meta[r["symbol"]] = {
-                    "executed_price": r["executed_price"],
-                    "created_at": str(r["created_at"])[:10],
-                }
+                "SELECT DISTINCT symbol FROM t_build_scan_results "
+                "WHERE source = 'mom_etf' AND status = 'executed'"
+            )).mappings().all()
+            return {r["symbol"] for r in rows}
         finally:
             db.close()
     except Exception as e:
-        logger.warning("[t-mom-etf] 持仓事件回填失败: %s", str(e)[:100])
+        logger.warning("[t-mom-etf] 持有标记读取失败: %s", str(e)[:100])
+        return set()
+
+
+def _mom_positions() -> List[Dict[str, Any]]:
+    """mom_etf 管理的可卖持仓（已执行候选 ∩ 实际可卖账本），供轮动换出判断。
+
+    只换出 mom_etf 目标组合内（scan_results executed 标记）的持仓，
+    不触碰其他流程（V反/每日自动选股等）在 t 账户建的仓位（并行互不干扰）。
+    """
+    from app.services.t_gateway import get_sellable_ledger
+    ledger = get_sellable_ledger()
+    owned = _mom_owned_symbols()
+    if not owned:
+        return []
+    syms = [s for s in owned
+            if ledger.get(s) and float(ledger[s].get("sellable") or 0) > 0]
+    if not syms:
+        return []
     out = []
     for sym in syms:
         it = ledger[sym]
-        m = meta.get(sym) or {}
         out.append({
             "symbol": sym,
             "volume": int(it.get("sellable") or 0),
-            "avg_price": float(m.get("executed_price") or it.get("avg_price") or 0),
-            "built_at": m.get("created_at") or _today(),
+            "avg_price": float(it.get("avg_price") or 0),
+            "built_at": _today(),
         })
     return out
 
@@ -336,8 +335,12 @@ def try_rebalance(force: bool = False) -> List[Dict[str, Any]]:
     target, reasons, _ = _target_portfolio(_today())
     target_syms = {_normalize(x["etf6"]) for x in target}
     results = []
+    # 买入跳过：t 账户实际可卖账本中已持有的标的（含其他流程建仓，避免重复买入）
+    ledger = get_sellable_ledger()
+    held_syms = {s for s, it in ledger.items()
+                 if it and float(it.get("sellable") or 0) > 0}
+    # 换出候选：仅 mom_etf 目标组合内已执行候选的持仓（不动其他策略仓位）
     positions = _mom_positions()
-    held_syms = {p["symbol"] for p in positions}
     # 1) 卖出不在目标组合的持仓（动量掉出 TOP3 / 贪婪过热）
     for p in positions:
         if p["symbol"] not in target_syms:
