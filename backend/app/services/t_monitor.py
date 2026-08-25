@@ -332,18 +332,21 @@ class TMonitor:
             return {"sellable": 0, "volume": 0, "avg_price": 0.0, "pnl_pct": 0.0}
 
     def _fetch_quotes_concurrent(self, symbols: List[str]) -> Dict[str, Optional[dict]]:
-        """并发取价（腾讯 qt 直连）。"""
+        """并发取价（腾讯 qt 直连），结果统一以归一化代码（sz159516）为键。
+
+        修复（迭代#58c）：此前以原始 symbol（SZ159516）为键，而调用方用
+        _normalize_symbol 小写键查询 → 全部 miss → 监控器对所有条件静默失效
+        （"今日触发"恒为 0）。现两处键口径统一为归一化代码。
+        """
         if not symbols:
             return {}
-        norm = {_normalize_symbol(s): s for s in symbols}
-        # 20 只并发 ≤5，分批
         result: Dict[str, Optional[dict]] = {}
         for i in range(0, len(symbols), MAX_WORKERS):
             batch = symbols[i:i + MAX_WORKERS]
             quotes = fetch_tencent_quote([_normalize_symbol(s) for s in batch])
-            for ns, s in norm.items():
-                if s in batch and ns in quotes:
-                    result[s] = quotes[ns]
+            for ns in (_normalize_symbol(s) for s in batch):
+                if ns in quotes and quotes[ns]:
+                    result[ns] = quotes[ns]
         return result
 
     # ── 条件评估 ──
@@ -422,6 +425,13 @@ class TMonitor:
             )
             print(f"[TMonitor] 触发写入 #{trig_id} {cond['symbol']} {trigger_kind} "
                   f"mode={mode} consec_hits={consecutive_hits} @ {current}")
+            # MANUAL_ONLY（regime 谨慎/下跌市，低吸闸门挂人）：只写触发挂人工确认，
+            # 不自动下单（修复：此前无条件自动执行，谨慎市也会绕过人工门自动买入）
+            if mode == "human_confirm":
+                t_db.update_trigger_status(
+                    trig_id, "human_confirm",
+                    reason="regime 低吸闸门 MANUAL_ONLY，挂人工确认（可执行/取消，2min 未确认自动取消）")
+                return
             # 自动执行闭环（迭代#57，用户需求）：条件命中自动执行（止损/止盈自动卖出、
             # 低吸自动买入，volume 优先用 AI 在条件里设定的股数），不再逐次等 AI 决策；
             # 迭代#58：无底仓买腿 = 条件单建仓，量按建仓规模（单笔上限÷现价）。
