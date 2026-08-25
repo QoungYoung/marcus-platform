@@ -495,18 +495,23 @@ class TMonitor:
                         pass
                     pos_volume = int(fresh_item.get("volume") or 0)
                     if not remain and pos_volume > 0:
-                        from app.services.t_build import auto_gen_conditions_for_build
-                        avg_price = float(fresh_item.get("avg_price") or 0)
-                        if avg_price <= 0 and exec_ok:
-                            avg_price = float(gw.get("price") or current)  # 无底仓建仓：无历史成本，用成交价
-                        if avg_price > 0:
-                            from datetime import date
-                            today = date.today().strftime("%Y%m%d")
-                            ok = auto_gen_conditions_for_build(
-                                symbol, avg_price, trade_date=today,
-                                quote_price=current)
-                            if ok:
-                                print(f"[TMonitor] 消费式条件自动重建 {symbol}（AI 重新评估，当日 @{current}）")
+                        from app.services.t_build import auto_gen_conditions_for_build, no_rebuild_symbols
+                        # 迭代#58g：只减不补等禁重建标的——触发后不自动重建
+                        # （防止消费式重建给它们补出低吸买腿）
+                        if symbol in no_rebuild_symbols():
+                            print(f"[TMonitor] 禁重建标的 {symbol}：触发后不自动重建（只减不补等语义）")
+                        else:
+                            avg_price = float(fresh_item.get("avg_price") or 0)
+                            if avg_price <= 0 and exec_ok:
+                                avg_price = float(gw.get("price") or current)  # 无底仓建仓：无历史成本，用成交价
+                            if avg_price > 0:
+                                from datetime import date
+                                today = date.today().strftime("%Y%m%d")
+                                ok = auto_gen_conditions_for_build(
+                                    symbol, avg_price, trade_date=today,
+                                    quote_price=current)
+                                if ok:
+                                    print(f"[TMonitor] 消费式条件自动重建 {symbol}（AI 重新评估，当日 @{current}）")
                 except Exception as e:
                     print(f"[TMonitor] 条件自动重建失败 {symbol}: {e}")
             except Exception as e:

@@ -159,6 +159,7 @@ def t_conditions_generate_ai(payload: dict = None):
     from datetime import date
     payload = payload or {}
     symbol = (payload.get("symbol") or "").strip()
+    no_rebuild = t_build.no_rebuild_symbols()  # 迭代#58g：只减不补等禁重建标的
     ledger = get_sellable_ledger()
     if symbol:
         symbols = [symbol]
@@ -168,6 +169,9 @@ def t_conditions_generate_ai(payload: dict = None):
         return {"success": True, "results": [], "note": "t 账户无持仓标的（AI 重建需持仓成本基准）"}
     results = []
     for sym in symbols:
+        if sym in no_rebuild:
+            results.append({"symbol": sym, "action": "skip", "reason": "禁重建标的（只减不补等语义，跳过）"})
+            continue
         item = ledger.get(sym) or {}
         avg = float(item.get("avg_price") or 0)
         if avg <= 0:

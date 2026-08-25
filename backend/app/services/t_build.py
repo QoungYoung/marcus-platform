@@ -82,6 +82,9 @@ BUILD_PARAMS_DEFAULT = {
     "total_floor_cap": {"cons": 0.40, "std": 0.55, "agg": 0.70},
     "max_floor_symbols": 10,         # 组合标的数宽松上限（实际受总量上限约束）
     "min_absolute_floor": 20000,     # 单票底仓做T划算下限（元）
+    # 迭代#58g：禁重建标的（只减不补等）——AI 重建、盘后生成、消费式重建均跳过
+    # （默认 SH515880「只减不补」；可按需增删，避免点重建按钮又给补出低吸买腿）
+    "no_rebuild_symbols": ["SH515880"],
     # ── trend_break 短线档（t-trend-breakout-short-term，只用于 t 账户）──
     "trend_break_single_order_pct": 0.30,   # 单笔 ≤ 净值 30%（25万 → 约7.5万/票）
     "trend_break_per_symbol_cap": 0.30,     # 单票 ≤ 30%
@@ -121,6 +124,15 @@ def _params() -> Dict[str, Any]:
     merged = dict(BUILD_PARAMS_DEFAULT)
     merged.update(stored)
     return merged
+
+
+def no_rebuild_symbols() -> set:
+    """禁重建标的集（迭代#58g）：AI 重建 / 盘后生成 / 消费式重建均跳过这些标的，
+    保护用户语义（如 SH515880「只减不补」不被补出低吸买腿）。"""
+    try:
+        return set(_params().get("no_rebuild_symbols") or [])
+    except Exception:
+        return set()
 
 
 # ────────────────────────────────────────────────────────────────
@@ -1326,6 +1338,8 @@ def auto_gen_conditions_for_live_pool() -> int:
         pool = compute_three_tier_pool(regime=regime)
         created = 0
         for symbol, info in (pool.get("live") or {}).items():
+            if symbol in no_rebuild_symbols():
+                continue  # 迭代#58g：只减不补等禁重建标的，不自动生成条件
             avg = float(info.get("avg_price") or 0)
             if avg <= 0:
                 continue
