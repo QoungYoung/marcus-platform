@@ -201,6 +201,8 @@ export default function TAccountPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
+  // AI 重建进度（迭代#58g）：非空 = 正在重建（显示 当前标的 i/n）
+  const [aiRebuilding, setAiRebuilding] = useState<string | null>(null);
 
   const [capital, setCapital] = useState<Capital | null>(null);
   const [ledger, setLedger] = useState<Record<string, SellableItem>>({});
@@ -422,6 +424,43 @@ export default function TAccountPage() {
   const confirmTrigger = async (id: number, action: 'execute' | 'cancel') => {
     await doPost(`/triggers/${id}/confirm?action=${action}`, null,
       action === 'execute' ? `已放行 #${id}` : `已取消 #${id}`);
+  };
+
+  // AI 重建条件（迭代#58g）：逐标的调用并显示进度（i/n + 当前标的），完成汇总
+  const aiRebuild = async () => {
+    if (aiRebuilding) return;
+    setError('');
+    setMsg('');
+    setAiRebuilding('准备中…');
+    try {
+      const ov: any = await fetchJson(`${API}/overview`);
+      const syms: string[] = (ov?.positions || [])
+        .map((p: any) => p?.symbol)
+        .filter((s: any): s is string => !!s);
+      if (syms.length === 0) {
+        setMsg('t 账户无持仓标的（AI 重建需持仓成本基准）');
+        setAiRebuilding(null);
+        return;
+      }
+      const out: string[] = [];
+      for (let i = 0; i < syms.length; i++) {
+        setAiRebuilding(`AI 重建中 ${i + 1}/${syms.length}：${syms[i]}（约需 1~3 分钟）…`);
+        const r: any = await fetchJson(`${API}/conditions/generate-ai`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: syms[i] }),
+        });
+        const res = ((r?.results || []) as any[])[0];
+        const act = res?.action;
+        out.push(`${syms[i]}：${act === 'rebuilt' ? '✅重建' : act === 'skip' ? '⏭跳过' : '❌失败'}${res?.reason ? `（${res.reason}）` : ''}`);
+      }
+      setMsg('AI 重建完成：' + out.join(' ｜ '));
+      loadConditions();
+    } catch (e: any) {
+      setError('AI 重建失败: ' + e.message);
+    } finally {
+      setAiRebuilding(null);
+    }
   };
 
   // ── 底仓建仓操作 ──
@@ -662,7 +701,9 @@ export default function TAccountPage() {
                     <span className="tac-panel-title">监控条件</span>
                     <div className="tac-toolbar">
                       <button className="tac-btn" onClick={() => doPost('/conditions/generate', null, '已生成条件')}>生成监控条件</button>
-                      <button className="tac-btn" onClick={() => doPost('/conditions/generate-ai', {}, 'AI 重建完成')}>AI重建条件</button>
+                      <button className="tac-btn" disabled={!!aiRebuilding} onClick={aiRebuild}>
+                        {aiRebuilding ? `⏳ ${aiRebuilding}` : 'AI重建条件'}
+                      </button>
                       <button className="tac-btn" onClick={loadConditions}>刷新</button>
                     </div>
                   </div>
