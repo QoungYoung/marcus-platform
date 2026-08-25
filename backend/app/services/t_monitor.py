@@ -378,6 +378,7 @@ class TMonitor:
         """写入 t_triggers(pending, snapshot{suggest_bid/ask, slippage_budget, confidence, fields})。"""
         current = float(quote.get("current", 0) or 0)
         trigger_kind = cond.get("trigger_kind", "low_buy")
+        symbol = cond["symbol"]
         # 滑点预算：0.1%（P4 标定 2-5 tick）
         slippage = 0.001
         gate = check_gate(trigger_kind, regime_state)
