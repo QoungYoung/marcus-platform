@@ -662,6 +662,7 @@ export default function TAccountPage() {
                     <span className="tac-panel-title">监控条件</span>
                     <div className="tac-toolbar">
                       <button className="tac-btn" onClick={() => doPost('/conditions/generate', null, '已生成条件')}>生成监控条件</button>
+                      <button className="tac-btn" onClick={() => doPost('/conditions/generate-ai', {}, 'AI 重建完成')}>AI重建条件</button>
                       <button className="tac-btn" onClick={loadConditions}>刷新</button>
                     </div>
                   </div>

@@ -143,6 +143,51 @@ def t_conditions_generate():
     return {"created": len(created), "conditions": created}
 
 
+@router.post("/conditions/generate-ai")
+def t_conditions_generate_ai(payload: dict = None):
+    """手动触发 **AI 重建**做T条件（迭代#58g，前端「AI重建条件」按钮）。
+
+    body: {symbol?: str}——指定单标的（需有持仓成本）；缺省 = 全部 t 持仓标的。
+    对每个标的调 auto_gen_conditions_for_build：优先 AI 生成（bridge
+    /conditions/generate，按现价移动基准），AI 失败/超时回退规则公式；
+    入库走部分更新（不覆盖既有 expression/direction 等）。
+    返回每标的 rebuilt/failed/skip 明细。
+    """
+    from app.services import t_build
+    from app.services.t_gateway import get_sellable_ledger
+    from app.services.t_data_sources import fetch_tencent_quote, _normalize_symbol
+    from datetime import date
+    payload = payload or {}
+    symbol = (payload.get("symbol") or "").strip()
+    ledger = get_sellable_ledger()
+    if symbol:
+        symbols = [symbol]
+    else:
+        symbols = [s for s, it in ledger.items() if float(it.get("volume") or 0) > 0]
+    if not symbols:
+        return {"success": True, "results": [], "note": "t 账户无持仓标的（AI 重建需持仓成本基准）"}
+    results = []
+    for sym in symbols:
+        item = ledger.get(sym) or {}
+        avg = float(item.get("avg_price") or 0)
+        if avg <= 0:
+            results.append({"symbol": sym, "action": "skip", "reason": "无持仓成本"})
+            continue
+        current = None
+        try:
+            ns = _normalize_symbol(sym)
+            q = fetch_tencent_quote([ns])
+            q0 = (q or {}).get(ns) or {}
+            current = float(q0.get("current") or 0) or None
+        except Exception:
+            pass
+        ok = t_build.auto_gen_conditions_for_build(
+            sym, avg, trade_date=date.today().strftime("%Y%m%d"), quote_price=current)
+        results.append({"symbol": sym, "action": "rebuilt" if ok else "failed",
+                        "cost": round(avg, 3), "price": current})
+    return {"success": True, "results": results}
+
+
 @router.get("/conditions")
 def t_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None):
     """条件列表（含表达式摘要，供 Agent/前端显示）。"""
