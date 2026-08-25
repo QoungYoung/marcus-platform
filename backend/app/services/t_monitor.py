@@ -425,13 +425,9 @@ class TMonitor:
             )
             print(f"[TMonitor] 触发写入 #{trig_id} {cond['symbol']} {trigger_kind} "
                   f"mode={mode} consec_hits={consecutive_hits} @ {current}")
-            # MANUAL_ONLY（regime 谨慎/下跌市，低吸闸门挂人）：只写触发挂人工确认，
-            # 不自动下单（修复：此前无条件自动执行，谨慎市也会绕过人工门自动买入）
-            if mode == "human_confirm":
-                t_db.update_trigger_status(
-                    trig_id, "human_confirm",
-                    reason="regime 低吸闸门 MANUAL_ONLY，挂人工确认（可执行/取消，2min 未确认自动取消）")
-                return
+            # 迭代#58d（用户需求）：无需人工确认——MANUAL_ONLY（谨慎/下跌市低吸闸门）
+            # 只作标记（mode 字段），不拦截自动执行；命中即按网关自动买入/卖出。
+            # 其余硬风控（STOP_ALL/日亏熔断/连续亏损/裸空/跌停）仍在网关层把关。
             # 自动执行闭环（迭代#57，用户需求）：条件命中自动执行（止损/止盈自动卖出、
             # 低吸自动买入，volume 优先用 AI 在条件里设定的股数），不再逐次等 AI 决策；
             # 迭代#58：无底仓买腿 = 条件单建仓，量按建仓规模（单笔上限÷现价）。
