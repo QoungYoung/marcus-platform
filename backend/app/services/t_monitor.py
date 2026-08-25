@@ -136,7 +136,7 @@ class TMonitor:
                 # 构建该标的字段快照（供表达式求值）
                 snapshot = self._build_snapshot(cond, quote, regime_state)
                 if self._evaluate_condition(cond, quote, regime_state, snapshot):
-                    self._write_trigger(cond, quote, regime_state, snapshot)
+                    self._write_trigger(cond, quote, regime_state, snapshot, ledger)
                     written += 1
             except Exception as e:
                 print(f"[TMonitor] 条件评估异常 {symbol}: {e}")
@@ -374,7 +374,7 @@ class TMonitor:
 
     # ── 写触发事件 ──
     def _write_trigger(self, cond: Dict[str, Any], quote: dict, regime_state: dict,
-                       snapshot: Optional[dict] = None):
+                       snapshot: Optional[dict] = None, ledger: Optional[dict] = None):
         """写入 t_triggers(pending, snapshot{suggest_bid/ask, slippage_budget, confidence, fields})。"""
         current = float(quote.get("current", 0) or 0)
         trigger_kind = cond.get("trigger_kind", "low_buy")
