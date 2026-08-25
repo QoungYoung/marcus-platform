@@ -61,6 +61,7 @@ interface Condition {
   regime_gate: string;
   trigger_count_today: number;
   direction?: string;   // 迭代#58：custom 等显式 buy/sell；空 = 按 trigger_kind 默认
+  expression_summary?: string;  // 表达式人类可读摘要（无表达式=默认复合逻辑）
 }
 
 interface Trigger {
@@ -152,7 +153,10 @@ function regimeLabel(r?: string) {
 const TRIGGER_KIND_LABEL: Record<string, string> = {
   low_buy: '低吸', high_sell_then_buy_back: '高抛接回',
   panic_vibrate: '恐慌震荡', high_only: '只高抛',
+  high_sell: '高抛', custom: '自定义',
 };
+
+const SELL_KINDS = new Set(['high_sell', 'high_sell_then_buy_back', 'high_only']);
 
 const STATUS_LABEL: Record<string, string> = {
   pending: '待处理', claimed: '已认领', auto_ready: '待执行',
@@ -664,7 +668,7 @@ export default function TAccountPage() {
                   <div className="tac-panel-body">
                     <table className="tac-table">
                       <thead><tr>
-                        <th>代码</th><th>类型</th><th>方向</th><th>触发价</th><th>复归价</th><th>高抛目标</th><th>止损</th>
+                        <th>代码</th><th>类型</th><th>方向</th><th>触发条件</th><th>高抛目标</th><th>止损</th>
                         <th>armed</th><th>regime门</th><th>今日触发</th><th>操作</th>
                       </tr></thead>
                       <tbody>
@@ -673,9 +677,16 @@ export default function TAccountPage() {
                             <td className="tac-sym">{c.symbol}</td>
                             <td>{TRIGGER_KIND_LABEL[c.trigger_kind] || c.trigger_kind}</td>
                             <td>{c.direction === 'buy' ? '🟢 买' : c.direction === 'sell' ? '🔴 卖' : '按类型'}</td>
-                            <td>{c.target_price ?? '-'}</td>
-                            <td>{c.reinform_price ?? '-'}</td>
-                            <td>{c.sell_target_price ?? '-'}</td>
+                            <td className="tac-muted">
+                              {c.expression_summary
+                                ? c.expression_summary
+                                : (c.trigger_kind === 'low_buy' || c.trigger_kind === 'panic_vibrate') && c.target_price
+                                  ? `≤ ${c.target_price}`
+                                  : SELL_KINDS.has(c.trigger_kind) && c.sell_target_price
+                                    ? `≥ ${c.sell_target_price}`
+                                    : '-'}
+                            </td>
+                            <td>{SELL_KINDS.has(c.trigger_kind) ? (c.sell_target_price ?? '-') : '-'}</td>
                             <td>{c.stop_loss_price ?? '-'}</td>
                             <td>{c.armed === 1 ? '✅' : '⛔'}</td>
                             <td>{c.regime_gate}</td>
@@ -687,7 +698,7 @@ export default function TAccountPage() {
                             </td>
                           </tr>
                         ))}
-                        {conditions.length === 0 && <tr><td colSpan={11} className="tac-empty">暂无条件，点击"生成监控条件"</td></tr>}
+                        {conditions.length === 0 && <tr><td colSpan={10} className="tac-empty">暂无条件，点击"生成监控条件"</td></tr>}
                       </tbody>
                     </table>
                   </div>

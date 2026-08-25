@@ -126,11 +126,15 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
                 "trade_date": cond.get("trade_date", _today()),
                 "trigger_kind": cond.get("trigger_kind", "low_buy"),
                 "target_price": cond.get("target_price"),
-                "reinform_price": cond.get("reinform_price"),
+                # 迭代#58f：低吸类行不承载高抛/复归价（语义归位，避免"低吸有高抛价"；
+                # 止损价保留——止损扫描共用）
+                "reinform_price": _normalize_leg_price(cond, ("high_sell", "high_sell_then_buy_back", "high_only"),
+                                                       "reinform_price"),
                 "vol_ratio_thresh": cond.get("vol_ratio_thresh"),
                 "benchmark_turnover_profile": _to_jsonb(cond.get("benchmark_turnover_profile")),
                 "stabilize_level": cond.get("stabilize_level"),
-                "sell_target_price": cond.get("sell_target_price"),
+                "sell_target_price": _normalize_leg_price(cond, ("high_sell", "high_sell_then_buy_back", "high_only"),
+                                                          "sell_target_price"),
                 "stop_loss_price": cond.get("stop_loss_price"),
                 "time_stop_open": cond.get("time_stop_open"),
                 "time_stop_close": cond.get("time_stop_close"),
@@ -153,6 +157,14 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
     except Exception as e:
         print(f"[t-db] upsert_condition 失败: {e}")
         return None
+
+
+def _normalize_leg_price(cond: Dict[str, Any], sell_kinds: tuple, field: str):
+    """迭代#58f：高抛/复归价仅卖腿（high_sell 等）承载，低吸类行强制置空。"""
+    kind = str(cond.get("trigger_kind") or "")
+    if kind not in sell_kinds:
+        return None
+    return cond.get(field)
 
 
 def _resolve_direction(cond: Dict[str, Any]) -> str:

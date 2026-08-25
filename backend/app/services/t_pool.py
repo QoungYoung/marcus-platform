@@ -271,8 +271,8 @@ def build_t_conditions(cost: float, amp_med: Optional[float] = None) -> List[Dic
         **base,
         "trigger_kind": "low_buy",
         "target_price": target,
-        "reinform_price": round(target * 1.004, 2),
-        "sell_target_price": sell_target,
+        # 迭代#58f：低吸行不承载高抛/复归价（那些字段只属于卖腿，低吸行带着
+        # 会造成"低吸有高抛价"的表意混乱；止损价仍保留——止损扫描共用）
         "stop_loss_price": stop,
     }
     high_sell = {
