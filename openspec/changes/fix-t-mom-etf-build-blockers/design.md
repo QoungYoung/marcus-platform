@@ -39,10 +39,11 @@
 - 理由：mom_etf 目标组合 ≤3 只、单只 ≤30%，即使账户已持其他策略底仓，总名义仍 ≤90%——60% 总仓上限与动量轮动的换仓目标冲突（会永久锁死建仓，见 08-25 实测）。
 - 备选：全部短线档统一放开——影响 V反/趋势突破，超出用户范围，放弃（REQ-MOM-010）。
 
-### D4: 持仓识别基于实际账本
+### D4: 持仓识别与换出边界
 
-`_mom_positions()` 改为直接取 `get_sellable_ledger()` 中 `sellable > 0` 的全部 t 账户持仓；`avg_price/built_at` 优先从最近成交事件回填，否则用账本均价。
-- 理由：t 账户是共享账户，SH515880 由 daily_auto 建仓后 mom_etf 无法通过 reason 识别 → 重复买入且永不换出。基于账本后：已持有标的跳过买入、参与换出判断（REQ-MOM-013）。
+买入跳过基于 t 账户完整实际可卖账本（`get_sellable_ledger`，`sellable>0`）：其他流程（daily_auto/V反）已建的标的（如 SH515880）视为已持有、不重复买入。换出候选 `_mom_positions()` 定义为「mom_etf 已执行候选标记（`t_build_scan_results` source='mom_etf' AND status='executed'）∩ 实际可卖账本」——只卖出 mom_etf 目标组合内的自有持仓，**不触碰其他流程在 t 账户建的仓位**（保证并行互不干扰，REQ-MOM-008 换出场景）。
+- 理由：t 账户是共享账户；若换出按全部可卖账本，mom_etf 会误卖 V反/每日自动选股建的仓位（08-25 后 T+1 解锁即触发）。已执行候选标记由 D5 的 `_mark_candidates_executed` 写入，天然标识 mom_etf 管理范围。
+- 备选：按 events 表 reason 含 mom_etf 识别自有持仓——reason 会被审计更新覆盖，不可靠，放弃。
 
 ### D5: 双周节律以 mom_etf 实际成交记录为基准
 

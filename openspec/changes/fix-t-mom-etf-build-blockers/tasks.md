@@ -17,7 +17,7 @@
 
 ## 4. 持仓识别与双周节律（D4/D5）
 
-- [x] 4.1 `t_mom_etf.py::_mom_positions`：改为基于 `get_sellable_ledger()` 实际可卖持仓（sellable>0），`avg_price/built_at` 优先回填最近成交事件，否则用账本均价
+- [x] 4.1 `t_mom_etf.py::_mom_positions`：换出候选 = mom_etf 已执行候选标记 ∩ 实际可卖账本（不卖其他流程仓位）；买入跳过用完整账本
 - [x] 4.2 `t_mom_etf.py::_last_rebalance_date`：改为读 `t_build_scan_results`（source='mom_etf' AND status='executed'）的最大 trade_date
 - [x] 4.3 `t_mom_etf.py::try_rebalance`：本次调仓产生任一成交（success/filled/executed）后，将当日 source='mom_etf' 候选置 status='executed'（消费信号）；全部未成交则保持 pending 供次日重试
 - [x] 4.4 `t_mom_etf.py::scan_once`：确认清理逻辑不误删已 executed 的历史候选（仅清理当日 pending/当日全量重写，保留 executed 记录）
@@ -39,6 +39,6 @@
 
 ## 7. 部署与验证
 
-- [ ] 7.1 提交到 main（中文 commit message），确认 prod `/opt/marcus-platform` 与仓库无未提交漂移（`git diff` 核对 t_mom_etf.py 等）
-- [ ] 7.2 prod 拉取 → 重建 backend/worker 镜像 → `docker compose up -d` 重启
+- [x] 7.1 提交到 main（中文 commit message），确认 prod `/opt/marcus-platform` 与仓库无未提交漂移（`git diff` 核对 t_mom_etf.py 等）
+- [x] 7.2 prod 拉取 → 重建 backend/worker 镜像 → `docker compose up -d` 重启
 - [ ] 7.3 验证 `/api/v1/t/mom-etf/status` 正常；下一建仓窗口观察：候选从「待处理」变「已执行」、t_build_events 出现 executed 建仓、无新 human_confirm 事件、日志逐条记录结果
