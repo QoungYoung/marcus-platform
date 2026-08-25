@@ -827,7 +827,8 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
     reasons = []
     if symbol_value >= per_symbol_max:
         reasons.append(f"单标底仓已达上限（{symbol_value:.0f} ≥ {per_symbol_max:.0f}）")
-    if total_floor_value + single_max > total_max:
+    # mom_etf 短线档不做总底仓上限（目标 ≤3 只 × 单笔 30% 自约束，避免账户已持底仓时锁死建仓）
+    if mode != "mom_etf" and total_floor_value + single_max > total_max:
         reasons.append(f"总底仓超上限（{total_floor_value:.0f} + 本笔 > {total_max:.0f}）")
 
     # 高价股保底：单笔上限 = max(净值×单笔%, 100股×价格)（A股最小交易单位 100 股），
@@ -1102,18 +1103,16 @@ def validate_build_position(symbol: str, price: float, volume: int,
             result["reason"] = "单票当日已建仓，分批须跨日"
             return result
 
-        # 7) 人工升级分流（daily_auto/ai_led 遇 human_confirm 同样升级，不自动放行）
-        if mode == "human_confirm" and decision_source in ("agent", "daily_auto", "ai_led") and not force_human:
-            result.update({"pass": True, "mode": "human_confirm", "level": "gate", "reason": up_reason})
-            return result
-        if force_human and decision_source == "human" and mode == "human_confirm":
-            result.update({"pass": True, "mode": "human_confirm", "level": "gate", "reason": up_reason})
-            return result
+        # 7) 人工确认已移除（全来源自动放行）：B1-B8 风险分类（首开/CAUTIOUS/单笔超档/
+        #    连续亏损/日亏预警/近跌停/当日触犯风控）不再暂停等待人工确认，
+        #    风险原因并入 warn 随结果与日志输出（HALT/B3 已在上面 blocked 强制拦截）。
+        risk_warn = ""
+        if mode == "human_confirm":
+            mode = "normal"
+            risk_warn = up_reason
 
         # 8) 过（自动放行）
-        warns = []
-        if mode == "human_confirm":
-            warns.append(up_reason)
+        warns = [risk_warn] if risk_warn else []
         result.update({"pass": True, "mode": mode, "level": "ok", "reason": up_reason, "warn": warns})
         return result
     except Exception as e:
@@ -1162,13 +1161,7 @@ def build_gateway_execute(symbol: str, price: float, volume: int,
                                 reason=f"{check['reason']}（level={check.get('level')}）")
         return {"status": "rejected", "reason": check["reason"], "level": check.get("level"), "mode": check.get("mode")}
 
-    if check["mode"] == "human_confirm" and decision_source in ("agent", "daily_auto", "ai_led") and not force_human:
-        # 升级人工：事件保持 pending_confirmation，等待人工确认端点放行
-        t_db.update_build_event(ev_id, status="human_confirm",
-                                reason=check.get("reason") or "人工确认")
-        return {"status": "human_confirm", "event_id": ev_id, "reason": check.get("reason") or "需人工确认"}
-
-    # 2) 撮合（复用做T执行器隔离：account_id='t'）
+    # 2) 撮合（复用做T执行器隔离：account_id='t'）——人工确认已移除，校验通过即执行
     try:
         from app.core.trading.marcus_trade import MarcusVNPyExecutor
         from paper_engine import PaperTradingEngine

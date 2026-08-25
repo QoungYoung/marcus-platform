@@ -77,6 +77,86 @@ class TestMomEtfRebalance(unittest.TestCase):
         self.assertIsInstance(res, list)
 
 
+class TestMomEtfHoldingsAndCadence(unittest.TestCase):
+    """持仓识别（实际账本）与双周节律（成交候选）修复。"""
+
+    def test_mom_positions_uses_actual_ledger(self):
+        """已持有识别基于实际可卖账本：非 mom_etf 来源（daily_auto 建的 SH515880）也识别。"""
+        ledger = {
+            "SH515880": {"symbol": "SH515880", "volume": 36200, "sellable": 36200, "avg_price": 0.677},
+            "SH515050": {"symbol": "SH515050", "volume": 0, "sellable": 0, "avg_price": 0.0},
+        }
+        with mock.patch("app.services.t_gateway.get_sellable_ledger", return_value=ledger), \
+             mock.patch("app.database.SessionLocal", side_effect=RuntimeError("db off")):
+            pos = me._mom_positions()  # 事件回填失败 → 退回账本均价
+        self.assertEqual(len(pos), 1)
+        self.assertEqual(pos[0]["symbol"], "SH515880")
+        self.assertEqual(pos[0]["volume"], 36200)
+        self.assertEqual(pos[0]["avg_price"], 0.677)
+
+    def test_last_rebalance_date_reads_executed_candidates(self):
+        """节律基准读 scan_results（source=mom_etf, status=executed），与 reason 字段无关。"""
+        class FakeResult:
+            def mappings(self):
+                class _F:
+                    def first(self):
+                        return {"d": "2026-08-25"}
+                return _F()
+        class FakeDB:
+            def execute(self, *a, **k):
+                return FakeResult()
+            def close(self):
+                pass
+        with mock.patch("app.database.SessionLocal", return_value=FakeDB()):
+            self.assertEqual(me._last_rebalance_date(), "2026-08-25")
+
+    def test_rebalance_success_marks_candidates_executed(self):
+        """调仓成交 → 当日候选置 executed（消费信号），节律内存基准更新。"""
+        from datetime import datetime as _dt
+        from app.services import t_mom_etf as me2
+        class _FakeDT(_dt):
+            @classmethod
+            def now(cls, tz=None):
+                return _dt(2026, 8, 25, 10, 30, 0)
+        target = [{"etf6": "515880", "mom": 0.05, "greed": 0.5, "name": "通信设备ETF国泰"}]
+        with mock.patch.object(me2, "datetime", _FakeDT), \
+             mock.patch.object(me2, "_rebalance_due", return_value=True), \
+             mock.patch.object(me2, "_target_portfolio", return_value=(target, ["ok"], True)), \
+             mock.patch.object(me2, "_mom_positions", return_value=[]), \
+             mock.patch("app.services.t_data_sources.fetch_tencent_quote",
+                        return_value={"sh515880": {"current": 0.677}}), \
+             mock.patch("app.services.t_build.build_t_position", return_value={
+                 "status": "success", "event_id": 1, "reason": "成交"}), \
+             mock.patch.object(me2, "_mark_candidates_executed") as mark:
+            res = me2.try_rebalance()
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["status"], "success")
+        mark.assert_called_once()
+        self.assertEqual(mark.call_args[0][0], {"SH515880"})
+        self.assertEqual(me2._last_rebalance_dt, "2026-08-25")
+
+    def test_rebalance_no_trade_keeps_pending(self):
+        """全部无成交（no_price）→ 不消费候选，且输出 warning 结果。"""
+        from datetime import datetime as _dt
+        from app.services import t_mom_etf as me2
+        class _FakeDT(_dt):
+            @classmethod
+            def now(cls, tz=None):
+                return _dt(2026, 8, 25, 10, 30, 0)
+        target = [{"etf6": "515880", "mom": 0.05, "greed": 0.5, "name": "通信设备ETF国泰"}]
+        with mock.patch.object(me2, "datetime", _FakeDT), \
+             mock.patch.object(me2, "_rebalance_due", return_value=True), \
+             mock.patch.object(me2, "_target_portfolio", return_value=(target, ["ok"], True)), \
+             mock.patch.object(me2, "_mom_positions", return_value=[]), \
+             mock.patch("app.services.t_data_sources.fetch_tencent_quote",
+                        return_value={"sh515880": {"current": 0}}), \
+             mock.patch.object(me2, "_mark_candidates_executed") as mark:
+            res = me2.try_rebalance()
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["status"], "no_price")
+        mark.assert_not_called()
+
+
 class TestMomEtfMonitor(unittest.TestCase):
 
     def test_disabled_by_default(self):

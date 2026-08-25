@@ -172,7 +172,8 @@ def scan_once() -> List[str]:
         _db = _SL()
         try:
             _db.execute(_text(
-                "DELETE FROM t_build_scan_results WHERE trade_date = :d AND source = 'mom_etf'"
+                "DELETE FROM t_build_scan_results WHERE trade_date = :d AND source = 'mom_etf' "
+                "AND status != 'executed'"
             ), {"d": _today()})
             _db.commit()
         finally:
@@ -193,47 +194,62 @@ def scan_once() -> List[str]:
 
 
 def _mom_positions() -> List[Dict[str, Any]]:
-    """t 账户中由 mom_etf 建仓的持仓。"""
-    from sqlalchemy import text
-    from app.database import SessionLocal
+    """t 账户当前实际可卖持仓（含其他流程建仓的标的），供轮动换出判断。
+
+    基于 get_sellable_ledger（paper_positions 推算 T+1 可卖），avg_price/built_at
+    优先从最近成交建仓事件回填，否则用账本均价。
+    """
+    from app.services.t_gateway import get_sellable_ledger
+    ledger = get_sellable_ledger()
+    syms = [s for s, it in ledger.items()
+            if it and float(it.get("sellable") or 0) > 0]
+    if not syms:
+        return []
+    # 最近成交事件回填（任意来源；reason 被审计覆盖不影响）
+    meta: Dict[str, Dict[str, Any]] = {}
     try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
         db = SessionLocal()
         try:
-            events = db.execute(text(
-                "SELECT symbol, executed_price, created_at FROM t_build_events "
-                "WHERE account_id = 't' AND event_type = 'build_position' AND status = 'executed' "
-                "AND reason LIKE '%mom_etf%' ORDER BY created_at DESC"
-            )).mappings().all()
+            rows = db.execute(text(
+                "SELECT DISTINCT ON (symbol) symbol, executed_price, created_at "
+                "FROM t_build_events WHERE account_id = 't' "
+                "AND event_type = 'build_position' AND status = 'executed' "
+                "AND symbol = ANY(:syms) ORDER BY symbol, created_at DESC"
+            ), {"syms": syms}).mappings().all()
+            for r in rows:
+                meta[r["symbol"]] = {
+                    "executed_price": r["executed_price"],
+                    "created_at": str(r["created_at"])[:10],
+                }
         finally:
             db.close()
     except Exception as e:
-        logger.warning("[t-mom-etf] 建仓事件读取失败: %s", str(e)[:100])
-        return []
-    from app.services.t_gateway import get_sellable_ledger
-    ledger = get_sellable_ledger()
+        logger.warning("[t-mom-etf] 持仓事件回填失败: %s", str(e)[:100])
     out = []
-    for ev in events:
-        sym = ev["symbol"]
-        item = ledger.get(sym)
-        if not item or item.get("sellable", 0) <= 0:
-            continue
-        out.append({"symbol": sym, "volume": int(item["sellable"]),
-                    "avg_price": float(ev["executed_price"] or 0),
-                    "built_at": str(ev["created_at"])[:10]})
+    for sym in syms:
+        it = ledger[sym]
+        m = meta.get(sym) or {}
+        out.append({
+            "symbol": sym,
+            "volume": int(it.get("sellable") or 0),
+            "avg_price": float(m.get("executed_price") or it.get("avg_price") or 0),
+            "built_at": m.get("created_at") or _today(),
+        })
     return out
 
 
 def _last_rebalance_date() -> Optional[str]:
-    """最近一次 mom_etf 调仓事件日期（建仓或平仓）。"""
+    """最近一次 mom_etf 调仓成交日期（t_build_scan_results 中 executed 候选）。"""
     from sqlalchemy import text
     from app.database import SessionLocal
     try:
         db = SessionLocal()
         try:
             row = db.execute(text(
-                "SELECT max(created_at) AS d FROM t_build_events "
-                "WHERE account_id = 't' AND reason LIKE '%mom_etf%' "
-                "AND event_type IN ('build_position', 'sell')"
+                "SELECT max(trade_date) AS d FROM t_build_scan_results "
+                "WHERE source = 'mom_etf' AND status = 'executed'"
             )).mappings().first()
             return str(row["d"])[:10] if row and row["d"] else None
         finally:
@@ -282,6 +298,25 @@ def _sell_mom_position(sym: str, vol: int, cur: float, reason: str):
         return "error"
 
 
+def _mark_candidates_executed(symbols: set) -> None:
+    """调仓成交后消费当日候选（pending → executed），作为双周节律基准。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "UPDATE t_build_scan_results SET status = 'executed', built_at = now() "
+                "WHERE source = 'mom_etf' AND trade_date = :d "
+                "AND symbol = ANY(:syms) AND status = 'pending'"
+            ), {"d": _today(), "syms": list(symbols)})
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[t-mom-etf] 候选消费失败: %s", str(e)[:100])
+
+
 def try_rebalance(force: bool = False) -> List[Dict[str, Any]]:
     """双周调仓：卖出不在目标组合的持仓、买入目标组合中未持有的标的。
 
@@ -324,7 +359,18 @@ def try_rebalance(force: bool = False) -> List[Dict[str, Any]]:
                                decision_source="ai_led", build_mode="mom_etf")
         results.append({"symbol": sym, "action": "buy", "status": out.get("status"), "reason": out.get("reason")})
         time.sleep(SCAN_INTERVAL_S)
+    # 3) 逐条落日志（含 no_price/护栏拒绝），避免"结果 N 项"掩盖静默失败
+    for r in results:
+        detail = ("：" + str(r.get("reason"))) if r.get("reason") else ""
+        lvl = logger.warning if r.get("status") in ("no_price", "rejected", "error") else logger.info
+        lvl("[t-mom-etf] 调仓 %s %s → %s%s", r.get("action"), r.get("symbol"), r.get("status"), detail)
     _last_rebalance_dt = _today()
+    executed_any = any(r.get("status") in ("success", "filled", "executed") for r in results)
+    if executed_any:
+        _mark_candidates_executed(target_syms)
+    else:
+        logger.warning("[t-mom-etf] 调仓无成交：目标 %s，结果 %d 项（全部被拦/无行情），候选保持待处理次日重试",
+                       sorted(target_syms), len(results))
     logger.info("[t-mom-etf] 调仓完成：目标 %s，结果 %d 项", sorted(target_syms), len(results))
     return results
 

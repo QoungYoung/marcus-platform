@@ -135,13 +135,14 @@ class TestValidateBuildPosition(_PGTestCase):
         for p in self.patches:
             p.stop()
 
-    def test_validate_first_open_upgrades_human(self):
-        # 无底仓标的 + 全部护栏过 → 首开升级 human（B1 清单），不自动放行
+    def test_validate_first_open_no_human_escalation(self):
+        # 无底仓标的 + 全部护栏过 → 首开（B1）不再升级人工：自动放行，风险入 warn
         from app.services.t_build import validate_build_position
         r = validate_build_position("SH600000", 10.0, 1000, reason="test", decision_source="agent")
         self.assertTrue(r["pass"])
-        self.assertEqual(r["mode"], "human_confirm")
+        self.assertEqual(r["mode"], "normal")
         self.assertIn("首开", r["reason"])
+        self.assertTrue(any("首开" in w for w in r["warn"]))
 
     def test_stop_all_rejects(self):
         from app.services import t_db
@@ -192,6 +193,40 @@ class TestValidateBuildPosition(_PGTestCase):
             self.assertFalse(r["pass"])
             self.assertIn("冷静期", r["reason"])
 
+    def test_cautious_no_human_escalation(self):
+        """CAUTIOUS 档自动建仓不再升级人工：自动放行，风险原因入 warn。"""
+        from app.services.t_build import validate_build_position
+        with patch.object(self.tb, "compute_regime", return_value={
+                "regime": "CAUTIOUS", "gate_low_buy": "ALLOWED", "gate_high_sell": "ALLOWED",
+                "interpret_sign": 1, "index_drop": -0.5}):
+            r = validate_build_position("SH600000", 10.0, 1000, reason="cautious test", decision_source="ai_led")
+        self.assertTrue(r["pass"])
+        self.assertEqual(r["mode"], "normal")
+        self.assertTrue(any("CAUTIOUS" in w for w in r["warn"]))
+
+    def test_count_today_builds_only_executed(self):
+        """当日配额只计 executed：pending/human_confirm/rejected 不占名额（单票口径同）。"""
+        from app.services import t_db
+        from datetime import datetime
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal
+        today = datetime.now().strftime("%Y-%m-%d")
+        seed = {"symbol": "SH600999", "event_type": "build_position", "side": "buy",
+                "price": 10.0, "volume": 100, "amount": 1000,
+                "decision_source": "ai_led", "reason": "quota-test"}
+        try:
+            # 未成交事件（pending_confirmation / human_confirm / rejected）不计数
+            for st in ("pending_confirmation", "human_confirm", "rejected"):
+                t_db.insert_build_event({**seed, "status": st})
+            self.assertEqual(t_db.count_today_builds(symbol="SH600999"), 0)
+            t_db.insert_build_event({**seed, "status": "executed"})
+            self.assertEqual(t_db.count_today_builds(symbol="SH600999"), 1)
+        finally:
+            db = SessionLocal()
+            db.execute(_text("DELETE FROM t_build_events WHERE reason = 'quota-test'"))
+            db.commit()
+            db.close()
+
 
 class TestSizing(_PGTestCase):
     def test_sizing_limits(self):
@@ -215,10 +250,26 @@ class TestSizing(_PGTestCase):
                  "regime": "ACTIVE", "gate_low_buy": "ALLOWED", "gate_high_sell": "ALLOWED",
                  "interpret_sign": 1, "index_drop": 0.0}), \
              patch.object(t_build, "_positions_value", return_value=(110000.0, {})):
-            # 总底仓 11 万 + 本笔 2 万 = 13 万 > 55%×20万=11万 → 拒
+            # 总底仓 11 万 + 本笔 2 万 = 13 万 > 55%×20万=11万 → 拒（标准档仍校验）
             s = t_build.build_sizing("SH600000", 10.0)
             self.assertFalse(s["pass"])
             self.assertIn("总底仓超上限", s["reason"])
+
+    def test_mom_etf_total_floor_cap_exempt(self):
+        """mom_etf 档不做总底仓 60% 上限（单笔/单标 30% 上限仍校验）。"""
+        from app.services import t_build
+        # 总底仓 15 万（=75% 净值）> 60% 上限 → mom_etf 档仍放行
+        s = t_build.build_sizing("SH515880", 0.8, net_asset=200000.0,
+                                 total_floor_value=150000.0, symbol_value=0.0,
+                                 regime="ACTIVE", mode="mom_etf")
+        self.assertTrue(s["pass"])
+        self.assertNotIn("总底仓超上限", s["reason"])
+        # 单标 30% 上限仍生效：持仓市值 7 万 ≥ 30%×20万=6万 → 拒
+        s2 = t_build.build_sizing("SH515880", 0.8, net_asset=200000.0,
+                                  total_floor_value=150000.0, symbol_value=70000.0,
+                                  regime="ACTIVE", mode="mom_etf")
+        self.assertFalse(s2["pass"])
+        self.assertIn("单标底仓已达上限", s2["reason"])
 
 
 class TestNetAsset(_PGTestCase):
@@ -590,11 +641,13 @@ class TestAiLedBuildGateway(_PGTestCase):
         self.assertTrue(r["pass"])
         self.assertEqual(r["mode"], "auto")
 
-    def test_ai_led_agent_first_open_still_human(self):
-        """agent 首开仍升级人工（ai_led 才放开 B1）。"""
+    def test_ai_led_agent_first_open_auto_passes(self):
+        """agent 首开也不再升级人工（人工确认已移除）：自动放行，风险入 warn。"""
         from app.services.t_build import validate_build_position
         r = validate_build_position("SH600000", 10.0, 1000, reason="agent test", decision_source="agent")
-        self.assertEqual(r["mode"], "human_confirm")
+        self.assertTrue(r["pass"])
+        self.assertEqual(r["mode"], "normal")
+        self.assertIn("首开", r["reason"])
 
     def test_ai_led_stop_all_rejects(self):
         """ai_led 不豁免熔断：STOP_ALL 时拒绝。"""
