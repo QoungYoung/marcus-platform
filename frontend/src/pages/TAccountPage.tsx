@@ -661,7 +661,6 @@ export default function TAccountPage() {
                   <div className="tac-panel-head">
                     <span className="tac-panel-title">三层股票池</span>
                     <div className="tac-toolbar">
-                      <button className="tac-btn" onClick={() => doPost('/conditions/generate', null, '已为实盘池生成条件')}>生成监控条件</button>
                       <button className="tac-btn" onClick={loadPool}>刷新</button>
                     </div>
                   </div>
@@ -700,7 +699,6 @@ export default function TAccountPage() {
                   <div className="tac-panel-head">
                     <span className="tac-panel-title">监控条件</span>
                     <div className="tac-toolbar">
-                      <button className="tac-btn" onClick={() => doPost('/conditions/generate', null, '已生成条件')}>生成监控条件</button>
                       <button className="tac-btn" disabled={!!aiRebuilding} onClick={aiRebuild}>
                         {aiRebuilding ? `⏳ ${aiRebuilding}` : 'AI重建条件'}
                       </button>
@@ -740,7 +738,7 @@ export default function TAccountPage() {
                             </td>
                           </tr>
                         ))}
-                        {conditions.length === 0 && <tr><td colSpan={10} className="tac-empty">暂无条件，点击"生成监控条件"</td></tr>}
+                        {conditions.length === 0 && <tr><td colSpan={10} className="tac-empty">暂无条件，点击"AI重建条件"生成</td></tr>}
                       </tbody>
                     </table>
                   </div>

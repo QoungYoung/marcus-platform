@@ -1309,14 +1309,36 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float,
 
 
 def auto_gen_conditions_for_live_pool() -> int:
-    """盘后任务：为 live 池缺失次日条件的标的补生成（复用 t_pool 模板）。"""
+    """盘后任务：为 live 池缺失次日条件的标的补生成（迭代#58g：只保留 AI 生成）。
+
+    逐标的走 auto_gen_conditions_for_build（**AI 生成优先**、规则公式仅兜底、
+    部分更新入库），不再用规则公式整池覆盖——避免覆盖用户语义
+    （如"只减不补"标的被规则补出低吸买腿）。“生成监控条件”规则入口已撤。
+    仅对**缺失次日 active 条件**的标的生成（已有条件跳过，不重复扰动）。
+    """
     try:
-        from app.services.t_pool import generate_conditions_for_live_pool
+        from app.services.t_pool import compute_three_tier_pool
+        from app.services.t_db import list_active_conditions
         regime = compute_regime().get("regime", "ACTIVE")
         if regime == "HALT":
             return 0
-        created = generate_conditions_for_live_pool(regime=regime)
-        return len(created)
+        next_td = _next_trade_date().replace("-", "")  # YYYYMMDD
+        pool = compute_three_tier_pool(regime=regime)
+        created = 0
+        for symbol, info in (pool.get("live") or {}).items():
+            avg = float(info.get("avg_price") or 0)
+            if avg <= 0:
+                continue
+            # 缺失次日条件才生成（已有则跳过）
+            if list_active_conditions(symbol=symbol, trade_date=next_td):
+                continue
+            try:
+                ok = auto_gen_conditions_for_build(symbol, avg, trade_date=next_td, quote_price=None)
+                if ok:
+                    created += 1
+            except Exception as e:
+                print(f"[t-build] AI 补生成条件失败 {symbol}: {e}")
+        return created
     except Exception as e:
         print(f"[t-build] live 池条件补生成失败: {e}")
         return 0
