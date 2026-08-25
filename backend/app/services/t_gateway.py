@@ -105,7 +105,8 @@ def get_sellable_ledger() -> Dict[str, Dict[str, Any]]:
             # 今日买入量（T+1 锁定，不可卖）
             buys = db.execute(text(
                 "SELECT symbol, COALESCE(SUM(volume), 0) AS v FROM paper_trades "
-                "WHERE account_id = 't' AND direction = '买入' AND voided = 0 "
+                "WHERE account_id = 't' AND direction = '买入' "
+                "AND (voided = 0 OR voided IS NULL) "
                 "AND substr(created_at, 1, 10) = :today GROUP BY symbol"
             ), {"today": today}).mappings().all()
             buy_map = {r["symbol"]: int(r["v"]) for r in buys}
@@ -503,7 +504,8 @@ def _daily_buy_legs(symbol: str) -> int:
             today = datetime.now().strftime("%Y-%m-%d")
             n = db.execute(text(
                 "SELECT COUNT(*) FROM paper_trades "
-                "WHERE account_id = 't' AND direction = '买入' AND voided = 0 "
+                "WHERE account_id = 't' AND direction = '买入' "
+                "AND (voided = 0 OR voided IS NULL) "
                 "AND substr(created_at, 1, 10) = :today AND symbol = :sym"
             ), {"today": today, "sym": symbol}).scalar()
             return int(n or 0)

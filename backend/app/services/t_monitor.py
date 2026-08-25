@@ -592,11 +592,14 @@ class TMonitor:
                                  reason="止损离场（stop_loss）", decision_source="ai_led",
                                  is_stop_loss=True)
             print(f"[TMonitor] 止损触发 {symbol} @ {current} x{volume}: {gw.get('status')}")
-            # 冻结该标的全部条件（当日不再触发低吸/高抛）
-            for c in conds or []:
-                cid = c.get("id")
-                if cid:
-                    t_db.update_condition_state(cid, armed=0)
+            # 迭代#58g：仅在止损**成交**后冻结当日条件——
+            # 此前无条件冻结：T+1 当日买入 sellable=0 时止损被拒（rejected），
+            # 仍把低吸/高抛条件冻成 armed=0 并与消费式重建打架（每轮刷屏）。
+            if gw.get("status") == "success":
+                for c in conds or []:
+                    cid = c.get("id")
+                    if cid:
+                        t_db.update_condition_state(cid, armed=0)
         except Exception as e:
             print(f"[TMonitor] 止损扫描异常 {symbol}: {e}")
 
