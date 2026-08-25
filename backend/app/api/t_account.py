@@ -538,6 +538,44 @@ def t_build_params_update(payload: dict):
     return {"success": ok, "params": t_build._params()}
 
 
+@router.get("/build/no-rebuild")
+def t_no_rebuild_get():
+    """禁重建标的名单（迭代#58h）：名单内标的不生成/重建低吸买腿（只减不补）。"""
+    from app.services import t_build
+    return {"symbols": sorted(t_build.no_rebuild_symbols())}
+
+
+@router.post("/build/no-rebuild")
+def t_no_rebuild_update(payload: dict):
+    """维护禁重建标的名单（Agent/AI 合理决策用，迭代#58h）。
+
+    body: {"action": "list|add|remove|set", "symbol": "SH515880" |
+          "symbols": ["SH515880", ...]}
+    add/remove 单只（symbol）；set 全量（symbols）。
+    """
+    from app.services import t_build
+    action = str((payload or {}).get("action") or "list").strip().lower()
+    sym_in = (payload or {}).get("symbol")
+    syms_in = (payload or {}).get("symbols")
+    if action in ("add", "remove"):
+        s = str(sym_in or "").strip().upper()
+        if not s:
+            raise HTTPException(status_code=400, detail="add/remove 需传 symbol")
+        cur = t_build.no_rebuild_symbols()
+        cur.add(s) if action == "add" else cur.discard(s)
+        ok = t_build.set_no_rebuild_symbols(sorted(cur))
+        return {"success": ok, "action": action, "symbol": s, "symbols": sorted(t_build.no_rebuild_symbols())}
+    if action == "set":
+        if not isinstance(syms_in, list):
+            raise HTTPException(status_code=400, detail="set 需传 symbols 数组")
+        # 校验：只接受字符串（非法项剔除并提示）
+        bad = [x for x in syms_in if not isinstance(x, str) or not str(x).strip()]
+        clean = [str(x).strip().upper() for x in syms_in if isinstance(x, str) and str(x).strip()]
+        ok = t_build.set_no_rebuild_symbols(clean)
+        return {"success": ok, "action": "set", "ignored": bad[:10], "symbols": sorted(t_build.no_rebuild_symbols())}
+    return {"success": True, "action": "list", "symbols": sorted(t_build.no_rebuild_symbols())}
+
+
 @router.get("/trend-break/status")
 def t_trend_break_status():
     """做T账户·趋势突破短线监控状态（只作用于 t 账户）。"""

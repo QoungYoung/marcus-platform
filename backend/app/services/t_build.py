@@ -135,6 +135,19 @@ def no_rebuild_symbols() -> set:
         return set()
 
 
+def set_no_rebuild_symbols(symbols: List[str]) -> bool:
+    """安全更新禁重建名单（迭代#58h）：只改存储层 no_rebuild_symbols 一个 key，
+    不冻结默认参数（其余 key 保持代码默认动态生效）。符号统一大写。"""
+    try:
+        stored = t_db.get_build_params() or {}
+        stored["no_rebuild_symbols"] = sorted(
+            {str(s).strip().upper() for s in symbols if str(s).strip()})
+        return t_db.update_build_params(stored)
+    except Exception as e:
+        print(f"[t-build] 更新禁重建名单失败: {e}")
+        return False
+
+
 # ────────────────────────────────────────────────────────────────
 # t 账户持仓辅助
 # ────────────────────────────────────────────────────────────────

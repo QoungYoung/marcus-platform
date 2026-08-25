@@ -207,6 +207,33 @@ function apply(ctx) {
         },
       }));
       register(defineTool({
+        name: 't_no_rebuild_symbols',
+        description: '查看/维护「禁重建标的」名单（只减不补等语义，迭代#58h）：名单内的标的不生成/不重建低吸买腿（AI 重建、盘后生成、消费式重建全部跳过），只保留手动配置的卖腿（高抛/破位）。合理决策：某持仓标的不再适合低吸补仓（下跌趋势/破位风险/用户要求只减不补）→ 加入名单并说明理由；低吸闭环恢复（企稳回踩/趋势向上）→ 可移除。',
+        parameters: {
+          action: { type: 'string', enum: ['list', 'add', 'remove', 'set'], description: 'list=查看；add/remove=增减单只（配 symbol）；set=全量替换（配 symbols）' },
+          symbol: { type: 'string', description: 'add/remove 时传入的代码，如 SH515880' },
+          symbols: { type: 'array', items: { type: 'string' }, description: 'set 全量名单' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const action = args.action || 'list';
+          const body = { action };
+          if (action === 'add' || action === 'remove') {
+            if (!args.symbol) return { ok: true, text: '❌ add/remove 需传 symbol' };
+            body.symbol = String(args.symbol).toUpperCase();
+          } else if (action === 'set') {
+            if (!Array.isArray(args.symbols)) return { ok: true, text: '❌ set 需传 symbols 数组' };
+            body.symbols = args.symbols.map((s) => String(s).toUpperCase());
+          }
+          const data = await apiFetch('/t/build/no-rebuild', { method: 'POST', body: JSON.stringify(body) });
+          const syms = (data.symbols || []).join(', ') || '（空）';
+          let head = '📛 禁重建标的（只减不补，AI 重建/盘后生成/消费式重建均跳过）';
+          if (action !== 'list' && data.ignored && data.ignored.length) head += `\n⚠️ 已忽略非法项: ${data.ignored.join(', ')}`;
+          return { ok: true, text: head + '\n『 ' + syms + ' 』\n' + (action === 'list' ? '（list）' : `已 ${action}，改动生效，后续 AI 重建将跳过名单内标的最多补入卖腿`) };
+        },
+      }));
+
+      register(defineTool({
         name: 'list_t_ai_actions',
         description: '查询做T AI 决策审计（t_ai_actions）：最近 N 条决策（exec/wait/abandon/update_condition/build/review），含理由与网关结果。AI 决策前/复盘时查最近决策，判断是否连续未实质改善。',
         parameters: {
@@ -842,6 +869,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                     'get_stock_moneyflow', 'get_market_state', 'get_stock_technical',
                     'get_portfolio_positions', 'get_t_candidates_summary',
                     'list_t_conditions', 'list_t_ai_actions', 'list_t_fields', 'create_t_condition',
+                    't_no_rebuild_symbols',
                     'scan_t_candidates', 'get_floor_overview', 'build_t_position',
                     'auto_gen_conditions', 'rebalance_floors',
                   ],
@@ -1439,6 +1467,10 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
         '建仓：scan_t_candidates 选股（候选池优先，空则全市场扫描）→ get_floor_overview →',
         'build_t_position（ai_led 首开自动放行；单笔≤净值5%、总底仓≤净值55%；冷静期/午后不自动建）。',
         '硬约束：仅 t 账户；STOP_ALL/日亏熔断/HALT 禁自动；T+1 当日禁卖；单票当日 1 批；所有下单经网关（ai_led 不豁免）。',
+        '',
+        '【禁重建标的 no_rebuild_symbols】名单内 = 只减不补：系统跳过其低吸重建（AI 重建/盘后/',
+        '消费式重建），只保留卖腿。用 t_no_rebuild_symbols 查看；持仓走弱/破位/浮亏扩大/用户要求',
+        '只减不补时加入（写明证据）；企稳回踩/趋势回升时可移出恢复低吸闭环。',
       ].join('\n'),
     };
     // 回测复核会话系统提示（沙盒：AI 决策 exec/wait/abandon/update_condition，禁止交易/写操作）
@@ -1457,6 +1489,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       'place_order', 'cancel_order', 'calc_position',
       'update_golden_pit_etf_config', 'create_t_condition',
       'list_t_fields', 'list_t_conditions', 'run_t_backtest',
+      't_no_rebuild_symbols',
     ];
 
     async function fetchPromptsFromAPI(retries = 3, delayMs = 5000) {
