@@ -201,6 +201,24 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                 cond.setdefault("session_id", session_id)
                 cid = upsert_condition(cond)
                 result["condition_id"] = cid
+                # 双向策略保障（用户需求）：AI 只更新单腿时，用规则公式补齐另一腿
+                # （低吸 + 高抛回补成对，避免卖腿/买腿缺失破坏做T闭环）
+                try:
+                    from app.services.t_build import ensure_dual_legs
+                    from app.services.t_gateway import get_sellable_ledger
+                    _sym = str(cond.get("symbol") or "").upper()
+                    _it = get_sellable_ledger().get(_sym) or {}
+                    _avg = float(_it.get("avg_price") or 0)
+                    if _avg > 0:
+                        _pairs = ensure_dual_legs([dict(cond)], _avg, None)
+                        for _leg in _pairs[1:]:
+                            _leg.setdefault("symbol", _sym)
+                            _leg.setdefault("trade_date", cond.get("trade_date"))
+                            _leg.setdefault("publisher", "rule")
+                            _leg.setdefault("session_id", session_id)
+                            upsert_condition(_leg)
+                except Exception:
+                    pass
             except Exception as e:
                 result["condition_error"] = str(e)[:200]
         else:

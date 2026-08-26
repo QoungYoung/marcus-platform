@@ -304,6 +304,27 @@ class TestNextDayConditions(_PGTestCase):
         conds = t_db.list_active_conditions(symbol="SH600000", trade_date=tomorrow)
         self.assertTrue(any(c["symbol"] == "SH600000" for c in conds))
 
+    def test_ensure_dual_legs_appends_missing_leg(self):
+        """双向策略保障：AI 只给单腿时补规则另一腿（低吸 + 高抛回补成对）。"""
+        from app.services.t_build import ensure_dual_legs
+        # AI 只给买腿 → 补规则卖腿
+        ai_only_buy = [{"trigger_kind": "low_buy", "target_price": 3.3,
+                        "stop_loss_price": 3.29, "reason": "AI 低吸"}]
+        out = ensure_dual_legs(ai_only_buy, 3.39, None)
+        kinds = {c["trigger_kind"] for c in out}
+        self.assertEqual(kinds, {"low_buy", "high_sell_then_buy_back"})
+        sell = next(c for c in out if c["trigger_kind"] == "high_sell_then_buy_back")
+        self.assertIn("规则补全卖腿", sell.get("reason", ""))
+        self.assertGreater(sell["sell_target_price"], 3.39)
+        # AI 只给卖腿 → 补规则买腿
+        ai_only_sell = [{"trigger_kind": "high_sell_then_buy_back", "target_price": 3.5,
+                         "sell_target_price": 3.5, "stop_loss_price": 3.29}]
+        out2 = ensure_dual_legs(ai_only_sell, 3.39, None)
+        self.assertEqual({c["trigger_kind"] for c in out2}, {"low_buy", "high_sell_then_buy_back"})
+        # 已双腿齐备 → 不重复追加
+        both = ensure_dual_legs(list(out), 3.39, None)
+        self.assertEqual(len(both), 2)
+
 
 class TestRebalance(_PGTestCase):
     def test_rebalance_marks_monitor_only(self):

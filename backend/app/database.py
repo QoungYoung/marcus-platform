@@ -352,13 +352,8 @@ def _apply_t_account_migration():
             ))
             # 迭代#58c：加宽超长枚举列（VARCHAR(12/20) 装不下 human_confirm=13、
             # high_sell_then_buy_back=22 → insert 静默失败，挂人工触发/高抛接回触发
-            # 从未真正落库）
-            conn.execute(text(
-                "ALTER TABLE t_triggers ALTER COLUMN mode TYPE VARCHAR(24)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE t_triggers ALTER COLUMN event_type TYPE VARCHAR(24)"
-            ))
+            # 从未真正落库）；t_triggers 的 ALTER 移到其建表之后（修复全新库顺序 bug：
+            # ALTER 在 CREATE 之前导致整个迁移事务回滚、t_conditions 也无法建成）
             conn.execute(text(
                 "ALTER TABLE t_conditions ALTER COLUMN trigger_kind TYPE VARCHAR(32)"
             ))
@@ -391,6 +386,13 @@ def _apply_t_account_migration():
             ))
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_t_triggers_pending ON t_triggers (account_id, status, id)"
+            ))
+            # 迭代#58c：t_triggers 枚举列加宽（建表后执行）
+            conn.execute(text(
+                "ALTER TABLE t_triggers ALTER COLUMN mode TYPE VARCHAR(24)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE t_triggers ALTER COLUMN event_type TYPE VARCHAR(24)"
             ))
 
             # 4) t_regime_state — 环境闸门状态（每交易日 1 行）

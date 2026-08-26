@@ -1259,8 +1259,9 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                 '② 低吸买腿（low_buy）：触发价应低于成本（回踩买点）；**volume = 本次触发买入的股数**（100 的整数倍，考虑可用资金）',
                 '③ 止损价（stop_loss_price）必须低于成本（防深跌），且不被正常波动击穿（结合振幅）；止损触发自动卖出 volume 股',
                 '④ vol_ratio_thresh（量比阈值，1.0~3.0）与 stabilize_level（not_new_low/other）可调',
-                '⑤ 条件组合由你决定：通常 low_buy + high_sell_then_buy_back 各一条；',
-                '   若行情需要可加 panic_vibrate（恐慌低吸）等，数量 1~4 条均可，但不要冗余重复',
+                '⑤ 条件组合必须双向：必须输出 low_buy（低吸买腿）+ high_sell_then_buy_back（高抛卖腿）各一条；',
+                '   只输出一条（缺买腿或缺卖腿）视为不完整，系统会用规则公式补齐另一条；',
+                '   行情需要时可加 panic_vibrate（恐慌低吸）等（最多 4 条），不要冗余重复',
                 '⑥ **输出规范（防呆）**：',
                 '   - low_buy（买腿）：只填 target_price（必须 < 成本，回踩买点）+ vol_ratio_thresh/stabilize_level；**不要填 sell_target_price**（那是卖腿字段）',
                 '   - high_sell_then_buy_back（卖腿）：填 sell_target_price（必须 > 成本）+ target_price 可省略；vol_ratio_thresh/stabilize_level 可省',
@@ -1307,10 +1308,14 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
           const kind = String(c.trigger_kind || '');
           if (kind !== 'low_buy' && kind !== 'high_sell_then_buy_back') continue;
           const costNum = Number(cost) || 0;
+          const isSellLeg = kind === 'high_sell_then_buy_back';
           const tp = Number(c.target_price);
           const stp = Number(c.sell_target_price) > 0 ? Number(c.sell_target_price) : tp;
+          // 卖腿允许缺 target_price：用 sell_target_price 兜底（同腿两个价格字段语义等价），
+          // 避免模型只给 sell_target_price 时卖腿被误丢（08-26：AI 只出 low_buy 单腿）
+          const target = isSellLeg ? (tp > 0 ? tp : stp) : tp;
           const st = Number(c.stop_loss_price);
-          if (!tp || tp <= 0) continue;
+          if (!target || target <= 0) continue;
           // 迭代#58g：价格×成本方向校验（AI 把现价当成本/目标设反 → 丢弃，规则兜底）
           //   低吸 = 买腿：target 必须低于成本（回踩买点）
           //   高抛 = 卖腿：sell_target 必须高于成本（兑现卖点）
@@ -1327,7 +1332,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
           const cond = {
             trigger_kind: kind,
             symbol: String(c.symbol || symbol || ''),
-            target_price: round2(tp),
+            target_price: round2(target),
             sell_target_price: round2(stp),
             stop_loss_price: round2(stop),
             vol_ratio_thresh: Number(c.vol_ratio_thresh) > 0 ? Number(c.vol_ratio_thresh) : 1.5,

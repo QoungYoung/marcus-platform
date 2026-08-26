@@ -1241,6 +1241,29 @@ def build_t_position(symbol: str, price: float, volume: Optional[int] = None,
 # 建仓后次日条件衔接（T+1：建仓当日盘后生成 D+1 条件）
 # ────────────────────────────────────────────────────────────────
 
+def ensure_dual_legs(conds: List[Dict[str, Any]], avg_price: float,
+                     amp_med: Optional[float]) -> List[Dict[str, Any]]:
+    """双向策略保障：条件集缺买腿或卖腿时，用规则公式补全成对（低吸 + 高抛回补）。
+
+    AI 可能只生成单腿（08-26 实测：5/5 次只返回 low_buy）；为保证做T闭环
+    （高抛止盈→回补、低吸回踩→买入）双腿齐备，缺失的一腿按规则公式
+    build_t_conditions 补全，reason 标注来源。
+    """
+    from app.services.t_pool import build_t_conditions
+    kinds = {c.get("trigger_kind") for c in conds}
+    rule_legs = {c["trigger_kind"]: c for c in build_t_conditions(avg_price, amp_med)}
+    out = list(conds)
+    if "high_sell_then_buy_back" not in kinds and "high_sell_then_buy_back" in rule_legs:
+        leg = dict(rule_legs["high_sell_then_buy_back"])
+        leg["reason"] = "规则补全卖腿（AI 未提供双向策略）"
+        out.append(leg)
+    if "low_buy" not in kinds and "low_buy" in rule_legs:
+        leg = dict(rule_legs["low_buy"])
+        leg["reason"] = "规则补全买腿（AI 未提供双向策略）"
+        out.append(leg)
+    return out
+
+
 def auto_gen_conditions_for_build(symbol: str, avg_price: float,
                                   trade_date: Optional[str] = None,
                                   quote_price: Optional[float] = None) -> bool:
@@ -1248,6 +1271,7 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float,
 
     AI 自主条件模式（AI 主导闭环）：优先 POST bridge /conditions/generate 让 AI 设定
     触发价/量比/止损/股数；桥不可达或解析失败回退规则公式 build_t_conditions。
+    双向策略保障：AI 返回的条件缺买腿/卖腿时用规则公式补全（ensure_dual_legs）。
     建仓当日不生成当日条件（sellable=0 无法触发）；次日该标的进 live 池后可做T。
     振幅用近 6 日 m5 日振幅中位自适应；无 m5 数据时用下限阈值。
     trade_date：默认次日（D+1 衔接）；消费式重建（迭代#56b）传当日——盘中条件
@@ -1291,6 +1315,9 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float,
             conds = None
         if not conds:
             conds = build_t_conditions(avg_price, amp_med)
+        else:
+            # 双向策略保障（用户需求）：AI 只给单腿时补规则另一腿（低吸 + 高抛回补成对）
+            conds = ensure_dual_legs(conds, avg_price, amp_med)
         # 止损钳制（迭代#52 下限 + 迭代#56c 上限）：
         #   - 不得低于规则值（可更紧、不可更宽），止损下限系统兜底
         #   - **必须低于成本 99%**（AI 把现价误当成本基准时止损会高于成本 →
