@@ -193,6 +193,47 @@ def t_conditions_generate_ai(payload: dict = None):
 
 
 @router.get("/conditions")
+def _default_condition_summary(c: dict) -> str:
+    """默认复合确认逻辑的人类可读摘要（从条件字段还原触发语义）。
+
+    低吸：现价回踩至 ≤target ∧ 量比≥thresh ∧ 分时不创新低 → 自动买入；
+    高抛：冲高至 ≥sell_target ∧ 量比≥thresh → 自动卖出（接回型附回补价）。
+    """
+    kind = c.get("trigger_kind") or "low_buy"
+    target = c.get("target_price")
+    sell_target = c.get("sell_target_price")
+    stop = c.get("stop_loss_price")
+    vol_raw = c.get("vol_ratio_thresh")
+    try:
+        vol_thresh = float(vol_raw) if vol_raw not in (None, "") else 1.5
+    except (TypeError, ValueError):
+        vol_thresh = 1.5
+    vol_txt = "无量比过滤" if vol_thresh == 0 else f"量比≥{vol_thresh:g}"
+    def _num(v):
+        try:
+            return f"{float(v):g}"
+        except (TypeError, ValueError):
+            return None
+    if kind in ("low_buy", "panic_vibrate"):
+        parts = [f"回踩至≤{_num(target)}" if _num(target) else "现价回踩"]
+        parts.append(vol_txt)
+        if c.get("stabilize_level") == "not_new_low":
+            parts.append("分时不创新低")
+        s = " ∧ ".join(parts) + " → 自动买入"
+    elif kind in ("high_sell", "high_sell_then_buy_back", "high_only"):
+        parts = [f"冲高至≥{_num(sell_target)}" if _num(sell_target) else "冲高"]
+        parts.append(vol_txt)
+        s = " ∧ ".join(parts) + " → 自动卖出"
+        if kind == "high_sell_then_buy_back" and _num(target):
+            s += f"；回补价≤{_num(target)}"
+    else:
+        s = f"{kind}（默认复合确认）"
+    if _num(stop):
+        s += f"；止损{_num(stop)}"
+    return s
+
+
+@router.get("/conditions")
 def t_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None):
     """条件列表（含表达式摘要，供 Agent/前端显示）。"""
     conds = t_db.list_active_conditions(symbol=symbol, trade_date=trade_date)
@@ -207,7 +248,7 @@ def t_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None)
                     expr = None
             c["expression_summary"] = expression_summary(expr) if expr else "(无效表达式)"
         else:
-            c["expression_summary"] = "(默认复合确认逻辑)"
+            c["expression_summary"] = _default_condition_summary(c)
     return {"conditions": conds}
 
 

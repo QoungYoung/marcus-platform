@@ -193,6 +193,10 @@
 .tac-empty { color:var(--bi-ink-soft); text-align:center; padding:18px; }
 .tac-muted { color:var(--bi-ink-soft); }
 
+/* 监控条件触发摘要：主行（何时买入/卖出）+ 明细行（时段/复归/企稳） */
+.tac-cond-main { font-weight:600; color:var(--bi-ink); white-space:normal; line-height:1.35; }
+.tac-cond-sub { font-size:11px; color:var(--bi-ink-soft); margin-top:2px; white-space:normal; }
+
 /* 状态徽章 */
 .tac-status { display:inline-block; padding:2px 8px; border-radius:6px; font-size:12px; font-weight:700; white-space:nowrap; }
 .tac-status-executed,.tac-status-auto_ready { background:var(--bi-ok-bg); color:var(--bi-ok); }

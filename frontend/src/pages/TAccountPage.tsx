@@ -61,7 +61,11 @@ interface Condition {
   regime_gate: string;
   trigger_count_today: number;
   direction?: string;   // 迭代#58：custom 等显式 buy/sell；空 = 按 trigger_kind 默认
-  expression_summary?: string;  // 表达式人类可读摘要（无表达式=默认复合逻辑）
+  expression_summary?: string;  // 表达式/默认复合逻辑的人类可读摘要
+  vol_ratio_thresh?: number;    // 量比阈值（0=关闭；缺省 1.5）
+  stabilize_level?: string;     // 企稳档：not_new_low = 分时不创新低
+  start_time?: string;          // 生效时段起
+  end_time?: string;            // 生效时段止
 }
 
 interface Trigger {
@@ -163,6 +167,26 @@ const STATUS_LABEL: Record<string, string> = {
   human_confirm: '待人工', executed: '已执行', blocked: '已拦截', cancelled: '已取消',
   expired: '已过期',
 };
+
+// 条件方向：显式 direction 优先；缺省按 trigger_kind 推导（低吸→买 / 高抛→卖 / 高抛接回→先卖后买）
+function condSide(c: Condition): string {
+  if (c.direction === 'buy') return '🟢 买';
+  if (c.direction === 'sell') return '🔴 卖';
+  if (c.trigger_kind === 'low_buy' || c.trigger_kind === 'panic_vibrate') return '🟢 买';
+  if (c.trigger_kind === 'high_sell_then_buy_back') return '🔴卖→🟢买';
+  if (SELL_KINDS.has(c.trigger_kind)) return '🔴 卖';
+  return '按类型';
+}
+
+// 条件明细行（触发价/量比/企稳/止损已在摘要中，这里补时段/复归等上下文）
+function condDetail(c: Condition): string {
+  const parts: string[] = [];
+  if (c.start_time && c.end_time) parts.push(`时段 ${c.start_time}-${c.end_time}`);
+  if (c.reinform_price) parts.push(`复归价 ${c.reinform_price}`);
+  if (c.vol_ratio_thresh === 0) parts.push('无量比过滤');
+  if (c.stabilize_level) parts.push(`企稳:${c.stabilize_level === 'not_new_low' ? '不创新低' : c.stabilize_level}`);
+  return parts.join(' · ');
+}
 
 interface VrebStatus {
   enabled?: boolean;
@@ -716,15 +740,18 @@ export default function TAccountPage() {
                           <tr key={c.id}>
                             <td className="tac-sym">{c.symbol}</td>
                             <td>{TRIGGER_KIND_LABEL[c.trigger_kind] || c.trigger_kind}</td>
-                            <td>{c.direction === 'buy' ? '🟢 买' : c.direction === 'sell' ? '🔴 卖' : '按类型'}</td>
+                            <td>{condSide(c)}</td>
                             <td className="tac-muted">
-                              {c.expression_summary
-                                ? c.expression_summary
-                                : (c.trigger_kind === 'low_buy' || c.trigger_kind === 'panic_vibrate') && c.target_price
-                                  ? `≤ ${c.target_price}`
-                                  : SELL_KINDS.has(c.trigger_kind) && c.sell_target_price
-                                    ? `≥ ${c.sell_target_price}`
-                                    : '-'}
+                              <div className="tac-cond-main" title={c.expression_summary || ''}>
+                                {c.expression_summary
+                                  ? c.expression_summary
+                                  : (c.trigger_kind === 'low_buy' || c.trigger_kind === 'panic_vibrate') && c.target_price
+                                    ? `回踩至≤${c.target_price} → 自动买入`
+                                    : SELL_KINDS.has(c.trigger_kind) && c.sell_target_price
+                                      ? `冲高至≥${c.sell_target_price} → 自动卖出`
+                                      : '-'}
+                              </div>
+                              {condDetail(c) && <div className="tac-cond-sub">{condDetail(c)}</div>}
                             </td>
                             <td>{SELL_KINDS.has(c.trigger_kind) ? (c.sell_target_price ?? '-') : '-'}</td>
                             <td>{c.stop_loss_price ?? '-'}</td>
