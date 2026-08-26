@@ -191,8 +191,6 @@ def t_conditions_generate_ai(payload: dict = None):
                         "cost": round(avg, 3), "price": current})
     return {"success": True, "results": results}
 
-
-@router.get("/conditions")
 def _default_condition_summary(c: dict) -> str:
     """默认复合确认逻辑的人类可读摘要（从条件字段还原触发语义）。
 
