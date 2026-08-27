@@ -29,5 +29,5 @@
 
 - [x] 5.1 单测：golden-pit/status 冷缓存 + 外部源缓慢时 ≤5s 返回（mock 外部源）；health 在重计算期间 <1s
 - [x] 5.2 集成验证：portfolio/equity-history/daily-pnl-breakdown <1s；market/indices 1~3s（单次 2s 预算）；golden-pit/status 冷缓存 ≤7s 返回降级（外部 ArkVol 慢时按 spec 允许）、热缓存命中 <1s（数据可用时）。实测 gp/status 计算期间 /health 0.6s、portfolio 0.04s 保持响应
-- [ ] 5.3 生产部署：已热补丁上线验证（docker cp + restart，2026-08-27）；镜像重建（docker buildx --cache-from pre-resp-fix）完成后 docker compose up -d backend 替换，观察 /health、golden-pit/status 延迟与容器健康状态
+- [x] 5.3 生产部署：已上线验证（2026-08-27）。热补丁先行（docker cp + restart），随后 docker-compose 增加 backend/app 与 core 的 bind mount（../backend/app:/app/app、../core:/app/core）并 recreate 容器——代码改动随挂载持久、重建不丢；本机无法访问 PyPI（files.pythonhosted.org 超时），镜像重建暂缓，待有 PyPI 网络的机器或改用镜像源后执行。验证：/health 0.003s、portfolio 等 <0.2s、gp/status 冷缓存 5.4s 降级返回且计算期间 /health 0.003s 不冻结
 - [ ] 5.4 回归：t/*、行情 quote/kline、调度与监控任务无重复执行、无新增告警（另：marcus-worker 自 08-18 停止，golden_pit_snapshots 为 0 行，需恢复 worker 才能让快照路径生效）

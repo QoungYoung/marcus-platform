@@ -16,12 +16,18 @@ x-backend-common: &backend-common
     MARCUS_API_URL: http://backend:8000/api/v1
     # 无 tty 下 stdout 块缓冲会吞掉 print 日志（TMonitor/t-build/回测等启动行不显示）
     PYTHONUNBUFFERED: "1"
+    # 容器内以 root 运行会往源码目录写 pycache（属主变 root）；关闭字节码缓存
+    PYTHONDONTWRITEBYTECODE: "1"
   volumes:
     - ../data:/app/data
     - ../apps:/app/apps:ro
     - ../config:/app/config
     - ../logs:/app/logs
     - ../memory:/app/memory
+    # 代码 bind mount：backend/app 与 core 直接挂载（与 apps/ 同理），
+    # 代码改动即时生效、容器重建后不丢；无需每次重建镜像（本机无法访问 PyPI 重建镜像）
+    - ../backend/app:/app/app
+    - ../core:/app/core
     - /etc/localtime:/etc/localtime:ro
 
 services:
