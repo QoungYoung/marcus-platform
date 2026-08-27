@@ -99,7 +99,7 @@ def _to_out(entry: dict) -> LTCandidateOut:
 # ── 端点 ──
 
 @router.get("/candidates", response_model=LTPoolListResponse)
-async def list_candidates(
+def list_candidates(
     status: Optional[str] = Query(None, description="筛选状态: active / promoted")
 ):
     """列出长期候选池中的标的"""
@@ -123,7 +123,7 @@ async def list_candidates(
 
 
 @router.post("/candidates")
-async def add_candidate(req: AddLTCandidateRequest):
+def add_candidate(req: AddLTCandidateRequest):
     """添加候选标的到长期观察池"""
     from app.services.long_term_pool import get_long_term_pool
 
@@ -147,7 +147,7 @@ async def add_candidate(req: AddLTCandidateRequest):
 
 
 @router.delete("/candidates/{symbol:path}")
-async def remove_candidate(symbol: str):
+def remove_candidate(symbol: str):
     """从长期候选池中删除标的 —— 已禁用：长期候选池不可移除。
 
     长期候选池为持久监控（含趋势突破自动入池的标的），不允许删除。
@@ -156,7 +156,7 @@ async def remove_candidate(symbol: str):
 
 
 @router.put("/candidates/{symbol:path}")
-async def update_candidate(symbol: str, req: UpdateLTCandidateRequest):
+def update_candidate(symbol: str, req: UpdateLTCandidateRequest):
     """更新候选标的的元数据（备注、产业链名、角色）"""
     from app.services.long_term_pool import get_long_term_pool
 
@@ -175,7 +175,7 @@ async def update_candidate(symbol: str, req: UpdateLTCandidateRequest):
 
 
 @router.get("/monitor/status")
-async def get_monitor_status():
+def get_monitor_status():
     """获取长期候选池监控器状态（API/Worker 拆分后读 worker 快照）"""
     from app.services.worker_control import read_status
 

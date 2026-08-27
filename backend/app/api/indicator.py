@@ -214,7 +214,7 @@ def _calculate_zone_suggestion(zone: str) -> str:
 
 
 @router.post("/fibonacci", response_model=FibonacciResponse)
-async def calculate_fibonacci(req: FibonacciRequest):
+def calculate_fibonacci(req: FibonacciRequest):
     """
     计算斐波那契回撤价位（0.382 / 0.618 / 0.786）。
     
@@ -3368,7 +3368,7 @@ def _check_entry_tushare(symbol: str, closes: list, daily: dict) -> dict:
 
 
 @router.get("/position-add-conditions")
-async def position_add_conditions_live(symbol: str = Query(None)):
+def position_add_conditions_live(symbol: str = Query(None)):
     """实盘模式：查询持仓距离加仓还差哪些条件。
 
     逐只检查当前持仓的层级评估和门控状态，返回缺失条件清单。

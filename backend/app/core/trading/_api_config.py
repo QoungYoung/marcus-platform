@@ -33,6 +33,8 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 # ── Tushare API ───────────────────────────────────────────
 TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+# 外部调用有界超时（秒）：单次调用 <=10s，失败走缓存/降级（D3）
+TUSHARE_TIMEOUT = int(os.getenv("TUSHARE_TIMEOUT", "10"))
 
 
 def get_tushare_pro():
@@ -41,13 +43,14 @@ def get_tushare_pro():
 
     所有调用 ts.pro_api() 的地方都应改用此函数，确保 Token 统一从 .env 控制。
     支持 TUSHARE_API_URL 环境变量切换代理地址。
+    创建 DataApi 时传入有界 timeout（默认 10s，可用 TUSHARE_TIMEOUT 覆盖）。
     """
     import tushare as ts
 
     token = os.getenv("TUSHARE_TOKEN", "")
     if not token:
         raise EnvironmentError("TUSHARE_TOKEN 未在环境变量或 .env 中配置")
-    pro = ts.pro_api(token)
+    pro = ts.pro_api(token, timeout=TUSHARE_TIMEOUT)
     api_url = os.getenv("TUSHARE_API_URL", "")
     if api_url:
         pro._DataApi__http_url = api_url

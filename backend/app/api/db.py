@@ -55,7 +55,7 @@ def open_db(db_name: str):
     return conn
 
 @router.get("/query")
-async def query_table(
+def query_table(
     db: str = Query(..., description="数据库名: stock_pool(PG), etf_pool(PG), trades, news, cache"),
     table: str = Query(..., description="表名"),
     columns: Optional[str] = Query(None, description="要查询的列，逗号分隔"),
@@ -126,7 +126,7 @@ async def query_table(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/schema/{db_name}")
-async def get_schema(db_name: str) -> DbSchemaResponse:
+def get_schema(db_name: str) -> DbSchemaResponse:
     """获取数据库表结构（PG 用 information_schema，SQLite 用 sqlite_master）"""
     try:
         conn = open_db(db_name)
@@ -206,7 +206,7 @@ async def get_schema(db_name: str) -> DbSchemaResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/write")
-async def write_db(
+def write_db(
     db: str = Query(..., description="数据库名"),
     sql: str = Query(..., description="SQL语句"),
 ) -> dict:

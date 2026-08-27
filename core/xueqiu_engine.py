@@ -263,13 +263,14 @@ class XueqiuEngine:
             print(f"[ERR] 解析腾讯行情失败: {symbol} - {e}")
             return None
 
-    def get_stock_quote(self, symbol: str, use_cache: bool = True) -> Optional[dict]:
+    def get_stock_quote(self, symbol: str, use_cache: bool = True, timeout: int = 8) -> Optional[dict]:
         """
         获取股票实时行情（腾讯 qt.gtimg.cn 接口，无认证/无频率限制）
         
         Args:
             symbol: 股票代码（如 SH600519，无前缀也能自动识别）
             use_cache: 是否使用缓存（默认 True，缓存5分钟）
+            timeout: 单次请求有界超时秒数（默认 8s，D3 约束外部调用 <=10s）
             
         Returns:
             行情数据字典（与雪球格式兼容）
@@ -303,7 +304,7 @@ class XueqiuEngine:
                 'Referer': 'https://finance.qq.com/',
             })
             
-            with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
+            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
                 raw = resp.read().decode('gbk', errors='replace')
             
             if not raw or 'pv_none' in raw.lower():

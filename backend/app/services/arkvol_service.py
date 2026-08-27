@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 ARKVOL_BASE_URL = "https://arkvol.com"
 
+# 外部调用有界超时（秒）：单次调用 <=10s，失败走缓存/降级（D3）
+ARKVOL_TIMEOUT = float(os.environ.get("ARKVOL_TIMEOUT", "10"))
+
 PAGE_ENDPOINTS = {
     "alla": "/api/data/alla",
     "alla-tech": "/api/data/alla-tech",
@@ -106,7 +109,7 @@ def _build_headers(api_key: str, extra: Optional[Dict[str, str]] = None) -> Dict
     return headers
 
 
-def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
+def _request_json(api_key: str, path: str, timeout: float = ARKVOL_TIMEOUT) -> Dict[str, Any]:
     url = f"{ARKVOL_BASE_URL}{path}"
     req = Request(url, headers=_build_headers(api_key), method="GET")
 
@@ -132,7 +135,7 @@ def _request_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
     return payload
 
 
-def _request_raw_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, Any]:
+def _request_raw_json(api_key: str, path: str, timeout: float = ARKVOL_TIMEOUT) -> Dict[str, Any]:
     """GET 请求（success 包装），用于 funds-greed/fund 与 tech-hardware-greed 等非 {code,msg,data} 接口。"""
     url = f"{ARKVOL_BASE_URL}{path}"
     req = Request(url, headers=_build_headers(api_key), method="GET")
@@ -157,7 +160,7 @@ def _request_raw_json(api_key: str, path: str, timeout: int = 30) -> Dict[str, A
     return payload
 
 
-def _request_post_json(api_key: str, path: str, body: Optional[Dict] = None, timeout: int = 30) -> Dict[str, Any]:
+def _request_post_json(api_key: str, path: str, body: Optional[Dict] = None, timeout: float = ARKVOL_TIMEOUT) -> Dict[str, Any]:
     """POST 请求，用于 ai-summary 等端点。"""
     url = f"{ARKVOL_BASE_URL}{path}"
     data = json.dumps(body or {}).encode("utf-8")
@@ -224,7 +227,7 @@ class ArkvolService:
         req = Request(url, headers=_build_headers(self.api_key), method="GET")
 
         try:
-            with urlopen(req, timeout=60) as resp:
+            with urlopen(req, timeout=ARKVOL_TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
         except HTTPError as exc:
             try:
@@ -250,7 +253,7 @@ class ArkvolService:
         返回 {success, fund_code, data: [{date, greed, close}]}。
         用于防御组合标的（014028/020412/020741/017193）贪婪快照。
         """
-        return _request_raw_json(self.api_key, f"/api/funds-greed/fund/{fund_code}?days={days}", timeout=60)
+        return _request_raw_json(self.api_key, f"/api/funds-greed/fund/{fund_code}?days={days}", timeout=ARKVOL_TIMEOUT)
 
     def fetch_tech_greed(self, days: int = 365) -> Dict[str, Any]:
         """获取半导体/科技板块贪婪序列（GET）。
@@ -258,4 +261,4 @@ class ArkvolService:
         返回 {success, data: {fund_code: [{date, greed, close}]}}。
         覆盖 588200（科创芯片）/512480（半导体）等 9 只科技 ETF。
         """
-        return _request_raw_json(self.api_key, f"/api/tech-hardware-greed/series?days={days}", timeout=60)
+        return _request_raw_json(self.api_key, f"/api/tech-hardware-greed/series?days={days}", timeout=ARKVOL_TIMEOUT)

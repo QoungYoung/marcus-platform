@@ -8,6 +8,7 @@
 """
 
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -69,6 +70,12 @@ class GoldenPitService:
         self._last_known_greed: Dict[str, float] = {}  # 用于盘中阈值穿越检测
         self._cache: Dict[str, tuple] = {}  # page_id → (data, timestamp)
         self._kline_cache: Dict[str, tuple] = {}  # etf_code → (bars, timestamp)
+        # ── 响应级状态缓存（D2: TTL + single-flight + deadline 降级）──
+        self._status_cache: Optional[Dict[str, Any]] = None
+        self._status_cache_ts: float = 0.0
+        self._status_lock = threading.Lock()
+        self._status_compute_lock = threading.Lock()
+        self._status_last_error: Optional[str] = None
 
     # ═══════════════════════════════════════════════════════════════
     # Data fetching helpers
@@ -259,15 +266,120 @@ class GoldenPitService:
                     "empty_reason": selection.get("empty_reason", ""),
                 }
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self, ttl: float = 300.0, deadline: float = 5.0) -> Dict[str, Any]:
         """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。
 
-        优先从 DB 快照读取（每日 15:30 定时落库），无数据时回退 ArkVol API。
+        响应级 TTL 缓存（默认 300s）+ single-flight：并发请求共享一次计算；
+        计算在后台线程执行，前台最多等待 deadline（默认 5s），超时返回最近
+        一次成功结果（_source=stale）或最小降级结构（_source=degraded），
+        绝不阻塞调用方（事件循环）无限等待外部数据源。
         """
+        now = time.time()
+        with self._status_lock:
+            if self._status_cache is not None and now - self._status_cache_ts < ttl:
+                cached = dict(self._status_cache)
+                cached["_source"] = "cached"
+                return cached
+
+        # single-flight：已有请求在计算中时，等待其结果（至多 deadline）
+        if not self._status_compute_lock.acquire(blocking=False):
+            waited = 0.0
+            step = 0.05
+            while waited < deadline:
+                time.sleep(step)
+                waited += step
+                with self._status_lock:
+                    if self._status_cache is not None:
+                        if time.time() - self._status_cache_ts < ttl:
+                            cached = dict(self._status_cache)
+                            cached["_source"] = "cached"
+                            return cached
+                        stale = dict(self._status_cache)
+                        stale["_source"] = "stale"
+                        stale["_degraded_reason"] = "状态计算中，返回最近一次结果"
+                        return stale
+            return self._degraded_status(f"另一个计算线程超过 {deadline:.1f}s 未返回")
+
+        try:
+            # 再次检查缓存（可能已被并发线程写入）
+            with self._status_lock:
+                if self._status_cache is not None and time.time() - self._status_cache_ts < ttl:
+                    cached = dict(self._status_cache)
+                    cached["_source"] = "cached"
+                    return cached
+
+            done: Dict[str, Optional[Dict[str, Any]]] = {"result": None}
+
+            def _compute_and_store() -> None:
+                try:
+                    data = self._compute_status_uncached()
+                    with self._status_lock:
+                        self._status_cache = data
+                        self._status_cache_ts = time.time()
+                    done["result"] = data
+                except Exception as exc:  # 外部数据源故障时降级，绝不抛出阻塞调用方
+                    self._status_last_error = str(exc)
+                    logger.warning("黄金坑状态后台计算失败: %s", exc)
+                    done["result"] = None
+
+            worker = threading.Thread(target=_compute_and_store, daemon=True, name="golden-pit-status")
+            worker.start()
+            worker.join(timeout=deadline)
+
+            if done["result"] is not None:
+                result = dict(done["result"])
+                result.setdefault("_source", "api")
+                return result
+
+            with self._status_lock:
+                if self._status_cache is not None:
+                    stale = dict(self._status_cache)
+                    stale["_source"] = "stale"
+                    stale["_degraded_reason"] = f"状态计算超过 {deadline:.1f}s，返回最近一次结果"
+                    return stale
+            return self._degraded_status(
+                f"黄金坑状态计算超过 {deadline:.1f}s" + (f"（{self._status_last_error}）" if self._status_last_error else "")
+            )
+        finally:
+            self._status_compute_lock.release()
+
+    def _compute_status_uncached(self) -> Dict[str, Any]:
+        """无缓存计算：优先 DB 快照，无数据回退 ArkVol API。"""
         db_result = self._get_status_from_db()
         if db_result is not None:
+            db_result.setdefault("_source", "db")
             return db_result
-        return self._get_status_from_api()
+        result = self._get_status_from_api()
+        result.setdefault("_source", "api")
+        return result
+
+    def refresh_status_cache(self) -> Optional[Dict[str, Any]]:
+        """后台/定时刷新缓存（启动预热、快照落库后调用）。失败返回 None 不影响主流程。"""
+        try:
+            data = self._compute_status_uncached()
+            with self._status_lock:
+                self._status_cache = data
+                self._status_cache_ts = time.time()
+            return data
+        except Exception as exc:
+            self._status_last_error = str(exc)
+            logger.warning("黄金坑状态缓存刷新失败: %s", exc)
+            return None
+
+    @staticmethod
+    def _degraded_status(reason: str) -> Dict[str, Any]:
+        """最小降级结构：字段与正常响应兼容，绝不阻塞调用方。"""
+        return {
+            "as_of": "",
+            "golden_pit_window": {"active": False, "phase": "idle", "pit_count": 0},
+            "indices": [],
+            "triple_confirmation": {},
+            "prediction": {},
+            "summary": "",
+            "global_macro": {},
+            "_source": "degraded",
+            "_degraded_reason": reason,
+        }
 
     def _get_status_from_api(self) -> Dict[str, Any]:
         """从 ArkVol API 获取完整状态。使用 ai-summary (POST, 轻量) 替代 alla (GET, 重型)。"""
@@ -589,7 +701,14 @@ class GoldenPitService:
 
     def save_daily_snapshot(self, now: Optional[datetime] = None) -> List[Any]:
         """保存每日快照到数据库。先同步全量历史序列，再写入当天状态快照。"""
-        return _repository.save_daily_snapshot(self, now=now)
+        saved = _repository.save_daily_snapshot(self, now=now)
+        # 落库后刷新进程内响应缓存（快照路径成功后 /status 可直接走 DB 快速重建）
+        if saved:
+            try:
+                self.refresh_status_cache()
+            except Exception as exc:
+                logger.warning("快照落库后刷新状态缓存失败: %s", exc)
+        return saved
 
 
     def format_morning_report(self, status: Optional[Dict[str, Any]] = None) -> str:

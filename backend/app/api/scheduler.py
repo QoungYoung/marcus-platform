@@ -36,7 +36,7 @@ def _snapshot() -> dict:
 
 
 @router.get("/status")
-async def get_scheduler_status():
+def get_scheduler_status():
     """获取调度器状态（来自 worker 快照）"""
     snap = _snapshot()
     if not snap:
@@ -47,7 +47,7 @@ async def get_scheduler_status():
 
 
 @router.get("/tasks")
-async def get_tasks():
+def get_tasks():
     """获取所有任务（来自 worker 快照）"""
     snap = _snapshot()
     return {
@@ -58,7 +58,7 @@ async def get_tasks():
 
 
 @router.get("/tasks/{task_id}")
-async def get_task(task_id: str):
+def get_task(task_id: str):
     """获取单个任务详情（来自 worker 快照）"""
     task = next((t for t in _snapshot().get("tasks", []) if t.get("id") == task_id), None)
     if not task:
@@ -67,7 +67,7 @@ async def get_task(task_id: str):
 
 
 @router.get("/tasks/{task_id}/executions")
-async def get_task_executions(
+def get_task_executions(
     task_id: str,
     limit: int = Query(20, ge=1, le=100),
 ):
@@ -79,32 +79,32 @@ async def get_task_executions(
 
 
 @router.post("/tasks/{task_id}/trigger")
-async def trigger_task(task_id: str):
+def trigger_task(task_id: str):
     """手动触发任务（命令交由 worker 执行）"""
     return send_command("scheduler.trigger", {"task_id": task_id})
 
 
 @router.post("/tasks/{task_id}/enable")
-async def enable_task(task_id: str):
+def enable_task(task_id: str):
     """启用任务"""
     return send_command("scheduler.enable", {"task_id": task_id})
 
 
 @router.post("/tasks/{task_id}/disable")
-async def disable_task(task_id: str):
+def disable_task(task_id: str):
     """禁用任务"""
     return send_command("scheduler.disable", {"task_id": task_id})
 
 
 @router.patch("/tasks/{task_id}")
-async def update_task(task_id: str, updates: TaskUpdateRequest):
+def update_task(task_id: str, updates: TaskUpdateRequest):
     """更新任务配置"""
     update_dict = updates.model_dump(exclude_none=True)
     return send_command("scheduler.update", {"task_id": task_id, "updates": update_dict})
 
 
 @router.get("/next-runs")
-async def get_next_runs():
+def get_next_runs():
     """获取即将执行的任务（来自 worker 快照）"""
     snap = _snapshot()
     return {
@@ -115,19 +115,19 @@ async def get_next_runs():
 
 
 @router.post("/reload")
-async def reload_config():
+def reload_config():
     """重新加载配置（命令交由 worker 执行）"""
     return send_command("scheduler.reload")
 
 
 @router.post("/start")
-async def start_scheduler():
+def start_scheduler():
     """启动调度器（命令交由 worker 执行）"""
     return send_command("scheduler.start")
 
 
 @router.get("/executions/{execution_id}/log")
-async def get_execution_log(execution_id: str):
+def get_execution_log(execution_id: str):
     """获取执行详细日志"""
     log_path = scheduler_service.get_execution_log(execution_id)
     if not log_path:
@@ -141,7 +141,7 @@ async def get_execution_log(execution_id: str):
 
 
 @router.get("/stop-loss-monitor")
-async def get_stop_loss_monitor_status():
+def get_stop_loss_monitor_status():
     """获取止损监控器运行状态（来自 worker 快照）"""
     snap = _snapshot()
     status = snap.get("stop_loss_monitor") or {}
@@ -155,7 +155,7 @@ async def get_stop_loss_monitor_status():
 
 
 @router.get("/stop-loss-monitor/distances")
-async def get_stop_loss_distances():
+def get_stop_loss_distances():
     """获取所有持仓到各止损线的距离（来自 worker 快照）"""
     snap = _snapshot()
     if not snap:
@@ -169,30 +169,30 @@ async def get_stop_loss_distances():
 
 
 @router.post("/stop-loss-monitor/start")
-async def start_stop_loss_monitor():
+def start_stop_loss_monitor():
     """启动止损监控器（命令交由 worker 执行）"""
     return send_command("monitor.stop_loss.start")
 
 
 @router.post("/stop-loss-monitor/stop")
-async def stop_stop_loss_monitor():
+def stop_stop_loss_monitor():
     """停止止损监控器（命令交由 worker 执行）"""
     return send_command("monitor.stop_loss.stop")
 
 
 @router.post("/tier-monitor/start")
-async def start_tier_monitor_endpoint():
+def start_tier_monitor_endpoint():
     """启动加仓层级监控器（命令交由 worker 执行）"""
     return send_command("monitor.tier.start")
 
 
 @router.post("/tier-monitor/stop")
-async def stop_tier_monitor_endpoint():
+def stop_tier_monitor_endpoint():
     """停止加仓层级监控器（命令交由 worker 执行）"""
     return send_command("monitor.tier.stop")
 
 
 @router.post("/stop")
-async def stop_scheduler():
+def stop_scheduler():
     """停止调度器（命令交由 worker 执行）"""
     return send_command("scheduler.stop")

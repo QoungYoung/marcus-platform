@@ -143,6 +143,17 @@ async def lifespan(app: FastAPI):
             print(f"[Main] ⚠️ daily-pnl-breakdown 缓存预热失败（非致命）: {e}")
     asyncio.create_task(_warm_breakdown_cache())
 
+    # 预热黄金坑状态缓存（后台线程，避免冷缓存时 /golden-pit/status 触发页面级重计算）
+    async def _warm_golden_pit_cache():
+        await asyncio.sleep(3)
+        try:
+            from app.services.golden_pit_service import get_golden_pit_service
+            await asyncio.to_thread(get_golden_pit_service().refresh_status_cache)
+            print("[Main] ✅ golden-pit 状态缓存预热完成")
+        except Exception as e:
+            print(f"[Main] ⚠️ golden-pit 缓存预热失败（非致命）: {e}")
+    asyncio.create_task(_warm_golden_pit_cache())
+
     print("[Main] ✅ API 进程就绪（调度/监控/QQ Bot 已拆分到 worker 进程）")
 
     yield

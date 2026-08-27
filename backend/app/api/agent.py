@@ -692,7 +692,7 @@ async def chat(request: ChatRequest):
 
 
 @router.get("/tools")
-async def list_tools():
+def list_tools():
     """
     List available tools for the trading agent.
     """
@@ -708,7 +708,7 @@ async def list_tools():
 
 
 @router.get("/skills")
-async def list_skills():
+def list_skills():
     """
     List available skills for the trading agent.
     """

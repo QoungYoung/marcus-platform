@@ -69,7 +69,7 @@ def _make_executor(request: Request, account: str = "stock"):
 
 
 @router.post("", response_model=TradeResponse)
-async def execute_trade(trade: TradeRequest, request: Request):
+def execute_trade(trade: TradeRequest, request: Request):
     """
     Execute a trade (buy or sell).
     Note: This is paper trading - no real money involved.
@@ -164,7 +164,7 @@ async def execute_trade(trade: TradeRequest, request: Request):
 
 
 @router.get("", response_model=TradeHistoryResponse)
-async def get_trade_history(
+def get_trade_history(
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     limit: int = Query(20, ge=1, le=100, description="Number of records"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -213,7 +213,7 @@ async def get_trade_history(
 
 
 @router.get("/orders")
-async def get_pending_orders(
+def get_pending_orders(
     request: Request,
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     status: Optional[str] = Query(None, description="Filter by status: 提交中/未成交/部分成交/已撤销"),
@@ -242,7 +242,7 @@ async def get_pending_orders(
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
-async def get_trade(order_id: str, account: str = Query("stock", description="账户标识")):
+def get_trade(order_id: str, account: str = Query("stock", description="账户标识")):
     """Get specific trade by order ID from PostgreSQL."""
     db = SessionLocal()
     try:
@@ -270,7 +270,7 @@ async def get_trade(order_id: str, account: str = Query("stock", description="�
 
 
 @router.get("/voided")
-async def get_voided_trades(request: Request, account: str = Query("stock", description="账户标识")):
+def get_voided_trades(request: Request, account: str = Query("stock", description="账户标识")):
     """Get all voided (cancelled) trades."""
     try:
         executor = _make_executor(request, account)
@@ -283,7 +283,7 @@ async def get_voided_trades(request: Request, account: str = Query("stock", desc
 
 
 @router.post("/{trade_id}/void", response_model=VoidResponse)
-async def void_trade(trade_id: int, body: VoidRequest, request: Request,
+def void_trade(trade_id: int, body: VoidRequest, request: Request,
                      account: str = Query("stock", description="账户标识")):
     """Void a trade (soft-delete, excluded from position calculation)."""
     try:
@@ -299,7 +299,7 @@ async def void_trade(trade_id: int, body: VoidRequest, request: Request,
 
 
 @router.post("/{trade_id}/unvoid", response_model=VoidResponse)
-async def unvoid_trade(trade_id: int, request: Request,
+def unvoid_trade(trade_id: int, request: Request,
                        account: str = Query("stock", description="账户标识")):
     """Restore a voided trade."""
     try:
@@ -315,7 +315,7 @@ async def unvoid_trade(trade_id: int, request: Request,
 
 
 @router.delete("/{order_id}/cancel")
-async def cancel_order(order_id: str, request: Request,
+def cancel_order(order_id: str, request: Request,
                        account: str = Query("stock", description="账户标识")):
     """
     Cancel a pending order by order ID.

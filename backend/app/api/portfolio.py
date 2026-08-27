@@ -782,7 +782,7 @@ def get_positions(account: str = Query("stock", description="账户标识")):
 
 
 @router.post("/unfreeze")
-async def unfreeze_funds(account: str = Query("stock", description="账户标识")):
+def unfreeze_funds(account: str = Query("stock", description="账户标识")):
     """Manually unfreeze all frozen funds.
 
     Used when trading exceptions cause funds to be incorrectly frozen.
@@ -845,7 +845,7 @@ async def unfreeze_funds(account: str = Query("stock", description="账户标识
 
 
 @router.post("/adjust-capital")
-async def adjust_capital(req: CapitalAdjustRequest, account: str = Query("stock", description="账户标识")):
+def adjust_capital(req: CapitalAdjustRequest, account: str = Query("stock", description="账户标识")):
     """手动调整可用资金（入金为正，出金为负），用于修正总资产。
 
     调整会记录到 paper_capital_adjustments，并在每日快照与权益曲线回放中生效。

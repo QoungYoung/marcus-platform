@@ -21,7 +21,7 @@ def _get_service() -> GoldenPitService:
 # ── v2 endpoints ──
 
 @router.get("/industry-preview")
-async def get_industry_preview(as_of: Optional[str] = Query(None, description="回放指定日期，默认今天")):
+def get_industry_preview(as_of: Optional[str] = Query(None, description="回放指定日期，默认今天")):
     """全行业监测提前 dry-run 预览：模拟推进今日窗口与资金池分配，不落单、不写状态。
 
     执行模式(industry_execute=true)下 status 只读落盘结果，09:36 DCA 任务运行前今日计划为 0；
@@ -41,7 +41,7 @@ async def get_industry_preview(as_of: Optional[str] = Query(None, description="�
 
 
 @router.get("/status")
-async def get_golden_pit_status():
+def get_golden_pit_status():
     """获取完整的 per-index 黄金坑状态 + 窗口信息 + 三重确认 + 预测。"""
     try:
         result = _get_service().get_status()
@@ -54,7 +54,7 @@ async def get_golden_pit_status():
 
 
 @router.get("/history")
-async def get_golden_pit_history(
+def get_golden_pit_history(
     index: str = Query("all", description="基金代码, 'all' 返回全部A股宽基"),
     days: int = Query(60, ge=1, le=2000, description="返回天数"),
 ):
@@ -70,7 +70,7 @@ async def get_golden_pit_history(
 
 
 @router.get("/snapshots")
-async def get_golden_pit_snapshots(
+def get_golden_pit_snapshots(
     days: int = Query(30, ge=1, le=365, description="返回天数"),
 ):
     """从数据库读取历史快照。"""
@@ -87,7 +87,7 @@ async def get_golden_pit_snapshots(
 # ── 板块拆分运行时配置 endpoints ──
 
 @router.get("/sector-config")
-async def get_sector_config_api():
+def get_sector_config_api():
     """获取黄金坑板块拆分配置项列表（供页面配置弹窗）。"""
     try:
         from app.services.golden_pit_sector_service import list_sector_config
@@ -100,7 +100,7 @@ async def get_sector_config_api():
 
 
 @router.put("/sector-config")
-async def update_sector_config_api(
+def update_sector_config_api(
     body: dict = Body(..., description="{\"values\": {config_key: value}}"),
 ):
     """批量更新黄金坑板块拆分配置（即时生效，无需重启）。"""
@@ -129,7 +129,7 @@ async def update_sector_config_api(
 # ── 科技牛熊判断 & 现状 endpoints ──
 
 @router.get("/tech-status")
-async def get_tech_status_api(as_of: str = Query(None, description="数据截止日 YYYY-MM-DD（默认最新）")):
+def get_tech_status_api(as_of: str = Query(None, description="数据截止日 YYYY-MM-DD（默认最新）")):
     """获取科技板块牛熊判断 + tech7/宽基现状（趋势腿MA20 + 贪婪250日分位）。"""
     try:
         from app.services.golden_pit_tech_status import get_tech_status
@@ -144,7 +144,7 @@ async def get_tech_status_api(as_of: str = Query(None, description="数据截止
 # ── DCA ETF 配置 & 执行日志 endpoints ──
 
 @router.get("/etf-configs")
-async def get_etf_configs():
+def get_etf_configs():
     """获取所有黄金坑 ETF 定投配置。"""
     try:
         from app.database import SessionLocal
@@ -188,7 +188,7 @@ async def get_etf_configs():
 
 
 @router.put("/etf-configs/{fund_code}")
-async def update_etf_config(fund_code: str, body: dict):
+def update_etf_config(fund_code: str, body: dict):
     """更新指定 ETF 的定投配置（enabled / strategy / daily_amount / max_total_amount）。"""
     try:
         from app.database import SessionLocal
@@ -228,7 +228,7 @@ async def update_etf_config(fund_code: str, body: dict):
 
 
 @router.get("/dca/logs")
-async def get_dca_logs(
+def get_dca_logs(
     days: int = Query(30, ge=1, le=365, description="返回天数"),
     fund_code: str = Query("", description="筛选基金代码，空=全部"),
 ):
@@ -273,7 +273,7 @@ async def get_dca_logs(
 
 
 @router.get("/dca/status")
-async def get_dca_status():
+def get_dca_status():
     """获取当前 DCA 执行状态概览（本窗口已执行/待执行/累计金额）。"""
     try:
         from app.database import SessionLocal
@@ -371,7 +371,7 @@ async def get_dca_status():
 # ── 前端展示配置 ──
 
 @router.get("/display-config")
-async def get_display_config():
+def get_display_config():
     """返回前端展示所需的统一配置（颜色、标签、策略名等）。"""
     from app.services.golden_pit_service import _display_config
     return {"code": 0, "data": _display_config()}
@@ -380,7 +380,7 @@ async def get_display_config():
 # ── v1 backward-compat endpoints ──
 
 @router.get("/score")
-async def get_score():
+def get_score():
     """[v1 兼容] 获取综合评分。新代码请使用 /status。"""
     try:
         result = _get_service().get_score()
@@ -393,7 +393,7 @@ async def get_score():
 
 
 @router.get("/factors")
-async def get_factors():
+def get_factors():
     """[v1 兼容] 获取因子明细。新代码请使用 /status。"""
     try:
         result = _get_service().get_factors()

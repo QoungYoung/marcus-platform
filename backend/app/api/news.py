@@ -17,7 +17,7 @@ router = APIRouter(prefix="/news", tags=["News"])
 
 
 @router.get("", response_model=NewsListResponse)
-async def get_news(
+def get_news(
     symbol: Optional[str] = Query(None, description="Filter by stock symbol"),
     limit: int = Query(20, ge=1, le=100, description="Number of records"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -124,7 +124,7 @@ async def get_news(
 
 
 @router.get("/sentiment", response_model=SentimentResponse)
-async def get_market_sentiment():
+def get_market_sentiment():
     """
     Get overall market sentiment based on recent news.
     """

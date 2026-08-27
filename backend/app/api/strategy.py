@@ -17,7 +17,7 @@ router = APIRouter(prefix="/strategy", tags=["Strategy"])
 
 
 @router.get("/current", response_model=StrategyResponse)
-async def get_current_strategy():
+def get_current_strategy():
     """
     Get current trading strategy state.
     Includes stance, position limits, watchlist, and risk parameters.
@@ -68,7 +68,7 @@ async def get_current_strategy():
 
 
 @router.get("/scans", response_model=ScanHistoryResponse)
-async def get_scan_history(
+def get_scan_history(
     limit: int = Query(10, ge=1, le=50, description="Number of records"),
 ):
     """

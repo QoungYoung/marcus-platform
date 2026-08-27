@@ -71,7 +71,7 @@ def _get_latest_pi_analysis(workspace: Path, date_str: str = None) -> Optional[d
 
 
 @router.get("/latest")
-async def get_latest_scan_report(
+def get_latest_scan_report(
     date: Optional[str] = Query(None, description="日期 YYYY-MM-DD，默认今天"),
 ):
     """
@@ -167,7 +167,7 @@ async def get_latest_scan_report(
 
 
 @router.get("/pi-analysis")
-async def get_pi_analysis_history(
+def get_pi_analysis_history(
     start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD，默认本周一"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，默认今天"),
 ):
@@ -253,7 +253,7 @@ async def get_pi_analysis_history(
 
 
 @router.get("/trade-reports")
-async def get_trade_history(
+def get_trade_history(
     start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD，默认本周一"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，默认今天"),
 ):
@@ -339,7 +339,7 @@ async def get_trade_history(
 
 
 @router.get("/history")
-async def get_scan_history(
+def get_scan_history(
     date: Optional[str] = Query(None, description="日期 YYYY-MM-DD，默认今天"),
     limit: int = Query(10, ge=1, le=50, description="返回条数"),
 ):

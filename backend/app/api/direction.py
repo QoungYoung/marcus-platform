@@ -295,7 +295,7 @@ def _fetch_all_moneyflow(pro, date: str, symbols: List[str],
 # ── 主端点 ───────────────────────────────────────────────
 
 @router.get("/predict")
-async def predict_direction(
+def predict_direction(
     horizon: str = Query("5d", description="预测周期: 1d/3d/5d"),
     date: Optional[str] = Query(None, description="历史日期 YYYYMMDD，不传使用最新"),
     min_return: float = Query(-5.0, description="最低预期收益率阈值(%)"),
@@ -416,7 +416,7 @@ async def predict_direction(
 
 
 @router.get("/validate")
-async def validate_models():
+def validate_models():
     """返回最近一次走步前进验证的指标。
 
     包含回归指标（RMSE, Spearman R, 方向准确率）和纯多头组合指标。

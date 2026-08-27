@@ -78,7 +78,7 @@ def get_market_indices():
         indices = []
         for symbol, name in zip(indices_symbols, indices_names):
             try:
-                quote = engine.get_stock_quote(symbol)
+                quote = engine.get_stock_quote(symbol, timeout=2)  # D3: 单次<=2s，5 个指数总预算<=10s
                 indices.append(IndexResponse(
                     symbol=symbol,
                     name=name,
@@ -190,7 +190,7 @@ def get_stock_quote(symbol: str):
 
 
 @router.get("/global", response_model=GlobalMarketResponse)
-async def get_global_market():
+def get_global_market():
     """
     Get US indices and commodities (gold, crude oil).
     Data source: akshare (US indices, commodities) + xueqiu (A50 futures).
@@ -236,7 +236,7 @@ async def get_global_market():
 # ========== 股票/ETF 搜索 API (用于 @mention) ==========
 
 @router.get("/search")
-async def search_market(q: str = Query(..., min_length=1, description="搜索关键词(代码或名称)")):
+def search_market(q: str = Query(..., min_length=1, description="搜索关键词(代码或名称)")):
     """
     搜索股票和ETF，用于聊天 @提及 功能。
     股票从 PostgreSQL stock_pool 表动态查询，ETF 从 PostgreSQL etf_pool 表查询。
@@ -798,7 +798,7 @@ def get_stock_pro_bar(
 # ========== 概念板块 API (数据源: PostgreSQL stock_pool) ==========
 
 @router.get("/concept")
-async def get_concept_mapping(
+def get_concept_mapping(
     concept: Optional[str] = Query(None, description="概念名称，如 人形机器人。不传则返回所有概念列表"),
     limit: int = Query(30, ge=1, le=200, description="返回数量上限"),
 ):
@@ -1310,7 +1310,7 @@ def get_concept_fund_flow_5d(
 # ========== 大盘资金流向 API (与 jobs/fund_flow._fetch_market_moneyflow_dc 同源) ==========
 
 @router.get("/moneyflow-mkt")
-async def get_moneyflow_mkt(
+def get_moneyflow_mkt(
     trade_date: str = Query(None, description="交易日期，YYYYMMDD。不传则使用实时数据"),
     source: str = Query("auto", description="数据源: auto(自动,优先实时) / realtime(东财实时,仅当日) / tushare(Tushare日频)"),
 ):
@@ -2212,7 +2212,7 @@ def _save_market_diagnosis(result: dict):
 # ========== 市场状态查询 API ==========
 
 @router.get("/market-state")
-async def get_market_state():
+def get_market_state():
     """查询当日市场状态（趋势/震荡/极端），从 PostgreSQL 读取缓存的诊断结果"""
     import json as _json
     from app.database import SessionLocal
@@ -2337,7 +2337,7 @@ def get_top_movers(
 # ========== 交易日状态 API (数据源: Tushare trade_cal) ==========
 
 @router.get("/trade-status")
-async def get_trade_status():
+def get_trade_status():
     """
     获取当前交易日状态和交易时段。
     数据源: Tushare trade_cal API。
@@ -2437,7 +2437,7 @@ async def get_trade_status():
 # ========== 东财实时板块资金流向 API (数据源: 东财 push2) ==========
 
 @router.get("/sector-flow")
-async def get_sector_flow_endpoint(
+def get_sector_flow_endpoint(
     type: str = Query("concept", description="板块类型: concept(概念) / industry(行业) / region(地域)"),
     sort_by: str = Query("main_net", description="排序字段: main_net(主力净流入) / pct_change(涨跌幅) / main_net_rate(主力占比)"),
     limit: int = Query(20, ge=1, le=200, description="返回数量上限"),
@@ -2507,7 +2507,7 @@ async def get_sector_flow_endpoint(
 
 
 @router.get("/sector-summary")
-async def get_sector_summary_endpoint(
+def get_sector_summary_endpoint(
     top_n: int = Query(5, ge=1, le=20, description="每个维度返回数量"),
 ):
     """
@@ -2543,7 +2543,7 @@ async def get_sector_summary_endpoint(
 
 
 @router.get("/sector-flow/{name}")
-async def get_sector_flow_by_name_endpoint(
+def get_sector_flow_by_name_endpoint(
     name: str,
     type: str = Query("concept", description="板块类型: concept / industry"),
 ):
@@ -2576,7 +2576,7 @@ async def get_sector_flow_by_name_endpoint(
 
 
 @router.get("/intraday-min")
-async def get_intraday_min(
+def get_intraday_min(
     symbols: str = Query(..., description="股票代码，逗号分隔，如 000001.SZ,600519.SH"),
     freq: str = Query("1min", description="分钟K线周期: 1min/5min/15min/30min/60min"),
 ):
@@ -2729,7 +2729,7 @@ async def get_intraday_min(
 # ── 行业龙头排行 ──
 
 @router.get("/industry-leaderboard", response_model=LeaderboardResponse)
-async def get_industry_leaderboard(
+def get_industry_leaderboard(
     limit: int = Query(50, ge=1, le=100, description="返回条数"),
     sort_by: str = Query("composite_score", description="排序字段: composite_score/trend_score/volume_price_score/industry_relative_score/price_residual_score/capital_score/change_pct"),
     industry: Optional[str] = Query(None, description="行业筛选（申万一级行业名称）"),
@@ -2781,7 +2781,7 @@ async def get_industry_leaderboard(
 # ── 前瞻收益验证 ──
 
 @router.get("/forward-returns/{symbol}", response_model=ForwardReturnsResponse)
-async def get_forward_returns(
+def get_forward_returns(
     symbol: str,
     date: str = Query(..., description="基准日期 YYYYMMDD"),
 ):

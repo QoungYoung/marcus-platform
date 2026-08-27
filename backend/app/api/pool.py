@@ -57,7 +57,7 @@ def _to_out(entry: dict) -> CandidateOut:
 
 
 @router.get("/candidates", response_model=PoolListResponse)
-async def list_candidates(
+def list_candidates(
     status: str = Query(None, description="筛选: waiting / ready / expired / promoted"),
 ):
     """列出候选池中的所有标的"""
@@ -82,7 +82,7 @@ async def list_candidates(
 
 
 @router.post("/candidates")
-async def add_candidate(req: AddCandidateRequest):
+def add_candidate(req: AddCandidateRequest):
     """手动添加候选标的到池中"""
     from app.services.candidate_pool import get_candidate_pool
     from app.api.indicator import _to_xueqiu_symbol
@@ -97,7 +97,7 @@ async def add_candidate(req: AddCandidateRequest):
 
 
 @router.delete("/candidates/{symbol:path}")
-async def remove_candidate(symbol: str):
+def remove_candidate(symbol: str):
     """从候选池中删除标的"""
     from app.services.candidate_pool import get_candidate_pool
     from app.api.indicator import _to_xueqiu_symbol
@@ -110,7 +110,7 @@ async def remove_candidate(symbol: str):
 
 
 @router.post("/refresh", response_model=RefreshResponse)
-async def refresh_pool():
+def refresh_pool():
     """手动触发候选池刷新（重跑 check_entry_filters）"""
     from app.services.candidate_pool import get_candidate_pool
 

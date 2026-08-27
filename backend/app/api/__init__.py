@@ -39,7 +39,7 @@ app.include_router(proxy.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")
-async def root():
+def root():
     return {
         "name": "Marcus AI Trading Platform",
         "version": "1.0.0",
@@ -48,7 +48,7 @@ async def root():
 
 
 @app.get("/api/v1/health")
-async def health_check():
+def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
@@ -58,7 +58,7 @@ async def health_check():
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
+def global_exception_handler(request, exc):
     return JSONResponse(
         status_code=500,
         content={"detail": str(exc)},

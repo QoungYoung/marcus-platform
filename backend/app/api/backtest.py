@@ -94,7 +94,7 @@ def _task_to_dict(task: BacktestTask) -> dict:
 # ── API Endpoints ──
 
 @router.post("/create")
-async def create_backtest(req: CreateBacktestRequest):
+def create_backtest(req: CreateBacktestRequest):
     """创建回测任务"""
     task_id = str(uuid.uuid4())[:12]
 
@@ -119,7 +119,7 @@ async def create_backtest(req: CreateBacktestRequest):
 
 
 @router.post("/{task_id}/start")
-async def start_backtest(task_id: str):
+def start_backtest(task_id: str):
     """验证任务状态（实际启动由 stream 端点完成）"""
     db = SessionLocal()
     try:
@@ -202,7 +202,7 @@ async def stream_backtest(task_id: str):
 
 
 @router.post("/{task_id}/cancel")
-async def cancel_backtest(task_id: str):
+def cancel_backtest(task_id: str):
     """取消回测任务"""
     backtest_engine.cancel_task(task_id)
 
@@ -220,7 +220,7 @@ async def cancel_backtest(task_id: str):
 
 
 @router.get("/tasks")
-async def list_backtest_tasks(
+def list_backtest_tasks(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
@@ -475,7 +475,7 @@ def get_backtest_detail(task_id: str):
 
 
 @router.get("/{task_id}/trades")
-async def get_backtest_trades(
+def get_backtest_trades(
     task_id: str,
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页条数"),
@@ -573,7 +573,7 @@ async def get_backtest_trades(
 
 
 @router.get("/{task_id}/equity-csv")
-async def export_equity_csv(task_id: str):
+def export_equity_csv(task_id: str):
     """导出回测实时权益曲线为 CSV 文件"""
     from io import StringIO
     import csv
@@ -1291,7 +1291,7 @@ def _build_xlsx_sync(task_id: str, db):
 # ─────────────────────────────────────────────────────────────
 
 @router.get("/{task_id}/trades-csv")
-async def export_trades_csv(task_id: str):
+def export_trades_csv(task_id: str):
     """导出逐笔交易明细 (含分钟级时分、信号价、实际价、印花税、过户费、滑点、净盈亏)
     用途: 评估真假交易、信号滑点、手续费吞噬、胜率/盈亏比
     """
@@ -1382,7 +1382,7 @@ async def export_trades_csv(task_id: str):
 # ─────────────────────────────────────────────────────────────
 
 @router.get("/{task_id}/positions-csv")
-async def export_positions_csv(task_id: str):
+def export_positions_csv(task_id: str):
     """导出每日收盘后持仓清单 (日频切片)
     用途: 单票集中度、仓位分散度、个股回撤同步性
     """
@@ -1475,7 +1475,7 @@ async def export_positions_csv(task_id: str):
 # ─────────────────────────────────────────────────────────────
 
 @router.get("/{task_id}/strategy-report")
-async def get_strategy_report(task_id: str):
+def get_strategy_report(task_id: str):
     """返回策略逻辑与参数摘要 (Markdown 文本)
     用途: 定性评估选股范围、买卖规则、风控纪律
     """
@@ -1647,7 +1647,7 @@ async def get_strategy_report(task_id: str):
 # ─────────────────────────────────────────────────────────────
 
 @router.get("/{task_id}/index-csv")
-async def export_index_csv(task_id: str):
+def export_index_csv(task_id: str):
     """导出回测期间主要指数日线 (沪深300/中证500/创业板/科创50/上证)
 
     数据源: Tushare index_daily (通过 sandbox/indices 缓存) + 本地 index_1min (兜底)
@@ -1842,7 +1842,7 @@ async def export_index_csv(task_id: str):
 
 
 @router.get("/{task_id}/prompt-snapshot/{log_id}")
-async def get_prompt_snapshot(task_id: str, log_id: int):
+def get_prompt_snapshot(task_id: str, log_id: int):
     """获取指定日志条目的完整 prompt 快照和回复"""
     db = SessionLocal()
     try:
@@ -1869,7 +1869,7 @@ async def get_prompt_snapshot(task_id: str, log_id: int):
 
 
 @router.delete("/{task_id}")
-async def delete_backtest(task_id: str):
+def delete_backtest(task_id: str):
     """删除回测任务及其所有关联数据"""
     db = SessionLocal()
     try:
@@ -2267,7 +2267,7 @@ def get_sandbox_orders(task_id: str,
 
 
 @router.get("/{task_id}/sandbox/scan-report")
-async def get_sandbox_scan_report(task_id: str, trade_date: str = Query(None)):
+def get_sandbox_scan_report(task_id: str, trade_date: str = Query(None)):
     """获取沙盒扫描报告（供 Pi 回测工具调用）"""
     db = SessionLocal()
     try:
@@ -2346,7 +2346,7 @@ def _is_moneyflow_available(phase_time: str = None) -> bool:
 
 
 @router.get("/{task_id}/sandbox/kline/{symbol}")
-async def get_sandbox_kline(task_id: str, symbol: str,
+def get_sandbox_kline(task_id: str, symbol: str,
                              limit: int = Query(30, ge=1, le=120),
                              trade_date: str = Query(None),
                              phase_time: str = Query(None)):
@@ -2395,7 +2395,7 @@ async def get_sandbox_kline(task_id: str, symbol: str,
 
 
 @router.get("/{task_id}/sandbox/technical/{symbol}")
-async def get_sandbox_technical(task_id: str, symbol: str,
+def get_sandbox_technical(task_id: str, symbol: str,
                                  trade_date: str = Query(None),
                                  phase_time: str = Query(None)):
     """返回技术指标（基于本地日线计算），Pi 的 get_technical 回测路由到此
@@ -2473,7 +2473,7 @@ async def get_sandbox_technical(task_id: str, symbol: str,
 
 
 @router.get("/{task_id}/sandbox/realtime-indicators/{symbol}")
-async def get_sandbox_realtime_indicators(task_id: str, symbol: str,
+def get_sandbox_realtime_indicators(task_id: str, symbol: str,
                                           trade_date: str = Query(None),
                                           phase_time: str = Query(None)):
     """回测模式下的"盘中估算"技术指标，基于本地分钟级快照 + 前日日线计算
@@ -2779,7 +2779,7 @@ async def check_entry_filters_sandbox(task_id: str, req: dict):
 
 
 @router.get("/{task_id}/sandbox/moneyflow/{symbol}")
-async def get_sandbox_moneyflow(task_id: str, symbol: str,
+def get_sandbox_moneyflow(task_id: str, symbol: str,
                                  trade_date: str = Query(None),
                                  limit: int = Query(5, ge=1, le=30),
                                  phase_time: str = Query(None)):
@@ -2958,7 +2958,7 @@ async def get_sandbox_moneyflow(task_id: str, symbol: str,
 
 
 @router.get("/{task_id}/sandbox/concept-fund-flow")
-async def get_sandbox_concept_fund_flow(task_id: str,
+def get_sandbox_concept_fund_flow(task_id: str,
                                           trade_date: str = Query(None),
                                           limit: int = Query(15, ge=1, le=50),
                                           sort_by: str = Query("main_net"),
@@ -3090,7 +3090,7 @@ async def get_sandbox_concept_fund_flow(task_id: str,
 
 
 @router.get("/{task_id}/sandbox/industry-fund-flow")
-async def get_sandbox_industry_fund_flow(task_id: str,
+def get_sandbox_industry_fund_flow(task_id: str,
                                           trade_date: str = Query(None),
                                           limit: int = Query(15, ge=1, le=50),
                                           sort_by: str = Query("main_net"),
@@ -3206,7 +3206,7 @@ async def get_sandbox_industry_fund_flow(task_id: str,
 
 
 @router.get("/{task_id}/sandbox/market-moneyflow")
-async def get_sandbox_market_moneyflow(task_id: str,
+def get_sandbox_market_moneyflow(task_id: str,
                                         trade_date: str = Query(None),
                                         phase_time: str = Query(None, description="Pi 调用时刻 HH:MM，盘中期(null/<16:00)用前日数据")):
     """回测模式下的大盘资金流向（基于本地 parquet）
@@ -3283,7 +3283,7 @@ async def get_sandbox_market_moneyflow(task_id: str,
 
 
 @router.get("/{task_id}/sandbox/realtime-sector-pct")
-async def get_sandbox_realtime_sector_pct(task_id: str,
+def get_sandbox_realtime_sector_pct(task_id: str,
                                             trade_date: str = Query(None),
                                             phase_time: str = Query(None, description="HH:MM 模拟时刻"),
                                             theme_top_n: int = Query(15, ge=1, le=50)):
@@ -3701,7 +3701,7 @@ def get_sandbox_indices(task_id: str,
 
 
 @router.get("/{task_id}/sandbox/quote/{symbol}")
-async def get_sandbox_quote(task_id: str, symbol: str,
+def get_sandbox_quote(task_id: str, symbol: str,
                              trade_date: str = Query(None),
                              phase_time: str = Query(None, description="Pi 调用时刻 HH:MM（用于反查分钟/防未来函数）"),
                              hour: int = Query(None), minute: int = Query(None)):
@@ -3800,7 +3800,7 @@ async def get_sandbox_quote(task_id: str, symbol: str,
 
 
 @router.get("/{task_id}/sandbox/fibonacci/{symbol}")
-async def get_sandbox_fibonacci(task_id: str, symbol: str,
+def get_sandbox_fibonacci(task_id: str, symbol: str,
                                  trade_date: str = Query(None),
                                  phase_time: str = Query(None)):
     """斐波那契回撤（基于本地日线），Pi 的 get_fibonacci_levels 回测路由到此
@@ -3880,7 +3880,7 @@ async def get_sandbox_fibonacci(task_id: str, symbol: str,
 
 
 @router.get("/{task_id}/sandbox/daily-channel/{symbol}")
-async def get_sandbox_daily_channel(task_id: str, symbol: str,
+def get_sandbox_daily_channel(task_id: str, symbol: str,
                                     trade_date: str = Query(None),
                                     phase_time: str = Query(None)):
     """日内K值通道（基于本地日线），Pi 的 get_daily_channel 回测路由到此。

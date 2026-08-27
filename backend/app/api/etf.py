@@ -38,7 +38,7 @@ def sync_etf_pool(pages: int = 5):
 
 
 @router.post("/sync-tushare")
-async def sync_etf_pool_tushare():
+def sync_etf_pool_tushare():
     """
     用 Tushare etf_basic 全量刷新 ETF 池基础信息（名称等），保留已有行情快照。
     """
