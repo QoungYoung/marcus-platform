@@ -1,5 +1,8 @@
 /** Persisted by scripts/persist-cordis-plugin.mjs — host half of "marcus-dsh-bridge". */
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { readdir, rm, stat } from 'node:fs/promises';
 
 const name = "dsh-marcus-bridge";
 const inject = ["webServer","agents","tools"];
@@ -747,6 +750,70 @@ const SESSION_TTL_MS = 45 * 60 * 1000;  // 会话空闲 TTL：45 分钟回收（
 const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上下文：30 天（用户要求保留）
         const sessions = new Map();
     const locks = new Map();
+    // 巨型 QQ 会话防 OOM 阈值：持久化日志（zstd）超过 512KB 视为失控会话，按 /new 语义清理重建
+    // （容器 memory limit 512M，2026-08-25 实测 133k 事件/600KB~1.7MB 会话 resume 直接 JS heap OOM 崩溃；
+    //   只有 chat 模式非 report_ 会话受此保护——report_ 报告会话与做T/回测会话不受影响）
+    const CHAT_SESSION_MAX_BYTES = 512 * 1024;
+
+    // ── 持久化会话清理（/new 真重置）──
+    // 磁盘布局与 dsh-session-persistence-jsonl 一致（容器钉死 0.1.0-rc.6）：
+    //   <DSH_HOME>/sessions/<projectKey(cwd)>/<encodeSegment(sessionId)>/session.jsonl[.zstd]
+    // 编码：安全字符 [A-Za-z0-9._-] 原样，其余（含 ':' '~'）→ ~XXXX（大写十六进制）
+    function encodeSegment(raw) {
+      let out = '';
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) out += ch;
+        else out += '~' + raw.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0');
+      }
+      return out;
+    }
+    function sessionStoreRoot() {
+      const home = process.env.DSH_HOME || join(homedir(), '.dsh');
+      return join(home, 'sessions');
+    }
+    function sessionStoreDir(mode, sessionId) {
+      const cwd = process.env.MARCUS_WORKSPACE || '/app';
+      // projectKey：/ \ : → '-'; 其余安全字符原样；包裹 --...--（与 jsonl 后端一致）
+      let readable = '';
+      let sep = false;
+      for (let i = 0; i < cwd.length; i++) {
+        const code = cwd.charCodeAt(i);
+        const ch = cwd[i];
+        if (ch === '/' || ch === '\\' || ch === ':') { if (!sep) readable += '-'; sep = true; }
+        else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) { readable += ch; sep = false; }
+        else { readable += '~' + code.toString(16).toUpperCase().padStart(4, '0'); sep = false; }
+      }
+      const proj = '--' + (readable.replace(/^-+/, '') || 'root').slice(0, 251) + '--';
+      return join(sessionStoreRoot(), proj, encodeSegment(mode + ':' + sessionId));
+    }
+    async function persistedSessionSize(mode, sessionId) {
+      const dir = sessionStoreDir(mode, sessionId);
+      for (const name of ['session.jsonl.zstd', 'session.jsonl']) {
+        try { const s = await stat(join(dir, name)); return s.size; } catch (e) { /* 不存在则试下一个 */ }
+      }
+      return 0;
+    }
+    /** 删除一个用户 chat 链路的全部持久化会话（裸 openid 键 + 全部 _m<ts> fork 变体）。 */
+    async function purgeSessionLineage(mode, rawId) {
+      const baseId = String(rawId || '').replace(/_m\d+$/g, '');
+      const encBase = encodeSegment(mode + ':' + baseId);
+      const dir = dirname(sessionStoreDir(mode, baseId));
+      let removed = 0;
+      try {
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          if (entry.name === encBase || entry.name.startsWith(encBase + '_m')) {
+            await rm(join(dir, entry.name), { recursive: true, force: true });
+            removed += 1;
+            console.log('[Bridge] 已删除持久化会话目录: ' + entry.name);
+          }
+        }
+      } catch (e) {
+        if (!e || e.code !== 'ENOENT') console.warn('[Bridge] 清理持久化会话失败: ' + (e && e.message ? e.message : e));
+      }
+      return removed;
+    }
     const MARCUS_API = process.env.MARCUS_API_URL || 'http://backend:8000/api/v1';
     const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
     const DEEPSEEK_TRADE_MODEL = process.env.DEEPSEEK_TRADE_MODEL || 'deepseek-v4-flash';
@@ -944,6 +1011,21 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       // 不需要任何工具。迭代#55b 实测：AI 会调 bash/grep/glob/list_t_conditions 探索
       // （会话 164s，工具调用耗掉一半，120s 超时回退规则）→ deny 全部工具 + 专用提示
       const isConditionsMode2 = mode === 'conditions';
+      // 1b) 巨型会话防 OOM：持久化日志超阈值则按 /new 语义清理重建
+      //     （2026-08-25：QQ 用户会话 133k 事件/600KB~1.7MB，resume 后 runAgentTurn 直接 JS heap OOM）
+      //     只保护 chat 模式非 report_ 的 QQ 对话；检查当前键与其裸基线键（fork 迁移会把
+      //     全部历史 seed 进 _m 变体，裸键也可能残留巨型历史）
+      if (mode === 'chat' && !String(sessionId || '').startsWith('report_')) {
+        const sid = asciiSessionId(sessionId);
+        const base = sid.replace(/_m\d+$/g, '');
+        const size = await persistedSessionSize(mode, sid);
+        const baseSize = base !== sid ? await persistedSessionSize(mode, base) : 0;
+        const maxSize = Math.max(size, baseSize);
+        if (maxSize > CHAT_SESSION_MAX_BYTES) {
+          console.warn('[Bridge] 会话持久化日志过大（当前键 ' + size + 'B / 基线 ' + baseSize + 'B，阈值 ' + CHAT_SESSION_MAX_BYTES + 'B），按 /new 语义重置: ' + key);
+          await purgeSessionLineage(mode, base);
+        }
+      }
       // 1) 尝试恢复持久化会话（容器重启后保留对话）
       try {
         const resumed = await ctx.agents.resume({
@@ -1092,13 +1174,26 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
               const { session_id, mode } = body;
               if (session_id) {
                 const m = mode || 'chat';
-                const key = m + ':' + session_id;
-                const handle = sessions.get(key);
-                if (handle) { await handle.dispose(); sessions.delete(key); }
-                locks.delete(key);
+                const sid = asciiSessionId(session_id);
+                const base = sid.replace(/_m\d+$/g, '');
+                const prefix = m + ':' + base;
+                // 1) 释放该用户 chat 链路全部内存句柄（含 fork 迁移产生的 _m 变体）
+                let disposed = 0;
+                for (const [key, handle] of [...sessions]) {
+                  if (key === prefix || key.startsWith(prefix + '_m')) {
+                    try { await handle.dispose(); } catch (e) { console.warn('[Bridge] /reset dispose 失败: ' + key + ': ' + e.message); }
+                    sessions.delete(key);
+                    locks.delete(key);
+                    disposed += 1;
+                  }
+                }
+                // 2) 删除持久化会话文件（否则下次 /chat 会 resume 回旧历史——/new 不生效的根因）
+                const removed = await purgeSessionLineage(m, base);
+                console.log('[Bridge] /reset: session_id=' + sid + ' base=' + base + ' 内存句柄释放=' + disposed + ' 持久化目录删除=' + removed);
               }
               json(res, 200, { status: 'reset' });
             } catch (e) {
+              console.error('[Bridge] /reset error:', e);
               json(res, 400, { error: e.message });
             }
           },
