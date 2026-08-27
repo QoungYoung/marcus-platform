@@ -27,7 +27,8 @@
 
 ## 5. 验证与回归
 
-- [x] 5.1 单测：golden-pit/status 冷缓存 + 外部源缓慢时 ≤5s 返回（mock 外部源）；health 在重计算期间 <1s
+- [x] 5.3 生产部署：本地 2026-08-27 热补丁 + bind mount 上线验证；**生产 81.70.44.68 2026-08-28 07:25 部署完成**（commit c177ac3：backend/app 与 core bind mount + PYTHONDONTWRITEBYTECODE=1，docker compose up -d backend）。生产验证：gp/status 冷缓存 5.01s 降级返回（08-26 事故时 5 分 17 秒冻结）、计算期间 /health 0.06s / portfolio 0.39s 不冻结、缓存回填后 gp/status 11ms 返回完整 18 指数、其余端点 <25ms、容器 healthy、worker 不受影响。镜像重建均暂缓（本机与生产均无 PyPI 网络），bind mount 已保证容器重建后修复不丢
+- [x] 5.5 515080 数据缺口根治（2026-08-28 生产 commit 0a4624f 同步版）：①sync_extra_series_to_db 支持无 arkvol_code 的 defense_price 标的，用 Tushare K线合成价格贪婪历史机制化落库（515080 已补 499 条，2024-08-07 起）；②_get_status_from_db 判空由 return None 改 continue（缺失指数实时补齐，不再整体回退）；③主批次取最近完整批次（count≥12 且 date 降序），修复序列行劫持最新批次；④DB 快路径外部展示字段（gcf/tech/行业监测）并行有界 1.5s，industry_monitor_snapshot 有界 1.5s 包装后台自愈；⑤命名历史遗留 _fetch_pi_server_kline→_fetch_tushare_kline。生产最终验证：gp/status cached 28ms、18 指数含 515080 中证红利、as_of=08-26、0 条回退日志
 - [x] 5.3 生产部署：本地 2026-08-27 热补丁 + bind mount 上线验证；**生产 81.70.44.68 2026-08-28 07:25 部署完成**（commit c177ac3：backend/app 与 core bind mount + PYTHONDONTWRITEBYTECODE=1，docker compose up -d backend）。生产验证：gp/status 冷缓存 5.01s 降级返回（08-26 事故时 5 分 17 秒冻结）、计算期间 /health 0.06s / portfolio 0.39s 不冻结、缓存回填后 gp/status 11ms 返回完整 18 指数、其余端点 <25ms、容器 healthy、worker 不受影响。镜像重建均暂缓（本机与生产均无 PyPI 网络），bind mount 已保证容器重建后修复不丢
 - [x] 5.3 生产部署：已上线验证（2026-08-27）。热补丁先行（docker cp + restart），随后 docker-compose 增加 backend/app 与 core 的 bind mount（../backend/app:/app/app、../core:/app/core）并 recreate 容器——代码改动随挂载持久、重建不丢；本机无法访问 PyPI（files.pythonhosted.org 超时），镜像重建暂缓，待有 PyPI 网络的机器或改用镜像源后执行。验证：/health 0.003s、portfolio 等 <0.2s、gp/status 冷缓存 5.4s 降级返回且计算期间 /health 0.003s 不冻结
 - [ ] 5.4 回归：t/*、行情 quote/kline、调度与监控任务无重复执行、无新增告警（另：marcus-worker 自 08-18 停止，golden_pit_snapshots 为 0 行，需恢复 worker 才能让快照路径生效）
