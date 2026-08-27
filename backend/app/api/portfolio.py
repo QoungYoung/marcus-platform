@@ -271,10 +271,10 @@ def calculate_positions_from_db(account: str = "stock"):
     return position_list, account, realized_pnl, win_rate
 
 
-def _calc_week_pnl(positions: list) -> tuple:
-    """计算本周持仓盈亏：(本周已实现, 本周浮盈)
+def _calc_week_pnl(positions: list, account: str = "stock") -> tuple:
+    """计算指定账户本周持仓盈亏：(本周已实现, 本周浮盈)
 
-    本周已实现：本周一至今日所有卖出交易的 profit 之和
+    本周已实现：本周一至今日该账户所有卖出交易的 profit 之和
     本周浮盈：本周内有买入记录的当前持仓的浮盈之和
     """
     today = datetime.now()
@@ -285,6 +285,7 @@ def _calc_week_pnl(positions: list) -> tuple:
     try:
         week_realized = float(
             db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
+                PaperTrade.account_id == account,
                 PaperTrade.direction == '卖出',
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None),
                 func.substr(PaperTrade.created_at, 1, 10) >= monday_str
@@ -294,6 +295,7 @@ def _calc_week_pnl(positions: list) -> tuple:
         week_bought = {
             row[0] for row in
             db.query(PaperTrade.symbol).filter(
+                PaperTrade.account_id == account,
                 PaperTrade.direction == '买入',
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None),
                 func.substr(PaperTrade.created_at, 1, 10) >= monday_str
@@ -688,8 +690,8 @@ def get_portfolio(account: str = Query("stock", description="账户标识")):
     total_asset = available_cash + account_info.get('frozen_cash', 0) + total_position_value
     total_float_pnl = sum(p.floating_pnl for p in positions)
 
-    # ── 本周持仓盈亏 ──
-    week_realized_pnl, week_float_pnl = _calc_week_pnl(positions)
+    # ── 本周持仓盈亏（按账户隔离，2026-08-28 修复跨账户串算）──
+    week_realized_pnl, week_float_pnl = _calc_week_pnl(positions, account)
     week_total = week_realized_pnl + week_float_pnl
     print(
         f"[Portfolio] 本周盈亏: 总{week_total:+.2f} "
