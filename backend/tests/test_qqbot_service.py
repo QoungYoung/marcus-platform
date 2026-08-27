@@ -326,3 +326,37 @@ def test_chat_streaming_slow_thinking_sends_hint():
     assert sent[0] == "🤔 正在思考，请稍候…"
     assert len(sent) >= 2
 
+
+def test_chat_streaming_prepends_current_time_context():
+    """发送给 AI 的消息自动附带当前时间（AI 不知道实时时间）。"""
+
+    async def scenario():
+        svc = QQBotService()
+        captured = {}
+
+        async def fake_send(openid, content, msg_id=""):
+            pass
+
+        svc._send_text = fake_send
+
+        async def fake_stream(message, session_id, on_delta):
+            captured["message"] = message
+            return {"reply": "好", "session_id": "sid"}
+
+        svc._call_pi_server_stream = fake_stream
+        await svc._chat_streaming("openid", "帮我看看今天的行情", "sid", "m")
+        return captured["message"]
+
+    sent_msg = asyncio.run(scenario())
+    assert sent_msg.startswith("现在是 ")
+    assert "星期" in sent_msg
+    assert sent_msg.endswith("。用户消息：帮我看看今天的行情")
+    # 时间应接近当前（容差 2 分钟）
+    import re
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", sent_msg)
+    assert m is not None
+    from datetime import datetime as _dt
+    now = _dt.now()
+    dt = _dt(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6)))
+    assert abs((now - dt).total_seconds()) < 120
+

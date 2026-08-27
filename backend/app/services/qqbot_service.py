@@ -44,6 +44,13 @@ QQ_STREAM_BOUNDARY_MIN = 150  # 段落边界出现且攒够该字符数时立即
 QQ_THINKING_HINT_DELAY = 5    # 流式开始后若 N 秒无任何输出，先发「正在思考」提示（模型思考期可能 30-60s）
 
 
+def _now_context() -> str:
+    """当前时间上下文（AI 不知道实时时间，发送 QQ 消息时带上）。"""
+    now = datetime.now()
+    weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+    return f"现在是 {now.strftime('%Y-%m-%d %H:%M:%S')} 星期{weekdays[now.weekday()]}"
+
+
 def _truncate_reply_by_paragraph(text: str, cap: int = MAX_QQ_REPLY_CHARS):
     """超长回复按段落（空行→换行→硬切）截断，返回 (截断后文本, 是否截断)。
 
@@ -264,7 +271,9 @@ class QQBotService:
         """流式聊天：SSE 增量 → 攒段 → 按段落边界发 QQ（投递侧，不改模型）。
 
         返回 (reply, new_session_id)；已发送内容由本方法直接推送到 QQ。
+        发送前自动附加当前时间上下文（AI 不知道实时时间）。
         """
+        message = f"{_now_context()}。用户消息：{message}"
         received = ""
         sent_pos = 0
         flushed = False
