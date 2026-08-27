@@ -557,13 +557,17 @@ class GoldenPitService:
         try:
             from app.database import SessionLocal
             from app.models.golden_pit import GoldenPitSnapshot
+            from sqlalchemy import func
 
             db = SessionLocal()
             try:
-                # 查询 DB 中最新的快照日期（而非 today），避免与 save_daily_snapshot 的 as_of 日期不匹配
+                # 主批次优先取"行数最多的日期"（完整快照批次，通常 18 条）；
+                # 避免 Tushare/ArkVol 序列行（每交易日少量）写入新 date 后劫持"最新批次"，
+                # 导致其余指数走实时补齐、DB 快路径退化（历史遗留修复）
                 latest_date_row = (
-                    db.query(GoldenPitSnapshot.date)
-                    .order_by(GoldenPitSnapshot.date.desc())
+                    db.query(GoldenPitSnapshot.date, func.count(GoldenPitSnapshot.id))
+                    .group_by(GoldenPitSnapshot.date)
+                    .order_by(func.count(GoldenPitSnapshot.id).desc(), GoldenPitSnapshot.date.desc())
                     .first()
                 )
                 if not latest_date_row:
