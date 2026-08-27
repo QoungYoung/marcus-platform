@@ -41,6 +41,7 @@ MAX_QQ_REPLY_CHARS = 6000  # 单次回复投递上限：超出部分按段落截
 # 流式攒段发送参数（二期 /chat/stream 增量 → 按段落边界分段发 QQ）：
 QQ_STREAM_FLUSH_CHARS = 500   # 攒够该字符数就发送一段（无段落边界时的兜底阈值）
 QQ_STREAM_BOUNDARY_MIN = 150  # 段落边界出现且攒够该字符数时立即按段落发送
+QQ_THINKING_HINT_DELAY = 5    # 流式开始后若 N 秒无任何输出，先发「正在思考」提示（模型思考期可能 30-60s）
 
 
 def _truncate_reply_by_paragraph(text: str, cap: int = MAX_QQ_REPLY_CHARS):
@@ -267,6 +268,8 @@ class QQBotService:
         received = ""
         sent_pos = 0
         flushed = False
+        hint_sent = False
+        hint_task = None
 
         async def flush_upto(end: int):
             nonlocal sent_pos, flushed
@@ -289,7 +292,20 @@ class QQBotService:
                 end = sent_pos + (boundary + 2) if boundary >= QQ_STREAM_BOUNDARY_MIN else len(received)
                 await flush_upto(end)
 
-        result = await self._call_pi_server_stream(message, session_id, on_delta)
+        # 思考期提示：模型思考阶段可能 30-60s 无可见输出，先发提示避免用户以为卡死
+        async def maybe_send_thinking_hint():
+            nonlocal hint_sent
+            await asyncio.sleep(QQ_THINKING_HINT_DELAY)
+            if not flushed and not hint_sent:
+                hint_sent = True
+                await self._send_text(openid, "🤔 正在思考，请稍候…", msg_id)
+
+        hint_task = asyncio.create_task(maybe_send_thinking_hint())
+        try:
+            result = await self._call_pi_server_stream(message, session_id, on_delta)
+        finally:
+            if hint_task:
+                hint_task.cancel()
         reply = result.get("reply", "")
         new_session_id = result.get("session_id", session_id)
 

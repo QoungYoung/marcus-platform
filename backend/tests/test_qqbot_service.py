@@ -273,3 +273,56 @@ def test_chat_streaming_short_reply_uses_send_reply():
     via_send_reply = asyncio.run(scenario())
     assert via_send_reply == ["收到。"]
 
+
+def test_chat_streaming_fast_reply_no_thinking_hint():
+    """快回复（秒回）不应出现「正在思考」提示。"""
+
+    async def scenario():
+        svc = QQBotService()
+        sent = []
+
+        async def fake_send(openid, content, msg_id=""):
+            sent.append(content)
+
+        svc._send_text = fake_send
+
+        async def fake_stream(message, session_id, on_delta):
+            await on_delta("立即回复。")
+            return {"reply": "立即回复。", "session_id": "sid"}
+
+        svc._call_pi_server_stream = fake_stream
+        await svc._chat_streaming("openid", "hi", "sid", "m")
+        return sent
+
+    sent = asyncio.run(scenario())
+    assert "".join(sent) == "立即回复。"
+    assert not any("正在思考" in s for s in sent)
+
+
+def test_chat_streaming_slow_thinking_sends_hint():
+    """思考期 >QQ_THINKING_HINT_DELAY 无输出时，先发「正在思考」提示。"""
+
+    async def scenario():
+        import app.services.qqbot_service as mod
+        svc = QQBotService()
+        sent = []
+
+        async def fake_send(openid, content, msg_id=""):
+            sent.append(content)
+
+        svc._send_text = fake_send
+
+        async def fake_stream(message, session_id, on_delta):
+            await asyncio.sleep(0.3)  # 模拟 0.3s 思考期
+            await on_delta("第一段内容。" + "字" * 200 + "\n\n")
+            return {"reply": "完整回复", "session_id": "sid"}
+
+        svc._call_pi_server_stream = fake_stream
+        with patch.object(mod, "QQ_THINKING_HINT_DELAY", 0.05):
+            await svc._chat_streaming("openid", "hi", "sid", "m")
+        return sent
+
+    sent = asyncio.run(scenario())
+    assert sent[0] == "🤔 正在思考，请稍候…"
+    assert len(sent) >= 2
+
