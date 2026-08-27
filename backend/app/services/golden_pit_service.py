@@ -642,17 +642,21 @@ class GoldenPitService:
 
             # 补全防御/半导体标的（DB 快照尚未积累历史时，实时从 API 构建，保证 DCA 门控与展示完整）
             existing_codes = {i["fund_code"] for i in indices}
+            # 仅在 DB 批次缺失时才实时补齐（主批次 18 条齐全时不再拉外部源，
+            # 保证 DB 快路径纯 DB 查询、不受 Tushare/ArkVol 慢影响）
+            def_missing = any(c not in existing_codes for c in DEFENSE_INDICES)
             tech_missing = any(c not in existing_codes for c in SEMI_BOOST_INDICES)
+            def_extra = []
+            tech_extra = []
             with ThreadPoolExecutor(max_workers=2) as executor:
-                f_def_extra = executor.submit(self._extract_defense_indices, latest_date)
+                f_def_extra = executor.submit(self._extract_defense_indices, latest_date) if def_missing else None
                 f_tech_extra = executor.submit(self._extract_tech_indices, latest_date) if tech_missing else None
                 # 实时补齐是有界等待（各 2s）：外部源慢时用 DB 已有指数返回，不再拖垮 DB 快路径
-                def_extra = []
-                tech_extra = []
-                try:
-                    def_extra = f_def_extra.result(timeout=2.0)
-                except Exception as e:
-                    logger.warning("防御标的实时补齐超时/失败，跳过: %s", e)
+                if f_def_extra is not None:
+                    try:
+                        def_extra = f_def_extra.result(timeout=2.0)
+                    except Exception as e:
+                        logger.warning("防御标的实时补齐超时/失败，跳过: %s", e)
                 if f_tech_extra is not None:
                     try:
                         tech_extra = f_tech_extra.result(timeout=2.0)
@@ -701,8 +705,17 @@ class GoldenPitService:
                 "global_macro": global_macro,
                 "_source": "db",
             }
-            self._attach_sector_split(status, latest_date)
-            self._attach_industry_monitor(status, latest_date)
+            # 附加展示字段（板块拆分/全行业监测）有界等待 2s：外部源慢时跳过，
+            # 保证 DB 快路径纯 DB 查询返回（这些字段失败不影响主状态）
+            def _attach_bounded(fn, *args) -> None:
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as _ex:
+                        _ex.submit(fn, *args).result(timeout=2.0)
+                except Exception as e:
+                    logger.warning("附加字段 %s 生成超时/失败，跳过: %s", getattr(fn, "__name__", fn), e)
+
+            _attach_bounded(self._attach_sector_split, status, latest_date)
+            _attach_bounded(self._attach_industry_monitor, status, latest_date)
             return status
         except Exception as e:
             logger.warning("从 DB 重建黄金坑状态失败，回退 API: %s", e)
