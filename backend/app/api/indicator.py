@@ -2170,6 +2170,15 @@ def _eval_overbought(rsi6: float, kdj_j: float, cci: float,
     return layer3, multiplier, hard_block, hard_block_reasons, downgrade_reason
 
 
+def _eval_l2_oversold_exempt(layer1_passed: bool, ret5d: Optional[float]) -> bool:
+    """L2 极端超跌豁免判定：L1 技术面已过且前5日跌幅≥15% → 5日主力<0 不直接排除。
+
+    回放结论 2026-08-28：全A 14.3万个股日中 5日主力<0 组前瞻收益并不差于放行组，
+    但会误杀极端超跌反弹尾部大肉（候选池被拦 576 例中 64 例后5日≥8%）。
+    """
+    return bool(layer1_passed and ret5d is not None and ret5d <= -0.15)
+
+
 @router.post("/check-entry-filters", response_model=EntryCheckResponse)
 async def check_entry_filters(req: EntryCheckRequest):
     """
@@ -2509,16 +2518,49 @@ async def check_entry_filters(req: EntryCheckRequest):
     layer2_grade = "✅通过"
     layer2_downgrade = ""
     layer2_action = ""
+    # ── L2 极端超跌豁免（回放结论 2026-08-28 落地）──
+    # 全A 14.3万个股日回放：5日主力<0 组前瞻收益并不差于放行组，但会误杀
+    # 极端超跌反弹的尾部大肉（候选池 576 例被拦中 64 例后5日≥8%）。
+    # 豁免：L1 技术面已过 + 前5日跌幅≥15% → 降级为仅试探仓（不再一刀切排除）；
+    # 若今日主力转正（拐头确认）→ 放宽至≤7%试探。
+    ret5d = None
+    if len(daily_bars) >= 5:
+        try:
+            _c_now = float(daily_bars[0].close)
+            _c_5d = float(daily_bars[4].close)
+            if _c_now > 0 and _c_5d > 0:
+                ret5d = _c_now / _c_5d - 1.0
+        except (AttributeError, TypeError, ValueError):
+            ret5d = None
+    extreme_oversold = _eval_l2_oversold_exempt(layer1_passed, ret5d)
+    l2_oversold_exempt = False
 
     if mf_data_available:
         # 2a. 5日主力检查
         if d5_main_net < 0:
-            capital_details.append(f"🚫 5日主力净流入({d5_main_net/1e8:.2f}亿) < 0 → 直接排除")
-            layer2_passed = False
-            layer2_grade = "🚫排除"
-            layer2_downgrade = "5日主力持续净流出"
-            layer2_action = "直接排除"
-            downgrade_multiplier = 0.0
+            if extreme_oversold:
+                capital_details.append(
+                    f"⚠️ 5日主力净流入({d5_main_net/1e8:.2f}亿) < 0，但 L1 已过 + 前5日跌幅{ret5d*100:.1f}%≥15% "
+                    f"→ 极端超跌豁免，仅试探仓（不再一刀切排除）"
+                )
+                layer2_grade = "⚠️降级"
+                layer2_downgrade = "5日主力净流出但极端超跌(L1过+前5日跌幅≥15%)"
+                layer2_action = "仅试探仓≤5%"
+                downgrade_multiplier = min(downgrade_multiplier, 0.5)
+                l2_oversold_exempt = True
+                # 主力拐头确认：今日主力转正 → 放宽至≤7%（仍非全仓）
+                if today_main_net > 0:
+                    downgrade_multiplier = min(downgrade_multiplier, 0.7)
+                    capital_details.append(
+                        f"  ✅ 今日主力({today_main_net/1e8:.2f}亿)转正，拐头确认，放宽至≤7%试探"
+                    )
+            else:
+                capital_details.append(f"🚫 5日主力净流入({d5_main_net/1e8:.2f}亿) < 0 → 直接排除")
+                layer2_passed = False
+                layer2_grade = "🚫排除"
+                layer2_downgrade = "5日主力持续净流出"
+                layer2_action = "直接排除"
+                downgrade_multiplier = 0.0
         else:
             capital_details.append(f"✅ 5日主力({d5_main_net/1e8:.2f}亿) > 0 — 通过")
 
@@ -2545,12 +2587,22 @@ async def check_entry_filters(req: EntryCheckRequest):
             trend_reversing = d5_main_net > 0 and d5_main_net > d10_main_net
             
             if accelerating_outflow and not trend_reversing:
-                capital_details.append(f"🚫 10日主力({d10_main_net/1e8:.2f}亿) < -5亿 + 5日主力({d5_main_net/1e8:.2f}亿) < 10日×0.5({d10_main_net*0.5/1e8:.2f}亿) → 排除")
-                layer2_passed = False
-                layer2_grade = "🚫排除"
-                layer2_downgrade = "10日主力持续大幅流出且加速"
-                layer2_action = "直接排除"
-                downgrade_multiplier = 0.0
+                if extreme_oversold:
+                    capital_details.append(
+                        f"⚠️ 10日主力({d10_main_net/1e8:.2f}亿) < -5亿 + 加速流出，但极端超跌豁免 → 仅试探仓"
+                    )
+                    layer2_grade = "⚠️降级"
+                    layer2_downgrade = "10日主力大幅流出但极端超跌(L1过+前5日跌幅≥15%)"
+                    layer2_action = "仅试探仓≤5%"
+                    downgrade_multiplier = min(downgrade_multiplier, 0.5)
+                    l2_oversold_exempt = True
+                else:
+                    capital_details.append(f"🚫 10日主力({d10_main_net/1e8:.2f}亿) < -5亿 + 5日主力({d5_main_net/1e8:.2f}亿) < 10日×0.5({d10_main_net*0.5/1e8:.2f}亿) → 排除")
+                    layer2_passed = False
+                    layer2_grade = "🚫排除"
+                    layer2_downgrade = "10日主力持续大幅流出且加速"
+                    layer2_action = "直接排除"
+                    downgrade_multiplier = 0.0
             elif trend_reversing:
                 capital_details.append(f"⚠️ 10日主力({d10_main_net/1e8:.2f}亿) < -5亿，但5日主力({d5_main_net/1e8:.2f}亿) > 0且>10日 → 趋势逆转，豁免排除")
             elif not accelerating_outflow:
@@ -2732,6 +2784,7 @@ async def check_entry_filters(req: EntryCheckRequest):
         downgrade_multiplier=round(downgrade_multiplier, 2),
         hard_block=hard_block,
         hard_block_reasons=hard_block_reasons,
+        l2_oversold_exempt=l2_oversold_exempt,
         buy_confirmation=buy_confirmation,
         all_layers_pass=all_layers_pass,
         summary=summary,

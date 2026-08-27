@@ -264,6 +264,8 @@ class EntryCheckResponse(BaseModel):
     # 硬拦截（不可被产业链信号豁免）
     hard_block: bool = False            # 代码层硬拦截标志
     hard_block_reasons: list[str] = []  # 硬拦截原因列表
+    # L2 极端超跌豁免（5日主力<0 但 L1 过 + 前5日跌幅≥15% → 降级仅试探仓，供长期池放行）
+    l2_oversold_exempt: bool = False
     # 买入确认
     buy_confirmation: EntryBuyConfirmation
     # 汇总

@@ -32,6 +32,19 @@ for _ in range(5):
     _p = _p.parent
 
 
+def _accept_entry_grade(result) -> bool:
+    """长期池接受建仓的过滤结果：pass 全接受；probe_only 仅当 L2 极端超跌豁免时接受。
+
+    2026-08-28 落地：L2 极端超跌豁免（5日主力<0 但 L1 过 + 前5日跌幅≥15%）
+    降级为仅试探仓，避免误杀超跌反弹尾部大肉；其余 probe_only 仍拒绝。
+    """
+    if result.final_grade == "pass":
+        return True
+    if result.final_grade == "probe_only" and getattr(result, "l2_oversold_exempt", False):
+        return True
+    return False
+
+
 class LongTermPoolMonitor:
     """长期候选池自动建仓监控器"""
 
@@ -303,7 +316,8 @@ class LongTermPoolMonitor:
             return False
 
         # ── 未通过 → 更新检查状态 ──
-        if result.final_grade != "pass":
+        # 2026-08-28：L2 极端超跌豁免（final_grade=probe_only + l2_oversold_exempt=True）允许试探仓建仓
+        if not _accept_entry_grade(result):
             pool.update_check(symbol, result.final_grade)
             return False
 
@@ -349,6 +363,11 @@ class LongTermPoolMonitor:
 
         # ── Step 4: 执行建仓 ──
         buy_volume = pos_result.quantity.probe_shares
+        if getattr(result, "l2_oversold_exempt", False):
+            # 极端超跌豁免：仓位再压至 5% 总资产以内（仅试探仓）
+            cap5 = int(pos_result.total_asset * 0.05 / pos_result.current_price / 100) * 100
+            if cap5 > 0:
+                buy_volume = min(buy_volume, cap5)
         if buy_volume < 100:
             # 长期候选池：如最低股数超出仓位限制，买入最低股数100
             min_cost = 100 * pos_result.current_price
@@ -366,6 +385,7 @@ class LongTermPoolMonitor:
             f"role={role} tier=probe | "
             f"过滤: L1={result.layer1_tech.grade} L2={result.layer2_capital.grade} "
             f"L3={result.layer3_overbought.grade}"
+            + (" L2豁免=极端超跌" if getattr(result, "l2_oversold_exempt", False) else "")
         )
 
         try:
