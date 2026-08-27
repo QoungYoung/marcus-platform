@@ -642,8 +642,18 @@ class GoldenPitService:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 f_def_extra = executor.submit(self._extract_defense_indices, latest_date)
                 f_tech_extra = executor.submit(self._extract_tech_indices, latest_date) if tech_missing else None
-                def_extra = f_def_extra.result()
-                tech_extra = f_tech_extra.result() if f_tech_extra else []
+                # 实时补齐是有界等待（各 2s）：外部源慢时用 DB 已有指数返回，不再拖垮 DB 快路径
+                def_extra = []
+                tech_extra = []
+                try:
+                    def_extra = f_def_extra.result(timeout=2.0)
+                except Exception as e:
+                    logger.warning("防御标的实时补齐超时/失败，跳过: %s", e)
+                if f_tech_extra is not None:
+                    try:
+                        tech_extra = f_tech_extra.result(timeout=2.0)
+                    except Exception as e:
+                        logger.warning("半导体增强实时补齐超时/失败，跳过: %s", e)
             def_map = {i["fund_code"]: i for i in def_extra}
             for item in tech_extra:
                 if item["fund_code"] not in existing_codes:
@@ -848,11 +858,16 @@ class GoldenPitService:
             arkvol_code = cfg.get("arkvol_code", "")
             if arkvol_code:
                 try:
-                    arkvol_series = self._cached_fund_series(arkvol_code)
+                    # ArkVol 慢/超时只影响展示字段，3s 内拿不到就退回价格分位（不阻塞 DB 快路径）
+                    with ThreadPoolExecutor(max_workers=1) as _ex:
+                        f_ark = _ex.submit(self._cached_fund_series, arkvol_code)
+                        arkvol_series = f_ark.result(timeout=3.0)
                     if arkvol_series:
                         arkvol_greed = float(arkvol_series[-1].get("greed", 0))
                 except Exception as e:
-                    logger.warning("防御标的 %s ArkVol 贪婪获取失败: %s", arkvol_code, e)
+                    logger.warning("防御标的 %s ArkVol 贪婪获取失败/超时: %s", arkvol_code, e)
+                    arkvol_series = None
+                    arkvol_greed = None
 
             status = _determine_status(cfg, synthetic_greed, percentile)
             if not cfg.get("entry_enabled", True):
