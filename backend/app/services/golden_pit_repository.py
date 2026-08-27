@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
 from app.services.golden_pit_config import ALL_INDEX_CONFIGS, CHINA_INDICES
+from app.services.golden_pit_indicators import _price_based_greed
 
 
 def get_history(index: str = "all", days: int = 60) -> Dict[str, Any]:
@@ -160,14 +161,41 @@ def sync_extra_series_to_db(service) -> int:
         # 防御组合: per-fund series（ArkVol 贪婪展示用）
         for code, cfg in DEFENSE_INDICES.items():
             arkvol_code = cfg.get("arkvol_code", "")
-            if not arkvol_code:
+            if arkvol_code:
+                try:
+                    series = service._cached_fund_series(arkvol_code)
+                    if series:
+                        pending.append((code, cfg["name"], series))
+                except Exception as e:
+                    logger.warning("同步防御标的 %s 序列失败: %s", code, e)
+                continue
+            # 无 arkvol_code 的 defense_price 标的（如 515080 中证红利）：
+            # 用 Tushare ETF 日K线合成价格贪婪历史，保证 DB 历史 ≥60 天，
+            # 否则 _get_status_from_db 判空会整体回退 API（历史遗留修复）
+            if cfg.get("data_source") != "defense_price":
+                continue
+            etf_code = cfg.get("etf_code", "")
+            if not etf_code:
                 continue
             try:
-                series = service._cached_fund_series(arkvol_code)
-                if series:
-                    pending.append((code, cfg["name"], series))
+                bars = service._cached_tushare_kline(etf_code, limit=500)
+                if not bars:
+                    continue
+                closes = [float(b.get("close", 0)) for b in bars]
+                rows = []
+                for i, b in enumerate(bars):
+                    window = closes[:i + 1]
+                    if len(window) < 2 or not window[-1]:
+                        continue
+                    rows.append({
+                        "date": b.get("date", ""),
+                        "greed": _price_based_greed(window[-1], window),
+                        "close": window[-1],
+                    })
+                if rows:
+                    pending.append((code, cfg["name"], rows))
             except Exception as e:
-                logger.warning("同步防御标的 %s 序列失败: %s", code, e)
+                logger.warning("同步防御标的 %s 价格历史失败: %s", code, e)
 
         if not pending:
             return 0

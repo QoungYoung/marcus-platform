@@ -445,8 +445,7 @@ def _get_sector_holdings(fund_code: str) -> List[Dict[str, Any]]:
 def _check_sector_down_turn(etf_code: str, down_days: Optional[int] = None) -> bool:
     """板块 ETF 二次拐点: 最近 N 日收盘连续回落（价格驱动）。"""
     try:
-        from app.services.golden_pit_service import GoldenPitService
-        bars = GoldenPitService._fetch_pi_server_kline(etf_code, limit=40)
+        bars = GoldenPitService._fetch_tushare_kline(etf_code, limit=40)
         closes = [float(b["close"]) for b in bars if b.get("close")]
         n = down_days or int(_sector.get_sector_params(etf_code).get("exit_down_days")
                              or _sector.get_sector_config().get("exit_down_days", SECTOR_EXIT_DOWN_DAYS))

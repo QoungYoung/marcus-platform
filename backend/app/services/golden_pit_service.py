@@ -129,21 +129,24 @@ class GoldenPitService:
         self._cache[cache_key] = (series, now)
         return series
 
-    def _cached_pi_kline(self, etf_code: str, limit: int = 250, ttl: int = 7200) -> List[Dict]:
-        """带 TTL 缓存的 ETF 日K线（防御标的价格分位用）。"""
+    def _cached_tushare_kline(self, etf_code: str, limit: int = 250, ttl: int = 7200) -> List[Dict]:
+        """带 TTL 缓存的 ETF 日K线（防御标的价格分位用，数据源 Tushare）。"""
         cache_key = f"kline:{etf_code}"
         now = time.time()
         if cache_key in self._kline_cache:
             bars, ts = self._kline_cache[cache_key]
             if now - ts < ttl:
                 return bars
-        bars = self._fetch_pi_server_kline(etf_code, limit=limit)
+        bars = self._fetch_tushare_kline(etf_code, limit=limit)
         self._kline_cache[cache_key] = (bars, now)
         return bars
 
     @staticmethod
-    def _fetch_pi_server_kline(etf_code: str, limit: int = 250) -> List[Dict]:
-        """通过 Tushare 获取 ETF 日K线，统一为 {date, close} 格式。"""
+    def _fetch_tushare_kline(etf_code: str, limit: int = 250) -> List[Dict]:
+        """通过 Tushare 获取 ETF 日K线，统一为 {date, close} 格式。
+
+        （历史遗留：旧名 _fetch_pi_server_kline，实际数据源一直是 Tushare）
+        """
         from datetime import datetime as dt, timedelta
         from app.core.trading._api_config import get_tushare_pro
 
@@ -598,8 +601,10 @@ class GoldenPitService:
 
                     code_rows = series_by_code.get(code, [])
                     if len(code_rows) < 60:
-                        logger.info("DB 快照历史不足 (%s: %d天)，回退 API", code, len(code_rows))
-                        return None
+                        # 历史不足的指数单独跳过，由下方"实时补齐防御/半导体标的"分支构建，
+                        # 不再整体回退 API（修复 515080 等单标的拖垮 DB 快路径的问题）
+                        logger.info("DB 快照历史不足 (%s: %d天)，跳过该指数（实时补齐）", code, len(code_rows))
+                        continue
                     code_rows = list(reversed(code_rows))  # date 升序
                     sorted_series = [
                         {"date": r.date, "greed": r.greed_value, "close": r.close_price or 0}
@@ -743,7 +748,7 @@ class GoldenPitService:
             if not etf_code:
                 continue
 
-            bars = self._fetch_pi_server_kline(etf_code, limit=250)
+            bars = self._fetch_tushare_kline(etf_code, limit=250)
             if not bars or len(bars) < 10:
                 logger.warning("Pi Server %s K线数据不足，跳过", etf_code)
                 continue
@@ -825,7 +830,7 @@ class GoldenPitService:
 
         def _build_one(code: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             etf_code = cfg.get("etf_code", "")
-            bars = self._cached_pi_kline(etf_code, limit=250) if etf_code else []
+            bars = self._cached_tushare_kline(etf_code, limit=250) if etf_code else []
             if not bars or len(bars) < 10:
                 logger.warning("防御标的 %s K线数据不足，跳过", etf_code)
                 return None

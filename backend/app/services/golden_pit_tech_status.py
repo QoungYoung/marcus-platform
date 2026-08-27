@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """科技板块牛熊判断 + 现状数据服务。
 
 按回测结论（data/backtest/_rotation_*）的口径输出：
@@ -88,7 +88,7 @@ def _kline(etf_code: str, limit: int = 140) -> List[Dict[str, Any]]:
     if cached is not None:
         return cached
     try:
-        bars = get_golden_pit_service()._cached_pi_kline(etf_code, limit=limit, ttl=7200)
+        bars = get_golden_pit_service()._cached_tushare_kline(etf_code, limit=limit, ttl=7200)
     except Exception as e:
         logger.warning("ETF K线获取失败 %s: %s", etf_code, e)
         bars = []

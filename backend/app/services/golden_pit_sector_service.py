@@ -573,7 +573,7 @@ def _fetch_etf_kline(etf_code: str, limit: int = 300) -> List[Dict[str, Any]]:
     if cached is not None:
         return cached
     from app.services.golden_pit_service import GoldenPitService
-    bars = GoldenPitService._fetch_pi_server_kline(etf_code, limit=limit)
+    bars = GoldenPitService._fetch_tushare_kline(etf_code, limit=limit)
     _cache_set(key, bars)
     return bars
 
