@@ -6,6 +6,7 @@ Fibonacci retracement & daily K-channel (牛股计算器策略).
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -2170,6 +2171,14 @@ def _eval_overbought(rsi6: float, kdj_j: float, cci: float,
     return layer3, multiplier, hard_block, hard_block_reasons, downgrade_reason
 
 
+def _l2_gate_disabled() -> bool:
+    """L2 门控试运行开关：ENTRY_L2_DISABLED=1 时关闭 L2 拦截（仅记录，不排除不降仓）。
+
+    2026-08-28 试运行：先关掉 L2 观察建仓表现。回退 = 删除/置 0 后重启容器。
+    """
+    return os.getenv("ENTRY_L2_DISABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _eval_l2_oversold_exempt(layer1_passed: bool, ret5d: Optional[float]) -> bool:
     """L2 极端超跌豁免判定：L1 技术面已过且前5日跌幅≥15% → 5日主力<0 不直接排除。
 
@@ -2535,10 +2544,19 @@ async def check_entry_filters(req: EntryCheckRequest):
     extreme_oversold = _eval_l2_oversold_exempt(layer1_passed, ret5d)
     l2_oversold_exempt = False
 
+    l2_disabled = _l2_gate_disabled()
     if mf_data_available:
+        if l2_disabled:
+            capital_details.append("⚠️ L2 门控已关闭（ENTRY_L2_DISABLED=1 试运行）：以下仅记录，不拦截/不降仓")
         # 2a. 5日主力检查
         if d5_main_net < 0:
-            if extreme_oversold:
+            if l2_disabled:
+                capital_details.append(
+                    f"⚠️(仅记录) 5日主力净流入({d5_main_net/1e8:.2f}亿) < 0 — L2 已关闭，不拦截"
+                )
+                layer2_grade = "⚠️已关闭(L2试运行)"
+                layer2_downgrade = "5日主力净流出（L2已关闭-试运行，仅记录）"
+            elif extreme_oversold:
                 capital_details.append(
                     f"⚠️ 5日主力净流入({d5_main_net/1e8:.2f}亿) < 0，但 L1 已过 + 前5日跌幅{ret5d*100:.1f}%≥15% "
                     f"→ 极端超跌豁免，仅试探仓（不再一刀切排除）"
@@ -2572,11 +2590,14 @@ async def check_entry_filters(req: EntryCheckRequest):
 
         # 2c. 今日出货检查
         if layer2_passed and today_main_net < 0:
-            capital_details.append(f"⚠️ 今日主力({today_main_net/1e8:.2f}亿) < 0 →「今日出货」，降仓50%或放观察")
-            downgrade_multiplier = min(downgrade_multiplier, 0.5)
-            layer2_grade = "⚠️降级"
-            layer2_downgrade = "今日主力出货"
-            layer2_action = "降仓50%或放观察"
+            if l2_disabled:
+                capital_details.append(f"⚠️(仅记录) 今日主力({today_main_net/1e8:.2f}亿) < 0 — L2 已关闭，不降仓")
+            else:
+                capital_details.append(f"⚠️ 今日主力({today_main_net/1e8:.2f}亿) < 0 →「今日出货」，降仓50%或放观察")
+                downgrade_multiplier = min(downgrade_multiplier, 0.5)
+                layer2_grade = "⚠️降级"
+                layer2_downgrade = "今日主力出货"
+                layer2_action = "降仓50%或放观察"
 
         # 2d. 10日主力排除（双条件+豁免）
         if layer2_passed and d10_main_net < -500000000:
@@ -2587,7 +2608,13 @@ async def check_entry_filters(req: EntryCheckRequest):
             trend_reversing = d5_main_net > 0 and d5_main_net > d10_main_net
             
             if accelerating_outflow and not trend_reversing:
-                if extreme_oversold:
+                if l2_disabled:
+                    capital_details.append(
+                        f"⚠️(仅记录) 10日主力({d10_main_net/1e8:.2f}亿) < -5亿 + 加速流出 — L2 已关闭，不拦截"
+                    )
+                    layer2_grade = "⚠️已关闭(L2试运行)"
+                    layer2_downgrade = "10日主力大幅流出（L2已关闭-试运行，仅记录）"
+                elif extreme_oversold:
                     capital_details.append(
                         f"⚠️ 10日主力({d10_main_net/1e8:.2f}亿) < -5亿 + 加速流出，但极端超跌豁免 → 仅试探仓"
                     )

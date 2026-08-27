@@ -14,7 +14,7 @@ for _p in (_BACKEND, _CORE):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from app.api.indicator import _eval_l2_oversold_exempt
+from app.api.indicator import _eval_l2_oversold_exempt, _l2_gate_disabled
 from app.services.long_term_pool_monitor import _accept_entry_grade
 
 
@@ -42,6 +42,21 @@ def test_exempt_requires_l1_pass():
 def test_exempt_handles_missing_data():
     assert _eval_l2_oversold_exempt(True, None) is False
     assert _eval_l2_oversold_exempt(False, None) is False
+
+
+# ── _l2_gate_disabled（试运行开关）──
+
+def test_l2_gate_disabled_default_off(monkeypatch):
+    monkeypatch.delenv("ENTRY_L2_DISABLED", raising=False)
+    assert _l2_gate_disabled() is False
+
+
+def test_l2_gate_disabled_flag(monkeypatch):
+    for v in ("1", "true", "TRUE", "yes", "on"):
+        monkeypatch.setenv("ENTRY_L2_DISABLED", v)
+        assert _l2_gate_disabled() is True
+    monkeypatch.setenv("ENTRY_L2_DISABLED", "0")
+    assert _l2_gate_disabled() is False
 
 
 # ── _accept_entry_grade ──
