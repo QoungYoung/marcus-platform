@@ -681,21 +681,39 @@ class GoldenPitService:
                     item["exit_greed_threshold"] = ex["exit_greed_threshold"]
             indices.sort(key=lambda x: x["priority"])
 
-            # 全球宏观 ArkVol 数据有界等待（各 2s）：外部源慢时用空数据降级，
-            # 不再拖垮 DB 快路径
-            gcf_data = {}
-            tech_data = {}
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
-                f_tech = executor.submit(self._cached_fetch, "alla-tech")
+            # 外部展示字段（全球宏观/行业监测）并行有界获取（各 1.5s，失败降级），
+            # shutdown(wait=False) 防止后台线程继续执行阻塞 DB 快路径返回
+            gcf_data: Dict[str, Any] = {}
+            tech_data: Dict[str, Any] = {}
+            industry_monitor: Optional[Dict[str, Any]] = None
+
+            def _fetch_industry() -> Optional[Dict[str, Any]]:
+                _st: Dict[str, Any] = {}
                 try:
-                    gcf_data = f_gcf.result(timeout=2.0)
+                    self._attach_industry_monitor(_st, latest_date)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("全行业监测附加失败: %s", e)
+                return _st.get("industry_monitor")
+
+            _extra_ex = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gp-db-extra")
+            try:
+                f_gcf = _extra_ex.submit(self._cached_fetch, "global-capital-flow")
+                f_tech = _extra_ex.submit(self._cached_fetch, "alla-tech")
+                f_ind = _extra_ex.submit(_fetch_industry)
+                try:
+                    gcf_data = f_gcf.result(timeout=1.5)
                 except Exception as e:
                     logger.warning("全球资金流获取超时/失败，跳过: %s", e)
                 try:
-                    tech_data = f_tech.result(timeout=2.0)
+                    tech_data = f_tech.result(timeout=1.5)
                 except Exception as e:
                     logger.warning("alla-tech 获取超时/失败，跳过: %s", e)
+                try:
+                    industry_monitor = f_ind.result(timeout=1.5)
+                except Exception as e:
+                    logger.warning("全行业监测获取超时/失败，跳过: %s", e)
+            finally:
+                _extra_ex.shutdown(wait=False)
             global_macro = self._parse_global_macro_overlay(gcf_data)
 
             # ── 全球宏观后处理 ──
@@ -704,17 +722,6 @@ class GoldenPitService:
             confirmation = self._compute_triple_confirmation(indices, gcf_data, tech_data)
             prediction = self._predict_next_entry(indices)
             window = self._detect_golden_pit_window(indices)
-
-            # 全行业监测（有界）先算，供 summary 与 status 复用，
-            # 避免 build_v2_summary 内部再同步拉 ArkVol 行业贪婪
-            industry_monitor = None
-            try:
-                _st: Dict[str, Any] = {}
-                with ThreadPoolExecutor(max_workers=1) as _ex:
-                    _ex.submit(self._attach_industry_monitor, _st, latest_date).result(timeout=2.0)
-                industry_monitor = _st.get("industry_monitor")
-            except Exception as e:
-                logger.warning("全行业监测附加超时/失败，跳过: %s", e)
 
             summary = _report.build_v2_summary(indices, window, confirmation, prediction,
                                                industry_monitor=industry_monitor)
