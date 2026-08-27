@@ -709,6 +709,123 @@ function apply(ctx) {
       return { reply: finalReport, elapsed_ms: totalElapsed };
     }
 
+
+    // ── chat 模式流式回复：轮询 assistant/chunk(text-delta)，边生成边推送增量 ──
+    // 背景：/chat 是同步请求/响应——等整个 turn 结束后才返回完整 reply，QQ 端 120s
+    // 硬超时会误杀长文本回复（实测 6397 字 ≈ 118s）。流式端点在生成过程中持续
+    // 推送 delta，QQ 侧攒段发送，不限制模型输出（不动 maxTokens/思考强度）。
+    async function runAgentTurnStreaming(agent, message, onDelta) {
+      // 收敛 + inbox 清理（与 runAgentTurn 同源：修复 resume 后 driver 卡住/残留输入）
+      try { if (agent.cancel) agent.cancel('pre-turn-converge'); } catch (e) { console.warn('[Bridge] cancel 收敛失败: ' + (e && e.message ? e.message : e)); }
+      try { await agent.whenIdle(); } catch (e) { console.warn('[Bridge] 收敛等待失败: ' + (e && e.message ? e.message : e)); }
+      try {
+        if (agent.inbox && agent.inbox.hasPending) {
+          let pendingN = 0;
+          try { pendingN = (agent.inbox.nextTurn?.length || 0) + (agent.inbox.nextStep?.length || 0); } catch (e) {}
+          agent.inbox.clear();
+          console.warn('[Bridge] 清理残留 pending inbox ' + pendingN + ' 条（会话 ' + String(agent.id || '').slice(-16) + '）');
+        }
+      } catch (e) { console.warn('[Bridge] inbox 清理失败: ' + (e && e.message ? e.message : e)); }
+
+      const firstSeq = agent.session.seq;
+      let text = '';
+      let sentLen = 0;
+      let lastSeq = firstSeq; // 每个事件只处理一次，避免重复累加/重复推送
+      const sweep = () => {
+        const events = agent.session.events; // 每次访问返回新快照（追加后变化）
+        for (const ev of events) {
+          if (ev.seq < lastSeq) continue;
+          lastSeq = ev.seq + 1;
+          if (ev.type === 'assistant/chunk' && ev.data && ev.data.chunk && ev.data.chunk.type === 'text-delta') {
+            text += ev.data.chunk.text;
+          } else if (ev.type === 'tool/call') {
+            // 工具调用步骤的可见文本不属于最终回复，丢弃重计
+            text = '';
+            sentLen = 0;
+          }
+        }
+        if (text.length > sentLen) {
+          const delta = text.slice(sentLen);
+          sentLen = text.length;
+          onDelta(delta);
+        }
+      };
+      const timer = setInterval(() => { try { sweep(); } catch (e) { console.warn('[Bridge] 流式 sweep 失败: ' + (e && e.message ? e.message : e)); } }, 300);
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: message }], source: { kind: 'user' } }));
+      try {
+        await agent.whenIdle();
+        sweep();
+      } finally {
+        clearInterval(timer);
+      }
+      // 兜底：adapter 不发射 text-delta 时，回退 runAgentTurn 式整段提取
+      if (!text) {
+        let started = false;
+        for (const event of agent.session.events) {
+          if (event.seq < firstSeq) continue;
+          if (event.type === 'turn/start') { started = true; continue; }
+          if (!started) continue;
+          if (event.type === 'assistant/message') {
+            const joined = (event.data.message.content || [])
+              .filter((b) => b.type === 'text')
+              .map((b) => b.text)
+              .join('');
+            if (joined !== '') text = joined;
+          }
+        }
+        if (text && text.length > sentLen) onDelta(text.slice(sentLen));
+      }
+      return text || '(无回复)';
+    }
+
+    // chat 模式 SSE 端点主体：与 /chat 相同的会话/锁/重试/迁移语义，但增量推送 delta
+    async function streamChatReply(req, res, body, sendSSE) {
+      const startTime = Date.now();
+      const { message, session_id, mode, model, thinking_level } = body;
+      const sessionId = session_id || 'default';
+      const chatMode = mode || 'chat';
+      const lockKey = chatMode + ':' + asciiSessionId(sessionId);
+      const prev = locks.get(lockKey);
+      if (prev) await prev;
+      let release;
+      const lock = new Promise((r) => { release = r; });
+      locks.set(lockKey, lock);
+      let closed = false;
+      req.on('close', () => { closed = true; try { res.end(); } catch (e) {} });
+      const safeSSE = (event, data) => { if (!closed) { try { sendSSE(event, data); } catch (e) { closed = true; } } };
+      try {
+        let agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
+        let reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }));
+        if (!reply || reply === '(无回复)') {
+          // 僵尸/异常会话：销毁重建重试一次（与 /chat 一致）
+          const retryKey = chatMode + ':' + sessionId;
+          const h = sessions.get(retryKey);
+          if (h) { try { await h.dispose(); } catch (e) { console.warn('[Bridge] stream retry dispose 失败: ' + (e && e.message ? e.message : e)); } sessions.delete(retryKey); }
+          locks.delete(retryKey);
+          console.warn('[Bridge] /chat/stream 空回复，销毁重建会话重试: ' + retryKey);
+          agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
+          reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }));
+        }
+        let finalSessionId = sessionId;
+        if (!reply || reply === '(无回复)') {
+          // 二次空回复：fork 迁移（保留历史，新 driver）
+          const migrated = await migrateForkedSession(sessionId, chatMode, model, thinking_level, agent);
+          if (migrated) {
+            agent = migrated.agent;
+            finalSessionId = migrated.sessionId;
+            reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }));
+          }
+        }
+        safeSSE('done', { reply, session_id: finalSessionId, mode: chatMode, elapsed_ms: Date.now() - startTime, migrated: String(finalSessionId).indexOf('_m') > -1 });
+      } catch (e) {
+        console.error('[Bridge] /chat/stream error:', e);
+        safeSSE('error', { message: e.message || '内部错误' });
+      } finally {
+        release();
+        if (locks.get(lockKey) === lock) locks.delete(lockKey);
+      }
+    }
+
     // ═══ 专家组路由注册（POST /chat/stream）═══
     const panelDisposers = [
       ctx.webServer.register({
@@ -718,7 +835,7 @@ function apply(ctx) {
           if (req.method !== 'POST') { json(res, 405, { error: 'Method Not Allowed' }); return; }
           try {
             const body = JSON.parse(await readBody(req));
-            const { message, session_id, skip_data_collection, panel_mode } = body;
+            const { message, session_id, skip_data_collection, panel_mode, mode } = body;
             if (!message) { json(res, 400, { error: '缺少 message 参数' }); return; }
             const sessionId = session_id || 'stream_' + Date.now();
             const skipDC = skip_data_collection === true;
@@ -731,6 +848,13 @@ function apply(ctx) {
               'X-Accel-Buffering': 'no',
             });
             const sendSSE = (event, data) => { res.write('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'); };
+            // chat 模式：单 Agent 增量流（QQ 分段推送用），非专家组讨论
+            if (mode === 'chat') {
+              sendSSE('start', { message: 'start' });
+              await streamChatReply(req, res, body, sendSSE);
+              try { res.end(); } catch (e) {}
+              return;
+            }
             sendSSE('start', { message: '专家组讨论已启动，正在收集数据...' });
             try {
               const result = await executePanelDiscussion(message, sessionId, (ev) => sendSSE(ev.phase, ev), skipDC, pMode);
