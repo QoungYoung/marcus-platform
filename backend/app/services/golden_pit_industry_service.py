@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """全行业监测 DCA + 优先级资金池（行业轨，dry-run 优先）。
 
 对应 openspec change full-industry-dca-priority-pool:
@@ -483,10 +483,38 @@ def advance_industry_windows(as_of: str, signals: Dict[str, Dict[str, Any]], px:
 def industry_monitor_snapshot(as_of: Optional[str] = None, advance: Optional[bool] = None) -> Dict[str, Any]:
     """全行业监测快照（industries[] + cash_pool），供 status 接口与前端面板。失败返回空结构。
 
+    有界包装：load_industry_greed/load_industry_px 依赖 ArkVol/Tushare，外部源慢时
+    1.5s 内返回降级结构（后台线程继续计算并写缓存，下次调用命中缓存快速返回），
+    避免拖垮 golden-pit 状态接口的 DB 快路径（历史遗留修复）。
+
     advance=None: 执行模式(industry_execute=true)下只读不推进（窗口由 DCA 任务推进），
                   否则 dry-run 模拟推进（当日幂等，重复调用重放今日记录）。
     advance 显式传入可覆盖。
     """
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        _ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix="industry-snap")
+        try:
+            f = _ex.submit(_industry_monitor_snapshot_impl, as_of, advance)
+            return f.result(timeout=1.5)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("全行业监测快照超时/失败，返回降级: %s", e)
+            return {
+                "as_of": as_of or datetime.now().strftime("%Y-%m-%d"),
+                "enabled": False, "industries": [], "cash_pool": {}, "notes": [],
+                "error": f"行业监测数据超时: {e}",
+            }
+        finally:
+            _ex.shutdown(wait=False)  # 后台线程继续算，写缓存自愈
+    except Exception as e:  # noqa: BLE001
+        logger.warning("全行业监测快照调用异常: %s", e)
+        return {"as_of": as_of or datetime.now().strftime("%Y-%m-%d"),
+                "enabled": False, "industries": [], "cash_pool": {}, "notes": [],
+                "error": f"行业监测数据异常: {e}"}
+
+
+def _industry_monitor_snapshot_impl(as_of: Optional[str] = None, advance: Optional[bool] = None) -> Dict[str, Any]:
+    """industry_monitor_snapshot 实际实现（在子线程中执行）。"""
     try:
         as_of = as_of or datetime.now().strftime("%Y-%m-%d")
         cfg = get_industry_config()

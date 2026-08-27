@@ -561,18 +561,19 @@ class GoldenPitService:
 
             db = SessionLocal()
             try:
-                # 主批次优先取"行数最多的日期"（完整快照批次，通常 18 条）；
-                # 避免 Tushare/ArkVol 序列行（每交易日少量）写入新 date 后劫持"最新批次"，
-                # 导致其余指数走实时补齐、DB 快路径退化（历史遗留修复）
-                latest_date_row = (
+                # 主批次取"最近的完整快照批次"（≥12 条才视为完整）：避免 Tushare/ArkVol
+                # 序列行（每交易日少量）写入新 date 后劫持"最新批次"，导致其余指数走
+                # 实时补齐、DB 快路径退化（历史遗留修复）
+                latest_rows = (
                     db.query(GoldenPitSnapshot.date, func.count(GoldenPitSnapshot.id))
                     .group_by(GoldenPitSnapshot.date)
-                    .order_by(func.count(GoldenPitSnapshot.id).desc(), GoldenPitSnapshot.date.desc())
-                    .first()
+                    .having(func.count(GoldenPitSnapshot.id) >= 12)
+                    .order_by(GoldenPitSnapshot.date.desc())
+                    .all()
                 )
-                if not latest_date_row:
+                if not latest_rows:
                     return None
-                latest_date = latest_date_row[0]
+                latest_date = latest_rows[0][0]
 
                 today_snaps = (
                     db.query(GoldenPitSnapshot)
@@ -680,12 +681,22 @@ class GoldenPitService:
                     item["exit_greed_threshold"] = ex["exit_greed_threshold"]
             indices.sort(key=lambda x: x["priority"])
 
+            # 全球宏观 ArkVol 数据有界等待（各 2s）：外部源慢时用空数据降级，
+            # 不再拖垮 DB 快路径
+            gcf_data = {}
+            tech_data = {}
             with ThreadPoolExecutor(max_workers=2) as executor:
                 f_gcf = executor.submit(self._cached_fetch, "global-capital-flow")
                 f_tech = executor.submit(self._cached_fetch, "alla-tech")
-                gcf_data = f_gcf.result()
-                tech_data = f_tech.result()
-                global_macro = self._parse_global_macro_overlay(gcf_data)
+                try:
+                    gcf_data = f_gcf.result(timeout=2.0)
+                except Exception as e:
+                    logger.warning("全球资金流获取超时/失败，跳过: %s", e)
+                try:
+                    tech_data = f_tech.result(timeout=2.0)
+                except Exception as e:
+                    logger.warning("alla-tech 获取超时/失败，跳过: %s", e)
+            global_macro = self._parse_global_macro_overlay(gcf_data)
 
             # ── 全球宏观后处理 ──
             self._apply_global_macro_to_indices(indices, global_macro)
@@ -693,7 +704,20 @@ class GoldenPitService:
             confirmation = self._compute_triple_confirmation(indices, gcf_data, tech_data)
             prediction = self._predict_next_entry(indices)
             window = self._detect_golden_pit_window(indices)
-            summary = _report.build_v2_summary(indices, window, confirmation, prediction)
+
+            # 全行业监测（有界）先算，供 summary 与 status 复用，
+            # 避免 build_v2_summary 内部再同步拉 ArkVol 行业贪婪
+            industry_monitor = None
+            try:
+                _st: Dict[str, Any] = {}
+                with ThreadPoolExecutor(max_workers=1) as _ex:
+                    _ex.submit(self._attach_industry_monitor, _st, latest_date).result(timeout=2.0)
+                industry_monitor = _st.get("industry_monitor")
+            except Exception as e:
+                logger.warning("全行业监测附加超时/失败，跳过: %s", e)
+
+            summary = _report.build_v2_summary(indices, window, confirmation, prediction,
+                                               industry_monitor=industry_monitor)
 
             status = {
                 "as_of": latest_date,
@@ -705,8 +729,9 @@ class GoldenPitService:
                 "global_macro": global_macro,
                 "_source": "db",
             }
-            # 附加展示字段（板块拆分/全行业监测）有界等待 2s：外部源慢时跳过，
-            # 保证 DB 快路径纯 DB 查询返回（这些字段失败不影响主状态）
+            if industry_monitor is not None:
+                status["industry_monitor"] = industry_monitor
+            # 板块拆分附加字段有界等待 2s：外部源慢时跳过，不影响主状态
             def _attach_bounded(fn, *args) -> None:
                 try:
                     with ThreadPoolExecutor(max_workers=1) as _ex:
@@ -715,7 +740,6 @@ class GoldenPitService:
                     logger.warning("附加字段 %s 生成超时/失败，跳过: %s", getattr(fn, "__name__", fn), e)
 
             _attach_bounded(self._attach_sector_split, status, latest_date)
-            _attach_bounded(self._attach_industry_monitor, status, latest_date)
             return status
         except Exception as e:
             logger.warning("从 DB 重建黄金坑状态失败，回退 API: %s", e)
