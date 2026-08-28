@@ -11,12 +11,13 @@
 - 日建仓上限 5 笔（安全阀）
 """
 
+import os
 import sys
 import json
 import time
 import threading
 import logging
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
@@ -43,6 +44,16 @@ def _accept_entry_grade(result) -> bool:
     if result.final_grade == "probe_only" and getattr(result, "l2_oversold_exempt", False):
         return True
     return False
+
+
+# ── 弱市切红利ETF（REGIME_DIVIDEND_ETF_ENABLED=1 启用，2026-08-28 回测落地）──
+ETF_SYMBOL = "SH515080"            # 中证红利ETF
+ETF_ALIASES = {"SH515080", "515080", "515080.SH"}
+
+
+def _etf_pivot_enabled() -> bool:
+    """弱市切红利ETF 开关：1=启用（上证收盘<MA20 时清个股→满仓 515080，转强卖出）。"""
+    return os.getenv("REGIME_DIVIDEND_ETF_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 class LongTermPoolMonitor:
@@ -79,6 +90,12 @@ class LongTermPoolMonitor:
         # 通知记录
         self.notifications: List[Dict[str, Any]] = []
         self.last_check_time: Optional[str] = None
+
+        # 弱市切红利ETF 状态（REGIME_DIVIDEND_ETF_ENABLED=1 时生效）
+        self._etf_holding = False                 # 当前是否持有 515080
+        self._etf_last_action_day = ""            # 同一方向当日只执行一次
+        self._regime_cache: Optional[bool] = None # 弱市判定缓存（600s TTL）
+        self._regime_cache_ts = 0.0
 
     # ── 生命周期 ──
 
@@ -120,6 +137,12 @@ class LongTermPoolMonitor:
             "is_pi_window": self._is_pi_window(),
             "last_check_time": self.last_check_time,
             "notifications": self.notifications[-20:],
+            "regime_dividend_etf": {
+                "enabled": _etf_pivot_enabled(),
+                "weak": self._regime_cache,
+                "holding_etf": self._etf_holding,
+                "last_action_day": self._etf_last_action_day,
+            },
         }
 
     # ── 主循环 ──
@@ -207,6 +230,147 @@ class LongTermPoolMonitor:
             pass
         return 'yellow'
 
+    # ── 弱市切红利ETF（可选开关）──
+
+    def _regime_weak(self) -> Optional[bool]:
+        """上证指数收盘 < MA20 → 弱市。数据失败返回 None（不阻断，维持原逻辑）。600s 缓存。"""
+        now = time.time()
+        if self._regime_cache_ts and now - self._regime_cache_ts < 600:
+            return self._regime_cache
+        weak: Optional[bool] = None
+        try:
+            from app.core.trading._api_config import get_tushare_pro
+            pro = get_tushare_pro()
+            end = datetime.now().strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
+            df = pro.index_daily(ts_code="000001.SH", start_date=start, end_date=end)
+            if df is not None and not df.empty and len(df) >= 20:
+                df = df.sort_values("trade_date")
+                closes = df["close"].astype(float).tolist()
+                weak = closes[-1] < sum(closes[-20:]) / 20
+        except Exception as e:
+            logger.warning(f"[长期池] 弱市判定失败（不阻断）: {e}")
+        self._regime_cache, self._regime_cache_ts = weak, now
+        return weak
+
+    @staticmethod
+    def _norm_symbol(sym: str) -> str:
+        s = (sym or "").strip().upper()
+        if s.startswith(("SH", "SZ", "BJ")):
+            return s
+        if s.endswith((".SH", ".SZ", ".BJ")):
+            return s[-2:] + s[:-3]
+        if s.isdigit() and len(s) == 6:
+            return ("SH" if s[0] in "56" else "SZ") + s
+        return s
+
+    def _quote_price(self, symbol: str) -> float:
+        """取现价（雪球），失败返回 0。"""
+        try:
+            from app.config import get_settings
+            settings = get_settings()
+            from xueqiu_engine import XueqiuEngine
+            engine = XueqiuEngine(config_file=str(settings.workspace_path / "core" / "config.json"))
+            q = engine.get_stock_quote(symbol)
+            if q:
+                return float(q.get("current", 0) or 0)
+        except Exception as e:
+            logger.warning(f"[长期池] 取价失败 {symbol}: {e}")
+        return 0.0
+
+    def _etf_pivot(self, weak: bool) -> None:
+        """弱市：清可卖个股 → 满仓买 515080；转强：卖 515080。
+        同一方向每日只执行一次；T+1 保护（当日买入不卖）；失败不污染状态。
+        """
+        if self.executor is None:
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._etf_last_action_day == today:
+            return
+        try:
+            positions = self.executor.get_positions() or []
+            account = self.executor.get_account() or {}
+        except Exception as e:
+            logger.error(f"[长期池] 弱市切ETF 获取账户失败: {e}")
+            return
+        today_buys = set()
+        try:
+            today_buys = set(self.executor._get_today_buy_symbols() or set())
+        except Exception:
+            pass
+
+        if weak:
+            # ── 清个股（保留 ETF、T+1 不卖）──
+            sold = 0
+            for p in positions:
+                sym = self._norm_symbol(p.get("symbol", ""))
+                vol = int(p.get("volume") or 0)
+                if sym in ETF_ALIASES or sym in today_buys or vol <= 0:
+                    continue
+                price = float(p.get("current_price") or 0)
+                if price <= 0:
+                    price = self._quote_price(sym)
+                if price <= 0:
+                    logger.warning(f"[长期池] 弱市切ETF 无法取价，跳过卖出 {sym}")
+                    continue
+                try:
+                    res = self.executor.sell(symbol=sym, price=price, volume=vol,
+                                             reason="[弱市切红利ETF] 上证<MA20清仓避险",
+                                             skip_trend_constraint=True)
+                    if res and res.get("status") in ("executed", "filled", "matched"):
+                        sold += vol
+                except Exception as e:
+                    logger.error(f"[长期池] 弱市切ETF 卖出异常 {sym}: {e}")
+            # ── 买 ETF（可用现金 98%，留缓冲）──
+            cash = float(account.get("available_cash") or 0)
+            etf_price = self._quote_price(ETF_SYMBOL)
+            if cash > 5000 and etf_price > 0:
+                shares = int(cash * 0.98 / etf_price / 100) * 100
+                if shares >= 100:
+                    try:
+                        res = self.executor.buy(symbol=ETF_SYMBOL, price=etf_price, volume=shares,
+                                                reason="[弱市切红利ETF] 满仓买入中证红利ETF(515080)")
+                        if res and res.get("status") in ("executed", "filled", "matched"):
+                            self._etf_holding = True
+                            msg = f"🛡️ [弱市切红利ETF] 上证<MA20，清个股{sold}股 → 买入515080 {shares}份（现金{cash:.0f}）"
+                            logger.info(msg)
+                            print(msg, file=sys.stderr)
+                            self.notifications.append({"timestamp": datetime.now().isoformat(), "event": "pivot_to_etf",
+                                                       "sold_shares": sold, "etf_shares": shares})
+                    except Exception as e:
+                        logger.error(f"[长期池] 弱市切ETF 买入异常: {e}")
+            else:
+                logger.warning(f"[长期池] 弱市切ETF 现金不足或无报价: cash={cash:.0f} price={etf_price}")
+            self._etf_last_action_day = today
+        else:
+            # ── 转强：卖 ETF ──
+            sold_etf = 0
+            for p in positions:
+                sym = self._norm_symbol(p.get("symbol", ""))
+                vol = int(p.get("volume") or 0)
+                if sym not in ETF_ALIASES or vol <= 0:
+                    continue
+                price = float(p.get("current_price") or 0)
+                if price <= 0:
+                    price = self._quote_price(sym)
+                if price <= 0:
+                    continue
+                try:
+                    res = self.executor.sell(symbol=sym, price=price, volume=vol,
+                                             reason="[弱市切红利ETF] 上证重回MA20上方，卖出ETF",
+                                             skip_trend_constraint=True)
+                    if res and res.get("status") in ("executed", "filled", "matched"):
+                        sold_etf += vol
+                except Exception as e:
+                    logger.error(f"[长期池] 弱市切ETF 卖ETF异常: {e}")
+            if sold_etf > 0:
+                self._etf_holding = False
+                msg = f"🛡️ [弱市切红利ETF] 上证重回MA20上方，卖出515080 {sold_etf}份，恢复个股建仓"
+                logger.info(msg)
+                print(msg, file=sys.stderr)
+                self.notifications.append({"timestamp": datetime.now().isoformat(), "event": "pivot_back", "etf_shares": sold_etf})
+            self._etf_last_action_day = today
+
     # ── 核心检查 ──
 
     def _check_candidates(self) -> None:
@@ -215,6 +379,16 @@ class LongTermPoolMonitor:
 
         from app.services.long_term_pool import get_long_term_pool
         pool = get_long_term_pool()
+
+        # ── 弱市切红利ETF（可选）：弱市清个股买ETF、转强卖ETF；弱市跳过候选建仓 ──
+        if _etf_pivot_enabled():
+            weak = self._regime_weak()
+            if weak is not None:
+                self._etf_pivot(weak)
+                if weak:
+                    print(f"[长期池] ⏸️ 弱市(上证<MA20)，跳过候选建仓（REGIME_DIVIDEND_ETF_ENABLED）",
+                          file=sys.stderr)
+                    return
 
         # ── 清仓复位：已 promoted 但持仓已清 → 恢复 active ──
         promoted = pool.get_promoted()
@@ -276,6 +450,12 @@ class LongTermPoolMonitor:
         symbol = entry.get("symbol", "")
         if not symbol:
             return False
+
+        # 弱市切红利ETF：弱市禁止个股建仓（双保险）
+        if _etf_pivot_enabled():
+            weak = self._regime_weak()
+            if weak:
+                return False
 
         # 单票每日自动买上限
         if self.today_buys.get(symbol, 0) >= self.max_per_symbol_per_day:

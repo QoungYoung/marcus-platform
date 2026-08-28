@@ -15,7 +15,7 @@ for _p in (_BACKEND, _CORE):
         sys.path.insert(0, str(_p))
 
 from app.api.indicator import _eval_l2_oversold_exempt, _l2_gate_disabled
-from app.services.long_term_pool_monitor import _accept_entry_grade
+from app.services.long_term_pool_monitor import _accept_entry_grade, _etf_pivot_enabled
 
 
 class _FakeResult:
@@ -57,6 +57,21 @@ def test_l2_gate_disabled_flag(monkeypatch):
         assert _l2_gate_disabled() is True
     monkeypatch.setenv("ENTRY_L2_DISABLED", "0")
     assert _l2_gate_disabled() is False
+
+
+# ── _etf_pivot_enabled（弱市切红利ETF 开关）──
+
+def test_etf_pivot_enabled_default_off(monkeypatch):
+    monkeypatch.delenv("REGIME_DIVIDEND_ETF_ENABLED", raising=False)
+    assert _etf_pivot_enabled() is False
+
+
+def test_etf_pivot_enabled_flag(monkeypatch):
+    for v in ("1", "true", "on"):
+        monkeypatch.setenv("REGIME_DIVIDEND_ETF_ENABLED", v)
+        assert _etf_pivot_enabled() is True
+    monkeypatch.setenv("REGIME_DIVIDEND_ETF_ENABLED", "0")
+    assert _etf_pivot_enabled() is False
 
 
 # ── _accept_entry_grade ──
