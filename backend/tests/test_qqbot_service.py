@@ -230,7 +230,7 @@ def test_chat_streaming_flushes_by_paragraph_boundary():
         p3 = "第三段：" + "字" * 180
         chunks = [p1, p2, p3]
 
-        async def fake_stream(message, session_id, on_delta):
+        async def fake_stream(message, session_id, on_delta, on_heartbeat=None):
             for c in chunks:
                 await on_delta(c)
             return {"reply": "".join(chunks), "session_id": "sid"}
@@ -263,7 +263,7 @@ def test_chat_streaming_short_reply_uses_send_reply():
         svc._send_reply = fake_send_reply
         svc._send_text = fake_send_text
 
-        async def fake_stream(message, session_id, on_delta):
+        async def fake_stream(message, session_id, on_delta, on_heartbeat=None):
             return {"reply": "收到。", "session_id": "sid"}
 
         svc._call_pi_server_stream = fake_stream
@@ -286,7 +286,7 @@ def test_chat_streaming_fast_reply_no_thinking_hint():
 
         svc._send_text = fake_send
 
-        async def fake_stream(message, session_id, on_delta):
+        async def fake_stream(message, session_id, on_delta, on_heartbeat=None):
             await on_delta("立即回复。")
             return {"reply": "立即回复。", "session_id": "sid"}
 
@@ -312,7 +312,7 @@ def test_chat_streaming_slow_thinking_sends_hint():
 
         svc._send_text = fake_send
 
-        async def fake_stream(message, session_id, on_delta):
+        async def fake_stream(message, session_id, on_delta, on_heartbeat=None):
             await asyncio.sleep(0.3)  # 模拟 0.3s 思考期
             await on_delta("第一段内容。" + "字" * 200 + "\n\n")
             return {"reply": "完整回复", "session_id": "sid"}
@@ -339,7 +339,7 @@ def test_chat_streaming_prepends_current_time_context():
 
         svc._send_text = fake_send
 
-        async def fake_stream(message, session_id, on_delta):
+        async def fake_stream(message, session_id, on_delta, on_heartbeat=None):
             captured["message"] = message
             return {"reply": "好", "session_id": "sid"}
 
@@ -359,4 +359,95 @@ def test_chat_streaming_prepends_current_time_context():
     now = _dt.now()
     dt = _dt(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6)))
     assert abs((now - dt).total_seconds()) < 120
+
+# ───────── 心跳保活：思考/工具调用静默期不误杀连接 ─────────
+
+def test_call_pi_server_stream_heartbeat_calls_on_heartbeat():
+    """heartbeat 事件回调 on_heartbeat（静默期保活信号），delta 照常解析。"""
+    lines = _sse_bytes([
+        ("start", {"message": "start"}),
+        ("heartbeat", {"ts": 1}),
+        ("heartbeat", {"ts": 2}),
+        ("delta", {"text": "结果"}),
+        ("done", {"reply": "结果", "session_id": "s"}),
+    ])
+
+    async def scenario():
+        svc = QQBotService()
+        svc.pi_server_url = "http://dsh:3001/chat"
+        hbs = []
+        deltas = []
+        with patch("aiohttp.ClientSession") as cls:
+            session = cls.return_value
+            session.__aenter__ = AsyncMock(return_value=session)
+            session.__aexit__ = AsyncMock(return_value=False)
+            resp = MagicMock()
+            resp.status = 200
+            resp.content = _FakeContent(lines)
+            ctx = MagicMock()
+            ctx.__aenter__.return_value = resp
+            ctx.__aexit__.return_value = False
+            session.post = MagicMock(return_value=ctx)
+            result = await svc._call_pi_server_stream("hi", "s", deltas.append, lambda: hbs.append(1))
+            return result, hbs, deltas
+
+    result, hbs, deltas = asyncio.run(scenario())
+    assert result == {"reply": "结果", "session_id": "s"}
+    assert len(hbs) == 2
+    assert deltas == ["结果"]
+
+
+def test_call_pi_server_stream_timeout_guards():
+    """流式超时：total=600s 整体护栏 + sock_read=240s 静默上限（bridge 每 20s 心跳）。"""
+
+    async def scenario():
+        svc = QQBotService()
+        svc.pi_server_url = "http://dsh:3001/chat"
+        with patch("aiohttp.ClientSession") as cls:
+            session = cls.return_value
+            session.__aenter__ = AsyncMock(return_value=session)
+            session.__aexit__ = AsyncMock(return_value=False)
+            resp = MagicMock()
+            resp.status = 200
+            resp.content = _FakeContent(_sse_bytes([("done", {"reply": "ok", "session_id": "s"})]))
+            ctx = MagicMock()
+            ctx.__aenter__.return_value = resp
+            ctx.__aexit__.return_value = False
+            session.post = MagicMock(return_value=ctx)
+            await svc._call_pi_server_stream("hi", "s", None)
+            to = session.post.call_args.kwargs["timeout"]
+            return to.total, to.sock_read
+
+    total, sock_read = asyncio.run(scenario())
+    assert total == 600
+    assert sock_read == 240
+
+
+def test_chat_streaming_rehint_on_heartbeat():
+    """心跳期间仍未出文：周期性补发「⏳ 还在处理中」。"""
+
+    async def scenario():
+        import app.services.qqbot_service as mod
+        svc = QQBotService()
+        sent = []
+
+        async def fake_send(openid, content, msg_id=""):
+            sent.append(content)
+
+        svc._send_text = fake_send
+
+        async def fake_stream(message, session_id, on_delta, on_heartbeat=None):
+            await asyncio.sleep(0.2)  # 思考期 > hint delay
+            if on_heartbeat:
+                await on_heartbeat()  # 心跳时仍无输出 → 补发「还在处理中」
+            return {"reply": "ok", "session_id": "sid"}
+
+        svc._call_pi_server_stream = fake_stream
+        with patch.object(mod, "QQ_THINKING_HINT_DELAY", 0.05), patch.object(mod, "QQ_REHINT_INTERVAL", 0.02):
+            await svc._chat_streaming("openid", "hi", "sid", "m")
+        return sent
+
+    sent = asyncio.run(scenario())
+    assert sent[0] == "🤔 正在思考，请稍候…"
+    assert "⏳ 还在处理中，请稍候…" in sent
 

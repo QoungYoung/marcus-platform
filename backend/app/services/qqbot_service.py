@@ -11,6 +11,7 @@ QQ Bot 服务 — 桥接 QQ 消息 ↔ Pi Agent（工具调用）
 import asyncio
 import json
 import sys
+import time
 import traceback
 from datetime import datetime
 from typing import Callable, Optional, Dict
@@ -42,6 +43,9 @@ MAX_QQ_REPLY_CHARS = 6000  # 单次回复投递上限：超出部分按段落截
 QQ_STREAM_FLUSH_CHARS = 500   # 攒够该字符数就发送一段（无段落边界时的兜底阈值）
 QQ_STREAM_BOUNDARY_MIN = 150  # 段落边界出现且攒够该字符数时立即按段落发送
 QQ_THINKING_HINT_DELAY = 5    # 流式开始后若 N 秒无任何输出，先发「正在思考」提示（模型思考期可能 30-60s）
+QQ_REHINT_INTERVAL = 60    # 思考/工具调用长期无输出时，每隔 N 秒补发一次「还在处理中」
+QQ_STREAM_TOTAL_TIMEOUT = 600   # 流式整体护栏（秒）：心跳持续到达时不会触发
+QQ_STREAM_SOCK_READ = 240       # 块间静默上限（秒）：bridge 每 20s 心跳，240s 静默=连接/桥已死
 
 
 def _now_context() -> str:
@@ -224,12 +228,13 @@ class QQBotService:
             return f"调用 Pi Server 失败: {str(e)}"
 
 
-    async def _call_pi_server_stream(self, message: str, session_id: str, on_delta: Optional[Callable[[str], object]] = None) -> Dict[str, str]:
+    async def _call_pi_server_stream(self, message: str, session_id: str, on_delta: Optional[Callable[[str], object]] = None, on_heartbeat: Optional[Callable[[], object]] = None) -> Dict[str, str]:
         """SSE 增量调用 /chat/stream（chat 模式）；on_delta(delta_text) 每次增量回调。
 
         返回 {"reply", "session_id"}；失败抛异常（调用方降级提示）。
-        流式语义：total 是整体护栏（6 分钟），sock_read 是块间静默上限（2 分钟）；
-        长文本生成过程中 delta 持续到达，不会误触超时，且不限制模型输出。
+        流式语义：bridge 在思考/工具调用静默期每 20s 发 heartbeat 保活；
+        sock_read 是块间静默上限（240s，桥每 20s 心跳 → 240s 静默=连接已死），
+        total 是整体护栏（600s）。长文本/长思考不会被误杀，且不限制模型输出。
         """
         import json as _json
         stream_url = self.pi_server_url.replace('/chat', '/chat/stream')
@@ -237,7 +242,7 @@ class QQBotService:
             async with session.post(
                 stream_url,
                 json={"message": message, "session_id": session_id, "mode": "chat"},
-                timeout=aiohttp.ClientTimeout(total=360, sock_read=120),
+                timeout=aiohttp.ClientTimeout(total=QQ_STREAM_TOTAL_TIMEOUT, sock_read=QQ_STREAM_SOCK_READ),
             ) as resp:
                 if resp.status != 200:
                     body_text = await resp.text()
@@ -263,6 +268,12 @@ class QQBotService:
                         elif event == "done":
                             reply = data.get("reply", "")
                             new_session_id = data.get("session_id", session_id)
+                        elif event == "heartbeat":
+                            # 桥保活心跳：思考/工具调用静默期每 20s 一条（读到此行即重置 sock_read）
+                            if on_heartbeat is not None:
+                                _res = on_heartbeat()
+                                if asyncio.iscoroutine(_res):
+                                    await _res
                         elif event == "error":
                             raise RuntimeError(data.get("message", "流式生成失败"))
                 return {"reply": reply, "session_id": new_session_id}
@@ -278,6 +289,7 @@ class QQBotService:
         sent_pos = 0
         flushed = False
         hint_sent = False
+        last_hint_at = 0
         hint_task = None
 
         async def flush_upto(end: int):
@@ -303,15 +315,23 @@ class QQBotService:
 
         # 思考期提示：模型思考阶段可能 30-60s 无可见输出，先发提示避免用户以为卡死
         async def maybe_send_thinking_hint():
-            nonlocal hint_sent
+            nonlocal hint_sent, last_hint_at
             await asyncio.sleep(QQ_THINKING_HINT_DELAY)
             if not flushed and not hint_sent:
                 hint_sent = True
+                last_hint_at = time.time()
                 await self._send_text(openid, "🤔 正在思考，请稍候…", msg_id)
+
+        # 桥心跳：思考/工具调用静默期保活；若长期仍无输出，周期性补发「还在处理中」
+        async def on_heartbeat():
+            nonlocal last_hint_at
+            if not flushed and hint_sent and (time.time() - last_hint_at) >= QQ_REHINT_INTERVAL:
+                last_hint_at = time.time()
+                await self._send_text(openid, "⏳ 还在处理中，请稍候…", msg_id)
 
         hint_task = asyncio.create_task(maybe_send_thinking_hint())
         try:
-            result = await self._call_pi_server_stream(message, session_id, on_delta)
+            result = await self._call_pi_server_stream(message, session_id, on_delta, on_heartbeat=on_heartbeat)
         finally:
             if hint_task:
                 hint_task.cancel()

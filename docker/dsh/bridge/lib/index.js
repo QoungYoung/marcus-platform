@@ -714,7 +714,10 @@ function apply(ctx) {
     // 背景：/chat 是同步请求/响应——等整个 turn 结束后才返回完整 reply，QQ 端 120s
     // 硬超时会误杀长文本回复（实测 6397 字 ≈ 118s）。流式端点在生成过程中持续
     // 推送 delta，QQ 侧攒段发送，不限制模型输出（不动 maxTokens/思考强度）。
-    async function runAgentTurnStreaming(agent, message, onDelta) {
+    // 心跳：模型思考/工具调用阶段无 text-delta，客户端 sock_read 会被静默误杀
+    // （2026-08-28 实测 121s 静默 → 超时）；每 20s 无输出时发 heartbeat 保活。
+    const STREAM_HEARTBEAT_MS = 20000;
+    async function runAgentTurnStreaming(agent, message, onDelta, onHeartbeat) {
       // 收敛 + inbox 清理（与 runAgentTurn 同源：修复 resume 后 driver 卡住/残留输入）
       try { if (agent.cancel) agent.cancel('pre-turn-converge'); } catch (e) { console.warn('[Bridge] cancel 收敛失败: ' + (e && e.message ? e.message : e)); }
       try { await agent.whenIdle(); } catch (e) { console.warn('[Bridge] 收敛等待失败: ' + (e && e.message ? e.message : e)); }
@@ -731,6 +734,7 @@ function apply(ctx) {
       let text = '';
       let sentLen = 0;
       let lastSeq = firstSeq; // 每个事件只处理一次，避免重复累加/重复推送
+      let lastEmit = Date.now();
       const sweep = () => {
         const events = agent.session.events; // 每次访问返回新快照（追加后变化）
         for (const ev of events) {
@@ -744,11 +748,19 @@ function apply(ctx) {
             sentLen = 0;
           }
         }
+        let emitted = false;
         if (text.length > sentLen) {
           const delta = text.slice(sentLen);
           sentLen = text.length;
           onDelta(delta);
+          emitted = true;
         }
+        // 静默期心跳：长时间无 text-delta（思考/工具调用）时保活客户端连接
+        if (!emitted && Date.now() - lastEmit >= STREAM_HEARTBEAT_MS && onHeartbeat) {
+          onHeartbeat();
+          emitted = true;
+        }
+        if (emitted) lastEmit = Date.now();
       };
       const timer = setInterval(() => { try { sweep(); } catch (e) { console.warn('[Bridge] 流式 sweep 失败: ' + (e && e.message ? e.message : e)); } }, 300);
       agent.followup(createUserMessage({ content: [{ type: 'text', text: message }], source: { kind: 'user' } }));
@@ -793,9 +805,10 @@ function apply(ctx) {
       let closed = false;
       req.on('close', () => { closed = true; try { res.end(); } catch (e) {} });
       const safeSSE = (event, data) => { if (!closed) { try { sendSSE(event, data); } catch (e) { closed = true; } } };
+      const hb = () => safeSSE('heartbeat', { ts: Date.now() });
       try {
         let agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
-        let reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }));
+        let reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }), hb);
         if (!reply || reply === '(无回复)') {
           // 僵尸/异常会话：销毁重建重试一次（与 /chat 一致）
           const retryKey = chatMode + ':' + sessionId;
@@ -804,7 +817,7 @@ function apply(ctx) {
           locks.delete(retryKey);
           console.warn('[Bridge] /chat/stream 空回复，销毁重建会话重试: ' + retryKey);
           agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
-          reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }));
+          reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }), hb);
         }
         let finalSessionId = sessionId;
         if (!reply || reply === '(无回复)') {
@@ -813,7 +826,7 @@ function apply(ctx) {
           if (migrated) {
             agent = migrated.agent;
             finalSessionId = migrated.sessionId;
-            reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }));
+            reply = await runAgentTurnStreaming(agent, message, (delta) => safeSSE('delta', { text: delta }), hb);
           }
         }
         safeSSE('done', { reply, session_id: finalSessionId, mode: chatMode, elapsed_ms: Date.now() - startTime, migrated: String(finalSessionId).indexOf('_m') > -1 });
