@@ -15,7 +15,7 @@ for _p in (_BACKEND, _CORE):
         sys.path.insert(0, str(_p))
 
 from app.api.indicator import _eval_l2_oversold_exempt, _l2_gate_disabled
-from app.services.long_term_pool_monitor import _accept_entry_grade, _etf_pivot_enabled
+from app.services.long_term_pool_monitor import _accept_entry_grade, _etf_pivot_enabled, _rank_candidate
 
 
 class _FakeResult:
@@ -72,6 +72,57 @@ def test_etf_pivot_enabled_flag(monkeypatch):
         assert _etf_pivot_enabled() is True
     monkeypatch.setenv("REGIME_DIVIDEND_ETF_ENABLED", "0")
     assert _etf_pivot_enabled() is False
+
+
+# ── _rank_candidate（当日最优前 N 排序）──
+
+class _FakeTech:
+    macd_status = "金叉"
+    ma_status = "MA5>MA20"
+    intraday_percentile = 30
+    current_price = 10.0
+
+
+class _FakeCapital:
+    d5_main_net = 1e8
+    today_main_net = 2e7
+    grade = "✅通过"
+
+
+class _FakeLayer:
+    passed = True
+    grade = "✅通过"
+
+
+class _FakeBuyConf:
+    change_pct = 2.0
+
+
+class _FakeResult2:
+    downgrade_multiplier = 1.0
+    tech = _FakeTech()
+    layer1_tech = _FakeLayer()
+    layer2_capital = _FakeCapital()
+    layer3_overbought = _FakeLayer()
+    buy_confirmation = _FakeBuyConf()
+    l2_oversold_exempt = False
+
+
+def test_rank_prefers_strong_signal_low_chase():
+    r = _FakeResult2()
+    score = _rank_candidate(r)
+    assert score >= 1.2  # 1.0基础 + L1过0.15 + 金叉0.1 + MA多头0.1 + 5日主力0.1 + 今日0.05 - 分位0.09
+
+
+def test_rank_penalizes_high_percentile_and_big_gain():
+    r = _FakeResult2()
+    r.tech.intraday_percentile = 95
+    r.buy_confirmation.change_pct = 7.0
+    r.downgrade_multiplier = 0.5
+    low = _rank_candidate(r)
+    r2 = _FakeResult2()
+    high = _rank_candidate(r2)
+    assert low < high
 
 
 # ── _accept_entry_grade ──

@@ -56,6 +56,34 @@ def _etf_pivot_enabled() -> bool:
     return os.getenv("REGIME_DIVIDEND_ETF_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _rank_candidate(result) -> float:
+    """候选排序分（2026-08-28：当日过条件候选多于每日上限时，取分高者优先建仓）。
+
+    基础 = 降级系数；加分：L1 通过 / MACD 金叉 / MA5>MA20 / 5日主力>0（L2 关但作为排序信号）
+    / 今日主力>0；减分：日内分位偏高（追高）、涨幅>5%。
+    """
+    score = max(0.0, float(getattr(result, "downgrade_multiplier", 1.0) or 0))
+    try:
+        if result.layer1_tech.passed:
+            score += 0.15
+        if getattr(result.tech, "macd_status", "") == "金叉":
+            score += 0.10
+        if getattr(result.tech, "ma_status", "") == "MA5>MA20":
+            score += 0.10
+        if getattr(result.layer2_capital, "d5_main_net", 0) > 0:
+            score += 0.10
+        if getattr(result.layer2_capital, "today_main_net", 0) > 0:
+            score += 0.05
+        pct = getattr(result.tech, "intraday_percentile", None)
+        if pct is not None:
+            score -= 0.15 * max(0.0, min(pct / 50.0, 2.0))
+        if result.buy_confirmation and getattr(result.buy_confirmation, "change_pct", 0) > 5:
+            score -= 0.10
+    except Exception:
+        pass
+    return round(score, 3)
+
+
 class LongTermPoolMonitor:
     """长期候选池自动建仓监控器"""
 
@@ -96,6 +124,9 @@ class LongTermPoolMonitor:
         self._etf_last_action_day = ""            # 同一方向当日只执行一次
         self._regime_cache: Optional[bool] = None # 弱市判定缓存（600s TTL）
         self._regime_cache_ts = 0.0
+
+        # 当日候选排序（2026-08-28：过条件后按 _rank_candidate 取前 N 建仓）
+        self._last_ranking: List[tuple] = []      # [(symbol, name, score), ...]
 
     # ── 生命周期 ──
 
@@ -143,6 +174,10 @@ class LongTermPoolMonitor:
                 "holding_etf": self._etf_holding,
                 "last_action_day": self._etf_last_action_day,
             },
+            "last_ranking": [
+                {"symbol": s, "name": n, "score": sc}
+                for s, n, sc in (self._last_ranking or [])[:10]
+            ],
         }
 
     # ── 主循环 ──
@@ -431,45 +466,63 @@ class LongTermPoolMonitor:
         self.last_check_time = datetime.now().isoformat()
         print(f"[长期池] 🔄 检查 {len(active)} 只候选 | {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr)
 
+        # ── 先收集当日全部合格候选（含排序分），再取最优前 N 建仓
+        #    （2026-08-28 优化：替代按池顺序先到先买）──
+        eligible = []  # (entry, result, score)
         for entry in active:
-            if total_today >= self.max_daily_auto_buys:
-                break
             try:
-                bought = self._evaluate_and_buy(entry)
-                if bought:
-                    total_today += 1
+                ev = self._evaluate(entry)
+                if ev is not None:
+                    eligible.append(ev)
             except Exception as e:
                 logger.error(f"[长期池] 评估 {entry.get('symbol')} 失败: {e}")
 
-    def _evaluate_and_buy(self, entry: dict) -> bool:
-        """对单个候选执行：已在持仓? → check_entry_filters → calc_position → buy"""
+        eligible.sort(key=lambda x: x[2], reverse=True)
+        self._last_ranking = [(e[0].get("symbol", ""), e[0].get("name", ""), e[2]) for e in eligible]
+        if eligible:
+            rank_str = " > ".join(f"{s}({sc:.2f})" for s, _, sc in self._last_ranking[:10])
+            print(f"[长期池] 📊 当日合格 {len(eligible)} 只，排序: {rank_str}", file=sys.stderr)
+
+        total_today = sum(self.today_buys.values())
+        for entry, result, score in eligible:
+            if total_today >= self.max_daily_auto_buys:
+                break
+            try:
+                if self._execute_buy(entry, result, score):
+                    total_today += 1
+            except Exception as e:
+                logger.error(f"[长期池] 建仓 {entry.get('symbol')} 失败: {e}")
+
+    def _evaluate(self, entry: dict):
+        """只评估候选：持仓/日限/弱市 → check_entry_filters → 分级 → 排序分。
+        返回 (entry, result, score) 或 None（未通过）。不执行下单。"""
         import asyncio
         from app.api.indicator import check_entry_filters
         from app.models.indicator import EntryCheckRequest
 
         symbol = entry.get("symbol", "")
         if not symbol:
-            return False
+            return None
 
         # 弱市切红利ETF：弱市禁止个股建仓（双保险）
         if _etf_pivot_enabled():
             weak = self._regime_weak()
             if weak:
-                return False
+                return None
 
         # 单票每日自动买上限
         if self.today_buys.get(symbol, 0) >= self.max_per_symbol_per_day:
-            return False
+            return None
 
         # ── 已在持仓中？跳过 ──
         try:
             positions = self.executor.get_positions() if self.executor else {}
             held_symbols = {p.get('symbol', '') for p in positions} if isinstance(positions, list) else set()
             if symbol in held_symbols:
-                return False
+                return None
         except Exception as e:
-            logger.error(f"[长期池] 查询持仓失败，保守拒绝买入 {symbol}: {e}")
-            return False
+            logger.error(f"[长期池] 查询持仓失败，保守拒绝 {symbol}: {e}")
+            return None
 
         # ── Step 1: 入场过滤 ──
         try:
@@ -483,7 +536,7 @@ class LongTermPoolMonitor:
                 loop.close()
         except Exception as e:
             logger.warning(f"[长期池] check_entry_filters failed for {symbol}: {e}")
-            return False
+            return None
 
         from app.services.long_term_pool import get_long_term_pool
         pool = get_long_term_pool()
@@ -493,15 +546,24 @@ class LongTermPoolMonitor:
             grade = "hard_block" if result.hard_block else "downgrade_zero"
             pool.update_check(symbol, grade)
             print(f"[长期池] {symbol} 硬拦截 ({grade})，跳过", file=sys.stderr)
-            return False
+            return None
 
         # ── 未通过 → 更新检查状态 ──
         # 2026-08-28：L2 极端超跌豁免（final_grade=probe_only + l2_oversold_exempt=True）允许试探仓建仓
         if not _accept_entry_grade(result):
             pool.update_check(symbol, result.final_grade)
-            return False
+            return None
 
-        # ── Step 2: 过滤通过，仓位计算 ──
+        score = _rank_candidate(result)
+        return (entry, result, score)
+
+    def _execute_buy(self, entry: dict, result, score: float) -> bool:
+        """对已通过评估的候选执行：calc_position → 验证 → 建仓。"""
+        symbol = entry.get("symbol", "")
+        from app.services.long_term_pool import get_long_term_pool
+        pool = get_long_term_pool()
+
+        # ── Step 2: 仓位计算 ──
         chain_role = entry.get("chain_role", "mid")
         if "上游" in chain_role or "upstream" in chain_role:
             role = "upstream"
@@ -566,6 +628,7 @@ class LongTermPoolMonitor:
             f"过滤: L1={result.layer1_tech.grade} L2={result.layer2_capital.grade} "
             f"L3={result.layer3_overbought.grade}"
             + (" L2豁免=极端超跌" if getattr(result, "l2_oversold_exempt", False) else "")
+            + f" | 排序分={score}"
         )
 
         try:
@@ -583,7 +646,7 @@ class LongTermPoolMonitor:
             msg = (
                 f"✅ [长期候选池] 自动建仓: {symbol} {name} "
                 f"@{buy_price:.2f} × {buy_volume}股 "
-                f"({pos_result.quantity.probe_pct:.1f}%仓位)"
+                f"({pos_result.quantity.probe_pct:.1f}%仓位, 排序分{score})"
             )
             logger.info(msg)
             print(msg, file=sys.stderr)
@@ -596,6 +659,7 @@ class LongTermPoolMonitor:
                 "volume": buy_volume,
                 "amount": pos_result.quantity.probe_amount,
                 "pct": pos_result.quantity.probe_pct,
+                "score": score,
             })
             return True
         else:
