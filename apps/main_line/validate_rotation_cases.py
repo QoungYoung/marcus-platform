@@ -149,6 +149,10 @@ def run_position():
     print("WROTE", os.path.join(DATA, "rotation_position_replay.json"), "cases=", len(out))
 
 def run_wave():
+    import os as _os
+    # 离线模式: 历史重放不需要实时两融/北向/GJD(多次实测 tushare 端会挂起数分钟)；量价结构+锚点+当前主线仍注入
+    _os.environ['TUSHARE_TOKEN'] = ''
+    _os.environ.pop('TUSHARE_API_URL', None)
     import wave_agent as wa
     import time
     dates = sorted({c["date"] for c in CASES})
