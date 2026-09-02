@@ -979,19 +979,32 @@ def _read_rotation_gate_context() -> str:
             return "## 轮动门控（rotation_gate）" + NL + "- rotation_gate 模块未加载，跳过。" + NL + NL
         wl = _wave_level_gate()
         op = wl.get("operation") or ""
-        # 主线明牌吸金代理：fusion 主线上 score>=0.85 且 conc>=0.7
-        sucking = False; ml_name = "?"
+        ml_name = "?"; sucking = None; healthy = None
+        crowded = []; room = []
+        # 细分宇宙+拥挤度代理(rotation_universe.py)：真实子方向资金/相对低位
+        try:
+            from main_line import rotation_universe as _ru
+            _p = _ru.proxies()
+            if _p and _p.get("rotation_healthy") is not None:
+                sucking = bool(_p.get("mainline_sucking"))
+                healthy = bool(_p.get("rotation_healthy"))
+                crowded = _p.get("crowded_top") or []
+                room = _p.get("room_bottom") or []
+        except Exception:
+            pass
         try:
             _p2 = _os.path.join(DATA, "main_line_state.json")
             if _os.path.exists(_p2):
                 ml = _json.load(open(_p2, encoding="utf-8"))
                 ml_name = ml.get("main_line") or "?"
-                fu = (ml.get("fusion") or {}).get(ml_name) or {}
-                score = float(fu.get("score") or 0); conc = float(fu.get("conc") or 0)
-                sucking = bool(score >= 0.85 and conc >= 0.7)
+                if sucking is None:  # fusion 兜底代理
+                    fu = (ml.get("fusion") or {}).get(ml_name) or {}
+                    score = float(fu.get("score") or 0); conc = float(fu.get("conc") or 0)
+                    sucking = bool(score >= 0.85 and conc >= 0.7)
         except Exception:
             pass
-        healthy = True  # TODO: 细分宇宙/轮动健康度(抽血/无主线快速轮动)实时识别
+        if sucking is None: sucking = False
+        if healthy is None: healthy = True
         dec = rg.decide(op, mainline_sucking=sucking, inside_mainline=False,
                         rotation_healthy=healthy)
         verdict = dec.get("verdict", "block")
@@ -999,9 +1012,12 @@ def _read_rotation_gate_context() -> str:
         guide = _ROT_VERDICT_GUIDE.get(verdict, "")
         block = ("## 轮动门控（rotation_gate）" + NL
                  + f"- 浪型操作：{op or '未知'} ｜ 主线：{ml_name}" + NL
-                 + f"- 主线明牌吸金(score/conc 代理)：{'是' if sucking else '否'}" + NL
-                 + f"- 轮动健康度：未实时建模，默认健康（待细分宇宙接入）" + NL
-                 + f"- 判定：{verdict} —— {guide}" + NL)
+                 + f"- 主线吸金/轮动健康（细分宇宙代理）：吸金={'是' if sucking else '否'} 健康={'是' if healthy else '否'}" + NL)
+        if crowded:
+            block += f"- 拥挤侧(回避新建/等回调)：{'、'.join(crowded[:4])}" + NL
+        if room:
+            block += f"- 相对低位/资金流入候选：{'、'.join(room[:4])}" + NL
+        block += f"- 判定：{verdict} —— {guide}" + NL
         if reason:
             block += f"- 依据：{reason[:160]}" + NL
         return block + NL
