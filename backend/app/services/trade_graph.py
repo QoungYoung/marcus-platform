@@ -932,16 +932,34 @@ def _read_confirm_context() -> str:
         vals = [v for v in res.values() if isinstance(v, dict) and v.get("action") and v.get("position") == "LOW"]
         if not vals:
             return ""
+        # 拥挤无空间过滤(双维: 真实基金拥挤×位置空间, rotation_universe.proxies.crowded_top) → 落到实处
+        avoid = []
+        ru = None
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps"))
+            from main_line import rotation_universe as _ru
+            ru = _ru
+            avoid = (_ru.proxies().get("crowded_top") or [])
+        except Exception:
+            pass
+        def in_avoid(nm):
+            if not avoid or not ru:
+                return False
+            return any(any(k in str(nm) for k in ru.SUB_UNIVERSE.get(sub, [])) for sub in avoid)
         idx_cc = vals[0].get("signals", {}).get("index_confirm", "未知")
         stages = _Counter((v.get("confirm_chain") or {}).get("stage", "?") for v in vals)
-        executable = [v["name"] for v in vals if (v.get("confirm_chain") or {}).get("stage") in ("确认", "突破候选")]
-        candidate = [v["name"] for v in vals if (v.get("confirm_chain") or {}).get("stage") in ("缩量止跌", "结构到位")]
+        executable = [v["name"] for v in vals if not in_avoid(v["name"]) and (v.get("confirm_chain") or {}).get("stage") in ("确认", "突破候选")]
+        candidate = [v["name"] for v in vals if not in_avoid(v["name"]) and (v.get("confirm_chain") or {}).get("stage") in ("缩量止跌", "结构到位")]
+        excluded = sum(1 for v in vals if in_avoid(v["name"]))
         block = ("## 低位确认链（确定性门槛）" + chr(10)
                  + "- LOW 概念数：" + str(len(vals)) + "；指数确认状态：" + str(idx_cc) + chr(10)
                  + "- 确认链分布：" + ("、".join(f"{k}={v}" for k, v in stages.most_common(4)) or "无") + chr(10)
                  + "- 已确认可执行（突破/站稳）：" + ("、".join(executable[:5]) or "无") + chr(10)
-                 + "- 埋伏候选（等确认链）：" + ("、".join(candidate[:5]) or "无") + chr(10)
-                 + "- 决策：指数确认未触发→LOW 不重仓；已确认(突破候选/确认)→可低吸；仅缩量止跌/结构到位→埋伏候选等待。" + chr(10) + chr(10))
+                 + "- 埋伏候选（等确认链）：" + ("、".join(candidate[:5]) or "无") + chr(10))
+        if excluded > 0:
+            block += "- 拥挤无空间已剔除(真实基金拥挤×位置空间)：" + ("、".join(avoid) or "") + f"，剔除 LOW 候选 {excluded} 个 → 回避新建" + chr(10)
+        block += "- 决策：指数确认未触发→LOW 不重仓；已确认(突破候选/确认)→可低吸；仅缩量止跌/结构到位→埋伏候选等待。" + chr(10) + chr(10)
         return block
     except Exception:
         return ""
