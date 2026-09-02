@@ -40,7 +40,20 @@ def main():
         json.dump({"date": time.strftime("%Y-%m-%d"), "additions": adds, "note": "no new concepts"},
                   open(fpath, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         return 0
-    cands = sorted(cands)[:top_n]
+    # A: 候选按 position 资金净流入强度排序——最活跃的新概念优先让 LLM 分类(而非字母序)
+    netmap = {}
+    for v in pos.values():
+        if not isinstance(v, dict): continue
+        nm = str(v.get("name") or "")
+        fs = v.get("fund_flow") or {}
+        try: s = float(fs.get("strength") or 0)
+        except Exception: s = 0.0
+        netmap[nm] = s
+    def _key(nm):
+        s = netmap.get(nm, 0.0)
+        return (s > 0, abs(s))
+    cands.sort(key=_key, reverse=True)
+    cands = cands[:top_n]
     groups = "、".join(list(META_GROUPS) + [g for g in SUB_UNIVERSE if g not in META_GROUPS])
     anchors = json.dumps({g: SUB_UNIVERSE[g][:6] for g in SUB_UNIVERSE}, ensure_ascii=False)[:1600]
     prompt = ("你是主线细分宇宙分类器。把下列未分类东财概念归入现有组；明显不属于任何科技/AI组则忽略不输出。"
