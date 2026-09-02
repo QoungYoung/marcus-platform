@@ -14,6 +14,7 @@
 - 两级 schema：level(d1..d5/down) + sub_level(3-x/4-x/失败5/ABC/B反/C杀/W底/双头M顶/衰竭) + operation(build/t_only/side/defense/exit)。
 - 特征：价格结构+量能(vol_ratio/z20/pct120)+两融+北向+GJD超额+GJD份额净申赎+历史锚点+主线。
 - gate：_wave_level_gate 按(level,sub_level)→operation→gate；defense/exit 硬拦不建仓。
+- **wave_context ③已落地(09-02, commit 7952611)**：喂 Pi 的 wave_context 已接 agent 两级输出(level/sub_level/operation/gate+操作指令)，与安全门同源；缺 wave_state.json 回退 rule-based。
 - 回测：方向 75% / 级别族 83%。配置固化 v6（wave_config.md + wave_version.json）。调度每周一 8:10。
 
 ### 1.3 高低位分类（position_class）✅ 核心+共振
