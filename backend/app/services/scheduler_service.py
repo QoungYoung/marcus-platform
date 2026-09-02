@@ -408,46 +408,11 @@ class SchedulerService:
 
         # === Pi 自主交易模式 ===
         if task.type == 'pi_trade':
-            # ── 止损监控生命周期管理（腾讯接口无IP封禁风险，已启用）──
+            # 2026-09-02 全量屏蔽：pi_trade 任务不再拉起 止损/候选池/加仓 监控
+            # （只有狼大做T可以操作；worker_main 也已停用这四个监控器）
             is_first_trade = 'morning' in task.id and 'late' not in task.id
             is_closing = 'closing' in task.id
             monitor = _get_monitor()
-            if is_first_trade and monitor:
-                # 注入 executor（延迟注入，监控器需要它来获取持仓和执行卖出）
-                if monitor.executor is None:
-                    try:
-                        from app.core.trading.marcus_trade import MarcusVNPyExecutor
-                        monitor.executor = MarcusVNPyExecutor(account_id="stock")
-                        logger.info(f"[{execution_id}] 🔗 止损监控器已绑定交易执行器")
-                    except Exception as e:
-                        logger.warning(f"[{execution_id}] ⚠️ 止损监控器无法绑定执行器: {e}")
-                if not monitor.is_running():
-                    monitor.start()
-                    logger.info(f"[{execution_id}] 🟢 止损监控已随首个交易任务启动")
-
-            # ── 候选池监控生命周期管理 ──
-            if is_first_trade:
-                try:
-                    from app.services.candidate_pool_monitor import get_candidate_pool_monitor
-                    from app.core.trading.marcus_trade import MarcusVNPyExecutor
-                    pool_monitor = get_candidate_pool_monitor(executor=MarcusVNPyExecutor(account_id="stock"))
-                    if not pool_monitor.is_running():
-                        pool_monitor.start()
-                        logger.info(f"[{execution_id}] 🟢 候选池监控已随首个交易任务启动")
-                except Exception as e:
-                    logger.warning(f"[{execution_id}] ⚠️ 候选池监控启动失败: {e}")
-
-            # ── 加仓层级监控生命周期管理 ──
-            if is_first_trade:
-                try:
-                    from app.services.position_tier_monitor import get_position_tier_monitor
-                    from app.core.trading.marcus_trade import MarcusVNPyExecutor
-                    tier_monitor = get_position_tier_monitor(executor=MarcusVNPyExecutor(account_id="stock"))
-                    if not tier_monitor.is_running():
-                        tier_monitor.start()
-                        logger.info(f"[{execution_id}] 🟢 加仓层级监控已随首个交易任务启动")
-                except Exception as e:
-                    logger.warning(f"[{execution_id}] ⚠️ 加仓层级监控启动失败: {e}")
             
             try:
                 output = self._execute_pi_trade(task, execution_id)

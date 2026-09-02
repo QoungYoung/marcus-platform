@@ -541,6 +541,16 @@ class LongTermPoolMonitor:
         from app.services.long_term_pool import get_long_term_pool
         pool = get_long_term_pool()
 
+        # ── fail-closed（2026-08-28 根因修复）：数据缺失 → 跳过 + QQ 通知（同日同标的只推一次）──
+        missing = list(getattr(result, "data_unavailable", None) or [])
+        if missing:
+            from app.services.data_unavailable_notify import notify_data_unavailable
+            notify_data_unavailable(symbol, entry.get("name", ""), missing)
+            pool.update_check(symbol, "data_unavailable:" + ",".join(missing))
+            print(f"[长期池] {symbol} 数据不可用({','.join(missing)}) → fail-closed 跳过，已QQ通知",
+                  file=sys.stderr)
+            return None
+
         # ── 硬拦截 → 跳过但不淘汰 ──
         if result.hard_block or result.downgrade_multiplier <= 0:
             grade = "hard_block" if result.hard_block else "downgrade_zero"

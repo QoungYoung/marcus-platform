@@ -490,6 +490,26 @@ def _query_stock_flow(ts_code: str) -> Optional[dict]:
 
 
 
+@router.get("/us-market")
+def get_us_market():
+    """外部风险：美股(纳指/标普/费半) + 美债10Y + 全球宏观(global_macro)。
+
+    数据源：腾讯 qt (usIXIC/usINX/usDJI/usSOXX) + FRED DGS10 + golden_pit global_macro。
+    供 agent get_us_market 工具 / mom_etf 门控 / AI 做T 快照使用（只读、降级安全）。
+    """
+    from app.services.t_external_risk import compute_external_risk
+    return compute_external_risk()
+
+@router.get("/nga-post/{tid}")
+def get_nga_research_post(tid: str, page: int = Query(1, ge=1)):
+    """读取 NGA 研究帖（高通胀+高景气）作为研究情报，返回标题+楼层。
+
+    数据源：bbs.nga.cn/app_api.php?__lib=post&__act=list（app_api 带 Cookie，干净 JSON）。
+    仅作研究参考、非交易信号——落地仍须经系统打分/纪律过滤。
+    """
+    from app.services.t_nga import read_nga_post
+    return read_nga_post(tid, page)
+
 @router.get("/moneyflow/{symbol}", response_model=ThsMoneyflowResponse)
 def get_stock_moneyflow(
     symbol: str,

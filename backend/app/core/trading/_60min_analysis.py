@@ -203,35 +203,67 @@ def build_partial_60min_bar(ts_code: str, now: Optional[datetime] = None) -> Opt
         return None
 
 
-def _fetch_60min_bars_history(ts_code: str, days: int = 30) -> Optional[List[dict]]:
-    """从 stk_mins 获取历史60分钟K线（主代理，用于计算 MA10/MA30 等）"""
+def _fetch_60min_bars_history_brze(ts_code: str, days: int = 30) -> Optional[List[dict]]:
+    """从 tu.brze.top 代理拉取历史60分钟K线（stk_mins），与 rt_min_daily 同源。
+
+    2026-08-31 起：历史 stk_mins 60min 统一走 brze 代理（主 Tushare token 不再使用）。
+    背景：主 token 的 stk_mins 在服务器上拉取失败（导致早盘60分MA不可用、
+    check_entry_filters 判『数据不可用』）；brze 为唯一历史分钟源，配合
+    1min 合成 partial 保证 09:30-10:30 首根60分K线未完成时也能算出 MA。
+    """
     try:
-        from app.core.trading._api_config import get_tushare_pro
-        pro = get_tushare_pro()
-        end_dt = datetime.now()
-        start_dt = end_dt - timedelta(days=days)
-        df = pro.stk_mins(
-            ts_code=ts_code, freq='60min',
-            start_date=start_dt.strftime('%Y-%m-%d 09:30:00'),
-            end_date=end_dt.strftime('%Y-%m-%d 15:00:00'),
+        start_dt = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d 09:30:00')
+        end_dt = datetime.now().strftime('%Y-%m-%d 15:00:00')
+        payload = json.dumps({
+            'api_name': 'stk_mins',
+            'token': _RT_MIN_TOKEN,
+            'params': {'ts_code': ts_code, 'freq': '60min',
+                       'start_date': start_dt, 'end_date': end_dt},
+            'fields': '',
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            _RT_MIN_URL, data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
         )
-        if df is None or df.empty:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        if data.get('code') != 0 or not data.get('data'):
             return None
-        df = df.sort_values('trade_time', ascending=True)
+        items = data['data'].get('items') or []
+        if not items:
+            return None
+        fields = data['data'].get('fields', [])
+        col_map = {name: idx for idx, name in enumerate(fields)}
         bars = []
-        for _, row in df.iterrows():
+        for row in items:
             bars.append({
-                "time": str(row.get("trade_time", "")),
-                "open": float(row.get("open", 0)),
-                "close": float(row.get("close", 0)),
-                "high": float(row.get("high", 0)),
-                "low": float(row.get("low", 0)),
-                "vol": float(row.get("vol", 0)),
+                "time": str(row[col_map.get("trade_time", 1)]),
+                "open": float(row[col_map.get("open", 2)]),
+                "close": float(row[col_map.get("close", 3)]),
+                "high": float(row[col_map.get("high", 4)]),
+                "low": float(row[col_map.get("low", 5)]),
+                "vol": float(row[col_map.get("vol", 6)]),
             })
-        return bars
+        bars.sort(key=lambda b: b["time"])
+        return bars or None
     except Exception as e:
-        logger.debug(f"[60min] stk_mins 获取失败 {ts_code}: {e}")
+        logger.debug(f"[60min] stk_mins brze 降级拉取失败 {ts_code}: {e}")
         return None
+
+
+def _fetch_60min_bars_history(ts_code: str, days: int = 30) -> Optional[List[dict]]:
+    """获取历史60分钟K线（统一走 tu.brze.top 代理 stk_mins，主 Tushare token 不再使用）。
+
+    2026-08-31 定版：历史 stk_mins 60min 只从 brze 拉取（与 rt_min_daily 同源，
+    单数据源统一管理，去掉主 token 双源切换）。失败返回 None（交由上层 fail-closed 处理）。
+    """
+    bars = _fetch_60min_bars_history_brze(ts_code, days)
+    if bars:
+        logger.debug(f"[60min] stk_mins(brze) 拉取成功 {ts_code} ({len(bars)} 根)")
+    else:
+        logger.warning(f"[60min] stk_mins(brze) 拉取失败 {ts_code}")
+    return bars
 
 
 def _fetch_60min_bars_merged(ts_code: str, today_bars: Optional[List[dict]] = None,

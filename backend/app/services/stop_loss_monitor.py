@@ -47,6 +47,13 @@ from app.core.trading._60min_analysis import evaluate_60min_stop
 
 logger = logging.getLogger(__name__)
 
+# 2026-09-02 用户改造：动态离场监控模式（只读）
+# 狼大做T离场是动态信号（分时T出/黄线跌破），无固定价格 → 监控改为展示
+# 「现价距离场信号还有多少%」（黄线VWAP距离 + 分时T出前高距离）。
+# STOP_LOSS_DYNAMIC_ONLY=1（默认）：只计算/展示距离，不自动卖出；
+# 卖出由 t_monitor 狼大条件（250 T出 / 252 黄线跌破）负责。
+STOP_LOSS_DYNAMIC_ONLY = os.getenv("STOP_LOSS_DYNAMIC_ONLY", "1") == "1"
+
 # 适配本地/Docker: 探测包含 core/utils/trade_day_utils.py 的项目根目录
 _p = Path(__file__).resolve().parent
 for _ in range(5):
@@ -115,6 +122,7 @@ class StopLossMonitor:
         self._panic_suspension_count: Dict[str, int] = {}  # 恐慌错杀警戒日计数器
         self._session_max_float: Dict[str, float] = {}  # 会话最高浮盈百分比，用于铁律二层级判定
         self._overbought_history: Dict[str, List[str]] = {}  # KDJ_K≥80 日期列表，用于超买止盈连续天数判定
+        self._last_dynamic_exit: Dict[str, dict] = {}  # 狼大动态离场距离（黄线/分时T出，只读）
 
         self.log_dir = self._resolve_log_dir()
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +223,8 @@ class StopLossMonitor:
             "is_morning_volatility": self._is_morning_volatility(),
             "position_count": len(positions),
             "triggered_count": sum(1 for p in positions if p.get("nearest_trigger", {}).get("danger_level") == "triggered"),
+            "dynamic_exit_only": STOP_LOSS_DYNAMIC_ONLY,
+            "dynamic_exit": dict(self._last_dynamic_exit),
             "positions": positions,
         }
 
@@ -374,6 +384,16 @@ class StopLossMonitor:
             volume = available  # 只卖非锁定的股数
 
             if avg_price <= 0 or current_price <= 0 or volume <= 0:
+                continue
+
+            # 2026-09-02 动态离场监控模式（只读）：只计算/展示狼大动态离场距离，
+            # 不评估固定止损、不自动卖出（卖出由 t_monitor 条件 250 T出 / 252 黄线跌破负责）
+            if STOP_LOSS_DYNAMIC_ONLY:
+                try:
+                    self._last_dynamic_exit[symbol] = self._calc_wolf_dynamic_exit(
+                        symbol, current_price)
+                except Exception as e:
+                    print(f"[StopLoss] 动态离场监控失败 {symbol}: {e}")
                 continue
 
             # 每次轮询更新持仓最高价到 positions 表
@@ -1244,15 +1264,25 @@ class StopLossMonitor:
                 logger.warning(f"[StopLoss] 距离计算超时，已处理 {len(results)}/{len(positions)} 只")
                 break
 
+            wolf_exit = self._calc_wolf_dynamic_exit(symbol, current_price)
+            # 2026-09-02 屏蔽旧止损距离体系：只保留狼大动态离场距离（黄线VWAP/分时T出前高）。
+            # 旧 8 条固定规则距离（破底/成本/板块/铁律/超买/技术背离/60min/大盘相对）代码保留
+            # 便于回滚，但不再计算、不再参与最近卖出线判定。
             distances = {
-                "rul0a_break_low": self._calc_break_low_distance(symbol, current_price),
-                "rul0b_cost_stop": self._calc_cost_stop_distance(symbol, float_pnl_pct, current_price, avg_price),
-                "rul1_sector": self._calc_sector_distance(symbol, float_pnl_pct),
-                "rul2_iron": self._calc_iron_rule2_distance(symbol, float_pnl_pct, current_price, avg_price),
-                "rul2_3_overbought": self._calc_overbought_distance(symbol, float_pnl_pct),
-                "rul2_5_tech": self._calc_tech_divergence_distance(symbol, current_price, float_pnl_pct),
-                "rul2_6_60min": self._calc_60min_distance(symbol, current_price, float_pnl_pct),
-                "rul3_dynamic": self._calc_dynamic_distance(float_pnl_pct, market_pct, symbol),
+                # "rul0a_break_low": self._calc_break_low_distance(symbol, current_price),
+                # "rul0b_cost_stop": self._calc_cost_stop_distance(symbol, float_pnl_pct, current_price, avg_price),
+                # "rul1_sector": self._calc_sector_distance(symbol, float_pnl_pct),
+                # "rul2_iron": self._calc_iron_rule2_distance(symbol, float_pnl_pct, current_price, avg_price),
+                # "rul2_3_overbought": self._calc_overbought_distance(symbol, float_pnl_pct),
+                # "rul2_5_tech": self._calc_tech_divergence_distance(symbol, current_price, float_pnl_pct),
+                # "rul2_6_60min": self._calc_60min_distance(symbol, current_price, float_pnl_pct),
+                # "rul3_dynamic": self._calc_dynamic_distance(float_pnl_pct, market_pct, symbol),
+                # 狼大动态离场（2026-09-02）：黄线(VWAP)距离 + 分时T出前高距离
+                # rul_wolf_vwap: 正=黄线上方安全空间, 负=已跌破黄线(触发离场)
+                # rul_wolf_t_sell: 距前高还差多少%(非负, 0=到前高=接近T出触发区)
+                "rul_wolf_vwap": wolf_exit.get("vwap_gap_pct"),
+                "rul_wolf_t_sell": (abs(wolf_exit["dist_to_first_high_pct"])
+                                    if wolf_exit.get("dist_to_first_high_pct") is not None else None),
             }
 
             # 过滤掉不适用(None)的规则，找出最危险（距离最小）的
@@ -1292,6 +1322,7 @@ class StopLossMonitor:
                     "danger_level": danger_level,
                 },
                 "rule_distances": {k: round(v, 2) if v is not None else None for k, v in distances.items()},
+                "wolf_dynamic_exit": wolf_exit,
             })
 
         # 按危险程度排序：已触发 > 危急 > 警告 > 关注 > 安全
@@ -1300,6 +1331,50 @@ class StopLossMonitor:
         return results
 
     # ── 各规则的距离计算（正值=距触发还远，负值=已触发） ──
+
+    def _calc_wolf_dynamic_exit(self, symbol: str, current_price: float) -> Dict[str, Any]:
+        """狼大动态离场信号距离（2026-09-02 用户改造）：
+        - 黄线(VWAP)：现价 vs 分时均价线距离%（正=在黄线上方安全空间, 负=已跌破黄线）
+        - 分时T出：当日第一分时高点 + 现价距前高% + t_sell 形态是否成立
+        （T出=超跌反弹放量→第一次分时高点→停量→二次拉升无量不过前高, 狼大7-29）
+        返回 dict；字段 None 表示数据不可得（保守不触发）。"""
+        out = {"vwap": None, "vwap_gap_pct": None, "vwap_break": False,
+               "first_high": None, "dist_to_first_high_pct": None, "t_sell_ready": False}
+        try:
+            from app.services.t_data_sources import (fetch_tencent_quote,
+                                                     _normalize_symbol,
+                                                     fetch_tencent_mkline)
+            ns = _normalize_symbol(symbol)
+            q = fetch_tencent_quote([ns]).get(ns) or {}
+            cur = float(q.get("current") or current_price or 0)
+            vwap = float(q.get("average") or 0)
+            if vwap > 0 and cur > 0:
+                out["vwap"] = round(vwap, 3)
+                out["vwap_gap_pct"] = round((cur / vwap - 1) * 100, 2)
+                out["vwap_break"] = cur < vwap
+            # 分时T出：当日 m5 第一分时高点 + 距前高 + t_sell 形态
+            try:
+                bars = fetch_tencent_mkline(ns, freq="m5", count=60)
+                today = datetime.now().strftime("%Y%m%d")
+                tb = [b for b in (bars or []) if str(b.get("time", "")).startswith(today)]
+                if len(tb) >= 10:
+                    tb = sorted(tb, key=lambda x: str(x.get("time")))
+                    highs = [float(b.get("high") or 0) for b in tb]
+                    fh = max(highs)
+                    if fh > 0:
+                        out["first_high"] = round(fh, 3)
+                        if cur > 0:
+                            out["dist_to_first_high_pct"] = round((cur / fh - 1) * 100, 2)
+                    try:
+                        from app.services.t_monitor import _t_signals_from_m5
+                        out["t_sell_ready"] = bool(_t_signals_from_m5(tb)[1])
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[StopLoss] 动态离场距离计算失败 {symbol}: {e}")
+        return out
 
     def _calc_break_low_distance(self, symbol: str, current_price: float) -> Optional[float]:
         """规则 0a：当前价到破底止损线的安全距离(%)"""

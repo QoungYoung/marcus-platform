@@ -86,7 +86,7 @@ def upsert_condition(cond: Dict[str, Any]) -> Optional[int]:
             values = {
                 "account_id": cond.get("account_id", ACCOUNT_T),
                 "symbol": cond["symbol"],
-                "trade_date": cond.get("trade_date", _today()),
+                "trade_date": (cond.get("trade_date") or _today()),  # None 视为默认今日, 2026-08-29 修复
                 "trigger_kind": str(cond.get("trigger_kind") or "low_buy"),
                 "target_price": cond.get("target_price"),
                 # 迭代#58f：低吸类行不承载高抛/复归价（语义归位；止损保留共用）
@@ -160,8 +160,9 @@ def _resolve_direction(cond: Dict[str, Any]) -> str:
     return ""
 
 
-def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None) -> List[Dict[str, Any]]:
-    """列出当日有效条件（默认 status='active'）。"""
+def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None,
+                             account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """列出当日有效条件（默认 status='active'）。account_id 可选过滤(2026-09-02, t_monitor 按账户监控)。"""
     try:
         db = SessionLocal()
         try:
@@ -179,6 +180,9 @@ def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[st
             if symbol:
                 sql += " AND symbol = :symbol"
                 params["symbol"] = symbol
+            if account_id:
+                sql += " AND account_id = :acc"
+                params["acc"] = account_id
             rows = db.execute(text(sql), params).mappings().all()
             return [dict(r) for r in rows]
         finally:

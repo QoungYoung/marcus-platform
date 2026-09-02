@@ -2,8 +2,19 @@
 
 本文档记录 Marcus AI Trading Platform 的主要变更。
 
+
 ---
 
+## [1.6.0] — 2026-09-02（做T体系落地：狼大做T信号 + 只读动态离场监控）
+
+- **做T监控改造（t_monitor）**：只监控股票任务账户 stock + 只跑狼大T表达式（WOLF_T_FIELDS: minute.m5.t_sell / index.intraday_dd / quote.vwap_break）；T1缩转放验证无预测力暂缓；自动维护(_daily_maintain/_ai_maintain)默认关闭。
+- **网关白名单**：EXEC_ALLOWED_ACCOUNTS=stock（t 账户下单一律拒绝，env T_EXEC_ALLOWED_ACCOUNTS 可配）；build_gateway_execute 同源拦截。
+- **模块屏蔽**：vrebounce/vreb_etf/mom_etf/t_build 服务停用、auto_trade 5任务停用、止损/加仓/建仓/长期池监控停用（止损改为只读动态监控恢复）；旧 t 账户条件 12 条 inactive。
+- **正T买点（新信号 index.intraday_dd）**：上证5min盘中回撤 dd∈[2%,3%) → 个股低吸；5股×184天验证 T+1 +3.15% hit0.75（分半稳定）。
+- **黄线跌破离场（quote.vwap_break）**：现价<分时均价线(VWAP)即离场，替代 -3% 固定止损；腾讯qt average 与 brze VWAP 交叉验证差异0.014%。
+- **止损监控改造**：STOP_LOSS_DYNAMIC_ONLY=1 只读动态离场距离监控（黄线距离+分时T出前高距离）；旧8条止损距离体系屏蔽；卖腿保留100底仓（防250/252连续卖底仓）。
+- **数据通道**：brze stk_mins 个股+指数分钟历史全通；已拉5只个股5min各197天。
+- 生产：stock账户药明康德100股@158.742，条件 249正T买/250 T出卖/252黄线卖。
 ## [1.5.4] — 2026-08-11（早盘 60 分钟 MA 可用性修复）
 
 - **`backend/app/core/trading/_60min_analysis.py`**：新增 `build_partial_60min_bar`，盘中用 1 分钟实时 K 线合成当前未完成的 60 分钟 K 线；`_fetch_60min_bars_merged` / `get_60min_ma_values` 在早盘首根 60 分钟 K 线未完成时不再返回空。

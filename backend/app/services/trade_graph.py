@@ -16,6 +16,7 @@ LangGraph 交易决策流程编排
   - Pi 只负责分析判断和下单执行，工具集可以更聚焦
 """
 
+import os
 import json
 import logging
 import re
@@ -427,7 +428,8 @@ def _get_regime_strategy(regime: str) -> str:
     """根据市场结构生成策略切换指令块"""
     if regime == "oscillation":
         return (
-            "\n📊 **今日市场结构：🔴 震荡市**\n"
+            "\n📊 **今日市场结构：🟡 震荡月（月度regime）**\n"
+            "⚠️ 月度regime=震荡 → **只做T摊薄、不新开仓**！仅趋势向上月才允许开新仓（5条件A 回测 +3.46%→+4.80%）。若 external.us_risk=true → 降科技仓位/暂停科技新开。\n"
             "你必须严格遵循以下震荡市策略参数，不得使用趋势市策略：\n\n"
             "| 参数 | 🔴 震荡市（当前） | 🟢 趋势市（禁用） |\n"
             "|------|:------:|:------:|\n"
@@ -845,6 +847,212 @@ def _check_position_utilization(execution_id: str, position_limit: int, reason: 
 # 图节点
 # ═══════════════════════════════════════════════════════════
 
+def _read_main_line_context() -> str:
+    """read main_line_state -> context block for trade prompt."""
+    try:
+        import json as _json
+        path = os.getenv("MAIN_LINE_STATE_FILE", os.path.join(os.environ.get("DATA_DIR", "data"), "main_line_state.json"))
+        if not os.path.exists(path):
+            return ""
+        with open(path, encoding="utf-8") as f:
+            st = _json.load(f)
+        ml = st.get("main_line") or "未知"
+        cands = st.get("candidates") or []
+        cat = st.get("catalyst") or {}
+        cat_str = chr(44).join(f"{k}={v}" for k,v in cat.items() if v is not None)
+        block = ("## 主线判定（main_line_state）" + chr(10)
+                 + "- 当前主线：" + str(ml) + chr(10)
+                 + "- 候选集（观察不建仓）：" + (", ".join(cands) if cands else "无") + chr(10)
+                 + "- catalyst_score：" + (cat_str or "无") + chr(10))
+        # 融合分(fusion: 研报0+资金0.3+强度0.2+净流入集中度0.5+银行, 周判方向可信度)
+        fusion = st.get("fusion") or {}
+        if fusion:
+            top = sorted(fusion.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:3]
+            fus_str = "、".join(f"{k}({v.get('score')})" for k, v in top)
+            block += ("- 融合分 TOP3（资金/集中度主导，研报辅助）：" + fus_str + chr(10))
+        block += ("- 决策：候选->观察(等确认)；候选+当日动量/资金转强(RS转正/突破前高/fund_acc>0/均线多头)->确认->可对主线方向建仓；"
+                  + "周判主线为方向参考，日内执行仍以实时概念TOP10双榜+浪型gate为准。" + chr(10) + chr(10))
+        return block
+    except Exception:
+        return ""
+
+
+def _read_position_context() -> str:
+    """read position_class_result -> 概念高低位 context（风险定位: 高位应减/低位埋伏清单）"""
+    try:
+        import json as _json
+        from collections import Counter as _Counter
+        path = os.path.join(os.environ.get("DATA_DIR", "data"), "position_class_result.json")
+        if not os.path.exists(path):
+            return ""
+        with open(path, encoding="utf-8") as f:
+            res = _json.load(f)
+        vals = [v for v in res.values() if isinstance(v, dict) and v.get("action")]
+        act = _Counter(v.get("action") or "?" for v in vals)
+        reduce_list = sorted([v for v in vals if v.get("action") in ("减仓/只做T", "防御清仓")],
+                             key=lambda v: -(v.get("fund_flow", {}).get("strength") or 0))[:5]
+        buy_list = sorted([v for v in vals if v.get("action") in ("低吸埋伏", "回踩低吸")],
+                          key=lambda v: -(v.get("fund_flow", {}).get("strength") or 0))[:5]
+        act_str = "、".join(f"{k}={v}" for k, v in act.most_common(5))
+        block = ("## 概念高低位（position_class）" + chr(10)
+                 + "- 操作分布：" + (act_str or "无") + chr(10)
+                 + "- 高位应减/只做T TOP：" + ("、".join(v.get("name", "?") for v in reduce_list) or "无") + chr(10)
+                 + "- 低位可埋伏/低吸 TOP：" + ("、".join(v.get("name", "?") for v in buy_list) or "无") + chr(10)
+                 + "- 决策：高位+资金流出→减仓/只做T；低位+资金流入+逻辑→埋伏候选(需确认链)；高低位为风险定位工具，不单独构成买卖信号。" + chr(10) + chr(10))
+        return block
+    except Exception:
+        return ""
+
+
+def _read_stock_confirm_context() -> str:
+    """read stock_confirm_result -> 主线概念成分股确认比例(个股层确认: 三层联动之三)"""
+    try:
+        import json as _json
+        path = os.path.join(os.environ.get("DATA_DIR", "data"), "stock_confirm_result.json")
+        if not os.path.exists(path):
+            return ""
+        with open(path, encoding="utf-8") as f:
+            res = _json.load(f)
+        if not res:
+            return ""
+        lines = []
+        total_n = 0; total_c = 0
+        for cname, v in res.items():
+            if not isinstance(v, dict) or "confirm" not in v:
+                continue
+            total_n += v.get("n", 0); total_c += v.get("confirm", 0)
+            lines.append(f"{cname}: 确认{v.get('confirm')}/{v.get('n')}({int(100*(v.get('confirm') or 0)/max(v.get('n') or 1,1))}%)")
+        overall = int(100 * total_c / max(total_n, 1)) if total_n else 0
+        block = ("## 个股确认链（三层联动之三）" + chr(10)
+                 + "- 主线概念成分股确认：")
+        for ln in lines[:6]:
+            block += ln + "；"
+        block = block.rstrip("；") + chr(10)
+        block += ("- 总确认比例：" + str(overall) + "%" + chr(10)
+                  + "- 决策：成分股确认比例低(<30%)=主线未确认主升→限制重仓(等放量突破站稳)；高(≥50%)=主线确认→可沿主线建仓。" + chr(10) + chr(10))
+        return block
+    except Exception:
+        return ""
+
+
+def _read_confirm_context() -> str:
+    """read position_class_result confirm_chain -> LOW 埋伏确认状态（确定性门槛: 候选 vs 可执行）"""
+    try:
+        import json as _json
+        from collections import Counter as _Counter
+        path = os.path.join(os.environ.get("DATA_DIR", "data"), "position_class_result.json")
+        if not os.path.exists(path):
+            return ""
+        with open(path, encoding="utf-8") as f:
+            res = _json.load(f)
+        vals = [v for v in res.values() if isinstance(v, dict) and v.get("action") and v.get("position") == "LOW"]
+        if not vals:
+            return ""
+        idx_cc = vals[0].get("signals", {}).get("index_confirm", "未知")
+        stages = _Counter((v.get("confirm_chain") or {}).get("stage", "?") for v in vals)
+        executable = [v["name"] for v in vals if (v.get("confirm_chain") or {}).get("stage") in ("确认", "突破候选")]
+        candidate = [v["name"] for v in vals if (v.get("confirm_chain") or {}).get("stage") in ("缩量止跌", "结构到位")]
+        block = ("## 低位确认链（确定性门槛）" + chr(10)
+                 + "- LOW 概念数：" + str(len(vals)) + "；指数确认状态：" + str(idx_cc) + chr(10)
+                 + "- 确认链分布：" + ("、".join(f"{k}={v}" for k, v in stages.most_common(4)) or "无") + chr(10)
+                 + "- 已确认可执行（突破/站稳）：" + ("、".join(executable[:5]) or "无") + chr(10)
+                 + "- 埋伏候选（等确认链）：" + ("、".join(candidate[:5]) or "无") + chr(10)
+                 + "- 决策：指数确认未触发→LOW 不重仓；已确认(突破候选/确认)→可低吸；仅缩量止跌/结构到位→埋伏候选等待。" + chr(10) + chr(10))
+        return block
+    except Exception:
+        return ""
+
+
+def _read_wave_context() -> str:
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps"))
+        from main_line import wave_level
+        return wave_level.read_wave_context()
+    except Exception:
+        return ""
+
+
+def _wave_norm(v):
+    """归一化 level/sub_level 字段：小写、去空白、去下划线，保留连字符(4-4)。"""
+    if v is None:
+        return ""
+    return str(v).strip().lower().replace("_", " ").replace(" ", "")
+
+def _wave_operation(level, sub):
+    """按狼大两级结构 (level 大级别 + sub_level 子浪/局部) 判 operation。
+    operation: build(建仓追)/t_only(只做T)/side(观望调仓换股)/defense(防御不建仓)/exit(兑现降仓)。
+    子浪/局部优先：取文本中【最早出现】的浪型 token（兼容规范 sub_level 与旧自由文本，如
+    大4回调浪·4-3筑底段（未到4-4反弹）→ 取 4-3）。若子浪无命中则落级到大级别。"""
+    import re as _re
+    L = _wave_norm(level)
+    S = _wave_norm(sub)
+    # (正则, operation)：按优先映射；左起最早命中者生效
+    token_rules = [
+        (r"4-5", "defense"), (r"失败5", "defense"),
+        (r"4-4", "t_only"),
+        (r"4-3", "side"),
+        (r"4-2", "t_only"), (r"b反", "t_only"),
+        (r"4-1", "defense"),
+        (r"c杀", "defense"),
+        (r"abc", "side"),
+        (r"双头", "exit"), (r"m顶", "exit"), (r"头肩", "exit"),
+        (r"w底", "build"), (r"双底", "build"),
+        (r"3-5", "exit"),
+        (r"3-4", "t_only"),
+        (r"3-3", "build"),
+        (r"3-2", "side"),
+        (r"3-1", "build"),
+        (r"衰竭", "exit"),
+    ]
+    # 找文本中最早出现的浪型 token
+    best = None  # (idx, op)
+    for pat, op in token_rules:
+        m = _re.search(pat, S)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), op)
+    if best is not None:
+        return best[1]
+    # 子浪无命中：再对 level 本身做同样的左起 token 扫描（兼容旧版 level 就是 "4-5下杀" 等自由文本）
+    best = None
+    for pat, op in token_rules:
+        m = _re.search(pat, L)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), op)
+    if best is not None:
+        return best[1]
+    # ---- 落级到指数大级别 ----
+    if any(k in L for k in ["d3", "主升", "大3", "上升", "大1", "反转", "d1"]):
+        return "build"
+    if any(k in L for k in ["d5", "末段", "5浪", "衰竭"]):
+        return "exit"
+    if any(k in L for k in ["d4", "大4", "4回"]):
+        return "defense"
+    if any(k in L for k in ["d2", "大2", "调整"]):
+        return "side"
+    if any(k in L for k in ["down", "下跌", "下跌一浪"]):
+        return "defense"
+    return "side"
+
+_OP_TO_GATE = {"build": "normal", "t_only": "t_only", "side": "side", "defense": "defense", "exit": "exit"}
+
+def _wave_level_gate() -> dict:
+    """按狼大两级规则: 读 wave_state {level, sub_level}, 返回 {level, sub_level, operation, gate}。
+    gate: normal(可建仓)/t_only(只做T)/side(观望调仓换股)/defense(防御不建仓)/exit(兑现降仓)。
+    code层硬拦截仅在 defense/exit 触发；t_only/side 传给 Pi 提示只做T/调仓不追。"""
+    try:
+        import os as _os, json as _json
+        path = _os.path.join(_os.environ.get("DATA_DIR", "data"), "wave_state.json")
+        if not _os.path.exists(path):
+            return {"level": "未知", "sub_level": "", "operation": "side", "gate": "normal"}
+        st = _json.load(open(path, encoding="utf-8"))
+        lvl = st.get("level") or "未知"
+        sub = st.get("sub_level") or st.get("sublevel") or st.get("sub") or ""
+        op = _wave_operation(lvl, sub)
+        return {"level": _wave_norm(lvl), "sub_level": _wave_norm(sub), "operation": op, "gate": _OP_TO_GATE[op]}
+    except Exception:
+        return {"level": "未知", "sub_level": "", "operation": "side", "gate": "normal"}
+
 def node_fetch_context(state: TradeState) -> dict:
     """
     节点 1: 获取上下文 —— 确定性节点
@@ -868,6 +1076,11 @@ def node_fetch_context(state: TradeState) -> dict:
         "market_regime": regime,
         "style_regime": style_info.get("style_regime", "NEUTRAL"),
         "trade_mode_instruction": _get_trade_instruction(state['window'], regime),
+        "main_line_context": _read_main_line_context(),
+        "position_context": _read_position_context(),
+        "confirm_context": _read_confirm_context(),
+        "stock_confirm_context": _read_stock_confirm_context(),
+        "wave_context": _read_wave_context(),
     }
 
 
@@ -892,6 +1105,12 @@ def node_check_safety_gates(state: TradeState) -> dict:
         }
 
     drawdown, blocked, reason = _check_drawdown(state['portfolio_json'])
+    wl_gate = _wave_level_gate()
+    if wl_gate["gate"] in ("defense", "exit"):
+        logger.warning(f"[{eid}] [Graph] ⛔ 狼大浪型防御/兑现: {wl_gate['level']}/{wl_gate['sub_level']} op={wl_gate['operation']}，不建仓")
+        blocked = True
+        reason = f"狼大浪型={wl_gate['level']}+{wl_gate['sub_level']} op={wl_gate['operation']}（防御/兑现，不建仓）"
+       
     consecutive = _check_consecutive_losses()
 
     updates = {
@@ -958,6 +1177,11 @@ def node_call_pi_decision(state: TradeState) -> dict:
         scan = scan[:2000] + '\n... (已截断)'
 
     prompt = (
+        f"{state.get('wave_context', chr(39)+chr(39))}"
+        f"{state.get('main_line_context', chr(39)+chr(39))}"
+        f"{state.get('position_context', chr(39)+chr(39))}"
+        f"{state.get('confirm_context', chr(39)+chr(39))}"
+        f"{state.get('stock_confirm_context', chr(39)+chr(39))}"
         f"{state['regime_context']}\n"
         f"{state.get('style_context', '')}"
         f"{state['pool_context']}"

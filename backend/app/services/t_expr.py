@@ -38,6 +38,8 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     "quote.volume_expand": ("bool", "放量（量比≥1.5）", "t_monitor 派生"),
     "quote.volume_shrink": ("bool", "缩量（量比≤0.7）", "t_monitor 派生"),
     "quote.price_up": ("bool", "上涨（涨跌幅>0）", "t_monitor 派生"),
+    "quote.average": ("number", "分时均价线/黄线(VWAP=成交额/量)", "t_data_sources.fetch_tencent_quote"),
+    "quote.vwap_break": ("bool", "分时黄线跌破(现价<均价, 狼大8-04『黄线跌破直接走』)", "t_monitor 派生"),
     "quote.price_down": ("bool", "下跌（涨跌幅<0）", "t_monitor 派生"),
     "quote.up_with_volume": ("bool", "放量上涨（价涨∧量比≥1.5）", "t_monitor 派生"),
     "quote.up_with_low_volume": ("bool", "缩量上涨（价涨∧量比≤0.7）", "t_monitor 派生"),
@@ -56,6 +58,8 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     "minute.m5.ma10": ("number", "5分钟线MA10", "fetch_minute_bars m5"),
     "minute.m5.ma20": ("number", "5分钟线MA20", "fetch_minute_bars m5"),
     "minute.m5.last_close": ("number", "5分钟最新收盘", "fetch_minute_bars m5"),
+    "minute.m5.t1_shrink_expand": ("bool", "T1缩转放(正T买点: 缩量后放量)", "t_monitor._t_signals_from_m5"),
+    "minute.m5.t_sell": ("bool", "分时T出(狼大7-29: 放量反弹→第一次分时高点→停量→二次拉升无量不过前高)", "t_monitor._t_signals_from_m5"),
     # regime 环境闸门（每轮计算）
     "regime.state": ("string", "环境档位 ACTIVE/CAUTIOUS/HALT", "t_regime.compute_regime"),
     "regime.gate_low_buy": ("string", "低吸闸门 ALLOWED/MANUAL_ONLY/BLOCKED", "t_regime"),
@@ -70,6 +74,9 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     "index.hs300_drop": ("number", "沪深300当日涨跌幅%", "fetch_tencent_quote sh000300"),
     "index.sh_drop": ("number", "上证指数当日涨跌幅%", "fetch_tencent_quote sh000001"),
     "index.sz_drop": ("number", "深证成指当日涨跌幅%", "fetch_tencent_quote sz399001"),
+    # 正T买点(狼大1-12『大盘带下来的机会』, 验证 docs/zt-dip-verification-report.md)：
+    # 上证指数当日盘中最大回撤%(从日高, 逐bar更新)；2%<=dd<3% 低吸, dd>=3% 系统性风险不买
+    "index.intraday_dd": ("number", "上证指数当日盘中最大回撤%(从日高)", "t_monitor._index_intraday_dd"),
     # ── 技术指标（复用 get_realtime_indicators：KDJ/MACD/RSI/MA，盘中实时估算） ──
     "tech.ma5": ("number", "MA5(日线)", "get_realtime_indicators"),
     "tech.ma10": ("number", "MA10(日线)", "get_realtime_indicators"),

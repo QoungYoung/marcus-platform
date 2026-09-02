@@ -231,6 +231,56 @@ TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stock_moneyflow",
+            "description": "【个股资金流】获取个股资金流向（主力/超大单/大单/中单/小单净流入 + 5日/10日累计 + 主力占比 + 资金效率）。数据源：Tushare moneyflow（盘后）+ 东财实时兜底，用于判断主力动向/是否出货",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "股票代码，如 000001 或 600519"
+                    }
+                },
+                "required": ["symbol"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_us_market",
+            "description": "【外部风险】获取美股(纳指/标普/道琼斯/费半ETF)涨跌 + 美债10年收益率 + 全球宏观(global_macro)。数据源：腾讯qt+FRED+golden_pit。用于判断美股科技/加息等外部风险，外部悲观时应降科技暴露",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_nga_research_post",
+            "description": "【NGA研究情报】读取NGA研究帖(如tid=47458281『高通胀+高景气基本面分析』)的标题+楼层内容，获取楼主的主线题材/标的/价差/业绩线索。数据源：bbs.nga.cn/app_api.php(带Cookie)。仅作研究参考，非交易信号——落地须经系统打分/纪律过滤",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tid": {
+                        "type": "string",
+                        "description": "NGA帖子tid，如 47458281"
+                    },
+                    "page": {
+                        "type": "integer",
+                        "description": "页码，默认1"
+                    }
+                },
+                "required": ["tid"]
+            }
+        }
+    },
 ]
 
 
@@ -286,6 +336,13 @@ TOOL_IMPLEMENTATIONS: Dict[str, Callable] = {
     # 实时工具（腾讯实时行情+Tushare历史结合计算）
     "get_realtime_indicators": lambda params: call_marcus_api(
         f"/api/v1/indicator/realtime/{params.get('symbol')}"
+    ),
+    "get_stock_moneyflow": lambda params: call_marcus_api(
+        f"/api/v1/market/moneyflow/{params.get('symbol')}"
+    ),
+    "get_us_market": lambda: call_marcus_api("/api/v1/market/us-market"),
+    "get_nga_research_post": lambda params: call_marcus_api(
+        f"/api/v1/market/nga-post/{params.get('tid')}?page={params.get('page', 1)}"
     ),
 }
 

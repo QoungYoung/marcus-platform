@@ -4,7 +4,11 @@
 提供：账户状态 / 三层池 / 条件列表与生成 / 触发事件流 / 人工确认 / 审计 / STOP_ALL。
 由 API 进程（uvicorn）加载，Worker 侧数据（t_monitor/t_bridge）通过 PostgreSQL 共享。
 """
-from typing import Optional
+from typing import Any, Dict, List, Optional
+import json
+import re
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
@@ -43,6 +47,66 @@ def t_fields():
         },
         "note": "表达式只控制触发时机；触发后仍走网关风控（可卖底仓/跌停/STOP_ALL/限额）。",
     }
+
+
+@router.get("/vreb/reversal-candidates")
+def t_vreb_reversal_candidates(trade_date: Optional[str] = None, top_n: int = 5):
+    """量窒息+顺风反包(5条件A 主板) → 做T底仓建仓候选（只读，不触发建仓/做T）。
+
+    trade_date=YYYY-MM-DD 指定确认日；缺省返回最近一个确认日。
+    """
+    from app.services.t_vreb_reversal import compute_vreb_reversal_candidates
+    td = None
+    if trade_date:
+        try:
+            td = datetime.strptime(trade_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="trade_date 需为 YYYY-MM-DD")
+    return {"candidates": compute_vreb_reversal_candidates(trade_date=td, top_n=top_n)}
+
+
+@router.post("/vreb/reversal/scan")
+def t_vreb_reversal_scan(trade_date: Optional[str] = None, top_n: int = 5,
+                         require_trend_up: bool = True):
+    """计算并持久化 vreb-反包候选到 t_build_scan_results（source='vreb_reversal'）。
+
+    任务 2.3/7.2：仅「趋势向上月」写入（require_trend_up），震荡/下跌月跳过并返回 note。
+    只写候选表（status=pending），不触发建仓/做T；建仓仍走既有 build_gateway（红线保留）。
+    """
+    from app.services.t_vreb_reversal import persist_vreb_candidates
+    td = None
+    if trade_date:
+        try:
+            td = datetime.strptime(trade_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="trade_date 需为 YYYY-MM-DD")
+    return persist_vreb_candidates(trade_date=td, top_n=top_n, require_trend_up=require_trend_up)
+
+
+@router.get("/vreb/reversal/candidates")
+def t_vreb_reversal_candidates_db(limit: int = 20):
+    """读取已持久化的 vreb-反包候选（t_build_scan_results source='vreb_reversal'）。"""
+    import json as _json
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        rows = db.execute(text(
+            "SELECT id, trade_date, symbol, score, reasons, trend, status, built_at "
+            "FROM t_build_scan_results WHERE source = 'vreb_reversal' "
+            "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
+            "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"), {"lim": limit}).mappings().all()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["reasons"] = _json.loads(d["reasons"]) if isinstance(d["reasons"], str) else (d["reasons"] or [])
+            except (ValueError, TypeError):
+                d["reasons"] = []
+            out.append(d)
+        return {"source": "vreb_reversal", "candidates": out, "count": len(out)}
+    finally:
+        db.close()
 
 
 @router.post("/conditions")
@@ -870,3 +934,209 @@ def t_vrebounce_events(limit: int = 20):
         return {"events": [dict(r) for r in rows], "count": len(rows)}
     finally:
         db.close()
+
+# ────────────────────────────────────────────────────────────────
+# 持仓同步（实际持仓 vs 系统）：粘贴文本 → AI 识别 → 预览 → 确认落库
+# ────────────────────────────────────────────────────────────────
+_fund_name_map: Optional[Dict[str, str]] = None
+
+
+def _bridge_chat_json(prompt: str, timeout: int = 150) -> Optional[str]:
+    """调 dsh 桥 /chat 获取 AI 回复文本（失败返回 None）。"""
+    try:
+        from app.services.t_bridge import _bridge_url
+        from urllib import request as _urlreq
+        payload = {'message': prompt, 'session_id': 't-holdings-parse',
+                   'mode': 'trade', 'decision_mode': 'ai_led'}
+        req = _urlreq.Request(_bridge_url(),
+                              data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+                              headers={'Content-Type': 'application/json'}, method='POST')
+        with _urlreq.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode('utf-8')
+        try:
+            return str(json.loads(body).get('reply') or '')
+        except Exception:
+            return body
+    except Exception as e:
+        print(f'[t-holdings] 桥调用失败: {e}')
+        return None
+
+
+def _fund_name_map_cached() -> Dict[str, str]:
+    """场内基金 名称→ts_code（缓存，tushare fund_basic market=E）。"""
+    global _fund_name_map
+    if _fund_name_map is not None:
+        return _fund_name_map
+    m: Dict[str, str] = {}
+    try:
+        from app.core.trading._api_config import get_tushare_pro
+        df = get_tushare_pro().fund_basic(market='E')
+        if df is not None and not df.empty:
+            for _, r in df.iterrows():
+                m[str(r['name'])] = str(r['ts_code'])
+    except Exception as e:
+        print(f'[t-holdings] 基金映射加载失败: {e}')
+    _fund_name_map = m
+    return m
+
+
+def _resolve_symbol(name: str, code: Optional[str]) -> Optional[str]:
+    """名称/代码 → SH/SZ 前缀 symbol（先代码后名称；股票用 stock_pool，基金用 fund_basic）。"""
+    if code and str(code).isdigit() and len(str(code)) == 6:
+        c = str(code)
+        return ('SH' if c[0] in '569' else 'SZ') + c
+    n = (name or '').strip()
+    if not n:
+        return None
+    from app.database import SessionLocal
+    from sqlalchemy import text as _text
+    try:
+        db = SessionLocal()
+        try:
+            row = db.execute(_text(
+                'SELECT ts_code FROM stock_pool WHERE name = :n LIMIT 1'), {'n': n}).mappings().first()
+            if row:
+                c = str(row['ts_code']).split('.')[0]
+                return ('SH' if c[0] in '569' else 'SZ') + c
+            row = db.execute(_text(
+                'SELECT ts_code FROM stock_pool WHERE name LIKE :p LIMIT 1'),
+                {'p': '%' + n + '%'}).mappings().first()
+            if row:
+                c = str(row['ts_code']).split('.')[0]
+                return ('SH' if c[0] in '569' else 'SZ') + c
+        finally:
+            db.close()
+    except Exception as e:
+        print(f'[t-holdings] stock_pool 查询失败: {e}')
+    fm = _fund_name_map_cached()
+    if n in fm:
+        c = fm[n].split('.')[0]
+        return ('SH' if c[0] in '569' else 'SZ') + c
+    for k, v in fm.items():
+        if n in k or k in n:
+            c = v.split('.')[0]
+            return ('SH' if c[0] in '569' else 'SZ') + c
+    return None
+
+
+def _regex_parse_holdings(text: str) -> List[Dict[str, Any]]:
+    """规则兜底解析：逐行 名称 + 数量[股] + 可选成本/均价。"""
+    out: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.search(r'([\u4e00-\u9fa5A-Za-z0-9（）()]{2,20}?)[\s:：\t]+(\d+)[\s股份,，]*', line)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        vol = int(m.group(2))
+        cost = None
+        mc = re.search(r'(?:成本|均价|价格|价|成本价)[=:\s：]*([0-9]+(?:\.[0-9]+)?)', line)
+        if mc:
+            cost = float(mc.group(1))
+        out.append({'name': name, 'code': None, 'volume': vol, 'avg_price': cost})
+    return out
+
+
+def _ai_parse_holdings(text: str) -> List[Dict[str, Any]]:
+    """AI 识别持仓文本 → 结构化列表（name/code/volume/avg_price）；桥失败回退规则解析。"""
+    prompt = (
+        '你是持仓识别助手。请从下面粘贴的持仓文本中提取每条持仓，只输出一个 JSON 数组，'
+        '不要任何多余文字或代码块标记。每项格式：'
+        '{"name": "股票或基金名称", "code": "6位代码或null", "volume": 股数/份数(整数), "avg_price": 每股成本或null}。'
+        '无法识别数量或成本的字段用 null。\n\n持仓文本：\n' + text[:4000]
+    )
+    reply = _bridge_chat_json(prompt)
+    if reply:
+        try:
+            cleaned = reply.strip()
+            if cleaned.startswith('`' * 3):
+                cleaned = re.sub(r'^' + '`' * 3 + r'[a-zA-Z]*\n?', '', cleaned)
+                cleaned = re.sub(r'\n?' + '`' * 3 + '$', '', cleaned)
+            arr = json.loads(cleaned)
+            if isinstance(arr, list):
+                items = []
+                for it in arr:
+                    if isinstance(it, dict) and it.get('name'):
+                        items.append({
+                            'name': str(it['name']).strip(),
+                            'code': (str(it.get('code') or '') or None),
+                            'volume': int(float(it.get('volume') or 0)),
+                            'avg_price': float(it['avg_price']) if it.get('avg_price') is not None else None,
+                        })
+                if items:
+                    return items
+        except Exception as e:
+            print(f'[t-holdings] AI 解析失败，回退规则: {e}')
+    return _regex_parse_holdings(text)
+
+
+@router.post('/holdings/parse')
+def t_holdings_parse(payload: dict = None):
+    """粘贴持仓 → AI 识别 + 名称/代码解析 → 返回预览（不落库）。"""
+    payload = payload or {}
+    text = str(payload.get('text') or '').strip()
+    if not text:
+        raise HTTPException(status_code=400, detail='请粘贴持仓文本')
+    parsed = _ai_parse_holdings(text)
+    resolved = []
+    for it in parsed:
+        sym = _resolve_symbol(it.get('name'), it.get('code'))
+        resolved.append({
+            'name': it.get('name'), 'code': it.get('code'),
+            'volume': int(it.get('volume') or 0), 'avg_price': it.get('avg_price'),
+            'symbol': sym, 'status': 'ok' if sym else 'unresolved',
+        })
+    return {'parsed': resolved, 'count': len(resolved)}
+
+
+@router.post('/holdings/sync')
+def t_holdings_sync(payload: dict = None):
+    """确认同步：用解析结果整体替换 t 账户 paper_positions（先备份审计）。"""
+    payload = payload or {}
+    account = str(payload.get('account') or 't')
+    positions = payload.get('positions') or []
+    if not positions:
+        raise HTTPException(status_code=400, detail='positions 为空')
+    clean = []
+    for p in positions:
+        sym = str(p.get('symbol') or '').strip().upper()
+        vol = int(float(p.get('volume') or 0))
+        avg = float(p.get('avg_price') or 0)
+        if not sym or vol <= 0:
+            continue
+        clean.append({'symbol': sym, 'volume': vol, 'avg_price': avg})
+    if not clean:
+        raise HTTPException(status_code=400, detail='无有效持仓')
+    from app.database import SessionLocal
+    from sqlalchemy import text as _text
+    db = SessionLocal()
+    try:
+        old = db.execute(_text(
+            'SELECT symbol, volume, avg_price FROM paper_positions WHERE account_id = :a'),
+            {'a': account}).mappings().all()
+        old_rows = [dict(r) for r in old]
+        try:
+            from app.config import get_settings
+            hist = Path(get_settings().workspace_path) / 'data' / 'holdings_sync_history.jsonl'
+            hist.parent.mkdir(parents=True, exist_ok=True)
+            with open(hist, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'ts': datetime.now().isoformat(), 'account': account,
+                    'old': old_rows, 'new': clean,
+                }, ensure_ascii=False) + '\n')
+        except Exception as e:
+            print(f'[t-holdings] 审计备份失败: {e}')
+        db.execute(_text('DELETE FROM paper_positions WHERE account_id = :a'), {'a': account})
+        _now_s = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        for p in clean:
+            db.execute(_text(
+                'INSERT INTO paper_positions (account_id, symbol, entry_date, updated_at, volume, frozen, avg_price) '
+                'VALUES (:a, :s, :e, :u, :v, 0, :p)'),
+                {'a': account, 's': p['symbol'], 'e': datetime.now().strftime('%Y-%m-%d'),
+                 'u': _now_s, 'v': p['volume'], 'p': p['avg_price']})
+        db.commit()
+    finally:
+        db.close()
+    return {'account': account, 'replaced': len(old_rows), 'inserted': len(clean), 'positions': clean}

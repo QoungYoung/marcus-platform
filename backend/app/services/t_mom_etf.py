@@ -180,6 +180,16 @@ def scan_once() -> List[str]:
             _db.close()
     except Exception as e:
         logger.warning("[t-mom-etf] 当日候选清理失败: %s", str(e)[:80])
+    # 外部风险门控：美股(纳指/费半)大跌/加息上行/全球流动性关闭 → 暂停 mom_etf 动量调仓/降科技仓
+    try:
+        from app.services.t_external_risk import external_risk_snapshot
+        ext = external_risk_snapshot()
+        if ext.get("us_risk"):
+            logger.warning("[t-mom-etf] 外部风险升（%s），暂停动量调仓/降科技仓", ext.get("us_risk_reason"))
+            return []
+    except Exception as e:
+        logger.warning("[t-mom-etf] 外部风险检查失败: %s", str(e)[:80])
+
     target, reasons, greed_ok = _target_portfolio(as_of)
     if not greed_ok:
         logger.warning("[t-mom-etf] 贪婪数据连续失败达阈值，停止自动调仓（需人工干预）")

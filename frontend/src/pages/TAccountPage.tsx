@@ -257,6 +257,37 @@ export default function TAccountPage() {
   const [meStatus, setMeStatus] = useState<VrebStatus | null>(null);
   const [meCands, setMeCands] = useState<VrebCandidate[]>([]);
 
+  // 持仓同步（实际 vs 系统）：粘贴文本 → AI 识别 → 确认落库
+  const [hsText, setHsText] = useState('');
+  const [hsRows, setHsRows] = useState<any[] | null>(null);
+  const [hsBusy, setHsBusy] = useState(false);
+  const hsParse = async () => {
+    if (!hsText.trim()) { setError('请先粘贴持仓文本'); return; }
+    setHsBusy(true); setError('');
+    try {
+      const res = await fetch(API + '/holdings/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: hsText, account: 't' }) });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.detail || res.statusText);
+      setHsRows(j.parsed || []); setMsg('解析完成：识别 ' + j.count + ' 条');
+    } catch (e: any) { setError('解析失败: ' + e.message); setHsRows(null); }
+    finally { setHsBusy(false); }
+  };
+  const hsSync = async () => {
+    if (!hsRows) return;
+    const ok = hsRows.filter((r: any) => r.status === 'ok' && r.symbol && r.volume > 0)
+      .map((r: any) => ({ symbol: r.symbol, volume: r.volume, avg_price: r.avg_price || 0 }));
+    if (!ok.length) { setError('没有可同步的有效持仓（请先解析）'); return; }
+    if (!window.confirm('确认用解析结果整体替换 t 账户系统持仓？将备份原持仓并可审计。')) return;
+    setHsBusy(true); setError('');
+    try {
+      const res = await fetch(API + '/holdings/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: 't', positions: ok }) });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.detail || res.statusText);
+      setMsg('已同步：替换 ' + j.replaced + ' 条，写入 ' + j.inserted + ' 条（审计已备份）');
+    } catch (e: any) { setError('同步失败: ' + e.message); }
+    finally { setHsBusy(false); }
+  };
+
   const fetchJson = async (url: string, opts?: RequestInit) => {
     const res = await fetch(url, opts);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -818,6 +849,39 @@ export default function TAccountPage() {
             {/* ── 信号与建仓 ── */}
             {tab === 'signal' && (
               <>
+                <section className="tac-panel">
+                  <div className="tac-panel-head">
+                    <span className="tac-panel-title">持仓同步（实际 vs 系统）</span>
+                    <button className="tac-btn" onClick={() => { setHsRows(null); setHsText(''); }}>清空</button>
+                  </div>
+                  <div className="tac-panel-body">
+                    <textarea className="tac-input" rows={4} placeholder={'粘贴实际持仓，例如：\n科创50ETF 588000 20000份 成本1.80\n火炬电子 100股 成本48.51'} value={hsText} onChange={(e) => setHsText(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
+                    <div className="tac-toolbar" style={{ marginTop: 8 }}>
+                      <button className="tac-btn" onClick={hsParse} disabled={hsBusy}>① AI 识别</button>
+                      <button className="tac-btn" onClick={hsSync} disabled={hsBusy || !hsRows}>② 确认同步到库</button>
+                      {hsBusy && <span className="tac-hint">处理中…（AI 识别约 10-60 秒）</span>}
+                    </div>
+                    {hsRows && hsRows.length > 0 && (
+                      <table style={{ width: '100%', marginTop: 8, borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead><tr style={{ textAlign: 'left' }}>
+                          <th style={{ padding: '4px 6px' }}>名称</th><th style={{ padding: '4px 6px' }}>数量</th>
+                          <th style={{ padding: '4px 6px' }}>成本</th><th style={{ padding: '4px 6px' }}>系统代码</th><th style={{ padding: '4px 6px' }}>状态</th>
+                        </tr></thead>
+                        <tbody>
+                          {hsRows.map((r: any, i: number) => (
+                            <tr key={i}>
+                              <td style={{ padding: '4px 6px' }}>{r.name}</td>
+                              <td style={{ padding: '4px 6px' }}>{r.volume}</td>
+                              <td style={{ padding: '4px 6px' }}>{r.avg_price ?? '-'}</td>
+                              <td style={{ padding: '4px 6px' }}>{r.symbol || '-'}</td>
+                              <td style={{ padding: '4px 6px', color: r.status === 'ok' ? '#2a7' : '#c33' }}>{r.status === 'ok' ? '✅ 已识别' : '⚠️ 未匹配'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </section>
                 <section className="tac-panel">
                   <div className="tac-panel-head">
                     <span className="tac-panel-title">底仓建仓（t-position-building）</span>

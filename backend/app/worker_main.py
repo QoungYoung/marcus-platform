@@ -83,42 +83,49 @@ def _start_services(settings):
 
     executor = MarcusVNPyExecutor(bridge=bridge, account_id="stock")
 
+    # 2026-09-02 止损监控改造为动态离场监控（只读）：展示黄线/分时T出距离，
+    # 不自动卖出（STOP_LOSS_DYNAMIC_ONLY=1, 卖出由 t_monitor 狼大条件负责）
     from app.services.stop_loss_monitor import start_monitor
     start_monitor(executor=executor)
 
-    from app.services.position_tier_monitor import start_tier_monitor
-    start_tier_monitor(executor=executor)
+    # from app.services.position_tier_monitor import start_tier_monitor
+    # start_tier_monitor(executor=executor)
 
-    from app.services.candidate_pool_monitor import start_pool_monitor
-    start_pool_monitor(executor=executor)
+    # from app.services.candidate_pool_monitor import start_pool_monitor
+    # start_pool_monitor(executor=executor)
 
-    from app.services.long_term_pool_monitor import start_lt_pool_monitor
-    start_lt_pool_monitor(executor=executor)
+    # from app.services.long_term_pool_monitor import start_lt_pool_monitor
+    # start_lt_pool_monitor(executor=executor)
 
     # 做T账户·V反短线监控（默认关闭灰度，T_VREB_ENABLED=1 才启动；
     # 只作用于 account_id='t'，不触碰 stock/golden_pit。
     # 旧 trend_break 信号已由回测证伪（次日开盘口径 PF~1.05，样本外不稳），不再注册；
     # 代码保留在 app.services.t_trend_break 便于回滚）
-    from app.services.t_vrebounce import start_vrebounce_monitor
-    start_vrebounce_monitor()
+    # 2026-09-02 全量屏蔽：t_monitor 改为只跑狼大做T(股票任务账户)，
+    # 其余做T模块(V反/探针/默认做T)一律不再启动；代码保留便于回滚
+    # from app.services.t_vrebounce import start_vrebounce_monitor
+    # start_vrebounce_monitor()
 
     # 做T账户·科技ETF V反短线（默认关闭灰度，T_VREB_ETF_ENABLED=1 才启动；
     # A股科技ETF T+1 规则，TP6/SL4/8日；只作用于 account_id='t'）
-    from app.services.t_vreb_etf import start_vreb_etf_monitor
-    start_vreb_etf_monitor()
+    # 2026-09-02 全量屏蔽（同 V反）：ETF V反仅作用于 account_id='t'，不再启动
+    # from app.services.t_vreb_etf import start_vreb_etf_monitor
+    # start_vreb_etf_monitor()
 
     # 做T账户·科技ETF动量趋势（默认关闭灰度，T_MOM_ETF_ENABLED=1 才启动；
     # 20日动量 TOP3 双周轮动 + arkvol 贪婪门控；只作用于 account_id='t'）
-    from app.services.t_mom_etf import start_mom_etf_monitor
-    start_mom_etf_monitor()
+    # 2026-09-02 全量屏蔽：ETF 动量仅作用于 account_id='t'，不再启动
+    # from app.services.t_mom_etf import start_mom_etf_monitor
+    # start_mom_etf_monitor()
 
     # 做T监控器（t_account 专用，30s 轮询 + 错峰启动）
     from app.services.t_monitor import start_t_monitor
     start_t_monitor()
 
-    # 做T建仓服务（盘后次日条件生成 + 日频再平衡，60s 低频）
-    from app.services.t_build import start_t_build_service
-    start_t_build_service()
+    # 2026-09-02 全量屏蔽：做T建仓服务(自动建仓/次日条件生成/再平衡)仅作用于 account_id='t'，
+    # 且无 env 门控会真实下单 → 停用；代码保留便于回滚
+    # from app.services.t_build import start_t_build_service
+    # start_t_build_service()
 
     # 做T回测任务执行（worker 侧轮询 pending，重活不阻塞 API）
     from app.services.t_backtest_runner import start_t_backtest_worker

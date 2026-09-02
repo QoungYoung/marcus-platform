@@ -48,6 +48,26 @@ LOOKBACK_DAYS = 70  # ≥65 才能算 MA60/b60
 BULL_ADAPT = os.getenv("VREB_ETF_BULL_ADAPT", "1") == "1"
 _bull_cache = {"date": "", "bull": True}
 
+# ── 修复期环境标记（2026-08-28 上线，仅标注/加分，不放松入场条件）──
+# 科创50 近 REPAIR_ENV_WINDOW_DAYS 个交易日内出现过 5日跌幅 ≤ -REPAIR_ENV_MIN_DROP
+# ⇒ 视为「修复期环境」，扫描候选加分并标注；数据失败返回 None（中性，不拦截）。
+REPAIR_ENV_BONUS = float(os.getenv("VREB_ETF_REPAIR_ENV_BONUS", "0.10"))
+REPAIR_ENV_WINDOW_DAYS = int(os.getenv("VREB_ETF_REPAIR_WINDOW_DAYS", "10"))
+REPAIR_ENV_MIN_DROP = float(os.getenv("VREB_ETF_REPAIR_MIN_DROP", "0.06"))
+# 环境触发时 QQ 通知左侧观察名单（科创50ETF/通信ETF）
+REPAIR_PROBE_NOTIFY = os.getenv("VREB_ETF_REPAIR_PROBE_NOTIFY", "1") == "1"
+_probe_notified: set = set()   # 同日去重：{YYYY-MM-DD}
+
+# ── 左侧探针自动买入（2026-08-28 用户确认上线；仅 t 账户）──
+# 纪律：单标≤5%总资产 / 触发日只通知 / 下一交易日试探一半 / 当日企稳(收≥成本)补另一半 /
+#       -6% 硬止损 / T20 交易日超时离场；全部按交易日历执行（区分节假日/周末）。
+REPAIR_AUTO = os.getenv("VREB_ETF_REPAIR_AUTO", "0") == "1"       # 生产 .env 置 1 即启用
+PROBE_ETFS = ["588000.SH", "515880.SH"]                            # 科创50ETF / 通信ETF
+PROBE_PCT = float(os.getenv("VREB_ETF_REPAIR_PCT", "0.05"))        # 单标 ≤5% 总资产
+PROBE_FIRST_HALF_RATIO = float(os.getenv("VREB_ETF_REPAIR_FIRST_HALF", "0.5"))
+PROBE_SL = float(os.getenv("VREB_ETF_REPAIR_SL", "0.06"))           # -6% 硬止损
+PROBE_HOLD_DAYS = int(os.getenv("VREB_ETF_REPAIR_HOLD", "20"))      # T20 交易日超时
+
 
 def _bull_state() -> bool:
     """上证 vs MA250：牛市要求超买确认；非牛弱反抽放行（缓存每日一次）。"""
@@ -284,9 +304,383 @@ def _load_etf_frame(pool: List[str]) -> Optional[Any]:
 
 
 # ────────────────────────────────────────────────────────────────
+# 修复期环境标记（2026-08-28 上线）
+# ────────────────────────────────────────────────────────────────
+_repair_env_cache = {"date": "", "flag": None}
+
+
+def _repair_env_flag() -> Optional[bool]:
+    """修复期环境：科创50 近 REPAIR_ENV_WINDOW_DAYS 个交易日内出现过 5日跌幅≤-REPAIR_ENV_MIN_DROP。
+
+    只作标注/加分（VREB_ETF_REPAIR_ENV_BONUS），不放松 V反 入场条件；数据失败返回 None（中性）。
+    缓存每日一次，避免盘中反复拉取指数。
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _repair_env_cache["date"] == today:
+        return _repair_env_cache["flag"]
+    flag: Optional[bool] = None
+    try:
+        pro = _get_pro()
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=REPAIR_ENV_WINDOW_DAYS * 2 + 25)).strftime("%Y%m%d")
+        df = pro.index_daily(ts_code="000688.SH", start_date=start, end_date=end)
+        if df is not None and not df.empty:
+            df = df.sort_values("trade_date")
+            closes = df["close"].astype(float).tolist()
+            n = len(closes)
+            flag = False
+            for i in range(n - 1, max(4, n - REPAIR_ENV_WINDOW_DAYS - 1), -1):
+                if i >= 5 and closes[i - 5] > 0:
+                    if closes[i] / closes[i - 5] - 1 <= -REPAIR_ENV_MIN_DROP:
+                        flag = True
+                        break
+    except Exception as e:
+        logger.warning("[t-vreb-etf] 修复期环境标记计算失败: %s", str(e)[:80])
+    _repair_env_cache["date"] = today
+    _repair_env_cache["flag"] = flag
+    logger.info("[t-vreb-etf] 修复期环境标记=%s（科创50近%d个交易日5日跌幅≤%d%%）",
+                flag, REPAIR_ENV_WINDOW_DAYS, REPAIR_ENV_MIN_DROP * 100)
+    return flag
+
+
+def _notify_repair_probe() -> None:
+    """环境触发时：QQ 通知左侧观察名单（科创50ETF/通信ETF），仅观察不自动买，同日去重。"""
+    global _probe_notified
+    today = datetime.now().strftime("%Y-%m-%d")
+    if today in _probe_notified:
+        return
+    _probe_notified.add(today)
+    try:
+        from app.services.qqbot_service import send_qq_notification
+        send_qq_notification(
+            "🔔 修复期环境触发（科创50近10日5日跌幅≤-6%）\n"
+            "左侧探针（已开启自动买入，t 账户）：588000 科创50ETF / 515880 通信ETF\n"
+            "纪律：单标≤5%、下一交易日试探一半、企稳补一半、-6%止损、T20离场。"
+        )
+    except Exception as e:
+        logger.warning("[t-vreb-etf] 修复期探针通知失败: %s", str(e)[:80])
+
+
+
+# ────────────────────────────────────────────────────────────────
+# 左侧探针 · 自动买入/出场（2026-08-28 上线，仅 t 账户，REPAIR_AUTO 开关）
+# 全部步骤按交易日历执行（区分周末/节假日）；T+1 由网关保证。
+# ────────────────────────────────────────────────────────────────
+_probe_cal_cache: Dict[str, Any] = {"key": "", "dates": []}
+
+
+def _trade_cal() -> List[str]:
+    """近 60 个自然日的 A 股交易日（SSE 日历，日缓存）。"""
+    global _probe_cal_cache
+    today = datetime.now().strftime("%Y-%m-%d")
+    key = today[:7] + today[8:]
+    if _probe_cal_cache["key"] == key:
+        return _probe_cal_cache["dates"]
+    try:
+        pro = _get_pro()
+        start = (datetime.now() - timedelta(days=75)).strftime("%Y%m%d")
+        end = (datetime.now() + timedelta(days=10)).strftime("%Y%m%d")
+        df = pro.trade_cal(exchange="SSE", start_date=start, end_date=end, is_open="1")
+        dates = sorted(str(x).replace("-", "") for x in df["cal_date"].tolist())
+    except Exception as e:
+        logger.warning("[t-vreb-etf] 交易日历获取失败: %s", str(e)[:80])
+        dates = []
+    _probe_cal_cache = {"key": key, "dates": dates}
+    return dates
+
+
+def _is_trade_day(d) -> bool:
+    ds = (d if isinstance(d, str) else d.strftime("%Y%m%d")).replace("-", "")
+    cal = _trade_cal()
+    if cal:
+        return ds in cal
+    return datetime.strptime(ds, "%Y%m%d").weekday() < 5  # 日历不可用时退化周末
+
+
+def _trading_days_between(d0, d1) -> int:
+    """d0(含) 到 d1(不含) 之间的交易日数。"""
+    cal = _trade_cal()
+    a = d0.replace("-", ""); b = d1.replace("-", "")
+    if cal:
+        return sum(1 for x in cal if a <= x < b)
+    return 0
+
+
+def _repair_env_on(ds: str) -> bool:
+    """科创50 在 ds(YYYYMMDD 或 YYYY-MM-DD) 视角的修复期环境标记（不缓存）。"""
+    d = ds.replace("-", "")
+    from app.core.trading._api_config import get_tushare_pro as _tp
+    try:
+        pro = _tp()
+        end = d
+        start = (datetime.strptime(d, "%Y%m%d") - timedelta(days=REPAIR_ENV_WINDOW_DAYS * 2 + 25)).strftime("%Y%m%d")
+        df = pro.index_daily(ts_code="000688.SH", start_date=start, end_date=end)
+        if df is not None and not df.empty:
+            df = df.sort_values("trade_date")
+            closes = df["close"].astype(float).tolist()
+            n = len(closes)
+            for i in range(n - 1, max(4, n - REPAIR_ENV_WINDOW_DAYS - 1), -1):
+                if i >= 5 and closes[i - 5] > 0 and closes[i] / closes[i - 5] - 1 <= -REPAIR_ENV_MIN_DROP:
+                    return True
+    except Exception as e:
+        logger.warning("[t-vreb-etf] 环境标记(历史)计算失败 %s: %s", d, str(e)[:80])
+    return False
+
+
+def _probe_events() -> List[Dict[str, Any]]:
+    """已成交的 repair_probe 建仓事件（第一半/第二半都算）。"""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            rows = db.execute(text(
+                "SELECT symbol, executed_price, created_at FROM t_build_events "
+                "WHERE account_id = 't' AND event_type = 'build_position' AND status = 'executed' "
+                "AND reason LIKE '%repair_probe%' ORDER BY created_at"
+            )).mappings().all()
+            return [dict(r) for r in rows]
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[t-vreb-etf] 探针事件读取失败: %s", str(e)[:80])
+        return []
+
+
+def _probe_first_half_done(ep_start: str) -> Dict[str, int]:
+    """本 episode 内各标的已买第一半的次数（0/1）。"""
+    out = {}
+    for ev in _probe_events():
+        d = str(ev["created_at"])[:10].replace("-", "")
+        if d >= ep_start:
+            sym = ev["symbol"]
+            out[sym] = out.get(sym, 0) + 1
+    return out
+
+
+def _episode_start_today() -> Optional[str]:
+    """当前(截至今天)处于修复期环境时的连续 episode 起点（YYYYMMDD）；不在环境期返回 None。"""
+    d = datetime.now().strftime("%Y%m%d")
+    if not _repair_env_on(d):
+        return None
+    # 从今天往回找连续 env=True 的最早日期
+    cur = d
+    for _ in range(60):
+        if not _repair_env_on(cur):
+            break
+        prev = None
+        for x in _trade_cal():
+            if x < cur:
+                prev = x
+        if prev is None:
+            break
+        cur = prev
+    return cur
+
+
+def _probe_net_asset() -> float:
+    try:
+        from app.services.t_build import t_net_asset
+        v = float(t_net_asset() or 0)
+        if v > 0:
+            return v
+    except Exception as e:
+        logger.warning("[t-vreb-etf] 探针取净值失败: %s", str(e)[:80])
+    return 0.0
+
+
+def _probe_shares(amount: float, price: float) -> int:
+    if price <= 0 or amount <= 0:
+        return 0
+    sh = int(amount / price / 100) * 100
+    return sh if sh >= 100 else 0
+
+
+def _buy_probe_first_half() -> List[Dict[str, Any]]:
+    """环境触发后的下一交易日：试探第一半（各 2.5% 起）。"""
+    results = []
+    today = datetime.now().strftime("%Y%m%d")
+    ep = _episode_start_today()
+    if ep is None:
+        return results
+    # 进场窗：今天必须是 episode 起点的下一交易日
+    cal = _trade_cal()
+    if ep not in cal:
+        return results
+    idx = cal.index(ep)
+    if idx + 1 >= len(cal) or cal[idx + 1] != today:
+        logger.info("[t-vreb-etf] 探针等待进场窗（ep=%s, next=%s）", ep,
+                    cal[idx + 1] if idx + 1 < len(cal) else "?")
+        return results
+    done = _probe_first_half_done(ep)
+    net = _probe_net_asset()
+    if net <= 0:
+        logger.warning("[t-vreb-etf] 探针净值不可用，跳过自动进场")
+        return results
+    for sym in PROBE_ETFS:
+        if sym in done and done[sym] >= 1:
+            continue
+        rt = fetch_realtime(sym)
+        price = (rt or {}).get("price") or 0
+        amount = net * PROBE_PCT * PROBE_FIRST_HALF_RATIO
+        vol = _probe_shares(amount, price)
+        if vol < 100:
+            results.append({"symbol": sym, "status": "skip_small"})
+            continue
+        try:
+            from app.services.t_build import build_t_position
+            out = build_t_position(sym, price, volume=vol,
+                                   reason="修复期探针第一半（repair_probe，T+1试探）",
+                                   decision_source="ai_led", build_mode="repair_probe")
+            results.append({"symbol": sym, "volume": vol, "price": price,
+                            "status": out.get("status"), "reason": out.get("reason")})
+            logger.info("[t-vreb-etf] 探针第一半 %s vol=%d price=%.3f -> %s", sym, vol, price, out.get("status"))
+        except Exception as e:
+            logger.warning("[t-vreb-etf] 探针第一半异常 %s: %s", sym, str(e)[:120])
+            results.append({"symbol": sym, "status": "error", "reason": str(e)[:120]})
+        time.sleep(SCAN_INTERVAL_S)
+    return results
+
+
+def _buy_probe_second_half() -> List[Dict[str, Any]]:
+    """第一半成交后的下一交易日，若昨日收盘≥成本（企稳）则补另一半。"""
+    results = []
+    today = datetime.now().strftime("%Y%m%d")
+    ep = _episode_start_today()
+    if ep is None:
+        return results
+    done = _probe_first_half_done(ep)
+    net = _probe_net_asset()
+    if net <= 0:
+        return results
+    for sym in PROBE_ETFS:
+        n_ev = done.get(sym, 0)
+        if n_ev < 1:
+            continue  # 还没第一半
+        if n_ev >= 2:
+            continue  # 已补过
+        # 找第一半的成交价与日期
+        fh = None
+        for ev in _probe_events():
+            if ev["symbol"] == sym and str(ev["created_at"])[:10].replace("-", "") >= ep:
+                fh = ev
+        if fh is None:
+            continue
+        d0 = str(fh["created_at"])[:10].replace("-", "")
+        cal = _trade_cal()
+        if d0 not in cal:
+            continue
+        idx = cal.index(d0)
+        if idx + 1 >= len(cal) or cal[idx + 1] != today:
+            continue  # 今天必须是第一半的下一交易日
+        # 企稳：第一半当天收盘 ≥ 成本
+        try:
+            from sqlalchemy import text
+            from app.database import SessionLocal
+            db = SessionLocal()
+            try:
+                row = db.execute(text(
+                    "SELECT close FROM t_vreb_daily WHERE ts_code=:s AND trade_date=:d ORDER BY trade_date DESC LIMIT 1"
+                ), {"s": sym, "d": d0}).mappings().first()
+            finally:
+                db.close()
+            prev_close = float(row["close"]) if row else 0.0
+        except Exception as e:
+            logger.warning("[t-vreb-etf] 企稳查询失败: %s", str(e)[:80])
+            continue
+        entry = float(fh["executed_price"] or 0)
+        if entry <= 0 or prev_close < entry:
+            logger.info("[t-vreb-etf] 探针 %s 昨收%.3f < 成本%.3f，不补仓", sym, prev_close, entry)
+            continue
+        rt = fetch_realtime(sym)
+        price = (rt or {}).get("price") or prev_close
+        amount = net * PROBE_PCT * (1 - PROBE_FIRST_HALF_RATIO)
+        vol = _probe_shares(amount, price)
+        if vol < 100:
+            continue
+        try:
+            from app.services.t_build import build_t_position
+            out = build_t_position(sym, price, volume=vol,
+                                   reason="修复期探针第二半（repair_probe，企稳补仓）",
+                                   decision_source="ai_led", build_mode="repair_probe")
+            results.append({"symbol": sym, "volume": vol, "status": out.get("status"),
+                            "reason": out.get("reason")})
+            logger.info("[t-vreb-etf] 探针第二半 %s vol=%d -> %s", sym, vol, out.get("status"))
+        except Exception as e:
+            logger.warning("[t-vreb-etf] 探针第二半异常 %s: %s", sym, str(e)[:120])
+        time.sleep(SCAN_INTERVAL_S)
+    return results
+
+
+def _probe_positions() -> List[Dict[str, Any]]:
+    from app.services.t_gateway import get_sellable_ledger
+    ledger = get_sellable_ledger()
+    out = []
+    for sym in PROBE_ETFS:
+        item = ledger.get(sym)
+        vol = int(item.get("sellable") or 0) if item else 0
+        if vol <= 0:
+            continue
+        evs = [x for x in _probe_events() if x["symbol"] == sym]
+        if not evs:
+            continue
+        total = sum(float(x["executed_price"] or 0) for x in evs) / len(evs)
+        built = str(evs[0]["created_at"])[:10]
+        out.append({"symbol": sym, "volume": vol, "avg_price": total, "built_at": built})
+    return out
+
+
+def check_probe_exits() -> List[Dict[str, Any]]:
+    """探针出场：-6% 硬止损 / T20 交易日超时；仅当可卖（T+1）。"""
+    if not REPAIR_AUTO:
+        return []
+    from app.services.t_gateway import gateway_execute
+    results = []
+    today = datetime.now().strftime("%Y%m%d")
+    for pos in _probe_positions():
+        sym = pos["symbol"]
+        avg = pos["avg_price"]
+        if avg <= 0:
+            continue
+        rt = fetch_realtime(sym)
+        cur = (rt or {}).get("price") or avg
+        pnl = cur / avg - 1
+        d0 = pos["built_at"].replace("-", "")
+        tdays = _trading_days_between(d0, today)
+        reason = None
+        is_stop = False
+        if pnl <= -PROBE_SL:
+            reason, is_stop = "repair_probe 止损 -%d%%（pnl %.1f%%）" % (PROBE_SL * 100, pnl * 100), True
+        elif tdays >= PROBE_HOLD_DAYS:
+            reason = "repair_probe 持有%d交易日超时平仓" % PROBE_HOLD_DAYS
+        if not reason:
+            continue
+        try:
+            gw = gateway_execute(sym, "sell", cur, pos["volume"], reason=reason,
+                                 decision_source="ai_led", is_stop_loss=is_stop)
+            results.append({"symbol": sym, "volume": pos["volume"], "pnl_pct": round(pnl * 100, 2),
+                            "reason": reason, "gateway": gw.get("status")})
+            logger.info("[t-vreb-etf] 探针离场 %s %s", sym, reason)
+        except Exception as e:
+            logger.warning("[t-vreb-etf] 探针平仓异常 %s: %s", sym, str(e)[:120])
+        time.sleep(SCAN_INTERVAL_S)
+    return results
+
+
+def try_repair_probe() -> Dict[str, Any]:
+    """探针自动买卖总入口（仅 REPAIR_AUTO=1 生效；交易日 9:45-13:00 窗口由调用方保证）。"""
+    if not REPAIR_AUTO:
+        return {"enabled": False}
+    if not _is_trade_day(datetime.now().strftime("%Y%m%d")):
+        return {"enabled": True, "skip": "非交易日"}
+    first = _buy_probe_first_half()
+    second = _buy_probe_second_half()
+    return {"enabled": True, "first_half": first, "second_half": second, "exits": check_probe_exits()}
+
+# ────────────────────────────────────────────────────────────────
 # ETF 版向量化筛选（与回测同公式）
 # ────────────────────────────────────────────────────────────────
-def _etf_candidates(df) -> List[Dict[str, Any]]:
+def _etf_candidates(df, env: Optional[bool] = None) -> List[Dict[str, Any]]:
     latest = df["trade_date"].max()
     out = []
     for code, g in df.groupby("ts_code"):
@@ -348,10 +742,15 @@ def _etf_candidates(df) -> List[Dict[str, Any]]:
             continue
         score = 0.5 + (0.2 if ov else 0) + (0.15 if rb >= REB_MIN + 0.04 else 0) + \
                 (0.15 if md else 0) + (0.1 if b20 <= BIAS20_MAX * 0.5 else 0)
+        reasons: List[str] = []
+        if env:
+            score = round(score + REPAIR_ENV_BONUS, 3)
+            reasons.append("修复期环境标记(科创50近%d日5日跌幅<=%d%%内)" % (
+                REPAIR_ENV_WINDOW_DAYS, REPAIR_ENV_MIN_DROP * 100))
         out.append({
             "symbol": _normalize(code.split(".")[0]),
             "score": round(score, 3),
-            "reasons": [],
+            "reasons": reasons,
             "trend": "vreb_etf 科技ETF MA20下行+15日反弹≥%.0f%%+超买" % (REB_MIN * 100),
         })
     out.sort(key=lambda x: -x["score"])
@@ -417,7 +816,10 @@ def scan_once() -> List[str]:
             _db.close()
     except Exception as e:
         logger.warning("[t-vreb-etf] 当日候选清理失败: %s", str(e)[:80])
-    cands = _etf_candidates(df)
+    env = _repair_env_flag()
+    if env and REPAIR_PROBE_NOTIFY:
+        _notify_repair_probe()
+    cands = _etf_candidates(df, env)
     hits = []
     for c in cands[:SCAN_MAX_DAILY]:
         _insert_scan_result(c["symbol"], c["symbol"], c["score"], c["reasons"], c["trend"])
@@ -638,6 +1040,7 @@ class VrebEtfMonitor:
                 if self._is_trading_time():
                     self._last_results["build"] = try_build_candidates()
                     self._last_results["exit"] = check_exits()
+                    self._last_results["probe"] = try_repair_probe()
             except Exception as e:
                 logger.warning("[t-vreb-etf] 主循环异常: %s", str(e)[:150])
             self._stop.wait(self.interval)

@@ -21,6 +21,13 @@ from app.services.t_regime import compute_regime
 
 ACCOUNT_T = "t"
 
+# ── 执行账户白名单（2026-09-02 用户决策：只有狼大做T可以操作）──
+# 默认只放行股票任务账户 stock；t 账户（做T/V反/ETF动量/建仓）一律拒绝。
+# 如需临时人工管理 t 账户持仓：T_EXEC_ALLOWED_ACCOUNTS=stock,t 后重启 worker。
+EXEC_ALLOWED_ACCOUNTS = {
+    a.strip() for a in os.getenv("T_EXEC_ALLOWED_ACCOUNTS", "stock").split(",") if a.strip()
+}
+
 # 底仓风控开关（灰度用；默认开）
 T_STOP_GUARD_ENABLED = os.getenv("T_STOP_GUARD_ENABLED", "1") != "0"
 BASE_LOSS_HALF_PCT = 3.0      # 底仓浮亏 −3% 减半仓
@@ -92,11 +99,12 @@ def t_net_asset() -> float:
 # 账本（当日可卖额度）
 # ────────────────────────────────────────────────────────────────
 
-def get_sellable_ledger() -> Dict[str, Dict[str, Any]]:
-    """读取 t 账户"当日可卖额度"账本（基于 paper_positions + 当日成交推算）。
+def get_sellable_ledger(account_id: str = "t") -> Dict[str, Dict[str, Any]]:
+    """读取指定账户"当日可卖额度"账本（基于 paper_positions + 当日成交推算）。
 
     可卖额度 = 持仓（昨日及以前净买入，T+1 可卖）− 今日已卖 + 今日买回成交回补。
     简化实现：以 paper_positions 当日持仓为基数，扣除今日买入（当日不可卖）得到可卖部分。
+    2026-09-02: 加 account_id 参数(默认 t 兼容), 支持股票任务账户 stock 做T。
     """
     try:
         db = SessionLocal()
@@ -105,16 +113,16 @@ def get_sellable_ledger() -> Dict[str, Dict[str, Any]]:
             # 今日买入量（T+1 锁定，不可卖）
             buys = db.execute(text(
                 "SELECT symbol, COALESCE(SUM(volume), 0) AS v FROM paper_trades "
-                "WHERE account_id = 't' AND direction = '买入' "
+                "WHERE account_id = :acc AND direction = '买入' "
                 "AND (voided = 0 OR voided IS NULL) "
                 "AND substr(created_at, 1, 10) = :today GROUP BY symbol"
-            ), {"today": today}).mappings().all()
+            ), {"acc": account_id, "today": today}).mappings().all()
             buy_map = {r["symbol"]: int(r["v"]) for r in buys}
             # 持仓
             pos = db.execute(text(
                 "SELECT symbol, volume, frozen, avg_price FROM paper_positions "
-                "WHERE account_id = 't' AND volume > 0"
-            )).mappings().all()
+                "WHERE account_id = :acc AND volume > 0"
+            ), {"acc": account_id}).mappings().all()
             ledger = {}
             for p in pos:
                 symbol = p["symbol"]
@@ -150,17 +158,17 @@ def _atomic_decrement_sellable(symbol: str, qty: int) -> bool:
     return item["sellable"] >= qty
 
 
-def is_sell_in_transit(symbol: str) -> bool:
+def is_sell_in_transit(symbol: str, account_id: str = "t") -> bool:
     """卖出在途锁定：当日有未确认成交的卖单则该标的锁买腿。"""
     try:
         db = SessionLocal()
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             row = db.execute(text(
-                "SELECT 1 FROM paper_orders WHERE account_id = 't' AND symbol = :symbol "
+                "SELECT 1 FROM paper_orders WHERE account_id = :acc AND symbol = :symbol "
                 "AND direction = '卖出' AND status IN ('提交中', '部分成交') "
                 "AND substr(created_at, 1, 10) = :today LIMIT 1"
-            ), {"symbol": symbol, "today": today}).fetchone()
+            ), {"acc": account_id, "symbol": symbol, "today": today}).fetchone()
             return row is not None
         finally:
             db.close()
@@ -351,7 +359,7 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
             # 低吸加仓次数上限（单标单日买腿成交 ≤ MAX_DAILY_BUY_LEGS）
             buy_legs = ctx.get("daily_buy_legs")
             if buy_legs is None:
-                buy_legs = _daily_buy_legs(symbol)
+                buy_legs = _daily_buy_legs(symbol, ctx.get("account_id", ACCOUNT_T))
             if buy_legs >= MAX_DAILY_BUY_LEGS:
                 result["level"] = "ledger"
                 result["reason"] = f"低吸加仓次数超限（当日已 {buy_legs} 笔 ≥ {MAX_DAILY_BUY_LEGS}）"
@@ -426,18 +434,21 @@ def validate_order(symbol: str, side: str, price: float, volume: int,
                    trigger_id: Optional[int] = None,
                    reason: str = "",
                    decision_source: str = "agent",
-                   is_stop_loss: bool = False) -> Dict[str, Any]:
-    """做T下单网关校验（实时路径）——构造实时 ctx 后委托 validate_order_at。"""
+                   is_stop_loss: bool = False,
+                   account_id: str = ACCOUNT_T) -> Dict[str, Any]:
+    """做T下单网关校验（实时路径）——构造实时 ctx 后委托 validate_order_at。
+    2026-09-02: account_id 参数(默认 t)——ledger/在途/买腿按账户, net_asset/daily/risk 保持全局风控口径。"""
     quote = self_quote(symbol)
     regime_state = compute_regime()
     ctx = {
         "regime": regime_state.get("regime", "ACTIVE"),
         "quote": quote,
-        "ledger": get_sellable_ledger(),
+        "ledger": get_sellable_ledger(account_id),
         "net_asset": t_net_asset(),
         "daily": t_db.get_daily_state() or {},
         "risk": t_db.get_risk_state() or {},
-        "sell_in_transit": is_sell_in_transit(symbol) if side == "buy" else False,
+        "sell_in_transit": is_sell_in_transit(symbol, account_id) if side == "buy" else False,
+        "account_id": account_id,
     }
     return validate_order_at(symbol, side, price, volume, ctx,
                              condition_id=condition_id, trigger_id=trigger_id,
@@ -496,18 +507,18 @@ def _base_loss_guard(symbol: str, side: str, quote: Optional[dict],
     return {"action": "pass", "reason": ""}
 
 
-def _daily_buy_legs(symbol: str) -> int:
-    """单标当日低吸（买腿）成交次数：paper_trades 当日买入笔数（t 账户）。"""
+def _daily_buy_legs(symbol: str, account_id: str = "t") -> int:
+    """单标当日低吸（买腿）成交次数：paper_trades 当日买入笔数（按账户）。"""
     try:
         db = SessionLocal()
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             n = db.execute(text(
                 "SELECT COUNT(*) FROM paper_trades "
-                "WHERE account_id = 't' AND direction = '买入' "
+                "WHERE account_id = :acc AND direction = '买入' "
                 "AND (voided = 0 OR voided IS NULL) "
                 "AND substr(created_at, 1, 10) = :today AND symbol = :sym"
-            ), {"today": today, "sym": symbol}).scalar()
+            ), {"acc": account_id, "today": today, "sym": symbol}).scalar()
             return int(n or 0)
         finally:
             db.close()
@@ -601,10 +612,12 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     trigger_id: Optional[int] = None,
                     reason: str = "",
                     decision_source: str = "agent",
-                    is_stop_loss: bool = False) -> Dict[str, Any]:
+                    is_stop_loss: bool = False,
+                    account_id: str = ACCOUNT_T) -> Dict[str, Any]:
     """做T下单唯一入口：网关校验通过才调用执行器撮合。
 
-    三权分立：Agent/AI 决策后提交 → 本网关（唯一放行者）→ MarcusVNPyExecutor(account_id='t')。
+    三权分立：Agent/AI 决策后提交 → 本网关（唯一放行者）→ MarcusVNPyExecutor(account_id)。
+    2026-09-02: 加 account_id 参数(默认 t 兼容)——支持股票任务账户 stock 做T。
     decision_source: agent（触发复核路径）/ ai_led（AI 主动决策，无触发事件也可下单）。
     is_stop_loss: 止损离场卖腿——豁免日亏损熔断/回转额上限（止血动作必须执行）。
     执行器失败/被拒 → 更新 t_triggers 为 blocked + 审计。
@@ -613,19 +626,27 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     from paper_engine import PaperTradingEngine
     from workspace_detector import DATA_DIR
 
+    # 0) 账户白名单（2026-09-02：只有狼大做T(stock)可以操作；t 账户拒绝）
+    if account_id not in EXEC_ALLOWED_ACCOUNTS:
+        msg = f"账户 {account_id} 不在执行白名单 {sorted(EXEC_ALLOWED_ACCOUNTS)}（T_EXEC_ALLOWED_ACCOUNTS）"
+        if trigger_id:
+            t_db.update_trigger_status(trigger_id, "blocked", reason=msg)
+        return {"status": "blocked", "reason": msg, "level": "HARD"}
+
     # 1) 校验
     check = validate_order(symbol, side, price, volume,
                            condition_id=condition_id, trigger_id=trigger_id,
                            reason=reason, decision_source=decision_source,
-                           is_stop_loss=is_stop_loss)
+                           is_stop_loss=is_stop_loss,
+                           account_id=account_id)
     if not check["pass"]:
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "blocked", reason=check["reason"])
         return {"status": "rejected", "reason": check["reason"], "level": check.get("level")}
 
-    # 2) 执行器撮合（account_id='t'）
-    engine = PaperTradingEngine(data_dir=str(DATA_DIR), account_id=ACCOUNT_T)
-    executor = MarcusVNPyExecutor(engine=engine, account_id=ACCOUNT_T)
+    # 2) 执行器撮合（按账户）
+    engine = PaperTradingEngine(data_dir=str(DATA_DIR), account_id=account_id)
+    executor = MarcusVNPyExecutor(engine=engine, account_id=account_id)
     try:
         if side == "buy":
             result = executor.buy(symbol=symbol, price=price, volume=volume, reason=reason or "做T低吸")

@@ -2367,6 +2367,7 @@ async def check_entry_filters(req: EntryCheckRequest):
     downgrade_multiplier = 1.0
     hard_block = False
     hard_block_reasons = []
+    data_unavailable = []   # fail-closed：关键输入（60分MA/日内分位/主力资金）缺失时记录，自动通道跳过并QQ通知
 
     # ── 时间门控：午后 13:00 后禁止新开仓 ──
     # 仅允许对已有持仓加仓，新开仓隔夜风险不可控（历史胜率 0%）
@@ -2410,7 +2411,16 @@ async def check_entry_filters(req: EntryCheckRequest):
                 day_info = f"日线 MA5({ma5:.2f}) > MA20({ma20:.2f})" if (ma5 > 0 and ma20 > 0 and ma5 > ma20) else "日线数据可用"
                 tech_details.append(f"✅ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) + {day_info} → 双周期共振，正常仓位")
         else:
-            tech_details.append(f"⚠️ 60分MA数据不可用，跳过MA检查")
+            # fail-closed（2026-08-28 根因修复）：分钟数据不可用 = 禁止建仓（与震荡市P0一致）
+            data_unavailable.append("60分MA")
+            tech_details.append("🚫 60分MA数据不可用（分钟数据缺失）→ 按P0硬门槛禁止建仓，等数据恢复后重评")
+            layer1_grade = "🚫排除"
+            layer1_downgrade = "60分MA数据不可用"
+            layer1_action = "等分钟数据恢复后再评估"
+            layer1_passed = False
+            downgrade_multiplier = 0.0
+            hard_block = True
+            hard_block_reasons.append("60分MA数据不可用（分钟数据缺失=不建仓）")
 
     else:
         # 趋势市：日线 MA5/MA20
@@ -2488,6 +2498,15 @@ async def check_entry_filters(req: EntryCheckRequest):
             downgrade_multiplier = min(downgrade_multiplier, 0.5)
         else:
             tech_details.append(f"✅ 日内分位({intraday_percentile:.0f}%) ≤ 60% — 通过")
+    else:
+        # fail-closed（2026-08-28 根因修复）：分位缺失=追高风险未验证，不允许 pass（自动通道将跳过）
+        data_unavailable.append("日内分位")
+        tech_details.append("⚠️ 日内分位数据不可用 → 追高风险未验证，仅试探仓；自动通道将 fail-closed 跳过并QQ通知")
+        if layer1_passed:
+            layer1_grade = "⚠️降级"
+            layer1_downgrade = "日内分位数据不可用"
+            layer1_action = "仅试探仓≤5%"
+        downgrade_multiplier = min(downgrade_multiplier, 0.5)
 
     # 1e. 资金效率检查
     if capital_efficiency is not None:
@@ -2641,6 +2660,7 @@ async def check_entry_filters(req: EntryCheckRequest):
     else:
         capital_details.append("⚠️ 资金流向数据不可用，跳过主力行为检查")
         layer2_grade = "⚠️数据缺失"
+        data_unavailable.append("主力资金")   # fail-closed：自动通道看到即跳过并QQ通知
 
     layer2 = LayerResult(
         passed=layer2_passed,
@@ -2812,6 +2832,7 @@ async def check_entry_filters(req: EntryCheckRequest):
         hard_block=hard_block,
         hard_block_reasons=hard_block_reasons,
         l2_oversold_exempt=l2_oversold_exempt,
+        data_unavailable=data_unavailable,
         buy_confirmation=buy_confirmation,
         all_layers_pass=all_layers_pass,
         summary=summary,

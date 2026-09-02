@@ -262,6 +262,25 @@ class CandidatePoolMonitor:
             logger.warning(f"[建仓] check_entry_filters failed for {symbol}: {e}")
             return False
 
+        # ── fail-closed（2026-08-28 根因修复）：数据缺失 → 跳过 + QQ 通知（同日同标的只推一次）
+        # 数据缺失不等于结构恶化：不 mark_expired，保留候选等数据恢复后下一轮重评 ──
+        missing = list(getattr(result, "data_unavailable", None) or [])
+        if missing:
+            from app.services.data_unavailable_notify import notify_data_unavailable
+            notify_data_unavailable(symbol, entry.get("name", ""), missing)
+            entry["last_reject"] = {
+                "final_grade": result.final_grade,
+                "data_unavailable": missing,
+                "hard_block": result.hard_block,
+                "checked_at": datetime.now().isoformat(),
+            }
+            entry["checks_count"] = entry.get("checks_count", 0) + 1
+            from app.services.candidate_pool import get_candidate_pool
+            pool = get_candidate_pool()
+            pool._save(pool._data)
+            logger.info(f"[建仓] {symbol} → data_unavailable({','.join(missing)}) fail-closed 跳过，已QQ通知")
+            return False
+
         # ── 硬拦截 → 移出候选池 ──
         if result.hard_block or result.downgrade_multiplier <= 0:
             from app.services.candidate_pool import get_candidate_pool

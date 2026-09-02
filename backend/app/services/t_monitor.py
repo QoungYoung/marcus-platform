@@ -9,6 +9,7 @@
 - 命中 → 写 t_triggers(pending, snapshot{suggest_bid/ask, slippage_budget, confidence})
 - 14:45 后禁新开仓；Worker 永不直接下单
 """
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,14 @@ MAX_CORE_SYMBOLS = 20       # 核心底仓数量上限
 MIN_TURNOVER_BASE = 0.5     # 量比基准兜底 %
 COOLDOWN_SECONDS = 300      # 同条件去抖冷却（5min）
 
+# 2026-09-02 架构修正: 只监控股票任务账户, 只跑狼大做T表达式, 停自动维护
+T_MONITOR_ACCOUNT = os.getenv("T_MONITOR_ACCOUNT", "stock")
+T_MONITOR_AUTO_MAINTAIN = os.getenv("T_MONITOR_AUTO_MAINTAIN", "0") == "1"
+# 狼大做T表达式字段(唯一允许)：分时T出(t_sell) + 正T买点(index.intraday_dd 大盘盘中回撤2-3%低吸)
+# + 黄线跌破离场(quote.vwap_break, 狼大8-04『黄线跌破直接走』)
+# T1缩转放(t1_shrink_expand) 已由个股5min验证无预测力(2026-09-02) → 暂缓, 不再作为自动买腿
+WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break")
+
 
 class TMonitor:
     """做T监控器：daemon 线程，30s 轮询 t_conditions，命中写 t_triggers。"""
@@ -43,7 +52,12 @@ class TMonitor:
             "conditions_checked": 0,
             "triggers_written": 0,
             "errors": 0,
+            "daily_maintained": None,
+            "ai_maintained": None,
+            "ai_maintain_running": False,
         }
+        self._daily_maintained = ""
+        self._ai_thread: Optional[threading.Thread] = None
 
     # ── 生命周期 ──
     def start(self) -> bool:
@@ -71,6 +85,12 @@ class TMonitor:
             round_start = time.time()
             try:
                 if _is_trading_time():
+                    today_d = datetime.now().strftime("%Y%m%d")
+                    if self._daily_maintained != today_d:
+                        self._daily_maintained = today_d
+                        if T_MONITOR_AUTO_MAINTAIN:   # 2026-09-02: 默认停自动维护(只留狼大做T条件)
+                            self._status["daily_maintained"] = self._daily_maintain()
+                            self._start_ai_maintain()
                     self._round()
                 else:
                     time.sleep(60)  # 非交易时段低频等待
@@ -87,13 +107,97 @@ class TMonitor:
             wait = self.interval + ((time.time() * 1000) % (JITTER * 2 + 1) - JITTER)
             self._stop.wait(max(5.0, wait))
 
+    def _daily_maintain(self) -> dict:
+        """每日一次（每交易日首次轮询前）：归档昨日条件 + 为缺条件的持仓补生成当日双条件。
+
+        规则兜底：只对“今日无任何 active 条件”的持仓标的生成（不覆盖 AI/手动已有条件）；
+        顺带让 V反/探针等 t 账户持仓（T+1 后可卖）每天自动获得做T条件。
+        """
+        res = {"expired": 0, "filled": 0}
+        try:
+            res["expired"] = t_db.expire_daily_conditions()
+        except Exception as e:
+            print(f"[TMonitor] 每日条件归档失败: {e}")
+        try:
+            # 来源：t 账户持仓（paper_positions），开盘前亦可稳定读取；
+            # 条件仅补齐“今日尚无 active 条件”的标的后，交由盘中报价驱动是否触发。
+            from app.services.t_pool import _get_positions, build_t_conditions, calc_t_quality
+            for pos in _get_positions():
+                sym = pos.get("symbol")
+                avg = float(pos.get("avg_price") or 0)
+                if not sym or avg <= 0:
+                    continue
+                if t_db.list_active_conditions(symbol=sym):
+                    continue
+                amp = None
+                try:
+                    q = calc_t_quality(sym)
+                    amp = (q.get("factors") or {}).get("amp_median")
+                except Exception:
+                    amp = None
+                for cond in build_t_conditions(avg, amp):
+                    cond = {**cond, "account_id": t_db.ACCOUNT_T,
+                            "symbol": sym, "trade_date": None}
+                    if t_db.upsert_condition(cond):
+                        res["filled"] += 1
+        except Exception as e:
+            print(f"[TMonitor] 每日条件补生成失败: {e}")
+        print(f"[TMonitor] 每日维护: 归档{res['expired']}条, 补生成{res['filled']}条")
+        return res
+
+    def _start_ai_maintain(self) -> None:
+        """每日自动 AI 维护：后台线程为持仓重建当日做T条件（AI 优先、规则兜底）。"""
+        if self._ai_thread and self._ai_thread.is_alive():
+            return
+        self._status["ai_maintain_running"] = True
+        self._ai_thread = threading.Thread(target=self._ai_maintain_loop, daemon=True,
+                                           name="t-ai-maintain")
+        self._ai_thread.start()
+
+    def _ai_maintain_loop(self) -> None:
+        """AI 维护主体：对 t 账户持仓逐标的 auto_gen_conditions_for_build（AI→规则回退→双腿补齐）。"""
+        res = {"ai_ok": 0, "rule_fallback": 0, "fail": 0, "skipped_user": 0}
+        try:
+            from app.services.t_build import auto_gen_conditions_for_build
+            from app.services.t_pool import _get_positions
+            today = datetime.now().strftime("%Y%m%d")
+            for pos in _get_positions():
+                sym = pos.get("symbol")
+                avg = float(pos.get("avg_price") or 0)
+                if not sym or avg <= 0:
+                    continue
+                # 人工条件优先：今日已有 publisher=user 的条件则不动
+                try:
+                    acts = t_db.list_active_conditions(symbol=sym)
+                    if any((c.get("publisher") or "") == "user" for c in acts):
+                        res["skipped_user"] += 1
+                        continue
+                except Exception:
+                    pass
+                try:
+                    ok = auto_gen_conditions_for_build(sym, avg, trade_date=today)
+                    if ok:
+                        res["ai_ok"] += 1
+                    else:
+                        res["rule_fallback"] += 1
+                except Exception as e:
+                    res["fail"] += 1
+                    print(f"[TMonitor] AI维护 %s 异常: {e}" % sym)
+                time.sleep(2)  # 多标的错峰，避免 LLM 桥连发
+        except Exception as e:
+            print(f"[TMonitor] AI维护循环异常: {e}")
+        self._status["ai_maintain_running"] = False
+        self._status["ai_maintained"] = f"{datetime.now():%Y-%m-%d %H:%M} {res}"
+        print(f"[TMonitor] AI维护完成: {res}")
+
     def _round(self):
         """单轮：拉 regime → 读条件 → 并发取价 → 构建字段快照 → 表达式/默认逻辑评估 → 写触发。"""
         # 1) regime 前置（每轮一次，缓存 5s）
         regime_state = compute_regime()
 
-        # 2) 当日有效条件
-        conditions = t_db.list_active_conditions()
+        # 2) 当日有效条件（只读目标账户 + 只跑狼大做T表达式条件, 屏蔽其他做T）
+        conditions = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
+        conditions = [c for c in conditions if _is_wolf_t_condition(c)]
         if not conditions:
             return
         self._status["conditions_checked"] = len(conditions)
@@ -105,7 +209,7 @@ class TMonitor:
         # 3.5) 止损扫描（持仓标的现价 ≤ stop_loss_price → 止损卖腿，独立于条件触发）
         try:
             from app.services.t_gateway import gateway_execute, get_sellable_ledger
-            ledger = get_sellable_ledger()
+            ledger = get_sellable_ledger(T_MONITOR_ACCOUNT)
         except Exception as e:
             print(f"[TMonitor] 止损扫描初始化失败: {e}")
             ledger = {}
@@ -142,6 +246,33 @@ class TMonitor:
                 print(f"[TMonitor] 条件评估异常 {symbol}: {e}")
         self._status["triggers_written"] += written
 
+    def _index_intraday_dd(self) -> float:
+        """上证指数当日盘中最大回撤%（从日高逐bar更新；30s TTL 缓存）。
+        狼大正T买点(1-12『利用盘中大盘带下来的机会做正T』)：
+        dd∈[2%,3%) → 低吸信号；dd≥3% 系统性风险不买（验证 docs/zt-dip-verification-report.md）。"""
+        now = time.time()
+        if now - _index_dd_cache["at"] < 30:
+            return _index_dd_cache["value"]
+        try:
+            from app.services.t_data_sources import fetch_tencent_mkline
+            bars = fetch_tencent_mkline("sh000001", freq="m5", count=60)
+            today = datetime.now().strftime("%Y%m%d")
+            today_bars = [b for b in (bars or []) if str(b.get("time", "")).startswith(today)]
+            if len(today_bars) < 10:
+                _index_dd_cache["at"] = now; _index_dd_cache["value"] = 0.0
+                return 0.0
+            dh = 0.0; mdd = 0.0
+            for b in sorted(today_bars, key=lambda x: str(x.get("time"))):
+                hi = float(b.get("high") or 0); cl = float(b.get("close") or 0)
+                if hi > dh: dh = hi
+                if dh > 0 and cl > 0:
+                    mdd = max(mdd, (dh - cl) / dh * 100)
+            _index_dd_cache["at"] = now; _index_dd_cache["value"] = round(mdd, 3)
+            return round(mdd, 3)
+        except Exception as e:
+            print(f"[TMonitor] 指数盘中回撤计算失败: {e}")
+            return 0.0
+
     def _build_snapshot(self, cond: Dict[str, Any], quote: dict,
                         regime_state: dict) -> Dict[str, Any]:
         """构建字段快照（Agent 自由表达式可引用的全部字段）。
@@ -152,8 +283,10 @@ class TMonitor:
         snapshot: Dict[str, Any] = {}
 
         # quote.*（腾讯 qt 实时）
+        _cur = float(quote.get("current", 0) or 0)
+        _avg = float(quote.get("average", 0) or 0)
         snapshot["quote"] = {
-            "current": float(quote.get("current", 0) or 0),
+            "current": _cur,
             "open": float(quote.get("open", 0) or 0),
             "high": float(quote.get("high", 0) or 0),
             "low": float(quote.get("low", 0) or 0),
@@ -163,6 +296,9 @@ class TMonitor:
             "amplitude": float(quote.get("amplitude", 0) or 0),
             "vol": float(quote.get("vol", 0) or 0),
             "amount": float(quote.get("amount", 0) or 0),
+            "average": _avg,
+            # 分时黄线跌破（狼大8-04『绝对不能破的点就是日均线那条黄线 一旦突发跌破直接走』）
+            "vwap_break": bool(_avg > 0 and _cur < _avg),
         }
         # vol_ratio（盘中量比归一）
         vr = self._calc_volume_ratio(cond, quote)
@@ -181,16 +317,33 @@ class TMonitor:
             "gate_high_sell": regime_state.get("gate_high_sell", "ALLOWED"),
             "interpret_sign": int(regime_state.get("interpret_sign", 1)),
         }
-        # position.*（t 账户持仓）
-        snapshot["position"] = self._build_position_snapshot(symbol)
-        # index.*（指数实时，复用本轮 regime 已拉取的报价）
+        # position.*（监控账户持仓）
+        snapshot["position"] = self._build_position_snapshot(
+            symbol, cond.get("account_id", T_MONITOR_ACCOUNT))
+        # index.*（指数实时，复用本轮 regime 已拉取的报价 + 盘中回撤=正T买点信号）
         snapshot["index"] = {
             "hs300_drop": float(regime_state.get("index_drop", 0) or 0),
             "sh_drop": 0.0,
             "sz_drop": 0.0,
+            "intraday_dd": self._index_intraday_dd(),
         }
         # tech.*（技术指标：KDJ/MACD/RSI/MA，复用 get_realtime_indicators，带缓存）
         snapshot["tech"] = self._build_tech_snapshot(symbol, snapshot["quote"])
+        # external.*（外部风险：美股纳指/费半/美债10Y/全球宏观，TTL 缓存降级）
+        try:
+            from app.services.t_external_risk import external_risk_snapshot
+            _ext = external_risk_snapshot()
+            snapshot["external"] = {
+                "us_risk": bool(_ext.get("us_risk")),
+                "us_risk_reason": str(_ext.get("us_risk_reason") or ""),
+                "us_risk_score": int(_ext.get("us_risk_score") or 0),
+                "nasdaq_pct": (_ext.get("us_market") or {}).get("nasdaq", {}).get("pct", 0.0),
+                "sox_pct": (_ext.get("us_market") or {}).get("sox", {}).get("pct", 0.0),
+                "gm_liquidity_gate": (_ext.get("global_macro") or {}).get("liquidity_gate", ""),
+            }
+        except Exception:
+            snapshot["external"] = {"us_risk": False, "us_risk_reason": "", "us_risk_score": 0,
+                                    "nasdaq_pct": 0.0, "sox_pct": 0.0, "gm_liquidity_gate": ""}
         return snapshot
 
     def _build_vol_price(self, q: Dict[str, Any], vol_ratio: float) -> Dict[str, Any]:
@@ -286,7 +439,7 @@ class TMonitor:
         return result
 
     def _build_minute_snapshot(self, symbol: str, quote: dict) -> Dict[str, Any]:
-        """分钟线衍生字段（m1/m5）。取不到时给保守默认（0/False），避免误触发。"""
+        """分钟线衍生字段（m1/m5）+ 做T信号(T1缩转放/分时T出)。取不到时给保守默认，避免误触发。"""
         result = {"m1": {}, "m5": {}}
         try:
             from app.services.t_data_sources import fetch_minute_bars
@@ -308,15 +461,20 @@ class TMonitor:
                     "ma10": _sma(closes, 10),
                     "ma20": _sma(closes, 20),
                 }
+                # ── 做T信号（狼大体系, t_signal 逻辑）──
+                t1, t_sell = _t_signals_from_m5(m5)
+                result["m5"]["t1_shrink_expand"] = bool(t1)   # T1 缩转放(正T买点)
+                result["m5"]["t_sell"] = bool(t_sell)         # 分时T出(第一次高点后停量+二次拉升无量不过前高)
         except Exception as e:
             print(f"[TMonitor] 分钟线快照失败 {symbol}: {e}")
         return result
 
-    def _build_position_snapshot(self, symbol: str) -> Dict[str, Any]:
-        """持仓字段（t 账户）。"""
+    def _build_position_snapshot(self, symbol: str,
+                                    account_id: Optional[str] = None) -> Dict[str, Any]:
+        """持仓字段（监控账户）。"""
         try:
             from app.services.t_gateway import get_sellable_ledger
-            ledger = get_sellable_ledger()
+            ledger = get_sellable_ledger(account_id or T_MONITOR_ACCOUNT)
             item = ledger.get(symbol) or {}
             avg = float(item.get("avg_price", 0) or 0)
             vol = int(item.get("volume", 0) or 0)
@@ -387,7 +545,7 @@ class TMonitor:
         consecutive_hits = self._consecutive_hits(cond.get("id"), cond["symbol"])
 
         trig = {
-            "account_id": "t",
+            "account_id": cond.get("account_id", T_MONITOR_ACCOUNT),
             "condition_id": cond.get("id"),
             "symbol": cond["symbol"],
             "event_type": trigger_kind,
@@ -455,9 +613,11 @@ class TMonitor:
                             except Exception:
                                 volume = 0
                     else:
-                        max_sell = sellable
-                        if sellable > 200:
-                            max_sell = max(sellable - 100, 0)
+                        # 狼大铁律『底仓不卖，T仓做T』（2026-09-02 修复）：
+                        # 卖腿始终保留 100 股底仓——此前 sellable>200 才扣 100，
+                        # 导致 T仓100+底仓100=200 时第二笔卖腿(250/252先后触发)
+                        # 会把底仓也卖掉。现改为：超过 100 股的部分才可卖(T仓)。
+                        max_sell = max(sellable - 100, 0) if sellable > 100 else 0
                         volume = max(int(sellable * 0.3), 100) if sellable > 0 else 0
                         volume = min(volume, max_sell)
                     volume = (volume // 100) * 100
@@ -466,7 +626,8 @@ class TMonitor:
                     gw = gateway_execute(symbol, side, current, volume,
                                          reason=f"条件命中自动执行（{trigger_kind}）",
                                          decision_source="ai_led",
-                                         condition_id=cond.get("id"))
+                                         condition_id=cond.get("id"),
+                                         account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
                     exec_ok = gw.get("status") == "success"
                     print(f"[TMonitor] 自动执行 {symbol} {side} {volume}股@{current}: "
                           f"{gw.get('status')} {str(gw.get('reason') or '')[:40]}")
@@ -485,12 +646,16 @@ class TMonitor:
                 # 执行后报告 AI = 调 AI 条件生成（含现价），失败回退规则公式。
                 try:
                     from app.services.t_db import list_active_conditions
-                    remain = list_active_conditions(symbol=symbol)
+                    remain = list_active_conditions(
+                        symbol=symbol,
+                        account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
                     # 成交后刷新持仓（无底仓建仓场景：执行前无持仓/成本）
                     fresh_item = {}
                     try:
                         from app.services.t_gateway import get_sellable_ledger
-                        fresh_item = get_sellable_ledger().get(symbol) or {}
+                        fresh_item = (get_sellable_ledger(
+                            cond.get("account_id", T_MONITOR_ACCOUNT))
+                            .get(symbol) or {})
                     except Exception:
                         pass
                     pos_volume = int(fresh_item.get("volume") or 0)
@@ -509,7 +674,9 @@ class TMonitor:
                                 today = date.today().strftime("%Y%m%d")
                                 ok = auto_gen_conditions_for_build(
                                     symbol, avg_price, trade_date=today,
-                                    quote_price=current)
+                                    quote_price=current,
+                                    account_id=cond.get("account_id",
+                                                        T_MONITOR_ACCOUNT))
                                 if ok:
                                     print(f"[TMonitor] 消费式条件自动重建 {symbol}（AI 重新评估，当日 @{current}）")
                 except Exception as e:
@@ -566,7 +733,8 @@ class TMonitor:
             if current <= 0:
                 return
             stop_price = None
-            conds = t_db.list_active_conditions(symbol=symbol)
+            conds = t_db.list_active_conditions(symbol=symbol,
+                                                account_id=T_MONITOR_ACCOUNT)
             for c in conds or []:
                 sp = float(c.get("stop_loss_price") or 0)
                 if sp > 0:
@@ -595,7 +763,8 @@ class TMonitor:
                 return
             gw = gateway_execute(symbol, "sell", current, volume,
                                  reason="止损离场（stop_loss）", decision_source="ai_led",
-                                 is_stop_loss=True)
+                                 is_stop_loss=True,
+                                 account_id=T_MONITOR_ACCOUNT)
             print(f"[TMonitor] 止损触发 {symbol} @ {current} x{volume}: {gw.get('status')}")
             # 迭代#58g：仅在止损**成交**后冻结当日条件——
             # 此前无条件冻结：T+1 当日买入 sellable=0 时止损被拒（rejected），
@@ -607,6 +776,80 @@ class TMonitor:
                         t_db.update_condition_state(cid, armed=0)
         except Exception as e:
             print(f"[TMonitor] 止损扫描异常 {symbol}: {e}")
+
+
+def _is_wolf_t_condition(cond: Dict[str, Any]) -> bool:
+    """只允许狼大做T表达式条件(expression 含 minute.m5.t_sell / t1_shrink_expand); 其他做T条件(V反/探针/默认)不评估。"""
+    expr = cond.get("expression")
+    if not isinstance(expr, dict):
+        return False
+    import json as _json
+    s = _json.dumps(expr, ensure_ascii=False)
+    return any(f in s for f in WOLF_T_FIELDS)
+
+
+# 结构性伪信号 bar（2026-09-02 复测发现, docs/t1-guard-reback-report.md）：
+# 开盘两根(09:30/09:35)与午休后第一根(13:05)是 A股 结构性放量 bar——
+# 指数184天中 T1 91% 命中午休效应假信号。T1 触发点排除这三根（阈值保持1.2x）。
+T1_EXCLUDE_BARS = ("0930", "0935", "1305")
+
+
+def _bar_hhmm(b) -> str:
+    """从 bar 提取 HHMM（兼容腾讯 time='YYYYMMDDHHMM' / 带分隔符格式）"""
+    t = str(b.get("trade_time") or b.get("time") or "")
+    t = t.strip()
+    if len(t) >= 12 and t.isdigit():
+        return t[8:12]
+    for sep in (" ", "T"):
+        if sep in t:
+            t = t.split(sep)[1]
+    parts = t.split(":")
+    if len(parts) >= 2:
+        return parts[0] + parts[1]
+    return t
+
+
+def _t_signals_from_m5(m5):
+    """做T信号(狼大体系): T1缩转放(日内缩量后放量=正T买点) + 分时T出(7-29原话: 放量反弹→第一次分时高点→停量→第二次拉升无量不过前高)
+    输入: m5 bars [{time, close, vol,...}] 返回 (t1, t_sell)
+    2026-09-02: T1 触发点排除 09:30/09:35/13:05 结构性伪信号 bar。"""
+    import numpy as _np
+    t1 = False; t_sell = False
+    try:
+        closes = _np.array([float(b["close"]) for b in m5])
+        vols = _np.array([float(b["vol"]) for b in m5])
+        times = [_bar_hhmm(b) for b in m5]
+        n = len(closes)
+        # T1 缩转放: 近8根缩量(末端<=起点) 且 最新放量(>前8均量1.2)；触发点排除结构性 bar
+        if n >= 18 and times[-1] not in T1_EXCLUDE_BARS:
+            prev = vols[-9:-1]
+            if prev.mean() > 0:
+                t1 = bool(prev[-1] <= prev[0] and vols[-1] > prev.mean() * 1.2)
+        # 分时T出(7-29): 放量反弹(vol>前look1.3) → 第一次分时高点 → 高点后停量(<0.8) → 第二次拉升无量不过前高
+        look = 8
+        if n >= look * 4 + 4:
+            start = None
+            for i in range(look, n - look - 2):
+                base = vols[max(0, i-look):i].mean()
+                if base > 0 and vols[i] > base * 1.3:
+                    start = i; break
+            if start is not None:
+                seg = closes[start:n-look]
+                hi = float(seg.max()); hi_idx = start + int(seg.argmax())
+                if hi_idx >= start + 2:
+                    va = vols[hi_idx+1:hi_idx+1+look].mean() if hi_idx+look < n else 0
+                    vb = vols[max(start, hi_idx-look):hi_idx].mean()
+                    if vb > 0 and va < vb * 0.8:
+                        after = closes[hi_idx+1:]
+                        sh = float(after.max()) if len(after) else 0
+                        t_sell = bool(sh > hi * 0.98 and sh < hi * 1.005)
+    except Exception:
+        pass
+    return t1, t_sell
+
+
+# 指数盘中回撤缓存（30s TTL，避免每轮拉腾讯）
+_index_dd_cache = {"at": 0.0, "value": 0.0}
 
 
 # ── 单例管理（对齐 candidate_pool_monitor 模式） ──

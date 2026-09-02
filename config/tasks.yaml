@@ -100,7 +100,7 @@ tasks:
 - id: auto_trade_morning
   name: 自动交易 (早盘)
   description: 9:35 趋势市→观察不动 / 震荡市→60min确认建仓60%
-  enabled: true
+  enabled: false  # 2026-09-02 停用（只有狼大做T可以操作）
   type: pi_trade
   pi_prompt: morning
   schedule:
@@ -120,7 +120,7 @@ tasks:
 - id: auto_trade_mid_morning
   name: 自动交易 (早盘中游)
   description: 9:53 趋势市→观察不动 / 震荡市→验证通过建仓40%
-  enabled: true
+  enabled: false  # 2026-09-02 停用（只有狼大做T可以操作）
   type: pi_trade
   pi_prompt: mid_morning
   schedule:
@@ -139,7 +139,7 @@ tasks:
 - id: auto_trade_late_morning
   name: 自动交易 (午前)
   description: 10:35 趋势市→日线确认建仓40% / 震荡市→不动(已建满)
-  enabled: true
+  enabled: false  # 2026-09-02 停用（只有狼大做T可以操作）
   type: pi_trade
   pi_prompt: late_morning
   schedule:
@@ -158,7 +158,7 @@ tasks:
 - id: auto_trade_afternoon
   name: 自动交易 (午后)
   description: 13:35 只卖不买（趋势/震荡通用）
-  enabled: true
+  enabled: false  # 2026-09-02 停用（只有狼大做T可以操作）
   type: pi_trade
   pi_prompt: afternoon
   schedule:
@@ -177,7 +177,7 @@ tasks:
 - id: auto_trade_closing
   name: 自动交易 (尾盘)
   description: 14:30 只卖不买（趋势/震荡通用）
-  enabled: true
+  enabled: false  # 2026-09-02 停用（只有狼大做T可以操作）
   type: pi_trade
   pi_prompt: closing
   schedule:

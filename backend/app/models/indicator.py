@@ -266,6 +266,9 @@ class EntryCheckResponse(BaseModel):
     hard_block_reasons: list[str] = []  # 硬拦截原因列表
     # L2 极端超跌豁免（5日主力<0 但 L1 过 + 前5日跌幅≥15% → 降级仅试探仓，供长期池放行）
     l2_oversold_exempt: bool = False
+    # 数据可用性（fail-closed）：关键输入缺失/不可用时列出，如 ["60分MA","日内分位","主力资金"]
+    # 自动通道（长期/短期候选池监控器）看到非空即 fail-closed 跳过并 QQ 通知（同日同标的只推一次）
+    data_unavailable: list[str] = []
     # 买入确认
     buy_confirmation: EntryBuyConfirmation
     # 汇总

@@ -380,7 +380,9 @@ def _load_candidate_symbols() -> List[str]:
         from app.services.candidate_pool import get_candidate_pool
         pool = get_candidate_pool()
         symbols = []
-        for item in pool.pool[:20]:
+        # 候选池内部为 _data["candidates"]（无 .pool 属性，2026-08-29 修复）
+        items = getattr(pool, "_data", {}).get("candidates", []) if hasattr(pool, "_data") else []
+        for item in items[:20]:
             sym = item.get("symbol") if isinstance(item, dict) else str(item)
             if sym:
                 symbols.append(sym)

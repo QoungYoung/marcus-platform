@@ -1132,7 +1132,19 @@ def build_gateway_execute(symbol: str, price: float, volume: int,
     """建仓执行唯一入口：建仓校验通过才调用执行器撮合（account_id='t'）。
 
     成功 → 更新日账本（建仓名义额入 daily_turnover_amount，来源 build）→ 更新审计事件。
+    2026-09-02: 账户白名单——只有狼大做T(stock)可以操作，t 账户建仓一律拒绝。
     """
+    # 0.5) 账户白名单（与 t_gateway.gateway_execute 同源，锁死 t 账户）
+    try:
+        from app.services.t_gateway import EXEC_ALLOWED_ACCOUNTS
+        if ACCOUNT_T not in EXEC_ALLOWED_ACCOUNTS:
+            msg = (f"账户 {ACCOUNT_T} 不在执行白名单 {sorted(EXEC_ALLOWED_ACCOUNTS)}"
+                   f"（T_EXEC_ALLOWED_ACCOUNTS，2026-09-02 起只允许狼大做T）")
+            if event_id:
+                t_db.update_build_event(event_id, status="rejected", reason=msg)
+            return {"status": "blocked", "reason": msg, "level": "HARD"}
+    except ImportError:
+        pass
     # 0) 审计先行（记录请求）
     regime = compute_regime().get("regime", "ACTIVE")
     before = _positions_value(symbol)[1] if symbol else {}
@@ -1266,7 +1278,8 @@ def ensure_dual_legs(conds: List[Dict[str, Any]], avg_price: float,
 
 def auto_gen_conditions_for_build(symbol: str, avg_price: float,
                                   trade_date: Optional[str] = None,
-                                  quote_price: Optional[float] = None) -> bool:
+                                  quote_price: Optional[float] = None,
+                                  account_id: Optional[str] = None) -> bool:
     """为刚建仓标的生成 t_conditions（双条件：低吸 + 高抛回补）。
 
     AI 自主条件模式（AI 主导闭环）：优先 POST bridge /conditions/generate 让 AI 设定
@@ -1278,6 +1291,8 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float,
     触发消费后即时重建当日新条件。
     quote_price：现价——消费式重建（迭代#57）传当前价，AI 基于现价设移动条件
     （止损/止盈随行情移动，不重复相同条件）；并防止 AI 把现价误当成本基准。
+    account_id：目标账户（2026-09-02 新增）；默认 ACCOUNT_T（'t'）保持既有调用兼容，
+    狼大做T(t_monitor) 传监控账户（'stock'）——重建条件必须落在同一账户。
     """
     try:
         from datetime import date, timedelta
@@ -1335,9 +1350,11 @@ def auto_gen_conditions_for_build(symbol: str, avg_price: float,
                 c["stop_loss_price"] = stop
         ok = True
         for cond in conds:
+            # 来源盖章：AI 生成标注 ai，规则兜底标 rule（2026-08-29 补）
+            cond.setdefault("publisher", "ai" if cond_source == "ai" else "rule")
             cond = {
                 **cond,
-                "account_id": ACCOUNT_T,
+                "account_id": account_id or ACCOUNT_T,
                 "symbol": _normalize(symbol).upper(),
                 "trade_date": trade_date,
             }

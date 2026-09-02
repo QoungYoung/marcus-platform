@@ -310,6 +310,8 @@ def fetch_tencent_quote(symbols: List[str], timeout: int = 8) -> Dict[str, Optio
                 low = float(fields[34])
                 turnover = float(fields[38]) if fields[38] else 0.0
                 amplitude = float(fields[43]) if len(fields) > 43 and fields[43] else 0.0
+                # 分时黄线=当日均价线(VWAP)：amount(万元)*100 / vol(手) = 元/股
+                average = round(amount * 100 / vol, 3) if vol > 0 else current
                 result[sym] = {
                     "name": fields[1],
                     "current": current,
@@ -321,6 +323,7 @@ def fetch_tencent_quote(symbols: List[str], timeout: int = 8) -> Dict[str, Optio
                     "amount": amount,
                     "turnover_rate": turnover,
                     "amplitude": amplitude,
+                    "average": average,
                     "change_pct": round((current - pre_close) / pre_close * 100, 2) if pre_close else 0.0,
                     "elapsed_s": round(elapsed, 3),
                 }
