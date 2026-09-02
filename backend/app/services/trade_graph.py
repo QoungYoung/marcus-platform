@@ -975,6 +975,43 @@ _ROT_VERDICT_GUIDE = {
     "manual_review": "人工：当前无明确轮动信号，等盘面",
 }
 
+def _read_risk_context() -> str:
+    """风控门控(risk_gate v1)软约束：读 risk_flags DB → 持仓/候选按 symbol 判 block/review/reduce，
+    并给 Pi 明确指令：建仓前命中 block/review 不买。"""
+    NL = chr(10)
+    try:
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "apps"))
+        from main_line import risk_gate as _rg
+        block = ("## 风控门控（risk_gate）" + NL
+                 + "- 指令：建仓/加仓前必须检查标的 risk_flags（来源 forecast/express/ST/公告AI）；"
+                   "命中 block（业绩雷/ST/立案/重组终止/监管）→ 禁止买入；review（财报窗口未落地/拥挤无空间）→ 等确认或人工；reduce（两融高位查杠杆）→ 系统性减仓。" + NL)
+        try:
+            import psycopg2 as _pg
+            conn = _pg.connect(_os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+            cur = conn.cursor()
+            cur.execute("SELECT symbol FROM paper_positions WHERE account_id='stock'")
+            syms = sorted({r[0] for r in cur.fetchall() if r[0]})
+            cur.close(); conn.close()
+        except Exception:
+            syms = []
+        if syms:
+            lines = []
+            for s in syms[:8]:
+                try:
+                    d = _rg.decide({"symbol": s})
+                    if d["decision"] != "allow":
+                        lines.append("%s → %s（%s）" % (s, d["decision"], d["reason"][:80]))
+                except Exception:
+                    continue
+            if lines:
+                block += "- 当前持仓风险：" + "；".join(lines) + NL
+            else:
+                block += "- 当前持仓风险：无（allow）" + NL
+        return block + NL
+    except Exception as e:
+        return "## 风控门控（risk_gate）" + NL + "- 计算失败：" + str(e)[:80] + NL + NL
+
 def _read_rotation_gate_context() -> str:
     """轮动门控（rotation_gate v2）上下文：wave_state op + main_line 吸金 → gate 判定。
     与 docs/p2-rotation-validation-analysis.md gate_rotation v2 同源；供 Pi 决定'能否切低/是否只做主线内轮动'。
@@ -1207,6 +1244,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "stock_confirm_context": _read_stock_confirm_context(),
         "wave_context": _read_wave_context(),
         "rotation_gate_context": _read_rotation_gate_context(),
+        "risk_context": _read_risk_context(),
     }
 
 
@@ -1309,6 +1347,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('confirm_context', chr(39)+chr(39))}"
         f"{state.get('stock_confirm_context', chr(39)+chr(39))}"
         f"{state.get('rotation_gate_context', chr(39)+chr(39))}"
+        f"{state.get('risk_context', chr(39)+chr(39))}"
         f"{state['regime_context']}\n"
         f"{state.get('style_context', '')}"
         f"{state['pool_context']}"
