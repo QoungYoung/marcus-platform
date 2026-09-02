@@ -1008,6 +1008,17 @@ def _read_risk_context() -> str:
                 block += "- 当前持仓风险：" + "；".join(lines) + NL
             else:
                 block += "- 当前持仓风险：无（allow）" + NL
+        try:  # 系统性风险联动开关(systemic_risk.json, 由行情采集写入)
+            import json as _json
+            _p3 = _os.path.join(_os.environ.get("DATA_DIR", "data"), "systemic_risk.json")
+            if _os.path.exists(_p3):
+                sr = _json.load(open(_p3, encoding="utf-8"))
+                if sr.get("level", 0) > 0:
+                    block += "- 系统性风险开关：level=%s — %s" % (sr.get("level"), (sr.get("advice") or "")) + NL
+                    for a in (sr.get("alerts") or []):
+                        block += "  · " + a + NL
+        except Exception:
+            pass
         return block + NL
     except Exception as e:
         return "## 风控门控（risk_gate）" + NL + "- 计算失败：" + str(e)[:80] + NL + NL
