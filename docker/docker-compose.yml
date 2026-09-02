@@ -28,6 +28,8 @@ x-backend-common: &backend-common
     # 代码改动即时生效、容器重建后不丢；无需每次重建镜像（本机无法访问 PyPI 重建镜像）
     - ../backend/app:/app/app
     - ../core:/app/core
+    # jobs 也 bind mount：market_scan 等任务脚本改动即时生效（镜像内 COPY jobs 会遮旧版）
+    - ../jobs:/app/jobs
     - /etc/localtime:/etc/localtime:ro
 
 services:

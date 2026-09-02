@@ -3074,7 +3074,133 @@ def generate_scan_report():
     except Exception as e:
         print(f"⚠️ 策略链记录失败：{e}")
 
+    # 🐺 狼大视角：信号层注入报告顶部（主线/浪型/高低位/确认链/做T提示）
+    try:
+        wolf = _read_wolf_context(indices=market.get("indices", {}))
+        if wolf:
+            report = wolf + report
+    except Exception as e:
+        print(f"[狼大视角] ⚠️ 注入失败: {e}", file=sys.stderr)
+
     return report, scan_result
+
+
+_WOLF_OP_GUIDE = {
+    "build": "可建仓/追主升：主线内低吸埋伏、波段持仓可加仓",
+    "t_only": "只做T不新建仓：底仓不动，T仓按正T低吸/分时T出/黄线离场高抛低吸",
+    "side": "观望/调仓换股：不追主升、不满仓，等结构确认",
+    "defense": "防御不建仓：等待企稳/止跌确认，规避C杀",
+    "exit": "兑现降仓：反弹即减、控制回撤，不再开新仓",
+}
+
+def _read_wolf_context(indices=None) -> str:
+    """狼大视角：主线/浪型/高低位/个股确认/做T提示 —— 读已落地狼大状态文件，缺失自动跳过。"""
+    NL = chr(10)
+    import os as _os
+    data_dir = str(DATA_DIR)
+
+    def _load(name):
+        p = _os.path.join(data_dir, name)
+        if not _os.path.exists(p):
+            return None
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    parts = []
+    # 1. 主线（main_line_state.json）
+    ml = _load("main_line_state.json")
+    if ml:
+        main_line = ml.get("main_line") or ""
+        cands = ml.get("candidates") or []
+        cat = ml.get("catalyst") or {}
+        s = f"- **主线**：{main_line}"
+        if cands:
+            s += f"（候选：{'、'.join(str(c) for c in cands)}）"
+        if cat:
+            top = sorted(((k, v) for k, v in cat.items() if v), key=lambda kv: -kv[1])[:3]
+            if top:
+                s += " ｜ catalyst " + "、".join(f"{k}:{v}" for k, v in top)
+        parts.append(s)
+
+    # 2. 浪型级别（wave_state.json）
+    wv = _load("wave_state.json")
+    if wv:
+        lvl = str(wv.get("level") or "未知")
+        sub = str(wv.get("sub_level") or "")
+        op = str(wv.get("operation") or "side")
+        guide = _WOLF_OP_GUIDE.get(op, "")
+        conf = wv.get("confidence")
+        date = str(wv.get("date") or "")
+        s = f"- **浪型**：{lvl}" + (f"·{sub}" if sub else "")
+        if conf is not None:
+            s += f"（置信度{conf}）"
+        s += f" → 操作 **{op}**：{guide}"
+        if date:
+            s += f"（判定 {date}）"
+        parts.append(s)
+
+    # 3. 概念高低位（position_class_result.json）
+    pc = _load("position_class_result.json")
+    if pc:
+        from collections import Counter
+        vals = [v for v in pc.values() if isinstance(v, dict) and v.get("action")]
+        act = Counter(str(v.get("action") or "?") for v in vals)
+        reduce_list = sorted([v for v in vals if v.get("action") in ("减仓/只做T", "防御清仓")],
+                             key=lambda v: -(v.get("fund_flow", {}).get("strength") or 0))[:5]
+        buy_list = sorted([v for v in vals if v.get("action") in ("低吸埋伏", "回踩低吸")],
+                          key=lambda v: -(v.get("fund_flow", {}).get("strength") or 0))[:5]
+        s = "- **高低位**：" + ("、".join(f"{k}={v}" for k, v in act.most_common(4)) or "无")
+        if buy_list:
+            s += f" ｜ 低位可埋伏：{'、'.join(str(v.get('name','?')) for v in buy_list[:4])}"
+        if reduce_list:
+            s += f" ｜ 高位只做T/减：{'、'.join(str(v.get('name','?')) for v in reduce_list[:4])}"
+        parts.append(s)
+
+    # 4. 主线个股确认链（stock_confirm_result.json）
+    sc = _load("stock_confirm_result.json")
+    if sc:
+        items = []
+        for cname, v in sc.items():
+            if not isinstance(v, dict) or "confirm" not in v:
+                continue
+            n = v.get("n", 0) or 0
+            c = v.get("confirm", 0) or 0
+            items.append(f"{cname} {c}/{n}({int(100*c/max(n,1))}%)")
+        if items:
+            parts.append("- **个股确认**：" + "；".join(items[:5]) + "（主线概念成分股突破/站稳比例）")
+
+    # 5. 做T提示（指数盘中回撤 -> 正T窗口；盘中精确信号由 t_monitor 30s 监控）
+    if indices:
+        dd_lines = []
+        for name, idx in indices.items():
+            high = idx.get("high") or 0
+            cur = idx.get("close") or 0
+            if high and cur and high > 0:
+                dd = (cur - high) / high * 100
+                if dd <= -1.5:
+                    dd_lines.append(f"{name} {dd:.1f}%")
+        if dd_lines:
+            tip = "- **做T提示**：指数盘中回撤 " + "、".join(dd_lines[:3]) + " —— "
+            sh = indices.get("上证指数") or indices.get("沪深300")
+            if sh:
+                sh_high = sh.get("high") or 0
+                sh_cur = sh.get("close") or 0
+                if sh_high and sh_cur:
+                    sh_dd = (sh_cur - sh_high) / sh_high * 100
+                    if -3.0 <= sh_dd < -2.0:
+                        tip += "上证回撤∈[2%,3%) = 正T低吸窗口（狼大1-12『大盘带下来的机会』）"
+                    elif sh_dd <= -3.0:
+                        tip += "上证回撤≥3% = 系统性风险，正T不接"
+                    else:
+                        tip += "未达正T窗口（t_monitor 30s 实时监控 249正T/250T出/252黄线）"
+            parts.append(tip)
+
+    if not parts:
+        return ""
+    return ("## 🐺 狼大视角（信号层）" + NL + NL.join(parts) + NL + NL)
 
 
 def main():
