@@ -46,6 +46,7 @@
 - **卖飞处理(狼大)**：两吃(8-12"不回调去别处吃一波")；不追回(8-06讽刺散户原价接回)；趋势逻辑归底仓(1-17)。
 
 ## 6. 生产系统注意事项（09-02 晚）
+- **选股链路周度调度已固化(09-02)**：config/tasks.yaml 现含 main_line_judge(周一 8:00) / wave_judge(8:10) / position_judge(8:20，链式 position_class→low_logic_agent→stock_confirm_judge)；本地 config/ 为权威源，改动须同步服务器 /opt/marcus-platform/config/ 并 docker restart marcus-worker——勿再用本地旧配置覆盖服务器（曾两次丢 08-31 已加的 main_line_judge）。
 - **只有狼大做T可以操作**：t_monitor 只监控 stock 账户+只跑狼大T表达式(WOLF_T_FIELDS=t_sell/index.intraday_dd/quote.vwap_break/index.m5_dump/quote.dip_prev_low)；t 账户下单被网关白名单拒绝。
 - **auto_trade 5任务已恢复 enabled**（09-02下午）；Pi 交易受约束：①trades.py 做T标的卖出保留100底仓(代码硬拦, 防Pi卖光底仓)；②prompt DB id=37 有浪型主基调必答+底仓不卖条款；③做T监控(t_monitor)与Pi同操作stock账户，买腿都在，观察交叉。
 - **做T条件为非消费式持续腿**（250/252/253/254等狼大形态表达式）：触发后保持 active+armed 不销毁，_round 5分钟冷却防刷；买腿(249/253/254)带黄线护栏(quote.current>quote.average 黄线在上才做T)；卖腿(250/252)一次清T仓(volume=sellable-100, 底仓100不动, 无T仓blocked)。

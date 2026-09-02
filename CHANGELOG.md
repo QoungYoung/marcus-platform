@@ -434,3 +434,11 @@
 - vol_ratio 数据缺失=0.0 令 ≤0.7 恒真 → 254 误触发买入（已加 >0 前置）
 - prompt_seeds.py 是权威源，改DB不改源=重建丢修改
 - 长中文 patch 脚本 TS/Python 双层转义易错（N')/多引号），用 String.raw + chr(92) + 文本锚点稳定
+
+
+## [1.7.1] 2026-09-02（晚）· 选股链路调度自动化核实
+
+- **根因查明**：08-31 服务器 config/tasks.yaml 曾含 main_line_judge 定时任务（logs/main_line_judge/675cbcdb.json，08:00:00 触发 success），09-02 本地 20 任务配置同步覆盖服务器时丢失；09-01/09-02 的 wave_state/position_class_result/stock_confirm_result 刷新均为手动运行（无对应调度日志），非代码内/DB/crontab 调度。
+- **修复**：config/tasks.yaml 补 3 个定时任务并本地+服务器同步——main_line_judge（周一 8:00，apps/main_line/main_line_judge.py）/ wave_judge（8:10，wave_agent.py）/ position_judge（8:20，position_judge.py：position_class→low_logic_agent→stock_confirm_judge 链式）。
+- 备份：/opt/marcus-platform/config/tasks.yaml.bak_20260902_20task；worker 已重启，23 任务加载/调度器运行验证通过（jobs_count=23, enabled=23），新脚本容器内 import 冒烟 OK。
+- 坑：改 tasks.yaml 必须以本地 config/ 为权威并同步服务器+重启 worker，防止再次被本地旧配置覆盖（曾两次丢失 08-31 已加条目）。

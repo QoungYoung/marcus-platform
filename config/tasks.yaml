@@ -392,3 +392,66 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- depends_on: []
+  description: 每周一 8:00 研报→agent产业催化分→候选(catalyst>=0.7)→写入主线状态;交易agent每日做确认+注入
+  enabled: true
+  id: main_line_judge
+  name: 主线判定
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: true
+    pi_analysis: false
+  output:
+    append: false
+    log_file: logs/main_line_judge_{date}.log
+  schedule:
+    expr: 0 8 * * mon
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/main_line_judge.py
+- depends_on: []
+  description: 每周一 8:10 上证指数结构+量能/资金/GJD/历史锚点/主线 -> 狼大两级浪型判定 -> 写入 wave_state.json;交易gate按(level,sub_level)->operation->gate防御
+  enabled: true
+  id: wave_judge
+  name: 波浪判定
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: true
+    pi_analysis: false
+  output:
+    append: false
+    log_file: logs/wave_judge_{date}.log
+  schedule:
+    expr: 10 8 * * mon
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/wave_agent.py
+- depends_on: []
+  description: 每周一 8:20 东财概念高低位分类(position_class)+低位看逻辑AI判定(low_logic_agent)+个股确认比例(stock_confirm_judge)，供主线内轮动/风控过滤
+  enabled: true
+  id: position_judge
+  name: 概念高低位判定
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/position_judge_{date}.log
+  schedule:
+    expr: 20 8 * * mon
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/position_judge.py
