@@ -62,7 +62,7 @@ def main():
         held = [(s, stock[s]) for s in codes if s in stock]
         sum_float = sum(v["sum_float"] for _, v in held)
         universe[sub] = {
-            "n_concepts": len(names), "concepts": sorted(names)[:12],
+            "n_concepts": len({_norm(n) for n in names}), "concepts": sorted(names)[:12],
             "n_stocks": len(codes), "n_held": len(held),
             "n_funds_ties": sum(v["n_funds"] for _, v in held),
             "sum_float": round(sum_float, 3),
