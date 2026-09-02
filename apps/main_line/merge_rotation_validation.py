@@ -12,6 +12,7 @@ def family_ok(expect, op):
     if not op: return "no-data"
     if expect=="build": return "OK" if op=="build" else ("PARTIAL" if op in ("t_only","side") else "MISMATCH")
     if expect in ("tside","t_only","side"): return "OK" if op in ("t_only","side") else ("PARTIAL" if op in ("build",) else "MISMATCH")
+    if expect in ("defense","exit"): return "OK" if op in ("defense","exit") else ("PARTIAL" if op in ("side","t_only") else "MISMATCH")
     return "na"
 def gate_text(op):
     return {"build":"主升/主浪→只做主线内细分轮动, 禁切出主线(板块级高低切)","t_only":"只做T/4-4→允许防御性高切低(候选LOW+无2孕线+未放量破前低)","side":"观望/调仓换股→同t_only(可防御切低, 降低随意调仓)","defense":"防御→禁止轮动, 防守为主","exit":"兑现→禁止轮动/离场"}.get(op, "unknown")

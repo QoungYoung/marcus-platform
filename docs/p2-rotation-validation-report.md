@@ -12,7 +12,7 @@
 | A6 | 2026-08-12 | A | tside | -/-/- | no-data | 创新药=MID(out,B反) |
 | B1 | 2026-01-12 | B | build | d3/3-3/build | OK | 卫星互联网=HIGH(in,flat) || 商业航天=HIGH(out,flat) |
 | B2 | 2026-01-12 | B | build | d3/3-3/build | OK | 商业航天=HIGH(out,flat) |
-| B3 | 2026-03-19 | B | tside | d4/4-1/defense | MISMATCH |  |
+| B3 | 2026-03-19 | B | defense | d4/4-1/defense | OK |  |
 | B4 | 2026-05-08 | B | build | d3/3-3/build | OK | 半导体概念=HIGH(out,flat); 第四代半导体=HIGH(out,B反) || PCB=HIGH(out,flat) |
 | B5 | 2026-05-08 | B | build | d3/3-3/build | OK |  |
 | C1 | 2026-04-15 | C | tside | d3/3-4/t_only | OK | 创新药=HIGH(in,B反) || 减肥药=HIGH(in,B反) || 中药概念=MID(in,B反) |
