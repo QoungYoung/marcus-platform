@@ -72,14 +72,35 @@ def proxies(pos=None):
     in_subs = [s for s in subs if nets[s] > 0]
     healthy = bool(len(in_subs) >= 2 and top1_share < 0.65)
     sucking = bool(top1_share >= 0.65 or len(in_subs) <= 1)
-    crowded = sorted(subs, key=lambda s: ((out_detail.get(s) or {}).get("crowd", 0) + (0.2 if "拥挤侧" in s else 0),
-                                          1 if "拥挤侧" in s else 0), reverse=True)[:3]
-    room_cand = [s for s in subs if "拥挤侧" not in s and (((out_detail.get(s) or {}).get("rel_lo_n") or 0) >= 1
-                 or (nets.get(s, 0) > 0 and ((out_detail.get(s) or {}).get("crowd") or 0) < 0.5))]
-    room_cand = [s for s in room_cand if s not in crowded][:3]
+    # 真实公募拥挤(rotation_crowding.json, build_crowding 产出) 与 rel 语义融合
+    crowd_real = None
+    try:
+        cf = json.load(open(os.path.join(DATA, "rotation_crowding.json"), encoding="utf-8"))
+        u = cf.get("universe") or {}
+        crowd_real = {k: {"avg_float": (v.get("avg_float_per_held") or 0), "ties": v.get("n_funds_ties") or 0}
+                      for k, v in u.items()}
+    except Exception:
+        pass
+    if crowd_real:
+        for s in subs:
+            r = crowd_real.get(s) or {}
+            (out_detail.setdefault(s, {}))["crowd_real_avg_float"] = round(r.get("avg_float") or 0, 4)
+    forced = [s for s in subs if "拥挤侧" in s]
+    others = [s for s in subs if s not in forced]
+    if crowd_real:
+        others.sort(key=lambda s: ((crowd_real.get(s) or {}).get("avg_float") or 0) +
+                                  ((out_detail.get(s) or {}).get("crowd") or 0) * 0.5, reverse=True)
+    else:
+        others.sort(key=lambda s: (out_detail.get(s) or {}).get("crowd", 0), reverse=True)
+    crowded = list(dict.fromkeys(forced + others))[:3]
+    room_cand = [s for s in subs if "拥挤侧" not in s and s not in crowded
+                 and (((out_detail.get(s) or {}).get("rel_lo_n") or 0) >= 1
+                      or (nets.get(s, 0) > 0 and ((out_detail.get(s) or {}).get("crowd") or 0) < 0.5))]
+    room_cand = room_cand[:3]
     return {"mainline_sucking": sucking, "rotation_healthy": healthy,
             "top1_sub": top_s, "top1_share": round(top1_share, 2), "inflow_subs": in_subs,
-            "crowded_top": crowded, "room_bottom": room_cand, "detail": out_detail}
+            "crowded_top": crowded, "room_bottom": room_cand, "detail": out_detail,
+            "crowding_real": bool(crowd_real)}
 
 def main():
     out = proxies()
