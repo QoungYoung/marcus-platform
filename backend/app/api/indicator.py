@@ -2713,6 +2713,19 @@ async def check_entry_filters(req: EntryCheckRequest):
     except Exception:
         pass  # 无 risk_flags 记录或DB不可用 → 不硬拦(调用方应先用 build_risk_flags 查询候选)
 
+    # ── 拥挤无空间黑名单(rotation_universe→crowding_blacklist.json) 硬过滤 ──
+    try:
+        import json as _json2
+        _bl = os.path.join(settings.workspace_path, "data", "crowding_blacklist.json")
+        if os.path.exists(_bl):
+            _bd = _json2.load(open(_bl, encoding="utf-8"))
+            if ts_code in set(_bd.get("symbols") or []):
+                hard_block = True
+                downgrade_multiplier = 0.0
+                hard_block_reasons.append("拥挤无空间(rotation_universe): " + "、".join((_bd.get("subs") or [])[:3]))
+    except Exception:
+        pass
+
     # ══════════════════════════════════════
     # Stage 4: 综合判定
     # ══════════════════════════════════════

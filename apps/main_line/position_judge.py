@@ -12,3 +12,9 @@ if __name__=="__main__":
     low_logic_agent.main()
     print("=== stock_confirm_judge ===")
     stock_confirm_judge.main()
+    print("=== rotation_universe(拥挤黑名单刷新) ===")
+    try:
+        import rotation_universe
+        rotation_universe.main()
+    except Exception as e:
+        print("rotation_universe refresh err:", e)

@@ -8,7 +8,7 @@ rotation_universe.py — P2 主线内"细分宇宙+拥挤度"（2026-09-02）
 输出: data/rotation_universe_result.json
 用法: python apps/main_line/rotation_universe.py   （worker 每轮可调 proxies()）
 """
-import os, sys, json, collections
+import os, sys, json, collections, datetime
 DATA = os.environ.get("DATA_DIR", "data")
 POS = os.path.join(DATA, "position_class_result.json")
 HIST = os.path.join(DATA, "concept_hist.json")
@@ -157,12 +157,42 @@ def proxies(pos=None):
             "crowded_top": crowded, "holdT_top": holdT, "room_bottom": room_cand, "detail": out_detail,
             "sub_scoring": scores, "crowding_real": bool(crowd_real), "crowded_represent": crowded_represent}
 
+def build_crowding_blacklist():
+    """拥挤无空间子方向的成分股黑名单 → data/crowding_blacklist.json（check_entry_filters 硬过滤用）"""
+    import json as _json
+    p = _json.load(open(os.path.join(DATA, "rotation_crowding.json"), encoding="utf-8")) if os.path.exists(os.path.join(DATA, "rotation_crowding.json")) else {}
+    try:
+        pr = proxies()
+        crowd_subs = pr.get("crowded_top") or []
+    except Exception:
+        crowd_subs = []
+    concepts = []
+    for sub in crowd_subs:
+        cu = (p.get("universe") or {}).get(sub) or {}
+        concepts += [c for c in (cu.get("concepts") or [])]
+    symbols = []
+    if concepts:
+        try:
+            import psycopg2
+            conn = psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name = ANY(%s)", (concepts,))
+            symbols = [r[0] for r in cur.fetchall()]; cur.close(); conn.close()
+        except Exception:
+            pass
+    out = {"subs": crowd_subs, "concepts": concepts, "symbols": symbols,
+           "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    json.dump(out, open(os.path.join(DATA, "crowding_blacklist.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    print("crowding_blacklist subs=", crowd_subs, "concepts=", len(concepts), "symbols=", len(symbols))
+    return out
+
 def main():
     out = proxies()
     print(json.dumps(out, ensure_ascii=False, indent=1)[:4000])
     try:
         json.dump(out, open(os.path.join(DATA, "rotation_universe_result.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print("WROTE", os.path.join(DATA, "rotation_universe_result.json"))
+        build_crowding_blacklist()
     except Exception as e:
         print("write err", e)
 
