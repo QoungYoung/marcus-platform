@@ -1630,7 +1630,11 @@ def calc_position(req: CalcPositionRequest):
     total_cap_pct = _get_total_cap(req.stance)
     tier_condition = _get_tier_condition(req.tier)
     amplitude_tier = _get_amplitude_tier(amplitude)
-    dynamic_stop_pct = _get_dynamic_stop_pct(index_pct, amplitude)
+    # 2026-09-02 对齐狼大离场体系：静态止损改为 3% 逻辑止损兜底（狼大3-05：
+    # 无利空、13日内下跌创新低后 -3% 即逻辑问题）；做T标的 T 仓以黄线VWAP跌破为
+    # 第一离场线（实时，由 t_monitor 条件252执行），高波动不再用振幅×0.4 扩到 8%。
+    dynamic_stop_pct = 3.0
+    warnings.append("止损参考：做T标的T仓以黄线VWAP跌破为第一离场（t_monitor 252实时执行）；波段逻辑止损=无利空创新低后-3%（狼大3-05）；静态-3%仅兜底，非黄线替代")
 
     # ── 震荡市仓位收紧 ──
     market_regime = _get_market_regime_for_calc()
