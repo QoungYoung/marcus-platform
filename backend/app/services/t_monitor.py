@@ -691,13 +691,13 @@ class TMonitor:
                             except Exception:
                                 volume = 0
                     else:
-                        # 狼大铁律『底仓不卖，T仓做T』（2026-09-02 修复）：
-                        # 卖腿始终保留 100 股底仓——此前 sellable>200 才扣 100，
-                        # 导致 T仓100+底仓100=200 时第二笔卖腿(250/252先后触发)
-                        # 会把底仓也卖掉。现改为：超过 100 股的部分才可卖(T仓)。
+                        # 狼大『T出=出 T 仓，黄线跌破直接走』（2026-09-02 修订）：
+                        # 卖腿一次卖光 T 仓（sellable-100），底仓 100 不动——
+                        # 不再 30% 分批：T仓单批大时 30% 卖不完，违背"当天低吸
+                        # 当天 T出"节奏，且单日多次分批卖与狼大"每天进出一次"不符。
+                        # T仓=0（只剩底仓）时 max_sell=0 → blocked 不卖底仓。
                         max_sell = max(sellable - 100, 0) if sellable > 100 else 0
-                        volume = max(int(sellable * 0.3), 100) if sellable > 0 else 0
-                        volume = min(volume, max_sell)
+                        volume = max_sell
                     volume = (volume // 100) * 100
                 exec_ok = False
                 if volume > 0:
