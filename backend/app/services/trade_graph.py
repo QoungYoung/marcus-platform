@@ -963,7 +963,47 @@ def _read_confirm_context() -> str:
         return ""
 
 
+_OP_GUIDE = {
+    "build": "可建仓/追主升：主线内低吸埋伏、波段持仓可加仓，避免追高杀跌",
+    "t_only": "只做T不新建仓：底仓不动，T仓按分时T出/正T低吸/黄线离场纪律高抛低吸",
+    "side": "观望/调仓换股：不追主升、不满仓，等结构确认后再动",
+    "defense": "防御不建仓：等待企稳/止跌确认，规避C杀，只保留底仓",
+    "exit": "兑现降仓：反弹即减、控制回撤，不再开新仓",
+}
+
 def _read_wave_context() -> str:
+    """浪型级别上下文：优先注入 wave_agent 两级判定(level/sub_level/operation/gate)，
+    与 _wave_level_gate 硬拦同源(读 wave_state.json)；文件缺失时回退 rule-based 结构判定。"""
+    NL = chr(10)
+    try:
+        import json as _json, os as _os
+        path = _os.path.join(_os.environ.get("DATA_DIR", "data"), "wave_state.json")
+        if _os.path.exists(path):
+            st = _json.load(open(path, encoding="utf-8"))
+            wl = _wave_level_gate()   # {level, sub_level, operation, gate} 与安全门同源
+            lvl = wl["level"] or "未知"
+            sub = wl["sub_level"] or ""
+            op = wl["operation"]
+            gate = wl["gate"]
+            conf = st.get("confidence")
+            reasons = (st.get("reasons") or "").strip()
+            if len(reasons) > 140:
+                reasons = reasons[:140] + "…"
+            date = st.get("date") or ""
+            guide = _OP_GUIDE.get(op, "")
+            block = ("## 浪型级别（wave_agent 两级判定）" + NL
+                     + "- 大级别：" + lvl + (f" ｜ 子浪/局部：{sub}" if sub else "") + NL
+                     + f"- 操作：{op}（gate={gate}）——" + guide + NL)
+            if conf is not None:
+                block += f"- 置信度：{conf}" + NL
+            if date:
+                block += f"- 判定日期：{date}" + NL
+            if reasons:
+                block += f"- 依据：{reasons}" + NL
+            return block + NL
+    except Exception:
+        pass
+    # 回退：rule-based 结构判定
     try:
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps"))
