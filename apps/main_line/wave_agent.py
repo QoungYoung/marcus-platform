@@ -263,7 +263,8 @@ def build_prompt(f):
 {"level":"d1/d2/d3/d4/d5/down","sub_level":"3-1/3-2/3-3/3-4/3-5/4-1/4-2/4-3/4-4/4-5/失败5/ABC/B反/C杀/W底/双头M顶/衰竭","operation":"build/t_only/side/defense/exit","confidence":0.0,"reasons":"简述(引用结构/量价/点位)"}''')
 
 def call_agent(prompt, session='wave_'):
-    r=requests.post(CHAT_URL, json={'message':prompt,'session_id':session+str(int(time.time()))}, headers={'Content-Type':'application/json'}, timeout=180, verify=False)
+    timeout=int(os.getenv('WAVE_AGENT_TIMEOUT','180'))
+    r=requests.post(CHAT_URL, json={'message':prompt,'session_id':session+str(int(time.time()))}, headers={'Content-Type':'application/json'}, timeout=timeout, verify=False)
     r.raise_for_status(); return r.json().get('reply','')
 
 def parse(reply):
