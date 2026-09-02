@@ -14,7 +14,7 @@ except Exception as e:
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 DATA = os.environ.get("DATA_DIR", "data")
 
-from rotation_universe import SUB_UNIVERSE as SUB  # 与宇宙打分共用同一组定义(含 L1 科技/AI总集与 AI应用)
+from rotation_universe import SUB_UNIVERSE as SUB, _norm  # 与宇宙打分共用同一组定义 + 空格归一匹配
 
 def main():
     conn = psycopg2.connect(DB)
@@ -56,7 +56,7 @@ def main():
     # 子方向(概念名含关键词, 动态来自DB)
     universe = {}
     for sub, kws in SUB.items():
-        names = [c for c in concept_stocks if any(k in c for k in kws)]
+        names = [c for c in concept_stocks if any(_norm(k) in _norm(c) for k in kws)]
         codes = set()
         for n in names: codes |= concept_stocks[n]
         held = [(s, stock[s]) for s in codes if s in stock]
@@ -70,7 +70,7 @@ def main():
             "top_held": sorted(held, key=lambda x: (-x[1]["n_funds"], -x[1]["sum_float"]))[:6],
         }
     def top_by(sub_kws, n=6):
-        cnames = [c for c in concept_stocks if any(k in c for k in sub_kws)]
+        cnames = [c for c in concept_stocks if any(_norm(k) in _norm(c) for k in sub_kws)]
         codes = set()
         for nm in cnames: codes |= concept_stocks[nm]
         held = [(s, stock[s]) for s in codes if s in stock]
