@@ -476,3 +476,24 @@ tasks:
   script:
     args: []
     path: apps/main_line/refresh_fund_crowding.py
+- depends_on: []
+  description: 每周一 将新增/未归类东财概念经LLM分类并入细分宇宙(rotation_universe_classified.json)，基线词表兜底
+  enabled: true
+  id: rotation_universe_classify
+  name: 细分宇宙每周分类
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/rotation_universe_classify_{date}.log
+  schedule:
+    expr: 5 8 * * mon
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/classify_rotation_universe.py

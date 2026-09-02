@@ -36,6 +36,24 @@ SUB_UNIVERSE = {
 }
 META_GROUPS = {"科技/AI(总集)"}
 
+# ── LLM 每周分类补丁(rotation_universe_classified.json)：把 classify_rotation_universe.py 的新增概念并入对应组 ──
+def _load_classified_ext():
+    try:
+        import os as _os
+        p = _os.path.join(DATA, "rotation_universe_classified.json")
+        if not _os.path.exists(p): return
+        d = json.load(open(p, encoding="utf-8"))
+        for it in (d.get("additions") or []):
+            g = it.get("group"); nm = it.get("concept")
+            if g and g in SUB_UNIVERSE and nm:
+                kws = SUB_UNIVERSE[g]
+                if not any(_norm(k) == _norm(nm) for k in kws):
+                    kws.append(nm)
+    except Exception:
+        pass
+
+_load_classified_ext()
+
 def load_json(p):
     try: return json.load(open(p, encoding="utf-8"))
     except Exception: return {}
