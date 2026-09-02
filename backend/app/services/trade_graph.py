@@ -947,6 +947,67 @@ def _read_confirm_context() -> str:
         return ""
 
 
+_ROT_VERDICT_GUIDE = {
+    "mainline_rotation": "允许：只做主线内细分轮动/补涨（候选须属当前主线，龙头未死）",
+    "switch_low": "允许：防御性切低——候选须相对主线低位(rel=low)+资金流入+无2根孕线/未放量破前日低",
+    "defensive_reduce": "允许：降个股/转ETF或埋伏rel-low候选，不追高",
+    "sell_guard": "警示：持仓高位破位/资金流出——撤A，不做同板块低切补涨",
+    "block": "禁止：当前不轮动/不切出主线，以做T与防守为主（与浪型gate一致）",
+    "defense_mainline_rotation": "允许：defense期主线内'未出货链'资金调仓（如海外链→国算）",
+    "manual_review": "人工：当前无明确轮动信号，等盘面",
+}
+
+def _read_rotation_gate_context() -> str:
+    """轮动门控（rotation_gate v2）上下文：wave_state op + main_line 吸金 → gate 判定。
+    与 docs/p2-rotation-validation-analysis.md gate_rotation v2 同源；供 Pi 决定'能否切低/是否只做主线内轮动'。
+    当前 rotation_healthy 未接细分宇宙实时模块，默认健康(True)。"""
+    NL = chr(10)
+    try:
+        import sys as _sys, json as _json, os as _os
+        DATA = _os.environ.get("DATA_DIR", "data")
+        rg = None
+        for _p in (_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "apps"),
+                   "/app/apps/main_line"):
+            try:
+                if _p not in _sys.path: _sys.path.insert(0, _p)
+                from main_line import rotation_gate as _rg
+                rg = _rg
+                break
+            except Exception:
+                continue
+        if rg is None:
+            return "## 轮动门控（rotation_gate）" + NL + "- rotation_gate 模块未加载，跳过。" + NL + NL
+        wl = _wave_level_gate()
+        op = wl.get("operation") or ""
+        # 主线明牌吸金代理：fusion 主线上 score>=0.85 且 conc>=0.7
+        sucking = False; ml_name = "?"
+        try:
+            _p2 = _os.path.join(DATA, "main_line_state.json")
+            if _os.path.exists(_p2):
+                ml = _json.load(open(_p2, encoding="utf-8"))
+                ml_name = ml.get("main_line") or "?"
+                fu = (ml.get("fusion") or {}).get(ml_name) or {}
+                score = float(fu.get("score") or 0); conc = float(fu.get("conc") or 0)
+                sucking = bool(score >= 0.85 and conc >= 0.7)
+        except Exception:
+            pass
+        healthy = True  # TODO: 细分宇宙/轮动健康度(抽血/无主线快速轮动)实时识别
+        dec = rg.decide(op, mainline_sucking=sucking, inside_mainline=False,
+                        rotation_healthy=healthy)
+        verdict = dec.get("verdict", "block")
+        reason = dec.get("reason", "")
+        guide = _ROT_VERDICT_GUIDE.get(verdict, "")
+        block = ("## 轮动门控（rotation_gate）" + NL
+                 + f"- 浪型操作：{op or '未知'} ｜ 主线：{ml_name}" + NL
+                 + f"- 主线明牌吸金(score/conc 代理)：{'是' if sucking else '否'}" + NL
+                 + f"- 轮动健康度：未实时建模，默认健康（待细分宇宙接入）" + NL
+                 + f"- 判定：{verdict} —— {guide}" + NL)
+        if reason:
+            block += f"- 依据：{reason[:160]}" + NL
+        return block + NL
+    except Exception as e:
+        return "## 轮动门控（rotation_gate）" + NL + "- 计算失败：" + str(e)[:80] + NL + NL
+
 _OP_GUIDE = {
     "build": "可建仓/追主升：主线内低吸埋伏、波段持仓可加仓，避免追高杀跌",
     "t_only": "只做T不新建仓：底仓不动，T仓按分时T出/正T低吸/黄线离场纪律高抛低吸",
@@ -1105,6 +1166,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "confirm_context": _read_confirm_context(),
         "stock_confirm_context": _read_stock_confirm_context(),
         "wave_context": _read_wave_context(),
+        "rotation_gate_context": _read_rotation_gate_context(),
     }
 
 
@@ -1206,6 +1268,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('position_context', chr(39)+chr(39))}"
         f"{state.get('confirm_context', chr(39)+chr(39))}"
         f"{state.get('stock_confirm_context', chr(39)+chr(39))}"
+        f"{state.get('rotation_gate_context', chr(39)+chr(39))}"
         f"{state['regime_context']}\n"
         f"{state.get('style_context', '')}"
         f"{state['pool_context']}"
