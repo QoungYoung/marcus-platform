@@ -2691,6 +2691,27 @@ async def check_entry_filters(req: EntryCheckRequest):
         hard_block = True
     hard_block_reasons.extend(l3_hard_block_reasons)
 
+    # ── risk_flags 风控(选股后即时查产物): earnings_bad/ST/公告AI → block ──
+    try:
+        import os as _os3, psycopg2 as _pg3
+        _conn = _pg3.connect(_os3.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        _cur = _conn.cursor()
+        _cur.execute("SELECT flag_type, value, source FROM risk_flags WHERE symbol=%s", (ts_code,))
+        _risk_rows = _cur.fetchall(); _cur.close(); _conn.close()
+        _risk_hits = []
+        for _ft, _val, _src in _risk_rows:
+            if _ft == "earnings_bad":
+                _risk_hits.append("业绩雷(%s)" % _src)
+            elif _ft == "is_st" and str(_val) == "1":
+                _risk_hits.append("ST")
+            elif _ft not in ("is_st", "earnings_clear"):
+                _risk_hits.append(_ft)
+        if _risk_hits:
+            hard_block = True
+            hard_block_reasons.append("risk_flags风控: " + "、".join(_risk_hits[:4]))
+    except Exception:
+        pass  # 无 risk_flags 记录或DB不可用 → 不硬拦(调用方应先用 build_risk_flags 查询候选)
+
     # ══════════════════════════════════════
     # Stage 4: 综合判定
     # ══════════════════════════════════════
