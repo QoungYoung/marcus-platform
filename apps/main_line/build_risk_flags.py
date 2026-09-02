@@ -36,7 +36,7 @@ def call(api, params, fields):
     return dd.get("fields") or [], dd.get("items") or []
 
 def default_watch():
-    from rotation_universe import SUB_UNIVERSE, _norm
+    """小型预建(选股后查财报为主): 持仓 + rotation top + risk_watch.txt(可选人工名单)"""
     out = set()
     p = os.path.join(DATA, "risk_watch.txt")
     if os.path.exists(p):
@@ -44,25 +44,16 @@ def default_watch():
             s = line.strip()
             if s and not s.startswith("#"):
                 out.add(s.split()[0])
-    # DB: 细分宇宙成员(东财概念成分) + 持仓
     try:
         import psycopg2 as _pg
         conn = _pg.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
         cur = conn.cursor()
-        cur.execute("select concept_name, ts_code from stock_concept_map")
-        for cname, code in cur.fetchall():
-            if any(any(_norm(k) in _norm(cname) for k in kws) for kws in SUB_UNIVERSE.values()):
-                out.add(code)
-        try:
-            cur.execute("select ts_code from paper_positions")
-            for r in cur.fetchall():
-                if r[0]: out.add(r[0])
-        except Exception:
-            pass
+        cur.execute("select ts_code from paper_positions")
+        for r in cur.fetchall():
+            if r[0]: out.add(r[0])
         cur.close(); conn.close()
-    except Exception as e:
-        print("DB watch err", e, flush=True)
-    # rotation_crowding top 名单
+    except Exception:
+        pass
     cp = os.path.join(DATA, "rotation_crowding.json")
     if os.path.exists(cp):
         try:
@@ -120,8 +111,9 @@ def fetch_flags(symbol):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stocks", default="")
+    ap.add_argument("--stocks", default="", help="候选/持仓 symbol, 逗号分隔(选股后即时查)")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--bulk-st", action="store_true", help="全市场 ST 批量入旗(低频维护用)")
     args = ap.parse_args()
     stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
     if not stocks:
@@ -131,14 +123,14 @@ def main():
     print("watch stocks:", len(stocks), flush=True)
     conn = psycopg2.connect(DB); conn.autocommit = True
     cur = conn.cursor()
-    # 全市场 ST 批量入旗(免逐股API)
-    cur.execute("SELECT ts_code, is_st FROM stock_pool WHERE is_st IS NOT NULL AND is_st <> 0")
-    st_all = cur.fetchall()
     now = time.strftime("%Y-%m-%d %H:%M:%S")
-    for sym, _v in st_all:
-        cur.execute("INSERT INTO risk_flags (symbol,flag_type,value,ann_date,source,updated_at) VALUES (%s,'is_st','1','','stock_pool',%s)"
-                    " ON CONFLICT (symbol,flag_type,source) DO UPDATE SET value='1', updated_at=EXCLUDED.updated_at", (sym, now))
-    print("ST bulk flags:", len(st_all), flush=True)
+    if args.bulk_st:
+        cur.execute("SELECT ts_code, is_st FROM stock_pool WHERE is_st IS NOT NULL AND is_st <> 0")
+        st_all = cur.fetchall()
+        for sym, _v in st_all:
+            cur.execute("INSERT INTO risk_flags (symbol,flag_type,value,ann_date,source,updated_at) VALUES (%s,'is_st','1','','stock_pool',%s)"
+                        " ON CONFLICT (symbol,flag_type,source) DO UPDATE SET value='1', updated_at=EXCLUDED.updated_at", (sym, now))
+        print("ST bulk flags:", len(st_all), flush=True)
     # stock_pool is_st for watch + 今日已完成的 fetch 集合(断点续跑)
     cur.execute("select ts_code, is_st from stock_pool where ts_code = ANY(%s)", (stocks,))
     pool = {r[0]: r[1] for r in cur.fetchall()}
