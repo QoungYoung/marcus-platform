@@ -2708,6 +2708,7 @@ async def check_entry_filters(req: EntryCheckRequest):
                 _risk_hits.append(_ft)
         if _risk_hits:
             hard_block = True
+            downgrade_multiplier = 0.0  # 硬拦 → Stage4 直接 blocked
             hard_block_reasons.append("risk_flags风控: " + "、".join(_risk_hits[:4]))
     except Exception:
         pass  # 无 risk_flags 记录或DB不可用 → 不硬拦(调用方应先用 build_risk_flags 查询候选)
