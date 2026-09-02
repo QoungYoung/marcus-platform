@@ -19,8 +19,8 @@ SUB_UNIVERSE = {
     "液冷": ["液冷概念"],
     "存储": ["存储芯片"],
     "材料": ["新材料", "碳基材料", "PEEK材料概念"],
-    "大芯(拥挤侧)": ["半导体概念", "国产芯片", "AI芯片", "第三代半导体", "第四代半导体"],
-    "大光(拥挤侧)": ["光通信模块", "CPO概念", "光纤概念"],
+    "芯片/半导体": ["半导体概念", "国产芯片", "AI芯片", "第三代半导体", "第四代半导体"],
+    "光通信": ["光通信模块", "CPO概念", "光纤概念"],
     "铜缆/电源": ["铜缆高速连接"],
 }
 
@@ -85,22 +85,31 @@ def proxies(pos=None):
         for s in subs:
             r = crowd_real.get(s) or {}
             (out_detail.setdefault(s, {}))["crowd_real_avg_float"] = round(r.get("avg_float") or 0, 4)
-    forced = [s for s in subs if "拥挤侧" in s]
-    others = [s for s in subs if s not in forced]
+    # 拥挤侧不写死语义标签：真实基金拥挤 avg_float 与 rel 高位融合自然排序取前3
+    others = subs[:]
     if crowd_real:
         others.sort(key=lambda s: ((crowd_real.get(s) or {}).get("avg_float") or 0) +
                                   ((out_detail.get(s) or {}).get("crowd") or 0) * 0.5, reverse=True)
     else:
         others.sort(key=lambda s: (out_detail.get(s) or {}).get("crowd", 0), reverse=True)
-    crowded = list(dict.fromkeys(forced + others))[:3]
-    room_cand = [s for s in subs if "拥挤侧" not in s and s not in crowded
+    crowded = list(dict.fromkeys(others))[:3]
+    room_cand = [s for s in subs if s not in crowded
                  and (((out_detail.get(s) or {}).get("rel_lo_n") or 0) >= 1
                       or (nets.get(s, 0) > 0 and ((out_detail.get(s) or {}).get("crowd") or 0) < 0.5))]
     room_cand = room_cand[:3]
+    crowded_represent = []
+    try:
+        cf = json.load(open(os.path.join(DATA, "rotation_crowding.json"), encoding="utf-8"))
+        for key in ("chip_top", "optics_top"):
+            for it in (cf.get(key) or [])[:2]:
+                nm = it.get("name") or it.get("symbol")
+                crowded_represent.append("%s(%s)" % (nm, it.get("symbol")))
+    except Exception:
+        pass
     return {"mainline_sucking": sucking, "rotation_healthy": healthy,
             "top1_sub": top_s, "top1_share": round(top1_share, 2), "inflow_subs": in_subs,
             "crowded_top": crowded, "room_bottom": room_cand, "detail": out_detail,
-            "crowding_real": bool(crowd_real)}
+            "crowding_real": bool(crowd_real), "crowded_represent": crowded_represent}
 
 def main():
     out = proxies()

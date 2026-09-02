@@ -980,7 +980,7 @@ def _read_rotation_gate_context() -> str:
         wl = _wave_level_gate()
         op = wl.get("operation") or ""
         ml_name = "?"; sucking = None; healthy = None
-        crowded = []; room = []
+        crowded = []; room = []; crep = []
         # 细分宇宙+拥挤度代理(rotation_universe.py)：真实子方向资金/相对低位
         try:
             from main_line import rotation_universe as _ru
@@ -990,6 +990,7 @@ def _read_rotation_gate_context() -> str:
                 healthy = bool(_p.get("rotation_healthy"))
                 crowded = _p.get("crowded_top") or []
                 room = _p.get("room_bottom") or []
+                crep = _p.get("crowded_represent") or []
         except Exception:
             pass
         try:
@@ -1017,6 +1018,8 @@ def _read_rotation_gate_context() -> str:
             block += f"- 拥挤侧(回避新建/等回调)：{'、'.join(crowded[:4])}" + NL
         if room:
             block += f"- 相对低位/资金流入候选：{'、'.join(room[:4])}" + NL
+        if crep:
+            block += f"- 高拥挤代表个股(芯片/光通信,真实公募持仓)：{'、'.join(crep[:6])}" + NL
         block += f"- 判定：{verdict} —— {guide}" + NL
         if reason:
             block += f"- 依据：{reason[:160]}" + NL

@@ -12,7 +12,25 @@ except Exception as e:
 TOKEN = os.getenv("TUSHARE_TOKEN", "")
 URL = os.getenv("TUSHARE_API_URL", "https://ts.gyzcloud.top/api")
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
-FUND_SHARE_DATE = "20260827"  # 最近可用份额日(探测: 1733 条)
+def _prev_quarter_end(d=None):
+    from datetime import date as _date
+    d = d or _date.today()
+    y, m = d.year, d.month
+    if m <= 3: return "%d1231" % (y - 1)
+    if m <= 6: return "%d0331" % y
+    if m <= 9: return "%d0630" % y
+    return "%d0930" % y
+
+def _latest_share_date():
+    from datetime import date as _date, timedelta as _td
+    for back in range(0, 8):
+        ds = (_date.today() - _td(days=back)).strftime("%Y%m%d")
+        try:
+            it = call("fund_share", {"trade_date": ds}, "ts_code,trade_date,fd_share")
+        except Exception:
+            continue
+        if it: return ds
+    return "20260827"
 
 def call(api, params, fields):
     body = {"api_name": api, "token": TOKEN, "params": params, "fields": fields}
@@ -30,9 +48,11 @@ def call(api, params, fields):
 
 def main():
     top_n = int(sys.argv[1]) if len(sys.argv) > 1 else 60
-    end = sys.argv[2] if len(sys.argv) > 2 else "20260630"
+    end = sys.argv[2] if len(sys.argv) > 2 else _prev_quarter_end()
+    share_date = _latest_share_date()
+    print("share_date:", share_date, "end:", end, flush=True)
     try:
-        share = call("fund_share", {"trade_date": FUND_SHARE_DATE}, "ts_code,trade_date,fd_share")
+        share = call("fund_share", {"trade_date": share_date}, "ts_code,trade_date,fd_share")
     except Exception as e:
         print("fund_share ERR", e); return 1
     best = {}

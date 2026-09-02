@@ -455,3 +455,24 @@ tasks:
   script:
     args: []
     path: apps/main_line/position_judge.py
+- depends_on: []
+  description: 季度末基金持仓回填(fund_portfolio)+真实拥挤度聚合(rotation_crowding)，供轮动门控拥挤侧/动态名单使用
+  enabled: true
+  id: fund_crowding_refresh
+  name: 基金持仓拥挤度刷新
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: true
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/fund_crowding_refresh_{date}.log
+  schedule:
+    expr: 30 8 25 1,4,7,10 *
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/refresh_fund_crowding.py

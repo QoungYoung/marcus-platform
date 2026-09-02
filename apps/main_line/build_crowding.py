@@ -19,15 +19,20 @@ SUB = {
     "液冷": ["液冷概念", "液冷服务器"],
     "存储": ["存储芯片"],
     "材料": ["半导体材料", "光刻胶", "光刻机(胶)", "碳基材料"],
-    "大芯(拥挤侧)": ["国产芯片", "半导体概念", "AI芯片", "数字芯片设计", "模拟芯片设计", "第三代半导体", "第四代半导体"],
-    "大光(拥挤侧)": ["光通信模块", "CPO概念", "光纤概念"],
+    "芯片/半导体": ["国产芯片", "半导体概念", "AI芯片", "数字芯片设计", "模拟芯片设计", "第三代半导体", "第四代半导体"],
+    "光通信": ["光通信模块", "CPO概念", "光纤概念"],
     "铜缆/电源": ["铜缆高速连接"],
 }
 
 def main():
-    end = sys.argv[1] if len(sys.argv) > 1 else "20260630"
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
+    if len(sys.argv) > 1:
+        end = sys.argv[1]
+    else:
+        cur.execute("SELECT max(end_date) FROM fund_portfolio_holdings")
+        end = cur.fetchone()[0]
+    print("end_date:", end, flush=True)
     # 股票级基金拥挤
     cur.execute("SELECT symbol, count(DISTINCT fund_code), sum(coalesce(stk_float_ratio,0)), "
                 "sum(coalesce(mkv,0)), sum(coalesce(amount,0)) FROM fund_portfolio_holdings "
@@ -43,6 +48,8 @@ def main():
     for cname, code in cur.fetchall():
         concept_stocks[cname].add(code)
         stock_concepts[code].add(cname)
+    cur.execute("SELECT ts_code, name FROM stock_pool")
+    stock_names = {r[0]: r[1] for r in cur.fetchall()}
     cur.close(); conn.close()
     concept = {}
     for cname, codes in concept_stocks.items():
@@ -71,26 +78,25 @@ def main():
             "top_held": sorted(held, key=lambda x: (-x[1]["n_funds"], -x[1]["sum_float"]))[:6],
         }
     def top_by(sub_kws, n=6):
-        names = [c for c in concept_stocks if any(k in c for k in sub_kws)]
+        cnames = [c for c in concept_stocks if any(k in c for k in sub_kws)]
         codes = set()
-        for nm in names: codes |= concept_stocks[nm]
+        for nm in cnames: codes |= concept_stocks[nm]
         held = [(s, stock[s]) for s in codes if s in stock]
-        # 过滤真实大票: 基金持仓市值≥5亿 或 (基金数≥4 且 float 占比较高)；排除 sum_float=0 的小票噪声
         held = [(s, v) for s, v in held if v["sum_mkv"] >= 5e8 or (v["n_funds"] >= 4 and v["sum_float"] >= 1.0)]
         held.sort(key=lambda x: (-x[1]["sum_mkv"], -x[1]["n_funds"]))
-        return [{"symbol": s, "n_funds": v["n_funds"], "sum_float": round(v["sum_float"], 3),
+        return [{"symbol": s, "name": stock_names.get(s, s), "n_funds": v["n_funds"], "sum_float": round(v["sum_float"], 3),
                  "mkv_yi": round(v["sum_mkv"] / 1e8, 2)} for s, v in held[:n]]
     out = {"end_date": end, "stock": stock, "concept": concept, "universe": universe,
-           "daxin_top": top_by(["芯片", "半导体"]),
-           "daguang_top": top_by(["光模块", "光通信", "CPO", "光纤"])}
+           "chip_top": top_by(["芯片", "半导体"]),
+           "optics_top": top_by(["光模块", "光通信", "CPO", "光纤"])}
     os.makedirs(DATA, exist_ok=True)
     json.dump(out, open(os.path.join(DATA, "rotation_crowding.json"), "w", encoding="utf-8"), ensure_ascii=False)
     print("WROTE", os.path.join(DATA, "rotation_crowding.json"))
     for sub, d in universe.items():
         print("%-14s n_con=%d held=%d ties=%d sum_float=%.1f avg=%.4f" % (
             sub, d["n_concepts"], d["n_held"], d["n_funds_ties"], d["sum_float"], d["avg_float_per_held"]))
-    print("daxin_top :", json.dumps(out["daxin_top"], ensure_ascii=False))
-    print("daguang_top:", json.dumps(out["daguang_top"], ensure_ascii=False))
+    print("chip_top :", json.dumps(out["chip_top"], ensure_ascii=False))
+    print("optics_top:", json.dumps(out["optics_top"], ensure_ascii=False))
     return 0
 
 if __name__ == "__main__":
