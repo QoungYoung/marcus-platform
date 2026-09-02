@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models.paper_trade import PaperTrade
 from app.models.paper_trade import PaperAccount
+from app.models.paper_trade import PaperPosition
 from app.models.trade import TradeRequest, TradeResponse, OrderResponse, TradeHistoryResponse, VoidRequest, VoidResponse
 
 settings = get_settings()
@@ -67,6 +68,31 @@ def _make_executor(request: Request, account: str = "stock"):
     engine = PaperTradingEngine(data_dir=str(DATA_DIR), account_id=account)
     return MarcusVNPyExecutor(engine=engine, account_id=account)
 
+def _get_hold_shares(account: str, symbol: str) -> int:
+    """当前可卖股数 = volume - frozen（paper_positions）。"""
+    db = SessionLocal()
+    try:
+        pos = db.query(PaperPosition).filter(
+            PaperPosition.account_id == account,
+            PaperPosition.symbol == symbol,
+        ).first()
+        if not pos:
+            return 0
+        return int(pos.volume or 0) - int(pos.frozen or 0)
+    finally:
+        db.close()
+
+
+def _t_floor_shares(symbol: str, account: str = "stock") -> int:
+    """做T标的保留底仓股数：账户存在当日 active 做T监控条件 → 保留 100 股（狼大铁律：底仓不卖）；
+    非做T标的不拦截（返回 0）。"""
+    try:
+        from app.services.t_db import list_active_conditions
+        conds = list_active_conditions(symbol=symbol, account_id=account)
+        return 100 if conds else 0
+    except Exception:
+        return 0
+
 
 @router.post("", response_model=TradeResponse)
 def execute_trade(trade: TradeRequest, request: Request):
@@ -94,6 +120,29 @@ def execute_trade(trade: TradeRequest, request: Request):
                 reason=trade.reason or "",
             )
         else:
+            # 做T标的底仓保护（狼大铁律：底仓不卖）——Pi/任何调用方卖出做T标的，
+            # 最多卖 T仓（持仓-100），持仓<=100 时拒绝卖出，避免清掉做T底仓。
+            floor = _t_floor_shares(trade.symbol, trade.account)
+            if floor > 0:
+                hold = _get_hold_shares(trade.account, trade.symbol)
+                max_sell = max(hold - floor, 0)
+                if trade.volume > max_sell:
+                    direction = "卖出"
+                    detail_msg = (f"做T标的保留底仓{floor}股（狼大铁律底仓不卖），"
+                                  f"当前可卖 {max_sell} 股，请求卖出 {trade.volume} 股被拒绝")
+                    print(f"[交易] ❌ {direction} {trade.symbol} 被拒绝: {detail_msg}", flush=True)
+                    return TradeResponse(
+                        order_id="",
+                        status="rejected",
+                        symbol=trade.symbol,
+                        direction=direction,
+                        price=trade.price,
+                        volume=trade.volume,
+                        amount=trade.price * trade.volume,
+                        timestamp=datetime.now(),
+                        reason=detail_msg,
+                        message=detail_msg,
+                    )
             result = executor.sell(
                 symbol=trade.symbol,
                 price=trade.price,
