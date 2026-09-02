@@ -41,7 +41,7 @@
 
 ## 3. 大周期任务清单（剩余）
 按优先级：
-- P1 主线三信号融合：w1研报catalyst+w2资金持续性+w3相对强度（研报56%≈资金60%，单通道不够）。
+- P1 主线三信号融合 ✅ 已实现81%(IS 22/27) + **样本外验证通过(2026-09-02)**：OOS 5/7=71%>代理60%，conc为稳定主力信号，v1权重(0,0.3,0.2,0.5)精度95%维持生产。剩余：科技子类粒度(AI硬vs半导体合并) + 机器人/互金主题覆盖。见 docs/mainline-oos-validation-report.md。
 - P1 做T扩样本：正T买点信号日仅8天(184天) → 拉更多个股/更长历史验证；分时T出个股验证。
 - P2 主线内轮动/产业链形态：主线上中下游/软硬切换/去弱留强。
 - P2 风控：回避公募重仓+个股大利空(业绩雷/查杠杆/监管)。
@@ -61,7 +61,7 @@
 - docs/t1-stock-verification-report.md（T1个股验证无预测力）
 - docs/t1-guard-reback-report.md（指数5min复测：午休伪信号）
 - docs/t-monitor-integration.md / t-trading-logic.md（做T接入与狼大逻辑）
-- docs/mainline-replay-report.md / wolf-consistency-v2-report.md（主线重放/一致性）
+- docs/mainline-replay-report.md / wolf-consistency-v2-report.md / **mainline-oos-validation-report.md**（主线重放/一致性/**样本外验证**）
 - data/stock_5min_{603259,603678,000725,002384,688072}.json（个股5min, 197天）
 - apps/main_line/backtest_zt_dip_v2.py / backtest_t1_stock.py / backtest_t1_paramsweep.py（回测）
 - scripts/fetch_stock_5min_brze.py（brze 拉取, 断点续拉）
