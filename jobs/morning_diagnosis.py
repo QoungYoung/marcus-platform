@@ -204,12 +204,6 @@ def format_message(data: dict) -> str:
                 f"资源{price_5d.get('resource_avg_return', 0):+.2f}%"
             )
 
-    lines += [
-        "━" * 24,
-        f"综合诊断: {diagnosis.get('label', '?')}（市场结构参考）",
-        f"市场结构建议: {diagnosis.get('suggestion', '?')}",
-    ]
-
     # 🐺 狼大视角（信号层）：浪型/主线/确认链/高低位 + 操作纪律优先
     wolf = _read_wolf_context()
     if wolf:
@@ -218,11 +212,6 @@ def format_message(data: dict) -> str:
     advice = _wolf_operation_advice()
     if advice:
         lines.append(advice)
-
-    score = diagnosis.get("score", {})
-    if score:
-        tv = score.get('total_votes', 6.5)
-        lines.append(f"得票: 趋势{score.get('trend', 0)} / 震荡{score.get('oscillation', 0)}")
 
     return "\n".join(lines)
 
