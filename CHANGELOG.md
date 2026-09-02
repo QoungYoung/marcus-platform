@@ -450,6 +450,15 @@
 - **验证**：wave_agent 历史重放 23/23 全齐 + position_class 时点回放；27 case 一致率 OK20/na7/0 错；A1/C3/D5 预期修正、B3 复核为 defense 期主线内调仓 → MISMATCH 清零。
 - **规则 code 化**：rotation_gate.py（五分支 gate v2）+ test（19场景）+ regress_rotation_gate.py（真实 wave/position 27case 端到端 19/19）双绿；trade_graph 注入轮动门控 context + LOW 埋伏候选拥挤过滤。
 - **细分宇宙+真实拥挤度**：fund_portfolio_holdings（Q2 真实公募，642行/274股）+ stock_concept_map 成分 → build_crowding.py 聚合 → rotation_universe.py 双维打分（拥挤×位置空间，存储=拥挤但有空间）；L1 科技/AI总集(META)+AI应用/AI终端 + L2 芯片/光通信/算力/液冷/存储/材料/铜缆电源 + 非科技5组；词表冻结 v1（docs/p2-rotation-universe-config.md）。
+
+
 - **调度**：stock_pool_refresh / rotation_universe_classify 移至周日（8:00/8:05），首次自动全量分类、之后增量+清理失效概念；季度 fund_crowding_refresh（1/4/7/10月25日 8:30）。
 - 生产：worker 25 任务；轮动门控已进 Pi prompt（拥挤无空间/可埋伏/拥挤但有空间/高拥挤代表个股）。
 - 剩余（下一批）：材料大级别买点执行链路（R7日历）、双维分类稳定性回测、拥挤名单下单硬过滤（当前为候选过滤+Pi软约束）。
+
+
+## [1.9.0] 2026-09-03（早）· P2 风控主体 + 轮动遗留子项收口
+
+- **P2 风控**：risk_gate v1(R-R1黑名单/R-R2财报/R-R3两融/R-R4拥挤, 11场景) → risk_flags DB(forecast/express/ST 结构化, 候选即时查模式 --stocks, 全市场ST 206) → check_entry_filters 硬拦(业绩雷 000586 E2E blocked, 需 downgrade_multiplier=0 教训) → trade_graph 风控门控 prompt；系统性风险联动开关 systemic_risk(银行512800双头+科创50不反→防御 / 大光破位大黑K→止盈) + build_systemic_inputs 采集器(工作日15:05, tasks 26)；Pi建仓SOP"先过滤后暴雷校验"reseed。
+- **P2 轮动遗留 3 项全完**：①材料大级别买点链路 material_entry.py(R7业绩月+wave转build/筑底side+指数&材料confirm, 实盘 wait)；②双维分类历史稳定性回测 backtest_rotation_quadrant.py(2025-12~2026-08 13时点, 相邻转换率14.9%, 拥挤维度Q2近似)；③拥挤名单下单硬过滤 crowding_blacklist(23概念1045股) 进 check_entry_filters。
+- 文档：docs/p2-risk-wolf-logic.md；overview/context 已更新(2026-09-03)。
