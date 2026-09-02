@@ -226,6 +226,18 @@ class TMonitor:
             #   买腿：迭代#58（用户需求）——无底仓放行触发，等价"条件单建仓"：
             #     低吸/custom(buy) 命中后按建仓规模买入开仓（量/风控由网关+建仓规模兜底）；
             #     14:45 后禁新开仓仍由时段门拦截。有底仓时仍是加仓语义（底仓 30%）。
+            # 狼大持续腿触发冷却（2026-09-02）：分时T出/黄线等表达式腿命中后
+            # 5 分钟不再重复写触发（非消费式持续腿防刷；分时形态天然低频，黄线靠此限频）
+            if _is_wolf_t_condition(cond):
+                _lt = cond.get("last_triggered_at") or ""
+                if _lt:
+                    try:
+                        from datetime import datetime as _dt
+                        _last = _dt.strptime(_lt, "%Y-%m-%d %H:%M:%S")
+                        if (datetime.now() - _last).total_seconds() < 300:
+                            continue
+                    except Exception:
+                        pass
             try:
                 pos_item = (ledger or {}).get(symbol) or {}
                 cond_kind = cond.get("trigger_kind", "low_buy")
@@ -627,16 +639,27 @@ class TMonitor:
         }
         trig_id = t_db.insert_trigger(trig)
         if trig_id:
-            # 消费式条件（迭代#56，用户需求）：触发后条件即销毁（consumed），
-            # 不再冷却复用——由 AI 重新评估设定新条件（update_condition 语义=重建）。
-            # 状态机：置 consumed + 计数 +1（保留计数供审计）
-            t_db.update_condition_state(
-                cond.get("id"),
-                armed=0,
-                status="consumed",
-                last_triggered_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                trigger_count_today=int(cond.get("trigger_count_today") or 0) + 1,
-            )
+            # 状态机（2026-09-02 修订）：狼大形态条件（分时T出/黄线/急杀/缩量触低等
+            # 表达式腿）= **非消费式持续腿**——命中后保持 active+armed（不销毁），
+            # 由 _round 5 分钟冷却防刷；使"买腿回补 T仓 → 卖腿持续监控 T出/黄线"的
+            # 做T循环闭环（狼大：底仓不动、T仓高抛低吸反复做）。
+            # 其他做T条件仍消费式（迭代#56：触发即销毁，由 AI 重建移动基准）。
+            if _is_wolf_t_condition(cond):
+                t_db.update_condition_state(
+                    cond.get("id"),
+                    armed=1,
+                    status="active",
+                    last_triggered_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    trigger_count_today=int(cond.get("trigger_count_today") or 0) + 1,
+                )
+            else:
+                t_db.update_condition_state(
+                    cond.get("id"),
+                    armed=0,
+                    status="consumed",
+                    last_triggered_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    trigger_count_today=int(cond.get("trigger_count_today") or 0) + 1,
+                )
             print(f"[TMonitor] 触发写入 #{trig_id} {cond['symbol']} {trigger_kind} "
                   f"mode={mode} consec_hits={consecutive_hits} @ {current}")
             # 迭代#58d（用户需求）：无需人工确认——MANUAL_ONLY（谨慎/下跌市低吸闸门）
