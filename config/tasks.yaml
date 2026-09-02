@@ -497,3 +497,24 @@ tasks:
   script:
     args: []
     path: apps/main_line/classify_rotation_universe.py
+- depends_on: []
+  description: 收盘后(15:05) 银行ETF/科创50/大光三股行情采集 → systemic_risk.json(银行双头+科技不反/大光破位大黑K开关)
+  enabled: true
+  id: systemic_risk_monitor
+  name: 系统性风险开关监测
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/systemic_risk_monitor_{date}.log
+  schedule:
+    expr: 5 15 * * mon-fri
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/build_systemic_inputs.py
