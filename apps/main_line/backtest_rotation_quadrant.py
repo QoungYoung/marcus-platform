@@ -54,14 +54,28 @@ def quadrant(crowd_avg, maxc, space):
     if crowd < 0.55 and space >= 0.55: return "可埋伏"
     return "中性"
 
+def quarter_end_of(date):
+    d = str(date).replace("-", "").replace(" ", "")
+    y = int(d[:4]); m = int(d[4:6])
+    if m <= 3: return "%d1231" % (y - 1)
+    if m <= 6: return "%d0331" % y
+    if m <= 9: return "%d0630" % y
+    return "%d0930" % y
+
 def main():
     hist = load(os.path.join(DATA, "concept_hist.json"))
-    crowd = load(os.path.join(DATA, "rotation_crowding.json"))
-    cu = crowd.get("universe") or {}
     dates = pick_dates(hist)
-    maxc = max([(cu.get(s) or {}).get("avg_float_per_held") or 0 for s in SUB_UNIVERSE] or [0]) or 1
+    crowd_cache = {}
     history = {}
     for dt in dates:
+        qe = quarter_end_of(dt)
+        crowd = crowd_cache.get(qe)
+        if crowd is None:
+            p = os.path.join(DATA, "rotation_crowding_%s.json" % qe)
+            crowd = load(p if os.path.exists(p) else os.path.join(DATA, "rotation_crowding.json"))
+            crowd_cache[qe] = crowd
+        cu = crowd.get("universe") or {}
+        maxc = max([(cu.get(s) or {}).get("avg_float_per_held") or 0 for s in SUB_UNIVERSE] or [0]) or 1
         rel_map = pc.build_rel_map(hist, upto=dt)
         day = {}
         for sub, kws in SUB_UNIVERSE.items():
@@ -71,7 +85,7 @@ def main():
             cavg = (cu.get(sub) or {}).get("avg_float_per_held") or 0.0
             day[sub] = {"space": round(space, 2), "crowd_avg": cavg, "quadrant": quadrant(cavg, maxc, space), "n": len(rows)}
         history[dt] = day
-        print(dt, {s: d["quadrant"][:2] for s, d in day.items() if s not in META_GROUPS}, flush=True)
+        print(dt, "q=", qe, {s: d["quadrant"][:2] for s, d in day.items() if s not in META_GROUPS}, flush=True)
     # 稳定性: 相邻时点转换率
     ds = sorted(history)
     trans = collections.Counter(); total = 0

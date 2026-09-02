@@ -82,8 +82,12 @@ def main():
            "chip_top": top_by(["芯片", "半导体"]),
            "optics_top": top_by(["光模块", "光通信", "CPO", "光纤"])}
     os.makedirs(DATA, exist_ok=True)
-    json.dump(out, open(os.path.join(DATA, "rotation_crowding.json"), "w", encoding="utf-8"), ensure_ascii=False)
-    print("WROTE", os.path.join(DATA, "rotation_crowding.json"))
+    json.dump(out, open(os.path.join(DATA, "rotation_crowding_%s.json" % end), "w", encoding="utf-8"), ensure_ascii=False)
+    print("WROTE", os.path.join(DATA, "rotation_crowding_%s.json" % end))
+    try:
+        json.dump(out, open(os.path.join(DATA, "rotation_crowding.json"), "w", encoding="utf-8"), ensure_ascii=False)  # 生产默认镜像
+    except Exception:
+        pass
     for sub, d in universe.items():
         print("%-14s n_con=%d held=%d ties=%d sum_float=%.1f avg=%.4f" % (
             sub, d["n_concepts"], d["n_held"], d["n_funds_ties"], d["sum_float"], d["avg_float_per_held"]))
