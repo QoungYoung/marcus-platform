@@ -1,6 +1,6 @@
 # 狼大交易策略复制 — 任务总览（大周期 / 小周期 / 已完成）
 
-> 生成：2026-09-01，更新：2026-09-02。目标：逆向复刻狼大(-阿狼-)完整 A 股交易策略。
+> 生成：2026-09-01，更新：2026-09-02(晚)。目标：逆向复刻狼大(-阿狼-)完整 A 股交易策略。
 > 已完成：主线判定、浪型级别判定(冻结v6)、高低位分类(核心+共振)、**做T体系(狼大做T信号+生产落地)**。
 
 ## 1. 已完成部分
@@ -33,17 +33,29 @@
 - **T1缩转放 语义修正(2026-09-02 重大发现)**：个股5min验证**无预测力**(药明86%/火炬95%触发率, 前向收益≈0；指数91%命中午休伪信号已排除)。根因：缩转放是**转折点信号，方向由位置决定**(8-04高位=卖/T点、8-12低位=买/止跌)，载体是**指数/板块量能**(跟前一天比)，不是个股日内5min形态。→ t1_shrink_expand **暂缓不恢复**作自动买腿。
 - **止损监控改造**：STOP_LOSS_DYNAMIC_ONLY=1 只读动态离场距离监控（黄线VWAP距离+分时T出前高距离），不自动卖；旧8条止损距离体系已屏蔽；卖腿保留100底仓(狼大『底仓不卖』铁律)。
 
+### 1.6 交易执行层狼大化改造（2026-09-02 下午）
+- **做T底仓保护(代码硬拦)**：trades.py 卖出时做T标的(有active t_conditions)最多卖持仓-100、持仓≤100拒绝——Pi place_order 卖出路径不经 t_gateway 白名单，此保护堵住"Pi卖光做T底仓"风险；prompts 表 id=37 同步加"底仓不卖"条款。
+- **auto_trade 5任务已恢复 enabled**（09-02 下午，此前停用）——Pi 自主交易回来，受做T底仓保护约束。
+- **盘中扫描(jobs/market_scan.py) 接 🐺狼大视角**：报告顶部注入主线/浪型(level·sub_level·operation)/个股确认比例/高低位埋伏名单/做T提示；清理死代码 521 行(16.2%, commit 0480af2)。
+- **盘前诊断(jobs/morning_diagnosis.py V2.1🐺)**：加狼大视角块；删除旧框架"震荡市/趋势市投票+持仓1-3天"结论(与狼大浪型operation矛盾)。
+- **交易提示词(prompt_seeds.py→DB id=37 reseed)**：SOP前加【第零步：浪型策略(交易主基调)】每报告必输出；删月度表"盈亏比目标1:1.5"；calc_position 静态止损 8%→3%狼大逻辑止损(黄线由t_monitor 252执行)；prompt_seeds 是权威源(FORCE_RESEED_PROMPTS=true 覆盖DB，改DB不改源=重建丢)。
+- **trade_graph 震荡/趋势注入对齐月度门控**：regime文本改"日度指标非月度regime"，震荡日短期层只做T不新开(删旧"建仓60%/加仓40%"时段指令)；trend分支不变。
+- **部署基建**：docker-compose backend-common 加 ../jobs:/app/jobs bind mount（镜像COPY jobs会遮旧版, 重启还原——已根治）。
+
 ## 2. 生产落地架构（2026-09-02 当前）
 - **股票任务账户 stock**：药明康德 SH603259 100股@158.742（2026-08-28建仓补录），现金 234,125.8。
-- **t_monitor**（30s轮询，只监控 stock 账户 + 只跑狼大T表达式）：条件 249 正T低吸 / 250 分时T出 / 252 黄线离场。T仓100股（买腿30%底仓），卖腿保留100底仓。
-- **网关白名单**：EXEC_ALLOWED_ACCOUNTS=stock（t 账户下单一律拒绝；T_EXEC_ALLOWED_ACCOUNTS 可临时放开）。
-- **已屏蔽**：vrebounce/vreb_etf/mom_etf/t_build 服务、auto_trade 5个定时任务、止损/加仓/建仓/长期池监控（止损已改为只读动态监控恢复）、旧 t 账户条件12条。
+- **t_monitor**（30s轮询，只监控 stock 账户 + 只跑狼大T表达式）——**5 条持续腿**（非消费式，5分钟触发冷却防刷）：
+  249 正T低吸(指数整日回撤2-3%) / 250 分时T出(t_sell) / 252 黄线离场(vwap_break) / 253 大盘5min分时急杀≥0.4%(m5_dump) / 254 个股触前日低点+缩量(dip_prev_low & vol_ratio≤0.7)。买腿(249/253/254)带黄线在上护栏(quote.current>quote.average)；卖腿(250/252)一次清T仓(volume=sellable-100，底仓100不动)；T仓=持仓-100。
+- **网关白名单**：EXEC_ALLOWED_ACCOUNTS=stock（t 账户下单拒绝；T_EXEC_ALLOWED_ACCOUNTS 可临时放开）。trades.py 做T标的卖出保留100底仓(代码硬拦，防 Pi 卖光底仓)。
+- **auto_trade 已恢复**：5 个定时任务 enabled(09-02 下午)；Pi 交易受做T底仓保护+prompt浪型主基调约束。
+- **已屏蔽**：vrebounce/vreb_etf/mom_etf/t_build 服务、止损/加仓/建仓/长期池监控（止损只读动态、加仓/建仓监控停用后 Pi 按 6.0 清单主动评估）、旧 t 账户条件12条。
 - **数据通道**：brze 代理(tu.brze.top) stk_mins 个股+指数 5min/1min 历史全通（官方 token 无分钟权限、datahubco 限频1次/小时、promax 仅15/30min）；腾讯 qt 实时(含 VWAP 均价)；腾讯/新浪 m5。个股5min已拉：603259/603678/000725/002384/688072 各197天。
 
 ## 3. 大周期任务清单（剩余）
 按优先级：
 - P1 主线三信号融合 ✅ 已实现81%(IS 22/27) + **样本外验证通过(2026-09-02)**：OOS 5/7=71%>代理60%，conc为稳定主力信号，v1权重(0,0.3,0.2,0.5)精度95%维持生产。剩余：科技子类粒度(AI硬vs半导体合并) + 机器人/互金主题覆盖。见 docs/mainline-oos-validation-report.md。
-- P1 做T扩样本：正T买点信号日仅8天(184天) → 拉更多个股/更长历史验证；分时T出个股验证。
+- P1 做T扩样本 ✅ 已重构为三档(09-02)：语料核实"带下来"=个股被拖累盘中低点(非上证整日-2%，年10次太少)，新增 253 大盘分时急杀(0.4%/0.5%, 回测+0.82%/+1.98%) + 254 个股触前日低点+缩量(133天+0.78%)。剩余：盘中口径验证 + 更多个股/历史扩样本。
+- P2 主线剩余：科技子类粒度(AI硬vs半导体合并) + 机器人/互金主题覆盖 + 选股链路调度自动化核实(main_line/position/wave 无 tasks.yaml 定时条目但状态文件每日刷新——触发机制未查明)。
 - P2 主线内轮动/产业链形态：主线上中下游/软硬切换/去弱留强。
 - P2 风控：回避公募重仓+个股大利空(业绩雷/查杠杆/监管)。
 - P2 宏观/机构行为：两融杠杆/30年国债/美债/汇率/北向/政策。
@@ -53,9 +65,9 @@
 
 ## 4. 当前状态（2026-09-02）
 - 主线✅ / 浪型v6✅(75%/83%) / 高低位✅(v2 79%) / 确定性门槛✅ / **做T体系✅(T出91% + 正T验证通过 + 黄线离场)**。
-- 生产：stock账户药明康德 3条件（249正T买/250 T出卖/252黄线卖），止损监控只读动态距离，worker 仅 TMonitor+t-backtest+动态止损监控。
-- 待观察：正T信号月约1次，2-4周实盘观察窗口。
-- **关键结论**：狼大『缩转放』是位置+市场级别信号（高位卖/低位买），个股日内5min形态无预测力——做T买点用『大盘带下来的机会』(指数回撤2-3%)，卖点用分时T出+黄线跌破。
+- 生产：stock账户药明康德底仓100股，做T 5条持续腿（249/250/252/253/254），auto_trade 5任务已恢复，做T底仓保护+黄线护栏+非消费式腿在跑；worker 仅 TMonitor+t-backtest+动态止损监控(只读)。
+- 待观察：正T三档触发质量（249 月1次 / 253 月2-5次 / 254 月20+次），250 分时T出实盘命中；2-4周观察窗口。
+- **关键结论(语料实证)**：①狼大"大盘带下来"做正T=**持仓个股被拖累的盘中低点**(每天级)，上证整日-2%只是极端档(年10次)——载体/频率/幅度三重认知修正，见 docs/zt-zhengT-semantics-report.md；②缩转放=转折点信号、方向由位置决定、载体=指数/板块量能(个股5min无预测力)；③分时放量过前高≠加仓点(狼大突破=放量+日线级站稳3天确认, 缩量突破/高位突破是诱多陷阱)——255方案已收回；④T出形态已排除放量突破(二次高点<前高×1.005)，卖飞=两吃不追回(狼大8-12/8-06)；⑤黄线在上才做T(6-30/7-31语料)。
 
 ## 5. 关键文档/产物索引
 - docs/zt-dip-verification-report.md（正T买点验证通过，含5股扩展）
@@ -66,3 +78,8 @@
 - data/stock_5min_{603259,603678,000725,002384,688072}.json（个股5min, 197天）
 - apps/main_line/backtest_zt_dip_v2.py / backtest_t1_stock.py / backtest_t1_paramsweep.py（回测）
 - scripts/fetch_stock_5min_brze.py（brze 拉取, 断点续拉）
+- **docs/zt-zhengT-semantics-report.md（正T真实语义语料报告）**：'带下来'载体/频率/幅度 + A/B/C信号候选
+- docs/mainline-oos-validation-report.md（主线样本外验证 OOS 5/7=71%）
+- apps/main_line/backtest_zt_signal_compare.py（正T A/B/C 信号对比回测）
+- apps/main_line/backtest_zt_dip_v2.py（原249口径回测）
+- 交易执行层改造：backend/app/services/{trade_graph,t_monitor,t_expr,t_db}.py + backend/app/api/{trades,indicator}.py + backend/app/db/prompt_seeds.py + jobs/{market_scan,morning_diagnosis}.py + docker/docker-compose.yml(jobs bind mount)

@@ -412,3 +412,25 @@
 - 定时调度器（盘前扫描 / 盘中交易 / 尾盘收盘 / 复盘）
 - QQ Bot 通知推送
 - 前端监控面板（React + Vite）
+
+
+## [1.7.0] 2026-09-02（晚）· 交易执行层狼大化 + 正T三档落地
+
+### 做T体系扩展（三档正T买点 + 高抛闭环）
+- 正T语义语料核实（docs/zt-zhengT-semantics-report.md）："大盘带下来"=持仓个股被拖累的盘中低点（每天级），非上证整日-2%（年~10次）；方法=挂前日低点+缩量
+- 信号对比回测（apps/main_line/backtest_zt_signal_compare.py）：C 大盘5min分时急杀0.4%（16天 T+1 +0.82%）/ A 个股触前日低点+缩量（133天 +0.78%）为合理频率档
+- 生产新增 253（custom_m5dump, index.m5_dump≥0.4）/ 254（custom_prevlow, dip_prev_low+vol_ratio∈(0,0.7]）条件；t_expr/t_monitor 注册 index.m5_dump、quote.dip_prev_low（30s TTL）
+- 高抛闭环修复：狼大形态条件改**非消费式持续腿**（触发保持active+armed，5分钟冷却防刷）；250 回场；买腿加黄线护栏（quote.current>quote.average）；卖腿一次清T仓（volume=sellable-100）
+
+### 交易执行层狼大化
+- 做T底仓保护（backend/app/api/trades.py）：做T标的卖出最多卖持仓-100（Pi place_order 路径不经 t_gateway 白名单，此前可卖光底仓）
+- auto_trade 5任务恢复 enabled（09-02下午，受底仓保护约束）
+- 交易提示词重构（backend/app/db/prompt_seeds.py→DB id=37 reseed）：SOP加【第零步浪型策略(交易主基调)】每报告必输出；删"盈亏比1:1.5"；calc_position 止损8%→3%逻辑止损
+- trade_graph：震荡/趋势注入对齐月度门控（震荡日短期层只做T不新开，删旧建仓60%/加仓40%时段指令）
+- 盘中扫描（jobs/market_scan.py）+盘前诊断（jobs/morning_diagnosis.py V2.1）注入🐺狼大视角；盘中扫描清死代码521行
+- 部署：docker-compose 加 ../jobs:/app/jobs bind mount（镜像COPY jobs会遮旧版）
+
+### 修复/坑
+- vol_ratio 数据缺失=0.0 令 ≤0.7 恒真 → 254 误触发买入（已加 >0 前置）
+- prompt_seeds.py 是权威源，改DB不改源=重建丢修改
+- 长中文 patch 脚本 TS/Python 双层转义易错（N')/多引号），用 String.raw + chr(92) + 文本锚点稳定
