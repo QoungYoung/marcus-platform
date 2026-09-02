@@ -34,7 +34,7 @@ T_MONITOR_AUTO_MAINTAIN = os.getenv("T_MONITOR_AUTO_MAINTAIN", "0") == "1"
 # 狼大做T表达式字段(唯一允许)：分时T出(t_sell) + 正T买点(index.intraday_dd 大盘盘中回撤2-3%低吸)
 # + 黄线跌破离场(quote.vwap_break, 狼大8-04『黄线跌破直接走』)
 # T1缩转放(t1_shrink_expand) 已由个股5min验证无预测力(2026-09-02) → 暂缓, 不再作为自动买腿
-WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break")
+WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break", "index.m5_dump", "quote.dip_prev_low")
 
 
 class TMonitor:
@@ -273,6 +273,59 @@ class TMonitor:
             print(f"[TMonitor] 指数盘中回撤计算失败: {e}")
             return 0.0
 
+    def _index_m5_dump(self) -> float:
+        """上证指数最新5min单根跌幅%（较前一根收盘；C档急杀信号≥0.4；30s TTL）。
+        狼大'盘中带下来'的分时形态——验证 backtest_zt_signal_compare: 单根>=0.4% 16天 T+1+0.82%。"""
+        now = time.time()
+        if now - _m5_dump_cache["at"] < 30:
+            return _m5_dump_cache["value"]
+        try:
+            from app.services.t_data_sources import fetch_tencent_mkline
+            bars = fetch_tencent_mkline("sh000001", freq="m5", count=60)
+            bars = sorted(bars or [], key=lambda b: str(b.get("time")))
+            dump = 0.0
+            if len(bars) >= 2:
+                c0 = float(bars[-1].get("close") or 0)
+                c1 = float(bars[-2].get("close") or 0)
+                if c0 > 0 and c1 > 0:
+                    dump = (c0 - c1) / c1 * 100
+            _m5_dump_cache["at"] = now; _m5_dump_cache["value"] = round(dump, 3)
+            return round(dump, 3)
+        except Exception as e:
+            print(f"[TMonitor] 指数急杀计算失败: {e}")
+            return 0.0
+
+    def _stock_dip_prev_low(self, symbol: str) -> bool:
+        """个股当日5min最低 ≤ 前一交易日5min最低×1.005（A档：触及/跌破前日低点）。
+        狼大2025-03-06『挂前一天的低点 能买进去就做正T』；配 vol_ratio<=0.7 缩量。
+        fetch_minute_bars m5 count=320 ≈ 6.5 交易日，取最近非今日组的 min low。30s TTL。"""
+        now = time.time()
+        key = symbol
+        if now - _prev_low_cache.get("at", 0) < 30 and _prev_low_cache.get("sym") == key:
+            return _prev_low_cache.get("value", False)
+        try:
+            from app.services.t_data_sources import fetch_minute_bars
+            bars = fetch_minute_bars(symbol, freq="m5", count=320) or []
+            if len(bars) < 100:
+                return False
+            today = datetime.now().strftime("%Y-%m-%d")
+            by_day = {}
+            for b in sorted(bars, key=lambda x: str(x.get("time") or x.get("trade_time"))):
+                t = str(b.get("time") or b.get("trade_time"))[:10]
+                by_day.setdefault(t, []).append(b)
+            days = sorted(by_day.keys())
+            if len(days) < 2:
+                return False
+            today_low = min(float(b["low"]) for b in by_day.get(today, [by_day[days[-1]][0]]))
+            prev_day = days[-2] if today in days else days[-1]
+            prev_low = min(float(b["low"]) for b in by_day[prev_day])
+            ok = prev_low > 0 and today_low <= prev_low * 1.005
+            _prev_low_cache.update({"at": now, "sym": key, "value": ok})
+            return ok
+        except Exception as e:
+            print(f"[TMonitor] 前日低点计算失败 {symbol}: {e}")
+            return False
+
     def _build_snapshot(self, cond: Dict[str, Any], quote: dict,
                         regime_state: dict) -> Dict[str, Any]:
         """构建字段快照（Agent 自由表达式可引用的全部字段）。
@@ -299,6 +352,7 @@ class TMonitor:
             "average": _avg,
             # 分时黄线跌破（狼大8-04『绝对不能破的点就是日均线那条黄线 一旦突发跌破直接走』）
             "vwap_break": bool(_avg > 0 and _cur < _avg),
+            "dip_prev_low": self._stock_dip_prev_low(symbol),
         }
         # vol_ratio（盘中量比归一）
         vr = self._calc_volume_ratio(cond, quote)
@@ -326,6 +380,7 @@ class TMonitor:
             "sh_drop": 0.0,
             "sz_drop": 0.0,
             "intraday_dd": self._index_intraday_dd(),
+            "m5_dump": self._index_m5_dump(),
         }
         # tech.*（技术指标：KDJ/MACD/RSI/MA，复用 get_realtime_indicators，带缓存）
         snapshot["tech"] = self._build_tech_snapshot(symbol, snapshot["quote"])
@@ -850,6 +905,8 @@ def _t_signals_from_m5(m5):
 
 # 指数盘中回撤缓存（30s TTL，避免每轮拉腾讯）
 _index_dd_cache = {"at": 0.0, "value": 0.0}
+_m5_dump_cache = {"at": 0.0, "value": 0.0}
+_prev_low_cache = {"at": 0.0, "sym": "", "value": False}
 
 
 # ── 单例管理（对齐 candidate_pool_monitor 模式） ──
