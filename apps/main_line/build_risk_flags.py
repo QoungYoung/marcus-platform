@@ -139,11 +139,16 @@ def main():
         cur.execute("INSERT INTO risk_flags (symbol,flag_type,value,ann_date,source,updated_at) VALUES (%s,'is_st','1','','stock_pool',%s)"
                     " ON CONFLICT (symbol,flag_type,source) DO UPDATE SET value='1', updated_at=EXCLUDED.updated_at", (sym, now))
     print("ST bulk flags:", len(st_all), flush=True)
-    # stock_pool is_st for watch
+    # stock_pool is_st for watch + 今日已完成的 fetch 集合(断点续跑)
     cur.execute("select ts_code, is_st from stock_pool where ts_code = ANY(%s)", (stocks,))
     pool = {r[0]: r[1] for r in cur.fetchall()}
-    total = 0
+    cur.execute("SELECT DISTINCT symbol FROM risk_flags WHERE updated_at LIKE %s AND source IN ('forecast','express')", (now[:10] + "%",))
+    done_fetch = {r[0] for r in cur.fetchall()}
+    total = 0; skipped = 0
     for i, sym in enumerate(stocks, 1):
+        if sym in done_fetch:
+            skipped += 1
+            continue
         rows = [("is_st", str(pool.get(sym) or 0), "", "stock_pool")] if sym in pool else []
         for f in fetch_flags(sym):
             rows.append(f)
