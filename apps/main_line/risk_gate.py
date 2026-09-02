@@ -9,7 +9,30 @@ risk_gate.py — P2 风控规则 v1（基于 docs/p2-risk-wolf-logic.md R-R1~R-R
   R-R4 拥挤回避: 由 rotation_universe 承接(本模块不重复), 预留 crowded 参数
 用法: python apps/main_line/test_risk_gate.py
 """
-import calendar, datetime
+import calendar, datetime, os
+
+def load_flags(symbol):
+    """从 postgres risk_flags 读真实标志（结构化源: forecast/express/stock_pool/ai）。失败返回 {}。"""
+    out = {"flags": set(), "db": True}
+    try:
+        import psycopg2
+        conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        cur = conn.cursor()
+        cur.execute("SELECT flag_type, value, source FROM risk_flags WHERE symbol=%s", (symbol,))
+        rows = cur.fetchall(); cur.close(); conn.close()
+    except Exception:
+        return {"flags": set(), "db": False}
+    for ftype, value, source in rows:
+        if ftype == "is_st":
+            if str(value) == "1": out["is_st"] = True
+            # is_st=0 不是风险, 不入 flags
+        elif ftype == "earnings_bad":
+            out["earnings_bad"] = True; out["earnings_reason"] = str(value)
+        elif ftype == "earnings_clear":
+            out["earnings_clear"] = True
+        else:
+            out["flags"].add(str(ftype))
+    return out
 
 HARD_FLAGS = {"st", "delist_risk", "立案", "监管处罚", "重组终止", "业绩暴雷", "退市风险"}
 # A股财报披露月末窗口(±容忍日)
@@ -31,6 +54,18 @@ def decide(cand, margin_pct=None, top_signal=False, day=None):
     top_signal: 指数高位 + 破位/缩量滞涨(查杠杆系统性信号)
     返回 {decision, risk_flags, macro_risk, reason}
     """
+    # DB 真实 flags 合并(risk_flags: forecast/express/stock_pool/ai)
+    if cand.get("symbol"):
+        _db = load_flags(cand["symbol"])
+        if _db.get("db"):
+            cand = dict(cand)
+            cand.setdefault("flags", [])
+            for fl in _db.get("flags") or []:
+                if fl not in cand["flags"]: cand["flags"].append(fl)
+            cand.setdefault("is_st", _db.get("is_st"))
+            cand.setdefault("earnings_bad", _db.get("earnings_bad"))
+            cand.setdefault("earnings_clear", _db.get("earnings_clear"))
+            if _db.get("earnings_reason"): cand.setdefault("earnings_reason", _db["earnings_reason"])
     flags = set(cand.get("flags") or [])
     if cand.get("is_st"):
         flags.add("st")
