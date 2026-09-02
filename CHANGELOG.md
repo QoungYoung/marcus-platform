@@ -442,3 +442,14 @@
 - **修复**：config/tasks.yaml 补 3 个定时任务并本地+服务器同步——main_line_judge（周一 8:00，apps/main_line/main_line_judge.py）/ wave_judge（8:10，wave_agent.py）/ position_judge（8:20，position_judge.py：position_class→low_logic_agent→stock_confirm_judge 链式）。
 - 备份：/opt/marcus-platform/config/tasks.yaml.bak_20260902_20task；worker 已重启，23 任务加载/调度器运行验证通过（jobs_count=23, enabled=23），新脚本容器内 import 冒烟 OK。
 - 坑：改 tasks.yaml 必须以本地 config/ 为权威并同步服务器+重启 worker，防止再次被本地旧配置覆盖（曾两次丢失 08-31 已加条目）。
+
+
+## [1.8.0] 2026-09-02（晚）· P2 主线内轮动/产业链形态第一轮闭环
+
+- **语料→逻辑**：docs/p2-rotation-wolf-logic.md（轮动两态/高低切语境/产业链传导/去弱留强/R7调仓），22+7 例 case 表 docs/p2-rotation-cases.md。
+- **验证**：wave_agent 历史重放 23/23 全齐 + position_class 时点回放；27 case 一致率 OK20/na7/0 错；A1/C3/D5 预期修正、B3 复核为 defense 期主线内调仓 → MISMATCH 清零。
+- **规则 code 化**：rotation_gate.py（五分支 gate v2）+ test（19场景）+ regress_rotation_gate.py（真实 wave/position 27case 端到端 19/19）双绿；trade_graph 注入轮动门控 context + LOW 埋伏候选拥挤过滤。
+- **细分宇宙+真实拥挤度**：fund_portfolio_holdings（Q2 真实公募，642行/274股）+ stock_concept_map 成分 → build_crowding.py 聚合 → rotation_universe.py 双维打分（拥挤×位置空间，存储=拥挤但有空间）；L1 科技/AI总集(META)+AI应用/AI终端 + L2 芯片/光通信/算力/液冷/存储/材料/铜缆电源 + 非科技5组；词表冻结 v1（docs/p2-rotation-universe-config.md）。
+- **调度**：stock_pool_refresh / rotation_universe_classify 移至周日（8:00/8:05），首次自动全量分类、之后增量+清理失效概念；季度 fund_crowding_refresh（1/4/7/10月25日 8:30）。
+- 生产：worker 25 任务；轮动门控已进 Pi prompt（拥挤无空间/可埋伏/拥挤但有空间/高拥挤代表个股）。
+- 剩余（下一批）：材料大级别买点执行链路（R7日历）、双维分类稳定性回测、拥挤名单下单硬过滤（当前为候选过滤+Pi软约束）。
