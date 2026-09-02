@@ -18,8 +18,8 @@ import pandas as pd
 # targets: [(概念关键词, 期望位置)] — 用关键词在 concept_hist 名称里找(取首个>=80日且有数据的)
 CASES = [
  # 组A
- dict(id="A1", date="2025-02-06", expect_wave="build", group="A",
-      note="三浪初期去弱留强/指数票容量票通道"),
+ dict(id="A1", date="2025-02-06", expect_wave="side", group="A",
+      note="三浪初期(2-06 仍是2浪W底side, 2-20才转3-1 build)去弱留强/筛票换票"),
  dict(id="A2", date="2025-03-19", expect_wave="build", group="A",
       note="机器人/算力主线内细分轮动走业绩向"),
  dict(id="A3", date="2026-01-05", expect_wave="build", group="A",
@@ -46,8 +46,8 @@ CASES = [
       note="低位拿来切换(药/航天 LOW vs 存储高位误配)"),
  dict(id="C2", date="2026-04-16", expect_wave="tside", group="C",
       note="压力线防御性高切低(不减仓换方向)"),
- dict(id="C3", date="2026-05-11", expect_wave="tside", group="C",
-      note="高切低成功底线: 无2孕线/未放量破前日低"),
+ dict(id="C3", date="2026-05-11", expect_wave="na", group="C",
+      note="高切低成功底线=执行纪律(无2孕线/未放量破前日低), 与wave op弱相关→不参与gate判定"),
  dict(id="C4", date="2026-07-23", expect_wave="tside", group="C",
       note="4-4机构按业绩指引调仓, ETF为主"),
  dict(id="C5", date="2026-07-27", expect_wave="tside", group="C",
@@ -63,8 +63,8 @@ CASES = [
       note="跌破4034高切低被识破=踩踏; 时点 gate"),
  dict(id="D4", date="2026-05-25", expect_wave="build", group="D",
       note="寒武纪/中芯/华虹/拓荆齐动无法轮动=抽血不健康"),
- dict(id="D5", date="2026-05-26", expect_wave="build", group="D",
-      note="机构逼散户趋弱留强(主升末明牌)"),
+ dict(id="D5", date="2026-05-26", expect_wave="t_only", group="D",
+      note="主升明牌(3-4/t_only)仍禁板块级高低切——规律①: 判据是主线吸金/明牌而非wave op"),
  dict(id="D6", date="2026-08-03", expect_wave="tside", group="D",
       note="GJD稳3800无主线快速轮动→机构收割散户"),
  # 组E(个股执行, 只查 wave 参考)
