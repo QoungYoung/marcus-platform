@@ -58,8 +58,11 @@ def proxies(pos=None):
         net_out = -sum(r["net"] for r in rows if (r["fund"] == "out"))
         rel_hi = sum(1 for r in rows if r["rel"] == "high")
         rel_lo = sum(1 for r in rows if r["rel"] == "low")
+        lowmid = sum(1 for r in rows if r["position"] in ("LOW", "MID"))
+        vs = [r["vs1y"] for r in rows if isinstance(r.get("vs1y"), (int, float))]
         out_detail[sub] = {"n": len(rows), "net_in_亿": round(net, 1), "net_out_亿": round(net_out, 1),
-                           "rel_high_n": rel_hi, "rel_low_n": rel_lo,
+                           "rel_high_n": rel_hi, "rel_low_n": rel_lo, "lowmid_n": lowmid,
+                           "avg_vs1y": round(sum(vs) / len(vs), 1) if vs else None,
                            "crowd": round(rel_hi / max(len(rows), 1), 2)}
     subs = list(SUB_UNIVERSE.keys())
     def netx(s):
@@ -85,18 +88,26 @@ def proxies(pos=None):
         for s in subs:
             r = crowd_real.get(s) or {}
             (out_detail.setdefault(s, {}))["crowd_real_avg_float"] = round(r.get("avg_float") or 0, 4)
-    # 拥挤侧不写死语义标签：真实基金拥挤 avg_float 与 rel 高位融合自然排序取前3
-    others = subs[:]
-    if crowd_real:
-        others.sort(key=lambda s: ((crowd_real.get(s) or {}).get("avg_float") or 0) +
-                                  ((out_detail.get(s) or {}).get("crowd") or 0) * 0.5, reverse=True)
-    else:
-        others.sort(key=lambda s: (out_detail.get(s) or {}).get("crowd", 0), reverse=True)
-    crowded = list(dict.fromkeys(others))[:3]
-    room_cand = [s for s in subs if s not in crowded
-                 and (((out_detail.get(s) or {}).get("rel_lo_n") or 0) >= 1
-                      or (nets.get(s, 0) > 0 and ((out_detail.get(s) or {}).get("crowd") or 0) < 0.5))]
-    room_cand = room_cand[:3]
+    # 双维打分: 拥挤度(真实基金 avg_float 归一化) × 位置空间(距高点折让/rel低位/低中位占比)
+    maxc = max([(crowd_real.get(s) or {}).get("avg_float") or 0 for s in subs] or [0]) or 1
+    scores = {}
+    for s in subs:
+        d = out_detail.get(s) or {}
+        n = max(d.get("n") or 1, 1)
+        rel_lo = (d.get("rel_low_n") or 0) / n
+        lowmid = (d.get("lowmid_n") or 0) / n
+        av = d.get("avg_vs1y")
+        dist = max(0.0, min(1.0, (-(av if isinstance(av, (int, float)) else 0)) / 30.0))
+        space = round(min(1.0, 0.45 * dist + 0.35 * rel_lo + 0.20 * lowmid), 2)
+        crowd = round(min(1.0, ((crowd_real.get(s) or {}).get("avg_float") or 0) / maxc), 2)
+        scores[s] = {"crowd_score": crowd, "space_score": space}
+    def pick(pred, key):
+        arr = [s for s in subs if pred(scores[s])]
+        arr.sort(key=lambda s: key(s), reverse=True)
+        return arr
+    crowded   = pick(lambda sc: sc["crowd_score"] >= 0.55 and sc["space_score"] < 0.55, lambda s: scores[s]["crowd_score"])[:3]
+    holdT     = pick(lambda sc: sc["crowd_score"] >= 0.55 and sc["space_score"] >= 0.55, lambda s: scores[s]["space_score"])[:3]
+    room_cand = pick(lambda sc: sc["crowd_score"] < 0.55 and sc["space_score"] >= 0.55, lambda s: scores[s]["space_score"])[:3]
     crowded_represent = []
     try:
         cf = json.load(open(os.path.join(DATA, "rotation_crowding.json"), encoding="utf-8"))
@@ -108,8 +119,8 @@ def proxies(pos=None):
         pass
     return {"mainline_sucking": sucking, "rotation_healthy": healthy,
             "top1_sub": top_s, "top1_share": round(top1_share, 2), "inflow_subs": in_subs,
-            "crowded_top": crowded, "room_bottom": room_cand, "detail": out_detail,
-            "crowding_real": bool(crowd_real), "crowded_represent": crowded_represent}
+            "crowded_top": crowded, "holdT_top": holdT, "room_bottom": room_cand, "detail": out_detail,
+            "sub_scoring": scores, "crowding_real": bool(crowd_real), "crowded_represent": crowded_represent}
 
 def main():
     out = proxies()
