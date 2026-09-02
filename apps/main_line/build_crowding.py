@@ -14,15 +14,7 @@ except Exception as e:
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 DATA = os.environ.get("DATA_DIR", "data")
 
-SUB = {
-    "国算/算力": ["算力概念", "数据中心", "云计算", "算力租赁"],
-    "液冷": ["液冷概念", "液冷服务器"],
-    "存储": ["存储芯片"],
-    "材料": ["半导体材料", "光刻胶", "光刻机(胶)", "碳基材料"],
-    "芯片/半导体": ["国产芯片", "半导体概念", "AI芯片", "数字芯片设计", "模拟芯片设计", "第三代半导体", "第四代半导体"],
-    "光通信": ["光通信模块", "CPO概念", "光纤概念"],
-    "铜缆/电源": ["铜缆高速连接"],
-}
+from rotation_universe import SUB_UNIVERSE as SUB  # 与宇宙打分共用同一组定义(含 L1 科技/AI总集与 AI应用)
 
 def main():
     conn = psycopg2.connect(DB)

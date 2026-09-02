@@ -15,14 +15,20 @@ HIST = os.path.join(DATA, "concept_hist.json")
 
 # 主线内细分宇宙（东财概念名关键词；"材料"=新材料/碳基近似, 半导体材料概念缺失待个股级）
 SUB_UNIVERSE = {
+    "科技/AI(总集)": ["人工智能", "AI应用", "AIGC", "AI智能体", "多模态AI", "智谱AI", "AIPC", "AI手机", "AI眼镜",
+                    "AI语料", "AI芯片", "算力概念", "数据中心", "云计算", "大数据", "国资云", "液冷概念", "液冷服务器",
+                    "存储芯片", "半导体概念", "国产芯片", "第三代半导体", "第四代半导体", "数字芯片设计", "模拟芯片设计",
+                    "半导体材料", "光刻", "光通信模块", "CPO概念", "光纤概念", "铜缆高速连接", "信创", "数据要素", "软件开发", "数字经济"],
+    "AI应用": ["AI应用", "AIGC", "AI智能体", "多模态AI", "AI语料", "智谱AI", "AIPC", "AI手机", "AI眼镜"],
     "国算/算力": ["算力概念", "数据中心", "云计算", "大数据", "国资云概念"],
-    "液冷": ["液冷概念"],
+    "液冷": ["液冷概念", "液冷服务器"],
     "存储": ["存储芯片"],
-    "材料": ["新材料", "碳基材料", "PEEK材料概念"],
-    "芯片/半导体": ["半导体概念", "国产芯片", "AI芯片", "第三代半导体", "第四代半导体"],
+    "材料": ["半导体材料", "光刻胶", "光刻机(胶)", "新材料", "碳基材料", "PEEK材料概念"],
+    "芯片/半导体": ["半导体概念", "国产芯片", "AI芯片", "第三代半导体", "第四代半导体", "数字芯片设计", "模拟芯片设计"],
     "光通信": ["光通信模块", "CPO概念", "光纤概念"],
     "铜缆/电源": ["铜缆高速连接"],
 }
+META_GROUPS = {"科技/AI(总集)"}
 
 def load_json(p):
     try: return json.load(open(p, encoding="utf-8"))
@@ -102,7 +108,7 @@ def proxies(pos=None):
         crowd = round(min(1.0, ((crowd_real.get(s) or {}).get("avg_float") or 0) / maxc), 2)
         scores[s] = {"crowd_score": crowd, "space_score": space}
     def pick(pred, key):
-        arr = [s for s in subs if pred(scores[s])]
+        arr = [s for s in subs if s not in META_GROUPS and pred(scores[s])]
         arr.sort(key=lambda s: key(s), reverse=True)
         return arr
     crowded   = pick(lambda sc: sc["crowd_score"] >= 0.55 and sc["space_score"] < 0.55, lambda s: scores[s]["crowd_score"])[:3]
