@@ -521,3 +521,10 @@
 - market_scan.py / morning_diagnosis.py 狼大视角新增宏观/机构段（CN/US30Y+DXY+两融+GJD+开关flags）。
 - 实测 SZ300054: probe_only/mult0.5，p2_gate_log 已落盘。
 
+
+## [1.16.0] 2026-09-03 · P2 Gate 每日观察报告任务
+
+- jobs/p2_gate_daily_report.py：聚合当日/近N日 p2_gate_log.jsonl（硬/软、wave/systemic/margin_burst/lhb/gjd/yield/other、top标的、样本reasons）→ data/p2_gate_daily_report.json + stdout。
+- config/tasks.yaml 新增 p2_gate_daily_report（工作日15:20，tasks 27→28）；已同步服务器并重启worker。
+- 实测2026-09-03: hits=1 soft=1 gjd_withdraw, top=300054。
+

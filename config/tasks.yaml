@@ -539,3 +539,24 @@ tasks:
   script:
     args: []
     path: apps/main_line/build_macro_state.py
+- depends_on: []
+  description: 收盘后(15:20) P2 Gate命中日志当日聚合 → p2_gate_daily_report.json(便于2周观察校准)
+  enabled: true
+  id: p2_gate_daily_report
+  name: P2 Gate每日观察报告
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/p2_gate_daily_report_{date}.log
+  schedule:
+    expr: 20 15 * * mon-fri
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: jobs/p2_gate_daily_report.py
