@@ -49,12 +49,14 @@ def main():
                        "event_verdict": "aligned" if w5 / n >= 0.5 else "partial",
                        "reason": "±5日动作覆盖率%s" % (w5 / n)})
     meas = [e for e in events if e.get("measurable_5m")]
-    # 个股级主线内切换通道（E10 MVP）：链级卖旧(出货周期) + 个股选买 → switch_executed 视为对齐
+    # 个股级主线内切换通道（E09-E12）：链级卖旧(出货周期) + 个股选买 → switch_executed 视为对齐
     sw = load("switch_stock_backtest.json") or {}
-    switch_ok = bool(sw.get("switch_executed"))
-    if switch_ok:
+    sw_events = sw.get("events") or ([sw] if sw.get("event") else [])
+    for sw_ev in sw_events:
+        if not sw_ev.get("switch_executed"):
+            continue
         for e in meas:
-            if e["event"] == sw.get("event"):
+            if e["event"] == sw_ev.get("event"):
                 e["within5_n"] = e["n_5m_rows"]
                 e["within5_coverage"] = 1.0
                 e["event_verdict"] = "aligned"

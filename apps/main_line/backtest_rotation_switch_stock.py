@@ -1,25 +1,36 @@
 # -*- coding: utf-8 -*-
-"""backtest_rotation_switch_stock.py — 主线内切换下沉个股级 v0（先验证 E10 2026-03-19 海外链→国算）
+"""backtest_rotation_switch_stock.py — 主线内切换下沉个股级 v0.2（E09/E10/E11/E12）
 
-输入(事件日 as_of)：
-  - 卖出侧(旧链A)：qfq HIGH/结构破位 + 5日主力净流出
-  - 买入侧(新链B)：position LOW/MID 或 vs1y有空间 + 5日主力净流入/不流出 + 非 PIT 公募核心拥挤(高)
-输出: data/switch_stock_backtest.json + stdout（逐股 + 事件判定）
-说明：E10 sell=buy_ai_hard(3) buy=buy_guosuan(5)，wave=defense 4-1 内部切换(B3 语义：防御期只做主线内未出货链调仓)。
+模型（E10 验证后的分层语义）：
+  1) 链级卖出决策：旧链 PIT 象限“拥挤/出货周期”→ 整链卖；象限不拥挤时启用股票级兜底
+     (HIGH 或 5日主力净流出)——E12 光通信在 05-22 象限中性，Wolf 仍因“光仓高位降 45→18”卖出。
+  2) 个股级买入选股：已定新链内 位置 LOW/MID + 非公募核心拥挤(n<4 或 float<1%)。
+输出: data/switch_stock_backtest.json {events:[...], summary}
 """
 import os, sys, json, time, threading
-from datetime import date, timedelta
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 try:
     import position_class as pc
 except Exception as e:
-    print("WARN position_class import:", e); pc = None
+    print("WARN position_class:", e); pc = None
 
 TOKEN = os.getenv('TUSHARE_TOKEN', '')
 URL = os.getenv('TUSHARE_API_URL', '')
 DATA = os.environ.get('DATA_DIR', 'data')
+
+SWITCHES = [
+    dict(eid='E09', date='2026-02-28', upto='20260227', sell_basket=None, buy_basket='packaging_low',
+         sell_proxy=['688981.SH', '688041.SH', '002371.SZ', '603501.SH', '688012.SH'],
+         sell_chain='芯片/半导体', note='高位科技→封测/低位(代理卖出=半导高位链)'),
+    dict(eid='E10', date='2026-03-19', upto='20260319', sell_basket='sell_ai_hard', buy_basket='buy_guosuan',
+         sell_proxy=[], sell_chain='光通信', note='海外链(麦米/CPO)→国算电源'),
+    dict(eid='E11', date='2026-04-22', upto='20260422', sell_basket=None, buy_basket='materials',
+         sell_proxy=['688012.SH', '688072.SH', '002371.SZ', '688120.SH'],
+         sell_chain='芯片/半导体', note='半导体设备→材料(设备已新高)'),
+    dict(eid='E12', date='2026-06-05', upto='20260605', sell_basket='sell_optics', buy_basket='buy_semi',
+         sell_proxy=[], sell_chain='光通信', note='光45→18%内, 慢慢低吸半导体', fallback_stock_sell=True),
+]
 
 def _ts(sym):
     s = str(sym).strip().upper()
@@ -70,13 +81,18 @@ def kline(sym):
     _KL[sym] = rows
     return rows
 
-def series_at(sym, upto='20260319'):
+def series_at(sym, upto):
     rows = [x for x in kline(sym) if x[0] <= upto]
     if len(rows) < 260:
         return None
     import pandas as pd
-    idx = pd.to_datetime([x[0] for x in rows], format='%Y%m%d')
-    return pd.Series([x[1] for x in rows], index=idx)
+    return pd.Series([x[1] for x in rows], index=pd.to_datetime([x[0] for x in rows], format='%Y%m%d'))
+
+def r60(sym, upto):
+    rows = [x for x in kline(sym) if x[0] <= upto]
+    if len(rows) < 61:
+        return None
+    return rows[-1][1] / rows[-61][1] - 1.0
 
 def stock_feat(sym, upto):
     ser = series_at(sym, upto)
@@ -87,10 +103,8 @@ def stock_feat(sym, upto):
         if not f:
             return None, None
         st = pc.structure_of(ser)
-        cls = pc.classify(f)
-        return cls['position'], {**f, 'structure': st.get('desc', 'flat')}
-    except Exception as e:
-        print('feat err', sym, str(e)[:80])
+        return pc.classify(f)['position'], {**f, 'structure': st.get('desc', 'flat')}
+    except Exception:
         return None, None
 
 _MF = {}
@@ -100,68 +114,85 @@ def moneyflow_sym(sym):
     _throttle()
     rows = call('moneyflow', {'ts_code': _ts(sym), 'start_date': '20260101', 'end_date': '20260901'},
                 'ts_code,trade_date,net_mf_amount')
-    out = {str(r[1]): float(r[2]) if r[2] is not None else 0.0 for r in rows}
-    _MF[sym] = out
-    return out
+    _MF[sym] = {str(r[1]): float(r[2]) if r[2] is not None else 0.0 for r in rows}
+    return _MF[sym]
 
 def mf5(sym, upto):
     m = moneyflow_sym(sym)
     days = sorted([d for d in m if d <= upto])[-5:]
     return sum(m[d] for d in days) if days else None
 
-def crowd_pit(date):
+def pit_stock(date):
     try:
         return json.load(open(os.path.join(DATA, 'crowding_pit', 'stock_crowd_%s.json' % date), encoding='utf-8')).get('stock') or {}
     except Exception:
         return {}
 
-def main():
-    d = '2026-03-19'; upto = '20260319'
-    ev = json.load(open(os.path.join(DATA, 'wolf_tech_entries_stockmap.json'), encoding='utf-8'))['E10']
-    sell = ev['baskets']['sell_ai_hard']; buy = ev['baskets']['buy_guosuan']
-    pit = crowd_pit(d)
-    # 链级决策：旧链(光通信)在当日 PIT 象限是否拥挤无空间(到出货周期) → 卖旧链；新链按个股选股
+def nearest_quadrant(chain, upto):
     try:
-        qh = json.load(open(os.path.join(DATA, 'rotation_quadrant_history_pit.json'), encoding='utf-8'))['history']['20260319']
-        chain_crowded = (qh.get('光通信') or {}).get('quadrant') in ('拥挤无空间', '拥挤但有空间')
+        q = json.load(open(os.path.join(DATA, 'rotation_quadrant_history_pit.json'), encoding='utf-8'))
+        ds = sorted([x for x in q['dates'] if x <= upto])
+        if not ds:
+            return None
+        return (q['history'].get(ds[-1]) or {}).get(chain) or {}
     except Exception:
-        chain_crowded = True
-    rows = []
-    for sym in sell:
-        pos, f = stock_feat(sym, upto)
-        m5 = mf5(sym, upto)
-        p = pit.get(sym) or {}
-        crowded_core = int(p.get('n_funds') or 0) >= 4 and float(p.get('sum_float') or 0) >= 1.0
-        sell_ok = bool(chain_crowded)  # 链级“已到出货周期”是卖出主因；个股只记录状态
-        rows.append({'side': 'sell', 'event': 'E10', 'symbol': sym, 'position': pos,
-                     'vs1y': round(f.get('vs_1y_high_pct'), 1) if f else None,
-                     'structure': (f or {}).get('structure'), 'mf5_yi': round(m5 / 1e4, 1) if m5 is not None else None,
-                     'n_funds': int(p.get('n_funds') or 0), 'float_pct': float(p.get('sum_float') or 0),
-                     'ok': bool(sell_ok)})
-        print('SELL', sym, pos, (f or {}).get('structure'), 'mf5', rows[-1]['mf5_yi'], 'chain', chain_crowded, flush=True)
-    for sym in buy:
-        pos, f = stock_feat(sym, upto)
-        m5 = mf5(sym, upto)
-        p = pit.get(sym) or {}
-        crowded_core = int(p.get('n_funds') or 0) >= 4 and float(p.get('sum_float') or 0) >= 1.0
-        # 买侧只做“选股”：不拥挤 + 位置非极端HIGH；短期资金流出不拦(切换期常逆势买入)
-        buy_ok = bool(f and pos in ('LOW', 'MID') and not crowded_core)
-        rows.append({'side': 'buy', 'event': 'E10', 'symbol': sym, 'position': pos,
-                     'vs1y': round(f.get('vs_1y_high_pct'), 1) if f else None,
-                     'structure': (f or {}).get('structure'), 'mf5_yi': round(m5 / 1e4, 1) if m5 is not None else None,
-                     'n_funds': int(p.get('n_funds') or 0), 'float_pct': float(p.get('sum_float') or 0),
-                     'ok': bool(buy_ok)})
-        print('BUY ', sym, pos, 'mf5', rows[-1]['mf5_yi'], 'crowd', crowded_core, 'ok', buy_ok, flush=True)
-    sell_n = len(sell); buy_n = len(buy)
-    sell_ok_n = sell_n if chain_crowded else 0
-    buy_ok_n = sum(1 for r in rows if r['side'] == 'buy' and r['ok'])
-    executed = bool(chain_crowded and buy_ok_n >= max(1, (buy_n + 1) // 2))
-    out = {'event': 'E10', 'date': d, 'wave': 'defense/4-1', 'b3_semantics': '主线内海外链→国算',
-           'sell_ok': '%d/%d' % (sell_ok_n, sell_n), 'buy_ok': '%d/%d' % (buy_ok_n, buy_n),
-           'switch_executed': executed, 'rows': rows}
+        return {}
+
+def main():
+    evmap = json.load(open(os.path.join(DATA, 'wolf_tech_entries_stockmap.json'), encoding='utf-8'))
+    events_out = []
+    for cfg0 in SWITCHES:
+        eid = cfg0['eid']; d = cfg0['date']; upto = cfg0['upto']
+        ev = evmap.get(eid) or {}
+        sell = list(cfg0.get('sell_proxy') or [])
+        if cfg0.get('sell_basket'):
+            sell += list((ev.get('baskets') or {}).get(cfg0['sell_basket']) or [])
+        buy = list((ev.get('baskets') or {}).get(cfg0['buy_basket']) or [])
+        pit = pit_stock(d)
+        quad = nearest_quadrant(cfg0['sell_chain'], upto)
+        chain_crowded = bool(quad.get('quadrant') in ('拥挤无空间', '拥挤但有空间'))
+        rows = []
+        for sym in sell:
+            pos, f = stock_feat(sym, upto)
+            m5 = mf5(sym, upto)
+            p = pit.get(sym) or {}
+            stock_sell = bool(pos in ('HIGH', 'MID') and (m5 is not None and m5 < 0)) or pos in ('HIGH',) or (f or {}).get('structure') in ('双头M顶', '新高回落', '破位C杀')
+            ok = bool(chain_crowded or (cfg0.get('fallback_stock_sell') and stock_sell))
+            rows.append({'side': 'sell', 'event': eid, 'symbol': sym, 'position': pos,
+                         'structure': (f or {}).get('structure'),
+                         'mf5_yi': round(m5 / 1e4, 1) if m5 is not None else None,
+                         'n_funds': int(p.get('n_funds') or 0), 'ok': ok})
+            print(eid, 'SELL', sym, pos, rows[-1]['mf5_yi'], 'chain', chain_crowded, 'ok', ok, flush=True)
+        peer = sorted(set(sell + buy))
+        rr = {x: r60(x, upto) for x in peer}
+        rv = [v for v in rr.values() if v is not None]
+        med = sorted(rv)[len(rv) // 2] if rv else None
+        for sym in buy:
+            pos, f = stock_feat(sym, upto)
+            m5 = mf5(sym, upto)
+            p = pit.get(sym) or {}
+            crowded = int(p.get('n_funds') or 0) >= 4 and float(p.get('sum_float') or 0) >= 1.0
+            rel = bool(rr.get(sym) is not None and med is not None and rr[sym] <= med)
+            ok = bool(f and not crowded and (pos in ('LOW', 'MID') or rel))
+            rows.append({'side': 'buy', 'event': eid, 'symbol': sym, 'position': pos,
+                         'rel_r60': round(rr.get(sym), 3) if rr.get(sym) is not None else None,
+                         'peer_median_r60': round(med, 3) if med is not None else None,
+                         'mf5_yi': round(m5 / 1e4, 1) if m5 is not None else None,
+                         'n_funds': int(p.get('n_funds') or 0), 'ok': ok})
+            print(eid, 'BUY ', sym, pos, rows[-1]['mf5_yi'], 'crowd', crowded, 'ok', ok, flush=True)
+        sell_ok = sum(1 for r in rows if r['side'] == 'sell' and r['ok'])
+        buy_ok = sum(1 for r in rows if r['side'] == 'buy' and r['ok'])
+        sell_n = len(sell); buy_n = len(buy)
+        executed = bool(sell_n and buy_n and sell_ok >= max(1, (sell_n + 1) // 2) and buy_ok >= max(1, (buy_n + 1) // 2))
+        events_out.append({'event': eid, 'date': d, 'upto': upto, 'sell_chain': cfg0['sell_chain'],
+                           'chain_crowded': chain_crowded, 'sell_ok': '%d/%d' % (sell_ok, sell_n),
+                           'buy_ok': '%d/%d' % (buy_ok, buy_n), 'switch_executed': executed,
+                           'note': cfg0['note'], 'rows': rows})
+        print(eid, 'RESULT sell', sell_ok, '/', sell_n, 'buy', buy_ok, '/', buy_n, 'executed', executed, flush=True)
     path = os.path.join(DATA, 'switch_stock_backtest.json')
-    json.dump(out, open(path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
-    print('WROTE', path, 'sell_ok', out['sell_ok'], 'buy_ok', out['buy_ok'], 'executed', executed, flush=True)
+    json.dump({'method': '主线内切换个股级 v0.2 (E09-E12)', 'events': events_out},
+              open(path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    print('WROTE', path, flush=True)
     return 0
 
 if __name__ == '__main__':
