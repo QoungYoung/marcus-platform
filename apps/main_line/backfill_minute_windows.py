@@ -75,7 +75,9 @@ def pull(code, dates, one_min, outdir, logf):
     os.makedirs(outdir, exist_ok=True)
     path = os.path.join(outdir, code6 + '.json')
     data = _load(path)
-    todo = [td for td in dates if not _ok(data.get(td), one_min)]
+    skip_path = os.path.join(outdir, '.skip_' + code6 + '.json')
+    skipped = _load(skip_path)   # 空结果日(节假日/停牌)记入, 避免每次重拉
+    todo = [td for td in dates if td not in skipped and not _ok(data.get(td), one_min)]
     print('START', code, freq, 'pending', len(todo), flush=True)
     if not todo:
         print('SKIP(已覆盖)', code, flush=True)
@@ -89,8 +91,11 @@ def pull(code, dates, one_min, outdir, logf):
             continue
         if bars:  # 只存有K线的交易日, 避免污染 trading-day 序列
             data[td] = bars
-        json.dump(data, open(path, 'w', encoding='utf-8'), ensure_ascii=False)
-        print(code, td, freq, len(bars or []), 'total', len(data), flush=True)
+            json.dump(data, open(path, 'w', encoding='utf-8'), ensure_ascii=False)
+        else:     # 空结果(节假日/停牌)记 skip
+            skipped[td] = 1
+            json.dump(skipped, open(skip_path, 'w', encoding='utf-8'), ensure_ascii=False)
+        print(code, td, freq, len(bars or []), 'total', len(data), 'skip', len(skipped), flush=True)
         time.sleep(0.4)
     print('DONE', code, freq, 'days', len(data), flush=True)
 
