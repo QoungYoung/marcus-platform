@@ -165,6 +165,19 @@ class TMonitor:
                     "status": "active",
                 })
                 copy.setdefault("armed", 1)
+                # 2026-09-03：跨日结转时刷新个股换手基准（近5已完成交易日均值，
+                # 每日重算一次）——旧 wolf 条件无 benchmark 时兜底 0.5%，使系统
+                # vol_ratio 与行情量比系统性差一个量级（药明 4.49 vs 1.50）。
+                try:
+                    prof = copy.get("benchmark_turnover_profile") or {}
+                    ct_date = str(prof.get("computed_at") or "")[:10].replace("-", "")
+                    if not prof.get("same_minute_avg") or ct_date != today:
+                        from app.services.t_turnover_profile import compute_turnover_profile
+                        _np = compute_turnover_profile(sym)
+                        if _np:
+                            copy["benchmark_turnover_profile"] = _np
+                except Exception as e:
+                    print(f"[TMonitor] 换手基准刷新失败 {sym}: {e}")
                 cid = t_db.upsert_condition(copy)
                 if cid:
                     rolled += 1
@@ -1251,10 +1264,13 @@ def evaluate_default_at(cond: Dict[str, Any], quote: dict, regime_state: dict,
 
 
 def calc_volume_ratio_at(cond: Dict[str, Any], quote: dict, now: datetime) -> Optional[float]:
-    """盘中量比归一（纯函数）：当前累计换手×时段伸缩 / 近N日同刻均值。
+    """盘中换手节奏比（纯函数）：当前累计换手×时段伸缩 / 个股换手基准。
 
-    公式：量比 = [当前累计换手 × (240/已开盘连续分钟)] / 近N日同刻均值
-    基准从 benchmark_turnover_profile 读（JSON），缺省用 2% 兜底（P4 标定）。
+    公式：vol_ratio = [当前累计换手 × (240/已开盘连续分钟)] / 基准
+    基准从 benchmark_turnover_profile.same_minute_avg 读（近5已完成交易日
+    日换手均值, 见 t_turnover_profile），缺省用 MIN_TURNOVER_BASE(0.5%) 兜底。
+    注意：这是"按当前节奏外推全天换手 ÷ 个股全天基准"的倍数（≈行情量比），
+    不是累计换手率本身，也不是行情软件"每分钟均量/近5日同刻均量"的严格同刻口径。
     """
     turnover = float(quote.get("turnover_rate", 0) or 0)
     if turnover <= 0:

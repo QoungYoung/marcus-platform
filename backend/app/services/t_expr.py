@@ -49,7 +49,7 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     "quote.near_day_low": ("bool", "接近日内低点（现价≤日低×1.01）", "t_monitor 派生"),
     "quote.stabilised": ("bool", "分时企稳（不再创新低）", "t_monitor 派生"),
     # 盘中量比归一（TMonitor 计算）
-    "vol_ratio": ("number", "盘中量比(时段归一)", "t_monitor._calc_volume_ratio"),
+    "vol_ratio": ("number", "换手节奏比(累计换手×240/开盘分钟÷个股近5日换手基准; ≈行情量比, 非累计换手)", "t_monitor._calc_volume_ratio"),
     # 分钟线衍生（腾讯 m5/m1，低频采集）
     "minute.m1.low_today": ("number", "当日1分钟最低价", "fetch_minute_bars m1"),
     "minute.m1.last_close": ("number", "1分钟最新收盘", "fetch_minute_bars m1"),
