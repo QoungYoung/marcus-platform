@@ -527,7 +527,7 @@ class LongTermPoolMonitor:
         # ── Step 1: 入场过滤 ──
         try:
             async def _run_filters():
-                return await check_entry_filters(EntryCheckRequest(symbol=symbol))
+                return await check_entry_filters(EntryCheckRequest(symbol=symbol, intent="new_base"))
 
             loop = asyncio.new_event_loop()
             try:

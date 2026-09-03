@@ -100,6 +100,13 @@ class CalcPositionRequest(BaseModel):
     chain_role: str = "mid"            # 产业链角色: upstream(上游) / mid(中游) / downstream(下游)
     tier: str = "probe"                # 加仓层级: probe(试探) / confirm(确认) / sprint(冲刺)
     stance: str = "yellow"             # 市场立场: green / yellow / red
+    # ── P3 三仓档位（StepB dry-run）──
+    intent: str = "new_base"            # new_base/add_base/refill_base/t_refill
+    account_id: str = "stock"
+    symbol_held: Optional[bool] = None  # None=按 paper_positions 自动
+    t_universe: Optional[bool] = None   # None=按 active t_conditions 自动
+    rel_low: Optional[bool] = None
+    mainline_dir: Optional[bool] = None
 
 
 class CalcPositionStopLoss(BaseModel):
@@ -195,6 +202,13 @@ class EntryCheckRequest(BaseModel):
     symbol: str                                        # 股票代码
     sector_net_inflow: Optional[float] = None           # 所属板块主力资金净流入（元），用于 MA5<MA20 时的备用检查
     volume_ratio: Optional[float] = None                # 量比，已知可传入，否则从行情计算
+    # ── P3 三仓档位（StepB dry-run）──
+    intent: str = "new_base"                            # new_base(新开底仓)/add_base(已有底仓加厚)/refill_base(T资格回补)/t_refill(T仓低吸)
+    account_id: str = "stock"                           # stock/t
+    symbol_held: Optional[bool] = None                  # 是否已有该标的底仓；None=按 paper_positions 自动判定
+    t_universe: Optional[bool] = None                   # 是否属做T宇宙(活跃狼大T腿)；None=按 t_conditions 自动判定
+    rel_low: Optional[bool] = None                      # 相对主线低位(rotation 可埋伏)
+    mainline_dir: Optional[bool] = None                 # 是否主线方向
 
 
 class LayerResult(BaseModel):
@@ -266,6 +280,10 @@ class EntryCheckResponse(BaseModel):
     hard_block_reasons: list[str] = []  # 硬拦截原因列表
     # P2 Gate(P2完整接入 Step1): wave/systemic/macro 命中原因(软/硬都记录)
     p2_gate_details: list[str] = []
+    # P3 三仓档位(StepB dry-run; P3_TIER_MODE=1 后按 intent_allowed 硬拦/限仓)
+    three_tier_details: list[str] = []
+    three_tier_allowed: Optional[bool] = None
+    three_tier_cap_pct: Optional[float] = None
     # L2 极端超跌豁免（5日主力<0 但 L1 过 + 前5日跌幅≥15% → 降级仅试探仓，供长期池放行）
     l2_oversold_exempt: bool = False
     # 数据可用性（fail-closed）：关键输入缺失/不可用时列出，如 ["60分MA","日内分位","主力资金"]

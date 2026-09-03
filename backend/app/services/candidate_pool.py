@@ -281,7 +281,7 @@ class CandidatePool:
         async def _refresh_one(entry):
             try:
                 result = await check_entry_filters(
-                    EntryCheckRequest(symbol=entry["symbol"])
+                    EntryCheckRequest(symbol=entry["symbol"], intent="new_base")
                 )
                 return (entry, result)
             except Exception as exc:

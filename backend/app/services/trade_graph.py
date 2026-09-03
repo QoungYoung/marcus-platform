@@ -1177,6 +1177,32 @@ def _read_wave_context() -> str:
         return ""
 
 
+def _read_three_tier_context() -> str:
+    """P3 三仓档位摘要（StepB dry-run）：按当前浪型档位说明可做/禁做与现金底线，注入 Pi prompt。
+    与 check_entry_filters 的 three_tier_details 同源（config/p3_position_tiers.json）。"""
+    NL = chr(10)
+    try:
+        from app.services.position_tier import three_tier_gate, tier_mode_enabled
+        w = _wave_level_gate() or {}
+        op = w.get("operation") or "side"
+        def _cap(intent, has_base=False, tuni=False, main=True, rel=False):
+            d = three_tier_gate(wave_state={"operation": op, "sub_level": w.get("sub_level") or "", "level": w.get("level") or ""},
+                                intent=intent, has_base=has_base, t_universe=tuni,
+                                rel_low=rel, mainline_dir=main)
+            return ("✅≤%s%%" % d["cap_pct"]) if d["intent_allowed"] else "❌"
+        mode = "硬拦(P3_TIER_MODE=1)" if tier_mode_enabled() else "dry-run只记录(P3_TIER_MODE=0)"
+        sub = w.get("sub_level") or ""
+        return ("## 三仓档位（P3 v0, %s）" % mode + NL
+                + "- 当前浪型档位：%s%s" % (op, ("/%s" % sub) if sub else "") + NL
+                + "- 新开底仓(new_base)：%s" % _cap("new_base", has_base=False, tuni=False, main=True) + NL
+                + "- 已有底仓加厚(add_base)：%s" % _cap("add_base", has_base=True, tuni=True, main=True) + NL
+                + "- T资格回补(refill_base，无仓但在T宇宙)：%s" % _cap("refill_base", has_base=False, tuni=True, main=True) + NL
+                + "- T仓低吸(t_refill，已有底仓)：%s" % _cap("t_refill", has_base=True, tuni=True, main=True) + NL
+                + "- 档位现金底线按 check_entry_filters/calc_position 输出执行" + NL + NL)
+    except Exception:
+        return ""
+
+
 def _wave_norm(v):
     """归一化 level/sub_level 字段：小写、去空白、去下划线，保留连字符(4-4)。"""
     if v is None:
@@ -1285,6 +1311,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "confirm_context": _read_confirm_context(),
         "stock_confirm_context": _read_stock_confirm_context(),
         "wave_context": _read_wave_context(),
+        "three_tier_context": _read_three_tier_context(),
         "rotation_gate_context": _read_rotation_gate_context(),
         "macro_context": _read_macro_context(),
         "risk_context": _read_risk_context(),
@@ -1385,6 +1412,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
 
     prompt = (
         f"{state.get('wave_context', chr(39)+chr(39))}"
+        f"{state.get('three_tier_context', chr(39)+chr(39))}"
         f"{state.get('main_line_context', chr(39)+chr(39))}"
         f"{state.get('position_context', chr(39)+chr(39))}"
         f"{state.get('confirm_context', chr(39)+chr(39))}"

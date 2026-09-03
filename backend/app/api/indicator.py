@@ -1654,6 +1654,30 @@ def calc_position(req: CalcPositionRequest):
         warnings.append(f"🎨 {style_note}")
         logger.info(f"[calc_position] 风格调整({style_regime}): single_cap={single_cap_pct:.1f}%, total_cap={total_cap_pct:.1f}%")
 
+    # ── P3 三仓档位（StepB dry-run; P3_TIER_MODE=1 后按档位 cap/现金底线生效）──
+    _p3_blocked = False
+    _p3_mode_enabled_calc = False
+    _p3_cash_floor_pct = 25.0
+    _p3_cap_pct = None
+    try:
+        from app.services.position_tier import three_tier_gate as _t3c, tier_mode_enabled as _t3cm
+        _ctx3 = _resolve_p3_context(ts_code, req)
+        _dec3 = _t3c(ts_code=ts_code, intent=req.intent, has_base=_ctx3["has_base"],
+                     t_universe=_ctx3["t_universe"], rel_low=_ctx3["rel_low"], mainline_dir=_ctx3["mainline_dir"])
+        _p3_mode_enabled_calc = _t3cm()
+        if _p3_mode_enabled_calc:
+            if not _dec3.get("intent_allowed"):
+                _p3_blocked = True
+                warnings.append("🚫 P3三仓档位禁止当前动作: " + "; ".join(_dec3.get("reasons") or []))
+            else:
+                _p3_cash_floor_pct = float(_dec3.get("cash_floor_pct") or 25.0)
+                _p3_cap_pct = float(_dec3.get("cap_pct") or 0)
+                warnings.append("P3三仓档位: cap≤%s%% 现金底线%s%%" % (_p3_cap_pct, _p3_cash_floor_pct))
+        else:
+            warnings.append("[P3 dry-run] " + "; ".join((_dec3.get("reasons") or [])[:1]))
+    except Exception as _e3:
+        warnings.append("⚠️ P3三仓档位计算失败(跳过): " + str(_e3)[:100])
+
     # ── Layer 3: 计算数量 ──
     effective_single_cap_before = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset
     effective_single_cap = effective_single_cap_before
@@ -1698,8 +1722,16 @@ def calc_position(req: CalcPositionRequest):
         warnings.append(
             f"⚡ 最低股数放行：100股={min_lot_amount:.0f}元 > 单票上限，允许按100股买入"
         )
+    # P3 档位生效（P3_TIER_MODE=1）：禁止意图→0；允许意图→按档位 cap 叠加
+    if _p3_blocked:
+        effective_single_cap = 0.0
+    elif _p3_mode_enabled_calc and _p3_cap_pct and _p3_cap_pct > 0:
+        _tier_cap_asset = _p3_cap_pct / 100.0 * total_asset
+        if _tier_cap_asset < effective_single_cap:
+            effective_single_cap = _tier_cap_asset
+            warnings.append("P3三仓档位 cap→≤%s%%" % _p3_cap_pct)
     total_remaining = total_cap_pct / 100.0 * total_asset - position_value
-    cash_reserve_line = total_asset * 0.25
+    cash_reserve_line = total_asset * (_p3_cash_floor_pct / 100.0 if _p3_mode_enabled_calc else 0.25)
     cash_available_for_buy = available_cash - cash_reserve_line
     max_usable = min(effective_single_cap, max(total_remaining, 0), max(cash_available_for_buy, 0))
 
@@ -2232,6 +2264,54 @@ def _legacy_tech_gates() -> bool:
     默认 0 = 狼大对齐(软提示不硬拦); LEGACY_TECH_GATES=1 恢复旧硬门槛(仅回退用)。
     """
     return os.getenv("LEGACY_TECH_GATES", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _db_conn_p3():
+    import psycopg2 as _pg
+    return _pg.connect(os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+
+
+def _account_held_symbols(account_id: str = "stock") -> set:
+    """stock/t 账户当前持仓 symbol 集合（paper_positions，格式 SH600519/SZ000001）。"""
+    try:
+        conn = _db_conn_p3(); cur = conn.cursor()
+        cur.execute("SELECT DISTINCT symbol FROM paper_positions WHERE account_id=%s AND volume > 0", (account_id,))
+        out = {str(r[0]) for r in cur.fetchall()}
+        cur.close(); conn.close()
+        return out
+    except Exception:
+        return set()
+
+
+def _active_t_leg_symbols(account_id: str = "stock") -> set:
+    """做T宇宙 = 该账户当前 status='active' 的 t_conditions 标的（含狼大持续腿 249/250/252/253/254）。"""
+    try:
+        conn = _db_conn_p3(); cur = conn.cursor()
+        cur.execute("SELECT DISTINCT symbol FROM t_conditions WHERE account_id=%s AND status='active'", (account_id,))
+        out = {str(r[0]) for r in cur.fetchall()}
+        cur.close(); conn.close()
+        return out
+    except Exception:
+        return set()
+
+
+def _resolve_p3_context(ts_code: str, req) -> dict:
+    """P3 三仓档位输入：请求显式值优先，否则按 DB（持仓/T腿）自动判定。"""
+    try:
+        held = None if req.symbol_held is None else bool(req.symbol_held)
+        tuni = None if req.t_universe is None else bool(req.t_universe)
+        main = None if req.mainline_dir is None else bool(req.mainline_dir)
+        rel = None if req.rel_low is None else bool(req.rel_low)
+    except Exception:
+        held = tuni = main = rel = None
+    acc = getattr(req, "account_id", "stock") or "stock"
+    xq = _make_xueqiu_symbol(ts_code)
+    if held is None:
+        held = xq in _account_held_symbols(acc)
+    if tuni is None:
+        tuni = xq in _active_t_leg_symbols(acc)
+    return {"has_base": bool(held), "t_universe": bool(tuni),
+            "mainline_dir": bool(main), "rel_low": bool(rel)}
 
 
 @router.post("/check-entry-filters", response_model=EntryCheckResponse)
@@ -2818,6 +2898,34 @@ async def check_entry_filters(req: EntryCheckRequest):
     except Exception as _pe:
         p2_gate_details.append("⚠️ P2 Gate 计算失败(放行): " + str(_pe)[:80])
 
+    # ── P3 三仓档位(StepB dry-run 2026-09-03): intent 级闸门/限仓（P3_TIER_MODE=0 只记录不拦截）──
+    three_tier_details = []
+    three_tier_allowed = None
+    three_tier_cap_pct = None
+    _p3_mode_enabled = False
+    try:
+        from app.services.position_tier import three_tier_gate as _t3, tier_mode_enabled as _t3mode, summarize as _t3sum
+        _ctx = _resolve_p3_context(ts_code, req)
+        _dec = _t3(ts_code=ts_code, intent=req.intent, has_base=_ctx["has_base"],
+                   t_universe=_ctx["t_universe"], rel_low=_ctx["rel_low"], mainline_dir=_ctx["mainline_dir"])
+        three_tier_allowed = bool(_dec.get("intent_allowed"))
+        three_tier_cap_pct = float(_dec.get("cap_pct") or 0)
+        _p3_mode_enabled = _t3mode()
+        three_tier_details.append(_t3sum(_dec))
+        if _p3_mode_enabled:
+            if not three_tier_allowed:
+                hard_block = True
+                downgrade_multiplier = 0.0
+                _r = _dec.get("reasons") or []
+                hard_block_reasons.extend(["P3三仓档位: " + s for s in _r])
+                three_tier_details.append("P3_TIER_MODE=1 → 硬拦(禁止该 intent)")
+            else:
+                three_tier_details.append("P3_TIER_MODE=1 → 放行(档位 cap=" + str(three_tier_cap_pct) + "%)")
+        else:
+            three_tier_details.append("P3_TIER_MODE=0 dry-run → 只记录不拦截")
+    except Exception as _pe:
+        three_tier_details.append("⚠️ P3 三仓档位计算失败(跳过): " + str(_pe)[:100])
+
     # ══════════════════════════════════════
     # Stage 4: 综合判定
     # ══════════════════════════════════════
@@ -2839,6 +2947,12 @@ async def check_entry_filters(req: EntryCheckRequest):
         final_decision = "✅可建仓"
         final_grade = "pass"
         max_position_pct = 10.0  # 默认首仓上限
+
+    # P3 三仓档位 enabled 且 intent 放行时：档位 cap 叠加（如 defense add ≤3%、side new ≤3%、t_refill ≤5%）
+    if _p3_mode_enabled and three_tier_allowed and three_tier_cap_pct and three_tier_cap_pct > 0:
+        if max_position_pct > three_tier_cap_pct:
+            max_position_pct = three_tier_cap_pct
+            final_decision += "（P3档位cap≤%s%%）" % str(three_tier_cap_pct)
 
     # ══════════════════════════════════════
     # Stage 5: 买入确认规则
@@ -2967,6 +3081,9 @@ async def check_entry_filters(req: EntryCheckRequest):
         data_unavailable=data_unavailable,
         buy_confirmation=buy_confirmation,
         all_layers_pass=all_layers_pass,
+        three_tier_details=three_tier_details,
+        three_tier_allowed=three_tier_allowed,
+        three_tier_cap_pct=three_tier_cap_pct,
         summary=summary,
     )
 
