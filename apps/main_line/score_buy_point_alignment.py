@@ -34,6 +34,21 @@ def main():
              "within5_of_triggered": round(len(within5) / max(len(trig), 1), 3),
              "within5_of_all_rows": round(len(within5) / max(len(bt), 1), 3),
              "offset_days": sorted({int(r["offset_days"]) for r in trig})}
+    # 1b) 趋势线回补触发（E05/E06/E08/E12/E13，24 代理股；站上MA20且MA20>MA60且前收在MA20下）
+    tr = load(os.path.join(DATA, "trend_refill_backtest.json")) or []
+    if tr:
+        import collections as _c
+        byev = _c.defaultdict(list)
+        for r in tr:
+            byev[r["event"]].append(r)
+        out["metrics"]["trend_refill_trigger"] = {
+            "rows": len(tr), "triggered": sum(1 for r in tr if r["trigger_date"]),
+            "same_day": sum(1 for r in tr if r["aligned_same_day"]),
+            "within3": sum(1 for r in tr if r["within3"]),
+            "within5": sum(1 for r in tr if r["within5"]),
+            "by_event_within5": {k: sum(1 for r in v if r["within5"]) for k, v in sorted(byev.items())},
+            "note": "日线代理：站上MA20(且MA20>MA60)回补触发；E12低吸型5/6对齐，E05/E13趋势内加仓型0——需另做缩量回踩/趋势内加仓触发"
+        }
     # 2) 动作通道 E01-E15（P3 v0 + probe 裁决后）
     p3 = load(os.path.join(DATA, "p3_tier_backtest.json")) or {}
     evs = p3.get("events") or []
