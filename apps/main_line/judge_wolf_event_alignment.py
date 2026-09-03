@@ -49,6 +49,17 @@ def main():
                        "event_verdict": "aligned" if w5 / n >= 0.5 else "partial",
                        "reason": "±5日动作覆盖率%s" % (w5 / n)})
     meas = [e for e in events if e.get("measurable_5m")]
+    # 敏感性：exit+无底仓时生产 P3 禁止任何买入（E06 若不放行则 3 只代理都不算对齐）
+    e06 = next((e for e in meas if e["event"] == "E06"), None)
+    sens = {}
+    if e06:
+        sens["E06_no_base_exit_blocked"] = {
+            "rows": e06["n_5m_rows"], "same_day_n": 0, "within5_n": 0,
+            "note": "当前生产 P3 exit+无底仓禁止 refill/t_refill → E06 代理动作(stepwise B 假设有底仓)全部不可执行，覆盖率 3/3→0/3；若放行则一致性+3/3但sys T+5约-2.6%（Wolf -4.65，同为负收益）"
+        }
+    # 数据覆盖缺口说明
+    sens["E02"] = {"note": "2025-09-10 无 5min/代理股票数据，probe≤3% 放行影响只能等 buy_point_log 实盘观察"}
+
     tot_rows = sum(e["n_5m_rows"] for e in meas)
     same_rows = sum(e["same_day_n"] for e in meas)
     w5_rows = sum(e["within5_n"] for e in meas)
@@ -66,6 +77,7 @@ def main():
             "events_aligned_binary": sum(1 for e in meas if e.get("event_verdict") == "aligned"),
             "avg_within5_coverage_events": round(sum(e["within5_coverage"] for e in meas) / len(meas), 3),
         },
+        "sensitivity": sens,
         "caveats": ["E01-E04/E07/E09-E11/E14/E15 无5min动作回放→不计一致率；代理股≠实盘；253 B语义+分步小仓假设",
                     "事件一致=代理股±5日动作覆盖率≥50%；同一天多次动作不重复加分"],
     }
