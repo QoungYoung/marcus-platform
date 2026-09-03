@@ -1,89 +1,90 @@
 # 狼大交易策略复制 — 任务总览（大周期 / 小周期 / 已完成）
 
-> 生成：2026-09-01，更新：2026-09-03(早, 上下文切换前)。目标：逆向复刻狼大(-阿狼-)完整 A 股交易策略。
-> 已完成：主线判定、浪型v6、高低位v2、确定性门槛、做T体系、**主线内轮动/细分宇宙(第一轮闭环)**、**P2 风控主体(risk_gate+真实拥挤+系统开关)**。
+> 生成：2026-09-01；更新：2026-09-03 晚（用户切换上下文前快照，HEAD commit a86fcee）
+> 目标：逆向复刻狼大(-阿狼-)完整 A 股交易策略。
+> 已完成：主线判定、浪型v6、高低位v2、确定性门槛、做T体系、主线内轮动/细分宇宙、P2 风控主体、**P2 宏观 v1/v2（观察校准中）**、**P2 Gate 统一接入交易（Step1/2）**。
 
 ## 1. 已完成部分
 
 ### 1.1 主线判定（main_line_judge）✅
-- 研报 report_rc → dsh agent 产业催化分 catalyst(0-1) → 候选(catalyst>=0.7) → 确认(候选+动量/资金转强) 两级。
-- 排名 z(catalyst)*1 + 0.3*z(momentum)。产物 data/main_line_state.json；调度每周一 8:00。
-- **历史重放(2026-09-01)**：改造 report_rc→research_report(有历史研报)+--date/--out/--window 参数；22个标注日期重放(30天窗口) **15/27=56%**(代理60%)——研报催化≠狼大主线判断，需三信号融合(w1研报catalyst+w2资金持续性+w3相对强度)。
+- fusion_mainline 生产权重 (catalyst=0, fund=0.3, rel=0.2, conc=0.5)；研报 catalyst 已被语料审计归零。
+- 22 标注日期重放 81%；OOS 5/7=71%（docs/mainline-oos-validation-report.md）；主线历史按日期取已回退（伤精度）。
 
 ### 1.2 浪型级别判定（wave_agent）✅ 冻结 v6
-- 两级 schema：level(d1..d5/down) + sub_level(3-x/4-x/失败5/ABC/B反/C杀/W底/双头M顶/衰竭) + operation(build/t_only/side/defense/exit)。
-- 特征：价格结构+量能(vol_ratio/z20/pct120)+两融+北向+GJD超额+GJD份额净申赎+历史锚点+主线。
-- gate：_wave_level_gate 按(level,sub_level)→operation→gate；defense/exit 硬拦不建仓。
-- **wave_context ③已落地(09-02, commit 7952611)**：喂 Pi 的 wave_context 已接 agent 两级输出(level/sub_level/operation/gate+操作指令)，与安全门同源；缺 wave_state.json 回退 rule-based。
-- 回测：方向 75% / 级别族 83%。配置固化 v6（wave_config.md + wave_version.json）。调度每周一 8:10。
+- 两级 schema（level/sub_level/operation）；gate：defense/exit 硬拦不建仓；wave_context 接 agent 输出，缺文件回退 rule-based。
+- 回测方向 75%/级别族 83%；调度周一 8:10。
 
-### 1.3 高低位分类（position_class）✅ 核心+共振
-- 东财概念(441+)：结构分级(高/中/低+趋势) + 位置/量能/资金流/题材 + 指数大级别锚 + 高位三档操作。
-- 共振(resonance)：低位+资金流+逻辑→低吸埋伏；高位+资金流出/量价顶→减仓/只做T；破MA60→防御清仓。
-- 系统性回测(2026-09-01)：LOW+资金流入 20日命中80%(n=20) 但需结构确认；HIGH/MID 20日区分弱(0.49/0.50)；量能硬接入有效(高位放量=顶确认, 地量=止跌)。
-- **一致性测试链路**：v1 50%→100%(G1结构+G2相对主线位置) 但过拟合；**v2 扩标注集(111条)+双人复核：主线60%/高低位75%→79%**（真实水平）。
+### 1.3 高低位分类（position_class）✅ 核心+共振（v2 79%）
+- 结构/相对主线/dip_buy 语义拆解；一致性链路 v1 18/18、v2 79%（真实水平）。
 
 ### 1.4 确定性门槛（confirm_chain）✅ P1
-- 确认链 S1缩量止跌→S2结构→S3放量突破→S4站稳 + F1-F4 假信号（硬抄底0.80 vs 确认组0.94/0.86, 指数确认60d hit 1.00）。
+- S1-S4 + F1-F4；指数确认 60d hit 1.00。
 
-### 1.5 做T体系（狼大做T信号 + 生产落地）✅ 2026-09-02
-- **分时T出(7-29原话)**：超跌反弹放量→第一次分时高点→停量→二次拉升无量不过前高→T出。5min回测(184天指数) 11触发 91% 不再创新高。生产：high_sell 条件(250)。
-- **正T买点(1-12『利用盘中大盘带下来的机会做正T』)**：指数5min当日盘中回撤 dd∈[2%,3%)→个股低吸。纯规则回测(5股×184天, brze数据)：T+1 +3.15% hit0.75 / T+2 +4.92% hit0.78，分半稳定(前+0.90%/后+4.23%)，dd≥3%失效(系统性风险)。生产：low_buy 条件(249, index.intraday_dd∈[2,3))。
-- **黄线跌破离场(8-04『黄线跌破直接走』)**：现价<分时均价线(VWAP=成交额/量)即离场，替代-3%固定止损。腾讯qt average 与 brze 权威VWAP 交叉验证差异0.014%。生产：custom sell 条件(252, quote.vwap_break)。
-- **T1缩转放 语义修正(2026-09-02 重大发现)**：个股5min验证**无预测力**(药明86%/火炬95%触发率, 前向收益≈0；指数91%命中午休伪信号已排除)。根因：缩转放是**转折点信号，方向由位置决定**(8-04高位=卖/T点、8-12低位=买/止跌)，载体是**指数/板块量能**(跟前一天比)，不是个股日内5min形态。→ t1_shrink_expand **暂缓不恢复**作自动买腿。
-- **止损监控改造**：STOP_LOSS_DYNAMIC_ONLY=1 只读动态离场距离监控（黄线VWAP距离+分时T出前高距离），不自动卖；旧8条止损距离体系已屏蔽；卖腿保留100底仓(狼大『底仓不卖』铁律)。
+### 1.5 做T体系（三档+黄线+底仓保护）✅ 2026-09-02
+- 正T语义修正（大盘带下来=个股被拖累盘中低点）；5min 指数急杀 253 / 个股触前低缩量 254；分时T出 250；黄线跌破离场 252；T1缩转放自动买腿暂缓（无预测力）。
+- 底仓保护：做T标的卖出保留 100 底仓（代码硬拦）；t_monitor 5 条持续腿（249/250/252/253/254）。
 
-### 1.6 交易执行层狼大化改造（2026-09-02 下午）
-- **做T底仓保护(代码硬拦)**：trades.py 卖出时做T标的(有active t_conditions)最多卖持仓-100、持仓≤100拒绝——Pi place_order 卖出路径不经 t_gateway 白名单，此保护堵住"Pi卖光做T底仓"风险；prompts 表 id=37 同步加"底仓不卖"条款。
-- **auto_trade 5任务已恢复 enabled**（09-02 下午，此前停用）——Pi 自主交易回来，受做T底仓保护约束。
-- **盘中扫描(jobs/market_scan.py) 接 🐺狼大视角**：报告顶部注入主线/浪型(level·sub_level·operation)/个股确认比例/高低位埋伏名单/做T提示；清理死代码 521 行(16.2%, commit 0480af2)。
-- **盘前诊断(jobs/morning_diagnosis.py V2.1🐺)**：加狼大视角块；删除旧框架"震荡市/趋势市投票+持仓1-3天"结论(与狼大浪型operation矛盾)。
-- **交易提示词(prompt_seeds.py→DB id=37 reseed)**：SOP前加【第零步：浪型策略(交易主基调)】每报告必输出；删月度表"盈亏比目标1:1.5"；calc_position 静态止损 8%→3%狼大逻辑止损(黄线由t_monitor 252执行)；prompt_seeds 是权威源(FORCE_RESEED_PROMPTS=true 覆盖DB，改DB不改源=重建丢)。
-- **trade_graph 震荡/趋势注入对齐月度门控**：regime文本改"日度指标非月度regime"，震荡日短期层只做T不新开(删旧"建仓60%/加仓40%"时段指令)；trend分支不变。
-- **部署基建**：docker-compose backend-common 加 ../jobs:/app/jobs bind mount（镜像COPY jobs会遮旧版, 重启还原——已根治）。
+### 1.6 买点对齐狼大（2026-09-03）
+- 误加逻辑审计：MA5>MA20 / 60分MA10>MA30 / KDJ/RSI/CCI/射击之星 / 午后禁开仓 均非 Wolf 语料 → 默认软约束（LEGACY_TECH_GATES=1 可回退）；拥挤核心硬拦保留为风控分歧。
+- A/B（E01-E15 技术门）：MA5<MA20 最伤对齐（Wolf MA20下方低吸 T+5 +4.31%）；254同日对齐 1/24、并入253 7/24≈29%；平均买点偏移约 6 交易日。
 
-## 2. 生产落地架构（2026-09-02 当前）
-- **股票任务账户 stock**：药明康德 SH603259 100股@158.742（2026-08-28建仓补录），现金 234,125.8。
-- **t_monitor**（30s轮询，只监控 stock 账户 + 只跑狼大T表达式）——**5 条持续腿**（非消费式，5分钟触发冷却防刷）：
-  249 正T低吸(指数整日回撤2-3%) / 250 分时T出(t_sell) / 252 黄线离场(vwap_break) / 253 大盘5min分时急杀≥0.4%(m5_dump) / 254 个股触前日低点+缩量(dip_prev_low & vol_ratio≤0.7)。买腿(249/253/254)带黄线在上护栏(quote.current>quote.average)；卖腿(250/252)一次清T仓(volume=sellable-100，底仓100不动)；T仓=持仓-100。
-- **网关白名单**：EXEC_ALLOWED_ACCOUNTS=stock（t 账户下单拒绝；T_EXEC_ALLOWED_ACCOUNTS 可临时放开）。trades.py 做T标的卖出保留100底仓(代码硬拦，防 Pi 卖光底仓)。
-- **auto_trade 已恢复**：5 个定时任务 enabled(09-02 下午)；Pi 交易受做T底仓保护+prompt浪型主基调约束。
-- **已屏蔽**：vrebounce/vreb_etf/mom_etf/t_build 服务、止损/加仓/建仓/长期池监控（止损只读动态、加仓/建仓监控停用后 Pi 按 6.0 清单主动评估）、旧 t 账户条件12条。
-- **数据通道**：brze 代理(tu.brze.top) stk_mins 个股+指数 5min/1min 历史全通（官方 token 无分钟权限、datahubco 限频1次/小时、promax 仅15/30min）；腾讯 qt 实时(含 VWAP 均价)；腾讯/新浪 m5。个股5min已拉：603259/603678/000725/002384/688072 各197天。
+### 1.7 P2 主线内轮动/产业链形态 ✅ 第一轮闭环 + 拥挤个股级 PIT v2
+- rotation_gate v2 + trade_graph 轮动门控 + LOW 候选过滤。
+- 拥挤过滤下沉：build_fund_pit（历史 fund_share T-1 top60 + ann_date + top10 清洗）→ crowding_blacklist 从整概念 1045 只 → 公募核心拥挤 17 只（per-symbol reason + 空间豁免）；E06-E13 前向重测验证（E10 国算/E11 材料/E12 低吸不再误拦）。
+- 材料大级别买点 / 双维历史回测 / 拥挤硬过滤 3 遗留项全部完成。
 
-## 3. 大周期任务清单（剩余）
-按优先级：
-- P1 主线三信号融合 ✅ 已实现81%(IS 22/27) + **样本外验证通过(2026-09-02)**：OOS 5/7=71%>代理60%，conc为稳定主力信号，v1权重(0,0.3,0.2,0.5)精度95%维持生产。剩余：科技子类粒度(AI硬vs半导体合并) + 机器人/互金主题覆盖。见 docs/mainline-oos-validation-report.md。
-- P1 做T扩样本 ✅ 已重构为三档(09-02)：语料核实"带下来"=个股被拖累盘中低点(非上证整日-2%，年10次太少)，新增 253 大盘分时急杀(0.4%/0.5%, 回测+0.82%/+1.98%) + 254 个股触前日低点+缩量(133天+0.78%)。剩余：盘中口径验证 + 更多个股/历史扩样本。
-- P2 主线剩余：科技子类粒度(AI硬vs半导体合并) + 机器人/互金主题覆盖。
-- P2 选股链路调度 ✅ 已补 tasks.yaml 自动化(09-02)：根因=08-31 服务器曾含 main_line_judge 调度任务(执行日志 logs/main_line_judge/675cbcdb.json 为证)，09-02 本地20任务配置同步覆盖服务器丢失该条目；09-01/09-02 的 wave/position 状态刷新均为手动运行。已补 main_line_judge(周一8:00) + wave_judge(8:10) + position_judge(8:20，链式 position_class→low_logic_agent→stock_confirm_judge) 三个定时任务；本地+服务器 config 已同步，worker 重启后 23 任务加载验证通过。
-- P2 主线内轮动/产业链形态 ✅ 第一轮闭环(2026-09-02 晚收尾)：语料 docs/p2-rotation-wolf-logic.md(轮动两态/高低切语境/产业链传导/去弱留强/R7调仓) → 22+34例 case 表(p2-rotation-cases.md) → wave_agent 历史重放 23/23 全齐 + position 回放 → 一致率 OK20/na7/0错 → rotation_gate v2 code化(rotation_gate.py + 19场景自测 + 27case端到端回归双绿) → trade_graph 轮动门控 context(拥挤无空间/可埋伏/拥挤但有空间/高拥挤代表个股) → LOW 埋伏候选过滤。细分宇宙+拥挤度：真实公募 Q2 fund_portfolio_holdings(642行/274股) + stock_concept_map(11.2万成分) + position 双维打分(拥挤×位置空间, 存储=拥挤但有空间)；L1 科技/AI总集(META)+AI应用/AI终端+非科技5组(医药/电力/金融/军工/有色)共15组；词表冻结 v1(docs/p2-rotation-universe-config.md)；周日上午 stock_pool_refresh(8:00)→rotation_universe_classify(8:05, 首次自动全量/增量+清理旧概念)。遗留子项(2026-09-03 全部完成)：①材料"大级别买点再开"执行链路✅(apps/main_line/material_entry.py, R7业绩月+wave转build/筑底side+指数&材料confirm, 实盘wait不提前开)；②双维分类历史稳定性回测✅(backtest_rotation_quadrant.py, 13时点相邻转换率14.9%, 拥挤维度Q2近似待季度回填点内化)；③拥挤侧名单下单硬过滤✅(crowding_blacklist 23概念1045股进 check_entry_filters, 688012实测blocked)。
-- P2 风控 ✅ 主体完成(2026-09-03)：语料 docs/p2-risk-wolf-logic.md；risk_gate v1(R-R1黑名单/R-R2财报窗口/R-R3两融查杠杆/R-R4拥挤, 11场景) + risk_flags DB(forecast/express/ST 真实结构化, 全市场ST206+候选即时查模式) + check_entry_filters 硬拦(业绩雷000586 blocked E2E) + trade_graph 风控门控 prompt + **系统性风险联动开关**(systemic_risk.py+行情采集器, 银行512800双头+科创50不反→防御/大光破位大黑K→止盈, 工作日15:05监测) + Pi建仓SOP"先过滤后暴雷校验"reseed。剩余：公告类立案/重组/监管 source=ai（anns 403, 等 news/公告 AI）。
-- P2 宏观/机构行为：两融杠杆/30年国债/美债/汇率/北向/政策。
-- P3 持仓纪律：仓位管理/波段头尾做T/不追高不杀跌；**新增子项(2026-09-02)："三仓档位模型"(底仓/T仓/现金 × 浪型档位)**——build=建主线底仓、t_only=只回补已有底仓+做T、side=可埋伏 rel-low、defense=不建；解决"狼大6-7成仓位结构"与"没底仓没资格做T"的闭环缺口。
-- P3 复盘认知：日复盘/迭代完善策略。
-- P3 数据收尾：补历史新闻/研报/扩样本/README。
+### 1.8 P2 风控主体 ✅（2026-09-03）
+- risk_gate + risk_flags DB（forecast/express/ST）+ check_entry_filters 硬拦 + trade_graph 风控 prompt + systemic_risk（银行双头/科创50/大光 15:05）。
+- 剩余：公告类 source=ai（anns 403，等 news/公告 AI）。
 
-## 4. 当前状态（2026-09-03）
-- 主线✅ / 浪型v6✅(75%/83%) / 高低位✅(v2 79%) / 确定性门槛✅ / **做T体系✅** / **主线内轮动·细分宇宙✅(09-02 晚收尾, 遗留3项09-03全完)** / **P2 风控主体✅(09-03)**。
-- 生产(2026-09-03)：stock账户药明康德底仓100股，做T 5条持续腿（249/250/252/253/254），auto_trade 5任务已恢复，做T底仓保护+黄线护栏+非消费式腿；tasks=26：主线/浪型/position(周一) + stock_pool/宇宙分类(周日) + fund_crowding(季度25日) + systemic_risk(工作日15:05) + 做T监控。候选拦截链：wave gate → rotation gate(拥挤/可埋伏) → risk_flags(业绩/ST硬拦) → crowding_blacklist(拥挤无空间硬拦) → check_entry_filters → calc_position。
-- 待观察：正T三档触发质量（249 月1次 / 253 月2-5次 / 254 月20+次），250 分时T出实盘命中；2-4周观察窗口。
-- **关键结论(语料实证)**：①狼大"大盘带下来"做正T=**持仓个股被拖累的盘中低点**(每天级)，上证整日-2%只是极端档(年10次)——载体/频率/幅度三重认知修正，见 docs/zt-zhengT-semantics-report.md；②缩转放=转折点信号、方向由位置决定、载体=指数/板块量能(个股5min无预测力)；③分时放量过前高≠加仓点(狼大突破=放量+日线级站稳3天确认, 缩量突破/高位突破是诱多陷阱)——255方案已收回；④T出形态已排除放量突破(二次高点<前高×1.005)，卖飞=两吃不追回(狼大8-12/8-06)；⑤黄线在上才做T(6-30/7-31语料)。
+### 1.9 P2 宏观/机构行为 ✅ v1/v2（2026-09-03，观察校准中）
+- 语料分析：Wolf 用法 = 4 类开关（崩盘清单/流动性/两融热钱/杀杠杆 + GJD政策底/护盘 + 政策日历 + 龙虎榜外资）。
+- macro_state v1 采集器（工作日 15:06）：akshare bond_zh_us_rate（CN/US 2/5/10/30Y，1990 起）+ 新浪 DXY + tushare 两融/GJD宽基/北向。
+- macro_state v2：Wolf 四类开关推导（margin_burst/lhb_foreign_sell/gjd_withdraw/yield_spike 等）→ trade_graph 宏观上下文。
+- A/B：10/10（两融热钱/杀杠杆/GJD护盘/龙虎榜外资方向全部对上语料；M04 靠 margin_net_buy<=-100 修复；M10 靠 tushare top_list+top_inst 深股通专用净卖修复）。
 
-## 5. 关键文档/产物索引
-- docs/zt-dip-verification-report.md（正T买点验证通过，含5股扩展）
-- docs/t1-stock-verification-report.md（T1个股验证无预测力）
-- docs/t1-guard-reback-report.md（指数5min复测：午休伪信号）
-- docs/t-monitor-integration.md / t-trading-logic.md（做T接入与狼大逻辑）
-- docs/mainline-replay-report.md / wolf-consistency-v2-report.md / **mainline-oos-validation-report.md**（主线重放/一致性/**样本外验证**）
-- data/stock_5min_{603259,603678,000725,002384,688072}.json（个股5min, 197天）
-- apps/main_line/backtest_zt_dip_v2.py / backtest_t1_stock.py / backtest_t1_paramsweep.py（回测）
-- scripts/fetch_stock_5min_brze.py（brze 拉取, 断点续拉）
-- **docs/zt-zhengT-semantics-report.md（正T真实语义语料报告）**：'带下来'载体/频率/幅度 + A/B/C信号候选
-- **P2 轮动一整套**：docs/p2-rotation-wolf-logic.md / p2-rotation-cases.md / p2-rotation-validation-analysis.md / p2-rotation-validation-report.md / p2-rotation-universe-config.md；代码 apps/main_line/{rotation_gate,test_rotation_gate,regress_rotation_gate,rotation_universe,build_crowding,build_fund_holdings,classify_rotation_universe,material_entry,backtest_rotation_quadrant}.py
-- **P2 风控一整套**：docs/p2-risk-wolf-logic.md；代码 apps/main_line/{risk_gate,test_risk_gate,build_risk_flags,systemic_risk,test_systemic_risk,build_systemic_inputs}.py；DB risk_flags + fund_portfolio_holdings；backend check_entry_filters 硬拦(risk_flags+crowding_blacklist)
-- **拥挤过滤个股级 PIT v2(2026-09-03)**：docs/crowding-stocklevel-event-recheck.md；脚本 apps/main_line/{build_fund_pit,backtest_crowding_stock_level}.py；data/crowding_pit/stock_crowd_*.json；crowding_blacklist 改 per-symbol(1045→17只公募核心拥挤), backend reason 带 n_funds/sum_float, 拥挤但个股低位/回踩降级review；旧整概念过滤误拦经 E06-E13 前向验证
-- docs/mainline-oos-validation-report.md（主线样本外验证 OOS 5/7=71%）
-- apps/main_line/backtest_zt_signal_compare.py（正T A/B/C 信号对比回测）
-- apps/main_line/backtest_zt_dip_v2.py（原249口径回测）
-- 交易执行层改造：backend/app/services/{trade_graph,t_monitor,t_expr,t_db}.py + backend/app/api/{trades,indicator}.py + backend/app/db/prompt_seeds.py + jobs/{market_scan,morning_diagnosis}.py + docker/docker-compose.yml(jobs bind mount)
+### 1.10 P2 Gate 统一接入交易 ✅ Step1+Step2（2026-09-03）
+- backend/app/services/p2_entry_gate.py：wave defense/exit、systemic level>=2、macro margin_burst → 硬拦；lhb_foreign_sell 方向感知（config/p2_macro_direction_map.json）；gjd_withdraw/yield_spike → 软降。
+- 接入 check_entry_filters → auto 通道（candidate/long_term monitor）获得 wave/systemic/macro 硬拦（此前只有 Pi/trade_graph 有 wave 硬拦）。
+- p2_gate_log.jsonl + p2_gate_daily_report 任务（15:20，便于 2 周观察校准）。
+
+## 2. 生产架构（2026-09-03，tasks=28）
+
+- stock 账户：药明康德底仓 100 股；做T 5 条持续腿；auto_trade 5 任务 enabled。
+- 调度：周一 8:00 main_line / 8:10 wave / 8:20 position(链)；周日 8:00 stock_pool / 8:05 宇宙分类；季度 fund_crowding；工作日 15:05 systemic、15:06 macro_state、15:20 p2_gate_daily_report。
+- 候选拦截链（所有新开仓通道统一过 check_entry_filters）：
+  risk_flags(业绩/ST) → crowding_blacklist(个股级公募核心拥挤) → P2 Gate(wave/systemic/macro) → 技术/资金/形态（Wolf 对齐软约束）→ calc_position。
+- 回退开关：LEGACY_TECH_GATES=1（恢复旧技术硬门槛）；P2_GATE_MODE=0（P2 Gate dry-run）。
+- 数据文件：data/macro_state.json、data/p2_gate_log.jsonl、data/crowding_pit/*、data/wolf_tech_entries_stockmap.json。
+
+## 3. 任务清单（剩余）
+
+### P2（或 P1 挂起项）
+1. P2 宏观收尾（观察型）：DXY 历史源自建快照；崩盘清单缺失源（期指空单/30Y 放量/券商破位）；板块级外资/龙虎榜扩充（覆盖红利核心大票）；policy_floor 事件日历；2 周 p2_gate_log 观察后校准阈值。
+2. P2 主线剩余：科技子类粒度（AI硬 vs 半导体）+ 机器人/互金主题覆盖（依赖 P1 标注，用户曾暂缓）。
+3. P2 风控剩余：公告类立案/重组/监管 source=ai（anns 403，等 news）。
+4. rotation_quadrant_history 13 时点真 PIT 重跑（build_fund_pit 基建已具备，工作量小）。
+5. P2 Gate Step3：观察 2 周 → 校准 → 定稿 P2_GATE_MODE=1。
+
+### P3
+- 三仓档位模型（底仓/T仓/现金 × 浪型档位）——与"Wolf t_only/defense 加厚底仓"缺口直接相关。
+- 复盘认知、数据收尾（历史新闻/研报/README）。
+
+## 4. 当前状态（2026-09-03 晚）
+
+- 主线✅ / 浪型✅ / 高低位✅ / 确定性✅ / 做T✅ / 轮动+拥挤PIT✅ / 风控✅ / 宏观 v2✅（观察）/ P2 Gate 接入✅（Step1+2，观察）。
+- 观察窗口：做T 三档触发质量（2-4 周）；P2 Gate 命中日志（2 周）；macro 开关实盘一致性。
+- 关键结论（语料实证）：
+  ① Wolf 买点多数不是 254 式盘口触发，是逻辑/分步/底仓回补 → 同日对齐低，但触发一致时收益一致；
+  ② 系统与 Wolf 差距=结构性（浪型期加厚底仓、无底仓无T资格、ETF通道、日历/事件源），不是盘口精度；
+  ③ 技术硬门槛 MA5>MA20/KDJ/RSI/CCI/射击之星/午后禁开 是旧栈误加，已软约束；
+  ④ 拥挤过滤必须个股级 PIT，整概念会误拦 E10-E12 类轻仓低吸；
+  ⑤ 宏观/机构模块按"开关"使用，不是择时器。
+
+## 5. 关键文档/产物索引（新增部分加粗）
+
+- **P2 宏观**：docs/p2-macro-wolf-logic.md；apps/main_line/build_macro_state.py / backtest_macro_wolf.py；data/macro_state.json；data/macro_source_probe*.json
+- **P2 接入交易**：docs/p2-trading-integration-design.md；backend/app/services/p2_entry_gate.py；config/p2_macro_direction_map.json；jobs/p2_gate_daily_report.py；data/p2_gate_log.jsonl
+- **拥挤 PIT**：docs/crowding-stocklevel-event-recheck.md；apps/main_line/{build_fund_pit,backtest_crowding_stock_level}.py；data/crowding_pit/*
+- **买点对齐/审计**：docs/wolf-extra-logic-audit.md；docs/ab-wolf-gates-e01e15.md；docs/wolf-buy-context-gaps.md；docs/wolf-dip254-5m-replay.md；docs/wolf-dip254-base-backtest.md；docs/tech-entry-system-backtest-report.md
+- 既有索引：mainline-oos-validation / wolf-consistency-v2 / t-monitor-integration / p2-rotation-* / p2-risk-wolf-logic 等
