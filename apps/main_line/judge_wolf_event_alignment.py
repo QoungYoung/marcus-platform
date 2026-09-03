@@ -3,11 +3,12 @@
 
 目的：修复盘#1/#3——不再把“动作通道覆盖率(93.3%)”或“窗口内任意一次动作”当作一致率。
 规则：
-  1) 只有具备 5min 动作回放的事件（E05/E06/E08/E12/E13，每事件 3-6 只代理股）才进入一致率分子；
-  2) 每只代理股用 stepwise_253_backtest_B(253 B语义+254首次+后3日≤2次回补) 的 same/within5 判定；
+  1) 只有具备 5min 动作回放的事件才进入一致率分子（v2: E05/E06/E08/E12/E13 等 8 事件；
+     v3 追加 E01-E04: E01/E02=intent_open(开盘建仓/probe≤3%同日), E03/E04=stepwise B, 253大盘急杀时点缺上证5min时用510300代理）；
+  2) 每只代理股用 stepwise_253_backtest_B(+_extra) 的 same/within5 判定；
   3) 事件级 = 该事件代理股中“±5日有动作”的覆盖率(coverage)，不因多次动作重复计分；
-  4) E01-E04/E07/E09-E11/E14/E15 无 5min 动作回放 → 记为 no_5m_replay，只输出 P3 通道可达性(不进入一致率)。
-输出: data/wolf_event_alignment_v2.json + stdout
+  4) 无回放行的事件 → 记为 no_5m_replay，只输出 P3 通道可达性(不进入一致率)。
+输出: data/wolf_event_alignment_v2.json(默认) / v3(设 ALIGN_V3_EVENTS=E01,E02,E03,E04 读 stepwise_253_backtest_B_extra.json) + stdout
 """
 import json, os, collections
 
@@ -27,6 +28,13 @@ def main():
     for r in stepB:
         if not r.get("error"):
             rows_by[r["event"]].append(r)
+    extra_rows = load("stepwise_253_backtest_B_extra.json") or []
+    v3_events = {x.strip() for x in os.environ.get("ALIGN_V3_EVENTS", "").split(",") if x.strip()}
+    if v3_events:
+        for r in extra_rows:
+            if r.get("event") in v3_events and not r.get("error"):
+                rows_by[r["event"]].append(r)
+    VER = "v3" if v3_events else "v2"
     events = []
     for eid in ["E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09", "E10",
                 "E11", "E12", "E13", "E14", "E15"]:
@@ -69,14 +77,21 @@ def main():
             "rows": e06["n_5m_rows"], "same_day_n": 0, "within5_n": 0,
             "note": "当前生产 P3 exit+无底仓禁止 refill/t_refill → E06 代理动作(stepwise B 假设有底仓)全部不可执行，覆盖率 3/3→0/3；若放行则一致性+3/3但sys T+5约-2.6%（Wolf -4.65，同为负收益）"
         }
-    # 数据覆盖缺口说明
-    sens["E02"] = {"note": "2025-09-10 无 5min/代理股票数据，probe≤3% 放行影响只能等 buy_point_log 实盘观察"}
+    # 数据覆盖缺口说明（v2口径遗留注释）
+    sens["E02"] = {"note": "v2: 2025-09-10 无 5min 文件视为不可测；v3 已补分钟并按 intent_open(probe≤3%) 回放"}
 
     tot_rows = sum(e["n_5m_rows"] for e in meas)
     same_rows = sum(e["same_day_n"] for e in meas)
     w5_rows = sum(e["within5_n"] for e in meas)
+    caveats = ["代理股≠实盘；253 B语义+分步小仓假设",
+                "事件一致=代理股±5日动作覆盖率≥50%；同一天多次动作不重复加分"]
+    if VER == "v3":
+        caveats += ["v3: E01/E02 intent_open(开盘建仓/probe≤3%)为通道放行假设, 非盘口触发",
+                    "v3: E03/E04 253大盘急杀时点=510300宽基ETF代理(brze idx_mins key过期, 上证5min缺失)",
+                    "v3: E04 动作落在10-30(253代理), Wolf原文为10-29低点买ETF, 差1交易日",
+                    "E15(2026-08-12) 代理池回放w5=3/7=0.43→按用户决定不并入v3, 维持no_5m_replay"]
     out = {
-        "method": "wolf_event_alignment_v2 (唯一事件判定; 仅可5min回放事件计一致率)",
+        "method": "wolf_event_alignment_%s (唯一事件判定; 仅可5min回放事件计一致率)" % VER,
         "generated": "2026-09-03",
         "events": events,
         "summary": {
@@ -90,10 +105,9 @@ def main():
             "avg_within5_coverage_events": round(sum(e["within5_coverage"] for e in meas) / len(meas), 3),
         },
         "sensitivity": sens,
-        "caveats": ["E01-E04/E07/E09-E11/E14/E15 无5min动作回放→不计一致率；代理股≠实盘；253 B语义+分步小仓假设",
-                    "事件一致=代理股±5日动作覆盖率≥50%；同一天多次动作不重复加分"],
+        "caveats": caveats,
     }
-    path = os.path.join(DATA, "wolf_event_alignment_v2.json")
+    path = os.path.join(DATA, "wolf_event_alignment_%s.json" % VER)
     json.dump(out, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(json.dumps(out["summary"], ensure_ascii=False, indent=1))
     for e in meas:
