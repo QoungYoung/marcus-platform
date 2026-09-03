@@ -470,3 +470,12 @@
 - **Phase2（前向重测）**：apps/main_line/backtest_crowding_stock_level.py，40 目标股 qfq+position 特征 → old vs new 矩阵（docs/crowding-stocklevel-event-recheck.md）；推荐阈值 N_funds≥4 & sum_float≥1%；旭创/中微等真核心拥挤仍拦（风控分歧非误拦）。
 - **Phase4（线上集成）**：rotation_universe.build_crowding_blacklist v2 → 仅拦公募核心拥挤个股（members 1045 → blocked 17），输出 symbols_detail{symbol,n_funds,float_pct,reason}；backend check_entry_filters 读取 per-symbol reason（“拥挤无空间(个股级rotation): n_funds=.., sum_float=..%”），并加个股空间豁免（crowd core + LOW/MID回踩 → 降级 review/probe 而非硬拦）。
 
+
+## [1.11.0] 2026-09-03 · 买点对齐狼大：误加技术/时间门控改为软约束（可回退）
+
+- 审计结论(docs/wolf-extra-logic-audit.md)：Wolf 语料没有 MA5>MA20/60分MA10>MA30/KDJ/RSI/CCI/射击之星/午后禁开仓等旧技术栈逻辑，且与他尾盘买/E05-E08低吸冲突。
+- check_entry_filters 默认进入 Wolf 对齐模式：60分/日线 MA 结构、MACD死叉、RSR、KDJ高位死叉、Layer3超买形态(射击之星/看跌吞没/RSI/KDJ/CCI) 全部改为提示或≤0.5降级，不再硬拦；午后13:00后/尾盘不再禁新开仓。
+- 数据可用性 fail-closed(60分MA缺失/日内分位缺失/主力资金缺失=自动通道跳过+QQ)保持不变。
+- 拥挤核心硬拦(n_funds≥4&float≥1%+高位无空间)保留为风控分歧(非Wolf逻辑但属于风险护栏)；LEGACY_TECH_GATES=1 可一键恢复旧硬门槛(回退用)。
+- backend已重启healthy；smoke: 688012 grade=blocked 由拥挤风控触发，MA/时间/形态均显示Wolf口径软提示。
+

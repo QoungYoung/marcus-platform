@@ -2227,6 +2227,13 @@ def _crowd_space_reason(ts_code: str):
         return False, ""
 
 
+def _legacy_tech_gates() -> bool:
+    """旧技术栈门控开关(误加审计2026-09-03)：Wolf 语料没有 MA5>MA20/60分MA10>MA30/KDJ-RSI-CCI/射击之星/午后禁开仓。
+    默认 0 = 狼大对齐(软提示不硬拦); LEGACY_TECH_GATES=1 恢复旧硬门槛(仅回退用)。
+    """
+    return os.getenv("LEGACY_TECH_GATES", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 @router.post("/check-entry-filters", response_model=EntryCheckResponse)
 async def check_entry_filters(req: EntryCheckRequest):
     """
@@ -2408,10 +2415,11 @@ async def check_entry_filters(req: EntryCheckRequest):
     hard_block_reasons = []
     data_unavailable = []   # fail-closed：关键输入（60分MA/日内分位/主力资金）缺失时记录，自动通道跳过并QQ通知
 
-    # ── 时间门控：午后 13:00 后禁止新开仓 ──
-    # 仅允许对已有持仓加仓，新开仓隔夜风险不可控（历史胜率 0%）
+    # ── 时间门控（狼大对齐2026-09-03）：Wolf 常午后/尾盘买(语料尾盘411次) → 不再硬拦；LEGACY_TECH_GATES=1 恢复旧禁开仓 ──
     trading_period = _get_trading_period()
-    if trading_period["new_positions_blocked"] and trading_period["period"] not in ("morning_quiet", "pre_market"):
+    if not _legacy_tech_gates():
+        tech_details.append(f"⏱️ Wolf口径: {trading_period['label']} 允许新开仓(不因时间硬拦)")
+    elif trading_period["new_positions_blocked"] and trading_period["period"] not in ("morning_quiet", "pre_market"):
         hard_block = True
         hard_block_reasons.append(f'午后禁止新开仓: {trading_period["label"]}')
         downgrade_multiplier = 0.0
@@ -2435,17 +2443,19 @@ async def check_entry_filters(req: EntryCheckRequest):
 
         if ma60_10 > 0 and ma60_30 > 0:
             if ma60_10 < ma60_30:
-                tech_details.append(f"⚠️ 60分 MA10({ma60_10:.2f}) < MA30({ma60_30:.2f}) → 短线未走好，降级入候选池")
-                layer1_grade = "⚠️降级"
-                layer1_downgrade = "60分MA10<MA30 短线未走好"
-                layer1_action = "入候选池观察，等60分钟金叉"
-                downgrade_multiplier = min(downgrade_multiplier, 0.3)
+                tech_details.append(f"ℹ️ 60分 MA10({ma60_10:.2f}) < MA30({ma60_30:.2f}) → Wolf口径: 不硬拦，仅提示短线结构未走好")
+                if _legacy_tech_gates():
+                    layer1_grade = "⚠️降级"
+                    layer1_downgrade = "60分MA10<MA30 短线未走好"
+                    layer1_action = "入候选池观察，等60分钟金叉"
+                    downgrade_multiplier = min(downgrade_multiplier, 0.3)
             elif ma5 > 0 and ma20 > 0 and ma5 < ma20:
-                tech_details.append(f"⚠️ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) 通过，但日线 MA5({ma5:.2f}) < MA20({ma20:.2f}) → 60分钟先行，仅试探仓≤5%")
-                layer1_grade = "⚠️降级"
-                layer1_downgrade = "60分金叉但日线未跟上"
-                layer1_action = "仅试探仓≤5%"
-                downgrade_multiplier = min(downgrade_multiplier, 0.5)
+                tech_details.append(f"ℹ️ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) 但日线 MA5({ma5:.2f}) < MA20({ma20:.2f}) → Wolf口径: 不因日线未跟上硬降")
+                if _legacy_tech_gates():
+                    layer1_grade = "⚠️降级"
+                    layer1_downgrade = "60分金叉但日线未跟上"
+                    layer1_action = "仅试探仓≤5%"
+                    downgrade_multiplier = min(downgrade_multiplier, 0.5)
             else:
                 day_info = f"日线 MA5({ma5:.2f}) > MA20({ma20:.2f})" if (ma5 > 0 and ma20 > 0 and ma5 > ma20) else "日线数据可用"
                 tech_details.append(f"✅ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) + {day_info} → 双周期共振，正常仓位")
@@ -2462,34 +2472,35 @@ async def check_entry_filters(req: EntryCheckRequest):
             hard_block_reasons.append("60分MA数据不可用（分钟数据缺失=不建仓）")
 
     else:
-        # 趋势市：日线 MA5/MA20
+        # 趋势市：日线 MA5/MA20（Wolf对齐: 只提示不硬拦; LEGACY_TECH_GATES=1 恢复旧排除）
         if ma5 > 0 and ma20 > 0:
             if ma5 > ma20:
                 tech_details.append(f"✅ MA5({ma5:.2f}) > MA20({ma20:.2f}) — 通过")
             else:
-                tech_details.append(f"⚠️ MA5({ma5:.2f}) < MA20({ma20:.2f}) — 趋势待确认")
-                price_above_vwap = current_price > avg_price if avg_price and avg_price > 0 else None
-                sector_ok = req.sector_net_inflow is not None and req.sector_net_inflow > 0
-                if price_above_vwap and sector_ok:
-                    tech_details.append("  备用检查: 价格>分时均价✅ + 板块资金净流入✅ → 仅试探仓≤5%")
-                    layer1_grade = "⚠️降级"
-                    layer1_downgrade = "MA5<MA20 趋势待确认"
-                    layer1_action = "仅试探仓≤5%"
-                    downgrade_multiplier = min(downgrade_multiplier, 0.5)
-                elif price_above_vwap is False:
-                    tech_details.append("  备用检查: 价格跌破分时均价❌ → 从计划表移除")
-                    layer1_passed = False
-                    layer1_grade = "🚫排除"
-                    layer1_downgrade = "MA5<MA20 且价格跌破分时均价"
-                    layer1_action = "从计划表移除"
-                    downgrade_multiplier = 0.0
-                elif not sector_ok:
-                    tech_details.append("  备用检查: 板块资金净流入不可用或≤0 → 从计划表移除")
-                    layer1_passed = False
-                    layer1_grade = "🚫排除"
-                    layer1_downgrade = "MA5<MA20 且板块无资金支撑"
-                    layer1_action = "从计划表移除"
-                    downgrade_multiplier = 0.0
+                tech_details.append(f"ℹ️ MA5({ma5:.2f}) < MA20({ma20:.2f}) → Wolf口径: 不硬排(他常低吸未收复MA20的票)")
+                if _legacy_tech_gates():
+                    price_above_vwap = current_price > avg_price if avg_price and avg_price > 0 else None
+                    sector_ok = req.sector_net_inflow is not None and req.sector_net_inflow > 0
+                    if price_above_vwap and sector_ok:
+                        tech_details.append("  备用检查: 价格>分时均价✅ + 板块资金净流入✅ → 仅试探仓≤5%")
+                        layer1_grade = "⚠️降级"
+                        layer1_downgrade = "MA5<MA20 趋势待确认"
+                        layer1_action = "仅试探仓≤5%"
+                        downgrade_multiplier = min(downgrade_multiplier, 0.5)
+                    elif price_above_vwap is False:
+                        tech_details.append("  备用检查: 价格跌破分时均价❌ → 从计划表移除")
+                        layer1_passed = False
+                        layer1_grade = "🚫排除"
+                        layer1_downgrade = "MA5<MA20 且价格跌破分时均价"
+                        layer1_action = "从计划表移除"
+                        downgrade_multiplier = 0.0
+                    elif not sector_ok:
+                        tech_details.append("  备用检查: 板块资金净流入不可用或≤0 → 从计划表移除")
+                        layer1_passed = False
+                        layer1_grade = "🚫排除"
+                        layer1_downgrade = "MA5<MA20 且板块无资金支撑"
+                        layer1_action = "从计划表移除"
+                        downgrade_multiplier = 0.0
         else:
             tech_details.append(f"⚠️ MA5/MA20数据不可用，跳过MA检查")
 
@@ -2500,20 +2511,22 @@ async def check_entry_filters(req: EntryCheckRequest):
         if macd_dif_converging:
             tech_details.append(f"⚠️ MACD死叉但DIF连续2日收敛 → 可观察")
         else:
-            tech_details.append(f"⚠️ MACD死叉且DIF未收敛 → 趋势转弱")
-            layer1_grade = "⚠️降级"
-            layer1_downgrade = "MACD死叉+未收敛"
-            layer1_action = "降仓50%或放观察"
-            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+            tech_details.append(f"ℹ️ MACD死叉且DIF未收敛 → Wolf口径: 仅提示，不硬降")
+            if _legacy_tech_gates():
+                layer1_grade = "⚠️降级"
+                layer1_downgrade = "MACD死叉+未收敛"
+                layer1_action = "降仓50%或放观察"
+                downgrade_multiplier = min(downgrade_multiplier, 0.5)
 
     # 1c. RSR 检查
     if rsr is not None:
         if rsr < 0.8:
-            tech_details.append(f"⚠️ RSR({rsr:.2f}) < 0.8 → 弱势，降仓50%")
-            downgrade_multiplier = min(downgrade_multiplier, 0.5)
-            layer1_grade = "⚠️降级"
-            layer1_downgrade = "RSR<0.8弱势"
-            layer1_action = "降仓50%"
+            tech_details.append(f"ℹ️ RSR({rsr:.2f}) < 0.8 → Wolf口径: 仅提示弱势，不硬降")
+            if _legacy_tech_gates():
+                downgrade_multiplier = min(downgrade_multiplier, 0.5)
+                layer1_grade = "⚠️降级"
+                layer1_downgrade = "RSR<0.8弱势"
+                layer1_action = "降仓50%"
         else:
             tech_details.append(f"✅ RSR({rsr:.2f}) ≥ 0.8 — 通过")
 
@@ -2562,15 +2575,18 @@ async def check_entry_filters(req: EntryCheckRequest):
     kdj_cross_result, kdj_cross_mult = _eval_kdj_death_cross(prev_k, prev_d, kdj_k, kdj_d)
     tech_details.extend(kdj_cross_result.details)
     if not kdj_cross_result.passed:
-        layer1_passed = False
-        layer1_grade = "🚫排除"
-        layer1_downgrade = kdj_cross_result.downgrade_reason
-        layer1_action = kdj_cross_result.downgrade_action
-    downgrade_multiplier = min(downgrade_multiplier, kdj_cross_mult)
-    if kdj_cross_mult <= 0.5 and layer1_passed:
-        layer1_grade = "⚠️降级"
-        layer1_downgrade = kdj_cross_result.downgrade_reason
-        layer1_action = kdj_cross_result.downgrade_action
+        tech_details.append(f"ℹ️ KDJ高位死叉 → Wolf口径: 仅提示(KDJ不在他语料), 不硬排")
+        if _legacy_tech_gates():
+            layer1_passed = False
+            layer1_grade = "🚫排除"
+            layer1_downgrade = kdj_cross_result.downgrade_reason
+            layer1_action = kdj_cross_result.downgrade_action
+    if _legacy_tech_gates():
+        downgrade_multiplier = min(downgrade_multiplier, kdj_cross_mult)
+        if kdj_cross_mult <= 0.5 and layer1_passed:
+            layer1_grade = "⚠️降级"
+            layer1_downgrade = kdj_cross_result.downgrade_reason
+            layer1_action = kdj_cross_result.downgrade_action
 
     layer1 = LayerResult(
         passed=layer1_passed,
@@ -2721,10 +2737,20 @@ async def check_entry_filters(req: EntryCheckRequest):
         divergence_warning=divergence_result["warning"],
         divergence_detail=divergence_result["detail"],
     )
-    downgrade_multiplier = min(downgrade_multiplier, l3_multiplier)
-    if l3_hard_block:
-        hard_block = True
-    hard_block_reasons.extend(l3_hard_block_reasons)
+    if _legacy_tech_gates():
+        downgrade_multiplier = min(downgrade_multiplier, l3_multiplier)
+        if l3_hard_block:
+            hard_block = True
+        hard_block_reasons.extend(l3_hard_block_reasons)
+    else:
+        # Wolf对齐: RSI/KDJ/CCI/射击之星/看跌吞没等经典技术指标只降级不硬拦(语料无这些词)
+        if l3_hard_block:
+            downgrade_multiplier = min(downgrade_multiplier, 0.5)
+            tech_details.extend(["Wolf口径(软): " + s for s in l3_hard_block_reasons])
+            tech_details.append("ℹ️ Layer3超买形态指标 → 仅降级(试探仓/观察)，不硬拦(与Wolf语料对齐)")
+        else:
+            downgrade_multiplier = min(downgrade_multiplier, l3_multiplier)
+            hard_block_reasons.extend(l3_hard_block_reasons)
 
     # ── risk_flags 风控(选股后即时查产物): earnings_bad/ST/公告AI → block ──
     try:
