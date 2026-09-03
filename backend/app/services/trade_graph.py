@@ -927,6 +927,12 @@ def _read_rotation_gate_context() -> str:
             block += f"- 拥挤但有空间(做T积累/等回调，勿新建重仓)：{'、'.join(holdT[:4])}" + NL
         if crep:
             block += f"- 高拥挤代表个股(芯片/光通信,真实公募持仓)：{'、'.join(crep[:6])}" + NL
+        # 主线内相对强度排序/去弱留强/龙头识别 (2026-09-03 P2 补齐, 软指导)
+        strong = room or []; mid = holdT or []; weak = crowded or []
+        leader = (strong or mid or [ml_name])[0] if (strong or mid) else (ml_name or '?')
+        block += f"- 主线内相对强度(去弱留强)：留强={'、'.join(strong[:3]) or '无'} ｜ 中={'、'.join(mid[:3]) or '无'} ｜ 去弱={'、'.join(weak[:3]) or '无'}" + NL
+        block += f"- 主线龙头候选：{leader}" + NL
+        block += f"- 去弱留强指令：主线内优先保留『资金流入+低位有空间(room)』子方向，规避『高位拥挤无空间(crowded_top)』；去弱=减持/规避 crowded 方向，留强=低吸 room 方向。" + NL
         block += f"- 判定：{verdict} —— {guide}" + NL
         if reason:
             block += f"- 依据：{reason[:160]}" + NL

@@ -91,7 +91,7 @@ def board_half(portfolio, now, cfg=None, quotes=None):
         gain_pct = (cur / pre - 1) * 100 if pre else 0
         float_pct = (cur / cost - 1) * 100 if cost else 0
         # 判别板: 代码 30/68 开头 → 20% 板, 其余 10% 板
-        is20 = sym[:2] in ("30", "68") or sym.startswith("30") or sym.startswith("68")
+        is20 = any(sym.startswith(p) for p in ("30", "68", "SZ30", "SZ68", "SH68"))
         thr = t20 if is20 else t10
         if gain_pct >= thr and float_pct >= min_float:
             sells.append({"symbol": sym, "gain_pct": round(gain_pct, 2), "float_pct": round(float_pct, 2),

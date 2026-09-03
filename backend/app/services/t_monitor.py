@@ -111,6 +111,7 @@ class TMonitor:
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
                     # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
+                    self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
@@ -297,6 +298,37 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] defensive_t_reduce异常: {e}")
+
+    def _check_board_half(self) -> None:
+        """板上减半(狼大纪律②): 持仓当日触及/接近涨停(10%板>=9.5%, 20%板>=19.5%) 且 本轮浮盈>=3% -> 减半锁定.
+        复用 trigger 管道写 wolf_board_half_sell(网关执行), 当日去抖."""
+        try:
+            from app.services.wolf_discipline import board_half
+            from app.services.t_pool import _get_positions
+            import json as _j, datetime as _dt
+            pos_list = _get_positions()
+            held = [p for p in pos_list if float(p.get('volume') or 0) > 0]
+            if not held:
+                return
+            xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
+            quotes = fetch_tencent_quote(xq_syms)
+            qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
+                        'pre_close': float((quotes.get(s) or {}).get('pre_close', 0) or 0)} for s in xq_syms}
+            portfolio = {"positions": [{"symbol": _normalize_symbol(p.get('symbol')),
+                                        "avg_cost": float(p.get('avg_price') or p.get('avg_cost') or 0),
+                                        "volume": float(p.get('volume') or 0)} for p in held]}
+            bh = board_half(_j.dumps(portfolio, ensure_ascii=False), _dt.datetime.now(), quotes=qmap)
+            today = _dt.datetime.now().strftime('%Y%m%d')
+            for s in bh.get('active_sells') or []:
+                sym = s.get('symbol')
+                if (sym, 'wolf_board_half_sell', today) in self._wolf_done:
+                    continue
+                q = quotes.get(sym) or {}
+                self._insert_wolf_trigger(sym, 'wolf_board_half_sell', q, s.get('reason', '板上减半锁定'))
+                self._wolf_done.add((sym, 'wolf_board_half_sell', today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] board_half异常: {e}")
 
     def _roll_wolf_legs(self, today: str) -> int:
         """狼大持续腿跨日结转（2026-09-03 修复生产监控条件丢失）。
