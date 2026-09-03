@@ -1,6 +1,6 @@
 # P3 三仓档位模型（底仓 / T仓 / 现金 × 浪型档位）— 设计 v0
 
-> 日期：2026-09-03 · 状态：设计 v0 + 纯规则服务（生产接线待确认）
+> 日期：2026-09-03 · 状态：设计 v0 + 纯规则服务 ✅ + E01-E15 回测 ✅（docs/p3-three-tier-e01e15-backtest.md）；生产接线 Step B 待推进（P3_TIER_MODE=0 dry-run 先观察）
 > 关联缺口：docs/wolf-buy-context-gaps.md ①（E01 仓位上限 / E15 保T资格买回）、docs/tech-entry-system-backtest-report.md 结论⑤（Wolf 底仓内低成本吸筹/回补无通道）
 > 相关现有资产：wave_agent operation（build/t_only/side/defense/exit）、p2_entry_gate（defense/exit 禁新开）、做T体系（底仓100保护、无底仓不做T、T仓=L仓买腿）
 
