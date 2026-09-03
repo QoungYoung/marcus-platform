@@ -83,13 +83,17 @@ def compute_turnover_profile(symbol: str, n_days: int = 5,
             bars = fetch_minute_bars(symbol, freq="m5", count=n_days * 48 + 120) or []
             by_day: Dict[str, List] = {}
             for b in bars:
-                t = str(b.get("time") or b.get("trade_time"))[:10]
-                by_day.setdefault(t, []).append(b)
-            today_ymd = datetime.strptime(today, "%Y%m%d").strftime("%Y-%m-%d")
+                t = str(b.get("time") or b.get("trade_time"))
+                dkey = t[:8] if len(t) >= 8 and t[:1].isdigit() else t[:10]
+                by_day.setdefault(dkey, []).append(b)
+            today_ymd = datetime.strptime(today, "%Y%m%d").strftime("%Y%m%d")
             vols = []
             dates = []
             for d in sorted(by_day.keys()):
                 if d >= today_ymd:
+                    continue
+                # 需完整交易日（约48根m5），避开拉取截断的半日
+                if len(by_day[d]) < 30:
                     continue
                 day_vol = sum(float(b.get("vol") or b.get("volume") or 0) for b in by_day[d])
                 if day_vol > 0:
@@ -97,13 +101,15 @@ def compute_turnover_profile(symbol: str, n_days: int = 5,
             if len(vols) >= 1:
                 pick_v = vols[-n_days:]; pick_d = dates[-n_days:]
                 avg_vol = sum(pick_v) / len(pick_v)
-                avg_tr = round(scale * avg_vol, 4)
-                return {
-                    "same_minute_avg": avg_tr,
-                    "basis": "m5_vol_proxy_{}d_avg".format(len(pick_v)),
-                    "dates": pick_d,
-                    "computed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
+                # 日均换手% = 当前换手率 × (近N日均量/今日累计量)（股本恒定，单位抵消）
+                avg_tr = round(cur_tr * avg_vol / cur_vol, 4) if cur_vol > 0 else None
+                if avg_tr:
+                    return {
+                        "same_minute_avg": avg_tr,
+                        "basis": "m5_vol_proxy_{}d_avg".format(len(pick_v)),
+                        "dates": pick_d,
+                        "computed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
     except Exception as e:
         print(f"[t-turnover-profile] m5 代理失败 {symbol}: {str(e)[:120]}")
     return None

@@ -781,7 +781,12 @@ class TMonitor:
                         # 不再 30% 分批：T仓单批大时 30% 卖不完，违背"当天低吸
                         # 当天 T出"节奏，且单日多次分批卖与狼大"每天进出一次"不符。
                         # T仓=0（只剩底仓）时 max_sell=0 → blocked 不卖底仓。
-                        max_sell = max(sellable - 100, 0) if sellable > 100 else 0
+                        # 2026-09-03：底仓保留数按标的覆盖（默认100；SH588170 ETF 底仓66,900），
+                        # 大底仓标的卖腿只清 T仓（持仓-底仓），绝不清底仓。
+                        from app.services.t_gateway import base_floor_shares
+                        _floor = base_floor_shares(
+                            cond.get("account_id", T_MONITOR_ACCOUNT), symbol)
+                        max_sell = max(sellable - _floor, 0) if sellable > _floor else 0
                         volume = max_sell
                     volume = (volume // 100) * 100
                 exec_ok = False

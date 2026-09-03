@@ -21,6 +21,21 @@ from app.services.t_regime import compute_regime
 
 ACCOUNT_T = "t"
 
+# ── 狼大做T标的"底仓保留"股数（默认 100 股 = 药明底仓铁律口径）──
+# 大底仓标的（ETF 等）覆盖为实际底仓，防止卖腿把底仓当 T仓 一次清光
+# （2026-09-03：SH588170 科创半导体ETF 66,900 股为底仓，T仓=持仓-底仓）
+T_BASE_FLOOR_OVERRIDES = {
+    "SH588170": 66900,
+}
+
+
+def base_floor_shares(account_id: str, symbol: str) -> int:
+    """做T标的底仓保留股数：狼大默认保留 100 股底仓；覆盖表(ETF 大底仓)优先。"""
+    ov = T_BASE_FLOOR_OVERRIDES.get(symbol)
+    if ov is not None:
+        return int(ov)
+    return 100
+
 # ── 执行账户白名单（2026-09-02 用户决策：只有狼大做T可以操作）──
 # 默认只放行股票任务账户 stock；t 账户（做T/V反/ETF动量/建仓）一律拒绝。
 # 如需临时人工管理 t 账户持仓：T_EXEC_ALLOWED_ACCOUNTS=stock,t 后重启 worker。
