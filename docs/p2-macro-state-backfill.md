@@ -68,7 +68,7 @@ backtest_macro_wolf.py 本次改造：**优先读取 data/macro_state_history.js
 | 2026-07-23 | E14+M05 | gjd_support, margin_burst, north_in | -97.2 | sh300 **+206.9** / sh50 -9.9 | **+15.82** | +21.05 | 2.20 | 4.71 |
 | 2026-08-12 | E15 | margin_burst, gjd_withdraw, lhb_foreign_sell | +94.8 | sh300 -84.1 / sh50 -4.4 | +31.38 | -3.52 | 2.17 | 4.68 |
 
-（两融/份额单位口径与 macro_state.json 一致：净买/流入=亿，chg=%；更多字段：margin_rzrqye、north_5d、lhb.top_sell 等见 states。）
+（两融/份额单位口径与 macro_state.json 一致：净买/流入=亿，chg=%；近5日流入列仅对 E12-E15 展示供解读，其余日期完整值见 states.<date>.market.gjd.sh300_inflow_5d；更多字段：margin_rzrqye、north_5d、lhb.top_sell 等见 states。）
 
 ## 5. E12/E13/E14 "政策底/GJD"解读（观察性结论，非调参）
 
