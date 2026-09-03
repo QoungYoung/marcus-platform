@@ -49,6 +49,30 @@ def dxy_now():
         try: return float(parts[1]), parts[0]  # value, time
         except Exception: pass
     return None,None
+def _lhb_snapshot(pro, target):
+    """龙虎榜日度资金净额(外资=沪深股通专用/机构/游资) + 外资/机构大额卖出名单"""
+    out={'foreign_net':0.0,'inst_net':0.0,'yz_net':0.0,'top_sell':[]}
+    if pro is None: return out
+    ds=target.replace('-','')
+    try:
+        tl=pro.top_list(trade_date=ds)
+        ti=pro.top_inst(trade_date=ds)
+        if tl is None or ti is None or len(ti)==0: return out
+        names=dict(zip(tl['ts_code'], tl['name']))
+        f=ins=yz=0.0; sells=[]
+        for _,r in ti.iterrows():
+            ex=str(r.get('exalter') or ''); net=float(r.get('net_buy') or 0)
+            if '股通专用' in ex: f+=net; sells.append((names.get(r.get('ts_code'),r.get('ts_code')),net,'外资'))
+            elif '机构专用' in ex: ins+=net
+            else: yz+=net
+        sells.sort(key=lambda x:x[1])
+        out={'foreign_net':round(f,0),'inst_net':round(ins,0),'yz_net':round(yz,0),
+             'top_sell':[{'name':n,'net':round(v,0),'type':t} for n,v,t in sells[:5]]}
+    except Exception as e:
+        out['error']=str(e)[:100]
+    return out
+
+
 def _derive_switches(out):
     """Wolf 四类开关 v2（阈值先按语料经验值, 供 A/B 调）:
     ①崩盘清单-债市异动 ②流动性/曲线 ③两融热钱/杀杠杆 ④GJD撤退/护盘 + 北向增量"""
@@ -61,7 +85,8 @@ def _derive_switches(out):
         'margin_burst': bool((m.get('margin_20d_chg') is not None and m['margin_20d_chg']<=-5.0) or (m.get('margin_net_buy') is not None and m['margin_net_buy']<=-100.0)),
         'gjd_support': bool((g.get('sh300_chg20') is not None and g['sh300_chg20']>0) and (g.get('sh50_chg20') is not None and g['sh50_chg20']>0)),
         'gjd_withdraw': bool((g.get('sh300_chg20') is not None and g['sh300_chg20']<-2.0) or (g.get('sh50_chg20') is not None and g['sh50_chg20']<-2.0)),
-        'north_in': bool((m.get('north_5d') or 0)>0)}
+        'north_in': bool((m.get('north_5d') or 0)>0 and not ((m.get('lhb') or {}).get('foreign_net') is not None and (m.get('lhb') or {}).get('foreign_net')<=-2e8)),
+        'lhb_foreign_sell': bool((m.get('lhb') or {}).get('foreign_net') is not None and (m.get('lhb') or {}).get('foreign_net')<=-2e8)}
     flags=[k for k,v in sw.items() if v]
     out['macro_switches']={'flags':flags,'detail':sw}
     out['macro_switches_text']=_switches_text(sw)
@@ -81,9 +106,11 @@ def _switches_text(sw):
         L.append('- GJD护盘(宽基份额增): 支撑位附近可低吸/做T')
     if sw['gjd_withdraw']:
         L.append('- GJD撤退(宽基份额减): 政策底未坐实/资金面弱, 不抢反弹')
+    if sw['lhb_foreign_sell']:
+        L.append('- 龙虎榜外资净卖出(深股通专用≤-2亿): 外资撤离(红利/核心/海外映射), 不追该类')
     if sw['north_in']:
-        L.append('- 北向/增量资金流入: 允许跟随主线')
-    else:
+        L.append('- 北向5日流入且龙虎榜外资未大额净卖: 允许跟随主线')
+    elif not sw['lhb_foreign_sell']:
         L.append('- 北向/增量资金偏弱: 不追高')
     if not L: L.append('- 宏观开关: 中性(未触发异常)')
     return '## 宏观/机构开关（Wolf v2）' + NL + NL.join(L) + NL + NL
@@ -118,6 +145,7 @@ def main():
         import wave_agent as wa
         ctx=wa.get_market_context(target)
         out['market']={k:ctx.get(k) for k in ['idx_close','idx_r5','idx_r20','margin_rzrqye','margin_20d_chg','margin_net_buy','margin_rzrqye_pct','north_5d','north_today','gjd','turnover_rate','pe_ttm','vol_ratio_5_60','vol_pct120']}
+        out['market']['lhb']=_lhb_snapshot(wa._ts_pro(), target)
         print('market ctx keys',list(out['market'].keys()),flush=True)
     except Exception as e:
         print('market ERR',str(e)[:200],flush=True); out['market']['error']=str(e)[:200]

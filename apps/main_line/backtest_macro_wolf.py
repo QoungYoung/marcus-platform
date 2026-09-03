@@ -34,6 +34,7 @@ def run_one(label):
     try:
         ctx=wa.get_market_context(d)
         out['market']={k:ctx.get(k) for k in ['margin_rzrqye','margin_20d_chg','margin_net_buy','north_5d','gjd']}
+        out['market']['lhb']=bm._lhb_snapshot(wa._ts_pro(), d)
     except Exception as e: out['market']['error']=str(e)[:100]
     try:
         bm._derive_switches(out)
