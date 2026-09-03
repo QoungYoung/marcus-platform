@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """backtest_macro_wolf.py — macro_state v2 开关 vs Wolf 宏观表态 A/B
 labels: Wolf 有明确宏观/机构表态的日期 → 期望开关(仅测能推导的项)
+优先读取 data/macro_state_history.json（关键时点回填）→ source=history；
+无回填日期时按实时源重算 → source=live。
 输出: data/crowding_pit/macro_wolf_backtest.json
 """
 import os, sys, json, time
@@ -20,9 +22,26 @@ LABELS=[
  {'id':'M09','date':'2026-07-28','expect':{'margin_burst':True,'gjd_support':True},'wolf':'政策性兜底;一个月3WE两融爆到2.7WE,杀杠杆阶段'},
  {'id':'M10','date':'2026-03-18','expect':{'north_in':False},'wolf':'今天砸盘的是外资,之前买红利的外资回新兴市场了'},
 ]
+
+HIST_FILE=os.path.join(DATA,'macro_state_history.json')
+def load_history():
+    """data/macro_state_history.json（backfill_macro_state_history.py 生成）→ {date: 当日快照}"""
+    try:
+        j=json.load(open(HIST_FILE,encoding='utf-8'))
+        return j.get('states',{}) or {}
+    except Exception:
+        return {}
+HIST=load_history()
+
 def run_one(label):
     d=label['date']
-    out={'date':d,'yields':{},'market':{}}
+    if d in HIST:
+        h=HIST[d]
+        flags=set((h.get('macro_switches') or {}).get('flags') or [])
+        out={'date':d,'yields':h.get('yields') or {},'market':h.get('market') or {},
+             'macro_switches':h.get('macro_switches') or {},'source':'history'}
+        return out, flags
+    out={'date':d,'yields':{},'market':{},'source':'live'}
     try:
         cur,prev=bm.rate_snapshot(d)
         if cur:
@@ -41,19 +60,27 @@ def run_one(label):
         flags=(out.get('macro_switches') or {}).get('flags') or []
     except Exception as e: flags=[]; out['switch_err']=str(e)[:100]
     return out, set(flags)
-rows=[]
-for L in LABELS:
-    t=time.time()
-    out,flags=run_one(L)
-    expect=L['expect']; hits=[]; miss=[]
-    for k,exp in expect.items():
-        actual=k in flags
-        (hits if actual==exp else miss).append({'flag':k,'expect':exp,'actual':actual})
-    rows.append({**L,'flags':sorted(flags),'hits':hits,'miss':miss,'sec':round(time.time()-t,1),
-                 'yields':out.get('yields',{}).get('cn',{}).get('30年'),'margin20d':out.get('market',{}).get('margin_20d_chg'),
-                 'margin_net':out.get('market',{}).get('margin_net_buy'),
-                 'gjd_h300':(out.get('market',{}).get('gjd') or {}).get('sh300_chg20')})
-    print('==',L['id'],L['date'],'flags',sorted(flags),'miss',miss,flush=True)
-    time.sleep(1)
-json.dump(rows,open(os.path.join(DATA,'crowding_pit','macro_wolf_backtest.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
-ok=sum(1 for r in rows if not r['miss']); print('AGG ok',ok,'/',len(rows),flush=True); print('DONE',flush=True)
+
+def main():
+    rows=[]
+    for L in LABELS:
+        t=time.time()
+        out,flags=run_one(L)
+        expect=L['expect']; hits=[]; miss=[]
+        for k,exp in expect.items():
+            actual=k in flags
+            (hits if actual==exp else miss).append({'flag':k,'expect':exp,'actual':actual})
+        rows.append({**L,'flags':sorted(flags),'hits':hits,'miss':miss,'sec':round(time.time()-t,1),
+                     'source':out.get('source'),
+                     'yields':out.get('yields',{}).get('cn',{}).get('30年'),'margin20d':out.get('market',{}).get('margin_20d_chg'),
+                     'margin_net':out.get('market',{}).get('margin_net_buy'),
+                     'gjd_h300':(out.get('market',{}).get('gjd') or {}).get('sh300_chg20')})
+        print('==',L['id'],L['date'],'flags',sorted(flags),'miss',miss,'src',out.get('source'),flush=True)
+        if out.get('source')=='live':
+            time.sleep(1)
+    os.makedirs(os.path.join(DATA,'crowding_pit'),exist_ok=True)
+    json.dump(rows,open(os.path.join(DATA,'crowding_pit','macro_wolf_backtest.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
+    ok=sum(1 for r in rows if not r['miss']); print('AGG ok',ok,'/',len(rows),flush=True); print('DONE',flush=True)
+
+if __name__=='__main__':
+    main()

@@ -10,7 +10,7 @@
 | Wolf 理由事件结构化 | 全部 | 语料→本 JSON | ✅ 本次完成 |
 | 业绩披露逐股日历(含预约披露日) | E05/E11/E14 | build_earnings_calendar.py(tushare disclosure_date pre_date/actual_date) → earnings_calendar.json | ✅ v2（12只watch，每日08:40刷新） |
 | H1/H2 产业节奏 + 政策会议日历 | E10/E11/E13/E14 | config/industry_rhythm_calendar.json + config/policy_calendar.json | ✅ v1（四中全会10-23/两会3-04等） |
-| 历史 macro_state（GJD/两融/债/美元 2025-08~2026-08） | E13/E14 | tushare fund_share/margin/bond 回填 | 中（需回填） |
+| 历史 macro_state（GJD/两融/债/美元 2025-08~2026-08） | E13/E14 | tushare fund_share/margin/bond 回填 | 中 → **✅ 2026-09-03 已回填 19 个关键时点（E05-E15∪M01-M10）**，见 docs/p2-macro-state-backfill.md；逐日全量未做 |
 | 公告/news（立案/重组/监管/发布会/涨价） | E05/E11/E12/E13 | news DB / anns API | 高（403 阻塞） |
 | 盘中恐慌/割肉盘口特征序列 | E12 | 5min/分时采集（brze 部分已有 2025-11+） | 高 |
 | 历史分钟数据 2025-11-24 前 | E01-E04 | brze/其它源 | 高（缺源） |
@@ -34,13 +34,13 @@
 | E10 | 产业周期/资金切换 | 出货周期日历（未做）、链级PIT拥挤（已有） |
 | E11 | 日历/产业节奏 | H1/H2日历+业绩日历（未做） |
 | E12 | 恐慌盘口/核心换链 | **割肉盘口特征序列（最缺，需5min/分时采集）** |
-| E13 | 政策底/机构 | **历史macro_state回填（最缺）** + 政策日历 |
+| E13 | 政策底/机构 | ~~历史macro_state回填（最缺）~~ → ✅ 已回填(07-08 见 macro_state_history.json)；剩余=公告/news、机构调仓代理 |
 | E14 | 日历/机构/ETF | 业绩月后日历+H2日历+ETF执行（未做） |
 | E15 | 工具性仓位 | T腿/底仓状态（已有） |
 
 ## 3. 结论/下一步
 1. 规则/护栏只解决技术层；理由层必须先有数据。
-2. 短期可自建（无外源）：业绩日历(risk_flags.ann)、H1/H2+政策会议 config、历史 macro_state 回填。
+2. 短期可自建（无外源）：业绩日历(risk_flags.ann)、H1/H2+政策会议 config、历史 macro_state 回填（✅ 关键时点版 2026-09-03 已做，逐日全量待定）。
 3. 中期需外部源：news/公告(403)、发布会/涨价事件。
 4. 长期需工程：恐慌/割肉盘口序列、全市场分钟广度（黄线吸血/微盘止跌）、ETF 执行通道。
 5. 每次新增 Wolf 操作：先把其“理由→可观测信号→所需数据”写进 wolf_reason_events.json，再决定能否规则化。
