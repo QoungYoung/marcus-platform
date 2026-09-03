@@ -125,6 +125,7 @@ def t_plus5(days, dm, di):
     return round((e / b - 1) * 100, 2) if b else None
 
 WANT = {'E05': ['liquid'], 'E06': ['buy_ai_hard'], 'E08': ['semi_core'],
+        'E09': ['packaging_low'], 'E10': ['buy_guosuan'], 'E11': ['materials'],
         'E12': ['buy_semi'], 'E13': ['guosuan_hw']}
 
 def main():
@@ -140,9 +141,14 @@ def main():
                 dm = load_stock(sym[:6])
                 days = sorted(dm.keys())
                 if evdk not in days:
-                    rows.append({'event': eid, 'symbol': sym, 'error': 'no_5m_data'})
-                    continue
-                ei = days.index(evdk)
+                    prior = [d for d in days if d <= evdk]
+                    if not prior:
+                        rows.append({'event': eid, 'symbol': sym, 'error': 'no_5m_data'})
+                        continue
+                    act_day = prior[-1]   # 事件日在周末/假日 → 用前一个交易日（E09 2026-02-28→02-27）
+                else:
+                    act_day = evdk
+                ei = days.index(act_day)
                 lo = max(0, ei - 10); hi = min(len(days), ei + 11)
                 actions = []
                 # ---- 253 全护栏（逐日独立评估：每个护栏通过的253日都算可执行买点） ----
@@ -196,12 +202,12 @@ def main():
                     a['T5'] = t5
                     if t5 is not None:
                         sys_t5s.append(t5)
-                same = any(a['date'] == evdk for a in actions)
+                same = any(a['date'] == act_day for a in actions)
                 offs = [days.index(a['date']) - ei for a in actions]
                 within3 = any(abs(o) <= 3 for o in offs)
                 within5 = any(abs(o) <= 5 for o in offs)
                 sys5 = round(sum(sys_t5s) / len(sys_t5s), 2) if sys_t5s else None
-                rows.append({'event': eid, 'wolf_date': cfg.get('date'), 'symbol': sym,
+                rows.append({'event': eid, 'wolf_date': cfg.get('date'), 'wolf_trade_date': act_day, 'symbol': sym,
                              'wolf_T5': wolf5, 'sys_T5_mean': sys5,
                              'same_day_action': bool(same), 'within3': within3, 'within5': within5,
                              'actions': actions})
