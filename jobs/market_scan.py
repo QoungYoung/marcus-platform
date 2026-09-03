@@ -2677,6 +2677,22 @@ def _read_wolf_context(indices=None) -> str:
                         tip += "未达正T窗口（t_monitor 30s 实时监控 249正T/250T出/252黄线）"
             parts.append(tip)
 
+    # 6. 宏观/机构(macro_state.json v2, Wolf四类开关)
+    ms=_load("macro_state.json")
+    if ms:
+        y=(ms.get("yields") or {}); cn=(y.get("cn") or {}); us=(y.get("us") or {}); dxy=(ms.get("dxy") or {})
+        m=(ms.get("market") or {}); g=(m.get("gjd") or {})
+        sw=(ms.get("macro_switches") or {})
+        flags=sw.get("flags") or []
+        s="- **宏观/机构**：CN30="+str(cn.get("30年"))+" US30="+str(us.get("30年"))+" DXY="+str(dxy.get("value"))
+        if m.get("margin_rzrqye") is not None:
+            s+=" ｜ 两融="+str(m.get("margin_rzrqye"))+"亿("+str(m.get("margin_20d_chg"))+"%/20d)"
+        if g:
+            s+=" ｜ GJD HS300=20d"+str(g.get("sh300_chg20"))+"%"
+        if flags:
+            s+=" ｜ 开关:"+(",".join(flags))
+        parts.append(s)
+
     if not parts:
         return ""
     return ("## 🐺 狼大视角（信号层）" + NL + NL.join(parts) + NL + NL)

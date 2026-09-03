@@ -111,6 +111,14 @@ def _read_wolf_context() -> str:
                 s += "高位只做T/减：" + "、".join(str(v.get("name", "?")) for v in reduce_list)
             parts.append(s)
 
+    ms=_load("macro_state.json")
+    if ms:
+        y=(ms.get("yields") or {}); us=(y.get("us") or {}); dxy=(ms.get("dxy") or {})
+        m=(ms.get("market") or {}); sw=(ms.get("macro_switches") or {}); flags=sw.get("flags") or []
+        s="- **宏观/机构**：US30="+str((us.get("30年")))+" DXY="+str(dxy.get("value"))
+        if flags: s+=" ｜ 开关:"+(",".join(flags))
+        parts.append(s)
+
     if not parts:
         return ""
     return "🐺 狼大视角（信号层）" + NL + NL.join(parts)

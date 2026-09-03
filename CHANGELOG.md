@@ -514,3 +514,10 @@
   - 结转不依赖 T_MONITOR_AUTO_MAINTAIN（自动维护仍默认关闭）。
 - **验证**：部署重启后日志 "[TMonitor] 狼大持续腿跨日结转 5 条 → 20260903"；DB 生成 09-03 新行 256-260(5条 active，表达式完整，trigger_count 归零)；旧 249/250/252/253/254 → expired；10:08:45 monitor 命中 high_sell(#69)/custom 黄线(#70)，因可卖 T仓=0 自动执行 blocked（底仓100保护生效，无错单）。
 
+
+## [1.15.0] 2026-09-03 · P2 Gate Step2：方向感知 + 命中日志 + 扫描展示
+
+- p2_entry_gate.py: lhb_foreign_sell 方向感知（data/p2_macro_direction_map.json，海外链/红利核心概念命中才降0.5，其它不拦）；每次命中写 data/p2_gate_log.jsonl（symbol/ts_code/multiplier/reasons）。
+- market_scan.py / morning_diagnosis.py 狼大视角新增宏观/机构段（CN/US30Y+DXY+两融+GJD+开关flags）。
+- 实测 SZ300054: probe_only/mult0.5，p2_gate_log 已落盘。
+
