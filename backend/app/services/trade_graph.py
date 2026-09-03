@@ -435,52 +435,25 @@ def _get_regime_strategy(regime: str) -> str:
 
 
 def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
-    """狼大口径交易模式指令(2026-09-03 审计: 去掉平台盘中时钟节拍/固定仓位/60分钟/产业链建仓禁用).
-
-    核心: ①主升浪才做主线(完整产业链/新逻辑/新资金/抗跌主升), 主线前排龙头优先;
-          ②调整浪/震荡只做T不追主升; ③主线低吸/新开须满足狼大买点(日内回撤>=2.5%或触前低 + 缩量 + 站回黄线)
-            或 计划/关键位命中(六因子软指导已注入); ④底仓不卖、T仓做T(由TMonitor 30s执行); ⑤不追高(高位只做T/防顶).
-    无平台"9:35观察/9:50买60%/10:35加仓/午后只卖不买/尾盘只卖不买"节拍, 也不设单票/总仓位固定上限.
-    """
+    """狼大口径交易模式指令(2026-09-03 审计: 不再注入震荡/趋势市状态, 大级别一律以 wave_context(浪型)为准;
+    本函数不再按市场结构(震荡/趋势)分流, 避免与狼大浪型/主线逻辑打架)."""
     if window == 'plan_trigger':
         return (
             "**本次为【计划触发】执行**（非等待窗口）：\n"
             "严格按 plan_context 中「已命中/待触发」的计划动作立即执行（回补 T 仓 / 低位建仓 / 减半锁定）。\n"
             "不受常规时间窗口节奏限制；但 P2 Gate(浪型/宏观)、仓位三档、狼大纪律(周末降仓/只做T不追主升) 等硬门控仍生效。\n"
         )
-
-    if regime == "oscillation":
-        return (
-            "【狼大口径·震荡/调整浪】只做T、不追主升；主线低吸须满足狼大买点：\n"
-            "· 大级别：反弹/调整浪(B反/4-5/C杀) → 只做T，不做主线新开、不追主升。\n"
-            "· 选股：主线只在天级别主升时做；当前为调整浪，主线低吸仅当 日内回撤≥2.5% 或 触前低 + 缩量 + 站回黄线，\n"
-            "   且 属于主线/计划/关键位命中（六因子软指导已注入，0.65~0.72 边界请结合计划/浪型复核）。\n"
-            "· 做T：正T低吸(-2.5%/触前低) → 确认制T出(放量→高点→停量→二次不过前高)/黄线跌破离场；\n"
-            "   只卖T仓，底仓不卖；做T由 TMonitor 30s 实时执行，你在报告中确认即可。\n"
-            "· 不追高：接近前高/高位 → 只做T/逢高减仓/防顶，不建新仓。\n"
-            "· 不设平台固定仓位/周期/产业链硬限。\n"
-            "SIGNAL: yellow POSITION:<当前仓位> REASON:震荡/调整浪 只做T不追主升，主线低吸须满足狼大买点"
-        )
-
-    if regime == "trend":
-        return (
-            "【狼大口径·主升浪/趋势】主线内低吸、持有为主：\n"
-            "· 大级别：主升浪才做主线；按 完整产业链形态 + 新逻辑 + 新资金进场 + 抗跌主升确定 判定主线，前排龙头/趋势票优先。\n"
-            "· 买点：主线低吸 = 日内回撤≥2.5% 或 触前低 + 缩量 + 站回黄线；或 计划/关键位命中。\n"
-            "   不追突破、不追高；高位(接近前高+量价背离/双头) → 只做T/逢高减仓/防顶。\n"
-            "· 仓位：按 calc_position 三档(试探/确认/冲刺)，不设平台固定单票/总仓上限。\n"
-            "· 持有/止盈：趋势不走不止盈；确认制T出(停量+二次不过前高) 或 趋势走弱再减。\n"
-            "· 底仓不卖、T仓做T(由TMonitor 30s执行)。\n"
-            "· 每条建仓/加仓前必须过 check_entry_filters + calc_position。\n"
-            "SIGNAL: green POSITION:<当前仓位> REASON:主升浪 主线低吸/持有，不追高"
-        )
-
     return (
-        "【狼大口径·市场结构未诊断】谨慎——不确定不出手：\n"
-        "1. 检查持仓盈亏/止损止盈是否触发；\n"
-        "2. ⛔ 不建新仓、不追主升；\n"
-        "3. 等盘前诊断/主线判定完成后再按狼大口径执行。\n"
-        "SIGNAL: red POSITION:<当前仓位> REASON:结构未诊断，仅风控/持仓管理"
+        "【狼大口径·按浪型/主线执行，不套用震荡/趋势市状态】\n"
+        "· 大级别以 wave_context(浪型) 为准：主升浪→主线低吸/持有（前排龙头优先，不追突破/不追高）；\n"
+        "   调整浪/震荡(B反/4-5/C杀)→只做T、不追主升。\n"
+        "· 主线低吸/新开须满足狼大买点：日内回撤≥2.5% 或 触前低 + 缩量 + 站回黄线；或 计划/关键位命中（六因子软指导已注入）。\n"
+        "· 不追高：接近前高/高位 → 只做T/逢高减仓/防顶。\n"
+        "· 做T：正T低吸(-2.5%/触前低)→确认制T出(放量→高点→停量→二次不过前高)/黄线跌破离场；只卖T仓，底仓不卖；\n"
+        "   做T由 TMonitor 30s 实时执行，你在报告中确认即可。\n"
+        "· 仓位按 calc_position 三档(试探/确认/冲刺)，不设平台固定单票/总仓上限。\n"
+        "· 每条建仓/加仓前必须过 check_entry_filters + calc_position。\n"
+        "SIGNAL: <按浪型> POSITION:<当前仓位> REASON:按狼大浪型/主线执行"
     )
 def _check_drawdown(portfolio_json: str) -> tuple:
     """检查总回撤（峰值回撤），返回 (pct, blocked, reason)。
@@ -1232,8 +1205,8 @@ def node_fetch_context(state: TradeState) -> dict:
         "portfolio_json": _read_portfolio(),
         "pool_context": _read_pool_context(state['task_id']),
         "stance_context": _read_stance_context(),
-        "regime_context": _get_regime_strategy(regime),
-        "style_context": _get_style_strategy(style_info),
+        "regime_context": "",   # 2026-09-03: 不再注入震荡/趋势市场状态(该状态错误且与狼大浪型/主线打架)，大级别以 wave_context 为准
+        "style_context": "",   # 2026-09-03: 不再注入平台风格模式(进攻/防御/资源避险)市场状态, 主线方向以 main_line_context 为准
         "market_regime": regime,
         "style_regime": style_info.get("style_regime", "NEUTRAL"),
         "trade_mode_instruction": _get_trade_instruction(state['window'], regime),
