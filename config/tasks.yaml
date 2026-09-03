@@ -563,7 +563,7 @@ tasks:
 - id: rotation_switch_dryrun
   name: 主线内切换dry-run
   description: 盘后(15:25) 主线内切换·狼大逻辑 dry-run 观察计划 → rotation_switch_plan.json(不自动下单)
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: 25 15 * * mon-fri
@@ -574,6 +574,26 @@ tasks:
   output:
     append: true
     log_file: logs/rotation_switch_dryrun_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: rotation_switch_agent
+  name: 主线内切换Agent执行
+  description: 盘后(15:25) Agent(Pi/dsh)链级节奏决策+个股选买 → 代码护栏后直接下单(模拟盘)
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 15 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/rotation_switch_agent.py
+    args: []
+  output:
+    append: true
+    log_file: logs/rotation_switch_agent_{date}.log
   notifications:
     channels:
     - qqbot
