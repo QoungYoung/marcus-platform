@@ -583,7 +583,7 @@ tasks:
 - id: rotation_switch_agent_morning
   name: 主线内切换Agent执行-早盘
   description: 盘中(09:50) Agent链级决策+个股选买 → 代码护栏后直接下单(模拟盘, 09:45-11:25窗内有效)
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: 50 9 * * mon-fri
@@ -597,7 +597,7 @@ tasks:
 - id: rotation_switch_agent_afternoon
   name: 主线内切换Agent执行-午后
   description: 盘中(14:10) Agent链级决策+个股选买 → 代码护栏后直接下单(模拟盘, 13:00-14:40窗内有效)
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: 10 14 * * mon-fri

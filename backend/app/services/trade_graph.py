@@ -1135,7 +1135,25 @@ def _read_rotation_switch_context() -> str:
     try:
         import json as _j, os as _os
         p = _os.path.join(_os.environ.get("DATA_DIR", "data"), "rotation_switch_plan.json")
-        if not _os.path.exists(p):
+        stale = True
+        if _os.path.exists(p):
+            try:
+                _pl = _j.load(open(p, encoding="utf-8"))
+                stale = str(_pl.get("ts") or "")[:10] != __import__("datetime").date.today().isoformat()
+            except Exception:
+                stale = True
+        if not _os.path.exists(p) or stale:
+            # 无当日独立计划：退回链信号上下文，由 Pi(auto_trade) 在既有链路内做切换决策
+            try:
+                _ru = _j.load(open(_os.path.join(_os.environ.get("DATA_DIR", "data"), "rotation_universe_result.json"), encoding="utf-8"))
+                return ("## 主线内切换计划（rotation_switch）" + NL
+                        + "- 状态：当日无独立 Agent 计划，由 auto_trade/Pi 按以下链信号决策（不新增下单通道）" + NL
+                        + "- 拥挤无空间：" + "、".join((_ru.get("crowded_top") or [])[:4]) + NL
+                        + "- 可埋伏/room：" + "、".join((_ru.get("room_bottom") or [])[:4]) + NL
+                        + "- 拥挤但有空间(做T积累)：" + "、".join((_ru.get("holdT_top") or [])[:4]) + NL
+                        + "- 轮动健康：" + ("是" if _ru.get("rotation_healthy") else "否") + " ｜ 主线抽血：" + ("是" if _ru.get("mainline_sucking") else "否") + NL + NL)
+            except Exception:
+                pass
             return ""
         pl = _j.load(open(p, encoding="utf-8"))
         mode = pl.get("mode") or "?"

@@ -2698,6 +2698,47 @@ def _read_wolf_context(indices=None) -> str:
     return ("## 🐺 狼大视角（信号层）" + NL + NL.join(parts) + NL + NL)
 
 
+_st_cleanup_date = ""
+def cleanup_st_holdings_once():
+    global _st_cleanup_date
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _st_cleanup_date == today:
+        return []
+    _st_cleanup_date = today
+    out = []
+    try:
+        import psycopg2, os, json as _j, urllib.request
+        DB = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        conn = psycopg2.connect(DB); cur = conn.cursor()
+        cur.execute("SELECT ts_code FROM stock_pool WHERE is_st = 1 OR name LIKE 'ST%' OR name LIKE '*ST%'")
+        bad = {str(r[0]) for r in cur.fetchall()}
+        cur.execute("SELECT symbol, volume FROM paper_positions WHERE account_id='stock' AND volume>0")
+        pos = cur.fetchall()
+        cur.close(); conn.close()
+        api = os.environ.get("MARCUS_API_URL", "http://backend:8000/api/v1")
+        for sym, vol in pos:
+            ts = str(sym)[2:] + ("." + str(sym)[:2])
+            if ts not in bad:
+                continue
+            try:
+                from app.services.t_data_sources import fetch_tencent_quote
+                q = fetch_tencent_quote(sym)
+                price = float(q.get("current")) if q and q.get("current") else 0.0
+            except Exception:
+                price = 0.0
+            if price <= 0:
+                continue
+            payload = {"symbol": sym, "side": "sell", "price": price, "volume": int(vol),
+                       "account": "stock", "reason": "cleanup_st_holdings(market_scan红线)"}
+            req = urllib.request.Request(api + "/trades", data=_j.dumps(payload).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            resp = _j.loads(urllib.request.urlopen(req, timeout=30).read().decode())
+            out.append({"symbol": sym, "status": resp.get("status"), "reason": resp.get("reason")})
+    except Exception as e:
+        print("[红线清理] ST清理失败:", str(e)[:100])
+    return out
+
+
 def main():
     """主函数 - 输出扫描报告"""
     # 节假日保护：休市日只输出提示，不执行扫描
@@ -2706,7 +2747,11 @@ def main():
         today_str = datetime.now().strftime('%Y-%m-%d')
         print(f"📅 今天是休市日（{today_str}），跳过盘中扫描")
         return
-    
+
+    _clean = cleanup_st_holdings_once()
+    if _clean:
+        print(f"[红线清理] ST持仓清理尝试: {_clean}")
+
     report, scan_result = generate_scan_report()
 
     # 从 scan_result 获取 position_analysis（generate_scan_report 里已计算）
