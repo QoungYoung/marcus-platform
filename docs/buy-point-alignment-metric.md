@@ -125,3 +125,7 @@
 - 逐事件：E05 2/3、E06 3/3、E08 6/6、E09 4/4、E10 5/5、E11 6/6、E12 6/6、E13 3/6。
 - 明细 data/alignment_audit.json（每行 event/symbol/channel/evidence/wolf_T5/sys_T5_mean）。
 - auto_trade 决策日志：trade_graph run_trade_decision 后追加 data/auto_trade_decision_log.jsonl（task/window/regime/stance/position/reason/report_head/hard_blocked），供未来 Agent vs 规则 vs Wolf 逐笔比对。
+
+## 14. 三方 join（决策×成交×Wolf）框架
+- apps/main_line/audit_trade_three_way.py：auto_trade_decision_log.jsonl → paper_trades 当日成交 → alignment_audit Wolf/规则行(±5交易日) 逐笔对照，输出 data/audit_trade_three_way.json。
+- 当前：决策日志尚为空(部署于午间,下一个auto_trade窗口开始积累)；脚本已跑通(decision_log_rows=0, trades_joined=0)。
