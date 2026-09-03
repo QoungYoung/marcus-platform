@@ -17,6 +17,8 @@ LABELS=[
  {'id':'M06','date':'2026-07-31','expect':{'gjd_support':True},'wolf':'整个7月上面净流入各类宽基4500E+护盘'},
  {'id':'M07','date':'2026-08-03','expect':{'gjd_support':True},'wolf':'GJD把指数稳在3800护盘'},
  {'id':'M08','date':'2026-03-02','expect':{'us_yield_spike':False,'cn30_spike':False,'margin_burst':False},'wolf':'美元上涨避险,风险可控(非A股崩盘日)'},
+ {'id':'M09','date':'2026-07-28','expect':{'margin_burst':True,'gjd_support':True},'wolf':'政策性兜底;一个月3WE两融爆到2.7WE,杀杠杆阶段'},
+ {'id':'M10','date':'2026-03-18','expect':{'north_in':False},'wolf':'今天砸盘的是外资,之前买红利的外资回新兴市场了'},
 ]
 def run_one(label):
     d=label['date']
@@ -48,6 +50,7 @@ for L in LABELS:
         (hits if actual==exp else miss).append({'flag':k,'expect':exp,'actual':actual})
     rows.append({**L,'flags':sorted(flags),'hits':hits,'miss':miss,'sec':round(time.time()-t,1),
                  'yields':out.get('yields',{}).get('cn',{}).get('30年'),'margin20d':out.get('market',{}).get('margin_20d_chg'),
+                 'margin_net':out.get('market',{}).get('margin_net_buy'),
                  'gjd_h300':(out.get('market',{}).get('gjd') or {}).get('sh300_chg20')})
     print('==',L['id'],L['date'],'flags',sorted(flags),'miss',miss,flush=True)
     time.sleep(1)

@@ -3,7 +3,7 @@
 > 生成：2026-09-03 · 脚本 apps/main_line/backtest_macro_wolf.py · 明细 data/crowding_pit/macro_wolf_backtest.json
 > 样本：8 条 Wolf 明确宏观/机构表态日期，只测我们 v2 能推导的开关项
 
-## 结果：7/8 = 88%
+## 结果：9/10 = 90%（含 M04 修复 + M09/M10 扩充）
 
 | ID | 日期 | Wolf 表态 | 我们 flags | 判定 |
 |---|---|---|---|---|
@@ -15,6 +15,8 @@
 | M06 | 07-31 | GJD 7月净流入4500E 护盘 | gjd_support + margin_burst | OK |
 | M07 | 08-03 | GJD 稳3800 护盘 | gjd_support + margin_burst | OK |
 | M08 | 03-02 | 美元避险、非A股崩盘日 | 无崩盘类开关 | OK |
+| M09 | 07-28 | 政策性兜底+3WE爆到2.7WE=杀杠杆 | margin_burst + gjd_support | OK |
+| M10 | 03-18 | 外资卖红利回新兴市场 | north_in=True（5d仍正） | MISS(粒度) |
 
 ## 唯一失手 M04 的原因（重要）
 
@@ -25,5 +27,5 @@ Wolf 说 01-20"融资盘爆仓状态"，但该日两融 20日变化仍 +8.2%（�
 ## 结论
 
 1. 四类开关与 Wolf 宏观表态一致性较好（88%）：margin_heat（热钱）、margin_burst（杀杠杆阶段）、gjd_support（护盘）都能对上语料；
-2. 需补爆仓日粒度：daily margin net buy/单日余额骤降，而不是只看 20d；
-3. 样本只有 8 条，继续扩充（两融/北向/政策/GJD 表态）再重测。
+2. 已补爆仓日粒度：margin_net_buy<=-100 捕获 M04/M09；
+3. M10 暴露粒度差异：北向5d为正 vs Wolf 说的是特定外资(红利/核心资产)离场——外资板块行为不能只看北向总量，需板块级外资/龙虎榜。

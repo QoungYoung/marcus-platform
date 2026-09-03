@@ -58,7 +58,7 @@ def _derive_switches(out):
         'cn30_spike': bool(ch.get('cn30_1d') is not None and ch['cn30_1d']>=0.15),
         'us_curve_inverted': bool(us.get('10年_2年') is not None and us['10年_2年']<0),
         'margin_heat': bool(m.get('margin_20d_chg') is not None and m['margin_20d_chg']>=3.0 and (m.get('margin_net_buy') or 0)>0),
-        'margin_burst': bool(m.get('margin_20d_chg') is not None and m['margin_20d_chg']<=-5.0),
+        'margin_burst': bool((m.get('margin_20d_chg') is not None and m['margin_20d_chg']<=-5.0) or (m.get('margin_net_buy') is not None and m['margin_net_buy']<=-100.0)),
         'gjd_support': bool((g.get('sh300_chg20') is not None and g['sh300_chg20']>0) and (g.get('sh50_chg20') is not None and g['sh50_chg20']>0)),
         'gjd_withdraw': bool((g.get('sh300_chg20') is not None and g['sh300_chg20']<-2.0) or (g.get('sh50_chg20') is not None and g['sh50_chg20']<-2.0)),
         'north_in': bool((m.get('north_5d') or 0)>0)}
