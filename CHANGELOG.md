@@ -528,3 +528,10 @@
 - config/tasks.yaml 新增 p2_gate_daily_report（工作日15:20，tasks 27→28）；已同步服务器并重启worker。
 - 实测2026-09-03: hits=1 soft=1 gjd_withdraw, top=300054。
 
+
+## [1.17.0] 2026-09-03 · rotation 双维分类 13 时点真 PIT 重跑（修正季度近似口径）
+
+- **数据**：apps/main_line/build_fund_pit.py 新增 --dates 支持，为 13 个双周时点逐点生成 PIT 拥挤快照（历史 fund_share T-1 top60 + ann_date<=时点 + 每基金 top10按mkv）→ data/crowding_pit/stock_crowd_<date>.json。
+- **聚合/重跑**：新增 apps/main_line/backtest_rotation_quadrant_pit.py：SUB_UNIVERSE 概念白名单×stock_concept_map 把每点 PIT 快照聚合成子方向拥挤（avg_float_per_held/n_held/sum_float），位置空间复用 backtest_rotation_quadrant.py → data/rotation_quadrant_history_pit.json + data/crowding_pit/rotation_crowd_pit_<YYYYMMDD>.json。
+- **结果**：13 时点总相邻转换率仍 23.4%（36/154，与季度近似口径一致），但 51/180=28.3% 格子变化（一致率 71.7%）：修正 2026-04-09 季报前视（Q1 ann 04-21 前仍用 Q4-25）；07-22/08-11 AI应用/国算/光通信/铜缆/金融 → 可埋伏（公募核心拥挤切向存储/芯片/材料）；01-12/01-30 金融/电力/光通信在 PIT top10 口径下更拥挤。
+- 报告 docs/p2-rotation-quadrant-pit-report.md；WOLF_TASKS_OVERVIEW §1.11 + 剩余清单去除该项。

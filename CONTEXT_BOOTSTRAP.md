@@ -13,6 +13,7 @@
 - **P2 宏观 v2**：macro_state 采集器 15:06（akshare CN/US 2-30Y + 新浪 DXY + 两融/GJD/北向）；Wolf 四类开关 → trade_graph 宏观上下文；A/B 10/10（龙虎榜 top_list+top_inst 修 M10）。
 - **P2 Gate 接入交易 Step1+2**：p2_entry_gate 进 check_entry_filters → auto 通道也硬拦；方向感知 map(config)；p2_gate_log + 15:20 每日报告。
 - 拥挤过滤个股级 PIT v2：黑名单 1045→17；E06-E13 前向验证。
+- rotation 13 时点双维分类真 PIT 重跑（build_fund_pit --dates + backtest_rotation_quadrant_pit.py）：总转换率 23.4%，51/180 格子修正季度近似口径。
 - 买点对齐：MA/KDJ/RSI/CCI/射击之星/午后禁开 = 软约束（LEGACY_TECH_GATES=1 回退）；A/B 报告 docs/ab-wolf-gates-e01e15.md。
 
 ## 2. 生产状态（2026-09-03）
@@ -37,6 +38,5 @@
 ## 5. 下一步候选（详见 WOLF_TASKS_OVERVIEW §3）
 1. P2 Gate Step3：观察 2 周 p2_gate_log → 校准阈值 → 定稿（默认已 =1）。
 2. P2 宏观收尾：DXY 历史快照自建、崩盘清单源（期指/30Y 放量/券商破位）、板块级外资/龙虎榜、policy_floor 日历。
-3. rotation_quadrant_history 13 时点真 PIT 重跑（基建已具备，工作量小）。
-4. 主线科技子类粒度（用户暂缓 P1）。
-5. P3 三仓档位模型（与"t_only/defense 加厚底仓"缺口直接相关）。
+3. 主线科技子类粒度（用户暂缓 P1）。
+4. P3 三仓档位模型（与"t_only/defense 加厚底仓"缺口直接相关）。

@@ -2,7 +2,8 @@
 """build_fund_pit.py — Phase1: 事件日 PIT 公募持仓快照
 步骤: ①事件日 fund_share top60(历史trade_date可用) → ②union基金 fund_portfolio 全历史拉取
       → ③每事件日取 ann_date<=事件日的每基金最新报告 + 每基金top10(按mkv) → data/crowding_pit/stock_crowd_<date>.json
-用法: python -u apps/main_line/build_fund_pit.py [--events E06,E13] [--dry-run]
+用法: python -u apps/main_line/build_fund_pit.py [--events E06,E13] [--dates 2025-12-01,2025-12-19] [--no-fetch] [--dry-run]
+  --events : 内置 E06-E13 事件集；--dates 可指定任意 YYYY-MM-DD 列表（label 自动 R01..Rnn）
 """
 import os, sys, json, urllib.request, gzip, time, collections, datetime as _dt
 
@@ -17,6 +18,10 @@ EVENTS = [
     ('E12','2026-06-05'), ('E13','2026-07-08'),
 ]
 def arg_events():
+    if '--dates' in sys.argv:
+        i = sys.argv.index('--dates')
+        ds = [x.strip() for x in sys.argv[i+1].split(',') if x.strip()]
+        return [('R%02d' % j, d) for j, d in enumerate(ds, 1)]
     if '--events' in sys.argv:
         i = sys.argv.index('--events'); want = set(sys.argv[i+1].split(','))
         return [(e,d) for e,d in EVENTS if e in want]

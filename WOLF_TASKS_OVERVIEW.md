@@ -48,6 +48,11 @@
 - 接入 check_entry_filters → auto 通道（candidate/long_term monitor）获得 wave/systemic/macro 硬拦（此前只有 Pi/trade_graph 有 wave 硬拦）。
 - p2_gate_log.jsonl + p2_gate_daily_report 任务（15:20，便于 2 周观察校准）。
 
+### 1.11 rotation 13 时点真 PIT 重跑 ✅（2026-09-03）
+- 13 个双周时点逐点生成 PIT 拥挤快照（fund_share T-1 top60 + ann_date<=时点 + 每基金 top10）；concept 白名单（SUB_UNIVERSE×stock_concept_map）聚合后重跑双维分类。
+- 结果：总相邻转换率仍 **23.4%**（36/154），但 51/180=28% 格子与季度近似口径不同（一致性 71.7%）；修正 04-09 季报前视误标、07-22 起 AI应用/国算/光通信→可埋伏（拥挤切向存储/芯片/材料）。
+- 脚本 apps/main_line/backtest_rotation_quadrant_pit.py；报告 docs/p2-rotation-quadrant-pit-report.md；数据 rotation_quadrant_history_pit.json + crowding_pit/stock_crowd_<13时点>.json。
+
 ## 2. 生产架构（2026-09-03，tasks=28）
 
 - stock 账户：药明康德底仓 100 股；做T 5 条持续腿；auto_trade 5 任务 enabled。
@@ -63,8 +68,7 @@
 1. P2 宏观收尾（观察型）：DXY 历史源自建快照；崩盘清单缺失源（期指空单/30Y 放量/券商破位）；板块级外资/龙虎榜扩充（覆盖红利核心大票）；policy_floor 事件日历；2 周 p2_gate_log 观察后校准阈值。
 2. P2 主线剩余：科技子类粒度（AI硬 vs 半导体）+ 机器人/互金主题覆盖（依赖 P1 标注，用户曾暂缓）。
 3. P2 风控剩余：公告类立案/重组/监管 source=ai（anns 403，等 news）。
-4. rotation_quadrant_history 13 时点真 PIT 重跑（build_fund_pit 基建已具备，工作量小）。
-5. P2 Gate Step3：观察 2 周 → 校准 → 定稿 P2_GATE_MODE=1。
+4. P2 Gate Step3：观察 2 周 → 校准 → 定稿 P2_GATE_MODE=1。
 
 ### P3
 - 三仓档位模型（底仓/T仓/现金 × 浪型档位）——与"Wolf t_only/defense 加厚底仓"缺口直接相关。
@@ -72,7 +76,7 @@
 
 ## 4. 当前状态（2026-09-03 晚）
 
-- 主线✅ / 浪型✅ / 高低位✅ / 确定性✅ / 做T✅ / 轮动+拥挤PIT✅ / 风控✅ / 宏观 v2✅（观察）/ P2 Gate 接入✅（Step1+2，观察）。
+- 主线✅ / 浪型✅ / 高低位✅ / 确定性✅ / 做T✅ / 轮动+拥挤PIT✅（含13时点真PIT重跑✅）/ 风控✅ / 宏观 v2✅（观察）/ P2 Gate 接入✅（Step1+2，观察）。
 - 观察窗口：做T 三档触发质量（2-4 周）；P2 Gate 命中日志（2 周）；macro 开关实盘一致性。
 - 关键结论（语料实证）：
   ① Wolf 买点多数不是 254 式盘口触发，是逻辑/分步/底仓回补 → 同日对齐低，但触发一致时收益一致；
@@ -85,6 +89,7 @@
 
 - **P2 宏观**：docs/p2-macro-wolf-logic.md；apps/main_line/build_macro_state.py / backtest_macro_wolf.py；data/macro_state.json；data/macro_source_probe*.json
 - **P2 接入交易**：docs/p2-trading-integration-design.md；backend/app/services/p2_entry_gate.py；config/p2_macro_direction_map.json；jobs/p2_gate_daily_report.py；data/p2_gate_log.jsonl
+- **13时点真PIT重跑**：docs/p2-rotation-quadrant-pit-report.md；apps/main_line/backtest_rotation_quadrant_pit.py；data/rotation_quadrant_history_pit.json
 - **拥挤 PIT**：docs/crowding-stocklevel-event-recheck.md；apps/main_line/{build_fund_pit,backtest_crowding_stock_level}.py；data/crowding_pit/*
 - **买点对齐/审计**：docs/wolf-extra-logic-audit.md；docs/ab-wolf-gates-e01e15.md；docs/wolf-buy-context-gaps.md；docs/wolf-dip254-5m-replay.md；docs/wolf-dip254-base-backtest.md；docs/tech-entry-system-backtest-report.md
 - 既有索引：mainline-oos-validation / wolf-consistency-v2 / t-monitor-integration / p2-rotation-* / p2-risk-wolf-logic 等

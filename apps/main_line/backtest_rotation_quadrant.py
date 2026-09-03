@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""backtest_rotation_quadrant.py — ② rotation 双维分类历史稳定性回测
+"""backtest_rotation_quadrant.py — ② rotation 双维分类历史稳定性回测（季度近似口径，保留用于对照）
 方法: 用 concept_hist 在 2025-12~2026-08 多个时点回放「位置空间」(距高折让/rel低位/LOW-MID)；
-拥挤度取 data/rotation_crowding.json 的 Q2 真实基金 avg_float(注: 单一季度, 回放近似, 非点内)。
+拥挤度取 data/rotation_crowding_<end>.json 的季度真实基金 avg_float(整表口径，非严格 PIT)。
 输出: data/rotation_quadrant_history.json + 稳定性摘要(相邻时点分类转换率)
 用法: python apps/main_line/backtest_rotation_quadrant.py
+⚠️ 2026-09-03 后 13 时点结论以真 PIT 版为准: backtest_rotation_quadrant_pit.py → data/rotation_quadrant_history_pit.json（本文件仅作旧口径对照）。
 """
 import os, sys, json, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
