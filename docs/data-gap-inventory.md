@@ -8,7 +8,7 @@
 | 缺口 | 对应事件 | 来源 | 成本/状态 |
 |---|---|---|---|
 | Wolf 理由事件结构化 | 全部 | 语料→本 JSON | ✅ 本次完成 |
-| 业绩披露逐股日历(已披露/未披露) | E05/E11/E14 | build_earnings_calendar.py → data/earnings_calendar.json | ✅ v1（12只watch，每日08:40刷新） |
+| 业绩披露逐股日历(含预约披露日) | E05/E11/E14 | build_earnings_calendar.py(tushare disclosure_date pre_date/actual_date) → earnings_calendar.json | ✅ v2（12只watch，每日08:40刷新） |
 | H1/H2 产业节奏 + 政策会议日历 | E10/E11/E13/E14 | config/industry_rhythm_calendar.json + config/policy_calendar.json | ✅ v1（四中全会10-23/两会3-04等） |
 | 历史 macro_state（GJD/两融/债/美元 2025-08~2026-08） | E13/E14 | tushare fund_share/margin/bond 回填 | 中（需回填） |
 | 公告/news（立案/重组/监管/发布会/涨价） | E05/E11/E12/E13 | news DB / anns API | 高（403 阻塞） |

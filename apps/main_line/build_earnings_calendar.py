@@ -20,6 +20,7 @@ DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marc
 DATA = os.environ.get("DATA_DIR", "data")
 TOKEN = os.getenv("TUSHARE_TOKEN", ""); URL = os.getenv("TUSHARE_API_URL", "")
 
+RECENT_ENDS = ['20250630','20250930','20251231','20260331','20260630','20260930']
 DEADLINE = {("03", "31"): ("04", "30"), ("06", "30"): ("08", "31"),
             ("09", "30"): ("10", "31"), ("12", "31"): ("04", "30")}
 BAD = {"首亏", "续亏"}
@@ -81,6 +82,17 @@ def fetch_one(sym):
             pass
     return sorted([x for x in out if x["ann"]], key=lambda x: x["ann"])
 
+def fetch_disclosure(sym):
+    out = {}
+    for end in RECENT_ENDS:
+        try:
+            for it in call("disclosure_date", {"ts_code": sym, "end_date": end}, "ts_code,ann_date,end_date,pre_date,actual_date"):
+                if len(it) >= 5:
+                    out[str(it[2] or "")] = {"ann_date": str(it[1] or ""), "pre_date": str(it[3] or ""), "actual_date": str(it[4] or "")}
+        except Exception:
+            continue
+    return out
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--stocks", default="")
     ap.add_argument("--as-of", default="")
@@ -93,9 +105,13 @@ def main():
         if not hist:
             continue
         latest = hist[-1]
-        disclosed = bool(latest["ann"] and latest["ann"] <= ref)
+        disc = fetch_disclosure(sym)
+        prec = disc.get(latest["end"]) or {}
+        pre_date = prec.get("pre_date") or ""
+        actual_date = prec.get("actual_date") or ""
+        disclosed = bool((actual_date and actual_date <= ref) or (latest["ann"] and latest["ann"] <= ref))
         bad = bool(latest["type"] in BAD or (latest["type"] in ("预减", "略减") and latest.get("pcmax") is not None and latest["pcmax"] < -30))
-        dline = deadline_for(latest["end"])
+        dline = actual_date or pre_date or deadline_for(latest["end"])
         dd = None
         try:
             if dline:
@@ -103,7 +119,8 @@ def main():
         except Exception:
             pass
         rows.append({"symbol": sym, "name": name_of(sym), "end_date": latest["end"], "ann_date": latest["ann"],
-                     "type": latest["type"], "source": latest["src"], "disclosed": disclosed, "bad": bad,
+                     "pre_date": pre_date, "actual_date": actual_date, "type": latest["type"],
+                     "source": latest["src"], "disclosed": disclosed, "bad": bad,
                      "deadline": dline, "days_to_deadline": dd})
     out = {"ref_date": ref, "rows": rows,
            "undisclosed": [r for r in rows if not r["disclosed"]],
