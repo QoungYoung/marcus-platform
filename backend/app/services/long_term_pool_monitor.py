@@ -653,6 +653,17 @@ class LongTermPoolMonitor:
             pool.mark_promoted(symbol)
             self.today_buys[symbol] = self.today_buys.get(symbol, 0) + 1
 
+            try:
+                from app.services.buy_point_log import log_buy_point
+                log_buy_point(source="long_term_pool", symbol=symbol, name=name,
+                              intent="new_base", price=buy_price, volume=buy_volume,
+                              amount=pos_result.quantity.probe_amount, pct=pos_result.quantity.probe_pct,
+                              grade=getattr(result, "final_grade", ""),
+                              tier_cap=getattr(result, "three_tier_cap_pct", None),
+                              score=score, reason="长期候选池自动建仓")
+            except Exception:
+                pass
+
             msg = (
                 f"✅ [长期候选池] 自动建仓: {symbol} {name} "
                 f"@{buy_price:.2f} × {buy_volume}股 "

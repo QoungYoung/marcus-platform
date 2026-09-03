@@ -407,6 +407,17 @@ class CandidatePoolMonitor:
         if buy_result.get("status") in ("executed", "filled", "matched"):
             self.today_buys[symbol] = self.today_buys.get(symbol, 0) + 1
 
+            try:
+                from app.services.buy_point_log import log_buy_point
+                log_buy_point(source="candidate_pool", symbol=symbol, name=entry.get("name", ""),
+                              intent="new_base", price=buy_price, volume=buy_volume,
+                              amount=pos_result.quantity.probe_amount, pct=pos_result.quantity.probe_pct,
+                              grade=getattr(result, "final_grade", ""),
+                              tier_cap=getattr(result, "three_tier_cap_pct", None),
+                              reason="候选池自动建仓")
+            except Exception:
+                pass
+
             from app.services.candidate_pool import get_candidate_pool
             pool = get_candidate_pool()
             pool.mark_promoted(symbol)
