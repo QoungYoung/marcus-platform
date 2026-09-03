@@ -1380,6 +1380,15 @@ def _read_discipline_context(window: Optional[str] = None) -> str:
         return ""
 
 
+def _read_wolf_judge_context() -> str:
+    """六因子规则打分(软指导, 不硬拦): 注入 Pi prompt 辅助"要不要出手"判断, 不伤召回. 见 wolf_judge."""
+    try:
+        from app.services.wolf_judge import day_gate_prompt
+        return day_gate_prompt()
+    except Exception:
+        return ""
+
+
 def node_fetch_context(state: TradeState) -> dict:
     """
     节点 1: 获取上下文 —— 确定性节点
@@ -1417,6 +1426,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "plan_context": (_pc := _read_plan_context()),
         "plan_triggered": ('🔔 计划命中' in _pc),
         "wolf_t_context": _read_wolf_t_context(),
+        "wolf_judge_context": _read_wolf_judge_context(),
     }
 
 
@@ -1516,6 +1526,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
     prompt = (
         f"{_plan_banner}{state.get('plan_context', chr(39)+chr(39))}"
         f"{state.get('wolf_t_context', chr(39)+chr(39))}"
+        f"{state.get('wolf_judge_context', chr(39)+chr(39))}"
         f"{state.get('discipline_context', chr(39)+chr(39))}"
         f"{state.get('wave_context', chr(39)+chr(39))}"
         f"{state.get('three_tier_context', chr(39)+chr(39))}"
