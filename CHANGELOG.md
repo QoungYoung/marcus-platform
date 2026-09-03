@@ -535,3 +535,12 @@
 - **聚合/重跑**：新增 apps/main_line/backtest_rotation_quadrant_pit.py：SUB_UNIVERSE 概念白名单×stock_concept_map 把每点 PIT 快照聚合成子方向拥挤（avg_float_per_held/n_held/sum_float），位置空间复用 backtest_rotation_quadrant.py → data/rotation_quadrant_history_pit.json + data/crowding_pit/rotation_crowd_pit_<YYYYMMDD>.json。
 - **结果**：13 时点总相邻转换率仍 23.4%（36/154，与季度近似口径一致），但 51/180=28.3% 格子变化（一致率 71.7%）：修正 2026-04-09 季报前视（Q1 ann 04-21 前仍用 Q4-25）；07-22/08-11 AI应用/国算/光通信/铜缆/金融 → 可埋伏（公募核心拥挤切向存储/芯片/材料）；01-12/01-30 金融/电力/光通信在 PIT top10 口径下更拥挤。
 - 报告 docs/p2-rotation-quadrant-pit-report.md；WOLF_TASKS_OVERVIEW §1.11 + 剩余清单去除该项。
+
+
+## [1.18.0] 2026-09-03 · P3 三仓档位模型 v0（纯规则 + E01-E15 回测 + StepB dry-run 接线）
+
+- 设计 docs/p3-three-tier-position-design.md：底仓/T仓/现金 × 浪型档位（build 新开≤10% / t_only 只回补+做T / side 埋伏≤3% / defense 已有主线底仓≤3% 加厚 / exit 只T），现金底线 25→50% 动态。
+- config/p3_position_tiers.json + backend/app/services/position_tier.py（three_tier_gate 纯函数）+ 8 单测。
+- E01-E15 事件回测（apps/main_line/backtest_p3_tiers.py → docs/p3-three-tier-e01e15-backtest.md）：旧 block 6 中 4 获通道（E05/E08/E12/E13）、partial 5 全获通道；仅 E02（t_only 新建试盘）与 E06（exit 无底仓抢反弹）设计保留。
+- StepB 生产接线（P3_TIER_MODE=0 dry-run 已重启生效）：check_entry_filters 增加 intent/has_base/t_universe/rel_low/mainline_dir 输入 + three_tier_details/allowed/cap 输出；calc_position 按档位 cap/现金底线生效逻辑；监控器显式传 intent=new_base；trade_graph 注入三仓档位摘要。
+- commit b0c48cf / 8b71a75 / eb14bbc；观察 2 周后校准再定 P3_TIER_MODE=1。

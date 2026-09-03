@@ -71,8 +71,8 @@
 4. P2 Gate Step3：观察 2 周 → 校准 → 定稿 P2_GATE_MODE=1。
 
 ### P3
-- 三仓档位模型（底仓/T仓/现金 × 浪型档位）——与"Wolf t_only/defense 加厚底仓"缺口直接相关。
-- 复盘认知、数据收尾（历史新闻/研报/README）。
+- **三仓档位模型 v0 ✅（2026-09-03，dry-run 观察中）**：design/config/position_tier 纯规则 + E01-E15 回测（block6中4获通道/partial5全获）+ StepB 生产接线（check_entry_filters/calc_position/trade_graph，P3_TIER_MODE=0 只记录不拦）。文档 docs/p3-three-tier-position-design.md / docs/p3-three-tier-e01e15-backtest.md；数据 data/p3_tier_backtest.json。
+- 复盘认知、数据收尾（历史新闻/研报/README）——待三仓档位观察定稿后推进。
 
 ## 4. 当前状态（2026-09-03 晚）
 
