@@ -496,3 +496,11 @@
 - 实测 2026-09-03: flags=[gjd_withdraw, north_in] → 文本“GJD撤退不抢反弹 + 北向流入允许跟主线”；宏快照含 CN30=2.14/US30=5.27/DXY=99.48/两融26610亿/GJD份额20d负；
 - worker 已重启 healthy, tasks=27; macro_state_collector 15:06 自动刷新含开关。
 
+
+## [1.14.0] 2026-09-03 · P2 Gate Step1：wave/systemic/macro 统一闸门接入 check_entry_filters
+
+- 新增 backend/app/services/p2_entry_gate.py：统一返回 hard_block/multiplier/reasons；wave defense/exit → 硬拦新开仓；systemic level>=2 → 硬拦；macro margin_burst → 硬拦，lhb_foreign_sell/gjd_withdraw/yield_spike → 降级0.5；P2_GATE_MODE=0 dry-run。
+- indicator.py 在 crowding 后调 p2_gate_check；响应新增 p2_gate_details（软/硬均可见原因）。
+- 效果：auto 通道（candidate/long_term monitor 只调 check_entry_filters）自动获得 wave/systemic/macro 硬拦（此前只有 Pi/trade_graph 有 wave 硬拦）。
+- 实测 SZ300054：grade=probe_only mult=0.5，p2_gate_details=GJD撤退降级0.5。
+

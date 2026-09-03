@@ -2413,6 +2413,7 @@ async def check_entry_filters(req: EntryCheckRequest):
     downgrade_multiplier = 1.0
     hard_block = False
     hard_block_reasons = []
+    p2_gate_details = []    # P2 Gate Step1: wave/systemic/macro 命中原因(软/硬均记录)
     data_unavailable = []   # fail-closed：关键输入（60分MA/日内分位/主力资金）缺失时记录，自动通道跳过并QQ通知
 
     # ── 时间门控（狼大对齐2026-09-03）：Wolf 常午后/尾盘买(语料尾盘411次) → 不再硬拦；LEGACY_TECH_GATES=1 恢复旧禁开仓 ──
@@ -2801,6 +2802,22 @@ async def check_entry_filters(req: EntryCheckRequest):
     except Exception:
         pass
 
+    # ── P2 Gate(Step1, 2026-09-03): wave/systemic/macro 代码层闸门 ──
+    try:
+        from app.services.p2_entry_gate import p2_gate_check as _pg2
+        _g = _pg2(ts_code=ts_code)
+        if _g["hard_block"]:
+            hard_block = True
+            downgrade_multiplier = 0.0
+            hard_block_reasons.extend(_g["reasons"])
+            p2_gate_details.extend(["🚫 " + s for s in _g["reasons"]])
+        else:
+            downgrade_multiplier = min(downgrade_multiplier, _g["multiplier"])
+            if _g["reasons"]:
+                p2_gate_details.extend(["⚠️ " + s for s in _g["reasons"]])
+    except Exception as _pe:
+        p2_gate_details.append("⚠️ P2 Gate 计算失败(放行): " + str(_pe)[:80])
+
     # ══════════════════════════════════════
     # Stage 4: 综合判定
     # ══════════════════════════════════════
@@ -2945,6 +2962,7 @@ async def check_entry_filters(req: EntryCheckRequest):
         downgrade_multiplier=round(downgrade_multiplier, 2),
         hard_block=hard_block,
         hard_block_reasons=hard_block_reasons,
+        p2_gate_details=p2_gate_details,
         l2_oversold_exempt=l2_oversold_exempt,
         data_unavailable=data_unavailable,
         buy_confirmation=buy_confirmation,

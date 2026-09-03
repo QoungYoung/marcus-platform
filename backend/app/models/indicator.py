@@ -264,6 +264,8 @@ class EntryCheckResponse(BaseModel):
     # 硬拦截（不可被产业链信号豁免）
     hard_block: bool = False            # 代码层硬拦截标志
     hard_block_reasons: list[str] = []  # 硬拦截原因列表
+    # P2 Gate(P2完整接入 Step1): wave/systemic/macro 命中原因(软/硬都记录)
+    p2_gate_details: list[str] = []
     # L2 极端超跌豁免（5日主力<0 但 L1 过 + 前5日跌幅≥15% → 降级仅试探仓，供长期池放行）
     l2_oversold_exempt: bool = False
     # 数据可用性（fail-closed）：关键输入缺失/不可用时列出，如 ["60分MA","日内分位","主力资金"]
