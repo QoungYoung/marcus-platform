@@ -85,6 +85,47 @@ def _live_price(ts, xq):
         pass
     return _latest_close(ts)
 
+
+def _bad_stock_set():
+    bad = set()
+    try:
+        import psycopg2
+        conn = psycopg2.connect(DB); cur = conn.cursor()
+        cur.execute("SELECT ts_code, name, is_st FROM stock_pool")
+        for ts, name, st in cur.fetchall():
+            n = str(name or "").upper()
+            if int(st or 0) == 1 or n.startswith("ST") or n.startswith("*ST"):
+                bad.add(str(ts))
+        cur.execute("SELECT symbol, flag_type, value FROM risk_flags WHERE flag_type IN ('is_st','earnings_bad')")
+        for sym, ft, val in cur.fetchall():
+            if str(ft) == 'is_st' and str(val) == '1':
+                bad.add(str(sym))
+            elif str(ft) == 'earnings_bad':
+                bad.add(str(sym))
+        cur.close(); conn.close()
+    except Exception:
+        pass
+    return bad
+
+def _sell_st_holdings(positions):
+    bad = _bad_stock_set()
+    out = []
+    for p in positions:
+        ts = p["symbol"][2:] + "." + p["symbol"][:2]
+        if ts not in bad:
+            continue
+        price = _live_price(ts, p["symbol"])
+        if price <= 0:
+            continue
+        try:
+            resp = _http("/trades", {"symbol": p["symbol"], "side": "sell", "price": price,
+                                     "volume": int(p.get("volume") or 0), "account": "stock",
+                                     "reason": "cleanup_st_holdings(不应持有ST)"})
+            out.append({"symbol": p["symbol"], "status": resp.get("status"), "reason": resp.get("reason")})
+        except Exception as e:
+            out.append({"symbol": p["symbol"], "status": "ERR " + str(e)[:60]})
+    return out
+
 def _chain_in_mainline(chain, ml):
     if not ml:
         return False
@@ -109,11 +150,12 @@ def _buy_shortlist(chain, exclude, limit=3):
         return []
     bl = load("crowding_blacklist.json") or {}
     detail = bl.get("symbols_detail") or {}
+    bad = _bad_stock_set()
     cands = []
     for ts, names in cm.items():
         if any(norm(k) in norm(n) for n in names for k in kws):
             xq = ("SH" + ts[:6] if ts.endswith(".SH") else ("SZ" + ts[:6] if ts.endswith(".SZ") else ts))
-            if xq not in exclude and ts not in detail:
+            if xq not in exclude and ts not in detail and ts not in bad:
                 cands.append((ts, xq))
     out = []
     for ts, xq in cands[:80]:
@@ -198,6 +240,7 @@ def main():
     healthy = bool(ru.get("rotation_healthy"))
     sucking = bool(ru.get("mainline_sucking"))
     positions = _held(); concepts = _concepts()
+    _st_cleanup = _sell_st_holdings(positions)
     holdings_ctx = [{"symbol": p["symbol"], "volume": p["volume"], "chains": _chains_of(p["symbol"], concepts)} for p in positions]
     ctx = {"date": wave.get("date") or "", "wave_op": wop, "wave_sub": wave.get("sub_level"),
            "main_line": ml.get("main_line"), "candidates": ml.get("candidates"),
