@@ -69,6 +69,22 @@ def _chains_of(sym, concepts):
     names = concepts.get(sym, []) + concepts.get(ts, [])
     return [sub for sub, kws in SUB.items() if any(norm(k) in norm(n) for n in names for k in kws)]
 
+def _in_exec_window():
+    from datetime import datetime
+    hm = datetime.now().hour * 100 + datetime.now().minute
+    return (945 <= hm <= 1125) or (1300 <= hm <= 1440)
+
+def _live_price(ts, xq):
+    try:
+        sys.path.insert(0, "/app/app")
+        from app.services.t_data_sources import fetch_tencent_quote
+        q = fetch_tencent_quote(xq)
+        if q and q.get("current"):
+            return float(q["current"])
+    except Exception:
+        pass
+    return _latest_close(ts)
+
 def _chain_in_mainline(chain, ml):
     if not ml:
         return False
@@ -209,6 +225,16 @@ def main():
         if side not in ("mainline", "defensive_resource"):
             continue
         buy_list.append({"chain": ch, "side": side, "reason": str(it.get("reason") or "")[:100]})
+    if not _in_exec_window():
+        from datetime import datetime
+        out_wait = {"ts": datetime.now().isoformat(), "mode": "PLAN-ONLY(非交易窗口, 不下单)",
+                    "wave": wop, "wave_sub": wave.get("sub_level"),
+                    "agent_raw": dec, "guarded_sell": sell_list, "guarded_buy": buy_list,
+                    "sell_exec": [], "buy_exec": [], "note": "交易日盘中窗口(09:45-11:25/13:00-14:40)才会自动下单"}
+        json.dump(out_wait, open(os.path.join(DATA, "rotation_switch_plan.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        print("非交易窗口 → 只更新计划不下单", flush=True)
+        print(json.dumps(out_wait, ensure_ascii=False, indent=1)[:1500])
+        return 0
     sell_exec = []
     for s in sell_list:
         for p in positions:
@@ -218,7 +244,7 @@ def main():
             vol = hold if s["action"] == "clear" else int(hold / 2 / 100) * 100
             if vol < 100:
                 continue
-            price = _latest_close(p["symbol"][2:] + "." + p["symbol"][:2])
+            price = _live_price(p["symbol"][2:] + "." + p["symbol"][:2], p["symbol"])
             if price <= 0:
                 continue
             try:
@@ -232,7 +258,7 @@ def main():
     held_syms = {p["symbol"] for p in positions}
     for b in buy_list[:2]:
         for cand in _buy_shortlist(b["chain"], exclude=held_syms, limit=3):
-            price = _latest_close(cand["ts_code"])
+            price = _live_price(cand["ts_code"], cand["symbol"])
             if price <= 0:
                 continue
             try:

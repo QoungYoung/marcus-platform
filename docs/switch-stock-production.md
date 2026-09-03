@@ -1,7 +1,7 @@
 # 主线内切换·个股级 — 生产接线建议（草案，待用户确认）
 
 > 基于 backtest_rotation_switch_stock.py（E09-E12 全部 executed）+ v2 评测（±5 日 35/39=89.7%，8/8 aligned）
-> 落地状态：**Agent(Pi)链级决策 + 代码护栏 + 模拟盘直接下单**（2026-09-03）——rotation_switch_agent 工作日15:25（旧规则任务已停用）；实测 t_only/4-2 下 Agent 判定主线拥挤分支不可追+军工room防御双线，护栏通过后买入 3 只军工 ×100 股。SWITCH_EXEC_ENABLED=1 时 plan 后自动：sell_plan clear/halve 先卖（保留做T 100股铁律由后端拦），主线内 room 链经 LOW/MID+非拥挤扫描后小仓买入（≤3只/100股起点）。参数默认见 config/switch_wolf_defaults.json（系统假设标注）。
+> 落地状态：**Agent(Pi)链级决策 + 代码护栏 + 模拟盘直接下单**（2026-09-03）——rotation_switch_agent 早盘09:50/午后14:10 两个盘中窗口（旧规则任务已停用；非交易窗口只更新计划不下单，价格用实时quote）；实测 t_only/4-2 下 Agent 判定主线拥挤分支不可追+军工room防御双线，护栏通过后买入 3 只军工 ×100 股。SWITCH_EXEC_ENABLED=1 时 plan 后自动：sell_plan clear/halve 先卖（保留做T 100股铁律由后端拦），主线内 room 链经 LOW/MID+非拥挤扫描后小仓买入（≤3只/100股起点）。参数默认见 config/switch_wolf_defaults.json（系统假设标注）。
 > 原则：**链级决策 ≠ 个股资金流**；个股级只做新链内的选股排序。
 
 ## 1. 生产语义拆成两层
