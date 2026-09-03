@@ -49,6 +49,45 @@ def dxy_now():
         try: return float(parts[1]), parts[0]  # value, time
         except Exception: pass
     return None,None
+def _derive_switches(out):
+    """Wolf 四类开关 v2（阈值先按语料经验值, 供 A/B 调）:
+    ①崩盘清单-债市异动 ②流动性/曲线 ③两融热钱/杀杠杆 ④GJD撤退/护盘 + 北向增量"""
+    y=(out.get('yields') or {}); us=(y.get('us') or {}); cn=(y.get('cn') or {}); ch=(y.get('chg') or {})
+    m=(out.get('market') or {}); g=(m.get('gjd') or {})
+    sw={'us_yield_spike': bool((ch.get('us10_1d') is not None and ch['us10_1d']>=0.10) or (ch.get('us30_1d') is not None and ch['us30_1d']>=0.10)),
+        'cn30_spike': bool(ch.get('cn30_1d') is not None and ch['cn30_1d']>=0.15),
+        'us_curve_inverted': bool(us.get('10年_2年') is not None and us['10年_2年']<0),
+        'margin_heat': bool(m.get('margin_20d_chg') is not None and m['margin_20d_chg']>=3.0 and (m.get('margin_net_buy') or 0)>0),
+        'margin_burst': bool(m.get('margin_20d_chg') is not None and m['margin_20d_chg']<=-5.0),
+        'gjd_support': bool((g.get('sh300_chg20') is not None and g['sh300_chg20']>0) and (g.get('sh50_chg20') is not None and g['sh50_chg20']>0)),
+        'gjd_withdraw': bool((g.get('sh300_chg20') is not None and g['sh300_chg20']<-2.0) or (g.get('sh50_chg20') is not None and g['sh50_chg20']<-2.0)),
+        'north_in': bool((m.get('north_5d') or 0)>0)}
+    flags=[k for k,v in sw.items() if v]
+    out['macro_switches']={'flags':flags,'detail':sw}
+    out['macro_switches_text']=_switches_text(sw)
+    return sw
+
+def _switches_text(sw):
+    NL=chr(10); L=[]
+    if sw['us_yield_spike'] or sw['cn30_spike']:
+        L.append('- 崩盘清单预警(债市异动): 美债/中债长端单日异动 → 不追高, 防守优先')
+    if sw['us_curve_inverted']:
+        L.append('- 美债10Y-2Y倒挂: 衰退/流动性风险背景')
+    if sw['margin_heat']:
+        L.append('- 两融热钱活跃: 主升可跟随, 但勿追高热点/高位基石')
+    if sw['margin_burst']:
+        L.append('- 杀杠杆阶段: 不接飞刀, 等GJD兜底; 难做浪段以指数ETF为主')
+    if sw['gjd_support']:
+        L.append('- GJD护盘(宽基份额增): 支撑位附近可低吸/做T')
+    if sw['gjd_withdraw']:
+        L.append('- GJD撤退(宽基份额减): 政策底未坐实/资金面弱, 不抢反弹')
+    if sw['north_in']:
+        L.append('- 北向/增量资金流入: 允许跟随主线')
+    else:
+        L.append('- 北向/增量资金偏弱: 不追高')
+    if not L: L.append('- 宏观开关: 中性(未触发异常)')
+    return '## 宏观/机构开关（Wolf v2）' + NL + NL.join(L) + NL + NL
+
 def main():
     target=sys.argv[1] if len(sys.argv)>1 else dstr_default()
     print('target',target,flush=True)
@@ -82,6 +121,10 @@ def main():
         print('market ctx keys',list(out['market'].keys()),flush=True)
     except Exception as e:
         print('market ERR',str(e)[:200],flush=True); out['market']['error']=str(e)[:200]
+    try:
+        _derive_switches(out)
+    except Exception as e:
+        out['macro_switches']={'flags':[],'err':str(e)[:120]}
     path=os.path.join(DATA,'macro_state.json')
     json.dump(out,open(path,'w',encoding='utf-8'),ensure_ascii=False,indent=1)
     print('WROTE',path,flush=True); print('DONE',flush=True)

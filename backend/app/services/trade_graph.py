@@ -1023,6 +1023,37 @@ def _read_risk_context() -> str:
     except Exception as e:
         return "## 风控门控（risk_gate）" + NL + "- 计算失败：" + str(e)[:80] + NL + NL
 
+def _read_macro_context() -> str:
+    """宏观/机构开关(macro_state v2)：读 macro_state.json → Wolf 四类开关文本。
+    未生成/未含开关时给数值摘要并提示待 macro_state 刷新。"""
+    NL = chr(10)
+    try:
+        import os as _os, json as _json
+        p = _os.path.join(_os.environ.get("DATA_DIR", "data"), "macro_state.json")
+        if not _os.path.exists(p):
+            return "## 宏观/机构开关（macro_state）" + NL + "- 尚未生成 macro_state.json，跳过宏观上下文。" + NL + NL
+        st = _json.load(open(p, encoding="utf-8"))
+        txt = st.get("macro_switches_text") or ""
+        y = st.get("yields") or {}; dxy = st.get("dxy") or {}; m = st.get("market") or {}; g = m.get("gjd") or {}
+        cn = (y.get("cn") or {}); us = (y.get("us") or {})
+        head = ("## 宏观快照" + NL
+                + "- 收益率: CN30=%(cn30)s CN10=%(cn10)s | US30=%(us30)s US10=%(us10)s | DXY=%(dxy)s" % {
+                    "cn30": cn.get("30年"), "cn10": cn.get("10年"), "us30": us.get("30年"), "us10": us.get("10年"),
+                    "dxy": dxy.get("value")})
+        margin = ("- 两融: 余额=%(rzrqye)s亿 20d=%(chg)s%% 净买=%(net)s亿" % {
+            "rzrqye": m.get("margin_rzrqye"), "chg": m.get("margin_20d_chg"), "net": m.get("margin_net_buy")}) if m.get("margin_rzrqye") is not None else "- 两融: 无数据"
+        gjd = ("- GJD: HS300份额20d=%(h300)s%% 上证50份额20d=%(h50)s%% 5d流入=%(in)s亿" % {
+            "h300": g.get("sh300_chg20"), "h50": g.get("sh50_chg20"), "in": g.get("sh300_inflow_5d")}) if g else "- GJD: 无数据"
+        block = head + NL + margin + NL + gjd + NL
+        if txt:
+            block += txt
+        else:
+            block += "## 宏观/机构开关（Wolf v2）" + NL + "- macro_state 未含开关推导(请跑 build_macro_state v2)" + NL
+        return block + NL
+    except Exception as e:
+        return "## 宏观/机构开关（macro_state）" + NL + "- 读取失败：" + str(e)[:80] + NL + NL
+
+
 def _read_rotation_gate_context() -> str:
     """轮动门控（rotation_gate v2）上下文：wave_state op + main_line 吸金 → gate 判定。
     与 docs/p2-rotation-validation-analysis.md gate_rotation v2 同源；供 Pi 决定'能否切低/是否只做主线内轮动'。
@@ -1255,6 +1286,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "stock_confirm_context": _read_stock_confirm_context(),
         "wave_context": _read_wave_context(),
         "rotation_gate_context": _read_rotation_gate_context(),
+        "macro_context": _read_macro_context(),
         "risk_context": _read_risk_context(),
     }
 
@@ -1358,6 +1390,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('confirm_context', chr(39)+chr(39))}"
         f"{state.get('stock_confirm_context', chr(39)+chr(39))}"
         f"{state.get('rotation_gate_context', chr(39)+chr(39))}"
+        f"{state.get('macro_context', chr(39)+chr(39))}"
         f"{state.get('risk_context', chr(39)+chr(39))}"
         f"{state['regime_context']}\n"
         f"{state.get('style_context', '')}"

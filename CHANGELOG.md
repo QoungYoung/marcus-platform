@@ -486,3 +486,13 @@
 - apps/main_line/build_macro_state.py: 采集 CN/US收益率 + 美元指数实时 + 两融(余额/20d变化/净买/分位) + GJD宽基份额(510300/510050 5d/20d) + 北向5d/当日 → data/macro_state.json。
 - config/tasks.yaml 新增 macro_state_collector(工作日15:06, tasks 26→27); 已同步服务器并重启worker。
 
+
+## [1.13.0] 2026-09-03 · macro_state v2：Wolf 四类开关推导 + trade_graph 接入
+
+- build_macro_state.py 增加 _derive_switches：从原始值推导开关(flags/detail + macro_switches_text)：
+  ①崩盘清单-债市异动(us/cn 30Y单日>=+0.10/0.15) ②美债10Y-2Y倒挂 ③两融热钱(20d>=3%+净买>0)/杀杠杆(20d<=-5%)
+  ④GJD护盘(份额20d>0)/撤退(份额20d<-2%) + 北向5d正负；
+- trade_graph.py 新增 _read_macro_context()（宏观快照+Wolf开关文本），node_fetch_context 注入 macro_context，Pi prompt 在 rotation/risk 之间输出；
+- 实测 2026-09-03: flags=[gjd_withdraw, north_in] → 文本“GJD撤退不抢反弹 + 北向流入允许跟主线”；宏快照含 CN30=2.14/US30=5.27/DXY=99.48/两融26610亿/GJD份额20d负；
+- worker 已重启 healthy, tasks=27; macro_state_collector 15:06 自动刷新含开关。
+
