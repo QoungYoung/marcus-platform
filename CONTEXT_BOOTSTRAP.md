@@ -1,6 +1,6 @@
 # 新上下文启动包（狼大策略复制 / 恢复指引）
 
-> 更新：2026-09-03（第二次切换上下文快照；commit 见 git log）。
+> 更新：2026-09-04（第三次切换上下文快照；commit 见 git log。本轮完成 Wolf 选股/做T/风控对齐）。
 
 ## 0. 先读这几份
 1. 仓库根 WOLF_TASKS_OVERVIEW.md —— 任务总览（含最新：买点一致率 v3=92.9%、macro 历史回填、分钟补拉、日历类）。
@@ -8,6 +8,10 @@
 3. dsh-memoir（memoir_read）：近几日记录多；关键词：crowding PIT、macro_state、P2 Gate、wolf dip、E06-E13、brze、idx_mins、v3、minute。
 4. 服务器 /opt/marcus-platform/data/wave_config.md（浪型 v6 冻结）。
 
+
+## 0. 本轮(2026-09-04)进展 + 下一位开发待办
+- **Wolf 逻辑对齐已完成**：主线判定/成分股确认/高低位/confirm_chain/浪型门(wave_level_gate defense/exit→不建仓)/做T(正T+确认T出+倒T+defensive+申万行业防御 defensive_t_reduce_sw)/周末降险/weekend_de_risk/六因子 wolf_judge(软指导)/check_entry_filters(旧技术硬门转软, LEGACY_TECH_GATES=1 回退)/board_half(减半,TMonitor写wolf_board_half_sell)/主线内轮动去弱留强+龙头+相对强度(rotation_gate上下文)/产业链形态(提示词让Pi用get_concept_mapping自查, 非数据注入)/**不再注入震荡/趋势市状态(regime/style_context置空, _get_trade_instruction按浪型(见wave_context)执行)**。
+- **下一位开发者待办（明确未做）**：①风控·查杠杆(P2)——个股/持仓级两融·融资盘检查，未进风控链；②宏观机构行为/持仓纪律/复盘(P2/P3)——机构行为仅宏观级，持仓纪律 backend=0，复盘缺完整买卖/持仓纪律闭环。详见 WOLF_TASKS_OVERVIEW.md §0。
 ## 1. 已完成（不用重做，结论在文档/记忆）
 - 主线/浪型/高低位/确定性/做T/轮动+拥挤PIT/风控/P3 三仓档位 v0(dry-run)。
 - **P2 宏观 v2 + 历史回填**：macro_state 15:06 采集；Wolf 四类开关；A/B M01-M10=10/10；backfill_macro_state_history.py 已回填 19 关键时点(E05-E15∪M01-M10)→data/macro_state_history.json（E13 07-08 margin_burst+gjd_withdraw，GJD 护盘 07-23 才在份额显现）。
