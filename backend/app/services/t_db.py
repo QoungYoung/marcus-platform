@@ -161,11 +161,20 @@ def _resolve_direction(cond: Dict[str, Any]) -> str:
 
 
 def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None,
-                             account_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """列出当日有效条件（默认 status='active'）。account_id 可选过滤(2026-09-02, t_monitor 按账户监控)。"""
+                             account_id: Optional[str] = None,
+                             before_trade_date: Optional[str] = None) -> List[Dict[str, Any]]:
+    """列出有效条件（status='active'）。默认 trade_date=今日；before_trade_date 给定时
+    改为列出该日期**之前**仍 active 的条件（狼大持续腿跨日结转用, 2026-09-03）。
+    account_id 可选过滤(2026-09-02, t_monitor 按账户监控)。"""
     try:
         db = SessionLocal()
         try:
+            if before_trade_date:
+                date_sql = "trade_date < :before_td"
+                date_params: Dict[str, Any] = {"before_td": before_trade_date}
+            else:
+                date_sql = "trade_date = :trade_date"
+                date_params = {"trade_date": trade_date or _today()}
             sql = (
                 "SELECT id, account_id, symbol, trade_date, trigger_kind, "
                 "target_price, reinform_price, vol_ratio_thresh, "
@@ -174,21 +183,41 @@ def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[st
                 "time_stop_open, time_stop_close, start_time, end_time, "
                 "armed, armed_at, last_triggered_at, trigger_count_today, "
                 "regime_gate, expression, status, publisher, session_id, direction "
-                "FROM t_conditions WHERE status = 'active' AND trade_date = :trade_date"
+                f"FROM t_conditions WHERE status = 'active' AND {date_sql}"
             )
-            params: Dict[str, Any] = {"trade_date": trade_date or _today()}
+            params: Dict[str, Any] = dict(date_params)
             if symbol:
                 sql += " AND symbol = :symbol"
                 params["symbol"] = symbol
             if account_id:
                 sql += " AND account_id = :acc"
                 params["acc"] = account_id
+            sql += " ORDER BY trade_date DESC, id DESC"
             rows = db.execute(text(sql), params).mappings().all()
             return [dict(r) for r in rows]
         finally:
             db.close()
     except Exception as e:
         print(f"[t-db] list_active_conditions 失败: {e}")
+        return []
+
+
+def list_condition_keys(account_id: str, trade_date: str) -> List[Dict[str, Any]]:
+    """返回某账户某交易日全部条件键(symbol, trigger_kind, status)（任意状态）。
+    狼大持续腿跨日结转用——判断今日是否已存在该键（含人工停用/消费行），
+    防止把用户今日已停用的腿复活 (2026-09-03)。"""
+    try:
+        db = SessionLocal()
+        try:
+            rows = db.execute(text(
+                "SELECT symbol, trigger_kind, status FROM t_conditions "
+                "WHERE account_id = :acc AND trade_date = :td"
+            ), {"acc": account_id, "td": trade_date}).mappings().all()
+            return [dict(r) for r in rows]
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-db] list_condition_keys 失败: {e}")
         return []
 
 

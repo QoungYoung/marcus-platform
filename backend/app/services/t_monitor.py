@@ -81,6 +81,12 @@ class TMonitor:
     # ── 主循环 ──
     def _run(self):
         time.sleep(INITIAL_OFFSET)  # 错峰
+        # 2026-09-03 修复：启动即补当日狼大持续腿——跨日/重启后监控条件不再丢失
+        # （worker 常在非交易时段重启；这里无条件幂等补一次，交易日切换再补一次）
+        try:
+            self._roll_wolf_legs(datetime.now().strftime("%Y%m%d"))
+        except Exception as e:
+            print(f"[TMonitor] 启动持续腿结转异常: {e}")
         while not self._stop.is_set():
             round_start = time.time()
             try:
@@ -88,6 +94,12 @@ class TMonitor:
                     today_d = datetime.now().strftime("%Y%m%d")
                     if self._daily_maintained != today_d:
                         self._daily_maintained = today_d
+                        # 2026-09-03：狼大持续腿跨日结转不依赖自动维护开关——
+                        # _daily_maintain 停用后也必须让 249/250/252/253/254 每个交易日可用
+                        try:
+                            self._roll_wolf_legs(today_d)
+                        except Exception as e:
+                            print(f"[TMonitor] 交易日持续腿结转异常: {e}")
                         if T_MONITOR_AUTO_MAINTAIN:   # 2026-09-02: 默认停自动维护(只留狼大做T条件)
                             self._status["daily_maintained"] = self._daily_maintain()
                             self._start_ai_maintain()
@@ -106,6 +118,66 @@ class TMonitor:
             # jitter 等待
             wait = self.interval + ((time.time() * 1000) % (JITTER * 2 + 1) - JITTER)
             self._stop.wait(max(5.0, wait))
+
+    def _roll_wolf_legs(self, today: str) -> int:
+        """狼大持续腿跨日结转（2026-09-03 修复生产监控条件丢失）。
+
+        背景：狼大做T条件(249/250/252/253/254 等)按“交易日”建行
+        (唯一键 account+symbol+trigger_kind+trade_date)，是非消费式持续腿
+        (命中后保持 active，5分钟冷却防刷)；而 t_monitor 每轮只读“当日”
+        active 条件。此前持续腿只在建仓当天(trade_date=当天)存在，跨日后
+        昨日行 status 仍 active 但因日期不是今日 → list_active_conditions
+        读不到 → 报告显示“没有监控条件”。
+
+        本函数幂等：把交易日 today 之前仍 active 的狼大表达式腿，按
+        (symbol, trigger_kind) 取最近一日，复制一份到 today（保留表达式/
+        价格/止损等全部配置）；今日已有同键行(任意状态, 含人工停用/消费)
+        则跳过——不复活用户已停用/已消费的腿；成功后归档旧日源行。
+        """
+        rolled = 0
+        try:
+            prev = t_db.list_active_conditions(
+                account_id=T_MONITOR_ACCOUNT, before_trade_date=today)
+            wolf = [c for c in prev if _is_wolf_t_condition(c)]
+            if not wolf:
+                return 0
+            keys_today = {(k.get("symbol"), k.get("trigger_kind"))
+                          for k in t_db.list_condition_keys(T_MONITOR_ACCOUNT, today)}
+            # prev 已按 trade_date DESC, id DESC → 首次出现即最近一日
+            latest: Dict[Any, Dict[str, Any]] = {}
+            for c in wolf:
+                key = (c.get("symbol"), c.get("trigger_kind"))
+                if key not in latest:
+                    latest[key] = c
+            expired_ids: List[int] = []
+            for (sym, kind), src in latest.items():
+                if (sym, kind) in keys_today:
+                    continue
+                copy = {k: v for k, v in src.items()
+                        if k not in ("id", "created_at", "armed_at",
+                                     "last_triggered_at", "trigger_count_today",
+                                     "trade_date", "status")}
+                copy.update({
+                    "account_id": T_MONITOR_ACCOUNT,
+                    "symbol": sym,
+                    "trigger_kind": kind,
+                    "trade_date": today,
+                    "status": "active",
+                })
+                copy.setdefault("armed", 1)
+                cid = t_db.upsert_condition(copy)
+                if cid:
+                    rolled += 1
+                    if src.get("id"):
+                        expired_ids.append(int(src["id"]))
+            for cid in expired_ids:
+                t_db.update_condition_state(cid, status="expired")
+        except Exception as e:
+            print(f"[TMonitor] 狼大持续腿跨日结转失败: {e}")
+        if rolled:
+            print(f"[TMonitor] 狼大持续腿跨日结转 {rolled} 条 → {today}")
+            self._status["wolf_legs_rolled"] = f"{today}:{rolled}"
+        return rolled
 
     def _daily_maintain(self) -> dict:
         """每日一次（每交易日首次轮询前）：归档昨日条件 + 为缺条件的持仓补生成当日双条件。

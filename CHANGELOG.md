@@ -504,3 +504,13 @@
 - 效果：auto 通道（candidate/long_term monitor 只调 check_entry_filters）自动获得 wave/systemic/macro 硬拦（此前只有 Pi/trade_graph 有 wave 硬拦）。
 - 实测 SZ300054：grade=probe_only mult=0.5，p2_gate_details=GJD撤退降级0.5。
 
+## [1.15.0] 2026-09-03 · 修复：狼大做T持续腿跨日丢失（监控条件消失）
+
+- **现象**：2026-09-03 交易报告 SH603259 无 t_conditions；DB 中 249/250/252/253/254 五条狼大持续腿 status=active 但 trade_date=20260902，无 09-03 行。
+- **根因**：t_conditions 按交易日建行(唯一键 account+symbol+trigger_kind+trade_date)；t_monitor._round 每轮只读"当日"active 条件；狼大持续腿为非消费式（命中不销毁、5分钟冷却）且自动维护已停（只留狼大做T），没有任何机制把它们结转到新交易日 → 跨日后昨日行日期不匹配当日查询，报告显示"没有监控条件"。
+- **修复（backend/app/services/t_monitor.py + t_db.py）**：
+  - t_db.list_active_conditions 支持 before_trade_date（取某日之前仍 active 的条件）；新增 list_condition_keys（某账户某日全部条件键，任意状态）。
+  - TMonitor 新增 _roll_wolf_legs()：启动时与每日交易日切换时幂等结转——把 today 之前仍 active 的狼大表达式腿按 (symbol, trigger_kind) 取最近一日复制到当日（保留表达式/价格/止损/publisher），今日已有同键行(含人工停用)则跳过，成功后旧日源行归档 expired。
+  - 结转不依赖 T_MONITOR_AUTO_MAINTAIN（自动维护仍默认关闭）。
+- **验证**：部署重启后日志 "[TMonitor] 狼大持续腿跨日结转 5 条 → 20260903"；DB 生成 09-03 新行 256-260(5条 active，表达式完整，trigger_count 归零)；旧 249/250/252/253/254 → expired；10:08:45 monitor 命中 high_sell(#69)/custom 黄线(#70)，因可卖 T仓=0 自动执行 blocked（底仓100保护生效，无错单）。
+
