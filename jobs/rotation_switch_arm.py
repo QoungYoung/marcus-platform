@@ -5,7 +5,7 @@
   → TMonitor 30s 轮询触发卖旧/买新（卖=quote.vwap_break；买=index.m5_dump 253 / dip_prev_low 254）
 
 动作：
-  1) expire 昨日 publisher='rotation_switch' 的旧腿
+  1) expire 昨日 publisher='switch' 的旧腿
   2) 卖侧：当前持仓落在 拥挤无空间/出货链 → 布 vwap_break 卖腿
   3) 买侧：room/holdT 且(主线 或 非build+健康 的防御/资源二线) → 选 LOW/MID 非拥挤 ≤3 只，
      每只布 m5dump(253) + dip_prev_low(254) 两条买腿
@@ -29,7 +29,7 @@ def norm(s):
 
 def _today():
     from datetime import date
-    return date.today().isoformat()
+    return date.today().strftime('%Y%m%d')
 
 def held_positions():
     try:
@@ -137,14 +137,14 @@ BUY_254_EXPR = {"and": [{"op": "==", "field": "quote.dip_prev_low", "value": Tru
                         {"op": ">", "field": "quote.current", "value": 0}]}
 
 def expire_old(cur, today):
-    cur.execute("UPDATE t_conditions SET status='expired' WHERE account_id='stock' AND publisher='rotation_switch' AND status='active' AND trade_date < %s", (today,))
+    cur.execute("UPDATE t_conditions SET status='expired' WHERE account_id='stock' AND publisher='switch' AND status='active' AND trade_date < %s", (today,))
 
 def arm(db, cur, symbol, trigger_kind, direction, expr, trade_date):
     from app.services import t_db
     return t_db.upsert_condition({"account_id": "stock", "symbol": symbol, "trade_date": trade_date,
                                   "trigger_kind": trigger_kind, "direction": direction,
                                   "expression": expr, "status": "active", "armed": 1,
-                                  "publisher": "rotation_switch"})
+                                  "publisher": "switch"})
 
 def main():
     dry = os.getenv("SWITCH_ARM_DRY", "0").strip() in ("1", "true", "yes")
