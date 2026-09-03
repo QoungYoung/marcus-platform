@@ -479,3 +479,10 @@
 - 拥挤核心硬拦(n_funds≥4&float≥1%+高位无空间)保留为风控分歧(非Wolf逻辑但属于风险护栏)；LEGACY_TECH_GATES=1 可一键恢复旧硬门槛(回退用)。
 - backend已重启healthy；smoke: 688012 grade=blocked 由拥挤风控触发，MA/时间/形态均显示Wolf口径软提示。
 
+
+## [1.12.0] 2026-09-03 · P2 宏观采集器 v1（macro_state.json）
+
+- 探测结论: worker已装akshare, bond_zh_us_rate()可用(1990-12-19~2026-09-02, 含CN/US 2/5/10/30Y); FRED超时/Yahoo429/东财RemoteDisconnected; DXY实时可用新浪DINIW(历史待自建快照)。
+- apps/main_line/build_macro_state.py: 采集 CN/US收益率 + 美元指数实时 + 两融(余额/20d变化/净买/分位) + GJD宽基份额(510300/510050 5d/20d) + 北向5d/当日 → data/macro_state.json。
+- config/tasks.yaml 新增 macro_state_collector(工作日15:06, tasks 26→27); 已同步服务器并重启worker。
+

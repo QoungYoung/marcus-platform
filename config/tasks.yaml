@@ -518,3 +518,24 @@ tasks:
   script:
     args: []
     path: apps/main_line/build_systemic_inputs.py
+- depends_on: []
+  description: 收盘后(15:06) 宏观采集(bond_zh_us_rate CN/US收益率+DXY+两融/GJD/北向) → macro_state.json
+  enabled: true
+  id: macro_state_collector
+  name: 宏观机构状态采集
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/macro_state_{date}.log
+  schedule:
+    expr: 6 15 * * mon-fri
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/build_macro_state.py
