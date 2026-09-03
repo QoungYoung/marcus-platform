@@ -437,9 +437,9 @@ def _get_regime_strategy(regime: str) -> str:
             "|------|:------:|\n"
             "| 新开仓 | **禁止**（短期层只做T不新开；仅趋势向上月允许） |\n"
             "| 操作方式 | **只做T摊薄**：正T低吸(指数回撤2-3%)/分时T出/黄线离场；T仓与底仓分离，底仓不卖 |\n"
-            "| K线周期 | 60分钟辅助（get_intraday_min freq='60min'） |\n"
-            "| 单票仓位 | ≤5-8%（仅已有底仓做T） |\n"
-            "| 产业链建仓 | **禁用** |\n\n"
+            "| 做T周期 | 分时做T（正T低吸/黄线/缩量转放量），不要求60分钟金叉 |\n"
+            "| 做T仓 | ≤5%（底仓另计）；主线低吸等建仓不设平台单票硬限 |\n"
+            "| 产业链/主线建仓 | 允许（若满足狼大买点：日内回撤≥2.5%/触前低 + 缩量 + 站回黄线，或 计划/关键位命中）；不追主升 |\n\n"
             "⚠️ 震荡日节奏（关键！）：\n"
             "- 短期层禁止新开仓、禁止加仓；持仓只做T摊薄（做T由 t_monitor 30s 实时监控）\n"
             "- 做T标的（有 t_conditions）卖出最多卖 T 仓（持仓-100），底仓不卖（狼大铁律，代码层强制拦截）\n"
@@ -1635,9 +1635,16 @@ def node_check_regime_compliance(state: TradeState) -> dict:
     except Exception:
         pass
 
-    if regime != 'oscillation':
-        logger.info(f"[{eid}] [Graph] ✓ 趋势市，跳过策略合规检查")
-        return {"regime_violation": False, "regime_violation_reason": ""}
+    # 狼大口径(2026-09-03 审计): 去掉平台自研"震荡市仓位≤50%/单票≤8%/必须60分/禁产业链建仓"硬约束。
+    if regime == 'oscillation':
+        logger.info(f"[{eid}] [Graph] ▶ check_regime_compliance (震荡/调整浪 -> 狼大口径: 只做T不追主升)")
+        note = ("【狼大口径·震荡/调整浪】只做T、不追主升；主线低吸须满足狼大买点"
+                "(日内回撤≥2.5%或触前低 + 缩量 + 站回黄线) 或 计划/关键位命中。"
+                "六因子软指导与 wave_level_gate 已生效；不再套用平台仓位/单票/60分/产业链建仓硬限。")
+        state['pi_raw_reply'] = (state.get('pi_raw_reply', '') + chr(10) + chr(10) + note)
+        return {"regime_violation": False, "regime_violation_reason": note}
+    logger.info(f"[{eid}] [Graph] ✓ 趋势市，跳过策略合规检查")
+    return {"regime_violation": False, "regime_violation_reason": ""}
 
     logger.info(f"[{eid}] [Graph] ▶ check_regime_compliance (震荡市)")
     violations = []
