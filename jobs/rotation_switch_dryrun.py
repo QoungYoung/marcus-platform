@@ -243,7 +243,7 @@ def main():
                           "signal": sig, "action": action, "wave_op": wop,
                           "rule": "拥挤出货链按狼大状态机(系统假设)" if action != "keep" else "keep(工具/不在出货档)"})
     buy_chains = [{"chain": c, "signal": signals.get(c)} for c in room if signals.get(c) == "room"]
-    plan = {"ts": datetime.now().isoformat(), "mode": "DRY-RUN(不自动下单)", "wave": wave.get("operation"),
+    plan = {"ts": datetime.now().isoformat(), "mode": ("AUTO-EXEC(模拟盘)" if _exec_enabled() else "DRY-RUN(不自动下单)"), "wave": wave.get("operation"),
             "wave_sub": wave.get("sub_level"), "chain_signals": {k: v for k, v in signals.items() if v != "normal"},
             "sell_plan": sell_plan, "buy_chains": buy_chains,
             "defaults_note": "卖旧尺度状态机/先卖后分步买/名单3-5档位probe3-refill8-add5 均为系统假设(非狼大原话)，dry-run观察校准"}

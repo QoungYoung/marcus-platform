@@ -1127,6 +1127,41 @@ def _read_rotation_gate_context() -> str:
     except Exception as e:
         return "## 轮动门控（rotation_gate）" + NL + "- 计算失败：" + str(e)[:80] + NL + NL
 
+def _read_rotation_switch_context() -> str:
+    """主线内切换·个股级计划（rotation_switch）上下文：读 data/rotation_switch_plan.json
+    （15:25 dry-run/自动执行产物；SWITCH_EXEC_ENABLED=1 时含 sell_plan/buy_chains/exec_results）。
+    与 rotation_gate 判定互补：gate 说能不能切，本块说当前建议切谁/买哪条链。"""
+    NL = chr(10)
+    try:
+        import json as _j, os as _os
+        p = _os.path.join(_os.environ.get("DATA_DIR", "data"), "rotation_switch_plan.json")
+        if not _os.path.exists(p):
+            return ""
+        pl = _j.load(open(p, encoding="utf-8"))
+        mode = pl.get("mode") or "?"
+        wave = pl.get("wave") or "?"
+        block = ("## 主线内切换计划（rotation_switch）" + NL
+                 + f"- 模式：{mode} ｜ 浪型：{wave}" + NL)
+        sp = pl.get("sell_plan") or []
+        if sp:
+            for it in sp[:6]:
+                block += (f"- 卖建议：{it.get('symbol')} action={it.get('action')} "
+                          f"chain={','.join(it.get('chains') or [])[:40]} signal={it.get('signal')}" + NL)
+        else:
+            block += "- 卖建议：无（当前持仓不在出货档）" + NL
+        bc = pl.get("buy_chains") or []
+        if bc:
+            block += "- 可埋伏买链：" + "、".join(x.get("chain", "") for x in bc[:4]) + "（需属主线才自动买）" + NL
+        er = pl.get("exec_results") or []
+        if er:
+            block += "- 执行结果：" + "、".join("%s %s %s→%s" % (x.get("action"), x.get("symbol"), x.get("volume"), x.get("resp")) for x in er[:8]) + NL
+        else:
+            block += "- 执行结果：本次无自动成交" + NL
+        return block + NL
+    except Exception as e:
+        return "## 主线内切换计划（rotation_switch）" + NL + "- 读取失败：" + str(e)[:80] + NL + NL
+
+
 _OP_GUIDE = {
     "build": "可建仓/追主升：主线内低吸埋伏、波段持仓可加仓，避免追高杀跌",
     "t_only": "只做T不新建仓：底仓不动，T仓按分时T出/正T低吸/黄线离场纪律高抛低吸",
@@ -1313,6 +1348,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "wave_context": _read_wave_context(),
         "three_tier_context": _read_three_tier_context(),
         "rotation_gate_context": _read_rotation_gate_context(),
+        "rotation_switch_context": _read_rotation_switch_context(),
         "macro_context": _read_macro_context(),
         "risk_context": _read_risk_context(),
     }
@@ -1418,6 +1454,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('confirm_context', chr(39)+chr(39))}"
         f"{state.get('stock_confirm_context', chr(39)+chr(39))}"
         f"{state.get('rotation_gate_context', chr(39)+chr(39))}"
+        f"{state.get('rotation_switch_context', chr(39)+chr(39))}"
         f"{state.get('macro_context', chr(39)+chr(39))}"
         f"{state.get('risk_context', chr(39)+chr(39))}"
         f"{state['regime_context']}\n"
