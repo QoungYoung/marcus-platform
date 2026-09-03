@@ -1,0 +1,170 @@
+{
+  "version": "2026-09-03",
+  "doc": "P3 三仓档位模型 v0 规则（本地 config/ 权威，可同步服务器；DB 覆盖后续支持）",
+  "mode_env": "P3_TIER_MODE",
+  "defaults": {
+    "t_cap_pct": 5,
+    "intent_not_allowed_reason": "三仓档位: 当前浪型不允许该动作"
+  },
+  "wave": {
+    "build": {
+      "base_mode": "new",
+      "cash_floor_pct": 25,
+      "intents": {
+        "new_base": {
+          "allow": true,
+          "cap_pct": 10,
+          "needs": []
+        },
+        "add_base": {
+          "allow": true,
+          "cap_pct": 10,
+          "needs": [
+            "has_base"
+          ]
+        },
+        "refill_base": {
+          "allow": true,
+          "cap_pct": 8,
+          "needs": [
+            "has_base_or_t_universe"
+          ]
+        },
+        "t_refill": {
+          "allow": true,
+          "cap_pct": 5,
+          "needs": [
+            "has_base"
+          ]
+        }
+      }
+    },
+    "t_only": {
+      "base_mode": "refill_only",
+      "cash_floor_pct": 35,
+      "intents": {
+        "new_base": {
+          "allow": false,
+          "cap_pct": 0,
+          "needs": []
+        },
+        "add_base": {
+          "allow": true,
+          "cap_pct": 5,
+          "needs": [
+            "has_base"
+          ]
+        },
+        "refill_base": {
+          "allow": true,
+          "cap_pct": 8,
+          "needs": [
+            "has_base_or_t_universe"
+          ]
+        },
+        "t_refill": {
+          "allow": true,
+          "cap_pct": 5,
+          "needs": [
+            "has_base"
+          ]
+        }
+      }
+    },
+    "side": {
+      "base_mode": "ambush",
+      "cash_floor_pct": 30,
+      "intents": {
+        "new_base": {
+          "allow": true,
+          "cap_pct": 3,
+          "needs": [
+            "rel_low_or_mainline"
+          ]
+        },
+        "add_base": {
+          "allow": true,
+          "cap_pct": 3,
+          "needs": [
+            "has_base"
+          ]
+        },
+        "refill_base": {
+          "allow": true,
+          "cap_pct": 5,
+          "needs": [
+            "has_base_or_t_universe"
+          ]
+        },
+        "t_refill": {
+          "allow": true,
+          "cap_pct": 5,
+          "needs": [
+            "has_base"
+          ]
+        }
+      }
+    },
+    "defense": {
+      "base_mode": "hold_refill",
+      "cash_floor_pct": 45,
+      "intents": {
+        "new_base": {
+          "allow": false,
+          "cap_pct": 0,
+          "needs": []
+        },
+        "add_base": {
+          "allow": true,
+          "cap_pct": 3,
+          "needs": [
+            "has_base",
+            "mainline_or_rel_low"
+          ]
+        },
+        "refill_base": {
+          "allow": true,
+          "cap_pct": 3,
+          "needs": [
+            "has_base_or_t_universe"
+          ]
+        },
+        "t_refill": {
+          "allow": true,
+          "cap_pct": 5,
+          "needs": [
+            "has_base"
+          ]
+        }
+      }
+    },
+    "exit": {
+      "base_mode": "reduce_only",
+      "cash_floor_pct": 50,
+      "intents": {
+        "new_base": {
+          "allow": false,
+          "cap_pct": 0,
+          "needs": []
+        },
+        "add_base": {
+          "allow": false,
+          "cap_pct": 0,
+          "needs": []
+        },
+        "refill_base": {
+          "allow": false,
+          "cap_pct": 0,
+          "needs": []
+        },
+        "t_refill": {
+          "allow": true,
+          "cap_pct": 5,
+          "needs": [
+            "has_base"
+          ]
+        }
+      }
+    }
+  }
+}
