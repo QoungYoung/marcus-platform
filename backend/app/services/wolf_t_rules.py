@@ -227,6 +227,40 @@ def resolve_sw_sector(sym):
     return l1
 
 
+_SW_L2_CACHE = {}
+def resolve_sw_l2(sym):
+    """个股→申万二级行业指数代码(801156.SI 医疗服务等). 用 datahubco index_member_all(ts_code) 反查 l2_code. 缓存."""
+    s = str(sym)
+    if s in _SW_L2_CACHE:
+        return _SW_L2_CACHE[s]
+    ts = s if s.endswith(('.SH', '.SZ')) else (s + '.SH' if s.startswith('6') else s + '.SZ')
+    items, fields = _dh_get('index_member_all', ts_code=ts)
+    if not items or not fields:
+        _SW_L2_CACHE[s] = None
+        return None
+    fmap = {f: i for i, f in enumerate(fields)}
+    l2 = items[0][fmap['l2_code']] if 'l2_code' in fmap else None
+    _SW_L2_CACHE[s] = l2
+    return l2
+
+
+def chain_breadth(syms, date=None):
+    """产业链形态完备度(狼大主线准则③): 返回 成分股覆盖的申万二级子行业数 + 子行业列表.
+    能拆上中下游/软硬 = 二级子行业数越多产业链越成型."""
+    import datetime as _dt
+    _date = (date or _dt.datetime.now().strftime('%Y%m%d'))
+    subs = set()
+    seen = set()
+    for s in (syms or []):
+        if s in seen:
+            continue
+        seen.add(s)
+        l2 = resolve_sw_l2(s)
+        if l2:
+            subs.add(l2)
+    return len(subs), sorted(subs)
+
+
 _SW_DAILY_CACHE = {}
 _SW_DAILY_TS = {}
 def _sw_daily_high(idx_code):
