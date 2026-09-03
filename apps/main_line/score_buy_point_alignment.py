@@ -49,6 +49,27 @@ def main():
             "by_event_within5": {k: sum(1 for r in v if r["within5"]) for k, v in sorted(byev.items())},
             "note": "日线代理：站上MA20(且MA20>MA60)回补触发；E12低吸型5/6对齐，E05/E13趋势内加仓型0——需另做缩量回踩/趋势内加仓触发"
         }
+    # 1c) 253 全护栏 + 254后3日分步回补（E05/E06/E08/E12/E13, 24 代理股, 5min）
+    sw = load(os.path.join(DATA, "stepwise_253_backtest.json")) or []
+    ok = [r for r in sw if not r.get("error")]
+    if ok:
+        import collections as _c2
+        byev2 = _c2.defaultdict(list)
+        for r in ok:
+            byev2[r["event"]].append(r)
+        kinds = _c2.Counter(a["kind"] for r in ok for a in r.get("actions") or [])
+        def _avg(xs):
+            xs=[x for x in xs if x is not None]
+            return round(sum(xs)/len(xs),2) if xs else None
+        out["metrics"]["stepwise_253_guardrails"] = {
+            "rows": len(ok), "same_day": sum(r["same_day_action"] for r in ok),
+            "within3": sum(r["within3"] for r in ok), "within5": sum(r["within5"] for r in ok),
+            "wolf_T5_avg": _avg([r["wolf_T5"] for r in ok]), "sys_T5_avg": _avg([r["sys_T5_mean"] for r in ok]),
+            "action_kinds": dict(kinds),
+            "by_event": {k: {"n": len(v), "same": sum(r["same_day_action"] for r in v),
+                             "within5": sum(r["within5"] for r in v)} for k, v in sorted(byev2.items())},
+            "note": "护栏: 253需个股bar.close>cumVWAP/非跌停/09:45-14:40; 254窗口内首次+后3日最多2次回补; ±5日=66.7%(16/24)高于254首次口径37.5%, 但E08同日仅2/6(护栏把raw 253 6/6降到2)"
+        }
     # 2) 动作通道 E01-E15（P3 v0 + probe 裁决后）
     p3 = load(os.path.join(DATA, "p3_tier_backtest.json")) or {}
     evs = p3.get("events") or []
