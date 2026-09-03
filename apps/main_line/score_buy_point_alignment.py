@@ -70,6 +70,17 @@ def main():
                              "within5": sum(r["within5"] for r in v)} for k, v in sorted(byev2.items())},
             "note": "护栏: 253需个股bar.close>cumVWAP/非跌停/09:45-14:40; 254窗口内首次+后3日最多2次回补; ±5日=66.7%(16/24)高于254首次口径37.5%, 但E08同日仅2/6(护栏把raw 253 6/6降到2)"
         }
+    # 1d) 253 护栏变体 B（无VWAP护栏，仅非跌停/时间/当日单次）
+    swb = load(os.path.join(DATA, "stepwise_253_backtest_B.json")) or []
+    okb = [r for r in swb if not r.get("error")]
+    if okb:
+        out["metrics"]["stepwise_253_guard_B"] = {
+            "rows": len(okb), "same_day": sum(r["same_day_action"] for r in okb),
+            "within3": sum(r["within3"] for r in okb), "within5": sum(r["within5"] for r in okb),
+            "same_day_rate": round(sum(r["same_day_action"] for r in okb) / max(len(okb), 1), 3),
+            "within5_rate": round(sum(r["within5"] for r in okb) / max(len(okb), 1), 3),
+            "note": "A(站回VWAP) same3/16, B(急杀即买) same7/20——E08同日从2/6→6/6但253动作37次、E12更早买"
+        }
     # 2) 动作通道 E01-E15（P3 v0 + probe 裁决后）
     p3 = load(os.path.join(DATA, "p3_tier_backtest.json")) or {}
     evs = p3.get("events") or []

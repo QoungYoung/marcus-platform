@@ -16,6 +16,7 @@ import os, sys, json
 from datetime import datetime
 
 DATA = os.environ.get('DATA_DIR', 'data')
+VARIANT = os.environ.get('253_VARIANT', 'A')  # A=站回cumVWAP才买; B=指数急杀+非跌停即买(无VWAP护栏)
 
 def _load(p):
     try:
@@ -164,8 +165,9 @@ def main():
                     if j < 0:
                         continue
                     vwap = (amts[j] / vols[j]) if vols[j] > 0 else 0
-                    if vwap <= 0 or cl <= vwap:
-                        continue  # 黄线护栏
+                    if VARIANT == 'A' and (vwap <= 0 or cl <= vwap):
+                        continue  # A版: 黄线护栏(站回cumVWAP才买)
+                    # B版: 无VWAP护栏，仅保留非跌停/时间/当日单次
                     if near_limit_down(cl, prev_close):
                         continue
                     if any(a['date'] == d and a['kind'] == '253' for a in actions):
@@ -205,7 +207,7 @@ def main():
                              'actions': actions})
                 print(eid, sym, 'wolf', cfg.get('date'), 'same', bool(same), 'w3', within3, 'w5', within5,
                       'acts', [(a['kind'], a['date']) for a in actions], flush=True)
-    path = os.path.join(DATA, 'stepwise_253_backtest.json')
+    path = os.path.join(DATA, 'stepwise_253_backtest.json' if VARIANT == 'A' else 'stepwise_253_backtest_B.json')
     json.dump(rows, open(path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     print('WROTE', path, 'rows', len(rows), flush=True)
     from collections import defaultdict
