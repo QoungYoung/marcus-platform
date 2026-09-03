@@ -271,7 +271,7 @@ class TMonitor:
     def _check_defensive_t_reduce(self) -> None:
         """防御性减T(风险/结构驱动): wave只做T + (量能不足 或 滞涨) → 写 wolf_defensive_t_reduce 减T触发(08-27/09-01式)."""
         try:
-            from app.services.wolf_t_rules import defensive_t_reduce_quote
+            from app.services.wolf_t_rules import defensive_t_reduce_quote, defensive_t_reduce_sw
             conds = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
             active = {c.get('symbol') for c in conds if _is_wolf_t_condition(c)}
             today = datetime.now().strftime('%Y%m%d')
@@ -287,6 +287,13 @@ class TMonitor:
                 if ok and (sym,'wolf_defensive_t_reduce',today) not in self._wolf_done:
                     self._insert_wolf_trigger(sym,'wolf_defensive_t_reduce',q,reason)
                     self._wolf_done.add((sym,'wolf_defensive_t_reduce',today))
+                # 个股申万行业级防御(行业近高而个股未跟, 泛化非科技) → 独立触发 wolf_defensive_t_reduce_index
+                sym_hi = float(q.get('high') or 0)
+                sym_hi_prev = max([p.get('high') for p in prev if p.get('high')], default=0)
+                iok, ireason = defensive_t_reduce_sw(sym, sym_hi, sym_hi_prev, wave_op='t_only')
+                if iok and (sym,'wolf_defensive_t_reduce_index',today) not in self._wolf_done:
+                    self._insert_wolf_trigger(sym,'wolf_defensive_t_reduce_index',q,ireason)
+                    self._wolf_done.add((sym,'wolf_defensive_t_reduce_index',today))
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] defensive_t_reduce异常: {e}")
