@@ -82,6 +82,7 @@
 - **docs/zt-zhengT-semantics-report.md（正T真实语义语料报告）**：'带下来'载体/频率/幅度 + A/B/C信号候选
 - **P2 轮动一整套**：docs/p2-rotation-wolf-logic.md / p2-rotation-cases.md / p2-rotation-validation-analysis.md / p2-rotation-validation-report.md / p2-rotation-universe-config.md；代码 apps/main_line/{rotation_gate,test_rotation_gate,regress_rotation_gate,rotation_universe,build_crowding,build_fund_holdings,classify_rotation_universe,material_entry,backtest_rotation_quadrant}.py
 - **P2 风控一整套**：docs/p2-risk-wolf-logic.md；代码 apps/main_line/{risk_gate,test_risk_gate,build_risk_flags,systemic_risk,test_systemic_risk,build_systemic_inputs}.py；DB risk_flags + fund_portfolio_holdings；backend check_entry_filters 硬拦(risk_flags+crowding_blacklist)
+- **拥挤过滤个股级 PIT v2(2026-09-03)**：docs/crowding-stocklevel-event-recheck.md；脚本 apps/main_line/{build_fund_pit,backtest_crowding_stock_level}.py；data/crowding_pit/stock_crowd_*.json；crowding_blacklist 改 per-symbol(1045→17只公募核心拥挤), backend reason 带 n_funds/sum_float, 拥挤但个股低位/回踩降级review；旧整概念过滤误拦经 E06-E13 前向验证
 - docs/mainline-oos-validation-report.md（主线样本外验证 OOS 5/7=71%）
 - apps/main_line/backtest_zt_signal_compare.py（正T A/B/C 信号对比回测）
 - apps/main_line/backtest_zt_dip_v2.py（原249口径回测）

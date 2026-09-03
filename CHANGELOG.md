@@ -462,3 +462,11 @@
 - **P2 风控**：risk_gate v1(R-R1黑名单/R-R2财报/R-R3两融/R-R4拥挤, 11场景) → risk_flags DB(forecast/express/ST 结构化, 候选即时查模式 --stocks, 全市场ST 206) → check_entry_filters 硬拦(业绩雷 000586 E2E blocked, 需 downgrade_multiplier=0 教训) → trade_graph 风控门控 prompt；系统性风险联动开关 systemic_risk(银行512800双头+科创50不反→防御 / 大光破位大黑K→止盈) + build_systemic_inputs 采集器(工作日15:05, tasks 26)；Pi建仓SOP"先过滤后暴雷校验"reseed。
 - **P2 轮动遗留 3 项全完**：①材料大级别买点链路 material_entry.py(R7业绩月+wave转build/筑底side+指数&材料confirm, 实盘 wait)；②双维分类历史稳定性回测 backtest_rotation_quadrant.py(2025-12~2026-08 13时点, 相邻转换率14.9%, 拥挤维度Q2近似)；③拥挤名单下单硬过滤 crowding_blacklist(23概念1045股) 进 check_entry_filters。
 - 文档：docs/p2-risk-wolf-logic.md；overview/context 已更新(2026-09-03)。
+
+## [1.10.0] 2026-09-03 · 拥挤过滤下沉个股级（PIT 基金持仓 + 前向重测验证）
+
+- **动机/验证**：旧 crowding_blacklist 按"拥挤子方向整概念成分"硬拦 1045 只，误拦低位/轻仓个股（语料事件 E06-E13 前向重测：E10 国算 +10.4% / E11 材料 +44.2% / E12 半导体低吸 +34.3% 全被旧过滤挡下）。
+- **Phase0/1（PIT 数据地基）**：确认 fund_share 支持历史 trade_date、fund_portfolio 按 ann_date 分级披露；fund_portfolio_holdings 扩至 20250630/20250930/20251231/20260331/20260630；每事件日按 T-1 top60 基金 + ann_date<=事件日 + 每基金 top10(按mkv) 生成 data/crowding_pit/stock_crowd_<date>.json（apps/main_line/build_fund_pit.py）。
+- **Phase2（前向重测）**：apps/main_line/backtest_crowding_stock_level.py，40 目标股 qfq+position 特征 → old vs new 矩阵（docs/crowding-stocklevel-event-recheck.md）；推荐阈值 N_funds≥4 & sum_float≥1%；旭创/中微等真核心拥挤仍拦（风控分歧非误拦）。
+- **Phase4（线上集成）**：rotation_universe.build_crowding_blacklist v2 → 仅拦公募核心拥挤个股（members 1045 → blocked 17），输出 symbols_detail{symbol,n_funds,float_pct,reason}；backend check_entry_filters 读取 per-symbol reason（“拥挤无空间(个股级rotation): n_funds=.., sum_float=..%”），并加个股空间豁免（crowd core + LOW/MID回踩 → 降级 review/probe 而非硬拦）。
+

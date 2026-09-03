@@ -157,10 +157,15 @@ def proxies(pos=None):
             "crowded_top": crowded, "holdT_top": holdT, "room_bottom": room_cand, "detail": out_detail,
             "sub_scoring": scores, "crowding_real": bool(crowd_real), "crowded_represent": crowded_represent}
 
-def build_crowding_blacklist():
-    """拥挤无空间子方向的成分股黑名单 → data/crowding_blacklist.json（check_entry_filters 硬过滤用）"""
+def build_crowding_blacklist(n_funds_min=4, float_pct_min=1.0):
+    """拥挤无空间子方向的成分股黑名单 → data/crowding_blacklist.json（个股级, 2026-09-03 v2）
+    旧: 拥挤子方向整概念成分全拦(误拦 E10/E11/E12 等轻仓/未持仓股)
+    新: 仅拦"公募核心拥挤"个股: n_funds>=n_funds_min 且 sum_float>=float_pct_min%
+        (rotation_crowding.stock 个股级PIT口径; E06-E13回测确认N4/F1.0最优)
+    兼容字段: symbols(旧整列表) + symbols_detail(per-symbol reason)"""
     import json as _json
     p = _json.load(open(os.path.join(DATA, "rotation_crowding.json"), encoding="utf-8")) if os.path.exists(os.path.join(DATA, "rotation_crowding.json")) else {}
+    crowd_stock = p.get("stock") or {}
     try:
         pr = proxies()
         crowd_subs = pr.get("crowded_top") or []
@@ -170,20 +175,37 @@ def build_crowding_blacklist():
     for sub in crowd_subs:
         cu = (p.get("universe") or {}).get(sub) or {}
         concepts += [c for c in (cu.get("concepts") or [])]
-    symbols = []
+    members = []
     if concepts:
         try:
             import psycopg2
             conn = psycopg2.connect(os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
             cur = conn.cursor()
             cur.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name = ANY(%s)", (concepts,))
-            symbols = [r[0] for r in cur.fetchall()]; cur.close(); conn.close()
+            members = [r[0] for r in cur.fetchall()]; cur.close(); conn.close()
         except Exception:
-            pass
+            members = []
+    symbols = []
+    symbols_detail = {}
+    for sym in members:
+        s = crowd_stock.get(sym) or {}
+        nf = int(s.get("n_funds") or 0)
+        fl = float(s.get("sum_float") or 0)
+        if nf >= n_funds_min and fl >= float_pct_min:
+            symbols.append(sym)
+            symbols_detail[sym] = {"symbol": sym,
+                                   "subs": crowd_subs,
+                                   "n_funds": nf,
+                                   "float_pct": round(fl, 3),
+                                   "sum_mkv_yi": round(float(s.get("sum_mkv") or 0) / 1e8, 1),
+                                   "rule": {"n_funds_min": n_funds_min, "float_pct_min": float_pct_min},
+                                   "reason": "公募核心拥挤: n_funds=%d, sum_float=%.2f%%" % (nf, fl)}
     out = {"subs": crowd_subs, "concepts": concepts, "symbols": symbols,
+           "symbols_detail": symbols_detail, "rule": {"n_funds_min": n_funds_min, "float_pct_min": float_pct_min},
            "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     json.dump(out, open(os.path.join(DATA, "crowding_blacklist.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print("crowding_blacklist subs=", crowd_subs, "concepts=", len(concepts), "symbols=", len(symbols))
+    print("crowding_blacklist v2 subs=", crowd_subs, "concepts=", len(concepts),
+          "members=", len(members), "blocked=", len(symbols), "rule=N%d/F%.1f" % (n_funds_min, float_pct_min))
     return out
 
 def main():
