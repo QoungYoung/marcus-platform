@@ -117,3 +117,11 @@
 - 信号：卖旧链=当日“冲高后跌破累计VWAP(黄线)”第一根5min；买新链=上证单根5min≤-0.4%后个股首根 close>cumVWAP 企稳，无急杀日则 254 型(触前日低+量比≤0.7+站回VWAP)。
 - 结果（事件日 ±6 交易日内）：**E09 sell 5/5 + buy 4/4、E10 3/3+5/5、E11 3/3+5/6、E12 3/3+5/6 —— 全部 executable=True**。
 - 含义：日线层“链级可切”之后，盘中确实存在可执行时点（卖旧冲高破黄线、买新急杀企稳/254 低吸），不是纯日线理论判定；这也支持 auto_trade 在盘中窗口执行主线内切换。
+
+## 13. 89.7% 逐笔审计（auto_trade 决策日志已接入 trade_graph，审计脚本 audit_alignment_per_trade.py）
+
+- 审计口径：aligned 行 = stepwise_B.within5 或 所属事件 switch_executed；每行记 primary channel + evidence(action/switch reason)。
+- **35/39 aligned 的通道拆分：253急杀=22、254低吸=7、switch(链级卖旧+个股选买)=6**（分步回补没有单独成为 primary，它把 E05/E06/E13 的 ±5 覆盖垫高但首动作多为 254）。
+- 逐事件：E05 2/3、E06 3/3、E08 6/6、E09 4/4、E10 5/5、E11 6/6、E12 6/6、E13 3/6。
+- 明细 data/alignment_audit.json（每行 event/symbol/channel/evidence/wolf_T5/sys_T5_mean）。
+- auto_trade 决策日志：trade_graph run_trade_decision 后追加 data/auto_trade_decision_log.jsonl（task/window/regime/stance/position/reason/report_head/hard_blocked），供未来 Agent vs 规则 vs Wolf 逐笔比对。

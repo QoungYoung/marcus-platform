@@ -1657,6 +1657,25 @@ def get_graph():
     return _graph
 
 
+def _log_auto_trade_decision(task_id, execution_id, state) -> None:
+    try:
+        import json as _j, os as _os
+        p = _os.path.join(_os.environ.get("DATA_DIR", "data"), "auto_trade_decision_log.jsonl")
+        stance, pos, reason, report = state.get("pi_stance"), state.get("pi_position_limit"), state.get("pi_reason"), state.get("report") or ""
+        row = {"at": __import__("datetime").datetime.now().isoformat(), "task_id": task_id,
+               "execution_id": execution_id, "window": state.get("window"),
+               "market_regime": state.get("market_regime"), "style_regime": state.get("style_regime"),
+               "pi_stance": stance, "pi_position_limit": pos, "pi_reason": reason,
+               "hard_blocked": state.get("hard_blocked"), "regime_violation": state.get("regime_violation"),
+               "rotation_switch_ctx": bool(state.get("rotation_switch_context")),
+               "report_head": report[:3000], "error": state.get("error") or ""}
+        _os.makedirs(_os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(_j.dumps(row, ensure_ascii=False) + chr(10))
+    except Exception:
+        pass
+
+
 def run_trade_decision(task_id: str, execution_id: str, pi_prompt: str) -> TradeState:
     """
     运行交易决策图。
@@ -1696,4 +1715,5 @@ def run_trade_decision(task_id: str, execution_id: str, pi_prompt: str) -> Trade
         "error": "",
     }
     result = get_graph().invoke(initial)
+    _log_auto_trade_decision(task_id, execution_id, result)
     return result
