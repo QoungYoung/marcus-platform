@@ -32,6 +32,8 @@
 
 > 语义锚点：defense/exit 都“不新开”（与 p2_entry_gate 一致）；区别在已有主线底仓加厚——defense 允许小档（E13 加仓国算），exit 以减为主仅保留 T（E06 的抢 AI硬回水 属需另行复核的左侧动作，v0 不自动放行）。
 
+> **2026-09-03 用户裁决**：t_only 增加 `probe` 小仓试盘档（≤3%，对应 E02 小仓试盘）；E06（exit 无底仓抢 AI硬回水）保持不放行（设计分歧，记入一致率口径）。
+
 ## 4. 决策服务 API（backend/app/services/position_tier.py）
 
 ```python

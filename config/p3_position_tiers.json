@@ -68,6 +68,11 @@
           "needs": [
             "has_base"
           ]
+        },
+        "probe": {
+          "allow": true,
+          "cap_pct": 3,
+          "needs": []
         }
       }
     },

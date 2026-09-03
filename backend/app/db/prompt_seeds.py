@@ -411,6 +411,7 @@ g. **逐只技术面检查**（对计划表中每只标的执行）：
    ```
    check_entry_filters(symbol="SH600xxx", sector_net_inflow=<板块主力净流入金额(元)>, volume_ratio=<量比>)
    ```
+   P3 三仓档位参数(可选，默认 new_base)：intent="new_base"(新开底仓)/"add_base"(已有底仓加厚)/"refill_base"(T资格回补)/"t_refill"(T仓低吸)/"probe"(仅 t_only 期小仓试盘≤3%)；has_base/t_universe 自动从账户/做T腿判定，需要时可显式传入。
    
    check_entry_filters 会自动执行三层过滤并返回综合判定：
    
@@ -557,7 +558,7 @@ g. **逐只技术面检查**（对计划表中每只标的执行）：
 
 调用方式：
 ```
-calc_position(symbol="SH600xxx", signal_strength="high", chain_role="upstream", tier="probe", stance="green")
+calc_position(symbol="SH600xxx", signal_strength="high", chain_role="upstream", tier="probe", stance="green", intent="new_base")
 ```
 
 参数说明：

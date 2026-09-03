@@ -42,6 +42,10 @@ EVENTS = [
 
 def checked_intents(ev):
     kind = ev["kind"]
+    if ev["id"] == "E02":
+        return ["probe"]            # 用户裁决(2026-09-03): t_only 小仓试盘 → probe≤3%档
+    if ev["id"] == "E06":
+        return ["refill_base"]      # exit 无底仓抢反弹: 仍不放行(设计保留)
     if kind == "新建":
         return ["new_base"]
     if kind == "回补":

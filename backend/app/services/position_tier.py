@@ -24,7 +24,8 @@ DEFAULT_CFG = {
                    "intents": {"new_base": {"allow": False, "cap_pct": 0},
                                "add_base": {"allow": True, "cap_pct": 5},
                                "refill_base": {"allow": True, "cap_pct": 8},
-                               "t_refill": {"allow": True, "cap_pct": 5}}},
+                               "t_refill": {"allow": True, "cap_pct": 5},
+                               "probe": {"allow": True, "cap_pct": 3}}},
         "side": {"base_mode": "ambush", "cash_floor_pct": 30,
                  "intents": {"new_base": {"allow": True, "cap_pct": 3},
                              "add_base": {"allow": True, "cap_pct": 3},
@@ -43,7 +44,7 @@ DEFAULT_CFG = {
     },
 }
 
-ALL_INTENTS = ("new_base", "add_base", "refill_base", "t_refill")
+ALL_INTENTS = ("new_base", "add_base", "refill_base", "t_refill", "probe")
 
 
 def _workspace():
@@ -131,7 +132,8 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
     allowed = bool(rule.get("allow") and (not needs or cap > 0))
 
     tier_map = {"new_base": "BASE_NEW", "add_base": "BASE_ADD",
-                "refill_base": "T_REFILL", "t_refill": "T_REFILL"}
+                "refill_base": "T_REFILL", "t_refill": "T_REFILL",
+                "probe": "PROBE"}
     reasons = []
     if allowed:
         reasons.append("P3档位%s: %s允许%s cap≤%s%%" % (op, op_cfg.get("base_mode"), intent, cap))

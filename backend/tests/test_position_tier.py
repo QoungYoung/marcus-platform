@@ -75,6 +75,16 @@ class ThreeTierGateTest(unittest.TestCase):
         self.assertFalse(d["intent_allowed"])
         self.assertEqual(d["wave"]["operation"], "side")
 
+    def test_t_only_probe_small_allow_and_exit_probe_reject(self):
+        d = self._call("t_only", "probe")
+        self.assertTrue(d["intent_allowed"])
+        self.assertEqual(d["cap_pct"], 3.0)
+        self.assertEqual(d["tier"], "PROBE")
+        d2 = self._call("exit", "probe", has_base=True)
+        self.assertFalse(d2["intent_allowed"])
+        d3 = self._call("build", "probe")
+        self.assertFalse(d3["intent_allowed"])
+
     def test_summarize_nonempty(self):
         d = self._call("build", "new_base")
         s = pt.summarize(d)
