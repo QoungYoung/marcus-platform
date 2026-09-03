@@ -30,3 +30,5 @@
 2. 换仓执行顺序/资金复用：先卖后买、同日完成 vs 分 2 日？
 3. 个股短名单数量上限（≤3-5？）与单票档位（probe≤3%？）
 4. 是否需要一个“切换日历”（业绩月后调仓、H1/H2）人工维护表做链级触发源。
+
+- 布腿器：rotation_switch_arm（工作日09:20）决策→布腿(卖=quote.vwap_break; 买=custom_m5dump 253 + custom_prevlow 254)到 t_conditions(account=stock, publisher=rotation_switch)，由 TMonitor 30s 执行；SWITCH_ARM_DRY=1 只输出不写库。

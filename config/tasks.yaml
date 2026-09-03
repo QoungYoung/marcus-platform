@@ -614,3 +614,24 @@ tasks:
     on_failure: true
     on_success: false
     pi_analysis: false
+- id: rotation_switch_arm
+  name: 主线内切换布腿器
+  description: 开盘前(09:20) 决策→布腿(卖vwap_break/买253/254)到TMonitor执行；不直接下单
+  enabled: true
+  schedule:
+    type: cron
+    expr: 20 9 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/rotation_switch_arm.py
+    args: []
+  output:
+    append: true
+    log_file: logs/rotation_switch_arm_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+
