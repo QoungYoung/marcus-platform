@@ -256,9 +256,10 @@ def _sw_daily_high(idx_code):
         return _SW_DAILY_CACHE.get(idx_code) or {}
 
 
-def defensive_t_reduce_sw(sym, sym_hi_now, sym_hi_prev, wave_op='t_only'):
-    """防御减T(个股申万行业级, 泛化非科技): 该股所属申万一级行业指数 近高/创新高(>=前5日高*0.998)
-    且 该股未跟(低<阶段高*0.998) → 防御减T. 返回 (ok, reason)."""
+def defensive_t_reduce_sw(sym, sym_hi_now, sym_hi_prev, wave_op='t_only', idx_near_th=0.998, sym_lag_th=0.98):
+    """防御减T(个股申万行业级, 泛化非科技): 该股所属申万一级行业指数 近高/创新高(>=前5日高*idx_near_th)
+    且 该股未跟(低<阶段高*sym_lag_th) → 防御减T. 返回 (ok, reason).
+    v15收紧: 默认 idx_near_th=0.998(行业须近高), sym_lag_th=0.98(个股须回落>2%) 以减少误报(08-24/09-03式)."""
     if wave_op not in ('t_only','side','defense','exit'):
         return False, 'wave allow build'
     idx = resolve_sw_sector(sym)
@@ -268,8 +269,8 @@ def defensive_t_reduce_sw(sym, sym_hi_now, sym_hi_prev, wave_op='t_only'):
     keys = sorted(d)
     idx_now = d.get(keys[-1]) if keys else None
     idx_prev = max([d[k] for k in keys[:-1]][-5:]) if len(keys)>1 else None
-    sym_lag = sym_hi_now is not None and sym_hi_prev and sym_hi_now < sym_hi_prev*0.998
-    idx_near = idx_now is not None and idx_prev and idx_now >= idx_prev*0.998
+    sym_lag = sym_hi_now is not None and sym_hi_prev and sym_hi_now < sym_hi_prev*sym_lag_th
+    idx_near = idx_now is not None and idx_prev and idx_now >= idx_prev*idx_near_th
     ok = bool(idx_near and sym_lag)
     ip = ((idx_now/idx_prev-1)*100 if (idx_now and idx_prev) else 0)
     sp = ((sym_hi_now/sym_hi_prev-1)*100 if (sym_hi_now and sym_hi_prev) else 0)
