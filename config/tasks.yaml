@@ -634,4 +634,24 @@ tasks:
     on_failure: true
     on_success: false
     pi_analysis: false
+- id: earnings_calendar_refresh
+  name: 业绩披露日历刷新
+  description: 每日08:40 更新 watch 业绩披露日历(forecast/express) → data/earnings_calendar.json
+  enabled: true
+  schedule:
+    type: cron
+    expr: 40 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/build_earnings_calendar.py
+    args: []
+  output:
+    append: true
+    log_file: logs/earnings_calendar_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
 
