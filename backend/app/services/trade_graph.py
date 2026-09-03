@@ -1151,7 +1151,8 @@ def _read_rotation_switch_context() -> str:
                         + "- 拥挤无空间：" + "、".join((_ru.get("crowded_top") or [])[:4]) + NL
                         + "- 可埋伏/room：" + "、".join((_ru.get("room_bottom") or [])[:4]) + NL
                         + "- 拥挤但有空间(做T积累)：" + "、".join((_ru.get("holdT_top") or [])[:4]) + NL
-                        + "- 轮动健康：" + ("是" if _ru.get("rotation_healthy") else "否") + " ｜ 主线抽血：" + ("是" if _ru.get("mainline_sucking") else "否") + NL + NL)
+                        + "- 轮动健康：" + ("是" if _ru.get("rotation_healthy") else "否") + " ｜ 主线抽血：" + ("是" if _ru.get("mainline_sucking") else "否") + NL
+                        + "- 双线门(狼大)：主线内 room 可切；防御/资源第二线仅在非build(t_only/side/defense/exit) 且 rotation_healthy 且非抽血时允许，主升明牌吸金期只做主线内" + NL + NL)
             except Exception:
                 pass
             return ""
