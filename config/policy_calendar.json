@@ -1,0 +1,59 @@
+{
+  "version": "2026-09-03",
+  "note": "政策会议/宏观窗口日历（用于 GJD 政策底/机构调仓一致的观察窗；日期级别=manual/approx，精确日程需官方确认）",
+  "events": [
+    {
+      "id": "20th_4th_plenum_2025",
+      "name": "二十届四中全会(十五五规划建议)",
+      "start": "2025-10-20",
+      "end": "2025-10-23",
+      "confidence": "high",
+      "source": "官方公报2025-10-23"
+    },
+    {
+      "id": "cewc_2025",
+      "name": "中央经济工作会议(2026基调)",
+      "start": "2025-12-08",
+      "end": "2025-12-12",
+      "confidence": "window-approx",
+      "source": "惯例12月上旬(approx)"
+    },
+    {
+      "id": "npc_2026_15th_five",
+      "name": "2026全国两会/人代会+十五五纲要",
+      "start": "2026-03-04",
+      "end": "2026-03-11",
+      "confidence": "high",
+      "source": "人大日程2026-03-04起, 审查十五五纲要"
+    },
+    {
+      "id": "politics_q1_2026",
+      "name": "政治局会议分析Q1经济",
+      "start": "2026-04-25",
+      "end": "2026-05-01",
+      "confidence": "window-approx",
+      "source": "惯例4月末(approx)"
+    },
+    {
+      "id": "politics_h1_2026",
+      "name": "政治局会议分析上半年经济",
+      "start": "2026-07-25",
+      "end": "2026-08-01",
+      "confidence": "window-approx",
+      "source": "惯例7月末(approx)"
+    },
+    {
+      "id": "politics_q4_2026",
+      "name": "政治局会议分析Q3/为中央经济工作会议定调",
+      "start": "2026-10-25",
+      "end": "2026-11-05",
+      "confidence": "window-approx",
+      "source": "惯例10月底-11月初(approx)"
+    }
+  ],
+  "policy_floor_rules": [
+    "GJD 护盘点位(3800/3900/3950) + 宽基份额净申购 = 政策底观察",
+    "政策底→市场底=机构调仓一致(GJD份额转正+两融不再杀杠杆)",
+    "会议后 1-2 周为“机构调仓一致”观察窗"
+  ]
+}

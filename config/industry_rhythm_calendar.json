@@ -1,0 +1,71 @@
+{
+  "version": "2026-09-03",
+  "note": "H1/H2 产业节奏 + 业绩/调仓窗口（狼大语料驱动；精确到日的事件另见 policy_calendar / earnings_calendar）",
+  "windows": [
+    {
+      "id": "annual_forecast_delta",
+      "name": "年初业绩预期差/年报预告",
+      "start": "2026-01-01",
+      "end": "2026-02-28",
+      "evidence": [
+        "E07 一月份做年报业绩和26年业绩预期差方向",
+        "市梦率转市盈率"
+      ],
+      "source": "wolf语料"
+    },
+    {
+      "id": "q1_report_deadline",
+      "name": "一季报披露窗(4月)",
+      "start": "2026-04-01",
+      "end": "2026-04-30",
+      "evidence": [
+        "E11 超过15号后鬼故事越来越多，持有15号前发过财报的"
+      ],
+      "source": "wolf语料+法定"
+    },
+    {
+      "id": "h1_2026_equipment",
+      "name": "2026H1 科技=半导体设备/AI硬件链",
+      "start": "2026-01-01",
+      "end": "2026-06-30",
+      "evidence": [
+        "E11 上半年设备",
+        "E08 今年看好半导体设备"
+      ],
+      "source": "wolf语料"
+    },
+    {
+      "id": "h2_2026_material_guosuan",
+      "name": "2026H2 科技=材料/国产算力链",
+      "start": "2026-07-01",
+      "end": "2026-12-31",
+      "evidence": [
+        "E11 下半年材料",
+        "E10 国算还没到出货周期(下半年加)",
+        "E14 业绩月后机构调仓下半年"
+      ],
+      "source": "wolf语料"
+    },
+    {
+      "id": "half_report_deadline",
+      "name": "半年报披露窗(8月)",
+      "start": "2026-08-01",
+      "end": "2026-08-31",
+      "evidence": [
+        "业绩月后调仓(7月下旬)",
+        "半年报前鬼故事"
+      ],
+      "source": "wolf语料+法定"
+    },
+    {
+      "id": "year_end_positioning",
+      "name": "年底布局次年业绩方向",
+      "start": "2025-12-01",
+      "end": "2025-12-31",
+      "evidence": [
+        "E05 年底布局液冷/26年业绩方向"
+      ],
+      "source": "wolf语料"
+    }
+  ]
+}
