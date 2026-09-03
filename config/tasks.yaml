@@ -560,3 +560,23 @@ tasks:
   script:
     args: []
     path: jobs/p2_gate_daily_report.py
+- id: rotation_switch_dryrun
+  name: 主线内切换dry-run
+  description: 盘后(15:25) 主线内切换·狼大逻辑 dry-run 观察计划 → rotation_switch_plan.json(不自动下单)
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 15 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/rotation_switch_dryrun.py
+    args: []
+  output:
+    append: true
+    log_file: logs/rotation_switch_dryrun_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false

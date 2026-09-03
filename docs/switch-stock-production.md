@@ -1,6 +1,7 @@
 # 主线内切换·个股级 — 生产接线建议（草案，待用户确认）
 
 > 基于 backtest_rotation_switch_stock.py（E09-E12 全部 executed）+ v2 评测（±5 日 35/39=89.7%，8/8 aligned）
+> 落地状态：**dry-run 已部署**（2026-09-03）——tasks=29 新增 rotation_switch_dryrun（工作日15:25）→ data/rotation_switch_plan.json；参数默认见 config/switch_wolf_defaults.json（系统假设标注）。
 > 原则：**链级决策 ≠ 个股资金流**；个股级只做新链内的选股排序。
 
 ## 1. 生产语义拆成两层

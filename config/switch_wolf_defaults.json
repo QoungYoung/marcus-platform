@@ -1,0 +1,28 @@
+{
+  "version": "2026-09-03",
+  "source_level": "system_assumption(非狼大原话; E10全清/E12减45→18/E08不清ETF为案例)",
+  "sell_scale": {
+    "crowded_no_space": {
+      "defense": "clear",
+      "exit": "clear",
+      "t_only": "clear",
+      "side": "clear",
+      "build": "halve"
+    },
+    "crowded_with_space": {
+      "defense": "halve",
+      "exit": "halve"
+    }
+  },
+  "tool_etf": "keep",
+  "order": "sell_first_then_staged_buy",
+  "staged_buy_days": 3,
+  "max_staged_refills": 2,
+  "shortlist_max": 5,
+  "shortlist_min": 3,
+  "caps": {
+    "probe": 0.03,
+    "refill_base": 0.08,
+    "add_base": 0.05
+  }
+}
