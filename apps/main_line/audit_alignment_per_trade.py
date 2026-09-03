@@ -12,6 +12,10 @@ DATA=os.environ.get('DATA_DIR','data')
 def load(p):
     try: return json.load(open(os.path.join(DATA,p),encoding='utf-8'))
     except Exception: return {}
+WOLF_INTENT = {"E05": "add_base(液冷加深)", "E06": "refill(AI硬回补)", "E08": "low_buy_etf(设备低吸/ETF不清)",
+              "E09": "switch(高切低封测)", "E10": "switch(海外链→国算)", "E11": "switch(设备→材料)",
+              "E12": "switch_low(光→半导体低吸)", "E13": "add(国算加仓)"}
+
 K2={'253':'253急杀','254':'254低吸','step_refill':'254后3日分步回补'}
 def main():
     step=load('stepwise_253_backtest_B.json') or []
@@ -31,7 +35,7 @@ def main():
             a=acts[0] if acts else None
             ch=K2.get(a.get('kind')) if a else 'within5'
             evidence={'action':a,'offset_note':'actions按窗口内排序'}
-        rows.append({'event':eid,'wolf_trade_date':r.get('wolf_trade_date') or r.get('wolf_date'),'symbol':sym,
+        rows.append({'event':eid,'wolf_intent':WOLF_INTENT.get(eid,''),'wolf_trade_date':r.get('wolf_trade_date') or r.get('wolf_date'),'symbol':sym,
                      'aligned':aligned,'within5_step':bool(r.get('within5')),
                      'switch_ok':sw_ok,'channel':ch,'evidence':evidence,
                      'wolf_T5':r.get('wolf_T5'),'sys_T5_mean':r.get('sys_T5_mean')})
@@ -41,6 +45,7 @@ def main():
     for x in rows:
         pe=per_event[x['event']]; pe['n']+=1; pe['aligned']+=int(x['aligned'])
     out={'method':'alignment_audit v1','aligned_rows':len(aligned_rows),'total_rows':len(rows),
+         'historical_three_way':True,'note':'历史回测三方：Wolf意图×系统回测通道(254/253/分步/切换)×是否±5日对齐',
          'channel_counts':dict(cnt),'per_event':{k:{'n':v['n'],'aligned':v['aligned']} for k,v in sorted(per_event.items())},
          'rows':rows}
     path=os.path.join(DATA,'alignment_audit.json')

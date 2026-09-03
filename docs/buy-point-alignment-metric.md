@@ -129,3 +129,5 @@
 ## 14. 三方 join（决策×成交×Wolf）框架
 - apps/main_line/audit_trade_three_way.py：auto_trade_decision_log.jsonl → paper_trades 当日成交 → alignment_audit Wolf/规则行(±5交易日) 逐笔对照，输出 data/audit_trade_three_way.json。
 - 当前：决策日志尚为空(部署于午间,下一个auto_trade窗口开始积累)；脚本已跑通(decision_log_rows=0, trades_joined=0)。
+
+- 历史回测三方：alignment_audit.json 每行新增 wolf_intent(Wolf动作类型) —— “Wolf意图 × 系统回测通道(254/253/分步/切换) × 是否±5日对齐”，即用历史回放替代等待实盘日志做 Agent/规则对比（Agent=规则+上下文代理，标注）。示例：E10 601138 wolf_intent=switch(海外链→国算) → channel=switch → aligned；E13 部分 add 行未对齐。
