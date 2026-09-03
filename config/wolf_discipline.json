@@ -1,0 +1,18 @@
+{
+  "weekend_de_risk": {
+    "enabled": true,
+    "th_ratio": 0.5,
+    "reduce_to": 0.5,
+    "windows": [
+      "late_morning",
+      "afternoon",
+      "closing"
+    ]
+  },
+  "board_half": {
+    "enabled": true,
+    "min_float_pct": 3,
+    "board_threshold_pct": 9.5,
+    "board_threshold_20": 19.5
+  }
+}

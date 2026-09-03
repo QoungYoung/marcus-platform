@@ -283,7 +283,12 @@ def parse(reply):
     return {'raw':reply,'parse_failed':True}
 
 def main():
-    f=index_features()
+    import sys as _s
+    date=None
+    if len(_s.argv)>1 and _s.argv[1].startswith('--date'):
+        if '=' in _s.argv[1]: date=_s.argv[1].split('=',1)[1]
+        elif len(_s.argv)>2: date=_s.argv[2]
+    f=index_features(date)
     if f is None: print('no data'); return
     print('[*] 指数结构:', json.dumps(f, ensure_ascii=False), file=sys.stderr)
     prompt=build_prompt(f)

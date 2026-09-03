@@ -4,8 +4,8 @@
 目标：把此前因“无5min文件”而不计一致率的 E01-E04/E15 补进动作回放候选：
   - E03(2025-10-28 指数回补)/E04(2025-10-30 ETF 254)/E15(2026-08-12 半导体refill)
     → 复用 stepwise_253_backtest_B 的 253+254+step_refill 逻辑（VARIANT=B, 无VWAP护栏）
-    → 253 大盘急杀时点: 优先上证 index_5min_dh；缺失日(E01-E04窗口)用 510300.SH 宽基ETF代理
-      （brze idx_mins tenant key 过期前临时口径, 与上证口径的偏差记入 caveats）
+    → 253 大盘急杀时点: 优先上证 index_5min_dh（E03/E04 窗口 2025-10-09~2025-11-12 已用 datahubco 真上证 5min 补齐）；
+      个别缺失日仍回退 510300.SH 宽基ETF代理兜底（偏差记入 caveats）
   - E01(2025-08-21 开盘买存储+华勤)/E02(2025-09-10 开盘CPO probe≤3%)
     → intent_open 语义: 事件前一交易日当日开盘动作(时间=当日首根5min bar)
       = “主线候选+P3 new_base/probe 通道放行后开盘执行”的系统等价假设

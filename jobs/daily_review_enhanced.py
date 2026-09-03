@@ -424,6 +424,30 @@ def generate_review_report():
 
 _冷静理性，数据驱动。不以物喜，不以己悲。_
 """
+
+    # ── 今日计划摘要(来自 plan_library DB) ──
+    try:
+        from app.database import SessionLocal
+        from app.models.plan import Plan
+        _db = SessionLocal()
+        _plans = _db.query(Plan).all()
+        _armed = sum(1 for p in _plans if p.status == 'armed')
+        _fired = sum(1 for p in _plans if p.status == 'fired')
+        _fsub = '、'.join(p.subject for p in _plans if p.status == 'fired')
+        _db.close()
+        report += f"""
+---
+
+## 🎯 今日计划
+- 计划库：{len(_plans)} 条（armed **{_armed}** / fired **{_fired}**）
+"""
+        if _fired:
+            report += f"- 当日命中：{_fsub}
+"
+    except Exception as _e:
+        report += f"
+> 今日计划：读取失败（{_e}）
+"
     
     return report
 

@@ -654,4 +654,24 @@ tasks:
     on_failure: true
     on_success: false
     pi_analysis: false
+- id: plan_generate_daily
+  name: 今日计划生成
+  description: 每日收盘后生成今日计划(结构优先主题计划+指数关键位回补) → plan_library 表 + data/plan_library.json
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 15 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/generate_today_plan.py
+    args: []
+  output:
+    append: true
+    log_file: logs/plan_generate_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
 

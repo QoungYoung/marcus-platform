@@ -99,6 +99,8 @@ def _get_pi_server_url() -> str:
 def _infer_window(task_id: str, pi_prompt: str) -> str:
     """根据 task_id 和 pi_prompt 推断时间窗口"""
     ctx = f"{task_id} {pi_prompt}".lower()
+    if 'plan' in ctx or 'trigger' in ctx:
+        return 'plan_trigger'
     if 'closing' in ctx:
         return 'closing'
     if 'mid_morning' in ctx:
@@ -483,6 +485,13 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
     趋势市节奏：主力 10:00 前试探，早盘是噪声 → 09:35/09:50 观察不动，10:35 日线确认后建仓 40%
     震荡市节奏：主力 09:35 试探但第一个冒头的是诱饵 → 09:35 记排名不动，09:50 买第1名 60%，10:35 第1名还在则加仓 40%
     """
+
+    if window == 'plan_trigger':
+        return (
+            "🔔 **本次为【计划触发】执行**（非等待窗口）：\n"
+            "严格按 plan_context 中「已命中/待触发」的计划动作立即执行（回补 T 仓 / 低位建仓 / 减半锁定）。\n"
+            "不受常规时间窗口节奏限制；但 P2 Gate(浪型/宏观)、仓位三档、狼大纪律(周末降仓/板上减半) 等硬门控仍生效。\n"
+        )
 
     if regime == "oscillation":
         return {
@@ -1286,7 +1295,7 @@ def _wave_operation(level, sub):
         (r"3-4", "t_only"),
         (r"3-3", "build"),
         (r"3-2", "side"),
-        (r"3-1", "build"),
+        (r"3-1", "side"),   # 3-1起步段未确认前保守为side(观望/轻仓分批); 确认build需LLM op=build且confidence>=0.6(见 _wave_level_gate)
         (r"衰竭", "exit"),
     ]
     # 找文本中最早出现的浪型 token
@@ -1333,9 +1342,43 @@ def _wave_level_gate() -> dict:
         lvl = st.get("level") or "未知"
         sub = st.get("sub_level") or st.get("sublevel") or st.get("sub") or ""
         op = _wave_operation(lvl, sub)
+        # 09-02 fix: 3-1默认保守(side); 仅当 agent 明确build 且 confidence>=0.6 才放行 build(避免未确认主升起步就追)
+        _llm_op = (st.get("operation") or "").strip().lower()
+        _conf = st.get("confidence")
+        if op == "side" and _llm_op == "build" and isinstance(_conf, (int, float)) and _conf >= 0.6:
+            op = "build"
         return {"level": _wave_norm(lvl), "sub_level": _wave_norm(sub), "operation": op, "gate": _OP_TO_GATE[op]}
     except Exception:
         return {"level": "未知", "sub_level": "", "operation": "side", "gate": "normal"}
+
+def _read_wolf_t_context() -> str:
+    """做T纪律(向狼大看齐): 正T/倒T规则 + 只做T/底仓/3-5点 纪律块, 注入 Pi prompt。"""
+    try:
+        from app.services.wolf_t_rules import discipline_context
+        return discipline_context()
+    except Exception:
+        return ""
+
+
+def _read_plan_context() -> str:
+    """计划库触发检查(plan_runner): 每日/每窗口检查 armed 计划, 命中→fired + 注入指令给 Pi。"""
+    try:
+        from app.services.plan_runner import plan_context
+        return plan_context()
+    except Exception:
+        return ""
+
+
+def _read_discipline_context(window: Optional[str] = None) -> str:
+    """狼大纪律规则(周末降仓+板上减半)上下文块: 注入 Pi prompt, 由 agent 结合实时行情执行。"""
+    try:
+        import json as _j, datetime as _dt
+        from app.services.wolf_discipline import discipline_context
+        pf = _read_portfolio()   # 持仓/现金/总资产 JSON
+        return discipline_context(portfolio=pf, now=_dt.datetime.now(), window=window, quotes=None)
+    except Exception:
+        return ""
+
 
 def node_fetch_context(state: TradeState) -> dict:
     """
@@ -1370,6 +1413,10 @@ def node_fetch_context(state: TradeState) -> dict:
         "rotation_switch_context": _read_rotation_switch_context(),
         "macro_context": _read_macro_context(),
         "risk_context": _read_risk_context(),
+        "discipline_context": _read_discipline_context(state['window']),
+        "plan_context": (_pc := _read_plan_context()),
+        "plan_triggered": ('🔔 计划命中' in _pc),
+        "wolf_t_context": _read_wolf_t_context(),
     }
 
 
@@ -1465,7 +1512,11 @@ def node_call_pi_decision(state: TradeState) -> dict:
     if len(scan) > 2000:
         scan = scan[:2000] + '\n... (已截断)'
 
+    _plan_banner = ("🔔 **计划触发执行**：请按下方已命中的计划立即行动，优先级高于常规窗口指令。\n\n" if state.get('plan_triggered') else "")
     prompt = (
+        f"{_plan_banner}{state.get('plan_context', chr(39)+chr(39))}"
+        f"{state.get('wolf_t_context', chr(39)+chr(39))}"
+        f"{state.get('discipline_context', chr(39)+chr(39))}"
         f"{state.get('wave_context', chr(39)+chr(39))}"
         f"{state.get('three_tier_context', chr(39)+chr(39))}"
         f"{state.get('main_line_context', chr(39)+chr(39))}"
@@ -1559,6 +1610,19 @@ def node_check_regime_compliance(state: TradeState) -> dict:
     eid = state['execution_id']
     regime = state.get('market_regime', 'trend')
     reply = state.get('pi_raw_reply', '')
+
+    # 狼大纪律: 周末降仓(周五, 不限 regime) —— 仓位占比达到阈值时只允许降T仓, 禁止买入/加仓/追
+    try:
+        import re as _re, datetime as _dt
+        from app.services.wolf_discipline import weekend_de_risk
+        _wd = weekend_de_risk(state.get('portfolio_json', '{}'), _dt.datetime.now(), window=state.get('window'))
+        if _wd.get('active'):
+            _rep = state.get('pi_raw_reply', '') or ''
+            if _re.search(r'买入|加仓|建仓|追|进场', _rep):
+                return {"regime_violation": True,
+                        "regime_violation_reason": _wd['directive'] + "（周末降仓日：只允许降T仓、禁止买入/加仓/追）"}
+    except Exception:
+        pass
 
     if regime != 'oscillation':
         logger.info(f"[{eid}] [Graph] ✓ 趋势市，跳过策略合规检查")

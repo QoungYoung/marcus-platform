@@ -58,6 +58,9 @@ class TMonitor:
         }
         self._daily_maintained = ""
         self._ai_thread: Optional[threading.Thread] = None
+        self._wolf_done = set()   # (symbol, trigger_kind, date) 当日去抖，防同一腿反复触发
+        self._wolf_bought_today = set()  # (symbol, date) 当日正T买入
+        self._wolf_sold_today = set()    # (symbol, date) 当日确认制T出已卖
 
     # ── 生命周期 ──
     def start(self) -> bool:
@@ -104,6 +107,10 @@ class TMonitor:
                             self._status["daily_maintained"] = self._daily_maintain()
                             self._start_ai_maintain()
                     self._round()
+                    self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
+                    self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
+                    # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
+                    self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
@@ -118,6 +125,171 @@ class TMonitor:
             # jitter 等待
             wait = self.interval + ((time.time() * 1000) % (JITTER * 2 + 1) - JITTER)
             self._stop.wait(max(5.0, wait))
+
+    def _check_plan_triggers(self) -> None:
+        """计划触发检查(复用TMonitor 30s轮次): 命中armed计划→立即 run_trade_decision 唤醒交易agent。"""
+        try:
+            from app.services.plan_runner import plan_context
+            from app.services.trade_graph import run_trade_decision
+            block = plan_context()   # 评估armed计划, 命中→status=fired+写plan_replay_log, 返回上下文块
+            if '🔔 计划命中' in block:
+                res = run_trade_decision(
+                    'auto_trade_plan_trigger',
+                    'PLAN' + datetime.now().strftime('%Y%m%d%H%M%S'),
+                    'plan trigger: 立即执行已命中的计划(回补/建仓/减半)')
+                self._status['plan_fired'] = datetime.now().isoformat()
+                print('[TMonitor] 🔔 计划触发→唤醒交易agent:', res.get('pi_stance'),
+                      '|', (res.get('report') or '')[:120])
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] 计划触发检查异常: {e}")
+
+    def _prev_daily(self, sym, n=5):
+        """最近 n 个交易日的 {close, high, low, vol}（读 data/recent_sync 或 stock_5m_bt）。"""
+        import os as _os, json as _j
+        D=_os.environ.get('DATA_DIR','/app/data')
+        code6=''.join(ch for ch in str(sym) if ch.isdigit())[:6]
+        data={}
+        for root in ['stock_5m_bt','recent_sync']:
+            p=_os.path.join(D,root,code6+'.json')
+            try: d=_j.load(open(p,encoding='utf-8'))
+            except Exception: continue
+            for k,v in d.items():
+                bs=sorted(v,key=lambda x:str(x.get('time') or x.get('trade_time')))
+                if bs: data.setdefault(k, {'close':float(bs[-1]['close']),
+                                           'high':max(float(b['high']) for b in bs),
+                                           'low':min(float(b['low']) for b in bs),
+                                           'vol':sum(float(b.get('vol') or 0) for b in bs)})
+        today=datetime.now().strftime('%Y%m%d')
+        days=sorted(k for k in data if k<today and data[k].get('vol'))
+        return [data[k] for k in days[-n:]]
+
+    def _today_bars(self, sym):
+        """当日 5min bars（读 recent_sync/stock_5m_bt/{code6}.json 的今天）。"""
+        import os as _os, json as _j
+        D=_os.environ.get('DATA_DIR','/app/data')
+        code6=''.join(ch for ch in str(sym) if ch.isdigit())[:6]
+        today=datetime.now().strftime('%Y%m%d')
+        for root in ['recent_sync','stock_5m_bt']:
+            p=_os.path.join(D,root,code6+'.json')
+            try: d=_j.load(open(p,encoding='utf-8'))
+            except Exception: continue
+            if today in d: return d[today]
+        return []
+
+    def _log_cycle(self, sym, cyc):
+        """把正T买→分时T出→收益 追加到 data/wolf_t_cycles.jsonl。"""
+        import os as _os, json as _j
+        D=_os.environ.get('DATA_DIR','/app/data')
+        with open(_os.path.join(D,'wolf_t_cycles.jsonl'),'a',encoding='utf-8') as f:
+            f.write(_j.dumps({'at':datetime.now().isoformat(),'symbol':sym,**cyc},ensure_ascii=False)+chr(10))
+
+    def _insert_wolf_trigger(self, sym, kind, quote, reason):
+        """把 wolf_t_rules 命中写成 t_triggers(pending/auto)，复用同一做T执行管道(不直接下单)。"""
+        now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            current=float(quote.get('current') or 0)
+        except Exception:
+            current=0
+        trig={
+            "account_id": T_MONITOR_ACCOUNT, "condition_id": None, "symbol": sym,
+            "event_type": kind, "trigger_price": None, "quote_price": current,
+            "suggest_bid_price": round(current*0.999, 3), "suggest_ask_price": round(current*1.001, 3),
+            "slippage_budget": 0.001,
+            "snapshot": {"quote_time": now, "wolf_rule": reason, "trigger_kind": kind, "source": "wolf_t_rules"},
+            "mode": "auto",
+        }
+        try:
+            tid = t_db.insert_trigger(trig)
+            if tid:
+                print(f"[TMonitor] wolf_t_rules触发 #{tid} {sym} {kind} @ {current} ({reason})")
+        except Exception as e:
+            print(f"[TMonitor] wolf_t_rules写触发异常: {e}")
+
+    def _check_wolf_t_rules(self) -> None:
+        """做T规则(向狼大看齐): 对做T宇宙标的用实时quote算正T/倒T, 命中写 t_triggers(当日去抖)。"""
+        try:
+            from app.services.wolf_t_rules import zheng_t_buy_quote, dao_t_sell_quote
+            conds = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
+            syms = sorted({c.get('symbol') for c in conds if _is_wolf_t_condition(c)})
+            if not syms:
+                return
+            quotes = fetch_tencent_quote([_normalize_symbol(s) for s in syms])
+            today = datetime.now().strftime('%Y%m%d')
+            for sym in syms:
+                q = quotes.get(_normalize_symbol(sym))
+                if not q:
+                    continue
+                prev = self._prev_daily(sym, 5)
+                if not prev:
+                    continue
+                b, rb = zheng_t_buy_quote(q, prev)
+                d, rd = dao_t_sell_quote(q, prev)
+                if b and (sym, 'wolf_zheng_t_buy', today) not in self._wolf_done:
+                    try:
+                        from app.services.wolf_t_rules import t_cycle_pnl
+                        tb=self._today_bars(sym)
+                        cyc=t_cycle_pnl(tb, 2.5) if tb else None
+                        if cyc:
+                            if cyc.get('sell'):
+                                rb += ' | 正T买@%.2f→确认制T出@%.2f(+%.2f%%/日高+%.2f%%)' % (cyc['buy'], cyc['sell'], cyc['pnl'], cyc['pnl_dayhigh'])
+                            else:
+                                rb += ' | 正T买@%.2f 未确认→黄线/持有至次日/周五减T仓(不强制日结)' % (cyc['buy'])
+                            self._log_cycle(sym, cyc)
+                            if cyc.get('confirm'):
+                                self._wolf_sold_today.add((sym, today))
+                                self._insert_wolf_trigger(sym, 'wolf_confirm_sell', q, '确认制T出(停量+二次不过前高)')
+                    except Exception:
+                        pass
+                    self._insert_wolf_trigger(sym, 'wolf_zheng_t_buy', q, rb)
+                    self._wolf_bought_today.add((sym, today))
+                    self._wolf_done.add((sym, 'wolf_zheng_t_buy', today))
+                if d and (sym, 'wolf_dao_t_sell', today) not in self._wolf_done:
+                    self._insert_wolf_trigger(sym, 'wolf_dao_t_sell', q, rd)
+                    self._wolf_done.add((sym, 'wolf_dao_t_sell', today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] wolf_t_rules检查异常: {e}")
+
+    def _check_day_end_de_t(self) -> None:
+        """当日正T买(狼大T+0) + 尾盘14:45后仍未确认T出 → 减T仓(保留底仓); 隔日反T/周五例外. """
+        try:
+            now=datetime.now()
+            if not (now.hour==14 and now.minute>=45) and now.hour!=15: return
+            today=now.strftime('%Y%m%d')
+            for sym in [s for s,t in self._wolf_bought_today if t==today]:
+                if (sym, today) in self._wolf_sold_today: continue
+                if (sym,'wolf_day_end_de_t',today) in self._wolf_done: continue
+                q=fetch_tencent_quote([_normalize_symbol(sym)]).get(_normalize_symbol(sym))
+                if not q: continue
+                self._insert_wolf_trigger(sym, 'wolf_day_end_de_t', q, '当日正T买+尾盘未确认→减T仓(保留底仓)')
+                self._wolf_done.add((sym,'wolf_day_end_de_t',today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] day_end_de_t异常: {e}")
+
+    def _check_defensive_t_reduce(self) -> None:
+        """防御性减T(风险/结构驱动): wave只做T + (量能不足 或 滞涨) → 写 wolf_defensive_t_reduce 减T触发(08-27/09-01式)."""
+        try:
+            from app.services.wolf_t_rules import defensive_t_reduce_quote
+            conds = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
+            active = {c.get('symbol') for c in conds if _is_wolf_t_condition(c)}
+            today = datetime.now().strftime('%Y%m%d')
+            syms = sorted(set(active) | {s for s,t in self._wolf_bought_today if t==today})
+            if not syms: return
+            quotes = fetch_tencent_quote([_normalize_symbol(s) for s in syms])
+            for sym in syms:
+                q = quotes.get(_normalize_symbol(sym))
+                if not q: continue
+                prev = self._prev_daily(sym, 5)
+                if not prev: continue
+                ok, reason = defensive_t_reduce_quote(q, prev, wave_op='t_only')
+                if ok and (sym,'wolf_defensive_t_reduce',today) not in self._wolf_done:
+                    self._insert_wolf_trigger(sym,'wolf_defensive_t_reduce',q,reason)
+                    self._wolf_done.add((sym,'wolf_defensive_t_reduce',today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] defensive_t_reduce异常: {e}")
 
     def _roll_wolf_legs(self, today: str) -> int:
         """狼大持续腿跨日结转（2026-09-03 修复生产监控条件丢失）。
