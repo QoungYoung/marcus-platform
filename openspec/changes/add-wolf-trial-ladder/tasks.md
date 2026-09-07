@@ -28,6 +28,6 @@
 
 ## 5. 验证与上线
 - [x] 用 09-04/09-07 数据回放：tier_for 对各持仓/候选标的分档正确；escalate_signal 今日是否成立；switch 清单对照狼大当日发言（科技主攻/消费滞后）
-- [x] DRY 观察数个交易日：清单与狼大行为对照无大偏差
-- [x] 生产上传 + worker 重启 + 报告可见后，由用户确认再开 SWITCH_AUTO_EXEC/完全接通
+- [ ] DRY 观察数个交易日：清单与狼大行为对照无大偏差（用户 2026-09-07 选择跳过 DRY 直接对接生产 → 改为线上观察）
+- [x] 生产上传 + worker 重启 + 报告可见后，由用户确认再开 SWITCH_AUTO_EXEC/完全接通（已开=1: buy_new 5只×253/254 布腿 t_conditions publisher=switch）
 - [x] 全量 validate（openspec validate）
