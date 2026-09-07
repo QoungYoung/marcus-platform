@@ -178,6 +178,23 @@ def main():
     for chain, side in buy_chains[:2]:
         for cand in pick_buy(chain, exclude=held_syms, limit=3):
             buy_legs.append({"symbol": cand["symbol"], "chain": chain, "side": side})
+    # 2026-09-07 wave 调档(回测 wave-tuned-v2): defense/exit 下按 invest 收窄买腿布设(控亏/只降不空),
+    # build/t_only/side invest=1 不裁剪 —— 只影响布腿数量，不绕过浪gate/风控
+    try:
+        from main_line.wave_alloc import read_wave_alloc
+        _alloc = read_wave_alloc()
+        _inv = float(_alloc.get("invest") or 1.0)
+        if _inv < 1.0 and buy_legs:
+            _keep = max(int(len(buy_legs) * _inv + 0.5), 1 if _inv > 0.3 else 0)
+            if _keep == 0:
+                buy_legs = []
+            else:
+                # 按权重优先保留主链(前序即主线优先)
+                buy_legs = buy_legs[:min(_keep, len(buy_legs))]
+        print("WAVE_ALLOC op=", _alloc.get("operation"), "invest=", _inv,
+              "top3=", (_alloc.get("top3") or [])[:3], file=sys.stderr)
+    except Exception as e:
+        print("[rotation_switch_arm] wave_alloc err:", str(e)[:80], file=sys.stderr)
     print("DECISION sell_legs", sell_legs, "buy_chains", buy_chains, "buy_legs", buy_legs)
     if dry:
         json.dump({"mode": "SWITCH_ARM_DRY", "date": today, "sell_legs": sell_legs,

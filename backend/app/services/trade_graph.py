@@ -728,23 +728,39 @@ def _read_stock_confirm_context() -> str:
             if not isinstance(v, dict) or "confirm" not in v:
                 continue
             total_n += v.get("n", 0); total_c += v.get("confirm", 0)
+            th = v.get("theme") or ""
             pct = int(100 * (v.get("confirm") or 0) / max(v.get("n") or 1, 1))
-            lines.append(f"{cname}: 确认{v.get('confirm')}/{v.get('n')}({pct}%)")
+            lines.append(f"{(th + '·') if th else ''}{cname}: 确认{v.get('confirm')}/{v.get('n')}({pct}%)")
             stocks = v.get("stocks") or []
             act = [str(s.get("code", "")).split(".")[0] for s in stocks
                    if (s.get("stage") or "") in ("确认", "突破候选")]
             if act:
-                active_codes.append(f"{cname}({'/'.join(act)})")
+                active_codes.append(f"{(th + '·') if th else ''}{cname}({'/'.join(act)})")
         overall = int(100 * total_c / max(total_n, 1)) if total_n else 0
-        block = ("## 个股确认链（三层联动之三）" + chr(10)
+        block = ("## 个股确认链（三层联动之三，fusion TOP3 均确认）" + chr(10)
                  + "- 主线概念成分股确认：")
-        for ln in lines[:6]:
+        for ln in lines[:9]:
             block += ln + "；"
         block = block.rstrip("；") + chr(10)
         block += ("- 总确认比例：" + str(overall) + "%" + chr(10)
-                  + "- 活跃个股(突破候选/确认，子方向领涨，可纳入做T/低吸观察——勿因整组比例低而漏买)：" + (chr(44).join(active_codes[:8]) or "无") + chr(10))
+                  + "- 活跃个股(突破候选/确认，子方向领涨，可纳入做T/低吸观察——勿因整组比例低而漏买)：" + (chr(44).join(active_codes[:10]) or "无") + chr(10))
         block += ("- 决策：成分股确认比例低(<30%)=主线未确认主升→限制重仓(等放量突破站稳)；高(≥50%)=主线确认→可沿主线建仓；"
                   + "整组比例低但出现'活跃个股'时：该子方向已局部激活，活跃个股可做T/轻仓低吸(重仓仍等整组确认)。" + chr(10) + chr(10))
+        # 2026-09-07 wave 调档: 多主线候选资源分配提示(回测验证 wave-tuned-v2)
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps"))
+            from main_line.wave_alloc import read_wave_alloc
+            a = read_wave_alloc()
+            if a.get("operation"):
+                w = a["w"]; invest = a["invest"]
+                block += ("## 主线候选权重分配(wave调档, 2026-09-07 回测落地)" + chr(10)
+                          + f"- 当前wave={a['operation']} → TOP3权重 {int(100*w[0])}/{int(100*w[1])}/{int(100*w[2])}，仓位投入 {int(100*invest)}%"
+                          + f"；TOP3=" + (chr(44).join(f"{k}({s})" for k, s in zip(a['top3'], a['scores'])) or "无") + chr(10)
+                          + "- 决策：build→分散吃轮动；t_only→主第1(70%)+2/3试仓；side→主第1(60%)；defense→仅30%仓参与(不追突破, 回踩低吸)；exit→70%仓(只降不空)。"
+                          + chr(10) + chr(10))
+        except Exception:
+            pass
         return block
     except Exception:
         return ""

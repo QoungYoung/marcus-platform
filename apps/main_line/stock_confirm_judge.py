@@ -28,42 +28,55 @@ def ts(a, **p):
     return {}
 
 def main():
-    # 主线主题 → 概念名(fusion THEME_CONCEPTS)
+    # 2026-09-07: 确认范围 main_line(1) → fusion TOP3(CONFIRM_TOP_N, 默认3)：
+    # TOP2/3 方向也跑成分确认(科技/军工突破候选进视野)，避免单主线偏置漏方向；
+    # 输出平铺 {概念:{...}}+theme 字段(概念名全局唯一，兼容下游平铺读法)
+    CONFIRM_TOP_N = int(os.getenv("CONFIRM_TOP_N", "3"))
+    MAX_CONCEPTS_PER_THEME = int(os.getenv("STOCK_CONFIRM_CONCEPTS", "8"))
     try:
         import fusion_mainline as fm
         st = json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8"))
-        mt = st.get("main_line") or "AI/算力/科技"
-        names = fm.THEME_CONCEPTS.get(mt, [])
+        fus = st.get("fusion") or {}
+        rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
+        themes = [k for k, _ in rank[:CONFIRM_TOP_N]] or [st.get("main_line") or "AI/算力/科技"]
     except Exception:
-        names = ["人工智能", "算力概念", "CPO概念", "光通信模块", "液冷概念"]
-    print("[stock_confirm] 主线:", mt if 'mt' in dir() else "AI/算力/科技", "概念候选:", len(names), file=sys.stderr)
+        fm = None
+        themes = ["AI/算力/科技"]
+    print("[stock_confirm] TOP确认主题:", themes, file=sys.stderr)
     if not os.path.exists(DB):
         print("[stock_confirm] NO stock_pool.db", file=sys.stderr); return
     con = sqlite3.connect(DB)
     out = {}
-    for cname in names[:MAX_CONCEPTS]:
+    for mt in themes:
         try:
-            cur = con.cursor()
-            cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=? LIMIT ?", (cname, MAX_STOCKS))
-            codes = [r[0] for r in cur.fetchall()]
-        except Exception as e:
-            print("[stock_confirm] concept err", cname, str(e)[:60], file=sys.stderr); continue
-        stocks = []
-        for code in codes:
-            d = ts("daily", ts_code=code, start_date="20260601", end_date=_dt.date.today().strftime("%Y%m%d"))  # 动态: 用最近交易日/今天, 避免停在旧日
-            data = d.get("data", {}); fields = data.get("fields") or []; items = data.get("items") or []
-            if not items: continue
-            df = pd.DataFrame([dict(zip(fields, it)) for it in items])
-            df["trade_date"] = pd.to_datetime(df["trade_date"]); df = df.sort_values("trade_date")
-            ser = df.set_index("trade_date")["close"].astype(float)
-            vol = df.set_index("trade_date")["vol"].astype(float)
-            cc = confirm_chain(ser, None, vol)
-            stocks.append({"code": code, "stage": cc["stage"]})
-            time.sleep(0.5)
-        n_confirm = sum(1 for s in stocks if s["stage"] in ("确认", "突破候选"))
-        out[cname] = {"n": len(stocks), "confirm": n_confirm,
-                      "ratio": round(n_confirm / max(len(stocks), 1), 2), "stocks": stocks}
-        print("[stock_confirm]", cname, "n=", len(stocks), "确认", n_confirm, file=sys.stderr)
+            names = fm.THEME_CONCEPTS.get(mt, []) if fm is not None else []
+        except Exception:
+            names = []
+        if not names:
+            names = ["人工智能", "算力概念", "CPO概念", "光通信模块", "液冷概念"]
+        for cname in names[:MAX_CONCEPTS_PER_THEME]:
+            try:
+                cur = con.cursor()
+                cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=? LIMIT ?", (cname, MAX_STOCKS))
+                codes = [r[0] for r in cur.fetchall()]
+            except Exception as e:
+                print("[stock_confirm] concept err", cname, str(e)[:60], file=sys.stderr); continue
+            stocks = []
+            for code in codes:
+                d = ts("daily", ts_code=code, start_date="20260601", end_date=_dt.date.today().strftime("%Y%m%d"))  # 动态: 用最近交易日/今天, 避免停在旧日
+                data = d.get("data", {}); fields = data.get("fields") or []; items = data.get("items") or []
+                if not items: continue
+                df = pd.DataFrame([dict(zip(fields, it)) for it in items])
+                df["trade_date"] = pd.to_datetime(df["trade_date"]); df = df.sort_values("trade_date")
+                ser = df.set_index("trade_date")["close"].astype(float)
+                vol = df.set_index("trade_date")["vol"].astype(float)
+                cc = confirm_chain(ser, None, vol)
+                stocks.append({"code": code, "stage": cc["stage"]})
+                time.sleep(0.5)
+            n_confirm = sum(1 for s in stocks if s["stage"] in ("确认", "突破候选"))
+            out[cname] = {"theme": mt, "n": len(stocks), "confirm": n_confirm,
+                          "ratio": round(n_confirm / max(len(stocks), 1), 2), "stocks": stocks}
+            print("[stock_confirm]", mt, ">", cname, "n=", len(stocks), "确认", n_confirm, file=sys.stderr)
     json.dump(out, open(os.path.join(DATA, "stock_confirm_result.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print("[stock_confirm] WROTE stock_confirm_result.json 概念:", list(out.keys()), file=sys.stderr)
 
