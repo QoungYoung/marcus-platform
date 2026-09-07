@@ -77,7 +77,10 @@ def zheng_t_buy_quote(quote, prev_days):
 
 
 def defensive_t_reduce_quote(quote, prev_days, wave_op='t_only'):
-    """防御性减T(风险/结构驱动, 狼大08-27/09-01): wave∈只做T/末段 且 (量能不足 或 滞涨(冲高回落)) → 减已持T仓."""
+    """防御性减T(风险/结构驱动, 狼大08-27/09-01): wave∈只做T/末段 且 高位(接近前高/近5日大涨)
+    且 (量能不足 或 滞涨(冲高回落)) → 减已持T仓.
+    v16加"高位看量价"位置门(狼大09-01高低位): 仅位置高位才判缩量滞涨为顶部→减T;
+    中段缩量滞涨=洗盘不触发, 避免过度防御(药明非高位被误减T)."""
     if wave_op not in ('t_only','side','defense','exit'):
         return False, 'wave allow build'
     try:
@@ -89,8 +92,15 @@ def defensive_t_reduce_quote(quote, prev_days, wave_op='t_only'):
     avg=sum(pvols)/len(pvols) if pvols else 0
     vol_low = avg>0 and vol <= avg*0.8
     fade = high>0 and current < high*0.99
-    ok = vol_low and fade
-    return bool(ok), '量能不足(vr=%.2f) 滞涨(收/高=%.2f)' % ((vol/avg if avg else 0), (current/high if high else 0))
+    # 高位门(狼大"接近前高/创高/大涨后短时顶"), 与 dao_t_sell 同口径
+    pcloses=[p.get('close') for p in prev_days if p.get('close')]
+    prev_high=max([p.get('high') for p in prev_days if p.get('high')], default=0)
+    start=pcloses[0] if pcloses else 0
+    gain=(current/start-1)*100 if start else 0
+    high_pos = gain>=10.0 or (prev_high and high>=prev_high*0.97)
+    ok = high_pos and vol_low and fade
+    return bool(ok), '高位(近5日gain=%.1f%% 接近前高=%s) 量能不足(vr=%.2f) 滞涨(收/高=%.2f)' % (
+        gain, (prev_high and high>=prev_high*0.97), (vol/avg if avg else 0), (current/high if high else 0))
 
 
 def dao_t_sell_quote(quote, prev_days):
