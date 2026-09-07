@@ -108,6 +108,7 @@ class TMonitor:
                             self._status["daily_maintained"] = self._daily_maintain()
                             self._start_ai_maintain()
                     self._round()
+                    self._settle_tsell_pending()  # 撤销式T出结算(放量过前高→撤销/超时→执行)
                     self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
                     # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
@@ -207,6 +208,46 @@ class TMonitor:
                 print(f"[TMonitor] wolf_t_rules触发 #{tid} {sym} {kind} @ {current} ({reason})")
         except Exception as e:
             print(f"[TMonitor] wolf_t_rules写触发异常: {e}")
+
+    def _settle_tsell_pending(self) -> None:
+        """撤销式 T出 结算(2026-09-07): 对 pending 的 high_sell 观察——
+        期间放量(vol>1.3×前均量)创新高(close>段高) → 撤销T出(继续持有等新高后新确认);
+        无新高且超 TSELL_DELAY_S → 执行卖出; 14:45 后不强制(day_end 已降级, 允许跨日)。"""
+        if not _TSELL_PENDING:
+            return
+        import time as _tm
+        from app.services.t_gateway import gateway_execute
+        from app.services.t_data_sources import fetch_minute_bars, fetch_tencent_quote
+        today = datetime.now().strftime("%Y-%m-%d")
+        for sym in list(_TSELL_PENDING.keys()):
+            p = _TSELL_PENDING[sym]
+            try:
+                qs = _normalize_symbol(sym)
+                bars = fetch_minute_bars(qs, freq="m5", count=60) or []
+                tb = [b for b in bars if str(b.get("time") or b.get("trade_time")).startswith(today)]
+                if not tb:
+                    continue
+                last = tb[-1]
+                lc = float(last.get("close") or 0); lv = float(last.get("vol") or 0)
+                dec = _tsell_undo_decide(p["hi"], p["base"], lc, lv, _tm.time() - p["ts"])
+                q = (fetch_tencent_quote([qs]) or {}).get(qs) or {}
+                cur = float(q.get("current") or 0)
+                if dec == "undo":
+                    t_db.update_trigger_status(p["trig_id"], "cancelled",
+                                               reason=f"放量过前高({lc}>{p['hi']})→撤销本次T出(主升未完, 继续持有)")
+                    print(f"[TMonitor] T出撤销 {sym} (放量过前高 {lc} > hi {p['hi']})")
+                    del _TSELL_PENDING[sym]
+                elif dec == "sell":
+                    gw = gateway_execute(sym, "sell", cur if cur > 0 else p.get("last_price", cur),
+                                         int(p["volume"]), reason="确认制T出(撤销式延迟无放量新高)",
+                                         decision_source="ai_led", account_id=p.get("account_id", T_MONITOR_ACCOUNT))
+                    ok = gw.get("status") == "success"
+                    t_db.update_trigger_status(p["trig_id"], "executed" if ok else "blocked",
+                                               reason=f"确认制T出(延迟确认): {gw.get('status')} | {str(gw.get('reason') or '')[:80]}")
+                    print(f"[TMonitor] T出执行(延迟无新高) {sym} {p['volume']}股@{cur}: {gw.get('status')}")
+                    del _TSELL_PENDING[sym]
+            except Exception as ex:
+                print(f"[TMonitor] settle_tsell err {sym}: {str(ex)[:100]}")
 
     def _check_wolf_t_rules(self) -> None:
         """做T规则(向狼大看齐): 对做T宇宙标的用实时quote算正T/倒T, 命中写 t_triggers(当日去抖)。"""
@@ -1050,10 +1091,33 @@ class TMonitor:
                             _g3_block, _g3_reason = g3_sell_blocked(symbol)
                         except Exception as _ge:
                             print(f"[TMonitor] no_t_gate err: {str(_ge)[:80]}")
+                    # 撤销式 T出(2026-09-07): high_sell(t_sell) 触发 → 进入观察期(不立即卖),
+                    # 期间放量过前高则撤销(主升未完), 无新高且超 TSELL_DELAY_S 由 _settle_tsell_pending 执行
+                    _tsell_defer = False
+                    if not _g3_block and side == "sell" and trigger_kind == "high_sell" and _TSELL_UNDO                             and symbol not in _TSELL_PENDING:
+                        try:
+                            import time as _tm
+                            _tb = self._today_bars(symbol)
+                            if _tb:
+                                _ctx = _tsell_hi_base(_tb)
+                                if _ctx:
+                                    _TSELL_PENDING[symbol] = {
+                                        "hi": _ctx[0], "base": _ctx[1], "volume": int(volume),
+                                        "trig_id": trig_id, "ts": _tm.time(),
+                                        "account_id": cond.get("account_id", T_MONITOR_ACCOUNT)}
+                                    t_db.update_trigger_status(
+                                        trig_id, "claimed",
+                                        reason=f"T出撤销式观察(hi={_ctx[0]:.3f}, {int(TSELL_DELAY_S)}s内放量过前高则撤销)")
+                                    print(f"[TMonitor] T出进入撤销式观察 {symbol} hi={_ctx[0]:.3f} vol={volume}")
+                                    _tsell_defer = True
+                        except Exception as _te:
+                            print(f"[TMonitor] tsell defer err: {str(_te)[:100]}")
                     if _g3_block:
                         exec_ok = False
                         print(f"[TMonitor] G3门拦截 {symbol} 卖腿: {_g3_reason}")
                         t_db.update_trigger_status(trig_id, "blocked", reason=_g3_reason + "（G3门）")
+                    elif _tsell_defer:
+                        exec_ok = False   # 延迟执行(由 _settle_tsell_pending 后续处理)
                     else:
                         gw = gateway_execute(symbol, side, current, volume,
                                              reason=f"条件命中自动执行（{trigger_kind}）",
@@ -1279,6 +1343,49 @@ def _t_signals_from_m5(m5):
     except Exception:
         pass
     return t1, t_sell
+
+
+# ── T出"撤销式"(2026-09-07, 离线验证 3357 触发点): 放量过前高=主升未完 → 撤销本次 T出
+# m5.t_sell 触发后不立即卖: 延迟观察 TSELL_DELAY_S, 期间若出现 vol>1.3×前均量 且 close>段高
+# → 撤销(继续持有等新高后新确认); 无放量新高且达延迟 → 执行卖出; 跨日不强制尾盘卖(day_end 已降级)
+_TSELL_PENDING = {}   # symbol -> {hi, base, volume, trig_id, ts, account_id}
+_TSELL_UNDO = os.getenv("WOLF_TSELL_UNDO", "1") != "0"
+TSELL_DELAY_S = float(os.getenv("TSELL_DELAY_S", "600"))
+
+
+def _tsell_hi_base(bars):
+    """重扫当日 m5(逻辑同 _t_signals_from_m5): t_sell 成立的段高点 hi 与高点前均量 base -> (hi,base) 或 None"""
+    import numpy as _np
+    try:
+        closes = _np.array([float(b["close"]) for b in bars])
+        vols = _np.array([float(b["vol"]) for b in bars])
+        look = 8; n = len(closes)
+        if n < look * 4 + 4:
+            return None
+        for i in range(look, n - look - 2):
+            base = vols[max(0, i - look):i].mean()
+            if base > 0 and vols[i] > base * 1.3:
+                seg = closes[i:n - look]
+                hi = float(seg.max()); hi_idx = i + int(seg.argmax())
+                if hi_idx >= i + 2:
+                    va = vols[hi_idx + 1:hi_idx + 1 + look].mean() if hi_idx + look < n else 0
+                    vb = vols[max(i, hi_idx - look):hi_idx].mean()
+                    if vb > 0 and va < vb * 0.8:
+                        sh = float(closes[hi_idx + 1:].max()) if hi_idx + 1 < n else 0
+                        if sh > hi * 0.98 and sh < hi * 1.005:
+                            return (float(hi), float(vb))
+        return None
+    except Exception:
+        return None
+
+
+def _tsell_undo_decide(hi, base, last_close, last_vol, elapsed_s):
+    """撤销式决策: 'undo'(放量过前高→撤销T出) / 'sell'(无新高且超延迟→执行) / 'wait'"""
+    if base > 0 and last_vol > 1.3 * base and last_close > hi:
+        return "undo"
+    if elapsed_s >= TSELL_DELAY_S:
+        return "sell"
+    return "wait"
 
 
 # 指数盘中回撤缓存（30s TTL，避免每轮拉腾讯）
