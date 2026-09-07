@@ -27,6 +27,8 @@ sys.path.insert(0, str(AKSHARE_DIR))
 sys.path.insert(0, str(CORE_DIR))
 sys.path.insert(0, str(CORE_DIR / "utils"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "paper-trading"))
+# 项目根目录（容器内 /app/app = backend/app 包），支持 from app.xxx 导入
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from paper_engine import PaperTradingEngine
 from xueqiu_engine import XueqiuEngine
