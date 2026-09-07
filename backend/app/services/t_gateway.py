@@ -29,10 +29,52 @@ T_BASE_FLOOR_OVERRIDES = {
 }
 
 
+def _fifo_net_position(account_id: str, symbol: str) -> Optional[int]:
+    """paper_trades(未void) 买入-卖出 累计净持仓(权威口径, 与 vnpy bridge 一致)。
+    无成交流水返回 None; 任何异常返回 None(调用方回退 paper_positions)。"""
+    try:
+        db = SessionLocal()
+        try:
+            v = db.execute(text(
+                "SELECT COALESCE(SUM(CASE WHEN direction='买入' THEN volume ELSE -volume END), 0) "
+                "FROM paper_trades WHERE account_id = :a AND symbol = :s "
+                "AND (voided = 0 OR voided IS NULL)"),
+                {"a": account_id, "s": symbol}).scalar()
+            return int(v or 0)
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+def _cum_buy_volume(account_id: str, symbol: str) -> Optional[int]:
+    """累计未void买入量(底仓锚定基数: 只升不降, 卖出不缩小底仓)。"""
+    try:
+        db = SessionLocal()
+        try:
+            v = db.execute(text(
+                "SELECT COALESCE(SUM(volume), 0) FROM paper_trades "
+                "WHERE account_id = :a AND symbol = :s AND direction = '买入' "
+                "AND (voided = 0 OR voided IS NULL)"),
+                {"a": account_id, "s": symbol}).scalar()
+            return int(v or 0)
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
 def base_floor_shares(account_id: str, symbol: str, volume: Optional[int] = None) -> int:
-    """动态底仓(狼大'底仓不动/T出半'): 底仓 = 当前持仓 × T_BASE_KEEP_RATIO(默认0.5), 下限100股。
-    不写死: 有持仓 volume 时按比例动态(随持仓自适应); 无 volume 回退旧覆盖→默认100(保守)。"""
+    """底仓保留下限(狼大'底仓不动/T出半') = 累计未void买入 × T_BASE_KEEP_RATIO(默认0.5), 下限100股。
+
+    2026-09-07 修复(588170 连卖超卖): 底仓锚定【累计买入量】而非【当前持仓】——
+    旧实现用当前持仓×0.5, 每卖一次持仓变小→floor 跟着变小→T仓'复活'→继续卖, 把底仓侵蚀到 100;
+    现在卖出不缩小累计买入→floor 固定, 卖腿 max_sell=当前净持仓−floor, T仓卖完即止。
+    无成交流水(外部同步仓)时回退 volume 动态 / 旧覆盖 / 100。"""
     keep = float(os.getenv("T_BASE_KEEP_RATIO", "0.5"))
+    base = _cum_buy_volume(account_id, symbol)
+    if base and int(base) > 0:
+        return max(int(int(base) * keep), 100)
     if volume is not None and int(volume) > 0:
         return max(int(int(volume) * keep), 100)
     ov = T_BASE_FLOOR_OVERRIDES.get(symbol)
@@ -145,6 +187,17 @@ def get_sellable_ledger(account_id: str = "t") -> Dict[str, Dict[str, Any]]:
                 symbol = p["symbol"]
                 volume = int(p["volume"] or 0)
                 today_buy = buy_map.get(symbol, 0)
+                # 2026-09-07 修复(588170 连卖): volume 以 paper_trades FIFO 净持仓为权威
+                # (bridge 播种曾把成交后的持仓覆盖回旧值 → 系统以为没卖 → 重复卖)；
+                # paper_positions 无成交记录(外部同步仓)时回退其 volume。并软同步表。
+                fifo = _fifo_net_position(account_id, symbol)
+                if fifo is not None and fifo >= 0 and abs(fifo - volume) > 0:
+                    db.execute(text(
+                        "UPDATE paper_positions SET volume = :v, updated_at = :u "
+                        "WHERE account_id = :a AND symbol = :s"),
+                        {"v": fifo, "u": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                         "a": account_id, "s": symbol})
+                    volume = fifo
                 # 可卖 = 持仓 − 今日买入（当日买回部分 T+1 锁定）
                 sellable = max(volume - today_buy, 0)
                 ledger[symbol] = {
@@ -154,6 +207,7 @@ def get_sellable_ledger(account_id: str = "t") -> Dict[str, Dict[str, Any]]:
                     "sellable": sellable,
                     "avg_price": float(p["avg_price"] or 0),
                 }
+            db.commit()
             return ledger
         finally:
             db.close()
