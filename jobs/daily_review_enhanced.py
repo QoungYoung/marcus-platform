@@ -442,12 +442,9 @@ _冷静理性，数据驱动。不以物喜，不以己悲。_
 - 计划库：{len(_plans)} 条（armed **{_armed}** / fired **{_fired}**）
 """
         if _fired:
-            report += f"- 当日命中：{_fsub}
-"
+            report += f"- 当日命中：{_fsub}\n"
     except Exception as _e:
-        report += f"
-> 今日计划：读取失败（{_e}）
-"
+        report += f"\n> 今日计划：读取失败（{_e}）\n"
     
     return report
 
