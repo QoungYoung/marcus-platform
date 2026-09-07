@@ -65,10 +65,11 @@ def held_concepts():
     return out
 
 def chain_of_symbol(sym, concepts):
-    from rotation_universe import SUB_UNIVERSE as SUB
+    from rotation_universe import get_sub_universe
+    SU = get_sub_universe()
     names = concepts.get(sym, []) + concepts.get(sym.replace("SH", "").replace("SZ", "") + (".SH" if sym.startswith("SH") else ".SZ"), [])
     hits = []
-    for sub, kws in SUB.items():
+    for sub, kws in SU.items():
         if any(norm(k) in norm(n) for n in names for k in kws):
             hits.append(sub)
     return hits
@@ -140,8 +141,8 @@ def _q_mid(ts):
         return None
 
 def _buy_shortlist(chain, exclude, limit=3):
-    from rotation_universe import SUB_UNIVERSE as SUB
-    kws = SUB.get(chain) or []
+    from rotation_universe import get_sub_universe
+    kws = get_sub_universe().get(chain) or []
     if not kws:
         return []
     try:

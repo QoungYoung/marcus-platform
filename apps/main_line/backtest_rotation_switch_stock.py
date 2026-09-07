@@ -18,6 +18,7 @@ except Exception as e:
 TOKEN = os.getenv('TUSHARE_TOKEN', '')
 URL = os.getenv('TUSHARE_API_URL', '')
 DATA = os.environ.get('DATA_DIR', 'data')
+REL_DAYS = int(os.environ.get('SWITCH_REL_DAYS', '60'))
 
 SWITCHES = [
     dict(eid='E09', date='2026-02-28', upto='20260227', sell_basket=None, buy_basket='packaging_low',
@@ -88,11 +89,11 @@ def series_at(sym, upto):
     import pandas as pd
     return pd.Series([x[1] for x in rows], index=pd.to_datetime([x[0] for x in rows], format='%Y%m%d'))
 
-def r60(sym, upto):
+def r60(sym, upto, n=60):
     rows = [x for x in kline(sym) if x[0] <= upto]
-    if len(rows) < 61:
+    if len(rows) < n + 1:
         return None
-    return rows[-1][1] / rows[-61][1] - 1.0
+    return rows[-1][1] / rows[-(n + 1)][1] - 1.0
 
 def stock_feat(sym, upto):
     ser = series_at(sym, upto)
@@ -164,7 +165,7 @@ def main():
                          'n_funds': int(p.get('n_funds') or 0), 'ok': ok})
             print(eid, 'SELL', sym, pos, rows[-1]['mf5_yi'], 'chain', chain_crowded, 'ok', ok, flush=True)
         peer = sorted(set(sell + buy))
-        rr = {x: r60(x, upto) for x in peer}
+        rr = {x: r60(x, upto, REL_DAYS) for x in peer}
         rv = [v for v in rr.values() if v is not None]
         med = sorted(rv)[len(rv) // 2] if rv else None
         for sym in buy:

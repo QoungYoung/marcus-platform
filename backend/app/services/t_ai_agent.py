@@ -182,7 +182,8 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                                      condition_id=(trigger or {}).get("condition_id"),
                                      trigger_id=trigger_id,
                                      reason=reason or "AI 决策执行",
-                                     decision_source="ai_led")
+                                     decision_source="ai_led",
+                                     account_id=(trigger or {}).get("account_id") or "stock")
             result["gateway"] = gw
             result["status"] = "executed" if gw.get("status") == "success" else "rejected"
             # 触发事件状态流转（exec 成功 → executed 由网关内处理；失败 → blocked）

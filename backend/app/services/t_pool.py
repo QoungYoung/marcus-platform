@@ -22,6 +22,7 @@ ACCOUNT_T = "t"
 
 # 参数初值（P4 敏感度扫描后固化）
 SLIPPAGE_TICKS = 2.5          # 双边滑点（最小报价单位），20-60 元中价股 2-5 tick
+REL_SLIPPAGE_PCT = 0.0003     # 低价/基金兜底相对滑点(0.03%/侧)——固定tick按低价归一化会爆炸(ETF→spread负)
 FEE_PCT = 0.001               # 手续费（万1 + 印花税近似）
 MIN_T_SPREAD = 0.5            # 可T价差空间硬门槛（%，原 0.0 过松——2% 振幅标的价差仍 >0 穿透）
 OC_LOW = 0.45                 # O-C 回归度 ≤0.45 加分（双向可T）
@@ -70,7 +71,13 @@ def _quality_from_ohlcv(amp_median: Optional[float], oc: float, round_trip: int,
         price: 现价（滑点成本基准）
     """
     tick = 0.01
-    slippage_cost = (SLIPPAGE_TICKS * tick * 2 + FEE_PCT * price) / price * 100 if price else 0.5
+    # 固定tick滑点(SLIPPAGE_TICKS*tick*2=0.05元)按低价归一化会爆炸(ETF/基金→spread为负, 如-9.65%)：
+    # 固定成本占价>0.4%的(低价/基金)改用相对滑点 REL_SLIPPAGE_PCT
+    if price and (SLIPPAGE_TICKS * tick * 2) / price > 0.004:
+        slippage_abs = REL_SLIPPAGE_PCT * price
+    else:
+        slippage_abs = SLIPPAGE_TICKS * tick * 2
+    slippage_cost = (slippage_abs + FEE_PCT * price) / price * 100 if price else 0.5
     spread = round(amp_median - 2 * slippage_cost, 3) if amp_median is not None else 0.0
     spread_score = min(spread / 2.0, 1.0) if spread > 0 else 0.0
     oc_score = 1.0 if oc <= OC_LOW else (0.5 if oc <= OC_HIGH else 0.0)

@@ -164,8 +164,8 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
 
 
 def tier_mode_enabled():
-    """P3_TIER_MODE=1 → 接线方按 intent_allowed 硬拦；默认 0=dry-run 只观察。"""
-    return os.getenv("P3_TIER_MODE", "0").strip().lower() in ("1", "true", "yes", "on")
+    """P3_TIER_MODE=1 → 接线方按 intent_allowed 硬拦；默认 1(模拟盘生产, 直接对接)；置 0 可回退 dry-run。"""
+    return os.getenv("P3_TIER_MODE", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
 def summarize(decision):

@@ -18,6 +18,9 @@ from app.services.t_regime import compute_regime
 
 # 唤醒降级轮询（桥不可达兜底）
 FALLBACK_POLL_INTERVAL = 30.0
+# AI 主导唤醒（wake_agent POST /chat 等 LLM 决策）：超时+重试（LLM turn 可能>30s，避免瞬时失败直接丢）
+WAKE_TIMEOUT = 90          # 单次 HTTP 等待秒数（原 30 太短）
+WAKE_RETRY = 2             # 失败重试次数
 # 本地条件单（卖出端秒级）在网关内通过 t_conditions 价位判断承载（见 t_monitor）
 # AI 主导模式下连续命中未实质改善的阈值（≥N 次提示 AI 调整/冷却条件）
 AI_CONSECUTIVE_HIT_ALERT = 3
@@ -204,26 +207,29 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         "mode": "trade",
         "decision_mode": "ai_led",
     }
-    try:
-        req = urllib.request.Request(
-            _bridge_url(),
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = resp.read().decode("utf-8")
-        # 解析 AI 回复（reply 字段）
+    reply = None
+    for attempt in range(1, WAKE_RETRY + 1):
         try:
-            reply = str(json.loads(body).get("reply") or "") if body else ""
-        except (ValueError, TypeError):
-            reply = body or ""
-        print(f"[t-bridge] 唤醒 Agent 成功: {symbol} ({len(body)} bytes) decision_mode=ai_led "
-              f"reply_len={len(reply)}")
-        return reply or None
-    except Exception as e:
-        print(f"[t-bridge] 唤醒 Agent 失败（降级轮询兜底）: {e}")
-        return None
+            req = urllib.request.Request(
+                _bridge_url(),
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=WAKE_TIMEOUT) as resp:
+                body = resp.read().decode("utf-8")
+            try:
+                reply = str(json.loads(body).get("reply") or "") if body else ""
+            except (ValueError, TypeError):
+                reply = body or ""
+            print(f"[t-bridge] 唤醒 Agent 成功: {symbol} ({len(body)} bytes) decision_mode=ai_led "
+                  f"reply_len={len(reply)}")
+            return reply or None
+        except Exception as e:
+            print(f"[t-bridge] 唤醒 Agent 失败(第{attempt}/{WAKE_RETRY}次): {e}", flush=True)
+            if attempt < WAKE_RETRY:
+                time.sleep(1.5)
+    return None
 
 
 def wake_and_decide(trigger: Dict[str, Any], context: Optional[dict] = None,
@@ -265,16 +271,18 @@ def agent_review_and_execute(trigger: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def fallback_poll_loop(stop_event):
-    """桥不可达时的低频轮询兜底：消费 pending 事件 → agent_review_and_execute。
-
-    AI 主导模式下兜底仅标记事件（human_confirm / ai_decided），不自动下单。
-    """
+    """桥不可达时的低频轮询兜底：消费 pending 事件 → 先 AI 主导唤醒决策（wake_and_decide，真 LLM），
+    唤醒失败/异常再降级 agent_review_and_execute（标记 human_confirm / ai_decided）。"""
     while not stop_event.is_set():
         try:
             trig = t_db.claim_pending_trigger("t-fallback", timeout_seconds=300)
             if trig:
-                result = agent_review_and_execute(trig)
-                print(f"[t-bridge] 兜底处理 #{trig.get('id')}: {result.get('status')}")
+                result = wake_and_decide(trig)
+                if result and result.get("status") != "wake_failed":
+                    print(f"[t-bridge] AI 决策完成 #{trig.get('id')}: {result.get('status')} {result.get('action')}")
+                else:
+                    result = agent_review_and_execute(trig)
+                    print(f"[t-bridge] 唤醒失败，降级标记 #{trig.get('id')}: {result.get('status')}")
         except Exception as e:
             print(f"[t-bridge] 兜底轮询异常: {e}")
         time.sleep(FALLBACK_POLL_INTERVAL)

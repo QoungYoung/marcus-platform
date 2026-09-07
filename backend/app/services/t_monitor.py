@@ -40,11 +40,12 @@ WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break", "i
 class TMonitor:
     """做T监控器：daemon 线程，30s 轮询 t_conditions，命中写 t_triggers。"""
 
-    def __init__(self, interval_seconds: int = MONITOR_INTERVAL):
+    def __init__(self, interval_seconds: int = MONITOR_INTERVAL, trade_executor=None):
         self.interval = interval_seconds
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        self._trade_executor = trade_executor  # ⑥ 253/254 无底仓建仓执行器（狼大建仓链），None 时保持纯做T gateway 路径
         self._status = {
             "running": False,
             "last_round": None,
@@ -1001,7 +1002,40 @@ class TMonitor:
                         volume = max_sell
                     volume = (volume // 100) * 100
                 exec_ok = False
-                if volume > 0:
+                # ⑥ 253/254 无底仓建仓 → 走狼大建仓链(而非做T gateway)；注 self._trade_executor 时生效，否则回退 gateway
+                _no_hold_build = (
+                    side == "buy"
+                    and trigger_kind in ("custom_m5dump", "custom_prevlow")
+                    and ((ledger or {}).get(symbol, {}).get("sellable", 0) or 0) <= 0
+                    and self._trade_executor is not None
+                )
+                if _no_hold_build:
+                    try:
+                        import datetime as _dtw
+                        from app.services import wolf_253_build as _W
+                        _today = _dtw.datetime.now().strftime("%Y%m%d")
+                        if trigger_kind == "custom_m5dump":
+                            _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
+                                              account=cond.get("account_id", T_MONITOR_ACCOUNT))
+                        else:
+                            # 254 首现→建小底仓并记 base_254；其后 3 日内再次命中→分步回补(≤2次)
+                            _chain = _W._chain_state().get(symbol) or {}
+                            _vr = float(snapshot.get("vol_ratio") or 0)
+                            if not _chain.get("base_254_date"):
+                                _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
+                                                  account=cond.get("account_id", T_MONITOR_ACCOUNT))
+                                _W.mark_base_254(symbol, _today)
+                            else:
+                                _r = _W.refill_253(self._trade_executor, symbol, quote, _vr, _today,
+                                                   account=cond.get("account_id", T_MONITOR_ACCOUNT))
+                        exec_ok = _r.get("status") == "success"
+                        print(f"[TMonitor] 狼大253/254建仓 {symbol}: {_r.get('status')} {str(_r.get('reason') or '')[:40]}")
+                        t_db.update_trigger_status(trig_id, "executed" if exec_ok else "blocked",
+                                                   reason="狼大253/254建仓: %s" % (_r.get("reason") or _r.get("status")))
+                    except Exception as _we:
+                        print(f"[TMonitor] 狼大253/254建仓异常 {symbol}: {_we}")
+                        t_db.update_trigger_status(trig_id, "blocked", reason="wolf_253_build_exc")
+                elif volume > 0:
                     gw = gateway_execute(symbol, side, current, volume,
                                          reason=f"条件命中自动执行（{trigger_kind}）",
                                          decision_source="ai_led",
@@ -1013,13 +1047,14 @@ class TMonitor:
                     # 执行结果写入触发事件（供审计/复盘）
                     t_db.update_trigger_status(
                         trig_id, "executed" if exec_ok else "blocked",
-                        reason=f"自动执行 {side} {volume}股 @{current}: {gw.get('status')}")
+                        reason=f"自动执行 {side} {volume}股 @{current}: {gw.get('status')} | {str(gw.get('reason') or '')[:120]} | level={gw.get('level')}")
                 elif volume <= 0:
-                    # 量推导为 0（卖腿无可卖底仓 / 无底仓建仓规模不可用）→ 直接标记，
-                    # 避免孤儿 pending 事件（降级轮询兜底）
+                    # 量推导为 0（卖腿仅剩底仓无T仓可卖 / 无底仓建仓规模不可用）→ 直接标记跳过，
+                    # 避免孤儿 pending 事件（降级轮询兜底）；持仓仅100股(底仓)时不再当作"裸空"错误
+                    _no_t_shop = (side == "sell")
                     t_db.update_trigger_status(
                         trig_id, "blocked",
-                        reason=f"自动执行量推导为 0（{side}，无可卖底仓或建仓规模不可用）")
+                        reason=f"自动执行量推导为 0（{side}，{'仅底仓无T仓可卖，跳过卖出' if _no_t_shop else '无底仓建仓规模不可用'}）")
                 # 消费式条件自动重建（迭代#56b/57）：本条件已 consumed，该标的仍有
                 # 持仓且无其他 active 条件 → AI 重新评估生成新条件（移动基准）。
                 # 执行后报告 AI = 调 AI 条件生成（含现价），失败回退规则公式。
@@ -1238,16 +1273,18 @@ _monitor_instance: Optional[TMonitor] = None
 _monitor_lock = threading.Lock()
 
 
-def get_t_monitor(interval_seconds: int = MONITOR_INTERVAL) -> TMonitor:
+def get_t_monitor(interval_seconds: int = MONITOR_INTERVAL, trade_executor=None) -> TMonitor:
     global _monitor_instance
     with _monitor_lock:
         if _monitor_instance is None:
-            _monitor_instance = TMonitor(interval_seconds=interval_seconds)
+            _monitor_instance = TMonitor(interval_seconds=interval_seconds, trade_executor=trade_executor)
+        elif trade_executor is not None and _monitor_instance._trade_executor is None:
+            _monitor_instance._trade_executor = trade_executor
         return _monitor_instance
 
 
-def start_t_monitor() -> bool:
-    monitor = get_t_monitor()
+def start_t_monitor(trade_executor=None) -> bool:
+    monitor = get_t_monitor(trade_executor=trade_executor)
     ok = monitor.start()
     # 桥不可达降级：启动低频轮询兜底线程（消费 pending 事件，执行仍经网关）
     try:

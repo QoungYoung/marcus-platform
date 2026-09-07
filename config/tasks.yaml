@@ -97,6 +97,27 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: mainline_open_buy
+  name: 主线候选开盘建仓 (E01/E02 intent_open) [已并入9:35 agent，停用作DRY观测]
+  description: 已并入 9:35 auto_trade_morning agent(按指令+上下文判断)；本任务仅作 DRY 观测(MAINLINE_OPEN_BUY_DRY=1)，默认停用避免与 agent 抢单
+  enabled: false
+  schedule:
+    type: cron
+    expr: 31 9 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/mainline_open_buy.py
+    args: []
+  output:
+    log_file: logs/mainline_open_buy_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: auto_trade_morning
   name: 自动交易 (早盘)
   description: 9:35 趋势市→观察不动 / 震荡市→60min确认建仓60%
@@ -325,6 +346,26 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: index_daily_refresh
+  name: 指数日线刷新 (昨日收盘)
+  description: 16:30 收盘后刷新链：tushare 增量刷 000001.SH 日线CSV(append>现有max) + 重建 wave_pivots(锚点)，供次日 wave_agent 基于昨日收盘判定；避免wave/pivot滞后
+  enabled: true
+  schedule:
+    type: cron
+    expr: 30 16 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/refresh_index_daily.py
+    args: []
+  output:
+    log_file: logs/index_daily_refresh_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
 - id: golden_pit_sync_pre_market
   name: 黄金坑盘前同步
   description: 9:00 盘前同步贪婪指数到数据库，确保开盘后 /status 走 DB 读取
@@ -402,17 +443,40 @@ tasks:
     - qqbot
     on_failure: true
     on_success: true
-    pi_analysis: false
+    pi_analysis: true
   output:
     append: false
     log_file: logs/main_line_judge_{date}.log
   schedule:
-    expr: 0 8 * * mon
+    expr: 0 8 * * mon-fri
     timezone: Asia/Shanghai
     type: cron
   script:
     args: []
     path: apps/main_line/main_line_judge.py
+- id: rotation_universe_refresh
+  name: 主线子方向动态细分刷新
+  description: 8:05 每日按主线动态派生 sub-universe(derive_sub_universe)+重建 rotation_universe_result/crowding_blacklist, 使宇宙跟主线不再周一滞后; 上游 taxonomy 由 build_concept_taxonomy 生成
+  enabled: true
+  schedule:
+    type: cron
+    expr: 5 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/derive_sub_universe.py
+    args:
+    - --refresh-result
+  output:
+    log_file: logs/rotation_universe_refresh_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - main_line_judge
 - depends_on: []
   description: 每周一 8:10 上证指数结构+量能/资金/GJD/历史锚点/主线 -> 狼大两级浪型判定 -> 写入 wave_state.json;交易gate按(level,sub_level)->operation->gate防御
   enabled: true
@@ -423,17 +487,61 @@ tasks:
     - qqbot
     on_failure: true
     on_success: true
-    pi_analysis: false
+    pi_analysis: true
   output:
     append: false
     log_file: logs/wave_judge_{date}.log
   schedule:
-    expr: 10 8 * * mon
+    expr: 10 8 * * mon-fri
     timezone: Asia/Shanghai
     type: cron
   script:
     args: []
     path: apps/main_line/wave_agent.py
+- id: stock_confirm_refresh
+  name: 成分股确认刷新
+  description: 8:20 每日按今日主线刷新个股确认(主线→THEME_CONCEPTS→成分→confirm_chain→stock_confirm_result.json), 使成分股确认始终跟主线(如消费/内需), 避免周度滞后旧主线; end_date动态
+  enabled: true
+  schedule:
+    type: cron
+    expr: 20 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/stock_confirm_judge.py
+    args: []
+  output:
+    log_file: logs/stock_confirm_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - main_line_judge
+- id: daily_strategy_summary
+  name: 当日策略摘要 (主线+波浪+宏观)
+  description: 8:25 读 main_line_state+wave_state+macro_state+systemic_risk -> 一份确定性合并摘要(含狼大操作口径), 替代零散主线/波浪报告; 非LLM叙事
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_strategy_summary.py
+    args: []
+  output:
+    log_file: logs/daily_strategy_summary_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - wave_judge
 - depends_on: []
   description: 每周一 8:20 东财概念高低位分类(position_class)+低位看逻辑AI判定(low_logic_agent)+个股确认比例(stock_confirm_judge)，供主线内轮动/风控过滤
   enabled: true
@@ -476,9 +584,31 @@ tasks:
   script:
     args: []
     path: apps/main_line/refresh_fund_crowding.py
+- id: taxonomy_classify
+  name: 主线taxonomy每周分类 (新概念→开集)
+  description: 停用：已验证 dsh 无法把原子概念聚成行业级子方向, 改走概念级粒度(get_sub_universe per-concept 动态)作为子方向来源; taxonomy 不再作为子方向来源
+  enabled: false
+  schedule:
+    type: cron
+    expr: 10 8 * * sun
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/classify_concept_taxonomy.py
+    args: []
+  output:
+    log_file: logs/taxonomy_classify_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - stock_pool_refresh
 - depends_on: []
-  description: 每周日(股票池入池后) 概念分类——首次用--full全量分类, 后续增量分类新概念并清理不存在的旧概念; 并入 rotation_universe_classified.json, 基线词表兜底
-  enabled: true
+  description: 每周日(股票池入池后) 概念分类——首次用--full全量分类, 后续增量分类新概念并清理不存在的旧概念; [改由 build_concept_taxonomy 开集taxonomy替代, 本任务停用]
+  enabled: false
   id: rotation_universe_classify
   name: 细分宇宙每周分类
   notifications:

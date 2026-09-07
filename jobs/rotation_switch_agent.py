@@ -64,10 +64,11 @@ def _concepts():
     return out
 
 def _chains_of(sym, concepts):
-    from rotation_universe import SUB_UNIVERSE as SUB
+    from rotation_universe import get_sub_universe
+    SU = get_sub_universe()
     ts = sym[2:] + ("." + sym[:2])
     names = concepts.get(sym, []) + concepts.get(ts, [])
-    return [sub for sub, kws in SUB.items() if any(norm(k) in norm(n) for n in names for k in kws)]
+    return [sub for sub, kws in SU.items() if any(norm(k) in norm(n) for n in names for k in kws)]
 
 def _in_exec_window():
     from datetime import datetime
@@ -134,8 +135,8 @@ def _chain_in_mainline(chain, ml):
     return any(t in chain or chain in t for t in toks)
 
 def _buy_shortlist(chain, exclude, limit=3):
-    from rotation_universe import SUB_UNIVERSE as SUB
-    kws = SUB.get(chain) or []
+    from rotation_universe import get_sub_universe
+    kws = get_sub_universe().get(chain) or []
     if not kws:
         return []
     try:

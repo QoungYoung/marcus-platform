@@ -199,6 +199,20 @@ def execute_trade(trade: TradeRequest, request: Request):
 
         # Success
         print(f"[交易] ✅ {direction} {trade.symbol} x{result.get('volume', trade.volume)} @ ¥{trade.price:.2f}", flush=True)
+        # ⑧ 狼大买点生产化：在狼大/Pi 建仓落单处写 buy_point_log 前向验证（模拟盘生产；仅记录不拦）
+        if trade.side.lower() == "buy":
+            try:
+                from app.services.buy_point_log import log_buy_point
+                log_buy_point(
+                    source="pi_trade", symbol=trade.symbol,
+                    name=_get_stock_name(trade.symbol), account=(trade.account or "stock"),
+                    intent=(trade.intent or "new_base"), price=trade.price, volume=trade.volume,
+                    amount=round(trade.price * trade.volume, 2),
+                    pct=None, grade=result.get("status", ""),
+                    trigger="execute_trade", reason=(trade.reason or "狼大Pi建仓"),
+                )
+            except Exception as _e:
+                print(f"[交易] buy_point_log 写入失败: {_e}", flush=True)
         return TradeResponse(
             order_id=result.get("order_id", ""),
             status=result.get("status", "executed"),

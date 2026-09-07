@@ -55,10 +55,11 @@ def concepts_map():
     return out
 
 def chains_of(sym, cm):
-    from rotation_universe import SUB_UNIVERSE as SUB
+    from rotation_universe import get_sub_universe
+    SU = get_sub_universe()
     ts = sym[2:] + "." + sym[:2]
     names = cm.get(sym, []) + cm.get(ts, [])
-    return [sub for sub, kws in SUB.items() if any(norm(k) in norm(n) for n in names for k in kws)]
+    return [sub for sub, kws in SU.items() if any(norm(k) in norm(n) for n in names for k in kws)]
 
 def bad_set():
     bad = set()
@@ -75,8 +76,8 @@ def bad_set():
     return bad
 
 def pick_buy(chain, exclude, limit=3):
-    from rotation_universe import SUB_UNIVERSE as SUB
-    kws = SUB.get(chain) or []
+    from rotation_universe import get_sub_universe
+    kws = get_sub_universe().get(chain) or []
     if not kws:
         return []
     try:

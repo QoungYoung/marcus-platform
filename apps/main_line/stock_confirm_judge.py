@@ -4,7 +4,7 @@
 输出: data/stock_confirm_result.json (每概念: n/confirm/ratio/stocks)
 运行: 每周一 position_judge 后置(需 tushare 网络, ~50次 pro.daily 调用 1-2分钟)
 """
-import sqlite3, json, os, sys, time
+import sqlite3, json, os, sys, time, datetime as _dt
 import pandas as pd, numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from confirm_chain import confirm_chain
@@ -50,7 +50,7 @@ def main():
             print("[stock_confirm] concept err", cname, str(e)[:60], file=sys.stderr); continue
         stocks = []
         for code in codes:
-            d = ts("daily", ts_code=code, start_date="20260601", end_date="20260901")
+            d = ts("daily", ts_code=code, start_date="20260601", end_date=_dt.date.today().strftime("%Y%m%d"))  # 动态: 用最近交易日/今天, 避免停在旧日
             data = d.get("data", {}); fields = data.get("fields") or []; items = data.get("items") or []
             if not items: continue
             df = pd.DataFrame([dict(zip(fields, it)) for it in items])

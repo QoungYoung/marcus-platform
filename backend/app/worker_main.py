@@ -88,6 +88,8 @@ def _start_services(settings):
     from app.services.stop_loss_monitor import start_monitor
     start_monitor(executor=executor)
 
+    # 2026-09-04 说明：长期池/短期池(candidate/long_term)是此前平台测试，非狼大逻辑范围，保持停用；
+    # P3 档位/P3_TIER_MODE 在 check_entry_filters/calc_position 内生效即可（狼大决策链=trade_graph/做T），不依赖 legacy 池 monitor。
     # from app.services.position_tier_monitor import start_tier_monitor
     # start_tier_monitor(executor=executor)
 
@@ -120,7 +122,7 @@ def _start_services(settings):
 
     # 做T监控器（t_account 专用，30s 轮询 + 错峰启动）
     from app.services.t_monitor import start_t_monitor
-    start_t_monitor()
+    start_t_monitor(trade_executor=executor)  # ⑥ 253/254 无底仓建仓走狼大建仓链(executor=stock)
 
     # 2026-09-02 全量屏蔽：做T建仓服务(自动建仓/次日条件生成/再平衡)仅作用于 account_id='t'，
     # 且无 env 门控会真实下单 → 停用；代码保留便于回滚

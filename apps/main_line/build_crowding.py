@@ -14,7 +14,7 @@ except Exception as e:
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 DATA = os.environ.get("DATA_DIR", "data")
 
-from rotation_universe import SUB_UNIVERSE as SUB, _norm  # 与宇宙打分共用同一组定义 + 空格归一匹配
+from rotation_universe import get_sub_universe, _norm  # 动态主线子方向(开集taxonomy)
 
 def main():
     conn = psycopg2.connect(DB)
@@ -53,9 +53,9 @@ def main():
             "sum_float": round(sum(r[1]["sum_float"] for r in rows), 3),
             "sum_mkv_yi": round(sum(r[1]["sum_mkv"] for r in rows) / 1e8, 2),
         }
-    # 子方向(概念名含关键词, 动态来自DB)
+    # 子方向(概念名含关键词, 来自动态主线子方向 get_sub_universe/开集taxonomy)
     universe = {}
-    for sub, kws in SUB.items():
+    for sub, kws in get_sub_universe().items():
         names = [c for c in concept_stocks if any(_norm(k) in _norm(c) for k in kws)]
         codes = set()
         for n in names: codes |= concept_stocks[n]

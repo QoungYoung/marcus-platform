@@ -45,8 +45,8 @@ EXEC_ALLOWED_ACCOUNTS = {
 
 # 底仓风控开关（灰度用；默认开）
 T_STOP_GUARD_ENABLED = os.getenv("T_STOP_GUARD_ENABLED", "1") != "0"
-BASE_LOSS_HALF_PCT = 3.0      # 底仓浮亏 −3% 减半仓
-BASE_LOSS_CLEAR_PCT = 5.0     # 底仓浮亏 −5% 清仓+当日锁定
+# BASE_LOSS_HALF_PCT = 3.0      # 改为狼大一致后不再拦买腿; 仅参考(如需恢复先取消注释)
+# BASE_LOSS_CLEAR_PCT = 5.0     # 同上; 狼大『急跌不割肉/3-3确认不清仓』, 固定浮亏%止损非狼大
 MAX_DAILY_BUY_LEGS = 2        # 单标单日低吸（买腿成交）次数上限
 # 买腿分档上限开关（L1 档买腿≤可卖底仓×0.5）——关闭后买腿≤可卖底仓全额（AI 自由跑用）
 T_BUY_TIER_LIMIT_ENABLED = os.getenv("T_BUY_TIER_LIMIT_ENABLED", "1") != "0"
@@ -59,7 +59,7 @@ DAILY_LOSS_BREAKER_PCT = 0.02      # 日亏 2% 熔断（硬闸门）
 DAILY_LOSS_WARN_PCT = 0.01         # 日亏 1% 预警（建议层）
 MAX_SELL_FLOOR_RATIO = 1.0         # 买腿 ≤ 可卖底仓（L2 默认 1:1）
 COOLDOWN_AFTER_LOSS_MIN = 15       # 亏损后冷却（标准档 15min）
-SLIPPAGE_PCT = 0.001               # 滑点参数化假设 0.1%（约 2-5 tick 中价股）
+SLIPPAGE_PCT = 0.0003             # 滑点参数化假设 0.03%（做T低价吃bid/高价抛ask, 实际滑点小；原0.1%高估）
 COST_RATIO_LIMIT = 0.2             # 滑点+手续费 > 价差空间 20% 不触发
 MIN_T_SPREAD_FILTER = 0.002        # 最低价差过滤（相对价 0.2%）
 MAX_DAILY_TURNOVER_RATIO = 3.0     # 日累计回转额 ≤ 3×净值（主指标）
@@ -77,10 +77,10 @@ TIER_L3 = "L3"  # 买腿 ≤ 可卖底仓×1.5 + 日回转额上限
 # t 账户净值（统一基准，替换散落的 initial=200000 硬编码）
 # ────────────────────────────────────────────────────────────────
 
-def t_net_asset() -> float:
-    """读取 t 账户当前净值 = 可用资金 + 冻结资金 + 持仓市值（以 paper_account_info 为准）。
+def t_net_asset(account_id: str = "t") -> float:
+    """读取指定账户当前净值 = 可用资金 + 冻结资金 + 持仓市值（以 paper_account_info 为准）。
 
-    替代历史硬编码 initial=200000（t_gateway.py 旧 _daily_pnl_pct / 日回转额上限），
+    account_id 默认 't'（做T账户）。做T交易在 stock 账户时应传 'stock'（validate_order 已按账户口径修正）。
     调额（POST /t/account/capital-adjust）后自动反映新值。
     读取失败时回退注册资金（paper_accounts.initial_capital），再退 200000 保守值。
     """
@@ -88,14 +88,14 @@ def t_net_asset() -> float:
         db = SessionLocal()
         try:
             acct = db.execute(text(
-                "SELECT available_cash, frozen_cash FROM paper_account_info WHERE account_id = 't'"
+                "SELECT available_cash, frozen_cash FROM paper_account_info WHERE account_id = '%s'" % account_id
             )).mappings().first()
             positions = db.execute(text(
-                "SELECT volume, avg_price FROM paper_positions WHERE account_id = 't' AND volume > 0"
+                "SELECT volume, avg_price FROM paper_positions WHERE account_id = '%s' AND volume > 0" % account_id
             )).mappings().all()
             if acct is None:
                 reg = db.execute(text(
-                    "SELECT initial_capital FROM paper_accounts WHERE account_id = 't'"
+                    "SELECT initial_capital FROM paper_accounts WHERE account_id = '%s'" % account_id
                 )).mappings().first()
                 return float(reg["initial_capital"] or 200000) if reg else 200000.0
             available = float(acct.get("available_cash") or 0)
@@ -318,6 +318,7 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
         net_asset = float(ctx.get("net_asset") or 200000.0)
         daily = ctx.get("daily") or {}
         risk = ctx.get("risk") or {}
+        account_id = ctx.get("account_id", ACCOUNT_T)
 
         # ── 第一阶：硬闸门（O(1) 快路径） ──
         # 1) account 白名单
@@ -332,7 +333,12 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
         # 3) 裸空/无卖腿拦截（卖出必须有持仓；买入若无底仓且为低吸则拒）
         if side == "sell":
             item = ledger.get(symbol)
-            if not item or item["sellable"] < volume:
+            # 持仓仅底仓（默认100股铁律 / ETF大底仓覆盖）时无T仓可卖 → 非裸空错误，
+            # 做T卖腿量已在 TMonitor 推导为 0/跳过，这里直接跳过卖出检查（用户需求：持仓仅100股时跳过卖出检查）
+            _floor = base_floor_shares(account_id, symbol) if item else 0
+            if item and item["sellable"] <= _floor:
+                pass
+            elif not item or item["sellable"] < volume:
                 result["reason"] = "无足够可卖底仓（裸空拦截）"
                 return result
         elif side == "buy":
@@ -459,7 +465,7 @@ def validate_order(symbol: str, side: str, price: float, volume: int,
         "regime": regime_state.get("regime", "ACTIVE"),
         "quote": quote,
         "ledger": get_sellable_ledger(account_id),
-        "net_asset": t_net_asset(),
+        "net_asset": t_net_asset(account_id),  # 修正：做T交易在 stock 账户，应读该账户净资（而非 t 账户）
         "daily": t_db.get_daily_state() or {},
         "risk": t_db.get_risk_state() or {},
         "sell_in_transit": is_sell_in_transit(symbol, account_id) if side == "buy" else False,
@@ -500,26 +506,14 @@ def _near_limit_down(quote: dict) -> bool:
 
 def _base_loss_guard(symbol: str, side: str, quote: Optional[dict],
                      ledger: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
-    """底仓浮亏风控（独立于做T止损，P0-3）：买腿/建仓前先评估标的浮亏。
-
-    - 浮亏 ≤ −5%：blocked（清仓锁定，禁止再买/加仓）
-    - 浮亏 ≤ −3%：blocked 且提示先减半（卖 50%）再考虑买腿
-    - 其余放行（返回 action=pass）
-    现价缺失时放行（保守：不因数据缺失误伤）。
+    """狼大式买腿风控：取消"浮亏 % 禁买"（非狼大，且狼大'急跌不割肉'方向相反）。
+    狼大的低吸本就由**技术触发**把关（253/254 缩量企稳/触前低/破位确认），
+    真正破位减仓/被动止盈由 **卖侧/止损组件** 处理；买腿不应再因固定浮亏%被拦。
+    故这里一律放行 action=pass；唯数据缺失时也放行（不误伤）。
+    备注：BASE_LOSS_HALF_PCT/CLEAR_PCT 保留供参考，不再用于拦买腿。
     """
-    if side != "buy":
-        return {"action": "pass", "reason": ""}
-    item = (ledger or {}).get(symbol) or {}
-    avg = float(item.get("avg_price") or 0)
-    current = float((quote or {}).get("current") or 0)
-    if avg <= 0 or current <= 0:
-        return {"action": "pass", "reason": ""}
-    pnl_pct = (current - avg) / avg * 100
-    if pnl_pct <= -BASE_LOSS_CLEAR_PCT:
-        return {"action": "block", "reason": f"底仓浮亏 {pnl_pct:.1f}%（≤−{BASE_LOSS_CLEAR_PCT:.0f}% 清仓锁定，禁买）"}
-    if pnl_pct <= -BASE_LOSS_HALF_PCT:
-        return {"action": "block", "reason": f"底仓浮亏 {pnl_pct:.1f}%（≤−{BASE_LOSS_HALF_PCT:.0f}% 先减半仓再考虑）"}
-    return {"action": "pass", "reason": ""}
+    # 放行买腿：狼大低吸看技术条件，不由浮亏%拦（急跌不割肉）
+    return {"action": "pass", "reason": "wolf_consistent: 低吸由技术条件(253/254/缩量企稳)把关，浮亏%不拦买腿"}
 
 
 def _daily_buy_legs(symbol: str, account_id: str = "t") -> int:
@@ -542,13 +536,24 @@ def _daily_buy_legs(symbol: str, account_id: str = "t") -> int:
         return 0
 
 
+def _fee_pct(symbol: str) -> float:
+    """单边手续费(小数, 按真实佣金)：A股 万0.86 / ETF 万0.5。返回小数。"""
+    try:
+        s = str(symbol)
+        code6 = s[2:8] if s[:2] in ("SH", "SZ", "BJ") else s
+        # 5开头=沪ETF/基金, 1开头=深ETF/基金 → 万0.5；其余股票 → 万0.86
+        return 0.00005 if len(code6) == 6 and code6[0] in ("5", "1") else 0.000086
+    except Exception:
+        return 0.000086
+
 def _cost_ratio_ok(symbol: str, price: float) -> bool:
-    """滑点+手续费 vs 价差空间：>20% 不值得做。"""
+    """滑点+手续费 vs 价差空间：>20% 不值得做。
+    佣金按用户实际费率：A股 万0.86，ETF 万0.5（原 0.001=万10 高估，已改为按标的分档）。"""
     try:
         from app.services.t_pool import calc_t_quality
         q = calc_t_quality(symbol)
         spread = float(q.get("spread", 0) or 0)
-        cost_pct = SLIPPAGE_PCT * 2 + 0.001  # 双边滑点 + 手续费
+        cost_pct = SLIPPAGE_PCT * 2 + _fee_pct(symbol)  # 双边滑点 + 真实单边手续费
         if spread <= 0:
             return False
         return cost_pct / (spread / 100) <= COST_RATIO_LIMIT

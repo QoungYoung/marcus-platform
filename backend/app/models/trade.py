@@ -12,6 +12,7 @@ class TradeRequest(BaseModel):
     volume: int
     reason: Optional[str] = ""
     account: str = "stock"  # 模拟盘账户标识（默认 stock）
+    intent: Optional[str] = None  # 狼大买点意图: new_base/add_base/refill_base/t_refill/probe(用于buy_point_log前向验证)
 
 
 class TradeResponse(BaseModel):

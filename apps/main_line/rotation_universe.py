@@ -40,6 +40,9 @@ SUB_UNIVERSE = {
     "有色贵金属": ["黄金", "贵金属", "有色", "稀土", "锂", "铜", "铝", "小金属", "钴"],
 }
 META_GROUPS = {"科技/AI(总集)"}
+# 伞概念/AI应用产品级概念(非精细产业链子方向), 统计健康时剔除, 避免"伞概念内部微流入"误判健康
+UMBRELLA_SUBS = {"人工智能", "AIGC概念", "AI应用", "AI智能体", "AI语料", "DeepSeek概念",
+                 "ChatGPT概念", "Kimi概念", "智谱AI", "多模态AI", "AI眼镜"}
 
 # ── LLM 每周分类补丁(rotation_universe_classified.json)：把 classify_rotation_universe.py 的新增概念并入对应组 ──
 def _load_classified_ext():
@@ -59,9 +62,85 @@ def _load_classified_ext():
 
 _load_classified_ext()
 
+def _themes_from_state():
+    """读 main_line_state.json → [main_line]+candidates 主题列表; 失败返回 None。"""
+    try:
+        st = json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8"))
+        return [st.get("main_line")] + list(st.get("candidates") or [])
+    except Exception:
+        return None
+
+def get_sub_universe():
+    """动态派生主线子方向(不写死): 优先读 AI 细分缓存 rotation_sub_universe.json。
+    - 缓存 main_line/candidates 与当前一致 → 直接返回缓存.subs(AI 聚成的语义子方向);
+    - 否则用 THEME_CONCEPTS 每概念各自成一组(仍动态, 覆盖主线但较散);
+    - 缺 main_line_state / fusion → 回退写死 SUB_UNIVERSE(仅全局兜底, 非主线路径)。"""
+    try:
+        from fusion_mainline import THEME_CONCEPTS
+    except Exception:
+        return SUB_UNIVERSE
+    try:
+        cache = json.load(open(os.path.join(DATA, "rotation_sub_universe.json"), encoding="utf-8"))
+    except Exception:
+        cache = None
+    themes = _themes_from_state()
+    if themes is None:
+        return SUB_UNIVERSE
+    main = themes[0] if themes else ""
+    cands = [t for t in themes[1:] if t]
+    if cache and cache.get("main_line") == main and (cache.get("candidates") or []) == cands and cache.get("subs"):
+        return cache["subs"]
+    sub = {}
+    for th in themes:
+        if not th: continue
+        for c in (THEME_CONCEPTS.get(th) or []):
+            if c: sub.setdefault(c, [c])
+    return sub if sub else SUB_UNIVERSE
+
 def load_json(p):
     try: return json.load(open(p, encoding="utf-8"))
     except Exception: return {}
+
+PROXY_STATE = "rotation_proxy_state.json"
+
+def _load_state():
+    try: return json.load(open(os.path.join(DATA, PROXY_STATE), encoding="utf-8"))
+    except Exception: return {}
+
+def _save_state(st):
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        json.dump(st, open(os.path.join(DATA, PROXY_STATE), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+def _apply_hysteresis(raw_healthy, raw_sucking):
+    """确认制/惯性: healthy/sucking 需连续 ROT_CONFIRM_DAYS 天稳定才翻转; 单日跳变不生效。
+    状态按天(last_date)持久化, 一天只推进一次, 返回确认后的 (healthy, sucking)。"""
+    CONFIRM = int(os.getenv("ROT_CONFIRM_DAYS", "3"))
+    today = datetime.date.today().isoformat()
+    st = _load_state()
+    if st.get("last_date") == today and "healthy" in st and "sucking" in st:
+        return bool(st.get("healthy")), bool(st.get("sucking"))
+    raw = (bool(raw_healthy), bool(raw_sucking))
+    if not st or "healthy" not in st:
+        _save_state({"last_date": today, "healthy": raw[0], "sucking": raw[1], "pend_days": 0})
+        return raw
+    prev_h = bool(st.get("healthy")); prev_s = bool(st.get("sucking"))
+    if raw[0] == prev_h and raw[1] == prev_s:
+        _save_state({"last_date": today, "healthy": raw[0], "sucking": raw[1], "pend_days": 0})
+        return raw
+    pd = int(st.get("pend_days", 0))
+    if st.get("pend_h") == raw[0] and st.get("pend_s") == raw[1]:
+        pd += 1
+    else:
+        pd = 1
+    if pd >= CONFIRM:
+        _save_state({"last_date": today, "healthy": raw[0], "sucking": raw[1], "pend_days": 0})
+        return raw
+    _save_state({"last_date": today, "healthy": prev_h, "sucking": prev_s,
+                 "pend_h": raw[0], "pend_s": raw[1], "pend_days": pd})
+    return prev_h, prev_s
 
 def match_names(names, kws):
     return [n for n in names if any(k in n for k in kws)]
@@ -76,17 +155,34 @@ def proxies(pos=None):
         nm = str(v.get("name") or "")
         if nm: names_by_code[code] = nm
     out_detail = {}
-    for sub, kws in SUB_UNIVERSE.items():
+    SU = get_sub_universe()   # 概念级: 跟主线动态派生子方向(不截断)
+    # 时间平滑: 用 concept_hist 的 N 日累计净流入替代单快照 fund_flow, 降单日噪
+    NET_DAYS = int(os.getenv("ROT_NET_DAYS", "10"))
+    hist = {}
+    try:
+        import os as _o
+        hist = load_json(_o.path.join(DATA, "concept_hist.json"))
+    except Exception:
+        hist = {}
+    net10_by_code = {}
+    for code, a in hist.items():
+        if not isinstance(a, dict): continue
+        vals = [float(v) for v in (a.get("net_amount") or []) if v is not None]
+        if vals:
+            net10_by_code[code] = sum(vals[-NET_DAYS:])
+    for sub, kws in SU.items():
         rows = []
         for code, nm in names_by_code.items():
             if any(_norm(k) in _norm(nm) for k in kws):
                 v = pos[code]
                 fe = v.get("features") or {}
                 fund = v.get("fund_flow") or {}
+                net = net10_by_code.get(code, fund.get("strength") or 0) if net10_by_code else (fund.get("strength") or 0)
+                fdir = ("in" if net > 0 else ("out" if net < 0 else fund.get("dir")))
                 rows.append({"name": nm, "position": v.get("position"), "action": v.get("action"),
                              "rel": fe.get("rel_mainline"), "box": fe.get("box_pos_pct"),
-                             "vs1y": fe.get("vs_1y_high_pct"), "fund": fund.get("dir"),
-                             "net": fund.get("strength") or 0})
+                             "vs1y": fe.get("vs_1y_high_pct"), "fund": fdir,
+                             "net": net})
         if not rows:
             out_detail[sub] = {"n": 0}; continue
         net = sum(r["net"] for r in rows if (r["fund"] == "in"))
@@ -99,17 +195,35 @@ def proxies(pos=None):
                            "rel_high_n": rel_hi, "rel_low_n": rel_lo, "lowmid_n": lowmid,
                            "avg_vs1y": round(sum(vs) / len(vs), 1) if vs else None,
                            "crowd": round(rel_hi / max(len(rows), 1), 2)}
-    subs = list(SUB_UNIVERSE.keys())
+    subs = list(SU.keys())
     def netx(s):
         d = out_detail.get(s) or {}
         return (d.get("net_in_亿") or 0) - (d.get("net_out_亿") or 0)
     nets = {s: netx(s) for s in subs}
+    # 健康口径: "≥2 个显著净流入子方向" + 分布<0.8, 剔除伞概念
+    # 显著阈值用 data-backed: SIG_FRAC × 当日最大|net|(相对量, 反过拟合), 下限 ROT_NET_MIN(默认0)
+    SIG_FRAC = float(os.getenv("ROT_SIG_FRAC", "0.1"))
+    NET_MIN = float(os.getenv("ROT_NET_MIN", "0"))
+    fine = [s for s in subs if s not in UMBRELLA_SUBS] or list(subs)
+    _max_abs = max([abs(nets.get(s, 0)) for s in fine] or [0])
+    th = max(SIG_FRAC * _max_abs, NET_MIN)
+    sig_subs = [s for s in fine if abs(nets.get(s, 0)) >= th] or fine
+    sig_in = [s for s in sig_subs if nets[s] > 0]
     abs_sum = sum(abs(v) for v in nets.values()) or 1
-    top_s = max(subs, key=lambda s: abs(nets[s]))
-    top1_share = abs(nets[top_s]) / abs_sum
-    in_subs = [s for s in subs if nets[s] > 0]
-    healthy = bool(len(in_subs) >= 2 and top1_share < 0.65)
-    sucking = bool(top1_share >= 0.65 or len(in_subs) <= 1)
+    top_s = max(sig_subs, key=lambda s: abs(nets[s]))
+    _sig_abs = sum(abs(nets[s]) for s in sig_subs) or 1
+    top1_share = abs(nets[top_s]) / _sig_abs if sig_subs else 0.0
+    if sig_in:
+        _in_sum = sum(nets[s] for s in sig_in)
+        _top_in = max(nets[s] for s in sig_in)
+        top_in_share = _top_in / _in_sum if _in_sum else 0.0
+    else:
+        top_in_share = 0.0
+    in_subs = [s for s in subs if nets[s] > 0]   # 记账用(全量)
+    healthy = bool(len(sig_in) >= 2 and top_in_share < 0.8)
+    sucking = bool(len(sig_in) <= 1 or (sig_in and top_in_share >= 0.8))
+    # 确认制: 连续 ROT_CONFIRM_DAYS 天稳定才翻转, 防单日跳变
+    healthy, sucking = _apply_hysteresis(healthy, sucking)
     # 真实公募拥挤(rotation_crowding.json, build_crowding 产出) 与 rel 语义融合
     crowd_real = None
     try:
@@ -124,7 +238,7 @@ def proxies(pos=None):
             r = crowd_real.get(s) or {}
             (out_detail.setdefault(s, {}))["crowd_real_avg_float"] = round(r.get("avg_float") or 0, 4)
     # 双维打分: 拥挤度(真实基金 avg_float 归一化) × 位置空间(距高点折让/rel低位/低中位占比)
-    maxc = max([(crowd_real.get(s) or {}).get("avg_float") or 0 for s in subs] or [0]) or 1
+    maxc = max([((crowd_real or {}).get(s) or {}).get("avg_float") or 0 for s in subs] or [0]) or 1
     scores = {}
     for s in subs:
         d = out_detail.get(s) or {}

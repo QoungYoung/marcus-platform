@@ -282,12 +282,40 @@ def parse(reply):
             except Exception: pass
     return {'raw':reply,'parse_failed':True}
 
+def _ensure_index_fresh():
+    """自愈：指数日线 CSV 可能滞后（如 16:30 刷新任务未跑/失败）→ 用 tushare 增量补齐到最近可用收盘，
+    避免 wave_agent 依据旧日期（如 08-31）判定。幂等：已有最新则 no-op。"""
+    try:
+        if not os.path.exists(CSV):
+            return
+        df = pd.read_csv(CSV, parse_dates=['trade_date']).sort_values('trade_date')
+        maxd = df['trade_date'].max()
+        pro = _ts_pro()
+        if pro is None:
+            return
+        start = (maxd - pd.Timedelta(days=25)).strftime('%Y%m%d')
+        new = pro.index_daily(ts_code='000001.SH', start_date=start, end_date='20991231')
+        if new is None or not len(new):
+            return
+        n = new[['trade_date', 'close']].copy()
+        n['trade_date'] = pd.to_datetime(n['trade_date'])
+        n = n[n['trade_date'] > maxd].sort_values('trade_date')
+        if not len(n):
+            return
+        df2 = pd.concat([df, n], ignore_index=True).sort_values('trade_date').drop_duplicates('trade_date')
+        df2.to_csv(CSV, index=False)
+        print("[*] index CSV self-heal: %s -> %s (+%d rows)" % (str(maxd.date()), str(df2['trade_date'].max().date()), len(n)), file=sys.stderr)
+    except Exception as e:
+        print("[*] index CSV self-heal failed: %s" % e, file=sys.stderr)
+
+
 def main():
     import sys as _s
     date=None
     if len(_s.argv)>1 and _s.argv[1].startswith('--date'):
         if '=' in _s.argv[1]: date=_s.argv[1].split('=',1)[1]
         elif len(_s.argv)>2: date=_s.argv[2]
+    _ensure_index_fresh()   # 自愈：确保指数日线到最近收盘，wave 判定 date=昨日
     f=index_features(date)
     if f is None: print('no data'); return
     print('[*] 指数结构:', json.dumps(f, ensure_ascii=False), file=sys.stderr)

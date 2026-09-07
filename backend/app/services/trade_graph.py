@@ -443,7 +443,7 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
             "严格按 plan_context 中「已命中/待触发」的计划动作立即执行（回补 T 仓 / 低位建仓 / 减半锁定）。\n"
             "不受常规时间窗口节奏限制；但 P2 Gate(浪型/宏观)、仓位三档、狼大纪律(周末降仓/只做T不追主升) 等硬门控仍生效。\n"
         )
-    return (
+    _base = (
         "【狼大口径·按浪型/主线执行，不套用震荡/趋势市状态】\n"
         "· 大级别以 wave_context(浪型) 为准：主升浪→主线低吸/持有（前排龙头优先，不追突破/不追高）；\n"
         "   调整浪/震荡(B反/4-5/C杀)→只做T、不追主升。\n"
@@ -455,6 +455,17 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
         "· 每条建仓/加仓前必须过 check_entry_filters + calc_position。\n"
         "SIGNAL: <按浪型> POSITION:<当前仓位> REASON:按狼大浪型/主线执行"
     )
+    if window == 'morning':
+        # ⑧ 开盘主线候选建仓/试仓：由 agent 按指令+上下文判断（不再用独立 9:31 规则脚本通道）
+        return (
+            "【开盘(9:35)主线候选建仓/试仓——由你按指令+上下文判断】\n"
+            "· 开盘时段优先评估主线候选：main_line_state.candidates 主题 → THEME_CONCEPTS(主题概念) → get_component_stocks 枚举成分股，逐一评估是否建仓/试仓。\n"
+            "· 意图按浪型：build/side→new_base(新开底仓)；t_only→probe(≤3%小仓试盘)；defense/exit→不新建。\n"
+            "· 建仓/试仓时，check_entry_filters 与 calc_position 必须显式传 mainline_dir=True（否则 side 浪型下 P3 会硬拦 new_base）。\n"
+            "· 仍须满足狼大买点（日内回撤≥2.5% 或 触前低+缩量+站回黄线；或 计划/关键位命中），不因开盘放宽；P2 Gate(浪型/宏观)与 P3 三仓档位硬门仍生效。\n"
+            + _base
+        )
+    return _base
 def _check_drawdown(portfolio_json: str) -> tuple:
     """检查总回撤（峰值回撤），返回 (pct, blocked, reason)。
 
@@ -757,7 +768,7 @@ def _read_confirm_context() -> str:
         def in_avoid(nm):
             if not avoid or not ru:
                 return False
-            return any(any(k in str(nm) for k in ru.SUB_UNIVERSE.get(sub, [])) for sub in avoid)
+            return any(any(k in str(nm) for k in ru.get_sub_universe().get(sub, [])) for sub in avoid)
         idx_cc = vals[0].get("signals", {}).get("index_confirm", "未知")
         stages = _Counter((v.get("confirm_chain") or {}).get("stage", "?") for v in vals)
         executable = [v["name"] for v in vals if not in_avoid(v["name"]) and (v.get("confirm_chain") or {}).get("stage") in ("确认", "突破候选")]
@@ -781,7 +792,7 @@ _ROT_VERDICT_GUIDE = {
     "switch_low": "允许：防御性切低——候选须相对主线低位(rel=low)+资金流入+无2根孕线/未放量破前日低",
     "defensive_reduce": "允许：降个股/转ETF或埋伏rel-low候选，不追高",
     "sell_guard": "警示：持仓高位破位/资金流出——撤A，不做同板块低切补涨",
-    "block": "禁止：当前不轮动/不切出主线，以做T与防守为主（与浪型gate一致）",
+    "block": "禁止：主线外切低/切防御第二线；主线内可继续轮动/做T（build 主升以主线内细分轮动为主，≠主线禁买；与浪型gate一致）",
     "defense_mainline_rotation": "允许：defense期主线内'未出货链'资金调仓（如海外链→国算）",
     "manual_review": "人工：当前无明确轮动信号，等盘面",
 }
@@ -915,7 +926,9 @@ def _read_rotation_gate_context() -> str:
             pass
         if sucking is None: sucking = False
         if healthy is None: healthy = True
-        dec = rg.decide(op, mainline_sucking=sucking, inside_mainline=False,
+        # 主线内判定: 有明确主线 -> inside_mainline=True, 使 build 抽血期得到"主线内细分轮动"而非"禁切出主线/block"
+        inside_mainline = bool(ml_name and ml_name != "?")
+        dec = rg.decide(op, mainline_sucking=sucking, inside_mainline=inside_mainline,
                         rotation_healthy=healthy)
         verdict = dec.get("verdict", "block")
         reason = dec.get("reason", "")

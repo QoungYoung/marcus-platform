@@ -125,6 +125,61 @@ def fusion_signals(hist, today, catalyst):
     sc={th: 0.3*v['fund']+0.2*v['rel']+0.5*v['conc'] for th,v in sig.items()}
     return sig, sc
 
+
+def _load_taxonomy():
+    """读 concept_taxonomy.json 的 themes(开集), 无则 None。"""
+    import json as _j, os as _o
+    p = _o.path.join(_o.environ.get('DATA_DIR', '/app/data'), 'concept_taxonomy.json')
+    if not _o.path.exists(p): return None
+    try:
+        t = _j.load(open(p, encoding='utf-8'))
+        return t.get('themes') or None
+    except Exception:
+        return None
+
+def _open_set_fusion(hist, today, catalyst):
+    """开集主线打分: 对 concept_taxonomy 全部主题, 按成员概念聚合 fund/rel, 主题间排百分位;
+    银行用独立行业信号; catalyst 已知主题来自 agent, 新主题=0。taxonomy 缺失时返回 None。"""
+    import fusion_mainline as fm
+    import numpy as np
+    tax = _load_taxonomy()
+    if not tax:
+        return None
+    theme_concepts = {th: [c for sub in (v.get('subs') or {}).values() for c in sub] for th, v in tax.items()}
+    try:
+        fund = {}; rel = {}
+        for th, cons in theme_concepts.items():
+            cset = set(cons); fs = []; rs = []
+            for c, a in hist.items():
+                if not isinstance(a, dict) or a.get('name') not in cset:
+                    continue
+                net = fm.net_series(a); s = net.dropna()
+                if len(s) >= 5:
+                    fs.append(float(s.iloc[-5:].sum()))
+                ser = fm.close_series(a); b = ser.dropna()
+                if len(b) >= 21 and float(b.iloc[-21]) > 0:
+                    rs.append(float(b.iloc[-1]) / float(b.iloc[-21]) - 1)
+            fund[th] = float(np.mean(fs)) if fs else 0.0
+            rel[th] = float(np.mean(rs)) if rs else 0.0
+        themes = list(theme_concepts.keys())
+        def pct(d):
+            arr = np.array([d.get(k, 0.0) for k in themes]); order = arr.argsort().argsort()
+            return {k: (order[i] + 1) / len(themes) for i, k in enumerate(themes)}
+        fund_p = pct(fund); rel_p = pct(rel)
+        sig = {}
+        for th in themes:
+            c = float(catalyst.get(th) or 0)
+            sig[th] = {'catalyst': c, 'fund': fund_p.get(th, 0.5), 'rel': rel_p.get(th, 0.5), 'conc': 0.5}
+        bk = live_bank_signal(today)
+        if bk:
+            sig['银行'] = bk
+        else:
+            sig.pop('银行', None)
+        return sig
+    except Exception as e:
+        print('[main_line] open_set_fusion err:', str(e)[:80], file=sys.stderr)
+        return None
+
 def main():
     ap=argparse.ArgumentParser(description='主线判定 agent (research_report 研报 + 资金/集中度/银行融合)')
     ap.add_argument('--date', default=None, help='评估日期 YYYY-MM-DD (历史重放用, 默认今天)')
@@ -173,7 +228,12 @@ def main():
         if os.path.exists(hist_path):
             try: hist=json.load(open(hist_path,encoding='utf-8'))
             except Exception: hist={}
-        sig, sc=fusion_signals(hist, today, catalyst)
+        _osig=_open_set_fusion(hist, today, catalyst)
+        if _osig is None:
+            sig, sc=fusion_signals(hist, today, catalyst)
+        else:
+            sig=_osig
+            sc={th: 0.3*sig[th]['fund'] + 0.2*sig[th]['rel'] + 0.5*sig[th]['conc'] for th in sig}
         ranked=sorted(sc.keys(), key=lambda k:-sc[k])
         main_line=ranked[0] if ranked else None
         candidates=ranked[:2] if len(ranked)>=2 else ranked
