@@ -17,7 +17,12 @@ DB = os.path.join(DATA, "stock_pool.db")
 U = "https://pcd.mobcvb.cn/tushare/pro"
 K = "tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE"
 MAX_STOCKS = int(os.getenv("STOCK_CONFIRM_MAX", "10"))
-MAX_CONCEPTS = int(os.getenv("STOCK_CONFIRM_CONCEPTS", "5"))
+# 2026-09-07: 每主题跑全部概念(不截断前N, 光模块/CPO 等硬件链必须覆盖, 否则漏狼大主攻龙头);
+# STOCK_CONFIRM_CONCEPTS 现仅作总安全阀(默认 99=全部)
+MAX_CONCEPTS = int(os.getenv("STOCK_CONFIRM_CONCEPTS", "99"))
+PRIORITY_CONCEPTS = [x.strip() for x in os.getenv(
+    "STOCK_CONFIRM_PRIORITY",
+    "光通信模块,CPO概念,算力概念,AI应用,人工智能,DeepSeek概念,液冷概念,数据中心,ChatGPT概念,AI智能体").split(",") if x.strip()]
 
 def ts(a, **p):
     for _ in range(3):
@@ -32,7 +37,6 @@ def main():
     # TOP2/3 方向也跑成分确认(科技/军工突破候选进视野)，避免单主线偏置漏方向；
     # 输出平铺 {概念:{...}}+theme 字段(概念名全局唯一，兼容下游平铺读法)
     CONFIRM_TOP_N = int(os.getenv("CONFIRM_TOP_N", "3"))
-    MAX_CONCEPTS_PER_THEME = int(os.getenv("STOCK_CONFIRM_CONCEPTS", "8"))
     try:
         import fusion_mainline as fm
         st = json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8"))
@@ -54,7 +58,9 @@ def main():
             names = []
         if not names:
             names = ["人工智能", "算力概念", "CPO概念", "光通信模块", "液冷概念"]
-        for cname in names[:MAX_CONCEPTS_PER_THEME]:
+        # 优先级排序(光模块/CPO/算力/AI应用硬件链先行), 随后全量剩余概念(不截断, 防漏狼大主攻龙头)
+        names = [n for n in PRIORITY_CONCEPTS if n in names] + [n for n in names if n not in PRIORITY_CONCEPTS]
+        for cname in names[:MAX_CONCEPTS]:
             try:
                 cur = con.cursor()
                 cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=? LIMIT ?", (cname, MAX_STOCKS))
