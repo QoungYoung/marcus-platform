@@ -133,7 +133,9 @@ BUY_253_EXPR = {"and": [{"op": ">=", "field": "index.m5_dump", "value": 0.4},
                         {"op": ">", "field": "quote.current", "value": 0}]}
 BUY_254_EXPR = {"and": [{"op": "==", "field": "quote.dip_prev_low", "value": True},
                         {"op": ">", "field": "vol_ratio", "value": 0},
-                        {"op": "<=", "field": "vol_ratio", "value": 0.7},
+                        # 2026-09-07 对齐狼大温和缩量(≤0.9, 同 zheng_t_buy_quote)：0.7 档过严——
+                        # 药明换手节奏比 0.71~0.85 属缩量却被挡, 触前低+温和缩量应放行
+                        {"op": "<=", "field": "vol_ratio", "value": 0.9},
                         {"op": ">", "field": "quote.average", "value": 0},
                         {"op": ">", "field": "quote.current", "value": 0}]}
 
