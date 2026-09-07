@@ -506,10 +506,10 @@ def _assess_outcome(symbol: str, side: str, fill_price: float,
     try:
         from datetime import datetime, timedelta
         from app.services import t_data_sources as _tds
-        day = trade_day or date.today().strftime("%Y-%m-%d")
+        day8 = (trade_day or date.today().strftime("%Y-%m-%d"))[:10].replace("-", "")
         bars = _tds.fetch_tencent_mkline(_tds._normalize_symbol(symbol), freq="m5", count=320) or []
-        # 过滤当日 bar，定位成交时刻之后
-        day_bars = [b for b in bars if str(b.get("time", ""))[:10] == day]
+        # 过滤当日 bar(腾讯 time='YYYYMMDDHHMM' 取前8位, 旧 [:10]==ISO day 恒不匹配致评估失效, 2026-09-07 修复)
+        day_bars = [b for b in bars if str(b.get("time", ""))[:8] == day8]
         if not day_bars:
             return None
         # 找成交价附近第一根 bar（成交 bar 之后；容差 ±1.5% 吸收撮合价差）

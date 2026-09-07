@@ -1139,12 +1139,15 @@ class PaperTradingEngine:
         return count
 
     def _save_order(self, order: Order):
-        """保存订单到 PostgreSQL"""
+        """保存订单到 PostgreSQL（原子 upsert：orderid 全局唯一主键，跨账户/并发按 orderid 更新，
+        避免 duplicate key 导致做T卖腿执行失败, 2026-09-07 修复; 与 vnpy_listeners._sync_order 同口径）"""
         conn = self._get_pg_conn()
         cursor = conn.cursor()
         cursor.execute(
             'INSERT INTO paper_orders (orderid, account_id, symbol, direction, price, volume, status, traded, created_at, updated_at, reason) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) '
+            'ON CONFLICT (orderid) DO UPDATE SET status=EXCLUDED.status, traded=EXCLUDED.traded, '
+            'updated_at=EXCLUDED.updated_at, reason=EXCLUDED.reason',
             (order.orderid, self.account_id, order.symbol, order.direction, order.price, order.volume,
              order.status, order.traded, order.created_at, order.updated_at, getattr(order, 'reason', ''))
         )

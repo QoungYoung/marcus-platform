@@ -617,10 +617,12 @@ class TMonitor:
             bars = fetch_minute_bars(symbol, freq="m5", count=320) or []
             if len(bars) < 100:
                 return False
-            today = datetime.now().strftime("%Y-%m-%d")
+            today = datetime.now().strftime("%Y%m%d")
             by_day = {}
             for b in sorted(bars, key=lambda x: str(x.get("time") or x.get("trade_time"))):
-                t = str(b.get("time") or b.get("trade_time"))[:10]
+                # 时间戳为 12 位 YYYYMMDDHHMM：取前 8 位得到交易日期（旧 [:10] 会带小时导致
+                # today 永远匹配不上、前日分组错乱 → A档 dip_prev_low/254 恒 False, 2026-09-07 修复）
+                t = str(b.get("time") or b.get("trade_time"))[:8]
                 by_day.setdefault(t, []).append(b)
             days = sorted(by_day.keys())
             if len(days) < 2:

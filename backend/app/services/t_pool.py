@@ -157,7 +157,8 @@ def _calc_daily_amplitudes(bars: List[dict]) -> List[float]:
     """按交易日聚合分钟线，计算每日振幅（(high-low)/pre_close 近似用 (high-low)/open）。"""
     by_day: Dict[str, List[dict]] = {}
     for b in bars:
-        day = str(b["time"])[:10]
+        # 分钟线 time 为 12 位 YYYYMMDDHHMM：取前 8 位聚合到交易日（旧 [:10] 按小时分组使振幅/OC 算错, 2026-09-07 修复）
+        day = str(b["time"])[:8]
         by_day.setdefault(day, []).append(b)
     amps = []
     for day, day_bars in by_day.items():
@@ -176,7 +177,7 @@ def _calc_oc_regression(bars: List[dict]) -> float:
     """O-C 回归度：按日聚合 |收盘-开盘| / 日内振幅，取均值。"""
     by_day: Dict[str, List[dict]] = {}
     for b in bars:
-        day = str(b["time"])[:10]
+        day = str(b["time"])[:8]
         by_day.setdefault(day, []).append(b)
     vals = []
     for day, day_bars in by_day.items():
