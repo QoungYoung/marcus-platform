@@ -498,6 +498,29 @@ tasks:
   script:
     args: []
     path: apps/main_line/wave_agent.py
+
+- id: sector_g3_judge
+  name: 板块洗盘收敛期判定(G3)
+  description: "8:15 持仓所属主题板块洗盘收敛期(相对自身常态: 主题概念收益波动20/60<0.8 且 |net|5/60<=0.8, concept_hist 合成) -> sector_g3_state.json; TMonitor no_t_gate 收敛期不自动T出(狼大'主力洗TMT洗干净才有下一波')"
+  enabled: true
+  schedule:
+    type: cron
+    expr: 15 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/sector_g3_judge.py
+    args: []
+  output:
+    log_file: logs/sector_g3_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - main_line_judge
 - id: stock_confirm_refresh
   name: 成分股确认刷新
   description: 8:20 每日按今日主线刷新个股确认(主线→THEME_CONCEPTS→成分→confirm_chain→stock_confirm_result.json), 使成分股确认始终跟主线(如消费/内需), 避免周度滞后旧主线; end_date动态

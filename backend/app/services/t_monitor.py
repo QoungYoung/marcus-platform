@@ -1038,18 +1038,35 @@ class TMonitor:
                         print(f"[TMonitor] 狼大253/254建仓异常 {symbol}: {_we}")
                         t_db.update_trigger_status(trig_id, "blocked", reason="wolf_253_build_exc")
                 elif volume > 0:
-                    gw = gateway_execute(symbol, side, current, volume,
-                                         reason=f"条件命中自动执行（{trigger_kind}）",
-                                         decision_source="ai_led",
-                                         condition_id=cond.get("id"),
-                                         account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
-                    exec_ok = gw.get("status") == "success"
-                    print(f"[TMonitor] 自动执行 {symbol} {side} {volume}股@{current}: "
-                          f"{gw.get('status')} {str(gw.get('reason') or '')[:40]}")
-                    # 执行结果写入触发事件（供审计/复盘）
-                    t_db.update_trigger_status(
-                        trig_id, "executed" if exec_ok else "blocked",
-                        reason=f"自动执行 {side} {volume}股 @{current}: {gw.get('status')} | {str(gw.get('reason') or '')[:120]} | level={gw.get('level')}")
+                    # 板块级 G3 不做T门(2026-09-07): 持仓所属主题处洗盘收敛期 → 存量T仓不自动T出
+                    # (盘前 sector_g3_state.json, 见 apps/main_line/sector_g3.py; env WOLF_NO_T_GATE=1 启用)
+                    _g3_block, _g3_reason = False, ""
+                    if side == "sell" and os.getenv("WOLF_NO_T_GATE", "0") != "0":
+                        try:
+                            import sys as _sg
+                            _sg.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                            "..", "..", "apps", "main_line"))
+                            from no_t_gate import g3_sell_blocked
+                            _g3_block, _g3_reason = g3_sell_blocked(symbol)
+                        except Exception as _ge:
+                            print(f"[TMonitor] no_t_gate err: {str(_ge)[:80]}")
+                    if _g3_block:
+                        exec_ok = False
+                        print(f"[TMonitor] G3门拦截 {symbol} 卖腿: {_g3_reason}")
+                        t_db.update_trigger_status(trig_id, "blocked", reason=_g3_reason + "（G3门）")
+                    else:
+                        gw = gateway_execute(symbol, side, current, volume,
+                                             reason=f"条件命中自动执行（{trigger_kind}）",
+                                             decision_source="ai_led",
+                                             condition_id=cond.get("id"),
+                                             account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
+                        exec_ok = gw.get("status") == "success"
+                        print(f"[TMonitor] 自动执行 {symbol} {side} {volume}股@{current}: "
+                              f"{gw.get('status')} {str(gw.get('reason') or '')[:40]}")
+                        # 执行结果写入触发事件（供审计/复盘）
+                        t_db.update_trigger_status(
+                            trig_id, "executed" if exec_ok else "blocked",
+                            reason=f"自动执行 {side} {volume}股 @{current}: {gw.get('status')} | {str(gw.get('reason') or '')[:120]} | level={gw.get('level')}")
                 elif volume <= 0:
                     # 量推导为 0（卖腿仅剩底仓无T仓可卖 / 无底仓建仓规模不可用）→ 直接标记跳过，
                     # 避免孤儿 pending 事件（降级轮询兜底）；持仓仅100股(底仓)时不再当作"裸空"错误
