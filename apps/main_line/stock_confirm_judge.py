@@ -1,41 +1,64 @@
 # -*- coding: utf-8 -*-
-"""stock_confirm_judge.py — 个股级确认链(三层联动之三): 主线概念成分股 confirm_chain → 确认比例
-流程: main_line_state 主线主题 → THEME_CONCEPTS 概念名 → stock_concept_map 成分股 → pro.daily → confirm_chain
-输出: data/stock_confirm_result.json (每概念: n/confirm/ratio/stocks)
-运行: 每周一 position_judge 后置(需 tushare 网络, ~50次 pro.daily 调用 1-2分钟)
+"""stock_confirm_judge.py — 个股级确认链(三层联动之三): fusion TOP3 主题全量概念成分 confirm_chain → 确认比例
+2026-09-07 数据层重构: 逐只 ts_code daily → 逐交易日(trade_cal) 全市场批量(gzcloud daily trade_date, 5548行/次 0.1s)
+70个交易日×0.1s≈1分钟拉全缓存, 取代 360+ 次逐只请求(原~30min); 概念优先级(光模块/CPO/算力/AI应用 先行)+全量概念。
+输出: data/stock_confirm_result.json (平铺 {概念:{theme,n,confirm,ratio,stocks}})
 """
-import sqlite3, json, os, sys, time, datetime as _dt
+import json, os, sys, time
 import pandas as pd, numpy as np
+import urllib3, requests
+urllib3.disable_warnings()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from confirm_chain import confirm_chain
-import urllib3
-urllib3.disable_warnings()
-import requests
 
 DATA = os.environ.get("DATA_DIR", "/app/data")
 DB = os.path.join(DATA, "stock_pool.db")
-U = "https://pcd.mobcvb.cn/tushare/pro"
-K = "tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE"
+GZ = "https://ts.gyzcloud.top/api"
+GZ_TOKEN = os.getenv("TUSHARE_TOKEN", "a5c495cbe5e14729ad756381efe1fd72")
 MAX_STOCKS = int(os.getenv("STOCK_CONFIRM_MAX", "10"))
-# 2026-09-07: 每主题跑全部概念(不截断前N, 光模块/CPO 等硬件链必须覆盖, 否则漏狼大主攻龙头);
-# STOCK_CONFIRM_CONCEPTS 现仅作总安全阀(默认 99=全部)
 MAX_CONCEPTS = int(os.getenv("STOCK_CONFIRM_CONCEPTS", "99"))
 PRIORITY_CONCEPTS = [x.strip() for x in os.getenv(
     "STOCK_CONFIRM_PRIORITY",
     "光通信模块,CPO概念,算力概念,AI应用,人工智能,DeepSeek概念,液冷概念,数据中心,ChatGPT概念,AI智能体").split(",") if x.strip()]
 
-def ts(a, **p):
+
+def _gz(api, **p):
     for _ in range(3):
         try:
-            return requests.get(f"{U}/{a}", params=p, headers={"X-API-Key": K}, verify=False, timeout=30).json()
+            r = requests.post(GZ, json={"api_name": api, "token": GZ_TOKEN, "params": p, "fields": "ts_code,trade_date,close,vol"}, timeout=40)
+            it = ((r.json().get("data") or {}).get("items") or [])
+            if it:
+                return it
         except Exception:
-            time.sleep(1)
-    return {}
+            time.sleep(0.5)
+    return []
+
+
+def _trade_days():
+    r = requests.post(GZ, json={"api_name": "trade_cal", "token": GZ_TOKEN,
+                                "params": {"exchange": "SSE", "start_date": "20260601",
+                                           "end_date": time.strftime("%Y%m%d")}, "fields": "cal_date,is_open"}, timeout=20)
+    it = ((r.json().get("data") or {}).get("items") or [])
+    days = sorted(x[0] for x in it if x[1] == 1)
+    return days[-90:] if len(days) > 90 else days
+
+
+def _fetch_market(days):
+    """逐交易日全市场批量 → (close_df, vol_df) index=datetime 交易日期, columns=ts_code"""
+    recs = []
+    for d in days:
+        for it in _gz("daily", trade_date=d):
+            recs.append({"d": d, "ts": it[0], "close": float(it[2] or 0), "vol": float(it[3] or 0)})
+        if len(recs) % 10000 == 0:
+            print(f"[stock_confirm] fetched {len(recs)} rows", file=sys.stderr)
+    df = pd.DataFrame(recs)
+    df["dt"] = pd.to_datetime(df["d"], format="%Y%m%d")
+    close = df.pivot_table(index="dt", columns="ts", values="close", aggfunc="last").sort_index()
+    vol = df.pivot_table(index="dt", columns="ts", values="vol", aggfunc="last").sort_index()
+    return close, vol
+
 
 def main():
-    # 2026-09-07: 确认范围 main_line(1) → fusion TOP3(CONFIRM_TOP_N, 默认3)：
-    # TOP2/3 方向也跑成分确认(科技/军工突破候选进视野)，避免单主线偏置漏方向；
-    # 输出平铺 {概念:{...}}+theme 字段(概念名全局唯一，兼容下游平铺读法)
     CONFIRM_TOP_N = int(os.getenv("CONFIRM_TOP_N", "3"))
     try:
         import fusion_mainline as fm
@@ -48,7 +71,14 @@ def main():
         themes = ["AI/算力/科技"]
     print("[stock_confirm] TOP确认主题:", themes, file=sys.stderr)
     if not os.path.exists(DB):
-        print("[stock_confirm] NO stock_pool.db", file=sys.stderr); return
+        print("[stock_confirm] NO stock_pool.db", file=sys.stderr)
+        return
+    t0 = time.time()
+    days = _trade_days()
+    close, vol = _fetch_market(days)
+    print(f"[stock_confirm] 全市场缓存 {len(days)}日 x {close.shape[1]}票  {time.time()-t0:.0f}s", file=sys.stderr)
+    con = None
+    import sqlite3
     con = sqlite3.connect(DB)
     out = {}
     for mt in themes:
@@ -58,33 +88,34 @@ def main():
             names = []
         if not names:
             names = ["人工智能", "算力概念", "CPO概念", "光通信模块", "液冷概念"]
-        # 优先级排序(光模块/CPO/算力/AI应用硬件链先行), 随后全量剩余概念(不截断, 防漏狼大主攻龙头)
         names = [n for n in PRIORITY_CONCEPTS if n in names] + [n for n in names if n not in PRIORITY_CONCEPTS]
         for cname in names[:MAX_CONCEPTS]:
             try:
                 cur = con.cursor()
                 cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=? LIMIT ?", (cname, MAX_STOCKS))
                 codes = [r[0] for r in cur.fetchall()]
-            except Exception as e:
-                print("[stock_confirm] concept err", cname, str(e)[:60], file=sys.stderr); continue
+            except Exception as ex:
+                print("[stock_confirm] concept err", cname, str(ex)[:60], file=sys.stderr)
+                continue
             stocks = []
-            for code in codes:
-                d = ts("daily", ts_code=code, start_date="20260601", end_date=_dt.date.today().strftime("%Y%m%d"))  # 动态: 用最近交易日/今天, 避免停在旧日
-                data = d.get("data", {}); fields = data.get("fields") or []; items = data.get("items") or []
-                if not items: continue
-                df = pd.DataFrame([dict(zip(fields, it)) for it in items])
-                df["trade_date"] = pd.to_datetime(df["trade_date"]); df = df.sort_values("trade_date")
-                ser = df.set_index("trade_date")["close"].astype(float)
-                vol = df.set_index("trade_date")["vol"].astype(float)
-                cc = confirm_chain(ser, None, vol)
-                stocks.append({"code": code, "stage": cc["stage"]})
-                time.sleep(0.5)
+            for ts_code in codes:
+                if ts_code not in close.columns:
+                    continue
+                ser = close[ts_code].dropna()
+                if len(ser) < 40:
+                    continue
+                v = vol[ts_code].reindex(ser.index)
+                cc = confirm_chain(ser, None, v)
+                stocks.append({"code": ts_code, "stage": cc["stage"]})
             n_confirm = sum(1 for s in stocks if s["stage"] in ("确认", "突破候选"))
             out[cname] = {"theme": mt, "n": len(stocks), "confirm": n_confirm,
                           "ratio": round(n_confirm / max(len(stocks), 1), 2), "stocks": stocks}
-            print("[stock_confirm]", mt, ">", cname, "n=", len(stocks), "确认", n_confirm, file=sys.stderr)
+            print(f"[stock_confirm] {mt} > {cname} n={len(stocks)} 确认 {n_confirm}", file=sys.stderr)
+    if con:
+        con.close()
     json.dump(out, open(os.path.join(DATA, "stock_confirm_result.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print("[stock_confirm] WROTE stock_confirm_result.json 概念:", list(out.keys()), file=sys.stderr)
+    print(f"[stock_confirm] WROTE stock_confirm_result.json 概念:{len(out)} ({time.time()-t0:.0f}s)", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()
