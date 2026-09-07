@@ -181,7 +181,7 @@ def main():
     # 2026-09-07 wave 调档(回测 wave-tuned-v2): defense/exit 下按 invest 收窄买腿布设(控亏/只降不空),
     # build/t_only/side invest=1 不裁剪 —— 只影响布腿数量，不绕过浪gate/风控
     try:
-        from main_line.wave_alloc import read_wave_alloc
+        from wave_alloc import read_wave_alloc   # /app/apps/main_line 已在 sys.path(line 17)
         _alloc = read_wave_alloc()
         _inv = float(_alloc.get("invest") or 1.0)
         if _inv < 1.0 and buy_legs:
