@@ -499,6 +499,28 @@ tasks:
     args: []
     path: apps/main_line/wave_agent.py
 
+- id: tranche_ladder_report
+  name: 建仓执行链盘前报告(试仓档)
+  description: "8:18 switch_builder(卖旧keep/buy_new DRY)+tranche升级联动 -> switch_builder_plan.json + 报告块(三档状态/额度/升级/切换清单), 与wave调档/个股确认链共存"
+  enabled: true
+  schedule:
+    type: cron
+    expr: 18 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/tranche_ladder_report.py
+    args: []
+  output:
+    log_file: logs/tranche_ladder_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - sector_g3_judge
 - id: sector_g3_judge
   name: 板块洗盘收敛期判定(G3)
   description: "8:15 持仓所属主题板块洗盘收敛期(相对自身常态: 主题概念收益波动20/60<0.8 且 |net|5/60<=0.8, concept_hist 合成) -> sector_g3_state.json; TMonitor no_t_gate 收敛期不自动T出(狼大'主力洗TMT洗干净才有下一波')"

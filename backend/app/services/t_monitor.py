@@ -1023,6 +1023,24 @@ class TMonitor:
                     if side == "buy":
                         if sellable > 0:
                             volume = max(int(sellable * 0.3), 100)
+                            # 2026-09-07 试仓档(tranche_ladder): 254/253 低吸且标的在主线候选(ambush/trial)
+                            # → 以档位上限放行(可沉淀底仓), 主升确认(normal, -1)走正常; none 保持做T原量
+                            if trigger_kind in ("custom_prevlow", "custom_m5dump"):
+                                try:
+                                    import sys as _tl
+                                    _tl.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                    "..", "..", "apps", "main_line"))
+                                    from tranche_ladder import allowed_buy_volume
+                                    _tlv, _tlr = allowed_buy_volume(
+                                        symbol, trigger_kind, {"current": current},
+                                        ledger, cond.get("account_id", T_MONITOR_ACCOUNT))
+                                    if _tlv == -1:
+                                        pass  # normal(主升确认): 正常建仓逻辑
+                                    elif _tlv > 0:
+                                        volume = max(_tlv, volume)   # 档位上限(不缩水原做T量)
+                                    print(f"[TMonitor] tranche buy {symbol} {trigger_kind}: {_tlv} ({_tlr})")
+                                except Exception as _tle:
+                                    print(f"[TMonitor] tranche_ladder err: {str(_tle)[:80]}")
                         else:
                             try:
                                 from app.services.t_build import build_sizing
@@ -1053,31 +1071,45 @@ class TMonitor:
                     and self._trade_executor is not None
                 )
                 if _no_hold_build:
+                    # 2026-09-07 试仓档方向门: 非主线候选(TOP1∪TOP2)标的无底仓不低吸建仓(防乱建)
+                    _tier_none = False
                     try:
-                        import datetime as _dtw
-                        from app.services import wolf_253_build as _W
-                        _today = _dtw.datetime.now().strftime("%Y%m%d")
-                        if trigger_kind == "custom_m5dump":
-                            _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
-                                              account=cond.get("account_id", T_MONITOR_ACCOUNT))
-                        else:
-                            # 254 首现→建小底仓并记 base_254；其后 3 日内再次命中→分步回补(≤2次)
-                            _chain = _W._chain_state().get(symbol) or {}
-                            _vr = float(snapshot.get("vol_ratio") or 0)
-                            if not _chain.get("base_254_date"):
+                        import sys as _tl2
+                        _tl2.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                         "..", "..", "apps", "main_line"))
+                        from tranche_ladder import tier_for
+                        _tier_none = tier_for(symbol)[0] == "none"
+                    except Exception:
+                        _tier_none = False
+                    if _tier_none:
+                        t_db.update_trigger_status(trig_id, "blocked", reason="非主线候选TOP1∪TOP2, 不低吸建仓(试仓档)")
+                        print(f"[TMonitor] 试仓档拦无底仓建仓 {symbol}")
+                    else:
+                        try:
+                            import datetime as _dtw
+                            from app.services import wolf_253_build as _W
+                            _today = _dtw.datetime.now().strftime("%Y%m%d")
+                            if trigger_kind == "custom_m5dump":
                                 _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
                                                   account=cond.get("account_id", T_MONITOR_ACCOUNT))
-                                _W.mark_base_254(symbol, _today)
                             else:
-                                _r = _W.refill_253(self._trade_executor, symbol, quote, _vr, _today,
-                                                   account=cond.get("account_id", T_MONITOR_ACCOUNT))
-                        exec_ok = _r.get("status") == "success"
-                        print(f"[TMonitor] 狼大253/254建仓 {symbol}: {_r.get('status')} {str(_r.get('reason') or '')[:40]}")
-                        t_db.update_trigger_status(trig_id, "executed" if exec_ok else "blocked",
-                                                   reason="狼大253/254建仓: %s" % (_r.get("reason") or _r.get("status")))
-                    except Exception as _we:
-                        print(f"[TMonitor] 狼大253/254建仓异常 {symbol}: {_we}")
-                        t_db.update_trigger_status(trig_id, "blocked", reason="wolf_253_build_exc")
+                                # 254 首现→建小底仓并记 base_254；其后 3 日内再次命中→分步回补(≤2次)
+                                _chain = _W._chain_state().get(symbol) or {}
+                                _vr = float(snapshot.get("vol_ratio") or 0)
+                                if not _chain.get("base_254_date"):
+                                    _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
+                                                      account=cond.get("account_id", T_MONITOR_ACCOUNT))
+                                    _W.mark_base_254(symbol, _today)
+                                else:
+                                    _r = _W.refill_253(self._trade_executor, symbol, quote, _vr, _today,
+                                                       account=cond.get("account_id", T_MONITOR_ACCOUNT))
+                            exec_ok = _r.get("status") == "success"
+                            print(f"[TMonitor] 狼大253/254建仓 {symbol}: {_r.get('status')} {str(_r.get('reason') or '')[:40]}")
+                            t_db.update_trigger_status(trig_id, "executed" if exec_ok else "blocked",
+                                                       reason="狼大253/254建仓: %s" % (_r.get("reason") or _r.get("status")))
+                        except Exception as _we:
+                            print(f"[TMonitor] 狼大253/254建仓异常 {symbol}: {_we}")
+                            t_db.update_trigger_status(trig_id, "blocked", reason="wolf_253_build_exc")
                 elif volume > 0:
                     # 板块级 G3 不做T门(2026-09-07): 持仓所属主题处洗盘收敛期 → 存量T仓不自动T出
                     # (盘前 sector_g3_state.json, 见 apps/main_line/sector_g3.py; env WOLF_NO_T_GATE=1 启用)
