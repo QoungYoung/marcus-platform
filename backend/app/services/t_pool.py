@@ -149,8 +149,27 @@ def calc_t_quality(symbol: str, quote: Optional[dict] = None) -> Dict[str, Any]:
     turnover = float(quote.get("turnover_rate", 0) or 0)
 
     # 5) 打分（加权，P4 标定）——统一核心，与回测 _quality_from_daily 同公式同门槛
-    return _quality_from_ohlcv(amp_median, oc, round_trip, amount, turnover,
-                               price, symbol=symbol)
+    res = _quality_from_ohlcv(amp_median, oc, round_trip, amount, turnover,
+                              price, symbol=symbol)
+
+    # 2026-09-07 修复: 数据缺失不再降级 PASS(假阳性)——
+    # 新浪分钟源失败/行情缺失曾使 amp 兜底3.0+amount=0/turnover=0 被判 PASS 送进做T池。
+    # 实时行情/成交额/分钟线缺失 → REJECT; ETF(5xxx/51x/15x) 豁免 turnover=0(用成交额判流动性)。
+    _missing = []
+    if not quote or float(quote.get("current") or 0) <= 0:
+        _missing.append("实时行情缺失")
+    if float(quote.get("amount") or 0) <= 0:
+        _missing.append("成交额=0(行情缺失/停牌)")
+    if not bars:
+        _missing.append("m5分钟线缺失")
+    _s = str(symbol or "")
+    _is_etf = _s.startswith(("SH51", "SH56", "SH58", "SZ15", "SZ16", "SZ51", "5", "1")) and len(_s) == 8
+    if float(quote.get("turnover_rate") or 0) <= 0 and not _is_etf:
+        _missing.append("换手率=0")
+    if _missing:
+        res["pass_gate"] = False
+        res["reasons"] = (res.get("reasons") or [])[:0] + ["数据缺失: " + "/".join(_missing)] + (res.get("reasons") or [])
+    return res
 
 
 def _calc_daily_amplitudes(bars: List[dict]) -> List[float]:
