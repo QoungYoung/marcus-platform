@@ -112,14 +112,15 @@ def _sync_order(pg_params: dict, params: tuple) -> None:
     try:
         conn = _get_conn(pg_params)
         cur = conn.cursor()
+        # 主键=orderid(全局唯一): 按 orderid 查(不限账户), 并原子 upsert, 避免跨账户/并发重复键
         cur.execute(
-            "SELECT orderid FROM paper_orders WHERE orderid = %s AND account_id = 'stock'",
+            "SELECT orderid FROM paper_orders WHERE orderid = %s",
             (orderid,),
         )
         if cur.fetchone():
             cur.execute(
                 "UPDATE paper_orders SET status = %s, traded = %s, "
-                "updated_at = %s WHERE orderid = %s AND account_id = 'stock'",
+                "updated_at = %s WHERE orderid = %s",
                 (status, traded, now, orderid),
             )
         else:
@@ -127,7 +128,9 @@ def _sync_order(pg_params: dict, params: tuple) -> None:
                 "INSERT INTO paper_orders "
                 "(orderid, account_id, symbol, direction, price, volume, status, "
                 "traded, created_at, updated_at, reason) "
-                "VALUES (%s, 'stock', %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "VALUES (%s, 'stock', %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (orderid) DO UPDATE SET status=EXCLUDED.status, "
+                "traded=EXCLUDED.traded, updated_at=EXCLUDED.updated_at",
                 (orderid, symbol, direction, price, volume, status,
                  traded, now, now, reason),
             )

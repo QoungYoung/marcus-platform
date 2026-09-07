@@ -29,12 +29,14 @@ T_BASE_FLOOR_OVERRIDES = {
 }
 
 
-def base_floor_shares(account_id: str, symbol: str) -> int:
-    """做T标的底仓保留股数：狼大默认保留 100 股底仓；覆盖表(ETF 大底仓)优先。"""
+def base_floor_shares(account_id: str, symbol: str, volume: Optional[int] = None) -> int:
+    """动态底仓(狼大'底仓不动/T出半'): 底仓 = 当前持仓 × T_BASE_KEEP_RATIO(默认0.5), 下限100股。
+    不写死: 有持仓 volume 时按比例动态(随持仓自适应); 无 volume 回退旧覆盖→默认100(保守)。"""
+    keep = float(os.getenv("T_BASE_KEEP_RATIO", "0.5"))
+    if volume is not None and int(volume) > 0:
+        return max(int(int(volume) * keep), 100)
     ov = T_BASE_FLOOR_OVERRIDES.get(symbol)
-    if ov is not None:
-        return int(ov)
-    return 100
+    return int(ov) if ov is not None else 100
 
 # ── 执行账户白名单（2026-09-02 用户决策：只有狼大做T可以操作）──
 # 默认只放行股票任务账户 stock；t 账户（做T/V反/ETF动量/建仓）一律拒绝。
@@ -335,7 +337,7 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
             item = ledger.get(symbol)
             # 持仓仅底仓（默认100股铁律 / ETF大底仓覆盖）时无T仓可卖 → 非裸空错误，
             # 做T卖腿量已在 TMonitor 推导为 0/跳过，这里直接跳过卖出检查（用户需求：持仓仅100股时跳过卖出检查）
-            _floor = base_floor_shares(account_id, symbol) if item else 0
+            _floor = base_floor_shares(account_id, symbol, volume=(item.get("volume") or item.get("sellable"))) if item else 0
             if item and item["sellable"] <= _floor:
                 pass
             elif not item or item["sellable"] < volume:

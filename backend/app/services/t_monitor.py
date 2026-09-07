@@ -997,7 +997,7 @@ class TMonitor:
                         # 大底仓标的卖腿只清 T仓（持仓-底仓），绝不清底仓。
                         from app.services.t_gateway import base_floor_shares
                         _floor = base_floor_shares(
-                            cond.get("account_id", T_MONITOR_ACCOUNT), symbol)
+                            cond.get("account_id", T_MONITOR_ACCOUNT), symbol, volume=sellable)
                         max_sell = max(sellable - _floor, 0) if sellable > _floor else 0
                         volume = max_sell
                     volume = (volume // 100) * 100
