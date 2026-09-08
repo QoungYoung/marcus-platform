@@ -38,6 +38,8 @@ def main():
     except Exception as e:
         print('[build] 缺 concept_long, 全量构建:', str(e)[:80], flush=True)
         sh('build_concept_long', [py, os.path.join(APP, 'build_concept_long.py'), '20250101'])
+    # 1.5) ETF 份额流(通道弱佐证, 份额加权; ~30s)
+    sh('build_etf_flow', [py, os.path.join(APP, 'build_etf_flow.py'), '--date', date8])
     # 2) 结构 GATE
     sh('trend_confirm', [py, os.path.join(APP, 'trend_confirm.py'), '--hist', os.path.join(DATA, 'concept_long.json'),
                          '--params', os.path.join(DATA, 'trend_confirm_params.json'), '--as-of', date8,

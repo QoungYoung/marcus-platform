@@ -44,10 +44,14 @@ def load_etf_map():
     return {th: [t for t, _ in etfs] for th, etfs in ETFS.items()}, 'curated_fallback'
 
 def main():
+    date8 = None
+    for i, a in enumerate(sys.argv[1:]):
+        if a == '--date': date8 = sys.argv[i + 2]
+    date8 = date8 or time.strftime('%Y%m%d')
     from app.api.market import _get_tushare_pro
     pro = _get_tushare_pro()
     # 交易日历(近 45 交易日)
-    cal = pro.trade_cal(exchange='SSE', start_date='20260601', end_date='20260908', is_open='1')
+    cal = pro.trade_cal(exchange='SSE', start_date='20260601', end_date=date8, is_open='1')
     days = [str(d).replace('-', '') for d in (cal['cal_date'].tolist() if cal is not None else [])]
     days = sorted(days)
     MAP, map_src = load_etf_map()
@@ -59,7 +63,7 @@ def main():
         per_etf = []
         for ts, nm in etfs:
             try:
-                df = pro.fund_share(ts_code=ts, start_date='20260601', end_date='20260908')
+                df = pro.fund_share(ts_code=ts, start_date='20260601', end_date=date8)
                 if df is not None and not df.empty:
                     ser = {}
                     for _, r in df.iterrows():
@@ -78,7 +82,7 @@ def main():
             if len(ds) <= k: continue
             total_a += e['series'][ds[-1 - k]]; total_b += e['series'][ds[-1]]
         return ((total_b / total_a - 1.0) * 100.0) if total_a else None
-    out = {'date': '20260908', 'themes': []}
+    out = {'date': date8, 'themes': []}
     for th, per in shares.items():
         out['themes'].append({'theme': th, 'etfs': [e['ts'] for e in per],
                               'd5': weighted_chg(per, 5) and round(weighted_chg(per, 5), 2),
