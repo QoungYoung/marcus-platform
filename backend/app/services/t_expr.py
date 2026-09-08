@@ -83,6 +83,9 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     # 个股触前一交易日5min最低(A档+缩量; 狼大'挂前一天的低点', 2025-03-06):
     # 当日触及/跌破前日低点(±0.5%)且量比<=0.7缩量 -> 低吸(回测133天 T+1+0.78%/0.56)
     "quote.dip_prev_low": ("bool", "个股当日触及前一交易日5min最低(±0.5%; A档正T低吸)", "t_monitor._stock_dip_prev_low"),
+    # 动态回撤保护(2026-09-08): 现价≤当日高点×(1-回撤阈值), 阈值=振幅自适应(0.4%~1.5%)——
+    # 任意股票/每日通用, 不写死价位(替代一次性 custom_level_sell)
+    "quote.trail_break": ("bool", "跌破当日高点回撤阈值(动态移动止盈/破位保护)", "t_monitor._trail_break"),
     # ── 技术指标（复用 get_realtime_indicators：KDJ/MACD/RSI/MA，盘中实时估算） ──
     "tech.ma5": ("number", "MA5(日线)", "get_realtime_indicators"),
     "tech.ma10": ("number", "MA10(日线)", "get_realtime_indicators"),

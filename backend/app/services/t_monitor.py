@@ -167,7 +167,9 @@ class TMonitor:
                         continue
                     buy_avg = float(st.get("buy_avg") or 0)
                     target = buy_avg * (1 + _rs.ROUNDTRIP_SELL_UP)
-                    if cur < target:
+                    avg = float(q.get("average") or q.get("avg_price") or 0)
+                    vwap_break = bool(avg > 0 and cur < avg)   # 黄线破位优先离场（直跌保护）
+                    if not vwap_break and cur < target:
                         continue
                     from app.services.t_gateway import (gateway_execute, get_sellable_ledger,
                                                         base_floor_shares)
@@ -693,6 +695,26 @@ class TMonitor:
             print(f"[TMonitor] 指数急杀计算失败: {e}")
             return 0.0
 
+    def _trail_break(self, symbol: str, cur: float, quote: dict) -> bool:
+        """跌破当日高点×回撤阈值(动态移动止盈/破位保护)。阈值=振幅自适应:
+        pct = max(0.004, min(0.015, amplitude×0.3))；env T_TRAIL_PCT 覆盖(>0 时)。
+        不依赖任何静态价位——同一规则任何股票/任何交易日通用。"""
+        try:
+            if cur <= 0:
+                return False
+            hi = float(quote.get("high", 0) or 0)
+            if hi <= 0 or cur > hi:
+                return False
+            amp = float(quote.get("amplitude", 0) or 0)
+            try:
+                fixed = float(os.getenv("T_TRAIL_PCT", "0") or 0)
+            except Exception:
+                fixed = 0.0
+            pct = fixed if fixed > 0 else max(0.004, min(0.015, amp * 0.3))
+            return cur <= hi * (1 - pct)
+        except Exception:
+            return False
+
     def _stock_dip_prev_low(self, symbol: str) -> bool:
         """个股当日5min最低 ≤ 前一交易日5min最低×1.005（A档：触及/跌破前日低点）。
         狼大2025-03-06『挂前一天的低点 能买进去就做正T』；配 vol_ratio<=0.7 缩量。
@@ -753,6 +775,10 @@ class TMonitor:
             # 分时黄线跌破（狼大8-04『绝对不能破的点就是日均线那条黄线 一旦突发跌破直接走』）
             "vwap_break": bool(_avg > 0 and _cur < _avg),
             "dip_prev_low": self._stock_dip_prev_low(symbol),
+            # 动态回撤保护(2026-09-08, 替代写死价位→任何标的/每日可复用):
+            # 现价 ≤ 当日高点×(1-回撤阈值)；阈值=振幅自适应(max(0.4%, amp×0.3, ≤1.5%))，
+            # 可用 env T_TRAIL_PCT 覆盖固定阈值。
+            "trail_break": self._trail_break(symbol, _cur, quote),
         }
         # vol_ratio（盘中量比归一）
         vr = self._calc_volume_ratio(cond, quote)
@@ -1033,7 +1059,9 @@ class TMonitor:
             # 由 _round 5 分钟冷却防刷；使"买腿回补 T仓 → 卖腿持续监控 T出/黄线"的
             # 做T循环闭环（狼大：底仓不动、T仓高抛低吸反复做）。
             # 其他做T条件仍消费式（迭代#56：触发即销毁，由 AI 重建移动基准）。
-            if _is_wolf_t_condition(cond):
+            # 2026-09-08: 手动护栏卖腿(价位/黄线)命中即一次性消费(不持续重复卖)
+            _one_shot_guard = str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell")
+            if _is_wolf_t_condition(cond) and not _one_shot_guard:
                 t_db.update_condition_state(
                     cond.get("id"),
                     armed=1,
@@ -1366,6 +1394,10 @@ def _is_wolf_t_condition(cond: Dict[str, Any]) -> bool:
         return False
     import json as _json
     s = _json.dumps(expr, ensure_ascii=False)
+    # 2026-09-08: 手动护栏卖腿(价位/黄线)也纳入评估——399 custom_level_sell(current<=X)
+    # 此前因不含WOLF_T_FIELDS字段被_round整轮跳过, 跌到155.2不触发
+    if str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell"):
+        return True
     return any(f in s for f in WOLF_T_FIELDS)
 
 
