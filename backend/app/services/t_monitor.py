@@ -1148,7 +1148,10 @@ class TMonitor:
                                 if not _chain.get("base_254_date"):
                                     _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
                                                       account=cond.get("account_id", T_MONITOR_ACCOUNT))
-                                    _W.mark_base_254(symbol, _today)
+                                    # 2026-09-08 修复(600004整天blocked): 仅建仓成功才记 base_254——
+                                    # 首建失败(data_unavailable等)若也标记, 当日后续254命中全走refill被same_day拦, 全天建仓0
+                                    if _r.get("status") == "success":
+                                        _W.mark_base_254(symbol, _today)
                                 else:
                                     _r = _W.refill_253(self._trade_executor, symbol, quote, _vr, _today,
                                                        account=cond.get("account_id", T_MONITOR_ACCOUNT))

@@ -527,7 +527,12 @@ def get_stock_moneyflow(
     bare_code = ts_code.split(".")[0] if "." in ts_code else ts_code.lstrip("SHEZBJ").lower()
 
     # ── 优先：东财实时个股接口（7×24 可用，盘后返回收盘快照）──
-    flow = _query_stock_flow(ts_code)
+    # 2026-09-08(C方案): 东财实时(EM_PROXY/8199隧道)异常时不再上抛——转Tushare日频降级
+    try:
+        flow = _query_stock_flow(ts_code)
+    except Exception as _em_e:
+        print(f"[moneyflow] 东财实时失败, 转Tushare日频: {str(_em_e)[:120]}", flush=True)
+        flow = None
     if flow:
         # ── 计算资金效率指数 ──
         capital_efficiency = None
@@ -572,12 +577,22 @@ def get_stock_moneyflow(
         pro = _get_tushare_pro()
         from datetime import timedelta
         end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=28)).strftime("%Y%m%d")  # 拉长窗口算5/10日累计
         df = pro.moneyflow_dc(ts_code=ts_code, start_date=start_date, end_date=end_date)
         if df is not None and not df.empty:
             # 按交易日降序，取最新一条
             df = df.sort_values('trade_date', ascending=False)
             row = df.iloc[0]
+            # 主力净额(元) helper: net_amount(万元)优先, 缺则超大单+大单买卖差
+            def _r_main(rr) -> float:
+                nm = rr.get("net_amount")
+                if nm is not None and nm != '':
+                    return float(nm) * 10000
+                return ((float(rr.get("buy_elg_amount") or 0) - float(rr.get("sell_elg_amount") or 0))
+                        + (float(rr.get("buy_lg_amount") or 0) - float(rr.get("sell_lg_amount") or 0))) * 10000
+            _recs = df.to_dict("records")
+            d5_main_net = round(sum(_r_main(r) for r in _recs[:5]), 2)
+            d10_main_net = round(sum(_r_main(r) for r in _recs[:10]), 2)
             logger.info(f"[moneyflow] Tushare 降级: {ts_code}, trade_date={row.get('trade_date')}, "
                         f"net_amount={row.get('net_amount')}, columns={list(df.columns)}")
             def _f(col: str, default=0.0) -> float:
@@ -624,6 +639,8 @@ def get_stock_moneyflow(
                 md_net=md_net, md_pct=_pct("buy_lg_amount_rate"),
                 sm_net=sm_net, sm_pct=_pct("buy_md_amount_rate"),
                 xs_net=xs_net, xs_pct=_pct("buy_sm_amount_rate"),
+                d5_main_net=d5_main_net, d5_main_pct=_pct("net_amount_rate"),
+                d10_main_net=d10_main_net, d10_main_pct=_pct("net_amount_rate"),
                 capital_efficiency=capital_efficiency,
                 source="tushare",
                 updated_at=datetime.now(),

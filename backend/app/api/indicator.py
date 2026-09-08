@@ -2467,21 +2467,27 @@ async def check_entry_filters(req: EntryCheckRequest):
             macd_status = "持平"
         macd_dif_converging = _check_macd_dif_converging(indicators_data)
 
-    # 资金流向数据
+    # 资金流向数据（C方案 2026-09-08: 东财实时优先, Tushare日频降级 source=tushare;
+    # 日频时"今日"实为最近交易日——today 口径归零, 只让 d5/d10 日频累计参与软veto, 避免误判"今日出货"）
     capital_efficiency = None
     today_main_net = 0.0
     d5_main_net = 0.0
     d10_main_net = 0.0
     xs_net = 0.0
     mf_data_available = False
+    mf_realtime = False
     if moneyflow_data:
         try:
+            mf_realtime = str(getattr(moneyflow_data, "source", "") or "") == "eastmoney_stock_get"
             today_main_net = getattr(moneyflow_data, "main_net", 0) or 0
             d5_main_net = getattr(moneyflow_data, "d5_main_net", 0) or 0
             d10_main_net = getattr(moneyflow_data, "d10_main_net", 0) or 0
             xs_net = getattr(moneyflow_data, "xs_net", 0) or 0
             capital_efficiency = getattr(moneyflow_data, "capital_efficiency", None)
             mf_data_available = True
+            if not mf_realtime:
+                today_main_net = 0.0   # 日频数据无"今日盘中"概念, 防误判今日出货/拐头
+                xs_net = 0.0
         except Exception:
             pass
 
@@ -2721,8 +2727,8 @@ async def check_entry_filters(req: EntryCheckRequest):
                 layer2_action = "仅试探仓≤5%"
                 downgrade_multiplier = min(downgrade_multiplier, 0.5)
                 l2_oversold_exempt = True
-                # 主力拐头确认：今日主力转正 → 放宽至≤7%（仍非全仓）
-                if today_main_net > 0:
+                # 主力拐头确认：今日主力转正 → 放宽至≤7%（仍非全仓；仅实时口径有效）
+                if mf_realtime and today_main_net > 0:
                     downgrade_multiplier = min(downgrade_multiplier, 0.7)
                     capital_details.append(
                         f"  ✅ 今日主力({today_main_net/1e8:.2f}亿)转正，拐头确认，放宽至≤7%试探"
@@ -2743,8 +2749,8 @@ async def check_entry_filters(req: EntryCheckRequest):
         elif layer2_passed and d5_main_net > 0 and d10_main_net > 0:
             capital_details.append(f"⚠️ 5日主力({d5_main_net/1e8:.2f}亿) ≤ 10日({d10_main_net/1e8:.2f}亿) → 减速中")
 
-        # 2c. 今日出货检查
-        if layer2_passed and today_main_net < 0:
+        # 2c. 今日出货检查（仅实时口径；Tushare日频降级时跳过——无今日盘中数据，防误判）
+        if layer2_passed and mf_realtime and today_main_net < 0:
             if l2_disabled:
                 capital_details.append(f"⚠️(仅记录) 今日主力({today_main_net/1e8:.2f}亿) < 0 — L2 已关闭，不降仓")
             else:
@@ -2753,6 +2759,8 @@ async def check_entry_filters(req: EntryCheckRequest):
                 layer2_grade = "⚠️降级"
                 layer2_downgrade = "今日主力出货"
                 layer2_action = "降仓50%或放观察"
+        elif layer2_passed and mf_data_available and not mf_realtime:
+            capital_details.append("ℹ️ 资金=日频(截至最近交易日)，今日盘中主力未覆盖 → 跳过今日出货检查(仅用5/10日累计)")
 
         # 2d. 10日主力排除（双条件+豁免）
         if layer2_passed and d10_main_net < -500000000:
