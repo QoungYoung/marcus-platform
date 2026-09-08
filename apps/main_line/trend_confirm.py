@@ -205,15 +205,29 @@ def main():
                   else 'suspect' if cnt['suspect'] > 0 and total == 0 else
                   'suspect' if cnt['suspect'] > 0 and cnt['confirmed'] == 0 else
                   'not_confirmed' if total > 0 else 'insufficient')
-        themes_out.append({'theme': th, 'date_to': date_to,
+        _gate_cfg = None
+        try:
+            _gp = json.load(open(os.path.join(DATA, 'trend_gate_params.json'), encoding='utf-8'))
+            _gate_cfg = (_gp.get('chosen') or {}).get('mode'), (_gp.get('chosen') or {}).get('t')
+        except Exception:
+            pass
+        gate = None
+        if _gate_cfg and _gate_cfg[0] and total > 0:
+            m, t = _gate_cfg
+            b = ratio >= t
+            a = judgeA.get('stage') == 'confirmed'
+            gate = {'A_only': a, 'B_only': b, 'A_or_B': a or b, 'A_and_B': a and b}.get(m)
+        themes_out.append({'theme': th, 'date_to': date_to, 'gate': gate, 'gate_rule': ((_gate_cfg[0] or '') + '_t' + str(_gate_cfg[1])) if _gate_cfg and _gate_cfg[0] else None,
                            'track_a': {'stage': judgeA['stage'], 'reason': judgeA.get('reason', []),
                                        'new_high': judgeA.get('new_high'), 'pullback': judgeA.get('pullback'),
                                        'no_break': judgeA.get('no_break'), 'l1': judgeA.get('l1')},
                            'track_b': {'confirmed_n': cnt['confirmed'], 'judgeable': total, 'total': len(per),
                                        'ratio': ratio, 'stage': stageB, 'counts': cnt},
                            'agreement': judgeA['stage'] == stageB})
-        print('%-12s A=%-10s B=%s(%d/%d) agree=%s' % (
-            th, judgeA['stage'], stageB, cnt['confirmed'], len(per), judgeA['stage'] == stageB), flush=True)
+        gt = 'PASS' if gate else 'FAIL'
+        gr = ('[' + (_gate_cfg[0] if _gate_cfg and _gate_cfg[0] else '?') + ' t=' + str((_gate_cfg or (None, None))[1]) + ']') if gate is not None else ''
+        print('%-12s A=%-9s B=%s(%d/%d) GATE=%-4s %s' % (
+            th, judgeA['stage'], stageB, cnt['confirmed'], total, (gt if gate is not None else 'n/a'), gr), flush=True)
     out = {'generator': 'trend_confirm_v0', 'date_to': date_to,
            'data_lag_notice': 'concept_hist 截至 ' + date_to + '(若晚于交易日需先更新)',
            'cfg': cfg, 'themes': themes_out}
