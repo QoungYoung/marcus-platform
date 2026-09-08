@@ -81,7 +81,7 @@ def main():
             r['heat_score'], ('PASS' if r['gate'] else 'FAIL') if r['gate'] is not None else 'n/a',
             r['gate_ratio'] or 0, r['judgeable'] or 0, r['verdict']), flush=True)
     out = {'date': date8, 'gate_rule': 'B_only>=0.35(F1 0.902 标定)',
-           'heat_note': 'v0 fusion proxy 0.3fund+0.2rel+0.5conc, 待step2资金未跑升级',
+           'heat_note': ('外部热度 json (heat_v2)' if fusion_p else 'v0 fusion proxy 0.3fund+0.2rel+0.5conc, 待step2资金未跑升级'),
            'topn': topn, 'rows': rows}
     p = os.path.join(DATA, f'mainline_gate_{date8}.json')
     json.dump(out, open(p, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
