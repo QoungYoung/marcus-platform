@@ -177,15 +177,25 @@ def theme_index(hist_names, theme_concepts):
 
 def main():
     args = sys.argv[1:]
-    params_p = None; json_p = None; hist_p = None
+    params_p = None; json_p = None; hist_p = None; as_of = None
     for i, a in enumerate(args):
         if a == '--params' and i + 1 < len(args): params_p = args[i + 1]
         if a == '--json' and i + 1 < len(args): json_p = args[i + 1]
         if a == '--hist' and i + 1 < len(args): hist_p = args[i + 1]
+        if a == '--as-of' and i + 1 < len(args): as_of = args[i + 1]
     cfg = _load_params(dict(TREND_CFG), params_p)
     hist_p = hist_p or os.path.join(DATA, 'concept_hist.json')
     from fusion_mainline import THEME_CONCEPTS
     by_name = load_by_name(hist_p)
+    if as_of:
+        cut = {}
+        for k, v in by_name.items():
+            ds = v.get('dates') or []
+            n = sum(1 for d in ds if d <= as_of)
+            if n >= 1:
+                cut[k] = {'dates': ds[:n], 'close': (v.get('close') or [])[:n]}
+        by_name = cut
+        print('--as-of', as_of, 'concepts', len(by_name), flush=True)
     themes_out = []
     date_to = max((v.get('dates') or [''])[-1] for v in by_name.values() if v.get('dates'))
     for th, cons in THEME_CONCEPTS.items():
