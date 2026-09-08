@@ -5,6 +5,7 @@
 """
 import os, sys, json
 os.environ.setdefault("SWITCH_AUTO_EXEC", "1")   # 生产对接(2026-09-07 用户确认): 8:18 switch 布腿执行; 显式 env=0 可回退 DRY
+sys.path.insert(0, "/app")          # import app 需父级(否则 No module named 'app')
 sys.path.insert(0, "/app/app")
 sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "/app/data")
