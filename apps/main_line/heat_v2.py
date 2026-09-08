@@ -92,22 +92,39 @@ def main():
         fac[th]['fund5'] = float(np.mean(f5)) if f5 else 0.0
     # ---- percentile 与默认权重排名 ----
     themes = [th for th in MAIN_THEMES if th in fac and th in THEME_CONCEPTS]
+    # ---- ETF 份额(份额加权弱佐证)与两融环境(margin) ----
+    etf20 = {}
+    env = {}
+    try:
+        ef = json.load(open(os.path.join(DATA, 'etf_share_flow.json'), encoding='utf-8'))
+        for t in ef.get('themes', []):
+            etf20[t['theme']] = t.get('d20')
+        env = ef.get('margin') or {}
+    except Exception:
+        pass
     for k in ('mf5', 'mf_accel', 'rel', 'fund5'):
         rk = percentile_rank([fac[th].get(k, -1e18) for th in themes])
         for i, th in enumerate(themes): fac[th][k + '_p'] = rk[i]
+    etf_vals = [etf20.get(th) if etf20.get(th) is not None else -1e18 for th in themes]
+    etf_p = percentile_rank(etf_vals)
+    for i, th in enumerate(themes):
+        fac[th]['etf_p'] = etf_p[i]; fac[th]['etf20'] = etf20.get(th)
     def score(th, w):
-        return w['mf5'] * fac[th].get('mf5_p', 0.5) + w['rel'] * fac[th].get('rel_p', 0.5) + w['mf_accel'] * fac[th].get('mf_accel_p', 0.5)
-    w0 = {'mf5': 0.4, 'rel': 0.3, 'mf_accel': 0.3}
+        return (w['mf5'] * fac[th].get('mf5_p', 0.5) + w['rel'] * fac[th].get('rel_p', 0.5)
+                + w['mf_accel'] * fac[th].get('mf_accel_p', 0.5) + w.get('etf', 0.0) * fac[th].get('etf_p', 0.5))
+    w0 = {'mf5': 0.35, 'rel': 0.25, 'mf_accel': 0.2, 'etf': 0.2}
     ranked = sorted(themes, key=lambda th: -score(th, w0))
-    print('=== heat_v2 默认权重', w0, 'date', date8, '===', flush=True)
+    print('=== heat_v2(v3: +ETF份额加权+两融环境) 权重', w0, 'date', date8, '===', flush=True)
+    print('margin(两融) 20d%%:', env.get('d20_pct'), flush=True)
     for th in ranked:
         mf5_raw = fac[th].get('mf5', 0.0)
-        print('%-12s mf5p=%.2f relp=%.2f accp=%.2f score=%.3f | 主力5日净额%+.3f亿 rel20=%.1f%%' % (
-            th, fac[th].get('mf5_p', 0.5), fac[th].get('rel_p', 0.5), fac[th].get('mf_accel_p', 0.5), score(th, w0),
-            mf5_raw / 1e8, fac[th].get('rel', 0.0) * 100), flush=True)
-    out = {'date': date8, 'weights': w0, 'ranked': [{'theme': th, 'rank': i + 1, 'score': round(score(th, w0), 3),
-             'factors': {k: fac[th].get(k) for k in ('mf5', 'mf5_p', 'rel', 'rel_p', 'mf_accel', 'mf_accel_p')}}
-            for i, th in enumerate(ranked)], 'raw': fac}
+        print('%-12s mf5p=%.2f relp=%.2f accp=%.2f etfp=%.2f score=%.3f | 主力5日%+.3f亿 rel20=%.1f%%' % (
+            th, fac[th].get('mf5_p', 0.5), fac[th].get('rel_p', 0.5), fac[th].get('mf_accel_p', 0.5),
+            fac[th].get('etf_p', 0.5), score(th, w0), mf5_raw / 1e8, fac[th].get('rel', 0.0) * 100), flush=True)
+    out = {'date': date8, 'weights': w0, 'margin': env,
+           'ranked': [{'theme': th, 'rank': i + 1, 'score': round(score(th, w0), 3),
+              'factors': {k: fac[th].get(k) for k in ('mf5', 'mf5_p', 'rel', 'rel_p', 'mf_accel', 'mf_accel_p', 'etf_p', 'etf20')}}
+             for i, th in enumerate(ranked)], 'raw': fac}
     json.dump(out, open(os.path.join(DATA, 'heat_v2_' + date8 + '.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     print('WROTE /app/data/heat_v2_%s.json' % date8, flush=True)
     # ---- 标定 ----
