@@ -86,6 +86,12 @@ def main():
     p = os.path.join(DATA, f'mainline_gate_{date8}.json')
     json.dump(out, open(p, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     print('WROTE', p)
+    try:
+        from mainline_confirm_state import ensure_history
+        n = ensure_history(rows, date8)
+        if n: print('CONFIRM_HISTORY', date8, 'themes', n, flush=True)
+    except Exception as e:
+        print('confirm_history err', str(e)[:80])
 
 if __name__ == '__main__':
     main()
