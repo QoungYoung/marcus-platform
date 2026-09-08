@@ -89,6 +89,7 @@ class TMonitor:
         # （worker 常在非交易时段重启；这里无条件幂等补一次，交易日切换再补一次）
         try:
             self._roll_wolf_legs(datetime.now().strftime("%Y%m%d"))
+            self._arm_stock_exit_legs(datetime.now().strftime("%Y%m%d"))
         except Exception as e:
             print(f"[TMonitor] 启动持续腿结转异常: {e}")
         while not self._stop.is_set():
@@ -102,6 +103,7 @@ class TMonitor:
                         # _daily_maintain 停用后也必须让 249/250/252/253/254 每个交易日可用
                         try:
                             self._roll_wolf_legs(today_d)
+                            self._arm_stock_exit_legs(today_d)
                         except Exception as e:
                             print(f"[TMonitor] 交易日持续腿结转异常: {e}")
                         if T_MONITOR_AUTO_MAINTAIN:   # 2026-09-02: 默认停自动维护(只留狼大做T条件)
@@ -495,6 +497,51 @@ class TMonitor:
             self._status["wolf_legs_rolled"] = f"{today}:{rolled}"
         return rolled
 
+    def _arm_stock_exit_legs(self, today: str) -> int:
+        """A方案(2026-09-08 用户拍板): 盘前/启动时对 stock 持仓自动布 3 条持续卖腿——
+        黄线离场(custom_vwap_sell) / T出前高(high_sell, m5.t_sell) / 回撤跟踪(custom_trail_sell, 振幅自适应移动止盈)。
+        幂等: 当日已有同键(symbol+trigger_kind)行(任意状态含manual/AI/auto)跳过, 不覆盖人工护栏。
+        卖量仍由 _round 按 sellable−底仓floor 推导(底仓保护, 无T仓空间则自然跳过)。"""
+        armed = 0
+        try:
+            import psycopg2 as _pg2
+            _conn = _pg2.connect(os.getenv("DATABASE_URL",
+                                           "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+            _cur = _conn.cursor()
+            _cur.execute("SELECT DISTINCT symbol FROM paper_positions WHERE account_id='stock' AND volume > 0")
+            syms = [str(r[0]) for r in _cur.fetchall()]
+            _cur.close(); _conn.close()
+        except Exception as e:
+            print(f"[TMonitor] stock持仓读取失败: {e}")
+            return 0
+        if not syms:
+            return 0
+        templates = [
+            ("custom_vwap_sell", {"and": [{"op": "==", "field": "quote.vwap_break", "value": True}]}),
+            ("high_sell", {"and": [{"op": "==", "field": "minute.m5.t_sell", "value": True}]}),
+            ("custom_trail_sell", {"and": [{"op": "==", "field": "quote.trail_break", "value": True}]}),
+        ]
+        keys_today = {(str(k.get("symbol")), str(k.get("trigger_kind")))
+                       for k in t_db.list_condition_keys(T_MONITOR_ACCOUNT, today)}
+        for sym in syms:
+            for kind, expr in templates:
+                if (sym, kind) in keys_today:
+                    continue
+                try:
+                    cid = t_db.upsert_condition({
+                        "account_id": T_MONITOR_ACCOUNT, "symbol": sym,
+                        "trigger_kind": kind, "direction": "sell",
+                        "trade_date": today, "status": "active", "armed": 1,
+                        "publisher": "auto_exit", "expression": expr,
+                    })
+                    if cid:
+                        armed += 1
+                except Exception as e:
+                    print(f"[TMonitor] auto_exit 布腿失败 {sym} {kind}: {e}")
+        if armed:
+            print(f"[TMonitor] stock持仓自动布卖出腿 {armed} 条 → {today}")
+        return armed
+
     def _daily_maintain(self) -> dict:
         """每日一次（每交易日首次轮询前）：归档昨日条件 + 为缺条件的持仓补生成当日双条件。
 
@@ -603,9 +650,14 @@ class TMonitor:
             ledger = {}
 
         # 4) 逐条件判断（表达式优先；无表达式回退默认复合确认逻辑）
+        # 2026-09-08 防双卖: 同轮同一标的只允许成交一条卖腿(trail/vwap/high 同时命中时互斥,
+        # 否则各自按轮初旧账本各卖一次把底仓卖穿, 512480 14:14 事故)
+        self._sold_this_round = set()
         written = 0
         for cond in conditions:
             symbol = cond["symbol"]
+            if str(cond.get("direction") or "") == "sell" and symbol in self._sold_this_round:
+                continue
             quote = quotes.get(_normalize_symbol(symbol))
             if not quote or not quote.get("current"):
                 continue
@@ -1059,8 +1111,9 @@ class TMonitor:
             # 由 _round 5 分钟冷却防刷；使"买腿回补 T仓 → 卖腿持续监控 T出/黄线"的
             # 做T循环闭环（狼大：底仓不动、T仓高抛低吸反复做）。
             # 其他做T条件仍消费式（迭代#56：触发即销毁，由 AI 重建移动基准）。
-            # 2026-09-08: 手动护栏卖腿(价位/黄线)命中即一次性消费(不持续重复卖)
-            _one_shot_guard = str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell")
+            # 2026-09-08: manual_guard 护栏卖腿命中即一次性消费；auto_exit(自动离场)持续监控
+            _one_shot_guard = (str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell")
+                               and str(cond.get("publisher") or "") == "manual_guard")
             if _is_wolf_t_condition(cond) and not _one_shot_guard:
                 t_db.update_condition_state(
                     cond.get("id"),
@@ -1237,6 +1290,9 @@ class TMonitor:
                                              condition_id=cond.get("id"),
                                              account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
                         exec_ok = gw.get("status") == "success"
+                        if exec_ok and side == "sell":
+                            # 同轮互斥: 该标的本轮已有卖腿成交, 其余离场腿本轮不再执行
+                            self._sold_this_round.add(symbol)
                         print(f"[TMonitor] 自动执行 {symbol} {side} {volume}股@{current}: "
                               f"{gw.get('status')} {str(gw.get('reason') or '')[:40]}")
                         # 执行结果写入触发事件（供审计/复盘）
@@ -1394,9 +1450,9 @@ def _is_wolf_t_condition(cond: Dict[str, Any]) -> bool:
         return False
     import json as _json
     s = _json.dumps(expr, ensure_ascii=False)
-    # 2026-09-08: 手动护栏卖腿(价位/黄线)也纳入评估——399 custom_level_sell(current<=X)
-    # 此前因不含WOLF_T_FIELDS字段被_round整轮跳过, 跌到155.2不触发
-    if str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell"):
+    # 2026-09-08: 手动护栏/自动离场卖腿(价位/黄线/回撤跟踪)纳入评估——此前因不含
+    # WOLF_T_FIELDS字段被_round整轮跳过(155.2/588170黄线都不触发)
+    if str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell", "custom_trail_sell"):
         return True
     return any(f in s for f in WOLF_T_FIELDS)
 
