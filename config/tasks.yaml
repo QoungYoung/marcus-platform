@@ -850,3 +850,23 @@ tasks:
     on_success: false
     pi_analysis: false
 
+- id: chain_map_daily
+  name: '产业链图每日生成 (chain_map v3: mv+主营核实龙头 + AI裁决边界股)'
+  description: 盘后18:15 生成 data/chain_map_{date}.json(规则层mv+主营核实top3 -> rejected边界股DeepSeek裁决回补 source=ai -> kw自举累积 chain_kw_suggestions.json)
+  enabled: true
+  schedule:
+    type: cron
+    expr: 15 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/chain_map.py
+    args: []
+  output:
+    append: true
+    log_file: logs/chain_map_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
