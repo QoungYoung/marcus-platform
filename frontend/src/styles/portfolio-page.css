@@ -1613,3 +1613,110 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+
+/* ═══════════════════════════════════════════════════════
+   情报中心 · 今日 buy_new 低吸布腿监控
+   ═══════════════════════════════════════════════════════ */
+.cp-intel-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.cp-intel-metric {
+  text-align: center;
+  padding: 5px 2px;
+  background: rgba(47, 124, 211, 0.04);
+  border: 1px solid var(--cc-line-soft);
+  border-radius: 4px;
+}
+
+.cp-intel-metric-val {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--cc-text);
+}
+
+.cp-intel-metric-val.hot { color: var(--cc-red); }
+
+.cp-intel-metric-label { font-size: 9px; color: var(--cc-faint); }
+
+.cp-leg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2.5px 0;
+  font-size: 10px;
+  border-bottom: 1px dashed var(--cc-line-soft);
+}
+
+.cp-leg-row:last-child { border-bottom: none; }
+
+.cp-leg-code {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--cc-text);
+  flex: none;
+  width: 46px;
+}
+
+.cp-leg-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--cc-text-dim);
+}
+
+.cp-leg-price {
+  font-family: var(--font-display);
+  font-size: 9px;
+  color: var(--cc-faint);
+  flex: none;
+}
+
+.cp-leg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-display);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  line-height: 1.6;
+  border: 1px solid;
+}
+
+.cp-leg-chip.ready {
+  background: rgba(47, 124, 211, 0.06);
+  color: var(--cc-blue);
+  border-color: rgba(47, 124, 211, 0.25);
+}
+
+.cp-leg-chip.fired {
+  background: rgba(39, 160, 107, 0.12);
+  color: var(--cc-green);
+  border-color: rgba(39, 160, 107, 0.35);
+  box-shadow: 0 0 6px rgba(39, 160, 107, 0.25);
+}
+
+.cp-leg-chip.gated {
+  background: rgba(201, 138, 18, 0.08);
+  color: var(--cc-amber);
+  border-color: rgba(201, 138, 18, 0.25);
+}
+
+.cp-leg-chip.muted {
+  background: transparent;
+  color: var(--cc-faint);
+  border-color: var(--cc-line-soft);
+}

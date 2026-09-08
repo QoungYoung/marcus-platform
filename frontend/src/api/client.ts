@@ -172,6 +172,15 @@ export const goldenPitApi = {
     api.get('/golden-pit/tech-status', { params: as_of ? { as_of } : {} }),
 }
 
+// T-system (布腿/触发/账户) APIs
+export const tApi = {
+  listConditions: (params?: { symbol?: string; trade_date?: string }) =>
+    api.get('/t/conditions', { params }),
+  listTriggers: (params?: { limit?: number; status?: string }) =>
+    api.get('/t/triggers', { params }),
+  getOverview: () => api.get('/t/overview'),
+}
+
 // Health check
 export const healthApi = {
   check: () => api.get('/health'),

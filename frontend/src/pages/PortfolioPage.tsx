@@ -6,13 +6,13 @@ import {
   BarChart, Bar, Cell,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi, tApi } from '../api/client';
 import { useAccountStore } from '../store/accountStore';
 import {
   computeSharpeRatio, computeMonthlyReturns, computeQuarterlyReturns,
-  computeBenchmarkDelta, aggregatePnlContributions,
+  computeBenchmarkDelta,
 } from './portfolioMetrics';
-import type { PnlContribution, PeriodReturn } from './portfolioMetrics';
+import type { PeriodReturn } from './portfolioMetrics';
 import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 
@@ -67,6 +67,28 @@ interface StopLossStatus {
   today_stops_count: number; is_trading_time: boolean;
   is_morning_volatility: boolean; position_count: number;
   triggered_count: number; positions: StopDistance[];
+}
+
+// ── 情报中心 · 今日 buy_new 低吸布腿（switch 253/254）──
+interface TLegCondition {
+  id: number; account_id?: string; symbol: string; trade_date?: string;
+  trigger_kind?: string; direction?: string; armed?: number; status?: string;
+  trigger_count_today?: number; last_triggered_at?: string | null;
+  regime_gate?: string; publisher?: string; expression_summary?: string;
+}
+interface TLegChip { key: '253' | '254'; armed: boolean; active: boolean; fired: number; at: string | null; gateOk: boolean; summary: string; }
+interface TLegRow { symbol: string; code: string; name: string; price: number | null; chips: TLegChip[]; }
+const SWITCH_BUY_KINDS = new Set(['custom_prevlow', 'custom_m5dump']);
+function shortSymbol(s: string): string { return s.replace(/^(SH|SZ|BJ)/, ''); }
+function legKey(kind?: string): '253' | '254' | null {
+  if (kind === 'custom_m5dump') return '253';
+  if (kind === 'custom_prevlow') return '254';
+  return null;
+}
+function todayCompact(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
 }
 
 type SortKey = 'market_value' | 'floating_pnl' | 'floating_pnl_pct' | 'weight';
@@ -133,7 +155,6 @@ export default function PortfolioPage() {
   const [modalData, setModalData] = useState<PnlBreakdownItem | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [stopLoss, setStopLoss] = useState<StopLossStatus | null>(null);
-  const [breakdowns, setBreakdowns] = useState<PnlBreakdownItem[]>([]);
 
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingTickers, setLoadingTickers] = useState(true);
@@ -286,12 +307,11 @@ export default function PortfolioPage() {
     loadAccounts();
   }, [loadAccounts]);
 
-  // ── 切换账户后重载 summary/positions/equity/trades/breakdowns ──
+  // ── 切换账户后重载 summary/positions/equity/trades ──
   useEffect(() => {
     refreshSummary(activeAccount);
     refreshEquity(activeAccount);
     refreshTrades(activeAccount);
-    refreshBreakdowns(activeAccount);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAccount]);
 
@@ -302,20 +322,6 @@ export default function PortfolioPage() {
     refreshGoldenPit();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const [loadingBreakdowns, setLoadingBreakdowns] = useState(true);
-
-  // ── 30日盈亏明细（贡献排名用）──
-  const refreshBreakdowns = useCallback(async (acct: string = 'stock') => {
-    setLoadingBreakdowns(true);
-    try {
-      const res = await portfolioApi.getDailyPnlBreakdown(30, acct);
-      if (Array.isArray(res.data)) setBreakdowns(res.data);
-    } catch { /* 静默失败 */ }
-    finally { setLoadingBreakdowns(false); }
-  }, []);
-
-  useEffect(() => { refreshBreakdowns(); }, [refreshBreakdowns]);
 
   // ── 资金流数据（持仓股）──
   const refreshMoneyflow = useCallback(async () => {
@@ -350,8 +356,63 @@ export default function PortfolioPage() {
     return { inflow, outflow, total: symbols.length };
   }, [moneyflowMap]);
 
-  // ── 衍生：行业集中度 ──
-  const sectorData = summary?.sector_concentration ?? null;
+  // ── 情报中心 · 今日 buy_new 低吸布腿（switch 253/254）──
+  const [intelLegs, setIntelLegs] = useState<TLegRow[]>([]);
+  const [loadingIntel, setLoadingIntel] = useState(true);
+
+  const refreshIntel = useCallback(async () => {
+    setLoadingIntel(true);
+    try {
+      const res = await tApi.listConditions({ trade_date: todayCompact() });
+      const conds = ((res.data as { conditions?: TLegCondition[] })?.conditions) ?? [];
+      const buys = conds.filter(c =>
+        c.publisher === 'switch' &&
+        c.account_id === 'stock' &&
+        c.direction === 'buy' &&
+        SWITCH_BUY_KINDS.has(c.trigger_kind || '')
+      );
+      const syms = [...new Set(buys.map(b => b.symbol))].sort();
+      const qs = await Promise.allSettled(syms.map(s => marketApi.getQuote(s)));
+      const qm: Record<string, { name: string; price: number | null }> = {};
+      syms.forEach((s, i) => {
+        const rr = qs[i];
+        if (rr.status === 'fulfilled' && rr.value?.data) {
+          const d = rr.value.data;
+          const name = cleanStockName(d?.name, d?.symbol || s);
+          const price = typeof d?.current === 'number' ? d.current : typeof d?.price === 'number' ? d.price : null;
+          qm[s] = { name, price };
+        } else {
+          qm[s] = { name: '', price: null };
+        }
+      });
+      const rows: TLegRow[] = syms.map(s => {
+        const legs = buys.filter(b => b.symbol === s);
+        const chips: TLegChip[] = [];
+        for (const k of ['253', '254'] as const) {
+          const leg = legs.find(l => legKey(l.trigger_kind) === k);
+          if (!leg) continue;
+          chips.push({
+            key: k,
+            armed: !!leg.armed,
+            active: leg.status === 'active',
+            fired: leg.trigger_count_today || 0,
+            at: leg.last_triggered_at || null,
+            gateOk: !leg.regime_gate || String(leg.regime_gate).toUpperCase().includes('ALLOW'),
+            summary: leg.expression_summary || '',
+          });
+        }
+        return { symbol: s, code: shortSymbol(s), name: qm[s]?.name || '', price: qm[s]?.price ?? null, chips };
+      });
+      setIntelLegs(rows);
+    } catch (e) {
+      console.error('[情报中心] 布腿监控加载失败', e);
+      setIntelLegs([]);
+    } finally {
+      setLoadingIntel(false);
+    }
+  }, []);
+
+  useEffect(() => { refreshIntel(); }, [refreshIntel]);
 
   // 启动/停止止损监控
   const handleToggleSL = useCallback(async (e: React.MouseEvent) => {
@@ -564,30 +625,11 @@ export default function PortfolioPage() {
   const sharpeRatio = useMemo(() => computeSharpeRatio(realEquity), [realEquity]);
   const monthlyReturns = useMemo(() => computeMonthlyReturns(realEquity, 6), [realEquity]);
   const quarterlyReturns = useMemo(() => computeQuarterlyReturns(realEquity, 4), [realEquity]);
-  const pnlContributions = useMemo(() => aggregatePnlContributions(breakdowns), [breakdowns]);
-  // ── 贡献排序 ──
-  type ContribSortKey = 'symbol' | 'name' | 'totalPnl';
-  const [contribSortKey, setContribSortKey] = useState<ContribSortKey>('totalPnl');
-  const [contribSortDir, setContribSortDir] = useState<'desc' | 'asc'>('desc');
-  const sortedContributions = useMemo(() => {
-    const arr = [...pnlContributions];
-    arr.sort((a, b) => {
-      const va = a[contribSortKey];
-      const vb = b[contribSortKey];
-      if (typeof va === 'string' && typeof vb === 'string') return contribSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-      return contribSortDir === 'asc' ? (va as number) - (vb as number) : (vb as number) - (va as number);
-    });
-    return arr;
-  }, [pnlContributions, contribSortKey, contribSortDir]);
-  const [contributionPage, setContributionPage] = useState(1);
-  const CONTRIB_PAGE_SIZE = 10;
-  const contributionPageCount = Math.max(1, Math.ceil(sortedContributions.length / CONTRIB_PAGE_SIZE));
-  const contributionPageItems = useMemo(() => {
-    const start = (contributionPage - 1) * CONTRIB_PAGE_SIZE;
-    return sortedContributions.slice(start, start + CONTRIB_PAGE_SIZE);
-  }, [sortedContributions, contributionPage]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setContributionPage(1); }, [pnlContributions.length]);
+  // ── 情报中心派生：已触发腿数 ──
+  const firedLegCount = useMemo(
+    () => intelLegs.reduce((n, r) => n + r.chips.filter(c => c.fired > 0).length, 0),
+    [intelLegs]
+  );
 
   // 沪深300 基准对比
   const hs300 = useMemo(() => {
@@ -986,68 +1028,61 @@ export default function PortfolioPage() {
               </div>
             </div>
 
-            {/* 情报中心 */}
+            {/* 情报中心 · 今日 buy_new 低吸布腿监控 */}
             <div className="cp-bottom-panel">
               <PanelHead title="情报中心" en="INTEL CENTER">
-                <button className="cp-icon-btn" onClick={() => refreshBreakdowns(activeAccount)} title="刷新">
-                  <i className={`fas fa-sync-alt ${loadingBreakdowns ? 'fa-spin' : ''}`} />
+                <button className="cp-icon-btn" onClick={() => refreshIntel()} title="刷新">
+                  <i className={`fas fa-sync-alt ${loadingIntel ? 'fa-spin' : ''}`} />
                 </button>
               </PanelHead>
               <div className="cp-bottom-body">
-                {loadingBreakdowns ? <Skel w="100%" h={80} /> : (
+                {loadingIntel ? (
+                  <Skel w="100%" h={90} />
+                ) : intelLegs.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 16, color: 'var(--cc-text-dim)', fontSize: 10 }}>
+                    <i className="fas fa-bullseye" style={{ display: 'block', fontSize: 16, marginBottom: 4 }} />
+                    今日暂无低吸布腿（253/254）
+                  </div>
+                ) : (
                   <>
-                    <div className="cp-sub-head">个股盈亏贡献 (30日)</div>
-                    {contributionPageItems.slice(0, 5).map((item, i) => (
-                      <div key={item.symbol} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: 10 }}>
-                        <span className="cp-intel-rank">{(contributionPage - 1) * CONTRIB_PAGE_SIZE + i + 1}</span>
-                        <span className="cp-intel-symbol">{item.symbol}</span>
-                        <span className="cp-intel-name">{item.name || item.symbol}</span>
-                        <span className={`cp-intel-pnl ${item.totalPnl >= 0 ? 'up' : 'down'}`}>
-                          {item.totalPnl >= 0 ? '+' : ''}¥{item.totalPnl.toLocaleString()}
-                        </span>
+                    <div className="cp-intel-metrics">
+                      <div className="cp-intel-metric">
+                        <div className="cp-intel-metric-val">{intelLegs.length}</div>
+                        <div className="cp-intel-metric-label">候选标的</div>
+                      </div>
+                      <div className="cp-intel-metric">
+                        <div className="cp-intel-metric-val">{intelLegs.reduce((n, r) => n + r.chips.length, 0)}</div>
+                        <div className="cp-intel-metric-label">低吸买腿</div>
+                      </div>
+                      <div className="cp-intel-metric">
+                        <div className={`cp-intel-metric-val ${firedLegCount > 0 ? 'hot' : ''}`}>{firedLegCount}</div>
+                        <div className="cp-intel-metric-label">已触发</div>
+                      </div>
+                      <div className="cp-intel-metric">
+                        <div className="cp-intel-metric-val">{intelLegs.reduce((n, r) => n + r.chips.filter(c => c.fired === 0).length, 0)}</div>
+                        <div className="cp-intel-metric-label">待触发</div>
+                      </div>
+                    </div>
+                    <div className="cp-sub-head">buy_new 低吸 · 253 大盘急杀 / 254 触前低</div>
+                    {intelLegs.map(row => (
+                      <div key={row.symbol} className="cp-leg-row">
+                        <span className="cp-leg-code">{row.code}</span>
+                        <span className="cp-leg-name" title={row.symbol}>{row.name || row.code}</span>
+                        <span className="cp-leg-price">{row.price != null ? row.price.toFixed(2) : '—'}</span>
+                        {row.chips.map(chip => {
+                          const fired = chip.fired > 0;
+                          const cls = !chip.active || !chip.armed ? 'muted' : fired ? 'fired' : chip.gateOk ? 'ready' : 'gated';
+                          const label = fired && chip.fired > 1 ? `${chip.key}×${chip.fired}` : chip.key;
+                          const state = fired ? `已触发 ${chip.at || ''}` : !chip.armed || !chip.active ? '已停用/过期' : chip.gateOk ? '布防中' : '门控拦截';
+                          return (
+                            <span key={chip.key} className={`cp-leg-chip ${cls}`}
+                              title={`${chip.key}低吸 · ${state}${chip.summary ? '｜' + chip.summary : ''}`}>
+                              {label}
+                            </span>
+                          );
+                        })}
                       </div>
                     ))}
-                    {contributionPageCount > 1 && (
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 4, fontSize: 10 }}>
-                        <button className="cp-icon-btn" style={{ width: 20, height: 20, fontSize: 8 }}
-                          disabled={contributionPage <= 1} onClick={() => setContributionPage(p => p - 1)}>
-                          <i className="fas fa-chevron-left" />
-                        </button>
-                        <span style={{ color: 'var(--cc-text-dim)', fontFamily: 'var(--font-display)' }}>{contributionPage}/{contributionPageCount}</span>
-                        <button className="cp-icon-btn" style={{ width: 20, height: 20, fontSize: 8 }}
-                          disabled={contributionPage >= contributionPageCount} onClick={() => setContributionPage(p => p + 1)}>
-                          <i className="fas fa-chevron-right" />
-                        </button>
-                      </div>
-                    )}
-                    <div className="cp-sub-head" style={{ marginTop: 8 }}>行业集中度</div>
-                    {sectorData && sectorData.sectors ? (
-                      <>
-                        {sectorData.sectors.slice(0, 4).map(s => (
-                          <div key={s.name} className="cp-sector-row">
-                            <span className="cp-sector-name">{s.name}</span>
-                            <div className="cp-sector-bar-track">
-                              <div className="cp-sector-bar-fill" style={{
-                                width: `${Math.min(s.weight_pct, 100)}%`,
-                                background: s.weight_pct > 50 ? 'var(--cc-red)' : s.weight_pct > 30 ? 'var(--cc-amber)' : 'var(--cc-green)',
-                              }} />
-                            </div>
-                            <span className="cp-sector-pct">{s.weight_pct}%</span>
-                          </div>
-                        ))}
-                        {sectorData.concentration_level && (
-                          <div style={{ fontSize: 9, color: 'var(--cc-text-dim)', marginTop: 2 }}>
-                            集中度: <span style={{
-                              color: sectorData.concentration_level === '集中' ? 'var(--cc-red)' : sectorData.concentration_level === '适中' ? 'var(--cc-amber)' : 'var(--cc-green)',
-                              fontWeight: 600,
-                            }}>{sectorData.concentration_level}</span>
-                            {sectorData.max_sector && ` · 最大: ${sectorData.max_sector.name} (${sectorData.max_sector.weight_pct}%)`}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div style={{ fontSize: 10, color: 'var(--cc-text-dim)', textAlign: 'center', padding: 8 }}>暂无行业数据</div>
-                    )}
                   </>
                 )}
               </div>
