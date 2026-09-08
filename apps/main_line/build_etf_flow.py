@@ -24,6 +24,25 @@ ETFS = {
  '稳增长/基建': [('516950.SH', '银华基建ETF')],
 }
 
+def load_etf_map():
+    """ETF 映射: Pi(服务器 dsh 镜像)审核结果优先(etf_theme_map_pi.json primary+optional 补足),
+    缺失/文件不存在回退内嵌 curated ETFS(v1 人审)"""
+    try:
+        raw = json.load(open(os.path.join(DATA, 'etf_theme_map_pi.json'), encoding='utf-8'))
+        out = {}
+        for a in raw.get('themes', []):
+            picks = [e['ts_code'] for e in a.get('primary', [])][:2]
+            if len(picks) < 2:
+                for e in a.get('optional', []):
+                    if len(picks) >= 2: break
+                    if e['ts_code'] not in picks: picks.append(e['ts_code'])
+            if picks: out[a['theme']] = picks
+        if out:
+            return out, 'pi_ai_review_v1'
+    except Exception:
+        pass
+    return {th: [t for t, _ in etfs] for th, etfs in ETFS.items()}, 'curated_fallback'
+
 def main():
     from app.api.market import _get_tushare_pro
     pro = _get_tushare_pro()
@@ -31,8 +50,12 @@ def main():
     cal = pro.trade_cal(exchange='SSE', start_date='20260601', end_date='20260908', is_open='1')
     days = [str(d).replace('-', '') for d in (cal['cal_date'].tolist() if cal is not None else [])]
     days = sorted(days)
+    MAP, map_src = load_etf_map()
+    print('ETF MAP source:', map_src, 'themes', len(MAP), flush=True)
     shares = {}
-    for th, etfs in ETFS.items():
+    for th, etfs in MAP.items():
+        if etfs and isinstance(etfs[0], str):
+            etfs = [(t, t) for t in etfs]
         per_etf = []
         for ts, nm in etfs:
             try:
@@ -83,6 +106,7 @@ def main():
     print('%-12s %8s %8s' % ('主题', '份额5d%', '份额20d%'), flush=True)
     for t in out['themes']:
         print('%-12s %8s %8s' % (t['theme'], t['d5'] and round(t['d5'], 2), t['d20'] and round(t['d20'], 2)), flush=True)
+    print('map_src', map_src, flush=True)
     print('margin(两融) 20d%%:', out.get('margin'), flush=True)
     print('WROTE /app/data/etf_share_flow.json', flush=True)
 
