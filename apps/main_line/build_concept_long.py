@@ -32,18 +32,29 @@ def cal(s, e):
     return sorted(x[0] for x in ((r.json().get('data') or {}).get('items') or []) if x[1] == 1)
 
 def main():
-    start = sys.argv[1] if len(sys.argv) > 1 else '20250101'
+    argv = sys.argv[1:]
+    seed_mode = '--seed' in argv
+    start = argv[0] if argv and not argv[0].startswith('-') else '20250101'
     end = time.strftime('%Y%m%d')
-    from fusion_mainline import THEME_CONCEPTS
     db = sqlite3.connect(os.path.join(DATA, 'stock_pool.db'))
     members = {}   # concept -> [ts]
     ts_conc = {}   # ts -> [concept]
-    for cons in THEME_CONCEPTS.values():
-        for c in cons:
-            rows = [r[0] for r in db.execute('SELECT ts_code FROM stock_concept_map WHERE concept_name=?', (c,))]
-            rows = list(dict.fromkeys(rows))
-            members[c] = rows
-            for ts in rows: ts_conc.setdefault(ts, []).append(c)
+    if seed_mode:
+        sys.path.insert(0, '/app/apps/main_line')
+        import chain_map as cm
+        src = {}
+        for t, segs in cm.SEED.items():
+            for s in segs:
+                for c in s.get('concepts', []):
+                    src.setdefault(c, True)
+    else:
+        from fusion_mainline import THEME_CONCEPTS
+        src = {c: True for cons in THEME_CONCEPTS.values() for c in cons}
+    for c in src:
+        rows = [r[0] for r in db.execute('SELECT ts_code FROM stock_concept_map WHERE concept_name=?', (c,))]
+        rows = list(dict.fromkeys(rows))
+        members[c] = rows
+        for ts in rows: ts_conc.setdefault(ts, []).append(c)
     all_ts = list(ts_conc)
     print('concepts', len(members), 'members', len(all_ts), flush=True)
     opens = [d for d in cal(start, end) if d >= start]
@@ -85,11 +96,11 @@ def main():
         off = len(opens) - len(cum[c])
         dates = opens[off:] if off > 0 else opens
         series[c] = {'dates': dates, 'close': cum[c]}
-    out = {'meta': {'generator': 'build_concept_long_v1', 'start': start, 'end': end,
+    out = {'meta': {'generator': 'build_concept_long_v1' + ('_seed' if seed_mode else ''), 'start': start, 'end': end,
                     'source': 'gzcloud daily 全市场等权pct累计', 'concepts': len(series),
                     'members': len(all_ts), 'note': '未复权已用pct环比规避; 停牌沿用昨收'},
            'series': series}
-    p = os.path.join(DATA, 'concept_long.json')
+    p = os.path.join(DATA, 'concept_long_seed.json' if seed_mode else 'concept_long.json')
     json.dump(out, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
     print('WROTE', p, 'size', os.path.getsize(p) // 1024, 'KB, %.0fs' % (time.time() - t0), flush=True)
 
