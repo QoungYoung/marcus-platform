@@ -43,7 +43,7 @@ SEED = {
  ],
 }
 LEAD_TOP_N = 3
-VERIFY_POOL_MV_N = 12
+VERIFY_POOL_MV_N = 20  # 2026-09-08: 12->20(金健米业案例: union mv第13被截断漏票, 中小市值细分票需更宽池)
 VERIFY_POOL_CONCEPT_N = 6
 AI_CONF_MIN = 0.85
 AI_BORDERLINE_MIN = 0.5
@@ -277,7 +277,9 @@ def main():
             needs_verify = (len(leading) < LEAD_TOP_N) or bool(ai_stats['unknown']) or bool(borderline)
             seg_node = {'role': seg['role'], 'label': seg['label'], 'concepts': seg['concepts'],
                         'pool_n': len(big), 'mv_date': mv_date, 'candidates': codes[:6],
-                        'leading_verified': leading, 'rejected': ai_kept, 'needs_verify': needs_verify,
+                        'leading_verified': leading,
+                        'verified_all': [dict(v, source='rule_mv') for v in verified],
+                        'rejected': ai_kept, 'needs_verify': needs_verify,
                         'ai_reviewed': ai_stats['reviewed'], 'ai_promoted': promoted_ai, 'ai_borderline': borderline,
                         'ai_stats': ai_stats, 'kw_suggest_new': kw_new, 'method': 'mv_verified+ai' if use_ai else 'mv_verified'}
             t_seg.append(seg_node)
