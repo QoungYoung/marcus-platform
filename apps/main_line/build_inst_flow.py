@@ -46,7 +46,7 @@ def main():
                 print('top_inst err', d, str(e)[:50])
             time.sleep(0.1)
         return rows
-    inst_rows = fetch_top_inst(w5 + [w20[0]])
+    inst_rows = fetch_top_inst(w20)   # 全 20 日窗口(修: 原只拉6天致 20 日值失真)
     print('top_inst rows', len(inst_rows), flush=True)
     # 北向: hk_hold 该网关返回港股(00001.HK), hsgt_top10 net_amount 空 -> 不可用(注明, 待净额源)
     hk = {}
