@@ -1246,7 +1246,16 @@ class StopLossMonitor:
             if not symbol:
                 continue
 
-            name = pos.get('name', '')
+            name = pos.get('name', '') or ''
+            if not name:
+                # 2026-09-08: executor持仓无name → 用股票名服务补齐(Portfolio防御面板直接显示)
+                try:
+                    from app.services.market_reference import get_stock_name as _gsn
+                    _nm = _gsn(symbol)
+                    if _nm:
+                        name = str(_nm)
+                except Exception:
+                    pass
             avg_price = pos.get('avg_price', 0)
             current_price = pos.get('current_price', 0)
             total_volume = pos.get('volume', 0)

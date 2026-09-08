@@ -1012,6 +1012,7 @@ export default function PortfolioPage() {
                           return (
                             <div key={p.symbol} className="cp-sl-row">
                               <div className="cp-sl-head">
+                                <span className="cp-sl-name">{p.name || p.symbol.replace(/^(SH|SZ|BJ)/, "")}</span>
                                 <span className="cp-sl-sym">{p.symbol.replace(/^(SH|SZ|BJ)/, "")}</span>
                                 <span className={`cp-sl-badge ${danger}`}>{levelText[danger] || "—"}</span>
                                 <span className={`cp-sl-pnl ${(p.float_pnl_pct || 0) >= 0 ? "up" : "down"}`}>

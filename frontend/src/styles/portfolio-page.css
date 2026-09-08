@@ -1832,3 +1832,13 @@
 .cp-sl-ref.touched i { color: var(--cc-red); }
 .cp-sl-ref.touched b { color: var(--cc-red); }
 .cp-sl-ref.touched .cp-sl-dist { color: var(--cc-red); font-weight: 700; }
+
+.cp-sl-name {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--cc-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 84px;
+}
