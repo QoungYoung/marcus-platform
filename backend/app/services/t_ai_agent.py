@@ -150,7 +150,8 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
             if volume <= 0:
                 try:
                     from app.services.t_gateway import get_sellable_ledger
-                    item = get_sellable_ledger().get(symbol) or {}
+                    _acc = (trigger or {}).get("account_id") or "stock"
+                    item = get_sellable_ledger(account_id=_acc).get(symbol) or {}
                     sellable = int(item.get("sellable") or 0)
                     if sellable > 0:
                         volume = max(int(sellable * 0.3), 100)

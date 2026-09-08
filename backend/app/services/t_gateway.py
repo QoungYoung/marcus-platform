@@ -433,6 +433,24 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
         near_limit = bool(quote and _near_limit_down(quote))
         tier = _floor_tier(regime, near_limit)
         if side == "buy":
+            # wolf 回补护栏（2026-09-08 用户拍板：588170 void脱节重复加仓根因）
+            # ① 当日 wolf 正T回补已成交 1 笔 → 拦截（防连续回补堆仓）
+            # ② 当日存在已撤销(回滚)卖单 → 拦截（回补语义与账本脱节，需人工确认）
+            _ev = None
+            if trigger_id:
+                try:
+                    _ev = (_get_trigger(trigger_id) or {}).get("event_type")
+                except Exception:
+                    _ev = None
+            if _ev == "wolf_zheng_t_buy":
+                if _wolf_buy_executed_today(symbol, account_id) >= 1:
+                    result["level"] = "ledger"
+                    result["reason"] = "wolf回补当日已成交1笔，上限1笔(防连续回补堆仓)"
+                    return result
+                if _voided_sell_today(symbol, account_id) > 0:
+                    result["level"] = "ledger"
+                    result["reason"] = "当日存在已撤销卖单(账本已回滚)，wolf回补需人工确认，禁止自动回补"
+                    return result
             # 低吸加仓次数上限（单标单日买腿成交 ≤ MAX_DAILY_BUY_LEGS）
             buy_legs = ctx.get("daily_buy_legs")
             if buy_legs is None:
@@ -570,6 +588,46 @@ def _base_loss_guard(symbol: str, side: str, quote: Optional[dict],
     """
     # 放行买腿：狼大低吸看技术条件，不由浮亏%拦（急跌不割肉）
     return {"action": "pass", "reason": "wolf_consistent: 低吸由技术条件(253/254/缩量企稳)把关，浮亏%不拦买腿"}
+
+
+def _wolf_buy_executed_today(symbol: str, account_id: str) -> int:
+    """当日 wolf 正T回补(wolf_zheng_t_buy)已执行笔数（按账户/标的，t_triggers executed）。"""
+    try:
+        db = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            row = db.execute(text(
+                "SELECT COUNT(*) FROM t_triggers "
+                "WHERE account_id = :acc AND symbol = :sym "
+                "AND event_type = 'wolf_zheng_t_buy' AND status = 'executed' "
+                "AND substr(created_at::text, 1, 10) = :today"
+            ), {"acc": account_id, "sym": symbol, "today": today}).scalar()
+            return int(row or 0)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-gate] wolf_executed_today 失败: {e}")
+        return 0
+
+
+def _voided_sell_today(symbol: str, account_id: str) -> int:
+    """当日已撤销(回滚)卖单笔数（paper_trades voided=1 & 卖出 & 当日）。"""
+    try:
+        db = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            row = db.execute(text(
+                "SELECT COUNT(*) FROM paper_trades "
+                "WHERE account_id = :acc AND symbol = :sym "
+                "AND direction = '卖出' AND voided = 1 "
+                "AND substr(created_at::text, 1, 10) = :today"
+            ), {"acc": account_id, "sym": symbol, "today": today}).scalar()
+            return int(row or 0)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-gate] voided_sell_today 失败: {e}")
+        return 0
 
 
 def _daily_buy_legs(symbol: str, account_id: str = "t") -> int:
