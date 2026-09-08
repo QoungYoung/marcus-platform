@@ -16,6 +16,32 @@ def load_json(p, dflt=None):
     try: return json.load(open(p, encoding='utf-8'))
     except Exception: return dflt
 
+
+def load_wave_env():
+    """读 wave_state.json 作为风险提示(保险丝), 不参与主线资格判定(Wolf: 调整浪内也做主线)。
+    返回 {level, sub_level, operation, date, c_kill, confirm, risk_note}"""
+    import re
+    try:
+        w = json.load(open(os.path.join(DATA, 'wave_state.json'), encoding='utf-8'))
+    except Exception:
+        return None
+    reasons = str(w.get('reasons') or '')
+    def find_num(anchor):
+        m = re.search(anchor + r'(?:\s*[-~]?\s*)(\d+(?:\.\d+)?)', reasons)
+        return float(m.group(1)) if m else None
+    c_kill = find_num('3764')
+    confirm = find_num('4010')
+    if c_kill is None:
+        m = re.search(r'3764(?:\.\d+)?', reasons)
+        c_kill = float(m.group(0)) if m else None
+    if confirm is None:
+        m = re.search(r'4010(?:\.\d+)?', reasons)
+        confirm = float(m.group(0)) if m else None
+    return {'level': w.get('level'), 'sub_level': w.get('sub_level'), 'operation': w.get('operation'),
+            'date': w.get('date'), 'c_kill': c_kill, 'confirm': confirm,
+            'risk_note': ('大盘 %s/%s(%s): 破位位%.0f前主线可做但防系统性拖累; 放量破%.0f执行层按保险丝撤主线' % (
+                w.get('level'), w.get('sub_level'), w.get('operation'), c_kill or 0, c_kill or 0)) if c_kill else None}
+
 def main():
     date8 = None; topn = 2; fusion_p = None
     for i, a in enumerate(sys.argv[1:]):
@@ -23,6 +49,10 @@ def main():
         if a == '--topn': topn = int(sys.argv[i + 2])
         if a == '--fusion-json': fusion_p = sys.argv[i + 2]
     date8 = date8 or '20260904'
+    wave_env = load_wave_env()
+    if wave_env:
+        print('WAVE_ENV', wave_env.get('operation'), wave_env.get('level') + '/' + str(wave_env.get('sub_level')),
+              '| c_kill', wave_env.get('c_kill'), '| note(只提示不否决资格)', flush=True)
     # ---- 热度分 ----
     if fusion_p:
         fx = load_json(fusion_p)
@@ -81,6 +111,8 @@ def main():
             r['heat_score'], ('PASS' if r['gate'] else 'FAIL') if r['gate'] is not None else 'n/a',
             r['gate_ratio'] or 0, r['judgeable'] or 0, r['verdict']), flush=True)
     out = {'date': date8, 'gate_rule': 'B_only>=0.35(F1 0.902 标定)',
+           'wave_env': wave_env,
+           'wave_note': 'wave 仅风险提示(保险丝: 放量破 c_kill 执行层撤主线), 不否决主线入场资格(Wolf 调整浪内做主线)',
            'heat_note': ('外部热度 json (heat_v2)' if fusion_p else 'v0 fusion proxy 0.3fund+0.2rel+0.5conc, 待step2资金未跑升级'),
            'topn': topn, 'rows': rows}
     p = os.path.join(DATA, f'mainline_gate_{date8}.json')
