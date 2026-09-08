@@ -97,6 +97,58 @@ def bank_signals(dt):
         rel = 0.1 if pct < 1.0 else 0.3
     return {"catalyst": 0.0, "fund": fund, "rel": rel, "conc": fund}
 
+
+# ---- concept_long_seed 双源 rel (2026-09-08: SEED域全概念成分等权close, 覆盖行业级概念) ----
+import bisect as _bisect
+_SEED_SERIES = None
+_SEED_LOADED = False
+_HIST_NAME = None
+
+def _seed_series_map():
+    global _SEED_SERIES, _SEED_LOADED
+    if not _SEED_LOADED:
+        _SEED_LOADED = True
+        try:
+            p = os.path.join(DATA, 'concept_long_seed.json')
+            if os.path.exists(p):
+                raw = json.load(open(p, encoding='utf-8'))
+                _SEED_SERIES = {k: v for k, v in raw.get('series', {}).items()}
+        except Exception:
+            _SEED_SERIES = None
+    return _SEED_SERIES
+
+def _hist_by_name(hist):
+    global _HIST_NAME
+    if _HIST_NAME is None:
+        _HIST_NAME = {a.get('name', ''): a for a in hist.values()}
+    return _HIST_NAME
+
+def rel_series(names, t, hist):
+    """双源 rel: SEED 域(成分等权close, 覆盖行业级概念)优先, concept_hist 兜底。r20 均值"""
+    t8 = t.strftime('%Y%m%d')
+    seed = _seed_series_map()
+    hbn = _hist_by_name(hist)
+    rs = []
+    for cname in names:
+        used = False
+        if seed is not None:
+            sv = seed.get(cname)
+            if sv:
+                ds = sv.get('dates') or []
+                cs = sv.get('close') or []
+                j = _bisect.bisect_right(ds, t8) - 1
+                if j >= 21 and ds and j < len(ds) and cs[j - 21] and cs[j]:
+                    rs.append(float(cs[j]) / float(cs[j - 21]) - 1.0)
+                    used = True
+        if not used:
+            a = hbn.get(cname)
+            if a:
+                base = close_series(a)
+                base = base[base.index <= t]
+                if len(base) >= 21 and float(base.iloc[-21]) > 0:
+                    rs.append(float(base.iloc[-1]) / float(base.iloc[-21]) - 1.0)
+    return rs
+
 def theme_conc(hist, dt):
     """资金集中度(替代成交集中度, concept_hist 全覆盖不依赖接口):
     Σ主题概念当日 net_amount 绝对值 / Σ全体概念 net_amount 绝对值, 9主题间百分位。
@@ -133,11 +185,7 @@ def theme_signals(hist, dt, state):
             s = net[net.index <= t].dropna()
             if len(s) >= 2: fs.append(float(s.iloc[-5:].sum()) if len(s) >= 5 else float(s.sum()))
         fund[th] = float(np.mean(fs)) if fs else 0.0
-        rs = []
-        for c in codes:
-            ser = close_series(hist[c]); base = ser[ser.index <= t]
-            if len(base) >= 21 and float(base.iloc[-21]) > 0:
-                rs.append(float(base.iloc[-1]) / float(base.iloc[-21]) - 1)
+        rs = rel_series(names, t, hist)
         rel[th] = float(np.mean(rs)) if rs else 0.0
     # 9 个概念主题间排名百分位(0-1); 银行用独立行业信号不参与排名
     NON_BANK = [th for th in MAIN_THEMES if th != "银行"]
