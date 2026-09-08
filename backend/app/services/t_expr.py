@@ -86,6 +86,12 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     # 动态回撤保护(2026-09-08): 现价≤当日高点×(1-回撤阈值), 阈值=振幅自适应(0.4%~1.5%)——
     # 任意股票/每日通用, 不写死价位(替代一次性 custom_level_sell)
     "quote.trail_break": ("bool", "跌破当日高点回撤阈值(动态移动止盈/破位保护)", "t_monitor._trail_break"),
+    # ── 波段支撑/压力位（步骤① 2026-09-08, support_resistance.compute_levels, 10min TTL）──
+    "quote.support_l1": ("number", "最近波段支撑(现价下方最近)", "support_resistance"),
+    "quote.support_l2": ("number", "次近波段支撑", "support_resistance"),
+    "quote.resistance_l1": ("number", "最近波段压力(现价上方最近)", "support_resistance"),
+    "quote.resistance_l2": ("number", "次近波段压力", "support_resistance"),
+    "quote.break_support": ("bool", "现价跌破最近支撑(support_l1)", "support_resistance 派生"),
     # ── 技术指标（复用 get_realtime_indicators：KDJ/MACD/RSI/MA，盘中实时估算） ──
     "tech.ma5": ("number", "MA5(日线)", "get_realtime_indicators"),
     "tech.ma10": ("number", "MA10(日线)", "get_realtime_indicators"),

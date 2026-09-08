@@ -812,6 +812,20 @@ class TMonitor:
         # quote.*（腾讯 qt 实时）
         _cur = float(quote.get("current", 0) or 0)
         _avg = float(quote.get("average", 0) or 0)
+        # 波段支撑/压力位（步骤① 2026-09-08, support_resistance.compute_levels, 模块10min TTL缓存）
+        _sup = []
+        _res = []
+        try:
+            from app.services.support_resistance import compute_levels as _sr_compute
+            _sr = _sr_compute(symbol)
+            _sup = sorted([float(x["price"]) for x in _sr.get("support", []) if x.get("price")])
+            _res = sorted([float(x["price"]) for x in _sr.get("resistance", []) if x.get("price")])
+        except Exception as _sre:
+            print(f"[TMonitor] 支撑/压力字段失败 {symbol}: {str(_sre)[:80]}")
+        _s1 = _sup[-1] if _sup else 0.0
+        _s2 = _sup[-2] if len(_sup) >= 2 else _s1
+        _r1 = _res[0] if _res else 0.0
+        _r2 = _res[1] if len(_res) >= 2 else _r1
         snapshot["quote"] = {
             "current": _cur,
             "open": float(quote.get("open", 0) or 0),
@@ -831,6 +845,11 @@ class TMonitor:
             # 现价 ≤ 当日高点×(1-回撤阈值)；阈值=振幅自适应(max(0.4%, amp×0.3, ≤1.5%))，
             # 可用 env T_TRAIL_PCT 覆盖固定阈值。
             "trail_break": self._trail_break(symbol, _cur, quote),
+            "support_l1": _s1,
+            "support_l2": _s2,
+            "resistance_l1": _r1,
+            "resistance_l2": _r2,
+            "break_support": bool(_s1 > 0 and _cur <= _s1),
         }
         # vol_ratio（盘中量比归一）
         vr = self._calc_volume_ratio(cond, quote)

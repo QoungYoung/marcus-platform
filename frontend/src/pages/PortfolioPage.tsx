@@ -65,6 +65,11 @@ interface StopDistance {
     rule?: string; label?: string; direction?: string;
     price?: number | null; dist_pct?: number | null; touched?: boolean;
   }[];
+  levels?: {
+    current?: number | null;
+    support?: { price: number; label?: string }[];
+    resistance?: { price: number; label?: string }[];
+  };
 }
 interface StopLossStatus {
   running: boolean; thread_alive: boolean; interval_seconds: number;
@@ -1043,7 +1048,28 @@ export default function PortfolioPage() {
                                     </span>
                                   );
                                 })}
+                                <div className="cp-sl-levels">
+                                {(p.levels?.support || []).slice(0, 2).length > 0 && (
+                                  <span className="cp-lv-group sup">
+                                    <i className="fas fa-arrow-down" />支撑{' '}
+                                    {(p.levels?.support || []).slice(0, 2).map((s, i) => (
+                                      <b key={i}>{fmt(s.price, 3)}</b>
+                                    ))}
+                                  </span>
+                                )}
+                                {(p.levels?.resistance || []).slice(0, 2).length > 0 && (
+                                  <span className="cp-lv-group res">
+                                    <i className="fas fa-arrow-up" />压力{' '}
+                                    {(p.levels?.resistance || []).slice(0, 2).map((r, i) => (
+                                      <b key={i}>{fmt(r.price, 3)}</b>
+                                    ))}
+                                  </span>
+                                )}
+                                {p.levels?.current != null && (
+                                  <span className="cp-lv-asof">日线@{fmt(p.levels.current, 3)}</span>
+                                )}
                               </div>
+                            </div>
                             </div>
                           );
                         })}

@@ -1842,3 +1842,21 @@
   white-space: nowrap;
   max-width: 84px;
 }
+
+.cp-sl-levels {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-top: 1px dashed var(--cc-line-soft);
+  margin-top: 3px;
+  padding-top: 3px;
+  font-size: 9px;
+}
+.cp-lv-group { display: inline-flex; align-items: center; gap: 4px; color: var(--cc-text-dim); }
+.cp-lv-group i { font-size: 8px; }
+.cp-lv-group.sup i { color: var(--cc-green); }
+.cp-lv-group.res i { color: var(--cc-red); }
+.cp-lv-group b { font-family: var(--font-display); font-weight: 700; margin-right: 4px; }
+.cp-lv-group.sup b { color: var(--cc-green); }
+.cp-lv-group.res b { color: var(--cc-red); }
+.cp-lv-asof { color: var(--cc-faint); margin-left: auto; }

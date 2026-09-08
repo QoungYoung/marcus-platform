@@ -1274,6 +1274,12 @@ class StopLossMonitor:
                 break
 
             wolf_exit = self._calc_wolf_dynamic_exit(symbol, current_price)
+            _sr_levels = {"support": [], "resistance": [], "current": None}
+            try:
+                from app.services.support_resistance import compute_levels
+                _sr_levels = compute_levels(symbol)
+            except Exception as _sre:
+                print(f"[StopLoss] levels 计算失败 {symbol}: {str(_sre)[:80]}")
             # 2026-09-02 屏蔽旧止损距离体系：只保留狼大动态离场距离（黄线VWAP/分时T出前高）。
             # 旧 8 条固定规则距离（破底/成本/板块/铁律/超买/技术背离/60min/大盘相对）代码保留
             # 便于回滚，但不再计算、不再参与最近卖出线判定。
@@ -1341,6 +1347,8 @@ class StopLossMonitor:
                      "price": wolf_exit.get("first_high"), "dist_pct": wolf_exit.get("dist_to_first_high_pct"),
                      "touched": bool(wolf_exit.get("t_sell_ready"))},
                 ],
+                # 波段支撑/压力位（步骤① 2026-09-08, support_resistance.compute_levels, 10min TTL）
+                "levels": _sr_levels,
             })
 
         # 按危险程度排序：已触发 > 危急 > 警告 > 关注 > 安全
