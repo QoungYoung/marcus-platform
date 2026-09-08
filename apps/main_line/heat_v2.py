@@ -29,11 +29,13 @@ def main():
     for i, a in enumerate(sys.argv[1:]):
         if a == '--date': date8 = sys.argv[i + 2]
     from fusion_mainline import THEME_CONCEPTS, MAIN_THEMES, load as fm_load, close_series, net_series
+    from trend_confirm import load_by_name
     import numpy as np, pandas as pd
     from app.api.market import _get_tushare_pro
     pro = _get_tushare_pro()
     hist = fm_load('concept_hist.json')
     hh = {v.get('name', ''): v for v in hist.values()}
+    lg = load_by_name(os.path.join(DATA, 'concept_long.json'))   # 到 date8 当日(调度前由 build_concept_long 更新)
     t = pd.Timestamp(date8[:4] + '-' + date8[4:6] + '-' + date8[6:])
     # 概念成分 member 全量(与 concept_long 同源)
     import sqlite3
@@ -46,7 +48,7 @@ def main():
                 ts.append(r[0])
         th_members[th] = list(dict.fromkeys(ts))
     # ---- 交易日(0904 前 20 个) ----
-    all_days = sorted({d for v in hist.values() for d in v.get('dates', []) if d <= date8})
+    all_days = sorted({d for v in lg.values() for d in v.get('dates', []) if d <= date8})
     days20 = all_days[-20:]
     # ---- moneyflow_dc 逐日 20 天全市场 ----
     mf = {}
@@ -69,15 +71,15 @@ def main():
         fac[th]['mf5'] = sum(s5)
         fac[th]['mf10'] = sum(s10)
         fac[th]['mf_accel'] = (sum(s5) / 5.0) - (sum(s10) / 10.0) if s10 else 0.0
-        # rel: 概念等权 r20(用 concept_hist close 与 concept_long 等权? 简化 concept_hist close_series)
+        # rel: 概念等权 r20 —— 用 concept_long(到 date8 当日), 不再受 concept_hist 滞后约束
         rs = []
         for c in THEME_CONCEPTS[th]:
-            v = hh.get(c)
+            v = lg.get(c)
             if not v: continue
-            ser = close_series(v).dropna()
-            b = ser[ser.index <= t]
-            if len(b) >= 21 and float(b.iloc[-21]) > 0:
-                rs.append(float(b.iloc[-1]) / float(b.iloc[-21]) - 1)
+            ds = v.get('dates') or []; cl = v.get('close') or []
+            n = sum(1 for x in ds if x <= date8)
+            if n >= 22 and cl[n - 22] > 0:
+                rs.append(cl[n - 1] / cl[n - 22] - 1.0)
         fac[th]['rel'] = float(np.mean(rs)) if rs else 0.0
         # fund5: concept net 近5日
         f5 = []

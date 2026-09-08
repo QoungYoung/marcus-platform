@@ -870,3 +870,24 @@ tasks:
     on_failure: true
     on_success: false
     pi_analysis: false
+
+- id: mainline_gate_daily
+  name: '主线确认每日更新 (concept_long + heat_v2 + 结构GATE + 确认历史)'
+  description: 盘后18:45 顺序更新 concept_long(未到当日才全量) -> trend_confirm 结构GATE -> heat_v2 主力资金热度 -> mainline_gate 漏斗 + mainline_confirm_history(供 rotation_switch_arm 曾确认闸)
+  enabled: true
+  schedule:
+    type: cron
+    expr: 45 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/mainline_gate_daily.py
+    args: []
+  output:
+    append: true
+    log_file: logs/mainline_gate_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
