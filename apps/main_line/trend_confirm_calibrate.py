@@ -10,11 +10,11 @@ sys.path.insert(0, '/app/apps/main_line')
 DATA = os.environ.get('DATA_DIR', '/app/data')
 
 def main():
-    from trend_confirm import judge_series, theme_index, _load_params, TREND_CFG
+    from trend_confirm import judge_series, theme_index, _load_params, TREND_CFG, load_by_name
     from fusion_mainline import THEME_CONCEPTS, MAIN_THEME_OF
-    hist = json.load(open(os.path.join(DATA, 'concept_hist.json'), encoding='utf-8'))
-    by_name = {v.get('name', ''): v for v in hist.values()}
-    dates_all = next(iter(hist.values()))['dates']
+    hist_p = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith('-') else os.path.join(DATA, 'concept_hist.json')
+    by_name = load_by_name(hist_p)
+    dates_all = max((v.get('dates') or []) for v in by_name.values() if v.get('dates'))
     labels = json.load(open(os.path.join(DATA, 'wolf_labels_v2.json'), encoding='utf-8'))['mainline']
     rows = []
     for l in labels:
@@ -34,21 +34,27 @@ def main():
         vs = [by_name[c] for c in THEME_CONCEPTS[theme] if c in by_name]
         j = dates_all.index(d8)
         return theme_index([{**v, 'close': v['close'][:j + 1]} for v in vs], THEME_CONCEPTS[theme])[0]
-    def judge_at(theme, d8, cfg):
-        s = idx_series(theme, d8)
-        if s is None or len(s) < 120: return None
-        return judge_series(s, cfg).get('stage') == 'confirmed'
+
     GRID = {
         'break_ratio': [0.95, 0.98, 0.995],
         'pullback_max_pct': [0.12, 0.18, 0.25],
         'pullback_min_pct': [0.02, 0.04],
         'swing_k': [3, 5, 8],
         'new_high_window': [40, 60, 90],
-        'confirm_recency_days': [3, 5, 10],
+        'confirm_recency_days': [3, 5, 10, 20, 40, 60],
         'prior_low_window': [90, 150],
     }
     keys = list(GRID)
     combos = [dict(zip(keys, v)) for v in itertools.product(*(GRID[k] for k in keys))]
+    # 预缓存: 每 (theme,date) 的主题指数前缀只建一次(972组合共享)
+    _idx_cache = {}
+    def judge_cached(theme, d8, cfg):
+        key = (theme, d8)
+        if key not in _idx_cache:
+            _idx_cache[key] = idx_series(theme, d8)
+        s = _idx_cache[key]
+        if s is None or len(s) < 120: return None
+        return judge_series(s, cfg).get('stage') == 'confirmed'
     print('grid combos', len(combos), flush=True)
     res = []
     for ci, over in enumerate(combos):
@@ -56,7 +62,7 @@ def main():
         hit = fp = 0; tn = sum(1 for r in usable if r['expect'])
         fn_n = 0; fp_n = 0
         for r in usable:
-            c = judge_at(r['theme'], r['date'], cfg)
+            c = judge_cached(r['theme'], r['date'], cfg)
             if c is None: continue
             if r['expect']:
                 if c: hit += 1

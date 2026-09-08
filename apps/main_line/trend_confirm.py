@@ -152,6 +152,13 @@ def judge_series(close, cfg, name=''):
     out['date_to'] = ''
     return out
 
+def load_by_name(path):
+    """concept_hist(BK码->{name,dates,close}) 或 concept_long({series:{name:{dates,close}}}) -> {name:{dates,close}}"""
+    raw = json.load(open(path, encoding='utf-8'))
+    if isinstance(raw, dict) and 'series' in raw:
+        return {k: {'dates': v['dates'], 'close': v['close']} for k, v in raw['series'].items()}
+    return {v.get('name', ''): v for v in raw.values()}
+
 def theme_index(hist_names, theme_concepts):
     """轨A: 主题等权 pct 合成指数(以各自序列起点为基准)"""
     pcts = []
@@ -168,16 +175,17 @@ def theme_index(hist_names, theme_concepts):
 
 def main():
     args = sys.argv[1:]
-    params_p = None; json_p = None
+    params_p = None; json_p = None; hist_p = None
     for i, a in enumerate(args):
         if a == '--params' and i + 1 < len(args): params_p = args[i + 1]
         if a == '--json' and i + 1 < len(args): json_p = args[i + 1]
+        if a == '--hist' and i + 1 < len(args): hist_p = args[i + 1]
     cfg = _load_params(dict(TREND_CFG), params_p)
-    hist = json.load(open(os.path.join(DATA, 'concept_hist.json'), encoding='utf-8'))
+    hist_p = hist_p or os.path.join(DATA, 'concept_hist.json')
     from fusion_mainline import THEME_CONCEPTS
-    by_name = {v.get('name', ''): v for v in hist.values()}
+    by_name = load_by_name(hist_p)
     themes_out = []
-    date_to = max(v.get('dates', [''])[-1] for v in hist.values())
+    date_to = max((v.get('dates') or [''])[-1] for v in by_name.values() if v.get('dates'))
     for th, cons in THEME_CONCEPTS.items():
         vs = [by_name[c] for c in cons if c in by_name]
         # 轨A 主题指数
