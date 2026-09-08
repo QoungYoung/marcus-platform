@@ -744,6 +744,14 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                                        executed_price=float(result.get("price", price) or price))
         # 更新日账本
         _update_daily_ledger(symbol, side, price, volume)
+        # B模型·等量换手(2026-09-08 落地): stock账户低吸买入成交 → 登记换手额度
+        if side == "buy" and account_id in ("stock",):
+            try:
+                from app.services import roundtrip_sell
+                fill_price = float(result.get("price", price) or price)
+                roundtrip_sell.record_buy(symbol, fill_price, volume, account=account_id)
+            except Exception as _rte:
+                print(f"[t-gate] roundtrip 登记失败: {_rte}")
         return {**result, "status": "success"}
     if trigger_id:
         t_db.update_trigger_status(trigger_id, "blocked", reason=result.get("reason") or "撮合失败")

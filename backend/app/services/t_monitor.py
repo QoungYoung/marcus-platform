@@ -111,6 +111,7 @@ class TMonitor:
                     self._settle_tsell_pending()  # 撤销式T出结算(放量过前高→撤销/超时→执行)
                     self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
+                    self._check_roundtrip_sell()  # B模型·等量换手(2026-09-08): 低吸后反弹≥+0.8%卖≤N旧仓
                     # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
@@ -146,6 +147,52 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] 计划触发检查异常: {e}")
+
+    def _check_roundtrip_sell(self) -> None:
+        """B模型·等量换手卖出检查(2026-09-08 落地): 当日低吸N后反弹≥+0.8%卖≤N股旧仓;
+        昨低吸未完成→今日解锁继续(两日窗口); 超窗 stale 转人工。"""
+        try:
+            from app.services import roundtrip_sell as _rs
+            if not _rs.ROUNDTRIP_ENABLED:
+                return
+            pend = _rs.pending_symbols()
+            if not pend:
+                return
+            quotes = self._fetch_quotes_concurrent([s for s, _ in pend])
+            for sym, st in pend:
+                try:
+                    q = quotes.get(sym) or {}
+                    cur = float(q.get("current") or 0)
+                    if cur <= 0:
+                        continue
+                    buy_avg = float(st.get("buy_avg") or 0)
+                    target = buy_avg * (1 + _rs.ROUNDTRIP_SELL_UP)
+                    if cur < target:
+                        continue
+                    from app.services.t_gateway import (gateway_execute, get_sellable_ledger,
+                                                        base_floor_shares)
+                    acct = st.get("account") or "stock"
+                    ledger = get_sellable_ledger(account_id=acct)
+                    item = ledger.get(sym) or {}
+                    sellable = int(item.get("sellable", 0) or 0)
+                    floor = base_floor_shares(acct, sym, volume=sellable)
+                    rem = _rs.remaining(sym)
+                    vol = min(rem, max(sellable - floor, 0))
+                    vol = (vol // 100) * 100
+                    if vol < 100:
+                        continue
+                    gw = gateway_execute(
+                        sym, "sell", cur, vol,
+                        reason=f"[B等量换手] 低吸@{buy_avg:.2f}→反弹@{cur:.2f}(≥+0.8%) 卖回{vol}股",
+                        decision_source="rule", account_id=acct)
+                    if gw.get("status") == "success":
+                        _rs.mark_sold(sym, vol)
+                    else:
+                        print(f"[RoundT] 换手卖出被拒 {sym}: {gw.get('reason')}")
+                except Exception as e:
+                    print(f"[RoundT] {sym} 检查异常: {e}")
+        except Exception as e:
+            print(f"[TMonitor] _check_roundtrip_sell 异常: {e}")
 
     def _prev_daily(self, sym, n=5):
         """最近 n 个交易日的 {close, high, low, vol}（读 data/recent_sync 或 stock_5m_bt）。"""
