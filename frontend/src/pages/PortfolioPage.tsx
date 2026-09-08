@@ -61,6 +61,10 @@ interface StopDistance {
   float_pnl_pct: number; t1_locked: boolean; daily_stops_used: number;
   nearest_trigger: { rule: string; distance_pct: number; danger_level: string; };
   rule_distances: Record<string, number | null>;
+  sell_refs?: {
+    rule?: string; label?: string; direction?: string;
+    price?: number | null; dist_pct?: number | null; touched?: boolean;
+  }[];
 }
 interface StopLossStatus {
   running: boolean; thread_alive: boolean; interval_seconds: number;
@@ -995,33 +999,54 @@ export default function PortfolioPage() {
                       <i className={`fas fa-chevron-${slExpanded ? 'up' : 'down'}`} /> {slExpanded ? '收起' : '展开'}单位距离详情
                     </div>
                     {slExpanded && stopLoss.positions.length > 0 && (
-                      <table className="cp-table-mini" style={{ marginTop: 6 }}>
-                        <thead><tr>
-                          <th>代码</th><th>名称</th><th>浮盈</th><th>距离%</th><th>规则</th><th>风险</th>
-                        </tr></thead>
-                        <tbody>
-                          {stopLoss.positions.slice(0, 6).map(p => {
-                            const danger = p.nearest_trigger?.danger_level || 'no_rules';
-                            const ruleLabels: Record<string, string> = {
-                              rul0a_break_low: '破底', rul0b_cost_stop: '成本',
-                              rul1_sector: '行业', rul2_iron: '铁律2', rul3_dynamic: '动态',
-                            };
-                            return (
-                              <tr key={p.symbol}>
-                                <td style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 10 }}>{p.symbol}</td>
-                                <td style={{ fontSize: 10 }}>{p.name || p.symbol}</td>
-                                <td style={{ color: p.float_pnl_pct >= 0 ? 'var(--cc-green)' : 'var(--cc-red)', fontFamily: 'var(--font-display)', fontSize: 10 }}>
-                                  {p.float_pnl_pct >= 0 ? '+' : ''}{p.float_pnl_pct.toFixed(1)}%</td>
-                                <td style={{ fontFamily: 'var(--font-display)', fontSize: 10 }}>
-                                  {p.nearest_trigger?.distance_pct != null ? `${p.nearest_trigger.distance_pct.toFixed(1)}%` : '-'}</td>
-                                <td style={{ fontSize: 10 }}>{ruleLabels[p.nearest_trigger?.rule || ''] || p.nearest_trigger?.rule || ''}</td>
-                                <td style={{ fontSize: 10, color: danger === 'triggered' ? 'var(--cc-red)' : danger === 'critical' ? 'var(--cc-amber)' : 'var(--cc-text-dim)' }}>
-                                  {danger === 'triggered' ? '触发' : danger === 'critical' ? '危急' : danger === 'warning' ? '警告' : '安全'}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                      <div className="cp-sl-list">
+                        {stopLoss.positions.slice(0, 6).map(p => {
+                          const danger = p.nearest_trigger?.danger_level || 'no_rules';
+                          const levelText: Record<string, string> = {
+                            triggered: '已触发', critical: '危急', warning: '警告',
+                            caution: '关注', safe: '安全', no_rules: '—',
+                          };
+                          const refs: { rule?: string; label?: string; direction?: string; price?: number | null; dist_pct?: number | null; touched?: boolean }[] = p.sell_refs || [];
+                          const fmt = (v: number | null | undefined, d = 2) =>
+                            (v == null || isNaN(v)) ? '—' : v.toFixed(d);
+                          return (
+                            <div key={p.symbol} className="cp-sl-row">
+                              <div className="cp-sl-head">
+                                <span className="cp-sl-sym">{p.symbol.replace(/^(SH|SZ|BJ)/, "")}</span>
+                                <span className={`cp-sl-badge ${danger}`}>{levelText[danger] || "—"}</span>
+                                <span className={`cp-sl-pnl ${(p.float_pnl_pct || 0) >= 0 ? "up" : "down"}`}>
+                                  {(p.float_pnl_pct || 0) >= 0 ? '+' : ''}{fmt(p.float_pnl_pct, 1)}%
+                                </span>
+                              </div>
+                              <div className="cp-sl-refs">
+                                <span className="cp-sl-now">现价 <b>{fmt(p.current_price)}</b></span>
+                                {refs.map(rf => {
+                                  const isDown = rf.direction === 'down';
+                                  const dist = rf.dist_pct;
+                                  const distAbs = dist == null ? 0 : Math.abs(dist);
+                                  let txt = '';
+                                  if (isDown) {
+                                    txt = rf.touched ? '已跌破·离场' : `高于黄线 ${fmt(distAbs, 1)}%`;
+                                  } else {
+                                    txt = rf.touched ? '已到·可T出'
+                                      : (dist != null && dist < 0 ? `还差 ${fmt(distAbs, 1)}% 到卖点`
+                                          : `高于卖点 ${fmt(distAbs, 1)}%`);
+                                  }
+                                  return (
+                                    <span key={rf.rule} className={`cp-sl-ref ${rf.touched ? 'touched' : isDown ? 'down' : 'up'}`}
+                                      title={`${rf.label || ''} · 触发价 ${fmt(rf.price, 3)}`}>
+                                      <i className={`fas fa-arrow-${isDown ? "down" : "up"}`} />
+                                      <em>{rf.label}</em>
+                                      <b>{fmt(rf.price, (rf.price || 0) >= 10 ? 2 : 3)}</b>
+                                      <span className="cp-sl-dist">{txt}</span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </>
                 )}

@@ -1720,3 +1720,115 @@
   color: var(--cc-faint);
   border-color: var(--cc-line-soft);
 }
+
+
+/* ═══════════════════════════════════════════════════════
+   防御系统 · 卖出参考价视图（2026-09-08 重设计）
+   ═══════════════════════════════════════════════════════ */
+.cp-sl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cp-sl-row {
+  border: 1px solid var(--cc-line-soft);
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: rgba(47, 124, 211, 0.03);
+}
+
+.cp-sl-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.cp-sl-sym {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--cc-text);
+}
+
+.cp-sl-pnl {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: auto;
+}
+
+.cp-sl-pnl.up { color: var(--cc-green); }
+.cp-sl-pnl.down { color: var(--cc-red); }
+
+.cp-sl-badge {
+  font-size: 8.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+  border: 1px solid;
+  font-family: var(--font-display);
+}
+
+.cp-sl-badge.triggered { color: #fff; background: var(--cc-red); border-color: var(--cc-red); }
+.cp-sl-badge.critical { color: var(--cc-red); background: rgba(229, 72, 77, 0.1); border-color: rgba(229, 72, 77, 0.35); }
+.cp-sl-badge.warning { color: var(--cc-amber); background: rgba(201, 138, 18, 0.08); border-color: rgba(201, 138, 18, 0.3); }
+.cp-sl-badge.caution { color: var(--cc-blue); background: rgba(47, 124, 211, 0.07); border-color: rgba(47, 124, 211, 0.25); }
+.cp-sl-badge.safe { color: var(--cc-green); background: rgba(39, 160, 107, 0.07); border-color: rgba(39, 160, 107, 0.25); }
+
+.cp-sl-refs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cp-sl-now {
+  font-size: 10px;
+  color: var(--cc-text-dim);
+  flex: none;
+}
+
+.cp-sl-now b {
+  font-family: var(--font-display);
+  color: var(--cc-text);
+}
+
+.cp-sl-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  border-radius: 3px;
+  padding: 1px 5px;
+  border: 1px solid var(--cc-line-soft);
+  background: #fff;
+  cursor: default;
+}
+
+.cp-sl-ref i { font-size: 8px; }
+.cp-sl-ref em {
+  font-style: normal;
+  color: var(--cc-faint);
+}
+.cp-sl-ref b {
+  font-family: var(--font-display);
+  color: var(--cc-text);
+}
+.cp-sl-dist { color: var(--cc-text-dim); }
+
+.cp-sl-ref.down { border-color: rgba(47, 124, 211, 0.25); }
+.cp-sl-ref.down i { color: var(--cc-blue); }
+.cp-sl-ref.up { border-color: rgba(39, 160, 107, 0.25); }
+.cp-sl-ref.up i { color: var(--cc-green); }
+
+.cp-sl-ref.touched {
+  background: rgba(229, 72, 77, 0.08);
+  border-color: rgba(229, 72, 77, 0.4);
+  box-shadow: 0 0 5px rgba(229, 72, 77, 0.15);
+}
+.cp-sl-ref.touched i { color: var(--cc-red); }
+.cp-sl-ref.touched b { color: var(--cc-red); }
+.cp-sl-ref.touched .cp-sl-dist { color: var(--cc-red); font-weight: 700; }

@@ -1323,6 +1323,15 @@ class StopLossMonitor:
                 },
                 "rule_distances": {k: round(v, 2) if v is not None else None for k, v in distances.items()},
                 "wolf_dynamic_exit": wolf_exit,
+                # 卖出参考价列表（2026-09-08 UI直观化: Portfolio防御面板直接渲染两线）
+                "sell_refs": [
+                    {"rule": "rul_wolf_vwap", "label": "黄线离场", "direction": "down",
+                     "price": wolf_exit.get("vwap"), "dist_pct": wolf_exit.get("vwap_gap_pct"),
+                     "touched": bool(wolf_exit.get("vwap_break"))},
+                    {"rule": "rul_wolf_t_sell", "label": "T出前高", "direction": "up",
+                     "price": wolf_exit.get("first_high"), "dist_pct": wolf_exit.get("dist_to_first_high_pct"),
+                     "touched": bool(wolf_exit.get("t_sell_ready"))},
+                ],
             })
 
         # 按危险程度排序：已触发 > 危急 > 警告 > 关注 > 安全
