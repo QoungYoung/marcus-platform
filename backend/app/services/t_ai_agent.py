@@ -79,6 +79,9 @@ def _parse_ai_decision(reply: str) -> Dict[str, Any]:
             "action": action,
             "reason": str(obj.get("reason") or "")[:500],
             "condition": obj.get("condition") if isinstance(obj.get("condition"), dict) else None,
+            # AI 建议量（2026-09-08 用户拍板：可输出建议股数/金额，系统按 min(建议,上限) 执行）
+            "volume": int(obj.get("volume") or obj.get("shares") or obj.get("vol") or 0),
+            "amount": float(obj.get("amount") or 0),
         }
     # 无 JSON：按关键词兜底
     if any(k in text for k in ("执行", "放行", "exec")):
@@ -145,8 +148,15 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
             # 方向：优先触发落库 direction（2026-09-08），不再按 event_type 白名单猜；
             # 历史行无 direction 时由 t_db.trigger_side 按 event_type/条件方向兜底。
             side = t_db.trigger_side(trigger or {})
-            # 量：优先 context.volume；否则按可卖底仓 30% 推导（对齐做T单笔惯例，最小 100 股）
-            volume = int((context or {}).get("volume") or 0)
+            # 量优先级：AI 建议(volume/amount) > context.volume > 系统默认推导(30%/建仓规模)；
+            # 最终 min(量, 系统档位上限) 执行（2026-09-08 用户拍板，AI 只能在护栏内调仓）
+            ai_sug = int((decision or {}).get("volume") or 0)
+            if ai_sug <= 0 and (decision or {}).get("amount"):
+                try:
+                    ai_sug = int(float((decision or {}).get("amount") or 0) / price / 100) * 100 if price > 0 else 0
+                except Exception:
+                    ai_sug = 0
+            volume = ai_sug or int((context or {}).get("volume") or 0)
             if volume <= 0:
                 try:
                     from app.services.t_gateway import get_sellable_ledger
@@ -164,7 +174,28 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                         volume = 100
                 except Exception:
                     volume = 100
-            volume = (volume // 100) * 100 or 100
+            # 系统上限截断：min(建议量, resolve cap)（AI 建议超上限时自动收敛，不整单拒绝）
+            try:
+                from app.services.t_gateway import resolve_buy_cap, resolve_sell_cap
+                _acc = (trigger or {}).get("account_id") or "stock"
+                if side == "buy":
+                    _cap = resolve_buy_cap(symbol, price=price, account_id=_acc,
+                                           condition_id=(trigger or {}).get("condition_id"))
+                    if _cap > 0:
+                        volume = min(volume, _cap)
+                else:
+                    _cap = resolve_sell_cap(symbol, account_id=_acc)
+                    if _cap > 0:
+                        volume = min(volume, _cap)
+            except Exception as _ce:
+                print(f"[t-ai] 量上限截断异常: {_ce}")
+            volume = (volume // 100) * 100
+            if volume <= 0:
+                gw = {"status": "rejected", "reason": "量推导后为0（AI建议为0或超出系统上限且无空间）"}
+                result["gateway"] = gw
+                result["status"] = "rejected"
+                _update_gateway_result(action_id, gw)
+                return result
             if price <= 0:
                 gw = {"status": "rejected", "reason": "无有效价格（AI 决策未携带价格）"}
             else:

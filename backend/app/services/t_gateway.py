@@ -325,6 +325,49 @@ def _max_buy_volume(symbol: str, tier: str, ledger: Optional[dict] = None,
     return int(sellable * 1.5)
 
 
+def resolve_buy_cap(symbol: str, price: Optional[float] = None,
+                    account_id: str = ACCOUNT_T,
+                    condition_id: Optional[int] = None) -> int:
+    """系统档位买量上限（与 validate_order_at 同口径：regime 档位 + 可卖底仓/建仓规模）。
+
+    供执行层做 min(AI建议量, 系统上限) 截断（2026-09-08 用户拍板）——
+    AI 可输出建议金额/股数，但最终不超系统上限。
+    """
+    try:
+        regime_state = compute_regime()
+        regime = regime_state.get("regime", "ACTIVE")
+        try:
+            quote = self_quote(symbol)
+        except Exception:
+            quote = None
+        tier = _floor_tier(regime, bool(quote and _near_limit_down(quote)))
+        ledger = get_sellable_ledger(account_id)
+        cap = _max_buy_volume(symbol, tier, ledger, price=price, condition_id=condition_id)
+        # AI自由跑(档位关闭)时仍有底仓的标的收敛到可卖底仓（min(建议,上限) 语义，2026-09-08）——
+        # 只有无底仓建仓(condition 路径)才放开给 build_sizing 规模
+        if not T_BUY_TIER_LIMIT_ENABLED:
+            _sellable = int((ledger.get(symbol) or {}).get("sellable") or 0)
+            if _sellable > 0:
+                cap = min(cap, _sellable)
+        return cap
+    except Exception as e:
+        print(f"[t-gate] resolve_buy_cap 失败: {e}")
+        return 0
+
+
+def resolve_sell_cap(symbol: str, account_id: str = ACCOUNT_T) -> int:
+    """系统可卖上限（卖出 = 可卖 − 底仓 floor，2026-09-02 狼大口径：底仓不动）。"""
+    try:
+        ledger = get_sellable_ledger(account_id)
+        item = ledger.get(symbol) or {}
+        sellable = int(item.get("sellable") or 0)
+        floor = base_floor_shares(account_id, symbol, volume=sellable)
+        return max(sellable - floor, 0)
+    except Exception as e:
+        print(f"[t-gate] resolve_sell_cap 失败: {e}")
+        return 0
+
+
 # ────────────────────────────────────────────────────────────────
 # 三阶校验网关
 # ────────────────────────────────────────────────────────────────

@@ -156,8 +156,10 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"输出决策 JSON："
         f'{{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", '
         f'"condition": {{...}}}}（condition 仅在 update_condition 时提供，含 symbol/trigger_kind/target_price 等）。'
-        f"exec 将按触发快照的『建议价』执行（低吸用建议买价、高抛用建议卖价），数量由系统按可卖底仓自动裁定；"
-        f"你不需要也不应自定价量，decision 只表达『是否放行』。"
+        f"exec 将按触发快照的『建议价』执行（低吸用建议买价、高抛用建议卖价）。"
+        f"数量可选：① 不输出 volume/amount → 系统按可卖底仓档位自动推导；"
+        f"② 在 JSON 输出建议量 volume(股,100整数倍) 或 amount(金额元) → 系统按 min(建议量, 档位上限) 执行，"
+        f"超出上限自动收敛、不会整单拒绝；不要输出超档位上限的巨额建议（会被收敛）。"
         f"【消费式条件】本次触发后该条件已销毁（consumed）——如需继续做T，请在决策后重新评估设定新条件："
         f"要么用 update_condition 附新 condition（重建），要么调用 create_t_condition 发布新条件；"
         f"不重建则本标的今日不再有触发条件。"
