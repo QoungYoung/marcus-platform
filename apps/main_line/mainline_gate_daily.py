@@ -40,6 +40,8 @@ def main():
         sh('build_concept_long', [py, os.path.join(APP, 'build_concept_long.py'), '20250101'])
     # 1.5) ETF 份额流(通道弱佐证, 份额加权; ~30s)
     sh('build_etf_flow', [py, os.path.join(APP, 'build_etf_flow.py'), '--date', date8])
+    # 1.6) 龙虎榜机构/游资净买(修正窗口, ~15s)
+    sh('build_inst_flow', [py, os.path.join(APP, 'build_inst_flow.py'), '--date', date8])
     # 2) 结构 GATE
     sh('trend_confirm', [py, os.path.join(APP, 'trend_confirm.py'), '--hist', os.path.join(DATA, 'concept_long.json'),
                          '--params', os.path.join(DATA, 'trend_confirm_params.json'), '--as-of', date8,
