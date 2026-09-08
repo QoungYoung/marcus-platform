@@ -44,7 +44,9 @@ DIRS = {
  '其他汽车': ['整车', '零部件', '汽车'],
  '综合/未知': [],
 }
-# Wolf 标注 theme 词 -> 方向支持计数(直接用原词)
+# 旧概念名 -> 已覆盖的 SEED 细分(假域外抑制: 语义已覆盖不再报候选)
+ALIAS_COV = {'猪肉概念': '生猪养殖', '鸡肉概念': '肉鸡养殖', '预制菜概念': '乳业',
+             '供销社概念': '农业', '旅游酒店': '旅游概念', '调味品概念': '白酒'}
 def main():
     import chain_map as cm
     from fusion_mainline import THEME_CONCEPTS
@@ -63,9 +65,12 @@ def main():
         return None
     gaps = {}
     scanned = 0
+    min_r20 = 8.0
+    if '--min-r20' in sys.argv:
+        min_r20 = float(sys.argv[sys.argv.index('--min-r20') + 1])
     for k, v in hist.items():
         name = v.get('name') or k
-        if name in cov: continue
+        if name in cov or name in ALIAS_COV: continue
         if any(w in name for w in JUNK): continue
         scanned += 1
         dir_hit = None
@@ -77,25 +82,36 @@ def main():
         c0 = pxlast(v, 20); c1 = pxlast(v, 0)
         if not c0 or not c1 or c0 <= 0: continue
         r20 = (c1 / c0 - 1) * 100
-        g = gaps.setdefault(dir_hit, {'concepts': [], 'r20s': [], 'wolf': set()})
+        g = gaps.setdefault(dir_hit, {'concepts': [], 'r20s': [], 'wolf': set(), 'net_pos': 0, 'net_n': 0})
         g['concepts'].append(name); g['r20s'].append(round(r20, 1))
+        nv = v.get('net_amount') or []
+        vals = [float(x) for x in nv[-5:] if x is not None]
+        if len(vals) >= 3:
+            g['net_n'] += 1
+            if sum(vals) > 0: g['net_pos'] += 1
         for lname in label_cnt:
             if lname and (lname in name or name in lname or any(w and w in lname for w in DIRS.get(dir_hit, []))):
                 g['wolf'].add(lname)
     out = []
     for d, g in gaps.items():
         if len(g['concepts']) < 1: continue
+        ra = round(sum(g['r20s']) / len(g['r20s']), 1)
         out.append({'direction': d, 'concept_n': len(g['concepts']),
-                    'r20_avg': round(sum(g['r20s']) / len(g['r20s']), 1),
+                    'r20_avg': ra,
+                    'net_pos_ratio': round(g['net_pos'] / g['net_n'], 2) if g['net_n'] else None,
                     'r20_top': sorted(g['concepts'], key=lambda c: -g['r20s'][g['concepts'].index(c)])[:6],
                     'concepts': g['concepts'][:12],
                     'wolf_support': sorted(g['wolf']),
-                    'strength': '强' if round(sum(g['r20s']) / len(g['r20s']), 1) > 4 else ('中' if round(sum(g['r20s']) / len(g['r20s']), 1) > 1 else '弱')})
+                    'strength': '强' if ra > 4 else ('中' if ra > 1 else '弱')})
     out.sort(key=lambda x: (-x['r20_avg'], -x['concept_n']))
-    json.dump({'date': '20260908', 'scanned_uncov': scanned, 'directions': out},
+    alerts = [x for x in out if x['r20_avg'] >= min_r20 and x['concept_n'] >= 3]
+    json.dump({'date': '20260908', 'min_r20': min_r20, 'scanned_uncov': scanned,
+               'alerts': alerts, 'directions': out},
               open(os.path.join(DATA, 'theme_gap_scan.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
-    print('域外未覆盖产业概念扫描数:', scanned)
-    for x in out[:22]:
+    print('域外未覆盖产业概念扫描数:', scanned, '| ALERTS(r20>=%s, n>=3):' % min_r20, len(alerts))
+    for x in alerts[:10]:
+        print('  !!', x['direction'], 'r20=%+.1f%% n=%d net+%s' % (x['r20_avg'], x['concept_n'], x['net_pos_ratio']))
+    for x in out[:18]:
         print(' %-22s n=%-3d r20=%+.1f%% %s wolf=%s' % (x['direction'], x['concept_n'], x['r20_avg'],
               str(x['r20_top'][:3]), x['wolf_support'][:3]))
     print('WROTE /app/data/theme_gap_scan.json')

@@ -891,3 +891,26 @@ tasks:
     on_failure: true
     on_success: false
     pi_analysis: false
+
+- id: theme_gap_scan
+  name: 域外主线方向监控
+  description: 每日18:45 扫描 concept_hist 521概念中域外未覆盖方向, r20>=8%且概念>=3 输出 ALERT 候选(theme_gap_scan.json); 假域外(语义已覆盖)经别名抑制
+  enabled: true
+  schedule:
+    type: cron
+    expr: '45 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/scan_theme_gaps.py
+    args:
+    - --min-r20
+    - '8'
+  output:
+    append: true
+    log_file: logs/theme_gap_scan_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
