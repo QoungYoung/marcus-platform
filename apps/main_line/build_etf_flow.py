@@ -70,21 +70,20 @@ def main():
                 print('fs err', ts, str(e)[:60])
             time.sleep(0.15)
         shares[th] = per_etf
-    def etf_chg(ser, k):
-        ds = sorted(ser)
-        if len(ds) <= k: return None, None
-        a, b = ser[ds[-1 - k]], ser[ds[-1]]
-        return ((b / a - 1.0) * 100.0 if a else None), ds[-1]
-    import statistics
+    def weighted_chg(per, k):
+        """主题份额变化=份额加权(总期末-总期初)/总期初; 防小产品中位噪声"""
+        total_a = total_b = 0.0
+        for e in per:
+            ds = sorted(e['series'])
+            if len(ds) <= k: continue
+            total_a += e['series'][ds[-1 - k]]; total_b += e['series'][ds[-1]]
+        return ((total_b / total_a - 1.0) * 100.0) if total_a else None
     out = {'date': '20260908', 'themes': []}
     for th, per in shares.items():
-        c5 = [v for v in (etf_chg(e['series'], 5)[0] for e in per) if v is not None]
-        c20 = [v for v in (etf_chg(e['series'], 20)[0] for e in per) if v is not None]
         out['themes'].append({'theme': th, 'etfs': [e['ts'] for e in per],
-                              'd5': round(statistics.median(c5), 2) if c5 else None,
-                              'd20': round(statistics.median(c20), 2) if c20 else None,
-                              'per_etf': [{'ts': e['ts'], 'd5': etf_chg(e['series'], 5)[0] and round(etf_chg(e['series'], 5)[0], 2),
-                                           'last': etf_chg(e['series'], 5)[1]} for e in per]})
+                              'd5': weighted_chg(per, 5) and round(weighted_chg(per, 5), 2),
+                              'd20': weighted_chg(per, 20) and round(weighted_chg(per, 20), 2),
+                              'per_etf': [{'ts': e['ts'], 'd20': weighted_chg([e], 20) and round(weighted_chg([e], 20), 2)} for e in per]})
     # margin 两融环境
     try:
         def mg(d):
