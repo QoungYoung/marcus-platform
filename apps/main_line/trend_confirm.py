@@ -51,8 +51,10 @@ def _load_params(cfg, path):
     if path and os.path.exists(path):
         p = json.load(open(path, encoding='utf-8'))
         if isinstance(p, dict):
-            cfg = dict(cfg); cfg.update({k: v for k, v in p.items() if k in cfg})
-            print('params override', p, flush=True)
+            src = p.get('params') if isinstance(p.get('params'), dict) else p
+            cfg = dict(cfg); cfg.update({k: v for k, v in src.items() if k in cfg})
+            print('params override', {k: cfg.get(k) for k in ('new_high_window', 'confirm_recency_days',
+                                                              'swing_k', 'break_ratio', 'pullback_max_pct')}, flush=True)
     return cfg
 
 def swings(c, k):
