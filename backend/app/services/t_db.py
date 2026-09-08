@@ -160,6 +160,50 @@ def _resolve_direction(cond: Dict[str, Any]) -> str:
     return ""
 
 
+# ── t_triggers 方向解析（2026-09-08：触发落库即带 direction，执行层不再靠 event_type 猜）──
+TRIGGER_BUY_EVENTS = frozenset({
+    "low_buy", "panic_vibrate", "custom_buy", "wolf_zheng_t_buy",
+})
+TRIGGER_SELL_EVENTS = frozenset({
+    "high_sell", "high_sell_then_buy_back", "high_only", "stop_loss",
+    "wolf_dao_t_sell", "wolf_confirm_sell", "wolf_day_end_de_t",
+    "wolf_defensive_t_reduce", "wolf_defensive_t_reduce_index", "wolf_board_half_sell",
+})
+
+
+def trigger_direction(trig: Optional[Dict[str, Any]] = None) -> str:
+    """触发事件方向：direction 列优先 → event_type 映射 → 条件 direction。
+
+    返回 'buy' | 'sell' | ''（未知事件保持历史语义，由 trigger_side 兜底为卖）。
+    """
+    if not trig:
+        return ""
+    d = str(trig.get("direction") or "").strip().lower()
+    if d in ("buy", "买", "买入"):
+        return "buy"
+    if d in ("sell", "卖", "卖出"):
+        return "sell"
+    ev = str(trig.get("event_type") or "")
+    if ev in TRIGGER_BUY_EVENTS:
+        return "buy"
+    if ev in TRIGGER_SELL_EVENTS:
+        return "sell"
+    cid = trig.get("condition_id")
+    if cid:
+        try:
+            c0 = get_condition(int(cid))
+            if c0:
+                return _resolve_direction(c0)
+        except Exception:
+            pass
+    return ""
+
+
+def trigger_side(trig: Optional[Dict[str, Any]] = None) -> str:
+    """执行侧（buy/sell），方向解析失败按历史语义默认 sell。"""
+    return "buy" if trigger_direction(trig) == "buy" else "sell"
+
+
 def list_active_conditions(symbol: Optional[str] = None, trade_date: Optional[str] = None,
                              account_id: Optional[str] = None,
                              before_trade_date: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -303,11 +347,11 @@ def insert_trigger(trig: Dict[str, Any]) -> Optional[int]:
                 INSERT INTO t_triggers (
                     account_id, condition_id, symbol, event_type,
                     trigger_price, quote_price, suggest_bid_price, suggest_ask_price,
-                    slippage_budget, snapshot, status, mode, reason
+                    slippage_budget, snapshot, status, mode, reason, direction
                 ) VALUES (
                     :account_id, :condition_id, :symbol, :event_type,
                     :trigger_price, :quote_price, :suggest_bid_price, :suggest_ask_price,
-                    :slippage_budget, :snapshot, 'pending', :mode, :reason
+                    :slippage_budget, :snapshot, 'pending', :mode, :reason, :direction
                 )
                 RETURNING id
                 """
@@ -324,6 +368,7 @@ def insert_trigger(trig: Dict[str, Any]) -> Optional[int]:
                 "snapshot": _to_jsonb(trig.get("snapshot")),
                 "mode": trig.get("mode", "auto"),
                 "reason": trig.get("reason"),
+                "direction": trigger_direction(trig),
             }).fetchone()
             db.commit()
             return row[0] if row else None

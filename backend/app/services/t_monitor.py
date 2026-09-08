@@ -201,6 +201,7 @@ class TMonitor:
             "slippage_budget": 0.001,
             "snapshot": {"quote_time": now, "wolf_rule": reason, "trigger_kind": kind, "source": "wolf_t_rules"},
             "mode": "auto",
+            "direction": "buy" if kind == "wolf_zheng_t_buy" else "sell",
         }
         try:
             tid = t_db.insert_trigger(trig)
@@ -976,6 +977,7 @@ class TMonitor:
                 "consecutive_hits": consecutive_hits,   # AI 主导：连续命中计数
             },
             "mode": mode,
+            "direction": "buy" if _is_buy_side(cond) else "sell",
         }
         trig_id = t_db.insert_trigger(trig)
         if trig_id:

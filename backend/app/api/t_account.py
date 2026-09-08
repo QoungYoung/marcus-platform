@@ -351,8 +351,8 @@ def t_trigger_confirm(trigger_id: int, action: str = "execute", price: Optional[
         ok = t_db.update_trigger_status(trigger_id, "cancelled", reason="人工取消")
         return {"success": ok, "status": "cancelled"}
 
-    # execute：按快照建议价执行（走网关）
-    side = "buy" if trig.get("event_type") in ("low_buy", "panic_vibrate") else "sell"
+    # execute：按快照建议价执行（走网关）；方向以落库 direction 为准（2026-09-08）
+    side = t_db.trigger_side(trig)
     exec_price = price or float(trig.get("suggest_bid_price") or trig.get("quote_price") or 0)
     from app.services.t_gateway import get_sellable_ledger
     ledger = get_sellable_ledger()

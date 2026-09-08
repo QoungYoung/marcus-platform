@@ -254,7 +254,7 @@ def agent_review_and_execute(trigger: Dict[str, Any]) -> Dict[str, Any]:
     """
     trigger_id = int(trigger.get("id") or 0)
     symbol = trigger.get("symbol", "")
-    side = "buy" if trigger.get("event_type") in ("low_buy", "panic_vibrate") else "sell"
+    side = t_db.trigger_side(trigger)  # 方向以落库 direction 为准（2026-09-08）
     regime = compute_regime().get("regime", "ACTIVE")
 
     # 1) 异常升级分类（与 AI 决策共享的硬性升级）

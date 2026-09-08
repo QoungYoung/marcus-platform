@@ -142,20 +142,9 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
             price = float((trigger or {}).get("suggest_bid_price")
                           or (trigger or {}).get("suggest_ask_price")
                           or (context or {}).get("price") or 0)
-            ev = (trigger or {}).get("event_type")
-            side = "buy" if ev in ("low_buy", "panic_vibrate", "custom_buy") else "sell"
-            # custom 等自由类型：触发事件自身无方向，回查条件 direction（迭代#58 与
-            # TMonitor._is_buy_side 对齐，避免 custom-buy 被按卖腿处理）
-            if side == "sell" and ev not in ("high_sell", "high_sell_then_buy_back", "high_only", "stop_loss"):
-                try:
-                    cid = (trigger or {}).get("condition_id")
-                    if cid:
-                        from app.services.t_db import get_condition
-                        c0 = get_condition(cid)
-                        if c0 and str(c0.get("direction") or "").strip().lower() in ("buy", "买", "买入"):
-                            side = "buy"
-                except Exception:
-                    pass
+            # 方向：优先触发落库 direction（2026-09-08），不再按 event_type 白名单猜；
+            # 历史行无 direction 时由 t_db.trigger_side 按 event_type/条件方向兜底。
+            side = t_db.trigger_side(trigger or {})
             # 量：优先 context.volume；否则按可卖底仓 30% 推导（对齐做T单笔惯例，最小 100 股）
             volume = int((context or {}).get("volume") or 0)
             if volume <= 0:
