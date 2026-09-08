@@ -111,6 +111,7 @@ class TMonitor:
                             self._start_ai_maintain()
                     self._round()
                     self._settle_tsell_pending()  # 撤销式T出结算(放量过前高→撤销/超时→执行)
+                    self._settle_pullback_sell()  # ②量能分层(2026-09-08): 缩量破位→反抽/尾盘确认离场
                     self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
                     self._check_roundtrip_sell()  # B模型·等量换手(2026-09-08): 低吸后反弹≥+0.8%卖≤N旧仓
@@ -260,6 +261,54 @@ class TMonitor:
                 print(f"[TMonitor] wolf_t_rules触发 #{tid} {sym} {kind} @ {current} ({reason})")
         except Exception as e:
             print(f"[TMonitor] wolf_t_rules写触发异常: {e}")
+
+    def _settle_pullback_sell(self) -> None:
+        """②量能分层卖结算(2026-09-08): 缩量破位等待中的标的——
+        反抽回 ref_up(支撑/黄线上沿) → 执行卖T仓; 14:45后仍未收回 → 尾盘确认离场; 处理完即清理。"""
+        if not _PULLBACK_SELL:
+            return
+        try:
+            from app.services.t_gateway import gateway_execute, resolve_sell_cap
+            now_hm = datetime.now().hour * 100 + datetime.now().minute
+            for sym in list(_PULLBACK_SELL.keys()):
+                p = _PULLBACK_SELL[sym]
+                try:
+                    cur = 0.0
+                    try:
+                        from app.services.t_data_sources import fetch_tencent_quote, _normalize_symbol
+                        _ns = _normalize_symbol(sym)
+                        q = fetch_tencent_quote([_ns]).get(_ns) or {}
+                        cur = float(q.get("current") or 0)
+                    except Exception:
+                        cur = 0.0
+                    if cur <= 0:
+                        continue
+                    do_sell, reason_tag = False, ""
+                    if cur >= float(p.get("ref_up") or 0):
+                        do_sell, reason_tag = True, "反抽到离场位"
+                    elif now_hm >= PULLBACK_END_HM:
+                        do_sell, reason_tag = True, "14:45尾盘确认离场"
+                    if not do_sell:
+                        continue
+                    cap = resolve_sell_cap(sym, account_id=p.get("account_id") or "stock")
+                    vol = min(int(p.get("volume") or 0), cap)
+                    vol = (vol // 100) * 100
+                    if vol < 100:
+                        del _PULLBACK_SELL[sym]
+                        continue
+                    gw = gateway_execute(sym, "sell", cur, vol,
+                                         reason="[量能分层] %s %s 缩量破位后离场" % (reason_tag, p.get("kind")),
+                                         trigger_id=p.get("trig_id"),
+                                         decision_source="rule",
+                                         account_id=p.get("account_id") or "stock")
+                    if gw.get("status") == "success":
+                        print(f"[TMonitor] 量能分层卖出 {sym} {vol}股@{cur} ({reason_tag})")
+                    del _PULLBACK_SELL[sym]
+                except Exception as e:
+                    print(f"[TMonitor] pullback settle err {sym}: {str(e)[:100]}")
+                    del _PULLBACK_SELL[sym]
+        except Exception as e:
+            print(f"[TMonitor] _settle_pullback_sell 异常: {str(e)[:120]}")
 
     def _settle_tsell_pending(self) -> None:
         """撤销式 T出 结算(2026-09-07): 对 pending 的 high_sell 观察——
@@ -520,6 +569,8 @@ class TMonitor:
             ("custom_vwap_sell", {"and": [{"op": "==", "field": "quote.vwap_break", "value": True}]}),
             ("high_sell", {"and": [{"op": "==", "field": "minute.m5.t_sell", "value": True}]}),
             ("custom_trail_sell", {"and": [{"op": "==", "field": "quote.trail_break", "value": True}]}),
+            # 步骤④/②: 跌破最近支撑位卖出腿（auto_exit 持续腿, 放量立减/缩量反抽减/尾盘确认）
+            ("custom_support_sell", {"and": [{"op": "==", "field": "quote.break_support", "value": True}]}),
         ]
         keys_today = {(str(k.get("symbol")), str(k.get("trigger_kind")))
                        for k in t_db.list_condition_keys(T_MONITOR_ACCOUNT, today)}
@@ -1211,6 +1262,14 @@ class TMonitor:
                         max_sell = max(sellable - _floor, 0) if sellable > _floor else 0
                         volume = max_sell
                     volume = (volume // 100) * 100
+                # ④破位禁低吸(2026-09-08): 现价已在最近支撑下方时禁止 254/253 自动低吸(防接刀)
+                if (side == "buy" and trigger_kind in ("custom_prevlow", "custom_m5dump")
+                        and (snapshot or {}).get("quote", {}).get("break_support")
+                        and os.getenv("SR_NO_DIP_BUY", "1") != "0"):
+                    t_db.update_trigger_status(trig_id, "blocked",
+                                               reason="破位禁低吸(现价<=support_l1, ④门)")
+                    print(f"[TMonitor] ④破位禁低吸 {symbol} {trigger_kind}")
+                    return
                 exec_ok = False
                 # ⑥ 253/254 无底仓建仓 → 走狼大建仓链(而非做T gateway)；注 self._trade_executor 时生效，否则回退 gateway
                 _no_hold_build = (
@@ -1296,12 +1355,40 @@ class TMonitor:
                                     _tsell_defer = True
                         except Exception as _te:
                             print(f"[TMonitor] tsell defer err: {str(_te)[:100]}")
+                    # ②量能分层(2026-09-08): 跌破类离场腿缩量(<PULLBACK_VOL_RATIO)不立即卖——
+                    # 进反抽减等待(claimed), 反抽回支撑/黄线上沿或14:45尾盘确认后由 _settle_pullback_sell 执行
+                    _pb_defer = False
+                    if (not _g3_block and not _tsell_defer and side == "sell"
+                            and trigger_kind in ("custom_vwap_sell", "custom_trail_sell", "custom_support_sell")
+                            and os.getenv("AUTO_PULLBACK_SELL", "1") != "0"
+                            and symbol not in _PULLBACK_SELL):
+                        try:
+                            _vr = float((snapshot or {}).get("vol_ratio") or 0) if snapshot else 0.0
+                            if 0 < _vr < PULLBACK_VOL_RATIO:
+                                _q = (snapshot or {}).get("quote") or {}
+                                _sup = float(_q.get("support_l1") or 0)
+                                _vwap = float(_q.get("average") or 0) or float(quote.get("average") or 0)
+                                _ref_up = max(_sup, _vwap)
+                                if _ref_up <= 0:
+                                    _ref_up = round(float(current) * 1.005, 4)
+                                _PULLBACK_SELL[symbol] = {"kind": trigger_kind, "trig_id": trig_id,
+                                                          "volume": int(volume), "ref_up": round(_ref_up, 4),
+                                                          "sup": round(_sup, 4), "vwap": round(_vwap, 4),
+                                                          "account_id": cond.get("account_id", T_MONITOR_ACCOUNT),
+                                                          "ts": time.time()}
+                                t_db.update_trigger_status(
+                                    trig_id, "claimed",
+                                    reason="缩量破位(%s量比%.2f<%.1f), 反抽减等待(ref_up=%.3f)" % (trigger_kind, _vr, PULLBACK_VOL_RATIO, _ref_up))
+                                print(f"[TMonitor] {trigger_kind} 缩量破位进入反抽等待 {symbol} ref_up={_ref_up:.3f} vr={_vr}")
+                                _pb_defer = True
+                        except Exception as _pbe:
+                            print(f"[TMonitor] pullback defer err: {str(_pbe)[:80]}")
                     if _g3_block:
                         exec_ok = False
                         print(f"[TMonitor] G3门拦截 {symbol} 卖腿: {_g3_reason}")
                         t_db.update_trigger_status(trig_id, "blocked", reason=_g3_reason + "（G3门）")
-                    elif _tsell_defer:
-                        exec_ok = False   # 延迟执行(由 _settle_tsell_pending 后续处理)
+                    elif _tsell_defer or _pb_defer:
+                        exec_ok = False   # 延迟执行(由 _settle_tsell_pending/_settle_pullback_sell 处理)
                     else:
                         gw = gateway_execute(symbol, side, current, volume,
                                              reason=f"条件命中自动执行（{trigger_kind}）",
@@ -1471,7 +1558,7 @@ def _is_wolf_t_condition(cond: Dict[str, Any]) -> bool:
     s = _json.dumps(expr, ensure_ascii=False)
     # 2026-09-08: 手动护栏/自动离场卖腿(价位/黄线/回撤跟踪)纳入评估——此前因不含
     # WOLF_T_FIELDS字段被_round整轮跳过(155.2/588170黄线都不触发)
-    if str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell", "custom_trail_sell"):
+    if str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell", "custom_trail_sell", "custom_support_sell"):
         return True
     return any(f in s for f in WOLF_T_FIELDS)
 
@@ -1582,6 +1669,11 @@ def _tsell_undo_decide(hi, base, last_close, last_vol, elapsed_s):
 # 指数盘中回撤缓存（30s TTL，避免每轮拉腾讯）
 _index_dd_cache = {"at": 0.0, "value": 0.0}
 _m5_dump_cache = {"at": 0.0, "value": 0.0}
+# ②量能分层卖(2026-09-08): 缩量破位→反抽减等待状态 + 支撑腿破位禁低吸
+PULLBACK_VOL_RATIO = float(os.getenv("PULLBACK_VOL_RATIO", "1.2"))  # vol_ratio<该值视为缩量
+PULLBACK_END_HM = 1445          # 14:45 后仍未反抽达标 → 尾盘确认离场
+_PULLBACK_SELL: Dict[str, dict] = {}   # symbol -> pending(缩量破位待反抽/尾盘确认)
+
 _prev_low_cache = {"at": 0.0, "sym": "", "value": False}
 
 
