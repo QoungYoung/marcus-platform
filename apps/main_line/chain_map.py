@@ -1293,36 +1293,68 @@ def fetch_mv(pro, date8):
         d = str(int(d) - 1)
     return {}, None
 
-def fina_verdict(pro, ts, seg, names):
-    v = {'ts': ts, 'name': names.get(ts, ''), 'mainbz': [], 'hit': [], 'ok': False}
+FINA_CACHE = {}
+AI_CACHE = {}
+FINA_TTL = 60 * 86400
+AI_TTL = 7 * 86400
+_FORCE_FINA = False
+_FINA_MISS = 0
+
+def _cache_files():
+    return os.path.join(DATA, 'chain_fina_cache.json'), os.path.join(DATA, 'chain_ai_cache.json')
+
+def load_caches():
+    global FINA_CACHE, AI_CACHE
+    try:
+        p, q = _cache_files()
+        FINA_CACHE = json.load(open(p, encoding='utf-8')) if os.path.exists(p) else {}
+        AI_CACHE = json.load(open(q, encoding='utf-8')) if os.path.exists(q) else {}
+    except Exception:
+        FINA_CACHE = {}; AI_CACHE = {}
+    print('caches | fina', len(FINA_CACHE), 'ai', len(AI_CACHE), flush=True)
+
+def save_caches():
+    try:
+        p, q = _cache_files()
+        json.dump(FINA_CACHE, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
+        json.dump(AI_CACHE, open(q, 'w', encoding='utf-8'), ensure_ascii=False)
+    except Exception as e:
+        print('cache save err', str(e)[:80], flush=True)
+
+def fina_fetch_raw(pro, ts, force=False):
+    """fina 主营原文 top10 缓存(60天TTL); 命中免网络, miss 才拉取"""
+    global _FINA_MISS
+    if not force and not _FORCE_FINA:
+        e = FINA_CACHE.get(ts)
+        if e and (time.time() - e.get('t', 0)) < FINA_TTL:
+            return e['items']
+    items = []
     try:
         df = pro.fina_mainbz(ts_code=ts)
         if df is not None and not df.empty:
             df = df.sort_values('bz_sales', ascending=False)
-            items = df[~df['bz_item'].isin(['行业', '产品', '地区'])].head(6).to_dict('records')
-            tops = [str(r.get('bz_item') or '')[:40] for r in items]
-            v['mainbz'] = tops
-            hits = [t for t in tops if any(k.lower() in t.lower() for k in seg['kw'])]
-            v['hit'] = hits[:3]
-            v['ok'] = len(hits) > 0
-    except Exception as e:
-        v['err'] = str(e)[:80]
+            items = [{'bz': str(r.get('bz_item') or '')[:40], 'sales': float(r.get('bz_sales') or 0)}
+                     for _, r in df[~df['bz_item'].isin(['行业', '产品', '地区'])].head(10).iterrows()]
+    except Exception:
+        pass
+    FINA_CACHE[ts] = {'t': time.time(), 'items': items}
+    _FINA_MISS += 1
+    time.sleep(0.05)
+    return items
+
+def fina_verdict(pro, ts, seg, names):
+    v = {'ts': ts, 'name': names.get(ts, ''), 'mainbz': [], 'hit': [], 'ok': False}
+    items = fina_fetch_raw(pro, ts)
+    if items:
+        tops = [x['bz'] for x in items[:6]]
+        v['mainbz'] = tops
+        hits = [t for t in tops if any(k.lower() in t.lower() for k in seg['kw'])]
+        v['hit'] = hits[:3]
+        v['ok'] = len(hits) > 0
     return v
 
 def load_fina_bz(pro, ts):
-    try:
-        df = pro.fina_mainbz(ts_code=ts)
-        if df is None or df.empty: return []
-        df = df.sort_values('bz_sales', ascending=False)
-        items = df[~df['bz_item'].isin(['行业', '产品', '地区'])].head(8)
-        out = []
-        for _, r2 in items.iterrows():
-            bz = str(r2.get('bz_item') or '')[:40]
-            try: s = float(r2.get('bz_sales') or 0)
-            except Exception: s = 0
-            out.append({'bz': bz, 'sales': int(s)})
-        return out
-    except Exception: return []
+    return fina_fetch_raw(pro, ts)[:8]
 
 SYSTEM = (
 '你是 A股产业链成分研究员。判断公司主营是否真正属于给定产业链环节(该环节是整条产业链的细分场景)。'
@@ -1410,6 +1442,9 @@ def kw_suggest_append(theme, seg, ts, name, verdict):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('-')]
     no_ai = '--no-ai' in sys.argv
+    global _FORCE_FINA
+    full = '--full' in sys.argv
+    _FORCE_FINA = '--refresh-fina' in sys.argv
     date8 = args[0] if args else None
     from app.api.market import _get_tushare_pro
     pro = _get_tushare_pro()
@@ -1432,6 +1467,7 @@ def main():
     except Exception as e:
         print('trade_cal fail, use date=', date8, str(e)[:80], flush=True)
     mv, mv_date = fetch_mv(pro, date8)
+    load_caches()
     use_ai = (not no_ai) and ai_enabled()
     print('chain_map v3 | date', date8, '| mv_date', mv_date, '| ai', 'ON' if use_ai else ('off(--no-ai)' if no_ai else 'UNAVAILABLE'), flush=True)
     out = {'date': date8, 'mv_date': mv_date, 'generated_by': 'chain_map_v3_mv_verified_ai',
@@ -1452,7 +1488,7 @@ def main():
             pool = list(dict.fromkeys([c for c in mv_sorted[:VERIFY_POOL_MV_N] if mv.get(c)] + codes[:VERIFY_POOL_CONCEPT_N]))
             verdicts = {}
             for ts in pool:
-                verdicts[ts] = fina_verdict(pro, ts, seg, names); time.sleep(0.12)
+                verdicts[ts] = fina_verdict(pro, ts, seg, names)
             verified = [verdicts[ts] for ts in pool if verdicts[ts]['ok']]
             verified.sort(key=lambda v: -mv.get(v['ts'], 0))
             for i, v in enumerate(verified):
@@ -1468,13 +1504,26 @@ def main():
             promoted_ai = []
             borderline = []
             todo = [rv for rv in rejected[:AI_MAX_PER_SEG]] if use_ai else []
+            a_map = {}
             if use_ai and todo:
-                import concurrent.futures as _cf
-                with _cf.ThreadPoolExecutor(max_workers=AI_WORKERS) as _ex:
-                    _res = list(_ex.map(lambda rv: ai_review_one(pro, rv['ts'], rv.get('name', ''), seg, theme), todo))
-            else:
-                _res = []
-            for rv, a in zip(todo, _res):
+                miss = []
+                for rv in todo:
+                    key = theme + '|' + seg['label'] + '|' + rv['ts']
+                    ae = AI_CACHE.get(key)
+                    if (not full) and ae and (time.time() - ae.get('t', 0)) < AI_TTL:
+                        a_map[rv['ts']] = ae.get('a') or {}
+                    else:
+                        miss.append((rv, key))
+                if miss:
+                    import concurrent.futures as _cf
+                    with _cf.ThreadPoolExecutor(max_workers=AI_WORKERS) as _ex:
+                        _res = list(_ex.map(
+                            lambda w: (w[0], w[1], ai_review_one(pro, w[0]['ts'], w[0].get('name', ''), seg, theme)), miss))
+                    for rv, key, a in _res:
+                        a_map[rv['ts']] = a
+                        AI_CACHE[key] = {'t': time.time(), 'a': a}
+            for rv in todo:
+                a = a_map.get(rv['ts'], {})
                 ai_stats['reviewed'] += 1
                 v = a.get('verdict', 'unknown'); conf = float(a.get('confidence') or 0)
                 rv['ai'] = {'verdict': v, 'confidence': round(conf, 2), 'reason': (a.get('reason') or '')[:60]}
@@ -1528,6 +1577,8 @@ def main():
     cp = os.path.join(DATA, 'chain_map_' + date8 + '_v2_cmp.json')
     with open(cp, 'w', encoding='utf-8') as f:
         json.dump({'date': date8, 'mv_date': mv_date, 'ai': out['ai'], 'rows': cmp_rows}, f, ensure_ascii=False, indent=1)
+    save_caches()
+    print('cached | fina_miss', _FINA_MISS, flush=True)
     print('WROTE', p); print('WROTE', cp)
 
 if __name__ == '__main__':
