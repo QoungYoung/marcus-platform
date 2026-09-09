@@ -751,14 +751,27 @@ def _read_stock_confirm_context() -> str:
             res = _json.load(f)
         if not res:
             return ""
+        # 2026-09-09: 主线(gate confirmed)过滤+全子概念展示(防前5/前9截断漏生猪/肉鸡)
+        import json as _json2
+        conf_themes = []
+        try:
+            mlp = os.path.join(os.environ.get("DATA_DIR", "data"), "main_line_state.json")
+            if os.path.exists(mlp):
+                mst = _json2.load(open(mlp, encoding="utf-8"))
+                gg = mst.get("mainline_gate") or {}
+                conf_themes = gg.get("confirmed_candidate") or ([mst.get("main_line")] if mst.get("main_line") else [])
+        except Exception:
+            pass
         lines = []
         active_codes = []   # stage=突破候选/确认 的个股(子方向领涨激活, 2026-09-07: 益民600824/爱施德002416被比例遮住漏买)
         total_n = 0; total_c = 0
         for cname, v in res.items():
             if not isinstance(v, dict) or "confirm" not in v:
                 continue
-            total_n += v.get("n", 0); total_c += v.get("confirm", 0)
             th = v.get("theme") or ""
+            if conf_themes and th and th not in conf_themes:
+                continue
+            total_n += v.get("n", 0); total_c += v.get("confirm", 0)
             pct = int(100 * (v.get("confirm") or 0) / max(v.get("n") or 1, 1))
             lines.append(f"{(th + '·') if th else ''}{cname}: 确认{v.get('confirm')}/{v.get('n')}({pct}%)")
             stocks = v.get("stocks") or []
@@ -767,9 +780,9 @@ def _read_stock_confirm_context() -> str:
             if act:
                 active_codes.append(f"{(th + '·') if th else ''}{cname}({'/'.join(act)})")
         overall = int(100 * total_c / max(total_n, 1)) if total_n else 0
-        block = ("## 个股确认链（三层联动之三，fusion TOP3 均确认）" + chr(10)
+        block = ("## 个股确认链（主线 confirmed 全子概念, 2026-09-09 口径）" + chr(10)
                  + "- 主线概念成分股确认：")
-        for ln in lines[:9]:
+        for ln in lines[:30]:
             block += ln + "；"
         block = block.rstrip("；") + chr(10)
         block += ("- 总确认比例：" + str(overall) + "%" + chr(10)
