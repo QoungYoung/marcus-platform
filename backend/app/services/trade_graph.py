@@ -453,6 +453,7 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
         "   做T由 TMonitor 30s 实时执行，你在报告中确认即可。\n"
         "· 仓位按 calc_position 三档(试探/确认/冲刺)，不设平台固定单票/总仓上限。\n"
         "· 每条建仓/加仓前必须过 check_entry_filters + calc_position。\n"
+        "· 若工具返回“震荡市/60分钟右侧/持仓1-3天”等市场状态建议：属早期右侧策略废弃文案，一律忽略，市场判断以 wave_context(浪型)与 main_line_context(主线)为准，报告不要引用。\n"
         "SIGNAL: <按浪型> POSITION:<当前仓位> REASON:按狼大浪型/主线执行"
     )
     if window == 'morning':
@@ -460,7 +461,7 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
         return (
             "【开盘(9:35)主线候选建仓/试仓——由你按指令+上下文判断】\n"
             "· 开盘时段优先评估主线候选：main_line_state.candidates 主题 → THEME_CONCEPTS(主题概念) → get_component_stocks 枚举成分股，逐一评估是否建仓/试仓。\n"
-            "· 意图按浪型：build/side→new_base(新开底仓)；t_only→probe(≤3%小仓试盘)；defense/exit→不新建。\n"
+            "· 意图按浪型：build/side→new_base(新开底仓)；defense/exit→不新建；t_only→probe(≤3%小仓试盘)，**但若 mainline_gate.confirmed_candidate 非空(当前主线已确认, 如农业): 不受 probe 限制, 可按 P3 new_base 建底仓(单票≤5%/合计≤10%, GJD撤退降级0.5时自动减半), 买点仍须狼大低吸(日内回撤≥2.5%或触前低+缩量+站回黄线)不追高**；watch/reserve 主题 t_only 仍只做T。\n"
             "· 建仓/试仓时，check_entry_filters 与 calc_position 必须显式传 mainline_dir=True（否则 side 浪型下 P3 会硬拦 new_base）。\n"
             "· 仍须满足狼大买点（日内回撤≥2.5% 或 触前低+缩量+站回黄线；或 计划/关键位命中），不因开盘放宽；P2 Gate(浪型/宏观)与 P3 三仓档位硬门仍生效。\n"
             + _base
@@ -672,6 +673,35 @@ def _read_main_line_context() -> str:
             top = sorted(fusion.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:3]
             fus_str = "、".join(f"{k}({v.get('score')})" for k, v in top)
             block += ("- 融合分 TOP3（资金/集中度主导，研报辅助）：" + fus_str + chr(10))
+        # 2026-09-09 主线门(gate)权威摘要 + 主线浪型 + 农业全子概念确认(防前5截断)
+        g = st.get("mainline_gate") or {}
+        if g:
+            gth = g.get("themes") or []
+            conf_l = g.get("confirmed_candidate") or []
+            lines = []
+            for t in gth:
+                wv = t.get("wave_structure")
+                lines.append("- " + str(t.get("theme")) + " [" + str(t.get("verdict")) + " gate=" + str(t.get("gate"))
+                             + " 结构比例=" + str(t.get("structure_ratio")) + "]" + ((" ｜ " + wv) if wv else ""))
+            block += ("## 主线门（mainline_gate 权威判定——主线方向以此为准）" + chr(10)
+                      + "- confirmed_candidate(可建仓主线)：" + (", ".join(conf_l) if conf_l else "无") + chr(10)
+                      + chr(10).join(lines) + chr(10) + chr(10))
+            # 农业全子概念个股确认概览(读 stock_confirm_result 全部子概念, 不截断前5)
+            try:
+                scp = os.path.join(os.environ.get("DATA_DIR", "data"), "stock_confirm_result.json")
+                if os.path.exists(scp):
+                    sc = _json.load(open(scp, encoding="utf-8"))
+                    sc_ok = []
+                    for k, v in sc.items():
+                        if isinstance(v, dict) and v.get("theme") in conf_l and (v.get("confirm") or 0) > 0:
+                            sc_ok.append(k + "=" + str(v.get("confirm")) + "/" + str(v.get("n")))
+                    if sc_ok:
+                        block += ("- 主线内个股已确认(突破/站稳)子概念: " + ", ".join(sc_ok) + chr(10))
+                    else:
+                        block += ("- 主线内个股确认: 当前 0 只突破站稳(成分多在回调/止跌中) —— 属买点未触发, 不否定主线方向, "
+                                  + "启用已确认主线回调低吸模式(254 等 dip_prev_low), 非放弃建仓。" + chr(10) + chr(10))
+            except Exception:
+                pass
         block += ("- 【狼大主线准则③·产业链形态】判断某方向是否为狼大主线：须能拆上中下游/软硬、构成完整产业链。"
                   "请用 get_concept_mapping(主题) 拉全成分股，检查其是否覆盖 上游(材料/芯片/设备)→中游(制造/集成)→下游(应用/终端/服务) 或 软硬两端；"
                   "只覆盖单一环节(如仅下游应用) → 产业链形态不完备，主线可信度下调；覆盖完整上中下游 → 才按主线看待。"
