@@ -279,20 +279,7 @@ def _read_portfolio() -> str:
 
 
 def _read_pool_context(task_id: str) -> str:
-    """获取候选池上下文"""
-    if 'closing' in task_id.lower():
-        return ""
-    try:
-        from app.services.candidate_pool import get_candidate_pool
-        pool = get_candidate_pool()
-        pool.expire_stale()
-        pool.cleanup_sold_promoted()
-        active = pool.get_all_active()
-        promoted = pool.get_promoted()
-        if active or promoted:
-            return pool.format_for_pi()
-    except Exception as e:
-        logger.warning(f"[TradeGraph] 候选池读取失败: {e}")
+    """候选池上下文 —— 2026-09-09 停用: CandidatePool 非 Wolf 体系(工程自创时机等待队列), 不再注入 Pi 决策"""
     return ""
 
 
@@ -1299,7 +1286,7 @@ def node_fetch_context(state: TradeState) -> dict:
     return {
         "scan_report_text": _read_scan_report(),
         "portfolio_json": _read_portfolio(),
-        "pool_context": _read_pool_context(state['task_id']),
+        "pool_context": "",   # 2026-09-09: CandidatePool 非 Wolf 体系(工程自创入场队列), 不再注入 Pi 决策(避免"候选池为空"误导)
         "stance_context": _read_stance_context(),
         "regime_context": "",   # 2026-09-03: 不再注入震荡/趋势市场状态(该状态错误且与狼大浪型/主线打架)，大级别以 wave_context 为准
         "style_context": "",   # 2026-09-03: 不再注入平台风格模式(进攻/防御/资源避险)市场状态, 主线方向以 main_line_context 为准

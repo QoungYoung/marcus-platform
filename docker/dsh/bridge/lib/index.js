@@ -562,30 +562,9 @@ function apply(ctx) {
         },
       }));
 
-      register(defineTool({
-        name: 'get_t_candidates_summary',
-        description: '做T候选扫描摘要：候选池/全市场扫描的可T质量候选短名单（build_score/趋势/理由）。AI 选股时用（pool 优先，scan 补充）。',
-        parameters: {
-          source: { type: 'string', description: '候选来源 pool（默认，做T候选池）或 scan（全市场扫描）' },
-          limit: { type: 'number', description: '返回条数（默认10）' },
-        },
-        output: textOut(),
-        async execute(args) {
-          const qs = new URLSearchParams({ source: args.source || 'pool', limit: String(args.limit || 10) });
-          const data = await apiFetch('/t/build/candidates?' + qs);
-          const cands = data.candidates || [];
-          if (cands.length === 0) return { ok: true, text: '📭 无建仓候选（来源: ' + data.source + '）' };
-          const lines = ['🎯 做T建仓候选（' + cands.length + ' 只，来源: ' + data.source + '）：', ''];
-          cands.forEach((c) => {
-            const pass = c.pass_gate ? '✅' : '⛔';
-            lines.push(pass + ' ' + c.symbol + ' build_score=' + (c.score ?? 'N/A') + '（门槛0.55）');
-            if (c.reasons && c.reasons.length) lines.push('   说明: ' + c.reasons.join('；'));
-          });
-          return { ok: true, text: lines.join('\n') };
-        },
-      }));
+      
       console.log('[Bridge] 做T底仓建仓工具注册完成（scan_t_candidates/build_t_position/auto_gen_conditions/rebalance_floors/get_floor_overview）');
-      console.log('[Bridge] 只读查询工具注册完成（get_stock_quote/get_portfolio_positions/get_t_realtime_indicators/get_stock_moneyflow/get_market_state/get_stock_technical/get_intraday_minute/get_t_candidates_summary/get_etf_kline）');
+      console.log('[Bridge] 只读查询工具注册完成（get_stock_quote/get_portfolio_positions/get_t_realtime_indicators/get_stock_moneyflow/get_market_state/get_stock_technical/get_intraday_minute/get_etf_kline）');
     }
     registerWriteTools();
 
@@ -1017,7 +996,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
         '条件组合由你自主决定（通常 low_buy + high_sell_then_buy_back 各一，可加减，1~4 条），不要冗余重复。',
         '工具使用：你被放行 8 个只读查询工具（get_stock_quote/get_t_realtime_indicators/',
         'get_intraday_minute/get_stock_moneyflow/get_market_state/get_stock_technical/',
-        'get_portfolio_positions/get_t_candidates_summary）。当给定信息不足以设定合理条件时，',
+        'get_portfolio_positions）。当给定信息不足以设定合理条件时，',
         '请按需调用查询工具补数（如现价/振幅/趋势/资金流存疑）；信息足够则直接输出，不必强行调用。',
         '权限边界由系统控制，你只能使用上述查询工具——不要尝试其他工具。',
         '输出格式（不要 markdown 代码块、不要任何其他文字）：',
