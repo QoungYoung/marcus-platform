@@ -446,7 +446,7 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
     _base = (
         "【狼大口径·按浪型/主线执行，不套用震荡/趋势市状态】\n"
         "· 大级别以 wave_context(浪型) 为准：主升浪→主线低吸/持有（前排龙头优先，不追突破/不追高）；\n"
-        "   调整浪/震荡(B反/4-5/C杀)→只做T、不追主升。\n"
+        "   调整浪/震荡(B反/4-5/C杀)→只做T、不追主升；**唯一例外(任意时段适用): mainline_gate.confirmed_candidate 非空(已确认主线, 如农业)=主题自身主升3浪运行中, 不受大盘 t_only 一刀切——可按 P3 new_base 在其回调低吸位建底仓(单票≤5%/合计≤10%, GJD撤退降级0.5时自动减半), 买点须狼大低吸(回撤≥2.5%/触前低+缩量+站回黄线), 不追高; watch/reserve 主题仍只做T**。\n"
         "· 主线低吸/新开须满足狼大买点：日内回撤≥2.5% 或 触前低 + 缩量 + 站回黄线；或 计划/关键位命中（六因子软指导已注入）。\n"
         "· 不追高：接近前高/高位 → 只做T/逢高减仓/防顶。\n"
         "· 做T：正T低吸(-2.5%/触前低)→确认制T出(放量→高点→停量→二次不过前高)/黄线跌破离场；只卖T仓，底仓不卖；\n"
@@ -461,7 +461,7 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
         return (
             "【开盘(9:35)主线候选建仓/试仓——由你按指令+上下文判断】\n"
             "· 开盘时段优先评估主线候选：main_line_state.candidates 主题 → THEME_CONCEPTS(主题概念) → get_component_stocks 枚举成分股，逐一评估是否建仓/试仓。\n"
-            "· 意图按浪型：build/side→new_base(新开底仓)；defense/exit→不新建；t_only→probe(≤3%小仓试盘)，**但若 mainline_gate.confirmed_candidate 非空(当前主线已确认, 如农业): 不受 probe 限制, 可按 P3 new_base 建底仓(单票≤5%/合计≤10%, GJD撤退降级0.5时自动减半), 买点仍须狼大低吸(日内回撤≥2.5%或触前低+缩量+站回黄线)不追高**；watch/reserve 主题 t_only 仍只做T。\n"
+            "· 意图按浪型：build/side→new_base(新开底仓)；defense/exit→不新建；t_only→probe(≤3%)，confirmed 主线例外见上文(主基调层)；watch/reserve 仍只做T。\n"
             "· 建仓/试仓时，check_entry_filters 与 calc_position 必须显式传 mainline_dir=True（否则 side 浪型下 P3 会硬拦 new_base）。\n"
             "· 仍须满足狼大买点（日内回撤≥2.5% 或 触前低+缩量+站回黄线；或 计划/关键位命中），不因开盘放宽；P2 Gate(浪型/宏观)与 P3 三仓档位硬门仍生效。\n"
             + _base
@@ -683,6 +683,11 @@ def _read_main_line_context() -> str:
                 wv = t.get("wave_structure")
                 lines.append("- " + str(t.get("theme")) + " [" + str(t.get("verdict")) + " gate=" + str(t.get("gate"))
                              + " 结构比例=" + str(t.get("structure_ratio")) + "]" + ((" ｜ " + wv) if wv else ""))
+            _wave_lines = [t.get("wave_structure") for t in gth if t.get("wave_structure")]
+            if conf_l and _wave_lines:
+                block += ("⚠️ **主线自身浪型（重要: 主题浪, 不同于上方大盘 wave_context）**：" + chr(10)
+                          + chr(10).join("- " + str(wv) for wv in _wave_lines[:2]) + chr(10)
+                          + "→ 该主线为主升 3 浪运行中(已确认), 不因大盘 t_only(4-2) 一刀切禁建; 按回调低吸模式(254 dip_prev_low/253)在其回调位建底仓, 不追高。" + chr(10) + chr(10))
             block += ("## 主线门（mainline_gate 权威判定——主线方向以此为准）" + chr(10)
                       + "- confirmed_candidate(可建仓主线)：" + (", ".join(conf_l) if conf_l else "无") + chr(10)
                       + chr(10).join(lines) + chr(10) + chr(10))
