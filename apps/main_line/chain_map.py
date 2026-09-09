@@ -1270,6 +1270,7 @@ VERIFY_POOL_CONCEPT_N = 6
 AI_CONF_MIN = 0.85
 AI_BORDERLINE_MIN = 0.5
 AI_MAX_PER_SEG = 10
+AI_WORKERS = 4   # 2026-09-09: AI 裁决并发(15主题全量曾>900s超时)
 
 def concept_stocks(db, cname, limit):
     try:
@@ -1466,10 +1467,15 @@ def main():
             kw_new = 0
             promoted_ai = []
             borderline = []
-            for rv in rejected[:AI_MAX_PER_SEG]:
-                if not use_ai: break
+            todo = [rv for rv in rejected[:AI_MAX_PER_SEG]] if use_ai else []
+            if use_ai and todo:
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(max_workers=AI_WORKERS) as _ex:
+                    _res = list(_ex.map(lambda rv: ai_review_one(pro, rv['ts'], rv.get('name', ''), seg, theme), todo))
+            else:
+                _res = []
+            for rv, a in zip(todo, _res):
                 ai_stats['reviewed'] += 1
-                a = ai_review_one(pro, rv['ts'], rv.get('name', ''), seg, theme)
                 v = a.get('verdict', 'unknown'); conf = float(a.get('confidence') or 0)
                 rv['ai'] = {'verdict': v, 'confidence': round(conf, 2), 'reason': (a.get('reason') or '')[:60]}
                 if v == 'in_segment' and conf >= AI_CONF_MIN:
@@ -1486,7 +1492,6 @@ def main():
                     ai_stats['unknown'] += 1
                 else:
                     ai_stats['err'] += 1
-                time.sleep(0.4)
             # final leading: rule verified + ai promoted 统一按 mv 排 top3
             final_pool = []
             for v in verified:
