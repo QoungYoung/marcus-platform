@@ -917,7 +917,7 @@ tasks:
 
 - id: chain_map_weekly
   name: 产业链图每周全量强核
-  description: 周六10:00 chain_map 全量(--full --refresh-fina: AI全量重判+主营缓存全刷), 每日任务走增量缓存
+  description: '周六10:00 chain_map 全量(--full --refresh-fina, AI全量重判+主营缓存全刷), 每日任务走增量缓存'
   enabled: true
   schedule:
     type: cron
