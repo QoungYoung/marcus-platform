@@ -1,6 +1,6 @@
 settings:
   max_concurrent_jobs: 3
-  job_timeout: 2400  # 2026-09-09: chain_map 15主题全量AI版曾超900s
+  job_timeout: 3600  # 2026-09-09: chain_map 15主题全量AI版曾超900s
   retry:
     enabled: true
     max_attempts: 3
