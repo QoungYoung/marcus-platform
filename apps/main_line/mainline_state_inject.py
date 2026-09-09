@@ -48,6 +48,15 @@ def _inject(ms, date8):
             if pb and l1:
                 struct = ('3浪健康: 2浪回调低点 %.2f(%s), 未破前低 %.2f(%s), 再创新高'
                           % (pb.get('l2') or 0, dt(pb.get('l2_idx')), l1.get('px') or 0, dt(l1.get('idx'))))
+                # 浪级标注(2026-09-09): 近似 3 浪目标 = 2浪低 + 1.618*(前高-1浪前低)
+                h1 = pb.get('h1') or 0
+                w1 = max(h1 - (l1.get('px') or 0), 0.0)
+                if w1 > 0:
+                    tgt = (pb.get('l2') or 0) + 1.618 * w1
+                    cur_wave = ta.get('new_high')
+                    struct += ' | 主升3浪运行中, 3浪目标≈%.1f(1.618x1浪% .1f)' % (tgt, w1)
+                    _topic_wave = {'wave': 3, 'w1_len': round(w1, 2), 'w2_low': pb.get('l2'),
+                                   'target1618': round(tgt, 1), 'basis_date': dt(pb.get('l2_idx'))}
             elif pb:
                 struct = '主升结构确认(回调低点 %.2f@%s)' % (pb.get('l2') or 0, dt(pb.get('l2_idx')))
         elif ta.get('stage') == 'suspect' and ta.get('new_high'):
