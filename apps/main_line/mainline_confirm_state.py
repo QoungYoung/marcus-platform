@@ -107,3 +107,24 @@ def ts_qualified(ts_code, upto_date=None, concepts_map=None):
     hit = [t for t in ths if t in conf]
     return {'ok': bool(hit), 'themes': ths, 'confirmed_in_window': conf,
             'hit_themes': hit, 'reason': None if hit else 'theme_not_recently_confirmed'}
+
+
+def gate_top_themes(n=3, upto=None):
+    """最近(<=upto) mainline_gate json rows 按 verdict 权重+heat_rank 排序前 n 主题;
+    无 gate 文件返回 None。供 stock_confirm/switch_builder 等旧 fusion TOP 消费方切换到新主线判定"""
+    import glob as _g, time as _t
+    upto = upto or _t.strftime('%Y%m%d')
+    best = None; bd = ''
+    for f in _g.glob(os.path.join(DATA, 'mainline_gate_*.json')):
+        d = os.path.basename(f)[14:22]
+        if d <= upto and d > bd:
+            bd = d; best = f
+    if not best: return None
+    try:
+        g = json.load(open(best, encoding='utf-8'))
+    except Exception:
+        return None
+    rows = [r for r in g.get('rows', []) if r.get('verdict') in ('confirmed_candidate', 'watch', 'reserve')]
+    w = {'confirmed_candidate': 0, 'watch': 1, 'reserve': 2}
+    rows.sort(key=lambda r: (w.get(r.get('verdict'), 3), r.get('heat_rank') or 99))
+    return [r['theme'] for r in rows[:n]], bd

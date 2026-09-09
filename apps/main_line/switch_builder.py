@@ -24,6 +24,13 @@ def _load(name):
 
 
 def fusion_top3():
+    # 2026-09-09 主线判定统一: mainline_gate(heat_v2+结构)优先; 旧 fusion conc 分回退
+    try:
+        from mainline_confirm_state import gate_top_themes
+        _gt = gate_top_themes(3)
+        if _gt: return _gt[0]
+    except Exception:
+        pass
     ml = _load("main_line_state.json")
     fus = ml.get("fusion") or {}
     rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
@@ -54,8 +61,15 @@ def stock_stage(code6):
 
 
 def active_stocks_by(stages):
-    ml = _load("main_line_state.json"); fus = ml.get("fusion") or {}
-    top12 = [k for k, _ in sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:2]]
+    try:
+        from mainline_confirm_state import gate_top_themes
+        _gt = gate_top_themes(2)
+        top12 = _gt[0] if _gt else None
+    except Exception:
+        top12 = None
+    if not top12:
+        ml = _load("main_line_state.json"); fus = ml.get("fusion") or {}
+        top12 = [k for k, _ in sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:2]]
     sc = _load("stock_confirm_result.json")
     out = {}
     for cname, v in sc.items():

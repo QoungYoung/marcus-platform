@@ -244,8 +244,42 @@ def main():
                               'fund':round(sig[th].get('fund',0),2),
                               'rel':round(sig[th].get('rel',0),2),
                               'conc':round(sig[th].get('conc',0),2)} for th in sig}
+    # 2026-09-09 主线判定统一到主线门(mainline_gate): 旧 0.3fund+0.2rel+0.5conc 的 conc 方向缺陷
+    # (实证: 净流出大户高分/农业真流入 conc0.07 被压), gate 结果(heat_v2 四因子+结构GATE)为唯一权威;
+    # catalyst/fusion 保留为参考字段, 不再决定 main_line。
+    try:
+        import glob as _g
+        gd = today.replace('-', '')
+        best = None; best_d = ''
+        for _f in _g.glob(os.path.join(os.environ.get('DATA_DIR', '/app/data'), 'mainline_gate_*.json')):
+            _dd = os.path.basename(_f)[14:22]
+            if _dd <= gd and _dd > best_d:
+                best_d = _dd; best = _f
+        if best:
+            _g2 = json.load(open(best, encoding='utf-8'))
+            _rows = [r for r in _g2.get('rows', []) if r.get('verdict') in ('confirmed_candidate', 'watch', 'reserve')]
+            _w = {'confirmed_candidate': 0, 'watch': 1, 'reserve': 2}
+            _rows.sort(key=lambda r: (_w.get(r.get('verdict'), 3), r.get('heat_rank') or 99))
+            if _rows:
+                state['main_line'] = _rows[0]['theme']
+                _tops = [r['theme'] for r in _rows[:2]]
+                state['candidates'] = _tops + [t for t in state.get('candidates', []) if t not in _tops]
+                state['main_line_source'] = 'mainline_gate_' + best_d
+                state['gate_rows'] = [{'theme': r.get('theme'), 'heat_rank': r.get('heat_rank'),
+                                       'heat_score': r.get('heat_score'), 'gate': r.get('gate'),
+                                       'verdict': r.get('verdict')} for r in _g2.get('rows', [])]
+                print('[main_line] gate-override %s -> main_line=%s candidates=%s' % (
+                    best_d, state['main_line'], state['candidates']), file=sys.stderr)
+    except Exception as e:
+        print('[main_line] gate override err:', str(e)[:100], file=sys.stderr)
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
-    with open(out_file,'w',encoding='utf-8') as f: json.dump(state, f, ensure_ascii=False, indent=2)
+    with open(out_file, 'w', encoding='utf-8') as f: json.dump(state, f, ensure_ascii=False, indent=2)
+    # 注入 gate 摘要块(mainline_gate_daily 同源; 防 main_line_judge 覆盖丢字段)
+    try:
+        from mainline_state_inject import _inject
+        _inject(state, best_d or gd)
+    except Exception as e:
+        print('[main_line] inject err:', str(e)[:80], file=sys.stderr)
     print(json.dumps(state, ensure_ascii=False, indent=2))
 
 if __name__=='__main__': main()
