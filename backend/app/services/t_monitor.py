@@ -1658,6 +1658,29 @@ class TMonitor:
                     break
             if not stop_price or current > stop_price:
                 return
+            # ── P2-4(2026-09-10): 收盘确认 / 假跌破守卫 ──
+            # 狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
+            #        2026-01-12「**等收盘确认破位出清**」。
+            # 复用既有纯函数 t_stop_loss_guard.evaluate_stop —— 该函数此前**只在 t_backtest 里被调用,
+            # 生产从未接线**(其 docstring 却称"回测与实盘共用", 属"文档声称 > 代码实现"的又一例)。
+            # 口径: 以**最近一根 5min bar 的收盘**作为"收盘价"判定 ——
+            #   · tick 插针(bar 收盘未破) → 不执行(假跌破/收回幅度/缩量贴支撑/分钟企稳 由守卫细判);
+            #   · 触及价取 min(bar.low, 现价), 以反映"tick 已破但 bar 未收完"的情形。
+            # 未确认 → 本轮不执行(日志当日去抖); **数据不足 → 按原口径执行**(不改变既有行为, 避免因缺数据漏止损)。
+            if os.getenv("WOLF_STOP_CLOSE_CONFIRM", "1").strip() not in ("0", "false", "no"):
+                try:
+                    from app.services import t_build as _tb
+                    _v = _stop_close_confirm(current, stop_price, self._today_bars(symbol),
+                                             self._prev_daily(symbol, 20), _tb._params())
+                    if _v is not None and str(_v.get("action")) == "hold":
+                        _tk = (symbol, round(float(stop_price), 3), datetime.now().strftime('%Y%m%d'))
+                        if _tk not in _STOP_HOLD_WARNED:
+                            _STOP_HOLD_WARNED.add(_tk)
+                            print(f"[TMonitor] 止损未确认(收盘口径) {symbol} stop={stop_price} "
+                                  f"cur={current}: {_v.get('reason')}")
+                        return
+                except Exception as _ge:
+                    print(f"[TMonitor] 止损守卫异常(按原口径执行) {symbol}: {str(_ge)[:100]}")
             # 当日已止损过则跳过
             from sqlalchemy import text
             from app.database import SessionLocal
@@ -1818,6 +1841,43 @@ _m5_dump_cache = {"at": 0.0, "value": 0.0}
 PULLBACK_VOL_RATIO = float(os.getenv("PULLBACK_VOL_RATIO", "1.2"))  # vol_ratio<该值视为缩量
 PULLBACK_END_HM = 1445          # 14:45 后仍未反抽达标 → 尾盘确认离场
 _PULLBACK_SELL: Dict[str, dict] = {}   # symbol -> pending(缩量破位待反抽/尾盘确认)
+# P2-4: 止损"收盘未确认"日志去抖 (symbol, stop_price, date) —— 避免每 30s 轮次刷屏
+_STOP_HOLD_WARNED: set = set()
+
+
+def _stop_close_confirm(current: float, stop_price: float, today_bars, prev_daily,
+                        params: Optional[dict] = None):
+    """P2-4(2026-09-10): 止损的**收盘确认 / 假跌破**判定（纯函数, 便于单测）。
+
+    狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
+           2026-01-12「**等收盘确认破位出清**」。
+    复用既有 t_stop_loss_guard.evaluate_stop（此前只在 t_backtest 里被调用, 生产未接线）。
+
+    口径: 以**最近一根 5min bar 的收盘**作为"收盘价"; 触及价取 min(bar.low, 现价),
+          以反映"tick 已破但 bar 未收完"的情形。
+
+    返回:
+      · None            → **不做限制**(无 m5 数据 / 守卫异常) → 调用方按原口径执行止损
+      · {"action":"stop"} → 确认破位, 调用方执行
+      · {"action":"hold", ...} → 未确认, 调用方本轮不执行
+    """
+    if not today_bars:
+        return None
+    try:
+        from app.services.t_stop_loss_guard import evaluate_stop
+        b = today_bars[-1]
+        low = float(b.get("low") or current) or current
+        bar = {"low": min(low, current),
+               "close": float(b.get("close") or 0),
+               "vol": float(b.get("vol") or 0),
+               "time": str(b.get("time") or "")}
+        dly = None
+        if prev_daily:
+            dly = [{"low": (v or {}).get("low")} for _, v in sorted(prev_daily.items())]
+        return evaluate_stop(bar, today_bars, stop_price, params or {}, daily_bars=dly)
+    except Exception as e:
+        print(f"[TMonitor] 止损守卫异常(按原口径执行): {str(e)[:100]}")
+        return None
 
 _prev_low_cache = {"at": 0.0, "sym": "", "value": False}
 
