@@ -142,7 +142,13 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     min_r20 = float(os.getenv("WOLF_PICK_MIN_R20", "0"))
     tier2_gap = float(tier2_gap if tier2_gap is not None else os.getenv("WOLF_PICK_TIER2_GAP", "8.0"))
     max_legs = int(max_legs if max_legs is not None else os.getenv("WOLF_PICK_MAX_LEGS", "4"))
-    etf_fb = bool(etf_fallback if etf_fallback is not None else os.getenv("WOLF_PICK_ETF_FALLBACK", "1") == "1")
+    # S1(2026-09-10 清理自造机制): ETF 兜底腿默认关闭。
+    # 原逻辑"空窗(位置闸/选择层闸否掉全部)且主题有 ETF → 必买 ETF"与狼大「买不到位置就等」相反,
+    # 且其前置条件 not wind_broken 因 wind_broken 恒 False(见 :213 d1>=0)而恒真 → 空窗必触发,
+    # 直接抵消了 rotation_switch_arm 的空窗等待语义(P0-4)。狼大用 ETF 是主动选择(2026-08-21 楼435
+    # 「选半导体仅仅只是因为他波动大 ETF都有3个点以上的波动」), 语料无"买不到个股就买ETF"这条规则。
+    # WOLF_PICK_ETF_FALLBACK=1 可恢复旧行为。
+    etf_fb = bool(etf_fallback if etf_fallback is not None else os.getenv("WOLF_PICK_ETF_FALLBACK", "0") == "1")
     wind_hard = os.getenv("WOLF_PICK_WIND_HARD", "0") == "1"
     # P0-2(2026-09-10): 选择层闸 —— 个股相对主题强度 rs>=rs_min 才入低吸池。
     # 依据: "选择层+兑现风格"回测 rs>0 胜率 51% vs rs<=0 41%; 触发条件本身相对同池基线不提升胜率。
