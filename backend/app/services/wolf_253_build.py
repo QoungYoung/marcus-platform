@@ -26,6 +26,11 @@ if pp not in sys.path:
 DATA = os.environ.get("DATA_DIR", "data")
 STATE_FILE = os.path.join(DATA, "wolf_253_chain.json")
 
+# S7 统一口径(2026-09-10): 回补笔数上限的唯一定义处, 与 t_gateway.MAX_WOLF_REFILL_PER_DAY
+# 读同一个 env(WOLF_REFILL_MAX_PER_DAY), 保证"策略层(refill_253)"与"执行层(t_gateway 护栏)"不会分叉。
+WOLF_REFILL_MAX_PER_DAY = int(os.getenv("WOLF_REFILL_MAX_PER_DAY", "2"))   # 单日回补上限(狼大「来来回回做几次」)
+WOLF_REFILL_MAX_WINDOW = int(os.getenv("WOLF_REFILL_MAX_WINDOW", "2"))     # 254 后 3 日窗口内总回补上限
+
 def load(name):
     try:
         with open(os.path.join(DATA, name), encoding="utf-8") as f:
@@ -163,8 +168,15 @@ def refill_253(executor, symbol, quote, vol_ratio, today, account="stock"):
     if not (0 < gap <= 3):
         return {"status": "noop", "reason": "outside_3d_gap"}
     refills = int(row.get("refill_count") or 0)
-    if refills >= 2:
-        return {"status": "noop", "reason": "refill_max_2"}
+    # S7 统一(2026-09-10): 回补笔数上限单一口径, 与 t_gateway.MAX_WOLF_REFILL_PER_DAY 共用同一 env,
+    # 避免"gateway 当日1笔 / 本处3日内2次"两套并行规则互相矛盾。
+    # 狼大「来来回回做几次就行了」→ 单日默认放宽到 2。
+    if refills >= WOLF_REFILL_MAX_WINDOW:
+        return {"status": "noop", "reason": "refill_max_window_%d" % WOLF_REFILL_MAX_WINDOW}
+    _day = str(row.get("refill_day") or "")
+    _day_n = int(row.get("refill_day_count") or 0) if _day == today else 0
+    if _day_n >= WOLF_REFILL_MAX_PER_DAY:
+        return {"status": "noop", "reason": "refill_max_per_day_%d" % WOLF_REFILL_MAX_PER_DAY}
     if float(vol_ratio or 0) > 1.2:
         return {"status": "noop", "reason": "vr_gt_1.2"}
     prev_close = float(quote.get("pre_close") or 0)
@@ -199,6 +211,8 @@ def refill_253(executor, symbol, quote, vol_ratio, today, account="stock"):
                           trigger="step_refill", reason="254后%d日第%d次小额回补" % (gap, refills + 1))
             row["refill_count"] = refills + 1
             row["last_refill_date"] = today
+            row["refill_day"] = today
+            row["refill_day_count"] = _day_n + 1
             _chain_state()[symbol] = row
             save("wolf_253_chain.json", _chain_state())
             return {"status": "success", "symbol": symbol, "price": precio, "volume": vol, "intent": intent2}

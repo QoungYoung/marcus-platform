@@ -107,6 +107,9 @@ SLIPPAGE_PCT = 0.0003             # 滑点参数化假设 0.03%（做T低价吃b
 COST_RATIO_LIMIT = 0.2             # 滑点+手续费 > 价差空间 20% 不触发
 MIN_T_SPREAD_FILTER = 0.002        # 最低价差过滤（相对价 0.2%）
 MAX_DAILY_TURNOVER_RATIO = 3.0     # 日累计回转额 ≤ 3×净值（主指标）
+# S7 统一口径(2026-09-10): wolf 回补单日上限。与 wolf_253_build.WOLF_REFILL_MAX_PER_DAY 同源(同一 env),
+# 使执行层护栏与策略层 refill_253 不再各用一套规则。狼大「来来回回做几次就行了」→ 默认 2。
+MAX_WOLF_REFILL_PER_DAY = int(os.getenv("WOLF_REFILL_MAX_PER_DAY", "2"))
 FLOOR_LOWER_RATIO = 0.5            # 底仓保留下限（市值 ≥ 成本 50%）
 TRIGGER_EXEC_TIMEOUT_MIN = 2       # human_confirm 超时 2min → cancelled
 
@@ -473,7 +476,10 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
         tier = _floor_tier(regime, near_limit)
         if side == "buy":
             # wolf 回补护栏（2026-09-08 用户拍板：588170 void脱节重复加仓根因）
-            # ① 当日 wolf 正T回补已成交 1 笔 → 拦截（防连续回补堆仓）
+            # ① 当日 wolf 正T回补笔数超上限 → 拦截（防连续回补堆仓）
+            #    S7 统一(2026-09-10): 上限改读 WOLF_REFILL_MAX_PER_DAY(默认2),
+            #    与 wolf_253_build.WOLF_REFILL_MAX_PER_DAY 同源, 消除"gateway 当日1笔 vs
+            #    refill_253 3日内2次"两套并行规则；狼大「来来回回做几次就行了」支持放宽到 2。
             # ② 当日存在已撤销(回滚)卖单 → 拦截（回补语义与账本脱节，需人工确认）
             _ev = None
             if trigger_id:
@@ -482,9 +488,11 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                 except Exception:
                     _ev = None
             if _ev == "wolf_zheng_t_buy":
-                if _wolf_buy_executed_today(symbol, account_id) >= 1:
+                _n_refill = _wolf_buy_executed_today(symbol, account_id)
+                if _n_refill >= MAX_WOLF_REFILL_PER_DAY:
                     result["level"] = "ledger"
-                    result["reason"] = "wolf回补当日已成交1笔，上限1笔(防连续回补堆仓)"
+                    result["reason"] = "wolf回补当日已成交%d笔，上限%d笔(防连续回补堆仓)" % (
+                        _n_refill, MAX_WOLF_REFILL_PER_DAY)
                     return result
                 if _voided_sell_today(symbol, account_id) > 0:
                     result["level"] = "ledger"
