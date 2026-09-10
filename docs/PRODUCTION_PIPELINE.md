@@ -26,7 +26,9 @@
    │
    ├─(全天, 30s/轮) TMonitor 触发 → 写 t_triggers
    │      254 = quote.dip_prev_low(当日5min最低≤前一日5min最低×1.005) ∧ vol_ratio≤0.9
-   │      253 = index.m5_dump≥0.4(指数单根5min急杀) ∧ 时段 09:45-14:40 ∧ 非跌停
+   │      253 = index.m5_dump≥0.4(指数单根5min急杀) ∧ average>0 ∧ current>0
+   │            【2026-09-10 更正】原写的"∧ 时段09:45-14:40 ∧ 非跌停"**不在表达式内**：
+   │            09:45 下限**任何地方都没有**；14:45 禁新开在通用护栏；非跌停/跌停禁买在网关层。
    │      护栏: regime GATE / 14:45 后禁新开 / armed / 5min 冷却 / 板块权限
    │
    ├─(触发后) 执行层 t_gateway.gateway_execute → validate_order(硬闸门+账本+建议层) → 执行器成交 → paper_orders/paper_positions
@@ -117,7 +119,12 @@
 
 - `wave_agent.py`（08:10，周一为主）→ `wave_state.json`：level(d1..down) / sub_level / operation(build/t_only/side/defense/exit) / confidence / reasons。
 - `wave_alloc.read_wave_alloc()`：把 operation 映射成 `invest` 仓位系数；布腿器按 invest 裁剪买腿数量（build/t_only/side=1 不裁剪）。
-- `trade_graph.node_check_safety_gates`：**operation ∈ (defense, exit) → 不建仓（硬拦）**；同时含「总回撤≥5% 禁买」「连续亏损≥3 笔当日熔断」（可用 SAFETY_GATE_BYPASS 旁路，默认关）。
+- `trade_graph.node_check_safety_gates`：**operation ∈ (defense, exit) → 不建仓（硬拦）**；可用 `SAFETY_GATE_BYPASS` 旁路（默认关）。
+  ⚠️ **范围更正（2026-09-10 核验）**：该硬拦**只覆盖 AI-agent 决策路径**（`run_trade_decision`，即 09:35/13:35 等 `auto_trade_*` 档）。
+  **253/254 表达式腿路径**（`rotation_switch_arm`(09:20) → TMonitor → `t_gateway.gateway_execute`）**全程不读 `wave_state`**
+  （`t_gateway.py` 只引用 `t_regime`），故不受此门约束。无底仓建仓另有一条 wave 门：`wolf_253_build.choose_intent()` 对 defense/exit 返回 `None`。
+  **2026-09-10 变更**：原同处的「总回撤≥5% 禁买」「连续亏损≥3 笔当日熔断」两条账户级熔断**已删除**（审计 §5.2 S5）；
+  `drawdown` / `consecutive` 仍计算并写入 state，但仅作观测，不再拦截。
 - `t_regime.compute_regime()`：日内环境门（沪深300 跌 >2% → HALT；市场诊断 extreme/bear → HALT 等），产出 `gate_low_buy` / `gate_high_sell`（ALLOWED / MANUAL_ONLY / BLOCKED）。
 
 ---
@@ -168,8 +175,8 @@
 | 层 | 内容 |
 |---|---|
 | 账户白名单 | 仅 `stock`（狼大做T账户）可执行 |
-| **硬闸门** | 裸空/无券卖、无底仓禁裸买（除非条件单建仓路径）、跌停禁买/涨停禁卖、STOP_ALL、触发事件状态异常、基础回撤 guard、**wolf 回补当日上限 1 笔**、当日有撤销卖单需人工确认、低吸加仓次数上限（MAX_DAILY_BUY_LEGS） |
-| 账本层 | 可卖底仓断言、买腿 ≤ 可卖底仓、当日回转额/日亏损熔断（止损卖单豁免） |
+| **硬闸门** | 裸空/无券卖、无底仓禁裸买（除非条件单建仓路径）、跌停禁买/涨停禁卖、STOP_ALL、触发事件状态异常、**wolf 回补当日上限 `WOLF_REFILL_MAX_PER_DAY`（默认 2，2026-09-10 由硬编码 1 放宽，S7）**、当日有撤销卖单需人工确认、低吸加仓次数上限（MAX_DAILY_BUY_LEGS）<br>【2026-09-10 更正】原列于此的「基础回撤 guard」**不在 `t_gateway`**（该文件对 drawdown 零引用）——回撤检查原在 `trade_graph`（agent 路径），且已随 S5 删除 |
+| 账本层 | 可卖底仓断言、买腿 ≤ 可卖底仓、日亏损熔断（止损卖单豁免）。**注：原「当日回转额 ≤3×净值」上限已于 2026-09-10 删除（审计 §5.2 S5）** |
 | 建议层 | **单笔 ≤ 净值 5%**、价差成本比、冷却、频次（仅告警） |
 | 执行 | MarcusVNPyExecutor + PaperTradingEngine → paper_orders/paper_positions；失败/被拒 → t_triggers 置 blocked + 审计 |
 
@@ -179,7 +186,7 @@
 
 - `wolf_t_rules`：正T买（`zheng_t_buy_quote`）/ 倒T卖（`dao_t_sell_quote`）/ 确认制T出（停量 + 二次不过前高）/ 日高与周期 PnL 记录；周五减 T 仓、不强制日结。
 - `SELL_EXPR = quote.vwap_break`（黄线破位）用于切换链卖腿；`custom_level_sell`/`custom_vwap_sell`（manual_guard）一次性。
-- 止损：条件带 `stop_loss_price`；TMonitor 每轮扫描；止损单豁免熔断（止血优先）。
+- 止损：条件带 `stop_loss_price`；TMonitor 每轮扫描；止损单豁免日亏损熔断（止血优先）。
 - auto_exit：自动离场腿（持续监控）。
 
 ---
@@ -196,27 +203,46 @@
 
 | 狼大规则/原话 | 生产落点 | 状态 |
 |---|---|---|
-| 只做主线（自上而下：资金热度 × 结构确认） | mainline_gate（confirmed_candidate）→ 09:20 布腿器 | ✅ 已实现（gate 为唯一权威） |
-| 只做趋势/确定性行情，调整浪内可做 | wave_state + operation 映射 invest；defense/exit 硬拦建仓 | ✅（wave 不否决主线资格，仅保险丝） |
-| 低吸：挂前一天低点、缩量才接 | 254 = dip_prev_low + vol_ratio≤0.9（换手节奏比） | ✅ 生产口径（已对账 09-10 实盘触发） |
-| 急杀抢反弹 | 253 = index.m5_dump ≥0.4（09:45-14:40、非跌停） | ✅（指数据用 ETF 代理，见偏差） |
-| 不买后排、龙头优先、买不到就退而求其次 | pick_v2 leader 榜 + tier1/tier2 + rank_in_concept | ✅ |
-| 买不到位置就等（空窗不硬做） | 位置闸（距前日低 ≤5%）；无候选则不布腿 | ✅ |
+| 只做主线（自上而下：资金热度 × 结构确认） | mainline_gate（confirmed_candidate）→ 09:20 布腿器 | ⚠️ **非唯一权威**：`rotation_switch_arm.py:300-301` 有 defensive_resource 非主线布腿分支；`auto_trade_*` 5 档走 LLM agent 不经 gate |
+| 只做趋势/确定性行情，调整浪内可做 | wave_state + operation 映射 invest；defense/exit 硬拦建仓 | ⚠️ 部分：**硬拦仅在 agent 路径**（见 §4）；253/254 腿路径不读 wave。另 `t_only → invest=1.0` 不裁剪买腿 |
+| 低吸：挂前一天低点、缩量才接 | 254 = dip_prev_low ∧ 0<vol_ratio≤0.9（换手节奏比） | ✅ 双条件确已实现（`rotation_switch_arm.py` `BUY_254_EXPR`）。⚠️ 原自评"已对账 09-10 实盘触发"**无法复核**（本机 PG 不可达），且当时 253 建仓分支因 P0-1 的 NameError 恒报 blocked |
+| 急杀抢反弹 | 253 = index.m5_dump ≥0.4 | ⚠️ 部分：表达式仅有 `m5_dump≥0.4 ∧ average>0 ∧ current>0`；**无 09:45 下限**（现 09:30 起即可触发）。14:45 禁新开在通用护栏（`t_monitor.py:1934/1963`）、跌停在网关层，均**不在**表达式内 |
+| 不买后排、龙头优先、买不到就退而求其次 | pick_v2 leader 榜 + tier1/tier2 + rank_in_concept | ✅（路径 B）。⚠️ 路径 A 的 `pick_buy` 仍走扫描序（`cands[:80]` 为 dict 序，无 leader 排序），尚未统一 |
+| 买不到位置就等（空窗不硬做） | 位置闸（距前日低 ≤5%）+ 空窗等待语义 | ⚠️ 已部分修正（2026-09-10）：ETF 兜底腿（空窗必买 ETF）已默认关闭（S1）；空窗回落 legacy 语义已修（P0-4）。注：位置闸另有 tier2 8% 补位档，比表面更宽 |
 | 高位不加、太高切低位 | 位置分类 position_class + 拥挤黑名单 | ⚠️ 部分（无独立"主题高度闸"，回测显示边际不显著） |
-| 板块权限（无创业板/科创板权限） | WOLF_PICK_BOARD_EXCLUDE + 多层过滤（选股/布腿/TMonitor） | ✅（用户口径） |
-| 底仓不动、T仓高抛低吸反复做 | 非消费式持续腿 + 5min 冷却 + 100 股底仓保护 | ✅ |
+| 板块权限（无创业板/科创板权限） | WOLF_PICK_BOARD_EXCLUDE + 多层过滤（选股/布腿/TMonitor） | ⚠️ **待用户确认**：属账户口径、**狼大语料无此依据**；狼大核心持仓大量在创业板（300308/300502/300189），且位置闸校准案例正是 300189 → 若为误加限制，该校准不可复现 |
+| 底仓不动、T仓高抛低吸反复做 | 非消费式持续腿 + 5min 冷却 + 100 股底仓保护 | ✅（另：与之冲突的"底仓浮亏−3%减半/−5%清仓"守卫早已退化为放行，调用点已于 2026-09-10 移除，S6） |
 | 黄线破位走人 | SELL_EXPR = vwap_break | ✅ |
-| 急杀/破位时不接刀（执行层保险丝） | trade_graph safety gates + gateway 硬闸门 | ✅ |
-| 仓位/资金纪律（探仓 ≤5%） | gateway 建议层单笔 ≤净值 5% + 资金闸分批 | ✅（建议层，非硬拦） |
+| 急杀/破位时不接刀（执行层保险丝） | ~~trade_graph safety gates + gateway 硬闸门~~ | ❌ 原自评**口径混淆**：safety gates 仅在 agent 路径；且 2026-09-10 已删除总回撤/连亏熔断/日回转额（S5）、破位禁低吸④门（S2）、trail_break 移动止损（S3）。现仅余网关层硬闸门（跌停/裸空/账本） |
+| 仓位/资金纪律（探仓 ≤5%） | gateway 建议层单笔 ≤净值 5% + 资金闸分批 | ✅（建议层，非硬拦）。注：日回转额 ≤3×净值 已于 2026-09-10 删除（S5） |
+| ~~（补）小赚就兑现（T 目标 3-5 点）~~ | 2026-09-10 新增 `wolf_discipline.profit_take`（浮盈≥+3% 减仓锁定） | ⚠️ 已实现但**默认关闭**（`profit_take.enabled=false`），待 dry-run 后再启用 |
 
 ## 12. 已知偏差与未落地（重要）
 
 1. **回测只覆盖布腿路径 B**（当日 confirmed 主题池）；路径 A（rotation 链候选）未建模（其输入 rotation_universe_result.json 无历史快照）。
 2. **回测的布腿时序需修正**：本轮回放按「gate 当日布腿、选股截至前一日」建样本；而生产是「gate 收盘后 18:45 产出 → **次日 09:20 布腿**、选股截至 gate 当日」。两者差一天，需重跑样本（已记录）。
-3. **253 的指数用 ETF 代理**（上证指数分钟 brze 不可用）；与上证 5min 收益相关系数 0.89。
+3. **253 的指数源澄清（2026-09-10 更正）**：本条原表述（"253 的指数用 ETF 代理"）易被误读为"生产也用 ETF 代理"。
+   实际——**生产用真实上证指数**：`t_monitor._index_m5_dump()` 与 `_index_intraday_dd()` 均走腾讯
+   `fetch_tencent_mkline("sh000001", freq="m5")`。**ETF 代理只是沙箱回测侧的限制**（回测走 brze，而上证指数分钟在 brze 不可用，
+   故用 510300 等代理，与上证 5min 收益相关系数 0.89）。
+   → 结论：253 的**生产语义与回测语义存在数据源差异**，回测结论外推时需考虑该 0.89 的相关性损失。
 4. **主题成分非严格 PIT**：农业/金融/稳增长基建 用生产 stock_confirm_result；其余主题用 THEME_CONCEPTS × 概念映射近似（按市值取前 120）。
 5. **成交假设**：回测按「一腿一次、每笔满额可成交」；未建模资金闸分批、涨跌停不可成交、滑点。
 6. WOLF_TASKS_OVERVIEW.md §0 已列出的未做项：个股级两融/杠杆检查、板块与个股级机构行为、持仓纪律与完整复盘闭环。
+7. **路径 A 的日线窗口被硬编码冻结**（2026-09-10 新发现，**待修**）：`rotation_switch_arm.py:110`（`pick_buy`）硬编码
+   `end_date="20260901"`、`:193`（legacy `confirm_pick` 回退分支）硬编码 `"20260908"`。与已修的 `mainline_gate_daily.py`
+   硬编码日期属同类缺陷 → 这两条路径的 `position_features` / LOW|MID 位置分类长期使用**过期收盘序列**。
+8. **"曾确认 40 日窗"资格闸未接入**（2026-09-10 核实）：`mainline_confirm_state.chain_qualified` / `ts_qualified`
+   有定义但**无任何调用点**；买侧实际使用 `gate_confirmed_today`（取最近一份 `mainline_gate_*.json`）。
+   详见 `docs/wolf-dip-entry-rule.md`（已同步更正）。
+9. **2026-09-10 删除的自造机制**（依审计 §5.2，用户拍板）：S1 ETF 兜底腿、S2 破位禁低吸④门、S3 trail_break 移动止损、
+   S4① 60分MA 缺数据硬禁建仓、S5 账户级熔断三件套（总回撤/连亏/回转额）、S6 底仓浮亏守卫调用点；
+   S7 回补口径已统一为 `WOLF_REFILL_MAX_PER_DAY`（默认 2）。对应 commit：566a410 / b26878a / 82a486f / ebde502。
+   **保留**的同类机制：S8 板上减半（经复核**有狼大原话支撑**：2026-09-01 楼678「吃一口减一半」「板上减了」）、
+   S4② 日内分位硬禁（机制=不追高，与狼大一致）、S5 之外的网关层硬闸门、S10 P2 宏观开关。
+10. **253/254 建仓链的 P0-1 缺陷已修**（2026-09-10）：`wolf_253_build.build_253` 成功分支原引用未定义的 `snapshot`
+    → 成交后抛 NameError 被 except 吞掉、上报 blocked、`mark_base_254` 永不调用 → 254「3 日内 ≤2 次回补」链整条失效。
+    已修（commit b1b5c20）。**此前任何基于 `t_triggers.status` 的"建仓成功率"统计均不可信**。
 
 ---
 
