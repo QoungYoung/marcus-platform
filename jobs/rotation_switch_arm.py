@@ -134,13 +134,28 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
     """曾确认主题低吸选股: THEME_CONCEPTS 成分 -> 过滤 bad/blacklist/held -> position LOW/MID, 至多 limit 只"""
     # 2026-09-09 狼大化 v2 (A=确认链/B=等权leader/C=容量提示/D=20日成交额>=1亿硬切); WOLF_PICK_LEGACY=1 回退旧版
     if os.getenv("WOLF_PICK_LEGACY", "0") != "1":
+        _st = {}
         try:
             from wolf_confirm_pick import pick_v2 as _v2
-            _p = _v2(theme, exclude=list(exclude or []), limit=limit, concepts=concepts)
-            if _p:
-                return _p
+            _p = _v2(theme, exclude=list(exclude or []), limit=limit, concepts=concepts, status_out=_st)
         except Exception as _e:
             print("WOLF_PICK_V2_ERR", theme, str(_e)[:200], file=sys.stderr)
+            _p = None
+        if _p is not None:
+            if _p:
+                return _p
+            # 2026-09-10(P0-4): v2 返回空列表有两种截然不同的语义, 旧代码用 `if _p: return _p`
+            # 把它们混为一谈并静默回落 legacy DB 扫描序 → 位置闸否掉全部时反而去买后排。
+            #   ① no_universe / no_scored = 确认域/候选数据缺失 → 允许回落 legacy(否则数据问题=全天不布腿)
+            #   ② ok(位置闸/选择层闸否掉全部) = 狼大"买不到位置就等" → 必须等待, 不得回落扫描序
+            if _st.get("status") in ("no_universe", "no_scored"):
+                print("WOLF_PICK_V2_DATAGAP_FALLBACK", theme, _st.get("status"), "-> legacy", file=sys.stderr)
+            elif os.getenv("WOLF_PICK_EMPTY_WAIT", "1") == "1":
+                print("WOLF_PICK_V2_EMPTY_WAIT", theme, "rs_rej=%s" % _st.get("rs_rejected"),
+                      "t1=%s" % _st.get("t1"), "-> 空窗等待(不回落 legacy)", file=sys.stderr)
+                return []
+            else:
+                print("WOLF_PICK_V2_EMPTY_FALLBACK", theme, "(WOLF_PICK_EMPTY_WAIT=0) -> legacy", file=sys.stderr)
     from fusion_mainline import THEME_CONCEPTS as TC
     from rotation_universe import get_sub_universe  # noqa (保持 universe 加载一致性)
     cons = concepts if concepts is not None else TC.get(theme, [])

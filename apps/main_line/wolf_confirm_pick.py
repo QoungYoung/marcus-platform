@@ -127,9 +127,14 @@ def latest_gate_date():
 
 def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, debug=False,
             pool_n=None, dist_pct=None, dist5_pct=None, etf_fallback=None, tier2_gap=None, max_legs=None,
-            pick_mode=None, rs_gate=None, rs_min=None):
+            pick_mode=None, rs_gate=None, rs_min=None, status_out=None):
     """v2.1 完整三层。返回兼容 rotation_switch_arm 的 list; 空窗时含 ETF 兜底腿(etf:True)。
-    附加信息(容量/风向标/等待池)进 stderr + json 审计文件。"""
+    附加信息(容量/风向标/等待池)进 stderr + json 审计文件。
+
+    2026-09-10(P0-4): status_out 为可选 dict 出参, 回填 {"status","reason"} 供调用方区分
+    「位置闸否掉全部=应等待」与「确认域/候选数据缺失=可回落 legacy」。status 取值:
+      no_universe / no_scored / ok。调用方不得再用"返回值为空"当作"v2 不可用"。
+    """
     exclude = set(exclude or [])
     AS = as_of or latest_gate_date()
     pool_n = int(pool_n if pool_n is not None else os.getenv("WOLF_PICK_POOL_N", "6"))
@@ -144,9 +149,13 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     # 关闭: WOLF_RS_GATE=0 (回到修复前的"只看绝对 r20"行为)。
     rs_gate = bool(rs_gate if rs_gate is not None else os.getenv("WOLF_RS_GATE", "1") == "1")
     rs_min = float(rs_min if rs_min is not None else os.getenv("WOLF_RS_MIN", "0"))
+    def _st(status, reason=""):
+        if isinstance(status_out, dict):
+            status_out["status"] = status; status_out["reason"] = reason; status_out["theme"] = theme
+        return []
     uni = confirm_universe(theme)
     if not uni:
-        print("WOLF_PICK NO_CONFIRM_UNIVERSE", theme, file=sys.stderr); return []
+        print("WOLF_PICK NO_CONFIRM_UNIVERSE", theme, file=sys.stderr); return _st("no_universe", "confirm_universe 无该主题")
     members = sorted({ts for lst in uni.values() for ts in lst})
     names = names_map(); bad = bad_set(); cm = cross_concepts()
     theme_cons = set(uni.keys())
@@ -193,7 +202,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                        "dist_prevlow": round(d1, 2), "dist_low5": round(d5, 2),
                        "trig_price": round(lows[-1] * 1.005, 3)})
     if not scored:
-        return []
+        return _st("no_scored", "成分域经板块/ST/成交额过滤后为空")
     def pct_rank(vals, key):
         srt = sorted(vals, key=lambda r: r[key] if r[key] is not None else -1e9)
         rank = {r["ts"]: i + 1 for i, r in enumerate(srt)}
@@ -304,6 +313,12 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                   f"dist_prevlow={r['dist_prevlow']}% trig={r['trig_price']} r20={r['r20']}")
         print("--- 布腿 ---")
         for p in picks: print(json.dumps(p, ensure_ascii=False))
+    # P0-4: v2 正常跑完 → status=ok。此时 picks 为空表示"位置闸/选择层闸否掉全部 = 应等待",
+    # 调用方据此不得回落 legacy 扫描序(除非数据缺失时 status 为 no_universe/no_scored)。
+    if isinstance(status_out, dict):
+        status_out.update({"status": "ok", "theme": theme, "rs_gate": rs_gate, "rs_min": rs_min,
+                           "theme_r20": round(theme_r20, 2), "rs_rejected": _rs_rej,
+                           "picks": len(picks), "t1": len(t1), "etf_fallback": etf_used})
     return picks
 
 def main():
