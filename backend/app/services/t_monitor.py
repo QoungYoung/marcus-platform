@@ -1364,14 +1364,16 @@ class TMonitor:
                             _today = _dtw.datetime.now().strftime("%Y%m%d")
                             if trigger_kind == "custom_m5dump":
                                 _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
-                                                  account=cond.get("account_id", T_MONITOR_ACCOUNT))
+                                                  account=cond.get("account_id", T_MONITOR_ACCOUNT),
+                                                  snapshot=snapshot)  # P0-1: 透传快照供日志记录 m5_dump
                             else:
                                 # 254 首现→建小底仓并记 base_254；其后 3 日内再次命中→分步回补(≤2次)
                                 _chain = _W._chain_state().get(symbol) or {}
                                 _vr = float(snapshot.get("vol_ratio") or 0)
                                 if not _chain.get("base_254_date"):
                                     _r = _W.build_253(self._trade_executor, symbol, quote, now_str=str(current),
-                                                      account=cond.get("account_id", T_MONITOR_ACCOUNT))
+                                                      account=cond.get("account_id", T_MONITOR_ACCOUNT),
+                                                      snapshot=snapshot)  # P0-1: 同上
                                     # 2026-09-08 修复(600004整天blocked): 仅建仓成功才记 base_254——
                                     # 首建失败(data_unavailable等)若也标记, 当日后续254命中全走refill被same_day拦, 全天建仓0
                                     if _r.get("status") == "success":

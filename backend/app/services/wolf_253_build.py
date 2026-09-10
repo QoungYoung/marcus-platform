@@ -87,8 +87,14 @@ def _near_limit_down(quote, prev_close):
     except Exception:
         return False
 
-def build_253(executor, symbol, quote, now_str="", account="stock"):
-    """无底仓 253 急杀→开小底仓(probe/new_base)。返回 dict(status)。"""
+def build_253(executor, symbol, quote, now_str="", account="stock", snapshot=None):
+    """无底仓 253 急杀→开小底仓(probe/new_base)。返回 dict(status)。
+
+    2026-09-10 修复(P0-1): 原先成功分支的 log_buy_point 引用了未定义的 snapshot
+    → 抛 NameError 被 except 吞掉, 成交却上报 blocked, 且 t_monitor 侧
+    "仅 status==success 才 mark_base_254" 永不成立 → 254 分步回补链整条失效。
+    现把 TMonitor 的字段快照显式透传进来（仅用于日志记录 reason 中的 m5_dump）。
+    """
     op = _wave_op()
     intent = choose_intent(op)
     if not intent:
