@@ -164,6 +164,102 @@ def theme_structure(theme):
     return out
 
 
+# ── P2-2 主题资金危险（与 P1-3 的边界: P1-3 管结构, 本段管资金）──
+_CH_CACHE = {"mtime": None, "by_name": None}
+
+
+def _concept_hist_by_name():
+    """concept_hist.json(约 8MB) 按 name 建索引, 进程内缓存(按 mtime 失效)。"""
+    p = os.path.join(DATA, "concept_hist.json")
+    try:
+        mt = os.path.getmtime(p)
+    except Exception:
+        return {}
+    if _CH_CACHE["mtime"] == mt and _CH_CACHE["by_name"] is not None:
+        return _CH_CACHE["by_name"]
+    try:
+        h = _load("concept_hist.json")
+        by = {}
+        for v in (h or {}).values():
+            if isinstance(v, dict) and v.get("name"):
+                by[str(v["name"])] = v
+        _CH_CACHE["mtime"] = mt
+        _CH_CACHE["by_name"] = by
+        return by
+    except Exception:
+        return {}
+
+
+def theme_fund_danger(theme, days=None):
+    """主题**资金**危险判定（P2-2）→ (danger: bool, reason)。
+
+    狼大 2025-03-06「你首先得判断现在大盘行情没有危险 **板块没有危险** 那就可以做」。
+    信号 = 该主题主力净流入（concept_hist.net_amount，主题内概念取均值）**连续 N 日全部为负**。
+
+    与 P1-3 的边界（避免造重复的门）：
+      · P1-3 `theme_structure` 判**结构**（主题浪 track_a.stage）；
+      · 本函数判**资金**（主力净流入的持续性）。
+    两者由 `theme_buyable()` 合成为一个入口。
+
+    fail-open：数据缺失 / 主题内概念样本不足 / 序列疑似前值填充（近 N 日全同）→ 视为**无危险**，
+    不拦（数据问题不应封死买路，与 P1-3 的 fail 策略一致）。
+    """
+    n = int(days if days is not None else os.getenv("WOLF_THEME_FUND_DAYS", "3"))
+    try:
+        import sys as _s
+        _p = os.path.dirname(os.path.abspath(__file__))
+        if _p not in _s.path:
+            _s.path.insert(0, _p)
+        from fusion_mainline import THEME_CONCEPTS
+        cons = THEME_CONCEPTS.get(theme) or []
+    except Exception:
+        return False, "主题概念表不可用 → 放行"
+    by = _concept_hist_by_name()
+    if not by:
+        return False, "concept_hist 不可用 → 放行"
+    series = []
+    for c in cons:
+        v = by.get(c)
+        if not isinstance(v, dict):
+            continue
+        na = [x for x in (v.get("net_amount") or []) if x is not None]
+        if len(na) < max(2, n):
+            continue
+        tail = na[-n:]
+        if len(set(tail)) == 1:          # 疑似前值填充(停牌/无数据) → 该概念不计
+            continue
+        series.append(tail)
+    if len(series) < 2:
+        return False, "主题内可用资金序列不足(%d) → 放行" % len(series)
+    avg = [sum(s[i] for s in series) / len(series) for i in range(n)]
+    if all(x < 0 for x in avg):
+        return True, "板块资金危险: 主题[%s] 主力净流入连续 %d 日为负(均值 %s 亿)" % (
+            theme, n, ", ".join("%.2f" % (x / 1e8) for x in avg))
+    return False, "板块资金正常(近%d日均值 %s 亿)" % (n, ", ".join("%.2f" % (x / 1e8) for x in avg))
+
+
+def theme_buyable(theme):
+    """主题是否可买 = **结构**(P1-3) ∧ **资金**(P2-2)。**单一定义处**, 供 253 与布腿器共用。
+
+    返回 (ok, reason)。结构未确认 → 拦; 结构确认但资金连续流出 → 拦。
+    """
+    if not theme:
+        return True, "主题未知 → 放行(不封死买路)"
+    st = theme_structure(theme)
+    stage = str(st.get("stage") or "")
+    if not stage:
+        return True, "主题浪数据缺失(theme=%s) → 放行" % theme
+    if stage not in THEME_STAGE_ALLOW:
+        return False, "结构未确认: 主题[%s] stage=%s verdict=%s（不在急杀那一刻接/不新开）" % (
+            theme, stage, st.get("verdict"))
+    if os.getenv("WOLF_THEME_FUND", "1").strip() in ("0", "false", "no"):
+        return True, "主题[%s] 结构已确认(stage=%s); 资金维度已关闭(WOLF_THEME_FUND=0)" % (theme, stage)
+    dg, dr = theme_fund_danger(theme)
+    if dg:
+        return False, dr
+    return True, "主题[%s] 可买: stage=%s verdict=%s | %s" % (theme, stage, st.get("verdict"), dr)
+
+
 def systemic_block(wave=None):
     """大盘是否处于"真正系统性下跌"（仅此情形拦 253）。返回 (blocked, reason)。"""
     w = wave if wave is not None else load_wave()
@@ -197,11 +293,11 @@ def m5dump_allowed(symbol=None, wave=None):
 
     stage = st.get("stage")
     verdict = st.get("verdict")
-    if stage in THEME_STAGE_ALLOW:
-        return True, "语境允许: 主题[%s] 结构 stage=%s verdict=%s（筑底/上行）" % (theme, stage, verdict)
-    # 结构未确认 → 不接（狼大: 肯定不是急杀的时候买 / B反典型诱多别抄底）
-    return False, "语境禁止: 主题[%s] 结构 stage=%s verdict=%s（未筑底, 不在急杀那一刻接）" % (
-        theme, stage, verdict)
+    if stage not in THEME_STAGE_ALLOW:
+        return False, "语境禁止: 主题[%s] 结构 stage=%s verdict=%s（未筑底, 不在急杀那一刻接）" % (
+            theme, stage, verdict)
+    # 结构已确认 → 再叠加 P2-2 的资金危险维度(单一定义处: theme_buyable = 结构 ∧ 资金)
+    return theme_buyable(theme)
 
 
 if __name__ == "__main__":

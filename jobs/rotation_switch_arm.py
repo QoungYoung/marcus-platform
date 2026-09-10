@@ -457,6 +457,23 @@ def main():
     # 2026-09-09 曾确认主题低吸候选池(实盘布腿, 全池<=2只; 农业 confirmed 优先):
     # 主线门结果(mainline_gate json) -> 今日 confirmed_candidate 主题优先, 其次曾确认窗内主题
     pool = [t for t in confirmed_today_set if t != "银行"]  # 今日 confirmed 主题低吸池(1-2只控制)
+    # P2-2(2026-09-10): 主线确认池也要过"主题可买"门 = **结构**(P1-3) ∧ **资金**(P2-2 连续净流出)。
+    # 狼大 2025-03-06「你首先得判断现在大盘行情没有危险 **板块没有危险** 那就可以做」。
+    # 单一定义处: wolf_context.theme_buyable —— 253 的 m5dump_allowed 也调它, 两条路径不会分叉。
+    # 注: 本门作用于 254/253 的**新开低吸腿**; 卖侧与已有持仓不受影响。
+    if pool:
+        try:
+            from wolf_context import theme_buyable
+            _ok_pool = []
+            for th in pool:
+                _ok, _why = theme_buyable(th)
+                if _ok:
+                    _ok_pool.append(th)
+                else:
+                    print("SKIP_THEME_NOT_BUYABLE", th, _why, file=sys.stderr)
+            pool = _ok_pool
+        except Exception as _e:
+            print("THEME_BUYABLE_ERR(放行)", str(_e)[:120], file=sys.stderr)
     if qualify and pool:
         # B(2026-09-09): 等待池分批——tier1严格前2 + tier2接近档补位至 ROT_POOL_LEGS(默认4);
         # 成交节奏由资金闸兜底(probe<=5%预算尽自动停), 狼大'埋伏一批等位置'
