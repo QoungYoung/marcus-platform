@@ -1,0 +1,228 @@
+# Marcus 生产全链路（狼大流程落地版 · 2026-09-10 梳理）
+
+> 目的：把「生产实际怎么跑」与「狼大原话/规则怎么落」对齐成一份可核对的主文档。
+> 来源：生产代码（/opt/marcus-platform ↔ 本仓同级路径）+ 调度配置 config/tasks.yaml + 数据库 t_* 表 + 线上产物。
+> 本文只描述**已实现并在线**的链路；未实现/未接入的写在 §11。
+
+---
+
+## 0. 全景
+
+```
+[数据层]  gzcloud(Tushare代理) / brze(分钟) / 腾讯·新浪(实时报价) / news.db / 研报(catalyst)
+   │
+   ├─(收盘后 18:45) 主线确认每日更新 mainline_gate_daily
+   │      concept_long → etf_flow → inst_flow → trend_confirm(结构GATE) → heat_v2(资金热度) → mainline_gate → 注入 main_line_state
+   │      产物: concept_long.json / trend_confirm_<date>_long.json / heat_v2_<date>.json / mainline_gate_<date>.json / mainline_confirm_history.json
+   │
+   ├─(次日 08:00) 主线判定 main_line_judge  → 以最新 gate 为准覆写 main_line/candidates, 写 main_line_state.json
+   ├─(08:10) 波浪判定 wave_agent → wave_state.json（level/sub_level/operation, defense/exit 硬拦不建仓）
+   ├─(08:15) 板块洗盘收敛期 G3 judge
+   ├─(08:20) 成分股确认 stock_confirm_judge → stock_confirm_result.json（低吸池的成分/阶段）
+   │
+   ├─(09:20) 主线内切换布腿器 rotation_switch_arm → 写 t_conditions(account=stock, publisher=switch)
+   │      卖腿: 持仓落在拥挤/出货链 → quote.vwap_break
+   │      买腿: ①当日 confirmed 主题池(pick_v2) ②rotation 链候选(再按 confirmed 主题过滤) → 每腿挂 253 + 254 两条买条件
+   │
+   ├─(全天, 30s/轮) TMonitor 触发 → 写 t_triggers
+   │      254 = quote.dip_prev_low(当日5min最低≤前一日5min最低×1.005) ∧ vol_ratio≤0.9
+   │      253 = index.m5_dump≥0.4(指数单根5min急杀) ∧ 时段 09:45-14:40 ∧ 非跌停
+   │      护栏: regime GATE / 14:45 后禁新开 / armed / 5min 冷却 / 板块权限
+   │
+   ├─(触发后) 执行层 t_gateway.gateway_execute → validate_order(硬闸门+账本+建议层) → 执行器成交 → paper_orders/paper_positions
+   │
+   └─(卖出/做T) wolf_t_rules(正T/倒T/确认制T出) + 止损扫描 + auto_exit/manual_guard 腿
+   │
+   └─(复盘/评估) 每日复盘 / 周五周度反思 / P2 Gate 报告 / 买点对齐评测 / 沙箱大样本回测
+```
+
+---
+
+## 1. 运行时与调度
+
+| 组件 | 作用 | 备注 |
+|---|---|---|
+| marcus-worker | APScheduler 读 `config/tasks.yaml`；**TMonitor 常驻线程**（30s/轮） | 脚本类任务在容器内以子进程运行 → **改 jobs/*.py 即时生效** |
+| marcus-backend | FastAPI（:8000）+ 进程内服务模块（t_monitor / trade_graph / p2 等） | **改这些模块需重启 backend + worker** |
+| marcus-postgres | 交易/条件/触发/持仓/回测表（t_conditions, t_triggers, paper_* 等） | |
+| marcus-dsh | 内部 LLM 通道（:3001 /chat） | 供 agent 决策与链路抽取 |
+
+### 1.1 关键时间表（生产实跑）
+
+| 时间(工作日) | 任务 | 脚本 | 主要产物 |
+|---|---|---|---|
+| 08:00 | 主线判定 | apps/main_line/main_line_judge.py | main_line_state.json（以最新 gate 覆写） |
+| 08:10 | 波浪判定 | apps/main_line/wave_agent.py | wave_state.json |
+| 08:15 | 板块洗盘收敛期(G3) | jobs/sector_g3_judge.py | — |
+| 08:20 | 成分股确认刷新 | apps/main_line/stock_confirm_judge.py | stock_confirm_result.json |
+| 08:40 | 业绩披露日历刷新 | apps/main_line/build_earnings_calendar.py | earnings_calendar.json |
+| 08:50 | 黄金坑盘前报告 | — | — |
+| 09:00 / 09:10 | 盘前扫描 / 盘前诊断 | jobs/pre_market_scan.py / morning_diagnosis.py | — |
+| **09:20** | **主线内切换布腿器** | jobs/rotation_switch_arm.py | t_conditions（253/254 买腿 + vwap 卖腿） |
+| 09:35 / 09:53 / 10:35 / 13:35 / 14:30 | 自动交易 agent 档 | — | 建仓/减仓/只卖不买 |
+| 盘中 20/31/50 分 | 盘中扫描 | jobs/market_scan.py | — |
+| 每 30 分钟 | 新闻采集 | apps/news/news_collector.py | news.db |
+| 15:01 / 15:05 / 15:06 / 15:20 / 15:25 / 15:30 | 净值快照 / 系统性风险 / 宏观机构状态 / P2 Gate 报告 / 今日计划 / 黄金坑快照 | — | — |
+| 16:00 | 每日复盘 | jobs/daily_review_enhanced.py | — |
+| 16:30 | 指数日线刷新 | jobs/refresh_index_daily.py | 指数CSV + wave_pivots |
+| **18:15** | 产业链图每日增量 | apps/main_line/chain_map.py | chain_map_<date>.json |
+| **18:45** | **主线确认每日更新** | apps/main_line/mainline_gate_daily.py | 见 §3 |
+| 18:45 | 域外主线方向监控 | apps/main_line/scan_theme_gaps.py | — |
+| 19:30 / 周五15:30 / 周日08:00 / 周六10:00 | 新闻晚报 / 周度反思 / 股票池更新 / chain_map 全量强核 | — | — |
+
+> **关键时序（务必记住）**：主线门在**收盘后 18:45** 产出（用当日收盘数据）；因此**次日 09:20 布腿**读到的 gate 是「昨天收盘产出的那一份」。布腿选股用的日线数据也就截至**昨天**。
+
+---
+
+## 2. 数据层
+
+| 源 | 用途 | 入口 |
+|---|---|---|
+| gzcloud（ts.gyzcloud.top，Tushare 兼容代理） | 日线 daily / daily_basic / moneyflow_dc / top_inst / margin / fund_share | wolf_confirm_pick.gz()、各 build_*.py |
+| brze（tu.brze.top） | **历史分钟** stk_mins(5min/1min，可回溯 2024+)、实时 rt_k/rt_min | app/services/t_data_sources.fetch_brze_stk_mins() |
+| 腾讯 qt | 实时报价（做T/触发取价） | fetch_tencent_quote() |
+| 新浪 | 5min（近 ~25 交易日）、指数快照 | fetch_sina_minline() |
+| 本地/DB | news.db（新闻+概念+影响级别）、stock_pool.db（成分/概念映射/市值）、concept_long.json（概念等权指数）、wave_state.json | — |
+
+约束（实测）：brze 单次最多 8000 根（5min≈167 交易日）→ 长区间需分块；**上证指数分钟在 brze 不可用**，指数相关（253）需用 510300 等 ETF 代理。
+
+---
+
+## 3. 主线判定链（gate）
+
+**脚本**：`apps/main_line/mainline_gate_daily.py`（18:45）依次执行
+1. `build_concept_long.py` — 概念等权指数（20250101 起，pct 环比规避复权）
+2. `build_etf_flow.py` — 主题 ETF 份额流（佐证因子）
+3. `build_inst_flow.py` — 龙虎榜机构/游资净买
+4. `trend_confirm.py --as-of <date>` — **结构 GATE**：逐主题判断 track_b（确认链）比例 → `gate = ratio >= 0.35`
+5. `heat_v2.py --date <date>` — **资金热度**：四因子（mf5 主力5日净额 / rel 概念等权20日 / mf_accel 加速 / etf 份额）→ 排名
+6. `mainline_gate.py --date <date> --fusion-json heat_v2_<date>.json` — 组合：
+
+| verdict | 条件 | 含义（狼大语义） |
+|---|---|---|
+| confirmed_candidate | 热度排名 ≤ TOPN(=2) **且** 结构GATE PASS | 资金主导 + 结构确认 = 主线候选（可布腿） |
+| watch | 排名 ≤ TOPN 但 GATE FAIL | 资金在、结构未确认 → 观察 |
+| reserve | GATE PASS 但排名 > TOPN | 结构健康等资金点火 → 预备 |
+| none | 其余 | — |
+
+7. `mainline_state_inject.py` — 注入 main_line_state.json（Pi/agent 可见）
+
+**波浪只作风险提示**：`wave_env`（level/sub_level/operation/c_kill）写入 gate 文件但**不否决主线资格**（狼大：调整浪内也做主线；破位位由执行层保险丝处理）。
+
+**确认历史**：`mainline_confirm_state.ensure_history` 维护 `mainline_confirm_history.json`（"曾确认"窗口，供布腿器回退/参考）。
+
+---
+
+## 4. 环境/波浪链
+
+- `wave_agent.py`（08:10，周一为主）→ `wave_state.json`：level(d1..down) / sub_level / operation(build/t_only/side/defense/exit) / confidence / reasons。
+- `wave_alloc.read_wave_alloc()`：把 operation 映射成 `invest` 仓位系数；布腿器按 invest 裁剪买腿数量（build/t_only/side=1 不裁剪）。
+- `trade_graph.node_check_safety_gates`：**operation ∈ (defense, exit) → 不建仓（硬拦）**；同时含「总回撤≥5% 禁买」「连续亏损≥3 笔当日熔断」（可用 SAFETY_GATE_BYPASS 旁路，默认关）。
+- `t_regime.compute_regime()`：日内环境门（沪深300 跌 >2% → HALT；市场诊断 extreme/bear → HALT 等），产出 `gate_low_buy` / `gate_high_sell`（ALLOWED / MANUAL_ONLY / BLOCKED）。
+
+---
+
+## 5. 标的确认链（低吸池）
+
+- `stock_confirm_judge.py`（08:20）→ `stock_confirm_result.json`：{子概念 → 成分股与确认阶段}。`wolf_confirm_pick.confirm_universe(theme)` 即读它。
+- `chain_map.py`（18:15 增量 / 周六 全量）→ 产业链图（主题→环节→代表股），供 agent 语义核对。
+- `position_judge.py`（周一）→ 概念高低位；`crowding_blacklist.json` 由基金持仓拥挤度刷新（`refresh_fund_crowding.py`）。
+
+---
+
+## 6. 布腿链（rotation_switch_arm，09:20）
+
+只布腿、不下单；执行交给 TMonitor。
+
+1. **过期**：`expire_old`（把 trade_date < today 的 switch 腿置 expired）
+2. **卖侧**：当前持仓落在 `crowded_top` 或 `holdT_top`（rotation universe）→ 布 `quote.vwap_break` 卖腿（SELL_EXPR）
+3. **买侧（两条路径）**
+   - **路径 A**：`room + holdT` 链候选 → 该链 `pick_buy(chain, limit=3)`（按关键词匹配成分、剔 ST/拥挤黑名单、位置 LOW/MID）→ 用「当日 confirmed 主题」过滤（`theme_of_chain`）
+   - **路径 B（主线确认池）**：`gate_confirmed_today(today)` 取最近 gate 文件的 confirmed_candidate 主题（排除银行）→ 逐主题 `confirm_pick(th, limit=pool_legs-got)`（内部 `pick_v2`：主题内 leader 榜 → 位置闸（距前日低 ≤5%）→ tier1 严格前 2 + tier2 接近档补位，跨主题合计 ≤ `ROT_POOL_LEGS`=4）
+4. **仓位系数**：`wave_alloc.invest` < 1 时按比例裁剪买腿（保留前序=主线优先）
+5. **板块权限**：`WOLF_PICK_BOARD_EXCLUDE`（默认 cyb,bj,kcb）→ 创业板/科创板/北交所腿直接剔除（账户无权限）
+6. **写入**：每条买腿写两条条件 `custom_m5dump`(253) + `custom_prevlow`(254)；每条卖腿写 `custom`(vwap_break)。同时写入 **换手基准** `benchmark_turnover_profile`（近 5 完成交易日均换手）供 vol_ratio 使用。
+7. `SWITCH_ARM_DRY=1` 只输出决策 JSON 不写库。
+
+---
+
+## 7. 触发链（TMonitor，30s/轮）
+
+- 轮询 `t_conditions`（account=stock、当日子弹）→ 并发取价（腾讯/新浪）→ 构建字段快照 → **表达式求值**（t_expr）→ 通过后仍须过通用护栏。
+- **字段与语义**
+  - `quote.dip_prev_low`：当日 5min 最低 ≤ 前一交易日 5min 最低 ×1.005（狼大「挂前一天低点」）
+  - `vol_ratio` = [当日累计换手% × (240/已开盘连续分钟)] ÷ base，base = 近 5 个已完成交易日**日换手均值**（`benchmark_turnover_profile.same_minute_avg`，缺省兜底 0.5%）
+  - `index.m5_dump`：上证（当前以 ETF 代理）单根 5min 跌幅%，急杀阈值 0.4
+  - `quote.vwap_break`：跌破日内均价线（黄线）→ 卖
+- **通用护栏**：regime GATE(低吸/高卖分别) → **14:45 后禁新开仓** → `armed=1` → **同条件 5 分钟冷却** → 板块权限（`_board_tradable`）
+- **状态机**：狼大表达式腿是**非消费式持续腿**（命中后保持 active，靠冷却防刷；底仓不动、T仓反复做）；其他做T腿触发即消费；manual_guard 一次性。
+- **跨日结转**：`_roll_wolf_legs` 把昨日仍 active 的狼大腿复制到今日（不复活已停用/已消费的腿）。
+- **其它每轮动作**：止损扫描（现价 ≤ stop_loss_price）、做T规则（正T/倒T/确认制T出）、尾盘 de-T、防御减T、board_half 等。
+
+---
+
+## 8. 执行链与风控（t_gateway）
+
+触发写入 `t_triggers(pending)` 后立即走 `gateway_execute()`（唯一放行者）：
+
+| 层 | 内容 |
+|---|---|
+| 账户白名单 | 仅 `stock`（狼大做T账户）可执行 |
+| **硬闸门** | 裸空/无券卖、无底仓禁裸买（除非条件单建仓路径）、跌停禁买/涨停禁卖、STOP_ALL、触发事件状态异常、基础回撤 guard、**wolf 回补当日上限 1 笔**、当日有撤销卖单需人工确认、低吸加仓次数上限（MAX_DAILY_BUY_LEGS） |
+| 账本层 | 可卖底仓断言、买腿 ≤ 可卖底仓、当日回转额/日亏损熔断（止损卖单豁免） |
+| 建议层 | **单笔 ≤ 净值 5%**、价差成本比、冷却、频次（仅告警） |
+| 执行 | MarcusVNPyExecutor + PaperTradingEngine → paper_orders/paper_positions；失败/被拒 → t_triggers 置 blocked + 审计 |
+
+---
+
+## 9. 做T / 卖出链
+
+- `wolf_t_rules`：正T买（`zheng_t_buy_quote`）/ 倒T卖（`dao_t_sell_quote`）/ 确认制T出（停量 + 二次不过前高）/ 日高与周期 PnL 记录；周五减 T 仓、不强制日结。
+- `SELL_EXPR = quote.vwap_break`（黄线破位）用于切换链卖腿；`custom_level_sell`/`custom_vwap_sell`（manual_guard）一次性。
+- 止损：条件带 `stop_loss_price`；TMonitor 每轮扫描；止损单豁免熔断（止血优先）。
+- auto_exit：自动离场腿（持续监控）。
+
+---
+
+## 10. 复盘 / 评估链
+
+- 生产：每日复盘（16:00）、周度反思（周五 15:30）、P2 Gate 每日观察报告（15:20）。
+- 评测：`judge_wolf_event_alignment.py`（买点与狼大事件对齐率，v3 ±5 日 92.9%）。
+- **沙箱大样本回测（本轮新增，不在生产调度内）**：`/app/data/_bt_pit/`，脚本 `/app/jobs/_bt_*.py`（gate 逐日回放 → 布腿复刻 → brze 5min 触发 → 分层统计 → REPORT.md）。
+
+---
+
+## 11. 与狼大流程的对照
+
+| 狼大规则/原话 | 生产落点 | 状态 |
+|---|---|---|
+| 只做主线（自上而下：资金热度 × 结构确认） | mainline_gate（confirmed_candidate）→ 09:20 布腿器 | ✅ 已实现（gate 为唯一权威） |
+| 只做趋势/确定性行情，调整浪内可做 | wave_state + operation 映射 invest；defense/exit 硬拦建仓 | ✅（wave 不否决主线资格，仅保险丝） |
+| 低吸：挂前一天低点、缩量才接 | 254 = dip_prev_low + vol_ratio≤0.9（换手节奏比） | ✅ 生产口径（已对账 09-10 实盘触发） |
+| 急杀抢反弹 | 253 = index.m5_dump ≥0.4（09:45-14:40、非跌停） | ✅（指数据用 ETF 代理，见偏差） |
+| 不买后排、龙头优先、买不到就退而求其次 | pick_v2 leader 榜 + tier1/tier2 + rank_in_concept | ✅ |
+| 买不到位置就等（空窗不硬做） | 位置闸（距前日低 ≤5%）；无候选则不布腿 | ✅ |
+| 高位不加、太高切低位 | 位置分类 position_class + 拥挤黑名单 | ⚠️ 部分（无独立"主题高度闸"，回测显示边际不显著） |
+| 板块权限（无创业板/科创板权限） | WOLF_PICK_BOARD_EXCLUDE + 多层过滤（选股/布腿/TMonitor） | ✅（用户口径） |
+| 底仓不动、T仓高抛低吸反复做 | 非消费式持续腿 + 5min 冷却 + 100 股底仓保护 | ✅ |
+| 黄线破位走人 | SELL_EXPR = vwap_break | ✅ |
+| 急杀/破位时不接刀（执行层保险丝） | trade_graph safety gates + gateway 硬闸门 | ✅ |
+| 仓位/资金纪律（探仓 ≤5%） | gateway 建议层单笔 ≤净值 5% + 资金闸分批 | ✅（建议层，非硬拦） |
+
+## 12. 已知偏差与未落地（重要）
+
+1. **回测只覆盖布腿路径 B**（当日 confirmed 主题池）；路径 A（rotation 链候选）未建模（其输入 rotation_universe_result.json 无历史快照）。
+2. **回测的布腿时序需修正**：本轮回放按「gate 当日布腿、选股截至前一日」建样本；而生产是「gate 收盘后 18:45 产出 → **次日 09:20 布腿**、选股截至 gate 当日」。两者差一天，需重跑样本（已记录）。
+3. **253 的指数用 ETF 代理**（上证指数分钟 brze 不可用）；与上证 5min 收益相关系数 0.89。
+4. **主题成分非严格 PIT**：农业/金融/稳增长基建 用生产 stock_confirm_result；其余主题用 THEME_CONCEPTS × 概念映射近似（按市值取前 120）。
+5. **成交假设**：回测按「一腿一次、每笔满额可成交」；未建模资金闸分批、涨跌停不可成交、滑点。
+6. WOLF_TASKS_OVERVIEW.md §0 已列出的未做项：个股级两融/杠杆检查、板块与个股级机构行为、持仓纪律与完整复盘闭环。
+
+---
+
+## 13. 运维要点
+
+- **改脚本类任务（jobs/*.py、apps/*）**：即时生效（子进程执行）。
+- **改 backend 进程内模块（t_monitor/trade_graph/p2 等）**：必须重启 backend + worker。
+- **改调度**：config/tasks.yaml（worker 需 reload/重启）。
+- **回放纪律**：任何 DATA_DIR 沙箱回放，先把「本次会写的文件」列出并 COPY 到沙箱（严禁软链可写文件）；分片并行上限 2（4 分片会被 OOM 静默杀掉）。
