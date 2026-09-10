@@ -34,7 +34,7 @@
      仅拦：level=down, 或 sub_level ∈ {C杀, 衰竭浪, 双头/M顶, 4-5, 失败5}（狼大: 最后一跌/防御等企稳）。
 
 ## 环境变量
-  WOLF_253_CONTEXT=1            启用本闸门（**默认 0 = 关闭**，主题浪数据通道需在生产验证后再开）
+  WOLF_253_CONTEXT=1            启用本闸门（**默认 1 = 启用**; 置 0 关闭）
   WOLF_253_CONTEXT_UNKNOWN=allow  主题浪数据缺失时放行（默认 allow —— 见下方 fail 策略）
   WOLF_253_CONTEXT_LOG=1        打印放行原因
 
@@ -181,7 +181,7 @@ def m5dump_allowed(symbol=None, wave=None):
 
     判定：①大盘系统性护栏（仅真系统性下跌才拦）→ ②主题浪（主判据）→ ③数据缺失放行。
     """
-    if os.getenv("WOLF_253_CONTEXT", "0").strip() in ("0", "false", "no"):
+    if os.getenv("WOLF_253_CONTEXT", "1").strip() in ("0", "false", "no"):
         return True, "闸门关闭(WOLF_253_CONTEXT=0)"
 
     sb, sreason = systemic_block(wave)
