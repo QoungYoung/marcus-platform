@@ -1925,11 +1925,32 @@ def evaluate_condition_at(cond: Dict[str, Any], quote: dict, regime_state: dict,
 
 
 def pass_common_gates(cond: Dict[str, Any], regime_state: dict, now: datetime) -> bool:
-    """表达式通过后的通用护栏：regime GATE + 时段 + 状态机（纯函数）。"""
+    """表达式通过后的通用护栏：regime GATE + 语境(253) + 时段 + 状态机（纯函数）。"""
     trigger_kind = cond.get("trigger_kind", "low_buy")
     gate = check_gate(trigger_kind, regime_state)
     if not gate["allowed"]:
         return False
+    # P1-3(2026-09-10): 253(指数急杀低吸) 的**狼大分语境闸门** —— 筑底/上行可接, 未筑底不接。
+    # 依据狼大 2025-06-05「急杀可以买，缓跌不买」/ 2025-07-28「跳水了你高位减仓的钱敢不敢买」
+    # vs 2026-05-15「只要磨出底部结构…肯定不是急杀的时候买啊」。判据复用 wave_agent 的狼大语境标签。
+    # 注: 该闸门**不是**时钟窗(语料无时段规则), 也**不是** P1-4 的 wave 全军门(只作用于 253 这一条)。
+    if trigger_kind in ("custom_m5dump", "m5_dump"):
+        try:
+            import sys as _wc
+            _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps", "main_line")
+            if _p not in _wc.path:
+                _wc.path.insert(0, _p)
+            from wolf_context import m5dump_allowed
+            _ok, _why = m5dump_allowed()
+            if not _ok:
+                print(f"[TMonitor] 253语境闸门拦截 {cond.get('symbol')}: {_why}", flush=True)
+                return False
+            if os.getenv("WOLF_253_CONTEXT_LOG", "0") == "1":
+                print(f"[TMonitor] 253语境闸门放行 {cond.get('symbol')}: {_why}", flush=True)
+        except Exception as _e:
+            # 仅"模块不可导入"这类代码级故障才放行(避免一处 import 错误把 253 整条买路封死);
+            # 语境本身缺失/未知时由 wolf_context 内部 fail-closed 处理。
+            print(f"[TMonitor] 253语境闸门异常(放行): {str(_e)[:120]}", flush=True)
     hm = now.hour * 100 + now.minute
     if hm >= 1445:
         return False
