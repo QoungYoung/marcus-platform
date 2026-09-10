@@ -13,6 +13,11 @@ def _cfg():
                             "windows": ["late_morning", "afternoon", "closing"]},
         "board_half": {"enabled": True, "min_float_pct": 3.0,
                        "board_threshold_pct": 9.5, "board_threshold_20": 19.5},
+        # ③ 小赚兑现(2026-09-10 P0-3): 浮盈>=min_float_pct → 减 reduce_ratio 锁定。
+        # 依据: 回测 T+5 收盘胜率 47% → 加 +3% 止盈 53%; rs>0 ∧ +3% 止盈 → 胜率 56%/中位 +1.01%。
+        # 默认 enabled=False: 该规则会新增一条高频卖腿, 线上影响面大于选择层闸(rs),
+        # 需先 dry-run 观察触发频次/与 board_half·defensive·roundtrip 的叠加再开启。
+        "profit_take": {"enabled": False, "min_float_pct": 3.0, "reduce_ratio": 0.5},
     }
     try:
         p = os.path.join(os.environ.get("DATA_DIR", "data"), "wolf_discipline.json")
@@ -99,16 +104,56 @@ def board_half(portfolio, now, cfg=None, quotes=None):
     directive = "⚠️ 板上减半：对持仓中『今日触及/接近涨停(10%%板≥%.1f%%, 20%%板≥%.1f%%) 且 本轮浮盈≥%.1f%%』的标的 → 减半锁定(卖出持仓的一半, 底仓/芯片类按 T 仓处理)。" % (t10, t20, min_float) if b.get("enabled") else ""
     return {"active_sells": sells, "directive": directive, "enabled": b.get("enabled", True)}
 
+def profit_take(portfolio, now=None, cfg=None, quotes=None):
+    """小赚兑现(P0-3, 2026-09-10): 持仓浮盈 >= min_float_pct → 减 reduce_ratio 锁定。
+
+    狼大原话依据: 「吃一口减一半 安全第一」(2026-09-01)、「我最喜欢的就是这种小赚就走的」
+    「兌现风格」回测: 固定持有到 T+5 收盘胜率 47%; 改 +3% 小止盈 → 53%;
+    rs>0(强于主题) ∧ +3% 止盈 → 56%(均值 +0.56%/中位 +1.01%)。
+    作用域: 与 board_half 同口径按持仓 avg_cost 判定; "减 reduce_ratio" 而非清仓, 底仓保护由卖出管道负责。
+    返回 {active_sells:[{symbol,reason,reduce_ratio}], directive, enabled}。
+    """
+    cfg = cfg or _cfg(); pt = cfg.get("profit_take", {})
+    if not pt.get("enabled"):
+        return {"active_sells": [], "directive": "", "enabled": False}
+    pos = _portfolio(portfolio)
+    pos_list = (pos or {}).get("positions") or []
+    min_float = float(pt.get("min_float_pct", 3.0))
+    ratio = float(pt.get("reduce_ratio", 0.5))
+    q = quotes or {}
+    sells = []
+    for p in pos_list:
+        sym = str(p.get("symbol", ""))
+        cost = float(p.get("avg_cost") or 0)
+        vol = float(p.get("volume") or 0)
+        if cost <= 0 or vol <= 0 or sym not in q:
+            continue          # 无实时价则不硬判(与 board_half 同口径)
+        cur = float(q[sym].get("current") or 0)
+        if cur <= 0:
+            continue
+        float_pct = (cur / cost - 1) * 100
+        if float_pct >= min_float:
+            sells.append({"symbol": sym, "float_pct": round(float_pct, 2), "reduce_ratio": ratio,
+                          "action": "profit_take_sell",
+                          "reason": "浮盈%.2f%%≥%.1f%% → 小赚兑现减%.0f%%(保留底仓)" % (float_pct, min_float, ratio * 100)})
+    directive = ("⚠️ 小赚兑现：持仓浮盈≥%.1f%% 的标的 → 减%.0f%%锁定(保留底仓)。"
+                 % (min_float, ratio * 100)) if pt.get("enabled") else ""
+    return {"active_sells": sells, "directive": directive, "enabled": pt.get("enabled", False)}
+
+
 def discipline_context(portfolio=None, now=None, window=None, quotes=None):
-    """返回注入 prompt 的纪律规则上下文块(周末降仓 + 板上减半)。"""
+    """返回注入 prompt 的纪律规则上下文块(周末降仓 + 板上减半 + 小赚兑现)。"""
     now = now or __import__("datetime").datetime.now()
     wd = weekend_de_risk(portfolio, now, window=window)
     bh = board_half(portfolio, now, quotes=quotes)
+    pt = profit_take(portfolio, now, quotes=quotes)
     parts = []
     if wd.get("active"):
         parts.append(wd["directive"])
     if bh.get("enabled") and bh.get("directive"):
         parts.append(bh["directive"])
-    for s in bh.get("active_sells", []):
+    if pt.get("enabled") and pt.get("directive"):
+        parts.append(pt["directive"])
+    for s in bh.get("active_sells", []) + pt.get("active_sells", []):
         parts.append("  - " + s["reason"])
     return ("\n## 狼大纪律规则\n" + "\n".join(parts) + "\n") if parts else ""

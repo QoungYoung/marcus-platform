@@ -136,6 +136,7 @@ class TMonitor:
                     # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
+                    self._check_profit_take()  # 小赚兑现(P0-3, 默认关): 浮盈>=阈值→减仓锁定(保留底仓)
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
@@ -490,6 +491,50 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] board_half异常: {e}")
+
+    def _check_profit_take(self) -> None:
+        """小赚兑现(P0-3, 2026-09-10): 持仓浮盈 >= 阈值 → 写 wolf_profit_take_sell 减仓(保留底仓)。
+
+        规则实现在 wolf_discipline.profit_take(配置 config/wolf_discipline.json 的 profit_take 段)。
+        **默认 enabled=False** —— 该规则新增一条高频卖腿, 线上影响面大于选择层闸(rs),
+        需先 dry-run 观察触发频次、与 board_half/defensive/roundtrip_sell 的叠加再开启。
+        开启: data/wolf_discipline.json 写 {"profit_take":{"enabled":true,"min_float_pct":3.0,"reduce_ratio":0.5}}
+        或 env WOLF_PROFIT_TAKE=1 强制开。
+        """
+        try:
+            from app.services.wolf_discipline import profit_take
+            from app.services.t_pool import _get_positions
+            import json as _j, datetime as _dt
+            force = os.getenv("WOLF_PROFIT_TAKE", "").strip() in ("1", "true", "yes")
+            pos_list = [p for p in (_get_positions() or []) if float(p.get('volume') or 0) > 0]
+            if not pos_list:
+                return
+            xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in pos_list})
+            quotes = fetch_tencent_quote(xq_syms)
+            qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
+                        'pre_close': float((quotes.get(s) or {}).get('pre_close', 0) or 0)} for s in xq_syms}
+            portfolio = {"positions": [{"symbol": _normalize_symbol(p.get('symbol')),
+                                        "avg_cost": float(p.get('avg_price') or p.get('avg_cost') or 0),
+                                        "volume": float(p.get('volume') or 0)} for p in pos_list]}
+            cfg = None
+            if force:
+                cfg = {"profit_take": {"enabled": True,
+                                       "min_float_pct": float(os.getenv("WOLF_PROFIT_TAKE_PCT", "3.0")),
+                                       "reduce_ratio": float(os.getenv("WOLF_PROFIT_TAKE_RATIO", "0.5"))}}
+            pt = profit_take(_j.dumps(portfolio, ensure_ascii=False), _dt.datetime.now(), cfg=cfg, quotes=qmap)
+            if not pt.get("enabled"):
+                return
+            today = _dt.datetime.now().strftime('%Y%m%d')
+            for s in pt.get('active_sells') or []:
+                sym = s.get('symbol')
+                if (sym, 'wolf_profit_take_sell', today) in self._wolf_done:
+                    continue
+                q = quotes.get(sym) or {}
+                self._insert_wolf_trigger(sym, 'wolf_profit_take_sell', q, s.get('reason', '小赚兑现'))
+                self._wolf_done.add((sym, 'wolf_profit_take_sell', today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] profit_take异常: {e}")
 
     def _roll_wolf_legs(self, today: str) -> int:
         """狼大持续腿跨日结转（2026-09-03 修复生产监控条件丢失）。
