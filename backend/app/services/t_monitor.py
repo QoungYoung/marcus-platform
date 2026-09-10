@@ -34,6 +34,24 @@ T_MONITOR_AUTO_MAINTAIN = os.getenv("T_MONITOR_AUTO_MAINTAIN", "0") == "1"
 # 狼大做T表达式字段(唯一允许)：分时T出(t_sell) + 正T买点(index.intraday_dd 大盘盘中回撤2-3%低吸)
 # + 黄线跌破离场(quote.vwap_break, 狼大8-04『黄线跌破直接走』)
 # T1缩转放(t1_shrink_expand) 已由个股5min验证无预测力(2026-09-02) → 暂缓, 不再作为自动买腿
+_BOARD_EXCLUDE = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
+
+
+def _board_tradable(symbol) -> bool:
+    """2026-09-10 账户权限最终防线: 无权限板块(创业板/科创板/北交所)不评估不成交,
+    防止任何来源(rotation/agent/rollover/手动)布出的腿被触发买入。"""
+    s = str(symbol or "")
+    p = s[:2]
+    code = s[2:8]
+    if "cyb" in _BOARD_EXCLUDE and p == "SZ" and code[:3] in ("300", "301"):
+        return False
+    if "kcb" in _BOARD_EXCLUDE and p == "SH" and code.startswith("688"):
+        return False
+    if "bj" in _BOARD_EXCLUDE and (p == "BJ" or code[:3] == "920" or code[:1] in ("4", "8")):
+        return False
+    return True
+
+
 WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break", "index.m5_dump", "quote.dip_prev_low")
 
 
@@ -707,6 +725,8 @@ class TMonitor:
         written = 0
         for cond in conditions:
             symbol = cond["symbol"]
+            if not _board_tradable(symbol):
+                continue
             if str(cond.get("direction") or "") == "sell" and symbol in self._sold_this_round:
                 continue
             quote = quotes.get(_normalize_symbol(symbol))
@@ -738,6 +758,8 @@ class TMonitor:
             except Exception:
                 pass
             try:
+                # 2026-09-09 根治: 条件缺当日换手基准 → 现场补算一次(当日缓存), 0.5% 仅最后保险
+                self._ensure_benchmark_profile(cond)
                 # 止损前置检查（每标的每轮一次：现价 ≤ 止损价 且 当日未止损过）
                 self._check_stop_loss(symbol, quote, ledger)
                 # 构建该标的字段快照（供表达式求值）
@@ -748,6 +770,49 @@ class TMonitor:
             except Exception as e:
                 print(f"[TMonitor] 条件评估异常 {symbol}: {e}")
         self._status["triggers_written"] += written
+
+    def _ensure_benchmark_profile(self, cond: Dict[str, Any]) -> None:
+        """2026-09-09 根治: cond 缺当日换手基准时现场补算一次(当日缓存), 0.5% 仅最后保险。
+        与 arm()/跨日结转同函数 compute_turnover_profile；写回 DB 供后续轮与次日结转复用。"""
+        sym = cond.get("symbol")
+        if not sym:
+            return
+        today = datetime.now().strftime("%Y%m%d")
+        cache = getattr(self, "_bench_cache", None)
+        if cache is None:
+            cache = self._bench_cache = {}
+        if cache.get(sym) == today:
+            return
+        cache[sym] = today          # 当日只尝试一次（失败保留 0.5% 兜底, 防每轮重拉）
+        try:
+            prof = cond.get("benchmark_turnover_profile") or {}
+            if isinstance(prof, str):
+                import json as _json
+                prof = _json.loads(prof) if prof else {}
+            ct = str(prof.get("computed_at") or "")[:10].replace("-", "")
+            if prof.get("same_minute_avg") and ct == today:
+                return
+        except Exception:
+            pass
+        try:
+            from app.services.t_turnover_profile import compute_turnover_profile
+            np_ = compute_turnover_profile(sym)
+        except Exception as e:
+            print(f"[TMonitor] 基准补算失败 {sym}: {e}")
+            np_ = None
+        if not np_:
+            return
+        cond["benchmark_turnover_profile"] = np_
+        try:
+            import app.services.t_db as _tdb
+            persist = {k: v for k, v in cond.items()
+                       if k not in ("id", "created_at", "armed_at",
+                                    "last_triggered_at", "trigger_count_today")}
+            persist["status"] = "active"
+            persist.setdefault("armed", 1)
+            _tdb.upsert_condition(persist)
+        except Exception as e:
+            print(f"[TMonitor] 基准写库失败 {sym}: {e}")
 
     def _index_intraday_dd(self) -> float:
         """上证指数当日盘中最大回撤%（从日高逐bar更新；30s TTL 缓存）。

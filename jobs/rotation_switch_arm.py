@@ -110,9 +110,11 @@ def pick_buy(chain, exclude, limit=3):
                     "params": {"ts_code": ts, "start_date": "20250101", "end_date": "20260901"},
                     "fields": "ts_code,trade_date,close"}
             import urllib.request
-            req = urllib.request.Request(os.getenv("TUSHARE_API_URL", ""), data=json.dumps(body).encode(),
+            req = urllib.request.Request((os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"), data=json.dumps(body).encode(),
                                          headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
             raw = urllib.request.urlopen(req, timeout=30).read()
+            import gzip
+            if raw[:2] == bytes([0x1f, 0x8b]): raw = gzip.decompress(raw)
             d = json.loads(raw.decode())
             rows = d.get("data", {}).get("items") or []
             if len(rows) < 60:
@@ -126,6 +128,93 @@ def pick_buy(chain, exclude, limit=3):
             pass
         time.sleep(0.1)
     return out
+
+
+def confirm_pick(theme, exclude, limit=2, concepts=None):
+    """曾确认主题低吸选股: THEME_CONCEPTS 成分 -> 过滤 bad/blacklist/held -> position LOW/MID, 至多 limit 只"""
+    # 2026-09-09 狼大化 v2 (A=确认链/B=等权leader/C=容量提示/D=20日成交额>=1亿硬切); WOLF_PICK_LEGACY=1 回退旧版
+    if os.getenv("WOLF_PICK_LEGACY", "0") != "1":
+        try:
+            from wolf_confirm_pick import pick_v2 as _v2
+            _p = _v2(theme, exclude=list(exclude or []), limit=limit, concepts=concepts)
+            if _p:
+                return _p
+        except Exception as _e:
+            print("WOLF_PICK_V2_ERR", theme, str(_e)[:200], file=sys.stderr)
+    from fusion_mainline import THEME_CONCEPTS as TC
+    from rotation_universe import get_sub_universe  # noqa (保持 universe 加载一致性)
+    cons = concepts if concepts is not None else TC.get(theme, [])
+    if not cons: return []
+    import psycopg2
+    ph = ','.join(['%s'] * len(cons))
+    # 核心概念优先(2026-09-09: 种植/粮食/水产为核心跟涨分支, 农化/乳业为边缘补涨)
+    core_cons = [x for x in cons if any(k in x for k in ('种植', '粮食', '水产'))]
+    conn = psycopg2.connect(DB); cur = conn.cursor()
+    if core_cons:
+        ph2 = ','.join(['%s'] * len(core_cons))
+        cur.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name IN (" + ph2 + ")", core_cons)
+        members = [str(r[0]) for r in cur.fetchall()]
+        cur.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name IN (" + ph + ") AND ts_code NOT IN (SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name IN (" + ph2 + "))", cons + core_cons)
+        members += [str(r[0]) for r in cur.fetchall()]
+    else:
+        cur.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name IN (" + ph + ")", cons)
+        members = [str(r[0]) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    bad = bad_set()
+    bl = load("crowding_blacklist.json") or {}
+    detail = bl.get("symbols_detail") or {}
+    out = []
+    scanned = 0
+    for ts in members:
+        if len(out) >= limit or scanned >= 60: break
+        if ts in bad or ts in detail: continue
+        xq = ("SH" if ts.endswith('.SH') else 'SZ') + ts[:6]
+        if xq in exclude: continue
+        scanned += 1
+        try:
+            import pandas as pd
+            import position_class as pc
+            body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
+                    "params": {"ts_code": ts, "start_date": "20250101", "end_date": "20260908"},
+                    "fields": "ts_code,trade_date,close"}
+            import urllib.request
+            req = urllib.request.Request((os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"), data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
+            raw = urllib.request.urlopen(req, timeout=30).read()
+            import gzip
+            if raw[:2] == bytes([0x1f, 0x8b]): raw = gzip.decompress(raw)
+            d = json.loads(raw.decode())
+            rows = d.get("data", {}).get("items") or []
+            if len(rows) < 60: time.sleep(0.1); continue
+            ser = pd.Series([float(x[2]) for x in rows], index=pd.to_datetime([str(x[1]) for x in rows], format="%Y%m%d"))
+            f = pc.position_features(ser)
+            pos = pc.classify(f)["position"] if f else None
+            if pos in ("LOW", "MID"):
+                out.append({"symbol": xq, "ts_code": ts, "position": pos, "theme": theme})
+        except Exception:
+            pass
+        time.sleep(0.1)
+    return out
+
+def gate_confirmed_today(today):
+    """最近(<=today) mainline_gate json 的 confirmed_candidate 主题集; 无则空"""
+    import glob
+    best = None; best_d = ''
+    for f in glob.glob(os.path.join(DATA, 'mainline_gate_*.json')):
+        d = os.path.basename(f)[14:22]
+        if d <= today and d > best_d: best_d = d; best = f
+    if not best: return set()
+    try:
+        g = json.load(open(best, encoding='utf-8'))
+        return {r.get('theme') for r in g.get('rows', []) if r.get('verdict') == 'confirmed_candidate'}
+    except Exception:
+        return set()
+
+def theme_of_chain(c):
+    from fusion_mainline import THEME_CONCEPTS
+    for th, cons in THEME_CONCEPTS.items():
+        if c in cons: return th
+    return None
 
 SELL_EXPR = {"op": "==", "field": "quote.vwap_break", "value": True}
 BUY_253_EXPR = {"and": [{"op": ">=", "field": "index.m5_dump", "value": 0.4},
@@ -143,11 +232,30 @@ def expire_old(cur, today):
     cur.execute("UPDATE t_conditions SET status='expired' WHERE account_id='stock' AND publisher='switch' AND status='active' AND trade_date < %s", (today,))
 
 def arm(db, cur, symbol, trigger_kind, direction, expr, trade_date):
+    # 2026-09-10 账户权限: 无权限板块(创业板/科创板/北交所)不布腿
+    _ex = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
+    _s = str(symbol); _p = _s[:2]; _c = _s[2:8]
+    if (("cyb" in _ex and _p == "SZ" and _c[:3] in ("300", "301"))
+            or ("kcb" in _ex and _p == "SH" and _c.startswith("688"))
+            or ("bj" in _ex and (_p == "BJ" or _c[:3] == "920" or _c[:1] in ("4", "8")))):
+        print("ARM_SKIP_BOARD", symbol, file=sys.stderr)
+        return None
     from app.services import t_db
-    return t_db.upsert_condition({"account_id": "stock", "symbol": symbol, "trade_date": trade_date,
-                                  "trigger_kind": trigger_kind, "direction": direction,
-                                  "expression": expr, "status": "active", "armed": 1,
-                                  "publisher": "switch"})
+    cond = {"account_id": "stock", "symbol": symbol, "trade_date": trade_date,
+            "trigger_kind": trigger_kind, "direction": direction,
+            "expression": expr, "status": "active", "armed": 1,
+            "publisher": "switch"}
+    # 2026-09-09 修复: arm 当日新布缺 benchmark -> vol_ratio 用 MIN_TURNOVER_BASE(0.5%) 兜底
+    # 被放大~10x -> vol_ratio<=0.9 恒不成立 -> 254 腿布腿当天全程哑火(478-489 全 0 触发;
+    # 对照 07:26 switch_builder 带 benchmark 的腿 254 正常触发)。与 TMonitor 跨日结转同函数补基准。
+    try:
+        from app.services.t_turnover_profile import compute_turnover_profile
+        _p = compute_turnover_profile(symbol)
+        if _p:
+            cond["benchmark_turnover_profile"] = _p
+    except Exception as _e:
+        print("ARM_BENCH_ERR", symbol, str(_e)[:100], file=sys.stderr)
+    return t_db.upsert_condition(cond)
 
 def main():
     dry = os.getenv("SWITCH_ARM_DRY", "0").strip() in ("1", "true", "yes")
@@ -167,10 +275,28 @@ def main():
             sell_legs.append({"symbol": p["symbol"], "chain": hit[0]})
     # 买侧候选链
     buy_chains = []
+    # 2026-09-09 Wolf 低吸资格闸(见 docs/wolf-dip-entry-rule.md): 主线低吸只放行"曾确认"主题
+    # (mainline_confirm_history 窗内 confirmed_candidate); MAINLINE_QUALIFY=0 回退旧 main_line_state 逻辑
+    qualify = os.getenv("MAINLINE_QUALIFY", "1").strip() in ("1", "true", "yes")
+    confirmed_today_set = gate_confirmed_today(today)
+    if confirmed_today_set:
+        print("GATE_CONFIRMED_TODAY", sorted(confirmed_today_set), file=sys.stderr)
     for c in room + holdT:
-        is_main = any(t in c or c in t for x in [str(ml.get("main_line") or ""), " ".join(str(v) for v in (ml.get("candidates") or []))] for t in x.split("/"))
+        old_is_main = any(t in c or c in t for x in [str(ml.get("main_line") or ""), " ".join(str(v) for v in (ml.get("candidates") or []))] for t in x.split("/"))
+        is_main = old_is_main
+        skip_reason = None
+        if qualify:
+            th0 = theme_of_chain(c)
+            if th0 is not None:
+                if th0 in confirmed_today_set:
+                    is_main = True
+                else:
+                    is_main = False                 # 仅今日 confirmed 主题放行主线低吸; 曾确认但结构回落(watch)不布新建腿
+                    skip_reason = "not_today_confirmed:" + th0
         if is_main:
             buy_chains.append((c, "mainline"))
+        elif skip_reason:
+            print("SKIP_MAINLINE_LOWBUY", c, skip_reason, file=sys.stderr)
         elif wop in ("t_only", "side", "defense", "exit") and healthy and not sucking:
             buy_chains.append((c, "defensive_resource"))
     held_syms = {p["symbol"] for p in positions}
@@ -178,6 +304,24 @@ def main():
     for chain, side in buy_chains[:2]:
         for cand in pick_buy(chain, exclude=held_syms, limit=3):
             buy_legs.append({"symbol": cand["symbol"], "chain": chain, "side": side})
+    # 2026-09-09 曾确认主题低吸候选池(实盘布腿, 全池<=2只; 农业 confirmed 优先):
+    # 主线门结果(mainline_gate json) -> 今日 confirmed_candidate 主题优先, 其次曾确认窗内主题
+    pool = [t for t in confirmed_today_set if t != "银行"]  # 今日 confirmed 主题低吸池(1-2只控制)
+    if qualify and pool:
+        # B(2026-09-09): 等待池分批——tier1严格前2 + tier2接近档补位至 ROT_POOL_LEGS(默认4);
+        # 成交节奏由资金闸兜底(probe<=5%预算尽自动停), 狼大'埋伏一批等位置'
+        pool_legs = int(os.getenv("ROT_POOL_LEGS", "4"))
+        print("CONFIRMED_POOL", pool, "pool_legs", pool_legs, file=sys.stderr)
+        got = 0
+        for th in pool:
+            if got >= pool_legs: break
+            _pick = confirm_pick(th, exclude=held_syms, limit=pool_legs - got)
+            if not _pick and dry:
+                print("CONFIRM_PICK_EMPTY", th, file=sys.stderr)
+            for cand in _pick:
+                if got >= pool_legs: break
+                buy_legs.append({"symbol": cand["symbol"], "chain": th, "side": "mainline_confirmed", "theme": th})
+                got += 1
     # 2026-09-07 wave 调档(回测 wave-tuned-v2): defense/exit 下按 invest 收窄买腿布设(控亏/只降不空),
     # build/t_only/side invest=1 不裁剪 —— 只影响布腿数量，不绕过浪gate/风控
     try:
@@ -195,6 +339,22 @@ def main():
               "top3=", (_alloc.get("top3") or [])[:3], file=sys.stderr)
     except Exception as e:
         print("[rotation_switch_arm] wave_alloc err:", str(e)[:80], file=sys.stderr)
+    # 2026-09-09 账户权限: 无创业板权限 → 布腿统一剔除(SZ300/SZ301); WOLF_PICK_BOARD_EXCLUDE 可加 kcb/bj
+    _ex_b = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
+    def _board_ok(xq):
+        _c = str(xq)[2:6] if len(str(xq)) >= 6 else ""
+        _p = str(xq)[:2]
+        if "cyb" in _ex_b and _p == "SZ" and (_c.startswith("300") or _c.startswith("301")):
+            return False
+        if "kcb" in _ex_b and _p == "SH" and _c.startswith("688"):
+            return False
+        if "bj" in _ex_b and (_p == "BJ" or _c.startswith(("4", "8", "920"))):
+            return False
+        return True
+    _nb = len(buy_legs)
+    buy_legs = [b for b in buy_legs if _board_ok(b.get("symbol"))]
+    if len(buy_legs) != _nb:
+        print("BOARD_FILTER removed", _nb - len(buy_legs), "个无权限板块买腿", file=sys.stderr)
     print("DECISION sell_legs", sell_legs, "buy_chains", buy_chains, "buy_legs", buy_legs)
     if dry:
         json.dump({"mode": "SWITCH_ARM_DRY", "date": today, "sell_legs": sell_legs,
