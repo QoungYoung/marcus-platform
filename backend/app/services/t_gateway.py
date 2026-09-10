@@ -465,13 +465,9 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                 return result
 
         # ── 第二阶：账本（确定性规则） ──
-        # 底仓风控（独立于做T止损）：浮亏 ≤ −3% 减半 / ≤ −5% 清仓锁定（开关可关，人工覆盖可放行）
-        if T_STOP_GUARD_ENABLED and not allow_human_override:
-            guard = _base_loss_guard(symbol, side, quote, ledger)
-            if guard["action"] != "pass":
-                result["level"] = "ledger"
-                result["reason"] = guard["reason"]
-                return result
+        # S6 删除(2026-09-10): 原"底仓浮亏 ≤ −3% 减半 / ≤ −5% 清仓锁定"(_base_loss_guard)调用已移除。
+        # 该守卫早已退化为无条件放行(action 恒为 pass), 与狼大「底仓不动」相冲, 属审计 §5.2 认定的自造机制。
+        # _base_loss_guard 函数体保留但不被调用, 供回溯历史行为。
         # 可卖底仓分档 + 买腿上限
         near_limit = bool(quote and _near_limit_down(quote))
         tier = _floor_tier(regime, near_limit)
@@ -525,15 +521,10 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
             result["level"] = "ledger"
             result["reason"] = f"日亏损熔断（{pnl_pct:.2f}%）"
             return result
-        # 日回转额上限（主指标）——止损卖腿豁免（止血离场必须执行）；
-        # T_TURNOVER_LIMIT_ENABLED=0（AI 自由跑）跳过
-        turnover = float(daily.get("daily_turnover_amount") or 0)
-        if T_TURNOVER_LIMIT_ENABLED \
-                and turnover + price * volume > net_asset * MAX_DAILY_TURNOVER_RATIO \
-                and not (side == "sell" and is_stop_loss):
-            result["level"] = "ledger"
-            result["reason"] = "当日累计回转额超上限"
-            return result
+        # S5 删除(2026-09-10): 原"日累计回转额 ≤ 3×净值"上限已删除。
+        # 狼大语料无对应规则, 属审计 §5.2 认定的自造机制。常量 MAX_DAILY_TURNOVER_RATIO 保留定义
+        # 仅供 t_build 等处的 import 兼容与复盘观测, 不再用于拦截。
+        # 注: 日亏损熔断(T_DAILY_LOSS_LIMIT_ENABLED)与本项无关, 未在本次删除范围。
 
         # ── 第三阶：建议层（仅告警/限频，不拒热路径） ──
         warns = []

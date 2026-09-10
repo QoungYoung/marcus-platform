@@ -109,9 +109,11 @@ def build_253(executor, symbol, quote, now_str="", account="stock", snapshot=Non
         res = run_async(check_entry_filters(EntryCheckRequest(symbol=symbol, intent=intent,
                                                               mainline_dir=True, account_id=account)))
         _du = getattr(res, "data_unavailable", None) or []
-        # 2026-09-08(C方案配套): 数据缺省分级——技术硬缺(60分MA/分钟K/价格)保持fail-closed;
+        # 2026-09-08(C方案配套): 数据缺省分级——技术硬缺保持fail-closed;
         # 软字段(日内分位/主力资金)缺失降级放行(资金已由Tushare日频兜底, 分位缺失仅降仓), 不整单拒
-        _hard = [x for x in _du if any(k in str(x) for k in ("60分MA", "分钟", "K线", "价格", "日K"))]
+        # S4① 删除(2026-09-10): 原把"60分MA"列入技术硬缺 → 分钟数据缺失即禁建仓。
+        # 该门属审计 §5.2 认定的自造机制, indicator.py 侧已一并删除硬拦, 此处同步移除该关键字。
+        _hard = [x for x in _du if any(k in str(x) for k in ("分钟", "K线", "价格", "日K"))]
         if _hard:
             return {"status": "blocked", "reason": "data_unavailable:" + ",".join(_hard)}
         if _du:

@@ -2547,16 +2547,11 @@ async def check_entry_filters(req: EntryCheckRequest):
                 day_info = f"日线 MA5({ma5:.2f}) > MA20({ma20:.2f})" if (ma5 > 0 and ma20 > 0 and ma5 > ma20) else "日线数据可用"
                 tech_details.append(f"✅ 60分 MA10({ma60_10:.2f}) > MA30({ma60_30:.2f}) + {day_info} → 双周期共振，正常仓位")
         else:
-            # fail-closed（2026-08-28 根因修复）：分钟数据不可用 = 禁止建仓（与震荡市P0一致）
+            # S4① 删除(2026-09-10): 原"分钟数据不可用 = 硬禁建仓"(fail-closed, 2026-08-28 引入)。
+            # 该门不受 LEGACY_TECH_GATES 控制, 属审计 §5.2 认定的自造机制 → 已删除。
+            # 现仅记数据可用性提示, 不再硬拦(建仓与否由狼大口径的触发/位置纪律决定)。
             data_unavailable.append("60分MA")
-            tech_details.append("🚫 60分MA数据不可用（分钟数据缺失）→ 按P0硬门槛禁止建仓，等数据恢复后重评")
-            layer1_grade = "🚫排除"
-            layer1_downgrade = "60分MA数据不可用"
-            layer1_action = "等分钟数据恢复后再评估"
-            layer1_passed = False
-            downgrade_multiplier = 0.0
-            hard_block = True
-            hard_block_reasons.append("60分MA数据不可用（分钟数据缺失=不建仓）")
+            tech_details.append("ℹ️ 60分MA数据不可用（分钟数据缺失）→ 仅提示, 不硬禁建仓；建议等数据恢复再评估")
 
     else:
         # 趋势市：日线 MA5/MA20（Wolf对齐: 只提示不硬拦; LEGACY_TECH_GATES=1 恢复旧排除）

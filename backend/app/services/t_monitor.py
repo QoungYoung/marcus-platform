@@ -610,8 +610,9 @@ class TMonitor:
         return rolled
 
     def _arm_stock_exit_legs(self, today: str) -> int:
-        """A方案(2026-09-08 用户拍板): 盘前/启动时对 stock 持仓自动布 3 条持续卖腿——
-        黄线离场(custom_vwap_sell) / T出前高(high_sell, m5.t_sell) / 回撤跟踪(custom_trail_sell, 振幅自适应移动止盈)。
+        """A方案(2026-09-08 用户拍板): 盘前/启动时对 stock 持仓自动布持续卖腿——
+        黄线离场(custom_vwap_sell) / T出前高(high_sell, m5.t_sell) / 破位离场(custom_support_sell)。
+        S3(2026-09-10): 回撤跟踪腿(custom_trail_sell)已停止新增(自造机制, quote.trail_break 恒 False)。
         幂等: 当日已有同键(symbol+trigger_kind)行(任意状态含manual/AI/auto)跳过, 不覆盖人工护栏。
         卖量仍由 _round 按 sellable−底仓floor 推导(底仓保护, 无T仓空间则自然跳过)。"""
         armed = 0
@@ -631,7 +632,6 @@ class TMonitor:
         templates = [
             ("custom_vwap_sell", {"and": [{"op": "==", "field": "quote.vwap_break", "value": True}]}),
             ("high_sell", {"and": [{"op": "==", "field": "minute.m5.t_sell", "value": True}]}),
-            ("custom_trail_sell", {"and": [{"op": "==", "field": "quote.trail_break", "value": True}]}),
             # 步骤④/②: 跌破最近支撑位卖出腿（auto_exit 持续腿, 放量立减/缩量反抽减/尾盘确认）
             ("custom_support_sell", {"and": [{"op": "==", "field": "quote.break_support", "value": True}]}),
         ]
@@ -908,26 +908,6 @@ class TMonitor:
             print(f"[TMonitor] 指数急杀计算失败: {e}")
             return 0.0
 
-    def _trail_break(self, symbol: str, cur: float, quote: dict) -> bool:
-        """跌破当日高点×回撤阈值(动态移动止盈/破位保护)。阈值=振幅自适应:
-        pct = max(0.004, min(0.015, amplitude×0.3))；env T_TRAIL_PCT 覆盖(>0 时)。
-        不依赖任何静态价位——同一规则任何股票/任何交易日通用。"""
-        try:
-            if cur <= 0:
-                return False
-            hi = float(quote.get("high", 0) or 0)
-            if hi <= 0 or cur > hi:
-                return False
-            amp = float(quote.get("amplitude", 0) or 0)
-            try:
-                fixed = float(os.getenv("T_TRAIL_PCT", "0") or 0)
-            except Exception:
-                fixed = 0.0
-            pct = fixed if fixed > 0 else max(0.004, min(0.015, amp * 0.3))
-            return cur <= hi * (1 - pct)
-        except Exception:
-            return False
-
     def _stock_dip_prev_low(self, symbol: str) -> bool:
         """个股当日5min最低 ≤ 前一交易日5min最低×1.005（A档：触及/跌破前日低点）。
         狼大2025-03-06『挂前一天的低点 能买进去就做正T』；配 vol_ratio<=0.7 缩量。
@@ -1002,10 +982,10 @@ class TMonitor:
             # 分时黄线跌破（狼大8-04『绝对不能破的点就是日均线那条黄线 一旦突发跌破直接走』）
             "vwap_break": bool(_avg > 0 and _cur < _avg),
             "dip_prev_low": self._stock_dip_prev_low(symbol),
-            # 动态回撤保护(2026-09-08, 替代写死价位→任何标的/每日可复用):
-            # 现价 ≤ 当日高点×(1-回撤阈值)；阈值=振幅自适应(max(0.4%, amp×0.3, ≤1.5%))，
-            # 可用 env T_TRAIL_PCT 覆盖固定阈值。
-            "trail_break": self._trail_break(symbol, _cur, quote),
+            # S3 删除(2026-09-10): 原"动态回撤保护 trail_break"(现价≤当日高点×(1-振幅自适应阈值))。
+            # 狼大不用百分比移动止损(他用"3-5点兑现"与"收盘破位"), 属审计 §5.2 认定的自造机制 → 已删除。
+            # 字段保留但恒 False, 避免存量条件(t_triggers/t_conditions 中引用 quote.trail_break 的表达式)求值报错。
+            "trail_break": False,
             "support_l1": _s1,
             "support_l2": _s2,
             "resistance_l1": _r1,
@@ -1372,14 +1352,9 @@ class TMonitor:
                         max_sell = max(sellable - _floor, 0) if sellable > _floor else 0
                         volume = max_sell
                     volume = (volume // 100) * 100
-                # ④破位禁低吸(2026-09-08): 现价已在最近支撑下方时禁止 254/253 自动低吸(防接刀)
-                if (side == "buy" and trigger_kind in ("custom_prevlow", "custom_m5dump")
-                        and (snapshot or {}).get("quote", {}).get("break_support")
-                        and os.getenv("SR_NO_DIP_BUY", "1") != "0"):
-                    t_db.update_trigger_status(trig_id, "blocked",
-                                               reason="破位禁低吸(现价<=support_l1, ④门)")
-                    print(f"[TMonitor] ④破位禁低吸 {symbol} {trigger_kind}")
-                    return
+                # S2 删除(2026-09-10): 原"④破位禁低吸"(现价<=算法波段支撑位 support_l1 → 禁 254/253 低吸)。
+                # 狼大语料无"波段支撑位"概念(他用前低与黄线), 属审计 §5.2 认定的自造机制 → 已删除。
+                # 是否接刀由狼大原口径把关: 254 触前日低+缩量、253 指数急杀, 以及 gateway 硬闸门。
                 exec_ok = False
                 # ⑥ 253/254 无底仓建仓 → 走狼大建仓链(而非做T gateway)；注 self._trade_executor 时生效，否则回退 gateway
                 _no_hold_build = (

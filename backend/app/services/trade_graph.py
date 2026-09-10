@@ -1316,8 +1316,11 @@ def node_check_safety_gates(state: TradeState) -> dict:
     节点 2: 安全门检查 —— 确定性节点
 
     代码层硬风控，不依赖 LLM:
-      1. 总回撤 ≥ 5% → 硬禁止一切买入
-      2. 连续亏损 ≥ 3 笔 → 当日熔断
+      · 狼大浪型 defense/exit → 不建仓（保留）
+
+    S5 删除(2026-09-10): 原"总回撤 ≥ 5% → 硬禁止一切买入"与"连续亏损 ≥ 3 笔 → 当日熔断"
+    两条账户级熔断已删除 —— 狼大语料无对应规则(他的风险控制是仓位+止损位+不追高),
+    属审计 §5.2 认定的自造机制。drawdown/consecutive 仍照常计算并写入 state, 仅作观测用, 不再拦截。
     """
     eid = state['execution_id']
     logger.info(f"[{eid}] [Graph] ▶ check_safety_gates")
@@ -1331,13 +1334,14 @@ def node_check_safety_gates(state: TradeState) -> dict:
             "block_reason": "",
         }
 
-    drawdown, blocked, reason = _check_drawdown(state['portfolio_json'])
+    drawdown, _dd_blocked, reason = _check_drawdown(state['portfolio_json'])
     wl_gate = _wave_level_gate()
+    blocked = False
     if wl_gate["gate"] in ("defense", "exit"):
         logger.warning(f"[{eid}] [Graph] ⛔ 狼大浪型防御/兑现: {wl_gate['level']}/{wl_gate['sub_level']} op={wl_gate['operation']}，不建仓")
         blocked = True
         reason = f"狼大浪型={wl_gate['level']}+{wl_gate['sub_level']} op={wl_gate['operation']}（防御/兑现，不建仓）"
-       
+
     consecutive = _check_consecutive_losses()
 
     updates = {
@@ -1348,15 +1352,11 @@ def node_check_safety_gates(state: TradeState) -> dict:
     if blocked:
         updates["hard_blocked"] = True
         updates["block_reason"] = reason
-        logger.warning(f"[{eid}] [Graph] ⛔ 回撤拦截: {reason}")
-    elif consecutive >= 3:
-        updates["hard_blocked"] = True
-        updates["block_reason"] = f"连续亏损 {consecutive} 笔，触发熔断"
-        logger.warning(f"[{eid}] [Graph] ⛔ 熔断拦截: 连亏{consecutive}笔")
+        logger.warning(f"[{eid}] [Graph] ⛔ 浪型防御拦截: {reason}")
     else:
         updates["hard_blocked"] = False
         updates["block_reason"] = ""
-        logger.info(f"[{eid}] [Graph] ✓ 安全门通过 (回撤{drawdown:.1f}%, 连亏{consecutive})")
+        logger.info(f"[{eid}] [Graph] ✓ 安全门通过 (回撤{drawdown:.1f}%, 连亏{consecutive} — 仅观测, 不拦截)")
 
     return updates
 

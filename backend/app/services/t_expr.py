@@ -83,9 +83,10 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     # 个股触前一交易日5min最低(A档+缩量; 狼大'挂前一天的低点', 2025-03-06):
     # 当日触及/跌破前日低点(±0.5%)且量比<=0.7缩量 -> 低吸(回测133天 T+1+0.78%/0.56)
     "quote.dip_prev_low": ("bool", "个股当日触及前一交易日5min最低(±0.5%; A档正T低吸)", "t_monitor._stock_dip_prev_low"),
-    # 动态回撤保护(2026-09-08): 现价≤当日高点×(1-回撤阈值), 阈值=振幅自适应(0.4%~1.5%)——
-    # 任意股票/每日通用, 不写死价位(替代一次性 custom_level_sell)
-    "quote.trail_break": ("bool", "跌破当日高点回撤阈值(动态移动止盈/破位保护)", "t_monitor._trail_break"),
+    # S3 删除(2026-09-10): 原"动态回撤保护"(现价≤当日高点×(1-振幅自适应阈值))已删除 ——
+    # 狼大不用百分比移动止损, 属审计 §5.2 认定的自造机制。字段保留但恒 False(见 t_monitor 快照),
+    # 以便存量条件(t_conditions 中引用 quote.trail_break 的 custom_trail_sell 腿)继续可求值、但不触发。
+    "quote.trail_break": ("bool", "【已删除机制】恒 False(原动态移动止盈, 2026-09-10 移除)", "t_monitor"),
     # ── 波段支撑/压力位（步骤① 2026-09-08, support_resistance.compute_levels, 10min TTL）──
     "quote.support_l1": ("number", "最近波段支撑(现价下方最近)", "support_resistance"),
     "quote.support_l2": ("number", "次近波段支撑", "support_resistance"),
