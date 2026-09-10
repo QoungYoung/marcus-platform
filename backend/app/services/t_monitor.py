@@ -1941,7 +1941,7 @@ def pass_common_gates(cond: Dict[str, Any], regime_state: dict, now: datetime) -
             if _p not in _wc.path:
                 _wc.path.insert(0, _p)
             from wolf_context import m5dump_allowed
-            _ok, _why = m5dump_allowed()
+            _ok, _why = m5dump_allowed(symbol=cond.get("symbol"))
             if not _ok:
                 print(f"[TMonitor] 253语境闸门拦截 {cond.get('symbol')}: {_why}", flush=True)
                 return False
