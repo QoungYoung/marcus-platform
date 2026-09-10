@@ -24,6 +24,16 @@ def load(name):
     except Exception:
         return {}
 
+def save(name, obj):
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        with open(os.path.join(DATA, name), "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=1)
+        return True
+    except Exception as e:
+        print("[switch_arm] save %s 失败: %s" % (name, str(e)[:80]), file=sys.stderr)
+        return False
+
 def norm(s):
     return str(s).replace(" ", "").replace("　", "")
 
@@ -368,6 +378,51 @@ def main():
         hit = [c for c in chs if c in crowded or c in holdT]
         if hit:
             sell_legs.append({"symbol": p["symbol"], "chain": hit[0]})
+
+    # ── P1-1 卖侧(2026-09-10): 狼大「龙头风向标死了就不能做了…千万不要想高切低, 麻溜的跑就行」──
+    # 范围 = **该主题的全部持仓**, 不只是风向标那一只。
+    #   依据 2026-01-16「后排反倒不能去 要看好龙头那些 龙头和核心都救不起来 那其他后排还要死」;
+    #        2026-01-13「说的是主线题材 题材 题材」→ 风向标是**主题**级信号。
+    # 时点: wind_broken 是**收盘口径**, 故只在 09:20 本处判定一次, 不放盘中(避免用旧数据反复触发假信号)。
+    # 注意: 腿路径的所有卖腿都保留 100 股工程底仓 → L2「清底仓」走不了腿路径, 改为输出指令由 agent/人工执行。
+    theme_holds = {}
+    for p in positions:
+        for c in chains_of(p["symbol"], cm):
+            th = theme_of_chain(c)
+            if th:
+                theme_holds.setdefault(th, set()).add(p["symbol"])
+    wind_dead = {}
+    for th in sorted(theme_holds):
+        try:
+            from wolf_confirm_pick import pick_v2 as _v2
+            _st = {}
+            _v2(th, exclude=set(), limit=1, status_out=_st)
+            if _st.get("wind_broken"):
+                wind_dead[th] = {"wind_symbol": _st.get("wind_symbol"), "wind_name": _st.get("wind_name"),
+                                 "dist_prevlow_prev": _st.get("wind_dist_prevlow_prev")}
+        except Exception as _we:
+            print("WIND_CHECK_ERR", th, str(_we)[:120], file=sys.stderr)
+    _prev = load("wolf_wind_state.json") or {}
+    _wn = {}
+    for th, info in wind_dead.items():
+        _d = _prev.get(th) or {}
+        # 本任务每个交易日只跑一次 → 连续运行次数即连续交易日数(周末/节假日不跑, 天然跳过)
+        _days = int(_d.get("dead_days") or 1) if str(_d.get("last_dead") or "") == today \
+            else int(_d.get("dead_days") or 0) + 1
+        _wn[th] = dict(info, dead_days=_days, first_dead=_d.get("first_dead") or today,
+                       last_dead=today, level=2 if _days >= 2 else 1)
+    if wind_dead or _prev:
+        save("wolf_wind_state.json", _wn)     # 已收复的主题自动消失(不再禁补)
+    for th, st in _wn.items():
+        syms = sorted(theme_holds.get(th, []))
+        for sym in syms:
+            sell_legs.append({"symbol": sym, "chain": th, "wind_dead": True, "level": st["level"],
+                              "reason": "风向标死[%s]%s L%d(%d日)"
+                                        % (th, st.get("wind_name") or st.get("wind_symbol") or "", st["level"], st["dead_days"])})
+        if st["level"] >= 2:
+            print("WIND_DEAD_L2_BASE_EXIT", th, syms,
+                  "→ L2: 次日收盘仍未收复, 应清底仓(腿路径保留100股工程底仓, 需 agent/人工执行)", file=sys.stderr)
+        print("WIND_DEAD sell_legs", th, syms, "level", st["level"], file=sys.stderr)
     # 买侧候选链
     buy_chains = []
     # 2026-09-09 Wolf 低吸资格闸(见 docs/wolf-dip-entry-rule.md): 主线低吸只放行"曾确认"主题

@@ -155,8 +155,34 @@ def build_253(executor, symbol, quote, now_str="", account="stock", snapshot=Non
 def _chain_state():
     return load("wolf_253_chain.json")
 
+def wind_dead_for(symbol):
+    """P1-1(2026-09-10): 该标的所属主题是否"风向标已死" → (dead: bool, theme)。
+
+    状态由 jobs/rotation_switch_arm.py 每日 09:20 写入 data/wolf_wind_state.json
+    （判据: 主题内辨识度最高龙头的**收盘**跌破其前一交易日最低; 狼大 2026-01-12）。
+    用途: 风向标已死的主题**禁止回补** —— 狼大「麻溜的跑就行」, 不能一边跑一边补。
+    """
+    try:
+        import sys as _s
+        _p = os.path.join(_root(), "apps", "main_line")
+        if _p not in _s.path:
+            _s.path.insert(0, _p)
+        from wolf_context import theme_of_symbol
+        th = theme_of_symbol(symbol)
+        if not th:
+            return False, None
+        st = load("wolf_wind_state.json") or {}
+        return (th in st), th
+    except Exception:
+        return False, None
+
+
 def refill_253(executor, symbol, quote, vol_ratio, today, account="stock"):
     """254 后 3 日内 ≤2 次小额回补(放宽量比≤1.2, 每次1/3)。返回 dict(status)。"""
+    _wd, _th = wind_dead_for(symbol)
+    if _wd:
+        return {"status": "blocked",
+                "reason": "风向标已死[%s] → 禁回补(狼大: 麻溜的跑就行/不要想高切低)" % _th}
     st = _chain_state(); row = st.get(symbol) or {}
     base_date = str(row.get("base_254_date") or "")
     if not base_date or base_date == today:

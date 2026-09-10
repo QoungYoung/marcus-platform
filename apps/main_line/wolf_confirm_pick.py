@@ -356,7 +356,11 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     if isinstance(status_out, dict):
         status_out.update({"status": "ok", "theme": theme, "rs_gate": rs_gate, "rs_min": rs_min,
                            "theme_r20": round(theme_r20, 2), "rs_rejected": _rs_rej,
-                           "picks": len(picks), "t1": len(t1), "etf_fallback": etf_used})
+                           "picks": len(picks), "t1": len(t1), "etf_fallback": etf_used,
+                           # P1-1 卖侧: 把风向标状态透出给 rotation_switch_arm(原先只在审计 json 里)
+                           "wind_broken": wind_broken, "wind_hard": wind_hard,
+                           "wind_symbol": (wind or {}).get("xq"), "wind_name": (wind or {}).get("name"),
+                           "wind_dist_prevlow_prev": (wind or {}).get("dist_prevlow_prev")})
     return picks
 
 def main():
