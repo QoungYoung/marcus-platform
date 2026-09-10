@@ -127,7 +127,7 @@ def latest_gate_date():
 
 def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, debug=False,
             pool_n=None, dist_pct=None, dist5_pct=None, etf_fallback=None, tier2_gap=None, max_legs=None,
-            pick_mode=None):
+            pick_mode=None, rs_gate=None, rs_min=None):
     """v2.1 完整三层。返回兼容 rotation_switch_arm 的 list; 空窗时含 ETF 兜底腿(etf:True)。
     附加信息(容量/风向标/等待池)进 stderr + json 审计文件。"""
     exclude = set(exclude or [])
@@ -139,6 +139,11 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     max_legs = int(max_legs if max_legs is not None else os.getenv("WOLF_PICK_MAX_LEGS", "4"))
     etf_fb = bool(etf_fallback if etf_fallback is not None else os.getenv("WOLF_PICK_ETF_FALLBACK", "1") == "1")
     wind_hard = os.getenv("WOLF_PICK_WIND_HARD", "0") == "1"
+    # P0-2(2026-09-10): 选择层闸 —— 个股相对主题强度 rs>=rs_min 才入低吸池。
+    # 依据: "选择层+兑现风格"回测 rs>0 胜率 51% vs rs<=0 41%; 触发条件本身相对同池基线不提升胜率。
+    # 关闭: WOLF_RS_GATE=0 (回到修复前的"只看绝对 r20"行为)。
+    rs_gate = bool(rs_gate if rs_gate is not None else os.getenv("WOLF_RS_GATE", "1") == "1")
+    rs_min = float(rs_min if rs_min is not None else os.getenv("WOLF_RS_MIN", "0"))
     uni = confirm_universe(theme)
     if not uni:
         print("WOLF_PICK NO_CONFIRM_UNIVERSE", theme, file=sys.stderr); return []
@@ -197,6 +202,11 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     f_r60 = pct_rank(scored, "r60"); f_amt = pct_rank(scored, "amt20"); f_lim = pct_rank(scored, "lim")
     for r in scored:
         r["leader"] = round((f_r60(r["ts"]) + f_amt(r["ts"]) + f_lim(r["ts"])) / 3.0, 4)
+    # P0-2: 主题20日涨幅 = 本主题可比成分 r20 等权均值(PIT: 收盘均截至 AS), 再算个股相对强度 rs
+    _r20s = [r["r20"] for r in scored if r["r20"] is not None]
+    theme_r20 = statistics.mean(_r20s) if _r20s else 0.0
+    for r in scored:
+        r["rs"] = round(r["r20"] - theme_r20, 2) if r["r20"] is not None else None
     import pandas as pd, position_class as pc
     for r in scored:
         closes = [x[1] for x in kl[r["ts"]]]
@@ -236,7 +246,17 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     else:
         cand_pool = [dict(r, concept="", rank_in_concept=1) for r in scored]
     lowmid = [r for r in cand_pool if r["pos"] in ("LOW", "MID")
-             and r["r20"] is not None and r["r20"] >= min_r20]
+             and r["r20"] is not None and r["r20"] >= min_r20
+             # P0-2 选择层闸: 只在强于主题的票上低吸(rs>=rs_min); WOLF_RS_GATE=0 关闭
+             and (not rs_gate or (r.get("rs") is not None and r["rs"] >= rs_min))]
+    _rs_rej = 0
+    if rs_gate:
+        _rs_rej = sum(1 for r in cand_pool if r["pos"] in ("LOW", "MID")
+                      and r["r20"] is not None and r["r20"] >= min_r20
+                      and not (r.get("rs") is not None and r["rs"] >= rs_min))
+        if _rs_rej:
+            print(f"[WOLF_PICK_RS] {theme} 选择层闸剔除 {_rs_rej} 只(rs<{rs_min}), theme_r20={theme_r20:.2f}",
+                  file=sys.stderr)
     # B(2026-09-09): 分批——tier1=位置闸(距前日低<=dist_pct)严格档前 limit 只; tier2=接近档(<=tier2_gap)补位至 max_legs;
     # 组内 rank1(分类龙头)优先于 rank2(龙2) = 狼大'买不到龙头买分类龙头/龙2, 绝不后排'
     _key = lambda r: (r.get("rank_in_concept", 1), -r["leader"], -r["cross"], r["ts"])
@@ -247,6 +267,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     _rows = [(r, "tier1") for r in t1] + [(r, "tier2") for r in t2]
     picks = [{"symbol": r["xq"], "ts_code": r["ts"], "position": r["pos"], "theme": theme,
               "leader": r["leader"], "amt20": round(r["amt20"], 2), "r20": round(r["r20"], 1),
+              "rs": r.get("rs"), "theme_r20": round(theme_r20, 2),
               "r60": round(r["r60"], 1), "lim": r["lim"], "cross": r["cross"],
               "dist_prevlow": r["dist_prevlow"], "trig_price": r["trig_price"], "tier": tier,
               "concept": r.get("concept", ""), "rank_in_concept": r.get("rank_in_concept", 1),
