@@ -2,8 +2,9 @@
 """wolf_confirm_pick.py — confirm_pick 狼大化 v2.1 (三层: 等待池+位置闸+ETF兜底+风向标监控)
 拍板(2026-09-09): A=确认链成分候选域 / B=老龙头等权标签 / C=主题容量提示 / D=20日成交额<1亿硬切
 v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低x1.005) → 当日布腿=池∩低吸位置闸(距前一日低<=X%)
-                池∩闸=0(空窗)且主题有ETF → ETF兜底腿(查 etf_theme_map_pi primary[0]); 风向标(池第一)破位可硬拦
-环境变量: WOLF_PICK_LEGACY=1 回退旧版 / WOLF_PICK_POOL_N / WOLF_PICK_DIST_PCT / WOLF_PICK_ETF_FALLBACK / WOLF_PICK_WIND_HARD
+                池∩闸=0(空窗) → 等待(不硬做); ETF兜底腿默认关闭(S1) ; 风向标(池第一)收破前日低 → 硬拦(P1-1)
+环境变量: WOLF_PICK_LEGACY=1 回退旧版 / WOLF_PICK_POOL_N / WOLF_PICK_DIST_PCT / WOLF_PICK_ETF_FALLBACK(默认0)
+         / WOLF_PICK_WIND_HARD(默认1, 狼大"风向标死了就不做") / WOLF_RS_GATE(默认1) / WOLF_PICK_EMPTY_WAIT(默认1)
 用法: python3 apps/main_line/wolf_confirm_pick.py --theme 农业 --as-of 20260902 [--limit 2]
 """
 import os, sys, json, time, gzip, glob, urllib.request, statistics
@@ -149,7 +150,9 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     # 「选半导体仅仅只是因为他波动大 ETF都有3个点以上的波动」), 语料无"买不到个股就买ETF"这条规则。
     # WOLF_PICK_ETF_FALLBACK=1 可恢复旧行为。
     etf_fb = bool(etf_fallback if etf_fallback is not None else os.getenv("WOLF_PICK_ETF_FALLBACK", "0") == "1")
-    wind_hard = os.getenv("WOLF_PICK_WIND_HARD", "0") == "1"
+    # P1-1(2026-09-10): 默认改为 1(启用硬拦) —— 依狼大 2026-01-12「龙头风向标死了就不能做了」。
+    # 原默认 0 使"风向标死了就不做"形同未实现(即便判据修对了也不会生效)。置 0 可回退。
+    wind_hard = os.getenv("WOLF_PICK_WIND_HARD", "1") == "1"
     # P0-2(2026-09-10): 选择层闸 —— 个股相对主题强度 rs>=rs_min 才入低吸池。
     # 依据: "选择层+兑现风格"回测 rs>0 胜率 51% vs rs<=0 41%; 触发条件本身相对同池基线不提升胜率。
     # 关闭: WOLF_RS_GATE=0 (回到修复前的"只看绝对 r20"行为)。
@@ -200,20 +203,41 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
         cc = len([c for c in cm.get(ts, []) if c in theme_cons]) if ts in cm else 0
         # 距前一日低(254 可达性): as_of收盘 相对 as_of当日低(前一日低即 as_of 交易日低, 供次日盘中回踩)
         d1 = (closes[-1] / lows[-1] - 1) * 100 if lows[-1] > 0 else 99.0
+        # P1-1(2026-09-10 修): 风向标"死了"的判据 —— 收盘 vs **前一交易日**最低。
+        # 原 wind_broken 误用 dist_prevlow(=收盘 vs 当日最低, 恒 >=0) → 判据数学上不可能成立, 属死代码。
+        # 此处另立字段, 不动 dist_prevlow(它同时是位置闸口径, 语义不同)。
+        d1p = (closes[-1] / lows[-2] - 1) * 100 if len(lows) >= 2 and lows[-2] > 0 else 99.0
         d5 = 99.0
         if len(lows) >= 5 and min(lows[-5:]) > 0:
             d5 = (closes[-1] / min(lows[-5:]) - 1) * 100
         scored.append({"ts": ts, "name": nm, "xq": xq, "amt20": amt20, "r60": r60, "r20": r20,
                        "lim": lim, "cross": cc, "mv": (mv.get(ts, 0) or 0) / 1e4,
                        "dist_prevlow": round(d1, 2), "dist_low5": round(d5, 2),
+                       "dist_prevlow_prev": round(d1p, 2),
                        "trig_price": round(lows[-1] * 1.005, 3)})
     if not scored:
         return _st("no_scored", "成分域经板块/ST/成交额过滤后为空")
     def pct_rank(vals, key):
-        srt = sorted(vals, key=lambda r: r[key] if r[key] is not None else -1e9)
-        rank = {r["ts"]: i + 1 for i, r in enumerate(srt)}
-        n = len(srt)
-        return lambda ts: rank[ts] / n
+        """升序 → 百分位 0-1。**并列取平均名次**(P1-5b 配套修复)。
+
+        原实现并列时按列表位置定序 → 并列多的因子(lim 在多数票上恒 0、amt20 相近)会把序位噪声
+        注入 leader, 盖过真正区分龙头的 r60, 与狼大"龙头优先"相悖。改为并列同名次。
+        """
+        arr = [r[key] if r[key] is not None else -1e9 for r in vals]
+        n = len(arr)
+        order = sorted(range(n), key=lambda i: arr[i])
+        rk = [0.0] * n
+        i = 0
+        while i < n:
+            j = i
+            while j + 1 < n and arr[order[j + 1]] == arr[order[i]]:
+                j += 1
+            avg_rank = (i + j) / 2.0 + 1.0
+            for k in range(i, j + 1):
+                rk[order[k]] = avg_rank / n
+            i = j + 1
+        pos_of = {r["ts"]: rk[idx] for idx, r in enumerate(vals)}
+        return lambda ts: pos_of[ts]
     f_r60 = pct_rank(scored, "r60"); f_amt = pct_rank(scored, "amt20"); f_lim = pct_rank(scored, "lim")
     for r in scored:
         r["leader"] = round((f_r60(r["ts"]) + f_amt(r["ts"]) + f_lim(r["ts"])) / 3.0, 4)
@@ -234,8 +258,12 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     scored.sort(key=lambda r: (-r["leader"], -r["cross"], r["ts"]))
     wait_pool = scored[:pool_n]                                   # ①等待池(老龙头榜, 含HIGH等回调)
     # 风向标: 等待池第一(辨识度最高龙头)状态
+    # P1-1(2026-09-10 修, 依狼大原话 2026-01-12):「龙头风向标死了就不能做了…麻溜的跑就行」
+    #   → 判据 = 风向标**收盘**跌穿其**前一交易日最低** 0.5% 以上(收盘口径, 与狼大"看收盘"一致)。
+    #   原实现用当日低(`dist_prevlow`)对比, 该值恒 >=0 故判据永不成立。
     wind = wait_pool[0] if wait_pool else None
-    wind_broken = bool(wind and wind["dist_prevlow"] <= -0.5)     # 收破前日低0.5%=风向标走弱(v1判据,可校)
+    wind_broken = bool(wind and (wind.get("dist_prevlow_prev") is not None)
+                       and wind["dist_prevlow_prev"] <= -0.5)
     # ②当日布腿 = 池(LOW/MID) ∩ 位置闸(距前一日低<=dist_pct)
     # 2026-09-10 狼大'分类龙头/龙2'(WOLF_PICK_MODE=concept, 默认): 全主题统一口径算 leader(可比)
     # → 按子概念分组 → 每组内 leader 前2 入池(rank1=分类龙头, rank2=龙2) → 再走位置闸与 tier 分批。
@@ -301,10 +329,14 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     # 审计输出
     info = {"as_of": AS, "theme": theme, "capacity_amt20_yi": round(cap_yi, 1),
             "wind_flag": {"symbol": wind["xq"] if wind else None, "name": wind["name"] if wind else None,
-                          "broken": wind_broken, "dist_prevlow": wind["dist_prevlow"] if wind else None},
+                          "broken": wind_broken,
+                          "dist_prevlow": wind["dist_prevlow"] if wind else None,
+                          "dist_prevlow_prev": wind.get("dist_prevlow_prev") if wind else None,
+                          "wind_hard": wind_hard},
             "etf_fallback": etf_used, "etf": etf,
             "wait_pool_top": [{k: r[k] for k in ("name", "ts", "pos", "leader", "r20", "r60",
-                                                  "amt20", "dist_prevlow", "dist_low5", "trig_price")} for r in wait_pool[:6]]}
+                                                  "amt20", "dist_prevlow", "dist_prevlow_prev",
+                                                  "dist_low5", "trig_price")} for r in wait_pool[:6]]}
     try:
         json.dump(info, open(os.path.join(DATA, f"pick_wolf_{theme}_{AS}_v21.json"), "w"),
                   ensure_ascii=False, indent=1)
