@@ -187,7 +187,7 @@ def benchmark_index(sym):
 def _dh_get(api, **p):
     import requests, urllib3
     urllib3.disable_warnings()
-    DH='http://datahubco.com/app-api/openapi/v1/tushare'; K='dba548a206a453c197f9175189b757374fa6db9554bb29e69efea127'
+    DH='http://datahubco.com/app-api/openapi/v1/tushare'; K=os.getenv("DATAHUBCO_API_KEY", "")
     r=requests.get(f'{DH}/{api}',params=p,headers={'X-API-Key':K},timeout=40)
     d=r.json(); dd=d.get('data') or {}
     return (dd.get('items') or []), (dd.get('fields') or [])
@@ -247,7 +247,7 @@ def _sw_daily_high(idx_code):
         return _SW_DAILY_CACHE[idx_code]
     import requests, urllib3
     urllib3.disable_warnings()
-    PM='https://pcd.mobcvb.cn/tushare/pro'; PK='tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE'
+    PM='https://pcd.mobcvb.cn/tushare/pro'; PK=os.getenv("PROMAX_API_KEY", "")
     try:
         from datetime import datetime
         end=datetime.now().strftime('%Y%m%d')
