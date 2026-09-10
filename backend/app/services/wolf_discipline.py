@@ -18,6 +18,14 @@ def _cfg():
         # 默认 enabled=False: 该规则会新增一条高频卖腿, 线上影响面大于选择层闸(rs),
         # 需先 dry-run 观察触发频次/与 board_half·defensive·roundtrip 的叠加再开启。
         "profit_take": {"enabled": False, "min_float_pct": 3.0, "reduce_ratio": 0.5},
+        # ④ 常态仓位纪律(2026-09-10 P2-5)
+        # 狼大**有原话**的: 2026-03-06「现在就是70%仓位」→ 总仓位上限 70%。
+        # 狼大**无原话**的: 单票上限 / 集中度(前3大) / 底仓与T仓结构上限 → 属系统自设,
+        #   默认一律 0(=不启用), 必须显式配置才生效, 以免冒充狼大规则(与 §5.2 清理同一条纪律)。
+        # 2026-04-14「50%的底仓 30%左右做日内…剩下20%」是**他本人的持仓结构描述**, 非规则, 故默认关。
+        "position_cap": {"enabled": True, "total_max_pct": 70.0,
+                         "single_max_pct": 0.0, "top3_max_pct": 0.0,
+                         "base_max_pct": 0.0, "t_max_pct": 0.0},
     }
     try:
         p = os.path.join(os.environ.get("DATA_DIR", "data"), "wolf_discipline.json")
@@ -141,13 +149,79 @@ def profit_take(portfolio, now=None, cfg=None, quotes=None):
     return {"active_sells": sells, "directive": directive, "enabled": pt.get("enabled", False)}
 
 
+def position_cap(portfolio, cfg=None):
+    """常态仓位纪律（P2-5, 2026-09-10）→ {"allowed", "ratio", "exposure", "reason", "directive"}。
+
+    **狼大有原话的部分**:
+      2026-03-06「现在就是 **70%仓位**」→ 总仓位上限 70%（`total_max_pct`）。
+    **狼大无原话、属系统自设的部分**（默认 0 = 不启用，需显式配置才生效）:
+      · `single_max_pct`  单票市值占净值上限
+      · `top3_max_pct`    前 3 大持仓合计上限（集中度）
+      · `base_max_pct` / `t_max_pct` 底仓/T 仓结构上限
+        （2026-04-14「50%的底仓 30%左右做日内…剩下20%」是他**本人的持仓结构描述**, 不是规则 → 默认关）
+
+    口径与 weekend_de_risk 一致: 持仓占比 = (总资产 − 现金) / 总资产。
+    本函数只**判定并给出建议**, 不直接下单、不做硬拦（是否拦截由调用方决定）。
+    """
+    cfg = cfg or _cfg(); c = cfg.get("position_cap", {})
+    if not c.get("enabled"):
+        return {"allowed": True, "ratio": None, "exposure": None, "reason": "rule_disabled", "directive": ""}
+    pos = _portfolio(portfolio)
+    if not pos:
+        return {"allowed": True, "ratio": None, "exposure": None, "reason": "no_portfolio", "directive": ""}
+    cash = float(pos.get("cash") or 0)
+    total = float(pos.get("total_asset_market") or pos.get("total_asset") or 0)
+    if total <= 0:
+        return {"allowed": True, "ratio": None, "exposure": None, "reason": "no_asset", "directive": ""}
+    ratio = (total - cash) / total * 100.0
+    tot_max = float(c.get("total_max_pct") or 0)
+    reasons = []
+    if tot_max > 0 and ratio > tot_max:
+        reasons.append("总仓位%.1f%% > 上限%.0f%%" % (ratio, tot_max))
+
+    # 系统自设项: 仅当配置 >0 才计算(默认不启用, 避免冒充狼大规则)
+    exp = {"single_max": None, "top3": None}
+    single_max = float(c.get("single_max_pct") or 0)
+    top3_max = float(c.get("top3_max_pct") or 0)
+    if (single_max > 0 or top3_max > 0):
+        vals = []
+        for p in (pos.get("positions") or []):
+            mv = float(p.get("market_value") or 0)
+            if mv <= 0:
+                mv = float(p.get("volume") or 0) * float(p.get("price") or p.get("current") or 0)
+            if mv > 0:
+                vals.append(mv)
+        vals.sort(reverse=True)
+        if vals:
+            top1_pct = vals[0] / total * 100.0
+            top3_pct = sum(vals[:3]) / total * 100.0
+            exp["single_max"] = round(top1_pct, 1)
+            exp["top3"] = round(top3_pct, 1)
+            if single_max > 0 and top1_pct > single_max:
+                reasons.append("单票%.1f%% > 上限%.0f%%" % (top1_pct, single_max))
+            if top3_max > 0 and top3_pct > top3_max:
+                reasons.append("前三集中度%.1f%% > 上限%.0f%%" % (top3_pct, top3_max))
+
+    allowed = not reasons
+    d = ""
+    if not allowed:
+        d = ("⚠️ 仓位纪律：%s。狼大 2026-03-06「现在就是70%%仓位」→ 不新开/不加仓, "
+             "优先降 T 仓至阈值内。" % "；".join(reasons))
+    return {"allowed": allowed, "ratio": round(ratio, 1), "exposure": exp,
+            "reason": "；".join(reasons) if reasons else "仓位在阈值内",
+            "directive": d}
+
+
 def discipline_context(portfolio=None, now=None, window=None, quotes=None):
-    """返回注入 prompt 的纪律规则上下文块(周末降仓 + 板上减半 + 小赚兑现)。"""
+    """返回注入 prompt 的纪律规则上下文块(周末降仓 + 板上减半 + 小赚兑现 + 仓位纪律)。"""
     now = now or __import__("datetime").datetime.now()
     wd = weekend_de_risk(portfolio, now, window=window)
     bh = board_half(portfolio, now, quotes=quotes)
     pt = profit_take(portfolio, now, quotes=quotes)
+    pc = position_cap(portfolio)
     parts = []
+    if pc.get("directive"):
+        parts.append(pc["directive"])
     if wd.get("active"):
         parts.append(wd["directive"])
     if bh.get("enabled") and bh.get("directive"):

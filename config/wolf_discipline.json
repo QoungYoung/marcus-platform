@@ -20,5 +20,14 @@
     "min_float_pct": 3.0,
     "reduce_ratio": 0.5,
     "_note": "P0-3 小赚兑现(2026-09-10)。enabled 默认 false: 新增高频卖腿, 需先 dry-run 观察与 board_half/defensive/roundtrip_sell 的叠加再开启。运行时实际从 DATA_DIR/wolf_discipline.json 读取; env WOLF_PROFIT_TAKE=1 可强制开启。"
+  },
+  "position_cap": {
+    "enabled": true,
+    "total_max_pct": 70.0,
+    "single_max_pct": 0.0,
+    "top3_max_pct": 0.0,
+    "base_max_pct": 0.0,
+    "t_max_pct": 0.0,
+    "_note": "P2-5 常态仓位纪律(2026-09-10)。total_max_pct=70 有狼大原话依据(2026-03-06「现在就是70%仓位」); single_max_pct/top3_max_pct/base_max_pct/t_max_pct **狼大无语料依据, 属系统自设** → 默认 0=不启用, 需显式配置才生效。"
   }
 }
