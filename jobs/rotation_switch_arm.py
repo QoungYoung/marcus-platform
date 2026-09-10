@@ -75,7 +75,57 @@ def bad_set():
         pass
     return bad
 
+def _gz(api, params, fields):
+    """gzcloud 单次查询(gzip/重定向容错)。返回 items 列表。"""
+    import urllib.request, gzip
+    body = {"api_name": api, "token": os.getenv("TUSHARE_TOKEN", ""),
+            "params": params, "fields": fields}
+    req = urllib.request.Request((os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"),
+                                 data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
+    raw = urllib.request.urlopen(req, timeout=30).read()
+    if raw[:2] == bytes([0x1f, 0x8b]):
+        raw = gzip.decompress(raw)
+    return (json.loads(raw.decode()).get("data", {}) or {}).get("items") or []
+
+
+def _pct_rank(vals):
+    """升序 → 百分位 0-1。**并列取平均名次**(与 wolf_confirm_pick.pct_rank 同口径)。
+
+    P1-5b 配套修复: 原实现并列时按列表位置定序, 导致大量并列的因子(如 lim 在多数票上恒 0、
+    amt20 相近)会把"序位噪声"注入 leader, 反而盖过真正区分龙头的 r60 —— 与狼大"龙头优先"相悖。
+    改为并列同名次后, 并列因子对排序不再产生方向性偏置。
+    """
+    n = len(vals)
+    if n == 0:
+        return []
+    order = sorted(range(n), key=lambda i: vals[i])
+    rk = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and vals[order[j + 1]] == vals[order[i]]:
+            j += 1
+        avg_rank = (i + j) / 2.0 + 1.0          # 1-based 平均名次
+        for k in range(i, j + 1):
+            rk[order[k]] = avg_rank / n
+        i = j + 1
+    return rk
+
+
 def pick_buy(chain, exclude, limit=3):
+    """路径A 低吸选股(rotation 链关键词匹配的候选域)。
+
+    P1-5b(2026-09-10 修, 依狼大 2026-01-16「后排反倒不能去 要看好龙头那些 /
+    龙头和核心都救不起来 那其他后排还要死」):
+      原实现直接取 stock_concept_map 扫描序的前 80 只(cands[:80]) —— 等于按字典序挑票,
+      与狼大"龙头优先"相反, 也与路径B(pick_v2: leader 榜 → 组内前2 → 位置闸)口径不一致。
+      现改为三段式, 与路径B 同口径:
+        ① 市值预筛(一次 daily_basic 全市场调用, 廉价): 龙头通常是核心/大市值票;
+        ② 对预筛集逐股取日线, 按 pick_v2 相同的三因子(r60/amt20/lim 分位均值)算 leader;
+        ③ 按 leader 降序过位置闸(LOW/MID), 取前 limit。
+    规模由 env WOLF_PICK_BUY_SHORTLIST 控制(默认 80, 即原来的逐股取数上限)。
+    """
     from rotation_universe import get_sub_universe
     kws = get_sub_universe().get(chain) or []
     if not kws:
@@ -99,34 +149,63 @@ def pick_buy(chain, exclude, limit=3):
             xq = "SH" + ts[:6] if ts.endswith(".SH") else ("SZ" + ts[:6] if ts.endswith(".SZ") else ts)
             if xq not in exclude and ts not in detail and ts not in bad:
                 cands.append((ts, xq))
+    if not cands:
+        return []
+    # ① 市值预筛(单次全市场调用): 龙头优先于字典序
+    shortlist_n = int(os.getenv("WOLF_PICK_BUY_SHORTLIST", "80"))
+    try:
+        mv = {str(x[0]): float(x[1] or 0) for x in _gz("daily_basic", {"trade_date": _today()}, "ts_code,total_mv")}
+        if mv:
+            cands.sort(key=lambda tx: -(mv.get(tx[0]) or 0))
+    except Exception as _e:
+        print("[pick_buy] daily_basic 预筛失败, 退回原序:", str(_e)[:80], file=sys.stderr)
+    cands = cands[:shortlist_n]
+    # ② 取日线 → 三因子
+    stats = []
+    for ts, xq in cands:
+        try:
+            rows = _gz("daily", {"ts_code": ts, "start_date": "20250101", "end_date": _today()},
+                       "ts_code,trade_date,close,amount")
+            rows = sorted(rows, key=lambda x: str(x[1]))
+            if len(rows) < 61:
+                time.sleep(0.1); continue
+            closes = [float(x[2]) for x in rows]
+            amts = [float(x[3] or 0) for x in rows]
+            r60 = (closes[-1] / closes[-61] - 1) * 100 if closes[-61] else None
+            amt20 = sum(amts[-20:]) / 20.0
+            lim = sum(1 for i in range(max(1, len(closes) - 60), len(closes))
+                      if closes[i - 1] and closes[i] / closes[i - 1] - 1 >= 0.097)
+            stats.append({"ts": ts, "xq": xq, "closes": closes,
+                          "r60": r60, "amt20": amt20, "lim": lim})
+        except Exception:
+            pass
+        time.sleep(0.1)
+    if not stats:
+        return []
+    for key in ("r60", "amt20", "lim"):
+        rk = _pct_rank([(s[key] if s[key] is not None else -1e9) for s in stats])
+        for s, v in zip(stats, rk):
+            s[key + "_p"] = v
+    for s in stats:
+        s["leader"] = round((s["r60_p"] + s["amt20_p"] + s["lim_p"]) / 3.0, 4)
+    stats.sort(key=lambda s: (-s["leader"], s["ts"]))
+    # ③ 按 leader 降序过位置闸
     out = []
-    for ts, xq in cands[:80]:
+    for s in stats:
         if len(out) >= limit:
             break
         try:
             import pandas as pd
             import position_class as pc
-            body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
-                    "params": {"ts_code": ts, "start_date": "20250101", "end_date": "20260901"},
-                    "fields": "ts_code,trade_date,close"}
-            import urllib.request
-            req = urllib.request.Request((os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"), data=json.dumps(body).encode(),
-                                         headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-            raw = urllib.request.urlopen(req, timeout=30).read()
-            import gzip
-            if raw[:2] == bytes([0x1f, 0x8b]): raw = gzip.decompress(raw)
-            d = json.loads(raw.decode())
-            rows = d.get("data", {}).get("items") or []
-            if len(rows) < 60:
-                time.sleep(0.1); continue
-            ser = pd.Series([float(x[2]) for x in rows], index=pd.to_datetime([str(x[1]) for x in rows], format="%Y%m%d"))
-            f = pc.position_features(ser)
+            f = pc.position_features(pd.Series(s["closes"]))
             pos = pc.classify(f)["position"] if f else None
-            if pos in ("LOW", "MID"):
-                out.append({"symbol": xq, "ts_code": ts, "position": pos})
         except Exception:
-            pass
-        time.sleep(0.1)
+            pos = None
+        if pos in ("LOW", "MID"):
+            out.append({"symbol": s["xq"], "ts_code": s["ts"], "position": pos,
+                        "chain": chain, "leader": s["leader"],
+                        "r60": round(s["r60"], 1) if s["r60"] is not None else None,
+                        "amt20": round(s["amt20"], 2)})
     return out
 
 
@@ -190,7 +269,8 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
             import pandas as pd
             import position_class as pc
             body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
-                    "params": {"ts_code": ts, "start_date": "20250101", "end_date": "20260908"},
+                    "params": {"ts_code": ts, "start_date": "20250101",
+                               "end_date": _today()},   # P1-5a 修复: 原硬编码 "20260908" 冻结日线窗口
                     "fields": "ts_code,trade_date,close"}
             import urllib.request
             req = urllib.request.Request((os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"), data=json.dumps(body).encode(),
