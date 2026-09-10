@@ -23,7 +23,8 @@ def sh(step, cmd):
     print('[%s] ok %.0fs' % (step, time.time() - t0), flush=True)
 
 def main():
-    date8 = '20260908'
+    import time as _t
+    date8 = _t.strftime('%Y%m%d')
     for i, a in enumerate(sys.argv[1:]):
         if a == '--date': date8 = sys.argv[i + 2]
     py = sys.executable
@@ -57,6 +58,8 @@ def main():
         print('latest', date8, '->', hist.get('dates', {}).get(date8), flush=True)
     except Exception as e:
         print('history read err', str(e)[:80], flush=True)
+    # 5) 注入 main_line_state.json(Pi 会话可见: gate 摘要+波浪结构)
+    sh('inject_state', [py, os.path.join(APP, 'mainline_state_inject.py'), date8])
     print('MAINLINE_GATE_DAILY DONE', date8, flush=True)
 
 if __name__ == '__main__':
