@@ -238,6 +238,64 @@ def theme_fund_danger(theme, days=None):
     return False, "板块资金正常(近%d日均值 %s 亿)" % (n, ", ".join("%.2f" % (x / 1e8) for x in avg))
 
 
+def slow_decline(prev_days, days=None, min_drop_pct=None, max_drop_pct=None, flush_day_pct=None):
+    """**缓跌通道**判定（P2-3, 2026-09-10）→ (is_slow_decline: bool, reason)。
+
+    狼大 2025-06-05「要么带量突破 空翻多…要么继续震荡，但是主线板块筑底行情，那就保持30%-50%...
+    **急杀可以买，缓跌不买**」；2025-07-28「跳水了你高位减仓的钱敢不敢买才对」。
+    → 语义: **急跌(有单日急杀)可接; 缩量阴跌式的"缓跌"不接**（缓跌会一路磨下去，接了没反弹）。
+
+    ⚠️ **阈值属系统自设**: 狼大只给了概念、未给数字。故以下阈值全部可配(env/参数),
+       默认取保守侧, 并在下方逐条标注, 便于按回测再标定。
+
+    判据（三条同时满足才算缓跌）:
+      1. 窗口累计跌幅 ∈ [min_drop, max_drop] —— 有跌, 但不是"急跌"(超过 max 视为急杀, 反而可接);
+      2. 窗口内**没有单日急杀**(无单日跌幅 ≥ flush_day_pct) —— 有急杀日则属"急杀", 不算缓跌;
+      3. 量能萎缩 —— 近 2 日均量 < 前段均量 × shrink_ratio(默认 1.0, 即确实在缩量)。
+
+    prev_days: {YYYYMMDD: {"close","high","low","vol"}}(t_monitor._prev_daily 的返回格式)。数据不足 → 不算缓跌(放行)。
+    """
+    n = int(days if days is not None else os.getenv("WOLF_SLOW_DECLINE_DAYS", "5"))
+    min_drop = float(min_drop_pct if min_drop_pct is not None else os.getenv("WOLF_SLOW_DECLINE_MIN_PCT", "1.0"))
+    max_drop = float(max_drop_pct if max_drop_pct is not None else os.getenv("WOLF_SLOW_DECLINE_MAX_PCT", "6.0"))
+    flush = float(flush_day_pct if flush_day_pct is not None else os.getenv("WOLF_FLUSH_DAY_PCT", "-3.0"))
+    try:
+        shrink_ratio = float(os.getenv("WOLF_SLOW_DECLINE_SHRINK", "1.0"))
+    except Exception:
+        shrink_ratio = 1.0
+
+    if not prev_days:
+        return False, "无日线数据 → 不作为缓跌(放行)"
+    rows = [prev_days[k] for k in sorted(prev_days)][-(n + 1):]
+    if len(rows) < 3:
+        return False, "日线不足(%d) → 不作为缓跌(放行)" % len(rows)
+    closes = [float(r.get("close") or 0) for r in rows]
+    if any(c <= 0 for c in closes):
+        return False, "日线收盘异常 → 不作为缓跌(放行)"
+    cum = (closes[-1] / closes[0] - 1) * 100.0
+    # 1) 有跌但非急跌
+    if not (-max_drop <= cum <= -min_drop):
+        return False, "窗口累计 %.2f%% 不属缓跌区间(需 [-%.1f%%, -%.1f%%])" % (cum, max_drop, min_drop)
+    # 2) 无单日急杀
+    worst = 0.0
+    for i in range(1, len(closes)):
+        d = (closes[i] / closes[i - 1] - 1) * 100.0
+        if d < worst:
+            worst = d
+    if worst <= flush:
+        return False, "窗口内有单日急杀 %.2f%%(≤%.1f%%) → 属急杀非缓跌" % (worst, flush)
+    # 3) 量能萎缩
+    vols = [float(r.get("vol") or 0) for r in rows]
+    if all(v > 0 for v in vols) and len(vols) >= 4:
+        recent = sum(vols[-2:]) / 2.0
+        prior = sum(vols[:-2]) / max(1, len(vols) - 2)
+        if prior > 0 and recent >= prior * shrink_ratio:
+            return False, "窗口内量能未萎缩(近2日均量 %.0f ≥ 前段 %.0f×%.2f) → 非缓跌" % (
+                recent, prior, shrink_ratio)
+    return True, "缓跌通道: 窗口累计 %.2f%%(无急杀日, 最差单日 %.2f%%), 量能萎缩 → 不接(狼大: 缓跌不买)" % (
+        cum, worst)
+
+
 def theme_buyable(theme):
     """主题是否可买 = **结构**(P1-3) ∧ **资金**(P2-2)。**单一定义处**, 供 253 与布腿器共用。
 
@@ -272,10 +330,11 @@ def systemic_block(wave=None):
     return False, ""
 
 
-def m5dump_allowed(symbol=None, wave=None):
+def m5dump_allowed(symbol=None, wave=None, prev_days=None):
     """253 是否允许 → (bool, reason)。
 
-    判定：①大盘系统性护栏（仅真系统性下跌才拦）→ ②主题浪（主判据）→ ③数据缺失放行。
+    判定：①大盘系统性护栏（仅真系统性下跌才拦）→ ②主题浪结构 ∧ 板块资金（theme_buyable）
+          → ③**缓跌通道**(P2-3, 需传入 prev_days 才能判) → ④数据缺失放行。
     """
     if os.getenv("WOLF_253_CONTEXT", "1").strip() in ("0", "false", "no"):
         return True, "闸门关闭(WOLF_253_CONTEXT=0)"
@@ -283,6 +342,13 @@ def m5dump_allowed(symbol=None, wave=None):
     sb, sreason = systemic_block(wave)
     if sb:
         return False, "语境禁止（系统性风险）: %s" % sreason
+
+    # P2-3(2026-09-10): 缓跌不买 —— 狼大 2025-06-05「急杀可以买，**缓跌不买**」。
+    # 只在调用方提供了日线(prev_days)时才判; 缺失 → 跳过(放行), 不因缺数据封死买路。
+    if prev_days and os.getenv("WOLF_SLOW_DECLINE", "1").strip() not in ("0", "false", "no"):
+        _sd, _sdr = slow_decline(prev_days)
+        if _sd:
+            return False, _sdr
 
     theme = theme_of_symbol(symbol)
     st = theme_structure(theme)
