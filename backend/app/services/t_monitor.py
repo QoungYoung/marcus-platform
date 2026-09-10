@@ -137,6 +137,7 @@ class TMonitor:
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                     self._check_profit_take()  # 小赚兑现(P0-3, 默认关): 浮盈>=阈值→减仓锁定(保留底仓)
+                    self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
@@ -535,6 +536,63 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] profit_take异常: {e}")
+
+    def _check_position_discipline(self) -> None:
+        """去弱留强(P1-6, 2026-09-10): 反弹语境内, 减 T 仓最弱的持仓。
+
+        狼大 2026-04-23「反弹的时候卖弱的 留强的 不要搞反了 / **不要觉得哪个反弹多就卖** 留那种没波动的」。
+        判据 = **反弹幅度**(反弹最多的是强票, 要留; 没波动的才是弱票 —— 与直觉相反)。
+        语境 = 该持仓**所属主题**的结构已确认(主题浪, **不是大盘浪**) + 大盘非系统性下跌;
+              依据狼大 2026-05-26「机构目的就是逼大家趋弱留强…这是明牌」→ 下跌段做等于替机构接盘。
+        作用域 = 只减 T 仓(复用既有 wolf_defensive_t_reduce 管道), **不动底仓**。
+        """
+        try:
+            if os.getenv("WOLF_POSITION_DISC", "1").strip() in ("0", "false", "no"):
+                return
+            from app.services.t_pool import _get_positions
+            _minp = int(os.getenv("WOLF_POSITION_DISC_MIN", "3"))
+            pos_list = [p for p in (_get_positions() or []) if float(p.get('volume') or 0) > 0]
+            if len(pos_list) < _minp:
+                return
+            import sys as _sp
+            _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps", "main_line")
+            if _p not in _sp.path:
+                _sp.path.insert(0, _p)
+            from wolf_context import systemic_block, theme_of_symbol, theme_structure
+            _sb, _sr = systemic_block()
+            if _sb:
+                return
+            import position_discipline as PD
+            items = []
+            for p in pos_list:
+                sym = _normalize_symbol(p.get('symbol'))
+                th = theme_of_symbol(sym)
+                st = theme_structure(th)
+                # 只在"结构确认过的反弹"里做(狼大: 反弹的时候); 主题未确认 → 该票不参与
+                if str(st.get("stage") or "") != "confirmed":
+                    continue
+                items.append({"symbol": sym, "theme": th,
+                              "rebound": PD.rebound_pct(self._prev_daily(sym, 5))})
+            res = PD.select_weak(items)
+            if res.get("skip") or not res.get("sells"):
+                if res.get("skip"):
+                    print(f"[TMonitor] 去弱留强不动作: {res['skip']}", flush=True)
+                return
+            today = datetime.now().strftime('%Y%m%d')
+            quotes = fetch_tencent_quote([s["symbol"] for s in res["sells"]])
+            for s in res["sells"]:
+                sym = s["symbol"]
+                if (sym, 'wolf_defensive_t_reduce', today) in self._wolf_done:
+                    continue
+                q = quotes.get(sym) or {}
+                reason = ("去弱留强: 反弹%+.2f%% 为持仓最弱(强弱分化%.2f%%%%) → 减T仓; "
+                          "狼大2026-04-23「反弹的时候卖弱的 留强的」" % (s.get("rebound") or 0, res.get("spread") or 0))
+                self._insert_wolf_trigger(sym, 'wolf_defensive_t_reduce', q, reason)
+                self._wolf_done.add((sym, 'wolf_defensive_t_reduce', today))
+                print(f"[TMonitor] 去弱留强减T {sym}: {reason}", flush=True)
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] position_discipline异常: {e}")
 
     def _roll_wolf_legs(self, today: str) -> int:
         """狼大持续腿跨日结转（2026-09-03 修复生产监控条件丢失）。
