@@ -16,17 +16,21 @@
   → **黄线在上**（等权强于加权）= 普涨、小票活跃 → 做 T 成功率高；
     **白线在上**（加权强于等权）= 权重护盘、二八分化 → 减少做 T。
 
-**口径实现（代理，必须标注）**：
-  白线 = 上证指数当日涨跌幅（腾讯 qt `sh000001`，与 `index.sh_drop` 同源）；
-  黄线 = **沪市个股等权平均涨跌幅**（新浪全A实时 `ak.stock_zh_a_spot`，按代码前缀取沪市）。
-  两者相减 = `spread`。
-  ⚠️ 这是**代理**：他说的黄线是行情软件里那条等权线，我们用"沪市等权平均涨跌幅"近似
-  （同一市场、同为等权口径、方向语义一致），**不是同一条线**；差异已写入文档，未声称等价。
+**口径实现（两级，都要标注是代理）**：
+  · **主口径（默认，可靠）= 指数对**：
+      白线 = **上证指数**当日涨跌幅（腾讯 qt `sh000001`）；
+      黄线 = **中证1000**当日涨跌幅（腾讯 qt `sh000852`，小盘代表）。
+      spread = 中证1000 − 上证。语义与他的"黄>白 = 小盘/科技消费强于权重/银保地券商"一致，
+      且两个都是**真实发布指数**、腾讯 qt 一直可用（另有 sh000016 上证50 作参考列）。
+  · **可选口径 = 全市场等权**（`WOLF_HUANG_BAI_SRC=spot`）：新浪 `ak.stock_zh_a_spot` 沪市等权平均涨跌幅。
+      ⚠️ **实测不稳**：生产容器上因被限流返回 HTML → `JSONDecodeError`（同一机器早先可用、随后被限）。
+      故**不作默认**；开启后若失败会**自动回落主口径**并在 `proxy` 字段标明。
+  · 无论哪级，**都不是行情软件里那条等权线**（他的"黄线"）——方向语义一致、数值不等价，已写入文档。
 
 **取数与安全**：
-  · 新浪全A一次约 16s（70 页）→ **必须缓存**（默认 TTL 180s）且 **fail-open**：
+  · 主口径是**两次腾讯 qt**（毫秒级）；spot 口径约 16s → 都必须缓存（默认 TTL 180s）且 **fail-open**：
     取不到就返回上一次成功值（标 stale），再没有就返回 None —— **绝不让它阻塞或改变交易判断**。
-  · 开关 `WOLF_HUANG_BAI=0` 关闭；`WOLF_HUANG_BAI_TTL` 调缓存；`WOLF_HUANG_BAI_SCOPE=sh|all` 换样本域。
+  · 开关 `WOLF_HUANG_BAI=0` 关闭；`WOLF_HUANG_BAI_TTL` 调缓存；`WOLF_HUANG_BAI_SRC=index|spot`。
 """
 from __future__ import annotations
 
@@ -88,15 +92,28 @@ def _equal_weight_pct(scope: str) -> Tuple[Optional[float], int]:
         return None, 0
 
 
-def _index_pct() -> Optional[float]:
-    """上证指数当日涨跌幅%（腾讯 qt，与 index.sh_drop 同源）。"""
+def _quote_pct(symbol: str) -> Optional[float]:
+    """指数当日涨跌幅%（腾讯 qt）。symbol 用小写带前缀写法，如 sh000001。"""
     try:
         from app.services.t_data_sources import fetch_tencent_quote
-        q = (fetch_tencent_quote(["sh000001"]) or {}).get("sh000001") or {}
+        q = (fetch_tencent_quote([symbol]) or {}).get(symbol) or {}
         v = q.get("change_pct")
         return round(float(v), 3) if v is not None else None
     except Exception:
         return None
+
+
+def _index_pct() -> Optional[float]:
+    """白线 = 上证指数当日涨跌幅%（与 index.sh_drop 同源）。"""
+    return _quote_pct("sh000001")
+
+
+def _index_pair() -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """主口径：黄线代理=中证1000、白线=上证、参考=上证50 → (huang, bai, sh50)。"""
+    small = os.getenv("WOLF_HUANG_BAI_SMALL", "sh000852")     # 中证1000
+    big = os.getenv("WOLF_HUANG_BAI_BIG", "sh000001")         # 上证指数
+    ref = os.getenv("WOLF_HUANG_BAI_REF", "sh000016")         # 上证50（参考列）
+    return _quote_pct(small), _quote_pct(big), _quote_pct(ref)
 
 
 def huang_bai(force: bool = False) -> Optional[Dict[str, Any]]:
@@ -114,17 +131,27 @@ def huang_bai(force: bool = False) -> Optional[Dict[str, Any]]:
     if not _LOCK.acquire(blocking=False):        # 已有线程在取数 → 直接用旧值，绝不等待
         return _CACHE["value"]
     try:
+        src = (os.getenv("WOLF_HUANG_BAI_SRC", "index") or "index").strip().lower()
         scope = (os.getenv("WOLF_HUANG_BAI_SCOPE", "sh") or "sh").strip().lower()
-        eq, n = _equal_weight_pct(scope)
-        ix = _index_pct()
-        if eq is None or ix is None:
+        hb, ix, ref, n, proxy = None, None, None, 0, "index_pair(中证1000−上证)"
+        if src == "spot":                       # 可选：全市场等权（不稳，失败自动回落）
+            hb, n = _equal_weight_pct(scope)
+            ix = _index_pct()
+            if hb is None:
+                hb, ix, ref = _index_pair()
+                n, proxy = 0, "index_pair(中证1000−上证) [spot失败回落]"
+            else:
+                proxy = "spot(沪市等权−上证)" if scope == "sh" else "spot(全A等权−上证)"
+        else:
+            hb, ix, ref = _index_pair()
+        if hb is None or ix is None:
             old = _CACHE["value"]
             if old:
                 return {**old, "stale": True}
             return None
-        spread = round(eq - ix, 3)
-        val = {"equal_pct": eq, "index_pct": ix, "spread": spread,
-               "side": classify(spread), "n": n, "scope": scope,
+        spread = round(hb - ix, 3)
+        val = {"equal_pct": hb, "index_pct": ix, "ref50_pct": ref, "spread": spread,
+               "side": classify(spread), "n": n, "scope": scope, "proxy": proxy,
                "ts": int(now), "stale": False}
         _CACHE.update({"at": now, "value": val})
         return val
@@ -149,8 +176,8 @@ def directive() -> str:
     if not hb:
         return ""
     side = hb.get("side")
-    base = ("日内黄白线：等权(黄)%.2f%% vs 上证(白)%.2f%% → spread %+.2fpp"
-            % (hb["equal_pct"], hb["index_pct"], hb["spread"]))
+    base = ("日内黄白线(代理口径%s)：黄%.2f%% vs 白(上证)%.2f%% → spread %+.2fpp"
+            % (hb.get("proxy", "?"), hb["equal_pct"], hb["index_pct"], hb["spread"]))
     if side == "huang":
         tail = ("**黄线在上** → 科技/消费这类主线强于银保地券商这类指数标，"
                 "**做T成功率较高**（狼大 2025-04-15 条件3）")
