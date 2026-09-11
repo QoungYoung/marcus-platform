@@ -144,6 +144,7 @@ class TMonitor:
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                     self._check_profit_take()  # 小赚兑现(P0-3, 默认关): 浮盈>=阈值→减仓锁定(保留底仓)
                     self._check_boll_sell()  # A10 BOLL上轨减半锁利(2026-09-11, 狼大 2026-04-29)
+                    self._check_boll_mid_exit()  # A10 BOLL中轨全止盈(尾盘确认窗, 狼大 2025-05-13)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
                     self._check_index_level_stop()  # ③ 指数大级别止损(狼大2026-08-27): 转下跌1浪→止损
                     self._check_logic_time_stop()  # ① 后半句: 13日内未碰前高→逻辑时间离场(狼大2026-03-05)
@@ -594,6 +595,47 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] board_half异常: {e}")
+
+    def _check_boll_mid_exit(self) -> None:
+        """A10 BOLL 中轨「完全止盈」（2026-09-11，狼大 2025-05-13）。
+
+        「顶部阶段…**全止盈的位置就放在日线BOLL中轨附近，放量跌破收盘完全止盈**」→ 三个前提：
+        ① **放量**（当日量 ≥ 前一日量 × 阈值）② **收盘**确认（只在收盘确认窗内判，复用 _in_close_window）
+        ③ **止盈**（要求浮盈>0；亏损侧交给既有六层止损，避免双杀）。
+        命中写 `wolf_boll_mid_exit`；`WOLF_BOLL_MID_EXIT=1` 才生效（默认 0）。
+        """
+        try:
+            from app.services.wolf_boll_levels import mid_break_sells, mid_exit_enabled
+            if not mid_exit_enabled():
+                return
+            if not _in_close_window():
+                return          # 他要求"收盘"确认
+            from app.services.t_pool import _get_positions
+            import datetime as _dt
+            pos_list = _get_positions()
+            held = [p for p in pos_list if float(p.get('volume') or 0) > 0]
+            if not held:
+                return
+            xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
+            quotes = fetch_tencent_quote(xq_syms)
+            qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
+                        'high': float((quotes.get(s) or {}).get('high', 0) or 0),
+                        'vol': float((quotes.get(s) or {}).get('vol', 0) or 0),
+                        'pre_close': float((quotes.get(s) or {}).get('pre_close', 0) or 0)} for s in xq_syms}
+            portfolio = {"positions": [{"symbol": _normalize_symbol(p.get('symbol')),
+                                        "avg_cost": float(p.get('avg_price') or p.get('avg_cost') or 0),
+                                        "volume": float(p.get('volume') or 0)} for p in held]}
+            today = _dt.datetime.now().strftime('%Y%m%d')
+            for sl in mid_break_sells(portfolio, quotes=qmap):
+                sym = sl.get('symbol')
+                if (sym, 'wolf_boll_mid_exit', today) in self._wolf_done:
+                    continue
+                q = quotes.get(sym) or {}
+                self._insert_wolf_trigger(sym, 'wolf_boll_mid_exit', q, sl.get('reason', 'BOLL中轨跌破完全止盈'))
+                self._wolf_done.add((sym, 'wolf_boll_mid_exit', today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] boll_mid_exit异常: {e}", flush=True)
 
     def _check_boll_sell(self) -> None:
         """A10 BOLL 上轨减半锁利（2026-09-11）。

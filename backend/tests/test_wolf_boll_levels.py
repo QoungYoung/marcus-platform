@@ -147,3 +147,55 @@ class TestWiring:
         pf = json.dumps({"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]})
         ctx = WD.discipline_context(pf, quotes={"SH600000": {"current": 10.5, "high": 10.6}})
         assert "BOLL 上轨" in ctx
+
+
+class TestMidExitPrereqs:
+    """中轨「完全止盈」的三个前提**都来自他 2025-05-13 的原话**：
+    「全止盈的位置就放在日线BOLL中轨附近，**放量**跌破**收盘**完全止盈」+ 语义是**止盈**。
+    """
+
+    def _lv(self, monkeypatch, mid=9.0, prev_vol=1000.0):
+        monkeypatch.setattr(BL, "levels", lambda sym, force=False: {
+            "symbol": sym, "upper": 10.0, "mid": mid, "prev_vol": prev_vol})
+
+    def test_requires_profit(self, monkeypatch):
+        self._lv(monkeypatch)
+        pf = {"positions": [{"symbol": "SH600000", "avg_cost": 12.0, "volume": 100}]}
+        assert BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5}}) == []
+
+    def test_requires_volume_expansion(self, monkeypatch):
+        """「放量跌破」→ 缩量跌破不触发。"""
+        self._lv(monkeypatch, prev_vol=2000.0)
+        pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
+        q = {"SH600000": {"current": 8.5, "vol": 1000.0}}      # 0.5× → 缩量
+        assert BL.mid_break_sells(pf, quotes=q) == []
+        q2 = {"SH600000": {"current": 8.5, "vol": 3000.0}}     # 1.5× → 放量
+        r = BL.mid_break_sells(pf, quotes=q2)
+        assert len(r) == 1 and r[0]["vol_ratio"] == pytest.approx(1.5)
+
+    def test_volume_threshold_tunable(self, monkeypatch):
+        monkeypatch.setenv("WOLF_BOLL_MID_VOL", "2.0")
+        self._lv(monkeypatch, prev_vol=2000.0)
+        pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
+        assert BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5, "vol": 3000.0}}) == []
+
+    def test_no_volume_data_does_not_block(self, monkeypatch):
+        """行情里没有量（或没有前一日量）时**不因缺数据而误拦**，但仍要求浮盈+跌破中轨。"""
+        self._lv(monkeypatch, prev_vol=0.0)
+        pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
+        r = BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5}})
+        assert len(r) == 1 and r[0]["vol_ratio"] is None
+
+    def test_close_window_enforced_by_monitor(self):
+        """「收盘」确认由 t_monitor 的 _in_close_window 保证（≥14:55，可用 WOLF_CLOSE_BREAK_HM 调）。"""
+        import inspect
+        from app.services import t_monitor
+        src = inspect.getsource(t_monitor.TMonitor._check_boll_mid_exit)   # 它是类方法，不是模块级函数
+        assert "_in_close_window()" in src
+        assert "wolf_boll_mid_exit" in src
+
+    def test_trigger_type_whitelisted(self):
+        """新触发类型必须进 TRIGGER_SELL_EVENTS，否则方向判定不到 → 不会被执行。"""
+        from app.services import t_db
+        assert "wolf_boll_mid_exit" in t_db.TRIGGER_SELL_EVENTS
+        assert "wolf_boll_upper_sell" in t_db.TRIGGER_SELL_EVENTS

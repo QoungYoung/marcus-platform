@@ -396,7 +396,6 @@ def t_daily_reset():
         "realized_pnl": 0,
         "buy_count": 0,
         "sell_count": 0,
-        "risk_breaker": False,
         "breaker_reason": None,
     })
     return {"success": ok}

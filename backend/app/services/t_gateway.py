@@ -262,9 +262,9 @@ def check_breakers() -> Tuple[bool, str]:
         return True, "STOP_ALL 已触发"
     if risk.get("manual_lock"):
         return True, f"人工锁定: {risk.get('lock_reason') or 'manual'}"
-    daily = t_db.get_daily_state() or {}
-    if daily.get("risk_breaker"):
-        return True, daily.get("breaker_reason") or "日亏损熔断"
+    # 2026-09-11 删除：原 `daily.get("risk_breaker")` 日亏损熔断守卫 —— 该列**从来没有任何写入方**
+    # （只有这两处读、0 处写，属死守卫），按用户决定删除而非补一个无依据的阈值。
+    # 仍在生效的风控：stop_all / manual_lock / 连续亏损≥3（均来自 risk_state 表）。
     # 连续亏损
     if int(risk.get("consecutive_losses") or 0) >= 3:
         return True, "连续亏损 ≥ 3 次，临时禁自动"
@@ -412,8 +412,7 @@ def _breakers_from_ctx(risk: Dict[str, Any], daily: Dict[str, Any]) -> Tuple[boo
         return True, "STOP_ALL 已触发"
     if risk.get("manual_lock"):
         return True, f"人工锁定: {risk.get('lock_reason') or 'manual'}"
-    if daily.get("risk_breaker"):
-        return True, daily.get("breaker_reason") or "日亏损熔断"
+    # 2026-09-11 删除：`daily.get("risk_breaker")` 日亏损熔断（死守卫：0 处写入，见上）。
     if int(risk.get("consecutive_losses") or 0) >= 3:
         return True, "连续亏损 ≥ 3 次，临时禁自动"
     return False, ""

@@ -82,10 +82,12 @@ def levels(symbol: str, force: bool = False) -> Optional[Dict[str, Any]]:
         b = boll(closes)
         if not b:
             return None
+        prev_vol = float(bars[-2].get("vol") or 0) if len(bars) >= 2 else 0.0
         v = {"symbol": symbol, **b,
              "last_close": closes[-1] if closes else None,
              "last_high": float(bars[-1].get("high") or 0) if bars else None,
              "last_vol": float(bars[-1].get("vol") or 0) if bars else None,
+             "prev_vol": prev_vol,          # 供"放量跌破"判定（他 2025-05-13「放量跌破收盘」）
              "bars": len(closes)}
         _CACHE[symbol] = {"at": now, "value": v}
         return v
@@ -155,9 +157,13 @@ def active_sells(portfolio: Any, quotes: Optional[Dict[str, Any]] = None,
 
 
 def mid_break_sells(portfolio: Any, quotes: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """中轨侧：**放量收盘跌破** 日线 BOLL 中轨 → 「完全止盈」（他 2025-05-13）。
+    """中轨侧：**放量、收盘跌破** 日线 BOLL 中轨 → 「完全止盈」（他 2025-05-13）。
 
-    默认**不自动卖**（`WOLF_BOLL_MID_EXIT=1` 才由调用方纳入）。收盘确认口径与他 2026-01-29 一致。
+    三个前提**都来自他的原话**：
+      · 「**放量**跌破」→ 当日量 ≥ 前一交易日量 × `WOLF_BOLL_MID_VOL`（默认 1.0；尾盘调用时当日量已接近全天，可比）
+      · 「跌破**收盘**」→ 由调用方限定在**收盘确认窗**（t_monitor `_in_close_window`，默认 ≥14:55）
+      · 「**止盈**」→ 要求浮盈 > 0（亏损侧由既有六层止损负责，避免与止损叠加成双杀）
+    `WOLF_BOLL_MID_EXIT=1`（默认 0）才被调用方纳入执行。
     """
     out: List[Dict[str, Any]] = []
     pos = portfolio
@@ -178,14 +184,26 @@ def mid_break_sells(portfolio: Any, quotes: Optional[Dict[str, Any]] = None) -> 
         cur = float(qt.get("current") or 0)
         if cur <= 0:
             continue
+        cost = float(p.get("avg_cost") or p.get("avg_price") or 0)
+        if cost > 0 and cur <= cost:
+            continue                       # 「止盈」语义 → 无浮盈不在此处动作
         lv = levels(sym)
         if not lv:
             continue
-        if cur < float(lv["mid"]):
-            out.append({"symbol": sym, "price": cur, "boll_mid": lv["mid"],
-                        "reason": ("跌破日线BOLL中轨(%.2f) → 完全止盈候选"
-                                   "（狼大 2025-05-13「全止盈的位置就放在日线BOLL中轨附近，放量跌破收盘完全止盈」）"
-                                   % lv["mid"])})
+        if cur >= float(lv["mid"]):
+            continue
+        # 「放量」：当日量 vs 前一交易日量（尾盘调用，当日量已接近全天）
+        vol_min = _env_f("WOLF_BOLL_MID_VOL", 1.0)
+        tv = float(qt.get("vol") or 0)
+        pv = float(lv.get("prev_vol") or 0)
+        vol_ratio = round(tv / pv, 3) if (tv > 0 and pv > 0) else None
+        if vol_ratio is not None and vol_ratio < vol_min:
+            continue
+        out.append({"symbol": sym, "price": cur, "boll_mid": lv["mid"],
+                    "vol_ratio": vol_ratio,
+                    "reason": ("放量(%.2f×)收盘跌破日线BOLL中轨(%.2f) → 完全止盈"
+                               "（狼大 2025-05-13「全止盈的位置就放在日线BOLL中轨附近，"
+                               "放量跌破收盘完全止盈」）" % (vol_ratio or 0, lv["mid"]))})
     return out
 
 

@@ -80,21 +80,38 @@ class TestAccountDimension:
         assert "'t'" not in sql.split("VALUES")[1].split("ON CONFLICT")[0]   # 不再硬编码 't'
 
     def test_upsert_only_updates_provided_fields(self, monkeypatch):
-        """未提供的字段必须走 COALESCE 保留行内现值（否则成交会把 risk_breaker 清零）。"""
+        """未提供的字段必须走 COALESCE 保留行内现值（否则一笔成交会把当日累计冲掉）。"""
         db = _CapDB()
         monkeypatch.setattr(t_db, "SessionLocal", lambda: db)   # 注意：t_db 是 from ... import，须 patch 模块内引用
         t_db.upsert_daily_state({"buy_count": 1}, account="t")
         sql, params = db.calls[0]
-        assert "risk_breaker = COALESCE(EXCLUDED.risk_breaker, t_daily_state.risk_breaker)" in sql
-        assert params["risk_breaker"] is None          # 未提供 → NULL → 保留
+        assert "sell_count = COALESCE(EXCLUDED.sell_count, t_daily_state.sell_count)" in sql
+        assert params["sell_count"] is None          # 未提供 → NULL → 保留
         assert params["realized_pnl"] is None
 
-    def test_upsert_keeps_provided_risk_breaker(self, monkeypatch):
+    def test_risk_breaker_removed_from_ledger(self, monkeypatch):
+        """2026-09-11 用户决定**删除 risk_breaker 机制**（死字段：0 处写入、2 处只读）。
+
+        注意：这是行为变化——但该熔断**原本也从未生效**，删除只是把死代码清掉。
+        """
         db = _CapDB()
-        monkeypatch.setattr(t_db, "SessionLocal", lambda: db)   # 注意：t_db 是 from ... import，须 patch 模块内引用
-        t_db.upsert_daily_state({"risk_breaker": True, "breaker_reason": "日亏超限"}, account="t")
-        _, params = db.calls[0]
-        assert params["risk_breaker"] is True and params["breaker_reason"] == "日亏超限"
+        monkeypatch.setattr(t_db, "SessionLocal", lambda: db)
+        t_db.upsert_daily_state({"risk_breaker": True, "buy_count": 1}, account="t")
+        sql, params = db.calls[0]
+        assert "risk_breaker" not in sql
+        assert "risk_breaker" not in params
+        # 整个 payload 都是死字段 → 无有效字段，不写库
+        db2 = _CapDB()
+        monkeypatch.setattr(t_db, "SessionLocal", lambda: db2)
+        assert t_db.upsert_daily_state({"risk_breaker": True}, account="t") is False
+
+    def test_no_risk_breaker_read_in_gateway(self):
+        """熔断判定里不得再出现 risk_breaker 的**代码行**（否则等于复活一半机制）。"""
+        import inspect
+        src = inspect.getsource(t_gateway)
+        bad = [ln for ln in src.split("\n")
+               if "risk_breaker" in ln and not ln.strip().startswith("#")]
+        assert bad == [], bad
 
     def test_upsert_empty_payload_no_write(self, monkeypatch):
         db = _CapDB()

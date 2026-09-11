@@ -168,7 +168,7 @@ TRIGGER_SELL_EVENTS = frozenset({
     "high_sell", "high_sell_then_buy_back", "high_only", "stop_loss",
     "wolf_dao_t_sell", "wolf_confirm_sell", "wolf_day_end_de_t",
     "wolf_defensive_t_reduce", "wolf_defensive_t_reduce_index", "wolf_board_half_sell",
-    "wolf_profit_take_sell",
+    "wolf_profit_take_sell", "wolf_boll_upper_sell", "wolf_boll_mid_exit",
 })
 
 
@@ -569,8 +569,10 @@ def upsert_daily_state(state: Dict[str, Any], account: str = "t") -> bool:
       ② 原来对**未提供的字段**用默认值覆盖（例如 `risk_breaker` 没传就写 False）→
          任何一次成交都会把熔断标志清掉。改为：**只更新显式传入的字段**。
     """
+    # 2026-09-11：移除 risk_breaker / breaker_reason（死字段：0 处写入；用户决定删除该机制）。
+    # 表里的列保留（不动 schema），但不再参与读写。
     _FIELDS = ("daily_turnover_amount", "net_turnover_shares", "realized_pnl",
-               "buy_count", "sell_count", "risk_breaker", "breaker_reason")
+               "buy_count", "sell_count")
     _provided = {k: state[k] for k in _FIELDS if k in state}
     if not _provided:
         return False
@@ -582,10 +584,10 @@ def upsert_daily_state(state: Dict[str, Any], account: str = "t") -> bool:
                 """
                 INSERT INTO t_daily_state (
                     account_id, trade_date, daily_turnover_amount, net_turnover_shares,
-                    realized_pnl, buy_count, sell_count, risk_breaker, breaker_reason, updated_at
+                    realized_pnl, buy_count, sell_count, updated_at
                 ) VALUES (
                     :account, :trade_date, :daily_turnover_amount, :net_turnover_shares,
-                    :realized_pnl, :buy_count, :sell_count, :risk_breaker, :breaker_reason, now()
+                    :realized_pnl, :buy_count, :sell_count, now()
                 )
                 ON CONFLICT (account_id, trade_date) DO UPDATE SET
                     daily_turnover_amount = COALESCE(EXCLUDED.daily_turnover_amount, t_daily_state.daily_turnover_amount),
@@ -593,8 +595,6 @@ def upsert_daily_state(state: Dict[str, Any], account: str = "t") -> bool:
                     realized_pnl = COALESCE(EXCLUDED.realized_pnl, t_daily_state.realized_pnl),
                     buy_count = COALESCE(EXCLUDED.buy_count, t_daily_state.buy_count),
                     sell_count = COALESCE(EXCLUDED.sell_count, t_daily_state.sell_count),
-                    risk_breaker = COALESCE(EXCLUDED.risk_breaker, t_daily_state.risk_breaker),
-                    breaker_reason = COALESCE(EXCLUDED.breaker_reason, t_daily_state.breaker_reason),
                     updated_at = now()
                 """
             ), {
@@ -605,8 +605,6 @@ def upsert_daily_state(state: Dict[str, Any], account: str = "t") -> bool:
                 "realized_pnl": _provided.get("realized_pnl"),
                 "buy_count": _provided.get("buy_count"),
                 "sell_count": _provided.get("sell_count"),
-                "risk_breaker": (bool(_provided["risk_breaker"]) if "risk_breaker" in _provided else None),
-                "breaker_reason": _provided.get("breaker_reason"),
             })
             db.commit()
             return True
