@@ -159,3 +159,32 @@ class TestWiredIntoContext:
                                                         "directive": "", "active_sells": []})
         ctx = WD.discipline_context({"total_asset": 1_000_000, "principal": 800_000})
         assert "利润垫" in ctx
+
+
+class TestRealizedSource:
+    def test_prefers_paper_trades(self, monkeypatch):
+        """**权威口径 = paper_trades.profit 合计**（t_daily_state.realized_pnl 曾经恒 0）。"""
+        monkeypatch.setattr(PC, "realized_total", lambda account="t", force=False: 2828.49)
+        monkeypatch.setattr(PC, "realized_src", lambda: "paper_trades.profit")
+        s = PC.snapshot({"total_asset": 1_000_000, "principal": 1_000_000})
+        assert s["realized"] == pytest.approx(2828.49)
+        assert s["realized_src"] == "paper_trades.profit"
+
+    def test_read_realized_falls_back_and_labels(self, monkeypatch):
+        """paper_trades 读不到 → 回退 t_daily_state，并**标注兜底来源**。"""
+        class _Row:
+            def __init__(self, v): self._v = v
+            def __getitem__(self, i): return self._v
+        calls = {"n": 0}
+
+        class _DB:
+            def execute(self, *a, **k):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise RuntimeError("paper_trades 挂了")
+                return type("R", (), {"fetchone": lambda self: _Row(123.0)})()
+            def close(self): pass
+
+        monkeypatch.setattr("app.database.SessionLocal", lambda: _DB())
+        v, src = PC._read_realized("t")
+        assert v == 123.0 and "兜底" in src

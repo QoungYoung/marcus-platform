@@ -73,20 +73,38 @@ def _db_timeout() -> float:
 
 
 def _read_realized(account: str) -> Optional[float]:
+    """**权威口径 = `paper_trades.profit` 合计**（成交事实来源）。
+
+    ⚠️ `t_daily_state.realized_pnl` 在 2026-09-11 之前**从来没被写过**（生产实测 10 个交易日全 0，
+    同期 paper_trades 有 22 笔非零 profit），所以**不能拿它当主口径**；本轮已同时修好写入方
+    （t_gateway._update_daily_ledger 现按 paper_trades 补写），这里仍以 paper_trades 为准。
+    返回 (值, 来源)。
+    """
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    db = SessionLocal()
     try:
-        from sqlalchemy import text
-        from app.database import SessionLocal
-        db = SessionLocal()
-        try:
-            row = db.execute(text(
-                "SELECT COALESCE(SUM(realized_pnl), 0) FROM t_daily_state WHERE account_id = :a"
-            ), {"a": account}).fetchone()
-            return float(row[0] or 0) if row else 0.0
-        finally:
-            db.close()
+        row = db.execute(text(
+            "SELECT COALESCE(SUM(profit), 0) FROM paper_trades "
+            "WHERE account_id = :a AND COALESCE(voided, false) = false"
+        ), {"a": account}).fetchone()
+        v = float(row[0] or 0) if row else 0.0
+        return v, "paper_trades.profit"
+    except Exception as e:
+        print(f"[cushion] 读 paper_trades 失败: {type(e).__name__}: {str(e)[:70]}")
+    try:
+        row = db.execute(text(
+            "SELECT COALESCE(SUM(realized_pnl), 0) FROM t_daily_state WHERE account_id = :a"
+        ), {"a": account}).fetchone()
+        return (float(row[0] or 0) if row else 0.0), "t_daily_state.realized_pnl(兜底)"
     except Exception as e:
         print(f"[cushion] 读 t_daily_state 失败: {type(e).__name__}: {str(e)[:70]}")
-        return None
+        return None, None
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 def realized_total(account: str = "t", force: bool = False) -> Optional[float]:
@@ -106,20 +124,25 @@ def realized_total(account: str = "t", force: bool = False) -> Optional[float]:
 
     def _w():
         try:
-            box["v"] = _read_realized(account)
+            box["v"], box["src"] = _read_realized(account)
         except Exception as e:          # _read_realized 内部已兜底，这里再兜一层
             print(f"[cushion] 读库异常: {type(e).__name__}: {str(e)[:60]}")
     th = threading.Thread(target=_w, daemon=True)
     th.start()
     th.join(_db_timeout())
     if th.is_alive():
-        print(f"[cushion] 读 t_daily_state 超过 {_db_timeout()}s → 放弃（按数据不可用处理）")
+        print(f"[cushion] 读已实现盈利超过 {_db_timeout()}s → 放弃（按数据不可用处理）")
         _CACHE.update({"at": now, "acct": account, "value": None, "ttl": _fail_ttl()})
         return None
     v = box.get("v")
-    _CACHE.update({"at": now, "acct": account, "value": v,
+    _CACHE.update({"at": now, "acct": account, "value": v, "src": box.get("src"),
                    "ttl": _ttl() if v is not None else _fail_ttl()})
     return v
+
+
+def realized_src() -> Optional[str]:
+    """上次读取用的数据源（写进快照，便于核查口径）。"""
+    return _CACHE.get("src")
 
 
 def _principal(portfolio: Optional[Dict[str, Any]], realized: float,
@@ -159,7 +182,7 @@ def snapshot(portfolio: Optional[Dict[str, Any]] = None,
     principal, psrc = _principal(p, realized, total_asset)
     risk_base = principal + keep * realized if principal > 0 else 0.0
     mult = round(risk_base / principal, 4) if principal > 0 else None
-    out = {"ok": True, "realized": round(realized, 2), "keep_ratio": keep,
+    out = {"ok": True, "realized": round(realized, 2), "realized_src": realized_src(), "keep_ratio": keep,
            "kept": round(keep * realized, 2), "taken": round((1 - keep) * realized, 2),
            "principal": round(principal, 2), "principal_src": psrc,
            "total_asset": round(total_asset, 2),

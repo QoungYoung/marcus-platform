@@ -271,11 +271,40 @@ def check_breakers() -> Tuple[bool, str]:
     return False, ""
 
 
+def _realized_today(account: str = "t") -> float:
+    """**当日已实现盈亏（权威口径）= paper_trades 当日 profit 合计**（未 void）。
+
+    ⚠️ 2026-09-11 修：原来 `_daily_pnl_pct()` 只读 `t_daily_state.realized_pnl`，
+    而该列**从来没被写过**（`_update_daily_ledger` 的注释写着"realized_pnl 由引擎成交推送补全"，
+    但没有任何调用方补；生产实测 10 个交易日全为 0，同期 paper_trades 有 22 笔非零 profit）
+    → 结果是 **"日亏 1% 预警"（本文件 line 549/775 与 t_build B7）从来没触发过**。
+    改为直接以 paper_trades 为准（该表由成交写入，是事实来源）。
+    """
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            row = db.execute(text(
+                "SELECT COALESCE(SUM(profit), 0) FROM paper_trades "
+                "WHERE account_id = :a AND trade_date = :d AND COALESCE(voided, false) = false"
+            ), {"a": account, "d": datetime.now().strftime("%Y-%m-%d")}).fetchone()
+            return float(row[0] or 0) if row else 0.0
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[t-gate] 当日已实现盈亏读取失败: {type(e).__name__}: {str(e)[:70]}")
+        daily = t_db.get_daily_state() or {}
+        return float(daily.get("realized_pnl") or 0)
+
+
 def _daily_pnl_pct() -> float:
-    """当日已实现盈亏 / 初始资金 百分比（近似，基准用 t 账户当前净值）。"""
-    daily = t_db.get_daily_state() or {}
+    """当日已实现盈亏 / 初始资金 百分比（近似，基准用 t 账户当前净值）。
+
+    口径见 `_realized_today()`（paper_trades 当日 profit 合计）。
+    """
     initial = t_net_asset()
-    realized = float(daily.get("realized_pnl") or 0)
+    realized = _realized_today()
     return realized / initial * 100 if initial else 0.0
 
 
@@ -865,10 +894,16 @@ def _update_daily_ledger(symbol: str, side: str, price: float, volume: int):
         amount = float(daily.get("daily_turnover_amount") or 0) + price * volume
         buy_count = int(daily.get("buy_count") or 0) + (1 if side == "buy" else 0)
         sell_count = int(daily.get("sell_count") or 0) + (1 if side == "sell" else 0)
-        t_db.upsert_daily_state({
+        # 2026-09-11：**补上原来没人写的 realized_pnl**（以 paper_trades 当日 profit 合计为准）
+        payload = {
             "daily_turnover_amount": round(amount, 2),
             "buy_count": buy_count,
             "sell_count": sell_count,
-        })
+        }
+        try:
+            payload["realized_pnl"] = round(_realized_today(), 2)
+        except Exception as _pe:
+            print(f"[t-gate] 日账本 realized_pnl 补写失败(忽略): {str(_pe)[:60]}")
+        t_db.upsert_daily_state(payload)
     except Exception as e:
         print(f"[t-gate] 日账本更新失败: {e}")
