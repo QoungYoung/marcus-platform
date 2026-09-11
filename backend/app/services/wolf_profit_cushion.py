@@ -84,14 +84,19 @@ def _read_realized(account: str) -> Optional[float]:
     from app.database import SessionLocal
     db = SessionLocal()
     try:
+        # ⚠️ paper_trades.voided 是 **integer**（不是 boolean）→ 必须用 0，否则 DatatypeMismatch
         row = db.execute(text(
             "SELECT COALESCE(SUM(profit), 0) FROM paper_trades "
-            "WHERE account_id = :a AND COALESCE(voided, false) = false"
+            "WHERE account_id = :a AND COALESCE(voided, 0) = 0"
         ), {"a": account}).fetchone()
         v = float(row[0] or 0) if row else 0.0
         return v, "paper_trades.profit"
     except Exception as e:
         print(f"[cushion] 读 paper_trades 失败: {type(e).__name__}: {str(e)[:70]}")
+        try:
+            db.rollback()          # 失败后事务已 abort → 不 rollback 的话兜底查询必挂（实测踩过）
+        except Exception:
+            pass
     try:
         row = db.execute(text(
             "SELECT COALESCE(SUM(realized_pnl), 0) FROM t_daily_state WHERE account_id = :a"

@@ -188,3 +188,17 @@ class TestRealizedSource:
         monkeypatch.setattr("app.database.SessionLocal", lambda: _DB())
         v, src = PC._read_realized("t")
         assert v == 123.0 and "兜底" in src
+
+
+class TestSqlTypes:
+    def test_voided_is_integer_not_boolean(self):
+        """paper_trades.voided 是 integer 列 → SQL 必须用 COALESCE(voided, 0) = 0。
+
+        生产实测：写成 COALESCE(voided, false) 会 DatatypeMismatch（且失败后事务 abort，
+        不 rollback 的话兜底查询也挂）——这里用源码断言防回归。
+        """
+        import inspect
+        src = inspect.getsource(PC._read_realized)
+        assert "COALESCE(voided, 0) = 0" in src
+        assert "voided, false" not in src
+        assert "db.rollback()" in src
