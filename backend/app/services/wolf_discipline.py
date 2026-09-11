@@ -540,6 +540,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d4)
     except Exception:
         pass
+    # A10 BOLL 上轨（2026-09-11）：他 2025-04-15 当日卖出条件之一 + 2026-04-29 明确动作
+    try:
+        from app.services.wolf_boll_levels import directive as _boll_dir
+        _d10 = _boll_dir(portfolio, quotes)
+        if _d10:
+            parts.append(_d10)
+    except Exception:
+        pass
     # C1 利润垫（2026-09-11）：他 2026-01-27「这个钱取一半留一半…仓位就比没有利润垫要大了」
     try:
         from app.services.wolf_profit_cushion import directive as _pc_dir

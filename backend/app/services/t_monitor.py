@@ -143,6 +143,7 @@ class TMonitor:
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                     self._check_profit_take()  # 小赚兑现(P0-3, 默认关): 浮盈>=阈值→减仓锁定(保留底仓)
+                    self._check_boll_sell()  # A10 BOLL上轨减半锁利(2026-09-11, 狼大 2026-04-29)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
                     self._check_index_level_stop()  # ③ 指数大级别止损(狼大2026-08-27): 转下跌1浪→止损
                     self._check_logic_time_stop()  # ① 后半句: 13日内未碰前高→逻辑时间离场(狼大2026-03-05)
@@ -593,6 +594,45 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] board_half异常: {e}")
+
+    def _check_boll_sell(self) -> None:
+        """A10 BOLL 上轨减半锁利（2026-09-11）。
+
+        狼大 2026-04-29「当出现 股价分时毫无理由地急速拉升，**触及上方大级别压力位(如BOLL上轨)时，
+        逢高卖出部分底仓、锁定利润**」+ 2026-01-13「偏离太多 **先卖一半** 等回归BOLL轨内再接回」
+        → 持仓**触及日线 BOLL(20,2) 上轨且浮盈>0** 时，写 wolf_boll_upper_sell（减半，复用 trigger 管道），
+        当日去抖。`WOLF_BOLL_SELL=0` 关。
+        """
+        try:
+            from app.services.wolf_boll_levels import active_sells, enabled as _boll_on
+            if not _boll_on():
+                return
+            from app.services.t_pool import _get_positions
+            import json as _j, datetime as _dt
+            pos_list = _get_positions()
+            held = [p for p in pos_list if float(p.get('volume') or 0) > 0]
+            if not held:
+                return
+            xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
+            quotes = fetch_tencent_quote(xq_syms)
+            qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
+                        'high': float((quotes.get(s) or {}).get('high', 0) or 0),
+                        'pre_close': float((quotes.get(s) or {}).get('pre_close', 0) or 0)} for s in xq_syms}
+            portfolio = {"positions": [{"symbol": _normalize_symbol(p.get('symbol')),
+                                        "avg_cost": float(p.get('avg_price') or p.get('avg_cost') or 0),
+                                        "volume": float(p.get('volume') or 0)} for p in held]}
+            r = active_sells(portfolio, quotes=qmap)
+            today = _dt.datetime.now().strftime('%Y%m%d')
+            for sl in r.get('active_sells') or []:
+                sym = sl.get('symbol')
+                if (sym, 'wolf_boll_upper_sell', today) in self._wolf_done:
+                    continue
+                q = quotes.get(sym) or {}
+                self._insert_wolf_trigger(sym, 'wolf_boll_upper_sell', q, sl.get('reason', 'BOLL上轨减半锁利'))
+                self._wolf_done.add((sym, 'wolf_boll_upper_sell', today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] boll_sell异常: {e}", flush=True)
 
     def _check_profit_take(self) -> None:
         """小赚兑现(P0-3, 2026-09-10): 持仓浮盈 >= 阈值 → 写 wolf_profit_take_sell 减仓(保留底仓)。
@@ -1343,6 +1383,26 @@ class TMonitor:
             "resistance_l2": _r2,
             "break_support": bool(_s1 > 0 and _cur <= _s1),
         }
+        # ── A10 BOLL（2026-09-11, wolf_boll_levels）──
+        # 他 2025-04-15「个股在区间震荡的时候碰到了自己各种压力位，比如均线或BOLL上轨」；
+        # 2026-04-29「触及上方大级别压力位(如BOLL上轨)时，逢高卖出部分底仓、锁定利润」。
+        # 带 5 分钟缓存 + 失败即 None（不影响其它字段）。
+        try:
+            from app.services.wolf_boll_levels import levels as _boll_levels, touch_upper as _boll_touch
+            _bl = _boll_levels(symbol)
+            if _bl:
+                snapshot["quote"]["boll_upper"] = float(_bl["upper"])
+                snapshot["quote"]["boll_mid"] = float(_bl["mid"])
+                snapshot["quote"]["boll_lower"] = float(_bl["lower"])
+                snapshot["quote"]["boll_upper_touch"] = bool(
+                    _boll_touch(_bl, _cur, float(quote.get("high", 0) or 0)))
+            else:
+                snapshot["quote"].update({"boll_upper": 0.0, "boll_mid": 0.0,
+                                          "boll_lower": 0.0, "boll_upper_touch": False})
+        except Exception as _be:
+            print(f"[TMonitor] BOLL 计算异常(忽略) {symbol}: {str(_be)[:70]}", flush=True)
+            snapshot["quote"].update({"boll_upper": 0.0, "boll_mid": 0.0,
+                                      "boll_lower": 0.0, "boll_upper_touch": False})
         # vol_ratio（盘中量比归一）
         vr = self._calc_volume_ratio(cond, quote)
         snapshot["vol_ratio"] = vr if vr is not None else 0.0

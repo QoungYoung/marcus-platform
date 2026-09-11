@@ -92,6 +92,11 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     # 狼大不用百分比移动止损, 属审计 §5.2 认定的自造机制。字段保留但恒 False(见 t_monitor 快照),
     # 以便存量条件(t_conditions 中引用 quote.trail_break 的 custom_trail_sell 腿)继续可求值、但不触发。
     "quote.trail_break": ("bool", "【已删除机制】恒 False(原动态移动止盈, 2026-09-10 移除)", "t_monitor"),
+    # ── BOLL（A10 2026-09-11, wolf_boll_levels；他 2025-04-15「区间震荡时碰到…均线或BOLL上轨」）──
+    "quote.boll_upper": ("number", "日线BOLL(20,2)上轨", "wolf_boll_levels"),
+    "quote.boll_mid": ("number", "日线BOLL(20,2)中轨（他当强弱分界用）", "wolf_boll_levels"),
+    "quote.boll_lower": ("number", "日线BOLL(20,2)下轨", "wolf_boll_levels"),
+    "quote.boll_upper_touch": ("bool", "当日最高价触及/上穿BOLL上轨", "wolf_boll_levels"),
     # ── 波段支撑/压力位（步骤① 2026-09-08, support_resistance.compute_levels, 10min TTL）──
     "quote.support_l1": ("number", "最近波段支撑(现价下方最近)", "support_resistance"),
     "quote.support_l2": ("number", "次近波段支撑", "support_resistance"),
