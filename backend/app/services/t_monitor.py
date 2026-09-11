@@ -1078,6 +1078,7 @@ class TMonitor:
         # 否则各自按轮初旧账本各卖一次把底仓卖穿, 512480 14:14 事故)
         self._sold_this_round = set()
         written = 0
+        _go_caution = {"computed": False, "reason": None}   # A6/A9 谨慎条件：每轮惰性算一次
         for cond in conditions:
             symbol = cond["symbol"]
             if not _board_tradable(symbol):
@@ -1103,6 +1104,27 @@ class TMonitor:
                             continue
                 except Exception as _twe:
                     print(f"[TMonitor] 时间窗判定异常(放行) {symbol}: {str(_twe)[:80]}", flush=True)
+                # ── A6/A9 谨慎4条（2026-09-11, 狼大 2025-04-15 条件4 后段）──
+                # 「如果当出现以下情况时，操作谨慎，尽量不要加仓进场：1 黄线迅速下穿白线，放量。
+                #   2 黄白线交织，缩大量。3 白线迅速上穿黄线：缩量，4 接近大指数级别压力位附近」
+                # 与 A5 同一组腿型（日内做T买腿=加仓/回补语义），命中则**拦**；
+                # 交叉类条件需 spread 历史，样本不足时不触发（fail-open，绝不误拦）。
+                try:
+                    from app.services.wolf_gap_open import block_reason as _go_block
+                    from app.services.wolf_trade_window import applies_to as _tw_applies2
+                    if _tw_applies2(cond.get("trigger_kind")):
+                        if not _go_caution["computed"]:      # 每轮只算一次（内含多源取数）
+                            _go_caution["computed"] = True
+                            _go_caution["reason"] = _go_block()
+                        if _go_caution["reason"]:
+                            _ck = (symbol, "gapcaution", datetime.now().strftime('%Y%m%d'))
+                            if _ck not in _STOP_HOLD_WARNED:
+                                _STOP_HOLD_WARNED.add(_ck)
+                                print(f"[TMonitor] 谨慎条件命中，跳过加仓/回补买腿 {symbol}"
+                                      f"({cond.get('trigger_kind')}): {_go_caution['reason']}", flush=True)
+                            continue
+                except Exception as _goe:
+                    print(f"[TMonitor] 高低开/缺口判定异常(放行) {symbol}: {str(_goe)[:80]}", flush=True)
             quote = quotes.get(_normalize_symbol(symbol))
             if not quote or not quote.get("current"):
                 continue

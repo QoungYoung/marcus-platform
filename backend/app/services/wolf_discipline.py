@@ -518,6 +518,15 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d3)
     except Exception:
         pass
+    # A6/A9 高低开+跳空缺口+量能实时对比（2026-09-11）：他 2025-04-15 条件4 的两个现象
+    # + 其后"操作谨慎，尽量不要加仓进场"的 4 条
+    try:
+        from app.services.wolf_gap_open import directive as _go_dir
+        _d4 = _go_dir()
+        if _d4:
+            parts.append(_d4)
+    except Exception:
+        pass
     if pc.get("directive"):
         parts.append(pc["directive"])
     if wd.get("active"):

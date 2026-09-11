@@ -41,6 +41,70 @@ from typing import Any, Dict, Optional, Tuple
 
 _CACHE: Dict[str, Any] = {"at": 0.0, "value": None}
 _LOCK = threading.Lock()
+# spread 采样序列（A9 谨慎4条里"黄线迅速下穿白线 / 黄白线交织"需要**走向**不只是瞬时值）。
+# 每次成功取数（t_monitor 每 30s 轮询会调）追加一条；进程重启即清空 → 样本不足时
+# cross_recent()/whipsaw() 返回 None（fail-open，宁可不拦也不误拦），并在 directive 里标注。
+_HIST: "collections.deque" = None
+
+
+def _hist():
+    global _HIST
+    if _HIST is None:
+        import collections
+        _HIST = collections.deque(maxlen=400)      # 30s 采样 × 400 ≈ 3.3 小时，覆盖整个交易日
+    return _HIST
+
+
+def _cross_win() -> float:
+    try:
+        return float(os.getenv("WOLF_HB_CROSS_WIN", "15")) * 60.0
+    except Exception:
+        return 900.0
+
+
+def _cross_eps() -> float:
+    try:
+        return float(os.getenv("WOLF_HB_CROSS_EPS", "0.05"))
+    except Exception:
+        return 0.05
+
+
+def cross_recent(now: Optional[float] = None) -> Optional[str]:
+    """最近窗口内是否发生**黄白线交叉** → 'down'(黄线下穿白线/白线上穿黄线, spread 正→负)
+    / 'up'(反向) / None(无交叉或样本不足)。
+
+    他的谨慎条件 1「黄线**迅速下穿**白线，放量」与 3「白线**迅速上穿**黄线：缩量」在几何上是
+    **同一个事件**（spread = 黄−白 由正转负），区别只在量能 → 本函数只判事件，量能由调用方判。
+    """
+    h = _hist()
+    now = now or time.time()
+    wn = [x for x in h if now - x[0] <= _cross_win()]
+    if len(wn) < 2:
+        return None
+    eps = _cross_eps()
+    sig = [1 if x[1] > eps else (-1 if x[1] < -eps else 0) for x in wn]
+    sig = [s for s in sig if s != 0]
+    if len(sig) < 2:
+        return None
+    for a, b in zip(sig, sig[1:]):
+        if a > 0 and b < 0:
+            return "down"
+        if a < 0 and b > 0:
+            return "up"
+    return None
+
+
+def whipsaw_recent(now: Optional[float] = None) -> Optional[int]:
+    """最近窗口内**符号翻转次数**（他条件2「黄白线**交织**」的量化）：样本不足 → None。"""
+    h = _hist()
+    now = now or time.time()
+    wn = [x for x in h if now - x[0] <= _cross_win()]
+    if len(wn) < 4:
+        return None
+    eps = _cross_eps()
+    sig = [1 if x[1] > eps else (-1 if x[1] < -eps else 0) for x in wn]
+    sig = [s for s in sig if s != 0]
+    return sum(1 for a, b in zip(sig, sig[1:]) if a != b)
 
 
 def enabled() -> bool:
@@ -154,6 +218,10 @@ def huang_bai(force: bool = False) -> Optional[Dict[str, Any]]:
                "side": classify(spread), "n": n, "scope": scope, "proxy": proxy,
                "ts": int(now), "stale": False}
         _CACHE.update({"at": now, "value": val})
+        try:
+            _hist().append((now, spread))       # 供 cross_recent/whipsaw（A9 谨慎条件）用
+        except Exception:
+            pass
         return val
     finally:
         _LOCK.release()
