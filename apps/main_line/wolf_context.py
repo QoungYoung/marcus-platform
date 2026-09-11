@@ -59,6 +59,9 @@ THEME_STAGE_ALLOW = {"confirmed"}
 SYSTEMIC_BLOCK_SUB = {"C杀", "衰竭浪", "双头/M顶", "4-5", "失败5"}
 SYSTEMIC_BLOCK_LEVEL = {"down"}
 
+# ── ③ 指数大级别止损（2026-08-27 狼大原话）: 他说"只看指数大级别"→ 判据只取 level ──
+INDEX_STOP_LEVELS = {"down"}
+
 
 def _load(name):
     try:
@@ -316,6 +319,47 @@ def theme_buyable(theme):
     if dg:
         return False, dr
     return True, "主题[%s] 可买: stage=%s verdict=%s | %s" % (theme, stage, st.get("verdict"), dr)
+
+
+def index_level_stop(wave=None, today=None, max_stale_days=None):
+    """**指数大级别止损**信号（狼大止损六层之③，2026-09-10, 依 2026-08-27 549楼原话）。
+
+    狼大原话:
+    「**只看指数大级别**如果不走大5浪而转为下跌1浪就止损 。。。。你们能不能看前面的啊。。」
+    （2026-08-27，**就在本轮回测窗口内**）
+
+    → 语义: 大4 调整之后本应走大5（主升末段）; 若指数**大级别转为下跌**而不是走大5, 则止损。
+    → 他说"**只看指数大级别**" → 判据**只取 level**, 不掺 sub_level/operation（避免自造复合条件）。
+       本仓 wave_agent 的 level 取值域为 d1/d2/d3/d4/d5/down → "转为下跌1浪" 即 **level == "down"**。
+
+    **新鲜度护栏**: wave_state 由 08:10 产出; 若其 date 距 today 超过 max_stale_days(默认 3 自然日),
+    视为数据过期 → **不触发**(避免拿过期浪型做清仓级动作), 并在 reason 中说明。
+
+    返回 (should_stop: bool, reason: str)。
+    """
+    w = wave if wave is not None else load_wave()
+    lv = str(w.get("level") or "").strip().lower()
+    wd = str(w.get("date") or "").strip()
+    if not lv:
+        return False, "无指数浪型数据 → 不触发"
+    # 新鲜度护栏
+    try:
+        n = int(max_stale_days if max_stale_days is not None else os.getenv("WOLF_INDEX_STOP_MAX_STALE_DAYS", "3"))
+    except Exception:
+        n = 3
+    if today and wd and n >= 0:
+        import datetime as _dt
+        try:
+            d1 = _dt.date(int(wd[:4]), int(wd[4:6]), int(wd[6:8]))
+            d2 = _dt.date(int(str(today)[:4]), int(str(today)[4:6]), int(str(today)[6:8]))
+            if (d2 - d1).days > n:
+                return False, "指数浪型数据过期(wave_state.date=%s, 距今 %d 天 > %d) → 不触发" % (
+                    wd, (d2 - d1).days, n)
+        except Exception:
+            pass
+    if lv in INDEX_STOP_LEVELS:
+        return True, "指数大级别止损: level=%s（狼大2026-08-27: 不走大5浪而转为下跌1浪就止损, date=%s）" % (lv, wd or "?")
+    return False, "指数级别=%s, 未转下跌 → 不触发" % lv
 
 
 def systemic_block(wave=None):

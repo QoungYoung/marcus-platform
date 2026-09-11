@@ -138,6 +138,7 @@ class TMonitor:
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                     self._check_profit_take()  # 小赚兑现(P0-3, 默认关): 浮盈>=阈值→减仓锁定(保留底仓)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
+                    self._check_index_level_stop()  # ③ 指数大级别止损(狼大2026-08-27): 转下跌1浪→止损
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
@@ -593,6 +594,74 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] position_discipline异常: {e}")
+
+    def _check_index_level_stop(self) -> None:
+        """③ 指数大级别止损（2026-09-10，狼大 2026-08-27 549楼原话）。
+
+        狼大:「**只看指数大级别**如果不走大5浪而转为下跌1浪就止损」。
+        信号 = wolf_context.index_level_stop(): 指数(上证) wave_state.level == "down"（**只取大级别**,
+               不掺 sub_level/operation, 依他"只看大级别"的原话）, 带**新鲜度护栏**(浪型数据过期则不触发)。
+
+        动作 = 对账户内所有持仓执行止损:
+          · 卖出量复用 _stop_exit_volume（收盘窗口→清仓 / 盘中→减半仓, 与个股止损同一分级;
+            理由: 不新造第二套量级规则, 避免 S7 那种并行口径）;
+          · 受 ④ 时点门约束(_stop_time_ok: 13:00-14:30 仅预警不执行);
+          · 走网关 is_stop_loss=True（止损单豁免日亏损熔断）。
+        开关: WOLF_INDEX_LEVEL_STOP=0 关闭。去抖: 每标的每日一次。
+        """
+        try:
+            if os.getenv("WOLF_INDEX_LEVEL_STOP", "1").strip() in ("0", "false", "no"):
+                return
+            import sys as _sp
+            _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps", "main_line")
+            if _p not in _sp.path:
+                _sp.path.insert(0, _p)
+            from wolf_context import index_level_stop
+            _today = datetime.now().strftime('%Y%m%d')
+            _stop, _why = index_level_stop(today=_today)
+            if not _stop:
+                return
+            _tok, _treason = _stop_time_ok()
+            if not _tok:
+                _tk = ("__index__", "timegate", _today)
+                if _tk not in _STOP_HOLD_WARNED:
+                    _STOP_HOLD_WARNED.add(_tk)
+                    print(f"[TMonitor] 指数级止损被时点门拦下(仅预警): {_why} | {_treason}")
+                return
+            from app.services.t_pool import _get_positions
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger
+            _acct = T_MONITOR_ACCOUNT
+            _ledger = get_sellable_ledger(account_id=_acct) or {}
+            _rows = []
+            for p in (_get_positions() or []):
+                if float(p.get('volume') or 0) <= 0:
+                    continue
+                _sym = _normalize_symbol(p.get('symbol'))
+                _sellable = int((_ledger.get(_sym) or {}).get("sellable", 0) or 0)
+                if _sellable > 0:
+                    _rows.append((_sym, _sellable))
+            if not _rows:
+                return
+            _quotes = fetch_tencent_quote([s for s, _ in _rows])
+            _close_win = _in_close_window()
+            for _sym, _sellable in _rows:
+                if (_sym, 'wolf_index_level_stop', _today) in self._wolf_done:
+                    continue
+                _q = _quotes.get(_sym) or {}
+                _cur = float(_q.get("current") or 0)
+                if _cur <= 0:
+                    continue
+                _vol, _mode = _stop_exit_volume(_sellable, _close_win)
+                if _vol <= 0:
+                    continue
+                _gw = gateway_execute(_sym, "sell", _cur, _vol,
+                                      reason="指数大级别止损→%s（%s）" % (_mode, _why),
+                                      decision_source="rule", is_stop_loss=True, account_id=_acct)
+                print(f"[TMonitor] 指数级止损 {_sym} @ {_cur} x{_vol}[{_mode}]: {_gw.get('status')} | {_why}")
+                self._wolf_done.add((_sym, 'wolf_index_level_stop', _today))
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] index_level_stop异常: {e}")
 
     def _roll_wolf_legs(self, today: str) -> int:
         """狼大持续腿跨日结转（2026-09-03 修复生产监控条件丢失）。
