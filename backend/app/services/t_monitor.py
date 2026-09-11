@@ -82,6 +82,8 @@ class TMonitor:
         self._wolf_sold_today = set()    # (symbol, date) 当日确认制T出已卖
         # ① 建仓初期波段逻辑止损: 建仓日锚点缓存 {(account, symbol, today): 'YYYY-MM-DD'|None}
         self._buy_date_cache: Dict[Any, Optional[str]] = {}
+        # 带日期日K缓存 {(symbol, today, n): bars}（含实时源兜底, 避免 30s 轮次重复请求）
+        self._dated_cache: Dict[Any, List[dict]] = {}
 
     # ── 生命周期 ──
     def start(self) -> bool:
@@ -252,8 +254,21 @@ class TMonitor:
         与 _prev_daily 同源（data/{stock_5m_bt,recent_sync}/{code6}.json），但**保留日期** ——
         ①建仓初期波段逻辑止损要按"建仓日"锚定（波段低点 = 建仓日之前的最低、持有天数 = 建仓日之后的根数），
         没有日期就无法锚定（_prev_daily 丢掉了 key）。
+
+        **实时源兜底（2026-09-11 生产实测后加）**：
+          data/stock_5m_bt（37 个文件，最新 mtime 2026-09-03 14:25）与 data/recent_sync
+          （14 个文件，2026-09-03 21:21）都是**一次性导出**，**没有常驻同步任务** —— 当日实测
+          当前在册 13 个标的里 **0 个新鲜**（3 个停在 09-03、10 个根本没有文件）。
+          若不补齐，依赖本函数的机制（①结构止损 / ①后半句逻辑时间离场）会**恒不动作**（"静默失效"）。
+          → 本地缓存最新日期早于"今天-2 自然日"时，用 `t_build._fetch_daily_bars`（Tushare 主源、
+            东财降级）补最近 n 根；取不到就用本地现有的，**绝不因为取不到而当成"没有数据就卖/不卖"以外的判断**。
+          可用 `WOLF_DATED_LIVE_FALLBACK=0` 关掉兜底。结果按 (symbol, today, n) 缓存，避免 30s 轮次重复请求。
         """
         import os as _os, json as _j
+        today = datetime.now().strftime('%Y%m%d')
+        ck = (sym, today, n)
+        if ck in self._dated_cache:
+            return self._dated_cache[ck]
         D = _os.environ.get('DATA_DIR', '/app/data')
         code6 = ''.join(ch for ch in str(sym) if ch.isdigit())[:6]
         data = {}
@@ -270,11 +285,38 @@ class TMonitor:
                                         'high': max(float(b['high']) for b in bs),
                                         'low': min(float(b['low']) for b in bs),
                                         'vol': sum(float(b.get('vol') or 0) for b in bs)})
-        today = datetime.now().strftime('%Y%m%d')
         days = sorted(k for k in data if k < today and data[k].get('vol'))
         out = []
         for k in days[-n:]:
             r = dict(data[k]); r['date'] = str(k); out.append(r)
+        if _os.getenv("WOLF_DATED_LIVE_FALLBACK", "1").strip() not in ("0", "false", "no"):
+            from datetime import timedelta
+            _last = out[-1]['date'] if out else ''
+            _cut = (datetime.now() - timedelta(days=2)).strftime('%Y%m%d')
+            if not _last or _last < _cut:
+                try:
+                    from app.services.t_build import _fetch_daily_bars
+                    lb = _fetch_daily_bars(sym, count=n) or []
+                    _live = []
+                    for b in lb:
+                        _d = str(b.get('date') or '').replace('-', '')[:8]
+                        if not _d or _d >= today:
+                            continue
+                        try:
+                            _live.append({'date': _d, 'close': float(b.get('close') or 0),
+                                          'high': float(b.get('high') or 0),
+                                          'low': float(b.get('low') or 0),
+                                          'vol': float(b.get('vol') or 0)})
+                        except Exception:
+                            continue
+                    if _live:
+                        if _last:
+                            print(f"[TMonitor] _daily_dated 本地缓存过期({sym} 停在 {_last}) → 实时源补齐 "
+                                  f"{len(_live)} 根(至 {_live[-1]['date']})")
+                        out = sorted(_live, key=lambda x: x['date'])[-n:]
+                except Exception as _e:
+                    print(f"[TMonitor] _daily_dated 实时源补齐失败 {sym}: {str(_e)[:100]}（用本地缓存）")
+        self._dated_cache[ck] = out
         return out
 
     def _buy_date(self, sym, today=None):

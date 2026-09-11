@@ -32,7 +32,8 @@ def make_bars(n, start_low=10.0, start="20260801"):
 def _clean_env():
     keys = ["WOLF_EARLY_STOP", "WOLF_EARLY_STOP_DAYS", "WOLF_SWING_LOW_WIN", "WOLF_EARLY_STOP_PCT",
             "WOLF_NEG_EVENT", "WOLF_NEG_EVENT_DAYS",
-            "WOLF_LOGIC_TIME_STOP", "WOLF_LOGIC_TIME_STOP_DAYS", "WOLF_SWING_HIGH_WIN"]
+            "WOLF_LOGIC_TIME_STOP", "WOLF_LOGIC_TIME_STOP_DAYS", "WOLF_SWING_HIGH_WIN",
+            "WOLF_DATED_LIVE_FALLBACK"]
     old = {k: os.environ.get(k) for k in keys}
     for k in keys:
         os.environ.pop(k, None)
@@ -375,3 +376,87 @@ class TestLogicTimeStop:
         os.environ["WOLF_SWING_HIGH_WIN"] = "5"
         # 窗口缩短 → 前高仍是 12.0（买点前 5 根都是 12.0）→ 仍不碰
         assert W.logic_time_stop(bars, bars[9]["date"])[0] is True
+
+
+class TestDailyDatedLiveFallback:
+    """_daily_dated 的**实时源兜底**（2026-09-11 生产实测后加）。
+
+    生产 data/stock_5m_bt 与 data/recent_sync 是 **2026-09-03 的一次性导出**、无常驻同步任务
+    → 当前在册 13 个标的里 0 个新鲜 → 不补齐则 ① 两个机制恒不动作（静默失效）。
+    """
+
+    def _mon(self, tmp_path):
+        import sys as _s
+        from pathlib import Path as _P
+        _root = _P(__file__).resolve().parents[2]
+        if str(_root / "backend") not in _s.path:
+            _s.path.insert(0, str(_root / "backend"))
+        os.environ["DATA_DIR"] = str(tmp_path)
+        from app.services.t_monitor import TMonitor
+        return TMonitor()
+
+    @staticmethod
+    def _write_local(tmp_path, code6, dates):
+        import json
+        d = tmp_path / "stock_5m_bt"
+        d.mkdir(exist_ok=True)
+        obj = {dt: [{"time": dt + "1000", "close": 10.0, "high": 10.5, "low": 9.5, "vol": 100.0},
+                    {"time": dt + "1030", "close": 10.2, "high": 10.8, "low": 9.6, "vol": 120.0}]
+               for dt in dates}
+        (d / (code6 + ".json")).write_text(json.dumps(obj), encoding="utf-8")
+
+    @staticmethod
+    def _stub_live(monkeypatch, bars, calls):
+        import app.services.t_build as TB
+
+        def fake(symbol, count=40, as_of=None):
+            calls.append(symbol)
+            return bars
+        monkeypatch.setattr(TB, "_fetch_daily_bars", fake, raising=True)
+
+    def test_stale_local_uses_live(self, tmp_path, monkeypatch):
+        today = __import__("datetime").datetime.now().strftime("%Y%m%d")
+        self._write_local(tmp_path, "600519", ["20260820", "20260821"])
+        calls = []
+        live = [{"date": "20260908", "close": 1.0, "high": 1.1, "low": 0.9, "vol": 1.0},
+                {"date": "20260909", "close": 2.0, "high": 2.1, "low": 1.9, "vol": 1.0},
+                {"date": today, "close": 3.0, "high": 3.1, "low": 2.9, "vol": 1.0}]
+        self._stub_live(monkeypatch, live, calls)
+        bars = self._mon(tmp_path)._daily_dated("SH600519", 20)
+        assert calls == ["SH600519"]                      # 调用了实时源
+        assert [b["date"] for b in bars] == ["20260908", "20260909"]   # 今天那根被排除（与本地口径一致）
+        assert bars[-1]["high"] == 2.1
+
+    def test_fresh_local_skips_live(self, tmp_path, monkeypatch):
+        import datetime as dt
+        fresh = (dt.date.today() - dt.timedelta(days=1)).strftime("%Y%m%d")
+        self._write_local(tmp_path, "600519", [fresh])
+        calls = []
+        self._stub_live(monkeypatch, [{"date": "20260101", "close": 1, "high": 1, "low": 1, "vol": 1}], calls)
+        bars = self._mon(tmp_path)._daily_dated("SH600519", 20)
+        assert calls == []                                # 本地够新 → 不请求
+        assert [b["date"] for b in bars] == [fresh]
+
+    def test_switch_off_disables_fallback(self, tmp_path, monkeypatch):
+        os.environ["WOLF_DATED_LIVE_FALLBACK"] = "0"
+        calls = []
+        self._stub_live(monkeypatch, [{"date": "20260909", "close": 1, "high": 1, "low": 1, "vol": 1}], calls)
+        assert self._mon(tmp_path)._daily_dated("SH600519", 20) == []
+        assert calls == []
+
+    def test_result_is_cached_per_day(self, tmp_path, monkeypatch):
+        calls = []
+        self._stub_live(monkeypatch, [{"date": "20260909", "close": 1, "high": 1, "low": 1, "vol": 1}], calls)
+        mon = self._mon(tmp_path)
+        a = mon._daily_dated("SH600519", 20)
+        b = mon._daily_dated("SH600519", 20)
+        assert calls == ["SH600519"] and a is b
+
+    def test_live_failure_falls_back_to_local(self, tmp_path, monkeypatch):
+        self._write_local(tmp_path, "600519", ["20260820"])
+        import app.services.t_build as TB
+        monkeypatch.setattr(TB, "_fetch_daily_bars",
+                            lambda symbol, count=40, as_of=None: (_ for _ in ()).throw(RuntimeError("boom")),
+                            raising=True)
+        bars = self._mon(tmp_path)._daily_dated("SH600519", 20)
+        assert [b["date"] for b in bars] == ["20260820"]   # 取不到实时 → 仍用本地，不抛
