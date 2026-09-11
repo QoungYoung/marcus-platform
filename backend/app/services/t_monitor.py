@@ -1097,11 +1097,12 @@ class TMonitor:
                             _tk = (symbol, "tw", datetime.now().strftime('%Y%m%d'))
                             if _tk not in _STOP_HOLD_WARNED:
                                 _STOP_HOLD_WARNED.add(_tk)
+                                # flush=True 必须加：容器里 stdout 非 TTY 会缓冲，不加就看不到这条（本轮踩过）
                                 print(f"[TMonitor] 日内做T时间窗外，跳过买腿 {symbol}"
-                                      f"({cond.get('trigger_kind')}): {_tw_why}")
+                                      f"({cond.get('trigger_kind')}): {_tw_why}", flush=True)
                             continue
                 except Exception as _twe:
-                    print(f"[TMonitor] 时间窗判定异常(放行) {symbol}: {str(_twe)[:80]}")
+                    print(f"[TMonitor] 时间窗判定异常(放行) {symbol}: {str(_twe)[:80]}", flush=True)
             quote = quotes.get(_normalize_symbol(symbol))
             if not quote or not quote.get("current"):
                 continue
