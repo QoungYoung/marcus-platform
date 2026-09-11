@@ -304,9 +304,11 @@
         而它的本地缓存源 `data/stock_5m_bt`（37 个文件，最新 mtime 2026-09-03 14:25）与
         `data/recent_sync`（14 个文件，2026-09-03 21:21）都是**一次性导出、没有常驻同步任务** ——
         当日实测在册 13 个标的里 **0 个新鲜**（3 个停在 09-03、10 个无文件）。
-        → 已给 `_daily_dated` 加**实时源兜底**（本地最新日期早于"今天-2 自然日"时改用
-        `t_build._fetch_daily_bars`，Tushare 主源 / 东财降级；结果按 symbol+日缓存；
-        `WOLF_DATED_LIVE_FALLBACK=0` 关闭）。**注意**：`_prev_daily`（P1-6 去弱留强、m5dump 的 prev_days、
+        → 已给 `_daily_dated` 加**实时源兜底**（本地最新日期早于"今天-2 自然日"时改用实时源；
+        结果按 symbol+日缓存；`WOLF_DATED_LIVE_FALLBACK=0` 关闭）。兜底是**两级**：
+        `t_build._fetch_daily_bars`（Tushare 主源 → 东财降级）→ 失败则 `_fetch_daily_tencent_dated`
+        （腾讯前复权日线，实测更稳且含当日）→ 再失败才退回本地缓存并打印原因。
+        （加第二级的原因：生产实测 Tushare/东财会短暂失败："东财日线失败: Remote end closed connection"。）**注意**：`_prev_daily`（P1-6 去弱留强、m5dump 的 prev_days、
         收盘确认守卫的 prev_daily）**仍只读那两个冻结目录**，未改 —— 属既存的数据源缺口，单独留档待定。
         **未做**：`t_conditions.time_stop_open` / `time_stop_close` 两列仍是**被写入但从不被读**
         （`t_pool.py:290` 写 `"14:45"`，语义上其实是**日内时段**而非日期）→"机制静默失效"第 6 例**仍存在**；

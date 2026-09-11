@@ -294,11 +294,10 @@ class TMonitor:
             _last = out[-1]['date'] if out else ''
             _cut = (datetime.now() - timedelta(days=2)).strftime('%Y%m%d')
             if not _last or _last < _cut:
+                _live, _src = [], ""
                 try:
                     from app.services.t_build import _fetch_daily_bars
-                    lb = _fetch_daily_bars(sym, count=n) or []
-                    _live = []
-                    for b in lb:
+                    for b in (_fetch_daily_bars(sym, count=n) or []):
                         _d = str(b.get('date') or '').replace('-', '')[:8]
                         if not _d or _d >= today:
                             continue
@@ -310,12 +309,20 @@ class TMonitor:
                         except Exception:
                             continue
                     if _live:
-                        if _last:
-                            print(f"[TMonitor] _daily_dated 本地缓存过期({sym} 停在 {_last}) → 实时源补齐 "
-                                  f"{len(_live)} 根(至 {_live[-1]['date']})")
-                        out = sorted(_live, key=lambda x: x['date'])[-n:]
+                        _src = "Tushare/东财"
                 except Exception as _e:
-                    print(f"[TMonitor] _daily_dated 实时源补齐失败 {sym}: {str(_e)[:100]}（用本地缓存）")
+                    print(f"[TMonitor] _daily_dated 实时源失败 {sym}: {str(_e)[:100]}")
+                if not _live:      # 主兜底两个源都失败 → 腾讯日线(第三个源, 实测更稳且含当日)
+                    _alt = _fetch_daily_tencent_dated(sym, n) or []
+                    if _alt:
+                        _live, _src = _alt, "腾讯日线"
+                if _live:
+                    if _last:
+                        print(f"[TMonitor] _daily_dated 本地缓存过期({sym} 停在 {_last}) → {_src}补齐 "
+                              f"{len(_live)} 根(至 {_live[-1]['date']})")
+                    out = sorted(_live, key=lambda x: x['date'])[-n:]
+                elif _last:
+                    print(f"[TMonitor] _daily_dated 实时源全部失败 {sym} → 用本地缓存(停在 {_last})")
         self._dated_cache[ck] = out
         return out
 
@@ -2120,6 +2127,46 @@ def _tsell_undo_decide(hi, base, last_close, last_vol, elapsed_s):
 
 
 # 指数盘中回撤缓存（30s TTL，避免每轮拉腾讯）
+def _fetch_daily_tencent_dated(symbol: str, count: int = 40):
+    """腾讯前复权**日线**（第三个兜底源, 2026-09-11 加）→ [{'date','open','close','high','low','vol'}]。
+
+    为什么需要它: `_daily_dated` 的实时兜底主源是 `t_build._fetch_daily_bars`（Tushare→东财），
+    生产实测**两个源都会短暂失败**（"东财日线失败: Remote end closed connection without response"），
+    失败就退回冻结在 2026-09-03 的本地缓存 → ① 的两个机制又变哑。腾讯这个端点在
+    `fetch_tencent_mkline`(分钟线)之外，日线走 web.ifzq.gtimg.cn 的 fqkline 接口，实测稳定且**含当日**。
+    返回升序、已剔除当日那根（调用方口径：当日盘中最高用 quote.high 另行传入）。
+    """
+    try:
+        import urllib.request, json as _j
+        _s = str(symbol).lower()
+        if _s[:2] not in ("sh", "sz", "bj"):
+            _d = "".join(ch for ch in _s if ch.isdigit())
+            _s = ("sh" if _d[:1] == "6" else ("bj" if _d[:2] in ("43", "83", "87", "92", "92") else "sz")) + _d
+        url = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+               "?param=%s,day,,,%d,qfq" % (_s, max(int(count), 20)))
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = _j.loads(resp.read().decode("utf-8"))
+        node = (d.get("data") or {}).get(_s) or {}
+        rows = node.get("qfqday") or node.get("day") or []
+        today = datetime.now().strftime("%Y%m%d")
+        out = []
+        for r in rows:
+            try:
+                _dd = str(r[0]).replace("-", "")[:8]
+                if not _dd or _dd >= today:
+                    continue
+                out.append({"date": _dd, "open": float(r[1]), "close": float(r[2]),
+                            "high": float(r[3]), "low": float(r[4]), "vol": float(r[5] or 0)})
+            except (ValueError, IndexError, TypeError):
+                continue
+        out.sort(key=lambda x: x["date"])
+        return out[-int(count):] if out else None
+    except Exception as e:
+        print(f"[TMonitor] 腾讯日线兜底失败 {symbol}: {str(e)[:100]}")
+        return None
+
+
 _index_dd_cache = {"at": 0.0, "value": 0.0}
 _m5_dump_cache = {"at": 0.0, "value": 0.0}
 # ②量能分层卖(2026-09-08): 缩量破位→反抽减等待状态 + 支撑腿破位禁低吸

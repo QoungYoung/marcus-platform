@@ -454,11 +454,36 @@ class TestDailyDatedLiveFallback:
         b = mon._daily_dated("SH600519", 20)
         assert calls == ["SH600519"] and a is b
 
-    def test_live_failure_falls_back_to_local(self, tmp_path, monkeypatch):
-        self._write_local(tmp_path, "600519", ["20260820"])
+    def test_primary_failure_uses_tencent(self, tmp_path, monkeypatch):
+        """主兜底(Tushare/东财)全失败 → 用腾讯日线第三个源（生产实测那两个源会短暂失败）。"""
         import app.services.t_build as TB
+        import app.services.t_monitor as TM
+        monkeypatch.setattr(TB, "_fetch_daily_bars", lambda symbol, count=40, as_of=None: None, raising=True)
+        monkeypatch.setattr(TM, "_fetch_daily_tencent_dated",
+                            lambda symbol, count=40: [{"date": "20260909", "open": 1, "close": 1,
+                                                       "high": 1.1, "low": 0.9, "vol": 1.0}], raising=True)
+        bars = self._mon(tmp_path)._daily_dated("SH600519", 20)
+        assert [b["date"] for b in bars] == ["20260909"] and bars[0]["high"] == 1.1
+
+    def test_all_sources_down_falls_back_to_local(self, tmp_path, monkeypatch):
+        """三个源全失败 → 用本地缓存，不抛、不误判。"""
+        import app.services.t_build as TB
+        import app.services.t_monitor as TM
+        self._write_local(tmp_path, "600519", ["20260820"])
+        monkeypatch.setattr(TB, "_fetch_daily_bars", lambda symbol, count=40, as_of=None: None, raising=True)
+        monkeypatch.setattr(TM, "_fetch_daily_tencent_dated", lambda symbol, count=40: None, raising=True)
+        bars = self._mon(tmp_path)._daily_dated("SH600519", 20)
+        assert [b["date"] for b in bars] == ["20260820"]
+
+    def test_primary_source_raises_still_tries_tencent(self, tmp_path, monkeypatch):
+        """主源抛异常也不能中断链条 —— 继续走腾讯源。"""
+        import app.services.t_build as TB
+        import app.services.t_monitor as TM
         monkeypatch.setattr(TB, "_fetch_daily_bars",
                             lambda symbol, count=40, as_of=None: (_ for _ in ()).throw(RuntimeError("boom")),
                             raising=True)
+        monkeypatch.setattr(TM, "_fetch_daily_tencent_dated",
+                            lambda symbol, count=40: [{"date": "20260909", "open": 1, "close": 1,
+                                                       "high": 1.2, "low": 0.9, "vol": 1.0}], raising=True)
         bars = self._mon(tmp_path)._daily_dated("SH600519", 20)
-        assert [b["date"] for b in bars] == ["20260820"]   # 取不到实时 → 仍用本地，不抛
+        assert [b["date"] for b in bars] == ["20260909"] and bars[0]["high"] == 1.2
