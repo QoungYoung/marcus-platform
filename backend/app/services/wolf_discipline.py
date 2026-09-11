@@ -32,18 +32,16 @@ def deep_merge(base, over):
 
 def _cfg_file():
     """文件兜底：先 DATA_DIR/wolf_discipline.json（运行时那份），再 config/wolf_discipline.json。"""
-    out = {}
-    for p in (os.path.join(os.environ.get("DATA_DIR", "data"), "wolf_discipline.json"),
-              os.path.join(_ws_root(), "config", "wolf_discipline.json")):
-        try:
-            with open(p, encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, dict) and d:
-                out = d
-                break
-        except Exception:
-            continue
-    return out
+    d = _read_json_first("wolf_discipline.json")
+    if isinstance(d, dict) and d:
+        return d
+    # 再兜底仓库里的 config/ 那份（仅作离线兜底；运行时以 DB 为准）
+    try:
+        with open(os.path.join(_ws_root(), "config", "wolf_discipline.json"), encoding="utf-8") as f:
+            d2 = json.load(f)
+        return d2 if isinstance(d2, dict) and d2 else {}
+    except Exception:
+        return {}
 
 
 def _ws_root():
@@ -309,6 +307,48 @@ def profit_take(portfolio, now=None, cfg=None, quotes=None):
     return {"active_sells": sells, "directive": directive, "enabled": pt.get("enabled", False)}
 
 
+def _data_candidates():
+    """数据目录候选，按优先级：DATA_DIR → <workspace>/data → cwd/data → 相对 data。
+
+    **踩坑记录（2026-09-11）**：原来只写 `os.path.join(os.environ.get("DATA_DIR", "data"), ...)`，
+    而生产容器里 **DATA_DIR 环境变量是 None** → 退化成**相对路径** `data/wave_state.json`：
+    `docker exec`（cwd=/app）能读到，但 **uvicorn 进程的 cwd 不是 /app** → 读不到 →
+    `current_operation()` 返回 None → 分档静默失效（回落 total_max_pct=0 = 完全没有上限）。
+    与 position_tier.read_wave_state()（走 <workspace>/data）口径对齐，避免同一系统两套路径解析。
+    """
+    out = []
+    dd = os.environ.get("DATA_DIR")
+    if dd:
+        out.append(dd)
+    try:
+        out.append(os.path.join(_ws_root(), "data"))
+    except Exception:
+        pass
+    try:
+        out.append(os.path.join(os.getcwd(), "data"))
+    except Exception:
+        pass
+    out.append("data")
+    seen, uniq = set(), []
+    for d in out:
+        if d and d not in seen:
+            seen.add(d); uniq.append(d)
+    return uniq
+
+
+def _read_json_first(name):
+    """在候选数据目录里找第一个存在的 name 并解析为 dict；都没有返回 None。"""
+    for d in _data_candidates():
+        p = os.path.join(d, name)
+        try:
+            if os.path.exists(p):
+                with open(p, encoding="utf-8") as f:
+                    return json.load(f) or {}
+        except Exception:
+            continue
+    return None
+
+
 def current_operation():
     """当前浪型主基调(wave_state.operation) —— 分档口径的轴。取不到返回 None。
 
@@ -316,10 +356,8 @@ def current_operation():
     side=观望调仓换股 / defense=防御不建仓 / exit=兑现降仓。
     """
     try:
-        p = os.path.join(os.environ.get("DATA_DIR", "data"), "wave_state.json")
-        with open(p, encoding="utf-8") as f:
-            op = str((json.load(f) or {}).get("operation") or "").strip().lower()
-        return op or None
+        w = _read_json_first("wave_state.json") or {}
+        return str(w.get("operation") or "").strip().lower() or None
     except Exception:
         return None
 
