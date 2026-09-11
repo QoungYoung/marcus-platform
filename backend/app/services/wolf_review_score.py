@@ -107,6 +107,16 @@ def _fut_net(symbol_prefix: str, date8: Optional[str] = None) -> Optional[Dict[s
         return None
 
 
+def _fut_bias(date8: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """期指多空**增减**（他 2026-01-23 的口径）→ 复用 wolf_index_futures.fetch_holdings。"""
+    try:
+        from app.services.wolf_index_futures import fetch_holdings
+        return fetch_holdings(date8)
+    except Exception as e:
+        print(f"[review_score] 期指多空失败: {type(e).__name__}: {str(e)[:70]}")
+        return None
+
+
 def _margin(date8: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """两融：融资净买入 = Σ(rzmre − rzche)（沪+深）。"""
     try:
@@ -273,12 +283,18 @@ def collect(date8: Optional[str] = None, ov: Optional[Dict[str, Any]] = None) ->
     # 新交所 A50 期货的持仓数据我们没有源 → **记数据缺**；不得拿第11项的 A50 指数涨跌顶替，
     # 否则同一标的会投两票（第2项 1 分 + 第11项 0.1 分）。
     v[2] = {"vote": None, "note": "A50 期货**持仓/多空单变化**无数据源（不得用第11项指数涨跌代替，否则重复计分）"}
-    if_i = _bounded(lambda: _fut_net("IF", date8), 30, "IF 持仓")
-    v[3] = {"vote": _vote(None if not if_i else if_i["net"] > 0),
-            "note": "IF 净持仓 %s" % (f"{if_i['net']:+.0f}" if if_i else "数据缺")}
-    im = _bounded(lambda: _fut_net("IM", date8), 30, "IM 持仓")
-    v[4] = {"vote": _vote(None if not im else im["net"] > 0),
-            "note": "IM 净持仓 %s" % (f"{im['net']:+.0f}" if im else "数据缺")}
+    # ⚠️ 口径按他 2026-01-23 的纠正：「**不是当日空单和多单相比 是和多空前一日的增减对比**」
+    #    （表里第2/3/4项的观察方向也是"看多单和空单的**变化**"）→ 用**偏多度 = 多单增减% − 空单增减%**。
+    #    第一版用的是"净持仓相比"，那是他明确否掉的口径。
+    #    实测（wolf_index_futures 文档）：该规则对次日黄白线的命中率约 51%（158 日样本）→ 仅作一项投票。
+    h = _bounded(lambda: _fut_bias(date8), 30, "期指多空增减")
+    for no, code, nm in ((3, "IF", "沪深300"), (4, "IM", "中证1000")):
+        x = (h or {}).get(code) or {}
+        b = x.get("bias")
+        v[no] = {"vote": _vote(None if b is None else b > 0),
+                 "note": ("%s 偏多度 %+.2f（多单%+.2f%%/空单%+.2f%%）" % (nm, b, x.get("long_chg_pct") or 0,
+                                                                        x.get("short_chg_pct") or 0))
+                 if b is not None else "数据缺"}
     sf = _bounded(lambda: _market_flow(date8), 45, "全市场资金流(3日)")
     if sf is None:
         v[5] = {"vote": None, "note": "全市场资金流数据缺"}

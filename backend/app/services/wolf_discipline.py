@@ -527,6 +527,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d4)
     except Exception:
         pass
+    # A3 期指多空 → 次日黄白线预判（2026-09-11）：他 2025-04-15 条件1
+    try:
+        from app.services.wolf_index_futures import directive as _if_dir
+        _d8 = _if_dir()
+        if _d8:
+            parts.append(_d8)
+    except Exception:
+        pass
     # C2 方向层「跌得少、弹得早」（2026-09-11）：他 2026-01-27 调整期第二步
     try:
         from app.services.wolf_theme_resilience import directive as _tr_dir

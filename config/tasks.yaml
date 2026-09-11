@@ -76,6 +76,28 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: wolf_index_futures
+  name: 股指期货多空 → 次日黄白线预判（A3）
+  description: 拉 fut_holding 多空单**增减**（口径按狼大 2026-01-23）→ 预判次日开盘黄线/白线在上，写
+    wolf_index_futures.json（实测命中率约51%，仅提示不参与硬门）
+  enabled: true
+  schedule:
+    type: cron
+    expr: '45 18 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_index_futures.py
+    args: []
+  output:
+    log_file: logs/wolf_index_futures_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_neg_event_scan
   name: 层①「无利空」公告标记
   description: 拉当日全市场公告→过滤持仓→判"意外事件/黑天鹅级利空"→写 wolf_negative_events.json（①止损的豁免前提）
