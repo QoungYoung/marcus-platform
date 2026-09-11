@@ -84,6 +84,8 @@ class TMonitor:
         self._buy_date_cache: Dict[Any, Optional[str]] = {}
         # 带日期日K缓存 {(symbol, today, n): bars}（含实时源兜底, 避免 30s 轮次重复请求）
         self._dated_cache: Dict[Any, List[dict]] = {}
+        # 止损当日已执行去抖 {(symbol, today)} —— 2026-09-11 修见 _check_stop_loss 注释
+        self._stop_done_day: set = set()
 
     # ── 生命周期 ──
     def start(self) -> bool:
@@ -1968,7 +1970,18 @@ class TMonitor:
                     _STOP_HOLD_WARNED.add(_tk2)
                     print(f"[TMonitor] 止损被时点门拦下(仅预警) {symbol} stop={stop_price} cur={current}: {_treason}")
                 return
-            # 当日已止损过则跳过
+            # ── 当日已止损过则跳过（2026-09-11 修复"止损重复执行"）──
+            # 事故复现（生产 2026-09-11 09:36:25 / 09:36:29, SH588170）:
+            #   本函数**按条件逐个调用**（_round 的 `for cond in ...` 里每条件调一次），
+            #   原去抖查的是 t_triggers.event_type='stop_loss'，而本路径**从来不写这种行**
+            #   （成功时只 update_condition_state(armed=0)）→ 该查询恒为空 → **去抖形同虚设**。
+            #   同标的两个条件 → 同一轮里执行两次"盘中减半仓" 17000+17000 = **34000 全部清光**
+            #   （狼大"底仓不卖"被违反：本意只减半）。
+            # 修复: ①内存当日去抖（同轮/同日即时生效，不依赖 DB 时序）；
+            #       ②成功后在 t_triggers 落一行 event_type='stop_loss' 作为**审计与跨重启去抖**依据。
+            _dkey = (symbol, datetime.now().strftime('%Y%m%d'))
+            if _dkey in self._stop_done_day:
+                return
             from sqlalchemy import text
             from app.database import SessionLocal
             db = SessionLocal()
@@ -1980,6 +1993,7 @@ class TMonitor:
             finally:
                 db.close()
             if done:
+                self._stop_done_day.add(_dkey)
                 return
             # ── 卖量分级（P2-4 完整落地, 2026-09-10）──
             # 狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
@@ -2001,6 +2015,22 @@ class TMonitor:
             # 此前无条件冻结：T+1 当日买入 sellable=0 时止损被拒（rejected），
             # 仍把低吸/高抛条件冻成 armed=0 并与消费式重建打架（每轮刷屏）。
             if gw.get("status") == "success":
+                # 先打内存标记: 同一轮里该标的的后续条件**不得**再执行一次止损
+                self._stop_done_day.add(_dkey)
+                try:
+                    # status='executed'（终态）—— 审计行**绝不能被认领**：
+                    # claim_pending_trigger 按 status='pending' 无差别取第一条(不筛 event_type)，
+                    # 留 pending 会被 t_bridge 当成待办再执行一次卖出。
+                    t_db.insert_trigger({
+                        "account_id": T_MONITOR_ACCOUNT,
+                        "condition_id": (conds or [{}])[0].get("id") if conds else None,
+                        "symbol": symbol, "event_type": "stop_loss",
+                        "trigger_price": stop_price, "quote_price": current,
+                        "direction": "sell", "mode": "auto",
+                        "reason": "%s | stop=%s mode=%s vol=%s" % (_reason, stop_price, _exit_mode, volume),
+                    }, status="executed")
+                except Exception as _te:
+                    print(f"[TMonitor] 止损审计行写入失败 {symbol}: {str(_te)[:80]}")
                 for c in conds or []:
                     cid = c.get("id")
                     if cid:

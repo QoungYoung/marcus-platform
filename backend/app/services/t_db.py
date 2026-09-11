@@ -338,8 +338,14 @@ def expire_daily_conditions(trade_date: Optional[str] = None) -> int:
 # t_triggers
 # ────────────────────────────────────────────────────────────────
 
-def insert_trigger(trig: Dict[str, Any]) -> Optional[int]:
-    """写入一条触发事件（status='pending'）。"""
+def insert_trigger(trig: Dict[str, Any], status: str = "pending") -> Optional[int]:
+    """写入一条触发事件（默认 status='pending'）。
+
+    `status` 可显式指定为一个**终态**（如 'executed'）—— 用于"只做审计/跨重启去抖、
+    绝不能被消费者认领"的行：`claim_pending_trigger` 是**按 status='pending' 无差别认领**的
+    （只按 id 顺序取第一条，不筛 event_type），所以审计行若留 pending 会被 t_bridge 再执行一次。
+    2026-09-11 止损重复执行事故的修复配套（见 t_monitor._check_stop_loss）。
+    """
     try:
         db = SessionLocal()
         try:
@@ -352,11 +358,12 @@ def insert_trigger(trig: Dict[str, Any]) -> Optional[int]:
                 ) VALUES (
                     :account_id, :condition_id, :symbol, :event_type,
                     :trigger_price, :quote_price, :suggest_bid_price, :suggest_ask_price,
-                    :slippage_budget, :snapshot, 'pending', :mode, :reason, :direction
+                    :slippage_budget, :snapshot, :status, :mode, :reason, :direction
                 )
                 RETURNING id
                 """
             ), {
+                "status": status,
                 "account_id": trig.get("account_id", ACCOUNT_T),
                 "condition_id": trig.get("condition_id"),
                 "symbol": trig["symbol"],
