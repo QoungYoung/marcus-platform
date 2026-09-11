@@ -1684,6 +1684,16 @@ class TMonitor:
                         return
                 except Exception as _ge:
                     print(f"[TMonitor] 止损守卫异常(按原口径执行) {symbol}: {str(_ge)[:100]}")
+            # ── ④ 止损时点约束（2026-09-10）──
+            # 狼大 2026-03-23:「每天的止损绝对不应该是下午1点到2点半这个时间。。。要么你早上卖 要么你尾盘卖」。
+            # 该时段(默认 [13:00,14:30)) 只预警不执行; 收盘清仓(>=14:55)不受影响。
+            _tok, _treason = _stop_time_ok()
+            if not _tok:
+                _tk2 = (symbol, "timegate", datetime.now().strftime('%Y%m%d'))
+                if _tk2 not in _STOP_HOLD_WARNED:
+                    _STOP_HOLD_WARNED.add(_tk2)
+                    print(f"[TMonitor] 止损被时点门拦下(仅预警) {symbol} stop={stop_price} cur={current}: {_treason}")
+                return
             # 当日已止损过则跳过
             from sqlalchemy import text
             from app.database import SessionLocal
@@ -1849,6 +1859,31 @@ _m5_dump_cache = {"at": 0.0, "value": 0.0}
 PULLBACK_VOL_RATIO = float(os.getenv("PULLBACK_VOL_RATIO", "1.2"))  # vol_ratio<该值视为缩量
 PULLBACK_END_HM = 1445          # 14:45 后仍未反抽达标 → 尾盘确认离场
 _PULLBACK_SELL: Dict[str, dict] = {}   # symbol -> pending(缩量破位待反抽/尾盘确认)
+def _stop_time_ok(now=None):
+    """止损**时点约束**（2026-09-10，狼大止损六层之④）→ (ok, reason)。
+
+    狼大 2026-03-23：「每天的止损**绝对不应该是下午1点到2点半**这个时间。。。**要么你早上卖 要么你尾盘卖**」。
+    他当时是在描述"量化在 13:00-14:30 硬止损被收割"的现象 —— 即该时段执行止损是**劣势时点**。
+
+    → 本门禁止在 [13:00, 14:30) 执行止损（该时段仅预警，不实际卖出）；
+      收盘确认清仓（默认 >=14:55）落在 14:30 之后，**不受影响**。
+
+    开关: WOLF_STOP_TIME_GATE=0 关闭; 禁止窗口可用 WOLF_STOP_BLOCK_FROM / WOLF_STOP_BLOCK_TO 调整(默认 1300/1430)。
+    """
+    if os.getenv("WOLF_STOP_TIME_GATE", "1").strip() in ("0", "false", "no"):
+        return True, "时点门关闭"
+    try:
+        n = now or datetime.now()
+        hm = n.strftime("%H%M")
+    except Exception:
+        return True, "时间不可用→放行"
+    a = str(os.getenv("WOLF_STOP_BLOCK_FROM", "1300"))
+    b = str(os.getenv("WOLF_STOP_BLOCK_TO", "1430"))
+    if a <= hm < b:
+        return False, "狼大2026-03-23: 止损不应在 %s-%s 执行(要么早上卖要么尾盘卖)" % (a, b)
+    return True, ""
+
+
 def _in_close_window(now=None) -> bool:
     """是否处于"收盘确认"时段（默认 >= 14:55）。
 

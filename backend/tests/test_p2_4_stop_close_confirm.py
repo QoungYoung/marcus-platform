@@ -31,6 +31,55 @@ def _bars(close, low, vol=1000.0, n=1):
             for i in range(n)]
 
 
+class TestStopTimeGate(unittest.TestCase):
+    """④ 止损时点约束: 狼大 2026-03-23「止损绝对不应该是下午1点到2点半…要么早上卖要么尾盘卖」。"""
+
+    def setUp(self):
+        from app.services.t_monitor import _stop_time_ok
+        self.fn = _stop_time_ok
+        self._saved = {k: os.environ.pop(k, None)
+                       for k in ("WOLF_STOP_TIME_GATE", "WOLF_STOP_BLOCK_FROM", "WOLF_STOP_BLOCK_TO")}
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    @staticmethod
+    def _at(h, m):
+        import datetime as dt
+        return dt.datetime(2026, 9, 10, h, m)
+
+    def test_blocked_window_13_00_to_14_30(self):
+        for h, m in ((13, 0), (13, 30), (14, 0), (14, 29)):
+            ok, reason = self.fn(self._at(h, m))
+            self.assertFalse(ok, "%02d:%02d 应被拦" % (h, m))
+            self.assertIn("2026-03-23", reason)
+
+    def test_allowed_outside_window(self):
+        for h, m in ((9, 30), (9, 59), (10, 0), (11, 30), (12, 59), (14, 30), (14, 45), (14, 55), (15, 0)):
+            ok, _ = self.fn(self._at(h, m))
+            self.assertTrue(ok, "%02d:%02d 应放行" % (h, m))
+
+    def test_close_window_not_affected(self):
+        """收盘清仓时点(默认>=14:55)必须不受时点门影响。"""
+        from app.services.t_monitor import _in_close_window
+        self.assertTrue(_in_close_window(self._at(14, 55)))
+        self.assertTrue(self.fn(self._at(14, 55))[0])
+
+    def test_gate_can_be_disabled(self):
+        os.environ["WOLF_STOP_TIME_GATE"] = "0"
+        self.assertTrue(self.fn(self._at(13, 30))[0])
+
+    def test_custom_block_window(self):
+        os.environ["WOLF_STOP_BLOCK_FROM"] = "1000"
+        os.environ["WOLF_STOP_BLOCK_TO"] = "1100"
+        self.assertFalse(self.fn(self._at(10, 30))[0])
+        self.assertTrue(self.fn(self._at(13, 30))[0])
+
+
 class TestStopExitVolume(unittest.TestCase):
     """P2-4 完整落地: 收盘确认破位 → 清仓(含底仓); 盘中确认 → 减半仓。"""
 
