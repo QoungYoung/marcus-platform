@@ -11,6 +11,27 @@ settings:
       enabled: true
       recipient: BF1510663A6C14D6E00E42B46108F51E
 tasks:
+- id: wolf_neg_event_scan
+  name: 层①「无利空」公告标记
+  description: 拉当日全市场公告→过滤持仓→判"意外事件/黑天鹅级利空"→写 wolf_negative_events.json（①止损的豁免前提）
+  enabled: true
+  schedule:
+    type: cron
+    expr: '*/30 8-16 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_neg_event_scan.py
+    args: []
+  output:
+    log_file: logs/wolf_neg_event_scan_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: news_collector
   name: 新闻定时采集
   description: 每10分钟采集财经新闻，DeepSeek AI情绪分析
