@@ -199,3 +199,66 @@ class TestWiredIntoContext:
             monkeypatch.setattr(WD, n, lambda *a, **k: {"active": False, "enabled": False,
                                                         "directive": "", "active_sells": []})
         assert "复盘打分" in WD.discipline_context()
+
+
+class TestEodGate:
+    """EOD 就绪守卫（2026-09-11 实测：15:46 时当日 fut_holding/margin/top_inst/daily 全为 0 行）。
+
+    没有它，盘后 job 会"取不到当日数据 → fail-safe 不落盘 → 每天假装成功"，即静默失效。
+    """
+
+    def test_is_trade_day_weekend_false(self, monkeypatch):
+        from app.services import wolf_eod as E
+        monkeypatch.setattr("app.services.t_backtest_data.resolve_trade_days",
+                            lambda a, b: (_ for _ in ()).throw(RuntimeError("no cal")))
+        assert E.is_trade_day("20260912") is False       # 周六
+        assert E.is_trade_day("20260911") is True        # 周五
+
+    def test_eod_ready_true_when_rows(self, monkeypatch):
+        import pandas as pd
+        from app.services import wolf_eod as E
+        monkeypatch.setattr("app.core.trading._api_config.get_tushare_pro",
+                            lambda: type("P", (), {"daily": lambda self, trade_date=None: pd.DataFrame([{"a": 1}])})())
+        assert E.eod_ready("20260910") is True
+
+    def test_eod_ready_false_when_empty(self, monkeypatch):
+        import pandas as pd
+        from app.services import wolf_eod as E
+        monkeypatch.setattr("app.core.trading._api_config.get_tushare_pro",
+                            lambda: type("P", (), {"daily": lambda self, trade_date=None: pd.DataFrame()})())
+        assert E.eod_ready("20260911") is False
+
+    def test_gate_returns_2_when_not_ready(self, monkeypatch):
+        from app.services import wolf_eod as E
+        monkeypatch.setattr(E, "is_trade_day", lambda d=None: True)
+        monkeypatch.setattr(E, "eod_ready", lambda d=None: False)
+        monkeypatch.setenv("WOLF_EOD_TRIES", "1")
+        assert E.gate("20260911") == 2
+
+    def test_gate_returns_1_on_non_trade_day(self, monkeypatch):
+        from app.services import wolf_eod as E
+        monkeypatch.setattr(E, "is_trade_day", lambda d=None: False)
+        assert E.gate("20260912") == 1
+
+    def test_gate_returns_0_when_ready(self, monkeypatch):
+        from app.services import wolf_eod as E
+        monkeypatch.setattr(E, "is_trade_day", lambda d=None: True)
+        monkeypatch.setattr(E, "eod_ready", lambda d=None: True)
+        assert E.gate("20260910") == 0
+
+
+class TestResolveTradeDaysFallback:
+    def test_fallback_accepts_yyyymmdd(self, monkeypatch):
+        """`resolve_trade_days` 降级分支原来用 %Y-%m-%d 解析 YYYYMMDD 入参 → 两个日历源
+        都失败时抛 ValueError（2026-09-11 修）。"""
+        from app.services import t_backtest_data as T
+        monkeypatch.setattr(T, "_fetch_trade_cal_gyzcloud", lambda a, b: [])
+        monkeypatch.setattr(T, "_fetch_trade_cal_brze", lambda a, b: [])
+        ds = T.resolve_trade_days("20260907", "20260911")     # 周一~周五
+        assert ds == ["20260907", "20260908", "20260909", "20260910", "20260911"]
+
+    def test_fallback_accepts_dashed(self, monkeypatch):
+        from app.services import t_backtest_data as T
+        monkeypatch.setattr(T, "_fetch_trade_cal_gyzcloud", lambda a, b: [])
+        monkeypatch.setattr(T, "_fetch_trade_cal_brze", lambda a, b: [])
+        assert T.resolve_trade_days("2026-09-12", "2026-09-13") == []   # 周末

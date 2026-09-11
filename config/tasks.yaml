@@ -17,7 +17,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '35 15 * * 1-5'
+    expr: '40 18 * * 1-5'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_limit_ladder_scan.py
@@ -39,7 +39,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '40 15 * * 1-5'
+    expr: '40 19 * * 1-5'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_review_score.py
@@ -61,7 +61,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '45 15 * * 1-5'
+    expr: '50 18 * * 1-5'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_theme_resilience.py

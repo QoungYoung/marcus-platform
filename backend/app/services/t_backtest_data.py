@@ -96,9 +96,22 @@ def resolve_trade_days(start_date: str, end_date: str) -> List[str]:
         if days:
             return days
     # 降级：周一至周五近似（不含节假日）
+    # ⚠️ 2026-09-11 修：本函数**入参是 YYYYMMDD**（文档与两个主源都按 YYYYMMDD），
+    #    但降级分支原来用 "%Y-%m-%d" 解析 → 一旦两个日历源都失败就抛
+    #    `ValueError: time data '20260912' does not match format '%Y-%m-%d'`，
+    #    把"降级"变成了"崩溃"。改为两种格式都接受。
+    def _norm(x: str) -> datetime:
+        x = str(x).strip()
+        for fmt in ("%Y%m%d", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(x, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"无法解析日期: {x!r}（应为 YYYYMMDD 或 YYYY-MM-DD）")
+
     out = []
-    d = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
+    d = _norm(start_date)
+    end = _norm(end_date)
     while d <= end:
         if d.weekday() < 5:
             out.append(d.strftime("%Y%m%d"))
