@@ -439,6 +439,19 @@ def position_cap(portfolio, cfg=None, operation=None):
     else:
         tot_max = float(c.get("total_max_pct") or 0)
         _src = "total_max_pct"
+    # C1 利润垫（2026-09-11，狼大 2026-01-27「这个钱取一半留一半…仓位就比没有利润垫要大了」）：
+    # **只在有已实现盈利时放宽上限**；默认 WOLF_CUSHION_CAP=0 → 乘数恒为 1.0（完全不影响现值）
+    try:
+        from app.services.wolf_profit_cushion import cap_multiplier as _cm
+        _mult = _cm(pos)
+        if _mult and _mult > 1.0 and tot_max > 0:
+            _new = min(100.0, tot_max * _mult)
+            if _new > tot_max:
+                print(f"[wolf_discipline] 利润垫放宽上限 {tot_max:.1f}% → {_new:.1f}%（×{_mult:.3f}）")
+                tot_max = _new
+                _src = _src + "+利润垫×%.2f" % _mult
+    except Exception as _ce:
+        print(f"[wolf_discipline] 利润垫判定异常(忽略): {str(_ce)[:70]}")
     reasons = []
     if tot_max > 0 and ratio > tot_max:
         reasons.append("总仓位%.1f%% > %s目标%.0f%%" % (ratio, _src, tot_max))
@@ -525,6 +538,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
         _d4 = _go_dir()
         if _d4:
             parts.append(_d4)
+    except Exception:
+        pass
+    # C1 利润垫（2026-09-11）：他 2026-01-27「这个钱取一半留一半…仓位就比没有利润垫要大了」
+    try:
+        from app.services.wolf_profit_cushion import directive as _pc_dir
+        _d9 = _pc_dir(portfolio)
+        if _d9:
+            parts.append(_d9)
     except Exception:
         pass
     # A3 期指多空 → 次日黄白线预判（2026-09-11）：他 2025-04-15 条件1
