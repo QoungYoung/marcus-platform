@@ -527,6 +527,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d4)
     except Exception:
         pass
+    # C2 方向层「跌得少、弹得早」（2026-09-11）：他 2026-01-27 调整期第二步
+    try:
+        from app.services.wolf_theme_resilience import directive as _tr_dir
+        _d7 = _tr_dir()
+        if _d7:
+            parts.append(_d7)
+    except Exception:
+        pass
     # B1 复盘打分表（2026-09-11）：他 2025-04-21「…推断出明天的指数前2小时的大致方向」
     try:
         from app.services.wolf_review_score import directive as _rs_dir

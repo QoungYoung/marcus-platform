@@ -54,6 +54,28 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: wolf_theme_resilience
+  name: 方向层「跌得少弹得早」（C2）
+  description: 调整期内按全市场中位基准算各主题的「跌得少/弹得早」（狼大 2026-01-27 调整期第二步）→ 写
+    wolf_theme_resilience.json，给出方向优先级
+  enabled: true
+  schedule:
+    type: cron
+    expr: '45 15 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_theme_resilience.py
+    args: []
+  output:
+    log_file: logs/wolf_theme_resilience_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_neg_event_scan
   name: 层①「无利空」公告标记
   description: 拉当日全市场公告→过滤持仓→判"意外事件/黑天鹅级利空"→写 wolf_negative_events.json（①止损的豁免前提）
