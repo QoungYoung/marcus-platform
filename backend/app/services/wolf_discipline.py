@@ -527,6 +527,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d4)
     except Exception:
         pass
+    # B1 复盘打分表（2026-09-11）：他 2025-04-21「…推断出明天的指数前2小时的大致方向」
+    try:
+        from app.services.wolf_review_score import directive as _rs_dir
+        _d6 = _rs_dir()
+        if _d6:
+            parts.append(_d6)
+    except Exception:
+        pass
     # A8 条件6 回补窗口（2026-09-11）：他 2025-04-15「…在下午2.00-2.30这个时间段进行回补」
     try:
         from app.services.wolf_refill import directive as _rf_dir

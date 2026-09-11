@@ -188,7 +188,9 @@ def get_china_etfs() -> list:
     # 3. 兜底缓存
     if not results:
         print("⚠️ 中概股 ETF 使用缓存数据 (非交易时段)")
-        results = fallback_data
+        # 同上：硬编码占位值，打标以便调用方识别
+        results = [dict(x, fallback=True, fallback_reason="中概ETF 全部数据源失败，返回硬编码占位值")
+                   for x in fallback_data]
     return results
 
 
@@ -256,7 +258,10 @@ def get_a50_futures() -> dict:
 
     # 4. 兜底缓存
     print("⚠️ A50 期货使用缓存数据 (非交易时段)")
-    return {"current": 11580, "change": 80, "change_pct": 0.70}
+    # ⚠️ 这是**硬编码占位值**（不是真实行情）。原来没有任何标记 → 消费方会把它当真实数据用
+    #    （2026-09-11 排查 B1 复盘打分表时发现）。加 fallback 标记后调用方可识别并丢弃。
+    return {"current": 11580, "change": 80, "change_pct": 0.70,
+            "fallback": True, "fallback_reason": "A50 全部数据源失败，返回硬编码占位值"}
 
 
 def get_usd_cny_rate() -> dict:

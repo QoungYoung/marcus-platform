@@ -32,6 +32,28 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: wolf_review_score_run
+  name: 每日复盘打分表（B1）
+  description: 按狼大 2025-04-21 复盘表打分（前8项各1分、外围各0.1分、两倍差判多空）→ 预判次日前2小时方向，写
+    wolf_review_score.json
+  enabled: true
+  schedule:
+    type: cron
+    expr: '40 15 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_review_score.py
+    args: []
+  output:
+    log_file: logs/wolf_review_score_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_neg_event_scan
   name: 层①「无利空」公告标记
   description: 拉当日全市场公告→过滤持仓→判"意外事件/黑天鹅级利空"→写 wolf_negative_events.json（①止损的豁免前提）
