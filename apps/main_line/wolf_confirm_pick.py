@@ -119,6 +119,40 @@ def theme_etf(theme):
         pass
     return None
 
+def theme_quantile_keep(rows, pct=None, key="leader"):
+    """**U9 主题容量约束**（2026-09-11，用户拍板用"相对分位"而非绝对名额）。
+
+    狼大原话:
+      2026-09-02 楼729「**小票就太多了 不好判断**」（说半导体细分太散、小票过多）;
+      2026-09-02 楼733「农业拉10个点带动的资金量不过100E」（主题体量不够就不值得参与）。
+    审计 U9 记录: 此前 capacity_amt20_yi **只输出提示、不拦截**（stderr / 审计 json）。
+
+    口径（用户决策）: 主题内按强度(leader)取**分位前 pct%** 才可买。
+      选相对分位而非绝对名额的理由: 绝对名额在大主题上过度压制、在小主题上等于无约束;
+      分位口径对主题规模免疫, 且与狼大「**绝不后排**」(2026-01-16「后排反倒不能去 要看好龙头那些」)同向。
+
+    阈值来源: 语料**没给数**（只有"小票太多了"这个定性说法）→ 默认 WOLF_THEME_QUANTILE_PCT=50
+      （= 不落后于主题内一半同伴, 与已验证的 rs>0 分层[51% vs 41%]同向）,
+      **水平由回测校准**（见 docs/backtest-plan.md）。置 0 关闭。
+
+    返回 (kept_rows, dropped_n, cut)；rows 需含数值型 key（默认 leader）。
+    边界口径: 取 ceil(n×pct%) 名（"前 X%"的直读），**与第 k 名并列的一并保留**（不按序位切并列,
+    否则又把序位噪声当强度差 —— 与 P1-5b 修 pct_rank 是同一个错）。
+    """
+    _p = float(pct) if pct is not None else float(os.getenv("WOLF_THEME_QUANTILE_PCT", "50") or 0)
+    arr = list(rows or [])
+    if _p <= 0 or len(arr) < 2:
+        return arr, 0, None
+    _p = min(100.0, _p)
+    vals = [r.get(key) if r.get(key) is not None else -1e9 for r in arr]
+    n = len(vals)
+    k = max(1, int(-(-(n * _p) // 100)))          # ceil(n * pct/100)
+    kth = sorted(vals, reverse=True)[k - 1]       # 第 k 名的强度
+    kept = [r for r, v in zip(arr, vals) if v >= kth]
+    cut = kth
+    return kept, n - len(kept), cut
+
+
 def latest_gate_date():
     best = ""
     for f in glob.glob(os.path.join(DATA, "mainline_gate_*.json")):
@@ -254,7 +288,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
             r["pos"] = pc.classify(f)["position"] if f else "?"
         except Exception:
             r["pos"] = "?"
-    cap_yi = sum(r["amt20"] for r in scored)
+    cap_yi = sum(r["amt20"] for r in scored)     # 主题体量(全成分口径, 提示用; 见 U9 台账)
     scored.sort(key=lambda r: (-r["leader"], -r["cross"], r["ts"]))
     wait_pool = scored[:pool_n]                                   # ①等待池(老龙头榜, 含HIGH等回调)
     # 风向标: 等待池第一(辨识度最高龙头)状态
@@ -288,6 +322,19 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
         cand_pool = list(_pool.values())
     else:
         cand_pool = [dict(r, concept="", rank_in_concept=1) for r in scored]
+    # ── U9 主题容量约束（2026-09-11, 用户决策"相对分位"）──
+    # 主题内按 leader 取分位前 WOLF_THEME_QUANTILE_PCT%(默认 50) 才可买。
+    # 位置有两个讲究:
+    #   ① 放在**组内前2 之后**（作用于 cand_pool 而非 scored）—— 否则会把小规模子概念的"龙2"一起砍掉,
+    #      与狼大「买不到龙头买分类龙头/龙2」(2026-01-16)相冲突; 作用于 cand_pool = 只收窄已选出的龙头/龙2 池。
+    #   ② 放在 theme_r20(主题均值)算完之后 —— 主题均值必须按**全体成分**算, 否则会连带改掉 rs 闸的基准。
+    _qcap = float(os.getenv("WOLF_THEME_QUANTILE_PCT", "50") or 0)
+    if _qcap > 0:
+        _kept, _qdrop, _qcut = theme_quantile_keep(cand_pool, pct=_qcap, key="leader")
+        if _qdrop:
+            print(f"[WOLF_THEME_CAP] {theme} 容量约束剔除 {_qdrop} 只"
+                  f"(只取前 {_qcap:.0f}%, 门槛 leader={_qcut})", file=sys.stderr)
+        cand_pool = _kept
     lowmid = [r for r in cand_pool if r["pos"] in ("LOW", "MID")
              and r["r20"] is not None and r["r20"] >= min_r20
              # P0-2 选择层闸: 只在强于主题的票上低吸(rs>=rs_min); WOLF_RS_GATE=0 关闭

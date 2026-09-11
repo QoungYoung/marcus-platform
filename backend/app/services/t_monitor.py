@@ -134,7 +134,7 @@ class TMonitor:
                     self._settle_pullback_sell()  # ②量能分层(2026-09-08): 缩量破位→反抽/尾盘确认离场
                     self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
-                    self._check_roundtrip_sell()  # B模型·等量换手(2026-09-08): 低吸后反弹≥+0.8%卖≤N旧仓
+                    self._check_roundtrip_sell()  # B模型·等量换手: 低吸后反弹≥狼大兑现幅度(默认+3%)卖≤N旧仓
                     # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
@@ -175,8 +175,10 @@ class TMonitor:
             print(f"[TMonitor] 计划触发检查异常: {e}")
 
     def _check_roundtrip_sell(self) -> None:
-        """B模型·等量换手卖出检查(2026-09-08 落地): 当日低吸N后反弹≥+0.8%卖≤N股旧仓;
-        昨低吸未完成→今日解锁继续(两日窗口); 超窗 stale 转人工。"""
+        """B模型·等量换手卖出检查(2026-09-08 落地, 2026-09-11 兑现幅度对齐狼大): 当日低吸N后
+        反弹≥低吸均价×(1+ROUNDTRIP_SELL_UP) 卖≤N股旧仓;
+        昨低吸未完成→今日解锁继续(两日窗口); 超窗 stale 转人工。
+        ROUNDTRIP_SELL_UP 默认 0.03 = 狼大「3-5个点」下沿(2026-08-13 楼275/280; 2026-09-02 楼728)。"""
         try:
             from app.services import roundtrip_sell as _rs
             if not _rs.ROUNDTRIP_ENABLED:
@@ -211,7 +213,8 @@ class TMonitor:
                         continue
                     gw = gateway_execute(
                         sym, "sell", cur, vol,
-                        reason=f"[B等量换手] 低吸@{buy_avg:.2f}→反弹@{cur:.2f}(≥+0.8%) 卖回{vol}股",
+                        reason=(f"[B等量换手] 低吸@{buy_avg:.2f}→反弹@{cur:.2f}"
+                                f"(≥+{_rs.ROUNDTRIP_SELL_UP * 100:.1f}%, 狼大3-5个点) 卖回{vol}股"),
                         decision_source="rule", account_id=acct)
                     if gw.get("status") == "success":
                         _rs.mark_sold(sym, vol)

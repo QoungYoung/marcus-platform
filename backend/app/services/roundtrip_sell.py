@@ -2,17 +2,26 @@
 """B模型·等量换手做T（roundtrip_sell）状态与规则（2026-09-08 用户拍板落地）。
 
 语义：当日低吸成交 N 股(254/253/低吸类, stock 账户经 gateway buy)后，
-允许在反弹 ≥低吸均价×1.008 时分批卖出 ≤N 股旧仓(不动当日买入/底仓floor)——
+允许在反弹 ≥低吸均价×(1+兑现幅度) 时分批卖出 ≤N 股旧仓(不动当日买入/底仓floor)——
 净持仓不变、当日完成一轮T；当日没到卖点则次日解锁后继续监控(两日窗口)；
 超过窗口仍未完成 → stale 提醒，由人工决策(那部分已成被动加仓)。
 纯状态模块：卖出动作由 TMonitor._check_roundtrip_sell 执行(gateway 唯一放行)。
+
+**兑现幅度（2026-09-11 修，用户决策）**：
+  狼大原话 2026-08-13 楼275「至少能有吃 **3-5个点** 的幅度吧 哪怕是ETF」、
+            楼280「刚才又T入进去 又等下一个 **3-5个点** 的机会啊」；
+  另 2026-09-02 楼728「而半导体只要 **3个点** 就远远超过这个量了」。
+  → 原值 0.008(+0.8%) 属**自设的小止盈**，与狼大兑现口径相反（0.8% 连他说的"波动连手续费都不够"那档都不到）。
+     现改为 **默认 0.03（狼大区间 3-5 个点的下沿）**，可 `WOLF_ROUNDTRIP_SELL_UP` 覆盖（如 0.05 取上沿）。
 """
 import json
 import os
 from datetime import date, datetime
 from typing import Optional
 
-ROUNDTRIP_SELL_UP = 0.008      # 卖点 = 低吸均价 × 1.008
+# 兑现幅度: 卖点 = 低吸均价 × (1 + ROUNDTRIP_SELL_UP)
+# 默认 0.03 = 狼大「3-5个点」的下沿（2026-08-13 楼275/280）; 环境变量可覆盖为 0.05(上沿)。
+ROUNDTRIP_SELL_UP = float(os.environ.get("WOLF_ROUNDTRIP_SELL_UP", "0.03"))
 ROUNDTRIP_ENABLED = str(os.environ.get("WOLF_ROUNDTRIP_SELL", "1")) == "1"
 STATE_FILE = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "roundtrip_state.json")
 MAX_AGE_DAYS = 5               # 状态保留天数（自然日）

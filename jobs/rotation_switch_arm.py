@@ -198,6 +198,19 @@ def pick_buy(chain, exclude, limit=3):
             s[key + "_p"] = v
     for s in stats:
         s["leader"] = round((s["r60_p"] + s["amt20_p"] + s["lim_p"]) / 3.0, 4)
+    # U9 主题容量约束（2026-09-11, 用户决策"相对分位"）: 与路径B(pick_v2) **同一函数、同一 env**,
+    # 避免又一次"两条路各一套口径"（本项目反复踩的坑）。理由与阈值出处见 wolf_confirm_pick.theme_quantile_keep。
+    try:
+        from wolf_confirm_pick import theme_quantile_keep as _tqk
+        _qcap = float(os.getenv("WOLF_THEME_QUANTILE_PCT", "50") or 0)
+        if _qcap > 0:
+            _kept, _qdrop, _qcut = _tqk(stats, pct=_qcap, key="leader")
+            if _qdrop:
+                print(f"WOLF_THEME_CAP {chain} 容量约束剔除 {_qdrop} 只"
+                      f"(只取前 {_qcap:.0f}%, 门槛 leader={_qcut})", file=sys.stderr)
+            stats = _kept
+    except Exception as _qe:
+        print("[pick_buy] 容量约束跳过:", str(_qe)[:80], file=sys.stderr)
     stats.sort(key=lambda s: (-s["leader"], s["ts"]))
     # ③ 按 leader 降序过位置闸
     out = []
