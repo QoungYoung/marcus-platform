@@ -288,7 +288,13 @@ def load() -> Dict[str, Any]:
 
 
 def directive() -> str:
-    """调整期的**方向优先级**提示（他 2026-01-27 的第二步）。"""
+    """调整期的**方向优先级**提示（他 2026-01-27 的第二步）。
+
+    ⚠️ 2026-09-11 修：原来**不检查 enabled()** → 把 `WOLF_THEME_RESILIENCE=0` 只能让盘后 job 停跑，
+    **状态文件里的旧内容仍会照常注入上下文**（假开关）。现关闭时直接返回空。
+    """
+    if not enabled():
+        return ""
     st = load()
     if not st or not st.get("themes"):
         return ""

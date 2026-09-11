@@ -207,3 +207,20 @@ class TestWiredIntoContext:
             monkeypatch.setattr(WD, n, lambda *a, **k: {"active": False, "enabled": False,
                                                         "directive": "", "active_sells": []})
         assert "跌得少弹得早" in WD.discipline_context()
+
+
+class TestSwitchActuallySilences:
+    """开关必须**真的**能关掉提示（2026-09-11：原 directive 不检查 enabled() → 假开关）。"""
+
+    def test_directive_blank_when_disabled(self, monkeypatch):
+        bench = [1.0, 2.0, 3.0, -2.0, -2.0, -1.0, 0.5]
+        mk = {}
+        for d, bp in zip(DAYS, bench):
+            row = {f"B{j:05d}.SZ": bp for j in range(10)}
+            for j in range(5):
+                row[f"X{j:05d}.SZ"] = bp + 1.0
+            mk[d] = row
+        TR.run(market=mk, uni={"主题X": [f"X{j:05d}.SZ" for j in range(5)]})
+        assert "跌得少弹得早" in TR.directive()          # 开着时正常输出
+        monkeypatch.setenv("WOLF_THEME_RESILIENCE", "0")
+        assert TR.directive() == ""                     # 关掉后必须为空

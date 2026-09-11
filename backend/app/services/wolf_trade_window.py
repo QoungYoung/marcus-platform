@@ -89,7 +89,15 @@ def allowed(now: Optional[datetime] = None) -> Tuple[bool, str]:
 
 
 def directive() -> str:
-    """给上下文的提示句（当前是否在窗口内）。"""
+    """给上下文的提示句（当前是否在窗口内）。
+
+    ⚠️ 2026-09-11：关闭（`WOLF_TRADE_WINDOW=0`）时**不得**再输出"时段…允许"——
+    那会被读成"时间窗仍在生效"。改为明确说明已关闭。
+    """
+    if not enabled():
+        return ("⏱ 日内做T时段：**已关闭**（`WOLF_TRADE_WINDOW=0`）。"
+                "依据 2026-09-11 回测：两种独立口径下窗内都无正贡献（详见 "
+                "`docs/backtest-batch2-design.md` §17/§18），故按用户决定关闭。")
     ws = windows()
     rng = " / ".join("%s-%s" % (a, b) for a, b in ws)
     try:

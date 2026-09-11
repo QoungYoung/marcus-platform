@@ -101,3 +101,17 @@ class TestDirective:
         monkeypatch.setenv("WOLF_TW_NEWS_EXEMPT", "1")
         _, why2 = TW.allowed(at(10, 30))
         assert "消息刺激例外已开" in why2 and "无可靠数据源" in why2
+
+
+class TestDisabledIsNotMisleading:
+    """关闭时 directive 不得再输出"时段…允许"（会被读成仍在生效）。"""
+
+    def test_directive_says_closed(self, monkeypatch):
+        monkeypatch.setenv("WOLF_TRADE_WINDOW", "0")
+        d = TW.directive()
+        assert "已关闭" in d and "允许" not in d
+
+    def test_allowed_passes_all_when_disabled(self, monkeypatch):
+        monkeypatch.setenv("WOLF_TRADE_WINDOW", "0")
+        ok, why = TW.allowed()
+        assert ok is True and "关闭" in why
