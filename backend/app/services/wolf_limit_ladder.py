@@ -213,28 +213,46 @@ def _fmt_date(d) -> str:
     return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 and s.isdigit() else (s or "未知日期")
 
 
+TAG_CN = {"complete": "梯队结构完整", "graduation": "集中毕业照(有量无高度)",
+          "failed": "上板失败(炸板高)", "plain": "一般"}
+
+
+def _fmt_item(k: str, v: Dict[str, Any]) -> str:
+    return "%s：%d涨停 最高%d板(%d/%d/%d) 炸%d → %s" % (
+        k, v["u_n"], v["max_times"], v["ladder"]["1"], v["ladder"]["2"],
+        v["ladder"]["3+"], v["z_n"], TAG_CN.get(v["tag"], v["tag"]))
+
+
 def directive() -> str:
     """给复盘/次日决策上下文的提示（他用法：据此判断接下来做哪个方向）。
 
-    主题映射（theme_of_symbol）覆盖的是**我们可交易的主题池**，涨停股里大部分不在其中 →
-    主题榜为空时回退到**行业**维度（tushare industry），保证任何时候都有可用信息。
+    两个维度**都要给**：
+      · 【主题】= 我们可交易的主题池（theme_of_symbol 映射）→ 可直接落到方向；
+        但该映射覆盖窄（生产实测 2026-09-10 仅 3/35 只涨停股能归到主题），
+        **不能让它把全市场的行业信号挡掉**（首版就犯了这个错）。
+      · 【行业】= tushare industry，全市场覆盖 → 补全"方向强弱"的底图；
+        其中**毕业照 / 上板失败**是异常信号，优先展示（挤掉 plain 的）。
     """
     st = load()
     if not st:
         return ""
-    tag_cn = {"complete": "梯队结构完整", "graduation": "集中毕业照(有量无高度)",
-              "failed": "上板失败(炸板高)", "plain": "一般"}
-    src = st.get("by_theme") or {}
-    dim = "主题"
-    if not src:
-        src = st.get("by_industry") or {}
-        dim = "行业"
-    if not src:
-        return ""
-    lines = ["📈 %s 涨停梯队[%s]（狼大 2025-04-21 复盘流程：「看涨停板方向…"
-             "判断板块的强弱从而推断接下来要做的方向」）" % (_fmt_date(st.get("date")), dim)]
-    for k, v in sorted(src.items(), key=lambda kv: -kv[1]["u_n"])[:5]:
-        lines.append("  - %s：%d涨停 最高%d板（%d/%d/%d 板）炸板%d → **%s**"
-                     % (k, v["u_n"], v["max_times"], v["ladder"]["1"], v["ladder"]["2"],
-                        v["ladder"]["3+"], v["z_n"], tag_cn.get(v["tag"], v["tag"])))
+    total = st.get("totals") or {}
+    lines = ["📈 %s 涨停梯队（狼大 2025-04-21 复盘流程：「看涨停板方向…"
+             "判断板块的强弱从而推断接下来要做的方向」）｜涨停%s 炸板%s 跌停%s"
+             % (_fmt_date(st.get("date")), total.get("u", "?"), total.get("z", "?"), total.get("d", "?"))]
+
+    th = sorted((st.get("by_theme") or {}).items(), key=lambda kv: -kv[1]["u_n"])[:3]
+    if th:
+        lines.append("  【主题】" + " ｜ ".join(_fmt_item(k, v) for k, v in th))
+
+    ind = st.get("by_industry") or {}
+    odd = [(k, v) for k, v in ind.items() if v.get("tag") in ("graduation", "failed")]
+    odd.sort(key=lambda kv: -kv[1]["u_n"])
+    if odd:
+        lines.append("  【行业·异常】" + " ｜ ".join(_fmt_item(k, v) for k, v in odd[:3]))
+    shown = {k for k, _ in odd[:3]}
+    big = [(k, v) for k, v in sorted(ind.items(), key=lambda kv: -kv[1]["u_n"])
+           if v.get("u_n", 0) >= 2 and k not in shown]      # 已在"异常"行出现的不重复
+    if big:
+        lines.append("  【行业·家数】" + " ｜ ".join(_fmt_item(k, v) for k, v in big[:4]))
     return "\n".join(lines)

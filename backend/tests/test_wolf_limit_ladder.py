@@ -182,8 +182,8 @@ class TestScanAndSave:
 
 
 class TestDirective:
-    def test_falls_back_to_industry_when_no_theme(self):
-        """主题映射只覆盖可交易主题池 → 主题榜空时回退行业维度，保证信息不丢。"""
+    def test_shows_both_dimensions(self):
+        """**两个维度都要给**：主题映射覆盖窄（生产 3/35），不能让它挡掉全市场的行业信号。"""
         LL.scan_and_save("20260910", rows=[
             _row("600001.SH", "甲", "电力", "U", 1),
             _row("600002.SH", "乙", "电力", "U", 2),
@@ -191,22 +191,37 @@ class TestDirective:
             _row("600004.SH", "丁", "化学制药", "U", 1),
             _row("600005.SH", "戊", "化学制药", "U", 1),
             _row("600006.SH", "己", "化学制药", "U", 1)])
+        st = LL.load()
+        st["by_theme"] = {"医药": st["by_industry"]["化学制药"]}
+        import json
+        json.dump(st, open(LL._path(), "w", encoding="utf-8"), ensure_ascii=False)
         d = LL.directive()
-        assert "2026-09-10" in d and "[行业]" in d
-        assert "化学制药" in d and "集中毕业照" in d      # 4 家全首板 → 毕业照
-        assert "电力" in d
+        assert "2026-09-10" in d
+        assert "【主题】" in d and "【行业·异常】" in d       # 主题 + 行业都给
+        assert "集中毕业照" in d                             # 4 家全首板 → 异常信号
+        assert "医药：4涨停" in d and "化学制药：4涨停" in d
+        # 同一行业不得在"异常"和"家数"两行里重复出现（出现两次 = 白占上下文）
+        assert d.count("化学制药：4涨停") == 1
+        assert "涨停6 炸板0 跌停0" in d
+
+    def test_industry_only_when_no_theme(self):
+        LL.scan_and_save("20260910", rows=[
+            _row("600001.SH", "甲", "电网设备", "U", 1),
+            _row("600002.SH", "乙", "电网设备", "U", 1),
+            _row("600003.SH", "丙", "电网设备", "Z", 1),
+            _row("600004.SH", "丁", "电网设备", "Z", 1)])
+        d = LL.directive()
+        assert "【主题】" not in d and "【行业·异常】" in d
+        assert "上板失败" in d                                # 2涨停/2炸板 → 失败
+
+    def test_totals_in_header(self):
+        LL.scan_and_save("20260910", rows=[_row("600001.SH", "甲", "电力", "U", 1),
+                                           _row("600002.SH", "乙", "电力", "Z", 1),
+                                           _row("600003.SH", "丙", "电力", "D", 1)])
+        assert "涨停1 炸板1 跌停1" in LL.directive()
 
     def test_empty_state_returns_blank(self):
         assert LL.directive() == ""
-
-    def test_guard_when_by_theme_present(self):
-        LL.scan_and_save("20260910", rows=[
-            _row("600001.SH", "甲", "电力", "U", 1), _row("600002.SH", "乙", "电力", "U", 2)])
-        st = LL.load()
-        st["by_theme"] = {"半导体": st["by_industry"]["电力"]}
-        import json
-        json.dump(st, open(LL._path(), "w", encoding="utf-8"), ensure_ascii=False)
-        assert "[主题]" in LL.directive()
 
 
 class TestWiredIntoContext:
