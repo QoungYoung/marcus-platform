@@ -540,13 +540,19 @@ def upsert_regime_state(state: Dict[str, Any]) -> bool:
 # t_daily_state / t_risk_state
 # ────────────────────────────────────────────────────────────────
 
-def get_daily_state(trade_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_daily_state(trade_date: Optional[str] = None, account: str = "t") -> Optional[Dict[str, Any]]:
+    """取某账户某日的日账本。
+
+    ⚠️ 2026-09-11 修：原来**硬编码 account_id='t'**，而 `_update_daily_ledger` 也没有账户维度
+    → **stock / golden_pit 的成交会写进 t 的账本**（生产实测：account t 的 paper_trades 最后
+    一笔是 09-02，但 t 的日账本 09-11 仍显示买2卖4，其实是 stock 账户的成交）。
+    """
     try:
         db = SessionLocal()
         try:
             row = db.execute(text(
-                "SELECT * FROM t_daily_state WHERE account_id = 't' AND trade_date = :trade_date"
-            ), {"trade_date": trade_date or _today()}).mappings().first()
+                "SELECT * FROM t_daily_state WHERE account_id = :a AND trade_date = :trade_date"
+            ), {"a": account, "trade_date": trade_date or _today()}).mappings().first()
             return dict(row) if row else None
         finally:
             db.close()
@@ -555,38 +561,52 @@ def get_daily_state(trade_date: Optional[str] = None) -> Optional[Dict[str, Any]
         return None
 
 
-def upsert_daily_state(state: Dict[str, Any]) -> bool:
+def upsert_daily_state(state: Dict[str, Any], account: str = "t") -> bool:
+    """写某账户某日的日账本。
+
+    ⚠️ 2026-09-11 修两处：
+      ① 原来硬编码 account_id='t'（见 get_daily_state 注释）→ 增加 account 参数；
+      ② 原来对**未提供的字段**用默认值覆盖（例如 `risk_breaker` 没传就写 False）→
+         任何一次成交都会把熔断标志清掉。改为：**只更新显式传入的字段**。
+    """
+    _FIELDS = ("daily_turnover_amount", "net_turnover_shares", "realized_pnl",
+               "buy_count", "sell_count", "risk_breaker", "breaker_reason")
+    _provided = {k: state[k] for k in _FIELDS if k in state}
+    if not _provided:
+        return False
     try:
         db = SessionLocal()
         try:
+            # 只更新显式传入的字段：未传的列沿用行内现值（EXCLUDED 里给 NULL 会被 COALESCE 挡掉）
             db.execute(text(
                 """
                 INSERT INTO t_daily_state (
                     account_id, trade_date, daily_turnover_amount, net_turnover_shares,
                     realized_pnl, buy_count, sell_count, risk_breaker, breaker_reason, updated_at
                 ) VALUES (
-                    't', :trade_date, :daily_turnover_amount, :net_turnover_shares,
+                    :account, :trade_date, :daily_turnover_amount, :net_turnover_shares,
                     :realized_pnl, :buy_count, :sell_count, :risk_breaker, :breaker_reason, now()
                 )
                 ON CONFLICT (account_id, trade_date) DO UPDATE SET
-                    daily_turnover_amount = EXCLUDED.daily_turnover_amount,
-                    net_turnover_shares = EXCLUDED.net_turnover_shares,
-                    realized_pnl = EXCLUDED.realized_pnl,
-                    buy_count = EXCLUDED.buy_count,
-                    sell_count = EXCLUDED.sell_count,
-                    risk_breaker = EXCLUDED.risk_breaker,
-                    breaker_reason = EXCLUDED.breaker_reason,
+                    daily_turnover_amount = COALESCE(EXCLUDED.daily_turnover_amount, t_daily_state.daily_turnover_amount),
+                    net_turnover_shares = COALESCE(EXCLUDED.net_turnover_shares, t_daily_state.net_turnover_shares),
+                    realized_pnl = COALESCE(EXCLUDED.realized_pnl, t_daily_state.realized_pnl),
+                    buy_count = COALESCE(EXCLUDED.buy_count, t_daily_state.buy_count),
+                    sell_count = COALESCE(EXCLUDED.sell_count, t_daily_state.sell_count),
+                    risk_breaker = COALESCE(EXCLUDED.risk_breaker, t_daily_state.risk_breaker),
+                    breaker_reason = COALESCE(EXCLUDED.breaker_reason, t_daily_state.breaker_reason),
                     updated_at = now()
                 """
             ), {
+                "account": account,
                 "trade_date": state.get("trade_date", _today()),
-                "daily_turnover_amount": state.get("daily_turnover_amount", 0),
-                "net_turnover_shares": state.get("net_turnover_shares", 0),
-                "realized_pnl": state.get("realized_pnl", 0),
-                "buy_count": state.get("buy_count", 0),
-                "sell_count": state.get("sell_count", 0),
-                "risk_breaker": bool(state.get("risk_breaker", False)),
-                "breaker_reason": state.get("breaker_reason"),
+                "daily_turnover_amount": _provided.get("daily_turnover_amount"),
+                "net_turnover_shares": _provided.get("net_turnover_shares"),
+                "realized_pnl": _provided.get("realized_pnl"),
+                "buy_count": _provided.get("buy_count"),
+                "sell_count": _provided.get("sell_count"),
+                "risk_breaker": (bool(_provided["risk_breaker"]) if "risk_breaker" in _provided else None),
+                "breaker_reason": _provided.get("breaker_reason"),
             })
             db.commit()
             return True

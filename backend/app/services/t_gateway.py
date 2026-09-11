@@ -285,9 +285,11 @@ def _realized_today(account: str = "t") -> float:
         from app.database import SessionLocal
         db = SessionLocal()
         try:
+            # ⚠️ paper_trades.voided 是 **integer** 列（不是 boolean）——
+            #    写成 COALESCE(voided, false) 会 DatatypeMismatch（生产实测踩过）
             row = db.execute(text(
                 "SELECT COALESCE(SUM(profit), 0) FROM paper_trades "
-                "WHERE account_id = :a AND trade_date = :d AND COALESCE(voided, false) = false"
+                "WHERE account_id = :a AND trade_date = :d AND COALESCE(voided, 0) = 0"
             ), {"a": account, "d": datetime.now().strftime("%Y-%m-%d")}).fetchone()
             return float(row[0] or 0) if row else 0.0
         finally:
@@ -872,7 +874,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             t_db.update_trigger_status(trigger_id, "executed",
                                        executed_price=float(result.get("price", price) or price))
         # 更新日账本
-        _update_daily_ledger(symbol, side, price, volume)
+        _update_daily_ledger(symbol, side, price, volume, account=account_id)
         # B模型·等量换手(2026-09-08 落地): stock账户低吸买入成交 → 登记换手额度
         if side == "buy" and account_id in ("stock",):
             try:
@@ -887,10 +889,15 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     return {**result, "status": "rejected", "reason": result.get("reason") or "撮合失败"}
 
 
-def _update_daily_ledger(symbol: str, side: str, price: float, volume: int):
-    """更新 t_daily_state（累计回转额/买卖计数；realized_pnl 由引擎成交推送补全）。"""
+def _update_daily_ledger(symbol: str, side: str, price: float, volume: int, account: str = "t"):
+    """更新该账户的日账本（累计回转额/买卖计数/当日已实现盈亏）。
+
+    ⚠️ 2026-09-11 修：原来**没有 account 维度**（t_db.get_daily_state 硬编码 't'）→
+    stock/golden_pit 的成交会污染 t 的账本（生产实测）。
+    realized_pnl 过去没人写（注释说"由引擎成交推送补全"但无人补）→ 现按 paper_trades 当日 profit 合计补写。
+    """
     try:
-        daily = t_db.get_daily_state() or {}
+        daily = t_db.get_daily_state(account=account) or {}
         amount = float(daily.get("daily_turnover_amount") or 0) + price * volume
         buy_count = int(daily.get("buy_count") or 0) + (1 if side == "buy" else 0)
         sell_count = int(daily.get("sell_count") or 0) + (1 if side == "sell" else 0)
@@ -901,9 +908,9 @@ def _update_daily_ledger(symbol: str, side: str, price: float, volume: int):
             "sell_count": sell_count,
         }
         try:
-            payload["realized_pnl"] = round(_realized_today(), 2)
+            payload["realized_pnl"] = round(_realized_today(account), 2)
         except Exception as _pe:
             print(f"[t-gate] 日账本 realized_pnl 补写失败(忽略): {str(_pe)[:60]}")
-        t_db.upsert_daily_state(payload)
+        t_db.upsert_daily_state(payload, account=account)
     except Exception as e:
         print(f"[t-gate] 日账本更新失败: {e}")
