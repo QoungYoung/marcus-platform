@@ -309,11 +309,17 @@ def logic_time_stop(bars: List[Dict[str, Any]], buy_date: Any,
         return False, ("有利空/意外事件(%s) → 不按逻辑时间离场（狼大: 那是\"别的逻辑\"）"
                        % ne.get("date"))
     d = int(days if days is not None else _env_int("WOLF_LOGIC_TIME_STOP_DAYS", EARLY_STAGE_DAYS_DEFAULT))
+    # reason 必须区分三种"不动作"（生产实测踩过: 把"窗口未走完"说成"前高算不出"会误导排查）
+    if swing_high_asof(bars, buy_date, win) is None:
+        return False, "前高数据不足（建仓日之前不足 %d 根日K）→ 不动作" % (
+            int(win if win is not None else _env_int("WOLF_SWING_HIGH_WIN", SWING_WIN_DEFAULT)))
     m = made_new_high(bars, buy_date, win=win, days=d, extra_high=extra_high)
-    if m is None:
-        return False, "数据不足（前高算不出）→ 不动作"
-    if m:
+    if m is True:
         return False, "窗口内已碰过前高 → 买入逻辑成立, 继续持有"
+    if m is None:                      # 未碰前高 **且** 窗口还没走完
+        _h = held_trading_days(bars, buy_date)
+        return False, "观察窗未走完（已持有 %s < %d 交易日）→ 不动作" % (
+            "?" if _h is None else _h, d)
     return True, ("建仓后 %d 个交易日内**从未碰过前高**(狼大2026-03-05「13日内需要碰新高或者新高。"
                   "否则这个票呆的意义就不大，证明自己的买入逻辑和时间有问题」) → 离场" % d)
 

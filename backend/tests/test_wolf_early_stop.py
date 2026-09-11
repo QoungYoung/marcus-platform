@@ -339,8 +339,10 @@ class TestLogicTimeStop:
 
     def test_hold_while_window_still_open(self):
         bars = bars_with_high(15, buy_idx=9, prior_high=12.0)
-        ok, _ = W.logic_time_stop(bars, bars[9]["date"])
+        ok, why = W.logic_time_stop(bars, bars[9]["date"])
         assert ok is False
+        # reason 必须说清是"窗口未走完"，不能与"前高算不出"混为一谈（生产排查踩过）
+        assert "观察窗未走完" in why and "数据不足" not in why
 
     def test_switch_off(self):
         bars = bars_with_high(30, buy_idx=9, prior_high=12.0)
@@ -368,7 +370,7 @@ class TestLogicTimeStop:
     def test_missing_data_does_not_exit(self):
         bars = bars_with_high(4, buy_idx=2, prior_high=12.0)
         ok, why = W.logic_time_stop(bars, bars[2]["date"])
-        assert ok is False and "数据不足" in why
+        assert ok is False and "前高数据不足" in why
 
     def test_front_high_win_configurable(self):
         bars = bars_with_high(30, buy_idx=9, prior_high=12.0, after_high=11.5)
