@@ -31,7 +31,8 @@ def make_bars(n, start_low=10.0, start="20260801"):
 @pytest.fixture(autouse=True)
 def _clean_env():
     keys = ["WOLF_EARLY_STOP", "WOLF_EARLY_STOP_DAYS", "WOLF_SWING_LOW_WIN", "WOLF_EARLY_STOP_PCT",
-            "WOLF_NEG_EVENT", "WOLF_NEG_EVENT_DAYS"]
+            "WOLF_NEG_EVENT", "WOLF_NEG_EVENT_DAYS",
+            "WOLF_LOGIC_TIME_STOP", "WOLF_LOGIC_TIME_STOP_DAYS", "WOLF_SWING_HIGH_WIN"]
     old = {k: os.environ.get(k) for k in keys}
     for k in keys:
         os.environ.pop(k, None)
@@ -275,3 +276,102 @@ class TestNegativeEventExemptsEarlyStop:
         bars = make_bars(30, start="20260801")
         _, src, _ = W.resolve_stop(9.5, bars, "20260817", symbol="SH600017", today="20260818")
         assert src == "wolf_early_swing"
+
+# ── ① 后半句：13 日内未碰新高 → 「逻辑与时间」离场（狼大 2026-03-05 同一句原话） ──
+
+def bars_with_high(n, buy_idx, prior_high=10.0, after_high=None, start="20260801"):
+    """造 n 根日K；前高由 buy_idx 之前的 high 决定；after_high 指定建仓后最高价。"""
+    import datetime as dt
+    d0 = dt.date(int(start[:4]), int(start[4:6]), int(start[6:8]))
+    out = []
+    for i in range(n):
+        d = (d0 + dt.timedelta(days=i)).strftime("%Y%m%d")
+        hi = prior_high if i <= buy_idx else (after_high if after_high is not None else prior_high - 0.5)
+        out.append({"date": d, "close": hi - 0.2, "high": hi, "low": hi - 0.6, "vol": 1000.0})
+    return out
+
+
+class TestMadeNewHigh:
+    def test_front_high_is_max_of_window_before_buy(self):
+        bars = bars_with_high(20, buy_idx=9, prior_high=12.0)
+        assert W.swing_high_asof(bars, bars[9]["date"], win=13) == pytest.approx(12.0)
+
+    def test_touch_counts_not_only_strict_break(self):
+        """狼大「**碰新高或者新高**」—— 碰到即算，不要求严格突破。"""
+        bars = bars_with_high(20, buy_idx=9, prior_high=12.0, after_high=12.0)
+        assert W.made_new_high(bars, bars[9]["date"], win=13, days=13) is True
+
+    def test_window_incomplete_returns_none(self):
+        """窗口没走完（持有 < 13 交易日）→ 不动作（不能买三天没新高就卖）。"""
+        bars = bars_with_high(15, buy_idx=9, prior_high=12.0)
+        assert W.made_new_high(bars, bars[9]["date"], win=13, days=13) is None
+
+    def test_window_elapsed_no_high_returns_false(self):
+        bars = bars_with_high(30, buy_idx=9, prior_high=12.0)
+        assert W.made_new_high(bars, bars[9]["date"], win=13, days=13) is False
+
+    def test_intraday_high_counts(self):
+        """盘中最高必须计入 —— 否则窗口最后一天的盘中触碰会漏判。"""
+        bars = bars_with_high(24, buy_idx=9, prior_high=12.0)   # 建仓后 14 根 > 13 → 窗口已走完
+        assert W.made_new_high(bars, bars[9]["date"], win=13, days=13) is False
+        assert W.made_new_high(bars, bars[9]["date"], win=13, days=13, extra_high=12.0) is True
+
+    def test_insufficient_prior_bars_returns_none(self):
+        bars = bars_with_high(4, buy_idx=2, prior_high=12.0)
+        assert W.made_new_high(bars, bars[2]["date"], win=13, days=13) is None
+
+    def test_no_buy_date_returns_none(self):
+        assert W.made_new_high(bars_with_high(20, 9), None, win=13, days=13) is None
+
+
+class TestLogicTimeStop:
+    def test_exit_when_window_elapsed_without_new_high(self):
+        bars = bars_with_high(30, buy_idx=9, prior_high=12.0)
+        ok, why = W.logic_time_stop(bars, bars[9]["date"])
+        assert ok is True
+        assert "2026-03-05" in why and "从未碰过前高" in why
+
+    def test_hold_when_new_high_made(self):
+        bars = bars_with_high(30, buy_idx=9, prior_high=12.0, after_high=12.5)
+        ok, why = W.logic_time_stop(bars, bars[9]["date"])
+        assert ok is False and "逻辑成立" in why
+
+    def test_hold_while_window_still_open(self):
+        bars = bars_with_high(15, buy_idx=9, prior_high=12.0)
+        ok, _ = W.logic_time_stop(bars, bars[9]["date"])
+        assert ok is False
+
+    def test_switch_off(self):
+        bars = bars_with_high(30, buy_idx=9, prior_high=12.0)
+        os.environ["WOLF_LOGIC_TIME_STOP"] = "0"
+        ok, why = W.logic_time_stop(bars, bars[9]["date"])
+        assert ok is False and "WOLF_LOGIC_TIME_STOP=0" in why
+
+    def test_window_configurable(self):
+        bars = bars_with_high(20, buy_idx=9, prior_high=12.0)   # 建仓后 10 根
+        assert W.logic_time_stop(bars, bars[9]["date"])[0] is False          # 默认 13 → 未走完
+        os.environ["WOLF_LOGIC_TIME_STOP_DAYS"] = "5"
+        assert W.logic_time_stop(bars, bars[9]["date"])[0] is True           # 5 → 已走完
+
+    def test_neg_event_exempts(self):
+        """黑天鹅导致的不创新高属"别的逻辑" → 不按逻辑时间离场。"""
+        bars = bars_with_high(30, buy_idx=9, prior_high=12.0)
+        ok, why = W.logic_time_stop(bars, bars[9]["date"],
+                                    neg_event={"date": "20260815", "note": "黑天鹅"})
+        assert ok is False and "别的逻辑" in why
+
+    def test_no_neg_event_still_exits(self):
+        bars = bars_with_high(30, buy_idx=9, prior_high=12.0)
+        assert W.logic_time_stop(bars, bars[9]["date"], neg_event=None)[0] is True
+
+    def test_missing_data_does_not_exit(self):
+        bars = bars_with_high(4, buy_idx=2, prior_high=12.0)
+        ok, why = W.logic_time_stop(bars, bars[2]["date"])
+        assert ok is False and "数据不足" in why
+
+    def test_front_high_win_configurable(self):
+        bars = bars_with_high(30, buy_idx=9, prior_high=12.0, after_high=11.5)
+        assert W.logic_time_stop(bars, bars[9]["date"])[0] is True     # 前高 12.0 未碰
+        os.environ["WOLF_SWING_HIGH_WIN"] = "5"
+        # 窗口缩短 → 前高仍是 12.0（买点前 5 根都是 12.0）→ 仍不碰
+        assert W.logic_time_stop(bars, bars[9]["date"])[0] is True

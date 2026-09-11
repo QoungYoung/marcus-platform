@@ -200,6 +200,124 @@ def swing_low_asof(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int]
     return min(lo for _, lo in rows)
 
 
+def swing_high_asof(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int] = None) -> Optional[float]:
+    """**建仓时点的前高**: 建仓日（含）之前 win 根日K 的**最高价**（与 swing_low_asof 对称）。
+
+    狼大 2026-03-05 语境: 他「参考 618 点位建仓、786 去补仓」——目标就是回到并突破
+    回调之前那个高点（"新高"）。故前高 = 建仓日之前那段的高点。
+    数据不足 MIN_SWING_BARS 根 → None（调用方不动作，详情见 made_new_high）。
+    """
+    w = int(win if win is not None else _env_int("WOLF_SWING_HIGH_WIN", SWING_WIN_DEFAULT))
+    if w <= 0:
+        return None
+    bd = _norm_date(buy_date)
+    if not bd:
+        return None
+    rows = []
+    for b in bars or []:
+        d = _norm_date(b.get("date"))
+        if not d or d > bd:
+            continue
+        try:
+            hi = float(b.get("high") or 0)
+        except Exception:
+            continue
+        if hi > 0:
+            rows.append((d, hi))
+    rows.sort(key=lambda x: x[0])
+    rows = rows[-w:]
+    if len(rows) < MIN_SWING_BARS:
+        return None
+    return max(hi for _, hi in rows)
+
+
+def made_new_high(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int] = None,
+                  days: Optional[int] = None, extra_high: Optional[float] = None) -> Optional[bool]:
+    """建仓后 `days`（默认 WOLF_LOGIC_TIME_STOP_DAYS=13）个交易日内**是否碰过/创过前高**。
+
+    `extra_high`: 当日**盘中最高**（腾讯 quote 的 high）。
+      必须传 —— 否则窗口最后一天的"盘中碰新高"会被漏判，白白多拿一天再卖。
+    返回:
+      · True  = 窗口内碰过前高（或窗口尚未走完但已碰过）→ 买入逻辑成立;
+      · False = 窗口已走完且**从未**碰过前高 → 逻辑/时间有问题 → 离场;
+      · None  = 数据不足（前高算不出）→ **不动作**（fail-open 到"继续持有"，不凭缺失数据卖票）。
+    """
+    bd = _norm_date(buy_date)
+    if not bd:
+        return None
+    ph = swing_high_asof(bars, buy_date, win)
+    if ph is None:
+        return None
+    n = int(days if days is not None else _env_int("WOLF_LOGIC_TIME_STOP_DAYS", EARLY_STAGE_DAYS_DEFAULT))
+    rows = []
+    for b in bars or []:
+        d = _norm_date(b.get("date"))
+        if not d or d <= bd:
+            continue
+        try:
+            hi = float(b.get("high") or 0)
+        except Exception:
+            continue
+        rows.append((d, hi))
+    rows.sort(key=lambda x: x[0])
+    try:
+        eh = float(extra_high or 0)
+    except Exception:
+        eh = 0.0
+    touched = any(hi >= ph for _, hi in rows)
+    if eh > 0 and eh >= ph:
+        touched = True
+    if touched:
+        return True
+    return False if len(rows) >= n else None
+
+
+def logic_time_stop(bars: List[Dict[str, Any]], buy_date: Any,
+                    days: Optional[int] = None, win: Optional[int] = None,
+                    extra_high: Optional[float] = None,
+                    neg_event: Optional[Dict[str, Any]] = None,
+                    symbol: Any = None, today: Any = None) -> Tuple[bool, str]:
+    """**建仓初期「逻辑与时间」离场**（狼大止损六层之① 的**后半句**）→ (should_exit, reason)。
+
+    狼大原话（2026-03-05，与 -3% 那条**同一句**）:
+      「我说一下我用的 **买入有时间** 然后13日内跌破波段低点的-3%没有收回 直接止损，
+        **13日内需要碰新高或者新高。否则这个票呆的意义就不大，证明自己的买入逻辑和时间有问题**。
+        按我0.618买入的情况下 这样止损就是-6%左右 是可以接受的。」
+
+    → 语义: 建仓后的 13 个交易日是一次**观察窗**; 窗口内既没碰新高、也没跌破波段低点-3%的票,
+      「呆的意义就不大」→ **离场**（不是等它慢慢跌到止损线）。
+      这是**时间/逻辑维度**的离场, 与 ① 的价格止损互补, 共用同一个 13 日窗口。
+
+    口径说明:
+      · 前高 = 建仓日（含）之前 `WOLF_SWING_HIGH_WIN`（默认 13）根日K 的最高价（与波段低点同窗同源）;
+      · 「碰新高或者新高」按原话取 **>= 前高**（碰即算, 不要求严格突破）; 盘中最高也计入;
+      · **窗口未走完（持有 < days）不动作** —— 不能买了三天没新高就卖;
+      · 数据不足（前高算不出）→ **不动作**（fail-open, 不凭缺失数据卖票）。
+
+    「无利空」前提: 原话里该前提是针对 -3% 那条说的; 对新高要求属**同窗逻辑的外推**
+      （狼大对黑天鹅的一贯态度是"那是别的逻辑"，见 `negative_event`）→ 同样豁免。
+      不认同这个外推的话，`WOLF_NEG_EVENT=0` 会把两条一起关掉。
+
+    开关: `WOLF_LOGIC_TIME_STOP=0` 关闭本机制。
+    """
+    if os.getenv("WOLF_LOGIC_TIME_STOP", "1").strip() in ("0", "false", "no"):
+        return False, "WOLF_LOGIC_TIME_STOP=0 → 不动作"
+    ne = neg_event
+    if ne is None and symbol is not None:
+        ne = negative_event(symbol, buy_date=buy_date, today=today)
+    if ne:
+        return False, ("有利空/意外事件(%s) → 不按逻辑时间离场（狼大: 那是\"别的逻辑\"）"
+                       % ne.get("date"))
+    d = int(days if days is not None else _env_int("WOLF_LOGIC_TIME_STOP_DAYS", EARLY_STAGE_DAYS_DEFAULT))
+    m = made_new_high(bars, buy_date, win=win, days=d, extra_high=extra_high)
+    if m is None:
+        return False, "数据不足（前高算不出）→ 不动作"
+    if m:
+        return False, "窗口内已碰过前高 → 买入逻辑成立, 继续持有"
+    return True, ("建仓后 %d 个交易日内**从未碰过前高**(狼大2026-03-05「13日内需要碰新高或者新高。"
+                  "否则这个票呆的意义就不大，证明自己的买入逻辑和时间有问题」) → 离场" % d)
+
+
 def held_trading_days(bars: List[Dict[str, Any]], buy_date: Any) -> Optional[int]:
     """建仓日**之后**的日K根数 = 持有交易日数（无建仓日 / 无数据 → None）。
 

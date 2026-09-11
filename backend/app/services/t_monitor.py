@@ -141,6 +141,7 @@ class TMonitor:
                     self._check_profit_take()  # 小赚兑现(P0-3, 默认关): 浮盈>=阈值→减仓锁定(保留底仓)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
                     self._check_index_level_stop()  # ③ 指数大级别止损(狼大2026-08-27): 转下跌1浪→止损
+                    self._check_logic_time_stop()  # ① 后半句: 13日内未碰前高→逻辑时间离场(狼大2026-03-05)
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
@@ -710,6 +711,83 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] index_level_stop异常: {e}")
+
+    def _check_logic_time_stop(self) -> None:
+        """① 后半句：**建仓初期「逻辑与时间」离场**（2026-09-11，狼大 2026-03-05 同一句原话）。
+
+        狼大:「我说一下我用的 **买入有时间** 然后13日内跌破波段低点的-3%没有收回 直接止损，
+              **13日内需要碰新高或者新高。否则这个票呆的意义就不大，证明自己的买入逻辑和时间有问题**」
+
+        → 建仓后 13 个交易日是**观察窗**：窗口走完仍**从未碰过前高**（=建仓日之前 13 根日K 的最高价，
+          与波段低点同窗同源）→ 买入逻辑与时间都不成立 → **离场**（不是等它慢慢跌到止损线）。
+        → 判据由 wolf_early_stop.logic_time_stop 给出（纯函数）：
+          · **窗口未走完（持有 < 13 交易日）一律不动作**（不能买三天没新高就卖）;
+          · 盘中最高计入「碰新高」（腾讯 quote.high）—— 否则窗口最后一天的盘中触碰会漏判;
+          · 数据不足（前高算不出）→ **不动作**（fail-open，不凭缺失数据卖票）;
+          · 「无利空」前提沿用（黑天鹅导致的不创新高属"别的逻辑"，见 negative_event）。
+
+        动作 = 卖出量复用 _stop_exit_volume（收盘窗口→清仓 / 盘中→减半仓，与止损同一分级，
+          不新造第二套量级规则）; 受 ④ 时点门约束; 走网关 is_stop_loss=True（止血优先）。
+        开关: WOLF_LOGIC_TIME_STOP=0 关闭。去抖: 每标的每日一次。
+        """
+        try:
+            if os.getenv("WOLF_LOGIC_TIME_STOP", "1").strip() in ("0", "false", "no"):
+                return
+            from app.services.wolf_early_stop import logic_time_stop as _logic_ts
+            _today = datetime.now().strftime('%Y%m%d')
+            from app.services.t_pool import _get_positions
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger
+            _acct = T_MONITOR_ACCOUNT
+            _ledger = get_sellable_ledger(account_id=_acct) or {}
+            _cands = []
+            for p in (_get_positions() or []):
+                if float(p.get('volume') or 0) <= 0:
+                    continue
+                _sym = _normalize_symbol(p.get('symbol'))
+                _sellable = int((_ledger.get(_sym) or {}).get("sellable", 0) or 0)
+                if _sellable > 0:
+                    _cands.append((_sym, _sellable))
+            if not _cands:
+                return
+            _quotes = fetch_tencent_quote([s for s, _ in _cands])
+            _close_win = _in_close_window()
+            for _sym, _sellable in _cands:
+                try:
+                    if (_sym, 'wolf_logic_time_stop', _today) in self._wolf_done:
+                        continue
+                    _bd = self._buy_date(_sym, _today)
+                    if not _bd:
+                        continue
+                    _q = _quotes.get(_sym) or {}
+                    _cur = float(_q.get("current") or 0)
+                    if _cur <= 0:
+                        continue
+                    _exit, _why = _logic_ts(self._daily_dated(_sym, 40), _bd,
+                                            extra_high=_q.get("high"),
+                                            symbol=_sym, today=_today)
+                    if not _exit:
+                        continue
+                    _tok, _treason = _stop_time_ok()
+                    if not _tok:
+                        _tk = (_sym, "logictime", _today)
+                        if _tk not in _STOP_HOLD_WARNED:
+                            _STOP_HOLD_WARNED.add(_tk)
+                            print(f"[TMonitor] 逻辑时间离场被时点门拦下(仅预警) {_sym}: {_why} | {_treason}")
+                        continue
+                    _vol, _mode = _stop_exit_volume(_sellable, _close_win)
+                    if _vol <= 0:
+                        continue
+                    _gw = gateway_execute(_sym, "sell", _cur, _vol,
+                                          reason="建仓初期逻辑时间离场→%s（%s）" % (_mode, _why),
+                                          decision_source="rule", is_stop_loss=True, account_id=_acct)
+                    print(f"[TMonitor] 逻辑时间离场[{_mode}] {_sym} @ {_cur} x{_vol}: "
+                          f"{_gw.get('status')} | {_why}")
+                    self._wolf_done.add((_sym, 'wolf_logic_time_stop', _today))
+                except Exception as _e1:
+                    print(f"[TMonitor] 逻辑时间离场 {_sym} 异常: {str(_e1)[:120]}")
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] logic_time_stop异常: {e}")
 
     def _roll_wolf_legs(self, today: str) -> int:
         """狼大持续腿跨日结转（2026-09-03 修复生产监控条件丢失）。
