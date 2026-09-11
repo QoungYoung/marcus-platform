@@ -98,10 +98,40 @@ class TestActiveSells:
         assert len(r["active_sells"]) == 1
 
 
+def _top_on(monkeypatch, pos=0.9):
+    monkeypatch.setattr(BL, "market_top", lambda force=False: {"top": True, "pos": pos, "win": 120})
+
+
+class TestMarketTopGate:
+    """他 2025-05-13 那句的前提是「**顶部阶段**」——回测证实：不加前提这条规则不成立
+    （全样本逐日差 +0.159% vs 加"大盘高位"前提后 −1.994%）。"""
+
+    def test_no_trigger_when_not_market_top(self, monkeypatch):
+        monkeypatch.setattr(BL, "levels", lambda sym, force=False: {"symbol": sym, "mid": 9.0, "prev_vol": 100.0})
+        monkeypatch.setattr(BL, "market_top", lambda force=False: {"top": False, "pos": 0.3, "win": 120})
+        pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
+        assert BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5, "vol": 300.0}}) == []
+
+    def test_no_trigger_when_market_data_unavailable(self, monkeypatch):
+        """取不到大盘位置 → **不放行**（宁可不卖；避免在未知行情下清仓）。"""
+        monkeypatch.setattr(BL, "levels", lambda sym, force=False: {"symbol": sym, "mid": 9.0, "prev_vol": 100.0})
+        monkeypatch.setattr(BL, "market_top", lambda force=False: None)
+        pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
+        assert BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5, "vol": 300.0}}) == []
+
+    def test_trigger_when_market_top(self, monkeypatch):
+        monkeypatch.setattr(BL, "levels", lambda sym, force=False: {"symbol": sym, "mid": 9.0, "prev_vol": 100.0})
+        _top_on(monkeypatch)
+        pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
+        r = BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5, "vol": 300.0}})
+        assert len(r) == 1 and "顶部阶段" in r[0]["reason"]
+
+
 class TestMidBreak:
     def test_mid_break_is_opt_in(self, monkeypatch):
         """中轨侧（2025-05-13「放量跌破收盘完全止盈」）**默认不自动卖**，只在开启后进 hint。"""
         monkeypatch.setattr(BL, "levels", lambda sym, force=False: {"symbol": sym, "upper": 10.0, "mid": 9.0})
+        _top_on(monkeypatch)
         pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
         q = {"SH600000": {"current": 8.5, "high": 8.6}}
         assert BL.mid_break_sells(pf, quotes=q)          # 计算得到
@@ -111,6 +141,7 @@ class TestMidBreak:
 
     def test_above_mid_no_break(self, monkeypatch):
         monkeypatch.setattr(BL, "levels", lambda sym, force=False: {"symbol": sym, "upper": 10.0, "mid": 9.0})
+        _top_on(monkeypatch)
         pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
         assert BL.mid_break_sells(pf, quotes={"SH600000": {"current": 9.5}}) == []
 
@@ -159,13 +190,13 @@ class TestMidExitPrereqs:
             "symbol": sym, "upper": 10.0, "mid": mid, "prev_vol": prev_vol})
 
     def test_requires_profit(self, monkeypatch):
-        self._lv(monkeypatch)
+        self._lv(monkeypatch); _top_on(monkeypatch)
         pf = {"positions": [{"symbol": "SH600000", "avg_cost": 12.0, "volume": 100}]}
         assert BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5}}) == []
 
     def test_requires_volume_expansion(self, monkeypatch):
         """「放量跌破」→ 缩量跌破不触发。"""
-        self._lv(monkeypatch, prev_vol=2000.0)
+        self._lv(monkeypatch, prev_vol=2000.0); _top_on(monkeypatch)
         pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
         q = {"SH600000": {"current": 8.5, "vol": 1000.0}}      # 0.5× → 缩量
         assert BL.mid_break_sells(pf, quotes=q) == []
@@ -175,13 +206,13 @@ class TestMidExitPrereqs:
 
     def test_volume_threshold_tunable(self, monkeypatch):
         monkeypatch.setenv("WOLF_BOLL_MID_VOL", "2.0")
-        self._lv(monkeypatch, prev_vol=2000.0)
+        self._lv(monkeypatch, prev_vol=2000.0); _top_on(monkeypatch)
         pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
         assert BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5, "vol": 3000.0}}) == []
 
     def test_no_volume_data_does_not_block(self, monkeypatch):
         """行情里没有量（或没有前一日量）时**不因缺数据而误拦**，但仍要求浮盈+跌破中轨。"""
-        self._lv(monkeypatch, prev_vol=0.0)
+        self._lv(monkeypatch, prev_vol=0.0); _top_on(monkeypatch)
         pf = {"positions": [{"symbol": "SH600000", "avg_cost": 8.0, "volume": 100}]}
         r = BL.mid_break_sells(pf, quotes={"SH600000": {"current": 8.5}})
         assert len(r) == 1 and r[0]["vol_ratio"] is None
