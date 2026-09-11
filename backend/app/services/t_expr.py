@@ -80,6 +80,11 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     # 大盘5min单根急杀(C档, 狼大'盘中带下来'分时形态, 验证 backtest_zt_signal_compare):
     # 上证最新5min单根收盘较前一根跌幅%; >=0.4 触发低吸(回测16天 T+1+0.82%/0.58)
     "index.m5_dump": ("number", "上证最新5min单根跌幅%(较前一根; 急杀>=0.4低吸)", "t_monitor._index_m5_dump"),
+    # A4 黄白线（2026-09-11, 狼大 2025-04-15 条件3）：
+    #   spread = 黄线(沪市等权平均涨跌幅) − 白线(上证涨跌幅)；
+    #   >0 = 黄线在上(普涨/小票强, 做T成功率高)；<0 = 白线在上(权重护盘, 减少做T)。
+    "index.huang_bai_spread": ("number", "黄白线差pp(等权−上证; >0黄线在上)", "wolf_index_breadth"),
+    "index.bai_on_top": ("bool", "白线在上(权重强于小票→减少做T)", "wolf_index_breadth"),
     # 个股触前一交易日5min最低(A档+缩量; 狼大'挂前一天的低点', 2025-03-06):
     # 当日触及/跌破前日低点(±0.5%)且量比<=0.7缩量 -> 低吸(回测133天 T+1+0.78%/0.56)
     "quote.dip_prev_low": ("bool", "个股当日触及前一交易日5min最低(±0.5%; A档正T低吸)", "t_monitor._stock_dip_prev_low"),

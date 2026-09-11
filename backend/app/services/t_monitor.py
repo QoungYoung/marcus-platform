@@ -1330,6 +1330,20 @@ class TMonitor:
             "intraday_dd": self._index_intraday_dd(),
             "m5_dump": self._index_m5_dump(),
         }
+        # 黄白线（A4, 2026-09-11）：日内强弱总开关 —— 黄(等权)在上→做T成功率高；白(加权)在上→减少做T。
+        # 狼大 2025-04-15 条件3。取数在新浪(约16s/次) → 模块内 TTL 缓存 + fail-open，取不到给 None。
+        try:
+            from app.services.wolf_index_breadth import snapshot as _hb_snap
+            _hb = _hb_snap() or {}
+            snapshot["index"].update({
+                "huang_bai_spread": _hb.get("huang_bai_spread"),
+                "huang_bai_side": _hb.get("huang_bai_side"),
+                "huang_bai_equal": _hb.get("huang_bai_equal"),
+                "huang_bai_index": _hb.get("huang_bai_index"),
+                "bai_on_top": (_hb.get("huang_bai_side") == "bai"),
+            })
+        except Exception as _hbe:
+            print(f"[TMonitor] 黄白线取数异常(忽略): {str(_hbe)[:80]}")
         # tech.*（技术指标：KDJ/MACD/RSI/MA，复用 get_realtime_indicators，带缓存）
         snapshot["tech"] = self._build_tech_snapshot(symbol, snapshot["quote"])
         # external.*（外部风险：美股纳指/费半/美债10Y/全球宏观，TTL 缓存降级）

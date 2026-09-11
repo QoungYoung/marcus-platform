@@ -486,13 +486,21 @@ def position_cap(portfolio, cfg=None, operation=None):
 
 
 def discipline_context(portfolio=None, now=None, window=None, quotes=None):
-    """返回注入 prompt 的纪律规则上下文块(周末降仓 + 板上减半 + 小赚兑现 + 仓位纪律)。"""
+    """返回注入 prompt 的纪律规则上下文块(周末降仓 + 板上减半 + 小赚兑现 + 仓位纪律 + 黄白线)。"""
     now = now or __import__("datetime").datetime.now()
     wd = weekend_de_risk(portfolio, now, window=window)
     bh = board_half(portfolio, now, quotes=quotes)
     pt = profit_take(portfolio, now, quotes=quotes)
     pc = position_cap(portfolio)
     parts = []
+    # A4 黄白线（2026-09-11）：日内强弱总开关 —— 他的用法是"看着黄白线决定今天做T的力度"
+    try:
+        from app.services.wolf_index_breadth import directive as _hb_dir
+        _d = _hb_dir()
+        if _d:
+            parts.append("📊 " + _d)
+    except Exception:
+        pass
     if pc.get("directive"):
         parts.append(pc["directive"])
     if wd.get("active"):
