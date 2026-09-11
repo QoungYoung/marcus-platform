@@ -7,6 +7,7 @@
 狼大依据: 2026-01-29「今天没跌破我没出, 我说了 收盘跌破我才出」;
          2026-01-12「等收盘确认破位出清」。
 """
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -28,6 +29,50 @@ PARAMS = {
 def _bars(close, low, vol=1000.0, n=1):
     return [{"time": "2026-09-10 10:%02d:00" % (i * 5), "low": low, "close": close, "vol": vol}
             for i in range(n)]
+
+
+class TestStopExitVolume(unittest.TestCase):
+    """P2-4 完整落地: 收盘确认破位 → 清仓(含底仓); 盘中确认 → 减半仓。"""
+
+    def setUp(self):
+        from app.services.t_monitor import _stop_exit_volume, _in_close_window
+        self.vol = _stop_exit_volume
+        self.win = _in_close_window
+        self._saved = os.environ.pop("WOLF_BASE_EXIT_CLOSE", None)
+
+    def tearDown(self):
+        if self._saved is not None:
+            os.environ["WOLF_BASE_EXIT_CLOSE"] = self._saved
+        else:
+            os.environ.pop("WOLF_BASE_EXIT_CLOSE", None)
+
+    def test_close_window_clears_all_including_floor(self):
+        v, mode = self.vol(1000, True)
+        self.assertEqual((v, mode), (1000, "close_clear"))
+
+    def test_intraday_halves(self):
+        v, mode = self.vol(1000, False)
+        self.assertEqual((v, mode), (500, "half"))
+
+    def test_intraday_odd_lot_floors_to_full(self):
+        """100 股时减半=0 → 回退为全部(与旧实现一致: half<100 时取 s)。"""
+        v, mode = self.vol(100, False)
+        self.assertEqual((v, mode), (100, "half"))
+
+    def test_close_window_disabled_falls_back_to_half(self):
+        os.environ["WOLF_BASE_EXIT_CLOSE"] = "0"
+        v, mode = self.vol(1000, True)
+        self.assertEqual((v, mode), (500, "half"))
+
+    def test_zero_or_invalid_sellable(self):
+        self.assertEqual(self.vol(0, True)[0], 0)
+        self.assertEqual(self.vol(None, True)[0], 0)
+
+    def test_close_window_boundary(self):
+        import datetime as dt
+        self.assertFalse(self.win(dt.datetime(2026, 9, 10, 14, 54)))
+        self.assertTrue(self.win(dt.datetime(2026, 9, 10, 14, 55)))
+        self.assertTrue(self.win(dt.datetime(2026, 9, 10, 15, 0)))
 
 
 class TestStopCloseConfirm(unittest.TestCase):

@@ -1635,7 +1635,10 @@ class TMonitor:
 
         - 每标的每轮一次（符号条件共享同一止损价，取条件表中非零止损价）
         - 当日已止损过（t_triggers 含当日 stop_loss 事件）则跳过，防止重复卖
-        - 卖量 = 可卖底仓全部（止损离场），走网关 ai_led 档位（不豁免风控）
+        - **卖量分级（P2-4 完整落地, 2026-09-10）**：收盘时段(>=14:55)确认破位 → **清仓(含底仓)**;
+          盘中确认破位 → 减半仓。见 _stop_exit_volume / _in_close_window。
+          （原 docstring 写"卖量 = 可卖底仓全部", 与当时代码实际的"减半仓"不符, 已更正。）
+        - 破位是否"确认"由 _stop_close_confirm(假跌破守卫)判定; 走网关 ai_led 档位(is_stop_loss=True)
         - 止损后冻结该标的全部条件（armed=0）
         """
         try:
@@ -1694,17 +1697,22 @@ class TMonitor:
                 db.close()
             if done:
                 return
-            # 卖量：减半仓（-3% 止损语义，保留底仓继续做T；全卖会导致后续高抛
-            # 触发但无券可卖，AI 反复"无底仓"放弃）
-            half = (sellable // 2 // 100) * 100
-            volume = half if half >= 100 else (sellable // 100) * 100
+            # ── 卖量分级（P2-4 完整落地, 2026-09-10）──
+            # 狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
+            #        2026-01-12「**等收盘确认破位出清**」。
+            #   · **收盘时段**（>= WOLF_CLOSE_BREAK_HM, 默认 14:55）确认破位 → **清仓**（全部可卖, 含 100 股工程底仓）;
+            #   · 盘中确认破位 → **减半仓**（保留底仓继续做T, 原语义不变, 避免盘中插针被全清）。
+            # 所谓"确认破位"由上方 `_stop_close_confirm`（假跌破守卫: 收盘确认/收回幅度/分钟企稳/缩量/支撑位）判定。
+            volume, _exit_mode = _stop_exit_volume(sellable, _in_close_window())
             if volume <= 0:
                 return
+            _reason = ("收盘确认破位→清仓（狼大: 收盘跌破我才出）" if _exit_mode == "close_clear"
+                       else "止损离场（stop_loss, 盘中减半仓）")
             gw = gateway_execute(symbol, "sell", current, volume,
-                                 reason="止损离场（stop_loss）", decision_source="ai_led",
+                                 reason=_reason, decision_source="ai_led",
                                  is_stop_loss=True,
                                  account_id=T_MONITOR_ACCOUNT)
-            print(f"[TMonitor] 止损触发 {symbol} @ {current} x{volume}: {gw.get('status')}")
+            print(f"[TMonitor] 止损触发[{_exit_mode}] {symbol} @ {current} x{volume}: {gw.get('status')}")
             # 迭代#58g：仅在止损**成交**后冻结当日条件——
             # 此前无条件冻结：T+1 当日买入 sellable=0 时止损被拒（rejected），
             # 仍把低吸/高抛条件冻成 armed=0 并与消费式重建打架（每轮刷屏）。
@@ -1841,6 +1849,42 @@ _m5_dump_cache = {"at": 0.0, "value": 0.0}
 PULLBACK_VOL_RATIO = float(os.getenv("PULLBACK_VOL_RATIO", "1.2"))  # vol_ratio<该值视为缩量
 PULLBACK_END_HM = 1445          # 14:45 后仍未反抽达标 → 尾盘确认离场
 _PULLBACK_SELL: Dict[str, dict] = {}   # symbol -> pending(缩量破位待反抽/尾盘确认)
+def _in_close_window(now=None) -> bool:
+    """是否处于"收盘确认"时段（默认 >= 14:55）。
+
+    P2-4: 狼大「收盘跌破我才出」→ 清仓只在收盘时段执行; 盘中只做减半仓。
+    可用 WOLF_CLOSE_BREAK_HM 调整(如设 "1500" 表示严格收盘后)。
+    """
+    try:
+        hm = (now or datetime.now()).strftime("%H%M")
+    except Exception:
+        return False
+    return hm >= str(os.getenv("WOLF_CLOSE_BREAK_HM", "1455"))
+
+
+def _stop_exit_volume(sellable: int, close_window: bool, floor: int = 100):
+    """止损/破位的卖出量分级（P2-4 完整落地, 2026-09-10）。
+
+    狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
+           2026-01-12「**等收盘确认破位出清**」。
+
+    · close_window=True  → **清仓**: 全部可卖(含 100 股工程底仓) —— 狼大"收盘跌破才**出清**";
+    · close_window=False → **减半仓**: 保留底仓继续做T(原语义; 全卖会导致后续高抛触发时无券可卖,
+                            AI 反复"无底仓"放弃)。
+
+    开关: WOLF_BASE_EXIT_CLOSE=0 关闭收盘清仓(退回"一律减半仓")。
+    返回 (volume, mode)；mode ∈ {"close_clear","half"}。
+    """
+    s = (int(sellable or 0) // 100) * 100
+    if s <= 0:
+        return 0, "half"
+    _enabled = os.getenv("WOLF_BASE_EXIT_CLOSE", "1").strip() not in ("0", "false", "no")
+    if close_window and _enabled:
+        return s, "close_clear"
+    half = (s // 2 // 100) * 100
+    return (half if half >= 100 else s), "half"
+
+
 # P2-4: 止损"收盘未确认"日志去抖 (symbol, stop_price, date) —— 避免每 30s 轮次刷屏
 _STOP_HOLD_WARNED: set = set()
 
