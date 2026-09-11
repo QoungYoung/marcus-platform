@@ -1084,6 +1084,24 @@ class TMonitor:
                 continue
             if str(cond.get("direction") or "") == "sell" and symbol in self._sold_this_round:
                 continue
+            # ── A5 日内做T的**正向时间窗**（2026-09-11, 狼大 2025-04-15 条件2）──
+            # 「当日只做上午 9.45-10.00 下午 2.00-2.30 这两个时间段的交易，尽量避免开盘直接买卖
+            #   和平稳时间的来回T」。**只作用于日内做T买腿**（low_buy 正T低吸 / custom_prevlow 挂前低回踩），
+            # 不作用于 253 建仓腿（属他自己划出去的"大级别买卖"）、卖腿与止损（止损另有 ④ 时点门）。
+            if str(cond.get("direction") or "") == "buy":
+                try:
+                    from app.services.wolf_trade_window import allowed as _tw_allowed, applies_to as _tw_applies
+                    if _tw_applies(cond.get("trigger_kind")):
+                        _tw_ok, _tw_why = _tw_allowed()
+                        if not _tw_ok:
+                            _tk = (symbol, "tw", datetime.now().strftime('%Y%m%d'))
+                            if _tk not in _STOP_HOLD_WARNED:
+                                _STOP_HOLD_WARNED.add(_tk)
+                                print(f"[TMonitor] 日内做T时间窗外，跳过买腿 {symbol}"
+                                      f"({cond.get('trigger_kind')}): {_tw_why}")
+                            continue
+                except Exception as _twe:
+                    print(f"[TMonitor] 时间窗判定异常(放行) {symbol}: {str(_twe)[:80]}")
             quote = quotes.get(_normalize_symbol(symbol))
             if not quote or not quote.get("current"):
                 continue

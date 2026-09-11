@@ -501,6 +501,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append("📊 " + _d)
     except Exception:
         pass
+    # A5 日内做T时间窗（2026-09-11）：他 2025-04-15 条件2「当日只做 9:45-10:00 / 14:00-14:30」
+    try:
+        from app.services.wolf_trade_window import directive as _tw_dir
+        _d2 = _tw_dir()
+        if _d2:
+            parts.append(_d2)
+    except Exception:
+        pass
     if pc.get("directive"):
         parts.append(pc["directive"])
     if wd.get("active"):
