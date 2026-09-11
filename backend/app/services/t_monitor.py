@@ -672,8 +672,14 @@ class TMonitor:
                 # 只在"结构确认过的反弹"里做(狼大: 反弹的时候); 主题未确认 → 该票不参与
                 if str(st.get("stage") or "") != "confirmed":
                     continue
+                # 用 _daily_dated（带日期 + 实时源兜底）而不是 _prev_daily：
+                # ① _prev_daily 丢掉日期 key，传给 rebound_pct 会去比较 dict → 抛异常（静默失效第 8 例；
+                #    已由 rebound_pct 兼容 list 兜底，但这里给带日期的正确形态）；
+                # ② _prev_daily 只读 data/{stock_5m_bt,recent_sync}，那两个目录是 2026-09-03 的一次性导出
+                #    → 去弱留强此前一直在用**过期日线**算反弹幅度。
+                _pd_map = {_b['date']: _b for _b in self._daily_dated(sym, 6)}
                 items.append({"symbol": sym, "theme": th,
-                              "rebound": PD.rebound_pct(self._prev_daily(sym, 5))})
+                              "rebound": PD.rebound_pct(_pd_map)})
             res = PD.select_weak(items)
             if res.get("skip") or not res.get("sells"):
                 if res.get("skip"):

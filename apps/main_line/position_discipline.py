@@ -36,13 +36,23 @@ DEFAULT_MAX_SELL = 2
 def rebound_pct(prev_days, window=DEFAULT_WINDOW):
     """反弹幅度% = 窗口内最后收盘 / 窗口内最低 low − 1。
 
-    prev_days: {YYYYMMDD: {"close","high","low","vol"}}（t_monitor._prev_daily 的返回格式）。
+    prev_days 接受**两种**形态：
+      · {YYYYMMDD: {"close","high","low","vol"}}（原契约，按 key 排序）;
+      · [{"close","high","low","vol"}, ...]（**已按时间升序**的序列）。
     取"从低点反弹了多少"而非"区间涨幅", 正是狼大说的"反弹多/没波动"那个维度。
     数据不足(<2 根)返回 None。
+
+    ⚠️ 为什么要兼容 list（2026-09-11 生产事故）：t_monitor._prev_daily 返回的是**list**（丢掉了日期 key），
+    而本函数原先直接 `sorted(prev_days)` → 对 list 会去**比较 dict 本身** →
+    抛 `TypeError: '<' not supported between instances of 'dict' and 'dict'`，
+    被 `_check_position_discipline` 的 except 吞掉 → **P1-6 去弱留强在生产中从未真正生效**（静默失效第 8 例）。
     """
     if not prev_days:
         return None
-    rows = [prev_days[k] for k in sorted(prev_days)][-max(2, int(window)):]
+    if isinstance(prev_days, dict):
+        rows = [prev_days[k] for k in sorted(prev_days)][-max(2, int(window)):]
+    else:
+        rows = list(prev_days)[-max(2, int(window)):]      # list：保持既有顺序（调用方保证时间升序）
     if len(rows) < 2:
         return None
     lows = [float(r.get("low") or 0) for r in rows if float(r.get("low") or 0) > 0]
