@@ -509,6 +509,15 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d2)
     except Exception:
         pass
+    # B4 涨停梯队/连板结构（2026-09-11）：他 2025-04-21「看涨停板方向…判断板块的强弱
+    # 从而推断出接下来要做的方向」→ 盘后产出，供**次日方向**判断
+    try:
+        from app.services.wolf_limit_ladder import directive as _ll_dir
+        _d3 = _ll_dir()
+        if _d3:
+            parts.append(_d3)
+    except Exception:
+        pass
     if pc.get("directive"):
         parts.append(pc["directive"])
     if wd.get("active"):

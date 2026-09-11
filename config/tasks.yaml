@@ -11,6 +11,27 @@ settings:
       enabled: true
       recipient: BF1510663A6C14D6E00E42B46108F51E
 tasks:
+- id: wolf_limit_ladder_scan
+  name: 涨停梯队/连板结构（B4）
+  description: 盘后拉涨跌停/炸板明细→按主题+行业聚合涨停梯队(家数/最高连板/1-2-3+分布/炸板)→写 wolf_limit_ladder.json（狼大 2025-04-21 复盘流程：判断板块强弱、推断次日方向）
+  enabled: true
+  schedule:
+    type: cron
+    expr: '35 15 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_limit_ladder_scan.py
+    args: []
+  output:
+    log_file: logs/wolf_limit_ladder_scan_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_neg_event_scan
   name: 层①「无利空」公告标记
   description: 拉当日全市场公告→过滤持仓→判"意外事件/黑天鹅级利空"→写 wolf_negative_events.json（①止损的豁免前提）
