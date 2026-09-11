@@ -117,6 +117,7 @@ def _apply_schema_patches():
 
     # ── 2026-08: API/Worker 拆分控制通道 ──
     _apply_worker_control_migration()
+    _apply_wolf_discipline_migration()   # 2026-09-11: 狼大纪律配置落库(取代 config/+data/ 两份 json)
 
     # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
     alter_patches = [
@@ -551,6 +552,37 @@ def _apply_t_build_migration():
         print("[DB] PATCH: 做T建仓迁移完成 (t_build_events + t_build_params)")
     except Exception as e:
         print(f"[DB] PATCH warn (t build tables): {e}")
+
+
+def _apply_wolf_discipline_migration():
+    """狼大纪律配置落库（幂等）：wolf_discipline_config。
+
+    背景（2026-09-11）：`config/wolf_discipline.json` 与运行时实际读的 `DATA_DIR/wolf_discipline.json`
+    是**两份**，改了一份没改另一份 → 生效值与预期不符（当天真实踩到：生产 data/ 那份还是 09-03 的旧副本，
+    连 profit_take/position_cap 段都没有，靠"缺失段回落内置默认"才没出错）。
+    → 改为单行 JSONB 落库（对齐 t_build_params 范式），DB 为**唯一事实来源**；
+      `wolf_discipline._cfg()` 读序 = DB → 文件 → 内置默认，首次读到空表时**自动用文件/默认播种**。
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS wolf_discipline_config (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    cfg_json JSONB NOT NULL DEFAULT '{}',
+                    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+                    updated_by VARCHAR(64) DEFAULT ''
+                )
+                """
+            ))
+            conn.execute(text(
+                "INSERT INTO wolf_discipline_config (id, cfg_json, updated_by) "
+                "SELECT 1, '{}', 'init' WHERE NOT EXISTS "
+                "(SELECT 1 FROM wolf_discipline_config WHERE id = 1)"
+            ))
+        print("[DB] PATCH: 狼大纪律配置落库完成 (wolf_discipline_config)")
+    except Exception as e:
+        print(f"[DB] PATCH warn (wolf_discipline_config): {e}")
 
 
 def _apply_vreb_daily_migration():

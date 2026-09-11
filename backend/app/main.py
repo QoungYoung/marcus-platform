@@ -44,6 +44,7 @@ from app.api import portfolio, trades, market, news, strategy, agent, etf, db, s
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
 from app.api.t_account import router as t_account_router
+from app.api.discipline import router as discipline_router   # 2026-09-11 狼大纪律配置(落库)
 from app.api.t_backtest import router as t_backtest_router
 from app.database import init_db
 from app.services.prompt_service import seed_prompts
@@ -208,6 +209,7 @@ app.include_router(direction.router, prefix="/api/v1")
 app.include_router(golden_pit.router, prefix="/api/v1")
 app.include_router(proxy.router, prefix="/api/v1")
 app.include_router(t_account_router, prefix="/api/v1")
+app.include_router(discipline_router, prefix="/api/v1")
 app.include_router(t_backtest_router, prefix="/api/v1")
 
 @app.get("/")

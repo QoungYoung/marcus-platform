@@ -6,8 +6,146 @@
 """
 import os, json
 
+_CFG_CACHE = {"at": 0.0, "cfg": None, "src": ""}
+_CFG_TTL = float(os.getenv("WOLF_DISCIPLINE_CFG_TTL", "60"))   # 秒；配置查询频繁(每轮调用), 不能每次打 DB
+# DB 熔断：连续失败后在窗口内不再尝试（本地无 PG / 生产 DB 抖动时，绝不能把监控线程拖住）
+_CFG_DB_BREAK = {"until": 0.0, "fails": 0, "warned": False}
+_CFG_DB_BREAK_SEC = float(os.getenv("WOLF_DISCIPLINE_CFG_DB_BREAK", "300"))
+
+
+def deep_merge(base, over):
+    """**递归**合并配置（dict 套 dict 也要逐层合）。
+
+    为什么必须递归：`position_cap.tier_targets` 是嵌套 dict，浅合并
+    (`{**base, **over}`) 会把整块 `tier_targets` 用局部值**整体替换** ——
+    例如只传 `{"tier_targets": {"build": 88}}` 会让 defense/t_only/side/exit **全部消失**
+    （单测 test_section_merge_keeps_other_keys 抓到的真实缺陷，正是"改一处丢一片"的同款）。
+    """
+    out = dict(base or {})
+    for k, v in (over or {}).items():
+        if isinstance(out.get(k), dict) and isinstance(v, dict):
+            out[k] = deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _cfg_file():
+    """文件兜底：先 DATA_DIR/wolf_discipline.json（运行时那份），再 config/wolf_discipline.json。"""
+    out = {}
+    for p in (os.path.join(os.environ.get("DATA_DIR", "data"), "wolf_discipline.json"),
+              os.path.join(_ws_root(), "config", "wolf_discipline.json")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict) and d:
+                out = d
+                break
+        except Exception:
+            continue
+    return out
+
+
+def _ws_root():
+    try:
+        from app.config import get_settings
+        return str(get_settings().workspace_path)
+    except Exception:
+        return os.environ.get("MARCUS_WORKSPACE", "/app")
+
+
+def _cfg_db_read():
+    """从 Postgres 读 wolf_discipline_config(id=1) → dict；失败/空/熔断中返回 None。
+
+    开关 `WOLF_DISCIPLINE_CFG_DB=0` → 完全跳过 DB（回退"文件/内置默认"的旧行为，也是单测前提）。
+    """
+    import time as _t
+    if os.getenv("WOLF_DISCIPLINE_CFG_DB", "1").strip() in ("0", "false", "no"):
+        return None
+    if _t.time() < _CFG_DB_BREAK["until"]:
+        return None
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            row = db.execute(text(
+                "SELECT cfg_json FROM wolf_discipline_config WHERE id = 1"
+            )).mappings().first()
+            if not row:
+                return None
+            v = row.get("cfg_json")
+            d = json.loads(v) if isinstance(v, str) else dict(v or {})
+            _CFG_DB_BREAK["fails"] = 0
+            _CFG_DB_BREAK["warned"] = False
+            return d if isinstance(d, dict) and d else None
+        finally:
+            db.close()
+    except Exception as e:
+        _CFG_DB_BREAK["fails"] += 1
+        _CFG_DB_BREAK["until"] = _t.time() + _CFG_DB_BREAK_SEC
+        if not _CFG_DB_BREAK["warned"]:
+            _CFG_DB_BREAK["warned"] = True
+            print(f"[wolf_discipline] 配置读库失败({_CFG_DB_BREAK['fails']}次): {str(e)[:90]} "
+                  f"→ {_CFG_DB_BREAK_SEC:.0f}s 内改用文件/默认(熔断)")
+        return None
+
+
+def _cfg_db_write(cfg, updated_by=""):
+    """整份写回（UPSERT）。返回 bool。熔断中/开关关闭 → 直接跳过（只落文件）。"""
+    import time as _t
+    if os.getenv("WOLF_DISCIPLINE_CFG_DB", "1").strip() in ("0", "false", "no"):
+        return False
+    if _t.time() < _CFG_DB_BREAK["until"]:
+        return False
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            db.execute(text(
+                "INSERT INTO wolf_discipline_config (id, cfg_json, updated_at, updated_by) "
+                "VALUES (1, :cfg, now(), :by) "
+                "ON CONFLICT (id) DO UPDATE SET cfg_json = EXCLUDED.cfg_json, "
+                "updated_at = now(), updated_by = EXCLUDED.updated_by"
+            ), {"cfg": json.dumps(cfg, ensure_ascii=False), "by": str(updated_by or "")[:64]})
+            db.commit()
+            return True
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[wolf_discipline] 配置落库失败: {str(e)[:120]}")
+        return False
+
+
+def save_cfg(cfg, updated_by="api"):
+    """写回配置（DB 为唯一事实来源）并刷新缓存。文件**同时**落一份作为离线兜底。"""
+    global _CFG_CACHE
+    ok = _cfg_db_write(cfg, updated_by)
+    try:
+        p = os.path.join(os.environ.get("DATA_DIR", "data"), "wolf_discipline.json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    _CFG_CACHE = {"at": 0.0, "cfg": None, "src": ""}
+    return ok
+
+
+def config_source():
+    """当前生效配置来自哪里：db / file / default（诊断用）。"""
+    _cfg()
+    return _CFG_CACHE.get("src") or "?"
+
+
 def _cfg():
-    """读取 config/wolf_discipline.json(可缺省) 或内置默认。"""
+    """狼大纪律配置：**DB(wolf_discipline_config) → 文件 → 内置默认**，带 TTL 缓存。
+
+    2026-09-11 落库：此前 config/ 与 DATA_DIR/ 两份 json 容易改漏一份（当天真实踩到），
+    DB 成为唯一事实来源；空表时**自动用文件（再退默认）播种**，保证首次上线行为不变。
+    DB 不可用 → 用缓存/文件（fail-open，不抛、不改变配置语义）。
+    """
     default = {
         "weekend_de_risk": {"enabled": True, "th_ratio": 0.5, "reduce_to": 0.5,
                             "windows": ["late_morning", "afternoon", "closing"]},
@@ -42,17 +180,24 @@ def _cfg():
                          "single_max_pct": 0.0, "top3_max_pct": 0.0,
                          "base_max_pct": 0.0, "t_max_pct": 0.0},
     }
-    try:
-        p = os.path.join(os.environ.get("DATA_DIR", "data"), "wolf_discipline.json")
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                d = json.load(f)
-            for k in default:
-                if k in d and isinstance(d[k], dict):
-                    default[k] = {**default[k], **d[k]}
-    except Exception:
-        pass
-    return default
+    import time as _time
+    now = _time.time()
+    if _CFG_CACHE["cfg"] is not None and (now - _CFG_CACHE["at"]) < _CFG_TTL:
+        return _CFG_CACHE["cfg"]
+
+    db = _cfg_db_read()
+    if db:
+        merged = deep_merge(default, db)
+        src = "db"
+    else:
+        # DB 没有/不可用 → 用文件；若文件有内容则**回种**DB（首次上线/迁移自动完成，行为不变）
+        f = _cfg_file()
+        merged = deep_merge(default, f)
+        src = "file" if f else "default"
+        if f and _cfg_db_write(merged, updated_by="autoseed"):
+            src = "db(seeded)"
+    _CFG_CACHE.update({"at": now, "cfg": merged, "src": src})
+    return merged
 
 def _portfolio(portfolio):
     if portfolio is None:

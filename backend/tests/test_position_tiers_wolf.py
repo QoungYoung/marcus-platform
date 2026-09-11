@@ -37,9 +37,15 @@ EXPECT_FLOOR = {"build": 55.0}
 @pytest.fixture(autouse=True)
 def _clean_env(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    # 配置已落库 + 有 TTL 缓存：单测必须①关掉 DB 读（本机无 PG，否则每例卡连接超时）
+    # ②每次清缓存，否则上一个用例的配置会串到下一个（曾导致 3 个用例假失败）
+    monkeypatch.setenv("WOLF_DISCIPLINE_CFG_DB", "0")
     for k in ("WOLF_POSITION_TIER_OP", "P3_USE_TIER_TARGETS"):
         monkeypatch.delenv(k, raising=False)
+    WD._CFG_CACHE.update({"at": 0.0, "cfg": None, "src": ""})
+    WD._CFG_DB_BREAK.update({"until": 0.0, "fails": 0, "warned": False})
     yield
+    WD._CFG_CACHE.update({"at": 0.0, "cfg": None, "src": ""})
 
 
 def pf(ratio_pct, total=100000.0):
