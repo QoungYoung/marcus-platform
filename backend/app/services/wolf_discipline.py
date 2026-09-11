@@ -23,7 +23,22 @@ def _cfg():
         # 狼大**无原话**的: 单票上限 / 集中度(前3大) / 底仓与T仓结构上限 → 属系统自设,
         #   默认一律 0(=不启用), 必须显式配置才生效, 以免冒充狼大规则(与 §5.2 清理同一条纪律)。
         # 2026-04-14「50%的底仓 30%左右做日内…剩下20%」是**他本人的持仓结构描述**, 非规则, 故默认关。
-        "position_cap": {"enabled": True, "total_max_pct": 70.0,
+        # ④ 常态仓位纪律 + 分档(2026-09-11 校正)
+        # **分档有原话**: 2026-01-17「主升趋势就75%以上 然后盘中满仓滚动啊 调整就50%
+        #   有风险就30% 下跌趋势就不做」→ tier_targets（按本仓 operation 语义映射, 属外推, 见 _mapping）
+        # **下限有原话**: 2025-08-11「这个位置 仓位低于55% 日内分时低于80%都是不太合适」
+        #   → tier_floor（原话带"这个位置"限定 → 只在结构完好档 build/side/t_only 生效）
+        # **原 total_max_pct=70 的依据被复核推翻**: 2026-03-06「现在就是70%仓位」是**他当时的状态描述、
+        #   不是上限规则**, 且与"主升趋势就75%以上…盘中满仓滚动"直接冲突 → 置 0=不再额外限制, 由分档取代。
+        # 系统自设项(单票/集中度/底仓T仓结构上限)默认一律 0=不启用, 不冒充狼大规则。
+        "position_cap": {"enabled": True, "tier_enabled": True,
+                         "tier_targets": {"build": 75.0, "t_only": 50.0, "side": 50.0,
+                                          "defense": 30.0, "exit": 50.0},
+                         # 下限**只挂 build 档**：原话带"这个位置"限定且他当时明确看多；
+                         # 若也挂 t_only/side 会与"调整就50%"的目标(50%)数学互斥(55>50) → 自相矛盾。
+                         "tier_floor": {"build": 55.0, "t_only": 0.0, "side": 0.0,
+                                        "defense": 0.0, "exit": 0.0},
+                         "total_max_pct": 0.0,
                          "single_max_pct": 0.0, "top3_max_pct": 0.0,
                          "base_max_pct": 0.0, "t_max_pct": 0.0},
     }
@@ -149,19 +164,76 @@ def profit_take(portfolio, now=None, cfg=None, quotes=None):
     return {"active_sells": sells, "directive": directive, "enabled": pt.get("enabled", False)}
 
 
-def position_cap(portfolio, cfg=None):
-    """常态仓位纪律（P2-5, 2026-09-10）→ {"allowed", "ratio", "exposure", "reason", "directive"}。
+def current_operation():
+    """当前浪型主基调(wave_state.operation) —— 分档口径的轴。取不到返回 None。
 
-    **狼大有原话的部分**:
-      2026-03-06「现在就是 **70%仓位**」→ 总仓位上限 70%（`total_max_pct`）。
-    **狼大无原话、属系统自设的部分**（默认 0 = 不启用，需显式配置才生效）:
-      · `single_max_pct`  单票市值占净值上限
-      · `top3_max_pct`    前 3 大持仓合计上限（集中度）
-      · `base_max_pct` / `t_max_pct` 底仓/T 仓结构上限
-        （2026-04-14「50%的底仓 30%左右做日内…剩下20%」是他**本人的持仓结构描述**, 不是规则 → 默认关）
+    本仓 operation 语义(wave_agent.py): build=建仓追 / t_only=只做T不新开 /
+    side=观望调仓换股 / defense=防御不建仓 / exit=兑现降仓。
+    """
+    try:
+        p = os.path.join(os.environ.get("DATA_DIR", "data"), "wave_state.json")
+        with open(p, encoding="utf-8") as f:
+            op = str((json.load(f) or {}).get("operation") or "").strip().lower()
+        return op or None
+    except Exception:
+        return None
+
+
+def tier_target_pct(operation=None, cfg=None):
+    """该 operation 下的**总仓位目标**(%) —— 狼大 2026-01-17 分档。取不到返回 None。
+
+    这是全仓唯一的"按市况分档给仓位"口径来源: `position_cap`(建议层)与
+    `position_tier`(P3 硬拦的现金底线) 都读它, 避免两套并行口径。
+    """
+    c = (cfg or _cfg()).get("position_cap", {}) or {}
+    if not c.get("tier_enabled", True):
+        return None
+    op = (operation or os.getenv("WOLF_POSITION_TIER_OP") or current_operation() or "").strip().lower()
+    if not op:
+        return None
+    t = (c.get("tier_targets") or {}).get(op)
+    try:
+        return float(t) if t is not None else None
+    except Exception:
+        return None
+
+
+def tier_floor_pct(operation=None, cfg=None):
+    """该 operation 下的**总仓位下限**(%) —— 狼大 2025-08-11。0/None = 该档无下限。"""
+    c = (cfg or _cfg()).get("position_cap", {}) or {}
+    if not c.get("tier_enabled", True):
+        return None
+    op = (operation or os.getenv("WOLF_POSITION_TIER_OP") or current_operation() or "").strip().lower()
+    if not op:
+        return None
+    f = (c.get("tier_floor") or {}).get(op)
+    try:
+        v = float(f) if f is not None else 0.0
+    except Exception:
+        v = 0.0
+    return v if v > 0 else None
+
+
+def position_cap(portfolio, cfg=None, operation=None):
+    """常态仓位纪律 + **按市况分档**（P2-5, 2026-09-10 立；2026-09-11 改为分档）
+    → {"allowed", "ratio", "target_pct", "floor_pct", "below_floor", "exposure", "reason", "directive"}。
+
+    **狼大有原话的部分（分档）**:
+      2026-01-17「**主升趋势就75%以上** 然后盘中满仓滚动啊 **调整就50%** **有风险就30%**
+                **下跌趋势就不做**」→ `tier_targets`（按本仓 operation 映射：build=主升 /
+                side·t_only=调整 / defense=有风险 / exit=下跌趋势就不做。**映射是外推**，
+                他的轴是"行情状态"、我们的是"浪型主基调"，故可 `tier_enabled=false` 关掉）。
+      2025-08-11「这个位置 **仓位低于55%** 日内分时低于80%都是不太合适」→ `tier_floor`
+                （**只挂 build 档**：原话带"这个位置"限定且他当时明确看多；若挂到调整档会与
+                  "调整就50%"的目标数学互斥 → 自相矛盾。default 0 = 该档无下限）。
+    **原 total_max_pct=70 的依据已被复核推翻**：2026-03-06「现在就是70%仓位」是**他当时的状态描述、
+      不是上限规则**，且与"主升趋势就75%以上…盘中满仓滚动"直接冲突 → 默认 0=不再额外限制，由分档取代。
+    **狼大无原话、属系统自设**（默认 0 = 不启用）：`single_max_pct` / `top3_max_pct` / `base_max_pct` / `t_max_pct`
+      （2026-04-14「50%的底仓 30%左右做日内…剩下20%」是他**本人的持仓结构描述**, 不是规则 → 默认关）。
 
     口径与 weekend_de_risk 一致: 持仓占比 = (总资产 − 现金) / 总资产。
-    本函数只**判定并给出建议**, 不直接下单、不做硬拦（是否拦截由调用方决定）。
+    本函数只**判定并给出建议**, 不直接下单、不做硬拦（是否拦截由调用方决定）；
+    硬拦侧的同源口径在 `position_tier`（P3 现金底线 = 100 − 本表目标）。
     """
     cfg = cfg or _cfg(); c = cfg.get("position_cap", {})
     if not c.get("enabled"):
@@ -174,10 +246,19 @@ def position_cap(portfolio, cfg=None):
     if total <= 0:
         return {"allowed": True, "ratio": None, "exposure": None, "reason": "no_asset", "directive": ""}
     ratio = (total - cash) / total * 100.0
-    tot_max = float(c.get("total_max_pct") or 0)
+    # 分档目标(=上限) 优先；未启用/取不到 operation 时退回 total_max_pct
+    _tgt = tier_target_pct(operation, cfg)
+    _flr = tier_floor_pct(operation, cfg)
+    _op = (operation or os.getenv("WOLF_POSITION_TIER_OP") or current_operation() or "")
+    if _tgt is not None:
+        tot_max = _tgt
+        _src = "分档(%s档)" % (_op or "?")
+    else:
+        tot_max = float(c.get("total_max_pct") or 0)
+        _src = "total_max_pct"
     reasons = []
     if tot_max > 0 and ratio > tot_max:
-        reasons.append("总仓位%.1f%% > 上限%.0f%%" % (ratio, tot_max))
+        reasons.append("总仓位%.1f%% > %s目标%.0f%%" % (ratio, _src, tot_max))
 
     # 系统自设项: 仅当配置 >0 才计算(默认不启用, 避免冒充狼大规则)
     exp = {"single_max": None, "top3": None}
@@ -202,12 +283,21 @@ def position_cap(portfolio, cfg=None):
             if top3_max > 0 and top3_pct > top3_max:
                 reasons.append("前三集中度%.1f%% > 上限%.0f%%" % (top3_pct, top3_max))
 
+    below_floor = bool(_flr and ratio < _flr)
     allowed = not reasons
     d = ""
     if not allowed:
-        d = ("⚠️ 仓位纪律：%s。狼大 2026-03-06「现在就是70%%仓位」→ 不新开/不加仓, "
-             "优先降 T 仓至阈值内。" % "；".join(reasons))
-    return {"allowed": allowed, "ratio": round(ratio, 1), "exposure": exp,
+        d = ("⚠️ 仓位纪律：%s。狼大 2026-01-17「主升趋势就75%%以上 然后盘中满仓滚动啊 "
+             "调整就50%% 有风险就30%% 下跌趋势就不做」→ 该档不新开/不加仓, 优先降 T 仓至目标内。"
+             % "；".join(reasons))
+    elif below_floor:
+        d = ("ℹ️ 仓位偏低：总仓位%.1f%% < 下限%.0f%%。狼大 2025-08-11「这个位置 仓位低于55%% "
+             "日内分时低于80%%都是不太合适」→ 结构完好时不要因为怕回撤而过度减仓；"
+             "该补则补（按 253/254 低吸腿，不追高）。" % (ratio, _flr))
+    return {"allowed": allowed, "ratio": round(ratio, 1),
+            "target_pct": (round(tot_max, 1) if tot_max > 0 else None),
+            "floor_pct": (_flr if _flr else None), "below_floor": below_floor,
+            "exposure": exp,
             "reason": "；".join(reasons) if reasons else "仓位在阈值内",
             "directive": d}
 

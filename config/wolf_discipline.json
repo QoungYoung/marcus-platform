@@ -23,11 +23,33 @@
   },
   "position_cap": {
     "enabled": true,
-    "total_max_pct": 70.0,
+    "tier_enabled": true,
+    "tier_targets": {
+      "build": 75,
+      "t_only": 50,
+      "side": 50,
+      "defense": 30,
+      "exit": 50
+    },
+    "tier_floor": {
+      "build": 55,
+      "t_only": 0,
+      "side": 0,
+      "defense": 0,
+      "exit": 0
+    },
+    "total_max_pct": 0.0,
     "single_max_pct": 0.0,
     "top3_max_pct": 0.0,
     "base_max_pct": 0.0,
     "t_max_pct": 0.0,
-    "_note": "P2-5 常态仓位纪律(2026-09-10)。total_max_pct=70 有狼大原话依据(2026-03-06「现在就是70%仓位」); single_max_pct/top3_max_pct/base_max_pct/t_max_pct **狼大无语料依据, 属系统自设** → 默认 0=不启用, 需显式配置才生效。"
+    "_note": "P2-5 常态仓位纪律(2026-09-10) + 分档(2026-09-11)。tier_targets = 狼大 2026-01-17「主升趋势就75%以上 然后盘中满仓滚动啊 调整就50% 有风险就30% 下跌趋势就不做」按本仓 operation 语义映射(外推, 见下)。tier_floor = 狼大 2025-08-11「这个位置 仓位低于55% 日内分时低于80%都是不太合适」。**只挂 build 档**: ①原话带『这个位置』限定, 且他当时明确看多(『3674在我看来不算什么压力, 我的技术模型已经上去了』); ②若同时挂 t_only/side, 会与『调整就50%』的 50% 目标数学互斥(下限55>目标50) → 自相矛盾。total_max_pct 置 0=不再额外限制 —— 原 70% 的依据(2026-03-06「现在就是70%仓位」)经复核是**他当时的状态描述、不是上限规则**, 且与『主升趋势就75%以上…盘中满仓滚动』直接冲突, 故由分档取代。single/top3/base/t_max_pct 狼大无语料依据, 默认 0=不启用。运行时从 DATA_DIR/wolf_discipline.json 读取(容器内 /app/data/)。",
+    "_mapping": {
+      "build": "建仓追(大3主升) ← 狼大『主升趋势』",
+      "side": "观望调仓换股 ← 狼大『调整』",
+      "t_only": "只做T不新开 ← 狼大『调整』",
+      "defense": "防御不建仓 ← 狼大『有风险』",
+      "exit": "兑现降仓 ← 狼大『下跌趋势就不做』; 注意 exit 档本仓 P3 已是 reduce_only(禁 new_base/add_base), 故这里不再把总仓位压到 0, 以免连带禁掉他确实会做的 T 回补"
+    }
   }
 }

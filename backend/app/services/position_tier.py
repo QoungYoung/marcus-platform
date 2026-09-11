@@ -131,9 +131,12 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
     cap = _cap_by_needs(rule.get("cap_pct"), needs, ctx) if rule.get("allow") else 0.0
     allowed = bool(rule.get("allow") and (not needs or cap > 0))
 
-    tier_map = {"new_base": "BASE_NEW", "add_base": "BASE_ADD",
-                "refill_base": "T_REFILL", "t_refill": "T_REFILL",
-                "probe": "PROBE"}
+    # 显示名：狼大的词是"底仓/T仓/现金"; 这里的档名(new_base/add_base/refill/t_refill/probe)
+    # 是系统自造标识(语料 0 命中, 2026-09-11 复核), 故对外展示统一用中文业务名,
+    # 并在 probe 上显式标注"自设档"以免被误当成狼大规则。
+    tier_map = {"new_base": "新开底仓", "add_base": "加厚底仓",
+                "refill_base": "T资格回补", "t_refill": "T仓日内低吸",
+                "probe": "试探底仓(自设档,狼大无语料)"}
     reasons = []
     if allowed:
         reasons.append("P3档位%s: %s允许%s cap≤%s%%" % (op, op_cfg.get("base_mode"), intent, cap))
@@ -155,12 +158,33 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
         "intent": intent,
         "intent_allowed": allowed,
         "cap_pct": round(cap, 1),
-        "cash_floor_pct": float(op_cfg.get("cash_floor_pct") or 0),
+        "cash_floor_pct": _tier_cash_floor(op, op_cfg.get("cash_floor_pct")),
         "tier": tier_map[intent] if allowed else "REJECT",
         "allowed_actions": allowed_actions,
         "context": dict(ctx),
         "reasons": reasons,
     }
+
+
+def _tier_cash_floor(op, fallback):
+    """现金底线(%) 的**同源口径**：优先用狼大 2026-01-17 分档目标换算（100 − 目标仓位）。
+
+    单一事实来源 = `wolf_discipline.position_cap.tier_targets`（2026-09-11 定）。
+    为什么要同源：此前 P3 的 cash_floor(build 25/t_only 35/side 30/defense 45/exit 50) 与
+    建议层(`position_cap`) 各写一套 → 同一条"按市况给多大仓位"会有两个数（本项目反复踩的"两套并行口径"）。
+    现在硬拦侧自动跟随分档：build 25 / t_only·side 50 / defense 70 / exit 50（exit 是本仓 reduce_only，不压到 0）。
+    回退：`P3_USE_TIER_TARGETS=0` → 用配置里的原值（隔离/对照用）。
+    """
+    if os.getenv("P3_USE_TIER_TARGETS", "1").strip() in ("0", "false", "no"):
+        return float(fallback or 0)
+    try:
+        from app.services import wolf_discipline as WD
+        t = WD.tier_target_pct(op)
+        if t is not None:
+            return round(max(0.0, 100.0 - float(t)), 1)
+    except Exception:
+        pass
+    return float(fallback or 0)
 
 
 def tier_mode_enabled():
