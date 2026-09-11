@@ -527,6 +527,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d4)
     except Exception:
         pass
+    # A8 条件6 回补窗口（2026-09-11）：他 2025-04-15「…在下午2.00-2.30这个时间段进行回补」
+    try:
+        from app.services.wolf_refill import directive as _rf_dir
+        _d5 = _rf_dir()
+        if _d5:
+            parts.append(_d5)
+    except Exception:
+        pass
     if pc.get("directive"):
         parts.append(pc["directive"])
     if wd.get("active"):
