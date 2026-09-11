@@ -80,6 +80,8 @@ class TMonitor:
         self._wolf_done = set()   # (symbol, trigger_kind, date) 当日去抖，防同一腿反复触发
         self._wolf_bought_today = set()  # (symbol, date) 当日正T买入
         self._wolf_sold_today = set()    # (symbol, date) 当日确认制T出已卖
+        # ① 建仓初期波段逻辑止损: 建仓日锚点缓存 {(account, symbol, today): 'YYYY-MM-DD'|None}
+        self._buy_date_cache: Dict[Any, Optional[str]] = {}
 
     # ── 生命周期 ──
     def start(self) -> bool:
@@ -239,6 +241,49 @@ class TMonitor:
         today=datetime.now().strftime('%Y%m%d')
         days=sorted(k for k in data if k<today and data[k].get('vol'))
         return [data[k] for k in days[-n:]]
+
+    def _daily_dated(self, sym, n=40):
+        """最近 n 个交易日的**带日期**日K: [{'date':'YYYYMMDD','close','high','low','vol'}]。
+
+        与 _prev_daily 同源（data/{stock_5m_bt,recent_sync}/{code6}.json），但**保留日期** ——
+        ①建仓初期波段逻辑止损要按"建仓日"锚定（波段低点 = 建仓日之前的最低、持有天数 = 建仓日之后的根数），
+        没有日期就无法锚定（_prev_daily 丢掉了 key）。
+        """
+        import os as _os, json as _j
+        D = _os.environ.get('DATA_DIR', '/app/data')
+        code6 = ''.join(ch for ch in str(sym) if ch.isdigit())[:6]
+        data = {}
+        for root in ['stock_5m_bt', 'recent_sync']:
+            p = _os.path.join(D, root, code6 + '.json')
+            try:
+                d = _j.load(open(p, encoding='utf-8'))
+            except Exception:
+                continue
+            for k, v in d.items():
+                bs = sorted(v, key=lambda x: str(x.get('time') or x.get('trade_time')))
+                if bs:
+                    data.setdefault(k, {'close': float(bs[-1]['close']),
+                                        'high': max(float(b['high']) for b in bs),
+                                        'low': min(float(b['low']) for b in bs),
+                                        'vol': sum(float(b.get('vol') or 0) for b in bs)})
+        today = datetime.now().strftime('%Y%m%d')
+        days = sorted(k for k in data if k < today and data[k].get('vol'))
+        out = []
+        for k in days[-n:]:
+            r = dict(data[k]); r['date'] = str(k); out.append(r)
+        return out
+
+    def _buy_date(self, sym, today=None):
+        """建仓日（paper_trades 首笔未作废买入；退回 paper_positions.entry_date），当日缓存。"""
+        _t = today or datetime.now().strftime('%Y%m%d')
+        ck = (T_MONITOR_ACCOUNT, sym, _t)
+        if ck not in self._buy_date_cache:
+            try:
+                from app.services.wolf_early_stop import first_buy_date
+                self._buy_date_cache[ck] = first_buy_date(T_MONITOR_ACCOUNT, sym)
+            except Exception:
+                self._buy_date_cache[ck] = None
+        return self._buy_date_cache[ck]
 
     def _today_bars(self, sym):
         """当日 5min bars（读 recent_sync/stock_5m_bt/{code6}.json 的今天）。"""
@@ -1703,6 +1748,11 @@ class TMonitor:
         """止损扫描（生产）：持仓标的现价 ≤ stop_loss_price → 止损卖腿（reason=stop_loss）。
 
         - 每标的每轮一次（符号条件共享同一止损价，取条件表中非零止损价）
+        - **阶段化止损线（2026-09-10, 狼大止损六层之①/④）**：
+          建仓初期（<= WOLF_EARLY_STOP_DAYS=13 交易日）→ **波段低点 ×(1-3%)**（狼大 2026-03-05 原话，
+          波段低点以**建仓日**为锚锁定，见 wolf_early_stop）；已成趋势后 → 既有 `stop_loss_price`
+          （六层之②趋势线法语料无参数，用户决策暂用 stop_loss_price）。
+          `WOLF_EARLY_STOP=0` 可退回"一律 stop_loss_price"。
         - 当日已止损过（t_triggers 含当日 stop_loss 事件）则跳过，防止重复卖
         - **卖量分级（P2-4 完整落地, 2026-09-10）**：收盘时段(>=14:55)确认破位 → **清仓(含底仓)**;
           盘中确认破位 → 减半仓。见 _stop_exit_volume / _in_close_window。
@@ -1728,6 +1778,28 @@ class TMonitor:
                 if sp > 0:
                     stop_price = sp
                     break
+            # ── ①+④ 阶段化止损线（2026-09-10, 狼大止损六层之①/④）──
+            # 狼大 2026-03-05「13日内跌破波段低点的-3%没有收回 直接止损」;
+            #        2026-03-06「**已经成为趋势后**…这个就没意义了…转为我之前说的趋势波段止盈止损方法
+            #                    也就是用**趋势线**的方法…不是一个策略用到底的」。
+            # → 建仓初期(<=13 交易日)用"建仓时点锁定的波段低点 -3%"; 已成趋势后维持既有 stop_loss_price
+            #   （六层之②趋势线法: 语料**无参数**, 用户 2026-09-10 决策"先用 stop_loss_price"，回测后再定）。
+            # 波段低点以**建仓日**为锚重算（等价于建仓时锁定, 不随行情滚动）—— 见 wolf_early_stop 模块头。
+            _src = "none"
+            if os.getenv("WOLF_EARLY_STOP", "1").strip() not in ("0", "false", "no"):
+                try:
+                    from app.services.wolf_early_stop import resolve_stop as _resolve_stop
+                    _bd = self._buy_date(symbol)
+                    _stop_price, _src, _sreason = _resolve_stop(
+                        stop_price, self._daily_dated(symbol, 40), _bd)
+                    if _src == "wolf_early_swing":
+                        _tk_s = (symbol, "earlyswing", datetime.now().strftime('%Y%m%d'))
+                        if _tk_s not in _STOP_HOLD_WARNED:
+                            _STOP_HOLD_WARNED.add(_tk_s)
+                            print(f"[TMonitor] ①波段逻辑止损线 {symbol}: {_sreason}")
+                    stop_price = _stop_price
+                except Exception as _ee:
+                    print(f"[TMonitor] 建仓初期止损线解析异常(退回 stop_loss_price) {symbol}: {str(_ee)[:100]}")
             if not stop_price or current > stop_price:
                 return
             # ── P2-4(2026-09-10): 收盘确认 / 假跌破守卫 ──
