@@ -2,8 +2,21 @@
 """个股波段逻辑止损（狼大止损六层之①）+ 建仓初期 / 趋势中段的阶段切换（六层之④口径）。
 
 ────────────────────────────────────────────────────────────────
-狼大原话（语料，2026-03-05）:
-  「13日内跌破波段低点的-3%没有收回 直接止损 。。。按我0.618买入 。。。-6%左右」
+狼大原话（语料，2026-03-05，**完整一段**）:
+  「我说一下我用的 **买入有时间** 然后**13日内跌破波段低点的-3%没有收回 直接止损**，
+    **13日内需要碰新高或者新高。否则这个票呆的意义就不大，证明自己的买入逻辑和时间有问题**。
+    按我0.618买入的情况下 这样止损就是-6%左右 是可以接受的。」
+
+狼大原话（语料，2026-03-05，回答「-3%再卖是因为破了-3%就是有效跌破了吧」——**
+  **这就是「无利空」前提的出处**）:
+  「是**自己逻辑**的有效跌破 **除非是意外事件，黑天鹅那种**。如果是**无利空**13日内下跌
+    那新低后-3%就是逻辑问题 要控制损失就必须止损。后面涨是别的逻辑 就比如今天京东方A大涨
+    你说是他本身的逻辑么？并不是啊 所以意外事件导致的上涨是路上捡到钱了，也不是自己的逻辑」
+
+  → 「无利空」的**正确语义**（与直觉相反，必须照原话）:
+      · **无利空** → 跌破新低后 -3% = **自己的买入逻辑被证伪** → **必须止损**（本规则适用）；
+      · **有利空 / 意外事件 / 黑天鹅** → 那不是自己逻辑的问题，跌下去也可能因为"别的逻辑"涨回来
+        → **不按此结构线止损**（退回 stop_loss_price 兜底，而不是放大风险）。
 
 狼大原话（语料，2026-03-06，**他自己划的适用边界**）:
   「**已经成为趋势后** 。。。这个就没意义了 更多应该转为我之前说的趋势波段止盈止损方法
@@ -33,11 +46,20 @@
 "没有收回"这一半由既有 `t_monitor._stop_close_confirm`（收盘确认 / 假跌破守卫）承担，
   本模块只负责**给出一条止损线**（狼大 2026-01-29「收盘跌破我才出」）。
 
+**「无利空」前提**（本模块 `negative_event()` 读标记；`resolve_stop(..., neg_event=/symbol=)` 应用）:
+  见上文原话 —— 标记为"意外事件/黑天鹅"的标的不套用 ① 的结构线，退回 stop_loss_price。
+  数据来源：本仓**拿不到可靠的个股利空/公告面数据**，故做成**显式输入**
+  `data/wolf_negative_events.json`，格式 `{"SH600000": {"date": "20260910", "note": "…"}}`，
+  由人工或上游 AI 标记；**持有期内**（事件日 >= 建仓日）才算，且超过 `WOLF_NEG_EVENT_DAYS`
+  （默认 13，与建仓初期同窗）后自动失效。
+  误标代价可控：只是不再用结构线止损，仍有 stop_loss_price 兜底。
+
 开关:
   · `WOLF_EARLY_STOP=0`          → 关闭本模块（退回"一律用 stop_loss_price"）；
   · `WOLF_EARLY_STOP_DAYS=13`    → 建仓初期窗口（交易日）；
   · `WOLF_SWING_LOW_WIN=13`      → 波段低点回看窗口（交易日）；
-  · `WOLF_EARLY_STOP_PCT=3`      → 波段低点下方几个百分点（狼大原话 -3%）。
+  · `WOLF_EARLY_STOP_PCT=3`      → 波段低点下方几个百分点（狼大原话 -3%）；
+  · `WOLF_NEG_EVENT=0`           → 忽略"无利空"前提（一律按 ① 执行，即永远当作无利空）。
 """
 from __future__ import annotations
 
@@ -73,6 +95,79 @@ def _norm_date(s: Any) -> str:
     """'2026-09-01' / '20260901' / date → 'YYYYMMDD'（空值返回 ''）。"""
     t = "".join(ch for ch in str(s or "") if ch.isdigit())
     return t[:8] if len(t) >= 8 else ""
+
+
+def _norm_sym(s: Any) -> str:
+    """符号归一：'SH600000' / '600000.SH' → 'SH600000'（去空格/大写）。"""
+    return str(s or "").replace(" ", "").upper()
+
+
+def _digits(s: Any) -> str:
+    return "".join(ch for ch in str(s or "") if ch.isdigit())[:6]
+
+
+NEG_EVENT_FILE = "wolf_negative_events.json"
+
+
+def negative_event(symbol: Any, buy_date: Any = None, today: Any = None,
+                   max_age_days: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """该标的是否有**意外事件/黑天鹅级别**的利空 → 记录 dict 或 None。
+
+    狼大原话（2026-03-05，见模块头）: 「是自己逻辑的有效跌破 **除非是意外事件，黑天鹅那种**。
+    如果是**无利空**13日内下跌那新低后-3%就是逻辑问题 要控制损失就必须止损。后面涨是别的逻辑」
+    → 所以本函数返回**非 None** 时的语义是「**不要**套用 ① 的结构止损线」。
+
+    数据源: `data/wolf_negative_events.json`
+      {"SH600000": {"date": "20260910", "note": "突发利空…"}, ...}
+      · `date` = 事件发生日（必填，用于"是否在持有期内"与过期判定）；
+      · `note` = 可选备注（会出现在日志 reason 里，便于人工核对）。
+    只认**持有期内**（事件日 >= 建仓日）的事件 —— 建仓前就有的利空不属于"持有期内的意外"，
+    那种情况该在建仓决策层解决。超过 `WOLF_NEG_EVENT_DAYS`（默认 13，与建仓初期同窗）自动失效。
+
+    `WOLF_NEG_EVENT=0` → 恒返回 None（忽略该前提，永远按"无利空"执行）。
+    任何异常 → None（**fail-open 到"无利空"**，即仍按 ① 止损；不能因为读文件失败就不止损）。
+    """
+    if os.getenv("WOLF_NEG_EVENT", "1").strip() in ("0", "false", "no"):
+        return None
+    try:
+        import json
+        p = os.path.join(os.environ.get("DATA_DIR", "/app/data"), NEG_EVENT_FILE)
+        if not os.path.exists(p):
+            return None
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f) or {}
+        if not isinstance(d, dict) or not d:
+            return None
+        sym = _norm_sym(symbol)
+        rec = d.get(sym)
+        if rec is None:                       # 容错: 允许 '600000.SH' 之类的键
+            for k, v in d.items():
+                if _digits(k) and _digits(k) == _digits(sym):
+                    rec = v
+                    break
+        if not isinstance(rec, dict):
+            return None
+        ed = _norm_date(rec.get("date"))
+        if not ed:
+            return None
+        bd = _norm_date(buy_date)
+        if bd and ed < bd:                    # 建仓前的利空 → 不属于"持有期内的意外事件"
+            return None
+        n = int(max_age_days if max_age_days is not None
+                else _env_int("WOLF_NEG_EVENT_DAYS", EARLY_STAGE_DAYS_DEFAULT))
+        td = _norm_date(today)
+        if td and n >= 0:
+            import datetime as _dt
+            try:
+                d1 = _dt.date(int(ed[:4]), int(ed[4:6]), int(ed[6:8]))
+                d2 = _dt.date(int(td[:4]), int(td[4:6]), int(td[6:8]))
+                if (d2 - d1).days > n:
+                    return None
+            except Exception:
+                pass
+        return {"date": ed, "note": str(rec.get("note") or "")}
+    except Exception:
+        return None
 
 
 def swing_low_asof(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int] = None) -> Optional[float]:
@@ -132,13 +227,23 @@ def resolve_stop(cond_stop: Optional[float],
                  buy_date: Any,
                  early_days: Optional[int] = None,
                  win: Optional[int] = None,
-                 pct: Optional[float] = None) -> Tuple[Optional[float], str, str]:
+                 pct: Optional[float] = None,
+                 neg_event: Optional[Dict[str, Any]] = None,
+                 symbol: Any = None,
+                 today: Any = None) -> Tuple[Optional[float], str, str]:
     """阶段化止损线解析 → (stop_price, source, reason)。
 
-    source ∈ {'wolf_early_swing'（① 建仓初期波段逻辑止损）, 'stop_loss_price'（④ 趋势中段: 既有口径）,
-              'none'}
+    source ∈ {'wolf_early_swing'（① 建仓初期波段逻辑止损）,
+              'neg_event'（①被"无利空"前提豁免 → 退回 stop_loss_price）,
+              'stop_loss_price'（④ 趋势中段: 既有口径）, 'none'}
     · 建仓初期（held <= WOLF_EARLY_STOP_DAYS）且有波段低点 → 狼大 ① 结构止损；
+    · 但该标的有**意外事件/黑天鹅级利空**（持有期内）→ **不用结构线**，退回 cond_stop
+      （狼大 2026-03-05: 「是自己逻辑的有效跌破 **除非是意外事件，黑天鹅那种**…如果是**无利空**…就必须止损」）；
     · 其它（已成趋势 / 无波段低点 / 无建仓日 / 关闭）→ 交回 cond_stop（既有 stop_loss_price）。
+
+    `neg_event`: 调用方可**显式传入**已取到的事件记录（便于测试/复用）；
+                 传 None 且给了 `symbol` → 自动读模块函数 `negative_event()`。
+    `today` 仅用于事件过期判定。
 
     注意: **不**在两者之间取 min/max 做"复合" —— 狼大「不是一个策略用到底的」，
     阶段之外就该换口径，把两条线叠加是自造机制。
@@ -153,6 +258,15 @@ def resolve_stop(cond_stop: Optional[float],
     if held > d_days:
         return (cs or None), ("stop_loss_price" if cs else "none"), (
             "已成趋势(持有 %d 交易日 > %d) → 六层之②暂用 stop_loss_price" % (held, d_days))
+    # ── 「无利空」前提: 有意外事件/黑天鹅 → 不套结构线（狼大 2026-03-05 原话）──
+    ne = neg_event
+    if ne is None and symbol is not None:
+        ne = negative_event(symbol, buy_date=buy_date, today=today)
+    if ne:
+        return (cs or None), ("neg_event" if cs else "none"), (
+            "有利空/意外事件(%s%s) → 不套建仓初期结构线, 退回 stop_loss_price"
+            "（狼大2026-03-05: 那是\"别的逻辑\", 非自己逻辑被证伪）"
+            % (ne.get("date"), ("·" + ne["note"]) if ne.get("note") else ""))
     sl = swing_low_asof(bars, buy_date, win)
     if sl is None:
         return (cs or None), ("stop_loss_price" if cs else "none"), (

@@ -30,7 +30,8 @@ def make_bars(n, start_low=10.0, start="20260801"):
 
 @pytest.fixture(autouse=True)
 def _clean_env():
-    keys = ["WOLF_EARLY_STOP", "WOLF_EARLY_STOP_DAYS", "WOLF_SWING_LOW_WIN", "WOLF_EARLY_STOP_PCT"]
+    keys = ["WOLF_EARLY_STOP", "WOLF_EARLY_STOP_DAYS", "WOLF_SWING_LOW_WIN", "WOLF_EARLY_STOP_PCT",
+            "WOLF_NEG_EVENT", "WOLF_NEG_EVENT_DAYS"]
     old = {k: os.environ.get(k) for k in keys}
     for k in keys:
         os.environ.pop(k, None)
@@ -178,3 +179,99 @@ class TestFirstBuyDate:
     def test_does_not_raise_without_db(self):
         v = W.first_buy_date("t", "SH600000")
         assert v is None or isinstance(v, str)
+
+# ── 「无利空」前提（狼大 2026-03-05 原话） ──
+
+@pytest.fixture()
+def negdir(tmp_path, monkeypatch):
+    """把 DATA_DIR 指到临时目录, 用于 wolf_negative_events.json 的读写。"""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    return tmp_path
+
+
+def write_neg(tmp_path, obj):
+    import json
+    (tmp_path / W.NEG_EVENT_FILE).write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+
+
+class TestNegativeEvent:
+    def test_no_file_returns_none(self, negdir):
+        assert W.negative_event("SH600000", buy_date="20260801", today="20260810") is None
+
+    def test_in_holding_window(self, negdir):
+        write_neg(negdir, {"SH600000": {"date": "20260805", "note": "突发利空"}})
+        r = W.negative_event("SH600000", buy_date="20260801", today="20260810")
+        assert r and r["date"] == "20260805" and "突发" in r["note"]
+
+    def test_before_buy_date_ignored(self, negdir):
+        """建仓**前**就存在的利空不属于"持有期内的意外事件"（那种应在建仓决策层解决）。"""
+        write_neg(negdir, {"SH600000": {"date": "20260701"}})
+        assert W.negative_event("SH600000", buy_date="20260801", today="20260810") is None
+
+    def test_expired_ignored(self, negdir):
+        write_neg(negdir, {"SH600000": {"date": "20260805"}})
+        assert W.negative_event("SH600000", buy_date="20260801", today="20260901") is None   # 27 天 > 13
+        assert W.negative_event("SH600000", buy_date="20260801", today="20260815") is not None
+
+    def test_missing_date_ignored(self, negdir):
+        write_neg(negdir, {"SH600000": {"note": "无日期"}})
+        assert W.negative_event("SH600000", buy_date="20260801") is None
+
+    def test_symbol_format_tolerant(self, negdir):
+        write_neg(negdir, {"600000.SH": {"date": "20260805"}})
+        assert W.negative_event("SH600000", buy_date="20260801", today="20260810") is not None
+
+    def test_switch_off_ignores(self, negdir):
+        write_neg(negdir, {"SH600000": {"date": "20260805"}})
+        os.environ["WOLF_NEG_EVENT"] = "0"
+        assert W.negative_event("SH600000", buy_date="20260801", today="20260810") is None
+
+    def test_corrupt_file_fails_open(self, negdir):
+        (negdir / W.NEG_EVENT_FILE).write_text("{not json", encoding="utf-8")
+        assert W.negative_event("SH600000", buy_date="20260801", today="20260810") is None
+
+
+class TestNegativeEventExemptsEarlyStop:
+    """有意外事件/黑天鹅 → **不套** ① 结构线, 退回 stop_loss_price（狼大: 那是"别的逻辑"）。"""
+
+    def test_neg_event_falls_back_to_stop_loss_price(self):
+        bars = make_bars(30, start="20260801")
+        stop, src, why = W.resolve_stop(9.5, bars, "20260817",
+                                        neg_event={"date": "20260818", "note": "黑天鹅"})
+        assert (stop, src) == (9.5, "neg_event")
+        assert "别的逻辑" in why and "20260818" in why
+
+    def test_without_neg_event_uses_swing_stop(self):
+        bars = make_bars(30, start="20260801")
+        _, src, _ = W.resolve_stop(9.5, bars, "20260817", neg_event=None)
+        assert src == "wolf_early_swing"
+
+    def test_neg_event_never_invents_a_stop(self):
+        """没有 cond_stop 又没有结构线 → 返回 none（不能凭空造一条止损线）。"""
+        bars = make_bars(30, start="20260801")
+        stop, src, _ = W.resolve_stop(None, bars, "20260817", neg_event={"date": "20260818"})
+        assert stop is None and src == "none"
+
+    def test_neg_event_does_not_apply_after_trend_stage(self):
+        """已成趋势时本来就走 stop_loss_price, 利空标记不改变结果（前提只作用于 ① 那一层）。"""
+        bars = make_bars(40, start="20260801")
+        stop, src, _ = W.resolve_stop(9.5, bars, "20260801", neg_event={"date": "20260810"})
+        assert (stop, src) == (9.5, "stop_loss_price")
+
+    def test_symbol_lookup_path(self, negdir):
+        write_neg(negdir, {"SH600017": {"date": "20260818", "note": "黑天鹅"}})
+        bars = make_bars(30, start="20260801")
+        stop, src, _ = W.resolve_stop(9.5, bars, "20260817", symbol="SH600017", today="20260818")
+        assert (stop, src) == (9.5, "neg_event")
+
+    def test_symbol_lookup_absent_behaves_normally(self, negdir):
+        bars = make_bars(30, start="20260801")
+        _, src, _ = W.resolve_stop(9.5, bars, "20260817", symbol="SH600017", today="20260818")
+        assert src == "wolf_early_swing"
+
+    def test_switch_off_ignores_neg_event_file(self, negdir):
+        write_neg(negdir, {"SH600017": {"date": "20260818"}})
+        os.environ["WOLF_NEG_EVENT"] = "0"
+        bars = make_bars(30, start="20260801")
+        _, src, _ = W.resolve_stop(9.5, bars, "20260817", symbol="SH600017", today="20260818")
+        assert src == "wolf_early_swing"

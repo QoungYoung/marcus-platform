@@ -1755,7 +1755,9 @@ class TMonitor:
           建仓初期（<= WOLF_EARLY_STOP_DAYS=13 交易日）→ **波段低点 ×(1-3%)**（狼大 2026-03-05 原话，
           波段低点以**建仓日**为锚锁定，见 wolf_early_stop）；已成趋势后 → 既有 `stop_loss_price`
           （六层之②趋势线法语料无参数，用户决策暂用 stop_loss_price）。
-          `WOLF_EARLY_STOP=0` 可退回"一律 stop_loss_price"。
+          **「无利空」前提**：该标的有持有期内的意外事件/黑天鹅级利空（data/wolf_negative_events.json）
+          → **不套结构线**，退回 `stop_loss_price`（狼大: 那是"别的逻辑", 非自己逻辑被证伪）。
+          `WOLF_EARLY_STOP=0` 退回"一律 stop_loss_price"；`WOLF_NEG_EVENT=0` 忽略利空前提。
         - 当日已止损过（t_triggers 含当日 stop_loss 事件）则跳过，防止重复卖
         - **卖量分级（P2-4 完整落地, 2026-09-10）**：收盘时段(>=14:55)确认破位 → **清仓(含底仓)**;
           盘中确认破位 → 减半仓。见 _stop_exit_volume / _in_close_window。
@@ -1794,12 +1796,13 @@ class TMonitor:
                     from app.services.wolf_early_stop import resolve_stop as _resolve_stop
                     _bd = self._buy_date(symbol)
                     _stop_price, _src, _sreason = _resolve_stop(
-                        stop_price, self._daily_dated(symbol, 40), _bd)
-                    if _src == "wolf_early_swing":
+                        stop_price, self._daily_dated(symbol, 40), _bd,
+                        symbol=symbol, today=datetime.now().strftime('%Y%m%d'))
+                    if _src in ("wolf_early_swing", "neg_event"):
                         _tk_s = (symbol, "earlyswing", datetime.now().strftime('%Y%m%d'))
                         if _tk_s not in _STOP_HOLD_WARNED:
                             _STOP_HOLD_WARNED.add(_tk_s)
-                            print(f"[TMonitor] ①波段逻辑止损线 {symbol}: {_sreason}")
+                            print(f"[TMonitor] ①波段逻辑止损线({_src}) {symbol}: {_sreason}")
                     stop_price = _stop_price
                 except Exception as _ee:
                     print(f"[TMonitor] 建仓初期止损线解析异常(退回 stop_loss_price) {symbol}: {str(_ee)[:100]}")
