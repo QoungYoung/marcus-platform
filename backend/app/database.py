@@ -563,6 +563,7 @@ def _apply_wolf_discipline_migration():
     → 改为单行 JSONB 落库（对齐 t_build_params 范式），DB 为**唯一事实来源**；
       `wolf_discipline._cfg()` 读序 = DB → 文件 → 内置默认，首次读到空表时**自动用文件/默认播种**。
     """
+    from sqlalchemy import text      # 各迁移函数都自带这个 import（模块级没有 text，漏了会静默 warn）
     try:
         with engine.begin() as conn:
             conn.execute(text(
