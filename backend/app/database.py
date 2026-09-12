@@ -415,7 +415,9 @@ def _apply_t_account_migration():
                 """
             ))
 
-            # 5) t_daily_state — 做T日级账本（累计回转额/净回转头寸/熔断）
+            # 5) t_daily_state — 做T日级账本（累计回转额/净回转头寸）
+            #    2026-09-12：删除死列 risk_breaker / breaker_reason（0 处写入、读取方已删，用户决定清理；
+            #    生产库已 ALTER TABLE DROP COLUMN，字段级备份见 .dsh-tmp/t_daily_state_backup.csv）
             conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS t_daily_state (
@@ -426,8 +428,6 @@ def _apply_t_account_migration():
                     realized_pnl DOUBLE PRECISION DEFAULT 0,
                     buy_count INTEGER DEFAULT 0,
                     sell_count INTEGER DEFAULT 0,
-                    risk_breaker BOOLEAN DEFAULT FALSE,
-                    breaker_reason VARCHAR(256),
                     updated_at TIMESTAMP NOT NULL DEFAULT now(),
                     PRIMARY KEY (account_id, trade_date)
                 )

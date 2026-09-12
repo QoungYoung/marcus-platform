@@ -319,7 +319,7 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 | ② 定仓位 | `wolf_discipline.tier_targets/tier_floor` + `position_tier` | ✅ 已落（build 75/55、t_only/side 50、defense 30、exit 50） |
 | ③ 选方向 | gate 链 6 步（concept_long→etf_flow→inst_flow→trend_confirm→heat_v2→mainline_gate） | ⚠️ 回放保真度 ~73%（缺 catalyst 历史）；**v2 口径下主线层无区分度** |
 | ④ 选票 | `stock_confirm_judge` + `pick_v2` + rs 闸 + 低吸资格 | ⚠️ 部分；**未验证**；`stock_confirm_result.json` 无逐日历史 |
-| ⑤ 买点 | 254（破前低+缩量）/ 253（指数急杀）/ low_buy / 现象1-2 | ✅ 有腿；A5 时间窗**已关**；A6 提示层 |
+| ⑤ 买点 | 254（破前低+缩量）/ 253（指数急杀）/ low_buy / 现象1-2 | ✅ 有腿；A5 时间窗**已关**（`.env`）；**A9 谨慎门已于 2026-09-12 关闭**（`.env` `WOLF_GAP_CAUTION=0`，实测 `_caution_on()=False`）；A6 提示层 |
 | ⑥ 持有/做T | `t_monitor` 30s + roundtrip_sell（等量换手） | ✅ 在跑 |
 | ⑦ 兑现/换方向 | `board_half`（板上减半）/ `high_sell` / `custom_vwap_sell`（破黄线）/ `custom_support_sell`（破支撑）/ `wolf_defensive_t_reduce` | ✅ 在跑（t 账户**已实现卖出腿** 63.6%，+2,828.5；口径见 §5.2） |
 | ⑧ 保护 | 止损六层（①结构 ②趋势线 ③指数大级别 ④时点 ⑤预设 ⑥组合层） | ⚠️ 已落但**几乎不触发**（历史仅 1 次）；A10 上轨/中轨已落 |
@@ -404,8 +404,8 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 | **G9** | **周末与事件前的减半避险**（08-21 原话：2 点半仍缩量不拉升→出一半、周一拿回、65% 过周末） | 既有 `weekend_de_risk` 只看「周五+仓位阈值」，**缺「缩量 ∧ 未拉升」前提** | ✅ **已落**（`wolf_weekend_hedge.py`，`WOLF_WEEKEND_HEDGE` 默认关） |
 | **G10** | **量能门槛准入**（真假突破：不上 3WE=诱多；2WE=地量） | 他有硬数值，我们的判据层无量能门槛；**1500E/2000E 口径不明（与 2WE 不同量纲）→ 只留档不实现** | ✅ **已落**（`wolf_volume_gate.py`，`WOLF_VOLUME_GATE` 默认关） |
 | **G11** | **检查买腿是否含基本面条件**（他要求"纯资金指标、不含一丝基本面"的机械式入场） | 我们的 pick/confirm 链里含研报 catalyst、主题叙事 → 与他的机械条件口径不同，需逐条核对 | 未做 |
-| **G13** | **清理生产测试残留**（`t_conditions` 里 `t_manual_test`/`t_patch_test`/`t_full_test`/`vp_test2` 各 1 条）与 `risk_breaker` 死列 | 生产表里有测试数据会被真实链路读到；死列会持续误导"机制还在" | 未做 |
-| **G14** | **A9 谨慎门（`WOLF_GAP_CAUTION`）默认开着但未经验证** | 代码默认 1、生产 `.env` 未覆盖 → 实际生效；而日级代理已被证明方向相反 | 待你决定：关掉 / 保留并补验证 |
+| **G13** | **清理生产测试残留**与死列 | 生产表里有测试数据会被真实链路读到；死列会持续误导"机制还在" | ✅ **已完成（2026-09-12）**：删除 `t_conditions` 4 条测试条件（已 expired、0 次触发）；`t_daily_state` 删除 `risk_breaker`/`breaker_reason` 两列（10 行完好）；`database.py` 建表语句同步；备份在 `.dsh-tmp/t_daily_state_backup.csv` 等 |
+| **G14** | ~~A9 谨慎门默认开着但未经验证~~ | 日级代理已被证明方向相反 | ✅ **已按用户决定关闭（2026-09-12）**：生产 `.env` 写入 `WOLF_GAP_CAUTION=0`，重建 backend/worker 后实测 `_caution_on()=False` |
 | **G12** | **分类型操作总纲落地**（高位：避开公募重仓 + 卖强留弱 + 拉升后都走；低位：避开暴雷 ST + 找辨识度最高老龙头埋伏 + 留强丢弱） | 我们有"去弱留强"（P1-6），但**高位/低位两套相反规则**没有区分 | 未做 |
 
 ---
@@ -500,3 +500,17 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 2. 1500E/2000E **未实现**（与 2WE 不同量纲，口径不明）；
 3. 两机制都是**提示层**（注入纪律上下文），不直接下单；要变成执行腿需另行接线；
 4. 2026-09-12 修 `jobs/wolf_theme_resilience.py` 的未定义变量 `date8`（开关打开即 NameError 的潜伏 bug）。
+
+
+---
+
+## §12 生产变更记录（2026-09-12，按用户指令执行）
+
+| 项 | 动作 | 证据 |
+|---|---|---|
+| **A9 谨慎门关闭** | 生产 `.env` 追加 `WOLF_GAP_CAUTION=0`（行级改写、保留末尾换行、`PROMAX_API_KEY` 长度仍 47 未被污染；备份 `.env.bak_<ts>`），`docker compose up -d --no-deps backend worker` 重建 | backend/worker 内 `os.getenv('WOLF_GAP_CAUTION') = '0'`；`wolf_gap_open._caution_on() = False`；容器 healthy |
+| **G13 测试残留清理** | `DELETE FROM t_conditions WHERE trigger_kind IN ('t_manual_test','t_patch_test','t_full_test','vp_test2')` → `DELETE 4`（4 条均 `expired`、`t_triggers` 关联 0 条） | 复核：`where trigger_kind like '%test%'` 计数 = 0 |
+| **G13 死列清理** | `ALTER TABLE t_daily_state DROP COLUMN IF EXISTS risk_breaker, DROP COLUMN IF EXISTS breaker_reason` | 列清单复核只到 `updated_at`；行数仍 10；`get_daily_state` 返回字段无这两列；`init_db()` 正常 |
+| **代码同步** | `backend/app/database.py` 建表语句去掉两列；本地 `pytest backend/tests/test_t_daily_ledger_account.py` **9 passed** | 已部署到生产并跑 `init_db()` 验证 |
+
+**未执行**：用户先提的「删除 t 账户」随后撤回（"t 账户先不删了"），**未对 `t` 账户数据做任何改动**。
