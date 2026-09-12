@@ -178,3 +178,51 @@ def test_directive_empty_without_state(monkeypatch, tmp_path):
     monkeypatch.setenv("WOLF_VG_FILE", str(tmp_path / "none.json"))
     monkeypatch.setenv("WOLF_VOLUME_GATE", "1")
     assert VG.directive() == ""
+
+# ── 「上攻关口」vs「跌破关口」的语义区分（2026-09-12 修，用户指出）────────
+# 他 2026-09-01「都到这个位置了 不过4000怎么诱多」/ 2026-09-03「不上3WE的突破就是诱多」= **自下而上攻关口**；
+# 他 2026-08-25「顶多就是指数破位后的止损」= **跌破关口**是止损触发，不是诱多。
+def test_side_approach_when_below_for_days():
+    g = VG.key_level_gap(3942.0, path=[3900.0, 3920.0, 3880.0, 3930.0])
+    assert g["side"] == "approach" and g["level"] == 4000.0
+
+
+def test_side_broken_when_recently_above():
+    """真实场景 2026-09-11：前几日在 3900 上方，当天收 3888.11（跌破）→ broken。"""
+    g = VG.key_level_gap(3888.11, path=[3934.40, 3951.51, 3940.55, 3932.70])
+    assert g["side"] == "broken" and g["level"] == 3900.0
+
+
+def test_side_above():
+    """收在关口**上方**才算 above（3951 仍在 4000 下方 → approach）。"""
+    g = VG.key_level_gap(4005.0, path=[3934.40, 3990.0])
+    assert g["side"] == "above" and g["level"] == 4000.0
+    assert VG.key_level_gap(3951.51, path=[3934.40, 3940.55])["side"] == "approach"
+
+
+def test_his_0903_call_flagged_as_fake_breakout():
+    """复现他 2026-09-03 的实喊：上证 3942、成交 17,802 亿（地量）→ 判诱多。"""
+    r = VG.evaluate(_series([20520, 18203, 17802]), close=3942.09,
+                    path=[3979.89 - 40, 3930.0, 3940.0, 3932.0])
+    assert r["fake_breakout_risk"] is True and r["breakdown_risk"] is False
+    assert "诱多" in r["directive"]
+
+
+def test_0911_breakdown_not_mislabeled_as_fake_breakout():
+    """**用户指出的错判**：09-11 是从 3900 上方跌破（开 3910、收 3888），
+    不能标成"攻关口诱多"，应标成**破位**（他的止损触发口径）。"""
+    r = VG.evaluate(_series([16623, 19870]), close=3888.11,
+                    path=[3934.40, 3951.51, 3940.55, 3932.70])
+    assert r["breakdown_risk"] is True and r["fake_breakout_risk"] is False
+    # 头部引用的是他 09-03 的原话（含"诱多"二字），所以判的是"结论句"里没有诱多判定
+    assert "破位" in r["directive"] and "判定为诱多" not in r["directive"]
+    assert "止损" in r["directive"]
+
+
+def test_broken_then_rebound_labeled_as_rebound():
+    """破位之后若当日是**上涨**的，那是他 2026-08-21 说的「主力诱多反抽小级别行情」→ 只做T不加仓。"""
+    # 关口 3900 已丢（早前收在 3934 上方），今日收 3895 仍在关口下方、但比昨日（3888.11）涨了 → 反抽
+    r = VG.evaluate(_series([16623, 19870]), close=3895.0,
+                    path=[3934.40, 3888.11])
+    assert r["breakdown_risk"] is True and r["index_chg_pct"] is not None
+    assert "反抽" in r["directive"] and "只做T" in r["directive"]

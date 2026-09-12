@@ -38,7 +38,8 @@
   · 全市场成交额（亿元）= Σ tushare `daily(trade_date)` 的 `amount`（原始单位千元）÷ 1e5
   · 地量: < `WOLF_VG_DI_CEIL`（默认 20,000 亿 = 2WE）
   · 突破级: ≥ `WOLF_VG_BREAKOUT`（默认 30,000 亿 = 3WE）
-  · 关键整数位: `WOLF_VG_KEY_LEVELS`（默认 "3800,3900,4000"），距离 < `WOLF_VG_NEAR_PCT`（默认 1.0%）算"到了关口"
+  · 关键整数位: `WOLF_VG_KEY_LEVELS`（默认 "3800,3900,4000"），距离 < `WOLF_VG_NEAR_PCT`（默认 **1.5%**）算"到了关口"
+    —— 1.5% 是对他两次实喊的标定：2026-09-03 上证 3942（距 4000 有 1.47%）他喊「不上3WE的突破就是诱多」；09-01 上证 3979（0.5%）「不过4000怎么诱多」
   · **诱多风险** = 「指数在关键整数位附近」∧「成交额未达突破级」→ 按他 2026-09-03 的口径即为诱多
 
 **落点**：提示层（进 `wolf_discipline.discipline_context`），关闭时 `directive()` 返回空。
@@ -117,19 +118,25 @@ def market_amount(days: Sequence[str]) -> Dict[str, float]:
     return out
 
 
-def index_close() -> Optional[float]:
-    """上证最近一根日线收盘（失败 → None）。"""
+def index_closes(n: int = 10) -> List[float]:
+    """上证最近 n 个交易日收盘价（升序，最后一个是最近）。失败 → []。"""
     try:
         import datetime as _dt
         from app.services.t_backtest_data import _fetch_tushare_index_daily
         end = _dt.date.today().strftime("%Y%m%d")
-        start = (_dt.date.today() - _dt.timedelta(days=20)).strftime("%Y%m%d")
-        bars = _fetch_tushare_index_daily(IDX_TS, start, end) or []
-        if bars:
-            return float(sorted(bars, key=lambda b: str(b.get("trade_date")))[-1].get("close"))
+        start = (_dt.date.today() - _dt.timedelta(days=int(n * 2.2) + 20)).strftime("%Y%m%d")
+        bars = sorted(_fetch_tushare_index_daily(IDX_TS, start, end) or [],
+                      key=lambda b: str(b.get("trade_date")))
+        return [float(b.get("close")) for b in bars[-int(n):] if b.get("close") is not None]
     except Exception as e:
-        print(f"[volume_gate] index_close 失败: {type(e).__name__}: {str(e)[:60]}")
-    return None
+        print(f"[volume_gate] index_closes 失败: {type(e).__name__}: {str(e)[:60]}")
+        return []
+
+
+def index_close() -> Optional[float]:
+    """上证最近一根日线收盘（失败 → None）。"""
+    cs = index_closes(1)
+    return cs[-1] if cs else None
 
 
 # ───────────────────────── 判据层（纯函数，可测） ─────────────────────────
@@ -178,28 +185,59 @@ def classify(total_yi: float, ma5_yi: Optional[float] = None, cfg: Optional[Dict
             "below_di": t < di, "at_breakout": t >= br}
 
 
+def _side(level: float, close: float, path: Optional[Sequence[float]] = None,
+          lookback: int = 10) -> str:
+    """判断当前处在关口的哪一侧（**这是 2026-09-12 修的关键语义**）。
+
+      · `above`    : 收在关口上方
+      · `broken`   : 收在关口下方，但**最近 N 日曾收在关口上方** → 是「跌破关口（破位）/ 反抽回下方」
+      · `approach` : 收在关口下方，且最近 N 日**一直在下方** → 才是「上攻关口」
+
+    为什么要分：他 2026-09-01「不过4000怎么诱多」与 2026-09-03「不上3WE的突破就是诱多」
+    说的都是**自下而上攻关口**；而 2026-08-25「顶多就是指数破位后的止损」说明**跌破关口**
+    在他的体系里是**止损触发**，不是诱多。原实现只向上找关口，会把"跌破后收回下方"误判成"上攻诱多"。
+    """
+    if close >= level:
+        return "above"
+    ps = [float(x) for x in (path or []) if x is not None][-int(lookback):]
+    if any(x > level for x in ps):
+        return "broken"
+    return "approach"
+
+
 def key_level_gap(close: Optional[float], levels: Optional[Sequence[float]] = None,
-                  tol_pct: Optional[float] = None) -> Dict[str, Any]:
-    """指数距**最近的、在其上方或贴近的**关键整数位有多远（%）。"""
+                  tol_pct: Optional[float] = None,
+                  path: Optional[Sequence[float]] = None) -> Dict[str, Any]:
+    """指数距**最近的、在其上方或贴近的**关键整数位有多远（%），并给出所处的一侧。
+
+    `path` = 最近若干日收盘价（用于区分「上攻」与「跌破」）。
+    """
     lv = sorted(levels if levels is not None else key_levels())
-    tol = float(tol_pct if tol_pct is not None else _env_f("WOLF_VG_NEAR_PCT", 1.0))
+    tol = float(tol_pct if tol_pct is not None else _env_f("WOLF_VG_NEAR_PCT", 1.5))
     if not close or not lv:
-        return {"level": None, "gap_pct": None, "near": False, "tol_pct": tol}
+        return {"level": None, "gap_pct": None, "near": False, "tol_pct": tol, "side": ""}
     c = float(close)
     above = [x for x in lv if x >= c]
     lvl = min(above) if above else max(lv)
     gap = round((lvl - c) / c * 100.0, 3)
-    return {"level": lvl, "gap_pct": gap, "near": abs(gap) <= tol, "tol_pct": tol}
+    side = _side(lvl, c, path)
+    return {"level": lvl, "gap_pct": gap, "near": abs(gap) <= tol, "tol_pct": tol, "side": side}
 
 
 def fake_breakout_risk(cls: Dict[str, Any], gap: Dict[str, Any]) -> bool:
-    """诱多风险 = 到了关口 ∧ 量能未达突破级（他 2026-09-03「不上3WE的突破就是诱多」）。"""
-    return bool(gap.get("near") and not cls.get("at_breakout"))
+    """诱多风险 = **自下而上攻关口**（side=approach）∧ 量能未达突破级（2026-09-03 原话口径）。"""
+    return bool(gap.get("near") and gap.get("side") == "approach" and not cls.get("at_breakout"))
+
+
+def breakdown_risk(gap: Dict[str, Any]) -> bool:
+    """破位风险 = 收在此前曾站上的关口**下方**（他 2026-08-25：「顶多就是指数破位后的止损」）。"""
+    return gap.get("side") == "broken"
 
 
 def evaluate(series: Dict[str, float], close: Optional[float] = None,
-             levels: Optional[Sequence[float]] = None, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """series: {YYYYMMDD: 亿元}（升序无关，内部排序）。返回完整判据结果。"""
+             levels: Optional[Sequence[float]] = None, cfg: Optional[Dict[str, Any]] = None,
+             path: Optional[Sequence[float]] = None) -> Dict[str, Any]:
+    """series: {YYYYMMDD: 亿元}；path: 最近若干日收盘价（判「上攻 vs 跌破」用）。"""
     ds = sorted(series.keys())
     if not ds:
         return {"ok": False, "reason": "no_series"}
@@ -207,10 +245,16 @@ def evaluate(series: Dict[str, float], close: Optional[float] = None,
     last_d, last = ds[-1], amounts[-1]
     ma5 = round(sum(amounts[-5:]) / len(amounts[-5:]), 1) if amounts else None
     cls = classify(last, ma5, cfg=cfg)
-    gap = key_level_gap(close, levels)
+    gap = key_level_gap(close, levels, path=path)
+    idx_chg = None
+    ps = [float(x) for x in (path or []) if x is not None]
+    if close and ps and ps[-1]:
+        idx_chg = round((float(close) - ps[-1]) / ps[-1] * 100.0, 3)
     res = {"ok": True, "as_of": last_d, "series": {d: series[d] for d in ds[-10:]},
-           "ma5": ma5, "level": cls, "key_level": gap, "close": close,
+           "ma5": ma5, "level": cls, "key_level": gap, "close": close, "path": list(path or [])[-10:],
+           "index_chg_pct": idx_chg,
            "fake_breakout_risk": fake_breakout_risk(cls, gap),
+           "breakdown_risk": breakdown_risk(gap),
            "prev_delta_pct": (round((last - amounts[-2]) / amounts[-2] * 100.0, 2)
                               if len(amounts) >= 2 and amounts[-2] else None)}
     res["directive"] = directive_text(res)
@@ -218,7 +262,11 @@ def evaluate(series: Dict[str, float], close: Optional[float] = None,
 
 
 def directive_text(res: Dict[str, Any]) -> str:
-    """把判据结果写成一行可注入的提示（不读文件、不做开关判断 → 便于单测）。"""
+    """把判据结果写成一行可注入的提示（不读文件、不做开关判断 → 便于单测）。
+
+    三个分支**必须分开**（2026-09-12 修）：他 2026-09-01/09-03 讲的是**上攻关口**放不出量=诱多；
+    而 2026-08-25「顶多就是指数破位后的止损」说明**跌破关口**是止损触发；两者不是一回事。
+    """
     lv = res.get("level") or {}
     g = res.get("key_level") or {}
     head = ("📊 量能门槛（狼大 2026-09-03「不上3WE的突破就是诱多」／2026-08-20「2WE是地量了」）"
@@ -229,11 +277,27 @@ def directive_text(res: Dict[str, Any]) -> str:
                lv.get("tag") or "?"))
     if g.get("level") is None:
         return head
-    tail = "｜上证 %s 距关口 %s 还有 %.2f%%" % (
-        ("%.2f" % float(res.get("close"))) if res.get("close") else "—",
-        ("%.0f" % float(g["level"])), abs(float(g.get("gap_pct") or 0)))
+    c_txt = ("%.2f" % float(res.get("close"))) if res.get("close") else "—"
+    lvl, gap_pct, side = float(g["level"]), abs(float(g.get("gap_pct") or 0)), g.get("side") or ""
+    if side == "broken":
+        tail = "｜上证 %s **收在关口 %.0f 下方**（近 %d 日曾在其上方）" % (
+            c_txt, lvl, len(res.get("path") or []) or 0)
+    elif side == "above":
+        tail = "｜上证 %s **已站上关口 %.0f**" % (c_txt, lvl)
+    else:
+        tail = "｜上证 %s 距关口 %.0f 还有 %.2f%%（**自下而上**）" % (c_txt, lvl, gap_pct)
+    if res.get("breakdown_risk"):
+        chg = res.get("index_chg_pct")
+        if chg is not None and chg > 0:
+            # 他 2026-08-21 14:43「指数4-4高点4000附近后因为利空回踩的第二次**可能的主力诱多反抽小级别行情**」
+            # → 这种"跌下来的关口下方的反抽"在他是**做T**场景，不是加仓场景
+            return (head + tail + "｜⚠️ 关口已跌破，今日为**破位后的反抽**（他 2026-08-21 称之为"
+                    "「主力诱多反抽小级别行情」）→ **只做T、不加仓**；量能不足则反抽随时结束")
+        return (head + tail + "｜⚠️ **跌破关口 = 破位**：按他 2026-08-25「顶多就是指数破位后的止损」"
+                "这是**止损/减仓评估触发**（不是诱多）；若随后缩量反抽回关口下方，"
+                "他 2026-09-07 称之为『散户绞肉机』→ **不追、只做T**")
     if res.get("fake_breakout_risk"):
-        return head + tail + "｜⚠️ **关口处量能未达突破级 → 按他口径判定为诱多：不追高、不加仓**"
+        return head + tail + "｜⚠️ **攻关口而量能未达突破级 → 按他口径判定为诱多：不追高、不加仓**"
     if lv.get("at_breakout"):
         return head + tail + "｜✅ 已达突破级量能（真突破仍需「放量很大+好消息」配合，他 2026-09-03）"
     if lv.get("below_di"):
@@ -244,8 +308,8 @@ def directive_text(res: Dict[str, Any]) -> str:
 # ───────────────────────── 采集/落盘 ─────────────────────────
 
 def run(days: int = 10, save: bool = True, series: Optional[Dict[str, float]] = None,
-        close: Optional[float] = None) -> Dict[str, Any]:
-    """采集 → 判据 → 落 `wolf_volume_gate.json`。`series`/`close` 可注入（测试/回放）。"""
+        close: Optional[float] = None, path: Optional[Sequence[float]] = None) -> Dict[str, Any]:
+    """采集 → 判据 → 落 `wolf_volume_gate.json`。`series`/`close`/`path` 可注入（测试/回放）。"""
     if series is None:
         if not enabled():
             return {"ok": False, "reason": "disabled"}
@@ -262,8 +326,13 @@ def run(days: int = 10, save: bool = True, series: Optional[Dict[str, float]] = 
         if not ds:
             return {"ok": False, "reason": "no_trade_days"}
         series = market_amount(ds)
+    if path is None:
+        cs = index_closes(10)
+        path = cs
+        if close is None and cs:
+            close = cs[-1]
     close = close if close is not None else index_close()
-    res = evaluate(series or {}, close)
+    res = evaluate(series or {}, close, path=path)
     res["close"] = close
     if res.get("ok") and save:
         try:
