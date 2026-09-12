@@ -393,8 +393,8 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 
 | 优先 | 缺口 | 为什么 | 状态 |
 |---|---|---|---|
-| **G1** | **每日决策对象（L1–L4 的统一裁决）** | 没有它，机制只能平铺互相打架；他的流程是层层决定 | 未做 |
-| **G2** | **每日存档**（gate/wave/catalyst/confirm/legs/regime） | 唯一能根治"只能重放猜历史"；**从今天起**不再产生新缺口 | 未做 |
+| **G1** | **每日决策对象（L1–L6 的统一裁决）** | 没有它，机制只能平铺互相打架；他的流程是层层决定 | ✅ **已上线（2026-09-12）**：`daily_decision.py` + job（19:45）→ `data/decision/<date>.json`；L5 把"会被拦掉的买入"显式化为 blockers；准入闸 `WOLF_DECISION_GATE` **默认关**（不改现有行为） |
+| **G2** | **每日存档**（gate/wave/catalyst/confirm/legs/regime） | 唯一能根治"只能重放猜历史"；**从今天起**不再产生新缺口 | ✅ **已上线（2026-09-12）**：文件快照 `data/_archive/<date>/` + **PostgreSQL 双写** `daily_artifacts`；job 19:50 |
 | **G3** | **分类型度量 + 回测离场口径改成生产实际** | 现在用"持 5 天"量做T腿 → 47%，实际 63.6% | 未做 |
 | **G4** | **建仓腿（低位埋伏）为什么亏**（stock 账户 27.3% / −2,538.6，见 §5.2） | 真金白银在亏、慢变量、且止损①几乎不触发 | 未做 |
 | **G5** | 复盘产出接入决策（B1/B4 → 明日方向与档位） | 他 9.0% 的语料都在讲这个，我们只做提示 | 未做 |
@@ -514,3 +514,23 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 | **代码同步** | `backend/app/database.py` 建表语句去掉两列；本地 `pytest backend/tests/test_t_daily_ledger_account.py` **9 passed** | 已部署到生产并跑 `init_db()` 验证 |
 
 **未执行**：用户先提的「删除 t 账户」随后撤回（"t 账户先不删了"），**未对 `t` 账户数据做任何改动**。
+
+
+---
+
+## §13 阶段 0 上线记录（2026-09-12）：G1 每日决策对象 + G2 每日存档
+
+| 项 | 内容 |
+|---|---|
+| **G1 决策对象** | `backend/app/services/daily_decision.py` + `jobs/daily_decision.py`（cron `45 19 * * 1-5`）。产出 `data/decision/<date>.json`（+ `latest.json`）：L1 方向 / L2 档位 / L3 仓位 / L4 选票 / **L5 买点（allowed + conditions + blockers）** / L6 兑现，每条带 `basis`；文件缺失时该层为 `null` 并记入 `missing`（不臆造）。`entry_allowed()` 供腿引用，准入闸 `WOLF_DECISION_GATE` **默认关**（置 1 才是"无决策对象 → 拒绝开新腿"）。 |
+| **G2 每日存档** | `backend/app/services/daily_archive.py` + `jobs/daily_archive.py`（cron `50 19 * * 1-5`）。① 文件快照到 `data/_archive/<date>/`（含 `concept_long` / `theme_inst_flow` / `etf_share_flow` / `main_line_state` / `stock_confirm_result` 这些**当日覆盖型**文件）；② **双写**进 PostgreSQL `daily_artifacts(trade_date, artifact_key, payload jsonb, sha256_16, src_path, src_mtime)`，迁移见 `app/database.py::_apply_daily_artifacts_migration`。 |
+| **开关** | `WOLF_DAILY_DECISION=1`、`WOLF_DAILY_ARCHIVE=1`（生产 `.env`，已重建容器生效）；`WOLF_DECISION_GATE` **未设 = 关** |
+| **任务** | 配置任务数 51 → **55**（新增 `daily_decision` 19:45、`daily_archive` 19:50；后者 `depends_on: daily_decision`） |
+| **实测（2026-09-11 回填）** | 决策对象：`L2=t_only`、`L5 拦阻 = G10 破位（不新开）`、`missing=['wave_dated']`（**日期版 `wave_state_<d>.json` 不存在** → 这正是"缺历史"的实证）、`warnings` 含 look-ahead 提示；存档：**33 文件 → 33 行入库（0 跳过，1.28MB）**，可从库读回 |
+
+**上线过程中踩到并修掉的三个坑（均已固化进代码与测试）**
+1. **`strategy_state.json` 含 `NaN`**（`a50_futures.change` / `change_pct`）→ Python 的 json 容忍、**PostgreSQL 的 jsonb 拒绝**（`invalid input syntax for type json`）。新增 `sanitize_payload()`：`NaN/Infinity → null`，解析失败记 `bad_json` 跳过。**这同时是一条数据质量线索**：该字段存在取数失败留下的 NaN。
+2. **一条失败连累全部**：原实现在异常时 `db.rollback()`，把同事务里**已成功的 15 条一起丢掉**（现象：库里只有后半段 key）。改为**每条一个 SAVEPOINT**（`begin_nested()`），单条失败只回滚自己。
+3. **2MB 上限挡掉最重要的产物**：`concept_long.json` 实测 **2.17MB**（gate 链第 1 步的概念矩阵），原上限让它只留文件不入库 → 上限改为可配 `WOLF_ARCHIVE_MAX_BYTES`（默认 **8MB**），入库后 TOAST 压到 ~1MB。
+
+**下一步（阶段 1，等用户确认）**：分类型度量 G3 —— 有了 `daily_artifacts` 就能把 gate/wave/confirm 结论与 `paper_trades`/`t_triggers` **按日 join**，再把回测离场口径从"持 T+5"改成生产实际（吃一口减一半 / 破线 / 周末减半 / T+0 不留）。
