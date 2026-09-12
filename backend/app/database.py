@@ -119,6 +119,9 @@ def _apply_schema_patches():
     _apply_worker_control_migration()
     _apply_wolf_discipline_migration()   # 2026-09-11: 狼大纪律配置落库(取代 config/+data/ 两份 json)
 
+    # ── 2026-09-12: 每日产物落库（阶段 0 / G2：当日覆盖型文件的历史缺口） ──
+    _apply_daily_artifacts_migration()
+
     # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
     alter_patches = [
         # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
@@ -552,6 +555,40 @@ def _apply_t_build_migration():
         print("[DB] PATCH: 做T建仓迁移完成 (t_build_events + t_build_params)")
     except Exception as e:
         print(f"[DB] PATCH warn (t build tables): {e}")
+
+
+def _apply_daily_artifacts_migration():
+    """每日产物落库（幂等）：daily_artifacts —— 阶段 0 / G2 的"库"那一半。
+
+    背景（2026-09-12）：生产链有一批**当日覆盖型**文件（concept_long / theme_inst_flow /
+    etf_share_flow / main_line_state / stock_confirm_result 等，名字不带日期），每天被覆盖，
+    导致历史只能靠回放猜（实测回放保真度 ~73%）。改为**双写**：文件照旧（兼容 gate 链与回放脚本），
+    同时把当日结论类产物 upsert 进本表 → 历史天然累积，且能与 paper_trades / t_triggers 按日
+    join 出分类型度量（G3）。
+    """
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS daily_artifacts (
+                    trade_date  VARCHAR(8)  NOT NULL,
+                    artifact_key TEXT       NOT NULL,
+                    payload     JSONB,
+                    sha256_16   TEXT,
+                    src_path    TEXT,
+                    src_mtime   TIMESTAMPTZ,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (trade_date, artifact_key)
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_daily_artifacts_key ON daily_artifacts (artifact_key, trade_date DESC)"
+            ))
+        print("[DB] PATCH: 每日产物落库表 daily_artifacts 完成")
+    except Exception as e:
+        print(f"[DB] daily_artifacts 迁移失败: {type(e).__name__}: {str(e)[:120]}")
 
 
 def _apply_wolf_discipline_migration():

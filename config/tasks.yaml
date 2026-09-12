@@ -1093,3 +1093,52 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+
+- id: daily_decision
+  name: 每日决策对象 G1
+  description: 盘后把 L1 方向/L2 档位/L3 仓位/L4 选票/L5 买点/L6 兑现 汇成 data/decision/<date>.json，
+    供次日盘中所有腿引用（daily_decision.entry_allowed()）。开关 WOLF_DAILY_DECISION 默认 0=跳过；
+    准入闸 WOLF_DECISION_GATE 默认 0=仍放行（置 1 后「无决策对象 → 拒绝开新腿」）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '45 19 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_decision.py
+    args: []
+  output:
+    log_file: logs/daily_decision_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+
+- id: daily_archive
+  name: 每日存档 G2（文件 + 落库双写）
+  description: 盘后把当日全部产物快照到 data/_archive/<date>/ 并**双写**进 PostgreSQL daily_artifacts
+    （含 concept_long / theme_inst_flow / etf_share_flow / main_line_state / stock_confirm_result
+    这些当日覆盖型文件）。开关 WOLF_DAILY_ARCHIVE 默认 0=跳过。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '50 19 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_archive.py
+    args: []
+  output:
+    log_file: logs/daily_archive_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - daily_decision
