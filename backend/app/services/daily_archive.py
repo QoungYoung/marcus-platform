@@ -263,6 +263,219 @@ def expected_files(d8: str) -> List[str]:
     return uniq
 
 
+# ── 回填（2026-09-12）：**只回填带日期的文件** ─────────────────────────
+# ⚠️ 安全红线：当日覆盖型文件（concept_long / theme_inst_flow / etf_share_flow / main_line_state /
+#    stock_confirm_result …）在磁盘上只有"最新那份"，若按历史日期归档/入库就会**张冠李戴**。
+#    它们的历史确实已经丢失——这正是 G2 要终结的问题；回填时**必须排除**，并如实记录。
+def per_date_only(d8: str) -> List[str]:
+    """仅"带日期"的当日产物（回填用；不含任何当日覆盖型文件）。"""
+    D = data_dir()
+    out: List[str] = []
+    for tpl in PER_DATE:
+        out.append(os.path.join(D, tpl.format(d=d8, dash="%s-%s-%s" % (d8[:4], d8[4:6], d8[6:8]))))
+    for g in PER_DATE_GLOB:
+        out.extend(sorted(glob.glob(os.path.join(D, g.format(d=d8)))))
+    for tpl in DECISION:
+        out.append(os.path.join(D, tpl.format(d=d8)))
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def available_per_date_days() -> List[str]:
+    """扫描磁盘，列出存在**带日期产物**的日期（升序）。"""
+    import re as _re
+    D = data_dir()
+    days = set()
+    try:
+        names = os.listdir(D)
+    except Exception:
+        return []
+    pats = [_re.compile(r"^mainline_gate_(\d{8})\.json$"), _re.compile(r"^heat_v2_(\d{8})\.json$"),
+            _re.compile(r"^trend_confirm_(\d{8})_long\.json$"), _re.compile(r"^wave_state_(\d{8})\.json$"),
+            _re.compile(r"^wave_state_(\d{4}-\d{2}-\d{2})\.json$"), _re.compile(r"^main_line_state_(\d{8})\.json$"),
+            _re.compile(r"^chain_map_(\d{8}).*\.json$")]
+    for n in names:
+        for pt in pats:
+            m = pt.match(n)
+            if m:
+                days.add(m.group(1).replace("-", ""))
+                break
+    return sorted(days)
+
+
+def backfill(dates: Sequence[str], save: bool = True, dry_run: bool = False) -> Dict[str, Any]:
+    """把**带日期**的历史产物补进 `daily_artifacts`（+ 快照到 `_archive/<d>/`）。
+
+    返回逐日结果与覆盖矩阵 {date: [keys]}；同时写 `_archive/_backfill_report.json`。
+    """
+    import datetime as _dt
+    rep: Dict[str, Any] = {"generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
+                           "mode": "backfill_per_date_only",
+                           "note": ("只回填带日期的产物；当日覆盖型文件（concept_long/theme_inst_flow/"
+                                    "etf_share_flow/main_line_state/stock_confirm_result）**历史已丢失、无法回填**，"
+                                    "这正是 G2 每日存档要终结的问题"),
+                           "days": {}}
+    total = 0
+    for d8 in dates:
+        d8 = str(d8)[:8]
+        if not (d8.isdigit() and len(d8) == 8):
+            continue
+        srcs = [p for p in per_date_only(d8) if os.path.isfile(p)]
+        entries = []
+        for src in srcs:
+            try:
+                entries.append({"name": os.path.basename(src), "src": src, "size": os.path.getsize(src),
+                                "sha256_16": _sha256(src), "mtime": int(os.path.getmtime(src))})
+            except Exception:
+                continue
+        keys = sorted([k for k in (artifact_key(e["name"], d8) for e in entries) if k])
+        ups = {"upserted": 0, "skipped": [], "errors": ["dry_run"]}
+        if not dry_run:
+            if save:
+                try:
+                    dest = archive_dir(d8)
+                    os.makedirs(dest, exist_ok=True)
+                    for e in entries:
+                        import shutil as _sh
+                        _sh.copy2(e["src"], os.path.join(dest, e["name"]))
+                except Exception:
+                    pass
+            ups = upsert_artifacts(d8, entries)
+        rep["days"][d8] = {"files": len(entries), "keys": keys, "upserted": ups.get("upserted", 0),
+                           "skipped": ups.get("skipped"), "errors": ups.get("errors")}
+        total += ups.get("upserted", 0)
+    rep["total_upserted"] = total
+    if save and not dry_run:
+        try:
+            with open(os.path.join(data_dir(), "_archive", "_backfill_report.json"), "w", encoding="utf-8") as f:
+                json.dump(rep, f, ensure_ascii=False, indent=1)
+        except Exception:
+            try:
+                os.makedirs(os.path.join(data_dir(), "_archive"), exist_ok=True)
+                with open(os.path.join(data_dir(), "_archive", "_backfill_report.json"), "w", encoding="utf-8") as f:
+                    json.dump(rep, f, ensure_ascii=False, indent=1)
+            except Exception:
+                pass
+    print("[archive] 回填 %d 天，共 %d 条入库" % (len(rep["days"]), total))
+    for d8, r in sorted(rep["days"].items()):
+        print("   %s  文件 %2d → key %s" % (d8, r["files"], ",".join(r["keys"]) or "（无）"))
+    return {"ok": True, **rep}
+
+
+# ── 导入"重建版"结论产物（回测支撑，2026-09-12）────────────────────────
+# 背景：当日覆盖型文件的历史内容已丢失，但 2026-06-01→09-11 的 gate 链**回放结果**还在
+# `/app/data/_bt_batch2/sandbox2/`（逐日 mainline_gate_*/heat_v2_*）与 `waves/`（逐日 wave_state_*）。
+# 把它们导入 daily_artifacts 供回测按日取用，但**必须在 payload 里标 `_source`/`_rebuilt`**，
+# 绝不能与"当日原生产物"混同（口径红线）。
+REPLAY_SOURCES = {
+    "mainline_gate": "sandbox2/mainline_gate_{d}.json",
+    "heat_v2": "sandbox2/heat_v2_{d}.json",
+    "wave_state": "waves/wave_state_{d}.json",
+}
+
+
+def upsert_payloads(d8: str, payloads: Dict[str, Any], src: str = "rebuilt",
+                    src_dir: Optional[str] = None) -> Dict[str, Any]:
+    """按 {artifact_key: payload} 直接入库（供重建/导入用），payload 内会标注来源。"""
+    out: Dict[str, Any] = {"ok": True, "upserted": 0, "errors": []}
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+    except Exception as e:
+        return {"ok": False, "upserted": 0, "errors": ["import:%s" % type(e).__name__]}
+    db = None
+    try:
+        db = SessionLocal()
+        ensure_table(db)
+        for key, obj in (payloads or {}).items():
+            if not isinstance(obj, dict):
+                obj = {"value": obj}
+            obj = dict(obj)
+            obj.setdefault("_source", src)
+            obj["_rebuilt"] = True
+            obj["_rebuilt_at"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+            try:
+                save = db.begin_nested()
+                db.execute(text("""
+                    INSERT INTO daily_artifacts (trade_date, artifact_key, payload, sha256_16, src_path, src_mtime)
+                    VALUES (:d, :k, CAST(:p AS jsonb), NULL, :sp, now())
+                    ON CONFLICT (trade_date, artifact_key) DO UPDATE
+                      SET payload = EXCLUDED.payload, src_path = EXCLUDED.src_path,
+                          src_mtime = EXCLUDED.src_mtime, created_at = now()
+                """), {"d": d8, "k": key, "p": json.dumps(obj, ensure_ascii=False),
+                       "sp": "%s:%s" % (src, src_dir or "")})
+                save.commit()
+                out["upserted"] += 1
+            except Exception as ex:
+                out["errors"].append("%s/%s:%s" % (d8, key, str(ex)[:60]))
+                try:
+                    save.rollback()
+                except Exception:
+                    pass
+        db.commit()
+    except Exception as e:
+        out["ok"] = False
+        out["errors"].append("session:%s" % str(e)[:80])
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+    return out
+
+
+def import_replay_artifacts(root: Optional[str] = None, save: bool = True,
+                            dry_run: bool = False) -> Dict[str, Any]:
+    """把回放目录里的**逐日**结论产物导入 daily_artifacts（标注 rebuilt）。"""
+    import datetime as _dt
+    root = root or os.path.join(data_dir(), "_bt_batch2")
+    rep: Dict[str, Any] = {"generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
+                           "root": root, "mode": "import_replay_artifacts",
+                           "note": ("这些是**回放重建**的结论（sandbox2/waves），不是当日原生产物；"
+                                    "payload 内已标 _source/_rebuilt 供审计"),
+                           "days": {}, "total_upserted": 0}
+    for key, tpl in REPLAY_SOURCES.items():
+        import glob as _g
+        pat = os.path.join(root, tpl.replace("{d}", "*"))
+        for f in sorted(_g.glob(pat)):
+            base = os.path.basename(f)
+            import re as _re
+            m = _re.search(r"(\d{8})", base)
+            if not m:
+                continue
+            d8 = m.group(1)
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    obj = json.load(fh)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            rec = rep["days"].setdefault(d8, {"keys": [], "upserted": 0})
+            if not dry_run:
+                r = upsert_payloads(d8, {key: obj}, src="replay_sandbox2", src_dir=base)
+                rec["upserted"] += r.get("upserted", 0)
+                rep["total_upserted"] += r.get("upserted", 0)
+            rec["keys"].append(key)
+    rep["days"] = {d: {"keys": sorted(set(v["keys"])), "upserted": v["upserted"]}
+                   for d, v in sorted(rep["days"].items())}
+    if save and not dry_run:
+        try:
+            os.makedirs(os.path.join(data_dir(), "_archive"), exist_ok=True)
+            with open(os.path.join(data_dir(), "_archive", "_replay_import_report.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(rep, f, ensure_ascii=False, indent=1)
+        except Exception:
+            pass
+    print("[archive] 导入回放产物：%d 天，共 %d 条" % (len(rep["days"]), rep["total_upserted"]))
+    return {"ok": True, **rep}
+
+
 def snapshot_files(d8: str, dest: Optional[str] = None) -> Dict[str, Any]:
     """只读复制当天产物 → `_archive/<d8>/`，返回 {copied, missing, entries}。"""
     dest = dest or archive_dir(d8)

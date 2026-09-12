@@ -135,3 +135,55 @@ def test_concept_long_scale_payload_is_accepted(monkeypatch):
     assert DA.should_skip_payload(entry, D8) is None
     monkeypatch.setenv("WOLF_ARCHIVE_MAX_BYTES", "1000000")
     assert DA.should_skip_payload(entry, D8) == "too_large"
+
+
+# ── 回填（只回填带日期的产物）────────────────────────────────────────
+def test_per_date_only_excludes_overwrite_type_files(_env):
+    """安全红线：回填**绝不能**包含当日覆盖型文件（磁盘上只有最新那份，按历史日归档会张冠李戴）。"""
+    names = [Path(p).name for p in DA.per_date_only(D8)]
+    assert "mainline_gate_%s.json" % D8 in names
+    assert "trend_confirm_%s_long.json" % D8 in names
+    for bad in ("concept_long.json", "theme_inst_flow.json", "etf_share_flow.json",
+                "main_line_state.json", "stock_confirm_result.json", "strategy_state.json"):
+        assert bad not in names, bad
+
+
+def test_available_per_date_days_scans_disk(_env, tmp_path):
+    (tmp_path / ("mainline_gate_%s.json" % D8)).write_text("{}", encoding="utf-8")
+    (tmp_path / "heat_v2_20260910.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "wave_state_2026-09-09.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "concept_long.json").write_text("{}", encoding="utf-8")     # 覆盖型：不算一天
+    assert DA.available_per_date_days() == ["20260909", "20260910", "20260911"]
+
+
+def test_backfill_dry_run_reports_keys(_env, tmp_path):
+    (tmp_path / ("mainline_gate_%s.json" % D8)).write_text('{"a":1}', encoding="utf-8")
+    (tmp_path / ("trend_confirm_%s_long.json" % D8)).write_text('{"b":2}', encoding="utf-8")
+    res = DA.backfill([D8], save=False, dry_run=True)
+    assert res["ok"] and res["days"][D8]["files"] == 2
+    assert res["days"][D8]["keys"] == ["mainline_gate", "trend_confirm_long"]
+    assert res["mode"] == "backfill_per_date_only"
+
+
+# ── 导入回放重建的结论产物（回测支撑）─────────────────────────────────
+def test_import_replay_dry_run_lists_days(_env, tmp_path):
+    """导入的是**重建版**：dry-run 只列天数与 key，不落库。"""
+    (tmp_path / "sandbox2").mkdir()
+    (tmp_path / "waves").mkdir()
+    (tmp_path / ("sandbox2/mainline_gate_%s.json" % D8)).write_text('{"rows":[]}', encoding="utf-8")
+    (tmp_path / ("sandbox2/heat_v2_%s.json" % D8)).write_text('{"ranked":[]}', encoding="utf-8")
+    (tmp_path / ("waves/wave_state_%s.json" % D8)).write_text('{"operation":"build"}', encoding="utf-8")
+    res = DA.import_replay_artifacts(root=str(tmp_path), save=False, dry_run=True)
+    assert res["ok"] and D8 in res["days"]
+    assert res["days"][D8]["keys"] == ["heat_v2", "mainline_gate", "wave_state"]
+    assert "不是当日原生产物" in res["note"]
+
+
+def test_import_replay_ignores_files_without_date(_env, tmp_path):
+    """sandbox2 里的 concept_long.json / etf_share_flow.json **不带日期** → 必须忽略
+    （它们只有最新那份，按日归档会张冠李戴）。"""
+    (tmp_path / "sandbox2").mkdir()
+    (tmp_path / "sandbox2/concept_long.json").write_text('{"x":1}', encoding="utf-8")
+    (tmp_path / "sandbox2/etf_share_flow.json").write_text('{"y":1}', encoding="utf-8")
+    res = DA.import_replay_artifacts(root=str(tmp_path), save=False, dry_run=True)
+    assert res["days"] == {}

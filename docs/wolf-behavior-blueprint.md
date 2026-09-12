@@ -593,3 +593,44 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 
 **紧急关停方式**（任一）：`WOLF_DECISION_GATE=0`（整体关）/ `WOLF_DECISION_GATE_SHADOW=1`（只记录不拦）/
 `WOLF_DECISION_GATE_MISSING=allow`（无对象时放行）。改 `.env` 后需 `docker compose up -d --no-deps backend worker` 重建。
+
+
+---
+
+## §15 回测数据底座（2026-09-12 建成）
+
+真实回测需要两样东西：**行情底座**（按日按票）与**当日结论**（PIT：D 日只能用 D 日前可得的信息）。
+这轮把两者都补起来了，并**明确区分"原生产物"与"重建产物"**。
+
+### 15.1 行情底座：`mkt_bars_daily`（tushare 回填）
+
+| 项 | 值 |
+|---|---|
+| 表 | `mkt_bars_daily(ts_code, trade_date, open, high, low, close, pre_close, pct_chg, vol, amount, total_mv, turnover_rate, is_st)`，主键 `(ts_code, trade_date)`，`trade_date` 建索引 |
+| 来源 | tushare：`daily`（OHLC/vol/amount）+ `daily_basic`（total_mv/turnover_rate）+ `stock_basic`（ST 判定）+ `trade_cal`（SSE 日历，不依赖其它日历来历） |
+| **实测覆盖** | **169 个交易日 / 929,573 行 / 5,582 只票 / 2026-01-05 → 2026-09-11 / 0 失败 0 跳过** |
+| 迁移 | `app/database.py::_apply_mkt_bars_migration`；回填入口 `jobs/backfill_market_bars.py --start 20260101 --end 20260911` |
+| 为什么另建表 | 现成的 `t_vreb_daily` 只覆盖 2026-05-13→09-01，且缺 `pre_close / pct_chg / amount / total_mv`；ETF 日线只有 14 天 |
+
+### 15.2 当日结论：已入库的覆盖情况（`daily_artifacts`）
+
+| 产物 | 覆盖天数 | 范围 | 来源标注 |
+|---|---|---|---|
+| `mainline_gate`（gate 链第 6 步） | **74** | 2026-06-01 → 09-11 | `replay_sandbox2`（**重建**） |
+| `heat_v2`（热度分） | **74** | 同上 | `replay_sandbox2`（**重建**） |
+| `wave_state`（波浪档位） | 73 | 同上 | `replay_sandbox2`（**重建**） |
+| `main_line_state`（研报 catalyst） | 7 | 2026-08-11 → 09-11 | 原生产物 |
+| `mainline_gate` / `heat_v2` / `trend_confirm_long` | 各 5 | 2026-09-04 → 09-11 | 原生产物 |
+| `concept_long` / `etf_share_flow` / `theme_inst_flow` / `stock_confirm_result` / `decision` | 各 1 | **2026-09-11 起** | 原生产物（**历史内容已永久丢失**） |
+
+**来源可审计**：重建的 payload 里带 `_source="replay_sandbox2"`、`_rebuilt=true`、`_rebuilt_at`；
+`select payload->>'_source', count(*) from daily_artifacts group by 1` 即可区分。
+
+### 15.3 仍然缺的（诚实清单）
+
+1. **2026-01-05 → 05-31（约 100 个交易日）没有 gate/波浪结论** —— 需要把 gate 链回放**向前推**；
+   回放脚本已在（`.dsh-tmp/wolfbt/bt2/stage0_replay_v2.py`，之前跑过 74/74 天、约 19 分钟），
+   但**催化剂（`main_line_state`）历史不可回溯**（LLM 当日读研报），所以那段的 gate 结论精度会更低。
+2. **当日覆盖型产物（concept_long / etf_share_flow / theme_inst_flow / stock_confirm_result）没有历史** ——
+   只能从 2026-09-11 起靠 G2 每日存档累积；要历史就得**按日重跑**这些步骤（输入可回溯性需逐项验证）。
+3. **波浪是 LLM 产出**：重跑可得，但每次调用有成本；重建版必须始终标注 `_rebuilt`（不能当"他当日的判断"）。

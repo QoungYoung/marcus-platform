@@ -122,6 +122,9 @@ def _apply_schema_patches():
     # ── 2026-09-12: 每日产物落库（阶段 0 / G2：当日覆盖型文件的历史缺口） ──
     _apply_daily_artifacts_migration()
 
+    # ── 2026-09-12: 回测用行情表（tushare 回填 mkt_bars_daily，供真实回测） ──
+    _apply_mkt_bars_migration()
+
     # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
     alter_patches = [
         # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
@@ -589,6 +592,36 @@ def _apply_daily_artifacts_migration():
         print("[DB] PATCH: 每日产物落库表 daily_artifacts 完成")
     except Exception as e:
         print(f"[DB] daily_artifacts 迁移失败: {type(e).__name__}: {str(e)[:120]}")
+
+
+def _apply_mkt_bars_migration():
+    """回测用行情表（幂等）mkt_bars_daily —— 2026-09-12。
+
+    `t_vreb_daily` 只覆盖 2026-05-13→09-01 且缺 pre_close/pct_chg/amount/total_mv；
+    真实回测需要"按日按票"的干净底座 → 从 tushare 回填本表（见 app/services/mkt_bars.py）。
+    """
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS mkt_bars_daily (
+                    ts_code       VARCHAR(16) NOT NULL,
+                    trade_date    VARCHAR(8)  NOT NULL,
+                    open DOUBLE PRECISION, high DOUBLE PRECISION, low DOUBLE PRECISION,
+                    close DOUBLE PRECISION, pre_close DOUBLE PRECISION, pct_chg DOUBLE PRECISION,
+                    vol DOUBLE PRECISION, amount DOUBLE PRECISION,
+                    total_mv DOUBLE PRECISION, turnover_rate DOUBLE PRECISION,
+                    is_st BOOLEAN,
+                    fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (ts_code, trade_date)
+                )
+                """
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_mkt_bars_date ON mkt_bars_daily (trade_date)"))
+        print("[DB] PATCH: 回测行情表 mkt_bars_daily 完成")
+    except Exception as e:
+        print(f"[DB] mkt_bars_daily 迁移失败: {type(e).__name__}: {str(e)[:120]}")
 
 
 def _apply_wolf_discipline_migration():

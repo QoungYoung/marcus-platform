@@ -7,6 +7,7 @@ stock_confirm_result 这些**当日覆盖型**文件）快照到 `data/_archive/
 开关 `WOLF_DAILY_ARCHIVE`（默认 0）。
 
 用法: python jobs/daily_archive.py [--date YYYYMMDD] [--skip-db]
+      python jobs/daily_archive.py --backfill [--days N]   # 回填"带日期"的历史产物（不含当日覆盖型）
 """
 import os
 import sys
@@ -24,7 +25,7 @@ def main():
         except Exception:
             d8 = None
     try:
-        from app.services.daily_archive import enabled, run
+        from app.services.daily_archive import enabled, run, backfill, available_per_date_days
         from app.services.wolf_eod import gate
     except Exception as e:
         print(f"[archive] 导入失败: {e}")
@@ -32,6 +33,23 @@ def main():
     if not enabled():
         print("[archive] WOLF_DAILY_ARCHIVE=0 → 跳过")
         return 0
+    if "--import-replay" in sys.argv:
+        from app.services.daily_archive import import_replay_artifacts
+        res = import_replay_artifacts(save=True)
+        return 0 if res.get("ok") else 1
+    if "--backfill" in sys.argv:
+        n = 15
+        if "--days" in sys.argv:
+            try:
+                n = int(sys.argv[sys.argv.index("--days") + 1])
+            except Exception:
+                n = 15
+        days = available_per_date_days()[-n:]
+        if not days:
+            print("[archive] 没有可回填的带日期产物")
+            return 0
+        res = backfill(days, save=True)
+        return 0 if res.get("ok") else 1
     _g = gate(d8)
     if _g == 1:
         return 0
