@@ -813,6 +813,65 @@ def classify_escalation(symbol: str, side: str, trigger: Optional[dict] = None,
 # 网关执行入口（供 Agent/Worker 调用，最终放行者）
 # ────────────────────────────────────────────────────────────────
 
+
+def _decision_gate(symbol: str, trigger_id: Optional[int] = None, account_id: str = ACCOUNT_T,
+                   reason: str = "") -> Optional[str]:
+    """每日决策对象准入（2026-09-12，G1 接线）：**判据先于成交**。
+
+    返回 None = 放行；返回字符串 = 拒绝原因（调用方据此 blocked）。
+
+    三条硬约束：
+      1. **只拦买入**（`side == "buy"` 才调用）——卖出/止损永不拦（止血动作必须能执行）
+      2. `WOLF_DECISION_GATE=0`（默认）时整体不生效 → 现有行为不变
+      3. `WOLF_DECISION_GATE_SHADOW=1` 时**只记录不拦**（灰度观察用），日志写
+         `DATA_DIR/decision_gate_log.jsonl`
+    """
+    try:
+        from app.services import daily_decision as _dd
+    except Exception:
+        return None
+    try:
+        if not _dd.gate_enabled():
+            return None
+        ok, why = _dd.entry_allowed_cached()   # 60s 进程内缓存，避免高频触发反复查库
+        if ok:
+            return None
+        shadow = os.getenv("WOLF_DECISION_GATE_SHADOW", "0").strip().lower() not in ("0", "false", "no", "")
+        _log_decision_refusal(symbol, why, shadow, account_id=account_id, trigger_id=trigger_id, note=reason)
+        if shadow:
+            print(f"[t-gate] 决策准入(shadow，仅记录不禁单) {symbol}: {why}")
+            return None
+        return f"决策对象准入拒绝: {why}"
+    except Exception as e:
+        # 准入机制自身出错时**放行**（不能让新机制变成新的静默停摆源），但要留痕
+        print(f"[t-gate] 决策准入异常（放行）{symbol}: {type(e).__name__}: {str(e)[:80]}")
+        return None
+
+
+def _log_decision_refusal(symbol: str, why: str, shadow: bool, account_id: str = "",
+                          trigger_id: Optional[int] = None, note: str = "") -> None:
+    """拒绝/灰度记录：追加 JSONL（DATA_DIR/decision_gate_log.jsonl），失败不影响下单流程。"""
+    try:
+        import json as _json
+        import time as _time
+        # 运行期以环境变量 DATA_DIR 为准；没有才退回 workspace_detector（该模块只在容器内可导入，
+        # 单测环境不可导入 —— 2026-09-12 实测：直接 import 会让日志静默写不出来）
+        _dir = os.environ.get("DATA_DIR")
+        if not _dir:
+            try:
+                from workspace_detector import DATA_DIR as _D
+                _dir = str(_D)
+            except Exception:
+                _dir = os.path.join(os.getcwd(), "data")
+        line = _json.dumps({"ts": int(_time.time()), "symbol": symbol, "account": account_id,
+                            "trigger_id": trigger_id, "shadow": bool(shadow), "reason": why,
+                            "note": note}, ensure_ascii=False)
+        with open(os.path.join(_dir, "decision_gate_log.jsonl"), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
 def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     condition_id: Optional[int] = None,
                     trigger_id: Optional[int] = None,
@@ -838,6 +897,14 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "blocked", reason=msg)
         return {"status": "blocked", "reason": msg, "level": "HARD"}
+
+    # 0.5) 每日决策对象准入（2026-09-12）：**只拦买入**，卖出/止损永不拦
+    if side == "buy" and not is_stop_loss:
+        _blk = _decision_gate(symbol, trigger_id=trigger_id, account_id=account_id, reason=reason)
+        if _blk:
+            if trigger_id:
+                t_db.update_trigger_status(trigger_id, "blocked", reason=_blk)
+            return {"status": "rejected", "reason": _blk, "level": "DECISION"}
 
     # 1) 校验
     check = validate_order(symbol, side, price, volume,

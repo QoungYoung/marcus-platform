@@ -1142,3 +1142,26 @@ tasks:
     - qqbot
   depends_on:
   - daily_decision
+
+- id: daily_decision_am
+  name: 每日决策对象 G1（盘前确认）
+  description: 盘前 08:25（wave_judge 08:10 之后）重算当日决策对象，让盘中腿用上**当天**的档位与闸门状态；
+    与盘后 19:45 的 daily_decision 共用同一 job。开关 WOLF_DAILY_DECISION 默认 0=跳过。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '25 8 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_decision.py
+    args: []
+  output:
+    log_file: logs/daily_decision_am_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []

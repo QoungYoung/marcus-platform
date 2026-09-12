@@ -28,6 +28,8 @@ def _env(monkeypatch, tmp_path):
     # 单测**不碰数据库**：默认打桩 PG 读写（否则会去连生产库、TCP 超时把测试挂死）
     monkeypatch.setattr(DD, "_load_pg", lambda d8: None)
     monkeypatch.setattr(DD, "_save_pg", lambda obj: {"ok": False, "reason": "test_stub"})
+    monkeypatch.setattr(DD, "_latest_pg_at_or_before", lambda d8: None)
+    DD._ALLOW_CACHE.update({"at": 0.0, "key": "", "value": None})   # 清准入缓存，避免跨用例泄漏
     yield
 
 
@@ -70,11 +72,23 @@ def test_l5_blocks_when_operation_disallows():
     assert any("档位" in b for b in l5["blockers"])
 
 
-def test_l5_blocks_on_breakdown():
+def test_l5_breakdown_is_warning_not_blocker():
+    """**破位不拦开仓**：他 08-25 说破位=止损评估（对持仓），08-24 破位当天照样按计划买入。
+    曾把它写成 blocker → 会导致整天无法开仓，属自造机制，已改为 warning。"""
     obj = DD.build("20260911", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None,
                    gates={"G10_volume_gate": {"enabled": True, "breakdown_risk": True}})
     l5 = obj["layers"]["L5_entry"]["value"]
-    assert l5["allowed"] is False and any("破位" in b for b in l5["blockers"])
+    assert l5["allowed"] is True
+    assert not l5["blockers"]
+    assert any("破位" in w for w in l5["warnings"])
+
+
+def test_l5_fake_breakout_still_blocks():
+    """诱多才是他明确说不追高、不加仓的（2026-09-01 / 09-03）。"""
+    obj = DD.build("20260911", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None,
+                   gates={"G10_volume_gate": {"fake_breakout_risk": True}})
+    l5 = obj["layers"]["L5_entry"]["value"]
+    assert l5["allowed"] is False and any("诱多" in b for b in l5["blockers"])
 
 
 def test_l5_blocks_on_fake_breakout_and_weekend_hedge():
@@ -96,7 +110,7 @@ def test_entry_allowed_defaults_to_pass(monkeypatch):
 def test_entry_allowed_denies_without_object_when_gate_on(monkeypatch):
     monkeypatch.setenv("WOLF_DECISION_GATE", "1")
     ok, why = DD.entry_allowed("20260911")
-    assert ok is False and "无当日决策对象" in why
+    assert ok is False and "无可用决策对象" in why
 
 
 def test_entry_allowed_follows_l5_when_gate_on(monkeypatch):
@@ -132,10 +146,10 @@ def test_directive_disabled_and_enabled(monkeypatch):
     d = DD.decision_dir()
     Path(d).mkdir(parents=True, exist_ok=True)
     obj = DD.build("20260911", gate=GATE, wave=WAVE_DEF, tiers={}, picks=None,
-                   gates={"G10_volume_gate": {"breakdown_risk": True}})
+                   gates={"G10_volume_gate": {"fake_breakout_risk": True}})
     Path(DD.path_for("20260911")).write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
     txt = DD.directive("20260911")
-    assert "每日决策对象" in txt and "拦阻" in txt and "破位" in txt
+    assert "每日决策对象" in txt and "拦阻" in txt and "诱多" in txt
 
 
 def test_backfill_warns_about_undated_wave(monkeypatch, tmp_path):

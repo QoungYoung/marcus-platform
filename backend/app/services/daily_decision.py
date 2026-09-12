@@ -39,6 +39,25 @@ def enabled() -> bool:
     return os.getenv("WOLF_DAILY_DECISION", "0").strip().lower() not in ("0", "false", "no", "")
 
 
+def max_age_days() -> int:
+    """允许用「最近一个决策对象」的最大陈旧天数（默认 4：覆盖 Friday→Monday 的跨周末）。
+
+    为什么要回退：盘后 job（19:45）产出的是**当日**对象，而盘中腿在 09:30–15:00 就要用它
+    ——若只看"当天对象"，周一开盘时它还不存在，会把整天的买入全拦掉。他的实际做法正是
+    「盘后定计划、次日执行」，所以用最近一个对象 + 标陈旧天数是符合他口径的。
+    """
+    try:
+        return int(float(os.getenv("WOLF_DECISION_MAX_AGE_DAYS", "") or 4))
+    except (TypeError, ValueError):
+        return 4
+
+
+def missing_policy() -> str:
+    """没有任何可用对象时的策略：block（默认，符合"没预案就不买"）/ allow。"""
+    v = (os.getenv("WOLF_DECISION_GATE_MISSING", "block") or "block").strip().lower()
+    return v if v in ("block", "allow") else "block"
+
+
 def gate_enabled() -> bool:
     """是否启用「无决策对象 → 拒绝开新腿」。**默认关**，避免突然改变生产行为。"""
     return os.getenv("WOLF_DECISION_GATE", "0").strip().lower() not in ("0", "false", "no", "")
@@ -129,26 +148,39 @@ def _l4(picks: Optional[Any]) -> Dict[str, Any]:
 
 
 def _l5(l2: Dict[str, Any], gates: Dict[str, Any]) -> Dict[str, Any]:
-    """L5 买点：**是否允许开新仓** + 前置条件 + 拦阻项（把 L5/L6 的闸门显式化，避免拦掉 L1–L4）。"""
+    """L5 买点：**是否允许开新仓** + 前置条件 + 拦阻项 + 警告（把会拦掉 L1–L4 结论的闸门显式化）。
+
+    ⚠️ 拦阻项必须**逐条有语料支撑**（这是本项目的红线，2026-09-12 修过一次）：
+      · 拦：**诱多**——他 2026-09-01「不过4000怎么诱多」、09-03「不上3WE的突破就是诱多」→ 不追高、不加仓
+      · 拦：**G9 周末/长假前**——他 2026-08-21「如果还是缩量 还是不拉升…先出来一半…65%仓位过周末」→ 只减不加
+      · 拦：**L2 档位不允许**——他 2026-01-17「主升75%+／调整50%／有风险30%／**下跌趋势就不做**」
+      · **不拦（只警告）：跌破关口（破位）**——他 2026-08-25 说破位对应的是「指数破位后的止损」
+        （对**持仓**的止损评估），而 2026-08-24 破位当天他照样「跌破了 按计划打入」→
+        破位**不禁止**按预设条件买入。曾一度把它写成 blocker，会把整天的开仓全禁掉，已改正。
+    """
     blockers: List[str] = []
+    warnings: List[str] = []
     conditions: List[str] = []
     op_ok = (l2.get("value") or {}).get("allow_new_position")
     if op_ok is False:
-        blockers.append("L2 档位=%s 不允许新开仓" % ((l2.get("value") or {}).get("operation")))
+        blockers.append("L2 档位=%s 不允许新开仓（他 2026-01-17 分档：下跌趋势就不做）"
+                        % ((l2.get("value") or {}).get("operation")))
     g10 = gates.get("G10_volume_gate") or {}
     if g10.get("breakdown_risk"):
-        blockers.append("G10：跌破关口（破位）→ 止损/减仓评估，不新开")
+        warnings.append("G10：已跌破关口（破位）→ 按他 2026-08-25 口径这是**止损/减仓评估**，"
+                        "不是禁买；但按 2026-08-24 的做法**只按预设条件买**，不追、不临时起意")
     if g10.get("fake_breakout_risk"):
-        blockers.append("G10：攻关口而量能未达突破级 → 判为诱多，不追高")
+        blockers.append("G10：攻关口而量能未达突破级 → 判为**诱多**（他 2026-09-03），不追高、不加仓")
     g9 = gates.get("G9_weekend_hedge") or {}
     if g9.get("active"):
-        blockers.append("G9：周末/长假前 缩量∧未拉升 → 只减不加")
+        blockers.append("G9：周末/长假前 缩量∧未拉升 → **只减不加**（他 2026-08-21）")
     if (gates.get("A5_trade_window") or {}).get("enabled"):
         conditions.append("A5 时间窗生效（9:45-10:00 / 14:00-14:30）")
     conditions.append("买点位置：**只在下跌里买、高开不追**（蓝图 §9 第 9 条）")
     allowed = (op_ok is not False) and not blockers
-    return {"value": {"allowed": allowed, "conditions": conditions, "blockers": blockers},
-            "basis": "L2 档位 + G9/G10/A5 当日状态（汇层，不新增判据）"}
+    return {"value": {"allowed": allowed, "conditions": conditions, "blockers": blockers,
+                      "warnings": warnings},
+            "basis": "L2 档位 + G9/G10/A5 当日状态（汇层，逐条语料支撑见 docstring）"}
 
 
 def _l6(gates: Dict[str, Any]) -> Dict[str, Any]:
@@ -357,23 +389,114 @@ def load(d8: Optional[str] = None) -> Dict[str, Any]:
     return {}
 
 
-def entry_allowed(d8: Optional[str] = None) -> Tuple[bool, str]:
-    """给腿用的准入：返回 (是否允许开新仓, 原因)。
+def _latest_pg_at_or_before(d8: str) -> Optional[Dict[str, Any]]:
+    """主存里查"不晚于 d8 的最近一个决策对象"。失败 → None。（单测会打桩此函数）"""
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        db = SessionLocal()
+        try:
+            row = db.execute(text(
+                "SELECT payload FROM daily_artifacts WHERE artifact_key = 'decision' "
+                "AND trade_date <= :d ORDER BY trade_date DESC LIMIT 1"), {"d": d8}).mappings().first()
+            if row:
+                pl = row["payload"]
+                return pl if isinstance(pl, dict) else json.loads(pl)
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return None
 
-    · `WOLF_DECISION_GATE=0`（默认）→ **永远放行**（保持现状，不改行为）
-    · 置 1 时：没有当日决策对象 → 拒绝；有对象 → 按 L5_entry.allowed
+
+def latest_within(d8: str, max_age: Optional[int] = None) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+    """取**不晚于** d8 的最近决策对象，返回 (obj, 陈旧天数)。没有 → (None, None)。"""
+    import datetime as _dt
+    mx = max_age_days() if max_age is None else int(max_age)
+    try:
+        base = _dt.datetime.strptime(d8, "%Y%m%d").date()
+    except ValueError:
+        return None, None
+    # ① PG（主存）：直接按日期倒序找
+    obj = _latest_pg_at_or_before(d8)
+    if obj and obj.get("date"):
+        try:
+            stale = (base - _dt.datetime.strptime(str(obj["date"]), "%Y%m%d").date()).days
+            if 0 <= stale <= mx:
+                return obj, stale
+        except ValueError:
+            pass
+    # ② 文件镜像兜底：目录里找最近的
+    try:
+        cands = sorted([f[:-5] for f in os.listdir(decision_dir())
+                        if f.endswith(".json") and f[:-5].isdigit() and f[:-5] <= d8], reverse=True)
+    except Exception:
+        cands = []
+    for c in cands:
+        obj = load(c)
+        if not obj or obj.get("date") != c:
+            continue
+        try:
+            stale = (base - _dt.datetime.strptime(c, "%Y%m%d").date()).days
+        except ValueError:
+            continue
+        if 0 <= stale <= mx:
+            return obj, stale
+    return None, None
+
+
+_ALLOW_CACHE: Dict[str, Any] = {"at": 0.0, "key": "", "value": None}
+ALLOW_TTL_SEC = 60
+
+
+def _allow_ttl() -> float:
+    try:
+        return float(os.getenv("WOLF_DECISION_TTL_SEC", "") or ALLOW_TTL_SEC)
+    except (TypeError, ValueError):
+        return ALLOW_TTL_SEC
+
+
+def entry_allowed_cached(d8: Optional[str] = None) -> Tuple[bool, str]:
+    """带 60s 进程内缓存的准入（给高频触发路径用，避免每次触发都查库）。
+
+    决策对象一天只变两次（盘后/盘前），60s TTL 足够；`WOLF_DECISION_TTL_SEC` 可调。
+    """
+    import time as _t
+    d8 = d8 or __import__("datetime").date.today().strftime("%Y%m%d")
+    now = _t.time()
+    if _ALLOW_CACHE["value"] is not None and _ALLOW_CACHE["key"] == d8 \
+            and now - float(_ALLOW_CACHE["at"] or 0) < _allow_ttl():
+        return _ALLOW_CACHE["value"]
+    v = entry_allowed(d8)
+    _ALLOW_CACHE.update({"at": now, "key": d8, "value": v})
+    return v
+
+
+def entry_allowed(d8: Optional[str] = None) -> Tuple[bool, str]:
+    """给腿用的准入：返回 (是否允许开新仓, 原因)。**永不用于卖出**。
+
+    · `WOLF_DECISION_GATE=0`（默认）→ 永远放行（保持现状）
+    · 置 1：优先当日对象；没有则用**最近一个**（≤ `WOLF_DECISION_MAX_AGE_DAYS`，默认 4 天，
+      覆盖跨周末），并在 reason 里标出陈旧天数；完全没有 → 按 `WOLF_DECISION_GATE_MISSING`
+      （默认 block）处理
     """
     if not gate_enabled():
         return True, "decision_gate_off"
     import datetime as _dt
     d8 = d8 or _dt.date.today().strftime("%Y%m%d")
     obj = load(d8)
+    stale = 0
     if not obj or obj.get("date") != d8:
-        return False, "无当日决策对象（%s）" % d8
+        obj, stale = latest_within(d8)
+    if not obj:
+        if missing_policy() == "allow":
+            return True, "无决策对象但 MISSING=allow（%s）" % d8
+        return False, "无可用决策对象（%s 及最近 %d 天内都没有）" % (d8, max_age_days())
+    tag = "" if stale == 0 else "（用 %s 的对象，陈旧 %d 天）" % (obj.get("date"), stale)
     l5 = (obj.get("layers", {}).get("L5_entry", {}) or {}).get("value") or {}
     if l5.get("allowed"):
-        return True, "L5 允许"
-    return False, "L5 拦阻: " + "; ".join(l5.get("blockers") or ["未说明"])
+        return True, "L5 允许" + tag
+    return False, "L5 拦阻%s: %s" % (tag, "; ".join(l5.get("blockers") or ["未说明"]))
 
 
 def directive(d8: Optional[str] = None) -> str:

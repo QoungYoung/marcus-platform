@@ -545,3 +545,51 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 
 **改法**：`run()` 先写 PG（主存，`upsert` + `revision` 递增）再写文件（镜像）；`load()` 读序 PG → 文件；DB 不可用时文件兜底但返回里标注 `file_error`/写库失败原因。
 **实测（2026-09-11）**：连写两次 `rev=1 → rev=2`；`load()` 从 PG 读回 `revision=2`；**把文件删掉后仍能读到**（证明主存确为 PG）；`daily_artifacts` 里 decision 行 1.8KB。
+
+
+---
+
+## §14 盘中腿接线：决策对象准入（2026-09-12 上线，`WOLF_DECISION_GATE=1`）
+
+**接线点**：`backend/app/services/t_gateway.py::_decision_gate()` —— 挂在**唯一咽喉** `gateway_execute()` 里
+（rotation / agent / 手动 / 条件单全部经过它），位于账户白名单之后、`validate_order()` 之前。
+
+**三条硬约束**
+1. **只拦买入**（`side=="buy" and not is_stop_loss`）——**卖出/止损永不拦**（止血动作必须能执行）；
+2. `WOLF_DECISION_GATE=0`（默认）时**完全不生效**；
+3. 准入机制**自身异常时放行**并打印——不能让新机制变成新的静默停摆源。
+
+**准入判定（`entry_allowed_cached()`，60s 进程内缓存，`WOLF_DECISION_TTL_SEC` 可调）**
+· 优先当日对象 → 没有则用**最近一个**（≤ `WOLF_DECISION_MAX_AGE_DAYS`，默认 **4 天**，覆盖跨周末），
+  原因里标注陈旧天数；完全没有 → 按 `WOLF_DECISION_GATE_MISSING`（默认 **block**）。
+
+**盘前确认**（修掉一个我自己引入的时序漏洞）：决策对象原本只在盘后 19:45 产出，
+而盘中腿在 09:30–15:00 就要用它 → 周一开盘时"当天对象"并不存在。现新增
+`daily_decision_am`（cron `25 8 * * 1-5`，在 wave_judge 08:10 之后）产出**当日**对象；
+配合陈旧回退，周一开盘即有可用对象。
+
+### 14.1 L5 拦阻项必须逐条有语料支撑（本轮自我纠错）
+
+上线前我把「G10 跌破关口（破位）」写成了 **blocker**（禁止开新仓）——**这是自造机制**：
+- 他 2026-08-25「顶多就是**指数破位后的止损**」→ 破位对应的是**持仓的止损评估**；
+- 他 2026-08-24「**跌破了 按计划打入**」→ 破位当天他照样按**预设条件**买入；
+- 真正"禁止类"的只有 **诱多**（09-01「不过4000怎么诱多」/ 09-03「不上3WE的突破就是诱多」→ 不追高不加仓）
+  与 **G9 周末缩量未拉升**（08-21 → 只减不加）。
+
+若按原写法，周一（G10 状态仍是周五的"破位"）会**整天无法开仓**。已改为：
+`breakdown_risk → warnings（不拦）`、`fake_breakout_risk → blockers`、`G9 active → blockers`、
+`L2 档位不允许 → blockers`（他 2026-01-17「下跌趋势就不做」）。测试同步钉死。
+
+### 14.2 上线验证（生产）
+
+| 检查 | 结果 |
+|---|---|
+| 生效状态 | `gate_enabled()=True`、`missing_policy=block`、`max_age=4` |
+| 有陈旧对象 | `entry_allowed()` → `(True, 'L5 允许（用 20260911 的对象，陈旧 1 天）')` |
+| 模拟买入 | `_decision_gate('SH600519')` → `None`（放行） |
+| **反证：无对象必须拦** | `entry_allowed('20270101')` → `(False, '无可用决策对象（20270101 及最近 4 天内都没有）')` |
+| 拒单日志 | `/app/data/decision_gate_log.jsonl`（JSONL，含 shadow 标记、symbol、trigger_id、reason） |
+| 任务 | 56 个（新增 `daily_decision_am` 08:25） |
+
+**紧急关停方式**（任一）：`WOLF_DECISION_GATE=0`（整体关）/ `WOLF_DECISION_GATE_SHADOW=1`（只记录不拦）/
+`WOLF_DECISION_GATE_MISSING=allow`（无对象时放行）。改 `.env` 后需 `docker compose up -d --no-deps backend worker` 重建。
