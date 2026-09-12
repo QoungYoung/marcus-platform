@@ -226,3 +226,9 @@ def test_broken_then_rebound_labeled_as_rebound():
                     path=[3934.40, 3888.11])
     assert r["breakdown_risk"] is True and r["index_chg_pct"] is not None
     assert "反抽" in r["directive"] and "只做T" in r["directive"]
+
+
+def test_directive_carries_as_of_date():
+    """日线口径必须自带日期（否则盘中会被当成实时量）。"""
+    r = VG.evaluate(_series([21000, 20500, 19800, 20200, 24500]), close=3980.0)
+    assert "2026-09-05 收盘" in r["directive"]

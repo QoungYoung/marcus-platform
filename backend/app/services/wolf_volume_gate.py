@@ -269,9 +269,14 @@ def directive_text(res: Dict[str, Any]) -> str:
     """
     lv = res.get("level") or {}
     g = res.get("key_level") or {}
-    head = ("📊 量能门槛（狼大 2026-09-03「不上3WE的突破就是诱多」／2026-08-20「2WE是地量了」）"
+    # as_of 必须写出来：本模块是**日线口径**（盘后算当日/最近交易日成交额），
+    # 盘中读到时它是"上一交易日"的数据，不写日期会被误读成实时量（2026-09-12 加）
+    as_of = str(res.get("as_of") or "")
+    d_txt = ("（%s-%s-%s 收盘）" % (as_of[:4], as_of[4:6], as_of[6:8])) if len(as_of) == 8 and as_of.isdigit() else ""
+    head = ("📊 量能门槛%s（狼大 2026-09-03「不上3WE的突破就是诱多」／2026-08-20「2WE是地量了」）"
             "｜全市场 %s 亿（MA5 %s 亿%s）→ **%s**"
-            % ("{:,.0f}".format(float(lv.get("amount") or 0)),
+            % (d_txt,
+               "{:,.0f}".format(float(lv.get("amount") or 0)),
                "{:,.0f}".format(float(res.get("ma5") or 0)),
                ("，较前日 %+.1f%%" % res["prev_delta_pct"]) if res.get("prev_delta_pct") is not None else "",
                lv.get("tag") or "?"))
