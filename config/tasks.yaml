@@ -1045,3 +1045,51 @@ tasks:
     on_failure: true
     on_success: false
     pi_analysis: false
+
+- id: wolf_volume_gate
+  name: 量能门槛（G10）
+  description: 盘后算全市场成交额分级（2WE=地量/3WE=突破级）与距关键整数位距离 → 写 wolf_volume_gate.json，
+    供次日纪律上下文判断「关口处量能是否够、是否诱多」（狼大 2026-09-03「不上3WE的突破就是诱多」）。
+    开关 WOLF_VOLUME_GATE 默认 0=关闭时本任务直接跳过。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '52 18 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_volume_gate.py
+    args: []
+  output:
+    log_file: logs/wolf_volume_gate_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+
+- id: wolf_weekend_hedge
+  name: 周末/长假前避险（G9）
+  description: 盘中 14:31 判「周末/长假前最后一个交易日 ∧ 缩量 ∧ 未拉升」→ 写 wolf_weekend_hedge.json，
+    给出「近两日T仓减半、收盘目标≤65%、周一拿回」（狼大 2026-08-21 14:20 原话）。
+    开关 WOLF_WEEKEND_HEDGE 默认 0=关闭时本任务直接跳过；非节前日也直接跳过。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '31 14 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_weekend_hedge.py
+    args: []
+  output:
+    log_file: logs/wolf_weekend_hedge_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []

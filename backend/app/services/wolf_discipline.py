@@ -588,6 +588,24 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             parts.append(_d5)
     except Exception:
         pass
+    # G10 量能门槛（2026-09-12）：他 2026-09-03「这里不上3WE的突破就是诱多」+ 2026-08-20「2WE是地量了」
+    try:
+        from app.services.wolf_volume_gate import directive as _vg_dir
+        _dvg = _vg_dir()
+        if _dvg:
+            parts.append(_dvg)
+    except Exception:
+        pass
+    # G9 周末/长假前避险（2026-09-12）：他 2026-08-21 14:20「2点半 如果还是缩量 还是不拉升
+    # 我会先把这两天T进去的仓位出来一半…65%仓位过周末」——注意与既有 weekend_de_risk 的区别：
+    # 后者只看"周五+仓位阈值"，本模块补上他原话里的**缩量 ∧ 未拉升**两个前提
+    try:
+        from app.services.wolf_weekend_hedge import directive as _wh_dir
+        _dwh = _wh_dir()
+        if _dwh:
+            parts.append(_dwh)
+    except Exception:
+        pass
     if pc.get("directive"):
         parts.append(pc["directive"])
     if wd.get("active"):

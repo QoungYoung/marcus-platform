@@ -33,7 +33,9 @@ def main():
         return 0
     # ── EOD 就绪守卫（2026-09-11）：盘后源要过一段时间才更新，未就绪就有限等待，
     #    仍没就绪则**非 0 退出交给调度器重试**（不要"假装成功"——那正是静默失效的来源）
-    _g = gate(date8)
+    # 2026-09-12 修：原来写的是未定义的 `date8` → 一旦开关打开就会 NameError（潜伏 bug，
+    # 生产 `WOLF_THEME_RESILIENCE=0` 提前 return 才一直没暴露）。
+    _g = gate()
     if _g == 1:
         return 0
     if _g == 2:
