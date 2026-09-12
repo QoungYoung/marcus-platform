@@ -149,6 +149,13 @@ def test_evaluate_empty_series():
     assert VG.evaluate({})["ok"] is False
 
 
+def test_directive_includes_index_close_and_level():
+    """指令里必须同时给出指数点位与关口距离（否则"距关口还有 —"这种半截信息会误导）。"""
+    r = VG.evaluate(_series([21000, 20500, 19800, 20200, 24500]), close=3980.0)
+    assert r["close"] == 3980.0
+    assert "3980.00" in r["directive"] and "4000" in r["directive"]
+
+
 # ── 假开关防护 ───────────────────────────────────────────────────────
 def test_directive_empty_when_disabled(monkeypatch, tmp_path):
     """关闭时即使状态文件里有内容，也不得注入（此前 C2/A5 犯过这个错）。"""

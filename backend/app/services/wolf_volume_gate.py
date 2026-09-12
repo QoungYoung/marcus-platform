@@ -209,7 +209,7 @@ def evaluate(series: Dict[str, float], close: Optional[float] = None,
     cls = classify(last, ma5, cfg=cfg)
     gap = key_level_gap(close, levels)
     res = {"ok": True, "as_of": last_d, "series": {d: series[d] for d in ds[-10:]},
-           "ma5": ma5, "level": cls, "key_level": gap,
+           "ma5": ma5, "level": cls, "key_level": gap, "close": close,
            "fake_breakout_risk": fake_breakout_risk(cls, gap),
            "prev_delta_pct": (round((last - amounts[-2]) / amounts[-2] * 100.0, 2)
                               if len(amounts) >= 2 and amounts[-2] else None)}
