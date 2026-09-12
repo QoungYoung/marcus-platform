@@ -1165,3 +1165,27 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+
+- id: wolf_mainline_select
+  name: 方向层主线选择（D1）
+  description: 盘后算当日主线=资格闸(gate)∩近5日相对强度 top1；实测后5日超额 +0.622%(t=2.86,n=159)，
+    超过验收线(+0.41%,t>2.6)；被否决的因子(边际加速/参与面/位置/带动板块)仅作诊断。
+    写 wolf_mainline_select.json + daily_artifacts；只写不交易。开关 WOLF_MAINLINE_SELECT 默认 0。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '55 18 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_mainline_select.py
+    args: []
+  output:
+    log_file: logs/wolf_mainline_select_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
