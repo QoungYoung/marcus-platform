@@ -17,12 +17,17 @@ for _d in [REPO_ROOT / "backend", REPO_ROOT / "apps" / "main_line"]:
 
 from app.services import daily_decision as DD  # noqa: E402
 
+_REAL_SAVE_PG = DD._save_pg    # fixture 会打桩，这里先留真身供"revision 递增"用例使用
+
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
     for k in ("WOLF_DAILY_DECISION", "WOLF_DECISION_GATE", "DATA_DIR"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    # 单测**不碰数据库**：默认打桩 PG 读写（否则会去连生产库、TCP 超时把测试挂死）
+    monkeypatch.setattr(DD, "_load_pg", lambda d8: None)
+    monkeypatch.setattr(DD, "_save_pg", lambda obj: {"ok": False, "reason": "test_stub"})
     yield
 
 
@@ -138,3 +143,63 @@ def test_backfill_warns_about_undated_wave(monkeypatch, tmp_path):
     obj = DD.build("20200101", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None, gates={},
                    sources={"wave_dated": {"present": False}})
     assert obj["warnings"] and "look-ahead" in obj["warnings"][0]
+
+
+# ── 存储：PG 为主 + 文件镜像（2026-09-12 按用户口径改）────────────────
+def test_run_writes_file_even_if_pg_fails(monkeypatch, tmp_path):
+    """DB 不可用时：文件镜像仍要写成（否则整条链断），但返回里要说明 PG 失败。"""
+    monkeypatch.setenv("WOLF_DAILY_DECISION", "1")
+    monkeypatch.setattr(DD, "_save_pg", lambda obj: {"ok": False, "reason": "db_down"})
+    res = DD.run("20260911", save=True)
+    assert res["ok"] is True and res.get("file_error") is None
+    assert Path(DD.path_for("20260911")).is_file()
+
+
+def test_run_fails_when_both_stores_fail(monkeypatch, tmp_path):
+    monkeypatch.setenv("WOLF_DAILY_DECISION", "1")
+    monkeypatch.setattr(DD, "_save_pg", lambda obj: {"ok": False, "reason": "db_down"})
+    monkeypatch.setattr(DD, "decision_dir", lambda: "/proc/nonexistent/xx")   # 文件也写不了
+    res = DD.run("20260911", save=True)
+    assert res["ok"] is False and "write_failed" in res["reason"]
+
+
+def test_load_prefers_pg(monkeypatch, tmp_path):
+    """主存是 PG：即使文件里是旧内容，也要以库为准。"""
+    d = DD.decision_dir()
+    Path(d).mkdir(parents=True, exist_ok=True)
+    Path(DD.path_for("20260911")).write_text(json.dumps({"date": "20260911", "from": "file"}), encoding="utf-8")
+    monkeypatch.setattr(DD, "_load_pg", lambda d8: {"date": d8, "from": "pg"})
+    assert DD.load("20260911")["from"] == "pg"
+
+
+def test_load_falls_back_to_file(monkeypatch, tmp_path):
+    d = DD.decision_dir()
+    Path(d).mkdir(parents=True, exist_ok=True)
+    Path(DD.path_for("20260911")).write_text(json.dumps({"date": "20260911", "from": "file"}), encoding="utf-8")
+    monkeypatch.setattr(DD, "_load_pg", lambda d8: None)
+    assert DD.load("20260911")["from"] == "file"
+
+
+def test_save_pg_increments_revision(monkeypatch):
+    """同日重算 revision 递增（不静默丢版本）。"""
+    monkeypatch.setattr(DD, "_save_pg", _REAL_SAVE_PG)
+    def fake_session():
+        class _R:
+            def mappings(self):
+                return self
+            def first(self):
+                return {"payload": {"revision": 3}}
+        class _DB:
+            def execute(self, *a, **k):
+                return _R()
+            def commit(self): pass
+            def rollback(self): pass
+            def close(self): pass
+        return _DB()
+    import types
+    fake_db = types.ModuleType("app.database")
+    fake_db.SessionLocal = lambda: fake_session()
+    monkeypatch.setitem(sys.modules, "app.database", fake_db)
+    obj = {"date": "20260911"}
+    res = DD._save_pg(obj)
+    assert res.get("ok") is True and res.get("revision") == 4 and obj["revision"] == 4

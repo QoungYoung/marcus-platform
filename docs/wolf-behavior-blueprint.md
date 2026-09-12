@@ -522,7 +522,7 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 
 | 项 | 内容 |
 |---|---|
-| **G1 决策对象** | `backend/app/services/daily_decision.py` + `jobs/daily_decision.py`（cron `45 19 * * 1-5`）。产出 `data/decision/<date>.json`（+ `latest.json`）：L1 方向 / L2 档位 / L3 仓位 / L4 选票 / **L5 买点（allowed + conditions + blockers）** / L6 兑现，每条带 `basis`；文件缺失时该层为 `null` 并记入 `missing`（不臆造）。`entry_allowed()` 供腿引用，准入闸 `WOLF_DECISION_GATE` **默认关**（置 1 才是"无决策对象 → 拒绝开新腿"）。 |
+| **G1 决策对象** | `backend/app/services/daily_decision.py` + `jobs/daily_decision.py`（cron `45 19 * * 1-5`）。**存储 = PG 为主 + 文件镜像**（2026-09-12 按用户口径改）：主存 `daily_artifacts(artifact_key='decision')`，文件 `data/decision/<date>.json`（+`latest.json`）仅作镜像；`load()` 读序 **PG → 文件**；payload 带 `revision`（同日重算递增）。六层：L1 方向 / L2 档位 / L3 仓位 / L4 选票 / **L5 买点（allowed + conditions + blockers）** / L6 兑现，每条带 `basis`；文件缺失时该层为 `null` 并记入 `missing`（不臆造）。`entry_allowed()` 供腿引用，准入闸 `WOLF_DECISION_GATE` **默认关**（置 1 才是"无决策对象 → 拒绝开新腿"）。 |
 | **G2 每日存档** | `backend/app/services/daily_archive.py` + `jobs/daily_archive.py`（cron `50 19 * * 1-5`）。① 文件快照到 `data/_archive/<date>/`（含 `concept_long` / `theme_inst_flow` / `etf_share_flow` / `main_line_state` / `stock_confirm_result` 这些**当日覆盖型**文件）；② **双写**进 PostgreSQL `daily_artifacts(trade_date, artifact_key, payload jsonb, sha256_16, src_path, src_mtime)`，迁移见 `app/database.py::_apply_daily_artifacts_migration`。 |
 | **开关** | `WOLF_DAILY_DECISION=1`、`WOLF_DAILY_ARCHIVE=1`（生产 `.env`，已重建容器生效）；`WOLF_DECISION_GATE` **未设 = 关** |
 | **任务** | 配置任务数 51 → **55**（新增 `daily_decision` 19:45、`daily_archive` 19:50；后者 `depends_on: daily_decision`） |
@@ -534,3 +534,14 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 3. **2MB 上限挡掉最重要的产物**：`concept_long.json` 实测 **2.17MB**（gate 链第 1 步的概念矩阵），原上限让它只留文件不入库 → 上限改为可配 `WOLF_ARCHIVE_MAX_BYTES`（默认 **8MB**），入库后 TOAST 压到 ~1MB。
 
 **下一步（阶段 1，等用户确认）**：分类型度量 G3 —— 有了 `daily_artifacts` 就能把 gate/wave/confirm 结论与 `paper_trades`/`t_triggers` **按日 join**，再把回测离场口径从"持 T+5"改成生产实际（吃一口减一半 / 破线 / 周末减半 / T+0 不留）。
+
+
+### 13.1 为什么 G1 也从"文件为主"改成"PG 为主"（2026-09-12 用户提问后的修正）
+
+原设计把决策对象写成 `data/decision/<date>.json`，靠 19:50 的存档 job 顺带入库。用户指出这与 G2 定下的"落库为主"不一致，复核后确认**原设计的三条理由都不成立**：
+1. "腿在盘中要读、文件读最简单" → 整个交易栈本就重度依赖 PG（`paper_trades`/`t_conditions`/`t_daily_state`，`t_monitor` 每 30s 读写）→ 站不住；
+2. "给人看方便" → 文件当**镜像**即可，不该当主存；
+3. "存档 job 会入库" → 要等 19:50 且**依赖存档成功**；存档失败时决策对象只在文件里，还会被下次覆盖。
+
+**改法**：`run()` 先写 PG（主存，`upsert` + `revision` 递增）再写文件（镜像）；`load()` 读序 PG → 文件；DB 不可用时文件兜底但返回里标注 `file_error`/写库失败原因。
+**实测（2026-09-11）**：连写两次 `rev=1 → rev=2`；`load()` 从 PG 读回 `revision=2`；**把文件删掉后仍能读到**（证明主存确为 PG）；`daily_artifacts` 里 decision 行 1.8KB。

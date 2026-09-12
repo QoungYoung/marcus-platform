@@ -6,6 +6,11 @@
 L1–L4 已经选出的买入。本模块把当天各层的结论**汇成一个对象**：
 `data/decision/<YYYYMMDD>.json`，供盘中所有腿引用；**没有对象就不开新腿**（可回退开关）。
 
+**存储（2026-09-12 按用户口径改为「PG 为主 + 文件镜像」）**
+  · 主存 = PostgreSQL `daily_artifacts(trade_date, artifact_key='decision', payload jsonb)` —— 与 G2 同一张表
+  · 文件 `data/decision/<date>.json`（+ `latest.json`）= **镜像**，供人查看 / 回放脚本 / DB 不可用时兜底
+  · `load()` 读序 = **PG → 文件**；`run()` 两边都写；payload 带 `revision`（同日重算递增，不静默丢版本）
+
 **六层（与 §4 一致）**
   L1 方向（主线/主题）→ L2 档位（wave operation：build/t_only/side/defense/exit）→
   L3 仓位（目标/下限，来自 tier_targets）→ L4 选票（当日 confirm 结果）→
@@ -234,13 +239,90 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
     return obj
 
 
+def _load_pg(d8: str) -> Optional[Dict[str, Any]]:
+    """从 daily_artifacts 读决策对象（主存）。失败/没有 → None。"""
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+    except Exception:
+        return None
+    db = None
+    try:
+        db = SessionLocal()
+        row = db.execute(text(
+            "SELECT payload FROM daily_artifacts WHERE trade_date = :d AND artifact_key = 'decision'"
+        ), {"d": d8}).mappings().first()
+        if not row:
+            return None
+        pl = row["payload"]
+        return pl if isinstance(pl, dict) else json.loads(pl)
+    except Exception:
+        return None
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+def _save_pg(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """写主存：upsert 进 daily_artifacts，并让 payload.revision 递增（同日重算可追溯）。"""
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+    except Exception as e:
+        return {"ok": False, "reason": "import:%s" % type(e).__name__}
+    db = None
+    try:
+        db = SessionLocal()
+        prev = db.execute(text(
+            "SELECT payload FROM daily_artifacts WHERE trade_date = :d AND artifact_key = 'decision'"
+        ), {"d": obj["date"]}).mappings().first()
+        rev = 1
+        if prev:
+            try:
+                old = prev["payload"] if isinstance(prev["payload"], dict) else json.loads(prev["payload"])
+                rev = int(old.get("revision") or 0) + 1
+            except Exception:
+                rev = 1
+        obj["revision"] = rev
+        obj["updated_at"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+        db.execute(text("""
+            INSERT INTO daily_artifacts (trade_date, artifact_key, payload, sha256_16, src_path, src_mtime)
+            VALUES (:d, 'decision', CAST(:p AS jsonb), :h, :sp, now())
+            ON CONFLICT (trade_date, artifact_key) DO UPDATE
+              SET payload = EXCLUDED.payload, sha256_16 = EXCLUDED.sha256_16,
+                  src_path = EXCLUDED.src_path, src_mtime = EXCLUDED.src_mtime, created_at = now()
+        """), {"d": obj["date"], "p": json.dumps(obj, ensure_ascii=False),
+               "h": None, "sp": "daily_decision"})
+        db.commit()
+        return {"ok": True, "revision": rev}
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {"ok": False, "reason": str(e)[:80]}
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
 def run(d8: Optional[str] = None, save: bool = True) -> Dict[str, Any]:
     import datetime as _dt
     d8 = d8 or _dt.date.today().strftime("%Y%m%d")
     if not enabled():
         return {"ok": False, "reason": "disabled"}
     obj = build(d8)
+    pg = {"ok": False, "reason": "not_saved"}
     if save:
+        # ① 主存：PG（同日重算 revision 递增）
+        pg = _save_pg(obj)
+        # ② 镜像：文件（供人查看 / 回放 / DB 不可用时兜底）
         try:
             os.makedirs(decision_dir(), exist_ok=True)
             with open(path_for(d8), "w", encoding="utf-8") as f:
@@ -248,17 +330,24 @@ def run(d8: Optional[str] = None, save: bool = True) -> Dict[str, Any]:
             with open(os.path.join(decision_dir(), "latest.json"), "w", encoding="utf-8") as f:
                 json.dump(obj, f, ensure_ascii=False, indent=1)
         except Exception as e:
-            return {"ok": False, "reason": "write_failed:%s" % str(e)[:60]}
+            if not pg.get("ok"):
+                return {"ok": False, "reason": "write_failed:pg=%s,file=%s" % (pg.get("reason"), str(e)[:40])}
+            obj["file_error"] = str(e)[:80]
     l5 = (obj["layers"]["L5_entry"]["value"]) or {}
-    print("[decision] %s L2=%s L5允许=%s 拦阻=%d 缺失层=%s"
-          % (d8, (obj["layers"]["L2_operation"]["value"] or {}).get("operation"),
+    print("[decision] %s rev=%s 主存PG=%s L2=%s L5允许=%s 拦阻=%d 缺失层=%s"
+          % (d8, obj.get("revision"), pg.get("ok"),
+             (obj["layers"]["L2_operation"]["value"] or {}).get("operation"),
              l5.get("allowed"), len(l5.get("blockers") or []), obj["missing"]))
     return {"ok": True, **obj}
 
 
 def load(d8: Optional[str] = None) -> Dict[str, Any]:
+    """读序 = **PG（主存）→ 文件（镜像/latest）**。"""
     import datetime as _dt
     d8 = d8 or _dt.date.today().strftime("%Y%m%d")
+    obj = _load_pg(d8)
+    if obj and obj.get("date") == d8:
+        return obj
     for p in (path_for(d8), os.path.join(decision_dir(), "latest.json")):
         try:
             with open(p, encoding="utf-8") as f:
