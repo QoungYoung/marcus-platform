@@ -429,17 +429,23 @@ def upsert_payloads(d8: str, payloads: Dict[str, Any], src: str = "rebuilt",
     return out
 
 
-def import_replay_artifacts(root: Optional[str] = None, save: bool = True,
-                            dry_run: bool = False) -> Dict[str, Any]:
-    """把回放目录里的**逐日**结论产物导入 daily_artifacts（标注 rebuilt）。"""
+def import_replay_artifacts(root: Optional[str] = None, save: bool = True, dry_run: bool = False,
+                            sources: Optional[Dict[str, str]] = None,
+                            source_label: str = "replay_sandbox2") -> Dict[str, Any]:
+    """把回放目录里的**逐日**结论产物导入 daily_artifacts（标注 rebuilt）。
+
+    `sources` 可覆盖 {artifact_key: 相对 root 的模板}（默认取 sandbox2 + waves）；
+    `source_label` 写进 payload 的 `_source`，便于区分不同批次的回放（如 H1 用 replay_sandbox_h1）。
+    """
     import datetime as _dt
     root = root or os.path.join(data_dir(), "_bt_batch2")
+    src_map = sources or REPLAY_SOURCES
     rep: Dict[str, Any] = {"generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
-                           "root": root, "mode": "import_replay_artifacts",
+                           "root": root, "mode": "import_replay_artifacts", "source": source_label,
                            "note": ("这些是**回放重建**的结论（sandbox2/waves），不是当日原生产物；"
                                     "payload 内已标 _source/_rebuilt 供审计"),
                            "days": {}, "total_upserted": 0}
-    for key, tpl in REPLAY_SOURCES.items():
+    for key, tpl in src_map.items():
         import glob as _g
         pat = os.path.join(root, tpl.replace("{d}", "*"))
         for f in sorted(_g.glob(pat)):
@@ -458,7 +464,7 @@ def import_replay_artifacts(root: Optional[str] = None, save: bool = True,
                 continue
             rec = rep["days"].setdefault(d8, {"keys": [], "upserted": 0})
             if not dry_run:
-                r = upsert_payloads(d8, {key: obj}, src="replay_sandbox2", src_dir=base)
+                r = upsert_payloads(d8, {key: obj}, src=source_label, src_dir=base)
                 rec["upserted"] += r.get("upserted", 0)
                 rep["total_upserted"] += r.get("upserted", 0)
             rec["keys"].append(key)

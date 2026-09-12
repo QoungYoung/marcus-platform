@@ -50,9 +50,38 @@ def main():
     date8 = date8 or time.strftime('%Y%m%d')
     from app.api.market import _get_tushare_pro
     pro = _get_tushare_pro()
-    # 交易日历(近 45 交易日)
-    cal = pro.trade_cal(exchange='SSE', start_date='20260601', end_date=date8, is_open='1')
-    days = [str(d).replace('-', '') for d in (cal['cal_date'].tolist() if cal is not None else [])]
+    # 交易日历（动态回看窗口；2026-09-12 修：原来**硬编码 start_date='20260601'**
+    # → 回放/重算任何早于 2026-06-01 的日期时 start>end，tushare 返回空表，
+    #   下一行取 cal['cal_date'] 直接 KeyError，整步失败。改为按 date8 动态回看。）
+    import datetime as _dt
+    _lb = int(os.getenv('ETF_FLOW_LOOKBACK_DAYS', '120'))
+    try:
+        _d8 = _dt.datetime.strptime(date8, '%Y%m%d').date()
+    except Exception:
+        _d8 = _dt.date.today()
+    start8 = (_d8 - _dt.timedelta(days=_lb)).strftime('%Y%m%d')
+    cal = None
+    try:
+        cal = pro.trade_cal(exchange='SSE', start_date=start8, end_date=date8, is_open='1')
+    except Exception as e:
+        print('trade_cal 失败:', type(e).__name__, str(e)[:60], flush=True)
+    days = []
+    if cal is not None and hasattr(cal, 'columns') and 'cal_date' in getattr(cal, 'columns', []):
+        days = [str(d).replace('-', '') for d in cal['cal_date'].tolist()]
+    if not days:                      # 兜底：用本地行情表里的交易日（mkt_bars_daily，已回填 2026 全年）
+        try:
+            from app.database import SessionLocal
+            from sqlalchemy import text
+            _db = SessionLocal()
+            try:
+                days = [r[0] for r in _db.execute(text(
+                    "SELECT DISTINCT trade_date FROM mkt_bars_daily WHERE trade_date BETWEEN :s AND :e "
+                    "ORDER BY 1"), {'s': start8, 'e': date8}).all()]
+            finally:
+                _db.close()
+        except Exception as e:
+            print('本地交易日兜底失败:', type(e).__name__, str(e)[:60], flush=True)
+    print('ETF_FLOW window %s → %s（%d 个交易日）' % (start8, date8, len(days)), flush=True)
     days = sorted(days)
     MAP, map_src = load_etf_map()
     print('ETF MAP source:', map_src, 'themes', len(MAP), flush=True)
@@ -63,7 +92,7 @@ def main():
         per_etf = []
         for ts, nm in etfs:
             try:
-                df = pro.fund_share(ts_code=ts, start_date='20260601', end_date=date8)
+                df = pro.fund_share(ts_code=ts, start_date=start8, end_date=date8)
                 if df is not None and not df.empty:
                     ser = {}
                     for _, r in df.iterrows():

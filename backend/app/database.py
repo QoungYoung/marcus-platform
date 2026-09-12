@@ -125,6 +125,9 @@ def _apply_schema_patches():
     # ── 2026-09-12: 回测用行情表（tushare 回填 mkt_bars_daily，供真实回测） ──
     _apply_mkt_bars_migration()
 
+    # ── 2026-09-12: 研报标题（catalyst 重建数据源；失败日期显式记账） ──
+    _apply_research_reports_migration()
+
     # (table, column, new_type) — ALTER COLUMN TYPE，用于已有列
     alter_patches = [
         # 2026-07-28: strategy 字段太短，tier/pos/trend 组合超 20 字符
@@ -622,6 +625,52 @@ def _apply_mkt_bars_migration():
         print("[DB] PATCH: 回测行情表 mkt_bars_daily 完成")
     except Exception as e:
         print(f"[DB] mkt_bars_daily 迁移失败: {type(e).__name__}: {str(e)[:120]}")
+
+
+def _apply_research_reports_migration():
+    """研报标题两张表（幂等）—— 2026-09-12，catalyst 重建用。
+
+    `research_reports_daily`：每天一行，`status` 区分 ok/empty/**failed**——
+    实测 promax 抖动严重（502/503/504/超时），**绝不能把 failed 当"当天没有研报"**。
+    `research_reports`：逐条标题（含机构/作者/类型/东财 PDF 链接），供按日/按主题检索。
+    """
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS research_reports_daily (
+                    trade_date  VARCHAR(8) NOT NULL PRIMARY KEY,
+                    status      VARCHAR(12) NOT NULL DEFAULT 'pending',
+                    http_status INTEGER,
+                    n_rows      INTEGER DEFAULT 0,
+                    attempts    INTEGER DEFAULT 0,
+                    error       TEXT,
+                    payload     JSONB,
+                    fetched_at  TIMESTAMPTZ
+                )
+                """
+            ))
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS research_reports (
+                    trade_date  VARCHAR(8)  NOT NULL,
+                    seq         INTEGER     NOT NULL,
+                    title       TEXT,
+                    org         TEXT,
+                    author      TEXT,
+                    report_type TEXT,
+                    ts_code     VARCHAR(16),
+                    name        TEXT,
+                    url         TEXT,
+                    PRIMARY KEY (trade_date, seq)
+                )
+                """
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_rr_ts ON research_reports (ts_code, trade_date)"))
+        print("[DB] PATCH: 研报表 research_reports(_daily) 完成")
+    except Exception as e:
+        print(f"[DB] research_reports 迁移失败: {type(e).__name__}: {str(e)[:120]}")
 
 
 def _apply_wolf_discipline_migration():

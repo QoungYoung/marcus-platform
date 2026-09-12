@@ -35,7 +35,26 @@ def main():
         return 0
     if "--import-replay" in sys.argv:
         from app.services.daily_archive import import_replay_artifacts
-        res = import_replay_artifacts(save=True)
+        sb = None
+        if "--sandbox" in sys.argv:
+            try:
+                sb = sys.argv[sys.argv.index("--sandbox") + 1]
+            except Exception:
+                sb = None
+        label = "replay_sandbox2"
+        if "--label" in sys.argv:
+            try:
+                label = sys.argv[sys.argv.index("--label") + 1]
+            except Exception:
+                pass
+        kw = {"save": True, "source_label": label}
+        if sb:
+            # 用同一个沙箱目录同时找 gate/heat/wave（H1 回放只有前两者，wave 缺失会如实记录）
+            kw["sources"] = {"mainline_gate": "mainline_gate_{d}.json",
+                             "heat_v2": "heat_v2_{d}.json",
+                             "wave_state": "wave_state_{d}.json"}
+            kw["root"] = sb
+        res = import_replay_artifacts(**kw)
         return 0 if res.get("ok") else 1
     if "--backfill" in sys.argv:
         n = 15
