@@ -629,8 +629,24 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 ### 15.3 仍然缺的（诚实清单）
 
 1. **2026-01-05 → 05-31（约 100 个交易日）没有 gate/波浪结论** —— 需要把 gate 链回放**向前推**；
-   回放脚本已在（`.dsh-tmp/wolfbt/bt2/stage0_replay_v2.py`，之前跑过 74/74 天、约 19 分钟），
-   但**催化剂（`main_line_state`）历史不可回溯**（LLM 当日读研报），所以那段的 gate 结论精度会更低。
+   回放脚本已在（`.dsh-tmp/wolfbt/bt2/stage0_replay_v2.py`，之前跑过 74/74 天、约 19 分钟）。
 2. **当日覆盖型产物（concept_long / etf_share_flow / theme_inst_flow / stock_confirm_result）没有历史** ——
    只能从 2026-09-11 起靠 G2 每日存档累积；要历史就得**按日重跑**这些步骤（输入可回溯性需逐项验证）。
 3. **波浪是 LLM 产出**：重跑可得，但每次调用有成本；重建版必须始终标注 `_rebuilt`（不能当"他当日的判断"）。
+
+### 15.4 催化剂（研报）到底能不能重建？—— 2026-09-12 更正
+
+**先更正本文档早先的说法**：并非"研报历史不可回溯"。分两条通道看：
+
+| 通道 | 接口 | 历史 | 结论 |
+|---|---|---|---|
+| **promax**（`https://pcd.mobcvb.cn/tushare/pro`，GET + `X-API-Key`） | **`research_report`（券商研报标题）** | **有历史** | ✅ **catalyst 可重建**（标题级）。`apps/main_line/main_line_judge.py` 注释即写明「report_rc(机构评级,**无历史**) → research_report(券商研报标题,**有历史**)」，并已支持 `--date/--out` 历史重放 |
+| promax | `report_rc`（机构评级/盈利预测） | **无历史** | ⚠️ 只能拿近期 |
+| tushare 官方 / gyzcloud | `news` / `anns` / `major_news` | — | ❌ **403 或空**（代理屏蔽/无权限）——项目记忆 2026-08-30 实测 |
+
+**因此**：`main_line_state`（catalyst）**可以按周逐日重建**，路径 = promax `research_report` 按主题代表股拉标题 → dsh `/chat` 打催化分（阈值 0.7）→ 落 `daily_artifacts` 并标 `_rebuilt`。
+**限制必须如实标注**：① 只有**标题**、没有正文；② 需要 LLM 打分（有成本）；③ 主题↔代表股的映射是我们定的（`main_line_judge.py::THEMES`），不是他给的。
+
+**当前通道状态（2026-09-12 实测）**：gzcloud 因当天行情回填（约 350 次调用）被判**限流**（连 `daily` 都返回空）；promax 返回 **502/503/504**（服务端不可用）。→ 待通道恢复后再实测 `research_report` 的历史深度（是否覆盖 2026-01 及更早）。
+
+**顺带发现（安全）**：`apps/main_line/main_line_judge.py` 里**硬编码了 promax 的 API Key**（应走 `PROMAX_API_KEY` 环境变量）。建议改为读环境变量并**轮换该 key**。
