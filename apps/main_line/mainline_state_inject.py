@@ -114,6 +114,12 @@ def _inject_select(ms, date8):
     # 2026-09-13：默认让旧的 gate 摘要**彻底退场**——从 state 里移除该键（回退时 WOLF_INJECT_GATE=1 会重新注入）
     if os.getenv('WOLF_INJECT_GATE', '0').strip().lower() not in ('1', 'true', 'yes', 'on'):
         ms.pop('mainline_gate', None)
+    # 2026-09-13：judge 任务停用（研报线关闭 + 主线改由方向层直写）→ catalyst/fusion **无人刷新**，
+    # 从 state 里移除，避免消费方读到过期值（stock_confirm_judge 会自然落到 main_line）。
+    if os.getenv('WOLF_KEEP_CATALYST_FUSION', '0').strip().lower() not in ('1', 'true', 'yes', 'on'):
+        ms.pop('catalyst', None)
+        ms.pop('catalyst_source', None)
+        ms.pop('fusion', None)
     json.dump(ms, open(os.path.join(DATA, 'main_line_state.json'), 'w', encoding='utf-8'),
               ensure_ascii=False, indent=1)
     print('INJECTED main_line_state.json mainline_select date', summary['date'],

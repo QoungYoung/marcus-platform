@@ -110,10 +110,28 @@ def ts_qualified(ts_code, upto_date=None, concepts_map=None):
 
 
 def gate_top_themes(n=3, upto=None):
-    """最近(<=upto) mainline_gate json rows 按 verdict 权重+heat_rank 排序前 n 主题;
-    无 gate 文件返回 None。供 stock_confirm/switch_builder 等旧 fusion TOP 消费方切换到新主线判定"""
-    import glob as _g, time as _t
+    """前 n 个主线主题。**2026-09-13 起优先用方向层池判定**（wolf_mainline_select：主线 ∪ 池，
+    按池内 r5 候选补齐），缺失时才回退旧的 mainline_gate json。
+
+    为什么换：gate 单独命中他的方向 ≈ 随机（top1 28%/precision 12%），作约束净负；
+    池判定与他「股票主线层」对齐 recall 75%/top1 54%/top3 85%（docs/wolf-structural-pool.md §十一）。
+    本函数是 stock_confirm_judge / switch_builder 等消费方的统一入口。
+    """
+    import glob as _g, time as _t, json as _j
     upto = upto or _t.strftime('%Y%m%d')
+    try:
+        _p = os.path.join(DATA, 'wolf_mainline_select.json')
+        _st = _j.load(open(_p, encoding='utf-8'))
+        _d = str(_st.get('date') or '')
+        if _st.get('mainline') and (not _d or _d <= upto):
+            ths = [_st.get('mainline')] + [t for t in (_st.get('pool') or []) if t != _st.get('mainline')]
+            for _t2 in (_st.get('rank_in_gate') or []):
+                if _t2 not in ths:
+                    ths.append(_t2)
+            if ths:
+                return ths[:n], (_d or upto)
+    except Exception:
+        pass
     best = None; bd = ''
     for f in _g.glob(os.path.join(DATA, 'mainline_gate_*.json')):
         d = os.path.basename(f)[14:22]

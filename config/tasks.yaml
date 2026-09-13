@@ -542,8 +542,8 @@ tasks:
     - qqbot
   depends_on: []
 - depends_on: []
-  description: 工作日 8:00 早间主线状态刷新——**不再判定主线**（主线由方向层 wolf_mainline_select 直写 main_line_state），也不再抓研报/打催化分（WOLF_JUDGE_CATALYST=0，2026-09-13 关）；现在只刷新融合分（资金/强度/集中度）并保留主线字段
-  enabled: true
+  description: 【2026-09-13 停用】原为「研报→催化分→主线判定」。主线已由方向层 wolf_mainline_select 直写 main_line_state（每日 18:55），研报线已关闭（WOLF_JUDGE_CATALYST=0），本任务只剩 fusion 计算+state 组装，而 fusion/catalyst 已不进主线判定与提示词 → 停用。回退：本项 enabled 置 true 且 .env 置 WOLF_JUDGE_CATALYST=1
+  enabled: false
   id: main_line_judge
   name: 主线判定
   notifications:
