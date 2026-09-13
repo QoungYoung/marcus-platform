@@ -120,11 +120,14 @@
 
 | 归属 | 条目 | 状态 |
 |---|---|---|
-| **本 agent 负责** | **D2 / G3**：换尺子（分类型度量 + 回测离场口径改成生产实际） | 🚧 阶段 0 进行中（`jobs/eval_leg_metrics.py` + `docs/leg-metrics-spec.md` + `docs/leg-metrics-baseline.md`） |
-| **本 agent 负责** | plan §5 阶段 1：R1–R5 兑现口径对齐（`jobs/eval_exit_rules.py`，变体对照） | ⏳ 待阶段 0 确认后开工 |
+| **本 agent 负责** | **D2 / G3**：换尺子（分类型度量 + 回测离场口径改成生产实际） | ✅ **阶段 0 完成**（`jobs/eval_leg_metrics.py` + `docs/leg-metrics-spec.md` + `docs/leg-metrics-baseline.md`） |
+| **本 agent 负责** | plan §5 阶段 1：R1–R5 兑现口径对齐（`jobs/eval_exit_rules.py`，变体对照） | 🚧 下一步（用户已确认新尺子=t 账户降为对照、以 stock+回合级为主） |
+| **本 agent 负责** | 兑现层语料专门取证 | ✅ 1,105 条（`jobs/wolf_exit_evidence.py` + `jobs/verify_exit_evidence.py` + `docs/wolf-exit-evidence.md`，99.6% 逐字可核） |
+| **本 agent 负责** | 退出层落差审计 + 落地 | ✅ 审计 `docs/wolf-exit-gap-audit.md`（10 落对/9 不完全/12 没落）；**2026-09-14 落地 C3 开 profit_take / C1 底仓穿透（中轨全止盈）/ C2 避险进执行层 / G0 死腿清理**（commit `62c2284`，119 tests passed，已部署+重启） |
+| **本 agent 负责（待做）** | C2b 回补腿（周一拿回）、G1 顶部判据做宽、G2 0.618 止盈位、G3 删票、G4 被动止盈上移、G6/G7/G8/G9 | ⏳ 清单与依据见 `docs/wolf-exit-gap-audit.md` §5 |
 | **本 agent 负责** | plan §5 阶段 2（R7/R9/R10，需分时/盘口 → 数据不足则不做）、阶段 3（R8/G8 止损口径复核） | ⏳ 视阶段 1 结果 |
 | **顺带覆盖** | **G9/G10 按新尺子复验**（`WOLF_WEEKEND_HEDGE` / `WOLF_VOLUME_GATE`）+ `WOLF_BOLL_MID_EXIT` / `WOLF_CUSHION_CAP` 增量量化 | 🚧 阶段 0 交付物 3（事件式口径，结论见 `docs/leg-metrics-baseline.md`） |
 | **顺带提供工具** | **D13** 块状 t：`eval_leg_metrics.block_t()`（按周分块，块内先取均值）已落地，可直接复用 | ✅ 工具就绪 |
-| **不碰（等用户定夺 / 他人在做）** | **D15/crowding 黑名单**（`indicator.py:2861–2885` 硬拦，已上报用户，**不自行改**）、**G4 低位埋伏为什么亏**（本计划不含；阶段 0 已产出回合级基线可作输入）、D3/D4/D5/D14（其它线） | ⛔ |
+| **不碰（他人在做）** | ~~D15/crowding 黑名单~~（**用户已于 2026-09-13 删除，实测文件与代码均已移除**）、**G4 低位埋伏为什么亏**（本计划不含；阶段 0 已产出回合级基线可作输入）、D3/D4/D5/D14（其它线） | ⛔ |
 | **文档纠错** | plan §2.6 把 `jobs/eval_d12_vol.py` 说成"退出规则变体（+3%/+5%/−3%）"——**实际它是 D12 波动/量能门槛评估**；真正的退出规则实验脚本是（已不在仓库的）`jobs/_bt_exit.py`，样本 `_bt_pit/trades.jsonl` | ✅ 已在 plan §2.6 标注 |
 
