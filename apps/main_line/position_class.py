@@ -24,7 +24,7 @@ def live_hedge_act():
         import requests, urllib3
         urllib3.disable_warnings()
         from datetime import datetime, timedelta
-        K="tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE"
+        K=(os.getenv('PROMAX_API_KEY') or os.getenv('PROMAX_KEY') or '').strip()
         d0=datetime.now().strftime("%Y%m%d")
         items=[]
         for _ in range(5):

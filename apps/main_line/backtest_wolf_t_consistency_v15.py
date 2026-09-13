@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """backtest_wolf_t_consistency_v15.py — 基线(0.998/0.998) vs 收紧(0.998/0.98) 的 index 与复合(confirm∪quote∪index) 一致率"""
+import os
 import sys, os, json
 sys.path.insert(0, '/app')
 from app.services.wolf_t_rules import defensive_t_reduce_quote, t_cycle_pnl
 import requests, urllib3
 urllib3.disable_warnings()
 DH='http://datahubco.com/app-api/openapi/v1/tushare'; DK='dba548a206a453c197f9175189b757374fa6db9554bb29e69efea127'
-PM='https://pcd.mobcvb.cn/tushare/pro'; PK='tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE'
+PM='https://pcd.mobcvb.cn/tushare/pro'; PK=(os.getenv('PROMAX_API_KEY') or os.getenv('PROMAX_KEY') or '').strip()
 def sw_l1(sym):
     r=requests.get(f'{DH}/index_member_all',params={'ts_code':sym},headers={'X-API-Key':DK},timeout=40)
     dd=r.json().get('data') or {}; it=dd.get('items') or []; f=dd.get('fields') or []
