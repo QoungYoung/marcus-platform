@@ -351,3 +351,41 @@ promax 聚合兜底，GET + `X-API-Key`，含重试/分页/降级/参考数据�
 
 **回退**：`.env` 置 `WOLF_MAINLINE_SELECT=0` 即回到"无方向层"（旧的 gate 块仍在上下文中，只是不再被标为权威）；
 或用 `WOLF_MS_USE_GATE=1` 只恢复"池∩gate"行为。备份：`/opt/marcus-platform/data/backup_deploy_20260913-141604/`（含 `.env.bak`）。
+
+
+---
+
+## 十二、把 gate 整块退场：浪型与个股确认迁到新判定（2026-09-13，用户指令）
+
+用户问：「浪型摘要、个股确认概览不能移动到我们新的主线判定上，然后直接删掉这个吗？」→ **可以，已完成。**
+
+### 12.1 依赖盘点（gate 到底供着什么）
+
+| 消费点 | 原依赖 | 处置 |
+|---|---|---|
+| **`main_line_judge.py`（08:00）** | 用 `mainline_gate` 的 confirmed_candidate **覆盖 `main_line`**、写 `gate_rows`、并再注入 gate 摘要 | **改为**读 `wolf_mainline_select.json` → `main_line` = 池主线、`candidates` = 池内其它、`main_line_source = mainline_select_<d>`；`gate_rows` 不再写；gate 覆盖仅在 `WOLF_MAINLINE_SELECT=0` 时回退 |
+| **浪型摘要**（`trade_graph` 提示词） | `mainline_gate.payload.themes[].wave_structure` | **搬到方向层主线**：`wolf_mainline_select.wave_structures()` 直接读 `trend_confirm_<d>_long.json`（与旧实现同源），随池内主题写入 `themes[].wave_structure`，由 `trade_graph` 新块渲染 |
+| **个股确认概览过滤** | gate 的 `confirmed_candidate` | 已改用 `mainline_select` 的 主线 ∪ 池 |
+| **盘中换仓 arming**（`rotation_switch_arm`, 09:20） | `gate_confirmed_today()` 读 `mainline_gate_*.json` | **改为 `mainline_today()`**（读 `wolf_mainline_select.json` 的主线 ∪ 池）；缺失时回退旧 gate（过渡保护），日志打 `MAINLINE_POOL_TODAY` / `GATE_FALLBACK_TODAY` |
+| **L1 决策层**（`daily_decision`） | gate json | 已优先 `mainline_select` |
+| 归档 / 分析脚本 | gate 产物 | **保留**（`mainline_gate_<d>.json` 仍在 18:45 链里产出，留作归档与事件研究） |
+
+### 12.2 "删掉"的边界（重要）
+
+- **删的是"gate 作为主线判定"这一层**：`main_line_state.json` 现在是 `mainline_select`（+ `main_line`/`candidates`/`fusion`/`catalyst`），**`mainline_gate` 与 `gate_rows` 两个键已彻底移除**（`WOLF_INJECT_GATE=0` 时由 `_inject_select` 主动 pop）。
+- **没删的**：① 18:45 链里的 gate **产物**（`mainline_gate_<d>.json`）——它还给归档/事件研究/回退用；② gate **代码**与开关（`WOLF_MS_USE_GATE=1` / `WOLF_INJECT_GATE=1` 可整体回退）；③ 18:45 链本身（`concept_long`/`etf_flow`/`inst_flow`/`trend_confirm`/`heat_v2` 都被别的功能消费）。
+
+### 12.3 时序（已核对）
+
+`18:45` 链（产出 trend_confirm/heat_v2/gate）→ **`18:55` wolf_mainline_select**（池判定 + 浪型，写 `wolf_mainline_select.json` / `daily_artifacts`）→ **次日 `08:00` main_line_judge**（读它，覆盖 `main_line`）→ `08:25` daily_decision → `09:20` rotation_switch_arm。**顺序无冲突**。
+
+### 12.4 生产验证（2026-09-11 数据，手动跑）
+
+```
+[main_line] select-override -> main_line=半导体/芯片 pool=['半导体/芯片', '新能源/电池']
+main_line = 半导体/芯片 | source = mainline_select_20260911
+candidates = ['新能源/电池']
+mainline_select = 半导体/芯片 | pool = ['半导体/芯片', '新能源/电池']
+mainline_gate 残留 = False | gate_rows 残留 = False
+```
+浪型也已挂上：`半导体/芯片 → 创新高但2浪形态不全(疑似V反/平台), 等结构确认`。

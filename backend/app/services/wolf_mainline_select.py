@@ -253,6 +253,64 @@ def load_universe(min_codes: int = 20):
         allc = sorted({ts for codes in uni.values() for ts in codes})
     return uni, lead, allc
 
+def wave_structures(d8: str, themes: Sequence[str]) -> Dict[str, Optional[str]]:
+    """主题浪型文本（**与 mainline_state_inject 同源**：trend_confirm_<d>_long.json 的 track_a）。
+
+    为什么搬到这：原先这段文本挂在 gate 摘要（mainline_gate.payload.themes[].wave_structure）里，
+    但它的数据源是 trend_confirm —— **与 gate 判定无关**。2026-09-13 起改挂到方向层主线（池内主题），
+    这样 gate 作为"主线判定"就可以整块退场，浪型信息不丢。
+    """
+    import json as _json
+    out: Dict[str, Optional[str]] = {t: None for t in themes}
+    p = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "trend_confirm_%s_long.json" % d8)
+    if not os.path.exists(p):
+        return out
+    try:
+        tr = _json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return out
+    dref = None
+    try:
+        cl = _json.load(open(os.path.join(os.environ.get("DATA_DIR", "/app/data"), "concept_long.json"),
+                             encoding="utf-8"))
+        v = next(iter(cl.get("series", {}).values()))
+        dref = v.get("dates")
+    except Exception:
+        pass
+
+    def dt(idx):
+        try:
+            if dref and isinstance(idx, int) and 0 <= idx < len(dref):
+                return dref[idx]
+        except Exception:
+            pass
+        return idx
+
+    for t in (tr.get("themes") or []):
+        th = t.get("theme")
+        if th not in out:
+            continue
+        ta = t.get("track_a") or {}
+        pb = ta.get("pullback") or {}
+        l1 = ta.get("l1") or {}
+        struct = None
+        if ta.get("stage") == "confirmed":
+            if pb and l1:
+                struct = ("3浪健康: 2浪回调低点 %.2f(%s), 未破前低 %.2f(%s), 再创新高"
+                          % (pb.get("l2") or 0, dt(pb.get("l2_idx")), l1.get("px") or 0, dt(l1.get("idx"))))
+                h1 = pb.get("h1") or 0
+                w1 = max(h1 - (l1.get("px") or 0), 0.0)
+                if w1 > 0:
+                    tgt = (pb.get("l2") or 0) + 1.618 * w1
+                    struct += " | 主升3浪运行中, 3浪目标≈%.1f(1.618x1浪%.1f)" % (tgt, w1)
+            elif pb:
+                struct = "主升结构确认(回调低点 %.2f@%s)" % (pb.get("l2") or 0, dt(pb.get("l2_idx")))
+        elif ta.get("stage") == "suspect" and ta.get("new_high"):
+            struct = "创新高但2浪形态不全(疑似V反/平台), 等结构确认"
+        out[th] = struct
+    return out
+
+
 def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
     """盘后运行：算当日主线选择（状态文件 + daily_artifacts 落库）。**只写不交易**。"""
     import datetime as _dt
@@ -313,7 +371,26 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                         share5=share5, pool_k=pool_k())
         if not res:
             return {"ok": False, "reason": "insufficient_history"}
-        res["validation"] = {"design": "池(量能占比topK ∩ r5>0) ∩ gate → 池内 r5 top1",
+        # 池内主题的浪型文本（原挂在 gate 摘要里，2026-09-13 起挂到方向层主线）
+        try:
+            _pos = [t for t in ([res.get("mainline")] + list(res.get("second") and [res["second"]] or [])
+                                + list(res.get("pool") or [])) if t]
+            _seen, _ordered = set(), []
+            for t in _pos:
+                if t not in _seen:
+                    _seen.add(t)
+                    _ordered.append(t)
+            _wv = wave_structures(d8, _ordered)
+            res["themes"] = [{"theme": t,
+                              "in_pool": t in (res.get("pool") or []),
+                              "is_mainline": t == res.get("mainline"),
+                              "r5": (res.get("diag", {}).get(t) or {}).get("r5"),
+                              "share5": (res.get("pool_share5") or {}).get(t),
+                              "wave_structure": _wv.get(t)} for t in _ordered]
+        except Exception as _e:
+            res["themes"] = []
+            print("[mainline] 浪型注入失败 %s: %s" % (type(_e).__name__, str(_e)[:70]), flush=True)
+        res["validation"] = {"design": "池(量能占比topK ∩ r5>0) → 池内 r5 top1（gate 默认不参与）",
                              "his_top1_2026": 0.54, "his_top3_2026": 0.85, "recall_2026": 0.75,
                              "h5_excess_2026": 1.03, "t_2026": 3.37, "h5_2025": 0.338, "t_2025": 3.01,
                              "source": "docs/wolf-structural-pool.md §七/§十",

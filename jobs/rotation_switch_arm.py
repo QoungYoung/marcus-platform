@@ -313,8 +313,25 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
         time.sleep(0.1)
     return out
 
+def mainline_today(today=None):
+    """方向层主线（2026-09-13 起取代 gate）：读 wolf_mainline_select.json 的 主线 ∪ 池；无则空。
+
+    为什么换：gate 单独命中他方向 ≈ 随机（top1 28%/precision 12%），且作约束净负
+    （见 docs/wolf-structural-pool.md §十一）；方向层池判定对齐 recall 75%/top1 54%/top3 85%。
+    """
+    p = os.path.join(DATA, 'wolf_mainline_select.json')
+    try:
+        st = json.load(open(p, encoding='utf-8'))
+    except Exception:
+        return set()
+    if not st.get('mainline'):
+        return set()
+    return {t for t in ([st.get('mainline')] + list(st.get('pool') or [])) if t}
+
+
 def gate_confirmed_today(today):
-    """最近(<=today) mainline_gate json 的 confirmed_candidate 主题集; 无则空"""
+    """（已弃用，2026-09-13）最近(<=today) mainline_gate json 的 confirmed_candidate 主题集; 无则空。
+    保留仅为回退对比；生产路径请用 mainline_today()。"""
     import glob
     best = None; best_d = ''
     for f in glob.glob(os.path.join(DATA, 'mainline_gate_*.json')):
@@ -440,9 +457,14 @@ def main():
     # 2026-09-09 Wolf 低吸资格闸(见 docs/wolf-dip-entry-rule.md): 主线低吸只放行"曾确认"主题
     # (mainline_confirm_history 窗内 confirmed_candidate); MAINLINE_QUALIFY=0 回退旧 main_line_state 逻辑
     qualify = os.getenv("MAINLINE_QUALIFY", "1").strip() in ("1", "true", "yes")
-    confirmed_today_set = gate_confirmed_today(today)
+    # 2026-09-13：主线低吸放行集合改用**方向层主线（池判定）**；缺失时回退旧 gate（过渡保护）
+    confirmed_today_set = mainline_today(today)
+    _src_tag = "MAINLINE_POOL"
+    if not confirmed_today_set:
+        confirmed_today_set = gate_confirmed_today(today)
+        _src_tag = "GATE_FALLBACK"
     if confirmed_today_set:
-        print("GATE_CONFIRMED_TODAY", sorted(confirmed_today_set), file=sys.stderr)
+        print(_src_tag + "_TODAY", sorted(confirmed_today_set), file=sys.stderr)
     for c in room + holdT:
         old_is_main = any(t in c or c in t for x in [str(ml.get("main_line") or ""), " ".join(str(v) for v in (ml.get("candidates") or []))] for t in x.split("/"))
         is_main = old_is_main

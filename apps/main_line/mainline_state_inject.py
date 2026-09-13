@@ -82,6 +82,45 @@ def _inject(ms, date8):
           '| confirmed', summary['confirmed_candidate'], '| watch', summary['watch'], flush=True)
     return 0
 
+def _inject_select(ms, date8):
+    """把**方向层主线（池判定）**注入 main_line_state.json 的 mainline_select 字段（2026-09-13 起为主）。
+
+    来源 = wolf_mainline_select.json（由 jobs/wolf_mainline_select.py 盘后产出，含池/选中/浪型）。
+    它取代原先 mainline_gate 的"主线判定"角色；gate 注入默认关闭（WOLF_INJECT_GATE=1 可回退）。
+    """
+    p = os.path.join(DATA, 'wolf_mainline_select.json')
+    if not os.path.exists(p):
+        print('no wolf_mainline_select.json', p)
+        return 1
+    try:
+        st = json.load(open(p, encoding='utf-8'))
+    except Exception as e:
+        print('read fail', e)
+        return 1
+    if not st.get('mainline'):
+        print('mainline_select 无主线（未启用或历史不足）')
+        return 1
+    summary = {'date': st.get('date') or date8,
+               'mainline': st.get('mainline'), 'second': st.get('second'),
+               'pool': st.get('pool') or [], 'pool_top': st.get('pool_top') or [],
+               'pool_k': st.get('pool_k'), 'pool_share5': st.get('pool_share5') or {},
+               'candidates': st.get('rank_in_gate') or [], 'r5': st.get('r5') or {},
+               'themes': st.get('themes') or [], 'use_gate': st.get('use_gate'),
+               'note': '方向层主线 = 池(主题近5日成交额占比 topK ∩ 近5日相对强度>0) → 池内 r5 top1；'
+                       '与他股票主线层对齐 recall 75%/top1 54%/top3 85%；gate 默认不参与选择'}
+    if ms is None:
+        ms = {}
+    ms['mainline_select'] = summary
+    # 2026-09-13：默认让旧的 gate 摘要**彻底退场**——从 state 里移除该键（回退时 WOLF_INJECT_GATE=1 会重新注入）
+    if os.getenv('WOLF_INJECT_GATE', '0').strip().lower() not in ('1', 'true', 'yes', 'on'):
+        ms.pop('mainline_gate', None)
+    json.dump(ms, open(os.path.join(DATA, 'main_line_state.json'), 'w', encoding='utf-8'),
+              ensure_ascii=False, indent=1)
+    print('INJECTED main_line_state.json mainline_select date', summary['date'],
+          '| mainline', summary['mainline'], '| pool', summary['pool'], flush=True)
+    return 0
+
+
 def main():
     date8 = sys.argv[1] if len(sys.argv) > 1 else None
     if not date8:
@@ -93,7 +132,13 @@ def main():
         ms = json.load(open(ms_p, encoding='utf-8'))
     except Exception:
         ms = {}
-    _inject(ms, date8)
+    # 2026-09-13：方向层主线（池判定）为主；gate 注入默认关闭（WOLF_INJECT_GATE=1 回退）
+    rc = _inject_select(ms, date8)
+    if os.getenv('WOLF_INJECT_GATE', '0').strip().lower() in ('1', 'true', 'yes', 'on'):
+        _inject(ms, date8)
+    else:
+        print('SKIP gate 注入（WOLF_INJECT_GATE=0，方向层主线已取代其判定角色）', flush=True)
+    return rc
 
 if __name__ == '__main__':
     sys.exit(main())

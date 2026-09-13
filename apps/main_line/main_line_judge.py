@@ -244,9 +244,30 @@ def main():
                               'fund':round(sig[th].get('fund',0),2),
                               'rel':round(sig[th].get('rel',0),2),
                               'conc':round(sig[th].get('conc',0),2)} for th in sig}
-    # 2026-09-09 主线判定统一到主线门(mainline_gate): 旧 0.3fund+0.2rel+0.5conc 的 conc 方向缺陷
-    # (实证: 净流出大户高分/农业真流入 conc0.07 被压), gate 结果(heat_v2 四因子+结构GATE)为唯一权威;
-    # catalyst/fusion 保留为参考字段, 不再决定 main_line。
+    # 2026-09-13 主线判定改到**方向层池判定**（池 = 主题近5日成交额占比topK ∩ 近5日相对强度>0 → 池内 r5 top1）。
+    # 旧口径（2026-09-09 起）用的是 mainline_gate 的 confirmed_candidate：实测它单独命中他方向 ≈ 随机
+    # （top1 28%/precision 12%），且与 0.3fund+0.2rel+0.5conc 的 fusion 一样有方向缺陷；
+    # 池判定在"他股票主线层"口径下 recall 75%/top1 54%/top3 85%（docs/wolf-structural-pool.md §十/§十一）。
+    # catalyst/fusion 保留为参考字段，不再决定 main_line。gate 覆盖逻辑仅在 WOLF_MAINLINE_SELECT=0 时回退启用。
+    _ms_ok = False
+    try:
+        from app.services import wolf_mainline_select as _MSJ
+        if _MSJ.enabled():
+            _stj = _MSJ.load() or {}
+            if _stj.get('mainline'):
+                state['main_line'] = _stj.get('mainline')
+                _pool_j = [t for t in (_stj.get('pool') or []) if t and t != _stj.get('mainline')]
+                _cand_j = [_stj.get('second')] + _pool_j if _stj.get('second') else _pool_j
+                _cand_j = [t for i, t in enumerate(_cand_j) if t and t not in _cand_j[:i]]
+                if _cand_j:
+                    state['candidates'] = _cand_j[:3]
+                state['main_line_source'] = 'mainline_select_' + str(_stj.get('date') or gd)
+                state['mainline_select_rows'] = _stj.get('themes') or []
+                _ms_ok = True
+                print('[main_line] select-override -> main_line=%s pool=%s' % (
+                    state['main_line'], _stj.get('pool')), file=sys.stderr)
+    except Exception as _e:
+        print('[main_line] select-override err:', str(_e)[:100], file=sys.stderr)
     try:
         import glob as _g
         gd = today.replace('-', '')
@@ -255,7 +276,7 @@ def main():
             _dd = os.path.basename(_f)[14:22]
             if _dd <= gd and _dd > best_d:
                 best_d = _dd; best = _f
-        if best:
+        if best and not _ms_ok:
             _g2 = json.load(open(best, encoding='utf-8'))
             _rows = [r for r in _g2.get('rows', []) if r.get('verdict') in ('confirmed_candidate', 'watch', 'reserve')]
             _w = {'confirmed_candidate': 0, 'watch': 1, 'reserve': 2}
@@ -276,8 +297,10 @@ def main():
     with open(out_file, 'w', encoding='utf-8') as f: json.dump(state, f, ensure_ascii=False, indent=2)
     # 注入 gate 摘要块(mainline_gate_daily 同源; 防 main_line_judge 覆盖丢字段)
     try:
-        from mainline_state_inject import _inject
-        _inject(state, best_d or gd)
+        from mainline_state_inject import _inject, _inject_select
+        _inject_select(state, gd)          # 2026-09-13：方向层主线（池判定）为主
+        if os.getenv('WOLF_INJECT_GATE', '0').strip().lower() in ('1', 'true', 'yes', 'on'):
+            _inject(state, best_d or gd)
     except Exception as e:
         print('[main_line] inject err:', str(e)[:80], file=sys.stderr)
     print(json.dumps(state, ensure_ascii=False, indent=2))

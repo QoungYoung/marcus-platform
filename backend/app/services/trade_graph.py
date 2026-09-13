@@ -670,6 +670,16 @@ def _read_main_line_context() -> str:
             _ms = {}
         if isinstance(_ms, dict) and _ms.get("mainline"):
             _pool = _ms.get("pool") or []
+            # 浪型文本（主题自身浪）：随方向层主线一起注入（原挂在 gate 摘要里，2026-09-13 搬迁）
+            _wv_lines = []
+            for _t in (_ms.get("themes") or []):
+                if _t.get("wave_structure"):
+                    _tag = "主线" if _t.get("is_mainline") else ("池内" if _t.get("in_pool") else "相关")
+                    _wv_lines.append("- [%s] %s：%s" % (_tag, _t.get("theme"), _t.get("wave_structure")))
+            _wave_txt = (("⚠️ **主线/池内主题自身浪型**（不同于上方大盘 wave_context）：" + chr(10)
+                          + chr(10).join(_wv_lines[:4]) + chr(10)
+                          + "→ 若主线为主题主升浪运行中，不因大盘 t_only 一刀切禁建；按回调低吸(254 dip_prev_low)在其回调位建底仓，不追高。" + chr(10))
+                         if _wv_lines else "")
             _sh = _ms.get("pool_share5") or {}
             _r5 = _ms.get("r5") or {}
             _ord = _ms.get("rank_in_gate") or []
@@ -680,6 +690,7 @@ def _read_main_line_context() -> str:
                                                        for t in _pool) or "—") + chr(10)
                       + "- 候选前三（池内按近5日相对强度）："
                       + ("、".join("%s(%+.2f%%)" % (t, 100 * (_r5.get(t) or 0)) for t in _ord[:3]) or "—") + chr(10)
+                      + _wave_txt
                       + "- 口径与验收：与他**股票主线层**对齐 recall 75% / top1 54% / top3 85%；"
                       + "2026 超额 +1.03%(t=3.37)、2025 +0.34%(t=3.01)；详见 docs/wolf-structural-pool.md" + chr(10)
                       + "- 说明：他在**期货/商品**（油/金）与**超短题材**（军工打短）上的动作不属于本层对照集。" + chr(10) + chr(10))
