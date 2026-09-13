@@ -2639,17 +2639,36 @@ def _read_wolf_context(indices=None) -> str:
         parts.append(s)
 
     # 4. 主线个股确认链（stock_confirm_result.json）
+    #    2026-09-09 生产改进（2026-09-13 回写仓库）：列**主线全子概念**而非前 5 条
+    #    （防前 5 截断漏掉生猪/肉鸡等），并明确「成分在回调/止跌＝买点未触发 ≠ 主线失败」。
+    #    2026-09-13: 主线来源改为方向层池判定 mainline_select.pool；
+    #    原 mainline_gate.confirmed_candidate 字段已随 mainline_gate 机制真删，不再使用。
     sc = _load("stock_confirm_result.json")
-    if sc:
+    ml2 = _load("main_line_state.json") or {}
+    conf_themes = []
+    if isinstance(ml2, dict):
+        _ms = ml2.get("mainline_select") or {}
+        conf_themes = list(_ms.get("pool") or [])
+        if not conf_themes and ml2.get("main_line"):
+            conf_themes = [ml2["main_line"]]
+    if sc and conf_themes:
         items = []
         for cname, v in sc.items():
             if not isinstance(v, dict) or "confirm" not in v:
+                continue
+            if v.get("theme") not in conf_themes:
                 continue
             n = v.get("n", 0) or 0
             c = v.get("confirm", 0) or 0
             items.append(f"{cname} {c}/{n}({int(100*c/max(n,1))}%)")
         if items:
-            parts.append("- **个股确认**：" + "；".join(items[:5]) + "（主线概念成分股突破/站稳比例）")
+            ok_n = sum(1 for it in items if not it.split(" ")[1].startswith("0/"))
+            note = (f"主线内 {ok_n}/{len(items)} 子概念有个股突破站稳"
+                    if ok_n else
+                    "主线方向以方向层池判定为准；成分多在回调/止跌中＝买点未触发≠主线失败，"
+                    "用已确认主线回调低吸模式(254 dip_prev_low)等触发，不否定主线")
+            parts.append("- **主线个股确认**（" + "、".join(conf_themes) + " 全子概念）："
+                         + "；".join(items) + " —— " + note)
 
     # 5. 做T提示（指数盘中回撤 -> 正T窗口；盘中精确信号由 t_monitor 30s 监控）
     if indices:
