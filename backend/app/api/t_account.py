@@ -49,64 +49,19 @@ def t_fields():
     }
 
 
-@router.get("/vreb/reversal-candidates")
-def t_vreb_reversal_candidates(trade_date: Optional[str] = None, top_n: int = 5):
-    """量窒息+顺风反包(5条件A 主板) → 做T底仓建仓候选（只读，不触发建仓/做T）。
+# ── vreb_reversal（量窒息+顺风反包 → 做T底仓候选）整块已于 2026-09-13 真删 ──
+# 原三个端点：GET /vreb/reversal-candidates、POST /vreb/reversal/scan、GET /vreb/reversal/candidates。
+# 删除依据：①其数据层 backend/app/services/t_vreb_reversal.py 顶层 import duckdb，
+#   而 duckdb 从未写进 backend/requirements.txt（镜像里没有）→ 两个端点调用即 500；
+#   ②它读的是 **parquet 数据湖**（data/股票数据/行情数据/stock_daily.parquet、
+#   data/指数数据/index_daily/000300.SH.parquet），**该数据已不存在**（本地与生产都没有）
+#   → 即使装上 duckdb 也无法运行（用户 2026-09-13 确认：parquet 数据已不存在，不必再装）；
+#   ③生产 t_build_scan_results 里 **source='vreb_reversal' 0 行** → 该特性从未在生产产出过数据，
+#   第三个（纯读库的）端点永远是空；
+#   ④无任何调用方：config/tasks.yaml 无 vreb 任务、worker_main 未注册、前端调的是 /vrebounce/...。
+# 一并删除：backend/app/services/t_vreb_reversal.py、backend/tests/test_t_vreb_reversal.py。
+# 勿重新引入；如需该策略请基于生产 PG 的 mkt_bars_daily 重写数据层，不要再依赖 parquet+duckdb。
 
-    trade_date=YYYY-MM-DD 指定确认日；缺省返回最近一个确认日。
-    """
-    from app.services.t_vreb_reversal import compute_vreb_reversal_candidates
-    td = None
-    if trade_date:
-        try:
-            td = datetime.strptime(trade_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="trade_date 需为 YYYY-MM-DD")
-    return {"candidates": compute_vreb_reversal_candidates(trade_date=td, top_n=top_n)}
-
-
-@router.post("/vreb/reversal/scan")
-def t_vreb_reversal_scan(trade_date: Optional[str] = None, top_n: int = 5,
-                         require_trend_up: bool = True):
-    """计算并持久化 vreb-反包候选到 t_build_scan_results（source='vreb_reversal'）。
-
-    任务 2.3/7.2：仅「趋势向上月」写入（require_trend_up），震荡/下跌月跳过并返回 note。
-    只写候选表（status=pending），不触发建仓/做T；建仓仍走既有 build_gateway（红线保留）。
-    """
-    from app.services.t_vreb_reversal import persist_vreb_candidates
-    td = None
-    if trade_date:
-        try:
-            td = datetime.strptime(trade_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="trade_date 需为 YYYY-MM-DD")
-    return persist_vreb_candidates(trade_date=td, top_n=top_n, require_trend_up=require_trend_up)
-
-
-@router.get("/vreb/reversal/candidates")
-def t_vreb_reversal_candidates_db(limit: int = 20):
-    """读取已持久化的 vreb-反包候选（t_build_scan_results source='vreb_reversal'）。"""
-    import json as _json
-    from sqlalchemy import text
-    from app.database import SessionLocal
-    db = SessionLocal()
-    try:
-        rows = db.execute(text(
-            "SELECT id, trade_date, symbol, score, reasons, trend, status, built_at "
-            "FROM t_build_scan_results WHERE source = 'vreb_reversal' "
-            "ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'executed' THEN 1 "
-            "WHEN 'blocked' THEN 2 ELSE 3 END, score DESC LIMIT :lim"), {"lim": limit}).mappings().all()
-        out = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["reasons"] = _json.loads(d["reasons"]) if isinstance(d["reasons"], str) else (d["reasons"] or [])
-            except (ValueError, TypeError):
-                d["reasons"] = []
-            out.append(d)
-        return {"source": "vreb_reversal", "candidates": out, "count": len(out)}
-    finally:
-        db.close()
 
 
 @router.post("/conditions")
