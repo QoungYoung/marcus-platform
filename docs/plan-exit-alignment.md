@@ -368,7 +368,8 @@ WOLF_DECISION_GATE=1     WOLF_MAINLINE_SELECT=1  WOLF_MAINLINE_GATE_STEP=0
 
 | 事项 | 正确做法 | 踩过的坑 |
 |---|---|---|
-| 部署脚本 | 模式：本地改 → `docker cp` → 容器内 `ast.parse` 自检 → 定向单测 | 生产曾跑着一份**带 git 冲突标记**的 `build_concept_matrix.py`（rc=256） |
+| 部署脚本 | 模式：本地改 → 上传宿主（bind mount 即生效）→ 容器内 `ast.parse` 自检 → 定向单测 → 重启进程 | 生产曾跑着一份**带 git 冲突标记**的 `build_concept_matrix.py`（rc=256） |
+| **改 `config/tasks.yaml`（或任何 YAML）** | **部署前必须本地用同款 pyyaml `safe_load` 校验**，再上传 | 🔴 **2026-09-13 实测事故**：在 `description:` 里写了一个半角 `": "`（`（注: …）`），未加引号的 plain scalar 里冒号+空格＝YAML 分隔符 → `ScannerError: mapping values are not allowed here`（tasks.yaml:546）→ **backend 启动即崩、health check 失败、restart loop，生产中断约 5 分钟**。改 YAML 的描述文字一律用**全角冒号**或给整个值**加引号** |
 | 跑验证脚本 | **先写成本地文件 → `docker cp` → `docker exec python /tmp/_verify.py`** | 用 `python -c "..."` 经 `docker exec` + shell **多层引号会被打散**，反复踩 |
 | 查容器内进程 | 读 `/proc`（遍历 `/proc/*/cmdline`） | 容器里**没有 `ps`、没有 `pkill`** |
 | 看任务日志 | `/app/logs/<task_id>/`（APScheduler execution records，JSON） | 不是普通文本日志，别 grep 文本格式 |
