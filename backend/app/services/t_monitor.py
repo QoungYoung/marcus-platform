@@ -142,7 +142,8 @@ class TMonitor:
                     # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
-                    self._check_profit_take()  # 小赚兑现(P0-3, 默认关): 浮盈>=阈值→减仓锁定(保留底仓)
+                    self._check_profit_take()  # 小赚兑现(P0-3, 2026-09-14 开): 浮盈>=阈值→减T半仓(保留底仓)
+                    self._check_weekend_hedge()  # G9 周末/长假前避险**执行层**(2026-09-14, 狼大 2026-08-21)
                     self._check_boll_sell()  # A10 BOLL上轨减半锁利(2026-09-11, 狼大 2026-04-29)
                     self._check_boll_mid_exit()  # A10 BOLL中轨全止盈(尾盘确认窗, 狼大 2025-05-13)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
@@ -362,15 +363,18 @@ class TMonitor:
         with open(_os.path.join(D,'wolf_t_cycles.jsonl'),'a',encoding='utf-8') as f:
             f.write(_j.dumps({'at':datetime.now().isoformat(),'symbol':sym,**cyc},ensure_ascii=False)+chr(10))
 
-    def _insert_wolf_trigger(self, sym, kind, quote, reason):
-        """把 wolf_t_rules 命中写成 t_triggers(pending/auto)，复用同一做T执行管道(不直接下单)。"""
+    def _insert_wolf_trigger(self, sym, kind, quote, reason, account_id=None):
+        """把 wolf_t_rules 命中写成 t_triggers(pending/auto)，复用同一做T执行管道(不直接下单)。
+
+        `account_id` 可指定（纪律类卖腿要覆盖 stock 账户，而不是只写 t 账户）；返回触发 id。
+        """
         now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         try:
             current=float(quote.get('current') or 0)
         except Exception:
             current=0
         trig={
-            "account_id": T_MONITOR_ACCOUNT, "condition_id": None, "symbol": sym,
+            "account_id": account_id or T_MONITOR_ACCOUNT, "condition_id": None, "symbol": sym,
             "event_type": kind, "trigger_price": None, "quote_price": current,
             "suggest_bid_price": round(current*0.999, 3), "suggest_ask_price": round(current*1.001, 3),
             "slippage_budget": 0.001,
@@ -382,8 +386,10 @@ class TMonitor:
             tid = t_db.insert_trigger(trig)
             if tid:
                 print(f"[TMonitor] wolf_t_rules触发 #{tid} {sym} {kind} @ {current} ({reason})")
+            return tid
         except Exception as e:
             print(f"[TMonitor] wolf_t_rules写触发异常: {e}")
+            return None
 
     def _settle_pullback_sell(self) -> None:
         """②量能分层卖结算(2026-09-08): 缩量破位等待中的标的——
@@ -565,17 +571,38 @@ class TMonitor:
             self._status['errors'] += 1
             print(f"[TMonitor] defensive_t_reduce异常: {e}")
 
+    def _discipline_positions(self, accounts=("stock", "t")):
+        """纪律类卖腿（板上减半 / 小赚兑现 / 周末避险 / 中轨全止盈）的**持仓口径 = stock + t 两个账户**。
+
+        历史实现只读 t 账户（t_pool._get_positions）→ 而 t 是**测试账户**，纪律规则实际管不到主账户
+        （2026-09-14 用户确认后修正）。
+        """
+        out = []
+        try:
+            import psycopg2 as _pg
+            conn = _pg.connect(os.getenv("DATABASE_URL",
+                                         "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+            cur = conn.cursor()
+            cur.execute("SELECT account_id, symbol, volume, avg_price FROM paper_positions "
+                        "WHERE account_id = ANY(%s) AND volume > 0", (list(accounts),))
+            for a, s, v, pr in cur.fetchall():
+                out.append({"account_id": str(a), "symbol": str(s),
+                            "volume": float(v or 0), "avg_price": float(pr or 0)})
+            cur.close(); conn.close()
+        except Exception as e:
+            print(f"[TMonitor] 纪律持仓读取失败: {e}")
+        return out
+
     def _check_board_half(self) -> None:
         """板上减半(狼大纪律②): 持仓当日触及/接近涨停(10%板>=9.5%, 20%板>=19.5%) 且 本轮浮盈>=3% -> 减半锁定.
         复用 trigger 管道写 wolf_board_half_sell(网关执行), 当日去抖."""
         try:
             from app.services.wolf_discipline import board_half
-            from app.services.t_pool import _get_positions
             import json as _j, datetime as _dt
-            pos_list = _get_positions()
-            held = [p for p in pos_list if float(p.get('volume') or 0) > 0]
+            held = [p for p in self._discipline_positions() if float(p.get('volume') or 0) > 0]
             if not held:
                 return
+            acct_of = {_normalize_symbol(p['symbol']): p['account_id'] for p in held}
             xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
             quotes = fetch_tencent_quote(xq_syms)
             qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
@@ -590,7 +617,8 @@ class TMonitor:
                 if (sym, 'wolf_board_half_sell', today) in self._wolf_done:
                     continue
                 q = quotes.get(sym) or {}
-                self._insert_wolf_trigger(sym, 'wolf_board_half_sell', q, s.get('reason', '板上减半锁定'))
+                self._insert_wolf_trigger(sym, 'wolf_board_half_sell', q, s.get('reason', '板上减半锁定'),
+                                          account_id=acct_of.get(sym))
                 self._wolf_done.add((sym, 'wolf_board_half_sell', today))
         except Exception as e:
             self._status['errors'] += 1
@@ -603,6 +631,9 @@ class TMonitor:
         ① **放量**（当日量 ≥ 前一日量 × 阈值）② **收盘**确认（只在收盘确认窗内判，复用 _in_close_window）
         ③ **止盈**（要求浮盈>0；亏损侧交给既有六层止损，避免双杀）。
         命中写 `wolf_boll_mid_exit`；`WOLF_BOLL_MID_EXIT=1` 才生效（默认 0）。
+        **执行量（2026-09-14 用户拍板，按他的策略）**：他说的是"**完全止盈**" → **底仓一起清**
+        （`_floor_break_enabled('wolf_boll_mid_exit')`；`WOLF_FLOOR_BREAK=0` 可整体退回"只卖 T 仓"）。
+        走网关 rule 通道**直连执行**（与止损同一模式，不经 AI 转一手），并把触发记进 t_triggers 供复盘。
         """
         try:
             from app.services.wolf_boll_levels import mid_break_sells, mid_exit_enabled
@@ -610,12 +641,12 @@ class TMonitor:
                 return
             if not _in_close_window():
                 return          # 他要求"收盘"确认
-            from app.services.t_pool import _get_positions
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger, base_floor_shares
             import datetime as _dt
-            pos_list = _get_positions()
-            held = [p for p in pos_list if float(p.get('volume') or 0) > 0]
+            held = [p for p in self._discipline_positions() if float(p.get('volume') or 0) > 0]
             if not held:
                 return
+            acct_of = {_normalize_symbol(p['symbol']): p['account_id'] for p in held}
             xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
             quotes = fetch_tencent_quote(xq_syms)
             qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
@@ -631,7 +662,36 @@ class TMonitor:
                 if (sym, 'wolf_boll_mid_exit', today) in self._wolf_done:
                     continue
                 q = quotes.get(sym) or {}
-                self._insert_wolf_trigger(sym, 'wolf_boll_mid_exit', q, sl.get('reason', 'BOLL中轨跌破完全止盈'))
+                cur = float(q.get('current') or 0)
+                acct = acct_of.get(sym) or T_MONITOR_ACCOUNT
+                reason = sl.get('reason', 'BOLL中轨跌破完全止盈')
+                tid = self._insert_wolf_trigger(sym, 'wolf_boll_mid_exit', q, reason, account_id=acct)
+                if cur <= 0:
+                    continue
+                try:
+                    sellable = int(((get_sellable_ledger(account_id=acct).get(sym) or {}).get('sellable', 0)) or 0)
+                except Exception:
+                    sellable = 0
+                if _floor_break_enabled('wolf_boll_mid_exit'):
+                    vol = sellable          # 他：顶部阶段"完全止盈" → 清仓（含底仓）
+                else:
+                    vol = max(sellable - base_floor_shares(acct, sym, volume=sellable), 0)
+                vol = (vol // 100) * 100
+                if vol < 100:
+                    self._wolf_done.add((sym, 'wolf_boll_mid_exit', today))
+                    continue
+                gw = gateway_execute(sym, 'sell', cur, vol, reason=reason, trigger_id=tid,
+                                     decision_source='rule', account_id=acct)
+                if gw.get('status') == 'success':
+                    self._sold_this_round.add(sym)
+                    print(f"[TMonitor] 中轨全止盈(底仓穿透) {sym} {vol}股@{cur} [{acct}]")
+                else:
+                    print(f"[TMonitor] 中轨全止盈被拒 {sym}: {str(gw.get('reason') or '')[:60]}")
+                try:
+                    t_db.update_trigger_status(tid, 'executed' if gw.get('status') == 'success' else 'blocked',
+                                               reason=f"中轨全止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                except Exception:
+                    pass
                 self._wolf_done.add((sym, 'wolf_boll_mid_exit', today))
         except Exception as e:
             self._status['errors'] += 1
@@ -679,20 +739,19 @@ class TMonitor:
     def _check_profit_take(self) -> None:
         """小赚兑现(P0-3, 2026-09-10): 持仓浮盈 >= 阈值 → 写 wolf_profit_take_sell 减仓(保留底仓)。
 
-        规则实现在 wolf_discipline.profit_take(配置 config/wolf_discipline.json 的 profit_take 段)。
-        **默认 enabled=False** —— 该规则新增一条高频卖腿, 线上影响面大于选择层闸(rs),
-        需先 dry-run 观察触发频次、与 board_half/defensive/roundtrip_sell 的叠加再开启。
-        开启: data/wolf_discipline.json 写 {"profit_take":{"enabled":true,"min_float_pct":3.0,"reduce_ratio":0.5}}
-        或 env WOLF_PROFIT_TAKE=1 强制开。
+        规则实现在 wolf_discipline.profit_take（配置 DB `wolf_discipline_config` 的 profit_take 段，
+        2026-09-14 用户拍板**开启**：他「正常收益就是 3-5 个点」2026-04-23 /「T+0 2个点我就够了」2025-04-03）。
+        持仓口径 = **stock + t 两个账户**（t 是测试账户，纪律规则必须覆盖主账户）。
+        减仓量 = 卖 T 仓的一半、保留底仓 —— 由卖出管道按 floor 推导，不在本函数里定死。
         """
         try:
             from app.services.wolf_discipline import profit_take
-            from app.services.t_pool import _get_positions
             import json as _j, datetime as _dt
             force = os.getenv("WOLF_PROFIT_TAKE", "").strip() in ("1", "true", "yes")
-            pos_list = [p for p in (_get_positions() or []) if float(p.get('volume') or 0) > 0]
+            pos_list = [p for p in self._discipline_positions() if float(p.get('volume') or 0) > 0]
             if not pos_list:
                 return
+            acct_of = {_normalize_symbol(p['symbol']): p['account_id'] for p in pos_list}
             xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in pos_list})
             quotes = fetch_tencent_quote(xq_syms)
             qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
@@ -714,11 +773,73 @@ class TMonitor:
                 if (sym, 'wolf_profit_take_sell', today) in self._wolf_done:
                     continue
                 q = quotes.get(sym) or {}
-                self._insert_wolf_trigger(sym, 'wolf_profit_take_sell', q, s.get('reason', '小赚兑现'))
+                self._insert_wolf_trigger(sym, 'wolf_profit_take_sell', q, s.get('reason', '小赚兑现'),
+                                          account_id=acct_of.get(sym))
                 self._wolf_done.add((sym, 'wolf_profit_take_sell', today))
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] profit_take异常: {e}")
+
+    def _check_weekend_hedge(self) -> None:
+        """G9 周末/长假前避险 **执行层**（狼大 2026-08-21 NGA 带时刻原话）。
+
+        14:20「2点半 如果还是缩量 还是不拉升 我会先把这两天T进去的仓位出来一半 防止周末出利空
+              这样周一再拿回来。出于仓位安全考虑 65%仓位过周末。」
+        14:35「2点半过了 **我按刚才说的操作了**。」← 他**当场执行**（此前我们只写到提示层）
+
+        判定由 jobs/wolf_weekend_hedge.py（14:31 调度）落 `wolf_weekend_hedge.json`；
+        本函数只负责"把判定变成卖腿"：**卖出量 = T 仓的一半**（`_hedge_reduce_volume`，底仓不动），
+        覆盖 stock + t 两个账户。开关 `WOLF_WH_EXEC=0` 可退回"只提示"。
+        回补腿（他「周一再拿回来」/ 2025-09-24「避险逻辑结束后 是不是应该补回来」）**另行设计**。
+        """
+        try:
+            if not _wh_exec_enabled():
+                return
+            from app.services import wolf_weekend_hedge as WH
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger, base_floor_shares
+            now = datetime.now()
+            today = now.strftime('%Y%m%d')
+            state = WH.load() or {}
+            if not _wh_should_execute(state, today, now.strftime('%H%M')):
+                return
+            held = [p for p in self._discipline_positions() if float(p.get('volume') or 0) > 0]
+            if not held:
+                return
+            xq_syms = sorted({_normalize_symbol(p['symbol']) for p in held})
+            quotes = fetch_tencent_quote(xq_syms)
+            for p in held:
+                sym = _normalize_symbol(p['symbol'])
+                acct = p['account_id']
+                if (sym, 'wolf_weekend_hedge_sell', today) in self._wolf_done:
+                    continue
+                q = quotes.get(sym) or {}
+                cur = float(q.get('current') or 0)
+                if cur <= 0:
+                    continue
+                try:
+                    sellable = int(((get_sellable_ledger(account_id=acct).get(sym) or {}).get('sellable', 0)) or 0)
+                except Exception:
+                    sellable = 0
+                floor = base_floor_shares(acct, sym, volume=sellable)
+                vol = _hedge_reduce_volume(sellable, floor)
+                reason = ("[G9 周末避险] 14:30 仍缩量(量比%s)∧未拉升(指数%s%%) → T仓减半 %d 股（保留底仓；"
+                          "狼大 2026-08-21「先把这两天T进去的仓位出来一半…周一再拿回来」）"
+                          % (state.get('shrink_ratio'), state.get('idx_pct'), vol))
+                tid = self._insert_wolf_trigger(sym, 'wolf_weekend_hedge_sell', q, reason, account_id=acct)
+                self._wolf_done.add((sym, 'wolf_weekend_hedge_sell', today))
+                if vol < 100:
+                    continue
+                gw = gateway_execute(sym, 'sell', cur, vol, reason=reason, trigger_id=tid,
+                                     decision_source='rule', account_id=acct)
+                print(f"[TMonitor] G9 周末避险减T半仓 {sym} {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                try:
+                    t_db.update_trigger_status(tid, 'executed' if gw.get('status') == 'success' else 'blocked',
+                                               reason=f"G9 周末避险 {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                except Exception:
+                    pass
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] weekend_hedge异常: {e}")
 
     def _check_position_discipline(self) -> None:
         """去弱留强(P1-6, 2026-09-10): 反弹语境内, 减 T 仓最弱的持仓。
@@ -948,6 +1069,8 @@ class TMonitor:
             prev = t_db.list_active_conditions(
                 account_id=T_MONITOR_ACCOUNT, before_trade_date=today)
             wolf = [c for c in prev if _is_wolf_t_condition(c)]
+            # G0(2026-09-14): 已删除机制的"死腿"不再跨日结转（见 _rollable 与 gap-audit G0）
+            wolf = _rollable(wolf)
             if not wolf:
                 return 0
             keys_today = {(k.get("symbol"), k.get("trigger_kind"))
@@ -2402,6 +2525,57 @@ def _in_close_window(now=None) -> bool:
     except Exception:
         return False
     return hm >= str(os.getenv("WOLF_CLOSE_BREAK_HM", "1455"))
+
+
+# ── 底仓 floor 穿透策略（**狼大原话口径**，2026-09-14）─────────────────────────
+# 他的底仓不是"永远不卖"：正常持有期不动（2025-05-27「我T了一把 底仓不动」），
+# 但**顶部阶段的"完全止盈"就是清仓**——2025-05-13「顶部阶段…全止盈的位置就放在日线
+# BOLL 中轨附近，放量跌破收盘完全止盈」。故此处按机制白名单放行，不做全局放行。
+FLOOR_BREAK_KINDS = frozenset({"wolf_boll_mid_exit"})
+# 死腿：机制已删（quote.trail_break 恒 False，2026-09-10 删除）→ 不再跨日结转
+_ROLL_SKIP_KINDS = frozenset({"custom_trail_sell"})
+
+
+def _rollable(conds: Optional[List[dict]]) -> List[dict]:
+    """跨日结转前的过滤：剔除**已删除机制的死腿**（见 _ROLL_SKIP_KINDS）。
+
+    背景（2026-09-14 G0）：custom_trail_sell 的机制 2026-09-10 已被删除（quote.trail_break 恒 False），
+    但 _roll_wolf_legs 每天仍把它复制成新条件 → 永不触发却冒充"有卖腿"。
+    """
+    return [c for c in (conds or []) if str((c or {}).get('trigger_kind') or '') not in _ROLL_SKIP_KINDS]
+
+
+def _floor_break_enabled(kind: str) -> bool:
+    """该离场机制是否允许卖底仓（狼大策略口径）。整体开关 WOLF_FLOOR_BREAK=0 可退回"只卖T仓"。"""
+    if os.getenv("WOLF_FLOOR_BREAK", "1").strip() in ("0", "false", "no"):
+        return False
+    return str(kind) in FLOOR_BREAK_KINDS
+
+
+def _hedge_reduce_volume(sellable: int, floor: int) -> int:
+    """周末/长假前避险卖出量 = **T 仓的一半**（他 2026-08-21「把这两天T进去的仓位出来一半」）。
+
+    T 仓 = 可卖 − 底仓 floor；取一半、100 股整数倍；无 T 仓 → 0（**不卖底仓**，与他的原话一致）。
+    """
+    t_shop = max(int(sellable or 0) - int(floor or 0), 0)
+    return (t_shop // 2 // 100) * 100
+
+
+def _wh_exec_enabled() -> bool:
+    """G9 避险是否进入执行层（默认 1=执行；0=只保留提示层）。"""
+    return os.getenv("WOLF_WH_EXEC", "1").strip() not in ("0", "false", "no")
+
+
+def _wh_should_execute(state: Optional[dict], today8: str, hhmm: str) -> bool:
+    """避险执行门（纯函数）：状态 active ∧ as_of=今日 ∧ 已过 14:30（他 14:20 预告、14:35 已执行）。"""
+    if not isinstance(state, dict) or not state.get("active"):
+        return False
+    if str(state.get("as_of") or "") != str(today8):
+        return False
+    try:
+        return int(str(hhmm)[:2]) * 60 + int(str(hhmm)[2:4]) >= 14 * 60 + 30
+    except Exception:
+        return False
 
 
 def _stop_exit_volume(sellable: int, close_window: bool, floor: int = 100):

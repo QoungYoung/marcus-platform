@@ -169,6 +169,7 @@ TRIGGER_SELL_EVENTS = frozenset({
     "wolf_dao_t_sell", "wolf_confirm_sell", "wolf_day_end_de_t",
     "wolf_defensive_t_reduce", "wolf_defensive_t_reduce_index", "wolf_board_half_sell",
     "wolf_profit_take_sell", "wolf_boll_upper_sell", "wolf_boll_mid_exit",
+    "wolf_weekend_hedge_sell",
 })
 
 
