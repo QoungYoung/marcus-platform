@@ -95,10 +95,21 @@ def _src(name: str, d8: str) -> Dict[str, Any]:
 
 
 # ───────────────────────── 判据层（纯函数，可测）─────────────────────────
-def _l1(gate: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """L1 方向：当日 gate 链确认的主线/主题 + 热度前几名。"""
+def _l1(gate: Optional[Dict[str, Any]], ms: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """L1 方向：**优先**用方向层主线判定（池：量能占比topK ∩ r5>0 ∩ 资格闸 → 池内 r5 top1），
+    没有时退回旧的 gate 结构资格闸。
+
+    为什么换：gate 单独命中他的方向仅 ≈ 随机（75% vs 77%，见 docs/wolf-stats），
+    而池判定在"他股票主线层"口径下 recall 75% / top1 54% / top3 85%（docs/wolf-structural-pool.md §十）。
+    """
+    if isinstance(ms, dict) and ms.get("mainline"):
+        return {"value": {"mainline": ms.get("mainline"), "second": ms.get("second"),
+                          "pool": list(ms.get("pool") or []),
+                          "candidates": list(ms.get("rank_in_gate") or [])[:8],
+                          "pool_k": ms.get("pool_k")},
+                "basis": "daily_artifacts.mainline_select（方向层池判定）"}
     if not gate:
-        return {"value": None, "basis": "mainline_gate_<d>.json（缺失）"}
+        return {"value": None, "basis": "mainline_select / mainline_gate 均缺失"}
     conf = gate.get("confirmed") or gate.get("confirmed_candidate") or gate.get("themes") or []
     if isinstance(conf, dict):
         conf = list(conf.keys())

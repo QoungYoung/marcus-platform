@@ -433,7 +433,7 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
     _base = (
         "【狼大口径·按浪型/主线执行，不套用震荡/趋势市状态】\n"
         "· 大级别以 wave_context(浪型) 为准：主升浪→主线低吸/持有（前排龙头优先，不追突破/不追高）；\n"
-        "   调整浪/震荡(B反/4-5/C杀)→只做T、不追主升；**唯一例外(任意时段适用): mainline_gate.confirmed_candidate 非空(已确认主线, 如农业)=主题自身主升3浪运行中, 不受大盘 t_only 一刀切——可按 P3 new_base 在其回调低吸位建底仓(单票≤5%/合计≤10%, GJD撤退降级0.5时自动减半), 买点须狼大低吸(回撤≥2.5%/触前低+缩量+站回黄线), 不追高; watch/reserve 主题仍只做T**。\n"
+        "   调整浪/震荡(B反/4-5/C杀)→只做T、不追主升；**唯一例外(任意时段适用): 方向层主线判定非空(见「主线判定（方向层）」块; 口径=池(量能占比topK∩r5>0)∩资格闸→池内r5 top1)=主题自身主升运行中, 不受大盘 t_only 一刀切——可按 P3 new_base 在其回调低吸位建底仓(单票≤5%/合计≤10%, GJD撤退降级0.5时自动减半), 买点须狼大低吸(回撤≥2.5%/触前低+缩量+站回黄线), 不追高; watch/reserve 主题仍只做T**。\n"
         "· 主线低吸/新开须满足狼大买点：日内回撤≥2.5% 或 触前低 + 缩量 + 站回黄线；或 计划/关键位命中（六因子软指导已注入）。\n"
         "· 不追高：接近前高/高位 → 只做T/逢高减仓/防顶。\n"
         "· 做T：正T低吸(-2.5%/触前低)→确认制T出(放量→高点→停量→二次不过前高)/黄线跌破离场；只卖T仓，底仓不卖；\n"
@@ -660,7 +660,30 @@ def _read_main_line_context() -> str:
             top = sorted(fusion.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:3]
             fus_str = "、".join(f"{k}({v.get('score')})" for k, v in top)
             block += ("- 融合分 TOP3（资金/集中度主导，研报辅助）：" + fus_str + chr(10))
-        # 2026-09-09 主线门(gate)权威摘要 + 主线浪型 + 农业全子概念确认(防前5截断)
+        # ── 2026-09-13 方向层主线（**权威**）：池 = 量能占比 topK ∩ 近5日相对强度>0，再 ∩ gate 资格 → 池内 r5 top1 ──
+        # 依据：gate 单独命中他的方向仅 ≈ 随机（75% vs 77%），而池判定在"他股票主线层"口径下 recall 75%、
+        #      top1 命中 54%（随机 7.7%）、top3 85%；跨 2025/2026 两年收益一致（docs/wolf-structural-pool.md）。
+        try:
+            from app.services import wolf_mainline_select as _MS
+            _ms = _MS.load() if _MS.enabled() else {}
+        except Exception:
+            _ms = {}
+        if isinstance(_ms, dict) and _ms.get("mainline"):
+            _pool = _ms.get("pool") or []
+            _sh = _ms.get("pool_share5") or {}
+            _r5 = _ms.get("r5") or {}
+            _ord = _ms.get("rank_in_gate") or []
+            block += ("## 主线判定（方向层·**主线方向以此为准**）：池 = 量能占比 top%d ∩ 近5日相对强度>0，再 ∩ 结构资格闸 → 池内 r5 top1"
+                      % _ms.get("pool_k", 3) + chr(10)
+                      + "- **当日主线：" + str(_ms.get("mainline")) + "**（次选 " + str(_ms.get("second") or "—") + "）" + chr(10)
+                      + "- 当期池（当期主线所在）：" + ("、".join("%s(量能占比%.1f%%)" % (t, 100 * (_sh.get(t) or 0))
+                                                       for t in _pool) or "—") + chr(10)
+                      + "- 候选前三（池内按近5日相对强度）："
+                      + ("、".join("%s(%+.2f%%)" % (t, 100 * (_r5.get(t) or 0)) for t in _ord[:3]) or "—") + chr(10)
+                      + "- 口径与验收：与他**股票主线层**对齐 recall 75% / top1 54% / top3 85%；"
+                      + "2026 超额 +1.03%(t=3.37)、2025 +0.34%(t=3.01)；详见 docs/wolf-structural-pool.md" + chr(10)
+                      + "- 说明：他在**期货/商品**（油/金）与**超短题材**（军工打短）上的动作不属于本层对照集。" + chr(10) + chr(10))
+        # 2026-09-09 主线门(gate)结构资格闸摘要 + 主线浪型 + 农业全子概念确认(防前5截断)
         g = st.get("mainline_gate") or {}
         if g:
             gth = g.get("themes") or []
@@ -675,8 +698,8 @@ def _read_main_line_context() -> str:
                 block += ("⚠️ **主线自身浪型（重要: 主题浪, 不同于上方大盘 wave_context）**：" + chr(10)
                           + chr(10).join("- " + str(wv) for wv in _wave_lines[:2]) + chr(10)
                           + "→ 该主线为主升 3 浪运行中(已确认), 不因大盘 t_only(4-2) 一刀切禁建; 按回调低吸模式(254 dip_prev_low/253)在其回调位建底仓, 不追高。" + chr(10) + chr(10))
-            block += ("## 主线门（mainline_gate 权威判定——主线方向以此为准）" + chr(10)
-                      + "- confirmed_candidate(可建仓主线)：" + (", ".join(conf_l) if conf_l else "无") + chr(10)
+            block += ("## 主线门（mainline_gate **结构资格闸**——自 2026-09-13 起**不再是主线权威**，保留为诊断）" + chr(10)
+                      + "- confirmed_candidate(gate 确认)：" + (", ".join(conf_l) if conf_l else "无") + chr(10)
                       + chr(10).join(lines) + chr(10) + chr(10))
             # 农业全子概念个股确认概览(读 stock_confirm_result 全部子概念, 不截断前5)
             try:

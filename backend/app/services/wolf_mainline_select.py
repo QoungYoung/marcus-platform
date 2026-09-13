@@ -53,6 +53,28 @@ def enabled() -> bool:
     return os.getenv("WOLF_MAINLINE_SELECT", "0").strip().lower() not in ("0", "false", "no", "")
 
 
+def pool_k() -> int:
+    """池宽 K（量能占比 topK）。默认 3：实测 K=3 选择质量最好（top3 74%、超额 +1.43%），
+    放大 K 只提 recall 不提选择质量。"""
+    try:
+        return max(1, int(os.getenv("WOLF_MS_POOL_K", "3") or 3))
+    except (TypeError, ValueError):
+        return 3
+
+
+def use_gate() -> bool:
+    """是否用 gate（结构资格闸）约束选择。**默认 0 = 不用**。
+
+    三方对照（2026，72 天，"他股票主线层"口径，见 jobs/eval_gate_vs_pool.py）：
+      · 池 T6（不用 gate）：top1 54% / top3 85% / recall 75% / 完全不在 15% / +1.789%(t=4.54)
+      · 池 T6 ∩ gate：      top1 51% / top3 78% / recall 63% / 完全不在 22% / +1.746%(t=4.90)
+      · gate 单独（旧判定）：top1 28% / top3 51% / precision 12% / +1.513%(t=4.43)
+    → gate 作**主线判定**无信息（≈随机）；作**约束**净负（砍 12pp 对齐度、收益差在噪声内）。
+    只在需要回退对比时用 WOLF_MS_USE_GATE=1 打开。
+    """
+    return os.getenv("WOLF_MS_USE_GATE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _w(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, "") or default)
@@ -91,7 +113,9 @@ def score_day(days: Sequence[str], i: int, px: Dict[str, Dict[str, float]],
               uni: Dict[str, List[str]], lead_codes: Sequence[str],
               market_codes: Sequence[str],
               gate_set: Optional[Sequence[str]] = None,
-              breadth: Optional[Dict[str, Dict[str, float]]] = None) -> Dict[str, Any]:
+              breadth: Optional[Dict[str, Dict[str, float]]] = None,
+              share5: Optional[Dict[str, float]] = None,
+              pool_k: int = 3) -> Dict[str, Any]:
     """给 13 主题打分并选主线（PIT：只用 ≤ 第 i 天）。
 
     **设计依据（2026-09-12 实测，见 /app/data/eval_ms_variants.json / eval_ms_robust.json）**
@@ -132,15 +156,39 @@ def score_day(days: Sequence[str], i: int, px: Dict[str, Dict[str, float]],
         }
     gs = [t for t in (gate_set or []) if t in scores]
     ranked = sorted(scores.items(), key=lambda kv: -kv[1])
-    pool = gs or [t for t, _ in ranked]
-    order = [t for t in pool if t in scores]
+    # ── 池（当期主线）= 结构判据：「资金在哪儿」×「有没有在动」 ──
+    # 依据（2026-09-13 跨 2025/2026 两年实测）：池把"他方向落 top1"从 23% 提到 48%（top3 74%）；
+    # 在"他股票主线层"口径下 recall 75% / 全部在池内 68% / 完全不在 15% / top3 85%；
+    # 放大 K 只提 recall、不提选择质量（K=8 时 top3 降到 61%），故默认 K=3。
+    # 语料依据：「光+半导体加起来是市场 50% 成交量…要降到 25%-30% 才可能重新走起来」（2026-08-24，量能集中度）
+    #          「看看主线题材动没动就知道了」（2026-01-13）→ r5>0。
+    src5: Dict[str, float] = {}
+    for t, v in (share5 or {}).items():
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv == fv:
+            src5[t] = fv
+    pool_top = [t for t, _ in sorted(src5.items(), key=lambda kv: -kv[1])[:max(1, int(pool_k))]]
+    pool = [t for t in pool_top if (scores.get(t) or 0) > 0]
+    if not pool:                       # 池全在跌 → 退回全主题（不硬拦）
+        pool = [t for t, _ in ranked]
+    # 选择域 = 池（默认）；仅当 WOLF_MS_USE_GATE=1 时才再 ∩ gate（实测净负，见 use_gate 注释）
+    cand = ([t for t in gs if t in pool] or pool) if use_gate() else pool
+    order = [t for t in cand if t in scores]
     order.sort(key=lambda t: -scores[t])
     out = {"date": days[i], "r5": {t: scores[t] for t in order[:6]},
            "rank_all": [t for t, _ in ranked],
            "rank_in_gate": order,
            "mainline": order[0] if order else None,
            "second": order[1] if len(order) > 1 else None,
-           "gate_n": len(gs), "diag": {t: diag[t] for t in order[:6]}}
+           "gate_n": len(gs), "diag": {t: diag[t] for t in order[:6]},
+           "pool": pool, "pool_top": pool_top, "pool_n": len(pool),
+           "pool_k": int(pool_k),
+           "pool_share5": {t: round(src5.get(t, 0.0), 4) for t in pool_top},
+           "use_gate": bool(use_gate()),
+           "gate_in_pool": [t for t in (gate_set or []) if t in pool]}
     return out
 
 
@@ -217,13 +265,23 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
         return {"ok": False, "reason": "disabled"}
     db = SessionLocal()
     try:
-        rows = db.execute(text("SELECT trade_date, ts_code, pct_chg FROM mkt_bars_daily "
-                               "WHERE pct_chg IS NOT NULL AND trade_date <= :d"), {"d": d8}).all()
+        # **回看窗口**：只取最近 LOOKBACK 个交易日（r5/r20/breadth 只需 ~25 天）。
+        # 生产教训：全历史拉取在 512MB 容器里会把 pandas 撑爆（2025 回填后表有 455 天/250 万行）。
+        lookback = int(os.getenv("WOLF_MS_LOOKBACK_DAYS", "60") or 60)
+        dmin = db.execute(text("SELECT min(trade_date) FROM (SELECT DISTINCT trade_date FROM mkt_bars_daily "
+                               "WHERE trade_date <= :d ORDER BY trade_date DESC LIMIT :n) t"),
+                          {"d": d8, "n": lookback}).scalar() or d8
+        rows = db.execute(text("SELECT trade_date, ts_code, pct_chg, amount FROM mkt_bars_daily "
+                               "WHERE pct_chg IS NOT NULL AND trade_date <= :d AND trade_date >= :d0"),
+                          {"d": d8, "d0": dmin}).all()
         if not rows:
             return {"ok": False, "reason": "no_bars"}
-        df = pd.DataFrame(rows, columns=["d", "ts", "pc"])
+        df = pd.DataFrame(rows, columns=["d", "ts", "pc", "amt"])
         df["pc"] = df["pc"].astype(float) / 100.0
+        df["amt"] = pd.to_numeric(df["amt"], errors="coerce").fillna(0.0)
         wide = df.pivot_table(index="d", columns="ts", values="pc", aggfunc="first").sort_index()
+        amt = df.pivot_table(index="d", columns="ts", values="amt", aggfunc="sum").reindex(wide.index).fillna(0.0)
+        del df
         idx = wide.index.tolist()
         px = {d: {c: float(v) for c, v in wide.loc[d].dropna().items()} for d in idx}
         uni, lead, allc = load_universe()
@@ -240,12 +298,26 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
         if r:
             p = r["payload"] if isinstance(r["payload"], dict) else _json.loads(r["payload"])
             gset = [x["theme"] for x in (p.get("rows") or []) if x.get("gate") and x.get("theme") in uni]
-        res = score_day(idx, len(idx) - 1, px, uni, lead, allc, gate_set=gset, breadth=breadth)
+        # 主题近 5 日成交额占全市场比（池判据之一：资金在哪儿）
+        mamt5 = amt.sum(axis=1).rolling(5).sum()
+        share5: Dict[str, float] = {}
+        for th, codes in uni.items():
+            cols = [c for c in codes if c in amt.columns]
+            if not cols:
+                continue
+            s = amt[cols].sum(axis=1).rolling(5).sum() / mamt5.replace(0, pd.NA)
+            v = s.iloc[-1] if len(s) else None
+            if v is not None and v == v:
+                share5[th] = float(v)
+        res = score_day(idx, len(idx) - 1, px, uni, lead, allc, gate_set=gset, breadth=breadth,
+                        share5=share5, pool_k=pool_k())
         if not res:
             return {"ok": False, "reason": "insufficient_history"}
-        res["validation"] = {"design": "gate ∩ r5 top1", "h5_excess": 0.622, "t": 2.86,
-                             "n": 159, "source": "/app/data/eval_ms_robust.json",
-                             "note": "accel/breadth 已实测无效，仅作诊断"}
+        res["validation"] = {"design": "池(量能占比topK ∩ r5>0) ∩ gate → 池内 r5 top1",
+                             "his_top1_2026": 0.54, "his_top3_2026": 0.85, "recall_2026": 0.75,
+                             "h5_excess_2026": 1.03, "t_2026": 3.37, "h5_2025": 0.338, "t_2025": 3.01,
+                             "source": "docs/wolf-structural-pool.md §七/§十",
+                             "note": "consistency 口径=他股票主线层；accel/breadth/联动/龙头 均已实测无效，仅作诊断"}
         if save:
             try:
                 p = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "wolf_mainline_select.json")
@@ -263,8 +335,8 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                 db.commit()
             except Exception:
                 db.rollback()
-        print("[mainline] %s 主线=%s（gate 资格 %d 个）｜r5 top3=%s" %
-              (d8, res.get("mainline"), res.get("gate_n"),
+        print("[mainline] %s 主线=%s｜池=%s（K=%d, 资格 %d 个）｜候选前3=%s" %
+              (d8, res.get("mainline"), res.get("pool"), res.get("pool_k", 0), res.get("gate_n"),
                [(t, res["r5"][t]) for t in res["rank_in_gate"][:3]]), flush=True)
         return {"ok": True, **res}
     finally:
@@ -290,5 +362,9 @@ def directive() -> str:
         return ""
     order = st.get("rank_in_gate") or []
     top3 = "、".join("%s(%+.2f%%)" % (t, 100 * (st.get("r5", {}).get(t) or 0)) for t in order[:3])
-    return ("🧭 方向层主线（资格闸∩近5日相对强度；实测 h5 超额 +0.62% t=2.86）｜**%s**"
-            "（次选 %s）｜候选前三：%s" % (st["mainline"], st.get("second") or "—", top3))
+    pool = st.get("pool") or []
+    sh = st.get("pool_share5") or {}
+    pdesc = "、".join("%s(占比%.1f%%)" % (t, 100 * (sh.get(t) or 0)) for t in pool) or "—"
+    return ("🧭 方向层主线（**池=量能占比top%d ∩ 近5日相对强度>0** ∩ 资格闸 → 池内 r5 top1；"
+            "他方向落 top1 54%%/top3 85%%）｜**%s**（次选 %s）｜池：%s｜候选前3：%s"
+            % (st.get("pool_k", 3), st["mainline"], st.get("second") or "—", pdesc, top3))

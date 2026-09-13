@@ -305,3 +305,49 @@ promax 聚合兜底，GET + `X-API-Key`，含重试/分页/降级/参考数据�
 **边界**：①F2 的口径由语料角色统计界定（军工无主线、资源股票只做油），**不是**"他的全部动作"；
 ②样本 72 天、且 F2 的样本是"他在做股票主线的日子"，天然偏向我们擅长的行情；
 ③`stock_direction` 分类由 dsh 完成（232 个标签，可复核 `data/wolf_dir_kind.json`）。
+
+
+---
+
+## 十一、上线记录（2026-09-13）：用池判定替换旧主线判定
+
+**用户指令**：「打开开关，替换掉以前错误的主线判定，开始对接」。
+
+### 11.1 gate 该不该留？——三方对照（`jobs/eval_gate_vs_pool.py`）
+
+用户质疑「gate 跟狼大的主线不一致，为什么不直接去掉」。用同一个量能池做三方对照（2026，72 天，"他股票主线层"口径）：
+
+| 变体 | top1 命中 | top3 命中 | recall | precision | 完全不在池内 | 后5日超额 | t | H1 | H2 |
+|---|---|---|---|---|---|---|---|---|---|
+| **A 池 T6（不用 gate）** | **54%** | **85%** | **75%** | 53% | **15%** | +1.789% | 4.54 | +1.749% | +1.843% |
+| B 池 T6 ∩ gate | 51% | 78% | 63% | 53% | 22% | +1.746% | 4.90 | +1.513% | +2.053% |
+| C gate 单独（旧判定） | **28%** | **51%** | 72% | **12%** | 21% | +1.513% | 4.43 | +1.273% | +1.830% |
+
+→ **gate 作主线判定无信息**（top1 28%、precision 12%）；**作约束净负**（砍 12pp recall、收益差在噪声内）。
+**结论：直接去掉**（不再是选择约束）。保留为诊断字段 + `WOLF_MS_USE_GATE=1` 可回退对比。
+
+### 11.2 代码改动
+
+| 文件 | 改动 |
+|---|---|
+| `wolf_mainline_select.py` | 新增**池层**：`share5`(主题近5日成交额占全市场比) → 池 = topK ∩ r5>0 → 池内 r5 top1；新增 `pool_k()`/`use_gate()`；输出 `pool/pool_top/pool_share5/use_gate/gate_in_pool`；`directive()` 改写；`run()` 加 `amount` 与**回看窗口**（`WOLF_MS_LOOKBACK_DAYS=60`，防 512MB 容器 OOM） |
+| `trade_graph.py` | 新增「## 主线判定（方向层·**主线方向以此为准**）」块（读 `mainline_select`）；原「主线门（mainline_gate 权威判定）」降级为**结构资格闸·仅诊断**；t_only 例外改引方向层主线 |
+| `daily_decision.py` | `_l1()` **优先**用 `mainline_select`（basis 标 `daily_artifacts.mainline_select`），缺失时回退 gate |
+| `prompt_seeds.py` | t_only 主线例外由 `mainline_gate.confirmed_candidate` 改为**方向层主线判定**（去掉"如当前农业"的例子） |
+| `backend/tests/test_wolf_mainline_select.py` | 8 项（原 5 项 + 池 2 项 + gate 开关 1 项，原"必须受 gate 约束"改为默认不受约束/开开关才受约束） |
+
+### 11.3 上线与验证（生产）
+
+`.env`：`WOLF_MAINLINE_SELECT=1`、`WOLF_MS_POOL_K=3`、`WOLF_MS_USE_GATE=0` → `docker compose up -d --force-recreate --no-deps backend worker`（**env 变更必须 recreate**）。
+
+**实跑（2026-09-11）**：
+```
+[mainline] 20260911 主线=半导体/芯片｜池=['半导体/芯片', '新能源/电池']（K=3, 资格 5 个）
+           ｜候选前3=[('半导体/芯片', 0.015619), ('新能源/电池', 0.004373)]
+```
+· 池剔除了**占比最高（34.07%）但 r5≤0** 的 `AI/算力/科技` —— "有没有在动"判据正确工作；
+· `daily_artifacts.mainline_select`(20260911) = 半导体/芯片，`use_gate=False`；
+· `trade_graph` / `daily_decision` / `prompt_seeds` / `wolf_mainline_select` 全部 import OK。
+
+**回退**：`.env` 置 `WOLF_MAINLINE_SELECT=0` 即回到"无方向层"（旧的 gate 块仍在上下文中，只是不再被标为权威）；
+或用 `WOLF_MS_USE_GATE=1` 只恢复"池∩gate"行为。备份：`/opt/marcus-platform/data/backup_deploy_20260913-141604/`（含 `.env.bak`）。
