@@ -79,6 +79,7 @@
 ## E. 环境与红线（长期适用）
 
 - **取数分工**：行情走 gzcloud 镜像（批量回填会打限流，需限速+断点续跑）；研报/行业指数走 promax（**服务抖动 502/503/504 常态化，必须重试并显式记录 failed**，不能把 failed 当"当天没有"）。
+- **传数据进容器禁止覆盖生产文件（2026-09-13 事故）**：为验收送拥挤度数据时用 `docker cp /tmp/x/. marcus-backend:/app/data/`，把容器里真实的 `crowding_blacklist.json`（9/11 版：AI应用 3 只）覆盖成宿主上的 9/3 旧副本（芯片/半导体等 **17 只**）→ `indicator.py` 会错误硬拦 17 只半导体核心票。**规则**：只往**新建子目录**（如 `/app/data/crowding_pit/`、`/app/data/corpus/`）里传；`/app/data/` 根目录下已存在的文件名在覆盖前必须先备份 + 比对 `ts`；发现覆盖立即按原任务参数重建并留证。
 - **重任务内存纪律（2026-09-12 事故）**：容器 cgroup 512MB，把 94 万行行情拉进 pandas 做全市场 pivot/merge 会被 OOM 杀掉，**并连带杀掉 marcus-backend 的 uvicorn 使生产容器重启**（实测 `restarts=1`、dmesg 有 `Killed process ... uvicorn`）。**规则**：重任务一律把聚合下推 SQL（临时成分表 + group by，出库只留 ~170×13 行），pandas 侧只做小宽表；跑之前先看 `free -m` / `docker stats`，一次只跑一个重任务。
 - **传文件进容器用 `docker cp`**（宿主顶层目录不映射到 `/app`）。
 - **红线**：不做未经语料支撑的自造机制；我们的代理必须标"我们的代理"；重建产物标 `_rebuilt`/`_source`；语料绝不手打转写。
