@@ -144,6 +144,67 @@ def score_day(days: Sequence[str], i: int, px: Dict[str, Dict[str, float]],
     return out
 
 
+def load_universe(min_codes: int = 20):
+    """主题成分（stock_pool.db::stock_concept_map，剔 ST）→ (uni, lead, allc)。
+
+    **为什么用概念库而不是 confirm_universe**：后者只覆盖 3 个主题（C2 实测），横截面不足；
+    概念库是同一生产数据源（stock_concept_map），13 主题全覆盖、逐日稳定。
+      · uni  = {主题: [代码]}（成分数 >= min_codes 才保留）
+      · lead = 带动板块代码（券商/银行/保险/多元金融 —— 他口径"大资金认不认"）
+      · allc = 全市场代码（等权基准）
+    env WOLF_MS_UNIVERSE_DB 覆盖 db 路径（回测沙箱）；env WOLF_MS_UNIVERSE_JSON 用现成 json。
+    """
+    import sqlite3
+    uni = {}
+    lead = []
+    allc = []
+    jp = os.getenv("WOLF_MS_UNIVERSE_JSON", "").strip()
+    if jp and os.path.exists(jp):
+        try:
+            with open(jp, encoding="utf-8") as fh:
+                d = json.load(fh)
+            return ({k: list(v) for k, v in (d.get("uni") or {}).items()},
+                    list(d.get("lead") or []), list(d.get("allc") or []))
+        except Exception as e:
+            print("[mainline] 成分 json 读取失败 %s: %s" % (type(e).__name__, str(e)[:80]), flush=True)
+    db_path = os.getenv("WOLF_MS_UNIVERSE_DB") or os.path.join(
+        os.environ.get("DATA_DIR", "/app/data"), "stock_pool.db")
+    try:
+        c = sqlite3.connect(db_path)
+        try:
+            st = {r[0] for r in c.execute("SELECT ts_code FROM stock_pool WHERE is_st=1")}
+        except sqlite3.Error:
+            st = set()
+        for th, kws in THEME_CONCEPT_KW.items():
+            codes = set()
+            for kw in kws:
+                for row in c.execute(
+                        "SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name LIKE ?",
+                        ("%" + kw + "%",)):
+                    ts = row[0]
+                    if ts and ts not in st:
+                        codes.add(ts)
+            if len(codes) >= min_codes:
+                uni[th] = sorted(codes)
+        lead_codes = set()
+        for kw in LEAD_KW:
+            for row in c.execute(
+                    "SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name LIKE ?",
+                    ("%" + kw + "%",)):
+                if row[0]:
+                    lead_codes.add(row[0])
+        lead = sorted(lead_codes)
+        try:
+            allc = sorted(r[0] for r in c.execute("SELECT DISTINCT ts_code FROM stock_pool") if r[0])
+        except sqlite3.Error:
+            allc = []
+        c.close()
+    except Exception as e:
+        print("[mainline] 主题成分加载失败 %s: %s" % (type(e).__name__, str(e)[:80]), flush=True)
+    if not allc:
+        allc = sorted({ts for codes in uni.values() for ts in codes})
+    return uni, lead, allc
+
 def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
     """盘后运行：算当日主线选择（状态文件 + daily_artifacts 落库）。**只写不交易**。"""
     import datetime as _dt
@@ -166,6 +227,10 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
         idx = wide.index.tolist()
         px = {d: {c: float(v) for c, v in wide.loc[d].dropna().items()} for d in idx}
         uni, lead, allc = load_universe()
+        if not uni:
+            return {"ok": False, "reason": "no_universe"}
+        if not allc:   # 基准兜底：面板全部代码（与 eval 脚本的全市场等权口径一致）
+            allc = sorted({x for d in px.values() for x in d})
         ma20 = wide.rolling(20).mean(); above = (wide > ma20)
         breadth = {d: {th: (sum(1 for c in uni[th] if bool(above.loc[d].get(c, False))) / max(1, len(uni[th])))
                        for th in uni} for d in idx}
