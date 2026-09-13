@@ -642,7 +642,7 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 |---|---|---|---|
 | **promax**（`https://pcd.mobcvb.cn/tushare/pro`，GET + `X-API-Key`） | **`research_report`（券商研报标题）** | **有历史** | ✅ **catalyst 可重建**（标题级）。`apps/main_line/main_line_judge.py` 注释即写明「report_rc(机构评级,**无历史**) → research_report(券商研报标题,**有历史**)」，并已支持 `--date/--out` 历史重放 |
 | promax | `report_rc`（机构评级/盈利预测） | **无历史** | ⚠️ 只能拿近期 |
-| tushare 官方 / gyzcloud | `news` / `anns` / `major_news` | — | ❌ **403 或空**（代理屏蔽/无权限）——项目记忆 2026-08-30 实测 |
+| tushare 官方 / gyzcloud（**已废弃**） | `news` / `anns` / `major_news` | — | ❌ **403 或空**（代理屏蔽/无权限）——项目记忆 2026-08-30 实测；gzcloud token 2026-09-13 起失效 |
 
 **因此**：`main_line_state`（catalyst）**可以按周逐日重建**，路径 = promax `research_report` 按主题代表股拉标题 → dsh `/chat` 打催化分（阈值 0.7）→ 落 `daily_artifacts` 并标 `_rebuilt`。
 **限制必须如实标注**：① 只有**标题**、没有正文；② 需要 LLM 打分（有成本）；③ 主题↔代表股的映射是我们定的（`main_line_judge.py::THEMES`），不是他给的。
@@ -668,7 +668,7 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
 （`research_report` 先 504 后 200）；抽查 8 天里 1 天 502、1 天连接异常 → **必须重试 + 记录未取到的日期**，
 不能把"取数失败"当成"当天没有研报"。
 
-**分工结论**：**行情走 gzcloud 镜像**（已补全 2026 全年 169 天/92.9 万行）、**研报与行业指数走 promax**。
-gzcloud 会被批量回填打限流（本轮 350 次调用后连 `daily` 都空），批量取数必须限速 + 断点续跑。
+**分工结论（2026-09-13 更新）**：**行情走 `core/tushare_relay.py`（datahubco 基础接口优先，promax 兜底）**、**研报与行业指数走 promax**。
+批量回填仍必须限速 + 断点续跑（datahubco 单请求 ≤5000 行、promax 上游限流）。
 
 **顺带发现（安全）**：`apps/main_line/main_line_judge.py` 里**硬编码了 promax 的 API Key**（应走 `PROMAX_API_KEY` 环境变量）。建议改为读环境变量并**轮换该 key**。

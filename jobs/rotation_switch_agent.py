@@ -9,6 +9,27 @@ CHAT_URL = os.getenv("WAVE_CHAT_URL", "http://marcus-dsh:3001/chat")
 API = os.getenv("MARCUS_API_URL", "http://backend:8000/api/v1")
 FENCE = chr(96) * 3
 
+def _relay():
+    """加载 core/tushare_relay.py（2026-09-13 起 datahubco 基础接口 + promax 聚合接口，
+    替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib, sys
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for _p in pathlib.Path(__file__).resolve().parents:
+        if (_p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(_p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
+
+
+def _ts_daily_rows(ts_code, start_date, end_date, fields="ts_code,trade_date,close"):
+    """Tushare 中继 daily 查询（返回 items 行列表，字段序 = fields）。"""
+    _f, items = _relay().relay_items("daily", ts_code=ts_code, start_date=start_date,
+                                     end_date=end_date, fields=fields)
+    return items or []
+
 def load(name):
     try:
         return json.load(open(os.path.join(DATA, name), encoding="utf-8"))
@@ -25,18 +46,7 @@ def _http(path, payload):
         return json.loads(resp.read().decode())
 
 def _latest_close(ts):
-    body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
-            "params": {"ts_code": ts, "start_date": "20260101", "end_date": "20260901"},
-            "fields": "ts_code,trade_date,close"}
-    req = urllib.request.Request(os.getenv("TUSHARE_API_URL", ""), data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-    raw = urllib.request.urlopen(req, timeout=30).read()
-    try:
-        d = json.loads(raw.decode())
-    except UnicodeDecodeError:
-        import gzip
-        d = json.loads(gzip.decompress(raw).decode())
-    rows = d.get("data", {}).get("items") or []
+    rows = _ts_daily_rows(ts, "20260101", "20260901")
     return float(rows[-1][2]) if rows else 0.0
 
 def _held():
@@ -166,18 +176,7 @@ def _buy_shortlist(chain, exclude, limit=3):
             import pandas as pd
             sys.path.insert(0, "/app/apps/main_line")
             import position_class as pc
-            body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
-                    "params": {"ts_code": ts, "start_date": "20250101", "end_date": "20260901"},
-                    "fields": "ts_code,trade_date,close"}
-            req = urllib.request.Request(os.getenv("TUSHARE_API_URL", ""), data=json.dumps(body).encode(),
-                                         headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-            raw = urllib.request.urlopen(req, timeout=30).read()
-            try:
-                d = json.loads(raw.decode())
-            except UnicodeDecodeError:
-                import gzip
-                d = json.loads(gzip.decompress(raw).decode())
-            rows = d.get("data", {}).get("items") or []
+            rows = _ts_daily_rows(ts, "20250101", "20260901")
             if len(rows) < 60:
                 time.sleep(0.1)
                 continue

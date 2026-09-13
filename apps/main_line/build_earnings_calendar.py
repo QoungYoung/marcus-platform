@@ -18,26 +18,32 @@ except Exception:
     psycopg2 = None
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 DATA = os.environ.get("DATA_DIR", "data")
-TOKEN = os.getenv("TUSHARE_TOKEN", ""); URL = os.getenv("TUSHARE_API_URL", "")
+# 2026-09-13: 取数走 core/tushare_relay.py（datahubco+promax），旧 TUSHARE_API_URL 已废弃
 
 RECENT_ENDS = ['20250630','20250930','20251231','20260331','20260630','20260930']
 DEADLINE = {("03", "31"): ("04", "30"), ("06", "30"): ("08", "31"),
             ("09", "30"): ("10", "31"), ("12", "31"): ("04", "30")}
 BAD = {"首亏", "续亏"}
 
-def call(api, params, fields):
-    import urllib.request, gzip
-    body = {"api_name": api, "token": TOKEN, "params": params, "fields": fields}
-    req = urllib.request.Request(URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-    raw = urllib.request.urlopen(req, timeout=40).read()
+def _relay():
+    """加载 core/tushare_relay.py（2026-09-13 起 datahubco 基础接口 + promax 聚合接口，
+    替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib, sys
     try:
-        d = json.loads(raw.decode())
-    except UnicodeDecodeError:
-        d = json.loads(gzip.decompress(raw).decode())
-    if d.get("code") != 0:
-        raise RuntimeError(str(d.get("msg"))[:100])
-    return d.get("data", {}).get("items") or []
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for _p in pathlib.Path(__file__).resolve().parents:
+        if (_p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(_p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
 
+
+def call(api, params, fields=""):
+    """Tushare 中继查询（返回 items 行列表；中继内部含重试/分页/双源降级）。"""
+    _fields, items = _relay().relay_items(api, fields=fields, **(params or {}))
+    return items or []
 def watch():
     out = set()
     try:

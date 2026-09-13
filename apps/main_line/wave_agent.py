@@ -13,14 +13,21 @@ CSV='data/指数数据/index_daily/000001.SH.csv'
 BT=chr(96)*3  # 代码围栏
 
 def _ts_pro():
+    """Tushare 客户端（2026-09-13 起走 datahubco+promax 中继，替代已失效的 gzcloud 代理）。"""
     try:
-        import tushare as ts
-        tok=os.getenv('TUSHARE_TOKEN','')
-        if not tok: return None
-        pro=ts.pro_api(tok)
-        url=os.getenv('TUSHARE_API_URL','')
-        if url: pro._DataApi__http_url=url
-        return pro
+        import importlib, pathlib
+        try:
+            relay = importlib.import_module('tushare_relay')
+        except ImportError:
+            relay = None
+            for p in pathlib.Path(__file__).resolve().parents:
+                if (p / 'core' / 'tushare_relay.py').exists():
+                    sys.path.insert(0, str(p / 'core'))
+                    relay = importlib.import_module('tushare_relay')
+                    break
+        if relay is None or not relay.available_sources():
+            return None
+        return relay.get_relay()
     except Exception:
         return None
 

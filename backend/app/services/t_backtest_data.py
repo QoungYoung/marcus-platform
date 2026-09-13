@@ -4,9 +4,10 @@
 数据源（见 design.md D3）：
 - 标的/指数分钟线：brze tushare 代理 `stk_mins` / `index_min`，按 trade_date 逐日拉取
   （单次调用行数有上限，逐日天然规避；卖家要求单线程串行 + 间隔≥1s，见 t_data_sources._brze_rate_limit）
-- 指数日线：tushare 直连 `index_daily` 主源（项目统一入口 get_tushare_pro，.env TUSHARE_TOKEN/TUSHARE_API_URL=gyzcloud 代理），
+- 指数日线：tushare 中继 `index_daily` 主源（项目统一入口 get_tushare_pro，
+  2026-09-13 起走 datahubco/promax 中继，替代已失效的 gzcloud 代理），
   降级东财（免费 klt=101）→ brze（regime L1 近似 / 昨收基准）
-- 交易日历：gyzcloud 代理 `trade_cal`（.env 配置，主源）→ 降级 brze → 工作日近似
+- 交易日历：Tushare 中继 `trade_cal`（datahubco 优先，主源）→ 降级 brze → 工作日近似
 
 缓存布局（data/t_backtest/{task_id}/）：
 - m5/{symbol}.json          → [{time, open, close, high, low, vol, amount}, ...]（全部交易日合并，按时间升序）
@@ -46,10 +47,11 @@ SKIP_INDEX_M5 = True
 # 交易日历
 # ────────────────────────────────────────────────────────────────
 
-def _fetch_trade_cal_gyzcloud(start_date: str, end_date: str) -> Optional[List[str]]:
-    """gyzcloud 代理 trade_cal（.env TUSHARE_TOKEN/TUSHARE_API_URL，主源）。
+def _fetch_trade_cal_relay(start_date: str, end_date: str) -> Optional[List[str]]:
+    """Tushare 中继 trade_cal（datahubco 基础接口优先，promax 兜底，主源）。
 
-    brze trade_cal 曾返回 "tenant key expired"，故交易日历改走 gyzcloud（150次/分钟限频，串行+间隔 0.4s）。
+    2026-09-13: 原 gyzcloud 代理 token 已失效 → 改走 core/tushare_relay.py（GET + X-API-Key）。
+    brze trade_cal 曾返回 "tenant key expired"，故交易日历主源仍走中继。
     """
     try:
         from app.core.trading._api_config import get_tushare_pro
@@ -64,7 +66,7 @@ def _fetch_trade_cal_gyzcloud(start_date: str, end_date: str) -> Optional[List[s
             days = [str(r["cal_date"]) for _, r in df.iterrows() if int(r.get("is_open", 0)) == 1]
             return sorted(days)
     except Exception as e:
-        print(f"[t-backtest-data] gyzcloud trade_cal 失败: {e}")
+        print(f"[t-backtest-data] relay trade_cal 失败: {e}")
     return None
 
 
@@ -89,9 +91,9 @@ def _fetch_trade_cal_brze(start_date: str, end_date: str) -> Optional[List[str]]
 def resolve_trade_days(start_date: str, end_date: str) -> List[str]:
     """返回 [start, end] 内的 A 股交易日（YYYYMMDD，升序）。
 
-    主源 gyzcloud 代理 trade_cal（.env 配置）→ 降级 brze → 最后工作日近似。
+    主源 Tushare 中继 trade_cal（datahubco/promax）→ 降级 brze → 最后工作日近似。
     """
-    for fn in (_fetch_trade_cal_gyzcloud, _fetch_trade_cal_brze):
+    for fn in (_fetch_trade_cal_relay, _fetch_trade_cal_brze):
         days = fn(start_date, end_date)
         if days:
             return days

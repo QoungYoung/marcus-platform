@@ -7,39 +7,40 @@ v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低x1.005)
          / WOLF_PICK_WIND_HARD(默认1, 狼大"风向标死了就不做") / WOLF_RS_GATE(默认1) / WOLF_PICK_EMPTY_WAIT(默认1)
 用法: python3 apps/main_line/wolf_confirm_pick.py --theme 农业 --as-of 20260902 [--limit 2]
 """
-import os, sys, json, time, gzip, glob, urllib.request, statistics
+import os, sys, json, time, glob, urllib.request, statistics
 sys.path.insert(0, "/app/app"); sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "/app/data")
-GZ = os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"
-TOK = os.getenv("TUSHARE_TOKEN", "a5c495cbe5e14729ad756381efe1fd72")
 MIN_AMT20_YI = 1.0
 LIMITUP_PCT = 9.7
 RANK_WIN = 60
 
-def gz(api, params, fields, tries=3):
-    """gzcloud 查询. 2026-09-10 修复: 网关偶发 307 Temporary Redirect 会让 urllib 直接抛错
-    (v2.1 pick 因此回退 legacy) —— 改用 requests(自动跟随307并重发POST) + 重试, urllib 仅兜底。"""
-    body = {"api_name": api, "token": TOK, "params": params, "fields": fields}
-    last = None
-    for _ in range(max(1, tries)):
-        try:
-            import requests
-            r = requests.post(GZ, json=body, timeout=60, headers={"Accept-Encoding": "identity"})
-            if r.status_code == 200:
-                d = r.json()
-                return (d.get("data") or {}).get("items") or []
-            last = "http %s" % r.status_code
-        except Exception as e:
-            last = str(e)[:100]
-        time.sleep(0.8)
+
+def _relay():
+    """加载 core/tushare_relay.py —— 2026-09-13: gzcloud 代理 token 失效，统一改走
+    datahubco（基础接口，快）+ promax（聚合接口）中继。"""
+    import importlib
     try:
-        req = urllib.request.Request(GZ, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-        raw = urllib.request.urlopen(req, timeout=60).read()
-        if raw[:2] == bytes([0x1f, 0x8b]): raw = gzip.decompress(raw)
-        d = json.loads(raw.decode()); return (d.get("data") or {}).get("items") or []
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    cur = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        if os.path.exists(os.path.join(cur, "core", "tushare_relay.py")):
+            core_dir = os.path.join(cur, "core")
+            if core_dir not in sys.path:
+                sys.path.insert(0, core_dir)
+            return importlib.import_module("tushare_relay")
+        cur = os.path.dirname(cur)
+    raise ImportError("core/tushare_relay.py 未找到（仓库根目录 core/ 需随代码部署）")
+
+
+def gz(api, params, fields="", tries=3):
+    """Tushare 查询（返回 items 行列表）。中继内部已含重试/分页/双源降级。"""
+    try:
+        _fields, items = _relay().relay_items(api, fields=fields, **(params or {}))
+        return items or []
     except Exception as e:
-        print("GZ_FAIL", api, last, str(e)[:80], file=sys.stderr)
+        print("TUSHARE_FAIL", api, str(e)[:120], file=sys.stderr)
         return []
 
 def board_allowed(ts_code):

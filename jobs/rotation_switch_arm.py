@@ -85,18 +85,25 @@ def bad_set():
         pass
     return bad
 
+def _relay():
+    """加载 core/tushare_relay.py（2026-09-13 起 datahubco 基础接口 + promax 聚合接口，
+    替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
+
+
 def _gz(api, params, fields):
-    """gzcloud 单次查询(gzip/重定向容错)。返回 items 列表。"""
-    import urllib.request, gzip
-    body = {"api_name": api, "token": os.getenv("TUSHARE_TOKEN", ""),
-            "params": params, "fields": fields}
-    req = urllib.request.Request((os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"),
-                                 data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-    raw = urllib.request.urlopen(req, timeout=30).read()
-    if raw[:2] == bytes([0x1f, 0x8b]):
-        raw = gzip.decompress(raw)
-    return (json.loads(raw.decode()).get("data", {}) or {}).get("items") or []
+    """Tushare 中继单次查询。返回 items 列表（中继内部含重试/分页/双源降级）。"""
+    _fields, items = _relay().relay_items(api, fields=fields, **(params or {}))
+    return items or []
 
 
 def _pct_rank(vals):
@@ -291,18 +298,10 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
         try:
             import pandas as pd
             import position_class as pc
-            body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
-                    "params": {"ts_code": ts, "start_date": "20250101",
-                               "end_date": _today()},   # P1-5a 修复: 原硬编码 "20260908" 冻结日线窗口
-                    "fields": "ts_code,trade_date,close"}
-            import urllib.request
-            req = urllib.request.Request((os.getenv("TUSHARE_API_URL") or "https://ts.gyzcloud.top/api"), data=json.dumps(body).encode(),
-                                         headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-            raw = urllib.request.urlopen(req, timeout=30).read()
-            import gzip
-            if raw[:2] == bytes([0x1f, 0x8b]): raw = gzip.decompress(raw)
-            d = json.loads(raw.decode())
-            rows = d.get("data", {}).get("items") or []
+            # P1-5a 修复: 原硬编码 "20260908" 冻结日线窗口
+            # 2026-09-13: 数据源改走 datahubco/promax 中继（gzcloud 代理 token 已失效）
+            rows = _gz("daily", {"ts_code": ts, "start_date": "20250101", "end_date": _today()},
+                       "ts_code,trade_date,close")
             if len(rows) < 60: time.sleep(0.1); continue
             ser = pd.Series([float(x[2]) for x in rows], index=pd.to_datetime([str(x[1]) for x in rows], format="%Y%m%d"))
             f = pc.position_features(ser)

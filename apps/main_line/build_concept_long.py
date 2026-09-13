@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """build_concept_long.py — concept_long 长历史概念收盘指数(2026-09-08)
-源: gzcloud 全市场 daily(trade_date 逐日批量, 实测 20240102 起 5300+行; 区间批量受~6000行/次上限,
-     逐日全市场为调用数最少的批量形态, 每次覆盖全部成分成员)。
+源: Tushare 中继(2026-09-13 起 datahubco 基础接口 + promax 聚合接口, 替代已失效的 gzcloud 代理)
+     全市场 daily(trade_date 逐日批量, 实测 5300+行/日; 逐日全市场为调用数最少的批量形态)。
 方法: THEME_CONCEPTS 104概念 x stock_pool.db stock_concept_map 全量成分(4676只去重)
       -> 等权 pct 环比累计合成概念收盘指数(规避未复权除权跳变; 停牌沿用昨收涨跌0)。
 产物: /app/data/concept_long.json {meta, dates:[交易日], series:{concept:[100,...]}}  起点20250101
@@ -12,24 +12,36 @@ sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/apps/main_line')
 urllib3.disable_warnings()
 DATA = os.environ.get('DATA_DIR', '/app/data')
-GZ = 'https://ts.gyzcloud.top/api'; TOK = os.getenv('TUSHARE_TOKEN', 'a5c495cbe5e14729ad756381efe1fd72')
+
+
+def _relay():
+    """加载 core/tushare_relay.py（datahubco + promax，替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib
+    try:
+        return importlib.import_module('tushare_relay')
+    except ImportError:
+        pass
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / 'core' / 'tushare_relay.py').exists():
+            sys.path.insert(0, str(p / 'core'))
+            return importlib.import_module('tushare_relay')
+    raise ImportError('core/tushare_relay.py 未找到')
+
 
 def gz(params, fields='ts_code,close'):
-    for _ in range(3):
-        try:
-            r = requests.post(GZ, json={'api_name': 'daily', 'token': TOK, 'params': params, 'fields': fields}, timeout=60)
-            it = ((r.json().get('data') or {}).get('items') or [])
-            if it: return it
-        except Exception:
-            pass
-        time.sleep(1.0)
-    return []
+    try:
+        _fields, items = _relay().relay_items('daily', fields=fields, **params)
+        return items or []
+    except Exception as e:
+        print('TUSHARE_FAIL daily', str(e)[:120], file=sys.stderr)
+        return []
+
 
 def cal(s, e):
-    r = requests.post(GZ, json={'api_name': 'trade_cal', 'token': TOK,
-                                'params': {'exchange': 'SSE', 'start_date': s, 'end_date': e},
-                                'fields': 'cal_date,is_open'}, timeout=30)
-    return sorted(x[0] for x in ((r.json().get('data') or {}).get('items') or []) if x[1] == 1)
+    _fields, items = _relay().relay_items('trade_cal', exchange='SSE', start_date=s, end_date=e,
+                                          fields='cal_date,is_open')
+    return sorted(x[0] for x in items if x[1] == 1)
+
 
 def main():
     argv = sys.argv[1:]

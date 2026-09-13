@@ -7,8 +7,7 @@
 """
 import os, sys, json, urllib.request, gzip, time, collections, datetime as _dt
 
-TOKEN = os.getenv('TUSHARE_TOKEN','')
-URL = os.getenv('TUSHARE_API_URL','')
+# 2026-09-13: 取数走 core/tushare_relay.py（datahubco+promax），旧 TUSHARE_API_URL 已废弃
 DB = os.getenv('DATABASE_URL','')
 DATA = os.environ.get('DATA_DIR','data')
 ALLOWED_ENDS = ['20250630','20250930','20251231','20260331','20260630']
@@ -27,17 +26,25 @@ def arg_events():
         return [(e,d) for e,d in EVENTS if e in want]
     return EVENTS
 
-def call(api, params, fields):
-    if not TOKEN or not URL:
-        raise RuntimeError('missing TUSHARE_TOKEN/TUSHARE_API_URL')
-    body={'api_name':api,'token':TOKEN,'params':params,'fields':fields}
-    req=urllib.request.Request(URL,data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Accept-Encoding':'identity'})
-    with urllib.request.urlopen(req,timeout=60) as resp: raw=resp.read()
-    try: d=json.loads(raw.decode())
-    except UnicodeDecodeError: d=json.loads(gzip.decompress(raw).decode())
-    if d.get('code')!=0: raise RuntimeError('%s %s' % (api, str(d.get('msg'))[:120]))
-    return d.get('data',{}).get('items') or []
+def _relay():
+    """加载 core/tushare_relay.py（2026-09-13 起 datahubco 基础接口 + promax 聚合接口，
+    替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib, sys
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for _p in pathlib.Path(__file__).resolve().parents:
+        if (_p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(_p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
 
+
+def call(api, params, fields=""):
+    """Tushare 中继查询（返回 items 行列表；中继内部含重试/分页/双源降级）。"""
+    _fields, items = _relay().relay_items(api, fields=fields, **(params or {}))
+    return items or []
 def nearest_trade_date(dstr, max_back=10):
     """事件日前一天起的最近交易日份额(严格PIT: 当日份额收盘后才公布)"""
     d = _dt.date.fromisoformat(dstr)

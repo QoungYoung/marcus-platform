@@ -4,7 +4,7 @@
 按回测结论（data/backtest/_rotation_*）的口径输出：
   - 趋势腿: MA20 多头激活（close>MA20 且 MA20 5日斜率为正）→ 多/空/震荡
   - 贪婪腿: 各板块贪婪 250 日分位（超跌区 = 分位 <= 0.15）
-数据源: 日K线走 tushare fund_daily（.env TUSHARE_TOKEN/TUSHARE_API_URL），
+数据源: 日K线走 tushare fund_daily（datahubco/promax 中继，见 core/tushare_relay.py），
         tech7 贪婪走 arkvol tech-hardware-greed（TTL 2h），宽基贪婪走 DB 快照。
 """
 import logging

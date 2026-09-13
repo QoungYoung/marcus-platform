@@ -39,8 +39,28 @@ import json
 # ============================================================================
 
 
-# Tushare API 配置（支持 TUSHARE_API_URL 环境变量切换代理）
-TUSHARE_URL = os.getenv("TUSHARE_API_URL", "https://api.tushare.pro")
+# Tushare 数据源（2026-09-13 起走 core/tushare_relay.py：datahubco 基础接口 + promax 聚合接口；
+# 旧 gzcloud 代理 token 已失效，TUSHARE_URL/TUSHARE_TOKEN 不再用于取数）
+def _relay_items(api, fields="", **params):
+    """Tushare 中继查询 → (fields, items)。失败返回 ([], [])。"""
+    import importlib
+    try:
+        relay = importlib.import_module("tushare_relay")
+    except ImportError:
+        relay = None
+        for _p in Path(__file__).resolve().parents:
+            if (_p / "core" / "tushare_relay.py").exists():
+                sys.path.insert(0, str(_p / "core"))
+                relay = importlib.import_module("tushare_relay")
+                break
+    if relay is None:
+        print("[Tushare] core/tushare_relay.py 未找到", file=sys.stderr)
+        return [], []
+    try:
+        return relay.relay_items(api, fields=fields, **params)
+    except Exception as e:
+        print(f"[Tushare] 查询失败 {api}: {str(e)[:120]}", file=sys.stderr)
+        return [], []
 
 # ============================================================================
 # 行业分类配置
@@ -131,32 +151,10 @@ def _get_industries_from_tushare(cache_only: bool = False) -> List[str]:
         print(f"[Tushare] 缓存模式：无可用缓存，使用 fallback", file=sys.stderr)
         return list(INDUSTRY_KEYWORDS.keys())
     
-    # 3. 从 API 获取并保存缓存
+    # 3. 从 API 获取并保存缓存（2026-09-13: 走 core/tushare_relay.py，替代已失效的 gzcloud 代理）
     try:
-        payload = {
-            'api_name': 'index_classify',
-            'token': TUSHARE_TOKEN,
-            'params': {'src': 'SW2021', 'level': 'L1'}
-        }
-        
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            TUSHARE_URL,
-            data=data,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
-        
-        context = ssl.create_default_context()
-        with urllib.request.urlopen(req, context=context, timeout=15) as response:
-            response_data = response.read().decode('utf-8')
-        
-        api_response = json.loads(response_data)
-        
-        if api_response.get('code') == 0:
-            fields = api_response['data']['fields']
-            items = api_response['data']['items']
-            
+        fields, items = _relay_items('index_classify', src='SW2021', level='L1')
+        if items:
             industries = []
             for item in items:
                 row = dict(zip(fields, item))

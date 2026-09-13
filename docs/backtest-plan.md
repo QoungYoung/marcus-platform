@@ -117,13 +117,13 @@
 
 | 数据 | 用途 | 现状 |
 |---|---|---|
-| `concept_long.json`（20250101 起，全概念等权指数） | heat_v2 的 `rel` 因子、trend_confirm | **生产产物，本仓没有**；本机已用 `build_concept_long.py` 起过全量构建（409 交易日，约 10 min，network 依赖 gzcloud） |
+| `concept_long.json`（20250101 起，全概念等权指数） | heat_v2 的 `rel` 因子、trend_confirm | **生产产物，本仓没有**；本机已用 `build_concept_long.py` 起过全量构建（409 交易日，约 10 min，network 依赖 Tushare 中继 datahubco） |
 | `trend_confirm_<date>_long.json` | 结构 GATE、**P1-3 的主题浪 `track_a.stage`** | 由回放逐日生成 |
 | `mainline_gate_<date>.json` | confirmed 主题、`verdict` | 由回放逐日生成 |
 | `stock_pool.db` | 成分/概念映射（`theme_of_symbol` 离线反查） | 在 `apps/paper-trading/data/stock_pool.db`，**需 COPY 进 DATA_DIR** |
 | `wave_state.json`（**大盘**浪） | P1-3 的系统性护栏 | 本仓有少量历史快照；回放需逐日重建 |
 | 个股 5min（brze） | 253/254 触发 | 可拉取（单次 ≤8000 根 ≈167 交易日，一次覆盖整窗） |
-| 个股日线（gzcloud） | 位置分类、rs、反弹幅度 | 可拉取 |
+| 个股日线（Tushare 中继：datahubco/promax） | 位置分类、rs、反弹幅度 | 可拉取 |
 
 **本机限制（务必注意）**：
 - **PostgreSQL 不可达** → `t_conditions` / `t_triggers` / `paper_*` 读不到，**执行层必须在回测内自建模拟**；

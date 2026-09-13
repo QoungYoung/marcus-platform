@@ -16,8 +16,7 @@
 import os, sys, json, time, threading
 from datetime import date, timedelta
 
-TOKEN = os.getenv('TUSHARE_TOKEN', '')
-URL = os.getenv('TUSHARE_API_URL', '')
+# 2026-09-13: 取数走 core/tushare_relay.py（datahubco+promax），旧 TUSHARE_API_URL 已废弃
 DATA = os.environ.get('DATA_DIR', 'data')
 END = '20260901'
 
@@ -27,21 +26,25 @@ def _ts(sym):
         return s
     return sym + ('.SH' if sym.startswith(('6', '9', '5')) else '.SZ')
 
-def call(api, params, fields):
-    import urllib.request, gzip, json as _j
-    body = {'api_name': api, 'token': TOKEN, 'params': params, 'fields': fields}
-    req = urllib.request.Request(URL, data=_j.dumps(body).encode(),
-                                 headers={'Content-Type': 'application/json', 'Accept-Encoding': 'identity'})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read()
+def _relay():
+    """加载 core/tushare_relay.py（2026-09-13 起 datahubco 基础接口 + promax 聚合接口，
+    替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib, sys
     try:
-        d = _j.loads(raw.decode())
-    except UnicodeDecodeError:
-        d = _j.loads(gzip.decompress(raw).decode())
-    if d.get('code') != 0:
-        raise RuntimeError(str(d.get('msg'))[:120])
-    return d.get('data', {}).get('items') or []
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for _p in pathlib.Path(__file__).resolve().parents:
+        if (_p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(_p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
 
+
+def call(api, params, fields=""):
+    """Tushare 中继查询（返回 items 行列表；中继内部含重试/分页/双源降级）。"""
+    _fields, items = _relay().relay_items(api, fields=fields, **(params or {}))
+    return items or []
 _lock = threading.Lock(); _last = 0.0
 def _throttle():
     global _last

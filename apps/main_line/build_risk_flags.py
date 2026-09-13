@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """build_risk_flags.py — risk_flags 结构化采集 v1
-数据源(真实): tushare gyzcloud forecast(业绩预告) / express(业绩快报) / DB stock_pool(is_st)
+数据源(真实): Tushare 中继(2026-09-13 起 datahubco+promax, 替代已失效的 gzcloud 代理)
+              forecast(业绩预告) / express(业绩快报) / DB stock_pool(is_st)
 用法:
   python -u apps/main_line/build_risk_flags.py --stocks 300308.SZ,300502.SZ
   python -u apps/main_line/build_risk_flags.py            # watch: rotation_crowding top 或 data/risk_watch.txt
@@ -8,32 +9,34 @@
       earnings_clear = 最新 forecast 已披露且非 bad
 输出: postgres risk_flags(symbol, flag_type, value, ann_date, source, updated_at)
 """
-import os, sys, json, time, urllib.request, gzip, argparse
+import os, sys, json, time, argparse
 try:
     import psycopg2
 except Exception as e:
     print("ERR psycopg2:", e); sys.exit(1)
 
-TOKEN = os.getenv("TUSHARE_TOKEN", "")
-URL = os.getenv("TUSHARE_API_URL", "https://ts.gyzcloud.top/api")
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 DATA = os.environ.get("DATA_DIR", "data")
 BAD_TYPES = {"首亏", "续亏"}
 
-def call(api, params, fields):
-    body = {"api_name": api, "token": TOKEN, "params": params, "fields": fields}
-    req = urllib.request.Request(URL, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read()
+
+def _relay():
+    """加载 core/tushare_relay.py（datahubco + promax，替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib
     try:
-        d = json.loads(raw.decode())
-    except UnicodeDecodeError:
-        d = json.loads(gzip.decompress(raw).decode())
-    if d.get("code") != 0:
-        raise RuntimeError("%s %s" % (api, d.get("msg")))
-    dd = d.get("data") or {}
-    return dd.get("fields") or [], dd.get("items") or []
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
+
+
+def call(api, params, fields):
+    """Tushare 中继查询（返回 (fields, items)）。"""
+    return _relay().relay_items(api, fields=fields, **(params or {}))
 
 def default_watch():
     """小型预建(选股后查财报为主): 持仓 + rotation top + risk_watch.txt(可选人工名单)"""

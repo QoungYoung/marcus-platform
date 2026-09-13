@@ -29,8 +29,28 @@ from workspace_detector import WORKSPACE, get_akshare_dir
 
 AKSHARE_DIR = get_akshare_dir()
 
-# Tushare 配置（支持 TUSHARE_API_URL 环境变量切换代理）
-TUSHARE_URL = os.getenv("TUSHARE_API_URL", "https://api.tushare.pro")
+# Tushare 数据源（2026-09-13 起走 core/tushare_relay.py：datahubco 基础接口 + promax 聚合接口，
+# 旧 gzcloud 代理 token 已失效；TUSHARE_URL/TUSHARE_TOKEN 不再使用）
+def _relay_items(api, fields="", **params):
+    """Tushare 中继查询 → (fields, items)。"""
+    import importlib
+    try:
+        relay = importlib.import_module("tushare_relay")
+    except ImportError:
+        relay = None
+        for _p in Path(__file__).resolve().parents:
+            if (_p / "core" / "tushare_relay.py").exists():
+                sys.path.insert(0, str(_p / "core"))
+                relay = importlib.import_module("tushare_relay")
+                break
+    if relay is None:
+        print("[Tushare] core/tushare_relay.py 未找到")
+        return [], []
+    try:
+        return relay.relay_items(api, fields=fields, **params)
+    except Exception as e:
+        print(f"[Tushare] 查询失败 {api}: {str(e)[:120]}")
+        return [], []
 
 # 输出文件
 OUTPUT_FILE = AKSHARE_DIR / "industry_keywords_auto.py"
@@ -39,46 +59,20 @@ STOCK_POOL_DB = WORKSPACE / "data" / "stock_pool.db"
 
 def get_stock_basic_by_industry():
     """
-    从 Tushare 获取股票基本信息，按 industry 字段分组
-    
+    从 Tushare 中继获取股票基本信息，按 industry 字段分组
+
+    2026-09-13: 由直连 TUSHARE_URL(gzcloud/官方) 改为 core/tushare_relay.py
+    （datahubco 基础接口优先 + promax 兜底）。
+
     Returns:
         {industry_name: [(ts_code, name), ...], ...}
     """
-    import urllib.request
-    import urllib.error
     import json
-    import ssl
-    
+
     try:
-        # 获取全部 A 股基本信息
-        payload = {
-            'api_name': 'stock_basic',
-            'token': TUSHARE_TOKEN,
-            'params': {
-                'exchange': '',
-                'list_status': 'L',
-                'fields': 'ts_code,symbol,name,area,industry,market'
-            }
-        }
-        
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            TUSHARE_URL,
-            data=data,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
-        
-        context = ssl.create_default_context()
-        with urllib.request.urlopen(req, context=context, timeout=30) as response:
-            response_data = response.read().decode('utf-8')
-        
-        api_response = json.loads(response_data)
-        
-        if api_response.get('code') == 0:
-            fields = api_response['data']['fields']
-            items = api_response['data']['items']
-            
+        fields, items = _relay_items(
+            'stock_basic', list_status='L', fields='ts_code,symbol,name,area,industry,market')
+        if items:
             # 按 industry 分组
             industry_stocks = {}
             for item in items:
@@ -86,16 +80,16 @@ def get_stock_basic_by_industry():
                 industry = row.get('industry', '')
                 ts_code = row.get('ts_code', '')
                 name = row.get('name', '')
-                
+
                 if industry and ts_code and name:
                     if industry not in industry_stocks:
                         industry_stocks[industry] = []
                     industry_stocks[industry].append((ts_code, name))
-            
+
             print(f"[Tushare] 获取到 {len(items)} 只股票，{len(industry_stocks)} 个行业")
             return industry_stocks
         else:
-            print(f"[Tushare] API 错误：{api_response.get('msg', '')}")
+            print("[Tushare] 无数据返回")
             return {}
     
     except Exception as e:

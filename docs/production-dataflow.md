@@ -46,7 +46,7 @@ auto_trade_*：09:35 / 09:53 / 10:35 / 13:35 / 14:30
 
 | # | 步骤 | 命令 | 输入 | 接口 | 产物 | 消费方 |
 |---|---|---|---|---|---|---|
-| 1 | concept_long | `build_concept_long.py 20250101` | 全市场日线 | gzcloud/tushare daily | `concept_long.json`（169 概念等权指数，meta.start=20250101；**增量**：end≥当日则 skip） | trend_confirm / heat_v2 / build_inst_flow |
+| 1 | concept_long | `build_concept_long.py 20250101` | 全市场日线 | Tushare 中继 daily（datahubco 优先） | `concept_long.json`（169 概念等权指数，meta.start=20250101；**增量**：end≥当日则 skip） | trend_confirm / heat_v2 / build_inst_flow |
 | 2 | ETF 份额流 | `build_etf_flow.py --date` | 12 主题↔宽基 ETF 映射 + 两融 | tushare `fund_share`/`fund_daily`/`margin` | `etf_share_flow.json` | **heat_v2**（因子之一） |
 | 3 | 机构通道 | `build_inst_flow.py --date` | 龙虎榜机构席位 + 北向持股 | tushare `top_inst`/`hk_hold` | `theme_inst_flow.json` | ⚠️ **无生产消费方**（详见 §4） |
 | 4 | 结构 GATE | `trend_confirm.py --hist concept_long --params … --as-of d --json trend_confirm_<d>_long.json` | concept_long(≤d) + trend_gate_params + THEME_CONCEPTS | 无（纯计算） | `trend_confirm_<d>_long.json`（逐主题 A/B/GATE） | mainline_gate |

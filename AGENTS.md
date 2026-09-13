@@ -48,7 +48,9 @@
 - 改造原因：19 个调度任务（自动交易最长 8 分钟、周度反思 12 分钟等）+ 监控线程与 HTTP 同进程共享 GIL，导致接口偶发 3-20s 卡顿；拆分后重活全部在 worker 进程。
 
 ### 数据源
-- Tushare：除实时行情外均可使用（日线、历史分钟线 `etf_mins` 等）；调用时注意控制请求频次（如 `time.sleep(0.6)`）避免限流。
+- Tushare（2026-09-13 起）：统一走 `core/tushare_relay.py` 中继 —— **datahubco**（`DATAHUBCO_API_KEY`，基础接口，RDS 快）优先、**promax**（`PROMAX_API_KEY`，聚合接口）兜底；
+  `get_tushare_pro()` 返回与 `tushare DataApi` 兼容的客户端（`pro.daily(...)` / `ts.pro_bar(api=pro, ...)` 均可用），按接口自动路由并内置退避重试/分页/降级。
+  旧 `TUSHARE_API_URL=https://ts.gyzcloud.top/api` 的 token 已失效（HTTP 401），仅作 `TUSHARE_SOURCE=legacy` 兜底；批量取数仍要控制频次（datahubco 单请求 ≤5000 行；promax 上游限流）。
 - 实时行情：Tushare 不提供实时报价，用东财接口取实时价（如 `push2his.eastmoney.com/api/qt/stock/kline/get`，参数 `klt=101&fqt=1`）；secid 规则：SH 代码 5/6 开头 → `1.x`，SZ → `0.x`；close 在返回 `klines` 每行的第 3 位。
 - ETF 池基础信息刷新：`POST /api/v1/etf/sync-tushare`（`backend/app/services/etf_pool_sync.py`，走 Tushare `etf_basic` 全量 upsert，保留东财行情快照）。
 

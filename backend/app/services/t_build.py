@@ -222,7 +222,7 @@ _daily_call_lock = threading.Lock()
 
 
 def _fetch_daily_bars_tushare(symbol: str, count: int = 40, as_of: Optional[str] = None) -> Optional[List[dict]]:
-    """Tushare daily 日线（走 .env TUSHARE_TOKEN + TUSHARE_API_URL 代理，规避东财限流）。
+    """Tushare daily 日线（走 datahubco/promax 中继，规避东财限流；2026-09-13 前为 gzcloud 代理）。
 
     返回 {date, open, close, high, low, vol, amount}，按日期升序（取最近 count 根且 ≤ as_of）；失败返回 None。
     as_of: YYYY-MM-DD 截止日（回测用，防前视；None = 实时今天）。
@@ -537,7 +537,7 @@ _SCAN_CACHE: Dict[str, Any] = {}
 
 
 def _fetch_all_a_symbols() -> List[Dict[str, str]]:
-    """全市场沪深 A 股列表（Tushare stock_basic，走 .env TUSHARE_TOKEN + TUSHARE_API_URL 代理）。
+    """全市场沪深 A 股列表（Tushare stock_basic，走 datahubco/promax 中继）。
 
     过滤：仅上市(L)、沪深交易所、排除 ST/*ST/退市/北交所/次新(<60 天)。
     失败返回 []（scan 退化为空，不阻断其他来源）。

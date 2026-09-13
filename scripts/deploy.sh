@@ -195,10 +195,17 @@ configure_env() {
             sed -i "s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=$DEEPSEEK_KEY|" .env
         fi
 
-        printf "${YELLOW}Tushare Token [必填]: ${NC}" > /dev/tty
-        read -r TUSHARE_KEY < /dev/tty
-        if [ -n "$TUSHARE_KEY" ]; then
-            sed -i "s|^TUSHARE_TOKEN=.*|TUSHARE_TOKEN=$TUSHARE_KEY|" .env
+        # 2026-09-13: 取数改走中继（datahubco 基础接口 + promax 聚合），旧 gzcloud TUSHARE_TOKEN 已废弃
+        printf "${YELLOW}Datahubco API Key [必填]: ${NC}" > /dev/tty
+        read -r DATAHUBCO_KEY < /dev/tty
+        if [ -n "$DATAHUBCO_KEY" ]; then
+            sed -i "s|^DATAHUBCO_API_KEY=.*|DATAHUBCO_API_KEY=$DATAHUBCO_KEY|" .env
+        fi
+
+        printf "${YELLOW}Promax API Key [必填]: ${NC}" > /dev/tty
+        read -r PROMAX_KEY < /dev/tty
+        if [ -n "$PROMAX_KEY" ]; then
+            sed -i "s|^PROMAX_API_KEY=.*|PROMAX_API_KEY=$PROMAX_KEY|" .env
         fi
 
         printf "${YELLOW}雪球 xq_a_token [必填]: ${NC}" > /dev/tty

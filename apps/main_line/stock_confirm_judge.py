@@ -1,20 +1,17 @@
 # -*- coding: utf-8 -*-
 """stock_confirm_judge.py — 个股级确认链(三层联动之三): fusion TOP3 主题全量概念成分 confirm_chain → 确认比例
-2026-09-07 数据层重构: 逐只 ts_code daily → 逐交易日(trade_cal) 全市场批量(gzcloud daily trade_date, 5548行/次 0.1s)
+2026-09-07 数据层重构: 逐只 ts_code daily → 逐交易日(trade_cal) 全市场批量(daily trade_date, 5548行/次 0.1s)
+2026-09-13: 数据源由 gzcloud 代理改为 datahubco(基础接口)+promax(聚合) 中继 (core/tushare_relay.py)
 70个交易日×0.1s≈1分钟拉全缓存, 取代 360+ 次逐只请求(原~30min); 概念优先级(光模块/CPO/算力/AI应用 先行)+全量概念。
 输出: data/stock_confirm_result.json (平铺 {概念:{theme,n,confirm,ratio,stocks}})
 """
 import json, os, sys, time
 import pandas as pd, numpy as np
-import urllib3, requests
-urllib3.disable_warnings()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from confirm_chain import confirm_chain
 
 DATA = os.environ.get("DATA_DIR", "/app/data")
 DB = os.path.join(DATA, "stock_pool.db")
-GZ = "https://ts.gyzcloud.top/api"
-GZ_TOKEN = os.getenv("TUSHARE_TOKEN", "a5c495cbe5e14729ad756381efe1fd72")
 MAX_STOCKS = int(os.getenv("STOCK_CONFIRM_MAX", "10"))
 MAX_CONCEPTS = int(os.getenv("STOCK_CONFIRM_CONCEPTS", "99"))
 PRIORITY_CONCEPTS = [x.strip() for x in os.getenv(
@@ -22,24 +19,35 @@ PRIORITY_CONCEPTS = [x.strip() for x in os.getenv(
     "光通信模块,CPO概念,算力概念,AI应用,人工智能,DeepSeek概念,液冷概念,数据中心,ChatGPT概念,AI智能体").split(",") if x.strip()]
 
 
+def _relay():
+    """加载 core/tushare_relay.py（datahubco + promax，替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
+
+
 def _gz(api, **p):
-    for _ in range(3):
-        try:
-            r = requests.post(GZ, json={"api_name": api, "token": GZ_TOKEN, "params": p, "fields": "ts_code,trade_date,close,vol"}, timeout=40)
-            it = ((r.json().get("data") or {}).get("items") or [])
-            if it:
-                return it
-        except Exception:
-            time.sleep(0.5)
-    return []
+    """Tushare 中继查询（返回 items 行列表，字段顺序 = fields 参数）。"""
+    try:
+        _fields, items = _relay().relay_items(api, fields="ts_code,trade_date,close,vol", **p)
+        return items or []
+    except Exception as e:
+        print("TUSHARE_FAIL", api, str(e)[:120], file=sys.stderr)
+        return []
 
 
 def _trade_days():
-    r = requests.post(GZ, json={"api_name": "trade_cal", "token": GZ_TOKEN,
-                                "params": {"exchange": "SSE", "start_date": "20260601",
-                                           "end_date": time.strftime("%Y%m%d")}, "fields": "cal_date,is_open"}, timeout=20)
-    it = ((r.json().get("data") or {}).get("items") or [])
-    days = sorted(x[0] for x in it if x[1] == 1)
+    _fields, items = _relay().relay_items(
+        "trade_cal", exchange="SSE", start_date="20260601",
+        end_date=time.strftime("%Y%m%d"), fields="cal_date,is_open")
+    days = sorted(x[0] for x in (items or []) if x[1] == 1)
     return days[-90:] if len(days) > 90 else days
 
 

@@ -88,8 +88,10 @@ def main():
     db = sys.argv[sys.argv.index("--db") + 1] if "--db" in sys.argv else DB
     sleep_sec = float(sys.argv[sys.argv.index("--sleep") + 1]) if "--sleep" in sys.argv else 0.2
     os.makedirs(os.path.dirname(db) or ".", exist_ok=True)
-    conn = sqlite3.connect(db, timeout=60)
+    conn = sqlite3.connect(db, timeout=120)
+    conn.execute("PRAGMA busy_timeout=120000")
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(DDL)
     conn.execute(IDX)
     conn.commit()
@@ -105,8 +107,15 @@ def main():
             if not rows:
                 print("[lb] %d/%d %s 无数据" % (i, len(todo), d8), flush=True)
                 continue
-            conn.executemany("INSERT OR REPLACE INTO mkt_bars_daily VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-            conn.commit()
+            for attempt in range(5):      # 多 worker 同写一个 SQLite 会偶发 database is locked → 退避重试
+                try:
+                    conn.executemany("INSERT OR REPLACE INTO mkt_bars_daily VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+                    conn.commit()
+                    break
+                except sqlite3.OperationalError as e:
+                    if "locked" not in str(e).lower() or attempt == 4:
+                        raise
+                    time.sleep(3 * (attempt + 1))
             tot += len(rows)
             if i % 5 == 0 or i == len(todo):
                 print("[lb] %d/%d %s 写入 %d（累计 %d）" % (i, len(todo), d8, len(rows), tot), flush=True)

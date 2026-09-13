@@ -39,7 +39,8 @@
 - tasks.yaml 本地 config/ 权威；改后同步服务器并 restart marcus-worker（跑长任务勿重启）。
 - 重启惯例：backend/app|jobs 改动→marcus-worker；backend/api|models→marcus-backend；apps/main_line 脚本→/app/apps bind mount 生效。
 - **长任务/后台坑**：经 ssh 启动的容器后台进程约 213s 被回收（非 OOM）→ 长拉取必须拆小批次+断点续跑（例：backfill_macro_state_history/backfill_minute_windows 均按日增量落盘）；docker exec -d 也不能豁免；worker 内存 512MB 上限，大任务临时 docker update --memory 1024m 跑完还原。
-- brze/官方源差异：官方 api.tushare.pro 不认代理 token；gyzcloud 代理不透传 stk_mins；分钟只能走 brze。
+- 分钟源差异：官方 api.tushare.pro 不认代理 token；旧 gyzcloud 代理不透传 stk_mins（且 token 2026-09-13 已失效）。
+  日线/基础接口现走 `core/tushare_relay.py`（datahubco + promax 中继）；历史分钟仍以 brze 为主，promax `stk_mins` 可作校验。
 
 ## 5. 下一步候选（详见 WOLF_TASKS_OVERVIEW §3）
 1. 更新快照落盘（本文件/Overview）后，等用户新指令或按排序：brze idx_mins 续 key→真上证复核 E03/E04。

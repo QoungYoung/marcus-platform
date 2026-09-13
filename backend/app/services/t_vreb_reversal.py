@@ -279,39 +279,32 @@ def confirmation_window_conditions(symbol: str, confirm_date: str,
 
 
 def fetch_daily_via_tushare(ts_code: str, start: str, end: str) -> List[Dict[str, Any]]:
-    """1.1 用 tushare 代理(tu/ts.gyzcloud.top) 拉个股日线，补本地截止后的缺失。
+    """1.1 拉个股日线（统一走 datahubco/promax 中继，见 core/tushare_relay.py），补本地截止后的缺失。
 
     返回 [{trade_date, open, high, low, close, pct_chg, vol}...]（best-effort，失败返回 []）。
     调用方可并入日线数据以刷新 VREB_STOCK_DAILY 覆盖范围。
     """
-    import json as _json, urllib.request as _ur, gzip as _gz
-    tok = os.environ.get("TUSHARE_TOKEN", "")
-    url = os.environ.get("TUSHARE_API_URL", "https://ts.gyzcloud.top/api")
-    if not tok:
-        return []
-    body = {"api_name": "daily", "token": tok,
-            "params": {"ts_code": ts_code, "start_date": start, "end_date": end}, "fields": ""}
     try:
-        req = _ur.Request(url, data=_json.dumps(body).encode(),
-                          headers={"Content-Type": "application/json", "Accept-Encoding": "identity"}, method="POST")
-        with _ur.urlopen(req, timeout=25) as resp:
-            raw = resp.read()
-        try:
-            d = _json.loads(raw.decode())
-        except Exception:
-            d = _json.loads(_gz.decompress(raw).decode())
-        if d.get("code") != 0:
-            return []
-        items = d.get("data", {}).get("items", [])
+        from app.core.trading._api_config import get_tushare_pro
+        df = get_tushare_pro().daily(ts_code=ts_code, start_date=start, end_date=end)
     except Exception:
         return []
-    out = []
-    for it in items:
-        # daily 字段序: ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount
-        if len(it) >= 10:
-            out.append({"trade_date": it[1], "open": float(it[2]), "high": float(it[3]),
-                        "low": float(it[4]), "close": float(it[5]), "pct_chg": float(it[8]),
-                        "vol": float(it[9])})
+    if df is None or len(df) == 0:
+        return []
+    out: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        try:
+            out.append({
+                "trade_date": str(row["trade_date"]),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "pct_chg": float(row.get("pct_chg") or 0.0),
+                "vol": float(row.get("vol") or 0.0),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
     return out
 
 

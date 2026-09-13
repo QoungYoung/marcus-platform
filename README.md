@@ -196,7 +196,9 @@ Docker 会启动 5 个容器：`postgres`、`backend`（纯 HTTP API）、`worke
 | 变量 | 用途 | 获取地址 |
 |------|------|----------|
 | `DEEPSEEK_API_KEY` | AI 对话、情绪分析 | [platform.deepseek.com](https://platform.deepseek.com) |
-| `TUSHARE_TOKEN` | A 股数据 | [tushare.pro](https://tushare.pro) |
+| `DATAHUBCO_API_KEY` | A 股基础数据（日线/交易日历/指数/基金…，datahubco 本地 RDS，快） | datahubco 客户密钥 |
+| `PROMAX_API_KEY` | 聚合接口（分钟线/资金流/概念/研报…） | promax 客户密钥（`pcd.mobcvb.cn/tushare/pro`） |
+| ~~`TUSHARE_TOKEN`~~ | **已废弃**（旧 gzcloud 代理 token 失效） | 仅在 `TUSHARE_SOURCE=legacy` 时兜底 |
 | `XUEQIU_TOKEN` | 雪球实时行情 | 浏览器登录雪球后获取 Cookie |
 | `SKIP_EASTMONEY` | 云服务器被东财限流时设为 `true`，跳过实时接口走 Tushare | 可选 |
 

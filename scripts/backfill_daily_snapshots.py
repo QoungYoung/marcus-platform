@@ -35,15 +35,9 @@ settings = get_settings()
 
 
 def get_tushare_pro():
-    """获取 Tushare pro 实例"""
-    token = os.getenv("TUSHARE_TOKEN", "")
-    if not token:
-        raise EnvironmentError("TUSHARE_TOKEN 未配置")
-    pro = ts.pro_api(token)
-    api_url = os.getenv("TUSHARE_API_URL", "")
-    if api_url:
-        pro._DataApi__http_url = api_url
-    return pro
+    """获取 Tushare 客户端（2026-09-13 起走 datahubco+promax 中继，替代已失效的 gzcloud 代理）。"""
+    from app.core.trading._api_config import get_tushare_pro as _gtp
+    return _gtp()
 
 
 def get_all_trade_dates(db) -> list:

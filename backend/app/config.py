@@ -30,8 +30,20 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_HOST: str = "api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-chat"
+    # Tushare 数据源（2026-09-13 起）：datahubco 基础接口 + promax 聚合接口
+    # 旧 gzcloud 代理 token 已失效，TUSHARE_* 仅作 legacy 兜底（TUSHARE_SOURCE=legacy）
+    DATAHUBCO_API_URL: str = "http://datahubco.com/app-api/openapi/v1/tushare"
+    DATAHUBCO_API_KEY: str = ""
+    PROMAX_URL: str = "https://pcd.mobcvb.cn/tushare/pro"
+    PROMAX_API_KEY: str = ""
+    TUSHARE_SOURCE: str = "auto"          # auto / datahubco / promax / legacy
+    TUSHARE_RELAY_TIMEOUT: int = 30
+    TUSHARE_RELAY_ATTEMPTS: int = 3
+    TUSHARE_RELAY_PAGE_SIZE: int = 5000
+    TUSHARE_RELAY_CACHE_TTL: int = 300
+    # deprecated: gzcloud 代理（token 已失效）
     TUSHARE_TOKEN: str = ""
-    TUSHARE_API_URL: str = ""  # 代理地址, 如 https://ts.gyzcloud.top/api
+    TUSHARE_API_URL: str = ""
     XUEQIU_TOKEN: str = ""
 
     # QQ Bot
@@ -138,10 +150,26 @@ class Settings(BaseSettings):
         return self.DEEPSEEK_API_KEY
 
     def get_tushare_token(self) -> str:
-        """Get Tushare token, raising error if not set."""
-        if not self.TUSHARE_TOKEN:
-            raise EnvironmentError("TUSHARE_TOKEN must be set in environment or .env file")
-        return self.TUSHARE_TOKEN
+        """[deprecated] 旧 gzcloud Tushare token。
+
+        2026-09-13 起取数走 datahubco/promax 中继（X-API-Key），不再需要该 token。
+        为兼容历史代码里 `if not token: return` 的守卫写法：当旧 token 为空但中继源已配置时，
+        返回中继凭据占位符（仅用于真值判断，不会被当作 Tushare token 使用）。
+        """
+        if self.TUSHARE_TOKEN:
+            return self.TUSHARE_TOKEN
+        if self.DATAHUBCO_API_KEY or self.PROMAX_API_KEY:
+            return "<relay:datahubco+promax>"
+        raise EnvironmentError(
+            "未配置 Tushare 数据源：请在 .env 配置 DATAHUBCO_API_KEY 和/或 PROMAX_API_KEY"
+        )
+
+    def has_tushare_source(self) -> bool:
+        """是否配置了可用的 Tushare 数据源（datahubco / promax / legacy 任一）。"""
+        return bool(
+            (self.DATAHUBCO_API_KEY or self.PROMAX_API_KEY)
+            or (self.TUSHARE_API_URL and self.TUSHARE_TOKEN)
+        )
 
     def get_xueqiu_token(self) -> str:
         """Get Xueqiu token, raising error if not set."""

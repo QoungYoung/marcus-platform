@@ -18,6 +18,27 @@ sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "data")
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 
+def _relay():
+    """加载 core/tushare_relay.py（2026-09-13 起 datahubco 基础接口 + promax 聚合接口，
+    替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib, sys
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for _p in pathlib.Path(__file__).resolve().parents:
+        if (_p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(_p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
+
+
+def _ts_daily_rows(ts_code, start_date, end_date, fields="ts_code,trade_date,close"):
+    """Tushare 中继 daily 查询（返回 items 行列表，字段序 = fields）。"""
+    _f, items = _relay().relay_items("daily", ts_code=ts_code, start_date=start_date,
+                                     end_date=end_date, fields=fields)
+    return items or []
+
 def load(name):
     try:
         return json.load(open(os.path.join(DATA, name), encoding="utf-8"))
@@ -91,17 +112,7 @@ def _http(path, payload):
 
 def _latest_close(sym):
     import urllib.request, gzip
-    body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
-            "params": {"ts_code": sym, "start_date": "20260101", "end_date": "20260901"},
-            "fields": "ts_code,trade_date,close"}
-    req = urllib.request.Request(os.getenv("TUSHARE_API_URL", ""), data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-    raw = urllib.request.urlopen(req, timeout=30).read()
-    try:
-        d = json.loads(raw.decode())
-    except UnicodeDecodeError:
-        d = json.loads(gzip.decompress(raw).decode())
-    rows = d.get("data", {}).get("items") or []
+    rows = _ts_daily_rows(sym, "20260101", "20260901")
     return float(rows[-1][2]) if rows else 0.0
 
 def _chain_in_mainline(chain, ml):
@@ -119,17 +130,7 @@ def _q_mid(ts):
     sys.path.insert(0, "/app/apps/main_line")
     import position_class as pc
     _throttle2()
-    body = {"api_name": "daily", "token": os.getenv("TUSHARE_TOKEN", ""),
-            "params": {"ts_code": ts, "start_date": "20250101", "end_date": "20260901"},
-            "fields": "ts_code,trade_date,close"}
-    req = urllib.request.Request(os.getenv("TUSHARE_API_URL", ""), data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-    raw = urllib.request.urlopen(req, timeout=30).read()
-    try:
-        d = json.loads(raw.decode())
-    except UnicodeDecodeError:
-        import gzip; d = json.loads(gzip.decompress(raw).decode())
-    rows = d.get("data", {}).get("items") or []
+    rows = _ts_daily_rows(ts, "20250101", "20260901")
     if not rows:
         return None
     idx = pd.to_datetime([str(x[1]) for x in rows], format="%Y%m%d")

@@ -9,7 +9,7 @@
 ## 0. 全景
 
 ```
-[数据层]  gzcloud(Tushare代理) / brze(分钟) / 腾讯·新浪(实时报价) / news.db / 研报(catalyst)
+[数据层]  datahubco(Tushare基础接口,RDS快) + promax(Tushare聚合) / brze(分钟) / 腾讯·新浪(实时报价) / news.db / 研报(catalyst)
    │
    ├─(收盘后 18:45) 主线确认每日更新 mainline_gate_daily
    │      concept_long → etf_flow → inst_flow → trend_confirm(结构GATE) → heat_v2(资金热度) → mainline_gate → 注入 main_line_state
@@ -80,7 +80,9 @@
 
 | 源 | 用途 | 入口 |
 |---|---|---|
-| gzcloud（ts.gyzcloud.top，Tushare 兼容代理） | 日线 daily / daily_basic / moneyflow_dc / top_inst / margin / fund_share | wolf_confirm_pick.gz()、各 build_*.py |
+| **datahubco**（datahubco.com，GET + `X-API-Key`） | 基础接口（RDS 本地，快）：daily / daily_basic / trade_cal / adj_factor / index_daily / fund_daily / moneyflow / stk_limit / stock_basic …（80+ 接口） | `core/tushare_relay.py`（`get_tushare_pro()`）、`wolf_confirm_pick.gz()`、各 build_*.py |
+| **promax**（pcd.mobcvb.cn/tushare/pro，GET + `X-API-Key`） | 聚合接口 298 个：stk_mins / rt_* / moneyflow_ind_dc / dc_* / ths_* / sw_daily / pro_bar / research_report …（**抖动 502/503/504 常见，中继内置退避重试**） | 同上（中继按接口自动路由，datahubco 失败自动降级 promax） |
+| ~~gzcloud（ts.gyzcloud.top）~~ | **已废弃**：token 失效（HTTP 401），2026-09-13 起全部路径改走上面两个源 | — |
 | brze（tu.brze.top） | **历史分钟** stk_mins(5min/1min，可回溯 2024+)、实时 rt_k/rt_min | app/services/t_data_sources.fetch_brze_stk_mins() |
 | 腾讯 qt | 实时报价（做T/触发取价） | fetch_tencent_quote() |
 | 新浪 | 5min（近 ~25 交易日）、指数快照 | fetch_sina_minline() |

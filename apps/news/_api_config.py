@@ -31,24 +31,30 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_HOST = os.getenv("DEEPSEEK_API_HOST", "api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
-# ── Tushare API ───────────────────────────────────────────
+# ── Tushare 数据源（中继） ────────────────────────────────
+# 2026-09-13: gzcloud 代理 token 已失效 → 统一走 core/tushare_relay.py
+# （datahubco 基础接口 + promax 聚合接口，GET + X-API-Key）
 TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+
+
+def _relay_module():
+    import importlib, sys
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for p in Path(__file__).resolve().parents:
+        if (p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
 
 
 def get_tushare_pro():
     """
-    统一获取 Tushare pro_api 实例（Token 从环境变量 TUSHARE_TOKEN 读取）。
+    统一获取 Tushare 数据客户端（datahubco + promax 中继，替代已失效的 gzcloud 代理）。
 
-    所有调用 ts.pro_api() 的地方都应改用此函数，确保 Token 统一从 .env 控制。
-    支持 TUSHARE_API_URL 环境变量切换代理地址。
+    返回对象与 `tushare.pro.client.DataApi` 兼容（pro.daily(...) / pro.query(...)）。
+    无可用数据源时抛 EnvironmentError。
     """
-    import tushare as ts
-
-    token = os.getenv("TUSHARE_TOKEN", "")
-    if not token:
-        raise EnvironmentError("TUSHARE_TOKEN 未在环境变量或 .env 中配置")
-    pro = ts.pro_api(token)
-    api_url = os.getenv("TUSHARE_API_URL", "")
-    if api_url:
-        pro._DataApi__http_url = api_url
-    return pro
+    return _relay_module().get_relay()

@@ -252,13 +252,13 @@ class TestResolveTradeDaysFallback:
         """`resolve_trade_days` 降级分支原来用 %Y-%m-%d 解析 YYYYMMDD 入参 → 两个日历源
         都失败时抛 ValueError（2026-09-11 修）。"""
         from app.services import t_backtest_data as T
-        monkeypatch.setattr(T, "_fetch_trade_cal_gyzcloud", lambda a, b: [])
+        monkeypatch.setattr(T, "_fetch_trade_cal_relay", lambda a, b: [])
         monkeypatch.setattr(T, "_fetch_trade_cal_brze", lambda a, b: [])
         ds = T.resolve_trade_days("20260907", "20260911")     # 周一~周五
         assert ds == ["20260907", "20260908", "20260909", "20260910", "20260911"]
 
     def test_fallback_accepts_dashed(self, monkeypatch):
         from app.services import t_backtest_data as T
-        monkeypatch.setattr(T, "_fetch_trade_cal_gyzcloud", lambda a, b: [])
+        monkeypatch.setattr(T, "_fetch_trade_cal_relay", lambda a, b: [])
         monkeypatch.setattr(T, "_fetch_trade_cal_brze", lambda a, b: [])
         assert T.resolve_trade_days("2026-09-12", "2026-09-13") == []   # 周末

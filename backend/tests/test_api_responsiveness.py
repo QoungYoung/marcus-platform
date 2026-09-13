@@ -107,10 +107,19 @@ def test_arkvol_timeout_default_is_10():
 
 
 def test_tushare_pro_api_passes_timeout():
+    """D3：取数必须有界超时。
+
+    2026-09-13 起 `get_tushare_pro()` 返回 core/tushare_relay.py 的中继客户端
+    （datahubco + promax，替代已失效的 gzcloud 代理），超时由 `TUSHARE_RELAY_TIMEOUT`
+    （默认 30s）+ `TUSHARE_RELAY_ATTEMPTS`（默认 3 次，退避重试）共同界定。
+    """
     from app.core.trading import _api_config
 
+    assert _api_config.TUSHARE_RELAY_TIMEOUT > 0
     src = inspect.getsource(_api_config.get_tushare_pro)
-    assert "timeout=" in src, "get_tushare_pro 未传入有界 timeout"
+    assert "get_relay" in src, "get_tushare_pro 未走统一中继客户端"
+    pro = _api_config.get_tushare_pro()
+    assert 0 < pro.timeout <= 60, "中继客户端缺少有界超时"
 
 
 def test_xueqiu_get_stock_quote_has_timeout_param():

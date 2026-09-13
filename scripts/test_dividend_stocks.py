@@ -1,10 +1,28 @@
 # -*- coding: utf-8 -*-
 """Get 红利股/红利破净股 leaders with market cap on 7/20."""
 import tushare as ts
+import os, sys
 import io
 
-pro = ts.pro_api('a5c495cbe5e14729ad756381efe1fd72')
-pro._DataApi__http_url = 'https://ts.gyzcloud.top/api'
+def _relay():
+    """加载 core/tushare_relay.py（datahubco + promax，替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
+
+
+def _pro():
+    """Tushare 中继客户端（tushare DataApi 兼容，pro.daily(...) → DataFrame）。"""
+    return _relay().get_relay()
+
+pro = _pro()
 
 # Get both concepts
 for concept_code, concept_name in [('BK1635.DC', '红利股'), ('BK1636.DC', '红利破净股')]:

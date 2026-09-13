@@ -9,6 +9,10 @@
     python jobs/backfill_market_bars_promax.py --start 20250101 --end 20251231 [--sleep 1.0]
     python jobs/backfill_market_bars_promax.py --coverage
 特性：①已存在的交易日自动跳过（断点续跑）；②502/503/504/超时退避重试；③每天一次 `/daily`（必要时补 `/daily_basic`）。
+
+注意（2026-09-13 起）：日常取数已统一走 `core/tushare_relay.py`（**datahubco 基础接口优先**(RDS 快) +
+promax 兜底），`jobs/backfill_market_bars.py` 即为该路径；本脚本保留纯 promax 通道，仅在中继不可用
+或需要绕开 datahubco 时使用。
 """
 import os
 import sys

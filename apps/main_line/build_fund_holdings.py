@@ -1,17 +1,32 @@
 # -*- coding: utf-8 -*-
 """build_fund_holdings.py — 真实公募持仓(Q2 20260630)回填 postgres fund_portfolio_holdings
-数据源: gyzcloud TUSHARE_API_URL fund_share(选规模topN) + fund_portfolio(每基金全部季度, 取 end_date=20260630)
+数据源: Tushare 中继(2026-09-13 起 datahubco 基础接口 + promax 聚合接口, 替代已失效的 gzcloud 代理)
+        fund_share(选规模topN) + fund_portfolio(每基金全部季度, 取 end_date=20260630)
 用法: python -u apps/main_line/build_fund_holdings.py [top_n] [end_date]
 """
-import os, sys, json, urllib.request, gzip, time
+import os, sys, json, time
 try:
     import psycopg2
 except Exception as e:
     print("ERR psycopg2:", e); sys.exit(1)
 
-TOKEN = os.getenv("TUSHARE_TOKEN", "")
-URL = os.getenv("TUSHARE_API_URL", "https://ts.gyzcloud.top/api")
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+
+
+def _relay():
+    """加载 core/tushare_relay.py（datahubco + promax，替代已失效的 gzcloud 代理）。"""
+    import importlib, pathlib
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError:
+        pass
+    for p in pathlib.Path(__file__).resolve().parents:
+        if (p / "core" / "tushare_relay.py").exists():
+            sys.path.insert(0, str(p / "core"))
+            return importlib.import_module("tushare_relay")
+    raise ImportError("core/tushare_relay.py 未找到")
+
+
 def _prev_quarter_end(d=None):
     from datetime import date as _date
     d = d or _date.today()
@@ -33,18 +48,9 @@ def _latest_share_date():
     return "20260827"
 
 def call(api, params, fields):
-    body = {"api_name": api, "token": TOKEN, "params": params, "fields": fields}
-    req = urllib.request.Request(URL, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read()
-    try:
-        d = json.loads(raw.decode())
-    except UnicodeDecodeError:
-        d = json.loads(gzip.decompress(raw).decode())
-    if d.get("code") != 0:
-        raise RuntimeError("%s %s" % (api, d.get("msg")))
-    return d.get("data", {}).get("items") or []
+    """Tushare 中继查询（返回 items 行列表）。"""
+    _fields, items = _relay().relay_items(api, fields=fields, **(params or {}))
+    return items or []
 
 def main():
     top_n = int(sys.argv[1]) if len(sys.argv) > 1 else 60

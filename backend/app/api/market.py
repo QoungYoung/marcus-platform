@@ -424,7 +424,7 @@ def _safe_float(v):
 
 
 def _get_tushare_pro():
-    """统一获取 Tushare pro_api 实例（走主代理 ts.gyzcloud.top）"""
+    """统一获取 Tushare 数据客户端（datahubco 基础接口 + promax 聚合中继，见 core/tushare_relay.py）"""
     from app.core.trading._api_config import get_tushare_pro as _gtp
     return _gtp()
 
