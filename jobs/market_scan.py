@@ -2651,24 +2651,39 @@ def _read_wolf_context(indices=None) -> str:
         conf_themes = list(_ms.get("pool") or [])
         if not conf_themes and ml2.get("main_line"):
             conf_themes = [ml2["main_line"]]
-    if sc and conf_themes:
-        items = []
+
+    def _confirm_items(themes):
+        """themes=None → 不过滤（取确认源全部）。"""
+        out = []
         for cname, v in sc.items():
             if not isinstance(v, dict) or "confirm" not in v:
                 continue
-            if v.get("theme") not in conf_themes:
+            if themes and v.get("theme") not in themes:
                 continue
-            n = v.get("n", 0) or 0
-            c = v.get("confirm", 0) or 0
-            items.append(f"{cname} {c}/{n}({int(100*c/max(n,1))}%)")
+            out.append((cname, v.get("confirm", 0) or 0, v.get("n", 0) or 0))
+        return out
+
+    if sc:
+        items = _confirm_items(conf_themes)
+        scope = "、".join(conf_themes)
+        if not items and conf_themes:
+            # 确认源的主题口径与当前主线池不重叠时，**不要静默丢整段**——
+            # 退化为展示确认源现有全部子概念，并在标题里写明原因（2026-09-13 实测：
+            # stock_confirm_result 覆盖 稳增长/基建·AI/算力/科技·农业，而主线池是 半导体/芯片·新能源/电池）
+            items = _confirm_items(None)
+            scope = (scope + "；该池在确认源中无对应子概念，下列为确认源现有全部 "
+                     + str(len(items)) + " 项，请检查 stock_confirm_refresh 的主题口径")
         if items:
-            ok_n = sum(1 for it in items if not it.split(" ")[1].startswith("0/"))
+            shown = items[:20]
+            txt = [f"{cn} {c}/{n}({int(100*c/max(n,1))}%)" for cn, c, n in shown]
+            if len(items) > len(shown):
+                txt.append(f"…共 {len(items)} 项")
+            ok_n = sum(1 for _cn, c, _n in items if c > 0)
             note = (f"主线内 {ok_n}/{len(items)} 子概念有个股突破站稳"
                     if ok_n else
-                    "主线方向以方向层池判定为准；成分多在回调/止跌中＝买点未触发≠主线失败，"
+                    "成分多在回调/止跌中＝买点未触发≠主线失败，"
                     "用已确认主线回调低吸模式(254 dip_prev_low)等触发，不否定主线")
-            parts.append("- **主线个股确认**（" + "、".join(conf_themes) + " 全子概念）："
-                         + "；".join(items) + " —— " + note)
+            parts.append("- **主线个股确认**（" + scope + "）：" + "；".join(txt) + " —— " + note)
 
     # 5. 做T提示（指数盘中回撤 -> 正T窗口；盘中精确信号由 t_monitor 30s 监控）
     if indices:
