@@ -92,6 +92,10 @@ def main():
     fwd5 = f5.sub(f5m, axis=0)
     amp20 = amp.rolling(20, min_periods=10).mean()
     volr = amt.rolling(5).sum() / (amt.rolling(20).mean() * 5).replace(0, np.nan)
+    # 持续性（语料 2026-08-11「以方向是否有持续性判断行情」/08-06「缩量…这能有什么持续性」）：
+    # = 近 5 日里主题跑赢全市场（逐日超额 > 0）的天数
+    rel = pc.sub(mk, axis=0)
+    pos5 = (rel > 0).rolling(5).sum()
     idx = pc.index.tolist()
 
     dmap = {r['dir_text']: r['theme'] for r in db.execute(
@@ -123,6 +127,7 @@ def main():
         pool_top3[d] = pool[:3]
         a20 = {t: v for t, v in ((t, amp20.iloc[i].get(t)) for t in pool) if v is not None and v == v}
         vr = {t: v for t, v in ((t, volr.iloc[i].get(t)) for t in pool) if v is not None and v == v}
+        p5 = {t: v for t, v in ((t, pos5.iloc[i].get(t)) for t in pool) if v is not None and v == v}
         if len(a20) >= 6:
             for rk, t in enumerate(sorted(a20, key=lambda x: -a20[x])):
                 amp_rank_sum[t] += rk
@@ -130,18 +135,26 @@ def main():
 
         def pick(mode):
             cand = list(pool)
+            # W7/W8：语料支撑的**方向黑名单**——他明确不做 A 股医药
+            # （2026-04-03「我不做大A医药股 只做港药套利」／04-17「大A的医药个股鬼故事太多了 跑还出不去」）
+            if mode in ('W7', 'W8'):
+                cand = [t for t in cand if t != '医药'] or cand
             if mode in ('W1', 'W4') and len(a20) >= 3:
                 bad = {t for t, _ in sorted(a20.items(), key=lambda kv: kv[1])[:max(1, len(a20) // 4)]}
                 cand = [t for t in cand if t not in bad] or cand
             if mode == 'W2':
                 cand = [t for t in cand if a20.get(t, 0.0) >= 0.02] or cand
-            if mode in ('W3', 'W4') and len(vr) >= 3:
+            if mode == 'W8':
+                pass
+            if mode in ('W5', 'W6'):
+                cand = [t for t in cand if p5.get(t, 0) >= 3] or cand          # 持续性：近5日里 ≥3 天跑赢
+            if mode in ('W3', 'W4', 'W6') and len(vr) >= 3:
                 bad = {t for t, _ in sorted(vr.items(), key=lambda kv: kv[1])[:max(1, len(vr) // 4)]}
                 cand = [t for t in cand if t not in bad] or cand
             return cand[0] if cand else None
 
         fs = fwd5.iloc[i]
-        for mode in ('V0', 'W1', 'W2', 'W3', 'W4'):
+        for mode in ('V0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8'):
             t = pick(mode)
             if not t:
                 continue
@@ -152,7 +165,8 @@ def main():
             picks_by_theme[mode][t] += 1
 
     names = {'V0': 'V0 基线（现状 D1）', 'W1': 'W1 剔除低波动1/4', 'W2': 'W2 剔除日均波动<2%',
-             'W3': 'W3 剔除缩量1/4', 'W4': 'W4 波动+量能'}
+             'W3': 'W3 剔除缩量1/4', 'W4': 'W4 波动+量能', 'W5': 'W5 持续性(近5日≥3天跑赢)',
+             'W6': 'W6 波动+量能+持续性', 'W7': 'W7 排除医药(语料黑名单)', 'W8': 'W8 波动+量能+持续性+排除医药'}
     out = {'diagnostics': {'amp_rank_avg': {t: round(amp_rank_sum[t] / max(1, amp_rank_n[t]), 2)
                                             for t in amp_rank_n},
                            'amp20_avg_pct': {t: round(float(amp20[t].mean()) * 100, 2) for t in amp20.columns}},
@@ -165,7 +179,7 @@ def main():
     print('\n【验收】所选方向后 5 日超额', flush=True)
     print('| 变体 | n | 均值 | t | 胜率 | 他落top1 | 他落top3 | 农业+医药选中 |')
     print('|---|---|---|---|---|---|---|---|')
-    for mode in ('V0', 'W1', 'W2', 'W3', 'W4'):
+    for mode in ('V0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8'):
         picks = variants[mode]
         s = stat([f for _, _, f in picks])
         hd = [d for d, _, _ in picks if his.get(d)]
@@ -194,8 +208,30 @@ def main():
     out['v0_agri_med_vs_rest'] = {'agri_med': stat(agri), 'rest': stat(rest)}
     print('\n农业+医药合计 %s ｜ 其余 %s' % (out['v0_agri_med_vs_rest']['agri_med'],
                                             out['v0_agri_med_vs_rest']['rest']), flush=True)
+    # 分段（H1/H2）稳定性检验：均值增益如果只出现在一半，就是噪声
+    mid = idx[len(idx) // 2 + 12]
+    print('\n【分段稳定性】H1 = %s…%s ｜ H2 = %s…%s' % (idx[0], mid, mid, idx[-1]), flush=True)
+    print('| 变体 | H1 均值 | H1 t | H2 均值 | H2 t | 两段都优于基线? |', flush=True)
+    print('|---|---|---|---|---|---|', flush=True)
+    half = {}
+    for mode in ('V0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8'):
+        h1 = stat([f for d, _, f in variants[mode] if d <= mid])
+        h2 = stat([f for d, _, f in variants[mode] if d > mid])
+        half[mode] = {'H1': h1, 'H2': h2}
+        print('| %s | %s | %s | %s | %s | — |' % (names[mode], h1.get('mean'), h1.get('t'),
+                                                   h2.get('mean'), h2.get('t')), flush=True)
+    b1 = half['V0']['H1'].get('mean') or 0
+    b2 = half['V0']['H2'].get('mean') or 0
+    print('\n  基线 V0：H1 %s / H2 %s' % (b1, b2), flush=True)
+    for mode in ('W1', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8'):
+        o1 = (half[mode]['H1'].get('mean') or 0) > b1
+        o2 = (half[mode]['H2'].get('mean') or 0) > b2
+        print('  %-4s H1 %s、H2 %s → %s' % (mode, '优' if o1 else '劣', '优' if o2 else '劣',
+                                            '两段都优' if (o1 and o2) else '**不是两段都优**'), flush=True)
+    out['split_half'] = half
+
     print('\n【各变体选中分布】', flush=True)
-    for mode in ('V0', 'W1', 'W2', 'W3', 'W4'):
+    for mode in ('V0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8'):
         print('   %-4s %s' % (mode, '、'.join('%s(%d)' % (t, n)
                                              for t, n in picks_by_theme[mode].most_common(6))), flush=True)
     try:
