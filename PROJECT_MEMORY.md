@@ -2384,6 +2384,17 @@ XLS 2025-26 独有：点位-仓位对照表（"3888 收盘没站上 50%、3850 �
 【覆盖范围】backend/app 全部 `get_tushare_pro()` 路径（indicator/_crowd_space_reason、t_trend_break、t_vrebounce、trend_breakout_monitor、support_resistance、golden_pit_tech_status、mkt_bars、industry_leaderboard、wolf_* …）；直连 gzcloud 的脚本全部改造（apps/main_line 9 个、jobs 3 个、scripts 7 个、apps/news 3 个、data/probe_*.py 2 个）。`.env`/`.env.example`/`config.py`/`deploy.sh` 同步；旧 TUSHARE_TOKEN/TUSHARE_API_URL 降级为 `TUSHARE_SOURCE=legacy` 兜底。**新增 `backend/tests/test_tushare_relay.py`（36 用例，全离线）**。
 
 【加速实测】moneyflow_dc 12.2s→0.4s；etf_basic 22.9s→0.7s；fund_share 14.8s(且返回超范围 2212 行)→0.5s(9 行，范围正确)；moneyflow_ind_dc 4.2s→1.6s；trend_breakout_monitor._detect_breakout 41.9s→1.2s。
+- [2026-09-13 13:07] [工作记录] A步完成：2025 跨期验证通过——结构池随时代改池(2025机器人46天/2026半导体第一)、T6 两年相对超额一致(+0.30pp/+0.35pp)；数据本地SQLite+COPY入库(455天/247万行) — **A 步（跨期验证）已完成，结论：结构池通过验证。**
+
+**一、数据落地**：promax 回填 2025 全年（含 2024-11 起预热供 20 日窗口）→ **本地 SQLite** `data/mkt_bars_local.db`（286 个交易日/154 万行，`jobs/backfill_market_bars_local.py`，多 worker 按缺口切块，**6 worker 并行实测 ~8–10 天/分钟**，单 worker ~24s/天——瓶颈是 promax 上游而非本机）→ 一次 `COPY`（服务端 COPY 到临时表 + `ON CONFLICT` upsert，53s）灌入生产 PG。现 `mkt_bars_daily` = **455 天 / 247 万行 / 2024-11-01→2026-09-11**，其中 2025 有 286 天。**注意坑**：①`\copy` 不能与 SQL 混在同一条 `psql -c` 里（须用服务端 `COPY`）；②promax `trade_cal` 单次区间 >366 天报 `date_range_too_large`，须按年分页；③多个 worker 同写一个 SQLite 会偶发 `database is locked`（已加 busy_timeout=120s + 退避重试）。
+
+**二、池随时代改池 = 证实**（关键否定"它只是科技别名"）：结构池（量能占比 top3）**2025-02~08 = {AI/算力、新能源、机器人}**（与他 2025 主线机器人一致）→ **2025-09 半导体进入 top3** → 2025-10~12 = {新能源、AI、半导体} → **2026 = {半导体、AI、新能源}**。T6 选中分布：**2025 = 机器人 46 天**、半导体 43、AI 39、新能源 38；2026 = 半导体 40、农业 23。→ 机器人 2025 被选中 46 天、2026 几近消失；半导体 2025Q4 才进池、2026 升第一。
+
+**三、收益跨期一致**：**2025**：P0 全主题对照 +0.041%(t=0.39)、S1 量能top3 +0.198%(t=2.08)、**T6(量能top3∩r5>0) +0.338%(t=3.01, 胜率 60.2%, n=166, H1 +0.155/H2 +0.464)**；**2026**：对照 +0.683%、T6 +1.029%(t=3.37, H1 +1.05/H2 +1.00)。**相对对照的超额：2025 +0.30pp / 2026 +0.35pp —— 两年一致**，且两年 H1/H2 均为正。
+
+**四、边界（勿当完成事实）**：①2025 无 `gate` 产物（`daily_artifacts` 只有 2026），故"gate 资格闸必需"只在 2026 上验证过；②主题成分用当前概念表 → 对 2025 有轻度幸存者偏差；③2025 行 `total_mv`/`turnover_rate` 为 NULL（未回填 daily_basic）；④回填走 promax（gzcloud token 仍失效，用户另会话处理中），`/daily` 偶发 502/503/504（已重试）。
+
+**五、下一步**：池层按**影子模式**接入 `wolf_mainline_select.py`（`WOLF_MS_POOL=1` 默认关、`WOLF_MS_POOL_MODE=vol|his|both`、N/K 可配；建议起手 N=10/K=3），先只记录池/候选/选中、不影响决策；待用户确认后再谈接线。分析脚本 `jobs/eval_structural_pool_local.py`（SQLite+pandas 本地跑）。文档 `docs/wolf-structural-pool.md` §七。
 
 ## 经验教训 Lessons Learned
 

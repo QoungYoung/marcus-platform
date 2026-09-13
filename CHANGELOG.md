@@ -5,6 +5,14 @@
 
 ---
 
+## [1.7.0] — 2026-09-13（数据源改造：gzcloud 代理 → datahubco + promax 统一中继）
+
+- **背景**：旧 Tushare 代理 `TUSHARE_API_URL=https://ts.gyzcloud.top/api` 的 token 已失效（HTTP 401「Token无效或已过期」），所有走 `get_tushare_pro()` 的路径（选股个股空间豁免 / regime L1 / 日线回填 / 分钟线）全部取不到数据，其中 `indicator._crowd_space_reason` 因取不到日线而 **fail-closed 恒硬拦**。
+- **新增 `core/tushare_relay.py`（唯一取数入口）**：与 `tushare.pro.client.DataApi` 兼容（`pro.daily(...)` / `pro.query(...)` / `ts.pro_bar(api=pro, ...)`，返回 DataFrame），按接口自动路由 **datahubco**（`DATAHUBCO_API_KEY`，80+ 基础接口命中本地 RDS，毫秒级）与 **promax**（`PROMAX_API_KEY`，298 聚合接口，抖动 502/503/504 自动退避重试并降级另一源）；内置 datahubco 自动补 `limit` + 翻页（无 limit 会 413）、**日期跨度超限自动分段**（两家网关 >~1 年直接 400）、`pro_bar` 由 daily+adj_factor 本地合成（不走 promax 抖动的 `/pro_bar`）、参考数据短 TTL 缓存、失败降级记忆（仅对「接口不支持」类错误）。
+- **切换范围**：backend 全部 `get_tushare_pro()` 路径（`_api_config` ×2、`config.py`、`indicator`、`t_trend_break`、`t_vrebounce`、`trend_breakout_monitor`、`support_resistance`、`golden_pit_tech_status`、`mkt_bars`、`industry_leaderboard`、`wolf_*` …）+ 直连 gzcloud 的脚本（apps/main_line 9、apps/news 3、jobs 3、scripts 7、data/probe_* 2）；`.env`/`.env.example`/`deploy.sh`/文档同步；旧 `TUSHARE_TOKEN`/`TUSHARE_API_URL` 降级为 `TUSHARE_SOURCE=legacy` 兜底。
+- **新增测试** `backend/tests/test_tushare_relay.py`（36 用例，全离线：路由/分页/分段/参数归一/双源降级/降级记忆/pro_bar/窗口复用）。
+- **实测收益**：全市场 daily 5550 行 0.4s、daily_basic 0.5s；`_crowd_space_reason` 由「恒空 + 硬拦」恢复为 1.3s 返回真实结论；`trend_breakout_monitor` 41.9s → 1.2s；`moneyflow_dc` 12.2s → 0.4s；`etf_basic` 22.9s → 0.7s；`fund_share` 由 promax 的超范围 2212 行修正为 9 行。
+
 ## [1.6.0] — 2026-09-02（做T体系落地：狼大做T信号 + 只读动态离场监控）
 
 - **做T监控改造（t_monitor）**：只监控股票任务账户 stock + 只跑狼大T表达式（WOLF_T_FIELDS: minute.m5.t_sell / index.intraday_dd / quote.vwap_break）；T1缩转放验证无预测力暂缓；自动维护(_daily_maintain/_ai_maintain)默认关闭。
