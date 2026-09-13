@@ -2668,11 +2668,14 @@ def _read_wolf_context(indices=None) -> str:
         scope = "、".join(conf_themes)
         if not items and conf_themes:
             # 确认源的主题口径与当前主线池不重叠时，**不要静默丢整段**——
-            # 退化为展示确认源现有全部子概念，并在标题里写明原因（2026-09-13 实测：
-            # stock_confirm_result 覆盖 稳增长/基建·AI/算力/科技·农业，而主线池是 半导体/芯片·新能源/电池）
+            # 退化为展示确认源现有全部子概念，并在标题里写明可能原因。
+            # 2026-09-13 实测：stock_confirm_result.json 是**上次运行**的产物（task stock_confirm_refresh
+            #   每日 08:20、仅工作日），若主线池在两次运行之间切换过（如周五盘后换池），
+            #   产物就会与当前池不重叠 —— 这是**时间差**，不是缺陷（脚本本身已读 mainline_top_themes）。
             items = _confirm_items(None)
             scope = (scope + "；该池在确认源中无对应子概念，下列为确认源现有全部 "
-                     + str(len(items)) + " 项，请检查 stock_confirm_refresh 的主题口径")
+                     + str(len(items)) + " 项（确认源每日 08:20 刷新、仅工作日，"
+                     "可能早于本次主线切换）")
         if items:
             shown = items[:20]
             txt = [f"{cn} {c}/{n}({int(100*c/max(n,1))}%)" for cn, c, n in shown]
