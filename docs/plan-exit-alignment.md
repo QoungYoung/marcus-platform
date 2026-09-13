@@ -79,7 +79,7 @@ WOLF_DECISION_GATE=1     WOLF_MAINLINE_SELECT=1  WOLF_MAINLINE_GATE_STEP=0
 
 | 脚本 | 用途 |
 |---|---|
-| `jobs/eval_d12_vol.py` | **退出规则变体**（+3%/+5% 止盈、−3% 止损）在 2025/2026 上的胜率对比 —— **本计划的主要起点** |
+| `jobs/eval_d12_vol.py` | ⚠️ **（2026-09-13 更正）** 实测这是 **D12 方向层「波动幅度/量能」门槛**的评估脚本，**不含退出规则变体**；退出规则（+3%/+5% 止盈、−3% 止损）的原始实验在**已不在仓库**的 `jobs/_bt_exit.py`（生产容器内，样本 `_bt_pit/trades.jsonl`）→ 阶段 0 已把它的口径复刻进 `jobs/eval_leg_metrics.py` |
 | `jobs/eval_structural_pool_local.py` | 本地（SQLite+pandas）跑池判定，含 H1/H2 分段 |
 | `jobs/eval_gate_vs_pool.py`、`jobs/eval_pool_alignment.py`、`jobs/eval_pool_k.py` | 对齐度/命中率/池宽扫描（口径可借鉴） |
 | `jobs/backfill_market_bars_local.py` | 本地回填（promax → SQLite，多 worker 分块） |
