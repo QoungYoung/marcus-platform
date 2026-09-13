@@ -9,7 +9,8 @@ warnings.filterwarnings('ignore')
 # 配置
 CHAT_URL=os.getenv('MAIN_LINE_CHAT_URL','http://marcus-dsh:3001/chat')
 PROMAX_URL='https://pcd.mobcvb.cn/tushare/pro'
-PROMAX_KEY='tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE'
+# 2026-09-13 安全修复：密钥从环境变量读（原先硬编码在源码里，已进入 git 历史 → **该 key 需轮换**）
+PROMAX_KEY=(os.getenv('PROMAX_API_KEY') or os.getenv('PROMAX_KEY') or '').strip()
 CATALYST_TH=0.7
 STATE_FILE=os.getenv('MAIN_LINE_STATE_FILE', 'data/main_line_state.json')
 REPORT_WINDOW_DAYS=int(os.getenv('MAIN_LINE_REPORT_WINDOW', '7'))  # 每周窗口, 回补近7天研报
@@ -30,6 +31,8 @@ THEMES={
 def ts_promax(api, **p):
     for _ in range(2):
         try:
+            if not PROMAX_KEY:
+                raise EnvironmentError('PROMAX_API_KEY 未配置（原硬编码 key 已移除，请走环境变量）')
             r=requests.get(f'{PROMAX_URL}/{api}', params=p, headers={'X-API-Key':PROMAX_KEY}, verify=False, timeout=45)
             return r.status_code, r.json()
         except Exception:
