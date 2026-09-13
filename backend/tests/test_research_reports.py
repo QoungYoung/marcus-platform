@@ -86,3 +86,27 @@ def test_key_read_from_env(monkeypatch):
     monkeypatch.delenv("PROMAX_API_KEY", raising=False)
     with pytest.raises(EnvironmentError):
         RR._key()
+
+
+# ── 字段布局错位的防护（生产实测：曾把长标题读进 ts_code → value too long）──
+def test_clean_code_rejects_malformed():
+    assert RR.clean_code("300308.SZ") == "300308.SZ"
+    assert RR.clean_code("300308.sz") == "300308.SZ"
+    assert RR.clean_code("国信证券_某行业深度报告_20260529.pdf") is None
+    assert RR.clean_code(None) is None
+    assert RR.clean_code("") is None
+
+
+def test_parse_items_cleans_misaligned_row():
+    """错位行：ts_code 位置是长标题 → 置 None，不再让整批入库失败。"""
+    items = [["20260529", "某报告", "http://x/y.pdf", "行业研报", "张三", "机械设备",
+              "国信证券_某行业深度报告_20260529.pdf", "国信证券"]]
+    rows = RR.parse_items(items)
+    assert len(rows) == 1 and rows[0]["ts_code"] is None
+    assert rows[0]["title"] == "某报告"
+
+
+def test_parse_items_truncates_long_fields():
+    long_url = "http://x/" + "a" * 2000
+    rows = RR.parse_items([["20260529", "t" * 5000, long_url, "行业研报"]])
+    assert len(rows[0]["title"]) <= 1024 and len(rows[0]["url"]) <= 512

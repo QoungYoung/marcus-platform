@@ -100,15 +100,44 @@ def fetch_day(d8: str, attempts: Optional[int] = None) -> Dict[str, Any]:
     return {"status": "failed", "http": None, "items": [], "attempts": n_att, "error": last_err}
 
 
+import re as _re
+
+_CODE_RE = _re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+
+
+def clean_code(v: Any) -> Optional[str]:
+    """ts_code 形态校验：不合规一律置 None。
+
+    2026-09-12 实测教训：promax `research_report` **不同日期返回的字段布局可能不同**，
+    按位置解析会错位（曾把长标题读进 ts_code → 入库报 `value too long`）。
+    原始行仍整行存进 payload 供审计，这里只保证入库字段干净。
+    """
+    if v is None:
+        return None
+    s = str(v).strip().upper()
+    return s if _CODE_RE.match(s) else None
+
+
+def _s(v: Any, limit: int = 1024) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s[:limit] if s else None
+
+
 def parse_items(items: Sequence[Sequence[Any]]) -> List[Dict[str, Any]]:
-    """items 形如 [trade_date, title, url, report_type, author, name, ts_code, org]（顺序按接口）。"""
+    """items 形如 [trade_date, title, url, report_type, author, name, ts_code, org]（按接口位置）。
+
+    对 ts_code 做形态校验（错位时置 None），其余字段做长度保护；原文整行保留在 daily.payload。
+    """
     out = []
     for i, it in enumerate(items or []):
         if not isinstance(it, (list, tuple)) or len(it) < 3:
             continue
-        g = lambda k: (str(it[k]) if len(it) > k and it[k] is not None else None)  # noqa: E731
-        out.append({"seq": i, "trade_date": g(0), "title": g(1), "url": g(2),
-                    "report_type": g(3), "author": g(4), "name": g(5), "ts_code": g(6), "org": g(7)})
+        g = lambda k: (it[k] if len(it) > k else None)  # noqa: E731
+        out.append({"seq": i, "trade_date": _s(g(0), 8), "title": _s(g(1)),
+                    "url": _s(g(2), 512), "report_type": _s(g(3), 64), "author": _s(g(4), 128),
+                    "name": _s(g(5), 128), "ts_code": clean_code(g(6)), "org": _s(g(7), 128)})
     return out
 
 

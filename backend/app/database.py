@@ -668,6 +668,9 @@ def _apply_research_reports_migration():
                 """
             ))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_rr_ts ON research_reports (ts_code, trade_date)"))
+            # 2026-09-12：字段布局偶有差异 → ts_code 曾超长导致 StringDataRightTruncation，放宽到 32 做冗余
+            conn.execute(text("ALTER TABLE research_reports ALTER COLUMN ts_code TYPE VARCHAR(32)"))
+            conn.execute(text("ALTER TABLE research_reports_daily ALTER COLUMN status TYPE VARCHAR(16)"))
         print("[DB] PATCH: 研报表 research_reports(_daily) 完成")
     except Exception as e:
         print(f"[DB] research_reports 迁移失败: {type(e).__name__}: {str(e)[:120]}")
