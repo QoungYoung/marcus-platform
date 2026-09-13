@@ -543,7 +543,7 @@ tasks:
   depends_on: []
 - id: rotation_universe_refresh
   name: 主线子方向动态细分刷新
-  description: 8:05 每日按主线动态派生 sub-universe(derive_sub_universe)+重建 rotation_universe_result/crowding_blacklist, 使宇宙跟主线不再周一滞后; 上游 taxonomy 由 build_concept_taxonomy 生成
+  description: 8:05 每日按主线动态派生 sub-universe(derive_sub_universe)+重建 rotation_universe_result, 使宇宙跟主线不再周一滞后; 上游 taxonomy 由 build_concept_taxonomy 生成（注: crowding_blacklist 已于 2026-09-13 真删，本任务不再产出该文件）
   enabled: true
   schedule:
     type: cron

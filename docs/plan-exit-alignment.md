@@ -376,7 +376,7 @@ WOLF_DECISION_GATE=1     WOLF_MAINLINE_SELECT=1  WOLF_MAINLINE_GATE_STEP=0
 | 验证历史日期 | 直接调 `MS.run(date8='YYYYMMDD')` | **EOD 就绪守卫会挡历史日期任务**，跑 job 只会静默跳过 |
 | 改 `.env` | 用**脚本做行级改写** | 曾用 `echo >>` 把 `PROMAX_API_KEY` 行写坏 |
 | 推送 GitHub | 失败就重试 2–3 次；用 `git ls-remote` 核对远端 SHA；**代理挂了就直连**：`git remote add ghdirect https://github.com/QoungYoung/marcus-platform.git && git push ghdirect main` | ①推送偶发 GnuTLS/credential 失败；②**2026-09-13 起 `origin` 用的 `ghfast.top` 代理已不可用**（curl 超时），而 **github.com 直连正常**——`credential storage lock` 警告**不影响推送结果**，以 `git ls-remote` 为准 |
-| 生产 vs git | **以 git 为准**；发现宿主/容器有手工 hotfix（`docker cp` 覆盖）要回写仓库 | 重新 `git pull` 部署会**悄悄回退**那些手工改动 |
+| 生产 vs git | **部署模型**：`backend/app`、`apps`、`jobs`、`core`、`config`、`data` 都是 **bind mount**（`apps` 在容器内**只读**）→ **改宿主文件即改容器文件，不需要 `docker cp`**；但进程内已加载的模块**必须重启**（backend/worker）才生效。**漂移是双向的**，开工前先对账：`git ls-files '*.py'` 逐文件比 md5（2026-09-13 实测 539 个受跟踪文件里 **47 个不一致**：12 个「生产滞后 git」＝漏部署，8 个「生产比 git 新」＝手工 hotfix）。**滞后**的直接补部署；**更新的**先回写仓库再部署，否则 `git pull` 会**悄悄回退** | 实例：commit `82a486f`(09-11) 删掉的 S4①「60分MA数据不可用→禁建仓」硬拦，生产一直没部署，直到 09-13 才发现（生产 mtime 停在 09-08）。教训：**「已提交」≠「已生效」**，关键改动部署后要核对宿主/容器 md5 是否等于 git HEAD |
 
 ### 10.4 用户的工作原则（比技术细节更重要）
 
@@ -394,7 +394,8 @@ WOLF_DECISION_GATE=1     WOLF_MAINLINE_SELECT=1  WOLF_MAINLINE_GATE_STEP=0
 
 | 机制 | 位置 | 状态 |
 |---|---|---|
-| **拥挤黑名单硬拦** | `backend/app/api/indicator.py:2861–2885`（`crowding_blacklist.json`，`hard_block=True`） | 🔴 **仍在硬拦**。D15 事件研究结论是**拦反**（被拦组未来 5 日 +3.689% vs 非拥挤 +0.250%；块状 t=1.39 不显著；仅 1–2 月回调期拦对）。建议降级为 review/probe，**用户尚未定夺** → 动它之前先问 |
+| **拥挤黑名单硬拦** | 原 `backend/app/api/indicator.py`（`crowding_blacklist.json`，`hard_block=True`） | ✅ **已于 2026-09-13 真删**（用户指令）。生成侧 `rotation_universe.build_crowding_blacklist()`、硬拦块 + `_crowd_space_reason()`、以及 `wolf_confirm_pick`/`rotation_switch_arm`/`rotation_switch_agent`/`rotation_switch_dryrun` 的**静默排除**一并删除，产物 `data/crowding_blacklist.json` 同时移除，并加回归守卫 `backend/tests/test_crowding_blacklist_removed.py`。证据见 D15 事件研究（拦反：+3.689% vs +0.250%，t=1.39）与 D11（排除型数据无支撑）。**注**：D15 研究的是当时 17 只的版本，删除当日黑名单只剩 3 只（688041/688525/300059），影响面已很小 |
+| **S4① `60分MA数据不可用→禁建仓`（fail-closed 自造机制）** | 原 `backend/app/api/indicator.py` | ✅ **git 已于 09-11 删除（commit `82a486f`）；但生产一直漏部署，09-13 才补上**。教训：改完要核对「宿主/容器 md5 是否等于 git」——详见 §10.3「部署漂移」 |
 | **P2 Gate 硬拦** | `app/services/p2_entry_gate.py:79 p2_gate_check()` | 浪型 `defense/exit` → 禁新开仓；由 `_mode()` 决定 hard 还是 dry-run |
 | **P3 三仓档位** | `indicator.py`（`P3_TIER_MODE=0`） | 当前只记录不拦截（dry-run） |
 | **周末避险 / 量能门 / 浮盈缓冲** | `wolf_weekend_hedge` / `wolf_volume_gate` / `wolf_profit_cushion` | 已上线，但**未按新尺子复验**（原 G9/G10 待办） |

@@ -10,8 +10,8 @@
   · 公募持仓拥挤 = `data/crowding_pit/stock_crowd_<YYYY-MM-DD>.json`（19 期，2025-12-01→2026-08-11），
     由 `apps/main_line/build_crowding.py` 产出，口径 "fund_share T-1 top60 + ann_date<=date + 每基金 top10"。
     PIT 取法：日 D 用 **date ≤ D 的最近一期**（快照本身即 T-1 份额 + 已披露公告）。
-  · 「基金持仓多」的判定阈值 = **直接读 `data/crowding_blacklist.json` 的 rule**
-    （`n_funds_min=4, float_pct_min=1.0`），逐日在 PIT 快照上重算 —— 不用"当前黑名单"回看历史。
+  · 「基金持仓多」的判定阈值 = `n_funds_min=4, float_pct_min=1.0`（原读 `data/crowding_blacklist.json`
+    的 rule；该文件与机制已于 2026-09-13 真删，阈值在本脚本内冻结为常量），逐日在 PIT 快照上重算。
   · 交易拥挤 = `mkt_bars_daily.amount` 的主题 5 日成交额占全市场比，取其在**自身近 120 日**中的分位。
 
 先回答"排除型数据本身有没有预测力"（IC），再做变体（资格闸 ∩ 近5日相对强度 top1，逐步加排除）：
@@ -82,17 +82,14 @@ def load_crowd_snapshots():
 
 
 def load_blacklist_rule():
-    """复用黑名单自己的规则参数（不自己另定阈值）。"""
-    try:
-        b = json.load(open(os.path.join(DATA, 'crowding_blacklist.json'), encoding='utf-8'))
-        r = b.get('rule') or {}
-        return {'n_funds_min': float(r.get('n_funds_min', 4)),
-                'float_pct_min': float(r.get('float_pct_min', 1.0)),
-                'concepts': b.get('concepts') or [], 'subs': b.get('subs') or [],
-                'ts': b.get('ts')}
-    except Exception as e:
-        print('[ex] 黑名单读取失败 %s' % str(e)[:60], flush=True)
-        return {'n_funds_min': 4.0, 'float_pct_min': 1.0, 'concepts': [], 'subs': [], 'ts': None}
+    """黑名单口径阈值（冻结常量）。
+
+    注：`data/crowding_blacklist.json` 与其生成/消费机制已于 2026-09-13 **真删**（D15 事件研究证
+    「拦反」+ 用户指令，见 docs/wolf-d15-crowd-blacklist-event-study.md）。本脚本是**离线研究工具**
+    （用于复现 D11/D15 的排除型数据检验），故把当时的口径固化为常量，不再依赖已删除的产物文件。
+    """
+    return {'n_funds_min': 4.0, 'float_pct_min': 1.0, 'concepts': [], 'subs': [],
+            'ts': '2026-09-13(机制删除日,口径冻结)'}
 
 
 def main(end=None):

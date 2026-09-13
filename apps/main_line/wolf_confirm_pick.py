@@ -203,11 +203,8 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     members = sorted({ts for lst in uni.values() for ts in lst})
     names = names_map(); bad = bad_set(); cm = cross_concepts()
     theme_cons = set(uni.keys())
-    try:
-        bl = json.load(open(os.path.join(DATA, "crowding_blacklist.json"), encoding="utf-8")) or {}
-    except Exception:
-        bl = {}
-    detail = bl.get("symbols_detail") or {}
+    # 拥挤黑名单(crowding_blacklist.json)已于 2026-09-13 真删(D15 事件研究证"拦反" + 用户指令)：
+    # 原此处会 ts in detail → continue，即无日志、无提示的静默排除。勿重新引入。
     kl, mv = {}, {}
     for i in range(0, len(members), 20):
         chunk = members[i:i+20]
@@ -225,7 +222,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     for ts, rows in kl.items():
         nm = names.get(ts, ts)
         xq = ("SH" if ts.endswith(".SH") else "SZ") + ts[:6]
-        if not board_allowed(ts) or xq in exclude or ts in bad or ts in detail or "ST" in nm:
+        if not board_allowed(ts) or xq in exclude or ts in bad or "ST" in nm:
             continue
         closes = [r[1] for r in rows]; lows = [r[2] for r in rows]; amts = [r[3] for r in rows]
         amt20 = statistics.mean(amts[-20:]) / 1e5

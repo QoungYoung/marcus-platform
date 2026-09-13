@@ -158,13 +158,12 @@ def pick_buy(chain, exclude, limit=3):
     except Exception:
         return []
     bad = bad_set()
-    bl = load("crowding_blacklist.json") or {}
-    detail = bl.get("symbols_detail") or {}
+    # 拥挤黑名单已于 2026-09-13 真删(D15 证拦反 + 用户指令)：不再读、不再静默排除候选。勿重新引入。
     cands = []
     for ts, names in cm.items():
         if any(norm(k) in norm(n) for n in names for k in kws):
             xq = "SH" + ts[:6] if ts.endswith(".SH") else ("SZ" + ts[:6] if ts.endswith(".SZ") else ts)
-            if xq not in exclude and ts not in detail and ts not in bad:
+            if xq not in exclude and ts not in bad:
                 cands.append((ts, xq))
     if not cands:
         return []
@@ -285,13 +284,12 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
         members = [str(r[0]) for r in cur.fetchall()]
     cur.close(); conn.close()
     bad = bad_set()
-    bl = load("crowding_blacklist.json") or {}
-    detail = bl.get("symbols_detail") or {}
+    # 拥挤黑名单已于 2026-09-13 真删(D15 证拦反 + 用户指令)：不再读、不再静默排除。
     out = []
     scanned = 0
     for ts in members:
         if len(out) >= limit or scanned >= 60: break
-        if ts in bad or ts in detail: continue
+        if ts in bad: continue
         xq = ("SH" if ts.endswith('.SH') else 'SZ') + ts[:6]
         if xq in exclude: continue
         scanned += 1

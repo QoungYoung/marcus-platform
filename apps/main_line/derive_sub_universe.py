@@ -65,6 +65,6 @@ if __name__ == "__main__":
     if "--refresh-result" in sys.argv:
         try:
             import rotation_universe as _ru
-            _ru.main()   # 写 rotation_universe_result.json + crowding_blacklist
+            _ru.main()   # 写 rotation_universe_result.json（crowding_blacklist 已于 2026-09-13 真删）
         except Exception as e:
             print("rotation_universe refresh err:", str(e)[:120])

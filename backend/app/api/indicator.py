@@ -2224,41 +2224,6 @@ def _eval_l2_oversold_exempt(layer1_passed: bool, ret5d: Optional[float]) -> boo
     return bool(layer1_passed and ret5d is not None and ret5d <= -0.15)
 
 
-def _crowd_space_reason(ts_code: str):
-    """公募核心拥挤股是否仍有个股级空间(LOW/MID回踩) → (has_space, reason)。
-    拥挤但低位/回踩 → 不硬拦(降级review/probe); 高位无空间/数据失败 → 保持硬拦(fail-closed)。
-    """
-    try:
-        from app.core.trading._api_config import get_tushare_pro
-        import tushare as _ts
-        _pro = get_tushare_pro()
-        _start = (datetime.now() - timedelta(days=420)).strftime("%Y%m%d")
-        _end = datetime.now().strftime("%Y%m%d")
-        _df = _ts.pro_bar(api=_pro, ts_code=ts_code, start_date=_start, end_date=_end, adj='qfq', freq='D')
-        if _df is None or _df.empty:
-            return False, ""
-        _df = _df.sort_values("trade_date")
-        _closes = [float(x) for x in _df["close"].tolist()]
-        if len(_closes) < 60:
-            return False, ""
-        _last = _closes[-1]
-        _hi = max(_closes[-250:])
-        _vh = (_last / _hi - 1.0) * 100.0 if _hi else 0.0
-        _box = _closes[-30:]
-        _bhi, _blo = max(_box), min(_box)
-        _boxpos = (_last - _blo) / ((_bhi - _blo) or 1.0) * 100.0
-        _ma60 = sum(_closes[-60:]) / 60.0
-        _vm60 = (_last / _ma60 - 1.0) * 100.0 if _ma60 else 0.0
-        _r20 = (_last / _closes[-21] - 1.0) * 100.0 if len(_closes) >= 21 else None
-        if _vh <= -30.0 and _boxpos <= 35.0 and _vm60 < 0:
-            return True, "低位(vh=%.0f%%, box=%.0f%%)" % (_vh, _boxpos)
-        if _vm60 > 0 and _r20 is not None and -10.0 <= _r20 < 0:
-            return True, "MID回踩(r20=%.1f%%)" % (_r20)
-        return False, "高位无空间(vh=%.0f%%)" % _vh
-    except Exception:
-        return False, ""
-
-
 def _legacy_tech_gates() -> bool:
     """旧技术栈门控开关(误加审计2026-09-03)：Wolf 语料没有 MA5>MA20/60分MA10>MA30/KDJ-RSI-CCI/射击之星/午后禁开仓。
     默认 0 = 狼大对齐(软提示不硬拦); LEGACY_TECH_GATES=1 恢复旧硬门槛(仅回退用)。
@@ -2858,32 +2823,14 @@ async def check_entry_filters(req: EntryCheckRequest):
     except Exception:
         pass  # 无 risk_flags 记录或DB不可用 → 不硬拦(调用方应先用 build_risk_flags 查询候选)
 
-    # ── 拥挤无空间黑名单(rotation_universe→crowding_blacklist.json v2 个股级) 硬过滤 ──
-    try:
-        import json as _json2
-        _bl = os.path.join(settings.workspace_path, "data", "crowding_blacklist.json")
-        if os.path.exists(_bl):
-            _bd = _json2.load(open(_bl, encoding="utf-8"))
-            _detail = (_bd.get("symbols_detail") or {}).get(ts_code)
-            if _detail:
-                _reason = _detail.get("reason") or ""
-                _subs = "、".join((_detail.get("subs") or (_bd.get("subs") or []))[:3])
-                # 个股级空间豁免: 公募核心拥挤但个股处于低位/MID回踩 → 不硬拦, 降级review/probe
-                _has_space, _sp_reason = await asyncio.to_thread(_crowd_space_reason, ts_code)
-                if _has_space:
-                    downgrade_multiplier = min(downgrade_multiplier, 0.5)
-                    hard_block_reasons.append("拥挤但有个股空间(" + _sp_reason + "): " + _reason + " → 降级review/probe")
-                else:
-                    hard_block = True
-                    downgrade_multiplier = 0.0
-                    hard_block_reasons.append("拥挤无空间(个股级rotation): " + _reason + (("; 子方向:" + _subs) if _subs else ""))
-            elif ts_code in set(_bd.get("symbols") or []):
-                # legacy(旧整概念黑名单) 兼容
-                hard_block = True
-                downgrade_multiplier = 0.0
-                hard_block_reasons.append("拥挤无空间(rotation_universe): " + "、".join((_bd.get("subs") or [])[:3]))
-    except Exception:
-        pass
+    # ── 拥挤无空间黑名单：已于 2026-09-13 真删 ──
+    # 原 block(2026-09-03 上线)：读 data/crowding_blacklist.json → 公募核心拥挤个股
+    #   （n_funds≥4 且 Σfloat≥1%）无个股空间时 hard_block=True（含 _crowd_space_reason 个股豁免）。
+    # 删除依据(D15 事件研究 docs/wolf-d15-crowd-blacklist-event-study.md + 用户 2026-09-13 指令)：
+    #   被拦组未来 5 日 +3.689% vs 非拥挤 +0.250%（块状 t=1.39 不显著）→ 拦反；
+    #   「公募重仓」这条腿无统计支撑（D11：主题层 IC≈0、个股层 IC +0.019、加排除后基线 +0.683%→−0.152%）。
+    # 生成侧（rotation_universe.build_crowding_blacklist）与消费侧（wolf_confirm_pick /
+    #   rotation_switch_arm / rotation_switch_agent 的静默跳过）一并删除，勿重新引入。
 
     # ── P2 Gate(Step1, 2026-09-03): wave/systemic/macro 代码层闸门 ──
     try:

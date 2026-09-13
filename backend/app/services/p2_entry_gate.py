@@ -3,7 +3,7 @@
 供 check_entry_filters / trade_graph 共用, 避免各通道判定不一致。
 模式: P2_GATE_MODE=1(默认硬拦) / 0(dry-run 只记录不拦)
 Step2: lhb_foreign_sell 方向感知(海外链/红利核心 map) + p2_gate_log 命中日志。
-注意: rotation(crowding_blacklist)与 risk_flags 已在 indicator 内实现。
+注意: crowding_blacklist 硬拦已于 2026-09-13 真删(D15 证拦反 + 用户指令); risk_flags 仍在 indicator 内实现。
 """
 import os, json, datetime as _dt
 

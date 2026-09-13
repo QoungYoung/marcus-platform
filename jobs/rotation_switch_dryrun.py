@@ -156,13 +156,12 @@ def _buy_shortlist(chain, exclude, limit=3):
         cur.close(); conn.close()
     except Exception:
         return []
-    bl = load("crowding_blacklist.json") or {}
-    detail = bl.get("symbols_detail") or {}
+    # 拥挤黑名单已于 2026-09-13 真删(D15 证拦反 + 用户指令)：不再读、不再静默排除候选。勿重新引入。
     candidates = []
     for ts, names in cm.items():
         if any(norm(k) in norm(n) for n in names for k in kws):
             xq = ("SH" + ts[:6] if ts.endswith(".SH") else ("SZ" + ts[:6] if ts.endswith(".SZ") else ts))
-            if xq not in exclude and ts not in detail:
+            if xq not in exclude:
                 candidates.append((ts, xq))
     out = []
     for ts, xq in candidates[:80]:

@@ -53,11 +53,9 @@ def main():
         except Exception:
             pass
     sdays = sorted(snaps)
-    try:
-        rule = (json.load(open(os.path.join(DATA, 'crowding_blacklist.json'), encoding='utf-8')).get('rule') or {})
-    except Exception:
-        rule = {}
-    nf_min, fl_min = float(rule.get('n_funds_min', 4)), float(rule.get('float_pct_min', 1.0))
+    # 口径阈值冻结为常量：data/crowding_blacklist.json 与其机制已于 2026-09-13 真删
+    # （D15 事件研究证「拦反」+ 用户指令）。本脚本是离线对照工具，不再依赖该产物文件。
+    nf_min, fl_min = 4.0, 1.0
 
     mk_amt5 = amt.sum(axis=1).rolling(5).sum()
     volpct = {}
