@@ -49,15 +49,23 @@ def main():
                          '--json', os.path.join(DATA, 'trend_confirm_%s_long.json' % date8)])
     # 3) heat_v2(主力资金热度, rel 至当日)
     sh('heat_v2', [py, os.path.join(APP, 'heat_v2.py'), '--date', date8])
-    # 4) mainline_gate(漏斗 + ensure_history)
-    sh('mainline_gate', [py, os.path.join(APP, 'mainline_gate.py'), '--date', date8,
-                         '--fusion-json', os.path.join(DATA, 'heat_v2_%s.json' % date8)])
-    try:
-        hist = json.load(open(os.path.join(DATA, 'mainline_confirm_history.json'), encoding='utf-8'))
-        print('CONFIRM_HISTORY dates:', sorted(hist.get('dates', {})), flush=True)
-        print('latest', date8, '->', hist.get('dates', {}).get(date8), flush=True)
-    except Exception as e:
-        print('history read err', str(e)[:80], flush=True)
+    # 4) mainline_gate(漏斗 + ensure_history) —— **2026-09-13 停用**（用户指令：保证主线判定唯一）
+    #    原因：主判定已由方向层 wolf_mainline_select（池：量能占比topK ∩ r5>0 → 池内 r5 top1）承担；
+    #    gate 单独命中他的方向 ≈ 随机（top1 28%/precision 12%），作约束净负（docs/wolf-structural-pool.md §十一）。
+    #    依赖已迁移：`mainline_confirm_state.gate_top_themes()` 改读 wolf_mainline_select.json；
+    #    `mainline_confirm_history.json`（本步 ensure_history 维护）**无生产消费者**（ts_qualified 全仓无调用）。
+    #    回退：置 WOLF_MAINLINE_GATE_STEP=1 即恢复本步。
+    if os.getenv('WOLF_MAINLINE_GATE_STEP', '0').strip().lower() in ('1', 'true', 'yes', 'on'):
+        sh('mainline_gate', [py, os.path.join(APP, 'mainline_gate.py'), '--date', date8,
+                             '--fusion-json', os.path.join(DATA, 'heat_v2_%s.json' % date8)])
+        try:
+            hist = json.load(open(os.path.join(DATA, 'mainline_confirm_history.json'), encoding='utf-8'))
+            print('CONFIRM_HISTORY dates:', sorted(hist.get('dates', {})), flush=True)
+            print('latest', date8, '->', hist.get('dates', {}).get(date8), flush=True)
+        except Exception as e:
+            print('history read err', str(e)[:80], flush=True)
+    else:
+        print('[mainline_gate] SKIP（WOLF_MAINLINE_GATE_STEP=0，主线判定唯一＝方向层池判定）', flush=True)
     # 5) 注入 main_line_state.json(Pi 会话可见: gate 摘要+波浪结构)
     sh('inject_state', [py, os.path.join(APP, 'mainline_state_inject.py'), date8])
     print('MAINLINE_GATE_DAILY DONE', date8, flush=True)

@@ -756,6 +756,7 @@ A = 「前提/执行/退出」归纳的记录条数（受子块数与语料密�
   浪型、个股确认概览、盘中换仓 arming（`mainline_today()`）、L1 决策层全部改挂新判定。
   产物 `mainline_gate_<d>.json` 与代码仍保留（归档 / 事件研究 / 回退：`WOLF_MS_USE_GATE=1`、`WOLF_INJECT_GATE=1`）。
 - 生产实跑（2026-09-11）：`main_line = 半导体/芯片`、`main_line_source = mainline_select_20260911`、池 = [半导体/芯片, 新能源/电池]。
+- **gate 判定步骤停用（同日）**：`mainline_gate_daily.py` 跳过 `mainline_gate` 步骤（`WOLF_MAINLINE_GATE_STEP=0`），gate 产物停在 2026-09-11、不再刷新 → **主线判定唯一（方向层池判定）**；链内 `trend_confirm` 保留（方向层浪型数据源）。
 - **研报线关闭 + `main_line_judge` 任务停用（同日）**：judge 不再抓研报/打催化分（`WOLF_JUDGE_CATALYST=0`），提示词不再渲染 catalyst/融合分；judge 任务 `enabled=false`（调度器跳过）；`gate_top_themes()` 改读池判定；`main_line_state.json` 里 `catalyst`/`fusion`/`gate_rows`/`mainline_gate` **全部移除**。
 - **缺口与待办的逐项状态**在 `docs/wolf-alignment-checklist.md`（G1–G14、D1–D15）；
   本蓝图的 §7 缺口清单**未逐项重排**，以该 checklist 为准。
