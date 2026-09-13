@@ -770,11 +770,21 @@ def _read_stock_confirm_context() -> str:
         import json as _json2
         conf_themes = []
         try:
-            mlp = os.path.join(os.environ.get("DATA_DIR", "data"), "main_line_state.json")
-            if os.path.exists(mlp):
-                mst = _json2.load(open(mlp, encoding="utf-8"))
-                gg = mst.get("mainline_gate") or {}
-                conf_themes = gg.get("confirmed_candidate") or ([mst.get("main_line")] if mst.get("main_line") else [])
+            # 2026-09-13：主线口径换成**方向层池判定**（缺失时退回旧 gate 的 confirmed_candidate）
+            _ms3 = {}
+            try:
+                from app.services import wolf_mainline_select as _MS3
+                _ms3 = _MS3.load() if _MS3.enabled() else {}
+            except Exception:
+                _ms3 = {}
+            if isinstance(_ms3, dict) and _ms3.get("mainline"):
+                conf_themes = [t for t in ([_ms3.get("mainline")] + list(_ms3.get("pool") or [])) if t]
+            else:
+                mlp = os.path.join(os.environ.get("DATA_DIR", "data"), "main_line_state.json")
+                if os.path.exists(mlp):
+                    mst = _json2.load(open(mlp, encoding="utf-8"))
+                    gg = mst.get("mainline_gate") or {}
+                    conf_themes = gg.get("confirmed_candidate") or ([mst.get("main_line")] if mst.get("main_line") else [])
         except Exception:
             pass
         lines = []

@@ -1168,9 +1168,11 @@ tasks:
 
 - id: wolf_mainline_select
   name: 方向层主线选择（D1）
-  description: 盘后算当日主线=资格闸(gate)∩近5日相对强度 top1；实测后5日超额 +0.622%(t=2.86,n=159)，
-    超过验收线(+0.41%,t>2.6)；被否决的因子(边际加速/参与面/位置/带动板块)仅作诊断。
-    写 wolf_mainline_select.json + daily_artifacts；只写不交易。开关 WOLF_MAINLINE_SELECT 默认 0。
+  description: 盘后算当日主线=**池(主题近5日成交额占比 topK ∩ 近5日相对强度>0) → 池内 r5 top1**（2026-09-13 起，
+    取代旧的 gate∩r5）；实测与他"股票主线层"对齐 recall 75%/top1 54%/top3 85%，2026 超额 +1.03%(t=3.37)、
+    2025 +0.34%(t=3.01)；gate 默认不参与选择(三方对照实测净负，WOLF_MS_USE_GATE=1 可回退)。
+    被否决的因子(边际加速/参与面/位置/联动/龙头)仅作诊断。写 wolf_mainline_select.json + daily_artifacts；
+    只写不交易。开关 WOLF_MAINLINE_SELECT 默认 0（生产已置 1）。
   enabled: true
   schedule:
     type: cron
