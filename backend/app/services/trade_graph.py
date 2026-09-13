@@ -648,18 +648,15 @@ def _read_main_line_context() -> str:
             st = _json.load(f)
         ml = st.get("main_line") or "未知"
         cands = st.get("candidates") or []
-        cat = st.get("catalyst") or {}
-        cat_str = chr(44).join(f"{k}={v}" for k,v in cat.items() if v is not None)
+        # 2026-09-13 关闭研报线：**不再向提示词渲染 catalyst_score 与融合分**
+        # 依据：①研报催化从未进生产判据，且生产实测 9 个主题全为 0.0（等于无信息）；
+        #      ②融合分 0.3fund+0.2rel+0.5conc 的 conc 成分有已知方向缺陷（净流出大户高分），
+        #        实测其第一名(AI/算力, conc=1.0)与池判定主线(半导体/芯片)不符；
+        #      ③wolf_match 网格搜索里研报最优权重 = 0；④语料侧他也不靠研报选方向（"研报都是他们发的"）。
+        # 保留这两项**计算**供 position_class / stock_confirm_judge 等内部使用，只是不再进交易提示词。
         block = ("## 主线判定（main_line_state）" + chr(10)
                  + "- 当前主线：" + str(ml) + chr(10)
-                 + "- 候选集（观察不建仓）：" + (", ".join(cands) if cands else "无") + chr(10)
-                 + "- catalyst_score：" + (cat_str or "无") + chr(10))
-        # 融合分(fusion: 研报0+资金0.3+强度0.2+净流入集中度0.5+银行, 周判方向可信度)
-        fusion = st.get("fusion") or {}
-        if fusion:
-            top = sorted(fusion.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:3]
-            fus_str = "、".join(f"{k}({v.get('score')})" for k, v in top)
-            block += ("- 融合分 TOP3（资金/集中度主导，研报辅助）：" + fus_str + chr(10))
+                 + "- 候选集（观察不建仓）：" + (", ".join(cands) if cands else "无") + chr(10))
         # ── 2026-09-13 方向层主线（**权威**）：池 = 量能占比 topK ∩ 近5日相对强度>0，再 ∩ gate 资格 → 池内 r5 top1 ──
         # 依据：gate 单独命中他的方向仅 ≈ 随机（75% vs 77%），而池判定在"他股票主线层"口径下 recall 75%、
         #      top1 命中 54%（随机 7.7%）、top3 85%；跨 2025/2026 两年收益一致（docs/wolf-structural-pool.md）。

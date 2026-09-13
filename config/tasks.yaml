@@ -542,7 +542,7 @@ tasks:
     - qqbot
   depends_on: []
 - depends_on: []
-  description: 每周一 8:00 研报→agent产业催化分→候选(catalyst>=0.7)→写入主线状态;交易agent每日做确认+注入
+  description: 工作日 8:00 早间主线状态刷新——**不再判定主线**（主线由方向层 wolf_mainline_select 直写 main_line_state），也不再抓研报/打催化分（WOLF_JUDGE_CATALYST=0，2026-09-13 关）；现在只刷新融合分（资金/强度/集中度）并保留主线字段
   enabled: true
   id: main_line_judge
   name: 主线判定

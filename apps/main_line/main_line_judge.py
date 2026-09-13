@@ -208,22 +208,48 @@ def main():
                 print('[main_line] concept incremental rc=%s'%rc, file=sys.stderr)
             except Exception as e:
                 print('[main_line] concept incremental err:', str(e)[:80], file=sys.stderr)
-    themes={}
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        fetched=list(ex.map(lambda th: (th, fetch_report_titles(th, start, end)), list(THEMES.keys())))
-    themes=dict(fetched)
-    print('[main_line] date=%s 研报数:'%today, {k:len(v) for k,v in themes.items()}, file=sys.stderr)
-    agent_themes=call_agent(today, themes)
-    catalyst={}
-    for th in THEMES:
-        v=agent_themes.get(th) or {}
-        catalyst[th]=v.get('catalyst_score')
-    state={'date':today,'catalyst':catalyst,'updated_at':time.strftime('%Y-%m-%d %H:%M:%S')}
+    # 2026-09-13 关闭研报线（用户指令）：默认**跳过 promax 研报抓取 + dsh LLM 催化打分**。
+    # 依据：catalyst 从未进生产判据（B3b）；生产实测 9 主题全 0.0；IC 仅 0.056（弱）；语料侧他不靠研报选方向。
+    # 需要回退时置 WOLF_JUDGE_CATALYST=1。
+    _use_cat = os.getenv('WOLF_JUDGE_CATALYST', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+    if _use_cat:
+        themes={}
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            fetched=list(ex.map(lambda th: (th, fetch_report_titles(th, start, end)), list(THEMES.keys())))
+        themes=dict(fetched)
+        print('[main_line] date=%s 研报数:'%today, {k:len(v) for k,v in themes.items()}, file=sys.stderr)
+        agent_themes=call_agent(today, themes)
+        catalyst={}
+        for th in THEMES:
+            v=agent_themes.get(th) or {}
+            catalyst[th]=v.get('catalyst_score')
+    else:
+        print('[main_line] 研报催化已关闭(WOLF_JUDGE_CATALYST=0)：跳过 promax 研报抓取与 LLM 打分', file=sys.stderr)
+        catalyst={}
+    # 2026-09-13 合并：main_line/candidates **不再由本模块判定**（方向层 wolf_mainline_select 直写 state），
+    # 本模块只负责早间刷新：研报 catalyst 分 + 融合分（参考字段）。→ 保留 state 里已有的主线字段。
+    _sp = os.path.join(os.environ.get('DATA_DIR', '/app/data'), 'main_line_state.json')
+    _prev = {}
+    try:
+        if os.path.exists(_sp):
+            _prev = json.load(open(_sp, encoding='utf-8')) or {}
+    except Exception:
+        _prev = {}
+    state = dict(_prev)
+    state['date'] = today
+    state['catalyst'] = catalyst
+    state['catalyst_source'] = ('agent' if os.getenv('WOLF_JUDGE_CATALYST', '0').strip().lower()
+                               in ('1', 'true', 'yes', 'on') else 'disabled')
+    state['updated_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    _set_ml = os.getenv('WOLF_JUDGE_SET_MAINLINE', '0').strip().lower() in ('1', 'true', 'yes', 'on')
     if args.no_fusion:
-        def cand(x): return (x is not None) and (x>=CATALYST_TH)
-        state['candidates']=[th for th in THEMES if cand(catalyst.get(th))]
-        ranked=sorted([th for th in THEMES if catalyst.get(th) is not None], key=lambda t:-(catalyst[t] or 0))
-        state['main_line']=ranked[0] if ranked else None
+        if _set_ml:      # 仅回退对比用
+            def cand(x): return (x is not None) and (x>=CATALYST_TH)
+            state['candidates']=[th for th in THEMES if cand(catalyst.get(th))]
+            ranked=sorted([th for th in THEMES if catalyst.get(th) is not None], key=lambda t:-(catalyst[t] or 0))
+            state['main_line']=ranked[0] if ranked else None
+        else:
+            state.setdefault('candidates', [])
     else:
         # 融合: 概念信号 + 银行 + score
         hist_path=os.path.join(os.environ.get('DATA_DIR','/app/data'),'concept_hist.json')
@@ -238,10 +264,9 @@ def main():
             sig=_osig
             sc={th: 0.3*sig[th]['fund'] + 0.2*sig[th]['rel'] + 0.5*sig[th]['conc'] for th in sig}
         ranked=sorted(sc.keys(), key=lambda k:-sc[k])
-        main_line=ranked[0] if ranked else None
-        candidates=ranked[:2] if len(ranked)>=2 else ranked
-        state['candidates']=candidates
-        state['main_line']=main_line
+        if _set_ml:      # 仅回退对比用
+            state['candidates']=ranked[:2] if len(ranked)>=2 else ranked
+            state['main_line']=ranked[0] if ranked else None
         state['fusion']={th: {'score':round(sc[th],3),
                               'catalyst':round(sig[th].get('catalyst',0),2),
                               'fund':round(sig[th].get('fund',0),2),
