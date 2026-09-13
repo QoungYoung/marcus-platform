@@ -375,7 +375,7 @@ WOLF_DECISION_GATE=1     WOLF_MAINLINE_SELECT=1  WOLF_MAINLINE_GATE_STEP=0
 | 删文件 | 在**宿主**删 | `/app/apps` 对容器**只读**，容器内删不掉（`.bak_*` 残留就是这么来的） |
 | 验证历史日期 | 直接调 `MS.run(date8='YYYYMMDD')` | **EOD 就绪守卫会挡历史日期任务**，跑 job 只会静默跳过 |
 | 改 `.env` | 用**脚本做行级改写** | 曾用 `echo >>` 把 `PROMAX_API_KEY` 行写坏 |
-| 推送 GitHub | 失败就重试 2–3 次；用 `git ls-remote` 核对远端 SHA | 推送偶发 GnuTLS/credential 失败，看起来"没推上去"其实只是抖动 |
+| 推送 GitHub | 失败就重试 2–3 次；用 `git ls-remote` 核对远端 SHA；**代理挂了就直连**：`git remote add ghdirect https://github.com/QoungYoung/marcus-platform.git && git push ghdirect main` | ①推送偶发 GnuTLS/credential 失败；②**2026-09-13 起 `origin` 用的 `ghfast.top` 代理已不可用**（curl 超时），而 **github.com 直连正常**——`credential storage lock` 警告**不影响推送结果**，以 `git ls-remote` 为准 |
 | 生产 vs git | **以 git 为准**；发现宿主/容器有手工 hotfix（`docker cp` 覆盖）要回写仓库 | 重新 `git pull` 部署会**悄悄回退**那些手工改动 |
 
 ### 10.4 用户的工作原则（比技术细节更重要）
