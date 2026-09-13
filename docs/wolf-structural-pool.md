@@ -79,3 +79,38 @@
 
 **C. 落地形态（不变）**：`wolf_mainline_select.py` 加"池"层（`WOLF_MS_POOL=1` 默认关、`WOLF_MS_POOL_MODE=vol|his|both`），
 先**影子模式**记录（池/候选/选中）→ 不影响决策；回填 2026 全年对照后再决定是否接线。
+
+---
+
+## 六、A 步进展：跨期验证（2026-09-13）
+
+### 6.1 数据源问题（先记一笔）
+
+`TUSHARE_API_URL=https://ts.gyzcloud.top/api`（gzcloud 镜像）的 token 报
+**「Token无效或已过期，请联系客服续费」** → 用它回填 2025 得到 **0 行**（连 `trade_cal` 都返回 0）。
+实测 **promax**（`PROMAX_URL` + `X-API-Key`）的 `/daily`、`/daily_basic`、`/trade_cal` 均 HTTP 200 可用
+→ 新增 `jobs/backfill_market_bars_promax.py`（断点续跑 + 502/503/504 退避重试），改走 promax。
+
+**顺带发现的生产影响**（同一根因）：失效 token 影响所有走 `get_tushare_pro()` 的路径——
+`backend/app/api/indicator.py::_crowd_space_reason`（选股路径的**个股空间豁免**，取不到日线 → `return False`
+→ **fail-closed 恒硬拦**）、`t_trend_break.fetch_daily_bars`、`t_vrebounce.fetch_daily_bars`、
+`trend_breakout_monitor`、`support_resistance`、`golden_pit_tech_status`（实测前两者返回 **0 行**并打
+「日线获取失败」）。需决定：**续费 gzcloud，或把这些路径改走 promax**。
+
+### 6.2 跨期预览（2025-01→04，回填进行中，38 个交易日）
+
+| 月份 | 结构池 top3（按量能占比） | 他该季度的方向池 top5 |
+|---|---|---|
+| 2025-02 | AI/算力/科技(16)、新能源/电池(16)、**机器人/智能制造(16)** | **机器人**、消费/内需、新能源、AI/算力 |
+| 2025-03 | AI/算力/科技(2)、新能源/电池(2)、**机器人/智能制造(2)** | （同上，按季度） |
+
+**T6 选中分布 = 机器人/智能制造(5 天)、AI/算力/科技(3 天)** —— 即：
+**2026 年结构池 top3 是 {半导体、AI、新能源}，2025 年初是 {AI、新能源、机器人}——机器人替换了半导体**，
+与他 2025 的主线（机器人，`wolf_period_directions.json`：2025Q1-Q3 机器人为第一）**一致**。
+→ **初步支持"量能占比判据随时代改池"**（不是"科技别名"）。收益样本尚不足（n=8，20 日窗口 + 5 日前瞻需要更多历史）。
+
+### 6.3 待完成
+
+2025 全年回填（243 个交易日，3 个 worker 并行，上游延迟是瓶颈）→ 完成后跑
+`jobs/eval_structural_pool_year.py --start 20250101 --end 20251231`，
+补齐 **全年月度池构成 + 收益/H1/H2**，并与他 2025 四季度的池逐季对照。
