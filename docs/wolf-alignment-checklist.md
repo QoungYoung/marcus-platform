@@ -88,3 +88,24 @@
 - **传文件进容器用 `docker cp`**（宿主顶层目录不映射到 `/app`）。
 - **红线**：不做未经语料支撑的自造机制；我们的代理必须标"我们的代理"；重建产物标 `_rebuilt`/`_source`；语料绝不手打转写。
 - **PIT 纪律**：回测用 T-1 及更早的研报；gate 结论是盘后产出，供次日使用。
+
+
+---
+
+## F. 已删除的负向机制清单（2026-09-13，真删不是停用）
+
+> 用户指令：「把这些负向的删除掉，避免后面 AI 开发的时候误以为我们还在使用，不能简单停掉」。
+> 处理原则：**判据价值为负/零的机制，代码与链路一并删除**；**历史产物与相关分析脚本保留**（复盘用）。
+> 删除后如需回退，从 git 历史取回对应 commit 即可（见每条末尾）。
+
+| 机制 | 负向证据 | 删除内容 |
+|---|---|---|
+| **heat_v2**（主力资金热度） | 他 `doing` 主题平均 heat 排名 **10.42/13**（随机 7.0）→ **−3.42, t=−11.89**，仅 12.8% 天进前半 ⇒ 假设（追资金流入/放量）与他「缩量低吸」**方向相反** | 删 `apps/main_line/heat_v2.py`、链内步骤、`daily_decision` 的 heat source；保留历史 `heat_v2_*.json`。回退：`git show b5d0df1~1:apps/main_line/heat_v2.py` |
+| **mainline_gate**（结构资格闸） | 单独命中他方向 ≈ 随机（top1 **28%**/precision **12%**）；作约束净负（池∩gate 比纯池 recall 75%→63%、top3 85%→78%） | 删 `apps/main_line/mainline_gate.py`、链内步骤、`gate_top_themes` 的 gate 回退、`daily_decision` 的 gate source；保留历史 `mainline_gate_*.json` 与 `mainline_confirm_history.json`。回退：`git show 8167713~1:apps/main_line/mainline_gate.py` |
+| **main_line_judge**（研报催化 + fusion + 主线判定） | ①研报 catalyst **从未进生产判据**且生产实测 9 主题**全为 0.0**；②标题分 IC 仅 **0.056/0.064**（弱），`wolf_match` 网格里研报最优权重 **0**；③fusion 的 **conc 成分有方向缺陷**（实测第一名 AI/算力 与池判定 半导体 不符） | 删 `apps/main_line/main_line_judge.py`、从 `tasks.yaml` **移除任务条目**（含 3 处 `depends_on` 引用）、删除 `mainline_confirm_state` 里只服务 gate 的死函数（`ensure_history`/`ts_qualified`/`_themes_confirmed_in_window`）、`stock_confirm_judge` 的 fusion 兜底。回退：`git show 3aea57d~1:apps/main_line/main_line_judge.py` |
+| **脚本改名** | 旧名 `mainline_gate_daily.py` 会让人误以为还在做 gate | 改名 `apps/main_line/daily_inputs_chain.py` + `tasks.yaml` 的 id/name/description/log_file（任务 id 由 `mainline_gate_daily` → `daily_inputs_chain`） |
+| **`gate_top_themes`** | 名字带 gate | 改名 `mainline_top_themes()`（只读方向层 `wolf_mainline_select.json`），调用点 `stock_confirm_judge` + `switch_builder`×2 已同步 |
+
+**删除后的实际生产链（唯一主线判定）**：`18:45` `daily_inputs_chain`（concept_long → etf_flow → inst_flow → **trend_confirm** → inject_state）→ `18:55` `wolf_mainline_select`（池判定 + 直写 `main_line_state.json`）→ 次日 `08:25` `daily_decision`（L1 = 方向层，`missing` 不再含 gate/heat）→ `09:20` `rotation_switch_arm`（读池）。
+
+**验证（2026-09-13）**：容器内已无 `heat_v2.py`/`mainline_gate.py`/`main_line_judge.py`/`mainline_gate_daily.py`；链实跑 rc=0 且无 heat/gate 步骤；调度器加载 **56 个任务**（原 57）；`daily_decision.build()` 的 L1 = `{"mainline":"半导体/芯片","pool":["半导体/芯片","新能源/电池"]}`，basis=方向层；`mainline_top_themes(3)` 正常；`test_daily_decision.py` 18 项通过（注入改为 `ms=`）。

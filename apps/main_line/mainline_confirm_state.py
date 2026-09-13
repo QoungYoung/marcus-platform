@@ -9,7 +9,7 @@
 """
 import os, json
 DATA = os.environ.get('DATA_DIR', '/app/data')
-HIST_FILE = os.path.join(DATA, 'mainline_confirm_history.json')
+HIST_FILE = os.path.join(DATA, 'mainline_confirm_history.json')   # 历史文件，保留供归档；已无生产者/消费者（gate 删除）
 LOOKBACK_DAYS = 40          # 主升确认资格回看窗(交易日)
 
 def load_hist():
@@ -18,16 +18,6 @@ def load_hist():
     except Exception:
         return {'dates': {}}
 
-def ensure_history(rows, date8):
-    """mainline_gate 每日收尾: 记录 date8 当日 confirmed_candidate 主题集"""
-    hist = load_hist()
-    confirmed = sorted({r['theme'] for r in rows if r.get('verdict') == 'confirmed_candidate'})
-    dates = hist.setdefault('dates', {})
-    if date8 in dates and dates[date8] == confirmed:
-        return 0
-    dates[date8] = confirmed
-    json.dump(hist, open(HIST_FILE, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
-    return len(confirmed)
 
 def _days_upto(upto_date):
     """concept_long 交易日(≤ upto_date) —— 供回看窗口"""
@@ -39,26 +29,6 @@ def _days_upto(upto_date):
     except Exception:
         return None
 
-def _themes_confirmed_in_window(hist, upto_date):
-    """近 LOOKBACK_DAYS 交易日内的确认主题集"""
-    days = _days_upto(upto_date)
-    if days:
-        window = set(days[-LOOKBACK_DAYS:])
-    else:
-        # fallback: 日历 75 天近似
-        import datetime as _dt
-        u = _dt.date(int(upto_date[:4]), int(upto_date[4:6]), int(upto_date[6:]))
-        window = set()
-        for d in hist.get('dates', {}):
-            try:
-                dd = _dt.date(int(d[:4]), int(d[4:6]), int(d[6:]))
-                if (u - dd).days <= 75: window.add(d)
-            except Exception: pass
-    out = set()
-    for d in hist.get('dates', {}):
-        if d in window or (days is None and d in window):
-            out.update(hist['dates'][d])
-    return sorted(out)
 
 def theme_of_chain(chain):
     from fusion_mainline import THEME_CONCEPTS
@@ -95,21 +65,8 @@ def themes_of_ts(ts_code, concepts_map=None):
         if t: themes.add(t)
     return sorted(themes)
 
-def ts_qualified(ts_code, upto_date=None, concepts_map=None):
-    """个股级准入: 任一所属主题近窗内曾确认"""
-    from datetime import date as _d
-    upto_date = upto_date or _d.today().strftime('%Y%m%d')
-    ths = themes_of_ts(ts_code, concepts_map)
-    if not ths:
-        return {'ok': False, 'themes': [], 'reason': 'no_theme'}
-    hist = load_hist()
-    conf = _themes_confirmed_in_window(hist, upto_date)
-    hit = [t for t in ths if t in conf]
-    return {'ok': bool(hit), 'themes': ths, 'confirmed_in_window': conf,
-            'hit_themes': hit, 'reason': None if hit else 'theme_not_recently_confirmed'}
 
-
-def gate_top_themes(n=3, upto=None):
+def mainline_top_themes(n=3, upto=None):
     """前 n 个主线主题。**2026-09-13 起优先用方向层池判定**（wolf_mainline_select：主线 ∪ 池，
     按池内 r5 候选补齐），缺失时才回退旧的 mainline_gate json。
 
@@ -132,17 +89,6 @@ def gate_top_themes(n=3, upto=None):
                 return ths[:n], (_d or upto)
     except Exception:
         pass
-    best = None; bd = ''
-    for f in _g.glob(os.path.join(DATA, 'mainline_gate_*.json')):
-        d = os.path.basename(f)[14:22]
-        if d <= upto and d > bd:
-            bd = d; best = f
-    if not best: return None
-    try:
-        g = json.load(open(best, encoding='utf-8'))
-    except Exception:
-        return None
-    rows = [r for r in g.get('rows', []) if r.get('verdict') in ('confirmed_candidate', 'watch', 'reserve')]
-    w = {'confirmed_candidate': 0, 'watch': 1, 'reserve': 2}
-    rows.sort(key=lambda r: (w.get(r.get('verdict'), 3), r.get('heat_rank') or 99))
-    return [r['theme'] for r in rows[:n]], bd
+    return None      # 2026-09-13：gate 回退路径已删除（mainline_gate 模块与产物均已废弃）
+
+

@@ -33,20 +33,24 @@ def _env(monkeypatch, tmp_path):
     yield
 
 
-GATE = {"confirmed": ["半导体", "液冷"], "top": [{"theme": "半导体"}, {"theme": "算力"}]}
+GATE = {"confirmed": ["半导体", "液冷"], "top": [{"theme": "半导体"}, {"theme": "算力"}]}  # 已废弃（保留兼容旧调用）
+MS = {"date": "20260911", "mainline": "半导体/芯片", "second": "新能源/电池",
+      "pool": ["半导体/芯片", "新能源/电池"], "rank_in_gate": ["半导体/芯片", "新能源/电池"],
+      "pool_k": 3}
 WAVE_BUILD = {"operation": "build", "level": "d4", "sub_level": "4-4"}
 WAVE_DEF = {"operation": "defense", "level": "d4", "sub_level": "4-5"}
 
 
 # ── 六层组装 ─────────────────────────────────────────────────────────
 def test_build_six_layers_from_injected_inputs():
-    obj = DD.build("20260911", gate=GATE, wave=WAVE_BUILD,
+    obj = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_BUILD,
                    tiers={"target_pct": 0.75, "floor_pct": 0.55, "tier": "build"},
                    picks={"picks": [{"symbol": "SH600519"}, {"symbol": "SZ000001"}]},
                    gates={"G10_volume_gate": {"enabled": True, "tag": "地量"}})
     L = obj["layers"]
     assert [k for k in L] == DD.LAYERS
-    assert L["L1_direction"]["value"]["confirmed"] == ["半导体", "液冷"]
+    assert L["L1_direction"]["value"]["mainline"] == "半导体/芯片"
+    assert L["L1_direction"]["value"]["pool"] == ["半导体/芯片", "新能源/电池"]
     assert L["L2_operation"]["value"]["operation"] == "build"
     assert L["L2_operation"]["value"]["allow_new_position"] is True
     assert L["L3_position"]["value"]["target_pct"] == pytest.approx(0.75)
@@ -66,7 +70,7 @@ def test_missing_inputs_degrade_honestly():
 
 # ── L5 拦阻项（这是"判据先于成交"的落点）────────────────────────────
 def test_l5_blocks_when_operation_disallows():
-    obj = DD.build("20260911", gate=GATE, wave=WAVE_DEF, tiers={}, picks=None, gates={})
+    obj = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_DEF, tiers={}, picks=None, gates={})
     l5 = obj["layers"]["L5_entry"]["value"]
     assert l5["allowed"] is False
     assert any("档位" in b for b in l5["blockers"])
@@ -75,7 +79,7 @@ def test_l5_blocks_when_operation_disallows():
 def test_l5_breakdown_is_warning_not_blocker():
     """**破位不拦开仓**：他 08-25 说破位=止损评估（对持仓），08-24 破位当天照样按计划买入。
     曾把它写成 blocker → 会导致整天无法开仓，属自造机制，已改为 warning。"""
-    obj = DD.build("20260911", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None,
+    obj = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_BUILD, tiers={}, picks=None,
                    gates={"G10_volume_gate": {"enabled": True, "breakdown_risk": True}})
     l5 = obj["layers"]["L5_entry"]["value"]
     assert l5["allowed"] is True
@@ -85,14 +89,14 @@ def test_l5_breakdown_is_warning_not_blocker():
 
 def test_l5_fake_breakout_still_blocks():
     """诱多才是他明确说不追高、不加仓的（2026-09-01 / 09-03）。"""
-    obj = DD.build("20260911", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None,
+    obj = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_BUILD, tiers={}, picks=None,
                    gates={"G10_volume_gate": {"fake_breakout_risk": True}})
     l5 = obj["layers"]["L5_entry"]["value"]
     assert l5["allowed"] is False and any("诱多" in b for b in l5["blockers"])
 
 
 def test_l5_blocks_on_fake_breakout_and_weekend_hedge():
-    obj = DD.build("20260911", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None,
+    obj = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_BUILD, tiers={}, picks=None,
                    gates={"G10_volume_gate": {"fake_breakout_risk": True},
                           "G9_weekend_hedge": {"active": True}})
     l5 = obj["layers"]["L5_entry"]["value"]
@@ -117,11 +121,11 @@ def test_entry_allowed_follows_l5_when_gate_on(monkeypatch):
     monkeypatch.setenv("WOLF_DECISION_GATE", "1")
     d = DD.decision_dir()
     Path(d).mkdir(parents=True, exist_ok=True)
-    blocked = DD.build("20260911", gate=GATE, wave=WAVE_DEF, tiers={}, picks=None, gates={})
+    blocked = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_DEF, tiers={}, picks=None, gates={})
     Path(DD.path_for("20260911")).write_text(json.dumps(blocked, ensure_ascii=False), encoding="utf-8")
     ok, why = DD.entry_allowed("20260911")
     assert ok is False and "L5 拦阻" in why
-    allowed = DD.build("20260911", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None, gates={})
+    allowed = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_BUILD, tiers={}, picks=None, gates={})
     Path(DD.path_for("20260911")).write_text(json.dumps(allowed, ensure_ascii=False), encoding="utf-8")
     ok2, why2 = DD.entry_allowed("20260911")
     assert ok2 is True and why2 == "L5 允许"
@@ -145,7 +149,7 @@ def test_directive_disabled_and_enabled(monkeypatch):
     monkeypatch.setenv("WOLF_DAILY_DECISION", "1")
     d = DD.decision_dir()
     Path(d).mkdir(parents=True, exist_ok=True)
-    obj = DD.build("20260911", gate=GATE, wave=WAVE_DEF, tiers={}, picks=None,
+    obj = DD.build("20260911", gate=GATE, ms=MS, wave=WAVE_DEF, tiers={}, picks=None,
                    gates={"G10_volume_gate": {"fake_breakout_risk": True}})
     Path(DD.path_for("20260911")).write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
     txt = DD.directive("20260911")
@@ -154,7 +158,7 @@ def test_directive_disabled_and_enabled(monkeypatch):
 
 def test_backfill_warns_about_undated_wave(monkeypatch, tmp_path):
     """回填历史日、又只有不带日期的 wave_state.json 时，必须给出 look-ahead 告警。"""
-    obj = DD.build("20200101", gate=GATE, wave=WAVE_BUILD, tiers={}, picks=None, gates={},
+    obj = DD.build("20200101", gate=GATE, ms=MS, wave=WAVE_BUILD, tiers={}, picks=None, gates={},
                    sources={"wave_dated": {"present": False}})
     assert obj["warnings"] and "look-ahead" in obj["warnings"][0]
 

@@ -412,6 +412,41 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                 db.commit()
             except Exception:
                 db.rollback()
+        # ── 2026-09-13 合并：方向层**直接写** main_line_state.json 的主线字段（单一判定者） ──
+        # 此前主线字段由 08:00 的 main_line_judge 从本模块结果"拷贝"过去；现改为本模块直写，
+        # judge 只负责早间的研报催化分/融合分刷新，不再参与主线判定（见 docs/wolf-structural-pool.md §十三）。
+        if save and os.getenv("WOLF_MS_WRITE_STATE", "1").strip().lower() not in ("0", "false", "no", ""):
+            try:
+                _sp = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "main_line_state.json")
+                _ms = {}
+                try:
+                    if os.path.exists(_sp):
+                        with open(_sp, encoding="utf-8") as _f:
+                            _ms = _json.load(_f) or {}
+                except Exception:
+                    _ms = {}
+                _ms["main_line"] = res.get("mainline")
+                _pool_j = [t for t in (res.get("pool") or []) if t and t != res.get("mainline")]
+                _cand = ([res.get("second")] if res.get("second") else []) + _pool_j
+                _cand = [t for i, t in enumerate(_cand) if t and t not in _cand[:i]]
+                if _cand:
+                    _ms["candidates"] = _cand[:3]
+                _ms["main_line_source"] = "mainline_select_" + d8
+                _ms["mainline_select"] = {
+                    "date": d8, "mainline": res.get("mainline"), "second": res.get("second"),
+                    "pool": res.get("pool") or [], "pool_top": res.get("pool_top") or [],
+                    "pool_k": res.get("pool_k"), "pool_share5": res.get("pool_share5") or {},
+                    "candidates": res.get("rank_in_gate") or [], "r5": res.get("r5") or {},
+                    "themes": res.get("themes") or [], "use_gate": res.get("use_gate"),
+                    "note": "方向层主线 = 池(量能占比topK ∩ r5>0) → 池内 r5 top1；与他股票主线层对齐 recall 75%/top1 54%/top3 85%",
+                }
+                _ms["updated_at"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(_sp, "w", encoding="utf-8") as _f:
+                    _json.dump(_ms, _f, ensure_ascii=False, indent=1)
+                print("[mainline] state 已写 main_line=%s candidates=%s" % (_ms.get("main_line"), _ms.get("candidates")),
+                      flush=True)
+            except Exception as _e:
+                print("[mainline] 写 state 失败 %s: %s" % (type(_e).__name__, str(_e)[:70]), flush=True)
         print("[mainline] %s 主线=%s｜池=%s（K=%d, 资格 %d 个）｜候选前3=%s" %
               (d8, res.get("mainline"), res.get("pool"), res.get("pool_k", 0), res.get("gate_n"),
                [(t, res["r5"][t]) for t in res["rank_in_gate"][:3]]), flush=True)

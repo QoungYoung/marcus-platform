@@ -71,18 +71,17 @@ def main():
     try:
         import fusion_mainline as fm
         st = json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8"))
-        # 2026-09-09 主线判定统一: gate(heat_v2+结构)优先, 旧 fusion conc 分仅参考
+        # 2026-09-13: 主题来源＝方向层池判定（mainline_top_themes）；fusion 已随研报线删除，不再作兜底
         themes = None
         try:
-            from mainline_confirm_state import gate_top_themes
-            _gt = gate_top_themes(CONFIRM_TOP_N)
+            from mainline_confirm_state import mainline_top_themes
+            _gt = mainline_top_themes(CONFIRM_TOP_N)
             if _gt: themes = _gt[0]
         except Exception:
             pass
         if not themes:
-            fus = st.get("fusion") or {}
-            rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
-            themes = [k for k, _ in rank[:CONFIRM_TOP_N]] or [st.get("main_line") or "AI/算力/科技"]
+            # 2026-09-13：fusion 已随研报线删除 → 直接落方向层主线
+            themes = [st.get("main_line") or "AI/算力/科技"]
     except Exception:
         fm = None
         themes = ["AI/算力/科技"]

@@ -108,15 +108,7 @@ def _l1(gate: Optional[Dict[str, Any]], ms: Optional[Dict[str, Any]] = None) -> 
                           "candidates": list(ms.get("rank_in_gate") or [])[:8],
                           "pool_k": ms.get("pool_k")},
                 "basis": "daily_artifacts.mainline_select（方向层池判定）"}
-    if not gate:
-        return {"value": None, "basis": "mainline_select / mainline_gate 均缺失"}
-    conf = gate.get("confirmed") or gate.get("confirmed_candidate") or gate.get("themes") or []
-    if isinstance(conf, dict):
-        conf = list(conf.keys())
-    top = gate.get("top") or gate.get("ranked") or []
-    themes = [t.get("theme") if isinstance(t, dict) else t for t in (top or [])][:5]
-    return {"value": {"confirmed": list(conf)[:8], "heat_top": [t for t in themes if t]},
-            "basis": "mainline_gate_<d>.json（gate 链第 6 步）"}
+    return {"value": None, "basis": "mainline_select 缺失（gate 回退分支已于 2026-09-13 删除）"}
 
 
 def _l2(wave: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -236,10 +228,15 @@ def _gates_state() -> Dict[str, Any]:
 def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[str, Any]] = None,
           tiers: Optional[Dict[str, Any]] = None, picks: Optional[Any] = None,
           gates: Optional[Dict[str, Any]] = None,
+          ms: Optional[Dict[str, Any]] = None,
           sources: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """组装决策对象（参数可注入 → 单测不依赖文件/数据库）。"""
+    """组装决策对象（参数可注入 → 单测不依赖文件/数据库）。
+
+    2026-09-13：`gate` 参数已废弃（mainline_gate 模块删除）；L1 方向层改用 `ms`（方向层池判定）。
+    """
     import datetime as _dt
-    gate = gate if gate is not None else _read_json("mainline_gate_{d}.json", d8)
+    ms = ms if ms is not None else (_read_json("wolf_mainline_select.json", d8)
+                                    or (_read_json("main_line_state.json", d8) or {}).get("mainline_select"))
     wave = wave if wave is not None else (_read_json("wave_state_{d}.json", d8) or _read_json("wave_state.json", d8))
     picks = picks if picks is not None else _read_json("stock_confirm_result.json", d8)
     gates = gates if gates is not None else _gates_state()
@@ -255,12 +252,14 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
                      "floor_pct": (float(flr) / 100.0) if flr else None, "tier": op}
         except Exception:
             tiers = {}
-    layers = {"L1_direction": _l1(gate), "L2_operation": l2, "L3_position": _l3(tiers),
+    layers = {"L1_direction": _l1(None, ms), "L2_operation": l2, "L3_position": _l3(tiers),
               "L4_picks": _l4(picks), "L5_entry": _l5(l2, gates), "L6_exit": _l6(gates)}
     src = sources if sources is not None else {
-        "gate": _src("mainline_gate_{d}.json", d8), "wave_dated": _src("wave_state_{d}.json", d8),
+        # "gate": 2026-09-13 删除——mainline_gate 模块与产物已废弃（主线判定唯一＝方向层池判定）
+        "wave_dated": _src("wave_state_{d}.json", d8),
         "wave_latest": _src("wave_state.json", d8), "picks": _src("stock_confirm_result.json", d8),
-        "heat": _src("heat_v2_{d}.json", d8),
+        # "heat": 2026-09-13 移除——heat_v2 已停用（与他做法反向 t=-11.89），不再作为源文件检查项，
+        #          否则每天会被记为 missing → 可能触发"数据不全"降级。
     }
     missing = [k for k, v in (src or {}).items() if isinstance(v, dict) and not v.get("present")]
     missing += [k for k, v in layers.items() if (v.get("value") is None)]

@@ -24,10 +24,10 @@ def _load(name):
 
 
 def fusion_top3():
-    # 2026-09-09 主线判定统一: mainline_gate(heat_v2+结构)优先; 旧 fusion conc 分回退
+    # 2026-09-13: 主题来源＝方向层池判定（mainline_top_themes）
     try:
-        from mainline_confirm_state import gate_top_themes
-        _gt = gate_top_themes(3)
+        from mainline_confirm_state import mainline_top_themes
+        _gt = mainline_top_themes(3)
         if _gt: return _gt[0]
     except Exception:
         pass
@@ -63,7 +63,7 @@ def stock_stage(code6):
 def active_stocks_by(stages):
     try:
         from mainline_confirm_state import gate_top_themes
-        _gt = gate_top_themes(2)
+        _gt = mainline_top_themes(2)
         top12 = _gt[0] if _gt else None
     except Exception:
         top12 = None

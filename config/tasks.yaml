@@ -541,27 +541,6 @@ tasks:
     channels:
     - qqbot
   depends_on: []
-- depends_on: []
-  description: 【2026-09-13 停用】原为「研报→催化分→主线判定」。主线已由方向层 wolf_mainline_select 直写 main_line_state（每日 18:55），研报线已关闭（WOLF_JUDGE_CATALYST=0），本任务只剩 fusion 计算+state 组装，而 fusion/catalyst 已不进主线判定与提示词 → 停用。回退：本项 enabled 置 true 且 .env 置 WOLF_JUDGE_CATALYST=1
-  enabled: false
-  id: main_line_judge
-  name: 主线判定
-  notifications:
-    channels:
-    - qqbot
-    on_failure: true
-    on_success: true
-    pi_analysis: true
-  output:
-    append: false
-    log_file: logs/main_line_judge_{date}.log
-  schedule:
-    expr: 0 8 * * mon-fri
-    timezone: Asia/Shanghai
-    type: cron
-  script:
-    args: []
-    path: apps/main_line/main_line_judge.py
 - id: rotation_universe_refresh
   name: 主线子方向动态细分刷新
   description: 8:05 每日按主线动态派生 sub-universe(derive_sub_universe)+重建 rotation_universe_result/crowding_blacklist, 使宇宙跟主线不再周一滞后; 上游 taxonomy 由 build_concept_taxonomy 生成
@@ -584,7 +563,6 @@ tasks:
     channels:
     - qqbot
   depends_on:
-  - main_line_judge
 - depends_on: []
   description: 每周一 8:10 上证指数结构+量能/资金/GJD/历史锚点/主线 -> 狼大两级浪型判定 -> 写入 wave_state.json;交易gate按(level,sub_level)->operation->gate防御
   enabled: true
@@ -650,7 +628,6 @@ tasks:
     channels:
     - qqbot
   depends_on:
-  - main_line_judge
 - id: stock_confirm_refresh
   name: 成分股确认刷新
   description: 8:20 每日按今日主线刷新个股确认(主线→THEME_CONCEPTS→成分→confirm_chain→stock_confirm_result.json), 使成分股确认始终跟主线(如消费/内需), 避免周度滞后旧主线; end_date动态
@@ -672,7 +649,6 @@ tasks:
     channels:
     - qqbot
   depends_on:
-  - main_line_judge
 - id: daily_strategy_summary
   name: 当日策略摘要 (主线+波浪+宏观)
   description: 8:25 读 main_line_state+wave_state+macro_state+systemic_risk -> 一份确定性合并摘要(含狼大操作口径), 替代零散主线/波浪报告; 非LLM叙事
@@ -979,20 +955,20 @@ tasks:
     on_success: false
     pi_analysis: false
 
-- id: mainline_gate_daily
-  name: '主线确认每日更新 (concept_long + heat_v2 + 结构GATE + 确认历史)'
-  description: 盘后18:45 顺序更新 concept_long(未到当日才全量) -> trend_confirm 结构GATE -> heat_v2 主力资金热度 -> mainline_gate 漏斗 + mainline_confirm_history(供 rotation_switch_arm 曾确认闸)
+- id: daily_inputs_chain
+  name: '盘后行情输入链 (concept_long + ETF/机构流 + 结构确认)'
+  description: 盘后18:45 顺序更新 concept_long(未到当日才全量) -> build_etf_flow -> build_inst_flow -> trend_confirm(结构, 供方向层浪型) -> inject_state。**heat_v2 与 mainline_gate 步骤已于 2026-09-13 删除**（判据无效/反向，主线判定唯一＝方向层池判定 wolf_mainline_select）
   enabled: true
   schedule:
     type: cron
     expr: 45 18 * * mon-fri
     timezone: Asia/Shanghai
   script:
-    path: apps/main_line/mainline_gate_daily.py
+    path: apps/main_line/daily_inputs_chain.py
     args: []
   output:
     append: true
-    log_file: logs/mainline_gate_{date}.log
+    log_file: logs/daily_inputs_chain_{date}.log
   notifications:
     channels:
     - qqbot
