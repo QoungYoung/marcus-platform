@@ -438,6 +438,8 @@ class TMonitor:
                                          account_id=p.get("account_id") or "stock")
                     if gw.get("status") == "success":
                         print(f"[TMonitor] 量能分层卖出 {sym} {vol}股@{cur} ({reason_tag})")
+                        self._after_sell(sym, p.get("account_id") or "stock", "custom_support_sell",
+                                         "量能分层破位离场（%s）" % reason_tag)
                     del _PULLBACK_SELL[sym]
                 except Exception as e:
                     print(f"[TMonitor] pullback settle err {sym}: {str(e)[:100]}")
@@ -1050,6 +1052,8 @@ class TMonitor:
                 gw = gateway_execute(sym, 'sell', cur, vol, reason="[G4 被动止盈] " + reason, trigger_id=rid,
                                      decision_source='rule', account_id=acct)
                 print(f"[TMonitor] G4 被动止盈线跌破 {sym} {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                if gw.get('status') == 'success':
+                    self._after_sell(sym, acct, 'wolf_passive_stop_sell', '被动止盈线跌破')
                 try:
                     t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
                                                reason=f"G4 被动止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
@@ -1058,6 +1062,19 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] passive_stop异常: {e}")
+
+    def _after_sell(self, sym, account, kind, reason="") -> None:
+        """G3（2026-09-14）：**破线类**卖出成交后"删票"（登记观察池黑名单，带 TTL）。
+
+        狼大 2025-02-06「最下面那根线一旦破了 **卖出然后删票**」/ 2025-04-03「破之前新低的，**直接删票**」/
+        2021-01-22「这两根破了**这个标我就不看了**」。只影响**买入侧候选**，不影响卖出（保护不能失效）。
+        """
+        try:
+            from app.services import wolf_ticket_ban as TB
+            if str(kind) in ("stop_loss", "custom_support_sell", "wolf_passive_stop_sell"):
+                TB.ban(account, sym, reason or str(kind))
+        except Exception as e:
+            print(f"[TMonitor] 删票登记失败 {sym}: {e}")
 
     def _check_position_discipline(self) -> None:
         """去弱留强(P1-6, 2026-09-10): 反弹语境内, 减 T 仓最弱的持仓。
@@ -1183,6 +1200,8 @@ class TMonitor:
                                       reason="指数大级别止损→%s（%s）" % (_mode, _why),
                                       decision_source="rule", is_stop_loss=True, account_id=_acct)
                 print(f"[TMonitor] 指数级止损 {_sym} @ {_cur} x{_vol}[{_mode}]: {_gw.get('status')} | {_why}")
+                if _gw.get("status") == "success":
+                    self._after_sell(_sym, _acct, "stop_loss", "指数大级别止损")
                 self._wolf_done.add((_sym, 'wolf_index_level_stop', _today))
         except Exception as e:
             self._status['errors'] += 1
@@ -2290,6 +2309,8 @@ class TMonitor:
                         if exec_ok and side == "sell":
                             # 同轮互斥: 该标的本轮已有卖腿成交, 其余离场腿本轮不再执行
                             self._sold_this_round.add(symbol)
+                            self._after_sell(symbol, cond.get("account_id", T_MONITOR_ACCOUNT),
+                                             trigger_kind, str(cond.get("reason") or ""))
                         print(f"[TMonitor] 自动执行 {symbol} {side} {volume}股@{current}: "
                               f"{gw.get('status')} {str(gw.get('reason') or '')[:40]}")
                         # 执行结果写入触发事件（供审计/复盘）

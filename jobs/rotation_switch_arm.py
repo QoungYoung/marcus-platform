@@ -159,12 +159,27 @@ def pick_buy(chain, exclude, limit=3):
         return []
     bad = bad_set()
     # 拥挤黑名单已于 2026-09-13 真删(D15 证拦反 + 用户指令)：不再读、不再静默排除候选。勿重新引入。
+    # G3(2026-09-14)：**破线卖出后"删票"**（狼大 2025-02-06「卖出然后删票」/2025-04-03「破之前新低的直接删票」）
+    # —— 带 TTL（默认 13 交易日）；与已删的拥挤黑名单不同：① 触发条件是**他自己的破线**，② **有日志**不静默。
+    banned, _skipped = {}, []
+    try:
+        import sys as _bs, os as _bo
+        _bs.path.insert(0, _bo.path.join(_bo.path.dirname(_bo.path.dirname(_bo.path.abspath(__file__))), "backend"))
+        from app.services.wolf_ticket_ban import banned_symbols as _banned_syms
+        banned = _banned_syms(["stock"])
+    except Exception as _be:
+        print(f"[rotation] 删票黑名单读取失败: {str(_be)[:60]}")
     cands = []
     for ts, names in cm.items():
         if any(norm(k) in norm(n) for n in names for k in kws):
             xq = "SH" + ts[:6] if ts.endswith(".SH") else ("SZ" + ts[:6] if ts.endswith(".SZ") else ts)
+            if ts in banned:
+                _skipped.append(ts)
+                continue
             if xq not in exclude and ts not in bad:
                 cands.append((ts, xq))
+    if _skipped:
+        print(f"[rotation] G3 删票过滤 {len(_skipped)} 只: {_skipped[:8]}")
     if not cands:
         return []
     # ① 市值预筛(单次全市场调用): 龙头优先于字典序

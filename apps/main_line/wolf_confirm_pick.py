@@ -205,6 +205,19 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     theme_cons = set(uni.keys())
     # 拥挤黑名单(crowding_blacklist.json)已于 2026-09-13 真删(D15 事件研究证"拦反" + 用户指令)：
     # 原此处会 ts in detail → continue，即无日志、无提示的静默排除。勿重新引入。
+    # G3(2026-09-14)：**破线卖出后"删票"**（狼大 2025-02-06 / 2025-04-03）——带 TTL（默认 13 交易日），
+    # 且**打日志**（不静默）；只影响买入侧候选，不影响卖出。
+    banned = {}
+    try:
+        import sys as _bs2, os as _bo2
+        _bs2.path.insert(0, _bo2.path.join(_bo2.path.dirname(_bo2.path.dirname(_bo2.path.dirname(
+            _bo2.path.abspath(__file__)))), "backend"))
+        from app.services.wolf_ticket_ban import banned_symbols as _banned_syms2
+        banned = _banned_syms2(["stock"])
+    except Exception as _be2:
+        print(f"WOLF_PICK BAN_LIST_ERR {str(_be2)[:60]}", file=sys.stderr)
+    if banned:
+        print(f"WOLF_PICK BAN_LIST n={len(banned)} symbols={sorted(banned)[:8]}", file=sys.stderr)
     kl, mv = {}, {}
     for i in range(0, len(members), 20):
         chunk = members[i:i+20]
@@ -222,7 +235,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     for ts, rows in kl.items():
         nm = names.get(ts, ts)
         xq = ("SH" if ts.endswith(".SH") else "SZ") + ts[:6]
-        if not board_allowed(ts) or xq in exclude or ts in bad or "ST" in nm:
+        if not board_allowed(ts) or xq in exclude or ts in bad or "ST" in nm or ts in banned:
             continue
         closes = [r[1] for r in rows]; lows = [r[2] for r in rows]; amts = [r[3] for r in rows]
         amt20 = statistics.mean(amts[-20:]) / 1e5
