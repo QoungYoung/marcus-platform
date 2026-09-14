@@ -163,6 +163,7 @@
 | **A1** | **roundtrip_sell 优先级反转**：+3% 目标优先于破黄线；破黄线需"突发"确认（幅度 ≥0.5% 或连续 2 轮在黄线下） | 「**一旦突发跌破直接走**；**如果没跌破就找这半小时的高点**」2026-08-04 10:48；「至少能有吃 3-5 个点的幅度」2026-08-13 楼275/280 | ✅ 已落地（2026-09-14） | 新增 `backend/app/services/roundtrip_priority.py`（纯函数 `roundtrip_decision`）+ `t_monitor._check_roundtrip_sell` 改判；开关 `WOLF_RT_PRIORITY=target_first`（回退 `vwap_first`）/ `WOLF_VWAP_BREAK_PCT=0.005` / `WOLF_VWAP_BREAK_ROUNDS=2`；单测 `backend/tests/test_roundtrip_priority.py` 6 项 |
 | **A2** | 破黄线只保留**保护语义**，不作为独立 alpha 来源 | 真 m5：33/33 条腿都会破线（`docs/exit-rules-m5-report.md` §3.1） | ✅ 按设计成立 | A1 之后破线只在目标之后触发离场（直跌保护），不再被当成择时信号；语料里与之同族的量能条件（「缩量不参与」「放量跌破收盘完全止盈」）已分别落在别处，未重复造 |
 | **A3** | 破线若要当信号，须定义**确认条件**（幅度/根数/量能） | 同上 §3.3 | 🚧 口径已定、阈值未定 | 阈值扫描 `jobs/eval_roundtrip_confirm.py`（§ 报告 4.1）：0.5%/2 轮仍 26/33 走破线、均值 +0.01%；rounds 3→5 时均值 −0.04→+1.65 **说明是"破线出场越少越好"而非阈值更好**；n=33 + H1/H2 变号 → **不据此调参**，生产保持保守默认 |
+| **A4** | **改成跟狼大一致**：等量换手兑现只在他的两个做 T 窗口内执行（09:45–10:00 / 14:00–14:30）；**14:00 未达标也 T 掉收工**；确认破黄线任何时候可走 | 2025-04-15 成文流程条件 2「当日只做上午 9:45–10:00、下午 14:00–14:30 这两个时间段」；2026-09-02 14:03「**2 点到了 力度不够 我先把早上博弈的先T了**…结束今天半导体做T操作」；2026-08-04 10:48「一旦突发跌破直接走」 | ✅ 已落地（2026-09-14） | `roundtrip_priority.roundtrip_decision()` 增加 `hm` + 窗口/到点判定；`t_monitor._check_roundtrip_sell` 传当前时刻、卖腿理由按分支带原话。开关：`WOLF_RT_WINDOW=0`（回 A1 旧行为）/ `WOLF_RT_WINDOWS` / `WOLF_RT_FORCE_HM=off`（只留窗口语义）/ `WOLF_RT_TIMEOUT_TOL=0.005`（"亏个手续费"容忍）。单测 12 项。**实测（n=428，`jobs/eval_roundtrip_windows.py`）：A4a ≈0（1 日 +0.01%/edge −0.9pp；2 日 −0.01%），落地理由是"忠实 + 回测无法区分"**（做 T 腿 1–2 日窗口内各口径都在 ±0.15pp、se≈0.18）；⚠️ 更正：§报告 §2 里 V3d +0.34%/edge +5.9pp 属于"**收盘** ≥+3% 才卖"的 5 日口径，**做 T 腿用不上**，不能记到 A4 头上（见 `docs/exit-rules-m5-report.md` §4.2） |
 | **阶段 1** | 兑现口径变体对照 `jobs/eval_exit_rules.py`（V1 +3% / V2 破黄线 / V3 组合 / V4 做 T 前置 / V5 高低位） | plan §5 阶段 1 | ✅ **已验收（2026-09-14，n=428 × 真 m5）** | 生产腿 n=33 的结论已在 **428 条参考腿 × 真分时均价线** 上复核（`docs/exit-rules-replay-m5-report.md`；428/428 腿 m5 齐全、0 缺口）：① **破线独立离场无 alpha**（V2a/b/c/d 均值 −0.04~0.00、胜率 41–42% < 持 T+5 的 47.4%，且 428/428 必破）；② A1 的“加确认”非关键（V2d −0.02 vs V2a −0.03，噪声内）；③ +3% 止盈 = **分布变换**（胜率 +5.2pp、中位 +0.98pp，均值 −0.14pp）；④ 生产现口径 V3d +0.34%/块状 t 2.29 ≥ 旧“破线优先”V3c +0.30%/2.05 且 **H1/H2 同号** → 保留 A1。V4/V5 仍是代理口径（做 T 前置 / 个股分位），未纳入本次验收 |
 
 ### 5.1 本轮落地的验证（2026-09-14）
@@ -218,6 +219,14 @@
   另有 3 个文件在本地**超时**（需要外部网络/DB：`test_daily_decision.py`、`test_golden_pit_paper_execution.py`、
   `test_golden_pit_sector_service.py`），以及 `test_marcus_trade_notify.py` 的既有 collection error
   （`No module named 'workspace_detector'`）。整仓 `pytest backend/tests` 一次跑会挂在那 3 个网络文件上。
+
+- **A4 做 T 时间窗 + 2 点决断**（同日追加，用户"改成跟狼大一致"）：`roundtrip_priority.py` 扩到
+  `roundtrip_decision(cur, buy_avg, avg, up, streak, hm)`（窗口内兑现 / 14:00 到点收工 / 破线保护优先）；
+  `t_monitor._check_roundtrip_sell` 传 `hm`；单测 `backend/tests/test_roundtrip_priority.py` **12 项**（含窗口闸、
+  到点收工、浮亏容忍、保护优先、两个开关回退）。
+  **服务器实测**：`window_enabled=True windows=09:45-10:00,14:00-14:30 force=14:00 tol=0.005 priority=target_first`；
+  八种场景判定 = 10:30 达标→`wait`(不在窗口)｜09:50/14:10 达标→`sell_target`｜14:00 +1.1%→`sell_timebox`｜13:55 +1.1%→`wait`｜
+  14:05 −0.3%→`sell_timebox`｜14:05 −2%/−3%→`wait`(超过容忍，交给保护腿)。回退：`WOLF_RT_WINDOW=0`。
 
 ### 5.2 G1 离线体检（2026-09-14，上证 2025-04-01 → 2026-09-11，355 个交易日）
 

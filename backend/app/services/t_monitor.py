@@ -191,10 +191,22 @@ class TMonitor:
             print(f"[TMonitor] 计划触发检查异常: {e}")
 
     def _check_roundtrip_sell(self) -> None:
-        """B模型·等量换手卖出检查(2026-09-08 落地, 2026-09-11 兑现幅度对齐狼大): 当日低吸N后
-        反弹≥低吸均价×(1+ROUNDTRIP_SELL_UP) 卖≤N股旧仓;
-        昨低吸未完成→今日解锁继续(两日窗口); 超窗 stale 转人工。
-        ROUNDTRIP_SELL_UP 默认 0.03 = 狼大「3-5个点」下沿(2026-08-13 楼275/280; 2026-09-02 楼728)。"""
+        """B模型·等量换手卖出检查(2026-09-08 落地; 2026-09-11 兑现幅度; 2026-09-14 A1+A4):
+        当日低吸N后，按狼大做 T 流程卖出 ≤N 股旧仓（不动当日买入/底仓 floor）。
+
+        **A4（2026-09-14 用户"改成跟狼大一致"）**：
+          · 目标兑现只在**他的两个做 T 时间窗**内执行（09:45–10:00 / 14:00–14:30，
+            2025-04-15 成文流程条件 2）——窗口外达标不卖，让它跑；
+          · **到点决断**：14:00 仍未达标也 T 掉收工（2026-09-02 14:03「2 点到了 力度不够
+            我先把早上博弈的先T了…结束今天半导体做T操作」），容忍"亏个手续费"（默认 0.5%）；
+          · **保护**：确认破黄线（A1：幅度≥0.5% 或连续 2 轮）任何时候都可走
+            （2026-08-04 10:48「一旦突发跌破直接走」）。
+        回退：`WOLF_RT_WINDOW=0`（回 A1 原行为，任何时间达标即卖）；`WOLF_RT_FORCE_HM=off`（只保留窗口语义）；
+        `WOLF_RT_PRIORITY=vwap_first`（回"破线优先"旧行为）。
+        ROUNDTRIP_SELL_UP 默认 0.03 = 狼大「3-5个点」下沿(2026-08-13 楼275/280; 2026-09-02 楼728)。
+        实测（n=428 参考腿，`jobs/eval_roundtrip_windows.py`）：本口径 ≈0（不是靠它赚钱，是靠它忠实），
+        且 1 日/2 日窗口内各口径差异都 ≤0.15pp —— 见 docs/exit-rules-m5-report.md §4.2。
+        """
         try:
             from app.services import roundtrip_sell as _rs
             from app.services import roundtrip_priority as RP
@@ -203,6 +215,7 @@ class TMonitor:
             pend = _rs.pending_symbols()
             if not pend:
                 return
+            hm = datetime.now().strftime("%H:%M")     # A4：做 T 时间窗 / 到点决断
             quotes = self._fetch_quotes_concurrent([s for s, _ in pend])
             for sym, st in pend:
                 try:
@@ -212,13 +225,9 @@ class TMonitor:
                         continue
                     buy_avg = float(st.get("buy_avg") or 0)
                     avg = float(q.get("average") or q.get("avg_price") or 0)
-                    # A1（2026-09-14，用户拍板）：**+3% 目标优先**；破黄线需"突发"确认（幅度 or 连续轮数）。
-                    # 依据：真 m5 验收显示"破线"在 33/33 条腿上都会发生（不是择时信号，见
-                    # docs/exit-rules-m5-report.md）；他原话 2026-08-04「**突发**跌破直接走；
-                    # 如果没跌破就找这半小时的高点」。回退：WOLF_RT_PRIORITY=vwap_first。
                     _streak = int(self._vwap_break_streak.get(sym, 0))
                     act, why, _streak2 = RP.roundtrip_decision(
-                        cur, buy_avg, avg or None, _rs.ROUNDTRIP_SELL_UP, streak=_streak)
+                        cur, buy_avg, avg or None, _rs.ROUNDTRIP_SELL_UP, streak=_streak, hm=hm)
                     if _streak2:
                         self._vwap_break_streak[sym] = _streak2
                     else:
@@ -239,8 +248,8 @@ class TMonitor:
                         continue
                     gw = gateway_execute(
                         sym, "sell", cur, vol,
-                        reason=(f"[B等量换手] 低吸@{buy_avg:.2f}→现价@{cur:.2f}"
-                                f"({why}) 卖回{vol}股"),
+                        reason=(f"[B等量换手] 低吸@{buy_avg:.2f}→现价@{cur:.2f}@{hm}"
+                                f"({act}: {why}) 卖回{vol}股"),
                         decision_source="rule", account_id=acct)
                     if gw.get("status") == "success":
                         _rs.mark_sold(sym, vol)
