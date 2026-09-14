@@ -121,16 +121,16 @@
 | 归属 | 条目 | 状态 |
 |---|---|---|
 | **本 agent 负责** | **D2 / G3**：换尺子（分类型度量 + 回测离场口径改成生产实际） | ✅ **阶段 0 完成**（`jobs/eval_leg_metrics.py` + `docs/leg-metrics-spec.md` + `docs/leg-metrics-baseline.md`） |
-| **本 agent 负责** | plan §5 阶段 1：R1–R5 兑现口径对齐（`jobs/eval_exit_rules.py`，变体对照） | 🚧 下一步（用户已确认新尺子=t 账户降为对照、以 stock+回合级为主） |
+| **本 agent 负责** | plan §5 阶段 1：R1–R5 兑现口径对齐（`jobs/eval_exit_rules.py`，变体对照） | ✅ **已验收（2026-09-14，n=428 真 m5）**：`docs/exit-rules-replay-m5-report.md`。「破黄线」独立离场**无 alpha**（四口径 428/428 必破、edge 为负）→ 只作保护；+3% 止盈是**分布变换**（胜率/中位↑、均值↓）；生产口径 V3d ≥ 旧口径且 H1/H2 同号 → 保留 A1。**A4（做 T 时间窗 + 14:00 到点决断）已按用户"改成跟狼大一致"落地**（`roundtrip_priority.py`，单测 12 项） |
 | **本 agent 负责** | 兑现层语料专门取证 | ✅ 1,105 条（`jobs/wolf_exit_evidence.py` + `jobs/verify_exit_evidence.py` + `docs/wolf-exit-evidence.md`，99.6% 逐字可核） |
 | **本 agent 负责** | 退出层落差审计 + 落地 | ✅ 审计 `docs/wolf-exit-gap-audit.md`（10 落对/9 不完全/12 没落）；**2026-09-14 落地 C3 开 profit_take / C1 底仓穿透（中轨全止盈）/ C2 避险进执行层 / G0 死腿清理**（commit `62c2284`，119 tests passed，已部署+重启） |
 | **本 agent 负责** | **G1 顶部判据做宽**（放量转缩量+收黑K破5日线 2026-01-12 / 放量上影线≥2×10日均量 2025-05-06 / 银保长上影+放量+大盘缩量 2025-05-15） | ✅ 已落地（`wolf_top_signals.py` + `market_top()` 并集 + 动作强度分层：仅信号触发→减半、原代理→完全止盈；单测 8 项；离线体检见 `docs/wolf-exit-gap-audit.md` §5.2） |
 | **本 agent 负责** | **G2 0.618 止盈位** + **G4 被动止盈线只上移不破不卖** | ✅ 已落地（`wolf_fib_target.py` / `wolf_passive_stop.py` + t_monitor 两个卖腿检查；单测 6 项；已部署） |
 | **本 agent 负责** | **G3 破线删票（TTL）/ G6 一票2买2卖 / G7 大涨日多卖 / G8 上影线停机 / G9 节假日反T 时点** | ✅ 全部已落地（2026-09-14，`wolf_ticket_ban.py` / t_gateway 护栏 / `wolf_day_rules.py` / 避险与回补时点；单测 26 项，已部署） |
-| **本 agent 负责（待做）** | **G5 高低位分型** | ⏳ **需先与用户确认"高位/低位"可判定口径**（当前只有 60 日分位代理，样本里高位腿仅 3 条） |
+| **本 agent 负责** | **G5 高低位分型** | ✅ **已落地（2026-09-14）**：口径 = **方向（主题/概念）的高低位**（复用既有概念分类器 `data/position_class_result.json` + 相对全局基准的富集度，避免该分类器偏 MID 导致"多数票"零信息）；`wolf_direction_position.py` + `position_discipline.select_weak()` 分两支（高位卖最强 / 低位卖最弱，每组必留一只）；单测 10 项。⚠️ 仍缺两个子条件：「避开公募重仓」（拥挤黑名单已被用户删除）、「辨识度」（不可算化） |
 | **本 agent 负责** | **持仓口径只读 stock**（T 账户暂时不使用）：统一 `_positions()`，清掉 6 处硬编码 t 的 `t_pool._get_positions()` | ✅ 已落地（commit `1280b0c`，运行时自检只读到 stock 持仓；`WOLF_POSITION_ACCOUNT=t` 可临时切回） |
 | **本 agent 负责** | **C2b 避险回补腿**（周一拿回 / 避险结束补回） | ✅ 已落地（`wolf_hedge_refill` + `_check_hedge_refill`：只补等量/不追高/负事件不补/2 交易日窗口；设计 `docs/wolf-hedge-refill-design.md`，单测 8 项） |
-| **本 agent 负责** | plan §5 阶段 2（R7/R9/R10，需分时/盘口 → 数据不足则不做）、阶段 3（R8/G8 止损口径复核） | ⏳ 视阶段 1 结果 |
+| **本 agent 负责（待做）** | plan §5 阶段 2（R7/R9/R10）、阶段 3（R8 止损口径复核） | ⏳ **仍未对齐**：R7/G10（尾段状态机）与 R10/G11（诱空三次）判为不可算化 ⛔；**R9「不突破+卖单加大+无带动」数据其实可得**（腾讯 qt 返回 88 字段含**五档**，我们只解析了 9 个字段，卖一~卖五在 [19]~[28]）但**无历史盘口**（DB 里没有任何 quote/盘口快照表）→ 只能做实时判据、**无法回测**；**R8 是当前最大的未对齐点**：他说"只看指数大级别…转下跌 1 浪就止损"，我们是**六层止损**（个股 −3%/13 日/破位/上影 + 中轨 + 指数级），对照实验未做 |
 | **顺带覆盖** | **G9/G10 按新尺子复验**（`WOLF_WEEKEND_HEDGE` / `WOLF_VOLUME_GATE`）+ `WOLF_BOLL_MID_EXIT` / `WOLF_CUSHION_CAP` 增量量化 | 🚧 阶段 0 交付物 3（事件式口径，结论见 `docs/leg-metrics-baseline.md`） |
 | **顺带提供工具** | **D13** 块状 t：`eval_leg_metrics.block_t()`（按周分块，块内先取均值）已落地，可直接复用 | ✅ 工具就绪 |
 | **不碰（他人在做）** | ~~D15/crowding 黑名单~~（**用户已于 2026-09-13 删除，实测文件与代码均已移除**）、**G4 低位埋伏为什么亏**（本计划不含；阶段 0 已产出回合级基线可作输入）、D3/D4/D5/D14（其它线） | ⛔ |
