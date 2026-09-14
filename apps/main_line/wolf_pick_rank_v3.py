@@ -45,6 +45,14 @@ from typing import Any, Dict, List, Optional
 VARIANT = "V1"
 DEFAULT_COMPONENTS = "pos"
 DEFAULT_TIEBREAK = "flat"
+# v2 新增（2026-09-15 第二版离线验收，见 docs/wolf-pick-rank-v3-eval.md §6）：
+#   stage_mode = "qtile"：主题「强/弱」用**跨主题 r5 分位**判定（≥0.5 强、≤0.5 弱；分位由调用方 PIT 计算）
+#   diergong   = True  ：强主题按他「已经涨起来的板块的龙头不做 做他的二供」(2026-04-13)
+#                        → 跳过该主题候选里 r20 最高的一只
+DEFAULT_STAGE = "qtile"
+DEFAULT_DIERGONG = True
+QTILE_HI = 0.5      # v2 验收最优（0.5/0.5）；0.66/0.33 亦达标（+0.157%）
+QTILE_LO = 0.5      # 阈值敏感性小，取对称中线=最简可解释
 
 # 强/弱主题阈值（我们的代理）：主题近 5 日等权涨幅（%）
 STRONG_THEME_R5 = 0.5
@@ -92,7 +100,9 @@ def _tie_key(r: Dict[str, Any], tb: str):
 
 
 def rank_rows(rows: List[Dict[str, Any]], theme_r5: Optional[float] = None,
-              variant: str = None, components: str = None, tiebreak: str = None) -> List[Dict[str, Any]]:
+              variant: str = None, components: str = None, tiebreak: str = None,
+              theme_r5_qtile: Optional[float] = None, stage_mode: str = None,
+              diergong: bool = None, qtile_hi: float = None, qtile_lo: float = None) -> List[Dict[str, Any]]:
     """对候选 rows（同一主题同一日）打分并降序返回；每条附 `v3_score` 与 `v3_reasons`。
 
     rows 需要的字段（缺值按 None 处理，不报错）：
@@ -100,6 +110,14 @@ def rank_rows(rows: List[Dict[str, Any]], theme_r5: Optional[float] = None,
       mf1（当日主力净流入，万元）, mf5（近5日累计）, vol_ratio5, pct_today, rank_in_theme（0–1，1=最强）
     """
     v = (variant or os.getenv("WOLF_PICK_RANK_V3_VARIANT", VARIANT) or VARIANT).strip().upper()
+    sm = (stage_mode or os.getenv("WOLF_PICK_RANK_V3_STAGE", DEFAULT_STAGE) or DEFAULT_STAGE).strip().lower()
+    dg = DEFAULT_DIERGONG if diergong is None else bool(diergong)
+    if os.getenv("WOLF_PICK_RANK_V3_DIERGONG") is not None and diergong is None:
+        dg = os.getenv("WOLF_PICK_RANK_V3_DIERGONG", "1").strip() not in ("0", "false", "no", "")
+    hi = QTILE_HI if qtile_hi is None else float(qtile_hi)
+    lo = QTILE_LO if qtile_lo is None else float(qtile_lo)
+    strong_q = bool(theme_r5_qtile is not None and sm == "qtile" and theme_r5_qtile >= hi)
+    weak_q = bool(theme_r5_qtile is not None and sm == "qtile" and theme_r5_qtile <= lo)
     comp = tuple(x.strip() for x in (components or os.getenv("WOLF_PICK_RANK_V3_COMPONENTS", DEFAULT_COMPONENTS)
                                      or "").split(",") if x.strip()) or ALL_COMPONENTS
     n = len(rows)
@@ -110,6 +128,14 @@ def rank_rows(rows: List[Dict[str, Any]], theme_r5: Optional[float] = None,
     z_rs = _z([r.get("rs") for r in rows])
     strong = theme_r5 is not None and theme_r5 > STRONG_THEME_R5
     weak = theme_r5 is not None and theme_r5 < WEAK_THEME_R5
+    # 「二供」：强主题先剔除候选里 r20 最高的一只（= 已经在涨的龙头/大哥）
+    if dg and strong_q and len(rows) > 1:
+        top = max(rows, key=lambda r: (r.get("r20") if r.get("r20") is not None else -1e9))
+        rows = [r for r in rows if r is not top]
+        z_flat = _z([r.get("flat_low_days") for r in rows])
+        z_hist = _z([r.get("hist") for r in rows])
+        z_rs = _z([r.get("rs") for r in rows])
+        n = len(rows)
     out = []
     for k, r in enumerate(rows):
         s, why = 0.0, []
@@ -139,14 +165,14 @@ def rank_rows(rows: List[Dict[str, Any]], theme_r5: Optional[float] = None,
             if "squeeze" in comp and vr is not None and vr == vr and vr <= 1.0:
                 s += 0.4
                 why.append("缩量")
-        if v == "V3" and "stage" in comp:
+        if (v == "V3" or sm == "qtile") and "stage" in comp and not dg:
             rk = r.get("rank_in_theme")
             # 强主题：不追"已经涨起来的龙头"（2026-04-13「龙头不做 做他的二供」）
             if strong and rk is not None and rk >= 0.98:
                 s -= 1.0
                 why.append("强主题跳第1名")
             # 弱主题：找抗跌的强势票（2026-04-19「弱势板块找强势票」）
-            if weak:
+            if weak or weak_q:
                 s += 0.6 * z_rs[k]
                 why.append("弱主题偏好抗跌")
         out.append(dict(r, v3_score=round(s, 4), v3_reasons="|".join(why)))
@@ -156,8 +182,16 @@ def rank_rows(rows: List[Dict[str, Any]], theme_r5: Optional[float] = None,
 
 
 def pick_top(rows: List[Dict[str, Any]], theme_r5: Optional[float] = None,
-             n: int = 2, variant: str = None, components: str = None,
-             tiebreak: str = None) -> List[Dict[str, Any]]:
-    """取 v3 排序前 n（生产用入口）。`components` 用于消融（如 "pos,dist"）；`tiebreak` 见 _tie_key。"""
+             n: int = 1, variant: str = None, components: str = None,
+             tiebreak: str = None, theme_r5_qtile: Optional[float] = None,
+             stage_mode: str = None, diergong: bool = None,
+             qtile_hi: float = None, qtile_lo: float = None) -> List[Dict[str, Any]]:
+    """取 v3 排序前 n（生产用入口；v2 验收配置 n=1）。
+
+    `components` 用于消融（如 "pos,dist"）；`tiebreak` 见 `_tie_key`；
+    `theme_r5_qtile` = 该主题 r5 在**当日各主题间的分位**（PIT，调用方算），用于 stage=qtile。
+    """
     return rank_rows(rows, theme_r5=theme_r5, variant=variant, components=components,
-                     tiebreak=tiebreak)[:max(0, int(n))]
+                     tiebreak=tiebreak, theme_r5_qtile=theme_r5_qtile,
+                     stage_mode=stage_mode, diergong=diergong,
+                     qtile_hi=qtile_hi, qtile_lo=qtile_lo)[:max(0, int(n))]

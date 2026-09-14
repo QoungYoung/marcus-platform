@@ -29,6 +29,18 @@ import eval_pick_factors as F            # noqa: E402
 import wolf_pick_rank_v3 as V3           # noqa: E402
 
 
+def _board_ok(ts):
+    """账户权限过滤：默认剔除创业板(300/301)、科创板(688)、北交所（= 生产 WOLF_PICK_BOARD_EXCLUDE）。"""
+    code, mkt = str(ts).split(".")[0], str(ts).split(".")[-1].upper()
+    if mkt == "SZ" and code[:3] in ("300", "301"):
+        return False
+    if mkt == "SH" and code.startswith("688"):
+        return False
+    if mkt == "BJ" or code[:3] == "920":
+        return False
+    return True
+
+
 def _mean(vals):
     xs = [float(v) for v in vals if v is not None and v == v]
     return float(np.mean(xs)) if xs else None
@@ -41,6 +53,16 @@ def main():
     ap.add_argument("--hold", type=int, default=5)
     ap.add_argument("--variants", default="V1,V2,V3")
     ap.add_argument("--components", default="", help="组件消融（逗号分隔，如 pos / pos,dist / flat,hist）；默认全开")
+    ap.add_argument("--board-filter", action="store_true",
+                    help="剔除无权限板块（cyb=300/301, kcb=688, bj）——对齐 WOLF_PICK_BOARD_EXCLUDE 的生产可执行域")
+    ap.add_argument("--hard-filters", default="",
+                    help="候选域硬过滤（逗号分隔）：flatmed(横盘天数≥本主题当日中位) / mf5pos(近5日资金非净流出) / noout5(当日不净流出) / lowonly")
+    ap.add_argument("--stage", default="none", choices=["none", "qtile", "pool"],
+                    help="阶段口径：none / qtile(主题r5在13主题中的分位) / pool(方向层池内=强主题)")
+    ap.add_argument("--qtile-hi", type=float, default=0.66, help="stage=qtile 的强主题阈值（主题 r5 跨主题分位）")
+    ap.add_argument("--qtile-lo", type=float, default=0.33, help="stage=qtile 的弱主题阈值")
+    ap.add_argument("--diergong", action="store_true",
+                    help="强主题按他的『二供』口径：跳过主题内第1名、取第2–4名")
     ap.add_argument("--tiebreak", default="ts", choices=["ts", "dist", "flat", "rs", "amt"],
                     help="并列时的次级键（默认 ts 仅作稳定序；防'靠代码序'的伪结论）")
     ap.add_argument("--limit", type=int, default=2, help="每个主题取前 n（与 tier1 的 2 对齐）")
@@ -55,12 +77,54 @@ def main():
 
     panel = E.Panel()
     MF = E.load_moneyflow(panel, "moneyflow")
+
     uni, lead, allc, MS = E.load_universe()
     th_cons, cmap = E.theme_concept_sets()
     want = [t for t in uni if not args.themes or t in args.themes.split(",")]
     days = [d for d in panel.dates if args.start <= d <= args.end and panel.di[d] >= 260]
+    pool_by_day = {}
+    if args.stage == "pool":
+        import pandas as _pd
+        pctw = _pd.DataFrame(panel.pct, index=panel.dates, columns=panel.codes)
+        amtw = _pd.DataFrame(panel.amt, index=panel.dates, columns=panel.codes).fillna(0.0)
+        px = {d: {c: float(v) for c, v in pctw.loc[d].dropna().items()} for d in panel.dates}
+        mamt5 = amtw.sum(axis=1).rolling(5).sum()
+        for d in days:
+            i = panel.di[d]
+            share5 = {}
+            for th, codes in uni.items():
+                cc = [c for c in codes if c in amtw.columns]
+                if not cc:
+                    continue
+                ser = amtw[cc].sum(axis=1).rolling(5).sum() / mamt5.replace(0, np.nan)
+                v = ser.iloc[i]
+                if v == v:
+                    share5[th] = float(v)
+            res = MS.score_day(panel.dates, i, px, uni, lead, allc, share5=share5, pool_k=3)
+            pool_by_day[d] = set(res.get("pool") or [])
+        print("[v3] 方向层池已回放（%d 天）" % len(pool_by_day), flush=True)
+
     print("[v3] %d 天 × %d 主题 | hold=%d | 变体 %s | 资金流=%s"
           % (len(days), len(want), args.hold, variants, "有" if MF is not None else "无"), flush=True)
+
+    # 跨主题的 r5 分位（阶段口径用；PIT：只用当日及以前的日线）
+    r5_by_day_theme = {}
+    for d in days:
+        i = panel.di[d]
+        vals = {}
+        for th in want:
+            codes = uni.get(th) or []
+            jj = np.array([panel.ci[c] for c in codes if c in panel.ci])
+            if len(jj) == 0:
+                continue
+            with np.errstate(invalid="ignore"):
+                r5v = np.nanmean((panel.close[i, jj] / panel.close[i - 5, jj] - 1.0) * 100.0)
+            if r5v == r5v:
+                vals[th] = float(r5v)
+        if vals:
+            arr = np.array(list(vals.values()))
+            order = np.argsort(np.argsort(arr)) / max(1, len(arr) - 1)
+            r5_by_day_theme[d] = {t: float(order[k]) for k, t in enumerate(vals)}
 
     recs = []          # 每个 (日,主题) 一行：各臂的均值 + 配对数
     for d in days:
@@ -117,6 +181,37 @@ def main():
             if args.dist_max is not None:
                 base_rows = [r for r in base_rows if r["dist_prevlow"] is not None
                              and r["dist_prevlow"] <= args.dist_max]
+            if args.board_filter:
+                base_rows = [r for r in base_rows if _board_ok(r["ts"])]
+            hf = [x.strip() for x in args.hard_filters.split(",") if x.strip()]
+            if hf:
+                fv = [r["flat_low_days"] for r in base_rows if r.get("flat_low_days") is not None]
+                fmed = float(np.median(fv)) if fv else None
+                keep = []
+                for r in base_rows:
+                    ok = True
+                    if "flatmed" in hf and fmed is not None and (r.get("flat_low_days") or 0) < fmed:
+                        ok = False
+                    if "mf5pos" in hf and not (r.get("mf5") is not None and r["mf5"] > 0):
+                        ok = False
+                    if "noout5" in hf and not (r.get("mf1") is not None and r["mf1"] > 0):
+                        ok = False
+                    if "lowonly" in hf and r["pos"] != "LOW":
+                        ok = False
+                    if ok:
+                        keep.append(r)
+                base_rows = keep
+            # 阶段（强/弱主题）与「二供」取法
+            tq = (r5_by_day_theme.get(d) or {}).get(th)
+            if args.stage == "pool":
+                strong = th in (pool_by_day.get(d) or set())
+                weak = not strong
+            elif args.stage == "qtile":
+                strong = tq is not None and tq >= args.qtile_hi
+                weak = tq is not None and tq <= args.qtile_lo
+            else:
+                strong = weak = False
+            # 阶段/二供**委托模块**（单一实现）；eval 只保留域级（板块/硬过滤）与观测
             cur = [rows[k] for k in np.where(pk["t1"])[0]]        # 现行 leader 的 tier1
             out = {"d": d, "th": th, "n_base": len(base_rows), "n_cur": len(cur),
                    "theme_r5": theme_r5, "theme_r20": theme_r20,
@@ -124,7 +219,10 @@ def main():
                    "x_cur": _mean([c["ex"] for c in cur])}
             for var in variants:
                 picks = V3.pick_top(base_rows, theme_r5=theme_r5, n=args.limit, variant=var,
-                                    components=args.components or None, tiebreak=args.tiebreak)
+                                    components=args.components or None, tiebreak=args.tiebreak,
+                                    theme_r5_qtile=tq, stage_mode=args.stage,
+                                    diergong=args.diergong,
+                                    qtile_hi=args.qtile_hi, qtile_lo=args.qtile_lo)
                 out["v_" + var] = _mean([p["rf"] for p in picks])
                 out["x_" + var] = _mean([p["ex"] for p in picks])
                 out["n_" + var] = len(picks)
@@ -144,6 +242,9 @@ def main():
 
     res = {"window": [days[0], days[-1]], "hold": args.hold, "n_theme_days": len(recs), "variants": variants,
            "domain": args.domain, "dist_max": args.dist_max, "limit": args.limit,
+           "board_filter": bool(args.board_filter), "hard_filters": args.hard_filters,
+           "stage": args.stage, "diergong": bool(args.diergong), "tiebreak": args.tiebreak,
+           "qtile_hi": args.qtile_hi, "qtile_lo": args.qtile_lo,
            "arms": {}, "paired_vs_cur": {}, "seg": {}}
     res["arms"]["cur"] = {"value": st(recs, "v_cur"), "excess": st(recs, "x_cur"),
                           "stock_n": int(sum(r["n_cur"] or 0 for r in recs))}
