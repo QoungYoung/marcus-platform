@@ -388,6 +388,25 @@ def legacy_pick(panel: Panel, i: int, order_ts, limit=2, scanned_max=60, batch=1
 
 
 # ─────────────────────────── 统计 ───────────────────────────
+def load_moneyflow(panel: "Panel", api="moneyflow"):
+    """读资金流历史 → (T×N) 矩阵，列对齐 panel.codes（缺失=NaN）。**只用当日及以前**（PIT）。"""
+    path = os.path.join(ROOT, ".dsh-tmp", "buyside", "moneyflow_%s.parquet" % api)
+    if not os.path.exists(path):
+        print("[eval] 资金流文件不存在: %s（先跑 jobs/fetch_moneyflow_history.py）" % path, file=sys.stderr)
+        return None
+    col = "net_mf_amount" if api == "moneyflow" else "net_amount"
+    df = pd.read_parquet(path)
+    df = df[[col, "trade_date", "ts_code"]].dropna(subset=[col])
+    df["trade_date"] = df["trade_date"].astype(str)
+    ri = df["trade_date"].map(panel.di)
+    ci = df["ts_code"].map(panel.ci)
+    ok = ri.notna() & ci.notna()
+    M = np.full((panel.T, panel.N), np.nan)
+    M[ri[ok].astype(int).to_numpy(), ci[ok].astype(int).to_numpy()] = \
+        pd.to_numeric(df.loc[ok, col], errors="coerce").to_numpy()
+    return M
+
+
 def _isnan(x):
     try:
         return math.isnan(float(x))
@@ -425,12 +444,19 @@ def main():
     ap.add_argument("--hold", type=int, default=5, help="前瞻持有交易日数（默认 5；低位埋伏口径更长，见 blueprint §6）")
     ap.add_argument("--themes", default="", help="逗号分隔，限定主题")
     ap.add_argument("--trades", action="store_true", help="额外核对生产实际成交腿（需 PG 隧道）")
+    ap.add_argument("--moneyflow", action="store_true",
+                    help="② 个股级资金确认：加载 .dsh-tmp/buyside/moneyflow_*.parquet 并加资金分档/IC（默认不加载）")
+    ap.add_argument("--mf-api", default="moneyflow", help="资金流数据源：moneyflow(tushare) / moneyflow_dc(东财)")
     ap.add_argument("--json", default=OUT)
     global HOLD
     args = ap.parse_args()
     HOLD = int(args.hold)
 
     panel = Panel()
+    MF = load_moneyflow(panel, args.mf_api) if args.moneyflow else None
+    if args.moneyflow:
+        cov = float(np.mean(~np.isnan(MF))) if MF is not None else 0.0
+        print("[eval] 资金流矩阵 %s 覆盖 %.1f%%（net_mf_amount 万元）" % (args.mf_api, 100 * cov), flush=True)
     uni, lead, allc, MS = load_universe()
     th_cons, cmap = theme_concept_sets()
     from fusion_mainline import THEME_CONCEPTS as LEGACY_CONS       # 旧 confirm_pick 的概念表
@@ -465,6 +491,7 @@ def main():
             pool_by_day[d] = res.get("pool") or []
         print("[eval] 池（按池大小分布）:", collections.Counter(len(v) for v in pool_by_day.values()), flush=True)
 
+    ic_rows_mf = []      # ② 资金流 IC（仅 --moneyflow）
     recs = []            # 每个 (主题,日,成分股) 一行
     day_rows = []        # 每个 (主题,日) 一行：各臂的均值（用于块状 t）
     ic_rows = []
@@ -532,6 +559,42 @@ def main():
                        n_lowmid=int(pk["lowmid"].sum()), n_cand=int(pk["cand"].sum()),
                        n_wait=int(pk["wait"].sum()), n=pk["n"],
                        wind_broken=pk["wind_broken"])
+            # ② 个股级资金确认（他的「跌多了不是买的理由，跌多了预判资金去配置才是买的理由」2021-08-04）
+            if MF is not None:
+                mf1 = MF[i, cols]
+                with np.errstate(invalid="ignore"):
+                    mf5 = np.nansum(MF[max(0, i - 4):i + 1][:, cols], axis=0)
+                has_mf = ~np.isnan(mf1)
+                row["mf_cov"] = float(has_mf.mean())
+                row["x_mf1pos"] = mxx(has_mf & (mf1 > 0))
+                row["x_mf1neg"] = mxx(has_mf & (mf1 <= 0))
+                row["x_mf5pos"] = mxx(has_mf & (mf5 > 0))
+                row["x_mf5neg"] = mxx(has_mf & (mf5 <= 0))
+                # 他的规则最尖锐的形式：「**跌**（价跌）但**资金净流入**」= 有人趁跌在配置
+                dip = panel.pct[i, cols] < 0
+                row["x_mf_dip_in"] = mxx(has_mf & dip & (mf1 > 0))
+                row["x_mf_dip_out"] = mxx(has_mf & dip & (mf1 <= 0))
+                # 关键切分：**在"已选出的池子/买点"内部**再加资金条件会怎样（决定 ② 是否只能靠 ① 落地）
+                row["x_cand_dipin"] = mxx(pk["cand"] & has_mf & dip & (mf1 > 0))
+                row["x_cand_dipout"] = mxx(pk["cand"] & has_mf & dip & (mf1 <= 0))
+                row["x_lowmid_dipin"] = mxx(pk["lowmid"] & has_mf & dip & (mf1 > 0))
+                row["x_lowmid_dipout"] = mxx(pk["lowmid"] & has_mf & dip & (mf1 <= 0))
+                _t12d = (pk["t1"] | pk["t2"]) & has_mf & dip & (mf1 > 0)
+                row["v_t12_dipin"] = m(_t12d)
+                row["x_t12_dipin"] = mxx(_t12d)
+                row["n_t12_dipin"] = int(_t12d.sum())
+                c_has = has_mf & pk["cand"]
+                row["x_mf1pos_cand"] = mxx(c_has & (mf1 > 0))
+                row["x_mf1neg_cand"] = mxx(c_has & (mf1 <= 0))
+                t12m = pk["t1"] | pk["t2"]
+                row["v_t12_mf"] = m(t12m & has_mf & (mf1 > 0))
+                row["x_t12_mf"] = mxx(t12m & has_mf & (mf1 > 0))
+                row["n_t12_mf"] = int((t12m & has_mf & (mf1 > 0)).sum())
+                row["n_t12"] = int(t12m.sum())
+                icm = c_has & ~np.isnan(ex)
+                ic_rows_mf.append(dict(d=d, th=th, n=int(icm.sum()),
+                                       ic_mf1=spearman(mf1[icm], ex[icm]) if icm.sum() >= 5 else None,
+                                       ic_mf5=spearman(mf5[icm], ex[icm]) if icm.sum() >= 5 else None))
             # 位置档 / 闸条件（全成分口径，不选股）
             for p in ("LOW", "MID", "HIGH"):
                 row["x_pos_" + p] = mxx(pos_is[p])
@@ -603,9 +666,13 @@ def main():
                           "value": _rows_stat(day_rows, "v254_" + a)}
                       for a in ("t1", "t12", "lowmid", "cand")}
     # 位置档与闸条件
-    res["gates"] = {k: _rows_stat(day_rows, k) for k in
-                    ["x_pos_LOW", "x_pos_MID", "x_pos_HIGH", "x_r20pos", "x_r20neg", "x_rspos", "x_rsneg",
-                     "x_near", "x_far", "x_top3", "x_bot50"]}
+    gate_keys = ["x_pos_LOW", "x_pos_MID", "x_pos_HIGH", "x_r20pos", "x_r20neg", "x_rspos", "x_rsneg",
+                 "x_near", "x_far", "x_top3", "x_bot50"]
+    if args.moneyflow:
+        gate_keys += ["x_mf1pos", "x_mf1neg", "x_mf5pos", "x_mf5neg", "x_mf_dip_in", "x_mf_dip_out",
+                      "x_mf1pos_cand", "x_mf1neg_cand", "x_cand_dipin", "x_cand_dipout",
+                      "x_lowmid_dipin", "x_lowmid_dipout"]
+    res["gates"] = {k: _rows_stat(day_rows, k) for k in gate_keys}
     # 分主题
     res["by_theme"] = {}
     for th, g in D.groupby("th"):
@@ -629,6 +696,21 @@ def main():
                                          "ic_leader_cand", "ic_leader_lowmid"]}
     res["ic_pos_rate"] = {c: round(float(np.nanmean([1.0 if (r[c] or 0) > 0 else 0.0 for r in ic_rows
                                                      if r[c] is not None])), 3) for c in res["ic"]}
+    if args.moneyflow and ic_rows_mf:
+        res["ic_moneyflow"] = {c: _stat([(r["d"], r[c]) for r in ic_rows_mf], [r[c] for r in ic_rows_mf])
+                               for c in ("ic_mf1", "ic_mf5")}
+        res["moneyflow_coverage"] = round(float(np.nanmean([r.get("mf_cov") or 0 for r in day_rows])), 3)
+        res["arm_t12_dipin"] = {"value": _rows_stat(day_rows, "v_t12_dipin"),
+                                "excess": _rows_stat(day_rows, "x_t12_dipin"),
+                                "stock_n": int(D["n_t12_dipin"].sum()) if "n_t12_dipin" in D.columns else None,
+                                "theme_days_with_pick": int((D.get("n_t12_dipin", pd.Series(dtype=float)) > 0).sum())
+                                if "n_t12_dipin" in D.columns else None,
+                                "t12_stock_n": int(D["n_t12"].sum()) if "n_t12" in D.columns else None}
+        res["arm_t12_mf"] = {"value": _rows_stat(day_rows, "v_t12_mf"), "excess": _rows_stat(day_rows, "x_t12_mf"),
+                             "stock_n": int(D["n_t12_mf"].sum()) if "n_t12_mf" in D.columns else None,
+                             "theme_days_with_mf_pick": int((D.get("n_t12_mf", pd.Series(dtype=float)) > 0).sum())
+                             if "n_t12_mf" in D.columns else None,
+                             "t12_stock_n": int(D["n_t12"].sum()) if "n_t12" in D.columns else None}
     # leader 十分位（分主题-日先算分位，再池化）
     dec = collections.defaultdict(list)
     for r in recs:
