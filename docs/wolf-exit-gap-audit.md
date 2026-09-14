@@ -207,6 +207,18 @@
   `select_weak` 场景 = 高位持仓卖最强(AAA +9.0%)、低位持仓卖最弱(CCC +1.0%)，理由文本含两支原话；
   重启后 TMonitor 正常启动、无异常（当前 stock 账户有效持仓 1 < 门槛 3 → 暂不动作，符合预期）。
 
+- **回归状态（2026-09-14 逐文件跑 backend/tests）**：与本次改动相关的文件全绿 ——
+  `test_roundtrip_priority.py` 6、`test_direction_position_g5.py` 10、`test_position_discipline_rebound.py` 10、
+  `test_exit_floor_and_hedge.py` 9、`test_g9_holiday_timing.py` 7、`test_p2_4_stop_close_confirm.py` 16、
+  `test_g6_trade_cap.py` 5、`test_wolf_top_signals.py` 8、`test_wolf_day_rules.py` 7 等。
+  **预存在失败（与本次改动无关：这些测试文件都不 import t_monitor/position_discipline/wolf_direction_position）**：
+  `test_dca_carrier.py`（`DCA_CARRIER_DEFAULTS["588000"].mode` 是 fixed_combo，测试期望 sector_selection）、
+  `test_api_responsiveness.py::test_golden_pit_router_handlers_run_in_threadpool`、
+  `test_main_wave_analyzer.py::TestMainWaveAnalyzer::test_600613_shenqi_red_flags`；
+  另有 3 个文件在本地**超时**（需要外部网络/DB：`test_daily_decision.py`、`test_golden_pit_paper_execution.py`、
+  `test_golden_pit_sector_service.py`），以及 `test_marcus_trade_notify.py` 的既有 collection error
+  （`No module named 'workspace_detector'`）。整仓 `pytest backend/tests` 一次跑会挂在那 3 个网络文件上。
+
 ### 5.2 G1 离线体检（2026-09-14，上证 2025-04-01 → 2026-09-11，355 个交易日）
 
 | 判据 | 命中天数 | 占比 | 信号日之后 5 日（指数） | 对照（其余日） |
