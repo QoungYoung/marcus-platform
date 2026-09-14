@@ -53,6 +53,13 @@ def _env_i(name: str, default: int) -> int:
         return default
 
 
+def _env_true(name: str, default: bool = True) -> bool:
+    v = os.getenv(name)
+    if v is None or str(v).strip() == "":
+        return default
+    return str(v).strip().lower() not in ("0", "false", "no")
+
+
 def _env_f(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, "") or default)
@@ -195,7 +202,25 @@ def market_top(force: bool = False) -> Optional[Dict[str, Any]]:
             return None
         pos = (closes[-1] - lo) / (hi - lo)
         q = _env_f("WOLF_BOLL_MID_MKT_Q", 0.8)
-        v = {"pos": round(pos, 3), "thr": q, "top": bool(pos >= q),
+        legacy_top = bool(pos >= q)
+        # ── G1（2026-09-14）：并入**他的原话判据**（放量转缩量+收黑K破5日线 / 放量上影线>=2x10日均量 /
+        #    银保长上影+放量+大盘缩量）。"做宽"= 并集：他的判据 ∨ 我们原有的 120 日分位**代理**。
+        sig = {"n": 0, "detail": "off"}
+        try:
+            from app.services import wolf_top_signals as _TS
+            if _TS.enabled():
+                sig = _TS.top_signals()
+        except Exception as e:
+            sig = {"n": 0, "detail": "err:%s" % str(e)[:50]}
+        include_legacy = _env_true("WOLF_TOP_INCLUDE_LEGACY", True)
+        include_signals = _env_true("WOLF_TOP_INCLUDE_SIGNALS", True)
+        need = _env_i("WOLF_TOP_MIN_SIGNALS", 1)
+        sig_top = bool(include_signals and int(sig.get("n") or 0) >= need)
+        top = bool((legacy_top and include_legacy) or sig_top)
+        source = "both" if (legacy_top and sig_top) else ("legacy" if legacy_top else ("signals" if sig_top else "none"))
+        v = {"pos": round(pos, 3), "thr": q, "top": top, "source": source,
+             "legacy_top": legacy_top, "signals": sig, "n_signals": int(sig.get("n") or 0),
+             "min_signals": need,
              "lo": round(lo, 2), "hi": round(hi, 2), "close": round(closes[-1], 2), "win": win}
         _MKT_CACHE.update({"at": now, "value": v})
         return v
@@ -251,12 +276,21 @@ def mid_break_sells(portfolio: Any, quotes: Optional[Dict[str, Any]] = None) -> 
         vol_ratio = round(tv / pv, 3) if (tv > 0 and pv > 0) else None
         if vol_ratio is not None and vol_ratio < vol_min:
             continue
+        # 动作强度分层（2026-09-14，按 2026-09-14 经验条"接他的判据要对齐动作强度"）：
+        #   · 顶部阶段来自**原代理**（近 120 日区间分位）→ 他那句是"完全止盈" → reduce_ratio=1.0；
+        #   · 仅来自 **G1 信号**（放量转缩量破5日线/放量上影线/银保长上影）→ 他的原话是"**减仓避一下**"
+        #     → reduce_ratio=0.5（只减 T 仓的一半，不动底仓）。
+        src = str(mk.get("source") or "")
+        rr = 1.0 if src in ("legacy", "both") else 0.5
+        why = ("大盘顶部阶段(近%d日区间分位%.2f)" % (mk.get("win", 120), mk.get("pos", 0))) if rr >= 1.0 else \
+              ("顶部信号(狼大判据: %s)" % ((mk.get("signals") or {}).get("detail") or ""))
         out.append({"symbol": sym, "price": cur, "boll_mid": lv["mid"],
-                    "vol_ratio": vol_ratio,
-                    "reason": ("大盘顶部阶段(近%d日区间分位%.2f) + 放量(%.2f×)收盘跌破日线BOLL中轨(%.2f) "
-                               "→ 完全止盈（狼大 2025-05-13「**顶部阶段**…全止盈的位置就放在日线BOLL中轨附近，"
-                               "放量跌破收盘完全止盈」）" % (mk.get("win", 120), mk.get("pos", 0),
-                                                       vol_ratio or 0, lv["mid"]))})
+                    "vol_ratio": vol_ratio, "reduce_ratio": rr, "top_source": src or "legacy",
+                    "reason": ("%s + 放量(%.2f×)收盘跌破日线BOLL中轨(%.2f) → %s"
+                               "（狼大 2025-05-13「**顶部阶段**…全止盈的位置就放在日线BOLL中轨附近，"
+                               "放量跌破收盘完全止盈」；G1 信号侧动作=I 2026-01-12「减仓避一下」）"
+                               % (why, vol_ratio or 0, lv["mid"],
+                                  "完全止盈" if rr >= 1.0 else "减半避险"))})
     return out
 
 

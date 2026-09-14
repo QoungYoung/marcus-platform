@@ -688,10 +688,17 @@ class TMonitor:
                     sellable = int(((get_sellable_ledger(account_id=acct).get(sym) or {}).get('sellable', 0)) or 0)
                 except Exception:
                     sellable = 0
-                if _floor_break_enabled('wolf_boll_mid_exit'):
-                    vol = sellable          # 他：顶部阶段"完全止盈" → 清仓（含底仓）
+                # 动作强度分层（2026-09-14）：顶部阶段来自原代理 → 他"完全止盈"（清仓含底仓）；
+                # 仅来自 G1 信号 → 他"减仓避一下"（减 T 仓的一半，不动底仓）。
+                rr = float(sl.get('reduce_ratio') or 1.0)
+                t_shop = max(sellable - base_floor_shares(acct, sym, volume=sellable), 0)
+                if rr >= 1.0 and _floor_break_enabled('wolf_boll_mid_exit'):
+                    vol = sellable                      # 完全止盈（含底仓）
+                elif rr >= 1.0:
+                    vol = t_shop                        # 完全止盈但关了底仓穿透 → 只卖 T 仓
                 else:
-                    vol = max(sellable - base_floor_shares(acct, sym, volume=sellable), 0)
+                    frac = float(os.getenv("WOLF_TOP_SIGNAL_REDUCE", "0.5"))   # "避一下"=减 T 仓一半
+                    vol = int(t_shop * max(min(frac, 1.0), 0.0))
                 vol = (vol // 100) * 100
                 if vol < 100:
                     self._wolf_done.add((sym, 'wolf_boll_mid_exit', today))
