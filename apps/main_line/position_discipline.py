@@ -24,6 +24,8 @@
   WOLF_POSITION_DISC_GAP      强弱分化门槛%(默认 3.0, 依狼大 2025-07-11 的 3%)
   WOLF_POSITION_DISC_MIN      最少持仓数(默认 3)
   WOLF_POSITION_DISC_MAX_SELL 每次最多卖几只(默认 2)
+  WOLF_POSITION_DISC_HIGH=0   关闭 G5 高位方向分支(默认 1 = 高位方向走"卖强留弱")
+  WOLF_POSITION_DISC_RS       (既有)用 rs 作次序键(默认关)
 """
 import os
 
@@ -66,35 +68,85 @@ def rebound_pct(prev_days, window=DEFAULT_WINDOW):
 
 
 def select_weak(items, gap_pct=None, min_positions=None, max_sell=None):
-    """从持仓中挑出"应该卖掉的弱票"。
+    """从持仓中挑出"应该卖掉的票"——**按方向高低位分两套相反规则**（G5, 2026-09-14）。
 
-    items: [{"symbol":..., "rebound": float|None, ...}]（额外字段原样带回, 便于上层记录理由）
-    返回 {"sells":[...], "skip": reason或None, "spread": float|None}
+    items: [{"symbol":..., "rebound": float|None, "dir_pos": "HIGH"|"LOW"|"MID"|"UNKNOWN", ...}]
+           （额外字段原样带回, 便于上层记录理由）
+
+    狼大 2026-09-04 15:07 分类型总纲：
+      · **高位方向**（大科技那类）：**卖强的 留弱的**（"拉升后都走"）→ 分支 `high_sell_strong`
+        —— 按反弹幅度**降序**卖最强的；
+      · **低位/中位/未知方向**：**留强丢弱**（原 P1-6 行为）→ 分支 `low_sell_weak`
+        —— 按反弹幅度**升序**卖最弱的（2026-04-23「反弹的时候卖弱的 留强的 不要搞反了」）。
 
     判定顺序（任一不满足即不动作 —— 狼大自己提示这动作可能是机构设的局, 故门槛偏严）:
       1. 有效样本(rebound 非 None)数量 >= min_positions
-      2. 最强与最弱的反弹幅度差 >= gap_pct（没有分化就不该动）
-      3. 卖出最弱的 max_sell 只（反弹幅度升序）
+      2. **在每个分支内部**最强与最弱反弹幅度差 >= gap_pct（没有分化就不该动）+ 该分支至少 2 只
+      3. 高位分支优先占用卖出额度（"拉升后都走"是主动离场），其余额度给低位分支的弱者
+    返回 {"sells":[...], "skip": reason或None, "spread": float|None, "branches": {...}}
     """
     gap = float(gap_pct if gap_pct is not None else os.getenv("WOLF_POSITION_DISC_GAP", DEFAULT_GAP_PCT))
     mn = int(min_positions if min_positions is not None else os.getenv("WOLF_POSITION_DISC_MIN", DEFAULT_MIN_POS))
     ms = int(max_sell if max_sell is not None else os.getenv("WOLF_POSITION_DISC_MAX_SELL", DEFAULT_MAX_SELL))
+    high_on = os.getenv("WOLF_POSITION_DISC_HIGH", "1").strip() not in ("0", "false", "no")
 
     valid = [dict(it) for it in (items or []) if it.get("rebound") is not None]
     if len(valid) < mn:
-        return {"sells": [], "skip": "持仓有效样本 %d < 门槛 %d" % (len(valid), mn), "spread": None}
-    valid.sort(key=lambda it: it["rebound"])
-    spread = round(valid[-1]["rebound"] - valid[0]["rebound"], 2)
-    if spread < gap:
-        return {"sells": [], "skip": "强弱分化 %.2f%% < 门槛 %.1f%%（无明显强弱, 不动）" % (spread, gap),
-                "spread": spread}
-    return {"sells": valid[:ms], "skip": None, "spread": spread}
+        return {"sells": [], "skip": "持仓有效样本 %d < 门槛 %d" % (len(valid), mn), "spread": None,
+                "branches": {}}
+    hi_idx = {i for i, it in enumerate(valid)
+              if high_on and str(it.get("dir_pos") or "").upper() == "HIGH"}
+    groups = []          # [(branch, sorted_group, 是否优先占用额度)]
+    if hi_idx:
+        groups.append(("high_sell_strong",
+                       sorted((valid[i] for i in hi_idx), key=lambda it: -it["rebound"]), True))
+    rest = [it for i, it in enumerate(valid) if i not in hi_idx]
+    if rest:
+        groups.append(("low_sell_weak", sorted(rest, key=lambda it: it["rebound"]), False))
+
+    sells, branches, first_spread, skips = [], {}, None, []
+    for branch, grp, _prio in groups:
+        if len(grp) < 2:
+            branches[branch] = {"n": len(grp), "spread": None, "picked": 0,
+                                "skip": "该分支持仓 %d < 2（无可比强弱）" % len(grp)}
+            continue
+        _rb = [it["rebound"] for it in grp]
+        sp = round(max(_rb) - min(_rb), 2)   # 与排序方向无关（高位分支按降序排）
+        branches[branch] = {"n": len(grp), "spread": sp, "picked": 0, "skip": None}
+        if sp < gap:
+            branches[branch]["skip"] = "分支内强弱分化 %.2f%% < 门槛 %.1f%%" % (sp, gap)
+            skips.append(branch)
+            continue
+        if first_spread is None:
+            first_spread = sp
+        # **每组必留一只**：低位分支留最强(sorted 升序的最后一个)、高位分支留最弱(降序的最后一个)
+        # → 候选 = grp[:-1]（"卖强留弱"/"留强丢弱"字面都是"留一个"，不能把该方向清空）
+        for it in grp[:-1][:ms]:
+            if len(sells) >= ms:
+                break
+            it["branch"] = branch
+            sells.append(it)
+            branches[branch]["picked"] += 1
+    if not sells:
+        why = ("强弱分化不足: " + "; ".join("%s(%s)" % (k, v.get("skip")) for k, v in branches.items())) \
+            if branches else "无可比样本"
+        return {"sells": [], "skip": why, "spread": first_spread, "branches": branches}
+    return {"sells": sells, "skip": None, "spread": first_spread, "branches": branches}
 
 
 def directive(sells, spread):
     """给 agent/日志的指令文本（本模块不直接下单）。"""
     if not sells:
         return ""
-    names = ", ".join("%s(反弹%+.2f%%)" % (s.get("symbol"), s.get("rebound") or 0) for s in sells)
-    return ("⚠️ 去弱留强（狼大 2026-04-23「反弹的时候卖弱的 留强的 不要搞反了」）："
-            "强弱分化 %.2f%% → 减 T 仓最弱者 %s；**保留反弹更强的持仓**，底仓不动。" % (spread, names))
+    hi = [s for s in sells if s.get("branch") == "high_sell_strong"]
+    lo = [s for s in sells if s.get("branch") != "high_sell_strong"]
+    parts = []
+    if hi:
+        parts.append("高位方向**卖强留弱**（狼大 2026-09-04「高位方向…卖强的 留弱的 拉升后都走」）："
+                     "减 T 仓最强 %s" % ", ".join("%s(反弹%+.2f%%)" % (s.get("symbol"), s.get("rebound") or 0)
+                                                for s in hi))
+    if lo:
+        parts.append("低位/中位方向**留强丢弱**（狼大 2026-04-23「反弹的时候卖弱的 留强的 不要搞反了」）："
+                     "减 T 仓最弱 %s" % ", ".join("%s(反弹%+.2f%%)" % (s.get("symbol"), s.get("rebound") or 0)
+                                                for s in lo))
+    return "⚠️ 分方向去弱留强（强弱分化 %.2f%%）：%s；底仓不动。" % (spread or 0, "；".join(parts))

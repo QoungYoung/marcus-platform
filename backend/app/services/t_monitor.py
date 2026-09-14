@@ -1146,7 +1146,13 @@ class TMonitor:
             if _sb:
                 return
             import position_discipline as PD
+            # G5（2026-09-14）：**分方向**——高位方向"卖强留弱"、低位方向"留强丢弱"（狼大 2026-09-04 15:07）
+            try:
+                from app.services import wolf_direction_position as DP
+            except Exception:
+                DP = None
             items = []
+            _dir_cache = {}
             for p in pos_list:
                 sym = _normalize_symbol(p.get('symbol'))
                 th = theme_of_symbol(sym)
@@ -1160,8 +1166,20 @@ class TMonitor:
                 # ② _prev_daily 只读 data/{stock_5m_bt,recent_sync}，那两个目录是 2026-09-03 的一次性导出
                 #    → 去弱留强此前一直在用**过期日线**算反弹幅度。
                 _pd_map = {_b['date']: _b for _b in self._daily_dated(sym, 6)}
-                items.append({"symbol": sym, "theme": th,
+                if DP is not None:
+                    if th not in _dir_cache:
+                        _dir_cache[th] = DP.branch_of(th)
+                    _dp = _dir_cache[th]
+                else:
+                    _dp = {"verdict": "UNKNOWN", "branch": "low_sell_weak", "reason": "无方向模块"}
+                items.append({"symbol": sym, "theme": th, "dir_pos": _dp.get("verdict"),
+                              "dir_branch": _dp.get("branch"), "dir_reason": _dp.get("reason"),
                               "rebound": PD.rebound_pct(_pd_map)})
+            _hi = [it for it in items if str(it.get("dir_pos") or "").upper() == "HIGH"]
+            if _hi:
+                print("[TMonitor] 方向高位位次(G5): %s" % ", ".join(
+                    "%s=%s(%s)" % (it["theme"], it.get("dir_pos"), (it.get("dir_reason") or "")[:28])
+                    for it in _hi), flush=True)
             res = PD.select_weak(items)
             if res.get("skip") or not res.get("sells"):
                 if res.get("skip"):
@@ -1174,8 +1192,17 @@ class TMonitor:
                 if (sym, 'wolf_defensive_t_reduce', today) in self._wolf_done:
                     continue
                 q = quotes.get(sym) or {}
-                reason = ("去弱留强: 反弹%+.2f%% 为持仓最弱(强弱分化%.2f%%%%) → 减T仓; "
-                          "狼大2026-04-23「反弹的时候卖弱的 留强的」" % (s.get("rebound") or 0, res.get("spread") or 0))
+                _br = s.get("branch") or "low_sell_weak"
+                if _br == "high_sell_strong":
+                    reason = ("分方向去弱留强[高位方向→卖强留弱]: 反弹%+.2f%% 为该方向最强"
+                              "(分支分化%.2f%%, 方向=%s/%s) → 减T仓; "
+                              "狼大2026-09-04「高位方向…卖强的 留弱的 拉升后都走」"
+                              % (s.get("rebound") or 0, res.get("spread") or 0,
+                                 s.get("dir_pos"), (s.get("dir_reason") or "")[:40]))
+                else:
+                    reason = ("分方向去弱留强[低位/中位→留强丢弱]: 反弹%+.2f%% 为持仓最弱"
+                              "(强弱分化%.2f%%) → 减T仓; 狼大2026-04-23「反弹的时候卖弱的 留强的」"
+                              % (s.get("rebound") or 0, res.get("spread") or 0))
                 self._insert_wolf_trigger(sym, 'wolf_defensive_t_reduce', q, reason)
                 self._wolf_done.add((sym, 'wolf_defensive_t_reduce', today))
                 print(f"[TMonitor] 去弱留强减T {sym}: {reason}", flush=True)
