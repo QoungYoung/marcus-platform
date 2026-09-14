@@ -151,16 +151,16 @@
 | — | **持仓口径统一为只读 stock**（t 账户暂时不使用）：纪律卖腿 + BOLL 上轨/中轨 + 去弱留强 + 指数级止损 + 逻辑时间止损 + 每日维护/AI 维护 全部走同一口径 | t 是测试账户（用户 2026-09-13/09-14 明确「持仓口径只读 stock，T 账户暂时不使用」） | ✅ 已落地 | `t_monitor._position_accounts()` / `POS_ACCOUNT` / `TMonitor._positions()`；清掉 6 处硬编码 t 的 `t_pool._get_positions()`；临时切回：`WOLF_POSITION_ACCOUNT=t` |
 | **G1** | 顶部判据做宽：**放量转缩量+收黑K破5日线**（2026-01-12）/ **放量上影线 ≥2×10 日均量**（2025-05-06）/ **银保长上影+放量+大盘缩量**（2025-05-15） | 见左 | ✅ 已落地（2026-09-14） | 新增 `wolf_top_signals.py`（S1/S2/S3 + 并列条件组）；`wolf_boll_levels.market_top()` 改为**并集**（他的判据 ∨ 原 120 日分位代理），返回 `source`；动作强度分层：**仅信号触发 → 减半**（他"减仓避一下" 2026-01-12），原代理触发 → 完全止盈（2025-05-13）；开关 `WOLF_TOP_SIGNALS / WOLF_TOP_MIN_SIGNALS / WOLF_TOP_INCLUDE_LEGACY / WOLF_TOP_SIGNAL_REDUCE` |
 | **G2** | 个股止盈点 = **前一波拉升幅度的 0.618 位** | 「超过或者到了 个股的前一波拉升幅度的 0.618 位 就是我的止盈点了」2026-04-23；「黄金分割只用 0.382 和 0.618」2026-03-05 | ✅ 已落地（2026-09-14） | 新增 `wolf_fib_target.py`（摆动点/前一波/0.618 位纯函数）+ `t_monitor._check_fib_target()`：前一波=买入前最近已确认"低→高"波段，止盈位=低+0.618×(高−低)，到点且有浮盈 → 卖 T 仓；开关 `WOLF_FIB_TARGET / WOLF_FIB_RATIO` |
-| **G3** | 破线卖出后"删票"（移出观察池） | 2025-02-06 / 2025-04-03 | ⏳ 待办 | 建议带 TTL，别永久拉黑 |
+| **G3** | 破线卖出后**"删票"**（移出观察池 + TTL） | 「最下面那根线一旦破了 卖出然后删票」2025-02-06；「破之前新低的，直接删票」2025-04-03；「这两根破了这个标我就不看了」2021-01-22 | ✅ 已落地（2026-09-14） | 新增 `wolf_ticket_ban.py`（TTL 用**交易日**，默认 13 —— 期限本身是我们的代理，代码已注明）；`t_monitor._after_sell()` 在**止损/破位/被动止盈线**成交后登记；买入侧过滤（`rotation_switch_arm` + `wolf_confirm_pick`）**打日志不静默**；开关 `WOLF_BAN_LIST` |
 | **G4** | 被动止盈线「**只上移、不破不卖**」 | 「被动止盈位提高到 3373，不破不卖」2025-06-09；「不破被动止盈根本不会卖」2025-07-17；「浮盈过 100% 后设置 13 或中轨」2026-07-01 | ✅ 已落地（2026-09-14） | 新增 `wolf_passive_stop.py`（候选=近 13 日最低价；浮盈>100% 并用 MA13/中轨；**新线=max(旧,候选) 只上移**）+ `t_monitor._check_passive_stop()`：跌破且有浮盈 → 卖 T 仓，受 ④ 时点门约束；开关 `WOLF_PASSIVE_STOP` |
 | **G5** | 高位/低位两套相反规则（高位卖强留弱、低位留强丢弱） | 2026-09-04 15:07 | ⏳ 待办 | 需先有"高位/低位"可判定口径 |
-| **G6** | 一个票最多 2 买 2 卖 | 2025-02-07 | ⏳ 待办 | 与 `WOLF_REFILL_MAX_PER_DAY=2` 语义不同 |
-| **G7** | 大涨日多卖、大跌日多买 | 2025-01-23 | ⏳ 待办 | 先做分组统计证明有增量 |
-| **G8** | 出上影线 → 停止做 T | 2025-07-17 | ⏳ 待办 | 当日"停机"开关 |
-| **G9** | 节假日反 T：早盘卖、尾盘买 | 2025-04-29 | ⏳ 待办 | 与 C2b 回补腿同源（时点参数） |
+| **G6** | **一个票最多买 2 笔、卖 2 笔** | 「一个票最多买 2 笔 卖 2 笔 后面如果是主升浪的话越动收益越低」2025-02-07 | ✅ 已落地（2026-09-14） | 落在**唯一下单入口** `t_gateway.gateway_execute`（validate_order 之前）：`trade_cap_ok/_count_today_trades`，覆盖所有买入路径；**止损与破位保护性卖出豁免**；`WOLF_MAX_TRADES_PER_SYMBOL_PER_DAY`（默认 2；0=关） |
+| **G7** | **大涨日多卖、大跌日多买** | 「大涨之日少买票，多卖票，大跌之日多买票 少卖票」2025-01-23 | ✅ 已落地（2026-09-14） | `wolf_day_rules.day_bias/tp_threshold/allow_realize_sell` + `t_monitor._index_pct_today()`：大涨日（≥1.0%）兑现门槛 ×0.67（3%→2%）；**大跌日不新增兑现类卖腿**（保护性卖出照旧）；买侧不新造"放宽买入"；开关 `WOLF_DAY_RULES` |
+| **G8** | **出上影线 → 停止做 T** | 「任何时候 看见机器人板块出上影线 立马停止做T，保持 30% 机器人底仓就别动了」2025-07-17 | ✅ 已落地（2026-09-14） | 执行层停机门（`_round` 内）：最新一根**已完成**日线上影 ≥`WOLF_SHADOW_RATIO`(0.3)×全幅 → 当日跳过该标的做T买腿与兑现类卖腿（触发记 blocked），保护性卖出不受影响；日线取不到 → 不停机 |
+| **G9** | **节假日反 T：早盘卖、尾盘买** | 「以后是节假日出今日…尽量做到**早盘卖 尾盘买的反T**」2025-04-29 | ✅ 已落地（2026-09-14） | `wolf_weekend_hedge.cutoff_for(kind)`：**长假前 10:00 早盘卖**（`WOLF_WH_HOLIDAY_HM`）、周末前仍 14:30；`wolf_hedge_refill.from_hm(holiday)`：**长假后回补从 14:00 起（尾盘买）**、周末后仍 09:35 |
 | **G10** | 尾段状态机 | 「一旦我认为行情结束」2026-09-04 | ⛔ 不做 | 条件不可识别 → 做了就是前视 |
 | **G11** | 诱空最多三次 | 2026-09-07 | ⛔ 不做 | 需盘口/分时语义，暂不可算化 |
-| **阶段 1** | 兑现口径变体对照 `jobs/eval_exit_rules.py`（V1 +3% / V2 破黄线 / V3 V1+V2 / V4 做 T 前置 / V5 高低位） | plan §5 阶段 1 | 🚧 下一步 | 新尺子 = stock 账户 + 回合级；**离线、无生产改动** |
+| **阶段 1** | 兑现口径变体对照 `jobs/eval_exit_rules.py`（V1 +3% / V2 破黄线 / V3 V1+V2 / V4 做 T 前置 / V5 高低位） | plan §5 阶段 1 | ✅ 已跑（2026-09-14，报告 `docs/exit-rules-variants-report.md`） | +3% 止盈两类样本都抬胜率；**V2 的 VWAP 代理过宽 → 待补 m5/分时（G6 数据缺口）才算验收**；V1 的 H1/H2 不同号 |
 
 ### 5.1 本轮落地的验证（2026-09-14）
 
@@ -178,6 +178,16 @@
   + `wolf_boll_levels.market_top()` 并集 + 动作强度分层；单测 `backend/tests/test_wolf_top_signals.py` 8 项；
   服务器自检：`S1=False S2=False S3=False, n=0`（as_of=20260911）、`market_top source=none / top=false`、
   `mid_break_sells` 带 `reduce_ratio/top_source`、`WOLF_TOP_SIGNAL_REDUCE` 生效。
+- 阶段 1（同日）：`jobs/eval_exit_rules.py` + `docs/exit-rules-variants-report.md`（V1 +3% 57.6%/+1.29% vs 生产 51.5%/−0.13%；
+  V2 的 VWAP 代理过宽 → 不作验收；428 参考腿 V1 47.4%→52.6%）。
+- G2 + G4（同日）：`wolf_fib_target.py`（前一波 0.618 位）+ `wolf_passive_stop.py`（被动线只上移）；
+  单测 `backend/tests/test_wolf_exit_targets.py` 6 项；自检 SH512480 0.618 位 1.0338 / SH603259 155.06、被动线候选 0.935/149.70。
+- G3 + G6 + G7 + G8 + G9（同日）：`wolf_ticket_ban.py`（删票 TTL=13 交易日，买入侧过滤带日志）、
+  `t_gateway` G6 笔数护栏（默认 2，止损/破位豁免）、`wolf_day_rules.py`（G7 日型门槛 / G8 上影线停机）、
+  G9 节假日时点（长假前 10:00 卖 / 长假后 14:00 回补）；单测 `test_wolf_ticket_ban.py` 7 项 /
+  `test_g6_trade_cap.py` 5 项 / `test_wolf_day_rules.py` 7 项 / `test_g9_holiday_timing.py` 7 项，全部通过。
+- 🐛 G9 顺带修一个**静默失效**：`wolf_weekend_hedge._hhmm` 只认 "HH:MM"，传 "1005" 会静默返回 0 → 时点门失效；已兼容 HHMM。
+- ⚠️ 已知与本轮无关的测试收集错误：`backend/tests/test_marcus_trade_notify.py` 缺 `workspace_detector` 模块（与本次改动无关）。
 
 ### 5.2 G1 离线体检（2026-09-14，上证 2025-04-01 → 2026-09-11，355 个交易日）
 
