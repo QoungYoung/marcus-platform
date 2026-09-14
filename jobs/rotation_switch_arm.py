@@ -130,6 +130,22 @@ def _pct_rank(vals):
     return rk
 
 
+def _banned_from_service():
+    """G3 删票黑名单（`app.services.wolf_ticket_ban`）—— 容器/宿主两种布局都要能找到。
+
+    2026-09-14 修复（审计 E3）：原实现只把 `<repo>/backend` 插进 sys.path，但**容器里 backend/app
+    是挂到 `/app/app`**（`docker inspect marcus-worker`：/opt/marcus-platform/backend/app -> /app/app），
+    所以 `from app.services...` 在生产实测报 `No module named 'app'` → 删票过滤**静默失效**。
+    这里同时插入 `<repo>` 与 `<repo>/backend`（宿主布局），并把失败留成 fail-open（返回空黑名单）。
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for _p in (root, os.path.join(root, "backend")):
+        if _p and _p not in sys.path:
+            sys.path.insert(0, _p)
+    from app.services.wolf_ticket_ban import banned_symbols as _bs
+    return _bs(["stock"])
+
+
 def pick_buy(chain, exclude, limit=3):
     """路径A 低吸选股(rotation 链关键词匹配的候选域)。
 
@@ -163,12 +179,9 @@ def pick_buy(chain, exclude, limit=3):
     # —— 带 TTL（默认 13 交易日）；与已删的拥挤黑名单不同：① 触发条件是**他自己的破线**，② **有日志**不静默。
     banned, _skipped = {}, []
     try:
-        import sys as _bs, os as _bo
-        _bs.path.insert(0, _bo.path.join(_bo.path.dirname(_bo.path.dirname(_bo.path.abspath(__file__))), "backend"))
-        from app.services.wolf_ticket_ban import banned_symbols as _banned_syms
-        banned = _banned_syms(["stock"])
+        banned = _banned_from_service()
     except Exception as _be:
-        print(f"[rotation] 删票黑名单读取失败: {str(_be)[:60]}")
+        print(f"[rotation] 删票黑名单读取失败: {str(_be)[:80]}")
     cands = []
     for ts, names in cm.items():
         if any(norm(k) in norm(n) for n in names for k in kws):
@@ -253,8 +266,48 @@ def pick_buy(chain, exclude, limit=3):
     return out
 
 
+def pick_health(theme, source, status="ok", err="", n=0):
+    """③ 可见性（2026-09-14）：把"选择层这次到底走的哪条路"落成文件 + 一行 stderr。
+
+    起因（审计 B11）：pick_v2 抛错时旧代码只打一行 `WOLF_PICK_V2_ERR` 就**静默回落 legacy 扫描序**
+    （2026-09-10 实测两次：`HTTP Error 307` / `cannot locate _key`）→「选择层已上线」是假象，
+    连续 6 个交易日没人发现。
+      ① 每次确认产出 `data/pick_health_<date>.json`（按 theme 覆盖，保留 last_error）并打印 `PICK_HEALTH` 行；
+      ② 开关 `WOLF_PICK_FAIL_MODE`：**默认 legacy**（=旧行为，零变化）；置 `wait` 则报错时**不回落、不布腿**（等数据恢复）。
+    不改任何选股判据；只做"看得见"。
+    """
+    rec = {"date": _today(), "theme": theme, "source": source, "status": status,
+           "err": (err or "")[:300], "n": int(n or 0), "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        fn = os.path.join(DATA, "pick_health_%s.json" % rec["date"])
+        cur = {}
+        if os.path.exists(fn):
+            try:
+                cur = json.load(open(fn, encoding="utf-8")) or {}
+            except Exception:
+                cur = {}
+        cur.setdefault("date", rec["date"])
+        cur.setdefault("themes", {})
+        cur["themes"][theme] = rec
+        if source in ("err", "err_wait"):
+            cur["last_error"] = rec
+        cur["updated_at"] = rec["ts"]
+        os.makedirs(DATA, exist_ok=True)
+        with open(fn, "w", encoding="utf-8") as f:
+            json.dump(cur, f, ensure_ascii=False, indent=1)
+    except Exception as _e:
+        print("PICK_HEALTH_WRITE_ERR", str(_e)[:80], file=sys.stderr)
+    print("PICK_HEALTH theme=%s source=%s status=%s n=%d err=%s"
+          % (theme, source, status, rec["n"], rec["err"][:80]), file=sys.stderr)
+    return rec
+
+
 def confirm_pick(theme, exclude, limit=2, concepts=None):
-    """曾确认主题低吸选股: THEME_CONCEPTS 成分 -> 过滤 bad/blacklist/held -> position LOW/MID, 至多 limit 只"""
+    """曾确认主题低吸选股: THEME_CONCEPTS 成分 -> 过滤 bad/blacklist/held -> position LOW/MID, 至多 limit 只
+
+    返回的每条 pick 带 `pick_source`（v2 / legacy / legacy_after_err / legacy_datagap / legacy_empty），
+    供 `PICK_PATH_SUMMARY` 与审计文件回答"这次到底走的哪条路"（③ 可见性，2026-09-14）。
+    """
     # 2026-09-09 狼大化 v2 (A=确认链/B=等权leader/C=容量提示/D=20日成交额>=1亿硬切); WOLF_PICK_LEGACY=1 回退旧版
     if os.getenv("WOLF_PICK_LEGACY", "0") != "1":
         _st = {}
@@ -264,8 +317,12 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
         except Exception as _e:
             print("WOLF_PICK_V2_ERR", theme, str(_e)[:200], file=sys.stderr)
             _p = None
+            pick_health(theme, "err", "error", str(_e)[:200])
         if _p is not None:
             if _p:
+                for _x in _p:
+                    _x.setdefault("pick_source", "v2")
+                pick_health(theme, "v2", str(_st.get("status") or "ok"), "", len(_p))
                 return _p
             # 2026-09-10(P0-4): v2 返回空列表有两种截然不同的语义, 旧代码用 `if _p: return _p`
             # 把它们混为一谈并静默回落 legacy DB 扫描序 → 位置闸否掉全部时反而去买后排。
@@ -273,12 +330,35 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
             #   ② ok(位置闸/选择层闸否掉全部) = 狼大"买不到位置就等" → 必须等待, 不得回落扫描序
             if _st.get("status") in ("no_universe", "no_scored"):
                 print("WOLF_PICK_V2_DATAGAP_FALLBACK", theme, _st.get("status"), "-> legacy", file=sys.stderr)
+                pick_health(theme, "legacy_datagap", str(_st.get("status")), "确认域/候选缺失 → legacy", 0)
             elif os.getenv("WOLF_PICK_EMPTY_WAIT", "1") == "1":
                 print("WOLF_PICK_V2_EMPTY_WAIT", theme, "rs_rej=%s" % _st.get("rs_rejected"),
                       "t1=%s" % _st.get("t1"), "-> 空窗等待(不回落 legacy)", file=sys.stderr)
+                pick_health(theme, "wait", str(_st.get("status") or "ok"), "空窗等待", 0)
                 return []
             else:
                 print("WOLF_PICK_V2_EMPTY_FALLBACK", theme, "(WOLF_PICK_EMPTY_WAIT=0) -> legacy", file=sys.stderr)
+                pick_health(theme, "legacy_empty", "ok", "WOLF_PICK_EMPTY_WAIT=0", 0)
+        elif os.getenv("WOLF_PICK_FAIL_MODE", "legacy").strip().lower() == "wait":
+            # ③ 失败语义可选：报错时不静默买 legacy 扫描序的票，改为"今天不布这只主题的腿"
+            print("WOLF_PICK_V2_FAIL_WAIT", theme, "→ 不回落 legacy(WOLF_PICK_FAIL_MODE=wait)", file=sys.stderr)
+            pick_health(theme, "err_wait", "error", "WOLF_PICK_FAIL_MODE=wait → 不布腿")
+            return []
+    _picks_legacy = _legacy_confirm_pick(theme, exclude, limit, concepts)
+    for _x in _picks_legacy:
+        _x.setdefault("pick_source", "legacy")
+    pick_health(theme, "legacy", "ok", "", len(_picks_legacy))
+    return _picks_legacy
+
+
+def _legacy_confirm_pick(theme, exclude, limit=2, concepts=None):
+    """旧版（DB 扫描序）低吸选股 —— pick_v2 之前的线上实现，现作为显式回退分支保留。
+
+    顺序 = `SELECT DISTINCT ts_code ... WHERE concept_name IN (...)`（无 ORDER BY，实测≈表内 rowid 序），
+    取扫描到的前 `limit` 只 position ∈ LOW/MID（最多扫 60 只）。
+    2026-09-14 审计：它的实测超额 ≈ 0（5 日 +0.014%，块状 t −0.14；10/20 日 +0.12%/+0.50%），
+    **不劣于** pick_v2 的 tier1（−0.98%/−2.37%/−1.20%）→ 保留为显式回退基线，不做静默替换。
+    """
     from fusion_mainline import THEME_CONCEPTS as TC
     from rotation_universe import get_sub_universe  # noqa (保持 universe 加载一致性)
     cons = concepts if concepts is not None else TC.get(theme, [])
@@ -508,17 +588,22 @@ def main():
     # 狼大 2025-03-06「你首先得判断现在大盘行情没有危险 **板块没有危险** 那就可以做」。
     # 单一定义处: wolf_context.theme_buyable —— 253 的 m5dump_allowed 也调它, 两条路径不会分叉。
     # 注: 本门作用于 254/253 的**新开低吸腿**; 卖侧与已有持仓不受影响。
+    _gate_blocked = []
     if pool:
         try:
             from wolf_context import theme_buyable
             _ok_pool = []
+            _blocked_themes = []
             for th in pool:
                 _ok, _why = theme_buyable(th)
                 if _ok:
                     _ok_pool.append(th)
                 else:
                     print("SKIP_THEME_NOT_BUYABLE", th, _why, file=sys.stderr)
+                    _blocked_themes.append({"theme": th, "why": str(_why)[:200]})
+                    pick_health(th, "gate_blocked", "blocked", str(_why)[:200])
             pool = _ok_pool
+            _gate_blocked.extend(_blocked_themes)
         except Exception as _e:
             print("THEME_BUYABLE_ERR(放行)", str(_e)[:120], file=sys.stderr)
     if qualify and pool:
@@ -569,6 +654,31 @@ def main():
     buy_legs = [b for b in buy_legs if _board_ok(b.get("symbol"))]
     if len(buy_legs) != _nb:
         print("BOARD_FILTER removed", _nb - len(buy_legs), "个无权限板块买腿", file=sys.stderr)
+    # ③ 可见性（2026-09-14）：把"这次买腿分别来自哪条路"显式打出来 + 落审计文件。
+    # 起因：pick_v2 报错会静默回落 legacy 扫描序，路径 A/B 的腿在日志里无法区分 → 上线 6 天无人发现。
+    _src_cnt = {}
+    for _b in buy_legs:
+        _src = _b.get("pick_source") or ("pathA" if _b.get("side") in ("mainline", "defensive_resource") else "?")
+        _src_cnt[_src] = _src_cnt.get(_src, 0) + 1
+    print("PICK_PATH_SUMMARY legs_by_source=%s pool=%s gate_blocked=%s pool_legs=%s"
+          % (_src_cnt, pool, [b.get("theme") for b in _gate_blocked], os.getenv("ROT_POOL_LEGS", "4")),
+          file=sys.stderr)
+    try:
+        _health_fn = os.path.join(DATA, "pick_path_%s.json" % today)
+        _hp = {}
+        if os.path.exists(_health_fn):
+            try:
+                _hp = json.load(open(_health_fn, encoding="utf-8")) or {}
+            except Exception:
+                _hp = {}
+        _hp.update({"date": today, "dry": bool(dry), "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "legs_by_source": _src_cnt, "legs": buy_legs,
+                    "confirmed_pool": pool, "gate_blocked": _gate_blocked,
+                    "theme_buyable_checked": bool(pool or _gate_blocked)})
+        with open(_health_fn, "w", encoding="utf-8") as _f:
+            json.dump(_hp, _f, ensure_ascii=False, indent=1)
+    except Exception as _he:
+        print("PICK_PATH_WRITE_ERR", str(_he)[:80], file=sys.stderr)
     print("DECISION sell_legs", sell_legs, "buy_chains", buy_chains, "buy_legs", buy_legs)
     if dry:
         json.dump({"mode": "SWITCH_ARM_DRY", "date": today, "sell_legs": sell_legs,

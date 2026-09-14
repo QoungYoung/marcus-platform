@@ -120,6 +120,22 @@ def theme_etf(theme):
         pass
     return None
 
+def _banned_from_service():
+    """G3 删票黑名单 —— 容器/宿主两种布局都要能找到 `app.services.wolf_ticket_ban`。
+
+    2026-09-14 修复（审计 E3）：原实现只插 `<repo>/backend`；但**容器里 backend/app 挂到 `/app/app`**
+    （`docker inspect marcus-worker`：`/opt/marcus-platform/backend/app -> /app/app`），
+    生产实测报 `WOLF_PICK BAN_LIST_ERR No module named 'app'` → 删票过滤静默失效。
+    同时插 `<repo>`（容器布局：/app + /app/app）与 `<repo>/backend`（宿主仓库布局）。
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for _p in (root, os.path.join(root, "backend")):
+        if _p and _p not in sys.path:
+            sys.path.insert(0, _p)
+    from app.services.wolf_ticket_ban import banned_symbols as _bs
+    return _bs(["stock"])
+
+
 def theme_quantile_keep(rows, pct=None, key="leader"):
     """**U9 主题容量约束**（2026-09-11，用户拍板用"相对分位"而非绝对名额）。
 
@@ -209,13 +225,9 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     # 且**打日志**（不静默）；只影响买入侧候选，不影响卖出。
     banned = {}
     try:
-        import sys as _bs2, os as _bo2
-        _bs2.path.insert(0, _bo2.path.join(_bo2.path.dirname(_bo2.path.dirname(_bo2.path.dirname(
-            _bo2.path.abspath(__file__)))), "backend"))
-        from app.services.wolf_ticket_ban import banned_symbols as _banned_syms2
-        banned = _banned_syms2(["stock"])
+        banned = _banned_from_service()
     except Exception as _be2:
-        print(f"WOLF_PICK BAN_LIST_ERR {str(_be2)[:60]}", file=sys.stderr)
+        print(f"WOLF_PICK BAN_LIST_ERR {str(_be2)[:80]}", file=sys.stderr)
     if banned:
         print(f"WOLF_PICK BAN_LIST n={len(banned)} symbols={sorted(banned)[:8]}", file=sys.stderr)
     kl, mv = {}, {}
