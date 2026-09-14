@@ -69,10 +69,28 @@ def test_dead_kind_not_rolled():
     assert "custom_trail_sell" in M._ROLL_SKIP_KINDS
 
 
-def test_discipline_positions_covers_both_accounts():
-    """纪律持仓必须是 stock + t 两个账户（t 是测试账户，主账户是 stock）。"""
+def test_position_account_default_is_stock_only(monkeypatch):
+    """持仓口径（2026-09-14 用户拍板）：**只读 stock**；t 账户是测试账户、暂时不使用。"""
+    monkeypatch.delenv("WOLF_POSITION_ACCOUNT", raising=False)
+    import importlib
+    m = importlib.reload(M)
+    assert m.POS_ACCOUNT == "stock"
+    assert m._position_accounts() == ("stock",)          # 默认只读 stock
+    monkeypatch.setenv("WOLF_POSITION_ACCOUNT", "t")
+    m2 = importlib.reload(m)
+    assert m2._position_accounts() == ("t",)             # 临时切回 t 只需改环境变量
+    importlib.reload(m2)
+
+
+def test_monitor_no_longer_reads_t_pool_positions():
+    """t_monitor 里不应再散落 t_pool._get_positions（硬编码 t 账户）——统一走 self._positions()。"""
     import inspect
-    src = inspect.getsource(M.TMonitor._discipline_positions)
-    assert '"stock"' in src and '"t"' in src
-    for fn in ("_check_weekend_hedge", "_check_profit_take", "_check_board_half", "_check_boll_mid_exit"):
+    src = inspect.getsource(M)
+    assert "from app.services.t_pool import _get_positions" not in src
+    assert "def _positions(" in src
+
+
+def test_discipline_helpers_exist():
+    for fn in ("_check_weekend_hedge", "_check_profit_take", "_check_board_half", "_check_boll_mid_exit",
+               "_positions", "_discipline_positions"):
         assert hasattr(M.TMonitor, fn), fn

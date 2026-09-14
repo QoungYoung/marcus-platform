@@ -30,6 +30,9 @@ COOLDOWN_SECONDS = 300      # 同条件去抖冷却（5min）
 
 # 2026-09-02 架构修正: 只监控股票任务账户, 只跑狼大做T表达式, 停自动维护
 T_MONITOR_ACCOUNT = os.getenv("T_MONITOR_ACCOUNT", "stock")
+# 持仓口径（2026-09-14 用户拍板）：**只读 stock 账户**；t 账户是测试账户、暂时不使用。
+# 需要临时切回 t 时设 WOLF_POSITION_ACCOUNT=t（不用改调用点）。
+POS_ACCOUNT = os.getenv("WOLF_POSITION_ACCOUNT", T_MONITOR_ACCOUNT)
 T_MONITOR_AUTO_MAINTAIN = os.getenv("T_MONITOR_AUTO_MAINTAIN", "0") == "1"
 # 狼大做T表达式字段(唯一允许)：分时T出(t_sell) + 正T买点(index.intraday_dd 大盘盘中回撤2-3%低吸)
 # + 黄线跌破离场(quote.vwap_break, 狼大8-04『黄线跌破直接走』)
@@ -571,26 +574,38 @@ class TMonitor:
             self._status['errors'] += 1
             print(f"[TMonitor] defensive_t_reduce异常: {e}")
 
-    def _discipline_positions(self, accounts=("stock", "t")):
-        """纪律类卖腿（板上减半 / 小赚兑现 / 周末避险 / 中轨全止盈）的**持仓口径 = stock + t 两个账户**。
+    def _positions(self, account=None):
+        """**统一持仓口径**（2026-09-14 用户拍板）：默认**只读 stock 账户**；t 账户是测试账户、暂不使用。
 
-        历史实现只读 t 账户（t_pool._get_positions）→ 而 t 是**测试账户**，纪律规则实际管不到主账户
-        （2026-09-14 用户确认后修正）。
+        历史实现散落着 t_pool._get_positions()（硬编码 t 账户）→ 监控器账户是 stock、持仓却读 t，
+        两边不一致。现在所有离场/维护/止损都走这里；切回 t 只需 `WOLF_POSITION_ACCOUNT=t`。
         """
+        acct = account or _position_accounts()[0]
         out = []
         try:
             import psycopg2 as _pg
             conn = _pg.connect(os.getenv("DATABASE_URL",
                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
             cur = conn.cursor()
-            cur.execute("SELECT account_id, symbol, volume, avg_price FROM paper_positions "
-                        "WHERE account_id = ANY(%s) AND volume > 0", (list(accounts),))
-            for a, s, v, pr in cur.fetchall():
-                out.append({"account_id": str(a), "symbol": str(s),
+            cur.execute("SELECT symbol, volume, avg_price FROM paper_positions "
+                        "WHERE account_id = %s AND volume > 0", (acct,))
+            for s, v, pr in cur.fetchall():
+                out.append({"account_id": acct, "symbol": str(s),
                             "volume": float(v or 0), "avg_price": float(pr or 0)})
             cur.close(); conn.close()
         except Exception as e:
-            print(f"[TMonitor] 纪律持仓读取失败: {e}")
+            print(f"[TMonitor] 持仓读取失败({acct}): {e}")
+        return out
+
+    def _discipline_positions(self, accounts=None):
+        """纪律类卖腿（板上减半 / 小赚兑现 / 周末避险 / 中轨全止盈）的持仓口径。
+
+        **默认 = POS_ACCOUNT（stock）**；t 账户是测试账户、暂时不使用（用户 2026-09-14 拍板）。
+        """
+        accts = tuple(accounts or _position_accounts())
+        out = []
+        for a in accts:
+            out += self._positions(a)
         return out
 
     def _check_board_half(self) -> None:
@@ -709,9 +724,8 @@ class TMonitor:
             from app.services.wolf_boll_levels import active_sells, enabled as _boll_on
             if not _boll_on():
                 return
-            from app.services.t_pool import _get_positions
             import json as _j, datetime as _dt
-            pos_list = _get_positions()
+            pos_list = self._positions()
             held = [p for p in pos_list if float(p.get('volume') or 0) > 0]
             if not held:
                 return
@@ -853,9 +867,8 @@ class TMonitor:
         try:
             if os.getenv("WOLF_POSITION_DISC", "1").strip() in ("0", "false", "no"):
                 return
-            from app.services.t_pool import _get_positions
             _minp = int(os.getenv("WOLF_POSITION_DISC_MIN", "3"))
-            pos_list = [p for p in (_get_positions() or []) if float(p.get('volume') or 0) > 0]
+            pos_list = [p for p in self._positions() if float(p.get('volume') or 0) > 0]
             if len(pos_list) < _minp:
                 return
             import sys as _sp
@@ -937,12 +950,11 @@ class TMonitor:
                     _STOP_HOLD_WARNED.add(_tk)
                     print(f"[TMonitor] 指数级止损被时点门拦下(仅预警): {_why} | {_treason}")
                 return
-            from app.services.t_pool import _get_positions
             from app.services.t_gateway import gateway_execute, get_sellable_ledger
-            _acct = T_MONITOR_ACCOUNT
+            _acct = POS_ACCOUNT
             _ledger = get_sellable_ledger(account_id=_acct) or {}
             _rows = []
-            for p in (_get_positions() or []):
+            for p in self._positions(_acct):
                 if float(p.get('volume') or 0) <= 0:
                     continue
                 _sym = _normalize_symbol(p.get('symbol'))
@@ -995,12 +1007,11 @@ class TMonitor:
                 return
             from app.services.wolf_early_stop import logic_time_stop as _logic_ts
             _today = datetime.now().strftime('%Y%m%d')
-            from app.services.t_pool import _get_positions
             from app.services.t_gateway import gateway_execute, get_sellable_ledger
-            _acct = T_MONITOR_ACCOUNT
+            _acct = POS_ACCOUNT
             _ledger = get_sellable_ledger(account_id=_acct) or {}
             _cands = []
-            for p in (_get_positions() or []):
+            for p in self._positions(_acct):
                 if float(p.get('volume') or 0) <= 0:
                     continue
                 _sym = _normalize_symbol(p.get('symbol'))
@@ -1183,10 +1194,10 @@ class TMonitor:
         except Exception as e:
             print(f"[TMonitor] 每日条件归档失败: {e}")
         try:
-            # 来源：t 账户持仓（paper_positions），开盘前亦可稳定读取；
+            # 来源：持仓口径账户（默认 stock；paper_positions），开盘前亦可稳定读取；
             # 条件仅补齐“今日尚无 active 条件”的标的后，交由盘中报价驱动是否触发。
-            from app.services.t_pool import _get_positions, build_t_conditions, calc_t_quality
-            for pos in _get_positions():
+            from app.services.t_pool import build_t_conditions, calc_t_quality
+            for pos in self._positions():
                 sym = pos.get("symbol")
                 avg = float(pos.get("avg_price") or 0)
                 if not sym or avg <= 0:
@@ -1223,9 +1234,8 @@ class TMonitor:
         res = {"ai_ok": 0, "rule_fallback": 0, "fail": 0, "skipped_user": 0}
         try:
             from app.services.t_build import auto_gen_conditions_for_build
-            from app.services.t_pool import _get_positions
             today = datetime.now().strftime("%Y%m%d")
-            for pos in _get_positions():
+            for pos in self._positions():
                 sym = pos.get("symbol")
                 avg = float(pos.get("avg_price") or 0)
                 if not sym or avg <= 0:
@@ -2534,6 +2544,14 @@ def _in_close_window(now=None) -> bool:
 FLOOR_BREAK_KINDS = frozenset({"wolf_boll_mid_exit"})
 # 死腿：机制已删（quote.trail_break 恒 False，2026-09-10 删除）→ 不再跨日结转
 _ROLL_SKIP_KINDS = frozenset({"custom_trail_sell"})
+
+
+def _position_accounts() -> tuple:
+    """持仓口径账户（2026-09-14 用户拍板：**只读 stock**；t 账户是测试账户、暂时不使用）。
+
+    要临时切回 t 账户：`WOLF_POSITION_ACCOUNT=t`（改环境变量即可，不用改调用点）。
+    """
+    return (os.getenv("WOLF_POSITION_ACCOUNT", T_MONITOR_ACCOUNT).strip() or T_MONITOR_ACCOUNT,)
 
 
 def _rollable(conds: Optional[List[dict]]) -> List[dict]:
