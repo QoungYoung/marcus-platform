@@ -45,7 +45,11 @@
 **黑K 且收盘 < MA5** → reduce（"收黑K跌破5日线…减仓避一下"）；另返回 13/34 **强弱分类**（`WOLF_TREND_WEAK_NO_VOL=1` 时弱分类破 34 免带量）。
 **唯一自造**＝"带量"的量化：`WOLF_TREND_VOL_RATIO`（默认 **1.2×** 近 20 日**成交额**均量；生产 `_daily_dated` 无 amount 时自动退回**成交量**均量），已在代码与日志中标注为代理。
 
-**开关**：`WOLF_TREND_STOP=1`（默认开，`=0` 回退到既有 `stop_loss_price`）/ `WOLF_TREND_KEEP_COND_STOP=0`（默认 **不保留** AI 建仓价那条线，否则它总在趋势线之上、永远先触发 → ② 等于没上；设 1 则两条并行）/ `WOLF_TREND_FRESH_ONLY=1`（**分阶段上线护栏**，见下）/ `WOLF_TREND_FRESH_DAYS=5` / `WOLF_TREND_WEAK_NO_VOL=0`。
+**开关**：`WOLF_TREND_STOP=1`（`=0` 回退到既有 `stop_loss_price`）/ `WOLF_TREND_KEEP_COND_STOP=0`（**不保留** AI 建仓价那条线，否则它总在趋势线之上、永远先触发 → ② 等于没上；设 1 则两条并行）/ `WOLF_TREND_FRESH_ONLY`（**上线护栏**，见下）/ `WOLF_TREND_FRESH_DAYS=5` / `WOLF_TREND_VOL_RATIO`（"带量"阈值）/ `WOLF_TREND_WEAK_NO_VOL`（弱分类破 34 免带量）。
+
+> **生产现值（2026-09-14 用户拍板"完全忠实"）**：`WOLF_TREND_STOP=1`、`WOLF_TREND_FRESH_ONLY=0`（久已破位也砍）、**`WOLF_TREND_VOL_RATIO=1.0`**（把"带量"读成"不缩量"）、**`WOLF_TREND_WEAK_NO_VOL=1`**（弱分类 MA13<MA34 下破 34 免带量也砍）。四处开关都在宿主 `/opt/marcus-platform/.env`（85–88 行），改后需 `cd /opt/marcus-platform/docker && docker compose up -d worker backend` 才生效（`docker restart` 不重载 .env；service 名是 `worker`/`backend`）。
+
+> **实测影响（n=428 臂级）**：`WOLF_TREND_VOL_RATIO` 1.0× vs 1.2× 对结果**几乎中性**（`T_only` 都是 +1.99%、`A1_T_idx` +0.98 vs +0.99），只多砍约 9 笔首触发；`WOLF_TREND_WEAK_NO_VOL=1` 让"弱分类破 34"不再要求带量，更贴他"留强丢弱"的一贯口径。二者都是**语义忠实**取向，不是收益优化。
 
 **分阶段上线护栏（重要）**：规则上线那天，存量持仓可能"早就跌破 60 日线"（只是以前没有这条规则）——
 直接执行等于一次**补跌式清仓**，那是**上线时点造成的伪信号**。故 `WOLF_TREND_FRESH_ONLY=1`（默认）下：
