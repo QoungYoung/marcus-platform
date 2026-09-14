@@ -362,6 +362,70 @@ def index_level_stop(wave=None, today=None, max_stale_days=None):
     return False, "指数级别=%s, 未转下跌 → 不触发" % lv
 
 
+# ── ③层加宽（2026-09-14）：他说的"尾段/结束"在系统里主要是 d4 系列 + 顶态子浪，不只是 down ──
+# 依据：关键点重放（jobs/check_wave_agent_turningpoints.py，28 条语料拐点声明/19 个日期）——
+#   2026 年他 6 次"尾段/结束"→ 系统给出 d4/4-1·4-2·4-3 + defense/t_only；2022 年"反弹浪走完"→ d4/C杀、d4/4-5；
+#   2021-01-21 → d3/3-5/exit。而原判据只认 level=='down' → 门槛比他的实际表达严得多（这就是"几乎不触发"的原因）。
+INDEX_TOP_LEVELS = ("d4", "d5")                      # 顶态大级别（d4 大4回调 / d5 末段衰竭）
+INDEX_TOP_SUBS = ("3-5", "4-1", "4-2", "4-3", "4-4", "4-5", "C杀", "双头", "衰竭", "失败5", "M顶")
+INDEX_TOP_ACTION_CLEAR = ("down",)                   # 明确下跌 → 清仓级
+
+
+def _top_sub_hit(sub, wave):
+    """子浪是否命中顶态词表（含 d3 末段 3-5 与 4-x/C杀/双头/衰竭）。"""
+    import re as _re
+    sl = str(sub or "").strip()
+    if not sl:
+        return False
+    for w in INDEX_TOP_SUBS:
+        if w == "双头" or w == "衰竭":
+            if w in sl:
+                return True
+        elif "M顶" in w:
+            if "M顶" in sl or "双头" in sl:
+                return True
+        elif _re.match(r"^%s" % _re.escape(w), sl):
+            return True
+    return False
+
+
+def index_top_state(wave=None, today=None, max_stale_days=None):
+    """③层**加宽版**：指数顶态/下跌 → (action, why)，action ∈ {"clear", "reduce", None}。
+
+    · `level == down`                        → **clear**（清的语义：原有清仓/收盘减半口径不变）
+    · `level ∈ {d4, d5}`                     → **reduce**（顶态，减仓级）
+    · `sub_level` 命中 {3-5, 4-x, C杀, 双头, 衰竭, 失败5} → **reduce**
+    新鲜度护栏与 `index_level_stop` 完全一致（过期 → None）。开关 `WOLF_INDEX_TOP_WIDEN=0` 时
+    退回旧口径（只认 down），调用方自行判断。
+    """
+    w = wave if wave is not None else load_wave()
+    lv = str(w.get("level") or "").strip().lower()
+    sl = str(w.get("sub_level") or "").strip()
+    wd = str(w.get("date") or "").strip()
+    if not lv:
+        return None, "无指数浪型数据 → 不动作"
+    try:
+        n = int(max_stale_days if max_stale_days is not None else os.getenv("WOLF_INDEX_STOP_MAX_STALE_DAYS", "3"))
+    except Exception:
+        n = 3
+    if today and wd and n >= 0:
+        import datetime as _dt
+        try:
+            d1 = _dt.date(int(wd[:4]), int(wd[4:6]), int(wd[6:8]))
+            d2 = _dt.date(int(str(today)[:4]), int(str(today)[4:6]), int(str(today)[6:8]))
+            if (d2 - d1).days > n:
+                return None, "指数浪型数据过期(wave_state.date=%s, 距今 %d 天 > %d) → 不动作" % (wd, (d2 - d1).days, n)
+        except Exception:
+            pass
+    if lv in INDEX_TOP_ACTION_CLEAR:
+        return "clear", "指数大级别转下跌: level=%s（狼大2026-08-27「不走大5浪而转为下跌1浪就止损」, date=%s）" % (lv, wd or "?")
+    if lv in INDEX_TOP_LEVELS:
+        return "reduce", "指数顶态: level=%s/%s（狼大「尾段/结束」口径, 2026-09-14 关键点重放校准, date=%s）" % (lv, sl or "-", wd or "?")
+    if _top_sub_hit(sl, w):
+        return "reduce", "指数顶态子浪: sub_level=%s（level=%s, date=%s）" % (sl, lv, wd or "?")
+    return None, "指数 level=%s/%s 未达顶态 → 不动作" % (lv, sl or "-")
+
+
 def systemic_block(wave=None):
     """大盘是否处于"真正系统性下跌"（仅此情形拦 253）。返回 (blocked, reason)。"""
     w = wave if wave is not None else load_wave()

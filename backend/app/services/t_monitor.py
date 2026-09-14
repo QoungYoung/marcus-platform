@@ -1240,9 +1240,20 @@ class TMonitor:
             _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps", "main_line")
             if _p not in _sp.path:
                 _sp.path.insert(0, _p)
-            from wolf_context import index_level_stop
+            # ③层加宽（2026-09-14）：他的"尾段/结束"在系统里主要是 d4 系列/顶态子浪，不只是 down。
+            # 关键点重放校准：2026 年 6 次"尾段"→d4/4-x+defense/t_only；2022"反弹浪走完"→d4/C杀、d4/4-5；2021-01-21→d3/3-5。
+            # 开关 WOLF_INDEX_TOP_WIDEN=0 → 退回旧口径（只认 level=='down'）。
             _today = datetime.now().strftime('%Y%m%d')
-            _stop, _why = index_level_stop(today=_today)
+            _widen = os.getenv("WOLF_INDEX_TOP_WIDEN", "1").strip() not in ("0", "false", "no")
+            _act = None
+            if _widen:
+                from wolf_context import index_top_state
+                _act, _why = index_top_state(today=_today)
+                _stop = _act is not None
+            else:
+                from wolf_context import index_level_stop
+                _stop, _why = index_level_stop(today=_today)
+                _act = "clear" if _stop else None
             if not _stop:
                 return
             _tok, _treason = _stop_time_ok()
@@ -1275,10 +1286,14 @@ class TMonitor:
                 if _cur <= 0:
                     continue
                 _vol, _mode = _stop_exit_volume(_sellable, _close_win)
+                if _act == "reduce":
+                    # 顶态 = **减仓级**（不是清仓）：不论是否收盘窗口都只减半
+                    _vol = max(((_vol // 2) // 100) * 100, 100) if _vol >= 200 else _vol
+                    _mode = "top_reduce"
                 if _vol <= 0:
                     continue
                 _gw = gateway_execute(_sym, "sell", _cur, _vol,
-                                      reason="指数大级别止损→%s（%s）" % (_mode, _why),
+                                      reason="指数级%s→%s（%s）" % ("顶态减仓" if _act == "reduce" else "大级别止损", _mode, _why),
                                       decision_source="rule", is_stop_loss=True, account_id=_acct)
                 print(f"[TMonitor] 指数级止损 {_sym} @ {_cur} x{_vol}[{_mode}]: {_gw.get('status')} | {_why}")
                 if _gw.get("status") == "success":
