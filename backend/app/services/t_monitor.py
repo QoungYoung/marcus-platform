@@ -2556,6 +2556,49 @@ class TMonitor:
                     stop_price = _stop_price
                 except Exception as _ee:
                     print(f"[TMonitor] 建仓初期止损线解析异常(退回 stop_loss_price) {symbol}: {str(_ee)[:100]}")
+            # ── ② 趋势线法（2026-09-14 落地）：**已成趋势后**换成他的趋势线口径 ──
+            # 狼大 2026-03-06「已经成为趋势后…用**趋势线**的方法…不是一个策略用到底的」；
+            #      2021-01-28「用 13日 34日做强弱分类，**60日是我的底线**，甚至没站稳 34日**带量**下穿的我都会砍掉」；
+            #      2026-01-12「收黑K跌破5日线…**减仓**避一下」。
+            # 运行条件：WOLF_TREND_STOP=1（默认）且已超出建仓初期窗口（① 未接管时）。
+            # 回退：WOLF_TREND_STOP=0 → 回到既有 stop_loss_price 口径（本文档下称"现状"）。
+            _trend_act = None
+            try:
+                from app.services import wolf_trend_stop as _TS
+                if _TS.enabled():
+                    _bd_t = self._buy_date(symbol)
+                    _held = None
+                    if _bd_t:
+                        try:
+                            from app.services.wolf_early_stop import held_trading_days as _htd
+                            _held = _htd(self._daily_dated(symbol, 90), _bd_t)
+                        except Exception:
+                            _held = None
+                    _early_days = int(os.getenv("WOLF_EARLY_STOP_DAYS", "13"))
+                    if _held is None or _held > _early_days:
+                        _tv = _TS.evaluate(self._daily_dated(symbol, 90))
+                        # **口径替换**：成趋势后按他的②只用趋势线；AI 建仓时给的 stop_loss_price 默认不再并行生效
+                        # （否则它总在趋势线之上、永远先触发 → ②等于没上）。要保留旧线：WOLF_TREND_KEEP_COND_STOP=1。
+                        _keep = os.getenv("WOLF_TREND_KEEP_COND_STOP", "0").strip() not in ("0", "false", "no")
+                        # fail-open：趋势线数据不足（含测试桩/新股）→ **保留**既有 stop_loss_price，
+                        # 不因为"算不出趋势线"而把保护撤掉（与 ① 的 fail-open 同口径）。
+                        if not _keep and bool((_tv.get("state") or {}).get("ok")):
+                            stop_price = None
+                        if _tv.get("action") == "notice":
+                            _tk_n = (symbol, "trend_notice", datetime.now().strftime('%Y%m%d'))
+                            if _tk_n not in _STOP_HOLD_WARNED:
+                                _STOP_HOLD_WARNED.add(_tk_n)
+                                print(f"[TMonitor] ②趋势线提示(不自动卖) {symbol}: {_tv['why']}")
+                        if _tv.get("action") in ("exit", "reduce") and _tv.get("line"):
+                            stop_price = float(_tv["line"])
+                            _trend_act = _tv["action"]
+                            _tk_t = (symbol, "trend", datetime.now().strftime('%Y%m%d'))
+                            if _tk_t not in _STOP_HOLD_WARNED:
+                                _STOP_HOLD_WARNED.add(_tk_t)
+                                print(f"[TMonitor] ②趋势线止损({_tv['action']}) {symbol}: {_tv['why']} "
+                                      f"line={stop_price}")
+            except Exception as _te:
+                print(f"[TMonitor] ②趋势线判定异常(跳过) {symbol}: {str(_te)[:100]}")
             if not stop_price or current > stop_price:
                 return
             # ── P2-4(2026-09-10): 收盘确认 / 假跌破守卫 ──
@@ -2623,10 +2666,15 @@ class TMonitor:
             #   · 盘中确认破位 → **减半仓**（保留底仓继续做T, 原语义不变, 避免盘中插针被全清）。
             # 所谓"确认破位"由上方 `_stop_close_confirm`（假跌破守卫: 收盘确认/收回幅度/分钟企稳/缩量/支撑位）判定。
             volume, _exit_mode = _stop_exit_volume(sellable, _in_close_window())
+            if _trend_act == "reduce":
+                # ②「收黑K跌破5日线…减仓避一下」= 减仓档（不论是否收盘窗口都只减半）
+                volume = max(((volume // 2) // 100) * 100, 100) if volume >= 200 else volume
+                _exit_mode = "trend_reduce"
             if volume <= 0:
                 return
             _reason = ("收盘确认破位→清仓（狼大: 收盘跌破我才出）" if _exit_mode == "close_clear"
-                       else "止损离场（stop_loss, 盘中减半仓）")
+                       else "②趋势线减仓：收黑K破5日线（狼大 2026-01-12「减仓避一下」）" if _exit_mode == "trend_reduce"
+                       else "②趋势线止损：跌破 60 日底线 / 34 日带量下穿（狼大 2021-01-28）")
             gw = gateway_execute(symbol, "sell", current, volume,
                                  reason=_reason, decision_source="ai_led",
                                  is_stop_loss=True,

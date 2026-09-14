@@ -20,6 +20,9 @@
   B_idx60   只指数级止损（代理 = 上证收盘 < MA60）
   H60_logic 指数(MA60) + 13 日逻辑时间止损（去掉个股 −3% 早停）—— 拆解用
   H60_early 指数(MA60) + 个股 −3% 早停（去掉 13 日逻辑时间）—— 拆解用
+  T_only    **②趋势线法**（60 日底线 / 34 日带量下穿 / 黑K破5日线减仓）—— 2026-09-14 新落地的层
+  T_idx     ②趋势线 + ③指数(MA60)
+  A1_T_idx  ①(13日窗口) + ②趋势线 + ③指数(MA60) —— **他的完整口径**
 
 ⚠️ 指数级"大级别转下跌1浪"**没有连续历史序列**（data/ 里只有 34 个 wave_state 快照），
    故指数臂一律用 MA 破位**代理**并明确标注；不得把代理结论说成"他的原话已验证"。
@@ -41,6 +44,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import eval_leg_metrics as M  # noqa: E402
+if os.path.join(ROOT, "backend") not in sys.path:
+    sys.path.insert(0, os.path.join(ROOT, "backend"))
+try:
+    from app.services import wolf_trend_stop as TS  # ②趋势线法（与被测生产模块同一实现）
+except Exception:                                     # pragma: no cover
+    TS = None
 
 EARLY_DAYS = 13          # 建仓初期窗口（狼大「13 日内」）
 EARLY_STOP_PCT = 0.03    # 波段低点 −3%
@@ -81,6 +90,18 @@ def _ma_flags(idxc: dict, win: int, consec: int = 1) -> dict:
     return flags
 
 
+def _trend_at(rows, j, win=90):
+    """用与生产同一实现判定第 j 根（含）为止的趋势线动作。"""
+    if TS is None:
+        return {"action": "hold", "why": "no module", "line": None}
+    seg = rows[max(0, j - win + 1):j + 1]
+    bars = [(r[0], 0, r[2], r[3], r[4], (r[5] if len(r) > 5 else 0)) for r in seg]
+    try:
+        return TS.evaluate(bars)
+    except Exception:
+        return {"action": "hold", "why": "err", "line": None}
+
+
 def simulate(rows, i, entry, idx_flags, idx_days, horizon, arm,
              early_pct=EARLY_STOP_PCT, touch=False, post_win=10):
     """返回 (收益%, 出场方式, 持有天数, MAE%, 出场后 10 日最大反弹%, 出场后 10 日最深跌幅%)。
@@ -102,8 +123,8 @@ def simulate(rows, i, entry, idx_flags, idx_days, horizon, arm,
         if prior_high and high >= prior_high:
             touched_high = True
         # ① 个股早停（只在建仓初期 13 个交易日内）
-        use_early = arm in ("A1_stock", "A1_touch", "A2_cur", "H60_early")
-        use_logic = arm in ("A1_stock", "A1_touch", "A2_cur", "H60_logic")
+        use_early = arm in ("A1_stock", "A1_touch", "A2_cur", "H60_early", "A1_T_idx")
+        use_logic = arm in ("A1_stock", "A1_touch", "A2_cur", "H60_logic", "A1_T_idx")
         if use_early and k <= EARLY_DAYS and stop_line:
             hit = (low <= stop_line) if (touch or arm == "A1_touch") else (close <= stop_line)
             if hit:
@@ -111,8 +132,30 @@ def simulate(rows, i, entry, idx_flags, idx_days, horizon, arm,
         # ② 13 日逻辑时间止损（窗口走完仍未碰前高）
         if use_logic and k == EARLY_DAYS and prior_high and not touched_high:
             return ((close / entry - 1) * 100, "logic_time", k, worst) + _post(rows, i + k, close, post_win)
+        # ② 趋势线法（成趋势后；本模拟里 13 日窗口之后才生效）
+        if arm in ("T_only", "T_idx", "A1_T_idx") and k > EARLY_DAYS:
+            _tv = _trend_at(rows, i + k)
+            if _tv.get("action") == "exit":
+                return ((close / entry - 1) * 100, "trend_exit", k, worst) + _post(rows, i + k, close, post_win)
+            if _tv.get("action") == "reduce":
+                # 减半：一半按当日收盘出场，余下继续走同一套规则（直到 exit/末端）
+                half = (close / entry - 1) * 100
+                for k2 in range(k + 1, n + 1):
+                    r2 = rows[i + k2]
+                    if r2[3] > 0:
+                        worst = min(worst, (r2[3] / entry - 1) * 100)
+                    _tv2 = _trend_at(rows, i + k2)
+                    if _tv2.get("action") == "exit":
+                        rest = (r2[4] / entry - 1) * 100
+                        return (0.5 * half + 0.5 * rest, "trend_reduce_then_exit", k2, worst) + _post(rows, i + k2, r2[4], post_win)
+                    if arm in ("T_idx", "A1_T_idx") and str(r2[0]) in idx_flags:
+                        rest = (r2[4] / entry - 1) * 100
+                        return (0.5 * half + 0.5 * rest, "trend_reduce_then_index", k2, worst) + _post(rows, i + k2, r2[4], post_win)
+                j2 = i + max(1, n)
+                rest = (rows[j2][4] / entry - 1) * 100
+                return (0.5 * half + 0.5 * rest, "trend_reduce_hold_end", max(1, n), worst) + _post(rows, j2, rows[j2][4], post_win)
         # ③ 指数级止损
-        if arm in ("A2_cur", "B_idx20", "B_idx20c", "B_idx60", "H60_logic", "H60_early") and d8 in idx_flags:
+        if arm in ("A2_cur", "B_idx20", "B_idx20c", "B_idx60", "H60_logic", "H60_early", "T_idx", "A1_T_idx") and d8 in idx_flags:
             return ((close / entry - 1) * 100, "index_stop", k, worst) + _post(rows, i + k, close, post_win)
     j = i + max(1, n)
     return ((rows[j][4] / entry - 1) * 100, "hold_end", max(1, n), worst) + _post(rows, j, rows[j][4], post_win)
@@ -144,7 +187,7 @@ def bucket(vals):
 
 
 ARMS = ("C_hold", "A1_stock", "A1_touch", "A2_cur", "B_idx20", "B_idx20c", "B_idx60",
-        "H60_logic", "H60_early")
+        "H60_logic", "H60_early", "T_only", "T_idx", "A1_T_idx")
 
 
 def main() -> int:
@@ -165,6 +208,9 @@ def main() -> int:
     flags["A1_touch"] = {}
     flags["H60_logic"] = flags["B_idx60"]
     flags["H60_early"] = flags["B_idx60"]
+    flags["T_only"] = {}
+    flags["T_idx"] = flags["B_idx60"]
+    flags["A1_T_idx"] = flags["B_idx60"]
 
     if args.sample == "replay":
         legs = M.load_replay_legs()
