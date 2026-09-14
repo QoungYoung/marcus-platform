@@ -49,8 +49,15 @@ def window_days() -> int:
         return 2
 
 
-def from_hm() -> str:
-    """回补起始时点（HH:MM）：默认 09:35；设 14:00 即他 2025-04-29「尾盘买」。"""
+def from_hm(holiday: bool = False) -> str:
+    """回补起始时点（HH:MM）：
+
+      · 普通（周末避险后的周一）：**09:35 起** —— 他 2026-08-21「这样周一再拿回来／万一低开 那就等于做了个反T」；
+      · **长假后**：**14:00 起（尾盘买）** —— 他 2025-04-29「早盘卖 **尾盘买**的反T。从概率上来说都是对的」
+        → `WOLF_REFILL_FROM_HOLIDAY`（默认 1400）。
+    """
+    if holiday:
+        return (os.getenv("WOLF_REFILL_FROM_HOLIDAY", "1400") or "1400").strip()
     return (os.getenv("WOLF_REFILL_FROM", "0935") or "0935").strip()
 
 
@@ -87,7 +94,7 @@ def _today8() -> str:
 
 
 def record_sell(symbol: str, price: float, volume: int, account: str = "stock",
-                trade_date: Optional[str] = None) -> Optional[str]:
+                trade_date: Optional[str] = None, kind: str = "") -> Optional[str]:
     """G9 避险卖出成交后登记**待回补额度**（幂等累加同日同标的）。"""
     if not enabled() or volume <= 0 or price <= 0:
         return None
@@ -97,6 +104,7 @@ def record_sell(symbol: str, price: float, volume: int, account: str = "stock",
     st = d.get(k) or {}
     if st.get("sell_date") != td:
         st = {"sell_date": td, "qty": 0, "notional": 0.0, "done": False}
+    st["kind"] = str(kind or st.get("kind") or "")
     st["qty"] = int(st.get("qty") or 0) + int(volume)
     st["notional"] = round(float(st.get("notional") or 0) + float(price) * int(volume), 2)
     st["sell_px"] = round(float(st["notional"]) / max(int(st["qty"]), 1), 4)
@@ -123,7 +131,8 @@ def pending(today8: Optional[str] = None) -> list:
         out.append({"key": k, "symbol": st.get("symbol") or k.split(":")[-1],
                     "account": st.get("account") or "stock",
                     "qty": int(st.get("qty") or 0), "sell_px": float(st.get("sell_px") or 0),
-                    "sell_date": st.get("sell_date"), "buy_qty": int(st.get("buy_qty") or 0)})
+                    "sell_date": st.get("sell_date"), "buy_qty": int(st.get("buy_qty") or 0),
+                    "holiday": str(st.get("kind") or "") == "holiday"})
     if changed:
         _save(d)
     return out

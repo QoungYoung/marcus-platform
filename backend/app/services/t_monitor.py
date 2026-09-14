@@ -857,7 +857,8 @@ class TMonitor:
             now = datetime.now()
             today = now.strftime('%Y%m%d')
             state = WH.load() or {}
-            if not _wh_should_execute(state, today, now.strftime('%H%M')):
+            _kind = str(state.get("kind") or "")
+            if not _wh_should_execute(state, today, now.strftime('%H%M'), WH.cutoff_for(_kind)):
                 return
             held = [p for p in self._discipline_positions() if float(p.get('volume') or 0) > 0]
             if not held:
@@ -893,7 +894,7 @@ class TMonitor:
                     # C2b: 登记待回补额度 → 下一个交易日按"不追高/逻辑没变"补回（狼大 2026-08-21「周一再拿回来」）
                     try:
                         from app.services import wolf_hedge_refill as _RF
-                        _RF.record_sell(sym, cur, vol, acct, today)
+                        _RF.record_sell(sym, cur, vol, acct, today, kind=_kind)
                     except Exception as _re:
                         print(f"[TMonitor] 回补登记失败 {sym}: {_re}")
                 try:
@@ -946,7 +947,8 @@ class TMonitor:
                 except Exception:
                     neg = False
                 act, reason = RF.refill_decision(float(p.get('sell_px') or 0), cur, elapsed, hhmm,
-                                                 neg_event=neg)
+                                                 neg_event=neg,
+                                                 start_hm=RF.from_hm(bool(p.get('holiday'))))
                 if act == 'expire':
                     RF.expire(p['key'], reason)
                     continue
@@ -2859,14 +2861,20 @@ def _wh_exec_enabled() -> bool:
     return os.getenv("WOLF_WH_EXEC", "1").strip() not in ("0", "false", "no")
 
 
-def _wh_should_execute(state: Optional[dict], today8: str, hhmm: str) -> bool:
-    """避险执行门（纯函数）：状态 active ∧ as_of=今日 ∧ 已过 14:30（他 14:20 预告、14:35 已执行）。"""
+def _wh_should_execute(state: Optional[dict], today8: str, hhmm: str, cutoff_hm: str = "1430") -> bool:
+    """避险执行门（纯函数）：状态 active ∧ as_of=今日 ∧ 已过检查时点。
+
+    时点按"周末前 / 长假前"分开（G9）：周末前 14:30（他 2026-08-21「2点半…14:35 我按刚才说的操作了」）；
+    **长假前 10:00 早盘卖**（他 2025-04-29「节假日出今日…尽量做到早盘卖 尾盘买的反T」）。
+    """
     if not isinstance(state, dict) or not state.get("active"):
         return False
     if str(state.get("as_of") or "") != str(today8):
         return False
     try:
-        return int(str(hhmm)[:2]) * 60 + int(str(hhmm)[2:4]) >= 14 * 60 + 30
+        _cut = "".join(ch for ch in str(cutoff_hm or "1430") if ch.isdigit())[:4] or "1430"
+        return (int(str(hhmm)[:2]) * 60 + int(str(hhmm)[2:4])
+                >= int(_cut[:2]) * 60 + int(_cut[2:4]))
     except Exception:
         return False
 

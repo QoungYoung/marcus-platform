@@ -64,6 +64,19 @@ def cutoff() -> str:
     return (os.getenv("WOLF_WH_TIME", CUTOFF_DEFAULT) or CUTOFF_DEFAULT).strip()
 
 
+def cutoff_for(kind: str = "") -> str:
+    """避险**检查时点**按"周末前 / 长假前"分开（狼大两句原话的时点不同）：
+
+      · **长假前 = 早盘卖**：2025-04-29「以后是节假日出今日 甭管当时指数什么行情，尽量做到
+        **早盘卖 尾盘买的反T**。从概率上来说都是对的」→ `WOLF_WH_HOLIDAY_HM`（默认 10:00）；
+      · **周末前 = 14:30**：2026-08-21 14:20「**2点半** 如果还是缩量 还是不拉升…」→ `WOLF_WH_TIME`（默认 14:30）。
+    """
+    if str(kind) == "holiday":
+        # ⚠️ 必须是 HH:MM 格式：模块内的 _hhmm() 用 ":" 分割，给 "1000" 会被解析成 0 分钟（实测踩到）
+        return (os.getenv("WOLF_WH_HOLIDAY_HM", "10:00") or "10:00").strip()
+    return cutoff()
+
+
 # ───────────────────────── 判据层（纯函数，可测） ─────────────────────────
 
 def is_pre_break_day(date8: str, trade_days: Sequence[str]) -> Dict[str, Any]:
@@ -133,8 +146,10 @@ def evaluate(hhmm: str, pre: Dict[str, Any], ratio: Optional[float],
     if not res["pre_break"]:
         res["reason"] = pre.get("reason") or "not_pre_break"
         return res
-    if _hhmm(hhmm) < _hhmm(cutoff()):
-        res["reason"] = "before_cutoff(%s)" % cutoff()
+    _cut = cutoff_for(pre.get("kind") or "")
+    res["cutoff"] = _cut
+    if _hhmm(hhmm) < _hhmm(_cut):
+        res["reason"] = "before_cutoff(%s/%s)" % (pre.get("kind") or "-", _cut)
         return res
     if not res["still_shrinking"]:
         res["reason"] = "放量(量比 %s) → 按他 08-21 口径不减" % (ratio if ratio is not None else "未知")
@@ -153,11 +168,23 @@ def evaluate(hhmm: str, pre: Dict[str, Any], ratio: Optional[float],
 
 
 def _hhmm(s: str) -> int:
+    """'HH:MM' → 分钟数；也兼容 'HHMM'（4 位数字）。
+
+    ⚠️ 2026-09-14：此前只认 'HH:MM'，传 '1005' 会静默返回 **0**（被当成 0 点）→ 时点门失效。
+    """
+    t = str(s).strip()
     try:
-        h, m = str(s).strip().split(":")[:2]
-        return int(h) * 60 + int(m)
+        if ":" in t:
+            h, m = t.split(":")[:2]
+            return int(h) * 60 + int(m)
+        d = "".join(ch for ch in t if ch.isdigit())
+        if len(d) >= 4:
+            return int(d[:2]) * 60 + int(d[2:4])
+        if len(d) == 3:
+            return int(d[:1]) * 60 + int(d[1:3])
     except Exception:
-        return 0
+        pass
+    return 0
 
 
 def _text(r: Dict[str, Any], reduce_to: float = 0.5) -> str:
