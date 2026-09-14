@@ -147,6 +147,7 @@ class TMonitor:
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                     self._check_profit_take()  # 小赚兑现(P0-3, 2026-09-14 开): 浮盈>=阈值→减T半仓(保留底仓)
                     self._check_weekend_hedge()  # G9 周末/长假前避险**执行层**(2026-09-14, 狼大 2026-08-21)
+                    self._check_hedge_refill()   # C2b 避险回补腿(下一个交易日补回; 狼大「周一再拿回来」)
                     self._check_boll_sell()  # A10 BOLL上轨减半锁利(2026-09-11, 狼大 2026-04-29)
                     self._check_boll_mid_exit()  # A10 BOLL中轨全止盈(尾盘确认窗, 狼大 2025-05-13)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
@@ -846,6 +847,13 @@ class TMonitor:
                 gw = gateway_execute(sym, 'sell', cur, vol, reason=reason, trigger_id=tid,
                                      decision_source='rule', account_id=acct)
                 print(f"[TMonitor] G9 周末避险减T半仓 {sym} {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                if gw.get('status') == 'success':
+                    # C2b: 登记待回补额度 → 下一个交易日按"不追高/逻辑没变"补回（狼大 2026-08-21「周一再拿回来」）
+                    try:
+                        from app.services import wolf_hedge_refill as _RF
+                        _RF.record_sell(sym, cur, vol, acct, today)
+                    except Exception as _re:
+                        print(f"[TMonitor] 回补登记失败 {sym}: {_re}")
                 try:
                     t_db.update_trigger_status(tid, 'executed' if gw.get('status') == 'success' else 'blocked',
                                                reason=f"G9 周末避险 {vol}股@{cur} [{acct}]: {gw.get('status')}")
@@ -854,6 +862,77 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] weekend_hedge异常: {e}")
+
+    def _check_hedge_refill(self) -> None:
+        """C2b 避险**回补腿**：把 G9 周末/长假避险卖出的那一份，在**下一个交易日**补回来。
+
+        狼大 2026-08-21「…这样**周一再拿回来**」＋「等周一确认安全再说 **万一低开 那就等于做了个反T**
+        万一高开 那**没吃到就没吃到了 不纠结**」＋ 2025-09-24「避险逻辑结束后 是不是应该补回来
+        **在个股逻辑没变的情况下**」。
+
+        口径：**只补等量**（不放大仓位）、**不追高**（≤卖出价×(1+WOLF_REFILL_CHASE_MAX)，默认 1%）、
+        负事件则放弃（"逻辑变了"）、超窗（WOLF_REFILL_DAYS，默认 2 个交易日）即放弃。
+        走 gateway 唯一买入通道 → 仍受 L5 准入闸（`WOLF_DECISION_GATE`）与资金检查约束。
+        """
+        try:
+            from app.services import wolf_hedge_refill as RF
+            if not RF.enabled():
+                return
+            pend = RF.pending()
+            if not pend:
+                return
+            from app.services.t_gateway import gateway_execute
+            now = datetime.now()
+            today = now.strftime('%Y%m%d')
+            hhmm = now.strftime('%H%M')
+            xq = sorted({_normalize_symbol(p['symbol']) for p in pend})
+            quotes = fetch_tencent_quote(xq)
+            for p in pend:
+                sym = _normalize_symbol(p['symbol'])
+                q = quotes.get(sym) or {}
+                cur = float(q.get('current') or 0)
+                if cur <= 0:
+                    continue
+                need = int(p.get('qty') or 0) - int(p.get('buy_qty') or 0)
+                if need <= 0:
+                    continue
+                elapsed = RF.elapsed_td(str(p.get('sell_date') or ''), today)
+                neg = False
+                try:
+                    from app.services.wolf_early_stop import negative_event
+                    neg = bool(negative_event(sym, p.get('sell_date')))
+                except Exception:
+                    neg = False
+                act, reason = RF.refill_decision(float(p.get('sell_px') or 0), cur, elapsed, hhmm,
+                                                 neg_event=neg)
+                if act == 'expire':
+                    RF.expire(p['key'], reason)
+                    continue
+                if act != 'buy':
+                    continue
+                if (sym, 'wolf_hedge_refill', today) in self._wolf_done:
+                    continue
+                vol = (need // 100) * 100
+                if vol < 100:
+                    continue
+                rid = self._insert_wolf_trigger(sym, 'wolf_hedge_refill', q,
+                                                "[G9 回补] " + reason, account_id=p['account'])
+                gw = gateway_execute(sym, 'buy', cur, vol, reason="[G9 回补] " + reason,
+                                     trigger_id=rid, decision_source='rule', account_id=p['account'])
+                if gw.get('status') == 'success':
+                    RF.mark_done(p['key'], vol)
+                    self._wolf_done.add((sym, 'wolf_hedge_refill', today))
+                    print(f"[TMonitor] G9 回补 {sym} {vol}股@{cur} [{p['account']}] ok")
+                else:
+                    print(f"[TMonitor] G9 回补被拒 {sym}: {str(gw.get('reason') or '')[:70]}")
+                try:
+                    t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
+                                               reason=f"G9 回补 {vol}股@{cur} [{p['account']}]: {gw.get('status')}")
+                except Exception:
+                    pass
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] hedge_refill异常: {e}")
 
     def _check_position_discipline(self) -> None:
         """去弱留强(P1-6, 2026-09-10): 反弹语境内, 减 T 仓最弱的持仓。

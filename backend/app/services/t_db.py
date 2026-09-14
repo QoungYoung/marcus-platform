@@ -163,6 +163,7 @@ def _resolve_direction(cond: Dict[str, Any]) -> str:
 # ── t_triggers 方向解析（2026-09-08：触发落库即带 direction，执行层不再靠 event_type 猜）──
 TRIGGER_BUY_EVENTS = frozenset({
     "low_buy", "panic_vibrate", "custom_buy", "wolf_zheng_t_buy",
+    "wolf_hedge_refill",          # C2b: G9 避险回吐后的回补腿（2026-09-14）
 })
 TRIGGER_SELL_EVENTS = frozenset({
     "high_sell", "high_sell_then_buy_back", "high_only", "stop_loss",

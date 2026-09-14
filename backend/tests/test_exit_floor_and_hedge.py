@@ -92,5 +92,12 @@ def test_monitor_no_longer_reads_t_pool_positions():
 
 def test_discipline_helpers_exist():
     for fn in ("_check_weekend_hedge", "_check_profit_take", "_check_board_half", "_check_boll_mid_exit",
-               "_positions", "_discipline_positions"):
+               "_positions", "_discipline_positions", "_check_hedge_refill"):
         assert hasattr(M.TMonitor, fn), fn
+
+
+def test_refill_is_registered_as_buy_event():
+    """C2b 回补腿是买入事件（走 gateway 买入通道，受 L5 准入闸约束）。"""
+    from app.services import t_db as TDB
+    assert "wolf_hedge_refill" in TDB.TRIGGER_BUY_EVENTS
+    assert "wolf_hedge_refill" not in TDB.TRIGGER_SELL_EVENTS
