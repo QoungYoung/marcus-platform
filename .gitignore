@@ -34,6 +34,7 @@ logs/
 *.log
 
 # Data (runtime generated)
+data/m5_local/          # 标的 m5 预取缓存（jobs/fetch_m5_legs.py 可重跑生成）
 data/*.db
 data/*.sqlite
 data/*.json

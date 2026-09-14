@@ -153,6 +153,148 @@ def vwap_of(sym, date8):
 
 
 # ── 变体模拟 ────────────────────────────────────────────────────────────
+class M5Bars(object):
+    """标的 m5 分钟线（jobs/fetch_m5_legs.py 预取，走既有 brze/tushare stk_mins 接口）。
+
+    文件：<cache>/m5/<SYMBOL>.json = {"YYYYMMDD": [{time,open,close,high,low,vol,amount}, ...]}
+    分时均价线（黄线）= 当日**累计** amount / 累计 vol（元/股），逐根推进。
+    """
+
+    def __init__(self, cache=None):
+        self.dir = os.path.join(cache or os.path.join(M.DATA, "m5_local"), "m5")
+        self._m = {}
+
+    @staticmethod
+    def _alts(sym):
+        """ts_code（603259.SH）↔ 业务符号（SH603259）两种文件名都试。
+
+        ⚠️ 2026-09-14 踩过：m5 缓存按业务符号命名（fetch_m5_legs 用 symbol_raw），
+        而腿里是 ts_code → 直接查不到、静默返回 [] → "破线从不触发"的假象。
+        """
+        s = str(sym)
+        n = M.norm_symbol(s)
+        out = [n, s.upper()]
+        if "." in n:
+            code, ex = n.split(".", 1)
+            out.append(ex + code)
+        return list(dict.fromkeys(out))
+
+    def day(self, sym, date8):
+        """当日 m5（升序）。缺 → []（**不把缺数据当"没破线"**，调用方要显式记 miss）。"""
+        key = M.norm_symbol(sym)
+        if key not in self._m:
+            data = {}
+            for alt in self._alts(sym):
+                p = os.path.join(self.dir, "%s.json" % alt)
+                try:
+                    data = json.load(open(p, encoding="utf-8"))
+                    break
+                except Exception:
+                    continue
+            self._m[key] = data
+        return (self._m[key] or {}).get(str(date8)) or []
+
+    def has(self, sym, date8):
+        return bool(self.day(sym, date8))
+
+
+def vwap_series(day_bars):
+    """按 m5 逐根算当日**累计**均价线（黄线代理口径 = amount 累计 / vol 累计）。"""
+    out, ca, cv = [], 0.0, 0.0
+    for b in day_bars:
+        try:
+            ca += float(b.get("amount") or 0)
+            cv += float(b.get("vol") or 0)
+        except (TypeError, ValueError):
+            continue
+        out.append(round(ca / cv, 4) if cv > 0 else None)
+    return out
+
+
+def sim_variant_m5(bars, m5, sym, entry_date, entry_px, variant, hold=5, tp=3.0,
+                   min_bars=2, consec=1):
+    """用**真·分时均价线**模拟 V2/V3（狼大 2026-08-04 10:48「黄线一旦突发跌破直接走」）。
+
+    variant：V2a 单根跌破即走 ｜ V2b 连续 2 根跌破才走 ｜ V3a/V3b = +3% 止盈与破线先到先执行。
+    返回 (收益率%, 出场方式)。出场方式 ∈ {tp3, vwap_break, hold_t5, no_m5}。
+    """
+    rows = bars.get(sym)
+    days = [r[0] for r in rows]
+    i = M.snap_idx(bars, sym, entry_date)
+    if i is None:
+        return None, "no_bars"
+    need_m5 = str(variant).startswith("V2") or str(variant).startswith("V3")
+    for k in range(1, hold + 1):
+        if i + k >= len(rows):
+            break
+        d8, c = rows[i + k][0], rows[i + k][4]
+        if variant in ("V1", "V3a", "V3b") and (c / entry_px - 1.0) * 100.0 >= tp:
+            return (c / entry_px - 1.0) * 100.0, "tp3"
+        if not need_m5:
+            continue
+        day = m5.day(sym, d8)
+        if not day:
+            continue
+        vw = vwap_series(day)
+        below = 0
+        for j, b in enumerate(day):
+            if j < min_bars or not vw[j]:
+                continue
+            px = float(b.get("close") or 0)
+            if px <= 0:
+                continue
+            if px < vw[j]:
+                below += 1
+                if below >= (1 if variant in ("V2a", "V3a") else max(2, consec)):
+                    return (px / entry_px - 1.0) * 100.0, "vwap_break"
+            else:
+                below = 0
+    j = min(i + hold, len(rows) - 1)
+    return (rows[j][4] / entry_px - 1.0) * 100.0, "hold_t5"
+
+
+T_WINDOWS = (("09:45", "10:00"), ("14:00", "14:30"))     # 他 2025-04-15 成文流程条件2 的两个做T窗口
+
+
+def _in_t_window(hm: str) -> bool:
+    return any(a <= hm <= b for a, b in T_WINDOWS)
+
+
+def sim_variant_m5_window(bars, m5, sym, entry_date, entry_px, variant, hold=5, tp=3.0,
+                          min_bars=2):
+    """V2c/V3c：**只在他做 T 的时间窗内**判"破黄线"（09:45–10:00 / 14:00–14:30）。
+
+    依据：2026-08-04 10:48「**在这个半小时内**有个绝对不能破的点 就是日均线那条黄线，一旦突发跌破直接走」；
+    2025-04-15 成文流程条件2「当日只做上午 9:45–10:00、下午 14:00–14:30 这两个时间段」。
+    ⚠️ 全时段版本（V2a/V2b）实测 33/33 条腿都会破线 → 那是"随机离场"，不是他的规则。
+    返回 (收益率%, 出场方式)。
+    """
+    rows = bars.get(sym)
+    i = M.snap_idx(bars, sym, entry_date)
+    if i is None:
+        return None, "no_bars"
+    for k in range(1, hold + 1):
+        if i + k >= len(rows):
+            break
+        d8, c = rows[i + k][0], rows[i + k][4]
+        if variant == "V3c" and (c / entry_px - 1.0) * 100.0 >= tp:
+            return (c / entry_px - 1.0) * 100.0, "tp3"
+        day = m5.day(sym, d8)
+        if day:
+            vw = vwap_series(day)
+            for j, b in enumerate(day):
+                if j < min_bars or not vw[j]:
+                    continue
+                hm = str(b.get("time") or "")[11:16]
+                if not _in_t_window(hm):
+                    continue
+                px = float(b.get("close") or 0)
+                if px > 0 and px < vw[j]:
+                    return (px / entry_px - 1.0) * 100.0, "vwap_break_win"
+    j = min(i + hold, len(rows) - 1)
+    return (rows[j][4] / entry_px - 1.0) * 100.0, "hold_t5"
+
+
 def sim_variant(bars, sym, entry_date, entry_px, variant, hold=5, tp=3.0):
     """返回 (收益率%, 出场方式)。V1/V3 用 tp；V2/V3 用"当日最低 < 当日 VWAP → 收盘离场"代理。"""
     if not entry_px:
@@ -212,6 +354,9 @@ def main():
     rows, meta = M.fetch_paper_trades()
     legs, opens, adds, diag = M.build_legs(rows)
     bars, themes = M.Bars(), M.Themes()
+    M5 = M5Bars() if os.path.isdir(os.path.join(M.DATA, "m5_local", "m5")) else None
+    if M5 is None:
+        print("[exit-rules] 没有 data/m5_local/m5 → 只跑日线口径变体（V2 用 VWAP 代理）")
     accts = tuple(a.strip() for a in args.accounts.split(",") if a.strip())
     strat = [l for l in legs if l["account"] in accts and l["entry_px"] and l["realized_pct"] is not None
              and abs(M._num(l.get("db_profit"))) > 1e-9]
@@ -224,8 +369,12 @@ def main():
     out = {"_meta": {**meta, "_accounts": list(accts), "_n_legs": len(strat),
                      "_spec": "jobs/eval_exit_rules.py（阶段 1 变体对照）"}, "variants": {}, "legs": []}
     variants = ("A_hold_t5", "V1_tp3", "V2_vwap", "V3_tp3_vwap", "V4_precond", "V5_bypos")
+    if M5 is not None:      # 有 m5 时追加"真·分时均价线"变体
+        variants = variants + ("V2a_m5", "V2b_m5", "V3a_m5", "V3b_m5", "V2c_m5w", "V3c_m5w")
     KEYMAP = {"A_hold_t5": "A_hold_t5", "V1_tp3": "V1", "V2_vwap": "V2", "V3_tp3_vwap": "V3",
-              "V4_precond": "V4_precond", "V5_bypos": "V5_bypos"}
+              "V4_precond": "V4_precond", "V5_bypos": "V5_bypos",
+              "V2a_m5": "V2a_m5", "V2b_m5": "V2b_m5", "V3a_m5": "V3a_m5", "V3b_m5": "V3b_m5",
+              "V2c_m5w": "V2c_m5w", "V3c_m5w": "V3c_m5w"}
     vals = collections.defaultdict(list)
     for l in strat:
         base = l["db_pct"] if l["db_pct"] is not None else l["realized_pct"]
@@ -237,6 +386,15 @@ def main():
             r, how = sim_variant(bars, l["symbol"], l["entry_date"], l["entry_px"], v)
             rec[v] = r
             rec[v + "_how"] = how
+        if M5 is not None:
+            for v, key in (("V2a", "V2a_m5"), ("V2b", "V2b_m5"), ("V3a", "V3a_m5"), ("V3b", "V3b_m5")):
+                r, how = sim_variant_m5(bars, M5, l["symbol"], l["entry_date"], l["entry_px"], v)
+                rec[key] = r
+                rec[key + "_how"] = how
+            for v, key in (("V2c", "V2c_m5w"), ("V3c", "V3c_m5w")):
+                r, how = sim_variant_m5_window(bars, M5, l["symbol"], l["entry_date"], l["entry_px"], v)
+                rec[key] = r
+                rec[key + "_how"] = how
         r, _ = sim_variant(bars, l["symbol"], l["entry_date"], l["entry_px"], "A")
         rec["A_hold_t5"] = r
         # V4：只保留"买入时已有底仓"的腿（其余按 0% 计入，代表"不做这笔"）
@@ -278,6 +436,12 @@ def main():
         for k in ("BASE_prod",) + variants]))
     by_how = collections.Counter((r.get("V3_how") or "?") for r in out["legs"])
     print("\n  V3 出场方式分布：", dict(by_how))
+    if M5 is not None:
+        for k in ("V2a_m5", "V2b_m5", "V3a_m5", "V3b_m5", "V2c_m5w", "V3c_m5w"):
+            _c = collections.Counter((r.get(k + "_how") or "?") for r in out["legs"])
+            print("  %-8s 出场方式：" % k, dict(_c))
+        _mis = sorted({r["symbol"] for r in out["legs"] if not M5.has(r["symbol"], r["entry_date"])})
+        print("  m5 覆盖：入场日缺 m5 的腿标的 = %d 只 %s" % (len(_mis), _mis[:6]))
     hi = [r for r in out["legs"] if (r.get("pos_pct") is not None and r["pos_pct"] >= 0.7)]
     lo = [r for r in out["legs"] if (r.get("pos_pct") is not None and r["pos_pct"] < 0.7)]
     print("  高/低位分档（入场 60 日分位）：高位 n=%d 生产均值 %s / V3 均值 %s ｜ 低位 n=%d 生产均值 %s / 持T+5 均值 %s"
