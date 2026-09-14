@@ -125,7 +125,8 @@
 | **本 agent 负责** | 兑现层语料专门取证 | ✅ 1,105 条（`jobs/wolf_exit_evidence.py` + `jobs/verify_exit_evidence.py` + `docs/wolf-exit-evidence.md`，99.6% 逐字可核） |
 | **本 agent 负责** | 退出层落差审计 + 落地 | ✅ 审计 `docs/wolf-exit-gap-audit.md`（10 落对/9 不完全/12 没落）；**2026-09-14 落地 C3 开 profit_take / C1 底仓穿透（中轨全止盈）/ C2 避险进执行层 / G0 死腿清理**（commit `62c2284`，119 tests passed，已部署+重启） |
 | **本 agent 负责** | **G1 顶部判据做宽**（放量转缩量+收黑K破5日线 2026-01-12 / 放量上影线≥2×10日均量 2025-05-06 / 银保长上影+放量+大盘缩量 2025-05-15） | ✅ 已落地（`wolf_top_signals.py` + `market_top()` 并集 + 动作强度分层：仅信号触发→减半、原代理→完全止盈；单测 8 项；离线体检见 `docs/wolf-exit-gap-audit.md` §5.2） |
-| **本 agent 负责（待做）** | G2 0.618 止盈位、G3 删票、G4 被动止盈上移、G6/G7/G8/G9 | ⏳ 清单与依据见 `docs/wolf-exit-gap-audit.md` §5 |
+| **本 agent 负责** | **G2 0.618 止盈位** + **G4 被动止盈线只上移不破不卖** | ✅ 已落地（`wolf_fib_target.py` / `wolf_passive_stop.py` + t_monitor 两个卖腿检查；单测 6 项；已部署） |
+| **本 agent 负责（待做）** | G3 破线删票（TTL）、G5 高低位分型、G6 一票2买2卖、G7 大涨日多卖、G8 上影线停机、G9 节假日反T 时点 | ⏳ 清单与依据见 `docs/wolf-exit-gap-audit.md` §5 |
 | **本 agent 负责** | **持仓口径只读 stock**（T 账户暂时不使用）：统一 `_positions()`，清掉 6 处硬编码 t 的 `t_pool._get_positions()` | ✅ 已落地（commit `1280b0c`，运行时自检只读到 stock 持仓；`WOLF_POSITION_ACCOUNT=t` 可临时切回） |
 | **本 agent 负责** | **C2b 避险回补腿**（周一拿回 / 避险结束补回） | ✅ 已落地（`wolf_hedge_refill` + `_check_hedge_refill`：只补等量/不追高/负事件不补/2 交易日窗口；设计 `docs/wolf-hedge-refill-design.md`，单测 8 项） |
 | **本 agent 负责** | plan §5 阶段 2（R7/R9/R10，需分时/盘口 → 数据不足则不做）、阶段 3（R8/G8 止损口径复核） | ⏳ 视阶段 1 结果 |
