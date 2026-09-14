@@ -227,7 +227,7 @@ class TMonitor:
                     avg = float(q.get("average") or q.get("avg_price") or 0)
                     _streak = int(self._vwap_break_streak.get(sym, 0))
                     act, why, _streak2 = RP.roundtrip_decision(
-                        cur, buy_avg, avg or None, _rs.ROUNDTRIP_SELL_UP, streak=_streak, hm=hm)
+                        cur, buy_avg, avg or None, _rs.sell_up_for(sym), streak=_streak, hm=hm)
                     if _streak2:
                         self._vwap_break_streak[sym] = _streak2
                     else:
@@ -1244,6 +1244,21 @@ class TMonitor:
             # 关键点重放校准：2026 年 6 次"尾段"→d4/4-x+defense/t_only；2022"反弹浪走完"→d4/C杀、d4/4-5；2021-01-21→d3/3-5。
             # 开关 WOLF_INDEX_TOP_WIDEN=0 → 退回旧口径（只认 level=='down'）。
             _today = datetime.now().strftime('%Y%m%d')
+            # ③ 附加护栏（2026-09-14）：锚点（wave_pivots）过旧也提示 —— 它是浪型判定的输入，
+            # 刷新链断了会导致"判定看似新鲜、依据却是旧的"。仅告警，不改行为。
+            try:
+                import sys as _s3, os as _o3
+                _s3.path.insert(0, _o3.path.join(_o3.path.dirname(_o3.path.dirname(_o3.path.dirname(_o3.path.abspath(__file__)))), "jobs"))
+                from wave_pivots_pg import age_days as _pv_age
+                _pa = _pv_age()
+                _lim = int(os.getenv("WOLF_PIVOTS_MAX_STALE_DAYS", "10"))
+                if _pa is not None and _lim > 0 and _pa > _lim:
+                    _tkp = ("__pivots__", "stale", _today)
+                    if _tkp not in _STOP_HOLD_WARNED:
+                        _STOP_HOLD_WARNED.add(_tkp)
+                        print("[TMonitor] ⚠️ wave_pivots 已 %d 天未重建（阈值 %d）→ 浪型判定的锚点可能滞后" % (_pa, _lim))
+            except Exception:
+                pass
             _widen = os.getenv("WOLF_INDEX_TOP_WIDEN", "1").strip() not in ("0", "false", "no")
             _act = None
             if _widen:
