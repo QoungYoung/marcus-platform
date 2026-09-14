@@ -20,3 +20,13 @@ print("n=",len(res))
 # print pivots from 2014 onward (recent relevant)
 for p in res:
     if p["date"]>="2014-01-01": print(f"  {p['date']} {p['type']} {p['value']}")
+
+
+if __name__ == "__main__":      # 双写：原有流程写完 JSON 后 → 落库 + 记 run（失败不影响主流程）
+    try:
+        import sys as _s, os as _o
+        _s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__)))), "jobs"))
+        from wave_pivots_pg import upsert_from_json
+        print("[build_wave_pivots] pg 落库:", upsert_from_json(), "行")
+    except Exception as _e:
+        print("[build_wave_pivots] pg 落库跳过:", str(_e)[:100])

@@ -160,7 +160,13 @@ def _detect_double_bottom(cs):
 def get_anchor_context(date, close, cs=None):
     """返回历史大级别锚点上下文 dict：当前价 vs 最近大级别顶/底、是否双底、近期关键位。"""
     try:
-        data = json.load(open(PIVOTS_FILE, encoding="utf-8"))
+        try:      # 2026-09-14：优先读 PG（wave_pivots 表），失败/为空自动回退 JSON（fail-open）
+            import sys as _s2, os as _o2
+            _s2.path.insert(0, _o2.path.join(_o2.path.dirname(_o2.path.dirname(_o2.path.dirname(_o2.path.abspath(__file__)))), "jobs"))
+            from wave_pivots_pg import load_pivots as _load_piv
+            data = _load_piv()
+        except Exception:
+            data = json.load(open(PIVOTS_FILE, encoding="utf-8"))
         piv = data.get("pivots", [])
     except Exception:
         return {}
