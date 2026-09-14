@@ -872,6 +872,43 @@ def _log_decision_refusal(symbol: str, why: str, shadow: bool, account_id: str =
         pass
 
 
+def _trade_cap() -> int:
+    """G6 每日每标的成交笔数上限（默认 2；0=关闭）。狼大 2025-02-07「一个票最多买 2 笔 卖 2 笔」。"""
+    try:
+        return max(int(float(os.getenv("WOLF_MAX_TRADES_PER_SYMBOL_PER_DAY", "2"))), 0)
+    except (TypeError, ValueError):
+        return 2
+
+
+def trade_cap_ok(done: int, cap: int, is_stop_loss: bool = False, reason: str = "") -> bool:
+    """G6 判定（纯函数，便于单测）：未达上限 → True；**止损类与破位清仓豁免**（保护动作不能被计数拦住）。"""
+    if cap <= 0:
+        return True
+    if is_stop_loss or ("止损" in str(reason)) or ("破位" in str(reason)):
+        return True
+    return int(done) < int(cap)
+
+
+def _count_today_trades(account_id: str, symbol: str, side: str) -> int:
+    """当日该账户该标的的成交笔数（paper_trades，剔除 voided）。取数失败 → 0（不因统计失败而拦单）。"""
+    try:
+        import datetime as _dt
+        import psycopg2
+        conn = psycopg2.connect(os.getenv("DATABASE_URL",
+                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        cur = conn.cursor()
+        _dir = "买入" if side == "buy" else "卖出"
+        cur.execute("SELECT count(*) FROM paper_trades WHERE account_id=%s AND symbol=%s AND direction=%s "
+                    "AND trade_date=%s AND COALESCE(voided,0)=0",
+                    (account_id, symbol, _dir, _dt.date.today().strftime("%Y-%m-%d")))
+        n = int((cur.fetchone() or [0])[0] or 0)
+        cur.close(); conn.close()
+        return n
+    except Exception as e:
+        print(f"[gateway] G6 笔数统计失败({symbol}): {str(e)[:60]}")
+        return 0
+
+
 def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     condition_id: Optional[int] = None,
                     trigger_id: Optional[int] = None,
@@ -905,6 +942,21 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             if trigger_id:
                 t_db.update_trigger_status(trigger_id, "blocked", reason=_blk)
             return {"status": "rejected", "reason": _blk, "level": "DECISION"}
+
+    # 0.7) G6（2026-09-14）**一个票最多买 2 笔、卖 2 笔**（狼大 2025-02-07「一个票最多买2笔 卖2笔
+    #      后面如果是主升浪的话越动收益越低」）—— 每日每标的成交笔数上限，落在**唯一下单入口**：
+    #      · 覆盖所有买入路径（低吸/回补/加仓/ETF 调仓…）；
+    #      · 卖出侧**豁免**止损类（is_stop_loss）与含"止损/破位"字样的保护性卖出；
+    #      · 上限 WOLF_MAX_TRADES_PER_SYMBOL_PER_DAY（默认 2；0=关闭）。
+    _cap = _trade_cap()
+    if _cap > 0:
+        _done = _count_today_trades(account_id, symbol, side)
+        if not trade_cap_ok(_done, _cap, is_stop_loss=is_stop_loss, reason=reason):
+            msg = ("[G6] 当日 %s %s 已 %d 笔 ≥ 上限 %d（狼大 2025-02-07「一个票最多买 2 笔 卖 2 笔」）"
+                   % (symbol, side, _done, _cap))
+            if trigger_id:
+                t_db.update_trigger_status(trigger_id, "blocked", reason=msg)
+            return {"status": "rejected", "reason": msg, "level": "ledger"}
 
     # 1) 校验
     check = validate_order(symbol, side, price, volume,
