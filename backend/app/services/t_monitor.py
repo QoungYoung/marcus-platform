@@ -148,6 +148,8 @@ class TMonitor:
                     self._check_profit_take()  # 小赚兑现(P0-3, 2026-09-14 开): 浮盈>=阈值→减T半仓(保留底仓)
                     self._check_weekend_hedge()  # G9 周末/长假前避险**执行层**(2026-09-14, 狼大 2026-08-21)
                     self._check_hedge_refill()   # C2b 避险回补腿(下一个交易日补回; 狼大「周一再拿回来」)
+                    self._check_fib_target()     # G2 个股止盈点=前一波拉升 0.618 位(狼大 2026-04-23)
+                    self._check_passive_stop()   # G4 被动止盈线只上移、不破不卖(狼大 2025-06-09/2026-07-01)
                     self._check_boll_sell()  # A10 BOLL上轨减半锁利(2026-09-11, 狼大 2026-04-29)
                     self._check_boll_mid_exit()  # A10 BOLL中轨全止盈(尾盘确认窗, 狼大 2025-05-13)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
@@ -940,6 +942,122 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] hedge_refill异常: {e}")
+
+    def _check_fib_target(self) -> None:
+        """G2：个股止盈点 = **前一波拉升幅度的 0.618 位**（狼大 2026-04-23「超过或者到了…就是我的止盈点了」）。
+
+        前一波 = 买入前最近一个已确认的"低→高"波段（摆动点两侧各 3 根）；止盈位 = 低点 + 0.618×(高−低)。
+        触发 = 现价 ≥ 止盈位 ∧ 有浮盈；卖出量 = **T 仓**（sellable − 底仓 floor，保留底仓）。
+        开关 `WOLF_FIB_TARGET=0`；比率 `WOLF_FIB_RATIO`（默认 0.618，他自己说「只用 0.382 和 0.618」）。
+        """
+        try:
+            from app.services import wolf_fib_target as FT
+            if not FT.enabled():
+                return
+            held = [p for p in self._positions() if float(p.get('volume') or 0) > 0]
+            if not held:
+                return
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger, base_floor_shares
+            today = datetime.now().strftime('%Y%m%d')
+            xq = sorted({_normalize_symbol(p['symbol']) for p in held})
+            quotes = fetch_tencent_quote(xq)
+            for p in held:
+                sym = _normalize_symbol(p['symbol'])
+                acct = p['account_id']
+                if (sym, 'wolf_fib_target_sell', today) in self._wolf_done:
+                    continue
+                q = quotes.get(sym) or {}
+                cur = float(q.get('current') or 0)
+                cost = float(p.get('avg_price') or 0)
+                if cur <= 0:
+                    continue
+                bars = _fetch_daily_tencent_dated(sym, 140) or []
+                if not bars:
+                    continue
+                tgt = FT.fib_target(bars, len(bars) - 1) or {}
+                act, reason = FT.fib_decision(cur, tgt.get('target'), cost)
+                if act != 'sell':
+                    continue
+                self._wolf_done.add((sym, 'wolf_fib_target_sell', today))
+                try:
+                    sellable = int(((get_sellable_ledger(account_id=acct).get(sym) or {}).get('sellable', 0)) or 0)
+                except Exception:
+                    sellable = 0
+                vol = (max(sellable - base_floor_shares(acct, sym, volume=sellable), 0) // 100) * 100
+                rid = self._insert_wolf_trigger(sym, 'wolf_fib_target_sell', q,
+                                                "[G2 0.618止盈] " + reason, account_id=acct)
+                if vol < 100:
+                    continue
+                gw = gateway_execute(sym, 'sell', cur, vol, reason="[G2 0.618止盈] " + reason, trigger_id=rid,
+                                     decision_source='rule', account_id=acct)
+                print(f"[TMonitor] G2 0.618止盈 {sym} {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                try:
+                    t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
+                                               reason=f"G2 0.618止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                except Exception:
+                    pass
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] fib_target异常: {e}")
+
+    def _check_passive_stop(self) -> None:
+        """G4：被动止盈线「**只上移、不破不卖**」（狼大 2025-06-09 / 2025-07-17 / 2026-07-01）。
+
+        线 = max(近 13 日最低价, 已有线)（只上移）；浮盈 >100% 时并用 MA13/中轨；
+        跌破且有浮盈 → 卖 **T 仓**（保留底仓），受 ④ 时点门约束（13:00–14:30 不执行）。
+        开关 `WOLF_PASSIVE_STOP=0`。
+        """
+        try:
+            from app.services import wolf_passive_stop as PS
+            if not PS.enabled():
+                return
+            held = [p for p in self._positions() if float(p.get('volume') or 0) > 0]
+            if not held:
+                return
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger, base_floor_shares
+            today = datetime.now().strftime('%Y%m%d')
+            tok, treason = _stop_time_ok()
+            xq = sorted({_normalize_symbol(p['symbol']) for p in held})
+            quotes = fetch_tencent_quote(xq)
+            for p in held:
+                sym = _normalize_symbol(p['symbol'])
+                acct = p['account_id']
+                q = quotes.get(sym) or {}
+                cur = float(q.get('current') or 0)
+                cost = float(p.get('avg_price') or 0)
+                if cur <= 0:
+                    continue
+                bars = _fetch_daily_tencent_dated(sym, 60) or []
+                if not bars:
+                    continue
+                prof = ((cur / cost - 1.0) * 100.0) if cost > 0 else 0.0
+                line = PS.sync_line(acct, sym, bars, prof)     # 只上移
+                act, reason = PS.passive_decision(cur, line, cost, time_ok=tok)
+                if act != 'sell':
+                    continue
+                if (sym, 'wolf_passive_stop_sell', today) in self._wolf_done:
+                    continue
+                self._wolf_done.add((sym, 'wolf_passive_stop_sell', today))
+                try:
+                    sellable = int(((get_sellable_ledger(account_id=acct).get(sym) or {}).get('sellable', 0)) or 0)
+                except Exception:
+                    sellable = 0
+                vol = (max(sellable - base_floor_shares(acct, sym, volume=sellable), 0) // 100) * 100
+                rid = self._insert_wolf_trigger(sym, 'wolf_passive_stop_sell', q,
+                                                "[G4 被动止盈] " + reason, account_id=acct)
+                if vol < 100:
+                    continue
+                gw = gateway_execute(sym, 'sell', cur, vol, reason="[G4 被动止盈] " + reason, trigger_id=rid,
+                                     decision_source='rule', account_id=acct)
+                print(f"[TMonitor] G4 被动止盈线跌破 {sym} {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                try:
+                    t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
+                                               reason=f"G4 被动止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
+                except Exception:
+                    pass
+        except Exception as e:
+            self._status['errors'] += 1
+            print(f"[TMonitor] passive_stop异常: {e}")
 
     def _check_position_discipline(self) -> None:
         """去弱留强(P1-6, 2026-09-10): 反弹语境内, 减 T 仓最弱的持仓。
