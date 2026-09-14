@@ -9,7 +9,11 @@
 （166 个符号），串行 + 间隔≥1s（卖家要求）。缓存与 fetch_m5_legs 共用 `data/m5_local/m5/<ts_code>.json`。
 
 用法：
-  .venv/bin/python jobs/fetch_m5_replay.py            # 幂等续拉；中断可重跑
+  .venv/bin/python jobs/fetch_m5_replay.py                 # 逐日（幂等续拉；慢，约 5s/请求）
+  .venv/bin/python jobs/fetch_m5_replay.py --range         # **区间模式**（快 ~10x，推荐）
+      └ 实测：stk_mins 支持 start_date/end_date 区间，一次返回多日（119 日/4.4s、160 日/10.9s），
+        而逐日调用每次约 5s → 同一份数据 100+ 请求 vs 1 请求。区间长按 ≤180 自然日切片（防单次行数上限）。
+      └ `--keep-all` 会把区间内**不需要的**日期也留在缓存里（默认只留需要的日子，避免缓存膨胀）。
 """
 from __future__ import annotations
 
@@ -45,10 +49,71 @@ def need_map(hold_pad: int = 6):
     return {k: sorted(v) for k, v in need.items()}, len(legs), skipped
 
 
+def fetch_range(ts_code: str, days, cache: Path, keep_all: bool = False,
+                chunk_days: int = 180) -> dict:
+    """**区间模式**：按需要的日子 min→max 切块，一次请求取回多日，再按日拆开落盘。"""
+    from datetime import datetime, timedelta
+    from app.services import t_backtest_data as T
+    import json as _json
+    target = cache / "m5" / ("%s.json" % ts_code)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if target.exists():
+        try:
+            existing = _json.loads(target.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            existing = {}
+    want = set(days)
+    need = sorted(d for d in want if len(existing.get(d) or []) < 40)
+    if not need:
+        return {"fetched": 0, "gaps": []}
+    pro = T._get_brze_pro()
+    freq = T.M5_FREQ
+    gaps, got = [], 0
+    lo = datetime.strptime(need[0], "%Y%m%d")
+    hi = datetime.strptime(need[-1], "%Y%m%d")
+    cur = lo
+    while cur <= hi:
+        end = min(cur + timedelta(days=chunk_days - 1), hi)
+        T._brze_rate_limit()
+        try:
+            df = pro.stk_mins(ts_code=ts_code, freq=freq,
+                              start_date=cur.strftime("%Y-%m-%d 09:00:00"),
+                              end_date=end.strftime("%Y-%m-%d 15:00:00"))
+        except Exception as e:  # noqa: BLE001
+            gaps.append({"key": "%s %s~%s" % (ts_code, cur.strftime("%Y%m%d"), end.strftime("%Y%m%d")),
+                         "reason": "%s: %s" % (type(e).__name__, str(e)[:80])})
+            df = None
+        if df is not None and len(df):
+            byday = {}
+            for _, r in df.iterrows():
+                d8 = str(r["trade_time"])[:10].replace("-", "")
+                byday.setdefault(d8, []).append({
+                    "time": str(r["trade_time"]), "open": float(r["open"]), "close": float(r["close"]),
+                    "high": float(r["high"]), "low": float(r["low"]),
+                    "vol": float(r.get("vol", 0) or 0),
+                    "amount": float(r["amount"]) if "amount" in df.columns else 0.0})
+            for d8, bars in byday.items():
+                if not keep_all and d8 not in want:
+                    continue
+                bars.sort(key=lambda x: x["time"])
+                if len(bars) >= 40:
+                    existing[d8] = bars
+                    got += 1
+        cur = end + timedelta(days=1)
+    still = [d for d in need if len(existing.get(d) or []) < 40]
+    for d in still:
+        gaps.append({"key": "%s %s" % (ts_code, d), "reason": "区间模式未返回该日"})
+    target.write_text(_json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+    return {"fetched": got, "gaps": gaps}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default=str(DEFAULT_CACHE))
     ap.add_argument("--pad", type=int, default=6, help="每腿取 arm_date 起 N 个交易日")
+    ap.add_argument("--range", dest="use_range", action="store_true", help="区间模式（快 ~10x）")
+    ap.add_argument("--keep-all", action="store_true", help="区间模式保留区间内全部日期（默认只留需要的）")
     args = ap.parse_args()
 
     need, n_legs, skipped = need_map(args.pad)
@@ -70,7 +135,10 @@ def main() -> int:
         prev = man["results"].get(sym) or {}
         done += 1
         try:
-            r = prefetch_m5(sym, days, cache, is_index=False, ts_code=sym)
+            if args.use_range:
+                r = fetch_range(sym, days, cache, keep_all=args.keep_all)
+            else:
+                r = prefetch_m5(sym, days, cache, is_index=False, ts_code=sym)
         except Exception as e:  # noqa: BLE001 —— 不把失败当"没有"
             r = {"fetched": 0, "gaps": [{"key": sym, "reason": "%s: %s" % (type(e).__name__, str(e)[:80])}]}
         g = r.get("gaps") or []
