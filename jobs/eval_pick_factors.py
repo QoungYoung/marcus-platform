@@ -29,14 +29,43 @@ sys.path.insert(0, os.path.join(ROOT, "apps", "main_line"))
 import eval_pick_selection as E  # noqa: E402
 
 
+STOP_TOKENS = {"概念", "板块", "产业", "指数", "设备", "材料", "龙头", "中国", "股份", "集团", "科技",
+               "行业", "主题", "相关", "服务", "应用", "领域", "制造", "技术", "其他", "综合", "开发",
+               "国家", "国际", "公司", "上市", "投资", "工程", "系统", "产品", "业务", "方案"}
+
+
+def theme_name_tokens(panel, th_cons, max_df=0.05):
+    """每个主题的「名字关键词」：概念名切 2–4 字 token，剔除通用词与**全市场高频** token。
+
+    依据（2026-01-29）：「根据量化做有色金属的打法，**名字优先**」「你觉得是有矿的资金涨得多
+    还是**名字是黄金白银的**涨得多?」→ 他的"辨识度"里有一条 = **简称是否含题材核心词**。
+    本函数是**我们的代理**（自动切词 + 文档频率过滤，避免"电子/科技"这类通用词误命中）。
+    """
+    names = {c: str(panel.names.get(c, "")) for c in panel.codes}
+    toks = {}
+    for th, cons in (th_cons or {}).items():
+        t = set()
+        for cn in cons:
+            base = cn.split("(")[0].split("（")[0]
+            for L in (2, 3, 4):
+                for k in range(max(0, len(base) - L + 1)):
+                    x = base[k:k + L]
+                    if len(x) == L and x not in STOP_TOKENS:
+                        t.add(x)
+        toks[th] = t
+    allt = set().union(*toks.values()) if toks else set()
+    df = {x: sum(1 for nm in names.values() if x in nm) / max(1, len(names)) for x in allt}
+    return {th: sorted(x for x in t if df.get(x, 1.0) <= max_df) for th, t in toks.items()}
+
+
 def rank_pct(v):
     """分位（0-1，并列取平均名次），与生产 pick_v2.pct_rank 同口径。"""
     return E._nan_pct_rank(np.asarray(v, dtype=float))
 
 
-def factor_matrix(panel, i, cols):
+def factor_matrix(panel, i, cols, name_toks=None):
     """每个主题日的候选因子（全部只用 ≤ i 的数据；PIT）。"""
-    C, A, P, L = panel.close, panel.amt, panel.pct, panel.low
+    C, A, P, L, H = panel.close, panel.amt, panel.pct, panel.low, panel.high
     c = C[i, cols]
     n = len(cols)
     out = {}
@@ -71,6 +100,29 @@ def factor_matrix(panel, i, cols):
         out["lead_days20"] = cnt20
         # 主题内当日涨幅排名（负号：越大越强）
         out["pct_today"] = P[i, cols]
+        # D2 量能活跃（2025-06-16「最近一周内至少2/3天数以上在10日量能以上」）→ 近 5 日达标天数
+        cnt_act = np.zeros(n)
+        for k in range(max(1, i - 4), i + 1):
+            base = np.nanmean(A[k - 10:k][:, cols], axis=0)
+            with np.errstate(invalid="ignore"):
+                cnt_act += (A[k, cols] > base).astype(float)
+        out["vol_active5"] = cnt_act
+        # D6 低位横盘多时（2026-04-07「低位横盘多时的就是好 超跌都没有低位走平多时的好」）：
+        #   近 20 日中「日振幅<2% ∧ 收盘位于 20 日区间下半」的天数
+        seg_c = C[i - 19:i + 1][:, cols]
+        seg_h = H[i - 19:i + 1][:, cols]
+        seg_l = L[i - 19:i + 1][:, cols]
+        with np.errstate(invalid="ignore"):
+            amp = (seg_h - seg_l) / np.where(seg_c > 0, seg_c, np.nan)
+            rng_hi = np.nanmax(seg_c, axis=0)
+            rng_lo = np.nanmin(seg_c, axis=0)
+            half = (seg_c - rng_lo) <= 0.5 * (rng_hi - rng_lo)
+            out["flat_low_days"] = np.nansum((amp < 0.02) & half, axis=0)
+        # D1 名字辨识度：简称是否含该主题的核心词
+        if name_toks:
+            subs = [panel.codes[k] for k in cols]
+            out["name_hit"] = np.array([1.0 if any(t in panel.names.get(s, "") for t in name_toks)
+                                        else 0.0 for s in subs])
     return out
 
 
@@ -86,6 +138,8 @@ def main():
     panel = E.Panel()
     uni, lead, allc, MS = E.load_universe()
     th_cons, cmap = E.theme_concept_sets()
+    name_toks_by_theme = theme_name_tokens(panel, th_cons)
+    print("[fac] 名字关键词示例: %s" % {k: v[:6] for k, v in list(name_toks_by_theme.items())[:3]}, flush=True)
     days = [d for d in panel.dates if args.start <= d <= args.end and panel.di[d] >= 260]
     print("[fac] %d 天 × %d 主题（hold=%d）" % (len(days), len(uni), args.hold), flush=True)
 
@@ -111,7 +165,7 @@ def main():
             ok = ~np.isnan(ex)
             if ok.sum() < 10:
                 continue
-            F = factor_matrix(panel, i, cols)
+            F = factor_matrix(panel, i, cols, name_toks_by_theme.get(th))
             for name, v in F.items():
                 v = np.asarray(v, dtype=float)
                 m = ok & ~np.isnan(v)

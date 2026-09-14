@@ -82,12 +82,14 @@ class Panel:
         self.T, self.N = T, N
         shape = (T, N)
         self.close = np.full(shape, np.nan)
+        self.high = np.full(shape, np.nan)
         self.low = np.full(shape, np.nan)
         self.amt = np.full(shape, np.nan)
         self.pct = np.full(shape, np.nan)
         ri = df["trade_date"].map(self.di).to_numpy()
         ci = df["ts_code"].map(self.ci).to_numpy()
         self.close[ri, ci] = pd.to_numeric(df["close"], errors="coerce").to_numpy()
+        self.high[ri, ci] = pd.to_numeric(df["high"], errors="coerce").to_numpy()
         self.low[ri, ci] = pd.to_numeric(df["low"], errors="coerce").to_numpy()
         self.amt[ri, ci] = pd.to_numeric(df["amount"], errors="coerce").to_numpy()
         self.pct[ri, ci] = pd.to_numeric(df["pct_chg"], errors="coerce").to_numpy()
@@ -106,6 +108,14 @@ class Panel:
             print("[panel] is_st 读取失败 %s" % e, file=sys.stderr)
         self.st = st
         self.valid = ~np.isnan(self.close)
+        # 股票简称（① 名字辨识度因子用；来自生产 stock_pool.db 副本，读不到就留空）
+        self.names = {}
+        try:
+            c = sqlite3.connect(UNI_DB)
+            self.names = {str(r[0]): str(r[1]) for r in c.execute("SELECT ts_code, name FROM stock_pool")}
+            c.close()
+        except Exception as e:  # pragma: no cover
+            print("[panel] 股票名称读取失败: %s" % str(e)[:80], file=sys.stderr)
 
     def fwd_ret(self, i, hold=HOLD, entry_off=1):
         """入场 = 第 i+entry_off 天收盘；出场 = 第 i+entry_off+hold 天收盘。"""
