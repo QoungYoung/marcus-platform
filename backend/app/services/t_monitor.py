@@ -762,6 +762,18 @@ class TMonitor:
             self._status['errors'] += 1
             print(f"[TMonitor] boll_sell异常: {e}", flush=True)
 
+    def _index_pct_today(self):
+        """上证当日涨跌幅（%）：现价 vs 昨收。取不到 → None（G7 判定退化为 neutral，不猜）。"""
+        try:
+            q = fetch_tencent_quote(["sh000001"]).get("sh000001") or {}
+            cur = float(q.get("current") or 0)
+            pre = float(q.get("pre_close") or 0)
+            if cur > 0 and pre > 0:
+                return (cur / pre - 1.0) * 100.0
+        except Exception as e:
+            print(f"[TMonitor] 指数涨跌幅取数失败: {str(e)[:60]}")
+        return None
+
     def _check_profit_take(self) -> None:
         """小赚兑现(P0-3, 2026-09-10): 持仓浮盈 >= 阈值 → 写 wolf_profit_take_sell 减仓(保留底仓)。
 
@@ -772,6 +784,7 @@ class TMonitor:
         """
         try:
             from app.services.wolf_discipline import profit_take
+            from app.services import wolf_discipline as _WD
             import json as _j, datetime as _dt
             force = os.getenv("WOLF_PROFIT_TAKE", "").strip() in ("1", "true", "yes")
             pos_list = [p for p in self._discipline_positions() if float(p.get('volume') or 0) > 0]
@@ -790,6 +803,24 @@ class TMonitor:
                 cfg = {"profit_take": {"enabled": True,
                                        "min_float_pct": float(os.getenv("WOLF_PROFIT_TAKE_PCT", "3.0")),
                                        "reduce_ratio": float(os.getenv("WOLF_PROFIT_TAKE_RATIO", "0.5"))}}
+            # G7（2026-09-14）狼大 2025-01-23「大涨之日少买票，多卖票，大跌之日多买票 少卖票」
+            #   · 大涨日 → 兑现门槛下调（多卖票）；· 大跌日 → 当日不新增兑现类卖腿（少卖票）。
+            try:
+                from app.services import wolf_day_rules as DR
+                bias = DR.day_bias(self._index_pct_today())
+                if not DR.allow_realize_sell(bias):
+                    print(f"[TMonitor] G7 大跌日（{bias}）→ 当日不新增小赚兑现腿（保护性卖出照旧）")
+                    return
+                if cfg is None:
+                    cfg = {"profit_take": dict((_WD._cfg().get("profit_take") or {}))}
+                _pt = dict(cfg.get("profit_take") or {})
+                _base = float(_pt.get("min_float_pct") or 3.0)
+                _pt["min_float_pct"] = DR.tp_threshold(_base, bias)
+                if _pt["min_float_pct"] != _base:
+                    print(f"[TMonitor] G7 大涨日 → 小赚兑现门槛 {_base}% → {_pt['min_float_pct']}%（多卖票）")
+                cfg["profit_take"] = _pt
+            except Exception as _de:
+                print(f"[TMonitor] G7 日型判定失败（按原口径执行）: {str(_de)[:60]}")
             pt = profit_take(_j.dumps(portfolio, ensure_ascii=False), _dt.datetime.now(), cfg=cfg, quotes=qmap)
             if not pt.get("enabled"):
                 return
@@ -2125,6 +2156,22 @@ class TMonitor:
             try:
                 from app.services.t_gateway import gateway_execute
                 side = "buy" if _is_buy_side(cond) else "sell"
+                # G8（2026-09-14）狼大 2025-07-17「任何时候 看见机器人板块出上影线 立马停止做T」：
+                # 该标的最近一根**已完成**日线出上影线 → 当日停止做T（不新开做T买腿、不做兑现类卖腿）；
+                # **保护性卖出**（止损/破位/被动止盈线）不受影响。取不到日线 → 不停机（不猜）。
+                _g8_stop, _g8_why = False, ""
+                try:
+                    from app.services import wolf_day_rules as _DR8
+                    if _DR8.enabled():
+                        _bars_sh = _fetch_daily_tencent_dated(symbol, 3) or []
+                        _st8, _why8 = _DR8.shadow_stop(_bars_sh, 1)
+                        _protect8 = (side == "sell"
+                                     and str(trigger_kind) in ("stop_loss", "custom_support_sell",
+                                                               "wolf_passive_stop_sell"))
+                        if _st8 and not _protect8:
+                            _g8_stop, _g8_why = True, _why8
+                except Exception as _ge8:
+                    print(f"[TMonitor] G8 判定失败（按原口径执行）: {str(_ge8)[:60]}")
                 cond_vol = int(cond.get("volume") or 0)
                 if cond_vol > 0:
                     volume = (cond_vol // 100) * 100
@@ -2231,6 +2278,9 @@ class TMonitor:
                         except Exception as _we:
                             print(f"[TMonitor] 狼大253/254建仓异常 {symbol}: {_we}")
                             t_db.update_trigger_status(trig_id, "blocked", reason="wolf_253_build_exc")
+                elif _g8_stop:
+                    t_db.update_trigger_status(trig_id, "blocked", reason="[G8] " + _g8_why)
+                    print(f"[TMonitor] G8 上影线停机 {symbol}（{_g8_why}）→ 跳过 {side} {trigger_kind}")
                 elif volume > 0:
                     # 板块级 G3 不做T门(2026-09-07): 持仓所属主题处洗盘收敛期 → 存量T仓不自动T出
                     # (盘前 sector_g3_state.json, 见 apps/main_line/sector_g3.py; env WOLF_NO_T_GATE=1 启用)
