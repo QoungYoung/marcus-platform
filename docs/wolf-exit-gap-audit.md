@@ -160,7 +160,10 @@
 | **G9** | **节假日反 T：早盘卖、尾盘买** | 「以后是节假日出今日…尽量做到**早盘卖 尾盘买的反T**」2025-04-29 | ✅ 已落地（2026-09-14） | `wolf_weekend_hedge.cutoff_for(kind)`：**长假前 10:00 早盘卖**（`WOLF_WH_HOLIDAY_HM`）、周末前仍 14:30；`wolf_hedge_refill.from_hm(holiday)`：**长假后回补从 14:00 起（尾盘买）**、周末后仍 09:35 |
 | **G10** | 尾段状态机 | 「一旦我认为行情结束」2026-09-04 | ⛔ 不做 | 条件不可识别 → 做了就是前视 |
 | **G11** | 诱空最多三次 | 2026-09-07 | ⛔ 不做 | 需盘口/分时语义，暂不可算化 |
-| **阶段 1** | 兑现口径变体对照 `jobs/eval_exit_rules.py`（V1 +3% / V2 破黄线 / V3 V1+V2 / V4 做 T 前置 / V5 高低位） | plan §5 阶段 1 | ✅ 已跑（2026-09-14，报告 `docs/exit-rules-variants-report.md`） | +3% 止盈两类样本都抬胜率；**V2 的 VWAP 代理过宽 → 待补 m5/分时（G6 数据缺口）才算验收**；V1 的 H1/H2 不同号 |
+| **A1** | **roundtrip_sell 优先级反转**：+3% 目标优先于破黄线；破黄线需"突发"确认（幅度 ≥0.5% 或连续 2 轮在黄线下） | 「**一旦突发跌破直接走**；**如果没跌破就找这半小时的高点**」2026-08-04 10:48；「至少能有吃 3-5 个点的幅度」2026-08-13 楼275/280 | ✅ 已落地（2026-09-14） | 新增 `backend/app/services/roundtrip_priority.py`（纯函数 `roundtrip_decision`）+ `t_monitor._check_roundtrip_sell` 改判；开关 `WOLF_RT_PRIORITY=target_first`（回退 `vwap_first`）/ `WOLF_VWAP_BREAK_PCT=0.005` / `WOLF_VWAP_BREAK_ROUNDS=2`；单测 `backend/tests/test_roundtrip_priority.py` 6 项 |
+| **A2** | 破黄线只保留**保护语义**，不作为独立 alpha 来源 | 真 m5：33/33 条腿都会破线（`docs/exit-rules-m5-report.md` §3.1） | ✅ 按设计成立 | A1 之后破线只在目标之后触发离场（直跌保护），不再被当成择时信号；语料里与之同族的量能条件（「缩量不参与」「放量跌破收盘完全止盈」）已分别落在别处，未重复造 |
+| **A3** | 破线若要当信号，须定义**确认条件**（幅度/根数/量能） | 同上 §3.3 | 🚧 口径已定、阈值未定 | 阈值扫描 `jobs/eval_roundtrip_confirm.py`（§ 报告 4.1）：0.5%/2 轮仍 26/33 走破线、均值 +0.01%；rounds 3→5 时均值 −0.04→+1.65 **说明是"破线出场越少越好"而非阈值更好**；n=33 + H1/H2 变号 → **不据此调参**，生产保持保守默认 |
+| **阶段 1** | 兑现口径变体对照 `jobs/eval_exit_rules.py`（V1 +3% / V2 破黄线 / V3 V1+V2 / V4 做 T 前置 / V5 高低位） | plan §5 阶段 1 | ✅ 已跑（2026-09-14，报告 `docs/exit-rules-variants-report.md`） | +3% 止盈两类样本都抬胜率；**V2 的 VWAP 代理已用真 m5 推翻**（`docs/exit-rules-m5-report.md`，33/33 必破线）；V1 的 H1/H2 不同号 → **阶段 1 仍未验收**。真 m5 数据缺口已补：`jobs/fetch_m5_legs.py`（cached `data/m5_local/`，不入库） |
 
 ### 5.1 本轮落地的验证（2026-09-14）
 
@@ -174,6 +177,13 @@
   单测 `backend/tests/test_wolf_hedge_refill.py` 8 项；服务器自检 enabled/chase_max=0.01/window=2/from=0935、
   `trade_days_between(20260911→20260914)=1`（周五→周一=1 个交易日）、六种场景判定符合预期、
   `wolf_hedge_refill` 注册为买入事件；设计见 `docs/wolf-hedge-refill-design.md`。
+- **A1 优先级反转**（同日追加，用户拍板「先做 A1」）：`backend/app/services/roundtrip_priority.py` +
+  `t_monitor._check_roundtrip_sell` 改判（新增 `_vwap_break_streak` 状态）；单测 `backend/tests/test_roundtrip_priority.py` 6 项。
+  **服务器实测**（`marcus-worker` 容器内直调）：`priority()=target_first`、`vwap_break_pct=0.005`、`vwap_break_rounds=2`；
+  四种场景判定 = 目标+深破→`sell_target`｜0.3% 浅破→`wait`(streak 0)｜4.8% 深破→`sell_vwap`｜第 2 轮在线下→`sell_vwap`；
+  `_vwap_break_streak` 状态与 `roundtrip_sell` 待卖腿联通。**回退**：`WOLF_RT_PRIORITY=vwap_first`（或 PCT=0 + ROUNDS=1 = 旧"一破就走"）。
+- **A1 的验收证据**（同日追加）：`jobs/eval_roundtrip_confirm.py` → `docs/exit-rules-m5-report.md` §4.1。
+  诚实结论：**加分主要在"目标优先"**；"加确认"在 n=33 上只值 +0.01pp（噪声内），阈值不可定。
 - G1 顶部判据（同日追加）：`backend/app/services/wolf_top_signals.py`（S1/S2/S3 + 并列条件组）
   + `wolf_boll_levels.market_top()` 并集 + 动作强度分层；单测 `backend/tests/test_wolf_top_signals.py` 8 项；
   服务器自检：`S1=False S2=False S3=False, n=0`（as_of=20260911）、`market_top source=none / top=false`、

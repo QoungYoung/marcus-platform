@@ -89,6 +89,8 @@ class TMonitor:
         self._dated_cache: Dict[Any, List[dict]] = {}
         # 止损当日已执行去抖 {(symbol, today)} —— 2026-09-11 修见 _check_stop_loss 注释
         self._stop_done_day: set = set()
+        # A1（2026-09-14）：等量换手腿"连续在黄线下"的轮数（用于破线确认）
+        self._vwap_break_streak: dict = {}
 
     # ── 生命周期 ──
     def start(self) -> bool:
@@ -195,6 +197,7 @@ class TMonitor:
         ROUNDTRIP_SELL_UP 默认 0.03 = 狼大「3-5个点」下沿(2026-08-13 楼275/280; 2026-09-02 楼728)。"""
         try:
             from app.services import roundtrip_sell as _rs
+            from app.services import roundtrip_priority as RP
             if not _rs.ROUNDTRIP_ENABLED:
                 return
             pend = _rs.pending_symbols()
@@ -208,10 +211,19 @@ class TMonitor:
                     if cur <= 0:
                         continue
                     buy_avg = float(st.get("buy_avg") or 0)
-                    target = buy_avg * (1 + _rs.ROUNDTRIP_SELL_UP)
                     avg = float(q.get("average") or q.get("avg_price") or 0)
-                    vwap_break = bool(avg > 0 and cur < avg)   # 黄线破位优先离场（直跌保护）
-                    if not vwap_break and cur < target:
+                    # A1（2026-09-14，用户拍板）：**+3% 目标优先**；破黄线需"突发"确认（幅度 or 连续轮数）。
+                    # 依据：真 m5 验收显示"破线"在 33/33 条腿上都会发生（不是择时信号，见
+                    # docs/exit-rules-m5-report.md）；他原话 2026-08-04「**突发**跌破直接走；
+                    # 如果没跌破就找这半小时的高点」。回退：WOLF_RT_PRIORITY=vwap_first。
+                    _streak = int(self._vwap_break_streak.get(sym, 0))
+                    act, why, _streak2 = RP.roundtrip_decision(
+                        cur, buy_avg, avg or None, _rs.ROUNDTRIP_SELL_UP, streak=_streak)
+                    if _streak2:
+                        self._vwap_break_streak[sym] = _streak2
+                    else:
+                        self._vwap_break_streak.pop(sym, None)
+                    if act == "wait":
                         continue
                     from app.services.t_gateway import (gateway_execute, get_sellable_ledger,
                                                         base_floor_shares)
@@ -227,8 +239,8 @@ class TMonitor:
                         continue
                     gw = gateway_execute(
                         sym, "sell", cur, vol,
-                        reason=(f"[B等量换手] 低吸@{buy_avg:.2f}→反弹@{cur:.2f}"
-                                f"(≥+{_rs.ROUNDTRIP_SELL_UP * 100:.1f}%, 狼大3-5个点) 卖回{vol}股"),
+                        reason=(f"[B等量换手] 低吸@{buy_avg:.2f}→现价@{cur:.2f}"
+                                f"({why}) 卖回{vol}股"),
                         decision_source="rule", account_id=acct)
                     if gw.get("status") == "success":
                         _rs.mark_sold(sym, vol)

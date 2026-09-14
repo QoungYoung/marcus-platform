@@ -295,6 +295,46 @@ def sim_variant_m5_window(bars, m5, sym, entry_date, entry_px, variant, hold=5, 
     return (rows[j][4] / entry_px - 1.0) * 100.0, "hold_t5"
 
 
+def sim_variant_m5_confirmed(bars, m5, sym, entry_date, entry_px, variant, hold=5, tp=3.0,
+                             pct=0.005, rounds=2):
+    """V2d/V3d：**A1 口径** —— 目标优先 + 破黄线需确认（幅度 ≤-0.5% 或连续 2 根在黄线下）。
+
+    对应生产改法（roundtrip_priority.roundtrip_decision）。返回 (收益率%, 出场方式)。
+    """
+    rows = bars.get(sym)
+    i = M.snap_idx(bars, sym, entry_date)
+    if i is None:
+        return None, "no_bars"
+    for k in range(1, hold + 1):
+        if i + k >= len(rows):
+            break
+        d8, c = rows[i + k][0], rows[i + k][4]
+        if variant == "V3d" and (c / entry_px - 1.0) * 100.0 >= tp:
+            return (c / entry_px - 1.0) * 100.0, "tp3"
+        day = m5.day(sym, d8)
+        if not day:
+            continue
+        vw = vwap_series(day)
+        below = 0
+        for j, b in enumerate(day):
+            if j < 2 or not vw[j]:
+                continue
+            px = float(b.get("close") or 0)
+            if px <= 0:
+                continue
+            if px < vw[j]:
+                below += 1
+                deep = (pct > 0 and px <= vw[j] * (1.0 - pct))
+                if deep or below >= rounds:
+                    return (px / entry_px - 1.0) * 100.0, "vwap_confirmed"
+            else:
+                below = 0
+            if variant == "V3d" and (px / entry_px - 1.0) * 100.0 >= tp:
+                return (px / entry_px - 1.0) * 100.0, "tp3"
+    j = min(i + hold, len(rows) - 1)
+    return (rows[j][4] / entry_px - 1.0) * 100.0, "hold_t5"
+
+
 def sim_variant(bars, sym, entry_date, entry_px, variant, hold=5, tp=3.0):
     """返回 (收益率%, 出场方式)。V1/V3 用 tp；V2/V3 用"当日最低 < 当日 VWAP → 收盘离场"代理。"""
     if not entry_px:
@@ -370,11 +410,12 @@ def main():
                      "_spec": "jobs/eval_exit_rules.py（阶段 1 变体对照）"}, "variants": {}, "legs": []}
     variants = ("A_hold_t5", "V1_tp3", "V2_vwap", "V3_tp3_vwap", "V4_precond", "V5_bypos")
     if M5 is not None:      # 有 m5 时追加"真·分时均价线"变体
-        variants = variants + ("V2a_m5", "V2b_m5", "V3a_m5", "V3b_m5", "V2c_m5w", "V3c_m5w")
+        variants = variants + ("V2a_m5", "V2b_m5", "V3a_m5", "V3b_m5", "V2c_m5w", "V3c_m5w",
+                                "V2d_m5c", "V3d_m5c")
     KEYMAP = {"A_hold_t5": "A_hold_t5", "V1_tp3": "V1", "V2_vwap": "V2", "V3_tp3_vwap": "V3",
               "V4_precond": "V4_precond", "V5_bypos": "V5_bypos",
               "V2a_m5": "V2a_m5", "V2b_m5": "V2b_m5", "V3a_m5": "V3a_m5", "V3b_m5": "V3b_m5",
-              "V2c_m5w": "V2c_m5w", "V3c_m5w": "V3c_m5w"}
+              "V2c_m5w": "V2c_m5w", "V3c_m5w": "V3c_m5w", "V2d_m5c": "V2d_m5c", "V3d_m5c": "V3d_m5c"}
     vals = collections.defaultdict(list)
     for l in strat:
         base = l["db_pct"] if l["db_pct"] is not None else l["realized_pct"]
@@ -393,6 +434,10 @@ def main():
                 rec[key + "_how"] = how
             for v, key in (("V2c", "V2c_m5w"), ("V3c", "V3c_m5w")):
                 r, how = sim_variant_m5_window(bars, M5, l["symbol"], l["entry_date"], l["entry_px"], v)
+                rec[key] = r
+                rec[key + "_how"] = how
+            for v, key in (("V2d", "V2d_m5c"), ("V3d", "V3d_m5c")):
+                r, how = sim_variant_m5_confirmed(bars, M5, l["symbol"], l["entry_date"], l["entry_px"], v)
                 rec[key] = r
                 rec[key + "_how"] = how
         r, _ = sim_variant(bars, l["symbol"], l["entry_date"], l["entry_px"], "A")
@@ -437,7 +482,7 @@ def main():
     by_how = collections.Counter((r.get("V3_how") or "?") for r in out["legs"])
     print("\n  V3 出场方式分布：", dict(by_how))
     if M5 is not None:
-        for k in ("V2a_m5", "V2b_m5", "V3a_m5", "V3b_m5", "V2c_m5w", "V3c_m5w"):
+        for k in ("V2a_m5", "V2b_m5", "V3a_m5", "V3b_m5", "V2c_m5w", "V3c_m5w", "V2d_m5c", "V3d_m5c"):
             _c = collections.Counter((r.get(k + "_how") or "?") for r in out["legs"])
             print("  %-8s 出场方式：" % k, dict(_c))
         _mis = sorted({r["symbol"] for r in out["legs"] if not M5.has(r["symbol"], r["entry_date"])})
