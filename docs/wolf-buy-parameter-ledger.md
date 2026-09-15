@@ -1179,7 +1179,7 @@ arm DRY 复跑打印 `MARKET_VOL we=1.629 bucket=缩量(1.5-2WE) shrink=True` �
 
 ### 34.1 为什么不能直接验"关税"那次
 
-* 我们没有**方向级事件档案**（只有手工文件 `wolf_negative_events.json`，且见 34.3 —— 它在生产**不存在**）；
+* 我们没有**方向级事件档案**（个股级有 `wolf_neg_event_scan` 每日扫公告写 `wolf_negative_events.json`，见 34.3 订正）；
 * 关税事件窗口（2025-04）落在我们路径 A 腿样本（2026-01→09）之外；
 * 用"事后跌得最多的方向"来定义"关税方向"会**循环论证**。
 
@@ -1199,18 +1199,19 @@ arm DRY 复跑打印 `MARKET_VOL we=1.629 bucket=缩量(1.5-2WE) shrink=True` �
 与 §17（144 线）、§25（BOLL）同属"证据不足"。特别地：我们的 `bad_set()` **已经把暴雷个股本身剔掉了**，
 本测试量的是**"同链其他票的溢出"**，而这个溢出在我们的腿上**没有稳定负向**。
 
-### 34.3 顺带发现：个股级负事件机制在生产**空转**（同类问题第二次）
+### 34.3 ⚠️ **订正（2026-09-15 round 26）**：`negative_event` **不是空转**，是我上一轮判断错了
 
-* `wolf_early_stop.negative_event()` 读 `data/wolf_negative_events.json`；
-* **实测生产不存在该文件**（`ls` 无、容器内 `cat` 空）→ 「无利空」这一前提**永远返回 None** →
-  「有意外利空就不套用结构止损线」的分支**从未生效**；
-* 这与 E3（`wolf_ticket_ban.json` 从未产生）是同一类"机制在、数据空转"的问题：
-  **依赖手工维护的数据文件，但没人往里写**。
+round 25 我看到 `data/wolf_negative_events.json` 在生产不存在，就写了"机制空转"。**round 26 的例行数据文件审计把它查清了**：
 
-**建议（待拍板）**：二选一 ——
-① **给它数据源**：把 PG `risk_flags` 里带日期的负面标记（`earnings_bad`，1754 行）自动映射成
-   `wolf_negative_events.json`（按 `ann_date` 落条目）→ 让"无利空前提"真的生效；
-② **承认它不生效**：在文档与代码注释里写明"该前提当前无数据源"，避免后人以为它在工作。
+* 写入方**存在**：定时任务 `wolf_neg_event_scan`（`config/tasks.yaml`，`enabled: true`，cron `*/30 8-16 * * 1-5`）；
+* 生产实跑（2026-09-15 10:30）：`[wolf_neg_event_scan] 账户=stock 持仓 5 只` →
+  `[wolf_neg_event] 20260915 公告 1384 条 / 持仓 5 只 → 命中 0 条, 标记 0 只 [无变动]` →
+  `持仓标的今日无意外事件级公告（无变动，未改文件）`；
+* 即：**文件不存在 = "没有需要标记的事件，且无变动时不写盘"**，不是机制失效。
+
+**教训（已写进 round 26 §35 的方法里）**：判断"机制是否生效"要看**任务日志/执行记录**，
+不能只看 `data/` 里有没有那个文件 —— **"文件不存在"有三种可能**：① 从没触发（状态文件）；② 触发了但无变动不写盘；
+③ 真的没人写。只有第 ③ 种才是空转（`wolf_ticket_ban.json` 属第 ① 种：部署后没发生过破线卖出）。
 
 ### 34.4 「业绩门槛」（§33 新候选）的可行性结论：**数据不可得（正面口径）**
 
@@ -1219,3 +1220,49 @@ arm DRY 复跑打印 `MARKET_VOL we=1.629 bucket=缩量(1.5-2WE) shrink=True` �
 没有"业绩预增/超预期"的结构化数据 → **该候选暂不可实现**；若要落地，需要先接入正向业绩数据（如 `forecast` 的预增类型）。
 
 复现：`.venv/bin/python jobs/eval_neg_event_regime.py --hold 5 --window 30 --k 1`
+
+## 35 数据文件审计：**谁读它 / 谁写它 / 生产有没有**（2026-09-15 round 26）
+
+起因：round 25 我凭"文件不存在"就判了"机制空转"，被 round 26 的任务日志推翻。于是做一次**系统性审计**
+（`jobs/audit_data_files.py`）：把代码里出现的 `data/*.json` 名扫出来，标出**读者/写入方**，再与**生产快照**（`data/` + `config/`）比对。
+
+### 35.1 结果
+
+| 分类 | 数量 | 说明 |
+|---|---|---|
+| 代码里出现的 json 名 | **205** | 生产快照：`data/*.json` 596 个 + `config/*.json` 6 个 |
+| **代码里同时有 writer** | 192 | 其中一部分是**离线分析产物**（`eval_*.json` 等，落在 `.dsh-tmp`，不进生产 data） |
+| **只读 · 生产存在** | 5 | `p2_macro_direction_map.json`（P2 门）、`p3_position_tiers.json`（**C3 三仓的档位配置**）、`replay_*.json`（fusion_mainline 回放指标） |
+| **只读 · 生产缺失 · 读者在生产路径** | **14** | 见 35.2 的逐个核查 |
+
+### 35.2 14 个"读者在生产路径、文件在生产缺失"的逐个结论
+
+| 文件 | 读者 | 核查结论 |
+|---|---|---|
+| `wolf_negative_events.json` | `wolf_early_stop` | ✅ **正常**：写入方是定时任务 `wolf_neg_event_scan`（每 30 分钟扫全市场公告），当日 1384 条公告命中 0 → **无变动不写盘**（§34.3 订正） |
+| `wolf_hedge_refill.json` | `wolf_hedge_refill`（C2b 回补） | ✅ **正常**：状态文件，**卖出避险时**才写；部署后未发生 → 未触发 |
+| `wolf_weekend_hedge.json` | `wolf_weekend_hedge`（G9 周末避险） | ✅ **正常**：同上，`_save()` 在判定后落盘；未触发 |
+| `wolf_253_chain.json` | `wolf_253_build`（253 分步建仓） | ✅ **正常**：状态文件，`_save()` 存在；未触发 |
+| `position_tiers.json` | `position_tier_monitor` | ⚠️ **待观察**：monitor 有 `_save()`（line 170），但该文件从未落盘 → 需确认 monitor 是否在生产被调用 |
+| `improvement_tracker.json` | `improvement_tracker` | ✅ 状态文件，`_save()` 存在；未触发 |
+| `arkvol-entry.json` | `arkvol_service` | ✅ **不是 data 文件**：它是 `~/.arkvol/arkvol-entry.json` 的 **API Key 配置路径**（生产用 env `ARKVOL_API_KEY`）→ 误报 |
+| `gaps.json` / `industry_map.json` / `probe_report.json` | `t_backtest_data` | ✅ 回测数据（离线准备），生产不需要 |
+| `peak_equity.json` | `api/backtest.py` | ✅ 回测 API 的产物路径 |
+| `concept_taxonomy.json` | `build_concept_taxonomy` 等 | ✅ 离线构建产物 |
+| `metadata.json` | `agent/storage.py` | ✅ agent 会话存储（按需创建） |
+| `etf_pool.json` | `apps/trader/etf_selector.py` | ✅ 该模块**没有任何地方 import**（非生产路径） |
+
+### 35.3 工具本身的两处坑（都修了，供复用）
+
+1. **生产快照必须包含 `config/`**：`position_tier._load_cfg()` 是**先 `config/` 后 `data/`** 查；
+   我只快照 `data/` 时，把生产**实际存在**的 `p3_position_tiers.json` 误报成"缺失"（且它的 `needs` 字段代码**确实在读**，没有"配置空转"问题）；
+2. **writer 判定不能按文件粒度**：最初写"该文件里有 `json.dump(` 就算有 writer"，会把
+   `wolf_negative_events.json` 这种**只读**文件误判成有写入方（同文件里写了别的 json）→ 改为**按名字附近 ±320 字窗口**判定；
+   但这样又会漏掉"写入路径来自 `args.json`"那类脚本 → 最终折中为**按读者是否在生产路径分组**，把审计当**分诊**而不是证明。
+
+### 35.4 结论
+
+* 生产路径上**没有发现真正的"数据空转"**（14 个候选逐个核完，都是"未触发状态文件/离线产物/误报"）；
+* **唯一的行动项**：`position_tiers.json`（`position_tier_monitor` 的档位状态）从未落盘 →
+  需确认该 monitor 在生产是否被调用（若没有，它那份"档位状态"就没人维护）；
+* 方法已固化成 `jobs/audit_data_files.py`（含 `--prod-dir` / `--prod-config-dir`），建议以后**改完涉及 data 文件的机制就跑一次**。
