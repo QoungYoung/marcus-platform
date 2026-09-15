@@ -441,3 +441,63 @@ hold=10 同向：Δ（F2−现行）253 **+0.491pp** / 254 +0.734pp；Δ（对�
    但每条已挂腿期望更好（−0.151% vs −0.293% @h5；−0.181% vs −0.210% @h10），**仍不如 253 的次日收盘**。
    → 若要做，是"**用均线挂单替换前低挂单**"（让那一档少亏一点），不是新增收益来源；
    建议先影子记录（"如果挂在最近均线上会怎样"），并纳入用户拍板清单。
+
+## 19 覆盖率体检：代码旋钮 vs 总账（2026-09-15 round 13）
+
+> 起因：objective ① 要求列出买入链**全部**可调参数 —— 人工清单会漏。
+> 做法：`jobs/build_param_ledger.py --coverage`（AST 扫 `os.getenv/os.environ.get` 的键 + 模块级全大写常量，
+> 与总账 `INVENTORY` 逐条比对；排除回测/数据源/桥接等**非生产**模块与路径/令牌类 env 键）。
+
+**本轮发现（都是真问题）**：
+1. `jobs/build_param_ledger.py` **自 2026-09-15 `008d52d` 起语法错误**（中文括号里嵌了 ASCII 引号，两处）→ **总账不可再生**；已修。
+2. 总账 `INVENTORY` 里 `WOLF_PICK_RS_MIN` 这个键**在生产代码里不存在**（真实键是 `WOLF_RS_MIN`，见 `wolf_confirm_pick.py:226`）→ 已改，改后「条目过期」告警 **0 个**。
+   （另 3 个疑似过期键 `WOLF_DECISION_GATE`/`WOLF_VG_KEY_LEVELS`/`WOLF_WH_TIME` 复查后都存在 —— 那是第一版扫描面太小造成的假警报。）
+3. 扫描面 **293 个模块**（apps/main_line 全量 + services 的 wolf_*/t_*/decision/position_tier/stop_loss_monitor + api）：
+   env 键 491 个、模块级常量 179 个；总账收录 **44** 条 → **代码里有、总账未收录 304 个**（涉及 74 个模块），分类：其它 146、策略阈值 92、开关/机制 33、运维/时序 19、标识/账户 14。
+
+**其中真正需要「语料依据判定」的是「策略阈值」这一档（92 个）**，按模块列在下表；
+它们多数是**执行侧护栏/成交口径**（止损、冷却、滑点、价差过滤、回补窗口…），不是选股判据 ——
+也就是说：**这些值是我们自己拍的，语料里没有对应数字**（性质同 §4 的「自设」，只是此前没进清单）。
+选股/方向侧的参数仍在 §1–§8 的判定框架里逐条对过语料。
+
+| 模块 | 参数（值） |
+|---|---|
+| `backtest_rotation_switch_stock` | `SWITCH_REL_DAYS=60` |
+| `bt_noise_effect` | `ROT_CONFIRM_DAYS=3`、`ROT_NET_DAYS=10`、`ROT_NET_MIN=0`、`ROT_TOP_N=3` |
+| `bt_sub_universe_dsh` | `ROT_CONFIRM_DAYS=3`、`ROT_NET_DAYS=10`、`ROT_NET_MIN=0`、`ROT_TOP_N=3` |
+| `build_etf_flow` | `ETF_FLOW_LOOKBACK_DAYS=120` |
+| `chain_dict_refine` | `VERIFY_MV_N=20` |
+| `chain_dict_worker` | `VERIFY_MV_N=20` |
+| `chain_map` | `AI_BORDERLINE_MIN=0.5`、`AI_CONF_MIN=0.85`、`AI_MAX_PER_SEG=10`、`LEAD_TOP_N=3`、`VERIFY_POOL_CONCEPT_N=6`、`VERIFY_POOL_MV_N=20` |
+| `daily_decision` | `WOLF_DECISION_MAX_AGE_DAYS=` |
+| `mainline_confirm_state` | `LOOKBACK_DAYS=40` |
+| `position_discipline` | `DEFAULT_GAP_PCT=3.0`、`DEFAULT_MAX_SELL=2`、`DEFAULT_MIN_POS=3`、`DEFAULT_WINDOW=5`、`WOLF_POSITION_DISC_GAP=None`、`WOLF_POSITION_DISC_MAX_SELL=None`、`WOLF_POSITION_DISC_MIN=None` |
+| `rotation_universe` | `ROT_CONFIRM_DAYS=3`、`ROT_NET_DAYS=10`、`ROT_NET_MIN=0`、`ROT_SIG_FRAC=0.1` |
+| `t_eod` | `FLOOR_RATIO=0.5`、`MISS_REBUY_DROP_PCT=1.0`、`REBUY_SPREAD=0.005`、`STOP_LOSS_PCT=0.03` |
+| `t_gateway` | `COOLDOWN_AFTER_LOSS_MIN=15`、`COST_RATIO_LIMIT=0.2`、`DAILY_LOSS_WARN_PCT=0.01`、`MAX_SELL_FLOOR_RATIO=1.0`、`MIN_T_SPREAD_FILTER=0.002`、`SLIPPAGE_PCT=0.0003` |
+| `t_monitor` | `CORPUS_DIP_TOL=0.0`、`LEGACY_DIP_TOL=0.005`、`WOLF_DIP_PREVLOW_TOL=None`、`WOLF_EARLY_STOP_DAYS=13`、`WOLF_FLOOR_BREAK=1`、`WOLF_PIVOTS_MAX_STALE_DAYS=10`、`WOLF_POSITION_DISC_MIN=3`、`WOLF_PROFIT_TAKE_PCT=3.0`、`WOLF_PROFIT_TAKE_RATIO=0.5` |
+| `t_pool` | `FEE_PCT=0.001`、`MAX_AMP_PCT=10.0`、`MIN_AMP_PCT=3.0`、`MIN_HIGH_SELL_PCT=1.5`、`MIN_LOW_BUY_PCT=2.0`、`MIN_T_SPREAD=0.5`、`POOL_FLOOR_RATIO=0.5`、`REL_SLIPPAGE_PCT=0.0003`、`STOP_LOSS_PCT_MIN=3.0` |
+| `t_vreb_etf` | `LOOKBACK_DAYS=70` |
+| `wolf_253_build` | `WOLF_REFILL_MAX_WINDOW=2` |
+| `wolf_confirm_pick` | `WOLF_DIP_PREVLOW_TOL=0.0`、`WOLF_PICK_MAX_LEGS=4`、`WOLF_PICK_TIER2_GAP=8.0` |
+| `wolf_context` | `WOLF_FLUSH_DAY_PCT=-3.0`、`WOLF_SLOW_DECLINE_DAYS=5`、`WOLF_SLOW_DECLINE_MAX_PCT=6.0`、`WOLF_SLOW_DECLINE_MIN_PCT=1.0` |
+| `wolf_day_rules` | `WOLF_UP_DAY_PCT=1.0` |
+| `wolf_direction_position` | `WOLF_DIRECTION_POS_MAX_AGE_H=48` |
+| `wolf_early_stop` | `EARLY_STAGE_DAYS_DEFAULT=13`、`STOP_PCT_DEFAULT=3.0`、`SWING_WIN_DEFAULT=13` |
+| `wolf_etf_vol` | `VOL_THR=3.0`、`VOL_WIN=20` |
+| `wolf_fib_target` | `WOLF_FIB_RATIO=0.618` |
+| `wolf_gap_open` | `WOLF_GAP_CAUTION=1`、`WOLF_GAP_OPEN=1` |
+| `wolf_hedge_refill` | `MAX_AGE_DAYS=10`、`WOLF_REFILL_CHASE_MAX=0.01`、`WOLF_REFILL_DAYS=2` |
+| `wolf_index_breadth` | `WOLF_HB_CROSS_WIN=15` |
+| `wolf_limit_ladder` | `GRAD_MIN_N=4` |
+| `wolf_ma144_regime` | `MA_N=144`、`WOLF_MA144_SLOPE_WIN=20` |
+| `wolf_mainline_select` | `WOLF_MS_LOOKBACK_DAYS=60` |
+| `wolf_neg_event` | `KEEP_DAYS_DEFAULT=30` |
+| `wolf_theme_vol_fund` | `ACT_DAYS=5`、`VOL_WIN=10` |
+| `wolf_trade_window` | `WOLF_TRADE_WINDOW=1` |
+| `wolf_trend_stop` | `WOLF_TREND_FRESH_DAYS=5` |
+| `wolf_volume_gate` | `_TOTAL_MIN=240.0` |
+
+复现：`.venv/bin/python jobs/build_param_ledger.py --coverage --json .dsh-tmp/buyside/param_coverage.json`
+
+**下一步（待用户定）**：这 92 个执行侧阈值要不要逐条给语料判定？建议只对**影响成交/风险敞口**的少数几条做（如 `MAX_DAILY_BUY_LEGS=2`、`STOP_LOSS_PCT=0.03`、`MIN_T_SPREAD_FILTER=0.002`、`COOLDOWN_AFTER_LOSS_MIN=15`、`WOLF_REFILL_*` 回补规则），其余按「系统护栏、非策略判据」备案即可。

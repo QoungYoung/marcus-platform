@@ -59,7 +59,7 @@ INVENTORY = [
     dict(id="pick.min_r20", cat="闸门", name="r20 下限（%）", loc="wolf_confirm_pick.MIN_R20",
          value="0", source="env WOLF_PICK_MIN_R20 默认"),
     dict(id="pick.rs_min", cat="闸门", name="个股相对主题强度 rs 下限（%）", loc="wolf_confirm_pick.RS_MIN",
-         value="0", source="env WOLF_PICK_RS_MIN 默认"),
+         value="0", source="env WOLF_RS_MIN 默认"),
     dict(id="pick.quantile_pct", cat="域", name="主题容量约束：按 leader 取前 x%（%）",
          loc="wolf_confirm_pick.theme_quantile_keep", value="50", source="env WOLF_THEME_QUANTILE_PCT 默认"),
     dict(id="pick.wind_break", cat="闸门", name="风向标死：收盘较前一交易日低 ≤ x%（%）",
@@ -103,7 +103,7 @@ INVENTORY = [
     dict(id="guard.trades_per_day", cat="护栏", name="同一标的每日成交次数上限", loc="t_gateway",
          value="2", source="env WOLF_MAX_TRADES_PER_SYMBOL_PER_DAY 默认"),
     dict(id="guard.single_order_pct", cat="护栏", name="单笔 ≤ 净值 x%（%）", loc="t_gateway.MAX_SINGLE_ORDER_PCT",
-         value="5", source="代码默认（"建议层"）"),
+         value="5", source="代码默认（建议层）"),
     dict(id="guard.daily_loss_breaker", cat="护栏", name="日亏熔断（%）", loc="t_gateway.DAILY_LOSS_BREAKER_PCT",
          value="2.0", source="代码默认"),
     dict(id="guard.max_turnover", cat="护栏", name="日累计回转额 ≤ x×净值", loc="t_gateway.MAX_DAILY_TURNOVER_RATIO",
@@ -119,7 +119,7 @@ INVENTORY = [
          loc="wolf_volume_gate.get_levels", value="关口 3800/3900/4000 点 + 量能档（2WE/3WE）",
          source="env WOLF_VG_KEY_LEVELS 默认 + DB 配置"),
     dict(id="gate.weekend_hedge", cat="环境门", name="G9 周末避险时点", loc="wolf_weekend_hedge.CUTOFF_DEFAULT",
-         value="14:30（他原话"2点半"）", source="env WOLF_WH_TIME 默认"),
+         value="14:30（他原话「2点半」）", source="env WOLF_WH_TIME 默认"),
     # 仓位
     dict(id="tier.caps", cat="仓位", name="各档位各意图上限（%）", loc="position_tier.DEFAULTS",
          value="build: new_base 10 / add_base 10 / refill 8 / t_refill 5；t_only: 5/8/5；side: 3/3/5/5；defense: 3/3/5；exit: 仅 t_refill 5",
@@ -159,14 +159,169 @@ def candidates(param, items, topn=4):
     return [x[1] for x in scored[:topn]]
 
 
+
+# ── 2) 覆盖率体检（2026-09-15 round 13）：代码里的买入侧旋钮 vs 总账 INVENTORY ──
+# 目的：objective ① 要求"列出买入链**全部**可调参数"。人工清单会漏 → 这里用 AST 扫一遍，
+# 报「代码里有、总账没收录」与「总账提了、代码里找不到」（后者=条目过期）。
+BUY_MODULES = [
+    # 选股/方向（apps/main_line）
+    "apps/main_line/wolf_confirm_pick.py",
+    "apps/main_line/wolf_context.py",
+    "apps/main_line/wolf_pick_rank_v3.py",
+    "apps/main_line/wolf_theme_vol_fund.py",
+    "apps/main_line/wolf_ma144_regime.py",
+    "apps/main_line/wolf_ma_line_entry.py",
+    "apps/main_line/wolf_mainline_select.py",
+    "apps/main_line/wolf_wave_gate.py",
+    "apps/main_line/wolf_volume_gate.py",
+    "apps/main_line/wolf_weekend_hedge.py",
+    "apps/main_line/wave_alloc.py",
+    "apps/main_line/rotation_universe.py",
+    # 布腿/执行（jobs + services）
+    "jobs/rotation_switch_arm.py",
+    "jobs/shadow_daily.py",
+    "backend/app/services/t_gateway.py",
+    "backend/app/services/t_monitor.py",
+    "backend/app/services/wolf_t_rules.py",
+    "backend/app/services/position_tier.py",
+    "backend/app/services/wolf_etf_vol.py",
+    "backend/app/services/wolf_ticket_ban.py",
+    "backend/app/services/wolf_hedge_refill.py",
+    "backend/app/api/indicator.py",
+]
+# 策略类键名前缀（其余 env 键归"非策略类"，不计入覆盖率缺口）
+STRAT_PREFIX = ("WOLF_", "T_", "P3_", "ROT_", "SWITCH_", "BUY_", "DIP_", "ETF_")
+# 生产买入路径**之外**的模块（回测/数据源/桥接/纪律账本等）从覆盖率里排除：
+# 它们不是"买入决策参数"，混进来会把缺口数字灌水（2026-09-15 round 13 实测：不排除时 291 个）
+NON_PROD_MODULES = {
+    "backtest", "t_backtest", "t_backtest_data", "t_backtest_runner", "t_backtest_report",
+    "t_data_sources", "t_bridge", "t_expr", "t_db", "t_build", "t_wake", "t_external_risk",
+    "discipline", "direction", "portfolio", "t_scan", "t_scan_coarse", "t_sim", "t_replay",
+}
+
+
+def _walk_buy_sources():
+    """扫描面 = 显式 BUY_MODULES + 通配的 wolf_*/t_* 模块（买入路径全部实现处，排除临时脚本）。"""
+    import glob as _g
+    pats = ["apps/main_line/wolf_*.py", "apps/main_line/t_*.py", "apps/main_line/*.py",
+            "backend/app/services/wolf_*.py", "backend/app/services/t_*.py",
+            "backend/app/services/daily_decision.py", "backend/app/services/*decision*.py",
+            "backend/app/services/position_tier.py", "backend/app/services/stop_loss_monitor.py",
+            "backend/app/api/*.py"]
+    out = {m for m in BUY_MODULES if os.path.exists(os.path.join(ROOT, m))}
+    for pat in pats:
+        for f in _g.glob(os.path.join(ROOT, pat)):
+            rel = os.path.relpath(f, ROOT)
+            if os.path.basename(rel).startswith("_tmp"):
+                continue
+            out.add(rel)
+    return sorted(out)
+
+
+def scan_knobs(rel_paths=None):
+    """扫模块：`os.getenv/os.environ.get` 的键 + 模块级全大写常量（数值/字符串）。"""
+    import ast
+    out = []
+    for rel in (rel_paths or _walk_buy_sources()):
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            out.append({"name": rel, "kind": "module_missing", "module": rel, "value": None, "line": 0})
+            continue
+        src = open(path, encoding="utf-8").read()
+        try:
+            tree = ast.parse(src)
+        except SyntaxError as e:
+            out.append({"name": rel, "kind": "syntax_error", "module": rel, "value": str(e)[:60], "line": e.lineno or 0})
+            continue
+        mod = os.path.basename(rel).replace(".py", "")
+        if mod in ("agent",) or "prompt" in mod or mod.endswith("_config"):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.args:
+                fn = node.func
+                is_getenv = (fn.attr == "getenv" and isinstance(fn.value, ast.Name) and fn.value.id == "os")
+                is_env_get = (fn.attr == "get" and isinstance(fn.value, ast.Attribute)
+                              and fn.value.attr == "environ"
+                              and isinstance(fn.value.value, ast.Name) and fn.value.value.id == "os")
+                if not (is_getenv or is_env_get):
+                    continue
+                a0 = node.args[0]
+                if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                    default = None
+                    if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                        default = node.args[1].value
+                    out.append({"name": a0.value, "kind": "env", "module": mod,
+                                "value": default, "line": node.lineno})
+        for node in tree.body:                       # 只看模块级赋值（函数内的局部阈值另行人工看）
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                nm = node.targets[0].id
+                if not (nm.isupper() and len(nm) >= 3 and isinstance(node.value, ast.Constant)):
+                    continue
+                v = node.value.value
+                # 只收**策略数值/短标识**：排除 prompt 文本、URL、路径等
+                if isinstance(v, str) and (len(v) > 24 or "\n" in v or "/" in v or ":" in v):
+                    continue
+                if not isinstance(v, (int, float, str, bool)):
+                    continue
+                out.append({"name": nm, "kind": "const", "module": mod,
+                            "value": v, "line": node.lineno})
+    # 去重（同一个键在多处出现只留一条）
+    seen, uniq = set(), []
+    for k in out:
+        key = (k["name"], k["module"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(k)
+    return uniq
+
+
+def coverage_report():
+    """→ (未收录, 条目过期, 全部旋钮)。收录判据：名字出现在 INVENTORY 的任意字段文本里。"""
+    text = json.dumps(INVENTORY, ensure_ascii=False)
+    knobs = scan_knobs()
+    missing = [k for k in knobs if k["name"] not in text and k["kind"] != "module_missing"
+               and k.get("module") not in NON_PROD_MODULES
+               and (k["kind"] == "const" or str(k["name"]).startswith(STRAT_PREFIX))]
+    other = [k for k in knobs if k["name"] not in text and k["kind"] == "env"
+             and not str(k["name"]).startswith(STRAT_PREFIX)]
+    # 总账提到的标识符在代码里找不到 → 条目可能过期（只查带点的 loc 里的 NAME 与 WOLF_* 键）
+    import re as _re
+    mentioned = set(_re.findall(r"\bWOLF_[A-Z0-9_]+", text)) | set(_re.findall(r"[.\s(]([A-Z][A-Z0-9_]{3,})\b", text))
+    names = {k["name"] for k in knobs}
+    stale = sorted(n for n in mentioned if n.startswith("WOLF_") and n not in names)
+    return missing, stale, knobs, other
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dump-candidates", default="", help="打印某类参数（P1..P5）的候选原话")
+    ap.add_argument("--coverage", action="store_true", help="覆盖率体检：代码旋钮 vs 总账条目")
+    ap.add_argument("--json", default="", help="覆盖率体检结果落盘")
     args = ap.parse_args()
     pe = load(PARAMS)
     be = load(BUYEV)
     items = (pe.get("items") or []) + (be.get("items") or [])
     print("[ledger] 语料候选池：参数抽取 %d 条 + 定性抽取 %d 条" % (len(pe.get("items") or []), len(be.get("items") or [])))
+    if args.coverage:
+        missing, stale, knobs, other = coverage_report()
+        env = [k for k in knobs if k["kind"] == "env"]
+        const = [k for k in knobs if k["kind"] == "const"]
+        print("[coverage] 扫 %d 个买入路径模块：env 键 %d 个 / 模块级常量 %d 个 | 总账收录 %d 条"
+              % (len(_walk_buy_sources()), len(env), len(const), len(INVENTORY)))
+        print("\n❌ 代码里有、总账**未收录**（%d 个）：" % len(missing))
+        for k in sorted(missing, key=lambda x: (x["module"], x["name"])):
+            print("   %-38s %-6s %-24s = %s" % (k["name"], k["kind"], k["module"], k["value"]))
+        print("\n（另有 %d 个**非策略类** env 键（路径/令牌/超时等）不在统计内）" % len(other))
+        print("\n⚠️ 总账提到、代码里找不到的 WOLF_* 键（%d 个，可能条目过期或已改名）：" % len(stale))
+        for n in stale:
+            print("   " + n)
+        if args.json:
+            json.dump({"n_modules": len(BUY_MODULES), "n_knobs": len(knobs),
+                       "missing": missing, "stale_env_keys": stale},
+                      open(args.json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            print("\n[coverage] 写出 %s" % args.json)
+        return 0
     if args.dump_candidates:
         for it in (pe.get("items") or []):
             if (it.get("kind") or "").startswith(args.dump_candidates):
