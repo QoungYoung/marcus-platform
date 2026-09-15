@@ -117,6 +117,10 @@ def db_json(cur, table, col):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only-changed", action="store_true", help="只打印非『一致』的行")
+    ap.add_argument("--files-only", action="store_true",
+                    help="只查 data/*_params.json 文件层覆盖（不需要 PG）")
+    ap.add_argument("--data-dir", default=os.getenv("DATA_DIR", "/app/data"),
+                    help="生产数据目录（默认 /app/data；本地审阅时指向快照目录）")
     args = ap.parse_args()
 
     checks = [
@@ -125,28 +129,63 @@ def main():
         ("t_build_params.params_json", "t_build_params", "params_json",
          os.path.join(REPO, "backend/app/services/t_build.py"), "BUILD_PARAMS_DEFAULT"),
     ]
+    # 文件层覆盖：`*_calibrate.py` 写出的校准产物，被 daily chain 用 `--params` 指过去 → **生效值**
+    file_checks = [
+        ("data/trend_confirm_params.json.params", "trend_confirm_params.json", "params",
+         os.path.join(REPO, "apps/main_line/trend_confirm.py"), "TREND_CFG"),
+        ("data/trend_gate_params.json.a_params", "trend_gate_params.json", "a_params",
+         os.path.join(REPO, "apps/main_line/trend_confirm.py"), "TREND_CFG"),
+    ]
 
-    conn = connect()
-    cur = conn.cursor()
     total_bad = 0
-    for label, table, col, code_path, mode in checks:
-        db = flatten(db_json(cur, table, col))
-        code = flatten(read_inline_default(code_path) if mode == "inline"
-                       else read_module_dict(code_path, mode))
-        rows = diff(db, code)
+    cur = None
+    if not args.files_only:
+        conn = connect()
+        cur = conn.cursor()
+        for label, table, col, code_path, mode in checks:
+            db = flatten(db_json(cur, table, col))
+            code = flatten(read_inline_default(code_path) if mode == "inline"
+                           else read_module_dict(code_path, mode))
+            rows = diff(db, code)
+            bad = [r for r in rows if r["status"] != "一致"]
+            total_bad += len(bad)
+            print("\n=== %s：DB %d 键 / 代码默认 %d 键 → 差异 %d 处" % (label, len(db), len(code), len(bad)))
+            for r in (bad if args.only_changed else rows):
+                if r["status"] == "一致" and args.only_changed:
+                    continue
+                print("  %-44s %-6s DB=%-28s 代码=%s"
+                      % (r["key"], r["status"],
+                         json.dumps(r["db"], ensure_ascii=False)[:28],
+                         json.dumps(r["code"], ensure_ascii=False)[:28]))
+        cur.close()
+        conn.close()
+
+    for label, fname, sub, code_path, mode in file_checks:
+        path = os.path.join(args.data_dir, fname)
+        if not os.path.exists(path):
+            print("\n=== %s：**文件不存在**（%s）→ 未覆盖，按代码默认" % (label, path))
+            continue
+        raw = json.load(open(path, encoding="utf-8"))
+        filecfg = flatten(raw.get(sub) or {})
+        code = flatten(read_module_dict(code_path, mode))
+        rows = diff(filecfg, code)
         bad = [r for r in rows if r["status"] != "一致"]
         total_bad += len(bad)
-        print("\n=== %s：DB %d 键 / 代码默认 %d 键 → 差异 %d 处" % (label, len(db), len(code), len(bad)))
+        print("\n=== %s：文件 %d 键 / 代码默认 %d 键 → 差异 %d 处（生成器 %s，日期 %s）"
+              % (label, len(filecfg), len(code), len(bad), raw.get("generator", "?"), raw.get("date", "?")))
+        if raw.get("note"):
+            print("  ⚠️ 文件自带说明：%s" % str(raw["note"])[:120])
         for r in (bad if args.only_changed else rows):
             if r["status"] == "一致" and args.only_changed:
                 continue
-            print("  %-44s %-6s DB=%-28s 代码=%s"
-                  % (r["key"], r["status"],
-                     json.dumps(r["db"], ensure_ascii=False)[:28],
-                     json.dumps(r["code"], ensure_ascii=False)[:28]))
-    cur.close()
-    conn.close()
-    print("\n[overrides] 差异合计 %d 处 —— **任何「与语料一致」的断言都应基于这里的 DB 生效值**" % total_bad)
+            status = "文件覆盖" if r["status"] == "DB覆盖" else r["status"]
+            print("  %-44s %-6s 文件=%-26s 代码=%s"
+                  % (r["key"], status,
+                     json.dumps(r["file"] if "file" in r else r["db"], ensure_ascii=False)[:26],
+                     json.dumps(r["code"], ensure_ascii=False)[:26]))
+
+    print("\n[overrides] 差异合计 %d 处 —— **任何「与语料一致」的断言都应基于这里的生效值"
+          "（DB 与 data/*_params.json 两层都要核）**" % total_bad)
     return 0
 
 

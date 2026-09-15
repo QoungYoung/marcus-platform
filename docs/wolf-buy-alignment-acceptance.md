@@ -164,4 +164,4 @@ docker exec marcus-worker python -u /app/jobs/shadow_daily.py --data /app/data
 2. **挂单价类参数必须看"每条已挂腿的期望"**：只看"成交后平均收益"会把机制性价差（tol=0 便宜 0.5%/腿）
    误当 alpha；把成交率算进去后，C1 是**等价改写**。
 3. **择时类规则先按时间分段**：144 单段样本 t=−9.69 是伪重复；分段后（≥3~4 段且方向一致）才看 t。
-4. **断言必须基于「生效值」**：参数优先级是 **DB 配置表 → 配置文件 → 代码默认**（§42）。实测两处真实覆盖：`profit_take.enabled`（DB true / 代码默认 false）、`no_rebuild_symbols`（DB 2 只 / 代码 1 只）→ 只看代码默认值可能对着**没生效**的数字下结论；自查：`jobs/audit_config_overrides.py --only-changed`。
+4. **断言必须基于「生效值」**：参数优先级是 **DB 配置表 → 配置文件（`data/*_params.json` 校准产物）→ 代码默认**（§42、§44）。实测真实覆盖：`profit_take.enabled`（DB true / 代码默认 false）、`no_rebuild_symbols`（DB 2 只 / 代码 1 只）、以及**趋势确认 10 键里 6 键**被 `data/trend_confirm_params.json` 覆盖（`confirm_recency_days` 生效 60 / 代码 5，且该文件是**32 条标注的拟合值、非语料**）→ 只看代码默认值可能对着**没生效**的数字下结论；自查：`jobs/audit_config_overrides.py --only-changed`（DB 层）与 `--files-only --data-dir <生产快照>`（文件层）。

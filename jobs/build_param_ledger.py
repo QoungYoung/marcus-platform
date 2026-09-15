@@ -159,6 +159,12 @@ INVENTORY = [
          value="tier_targets build75/side50/t_only50/defense30/exit50；tier_floor build55；"
                "profit_take.enabled=**true**（代码默认 false）；board_half 19.5%/9.5%；weekend_de_risk 0.5",
          source="DB 生效值", note="§42.3：`profit_take.enabled` 是真实覆盖，断言必须看生效值"),
+    dict(id="trend.confirm_cfg_effective", cat="买点", name="趋势确认参数的**生效值**（校准文件覆盖代码默认）",
+         loc="data/trend_confirm_params.json.params（生成器 trend_confirm_calibrate_v1，20260908）",
+         value="new_high_window 40 / confirm_recency_days 60 / prior_low_window 90 / "
+               "pullback_max_pct 0.12 / pullback_min_pct 0.02 / swing_k 3（10 键中 6 键与代码默认不同）",
+         source="data/*_params.json 校准产物（**拟合值，非语料**）",
+         note="§44：daily_inputs_chain 用 --params 指向它；文件自带说明「样本量小(离散40行)，参数仍需周复盘校验」"),
 ]
 
 # ── 2) 语料判定（人工/模型判定，写在这里；quote 必须来自取证产物并已逐字校验） ──

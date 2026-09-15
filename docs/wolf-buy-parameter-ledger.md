@@ -1791,3 +1791,70 @@ docker exec marcus-worker python /app/jobs/audit_config_overrides.py
 * ④ 类里最要紧的 27 键判完：**2 组有语料支撑方向**（放量不追、趋势闸）、**1 条口径差异候选**（回踩门槛）、其余自设/工程/出场侧备案；
 * **评分门槛族（8 个键）必须始终标注"自设"** —— 它们的依据是回测，不是他的话；
 * 复现：`jobs/scan_tbuild_params.py`（8 组语义检索）+ `jobs/scan_dict_params.py --keys BUILD_PARAMS_DEFAULT`。
+
+## 44 生效值的第二个来源：`data/*_params.json` **校准产物**（2026-09-15 round 33）
+
+§42 讲了"DB 覆盖代码默认"。本轮发现同一件事还有**第二层**：`data/*_params.json` ——
+由 `*_calibrate.py` 拟合写出的参数文件，生产链路用 `--params` 指过去 → **文件即生效值**。
+
+### 44.1 事实
+
+`apps/main_line/daily_inputs_chain.py:48`：
+
+```python
+'--params', os.path.join(DATA, 'trend_confirm_params.json'), '--as-of', date8,
+```
+
+而 `apps/main_line/trend_confirm_calibrate.py` 的产物就是 `/app/data/trend_confirm_params.json`
+（`generator=trend_confirm_calibrate_v1`，生产文件日期 **20260908**）。
+→ 趋势确认（买点/主题确认）跑的是**校准值**，`trend_confirm.TREND_CFG` 只是"默认基线"。
+
+### 44.2 精确 diff（`jobs/audit_config_overrides.py --files-only`，2026-09-15 实测）
+
+`data/trend_confirm_params.json.params` vs 代码 `TREND_CFG`：**10 键里 6 键不同**
+
+| 键 | 代码默认 | **生效值（文件）** | 差 |
+|---|---:|---:|---|
+| `confirm_recency_days` | 5 | **60** | ×12 |
+| `new_high_window` | 60 | **40** | −20 |
+| `prior_low_window` | 120 | **90** | −30 |
+| `pullback_max_pct` | 0.18 | **0.12** | −0.06 |
+| `pullback_min_pct` | 0.03 | **0.02** | −0.01 |
+| `swing_k` | 5 | **3** | −2 |
+| `pullback_gap_days_max` / `break_ratio` / `theme_pass_ratio` / `min_days` | 90 / 0.98 / 0.5 / 120 | 同 | — |
+
+`data/trend_gate_params.json.a_params` 是同一批 4 键（`new_high_window=40`、`confirm_recency_days=60`、
+`swing_k=3`、`break_ratio=0.98`），另有 `chosen={"mode":"B_only","t":0.35}`（趋势门的工作模式与阈值）。
+
+文件**自带说明**（逐字）：
+
+> 「稳定平原(>=0.95*maxF1)内取 recall 最高; **样本量小(离散40行), 参数仍需周复盘校验**; break_ratio>=0.98 语义约束生效」
+> （`labels_used=32`，`plateau_n=120`，`true_n=25`）
+
+### 44.3 判定
+
+* 这些值是 **拟合值（自设）**，不是语料值 —— 依据是 **32 条标注**，**不是他的话**；
+  台账里必须标"自设/拟合"，**不得**宣称"与语料一致"（与 §43 的评分门槛族同一条纪律）；
+* 顺带一处口径对照：生效 `pullback_min_pct = 0.02`（回踩 2%），而 §43.2 里他的口径是 **3 个点**
+  （2016-08-16「回踩 3 个点左右就进」/ 2021-01-22「回调幅度不超过 3 个点 我做T的空间都没有」）
+  → 我们**偏松**，且与 `t_build.drawdown_min_pct=1.0` 属同一族问题（都是"回踩门槛偏松"）；
+* 校准产物**样本小、文件自己也说"仍需周复盘校验"** → 建议：把它纳入"周复盘校验"清单（不改值，只盯漂移）。
+
+### 44.4 工具与登记
+
+* `jobs/audit_config_overrides.py` 扩到**两层**：
+  * DB 层：`wolf_discipline_config.cfg_json`、`t_build_params.params_json`（需 PG）；
+  * 文件层：`data/trend_confirm_params.json`、`data/trend_gate_params.json`（`--files-only` 可离线跑，
+    `--data-dir` 指生产快照目录即可复盘）；
+* `INVENTORY` 加 1 条：`trend.confirm_cfg_effective`（生效值来自校准文件，非代码默认）；
+* 验收总页 §6 第 4 条口径陷阱同步扩写为"**DB 与 data/*_params.json 两层都要核**"。
+
+### 44.5 复现
+
+```bash
+# 离线复盘（把生产快照放到某个目录后）
+.venv/bin/python jobs/audit_config_overrides.py --files-only --only-changed \
+    --data-dir .dsh-tmp/buyside/prod_data_snapshot
+# 含 DB 层（本地走 SSH 隧道 / 容器内直连）
+.venv/bin/python jobs/audit_config_overrides.py --only-changed
+```
