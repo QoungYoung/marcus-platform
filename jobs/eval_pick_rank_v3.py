@@ -225,6 +225,23 @@ def main():
                 strong = weak = False
             # 阶段/二供**委托模块**（单一实现）；eval 只保留域级（板块/硬过滤）与观测
             cur = [rows[k] for k in np.where(pk["t1"])[0]]        # 现行 leader 的 tier1
+            if args.by_drawdown and args.by_drawdown_var.upper() == "CUR" and cur:
+                for _p in cur:
+                    _j = panel.ci.get(_p["ts"])
+                    if _j is None:
+                        continue
+                    _hi, _lo, _cl = panel.high[i, _j], panel.low[i, _j], panel.close[i, _j]
+                    if not (_hi > 0 and _cl == _cl and _lo == _lo):
+                        continue
+                    _dd = (_hi - _cl) / _hi * 100.0
+                    _pos = (_cl - _lo) / (_hi - _lo) if _hi > _lo else None
+                    _lbl = ("dd<1" if _dd < 1 else "dd1-2" if _dd < 2 else
+                            "dd2-3" if _dd < 3 else "dd3-5" if _dd < 5 else "dd>=5")
+                    dd_bucket[_lbl].append((d, _p["ex"]))
+                    if _pos is not None:
+                        _pl = ("pos<0.2" if _pos < 0.2 else "pos0.2-0.5" if _pos < 0.5 else
+                               "pos0.5-0.8" if _pos < 0.8 else "pos>=0.8")
+                        pos_bucket[_pl].append((d, _p["ex"]))
             if args.by_rank and args.by_rank_var.upper() == "CUR" and cur:
                 _srt = sorted(cur, key=lambda x: -(x.get("r20") if x.get("r20") is not None else -1e18))
                 for _k, _p in enumerate(_srt[:6]):
