@@ -91,9 +91,14 @@ def write_m5(pack: str, symbol: str, bars, sub: str = "m5"):
             cur = json.load(open(p, encoding="utf-8")) or {}
         except Exception:
             cur = {}
+    # ⚠️ **按天替换**（不是追加）：pack 必须是分钟缓存的纯函数，否则重复打包会把同一天的 bar 叠一倍
+    #    （实测：二次打包后 09-11 的触发从 28 次变成 0 次 —— 累计量被重复计数）
+    by_day = {}
     for b in bars:
-        day = b["time"][:10].replace("-", "")
-        cur.setdefault(day, []).append(b)
+        by_day.setdefault(b["time"][:10].replace("-", ""), []).append(b)
+    for day, arr in by_day.items():
+        arr.sort(key=lambda x: x["time"])
+        cur[day] = arr
     for day in cur:
         cur[day].sort(key=lambda x: x["time"])
     json.dump(cur, open(p, "w", encoding="utf-8"), ensure_ascii=False)
