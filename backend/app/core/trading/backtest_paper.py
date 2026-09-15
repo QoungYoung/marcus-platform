@@ -17,6 +17,49 @@ if str(_paper_dir) not in sys.path:
 from paper_engine import PaperTradingEngine
 
 
+# ── 费用口径（2026-09-15 参数化；用户拍板：全拟真回测按 **0.1292%/往返**）──────────
+# 评估链口径（`jobs/eval_aligned_package.py:54`，总账 §10）拆到**单边**：
+#   佣金 万0.86 单边 + 印花税 0.05% 仅卖出 + 过户费 0.001% 双边 + 滑点 0.0003 单边
+#   买 = 0.000086+0.00001+0.0003            = 0.000396
+#   卖 = 0.000086+0.0005+0.00001+0.0003     = 0.000896
+#   往返 = 0.001292 = **0.1292%** ✔
+# ⚠️ 旧默认（买 0.0005 / 卖 0.0015）把印花税按 **0.1%**（2023-08-28 前的税率）计入 →
+#    往返 0.2%，比现行口径高 55%。现改为可配，默认取现行口径；
+#    回到旧行为：`BT_FEE_PROFILE=legacy`，或构造时显式传 commission_buy/sell。
+FEE_PROFILE_DEFAULT = "wen0.86_2026"
+COMMISSION_BUY_DEFAULT = 0.000396
+COMMISSION_SELL_DEFAULT = 0.000896
+COMMISSION_BUY_LEGACY = 0.0005
+COMMISSION_SELL_LEGACY = 0.0015
+
+
+def resolve_commission(profile: Optional[str] = None,
+                       buy: Optional[float] = None,
+                       sell: Optional[float] = None):
+    """→ `(commission_buy, commission_sell, profile)`。优先级：显式入参 > env > 默认口径。
+
+    env：`BT_FEE_PROFILE=wen0.86_2026|legacy`、`BT_COMMISSION_BUY` / `BT_COMMISSION_SELL` 可直接覆盖费率。
+    """
+    prof = str(profile if profile is not None else os.getenv("BT_FEE_PROFILE", FEE_PROFILE_DEFAULT))
+    prof = prof.strip().lower() or FEE_PROFILE_DEFAULT
+    if prof in ("legacy", "old"):
+        b, s = COMMISSION_BUY_LEGACY, COMMISSION_SELL_LEGACY
+    else:
+        b = float(os.getenv("BT_COMMISSION_BUY", str(COMMISSION_BUY_DEFAULT)))
+        s = float(os.getenv("BT_COMMISSION_SELL", str(COMMISSION_SELL_DEFAULT)))
+    if buy is not None:
+        b = float(buy)
+    if sell is not None:
+        s = float(sell)
+    return b, s, prof
+
+
+def roundtrip_fee_pct(profile: Optional[str] = None) -> float:
+    """往返总费率（%）：现行口径 0.1292 / legacy 0.2 —— 供回测报告与对照使用。"""
+    b, s, _ = resolve_commission(profile=profile)
+    return round((b + s) * 100, 4)
+
+
 class BacktestPaperEngine:
     """
     回测专用 PaperTradingEngine 包装器。
@@ -32,7 +75,9 @@ class BacktestPaperEngine:
     - Xueqiu 股票名称查询（回测不需要）
     """
 
-    def __init__(self, task_id: str, initial_capital: float = 1_000_000):
+    def __init__(self, task_id: str, initial_capital: float = 1_000_000,
+                 commission_buy: Optional[float] = None,
+                 commission_sell: Optional[float] = None):
         self.task_id = task_id
         data_dir = str(Path(__file__).parent.parent.parent.parent.parent
                        / "data" / "backtest" / task_id / "paper")
@@ -44,10 +89,12 @@ class BacktestPaperEngine:
         # 代理 _get_stock_name 避免网络调用
         self._engine._get_stock_name = lambda s: ""
 
-        # 累计佣金（与 paper_engine 内部 1.0005 倍率对齐：A 股 0.05% 手续费 + 印花税 0.1% 仅卖出）
+        # ── 费用口径（见模块顶部 `resolve_commission`；默认 0.1292%/往返）──
         self.total_commission = 0.0
-        self.COMMISSION_BUY = 0.0005   # 买入：手续费 0.05%
-        self.COMMISSION_SELL = 0.0015  # 卖出：手续费 0.05% + 印花税 0.1%
+        _b, _s, _prof = resolve_commission(buy=commission_buy, sell=commission_sell)
+        self.COMMISSION_BUY = _b
+        self.COMMISSION_SELL = _s
+        self.fee_profile = _prof
 
         # T+1 锁定：按买入批次追踪每只股票的买入日期和股数
         # 只有当日买入的股数被锁定，之前买入的股数可自由卖出
