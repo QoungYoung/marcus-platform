@@ -51,23 +51,27 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
-    ap.add_argument("--bars-db", default=os.path.join(ROOT, "bars.sqlite"))
-    ap.add_argument("--out", default=os.path.join(ROOT, "_summary"))
+    ap.add_argument("--root", default=ROOT, help="沙箱根目录（默认 <DATA_DIR>/_bt_full）")
+    ap.add_argument("--bars-db", default=os.path.join(DATA, "_bt_full", "bars.sqlite"))
+    ap.add_argument("--out", default=None)
     ap.add_argument("--skip-seed", action="store_true", help="沙箱已建好时跳过 seed")
     ap.add_argument("--llm-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
     a = ap.parse_args()
 
+    if not a.out:
+        a.out = os.path.join(a.root, "_summary")
     os.makedirs(a.out, exist_ok=True)
     days = trade_days(a.start, a.end, a.bars_db)
     print("[days] %d 个交易日：%s → %s" % (len(days), days[0] if days else "-", days[-1] if days else "-"), flush=True)
     by_day, all_legs = {}, []
     for d8 in days:
-        sb = os.path.join(ROOT, d8)
+        sb = os.path.join(a.root, d8)
         cut = prev_trade_day(d8, a.bars_db)
         entry = {"date": d8, "cut": cut, "steps": {}}
         # ① seed
         if not a.skip_seed:
-            rc, dt = run([sys.executable, "/app/jobs/bt_seed_day.py", "--date", d8],
+            rc, dt = run([sys.executable, "/app/jobs/bt_seed_day.py", "--date", d8,
+                          "--root", a.root, "--llm-mode", a.llm_mode],
                          os.path.join(a.out, "seed_%s.log" % d8), timeout=3600)
             entry["steps"]["seed"] = {"rc": rc, "s": round(dt, 1)}
             print("[days] %s seed rc=%d %.0fs" % (d8, rc, dt), flush=True)
@@ -89,7 +93,8 @@ def main() -> int:
                             "--script", _script_in_rev(d8, "apps/main_line/stock_confirm_judge.py")],
                            os.path.join(a.out, "confirm_%s.log" % d8), timeout=1800)
         entry["steps"]["confirm_prevday"] = {"rc": rc_prev, "as_of": prev, "s": round(dtp, 1)}
-        rc_sw, dts = run([sys.executable, "/app/jobs/bt_day_legs_switch.py", "--date", d8, "--held-from-db"],
+        rc_sw, dts = run([sys.executable, "/app/jobs/bt_day_legs_switch.py", "--date", d8, "--held-from-db",
+                          "--sandbox", sb, "--bars-db", a.bars_db],
                          os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
         entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
         # 08:18 用的是上一交易日确认域 → 跑完必须**还原当天口径**，否则 09:20 路径会看错版本
@@ -102,7 +107,8 @@ def main() -> int:
         except Exception as _re:
             entry["steps"]["confirm_restore_err"] = str(_re)[:80]
         # ③ 09:20 路径
-        rc_arm, dta = run([sys.executable, "/app/jobs/bt_day_legs.py", "--date", d8, "--held-from-db"],
+        rc_arm, dta = run([sys.executable, "/app/jobs/bt_day_legs.py", "--date", d8, "--held-from-db",
+                           "--sandbox", sb, "--bars-db", a.bars_db],
                           os.path.join(a.out, "arm_%s.log" % d8), timeout=2400)
         entry["steps"]["arm_0920"] = {"rc": rc_arm, "s": round(dta, 1)}
         # ④ 汇总当日腿

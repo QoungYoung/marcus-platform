@@ -264,7 +264,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True, help="决策日 T（如 20260911）")
     ap.add_argument("--cut", default="", help="数据切点（默认 = 前一交易日）")
-    ap.add_argument("--bars-db", default=os.path.join(ROOT, "bars.sqlite"))
+    ap.add_argument("--bars-db", default=os.path.join(SRC, "_bt_full", "bars.sqlite"))
+    ap.add_argument("--root", default=ROOT, help="沙箱根目录（默认 <DATA_DIR>/_bt_full）；**不同轮次用不同根目录**，避免一次跑批把已验证的沙箱覆盖掉（踩过：全窗口跑批把 09-11/09-14 的 wave_state 冲成空）")
     ap.add_argument("--no-llm", action="store_true", help="跳过 wave agent（LLM）再生")
     ap.add_argument("--code-dir", default="", help="该日代码版本树（默认按 data/_bt_code/rev_map.json 解析）")
     ap.add_argument("--no-shim", action="store_true", help="跳过 4 个 producer 的 as-of 打桩（全用 stub）")
@@ -284,7 +285,7 @@ def main() -> int:
             code_dir = _d if _d and os.path.isdir(_d) else ""
         except Exception:
             code_dir = ""
-    sb = os.path.join(ROOT, T)
+    sb = os.path.join(a.root, T)
     os.makedirs(sb, exist_ok=True)
     man = {"date": T, "cut": cut, "sandbox": sb, "files": {}, "started_at": time.strftime("%H:%M:%S")}
 
