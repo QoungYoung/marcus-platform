@@ -1285,7 +1285,20 @@ def _get_role_cap(role: str) -> float:
 
 
 def _get_total_cap(stance: str) -> float:
-    """市场立场 → 总仓上限%"""
+    """市场立场 → 总仓上限%。
+
+    2026-09-15 参数对齐（开关 `WOLF_TOTAL_CAP_CORPUS`，默认 0 = 现状零变化）：
+    狼大 2026-01-17（逐字）「**主升趋势就75%以上** 然后盘中满仓滚动啊 **调整就50%**
+    **有风险就30%** **下跌趋势就不做**」→ green 100→**75**、yellow 50→50（本就一致）、red 20→**30**；
+    "下跌不做"=0 由 L2 档位（不允许新开仓）承担，不在本表。
+    """
+    if os.getenv("WOLF_TOTAL_CAP_CORPUS", "0").strip().lower() not in ("0", "false", "no", ""):
+        try:
+            from app.services.position_tier import CORPUS_PROFILE as _CP
+            t = _CP["total_cap_pct"]                     # 单一来源（含原话出处）
+            return float({"green": t["主升"], "yellow": t["调整"], "red": t["有风险"]}.get(stance, t["调整"]))
+        except Exception:
+            return {"green": 75.0, "yellow": 50.0, "red": 30.0}.get(stance, 50.0)
     return {"green": 100.0, "yellow": 50.0, "red": 20.0}.get(stance, 50.0)
 
 

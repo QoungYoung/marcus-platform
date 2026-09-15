@@ -46,6 +46,38 @@ DEFAULT_CFG = {
 
 ALL_INTENTS = ("new_base", "add_base", "refill_base", "t_refill", "probe")
 
+# ── 参数对齐（2026-09-15，用户红线：参数必须来自语料）────────────────────────────
+# 狼大原话（逐字）:
+#   · 2026-04-14「50%的底仓 30%左右做日内 或者一天到两天的T，剩下20%左右应对川普说话黑天鹅的抄底」
+#     → **桶级**结构：底仓 50% / T仓 30% / 现金(抄底) 20%
+#   · 2026-01-17「主升趋势就75%以上 然后盘中满仓滚动啊 调整就50% 有风险就30% 下跌趋势就不做」
+#     → **分档总仓位上限**：主升 75 / 调整 50 / 有风险 30 / 下跌 0（后者由"不允许新开仓"体现）
+#
+# ⚠️ 语义纪律：他的 50/30/20 是**桶级**比例，**不是单笔上限**。因此这里新增
+#   `base_bucket_pct` / `t_bucket_pct` / `cash_floor_bucket_pct` 三个桶级字段，
+#   而 **per-order cap_pct 维持现状并标注为"自设"**（他从未给过单笔百分比）——
+#   不得把 50 塞进 cap_pct（那会让单笔可下 50% 净值的单，风险量级完全不同）。
+CORPUS_PROFILE = {
+    "quote_buckets": "2026-04-14「50%的底仓 30%左右做日内 或者一天到两天的T，剩下20%左右应对黑天鹅的抄底」",
+    "quote_total": "2026-01-17「主升趋势就75%以上…调整就50% 有风险就30% 下跌趋势就不做」",
+    "base_bucket_pct": 50,     # 底仓合计上限（他的话）
+    "t_bucket_pct": 30,        # T 仓合计上限（他的话）
+    "cash_floor_bucket_pct": 20,   # 现金底线（他的话：留 20% 抄底）
+    "total_cap_pct": {"主升": 75, "调整": 50, "有风险": 30, "下跌": 0},
+    # 浪型 operation ↔ 他的话四档 的对应关系 = **我们的代理**（他没说"build=主升"这层映射）
+    "op_to_total": {"build": "主升", "t_only": "调整", "side": "调整", "defense": "有风险", "exit": "下跌"},
+}
+
+
+def profile() -> str:
+    """档位表选择：`P3_TIER_PROFILE=corpus` 用他的话（桶级 + 分档总仓）；默认 `legacy`（现状，零变化）。"""
+    return (os.getenv("P3_TIER_PROFILE", "legacy") or "legacy").strip().lower()
+
+
+def corpus_buckets() -> dict:
+    """桶级参数（他的话）。调用方在 P3_TIER_PROFILE=corpus 时用它做金额级约束。"""
+    return dict(CORPUS_PROFILE)
+
 
 def _workspace():
     try:

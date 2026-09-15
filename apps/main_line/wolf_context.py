@@ -207,7 +207,9 @@ def theme_fund_danger(theme, days=None):
     fail-open：数据缺失 / 主题内概念样本不足 / 序列疑似前值填充（近 N 日全同）→ 视为**无危险**，
     不拦（数据问题不应封死买路，与 P1-3 的 fail 策略一致）。
     """
-    n = int(days if days is not None else os.getenv("WOLF_THEME_FUND_DAYS", "3"))
+    # 2026-09-15 参数对齐（P2）：他的同族口径是 **5 日**（2025-06-16「资金没有**5日**连续流出的」），
+    # 原默认 3 是自设（参数总账 §3-11）。调用方若显式传 days 不受影响；env 可覆写。
+    n = int(days if days is not None else os.getenv("WOLF_THEME_FUND_DAYS", "5"))
     try:
         import sys as _s
         _p = os.path.dirname(os.path.abspath(__file__))
