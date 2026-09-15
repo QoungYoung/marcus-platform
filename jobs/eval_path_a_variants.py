@@ -48,8 +48,13 @@ FEE = 0.1292
 AMT20_MIN_YI = 1.0          # pick_v2 的 MIN_AMT20_YI（我们自设口径，见总账 §4）
 
 
-def select(panel, i, cols, limit, cmap, kws, amt_gate=False, top2_per_concept=False):
-    """变体选股：返回 (legs[列号], 统计信息)。"""
+def select(panel, i, cols, limit, cmap, kws, amt_gate=False, top2_per_concept=False,
+           mv_top=None, mv_resolver=None):
+    """变体选股：返回 (legs[列号], 统计信息)。
+
+    `mv_top` = 只保留**该链（板块）内总市值前 N** 的候选 —— 狼大 2025-12-06「判断板块核心标还有 3 个要点：
+    1 他是**板块内总市值前 5** 的股…」；`mv_resolver(ts, i)` 给市值（单位无关，只比大小）。
+    """
     f = W._feat(panel, i, cols)
     keep = [k for k in range(len(cols)) if f["ok"][k]]
     if not keep:
@@ -59,6 +64,12 @@ def select(panel, i, cols, limit, cmap, kws, amt_gate=False, top2_per_concept=Fa
     lead = np.mean([W._pct_rank(np.nan_to_num(x, nan=-1e9))
                     for x in (f["r60"][keep], f["amt20"][keep], f["lim"][keep])], axis=0)
     order = sorted(range(len(fc)), key=lambda k: (-float(lead[k]), panel.codes[fc[k]]))
+    if mv_top and mv_resolver is not None:
+        mvs = [(mv_resolver(panel.codes[fc[k]], i), k) for k in order]
+        mvs = [(m, k) for m, k in mvs if m is not None and m == m]
+        mvs.sort(key=lambda x: -x[0])
+        keep = {k for _, k in mvs[:mv_top]}
+        order = [k for k in order if k in keep]
     if amt_gate:                      # A4：流动性闸（amt20 单位=亿元，与 pick_v2 同）
         order = [k for k in order if amt20[k] >= AMT20_MIN_YI]
     if top2_per_concept:              # B2：按命中的子概念分组，各留 leader 前 2
@@ -130,11 +141,23 @@ def main():
         chains = {k: v for k, v in chains.items() if k in want}
     cmap, bad = W.load_concepts()
     panel = E.Panel(args.bars)
+    import pandas as _pd
+    _mv = _pd.read_parquet(args.bars, columns=["ts_code", "trade_date", "total_mv"])
+    _mv["trade_date"] = _mv["trade_date"].astype(str)
+    _mvp = _mv.pivot_table(index="trade_date", columns="ts_code", values="total_mv", aggfunc="last")
+
+    def mv_of(ts, i):
+        try:
+            return float(_mvp.at[panel.dates[i], ts])
+        except Exception:
+            return None
+
     days = [d for d in panel.dates if args.start <= d <= args.end]
     print("[pA] 链 %d | 交易日 %d | hold=%d limit=%d | 费率 %.4f%%" % (len(chains), len(days), args.hold, args.limit, FEE))
 
-    VARIANTS = {"V0 现行": (False, False), "V1 +流动性闸(amt20≥1亿)": (True, False),
-                "V2 +组内前2": (False, True), "V3 两者都上": (True, True)}
+    VARIANTS = {"V0 现行": {}, "V1 +流动性闸(amt20≥1亿)": {"amt_gate": True},
+                "V2 +组内前2": {"top2_per_concept": True}, "V3 两者都上": {"amt_gate": True, "top2_per_concept": True},
+                "V4 +板块内市值前5(他的话)": {"mv_top": 5}, "V5 +板块内市值前20": {"mv_top": 20}}
     res = {v: {0: [], 1: []} for v in VARIANTS}         # 0=253, 1=254
     leg_cnt = collections.Counter()
     per_day_chain = collections.Counter()
@@ -150,8 +173,9 @@ def main():
             i = panel.di[d]
             if i < 61:
                 continue
-            for v, (ag, t2) in VARIANTS.items():
-                legs, _info = select(panel, i, cols, args.limit, cmap, kws, amt_gate=ag, top2_per_concept=t2)
+            for v, kw in VARIANTS.items():
+                legs, _info = select(panel, i, cols, args.limit, cmap, kws,
+                                     mv_resolver=mv_of, **kw)
                 leg_cnt[v] += len(legs)
                 per_day_chain[v] += 1 if legs else 0
                 for a, b in leg_returns(panel, i, legs, args.hold):
