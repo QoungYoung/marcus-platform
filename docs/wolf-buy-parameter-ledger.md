@@ -1444,6 +1444,43 @@ docker exec marcus-worker sh -c 'env | grep -c ""'     # → 77
   若要让 v3 影子每天都有记录，需要先定"路径 A 的日子拿什么当对照"（例如同日同主题下**不排序**的池内等权，或路径 A 实际挂的腿）——
   这属于**验收口径**问题，**待您拍板**。
 
+### 38.6 实证（round 30 补）：DRY 跑一次 arm，三段影子在"无确认主题"的日子照样落盘
+
+静态证据（缩进层级 + 部署时间）之外，本轮直接做了一次**实证**：
+
+```bash
+# 生产容器内，DRY 模式（不写库、不布腿），跑的是当前部署版脚本
+docker exec -d marcus-worker sh -c 'SWITCH_ARM_DRY=1 python /app/jobs/rotation_switch_arm.py > /tmp/arm_dry.log 2>&1'
+```
+
+结果（2026-09-15 13:14→13:22，当天 `pool=[]`、`CONFIRMED_POOL` **0 行**）：
+
+```
+SKIP_THEME_NOT_BUYABLE 新能源/电池 结构未确认…
+SKIP_THEME_NOT_BUYABLE 半导体/芯片 结构未确认…
+WAVE_ALLOC op= side invest= 1.0 top3= []
+MA144 index=000001.SH state={'date': '20260914', 'close': 3885.33, 'ma144': 4013.94,
+      'slope_pct': -0.625, 'above': False, 'allow_slope': False}
+LINE_REGIME side=huang shrink=True no_buy=False gate=False allow=True
+MARKET_VOL we=1.629 bucket=缩量(1.5-2WE) shrink=True
+PICK_PATH_SUMMARY legs_by_source={'pathA': 2} pool=[] gate_blocked=['新能源/电池','半导体/芯片']
+```
+
+* **三段全跑、全部落盘**，而当天**没有任何"今日确认主题"** → 直接推翻 §38 原结论（与"那天有没有腿"无关）；
+* 三份影子按 `date = 上一交易日`（20260914）落盘，`ts` = 跑的时刻：
+  `ma144_shadow_20260914.json` / `line_regime_shadow_20260914.json` / `market_vol_shadow_20260914.json`；
+* **时点口径备忘**：`date` 是**上一交易日**（09:20 的日常 run 记的是昨天），
+  `market_vol` 用的是**上一交易日全天**两市成交额（`sh_yi 7792.8 + sz_yi 8498.9 = 16291.8 亿 → 1.629WE`），
+  **不是盘中实时值** → 与他的 1WE/1.5WE/2WE 口径可比，读数不会因盘中跑而偏小。
+
+**顺带拿到今天的"若开闸会怎样"读数**（第一条真实增量样本）：
+上证 **3885.33 < MA144 4013.94**、斜率 **−0.625** → `WOLF_MA144_GATE=1` 的话今天会**拦掉买腿**；
+白线/黄线侧 `side=huang`（不是"白线在上"）→ 白线门**不拦**；两市 **1.629WE**（缩量 1.5–2WE 档）。
+
+**生产影响控制**（DRY 的安全性）：`SWITCH_ARM_DRY=1` 不写库、不布腿；
+但 `pick_path_<date>.json` / `pick_health_<date>.json` **不受 dry 保护**会被重写 → 跑前备份、跑完还原（md5 一致核对通过）；
+`rotation_switch_arm_dry.json` 跑完删除。
+
 ### 38.5 复现（含"部署时间 vs run 时间"这一步，round 30 补）
 
 ```bash
