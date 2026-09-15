@@ -188,6 +188,40 @@ def backfill(start8: str, end8: str, sleep_sec: float = 0.4, save: bool = True,
     return out
 
 
+def ensure_fresh(max_lag_days: int = 2, lookback_days: int = 15,
+                 quiet: bool = True, today8: Optional[str] = None,
+                 now_hm: Optional[int] = None) -> Dict[str, Any]:
+    """**自愈**：库里落后于"最近已收盘交易日"就调中继补齐并落库（2026-09-15 用户指示）。
+
+    用户原话（2026-09-15）：「如果再遇到数据库没有新数据的情况，直接调用 relay 获取并落库」。
+    `WOLF_MKT_BARS_AUTOSYNC=0` 关闭（默认开）。任何异常都不抛 —— 返回 {"ok": False, "error": ...}。
+    """
+    import datetime as _dt
+    if os.getenv("WOLF_MKT_BARS_AUTOSYNC", "1").strip().lower() in ("0", "false", "no"):
+        return {"ok": True, "skipped": "autosync_off"}
+    try:
+        cov = coverage() or {}
+        max_before = str(cov.get("d1") or "") or None
+        today = _dt.date.today()
+        end8 = today8 or today.strftime("%Y%m%d")
+        start8 = (today - _dt.timedelta(days=int(lookback_days))).strftime("%Y%m%d")
+        _hm = now_hm if now_hm is not None else (today.hour * 100 + today.minute)
+        # 已收盘（≥15:30）时把"今天"也算进目标日，供 16:30 收盘后刷新链当天落库
+        days = [d for d in (trade_days(start8, end8) or []) if d < end8 or (_hm >= 1530 and d == end8)]
+        missing = [d for d in days if not max_before or d > max_before]
+        if not missing:
+            return {"ok": True, "max_before": max_before, "missing": [], "rows": 0}
+        res = backfill(start8, end8, days=missing)
+        if not quiet:
+            print("[mkt_bars] 自愈回填 %s → rows=%s" % (missing, res.get("rows")))
+        return {"ok": bool(res.get("ok", True)), "max_before": max_before,
+                "missing": missing, "rows": res.get("rows", 0)}
+    except Exception as e:
+        if not quiet:
+            print("[mkt_bars] ensure_fresh 失败: %s" % str(e)[:120])
+        return {"ok": False, "error": str(e)[:160]}
+
+
 def coverage() -> Dict[str, Any]:
     """覆盖度查询（回测前先看这个）。"""
     try:

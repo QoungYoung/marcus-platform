@@ -130,8 +130,25 @@ def theme_amounts(theme: str, as_of: Optional[str] = None, days: int = VOL_WIN +
         return []
 
 
+def _ensure_bars_fresh() -> None:
+    """自愈（2026-09-15 用户指示）：**库里没有新数据时直接调 relay 取并落库**，再继续判定。
+
+    经 `app.services.mkt_bars.ensure_fresh` 单一实现；`WOLF_MKT_BARS_AUTOSYNC=0` 关闭；失败不抛。
+    """
+    try:
+        import sys as _s
+        for _p in ("/app", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))):
+            if os.path.isdir(os.path.join(_p, "backend")) and _p not in _s.path:
+                _s.path.insert(0, _p)
+        from app.services.mkt_bars import ensure_fresh
+        ensure_fresh()
+    except Exception as _e:
+        print("[theme_volfund] bars 自愈跳过: %s" % str(_e)[:80])
+
+
 def _trade_days(as_of: Optional[str], n: int) -> List[str]:
-    """最近 n 个交易日（升序，≤as_of）。数据源：PG mkt_bars_daily。"""
+    """最近 n 个交易日（升序，≤as_of）。数据源：PG mkt_bars_daily（判定前先自愈补齐）。"""
+    _ensure_bars_fresh()
     try:
         import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL",
