@@ -1858,3 +1858,66 @@ docker exec marcus-worker python /app/jobs/audit_config_overrides.py
 # 含 DB 层（本地走 SSH 隧道 / 容器内直连）
 .venv/bin/python jobs/audit_config_overrides.py --only-changed
 ```
+
+## 45 ④ 类收尾：`position_class.CONFIG`（11 键）与 `wave_alloc.WAVE_ALLOC`（5 键）（2026-09-15 round 34）
+
+### 45.1 `position_class.CONFIG`（11 键）——**自设初值，喂方向层，不喂买入判据**
+
+* 用途：东财概念级高低位分类器（`apps/main_line/position_class.py`）→ `data/position_class_result.json`
+  → 方向层 `wolf_direction_position`（持仓位置建议）＋ `trade_graph`（概念高低位 context / confirm_chain LOW 埋伏确认）；
+  **我们的选股/买点判据不读它** —— 所以它不影响已验收的买入层结论，登记即可；
+* **原则有语料**：模块 docstring 逐字「东财概念级高低位分类器（**狼大: 低位看逻辑、高位看量价**）」；
+  其"低位"语义与我们 §39 的复核一致（位置低＋横盘走平＋没涨，且他明确"超跌不如低位走平"）；
+* **数值全自设**：代码注释逐字「高低位阈值(可配置, 6.2) —— **初值, 后续回测校准**」：
+
+  | 键 | 值 | 键 | 值 |
+  |---|---:|---|---:|
+  | `low_vh` | −30 | `high_box_hi` | 80 |
+  | `low_box` | 35 | `high_vma60` | 0 |
+  | `low_vma60` | 0 | `high_vh_floor` | 20 |
+  | `high_vh` | 10 | `mid_box_lo` / `mid_box_hi` | 35 / 65 |
+  | `top_inflow_n` | 40 | `vol_confirm_pct` | 0.15 |
+
+* 判定：**自设（初值待校准）**，不得宣称与语料一致；要校准属**方向层**议题，不在本轮买入层范围内。
+
+### 45.2 `wave_alloc.WAVE_ALLOC`（5 键）——**回测拟合值**，但方向与他的话相容
+
+* 用途：arm 布腿时的**方向间资源分配**（`top1:top2:top3` 权重 ＋ `invest` 比例）→ 直接决定"先买谁、买多少"；
+* 依据（模块 docstring 逐字）：「`wave_alloc.py` — wave 调档·主线候选权重分配（**2026-09-07 回测验证落地**）
+  主题层+个股层回测(**wave-tuned-v2**)结论 → 候选/做T多方向资源按 `wave_state.operation` 分配」；
+* 值：
+
+  | operation | top1:top2:top3 | invest |
+  |---|---:|---:|
+  | `build`（主升吃轮动，分散） | 40 / 35 / 25 | 100% |
+  | `t_only`（收益持平回撤更小） | 70 / 20 / 10 | 100% |
+  | `side` | 60 / 25 / 15 | 100% |
+  | `defense`（深调段降仓控亏） | 60 / 25 / 15 | **30%** |
+  | `exit`（只降不空，防踏空） | 60 / 25 / 15 | **70%** |
+
+* 判定：**数值 = 回测拟合（自设）**；但 `defense → invest 30%` / `exit → 70%`（只降不空）的**方向**与他的原话相容
+  （「有风险就30%」「下跌趋势就不做」已入账 §2/§40）→ 标注口径应是「**方向有据、数值拟合**」，不是"与语料一致"。
+
+### 45.3 ④ 类（字典型默认值）判定完成度
+
+| 容器 | 键数 | 判定 | 出处 |
+|---|---:|---|---|
+| `t_build.BUILD_PARAMS_DEFAULT` | 50 | 2 组方向有据（放量不追、趋势闸）；评分门槛族等自设；1 条口径差异候选（回踩 1% vs 3–5%） | §43 |
+| `trend_confirm.TREND_CFG` | 10 | **生效值**来自 `data/trend_confirm_params.json`（32 标注拟合，6/10 键覆盖）→ 拟合值 | §44 |
+| `position_class.CONFIG` | 11 | 原则有语料、**数值全自设（初值待校准）**；喂方向层 | §45.1 |
+| `position_tier.CORPUS_PROFILE` | 7 | 已登记（`P3_TIER_PROFILE=corpus`，§29） | §29 |
+| `wave_alloc.WAVE_ALLOC` | 5 | 数值回测拟合、方向与他的话相容 | §45.2 |
+| `wolf_trend_stop.DEFAULTS` | 5 | 出场/止损侧 —— 按用户指令**不碰**（仅登记） | — |
+| 其余 4 个（`TENCENT_FREQS`/`SINA_SCALES`/`EARNINGS_MONTH_END`/`ETFS`） | — | 数据源周期 / 日历 / ETF 映射，**非策略参数** | §42.1 |
+
+**结论**：④ 类里**真正"有语料支撑"的只有"放量不追 / 回踩才买"与"趋势/级别"两组方向**，
+其余全部是**自设或回测拟合** —— 这一档在对外表述里必须整体标注为自设，
+**不得**计入"与狼大对齐"的成绩（与 §43 评分门槛族、§44 校准产物同一条纪律）。
+
+### 45.4 复现
+
+```bash
+.venv/bin/python jobs/scan_dict_params.py                      # 列出 ④ 类容器
+.venv/bin/python jobs/scan_dict_params.py --keys CONFIG        # position_class 11 键
+.venv/bin/python jobs/scan_dict_params.py --keys WAVE_ALLOC    # wave_alloc 5 键
+```

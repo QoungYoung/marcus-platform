@@ -165,6 +165,11 @@ INVENTORY = [
                "pullback_max_pct 0.12 / pullback_min_pct 0.02 / swing_k 3（10 键中 6 键与代码默认不同）",
          source="data/*_params.json 校准产物（**拟合值，非语料**）",
          note="§44：daily_inputs_chain 用 --params 指向它；文件自带说明「样本量小(离散40行)，参数仍需周复盘校验」"),
+    dict(id="wave.alloc", cat="仓位", name="wave 调档·方向间资源分配（top1/2/3 权重 + invest 比例）",
+         loc="wave_alloc.WAVE_ALLOC", value="build 40/35/25 invest100% / t_only 70/20/10 100% / "
+               "side 60/25/15 100% / defense 60/25/15 **30%** / exit 60/25/15 **70%**",
+         source="代码默认（**2026-09-07 回测 wave-tuned-v2 拟合**）",
+         note="§45.2：数值=回测拟合（自设），但 defense 降仓/exit 只降不空的方向与他的话相容 → 标注「方向有据、数值拟合」"),
 ]
 
 # ── 2) 语料判定（人工/模型判定，写在这里；quote 必须来自取证产物并已逐字校验） ──
