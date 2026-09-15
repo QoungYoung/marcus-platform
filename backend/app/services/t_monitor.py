@@ -1027,6 +1027,21 @@ class TMonitor:
                     continue
                 if act != 'buy':
                     continue
+                # C6（2026-09-15 round 20）：**附加**他的回补条件 —— 时间窗(14:00-14:30) ∧ 缩量。
+                #   2025-04-15 条件6「…在下午2.00-2.30这个时间段进行回补…确保分时上涨放量、回调缩量」＋
+                #   2025-06-10「下去了缩量再买回来」。默认**只记录（影子）**，WOLF_STEP_REFILL=1 才真拦；
+                #   数据缺失 fail-open（绝不因读数失败而放弃回补）。只影响回补/加仓，不动卖出与止损。
+                try:
+                    from app.services import wolf_step_refill as SR
+                    _st_sr = SR.state()
+                    if SR.shadow_enabled():
+                        SR.shadow_record({"candidates": [p['symbol'] for p in pend],
+                                          "gate": SR.enabled()})
+                    if SR.enabled() and not SR.allow(_st_sr):
+                        print("[TMonitor] C6 回补条件不满足，跳过 %s: %s" % (sym, _st_sr.get("why")))
+                        continue
+                except Exception as _e_sr:
+                    print("[TMonitor] step_refill 条件异常(放行): %s" % str(_e_sr)[:80])
                 if (sym, 'wolf_hedge_refill', today) in self._wolf_done:
                     continue
                 vol = (need // 100) * 100
