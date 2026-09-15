@@ -160,6 +160,10 @@ def main() -> int:
     except Exception as _de:
         print("[diag] err %s" % str(_de)[:120], flush=True)
     sb_mod.DATA = sb
+    # ⚠️ `PLAN_FILE` 是**模块级常量**（import 时就按生产的 DATA_DIR 定死了）→ 只改 `sb_mod.DATA` 不够，
+    #    `build_plan()` 会把计划**写穿到生产** `data/switch_builder_plan.json`（实测 2026-09-16 06:35）。
+    #    这里把它一并指向沙箱；同时把"写盘"整体关掉（回测不需要这个 DRY 报告产物）。
+    sb_mod.PLAN_FILE = os.path.join(sb, "switch_builder_plan.json")
 
 
     # ① 持仓：换成回测持仓（生产版读 paper_positions = 当期，会前视）

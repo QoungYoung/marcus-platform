@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -362,9 +363,17 @@ def main() -> int:
 
     # ③c 沙箱兜底：把生产 data 下**其余文件**软链进来（脚本缺输入时才不会炸）；
     #     已知产物先建成真实空文件 → 任何写入都落在沙箱里，**绝不会穿透到生产文件**。
+    # ⚠️ **凡是 PINNED 生产者（position_class / derive_sub_universe+rotation_universe / stock_confirm_judge）
+    #    会写的文件，都必须在沙箱里是"真实文件"**：留成软链 = 写入穿透到生产文件。
+    #    实测 2026-09-16 06:33：`rotation_crowding.json`（由 regen 链里的 build_crowding 写）经软链
+    #    重写了生产文件；这次因输出确定性、**字节完全相同**才没造成损失，换个 as-of 就会改掉生产。
     PRODUCER_OUTPUTS = ["rotation_universe_result.json", "rotation_sub_universe.json",
                         "position_class_result.json", "stock_confirm_result.json",
-                        "wolf_mainline_select.json", "wave_state.json", "theme_r5_%s.json" % cut]
+                        "wolf_mainline_select.json", "wave_state.json",
+                        "rotation_crowding.json", "rotation_proxy_state.json",
+                        "sector_g3_state.json", "trend_confirm_params.json",
+                        "switch_builder_plan.json", "rotation_switch_plan.json",
+                        "theme_r5_%s.json" % cut]
     n_links = n_real = 0
     try:
         for nm in os.listdir(SRC):
@@ -437,6 +446,26 @@ def main() -> int:
         except Exception as e:
             rec("wave_state.json(regen)", {"src": "regen_llm_err", "err": str(e)[:90]})
 
+    # ③a-0 **写入穿透自检**：记录生产 data 下所有 *.json/*.jsonl 的 mtime，跑完再比一次；
+    #      只要有文件被改动 → 记 man["write_penetration"] 并大声打印（这是"回测改了生产"的告警）。
+    def _src_mtimes():
+        """生产 data 下文件的"指纹"：小文件用 md5（准确），大文件用 (size, mtime)。"""
+        import hashlib
+        out = {}
+        for pat in ("*.json", "*.jsonl"):
+            for _p in glob.glob(os.path.join(SRC, pat)):
+                try:
+                    sz = os.path.getsize(_p)
+                    if sz <= 2 * 1024 * 1024:
+                        out[_p] = hashlib.md5(open(_p, "rb").read()).hexdigest()
+                    else:
+                        out[_p] = "%d:%s" % (sz, os.path.getmtime(_p))
+                except OSError:
+                    pass
+        return out
+
+    _mt_before = _src_mtimes()
+
     # ④ as-of 打桩：跑没有 --date 的生产脚本（钉时钟 + 本地日线 + 沙箱 DATA_DIR）
     #    顺序 = 概念高低位 → 子方向 → 方向层池 → 确认域（后面的依赖前面的产物）
     # ⚠️ 生产 08:05 只有**一个**任务：`rotation_universe_refresh` = `derive_sub_universe.py --refresh-result`，
@@ -484,6 +513,16 @@ def main() -> int:
             src = "/app/config/p3_position_tiers.json"
         info = copy_json(src, os.path.join(sb, name)) if os.path.exists(src) else None
         rec(name, (dict(info, src="stub", from_=src) if info else None))
+
+    # ③a-1 写入穿透自检（跑完比对）
+    try:
+        _changed = sorted(_p for _p, _t in _src_mtimes().items() if _mt_before.get(_p) != _t)
+        if _changed:
+            man["write_penetration"] = _changed[:20]
+            print("[seed] ⛔ 写入穿透告警：生产 data 下有 %d 个文件在本次 seed 期间被改动：%s"
+                  % (len(_changed), _changed[:8]), flush=True)
+    except Exception as _e:
+        man["write_penetration_err"] = str(_e)[:80]
 
     man["code_dir"] = code_dir
     man["finished_at"] = time.strftime("%H:%M:%S")

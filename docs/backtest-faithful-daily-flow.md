@@ -665,3 +665,37 @@ main=… subs=… | [子概念…] | {池 JSON}`）→ 新增 `jobs/bt_input_div
 重跑范围：**09-09 / 09-10 / 09-14**（沙箱根 `_bt_sep2`，09-11 作对照应保持 9/9）。
 已知 09-14 仍会偏：那天**早晨**的 `main_line_state` 版本在归档/日期文件/DB 三处都没有（只有 09-11 那份），
 而生产 08:05 derive 用的 main=半导体/芯片（见 §9.16 表）。
+
+### 9.18 第 7 轮（续）：**写入穿透**——回测把生产文件写了两处（已修 + 已加自检）
+
+`bt_seed_day` 的沙箱是"软链农场 + 已知产物建真实占位"的写法，但**占位名单不全**，于是生产者写文件时
+**顺着软链写穿到生产**：
+
+| 被写穿的生产文件 | 来源 | 影响 | 处置 |
+|---|---|---|---|
+| `data/rotation_crowding.json` | regen 链里的 `build_crowding()`（`rotation_universe.py` 内部调用） | 实测**字节完全相同**（md5 一致：确定性输出 + 同一 `end_date=20260630`）→ 无实际损失 | 加入占位名单；已核对 md5 与 `rotation_crowding_20260630.json` 一致 ✅ |
+| `data/switch_builder_plan.json` | `switch_builder.build_plan()` 的 `PLAN_FILE` 是**模块级常量**（只改 `sb_mod.DATA` 不够） | 生产该文件被我这次重放的 DRY 计划覆盖（无代码消费方；生产 08:18 `tranche_ladder_report` 当天会重写） | 占位名单 + `sb_mod.PLAN_FILE` 指向沙箱；自愈于 08:18 |
+
+**已加两道防线（本轮验证过）**：
+1. **占位名单补全**（`PRODUCER_OUTPUTS` += `rotation_crowding.json`、`rotation_proxy_state.json`、
+   `sector_g3_state.json`、`trend_confirm_params.json`、`switch_builder_plan.json`、`rotation_switch_plan.json`）
+   —— 名单里的文件在沙箱里一定是**真实文件**（先 `unlink` 软链再建占位），写入绝不外溢。
+2. **写入穿透自检**：seed 跑前/跑后对生产 `data/*.json|jsonl` 取指纹（≤2MB 用 md5，大文件用 size+mtime），
+   有变化就写 `man["write_penetration"]` 并大声打印。
+   实测（`/app/data/_verify_nopen.{sh,py}`：seed + 两条布腿路径）：**CHANGED_PROD_FILES = 0** ✅
+
+**教训**：沙箱隔离不能只靠"软链 + 部分占位"——**凡是运行期会被写的文件都必须在名单里**，
+并且要有"跑完对比生产指纹"的**主动自检**（本轮两次污染都是自检抓出来的，不是靠人看日志）。
+
+### 9.19 第 7 轮（续）：09-10 的缺口定位到**确认域（confirm domain）**
+
+09-10 生产 09:20 的腿来自 **`CONFIRMED_POOL ['农业'] pool_legs 4`**（不是 room 链；room 三条链
+`免税概念/短剧互动游戏/数字货币` 全被 `not_today_confirmed` 跳过），而回放侧的确认域是**退化的**
+（`[stock_confirm] … WROTE stock_confirm_result.json 概念:5`，确认 0）→ 无候选 → 0 条腿。
+日志里还有一条强线索：回放的 `stock_confirm_judge` 打印 `农业 > 人工智能 n=10 确认 0`
+= **主题→概念的映射取错了**（农业映射到了 AI 的概念族）。⇒ 下一轮目标：把 `stock_confirm_judge`
+在沙箱里的"主题→概念"来源对齐（用同一份 `rotation_sub_universe.json`/`mainline_confirm_state`），
+并用 `jobs/bt_input_divergence.py` + 生产日志的 `CONFIRMED_POOL … pool_legs N` 做验证。
+
+**本轮稳定结论（已验证）**：09-11 在隔离沙箱里 **9/9 复现**（两次独立跑批）；09-01→09-07 回放 0 条腿 = 生产真值
+（时代检查生效）；写入穿透 = 0（自检通过）；账户级回放与对账工具就绪。

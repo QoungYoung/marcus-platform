@@ -272,9 +272,10 @@ def main() -> int:
             print("[legs] 资格集合取数失败 %s: %s" % (getattr(_f_sel, "__name__", "?"), str(_se)[:90]), flush=True)
     print("[legs] 资格集合(%s)=%s" % (getattr(_f_sel, "__name__", "?"), sorted(confirmed_today_set)), flush=True)
     print("[legs] module=%s" % getattr(arm, "__file__", "?"), flush=True)
+    # `theme_of_chain` 是**版本相关**函数（早期版本树没有）→ 取一次、后面都用它（容错）
+    _toc = getattr(arm, "theme_of_chain", None)
     # ⚠️ `theme_of_chain` 是**版本相关**函数：早期版本树里没有它（实测 rev_5a6327… 报
     #    AttributeError → 整个 09-10 布腿路径崩掉、静默变成 0 条腿）。诊断打印必须容错。
-    _toc = getattr(arm, "theme_of_chain", None)
     for c in list(room) + list(holdT):
         print("   链 %s → theme=%s" % (c, _toc(c) if callable(_toc) else "(该版本无 theme_of_chain)"),
               flush=True)
@@ -286,12 +287,15 @@ def main() -> int:
                                                      " ".join(str(v) for v in (ml.get("candidates") or []))]
                           for t in x.split("/"))
         is_main, skip_reason = old_is_main, None
-        if qualify and arm.theme_of_chain(c) is not None:
-            th0 = arm.theme_of_chain(c)
-            if th0 in confirmed_today_set:
+        # ⚠️ `theme_of_chain` 是**版本相关**函数：早期版本树（如 rev_5a6327…）没有它 →
+        #    早期版本的主线性判定就走"按 main_line/candidates 文本匹配"（`old_is_main`）。
+        #    这里必须容错，否则该日整条布腿路径 AttributeError 崩掉、被误读成"生产当天 0 条腿"。
+        _th0 = _toc(c) if callable(_toc) else None
+        if qualify and _th0 is not None:
+            if _th0 in confirmed_today_set:
                 is_main = True
             else:
-                is_main = False; skip_reason = "not_today_confirmed:" + th0
+                is_main = False; skip_reason = "not_today_confirmed:" + _th0
         if is_main:
             buy_chains.append((c, "mainline"))
         elif skip_reason:
