@@ -54,6 +54,8 @@ def check(amounts: Sequence[float], nets: Sequence[float],
     # 每日都要有完整的 10 日量能基准 → 至少需要 vol_win + act_days 个点（否则头部几天会拿空窗口当 0）
     need = vol_win + act_days
     if len(a) < need:
+        detail["data_missing"] = True
+        detail["missing_kind"] = "vol_insufficient"
         return True, "量能序列不足(%d<%d, 需 10日基准×5日) → 放行" % (len(a), need), detail
     act = 0
     for k in range(act_days):
@@ -69,12 +71,16 @@ def check(amounts: Sequence[float], nets: Sequence[float],
     n = [float(x) for x in (nets or []) if x is not None and float(x) == float(x)]
     if len(n) < fund_days:
         detail["fund_data"] = "insufficient"
+        detail["data_missing"] = True
+        detail["missing_kind"] = "fund_insufficient"
         return True, "资金序列不足(%d<%d) → 放行" % (len(n), fund_days), detail
     tail = n[-fund_days:]
     detail["fund_tail"] = [round(x, 1) for x in tail]
     if len(set(tail)) == 1:
         # 序列全同 = 前值填充/陈旧（生产 concept_hist 实测如此）→ 资金半边放行，不据此拦
         detail["fund_data"] = "stale(all-equal)"
+        detail["data_missing"] = True
+        detail["missing_kind"] = "fund_stale"
         return True, "量能活跃 %d/%d ∧ 资金序列疑似前值填充(全同) → 资金半边放行" % (act, act_days), detail
     if all(x < 0 for x in tail):
         return False, "资金连续%d日净流出 → 不新开腿" % fund_days, detail
@@ -239,6 +245,90 @@ def theme_nets(theme: str, as_of: Optional[str] = None, days: int = FUND_DAYS + 
     return [float(cache[d][theme]) for d in dts if isinstance(cache.get(d), dict) and theme in cache[d]]
 
 
+FAILCLOSED_ENV = "WOLF_FUND_GATE_FAILCLOSED"
+
+
+def failclosed_enabled() -> bool:
+    """**资金/量能数据读取失败**时是否「停止买入」（用户 2026-09-15 拍板）。
+
+    默认 **1（fail-closed）**：读不到数据 → 判**不通过** + QQ 通知；
+    置 `WOLF_FUND_GATE_FAILCLOSED=0` 恢复旧的 fail-open（放行）。
+    适用范围：P1「选板块第一要素」与 P2-2「板块资金危险」两处资金门共用同一策略。
+    """
+    return os.getenv(FAILCLOSED_ENV, "1").strip().lower() not in ("0", "false", "no")
+
+
+def _alert_path() -> str:
+    import datetime as _dt
+    d8 = _dt.datetime.now().strftime("%Y%m%d")
+    return os.path.join(os.environ.get("DATA_DIR", "/app/data"), "fund_gate_alerts_%s.json" % d8)
+
+
+def _send_qq(msg: str) -> bool:
+    """尽力发 QQ（服务侧封装 → core 通知器 → 都不行就只记日志），**任何异常都不抛**。"""
+    import sys
+    try:
+        import sys as _s
+        _here = os.path.dirname(os.path.abspath(__file__))
+        for _cand in (os.path.join(os.path.dirname(os.path.dirname(_here)), "backend"),
+                      os.path.dirname(os.path.dirname(_here))):
+            if os.path.isdir(_cand) and _cand not in _s.path:
+                _s.path.insert(0, _cand)
+        from app.services.qqbot_service import send_qq_notification   # 服务侧封装（含默认收件人）
+        send_qq_notification(msg)
+        return True
+    except Exception as _e1:
+        try:
+            import sys as _s
+            _here = os.path.dirname(os.path.abspath(__file__))
+            cur = _here
+            for _ in range(6):
+                cand = os.path.join(cur, "core")
+                if os.path.exists(os.path.join(cand, "qq_notifier.py")):
+                    if cand not in _s.path:
+                        _s.path.insert(0, cand)
+                    break
+                cur = os.path.dirname(cur)
+            import qq_notifier
+            openid = (os.getenv("QQ_NOTIFY_OPENID") or os.getenv("QQ_OPENID") or "").strip()
+            if not openid:
+                print("[fund_gate] 无 QQ_NOTIFY_OPENID，跳过直发；原因: %s" % str(_e1)[:60], file=sys.stderr)
+                return False
+            return bool(qq_notifier.send_c2c_message(openid, msg))
+        except Exception as _e2:
+            print("[fund_gate] QQ 通知失败: %s / %s" % (str(_e1)[:50], str(_e2)[:50]), file=sys.stderr)
+            return False
+
+
+def notify_once(key: str, msg: str) -> bool:
+    """按 (当日, key) 去重后发通知；同时落 `data/fund_gate_alerts_<date>.json` + `*.jsonl`。**不抛**。"""
+    import datetime as _dt
+    import sys
+    sent = False
+    try:
+        path, log = _alert_path(), os.path.join(os.environ.get("DATA_DIR", "/app/data"),
+                                                "fund_gate_alerts.jsonl")
+        store = {}
+        try:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    store = json.load(f) or {}
+        except Exception:
+            store = {}
+        if key in store:
+            return False
+        store[key] = {"msg": msg, "ts": _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=1)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(json.dumps(store[key], ensure_ascii=False) + "\n")
+        sent = _send_qq(msg)
+    except Exception as e:
+        print("[fund_gate] notify_once 异常: %s" % str(e)[:80], file=sys.stderr)
+    return sent
+
+
 def shadow_enabled() -> bool:
     """`WOLF_THEME_VOLFUND_SHADOW` 默认 1：**只记录不拦**（灰度期，拿到"会拦谁"的逐日记录）。"""
     return os.getenv("WOLF_THEME_VOLFUND_SHADOW", "1").strip().lower() not in ("0", "false", "no", "")
@@ -269,8 +359,24 @@ def shadow_record(theme: str, ok: bool, why: str) -> None:
 
 
 def theme_volfund_ok(theme: str, as_of: Optional[str] = None) -> Tuple[bool, str]:
-    """生产入口：按他的话判该主题当前可不可做（数据缺失 → 放行）。"""
+    """生产入口：按他的话判该主题当前可不可做。
+
+    **数据缺失的处置（2026-09-15 用户拍板）**：`WOLF_FUND_GATE_FAILCLOSED`（默认 1）
+    → 读不到量能/资金数据就**停止买入**（判不通过）并发 QQ 通知；置 0 恢复旧的 fail-open。
+    """
+    _fc = failclosed_enabled()
     if not theme:
+        if _fc:
+            notify_once("theme_unknown", "[资金门] 主题未知 → 已停止买入（fail-closed）")
+            return False, "主题未知 → 停止买入（fail-closed，2026-09-15 用户指示）"
         return True, "主题未知 → 放行"
-    ok, why, _ = check(theme_amounts(theme, as_of), theme_nets(theme))
+    ok, why, detail = check(theme_amounts(theme, as_of), theme_nets(theme))
+    if detail.get("data_missing"):
+        if _fc:
+            notify_once("volfund:%s" % theme,
+                        "[资金门] 主题[%s] 量能/资金数据读取失败 → 已停止买入：%s（kind=%s）"
+                        % (theme, why, detail.get("missing_kind")))
+            return False, ("资金/量能数据读取失败 → 停止买入（fail-closed，2026-09-15 用户指示）: %s"
+                           % why)
+        return True, why
     return ok, why

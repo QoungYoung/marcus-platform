@@ -193,6 +193,25 @@ def _concept_hist_by_name():
         return {}
 
 
+def _fund_data_missing(theme, why):
+    """**资金数据读取失败**时的处置（2026-09-15 用户拍板）：默认停止买入 + QQ 通知。
+
+    `WOLF_FUND_GATE_FAILCLOSED=0` → 恢复旧的 fail-open（视为无危险、不拦）。
+    """
+    try:
+        import sys as _s3
+        _p3 = os.path.dirname(os.path.abspath(__file__))
+        if _p3 not in _s3.path:
+            _s3.path.insert(0, _p3)
+        from wolf_theme_vol_fund import failclosed_enabled as _fc, notify_once as _no
+    except Exception:
+        return False, "资金数据不可用(%s) → 放行（策略模块不可用）" % why
+    if _fc():
+        _no("theme_fund:%s" % theme, "[资金门] 主题[%s] 资金数据读取失败 → 已停止买入：%s" % (theme, why))
+        return True, "板块资金数据读取失败 → 停止买入（fail-closed，2026-09-15 用户指示）: %s" % why
+    return False, "资金数据不可用(%s) → 放行（WOLF_FUND_GATE_FAILCLOSED=0）" % why
+
+
 def theme_fund_danger(theme, days=None):
     """主题**资金**危险判定（P2-2）→ (danger: bool, reason)。
 
@@ -219,9 +238,30 @@ def theme_fund_danger(theme, days=None):
         cons = THEME_CONCEPTS.get(theme) or []
     except Exception:
         return False, "主题概念表不可用 → 放行"
+    # 2026-09-15（用户指示）：
+    #  ① 数据源先走 **relay 日频资金流**（`wolf_theme_vol_fund.theme_nets`，与 P1 同源；生产实测 concept_hist
+    #     的 net_amount 是前值填充、且主题内可用序列长度为 0 → 这条门实际上天天放行）；
+    #  ② 两边都拿不到 → 按 `WOLF_FUND_GATE_FAILCLOSED`（默认 1）**停止买入** + QQ 通知（置 0 恢复放行）。
+    _nets = []
+    try:
+        import sys as _s2
+        _p2 = os.path.dirname(os.path.abspath(__file__))
+        if _p2 not in _s2.path:
+            _s2.path.insert(0, _p2)
+        from wolf_theme_vol_fund import theme_nets as _tn
+        _nets = [x for x in (_tn(theme, days=n + 2) or []) if x is not None]
+    except Exception as _e_nets:
+        print("[wolf_context] theme_fund relay 序列不可用: %s" % str(_e_nets)[:80])
+    if len(_nets) >= n and len(set(_nets[-n:])) > 1:
+        _avg = _nets[-n:]
+        if all(x < 0 for x in _avg):
+            return True, "板块资金危险: 主题[%s] 主力净流入连续 %d 日为负(均值 %s 亿)" % (
+                theme, n, ", ".join("%.2f" % (x / 1e4) for x in _avg))
+        return False, "板块资金正常(近%d日均值 %s 亿)" % (n, ", ".join("%.2f" % (x / 1e4) for x in _avg))
+
     by = _concept_hist_by_name()
     if not by:
-        return False, "concept_hist 不可用 → 放行"
+        return _fund_data_missing(theme, "concept_hist 不可用 且 relay 资金序列不足(%d)" % len(_nets))
     series = []
     for c in cons:
         v = by.get(c)
@@ -235,7 +275,8 @@ def theme_fund_danger(theme, days=None):
             continue
         series.append(tail)
     if len(series) < 2:
-        return False, "主题内可用资金序列不足(%d) → 放行" % len(series)
+        return _fund_data_missing(theme, "主题内可用资金序列不足(%d)，relay 序列也不足(%d)"
+                                  % (len(series), len(_nets)))
     avg = [sum(s[i] for s in series) / len(series) for i in range(n)]
     if all(x < 0 for x in avg):
         return True, "板块资金危险: 主题[%s] 主力净流入连续 %d 日为负(均值 %s 亿)" % (
@@ -336,7 +377,20 @@ def theme_buyable(theme):
                 _vf_rec(theme, ok_vf, why_vf)          # 影子：只记录
             dr = dr + " | " + ("[影子]" if not _vf_on() else "") + str(why_vf)
     except Exception as _e:
-        print("[wolf_context] theme_volfund 检查跳过: %s" % str(_e)[:80])
+        print("[wolf_context] theme_volfund 检查异常: %s" % str(_e)[:80])
+        try:
+            import sys as _s4
+            _p4 = os.path.dirname(os.path.abspath(__file__))
+            if _p4 not in _s4.path:
+                _s4.path.insert(0, _p4)
+            from wolf_theme_vol_fund import failclosed_enabled as _fc4, notify_once as _no4
+            if _fc4():
+                _no4("theme_volfund_err:%s" % theme,
+                     "[资金门] 主题[%s] 门检查异常 → 已停止买入：%s" % (theme, str(_e)[:80]))
+                return False, ("选板块第一要素检查异常 → 停止买入（fail-closed，2026-09-15 用户指示）: %s"
+                               % str(_e)[:100])
+        except Exception:
+            pass
     return True, "主题[%s] 可买: stage=%s verdict=%s | %s" % (theme, stage, st.get("verdict"), dr)
 
 

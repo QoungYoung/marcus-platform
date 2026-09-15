@@ -2275,3 +2275,49 @@ dd<3% → −0.857（t −1.71）；dd<5% → −0.823（t −1.77）。
   --by-drawdown --by-drawdown-var CUR --variants V3 --json .dsh-tmp/buyside/eval_cross_cur.json
 # 跨时段：加 --start 20260105 --end 20260512（及 20260512→20260904）
 ```
+
+## 51 资金门「数据读取失败」的处置改为 **fail-closed + QQ 通知**（2026-09-15 用户拍板）
+
+**用户指示**：待定项 #2（资金门读取失败的 fail-open）→「改成停止并QQ通知我」。
+
+### 51.1 先查生产实测（关键，决定能不能直接改）
+
+| 门 | 数据源 | 今天（2026-09-15）实测 6 个主题 |
+|---|---|---|
+| **P2-2** `theme_fund_danger` | `concept_hist.net_amount` | **全部「主题内可用资金序列不足(0) → 放行」** → 该门**长期无数据、天天放行** |
+| **P1** `theme_volfund_ok` | relay 日频 `moneyflow`（`data/theme_mf_daily.json`） | 判定**有效**：新能源/电池、半导体/芯片「量能不活跃」；农业「资金连续5日净流出」；光刻机(胶)「量能序列不足(0<15)」 |
+
+并确认 `concept_hist.net_amount` 是**前值填充**（抽 3 个概念，末 5 值全同）。
+
+⇒ **若直接对 P2-2 施加 fail-closed，会每天拦掉所有主题 = 买入全停**。所以本轮先**修数据源**再改策略。
+
+### 51.2 改了什么
+
+1. **新增开关 `WOLF_FUND_GATE_FAILCLOSED`（默认 1 = 用户要的新行为）**：
+   量能/资金**数据读取失败**（序列不足 / 空 / 前值填充全同 / 取数异常）→ **判不通过（停止买入）** 并发 QQ 通知；
+   置 `0` 恢复旧的 fail-open（放行）。
+2. **`wolf_theme_vol_fund.py`**：
+   * `check()` 在三处「数据不足/陈旧」分支上标注 `detail["data_missing"]=True` + `missing_kind`（**纯函数返回值不变**，策略由调用方施加）；
+   * 生产入口 `theme_volfund_ok()` 施加策略：数据缺失 + fail-closed → 返回 `(False, "…停止买入（fail-closed…）")` 并**通知**；
+   * 新增 `failclosed_enabled()` / `notify_once(key,msg)` / `_send_qq(msg)`：通知按 **(当日, key)** 去重，
+     发送链 = `app.services.qqbot_service.send_qq_notification`（服务侧封装，含默认收件人）→ `core/qq_notifier` + `QQ_NOTIFY_OPENID` → 仅落盘；
+     同时落 `data/fund_gate_alerts_<date>.json` 与 `data/fund_gate_alerts.jsonl`；**任何异常都不抛**（通知失败不影响交易）。
+3. **`wolf_context.py`**：
+   * `theme_fund_danger`（P2-2）**先走 relay 日频资金序列**（与 P1 同源、生产可用；单位万元→亿元按 /1e4 显示），
+     拿不到再退 `concept_hist`；**两边都不足 → 按开关处置**（默认停止买入 + 通知）；
+   * `theme_buyable()` 里 P1 检查**抛异常**的分支：原来只 print 后放行 → 现在 fail-closed 时**拦 + 通知**。
+
+### 51.3 测试与验证
+
+* 单测 `backend/tests/test_fund_gate_failclosed.py`（4 项）：`check()` 三处标注；默认 fail-closed 时 `theme_volfund_ok` 返回 False + 通知（**同键去重**）；
+  `WOLF_FUND_GATE_FAILCLOSED=0` 恢复放行；`_fund_data_missing` 两种开关下的判定；
+* 生产部署后待验：P2-2 应给出**真实判定**（不再「序列不足(0)」）。
+
+### 51.4 复现
+
+```bash
+.venv/bin/python -m pytest backend/tests/test_fund_gate_failclosed.py -q
+# 容器内看两处门的实际判定与告警文件
+docker exec marcus-worker python -c "import sys;sys.path[:0]=['/app','/app/core','/app/apps/main_line'];\
+import wolf_context as WC; print(WC.theme_fund_danger('农业'))"
+```
