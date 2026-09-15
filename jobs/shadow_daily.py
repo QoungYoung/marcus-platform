@@ -163,6 +163,43 @@ def main():
         j = _j(f, {}) or {}
         rep["items"]["ma144"] = {"file": os.path.basename(f), "state": j.get("state") or {},
                                  "extra": j.get("extra") or {}}
+    # ⑫ 白线在上 ∧ 缩量（round 40 补；门已正式开启 → 每日必看）
+    f = _latest("line_regime_shadow_*.json")
+    if f:
+        j = _j(f, {}) or {}
+        rep["items"]["line_regime"] = {"file": os.path.basename(f), "state": j.get("state") or {},
+                                       "extra": j.get("extra") or {}}
+    # ⑬ 大盘级量能档位（1WE/1.5WE/2WE）
+    f = _latest("market_vol_shadow_*.json")
+    if f:
+        j = _j(f, {}) or {}
+        rep["items"]["market_vol"] = {"file": os.path.basename(f), "state": j.get("state") or {},
+                                      "extra": j.get("extra") or {}}
+    # ⑭ 分步回补（缩量条件）
+    f = _latest("step_refill_shadow_*.json")
+    if f:
+        j = _j(f, {}) or {}
+        rep["items"]["step_refill"] = {"file": os.path.basename(f), "gate": j.get("gate"),
+                                       "state": j.get("state") or {},
+                                       "candidates": (j.get("extra") or {}).get("candidates") or []}
+    # ⑮ 均线挂单（13/34/60/144）：各链每条腿挂在哪条线上
+    f = _latest("ma_line_shadow_*.json")
+    if f:
+        j = _j(f, {}) or {}
+        chains = j.get("chains") or {}
+        rep["items"]["ma_line"] = {"file": os.path.basename(f), "lines": j.get("lines"),
+                                   "chains": {th: {"legs": [{"symbol": l.get("symbol"),
+                                                             "k": l.get("ma_line_k"),
+                                                             "dist_pct": l.get("ma_line_dist_pct")}
+                                                            for l in (v.get("legs") or [])]}
+                                              for th, v in chains.items()}}
+    # ⑯ 资金门告警（fail-closed 触发记录；2026-09-15 上线）
+    al = _latest("fund_gate_alerts_*.json")
+    if al:
+        j = _j(al, {}) or {}
+        rep["items"]["fund_gate_alerts"] = {"file": os.path.basename(al), "n": len(j),
+                                            "items": [{"key": k, "msg": (v or {}).get("msg")}
+                                                      for k, v in list(j.items())[:10]]}
     # C3 / C4（本脚本现算）
     rep["items"]["pos_cap"] = c3_position_cap(data_dir, d8)
     rep["items"]["etf_vol"] = c4_etf_vol(data_dir, d8)
