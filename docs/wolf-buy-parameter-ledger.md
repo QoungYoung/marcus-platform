@@ -1391,68 +1391,75 @@ return Path(__file__).parent.parent.parent          # 宿主机分支：与旧�
 docker exec marcus-worker sh -c 'env | grep -c ""'     # → 77
 ```
 
-## 38 影子积累现状：**8 类影子里只有 3 类每天自动落盘**，其余靠"那天真有买腿"（2026-09-15 round 29）
+## 38 影子积累现状（**round 30 已订正**）：8 类影子**都在**每个交易日落盘，只是三类今天才部署
 
-开关要拍板，前提是影子把样本攒够。本轮把"到底攒得怎么样"查清（此前只验证过"影子产物有模块在写"，没验过**每天写不写**）。
+> ⛔ **订正（2026-09-15 round 30）**：本节 round 29 的结论「三段影子写在 `if qualify and pool:` 块内 → 没有确认主题的日子不记」**是错的**。
+> 复核缩进后确认：`jobs/rotation_switch_arm.py` 的 `⑩ 144`（第 768 行 `try:`）、`⑫ 白线`（第 796 行）、`⑬ 大盘量能`（第 818 行）
+> 都在**缩进 4 层**、与 `if pool:`（713）/ `if qualify and pool:`（730）**同级** ⇒ **每次 arm run 都会执行**，
+> 与"今天有没有确认主题"无关。
+>
+> **今天 09:20 的定时 run 之所以没有这三行，是部署时间问题**：生产上
+> `apps/main_line/wolf_ma144_regime.py` = **10:02**、`wolf_line_regime.py` = **10:38**、
+> `wolf_market_volume.py` 与 `jobs/rotation_switch_arm.py` = **11:26**，**全部晚于当天 09:20 的 run**；
+> 而那次 run 的日志里有第 833 行之后的 `BOARD_FILTER` / `PICK_PATH_SUMMARY` ⇒ 脚本确实跑过了这些段，
+> 只是**当时部署的那版脚本里还没有这些段**。`data/*_shadow_20260914.json` 的 11:35 时间戳来自**当天手工跑**（as_of = 上一交易日）。
+>
+> ⇒ **结论改为：三项状态影子速率 = 1/交易日**（arm 任务 `enabled: true`、cron `20 9 * * mon-fri`），
+> **不需要"把状态记录移出 pool 块"这个改动**（原 §38.4 的选项 A/B 一并撤回）。
 
 ### 38.1 生产实测（2026-09-15 13:1x，`/opt/marcus-platform/data/`）
 
-| 影子产物 | 日期文件 | 最后写入 | 每日任务驱动的？ |
+| 影子产物 | 日期文件 | 最后写入 | 每天自动落盘？ |
 |---|---|---|---|
-| `rank_v3_<as_of>.json` | 只有 `20260911` | 09-15 11:32 | ❌ 只在**路径 B**（`wolf_confirm_pick`）跑到时写；今天 `legs_by_source={'pathA': 3}` → 没写 |
+| `rank_v3_<as_of>.json` | 只有 `20260911` | 09-15 11:32 | ⚠️ **只在路径 B（`wolf_confirm_pick`）跑到时写**；今天 `legs_by_source={'pathA': 3}` → 没写（设计问题：没有 leader 选票就无法配对，见 §38.4） |
 | `theme_volfund_shadow_<date>.json` | `20260915` | 09-15 08:57 | ✅ 随选股链（`wolf_context`） |
 | `dip_tol_shadow_<date>.json` | `20260915` | 09-15 13:08 | ✅ 随 TMonitor（254 容差） |
 | `step_refill_shadow_<date>.json` | `20260915` | 09-15 11:20 | ✅ 随 TMonitor（分步回补） |
-| `pick_path_<date>.json` / `pick_health_<date>.json` | `20260915` | 09-15 09:22 | ✅ 随选股（今天起才有第一份） |
-| `board_prefilter_shadow_<date>.json` | `20260915` | 09-15 **11:35** | ⚠️ 写在 arm 的 `BOARD_FILTER` 段（多数日子会到） |
-| `ma_line_shadow_<date>.json` | `20260915` | 09-15 **11:35** | ⚠️ 同上（路径 B/arm） |
-| `ma144_shadow_<date>.json` | 只有 `20260914` | 09-15 **11:35** | ❌ 见 §38.2 |
-| `line_regime_shadow_<date>.json` | 只有 `20260914` | 09-15 **11:35** | ❌ 见 §38.2 |
-| `market_vol_shadow_<date>.json` | 只有 `20260914` | 09-15 **11:35** | ❌ 见 §38.2 |
+| `pick_path_<date>.json` / `pick_health_<date>.json` | `20260915` | 09-15 09:22 | ✅ 随选股（09-15 起才有第一份） |
+| `board_prefilter_shadow_<date>.json` | `20260915` | 09-15 11:35（手工跑） | ✅ arm 的 `BOARD_FILTER` 段（每次 run 都到） |
+| `ma_line_shadow_<date>.json` | `20260915` | 09-15 11:35（手工跑） | ✅ arm（路径 B/arm，每次 run 都到） |
+| `ma144_shadow_<date>.json` | `20260914` | 09-15 11:35（手工跑） | ✅ **每天**（09-15 10:02 才部署 → 下一交易日 09:20 起自动写） |
+| `line_regime_shadow_<date>.json` | `20260914` | 09-15 11:35（手工跑） | ✅ **每天**（09-15 10:38 才部署） |
+| `market_vol_shadow_<date>.json` | `20260914` | 09-15 11:35（手工跑） | ✅ **每天**（09-15 11:26 才部署） |
 
-（`11:35` 那几份是**手工跑** `rotation_switch_arm` 留下的；每日 09:20 的定时 run 日志里**没有** `MA144` / `LINE_REGIME` / `MARKET_VOL` 任何一行。）
+### 38.2 为什么 round 29 会看错（教训）
 
-### 38.2 机制：⑩⑫⑬ 三段影子写在 `if qualify and pool:` **块内**
+* 只看"某类影子只有一份文件、且时间戳晚于定时 run"，就推断了"机制上不记"——**没有核对缩进层级**
+  （`if qualify and pool:` 块的边界在 744 行就结束了，三段在 762 行之后、块外）；
+* 也**没有核对"这段代码是什么时候部署到生产的"**——定时 run 用的是**当时**那版脚本，
+  拿今天的 run 日志去证明"今天新写的段不会执行"，是无效证据。
 
-`jobs/rotation_switch_arm.py:730` ⇒ `if qualify and pool:`（`qualify` 默认开），
-而 `pool = [t for t in confirmed_today_set if t != "银行"]`（第 708 行）= **今日主线确认主题池**（剔除银行）。
-没有"今日确认主题"的日子，整块跳过 → 144 / 白线 / 大盘量能三类影子的状态**根本不记**。
+### 38.3 现在的真实节奏
 
-历史 9 次 arm run（09-04 → 09-15）里，只有 **4 次**有 `CONFIRMED_POOL`（09-09、09-10 各两次，全是「农业」）：
+* 144 / 白线 / 大盘量能：**1/交易日**（arm 09:20 每次 run 都写；三项各自 `*_shadow_enabled()` 默认开）；
+* `rank_v3`：只在**当天走路径 B** 的日子写 → 频率取决于路径 A/B 的分布（近两周日志里路径 A 占多数）；
+* 要重判 §17/§26 那类"跨时段"结论，**约 2 周**可攒到 10 个交易日样本（不必等一个多月）。
 
-```
-725978db 09-04 -        3e764648 09-07 -        0d1e0f4f 09-09 CONFIRMED_POOL ['农业']
-873b8e66 09-09 ['农业'] 0064124e 09-10 ['农业'] 9d4feef4 09-10 ['农业']
-b60aba38 09-11 -        c241b028 09-14 -        45f74226 09-15 -（今天 pool=[]）
-```
+### 38.4 撤回与遗留
 
-### 38.3 后果（直接影响拍板节奏）
+* **撤回**：round 29 提出的"选项 A / 选项 B（把状态记录移出 pool 块）"——**前提不成立，不需要这个改动**；
+  验收总页 §3 的第 4 项决策同步撤回。
+* **遗留（真问题，但不是闸门问题）**：`rank_v3` 影子的配对方式是"v3 会选谁 vs 现行 leader 实际选谁"，
+  而 **leader 选票只在路径 B 产生**；走路径 A 的日子没有 leader 选票可配对。
+  若要让 v3 影子每天都有记录，需要先定"路径 A 的日子拿什么当对照"（例如同日同主题下**不排序**的池内等权，或路径 A 实际挂的腿）——
+  这属于**验收口径**问题，**待您拍板**。
 
-* 全量速率 ≈ **0.4 次/交易日**（还要乘上"那天真的有腿"）；
-* 144 / 白线 / 大盘量能这三条要攒"跨时段样本"（总账 §17/§26 的结论就是"单时段伪显著"），
-  按当前速率**要一个多月**才够重判；而 `rank_v3` 只在路径 B 的日子写，更慢；
-* 也就是说：**开关能不能翻，瓶颈不在"证据不足"而在"影子没在积累"** —— 这是可以工程解决的。
-
-### 38.4 建议（**待您拍板**，两条路）
-
-| 选项 | 做法 | 代价 |
-|---|---|---|
-| **A 接受慢速** | 什么都不改，等有腿的日子自然攒（≈0.4/交易日） | 重判要等 1–2 个月 |
-| **B 把"状态记录"移出 pool 块**（推荐） | 在 `if qualify and pool:` 之后新增一段：`*_shadow_enabled()` 为真就记录**当日状态**（144/白线/大盘量能），`buy_legs` 为空就记空 —— **纯增量落盘、不碰任何决策**（闸门逻辑仍留在原块内），约 10 行 + 定向单测 | arm 任务每天多 2 次取数（relay，秒级）；多出的是"无腿日"的状态样本 |
-
-选项 B 的意义：**"状态"本来就不依赖有没有腿**（144 走平没走平、白线在不在上、两市多少成交额，天天都有值），
-把状态与腿解耦后，**每个交易日**都能积累一行，重判周期从"1–2 个月"压到"1–2 周"。
-
-### 38.5 复现
+### 38.5 复现（含"部署时间 vs run 时间"这一步，round 30 补）
 
 ```bash
-# 影子文件与最后写入时间
+# ① 影子文件与最后写入时间
 ls -l --time-style=+%m-%d_%H:%M /opt/marcus-platform/data/*_shadow_*.json
-# 每日 arm run 是否记录了三段状态（应为"没有这一行"）
-python3 - <<'PY'
+# ② 每日 arm run 记了哪些段（对照部署时间判断"是机制不记，还是当时还没部署"）
+python3 - <<'PYX'
 import json,glob,os
 for f in sorted(glob.glob('/opt/marcus-platform/logs/rotation_switch_arm/*.json'), key=os.path.getmtime)[-3:]:
     d=json.load(open(f,encoding='utf-8')); hay=(d.get('output') or '')+(d.get('error') or '')
-    print(os.path.basename(f), [k for k in ('MA144','LINE_REGIME','MARKET_VOL','CONFIRMED_POOL') if k in hay])
-PY
+    print(os.path.basename(f), d.get('started_at'),
+          [k for k in ('MA144','LINE_REGIME','MARKET_VOL','CONFIRMED_POOL') if k in hay])
+PYX
+# ③ 关键一步：这些模块/脚本是什么时候落到生产的？
+ls -l --time-style=+%m-%d_%H:%M:%S /opt/marcus-platform/apps/main_line/wolf_ma144_regime.py \
+   /opt/marcus-platform/apps/main_line/wolf_line_regime.py \
+   /opt/marcus-platform/apps/main_line/wolf_market_volume.py \
+   /opt/marcus-platform/jobs/rotation_switch_arm.py
 ```
