@@ -66,6 +66,9 @@ def main():
     ap.add_argument("--tiebreak", default="ts", choices=["ts", "dist", "flat", "rs", "amt"],
                     help="并列时的次级键（默认 ts 仅作稳定序；防'靠代码序'的伪结论）")
     ap.add_argument("--limit", type=int, default=2, help="每个主题取前 n（与 tier1 的 2 对齐）")
+    ap.add_argument("--by-rank", action="store_true",
+                    help="额外输出『主题内第 k 只腿』与『前 k 只腿组合』的期望表（验收主题内腿数上限）")
+    ap.add_argument("--by-rank-var", default="V3", help="--by-rank 用哪个变体（默认 V3）")
     ap.add_argument("--themes", default="")
     ap.add_argument("--domain", default="lowmid", choices=["lowmid", "cand_low", "cand_lowonly"],
                     help="候选域：lowmid=现行 tier1 域 / cand_low=候选池∩LOW,MID（去掉 r20≥0,rs≥0 闸）/ cand_lowonly=仅 LOW")
@@ -128,6 +131,8 @@ def main():
             order = np.argsort(np.argsort(arr)) / max(1, len(arr) - 1)
             r5_by_day_theme[d] = {t: float(order[k]) for k, t in enumerate(vals)}
 
+    by_rank = collections.defaultdict(list)   # rank k → [(date, ex), ...]
+    topk = collections.defaultdict(list)      # 前 k 只等权 → [(date, ex), ...]
     recs = []          # 每个 (日,主题) 一行：各臂的均值 + 配对数
     for d in days:
         i = panel.di[d]
@@ -215,6 +220,11 @@ def main():
                 strong = weak = False
             # 阶段/二供**委托模块**（单一实现）；eval 只保留域级（板块/硬过滤）与观测
             cur = [rows[k] for k in np.where(pk["t1"])[0]]        # 现行 leader 的 tier1
+            if args.by_rank and args.by_rank_var.upper() == "CUR" and cur:
+                _srt = sorted(cur, key=lambda x: -(x.get("r20") if x.get("r20") is not None else -1e18))
+                for _k, _p in enumerate(_srt[:6]):
+                    by_rank[_k].append((d, _p["ex"]))
+                    topk[_k + 1].append((d, _mean([q["ex"] for q in _srt[:_k + 1]])))
             out = {"d": d, "th": th, "n_base": len(base_rows), "n_cur": len(cur),
                    "theme_r5": theme_r5, "theme_r20": theme_r20,
                    "v_cur": _mean([c["rf"] for c in cur]),
@@ -227,6 +237,10 @@ def main():
                                     qtile_hi=args.qtile_hi, qtile_lo=args.qtile_lo)
                 out["v_" + var] = _mean([p["rf"] for p in picks])
                 out["x_" + var] = _mean([p["ex"] for p in picks])
+                if args.by_rank and var == args.by_rank_var.upper() and picks:
+                    for _k, _p in enumerate(picks[:6]):
+                        by_rank[_k].append((d, _p["ex"]))
+                        topk[_k + 1].append((d, _mean([q["ex"] for q in picks[:_k + 1]])))
                 out["n_" + var] = len(picks)
                 # 与现行 tier1 的重合度
                 if cur and picks:
@@ -289,6 +303,23 @@ def main():
         print("   %s(切%s) %s" % (tag, seg["split_at"],
                                   " ".join("%s=%s" % (a, (seg[a].get("mean") if seg[a].get("n") else None))
                                            for a in ["cur"] + variants)))
+    if args.by_rank:
+        print("\n== 主题内第 k 只腿（变体 %s；同主题超额%%）==" % args.by_rank_var.upper())
+        for k in sorted(by_rank):
+            rows_k = by_rank[k]
+            stt = E._stat(rows_k, [v for _, v in rows_k])
+            print("   第%d只 n=%-5s 超额 mean=%7.3f median=%7.3f win=%.3f block_t=%5s"
+                  % (k + 1, stt.get("n"), stt.get("mean") or 0, stt.get("median") or 0,
+                     stt.get("win") or 0, stt.get("block_t")))
+        print("\n== 前 k 只腿等权组合（theme-day 等权）==")
+        for k in sorted(topk):
+            rows_k = topk[k]
+            stt = E._stat(rows_k, [v for _, v in rows_k])
+            print("   top%d   n=%-5s 超额 mean=%7.3f median=%7.3f win=%.3f block_t=%5s"
+                  % (k, stt.get("n"), stt.get("mean") or 0, stt.get("median") or 0,
+                     stt.get("win") or 0, stt.get("block_t")))
+        res["by_rank"] = {str(k + 1): E._stat(v, [x for _, x in v]) for k, v in by_rank.items()}
+        res["topk"] = {str(k): E._stat(v, [x for _, x in v]) for k, v in topk.items()}
     print("\n[v3] 已写 %s" % args.json)
     return 0
 
