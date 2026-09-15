@@ -2372,3 +2372,28 @@ import wolf_context as WC; print(WC.theme_fund_danger('农业'))"
 docker exec -e SWITCH_ARM_DRY=1 marcus-worker python -u /app/jobs/rotation_switch_arm.py
 docker exec marcus-worker cat /app/data/entry_filter_$(date +%Y%m%d).json
 ```
+
+### 52.5 生产验证（容器内探针，2026-09-15 17:0x）
+
+用**当日真实 confirmed 主题**（`pick_health_20260915.json` → `新能源/电池`、`半导体/芯片`）在 `marcus-worker` 里跑探针
+（`jobs/_tmp_entry_domain_probe.py`，用后删）：
+
+```
+[probe] pathB 新能源/电池   picks=0 status=ok  domain_n=6   (219s)
+[probe] pathB 半导体/芯片   picks=1 status=ok  domain_n=10  (352s)
+[probe] 候选域合计 16 只；其中有 dist+pos 的 16 只
+[probe] 当日实际买腿: ['SZ002185', 'SH603823', 'SH603650', 'SH600353']
+ENTRY_FILTER_DOMAIN n=16 src=cand cut_hi=0.04 cut_lo=-2.03 idx_ret20=-3.16 legs=4 blocked=1
+[probe] 新口径(cand) → kept=['SH603823','SH603650','SH600353']
+        blocked=[{'symbol': 'SZ002185', 'why': '距前低高档(4.54≥0.04) ∧ 半强收盘(pos=0.75∈[0.5,0.8)) → 不买（§50 交叉格）'}]
+ENTRY_FILTER_DOMAIN n=4  src=legs cut_hi=None cut_lo=None legs=4 blocked=0
+[probe] 旧口径(legs) → kept=全部 4 条，blocked=[]
+```
+
+**读数**：
+1. 候选域**真的来了**（16 只，两种路径都透出：路径 B 6+10 只，带 `dist_prevlow/pos/ret20`）；
+2. 新口径下闸门**真的会拦**：`SZ002185` 距前低 4.54%（域内上三分位门槛 0.04%）∧ 收盘落在当日区间 0.75（∈[0.5,0.8)）
+   → §50 交叉格命中，被剔除；
+3. 同一批腿在旧口径（`qdomain=legs`）下 `cut=None` → 一条不拦 —— **直接对照出 round 39「已接入但未生效」**；
+4. 域小（6~10 只/主题）说明"当日候选域"本身不宽：这是当前生产选股口径（组内前2 ∩ 容量 50% ∩ LOW/MID）的真实宽度，
+   若后续要让分位更稳，可考虑把域放宽到"候选池全域（含 HIGH 位置）"或滚动多日 —— **属下一轮的口径决策，未做**。
