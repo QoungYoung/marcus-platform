@@ -1622,3 +1622,53 @@ docker exec marcus-worker python /app/jobs/scan_exec_thresholds.py
 
 命中量级参考（全表）：回补 235 / 不追高 83 / 做T价差 76 / 持仓只数 38 / 手续费 21 / 量能档 19 /
 分批 10 / 加仓档距 9 / **每日亏损与冷却 0**。
+
+## 41 覆盖率的第三档：**函数字面量旋钮**（2026-09-15 round 32）—— 补扫 128 条，真正影响买入链的只有 3 条
+
+objective ① 要的是「买入链**全部**可调参数」。§19 已经证过"人工清单会漏"，于是上了 AST 扫描；
+但那次扫描面只有 **env 键 + 模块级大写常量** —— 还剩一类没盖到：**函数签名默认值 / 局部数字字面量**
+（`def pick_v2(..., limit=2)`、`look = 8`）。改它同样改变"买什么/买几只/何时买"，却不在任何清单里。
+
+### 41.1 做法
+
+新工具 `jobs/scan_literal_params.py`（AST）：
+
+* 抓 **① 形参默认值是数字字面量**、**② 赋值右侧是数字字面量**；
+* 名字过两道词表：**策略语义**（`limit|top|days|win|window|max|min|pct|ratio|thr|tol|gap|frac|cap|floor|lookback|confirm|fresh|stale|share|legs|qty|weight|score|drop|rise|slope|band|rank|k`）收，
+  **工程语义**（`timeout|sleep|interval|port|retry|ttl|cache|worker|width|precision|chunk|page|backoff|depth|train|trial|epoch|fold|seed`）不收；
+* 排除回测/审计/A-B/临时脚本（`backtest*`、`ab_*`、`audit*`、`tmp_*`、`bt_*`…）。
+
+命中：**生产买入链 128 条 / 62 个文件**（`--all` 含回测脚本共 179 条）。
+
+### 41.2 判定：只有 3 条与「买什么/买几只」有关，且都不是新判据
+
+| 位置 | 字面量 | 判定 |
+|---|---|---|
+| `wolf_confirm_pick.pick_v2(limit=2)` | 每主题默认 2 只 | **已被 `pick.limit` 条目覆盖**（tier1 每主题 2 只）；生产由调用方传 `ROT_POOL_LEGS=4` → 字面量只在 CLI 直调时生效 |
+| `t_build.scan_t_candidates(limit=20)` | 做T候选扫描上限 20 | 影响**扫描广度**、不直接决定买什么 → 工程/护栏（已登记 `tpool.scan_limit`）|
+| `t_ai_agent.ai_select_and_build(select_limit=5)` | AI 选股建仓上限 5 | 语料无对应数值；他的口径是每方向 2–3 只（§40.3a）→ 自设（已登记 `tai.select_limit`）|
+
+其余 125 条按类备案（**不是策略参数**）：
+
+* **交易规则常量**：`position_tier_monitor` 的 `add_shares = 100` 是「不足 100 股时强制买 100 股」= **A 股最小下单单位**，不是策略值；
+* **执行/兑现侧形态窗口**（属出场/做T层，本任务不碰）：`t_monitor.look=8`（分时T出：放量反弹→第一次高点→停量→二次拉升无量的 5 分钟 bar 窗口）、`t_signal.t_sell(look=10)`、`shrink_to_expand(look=5)`、`_t_confirmed.t_sell_confirmed(look=5)` / `buy_idx(thr=2.5)`；
+* **ML/统计/抓取**：`n_trials=50`、`train_days=120`、DB 列表 `limit=100`、NGA `max_floors=40`、AST `depth=0`；
+* **非主路径工具**：`confirm_chain.min15_stand(look=20, stand_n=3)`、`mainline_act(look=5)`、`_local_lows(look=60)`、`detect_new_theme._strength(days=5)`
+  —— `confirm_chain` 只被 `trade_graph` 与回测脚本引用，**不在生产选股链**。
+
+### 41.3 结论
+
+* objective ① 的「全部可调参数」现在有**两档扫描面**覆盖：env/大写常量（§19，304 条未收录）+ 函数字面量（§41，128 条）；
+  **没有新的、需要语料判定的买入参数藏在字面量里** —— 3 条里 2 条是工程/护栏、1 条已被现有条目覆盖；
+* 判据固化：算不算"要跟语料对齐的旋钮"，问**「它变了会不会改变下单行为」**（§40.4 同款）；
+* 已把这 3 条登记进 `jobs/build_param_ledger.py` 的 `INVENTORY`（收录 **44 → 47**），以后 `--coverage` 会统计到它们；
+* 定向单测 `backend/tests/test_scan_literal_params.py`（3 项）：策略名收 / 工程名与非字面量不收 / **§41 登记的三条扫描器必须真能看见**（防"文档写了、工具看不见"）。
+
+### 41.4 复现
+
+```bash
+.venv/bin/python jobs/scan_literal_params.py            # 生产买入链（默认）
+.venv/bin/python jobs/scan_literal_params.py --all      # 含 core/apps/jobs 全量
+.venv/bin/python jobs/build_param_ledger.py --coverage  # 收录数应为 47、条目过期 0
+.venv/bin/python -m pytest backend/tests/test_scan_literal_params.py -q
+```

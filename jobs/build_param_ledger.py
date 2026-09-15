@@ -130,6 +130,16 @@ INVENTORY = [
          value="0.5", source="env 默认"),
     dict(id="rank.fusion.weights", cat="排序", name="leader 三因子权重（r60/amt20/涨停 等权）",
          loc="wolf_confirm_pick.pick_v2 / rotation_switch_arm.pick_buy", value="各 1/3（等权）", source="代码默认"),
+    # ── 函数字面量档（2026-09-15 round 32 补扫发现：函数默认值/局部字面量不在任何扫描面内，见总账 §41）──
+    dict(id="pick.pick_v2_limit_literal", cat="选股", name="pick_v2 默认每主题只数（字面量默认值）",
+         loc="wolf_confirm_pick.pick_v2(limit=2)", value="2", source="代码默认（函数字面量）",
+         note="语义同 pick.limit；生产由调用方传 ROT_POOL_LEGS=4，字面量只在 CLI 直调时生效"),
+    dict(id="tpool.scan_limit", cat="执行", name="做T候选扫描上限（字面量默认值）",
+         loc="t_build.scan_t_candidates(limit=20)", value="20", source="代码默认（函数字面量）",
+         note="影响候选扫描广度，不直接决定买什么"),
+    dict(id="tai.select_limit", cat="执行", name="AI 选股建仓上限（字面量默认值）",
+         loc="t_ai_agent.ai_select_and_build(select_limit=5)", value="5", source="代码默认（函数字面量）",
+         note="语料无对应数值；他的口径是每方向 2-3 只（§40.3a）"),
 ]
 
 # ── 2) 语料判定（人工/模型判定，写在这里；quote 必须来自取证产物并已逐字校验） ──
