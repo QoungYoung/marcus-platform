@@ -104,3 +104,17 @@ def test_arm_is_wired_shadow_first():
     assert "MA144_GATE 拦下" in src
     # 影子先记（raw_legs_n），再判断闸门 → 保证影子不受闸门影响
     assert src.index("shadow_record(") < src.index("MA144_GATE 拦下")
+
+
+def test_gate_mode_default_is_above_and_switchable(monkeypatch):
+    """2026-09-15 拍板：默认口径改挂 ② 收盘 ≥ MA144；置 slope 回到旧口径。"""
+    import importlib
+    M = importlib.import_module("wolf_ma144_regime")
+    monkeypatch.delenv("WOLF_MA144_MODE", raising=False)
+    assert M.gate_mode() == "above"
+    st = {"ok": True, "above": False, "allow_slope": True}      # 收盘在下方但斜率达标
+    assert M.allow(st) is False                                 # 新口径：收盘下 → 拦
+    monkeypatch.setenv("WOLF_MA144_MODE", "slope")
+    assert M.allow(st) is True                                  # 旧口径：斜率达标 → 放行
+    monkeypatch.delenv("WOLF_MA144_MODE", raising=False)
+    assert M.allow({"ok": False}) is True                       # 数据缺失仍 fail-open

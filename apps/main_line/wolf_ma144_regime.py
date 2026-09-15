@@ -176,14 +176,29 @@ def state(as_of: Optional[str] = None) -> Dict[str, Any]:
     return state_from(closes(), as_of=as_of)
 
 
+def gate_mode() -> str:
+    """闸门口径：`WOLF_MA144_MODE`（2026-09-15 用户拍板改挂 ②）。
+
+    · `above`（**默认，现用**）= **收盘 ≥ MA144**（他的话「我的牛熊分界线是 日K144线…那是我的最后底线」2026-03-20）；
+    · `slope`（旧口径）= 斜率(20天) ≥ 0 为主，斜率算不出才退收盘 —— 该口径经组合级对照实测
+      **与"关门"几乎无差别（+2.7pp、回撤不变）**，且属伪显著（被拦日全在 2026-08-03→09-11 一段）→ 已停用。
+    """
+    return (os.getenv("WOLF_MA144_MODE", "above").strip().lower() or "above")
+
+
 def allow(st: Optional[Dict[str, Any]] = None) -> bool:
-    """闸门语义：**数据缺失一律放行**（fail-open）；口径=① 斜率≥0（主），斜率算不出时退 ② 收盘≥MA144。"""
+    """闸门语义：**数据缺失一律放行**（fail-open）。
+
+    默认口径 = ② **收盘 ≥ MA144**（`WOLF_MA144_MODE=above`）；置 `slope` 可回到旧的斜率口径。
+    """
     st = st if st is not None else state()
     if not st.get("ok"):
         return True
-    if st.get("allow_slope") is None:
-        return bool(st.get("above", True))
-    return bool(st["allow_slope"])
+    if gate_mode() == "slope":
+        if st.get("allow_slope") is None:
+            return bool(st.get("above", True))
+        return bool(st["allow_slope"])
+    return bool(st.get("above", True))
 
 
 def shadow_record(extra: Optional[Dict[str, Any]] = None) -> Optional[str]:

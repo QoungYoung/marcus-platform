@@ -139,6 +139,33 @@ def main():
     days = sorted(per_day)
     print("[comb] 交易日 %d 天，总腿数 %d" % (len(days), sum(len(v) for v in per_day.values())))
 
+    # ── 增量对照：把「收盘<MA144」拦掉的日子，拆成"现有门本来就没腿可布"与"只有 144 会拦" ──
+    am_above = allow_map(rows, "above", win=20)
+    base_days = {d for d in days if per_day.get(d)}          # 当天至少有一条可布的腿
+    no_leg_days = [d for d in days if d not in base_days]     # 当天本来就没腿（现有门/选股已空）
+    blk = [d for d in days if not am_above.get(d, True)]
+    only144 = [d for d in blk if d in base_days]              # 144 会拦、但当天本来有腿
+    already = [d for d in blk if d not in base_days]
+    print("\n== 增量对照（代理口径：现有门已空 = 当天本来没有可布的腿）==")
+    print("   全窗口 %d 天 | 收盘<MA144 共 %d 天 → 其中【本来就没腿】%d 天、【本来有腿被 144 拦】%d 天"
+          % (len(days), len(blk), len(already), len(only144)))
+    print("   无腿天数（全窗口，与 MA144 无关的门/选股造成的）= %d 天（%.0f%%）"
+          % (len(no_leg_days), 100.0 * len(no_leg_days) / max(1, len(days))))
+    # 四格腿期望（腿级，比"日均"更能说明增量）
+    grid = {"allow&has_legs": [], "block&has_legs": [], "allow&no_legs": [], "block&no_legs": []}
+    for d in days:
+        key = ("allow" if am_above.get(d, True) else "block") + ("&has_legs" if d in base_days else "&no_legs")
+        grid[key].extend(per_day.get(d) or [])
+    for k, v in grid.items():
+        if v:
+            print("   %-16s 腿数=%-5d 腿均收益=%+.3f%%" % (k, len(v), float(np.mean(v))))
+        else:
+            print("   %-16s 腿数=0" % k)
+    if only144:
+        v = [x for d in only144 for x in (per_day.get(d) or [])]
+        print("   → **只有 144 会拦的那些天**：%d 天 / %d 条腿 / 腿均收益 %+.3f%%（这就是增量部分）"
+              % (len(only144), len(v), float(np.mean(v)) if v else 0.0))
+
     modes = [("off", None), ("slope20", ("slope", 20)), ("slope40", ("slope", 40)), ("above", ("above", 20))]
     print("\n%-9s %10s %9s %9s %9s %9s %9s" % ("口径", "累计收益%", "日均%", "腿数", "停买天", "最长连停", "最大回撤%"))
     for name, m in modes:
