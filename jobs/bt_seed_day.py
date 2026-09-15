@@ -325,9 +325,19 @@ def main() -> int:
     #   （实测 09-11：生产那份 updated_at=2026-09-11 08:00:46，main_line=稳增长/基建、candidates 含 AI/传媒；
     #    而 09-10 的 D1 select 只给 农业 —— 两者是不同写入方，用错就会把主题选偏、连带确认域与腿全偏）。
     # 选择顺序：_archive/<T>（19:50 快照，若未被当日链重写则就是早间那份）→ _archive/<cut> → DB(daily_artifacts)。
+    # ⚠️ **必须把"带日期变体"也列进候选**：09-09 的 `main_line_state_20260909.json` 一直存在，
+    #    但旧链（`_archive/<T>/main_line_state.json` → `_archive/<cut>/…` → DB artifact）没列它
+    #    → 掉到"当期活文件"兜底 → 主题/池/腿全偏（实测 09-09 回放 main=半导体/芯片，生产是 消费/内需）。
+    _cands = []
+    for d8, tag in ((T, "T"), (cut, "cut")):
+        _cands += [
+            (os.path.join(SRC, "_archive", d8, "main_line_state.json"), "archive_%s" % tag),
+            (os.path.join(SRC, "_archive", d8, "main_line_state_%s.json" % d8), "archive_%s_dated" % tag),
+            (os.path.join(SRC, "main_line_state_%s.json" % d8), "%s_dated" % tag),
+            (os.path.join(SRC, "main_line_state_%s-%s-%s.json" % (d8[:4], d8[4:6], d8[6:])), "%s_dated_dash" % tag),
+        ]
     _picked = None
-    for d8, tag in ((T, "archive_T"), (cut, "archive_cut")):
-        cand = os.path.join(SRC, "_archive", d8, "main_line_state.json")
+    for cand, tag in _cands:
         if not os.path.exists(cand):
             continue
         dd = _jload(cand, {}) or {}
@@ -338,9 +348,17 @@ def main() -> int:
         _picked = {"src": tag, "path": cand, "updated_at": dd.get("updated_at"), "date": dd.get("date"),
                    "main_line": dd.get("main_line")}
         rec("main_line_state.json", _picked)
+        print("[seed] main_line_state.json ← %s（%s, main_line=%s）" % (tag, cand, dd.get("main_line")), flush=True)
         break
     if not _picked:
-        rec("main_line_state.json", from_archive_or_db("main_line_state.json", cut, os.path.join(sb, "main_line_state.json")))
+        got = from_archive_or_db("main_line_state.json", cut, os.path.join(sb, "main_line_state.json"))
+        rec("main_line_state.json", got)
+        _ok = isinstance(got, dict) and got.get("src") not in (None, "live_file_STALE?")
+        if not _ok:
+            # 三处都没有 → **显式标 fatal**，不要静默用当期活文件（否则"没跑对"会被当成"确实没腿"）
+            man["fatal"] = "main_line_state_unavailable(T=%s, cut=%s)" % (T, cut)
+            print("[seed] ⛔ FATAL main_line_state 三处都取不到（T=%s cut=%s）→ 本日主题/池/腿不可信" % (T, cut),
+                  flush=True)
 
     # ③c 沙箱兜底：把生产 data 下**其余文件**软链进来（脚本缺输入时才不会炸）；
     #     已知产物先建成真实空文件 → 任何写入都落在沙箱里，**绝不会穿透到生产文件**。
@@ -421,10 +439,14 @@ def main() -> int:
 
     # ④ as-of 打桩：跑没有 --date 的生产脚本（钉时钟 + 本地日线 + 沙箱 DATA_DIR）
     #    顺序 = 概念高低位 → 子方向 → 方向层池 → 确认域（后面的依赖前面的产物）
+    # ⚠️ 生产 08:05 只有**一个**任务：`rotation_universe_refresh` = `derive_sub_universe.py --refresh-result`，
+    #    它**一次写两个产物**（`rotation_sub_universe.json` + `rotation_universe_result.json`）。
+    #    早期版本这里多跑了一个 `rotation_universe.py` 并把池文件**覆盖**掉 → 池的 `room_bottom` 与生产不同
+    #    （实测 09-10：生产 [免税概念,短剧互动游戏,数字货币] vs 回放 [Kimi概念,智谱AI,AI语料]），
+    #    买链因此整体偏掉、腿级 0/8。**别再加回来**。
     PINNED = [
         ("position_class_result.json", "apps/main_line/position_class.py", []),
         ("rotation_sub_universe.json", "apps/main_line/derive_sub_universe.py", ["--refresh-result"]),
-        ("rotation_universe_result.json", "apps/main_line/rotation_universe.py", []),
         ("stock_confirm_result.json", "apps/main_line/stock_confirm_judge.py", []),
     ]
     if a.no_shim:
@@ -472,6 +494,10 @@ def main() -> int:
     for k, v in man["files"].items():
         if v.get("src") == "MISSING":
             print("       ❌ MISSING %s" % k)
+    if man.get("fatal"):
+        print("[seed] ⛔ FATAL %s —— 沙箱可用，但本日主题/池/腿**不可信**（勿把它当成\"确实没腿\"）" % man["fatal"],
+              flush=True)
+        return 4
     return 0
 
 

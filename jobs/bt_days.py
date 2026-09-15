@@ -108,6 +108,18 @@ def main() -> int:
                          os.path.join(a.out, "seed_%s.log" % d8), timeout=3600)
             entry["steps"]["seed"] = {"rc": rc, "s": round(dt, 1)}
             print("[days] %s seed rc=%d %.0fs" % (d8, rc, dt), flush=True)
+            # ⛔ seed 非 0 = 该日 as-of 输入不可信（如 main_line_state 三处都取不到）→
+            #   **不要**照常跑布腿：否则"没跑对"会被记成"生产当天就是 0 条腿"，直接污染对账。
+            if rc != 0:
+                entry["blocked"] = "seed_rc=%d" % rc
+                try:
+                    _m = json.load(open(os.path.join(sb, "_seed.json"), encoding="utf-8")) or {}
+                    entry["blocked_reason"] = _m.get("fatal") or entry["blocked"]
+                except Exception:
+                    entry["blocked_reason"] = entry["blocked"]
+                by_day[d8] = entry
+                print("[days] %s ⛔ 阻断：%s（跳过两条布腿路径）" % (d8, entry["blocked_reason"]), flush=True)
+                continue
         # 备份"当天(cut)口径"的确认域，供 08:18 用完还原
         try:
             import shutil

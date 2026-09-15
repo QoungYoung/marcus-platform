@@ -643,3 +643,25 @@ main=… subs=… | [子概念…] | {池 JSON}`）→ 新增 `jobs/bt_input_div
 **本轮另外修掉的一个静默崩溃**：`bt_day_legs.py` 的诊断打印调用 `arm.theme_of_chain(c)`，
 而早期版本树没有这个函数（rev_5a6327…）→ **整个 09-10 布腿路径 AttributeError 崩掉、静默变成 0 条腿**。
 已改成容错取值（`getattr(arm, "theme_of_chain", None)`）。
+
+### 9.17 第 7 轮（续）：两个"输入版本"修复 + 失败**不许静默**（改动都隔离、可回退）
+
+**① 生产 08:05 只有一个任务：`rotation_universe_refresh` = `derive_sub_universe.py --refresh-result`**
+（`config/tasks.yaml` 里 `script.path` 就是它，args `["--refresh-result"]`），它**一次写两个产物**
+（`rotation_sub_universe.json` + `rotation_universe_result.json`）。而我的 `bt_seed_day.py` 的 PINNED 列表里
+**多跑了一个 `apps/main_line/rotation_universe.py` 并把池文件覆盖掉** → 池的 `room_bottom` 与生产不同
+（09-10：生产 `[免税概念,短剧互动游戏,数字货币]` vs 回放 `[Kimi概念,智谱AI,AI语料]`）→ 买链整体偏、腿级 0/8。
+**已删掉那一行**（生产根本没跑它；注释写明"别再加回来"）。
+
+**② `main_line_state.json` 选择链补"带日期变体"**：`_archive/<d>/main_line_state_<d>.json`、
+`<DATA_DIR>/main_line_state_<d>.json`、横杠变体 —— 09-09 的 `main_line_state_20260909.json` **一直存在**，
+旧链没列它才掉到当期活文件（回放 main=半导体/芯片，生产 08:05 是 消费/内需）。保留 `updated_at ≤ T` 校验。
+
+**③ "三处都没有"从静默降级改成显式失败**（`fatal` 标记 + seed 非 0 退出）：
+`bt_seed_day` 记 `man["fatal"]="main_line_state_unavailable(...)"` 并 `return 4`；
+`bt_days` 见 `rc!=0` 就把该日记成 `blocked`（带 `blocked_reason`）并**跳过两条布腿路径** ——
+因为"没跑对"与"生产当天确实 0 条腿"必须能区分，否则对账分母是假的。
+
+重跑范围：**09-09 / 09-10 / 09-14**（沙箱根 `_bt_sep2`，09-11 作对照应保持 9/9）。
+已知 09-14 仍会偏：那天**早晨**的 `main_line_state` 版本在归档/日期文件/DB 三处都没有（只有 09-11 那份），
+而生产 08:05 derive 用的 main=半导体/芯片（见 §9.16 表）。
