@@ -501,3 +501,43 @@ hold=10 同向：Δ（F2−现行）253 **+0.491pp** / 254 +0.734pp；Δ（对�
 复现：`.venv/bin/python jobs/build_param_ledger.py --coverage --json .dsh-tmp/buyside/param_coverage.json`
 
 **下一步（待用户定）**：这 92 个执行侧阈值要不要逐条给语料判定？建议只对**影响成交/风险敞口**的少数几条做（如 `MAX_DAILY_BUY_LEGS=2`、`STOP_LOSS_PCT=0.03`、`MIN_T_SPREAD_FILTER=0.002`、`COOLDOWN_AFTER_LOSS_MIN=15`、`WOLF_REFILL_*` 回补规则），其余按「系统护栏、非策略判据」备案即可。
+
+## 20 覆盖率体检的正面结果：**语料已对齐但此前未入账**的买入侧参数（round 13）
+
+§19 的 **304 个未入账旋钮**里，方向/买点相关的那些**多数其实早已按语料实现**（A5/A6/G5/G7/G8/G9 等工作流的产物），
+只是没进总账的 `INVENTORY` → 人工清单看起来像"没对齐"。它们每个模块的 docstring 都带**原话**（本项目house style），
+下表把它们登记进账（原话列直接取自模块 docstring；⚠️ 少数模块的原话在文件后段，本表取的是首条）：
+
+| 模块 | 未入账参数（生产值） | 模块自带语料原话（日期 + 摘句） |
+|---|---|---|
+| `wolf_gap_open` | `WOLF_GAP_CAUTION=1`、`WOLF_GAP_OPEN=1` | 2025-04-15、2025-11-23 我的买卖做T方法 |
+| `wolf_day_rules` | `WOLF_SHADOW_RATIO=0.3`、`WOLF_UP_DAY_PCT=1.0` | 2025-01-23、2025-05-06 **大涨之日少买票，多卖票，大跌之日多买票 少卖票**。因为指数方面没什么太大隐患… |
+| `wolf_trade_window` | `WOLF_TRADE_WINDOW=1` | 2025-03-06、2025-04-15 我的买卖做T方法 |
+| `wolf_direction_position` | `WOLF_DIRECTION_POS_MAX_AGE_H=48` | 2026-09-04、2026-09-14 之前的高位方向 大科技这些，**避开公墓重仓的同时，卖强的 留弱的 拉升后都走**。 之前的低位方向 AI软券商军工这些，避开暴雷ST股的同时，** |
+| `wolf_early_stop` | `EARLY_STAGE_DAYS_DEFAULT=13`、`STOP_PCT_DEFAULT=3.0`、`SWING_WIN_DEFAULT=13` | 2022-04-26、2026-01-29 -3%再卖是因为破了-3%就是有效跌破了吧 |
+| `wolf_hedge_refill` | `MAX_AGE_DAYS=10`、`WOLF_REFILL_CHASE_MAX=0.01`、`WOLF_REFILL_DAYS=2` | 2025-04-29、2025-09-24 2点半 如果还是缩量 还是不拉升 我会先把这两天T进去的仓位出来一半 防止周末出利空 **这样周一再拿回来**。出于仓位安全考虑 65%仓位过周末。 |
+| `wolf_253_build` | `WOLF_REFILL_MAX_WINDOW=2` | 2026-09-10 来来回回做几次就行了 |
+| `wolf_weekend_hedge` | `WOLF_WH_HOLIDAY_HM=10:00` | 2025-04-29、2025-05-20 **2点半 如果还是缩量 还是不拉升 我会先把这两天T进去的仓位出来一半 防止周末出利空 这样周一再拿回来。 出于仓位安全考虑 65%仓位 |
+| `wolf_trend_stop` | `WOLF_TREND_FRESH_DAYS=5` | 2016-03-30、2016-08-05 **已经成为趋势后**…这个就没意义了 更多应该转为我之前说的趋势波段止盈止损方法 也就是用**趋势线**的方法…**不是一个策略用到底的** |
+| `wolf_limit_ladder` | `GRAD_MIN_N=4` | 2025-04-21、2026-08-20 看第10的涨停板方向主要是观察**哪些梯队结构完整**，**哪些集中毕业照**， **哪些方向上板失败**，用这些来**判断板块的强弱从而推断出接下 |
+| `wolf_neg_event` | `KEEP_DAYS_DEFAULT=30` | 2026-01-29、2026-03-05 是自己逻辑的有效跌破 **除非是意外事件，黑天鹅那种**。如果是**无利空**13日内下跌 那新低后-3%就是逻辑问题 要控制损失就必须止损。后面涨 |
+| `wolf_fib_target` | `WOLF_FIB_RATIO=0.618` | 2025-04-01、2025-05-27 我说一下 我个人认为 如果手上的泛科技票 如果**超过或者到了 个股的前一波拉升幅度的 0.618 位 就是我的止盈点了** 这个个股的止盈位置 |
+| `wolf_volume_gate` | `_TOTAL_MIN=240.0` | 2026-08-19、2026-08-20 这里**不上3WE的突破就是诱多** 简单直接的结论。 |
+| `wolf_index_breadth` | `WOLF_HB_CROSS_WIN=15` | 2025-04-15、2026-01-20 我的买卖做T方法 |
+| `wolf_context` | `WOLF_FLUSH_DAY_PCT=-3.0`、`WOLF_INDEX_STOP_MAX_STALE_DAYS=3`、`WOLF_SLOW_DECLINE_DAYS=5`、`WOLF_SLOW_DECLINE_MAX_PCT=6.0`、`WOLF_SLOW_DECLINE_MIN_PCT=1.0` | 2025-06-05、2025-07-28 要么继续震荡，但是**主线板块筑底行情**…**急杀可以买，缓跌不买** |
+| `wolf_mainline_select` | `WOLF_MS_LOOKBACK_DAYS=60` | 2026-01-13、2026-02-07 看看**主线题材动没动**就知道了 |
+| `wolf_confirm_pick` | `WOLF_DIP_PREVLOW_TOL=0.0`、`WOLF_PICK_MAX_LEGS=4`、`WOLF_PICK_TIER2_GAP=8.0` | 2026-09-09、2026-09-13 **小票就太多了 不好判断** |
+| `wolf_theme_vol_fund` | `ACT_DAYS=5`、`VOL_WIN=10` | 2025-06-16、2026-09-15 **选板块的第一要素** |
+| `wolf_etf_vol` | `VOL_THR=3.0`、`VOL_WIN=20` | 2026-08-21、2026-09-15 选半导体仅仅只是因为他**波动大 ETF都有3个点以上的波动** 不然选个别的1个点的ETF没意思 |
+| `wolf_ma144_regime` | `MA_N=144`、`WOLF_MA144_SLOPE_WIN=20` | 2016-07-07、2016-08-15 当K线盘整**144线稍微走平**，那就表明**可以做一个波段趋势**了 |
+| `t_monitor` | `CORPUS_DIP_TOL=0.0`、`LEGACY_DIP_TOL=0.005`、`PULLBACK_END_HM=1445`、`WOLF_CLOSE_BREAK_HM=1455`、`WOLF_DIP_PREVLOW_TOL=None`、`WOLF_EARLY_STOP_DAYS=13`、`WOLF_FLOOR_BREAK=1`、`WOLF_PIVOTS_MAX_STALE_DAYS=10`、`WOLF_POSITION_DISC_MIN=3`、`WOLF_PROFIT_TAKE_PCT=3.0`、`WOLF_PROFIT_TAKE_RATIO=0.5` | 2025-03-06、2026-09-02 就是**挂前一天的低点** 能买进去就做正T |
+| `t_gateway` | `COOLDOWN_AFTER_LOSS_MIN=15`、`COST_RATIO_LIMIT=0.2`、`DAILY_LOSS_WARN_PCT=0.01`、`MAX_SELL_FLOOR_RATIO=1.0`、`MIN_T_SPREAD_FILTER=0.002`、`SLIPPAGE_PCT=0.0003`、`TRIGGER_EXEC_TIMEOUT_MIN=2` | 2026-09-02、2026-09-03 来来回回做几次就行了 |
+| `daily_decision` | `WOLF_DECISION_MAX_AGE_DAYS=` | 2026-09-12 11 种 trigger_kind 在等腿触发 | 
+**模块 docstring 里没找到原话的（=我们自造的执行护栏，建议按 §4 备案）**：
+
+| 模块 | 参数（生产值） |
+|---|---|
+| `rotation_universe` | `ROT_CONFIRM_DAYS=3`、`ROT_NET_DAYS=10`、`ROT_NET_MIN=0`、`ROT_SIG_FRAC=0.1` | 
+**结论**：买入侧"可调参数"的**实际覆盖面**远大于总账原来的 44 条 ——
+把 §19（300 个未入账，其中策略阈值 97 个）与本表合起来，才是"全部可调参数"的真实清单。
+待用户定的一件事：**这 97 个执行侧阈值要不要逐条给语料判定**（建议只做影响成交/风险敞口的少数几条）。
