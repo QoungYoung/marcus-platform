@@ -369,3 +369,29 @@ data/_bt_runs/<T>/
   但更早的版本可能读 `main_line_state.fusion`），再查该日 `mainline_gate_<d>.json` 是否被我们播种成了 **DB 里那份 rebuilt**（实测 rebuilt 的 rows 与真实文件不同）；
 * 09-10：部分重合（3/11）——确认域/主题两个中间量逐条比；
 * 09-14：回测 0 条 —— 该日起主题来源已切到方向层池（`mainline_top_themes`），要确认沙箱的 `wolf_mainline_select.json`（as-of 09-11 再生）与生产当天读到的一致。
+
+### 9.8 第 4 轮：09-08/09-09 的**有界缺口** + 盘中层开工（分钟数据 + 复用生产回测引擎）
+
+**① 09-08 / 09-09 不可精确复现（有界缺口，不是 bug）**
+这两天生产 `switch_builder` 的主题来源是 `main_line_state.json` 的 **`fusion`** 分数（那两天的版本里
+`mainline_confirm_state` 既没有 `gate_top_themes` 也没有 `mainline_top_themes`）。而 `main_line_state.json`
+是**每日覆盖型**文件，09-07/09-08 的版本已丢：归档 `_archive/<d>/` 从 08-11 才有、且只有"带日期产物"，
+DB `daily_artifacts.main_line_state` 只从 08-11 起，旧版 dated 文件（`main_line_state_2026-09-03.json` 等）
+在 09-03 之后就没有了。⇒ 结论：**要精确复现，必须从 08-11（G2 每日存档上线）起；09-10 起腿级已可 100%**
+（实测 09-10 3/3、09-11 9/9、09-14 0/0 与生产一致）。
+
+**② 生产自己的 08:18 计划日志 = 最好的地面真值**
+`logs/tranche_ladder_report/*.json` 每天打印 `buy_new(新方向低吸): …`：
+09-08 13 只 / 09-09 10 只 / 09-10 3 只 / 09-11 9 只 / 09-14 **无** / 09-15 **无** ——
+与我们的重放逐日对比：**09-10、09-11、09-14 完全一致**，09-08/09-09 因上述 `fusion` 缺失而不一致。
+
+**③ 盘中层：分钟数据 + 复用生产回测引擎**
+* `jobs/bt_fetch_mins.py`：按 (symbol, day) 拉 `stk_mins` 5min（含指数码）→ `data/_bt_full/mins/`；
+  实测 9 只腿标的 × 3 天 + 指数 = 27 个文件 / 1315 根 bar（**有 3 个组合首次失败，已加重试重拉**）。
+* `jobs/bt_pack_mins.py`：把分钟缓存打成生产回测引擎认识的布局
+  （`m5/<sym>.json`、`index_m5/sh.json`、`index_daily/<ts>.json`、`stock_daily/<sym>.json`）；
+  两个格式坑：引擎 `build_snapshot_at()` 要求 `time` 是 **`YYYY-MM-DD HH:MM:SS`**（不能用 12 位紧凑串）；
+  `mkt_bars_daily` **不含指数** → 指数日线要从 `data/指数数据/index_daily/000001.SH.csv` 兜底（实测 3090 行）。
+* `jobs/bt_intraday.py`：用 `TBacktestEngine`（生产自带的 m5 回放引擎：逐 bar 快照 → 条件求值 → 护栏 → 撮合）
+  跑单标的单日，并与生产 `t_triggers` 对账。**生产 09-11 的地面真值**：SH600039 只有 `custom_prevlow`
+  触发过（首次 11:00:24，21 次重试），`custom_m5dump` 未触发；SH600977 触发 13 次。
