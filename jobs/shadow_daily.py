@@ -157,6 +157,12 @@ def main():
         j = _j(f, {}) or {}
         rep["items"]["board_prefilter"] = {"file": os.path.basename(f),
                                            "chains": j.get("chains") or {}}
+    # 144 线大级别资格（影子；含当日其它门状态，供增量对照）
+    f = _latest("ma144_shadow_*.json")
+    if f:
+        j = _j(f, {}) or {}
+        rep["items"]["ma144"] = {"file": os.path.basename(f), "state": j.get("state") or {},
+                                 "extra": j.get("extra") or {}}
     # C3 / C4（本脚本现算）
     rep["items"]["pos_cap"] = c3_position_cap(data_dir, d8)
     rep["items"]["etf_vol"] = c4_etf_vol(data_dir, d8)
@@ -210,6 +216,18 @@ def main():
                      ",".join(v.get("dropped") or []) or "—"))
     else:
         print("\nF2 选股域⊆执行域：（当日无差异记录 —— 或选出的票本就都在可交易板块）")
+    if "ma144" in it:
+        m144 = it["ma144"]
+        st = m144["state"] or {}
+        print("\n⑨ 144 线资格（影子，默认只记录）：指数 %s 收盘 %s vs MA144 %s（%s）| 斜率(%s日) %s%% → %s"
+              % ("000001.SH", st.get("close"), st.get("ma144"),
+                 "在上方" if st.get("above") else "在下方", st.get("slope_win"), st.get("slope_pct"),
+                 "放行" if st.get("allow_slope") else "会拦"))
+        _ex = m144["extra"] or {}
+        print("   当日其它门：wave_op=%s gate_blocked=%s；当日买腿 %s（选股原始 %s 条）"
+              % (_ex.get("wave_op"), _ex.get("gate_blocked"), _ex.get("buy_legs"), _ex.get("raw_legs_n")))
+    else:
+        print("\n⑨ 144 线资格：（暂无影子文件）")
     p = it["pos_cap"]
     print("\nC3 仓位档（他的话 75/50/30/0）：operation=%s → 上限 %s%%；当前仓位 %s%% %s"
           % (p.get("operation"), p.get("corpus_total_cap_pct"), p.get("position_pct"),

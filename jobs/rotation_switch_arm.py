@@ -727,6 +727,36 @@ def main():
               "top3=", (_alloc.get("top3") or [])[:3], file=sys.stderr)
     except Exception as e:
         print("[rotation_switch_arm] wave_alloc err:", str(e)[:80], file=sys.stderr)
+    # ⑩ 「144 线」大级别资格（2026-09-15 round 10）：**默认只记录（影子）**，`WOLF_MA144_GATE=1` 才真拦买腿。
+    #   狼大 2016-07-07「当K线盘整144线稍微走平，那就表明可以做一个波段趋势了」/ 2016-08-15「144都已经走平向上了…找买点进大波段」
+    #   / 2026-03-20「我的牛熊分界线是 日K144线…那是我的最后底线」。
+    #   离线验收（jobs/eval_ma144_regime.py，总账 §17）：**证据不足以开闸** —— 斜率口径被拦日全在一个连续时段（伪显著）、
+    #   收盘口径跨 4 段方向一致但不显著且未与现有大盘门做增量对照 → 先影子攒跨时段样本，再决定是否做成门。
+    #   影子额外记 `wave_op` / `gate_blocked` / `buy_legs`，正是为了下一轮做**增量对照**（144 拦掉的日子有多少是现有门已在拦的）。
+    try:
+        import importlib as _il
+        _M144 = None
+        for _p in (os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line"),):
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        try:
+            _M144 = _il.import_module("wolf_ma144_regime")
+        except Exception as _me:
+            print("MA144_IMPORT_ERR", str(_me)[:80], file=sys.stderr)
+        if _M144 is not None:
+            _st144 = _M144.state()
+            if _M144.shadow_enabled():
+                _M144.shadow_record({"wave_op": wop, "gate_blocked": [t.get("theme") for t in _gate_blocked],
+                                     "pool": pool, "buy_legs": [b.get("symbol") for b in buy_legs],
+                                     "raw_legs_n": len(buy_legs)})
+            print("MA144 index=%s state=%s gate=%s allow=%s"
+                  % (_M144.index_code(), _st144, _M144.gate_enabled(), _M144.allow(_st144)), file=sys.stderr)
+            if _M144.gate_enabled() and buy_legs and not _M144.allow(_st144):
+                print("MA144_GATE 拦下 %d 条买腿（144 走平/向上资格不满足）: %s"
+                      % (len(buy_legs), [b.get("symbol") for b in buy_legs]), file=sys.stderr)
+                buy_legs = []
+    except Exception as _e144:
+        print("[rotation_switch_arm] ma144 err:", str(_e144)[:80], file=sys.stderr)
     # 2026-09-09 账户权限: 无创业板权限 → 布腿统一剔除(SZ300/SZ301); WOLF_PICK_BOARD_EXCLUDE 可加 kcb/bj
     _ex_b = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
     _board_ok = board_ok      # F2(2026-09-15)：与选股侧共用**唯一实现**（原内联版已删，避免两套口径分叉）
