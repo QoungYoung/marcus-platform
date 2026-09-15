@@ -579,6 +579,65 @@ BUY_254_EXPR = {"and": [{"op": "==", "field": "quote.dip_prev_low", "value": Tru
 def expire_old(cur, today):
     cur.execute("UPDATE t_conditions SET status='expired' WHERE account_id='stock' AND publisher='switch' AND status='active' AND trade_date < %s", (today,))
 
+MA_LINE_EXPR_VOL_MAX = 0.9      # 温和缩量（与 254 同口径）
+MA_LINE_MIN_CLOSES = 144         # 至少要够最长的那条线
+
+
+def ma_line_expr(price, vol_max=MA_LINE_EXPR_VOL_MAX):
+    """**均线挂单**的条件表达式（他的话：跌到 13/34/60/144 线上挂单买）。
+
+    与 254 的唯一区别 = 触发价：254 用 `quote.dip_prev_low`（触前一日最低 ×(1+tol)），
+    这里用**收盘下方最近一条均线的价格**（字面量写进表达式，t_monitor 无需改动）。
+    其余条件（温和缩量、均价/现价有效）与 254 保持一致。
+    """
+    px = round(float(price), 3)
+    return {"and": [
+        {"op": "<=", "field": "quote.current", "value": px},
+        {"op": ">", "field": "quote.current", "value": 0},
+        {"op": "<=", "field": "vol_ratio", "value": float(vol_max)},
+        {"op": ">", "field": "vol_ratio", "value": 0},
+        {"op": ">", "field": "quote.average", "value": 0},
+    ]}
+
+
+def ma_line_price(symbol, as_of):
+    """→ {"k":13/34/60/144, "v":均线价, "dist_pct":距线%} 或 None（收盘下方最近的那条线）。"""
+    try:
+        _p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        import datetime as _dt
+        import wolf_confirm_pick as _WCP
+        import wolf_ma_line_entry as _MLE
+        s = str(symbol)
+        ts = (s[2:] + "." + s[:2]) if s[:2] in ("SH", "SZ") else s
+        # ⚠️ 必须拉足够长的历史：`fetch_daily` 只从 20260301 起（≈136 根）→ 算不出 144 线，
+        #    且高位股的 MA13/34/60 可能都在收盘价上方 → nearest_line_below 返回 None（2026-09-15 实测踩到）。
+        closes = []
+        try:
+            start = (_dt.date.today() - _dt.timedelta(days=540)).strftime("%Y%m%d")
+            rows = _WCP.gz("daily", {"ts_code": ts, "start_date": start, "end_date": as_of},
+                           "ts_code,trade_date,close,low,amount,high") or []
+            rows = sorted(rows, key=lambda x: str(x[1]))
+            closes = [float(x[2]) for x in rows if len(x) > 2 and x[2] not in (None, "")]
+        except Exception as _e1:
+            print("MA_LINE_LONG_FETCH_ERR", symbol, str(_e1)[:60], file=sys.stderr)
+        if len(closes) < MA_LINE_MIN_CLOSES:
+            rows2 = _WCP.fetch_daily(ts, as_of) or []
+            closes = [r[1] for r in rows2 if r and r[1]]
+        if len(closes) < MA_LINE_MIN_CLOSES:
+            return None
+        return _MLE.nearest_line_below(closes)
+    except Exception as _e:
+        print("MA_LINE_PRICE_ERR", symbol, str(_e)[:70], file=sys.stderr)
+        return None
+
+
+def ma_line_enabled():
+    """`WOLF_MA_LINE_ENTRY`（默认 0；2026-09-15 起生产置 1）→ 真挂腿时用均线价。"""
+    return os.getenv("WOLF_MA_LINE_ENTRY", "0").strip().lower() in ("1", "true", "yes")
+
+
 def arm(db, cur, symbol, trigger_kind, direction, expr, trade_date):
     # 2026-09-10 账户权限: 无权限板块(创业板/科创板/北交所)不布腿
     _ex = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
@@ -875,11 +934,32 @@ def main():
     for s in sell_legs:
         rid = arm(conn, cur, s["symbol"], "custom", "sell", SELL_EXPR, today)
         armed.append({"type": "sell_vwap_break", "symbol": s["symbol"], "id": rid})
+    _ma_on = ma_line_enabled()
+    ma_rows = []
     for b in buy_legs:
         rid253 = arm(conn, cur, b["symbol"], "custom_m5dump", "buy", BUY_253_EXPR, today)
-        rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy", BUY_254_EXPR, today)
+        # ⑯ 均线挂单真挂腿（2026-09-15，用户指示上线）：254 的挂单价 = 收盘下方最近均线（13/34/60/144）；
+        #    取不到均线 → 回退 254 原条件（触前低），绝不因此丢腿。
+        _ln = ma_line_price(b["symbol"], today) if _ma_on else None
+        if _ln and _ln.get("v"):
+            rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy",
+                         ma_line_expr(_ln["v"]), today)
+            ma_rows.append({"symbol": b["symbol"], "k": _ln.get("k"),
+                            "price": round(float(_ln["v"]), 3),
+                            "dist_pct": _ln.get("dist_pct"), "pricing": "ma_line"})
+        else:
+            rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy", BUY_254_EXPR, today)
+            ma_rows.append({"symbol": b["symbol"], "pricing": "prevlow_fallback"})
         armed.append({"type": "buy_253", "symbol": b["symbol"], "id": rid253})
         armed.append({"type": "buy_254", "symbol": b["symbol"], "id": rid254})
+    try:
+        json.dump({"date": today, "mode": "enforce" if _ma_on else "shadow",
+                   "legs": ma_rows},
+                  open(os.path.join(DATA, "ma_line_arm_%s.json" % today), "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+    except Exception as _mle:
+        print("MA_LINE_ARM_WRITE_ERR", str(_mle)[:70], file=sys.stderr)
+    print("MA_LINE_ARMED", [r for r in ma_rows if r.get("pricing") == "ma_line"])
     cur.close(); conn.close()
     print("ARMED", armed)
     return 0
