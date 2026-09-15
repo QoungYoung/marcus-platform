@@ -273,3 +273,46 @@ data/_bt_runs/<T>/
 两者都写 `publisher='switch'` 的条件。只重放后者会让腿数偏少（实测 09-11：2 vs 9）。
 下一步：把 `switch_builder.build_plan()` 也纳入沙箱重放，并以 `logs/rotation_switch_arm/*.json` +
 `_archive/<d>/db_t_conditions.csv` 做逐日对账基准。
+
+### 9.5 第 2 轮（2026-09-15 夜）：把「代码版本」也做成 as-of —— 并且拿到了 **9/9 的腿级完全一致**
+
+**新增的第 0 层：按日的代码版本树**（`jobs/bt_code_revs.py`）
+* 生产代码 2026 年一路在改（09-11、09-13、09-14、09-15 都有影响买入链的提交：如 09-13
+  「gate 整块退场 / 主题来源改方向层池」、09-15「两道建仓门 + 均线挂单 + v3」）。**用今天的代码回放 1 月 = 把后来的机制提前装上**。
+* 做法：每个交易日解析"当天在跑的版本"= 该日之前最后一次触及链路的提交 → `git archive` 出**代码版本树**
+  （10 个不同版本 / 11 天，89MB，落在 `data/_bt_code/rev_<rev>/`，容器内 `/app/data/_bt_code/...`）；
+  回放时把该树的 `apps/main_line, jobs, backend, core, config` **置顶到 `sys.path`**。
+* 三个必须做对的地方（都踩过）：
+  1. **入口脚本也要用版本树里的那份**：`runpy`/`subprocess` 跑的是"这个文件"，只有 import 才走 sys.path
+     → 只改 sys.path 会让"入口脚本是今天的、被 import 的模块是旧的"。现在按 `script_path(code_dir, rel)` 解析；
+  2. **装 shim 会打乱 sys.path 顺序**：`bt_run_pinned` 在 import 时把 `/app*` 插到最前
+     → 必须**在它之后再插一次版本树**（否则 `mainline_confirm_state` 用的是现行版：
+     实测 `gate_top_themes` 不存在 → 回退 `main_line_state.fusion` → 主题从「稳增长/基建」变成「农业/消费/金融」）；
+  3. **老版本的取数协议不同**：09-13 之前的脚本走 **gzcloud HTTP**（服务已失效），
+     relay 替身接不到 → 新增 `GzcloudShim`：识别 `POST {api_name, params, fields}` → 本地 SQLite 应答
+     （trade_cal / daily / daily_basic 全覆盖，其余回落 relay）。
+
+**时钟打桩的补全**：`time.strftime/localtime/gmtime/ctime/asctime` 也必须钉 —— `time.strftime('%Y%m%d')`
+用的是 `localtime()`（C 层读系统钟，**不走** `time.time()`）→ 只钉 `time.time` 会让 `upto=今天`，
+于是 `glob('mainline_gate_*.json')` 挑到**最新那天的 gate**（实测：09-11 的回放读到了 09-15 的 gate，
+第三个主题从 农业 变 资源/周期，确认域整块跑偏）。
+
+**2026-09-11 的对账结果（生产 `_archive/20260911/` + `t_conditions` 为基准）**
+
+| 层 | 回放结果 | 生产实际 | 判定 |
+|---|---|---|---|
+| 波浪判定 `wave_state` | `d4 / 4-3 / side`（as-of 09-10） | 同 | ✅ **完全一致** |
+| 方向层 D1 `mainline_select` | `mainline=农业, pool=[农业,消费/内需,金融,稳增长/基建,电力/公用]`（09-10） | 同 | ✅ **逐字段一致** |
+| 确认域 `stock_confirm_result`（09-11 08:20 口径） | 47 概念 / 417 成员 / stage 分布 {下跌中173, 缩量止跌151, 结构到位67, 确认15, 突破候选11} | **完全相同** | ✅ **47/47 概念、417/417 成员一致** |
+| **08:18 布腿路径**（`tranche_ladder_report` → `switch_builder.build_plan()`） | `buy_new` = 000065 / 600977 / 600039 / 600284 / 000401 / 600449 / 603737 / 600586 / 002613 | 生产 09-11 实际布腿 **同样 9 只** | ✅ **9/9 完全一致** |
+| 09:20 布腿路径（`rotation_switch_arm`） | 出 2 条腿（Kimi概念/免税概念） | 当天 `buy_chains=[]`、**一条没布** | ❌ 未对齐（见下） |
+
+**关键时序发现（只有逐日对账才会暴露）**：`switch_builder` 在 **08:18** 跑，而 `stock_confirm_judge`
+在 **08:20** 才刷新 → 所以 08:18 用的是**上一个交易日**的确认域（实测：用 09-11 口径的确认域 → 13 只候选、
+与生产 9 只只重合 6 只；换成 **09-09 口径**（= 09-10 08:20 写的那份）→ **正好 9 只，完全命中**）。
+⇒ 回测里"同一个文件在不同时点看到的是不同版本"，必须按**任务时序**而不是按"当天日期"来取。
+
+**仍未对齐的一处（下一轮目标）**：09:20 路径的 `rotation_universe_result.json` ——
+生产 09-11 早上 `room_bottom/holdT_top` 为空（所以 `buy_chains=[]`），而我们的 as-of 再生给出了
+`Kimi概念 / 免税概念` 两条链。疑似它的输入里还有未打桩的（`rotation_universe_classified.json` /
+`rotation_proxy_state.json` / `concept_long.json` 等"当日覆盖型"）。对齐它 09:20 那条路径才能收敛。

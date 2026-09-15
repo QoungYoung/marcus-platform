@@ -19,12 +19,109 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import os
 import runpy
 import sys
 import time
 
 sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs", "/app/core"]
+
+
+class GzcloudShim:
+    """老版本代码走的是 **gzcloud HTTP**（`requests.post(GZ, json={api_name, token, params, fields})`），
+    该服务已失效（2026-09-13 起改用 relay）。回放 09-13 之前的版本时必须把这个协议也替身掉，
+    否则脚本拿到空数据 → 例如 `stock_confirm_judge` 会在 `df["d"]` 上 KeyError。
+
+    路由规则：POST body 里有 `api_name` **或** URL 含 gzcloud → 本地应答；其余原样转发真实 requests。
+    覆盖接口：trade_cal / daily / daily_basic / index_daily（其余回落 relay 并按日期截断）。
+    """
+
+    def __init__(self, bars_db: str, as_of: str, real_post):
+        self.bars_db = bars_db
+        self.as_of = str(as_of)
+        self._real_post = real_post
+        self.n_local = self.n_remote = 0
+        self._dates = None
+
+    def trade_days(self):
+        if self._dates is None:
+            import sqlite3
+            c = sqlite3.connect(self.bars_db)
+            self._dates = [r[0] for r in c.execute(
+                "SELECT DISTINCT trade_date FROM bars WHERE trade_date <= ? ORDER BY trade_date", (self.as_of,))]
+            c.close()
+        return self._dates
+
+    def _fields_items(self, api, params, fields):
+        f = [x.strip() for x in str(fields or "").split(",") if x.strip()]
+        import sqlite3
+        c = sqlite3.connect(self.bars_db)
+        try:
+            if api == "trade_cal":
+                s = str(params.get("start_date") or "19000101"); e = min(str(params.get("end_date") or self.as_of), self.as_of)
+                days = [d for d in self.trade_days() if s <= d <= e]
+                return f or ["cal_date", "is_open"], [[d, 1] for d in days]
+            if api in ("daily", "daily_basic"):
+                cols = [x for x in f if x in ("ts_code", "trade_date", "open", "high", "low", "close",
+                                              "pre_close", "pct_chg", "vol", "amount", "total_mv", "turnover_rate")]
+                if not cols:
+                    cols = ["ts_code", "trade_date", "close", "vol"]
+                if params.get("trade_date"):
+                    d = min(str(params["trade_date"]), self.as_of)
+                    rows = c.execute("SELECT %s FROM bars WHERE trade_date=?" % ",".join(cols), (d,)).fetchall()
+                else:
+                    s = str(params.get("start_date") or "19000101")
+                    e = min(str(params.get("end_date") or self.as_of), self.as_of)
+                    rows = c.execute("SELECT %s FROM bars WHERE ts_code=? AND trade_date BETWEEN ? AND ? ORDER BY trade_date"
+                                     % ",".join(cols), (str(params.get("ts_code")), s, e)).fetchall()
+                return cols, [list(r) for r in rows]
+        finally:
+            c.close()
+        # 其余接口回落 relay（走 RelayShim → 自身带 as-of 截断与真 relay 兜底，不会递归）
+        import tushare_relay
+        try:
+            return tushare_relay.relay_items(api, fields=fields, **params)
+        except Exception:
+            return [], []
+
+    def post(self, url, **kw):
+        body = kw.get("json") or {}
+        if isinstance(body, dict) and body.get("api_name"):
+            api = str(body["api_name"]); params = body.get("params") or {}; fields = body.get("fields") or ""
+            flds, items = self._fields_items(api, params, fields)
+            self.n_local += 1
+            return _FakeJsonResponse({"data": {"fields": flds, "items": items}})
+        if "gzcloud" in str(url):
+            self.n_local += 1
+            return _FakeJsonResponse({"data": {"items": []}})
+        self.n_remote += 1
+        return self._real_post(url, **kw)
+
+
+class _FakeJsonResponse:
+    def __init__(self, payload, status=200):
+        self._p = payload
+        self.status_code = status
+        try:
+            self.text = json.dumps(payload, ensure_ascii=False)[:2000]
+        except Exception:
+            self.text = "<unserializable>"
+
+    def json(self):
+        return self._p
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError("HTTP %s" % self.status_code)
+
+
+def install_gzcloud_shim(bars_db: str, as_of: str) -> GzcloudShim:
+    import requests as _rq
+    real_post = _rq.post
+    shim = GzcloudShim(bars_db, as_of, real_post)
+    _rq.post = shim.post
+    return shim
 
 
 def pin_clock(as_of: str):
@@ -68,6 +165,17 @@ def pin_clock(as_of: str):
     _dt.datetime = _Datetime
     _real_time = time.time
     time.time = lambda: _real_time() + offset
+    # ⚠️ **必须连"日历类"时间函数一起钉**：`time.strftime('%Y%m%d')` 用的是 `time.localtime()`，
+    #    它不走 `time.time()`（C 层直接读系统钟）→ 只钉 time.time 会让 `upto=今天`，
+    #    于是 `glob('mainline_gate_*.json')` 挑到**最新那天的 gate**（实测：09-11 的回放读到了 09-15 的 gate，
+    #    第三个主题从生产真实的 农业 变成 资源/周期 → 确认域整块跑偏）。
+    _st = time.struct_time((d.year, d.month, d.day, 9, 15, 0, 0, 0, -1))
+    time.localtime = lambda *a: _st
+    time.gmtime = lambda *a: _st
+    time.ctime = lambda *a: time.strftime("%a %b %d %H:%M:%S %Y", _st)
+    time.asctime = lambda *a: time.strftime("%a %b %d %H:%M:%S %Y", _st)
+    _real_strftime = time.strftime
+    time.strftime = lambda fmt, t=None: _real_strftime(fmt, _st if t is None else t)
     return d
 
 
@@ -166,13 +274,23 @@ def main() -> int:
     ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
     ap.add_argument("--script", required=True)
     ap.add_argument("--no-relay-shim", action="store_true")
+    ap.add_argument("--code-dir", default="",
+                    help="该日**在跑的代码版本树**（data/_bt_code/rev_<rev>）；给定时优先于 /app 下的现行代码")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[])
     a, unknown = ap.parse_known_args()          # 目标脚本自己的参数一律透传（含 `--date` 之类）
     a.extra = list(a.extra or []) + list(unknown or [])
 
     os.environ["DATA_DIR"] = a.data_dir
+    if a.code_dir:
+        # 关键：把该日版本树插到 sys.path 最前 → import 到的是"当天在跑的代码"，不是今天的
+        for sub in ("apps/main_line", "jobs", "backend", "core", "config", "scripts", ""):
+            pth = os.path.join(a.code_dir, sub) if sub else a.code_dir
+            if os.path.isdir(pth):
+                sys.path.insert(0, pth)
+        print("[code] 使用版本树 %s" % a.code_dir, file=sys.stderr)
     pin_clock(a.as_of)
     shim = None if a.no_relay_shim else install_relay_shim(a.bars_db, a.as_of)
+    gzshim = None if a.no_relay_shim else install_gzcloud_shim(a.bars_db, a.as_of)
 
     extra = [x for x in (a.extra or []) if x != "--"]   # 兼容调用方用 `--` 分隔
     sys.argv = [a.script] + extra
@@ -186,6 +304,9 @@ def main() -> int:
         import traceback
         traceback.print_exc()
         rc = 1
+    if gzshim is not None:
+        print("[gzshim] %s as_of=%s local=%d passthrough=%d"
+              % (os.path.basename(a.script), a.as_of, gzshim.n_local, gzshim.n_remote), file=sys.stderr)
     if shim is not None:
         print("[shim] %s as_of=%s local=%d remote=%d dropped_future=%d err=%d %s"
               % (os.path.basename(a.script), a.as_of, shim.n_local, shim.n_remote, shim.n_dropped,

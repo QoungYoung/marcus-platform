@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
@@ -35,10 +36,7 @@ class GzShim:
         self.bars_db = bars_db
         self.as_of = str(as_of)
         self.n_local = self.n_remote = 0
-        import importlib
-        self._relay_mod = importlib.import_module("tushare_relay")
-        self._real = self._relay_mod.relay_items
-
+    
     def _rows_from_sqlite(self, ts_code, cols, start, end):
         import sqlite3
         e = min(str(end or self.as_of), self.as_of)
@@ -108,6 +106,20 @@ def held_from_db(cut: str, account: str = "stock"):
     return out
 
 
+
+def resolve_code_dir(date8: str, explicit: str = "") -> str:
+    """该日"在跑的代码版本"目录：`--code-dir` > `data/_bt_code/rev_map.json` 里的映射 > 空（用现行代码）。"""
+    if explicit:
+        return explicit
+    root = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "_bt_code")
+    try:
+        m = json.load(open(os.path.join(root, "rev_map.json"), encoding="utf-8"))
+    except Exception:
+        return ""
+    rev = ((m.get(date8) or {}).get("rev")) or ""
+    d = os.path.join(root, "rev_%s" % rev) if rev else ""
+    return d if d and os.path.isdir(d) else ""
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True, help="决策日 T（如 20260911）")
@@ -116,10 +128,18 @@ def main() -> int:
     ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
     ap.add_argument("--held", default="", help="持仓（逗号分隔，作为 exclude）")
     ap.add_argument("--held-from-db", action="store_true", help="用 paper_trades(≤cut) 重建持仓")
+    ap.add_argument("--code-dir", default="", help="该日的代码版本树（默认按 data/_bt_code/rev_map.json 自动解析）")
     ap.add_argument("--out", default="")
     a = ap.parse_args()
 
     sb = a.sandbox or os.path.join(os.environ.get("DATA_DIR", "/app/data"), "_bt_full", a.date)
+    _code = resolve_code_dir(a.date, a.code_dir)
+    if _code:
+        for _sub in ("apps/main_line", "jobs", "backend", "core", "config"):
+            _p = os.path.join(_code, _sub)
+            if os.path.isdir(_p):
+                sys.path.insert(0, _p)
+        print("[code] 使用该日版本树 %s" % _code, flush=True)
     seed = {}
     try:
         seed = json.load(open(os.path.join(sb, "_seed.json"), encoding="utf-8"))
@@ -129,6 +149,28 @@ def main() -> int:
     if not cut:
         print("需要 --cut 或沙箱里有 _seed.json", file=sys.stderr); return 2
     os.environ["DATA_DIR"] = sb
+
+    # 钉时钟（含 time.strftime/localtime）+ 钉取数：否则 09-11 的代码会 glob 到"最新那天的 gate/文件"
+    try:
+        sys.path.insert(0, "/app/jobs")
+        from bt_run_pinned import pin_clock, install_relay_shim, install_gzcloud_shim
+        pin_clock(cut)
+        _rs = install_relay_shim(a.bars_db, cut)
+        _gs = install_gzcloud_shim(a.bars_db, cut)
+        print("[pin] clock=%s relay_shim/gzcloud_shim 已装" % cut, flush=True)
+    except Exception as _pe:
+        print("[pin] 打桩失败（结论可能失真）: %s" % str(_pe)[:110], flush=True)
+    # ⚠️ `bt_run_pinned` 在 import 时会把 /app* 插到 sys.path 最前 → 必须在它之后再插一次版本树，
+    #    否则 import 到的是**今天的**模块（实测：mainline_confirm_state 用了现行版，
+    #    gate_top_themes 不存在 → 回退到 main_line_state.fusion → 主题变 农业/消费/金融）
+    if _code:
+        for _sub in ("apps/main_line", "jobs", "backend", "core", "config"):
+            _p = os.path.join(_code, _sub)
+            if os.path.isdir(_p):
+                sys.path.insert(0, _p)
+        print("[code] 版本树路径已重新置顶（在 shim import 之后）", flush=True)
+        self._relay_mod = importlib.import_module("tushare_relay")
+        self._real = self._relay_mod.relay_items
     import importlib
     arm = importlib.import_module("rotation_switch_arm")
     arm.DATA = sb

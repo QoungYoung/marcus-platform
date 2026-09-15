@@ -34,6 +34,7 @@ def main() -> int:
     ap.add_argument("--mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
     ap.add_argument("--cache", default=os.getenv("BT_LLM_CACHE", ""), help="LLM 缓存根目录")
     ap.add_argument("--main-line-state", default="", help="as-of 那天的 main_line_state.json（**必填**）")
+    ap.add_argument("--code-dir", default="", help="该日代码版本树（版本树里的 wave_agent 优先）")
     ap.add_argument("--out", default="", help="结果落盘路径（默认 <DATA_DIR>/_bt_runs/<as_of+1>/wave_state.json）")
     a = ap.parse_args()
 
@@ -47,6 +48,12 @@ def main() -> int:
             return 2
         os.environ["MAIN_LINE_STATE_FILE"] = a.main_line_state
 
+    if a.code_dir:
+        for _sub in ("apps/main_line", "jobs", "backend", "core", "config"):
+            _p = os.path.join(a.code_dir, _sub)
+            if os.path.isdir(_p):
+                sys.path.insert(0, _p)
+        print("[code] wave 用版本树 %s" % a.code_dir, file=sys.stderr)
     import importlib
     import bt_llm_replay
     WA = importlib.import_module("wave_agent")

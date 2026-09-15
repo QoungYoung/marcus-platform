@@ -221,6 +221,16 @@ PROTECT_AFTER_PRODUCERS = ["main_line_state.json", "mainline_confirm_history.jso
                            "theme_inst_flow.json", "wave_pivots.json"]
 
 
+def script_path(code_dir: str, rel: str) -> str:
+    """**关键**：`runpy`/`subprocess` 跑的是"这个文件"，import 才走 sys.path。
+    要真正用当天版本，必须执行**版本树里的那份脚本**（否则只有 import 到的模块是旧版，入口脚本还是今天的）。"""
+    if code_dir:
+        cand = os.path.join(code_dir, rel)
+        if os.path.exists(cand):
+            return cand
+    return os.path.join("/app", rel)
+
+
 def snapshot_files(sb: str, names) -> dict:
     snap = {}
     for nm in names:
@@ -256,12 +266,24 @@ def main() -> int:
     ap.add_argument("--cut", default="", help="数据切点（默认 = 前一交易日）")
     ap.add_argument("--bars-db", default=os.path.join(ROOT, "bars.sqlite"))
     ap.add_argument("--no-llm", action="store_true", help="跳过 wave agent（LLM）再生")
+    ap.add_argument("--code-dir", default="", help="该日代码版本树（默认按 data/_bt_code/rev_map.json 解析）")
     ap.add_argument("--no-shim", action="store_true", help="跳过 4 个 producer 的 as-of 打桩（全用 stub）")
     ap.add_argument("--llm-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
     a = ap.parse_args()
 
     T = a.date
     cut = a.cut or prev_trade_day(T, a.bars_db)
+    # 该日"在跑的代码"（版本树）：producer 与 regen 都用它，保证不是拿今天的代码回放历史
+    code_dir = a.code_dir
+    if not code_dir:
+        try:
+            # 注意：`ROOT` 是 _bt_full，版本树在 `SRC/_bt_code`（踩过一次：写成 ROOT/_bt_code → 永远解析为空）
+            _m = json.load(open(os.path.join(SRC, "_bt_code", "rev_map.json"), encoding="utf-8"))
+            _rev = ((_m.get(T) or {}).get("rev")) or ""
+            _d = os.path.join(SRC, "_bt_code", "rev_%s" % _rev) if _rev else ""
+            code_dir = _d if _d and os.path.isdir(_d) else ""
+        except Exception:
+            code_dir = ""
     sb = os.path.join(ROOT, T)
     os.makedirs(sb, exist_ok=True)
     man = {"date": T, "cut": cut, "sandbox": sb, "files": {}, "started_at": time.strftime("%H:%M:%S")}
@@ -353,7 +375,8 @@ def main() -> int:
 
     # ③ 再生：方向层主线选择（有 --date）
     try:
-        r = subprocess.run([sys.executable, "/app/jobs/wolf_mainline_select.py", "--date", cut],
+        _wms = script_path(code_dir, "jobs/wolf_mainline_select.py")
+        r = subprocess.run([sys.executable, _wms, "--date", cut],
                            capture_output=True, text=True, timeout=600,
                            env={**os.environ, "DATA_DIR": sb})
         ok = os.path.exists(os.path.join(sb, "wolf_mainline_select.json"))
@@ -384,7 +407,7 @@ def main() -> int:
     if not a.no_llm:
         try:
             mls = os.path.join(sb, "main_line_state.json")
-            r = subprocess.run([sys.executable, "/app/jobs/bt_wave_asof.py", "--as-of", cut,
+            r = subprocess.run([sys.executable, "/app/jobs/bt_wave_asof.py", "--as-of", cut, "--code-dir", code_dir,
                                 "--mode", a.llm_mode, "--main-line-state", mls,
                                 "--out", os.path.join(sb, "wave_state.json")],
                                capture_output=True, text=True, timeout=900,
@@ -416,7 +439,8 @@ def main() -> int:
             try:
                 r = subprocess.run([sys.executable, "/app/jobs/bt_run_pinned.py", "--as-of", cut,
                                     "--data-dir", sb, "--bars-db", a.bars_db,
-                                    "--script", os.path.join("/app", script), "--"] + args,
+                                    "--code-dir", code_dir,
+                                    "--script", script_path(code_dir, script), "--"] + args,
                                    capture_output=True, text=True, timeout=1800,
                                    env={**os.environ, "DATA_DIR": sb})
                 after = os.path.getmtime(out) if os.path.exists(out) else 0
@@ -438,6 +462,7 @@ def main() -> int:
         info = copy_json(src, os.path.join(sb, name)) if os.path.exists(src) else None
         rec(name, (dict(info, src="stub", from_=src) if info else None))
 
+    man["code_dir"] = code_dir
     man["finished_at"] = time.strftime("%H:%M:%S")
     man["n_ok"] = sum(1 for v in man["files"].values() if v.get("src") != "MISSING")
     man["n_missing"] = sum(1 for v in man["files"].values() if v.get("src") == "MISSING")
