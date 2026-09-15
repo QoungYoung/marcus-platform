@@ -151,6 +151,7 @@ python jobs/verify_exit_evidence.py --evidence .dsh-tmp/buyside/wolf_buy_params_
 |---|---|---|---|
 | **P1 选板块第一要素** | `WOLF_THEME_VOLFUND_GATE=0` + `WOLF_THEME_VOLFUND_SHADOW=1`（默认） | **记录但不拦**（`theme_buyable` 仍放行，reason 里带 `[影子]`） | `data/theme_volfund_shadow_<date>.json` |
 | **C1 254 容差** | `WOLF_DIP_PREVLOW_SHADOW=1`（默认；需 `WOLF_DIP_PREVLOW_TOL<0.005` 才生效） | 记录"tol=0 不成交、历史 0.005 会成交"的票与价差 | `data/dip_tol_shadow_<date>.json` |
+| **F2 选股域⊆执行域** | `WOLF_PICK_BOARD_PREFILTER=0`（默认）+ 影子**默认开** | 记录"若在选股时就剔除无权限板块（创业板/科创板/北交所），会改成选谁 / 白丢了谁"；**不改决策** | `data/board_prefilter_shadow_<date>.json` |
 
 **生产验证（2026-09-15 容器内只读冒烟）**：`gate_on=False | shadow_on=True`；
 `theme_buyable('农业') → allowed=True`（**未被拦**）且 reason 带 `[影子]资金连续5日净流出 → 不新开腿`；影子文件已落盘。
@@ -228,3 +229,23 @@ C4 ETF 波动     检查 20 只、达标 6 只：512480 半导体ETF 振幅 3.51
 3. 口径限制：他说的"3 个点以上"是**定性**，我们落成"20 日日均振幅 ≥3.0%"；检查时点是**买入前**、**只对 ETF**（不套个股）。
 
 复现：`.venv/bin/python jobs/eval_align_c3c4.py` → `.dsh-tmp/buyside/eval_align_c3c4.json`
+
+## 14 F2「选股域 ⊆ 执行域」（2026-09-15 round 7）
+
+**问题**：账户**没有创业板/科创板/北交所权限**，但路径 A（`rotation_switch_arm.pick_buy`）选股时**不看板块**，
+到布腿前才统一砍（`BOARD_FILTER removed N 个无权限板块买腿`）→ **被砍掉的腿不用次优票补位，直接白丢**。
+
+**实测证据**（生产 arm 日志 `logs/rotation_switch_arm/*.json`）：
+4 次布腿记录里 **4 次都发生剔除**（各 1 / 2 / 1 / 1 条）；**09-15 当天选出的 5 条腿里 2 条被砍 → 实际只布了 3 条**。
+
+**改动**（默认关，行为零变化；等拍板）：
+1. 板块判据收敛成**唯一实现** `rotation_switch_arm.board_ok()`（原 `main()` 内联版已删）——选股侧与布腿侧共用，
+   避免又一次"两条路各一套口径"；接受 `SZ300189` 与 `300189.SZ` 两种写法；
+2. 开关 `WOLF_PICK_BOARD_PREFILTER=1` → **选股时**即剔除无权限板块（位置闸之前），会用次优票补位；
+3. 默认 0 时仍写影子 `data/board_prefilter_shadow_<date>.json`：`current`（现选谁）/ `with_prefilter`（剔后选谁）/
+   `dropped`（白丢了谁）；已接入 `jobs/shadow_daily.py` 的"F2"段；
+4. 单测 `backend/tests/test_board_prefilter.py`（7 项）：判据两种写法 + env 可配 + 开关默认关 +
+   开关下取票差异（首选创业板 → 跳过取次优）+ 影子文件内容。
+
+**为什么不算"自设参数"**：狼大语料不涉及账户权限（这是**账户事实**，不是策略参数）→ 不进 §4 自设计数。
+**待拍板**：是否置 `WOLF_PICK_BOARD_PREFILTER=1`（置 1 后每日布腿数可能从 3 条回到 4–5 条，但补位票的质地需看影子）。

@@ -130,6 +130,97 @@ def _pct_rank(vals):
     return rk
 
 
+def board_ok(xq_or_ts):
+    """账户交易权限板块过滤（**唯一实现**）：无创业板权限（默认），`WOLF_PICK_BOARD_EXCLUDE` 可加 kcb/bj。
+
+    F2（2026-09-15）：此前这段判据在 `main()` 里有一份内联实现、**选股侧完全没有** →
+    "选股域（全市场）⊃ 执行域（主板）"，被砍掉的腿不会用次优票补位。现在收敛成一个函数，
+    `pick_buy`（选股）与 `main()`（布腿）共用，避免又一次"两条路各一套口径"。
+    接受 `SZ300189`（xq）与 `300189.SZ`（ts_code）两种写法。
+    """
+    s = str(xq_or_ts or "").strip().upper()
+    if not s:
+        return True
+    if "." in s:                                   # ts_code → xq
+        _code, _mkt = s.split(".")[0], s.split(".")[-1]
+        s = _mkt + _code
+    ex = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
+    p, c = s[:2], s[2:8]
+    if "cyb" in ex and p == "SZ" and (c.startswith("300") or c.startswith("301")):
+        return False
+    if "kcb" in ex and p == "SH" and c.startswith("688"):
+        return False
+    if "bj" in ex and (p == "BJ" or c.startswith(("4", "8", "920"))):
+        return False
+    return True
+
+
+def board_prefilter_enabled():
+    """F2 开关：`WOLF_PICK_BOARD_PREFILTER=1` → **选股时**就剔除无权限板块（会改选票）。
+
+    默认 0 = 现行为不变（选股不限板块、布腿前统一砍）；此时仍会写影子文件
+    `data/board_prefilter_shadow_<date>.json`，记录"若在选择时剔除，会改成选谁"。
+    狼大语料不涉及账户权限（这是账户事实、不是策略参数）→ 不进参数总账的"自设/代理"计数。
+    """
+    return os.getenv("WOLF_PICK_BOARD_PREFILTER", "0").strip() == "1"
+
+
+def board_prefilter_shadow(chain, cur, alt):
+    """F2 影子（只记录，不改决策）：把"剔除无权限板块后会选谁"写入当日文件。"""
+    try:
+        fn = os.path.join(DATA, "board_prefilter_shadow_%s.json" % _today())
+        rec = {}
+        if os.path.exists(fn):
+            try:
+                rec = json.load(open(fn, encoding="utf-8")) or {}
+            except Exception:
+                rec = {}
+        rec.setdefault("date", _today())
+        rec.setdefault("chains", {})
+        rec["chains"][chain] = {
+            "mode": "shadow",
+            "current": [x.get("symbol") for x in (cur or [])],
+            "with_prefilter": [x.get("symbol") for x in (alt or [])],
+            "dropped": [x.get("symbol") for x in (cur or []) if x.get("symbol") not in
+                        {y.get("symbol") for y in (alt or [])}],
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        rec["updated_at"] = rec["chains"][chain]["ts"]
+        os.makedirs(DATA, exist_ok=True)
+        with open(fn, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=1)
+        print("BOARD_PREFILTER shadow chain=%s 现=%s 剔后=%s"
+              % (chain, rec["chains"][chain]["current"], rec["chains"][chain]["with_prefilter"]),
+              file=sys.stderr)
+    except Exception as e:
+        print("BOARD_PREFILTER_WRITE_ERR", str(e)[:80], file=sys.stderr)
+
+
+def _select_by_gate(stats, limit, use_board_prefilter=False):
+    """按 leader 降序过位置闸取前 `limit`（原 `pick_buy` ③ 段抽出，便于单测）。
+
+    `use_board_prefilter=True` → 位置闸之前先剔除无权限板块（F2）。
+    """
+    out = []
+    for s in stats:
+        if len(out) >= limit:
+            break
+        if use_board_prefilter and not board_ok(s.get("xq")):
+            continue
+        try:
+            import pandas as pd
+            import position_class as pc
+            f = pc.position_features(pd.Series(s["closes"]))
+            pos = pc.classify(f)["position"] if f else None
+        except Exception:
+            pos = None
+        if pos in ("LOW", "MID"):
+            out.append({"symbol": s["xq"], "ts_code": s["ts"], "position": pos,
+                        "chain": s.get("chain"), "leader": s["leader"],
+                        "r60": round(s["r60"], 1) if s["r60"] is not None else None,
+                        "amt20": round(s["amt20"], 2)})
+    return out
+
+
 def _banned_from_service():
     """G3 删票黑名单（`app.services.wolf_ticket_ban`）—— 容器/宿主两种布局都要能找到。
 
@@ -247,23 +338,20 @@ def pick_buy(chain, exclude, limit=3):
     except Exception as _qe:
         print("[pick_buy] 容量约束跳过:", str(_qe)[:80], file=sys.stderr)
     stats.sort(key=lambda s: (-s["leader"], s["ts"]))
-    # ③ 按 leader 降序过位置闸
-    out = []
     for s in stats:
-        if len(out) >= limit:
-            break
+        s.setdefault("chain", chain)
+    # ③ 按 leader 降序过位置闸（抽成 `_select_by_gate`，便于单测）
+    # F2（2026-09-15）：选股域必须 ⊆ 执行域。默认**不改行为**（`WOLF_PICK_BOARD_PREFILTER=0`），
+    #   但把"若在选择时就剔除无权限板块、会改成选谁"记入 data/board_prefilter_shadow_<date>.json。
+    _pf_on = board_prefilter_enabled()
+    out = _select_by_gate(stats, limit, use_board_prefilter=_pf_on)
+    if not _pf_on:
         try:
-            import pandas as pd
-            import position_class as pc
-            f = pc.position_features(pd.Series(s["closes"]))
-            pos = pc.classify(f)["position"] if f else None
-        except Exception:
-            pos = None
-        if pos in ("LOW", "MID"):
-            out.append({"symbol": s["xq"], "ts_code": s["ts"], "position": pos,
-                        "chain": chain, "leader": s["leader"],
-                        "r60": round(s["r60"], 1) if s["r60"] is not None else None,
-                        "amt20": round(s["amt20"], 2)})
+            _alt = _select_by_gate(stats, limit, use_board_prefilter=True)
+            if [x["symbol"] for x in _alt] != [x["symbol"] for x in out]:
+                board_prefilter_shadow(chain, out, _alt)
+        except Exception as _pfe:
+            print("BOARD_PREFILTER_SHADOW_ERR", str(_pfe)[:80], file=sys.stderr)
     return out
 
 
@@ -641,16 +729,7 @@ def main():
         print("[rotation_switch_arm] wave_alloc err:", str(e)[:80], file=sys.stderr)
     # 2026-09-09 账户权限: 无创业板权限 → 布腿统一剔除(SZ300/SZ301); WOLF_PICK_BOARD_EXCLUDE 可加 kcb/bj
     _ex_b = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
-    def _board_ok(xq):
-        _c = str(xq)[2:6] if len(str(xq)) >= 6 else ""
-        _p = str(xq)[:2]
-        if "cyb" in _ex_b and _p == "SZ" and (_c.startswith("300") or _c.startswith("301")):
-            return False
-        if "kcb" in _ex_b and _p == "SH" and _c.startswith("688"):
-            return False
-        if "bj" in _ex_b and (_p == "BJ" or _c.startswith(("4", "8", "920"))):
-            return False
-        return True
+    _board_ok = board_ok      # F2(2026-09-15)：与选股侧共用**唯一实现**（原内联版已删，避免两套口径分叉）
     _nb = len(buy_legs)
     buy_legs = [b for b in buy_legs if _board_ok(b.get("symbol"))]
     if len(buy_legs) != _nb:

@@ -86,7 +86,7 @@
 | # | 项 | 机制 | 生产实测 | 判定 |
 |---|---|---|---|---|
 | F1 | 双腿布设 + 每日腿数上限 | 每只票布 253(`custom_m5dump`) + 254(`custom_prevlow`)；`ROT_POOL_LEGS=4` | 09-14 布 4 只 × 2 腿；09-07/08 曾一天布 10 只 × 2 = 20 腿（无上限时代） | ✅ 已落 |
-| F2 | 账户板块权限 | `WOLF_PICK_BOARD_EXCLUDE=cyb,bj,kcb` → 创业板/科创板买腿被剔除（`BOARD_FILTER removed`） | 09-14 `BOARD_FILTER removed 1 个无权限板块买腿`；v2.1 的展示票**神农 300189（创业板）**在生产会被剔除 | ⚠️ 与选票冲突：**选股层按全市场排序、执行层只买主板** → 排序口径与实际可买集不一致，需要拍板（要么选股时就剔除，要么申请权限） |
+| F2 | 账户板块权限 | `WOLF_PICK_BOARD_EXCLUDE=cyb,bj,kcb` → 创业板/科创板买腿被剔除（`BOARD_FILTER removed`）；**2026-09-15 新增** 唯一判据 `rotation_switch_arm.board_ok()` + 开关 `WOLF_PICK_BOARD_PREFILTER`（默认 **0** = 行为不变）+ 影子 `data/board_prefilter_shadow_<date>.json` | **实测（arm JSON 日志）：4 次布腿记录里有 4 次发生剔除（1/2/1/1 条）；09-15 当天选出的 5 条腿里 2 条被砍 → 实际只布 3 条，且不用次优票补位**（腿白丢） | ⚠️ 落不完全 → **已实现待拍板**：开 `WOLF_PICK_BOARD_PREFILTER=1` 即在选股时剔除（会用次优票补位）。注：**狼大语料不涉及账户权限**（账户事实，非策略参数）→ 不进参数总账的"自设/代理"计数 |
 | F3 | 资金探针预算 | probe ≤5% 预算尽自动停 | 在跑 | ✅ 已落 |
 | F4 | 每日回补上限 | `t_gateway.MAX_WOLF_REFILL_PER_DAY=2`（狼大「来来回回做几次就行了」） | 在跑 | ✅ 已落 |
 

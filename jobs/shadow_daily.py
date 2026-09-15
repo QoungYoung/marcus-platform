@@ -151,6 +151,12 @@ def main():
         j = _j(f, {}) or {}
         rep["items"]["dip_tol"] = {"file": os.path.basename(f), "n": len(j.get("items") or {}),
                                    "items": list((j.get("items") or {}).items())[:10]}
+    # F2 选股域⊆执行域（账户板块权限）
+    f = _latest("board_prefilter_shadow_*.json")
+    if f:
+        j = _j(f, {}) or {}
+        rep["items"]["board_prefilter"] = {"file": os.path.basename(f),
+                                           "chains": j.get("chains") or {}}
     # C3 / C4（本脚本现算）
     rep["items"]["pos_cap"] = c3_position_cap(data_dir, d8)
     rep["items"]["etf_vol"] = c4_etf_vol(data_dir, d8)
@@ -194,6 +200,16 @@ def main():
                                                           v.get("gap_pct")))
     else:
         print("\nC1 254 容差：（暂无影子文件 —— 需部署含影子的 t_monitor）")
+    if "board_prefilter" in it:
+        b = it["board_prefilter"]
+        print("\nF2 选股域⊆执行域（账户无创业板/科创板权限）：会白丢几条腿")
+        for ch, v in (b["chains"] or {}).items():
+            print("   %-14s 现选=%s → 剔后=%s（白丢 %s）"
+                  % (ch, ",".join(v.get("current") or []) or "—",
+                     ",".join(v.get("with_prefilter") or []) or "—",
+                     ",".join(v.get("dropped") or []) or "—"))
+    else:
+        print("\nF2 选股域⊆执行域：（当日无差异记录 —— 或选出的票本就都在可交易板块）")
     p = it["pos_cap"]
     print("\nC3 仓位档（他的话 75/50/30/0）：operation=%s → 上限 %s%%；当前仓位 %s%% %s"
           % (p.get("operation"), p.get("corpus_total_cap_pct"), p.get("position_pct"),
