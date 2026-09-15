@@ -318,6 +318,19 @@ def theme_buyable(theme):
     dg, dr = theme_fund_danger(theme)
     if dg:
         return False, dr
+    # 2026-09-15 参数对齐（P1，**默认关**）：他称的「选板块的第一要素」
+    #   2025-06-16「量能活跃(最近一周内至少2/3天数以上在10日量能以上)，资金没有5日连续流出的。」
+    #   离线对照：我们的池内通过该门的子集后 5 日超额 +0.718%（n=177）vs 不通过 −0.080%（n=732）
+    #   → 开启会改变行为（他的门 104/164 天非空，其余日子不布新腿），故默认 0，待拍板。
+    try:
+        from wolf_theme_vol_fund import enabled as _vf_on, theme_volfund_ok as _vf_ok
+        if _vf_on():
+            ok_vf, why_vf = _vf_ok(theme)
+            if not ok_vf:
+                return False, "选板块第一要素未过(2025-06-16「量能活跃+资金没有5日连续流出」): " + str(why_vf)
+            dr = dr + " | " + str(why_vf)
+    except Exception as _e:
+        print("[wolf_context] theme_volfund 检查跳过: %s" % str(_e)[:80])
     return True, "主题[%s] 可买: stage=%s verdict=%s | %s" % (theme, stage, st.get("verdict"), dr)
 
 
@@ -349,9 +362,17 @@ def index_level_stop(wave=None, today=None, max_stale_days=None):
         n = 3
     if today and wd and n >= 0:
         import datetime as _dt
+        import re as _re2
         try:
-            d1 = _dt.date(int(wd[:4]), int(wd[4:6]), int(wd[6:8]))
-            d2 = _dt.date(int(str(today)[:4]), int(str(today)[4:6]), int(str(today)[6:8]))
+            # ⚠️ 2026-09-14 修复：wave_state.json 的 date 是**带横杠**的（"2026-09-10"），
+            # 原实现直接切字符串 wd[4:6] → "-0" → int("-0")=0 → date(2026,0,..) 抛异常 →
+            # 被 except 吞掉 → **新鲜度护栏长期静默失效**（拿过期浪型做清仓级动作）。
+            _w8 = _re2.sub(r"\D", "", wd)[:8]
+            _t8 = _re2.sub(r"\D", "", str(today))[:8]
+            if len(_w8) != 8 or len(_t8) != 8:
+                raise ValueError("bad date")
+            d1 = _dt.date(int(_w8[:4]), int(_w8[4:6]), int(_w8[6:8]))
+            d2 = _dt.date(int(_t8[:4]), int(_t8[4:6]), int(_t8[6:8]))
             if (d2 - d1).days > n:
                 return False, "指数浪型数据过期(wave_state.date=%s, 距今 %d 天 > %d) → 不触发" % (
                     wd, (d2 - d1).days, n)
@@ -410,9 +431,17 @@ def index_top_state(wave=None, today=None, max_stale_days=None):
         n = 3
     if today and wd and n >= 0:
         import datetime as _dt
+        import re as _re2
         try:
-            d1 = _dt.date(int(wd[:4]), int(wd[4:6]), int(wd[6:8]))
-            d2 = _dt.date(int(str(today)[:4]), int(str(today)[4:6]), int(str(today)[6:8]))
+            # ⚠️ 2026-09-14 修复：wave_state.json 的 date 是**带横杠**的（"2026-09-10"），
+            # 原实现直接切字符串 wd[4:6] → "-0" → int("-0")=0 → date(2026,0,..) 抛异常 →
+            # 被 except 吞掉 → **新鲜度护栏长期静默失效**（拿过期浪型做清仓级动作）。
+            _w8 = _re2.sub(r"\D", "", wd)[:8]
+            _t8 = _re2.sub(r"\D", "", str(today))[:8]
+            if len(_w8) != 8 or len(_t8) != 8:
+                raise ValueError("bad date")
+            d1 = _dt.date(int(_w8[:4]), int(_w8[4:6]), int(_w8[6:8]))
+            d2 = _dt.date(int(_t8[:4]), int(_t8[4:6]), int(_t8[6:8]))
             if (d2 - d1).days > n:
                 return None, "指数浪型数据过期(wave_state.date=%s, 距今 %d 天 > %d) → 不动作" % (wd, (d2 - d1).days, n)
         except Exception:
