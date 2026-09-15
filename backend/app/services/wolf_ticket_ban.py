@@ -34,6 +34,7 @@ def enabled() -> bool:
 def ttl_td() -> int:
     """TTL（交易日）。默认 13（他的时间周期）；⚠️ 期限本身是我们的代理，不是他的原话。"""
     try:
+        # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
         return max(int(float(os.getenv("WOLF_BAN_TTL_TD", "13"))), 1)
     except (TypeError, ValueError):
         return 13

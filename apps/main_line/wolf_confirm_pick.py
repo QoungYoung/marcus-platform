@@ -10,9 +10,9 @@ v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低×(1+WO
 import os, sys, json, time, glob, urllib.request, statistics
 sys.path.insert(0, "/app/app"); sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "/app/data")
-MIN_AMT20_YI = 1.0
-LIMITUP_PCT = 9.7
-RANK_WIN = 60
+MIN_AMT20_YI = 1.0      # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
+LIMITUP_PCT = 9.7         # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
+RANK_WIN = 60             # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)(窗口)
 
 
 def _relay():
@@ -197,10 +197,15 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     """
     exclude = set(exclude or [])
     AS = as_of or latest_gate_date()
+    # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)（他的话『就6个票』是持仓数，语义不等价）
     pool_n = int(pool_n if pool_n is not None else os.getenv("WOLF_PICK_POOL_N", "6"))
+    # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)（他只有『挂前一天低点』）
     dist_pct = float(dist_pct if dist_pct is not None else os.getenv("WOLF_PICK_DIST_PCT", "5.0"))
+    # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)（他未给 r20 阈值；实测该闸净负）
     min_r20 = float(os.getenv("WOLF_PICK_MIN_R20", "0"))
+    # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
     tier2_gap = float(tier2_gap if tier2_gap is not None else os.getenv("WOLF_PICK_TIER2_GAP", "8.0"))
+    # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
     max_legs = int(max_legs if max_legs is not None else os.getenv("WOLF_PICK_MAX_LEGS", "4"))
     # S1(2026-09-10 清理自造机制): ETF 兜底腿默认关闭。
     # 原逻辑"空窗(位置闸/选择层闸否掉全部)且主题有 ETF → 必买 ETF"与狼大「买不到位置就等」相反,
@@ -330,6 +335,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     #   原实现用当日低(`dist_prevlow`)对比, 该值恒 >=0 故判据永不成立。
     wind = wait_pool[0] if wait_pool else None
     wind_broken = bool(wind and (wind.get("dist_prevlow_prev") is not None)
+                       # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)（风向标“死”的 -0.5% 阈值；他只有『死了就不做』）
                        and wind["dist_prevlow_prev"] <= -0.5)
     # ②当日布腿 = 池(LOW/MID) ∩ 位置闸(距前一日低<=dist_pct)
     # 2026-09-10 狼大'分类龙头/龙2'(WOLF_PICK_MODE=concept, 默认): 全主题统一口径算 leader(可比)

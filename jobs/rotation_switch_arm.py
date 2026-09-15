@@ -196,6 +196,7 @@ def pick_buy(chain, exclude, limit=3):
     if not cands:
         return []
     # ① 市值预筛(单次全市场调用): 龙头优先于字典序
+    # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
     shortlist_n = int(os.getenv("WOLF_PICK_BUY_SHORTLIST", "80"))
     try:
         mv = {str(x[0]): float(x[1] or 0) for x in _gz("daily_basic", {"trade_date": _today()}, "ts_code,total_mv")}
@@ -444,7 +445,7 @@ def theme_of_chain(c):
     return None
 
 SELL_EXPR = {"op": "==", "field": "quote.vwap_break", "value": True}
-BUY_253_EXPR = {"and": [{"op": ">=", "field": "index.m5_dump", "value": 0.4},
+BUY_253_EXPR = {"and": [{"op": ">=", "field": "index.m5_dump", "value": 0.4},   # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)(253 跌幅阈值)
                         {"op": ">", "field": "quote.average", "value": 0},
                         {"op": ">", "field": "quote.current", "value": 0}]}
 BUY_254_EXPR = {"and": [{"op": "==", "field": "quote.dip_prev_low", "value": True},
@@ -609,7 +610,7 @@ def main():
     if qualify and pool:
         # B(2026-09-09): 等待池分批——tier1严格前2 + tier2接近档补位至 ROT_POOL_LEGS(默认4);
         # 成交节奏由资金闸兜底(probe<=5%预算尽自动停), 狼大'埋伏一批等位置'
-        pool_legs = int(os.getenv("ROT_POOL_LEGS", "4"))
+        pool_legs = int(os.getenv("ROT_POOL_LEGS", "4"))   # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)（他的话『分了4个方向』是调仓方向数）
         print("CONFIRMED_POOL", pool, "pool_legs", pool_legs, file=sys.stderr)
         got = 0
         for th in pool:

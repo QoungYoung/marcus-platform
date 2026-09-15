@@ -98,15 +98,15 @@ T_BUY_TIER_LIMIT_ENABLED = os.getenv("T_BUY_TIER_LIMIT_ENABLED", "1") != "0"
 T_TURNOVER_LIMIT_ENABLED = os.getenv("T_TURNOVER_LIMIT_ENABLED", "1") != "0"
 
 # ── 参数（P4 敏感度扫描标定，当前保守档初值） ──
-MAX_SINGLE_ORDER_PCT = 0.05        # 单笔 ≤ 净值 5%（建议层）
-DAILY_LOSS_BREAKER_PCT = 0.02      # 日亏 2% 熔断（硬闸门）
+MAX_SINGLE_ORDER_PCT = 0.05        # 单笔 ≤ 净值 5%（建议层）  # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
+DAILY_LOSS_BREAKER_PCT = 0.02      # 日亏 2% 熔断（硬闸门）  # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
 DAILY_LOSS_WARN_PCT = 0.01         # 日亏 1% 预警（建议层）
 MAX_SELL_FLOOR_RATIO = 1.0         # 买腿 ≤ 可卖底仓（L2 默认 1:1）
-COOLDOWN_AFTER_LOSS_MIN = 15       # 亏损后冷却（标准档 15min）
-SLIPPAGE_PCT = 0.0003             # 滑点参数化假设 0.03%（做T低价吃bid/高价抛ask, 实际滑点小；原0.1%高估）
+COOLDOWN_AFTER_LOSS_MIN = 15       # 亏损后冷却（标准档 15min）  # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
+SLIPPAGE_PCT = 0.0003             # 滑点参数化假设 0.03%  # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)（做T低价吃bid/高价抛ask, 实际滑点小；原0.1%高估）
 COST_RATIO_LIMIT = 0.2             # 滑点+手续费 > 价差空间 20% 不触发
 MIN_T_SPREAD_FILTER = 0.002        # 最低价差过滤（相对价 0.2%）
-MAX_DAILY_TURNOVER_RATIO = 3.0     # 日累计回转额 ≤ 3×净值（主指标）
+MAX_DAILY_TURNOVER_RATIO = 3.0     # 日累计回转额 ≤ 3×净值（主指标）  # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
 # S7 统一口径(2026-09-10): wolf 回补单日上限。与 wolf_253_build.WOLF_REFILL_MAX_PER_DAY 同源(同一 env),
 # 使执行层护栏与策略层 refill_253 不再各用一套规则。狼大「来来回回做几次就行了」→ 默认 2。
 MAX_WOLF_REFILL_PER_DAY = int(os.getenv("WOLF_REFILL_MAX_PER_DAY", "2"))
@@ -899,6 +899,7 @@ def _log_decision_refusal(symbol: str, why: str, shadow: bool, account_id: str =
 def _trade_cap() -> int:
     """G6 每日每标的成交笔数上限（默认 2；0=关闭）。狼大 2025-02-07「一个票最多买 2 笔 卖 2 笔」。"""
     try:
+        # ✅语料: 2025-02-07「一个票最多买2笔 卖2笔」
         return max(int(float(os.getenv("WOLF_MAX_TRADES_PER_SYMBOL_PER_DAY", "2"))), 0)
     except (TypeError, ValueError):
         return 2
