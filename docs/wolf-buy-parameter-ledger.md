@@ -1921,3 +1921,78 @@ docker exec marcus-worker python /app/jobs/audit_config_overrides.py
 .venv/bin/python jobs/scan_dict_params.py --keys CONFIG        # position_class 11 键
 .venv/bin/python jobs/scan_dict_params.py --keys WAVE_ALLOC    # wave_alloc 5 键
 ```
+
+## 46 配置面的两个"看板陷阱"：死配置文件 vs 权威文件多出的 25 键（2026-09-15 round 34）
+
+顺着 §42/§44 的「生效值」纪律，把 `config/*.json` 也核了一遍 —— 结果有两类问题。
+
+### 46.1 `config/switch_wolf_defaults.json`：**没有任何读取者（死配置）**
+
+* 全仓检索（`backend/ apps/ jobs/ core/`）：文件名 `switch_wolf_defaults` **0 处提及**；
+  其独有键 `staged_buy_days`、`shortlist_max` **0 处提及**；`sell_scale` / `crowded_no_space` 只出现在
+  `jobs/rotation_switch_dryrun.py` 里同名的**独立函数**（不读该文件）→ **它不参与任何生产行为**；
+* 但它的外观很像权威配置（`config/` 目录、带 `version`），且里面写着一批**看起来生效**的值：
+
+  | 键 | 值 |
+  |---|---|
+  | `sell_scale.crowded_no_space` | defense/exit/t_only/side = clear，build = halve |
+  | `sell_scale.crowded_with_space` | defense/exit = halve |
+  | `tool_etf` / `order` | keep / sell_first_then_staged_buy |
+  | `staged_buy_days` / `max_staged_refills` | 3 / 2 |
+  | `shortlist_min` / `shortlist_max` | 3 / 5 |
+  | `caps` | probe 0.03 / refill_base 0.08 / add_base 0.05 |
+
+* 它自己声明了来源：`"source_level": "system_assumption(非狼大原话; E10全清/E12减45→18/E08不清ETF为案例)"`
+  → **即使在用，也不能当语料依据**；
+* **处置建议（待拍板）**：按用户"真删不要停用"的原则，这类**未接线的配置文件**应删除或改名为 `*.unused.json`
+  并在文档注明"未接线"，避免后续 AI/人误以为它在生效。本轮只**登记**，不擅自删除生产目录文件。
+
+### 46.2 `config/p3_position_tiers.json`：**权威且被读，但比代码默认多 25 键**
+
+* 它是 P3 三仓档位模型的**权威来源**（`position_tier._load_cfg()` 先读 `config/` 再读 `DATA_DIR/`，
+  代码里的 `DEFAULT_CFG` 只是**兜底**）；文件头自述「P3 三仓档位模型 v0 规则（**本地 config/ 权威**，
+  可同步服务器；DB 覆盖后续支持）」；
+* 实测对比（本地文件 ↔ 代码 `DEFAULT_CFG`，两者在生产与本地 md5 一致 ✅）：
+
+  ```
+  文件 78 键 / 代码默认 53 键 → 差异 25 处
+  ```
+
+  差异**全部是"文件有、代码没有"**，其中最关键的是**各档 `needs` 前置条件**（档位能不能做的判据）：
+
+  | 位置 | needs（文件里的真实判据） |
+  |---|---|
+  | `wave.build.intents.new_base` / `add_base` | `[]` / `["has_base"]` |
+  | `wave.build.intents.refill_base` | `["has_base_or_t_universe"]` |
+  | `wave.side.intents.new_base` | `["rel_low_or_mainline"]` |
+  | `wave.defense.intents.add_base` | `["has_base", …]` |
+  | `wave.exit.intents.*` | 多为 `[]` / `["has_base"]` |
+
+  以及 `defaults.t_cap_pct = 5`、`defaults.intent_not_allowed_reason`、`doc`/`mode_env` 等元字段。
+
+* ⇒ **结论：P3 档位的"生效判据"要读 `config/p3_position_tiers.json`，不能读代码 `DEFAULT_CFG`**
+  —— 后者缺 25 键（含 needs 门槛）。这与 §42（DB 覆盖）、§44（`data/*_params.json` 校准产物）是同一条纪律的
+  第三次实例，而这次落在**买入侧的"买多少"**上。
+
+### 46.3 生效值来源汇总（累计三层，均已实测）
+
+| 层 | 位置 | 实例 | 核对方式 |
+|---|---|---|---|
+| DB 配置表 | `wolf_discipline_config` / `t_build_params` | `profit_take.enabled` true（代码 false）；`no_rebuild_symbols` 2 只（代码 1 只） | `jobs/audit_config_overrides.py --only-changed` |
+| 校准产物 | `data/trend_confirm_params.json` 等 | 趋势确认 10 键里 6 键被覆盖（32 标注拟合） | 同上加 `--files-only --data-dir <快照>` |
+| 权威配置文件 | `config/p3_position_tiers.json` | 比代码默认多 **25 键**（含各档 `needs`） | 本轮 §46.2（可仿照写自查） |
+
+> 附带结论：本仓库里"配置文件"既不等于"生效"（§46.1 死配置），也不等于"代码默认"（§46.2 多 25 键）
+> —— **每次引用某个参数值，都要先确认"谁在读它"**。
+
+### 46.4 复现
+
+```bash
+# 死配置核查（全仓检索读取者）
+grep -rn "switch_wolf_defaults" --include=*.py backend apps jobs core | grep -v __pycache__
+# P3 权威文件 vs 代码默认
+.venv/bin/python -c "import json,sys;sys.path.insert(0,'backend');from app.services.position_tier import DEFAULT_CFG;\
+print(len(json.load(open('config/p3_position_tiers.json',encoding='utf-8'))), len(DEFAULT_CFG))"
+# 生产与本地是否一致
+md5sum config/p3_position_tiers.json config/switch_wolf_defaults.json
+```
