@@ -789,6 +789,30 @@ def main():
                 buy_legs = []
     except Exception as _e144:
         print("[rotation_switch_arm] ma144 err:", str(_e144)[:80], file=sys.stderr)
+    # ⑫ 「白线在上 ∧ 缩量 → 没有买点」（2026-09-15 round 17）：**默认只记录（影子）**，WOLF_LINE_REGIME_GATE=1 才拦买腿。
+    #   狼大 2025-07-15「缩量 白线在上千万别没事加仓…60%仓位内」/ 2026-04-09「今天白线在上 肯定没有买点…减回50%-55%仓位」。
+    #   离线验收（jobs/eval_line_regime.py，总账 §26）：253 腿在他说"没买点"的日子 −1.556%（n=608，周块状 t −1.35）
+    #   vs 放行 +0.157%；周内配对 16/24 周为负（周级 t −1.19，不显著）→ 先影子攒样本。
+    try:
+        import importlib as _il5
+        _p5 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _p5 not in sys.path:
+            sys.path.insert(0, _p5)
+        _MLR = _il5.import_module("wolf_line_regime")
+        _st_lr = _MLR.state()
+        if _MLR.shadow_enabled():
+            _MLR.shadow_record({"wave_op": wop, "gate_blocked": [t.get("theme") for t in _gate_blocked],
+                                "pool": pool, "buy_legs": [b.get("symbol") for b in buy_legs],
+                                "raw_legs_n": len(buy_legs)})
+        print("LINE_REGIME side=%s shrink=%s no_buy=%s gate=%s allow=%s"
+              % (_st_lr.get("side"), _st_lr.get("shrink"), _st_lr.get("no_buy"),
+                 _MLR.gate_enabled(), _MLR.allow(_st_lr)), file=sys.stderr)
+        if _MLR.gate_enabled() and buy_legs and not _MLR.allow(_st_lr):
+            print("LINE_REGIME_GATE 拦下 %d 条买腿（白线在上 ∧ 缩量 → 他说的没有买点）: %s"
+                  % (len(buy_legs), [b.get("symbol") for b in buy_legs]), file=sys.stderr)
+            buy_legs = []
+    except Exception as _e_lr:
+        print("[rotation_switch_arm] line_regime err:", str(_e_lr)[:80], file=sys.stderr)
     # 2026-09-09 账户权限: 无创业板权限 → 布腿统一剔除(SZ300/SZ301); WOLF_PICK_BOARD_EXCLUDE 可加 kcb/bj
     _ex_b = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
     _board_ok = board_ok      # F2(2026-09-15)：与选股侧共用**唯一实现**（原内联版已删，避免两套口径分叉）
