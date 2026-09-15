@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """wolf_confirm_pick.py — confirm_pick 狼大化 v2.1 (三层: 等待池+位置闸+ETF兜底+风向标监控)
 拍板(2026-09-09): A=确认链成分候选域 / B=老龙头等权标签 / C=主题容量提示 / D=20日成交额<1亿硬切
-v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低x1.005) → 当日布腿=池∩低吸位置闸(距前一日低<=X%)
+v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低×(1+WOLF_DIP_PREVLOW_TOL), 语料值 tol=0) → 当日布腿=池∩低吸位置闸(距前一日低<=X%)
                 池∩闸=0(空窗) → 等待(不硬做); ETF兜底腿默认关闭(S1) ; 风向标(池第一)收破前日低 → 硬拦(P1-1)
 环境变量: WOLF_PICK_LEGACY=1 回退旧版 / WOLF_PICK_POOL_N / WOLF_PICK_DIST_PCT / WOLF_PICK_ETF_FALLBACK(默认0)
          / WOLF_PICK_WIND_HARD(默认1, 狼大"风向标死了就不做") / WOLF_RS_GATE(默认1) / WOLF_PICK_EMPTY_WAIT(默认1)
@@ -119,6 +119,14 @@ def theme_etf(theme):
     except Exception:
         pass
     return None
+
+def _dip_tol():
+    """254 触发容差（语料值 0.0；历史自设 0.005）。见 docs/wolf-buy-parameter-ledger.md §2-C1。"""
+    try:
+        return max(float(os.getenv("WOLF_DIP_PREVLOW_TOL", "0.0") or 0.0), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 def _banned_from_service():
     """G3 删票黑名单 —— 容器/宿主两种布局都要能找到 `app.services.wolf_ticket_ban`。
@@ -271,7 +279,9 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                        "lim": lim, "cross": cc, "mv": (mv.get(ts, 0) or 0) / 1e4,
                        "dist_prevlow": round(d1, 2), "dist_low5": round(d5, 2),
                        "dist_prevlow_prev": round(d1p, 2),
-                       "trig_price": round(lows[-1] * 1.005, 3)})
+                       # 254 触发价：语料值 = 前一日低点本身（狼大 2025-03-06「就是挂前一天的低点」）；
+                       # `WOLF_DIP_PREVLOW_TOL` 默认 0.0（历史自设值 0.005）。与 t_monitor._stock_dip_prev_low 同源。
+                       "trig_price": round(lows[-1] * (1.0 + _dip_tol()), 3)})
     if not scored:
         return _st("no_scored", "成分域经板块/ST/成交额过滤后为空")
     def pct_rank(vals, key):

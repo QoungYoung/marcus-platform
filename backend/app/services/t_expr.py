@@ -87,7 +87,7 @@ FIELD_REGISTRY: Dict[str, Dict[str, Any]] = {
     "index.bai_on_top": ("bool", "白线在上(权重强于小票→减少做T)", "wolf_index_breadth"),
     # 个股触前一交易日5min最低(A档+缩量; 狼大'挂前一天的低点', 2025-03-06):
     # 当日触及/跌破前日低点(±0.5%)且量比<=0.7缩量 -> 低吸(回测133天 T+1+0.78%/0.56)
-    "quote.dip_prev_low": ("bool", "个股当日触及前一交易日5min最低(±0.5%; A档正T低吸)", "t_monitor._stock_dip_prev_low"),
+    "quote.dip_prev_low": ("bool", "个股当日触及前一交易日5min最低(容差 WOLF_DIP_PREVLOW_TOL，语料值 0=挂前低本身；A档正T低吸)", "t_monitor._stock_dip_prev_low"),
     # S3 删除(2026-09-10): 原"动态回撤保护"(现价≤当日高点×(1-振幅自适应阈值))已删除 ——
     # 狼大不用百分比移动止损, 属审计 §5.2 认定的自造机制。字段保留但恒 False(见 t_monitor 快照),
     # 以便存量条件(t_conditions 中引用 quote.trail_break 的 custom_trail_sell 腿)继续可求值、但不触发。

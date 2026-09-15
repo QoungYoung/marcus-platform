@@ -62,6 +62,7 @@ MIN_R20 = 0.0         # WOLF_PICK_MIN_R20
 RS_MIN = 0.0          # WOLF_PICK_RS_MIN
 WIND_BREAK = -0.5     # 风向标"死"：收盘 vs 前一交易日低 ≤ -0.5%
 HOLD = 5              # 前瞻窗口（交易日，可用 --hold 覆盖）
+DIP_TOL = 0.005       # 254 触发容差（--dip-tol；语料值 0.0，历史自设 0.005）
 LIMITUP = 9.7         # 涨停判定阈值（%）
 MC_DRAWS = 200        # 池内随机对照的蒙特卡洛次数
 
@@ -125,15 +126,18 @@ class Panel:
         r = self.close[b] / self.close[a] - 1.0
         return r * 100.0
 
-    def fwd_ret_254(self, i, hold=HOLD):
-        """254 回踩挂单：触发价 = low(D)×1.005；D+1 盘中触及则按触发价成交，出场 D+1+hold 收盘。
+    def fwd_ret_254(self, i, hold=HOLD, tol=None):
+        """254 回踩挂单：触发价 = low(D)×(1+tol)；D+1 盘中触及则按触发价成交，出场 D+1+hold 收盘。
+
+        `tol`：语料值 **0.0**（狼大 2025-03-06「就是挂前一天的低点」）；历史自设 0.005。
+        默认取模块级 DIP_TOL（由 --dip-tol 设置，默认 0.005 以保持旧结果可复现）。
 
         返回 (return%, filled)；未触及 → (None, False)。
         """
         a, b = i + 1, i + 1 + hold
         if b >= self.T:
             return None, False
-        trig = self.low[i] * 1.005
+        trig = self.low[i] * (1.0 + (DIP_TOL if tol is None else float(tol)))
         hit = self.low[a] <= trig
         r = np.where(hit, self.close[b] / np.where(hit, trig, np.nan) - 1.0, np.nan) * 100.0
         return r, hit
@@ -452,15 +456,18 @@ def main():
     ap.add_argument("--end", default="20260904")
     ap.add_argument("--pool-only", action="store_true", help="只在方向层池内主题上跑（生产产量口径）")
     ap.add_argument("--hold", type=int, default=5, help="前瞻持有交易日数（默认 5；低位埋伏口径更长，见 blueprint §6）")
+    ap.add_argument("--dip-tol", type=float, default=0.005,
+                    help="254 触发容差（语料值 0.0=挂前低本身；历史自设 0.005）")
     ap.add_argument("--themes", default="", help="逗号分隔，限定主题")
     ap.add_argument("--trades", action="store_true", help="额外核对生产实际成交腿（需 PG 隧道）")
     ap.add_argument("--moneyflow", action="store_true",
                     help="② 个股级资金确认：加载 .dsh-tmp/buyside/moneyflow_*.parquet 并加资金分档/IC（默认不加载）")
     ap.add_argument("--mf-api", default="moneyflow", help="资金流数据源：moneyflow(tushare) / moneyflow_dc(东财)")
     ap.add_argument("--json", default=OUT)
-    global HOLD
+    global HOLD, DIP_TOL
     args = ap.parse_args()
     HOLD = int(args.hold)
+    DIP_TOL = float(args.dip_tol)
 
     panel = Panel()
     MF = load_moneyflow(panel, args.mf_api) if args.moneyflow else None
@@ -661,7 +668,8 @@ def main():
     D = pd.DataFrame(day_rows)
     IC = pd.DataFrame(ic_rows)
     res = {"window": [days[0], days[-1]], "n_days": len(days), "n_theme_days": len(D),
-           "pool_only": bool(args.pool_only), "hold": HOLD, "themes": sorted(set(D["th"]))}
+           "pool_only": bool(args.pool_only), "hold": HOLD, "dip_tol": DIP_TOL,
+           "themes": sorted(set(D["th"]))}
     arms = ["t1", "t12", "lowmid", "cand", "wait", "basket", "market", "rand", "legacy"]
     res["arms"] = {a: {"value": _rows_stat(day_rows, "v_" + a), "excess": _rows_stat(day_rows, "x_" + a)
                        if a != "basket" else {"n": len(D), "mean": 0.0, "median": 0.0, "win": None,

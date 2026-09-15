@@ -57,6 +57,17 @@ def _board_tradable(symbol) -> bool:
 
 WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break", "index.m5_dump", "quote.dip_prev_low")
 
+# 254 低吸触发容差（2026-09-15 参数对齐）：狼大 2025-03-06「就是**挂前一天的低点** 能买进去就做正T」
+#   → 语料值 = 0.0（挂前低本身）；历史自设值 0.005（±0.5% 容差）。见 docs/wolf-buy-parameter-ledger.md §2-C1。
+def _dip_prevlow_tol() -> float:
+    try:
+        return max(float(os.getenv("WOLF_DIP_PREVLOW_TOL", "0.0") or 0.0), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+DIP_PREVLOW_TOL = _dip_prevlow_tol()
+
 
 class TMonitor:
     """做T监控器：daemon 线程，30s 轮询 t_conditions，命中写 t_triggers。"""
@@ -1809,12 +1820,18 @@ class TMonitor:
             return 0.0
 
     def _stock_dip_prev_low(self, symbol: str) -> bool:
-        """个股当日5min最低 ≤ 前一交易日5min最低×1.005（A档：触及/跌破前日低点）。
-        狼大2025-03-06『挂前一天的低点 能买进去就做正T』；配 vol_ratio<=0.7 缩量。
+        """个股当日5min最低 ≤ 前一交易日5min最低×(1+tol)（A档：触及/跌破前日低点）。
+
+        狼大 2025-03-06（逐字）:「就是**挂前一天的低点** 能买进去就做正T 买不进去证明涨了 不用动 主升浪的做法」
+        → 他的话是"挂**前一天的低点**"本身，即 **tol = 0**。
+        `WOLF_DIP_PREVLOW_TOL`（2026-09-15 参数对齐新增）：**默认 0.0 = 语料值**；
+        历史值是 0.005（自设容差，参数总账 §2-C1）。置 0.005 可回退旧行为。
+        配 vol_ratio<=0.9 缩量（`BUY_254_EXPR`）。
         fetch_minute_bars m5 count=320 ≈ 6.5 交易日，取最近非今日组的 min low。30s TTL。"""
         now = time.time()
         key = symbol
-        if now - _prev_low_cache.get("at", 0) < 30 and _prev_low_cache.get("sym") == key:
+        if (now - _prev_low_cache.get("at", 0) < 30 and _prev_low_cache.get("sym") == key
+                and _prev_low_cache.get("tol") == DIP_PREVLOW_TOL):
             return _prev_low_cache.get("value", False)
         try:
             from app.services.t_data_sources import fetch_minute_bars
@@ -1834,8 +1851,8 @@ class TMonitor:
             today_low = min(float(b["low"]) for b in by_day.get(today, [by_day[days[-1]][0]]))
             prev_day = days[-2] if today in days else days[-1]
             prev_low = min(float(b["low"]) for b in by_day[prev_day])
-            ok = prev_low > 0 and today_low <= prev_low * 1.005
-            _prev_low_cache.update({"at": now, "sym": key, "value": ok})
+            ok = prev_low > 0 and today_low <= prev_low * (1.0 + DIP_PREVLOW_TOL)
+            _prev_low_cache.update({"at": now, "sym": key, "value": ok, "tol": DIP_PREVLOW_TOL})
             return ok
         except Exception as e:
             print(f"[TMonitor] 前日低点计算失败 {symbol}: {e}")
