@@ -146,3 +146,43 @@
 3. **阶段口径是"跨主题 r5 分位"**（我们的代理）：他原话只说"强势/弱势板块"，没有给分位口径；
    生产里更自然的口径是**方向层池**，但用池当强主题的实测更差（c5：−0.009%，H1 −0.145%）→ 保留分位口径并标注为代理。
 4. **未做**：错杀票的"有业绩有订单没有雷"（缺结构化事件源）、龙虎榜席位结构（数据薄）。
+
+
+---
+
+# 接生产接线（2026-09-15，round 4）：开关 + 影子
+
+## 10 接线方式
+
+`apps/main_line/wolf_confirm_pick.pick_v2()` 末尾新增分支（**默认关**）：
+
+```
+WOLF_PICK_RANK_V3=1         → 生效：返回 v3 选票（pick_source='v3'，只取 1 只）
+WOLF_PICK_RANK_V3_SHADOW=1  → 影子：**只记录不生效**（返回仍是原 leader 的票）
+两个都关（默认）             → 行为与接线前逐字节一致
+```
+
+v3 分支用的就是**已验收配置**：域 = 候选池 ∩ LOW/MID（去掉 `r20≥0` 与 `rs≥0` 两个实测净负的闸）、
+排序 = LOW 优先 + `flat_low_days` 次键、阶段 = 主题 r5 **跨主题分位** ≥0.5 → 强 → 二供（跳过组内 r20 最高一只）、
+只取 1 只；`flat_low_days` 由 pick_v2 现成的日线算出（`fetch_daily` 新增 high 字段）。
+影子/生效都会写 `data/rank_v3_<as_of>.json`（含 v3 选票、leader 选票、域大小、主题分位）。
+
+`theme_r5_quantile(theme, as_of)` 在 `wolf_pick_rank_v3.py` 里实现（PG 聚合 + 按日缓存 `data/theme_r5_<as_of>.json`），
+**已用本地独立复算校验**：2026-09-11 各主题分位逐一对上（农业 0.9167 / 军工 1.0 / 医药 0.0833 / 半导体 1.0；
+本地未做 1.0 截断故最大值为 1.0833，生产已 `min(1.0, …)`）。
+
+## 11 生产影子实测（2026-09-15，容器内只读 + `WOLF_PICK_RANK_V3_SHADOW=1`）
+
+```
+RANK_V3 SHADOW theme=半导体/芯片 domain=10 q=1.0 v3=['SH603986'] | leader=[]
+status=ok picks=[]        ← 返回的仍是 leader 的票（空），行为未变
+data/rank_v3_20260911.json: mode=shadow, q=1.0, domain_n=10
+  v3 会选: [{"symbol": "SH603986", "v3_score": 1.0, "why": "低位(LOW)"}]
+```
+
+→ 这一天 **现行 leader 位置闸命中 0 只（不布腿）**，而 **v3 会布 SH603986（低位）** —— 正是"对齐后会有什么不同"的实例。
+
+## 12 单测
+
+`backend/tests/test_rank_v3_wiring.py` 3 项：默认关（选票不变、无影子文件）／影子（返回 leader 票 + 写影子文件）／
+开启（返回 1 只 `pick_source='v3'` + `mode=on`）。

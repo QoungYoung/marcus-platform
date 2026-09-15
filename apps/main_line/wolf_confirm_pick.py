@@ -100,8 +100,10 @@ def cross_concepts():
 
 def fetch_daily(ts, end):
     rows = gz("daily", {"ts_code": ts, "start_date": "20260301", "end_date": end},
-              "ts_code,trade_date,close,low,amount")
-    return sorted((str(x[1]), float(x[2]), float(x[3]), float(x[4])) for x in rows)
+              "ts_code,trade_date,close,low,amount,high")
+    # rows: (trade_date, close, low, amount, high)  —— high 为 2026-09-15 v3 排序新增（flat_low_days）
+    return sorted((str(x[1]), float(x[2]), float(x[3]), float(x[4]),
+                   (float(x[5]) if len(x) > 5 and x[5] not in (None, "") else None)) for x in rows)
 
 def theme_etf(theme):
     """主题ETF兜底: etf_theme_map_pi.json primary[0] -> (xq, ts_code, name)"""
@@ -280,7 +282,25 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
         d5 = 99.0
         if len(lows) >= 5 and min(lows[-5:]) > 0:
             d5 = (closes[-1] / min(lows[-5:]) - 1) * 100
+        # v3 排序次键「低位横盘多时」（2026-04-07「低位横盘多时的就是好 超跌都没有低位走平多时的好」）：
+        #   近 20 日中「日振幅<2% ∧ 收盘位于 20 日区间下半」的天数
+        highs = [r[4] for r in rows]
+        flat_low = 0
+        seg_c, seg_h, seg_l = closes[-20:], [h for h in highs[-20:]], lows[-20:]
+        if len(seg_c) >= 10 and all(h is not None for h in seg_h):
+            hi20, lo20 = max(seg_c), min(seg_c)
+            rng = (hi20 - lo20) or 1.0
+            for k in range(len(seg_c)):
+                try:
+                    if seg_c[k] <= 0:
+                        continue
+                    amp = (float(seg_h[k]) - float(seg_l[k])) / float(seg_c[k])
+                    if amp < 0.02 and (seg_c[k] - lo20) <= 0.5 * rng:
+                        flat_low += 1
+                except (TypeError, ValueError):
+                    continue
         scored.append({"ts": ts, "name": nm, "xq": xq, "amt20": amt20, "r60": r60, "r20": r20,
+                       "flat_low_days": flat_low, "hist": len(closes),
                        "lim": lim, "cross": cc, "mv": (mv.get(ts, 0) or 0) / 1e4,
                        "dist_prevlow": round(d1, 2), "dist_low5": round(d5, 2),
                        "dist_prevlow_prev": round(d1p, 2),
@@ -403,6 +423,64 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
               "reason": {"r60_rank": round(f_r60(r["ts"]), 3), "amt_rank": round(f_amt(r["ts"]), 3),
                          "lim_rank": round(f_lim(r["ts"]), 3), "cross_concepts": r["cross"]}}
              for r, tier in _rows]
+    # ① 排序/域对齐（2026-09-15）：**v3 条件化分层排序**（离线验收见 docs/wolf-pick-rank-v3-eval.md §6）
+    #   已验收配置：域 = 候选池 ∩ LOW/MID（**去掉 r20≥0 与 rs≥0 两个实测净负的闸**）；
+    #   排序 = LOW 优先，并列次键 = flat_low_days；阶段 = 主题 r5 **跨主题分位** ≥0.5 → 强 → 走"二供"
+    #   （跳过组内 r20 最高的一只，2026-04-13「已经涨起来的板块的龙头不做 做他的二供」）；只取 1 只。
+    #   离线（含费率）：5 日 +0.213%→+0.083%（现行 −0.982%~−1.112%），配对 Δ +1.120pp（t 2.29），H1/H2 两段都更优。
+    #   开关：WOLF_PICK_RANK_V3=1 生效；WOLF_PICK_RANK_V3_SHADOW=1 只记录不生效（默认都关）。
+    _v3_on = os.getenv("WOLF_PICK_RANK_V3", "0").strip() == "1"
+    _v3_shadow = os.getenv("WOLF_PICK_RANK_V3_SHADOW", "0").strip() == "1"
+    if _v3_on or _v3_shadow:
+        try:
+            import wolf_pick_rank_v3 as _V3
+            # 域 = 候选池（组内前2 ∩ 容量分位）∩ LOW/MID —— 与离线验收的 domain=cand_low 同口径
+            _domain = [r for r in cand_pool if str(r.get("pos")) in ("LOW", "MID")]
+            _r20s = [r["r20"] for r in _domain if r.get("r20") is not None]
+            if _r20s:
+                _lo, _hi = min(_r20s), max(_r20s)
+                for r in _domain:
+                    r["rank_in_theme"] = (1.0 if _hi == _lo else (r["r20"] - _lo) / (_hi - _lo)) \
+                        if r.get("r20") is not None else None
+            _q = _V3.theme_r5_quantile(theme, AS)
+            _v3picks = _V3.pick_top(_domain, theme_r5_qtile=_q, n=1, variant="V1",
+                                    components="pos", tiebreak="flat",
+                                    stage_mode="qtile", diergong=True, qtile_hi=0.5, qtile_lo=0.5)
+            _v3out = [{"symbol": r["xq"], "ts_code": r["ts"], "position": r["pos"], "theme": theme,
+                       "r20": round(r["r20"], 1) if r["r20"] is not None else None,
+                       "rs": r.get("rs"), "dist_prevlow": r["dist_prevlow"],
+                       "flat_low_days": r.get("flat_low_days"), "trig_price": r["trig_price"],
+                       "tier": "v3", "pick_source": "v3",
+                       "v3_score": r.get("v3_score"), "reason": {"v3": r.get("v3_reasons", "")[:120],
+                                                                 "theme_r5_qtile": _q}}
+                      for r in _v3picks]
+            try:
+                _sj = os.path.join(DATA, "rank_v3_%s.json" % AS)
+                _cur = {}
+                if os.path.exists(_sj):
+                    try:
+                        _cur = json.load(open(_sj, encoding="utf-8")) or {}
+                    except Exception:
+                        _cur = {}
+                _cur.setdefault("date", AS)
+                _cur.setdefault("themes", {})
+                _cur["themes"][theme] = {"mode": "on" if _v3_on else "shadow",
+                                         "theme_r5_qtile": _q,
+                                         "v3": [{"symbol": p.get("symbol"), "v3_score": p.get("v3_score"),
+                                                 "why": (p.get("reason") or {}).get("v3")} for p in _v3out],
+                                         "leader": [{"symbol": p.get("symbol"), "tier": p.get("tier"),
+                                                     "leader": p.get("leader")} for p in picks],
+                                         "domain_n": len(_domain)}
+                json.dump(_cur, open(_sj, "w"), ensure_ascii=False, indent=1)
+            except Exception as _sje:
+                print("RANK_V3_SHADOW_WRITE_ERR", str(_sje)[:80], file=sys.stderr)
+            print("RANK_V3 %s theme=%s domain=%d q=%s v3=%s | leader=%s"
+                  % ("ON" if _v3_on else "SHADOW", theme, len(_domain), _q,
+                     [p["symbol"] for p in _v3out], [p["symbol"] for p in picks]), file=sys.stderr)
+            if _v3_on:
+                picks = _v3out
+        except Exception as _v3e:
+            print("RANK_V3_ERR", theme, str(_v3e)[:150], file=sys.stderr)
     # ③ETF兜底(空窗: 个股0布 且 风向标未破 且 主题有ETF)
     etf = theme_etf(theme)
     etf_used = False

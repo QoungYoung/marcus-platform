@@ -195,3 +195,80 @@ def pick_top(rows: List[Dict[str, Any]], theme_r5: Optional[float] = None,
                      tiebreak=tiebreak, theme_r5_qtile=theme_r5_qtile,
                      stage_mode=stage_mode, diergong=diergong,
                      qtile_hi=qtile_hi, qtile_lo=qtile_lo)[:max(0, int(n))]
+
+
+# ─────────────────────── 生产接线辅助（2026-09-15，round 4） ───────────────────────
+def theme_r5_quantile(theme: str, as_of: Optional[str] = None) -> Optional[float]:
+    """该主题「近 5 日等权涨幅」在**当日各主题之间**的分位（0–1，PIT）。
+
+    离线验收（`docs/wolf-pick-rank-v3-eval.md` §6）里 stage=qtile 用的就是它：
+    「强/弱板块」用**跨主题相对分位**（2026-04-19「弱势板块找强势票，强势板块找二线补涨」），
+    而**不是**绝对阈值（v1 用 ±0.5% 绝对阈值实测无增益）。
+
+    数据：PG `mkt_bars_daily` 近 6 个交易日 × 全部主题成分（去重后 ~5,500 只）；
+    结果按 as_of 缓存 `data/theme_r5_<as_of>.json`。失败 → None（stage 关闭，不做二供）。
+    """
+    import json as _json
+    try:
+        import psycopg2
+        import sys as _s
+        _p = os.path.dirname(os.path.abspath(__file__))
+        if _p not in _s.path:
+            _s.path.insert(0, _p)
+        from app.services.wolf_mainline_select import load_universe
+        uni, _lead, _allc = load_universe()
+        if theme not in uni:
+            return None
+        d8 = as_of or _dt_date8()
+        cache = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "theme_r5_%s.json" % d8)
+        data = None
+        try:
+            with open(cache, encoding="utf-8") as f:
+                data = _json.load(f)
+        except Exception:
+            data = None
+        if not isinstance(data, dict) or theme not in data:
+            conn = psycopg2.connect(os.getenv("DATABASE_URL",
+                                              "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT trade_date FROM mkt_bars_daily WHERE trade_date<=%s "
+                        "ORDER BY trade_date DESC LIMIT 6", (d8,))
+            ds = sorted(str(r[0]) for r in cur.fetchall())
+            if len(ds) < 6:
+                cur.close(); conn.close(); return None
+            d0, d1 = ds[0], ds[-1]
+            codes = sorted({c for cc in uni.values() for c in cc})
+            out = {}
+            for th, cc in uni.items():
+                cl = [c for c in cc if c]
+                if not cl:
+                    continue
+                cur.execute("SELECT AVG(r) FROM (SELECT ts_code, "
+                            "(MAX(close) FILTER (WHERE trade_date=%s) / NULLIF(MIN(close) FILTER (WHERE trade_date=%s),0) - 1) AS r "
+                            "FROM mkt_bars_daily WHERE trade_date IN (%s,%s) AND ts_code = ANY(%s) "
+                            "GROUP BY ts_code) t", (d1, d0, d0, d1, cl))
+                v = (cur.fetchone() or [None])[0]
+                if v is not None:
+                    out[th] = float(v)
+            cur.close(); conn.close()
+            if len(out) < 5:
+                return None
+            vals = sorted(out.values())
+            for th, v in out.items():
+                rank = sum(1 for x in vals if x <= v) / max(1, len(vals) - 1)
+                out[th] = round(min(1.0, max(0.0, rank if len(vals) > 1 else 1.0)), 4)
+            data = out
+            try:
+                with open(cache, "w", encoding="utf-8") as f:
+                    _json.dump(data, f, ensure_ascii=False)
+            except Exception:
+                pass
+        return data.get(theme)
+    except Exception as e:
+        print("[rank_v3] theme_r5_quantile 失败 %s: %s" % (theme, str(e)[:80]))
+        return None
+
+
+def _dt_date8() -> str:
+    import datetime as _d
+    return _d.date.today().strftime("%Y%m%d")
