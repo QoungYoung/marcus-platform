@@ -107,7 +107,17 @@ class Settings(BaseSettings):
 
     @staticmethod
     def _detect_workspace() -> Path:
-        """Detect Marcus platform root path."""
+        """Detect Marcus platform root path.
+
+        ⚠️ 容器布局：`backend/app` 挂在 `/app/app`，故"上溯三级"= **`/`**（不是工作区）。
+        生产之所以没炸，是因为 compose 注入了 `MARCUS_WORKSPACE=/app`，这个兜底根本没被调用
+        （2026-09-15 round 29 路径审计发现；见 docs/wolf-buy-parameter-ledger.md §37）。
+        这里改成**先按标记目录判定**（与 `jobs/refresh_index_daily.py` 同款约定）：
+          · 容器（`/app/app` 与 `/app/data` 都在）→ `/app`；
+          · 宿主机（没有 `/app/app`）→ 保持原上溯逻辑不变（= 仓库根），**行为零变化**。
+        """
+        if os.path.isdir("/app/app") and os.path.isdir("/app/data"):
+            return Path("/app")
         # Use marcus-platform directory (backend is at marcus-platform/backend/)
         return Path(__file__).parent.parent.parent
 
