@@ -138,6 +138,7 @@ def main():
     topk = collections.defaultdict(list)      # 前 k 只等权 → [(date, ex), ...]
     dd_bucket = collections.defaultdict(list)   # 回撤幅度桶 → [(date, ex)]
     pos_bucket = collections.defaultdict(list)  # 当日区间位置桶 → [(date, ex)]
+    corr_rows = []                              # (pos_daily, {feat: val})
     recs = []          # 每个 (日,主题) 一行：各臂的均值 + 配对数
     for d in days:
         i = panel.di[d]
@@ -242,6 +243,10 @@ def main():
                         _pl = ("pos<0.2" if _pos < 0.2 else "pos0.2-0.5" if _pos < 0.5 else
                                "pos0.5-0.8" if _pos < 0.8 else "pos>=0.8")
                         pos_bucket[_pl].append((d, _p["ex"]))
+                        corr_rows.append({"pos": _pos, "ex": _p["ex"], "d": d,
+                            "f": {k: _p.get(k) for k in
+                                  ("dist_prevlow", "rs", "r20", "flat_low_days", "hist",
+                                   "pct_today", "rank_in_theme", "vol_ratio5", "mf5")}})
             if args.by_rank and args.by_rank_var.upper() == "CUR" and cur:
                 _srt = sorted(cur, key=lambda x: -(x.get("r20") if x.get("r20") is not None else -1e18))
                 for _k, _p in enumerate(_srt[:6]):
@@ -282,6 +287,10 @@ def main():
                             _pl = ("pos<0.2" if _pos < 0.2 else "pos0.2-0.5" if _pos < 0.5 else
                                    "pos0.5-0.8" if _pos < 0.8 else "pos>=0.8")
                             pos_bucket[_pl].append((d, _p["ex"]))
+                            corr_rows.append({"pos": _pos, "ex": _p["ex"], "d": d,
+                                "f": {k: _p.get(k) for k in
+                                      ("dist_prevlow", "rs", "r20", "flat_low_days", "hist",
+                                       "pct_today", "rank_in_theme", "vol_ratio5", "mf5")}})
                 out["n_" + var] = len(picks)
                 # 与现行 tier1 的重合度
                 if cur and picks:
@@ -372,6 +381,40 @@ def main():
                      stt.get("win") or 0, stt.get("block_t")))
         res["by_drawdown"] = {k: E._stat(v, [x for _, x in v]) for k, v in dd_bucket.items()}
         res["by_pos"] = {k: E._stat(v, [x for _, x in v]) for k, v in pos_bucket.items()}
+        if corr_rows and len(corr_rows) > 50:
+            _xs = np.array([r["pos"] for r in corr_rows], dtype=float)
+            print("\n   —— pos_daily 与现有因子的 Pearson 相关（n=%d）——" % len(_xs))
+            for _f in ("dist_prevlow", "rs", "r20", "flat_low_days", "hist",
+                       "pct_today", "rank_in_theme", "vol_ratio5", "mf5"):
+                _ys = np.array([(r["f"].get(_f) if r["f"].get(_f) is not None else np.nan)
+                                for r in corr_rows], dtype=float)
+                _m = ~np.isnan(_ys)
+                if _m.sum() < 50 or np.nanstd(_ys[_m]) == 0:
+                    continue
+                _c = float(np.corrcoef(_xs[_m], _ys[_m])[0, 1])
+                print("     %-16s r=%+.3f  n=%d" % (_f, _c, int(_m.sum())))
+            # 二维交叉：在 dist_prevlow 分位内，pos∈[0.5,0.8) 是否仍有增量
+            _dp = np.array([(r["f"].get("dist_prevlow") if r["f"].get("dist_prevlow") is not None else np.nan)
+                            for r in corr_rows], dtype=float)
+            _ok = ~np.isnan(_dp)
+            if _ok.sum() > 200:
+                _q1, _q2 = np.nanpercentile(_dp[_ok], [33.3, 66.7])
+                print("\n   —— 二维交叉：dist_prevlow 三分位 × pos 是否落在 [0.5,0.8)（同主题超额%%）——")
+                print("     %-22s %-18s %-18s" % ("dist_prevlow 档", "pos∈[0.5,0.8)", "pos 其他"))
+                for _lbl, _sel in (("低档(距前低最近)", _dp <= _q1),
+                                   ("中档", (_dp > _q1) & (_dp <= _q2)),
+                                   ("高档(距前低最远)", _dp > _q2)):
+                    _cells = []
+                    for _want in (True, False):
+                        _rs = [(r["d"], r["ex"]) for r, m, dp in zip(corr_rows, _sel, _dp)
+                               if m and ((0.5 <= r["pos"] < 0.8) == _want) and r["ex"] is not None]
+                        if not _rs:
+                            _cells.append("n=0")
+                            continue
+                        _st = E._stat(_rs, [v for _, v in _rs])
+                        _cells.append("n=%-4s mean=%6.3f t=%5s"
+                                      % (_st.get("n"), _st.get("mean") or 0, _st.get("block_t")))
+                    print("     %-22s %-38s %-38s" % (_lbl, _cells[0], _cells[1]))
     if args.by_rank:
         print("\n== 主题内第 k 只腿（变体 %s；同主题超额%%）==" % args.by_rank_var.upper())
         for k in sorted(by_rank):
