@@ -1415,7 +1415,7 @@ docker exec marcus-worker sh -c 'env | grep -c ""'     # → 77
 ### 38.2 机制：⑩⑫⑬ 三段影子写在 `if qualify and pool:` **块内**
 
 `jobs/rotation_switch_arm.py:730` ⇒ `if qualify and pool:`（`qualify` 默认开），
-而 `pool = [t for t in confirmed_today_set if t != "农业"之外的银行]`（第 708 行）= **今日主线确认主题池**。
+而 `pool = [t for t in confirmed_today_set if t != "银行"]`（第 708 行）= **今日主线确认主题池**（剔除银行）。
 没有"今日确认主题"的日子，整块跳过 → 144 / 白线 / 大盘量能三类影子的状态**根本不记**。
 
 历史 9 次 arm run（09-04 → 09-15）里，只有 **4 次**有 `CONFIRMED_POOL`（09-09、09-10 各两次，全是「农业」）：
