@@ -213,12 +213,50 @@ def normalize_state_files(sb: str, cut: str) -> list:
     return fixed
 
 
+# 这些文件在沙箱里**由本脚本按 as-of 播种**，但会被"再生类"生产脚本顺手改写（实测：
+# `wolf_mainline_select.py` 会把 `main_line_state.json` 重写 → 用它去选主题/确认域就不是 as-of 了）
+# → 在跑 producer 前**快照**，跑完**还原**（producer 自己负责产出的文件不在此列）。
+PROTECT_AFTER_PRODUCERS = ["main_line_state.json", "mainline_confirm_history.json",
+                           "latest_hot_sectors.json", "etf_share_flow.json", "concept_long.json",
+                           "theme_inst_flow.json", "wave_pivots.json"]
+
+
+def snapshot_files(sb: str, names) -> dict:
+    snap = {}
+    for nm in names:
+        p = os.path.join(sb, nm)
+        if os.path.exists(p) and not os.path.islink(p):
+            try:
+                with open(p, "rb") as f:
+                    snap[nm] = f.read()
+            except Exception:
+                pass
+    return snap
+
+
+def restore_files(sb: str, snap: dict) -> list:
+    """把 producer 跑动过的受保护文件还原（返回被还原的文件名）。"""
+    restored = []
+    for nm, blob in snap.items():
+        p = os.path.join(sb, nm)
+        try:
+            cur = open(p, "rb").read() if os.path.exists(p) else None
+        except Exception:
+            cur = None
+        if cur != blob:
+            with open(p, "wb") as f:
+                f.write(blob)
+            restored.append(nm)
+    return restored
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True, help="决策日 T（如 20260911）")
     ap.add_argument("--cut", default="", help="数据切点（默认 = 前一交易日）")
     ap.add_argument("--bars-db", default=os.path.join(ROOT, "bars.sqlite"))
     ap.add_argument("--no-llm", action="store_true", help="跳过 wave agent（LLM）再生")
+    ap.add_argument("--no-shim", action="store_true", help="跳过 4 个 producer 的 as-of 打桩（全用 stub）")
     ap.add_argument("--llm-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
     a = ap.parse_args()
 
@@ -241,10 +279,17 @@ def main() -> int:
         src = os.path.join(SRC, name)
         rec(name, fn(src, os.path.join(sb, name), cut) | {"src": "truncated", "from": src}
             if os.path.exists(src) else None)
-    # index_daily 直接拷贝（wave/144 只用 ≤ 日期的部分；由消费方按 as-of 过滤）
+    # index_daily 必须**按日期截断**（有些消费方是整段算的：position_class 的确认链、wave 的均线）
     idx = os.path.join(SRC, "index_daily_000001.json")
     if os.path.exists(idx):
-        rec("index_daily_000001.json", copy_json(idx, os.path.join(sb, "index_daily_000001.json")) | {"src": "copy"})
+        rows = _jload(idx, []) or []
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            kept = [r for r in rows if str(r.get("trade_date") or "") <= cut]
+            _jdump(os.path.join(sb, "index_daily_000001.json"), kept)
+            rec("index_daily_000001.json", {"src": "truncated", "rows": len(kept), "of": len(rows),
+                                           "last": (kept[-1].get("trade_date") if kept else None)})
+        else:
+            rec("index_daily_000001.json", copy_json(idx, os.path.join(sb, "index_daily_000001.json")) | {"src": "copy"})
 
     # ② 按日产物
     for tmpl in PER_DATE:
@@ -252,6 +297,27 @@ def main() -> int:
         rec(name, from_archive_or_db(name, cut, os.path.join(sb, name)))
     for name in SINGLE_FROM_ARCHIVE:
         rec(name, from_archive_or_db(name, cut, os.path.join(sb, name)))
+    # `main_line_state.json` 是**当日覆盖型、且会被 T 日早间任务（08:00）重写**的文件：
+    #   T 日 08:20 的 stock_confirm / 09:20 的布腿器看到的版本 = **updated_at ≤ T 日早晨** 的那份
+    #   （实测 09-11：生产那份 updated_at=2026-09-11 08:00:46，main_line=稳增长/基建、candidates 含 AI/传媒；
+    #    而 09-10 的 D1 select 只给 农业 —— 两者是不同写入方，用错就会把主题选偏、连带确认域与腿全偏）。
+    # 选择顺序：_archive/<T>（19:50 快照，若未被当日链重写则就是早间那份）→ _archive/<cut> → DB(daily_artifacts)。
+    _picked = None
+    for d8, tag in ((T, "archive_T"), (cut, "archive_cut")):
+        cand = os.path.join(SRC, "_archive", d8, "main_line_state.json")
+        if not os.path.exists(cand):
+            continue
+        dd = _jload(cand, {}) or {}
+        upd = str(dd.get("updated_at") or "")[:10].replace("-", "")
+        if upd and upd > T:          # 比 T 还晚 = 当日盘后被重写过，不是早间那份
+            continue
+        shutil.copy2(cand, os.path.join(sb, "main_line_state.json"))
+        _picked = {"src": tag, "path": cand, "updated_at": dd.get("updated_at"), "date": dd.get("date"),
+                   "main_line": dd.get("main_line")}
+        rec("main_line_state.json", _picked)
+        break
+    if not _picked:
+        rec("main_line_state.json", from_archive_or_db("main_line_state.json", cut, os.path.join(sb, "main_line_state.json")))
 
     # ③c 沙箱兜底：把生产 data 下**其余文件**软链进来（脚本缺输入时才不会炸）；
     #     已知产物先建成真实空文件 → 任何写入都落在沙箱里，**绝不会穿透到生产文件**。
@@ -280,6 +346,11 @@ def main() -> int:
     except Exception as e:
         print("[seed] 沙箱兜底失败: %s" % str(e)[:90], flush=True)
 
+
+    # ③a-2 regen 前先快照"按 as-of 播种好的"受保护文件（regen 会顺手改写 main_line_state 之类）
+    _snap_seed = snapshot_files(sb, PROTECT_AFTER_PRODUCERS)
+    man["protected_files"] = sorted(_snap_seed.keys())
+
     # ③ 再生：方向层主线选择（有 --date）
     try:
         r = subprocess.run([sys.executable, "/app/jobs/wolf_mainline_select.py", "--date", cut],
@@ -295,6 +366,12 @@ def main() -> int:
             {"src": "regen", "rc": r.returncode, "ok": ok, "tail": (r.stdout or r.stderr or "")[-160:]})
     except Exception as e:
         rec("wolf_mainline_select.json(regen)", {"src": "regen_err", "err": str(e)[:90]})
+
+    # ③a-3 regen 的副作用立刻撤掉（它会重写 main_line_state → 那就不再是 as-of 那份）
+    _rb = restore_files(sb, _snap_seed)
+    if _rb:
+        man["restored_after_regen"] = _rb
+        print("[seed] regen 后还原 as-of 文件：%s" % _rb, flush=True)
 
     # ③b 归一化易变字段（必须在 wave 之前：否则 prompt 每次都变，LLM 缓存不可回放）
     try:
@@ -318,8 +395,43 @@ def main() -> int:
         except Exception as e:
             rec("wave_state.json(regen)", {"src": "regen_llm_err", "err": str(e)[:90]})
 
-    # ④ 待打桩的 4 个：先沿用最近一版（manifest 标 stub）
+    # ④ as-of 打桩：跑没有 --date 的生产脚本（钉时钟 + 本地日线 + 沙箱 DATA_DIR）
+    #    顺序 = 概念高低位 → 子方向 → 方向层池 → 确认域（后面的依赖前面的产物）
+    PINNED = [
+        ("position_class_result.json", "apps/main_line/position_class.py", []),
+        ("rotation_sub_universe.json", "apps/main_line/derive_sub_universe.py", ["--refresh-result"]),
+        ("rotation_universe_result.json", "apps/main_line/rotation_universe.py", []),
+        ("stock_confirm_result.json", "apps/main_line/stock_confirm_judge.py", []),
+    ]
+    if a.no_shim:
+        for name, _script, _args in PINNED:
+            src = os.path.join(SRC, name)
+            info = copy_json(src, os.path.join(sb, name)) if os.path.exists(src) else None
+            rec(name, (dict(info, src="stub_no_shim") if info else None))
+    else:
+        _snap = snapshot_files(sb, PROTECT_AFTER_PRODUCERS)   # producers 前再快照一次（含 wave 之后的最终态）
+        for name, script, args in PINNED:
+            out = os.path.join(sb, name)
+            before = os.path.getmtime(out) if os.path.exists(out) else 0
+            try:
+                r = subprocess.run([sys.executable, "/app/jobs/bt_run_pinned.py", "--as-of", cut,
+                                    "--data-dir", sb, "--bars-db", a.bars_db,
+                                    "--script", os.path.join("/app", script), "--"] + args,
+                                   capture_output=True, text=True, timeout=1800,
+                                   env={**os.environ, "DATA_DIR": sb})
+                after = os.path.getmtime(out) if os.path.exists(out) else 0
+                rec(name, {"src": "regen_pinned", "rc": r.returncode, "written": after > before,
+                           "script": script, "tail": (r.stderr or r.stdout or "")[-200:]})
+            except Exception as e:
+                rec(name, {"src": "regen_pinned_err", "err": str(e)[:100]})
+        man["restored_after_producers"] = restore_files(sb, _snap)
+        if man["restored_after_producers"]:
+            print("[seed] producer 跑完后还原 as-of 文件：%s" % man["restored_after_producers"], flush=True)
+
+    # 其余辅助文件仍沿用最近一版（manifest 标 stub）
     for name in STUB_FROM_LIVE:
+        if any(name == n for n, _s, _a in PINNED):
+            continue
         src = os.path.join(SRC, name)
         if not os.path.exists(src) and name == "p3_position_tiers.json":
             src = "/app/config/p3_position_tiers.json"

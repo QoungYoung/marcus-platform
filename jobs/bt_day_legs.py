@@ -1,0 +1,275 @@
+# -*- coding: utf-8 -*-
+"""bt_day_legs.py — 在 as-of 沙箱里重放**单个决策日的 09:20 布腿器（买侧）**，产出当日腿。
+
+口径（与 `jobs/rotation_switch_arm.py::main()` 的买侧逐行对齐，只是数据换成沙箱 + as-of）：
+  ① 卖侧不动（本轮只做买侧；卖侧 leg 在盘中/次日由成交与止损链处理）
+  ② `wave_state.operation` → wop；`rotation_universe_result` → crowded/room/holdT/healthy/sucking
+  ③ 方向层池（`mainline_today` = 沙箱 `wolf_mainline_select.json`）→ 主题可买门（结构 ∧ 资金）
+  ④ 买链 = `room + holdT` 过"主线性"资格（`MAINLINE_QUALIFY`）→ 路径A `pick_buy`（≤2 链 × ≤3 只）
+  ⑤ 确认池主题 → 路径B `confirm_pick`（`pick_v2`：组内前2 ∩ 容量 ∩ LOW/MID ∩ v3 排序）≤ `ROT_POOL_LEGS`
+  ⑥ 板块前过滤（`WOLF_PICK_BOARD_EXCLUDE`）→ **两道入口门**（`wolf_entry_filters.filter_legs`，分位按候选域）
+  ⑦ 每条腿：253（custom_m5dump）+ 254（custom_prevlow；`WOLF_MA_LINE_ENTRY=1` 时挂最近均线价）
+
+数据层：`bt_daily_cache.Bars`（本地 SQLite，强制 ≤ cut）+ ETF/指数走 relay 兜底（同样按日期截断）。
+
+用法：
+  python jobs/bt_day_legs.py --date 20260911                      # 持仓用 --held 或 --held-from-db
+      --held "SZ002409,SH588170,SH512480,SH603259" | --held-from-db
+      [--sandbox /app/data/_bt_full/20260911] [--out <sb>/legs.jsonl]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs", "/app/core", "/app/backend"]
+
+
+class GzShim:
+    """生产 `rotation_switch_arm._gz` 的替身：daily/daily_basic 走本地 SQLite；其余走 relay 并截断 ≤ as_of。"""
+
+    def __init__(self, bars_db: str, as_of: str):
+        self.bars_db = bars_db
+        self.as_of = str(as_of)
+        self.n_local = self.n_remote = 0
+        import importlib
+        self._relay_mod = importlib.import_module("tushare_relay")
+        self._real = self._relay_mod.relay_items
+
+    def _rows_from_sqlite(self, ts_code, cols, start, end):
+        import sqlite3
+        e = min(str(end or self.as_of), self.as_of)
+        c = sqlite3.connect(self.bars_db)
+        try:
+            cur = c.execute("SELECT %s FROM bars WHERE ts_code=? AND trade_date BETWEEN ? AND ? ORDER BY trade_date"
+                            % ",".join(cols), (str(ts_code), str(start), e))
+            return [tuple(r) for r in cur.fetchall()]
+        finally:
+            c.close()
+
+    def __call__(self, api, params, fields):
+        p = dict(params or {})
+        f = [x.strip() for x in str(fields or "").split(",") if x.strip()]
+        if api == "daily" and p.get("ts_code"):
+            cols = [c for c in f if c in ("ts_code", "trade_date", "open", "high", "low", "close",
+                                          "pre_close", "pct_chg", "vol", "amount", "total_mv", "turnover_rate")]
+            if not cols:
+                cols = ["ts_code", "trade_date", "close", "amount", "low", "high"]
+            self.n_local += 1
+            return self._rows_from_sqlite(p["ts_code"], cols, p.get("start_date") or "19000101",
+                                          p.get("end_date") or self.as_of)
+        if api == "daily_basic" and p.get("trade_date"):
+            d = min(str(p["trade_date"]), self.as_of)
+            import sqlite3
+            c = sqlite3.connect(self.bars_db)
+            try:
+                rows = c.execute("SELECT ts_code,total_mv FROM bars WHERE trade_date=? AND total_mv IS NOT NULL",
+                                 (d,)).fetchall()
+            finally:
+                c.close()
+            self.n_local += 1
+            return [tuple(r) for r in rows]
+        # 其余（ETF 日线 / 指数 / 资金流…）：真 relay + 按日期字段丢掉 as_of 之后的行
+        try:
+            flds, items = self._real(api, fields=fields, **p)
+        except Exception as e:
+            print("[legs] relay %s 失败 %s" % (api, str(e)[:70]), file=sys.stderr)
+            return []
+        self.n_remote += 1
+        idx = None
+        for cand in ("trade_date", "date", "trade_time", "end_date"):
+            if cand in (flds or []):
+                idx = flds.index(cand); break
+        if idx is not None and items:
+            items = [r for r in items
+                     if not (len(str(r[idx]).replace("-", "")[:8]) == 8 and str(r[idx]).replace("-", "")[:8].isdigit()
+                             and str(r[idx]).replace("-", "")[:8] > self.as_of)]
+        return items
+
+
+def held_from_db(cut: str, account: str = "stock"):
+    """从生产 `paper_trades`（≤ cut）重建持仓 —— 校验窗口用它，保证与生产当时的持仓一致。"""
+    import psycopg2
+    url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+    c = psycopg2.connect(url); cur = c.cursor()
+    # 注意：原实现用 `LIKE '买%'`，psycopg2 会把那个 `%` 当占位符（实测 IndexError）→ 改用 `= '买入'`
+    cur.execute("""SELECT symbol,
+                          SUM(CASE WHEN direction = '买入' THEN volume ELSE -volume END) AS v
+                   FROM paper_trades
+                   WHERE account_id=%s AND COALESCE(voided,0)=0 AND created_at < %s
+                   GROUP BY symbol
+                   HAVING SUM(CASE WHEN direction = '买入' THEN volume ELSE -volume END) > 0""",
+                (account, "%s-%s-%sT00:00:00" % (cut[:4], cut[4:6], cut[6:8])))
+    out = sorted(r[0] for r in cur.fetchall())
+    cur.close(); c.close()
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--date", required=True, help="决策日 T（如 20260911）")
+    ap.add_argument("--cut", default="", help="数据切点（默认 = 沙箱 _seed.json 里的 cut）")
+    ap.add_argument("--sandbox", default="")
+    ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
+    ap.add_argument("--held", default="", help="持仓（逗号分隔，作为 exclude）")
+    ap.add_argument("--held-from-db", action="store_true", help="用 paper_trades(≤cut) 重建持仓")
+    ap.add_argument("--out", default="")
+    a = ap.parse_args()
+
+    sb = a.sandbox or os.path.join(os.environ.get("DATA_DIR", "/app/data"), "_bt_full", a.date)
+    seed = {}
+    try:
+        seed = json.load(open(os.path.join(sb, "_seed.json"), encoding="utf-8"))
+    except Exception:
+        pass
+    cut = a.cut or seed.get("cut")
+    if not cut:
+        print("需要 --cut 或沙箱里有 _seed.json", file=sys.stderr); return 2
+    os.environ["DATA_DIR"] = sb
+    import importlib
+    arm = importlib.import_module("rotation_switch_arm")
+    arm.DATA = sb
+    arm._today = lambda: str(cut)
+    shim = GzShim(a.bars_db, cut)
+    arm._gz = shim
+    # 资金门（P2-2）与主题门（P1）都要 as-of 且**不能发通知**：
+    #   · `theme_nets(theme, as_of=None, days=…)` 返回 **List[float]**（不是 dict！），
+    #     正确做法是**强制传 as_of=cut**，而不是过滤返回值（第一版按 dict 过滤 → 返回 0 长度
+    #     → 资金门 fail-closed → 农业/金融/医药 全被"停止买入"，还顺手发了 QQ 通知）；
+    #   · 回测跑一年会触发成百上千次告警 → 必须把通知打成空操作（否则刷屏）。
+    try:
+        import wolf_theme_vol_fund as _WVF
+        _orig_nets = getattr(_WVF, "theme_nets", None)
+        if _orig_nets:
+            def _nets_cut(theme, as_of=None, *a, **kw):
+                return _orig_nets(theme, as_of=cut, *a, **kw)
+            _WVF.theme_nets = _nets_cut
+        _WVF.notify_once = lambda *a, **kw: False
+        _WVF._send_qq = lambda *a, **kw: False
+        import wolf_context as _WC
+        if getattr(_WC, "theme_nets", None) is not None:
+            _WC.theme_nets = _WVF.theme_nets
+        if getattr(_WC, "notify_once", None) is not None:
+            _WC.notify_once = lambda *a, **kw: False
+        print("[legs] 资金门已 as-of(cut=%s) 且通知置空" % cut, flush=True)
+    except Exception as e:
+        print("[legs] 资金门 as-of 打桩失败: %s" % str(e)[:90], file=sys.stderr)
+
+    held = set()
+    if a.held_from_db:
+        held = set(held_from_db(cut))
+    elif a.held:
+        held = {x.strip() for x in a.held.split(",") if x.strip()}
+
+    t0 = time.time()
+    wave = arm.load("wave_state.json"); ru = arm.load("rotation_universe_result.json")
+    ml = arm.load("main_line_state.json")
+    wop = str(wave.get("operation") or "side").lower()
+    crowded = ru.get("crowded_top") or []; room = ru.get("room_bottom") or []
+    holdT = ru.get("holdT_top") or []
+    healthy = bool(ru.get("rotation_healthy")); sucking = bool(ru.get("mainline_sucking"))
+    print("[legs] T=%s cut=%s wop=%s room=%s holdT=%s healthy=%s sucking=%s held=%d"
+          % (a.date, cut, wop, room, holdT, healthy, sucking, len(held)), flush=True)
+
+    confirmed_today_set = arm.mainline_today(cut) or set()
+    print("[legs] 方向层池(主线∪池)=%s" % sorted(confirmed_today_set), flush=True)
+    for c in list(room) + list(holdT):
+        print("   链 %s → theme=%s" % (c, arm.theme_of_chain(c)), flush=True)
+
+    buy_chains = []
+    qualify = os.getenv("MAINLINE_QUALIFY", "1").strip() in ("1", "true", "yes")
+    for c in room + holdT:
+        old_is_main = any(t in c or c in t for x in [str(ml.get("main_line") or ""),
+                                                     " ".join(str(v) for v in (ml.get("candidates") or []))]
+                          for t in x.split("/"))
+        is_main, skip_reason = old_is_main, None
+        if qualify and arm.theme_of_chain(c) is not None:
+            th0 = arm.theme_of_chain(c)
+            if th0 in confirmed_today_set:
+                is_main = True
+            else:
+                is_main = False; skip_reason = "not_today_confirmed:" + th0
+        if is_main:
+            buy_chains.append((c, "mainline"))
+        elif skip_reason:
+            print("[legs] SKIP_MAINLINE_LOWBUY %s %s" % (c, skip_reason), flush=True)
+        elif wop in ("t_only", "side", "defense", "exit") and healthy and not sucking:
+            buy_chains.append((c, "defensive_resource"))
+    print("[legs] 买链=%s" % buy_chains, flush=True)
+
+    dom, legs_out = [], []
+    for chain, side in buy_chains[:2]:
+        try:
+            picks = arm.pick_buy(chain, exclude=held, limit=3, domain_out=dom)
+        except Exception as e:
+            print("[legs] pick_buy %s ERR %s" % (chain, str(e)[:120]), flush=True); picks = []
+        for p in picks:
+            legs_out.append({"symbol": p["symbol"], "chain": chain, "side": side, "theme": arm.theme_of_chain(chain),
+                             "src": "pathA", "position": p.get("position"), "leader": p.get("leader")})
+        print("[legs] pathA %-12s → %s" % (chain, [p["symbol"] for p in picks]), flush=True)
+
+    pool = [t for t in confirmed_today_set if t != "银行"]
+    _gate_blocked = []
+    if pool:
+        try:
+            from wolf_context import theme_buyable
+            ok_pool = []
+            for th in pool:
+                ok, why = theme_buyable(th)
+                if ok:
+                    ok_pool.append(th)
+                else:
+                    print("[legs] SKIP_THEME_NOT_BUYABLE %s %s" % (th, str(why)[:110]), flush=True)
+                    _gate_blocked.append({"theme": th, "why": str(why)[:200]})
+            pool = ok_pool
+        except Exception as e:
+            print("[legs] THEME_BUYABLE_ERR(放行) %s" % str(e)[:110], flush=True)
+    if qualify and pool:
+        pool_legs = int(os.getenv("ROT_POOL_LEGS", "4"))
+        got = 0
+        for th in pool:
+            if got >= pool_legs:
+                break
+            try:
+                _pick = arm.confirm_pick(th, exclude=held, limit=pool_legs - got, domain_out=dom)
+            except Exception as e:
+                print("[legs] confirm_pick %s ERR %s" % (th, str(e)[:110]), flush=True); _pick = []
+            for cand in _pick:
+                if got >= pool_legs:
+                    break
+                legs_out.append({"symbol": cand["symbol"], "chain": th, "side": "mainline_confirmed", "theme": th,
+                                 "src": cand.get("pick_source") or "v2", "tier": cand.get("tier")})
+                got += 1
+            print("[legs] pathB %-12s → %s" % (th, [c["symbol"] for c in _pick]), flush=True)
+
+    # 板块前过滤（与生产同一函数）
+    _nb = len(legs_out)
+    legs_out = [l for l in legs_out if arm.board_ok(l["symbol"])]
+    if len(legs_out) != _nb:
+        print("[legs] BOARD_FILTER 去掉 %d 条" % (_nb - len(legs_out)), flush=True)
+    # 两道入口门（生产同一函数；分位按候选域）
+    try:
+        import wolf_entry_filters as EF
+        kept, blocked = EF.filter_legs(legs_out, cut, domain=dom)
+        if blocked:
+            print("[legs] ENTRY_FILTER 拦 %d/%d: %s" % (len(blocked), len(legs_out),
+                                                        [(b["symbol"], b["why"][:60]) for b in blocked]), flush=True)
+        legs_out = kept
+    except Exception as e:
+        print("[legs] entry_filters ERR %s" % str(e)[:110], flush=True)
+
+    out = a.out or os.path.join(sb, "legs.jsonl")
+    with open(out, "w", encoding="utf-8") as f:
+        for l in legs_out:
+            f.write(json.dumps(dict(l, date=a.date, cut=cut), ensure_ascii=False) + "\n")
+    print("[legs] 写出 %s：%d 条腿 %s | shim local=%d remote=%d | %.0fs"
+          % (out, len(legs_out), [l["symbol"] for l in legs_out], shim.n_local, shim.n_remote, time.time() - t0),
+          flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

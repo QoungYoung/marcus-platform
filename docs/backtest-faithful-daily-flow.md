@@ -224,3 +224,52 @@ data/_bt_runs/<T>/
 5. **盘中撮合**：分钟 bar 驱动 t_monitor 表达式 + t_gateway 护栏 + `BacktestPaperEngine`；
 6. **校验**：§6 五项对账，逐条解释差异；
 7. **出结果**：净值曲线 / 分主题分腿型收益 / 与"买而不卖"等基线对照（**最后才谈调参**）。
+
+---
+
+## 9. 实施进展与已发现的口径事实（2026-09-15 夜，第 1 轮）
+
+### 9.1 已建成的部件
+
+| 部件 | 作用 | 实测 |
+|---|---|---|
+| `jobs/bt_daily_cache.py` | 生产库 `mkt_bars_daily` → 本地 SQLite，提供与生产 `_gz` **同形状**的取数（强制 ≤ as_of） | 2,479,571 行 / 20241101→20260914 / 5,613 标的 / 388MB（≈60s）；与 relay 抽样一致 ✔ |
+| `jobs/bt_seed_day.py` | 为决策日 T 建 `_bt_full/<T>/` as-of 沙箱（截断 / 归档 / 再生 / 待打桩 + 软链兜底 + 防写入穿透 + 易变字段归一化） | 09-11 沙箱 ok=28；生产文件 mtime 未被改动 ✔ |
+| `jobs/bt_run_pinned.py` | 给**没有 `--date`** 的生产脚本钉时钟 + 钉取数（本地日线）+ 钉 DATA_DIR | 4 个 producer 全部 rc=0 **as-of 再生** ✔ |
+| `jobs/bt_day_legs.py` | 在沙箱里重放 09:20 布腿器买侧（主题门 → 路径A/B → 板前过滤 → 两道入口门 → 253/254） | 09-11 跑通（56s）✔ |
+| `jobs/bt_llm_replay.py` + `bt_wave_asof.py` | 波浪/交易腿 agent 的 LLM 录制-回放 | **波浪 as-of 重放与生产存档逐字段一致**（d4/4-3/side）✔ |
+
+### 9.2 已验证的"完全一致"（强证据）
+
+1. **波浪判定**：as-of 20260910 重放 = `d4/4-3/side`，与生产 `daily_artifacts`(trade_date=20260911) 一致 ✔
+2. **方向层 D1 选主**：`wolf_mainline_select.py --date 20260910` 再生结果 = `mainline=农业,
+   pool=[农业, 消费/内需, 金融, 稳增长/基建, 电力/公用, …]`，与生产同日 `daily_artifacts.mainline_select` **逐字段一致** ✔
+
+### 9.3 本轮踩到并修掉的坑（都会让结论失真，值得记）
+
+1. **钉时钟不能替换 `datetime.date/datetime` 本身** —— pandas/numpy 的 C 扩展会因 PyObject 尺寸变化**直接 SIGSEGV**（rc=-11）；
+   正确做法：**先 import pandas/numpy 预热**，再打补丁，且补丁类的 `today()/now()` **返回真实 date 实例**。
+2. **relay 替身只能替换 `relay_items`，不要动 `get_relay`** —— 原版 `relay_items` 内部调 `get_relay()`，
+   两者都换 → shim→原函数→shim 的**无限递归**（RecursionError，表现为"所有 relay 调用 0.0s 失败"）。
+3. **regenerate 类脚本会顺手改写其它状态文件** —— `wolf_mainline_select.py` 会把 `main_line_state.json` 重写；
+   若不快照/还原，后续 `stock_confirm_judge` 读到的是"再生后的 main_line_state"，主题就会选偏
+   （实测：确认域从生产口径的 AI/半导体族变成 农业/金融族）。→ 现已在 regen 后与 producers 前后**双次还原**。
+4. **`main_line_state.json` 的取源要用"≤ T 日早晨"**，不是"≤ cut"：T 日 08:20 的进程看到的是
+   **T 日 08:00 写的**那份（实测 09-11：`updated_at=2026-09-11 08:00:46`，`main_line=稳增长/基建`）。
+5. **`theme_nets()` 返回 `List[float]`（不是 dict）**：资金门要 as-of 就**传 `as_of=cut`**，
+   按 dict 过滤返回值会让序列长度变 0 → 资金门 fail-closed → 全部主题"停止买入"（并**真的发了 QQ 告警**）。
+   回测里必须把 `notify_once/_send_qq` 打成空操作，否则跑一年会刷屏。
+6. **归档里的"当日覆盖型"文件可能是盘后版本**：`_archive/<T>/stock_confirm_result.json` 是 **19:50 快照**，
+   而它当日被 18:55 的方向层链重写过 → 拿它当"T 日 08:20 的口径"比对会误判（本轮先踩，后改用 arm 日志当基准）。
+7. **psycopg2 里 `LIKE '买%'` 的 `%` 会被当占位符**（IndexError）→ 改 `= '买入'`。
+
+### 9.4 ⚠️ 结构性发现：**腿有两个来源**，只重放 09:20 会漏一半
+
+生产 09-11 的 18 条 switch 条件（9 只票）是 **08:18** 创建的吗？不是——是 **08:18** 由
+`jobs/tranche_ladder_report.py`（`SWITCH_AUTO_EXEC=1`）→ `switch_builder.build_plan()` 布的；
+而 **09:20** 的 `rotation_switch_arm` 当天 `buy_chains=[]`、`ARMED []`（一条没布）。
+反过来 09-15 是 09:20 布的（id 696–701）。
+⇒ **全拟真的腿层 = `switch_builder`（08:18 试仓档/清单）∪ `rotation_switch_arm`（09:20）**，
+两者都写 `publisher='switch'` 的条件。只重放后者会让腿数偏少（实测 09-11：2 vs 9）。
+下一步：把 `switch_builder.build_plan()` 也纳入沙箱重放，并以 `logs/rotation_switch_arm/*.json` +
+`_archive/<d>/db_t_conditions.csv` 做逐日对账基准。
