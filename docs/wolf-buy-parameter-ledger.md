@@ -1672,3 +1672,80 @@ objective ① 要的是「买入链**全部**可调参数」。§19 已经证过
 .venv/bin/python jobs/build_param_ledger.py --coverage  # 收录数应为 47、条目过期 0
 .venv/bin/python -m pytest backend/tests/test_scan_literal_params.py -q
 ```
+
+## 42 参数载体的**四类** + DB 覆盖优先级：字典型默认值，与「生效值 ≠ 代码默认」（2026-09-15 round 32）
+
+objective ① 要「买入链**全部**可调参数」。前三轮分别盖了 env/大写常量（§19）与函数字面量（§41）；
+本轮发现**还有一类载体**（字典型默认值的内部键），以及一个更要紧的事实：
+**跑起来的参数有优先级链 `DB 配置表 → 配置文件 → 代码内置默认`** —— 任何「我们与语料一致」的断言
+都必须以 **DB 生效值** 为准，否则可能对着一个**没在生效**的代码默认值下结论。
+
+### 42.1 参数载体四类（本轮定型）
+
+| # | 载体 | 例子 | 扫描工具 | 规模（买入链） |
+|---|---|---|---|---|
+| ① | env 键 | `WOLF_PICK_MAX_LEGS`、`ROT_POOL_LEGS`、`MIN_T_SPREAD_FILTER` | `build_param_ledger.py --coverage`（§19） | 502 键 |
+| ② | 模块级**标量**大写常量 | `MIN_T_SPREAD = 0.5`、`WOLF_EARLY_STOP_DAYS` | 同上 | 179 个 |
+| ③ | 函数默认值 / 局部字面量 | `pick_v2(limit=2)`、`look = 8` | `scan_literal_params.py`（§41） | 128 条 |
+| ④ | **字典型默认值的内部键** | 见下表 | **`scan_dict_params.py`（本轮新增）** | 10 个容器 |
+
+④ 类容器（≥5 键、已排除主题/事件映射词典）：
+
+| 容器 | 键数 | 语义 | 与买入层的关系 |
+|---|---|---|---|
+| `t_build.BUILD_PARAMS_DEFAULT` | **50** | 做T建仓参数：候选/建仓门槛、评分权重、趋势闸、时机窗、日上限、规模分档、trend_break 档 | **买什么/何时买/买多少**（全部自设） |
+| `trend_confirm.TREND_CFG` | 10 | 趋势确认：新高窗、确认新鲜度、回踩幅度区间、前低窗 | 买点确认（自设） |
+| `position_class.CONFIG` | 11 | 位置分类（低位/高位 × 量能/箱体/均线） | 买点位置判据（自设） |
+| `position_tier.CORPUS_PROFILE` | 7 | 语料档位画像（`P3_TIER_PROFILE=corpus` 用） | 已登记（§29） |
+| `wave_alloc.WAVE_ALLOC` | 5 | 浪型调档 invest（build/t_only/side/defense/exit） | 买腿数量缩放 |
+| `wolf_trend_stop.DEFAULTS` | 5 | 趋势止损均线/量窗 | 出场层（本任务不碰） |
+| 其余 4 个 | — | `TENCENT_FREQS`/`SINA_SCALES`（数据源周期）、`EARNINGS_MONTH_END`（日历）、`ETFS`（ETF 映射） | 非策略参数 |
+
+### 42.2 DB 配置面（**优先级最高**的一层，可不发版直接改）
+
+| 表 | 键数 | 内容 | 买入侧相关 |
+|---|---|---|---|
+| `wolf_discipline_config.cfg_json` | 35 键 / 4 段 | `position_cap`（档位目标 75/50/50/30/50、下限 build 55、单票/集中度/总仓上限全 0=不启用）、`profit_take`（浮盈 3% 减半）、`board_half`（板块半数阈值 19.5%/9.5%）、`weekend_de_risk`（0.5 减仓） | **`position_cap` = 买多少** |
+| `t_build_params.params_json` | 1 键（覆盖） | `no_rebuild_symbols` 禁重建/不回补名单 | **买入/回补侧** |
+| `golden_pit_sector_config` | **49** 键 | 黄金坑 DCA：载体（`dca_carrier_*`）、逐 ETF 出入场（`entry_exit_<code>` ×17）、板块池（`industry_pool`）、信号模式（`signal_mode=greed`） | 黄金坑买入面（本任务按用户指令不动） |
+
+### 42.3 实测：生效值 ≠ 代码默认（`jobs/audit_config_overrides.py`，round 32 运行）
+
+```
+=== wolf_discipline_config.cfg_json：DB 35 键 / 代码默认 28 键 → 差异 8 处
+  profit_take.enabled          DB覆盖  DB=true     代码=false        ← 真实覆盖
+  position_cap._note / _mapping.* (5) + profit_take._note   仅DB       ← 语料注释（代码侧没有）
+=== t_build_params.params_json：DB 1 键 / 代码默认 59 键 → 差异 59 处
+  no_rebuild_symbols           DB覆盖  DB=["SH515880","SZ002409"]  代码=["SH515880"]  ← 真实覆盖
+```
+
+* **真实覆盖只有 2 处**，但示例意义大于数量：`profit_take.enabled` 是**代码默认关、生产已开**
+  （DB `_note`：「2026-09-14 用户拍板开启：狼大『正常收益就是 3-5 个点』2026-04-23 /『T+0 2 个点我就够了』」）；
+  `no_rebuild_symbols` 比代码多一只 `SZ002409`（该票只减不补）。
+* ⇒ **凡是"我们与 X 一致"的结论，都要在这张表上核一遍**；只看代码默认值可能对着没生效的值下结论。
+
+### 42.4 台账覆盖现状与处置
+
+* 语义提过、键名没提：台账里「75/50/30」3 处、「止盈」6 处、「周末避险」2 处，但
+  `tier_targets` / `profit_take` / `board_half` / `no_rebuild_symbols` / `BUILD_PARAMS_DEFAULT` /
+  `TREND_CFG` / `position_class` / `golden_pit_sector_config` 的键名 **0 提及**；
+* 本轮把 **5 条**登记进 `INVENTORY`（44 → **51**）：DB 两张 JSON 表 + 三个字典型容器
+  （`t_build.BUILD_PARAMS_DEFAULT` / `trend_confirm.TREND_CFG` / `position_class.CONFIG`）；
+* **下一轮的活**：④ 类里与「买什么/买多少/何时买」直接相关的 **~76 个键**逐条对语料 ——
+  重点是 `t_build` 的门槛（`cand_score_min=0.78`、`build_score_min=0.78`、`trend_gate`、
+  `vol_ratio_max=2.0`、`drawdown_min_pct=1.0`、`quiet_end=09:45`、`afternoon_ban_from=13:00`、
+  `max_daily_auto=3`、`max_symbols_being_built=5`、规模分档 `single_order_pct/per_symbol_cap/total_floor_cap`）
+  与 `trend_confirm.TREND_CFG`（新高窗 / 回踩幅度 / 前低窗）。**这些目前全部是自设**，须按 §40 的方式给判定。
+
+### 42.5 复现
+
+```bash
+# ④ 类载体（离线，本地即可）
+.venv/bin/python jobs/scan_dict_params.py                        # 列容器
+.venv/bin/python jobs/scan_dict_params.py --keys BUILD_PARAMS_DEFAULT   # 展开 50 键
+# 生效值 vs 代码默认（需要 PG：本地走 SSH 隧道，容器内直连）
+.venv/bin/python jobs/audit_config_overrides.py --only-changed
+docker exec marcus-worker python /app/jobs/audit_config_overrides.py
+# 定向单测
+.venv/bin/python -m pytest backend/tests/test_config_override_audit.py backend/tests/test_scan_literal_params.py -q
+```

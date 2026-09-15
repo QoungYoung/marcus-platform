@@ -140,6 +140,25 @@ INVENTORY = [
     dict(id="tai.select_limit", cat="执行", name="AI 选股建仓上限（字面量默认值）",
          loc="t_ai_agent.ai_select_and_build(select_limit=5)", value="5", source="代码默认（函数字面量）",
          note="语料无对应数值；他的口径是每方向 2-3 只（§40.3a）"),
+    # ── ④ 字典型默认值容器 + DB 运行时可调（2026-09-15 round 32 补扫发现，见总账 §42）──
+    dict(id="tbuild.params_default", cat="执行", name="做T建仓参数字典（50 键：门槛/权重/趋势闸/时机/规模分档）",
+         loc="t_build.BUILD_PARAMS_DEFAULT", value="cand_score_min 0.78 / build_score_min 0.78 / vol_ratio_max 2.0 / "
+         "drawdown_min_pct 1.0 / quiet_end 09:45 / afternoon_ban_from 13:00 / max_daily_auto 3（全部自设）",
+         source="代码默认（**字典型常量内部键**）；DB `t_build_params.params_json` 可覆盖"),
+    dict(id="tbuild.params_db", cat="执行", name="做T建仓参数的 DB 覆盖（优先级最高）",
+         loc="t_build_params.params_json（DB）", value="no_rebuild_symbols=['SH515880','SZ002409']",
+         source="DB 生效值（代码默认只有 ['SH515880']）", note="生效值≠代码默认，§42.3 实测"),
+    dict(id="trend.confirm_cfg", cat="买点", name="趋势确认参数（10 键：新高窗/确认新鲜度/回踩幅度/前低窗）",
+         loc="trend_confirm.TREND_CFG", value="见 jobs/scan_dict_params.py --keys TREND_CFG",
+         source="代码默认（字典型常量内部键）", note="全部自设，待语料判定（§42.4）"),
+    dict(id="pick.position_class_cfg", cat="买点", name="位置分类参数（11 键：低位/高位 × 量能/箱体/均线）",
+         loc="position_class.CONFIG", value="见 jobs/scan_dict_params.py --keys CONFIG",
+         source="代码默认（字典型常量内部键）", note="全部自设，待语料判定（§42.4）"),
+    dict(id="cfg.wolf_discipline_db", cat="仓位", name="狼大纪律配置的 DB 生效值（档位/止盈/板块半数/周末避险）",
+         loc="wolf_discipline_config.cfg_json（DB，读序 DB→文件→内置默认）",
+         value="tier_targets build75/side50/t_only50/defense30/exit50；tier_floor build55；"
+               "profit_take.enabled=**true**（代码默认 false）；board_half 19.5%/9.5%；weekend_de_risk 0.5",
+         source="DB 生效值", note="§42.3：`profit_take.enabled` 是真实覆盖，断言必须看生效值"),
 ]
 
 # ── 2) 语料判定（人工/模型判定，写在这里；quote 必须来自取证产物并已逐字校验） ──
