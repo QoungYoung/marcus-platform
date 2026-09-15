@@ -27,7 +27,39 @@ sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs", "/app/core"]
 DATA = os.environ.get("DATA_DIR", "/app/data")
 
 
-def panels(cut: str, n_days: int, cache: str = ""):
+def cand_symbols(chains):
+    """候选票预筛（chain 关键词 ∩ `stock_concept_map`）——panel **只保留这些票**。
+
+    为什么：worker 容器内存上限 **512MB**（`docker inspect` 实测），全市场 175 日 panel
+    会把容器 OOMKilled（2026-09-15 实测 Killed）。`pick_buy` 只会去取候选票的日线，所以裁剪无损。
+    """
+    try:
+        from rotation_universe import get_sub_universe
+        SU = get_sub_universe()
+        kws = []
+        for c, _side in chains:
+            kws += [str(k) for k in (SU.get(c) or [])]
+        if not kws:
+            return set()
+        import psycopg2
+        conn = psycopg2.connect(os.environ.get(
+            "DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        cur = conn.cursor()
+        cur.execute("SELECT concept_name, ts_code FROM stock_concept_map")
+        keep = set()
+        for cn, ts in cur.fetchall():
+            n = str(cn).replace(" ", "")
+            if any(str(k).replace(" ", "") in n for k in kws):
+                keep.add(str(ts))
+        cur.close(); conn.close()
+        print("[replay] 候选票预筛：%d 只（chains=%s）" % (len(keep), [c for c, _ in chains]), flush=True)
+        return keep
+    except Exception as e:
+        print("[replay] 候选票预筛失败(保留全市场):", str(e)[:100], flush=True)
+        return set()
+
+
+def panels(cut: str, n_days: int, cache: str = "", keep=None):
     """→ (days, daily, mv)：全市场日线 panel（cut 之前 n_days 个交易日）+ 当日 daily_basic 市值。
 
     `cache` 非空 → pickle 复用（panel 建一次约 8~10 分钟；换 `--daily-basic` 变体时不必重拉）。
@@ -50,6 +82,8 @@ def panels(cut: str, n_days: int, cache: str = ""):
                                   trade_date=d)
         for it in (items or []):
             ts = str(it[0])
+            if keep and ts not in keep:          # 只留候选票（512MB 容器：全市场 175 日会 OOM）
+                continue
             daily.setdefault(ts, []).append((str(it[1]), it[2], it[3], it[4], it[5]))
         print("[panel] %s %d 行 %d/%d (%.1fs)" % (d, len(items or []), i + 1, len(days), time.time() - t0),
               flush=True)
@@ -116,6 +150,8 @@ def main():
     ap.add_argument("--chains", default="", help="逗号分隔的买链（默认取自当日 09:20 日志）")
     ap.add_argument("--panel-days", type=int, default=90)
     ap.add_argument("--panel-cache", default="", help="panel pickle 缓存路径（复用/加速多变体）")
+    ap.add_argument("--panel-all", action="store_true",
+                    help="panel 保留全市场（默认只留候选票；512MB 容器全市场 175 日会 OOM）")
     ap.add_argument("--held-at-cut", default="",
                     help="**09:20 时点的持仓**（逗号分隔，用于 exclude）。默认取当前持仓 —— "
                          "注意：当日已被买进的票现在也在持仓里，会把 09:20 的候选错误剔除（实测："
@@ -137,7 +173,8 @@ def main():
     print("[replay] 实盘 09:20 日志=%s chains=%s" % (armed.get("file"), chains), flush=True)
     print("[replay] 实盘布腿=%s" % [l.get("symbol") for l in (armed.get("legs") or [])], flush=True)
 
-    days, daily, mv = panels(a.cut, a.panel_days, a.panel_cache)
+    keep = cand_symbols(chains) if not a.panel_all else set()
+    days, daily, mv = panels(a.cut, a.panel_days, a.panel_cache, keep)
     print("[replay] panel: %d 只票 / %d 个交易日（%s → %s）"
           % (len(daily), len(days), days[0] if days else "-", days[-1] if days else "-"), flush=True)
 
