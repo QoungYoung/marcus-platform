@@ -1266,3 +1266,46 @@ round 25 我看到 `data/wolf_negative_events.json` 在生产不存在，就写�
 * **唯一的行动项**：`position_tiers.json`（`position_tier_monitor` 的档位状态）从未落盘 →
   需确认该 monitor 在生产是否被调用（若没有，它那份"档位状态"就没人维护）；
 * 方法已固化成 `jobs/audit_data_files.py`（含 `--prod-dir` / `--prod-config-dir`），建议以后**改完涉及 data 文件的机制就跑一次**。
+
+## 36 审计行动项闭环：档位状态文件路径写错 → 生产**静默不持久化**（2026-09-15 round 27）
+
+§35 的数据文件审计留下的唯一行动项：`data/position_tiers.json`（`position_tier_monitor` 的逐票档位状态）**从未落盘**。本轮查清并修好（默认关）。
+
+### 36.1 根因（路径按仓库布局推导，容器里算错）
+
+```python
+# 修改前
+TIER_STATE_FILE = Path(__file__).parent.parent.parent.parent / "data" / "position_tiers.json"
+```
+
+* 仓库布局：`<repo>/backend/app/services/position_tier_monitor.py` → 上四级 = `<repo>` ✓ 正确；
+* **容器布局**：`backend/app` 挂在 `/app/app` → `__file__ = /app/app/services/…` → 上四级 = **`/`** →
+  实际写成 **`/data/position_tiers.json`**，而容器里**没有 `/data`**（实测 `ls /data` → No such file）；
+* `_save_tier_states()` 的异常被 `except` 吞掉、且只在 **debug** 级记日志 → **静默失败**；
+* 后果：**逐票档位状态（`tier_states`，加仓档位连续性判断用）只在进程内存里活着，worker 重启即丢**。
+
+生产实测（容器内）：
+
+```
+default FIX=False -> /data/position_tiers.json        ← 现状（错的）
+fixed   FIX=True  -> /app/data/position_tiers.json    ← 修复后
+```
+
+### 36.2 修复（**默认关**，行为零变化）
+
+* 新增开关 `WOLF_TIER_STATE_FIX`（默认 **0**）：置 1 → 用与其它模块一致的 `DATA_DIR` 约定
+  （`Path(os.environ.get("DATA_DIR", "/app/data"))`）；
+* `_resolve_log_dir()` 的兜底同样按仓库布局 → 一并走同一个 `_state_dir()`；
+* **日志级别**：`层级状态保存失败` 从 `logger.debug` → **`logger.warning`**（只在档位变化时调用，不会刷屏）
+  —— 这是"让静默失败可见"的最小改动，**不影响行为**；
+* 单测 `backend/tests/test_tier_state_path.py`（4 项）：默认路径与旧行为逐字一致、开关后按 `DATA_DIR` 解析、
+  文件能落盘读回、日志级别已提级（源码级）；
+* 生产验证：MD5 三层一致；容器内两种设置分别输出上面两行；worker/backend 已重启、running。
+
+**待拍板**：是否置 `WOLF_TIER_STATE_FIX=1`（置 1 后档位状态开始持久化，worker 重启不再丢档位）。
+
+### 36.3 与"买入层对齐"的关系
+
+`position_tier_monitor` 管的是**加仓档位**（L0–L3、`max_position_pct`、加仓信号），
+属审计里 **D1/C3（仓位与档位）** 那一族；它不读写选股判据，所以**不影响我们已验收的选股/买点结论**，
+但**影响"加仓"这一段的连续性**（重启后档位从头算）。修好后建议观察一周档位状态文件是否稳定生成。

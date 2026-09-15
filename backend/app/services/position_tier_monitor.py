@@ -43,7 +43,22 @@ for _ in range(5):
     _p = _p.parent
 
 # ── 层级状态持久化路径 ──
-TIER_STATE_FILE = Path(__file__).parent.parent.parent.parent / "data" / "position_tiers.json"
+# ⚠️ 2026-09-15 round 27（数据文件审计的发现）：原路径按**仓库布局**推导
+#   （`<repo>/backend/app/services/x.py` → 上四级 = `<repo>`），但**容器里 backend/app 挂在 `/app/app`**
+#   → 上四级 = `/` → 实际写成 **`/data/position_tiers.json`**，而容器里没有 `/data`
+#   → `_save_tier_states()` 抛异常但只在 **debug** 级记日志 → **逐票档位状态在生产静默不持久化**
+#   （只在进程内存里活着，worker 重启即丢；影响"加仓"档位的连续性判断）。
+# 修复（默认**关**，行为零变化）：WOLF_TIER_STATE_FIX=1 → 用与其它模块一致的 DATA_DIR 约定。
+FIX_STATE_DIR = os.getenv("WOLF_TIER_STATE_FIX", "0").strip() in ("1", "true", "yes")
+
+
+def _state_dir() -> Path:
+    if FIX_STATE_DIR:
+        return Path(os.environ.get("DATA_DIR", "/app/data"))
+    return Path(__file__).parent.parent.parent.parent / "data"
+
+
+TIER_STATE_FILE = _state_dir() / "position_tiers.json"
 
 
 class TierEvaluation:
@@ -157,7 +172,7 @@ class PositionTierMonitor:
             from workspace_detector import DATA_DIR
             return Path(str(DATA_DIR))
         except Exception:
-            return Path(__file__).parent.parent.parent.parent / "data"
+            return _state_dir()
 
     # ── 层级状态持久化 ──
 
@@ -169,7 +184,8 @@ class PositionTierMonitor:
                 with open(TIER_STATE_FILE, 'w', encoding='utf-8') as f:
                     json.dump(self.tier_states, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.debug(f"[加仓] 层级状态保存失败: {e}")
+            # 2026-09-15 round 27：原来是 debug 级 → 生产静默；改为 warning（只在档位变化时调用，不会刷屏）
+            logger.warning(f"[加仓] 层级状态保存失败 {TIER_STATE_FILE}: {e}")
 
     def _load_tier_states(self) -> None:
         """从 JSON 文件加载层级状态"""
