@@ -395,3 +395,23 @@ DB `daily_artifacts.main_line_state` 只从 08-11 起，旧版 dated 文件（`m
 * `jobs/bt_intraday.py`：用 `TBacktestEngine`（生产自带的 m5 回放引擎：逐 bar 快照 → 条件求值 → 护栏 → 撮合）
   跑单标的单日，并与生产 `t_triggers` 对账。**生产 09-11 的地面真值**：SH600039 只有 `custom_prevlow`
   触发过（首次 11:00:24，21 次重试），`custom_m5dump` 未触发；SH600977 触发 13 次。
+
+### 9.9 盘中层：**生产回测引擎不能直接拿来跑 253/254 腿**（第 4 轮结论）
+
+`backend/app/services/t_backtest.py::TBacktestEngine` 是现成的 m5 逐 bar 回放引擎（快照重建 → 表达式求值 →
+护栏 → 撮合），我原打算直接复用。实测结论（值得记住，避免下一轮重复踩）：
+
+* **能用的部分**：`build_snapshot_at()` 的字段（`quote.*` 全套派生、`vol_ratio`、`minute.*`、`index.*`、`tech.*`）
+  与 `t_expr.evaluate_expression()`（**生产同一个表达式求值器**、支持 `a.b.c` 点路径）——
+  所以快照可以直接复用，只需注入两个 253/254 专用字段：
+  `quote.dip_prev_low`（当日最低 ≤ 前一交易日最低×(1+tol)，同 `t_monitor._stock_dip_prev_low`）与
+  `index.m5_dump`（指数 5min 单根跌幅，同 `t_monitor._index_m5_dump`）—— 已在 `jobs/bt_intraday.py` 里以
+  "包一层 `build_snapshot_at`"的方式实现（不改生产文件）。
+* **不能用的部分**：主循环是**为做T账户写死的** —— `trigger_kind` 只认 `high_sell/high_sell_then_buy_back/
+  low_buy/panic_vibrate`，买腿还带"无底仓不评估"预拦截；换成我们的 `custom_m5dump/custom_prevlow` 时
+  **条件会被求值但不产出任何事件**（实测 `status=completed, events=0`，而生产当天 SH600039 触发过
+  `custom_prevlow` @11:00:24）。
+* ⇒ 下一轮做法（已定）：**自己写 tick 循环**（5min bar + 指数 bar 驱动），复用上面的快照与求值器，
+  触发后用 `BacktestPaperEngine` 撮合（T+1 / 100 股整手 / 跌停禁买·涨停禁卖 / 0.1292% 往返），
+  用**生产 `t_triggers`（join `t_conditions` 得到 253/254 类型）** 做地面真值对账：
+  09-11 SH600039 的 `custom_prevlow` 首次触发 11:00:24（重试 21 次）、SH600977 触发 13 次、其余 7 条腿未触发。

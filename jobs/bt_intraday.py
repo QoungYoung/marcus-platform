@@ -23,6 +23,60 @@ import sys
 sys.path[:0] = ["/app", "/app/backend"]
 
 
+def install_leg_fields(TB, pack: str, symbol: str, dip_tol: float):
+    """给引擎的快照补上**两个 253/254 专用字段**（引擎原本只服务做T账户，没有这两个）：
+
+    · `quote.dip_prev_low` = 当日（截至该 bar）最低 ≤ **前一交易日**最低 × (1+tol)
+      —— 与生产 `t_monitor._stock_dip_prev_low()` 同口径（它用 5min 序列按日前 8 位分组取 min low）；
+    · `index.m5_dump`       = 指数 5min **单根跌幅%**（最近两根指数 bar 的收盘）
+      —— 与生产 `t_monitor._index_m5_dump()` 同口径（它取腾讯 m5 最近 60 根的最后两根）。
+    做法：包一层 `build_snapshot_at`，不改生产文件（回测专用注入）。
+    """
+    import json as _json
+    import os as _os
+    from datetime import datetime as _dt
+
+    idx_path = _os.path.join(pack, "index_m5", "sh.json")
+    idx_bars = []
+    if _os.path.exists(idx_path):
+        d = _json.load(open(idx_path, encoding="utf-8"))
+        for day_bars in d.values():
+            idx_bars.extend(day_bars)
+        idx_bars.sort(key=lambda b: b["time"])
+
+    def _dump_at(tick_time: str) -> float:
+        prior = [b for b in idx_bars if b["time"] <= tick_time]
+        if len(prior) < 2:
+            return 0.0
+        c0, c1 = float(prior[-1]["close"]), float(prior[-2]["close"])
+        return round((c0 - c1) / c1 * 100, 3) if c1 > 0 else 0.0
+
+    def _dip_prev_low(bars_up_to, trade_day: str) -> bool:
+        by_day = {}
+        for b in bars_up_to:
+            by_day.setdefault(str(b["time"])[:10].replace("-", ""), []).append(b)
+        days = sorted(by_day)
+        if trade_day not in days or len(days) < 2:
+            return False
+        today_low = min(float(b["low"]) for b in by_day[trade_day])
+        prev_low = min(float(b["low"]) for b in by_day[days[days.index(trade_day) - 1]])
+        return prev_low > 0 and today_low <= prev_low * (1.0 + dip_tol)
+
+    orig = TB.build_snapshot_at
+
+    def _build(symbol_, bars_up_to, trade_day, regime, ledger, vol_ratio_base, pre_close):
+        snap = orig(symbol_, bars_up_to, trade_day, regime, ledger, vol_ratio_base, pre_close)
+        try:
+            snap["quote"]["dip_prev_low"] = _dip_prev_low(bars_up_to, trade_day)
+            snap["index"]["m5_dump"] = _dump_at(str(bars_up_to[-1]["time"]))
+        except Exception:
+            pass
+        return snap
+
+    TB.build_snapshot_at = _build
+    print("[intraday] 已注入 quote.dip_prev_low（tol=%s）与 index.m5_dump" % dip_tol, flush=True)
+
+
 def conds_from_prod(symbol: str, day: str):
     """从生产 `t_conditions` 取该标的该日的 253/254 条件定义（expression 原样）。"""
     import psycopg2
@@ -86,6 +140,8 @@ def main() -> int:
     ap.add_argument("--net-asset", type=float, default=250000.0)
     ap.add_argument("--init-price", type=float, default=0.0)
     ap.add_argument("--fee-rate", type=float, default=0.000396, help="买侧单边费率（默认现行口径）")
+    ap.add_argument("--dip-tol", type=float, default=0.005,
+                    help="254 触发容差（生产 09-15 前为 0.005 自设值；语料值 0.0）")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
 
@@ -102,6 +158,7 @@ def main() -> int:
     task = {"symbol": a.symbol, "conditions": conds, "init_shares": 0,
             "init_price": a.init_price, "net_asset": a.net_asset,
             "start_trade_day": a.date, "end_trade_day": a.date}
+    install_leg_fields(TB, a.pack, a.symbol, a.dip_tol)
     eng = TB.TBacktestEngine(task, a.pack, fee_rate=a.fee_rate)
     res = eng.run()
     evs = (res or {}).get("events") or []

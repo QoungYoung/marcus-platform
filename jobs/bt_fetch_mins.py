@@ -31,17 +31,37 @@ def to_ts(sym: str) -> str:
 
 
 def fetch(ts_code: str, freq: str, day: str, tries: int = 3):
+    """先 `stk_mins`（promax，历史全）；失败再退本地 ClickHouse `a_share_mins`
+    （列序不同：ts_code,trade_time,freq,open,high,low,close,vol,amount —— 必须显式对齐，
+    实测数据与 stk_mins 同源、逐 bar 一致）。"""
     import tushare_relay as R
+    err = ""
     for i in range(tries):
         try:
             flds, items = R.relay_items(
                 "stk_mins", fields="ts_code,trade_time,open,high,low,close,vol,amount",
                 ts_code=ts_code, freq=freq, start_date=day, end_date=day)
-            return items or []
+            if items:
+                return items
         except Exception as e:
-            if i == tries - 1:
-                print("[mins] %s %s 失败: %s" % (ts_code, day, str(e)[:90]), file=sys.stderr)
-            time.sleep(2 + 2 * i)
+            err = str(e)[:90]
+        time.sleep(2 + 2 * i)
+    try:
+        flds, items = R.relay_items("a_share_mins", ts_code=ts_code, freq=freq.upper(),
+                                    start_date="%s-%s-%s 00:00:00" % (day[:4], day[4:6], day[6:8]),
+                                    end_date="%s-%s-%s 23:59:59" % (day[:4], day[4:6], day[6:8]))
+        if items:
+            fi = {k: i for i, k in enumerate(flds or [])}
+            out = []
+            for b in items:
+                out.append([b[fi.get("ts_code", 0)], b[fi.get("trade_time", 1)],
+                            b[fi["open"]], b[fi["high"]], b[fi["low"]], b[fi["close"]],
+                            b[fi.get("vol")], b[fi.get("amount")]])
+            print("[mins] %s %s 走 a_share_mins 兜底 %d 根" % (ts_code, day, len(out)), file=sys.stderr)
+            return out
+    except Exception as e2:
+        err = "%s | a_share_mins: %s" % (err, str(e2)[:70])
+    print("[mins] %s %s 失败: %s" % (ts_code, day, err), file=sys.stderr)
     return []
 
 
