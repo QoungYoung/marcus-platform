@@ -68,6 +68,38 @@ def _dip_prevlow_tol() -> float:
 
 DIP_PREVLOW_TOL = _dip_prevlow_tol()
 
+LEGACY_DIP_TOL = 0.005        # 历史自设容差（回退档），影子对比用
+
+
+def _dip_shadow_enabled() -> bool:
+    """`WOLF_DIP_PREVLOW_SHADOW` 默认 1：只记录"对齐后会少成交"的情形。"""
+    return os.getenv("WOLF_DIP_PREVLOW_SHADOW", "1").strip().lower() not in ("0", "false", "no", "")
+
+
+def _dip_shadow_record(symbol: str, prev_low: float, today_low: float) -> None:
+    import json as _json
+    d = os.environ.get("DATA_DIR", "/app/data")
+    try:
+        import datetime as _dt
+        path = os.path.join(d, "dip_tol_shadow_%s.json" % _dt.date.today().strftime("%Y%m%d"))
+        cur = {}
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    cur = _json.load(f) or {}
+            except Exception:
+                cur = {}
+        cur.setdefault("date", _dt.date.today().strftime("%Y%m%d"))
+        cur.setdefault("items", {})
+        cur["items"][symbol] = {"ts": _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                "prev_low": round(float(prev_low), 3), "today_low": round(float(today_low), 3),
+                                "gap_pct": round((float(today_low) / float(prev_low) - 1) * 100, 3),
+                                "note": "tol=0 不成交 / 历史 0.005 会成交"}
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(cur, f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print("[TMonitor] dip 影子写盘失败: %s" % str(e)[:60])
+
 
 class TMonitor:
     """做T监控器：daemon 线程，30s 轮询 t_conditions，命中写 t_triggers。"""
@@ -1852,6 +1884,15 @@ class TMonitor:
             prev_day = days[-2] if today in days else days[-1]
             prev_low = min(float(b["low"]) for b in by_day[prev_day])
             ok = prev_low > 0 and today_low <= prev_low * (1.0 + DIP_PREVLOW_TOL)
+            # C1 影子（2026-09-15）：记录"按语料值 tol=0 不触发、但按历史自设 tol=0.005 会触发"的情形
+            #   → 灰度期量化"对齐后会少成交多少/少成交的是哪些票"，不改真实行为。
+            try:
+                if _dip_shadow_enabled() and DIP_PREVLOW_TOL < LEGACY_DIP_TOL:
+                    wide = prev_low > 0 and today_low <= prev_low * (1.0 + LEGACY_DIP_TOL)
+                    if wide and not ok:
+                        _dip_shadow_record(symbol, prev_low, today_low)
+            except Exception as _se:
+                print("[TMonitor] dip 影子记录失败: %s" % str(_se)[:60])
             _prev_low_cache.update({"at": now, "sym": key, "value": ok, "tol": DIP_PREVLOW_TOL})
             return ok
         except Exception as e:

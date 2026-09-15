@@ -94,3 +94,22 @@ def test_theme_buyable_wiring_is_opt_in():
     vf = open(os.path.join(ROOT, "apps", "main_line", "wolf_theme_vol_fund.py"), encoding="utf-8").read()
     assert 'WOLF_THEME_VOLFUND_GATE", "0"' in vf      # 默认值就是 "0"（关）
     assert "2025-06-16" in vf                         # 原话日期在代码里（可追溯）
+
+
+def test_shadow_mode_records_without_blocking(monkeypatch, tmp_path):
+    """P1 影子：门=关但影子=开时，应**记录**结果且**不拦**（theme_buyable 继续放行）。"""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("WOLF_THEME_VOLFUND_GATE", raising=False)
+    monkeypatch.delenv("WOLF_THEME_VOLFUND_SHADOW", raising=False)
+    assert V.enabled() is False and V.shadow_enabled() is True
+    V.shadow_record("农业", False, "量能不活跃：构造")
+    files = [p for p in os.listdir(tmp_path) if p.startswith("theme_volfund_shadow_")]
+    assert files
+    import json
+    d = json.load(open(os.path.join(tmp_path, files[0]), encoding="utf-8"))
+    assert d["themes"]["农业"]["pass"] is False and d["themes"]["农业"]["mode"] == "shadow"
+
+
+def test_shadow_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("WOLF_THEME_VOLFUND_SHADOW", "0")
+    assert V.shadow_enabled() is False

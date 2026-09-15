@@ -239,6 +239,35 @@ def theme_nets(theme: str, as_of: Optional[str] = None, days: int = FUND_DAYS + 
     return [float(cache[d][theme]) for d in dts if isinstance(cache.get(d), dict) and theme in cache[d]]
 
 
+def shadow_enabled() -> bool:
+    """`WOLF_THEME_VOLFUND_SHADOW` 默认 1：**只记录不拦**（灰度期，拿到"会拦谁"的逐日记录）。"""
+    return os.getenv("WOLF_THEME_VOLFUND_SHADOW", "1").strip().lower() not in ("0", "false", "no", "")
+
+
+def shadow_record(theme: str, ok: bool, why: str) -> None:
+    """把门的结果写进 `data/theme_volfund_shadow_<date>.json`（按主题覆盖，附时间戳）。"""
+    try:
+        import datetime as _dt
+        d8 = _dt.date.today().strftime("%Y%m%d")
+        path = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "theme_volfund_shadow_%s.json" % d8)
+        cur = {}
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    cur = json.load(f) or {}
+            except Exception:
+                cur = {}
+        cur.setdefault("date", d8)
+        cur.setdefault("themes", {})
+        cur["themes"][theme] = {"pass": bool(ok), "why": str(why)[:200],
+                                "ts": _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                                "mode": "enforce" if enabled() else "shadow"}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cur, f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print("[theme_volfund] 影子写入失败: %s" % str(e)[:80])
+
+
 def theme_volfund_ok(theme: str, as_of: Optional[str] = None) -> Tuple[bool, str]:
     """生产入口：按他的话判该主题当前可不可做（数据缺失 → 放行）。"""
     if not theme:

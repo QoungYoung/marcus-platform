@@ -114,3 +114,24 @@ def test_pick_trig_price_same_source(monkeypatch):
     assert "WOLF_DIP_PREVLOW_TOL" in src and "1.0 + _dip_tol()" in src
     tm_src = open(os.path.join(ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     assert "1.0 + DIP_PREVLOW_TOL" in tm_src
+
+
+def test_shadow_records_would_miss(monkeypatch, tmp_path):
+    """C1 影子：tol=0 不触发但历史 0.005 会触发 → 记录到 data/dip_tol_shadow_<date>.json（不改行为）。"""
+    import json
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("WOLF_DIP_PREVLOW_SHADOW", raising=False)
+    tm = _fresh_tm(monkeypatch, None)
+    tm.DATA_DIR = str(tmp_path)
+    assert tm._dip_shadow_enabled() is True
+    # +0.3%：tol=0 不触发、0.005 触发 → 应记录
+    assert _run(tm, monkeypatch, 10.00, 10.03) is False
+    files = [p for p in os.listdir(tmp_path) if p.startswith("dip_tol_shadow_")]
+    assert files, "影子文件未生成"
+    d = json.load(open(os.path.join(tmp_path, files[0]), encoding="utf-8"))
+    assert d["items"]["SH600000"]["note"].startswith("tol=0 不成交")
+    # 恰好触前低：tol=0 也触发 → 不应新增记录
+    before = len(d["items"])
+    assert _run(tm, monkeypatch, 10.00, 10.00) is True
+    d2 = json.load(open(os.path.join(tmp_path, files[0]), encoding="utf-8"))
+    assert len(d2["items"]) == before

@@ -325,12 +325,16 @@ def theme_buyable(theme):
     #   离线对照：我们的池内通过该门的子集后 5 日超额 +0.718%（n=177）vs 不通过 −0.080%（n=732）
     #   → 开启会改变行为（他的门 104/164 天非空，其余日子不布新腿），故默认 0，待拍板。
     try:
-        from wolf_theme_vol_fund import enabled as _vf_on, theme_volfund_ok as _vf_ok
-        if _vf_on():
+        from wolf_theme_vol_fund import (enabled as _vf_on, shadow_enabled as _vf_shadow,
+                                         theme_volfund_ok as _vf_ok, shadow_record as _vf_rec)
+        if _vf_on() or _vf_shadow():
             ok_vf, why_vf = _vf_ok(theme)
-            if not ok_vf:
+            if _vf_on() and not ok_vf:
+                _vf_rec(theme, ok_vf, why_vf)
                 return False, "选板块第一要素未过(2025-06-16「量能活跃+资金没有5日连续流出」): " + str(why_vf)
-            dr = dr + " | " + str(why_vf)
+            if not _vf_on():
+                _vf_rec(theme, ok_vf, why_vf)          # 影子：只记录
+            dr = dr + " | " + ("[影子]" if not _vf_on() else "") + str(why_vf)
     except Exception as _e:
         print("[wolf_context] theme_volfund 检查跳过: %s" % str(_e)[:80])
     return True, "主题[%s] 可买: stage=%s verdict=%s | %s" % (theme, stage, st.get("verdict"), dr)

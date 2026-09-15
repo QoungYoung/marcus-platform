@@ -70,6 +70,8 @@ def main():
     ap.add_argument("--domain", default="lowmid", choices=["lowmid", "cand_low", "cand_lowonly"],
                     help="候选域：lowmid=现行 tier1 域 / cand_low=候选池∩LOW,MID（去掉 r20≥0,rs≥0 闸）/ cand_lowonly=仅 LOW")
     ap.add_argument("--dist-max", type=float, default=None, help="额外限制 dist_prevlow ≤ x%%（默认不限）")
+    ap.add_argument("--fee-pct", type=float, default=0.0,
+                    help="单次往返总成本（小数，如 0.000692=佣金双边+印花税+过户费；0=不计费）")
     ap.add_argument("--json", default=os.path.join(ROOT, ".dsh-tmp", "buyside", "eval_rank_v3.json"))
     args = ap.parse_args()
     E.HOLD = int(args.hold)
@@ -240,7 +242,15 @@ def main():
     def st(rows, key, date_key="d"):
         return E._stat([(r[date_key], r.get(key)) for r in rows], [r.get(key) for r in rows])
 
+    # 费率：对每条 pick（=一次往返）扣同一个成本 → 只改水平，不改配对差
+    FEE = float(args.fee_pct or 0.0) * 100.0        # 转成百分点
+    if FEE:
+        for r in recs:
+            for k in list(r.keys()):
+                if (k.startswith("v_") or k.startswith("x_")) and isinstance(r.get(k), (int, float)):
+                    r[k] = r[k] - FEE
     res = {"window": [days[0], days[-1]], "hold": args.hold, "n_theme_days": len(recs), "variants": variants,
+           "fee_pct": float(args.fee_pct or 0.0),
            "domain": args.domain, "dist_max": args.dist_max, "limit": args.limit,
            "board_filter": bool(args.board_filter), "hard_filters": args.hard_filters,
            "stage": args.stage, "diergong": bool(args.diergong), "tiebreak": args.tiebreak,
