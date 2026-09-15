@@ -274,8 +274,11 @@ def _send_qq(msg: str) -> bool:
                       os.path.dirname(os.path.dirname(_here))):
             if os.path.isdir(_cand) and _cand not in _s.path:
                 _s.path.insert(0, _cand)
-        from app.services.qqbot_service import send_qq_notification   # 服务侧封装（含默认收件人）
-        send_qq_notification(msg)
+        from app.services.qqbot_service import send_qq_notification
+        # 服务侧 default_recipient 只在 worker 启动时注入；**任务进程**里要显式给收件人
+        openid = (os.getenv("QQ_BOT_RECIPIENT") or os.getenv("QQ_NOTIFY_OPENID")
+                  or os.getenv("QQ_OPENID") or "").strip()
+        send_qq_notification(msg, openid or None)
         return True
     except Exception as _e1:
         try:
