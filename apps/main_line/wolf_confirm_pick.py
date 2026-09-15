@@ -428,9 +428,11 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     #   排序 = LOW 优先，并列次键 = flat_low_days；阶段 = 主题 r5 **跨主题分位** ≥0.5 → 强 → 走"二供"
     #   （跳过组内 r20 最高的一只，2026-04-13「已经涨起来的板块的龙头不做 做他的二供」）；只取 1 只。
     #   离线（含费率）：5 日 +0.213%→+0.083%（现行 −0.982%~−1.112%），配对 Δ +1.120pp（t 2.29），H1/H2 两段都更优。
-    #   开关：WOLF_PICK_RANK_V3=1 生效；WOLF_PICK_RANK_V3_SHADOW=1 只记录不生效（默认都关）。
+    #   开关：WOLF_PICK_RANK_V3=1 **生效**（默认 0，等拍板）；WOLF_PICK_RANK_V3_SHADOW=**1 默认开**
+    #   —— 影子只写 data/rank_v3_<as_of>.json（v3 会选什么 vs leader 实际选什么），**不改任何决策**，
+    #   供"对齐后 vs 现状"的逐日对账（与 P1 门影子的默认行为一致）。置 0 可关掉影子。
     _v3_on = os.getenv("WOLF_PICK_RANK_V3", "0").strip() == "1"
-    _v3_shadow = os.getenv("WOLF_PICK_RANK_V3_SHADOW", "0").strip() == "1"
+    _v3_shadow = os.getenv("WOLF_PICK_RANK_V3_SHADOW", "1").strip() == "1"
     if _v3_on or _v3_shadow:
         try:
             import wolf_pick_rank_v3 as _V3

@@ -158,8 +158,10 @@
 
 ```
 WOLF_PICK_RANK_V3=1         → 生效：返回 v3 选票（pick_source='v3'，只取 1 只）
-WOLF_PICK_RANK_V3_SHADOW=1  → 影子：**只记录不生效**（返回仍是原 leader 的票）
-两个都关（默认）             → 行为与接线前逐字节一致
+WOLF_PICK_RANK_V3_SHADOW=1  → 影子：**只记录不生效**（返回仍是原 leader 的票）——**默认就是 1**
+                               （与 P1 门影子一致：只写 data/rank_v3_<as_of>.json，不改决策，天天自动攒对账数据）
+WOLF_PICK_RANK_V3=1         → 生效（默认 0，等拍板）
+SHADOW=0 且 RANK_V3=0        → 完全不碰（连影子文件都不写），行为与接线前一致
 ```
 
 v3 分支用的就是**已验收配置**：域 = 候选池 ∩ LOW/MID（去掉 `r20≥0` 与 `rs≥0` 两个实测净负的闸）、
@@ -186,3 +188,17 @@ data/rank_v3_20260911.json: mode=shadow, q=1.0, domain_n=10
 
 `backend/tests/test_rank_v3_wiring.py` 3 项：默认关（选票不变、无影子文件）／影子（返回 leader 票 + 写影子文件）／
 开启（返回 1 只 `pick_source='v3'` + `mode=on`）。
+
+
+## 13 逐日对账脚本（`jobs/shadow_reconcile.py`）
+
+把三类影子产物汇总成一张"对齐后会怎样"的表（只读）：
+`theme_volfund_shadow_*`（P1 门会拦谁）/ `rank_v3_*`（v3 会选什么 vs leader 实际选什么）/ `dip_tol_shadow_*`（C1 会少成交哪些票）。
+
+生产实跑样例（2026-09-15）：
+
+```
+【P1】检查过的主题=1  会拦=1  → ✋ 农业 资金连续5日净流出 → 不新开腿
+【v3】半导体/芯片  mode=shadow 主题分位=1.0 域=10  v3=SH603986  leader=—   **不同**
+【C1】（无影子文件：需部署含影子的 t_monitor）
+```

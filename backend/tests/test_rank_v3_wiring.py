@@ -63,11 +63,24 @@ def _fake_pick_module(monkeypatch, tmp_path, env):
     return W, days[-1]          # 返回 (模块, as_of=最后一个交易日) —— pick_v2 要求 rows[-1]==AS
 
 
-def test_default_off_unchanged(monkeypatch, tmp_path):
-    W, AS = _fake_pick_module(monkeypatch, tmp_path, {"WOLF_PICK_RANK_V3": "0", "WOLF_PICK_RANK_V3_SHADOW": "0"})
+def test_default_shadow_records_only(monkeypatch, tmp_path):
+    """默认（RANK_V3 未设 / SHADOW 默认 1）：**只记录不生效** —— 选票与接线前一致，但写影子文件。"""
+    W, AS = _fake_pick_module(monkeypatch, tmp_path, {"WOLF_PICK_RANK_V3": "0"})
+    monkeypatch.delenv("WOLF_PICK_RANK_V3_SHADOW", raising=False)
     st = {}
     picks = W.pick_v2("农业", exclude=set(), limit=2, as_of=AS, status_out=st)
     assert st.get("status") == "ok"
+    assert all(p.get("pick_source") != "v3" for p in picks)      # 决策未变
+    f = os.path.join(str(tmp_path), "rank_v3_%s.json" % AS)
+    assert os.path.exists(f), "默认应写影子文件（供逐日对账）"
+    assert json.load(open(f, encoding="utf-8"))["themes"]["农业"]["mode"] == "shadow"
+
+
+def test_shadow_can_be_disabled(monkeypatch, tmp_path):
+    """影子显式置 0 → 完全不碰（连文件都不写），行为与接线前逐字节一致。"""
+    W, AS = _fake_pick_module(monkeypatch, tmp_path, {"WOLF_PICK_RANK_V3": "0", "WOLF_PICK_RANK_V3_SHADOW": "0"})
+    st = {}
+    picks = W.pick_v2("农业", exclude=set(), limit=2, as_of=AS, status_out=st)
     assert all(p.get("pick_source") != "v3" for p in picks)
     assert not os.path.exists(os.path.join(str(tmp_path), "rank_v3_%s.json" % AS))
 
