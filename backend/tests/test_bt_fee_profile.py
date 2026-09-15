@@ -51,3 +51,73 @@ def test_matches_eval_chain_fee_constant():
     src = open(os.path.join(ROOT, "jobs", "eval_aligned_package.py"), encoding="utf-8").read()
     assert "FEE_ROUNDTRIP = 0.1292" in src
     assert BP.roundtrip_fee_pct() == 0.1292
+
+
+# ── LLM 录制/回放层（wave agent / 交易腿 agent 共用）────────────────────────
+def _load_llm():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "bt_llm_replay_under_test", os.path.join(ROOT, "jobs", "bt_llm_replay.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_llm_replay_miss_is_loud(tmp_path, monkeypatch):
+    """replay 模式缺缓存 → **必须报错**（否则回测会静默少一层 agent 决策）。"""
+    L = _load_llm()
+    monkeypatch.setenv("BT_LLM_CACHE", str(tmp_path))
+    r = L.LLMReplay(agent="wave", as_of="20260911", mode="replay")
+    try:
+        r.post("http://x/chat", json={"message": "hi"})
+        assert False, "应当报错"
+    except L.LLMReplayError as e:
+        assert "replay 缺少缓存" in str(e)
+
+
+def test_llm_record_then_replay_same_reply(tmp_path, monkeypatch):
+    """record 落盘 → replay 命中同一条 reply，且**不再外呼**。"""
+    L = _load_llm()
+    monkeypatch.setenv("BT_LLM_CACHE", str(tmp_path))
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+        text = '{"reply": "{\\"operation\\": \\"side\\"}"}'
+
+        def json(self):
+            calls["n"] += 1
+            return {"reply": '{"operation": "side"}'}
+
+        def raise_for_status(self):
+            pass
+
+    L.LLMReplay.real_post = staticmethod(lambda url, **kw: _Resp())
+    rec = L.LLMReplay(agent="wave", as_of="20260911", mode="record")
+    out1 = rec.post("http://x/chat", json={"message": "P"}).json()
+    # record：① 本层内部读一次拿 reply 落盘；② 调用方（agent）自己再读一次 → 真外呼只有 1 次
+    assert out1["reply"] == '{"operation": "side"}' and rec.n_record == 1 and calls["n"] == 2
+
+    rep = L.LLMReplay(agent="wave", as_of="20260911", mode="replay")
+    out2 = rep.post("http://x/chat", json={"message": "P"}).json()
+    assert out2 == out1 and rep.n_hit == 1 and calls["n"] == 2          # 外呼次数没再增加 ✔
+
+
+def test_llm_replay_detects_prompt_drift(tmp_path, monkeypatch):
+    """prompt 与录制时不一致（输入/PIT 口径漂移）→ 默认报错；BT_LLM_STRICT=0 只警告。"""
+    L = _load_llm()
+    monkeypatch.setenv("BT_LLM_CACHE", str(tmp_path))
+    L.LLMReplay.real_post = staticmethod(lambda url, **kw: type("R", (), {
+        "status_code": 200, "text": "{}", "json": lambda self=None: {"reply": "R1"},
+        "raise_for_status": lambda self=None: None})())
+    L.LLMReplay(agent="wave", as_of="20260911", mode="record").post("http://x", json={"message": "P1"})
+
+    monkeypatch.setenv("BT_LLM_STRICT", "1")
+    try:
+        L.LLMReplay(agent="wave", as_of="20260911", mode="replay").post("http://x", json={"message": "P2"})
+        assert False, "应当报错"
+    except L.LLMReplayError as e:
+        assert "prompt 与录制时不一致" in str(e)
+    monkeypatch.setenv("BT_LLM_STRICT", "0")
+    r = L.LLMReplay(agent="wave", as_of="20260911", mode="replay")
+    assert r.post("http://x", json={"message": "P2"}).json()["reply"] == "R1" and r.warnings

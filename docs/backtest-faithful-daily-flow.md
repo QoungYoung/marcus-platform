@@ -26,7 +26,7 @@
 | T-1 19:50 | `daily_archive.py`（G2 存档） | 不需要（回测自己落盘） | — |
 | T 08:00/08:05 | `stock_pool_manager` / `arkvol_checkin` | 交易日历 + 股票池快照（从 DB/relay 取） | R |
 | T 08:05 | `derive_sub_universe.py`（主线子方向细分刷新） | 同代码 + **as-of 打桩**（脚本无 `--date`） | S |
-| T 08:10 | `wave_agent.py`（波浪判定） | 同代码 + as-of（浪型状态是次日闸门的输入） | S |
+| T 08:10 | `wave_agent.py`（波浪判定，**LLM**） | **纳入**（用户拍板）：同代码 + as-of 钉住 + LLM 录制/回放 | **S/R** |
 | T 08:15 | `sector_g3_judge.py`（板块洗盘收敛期） | 同代码重放 | R |
 | T 08:18 | `tranche_ladder_report.py`（试仓档盘前报告） | 同代码重放（读 `stock_confirm_result`） | R |
 | T 08:20 | `stock_confirm_judge.py`（**成分股确认刷新**） | 同代码 + as-of；其中 AI 裁决部分 **A** | S/A |
@@ -34,8 +34,9 @@
 | T 08:40 | `build_earnings_calendar.py` | 同代码（业绩门槛用） | R |
 | T 09:00 / 09:10 | `pre_market_scan.py` / `morning_diagnosis.py` | 同代码（盘前扫描/诊断只读） | R |
 | **T 09:20** | **`rotation_switch_arm.py`（主线内切换布腿器）** | **核心步骤**：`jobs/replay_entry_0920.py` 已实现"切点= T-1"的逐日重放（含主题可买门 → 路径A/B 选股 → v3 排序 → 板块前过滤 → 两道入口门 → 253/254 腿 + 均线挂单价） | R |
-| T 09:35 / 09:53 / 10:35 / 13:35 / 14:30 | 自动交易（Pi agent 5 个窗口） | **A**：LLM 决策；默认**不纳入**下单（见 §7-①），只做"生产确实发生了"的记录 | A |
-| T 09:36 / 14:44 | 黄金坑 DCA 定投 | 默认不纳入（另一账户） | A |
+| T 09:35 / 09:53 / 10:35 / 13:35 / 14:30 | 自动交易（Pi agent 5 个窗口） | **不纳入**（用户拍板）；只做"生产确实发生了"的记录 | A |
+| T 09:50 / 14:10 | `rotation_switch_agent.py`（**主线内切换·交易腿 agent**，LLM 决策 + 直接下单） | **纳入**（用户拍板）：同代码 + as-of 钉住 + LLM 录制/回放 + `/trades` 改走回测撮合；生产当前 OFF → 回测跑 **on/off 两版**对照（见 §2.1） | **S/M/A** |
+| T 09:36 / 14:44 | 黄金坑 DCA 定投 | **不纳入**（用户拍板，另一账户） | A |
 | T 14:31 | `wolf_weekend_hedge.py`（G9 周末避险） | 同代码重放（周五/长假前） | R |
 | **T 09:30–15:00** | `t_monitor`（**30s 轮询**）+ `t_gateway`（三阶校验）+ 纸交易撮合 | **M**：用分钟线逐 bar 重放（`index.m5_dump` / `quote.dip_prev_low` / `vwap_break` / 量比 / 分时均价 / 止损）；撮合按 §3 规则 | M |
 | T 15:01 | `snapshot_portfolio.py`（净值快照） | 回测自算净值（同一口径） | R |
@@ -114,6 +115,32 @@ T 盘后
 
 ---
 
+## 2.1 两个要带的 agent 怎么纳入（用户拍板：wave agent + 交易腿 agent 带上）
+
+两个 agent 的决策都来自 dsh `/chat`（LLM）→ 非确定。回测要可复现，做法是**录制/回放 + as-of 打桩**：
+
+**① 波浪判定 `apps/main_line/wave_agent.py`（T 08:10）** —— 已实现并实测通过：
+* 新工具 `jobs/bt_wave_asof.py`：显式传 `--as-of`（= 生产 08:10 看到的"昨日收盘"）；
+  **禁用 `_ensure_index_fresh()`**（它会自愈拉当日收盘并回写 CSV = 前视）；
+  `MAIN_LINE_STATE_FILE` 必须指向 as-of 那天的 `main_line_state`（缺文件直接报错，不静默用当期）；
+* 实测（as-of 20260911）：`features.date=2026-09-11 / close=3888.1`（与指数 09-11 收盘一致，无未来数据）；
+  record 1 次外呼 → replay 命中缓存、**0 次外呼、输出完全一致**（可复现 ✔）。
+
+**② 交易腿 agent `jobs/rotation_switch_agent.py`（T 09:50 / 14:10）** —— 待接线：
+* 它自己读 `paper_positions / stock_concept_map / stock_pool / risk_flags` 并**通过 `/trades` 直接下单** →
+  回测里把数据源换成沙箱（回测自己的持仓/腿状态），把 `MARCUS_API_URL` 指向回测撮合服务（不碰生产库）；
+* LLM 走同一套 `jobs/bt_llm_replay.py`；
+* ⚠️ **生产这两条 cron 当前是 OFF** → 回测做 `BT_LEG_AGENT=on/off` 两版：既满足"带上"，又能量化
+  "这一层 agent 到底增厚还是拖累"，同时保留与当前生产口径可直接对比的 off 版。
+
+**③ 共用层 `jobs/bt_llm_replay.py`**（已实现）：
+* `BT_LLM_MODE=record`（默认）：真实外呼 + 把 `(agent, as_of, prompt, prompt_sha1, reply, ts)` 落
+  `data/_bt_llm/<agent>/<as_of>.json`；`replay`：只读缓存，**未命中直接报错**（不静默降级）；
+* replay 时若 prompt 与录制不一致（= 输入/PIT 口径漂移）→ 默认**报错**（`BT_LLM_STRICT=0` 可降级为警告）；
+* 成本：波浪 1 次/日、交易腿 2 次/日 × 约 180 交易日 ≈ **540 次 LLM 调用**（可分批录制）。
+
+---
+
 ## 3. 撮合与费用口径（请你确认）
 
 | 项 | 取值 | 出处 |
@@ -174,14 +201,17 @@ data/_bt_runs/<T>/
 
 ## 7. 待你拍板（跑之前必须先定）
 
-| # | 问题 | 我的建议 |
+| # | 问题 | 状态 |
 |---|---|---|
-| ① | 生产实际下单有一部分来自 **Pi agent 链**（09:35/10:35/13:35/14:30 五个窗口，例如 09-15 的 SZ002156/SH600584 就是它买的），回测要不要纳入？ | **先不纳入**（Phase A：只跑规则链，干净可比）；Phase B 再评估 agent 回放 |
-| ② | 往返费用用 **0.1292%**（评估口径）还是 `backtest_paper.py` 的 0.0005/0.0015（含 0.1% 印花税，疑过时）？ | 用 0.1292%，并把 `backtest_paper.py` 参数化 |
-| ③ | 起点资金 = `stock` 账户 25 万，空仓（已定）；要不要同时跑 `t`（做T）与 `golden_pit`（DCA）账户？ | 只跑 `stock` |
-| ④ | 卖出侧是否包含生产那些"非腿"的卖出（趋势止损/防守减仓/周末避险）？ | 包含（都是确定性规则），但 DCA/避险等按各自开关还原 |
-| ⑤ | 概念成分用**当期快照**（非严格 PIT）是否可接受？ | 可接受，但结论里标注该偏差 |
-| ⑥ | 无历史盘口的守卫（`record_orderbook` 相关）怎么处理？ | 按"不适用"跳过 + 标注 |
+| ① | Pi agent 链（09:35/10:35/13:35/14:30 五窗口）是否纳入？ | ✅ **已定（用户）**：**不纳入**；黄金坑 DCA、做T账户同样不纳入 |
+| ①b | **波浪 agent + 交易腿 agent** | ✅ **已定（用户）**：**必须带上** → 见 §2.1（录制/回放 + as-of 打桩） |
+| ② | 费用口径 | ✅ **已定并落地**（commit `04ef591`）：0.1292%/往返，`backtest_paper.py` 参数化（`BT_FEE_PROFILE=legacy` 可回退） |
+| ③ | 起点资金 | ✅ **已定**：`stock` 账户 25 万、空仓起步；`t`/`golden_pit` 不纳入 |
+| ④ | 卖出侧的"非腿"卖出（趋势止损/防守减仓/周末避险） | 按建议默认**包含**（确定性规则）；若你不要，回一句我剔除 |
+| ⑤ | 概念成分用当期快照（非严格 PIT） | 按建议默认**接受**并在结论标注偏差 |
+| ⑥ | 无历史盘口的守卫 | 按建议默认**跳过 + 标注** |
+| ⑦ | **新增待定**：交易腿 agent 生产当前 OFF → 回测 on/off 两版是否都要出？ | 建议**两版都出**（off = 与当前生产可直接对比；on = 你要的"带上 agent"） |
+| ⑧ | **新增待定**：波浪判定用**回测自录**的 LLM 结论（全年一致、可复现），还是优先用生产当天存档的 `wave_state`（只有 09-11 起）？ | 建议**自录**为主 + 用生产存档做校验（LLM 非确定，混用会破坏可复现） |
 
 ---
 
@@ -189,7 +219,8 @@ data/_bt_runs/<T>/
 
 1. **PIT 打桩**：给 `derive_sub_universe` / `wave_agent` / `position_class` / `stock_confirm_judge` 加 as-of（沙箱 DATA_DIR + 日期函数钉住），逐个与当期生产文件比对（先对齐 09-01→09-15 这 11 天）；
 2. **布腿链全年化**：`replay_entry_0920.py` 跑 2026-01-05→2026-09-15，产出每日腿；
-3. **分钟数据**：按第 2 步产物拉 `(symbol, date)` 的 5min（复用 `jobs/fetch_m5_replay.py` 区间模式，缓存本地），指数 5min 全年；
-4. **盘中撮合**：分钟 bar 驱动 t_monitor 表达式 + t_gateway 护栏 + `BacktestPaperEngine`；
-5. **校验**：§6 五项对账，逐条解释差异；
-6. **出结果**：净值曲线 / 分主题分腿型收益 / 与"买而不卖"等基线对照（**最后才谈调参**）。
+3. **两个 agent 接线**：波浪（`bt_wave_asof.py` 已就绪）+ 交易腿 agent（`/trades` 改走回测撮合）→ 全年录制 LLM（约 540 次）；
+4. **分钟数据**：按第 2 步产物拉 `(symbol, date)` 的 5min（复用 `jobs/fetch_m5_replay.py` 区间模式，缓存本地），指数 5min 全年；
+5. **盘中撮合**：分钟 bar 驱动 t_monitor 表达式 + t_gateway 护栏 + `BacktestPaperEngine`；
+6. **校验**：§6 五项对账，逐条解释差异；
+7. **出结果**：净值曲线 / 分主题分腿型收益 / 与"买而不卖"等基线对照（**最后才谈调参**）。
