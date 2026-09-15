@@ -202,7 +202,16 @@ def get_sellable_ledger(account_id: str = "t") -> Dict[str, Dict[str, Any]]:
                          "a": account_id, "s": symbol})
                     volume = fifo
                 # 可卖 = 持仓 − 今日买入（当日买回部分 T+1 锁定）
-                sellable = max(volume - today_buy, 0)
+                # ETF 例外（2026-09-14）：ETF 是 **T+0**，当日买入当日可卖 —— 狼大做 T 的主要载体就是 ETF
+                # （2025-04-03「T+0 2 个点我就够了」、2026-09-02「ETF 能 T 出 2 个点即合格」）。
+                # 开关 WOLF_ETF_T0=0 退回"一律 T+1"。
+                _etf_t0 = os.getenv("WOLF_ETF_T0", "1").strip() not in ("0", "false", "no")
+                try:
+                    from app.services.roundtrip_sell import is_etf as _is_etf
+                    _is_e = bool(_etf_t0 and _is_etf(symbol))
+                except Exception:
+                    _is_e = False
+                sellable = volume if _is_e else max(volume - today_buy, 0)
                 ledger[symbol] = {
                     "symbol": symbol,
                     "volume": volume,
@@ -505,6 +514,21 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
         near_limit = bool(quote and _near_limit_down(quote))
         tier = _floor_tier(regime, near_limit)
         if side == "buy":
+            # C4 参数对齐（2026-09-15，**默认关**）：ETF 波动下限。
+            #   狼大 2026-08-21「选半导体仅仅只是因为他波动大 **ETF都有3个点以上的波动**
+            #   不然选个别的1个点的ETF没意思」→ 只对 **ETF** 生效（他的话就是讲 ETF；
+            #   ② 已三次证明他的板块级/品种级判据搬到个股级会变负，故个股不套用）。
+            #   开关 WOLF_ETF_VOL_GATE=1 开启；数据不足 → 放行。
+            try:
+                from app.services.wolf_etf_vol import enabled as _ev_on, etf_vol_ok as _ev_ok, is_etf as _is_etf
+                if _ev_on() and _is_etf(symbol):
+                    _ok, _why = _ev_ok(symbol)
+                    if not _ok:
+                        result["level"] = "soft"
+                        result["reason"] = "ETF 波动不足（狼大 2026-08-21「ETF都有3个点以上的波动」）: " + _why
+                        return result
+            except Exception as _e:
+                print("[t_gateway] etf_vol 检查跳过: %s" % str(_e)[:80])
             # wolf 回补护栏（2026-09-08 用户拍板：588170 void脱节重复加仓根因）
             # ① 当日 wolf 正T回补笔数超上限 → 拦截（防连续回补堆仓）
             #    S7 统一(2026-09-10): 上限改读 WOLF_REFILL_MAX_PER_DAY(默认2),
