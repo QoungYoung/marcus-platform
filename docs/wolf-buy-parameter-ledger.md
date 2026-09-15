@@ -1309,3 +1309,84 @@ fixed   FIX=True  -> /app/data/position_tiers.json    ← 修复后
 `position_tier_monitor` 管的是**加仓档位**（L0–L3、`max_position_pct`、加仓信号），
 属审计里 **D1/C3（仓位与档位）** 那一族；它不读写选股判据，所以**不影响我们已验收的选股/买点结论**，
 但**影响"加仓"这一段的连续性**（重启后档位从头算）。修好后建议观察一周档位状态文件是否稳定生成。
+
+## 37 容器路径审计扩面：25 处「按仓库布局推导」的路径在容器里解析错 —— 逐项定性，**无一处影响实盘买卖链**（2026-09-15 round 29）
+
+§36 修掉 `position_tier_monitor` 的档位状态路径后，留下的问题是：**同类写法还有多少**、有没有第二个"静默失败"。
+本轮把审计做成可复跑脚本并在**容器内**跑（本地跑没意义：仓库布局本来就是对的），把每一处逐条定性。
+
+### 37.1 方法
+
+```bash
+# 脚本在容器里跑（扫 /app/app = 生产真实模块位置），宿主上跑会得到"全都对"的假阴性
+docker exec marcus-worker python -u /app/jobs/audit_container_paths.py --root /app/app
+```
+
+`jobs/audit_container_paths.py`：正则抓 `Path(__file__)` + 上溯链 + 字面量后缀，按**模块在容器里的真实位置**
+复算落点，列出"落点不存在 / 落点 = `/` / 上溯越界"的条目。
+
+### 37.2 先修工具自己的 3 个漏报 bug（**否则审计结论不可信**）
+
+| # | bug | 后果 | 修法 |
+|---|---|---|---|
+| 1 | `parents[k]` 被当成"上溯 k 级" | **少算一级** → `direction_prediction.py:813` 被算成 `/app/data/backtest`（存在）而漏报，真相是 `/data/backtest` | `parents[k]` → n = k+1，使 `parents[n-1]` 恒等于落点 |
+| 2 | 正则 `(?:\.parent)+` 排在 `\.parents\[\d+\]` 前 | `.parents[3]` 的 `.parent` 前缀被吃掉 → 整条退化成"上溯 1 级、无字面量"被跳过 | 分支顺序对调（`\.parents\[\d+\]` 在前） |
+| 3 | 上溯越界时 `IndexError → continue`；落点 = `/` 时因 `/` 存在而放过 | 静默漏报 4 处（`trade_graph:88`、`api/scan:23`、`api/market:22`、`backtest_stop_loss:22`、`config:112`） | 越界显式报「上溯越界」；落点 = `/` 单列一类 |
+
+修完后同一份生产代码的命中数：**14 → 18 → 20 → 25**（每一次都是工具变严后多抓到的，不是代码改动）。
+定向单测 `backend/tests/test_audit_container_paths.py`（7 项）：含"用真实漏报那行做回归"与 `pathlib.parents` 对拍。
+
+### 37.3 全量定性（25 条，分 5 类）
+
+容器事实（实测）：`/data`、`/core`、`/.env`、`/app/.env` **都不存在**（`env` 由 compose 注入）；
+`/app/app`、`/app/data`、`/app/core` 都在；进程 cwd = `/app`；`MARCUS_WORKSPACE=/app`。
+
+| 类 | 条目 | 为什么无害 / 有害 |
+|---|---|---|
+| **A. 兜底链第一分支就命中了**（落点根本没用上）| `config.py:97`+`main.py:8`+`worker_main.py:25`（`/.env`）；`stop_loss_monitor:135`、`improvement_tracker:21`（先试 `workspace_detector.DATA_DIR`）；`api/market:2178/2220`、`qqbot_service:23`、`scheduler_service:351`（`/core`，但 worker/backend 启动时已把 `/app/core` 插进 `sys.path`）；`candidate_pool:39`、`direction_prediction:65`（先试 `settings.data_dir`，再试 `cwd/data`，**cwd = `/app`**）；`industry_leaderboard:37`（先试 `settings.data_dir`）；`vnpy_bridge:402`、`trade_graph:88`、`api/scan:23`（先读 `MARCUS_WORKSPACE` / `settings.workspace_path`）| 环境变量由 compose `env_file: ../.env` 注入（实测容器内 **77 个** 环境变量，含 `TUSHARE_API_URL`/`PROMAX_API_KEY`/`WOLF_*`）→ `load_dotenv("/.env")` 失败无所谓；`DATA_DIR` 实测 = `/app/data` |
+| **B. 落点 = `/`，但只是"探测兜底"** | `config.py:112`（`_detect_workspace()`）、`api/market:22`（`PROJECT_ROOT`，**全文件未被使用**）、`backtest_stop_loss:22`（`sys.path.insert("/backend")`，backend 已有 bootstrap）| 只有"环境变量全丢"才会走到；本轮已把 `config.py:112` 修成标记目录判定（§37.4） |
+| **C. 指向**已经不存在**的数据湖 / 回滚模式** | `golden_pit_sector_service:49`、`local_data_provider:20`、`api/backtest:3524`、`backtest_paper:13/37`、`direction_prediction:813` | `data/backtest/股票数据` 在**宿主与容器都不存在**（parquet 数据湖早就没了，与已删的 `t_vreb_reversal` 同源）。黄金坑生产 `dca_carriers = fixed_combo`、`GOLDEN_PIT_SECTOR_SIGNAL_MODE=greed` → 需要资金流 parquet 的 `sector_selection`/`moneyflow` 分支**根本没被调用**（实测 `_load_industry_flow_df()` 返回 0 行，若被调用会打 WARNING，不静默）|
+| **D. 真实缺陷（非交易）** | `backtest_paper:13/37` | 第 5/4 级上溯 → `/apps/paper-trading`、`/data/backtest`，而这两处**下一行 `os.makedirs(..., exist_ok=True)` 会在容器里新建目录** → 回测沙箱数据落在**容器临时层**，重建即丢（正确落点应是 `/app/apps/paper-trading`，但 `apps` 是**只读挂载**，真要修得改到 `data/` 下）|
+| **E. 真实缺陷（交易链）** | `position_tier_monitor:58` | §36 已修（`WOLF_TIER_STATE_FIX`，默认关）|
+
+**结论：25 处里，影响实盘买卖链的只有 1 处（已修）；其余是"兜底没走到 / 死代码 / 数据湖不存在 / 回测沙箱写临时层"。**
+
+### 37.4 唯一"根因级"隐患已修：`config.Settings._detect_workspace()`
+
+```python
+# 修改前：容器里 backend/app → /app/app ⇒ 上溯三级 = "/"，不是工作区
+return Path(__file__).parent.parent.parent
+# 修改后：先按标记目录判定（与 jobs/refresh_index_daily.py 同款约定）
+if os.path.isdir("/app/app") and os.path.isdir("/app/data"):
+    return Path("/app")
+return Path(__file__).parent.parent.parent          # 宿主机分支：与旧行为**逐字一致**
+```
+
+* 生产**行为零变化**：compose 注入 `MARCUS_WORKSPACE=/app` → `__init__` 里 `if not self.MARCUS_WORKSPACE` 不成立，
+  这个兜底**从来没被调用**（实测 `workspace_path=/app`、`DATA_DIR=/app/data`）；宿主机没有 `/app/app` → 走原分支。
+* 价值：一旦 `MARCUS_WORKSPACE` 丢了（改 compose、换启动方式、裸跑脚本），旧代码会把
+  `workspace_path` 变成 `/`，`data/memory/apps` 全部落到根目录 —— 那就是 §36 那一族的**总根因**。
+* 单测 `backend/tests/test_workspace_detect.py`（4 项）：容器标记 → `/app`；宿主机 → 仓库根（与旧行为一致）；
+  标记只满足一半 → 保守回退；环境变量优先（生产实际路径）。
+* 部署：**只落盘不重启**（改动生效于下次自然重启；今天盘中，重启 worker 会打断止损监控，不值当）。
+
+### 37.5 与"买入层对齐"的关系
+
+* **不影响**已验收的选股/买点结论：这 25 处里没有任何一处参与 `pick_buy`/`pick_v2`/两条腿/护栏的取值；
+  候选池、行业榜、方向层基准那三处都能解析到正确目录（`settings.data_dir` 或 `cwd=/app`）。
+* 顺带确认了一个**遗留**（不在本任务范围、先记账）：生产 `data/candidate_pool.json` 最后写入是 **2026-08-27**，
+  而它只被 `t_pool.py`（做T池）读 → 属做T层陈旧，不是主选股链输入（主链输入是方向层池 + `stock_pool.db`）。
+* **待拍板**：`data/backtest/股票数据` 这族 parquet 数据湖要不要按"真删不要停用"处理
+  （涉及 `golden_pit_sector_service` 的 moneyflow 回滚模式、`local_data_provider`、`api/backtest` 指数端点、
+  `backtest_paper` 沙箱）——这是**独立议题**，不在买入层对齐内。
+
+### 37.6 复现
+
+```bash
+# 1) 工具单测（本地）
+.venv/bin/python -m pytest backend/tests/test_audit_container_paths.py backend/tests/test_workspace_detect.py -q
+# 2) 容器内全量审计（远端生产）
+.venv/bin/python -c "import sys;sys.path.insert(0,'.dsh-tmp/wolfbt');import prod;prod.run('docker exec marcus-worker python -u /app/jobs/audit_container_paths.py --root /app/app')"
+# 3) 环境变量注入核实（证明 /.env 类无害）
+docker exec marcus-worker sh -c 'env | grep -c ""'     # → 77
+```
