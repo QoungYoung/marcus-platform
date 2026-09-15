@@ -71,6 +71,14 @@ def main() -> int:
                          os.path.join(a.out, "seed_%s.log" % d8), timeout=3600)
             entry["steps"]["seed"] = {"rc": rc, "s": round(dt, 1)}
             print("[days] %s seed rc=%d %.0fs" % (d8, rc, dt), flush=True)
+        # 备份"当天(cut)口径"的确认域，供 08:18 用完还原
+        try:
+            import shutil
+            src_c = os.path.join(sb, "stock_confirm_result.json")
+            if os.path.exists(src_c):
+                shutil.copy2(src_c, os.path.join(sb, "stock_confirm_result_cut.json"))
+        except Exception:
+            pass
         # ② 08:18 路径：用**上一交易日**的确认域（switch_builder 08:18 跑，confirm 08:20 才刷新）
         prev = prev_trade_day(cut, a.bars_db)
         rc_prev, dtp = run([sys.executable, "/app/jobs/bt_run_pinned.py", "--as-of", prev,
@@ -84,6 +92,15 @@ def main() -> int:
         rc_sw, dts = run([sys.executable, "/app/jobs/bt_day_legs_switch.py", "--date", d8, "--held-from-db"],
                          os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
         entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
+        # 08:18 用的是上一交易日确认域 → 跑完必须**还原当天口径**，否则 09:20 路径会看错版本
+        try:
+            import shutil
+            bak = os.path.join(sb, "stock_confirm_result_cut.json")
+            if os.path.exists(bak):
+                shutil.copy2(bak, os.path.join(sb, "stock_confirm_result.json"))
+                entry["steps"]["confirm_restored_to_cut"] = True
+        except Exception as _re:
+            entry["steps"]["confirm_restore_err"] = str(_re)[:80]
         # ③ 09:20 路径
         rc_arm, dta = run([sys.executable, "/app/jobs/bt_day_legs.py", "--date", d8, "--held-from-db"],
                           os.path.join(a.out, "arm_%s.log" % d8), timeout=2400)

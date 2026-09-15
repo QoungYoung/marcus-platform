@@ -85,6 +85,9 @@ def main() -> int:
         pass
     cut = a.cut or seed.get("cut") or a.date
     os.environ["DATA_DIR"] = sb
+    # 生产 08:18 的 `tranche_ladder_report.py` 会 `os.environ.setdefault("SWITCH_AUTO_EXEC", "1")`
+    # → 才走 _arm_legs() 真正产出腿；不设 = DRY 模式（实测：命中 9 只但 buy_new 记录为空）
+    os.environ.setdefault("SWITCH_AUTO_EXEC", "1")
 
     # 钉时钟（含 time.strftime/localtime）+ 钉取数：否则 09-11 的代码会 glob 到"最新那天的 gate/文件"
     try:
@@ -141,9 +144,26 @@ def main() -> int:
         return [{"type": "bt_noop", "n_sell": len(recorded["sell_old"]), "n_buy": len(recorded["buy_new"])}]
 
     sb_mod._arm_legs = _record_only
+    # 诊断：包一层 active_stocks_by，看 build_plan 内部调用时传的 stages 与返回值
+    _orig_asb = sb_mod.active_stocks_by
+    def _asb_probe(stages, *a, **kw):
+        r = _orig_asb(stages, *a, **kw)
+        n = len((r[0] or {})) if isinstance(r, tuple) else -1
+        print("[diag] build_plan→active_stocks_by(stages=%s) 命中=%s top12=%s"
+              % (stages, n, (r[1] if isinstance(r, tuple) else None)), flush=True)
+        return r
+    sb_mod.active_stocks_by = _asb_probe
 
     t0 = time.time()
     print("[legs_switch] T=%s cut=%s held=%d（盘前 08:18 路径）" % (a.date, cut, len(held)), flush=True)
+    try:      # 诊断：active_stocks_by 的中间结果（top12 / 确认域规模 / 命中）
+        _sc = sb_mod._load("stock_confirm_result.json")
+        _bn, _t12 = sb_mod.active_stocks_by(("突破候选", "确认"))
+        print("[diag] confirm 概念=%d | top12=%s | 命中=%d %s"
+              % (len(_sc or {}), _t12, len(_bn or {}), sorted(_bn or {})[:12]), flush=True)
+    except Exception as _de:
+        import traceback; traceback.print_exc()
+        print("[diag] active_stocks_by err %s" % str(_de)[:110], flush=True)
     try:
         plan = sb_mod.build_plan()
     except Exception as e:
