@@ -895,6 +895,24 @@ def main():
     buy_legs = [b for b in buy_legs if _board_ok(b.get("symbol"))]
     if len(buy_legs) != _nb:
         print("BOARD_FILTER removed", _nb - len(buy_legs), "个无权限板块买腿", file=sys.stderr)
+    # ⑰ 建仓两道**真闸门**（2026-09-15 用户指示：真对接生产，不做只记录影子）
+    #   · WOLF_CLOSE_POS_GATE（默认 1）：距前低高档 ∧ 半强收盘(pos∈[0.5,0.8)) → 不买（§50 交叉格）
+    #   · WOLF_DEFENSIVE_GATE（默认 1）：低位 ∧ 近 20 日弱于大盘 → 不买（他的话「防御型就是大盘跌的时候他少跌一点」）
+    #   数据缺失一律放行（fail-open）；被拦的腿在这里**直接剔除**，不再进入布腿。
+    try:
+        import importlib as _il7
+        _p7 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _p7 not in sys.path:
+            sys.path.insert(0, _p7)
+        _EF = _il7.import_module("wolf_entry_filters")
+        _n_before = len(buy_legs)
+        buy_legs, _ef_blocked = _EF.filter_legs(buy_legs, today)
+        if _ef_blocked:
+            print("ENTRY_FILTER blocked %d/%d: %s" % (
+                len(_ef_blocked), _n_before,
+                [(x.get("symbol"), str(x.get("why"))[:48]) for x in _ef_blocked]), file=sys.stderr)
+    except Exception as _e_ef:
+        print("[rotation_switch_arm] entry_filters err:", str(_e_ef)[:90], file=sys.stderr)
     # ③ 可见性（2026-09-14）：把"这次买腿分别来自哪条路"显式打出来 + 落审计文件。
     # 起因：pick_v2 报错会静默回落 legacy 扫描序，路径 A/B 的腿在日志里无法区分 → 上线 6 天无人发现。
     _src_cnt = {}
