@@ -78,3 +78,14 @@ def test_fund_data_missing_policy(tmp_data, monkeypatch):
     monkeypatch.setenv("WOLF_FUND_GATE_FAILCLOSED", "0")
     danger2, why2 = WC._fund_data_missing("农业", "序列不足")
     assert danger2 is False and "放行" in why2                      # 关掉开关 → 旧的 fail-open
+
+
+def test_chain_name_is_not_applicable_not_failclosed(monkeypatch):
+    """链名（不在 13 主题内，如 光刻机(胶)）→ 放行且**不告警**，不能按"数据缺失"fail-closed。"""
+    monkeypatch.delenv("WOLF_FUND_GATE_FAILCLOSED", raising=False)
+    called = []
+    monkeypatch.setattr(VF, "notify_once", lambda k, m: called.append(k) or True, raising=False)
+    monkeypatch.setattr(VF, "theme_amounts", lambda *a, **k: [])
+    monkeypatch.setattr(VF, "theme_nets", lambda *a, **k: [])
+    ok, why = VF.theme_volfund_ok("光刻机(胶)")
+    assert ok is True and "不适用" in why and not called

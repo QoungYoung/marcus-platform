@@ -385,6 +385,20 @@ def theme_volfund_ok(theme: str, as_of: Optional[str] = None) -> Tuple[bool, str
     → 读不到量能/资金数据就**停止买入**（判不通过）并发 QQ 通知；置 0 恢复旧的 fail-open。
     """
     _fc = failclosed_enabled()
+    # 2026-09-15：**链名不是主题名**（如 光刻机(胶)/Chiplet概念 不在 THEME_CONCEPTS 的 13 主题内）
+    #   → 这不是"数据读取失败"，而是"本门不适用" → **放行且不告警**（否则开 P1 后会 fail-closed 误拦 + 刷 QQ）
+    _is_theme = False
+    try:
+        import sys as _st
+        _pt = os.path.dirname(os.path.abspath(__file__))
+        if _pt not in _st.path:
+            _st.path.insert(0, _pt)
+        from fusion_mainline import THEME_CONCEPTS as _TC
+        _is_theme = theme in _TC
+    except Exception:
+        _is_theme = True          # 主题表不可用 → 不据此判"不适用"
+    if not _is_theme:
+        return True, "主题[%s] 不在量能/资金表的 13 个主题内（链名）→ 本门不适用，放行" % theme
     if not theme:
         if _fc:
             notify_once("theme_unknown", "[资金门] 主题未知 → 已停止买入（fail-closed）")
