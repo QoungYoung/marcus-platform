@@ -57,6 +57,8 @@
 
 其余自设参数 11 条、代理参数 14 条已逐条列在 `docs/wolf-buy-parameter-ledger.md` §3/§4（代码里也逐条标了 `⛔自设`）。
 
+> **「全部可调参数」的完整画面（2026-09-15 round 13 覆盖率体检）**：总账 §1–§8 是**人工清单（44 条）**；AST 扫 293 个模块后，另有 **304 个未入账旋钮**（其中**策略阈值 92 个**，多为执行侧护栏）——见总账 §19；其中方向/买点相关的 **23 个模块其实早已按语料实现**（docstring 带原话），已登记进 §20。复现：`.venv/bin/python jobs/build_param_ledger.py --coverage`。→ 待您定：这 92 个执行侧阈值**要不要逐条给语料判定**（建议只做影响成交/风险敞口的少数几条：`MAX_DAILY_BUY_LEGS`、`STOP_LOSS_PCT`、`MIN_T_SPREAD_FILTER`、`COOLDOWN_AFTER_LOSS_MIN`、`WOLF_REFILL_*`）。
+
 ---
 
 ## 4 复现命令（全部离线、可重跑）
