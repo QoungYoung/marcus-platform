@@ -36,6 +36,9 @@ class GzShim:
         self.bars_db = bars_db
         self.as_of = str(as_of)
         self.n_local = self.n_remote = 0
+        # 真 relay 的原函数（打了 relay shim 后 module 属性已换，必须直接拿）
+        import tushare_relay as _tr
+        self._real = _tr.relay_items
     
     def _rows_from_sqlite(self, ts_code, cols, start, end):
         import sqlite3
@@ -169,9 +172,6 @@ def main() -> int:
             if os.path.isdir(_p):
                 sys.path.insert(0, _p)
         print("[code] 版本树路径已重新置顶（在 shim import 之后）", flush=True)
-        self._relay_mod = importlib.import_module("tushare_relay")
-        self._real = self._relay_mod.relay_items
-    import importlib
     arm = importlib.import_module("rotation_switch_arm")
     arm.DATA = sb
     arm._today = lambda: str(cut)
@@ -216,8 +216,18 @@ def main() -> int:
     print("[legs] T=%s cut=%s wop=%s room=%s holdT=%s healthy=%s sucking=%s held=%d"
           % (a.date, cut, wop, room, holdT, healthy, sucking, len(held)), flush=True)
 
-    confirmed_today_set = arm.mainline_today(cut) or set()
-    print("[legs] 方向层池(主线∪池)=%s" % sorted(confirmed_today_set), flush=True)
+    # ⚠️ 资格集合的取法必须**随版本自适应**：09-13 之前是 `gate_confirmed_today()`（gate 的
+    #    confirmed_candidate），09-13 起才是 `mainline_today()`（方向层池）。写死任何一个都会错版本：
+    #    实测 09-11 用新版函数 → 拿到 13 个主题 → 免税/Kimi 两条链被放行（生产当天其实一条没布）。
+    _f_sel = getattr(arm, "mainline_today", None) or getattr(arm, "gate_confirmed_today", None)
+    confirmed_today_set = set()
+    if callable(_f_sel):
+        try:
+            confirmed_today_set = set(_f_sel(cut) or ())
+        except Exception as _se:
+            print("[legs] 资格集合取数失败 %s: %s" % (getattr(_f_sel, "__name__", "?"), str(_se)[:90]), flush=True)
+    print("[legs] 资格集合(%s)=%s" % (getattr(_f_sel, "__name__", "?"), sorted(confirmed_today_set)), flush=True)
+    print("[legs] module=%s" % getattr(arm, "__file__", "?"), flush=True)
     for c in list(room) + list(holdT):
         print("   链 %s → theme=%s" % (c, arm.theme_of_chain(c)), flush=True)
 

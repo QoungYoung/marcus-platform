@@ -316,3 +316,26 @@ data/_bt_runs/<T>/
 生产 09-11 早上 `room_bottom/holdT_top` 为空（所以 `buy_chains=[]`），而我们的 as-of 再生给出了
 `Kimi概念 / 免税概念` 两条链。疑似它的输入里还有未打桩的（`rotation_universe_classified.json` /
 `rotation_proxy_state.json` / `concept_long.json` 等"当日覆盖型"）。对齐它 09:20 那条路径才能收敛。
+
+### 9.6 第 3 轮：09-11 **两条路径全部对齐**（09:20 的根因是"资格集合取法随版本不同"）
+
+上一轮 09:20 路径未对齐（生产 `buy_chains=[]`，我们给出 2 条链）。本轮查到根因并修掉：
+
+* **根因**：`room_bottom`/`holdT_top` 两边其实**一致**（生产 09-11 的 `rotation_universe_result` 实测
+  `crowded_top=[AI应用] / holdT_top=[] / room_bottom=[Kimi概念, 免税概念, 短剧互动游戏]`，与我们的再生一致）。
+  真正不同的是**放行资格集合的取法**：09-13 之前用 `gate_confirmed_today()`（gate 的 `confirmed_candidate`
+  = 当天只有 `稳增长/基建`），09-13 起才改成 `mainline_today()`（方向层池）。
+  我的回放脚本写死了新版函数 → 拿到 13 个主题 → 免税/Kimi/短剧 三条链全部放行 → 多出 2 条腿。
+* **修法**：脚本改成**随版本自适应**——模块里有 `mainline_today` 就用它，否则用 `gate_confirmed_today`
+  （与各版本 `main()` 自己的取法一致）。
+
+**2026-09-11 最终对账（两条路径）**
+
+| 路径 | 回放 | 生产 | 判定 |
+|---|---|---|---|
+| 08:18 `switch_builder`（含 09-09 口径确认域） | 9 只：000065/600977/600039/600284/000401/600449/603737/600586/002613 | 同 9 只 | ✅ **9/9** |
+| 09:20 `rotation_switch_arm` | 资格集合=`['稳增长/基建']` → 3 条链全部 `SKIP_MAINLINE_LOWBUY` → **0 条腿** | `buy_chains=[]`、`ARMED []` | ✅ **0/0** |
+| 波浪 / D1 选主 / 确认域 | 见 §9.5 | — | ✅ 完全一致 |
+
+⇒ 09-11 单日**全链路一致**（腿级 100%）。同日还新增多日流水线 `jobs/bt_days.py`：
+按日 `seed → (上一交易日确认域) → 08:18 路径 → 09:20 路径 → 汇总 legs_all.jsonl/legs_by_day.json`。
