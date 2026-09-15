@@ -813,6 +813,22 @@ def main():
             buy_legs = []
     except Exception as _e_lr:
         print("[rotation_switch_arm] line_regime err:", str(_e_lr)[:80], file=sys.stderr)
+    # ⑬ 大盘级"缩量/地量"（2026-09-15 round 22）：他的量能口径在**大盘级**（1WE/1.5WE/2WE 成交额），
+    #   而我们的 254 用的是"个股 5 分钟量比"（总账 §31 发现 #11：「层级错」）。
+    #   **本项只记录（影子）**：把当日两市成交额与他的档位落盘，供后续评估"地量才买"该怎么落。
+    try:
+        import importlib as _il6
+        _p6 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _p6 not in sys.path:
+            sys.path.insert(0, _p6)
+        _MMV = _il6.import_module("wolf_market_volume")
+        if _MMV.shadow_enabled():
+            _MMV.shadow_record({"wave_op": wop, "buy_legs": [b.get("symbol") for b in buy_legs]})
+            _st_mv = _MMV.state()
+            print("MARKET_VOL we=%s bucket=%s shrink=%s" % (_st_mv.get("we"), _st_mv.get("bucket"),
+                                                            _st_mv.get("shrink_vs_prev")), file=sys.stderr)
+    except Exception as _e_mv:
+        print("[rotation_switch_arm] market_vol err:", str(_e_mv)[:80], file=sys.stderr)
     # 2026-09-09 账户权限: 无创业板权限 → 布腿统一剔除(SZ300/SZ301); WOLF_PICK_BOARD_EXCLUDE 可加 kcb/bj
     _ex_b = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
     _board_ok = board_ok      # F2(2026-09-15)：与选股侧共用**唯一实现**（原内联版已删，避免两套口径分叉）
