@@ -699,3 +699,33 @@ main=… subs=… | [子概念…] | {池 JSON}`）→ 新增 `jobs/bt_input_div
 
 **本轮稳定结论（已验证）**：09-11 在隔离沙箱里 **9/9 复现**（两次独立跑批）；09-01→09-07 回放 0 条腿 = 生产真值
 （时代检查生效）；写入穿透 = 0（自检通过）；账户级回放与对账工具就绪。
+
+### 9.20 第 7 轮（续）：**逐日代码版本不可全信**——`git` 映射 ≠ 生产当天在跑的代码
+
+09-10 的确认域为什么退化（§9.19）？顺着 `stock_confirm_judge.py:102` 找到映射来源：
+
+```python
+names = fm.THEME_CONCEPTS.get(mt, [])          # fm = fusion_mainline.py（**静态字面量字典**，第 23 行）
+if not names:
+    names = ["人工智能", "算力概念", "CPO概念", "光通信模块", "液冷概念"]   # ← 固定 AI 兜底
+```
+
+于是沙箱里出现了 `{"光通信模块": {"theme": "农业", ...}}` —— **主题是农业、概念却是 AI 族** = 走了兜底分支。
+
+用探针（`/app/data/_probe_fm.py`，加载某个代码树后打印 `fm.__file__` 与 `'农业' in THEME_CONCEPTS`）：
+
+| 代码 | `fm.__file__` | 主题数 | 含农业 |
+|---|---|---|---|
+| 我按 `rev_map.json` 给 09-10 选的树 `rev_5a6327…` | `…/rev_5a6327…/apps/main_line/fusion_mainline.py` | **9** | **False** |
+| **今天生产在跑的** | `/app/apps/main_line/fusion_mainline.py` | **14** | **True**（农业 → 农业种植/水产养殖/农药兽药…） |
+
+而生产 09-10 自己 08:20 的日志是 `TOP确认主题: ['农业', '金融', '稳增长/基建']` + `农业 > 农业种植 n=10`
+——**生产当天那份代码必然是"有农业"的版本**。⇒ 结论：**`rev_map.json`（git 提交日）给 09-10 选的版本
+不是生产当天实际在跑的版本**（生产大概率是从工作区部署的，含未提交改动；宿主 git 只到 2026-06-03，
+且 `backup_deploy_*` 快照只留了文件包）。
+
+**这条对"全拟真"是根本性的**：`--code-dir` 用 git 逐日映射只是**近似**。可行的自证办法（下一轮落地）：
+**用生产自己的日志校验版本** —— 每天从 `scheduler_<date>.jsonl` 取 `stock_confirm_refresh` 的
+`TOP确认主题`，要求候选版本满足 `THEME_CONCEPTS ⊇ TOP确认主题`；不满足就换版本树（或退化为"用现行代码+标注"）。
+同理可用 `rotation_universe_refresh` 的 `main=`、`rotation_switch_arm` 的 `GATE_CONFIRMED_TODAY/MAINLINE_POOL_TODAY`
+做三重校验。**没有这层校验，"腿对不上"会被误判成"数据缺失"**（本轮 09-10 正是如此）。
