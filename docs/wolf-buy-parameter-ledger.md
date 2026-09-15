@@ -1390,3 +1390,69 @@ return Path(__file__).parent.parent.parent          # 宿主机分支：与旧�
 # 3) 环境变量注入核实（证明 /.env 类无害）
 docker exec marcus-worker sh -c 'env | grep -c ""'     # → 77
 ```
+
+## 38 影子积累现状：**8 类影子里只有 3 类每天自动落盘**，其余靠"那天真有买腿"（2026-09-15 round 29）
+
+开关要拍板，前提是影子把样本攒够。本轮把"到底攒得怎么样"查清（此前只验证过"影子产物有模块在写"，没验过**每天写不写**）。
+
+### 38.1 生产实测（2026-09-15 13:1x，`/opt/marcus-platform/data/`）
+
+| 影子产物 | 日期文件 | 最后写入 | 每日任务驱动的？ |
+|---|---|---|---|
+| `rank_v3_<as_of>.json` | 只有 `20260911` | 09-15 11:32 | ❌ 只在**路径 B**（`wolf_confirm_pick`）跑到时写；今天 `legs_by_source={'pathA': 3}` → 没写 |
+| `theme_volfund_shadow_<date>.json` | `20260915` | 09-15 08:57 | ✅ 随选股链（`wolf_context`） |
+| `dip_tol_shadow_<date>.json` | `20260915` | 09-15 13:08 | ✅ 随 TMonitor（254 容差） |
+| `step_refill_shadow_<date>.json` | `20260915` | 09-15 11:20 | ✅ 随 TMonitor（分步回补） |
+| `pick_path_<date>.json` / `pick_health_<date>.json` | `20260915` | 09-15 09:22 | ✅ 随选股（今天起才有第一份） |
+| `board_prefilter_shadow_<date>.json` | `20260915` | 09-15 **11:35** | ⚠️ 写在 arm 的 `BOARD_FILTER` 段（多数日子会到） |
+| `ma_line_shadow_<date>.json` | `20260915` | 09-15 **11:35** | ⚠️ 同上（路径 B/arm） |
+| `ma144_shadow_<date>.json` | 只有 `20260914` | 09-15 **11:35** | ❌ 见 §38.2 |
+| `line_regime_shadow_<date>.json` | 只有 `20260914` | 09-15 **11:35** | ❌ 见 §38.2 |
+| `market_vol_shadow_<date>.json` | 只有 `20260914` | 09-15 **11:35** | ❌ 见 §38.2 |
+
+（`11:35` 那几份是**手工跑** `rotation_switch_arm` 留下的；每日 09:20 的定时 run 日志里**没有** `MA144` / `LINE_REGIME` / `MARKET_VOL` 任何一行。）
+
+### 38.2 机制：⑩⑫⑬ 三段影子写在 `if qualify and pool:` **块内**
+
+`jobs/rotation_switch_arm.py:730` ⇒ `if qualify and pool:`（`qualify` 默认开），
+而 `pool = [t for t in confirmed_today_set if t != "农业"之外的银行]`（第 708 行）= **今日主线确认主题池**。
+没有"今日确认主题"的日子，整块跳过 → 144 / 白线 / 大盘量能三类影子的状态**根本不记**。
+
+历史 9 次 arm run（09-04 → 09-15）里，只有 **4 次**有 `CONFIRMED_POOL`（09-09、09-10 各两次，全是「农业」）：
+
+```
+725978db 09-04 -        3e764648 09-07 -        0d1e0f4f 09-09 CONFIRMED_POOL ['农业']
+873b8e66 09-09 ['农业'] 0064124e 09-10 ['农业'] 9d4feef4 09-10 ['农业']
+b60aba38 09-11 -        c241b028 09-14 -        45f74226 09-15 -（今天 pool=[]）
+```
+
+### 38.3 后果（直接影响拍板节奏）
+
+* 全量速率 ≈ **0.4 次/交易日**（还要乘上"那天真的有腿"）；
+* 144 / 白线 / 大盘量能这三条要攒"跨时段样本"（总账 §17/§26 的结论就是"单时段伪显著"），
+  按当前速率**要一个多月**才够重判；而 `rank_v3` 只在路径 B 的日子写，更慢；
+* 也就是说：**开关能不能翻，瓶颈不在"证据不足"而在"影子没在积累"** —— 这是可以工程解决的。
+
+### 38.4 建议（**待您拍板**，两条路）
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **A 接受慢速** | 什么都不改，等有腿的日子自然攒（≈0.4/交易日） | 重判要等 1–2 个月 |
+| **B 把"状态记录"移出 pool 块**（推荐） | 在 `if qualify and pool:` 之后新增一段：`*_shadow_enabled()` 为真就记录**当日状态**（144/白线/大盘量能），`buy_legs` 为空就记空 —— **纯增量落盘、不碰任何决策**（闸门逻辑仍留在原块内），约 10 行 + 定向单测 | arm 任务每天多 2 次取数（relay，秒级）；多出的是"无腿日"的状态样本 |
+
+选项 B 的意义：**"状态"本来就不依赖有没有腿**（144 走平没走平、白线在不在上、两市多少成交额，天天都有值），
+把状态与腿解耦后，**每个交易日**都能积累一行，重判周期从"1–2 个月"压到"1–2 周"。
+
+### 38.5 复现
+
+```bash
+# 影子文件与最后写入时间
+ls -l --time-style=+%m-%d_%H:%M /opt/marcus-platform/data/*_shadow_*.json
+# 每日 arm run 是否记录了三段状态（应为"没有这一行"）
+python3 - <<'PY'
+import json,glob,os
+for f in sorted(glob.glob('/opt/marcus-platform/logs/rotation_switch_arm/*.json'), key=os.path.getmtime)[-3:]:
+    d=json.load(open(f,encoding='utf-8')); hay=(d.get('output') or '')+(d.get('error') or '')
+    print(os.path.basename(f), [k for k in ('MA144','LINE_REGIME','MARKET_VOL','CONFIRMED_POOL') if k in hay])
+PY
+```
