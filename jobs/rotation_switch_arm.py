@@ -214,10 +214,26 @@ def _select_by_gate(stats, limit, use_board_prefilter=False):
         except Exception:
             pos = None
         if pos in ("LOW", "MID"):
-            out.append({"symbol": s["xq"], "ts_code": s["ts"], "position": pos,
-                        "chain": s.get("chain"), "leader": s["leader"],
-                        "r60": round(s["r60"], 1) if s["r60"] is not None else None,
-                        "amt20": round(s["amt20"], 2)})
+            leg = {"symbol": s["xq"], "ts_code": s["ts"], "position": pos,
+                   "chain": s.get("chain"), "leader": s["leader"],
+                   "r60": round(s["r60"], 1) if s["r60"] is not None else None,
+                   "amt20": round(s["amt20"], 2)}
+            # ⑪ 均线挂单（2026-09-15 round 12）：狼大「跌到 13/34/60/144 线上挂单买」——
+            #    closes 已在手，零额外取数；这里只算"收盘下方最近的一条线"，供影子记录（不改决策）。
+            try:
+                import importlib as _il2
+                _p2 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+                if _p2 not in sys.path:
+                    sys.path.insert(0, _p2)
+                _MLE = _il2.import_module("wolf_ma_line_entry")
+                _line = _MLE.nearest_line_below(s.get("closes") or [])
+                if _line:
+                    leg["ma_line_k"] = _line["k"]
+                    leg["ma_line_v"] = _line["v"]
+                    leg["ma_line_dist_pct"] = _line["dist_pct"]
+            except Exception:
+                pass
+            out.append(leg)
     return out
 
 
@@ -345,6 +361,22 @@ def pick_buy(chain, exclude, limit=3):
     #   但把"若在选择时就剔除无权限板块、会改成选谁"记入 data/board_prefilter_shadow_<date>.json。
     _pf_on = board_prefilter_enabled()
     out = _select_by_gate(stats, limit, use_board_prefilter=_pf_on)
+    # ⑪ 均线挂单影子（2026-09-15 round 12）：只记录"如果挂在最近均线上会怎样"，**不改任何决策**。
+    #    离线验收（总账 §18）：成交率 25.9% vs 254 的 52%，每条已挂腿期望略优于 254 但不如 253
+    #    → 属"同类替换"候选，先影子攒数据再拍板是否替换 254。
+    try:
+        import importlib as _il3
+        _p3 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _p3 not in sys.path:
+            sys.path.insert(0, _p3)
+        _MLE2 = _il3.import_module("wolf_ma_line_entry")
+        if _MLE2.shadow_enabled():
+            _rows = [{"symbol": l["symbol"], "ma_line_k": l.get("ma_line_k"),
+                      "ma_line_v": l.get("ma_line_v"), "ma_line_dist_pct": l.get("ma_line_dist_pct")}
+                     for l in out]
+            _MLE2.shadow_record(chain, _rows)
+    except Exception as _e_ml:
+        print("MA_LINE_SHADOW_ERR", str(_e_ml)[:80], file=sys.stderr)
     if not _pf_on:
         try:
             _alt = _select_by_gate(stats, limit, use_board_prefilter=True)
