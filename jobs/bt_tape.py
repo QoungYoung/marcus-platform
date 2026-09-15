@@ -155,6 +155,8 @@ def snapshot(symbol, bars_up_to, trade_day, base, pre_close, idx_bars, tol,
             "amplitude": round((h - l) / pre_close * 100, 2) if pre_close > 0 else 0.0,
             "vol": v, "amount": amt,
             "average": (cum_a / cum_v) if cum_v > 0 else 0.0,      # 分时均价（生产 quote.average）
+            # 黄线跌破（生产 `t_monitor.py:1966`：`vwap_break = avg>0 and cur < avg`）——卖腿 `custom` 用它
+            "vwap_break": bool(cum_v > 0 and c < (cum_a / cum_v)),
             "dip_prev_low": dip_prev_low(bars_up_to, trade_day, tol),
             "near_day_low": (c <= min(float(b["low"]) for b in day_bars) * 1.01) if day_bars else False,
         },
@@ -164,16 +166,21 @@ def snapshot(symbol, bars_up_to, trade_day, base, pre_close, idx_bars, tol,
 
 
 # ── 主流程 ────────────────────────────────────────────────
-def run_symbol(pack: str, symbol: str, day: str, conds, dip_tol=0.005, cooldown_bars=1):
+def run_symbol(pack: str, symbol: str, day: str, conds, dip_tol=0.005, cooldown_bars=1,
+               with_engine: bool = False):
     """逐 bar 回放 → 触发列表（含首次时间与次数）。"""
     from datetime import datetime as _dt
     import importlib
     t_expr = importlib.import_module("app.services.t_expr")
+    # ⛔ 引擎是 **PostgreSQL 落地** 的（`paper_orders/paper_trades/paper_positions/paper_account_info`，
+    #    account_id 默认 'stock'）→ 一旦 place_order 就写**生产模拟盘**。
+    #    2026-09-16 02:12 实测：一次 smoke 跑插了 5 张生产订单 + 5 笔成交（SH600977 9500 股 / 12.0 万元）
+    #    并改了生产现金与持仓。故：**默认不加载、不实例化**；确需撮合请用 `jobs/bt_account.py` 的内存账户。
     engine_cls = None
-    try:
-        engine_cls = importlib.import_module("app.core.trading.backtest_paper").BacktestPaperEngine
-    except Exception:
-        pass
+    if with_engine or str(os.getenv("BT_ALLOW_PROD_ENGINE", "")).strip() == "1":
+        raise RuntimeError(
+            "bt_tape 拒绝加载撮合引擎：BacktestPaperEngine/PaperTradingEngine 是 PG 落地的，"
+            "place_order 会写生产 paper_* 表（2026-09-16 已造成污染）。请用 jobs/bt_account.py 的进程内账户。")
 
     m5 = load_m5(pack, symbol)
     all_bars = [b for d in sorted(m5) for b in m5[d]]
@@ -238,9 +245,14 @@ def run_symbol(pack: str, symbol: str, day: str, conds, dip_tol=0.005, cooldown_
                              "vol_ratio": snap["vol_ratio"], "average": round(snap["quote"]["average"], 3),
                              "dip_prev_low": snap["quote"]["dip_prev_low"],
                              "index_m5_dump": snap["index"]["m5_dump"]})
-    # 撮合（可选）：按触发顺序用 BacktestPaperEngine 落单（T+1 / 整手 / 涨跌停由其内部处理）
+    # 撮合（**默认关闭，别打开**）：
+    #   `BacktestPaperEngine` 内部是 `apps/paper-trading/paper_engine.PaperTradingEngine`，
+    #   而它是 **PostgreSQL 落地**的（`paper_orders/paper_trades/paper_positions/paper_account_info`，
+    #   默认 `account_id='stock'`）→ 一 `place_order` 就**写生产模拟盘账户**。
+    #   实测（2026-09-16 02:12）：一次 smoke 跑就插了 5 张生产订单 + 5 笔生产成交（SH600977 共 9500 股），
+    #   并改动了生产持仓/现金。**回测要撮合请用自己的内存账户**（见 `jobs/bt_account.py`）。
     fills = []
-    if engine_cls is not None and trig:
+    if with_engine and engine_cls is not None and trig:
         try:
             eng = engine_cls("bt_tape_%s_%s" % (symbol, day), initial_capital=250000.0)
             eng.set_current_date(_dt.strptime(day, "%Y%m%d").date())

@@ -599,3 +599,47 @@ bt_llm_replay.LLMReplayError: prompt 与录制时不一致：agent=wave as_of=20
 两个布腿脚本各自加 `--require-task`（默认 `rotation_switch_arm` / `tranche_ladder_report`）做二次把关，
 并加**模块来源校验**：`rotation_switch_arm` / `switch_builder` 的 `__file__` 必须落在当日版本树内，
 否则 `ABORT_MODULE_PROVENANCE` 退出（防"今天的代码跑历史"这类静默前视）。
+
+### 9.15 ⛔ 事故（第 7 轮）：回测误写**生产模拟盘**——根因、修复、硬拦
+
+**事故**：`jobs/bt_tape.run_symbol()` 曾会实例化 `BacktestPaperEngine`，而它内部是
+`apps/paper-trading/paper_engine.PaperTradingEngine`——**PostgreSQL 落地**（`paper_orders/paper_trades/
+paper_positions/paper_account_info`，默认 `account_id='stock'`）→ 一次回测 smoke 跑（2026-09-16 02:12:18）
+把 **5 张生产订单 + 5 笔生产成交**（SH600977 买入 1,900 股 ×5 = 9,500 股，120,251.00 元）写进生产模拟盘，
+并新建一条幽灵持仓、把可用现金从 **115,640.31 扣到 7,369.08**。第 5 轮那次没插进去纯属侥幸
+（它在余额校验处失败被 try/except 吞了）。
+
+**修复**（`jobs/repair_paper_contamination.py`，`--apply` 需显式；用户已批准）：
+① 5 笔成交 `voided=1` + `void_reason=BT_CONTAMINATION_20260916_tape_smoke`（保留审计痕迹，不物理删）；
+② 5 张订单删除；③ 幽灵持仓删除；④ 账户复原到**生产自己的 09-15 收盘快照**（`available_cash=115,640.3115`、
+`frozen=0`、`order_counter=39`）。修后核对：现金=快照值 ✅、持仓 5 只=09-15 收盘 ✅、SH600977 已不在持仓 ✅。
+
+**硬拦（防复发）**：
+* `bt_tape.run_symbol(..., with_engine=False)` 为默认，且一旦要求引擎就**直接 raise**（提示改用内存账户）；
+* 回测撮合改走 `jobs/bt_account.py` 的**进程内账户**（只复用 `resolve_commission()` 的费用率与 T+1/整手语义）；
+* 全量复查：`bt_days / bt_seed_day / bt_day_legs* / bt_reconcile / bt_legs_truth / bt_account` 里
+  **没有任何** 对生产表的 INSERT/UPDATE/DELETE（只有 SELECT）。
+
+**教训（通用）**：回测工具**永远不要复用"会落库的生产交易引擎"**；凡是"喂一笔单"的接口，先问一句
+"它写哪儿"。另外：容器里没有 `ps/pkill`（见 §9.14），而"跑批死了没有"判断错的代价很高。
+
+### 9.16 第 7 轮：**中间输入分叉表**（把"腿对不上"变成"第一分叉在哪"）
+
+生产 08:05 的 `rotation_universe_refresh` 会把自己的产物打全（`derive: WROTE rotation_sub_universe.json
+main=… subs=… | [子概念…] | {池 JSON}`）→ 新增 `jobs/bt_input_divergence.py`，把它与沙箱里的
+`rotation_sub_universe.json` / `rotation_universe_result.json` 逐日对照：
+
+| 交易日 | 生产 main | 回放 main | 生产 room_bottom | 回放 room_bottom | 腿级结果 |
+|---|---|---|---|---|---|
+| 09-09 | 消费/内需 | 半导体/芯片 ❌ | [免税概念, 短剧互动游戏, 影视概念] | [存储芯片, Chiplet概念, 光刻机(胶)] ❌ | 0/14 |
+| 09-10 | 农业 ✅ | 农业 ✅ | [免税概念, 短剧互动游戏, 数字货币] | [Kimi概念, 智谱AI, AI语料] ❌ | 0/8 |
+| 09-11 | 稳增长/基建 ✅ | 稳增长/基建 ✅ | [Kimi概念, 免税概念, 短剧互动游戏] ✅ | 同左 ✅ | **9/9** ✅ |
+| 09-14 | 半导体/芯片 | 稳增长/基建 ❌ | [存储芯片, Chiplet概念, 光刻机(胶)] | [Kimi概念, 免税概念, 短剧互动游戏] ❌ | 0/4 |
+
+**读法**：`main` 与 `room_bottom` **都一致的那天（09-11）腿级 9/9 完全命中** → 布腿链本身是忠实的；
+对不上的 3 天，第一分叉都发生在**主题/池输入**（`main_line_state` 取的版本不对：09-09 用了 09-08 版、
+09-14 用了 09-11 版；09-10 虽 `main` 对但池的 room 不同）→ 与 §9.13 的"缺 `main_line_state` 版本"同一族。
+
+**本轮另外修掉的一个静默崩溃**：`bt_day_legs.py` 的诊断打印调用 `arm.theme_of_chain(c)`，
+而早期版本树没有这个函数（rev_5a6327…）→ **整个 09-10 布腿路径 AttributeError 崩掉、静默变成 0 条腿**。
+已改成容错取值（`getattr(arm, "theme_of_chain", None)`）。

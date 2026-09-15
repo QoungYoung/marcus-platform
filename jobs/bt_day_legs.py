@@ -272,8 +272,12 @@ def main() -> int:
             print("[legs] 资格集合取数失败 %s: %s" % (getattr(_f_sel, "__name__", "?"), str(_se)[:90]), flush=True)
     print("[legs] 资格集合(%s)=%s" % (getattr(_f_sel, "__name__", "?"), sorted(confirmed_today_set)), flush=True)
     print("[legs] module=%s" % getattr(arm, "__file__", "?"), flush=True)
+    # ⚠️ `theme_of_chain` 是**版本相关**函数：早期版本树里没有它（实测 rev_5a6327… 报
+    #    AttributeError → 整个 09-10 布腿路径崩掉、静默变成 0 条腿）。诊断打印必须容错。
+    _toc = getattr(arm, "theme_of_chain", None)
     for c in list(room) + list(holdT):
-        print("   链 %s → theme=%s" % (c, arm.theme_of_chain(c)), flush=True)
+        print("   链 %s → theme=%s" % (c, _toc(c) if callable(_toc) else "(该版本无 theme_of_chain)"),
+              flush=True)
 
     buy_chains = []
     qualify = os.getenv("MAINLINE_QUALIFY", "1").strip() in ("1", "true", "yes")
