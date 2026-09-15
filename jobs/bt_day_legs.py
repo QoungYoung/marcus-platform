@@ -110,6 +110,35 @@ def held_from_db(cut: str, account: str = "stock"):
 
 
 
+def task_enabled(code_dir: str, task_id: str):
+    """该日版本树的 `config/tasks.yaml` 里这条任务是否存在且 `enabled: true`。
+
+    ⚠️ 为什么必须查：**规则买入链是 2026-09-03 才上线的**（`rotation_switch_arm` 09-03、
+    `tranche_ladder_report` 09-07）。不查就会出现"用未来才有的链在 1-8 月布腿"的**时代错位**
+    （实测 09-01 回放布出 5 条腿，而生产当天根本没有这条链 → 假阳性污染对账）。
+    返回 (ok, reason)。
+    """
+    if not code_dir:
+        return True, "no_code_dir(未做版本树检查)"
+    p = os.path.join(code_dir, "config", "tasks.yaml")
+    if not os.path.exists(p):
+        return True, "no_tasks_yaml"
+    try:
+        txt = open(p, encoding="utf-8", errors="replace").read()
+    except Exception as e:
+        return True, "tasks_yaml_unreadable:%s" % str(e)[:40]
+    import re as _re
+    for blk in _re.split(r"\n(?=\s*-\s*id:)", txt):
+        m = _re.search(r"id:\s*([A-Za-z0-9_]+)", blk)
+        if not m or m.group(1) != task_id:
+            continue
+        en = _re.search(r"enabled:\s*(true|false)", blk)
+        if en and en.group(1) == "false":
+            return False, "task_disabled"
+        return True, "task_enabled"
+    return False, "task_not_registered"
+
+
 def resolve_code_dir(date8: str, explicit: str = "") -> str:
     """该日"在跑的代码版本"目录：`--code-dir` > `data/_bt_code/rev_map.json` 里的映射 > 空（用现行代码）。"""
     if explicit:
@@ -133,6 +162,8 @@ def main() -> int:
     ap.add_argument("--held-from-db", action="store_true", help="用 paper_trades(≤cut) 重建持仓")
     ap.add_argument("--code-dir", default="", help="该日的代码版本树（默认按 data/_bt_code/rev_map.json 自动解析）")
     ap.add_argument("--out", default="")
+    ap.add_argument("--require-task", default="rotation_switch_arm",
+                    help="该日版本树里必须启用的任务 id（时代检查；空字符串=不检查）")
     a = ap.parse_args()
 
     sb = a.sandbox or os.path.join(os.environ.get("DATA_DIR", "/app/data"), "_bt_full", a.date)
@@ -173,6 +204,19 @@ def main() -> int:
                 sys.path.insert(0, _p)
         print("[code] 版本树路径已重新置顶（在 shim import 之后）", flush=True)
     arm = importlib.import_module("rotation_switch_arm")
+    # ⚠️ 模块来源校验：必须来自**当日版本树**，否则就是"今天的代码在跑历史"
+    if _code:
+        _af = os.path.abspath(getattr(arm, "__file__", "") or "")
+        _exp = os.path.abspath(os.path.join(_code, "jobs"))
+        if _af and not _af.startswith(_exp):
+            print("ABORT_MODULE_PROVENANCE rotation_switch_arm=%s 期望在 %s 内" % (_af, _exp), flush=True)
+            return 5
+    if a.require_task:
+        ok, why = task_enabled(_code, a.require_task)
+        if not ok:
+            print("SKIP_TASK_NOT_AVAILABLE %s %s（该日生产根本没有这条链 → 本路径当日应为 0 条腿）"
+                  % (a.require_task, why), flush=True)
+            return 0
     arm.DATA = sb
     arm._today = lambda: str(cut)
     shim = GzShim(a.bars_db, cut)

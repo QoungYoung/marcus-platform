@@ -583,3 +583,19 @@ bt_llm_replay.LLMReplayError: prompt 与录制时不一致：agent=wave as_of=20
   ② 把"三处都没有"从**静默用活文件**改成 **`fatal` 标记 + 非 0 退出**，`bt_days` 记该日为"阻断"而不是"0 条腿"
      （本轮已实测：静默降级会把"没跑成"伪装成"确实没腿"，直接污染对账）；
   ③ `bt_seed_day.py --main-line-state-file <path>` 显式覆盖（用于把 09-08 这类真丢的天手工标成"不可复现"）。
+
+### 9.14 第 6 轮（续）：两个必须记住的运维事实（都直接导致本轮返工）
+
+**① 容器里没有 `ps` / `pkill`**：`ps -ef` 返回**空**、`pkill: not found`。我用 `ps aux | grep bt_days`
+判断"后台跑批已经死了" → 结论是**错的**：全窗口跑批（`bt_days --start 20260603`）**一直活着**（PID 24198，
+已跑到 06-29），与第二次启动的 09 月跑批**同时**写同一个沙箱根目录，日志也搅在一起。
+后果：内存被两家分（容器 512MB 上限，实测飙到 417MB）、seed 变慢、沙箱被互相覆盖。
+正确姿势：**扫 `/proc/*/cmdline`**（已封装 `.dsh-tmp/wolfbt/procs.py`：`list_backtest()` / `kill_backtest()`）。
+
+**② 时代检查（era gating）必须做**：实测不给检查的话，2026-09-01 会"用 9 月才上线的链"布出 **5 条腿**
+（生产当天 0 条）——这是最隐蔽的一类失真：**代码能跑 ≠ 那天有这条链**。
+处置：`bt_days.py` 读 `data/_bt_task_timeline.json`（75 天逐日 `tasks.yaml` 的 `enabled`），
+当天没登记/被停用的链**直接跳过**并在日志里记 `skipped: task_not_registered`；
+两个布腿脚本各自加 `--require-task`（默认 `rotation_switch_arm` / `tranche_ladder_report`）做二次把关，
+并加**模块来源校验**：`rotation_switch_arm` / `switch_builder` 的 `__file__` 必须落在当日版本树内，
+否则 `ABORT_MODULE_PROVENANCE` 退出（防"今天的代码跑历史"这类静默前视）。

@@ -45,6 +45,33 @@ def held_from_db(cut: str, account: str = "stock"):
 
 
 
+def task_enabled(code_dir: str, task_id: str):
+    """该日版本树的 `config/tasks.yaml` 里这条任务是否存在且 `enabled: true`（时代检查）。
+
+    ⚠️ 规则买入链 2026-09-07 才有 `tranche_ladder_report`；不查就会出现"用未来才有的链
+    在 6-8 月布腿"的时代错位（假阳性）。
+    """
+    if not code_dir:
+        return True, "no_code_dir(未做版本树检查)"
+    p = os.path.join(code_dir, "config", "tasks.yaml")
+    if not os.path.exists(p):
+        return True, "no_tasks_yaml"
+    try:
+        txt = open(p, encoding="utf-8", errors="replace").read()
+    except Exception as e:
+        return True, "tasks_yaml_unreadable:%s" % str(e)[:40]
+    import re as _re
+    for blk in _re.split(r"\n(?=\s*-\s*id:)", txt):
+        m = _re.search(r"id:\s*([A-Za-z0-9_]+)", blk)
+        if not m or m.group(1) != task_id:
+            continue
+        en = _re.search(r"enabled:\s*(true|false)", blk)
+        if en and en.group(1) == "false":
+            return False, "task_disabled"
+        return True, "task_enabled"
+    return False, "task_not_registered"
+
+
 def resolve_code_dir(date8: str, explicit: str = "") -> str:
     """该日"在跑的代码版本"目录：`--code-dir` > `data/_bt_code/rev_map.json` 里的映射 > 空（用现行代码）。"""
     if explicit:
@@ -68,6 +95,8 @@ def main() -> int:
     ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
     ap.add_argument("--code-dir", default="", help="该日的代码版本树（默认按 data/_bt_code/rev_map.json 自动解析）")
     ap.add_argument("--out", default="")
+    ap.add_argument("--require-task", default="tranche_ladder_report",
+                    help="该日版本树里必须启用的任务 id（时代检查；空=不检查）")
     a = ap.parse_args()
 
     sb = a.sandbox or os.path.join(os.environ.get("DATA_DIR", "/app/data"), "_bt_full", a.date)
@@ -108,7 +137,19 @@ def main() -> int:
             if os.path.isdir(_p):
                 sys.path.insert(0, _p)
         print("[code] 版本树路径已重新置顶（在 shim import 之后）", flush=True)
+    if a.require_task:
+        _ok, _why = task_enabled(_code, a.require_task)
+        if not _ok:
+            print("SKIP_TASK_NOT_AVAILABLE %s %s（该日生产根本没有这条链 → 本路径当日应为 0 条腿）"
+                  % (a.require_task, _why), flush=True)
+            return 0
     sb_mod = importlib.import_module("switch_builder")
+    if _code:
+        _sf = os.path.abspath(getattr(sb_mod, "__file__", "") or "")
+        _se = os.path.abspath(os.path.join(_code, "apps", "main_line"))
+        if _sf and not _sf.startswith(_se):
+            print("ABORT_MODULE_PROVENANCE switch_builder=%s 期望在 %s 内" % (_sf, _se), flush=True)
+            return 5
     try:      # 诊断：确认主题来源模块/函数（版本树 vs 现行）
         _mcs = importlib.import_module("mainline_confirm_state")
         print("[diag] mainline_confirm_state = %s | gate_top_themes=%s | mainline_top_themes=%s"

@@ -21,6 +21,34 @@ import time
 
 DATA = os.environ.get("DATA_DIR", "/app/data")
 ROOT = os.path.join(DATA, "_bt_full")
+TASK_TIMELINE = os.path.join(DATA, "_bt_task_timeline.json")
+
+
+def load_timeline(path):
+    """逐日 `config/tasks.yaml` 的任务登记表（`data/_bt_task_timeline.json`，由宿主机脚本从
+    75 份逐日代码树抽出）→ **时代检查**：某条链当天根本不存在/被停用时，当天就不该布腿。
+
+    ⚠️ 实测教训：不加这层检查，2026-09-01 会"用 9 月才上线的链"布出 5 条腿（生产当天 0 条），
+    直接制造假阳性。
+    """
+    try:
+        return (json.load(open(path, encoding="utf-8")) or {}).get("days") or {}
+    except Exception:
+        return {}
+
+
+def task_on(tl, day, task_id):
+    """该日这条链是否启用。三种返回：
+       True/False = 当日版本树里有明确登记（False 含"整条任务还没上线"）
+       None       = 当天不在登记表里（信息缺失）→ 保守：不拦
+    """
+    d = tl.get(day)
+    if not d:
+        return None
+    t = (d.get("tasks") or {}).get(task_id)
+    if t is None:
+        return False                     # 当天有登记表、但没有这条任务 = 那时还没上线
+    return bool(t.get("enabled"))
 
 
 def trade_days(start: str, end: str, bars_db: str):
@@ -56,11 +84,16 @@ def main() -> int:
     ap.add_argument("--out", default=None)
     ap.add_argument("--skip-seed", action="store_true", help="沙箱已建好时跳过 seed")
     ap.add_argument("--llm-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
+    ap.add_argument("--task-timeline", default=TASK_TIMELINE,
+                    help="逐日任务登记表（时代检查；缺失则不拦）")
     a = ap.parse_args()
 
     if not a.out:
         a.out = os.path.join(a.root, "_summary")
     os.makedirs(a.out, exist_ok=True)
+    tl = load_timeline(a.task_timeline)
+    if tl:
+        print("[days] 时代检查：任务登记表 %d 天（%s）" % (len(tl), a.task_timeline), flush=True)
     days = trade_days(a.start, a.end, a.bars_db)
     print("[days] %d 个交易日：%s → %s" % (len(days), days[0] if days else "-", days[-1] if days else "-"), flush=True)
     by_day, all_legs = {}, []
@@ -85,18 +118,29 @@ def main() -> int:
             pass
         # ② 08:18 路径：用**上一交易日**的确认域（switch_builder 08:18 跑，confirm 08:20 才刷新）
         prev = prev_trade_day(cut, a.bars_db)
-        rc_prev, dtp = run([sys.executable, "/app/jobs/bt_run_pinned.py", "--as-of", prev,
-                            "--data-dir", sb, "--bars-db", a.bars_db,
-                            "--code-dir", os.path.join(DATA, "_bt_code", "rev_" + (
-                                (json.load(open(os.path.join(DATA, "_bt_code", "rev_map.json"), encoding="utf-8"))
-                                 .get(d8, {}) or {}).get("rev", ""))),
-                            "--script", _script_in_rev(d8, "apps/main_line/stock_confirm_judge.py")],
-                           os.path.join(a.out, "confirm_%s.log" % d8), timeout=1800)
-        entry["steps"]["confirm_prevday"] = {"rc": rc_prev, "as_of": prev, "s": round(dtp, 1)}
-        rc_sw, dts = run([sys.executable, "/app/jobs/bt_day_legs_switch.py", "--date", d8, "--held-from-db",
-                          "--sandbox", sb, "--bars-db", a.bars_db],
-                         os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
-        entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
+        sw_on = task_on(tl, d8, "tranche_ladder_report")
+        arm_on = task_on(tl, d8, "rotation_switch_arm")
+        conf_on = task_on(tl, d8, "stock_confirm_refresh")
+        entry["paths"] = {"tranche_ladder_report": sw_on, "rotation_switch_arm": arm_on,
+                          "stock_confirm_refresh": conf_on}
+        if conf_on is False:
+            entry["steps"]["confirm_prevday"] = {"skipped": "task_not_registered"}
+        else:
+          rc_prev, dtp = run([sys.executable, "/app/jobs/bt_run_pinned.py", "--as-of", prev,
+                              "--data-dir", sb, "--bars-db", a.bars_db,
+                              "--code-dir", os.path.join(DATA, "_bt_code", "rev_" + (
+                                  (json.load(open(os.path.join(DATA, "_bt_code", "rev_map.json"), encoding="utf-8"))
+                                   .get(d8, {}) or {}).get("rev", ""))),
+                              "--script", _script_in_rev(d8, "apps/main_line/stock_confirm_judge.py")],
+                             os.path.join(a.out, "confirm_%s.log" % d8), timeout=1800)
+          entry["steps"]["confirm_prevday"] = {"rc": rc_prev, "as_of": prev, "s": round(dtp, 1)}
+        if sw_on is False:
+            entry["steps"]["switch_0818"] = {"skipped": "task_not_registered"}
+        else:
+            rc_sw, dts = run([sys.executable, "/app/jobs/bt_day_legs_switch.py", "--date", d8, "--held-from-db",
+                              "--sandbox", sb, "--bars-db", a.bars_db],
+                             os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
+            entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
         # 08:18 用的是上一交易日确认域 → 跑完必须**还原当天口径**，否则 09:20 路径会看错版本
         try:
             import shutil
@@ -107,10 +151,13 @@ def main() -> int:
         except Exception as _re:
             entry["steps"]["confirm_restore_err"] = str(_re)[:80]
         # ③ 09:20 路径
-        rc_arm, dta = run([sys.executable, "/app/jobs/bt_day_legs.py", "--date", d8, "--held-from-db",
-                           "--sandbox", sb, "--bars-db", a.bars_db],
-                          os.path.join(a.out, "arm_%s.log" % d8), timeout=2400)
-        entry["steps"]["arm_0920"] = {"rc": rc_arm, "s": round(dta, 1)}
+        if arm_on is False:
+            entry["steps"]["arm_0920"] = {"skipped": "task_not_registered"}
+        else:
+            rc_arm, dta = run([sys.executable, "/app/jobs/bt_day_legs.py", "--date", d8, "--held-from-db",
+                               "--sandbox", sb, "--bars-db", a.bars_db],
+                              os.path.join(a.out, "arm_%s.log" % d8), timeout=2400)
+            entry["steps"]["arm_0920"] = {"rc": rc_arm, "s": round(dta, 1)}
         # ④ 汇总当日腿
         legs = []
         for fn, src in (("legs_switch.jsonl", "switch_0818"), ("legs.jsonl", "arm_0920")):
