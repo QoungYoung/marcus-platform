@@ -124,7 +124,31 @@ def _basket(panel, i, theme, uni, hold):
     return float(m) if m == m else None
 
 
-def evaluate(rank_rows, p1_rows, panel, uni, hold=5):
+def load_gate_blocked(shadow_dir):
+    """读 `pick_path_*.json` → [{date, theme, why, allowed}]。
+
+    `gate_blocked` = 当日被**主题门**（A2 结构门 ∧ 资金门）挡掉的主题；`allowed` = 当日实际布了腿的主题
+    （从 `legs` 去重）。用来量 A2 那个悬而未决的问题：**门是不是太严**（09-11/09-14/09-15 池内主题全被挡，
+    路径 B 根本不进）→ 被挡主题的篮子后续是不是真的更差。
+    """
+    out = []
+    for p in sorted(glob.glob(os.path.join(shadow_dir, "pick_path_*.json"))):
+        d = os.path.basename(p)[len("pick_path_"):-len(".json")]
+        try:
+            j = json.load(open(p, encoding="utf-8"))
+        except Exception as e:                                  # pragma: no cover
+            print("[shadow] 读取失败 %s: %s" % (p, str(e)[:80]), file=sys.stderr)
+            continue
+        date = str(j.get("date") or d)[:8] or d
+        for b in (j.get("gate_blocked") or []):
+            out.append({"date": date, "theme": b.get("theme"), "why": b.get("why"), "allowed": False})
+        for th in sorted({str(x.get("theme") or x.get("chain") or "")
+                          for x in (j.get("legs") or [])} - {""}):
+            out.append({"date": date, "theme": th, "why": "当日有布腿", "allowed": True})
+    return out
+
+
+def evaluate(rank_rows, p1_rows, panel, uni, hold=5, gate_rows=None):
     """核心：把影子记录算成逐 theme-day 明细 + 聚合统计（纯函数，便于单测）。"""
     detail, reason_cnt = [], {}
     for row in rank_rows:
@@ -187,8 +211,28 @@ def evaluate(rank_rows, p1_rows, panel, uni, hold=5):
                                         if r["passed"] is True and r["basket"] is not None],
                                        [r["basket"] for r in p1_detail
                                         if r["passed"] is True and r["basket"] is not None])}
-    return {"hold": hold, "detail": detail, "p1_detail": p1_detail, "agg": agg, "p1_agg": p1_agg,
-            "skipped": reason_cnt}
+    # ③ A2 主题门：被挡的主题篮子 vs 当日放行（布了腿）的主题篮子
+    gate_rows = gate_rows or []
+    g_detail = []
+    for row in gate_rows:
+        i = panel.di.get(str(row["date"]))
+        if i is None:
+            reason_cnt["gate:date_not_in_bars"] = reason_cnt.get("gate:date_not_in_bars", 0) + 1
+            continue
+        bk = _basket(panel, i, row["theme"], uni, hold)
+        g_detail.append({"date": row["date"], "theme": row["theme"], "allowed": bool(row.get("allowed")),
+                         "why": (row.get("why") or "")[:80], "basket": None if bk is None else round(bk, 3)})
+    g_blocked = [r for r in g_detail if not r["allowed"] and r["basket"] is not None]
+    g_allowed = [r for r in g_detail if r["allowed"] and r["basket"] is not None]
+    gate_agg = {"n_checked": len(g_detail), "n_blocked": len(g_blocked), "n_allowed": len(g_allowed),
+                "n_pending": len(g_detail) - len(g_blocked) - len(g_allowed),
+                "blocked_basket": E._stat([(r["date"], r["basket"]) for r in g_blocked],
+                                          [r["basket"] for r in g_blocked]),
+                "allowed_basket": E._stat([(r["date"], r["basket"]) for r in g_allowed],
+                                          [r["basket"] for r in g_allowed])}
+
+    return {"hold": hold, "detail": detail, "p1_detail": p1_detail, "gate_detail": g_detail,
+            "agg": agg, "p1_agg": p1_agg, "gate_agg": gate_agg, "skipped": reason_cnt}
 
 
 def _fmt(s):
@@ -208,15 +252,16 @@ def main():
 
     rank_rows = load_rank_shadow(args.shadow_dir)
     p1_rows = load_p1_shadow(args.shadow_dir)
-    print("[shadow] rank_v3 theme-day 记录 %d 条 | P1 记录 %d 条 | 目录 %s"
-          % (len(rank_rows), len(p1_rows), args.shadow_dir))
-    if not rank_rows and not p1_rows:
+    gate_rows = load_gate_blocked(args.shadow_dir)
+    print("[shadow] rank_v3 theme-day 记录 %d 条 | P1 记录 %d 条 | 主题门(pick_path) 记录 %d 条 | 目录 %s"
+          % (len(rank_rows), len(p1_rows), len(gate_rows), args.shadow_dir))
+    if not rank_rows and not p1_rows and not gate_rows:
         print("[shadow] 暂无影子记录（灰度期尚未产生，或目录不对）")
         return 0
 
     panel = E.Panel(args.bars)
     uni, _lead, _allc, _ms = E.load_universe()
-    res = evaluate(rank_rows, p1_rows, panel, uni, hold=args.hold)
+    res = evaluate(rank_rows, p1_rows, panel, uni, hold=args.hold, gate_rows=gate_rows)
 
     bars_max = panel.dates[-1]
     print("\n影子期对照（hold=%d，入场=影子日次日收盘，超额=同主题等权篮子；bars 至 %s）" % (args.hold, bars_max))
@@ -241,7 +286,16 @@ def main():
     if pa["n_blocked"] < MIN_N:
         print("   ⚠️ 被拦样本 %d < %d → **探索性**" % (pa["n_blocked"], MIN_N))
 
-    print("\n③ 逐 theme-day 明细")
+    print("\n③ A2 主题门：被挡的主题 vs 当日放行的主题（拦对 = 被挡篮子后续确实差）")
+    ga = res["gate_agg"]
+    print("   记录 %d 个 theme-day：被挡 %d / 放行 %d / 窗口未走完 %d"
+          % (ga["n_checked"], ga["n_blocked"], ga["n_allowed"], ga.get("n_pending", 0)))
+    print("   被挡主题篮子 " + _fmt(ga["blocked_basket"]))
+    print("   放行主题篮子 " + _fmt(ga["allowed_basket"]))
+    if ga["n_blocked"] < MIN_N:
+        print("   ⚠️ 被挡样本 %d < %d → **探索性**（每天自动累积，攒够再下结论）" % (ga["n_blocked"], MIN_N))
+
+    print("\n④ 逐 theme-day 明细")
     for r in res["detail"]:
         print("   %s %-12s q=%-4s dom=%-3s v3=%-5s %-7s leader=%-5s %-7s 篮子=%s"
               % (r["date"], r["theme"], r["qtile"], r["domain_n"], r["v3_sym"] or "—",
@@ -253,10 +307,15 @@ def main():
         print("   %s %-12s P1=%s 篮子=%s  %s"
               % (r["date"], r["theme"], "拦" if r["passed"] is False else "放",
                  ("%+.2f%%" % r["basket"]) if r["basket"] is not None else "—", (r.get("why") or "")[:40]))
+    for r in res["gate_detail"]:
+        print("   %s %-12s 主题门=%s 篮子=%s  %s"
+              % (r["date"], r["theme"], "放" if r["allowed"] else "挡",
+                 ("%+.2f%%" % r["basket"]) if r["basket"] is not None else "—", (r.get("why") or "")[:50]))
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump({"shadow_dir": args.shadow_dir, "bars": args.bars, "bars_max": bars_max,
-               "n_rank_rows": len(rank_rows), "n_p1_rows": len(p1_rows), **res},
+               "n_rank_rows": len(rank_rows), "n_p1_rows": len(p1_rows),
+               "n_gate_rows": len(gate_rows), **res},
               open(args.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print("\n[shadow] 写出 %s" % args.out)
     return 0

@@ -124,3 +124,39 @@ def test_accepts_ts_code_symbol(panel):
              "v3": ["000001.SZ"], "leader": ["000002.SZ"]}]
     res = S.evaluate(rank, [], panel, {"T": ["000001.SZ"]}, hold=2)
     assert res["detail"][0]["v3"] == pytest.approx(2.01, abs=0.01)
+
+
+def test_load_gate_blocked_parses_pick_path(tmp_path):
+    """`pick_path_*.json` → 主题门记录（gate_blocked = 被挡；legs 的 theme = 放行）。"""
+    import json as _json
+    (_json.dump({"date": "20260105",
+                 "gate_blocked": [{"theme": "半导体/芯片", "why": "结构未确认: stage=suspect"}],
+                 "legs": [{"symbol": "SZ000001", "theme": "T"}]},
+                open(tmp_path / "pick_path_20260105.json", "w", encoding="utf-8")))
+    rows = S.load_gate_blocked(str(tmp_path))
+    got = {(r["theme"], r["allowed"]) for r in rows}
+    assert ("半导体/芯片", False) in got
+    assert ("T", True) in got
+    assert len(rows) == 2
+
+
+def test_gate_section_baskets(panel):
+    """A2 主题门：被挡主题的篮子 vs 当日放行主题的篮子（同一把尺子）。"""
+    gate = [{"date": "20260105", "theme": "T", "why": "结构未确认", "allowed": False},
+            {"date": "20260105", "theme": "U", "why": "当日有布腿", "allowed": True}]
+    uni = {"T": ["000001.SZ", "000002.SZ"],     # 篮子 = (2.01 − 3.96)/2 = −0.975
+           "U": ["600000.SH"]}                  # 篮子 = +4.04
+    res = S.evaluate([], [], panel, uni, hold=2, gate_rows=gate)
+    assert res["gate_agg"]["n_blocked"] == 1 and res["gate_agg"]["n_allowed"] == 1
+    assert res["gate_agg"]["blocked_basket"]["mean"] == pytest.approx(-0.975, abs=0.02)
+    assert res["gate_agg"]["allowed_basket"]["mean"] == pytest.approx(4.04, abs=0.02)
+
+
+def test_gate_section_pending_excluded(panel):
+    """主题门记录的前瞻窗口没走完 → 记 skipped 且不进聚合（不当作 0）。"""
+    gate = [{"date": "20260113", "theme": "T", "why": "x", "allowed": False}]
+    res = S.evaluate([], [], panel, {"T": ["000001.SZ"]}, hold=2, gate_rows=gate)
+    assert res["gate_agg"]["n_checked"] == 1
+    assert res["gate_agg"]["n_blocked"] == 0 and res["gate_agg"]["n_pending"] == 1
+    assert res["skipped"].get("gate:date_not_in_bars") is None       # 日期在 bars 里，只是窗口没走完
+    assert res["gate_detail"][0]["basket"] is None
