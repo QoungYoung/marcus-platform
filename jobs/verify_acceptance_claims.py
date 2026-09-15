@@ -40,7 +40,13 @@ def py_files():
 
 
 def code_knobs(files):
-    """→ {NAME: [(relpath, default)]}（AST 扫 os.getenv / os.environ.get 的字面量键）。"""
+    """→ {NAME: [(relpath, default)]}（AST 扫 os.getenv / os.environ.get 的字面量键）。
+
+    2026-09-15 round 40：**间接形态也要收** —— 有些开关把键名放在常量里再 `os.getenv(NAME, ...)`
+    （如 `wolf_theme_vol_fund.FAILCLOSED_ENV = "WOLF_FUND_GATE_FAILCLOSED"`），
+    只扫调用点会报"文档提到、代码里没有"的**假阳性**（实测 1 个）。这里额外收
+    `NAME = "WOLF_*/P3_*/ROT_*…"` 这类**看起来就是 env 键**的字符串常量。
+    """
     out = {}
     for p in files:
         try:
@@ -48,6 +54,15 @@ def code_knobs(files):
         except Exception:
             continue
         rel = os.path.relpath(p, ROOT)
+        # ① 先建"常量名 → env 键"映射（NAME = "WOLF_XXX"），供 ② 里 `os.getenv(NAME, "<default>")` 解析
+        const_map = {}
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                    and re.match(r"^(WOLF|P3|ROT|SWITCH|BUY|DIP|ETF|T)_[A-Z0-9_]{2,}$", node.value.value)):
+                const_map[node.targets[0].id] = node.value.value
+                out.setdefault(node.value.value, []).append((rel, None))   # 键存在（默认值见 ② 的调用点）
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.args):
                 continue
@@ -59,12 +74,17 @@ def code_knobs(files):
             if not (is_getenv or is_env_get):
                 continue
             a0 = node.args[0]
-            if not (isinstance(a0, ast.Constant) and isinstance(a0.value, str)):
+            key = None
+            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                key = a0.value
+            elif isinstance(a0, ast.Name):                      # 间接形态：os.getenv(FAILCLOSED_ENV, "1")
+                key = const_map.get(a0.id)
+            if not key:
                 continue
             default = None
             if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
                 default = node.args[1].value
-            out.setdefault(a0.value, []).append((rel, default))
+            out.setdefault(key, []).append((rel, default))
     return out
 
 
@@ -138,8 +158,10 @@ def main():
     for k in sorted(claimed):
         if k not in knobs:
             continue
-        d = knobs[k][0][1]
-        rel = knobs[k][0][0]
+        # 同一键可能有多个记录点（常量声明处 default=None + getenv 调用处的真默认）→ 取**已知默认值**那条
+        recs = [r for r in knobs[k] if r[1] is not None] or knobs[k]
+        d = recs[0][1]
+        rel = recs[0][0]
         same = str(claimed[k]) == str(d) or (str(claimed[k]) in ("0", "1") and str(d) in ("0", "1")
                                              and str(claimed[k]) == str(d))
         if not same:
