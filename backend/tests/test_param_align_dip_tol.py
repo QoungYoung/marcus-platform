@@ -63,30 +63,34 @@ def _run(tm, monkeypatch, prev_low, today_low, today=None):
     return obj._stock_dip_prev_low("SH600000")
 
 
-def test_default_is_corpus_value(monkeypatch):
-    """默认 = 语料值 0.0（不是历史的 0.005）。"""
+def test_default_is_legacy_until_approved(monkeypatch):
+    """**默认 = legacy 0.005**（避免"部署即静默改变行为"）；语料值 0.0 需显式 env 或后续 commit 翻转。"""
     tm = _fresh_tm(monkeypatch, None)
-    assert tm.DIP_PREVLOW_TOL == 0.0
+    assert tm.DIP_PREVLOW_TOL == tm.LEGACY_DIP_TOL == 0.005
+    assert tm.CORPUS_DIP_TOL == 0.0
     assert "挂前一天的低点" in tm.TMonitor._stock_dip_prev_low.__doc__
 
 
-def test_env_can_restore_legacy(monkeypatch):
-    tm = _fresh_tm(monkeypatch, 0.005)
-    assert tm.DIP_PREVLOW_TOL == 0.005
-    tm2 = _fresh_tm(monkeypatch, None)
+def test_env_selects_corpus_value(monkeypatch):
+    """`WOLF_DIP_PREVLOW_TOL=0.0` → 语料值（批准后一键切换）。"""
+    tm = _fresh_tm(monkeypatch, 0.0)
+    assert tm.DIP_PREVLOW_TOL == 0.0
+    tm2 = _fresh_tm(monkeypatch, "0.0")
     assert tm2.DIP_PREVLOW_TOL == 0.0
+    tm3 = _fresh_tm(monkeypatch, None)
+    assert tm3.DIP_PREVLOW_TOL == 0.005
 
 
 def test_touch_exact_prev_low_fires_at_zero_tol(monkeypatch):
-    """tol=0：恰好触到前日低 → 触发；比前日低高 0.3% → 不触发。"""
-    tm = _fresh_tm(monkeypatch, None)
+    """tol=0（语料值）：恰好触到前日低 → 触发；比前日低高 0.3% → 不触发。"""
+    tm = _fresh_tm(monkeypatch, 0.0)
     assert _run(tm, monkeypatch, 10.00, 10.00) is True
     assert _run(tm, monkeypatch, 10.00, 10.03) is False       # +0.3% 不触发（旧 ×1.005 会触发）
     assert _run(tm, monkeypatch, 10.00, 9.95) is True         # 跌破 → 触发
 
 
 def test_legacy_tol_still_fires(monkeypatch):
-    """tol=0.005（回退档）：+0.3% 也触发，+0.6% 不触发。"""
+    """tol=0.005（默认/回退档）：+0.3% 也触发，+0.6% 不触发。"""
     tm = _fresh_tm(monkeypatch, 0.005)
     assert _run(tm, monkeypatch, 10.00, 10.03) is True
     assert _run(tm, monkeypatch, 10.00, 10.06) is False
@@ -94,7 +98,7 @@ def test_legacy_tol_still_fires(monkeypatch):
 
 def test_cache_key_includes_tol(monkeypatch):
     """缓存必须带 tol：否则同一 symbol 在 30s 内会用上一次容差的结果。"""
-    tm = _fresh_tm(monkeypatch, None)
+    tm = _fresh_tm(monkeypatch, 0.0)
     assert _run(tm, monkeypatch, 10.00, 10.03) is False
     assert tm._prev_low_cache.get("tol") == 0.0
     # 换容差（模拟灰度切换）后立即重算，不被缓存挡住
@@ -117,20 +121,20 @@ def test_pick_trig_price_same_source(monkeypatch):
 
 
 def test_shadow_records_would_miss(monkeypatch, tmp_path):
-    """C1 影子：tol=0 不触发但历史 0.005 会触发 → 记录到 data/dip_tol_shadow_<date>.json（不改行为）。"""
+    """C1 影子：**默认跑 legacy(0.005)** 但记录"按语料值 0.0 不会成交"的票 —— 不改行为。"""
     import json
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.delenv("WOLF_DIP_PREVLOW_SHADOW", raising=False)
-    tm = _fresh_tm(monkeypatch, None)
+    tm = _fresh_tm(monkeypatch, None)          # 默认 legacy 0.005
     tm.DATA_DIR = str(tmp_path)
-    assert tm._dip_shadow_enabled() is True
-    # +0.3%：tol=0 不触发、0.005 触发 → 应记录
-    assert _run(tm, monkeypatch, 10.00, 10.03) is False
+    assert tm._dip_shadow_enabled() is True and tm.DIP_PREVLOW_TOL == 0.005
+    # +0.3%：legacy 会成交、语料值 0.0 不会 → 应记录（且函数返回 True = 行为未变）
+    assert _run(tm, monkeypatch, 10.00, 10.03) is True
     files = [p for p in os.listdir(tmp_path) if p.startswith("dip_tol_shadow_")]
     assert files, "影子文件未生成"
     d = json.load(open(os.path.join(tmp_path, files[0]), encoding="utf-8"))
-    assert d["items"]["SH600000"]["note"].startswith("tol=0 不成交")
-    # 恰好触前低：tol=0 也触发 → 不应新增记录
+    assert "tol=0 不成交" in d["items"]["SH600000"]["note"]
+    # 恰好触前低：语料值也成交 → 不应新增记录
     before = len(d["items"])
     assert _run(tm, monkeypatch, 10.00, 10.00) is True
     d2 = json.load(open(os.path.join(tmp_path, files[0]), encoding="utf-8"))

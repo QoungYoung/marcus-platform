@@ -59,16 +59,25 @@ WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break", "i
 
 # 254 低吸触发容差（2026-09-15 参数对齐）：狼大 2025-03-06「就是**挂前一天的低点** 能买进去就做正T」
 #   → 语料值 = 0.0（挂前低本身）；历史自设值 0.005（±0.5% 容差）。见 docs/wolf-buy-parameter-ledger.md §2-C1。
+LEGACY_DIP_TOL = 0.005        # 历史自设容差
+CORPUS_DIP_TOL = 0.0         # **语料值**：狼大 2025-03-06「就是挂前一天的低点 能买进去就做正T」
+
+
 def _dip_prevlow_tol() -> float:
+    """254 触发容差。
+
+    ⚠️ 2026-09-15：**代码默认先回到 legacy(0.005)**，避免"部署即静默改变行为"——
+    语料值 0.0 需用户批准后置 `WOLF_DIP_PREVLOW_TOL=0.0`（或后续单独 commit 翻转默认值）。
+    影子 `WOLF_DIP_PREVLOW_SHADOW`（默认 1）会记录"按语料值会少成交哪些票"，供切换前评估。
+    见 docs/wolf-buy-parameter-ledger.md §2-C1 / §11。
+    """
     try:
-        return max(float(os.getenv("WOLF_DIP_PREVLOW_TOL", "0.0") or 0.0), 0.0)
+        return max(float(os.getenv("WOLF_DIP_PREVLOW_TOL", str(LEGACY_DIP_TOL)) or LEGACY_DIP_TOL), 0.0)
     except (TypeError, ValueError):
-        return 0.0
+        return LEGACY_DIP_TOL
 
 
 DIP_PREVLOW_TOL = _dip_prevlow_tol()
-
-LEGACY_DIP_TOL = 0.005        # 历史自设容差（回退档），影子对比用
 
 
 def _dip_shadow_enabled() -> bool:
@@ -1887,9 +1896,10 @@ class TMonitor:
             # C1 影子（2026-09-15）：记录"按语料值 tol=0 不触发、但按历史自设 tol=0.005 会触发"的情形
             #   → 灰度期量化"对齐后会少成交多少/少成交的是哪些票"，不改真实行为。
             try:
-                if _dip_shadow_enabled() and DIP_PREVLOW_TOL < LEGACY_DIP_TOL:
-                    wide = prev_low > 0 and today_low <= prev_low * (1.0 + LEGACY_DIP_TOL)
-                    if wide and not ok:
+                if _dip_shadow_enabled() and DIP_PREVLOW_TOL > CORPUS_DIP_TOL:
+                    # 当前用宽档（legacy 0.005）而语料值是 0.0 → 记录"按语料值不会成交"的那些票
+                    strict = prev_low > 0 and today_low <= prev_low * (1.0 + CORPUS_DIP_TOL)
+                    if ok and not strict:
                         _dip_shadow_record(symbol, prev_low, today_low)
             except Exception as _se:
                 print("[TMonitor] dip 影子记录失败: %s" % str(_se)[:60])
