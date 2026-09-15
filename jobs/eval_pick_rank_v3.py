@@ -69,6 +69,9 @@ def main():
     ap.add_argument("--by-rank", action="store_true",
                     help="额外输出『主题内第 k 只腿』与『前 k 只腿组合』的期望表（验收主题内腿数上限）")
     ap.add_argument("--by-rank-var", default="V3", help="--by-rank 用哪个变体（默认 V3）")
+    ap.add_argument("--by-drawdown", action="store_true",
+                    help="按『当日回撤幅度(高-收)/高』与『收盘在当日区间的位置』分桶看期望（候选(d) 回踩门槛）")
+    ap.add_argument("--by-drawdown-var", default="V3", help="--by-drawdown 用哪个变体（默认 V3）")
     ap.add_argument("--themes", default="")
     ap.add_argument("--domain", default="lowmid", choices=["lowmid", "cand_low", "cand_lowonly"],
                     help="候选域：lowmid=现行 tier1 域 / cand_low=候选池∩LOW,MID（去掉 r20≥0,rs≥0 闸）/ cand_lowonly=仅 LOW")
@@ -133,6 +136,8 @@ def main():
 
     by_rank = collections.defaultdict(list)   # rank k → [(date, ex), ...]
     topk = collections.defaultdict(list)      # 前 k 只等权 → [(date, ex), ...]
+    dd_bucket = collections.defaultdict(list)   # 回撤幅度桶 → [(date, ex)]
+    pos_bucket = collections.defaultdict(list)  # 当日区间位置桶 → [(date, ex)]
     recs = []          # 每个 (日,主题) 一行：各臂的均值 + 配对数
     for d in days:
         i = panel.di[d]
@@ -241,6 +246,25 @@ def main():
                     for _k, _p in enumerate(picks[:6]):
                         by_rank[_k].append((d, _p["ex"]))
                         topk[_k + 1].append((d, _mean([q["ex"] for q in picks[:_k + 1]])))
+                if args.by_drawdown and var == args.by_drawdown_var.upper() and picks:
+                    for _p in picks:
+                        _j = panel.ci.get(_p["ts"])
+                        if _j is None:
+                            continue
+                        _hi = panel.high[i, _j]
+                        _lo = panel.low[i, _j]
+                        _cl = panel.close[i, _j]
+                        if not (_hi > 0 and _cl == _cl and _lo == _lo):
+                            continue
+                        _dd = (_hi - _cl) / _hi * 100.0                      # 当日回撤(%)
+                        _pos = (_cl - _lo) / (_hi - _lo) if _hi > _lo else None  # 收盘位置 0=最低 1=最高
+                        _lbl = ("dd<1" if _dd < 1 else "dd1-2" if _dd < 2 else
+                                "dd2-3" if _dd < 3 else "dd3-5" if _dd < 5 else "dd>=5")
+                        dd_bucket[_lbl].append((d, _p["ex"]))
+                        if _pos is not None:
+                            _pl = ("pos<0.2" if _pos < 0.2 else "pos0.2-0.5" if _pos < 0.5 else
+                                   "pos0.5-0.8" if _pos < 0.8 else "pos>=0.8")
+                            pos_bucket[_pl].append((d, _p["ex"]))
                 out["n_" + var] = len(picks)
                 # 与现行 tier1 的重合度
                 if cur and picks:
@@ -303,6 +327,34 @@ def main():
         print("   %s(切%s) %s" % (tag, seg["split_at"],
                                   " ".join("%s=%s" % (a, (seg[a].get("mean") if seg[a].get("n") else None))
                                            for a in ["cur"] + variants)))
+    if args.by_drawdown:
+        print("\n== 按『当日回撤幅度 (高-收)/高』分桶（变体 %s；同主题超额%%）==" % args.by_drawdown_var.upper())
+        for lbl in ("dd<1", "dd1-2", "dd2-3", "dd3-5", "dd>=5"):
+            rows_k = dd_bucket.get(lbl) or []
+            if not rows_k:
+                continue
+            stt = E._stat(rows_k, [v for _, v in rows_k])
+            print("   %-7s n=%-5s 超额 mean=%7.3f median=%7.3f win=%.3f block_t=%5s"
+                  % (lbl, stt.get("n"), stt.get("mean") or 0, stt.get("median") or 0,
+                     stt.get("win") or 0, stt.get("block_t")))
+        print("   —— 对照：若门槛提到 x，被砍掉的是 dd<x 的那些腿 ——")
+        for _cut, _lbls in ((2.0, ("dd<1",)), (3.0, ("dd<1", "dd1-2")), (5.0, ("dd<1", "dd1-2", "dd2-3"))):
+            drop = [x for _l in _lbls for x in (dd_bucket.get(_l) or [])]
+            if drop:
+                stt = E._stat(drop, [v for _, v in drop])
+                print("   砍掉 dd<%d%% 的腿：n=%-5s 其超额 mean=%7.3f median=%7.3f block_t=%5s"
+                      % (_cut, stt.get("n"), stt.get("mean") or 0, stt.get("median") or 0, stt.get("block_t")))
+        print("\n== 按『收盘在当日区间的位置』分桶（0=收在最低 1=收在最高）==")
+        for lbl in ("pos<0.2", "pos0.2-0.5", "pos0.5-0.8", "pos>=0.8"):
+            rows_k = pos_bucket.get(lbl) or []
+            if not rows_k:
+                continue
+            stt = E._stat(rows_k, [v for _, v in rows_k])
+            print("   %-11s n=%-5s 超额 mean=%7.3f median=%7.3f win=%.3f block_t=%5s"
+                  % (lbl, stt.get("n"), stt.get("mean") or 0, stt.get("median") or 0,
+                     stt.get("win") or 0, stt.get("block_t")))
+        res["by_drawdown"] = {k: E._stat(v, [x for _, x in v]) for k, v in dd_bucket.items()}
+        res["by_pos"] = {k: E._stat(v, [x for _, x in v]) for k, v in pos_bucket.items()}
     if args.by_rank:
         print("\n== 主题内第 k 只腿（变体 %s；同主题超额%%）==" % args.by_rank_var.upper())
         for k in sorted(by_rank):
