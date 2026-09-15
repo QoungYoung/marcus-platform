@@ -62,6 +62,26 @@ def load_mins_file(path: str):
     return out
 
 
+def aggregate_5min(bars):
+    """把同一 5min 槽内的多行聚合（实测：部分标的 `stk_mins` 返回的是**分钟级多行**，
+    time 会重复出现 3~4 次；不聚合会让"累计量/量比"被重复计数）。
+    聚合口径：open=首、high=max、low=min、close=末、vol/amount=求和；时间对齐到 5min 槽起点。"""
+    buckets = {}
+    for b in bars:
+        t = b["time"]
+        hh, mm = int(t[11:13]), int(t[14:16])
+        slot = "%s %02d:%02d:00" % (t[:10], hh, (mm // 5) * 5)
+        buckets.setdefault(slot, []).append(b)
+    out = []
+    for slot in sorted(buckets):
+        g = buckets[slot]
+        out.append({"time": slot,
+                    "open": g[0]["open"], "high": max(x["high"] for x in g),
+                    "low": min(x["low"] for x in g), "close": g[-1]["close"],
+                    "vol": sum(x["vol"] for x in g), "amount": sum(x["amount"] for x in g)})
+    return out
+
+
 def write_m5(pack: str, symbol: str, bars, sub: str = "m5"):
     p = os.path.join(pack, sub, "%s.json" % symbol)
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -170,6 +190,7 @@ def main() -> int:
         bars = load_mins_file(os.path.join(a.mins, f))
         if not bars:
             continue
+        bars = aggregate_5min(bars)          # ← 关键：同槽多行先聚合
         if ts == a.index_sh:
             write_m5(a.pack, "sh", bars, sub="index_m5")
         else:
