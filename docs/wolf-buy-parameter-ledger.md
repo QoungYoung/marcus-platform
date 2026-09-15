@@ -2321,3 +2321,54 @@ dd<3% → −0.857（t −1.71）；dd<5% → −0.823（t −1.77）。
 docker exec marcus-worker python -c "import sys;sys.path[:0]=['/app','/app/core','/app/apps/main_line'];\
 import wolf_context as WC; print(WC.theme_fund_danger('农业'))"
 ```
+
+## 52 两道建仓门的分位口径改为「**当日候选域**」（2026-09-15 round 40，用户指令）
+
+**问题（round 39 遗留）**：round 39 把两道建仓门（`WOLF_CLOSE_POS_GATE` / `WOLF_DEFENSIVE_GATE`，默认 1）
+按"真闸门"接进布腿器并部署，但 DRY 实测 `PICK_PATH_SUMMARY legs_by_source={'pathA': 4}` 且**没有 `ENTRY_FILTER` 行** ——
+根因：三分位算在**当日终选腿**（3~4 条）上，`tercile_high/low` 的"样本 <6 → 不判（放行）"护栏触发
+→ **两道门实际从未生效**（已接入、已部署 ≠ 生效）。
+
+**用户指令**：`分位改在更宽的候选域上算`。
+
+### 52.1 改了什么（口径）
+
+| | 旧（round 39，实际不生效） | 新（round 40） |
+|---|---|---|
+| 分位样本 | 当日**终选腿**（3~4 条） | 当日**候选域**：各选股路径实际评估过的**可买候选** |
+| 路径 B 的域 | — | `pick_v2` 的候选池 ∩ LOW/MID（与离线验收 `domain=cand_low` 同口径），随 `status_out["domain"]` 透出 |
+| 路径 A 的域 | — | `pick_buy` 短名单里位置闸 LOW/MID 的候选（**不设 limit**，"能买但没被选中"的也算分母） |
+| 跨主题 | — | 两条路径/各主题的候选**并成一个当日域**（与 §50 证据的池化口径一致） |
+| 兜底 | — | 域内样本仍 <6 → 退回旧口径并在 stderr/审计文件写明 `src=legs`；域外腿（ETF 兜底/legacy 回退）单独取数 |
+| 回退开关 | — | `WOLF_ENTRY_QDOMAIN=legs` 恢复旧口径（= 不生效状态） |
+
+**字段映射（防"同名不同义"）**：`pick_v2` 的 `dist_prevlow` 是**距当日低**、`dist_prevlow_prev` 才是**距前一日低**
+（= 闸门与 §50 证据的口径）；`pos` ← `pos_range`（当日区间位置，§49/§50 同口径 `(close−low)/(high−low)`）；
+`ret20` ← `r20`。映射在 `wolf_entry_filters.domain_map()` 里显式做。
+
+### 52.2 改动面（3 个文件）
+
+* `apps/main_line/wolf_entry_filters.py`：`domain_map()`、`qdomain_mode()`、`filter_legs(legs, as_of, domain=None)`、
+  审计文件 `data/entry_filter_<date>.json`（域大小/门槛/每条腿的 `in_domain` 与判定）、stderr 行
+  `ENTRY_FILTER_DOMAIN n=… src=… cut_hi=… cut_lo=… idx_ret20=…`；
+* `apps/main_line/wolf_confirm_pick.py`：`scored` 增 `pos_range`；`_dom_rows`（= 候选池 ∩ LOW/MID）统一供 v3 与建仓门；
+  `status_out["domain"]` 透出候选域（含 `symbol/dist_prevlow/pos/ret20`）；
+* `jobs/rotation_switch_arm.py`：`pick_buy(..., domain_out=)` 拉 `low/high`（字段追加在末尾，`x[3]` 仍是 amount）+
+  `_dom_feat()` / `_lowmid_domain()`；`confirm_pick(..., domain_out=)` 转发 v2 的域；主流程并成 `_cand_domain` 喂给
+  `filter_legs`，`PICK_PATH_SUMMARY` 增 `cand_domain=N`。
+
+### 52.3 测试
+
+`backend/tests/test_entry_filters.py` 14 项（原 4 项 + 新增 10 项）：宽域下**真的会拦**（域内涵盖时不再取数）、
+域窄退回 `src=legs`、回退开关 `WOLF_ENTRY_QDOMAIN=legs`、域外腿单独取数、闸门 2 在同一域上判、
+`domain_map` 字段映射、审计文件内容、`_dom_feat` 口径与闸门一致、`_lowmid_domain` 只留 LOW/MID、
+`confirm_pick` 透出域且不传时向后兼容。
+
+### 52.4 复现
+
+```bash
+.venv/bin/python -m pytest backend/tests/test_entry_filters.py -q
+# 生产 DRY（容器内，收盘后）：应看到 ENTRY_FILTER_DOMAIN 行 + 审计文件
+docker exec -e SWITCH_ARM_DRY=1 marcus-worker python -u /app/jobs/rotation_switch_arm.py
+docker exec marcus-worker cat /app/data/entry_filter_$(date +%Y%m%d).json
+```

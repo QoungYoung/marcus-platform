@@ -285,6 +285,8 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
         # v3 排序次键「低位横盘多时」（2026-04-07「低位横盘多时的就是好 超跌都没有低位走平多时的好」）：
         #   近 20 日中「日振幅<2% ∧ 收盘位于 20 日区间下半」的天数
         highs = [r[4] for r in rows]
+        # 当日收盘在当日区间的位置（= 建仓门 `wolf_entry_filters` 的 `pos` 口径，§49/§50 证据同口径）
+        pos_range = ((closes[-1] - lows[-1]) / (highs[-1] - lows[-1])) if highs[-1] > lows[-1] else None
         flat_low = 0
         seg_c, seg_h, seg_l = closes[-20:], [h for h in highs[-20:]], lows[-20:]
         if len(seg_c) >= 10 and all(h is not None for h in seg_h):
@@ -301,6 +303,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                     continue
         scored.append({"ts": ts, "name": nm, "xq": xq, "amt20": amt20, "r60": r60, "r20": r20,
                        "flat_low_days": flat_low, "hist": len(closes),
+                       "pos_range": (round(pos_range, 4) if pos_range is not None else None),
                        "lim": lim, "cross": cc, "mv": (mv.get(ts, 0) or 0) / 1e4,
                        "dist_prevlow": round(d1, 2), "dist_low5": round(d5, 2),
                        "dist_prevlow_prev": round(d1p, 2),
@@ -433,11 +436,15 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     #   供"对齐后 vs 现状"的逐日对账（与 P1 门影子的默认行为一致）。置 0 可关掉影子。
     _v3_on = os.getenv("WOLF_PICK_RANK_V3", "0").strip() == "1"
     _v3_shadow = os.getenv("WOLF_PICK_RANK_V3_SHADOW", "1").strip() == "1"
+    # 候选域（= 候选池（组内前2 ∩ 容量分位）∩ LOW/MID，与离线验收的 domain=cand_low 同口径）。
+    # 2026-09-15 round 40：除 v3 排序用之外，**同时透出给建仓门**（`wolf_entry_filters`）——
+    # 两道建仓门的分位原来算在"当日终选腿"（3~4 条）上 → 样本不足、门形同虚设；
+    # 改为算在**当日候选域**上（用户指令："分位改在更宽的候选域上算"）。
+    _dom_rows = [r for r in cand_pool if str(r.get("pos")) in ("LOW", "MID")]
     if _v3_on or _v3_shadow:
         try:
             import wolf_pick_rank_v3 as _V3
-            # 域 = 候选池（组内前2 ∩ 容量分位）∩ LOW/MID —— 与离线验收的 domain=cand_low 同口径
-            _domain = [r for r in cand_pool if str(r.get("pos")) in ("LOW", "MID")]
+            _domain = _dom_rows
             _r20s = [r["r20"] for r in _domain if r.get("r20") is not None]
             if _r20s:
                 _lo, _hi = min(_r20s), max(_r20s)
@@ -526,7 +533,14 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                            # P1-1 卖侧: 把风向标状态透出给 rotation_switch_arm(原先只在审计 json 里)
                            "wind_broken": wind_broken, "wind_hard": wind_hard,
                            "wind_symbol": (wind or {}).get("xq"), "wind_name": (wind or {}).get("name"),
-                           "wind_dist_prevlow_prev": (wind or {}).get("dist_prevlow_prev")})
+                           "wind_dist_prevlow_prev": (wind or {}).get("dist_prevlow_prev"),
+                           # 候选域（2026-09-15 round 40）：建仓门的分位就按它算。
+                           # 字段映射：`dist_prevlow`(闸门口径=距**前一日**低) ← 本模块 `dist_prevlow_prev`；
+                           # `pos` ← `pos_range`（当日区间位置）；`ret20` ← `r20`。
+                           "domain": [{"symbol": r.get("xq"), "ts": r.get("ts"),
+                                       "dist_prevlow": r.get("dist_prevlow_prev"),
+                                       "pos": r.get("pos_range"), "ret20": r.get("r20")}
+                                      for r in _dom_rows]})
     return picks
 
 def main():

@@ -55,6 +55,24 @@ def _pg_positions():
         return None, None
 
 
+def entry_filter_item(data_dir, date8):
+    """⑰ 建仓两道真闸门（**真拦，非影子**）的当日留证 → 汇总条目（无文件返回 None）。
+
+    读 `data/entry_filter_<date>.json`（`wolf_entry_filters.filter_legs` 写）：
+    候选域多大、分位门槛多少、拦了哪几条腿、域从哪来（`cand`=当日候选域 / `legs`=旧口径）。
+    """
+    p = os.path.join(data_dir, "entry_filter_%s.json" % date8)
+    if not os.path.exists(p):
+        return None
+    j = _j(p, {}) or {}
+    return {"file": os.path.basename(p), "date": j.get("date"), "qdomain": j.get("qdomain"),
+            "src": j.get("src"), "domain_n": j.get("domain_n"), "cut_hi": j.get("cut_hi"),
+            "cut_lo": j.get("cut_lo"), "index_ret20": j.get("index_ret20"),
+            "n_legs": len(j.get("legs") or []),
+            "blocked": [{"symbol": b.get("symbol"), "why": b.get("why")}
+                        for b in (j.get("blocked") or [])]}
+
+
 def c3_position_cap(data_dir, date8):
     """C3：当前总仓位 vs 他 2026-01-17 的分档上限（75/50/30/0）。"""
     wave = _j(os.path.join(data_dir, "wave_state.json"), {}) or {}
@@ -200,6 +218,11 @@ def main():
         rep["items"]["fund_gate_alerts"] = {"file": os.path.basename(al), "n": len(j),
                                             "items": [{"key": k, "msg": (v or {}).get("msg")}
                                                       for k, v in list(j.items())[:10]]}
+    # ⑰ 建仓两道**真闸门**（2026-09-15 round 39 上线 / round 40 分位域改口径）——**不是影子、是真拦**，
+    #    但同样要"看得见"：当日候选域多大、三分位门槛多少、拦了哪几条腿、域从哪来（cand/legs）。
+    _efi = entry_filter_item(data_dir, d8)
+    if _efi:
+        rep["items"]["entry_filter"] = _efi
     # C3 / C4（本脚本现算）
     rep["items"]["pos_cap"] = c3_position_cap(data_dir, d8)
     rep["items"]["etf_vol"] = c4_etf_vol(data_dir, d8)
@@ -265,6 +288,17 @@ def main():
               % (_ex.get("wave_op"), _ex.get("gate_blocked"), _ex.get("buy_legs"), _ex.get("raw_legs_n")))
     else:
         print("\n⑨ 144 线资格：（暂无影子文件）")
+    if "entry_filter" in it:
+        ef = it["entry_filter"]
+        print("\n⑰ 建仓两道真闸门（**真拦**，非影子）：候选域 %s 只（src=%s，口径=%s）| "
+              "距前低 上三分位=%s / 下三分位=%s | 指数20日=%s%%"
+              % (ef.get("domain_n"), ef.get("src"), ef.get("qdomain"),
+                 ef.get("cut_hi"), ef.get("cut_lo"), ef.get("index_ret20")))
+        print("   当日买腿 %s 条，拦下 %s 条" % (ef.get("n_legs"), len(ef.get("blocked") or [])))
+        for b in (ef.get("blocked") or []):
+            print("   ✋ %-10s %s" % (b.get("symbol"), str(b.get("why"))[:88]))
+    else:
+        print("\n⑰ 建仓两道真闸门：（当日无 entry_filter 文件 —— 布腿器未跑到该步或当日无买腿）")
     p = it["pos_cap"]
     print("\nC3 仓位档（他的话 75/50/30/0）：operation=%s → 上限 %s%%；当前仓位 %s%% %s"
           % (p.get("operation"), p.get("corpus_total_cap_pct"), p.get("position_pct"),

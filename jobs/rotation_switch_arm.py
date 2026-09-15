@@ -237,6 +237,50 @@ def _select_by_gate(stats, limit, use_board_prefilter=False):
     return out
 
 
+def _dom_feat(closes, lows, highs, win=20):
+    """候选域特征（口径与 `wolf_entry_filters.leg_features` / §50 证据一致）：
+
+    · `dist_prevlow` = 收盘 / **前一日**最低 − 1（%）
+    · `pos`          = (收盘 − 当日最低) / (当日最高 − 当日最低)
+    · `ret20`        = 近 `win` 日涨幅（%）
+    纯函数，便于单测。
+    """
+    try:
+        c, lo, hi = float(closes[-1]), float(lows[-1]), float(highs[-1])
+        prev_low = float(lows[-2]) if len(lows) >= 2 else None
+        dist = ((c / prev_low - 1) * 100.0) if prev_low else None
+        pos = ((c - lo) / (hi - lo)) if hi > lo else None
+        ret = ((c / float(closes[-1 - win]) - 1) * 100.0) if len(closes) > win and closes[-1 - win] else None
+        return {"dist_prevlow": dist, "pos": pos, "ret20": ret}
+    except Exception:
+        return {"dist_prevlow": None, "pos": None, "ret20": None}
+
+
+def _lowmid_domain(stats, win=20):
+    """路径A 的**当日候选域** = 短名单里位置闸 LOW/MID 的候选（与 `_select_by_gate` 同判据）。
+
+    2026-09-15 round 40（用户指令"分位改在更宽的候选域上算"）：建仓门的三分位要在**候选域**上算，
+    而不是当日终选腿（3~4 条，样本不足 → 门形同虚设）。这里不设 limit、不早退，
+    把"能买但没被选中"的候选也算进分位分母。
+    """
+    out = []
+    for s in (stats or []):
+        try:
+            import pandas as pd
+            import position_class as pc
+            f = pc.position_features(pd.Series(s["closes"]))
+            pos = pc.classify(f)["position"] if f else None
+        except Exception:
+            pos = None
+        if pos not in ("LOW", "MID"):
+            continue
+        d = {"symbol": s.get("xq"), "ts_code": s.get("ts"), "chain": s.get("chain")}
+        d.update(s.get("dom") or _dom_feat(s.get("closes") or [], s.get("lows") or [],
+                                           s.get("highs") or [], win))
+        out.append(d)
+    return out
+
+
 def _banned_from_service():
     """G3 删票黑名单（`app.services.wolf_ticket_ban`）—— 容器/宿主两种布局都要能找到。
 
@@ -253,7 +297,7 @@ def _banned_from_service():
     return _bs(["stock"])
 
 
-def pick_buy(chain, exclude, limit=3):
+def pick_buy(chain, exclude, limit=3, domain_out=None):
     """路径A 低吸选股(rotation 链关键词匹配的候选域)。
 
     P1-5b(2026-09-10 修, 依狼大 2026-01-16「后排反倒不能去 要看好龙头那些 /
@@ -316,18 +360,23 @@ def pick_buy(chain, exclude, limit=3):
     stats = []
     for ts, xq in cands:
         try:
+            # 低/高也要（2026-09-15 round 40）：建仓门的分位域需要 dist_prevlow 与当日区间位置；
+            # 追加在字段末尾，`x[3]` 仍是 amount，不改既有口径。
             rows = _gz("daily", {"ts_code": ts, "start_date": "20250101", "end_date": _today()},
-                       "ts_code,trade_date,close,amount")
+                       "ts_code,trade_date,close,amount,low,high")
             rows = sorted(rows, key=lambda x: str(x[1]))
             if len(rows) < 61:
                 time.sleep(0.1); continue
             closes = [float(x[2]) for x in rows]
             amts = [float(x[3] or 0) for x in rows]
+            lows = [float(x[4]) for x in rows]
+            highs = [float(x[5]) for x in rows]
             r60 = (closes[-1] / closes[-61] - 1) * 100 if closes[-61] else None
             amt20 = sum(amts[-20:]) / 20.0
             lim = sum(1 for i in range(max(1, len(closes) - 60), len(closes))
                       if closes[i - 1] and closes[i] / closes[i - 1] - 1 >= 0.097)
-            stats.append({"ts": ts, "xq": xq, "closes": closes,
+            stats.append({"ts": ts, "xq": xq, "closes": closes, "lows": lows, "highs": highs,
+                          "dom": _dom_feat(closes, lows, highs),
                           "r60": r60, "amt20": amt20, "lim": lim})
         except Exception:
             pass
@@ -361,6 +410,13 @@ def pick_buy(chain, exclude, limit=3):
     #   但把"若在选择时就剔除无权限板块、会改成选谁"记入 data/board_prefilter_shadow_<date>.json。
     _pf_on = board_prefilter_enabled()
     out = _select_by_gate(stats, limit, use_board_prefilter=_pf_on)
+    # ⑰-a 候选域透出（2026-09-15 round 40）：路径A 的**可买候选**（位置闸 LOW/MID，不设 limit）
+    #    → 供建仓门 `wolf_entry_filters` 算分位（原来只有 3~4 条终选腿 → 样本不足、门不生效）。
+    if domain_out is not None:
+        try:
+            domain_out.extend(_lowmid_domain(stats))
+        except Exception as _de:
+            print("ENTRY_DOMAIN_ERR", str(_de)[:80], file=sys.stderr)
     # ⑪ 均线挂单影子（2026-09-15 round 12）：只记录"如果挂在最近均线上会怎样"，**不改任何决策**。
     #    离线验收（总账 §18）：成交率 25.9% vs 254 的 52%，每条已挂腿期望略优于 254 但不如 253
     #    → 属"同类替换"候选，先影子攒数据再拍板是否替换 254。
@@ -423,11 +479,14 @@ def pick_health(theme, source, status="ok", err="", n=0):
     return rec
 
 
-def confirm_pick(theme, exclude, limit=2, concepts=None):
+def confirm_pick(theme, exclude, limit=2, concepts=None, domain_out=None):
     """曾确认主题低吸选股: THEME_CONCEPTS 成分 -> 过滤 bad/blacklist/held -> position LOW/MID, 至多 limit 只
 
     返回的每条 pick 带 `pick_source`（v2 / legacy / legacy_after_err / legacy_datagap / legacy_empty），
     供 `PICK_PATH_SUMMARY` 与审计文件回答"这次到底走的哪条路"（③ 可见性，2026-09-14）。
+
+    `domain_out`（2026-09-15 round 40）：把 `pick_v2` 的**候选域**（候选池 ∩ LOW/MID，带特征）
+    追加进去，供建仓门算分位（用户指令"分位改在更宽的候选域上算"）。
     """
     # 2026-09-09 狼大化 v2 (A=确认链/B=等权leader/C=容量提示/D=20日成交额>=1亿硬切); WOLF_PICK_LEGACY=1 回退旧版
     if os.getenv("WOLF_PICK_LEGACY", "0") != "1":
@@ -439,6 +498,9 @@ def confirm_pick(theme, exclude, limit=2, concepts=None):
             print("WOLF_PICK_V2_ERR", theme, str(_e)[:200], file=sys.stderr)
             _p = None
             pick_health(theme, "err", "error", str(_e)[:200])
+        # 候选域透出：无论 picks 是否为空/是否回落 legacy，只要 v2 跑出候选域就记下来（round 40）
+        if domain_out is not None and _st.get("domain"):
+            domain_out.extend(_st["domain"])
         if _p is not None:
             if _p:
                 for _x in _p:
@@ -758,8 +820,12 @@ def main():
             buy_chains.append((c, "defensive_resource"))
     held_syms = {p["symbol"] for p in positions}
     buy_legs = []
+    # ⑰-b 当日**候选域**收集（2026-09-15 round 40，用户指令"分位改在更宽的候选域上算"）：
+    #   两条选股路径实际评估过的可买候选（路径A 短名单 LOW/MID、路径B 候选池 ∩ LOW/MID）并成一个当日域，
+    #   供建仓门 `wolf_entry_filters` 算三分位 —— 原来按"当日终选腿（3~4 条）"算 → 样本 <6 → 两道门形同虚设。
+    _cand_domain = []
     for chain, side in buy_chains[:2]:
-        for cand in pick_buy(chain, exclude=held_syms, limit=3):
+        for cand in pick_buy(chain, exclude=held_syms, limit=3, domain_out=_cand_domain):
             buy_legs.append({"symbol": cand["symbol"], "chain": chain, "side": side})
     # 2026-09-09 曾确认主题低吸候选池(实盘布腿, 全池<=2只; 农业 confirmed 优先):
     # 主线门结果(mainline_gate json) -> 今日 confirmed_candidate 主题优先, 其次曾确认窗内主题
@@ -794,7 +860,7 @@ def main():
         got = 0
         for th in pool:
             if got >= pool_legs: break
-            _pick = confirm_pick(th, exclude=held_syms, limit=pool_legs - got)
+            _pick = confirm_pick(th, exclude=held_syms, limit=pool_legs - got, domain_out=_cand_domain)
             if not _pick and dry:
                 print("CONFIRM_PICK_EMPTY", th, file=sys.stderr)
             for cand in _pick:
@@ -898,7 +964,8 @@ def main():
     # ⑰ 建仓两道**真闸门**（2026-09-15 用户指示：真对接生产，不做只记录影子）
     #   · WOLF_CLOSE_POS_GATE（默认 1）：距前低高档 ∧ 半强收盘(pos∈[0.5,0.8)) → 不买（§50 交叉格）
     #   · WOLF_DEFENSIVE_GATE（默认 1）：低位 ∧ 近 20 日弱于大盘 → 不买（他的话「防御型就是大盘跌的时候他少跌一点」）
-    #   数据缺失一律放行（fail-open）；被拦的腿在这里**直接剔除**，不再进入布腿。
+    #   分位按**当日候选域**（`_cand_domain`，两条路径的可买候选并集）算 —— round 40 用户指令；
+    #   域内样本不足或腿不在域里时 fail-open 放行；被拦的腿在这里**直接剔除**，不再进入布腿。
     try:
         import importlib as _il7
         _p7 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
@@ -906,7 +973,7 @@ def main():
             sys.path.insert(0, _p7)
         _EF = _il7.import_module("wolf_entry_filters")
         _n_before = len(buy_legs)
-        buy_legs, _ef_blocked = _EF.filter_legs(buy_legs, today)
+        buy_legs, _ef_blocked = _EF.filter_legs(buy_legs, today, domain=_cand_domain)
         if _ef_blocked:
             print("ENTRY_FILTER blocked %d/%d: %s" % (
                 len(_ef_blocked), _n_before,
@@ -919,8 +986,9 @@ def main():
     for _b in buy_legs:
         _src = _b.get("pick_source") or ("pathA" if _b.get("side") in ("mainline", "defensive_resource") else "?")
         _src_cnt[_src] = _src_cnt.get(_src, 0) + 1
-    print("PICK_PATH_SUMMARY legs_by_source=%s pool=%s gate_blocked=%s pool_legs=%s"
-          % (_src_cnt, pool, [b.get("theme") for b in _gate_blocked], os.getenv("ROT_POOL_LEGS", "4")),
+    print("PICK_PATH_SUMMARY legs_by_source=%s pool=%s gate_blocked=%s pool_legs=%s cand_domain=%d"
+          % (_src_cnt, pool, [b.get("theme") for b in _gate_blocked], os.getenv("ROT_POOL_LEGS", "4"),
+             len(_cand_domain)),
           file=sys.stderr)
     try:
         _health_fn = os.path.join(DATA, "pick_path_%s.json" % today)
