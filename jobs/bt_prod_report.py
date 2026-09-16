@@ -64,6 +64,22 @@ def _fee_rates() -> Tuple[float, float, str]:
         return 0.000396, 0.000896, "wen0.86_2026(fallback)"
 
 
+def _all_trade_days(bars_db: str, lo: str, hi: str) -> List[str]:
+    """窗口内**全部交易日**（本地日线库的 distinct trade_date）——净值曲线必须逐日连续，
+    不能只在"有成交的日子"取点（否则回撤/收益都会被少数几天代表）。"""
+    if not (lo and hi):
+        return []
+    try:
+        c = sqlite3.connect(bars_db)
+        rows = [r[0] for r in c.execute(
+            "SELECT DISTINCT trade_date FROM bars WHERE trade_date BETWEEN ? AND ? ORDER BY trade_date",
+            (lo, hi))]
+        c.close()
+        return rows
+    except Exception:
+        return []
+
+
 class Closes:
     """当日收盘价（本地日线库）。"""
 
@@ -97,6 +113,18 @@ class Closes:
         return last
 
 
+def _norm_day(v) -> str:
+    """任意日期表示 → `YYYYMMDD`。
+
+    ⚠️ 2026-09-16 修复：`paper_trades.trade_date` 存的是 **ISO `YYYY-MM-DD`**，
+    原来直接 `[:8]` 切片会得到 `2026-01-` 这种**残key** → 曲线只剩 1-2 个点、
+    按日收盘的市值查询字符串比较全不成立（`20260106 <= "2026-02-"` 为 False）
+    → 净值/收益率整块失真（实测把 -1.64% 这种数字算了出来）。
+    """
+    d = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return d[:8] if len(d) >= 8 else ""
+
+
 def _leg_kind(reason: str) -> str:
     m = re.search(r"（([A-Za-z0-9_]+)）", str(reason or ""))
     if m:
@@ -126,7 +154,7 @@ def main() -> int:
             "FROM paper_trades WHERE account_id=%s AND coalesce(voided,0)=0 ORDER BY id", (a.account,))
     trig = _q("SELECT status, count(*) c FROM t_triggers WHERE account_id=%s GROUP BY status", (a.account,))
     for t in tr:
-        t["day"] = str(t.get("trade_date") or str(t.get("created_at"))[:10].replace("-", ""))[:8]
+        t["day"] = _norm_day(t.get("trade_date") or t.get("created_at"))
 
     buy_fee, sell_fee, prof = _fee_rates()
     init = float(a.initial)
@@ -135,9 +163,14 @@ def main() -> int:
     # ── 重建现金/持仓/净值曲线 ──
     cash = init
     holdings: Dict[str, List[Any]] = {}     # symbol -> [vol, cost]
-    days = sorted({t["day"] for t in tr if t.get("day")})
+    trade_days = sorted({t["day"] for t in tr if t.get("day")})
+    lo = a.start or (trade_days[0] if trade_days else "")
+    hi = a.end or (trade_days[-1] if trade_days else "")
+    days = _all_trade_days(closes.bars_db, lo, hi) or trade_days
     if a.start:
         days = [d for d in days if d >= a.start]
+    if a.end:
+        days = [d for d in days if d <= a.end]
     by_day: Dict[str, List[dict]] = collections.defaultdict(list)
     for t in tr:
         by_day[t["day"]].append(t)
@@ -205,11 +238,19 @@ def main() -> int:
     print("═" * 78)
     print("生产链年跑 · 收益报告（本地 PG 模拟盘 account=%s）" % a.account)
     print("═" * 78)
-    print("窗口        : %s → %s（%d 个有成交的交易日）" % (days[0] if days else "-", days[-1] if days else "-", len(days)))
+    def _fmt(d):
+        return "%s-%s-%s" % (d[:4], d[4:6], d[6:8]) if len(d) == 8 else (d or "-")
+    print("窗口        : %s → %s（%d 个交易日；其中 %d 天有成交）"
+          % (_fmt(days[0] if days else ""), _fmt(days[-1] if days else ""), len(days), len(trade_days)))
     print("起点/期末   : %.0f → %.2f  收益率 %+.2f%%" % (init, last["equity"], ret))
     print("期末构成    : 现金 %.2f + 持仓市值 %.2f" % (last["cash"], last["mv"]))
     print("最大回撤    : %.2f%%" % (mdd * 100))
     print("已实现盈亏  : %+.2f（引擎落库 profit 求和）" % realized)
+    # 收益分解：总权益变动 = 已实现 + 浮动（+费用口径差）。正已实现 + 负总收益 = 未平仓浮亏 > 已实现。
+    _float_pnl = round(last["equity"] - init - realized, 2)
+    print("浮动盈亏    : %+.2f（未平仓按窗口末日收盘计价）" % _float_pnl)
+    print("分解校验    : 初始 %.0f + 已实现 %+.2f + 浮动 %+.2f = %.2f（= 期末权益）"
+          % (init, realized, _float_pnl, init + realized + _float_pnl))
     print("成交        : 买 %d 笔 / 卖 %d 笔；触发 %d 次、其中 executed %d（成交/触发 %.0f%%）"
           % (n_buy, n_sell, n_trig, n_exec, (100.0 * n_exec / n_trig) if n_trig else 0.0))
     print("费率口径    : %s（买 %.6f / 卖 %.6f）" % (prof, buy_fee, sell_fee))
@@ -228,8 +269,9 @@ def main() -> int:
             print("   %-10s %4d 笔  已实现 %+11.2f" % (k, v["n"], v["pnl"]))
     print("─" * 78)
     print("期末持仓 %d 只：%s" % (len(pos), ", ".join("%s×%s" % (p["symbol"], p["volume"]) for p in pos[:12]) or "无"))
-    print("引擎真账  : available_cash=%s frozen=%s（与上面重建现金对账，差异=费用/滑点口径）"
-          % (acct.get("available_cash"), acct.get("frozen_cash")))
+    _eng = float(acct.get("available_cash") or 0) + float(acct.get("frozen_cash") or 0)
+    print("引擎真账  : available_cash=%s + frozen=%s = %.2f（与重建现金 %.2f 对账，差异=费用口径）"
+          % (acct.get("available_cash"), acct.get("frozen_cash"), _eng, last["cash"]))
     print("⚠️ 口径：净值曲线为**重建**（引擎不写 paper_daily_snapshot）；分主题用 stock_concept_map 映射。")
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
