@@ -1215,3 +1215,32 @@ tasks:
   notifications:
     on_success: false
     on_failure: false
+
+- id: account_cash_recon
+  name: 账户现金对账（现金/持仓/方向词表三条线）
+  description: |
+    按 09-01 基线起的成交流水重放现金，与 paper_account_info 比对，同时校验 FIFO 持仓与方向词表；
+    任一条不一致即 exit 1 → QQ 告警。守住两类静默错误：
+    （a）现金多写者互相覆盖（backend/worker 各自 bridge+engine）；
+    （b）paper_trades 出现表外方向词表（英文 buy/sell 曾被读取端静默忽略）。
+    对账口径与 jobs/rebase_account_0901.py 的基线同源（读 system_state.account_rebase_0901）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '5 15 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/recon_account_cash.py
+    args: []
+  output:
+    log_file: logs/account_cash_recon_{date}.log
+    append: true
+  notifications:
+    on_success: false      # 一致时不打扰
+    on_failure: true       # 漂移/持仓差异/表外词表 → QQ 告警
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: false         # 对账失败是数据问题，自动重跑没有意义（只会重复告警）
