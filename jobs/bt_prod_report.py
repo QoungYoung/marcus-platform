@@ -267,6 +267,42 @@ def main() -> int:
         print("分标的（前 12）：")
         for k, v in sorted(by_sym.items(), key=lambda kv: -kv[1]["pnl"])[:12]:
             print("   %-10s %4d 笔  已实现 %+11.2f" % (k, v["n"], v["pnl"]))
+    # ── 触发→成交漏斗（2026-09-16 新增）：把"噪声触发"与"真实成交"分开量化 ──
+    funnel = _q("SELECT event_type, status, count(*) c FROM t_triggers WHERE account_id=%s "
+                "GROUP BY 1,2", (a.account,))
+    arms = {r["trigger_kind"]: int(r["c"]) for r in _q(
+        "SELECT trigger_kind, count(*) c FROM t_conditions WHERE account_id=%s GROUP BY 1", (a.account,))}
+    per: Dict[str, Dict[str, int]] = {}
+    for r in funnel:
+        per.setdefault(r["event_type"], {})[r["status"]] = int(r["c"])
+    if per:
+        print("─" * 78)
+        print("触发→成交漏斗（按腿型；arm=布过的条件数，trigger=触发总数，exec=成交，fill%=exec/trigger）")
+        print("   %-24s %6s %9s %6s %6s %8s %8s" % ("腿型", "arm", "trigger", "exec", "blocked", "pending", "fill%"))
+        for k in sorted(per, key=lambda x: -sum(per[x].values())):
+            v = per[k]
+            tot = sum(v.values())
+            ex = v.get("executed", 0)
+            print("   %-24s %6s %9d %6d %8d %8d %7.1f%%" % (
+                k, arms.get(k, "-"), tot, ex, v.get("blocked", 0), v.get("pending", 0),
+                100.0 * ex / tot if tot else 0.0))
+        # 被拦原因归类（只列占比最高的几类，便于判断"噪声"还是"真拦截"）
+        cls = collections.Counter()
+        for r in _q("SELECT reason FROM t_triggers WHERE account_id=%s AND status='blocked'", (a.account,)):
+            rr = str(r.get("reason") or "")
+            if "仅底仓无T仓可卖" in rr:
+                cls["(噪声) 仅底仓无T仓可卖"] += 1
+            elif "[G6]" in rr:
+                cls["[G6] 当日笔数上限"] += 1
+            elif "趋势约束阻止卖出" in rr:
+                cls["趋势约束阻止卖出"] += 1
+            elif "决策对象准入拒绝" in rr:
+                cls["决策对象准入拒绝"] += 1
+            elif "资金不足" in rr:
+                cls["资金不足"] += 1
+            else:
+                cls["其他"] += 1
+        print("   被拦原因归类：" + "；".join("%s %d" % (k, n) for k, n in cls.most_common(6)))
     print("─" * 78)
     print("期末持仓 %d 只：%s" % (len(pos), ", ".join("%s×%s" % (p["symbol"], p["volume"]) for p in pos[:12]) or "无"))
     _eng = float(acct.get("available_cash") or 0) + float(acct.get("frozen_cash") or 0)
