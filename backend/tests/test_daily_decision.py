@@ -29,6 +29,11 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setattr(DD, "_load_pg", lambda d8: None)
     monkeypatch.setattr(DD, "_save_pg", lambda obj: {"ok": False, "reason": "test_stub"})
     monkeypatch.setattr(DD, "_latest_pg_at_or_before", lambda d8: None)
+    # tier_target_pct/tier_floor_pct 走库读配置，本机 18789 无监听时熔断等待 ~140s
+    # （2026-09-16 实测：test_run_writes_object_and_latest 单例就耗 134s）→ 打桩
+    from app.services import wolf_discipline as _WD
+    monkeypatch.setattr(_WD, "tier_target_pct", lambda op: 50.0, raising=False)
+    monkeypatch.setattr(_WD, "tier_floor_pct", lambda op: 30.0, raising=False)
     DD._ALLOW_CACHE.update({"at": 0.0, "key": "", "value": None})   # 清准入缓存，避免跨用例泄漏
     yield
 
@@ -158,9 +163,14 @@ def test_directive_disabled_and_enabled(monkeypatch):
 
 def test_backfill_warns_about_undated_wave(monkeypatch, tmp_path):
     """回填历史日、又只有不带日期的 wave_state.json 时，必须给出 look-ahead 告警。"""
-    obj = DD.build("20200101", gate=GATE, ms=MS, wave=WAVE_BUILD, tiers={}, picks=None, gates={},
-                   sources={"wave_dated": {"present": False}})
-    assert obj["warnings"] and "look-ahead" in obj["warnings"][0]
+    d = Path(DD.data_dir())
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "wave_state.json").write_text(
+        json.dumps({"operation": "build", "level": "d4", "date": "2026-09-15"}, ensure_ascii=False),
+        encoding="utf-8")
+    obj = DD.build("20200101", gate=GATE, ms=MS, tiers={}, picks=None, gates={})
+    assert obj["sources"]["wave"]["kind"] == "latest"
+    assert any("look-ahead" in w for w in obj["warnings"])
 
 
 # ── 存储：PG 为主 + 文件镜像（2026-09-12 按用户口径改）────────────────

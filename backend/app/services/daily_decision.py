@@ -94,6 +94,61 @@ def _src(name: str, d8: str) -> Dict[str, Any]:
             "mtime": int(os.path.getmtime(p)) if os.path.isfile(p) else None}
 
 
+def _norm_date8(v: Any) -> Optional[str]:
+    """把日期归一成 YYYYMMDD（接受 '2026-09-16' / '20260916' / date / datetime）。"""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        v = str(int(v))
+    s = str(v).strip()
+    if len(s) >= 10 and s[4] == "-":
+        s = s[:10].replace("-", "")
+    else:
+        s = s[:8]
+    return s if len(s) == 8 and s.isdigit() else None
+
+
+def _days_between(a8: Optional[str], b8: Optional[str]) -> Optional[int]:
+    try:
+        import datetime as _dt
+        a = _dt.datetime.strptime(a8, "%Y%m%d").date()
+        b = _dt.datetime.strptime(b8, "%Y%m%d").date()
+        return (b - a).days
+    except Exception:
+        return None
+
+
+def _load_wave(d8: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """读波浪状态 + 来源元信息（**这是 2026-09-16 修的新鲜度缺陷的落点**）。
+
+    实测（生产 /app/data）：日更的 `apps/main_line/wave_agent.py` **只写无日期的**
+    `data/wave_state.json`（其 `date` 字段是带横杠的 '2026-09-16'），带日期的
+    `wave_state_2026-09-xx.json` 全是历史回填产物。旧代码只找 `wave_state_{YYYYMMDD}.json`
+    → 每天 `missing` 里恒有 `wave_dated`、basis 写的来源与实际不符，**且对 wave_state.json
+    没有任何新鲜度校验**：08:10 判浪失败时，盘前/盘后对象会静默沿用旧档位。
+
+    读序：带日期的（两种命名都试）→ 无日期的最新文件；后者用内部 `date` 算 as_of/stale_days。
+    """
+    for name in ("wave_state_{d}.json", "wave_state_{dash}.json"):
+        w = _read_json(name, d8)
+        if isinstance(w, dict) and w:
+            fname = os.path.basename(name.format(d=d8, dash="%s-%s-%s" % (d8[:4], d8[4:6], d8[6:8])))
+            p = os.path.join(data_dir(), fname)
+            return w, {"path": p, "file": fname, "present": True, "kind": "dated",
+                       "mtime": int(os.path.getmtime(p)) if os.path.isfile(p) else None,
+                       "as_of": _norm_date8(w.get("date") or w.get("as_of")) or d8,
+                       "stale_days": 0}
+    w = _read_json("wave_state.json", d8)
+    if isinstance(w, dict) and w:
+        p = os.path.join(data_dir(), "wave_state.json")
+        as_of = _norm_date8(w.get("date") or w.get("as_of"))
+        return w, {"path": p, "file": "wave_state.json", "present": True, "kind": "latest",
+                   "mtime": int(os.path.getmtime(p)) if os.path.isfile(p) else None,
+                   "as_of": as_of, "stale_days": _days_between(as_of, d8)}
+    return None, {"path": os.path.join(data_dir(), "wave_state.json"), "file": "wave_state.json",
+                  "present": False, "kind": "none", "mtime": None, "as_of": None, "stale_days": None}
+
+
 # ───────────────────────── 判据层（纯函数，可测）─────────────────────────
 def _l1(gate: Optional[Dict[str, Any]], ms: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """L1 方向：**优先**用方向层主线判定（池：量能占比topK ∩ r5>0 ∩ 资格闸 → 池内 r5 top1），
@@ -111,16 +166,27 @@ def _l1(gate: Optional[Dict[str, Any]], ms: Optional[Dict[str, Any]] = None) -> 
     return {"value": None, "basis": "mainline_select 缺失（gate 回退分支已于 2026-09-13 删除）"}
 
 
-def _l2(wave: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """L2 档位：波浪 operation（build/t_only/side/defense/exit）+ 级别。"""
+def _l2(wave: Optional[Dict[str, Any]], src: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """L2 档位：波浪 operation（build/t_only/side/defense/exit）+ 级别。
+
+    2026-09-16：basis 改为**实际**读到的文件，并把 as_of/陈旧天数带进 value（原先写死
+    `wave_state_<d>.json`，而日更 agent 只写无日期的 wave_state.json → 来源名不副实）。
+    """
     if not wave:
-        return {"value": None, "basis": "wave_state*.json（缺失）"}
+        return {"value": None, "basis": "波浪状态缺失（wave_state*.json 都没有）"}
     op = wave.get("operation") or wave.get("wave_operation")
     lvl = wave.get("level")
     sub = wave.get("sub_level")
-    return {"value": {"operation": op, "level": lvl, "sub_level": sub,
-                      "allow_new_position": (str(op) in BUY_ALLOWED_OPS) if op else None},
-            "basis": "wave_state_<d>.json（apps/main_line/wave_agent.py LLM 产出）"}
+    src = src or {}
+    val: Dict[str, Any] = {"operation": op, "level": lvl, "sub_level": sub,
+                           "allow_new_position": (str(op) in BUY_ALLOWED_OPS) if op else None}
+    if src:
+        val["wave_source"] = src.get("file") or src.get("path")
+        val["wave_as_of"] = src.get("as_of")
+        val["wave_stale_days"] = src.get("stale_days")
+    basis = "波浪状态 %s（apps/main_line/wave_agent.py LLM 产出；as_of=%s）" % (
+        src.get("file") or "wave_state*.json", src.get("as_of") or "未知（文件无 date 字段）")
+    return {"value": val, "basis": basis}
 
 
 def _l3(tiers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -237,10 +303,17 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
     import datetime as _dt
     ms = ms if ms is not None else (_read_json("wolf_mainline_select.json", d8)
                                     or (_read_json("main_line_state.json", d8) or {}).get("mainline_select"))
-    wave = wave if wave is not None else (_read_json("wave_state_{d}.json", d8) or _read_json("wave_state.json", d8))
+    # wave：2026-09-16 起返回 (状态, 来源元信息)；注入 wave 时不读文件（单测用）
+    if wave is not None:
+        wave_src: Dict[str, Any] = {"kind": "injected", "present": True, "file": "(注入)",
+                                    "path": None, "mtime": None,
+                                    "as_of": _norm_date8((wave or {}).get("date")),
+                                    "stale_days": None}
+    else:
+        wave, wave_src = _load_wave(d8)
     picks = picks if picks is not None else _read_json("stock_confirm_result.json", d8)
     gates = gates if gates is not None else _gates_state()
-    l2 = _l2(wave)
+    l2 = _l2(wave, wave_src)
     if tiers is None:
         # 生产里的真实函数名是 tier_target_pct / tier_floor_pct（2026-09-12 核对）
         op = (l2.get("value") or {}).get("operation")
@@ -256,28 +329,42 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
               "L4_picks": _l4(picks), "L5_entry": _l5(l2, gates), "L6_exit": _l6(gates)}
     src = sources if sources is not None else {
         # "gate": 2026-09-13 删除——mainline_gate 模块与产物已废弃（主线判定唯一＝方向层池判定）
-        "wave_dated": _src("wave_state_{d}.json", d8),
-        "wave_latest": _src("wave_state.json", d8), "picks": _src("stock_confirm_result.json", d8),
+        # 2026-09-16：wave_dated/wave_latest 两个键合并成 "wave"（带 kind/as_of/stale_days），
+        #            否则盘前盘后每天都把不存在的带日期文件记为缺失，纯噪声且来源名不副实。
+        "wave": wave_src, "picks": _src("stock_confirm_result.json", d8),
         # "heat": 2026-09-13 移除——heat_v2 已停用（与他做法反向 t=-11.89），不再作为源文件检查项，
         #          否则每天会被记为 missing → 可能触发"数据不全"降级。
     }
+    wsrc = (src or {}).get("wave") or wave_src or {}
     missing = [k for k, v in (src or {}).items() if isinstance(v, dict) and not v.get("present")]
     missing += [k for k, v in layers.items() if (v.get("value") is None)]
-    # 诚实告警：回填历史日时若只能拿到**不带日期**的 wave_state.json，那可能不是当日状态
+    # ── 诚实告警（2026-09-16 扩）：波浪状态的来源/新鲜度 ──
     warns: List[str] = []
+    stale: List[str] = []
     try:
         _today = _dt.date.today().strftime("%Y%m%d")
-        if d8 != _today and not (src or {}).get("wave_dated", {}).get("present"):
+        kind = wsrc.get("kind")
+        if kind == "latest" and d8 != _today:
             warns.append("wave 用了不带日期的最新文件（wave_state.json），**回填历史日时可能不是当日状态**"
                          "（look-ahead 风险），只可作参考，不可用于回测")
+        if kind in ("latest", "dated"):
+            sd = wsrc.get("stale_days")
+            as_of = wsrc.get("as_of")
+            if as_of is None:
+                warns.append("波浪状态文件 %s 没有 date 字段 → **无法判定新鲜度**，L2 档位按最新判浪执行"
+                             % wsrc.get("file"))
+            elif isinstance(sd, int) and sd > 0:
+                stale.append("wave(as_of=%s, 陈旧%d天)" % (as_of, sd))
+                warns.append("波浪状态不是当日（as_of=%s，对象日 %s，陈旧 %d 天）→ L2 档位可能是**旧口径**，"
+                             "只按预设条件执行、不据此加仓（他「判据先于成交」）" % (as_of, d8, sd))
     except Exception:
         pass
-    obj = {"date": d8, "warnings": warns,
+    obj = {"date": d8, "warnings": warns, "stale": stale,
            "generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
            "layers": layers, "gates": gates, "sources": src, "missing": missing,
            "entry_allowed": bool(((layers["L5_entry"]["value"]) or {}).get("allowed")),
            "note": ("本对象只汇总与准入，不新增选股/择时逻辑；每条带 basis；"
-                    "缺文件时该层为 null 并记入 missing")}
+                    "缺文件时该层为 null 并记入 missing；陈旧但可用的源记入 stale（不拦开仓）")}
     return obj
 
 
@@ -376,10 +463,12 @@ def run(d8: Optional[str] = None, save: bool = True) -> Dict[str, Any]:
                 return {"ok": False, "reason": "write_failed:pg=%s,file=%s" % (pg.get("reason"), str(e)[:40])}
             obj["file_error"] = str(e)[:80]
     l5 = (obj["layers"]["L5_entry"]["value"]) or {}
-    print("[decision] %s rev=%s 主存PG=%s L2=%s L5允许=%s 拦阻=%d 缺失层=%s"
+    print("[decision] %s rev=%s 主存PG=%s L2=%s(%s, as_of=%s) L5允许=%s 拦阻=%d 缺失层=%s 陈旧=%s"
           % (d8, obj.get("revision"), pg.get("ok"),
              (obj["layers"]["L2_operation"]["value"] or {}).get("operation"),
-             l5.get("allowed"), len(l5.get("blockers") or []), obj["missing"]))
+             (obj["layers"]["L2_operation"]["value"] or {}).get("wave_source"),
+             (obj["layers"]["L2_operation"]["value"] or {}).get("wave_as_of"),
+             l5.get("allowed"), len(l5.get("blockers") or []), obj["missing"], obj.get("stale") or "无"))
     return {"ok": True, **obj}
 
 
@@ -525,6 +614,10 @@ def directive(d8: Optional[str] = None) -> str:
             % (obj.get("date"), "、".join((l1.get("confirmed") or [])[:3]) or "—",
                l2.get("operation") or "—", l2.get("allow_new_position"),
                ("%.0f" % (float(l3["target_pct"]) * 100)) if isinstance(l3.get("target_pct"), (int, float)) else "—"))
+    # 2026-09-16：档位来源陈旧时必须显式标注（否则 prompt 会把旧口径当当天口径用）
+    _sd = l2.get("wave_stale_days")
+    if isinstance(_sd, int) and _sd > 0:
+        head += "｜⚠️ 档位陈旧 %d 天（wave as_of=%s）" % (_sd, l2.get("wave_as_of") or "未知")
     if l5.get("blockers"):
         return head + "｜⛔ 今日拦阻: " + "；".join(l5["blockers"])
     return head + "｜✅ 今日无拦阻（开新仓仍须满足 L5 前置条件）"

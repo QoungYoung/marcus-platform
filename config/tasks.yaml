@@ -2,6 +2,10 @@ settings:
   max_concurrent_jobs: 3
   job_timeout: 3600  # 2026-09-09: chain_map 15主题全量AI版曾超900s
   retry:
+    # 2026-09-16 起**真的生效了**（原先只是死配置，调度器没有重试实现）。
+    # 语义：这里是「总开关 + 默认参数」；某个任务要不要自动重跑由**任务级 opt-in** 决定
+    # （任务块里写 `retry: {enabled: true}`）。刻意做成 opt-in：会下单的 script 任务
+    # 若被自动重跑，可能变成"重复下单"，比少跑一次严重得多。
     enabled: true
     max_attempts: 3
     delay_seconds: 60
@@ -32,6 +36,9 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
+
 - id: wolf_review_score_run
   name: 每日复盘打分表（B1）
   description: 按狼大 2025-04-21 复盘表打分（前8项各1分、外围各0.1分、两倍差判多空）→ 预判次日前2小时方向，写
@@ -54,6 +61,9 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
+
 - id: wolf_theme_resilience
   name: 方向层「跌得少弹得早」（C2）
   description: 调整期内按全市场中位基准算各主题的「跌得少/弹得早」（狼大 2026-01-27 调整期第二步）→ 写
@@ -76,6 +86,9 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
+
 - id: wolf_index_futures
   name: 股指期货多空 → 次日黄白线预判（A3）
   description: 拉 fut_holding 多空单**增减**（口径按狼大 2026-01-23）→ 预判次日开盘黄线/白线在上，写
@@ -98,6 +111,9 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
+
 - id: wolf_neg_event_scan
   name: 层①「无利空」公告标记
   description: 拉当日全市场公告→过滤持仓→判"意外事件/黑天鹅级利空"→写 wolf_negative_events.json（①止损的豁免前提）
@@ -1045,6 +1061,8 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
 
 - id: wolf_weekend_hedge
   name: 周末/长假前避险（G9）
@@ -1093,6 +1111,8 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
 
 - id: daily_archive
   name: 每日存档 G2（文件 + 落库双写）
@@ -1118,6 +1138,8 @@ tasks:
     - qqbot
   depends_on:
   - daily_decision
+  retry:
+    enabled: true
 
 - id: daily_decision_am
   name: 每日决策对象 G1（盘前确认）
@@ -1145,6 +1167,8 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
 
 - id: wolf_mainline_select
   name: 方向层主线选择（D1）
@@ -1171,6 +1195,8 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+  retry:
+    enabled: true
 
 - id: orderbook_snapshot_r9
   name: 盘口五档快照（R9 数据积累）

@@ -68,6 +68,7 @@ class TaskConfig:
     notifications: Dict[str, Any] = field(default_factory=dict)
     depends_on: List[str] = field(default_factory=list)
     pi_prompt: str = ""  # pi_trade 类型使用的 context 提示（如 "early""late_morning""afternoon""closing"）
+    retry: Dict[str, Any] = field(default_factory=dict)  # 任务级重试覆盖（见 _retry_policy）
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'TaskConfig':
@@ -83,6 +84,7 @@ class TaskConfig:
             notifications=data.get('notifications', {}),
             depends_on=data.get('depends_on', []),
             pi_prompt=data.get('pi_prompt', ''),
+            retry=data.get('retry', {}) or {},
         )
 
 
@@ -98,6 +100,11 @@ class JobExecution:
     output: str = ""
     error: str = ""
     return_code: int = 0
+    # 重试元信息（2026-09-16 新增：失败自动重跑，见 _schedule_retry）
+    attempt: int = 1
+    max_attempts: int = 1
+    will_retry: bool = False
+    retry_in: int = 0
 
 
 class SchedulerService:
@@ -284,6 +291,67 @@ class SchedulerService:
         from app.config import get_settings
         return Path(get_settings().workspace_path)
 
+    # ==================== 失败重试（2026-09-16）====================
+    # 为什么要实现：config 里 settings.retry(enabled/max_attempts/delay_seconds) **一直没有实现**
+    # （scheduler_service 里没有任何 retry/requeue 逻辑），而 wolf_eod 就绪闸的注释写着
+    # "没就绪就非 0 退出交给调度器重试" → 实际是当天直接终止（09-15/09-16 两天的
+    # daily_decision_am 就是这么死的，只是那次根因是探针日选错）。
+    # **适用范围（fail-safe 口径）**：
+    #   · 只重试 script 型任务（pi_trade / pi_reflect / golden_pit / golden_pit_dca 有一次性副作用，不重跑）；
+    #   · 且**必须任务级显式 opt-in**（`retry: {enabled: true}`）——settings.retry 只当"总开关+默认参数"。
+    #     这样新加的任务（尤其会下单的）不会被自动重跑：重复下单是比"少跑一次"严重得多的错
+    #     （2026-08 的 588170 重复加仓事故）。当前 opt-in 的只有盘后 EOD 数据批（纯落盘/幂等）。
+    RETRYABLE_TASK_TYPES = ("script",)
+
+    def _retry_policy(self, task: TaskConfig) -> Dict[str, Any]:
+        """重试策略：settings.retry = 总开关 + 默认参数；task.retry 决定"这个任务要不要重试"。"""
+        g = dict(self.settings.get('retry') or {})
+        t = dict(task.retry or {})
+        enabled = (bool(g.get('enabled', False)) and bool(t.get('enabled', False))
+                   and task.type in self.RETRYABLE_TASK_TYPES)
+        try:
+            max_attempts = max(1, int(t.get('max_attempts', g.get('max_attempts', 1)) or 1))
+        except (TypeError, ValueError):
+            max_attempts = 1
+        try:
+            delay = max(0, int(float(t.get('delay_seconds', g.get('delay_seconds', 60)) or 0)))
+        except (TypeError, ValueError):
+            delay = 60
+        return {"enabled": enabled, "max_attempts": max_attempts, "delay_seconds": delay}
+
+    def _schedule_retry(self, task: TaskConfig, next_attempt: int, delay: int,
+                        manual: bool = False, max_attempts: int = 1) -> bool:
+        """把"第 next_attempt 次尝试"排成一次性定时任务（不阻塞当前线程、不占并发槽）。
+
+        · 走 `_execute_task` 同一条路径 → 交易日/时间窗校验、执行记录、通知都照旧生效
+          （时间窗不匹配时会被安全跳过，不会在窗口外补跑下单类动作）
+        · job id = `retry::<task>::<attempt>`；`scheduler.reload` 会清空所有 job（重试作废）
+        · 失败即放弃（返回 False），不抛出——重试是补救手段，不能变成新的失败源
+        """
+        try:
+            if self.scheduler.state != STATE_RUNNING:
+                logger.warning(f"[{task.id}] 调度器未运行(state={self.scheduler.state})，放弃重试")
+                return False
+            run_date = datetime.now() + timedelta(seconds=max(0, int(delay)))
+            self.scheduler.add_job(
+                func=self._execute_task,
+                trigger=DateTrigger(run_date=run_date, timezone='Asia/Shanghai'),
+                id=f"retry::{task.id}::{next_attempt}",
+                name=f"{task.name} (重试 {next_attempt}/{max_attempts})",
+                args=[task.id],
+                kwargs={'manual': manual, '_attempt': next_attempt},
+                replace_existing=True,
+                misfire_grace_time=300,
+            )
+            logger.warning(
+                f"[{task.id}] 失败重试已排期：第 {next_attempt} 次尝试，"
+                f"{delay}s 后（{run_date.strftime('%H:%M:%S')}）"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"[{task.id}] 排期重试失败: {e}")
+            return False
+
     def _add_job(self, task: TaskConfig):
         """添加任务到调度器"""
         if task.schedule.get('type') != 'cron':
@@ -325,12 +393,13 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"Failed to add job {task.id}: {e}")
 
-    def _execute_task(self, task_id: str, manual: bool = False):
+    def _execute_task(self, task_id: str, manual: bool = False, _attempt: int = 1):
         """执行任务
         
         Args:
             task_id: 任务ID
             manual: 是否手动触发（True 时跳过时间窗口校验）
+            _attempt: 第几次尝试（1=首次；失败后由 _schedule_retry 排期重跑，见 _retry_policy）
         """
         task = self.tasks.get(task_id)
         if not task:
@@ -395,16 +464,21 @@ class SchedulerService:
                     return
 
         execution_id = str(uuid.uuid4())[:8]
+        rcfg = self._retry_policy(task)
         execution = JobExecution(
             id=execution_id,
             task_id=task_id,
             task_name=task.name,
             status=JobStatus.RUNNING.value,
             started_at=datetime.now(),
+            attempt=max(1, int(_attempt)),
+            max_attempts=rcfg["max_attempts"],
         )
         self.executions[execution_id] = execution
 
-        logger.info(f"[{execution_id}] Starting task: {task.name} (type={task.type})")
+        logger.info(f"[{execution_id}] Starting task: {task.name} (type={task.type})"
+                    + (f" [retry {execution.attempt}/{execution.max_attempts}]"
+                       if execution.attempt > 1 else ""))
 
         # === Pi 自主交易模式 ===
         if task.type == 'pi_trade':
@@ -674,6 +748,15 @@ class SchedulerService:
 
         finally:
             execution.finished_at = datetime.now()
+            # ── 失败自动重试（2026-09-16 新增；先排期再落日志/发通知，保证记录与实际一致）──
+            if execution.status == JobStatus.FAILED.value and rcfg["enabled"] \
+                    and execution.attempt < rcfg["max_attempts"]:
+                execution.retry_in = rcfg["delay_seconds"]
+                execution.will_retry = self._schedule_retry(
+                    task, execution.attempt + 1, rcfg["delay_seconds"], manual=manual,
+                    max_attempts=rcfg["max_attempts"])
+                if not execution.will_retry:
+                    execution.retry_in = 0
             self._save_execution_log(execution)
             self._send_notifications(task, execution)
             
@@ -726,6 +809,11 @@ class SchedulerService:
                 'return_code': execution.return_code,
                 'output': execution.output if execution.output else "",
                 'error': execution.error if execution.error else "",
+                # 重试元信息（2026-09-16）：attempt>1 表示这是自动重跑；will_retry=还会再试
+                'attempt': execution.attempt,
+                'max_attempts': execution.max_attempts,
+                'will_retry': execution.will_retry,
+                'retry_in': execution.retry_in,
             }
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(log_data, ensure_ascii=False) + '\n')
@@ -788,6 +876,13 @@ class SchedulerService:
                     f"状态: {execution.status}",
                     f"时间: {execution.finished_at.strftime('%H:%M:%S')}" if execution.finished_at else "",
                 ]
+                if execution.attempt > 1:
+                    lines.append(f"尝试: 第 {execution.attempt}/{execution.max_attempts} 次（自动重跑）")
+                if execution.will_retry:
+                    lines.append(f"重试: {execution.retry_in}s 后再跑一次"
+                                 f"（第 {execution.attempt + 1}/{execution.max_attempts} 次尝试）")
+                elif execution.status == JobStatus.FAILED.value and execution.max_attempts > 1:
+                    lines.append(f"重试: 已用尽（共 {execution.attempt}/{execution.max_attempts} 次尝试）")
                 if execution.output:
                     # golden_pit_dca: 从 JSON 中提取 summary_text 作为友好回退
                     output_preview = execution.output
@@ -1663,6 +1758,8 @@ class SchedulerService:
                 }
                 if task.type == 'pi_trade':
                     task_dict['pi_prompt'] = task.pi_prompt
+                if task.retry:
+                    task_dict['retry'] = task.retry
                 tasks_list.append(task_dict)
 
             config = {
