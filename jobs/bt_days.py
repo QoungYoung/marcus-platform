@@ -257,7 +257,17 @@ def main() -> int:
                            "--out", os.path.join(a.out, "prod_%s.json" % d8)]
                     if a.prod_reset_first and d8 == days[0]:
                         _pc.append("--reset")
-                    run(_pc, os.path.join(a.out, "prod_%s.log" % d8), timeout=10800)
+                    _prod_out = os.path.join(a.out, "prod_%s.json" % d8)
+                    _rcp, _dtp = run(_pc, os.path.join(a.out, "prod_%s.log" % d8), timeout=10800)
+                    entry["steps"]["prod"] = {"rc": _rcp, "s": round(_dtp, 1)}
+                    # ⛔ 生产链失败必须**当天停**：否则 bt_days 会把 170 天全部"跑完"却一条结果都没有
+                    #   （2026-09-16 实测：子进程 170 次 NameError，父进程照跑到 06-09，白跑 2 小时）
+                    if _rcp != 0 or not os.path.exists(_prod_out):
+                        entry["blocked"] = "prod_rc=%d" % _rcp
+                        entry["blocked_reason"] = "生产链失败（见 %s）" % os.path.join(a.out, "prod_%s.log" % d8)
+                        by_day[d8] = entry
+                        print("[days] %s ⛔ 生产链失败 rc=%d → 终止年跑（不静默跳过）" % (d8, _rcp), flush=True)
+                        break
                 entry["steps"]["formal"] = {"symbols": len(_syms), "modes": ["hold", "leg"]}
                 print("[days] %s 正式口径已增量更新（%d 个标的）" % (d8, len(_syms)), flush=True)
 

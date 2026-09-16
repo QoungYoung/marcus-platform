@@ -563,7 +563,6 @@ def main() -> int:
     # ② relay / gzcloud 替身（日线 ≤ cut）
     import bt_run_pinned as brp
     shim = brp.install_relay_shim(a.bars_db, cut)
-    _RELAY_SHIM["fn"] = shim.relay_items          # 实例方法级替身（get_relay().relay_items 也走本地）
     gzshim = brp.install_gzcloud_shim(a.bars_db, cut)
 
     # ③ 本地分钟数据替身
