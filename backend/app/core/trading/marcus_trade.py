@@ -865,6 +865,9 @@ class MarcusVNPyExecutor:
             'cost': total_cost
         }
         self._log_trade(trade_record)
+        if used_bridge:
+            # 桥接路径不会自己结算现金（见 _settle_bridge_cash 说明），这里补扣款
+            self._settle_bridge_cash("买入", price, volume)
         self._enrich_trade_record(order_id, symbol, '买入', price, volume, reason)
 
         # 推送 QQ 通知
@@ -935,6 +938,9 @@ class MarcusVNPyExecutor:
         
         # 记录交易结果用于连续亏损追踪
         self.record_trade_result(symbol, profit)
+        if used_bridge:
+            # 桥接路径不会自己结算现金（见 _settle_bridge_cash 说明），这里补回款
+            self._settle_bridge_cash("卖出", price, volume)
         self._enrich_trade_record(order_id, symbol, '卖出', price, volume, reason, profit)
         
         # 推送 QQ 通知
@@ -1090,6 +1096,69 @@ class MarcusVNPyExecutor:
 
     _ENRICH_RETRIES = 12       # 监听器异步写库，最多等 ~3s
     _ENRICH_INTERVAL = 0.25
+
+    # 桥接路径现金结算费率（与 apps/paper-trading/paper_engine.py 成交口径一致）
+    _BRIDGE_BUY_FEE = 0.0005   # 买入佣金 0.05%
+    _BRIDGE_SELL_FEE = 0.0015  # 卖出佣金 0.05% + 印花税 0.1%
+
+    def _settle_bridge_cash(self, direction: str, price: float, volume: int) -> None:
+        """桥接路径成交后的现金结算（扣款/回款）。
+
+        为什么必须在这里补：VN.PY 自带的 PaperAccount 撮合引擎**只维护持仓**——
+        `cross_order → update_position → calculate_pnl()` 全程不读写
+        `account_data.balance`，其 `register_event()` 也不订阅 EVENT_ACCOUNT；
+        全项目唯一发 EVENT_ACCOUNT 的地方是 VNPyBridge.start() 启动时那一次注入
+        （把 PG 里的现金原样回写）。⇒ 桥接路径成交既不会扣款也不会回款，现金长期
+        原地不动（2026-09-16 实测：3 笔卖出 34,190 一分未进现金，而同日 engine
+        路径的买单精确扣款）。
+
+        engine 路径（apps/paper-trading/paper_engine.py）自己会结算，故这里只在
+        used_bridge=True 时调用，避免重复扣款。
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+        conn = None
+        try:
+            conn = self._get_pg_conn()
+            if conn is None:
+                return
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT available_cash FROM paper_account_info WHERE account_id = %s FOR UPDATE",
+                (self.account_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return
+            cash = float(row[0] or 0)
+            gross = float(price) * int(volume)
+            if direction == "买入":
+                delta = -gross * (1 + self._BRIDGE_BUY_FEE)
+                label = "扣款"
+            else:
+                delta = gross * (1 - self._BRIDGE_SELL_FEE)
+                label = "回款"
+            new_cash = round(cash + delta, 4)
+            cur.execute(
+                "UPDATE paper_account_info SET available_cash = %s, updated_at = %s "
+                "WHERE account_id = %s",
+                (new_cash, datetime.now().isoformat(), self.account_id)
+            )
+            if not conn.autocommit:
+                conn.commit()
+            cur.close()
+            _log.info(
+                "[MarcusTrade] 桥接现金结算(%s): %.2f → %.2f (%+.2f)",
+                label, cash, new_cash, delta,
+            )
+        except Exception as e:
+            _log.warning(f"[MarcusTrade] ⚠️ 桥接现金结算失败({direction} {price}×{volume}): {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _enrich_trade_record_sync(self, direction: str, symbol: str, price: float,
                                   volume: float, reason: str, profit: float,
