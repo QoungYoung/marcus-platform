@@ -1123,6 +1123,8 @@ tasks:
   name: 每日决策对象 G1（盘前确认）
   description: 盘前 08:25（wave_judge 08:10 之后）重算当日决策对象，让盘中腿用上**当天**的档位与闸门状态；
     与盘后 19:45 的 daily_decision 共用同一 job。开关 WOLF_DAILY_DECISION 默认 0=跳过。
+    **2026-09-16 修**：必须带 `--eod-probe last-closed` —— 开盘前当天日线必然 0 行，沿用默认
+    （探当天）会每天白等 6×300s 后 rc=2，导致 AM 对象从未产出（09-15、09-16 生产实锤）。
   enabled: true
   schedule:
     type: cron
@@ -1130,7 +1132,9 @@ tasks:
     timezone: Asia/Shanghai
   script:
     path: jobs/daily_decision.py
-    args: []
+    args:
+    - --eod-probe
+    - last-closed
   output:
     log_file: logs/daily_decision_am_{date}.log
     append: true
@@ -1167,3 +1171,21 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+
+- id: orderbook_snapshot_r9
+  name: 盘口五档快照（R9 数据积累）
+  description: 交易时段每5分钟记录持仓标的的五档买卖量/卖压代理（R9「卖单加大」；只记不用）
+  enabled: true
+  schedule:
+    type: cron
+    expr: '*/5 9-11,13-14 * * 1-5'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/record_orderbook.py
+    args: ["--once", "--tag", "r9"]
+  output:
+    log_file: logs/orderbook_r9_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: false

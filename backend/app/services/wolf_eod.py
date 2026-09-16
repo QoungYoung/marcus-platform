@@ -13,6 +13,15 @@
 处置：① 三者的 cron 挪到 EOD 之后（18:40 / 18:50 / 19:40）；② 任务内先做**就绪检查**，
    没就绪就**有限等待**（默认 6 次 × 5 分钟 = 30 分钟），仍没就绪则**非 0 退出**交给调度器重试
    （不要像以前那样"假装成功"）；③ 非交易日**直接跳过**（退出 0），避免节假日反复失败。
+
+**2026-09-16 修：盘前任务不能探「当天」日线（探针必须能指向上一交易日）**
+    实测（生产）：`daily_decision_am`（08:25）沿用 `gate(d8)` 默认探**当天**
+    `pro.daily(trade_date=今天)` → 开盘前当天日线必然是 0 行 → 09-15 / 09-16 两天都是
+    5×300s 白等 25 分钟后 rc=2 → **AM 决策对象从未产出**（`data/decision/` 只有盘后对象），
+    盘中腿一直回退用前一天的对象；探针事实（09-16 09:34 生产实测）：
+        20260914 → 5550 行就绪 / 20260915 → 5548 行就绪 / 20260916 → 0 行。
+    → 新增 `probe` 语义：`self`（默认，探 date8 当天 —— 盘后任务用）/
+      `last-closed`（探 date8 **之前**最近一个交易日 —— **盘前任务用**）/ `none` / 显式 `YYYYMMDD`。
 """
 from __future__ import annotations
 
@@ -78,13 +87,75 @@ def wait_ready(date8: Optional[str] = None, tries: Optional[int] = None,
     return False
 
 
-def gate(date8: Optional[str] = None) -> int:
-    """任务入口统一调用：返回 0=可以继续；1=跳过（非交易日）；2=未就绪（应重试）。"""
+def gate(date8: Optional[str] = None, probe: Optional[str] = "self") -> int:
+    """任务入口统一调用：返回 0=可以继续；1=跳过（非交易日）；2=未就绪（应重试）。
+
+    `probe` —— 探针要探**哪一天**的日线：
+      · `"self"`（默认）= date8 当天 → **盘后**任务用（它们确实要读当天数据）
+      · `"last-closed"`  = date8 **之前**最近一个交易日 → **盘前**任务必须用这个
+        （08:25 探当天 = 永远 0 行 = 每天白等 30 分钟后失败，2026-09-15/16 实锤）
+      · `"none"`         = 不做就绪探测，只保留「非交易日跳过」
+      · `"YYYYMMDD"`     = 显式指定
+    """
     d = date8 or today8()
     td = is_trade_day(d)
     if td is False:
         print(f"[eod] {d} 非交易日 → 跳过")
         return 1
-    if not wait_ready(d):
+    p = resolve_probe_date(probe, d)
+    if p is None:
+        return 0
+    if p != d:
+        print(f"[eod] 盘前/指定探针：探 {p}（对象日 {d}）的就绪")
+    if not wait_ready(p):
         return 2
     return 0
+
+
+def resolve_probe_date(probe: Optional[str], date8: Optional[str] = None) -> Optional[str]:
+    """把 `probe` 语义解析成**实际要探测的日期**；返回 None = 不探测（跳过就绪检查）。"""
+    d = date8 or today8()
+    if probe is None:
+        return d
+    p = str(probe).strip()
+    low = p.lower()
+    if low in ("", "self", "today", "d"):
+        return d
+    if low in ("none", "skip", "off", "no"):
+        return None
+    if low in ("last-closed", "last_closed", "lastclosed", "prev", "previous",
+               "prev-trade-day", "prev_trade_day"):
+        return prev_trade_day(d)
+    if len(p) == 8 and p.isdigit():
+        return p
+    print(f"[eod] 未知 probe={probe!r} → 按 self 处理")
+    return d
+
+
+def prev_trade_day(date8: Optional[str] = None) -> Optional[str]:
+    """**严格早于** date8 的最近一个交易日（YYYYMMDD）。
+
+    盘前任务（08:25）要探的正是它：当天日线还没生成，昨天的一定在。
+    日历拿不到 → 按工作日近似往回找（周一向回落到周五），保证不返回 None 把任务卡死。
+    """
+    import datetime as _dt
+    d = date8 or today8()
+    try:
+        base = _dt.datetime.strptime(d, "%Y%m%d")
+    except ValueError:
+        return None
+    try:
+        from app.services.t_backtest_data import resolve_trade_days
+        start = (base - _dt.timedelta(days=60)).strftime("%Y%m%d")
+        ds = resolve_trade_days(start, d) or []
+        cands = sorted({str(x)[:8] for x in ds if str(x)[:8] < d})
+        if cands:
+            return cands[-1]
+    except Exception as e:
+        print(f"[eod] 取上一交易日失败: {type(e).__name__}: {str(e)[:60]}")
+    cur = base - _dt.timedelta(days=1)
+    for _ in range(10):
+        if cur.weekday() < 5:
+            return cur.strftime("%Y%m%d")
+        cur -= _dt.timedelta(days=1)
+    return None
