@@ -213,10 +213,29 @@ def truncate_dates_arrays(src: str, dst: str, cut: str):
     return {"concepts": len(out)}
 
 
+def _materialize(dst: str) -> bool:
+    """dst 若是**符号链接** → 先删链再写。
+
+    ⚠️ 2026-09-17 实测的写穿：沙箱农场会先把 repo `data/` 下的文件链进来，而补桩步骤随后
+    `copy_json(src, dst)` 的 `_jdump(dst, …)` 会**跟随符号链接**写到 repo 的真文件上
+    （`low_logic.json` / `etf_theme_map_pi.json` 的 mtime 被改到 seed 那一刻；内容因为
+    先 load 后 dump 而未变，但**这就是写穿**）。补桩的本意是"在沙箱里落一个真文件"，
+    所以必须先解除链接。
+    """
+    try:
+        if os.path.islink(dst):
+            os.unlink(dst)
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def copy_json(src: str, dst: str, cut: str = "20991231"):
     d = _jload(src, None)
     if d is None:
         return None
+    _materialize(dst)
     _jdump(dst, d)
     return {"bytes": os.path.getsize(dst)}
 
