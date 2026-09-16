@@ -984,9 +984,13 @@ class MarcusVNPyExecutor:
             message += f"\n\n> {clean_reason}\n\n"
             message += f"时间: {now_str}"
 
-            send_qq_notification(message)
+            delivered = send_qq_notification(message)
             import logging
-            logging.getLogger(__name__).info(f"[MarcusTrade] 📨 QQ买入通知已发送: {symbol}")
+            _log = logging.getLogger(__name__)
+            if delivered:
+                _log.info(f"[MarcusTrade] 📨 QQ买入通知已发送: {symbol}")
+            else:
+                _log.warning(f"[MarcusTrade] ⚠️ QQ买入通知未投递（无接收人/发送失败）: {symbol}")
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"[MarcusTrade] QQ买入通知发送失败: {e}")
@@ -1037,9 +1041,13 @@ class MarcusVNPyExecutor:
             message += f"\n\n> {clean_reason}\n\n"
             message += f"时间: {now_str}"
 
-            send_qq_notification(message)
+            delivered = send_qq_notification(message)
             import logging
-            logging.getLogger(__name__).info(f"[MarcusTrade] 📨 QQ通知已发送: {symbol}")
+            _log = logging.getLogger(__name__)
+            if delivered:
+                _log.info(f"[MarcusTrade] 📨 QQ通知已发送: {symbol}")
+            else:
+                _log.warning(f"[MarcusTrade] ⚠️ QQ卖出通知未投递（无接收人/发送失败）: {symbol}")
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"[MarcusTrade] QQ通知发送失败: {e}")

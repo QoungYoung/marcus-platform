@@ -426,22 +426,54 @@ class QQBotService:
         ]
         await self._send_text(reply_openid, '\n'.join(status_lines))
 
-    def _send_to_qq(self, openid: str, content: str):
-        """发送 QQ 消息（同步回退，供非异步调用者使用）"""
+    def _send_to_qq(self, openid: str, content: str) -> bool:
+        """发送 QQ 消息（同步回退，供非异步调用者使用）。返回是否投递成功。"""
         try:
             if not content or not openid:
-                return
-            send_c2c_message(openid, content)
+                return False
+            return bool(send_c2c_message(openid, content))
         except Exception as e:
             print(f"[QQBotService] Send failed: {e}", file=sys.stderr)
+            return False
 
-    def send_notification(self, message: str, openid: Optional[str] = None):
-        """发送通知消息（供调度器等外部同步调用）"""
-        target = openid or self.default_recipient
+    def _resolve_recipient(self, openid: Optional[str] = None) -> Optional[str]:
+        """解析通知接收人：显式 openid → 进程内 default_recipient → settings.QQ_BOT_RECIPIENT。
+
+        最后一级兜底是必需的：QQ Bot WebSocket 只在 worker 进程里启动，
+        API 进程（backend）里 default_recipient 永远是 None，导致 API / agent
+        执行的成交通知被静默丢弃（日志只留一行 No recipient）。
+        注意：send_c2c_message 走 HTTP + access_token，与 WS 监听无关，
+        因此 backend 进程不启动 WS 也能正常发通知。
+        """
+        if openid:
+            return openid
+        if self.default_recipient:
+            return self.default_recipient
+
+        recipient = ""
+        try:
+            from app.config import get_settings
+            settings = get_settings()
+            if not settings.QQ_BOT_ENABLED:
+                return None
+            recipient = (settings.QQ_BOT_RECIPIENT or "").strip()
+        except Exception as e:
+            print(f"[QQBotService] 读取通知配置失败: {e}", file=sys.stderr)
+            return None
+
+        if recipient:
+            # 缓存到进程内，避免每条通知都走一次 settings
+            self.default_recipient = recipient
+            return recipient
+        return None
+
+    def send_notification(self, message: str, openid: Optional[str] = None) -> bool:
+        """发送通知消息（供调度器等外部同步调用）。返回是否真正投递成功。"""
+        target = self._resolve_recipient(openid)
         if not target:
             print(f"[QQBotService] No recipient for notification", file=sys.stderr)
-            return
-        self._send_to_qq(target, message)
+            return False
+        return self._send_to_qq(target, message)
 
 
 # ===== 全局单例 =====
@@ -453,11 +485,12 @@ def get_qqbot_service() -> QQBotService:
     return qqbot_service
 
 
-def send_qq_notification(message: str, openid: Optional[str] = None):
+def send_qq_notification(message: str, openid: Optional[str] = None) -> bool:
     """
     便捷函数：发送 QQ 通知
-    
-    供调度器等模块直接调用，无需关心异步细节
+
+    供调度器等模块直接调用，无需关心异步细节。
+    返回是否真正投递成功——调用方据此决定日志口径，别再无条件打「已发送」。
     """
     service = get_qqbot_service()
-    service.send_notification(message, openid)
+    return service.send_notification(message, openid)
