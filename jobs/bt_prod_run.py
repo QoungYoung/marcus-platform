@@ -44,6 +44,8 @@ bt_env.add_paths()
 
 REPO = bt_env.REPO
 LOCAL_DB_URL = os.getenv("BT_PG_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+_NET_HITS: Dict[str, Any] = {}
+
 BAR_MINUTES = ("09:35", "09:40", "09:45", "09:50", "09:55", "10:00", "10:05", "10:10", "10:15", "10:20",
                "10:25", "10:30", "10:35", "10:40", "10:45", "10:50", "10:55", "11:00", "11:05", "11:10",
                "11:15", "11:20", "11:25", "11:30", "13:05", "13:10", "13:15", "13:20", "13:25", "13:30",
@@ -150,11 +152,28 @@ def _norm_bar(b) -> dict:
       · pack 字典 `{time, open, high, low, close, vol, amount}`。
     """
     if isinstance(b, dict):
-        return b
+        d = dict(b)
+        _c = d.get("close")
+        for k in ("open", "high", "low"):
+            if d.get(k) in (None, ""):
+                d[k] = _c
+        for k in ("vol", "amount"):
+            if d.get(k) in (None, ""):
+                d[k] = 0.0
+        return d
     try:
-        _ts, t, o, h, l, c, v, amt = b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]
-        return {"time": str(t), "open": float(o), "high": float(h), "low": float(l),
-                "close": float(c), "vol": float(v or 0), "amount": float(amt or 0)}
+        t, o, h, l, c, v, amt = b[1], b[2], b[3], b[4], b[5], b[6], b[7]
+        # ⚠️ 指数走本地 ClickHouse 兜底时**只有 close**（open/high/low 为 null，实测 20260105 的
+        #    `000001_SH_5min_20260105.json`）→ 用 close 兜住，否则 float(None) 直接 KeyError/TypeError
+        #    （指数只用于 `index.m5_dump` / `index.intraday_dd`，两处都只读 close/high）。
+        if c is None:
+            return {"time": str(t), "open": None, "high": None, "low": None,
+                    "close": None, "vol": float(v or 0), "amount": float(amt or 0)}
+        cf = float(c)
+        return {"time": str(t), "open": float(o) if o is not None else cf,
+                "high": float(h) if h is not None else cf,
+                "low": float(l) if l is not None else cf,
+                "close": cf, "vol": float(v or 0), "amount": float(amt or 0)}
     except (ValueError, IndexError, TypeError):
         return {"time": ""}
 
@@ -229,7 +248,7 @@ class LocalMarket:
         return [b for b in day if str(b.get("time"))[11:16] <= hhmm]
 
     def cum(self, symbol: str, hhmm: str) -> Dict[str, float]:
-        bs = self.bars_upto(symbol, hhmm)
+        bs = [b for b in self.bars_upto(symbol, hhmm) if b.get("close") not in (None, "")]
         if not bs:
             return {}
         v = sum(float(b.get("vol") or 0) for b in bs)
@@ -391,204 +410,6 @@ def install_data_shims(market: LocalMarket, hhmm_ref: Dict[str, str]):
     return names
 
 
-class _NetOffline(RuntimeError):
-    pass
-
-
-_NET_HITS: Dict[str, int] = {}
-
-
-def install_net_offline() -> None:
-    """`BT_NET_OFFLINE=1`：把所有出网调用**立即**变成异常（不等待 30-40s 超时）。
-
-    回测里网络既慢又**只能带来未来数据**，所以正确的做法就是"没有网"——
-    生产代码对网络失败本来就有一整套降级（日志 + 返回空），语义与真实断网一致；
-    这里把尝试过的 host/path 计数，收尾打印出来做**取数账本**。
-    """
-    def _note(url: str) -> None:
-        try:
-            u = str(url)
-            key = u.split("?")[0][:120]
-        except Exception:
-            key = "?"
-        _NET_HITS[key] = _NET_HITS.get(key, 0) + 1
-
-    try:
-        import requests
-        _rg, _rp = requests.get, requests.post
-
-        def _get(url, *a, **kw):
-            _note(url)
-            raise _NetOffline("BT_NET_OFFLINE: %s" % str(url)[:80])
-
-        def _post(url, *a, **kw):
-            _note(url)
-            raise _NetOffline("BT_NET_OFFLINE: %s" % str(url)[:80])
-
-        requests.get, requests.post = _get, _post
-        try:
-            requests.sessions.Session.request = lambda self, method, url, *a, **kw: (
-                _note(url), (_ for _ in ()).throw(_NetOffline("BT_NET_OFFLINE: %s" % str(url)[:80])))[1]
-        except Exception:
-            pass
-    except Exception:
-        pass
-    try:
-        import urllib.request as _ur
-        _real_open = _ur.urlopen
-
-        def _urlopen(url, *a, **kw):
-            _note(getattr(url, "full_url", url))
-            raise _NetOffline("BT_NET_OFFLINE: %s" % str(url)[:80])
-
-        _ur.urlopen = _urlopen
-    except Exception:
-        pass
-    print("[net] 已切断出网（BT_NET_OFFLINE=1）", file=sys.stderr)
-
-
-class _LocalPro:
-    """生产 `pro.*`（tushare 中继客户端）的**本地替身**：能本地服务的走本地库且 **强制 ≤ cut**，
-    其余接口返回空 DataFrame 并**记账**（收尾打印）——绝不联网、绝不前视。
-
-    为什么要这一层：生产里除 `relay_items` 之外还有一条 `pro.daily(...)` / `pro.fund_daily(...)`
-    的取数路径（如 `support_resistance.get_daily_bars`），只补 `relay_items` 是补不住的
-    （实测：钉住 relay 后仍反复出现 `[tushare_relay] fund_daily 日期跨度超限` 联网调用）。
-    """
-
-    def __init__(self, market: "LocalMarket", cut: str):
-        self.market = market
-        self.cut = str(cut or "19000101")
-        self.calls: Dict[str, int] = {}
-        self.unserved: Dict[str, int] = {}
-
-    # — 内部 —
-    def _df(self, rows, cols):
-        try:
-            import pandas as pd
-        except Exception:
-            return rows
-        return pd.DataFrame(rows, columns=cols)
-
-    def _clamp(self, d) -> str:
-        d = str(d or "").strip()
-        return min(d, self.cut) if d and d.isdigit() else self.cut
-
-    def _bars(self, ts_code, start, end):
-        import sqlite3
-        cols = ("ts_code", "trade_date", "open", "high", "low", "close", "pre_close",
-                "pct_chg", "vol", "amount", "turnover_rate")
-        c = sqlite3.connect(self.market.bars_db)
-        q = ("SELECT ts_code, trade_date, open, high, low, close, NULL, NULL, vol, amount, turnover_rate "
-             "FROM bars WHERE ts_code=? AND trade_date BETWEEN ? AND ? ORDER BY trade_date")
-        rows = c.execute(q, (ts_code, start, end)).fetchall()
-        c.close()
-        return self._df([list(r) for r in rows], cols)
-
-    # — 入口 —
-    def __getattr__(self, api: str):
-        if api.startswith("_"):
-            raise AttributeError(api)
-
-        def _call(**kw):
-            return self.call(api, **kw)
-        return _call
-
-    def call(self, api: str, **kw):
-        self.calls[api] = self.calls.get(api, 0) + 1
-        end = self._clamp(kw.get("end_date") or kw.get("trade_date") or self.cut)
-        start = str(kw.get("start_date") or "19900101")
-        ts_code = str(kw.get("ts_code") or "")
-        try:
-            if api in ("daily", "daily_basic"):
-                if kw.get("trade_date"):
-                    import sqlite3
-                    c = sqlite3.connect(self.market.bars_db)
-                    rows = c.execute("SELECT ts_code, trade_date, open, high, low, close, vol, amount, turnover_rate"
-                                     " FROM bars WHERE trade_date=?", (end,)).fetchall()
-                    c.close()
-                    return self._df([list(r) for r in rows],
-                                    ("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount",
-                                     "turnover_rate"))
-                return self._bars(ts_code, start, end)
-            if api == "trade_cal":
-                import sqlite3
-                c = sqlite3.connect(self.market.bars_db)
-                days = [r[0] for r in c.execute(
-                    "SELECT DISTINCT trade_date FROM bars WHERE trade_date BETWEEN ? AND ? ORDER BY trade_date",
-                    (start, self._clamp(kw.get("end_date") or self.cut)))]
-                c.close()
-                return self._df([[d, 1] for d in days], ("cal_date", "is_open"))
-            if api == "stock_basic":
-                rows = _q("SELECT ts_code, symbol, name, area, industry, market, list_date FROM stock_pool")
-                return self._df([list(r.values()) for r in rows],
-                                ("ts_code", "symbol", "name", "area", "industry", "market", "list_date"))
-            if api == "index_daily":
-                bars = self.market.load_index(ts_code or "000001.SH")
-                by = {}
-                for b in bars:
-                    d = str(b.get("time"))[:10].replace("-", "")
-                    if d > self.cut:
-                        continue
-                    cur = by.get(d)
-                    if not cur:
-                        by[d] = {"trade_date": d, "open": b["open"], "high": b["high"],
-                                 "low": b["low"], "close": b["close"], "vol": b.get("vol") or 0,
-                                 "amount": b.get("amount") or 0}
-                    else:
-                        cur["high"] = max(cur["high"], b["high"])
-                        cur["low"] = min(cur["low"], b["low"])
-                        cur["close"] = b["close"]
-                        cur["vol"] += b.get("vol") or 0
-                        cur["amount"] += b.get("amount") or 0
-                rows = [by[d] for d in sorted(by)]
-                return self._df([[r["trade_date"], ts_code, r["open"], r["high"], r["low"], r["close"],
-                                  r["vol"], r["amount"]] for r in rows],
-                                ("trade_date", "ts_code", "open", "high", "low", "close", "vol", "amount"))
-        except Exception as e:
-            print("[localpro] %s 本地服务失败：%s" % (api, str(e)[:100]), file=sys.stderr)
-        self.unserved[api] = self.unserved.get(api, 0) + 1
-        return self._df([], ())
-
-    def query(self, api: str, **kw):
-        return self.call(str(api), **kw)
-
-
-def install_local_pro(market: "LocalMarket", cut: str) -> "_LocalPro":
-    """把 `get_tushare_pro()` 换成 `_LocalPro`（覆盖 `pro.*` 与 `pro.query(...)` 两条路径）。"""
-    pro = _LocalPro(market, cut)
-    patched = []
-    try:
-        import app.core.trading._api_config as ac
-        ac.get_tushare_pro = lambda: pro
-        patched.append("_api_config")
-    except Exception as e:
-        print("[localpro] _api_config 打补丁失败：%s" % str(e)[:80], file=sys.stderr)
-    try:
-        import app.api.market as am
-        am._get_tushare_pro = lambda: pro
-        patched.append("api.market")
-    except Exception as e:
-        print("[localpro] api.market 打补丁失败：%s" % str(e)[:80], file=sys.stderr)
-    if str(os.getenv("BT_RELAY_OFFLINE", "0")).strip() in ("1", "true", "yes"):
-        try:
-            import tushare_relay
-            cls = tushare_relay.TushareRelay
-
-            # `get_relay()` 返回的是 TushareRelay **实例**，只替换模块级函数是拦不住它的
-            # → 连类方法一起换成 RelayShim（offline 模式下 RelayShim 不会回调网络，故无递归风险）
-            cls.relay_items = lambda self, api_name, fields="", **params: _RELAY_SHIM["fn"](
-                api_name, fields=fields, **params)
-            patched.append("TushareRelay.relay_items")
-        except Exception as e:
-            print("[localpro] TushareRelay 打补丁失败：%s" % str(e)[:80], file=sys.stderr)
-    print("[localpro] 已接管 tushare 客户端：%s" % patched, file=sys.stderr)
-    return pro
-
-
-_RELAY_SHIM: Dict[str, Any] = {}
-
-
 def _reset_paper_account(account_id: str = "stock", initial: float = 250000.0) -> None:
     """把本地副本里的模拟盘账户清成"起点状态"（只动本地 PG，生产库碰不到）。"""
     import psycopg2
@@ -602,7 +423,6 @@ def _reset_paper_account(account_id: str = "stock", initial: float = 250000.0) -
         "DELETE FROM paper_account_info WHERE account_id=%s",
         "DELETE FROM t_conditions WHERE account_id=%s",
         "DELETE FROM t_triggers WHERE account_id=%s",
-        "DELETE FROM t_daily_state WHERE account=%s",
     ):
         try:
             cur.execute(sql, (account_id,))
@@ -733,7 +553,8 @@ def main() -> int:
             sys.path.insert(0, p)
     install_vnpy_stubs()
     if str(os.getenv("BT_NET_OFFLINE", "1")).strip() in ("1", "true", "yes"):
-        install_net_offline()
+        import bt_local_pro
+        _NET_HITS.update(bt_local_pro.install_net_offline())
     _pin_clock_dynamic()
     set_now(day, "09:15")
     print("[prod] day=%s cut=%s DATA_DIR=%s WS=%s DB=%s"
@@ -749,7 +570,9 @@ def main() -> int:
     market = LocalMarket(a.mins, a.bars_db, day)
     hhmm_ref = {"hhmm": "09:15"}
     install_data_shims(market, hhmm_ref)
-    localpro = install_local_pro(market, cut)
+    import bt_local_pro
+    bt_local_pro.set_query_fn(_q)
+    localpro = bt_local_pro.install_local_pro(market, cut, relay_fn=shim.relay_items)
 
     # ④ 生产模块
     import app.services.t_db as t_db

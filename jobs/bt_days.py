@@ -98,6 +98,14 @@ def main() -> int:
     ap.add_argument("--no-era-gating", action="store_true",
                     help="关掉时代检查：**全年反事实**跑法（用现行完整代码跑所有交易日，不再问"
                          "\"当天生产有没有这条链\"）。对齐生产时不要开。")
+    ap.add_argument("--reuse-seeded", action="store_true",
+                    help="已有 _seed.json 且 cut 相同的沙箱不重跑 seed（续跑/复用已验证沙箱）")
+    ap.add_argument("--prod", action="store_true",
+                    help="用**生产代码**跑当日交易（调用 jobs/bt_prod_run.py：本地 PG + 生产布腿/触发/网关/模拟盘），"
+                         "替代内置 bt_account 账户层")
+    ap.add_argument("--prod-reset-first", action="store_true",
+                    help="年跑第一天把本地模拟盘重置为起点（25 万空仓）；只在 start 那天生效")
+    ap.add_argument("--prod-only", action="store_true", help="--prod 时不再跑 bt_account（默认两条都跑，互为交叉校验）")
     ap.add_argument("--code-dir", default="",
                     help="强制所有交易日使用同一份代码（默认空=按 rev_map 逐日；全年反事实建议用现行代码）")
     a = ap.parse_args()
@@ -120,7 +128,20 @@ def main() -> int:
         cut = prev_trade_day(d8, a.bars_db)
         entry = {"date": d8, "cut": cut, "steps": {}}
         # ① seed
-        if not a.skip_seed:
+        # `--reuse-seeded`：已有 `_seed.json` 且 cut 相同的沙箱**不重跑 seed**。
+        # 为什么需要：seed 里的 wave agent 是 LLM 步（本地隧道不可用时会被记成 regen_llm_err），
+        # 重跑会把已验证沙箱里的 wave_state 冲空（文档里踩过）；年跑续跑必须能复用。
+        _reuse = False
+        if a.reuse_seeded and not a.skip_seed:
+            try:
+                _m0 = json.load(open(os.path.join(sb, "_seed.json"), encoding="utf-8")) or {}
+                _reuse = str(_m0.get("cut") or "") == cut
+            except Exception:
+                _reuse = False
+            if _reuse:
+                entry["steps"]["seed"] = {"reused": True}
+                print("[days] %s seed 复用（已有沙箱 cut=%s）" % (d8, cut), flush=True)
+        if not a.skip_seed and not _reuse:
             _seed_cmd = [sys.executable, bt_env.jobs_file("bt_seed_day.py"), "--date", d8,
                          "--root", a.root, "--llm-mode", a.llm_mode]
             if a.code_dir:
@@ -222,11 +243,21 @@ def main() -> int:
                 run([sys.executable, bt_env.jobs_file("bt_pack_mins.py"),
                      "--mins", os.path.join(DATA, "_bt_full", "mins"), "--pack", _pack,
                      "--bars-db", a.bars_db], os.path.join(a.out, "pack_%s.log" % d8), timeout=1800)
-                for _m in ("hold", "leg"):
-                    run([sys.executable, bt_env.jobs_file("bt_account.py"), "--root", a.root, "--pack", _pack,
-                         "--mode", _m, "--resume", "--bars-db", a.bars_db,
-                         "--out", os.path.join(a.out, "account_%s.json" % _m)],
-                        os.path.join(a.out, "acct_%s_%s.log" % (_m, d8)), timeout=3600)
+                if not a.prod_only:
+                    for _m in ("hold", "leg"):
+                        run([sys.executable, bt_env.jobs_file("bt_account.py"), "--root", a.root, "--pack", _pack,
+                             "--mode", _m, "--resume", "--bars-db", a.bars_db,
+                             "--out", os.path.join(a.out, "account_%s.json" % _m)],
+                            os.path.join(a.out, "acct_%s_%s.log" % (_m, d8)), timeout=3600)
+                # ③c **生产链**（用户 2026-09-16 拍板）：生产布腿 → 触发 → 网关 → 模拟盘（本地 PG）
+                if a.prod:
+                    _pc = [sys.executable, bt_env.jobs_file("bt_prod_run.py"), "--day", d8,
+                           "--root", a.root, "--mins", os.path.join(DATA, "_bt_full", "mins"),
+                           "--bars-db", a.bars_db,
+                           "--out", os.path.join(a.out, "prod_%s.json" % d8)]
+                    if a.prod_reset_first and d8 == days[0]:
+                        _pc.append("--reset")
+                    run(_pc, os.path.join(a.out, "prod_%s.log" % d8), timeout=10800)
                 entry["steps"]["formal"] = {"symbols": len(_syms), "modes": ["hold", "leg"]}
                 print("[days] %s 正式口径已增量更新（%d 个标的）" % (d8, len(_syms)), flush=True)
 

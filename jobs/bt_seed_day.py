@@ -683,10 +683,17 @@ def main() -> int:
     if not a.no_llm:
         try:
             mls = os.path.join(sb, "main_line_state.json")
-            r = subprocess.run([sys.executable, bt_env.jobs_file("bt_wave_asof.py"), "--as-of", cut, "--code-dir", code_dir,
+            # ⚠️ 2026-09-16：波浪步必须**和其它生产者一样套 `bt_run_pinned`**（钉钟 + relay/gzcloud 替身
+            #    + 本地日线 ≤ cut）。此前直接调 `bt_wave_asof.py`：本机跑时取数走真实中继而失败
+            #    （实测 `ProxyError 127.0.0.1:7890`）→ `wave_state.json` 只剩空占位（无 operation）
+            #    → `daily_decision` 的 L2/L5 取不到波浪 → **L5 默认放行**（缺层不算拦阻）→ 年跑静默偏乐观。
+            r = subprocess.run([sys.executable, bt_env.jobs_file("bt_run_pinned.py"), "--as-of", cut,
+                                "--data-dir", sb, "--bars-db", a.bars_db, "--code-dir", code_dir,
+                                "--script", bt_env.jobs_file("bt_wave_asof.py"), "--",
+                                "--as-of", cut, "--code-dir", code_dir,
                                 "--mode", a.llm_mode, "--main-line-state", mls,
                                 "--out", os.path.join(sb, "wave_state.json")],
-                               capture_output=True, text=True, timeout=900,
+                               capture_output=True, text=True, timeout=1800,
                                env={**os.environ, "DATA_DIR": sb,
                                     "BT_LLM_CACHE": os.environ.get("BT_LLM_CACHE", os.path.join(SRC, "_bt_llm"))})
             rec("wave_state.json(regen)", {"src": "regen_llm", "rc": r.returncode,

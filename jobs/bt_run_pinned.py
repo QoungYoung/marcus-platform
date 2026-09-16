@@ -323,6 +323,36 @@ def install_relay_shim(bars_db: str, as_of: str) -> RelayShim:
     #    若把它也换成 shim → 回落路径变成 shim→原函数→shim 的**无限递归**（实测 RecursionError）。
     tushare_relay.relay_items = shim.relay_items
     print("[shim] 已替换 tushare_relay.relay_items（get_relay 保持原样，避免自递归）", file=sys.stderr)
+    # `pro.*`（客户端实例方法）是**另一条**取数路径：只补模块级函数拦不住它。
+    # 实测：波浪 agent 的 `pro.index_daily` 走真实中继 → 本机无代理 ProxyError → `wave_state.json`
+    # 写成空占位 → 决策层 L5 默认放行。这里用 `bt_local_pro` 把 `get_tushare_pro()` 也接管。
+    if str(os.getenv("BT_LOCAL_PRO", "1")).strip() not in ("0", "false", "no"):
+        try:
+            import bt_local_pro
+
+            class _Mkt:
+                """只给 `_LocalPro` 需要的两样：bars_db + 指数分钟（按日聚合出指数日线）。"""
+
+                def __init__(self, bars_db: str):
+                    self.bars_db = bars_db
+                    self._idx: Dict[str, list] = {}
+
+                def load_index(self, symbol: str = "000001.SH") -> list:
+                    if symbol in self._idx:
+                        return self._idx[symbol]
+                    p = os.path.join(bt_env.DATA, "_bt_idx_m5", "%s.json" % str(symbol).replace(".", "_"))
+                    bars = []
+                    try:
+                        bars = json.load(open(p, encoding="utf-8"))
+                    except Exception:
+                        bars = []
+                    self._idx[symbol] = bars
+                    return bars
+
+            _mp = _Mkt(bars_db)
+            shim.local_pro = bt_local_pro.install_local_pro(_mp, as_of, relay_fn=shim.relay_items)
+        except Exception as e:
+            print("[shim] local_pro 安装失败：%s" % str(e)[:100], file=sys.stderr)
     return shim
 
 
@@ -348,6 +378,14 @@ def main() -> int:
                 sys.path.insert(0, pth)
         print("[code] 使用版本树 %s" % a.code_dir, file=sys.stderr)
     pin_clock(a.as_of)
+    # 出网一律切断（默认）：否则代理不可用时每个 relay 调用都要 30-60s 重试，波浪步实测 4 分钟跑不完。
+    if str(os.getenv("BT_NET_OFFLINE", "1")).strip() not in ("0", "false", "no"):
+        try:
+            import bt_local_pro
+            bt_local_pro.install_net_offline()
+            print("[shim] 已切断出网（BT_NET_OFFLINE=1）", file=sys.stderr)
+        except Exception as _ne:
+            print("[shim] 断网失败：%s" % str(_ne)[:80], file=sys.stderr)
     shim = None if a.no_relay_shim else install_relay_shim(a.bars_db, a.as_of)
     gzshim = None if a.no_relay_shim else install_gzcloud_shim(a.bars_db, a.as_of)
 
