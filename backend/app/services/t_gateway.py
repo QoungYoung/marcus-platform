@@ -946,6 +946,30 @@ def _count_today_trades(account_id: str, symbol: str, side: str) -> int:
         return 0
 
 
+def _sell_time_gate_ok(reason: str = "") -> tuple:
+    """卖出时点门（2026-09-16 落地）：**非保护性**卖出禁在 [13:00, 14:30)。
+
+    狼大 2026-03-23「**每天的止损绝对不应该是下午1点到2点半**这个时间。。。要么你早上卖 要么你尾盘卖」。
+    此前该门只存在于纪律卖腿（t_monitor._stop_time_ok）→ **agent 自主交易走网关时可绕过**
+    （2026-09-16 13:36 就发生过一次：监控器被禁止做的事，agent 做了）。
+    保护性卖出豁免：is_stop_loss / 止损 / 破位 / 被动止盈 / 顶态清仓 等止血与风控动作。
+    返回 (ok, why)。开关 WOLF_SELL_TIME_GATE=0 关闭。
+    """
+    if os.getenv("WOLF_SELL_TIME_GATE", "1").strip() in ("0", "false", "no"):
+        return True, ""
+    _r = str(reason or "")
+    if any(k in _r for k in ("止损", "破位", "被动止盈", "顶态", "清仓", "避险", "风控")):
+        return True, ""
+    try:
+        hm = datetime.now().strftime("%H:%M")
+    except Exception:
+        return True, ""
+    if "13:00" <= hm < "14:30":
+        return False, ("时点门：13:00–14:30 是非保护性卖出的禁区"
+                       "（狼大 2026-03-23「要么早上卖 要么你尾盘卖」）→ 请顺延到 14:30 之后或尾盘")
+    return True, ""
+
+
 def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     condition_id: Optional[int] = None,
                     trigger_id: Optional[int] = None,
@@ -1046,6 +1070,11 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
 
 def _update_daily_ledger(symbol: str, side: str, price: float, volume: int, account: str = "t"):
     """更新该账户的日账本（累计回转额/买卖计数/当日已实现盈亏）。
+
+    if str(side).lower() == "sell" and not is_stop_loss:
+        _ok_t, _why_t = _sell_time_gate_ok(reason)
+        if not _ok_t:
+            return {"status": "deferred", "reason": _why_t, "symbol": symbol, "volume": volume}
 
     ⚠️ 2026-09-11 修：原来**没有 account 维度**（t_db.get_daily_state 硬编码 't'）→
     stock/golden_pit 的成交会污染 t 的账本（生产实测）。
