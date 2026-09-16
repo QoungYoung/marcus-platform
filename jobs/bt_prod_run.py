@@ -428,9 +428,25 @@ def _reset_paper_account(account_id: str = "stock", initial: float = 250000.0) -
             cur.execute(sql, (account_id,))
         except Exception as e:
             print("[reset] %s → %s" % (sql.split()[1], str(e)[:70]), file=sys.stderr)
+    # ⚠️ `paper_orders.orderid` 是**全局主键**（不是 (account_id, orderid)），而 `PaperTradingEngine.buy()`
+    #    的订单号只按**本账户** MAX(orderid) 续号 → 本账户清空后计数器归零，就会与**其它账户**的历史单号
+    #    撞号：`_save_order` 的 `ON CONFLICT (orderid) DO UPDATE` 把 INSERT 变成"改别人的单"，
+    #    于是 `match_order(orderid, account_id=本账户)` 查不到 → 返回 False → `cancel_order` 同样查不到
+    #    → **早退、跳过解冻** → 冻结资金永久卡住（实测 31,249.617 卡死，可用资金少 12.5%），
+    #    并且污染了 t 账户的单据行（本地副本）。
+    #    修法：重置时把计数器顶到**同前缀全局最大号**之上，绝不与任何账户撞号。
+    _prefix = "ORD"      # 与引擎对该账户的 order_prefix 一致（A 股任务账户）
+    try:
+        cur.execute("SELECT COALESCE(MAX(CAST(SUBSTRING(orderid FROM %s) AS INTEGER)), 0) "
+                    "FROM paper_orders WHERE orderid LIKE %s AND SUBSTRING(orderid FROM %s) ~ '^[0-9]+$'",
+                    (len(_prefix) + 1, _prefix + "%", len(_prefix) + 1))
+        _gmax = int(cur.fetchone()[0] or 0)
+    except Exception as _e:
+        _gmax, _ = 0, print("[reset] ⚠️ 全局单号探测失败：%s" % str(_e)[:80], file=sys.stderr)
     cur.execute("INSERT INTO paper_account_info (account_id, initial_capital, available_cash, frozen_cash,"
-                " order_counter, updated_at) VALUES (%s,%s,%s,0,0,now())",
-                (account_id, initial, initial))
+                " order_counter, updated_at) VALUES (%s,%s,%s,0,%s,now())",
+                (account_id, initial, initial, _gmax))
+    print("[reset] 订单计数器起点 = 全局同前缀最大号 %d（防跨账户撞号）" % _gmax, file=sys.stderr)
     cur.close()
     conn.close()
     print("[reset] 本地 %s 账户已重置为 %.0f 元空仓" % (account_id, initial), file=sys.stderr)
@@ -717,6 +733,21 @@ def main() -> int:
         if n1 > n0:
             print("[prod] %s 触发 +%d（累计 %d）/ 成交累计 %d" % (hhmm, n1 - n0, n1, nt), file=sys.stderr)
 
+    # ⑦b 日终账户自检：冻结资金必须归零
+    #   为什么：`paper_orders.orderid` 是**全局主键**而订单号按账户续号 → 撞号时 `_save_order` 会改到
+    #   别人的单 → `match_order/cancel_order` 查不到本账户单 → **跳过解冻** → 冻结资金静默泄漏
+    #   （实测卡死 31,249.617 = 可用资金的 12.5%）。这里日终显式检查，泄漏即报。
+    try:
+        _ai = _account_info(a.account)
+        _fz = float((_ai[0] if _ai else {}).get("frozen_cash") or 0)
+        if _fz > 0.01:
+            print("[prod] ⚠️ %s 日终冻结资金未归零：%.2f（疑似撞号/未解冻，见 commit 说明）" % (day, _fz),
+                  file=sys.stderr)
+        else:
+            print("[prod] %s 日终冻结资金 = 0 ✓" % day, file=sys.stderr)
+    except Exception as _e:
+        print("[prod] 日终自检失败：%s" % str(_e)[:80], file=sys.stderr)
+
     # ⑧ 汇总
     res = {"day": day, "cut": cut, "symbols": symbols, "armed": armed,
            "triggers": _trigger_rows(a.account), "trades": _trade_rows(a.account),
@@ -725,6 +756,7 @@ def main() -> int:
            "decision": {"cut": cut, "ok": dec_res.get("ok"),
                         "allowed": ((((dec_res.get("layers") or {}).get("L5_entry") or {}).get("value") or {}).get("allowed")),
                         "missing": dec_res.get("missing")},
+           "frozen_cash_end": float(((_account_info(a.account) or [{}])[0]).get("frozen_cash") or 0),
            "step_secs": {k: round(v, 1) for k, v in sorted(step_secs.items(), key=lambda kv: -kv[1])},
            "net_hits": sorted(_NET_HITS.items(), key=lambda kv: -kv[1])[:30]}
     out = a.out or os.path.join(bt_env.DATA, "_bt_prod", "%s.json" % day)
