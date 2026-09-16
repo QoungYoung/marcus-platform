@@ -144,6 +144,20 @@ def test_state_file_overrides(monkeypatch, tmp_path):
     assert B.resolve_ratio(state={"bucket_override": "exit"})[0] == 0.0   # 人工全局覆盖优先于浪型
 
 
+def test_data_dir_resolution(monkeypatch, tmp_path):
+    """部署踩坑回归：容器里代码在 /app/app，向上三级会走到 "/" → 状态文件落到容器可写层 /data。
+
+    规则：DATA_DIR > MARCUS_WORKSPACE/data > 逐级向上找"仓库根"（同级有 backend/ 或 apps/）的 data/。
+    """
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    ws = tmp_path / "app"
+    (ws / "data").mkdir(parents=True)
+    monkeypatch.setenv("MARCUS_WORKSPACE", str(ws))
+    assert B._data_dir() == str(ws / "data")
+    monkeypatch.delenv("MARCUS_WORKSPACE", raising=False)
+    assert B._data_dir().endswith("/data")           # 本仓库兜底也必须是 data/，不能是 "/"
+
+
 # ────────────────────────── 端到端（含状态落盘）──────────────────────────
 
 def test_evaluate_position_zero_distinction(monkeypatch):

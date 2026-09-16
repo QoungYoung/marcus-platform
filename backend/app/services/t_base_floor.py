@@ -63,13 +63,38 @@ def _audit_enabled() -> bool:
 
 
 def _data_dir() -> str:
+    """状态文件目录。按 DATA_DIR → MARCUS_WORKSPACE/data → 逐级向上找已存在的 data/ → 兜底。
+
+    ⚠️ 2026-09-16 部署踩坑：容器里代码挂在 /app/app（= 宿主 backend/app），从
+    /app/app/services 向上三级会走到 "/"，于是状态文件被写进**容器内的 /data**（可写层）——
+    既不落宿主 bind mount，又让 backend 与 worker 两个容器各写一份、floor 互相不一致。
+    故改为"向上逐级探测已存在的 data/"，不再假设固定层级。
+    """
     d = os.environ.get("DATA_DIR") or ""
     if d:
         return d
-    here = os.path.dirname(os.path.abspath(__file__))              # backend/app/services
-    root = os.path.abspath(os.path.join(here, "..", "..", ".."))    # 仓库根
-    cand = os.path.join(root, "data")
-    return cand if os.path.isdir(cand) else "data"
+    ws = os.environ.get("MARCUS_WORKSPACE") or ""
+    if ws:
+        cand = os.path.join(ws, "data")
+        if os.path.isdir(cand):
+            return cand
+    # 逐级向上：优先认"仓库根"（同级有 backend/ 或 apps/），否则退回首个存在的 data/
+    p = os.path.dirname(os.path.abspath(__file__))
+    fallback = None
+    for _ in range(6):
+        cand = os.path.join(p, "data")
+        if os.path.isdir(cand):
+            if os.path.isdir(os.path.join(p, "backend")) or os.path.isdir(os.path.join(p, "apps")):
+                return cand
+            if fallback is None:
+                fallback = cand
+        nxt = os.path.dirname(p)
+        if nxt == p:
+            break
+        p = nxt
+    if fallback:
+        return fallback
+    return "/app/data" if os.path.isdir("/app/data") else "data"
 
 
 def _state_path() -> str:
