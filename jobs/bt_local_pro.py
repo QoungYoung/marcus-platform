@@ -277,3 +277,40 @@ def mark_goldenpit_degraded() -> bool:
     print("[localpro] 黄金坑 get_status 已短路到生产降级分支（省掉每 bar 的 deadline 等待）", file=sys.stderr)
     return True
 
+def shortcut_external_risk() -> bool:
+    """回测：把 `t_external_risk.external_risk_snapshot()` 短路成"即时的空快照"。
+
+    用途（先查清楚再动手）：ArkVol/FRED/美股那批接口只服务 `external.*` 字段组 —— 消费者是
+      ① **交易腿 agent 的提示词契约**（`db/prompt_seeds.py`「当系统注入 external.us_risk=true 时…」、
+         `trade_graph.py` 月度门控文案）；
+      ② `t_mom_etf`（动量调仓，`T_MOM_ETF_ENABLED=0` 已关）；
+      ③ 存档进 `t_triggers.snapshot.fields` 供审计。
+    而**规则类判据一条都不用它**：本地库 `t_conditions` 中含 `external` 的表达式 = 0 条。
+    ⇒ 对"规则驱动的股票做T链"（当前 LLM-off 年跑）它是纯开销；LLM-on 时它只是提示词上下文。
+
+    为什么还要短路而不是删：断网时 `compute_external_risk()` 本来就会因取数失败而给出"无风险"默认值
+    （`us_risk=false`、`us_risk_reason=外部风险正常`、`gm_liquidity_gate=""`），这里**逐字段返回同一形状**，
+    因此判据取值不变，只是不再去碰 ArkVol/FRED/美股接口（也顺带避免它们背后的跨期数据风险）。
+    开关：`BT_EXTERNAL_RISK_OFF=0` 恢复真实调用。
+    """
+    try:
+        import app.services.t_external_risk as ter
+    except Exception as e:
+        print("[localpro] t_external_risk 短路安装失败：%s" % str(e)[:80], file=sys.stderr)
+        return False
+
+    def _empty_snapshot():
+        return {
+            "as_of": "", "us_market": {}, "us10y": None, "global_macro": {},
+            "us_risk": False, "us_risk_reason": "外部风险正常", "us_risk_score": 0,
+            "_source": "backtest_offline",
+        }
+
+    ter.external_risk_snapshot = _empty_snapshot
+    # `get_global_macro()` 是 ArkVol（黄金坑状态）在股票路径上的**唯一入口**：一并短路成 {}，
+    # 与断网时的实际取值一致（`compute_external_risk` 里 gm 取不到时就是 {}）。
+    ter.get_global_macro = lambda: {}
+    print("[localpro] external_risk/global_macro 已短路（不碰 ArkVol/FRED/美股；字段形状与断网一致）",
+          file=sys.stderr)
+    return True
+

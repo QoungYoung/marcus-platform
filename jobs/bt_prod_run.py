@@ -585,6 +585,10 @@ def main() -> int:
         # （cProfile 实测 3.06s/bar）。只在本驱动启用，seed/波浪路径不受影响（见函数 docstring）。
         if str(os.getenv("BT_GOLDENPIT_DEGRADED", "1")).strip() not in ("0", "false", "no"):
             bt_local_pro.mark_goldenpit_degraded()
+        # `external.*` 字段组：规则判据一条都不用（t_conditions 里含 external 的表达式 = 0 条），
+        # LLM-off 年跑下纯开销；短路成与断网同形状的空快照，不再碰 ArkVol/FRED/美股。
+        if str(os.getenv("BT_EXTERNAL_RISK_OFF", "1")).strip() not in ("0", "false", "no"):
+            bt_local_pro.shortcut_external_risk()
     _pin_clock_dynamic()
     set_now(day, "09:15")
     print("[prod] day=%s cut=%s DATA_DIR=%s WS=%s DB=%s"
