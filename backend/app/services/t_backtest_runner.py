@@ -33,7 +33,7 @@ def create_task(symbol: str, start_date: str, end_date: str,
                 conditions: List[Dict[str, Any]], init_shares: int = 1000,
                 init_price: Optional[float] = None, net_asset: float = 200000.0,
                 review_mode: str = "llm", symbols: Optional[List[str]] = None,
-                build_mode: bool = False, build_limit_ratio: float = 0.55,
+                build_mode: bool = False, build_limit_ratio: float = 0.50,   # 2026-09-16: 0.55→0.50（他的 50% 档）
                 select_source: str = "manual", select_limit: int = 10,
                 rolling_build: bool = False,
                 rolling_scan: bool = False,
@@ -587,7 +587,7 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
     except Exception:
         symbols = []
     build_mode = bool(task.get("build_mode", False))
-    build_limit_ratio = float(task.get("build_limit_ratio") or 0.55)
+    build_limit_ratio = float(task.get("build_limit_ratio") or 0.50)   # 2026-09-16: 默认改 50% 档
 
     task_dir = DATA_ROOT / f"task_{task_id}"
     symbol = task["symbol"]

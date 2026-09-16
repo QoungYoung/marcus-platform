@@ -1450,7 +1450,9 @@ class TCombinedBacktestEngine:
         self._all_symbols: Optional[List[str]] = task.get("_all_symbols") or None
         self._scan_pool: Optional[List[str]] = task.get("_scan_pool") or None
         self.net_asset = float(task.get("net_asset", 200000.0))
-        self.build_limit_ratio = float(task.get("build_limit_ratio", 0.55))
+        # 2026-09-16：默认 0.55 → 0.50（狼大 2026-01-17「75/50/30/不做」四档的 50% 档）。
+        # ⚠️ 改默认值会影响与历史回测的可比性；如需复现旧结果，请在任务参数里显式传 0.55。
+        self.build_limit_ratio = float(task.get("build_limit_ratio", 0.50))
         self.conditions = task.get("conditions") or []
         self.start_date = str(task.get("start_date") or "")
         self.end_date = str(task.get("end_date") or "")
