@@ -19,6 +19,32 @@ sys.path[:0] = []
 import bt_env  # noqa: E402
 
 
+
+PG_URL = os.getenv("BT_PG_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+
+
+def _pg(sql: str, args=()):
+    """直连**本地 PG**（生产模拟盘的真实落库），避免用某天 JSON 里的**快照**当现状。
+
+    ⚠️ 为什么必须这样：`prod_<day>.json` 里的 `account` 是**写那一天结果时读到的快照**，
+    它永远落后于当前账户——实测「已完成 4 天」时最后一天 JSON 里还是 250000，
+    而 PG 里早已是 156251（已有成交），用户一眼就看出不对。
+    """
+    try:
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(PG_URL)
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql, args)
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception as e:
+        print("[进度] ⚠️ 本地 PG 取数失败：%s" % str(e)[:80])
+        return []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=os.path.join(bt_env.DATA, "_bt_year"))
@@ -56,8 +82,12 @@ def main() -> int:
                 blocked += 1
                 reasons[(t.get("reason") or "")[:60]] += 1
     print("已完成 %d 天：%s → %s" % (len(days), days[0], days[-1]))
-    print("布腿 %d 条 / 触发 %d 条（去重） / 成交 %d 笔（去重） / 期末持仓 %d 只"
-          % (legs, len(trig_ids), len(fill_ids), pos_last))
+    _acct = (_pg("SELECT available_cash, frozen_cash FROM paper_account_info WHERE account_id='stock'") or [{}])[0]
+    _ntr = (_pg("SELECT count(*) c FROM paper_trades WHERE account_id='stock' AND coalesce(voided,0)=0") or [{}])[0].get("c")
+    _npos = (_pg("SELECT count(*) c FROM paper_positions WHERE account_id='stock' AND volume>0") or [{}])[0].get("c")
+    print("账户（实时·本地 PG）: 可用 %s + 冻结 %s | 成交 %s 笔 | 持仓 %s 只"
+          % (_acct.get("available_cash"), _acct.get("frozen_cash"), _ntr, _npos))
+    print("布腿 %d 条 / 触发 %d 条（按 id 去重，来自逐日 JSON）" % (legs, len(trig_ids)))
     print("触发状态：%s" % dict(status))
     if blocked:
         print("被拦 TOP5：")
@@ -68,7 +98,9 @@ def main() -> int:
         print("最后一天决策对象：cut=%s 允许买入=%s 缺失层=%s" % (dec.get("cut"), dec.get("allowed"), dec.get("missing")))
         acct = (last.get("account") or [{}])[0]
         if acct:
-            print("账户：可用资金 %s / 初始 %s" % (acct.get("available_cash"), acct.get("initial_capital")))
+            # 这是**写那一天结果时读到的快照**，不是现状（现状见上面"实时·本地 PG"行）
+            print("最后一天快照（写 %s 时）: 可用 %s / 初始 %s"
+                  % (last.get("day"), acct.get("available_cash"), acct.get("initial_capital")))
     print("最近 %d 天：" % min(a.tail, len(days)))
     for f in files[-a.tail:]:
         try:
