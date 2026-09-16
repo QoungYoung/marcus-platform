@@ -202,10 +202,14 @@ def ensure_fresh(max_lag_days: int = 2, lookback_days: int = 15,
     try:
         cov = coverage() or {}
         max_before = str(cov.get("d1") or "") or None
-        today = _dt.date.today()
+        # 2026-09-16 修复：这里原本是 _dt.date.today()，date 对象没有 hour/minute →
+        # 只要调用方不显式传 now_hm（16:30 刷新链就是这样调的）就整体抛
+        # 'datetime.date' object has no attribute 'hour'，自愈从来没真正生效过（返回 ok=False）。
+        now = _dt.datetime.now()
+        today = now.date()
         end8 = today8 or today.strftime("%Y%m%d")
         start8 = (today - _dt.timedelta(days=int(lookback_days))).strftime("%Y%m%d")
-        _hm = now_hm if now_hm is not None else (today.hour * 100 + today.minute)
+        _hm = now_hm if now_hm is not None else (now.hour * 100 + now.minute)
         # 已收盘（≥15:30）时把"今天"也算进目标日，供 16:30 收盘后刷新链当天落库
         days = [d for d in (trade_days(start8, end8) or []) if d < end8 or (_hm >= 1530 and d == end8)]
         missing = [d for d in days if not max_before or d > max_before]

@@ -62,3 +62,22 @@ def test_after_close_includes_today(monkeypatch):
     monkeypatch.setattr(MB, "backfill", lambda s8, e8, **kw: (seen.update({"days": kw.get("days")}), {"ok": True, "rows": 5550})[1])
     r = MB.ensure_fresh(today8="20260915", now_hm=1630)
     assert r["missing"] == ["20260915"] and seen["days"] == ["20260915"]
+
+
+def test_default_clock_path_does_not_crash(monkeypatch):
+    """回归（2026-09-16 生产事故）：不传 now_hm 时必须走系统时钟。
+
+    原来这里用 _dt.date.today() 再取 .hour → date 对象没有 hour/minute，
+    只要调用方不显式传 now_hm 就整体抛 "datetime.date object has no attribute hour"。
+    16:30 收盘刷新链（jobs/refresh_index_daily.py → ensure_fresh(quiet=False)）恰好不传 now_hm，
+    所以「PG 日线底座自愈」从上线起每天都是 ok=False、一天都没真正补过。
+    """
+    monkeypatch.delenv("WOLF_MKT_BARS_AUTOSYNC", raising=False)
+    monkeypatch.setattr(MB, "coverage", lambda: {"d1": "20260911"})
+    monkeypatch.setattr(MB, "trade_days", lambda a, b: ["20260911", "20260914", "20260915", "20260916"])
+    seen = {}
+    monkeypatch.setattr(MB, "backfill",
+                        lambda s8, e8, **kw: (seen.update({"days": kw.get("days")}), {"ok": True, "rows": 5550})[1])
+    r = MB.ensure_fresh(today8="20260915")                 # 不传 now_hm → 走系统时钟
+    assert "error" not in r and r.get("ok") is True, r     # 修复前：{"ok": False, "error": "...no attribute hour"}
+    assert "20260914" in r["missing"] and seen["days"] == r["missing"]
