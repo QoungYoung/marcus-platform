@@ -205,7 +205,9 @@ class RelayShim:
         self.as_of = str(as_of)
         self._real_fn = real_fn            # ⚠️ 必须是**打补丁之前**的原函数，否则会自递归
         self.n_local = self.n_remote = self.n_dropped = self.n_err = 0
+        self._td_cache = None
         self.first_err = ""
+        self.offline_calls = {}
 
     def _conn(self):
         import sqlite3
@@ -213,13 +215,41 @@ class RelayShim:
         return c
 
     def _real_relay_items(self, api_name, fields, params):
-        """真实 relay（用打补丁前保存的原函数；**不能**再走模块属性，否则自递归）。"""
+        """真实 relay（用打补丁前保存的原函数；**不能**再走模块属性，否则自递归）。
+
+        `BT_RELAY_OFFLINE=1`：未本地覆盖的接口**直接返回空**（不联网）——回测里"联网取数"既慢
+        又可能引入未来数据；置 1 后把这些接口名计数并在收尾打印，便于逐个判断要不要本地补齐。
+        """
+        if str(os.getenv("BT_RELAY_OFFLINE", "0")).strip() in ("1", "true", "yes"):
+            self.offline_calls[api_name] = self.offline_calls.get(api_name, 0) + 1
+            return [], []
         if self._real_fn is None:
             return [], []
         return self._real_fn(api_name, fields=fields, **params)
 
+    def _trade_days(self):
+        if not hasattr(self, "_td_cache") or self._td_cache is None:
+            self._td_cache = [r[0] for r in self._conn().execute(
+                "SELECT DISTINCT trade_date FROM bars ORDER BY trade_date")]
+        return self._td_cache
+
     def relay_items(self, api_name: str, fields: str = "", **params):
         f = [x.strip() for x in str(fields or "").split(",") if x.strip()]
+        # ⚠️ `trade_cal` 必须本地服务 + **空窗口兜底**：生产有脚本把窗口起点写死（如 20260601），
+        #    钉到更早日期时窗口为空 → 那些脚本拿到 0 个交易日 → 直接 KeyError（实测 stock_confirm_judge）。
+        if api_name == "trade_cal":
+            _s = str(params.get("start_date") or "19000101")
+            _e = min(str(params.get("end_date") or self.as_of), self.as_of)
+            _days = [d for d in self._trade_days() if _s <= d <= _e]
+            if not _days and _s > _e:
+                import datetime as _d3
+                _a = _d3.datetime(int(self.as_of[:4]), int(self.as_of[4:6]), int(self.as_of[6:8]))
+                _s2 = (_a - _d3.timedelta(days=200)).strftime("%Y%m%d")
+                _days = [d for d in self._trade_days() if _s2 <= d <= _e]
+                print("[shim] trade_cal 窗口为空(%s→%s) → 回测兜底 %s→%s（%d 个交易日）"
+                      % (_s, _e, _s2, _e, len(_days)), file=sys.stderr)
+            self.n_local += 1
+            return (fields or "cal_date,is_open"), [[d, 1] for d in _days]
         if api_name == "daily" and params.get("ts_code"):
             cols = [c for c in f if c in ("ts_code", "trade_date", "open", "high", "low", "close",
                                           "pre_close", "pct_chg", "vol", "amount", "total_mv", "turnover_rate")]
@@ -231,6 +261,19 @@ class RelayShim:
             rows = self._conn().execute(
                 "SELECT %s FROM bars WHERE ts_code=? AND trade_date BETWEEN ? AND ? ORDER BY trade_date"
                 % ",".join(cols), (str(params["ts_code"]), s, e)).fetchall()
+            return cols, [list(r) for r in rows]
+        # ⚠️ **整市场按日**（`daily` + 只给 trade_date，不给 ts_code）：`stock_confirm_judge._fetch_market`
+        #    就是这么取的（fields="ts_code,trade_date,close,vol"），旧版 shim 只支持"按 ts_code"→ 落到远端，
+        #    远端返回结构不符 → 生产脚本 `KeyError: 'd'` → 确认域为空 → pathA 无票 → 布腿 0 条。
+        if api_name == "daily" and params.get("trade_date") and not params.get("ts_code"):
+            cols = [c for c in f if c in ("ts_code", "trade_date", "open", "high", "low", "close",
+                                          "pre_close", "pct_chg", "vol", "amount", "total_mv", "turnover_rate")]
+            if not cols:
+                cols = ["ts_code", "trade_date", "close", "vol"]
+            d = min(str(params["trade_date"]), self.as_of)
+            self.n_local += 1
+            rows = self._conn().execute(
+                "SELECT %s FROM bars WHERE trade_date=? ORDER BY ts_code" % ",".join(cols), (d,)).fetchall()
             return cols, [list(r) for r in rows]
         if api_name == "daily_basic" and params.get("trade_date"):
             d = min(str(params["trade_date"]), self.as_of)

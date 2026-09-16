@@ -1,0 +1,10 @@
+# -*- coding: utf-8 -*-
+"""`vnpy.trader.event` 事件名常量替身。"""
+EVENT_CONTRACT = "eContract"
+EVENT_TICK = "eTick"
+EVENT_ORDER = "eOrder"
+EVENT_TRADE = "eTrade"
+EVENT_ACCOUNT = "eAccount"
+EVENT_POSITION = "ePosition"
+EVENT_LOG = "eLog"
+EVENT_TIMER = "eTimer"
