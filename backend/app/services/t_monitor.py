@@ -1618,6 +1618,18 @@ class TMonitor:
                         res["filled"] += 1
         except Exception as e:
             print(f"[TMonitor] 每日条件补生成失败: {e}")
+        # 2026-09-16（用户拍板）：底仓 floor 盘前一次性认账——历史卖超的标的 floor 会永久大于持仓，
+        # 使卖腿推导量恒 0（实测 588170/512480/002409）。新口径在"floor > 可卖−100"时把锚重标为
+        # 可卖×ratio 并留痕，此后只随新增买入增长（不会被卖出一笔笔啃掉）。见 t_base_floor 模块头。
+        try:
+            from app.services.t_base_floor import maintain as _bf_maintain
+            _bf = _bf_maintain(accounts=tuple(_position_accounts()), persist=True)
+            res["floor_checked"] = _bf.get("checked", 0)
+            if _bf.get("rebased") or _bf.get("reset"):
+                print(f"[TMonitor] 底仓 floor 认账: rebase={_bf.get('rebased')} reset={_bf.get('reset')}")
+                print(f"[TMonitor] 底仓 floor 快照: {_bf.get('floors')}")
+        except Exception as e:
+            print(f"[TMonitor] 底仓 floor 认账失败（不影响其它维护）: {type(e).__name__}: {str(e)[:80]}")
         print(f"[TMonitor] 每日维护: 归档{res['expired']}条, 补生成{res['filled']}条")
         return res
 

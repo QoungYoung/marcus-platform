@@ -83,16 +83,20 @@ def _get_hold_shares(account: str, symbol: str) -> int:
         db.close()
 
 
-def _t_floor_shares(symbol: str, account: str = "stock") -> int:
-    """做T标的保留底仓股数：账户存在当日 active 做T监控条件 → 保留 100 股（狼大铁律：底仓不卖）；
-    非做T标的不拦截（返回 0）。"""
+def _t_floor_shares(symbol: str, account: str = "stock", volume: Optional[int] = None) -> int:
+    """做T标的保留底仓股数：账户存在当日 active 做T监控条件 → 保留底仓（狼大铁律：底仓不卖）；
+    非做T标的不拦截（返回 0）。
+
+    volume = 当前可卖持仓，透传给 base_floor_shares —— 新口径（2026-09-16）要靠它判断
+    "floor 是否已把 T 仓锁死"（floor > 可卖 − 100 时一次性认账重标），不传则内部自查。
+    """
     try:
         from app.services.t_db import list_active_conditions
         conds = list_active_conditions(symbol=symbol, account_id=account)
         if not conds:
             return 0
         from app.services.t_gateway import base_floor_shares
-        return base_floor_shares(account, symbol)
+        return base_floor_shares(account, symbol, volume=volume)
     except Exception:
         return 0
 
@@ -125,9 +129,9 @@ def execute_trade(trade: TradeRequest, request: Request):
         else:
             # 做T标的底仓保护（狼大铁律：底仓不卖）——Pi/任何调用方卖出做T标的，
             # 最多卖 T仓（持仓-100），持仓<=100 时拒绝卖出，避免清掉做T底仓。
-            floor = _t_floor_shares(trade.symbol, trade.account)
+            hold = _get_hold_shares(trade.account, trade.symbol)
+            floor = _t_floor_shares(trade.symbol, trade.account, volume=hold)
             if floor > 0:
-                hold = _get_hold_shares(trade.account, trade.symbol)
                 max_sell = max(hold - floor, 0)
                 if trade.volume > max_sell:
                     direction = "卖出"

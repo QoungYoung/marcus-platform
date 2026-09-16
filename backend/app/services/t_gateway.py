@@ -65,12 +65,24 @@ def _cum_buy_volume(account_id: str, symbol: str) -> Optional[int]:
 
 
 def base_floor_shares(account_id: str, symbol: str, volume: Optional[int] = None) -> int:
-    """底仓保留下限(狼大'底仓不动/T出半') = 累计未void买入 × T_BASE_KEEP_RATIO(默认0.5), 下限100股。
+    """底仓保留下限(狼大'底仓不动/T出半')。
 
-    2026-09-07 修复(588170 连卖超卖): 底仓锚定【累计买入量】而非【当前持仓】——
-    旧实现用当前持仓×0.5, 每卖一次持仓变小→floor 跟着变小→T仓'复活'→继续卖, 把底仓侵蚀到 100;
-    现在卖出不缩小累计买入→floor 固定, 卖腿 max_sell=当前净持仓−floor, T仓卖完即止。
+    **2026-09-16 口径升级（用户拍板）**：委托 `app.services.t_base_floor`——锚仍是「累计未void买入」
+    （卖出不动锚，保留 2026-09-07 防 588170 连卖超卖的原始意图），但补齐两点：
+      ① **一次性认账(rebasing)**：当 floor > 可卖 − 100 股（T 仓被锁死）时，把该标的的锚重标为
+         「可卖 × ratio」并留痕；此后 floor 只随**新增买入**增长，卖出不动它 → 既解锁、又不被啃掉。
+         依据：2026-09-16 实测 SH588170(持仓23200/累计买入109000)、SH512480(1300/8000)、
+         SZ002409(200/400) 的卖腿推导量恒 0；而反过来"floor 跟持仓走"会几何侵蚀底仓（09-07 已证否）。
+      ② **分档 ratio**：按浪型 operation 取档（build 2/3 / t_only·side 1/2 / defense 1/3 / exit 0），
+         依据狼大 2026-01-17「主升趋势就75%以上…调整就50% 有风险就30 下跌趋势就不做」。
+    开关 `T_BASE_FLOOR_REBASE=0` 退回旧口径；新口径内部异常时本函数也回退旧实现（不改变可用性）。
     无成交流水(外部同步仓)时回退 volume 动态 / 旧覆盖 / 100。"""
+    try:
+        from app.services.t_base_floor import base_floor_shares as _impl
+        return _impl(account_id, symbol, volume=volume,
+                     override=T_BASE_FLOOR_OVERRIDES.get(symbol))
+    except Exception as e:
+        print(f"[t-gate] 底仓新口径失败，回退旧实现: {type(e).__name__}: {str(e)[:90]}")
     keep = float(os.getenv("T_BASE_KEEP_RATIO", "0.5"))
     base = _cum_buy_volume(account_id, symbol)
     if base and int(base) > 0:
