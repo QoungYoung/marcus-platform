@@ -264,7 +264,8 @@ def main() -> int:
     ap.add_argument("--root", default=os.path.join(bt_env.DATA, "_bt_year"))
     ap.add_argument("--bars-db", default=os.path.join(bt_env.DATA, "_bt_full", "bars.sqlite"))
     ap.add_argument("--account", default="")
-    ap.add_argument("--rough", action="store_true", help="只出粗估预览")
+    ap.add_argument("--rough", action="store_true", help="只出粗估预览（不显示正式口径）")
+    ap.add_argument("--no-rough", action="store_true", help="只出正式口径（不附粗估对照）")
     ap.add_argument("--initial", type=float, default=250000.0, help="粗估：初始资金")
     ap.add_argument("--budget", type=float, default=25000.0, help="粗估：单笔预算（生产试仓档 ≈ 2.5 万/笔）")
     ap.add_argument("--entry", default="same_day_close", choices=["same_day_close", "next_open"],
@@ -274,10 +275,45 @@ def main() -> int:
     acc = a.account
     if not acc:
         cands = sorted(glob.glob(os.path.join(a.root, "_summary", "account_*.json")))
-        acc = cands[0] if cands else ""
-    if acc and os.path.exists(acc) and not a.rough:
-        return formal_report(acc)
+        # 优先 hold（与"粗估上限"口径同族，便于对照）
+        acc = next((c for c in cands if "hold" in os.path.basename(c)), cands[0] if cands else "")
+    if a.rough:
+        return rough_report(a.root, a.bars_db, initial=a.initial, budget=a.budget, entry_mode=a.entry)
+    if acc and os.path.exists(acc):
+        rc = formal_report(acc)
+        if not a.no_rough:
+            print("\n" + "─" * 72)
+            print("（对照）下面是**粗估上限**口径：假设每笔腿当天都成交、一次建满仓")
+            rough_report(a.root, a.bars_db, initial=a.initial, budget=a.budget, entry_mode=a.entry)
+            _compare_block(a.root, acc)
+        return rc
     return rough_report(a.root, a.bars_db, initial=a.initial, budget=a.budget, entry_mode=a.entry)
+
+
+def _compare_block(root: str, acc_json: str):
+    """正式 vs 粗估上限的关键差异：腿数 / 成交数 / 成交率（口径是否"假设都成交"）。"""
+    try:
+        d = json.load(open(acc_json, encoding="utf-8"))
+        s = d.get("summary") or {}
+        legs = load_legs(root)
+        # ⚠️ 两侧窗口必须对齐：正式账户只覆盖 run.days，粗估腿可能是**全量**（跑批还在推进）
+        win = set(d.get("run", {}).get("days") or [])
+        if win:
+            legs = {k: v for k, v in legs.items() if k in win}
+        n_leg = sum(len(v) for v in legs.values())
+        n_sym = len({(k, x["symbol"]) for k, v in legs.items() for x in v})
+        n_sym = len({(k, x["symbol"]) for k, v in legs.items() for x in v})
+        print("\n== 口径对照（关键差异）")
+        print("   腿（计划）：%d 笔（%d 个 标的×日）" % (n_leg, n_sym))
+        print("   正式成交：%d 笔（成交率 %.0f%% 相对标的×日）   ← 触发条件的稀疏性"
+              % (s.get("n_buy", 0), 100.0 * (s.get("n_buy", 0) / max(n_sym, 1))))
+        print("   正式收益：%+.2f%%（初始 %.0f → 净值 %.2f）"
+              % (s.get("return_pct", 0), d["run"].get("initial", 0), s.get("final_equity", 0)))
+        print("   粗估上限：假设上述 %d 个标的×日全部成交（因此必然比正式收益乐观）" % n_sym)
+        print("   窗口：两端对齐到 %s → %s（跑批推进后请重跑 `run_formal_incremental.sh` 让正式口径跟上）"
+              % (win and min(win) or "-", win and max(win) or "-"))
+    except Exception as e:
+        print("（对照计算失败：%s）" % str(e)[:80])
 
 
 if __name__ == "__main__":
