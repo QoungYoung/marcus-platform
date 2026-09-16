@@ -118,6 +118,33 @@ def _days_between(a8: Optional[str], b8: Optional[str]) -> Optional[int]:
         return None
 
 
+_PREV_TD_CACHE: Dict[str, Optional[str]] = {}
+
+
+def _prev_trade_day(d8: str) -> Optional[str]:
+    """d8 之前最近一个**已收盘**交易日 —— 波浪判定的数据日（as_of）正常就等于它。
+
+    为什么是"上一交易日"而不是 d8：`apps/main_line/wave_agent.py` 08:10 跑，
+    `_ensure_index_fresh()` 的注释写得很清楚「确保指数日线到最近收盘，**wave 判定 date=昨日**」。
+    所以盘前 08:25 / 盘后 19:45 两个对象里 as_of=上一交易日都是**正常**的——
+    2026-09-16 实测：wave_state.json 写于 09-16 08:11、内部 date='2026-09-15'。
+    只有 as_of **早于**上一交易日，才说明 08:10 判浪没跑成/失败。
+
+    复用 wolf_eod.prev_trade_day（同一交易日历口径 + 工作日回退）；取不到 → None
+    （此时**不做**陈旧判断，宁可少告警也不要每天误报）；按日缓存避免重复取日历。
+    """
+    if d8 in _PREV_TD_CACHE:
+        return _PREV_TD_CACHE[d8]
+    v: Optional[str] = None
+    try:
+        from app.services.wolf_eod import prev_trade_day
+        v = prev_trade_day(d8)
+    except Exception:
+        v = None
+    _PREV_TD_CACHE[d8] = v
+    return v
+
+
 def _load_wave(d8: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """读波浪状态 + 来源元信息（**这是 2026-09-16 修的新鲜度缺陷的落点**）。
 
@@ -144,7 +171,7 @@ def _load_wave(d8: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
         as_of = _norm_date8(w.get("date") or w.get("as_of"))
         return w, {"path": p, "file": "wave_state.json", "present": True, "kind": "latest",
                    "mtime": int(os.path.getmtime(p)) if os.path.isfile(p) else None,
-                   "as_of": as_of, "stale_days": _days_between(as_of, d8)}
+                   "as_of": as_of, "stale_days": None}
     return None, {"path": os.path.join(data_dir(), "wave_state.json"), "file": "wave_state.json",
                   "present": False, "kind": "none", "mtime": None, "as_of": None, "stale_days": None}
 
@@ -311,6 +338,10 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
                                     "stale_days": None}
     else:
         wave, wave_src = _load_wave(d8)
+    # 新鲜度 = as_of 与「d8 之前最近一个已收盘交易日」的差距（0=正常，见 _prev_trade_day 注释）
+    wave_src["expected_as_of"] = _prev_trade_day(d8)
+    _sd = _days_between(wave_src.get("as_of"), wave_src.get("expected_as_of"))
+    wave_src["stale_days"] = max(0, _sd) if _sd is not None else None
     picks = picks if picks is not None else _read_json("stock_confirm_result.json", d8)
     gates = gates if gates is not None else _gates_state()
     l2 = _l2(wave, wave_src)
@@ -350,13 +381,15 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
         if kind in ("latest", "dated"):
             sd = wsrc.get("stale_days")
             as_of = wsrc.get("as_of")
+            exp = wsrc.get("expected_as_of")
             if as_of is None:
                 warns.append("波浪状态文件 %s 没有 date 字段 → **无法判定新鲜度**，L2 档位按最新判浪执行"
                              % wsrc.get("file"))
             elif isinstance(sd, int) and sd > 0:
-                stale.append("wave(as_of=%s, 陈旧%d天)" % (as_of, sd))
-                warns.append("波浪状态不是当日（as_of=%s，对象日 %s，陈旧 %d 天）→ L2 档位可能是**旧口径**，"
-                             "只按预设条件执行、不据此加仓（他「判据先于成交」）" % (as_of, d8, sd))
+                stale.append("wave(as_of=%s, 应为%s, 陈旧%d天)" % (as_of, exp, sd))
+                warns.append("波浪状态的数据日 %s 早于最近已收盘交易日 %s（陈旧 %d 天）→ 08:10 判浪"
+                             "**可能没跑成/失败**，L2 档位是旧口径：只按预设条件执行、不据此加仓"
+                             % (as_of, exp, sd))
     except Exception:
         pass
     obj = {"date": d8, "warnings": warns, "stale": stale,
