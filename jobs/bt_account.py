@@ -35,6 +35,9 @@ import argparse
 import json
 import os
 import sys
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import bt_env  # noqa: E402
 
 sys.path[:0] = ["/app", "/app/backend", "/app/jobs"]
 
@@ -121,6 +124,22 @@ class Account:
             self.pos.pop(sym, None)
         return {"fill_price": px, "amount": amount, "fee": fee}
 
+    def to_dict(self):
+        return {"cash": self.cash, "commission": self.commission, "realized": self.realized,
+                "pos": {k: {"vol": v["vol"], "cost": v["cost"], "lots": [list(x) for x in v["lots"]]}
+                        for k, v in self.pos.items()}}
+
+    @classmethod
+    def from_dict(cls, d, initial, fee_buy, fee_sell):
+        a = cls(initial, fee_buy, fee_sell)
+        a.cash = float(d.get("cash", initial))
+        a.commission = float(d.get("commission") or 0.0)
+        a.realized = float(d.get("realized") or 0.0)
+        for k, v in (d.get("pos") or {}).items():
+            a.pos[k] = {"vol": int(v.get("vol") or 0), "cost": float(v.get("cost") or 0.0),
+                        "lots": [(str(x[0]), int(x[1])) for x in (v.get("lots") or [])]}
+        return a
+
     def nav(self, day: str, closes: dict) -> float:
         mv = 0.0
         for sym, p in self.pos.items():
@@ -181,15 +200,17 @@ def main() -> int:
     ap.add_argument("--dip-tol", type=float, default=0.005)
     ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
     ap.add_argument("--out", default="")
+    ap.add_argument("--resume", action="store_true",
+                    help="续跑：读 <out 同目录>/account_state_<mode>.json，只处理 last_day 之后的新交易日，"
+                         "跑完写回（重复跑=秒回，适合接在跑批后面自动增量）")
+    ap.add_argument("--state", default="", help="状态文件路径（默认 <out>/account_state_<mode>.json）")
     a = ap.parse_args()
     pack = a.pack or os.path.join(a.root, "pack")
 
     import sqlite3
-    sys.path.insert(0, "/app/jobs")
+    sys.path.insert(0, bt_env.JOBS)
     import bt_tape
 
-    fee_b, fee_s, prof = fee_rates()
-    acct = Account(a.initial, fee_b, fee_s)
     sq = sqlite3.connect(a.bars_db)
     days = sorted(d for d in os.listdir(a.root) if len(d) == 8 and d.isdigit())
     if a.start:
@@ -197,8 +218,35 @@ def main() -> int:
     if a.end:
         days = [d for d in days if d <= a.end]
 
-    curve, trades, errs = [], [], []
-    theme_agg, type_agg, over5 = {}, {}, 0
+    # ── 续跑状态（--resume）：状态文件逐日落盘，只处理 last_day 之后的新交易日 ──
+    _state_path = a.state or os.path.join(os.path.dirname(os.path.abspath(a.out or "x")),
+                                          "account_state_%s.json" % a.mode)
+    _st = {}
+    if a.resume and os.path.exists(_state_path):
+        try:
+            _st = json.load(open(_state_path, encoding="utf-8")) or {}
+        except Exception:
+            _st = {}
+    fee_b, fee_s, prof = fee_rates()
+    if _st.get("last_day"):
+        acct = Account.from_dict(_st.get("account") or {}, a.initial, fee_b, fee_s)
+        curve = list(_st.get("curve") or [])
+        trades = list(_st.get("trades") or [])
+        theme_agg = dict(_st.get("by_theme") or {})
+        type_agg = dict(_st.get("by_leg_type") or {})
+        over5 = int(_st.get("over5") or 0)
+        days = [d for d in days if d > _st["last_day"]]
+        print("[acct] 续跑：已处理到 %s（%d 天 / %d 笔成交）→ 本次只算 %d 个新交易日"
+              % (_st["last_day"], len(curve), len(trades), len(days)), flush=True)
+        if not days:
+            print("[acct] 没有新交易日 → 直接退出", flush=True)
+            return 0
+    else:
+        acct = Account(a.initial, fee_b, fee_s)
+        curve, trades, theme_agg, type_agg = [], [], {}, {}
+        over5 = 0
+    errs = []
+    pending_buys, bought, blocked = [], [], {}
 
     for day in days:
         buys, sells = load_legs(a.root, day)
@@ -224,7 +272,72 @@ def main() -> int:
                 events.append({"time": t["time"], "symbol": sym, "kind": t.get("kind"),
                                "price": float(t["price"]), "theme": leg["theme"], "type": leg["type"],
                                "side": "buy"})
-        if a.mode == "leg":
+        # ── 出场层（--mode leg，且 --exits=1 默认开）：逐 bar 评估生产卖侧规则 ──
+        if a.mode == "leg" and str(os.getenv("BT_EXITS", "1")).strip() in ("1", "true", "yes"):
+            import bt_exits as EX
+            _done = {}
+            _t_sold = {}
+            for _sym in list(acct.pos.keys()):
+                try:
+                    _bars = bt_tape.load_m5(pack, _sym)
+                except Exception:
+                    continue
+                _all = sorted([b for _dd in sorted(_bars) for b in _bars[_dd]], key=lambda b: b["time"])
+                _day_bars = [b for b in _all if str(b["time"])[:10].replace("-", "") == day]
+                if not _day_bars:
+                    continue
+                _prev = [b for b in _all if str(b["time"])[:10].replace("-", "") < day]
+                _daily = bt_tape.load_daily(pack, _sym, a.bars_db)
+                _cost = float(acct.pos[_sym]["cost"])
+                _sup = EX.support_level(_sym, _daily, day, cur=float(_day_bars[0]["close"]))
+                _streak = 0
+                _bd = ""
+                try:
+                    _lots = acct.pos[_sym].get("lots") or []
+                    _bd = min(str(x[0]) for x in _lots) if _lots else ""
+                except Exception:
+                    _bd = ""
+                for _i in range(3, len(_day_bars)):
+                    _hits = EX.exits_for_bar(_sym, _day_bars[:_i + 1], day, _cost, _daily, _prev,
+                                             "t_only", _sup, _streak, buy_date=_bd)
+                    if not _hits:
+                        continue
+                    _kind, _why = _hits[0]                      # 生产按优先级取第一条
+                    if _done.get((_sym, _kind, day)):
+                        continue
+                    _px = float(_day_bars[_i]["close"])
+                    # ── 买侧信号：正T回补（stock 账户上的 T 循环闭合）──
+                    if _kind == "wolf_zheng_t_buy":
+                        _done[(_sym, _kind, day)] = True
+                        _tqty = int(_t_sold.get(_sym, 0))
+                        _want = _tqty if _tqty > 0 else int(min(a.order_budget, acct.cash * 0.98) / max(_px, 0.01) / 100) * 100
+                        _want = int(min(_want, int(acct.cash * 0.98 / max(_px, 0.01) / 100) * 100))
+                        if _want >= 100:
+                            _rb = acct.buy(_sym, _px, _want, day)
+                            if _rb:
+                                trades.append({"day": day, "time": str(_day_bars[_i]["time"]), "symbol": _sym,
+                                               "side": "buy", "price": _px, "vol": _want,
+                                               "fee": round(_rb["fee"], 2), "kind": _kind,
+                                               "theme": "", "type": _kind, "why": _why})
+                                _t_sold[_sym] = max(0, _tqty - _want)
+                        continue
+                    _frac = EX._FRAC_OVERRIDE.pop(_kind, None) or EX.EXIT_FRACTION.get(_kind, 0.5)
+                    _avail = acct.available(_sym, day)
+                    _vol = int(_avail * _frac / 100) * 100
+                    if _vol <= 0:
+                        continue
+                    _cost0 = float(acct.pos[_sym]["cost"])
+                    _r = acct.sell(_sym, _px, _vol, day)
+                    _done[(_sym, _kind, day)] = True
+                    if _r:
+                        _t_sold[_sym] = int(_t_sold.get(_sym, 0)) + int(_vol)
+                        trades.append({"day": day, "time": str(_day_bars[_i]["time"]), "symbol": _sym,
+                                       "side": "sell", "price": _px, "vol": _vol, "fee": round(_r["fee"], 2),
+                                       "cost": round(_cost0, 3), "pnl": round((_px - _cost0) * _vol - _r["fee"], 2),
+                                       "kind": _kind, "theme": "", "type": _kind, "why": _why})
+                if _sym not in acct.pos:
+                    continue
+        if a.mode == "leg" and False:
             for leg in sells:
                 sym = leg["symbol"]
                 if sym not in acct.pos:
@@ -298,6 +411,16 @@ def main() -> int:
         print("[acct] %s 当日成交%d 持仓%d 净值%.2f 现金%.2f"
               % (day, len([t for t in trades if t["day"] == day]), len(acct.pos),
                  curve[-1]["equity"], acct.cash), flush=True)
+        # ── 逐日落盘（续跑/中断续算都靠它）──
+        try:
+            _tmp = _state_path + ".tmp"
+            with open(_tmp, "w", encoding="utf-8") as _f:
+                json.dump({"mode": a.mode, "initial": a.initial, "last_day": day,
+                           "account": acct.to_dict(), "curve": curve, "trades": trades,
+                           "by_theme": theme_agg, "by_leg_type": type_agg}, _f, ensure_ascii=False)
+            os.replace(_tmp, _state_path)
+        except Exception as _e:
+            print("[acct] 状态落盘失败: %s" % str(_e)[:80], flush=True)
 
     for t in trades:
         for agg, key in ((theme_agg, t["theme"] or "(无主题)"), (type_agg, t["type"] or "(未知腿型)")):

@@ -92,6 +92,9 @@ def main() -> int:
                     help="逐日任务登记表（时代检查；缺失则不拦）")
     ap.add_argument("--state-from-producers", action="store_true",
                     help="反事实模式：state 由生产者按 as-of 数据算（不要求生产历史快照）；与 --no-era-gating 一起用")
+    ap.add_argument("--formal", action="store_true",
+                    help="每天布完腿后**就地**跑正式口径（拉当天分钟 → 打包 → 账户层续跑 hold/leg）："
+                         "跑批落地即增量，无需事后手动补跑")
     ap.add_argument("--no-era-gating", action="store_true",
                     help="关掉时代检查：**全年反事实**跑法（用现行完整代码跑所有交易日，不再问"
                          "\"当天生产有没有这条链\"）。对齐生产时不要开。")
@@ -197,6 +200,36 @@ def main() -> int:
             rc_arm, dta = run(_arm_cmd,
                               os.path.join(a.out, "arm_%s.log" % d8), timeout=2400)
             entry["steps"]["arm_0920"] = {"rc": rc_arm, "s": round(dta, 1)}
+        # ③b **正式口径就地增量**（--formal）：当天腿 → 拉分钟 → 打包 → 账户层续跑
+        _formal_legs = []
+        for _fn in ("legs_switch.jsonl", "legs.jsonl"):
+            _p2 = os.path.join(sb, _fn)
+            if os.path.exists(_p2):
+                for _ln in open(_p2, encoding="utf-8"):
+                    _ln = _ln.strip()
+                    if _ln:
+                        try:
+                            _formal_legs.append(json.loads(_ln))
+                        except Exception:
+                            pass
+        if a.formal:
+            _syms = sorted({l.get("symbol") for l in _formal_legs if l.get("symbol")})
+            _pack = os.path.join(a.root, "pack")
+            if _syms:
+                run([sys.executable, bt_env.jobs_file("bt_fetch_mins.py"), "--symbols", ",".join(_syms),
+                     "--days", d8, "--freq", "5min", "--out", os.path.join(DATA, "_bt_full", "mins"),
+                     "--index", ""], os.path.join(a.out, "fetchmins_%s.log" % d8), timeout=1800)
+                run([sys.executable, bt_env.jobs_file("bt_pack_mins.py"),
+                     "--mins", os.path.join(DATA, "_bt_full", "mins"), "--pack", _pack,
+                     "--bars-db", a.bars_db], os.path.join(a.out, "pack_%s.log" % d8), timeout=1800)
+                for _m in ("hold", "leg"):
+                    run([sys.executable, bt_env.jobs_file("bt_account.py"), "--root", a.root, "--pack", _pack,
+                         "--mode", _m, "--resume", "--bars-db", a.bars_db,
+                         "--out", os.path.join(a.out, "account_%s.json" % _m)],
+                        os.path.join(a.out, "acct_%s_%s.log" % (_m, d8)), timeout=3600)
+                entry["steps"]["formal"] = {"symbols": len(_syms), "modes": ["hold", "leg"]}
+                print("[days] %s 正式口径已增量更新（%d 个标的）" % (d8, len(_syms)), flush=True)
+
         # ④ 汇总当日腿
         legs = []
         for fn, src in (("legs_switch.jsonl", "switch_0818"), ("legs.jsonl", "arm_0920")):

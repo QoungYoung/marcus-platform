@@ -30,13 +30,19 @@ def to_ts(sym: str) -> str:
     return (s[2:8] + "." + s[:2]) if s[:2] in ("SH", "SZ") else s
 
 
+# ⚠️ 同一进程内记住"stk_mins 不可用"（本机实测：promax 恒返回 `minute_data_pending`）：
+#    否则每个标的都要先重试 3 次（sleep 2+4+6=12s）再走兜底 → 500 个标的要多花 ~1.7 小时。
+_SKIP_STK_MINS = {"flag": False}
+
+
 def fetch(ts_code: str, freq: str, day: str, tries: int = 3):
     """先 `stk_mins`（promax，历史全）；失败再退本地 ClickHouse `a_share_mins`
     （列序不同：ts_code,trade_time,freq,open,high,low,close,vol,amount —— 必须显式对齐，
     实测数据与 stk_mins 同源、逐 bar 一致）。"""
     import tushare_relay as R
     err = ""
-    for i in range(tries):
+    _tries = 1 if _SKIP_STK_MINS["flag"] else tries
+    for i in range(_tries):
         try:
             flds, items = R.relay_items(
                 "stk_mins", fields="ts_code,trade_time,open,high,low,close,vol,amount",
@@ -45,7 +51,10 @@ def fetch(ts_code: str, freq: str, day: str, tries: int = 3):
                 return items
         except Exception as e:
             err = str(e)[:90]
-        time.sleep(2 + 2 * i)
+            if "minute_data_pending" in err or "全部数据源失败" in err:
+                _SKIP_STK_MINS["flag"] = True     # 本进程后续不再浪费时间重试
+                break
+        time.sleep(1 + i)
     try:
         flds, items = R.relay_items("a_share_mins", ts_code=ts_code, freq=freq.upper(),
                                     start_date="%s-%s-%s 00:00:00" % (day[:4], day[4:6], day[6:8]),
