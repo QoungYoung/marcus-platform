@@ -865,6 +865,7 @@ class MarcusVNPyExecutor:
             'cost': total_cost
         }
         self._log_trade(trade_record)
+        self._enrich_trade_record(order_id, symbol, '买入', price, volume, reason)
 
         # 推送 QQ 通知
         self._notify_buy(symbol, price, volume, reason, total_cost)
@@ -934,6 +935,7 @@ class MarcusVNPyExecutor:
         
         # 记录交易结果用于连续亏损追踪
         self.record_trade_result(symbol, profit)
+        self._enrich_trade_record(order_id, symbol, '卖出', price, volume, reason, profit)
         
         # 推送 QQ 通知
         self._notify_sell(symbol, price, volume, reason, profit, avg_cost)
@@ -1052,6 +1054,92 @@ class MarcusVNPyExecutor:
             import logging
             logging.getLogger(__name__).warning(f"[MarcusTrade] QQ通知发送失败: {e}")
     
+    def _enrich_trade_record(self, order_id: str, symbol: str, direction: str,
+                             price: float, volume: int, reason: str,
+                             profit: float = None) -> None:
+        """补齐 paper_trades 的 reason / profit 两列（后台线程，不阻塞下单路径）。
+
+        背景：VN.PY 桥接路径的成交由 `vnpy_listeners.TradeEventListener` 异步 INSERT，
+        它只写 orderid/价格/数量，**profit 恒 0、reason 恒空**；而 engine 路径
+        （apps/paper-trading/paper_engine.py）写全。同一账户两条写入路径口径不一致。
+
+        影响面（paper_trades.profit 是**权威口径**）：
+          · t_gateway._realized_today() 当日已实现盈亏 = SUM(profit)
+          · wolf_profit_cushion 利润垫、t_base_floor 等
+        空值会让这些统计系统性低估（2026-09-16 三笔卖出即 +1600.95 被记成 0）。
+
+        实现约束：
+          · 只 UPDATE 已存在的行、绝不 INSERT —— 监听器是唯一写入方，
+            这里补写不会与它抢写产生重复行；
+          · 监听器异步落库，故带重试等待该行出现；
+          · reason/profit 均为「仅在为空/零时填充」，已写入的值（engine 路径）不被覆盖。
+        """
+        if not order_id:
+            return
+        bare = order_id.split(".", 1)[1] if order_id.startswith("PAPER.") else order_id
+        args = (direction, symbol, price, float(volume), reason or "", profit, order_id, bare)
+        try:
+            import threading
+            threading.Thread(
+                target=self._enrich_trade_record_sync, args=args, daemon=True,
+                name=f"enrich-trade-{bare[-6:]}",
+            ).start()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[MarcusTrade] 成交补写线程启动失败: {e}")
+
+    _ENRICH_RETRIES = 12       # 监听器异步写库，最多等 ~3s
+    _ENRICH_INTERVAL = 0.25
+
+    def _enrich_trade_record_sync(self, direction: str, symbol: str, price: float,
+                                  volume: float, reason: str, profit: float,
+                                  order_id: str, bare_order_id: str) -> None:
+        import time
+        import logging
+        _log = logging.getLogger(__name__)
+
+        # 卖出：补 reason + profit；买入：只补 reason（买入无已实现盈亏）
+        set_sql = "SET reason = CASE WHEN COALESCE(reason, '') = '' THEN %s ELSE reason END"
+        if direction == "卖出" and profit is not None:
+            set_sql += ", profit = CASE WHEN COALESCE(profit, 0) = 0 THEN %s ELSE profit END"
+        where_sql = (
+            " WHERE orderid IN (%s, %s) AND account_id = %s AND symbol = %s "
+            "AND direction = ANY(%s) AND price = %s AND volume = %s"
+        )
+        params = [reason]
+        if direction == "卖出" and profit is not None:
+            params.append(round(float(profit), 4))
+        params += [order_id, bare_order_id, self.account_id, symbol,
+                   ['买入', 'buy'] if direction == "买入" else ['卖出', 'sell'],
+                   price, int(volume)]
+
+        for attempt in range(self._ENRICH_RETRIES):
+            conn = None
+            try:
+                conn = self._get_pg_conn()
+                if conn is None:
+                    return
+                cur = conn.cursor()
+                cur.execute("UPDATE paper_trades " + set_sql + where_sql, tuple(params))
+                changed = cur.rowcount
+                if not conn.autocommit:
+                    conn.commit()
+                cur.close()
+                if changed:
+                    _log.info(f"[MarcusTrade] 已补齐 paper_trades reason/profit: {symbol} {order_id}")
+                    return
+            except Exception as e:
+                _log.debug(f"[MarcusTrade] 成交补写失败(第{attempt + 1}次): {e}")
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            time.sleep(self._ENRICH_INTERVAL)
+
+        _log.warning(f"[MarcusTrade] ⚠️ paper_trades 补写超时未命中行: {symbol} {order_id}")
+
     def _calc_profit(self, symbol: str, sell_price: float, volume: int) -> float:
         """计算卖出盈亏 (简化版)"""
         # 从数据库获取真实持仓成本
