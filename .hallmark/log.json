@@ -2,10 +2,11 @@
   {
     "date": "2026-09-16",
     "macrostructure": "Workbench（多窗格研究台：心跳条 + 净值/回撤 + 每日盈亏 + 持仓/个股 + 归因 + 诊断 + 覆盖率）",
-    "theme": "Terminal（深色 · 等宽/几何无衬线 · phosphor cyan accent）· 自带 tokens.css",
-    "theme_axes": "dark / mono-grotesk / cyan",
+    "theme": "Blue Archive (user-requested) · accent #1189F9 · sky-glow #a7d8ea · 浅色玻璃拟态卡（半透明白 + 蓝调阴影）+ 圆角几何 · 自带 tokens.css",
+    "theme_axes": "light-glass / geometric-rounded / brand-blue (#1189F9)",
     "enrichment": "canvas 手绘（净值+回撤带、每日盈亏柱、K 线+B/S 标注）— Tier-A 自绘，无外部资源",
-    "brief": "回测监控看板（tone: technical · 单人研究台）：心跳刷新进度、每日盈亏与净值曲线、持仓历史、个股 K 线 B/S 点、分腿型/分主题归因、被拦原因诊断、覆盖率与口径；只读服务 jobs/bt_dashboard.py + 单文件页面 jobs/bt_dashboard.html"
+    "brief": "回测监控看板（tone: technical · 单人研究台）：心跳刷新进度、每日盈亏与净值曲线、持仓历史、个股 K 线 B/S 点、分腿型/分主题归因、被拦原因诊断、覆盖率与口径；只读服务 jobs/bt_dashboard.py + 单文件页面 jobs/bt_dashboard.html；改版（同日迭代）：① 配色改 Blue Archive（用户指定，覆盖 diversification）② 字号整体上调（正文 16px / 表格 14px / 元信息 ≥13px / KPI 走 --text-kpi）③ 离线 GSAP 动效（/vendor/gsap.min.js 只读转发 frontend/node_modules，无 CDN；KPI 数字滚动、四主面板 stagger、净值曲线 clip-path 扫出 + 回撤带淡入、盈亏柱生长、存活灯呼吸、弹窗 scale、K 线蜡烛生长；reduced-motion 与 GSAP 缺席均降级）④ 持仓/成交/归因/个股/当日各处补 stock_pool 名称⑤ 服务端新增「旧产物 vs 本次运行」判定，避免跑批重启后统计混用",
+    "note": "配色由用户明确指定，覆盖 theme-diversification 轮换规则（不换主题，按 Blue Archive DNA 统一全站）"
   },
   {
     "date": "2026-08-12",

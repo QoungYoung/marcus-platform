@@ -1,90 +1,109 @@
-/* Hallmark · macrostructure: Workbench · tone: technical · anchor hue: phosphor cyan (oklch 82% 0.135 195) */
+/* Hallmark · macrostructure: Workbench · tone: technical · theme: Blue Archive (user-requested) · anchor hue: #1189F9 */
 /* Hallmark · pre-emit critique: P5 H4 E5 S5 R4 V4 */
-/* Hallmark · theme: Terminal (dark · monospace-led · geometric sans body) · nav: N8 terminal command bar · footer: Ft2 inline single rule
- * Hallmark · enrichment: none (typography only) · audience: 单人研究台 · brief: 生产代码回测监控看板
- * Hallmark · accent note: cyan-phosphor instead of phosphor-green so the accent never collides with the
- *             A-share semantic pair (涨/买 = 红, 跌/卖 = 绿) used by every chart and table on the page.
- * Hallmark · contrast: body ink 94% L on paper 17% L ≫ 4.5:1 · muted 70% L on paper-2 ≫ 4.5:1 ·
- *             accent-ink 16% L on accent 82% L ≫ 4.5:1 · focus ring 90% L ≥ 3:1 on every surface in use.
+/* Hallmark · 配色由用户明确指定（Blue Archive DNA：accent #1189F9 · sky-glow #a7d8ea · 浅色玻璃拟态卡 + 蓝调阴影
+ *            + 圆角几何 + 干净留白），**覆盖 theme-diversification 轮换规则**：用户明确要求回到 Blue Archive，
+ *            本次不再按 catalog 轮换，并按该 DNA 统一全站配色。
+ * Hallmark · nav: N8 terminal command bar（顶部 `$` 提示符 + 复制命令）· footer: Ft2 inline single rule
+ * Hallmark · enrichment: none（自绘 canvas 图表，无外部资源）· audience: 单人研究台 · brief: 生产代码回测监控看板
+ * Hallmark · 数值口径：颜色以 sRGB hex 写出（用户给定值 + 项目既有 DNA 值），注释里给出等价 oklch；
+ *            用 hex 也让 canvas 取色不依赖浏览器对 oklch 的解析（getComputedStyle 读到的即 #RRGGBB）。
+ * Hallmark · 对比度（WCAG 实测，格式「文字色 / 玻璃卡面 #f7fbff」—「/ 页面底 #eaf3fb」）：
+ *            --color-ink 13.10 — 11.67 ✓ · --color-ink-2 9.15 — 8.15 ✓ · --color-muted 5.30 — 4.73 ✓
+ *            --color-accent-strong 5.19 — 4.63 ✓（**唯一允许承载文字/链接的蓝**）
+ *            --color-up 5.05 — 4.50 ✓ · --color-down 4.94 — 4.40 ✓ · --color-warn 5.01 — 4.46 ✓
+ *            --color-error 5.44 ✓ · --color-ok 5.33 ✓ · --color-info 5.23 ✓ · 白字 @ accent-strong 5.19 ✓
+ *            仅作**图形/装饰**用途（禁止用于文字，注释已标明）：
+ *            --color-accent #1189F9 3.52:1（线/描边/焦点环/填充）· --color-chart-buy #e5484d 3.91:1
+ *            --color-chart-sell #27a06b 3.32:1 · --color-chart-band #c98a12 2.95:1 · --color-graphic #a8cdee 1.66:1
+ *            --color-led-idle #94a9bd 2.42:1（灰灯另加 --color-rule-2 描边环保证可辨识）
  *
- * This file is the ONLY place in the deliverable where a raw colour, font stack, size, duration or
- * radius value may appear. jobs/bt_dashboard.html references these tokens by name only
- * (`var(--color-*)`, `var(--font-*)`, `var(--space-*)`, `var(--text-*)`, `var(--ease-*)`,
- * `var(--dur-*)`, `var(--radius-*)`, `var(--rule-*)`). Canvas painters read the same tokens at
- * runtime through getComputedStyle, so no painting code inlines a colour either.
+ * 本文件是本交付物中**唯一**允许出现裸颜色/字体/尺寸/时长/圆角的地方。jobs/bt_dashboard.html
+ * 只按名字引用 token（var(--color-*) / var(--font-*) / var(--space-*) / var(--text-*) /
+ * var(--ease-*) / var(--dur-*) / var(--radius-*) / var(--rule-*)）；canvas 画布同样在运行时用
+ * getComputedStyle 读同一批 token，因此绘图代码里也没有裸值。
  */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  /* ── surfaces ─────────────────────────────────────────────────────────── */
-  --color-void: oklch(13% 0.012 220);
-  --color-paper: oklch(17% 0.014 220);
-  --color-paper-2: oklch(20.5% 0.016 220);
-  --color-paper-3: oklch(24% 0.018 220);
-  --color-inset: oklch(14.5% 0.013 220);
-  --color-scrim: oklch(10% 0.01 220);
+  /* ── 页面底与玻璃面 ───────────────────────────────────────────────────── */
+  --color-void: #eaf3fb;                      /* oklch(96.0% 0.014 244.7) 页面底色 */
+  --grad-page: radial-gradient(1100px 520px at 10% -6%, #dceffc 0%, rgba(234, 243, 251, 0) 62%),
+               radial-gradient(900px 480px at 96% 4%, #e6f6ff 0%, rgba(234, 243, 251, 0) 58%),
+               linear-gradient(180deg, #f3f9ff 0%, #e8f2fb 100%);
+  --color-paper: rgba(255, 255, 255, 0.74);   /* 玻璃拟态卡面（半透明白） */
+  --color-paper-solid: #ffffff;               /* 不支持 backdrop-filter 时的实底回退 */
+  --color-paper-2: rgba(255, 255, 255, 0.92); /* 抬升面：表头 / 吸顶栏 / 弹窗头 */
+  --color-paper-3: #f2f8ff;                   /* oklch(97.7% 0.011 252.1) 悬停面 */
+  --color-inset: #f6fbff;                     /* oklch(98.5% 0.008 241.7) 卡内嵌块 */
+  --color-scrim: rgba(9, 38, 66, 0.38);       /* dialog backdrop */
+  --glass-blur: saturate(140%) blur(10px);
 
-  /* ── text ─────────────────────────────────────────────────────────────── */
-  --color-ink: oklch(94% 0.015 200);
-  --color-ink-2: oklch(84% 0.018 200);
-  --color-muted: oklch(70% 0.02 210);
-  /* --color-graphic 仅用于**非文本**图形（网格线、坐标轴刻度线、装饰字形）：
-     它在 paper 上的对比度约 4.0:1，低于正文 4.5:1 门槛，禁止用于任何文字。 */
-  --color-graphic: oklch(58% 0.02 215);
+  /* ── 文字 ─────────────────────────────────────────────────────────────── */
+  --color-ink: #16324f;                       /* oklch(31.1% 0.063 251.2) Blue Archive 主文字 */
+  --color-ink-2: #2b4a6b;                     /* oklch(40.1% 0.067 251.2) 次级文字 */
+  --color-muted: #4f6a87;                     /* 辅助元信息（≥13px 才可用）5.30:1 @ 玻璃卡面 */
+  --color-graphic: #a8cdee;                   /* ⚠ 装饰专用（网格线/刻度线/空态图标/排序点）1.66:1，禁止承载文字 */
 
-  /* ── rules & grid ─────────────────────────────────────────────────────── */
-  --color-rule: oklch(28% 0.02 220);
-  --color-rule-2: oklch(37% 0.022 220);
-  --color-grid: oklch(24.5% 0.018 220);
+  /* ── 描边与网格 ───────────────────────────────────────────────────────── */
+  --color-rule: #d4e7f9;                      /* oklch(91.9% 0.032 246.7) Blue Archive 网格色 */
+  --color-rule-2: #b9d7f2;                    /* oklch(86.6% 0.049 245.6) */
+  --color-grid: #dcebfa;                      /* 图表网格（装饰） */
+  --color-glass-line: rgba(17, 137, 249, 0.16);
 
-  /* ── accent (phosphor cyan) ───────────────────────────────────────────── */
-  --color-accent: oklch(82% 0.135 195);
-  --color-accent-2: oklch(68% 0.125 200);
-  --color-accent-ink: oklch(16% 0.03 210);
-  --color-accent-dim: oklch(42% 0.07 200);
-  --color-accent-wash: oklch(23% 0.04 200);
+  /* ── accent（唯一品牌蓝 #1189F9）──────────────────────────────────────── */
+  --color-accent: #1189F9;                    /* ⚠ 线/描边/焦点环/填充专用（3.52:1，不作小字文字色） */
+  --color-accent-strong: #0b6dc9;             /* ✅ 承载文字/链接的深蓝 5.19:1 */
+  --color-accent-2: #4aa8fb;                  /* oklch(71.2% 0.150 248.3) 次级蓝（进度条/柱） */
+  --color-accent-dim: #8ec6fb;                /* oklch(80.8% 0.095 247.7) 量能柱 */
+  --color-accent-wash: rgba(17, 137, 249, 0.10);
+  --color-accent-ink: #ffffff;                /* 只与 --color-accent-strong 搭配使用 */
+  --color-sky-glow: #a7d8ea;                  /* oklch(85.4% 0.057 222.4) Blue Archive sky-glow（光晕/描边） */
 
-  /* ── semantic (A-share convention: 涨/买 = 红, 跌/卖 = 绿) ─────────────── */
-  --color-up: oklch(70% 0.185 22);
-  --color-down: oklch(79% 0.16 158);
-  --color-warn: oklch(83% 0.145 85);
-  --color-error: oklch(73% 0.19 12);
-  --color-ok: oklch(82% 0.15 158);
-  --color-info: oklch(80% 0.09 250);
-  --color-focus: oklch(90% 0.16 195);
+  /* ── 涨跌（中国市场习惯：红涨绿跌；已压低饱和度/明度差，与蓝调协调）─── */
+  --color-up: #c93a3f;                        /* oklch(56.2% 0.180 23.3) 文字级红（≥4.5:1） */
+  --color-down: #1f7f5c;                      /* oklch(53.3% 0.103 163.7) 文字级绿（≥4.5:1） */
 
-  /* ── status lamps ─────────────────────────────────────────────────────── */
-  --color-led-live: oklch(82% 0.16 158);
-  --color-led-idle: oklch(70% 0.02 210);
-  --color-led-stale: oklch(83% 0.145 85);
-  --color-led-dead: oklch(73% 0.19 12);
+  /* ── 状态色（均可承载文字）───────────────────────────────────────────── */
+  --color-warn: #a35f00;                      /* oklch(55.1% 0.125 63.9) */
+  --color-error: #c0392b;                     /* oklch(54.3% 0.174 29.7) */
+  --color-ok: #157a52;                        /* oklch(51.5% 0.109 160.6) */
+  --color-info: #1d6fb8;                      /* oklch(53.2% 0.137 250.4) */
+  --color-focus: #0b6dc9;                     /* 焦点环（对卡面与页面底均 ≥3:1） */
 
-  /* ── data-viz aliases (charts read these, never a raw colour) ─────────── */
+  /* ── 状态灯（图形；灰灯靠描边环可辨识）──────────────────────────────── */
+  --color-led-live: #16a34a;                  /* oklch(62.7% 0.170 149.2) 跑批存活 */
+  --color-led-idle: #94a9bd;                  /* ⚠ 图形专用 2.42:1：心跳静止的灰灯 */
+  --color-led-stale: #d97706;                 /* oklch(66.6% 0.157 58.3) */
+  --color-led-dead: #dc2626;                  /* oklch(57.7% 0.215 27.3) 未运行 */
+
+  /* ── 数据可视化（canvas 直接读这些；图形用途）────────────────────────── */
   --color-chart-line: var(--color-accent);
-  --color-chart-line-2: var(--color-up);
-  --color-chart-band: var(--color-warn);
-  --color-chart-grid: var(--color-grid);
-  --color-chart-axis: var(--color-muted);
-  --color-chart-frame: var(--color-rule-2);
-  --color-chart-crosshair: var(--color-ink-2);
-  --color-chart-vol: var(--color-accent-dim);
-  --color-chart-cash: var(--color-info);
+  --color-chart-line-2: #c93a3f;              /* 有成交交易日的打点 = 文字级红 */
+  --color-chart-wash: rgba(17, 137, 249, 0.12);
+  --color-chart-band: #c98a12;                /* ⚠ 图形专用（回撤带线，2.95:1） */
+  --color-chart-band-wash: rgba(201, 138, 18, 0.14);
+  --color-chart-grid: #dcebfa;
+  --color-chart-axis: #4f6a87;                /* 轴标签文字（≥4.5:1） */
+  --color-chart-frame: #b9d7f2;
+  --color-chart-crosshair: #2b4a6b;
+  --color-chart-vol: #8ec6fb;
+  --color-chart-cash: #1d6fb8;
   --color-chart-realized: var(--color-down);
   --color-chart-float: var(--color-up);
   --color-chart-exec: var(--color-accent);
-  --color-chart-blocked: var(--color-warn);
-  --color-chart-buy: var(--color-up);
-  --color-chart-sell: var(--color-down);
+  --color-chart-blocked: #d97706;
+  --color-chart-buy: #e5484d;                 /* ⚠ 图形专用（蜡烛/柱，3.91:1） */
+  --color-chart-sell: #27a06b;                /* ⚠ 图形专用（蜡烛/柱，3.32:1） */
 
-  /* ── fonts (system stacks only — no CDN, no webfont) ──────────────────── */
+  /* ── 字体（只用系统字体栈，无 CDN / 无外链字体）─────────────────────── */
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
-  --font-display: var(--font-mono);
+  --font-display: var(--font-sans);
   --font-body: var(--font-sans);
   --font-num: var(--font-mono);
 
-  /* ── space (4pt scale) ────────────────────────────────────────────────── */
+  /* ── 间距（4pt 阶）──────────────────────────────────────────────────── */
   --space-3xs: 2px;
   --space-2xs: 4px;
   --space-xs: 8px;
@@ -95,21 +114,23 @@
   --space-2xl: 40px;
   --space-3xl: 56px;
 
-  /* ── type scale ───────────────────────────────────────────────────────── */
-  --text-2xs: 0.625rem;
-  --text-xs: 0.6875rem;
-  --text-sm: 0.75rem;
-  --text-base: 0.8125rem;
-  --text-md: 0.9375rem;
-  --text-lg: 1.0625rem;
-  --text-xl: 1.375rem;
-  --text-display: clamp(1.5rem, 1.15rem + 1.5vw, 2rem);
-  --leading-tight: 1.15;
-  --leading-base: 1.5;
-  --tracking-label: 0.08em;
+  /* ── 字号（整体上调：正文 16px / 表格 14px / 元信息最低 13px）────────── */
+  --text-2xs: 0.8125rem;                      /* 13px 辅助元信息（仅非关键信息） */
+  --text-xs: 0.875rem;                        /* 14px 表格单元格 / 按钮 / 提示 */
+  --text-sm: 0.9375rem;                       /* 15px 小标题 / 密集数据 */
+  --text-base: 1rem;                          /* 16px 正文基准 */
+  --text-md: 1.0625rem;                       /* 17px 面板标题 */
+  --text-lg: 1.1875rem;                       /* 19px 页面标题 */
+  --text-xl: 1.4375rem;                       /* 23px */
+  --text-kpi: clamp(1.375rem, 1.15rem + 1.1vw, 2rem);      /* 22→32px KPI 数值 */
+  --text-display: clamp(1.625rem, 1.3rem + 1.8vw, 2.5rem); /* 26→40px 大号数值 */
+  --chart-text: 0.75rem;                      /* 12px canvas 刻度/轴标签（绘图时按 rem 换算 px） */
+  --leading-tight: 1.2;
+  --leading-base: 1.55;
+  --tracking-label: 0.06em;
   --tracking-num: 0.01em;
 
-  /* ── motion ───────────────────────────────────────────────────────────── */
+  /* ── 动效 ─────────────────────────────────────────────────────────────── */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
@@ -118,22 +139,26 @@
   --dur-2: 200ms;
   --dur-3: 320ms;
   --dur-4: 600ms;
+  --dur-sweep: 900ms;                         /* 净值曲线扫出（≤0.9s） */
+  --dur-lamp: 1200ms;                         /* 存活灯呼吸周期（≤1.2s） */
 
-  /* ── radii & rules ────────────────────────────────────────────────────── */
+  /* ── 圆角与描边（圆角几何）──────────────────────────────────────────── */
   --radius-0: 0px;
-  --radius-1: 2px;
-  --radius-2: 4px;
-  --radius-3: 8px;
+  --radius-1: 6px;
+  --radius-2: 12px;
+  --radius-3: 18px;
   --radius-pill: 999px;
   --rule-1: 1px;
   --rule-2: 2px;
   --rule-3: 3px;
 
-  /* ── layout ───────────────────────────────────────────────────────────── */
+  /* ── 布局与阴影（蓝调阴影）──────────────────────────────────────────── */
   --layout-max: 1760px;
   --layout-pane-min: 21rem;
   --layout-hit: 44px;
   --layout-z-sticky: 20;
   --layout-z-dialog: 60;
-  --layout-shadow: 0 1px 0 var(--color-rule);
+  --shadow-card: 0 2px 10px rgba(17, 137, 249, 0.08);
+  --shadow-lift: 0 10px 26px rgba(17, 137, 249, 0.16);
+  --layout-shadow: var(--shadow-lift);
 }

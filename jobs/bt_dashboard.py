@@ -9,7 +9,8 @@
 拼成一个看板所需的快照：
 
   1. 本地 PG `paper_account_info / paper_trades / paper_positions / t_triggers / t_conditions`
-     （回测账户 `--account`，默认 `stock`）；
+     （回测账户 `--account`，默认 `stock`），以及 `stock_pool(ts_code, symbol, name)` 提供**标的名称**
+     （按 6 位代码映射；缺失给 null，绝不编造）；
   2. 逐日产物 `data/_bt_year/_summary/prod_<YYYYMMDD>.json`（**注意：里面的 triggers/trades
      是当天收盘时的全量快照**，本服务按 `id` 去重、并按「id 首次出现的那一天」归属到交易日）；
   3. 日线 `data/_bt_full/bars.sqlite`、分钟文件存在性 `data/_bt_full/mins/`、
@@ -22,6 +23,9 @@
 * **只读**：不写任何库、不写任何文件；PG 会话显式设为 `readonly=True`；sqlite 以
   `mode=ro` 打开；所有聚合都在内存里做；
 * 不执行任何跑批命令，页面只提供「复制监控命令」；
+* 唯一对外发送的**第三方静态文件**是 `GET /vendor/gsap.min.js`：直接从
+  `frontend/node_modules/gsap/dist/gsap.min.js` 只读转发（不复制、不改写 frontend/），
+  文件不存在时返回 404 → 页面自动降级为无动效且完全可用；
 * 缺失的字段一律给 `null`，绝不编造数值。
 
 启动
@@ -58,6 +62,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 DEFAULT_PG = "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+# 本机已装的 GSAP（离线自托管；只读转发，绝不改动 frontend/）
+GSAP_PATH = os.path.join(REPO, "frontend", "node_modules", "gsap", "dist", "gsap.min.js")
 BUY_FEE = 1.0 + 0.000396   # 买入：佣金 0.000086 + 过户 0.00001 + 其他 0.0003（见 backend/app/core/trading/backtest_paper.py）
 SELL_FEE = 1.0 - 0.000896  # 卖出：佣金 0.000086 + 印花税 0.0005 + 过户 0.00001 + 其他 0.0003
 
@@ -206,6 +212,7 @@ def scan_procs() -> list[dict]:
                 "kind": kind,
                 "day": m.group(1) if m else None,
                 "started_at": epoch_iso(started),
+                "started_epoch": started,
                 "cmdline": line[:400],
             }
         )
@@ -234,6 +241,8 @@ class Store:
         self._trig_by_id: dict[int, dict] = {}
         self._trig_by_day: dict[str, list[int]] = {}
         self._theme_pairs: dict[str, list[tuple[str, str]]] = {}
+        self._active_sig = None
+        self._active = None
         self._warn_theme_unmapped = 0
         self._last_rebuild = 0.0
 
@@ -246,9 +255,11 @@ class Store:
         self._pg = {}               # PG 查询结果（按 TTL 缓存）
         self._pg_at = 0.0
         self._pg_err = None
+        self._names: dict[str, str] = {}   # 6 位代码 → 名称（来自 PG stock_pool）
         self._bars_cache: dict[str, list[tuple[str, float]]] = {}
         self._bars_at = 0.0
         self._mins_stats = None
+        self._mins_key = None
         self._mins_sig = None
 
     # ── 逐日产物：增量解析 ────────────────────────────────────────────────
@@ -575,6 +586,7 @@ class Store:
             acc = None
             trades: list[dict] = []
             positions: list[dict] = []
+            names: dict[str, str] = {}
             err = None
             try:
                 conn = psycopg2.connect(self.pg_url, connect_timeout=4)
@@ -603,22 +615,89 @@ class Store:
                     )
                     for r in cur.fetchall():
                         positions.append(dict(r))
+                    # 标的名称：按 6 位代码建表（ts_code 形如 002587.SZ / 920139.BJ）
+                    cur.execute("SELECT ts_code, symbol, name FROM stock_pool ORDER BY ts_code")
+                    for r in cur.fetchall():
+                        code = (r.get("ts_code") or "").split(".")[0].strip()
+                        if not (len(code) == 6 and code.isdigit()):
+                            code = (r.get("symbol") or "").strip()
+                            code = code[-6:] if len(code) >= 6 else code
+                        if len(code) == 6 and code.isdigit() and r.get("name") and code not in names:
+                            names[code] = r["name"]
                 finally:
                     conn.close()
             except Exception as exc:
                 err = "%s: %s" % (type(exc).__name__, str(exc)[:220])
             self._pg = {"account": acc, "trades": trades, "positions": positions}
+            if names or not err:
+                self._names = names          # PG 失败时保留上一次的表，避免名称整片变 null
             self._pg_err = err
-            return {"account": acc, "trades": trades, "positions": positions, "error": err}
+            return {"account": acc, "trades": trades, "positions": positions, "error": err,
+                    "names": len(names)}
+
+    # ── 本次运行 vs 上一次遗留（跑批被重启时 _summary 里的旧 prod_*.json 会留下来）──
+    def active_view(self) -> dict:
+        """只用**当前这次跑批**产出的 prod_*.json 参与统计。
+
+        背景（实测踩到）：年跑被重启且 `--prod-reset-first` 重置了 PG，但 `_summary/` 里
+        上一次跑到 20260317 的旧产物还在。若不加区分，触发归属/覆盖率会把两次运行混在一起。
+
+        判定规则（按可信度排序，两条都写进 coverage 供人核对）：
+          A. 有活的 bt_days / bt_prod_run 进程 → 进程启动时刻之后写出的产物才算本次运行
+             （文件 mtime ≥ 启动时刻 − 5s）；更早的判为遗留。
+          B. 没有进程时退化为：若文件数明显多于日志里 `cut=` 行数（> +3），
+             则以日志的 last_completed 为界，只保留 ≤ 它的产物。
+        """
+        procs = scan_procs()
+        live = [p for p in procs if p["kind"] in ("bt_days", "bt_prod_run")]
+        starts = [p.get("started_epoch") for p in live if p.get("started_epoch")]
+        run_start = min(starts) if starts else None
+        log = self.log_info()
+        completed_count = log.get("completed_count") or 0
+        last_completed = log.get("last_completed")
+        sig = (tuple(self._days), run_start, completed_count, last_completed)
+        if self._active is not None and self._active_sig == sig:
+            return self._active
+
+        stale: list[str] = []
+        rule = "none"
+        if run_start:
+            rule = "proc-start"
+            stale = [d for d in self._days if (self._files[d]["_mtime"] or 0) < run_start - 5.0]
+        elif self._days and completed_count and len(self._days) > completed_count + 3 and last_completed:
+            rule = "log-last-completed"
+            stale = [d for d in self._days if d > last_completed]
+
+        stale_set = set(stale)
+        days = [d for d in self._days if d not in stale_set]
+        day_set = set(days)
+        trig_by_id = {i: t for i, t in self._trig_by_id.items() if t["day_compact"] in day_set}
+        trig_by_day = {d: [i for i in ids if i in trig_by_id] for d, ids in self._trig_by_day.items() if d in day_set}
+        day_meta = {d: m for d, m in self._day_meta.items() if d in day_set}
+        out = {"days": days, "day_set": day_set, "stale": stale, "rule": rule,
+               "run_start_epoch": run_start, "run_start_iso": epoch_iso(run_start),
+               "trig_by_id": trig_by_id, "trig_by_day": trig_by_day, "day_meta": day_meta,
+               "procs": procs, "live": live}
+        self._active, self._active_sig = out, sig
+        return out
+
+    def name_for(self, symbol: str | None) -> str | None:
+        """`SZ002587` → `奥拓电子`（来自 PG stock_pool；查不到返回 None，页面显示 —）。"""
+        if not symbol:
+            return None
+        code = symbol[2:] if SYMBOL_RE.match(symbol) else symbol
+        return self._names.get(code)
 
     # ── 分钟数据缺口（估算）───────────────────────────────────────────────
-    def mins_stats(self) -> dict:
+    def mins_stats(self, days: list[str] | None = None) -> dict:
+        days = list(days if days is not None else self._days)
+        key = tuple(days)
         with self._lock:
-            if self._mins_stats is not None:
+            if self._mins_stats is not None and self._mins_key == key:
                 return self._mins_stats
             armed_total = missing = 0
             missing_samples: list[str] = []
-            for day in self._days:
+            for day in days:
                 rec = self._files.get(day) or {}
                 for a in rec.get("armed") or []:
                     sym = a.get("symbol")
@@ -638,7 +717,7 @@ class Store:
                 "mins_dir": self.mins_dir,
                 "estimated": True,
             }
-            self._mins_stats = out
+            self._mins_stats, self._mins_key = out, key
             return out
 
     # ──────────────────────────────────────────────────────────────────────
@@ -647,16 +726,29 @@ class Store:
     def snapshot(self) -> dict:
         self.refresh()
         warnings: list[dict] = []
-        procs = scan_procs()
+        act = self.active_view()          # 只取本次运行产出的逐日产物（排除上一次遗留）
+        procs = act["procs"]
+        procs_live = act["live"]
+        active_days = act["days"]
+        day_meta = act["day_meta"]
+        trig_by_id = act["trig_by_id"]
+        trig_by_day = act["trig_by_day"]
         log = self.log_info()
         pg = self.pg_fetch()
-        procs_live = [p for p in procs if p["kind"] in ("bt_days", "bt_prod_run")]
+        if act["stale"]:
+            warnings.append({
+                "level": "warn",
+                "text": "检测到 %d 个上一次跑批遗留的逐日产物（判定规则 %s），已从触发归属/覆盖率/每日统计中排除：%s%s"
+                        % (len(act["stale"]), act["rule"],
+                           ", ".join(iso_day(d) for d in act["stale"][:6]),
+                           " 等" if len(act["stale"]) > 6 else ""),
+            })
 
         # ── 心跳 ────────────────────────────────────────────────────────────
         activity: list[tuple[str, float]] = []
         if log.get("mtime"):
             activity.append(("year_prod.log", log["mtime"]))
-        for day in self._days[-3:]:
+        for day in active_days[-3:]:
             mt = (self._files.get(day) or {}).get("_mtime")
             if mt:
                 activity.append(("prod_%s.json" % day, mt))
@@ -679,13 +771,13 @@ class Store:
         cal = self.calendar()
         run_start = log.get("run_start")
         run_end = log.get("run_end")
-        if not run_start and self._days:
-            run_start = self._days[0]
+        if not run_start and active_days:
+            run_start = active_days[0]
         if not run_end and cal:
             run_end = cal[-1]
         window = [d for d in cal if run_start and run_end and run_start <= d <= run_end]
         days_total = log.get("days_total") or (len(window) or None)
-        last_completed = log.get("last_completed") or (self._days[-1] if self._days else None)
+        last_completed = log.get("last_completed") or (active_days[-1] if active_days else None)
         days_done = len([d for d in window if last_completed and d <= last_completed]) or None
         started_day = log.get("last_started")
         prod_proc_day = next((p["day"] for p in procs_live if p["kind"] == "bt_prod_run" and p["day"]), None)
@@ -693,7 +785,7 @@ class Store:
         current_day = max(candidates) if candidates else None
 
         pace = None
-        mtimes = sorted((self._files[d]["_mtime"], d) for d in self._days if self._files.get(d))
+        mtimes = sorted((self._files[d]["_mtime"], d) for d in active_days if self._files.get(d))
         deltas = []
         for i in range(1, len(mtimes)):
             delta = mtimes[i][0] - mtimes[i - 1][0]
@@ -732,6 +824,8 @@ class Store:
 
         if not self._days:
             warnings.append({"level": "info", "text": "未发现逐日产物 data/_bt_year/_summary/prod_*.json —— 跑批尚未产出任何一天"})
+        elif not active_days:
+            warnings.append({"level": "warn", "text": "所有 prod_*.json 都被判定为上一次跑批的遗留产物，本次运行尚无产出"})
 
         # ── 账户 / 成交 / 持仓（PG）─────────────────────────────────────────
         acc = pg["account"]
@@ -745,8 +839,8 @@ class Store:
 
         # ── 净值重建（口径见页脚/覆盖率面板）───────────────────────────────
         symbols = sorted({t["symbol"] for t in trades_pg} | {p["symbol"] for p in pg["positions"]})
-        curve_start = run_start or (self._days[0] if self._days else None)
-        curve_end = last_completed or (self._days[-1] if self._days else None)
+        curve_start = run_start or (active_days[0] if active_days else None)
+        curve_end = last_completed or (active_days[-1] if active_days else None)
         # 曲线要覆盖「窗口内全部交易日」，并且必须含**进行中的那一天**：PG 里当天已有成交，
         # 若曲线停在昨天，重建现金与账户可用现金就不是同口径（差额会被当成误差）。
         pg_last_day = None
@@ -811,8 +905,8 @@ class Store:
                 })
                 buys = sum(1 for t in by_day.get(day, []) if t["direction"] == "买入")
                 sells = sum(1 for t in by_day.get(day, []) if t["direction"] != "买入")
-                tids = self._trig_by_day.get(day) or []
-                trig = [self._trig_by_id[i] for i in tids]
+                tids = trig_by_day.get(day) or []
+                trig = [trig_by_id[i] for i in tids]
                 executed = sum(1 for x in trig if x["status"] == "executed")
                 blocked = sum(1 for x in trig if x["status"] in ("blocked", "cancelled"))
                 daily.append({
@@ -820,9 +914,9 @@ class Store:
                     "pnl": round(equity - prev_equity, 2),
                     "buys": buys, "sells": sells,
                     "triggers": len(trig), "executed": executed, "blocked": blocked,
-                    "step_total": (self._day_meta.get(day) or {}).get("step_total"),
-                    "armed": (self._day_meta.get(day) or {}).get("armed"),
-                    "symbols": (self._day_meta.get(day) or {}).get("symbols"),
+                    "step_total": (day_meta.get(day) or {}).get("step_total"),
+                    "armed": (day_meta.get(day) or {}).get("armed"),
+                    "symbols": (day_meta.get(day) or {}).get("symbols"),
                     "partial": bool(in_progress_day and day >= in_progress_day),
                 })
                 prev_equity = equity
@@ -866,6 +960,7 @@ class Store:
                 held = len(idx) if idx else None
             positions.append({
                 "symbol": sym,
+                "name": self.name_for(sym),
                 "volume": volume,
                 "avg_price": round(avg, 4),
                 "last": last,
@@ -889,6 +984,7 @@ class Store:
             trades.append({
                 "id": t["id"],
                 "symbol": t["symbol"],
+                "name": self.name_for(t["symbol"]),
                 "side": "buy" if t["direction"] == "买入" else "sell",
                 "direction": t["direction"],
                 "price": float(t["price"]),
@@ -905,8 +1001,8 @@ class Store:
         trades.sort(key=lambda r: (r["day"] or "", r["id"]), reverse=True)
 
         # ── 触发（逐日产物去重 + 按 id 首次出现的交易日归属）────────────────
-        trigs_all = sorted(self._trig_by_id.values(), key=lambda r: r["id"])
-        trigs_out = [dict(t) for t in trigs_all[-400:]][::-1]
+        trigs_all = sorted(trig_by_id.values(), key=lambda r: r["id"])
+        trigs_out = [dict(t, name=self.name_for(t["symbol"])) for t in trigs_all[-400:]][::-1]
         blocked_counter: dict[str, dict] = {}
         for t in trigs_all:
             if t["status"] not in ("blocked", "cancelled"):
@@ -919,7 +1015,8 @@ class Store:
             if t["day_compact"] not in rec["days"]:
                 rec["days"].append(t["day_compact"])
             if len(rec["samples"]) < 5:
-                rec["samples"].append({"id": t["id"], "symbol": t["symbol"], "day": t["day"],
+                rec["samples"].append({"id": t["id"], "symbol": t["symbol"], "name": self.name_for(t["symbol"]),
+                                       "day": t["day"],
                                        "status": t["status"], "price": t["price"],
                                        "reason": (t["reason"] or "")[:160]})
         blocked_top = []
@@ -950,18 +1047,23 @@ class Store:
 
         by_kind = _agg(lambda t: t["kind"])
         by_theme = [{"name": r["name"], "n": r["n"], "pnl": r["pnl"]} for r in _agg(lambda t: t["theme"])]
-        by_symbol = [{"symbol": r["name"], "n": r["n"], "pnl": r["pnl"],
+        by_symbol = [{"symbol": r["name"], "name": self.name_for(r["name"]), "n": r["n"], "pnl": r["pnl"],
                       "amount": r["amount"], "theme": self.theme_for(r["name"], curve_end)}
                      for r in _agg(lambda t: t["symbol"])]
 
         # ── 覆盖率与口径 ────────────────────────────────────────────────────
         wave = self.wave_stats()
-        mins = self.mins_stats()
-        decision_blocked_days = [d for d, m in sorted(self._day_meta.items())
+        mins = self.mins_stats(active_days)
+        decision_blocked_days = [d for d, m in sorted(day_meta.items())
                                  if (m.get("decision") or {}).get("missing")
                                  or (m.get("decision") or {}).get("ok") is False]
         coverage = {
-            "prod_days": len(self._days),
+            "prod_days": len(active_days),
+            "prod_days_on_disk": len(self._days),
+            "stale_prod_days": len(act["stale"]),
+            "stale_prod_samples": [iso_day(d) for d in act["stale"][:10]],
+            "stale_rule": act["rule"],
+            "run_started_at": act["run_start_iso"],
             "wave_ok_days": wave.get("ok"),
             "wave_err_days": wave.get("err"),
             "wave_total_days": wave.get("total"),
@@ -969,7 +1071,8 @@ class Store:
             "decision_blocked_days": len(decision_blocked_days),
             "decision_blocked_samples": [iso_day(d) for d in decision_blocked_days[:8]],
             "minute_missing_pct": mins.get("missing_pct"),
-            "note": self._coverage_note(trades, wave, mins, procs_live, recon_delta, pg),
+            "note": self._coverage_note(trades, wave, mins, procs_live, recon_delta, pg,
+                                        stale_n=len(act["stale"]), rule=act["rule"]),
             "recon_delta": recon_delta,
             "account": self.account,
             "run_window": [iso_day(run_start), iso_day(run_end)],
@@ -1035,7 +1138,7 @@ class Store:
                 "bars_db": self.bars_db,
                 "mins_dir": self.mins_dir,
                 "log": self.log_path,
-                "sources": ["本地 PG paper_*/t_triggers", "_summary/prod_*.json", "_bt_full/bars.sqlite",
+                "sources": ["本地 PG paper_*/t_triggers/stock_pool", "_summary/prod_*.json", "_bt_full/bars.sqlite",
                             "_bt_full/mins/", "_summary/wave_backfill.json", ".dsh-tmp/wolfbt/logs/year_prod.log",
                             "/proc/*/cmdline"],
                 "generated_at": now_iso(),
@@ -1043,7 +1146,8 @@ class Store:
             },
         }
 
-    def _coverage_note(self, trades, wave, mins, procs, recon_delta, pg) -> str:
+    def _coverage_note(self, trades, wave, mins, procs, recon_delta, pg,
+                       stale_n: int = 0, rule: str = "none") -> str:
         parts = []
         parts.append("口径：生产链逐日重放（bt_days → bt_prod_run，LLM-off 版本）+ 本地 PG 落库；"
                      "账户 %s，起点 %.0f 元。" % (self.account, (pg.get("account") or {}).get("initial_capital") or 0.0))
@@ -1054,6 +1158,9 @@ class Store:
         parts.append("波浪层 %s/%s 天 ok；分钟缺口为**估算**（armed 标的 × 当日 5min 文件存在性）。"
                      % (wave.get("ok"), wave.get("total")))
         parts.append("沙箱复用：日志显示 seed 沙箱按日递增复用（cut 逐日前移），不是每天重建。")
+        if stale_n:
+            parts.append("⚠ 本次统计只用**当前这次跑批**的产物：判定规则 %s，已排除 %d 个上一次遗留的 prod_*.json。"
+                         % (rule, stale_n))
         if recon_delta is not None:
             parts.append("重建现金 vs 账户可用现金差 %.2f 元（费用模型口径差异）。" % recon_delta)
         parts.append("跑批进程：%s。" % ("、".join("%s(pid %d)" % (p["kind"], p["pid"]) for p in procs) if procs else "未发现"))
@@ -1064,33 +1171,37 @@ class Store:
     # ──────────────────────────────────────────────────────────────────────
     def symbol_detail(self, symbol: str) -> dict:
         self.refresh()
+        act = self.active_view()
         if not SYMBOL_RE.match(symbol or ""):
             return {"error": "symbol 形态应为 SH600977 / SZ000001 / BJ920139"}
         log = self.log_info()
-        last_completed = log.get("last_completed") or (self._days[-1] if self._days else None)
-        start = log.get("run_start") or (self._days[0] if self._days else None)
+        active_days = act["days"]
+        last_completed = log.get("last_completed") or (active_days[-1] if active_days else None)
+        start = log.get("run_start") or (active_days[0] if active_days else None)
         pg = self.pg_fetch()
         bars = self.bars_for(symbol, start, last_completed, 400) if (start and last_completed) else []
+        sym_name = self.name_for(symbol)
         trades = []
         for t in pg["trades"]:
             if t["symbol"] != symbol:
                 continue
             day = compact_day(t.get("trade_date"))
             trades.append({
-                "id": t["id"], "side": "buy" if t["direction"] == "买入" else "sell",
+                "id": t["id"], "symbol": symbol, "name": sym_name,
+                "side": "buy" if t["direction"] == "买入" else "sell",
                 "direction": t["direction"], "price": float(t["price"]), "volume": int(t["volume"]),
                 "amount": float(t.get("amount") or 0.0), "pnl": t.get("profit"),
                 "day": iso_day(day), "day_compact": day, "kind": parse_kind(t.get("reason")),
                 "reason": t.get("reason"), "created_at": t.get("created_at"),
             })
         trades.sort(key=lambda r: (r["day"] or "", r["id"]))
-        trigs = [dict(t) for t in self._trig_by_id.values() if t["symbol"] == symbol]
+        trigs = [dict(t, name=sym_name) for t in act["trig_by_id"].values() if t["symbol"] == symbol]
         trigs.sort(key=lambda r: r["id"])
         position = None
         for p in pg["positions"]:
             if p["symbol"] == symbol:
                 position = {
-                    "symbol": symbol, "volume": int(p.get("volume") or 0),
+                    "symbol": symbol, "name": sym_name, "volume": int(p.get("volume") or 0),
                     "avg_price": float(p.get("avg_price") or 0.0), "entry_date": iso_day(compact_day(p.get("entry_date"))),
                     "highest_price": p.get("highest_price"),
                 }
@@ -1123,7 +1234,7 @@ class Store:
                     conn.close()
                 latest = None
                 for r in rows:
-                    meta = self._trig_by_id.get(r["id"])
+                    meta = act["trig_by_id"].get(r["id"])
                     day = (meta or {}).get("day")
                     if day:
                         snap_days.append(day)
@@ -1150,6 +1261,7 @@ class Store:
         realized = round(sum(float(t["pnl"] or 0.0) for t in trades if t["side"] == "sell"), 2)
         return {
             "symbol": symbol,
+            "name": sym_name,
             "ts_code": to_ts_code(symbol),
             "theme": self.theme_for(symbol, last_completed),
             "window": [iso_day(start), iso_day(last_completed)],
@@ -1194,20 +1306,22 @@ class Store:
 
     def day_detail(self, day: str) -> dict:
         self.refresh()
+        act = self.active_view()
         d = compact_day(day)
         if not d:
             return {"error": "day 形态应为 20260302 或 2026-03-02"}
         rec = self._files.get(d)
-        meta = self._day_meta.get(d) or {}
+        meta = act["day_meta"].get(d) or {}
         log = self.log_info()
-        last_completed = log.get("last_completed") or (self._days[-1] if self._days else None)
+        active_days = act["days"]
+        last_completed = log.get("last_completed") or (active_days[-1] if active_days else None)
         pg = self.pg_fetch()
         trades = []
         for t in pg["trades"]:
             if compact_day(t.get("trade_date")) != d:
                 continue
             trades.append({
-                "id": t["id"], "symbol": t["symbol"],
+                "id": t["id"], "symbol": t["symbol"], "name": self.name_for(t["symbol"]),
                 "side": "buy" if t["direction"] == "买入" else "sell",
                 "price": float(t["price"]), "volume": int(t["volume"]),
                 "amount": float(t.get("amount") or 0.0), "pnl": t.get("profit"),
@@ -1215,8 +1329,8 @@ class Store:
                 "created_at": t.get("created_at"),
                 "theme": self.theme_for(t["symbol"], d),
             })
-        tids = self._trig_by_day.get(d) or []
-        trigs = [dict(self._trig_by_id[i]) for i in tids]
+        tids = act["trig_by_day"].get(d) or []
+        trigs = [dict(act["trig_by_id"][i], name=self.name_for(act["trig_by_id"][i]["symbol"])) for i in tids]
         trigs.sort(key=lambda r: r["id"])
         step = (rec or {}).get("step_secs") or {}
         step_rows = sorted(({"name": k, "sec": round(v, 2)} for k, v in step.items()),
@@ -1227,8 +1341,9 @@ class Store:
             "date": iso_day(d),
             "exists": rec is not None,
             "cut": (rec or {}).get("cut"),
-            "armed": (rec or {}).get("armed") or [],
-            "symbols": (rec or {}).get("symbols") or [],
+            "armed": [dict(a, name=self.name_for(a.get("symbol"))) for a in ((rec or {}).get("armed") or [])],
+            "symbols": [{"symbol": sym, "name": self.name_for(sym)}
+                        for sym in ((rec or {}).get("symbols") or [])],
             "trades": trades,
             "triggers": trigs,
             "counts": {
@@ -1267,11 +1382,11 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[bt_dashboard] %s - %s\n" % (self.address_string(), fmt % args))
 
     # ── helpers ───────────────────────────────────────────────────────────
-    def _send(self, body: bytes, ctype: str, status: int = 200):
+    def _send(self, body: bytes, ctype: str, status: int = 200, cache: str = "no-store"):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         if self.command != "HEAD":
@@ -1281,10 +1396,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send(json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"),
                    "application/json; charset=utf-8", status)
 
-    def _file(self, path: str, ctype: str):
+    def _file(self, path: str, ctype: str, cache: str = "no-store"):
         try:
             with open(path, "rb") as fh:
-                self._send(fh.read(), ctype)
+                self._send(fh.read(), ctype, cache=cache)
         except OSError as exc:
             self._json({"error": "读不到 %s: %s" % (os.path.basename(path), exc)}, 500)
 
@@ -1298,6 +1413,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(os.path.join(HERE, "bt_dashboard.html"), "text/html; charset=utf-8")
             if route == "/tokens.css":
                 return self._file(os.path.join(HERE, "tokens.css"), "text/css; charset=utf-8")
+            if route == "/vendor/gsap.min.js":
+                # 离线自托管：只读转发 frontend/node_modules 里的 GSAP（不改动 frontend/ 任何文件）
+                if not os.path.isfile(GSAP_PATH):
+                    return self._json({"error": "GSAP 未安装：%s 不存在（页面会自动降级为无动效）" % GSAP_PATH}, 404)
+                return self._file(GSAP_PATH, "application/javascript; charset=utf-8",
+                                  cache="public, max-age=3600")
             if route == "/api/snapshot":
                 return self._json(self.store.snapshot())
             if route == "/api/symbol":
