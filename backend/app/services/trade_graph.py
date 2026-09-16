@@ -79,6 +79,14 @@ class TradeState(TypedDict):
 # 辅助函数
 # ═══════════════════════════════════════════════════════════
 
+def _external_risk_on() -> bool:
+    """`external.*` 外部风险字段组/文案是否启用。**默认关**（2026-09-16 用户拍板"下掉"）：
+    该组无任何规则判据引用（t_conditions 里含 external 的表达式 = 0 条），其数据源是 ArkVol
+    （黄金坑接口），且它承载的提示词规则缺语料支撑。回退：`WOLF_EXTERNAL_RISK=1`。"""
+    import os as _os
+    return str(_os.getenv("WOLF_EXTERNAL_RISK", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _get_workspace() -> Path:
     try:
         from app.config import get_settings
@@ -381,7 +389,9 @@ def _get_regime_strategy(regime: str) -> str:
     if regime == "oscillation":
         return (
             "\n📊 **今日市场结构：🟡 震荡（日度指标，非月度regime）**\n"
-            "⚠️ 月度门控：短期层（动量/做T/短线）仅「趋势向上月」允许开新仓；**震荡日/震荡月短期层只做T不新开**。若 external.us_risk=true → 降科技仓位/暂停科技新开。\n"
+            "⚠️ 月度门控：短期层（动量/做T/短线）仅「趋势向上月」允许开新仓；**震荡日/震荡月短期层只做T不新开**。"
+            + ("若 external.us_risk=true → 降科技仓位/暂停科技新开。" if _external_risk_on() else "")
+            + "\n"
             "你必须严格遵循以下月度门控参数，不得使用趋势月策略：\n\n"
             "| 参数 | 🟡 震荡（当前） |\n"
             "|------|:------:|\n"

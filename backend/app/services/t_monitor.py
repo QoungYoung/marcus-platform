@@ -110,6 +110,42 @@ def _dip_shadow_record(symbol: str, prev_low: float, today_low: float) -> None:
         print("[TMonitor] dip 影子写盘失败: %s" % str(e)[:60])
 
 
+def _external_risk_enabled() -> bool:
+    """external.* 字段组是否采集。**默认关**（2026-09-16 用户拍板下掉）。
+
+    为什么下掉（审计证据）：
+      · **没有任何规则判据用它**——`t_conditions` 里含 `external` 的表达式 = 0 条；
+      · 唯一实质消费者是交易腿 agent 的提示词契约，而那条规则本身**缺语料支撑**
+        （`db/prompt_seeds.py` 该行无语料引用、参数总账里查不到、阈值 -1.0%/40/0.9 为硬编码）；
+      · 它的数据源是 ArkVol（黄金坑功能接口），为取一个字段把整个黄金坑状态计算
+        （18 指数 + 行业监控 + 5s deadline）拖进股票做T的每 bar 路径，并且实测能读到
+        **跨期快照**（1 月重放读到 as_of=2026-09-15）。
+    回退：置 `WOLF_EXTERNAL_RISK=1` 恢复采集（同时 `trade_graph` 的月度门控文案里那句也会恢复）。
+    """
+    return str(os.getenv("WOLF_EXTERNAL_RISK", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _external_snapshot_fields() -> Dict[str, Any]:
+    """`external.*` 字段组的取值。关闭时返回**与取数失败时同形**的默认值（字段仍在、恒不告警）。"""
+    if not _external_risk_enabled():
+        return {"us_risk": False, "us_risk_reason": "", "us_risk_score": 0,
+                "nasdaq_pct": 0.0, "sox_pct": 0.0, "gm_liquidity_gate": ""}
+    try:
+        from app.services.t_external_risk import external_risk_snapshot
+        _ext = external_risk_snapshot()
+        return {
+            "us_risk": bool(_ext.get("us_risk")),
+            "us_risk_reason": str(_ext.get("us_risk_reason") or ""),
+            "us_risk_score": int(_ext.get("us_risk_score") or 0),
+            "nasdaq_pct": (_ext.get("us_market") or {}).get("nasdaq", {}).get("pct", 0.0),
+            "sox_pct": (_ext.get("us_market") or {}).get("sox", {}).get("pct", 0.0),
+            "gm_liquidity_gate": (_ext.get("global_macro") or {}).get("liquidity_gate", ""),
+        }
+    except Exception:
+        return {"us_risk": False, "us_risk_reason": "", "us_risk_score": 0,
+                "nasdaq_pct": 0.0, "sox_pct": 0.0, "gm_liquidity_gate": ""}
+
+
 class TMonitor:
     """做T监控器：daemon 线程，30s 轮询 t_conditions，命中写 t_triggers。"""
 
@@ -2051,21 +2087,8 @@ class TMonitor:
             print(f"[TMonitor] 黄白线取数异常(忽略): {str(_hbe)[:80]}")
         # tech.*（技术指标：KDJ/MACD/RSI/MA，复用 get_realtime_indicators，带缓存）
         snapshot["tech"] = self._build_tech_snapshot(symbol, snapshot["quote"])
-        # external.*（外部风险：美股纳指/费半/美债10Y/全球宏观，TTL 缓存降级）
-        try:
-            from app.services.t_external_risk import external_risk_snapshot
-            _ext = external_risk_snapshot()
-            snapshot["external"] = {
-                "us_risk": bool(_ext.get("us_risk")),
-                "us_risk_reason": str(_ext.get("us_risk_reason") or ""),
-                "us_risk_score": int(_ext.get("us_risk_score") or 0),
-                "nasdaq_pct": (_ext.get("us_market") or {}).get("nasdaq", {}).get("pct", 0.0),
-                "sox_pct": (_ext.get("us_market") or {}).get("sox", {}).get("pct", 0.0),
-                "gm_liquidity_gate": (_ext.get("global_macro") or {}).get("liquidity_gate", ""),
-            }
-        except Exception:
-            snapshot["external"] = {"us_risk": False, "us_risk_reason": "", "us_risk_score": 0,
-                                    "nasdaq_pct": 0.0, "sox_pct": 0.0, "gm_liquidity_gate": ""}
+        # external.*（外部风险字段组）—— 2026-09-16 默认**不再采集**（用户拍板"下掉"）
+        snapshot["external"] = _external_snapshot_fields()
         return snapshot
 
     def _build_vol_price(self, q: Dict[str, Any], vol_ratio: float) -> Dict[str, Any]:
