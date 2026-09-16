@@ -234,7 +234,29 @@ def main() -> int:
                         except Exception:
                             pass
         if a.formal:
-            _syms = sorted({l.get("symbol") for l in _formal_legs if l.get("symbol")})
+            # ⚠️ 2026-09-16：拉分钟名单必须是**并集**——只拉"当天布腿标的"会漏掉
+            # 持仓票的离场腿（`_arm_stock_exit_legs` 布 vwap/support/high_sell）与当日 armed 条件标的
+            # → 那些标的没有当日 bars → `TMonitor._round` 里 `if not quote: continue` **静默跳过**
+            # → 离场层哑火、仓位冻结（实测 588 个标的日中 196 个缺分钟，占 33%）。
+            _symset = {l.get("symbol") for l in _formal_legs if l.get("symbol")}
+            try:
+                import psycopg2
+                _conn = psycopg2.connect(os.environ.get(
+                    "DATABASE_URL", "postgresql://marcus:marcus123@127.0.0.1:5432/marcus_trading"))
+                _cur = _conn.cursor()
+                _cur.execute("SELECT symbol FROM paper_positions WHERE account_id='stock' AND volume>0")
+                _held = {r[0] for r in _cur.fetchall()}
+                _cur.execute("SELECT DISTINCT symbol FROM t_conditions WHERE account_id='stock' "
+                             "AND status IN ('active','expired') AND trade_date >= %s", (cut,))
+                _conds = {r[0] for r in _cur.fetchall()}
+                _cur.close(); _conn.close()
+                _symset |= _held | _conds
+                print("[days] %s 拉分钟名单=腿%d ∪ 持仓%d ∪ 条件%d = %d"
+                      % (d8, len({l.get("symbol") for l in _formal_legs if l.get("symbol")}),
+                         len(_held), len(_conds), len(_symset)), flush=True)
+            except Exception as _se:
+                print("[days] %s ⚠️ 并集名单取持仓/条件失败（退化为仅腿）: %s" % (d8, str(_se)[:90]), flush=True)
+            _syms = sorted(x for x in _symset if x)
             _pack = os.path.join(a.root, "pack")
             if _syms:
                 run([sys.executable, bt_env.jobs_file("bt_fetch_mins.py"), "--symbols", ",".join(_syms),

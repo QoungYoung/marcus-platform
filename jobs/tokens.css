@@ -1,0 +1,139 @@
+/* Hallmark · macrostructure: Workbench · tone: technical · anchor hue: phosphor cyan (oklch 82% 0.135 195) */
+/* Hallmark · pre-emit critique: P5 H4 E5 S5 R4 V4 */
+/* Hallmark · theme: Terminal (dark · monospace-led · geometric sans body) · nav: N8 terminal command bar · footer: Ft2 inline single rule
+ * Hallmark · enrichment: none (typography only) · audience: 单人研究台 · brief: 生产代码回测监控看板
+ * Hallmark · accent note: cyan-phosphor instead of phosphor-green so the accent never collides with the
+ *             A-share semantic pair (涨/买 = 红, 跌/卖 = 绿) used by every chart and table on the page.
+ * Hallmark · contrast: body ink 94% L on paper 17% L ≫ 4.5:1 · muted 70% L on paper-2 ≫ 4.5:1 ·
+ *             accent-ink 16% L on accent 82% L ≫ 4.5:1 · focus ring 90% L ≥ 3:1 on every surface in use.
+ *
+ * This file is the ONLY place in the deliverable where a raw colour, font stack, size, duration or
+ * radius value may appear. jobs/bt_dashboard.html references these tokens by name only
+ * (`var(--color-*)`, `var(--font-*)`, `var(--space-*)`, `var(--text-*)`, `var(--ease-*)`,
+ * `var(--dur-*)`, `var(--radius-*)`, `var(--rule-*)`). Canvas painters read the same tokens at
+ * runtime through getComputedStyle, so no painting code inlines a colour either.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ── surfaces ─────────────────────────────────────────────────────────── */
+  --color-void: oklch(13% 0.012 220);
+  --color-paper: oklch(17% 0.014 220);
+  --color-paper-2: oklch(20.5% 0.016 220);
+  --color-paper-3: oklch(24% 0.018 220);
+  --color-inset: oklch(14.5% 0.013 220);
+  --color-scrim: oklch(10% 0.01 220);
+
+  /* ── text ─────────────────────────────────────────────────────────────── */
+  --color-ink: oklch(94% 0.015 200);
+  --color-ink-2: oklch(84% 0.018 200);
+  --color-muted: oklch(70% 0.02 210);
+  /* --color-graphic 仅用于**非文本**图形（网格线、坐标轴刻度线、装饰字形）：
+     它在 paper 上的对比度约 4.0:1，低于正文 4.5:1 门槛，禁止用于任何文字。 */
+  --color-graphic: oklch(58% 0.02 215);
+
+  /* ── rules & grid ─────────────────────────────────────────────────────── */
+  --color-rule: oklch(28% 0.02 220);
+  --color-rule-2: oklch(37% 0.022 220);
+  --color-grid: oklch(24.5% 0.018 220);
+
+  /* ── accent (phosphor cyan) ───────────────────────────────────────────── */
+  --color-accent: oklch(82% 0.135 195);
+  --color-accent-2: oklch(68% 0.125 200);
+  --color-accent-ink: oklch(16% 0.03 210);
+  --color-accent-dim: oklch(42% 0.07 200);
+  --color-accent-wash: oklch(23% 0.04 200);
+
+  /* ── semantic (A-share convention: 涨/买 = 红, 跌/卖 = 绿) ─────────────── */
+  --color-up: oklch(70% 0.185 22);
+  --color-down: oklch(79% 0.16 158);
+  --color-warn: oklch(83% 0.145 85);
+  --color-error: oklch(73% 0.19 12);
+  --color-ok: oklch(82% 0.15 158);
+  --color-info: oklch(80% 0.09 250);
+  --color-focus: oklch(90% 0.16 195);
+
+  /* ── status lamps ─────────────────────────────────────────────────────── */
+  --color-led-live: oklch(82% 0.16 158);
+  --color-led-idle: oklch(70% 0.02 210);
+  --color-led-stale: oklch(83% 0.145 85);
+  --color-led-dead: oklch(73% 0.19 12);
+
+  /* ── data-viz aliases (charts read these, never a raw colour) ─────────── */
+  --color-chart-line: var(--color-accent);
+  --color-chart-line-2: var(--color-up);
+  --color-chart-band: var(--color-warn);
+  --color-chart-grid: var(--color-grid);
+  --color-chart-axis: var(--color-muted);
+  --color-chart-frame: var(--color-rule-2);
+  --color-chart-crosshair: var(--color-ink-2);
+  --color-chart-vol: var(--color-accent-dim);
+  --color-chart-cash: var(--color-info);
+  --color-chart-realized: var(--color-down);
+  --color-chart-float: var(--color-up);
+  --color-chart-exec: var(--color-accent);
+  --color-chart-blocked: var(--color-warn);
+  --color-chart-buy: var(--color-up);
+  --color-chart-sell: var(--color-down);
+
+  /* ── fonts (system stacks only — no CDN, no webfont) ──────────────────── */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+  --font-display: var(--font-mono);
+  --font-body: var(--font-sans);
+  --font-num: var(--font-mono);
+
+  /* ── space (4pt scale) ────────────────────────────────────────────────── */
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 20px;
+  --space-xl: 28px;
+  --space-2xl: 40px;
+  --space-3xl: 56px;
+
+  /* ── type scale ───────────────────────────────────────────────────────── */
+  --text-2xs: 0.625rem;
+  --text-xs: 0.6875rem;
+  --text-sm: 0.75rem;
+  --text-base: 0.8125rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-display: clamp(1.5rem, 1.15rem + 1.5vw, 2rem);
+  --leading-tight: 1.15;
+  --leading-base: 1.5;
+  --tracking-label: 0.08em;
+  --tracking-num: 0.01em;
+
+  /* ── motion ───────────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-0: 0ms;
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --dur-4: 600ms;
+
+  /* ── radii & rules ────────────────────────────────────────────────────── */
+  --radius-0: 0px;
+  --radius-1: 2px;
+  --radius-2: 4px;
+  --radius-3: 8px;
+  --radius-pill: 999px;
+  --rule-1: 1px;
+  --rule-2: 2px;
+  --rule-3: 3px;
+
+  /* ── layout ───────────────────────────────────────────────────────────── */
+  --layout-max: 1760px;
+  --layout-pane-min: 21rem;
+  --layout-hit: 44px;
+  --layout-z-sticky: 20;
+  --layout-z-dialog: 60;
+  --layout-shadow: 0 1px 0 var(--color-rule);
+}

@@ -707,6 +707,18 @@ def main() -> int:
     symbols = sorted(set(symbols))
     idx_syms = [a.index]
 
+    # ⑥b **无行情硬校验**：监控名单里任一标的当日无 bars → 大声报（绝不静默跳过）
+    #    为什么：`TMonitor._round` 里 `if not quote or not quote.get("current"): continue` 会**静默跳过**
+    #    没有行情的标的 → 数据缺口会被伪装成"策略没触发"（实测 588 标的日中 196 个缺分钟）。
+    _missing_bars = []
+    for _s in symbols:
+        if not market.bars_upto(_s, "15:00"):
+            _missing_bars.append(_s)
+    if _missing_bars:
+        print("[prod] ⚠️ %s 有 %d/%d 个监控标的**当日无行情**（这些标的整日不会被评估，"
+              "成交/离场都会缺）: %s" % (day, len(_missing_bars), len(symbols), ",".join(_missing_bars[:12])),
+              file=sys.stderr)
+
     # ⑦ 逐 bar 驱动
     bars = list(BAR_MINUTES)
     if a.hours:
@@ -767,6 +779,7 @@ def main() -> int:
            "decision": {"cut": cut, "ok": dec_res.get("ok"),
                         "allowed": ((((dec_res.get("layers") or {}).get("L5_entry") or {}).get("value") or {}).get("allowed")),
                         "missing": dec_res.get("missing")},
+           "missing_bars": _missing_bars,
            "frozen_cash_end": float(((_account_info(a.account) or [{}])[0]).get("frozen_cash") or 0),
            "step_secs": {k: round(v, 1) for k, v in sorted(step_secs.items(), key=lambda kv: -kv[1])},
            "net_hits": sorted(_NET_HITS.items(), key=lambda kv: -kv[1])[:30]}

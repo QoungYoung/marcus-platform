@@ -1,5 +1,13 @@
 [
   {
+    "date": "2026-09-16",
+    "macrostructure": "Workbench（多窗格研究台：心跳条 + 净值/回撤 + 每日盈亏 + 持仓/个股 + 归因 + 诊断 + 覆盖率）",
+    "theme": "Terminal（深色 · 等宽/几何无衬线 · phosphor cyan accent）· 自带 tokens.css",
+    "theme_axes": "dark / mono-grotesk / cyan",
+    "enrichment": "canvas 手绘（净值+回撤带、每日盈亏柱、K 线+B/S 标注）— Tier-A 自绘，无外部资源",
+    "brief": "回测监控看板（tone: technical · 单人研究台）：心跳刷新进度、每日盈亏与净值曲线、持仓历史、个股 K 线 B/S 点、分腿型/分主题归因、被拦原因诊断、覆盖率与口径；只读服务 jobs/bt_dashboard.py + 单文件页面 jobs/bt_dashboard.html"
+  },
+  {
     "date": "2026-08-12",
     "macrostructure": "Session Ledger (mobile-first: desk-first grid areas + collapsible rail)",
     "theme": "Blue Archive (brand preserved) · accent #2f7cd3 · --tb-* locked tokens",
