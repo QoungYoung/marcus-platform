@@ -100,11 +100,11 @@ def held_from_db(cut: str, account: str = "stock"):
     c = psycopg2.connect(url); cur = c.cursor()
     # 注意：原实现用 `LIKE '买%'`，psycopg2 会把那个 `%` 当占位符（实测 IndexError）→ 改用 `= '买入'`
     cur.execute("""SELECT symbol,
-                          SUM(CASE WHEN direction = '买入' THEN volume ELSE -volume END) AS v
+                          SUM(CASE WHEN direction IN ('买入','buy') THEN volume ELSE -volume END) AS v
                    FROM paper_trades
                    WHERE account_id=%s AND COALESCE(voided,0)=0 AND created_at < %s
                    GROUP BY symbol
-                   HAVING SUM(CASE WHEN direction = '买入' THEN volume ELSE -volume END) > 0""",
+                   HAVING SUM(CASE WHEN direction IN ('买入','buy') THEN volume ELSE -volume END) > 0""",
                 (account, "%s-%s-%sT00:00:00" % (cut[:4], cut[4:6], cut[6:8])))
     out = sorted(r[0] for r in cur.fetchall())
     cur.close(); c.close()

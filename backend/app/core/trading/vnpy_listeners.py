@@ -32,6 +32,8 @@ from vnpy.trader.object import (
 from vnpy.trader.constant import Direction, Status
 from vnpy.event import Event, EventEngine
 
+from trade_direction import to_canonical  # noqa: E402 统一方向词表
+
 logger = logging.getLogger(__name__)
 
 # 共享后台写入线程池 (最多 2 个 worker, 避免过多的 PG 连接)
@@ -39,6 +41,11 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pg_sync")
 
 # PG 连接超时 (秒), 确保网络异常时不会无限阻塞
 _CONNECT_TIMEOUT = 3
+
+
+def _canonical(direction: str) -> str:
+    """写库前统一方向词表（中文「买入/卖出」），表外词表原样返回并告警。"""
+    return to_canonical(direction)
 
 
 def _now() -> str:
@@ -89,7 +96,7 @@ class OrderEventListener:
             params = (
                 order.vt_orderid,
                 _marcus_symbol(order.symbol, order.exchange),
-                "买入" if order.direction == Direction.LONG else "卖出",
+                _canonical("买入" if order.direction == Direction.LONG else "卖出"),
                 order.price,
                 order.volume,
                 status_map.get(order.status, str(order.status)),
@@ -156,7 +163,7 @@ class TradeEventListener:
             params = (
                 trade.orderid,
                 _marcus_symbol(trade.symbol, trade.exchange),
-                "买入" if trade.direction == Direction.LONG else "卖出",
+                _canonical("买入" if trade.direction == Direction.LONG else "卖出"),
                 trade.price,
                 trade.volume,
                 trade.price * trade.volume,

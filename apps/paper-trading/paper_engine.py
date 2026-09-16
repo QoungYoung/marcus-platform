@@ -26,6 +26,7 @@ import psycopg2.extensions
 # Use workspace_detector for cross-platform path resolution
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from workspace_detector import get_xueqiu_dir
+from trade_direction import is_buy, to_canonical  # 统一方向词表（读兼容 + 写归一化）
 
 class Direction(Enum):
     LONG = "买入"
@@ -281,7 +282,7 @@ class PaperTradingEngine:
                 if symbol not in positions:
                     positions[symbol] = []
 
-                if direction == '买入':
+                if is_buy(direction):
                     positions[symbol].append({'price': price, 'volume': vol})
                 else:  # 卖出
                     remaining = vol
@@ -898,7 +899,7 @@ class PaperTradingEngine:
             cursor.execute(
                 'INSERT INTO paper_trades (orderid, account_id, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
                 'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                (order_id, self.account_id, order.symbol, order.direction, fill_price, order.volume,
+                (order_id, self.account_id, order.symbol, to_canonical(order.direction), fill_price, order.volume,
                  fill_price * order.volume, 0, datetime.now().isoformat(), td, getattr(order, 'reason', ''))
             )
 
@@ -999,7 +1000,7 @@ class PaperTradingEngine:
             cursor.execute(
                 'INSERT INTO paper_trades (orderid, account_id, symbol, direction, price, volume, amount, profit, created_at, trade_date, reason) '
                 'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                (order_id, self.account_id, order.symbol, order.direction, fill_price, order.volume,
+                (order_id, self.account_id, order.symbol, to_canonical(order.direction), fill_price, order.volume,
                  fill_price * order.volume, net_profit, datetime.now().isoformat(), td, getattr(order, 'reason', ''))
             )
 
@@ -1195,7 +1196,7 @@ class PaperTradingEngine:
             'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) '
             'ON CONFLICT (orderid) DO UPDATE SET status=EXCLUDED.status, traded=EXCLUDED.traded, '
             'updated_at=EXCLUDED.updated_at, reason=EXCLUDED.reason',
-            (order.orderid, self.account_id, order.symbol, order.direction, order.price, order.volume,
+            (order.orderid, self.account_id, order.symbol, to_canonical(order.direction), order.price, order.volume,
              order.status, order.traded, order.created_at, order.updated_at, getattr(order, 'reason', ''))
         )
         conn.commit()

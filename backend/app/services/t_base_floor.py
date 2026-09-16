@@ -32,6 +32,7 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 MIN_LOT = 100                    # 一手；也是"至少留一条腿"的可卖额度
 _STATE_NAME = "t_base_floor_rebase.json"
@@ -340,7 +341,7 @@ def _cum_buy_volume(account_id: str, symbol: str) -> int:
     try:
         v = db.execute(text(
             "SELECT COALESCE(SUM(volume), 0) FROM paper_trades "
-            "WHERE account_id = :a AND symbol = :s AND direction = '买入' "
+            "WHERE account_id = :a AND symbol = :s AND direction IN ('买入','buy') "
             "AND (voided = 0 OR voided IS NULL)"),
             {"a": account_id, "s": symbol}).scalar()
         return int(v or 0)

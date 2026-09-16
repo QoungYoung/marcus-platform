@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional, Tuple
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 # 狼大 2026-03-05 原话里的数字（默认值全部有出处，不另设"调参"）
 EARLY_STAGE_DAYS_DEFAULT = 13
@@ -415,7 +416,7 @@ def first_buy_date(account_id: str, symbol: str) -> Optional[str]:
         try:
             v = db.execute(text(
                 "SELECT MIN(created_at) FROM paper_trades "
-                "WHERE account_id = :a AND symbol = :s AND direction = '买入' "
+                "WHERE account_id = :a AND symbol = :s AND direction IN ('买入','buy') "
                 "AND (voided = 0 OR voided IS NULL)"),
                 {"a": account_id, "s": symbol}).scalar()
             if v:

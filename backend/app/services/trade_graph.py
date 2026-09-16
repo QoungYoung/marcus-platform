@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TypedDict, Optional, Dict, Any
 
 from langgraph.graph import StateGraph, END
+from trade_direction import SELL_WORDS, is_buy, is_sell  # noqa: E402 统一方向词表
 
 logger = logging.getLogger(__name__)
 
@@ -219,10 +220,10 @@ def _read_portfolio() -> str:
             sym = t.symbol
             if sym not in symbol_pos:
                 symbol_pos[sym] = {'buy_volume': 0, 'buy_amount': 0.0, 'sell_volume': 0, 'sell_amount': 0.0}
-            if t.direction == '买入':
+            if is_buy(t.direction):
                 symbol_pos[sym]['buy_volume'] += (t.volume or 0)
                 symbol_pos[sym]['buy_amount'] += (t.amount or 0)
-            elif t.direction == '卖出':
+            elif is_sell(t.direction):
                 symbol_pos[sym]['sell_volume'] += (t.volume or 0)
                 symbol_pos[sym]['sell_amount'] += (t.amount or 0)
 
@@ -240,8 +241,8 @@ def _read_portfolio() -> str:
                     "highest_price": entry_info.highest_price if entry_info else None,
                 })
 
-        total_buy = sum(t.amount or 0 for t in trades if t.direction == '买入')
-        total_sell = sum(t.amount or 0 for t in trades if t.direction == '卖出')
+        total_buy = sum(t.amount or 0 for t in trades if is_buy(t.direction))
+        total_sell = sum(t.amount or 0 for t in trades if is_sell(t.direction))
         cash = available_cash
         total_cost = sum(p['avg_cost'] * p['volume'] for p in positions)
 
@@ -257,7 +258,7 @@ def _read_portfolio() -> str:
         today = datetime.now().strftime('%Y-%m-%d')
         today_bought = list(set(
             t.symbol for t in trades
-            if t.direction == '买入' and (t.trade_date or '') == today
+            if is_buy(t.direction) and (t.trade_date or '') == today
         ))
 
         return json.dumps({
@@ -487,7 +488,7 @@ def _check_consecutive_losses() -> int:
         try:
             rows = db.query(PaperTrade.profit).filter(
                 PaperTrade.account_id == 'stock',
-                PaperTrade.direction == '卖出',
+                PaperTrade.direction.in_(SELL_WORDS),
                 PaperTrade.volume > 0,
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None)
             ).order_by(PaperTrade.created_at.desc()).limit(10).all()

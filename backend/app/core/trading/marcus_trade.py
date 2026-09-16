@@ -29,6 +29,7 @@ sys.path.insert(0, str(AKSHARE_DIR))
 sys.path.insert(0, str(MARCUS_INTEGRATION_DIR))
 
 from paper_engine import PaperTradingEngine
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 from app.core.trading.vnpy_bridge import VNPyBridge
 
 # 模块级 bridge 引用，供调度任务等非 HTTP 上下文使用
@@ -174,7 +175,7 @@ class MarcusVNPyExecutor:
             today_str = datetime.now().strftime('%Y-%m-%d')
             trades = self._get_trades_list(limit=10000)
             for t in trades:
-                if t.get('direction') != '买入':
+                if not is_buy(t.get('direction')):
                     continue
                 if t.get('voided'):
                     continue
@@ -1144,7 +1145,7 @@ class MarcusVNPyExecutor:
                 return
             cur = conn.cursor()
             gross = float(price) * int(volume)
-            if direction == "买入":
+            if is_buy(direction):
                 delta = -gross * (1 + self._BRIDGE_BUY_FEE)
                 label = "扣款"
             else:
@@ -1254,7 +1255,7 @@ class MarcusVNPyExecutor:
             if symbol not in positions:
                 positions[symbol] = []
 
-            if direction == '买入':
+            if is_buy(direction):
                 positions[symbol].append({'price': price, 'volume': vol})
             else:
                 remaining = vol
@@ -1358,7 +1359,7 @@ class MarcusVNPyExecutor:
         from datetime import datetime as _dt
 
         symbol = (symbol or "").upper()
-        if direction == "买入":
+        if is_buy(direction):
             if symbol.startswith(("SH", "SZ")):
                 cash_delta = price * volume * (1 + self._BUY_COMMISSION)
             else:

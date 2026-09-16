@@ -29,10 +29,16 @@ from pathlib import Path
 
 import psycopg2
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
+try:
+    from trade_direction import SELL_WORDS, BUY_WORDS, is_buy as is_buy_word, is_sell as is_sell_word  # noqa: E402
+except Exception:  # core 不在路径时退化为内置词表
+    BUY_WORDS, SELL_WORDS = ("买入", "buy"), ("卖出", "sell")
+    is_buy_word = lambda v: str(v or "").strip().lower() in ("买入", "buy")
+    is_sell_word = lambda v: str(v or "").strip().lower() in ("卖出", "sell")
+
 BUY_FEE = 0.0005
 SELL_FEE = 0.0015
-BUY_WORDS = ("买入", "buy")
-SELL_WORDS = ("卖出", "sell")
 DEFAULT_BASELINE_DATE = "2026-09-01"
 DEFAULT_BASELINE_ASSET = 244501.79
 
@@ -112,6 +118,14 @@ def main() -> int:
 
     cur.execute("SELECT symbol, volume FROM paper_positions WHERE account_id = %s", (args.account,))
     pos_db = {s: int(v) for s, v in cur.fetchall()}
+
+    # 方向词表审计：表外词表（既非中文也非 buy/sell）会让读取端静默漏算
+    cur.execute(
+        "SELECT direction, count(*) FROM paper_trades WHERE account_id = %s GROUP BY direction "
+        "ORDER BY direction", (args.account,))
+    vocab = {d: int(n) for d, n in cur.fetchall()}
+    unknown_vocab = {d: n for d, n in vocab.items()
+                     if not (is_buy_word(d) or is_sell_word(d))}
     cur.close()
     conn.close()
 
@@ -130,7 +144,9 @@ def main() -> int:
         "trades_replayed": len(rows),
         "realized_fifo": round(realized, 2),
         "position_mismatch": pos_diff,
-        "ok": abs(drift) <= args.tol and not pos_diff,
+        "direction_vocab": vocab,
+        "unknown_direction": unknown_vocab,
+        "ok": abs(drift) <= args.tol and not pos_diff and not unknown_vocab,
     }
 
     if args.json:
@@ -140,6 +156,7 @@ def main() -> int:
         print(f"[对账] 现金: 库内 {cash_db:,.2f} / 流水重放 {cash:,.2f} → 漂移 {drift:+,.2f} 元")
         print(f"[对账] 重放 {len(rows)} 笔，FIFO 已实现 {realized:,.2f}")
         print(f"[对账] 持仓差异: {pos_diff if pos_diff else '无'}")
+        print(f"[对账] 方向词表: {vocab}" + (f" ⚠️ 表外词表 {unknown_vocab}" if unknown_vocab else " ✅"))
         print("[对账] " + ("✅ 一致" if out["ok"] else f"❌ 漂移超阈值（tol={args.tol}）"))
     return 0 if out["ok"] else 1
 

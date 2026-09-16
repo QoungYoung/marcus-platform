@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 logger = logging.getLogger(__name__)
 
@@ -363,9 +364,9 @@ class CandidatePool:
             positions: dict[str, int] = {}
             for t in trades:
                 sym = t.symbol
-                if t.direction == '买入':
+                if is_buy(t.direction):
                     positions[sym] = positions.get(sym, 0) + t.volume
-                elif t.direction == '卖出':
+                elif is_sell(t.direction):
                     positions[sym] = positions.get(sym, 0) - t.volume
 
             held = {sym for sym, vol in positions.items() if vol > 0}

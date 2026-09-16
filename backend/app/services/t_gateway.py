@@ -18,6 +18,7 @@ from app.database import SessionLocal
 from app.services import t_db
 from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
 from app.services.t_regime import compute_regime
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 ACCOUNT_T = "t"
 
@@ -36,7 +37,7 @@ def _fifo_net_position(account_id: str, symbol: str) -> Optional[int]:
         db = SessionLocal()
         try:
             v = db.execute(text(
-                "SELECT COALESCE(SUM(CASE WHEN direction='买入' THEN volume ELSE -volume END), 0) "
+                "SELECT COALESCE(SUM(CASE WHEN direction IN ('买入','buy') THEN volume ELSE -volume END), 0) "
                 "FROM paper_trades WHERE account_id = :a AND symbol = :s "
                 "AND (voided = 0 OR voided IS NULL)"),
                 {"a": account_id, "s": symbol}).scalar()
@@ -54,7 +55,7 @@ def _cum_buy_volume(account_id: str, symbol: str) -> Optional[int]:
         try:
             v = db.execute(text(
                 "SELECT COALESCE(SUM(volume), 0) FROM paper_trades "
-                "WHERE account_id = :a AND symbol = :s AND direction = '买入' "
+                "WHERE account_id = :a AND symbol = :s AND direction IN ('买入','buy') "
                 "AND (voided = 0 OR voided IS NULL)"),
                 {"a": account_id, "s": symbol}).scalar()
             return int(v or 0)
@@ -187,7 +188,7 @@ def get_sellable_ledger(account_id: str = "t") -> Dict[str, Dict[str, Any]]:
             # 今日买入量（T+1 锁定，不可卖）
             buys = db.execute(text(
                 "SELECT symbol, COALESCE(SUM(volume), 0) AS v FROM paper_trades "
-                "WHERE account_id = :acc AND direction = '买入' "
+                "WHERE account_id = :acc AND direction IN ('买入','buy') "
                 "AND (voided = 0 OR voided IS NULL) "
                 "AND substr(created_at, 1, 10) = :today GROUP BY symbol"
             ), {"acc": account_id, "today": today}).mappings().all()
@@ -261,7 +262,7 @@ def is_sell_in_transit(symbol: str, account_id: str = "t") -> bool:
             today = datetime.now().strftime("%Y-%m-%d")
             row = db.execute(text(
                 "SELECT 1 FROM paper_orders WHERE account_id = :acc AND symbol = :symbol "
-                "AND direction = '卖出' AND status IN ('提交中', '部分成交') "
+                "AND direction IN ('卖出','sell') AND status IN ('提交中', '部分成交') "
                 "AND substr(created_at, 1, 10) = :today LIMIT 1"
             ), {"acc": account_id, "symbol": symbol, "today": today}).fetchone()
             return row is not None
@@ -727,7 +728,7 @@ def _voided_sell_today(symbol: str, account_id: str) -> int:
             row = db.execute(text(
                 "SELECT COUNT(*) FROM paper_trades "
                 "WHERE account_id = :acc AND symbol = :sym "
-                "AND direction = '卖出' AND voided = 1 "
+                "AND direction IN ('卖出','sell') AND voided = 1 "
                 "AND substr(created_at::text, 1, 10) = :today"
             ), {"acc": account_id, "sym": symbol, "today": today}).scalar()
             return int(row or 0)
@@ -746,7 +747,7 @@ def _daily_buy_legs(symbol: str, account_id: str = "t") -> int:
             today = datetime.now().strftime("%Y-%m-%d")
             n = db.execute(text(
                 "SELECT COUNT(*) FROM paper_trades "
-                "WHERE account_id = :acc AND direction = '买入' "
+                "WHERE account_id = :acc AND direction IN ('买入','buy') "
                 "AND (voided = 0 OR voided IS NULL) "
                 "AND substr(created_at, 1, 10) = :today AND symbol = :sym"
             ), {"acc": account_id, "today": today, "sym": symbol}).scalar()

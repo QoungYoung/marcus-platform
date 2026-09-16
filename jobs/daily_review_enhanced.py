@@ -117,7 +117,7 @@ def get_today_trades():
     cursor.execute('''
         SELECT symbol, price, volume, created_at 
         FROM trades 
-        WHERE direction = '买入' 
+        WHERE direction IN ('买入','buy') 
         AND date(created_at) = ?
         ORDER BY created_at DESC
     ''', (today,))

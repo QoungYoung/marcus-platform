@@ -32,6 +32,7 @@ from app.services.golden_pit_config import (
     get_effective_index_config,
 )
 from app.services import golden_pit_sector_service as _sector
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 PIT_WINDOW_DAYS = 15
 # 板块选筹回退宽基状态: fund_code -> 最近一次回退日期（用于『信号恢复切回』标注）
@@ -968,12 +969,12 @@ def _get_holdings_detail() -> List[Dict[str, Any]]:
         lots_map: Dict[str, List[Dict]] = {}
         for t in trades:
             sym = t.symbol
-            if t.direction == '买入':
+            if is_buy(t.direction):
                 entry_date = t.trade_date or (t.created_at[:10] if t.created_at else '')
                 lots_map.setdefault(sym, []).append({
                     'price': t.price, 'volume': t.volume, 'entry_date': entry_date
                 })
-            elif t.direction == '卖出':
+            elif is_sell(t.direction):
                 lots = lots_map.get(sym, [])
                 remaining = t.volume
                 i = 0

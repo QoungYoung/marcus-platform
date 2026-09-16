@@ -19,6 +19,10 @@ from app.models.paper_trade import PaperAccountInfo, PaperTrade, PaperDailySnaps
 
 settings = get_settings()
 
+from trade_direction import (  # noqa: E402  统一方向词表（中英文兼容）
+    BUY_WORDS, SELL_WORDS, is_buy, is_sell,
+)
+
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 
 
@@ -200,19 +204,19 @@ def calculate_positions_from_db(account: str = "stock"):
         realized_pnl = float(
             db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
                 PaperTrade.account_id == account,
-                PaperTrade.direction == '卖出',
+                PaperTrade.direction.in_(SELL_WORDS),
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None)
             ).scalar() or 0
         )
 
         total_sells = db.query(func.count()).filter(
             PaperTrade.account_id == account,
-            PaperTrade.direction == '卖出',
+            PaperTrade.direction.in_(SELL_WORDS),
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         ).scalar() or 0
         wins = db.query(func.count()).filter(
             PaperTrade.account_id == account,
-            PaperTrade.direction == '卖出',
+            PaperTrade.direction.in_(SELL_WORDS),
             PaperTrade.profit > 0,
             (PaperTrade.voided == 0) | (PaperTrade.voided == None)
         ).scalar() or 0
@@ -228,10 +232,10 @@ def calculate_positions_from_db(account: str = "stock"):
         price = trade.price
         volume = trade.volume
 
-        if direction == '买入':
+        if is_buy(direction):
             entry_date = trade.trade_date or (trade.created_at[:10] if trade.created_at else '')
             positions.setdefault(symbol, []).append({'price': price, 'volume': volume, 'entry_date': entry_date})
-        elif direction == '卖出':
+        elif is_sell(direction):
             lots = positions.get(symbol, [])
             if not lots:
                 continue
@@ -286,7 +290,7 @@ def _calc_week_pnl(positions: list, account: str = "stock") -> tuple:
         week_realized = float(
             db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
                 PaperTrade.account_id == account,
-                PaperTrade.direction == '卖出',
+                PaperTrade.direction.in_(SELL_WORDS),
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None),
                 func.substr(PaperTrade.created_at, 1, 10) >= monday_str
             ).scalar() or 0
@@ -296,7 +300,7 @@ def _calc_week_pnl(positions: list, account: str = "stock") -> tuple:
             row[0] for row in
             db.query(PaperTrade.symbol).filter(
                 PaperTrade.account_id == account,
-                PaperTrade.direction == '买入',
+                PaperTrade.direction.in_(BUY_WORDS),
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None),
                 func.substr(PaperTrade.created_at, 1, 10) >= monday_str
             ).distinct().all()
@@ -389,7 +393,7 @@ def save_daily_snapshot(target_date: str = None, account: str = "stock") -> dict
         realized_pnl = float(
             db.query(func.coalesce(func.sum(PaperTrade.profit), 0)).filter(
                 PaperTrade.account_id == account,
-                PaperTrade.direction == '卖出',
+                PaperTrade.direction.in_(SELL_WORDS),
                 (PaperTrade.voided == 0) | (PaperTrade.voided == None),
                 (PaperTrade.trade_date <= target_date) |
                 ((PaperTrade.trade_date == None) & (func.substr(PaperTrade.created_at, 1, 10) <= target_date))
@@ -415,11 +419,11 @@ def save_daily_snapshot(target_date: str = None, account: str = "stock") -> dict
         price = t.price
         volume = t.volume
 
-        if direction == '买入':
+        if is_buy(direction):
             cost = price * volume * (1 + _BUY_COMMISSION)
             available_cash -= cost
             positions_lots.setdefault(sym, []).append({'price': price, 'volume': volume})
-        elif direction == '卖出':
+        elif is_sell(direction):
             lots = positions_lots.get(sym, [])
             if not lots:
                 continue
@@ -1150,7 +1154,7 @@ def get_daily_pnl_breakdown(
         day_realized = 0.0
         day_realized_by_stock: dict[str, float] = {}
         for t in trades_by_date.get(d, []):
-            if hasattr(t, "direction") and t.direction == "卖出":
+            if hasattr(t, "direction") and is_sell(t.direction):
                 sell_price = t.price
                 prev_close = prev_close_cache.get(t.symbol, sell_price)
                 daily_incr = t.volume * (sell_price - prev_close)
@@ -1301,7 +1305,7 @@ def get_daily_pnl_breakdown_by_date(date: str = Query(..., description="Target d
     day_realized = 0.0
     day_realized_by_stock: dict[str, float] = {}
     for t in trades_by_date.get(date, []):
-        if hasattr(t, "direction") and t.direction == "卖出":
+        if hasattr(t, "direction") and is_sell(t.direction):
             sell_price = t.price
             prev_close = prev_close_prices.get(t.symbol, sell_price)
             daily_incr = t.volume * (sell_price - prev_close)
@@ -1363,12 +1367,12 @@ def _apply_trade(trade, cash: float, positions: dict) -> tuple:
         price = trade["price"]
         volume = trade["volume"]
 
-    if direction == '买入':
+    if is_buy(direction):
         cost = price * volume * (1 + _BUY_COMMISSION)
         cash -= cost
         positions.setdefault(symbol, []).append({'price': price, 'volume': volume})
 
-    elif direction == '卖出':
+    elif is_sell(direction):
         lots = positions.get(symbol, [])
         gross = price * volume
         sell_fee = gross * _SELL_FEE_RATE

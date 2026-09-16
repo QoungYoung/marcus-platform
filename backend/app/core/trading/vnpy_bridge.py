@@ -50,6 +50,7 @@ from .vnpy_listeners import (
 )
 
 logger = logging.getLogger(__name__)
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 GATEWAY_NAME = "PAPER"
 
@@ -610,9 +611,9 @@ class VNPyBridge:
             volume = int(t.get("volume", 0) or 0)
             if not symbol or volume <= 0:
                 continue
-            if direction == "买入":
+            if is_buy(direction):
                 lots.setdefault(symbol, []).append({"price": price, "volume": volume})
-            elif direction == "卖出":
+            elif is_sell(direction):
                 remaining = volume
                 lst = lots.get(symbol, [])
                 i = 0

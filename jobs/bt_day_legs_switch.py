@@ -35,11 +35,11 @@ def held_from_db(cut: str, account: str = "stock"):
     url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
     c = psycopg2.connect(url); cur = c.cursor()
     cur.execute("""SELECT symbol,
-                          SUM(CASE WHEN direction = '买入' THEN volume ELSE -volume END) AS v
+                          SUM(CASE WHEN direction IN ('买入','buy') THEN volume ELSE -volume END) AS v
                    FROM paper_trades
                    WHERE account_id=%s AND COALESCE(voided,0)=0 AND created_at < %s
                    GROUP BY symbol
-                   HAVING SUM(CASE WHEN direction = '买入' THEN volume ELSE -volume END) > 0""",
+                   HAVING SUM(CASE WHEN direction IN ('买入','buy') THEN volume ELSE -volume END) > 0""",
                 (account, "%s-%s-%sT00:00:00" % (cut[:4], cut[4:6], cut[6:8])))
     out = [{"symbol": r[0], "volume": int(r[1])} for r in cur.fetchall()]
     cur.close(); c.close()

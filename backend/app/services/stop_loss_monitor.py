@@ -44,6 +44,7 @@ from typing import Optional, Dict, Any, List
 
 # 60分钟K线级别分析（v2.6）
 from app.core.trading._60min_analysis import evaluate_60min_stop
+from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,7 @@ class StopLossMonitor:
             buy_dates = [
                 (t.get('created_at', '') or '')[:10]
                 for t in trades
-                if t.get('direction') == '买入' and not t.get('voided')
+                if is_buy(t.get('direction')) and not t.get('voided')
             ]
             if buy_dates:
                 first_date = min(buy_dates)

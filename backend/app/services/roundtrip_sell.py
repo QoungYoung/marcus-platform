@@ -22,6 +22,24 @@ from typing import Optional
 # 兑现幅度: 卖点 = 低吸均价 × (1 + ROUNDTRIP_SELL_UP)
 # 默认 0.03 = 狼大「3-5个点」的下沿（2026-08-13 楼275/280）; 环境变量可覆盖为 0.05(上沿)。
 ROUNDTRIP_SELL_UP = float(os.environ.get("WOLF_ROUNDTRIP_SELL_UP", "0.03"))
+# 分品种（2026-09-14）：狼大对 ETF 的门槛更低 —— 2025-04-03「我药都T卖出去了 **T+0 2 个点我就够了**」
+#   下来再买；2026-09-02 记录「**ETF 能 T 出 2 个点即合格**」；而个股是「3-5 个点」（2026-08-13 楼275/280）。
+#   故 ETF 默认 2 个点、个股 3 个点；各自可配。
+ROUNDTRIP_SELL_UP_ETF = float(os.environ.get("WOLF_ROUNDTRIP_SELL_UP_ETF", "0.02"))
+_ETF_PREFIX = ("SH51", "SH56", "SH58", "SH50", "SZ15", "SZ16", "SZ51", "SH52", "SZ56")
+
+
+def is_etf(symbol) -> bool:
+    """ETF/LOF 判定（与 t_pool 同口径：SH51/56/58/50/52、SZ15/16/51/56 开头）。"""
+    s = str(symbol or "").strip().upper().replace(".", "")
+    if len(s) >= 8 and s[2:8].isdigit():
+        return s[:4] in _ETF_PREFIX
+    return False
+
+
+def sell_up_for(symbol) -> float:
+    """该标的的等量换手兑现幅度（ETF 2 个点 / 个股 3 个点）。"""
+    return ROUNDTRIP_SELL_UP_ETF if is_etf(symbol) else ROUNDTRIP_SELL_UP
 ROUNDTRIP_ENABLED = str(os.environ.get("WOLF_ROUNDTRIP_SELL", "1")) == "1"
 STATE_FILE = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "roundtrip_state.json")
 MAX_AGE_DAYS = 5               # 状态保留天数（自然日）
@@ -76,7 +94,8 @@ def record_buy(symbol: str, price: float, volume: int,
     d[sym] = st
     _save(d)
     print(f"[RoundT] 登记等量换手 {sym} 低吸{volume}股@{price} → "
-          f"目标卖@{st['buy_avg'] * (1 + ROUNDTRIP_SELL_UP):.3f} 总额度{new_qty}")
+          f"目标卖@{st['buy_avg'] * (1 + sell_up_for(symbol)):.3f} "
+          f"({'+%.1f%%' % (sell_up_for(symbol) * 100)}{' ETF档' if is_etf(symbol) else ''}) 总额度{new_qty}")
 
 
 def remaining(symbol: str) -> int:
