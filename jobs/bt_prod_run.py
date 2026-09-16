@@ -581,6 +581,10 @@ def main() -> int:
     if str(os.getenv("BT_NET_OFFLINE", "1")).strip() in ("1", "true", "yes"):
         import bt_local_pro
         _NET_HITS.update(bt_local_pro.install_net_offline())
+        # 断网后黄金坑状态取数必然失败 → 让它直接走生产降级分支，省掉每根 bar 的 deadline 等待
+        # （cProfile 实测 3.06s/bar）。只在本驱动启用，seed/波浪路径不受影响（见函数 docstring）。
+        if str(os.getenv("BT_GOLDENPIT_DEGRADED", "1")).strip() not in ("0", "false", "no"):
+            bt_local_pro.mark_goldenpit_degraded()
     _pin_clock_dynamic()
     set_now(day, "09:15")
     print("[prod] day=%s cut=%s DATA_DIR=%s WS=%s DB=%s"

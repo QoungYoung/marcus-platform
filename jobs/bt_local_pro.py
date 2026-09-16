@@ -242,4 +242,38 @@ def install_local_pro(market: Any, cut: str, relay_fn=None) -> "_LocalPro":
 
 _RELAY_FN: Dict[str, Any] = {}
 
+def mark_goldenpit_degraded() -> bool:
+    """回测：把黄金坑 `get_status()` 短路到**生产自带的降级分支**（`_degraded_status`）。
+
+    为什么：`get_status()` 把状态计算丢进后台线程并 `worker.join(timeout=deadline=5s)`；生产里
+    盘中 30s 一轮 + 300s TTL → 一次等待摊到约 10 轮；**回测的时钟每根 bar 跳 5 分钟** → TTL 每轮都
+    过期 → **每根 bar 等满一次 deadline**（cProfile 实测 3.06s/bar，占单日耗时的大头，48 根 bar
+    ≈ 100-150s）。断网后取数本就瞬间失败（`global_macro` 最终为 `{}`），所以直接返回生产自己的
+    降级结构（同样是 `global_macro={}`）**不改变任何判据字段的取值**，只省掉等待。
+
+    适用范围：**只在生产链驱动 `bt_prod_run` 里启用**——seed / 波浪 agent 路径不要用，
+    否则波浪 prompt 里的"市场环境"块会从"取不到"变成"降级"，改变 prompt → 让严格回放的
+    LLM 缓存判为漂移（`BT_LLM_STRICT=1` 直接报错）。
+    开关：`BT_GOLDENPIT_DEGRADED=0` 关闭（恢复真实/等待路径）。
+    """
+    try:
+        from app.services.golden_pit_service import GoldenPitService
+    except Exception as e:
+        print("[localpro] golden_pit 降级替身安装失败：%s" % str(e)[:80], file=sys.stderr)
+        return False
+
+    def _fast_get_status(self, ttl: float = 300.0, deadline: float = 5.0):
+        try:
+            with self._status_lock:
+                if self._status_cache is not None:
+                    c = dict(self._status_cache)
+                    c["_source"] = "cached"
+                    return c
+        except Exception:
+            pass
+        return self._degraded_status("回测：外部数据源不可用（BT_NET_OFFLINE）")
+
+    GoldenPitService.get_status = _fast_get_status
+    print("[localpro] 黄金坑 get_status 已短路到生产降级分支（省掉每 bar 的 deadline 等待）", file=sys.stderr)
+    return True
 
