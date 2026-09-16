@@ -870,6 +870,15 @@ class MarcusVNPyExecutor:
             match_ok = self.engine.match_order(order_id, price)
             if not match_ok:
                 self.engine.cancel_order(order_id)
+                # ⚠️ 2026-09-16：`cancel_order` 在**单据查不到**时会早退（撞号场景必然如此），
+                #    解冻代码就不执行 → frozen_cash 永久卡住（实测 31,249.617）。这里显式再解冻一次，
+                #    保证"撮合失败 → 资金回滚"这条不变量成立。开关 PAPER_UNFREEZE_ON_MATCH_FAIL=0 回退。
+                if str(os.getenv("PAPER_UNFREEZE_ON_MATCH_FAIL", "1")).strip().lower() not in ("0", "false", "no"):
+                    try:
+                        if hasattr(self.engine, "release_frozen"):
+                            self.engine.release_frozen(symbol, price, volume)
+                    except Exception as _ue:
+                        print(f'[交易] 解冻兜底失败: {str(_ue)[:80]}', file=sys.stderr)
                 print(f'[交易] 撮合失败，资金已解冻', file=sys.stderr)
                 return {'status': 'failed', 'reason': 'VN.PY 撮合失败，资金已解冻'}
         # 创建订单记录

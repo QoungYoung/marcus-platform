@@ -73,6 +73,38 @@ class Position:
     entry_date: str = ""  # 入场日期
 
 
+def _resolve_order_prefix(account_id: str) -> str:
+    """订单号前缀：**默认带账户名**（如 `stock_order`），跨账户永不撞号（2026-09-16 用户拍板）。
+
+    为什么必须改：`paper_orders.orderid` 是**全局主键**（不是 (account_id, orderid)），而取号只按
+    **本账户** `MAX(orderid)` 续号。旧前缀 `{"stock":"ORD","golden_pit":"GP","t":"T"}` 里 stock 与
+    t 历史上都用过 `ORD` → 某账户计数器归零/落后时就会**撞到别的账户的单号**：`_save_order` 的
+    `ON CONFLICT (orderid) DO UPDATE` 不报错，而是**静默改掉别人的单据行**（实测：t 账户
+    ORD000001 的 updated_at/reason 被回测账户覆盖），随后 `match_order(orderid, account_id=本账户)`
+    查不到 → False → `cancel_order` 同样查不到 → 早退跳过解冻 → **冻结资金永久泄漏**
+    （实测卡住 31,249.617 = 可用资金的 12.5%）。
+
+    回退开关：`PAPER_ORDER_PREFIX_LEGACY=1` → 恢复旧前缀映射（仅用于排查/兼容）。
+    兼容性：历史行保留旧号不动；新单从 `<account>_order000001` 起（取号查询用同一前缀，互不干扰）。
+    """
+    if str(os.getenv("PAPER_ORDER_PREFIX_LEGACY", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        return {"stock": "ORD", "golden_pit": "GP", "t": "T"}.get(account_id, "ORD")
+    acc = "".join(ch if (ch.isalnum() or ch in "_-") else "_" for ch in str(account_id or "default"))
+    acc = acc or "default"
+    # ⚠️ 字段宽度硬约束：`paper_orders.orderid` / `paper_trades.orderid` 都是 **varchar(32)**，
+    #    而单号 = 前缀 + 6 位序号 → 前缀最多 26 字符。账户名超过 20 字符时会写不进去
+    #    （`value too long for type character varying(32)`），这类超长写入正是"静默失败"的高发区，
+    #    所以在**构造前缀时**就裁掉：保留账户名前段 + 6 位哈希，保证既唯一又不超宽。
+    suffix = "_order"
+    max_pref = 32 - 6
+    if len(acc) + len(suffix) > max_pref:
+        import hashlib
+        h = hashlib.sha1(acc.encode("utf-8")).hexdigest()[:6]
+        keep = max(max_pref - len(suffix) - len(h) - 1, 1)
+        acc = acc[:keep] + "_" + h
+    return acc + suffix
+
+
 class PaperTradingEngine:
     """
     持久化模拟交易引擎
@@ -162,7 +194,7 @@ class PaperTradingEngine:
         # 订单号前缀：每个账户独立（stock=ORD, golden_pit=GP, t=T）
         # paper_orders.orderid 是全局主键——共用前缀会跨账户撞号
         # （t 落默认 ORD 与 stock 历史 ORD000003 冲突 → buy 静默失败，迭代#58e）
-        self.order_prefix = {"stock": "ORD", "golden_pit": "GP", "t": "T"}.get(account_id, "ORD")
+        self.order_prefix = _resolve_order_prefix(account_id)
         self.data_dir = os.path.expanduser(data_dir)
         os.makedirs(self.data_dir, exist_ok=True)
         self.db_file = os.path.join(self.data_dir, "trades.db")  # 保留用于迁移
@@ -739,6 +771,28 @@ class PaperTradingEngine:
         print(f"[DOWN] 卖出委托：{symbol} @ {price:.2f} x {volume} | 订单号：{order_id}")
         return order_id
     
+    def release_frozen(self, symbol: str, price: float, volume: int) -> float:
+        """按"买入冻结"同口径**释放**冻结资金（与 `buy()` 的 `price*volume*1.0005` 一致）。
+
+        为什么需要它：`cancel_order()` 在"单据查不到"时 `return False` **早退**，于是解冻代码根本不执行
+        ——而单据查不到恰恰是**撞号场景**（`_save_order` 的 ON CONFLICT 把单写到别的账户去了）必然发生的
+        情况，结果 `frozen_cash` 永久卡住（实测 31,249.617）。撮合失败路径必须先回滚副作用再决定返回值。
+        开关：`PAPER_UNFREEZE_ON_MATCH_FAIL=0` 可关（回退旧行为）。
+        """
+        try:
+            if str(symbol).startswith("SH") or str(symbol).startswith("SZ"):
+                frozen_amount = float(price) * int(volume) * 1.0005
+            else:
+                frozen_amount = float(price) * int(volume) * 100 * 0.1
+            self.frozen_cash -= frozen_amount
+            self.available_cash += frozen_amount
+            self._save_account()
+            print(f"[OK] 撮合失败已解冻：{symbol} {price} x {volume} → {frozen_amount:.3f}")
+            return frozen_amount
+        except Exception as e:
+            print(f"[ERR] 解冻失败 {symbol}: {str(e)[:80]}")
+            return 0.0
+
     def cancel_order(self, order_id: str) -> bool:
         """撤销订单"""
         conn = self._get_pg_conn()

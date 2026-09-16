@@ -435,7 +435,10 @@ def _reset_paper_account(account_id: str = "stock", initial: float = 250000.0) -
     #    → **早退、跳过解冻** → 冻结资金永久卡住（实测 31,249.617 卡死，可用资金少 12.5%），
     #    并且污染了 t 账户的单据行（本地副本）。
     #    修法：重置时把计数器顶到**同前缀全局最大号**之上，绝不与任何账户撞号。
-    _prefix = "ORD"      # 与引擎对该账户的 order_prefix 一致（A 股任务账户）
+    # 与引擎 `_resolve_order_prefix()` 同口径：新版 = "<account>_order"（账户级前缀，跨账户不撞号），
+    # 旧版（PAPER_ORDER_PREFIX_LEGACY=1）= ORD。这里**跟着引擎口径走**，避免两边不一致。
+    _legacy = str(os.getenv("PAPER_ORDER_PREFIX_LEGACY", "0")).strip().lower() in ("1", "true", "yes", "on")
+    _prefix = "ORD" if _legacy else (account_id + "_order")
     try:
         cur.execute("SELECT COALESCE(MAX(CAST(SUBSTRING(orderid FROM %s) AS INTEGER)), 0) "
                     "FROM paper_orders WHERE orderid LIKE %s AND SUBSTRING(orderid FROM %s) ~ '^[0-9]+$'",
