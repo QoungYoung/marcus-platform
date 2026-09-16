@@ -25,7 +25,9 @@ import runpy
 import sys
 import time
 
-sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs", "/app/core"]
+sys.path[:0] = []
+import bt_env  # noqa: E402
+bt_env.add_paths()
 
 
 class GzcloudShim:
@@ -61,6 +63,20 @@ class GzcloudShim:
             if api == "trade_cal":
                 s = str(params.get("start_date") or "19000101"); e = min(str(params.get("end_date") or self.as_of), self.as_of)
                 days = [d for d in self.trade_days() if s <= d <= e]
+                if not days and s > e:
+                    # ⚠️ 回测专用兜底：生产某些脚本把窗口起点写死（如 `stock_confirm_judge._trade_days()`
+                    #    里 `start_date="20260601"`，那是"当时近 90 个交易日"的硬编码）。钉到更早的日期时
+                    #    窗口变成空集 → 生产脚本拿到 0 行 → 直接 KeyError。这里按"as_of 往前 200 自然日"重算，
+                    #    保持生产脚本"取近 90 个交易日"的原意；**只影响回测**（生产窗口非空，不走这条）。
+                    try:
+                        import datetime as _d2
+                        _a = _d2.datetime(int(self.as_of[:4]), int(self.as_of[4:6]), int(self.as_of[6:8]))
+                        s2 = (_a - _d2.timedelta(days=200)).strftime("%Y%m%d")
+                        days = [d for d in self.trade_days() if s2 <= d <= e]
+                        print("[pinned] trade_cal 窗口为空(%s→%s) → 回测兜底改用 %s→%s（%d 个交易日）"
+                              % (s, e, s2, e, len(days)), file=sys.stderr)
+                    except Exception:
+                        pass
                 return f or ["cal_date", "is_open"], [[d, 1] for d in days]
             if api in ("daily", "daily_basic"):
                 cols = [x for x in f if x in ("ts_code", "trade_date", "open", "high", "low", "close",
@@ -271,7 +287,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--as-of", required=True)
     ap.add_argument("--data-dir", required=True, help="沙箱目录（脚本的读写都在这里）")
-    ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
+    ap.add_argument("--bars-db", default=os.path.join(bt_env.DATA, "_bt_full", "bars.sqlite"))
     ap.add_argument("--script", required=True)
     ap.add_argument("--no-relay-shim", action="store_true")
     ap.add_argument("--code-dir", default="",

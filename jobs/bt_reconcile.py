@@ -22,6 +22,10 @@ import glob
 import json
 import os
 import sys
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import bt_env  # noqa: E402  （容器/本地两种布局都能跑）
+
 
 DEFAULT_DSN = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 
@@ -129,7 +133,7 @@ def sec_triggers(days, root, pack, dip_tol, use_prod_conds=True, db_trig=None):
         数据下是否得到同样的触发时刻"（纯撮合/行情层差异）；
       `False` → 用回放自己布出来的条件（`rotation_switch_arm.BUY_253/254_EXPR`），衡量端到端。
     """
-    sys.path.insert(0, "/app/jobs")
+    bt_env.add_paths()
     import bt_tape
     db_trig = db_trig or {}
     rows = []
@@ -208,7 +212,7 @@ def main() -> int:
     ap.add_argument("--tape", action="store_true", help="跑触发级对账（需要 pack 分钟数据）")
     ap.add_argument("--pack", default="")
     ap.add_argument("--dip-tol", type=float, default=0.005)
-    ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
+    ap.add_argument("--bars-db", default=os.path.join(bt_env.DATA, "_bt_full", "bars.sqlite"))
     ap.add_argument("--initial", type=float, default=250000.0)
     ap.add_argument("--out", default="")
     a = ap.parse_args()

@@ -24,7 +24,9 @@ import json
 import os
 import sys
 
-sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs"]
+sys.path[:0] = []
+import bt_env  # noqa: E402
+bt_env.add_paths()
 
 
 def main() -> int:

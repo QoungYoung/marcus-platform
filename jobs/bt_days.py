@@ -18,8 +18,12 @@ import os
 import subprocess
 import sys
 import time
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import bt_env  # noqa: E402  （容器/本地两种布局都能跑）
 
-DATA = os.environ.get("DATA_DIR", "/app/data")
+
+DATA = os.environ.get("DATA_DIR") or bt_env.DATA
 ROOT = os.path.join(DATA, "_bt_full")
 TASK_TIMELINE = os.path.join(DATA, "_bt_task_timeline.json")
 
@@ -86,12 +90,23 @@ def main() -> int:
     ap.add_argument("--llm-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
     ap.add_argument("--task-timeline", default=TASK_TIMELINE,
                     help="逐日任务登记表（时代检查；缺失则不拦）")
+    ap.add_argument("--state-from-producers", action="store_true",
+                    help="反事实模式：state 由生产者按 as-of 数据算（不要求生产历史快照）；与 --no-era-gating 一起用")
+    ap.add_argument("--no-era-gating", action="store_true",
+                    help="关掉时代检查：**全年反事实**跑法（用现行完整代码跑所有交易日，不再问"
+                         "\"当天生产有没有这条链\"）。对齐生产时不要开。")
+    ap.add_argument("--code-dir", default="",
+                    help="强制所有交易日使用同一份代码（默认空=按 rev_map 逐日；全年反事实建议用现行代码）")
     a = ap.parse_args()
 
     if not a.out:
         a.out = os.path.join(a.root, "_summary")
     os.makedirs(a.out, exist_ok=True)
-    tl = load_timeline(a.task_timeline)
+    tl = {} if a.no_era_gating else load_timeline(a.task_timeline)
+    if a.no_era_gating:
+        print("[days] ⚠️ 时代检查已关闭（全年反事实模式）：所有交易日都用同一份代码跑布腿链", flush=True)
+    if a.code_dir:
+        print("[days] 强制代码目录：%s" % a.code_dir, flush=True)
     if tl:
         print("[days] 时代检查：任务登记表 %d 天（%s）" % (len(tl), a.task_timeline), flush=True)
     days = trade_days(a.start, a.end, a.bars_db)
@@ -103,8 +118,13 @@ def main() -> int:
         entry = {"date": d8, "cut": cut, "steps": {}}
         # ① seed
         if not a.skip_seed:
-            rc, dt = run([sys.executable, "/app/jobs/bt_seed_day.py", "--date", d8,
-                          "--root", a.root, "--llm-mode", a.llm_mode],
+            _seed_cmd = [sys.executable, bt_env.jobs_file("bt_seed_day.py"), "--date", d8,
+                         "--root", a.root, "--llm-mode", a.llm_mode]
+            if a.code_dir:
+                _seed_cmd += ["--code-dir", a.code_dir]
+            if a.state_from_producers or a.no_era_gating:
+                _seed_cmd += ["--state-from-producers"]
+            rc, dt = run(_seed_cmd,
                          os.path.join(a.out, "seed_%s.log" % d8), timeout=3600)
             entry["steps"]["seed"] = {"rc": rc, "s": round(dt, 1)}
             print("[days] %s seed rc=%d %.0fs" % (d8, rc, dt), flush=True)
@@ -138,19 +158,23 @@ def main() -> int:
         if conf_on is False:
             entry["steps"]["confirm_prevday"] = {"skipped": "task_not_registered"}
         else:
-          rc_prev, dtp = run([sys.executable, "/app/jobs/bt_run_pinned.py", "--as-of", prev,
-                              "--data-dir", sb, "--bars-db", a.bars_db,
-                              "--code-dir", os.path.join(DATA, "_bt_code", "rev_" + (
-                                  (json.load(open(os.path.join(DATA, "_bt_code", "rev_map.json"), encoding="utf-8"))
-                                   .get(d8, {}) or {}).get("rev", ""))),
-                              "--script", _script_in_rev(d8, "apps/main_line/stock_confirm_judge.py")],
+          _cdir = a.code_dir or os.path.join(DATA, "_bt_code", "rev_" + (
+              (json.load(open(os.path.join(DATA, "_bt_code", "rev_map.json"), encoding="utf-8"))
+               .get(d8, {}) or {}).get("rev", "")))
+          rc_prev, dtp = run([sys.executable, bt_env.jobs_file("bt_run_pinned.py"), "--as-of", prev,
+                              "--data-dir", sb, "--bars-db", a.bars_db, "--code-dir", _cdir,
+                              "--script", (os.path.join(a.code_dir, "apps/main_line/stock_confirm_judge.py")
+                                           if a.code_dir else _script_in_rev(d8, "apps/main_line/stock_confirm_judge.py"))],
                              os.path.join(a.out, "confirm_%s.log" % d8), timeout=1800)
           entry["steps"]["confirm_prevday"] = {"rc": rc_prev, "as_of": prev, "s": round(dtp, 1)}
         if sw_on is False:
             entry["steps"]["switch_0818"] = {"skipped": "task_not_registered"}
         else:
-            rc_sw, dts = run([sys.executable, "/app/jobs/bt_day_legs_switch.py", "--date", d8, "--held-from-db",
-                              "--sandbox", sb, "--bars-db", a.bars_db],
+            _sw_cmd = [sys.executable, bt_env.jobs_file("bt_day_legs_switch.py"), "--date", d8, "--held-from-db",
+                       "--sandbox", sb, "--bars-db", a.bars_db]
+            if a.code_dir:
+                _sw_cmd += ["--code-dir", a.code_dir]
+            rc_sw, dts = run(_sw_cmd,
                              os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
             entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
         # 08:18 用的是上一交易日确认域 → 跑完必须**还原当天口径**，否则 09:20 路径会看错版本
@@ -166,8 +190,11 @@ def main() -> int:
         if arm_on is False:
             entry["steps"]["arm_0920"] = {"skipped": "task_not_registered"}
         else:
-            rc_arm, dta = run([sys.executable, "/app/jobs/bt_day_legs.py", "--date", d8, "--held-from-db",
-                               "--sandbox", sb, "--bars-db", a.bars_db],
+            _arm_cmd = [sys.executable, bt_env.jobs_file("bt_day_legs.py"), "--date", d8, "--held-from-db",
+                        "--sandbox", sb, "--bars-db", a.bars_db]
+            if a.code_dir:
+                _arm_cmd += ["--code-dir", a.code_dir]
+            rc_arm, dta = run(_arm_cmd,
                               os.path.join(a.out, "arm_%s.log" % d8), timeout=2400)
             entry["steps"]["arm_0920"] = {"rc": rc_arm, "s": round(dta, 1)}
         # ④ 汇总当日腿
@@ -207,7 +234,7 @@ def _script_in_rev(d8: str, rel: str) -> str:
             return p
     except Exception:
         pass
-    return os.path.join("/app", rel)
+    return os.path.join(bt_env.REPO, rel)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,9 @@ import os
 import sys
 import time
 
-sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs", "/app/app", "/app/core", "/app/backend"]
+sys.path[:0] = []
+import bt_env  # noqa: E402
+bt_env.add_paths()
 
 
 def held_from_db(cut: str, account: str = "stock"):
@@ -76,7 +78,7 @@ def resolve_code_dir(date8: str, explicit: str = "") -> str:
     """该日"在跑的代码版本"目录：`--code-dir` > `data/_bt_code/rev_map.json` 里的映射 > 空（用现行代码）。"""
     if explicit:
         return explicit
-    root = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "_bt_code")
+    root = os.path.join(os.environ.get("DATA_DIR", bt_env.DATA), "_bt_code")
     try:
         m = json.load(open(os.path.join(root, "rev_map.json"), encoding="utf-8"))
     except Exception:
@@ -92,14 +94,14 @@ def main() -> int:
     ap.add_argument("--sandbox", default="")
     ap.add_argument("--held", default="")
     ap.add_argument("--held-from-db", action="store_true")
-    ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
+    ap.add_argument("--bars-db", default=os.path.join(bt_env.DATA, "_bt_full", "bars.sqlite"))
     ap.add_argument("--code-dir", default="", help="该日的代码版本树（默认按 data/_bt_code/rev_map.json 自动解析）")
     ap.add_argument("--out", default="")
     ap.add_argument("--require-task", default="tranche_ladder_report",
                     help="该日版本树里必须启用的任务 id（时代检查；空=不检查）")
     a = ap.parse_args()
 
-    sb = a.sandbox or os.path.join(os.environ.get("DATA_DIR", "/app/data"), "_bt_full", a.date)
+    sb = a.sandbox or os.path.join(os.environ.get("DATA_DIR", bt_env.DATA), "_bt_full", a.date)
     _code = resolve_code_dir(a.date, a.code_dir)
     if _code:
         for _sub in ("apps/main_line", "jobs", "backend", "core", "config"):
@@ -120,7 +122,7 @@ def main() -> int:
 
     # 钉时钟（含 time.strftime/localtime）+ 钉取数：否则 09-11 的代码会 glob 到"最新那天的 gate/文件"
     try:
-        sys.path.insert(0, "/app/jobs")
+        bt_env.add_paths()
         from bt_run_pinned import pin_clock, install_relay_shim, install_gzcloud_shim
         pin_clock(cut)
         _rs = install_relay_shim(a.bars_db, cut)

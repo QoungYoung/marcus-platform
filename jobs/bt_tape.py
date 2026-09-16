@@ -25,7 +25,9 @@ import json
 import os
 import sys
 
-sys.path[:0] = ["/app", "/app/backend"]
+sys.path[:0] = []
+import bt_env  # noqa: E402
+bt_env.add_paths()
 
 
 # ── 数据装载 ──────────────────────────────────────────────
@@ -298,7 +300,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True)
     ap.add_argument("--symbol", required=True)
-    ap.add_argument("--pack", default="/app/data/_bt_full/pack")
+    ap.add_argument("--pack", default=os.path.join(bt_env.DATA, "_bt_full", "pack"))
     ap.add_argument("--dip-tol", type=float, default=0.005)
     ap.add_argument("--conditions-from-prod", action="store_true")
     ap.add_argument("--legs", default="")

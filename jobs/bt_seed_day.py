@@ -33,8 +33,10 @@ import subprocess
 import sys
 import time
 
-sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs"]
-SRC = os.environ.get("DATA_DIR", "/app/data")
+sys.path[:0] = []
+import bt_env  # noqa: E402
+bt_env.add_paths()
+SRC = os.environ.get("DATA_DIR") or bt_env.DATA
 ROOT = os.path.join(SRC, "_bt_full")
 DB_URL = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 
@@ -229,7 +231,7 @@ def script_path(code_dir: str, rel: str) -> str:
         cand = os.path.join(code_dir, rel)
         if os.path.exists(cand):
             return cand
-    return os.path.join("/app", rel)
+    return os.path.join(bt_env.REPO, rel)
 
 
 def snapshot_files(sb: str, names) -> dict:
@@ -261,6 +263,60 @@ def restore_files(sb: str, snap: dict) -> list:
     return restored
 
 
+def themes_from_prod_log(T: str, log_dir: str = ""):
+    """从生产自己的调度日志里读"当天实际用的主题"（用于补 `main_line_state.candidates`）。
+
+    为什么需要（§9.21）：`main_line_state.json` 是**当日覆盖型**文件，某些天（如 09-10 早晨那份）在
+    归档 / 带日期文件 / DB artifact 三处都没有 → 只能退到上一交易日那份，`candidates` 少几个主题
+    → `stock_confirm_judge` 只覆盖部分主题 → 确认域退化 → 布腿 0 条。生产日志里恰好记着它当时用的主题：
+      · `stock_confirm_refresh` 的 `TOP确认主题: [...]`（= 当时 state.candidates）
+      · `rotation_switch_arm` 的 `GATE_CONFIRMED_TODAY [...]` / `MAINLINE_POOL_TODAY [...]`
+    这些是**生产自己的产物**（可查证），注入比"退到旧版本"更忠实，且会写进 manifest 供审计。
+    """
+    import glob as _glob
+    import re as _re
+    log_dir = log_dir or bt_env.LOGS
+    day = "%s-%s-%s" % (T[:4], T[4:6], T[6:])
+    pats = [("top_confirm", r"TOP确认主题:\s*\[([^\]]*)\]"),
+            ("gate_confirmed", r"GATE_CONFIRMED_TODAY\s*\[([^\]]*)\]"),
+            ("mainline_pool", r"MAINLINE_POOL_TODAY\s*\[([^\]]*)\]")]
+    found = {}
+    for path in _glob.glob(os.path.join(log_dir, "scheduler_%s.jsonl" % day)) + \
+            _glob.glob(os.path.join(log_dir, "scheduler_%s.jsonl" % day.replace("-", ""))):
+        try:
+            for ln in open(path, encoding="utf-8", errors="replace"):
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    j = json.loads(ln)
+                except Exception:
+                    continue
+                blob = (j.get("output") or "") + "\n" + (j.get("error") or "")
+                for key, pat in pats:
+                    for m in _re.finditer(pat, blob):
+                        items = [x.strip().strip("'\"") for x in m.group(1).split(",") if x.strip()]
+                        if items and key not in found:
+                            found[key] = items
+        except Exception:
+            continue
+    # 当天 derive 用的主主线（`rotation_universe_refresh` 日志：`derive: WROTE rotation_sub_universe.json main=X`）
+    main = None
+    for path in _glob.glob(os.path.join(log_dir, "scheduler_%s.jsonl" % day)):
+        try:
+            for ln in open(path, encoding="utf-8", errors="replace"):
+                m = _re.search(r"derive: WROTE rotation_sub_universe\.json main=(\S+)", ln)
+                if m:
+                    main = m.group(1)
+                    break
+        except Exception:
+            pass
+        if main:
+            break
+    themes = found.get("top_confirm") or found.get("mainline_pool") or found.get("gate_confirmed") or []
+    return themes, dict(found, derive_main=main)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True, help="决策日 T（如 20260911）")
@@ -271,6 +327,13 @@ def main() -> int:
     ap.add_argument("--code-dir", default="", help="该日代码版本树（默认按 data/_bt_code/rev_map.json 解析）")
     ap.add_argument("--no-shim", action="store_true", help="跳过 4 个 producer 的 as-of 打桩（全用 stub）")
     ap.add_argument("--llm-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
+    ap.add_argument("--state-from-producers", action="store_true",
+                    help="**全年反事实模式**：不要求存在生产的历史 `main_line_state.json` 快照，"
+                         "改由生产者（`wolf_mainline_select` 等）按 as-of 数据**就地算出** state，"
+                         "并且**不还原**（as-of 快照优先的逻辑只为对齐生产而设）")
+    ap.add_argument("--state-themes-from-log", action="store_true",
+                    help="用生产调度日志里的 TOP确认主题/GATE_CONFIRMED_TODAY 覆盖 state.candidates"
+                         "（当日 state 版本缺失时的可查证替代；注入内容写进 manifest）")
     a = ap.parse_args()
 
     T = a.date
@@ -351,6 +414,43 @@ def main() -> int:
         rec("main_line_state.json", _picked)
         print("[seed] main_line_state.json ← %s（%s, main_line=%s）" % (tag, cand, dd.get("main_line")), flush=True)
         break
+    # ②b（可选）用生产日志的当日主题覆盖 `candidates`：当日的 state 版本三处都缺时才用得上，
+    #     且**必须留痕**（manifest 里记 injected/原 candidates），避免"悄悄改了输入还不知道"。
+    if a.state_themes_from_log:
+        try:
+            _themes, _found = themes_from_prod_log(T)
+            _p = os.path.join(sb, "main_line_state.json")
+            if _themes and os.path.exists(_p):
+                _cur = _jload(_p, {}) or {}
+                _old_c = list(_cur.get("candidates") or [])
+                _old_ml = _cur.get("main_line")
+                _cur["candidates"] = list(_themes)
+                _ml_new = (_found or {}).get("derive_main")
+                if _ml_new:
+                    _cur["main_line"] = _ml_new
+                _cur["_bt_themes_from_log"] = {"themes": _themes, "old_candidates": _old_c,
+                                               "old_main_line": _old_ml, "derive_main": _ml_new,
+                                               "found": _found, "src": "prod_scheduler_log"}
+                _jdump(_p, _cur)
+                man["state_themes_injected"] = {"themes": _themes, "old_candidates": _old_c,
+                                                "main_line": _cur.get("main_line"), "old_main_line": _old_ml}
+                print("[seed] ⚑ state ← 生产日志：main_line %s→%s，candidates %s→%s"
+                      % (_old_ml, _cur.get("main_line"), _old_c, _themes), flush=True)
+            else:
+                print("[seed] ⚑ 生产日志里没读到当日主题（found=%s）→ 不注入" % (_found or {}), flush=True)
+        except Exception as _e:
+            print("[seed] ⚑ 日志注主题失败: %s" % str(_e)[:90], flush=True)
+
+    if not _picked and a.state_from_producers:
+        # 全年反事实：历史快照可能根本不存在 → 交给生产者算；先放一个空占位（wave 步骤要求文件存在）
+        _p = os.path.join(sb, "main_line_state.json")
+        if os.path.islink(_p):
+            os.unlink(_p)
+        if not os.path.exists(_p):
+            _jdump(_p, {})
+        rec("main_line_state.json", {"src": "counterfactual_placeholder", "note": "由生产者按 as-of 数据就地计算"})
+        print("[seed] ⚑ 反事实模式：不找生产 state 快照，交由生产者计算（cut=%s）" % cut, flush=True)
+        _picked = {"src": "counterfactual_placeholder"}
     if not _picked:
         got = from_archive_or_db("main_line_state.json", cut, os.path.join(sb, "main_line_state.json"))
         rec("main_line_state.json", got)
@@ -397,6 +497,66 @@ def main() -> int:
         print("[seed] 沙箱兜底失败: %s" % str(e)[:90], flush=True)
 
 
+    # ③a-1.5 **trend_confirm as-of cut**：`trend_confirm_<cut>_long.json` 是链上真实输入
+    #   （`wolf_context.py` 从它取 `themes[*].track_a.stage` → 布腿器的 stage/verdict；`mainline_state_inject`
+    #    也用它），而它由盘后任务 `daily_inputs_chain` 生成、**历史日期只有部分存在**。
+    #   生产 2026-09-13 已删掉 heat_v2 / mainline_gate 两步（heat_v2 假设被证伪、gate 作约束净负），
+    #   所以只剩 trend_confirm 这一个必须自己算的输入。
+    _tc_path = os.path.join(sb, "trend_confirm_%s_long.json" % cut)
+    if a.state_from_producers or not os.path.exists(_tc_path):
+        try:
+            r = subprocess.run([sys.executable, bt_env.jobs_file("bt_run_pinned.py"), "--as-of", cut,
+                                "--data-dir", sb, "--bars-db", a.bars_db, "--code-dir", code_dir,
+                                "--script", script_path(code_dir, "apps/main_line/trend_confirm.py"), "--",
+                                "--hist", os.path.join(sb, "concept_long.json"),
+                                "--params", os.path.join(sb, "trend_confirm_params.json"),
+                                "--as-of", cut, "--json", _tc_path],
+                               capture_output=True, text=True, timeout=1800,
+                               env={**os.environ, "DATA_DIR": sb})
+            rec("trend_confirm_%s_long.json" % cut, {"src": "regen_pinned", "rc": r.returncode,
+                                                     "script": "apps/main_line/trend_confirm.py",
+                                                     "tail": (r.stderr or r.stdout or "")[-160:]})
+            print("[seed] trend_confirm as-of %s rc=%d" % (cut, r.returncode), flush=True)
+        except Exception as _e:
+            rec("trend_confirm_%s_long.json" % cut, {"src": "regen_err", "err": str(_e)[:90]})
+
+    # ③a-1.6 **反事实模式**：把每日链上另外两个"按日期"的生产者也算出来（生产 `daily_inputs_chain` 里有）
+    #   `build_etf_flow --date cut` / `build_inst_flow --date cut`；否则沙箱里用的是**当期快照**（前视/失真）。
+    if a.state_from_producers:
+        for _rel, _out in (("apps/main_line/build_etf_flow.py", "etf_share_flow.json"),
+                           ("apps/main_line/build_inst_flow.py", "theme_inst_flow.json")):
+            try:
+                r = subprocess.run([sys.executable, "/app/jobs/bt_run_pinned.py".replace("/app/jobs", os.path.dirname(os.path.abspath(__file__))),
+                                    "--as-of", cut, "--data-dir", sb, "--bars-db", a.bars_db,
+                                    "--code-dir", code_dir, "--script", script_path(code_dir, _rel),
+                                    "--", "--date", cut],
+                                   capture_output=True, text=True, timeout=1200,
+                                   env={**os.environ, "DATA_DIR": sb})
+                rec(_out + "(asof)", {"src": "regen_pinned", "rc": r.returncode, "script": _rel,
+                                      "tail": (r.stderr or r.stdout or "")[-140:]})
+                print("[seed] %s as-of %s rc=%d" % (_rel.split("/")[-1], cut, r.returncode), flush=True)
+            except Exception as _e:
+                rec(_out + "(asof)", {"src": "regen_err", "err": str(_e)[:90]})
+
+    # ③a-1.7 **crowding 按日**：`rotation_crowding_<季度末>.json` 里选 ≤ cut 最近的一份（生产是季度更新）
+    try:
+        import glob as _g2
+        _cands = sorted(_g2.glob(os.path.join(SRC, "rotation_crowding_2*.json")))
+        _pick = None
+        for _c in _cands:
+            _d = "".join(ch for ch in os.path.basename(_c) if ch.isdigit())[:8]
+            if _d and _d <= cut:
+                _pick = (_c, _d)
+        if _pick:
+            _dst = os.path.join(sb, "rotation_crowding.json")
+            if os.path.islink(_dst):
+                os.unlink(_dst)
+            shutil.copy2(_pick[0], _dst)
+            rec("rotation_crowding.json", {"src": "asof_quarter", "path": _pick[0], "quarter_end": _pick[1]})
+            print("[seed] rotation_crowding ← %s（≤cut 最近一份）" % os.path.basename(_pick[0]), flush=True)
+    except Exception as _e:
+        rec("rotation_crowding.json", {"src": "asof_err", "err": str(_e)[:80]})
+
     # ③a-2 regen 前先快照"按 as-of 播种好的"受保护文件（regen 会顺手改写 main_line_state 之类）
     _snap_seed = snapshot_files(sb, PROTECT_AFTER_PRODUCERS)
     man["protected_files"] = sorted(_snap_seed.keys())
@@ -419,7 +579,8 @@ def main() -> int:
         rec("wolf_mainline_select.json(regen)", {"src": "regen_err", "err": str(e)[:90]})
 
     # ③a-3 regen 的副作用立刻撤掉（它会重写 main_line_state → 那就不再是 as-of 那份）
-    _rb = restore_files(sb, _snap_seed)
+    #       ⚠️ 但**全年反事实**模式下，我们要的正是"按 as-of 数据算出来的 state" → 不还原。
+    _rb = [] if a.state_from_producers else restore_files(sb, _snap_seed)
     if _rb:
         man["restored_after_regen"] = _rb
         print("[seed] regen 后还原 as-of 文件：%s" % _rb, flush=True)
@@ -435,7 +596,7 @@ def main() -> int:
     if not a.no_llm:
         try:
             mls = os.path.join(sb, "main_line_state.json")
-            r = subprocess.run([sys.executable, "/app/jobs/bt_wave_asof.py", "--as-of", cut, "--code-dir", code_dir,
+            r = subprocess.run([sys.executable, bt_env.jobs_file("bt_wave_asof.py"), "--as-of", cut, "--code-dir", code_dir,
                                 "--mode", a.llm_mode, "--main-line-state", mls,
                                 "--out", os.path.join(sb, "wave_state.json")],
                                capture_output=True, text=True, timeout=900,
@@ -489,7 +650,7 @@ def main() -> int:
             out = os.path.join(sb, name)
             before = os.path.getmtime(out) if os.path.exists(out) else 0
             try:
-                r = subprocess.run([sys.executable, "/app/jobs/bt_run_pinned.py", "--as-of", cut,
+                r = subprocess.run([sys.executable, bt_env.jobs_file("bt_run_pinned.py"), "--as-of", cut,
                                     "--data-dir", sb, "--bars-db", a.bars_db,
                                     "--code-dir", code_dir,
                                     "--script", script_path(code_dir, script), "--"] + args,
@@ -510,7 +671,7 @@ def main() -> int:
             continue
         src = os.path.join(SRC, name)
         if not os.path.exists(src) and name == "p3_position_tiers.json":
-            src = "/app/config/p3_position_tiers.json"
+            src = os.path.join(bt_env.REPO, "config", "p3_position_tiers.json")
         info = copy_json(src, os.path.join(sb, name)) if os.path.exists(src) else None
         rec(name, (dict(info, src="stub", from_=src) if info else None))
 
