@@ -29,7 +29,10 @@ def main() -> int:
     if not files:
         print("还没有跑完任何一天（找 %s/_summary/prod_*.json）" % a.root)
         return 1
-    days, legs, trig, fills = [], 0, 0, 0
+    days, legs = [], 0
+    # ⚠️ 每日 prod_<day>.json 里的 triggers/trades 是**该时刻的全量快照**（不是当日增量）
+    #    → 直接累加会重复计数（实测 4 天累加 36 次，库里其实只有 14 条）。按 id 去重。
+    trig_ids, fill_ids = set(), set()
     status = collections.Counter()
     reasons = collections.Counter()
     blocked = 0
@@ -41,8 +44,10 @@ def main() -> int:
             continue
         days.append(d["day"])
         legs += len(d.get("armed") or [])
-        trig += len(d.get("triggers") or [])
-        fills += len(d.get("trades") or [])
+        for _t in (d.get("triggers") or []):
+            trig_ids.add(_t.get("id"))
+        for _t in (d.get("trades") or []):
+            fill_ids.add(_t.get("id"))
         pos_last = len(d.get("positions") or [])
         last = d
         for t in d.get("triggers") or []:
@@ -51,7 +56,8 @@ def main() -> int:
                 blocked += 1
                 reasons[(t.get("reason") or "")[:60]] += 1
     print("已完成 %d 天：%s → %s" % (len(days), days[0], days[-1]))
-    print("布腿 %d 条 / 触发 %d 次 / 成交 %d 笔 / 期末持仓 %d 只" % (legs, trig, fills, pos_last))
+    print("布腿 %d 条 / 触发 %d 条（去重） / 成交 %d 笔（去重） / 期末持仓 %d 只"
+          % (legs, len(trig_ids), len(fill_ids), pos_last))
     print("触发状态：%s" % dict(status))
     if blocked:
         print("被拦 TOP5：")

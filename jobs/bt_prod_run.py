@@ -475,6 +475,7 @@ def _forbid_bridge() -> None:
 
 def _farm_root(day_dir: str) -> str:
     """造一个 `MARCUS_WORKSPACE` farm：`<farm>/data -> 沙箱`，其余指向仓库。"""
+    day_dir = os.path.abspath(day_dir)
     farm = os.path.join(os.path.dirname(day_dir), "_farm", os.path.basename(day_dir))
     os.makedirs(farm, exist_ok=True)
     for name in ("apps", "backend", "core", "jobs", "config", "scripts", "frontend", "packages"):
@@ -530,6 +531,12 @@ def main() -> int:
     ap.add_argument("--out", default="", help="结果 JSON 落盘路径")
     a = ap.parse_args()
     day = a.day
+    # ⚠️ 必须**绝对路径**：`_farm_root` 会把 `farm/<day>/data` 做成指向沙箱的**符号链接**，
+    #    相对路径的链接目标会按"链接所在目录"解析 → 变成断链 → 生产 `PaperTradingEngine.__init__`
+    #    的 `os.makedirs(data_dir, exist_ok=True)` 判定 isdir=False → **FileExistsError** →
+    #    `_write_trigger` 的自动执行整块被 except 吞掉 → 触发全留在 pending、**成交恒为 0**
+    #    （2026-09-16 实测：年跑用相对 --root，2 小时里 0 成交；同一代码用绝对 --root 的 smoke 正常）。
+    a.root = os.path.abspath(a.root)
     day_dir = os.path.join(a.root, day)
     if not os.path.isdir(day_dir):
         print("⛔ 沙箱不存在：%s" % day_dir, file=sys.stderr)
