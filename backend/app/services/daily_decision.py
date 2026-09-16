@@ -220,9 +220,14 @@ def _l3(tiers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """L3 仓位：目标仓位/下限（来自 tier_targets，与 §5 映射表一致）。"""
     if not tiers:
         return {"value": None, "basis": "wolf_discipline.tier_targets（缺失）"}
-    return {"value": {"target_pct": tiers.get("target_pct"), "floor_pct": tiers.get("floor_pct"),
-                      "tier": tiers.get("tier") or tiers.get("operation")},
-            "basis": "wolf_discipline.tier_target_pct/tier_floor_pct(operation)"}
+    val = {"target_pct": tiers.get("target_pct"),
+           "cap_pct": tiers.get("target_pct"),          # 明确"上限=档位目标"，别再从 floor 里找上限
+           "tier": tiers.get("tier") or tiers.get("operation")}
+    if tiers.get("floor_pct"):
+        val["floor_pct"] = tiers["floor_pct"]
+        val["floor_note"] = tiers.get("floor_note") or "下限（非上限）"
+    return {"value": val,
+            "basis": "wolf_discipline.tier_target_pct（上限=目标）/ tier_floor_pct（下限，仅 build 档）"}
 
 
 def _l4(picks: Optional[Any]) -> Dict[str, Any]:
@@ -352,8 +357,13 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
             from app.services.wolf_discipline import tier_target_pct, tier_floor_pct
             tgt = tier_target_pct(op)
             flr = tier_floor_pct(op)
-            tiers = {"target_pct": (float(tgt) / 100.0) if tgt else None,
-                     "floor_pct": (float(flr) / 100.0) if flr else None, "tier": op}
+            # 2026-09-16 修：**只有当前档位真有下限时才输出 floor_pct** —— 否则 build 档的 55% 会跟着
+            # 其它档位一起吐出去，被 agent 当成"上限"（9-16 报告"上轮纪律上限 55%"即此）。
+            _fl = (float(flr) / 100.0) if flr else None
+            tiers = {"target_pct": (float(tgt) / 100.0) if tgt else None, "tier": op}
+            if _fl:
+                tiers["floor_pct"] = _fl
+                tiers["floor_note"] = "下限（仅 build 档；side/t_only 无下限）"
         except Exception:
             tiers = {}
     layers = {"L1_direction": _l1(None, ms), "L2_operation": l2, "L3_position": _l3(tiers),
