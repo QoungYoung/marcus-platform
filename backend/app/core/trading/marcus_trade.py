@@ -140,6 +140,23 @@ class MarcusVNPyExecutor:
                 return positions
         return self.get_positions_from_db()
 
+    def _refresh_engine_cash(self) -> None:
+        """成交前刷新 engine 的现金缓存。
+
+        engine 路径会把现金存在内存里（构造时从 DB 加载、成交时自增自减），
+        而同一账户的现金可能被另一个进程（backend 的 VN.PY bridge）改动过；
+        成交前对齐一次，既避免用过时余额误判"资金不足"，也让后续的增量写库准确。
+        """
+        if self.engine is None:
+            return
+        try:
+            refresh = getattr(self.engine, "refresh_cash_from_pg", None)
+            if callable(refresh):
+                refresh()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[MarcusTrade] engine 现金刷新失败: {e}")
+
     def _get_pg_conn(self):
         """跨后端统一获取 PostgreSQL 连接（engine 优先）"""
         if self.engine is not None:
@@ -807,6 +824,8 @@ class MarcusVNPyExecutor:
 
     def buy(self, symbol: str, price: float, volume: int, reason: str = "") -> dict:
         """买入操作 - 通过完整订单流程成交，失败时解冻资金"""
+        # 跨进程共享账户：成交前把 engine 的现金缓存与 DB 对齐（见 refresh_cash_from_pg）
+        self._refresh_engine_cash()
         # 风控检查
         risk_result = self.check_risk(symbol, price, volume, 'buy')
 
@@ -890,6 +909,7 @@ class MarcusVNPyExecutor:
         # 归一化 symbol（兼容 301566.SZ / SZ301566 / 301566 多种输入格式）
         if self.engine:
             symbol = self.engine._normalize_symbol(symbol)
+        self._refresh_engine_cash()
         # 风控检查
         risk_result = self.check_risk(symbol, price, volume, 'sell',
                                       skip_trend_constraint=skip_trend_constraint)
@@ -1123,14 +1143,6 @@ class MarcusVNPyExecutor:
             if conn is None:
                 return
             cur = conn.cursor()
-            cur.execute(
-                "SELECT available_cash FROM paper_account_info WHERE account_id = %s FOR UPDATE",
-                (self.account_id,)
-            )
-            row = cur.fetchone()
-            if not row:
-                return
-            cash = float(row[0] or 0)
             gross = float(price) * int(volume)
             if direction == "买入":
                 delta = -gross * (1 + self._BRIDGE_BUY_FEE)
@@ -1138,19 +1150,22 @@ class MarcusVNPyExecutor:
             else:
                 delta = gross * (1 - self._BRIDGE_SELL_FEE)
                 label = "回款"
-            new_cash = round(cash + delta, 4)
+            # 原子增量：多进程（backend / worker 各自的 bridge 与 engine）共享同一行现金，
+            # 谁都不能用进程内绝对值覆盖别人 —— 只做 available_cash = available_cash + delta。
             cur.execute(
-                "UPDATE paper_account_info SET available_cash = %s, updated_at = %s "
-                "WHERE account_id = %s",
-                (new_cash, datetime.now().isoformat(), self.account_id)
+                "UPDATE paper_account_info SET available_cash = available_cash + %s, "
+                "updated_at = %s WHERE account_id = %s RETURNING available_cash",
+                (round(delta, 4), datetime.now().isoformat(), self.account_id)
             )
+            row = cur.fetchone()
             if not conn.autocommit:
                 conn.commit()
             cur.close()
-            _log.info(
-                "[MarcusTrade] 桥接现金结算(%s): %.2f → %.2f (%+.2f)",
-                label, cash, new_cash, delta,
-            )
+            if row:
+                _log.info(
+                    "[MarcusTrade] 桥接现金结算(%s): %+.2f → 余额 %.2f",
+                    label, delta, float(row[0]),
+                )
         except Exception as e:
             _log.warning(f"[MarcusTrade] ⚠️ 桥接现金结算失败({direction} {price}×{volume}): {e}")
         finally:
@@ -1353,19 +1368,16 @@ class MarcusVNPyExecutor:
             cash_delta = price * volume * (1 - self._SELL_FEE_RATE)
             sign = -1 if is_void else 1  # 撤回卖出 → 扣回回款；恢复卖出 → 回款
 
+        # 原子增量（与 _settle_bridge_cash 同口径）：多写者共享同一行，禁止写进程内绝对值
         cur.execute(
-            "SELECT available_cash FROM paper_account_info WHERE account_id = %s FOR UPDATE",
-            (self.account_id,)
+            "UPDATE paper_account_info SET available_cash = available_cash + %s, "
+            "updated_at = %s WHERE account_id = %s RETURNING available_cash",
+            (sign * cash_delta, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), self.account_id)
         )
         row = cur.fetchone()
         if not row:
             return 0.0
-        available = float(row[0] or 0) + sign * cash_delta
-        cur.execute(
-            "UPDATE paper_account_info SET available_cash = %s, updated_at = %s WHERE account_id = %s",
-            (available, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), self.account_id)
-        )
-        return available
+        return float(row[0] or 0)
 
     def void_trade(self, trade_id: int, reason: str) -> dict:
         """撤回一笔成交（软删除，不计入持仓；同时反向结算资金，避免资金被吞）"""

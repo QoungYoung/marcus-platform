@@ -224,17 +224,28 @@ class AccountEventListener:
 
 
 def _sync_account(pg_params: dict, params: tuple) -> None:
-    """后台线程: 写入 paper_account_info"""
+    """后台线程: 账户事件 → paper_account_info。
+
+    ⚠️ 只处理「账户行缺失」的播种场景，**不再写 available_cash**：
+    VN.PY 自带的 PaperAccount 撮合引擎从不维护 balance，也没有其它 EVENT_ACCOUNT
+    发送点，本事件的实际来源只有 VNPyBridge.start() 的那次注入——而注入值就是从
+    PG 读出来的原值。也就是说这里以前是个"回声写入"：它会把 bridge 启动瞬间的余额
+    写回同一行，覆盖掉期间别的进程（另一个 bridge / engine）成交造成的现金变化，
+    是现金漂移的来源之一。现金的唯一真相是 DB，所有变更一律走原子增量。
+    """
     balance, frozen, now = params
     try:
         conn = _get_conn(pg_params)
         cur = conn.cursor()
         cur.execute(
-            "UPDATE paper_account_info SET available_cash = %s, "
-            "frozen_cash = %s, updated_at = %s WHERE account_id = 'stock'",
-            (balance, frozen, now),
+            "SELECT account_id FROM paper_account_info WHERE account_id = 'stock'"
         )
-        if cur.rowcount == 0:
+        if cur.fetchone():
+            cur.execute(
+                "UPDATE paper_account_info SET updated_at = %s WHERE account_id = 'stock'",
+                (now,),
+            )
+        else:
             cur.execute(
                 "INSERT INTO paper_account_info "
                 "(account_id, initial_capital, available_cash, frozen_cash, updated_at) "

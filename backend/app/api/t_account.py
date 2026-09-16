@@ -420,11 +420,12 @@ def t_capital_adjust(amount: float, reason: str = ""):
         if row is None:
             raise HTTPException(status_code=404, detail="t 账户资金记录不存在（先触发一次 t 账户撮合初始化）")
         new_initial = float(row["initial_capital"] or 0) + amount
-        new_cash = float(row["available_cash"] or 0) + amount
+        # 现金走原子增量：多进程共享该行，写绝对值会覆盖期间其它进程的成交结果
         db.execute(_text(
-            "UPDATE paper_account_info SET initial_capital = :ic, available_cash = :cash, "
+            "UPDATE paper_account_info SET initial_capital = :ic, "
+            "available_cash = available_cash + :amt, "
             "frozen_cash = COALESCE(frozen_cash, 0), updated_at = now() WHERE account_id = 't'"
-        ), {"ic": new_initial, "cash": new_cash})
+        ), {"ic": new_initial, "amt": amount})
         db.commit()
     finally:
         db.close()

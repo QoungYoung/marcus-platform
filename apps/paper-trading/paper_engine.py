@@ -199,6 +199,7 @@ class PaperTradingEngine:
                 self.available_cash = row[1]
                 self.frozen_cash = row[2] if row[2] is not None else 0.0
                 self.order_counter = row[3] if row[3] is not None else 0
+                self._cash_saved = self.available_cash   # 增量写库基线（见 _save_account）
                 self.positions = self._load_positions_from_db()
                 print(f"[OK] 账户数据从 PostgreSQL 读取，可用资金：{self.available_cash:,.2f}")
                 print(f"[OK] 持仓从 PostgreSQL 读取: {len(self.positions)} 只")
@@ -215,6 +216,8 @@ class PaperTradingEngine:
                 self.frozen_cash = data.get('frozen_cash', 0.0)
                 self.order_counter = data.get('order_counter', 0)
 
+            # 首次迁移：DB 里还没有该账户，_cash_saved 置 None 走 INSERT 绝对值分支
+            self._cash_saved = None
             self._save_account()
             self.positions = self._load_positions_from_db()
 
@@ -243,6 +246,7 @@ class PaperTradingEngine:
             self.frozen_cash = 0.0
             self.positions = {}
             self.order_counter = 0
+            self._cash_saved = None   # 新账户：走 INSERT 绝对值分支
             self._save_account()
             print(f"[OK] 已创建新账户 {self.account_id}，初始资金：{initial_capital:,.2f}")
     
@@ -372,11 +376,23 @@ class PaperTradingEngine:
             print(f"[警告] 删除持仓元数据失败: {e}")
 
     def _save_account(self):
-        """保存账户状态到 PostgreSQL paper_account_info（SELECT ... FOR UPDATE 防并发写）"""
+        """保存账户状态到 PostgreSQL paper_account_info。
+
+        ⚠️ 现金只写**增量**，不写进程内的绝对值：
+        本项目同时存在多个持有现金状态的进程/对象（backend 与 worker 各一套 VN.PY bridge，
+        以及各自的 PaperTradingEngine 实例），谁最后写谁生效。写绝对值时，engine A 在 T0
+        加载的余额会覆盖掉 T0~T2 之间别的进程成交造成的现金变化（生产实测漂移 3.4 万）。
+        改为 `available_cash = available_cash + (内存值 − 上次落库值)` 后，各写者的增量天然可叠加，
+        DB 成为唯一真相；内存值只是缓存（长期存活的 engine 应在成交前 refresh_cash_from_pg）。
+        """
         try:
             conn = self._get_pg_conn()
             cursor = conn.cursor()
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            baseline = getattr(self, '_cash_saved', None)
+            # baseline=None 表示本对象尚未与 DB 对齐（新建/迁移路径）。若此时行已存在，
+            # 说明另一个进程已建好账户，写绝对值会覆盖别人的成交 → 现金增量记 0。
+            cash_delta = 0.0 if baseline is None else (self.available_cash - baseline)
             # 锁定行再 upsert，保证并发安全（按账户行锁）
             cursor.execute(
                 'SELECT account_id FROM paper_account_info WHERE account_id = %s FOR UPDATE',
@@ -384,10 +400,10 @@ class PaperTradingEngine:
             )
             if cursor.fetchone():
                 cursor.execute(
-                    'UPDATE paper_account_info SET initial_capital = %s, available_cash = %s, '
-                    'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE account_id = %s',
-                    (self.initial_capital, self.available_cash, self.frozen_cash,
-                     self.order_counter, now, self.account_id)
+                    'UPDATE paper_account_info SET available_cash = available_cash + %s, '
+                    'frozen_cash = %s, order_counter = GREATEST(order_counter, %s), updated_at = %s '
+                    'WHERE account_id = %s',
+                    (cash_delta, self.frozen_cash, self.order_counter, now, self.account_id)
                 )
             else:
                 cursor.execute(
@@ -396,10 +412,36 @@ class PaperTradingEngine:
                     (self.account_id, self.initial_capital, self.available_cash,
                      self.frozen_cash, self.order_counter, now)
                 )
+            self._cash_saved = self.available_cash
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[警告] 保存账户状态失败: {e}")
+
+    def refresh_cash_from_pg(self) -> None:
+        """成交前从 DB 重新拉取现金/冻结/计数器，避免长期存活实例用过时余额判断资金。
+
+        跨进程共享同一账户时（agent 走 backend 的 VN.PY bridge、监控走 worker 的 engine），
+        内存余额随时可能落后于 DB；本方法把缓存与 `_cash_saved` 基线一起对齐。
+        """
+        try:
+            conn = self._get_pg_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT initial_capital, available_cash, frozen_cash, order_counter '
+                'FROM paper_account_info WHERE account_id = %s',
+                (self.account_id,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                self.initial_capital = float(row[0])
+                self.available_cash = float(row[1])
+                self.frozen_cash = float(row[2] or 0)
+                self.order_counter = int(row[3] or 0)
+                self._cash_saved = self.available_cash
+        except Exception as e:
+            print(f"[警告] 现金刷新失败: {e}")
 
     def _init_database(self):
         """初始化 PostgreSQL 表结构"""
@@ -974,13 +1016,18 @@ class PaperTradingEngine:
                 )
 
         # 在同一事务内更新账户状态（行已由开头的 FOR UPDATE 锁定）
+        # 现金同样只写增量：本对象的 available_cash 是"加载时 DB 值 + 本次成交"，
+        # 直接写绝对值会覆盖期间别的进程（VN.PY bridge 等）造成的现金变化。
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _baseline = getattr(self, '_cash_saved', None)
+        cash_delta = 0.0 if _baseline is None else (self.available_cash - _baseline)
         cursor.execute(
-            'UPDATE paper_account_info SET initial_capital = %s, available_cash = %s, '
-            'frozen_cash = %s, order_counter = %s, updated_at = %s WHERE account_id = %s',
-            (self.initial_capital, self.available_cash, self.frozen_cash,
-             self.order_counter, now, self.account_id)
+            'UPDATE paper_account_info SET available_cash = available_cash + %s, '
+            'frozen_cash = %s, order_counter = GREATEST(order_counter, %s), updated_at = %s '
+            'WHERE account_id = %s',
+            (cash_delta, self.frozen_cash, self.order_counter, now, self.account_id)
         )
+        self._cash_saved = self.available_cash
 
         conn.commit()
         conn.close()
