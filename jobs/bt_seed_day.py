@@ -100,6 +100,72 @@ def truncate_concept_hist(src: str, dst: str, cut: str):
     return {"concepts": len(out), "cut": cut}
 
 
+# 按日产物家族：软链农场会把"当期"文件也链进来，而消费方常按"日期最大"取用 → **必须裁掉 > cut 的**
+DATED_FAMILIES = ("trend_confirm_*_long.json", "mainline_gate_*.json", "heat_v2_*.json", "theme_r5_*.json",
+                  "chain_map_2*.json", "rotation_crowding_2*.json", "wave_state_2*.json",
+                  "main_line_state_2*.json", "mainline_confirm_history_2*.json")
+
+
+def prune_future_dated(sb: str, cut: str):
+    """删掉沙箱里日期 > cut 的按日产物（含软链）——**防未来函数**。
+
+    实测踩坑：1 月沙箱里混进 `trend_confirm_202609xx_long.json`，而 `wolf_context._latest("trend_confirm_")`
+    取日期最大的那份 → 1 月决策用了 9 月的结构状态（真前视）。
+    """
+    import re as _re
+    removed = []
+    for pat in DATED_FAMILIES:
+        for p in glob.glob(os.path.join(sb, pat)):
+            m = _re.search(r"(?<!\d)(20\d{6})(?!\d)", os.path.basename(p))
+            if m and m.group(1) > cut:
+                try:
+                    os.unlink(p)
+                    removed.append(os.path.basename(p))
+                except OSError:
+                    pass
+    return removed
+
+
+def assert_pit(sb: str, cut: str, names):
+    """**PIT 硬校验**：沙箱里的滚动输入不得含 > cut 的日期（当日/未来数据）。
+
+    用户的纪律：**主题资金流等按日数据，当日值只能用于次日决策**（避免未来函数）。
+    这里对三类结构做检查并返回明细；任何越界都记 `man["pit_violations"]` 并大声打印：
+      · 顶层键是日期（`theme_mf_daily.json`）
+      · `{concepts:{name:{dates:[...]}}}`（`concept_hist.json`）
+      · `{series:{...}}` / `{dates:[...]}`（`concept_long_seed.json` / `concept_vol.json`）
+    """
+    bad = {}
+    for nm in names:
+        p = os.path.join(sb, nm)
+        if not os.path.exists(p):
+            continue
+        d = _jload(p, None)
+        if d is None:
+            continue
+        found = []
+
+        def _scan(obj, depth=0):
+            if depth > 4 or len(found) > 5:
+                return
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(k, str) and len(k) == 8 and k.isdigit() and k > cut:
+                        found.append(k)
+                    _scan(v, depth + 1)
+            elif isinstance(obj, list):
+                for v in obj[:400]:
+                    if isinstance(v, str) and len(v) == 8 and v.isdigit() and v > cut:
+                        found.append(v)
+                    elif isinstance(v, (dict, list)):
+                        _scan(v, depth + 1)
+
+        _scan(d)
+        if found:
+            bad[nm] = sorted(set(found))[:5]
+    return bad
+
+
 def truncate_by_date_keys(src: str, dst: str, cut: str):
     d = _jload(src, {}) or {}
     out = {k: v for k, v in d.items() if str(k) <= cut} if isinstance(d, dict) else d
@@ -497,6 +563,27 @@ def main() -> int:
         print("[seed] 沙箱兜底失败: %s" % str(e)[:90], flush=True)
 
 
+    # ③a-1.3 **裁掉未来按日产物**（软链农场会链进当期文件；消费方按"日期最大"取 → 真前视）
+    try:
+        _pruned = prune_future_dated(sb, cut)
+        if _pruned:
+            man["pruned_future_files"] = _pruned
+            print("[seed] ✂️ 裁掉 %d 个 > cut 的按日产物：%s" % (len(_pruned), _pruned[:6]), flush=True)
+    except Exception as _e:
+        print("[seed] 裁未来文件失败: %s" % str(_e)[:80], flush=True)
+
+    # ③a-1.4 **PIT 硬校验**：确保滚动输入里没有 > cut 的日期（当日/未来数据不许进来）
+    try:
+        _viol = assert_pit(sb, cut, ["theme_mf_daily.json", "concept_hist.json", "concept_long_seed.json",
+                                     "concept_vol.json", "index_daily_000001.json"])
+        if _viol:
+            man["pit_violations"] = _viol
+            print("[seed] ⛔ PIT 越界（存在 > cut=%s 的日期）：%s" % (cut, _viol), flush=True)
+        else:
+            print("[seed] ✅ PIT 校验通过：滚动输入均 ≤ cut=%s（当日资金流不会进当日决策）" % cut, flush=True)
+    except Exception as _e:
+        print("[seed] PIT 校验异常: %s" % str(_e)[:90], flush=True)
+
     # ③a-1.5 **trend_confirm as-of cut**：`trend_confirm_<cut>_long.json` 是链上真实输入
     #   （`wolf_context.py` 从它取 `themes[*].track_a.stage` → 布腿器的 stage/verdict；`mainline_state_inject`
     #    也用它），而它由盘后任务 `daily_inputs_chain` 生成、**历史日期只有部分存在**。
@@ -666,13 +753,26 @@ def main() -> int:
             print("[seed] producer 跑完后还原 as-of 文件：%s" % man["restored_after_producers"], flush=True)
 
     # 其余辅助文件仍沿用最近一版（manifest 标 stub）
+    # ⚠️ **不许覆盖生产者刚算出来的产物**：踩过的坑——`rotation_universe_result.json` 是
+    #    `derive_sub_universe --refresh-result` 的产物（它内部调 `rotation_universe.main()` 写池），
+    #    但它在"补桩名单"里也存在 → 这一轮 copy_json 把**当期快照**盖回去，池退化成写死的
+    #    `SUB_UNIVERSE`（room_bottom 变成 国算/算力 这种主题名而不是概念）→ pathA 选不出票 → 0 条腿。
+    #    规则：① 名字出现在 PRODUCER_OUTPUTS/PINNED 里的一律跳过；② 目标文件比源文件**新**（= 生产者刚写的）也跳过。
+    _stub_skip = set(PRODUCER_OUTPUTS) | {n for n, _s, _a in PINNED}
     for name in STUB_FROM_LIVE:
-        if any(name == n for n, _s, _a in PINNED):
+        if name in _stub_skip:
             continue
         src = os.path.join(SRC, name)
         if not os.path.exists(src) and name == "p3_position_tiers.json":
             src = os.path.join(bt_env.REPO, "config", "p3_position_tiers.json")
-        info = copy_json(src, os.path.join(sb, name)) if os.path.exists(src) else None
+        dst = os.path.join(sb, name)
+        try:
+            if os.path.exists(dst) and os.path.exists(src) and os.path.getmtime(dst) > os.path.getmtime(src):
+                rec(name, {"src": "stub_skipped_newer", "dst_mtime": int(os.path.getmtime(dst))})
+                continue
+        except OSError:
+            pass
+        info = copy_json(src, dst) if os.path.exists(src) else None
         rec(name, (dict(info, src="stub", from_=src) if info else None))
 
     # ③a-1 写入穿透自检（跑完比对）

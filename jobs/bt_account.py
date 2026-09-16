@@ -216,7 +216,7 @@ def main() -> int:
                 conds = [{"trigger_kind": "custom_m5dump", "expression": arm.BUY_253_EXPR},
                          {"trigger_kind": "custom_prevlow", "expression": arm.BUY_254_EXPR}]
             try:
-                res = bt_tape.run_symbol(pack, sym, day, conds, dip_tol=a.dip_tol)
+                res = bt_tape.run_symbol(pack, sym, day, conds, dip_tol=a.dip_tol, bars_db=a.bars_db)
             except Exception as e:
                 errs.append({"day": day, "symbol": sym, "err": str(e)[:140]})
                 continue
@@ -231,7 +231,8 @@ def main() -> int:
                     continue
                 try:
                     res = bt_tape.run_symbol(pack, sym, day, [{"trigger_kind": "sell_vwap_break",
-                                                               "expression": SELL_VWAP_EXPR}], dip_tol=a.dip_tol)
+                                                               "expression": SELL_VWAP_EXPR}], dip_tol=a.dip_tol,
+                                             bars_db=a.bars_db)
                 except Exception as e:
                     errs.append({"day": day, "symbol": sym, "err": str(e)[:140]})
                     continue

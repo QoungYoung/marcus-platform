@@ -51,8 +51,15 @@ def load_index_m5(pack: str, key: str = "sh"):
     return bars
 
 
-def load_daily(pack: str, symbol: str, bars_db: str = "/app/data/_bt_full/bars.sqlite"):
-    """日线（含**换手率**，生产 vol_ratio 要用）。pack 里没有 turnover_rate → 从 bars.sqlite 补。"""
+def load_daily(pack: str, symbol: str, bars_db: str = ""):
+    """日线（含**换手率**，生产 vol_ratio 要用）。pack 里没有 turnover_rate → 从 bars.sqlite 补。
+
+    ⚠️ 默认库路径必须走 `bt_env.DATA`：以前写死 `/app/data/_bt_full/bars.sqlite`，
+    本机跑时该路径不存在 → sqlite 静默建空库 → **换手率全 None → vol_ratio=0 → 254 条件永不成立
+    → 触发/成交全 0**（本轮踩坑）。
+    """
+    if not bars_db:
+        bars_db = os.path.join(bt_env.DATA, "_bt_full", "bars.sqlite")
     out = []
     p = os.path.join(pack, "stock_daily", "%s.json" % symbol)
     if os.path.exists(p):
@@ -70,8 +77,13 @@ def load_daily(pack: str, symbol: str, bars_db: str = "/app/data/_bt_full/bars.s
             d = str(r.get("trade_date"))
             r["turnover_rate"] = tr.get(d)
             r["day_vol"] = vol.get(d)
-    except Exception:
-        pass
+        _miss = sum(1 for r in out if r.get("turnover_rate") is None)
+        if _miss == len(out) and out:
+            print("[tape] ⚠️ %s 换手率全部缺失（bars_db=%s 是否有该标的？）→ vol_ratio 会恒为 0"
+                  % (symbol, bars_db), file=sys.stderr)
+    except Exception as _e:
+        print("[tape] ⚠️ %s 日线/换手取数失败：%s（bars_db=%s）" % (symbol, str(_e)[:80], bars_db),
+              file=sys.stderr)
     return out
 
 
@@ -169,7 +181,7 @@ def snapshot(symbol, bars_up_to, trade_day, base, pre_close, idx_bars, tol,
 
 # ── 主流程 ────────────────────────────────────────────────
 def run_symbol(pack: str, symbol: str, day: str, conds, dip_tol=0.005, cooldown_bars=1,
-               with_engine: bool = False):
+               with_engine: bool = False, bars_db: str = ""):
     """逐 bar 回放 → 触发列表（含首次时间与次数）。"""
     from datetime import datetime as _dt
     import importlib
@@ -190,7 +202,7 @@ def run_symbol(pack: str, symbol: str, day: str, conds, dip_tol=0.005, cooldown_
     if not all_bars:
         return {"status": "no_bars", "triggers": []}
     idx_bars = load_index_m5(pack, "sh")
-    daily = load_daily(pack, symbol)
+    daily = load_daily(pack, symbol, bars_db)
     pre_close = 0.0
     prev_days = [r for r in daily if str(r["trade_date"]) < day]
     if prev_days:

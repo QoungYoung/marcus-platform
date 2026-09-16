@@ -56,8 +56,15 @@ def load_mins_file(path: str):
         else:
             t = b[1]; o, h, l, c = _num(b[2]), _num(b[3]), _num(b[4]), _num(b[5])
             v, amt = (_num(b[6]) or 0.0), (_num(b[7]) or 0.0)
-        if None in (o, h, l, c):
-            continue          # OHLC 缺值的 bar 直接丢（实测指数 09:30 竞价 bar 偶发 None）
+        # ⚠️ **指数**的分钟上游只给收盘价（实测 `000001.SH` 的 5min 行是 [ts, time, None,None,None,close,None,None]）
+        #    → 旧实现把"OHLC 有 None"的行全丢 → 指数 m5 变空 → `index.m5_dump` 恒 0 → 253 条件永不成立
+        #    （2026-01 回测踩坑：51 个腿-标的日 0 触发）。指数只做"5min 跌幅"判定 → 用收盘价兜底 OHLC。
+        if c is None:
+            continue
+        if o is None or h is None or l is None:
+            o = o if o is not None else c
+            h = h if h is not None else c
+            l = l if l is not None else c
         out.append({"time": _iso(t), "open": o, "high": h, "low": l, "close": c, "vol": v, "amount": amt})
     return out
 
