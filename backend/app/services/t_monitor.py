@@ -565,13 +565,14 @@ class TMonitor:
         import time as _tm
         from app.services.t_gateway import gateway_execute
         from app.services.t_data_sources import fetch_minute_bars, fetch_tencent_quote
-        today = datetime.now().strftime("%Y-%m-%d")
+        today8 = datetime.now().strftime("%Y%m%d")   # 归一成 8 位日期，与 _bar_date8 同口径
         for sym in list(_TSELL_PENDING.keys()):
             p = _TSELL_PENDING[sym]
             try:
                 qs = _normalize_symbol(sym)
                 bars = fetch_minute_bars(qs, freq="m5", count=60) or []
-                tb = [b for b in bars if str(b.get("time") or b.get("trade_time")).startswith(today)]
+                # 当日 bar 过滤：不依赖分隔符（生产 12 位 YYYYMMDDHHMM / 回测 '2026-09-17 10:35:00'）
+                tb = [b for b in bars if _bar_date8(b.get("time") or b.get("trade_time")) == today8]
                 if not tb:
                     continue
                 last = tb[-1]
@@ -1884,8 +1885,8 @@ class TMonitor:
         try:
             from app.services.t_data_sources import fetch_tencent_mkline
             bars = fetch_tencent_mkline("sh000001", freq="m5", count=60)
-            today = datetime.now().strftime("%Y%m%d")
-            today_bars = [b for b in (bars or []) if str(b.get("time", "")).startswith(today)]
+            today8 = datetime.now().strftime("%Y%m%d")
+            today_bars = [b for b in (bars or []) if _bar_date8(b.get("time")) == today8]
             if len(today_bars) < 10:
                 _index_dd_cache["at"] = now; _index_dd_cache["value"] = 0.0
                 return 0.0
@@ -2191,8 +2192,8 @@ class TMonitor:
             m1 = fetch_minute_bars(symbol, freq="m1", count=120)
             m5 = fetch_minute_bars(symbol, freq="m5", count=60)
             if m1:
-                today = datetime.now().strftime("%Y-%m-%d")
-                today_lows = [b["low"] for b in m1 if str(b["time"]).startswith(today)]
+                today8 = datetime.now().strftime("%Y%m%d")
+                today_lows = [b["low"] for b in m1 if _bar_date8(b.get("time")) == today8]
                 result["m1"] = {
                     "low_today": min(today_lows) if today_lows else 0.0,
                     "last_close": float(m1[-1]["close"]),
@@ -2891,6 +2892,39 @@ def _bar_hhmm(b) -> str:
     return t
 
 
+def _bar_date8(raw) -> str:
+    """从 bar 时间戳里取出交易日期 YYYYMMDD（**不依赖分隔符**）。
+
+    2026-09-17 修复（P0）：生产分钟源（`t_data_sources.fetch_minute_bars`，brze 中继）返回的时间戳是
+    **12 位 `YYYYMMDDHHMM`（无横线）**，而旧写法一律用
+    `str(b["time"]).startswith(datetime.now().strftime("%Y-%m-%d"))`（带横线）去筛"当日 bar"——
+    两种格式永远匹配不上 → 当日 bar 列表恒空。回测/腾讯 mkline 路径则是
+    `2026-09-17 10:35:00`（带横线）。故必须两种格式都能归一：
+      · `202609171035` → `20260917`
+      · `2026-09-17 10:35:00` / `2026-09-17T10:35` / `2026/9/7` → `20260917`
+      · 只有 HHMM（如 `1035`）或空值 → `""`（调用方按"无当日 bar"处理，别静默放行成假信号）
+    受影响调用点（原来都因格式不匹配而失效）：
+      · `_settle_tsell_pending`（撤销式T出永不结算，13 条观察恒停在 claimed）
+      · `_build_minute_snapshot`（`minute.m1.low_today` 恒 0.0）
+      · `stabilize_not_new_low_at`（企稳恒 True，fail-open）
+      · `_index_intraday_dd`（盘中回撤恒 0.0；这处旧写法是 `%Y%m%d`，对带横线的时间戳同样失配）
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        return s[:8] if len(s) >= 8 else ""
+    head = s.replace("T", " ").split(" ")[0]
+    parts = [p for p in head.replace("/", "-").replace(".", "-").split("-") if p]
+    if len(parts) >= 3:
+        try:
+            return "%04d%02d%02d" % (int(parts[0]), int(parts[1]), int(parts[2]))
+        except (TypeError, ValueError):
+            pass
+    digits = "".join(ch for ch in head if ch.isdigit())
+    return digits[:8] if len(digits) >= 8 else ""
+
+
 def _t_signals_from_m5(m5):
     """做T信号(狼大体系): T1缩转放(日内缩量后放量=正T买点) + 分时T出(7-29原话: 放量反弹→第一次分时高点→停量→第二次拉升无量不过前高)
     输入: m5 bars [{time, close, vol,...}] 返回 (t1, t_sell)
@@ -3500,8 +3534,8 @@ def stabilize_not_new_low_at(symbol: str, current: float, now: datetime) -> bool
         bars = fetch_minute_bars(symbol, freq="m1", count=120)
         if not bars:
             return True  # 无分钟线时放行（有腾讯 qt 实时兜底）
-        today = now.strftime("%Y-%m-%d")
-        today_lows = [b["low"] for b in bars if str(b["time"]).startswith(today)]
+        today8 = now.strftime("%Y%m%d")
+        today_lows = [b["low"] for b in bars if _bar_date8(b.get("time")) == today8]
         if not today_lows:
             return True
         day_low = min(today_lows)
