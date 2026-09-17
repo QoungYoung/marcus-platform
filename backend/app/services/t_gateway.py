@@ -125,6 +125,24 @@ MAX_DAILY_TURNOVER_RATIO = 3.0     # 日累计回转额 ≤ 3×净值（主指�
 MAX_WOLF_REFILL_PER_DAY = int(os.getenv("WOLF_REFILL_MAX_PER_DAY", "2"))
 FLOOR_LOWER_RATIO = 0.5            # 底仓保留下限（市值 ≥ 成本 50%）
 TRIGGER_EXEC_TIMEOUT_MIN = 2       # human_confirm 超时 2min → cancelled
+# 2026-09-17 修复（P1）：claimed_at 的超时判定必须与写入端同钟源。
+#   · 默认：`t_db.claim_pending_trigger` 用 **Python 钟**写 claimed_at（与这里的 datetime.now() 同源），
+#     生产两钟本来就一致 ⇒ 行为中性；回测里 Python 被钉到 as-of、DB 是真钟，修复前差值恒为负
+#     → **永不超时**，本该转 human 的单仍走 agent。
+#   · 遗留行（claimed_at 由 DB `now()` 写入、或跨容器钟源不一致）会出现"未来时间"：
+#     `now - claimed_at < -T_GATE_CROSS_CLOCK_TOL_S` 时按**已超时**处理（fail-closed → human，
+#     宁可人工确认也不放行）。`T_GATE_CROSS_CLOCK_TIMEOUT=0` 可关掉这条兜底。
+def _cross_clock_tol_s() -> float:
+    """跨钟源兜底的容忍秒数（-tol 以下才算"未来时间"）；返回 0 = 关闭该兜底。
+
+    开关（运行时读取，便于灰度）：`T_GATE_CROSS_CLOCK_TIMEOUT=0` 关闭；`T_GATE_CROSS_CLOCK_TOL_S` 调容忍度。
+    """
+    if os.getenv("T_GATE_CROSS_CLOCK_TIMEOUT", "1").strip().lower() in ("0", "false", "no"):
+        return 0.0
+    try:
+        return float(os.getenv("T_GATE_CROSS_CLOCK_TOL_S", "60"))
+    except ValueError:
+        return 60.0
 
 # 可卖底仓分档
 TIER_L0 = "L0"  # 禁用低吸（下跌市/近跌停）
@@ -803,6 +821,33 @@ def _get_trigger(trigger_id: int) -> Optional[dict]:
 # 异常升级判定（6 类清单）
 # ────────────────────────────────────────────────────────────────
 
+def _gateway_now() -> datetime:
+    """网关侧统一取时：与 `t_db.claim_pending_trigger` 写 claimed_at 的钟同源（都是 Python 进程钟）。"""
+    return datetime.now()
+
+
+def _claimed_age_seconds(claimed_at, now: Optional[datetime] = None) -> Optional[float]:
+    """claimed_at 距"现在"的秒数；解析不出来返回 None（调用方按"判不了"处理 = 维持原行为）。
+
+    2026-09-17：兼容 psycopg 返回的 datetime 与字符串两种形态；带时区的值先去掉 tzinfo
+    （库列是 `timestamp without time zone`，与 Python 天真钟同口径比）。
+
+    ⚠️ 这里**刻意用鸭子类型而非 `isinstance(x, datetime)`**：回测的钉钟
+    （`jobs/bt_run_pinned.pin_clock`）会把 `datetime.datetime` 换成子类，一旦本模块在钉钟之后被导入，
+    `from datetime import datetime` 拿到的是那个子类，而 psycopg 返回的是真 `datetime` 实例 →
+    isinstance 判假 → 超时判定被静默跳过（正是本次要修的病症）。
+    """
+    try:
+        claimed_dt = claimed_at
+        if isinstance(claimed_dt, str):
+            claimed_dt = datetime.strptime(claimed_dt.strip()[:19], "%Y-%m-%d %H:%M:%S")
+        if getattr(claimed_dt, "tzinfo", None) is not None:
+            claimed_dt = claimed_dt.replace(tzinfo=None)
+        return ((now or _gateway_now()) - claimed_dt).total_seconds()
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def classify_escalation(symbol: str, side: str, trigger: Optional[dict] = None,
                         regime: str = "ACTIVE") -> Tuple[str, str]:
     """异常升级 6 类清单 → 返回 (是否升级, 原因)。升级目标：agent / human。
@@ -826,16 +871,15 @@ def classify_escalation(symbol: str, side: str, trigger: Optional[dict] = None,
 
     # ⑥ 孤儿单/账实不一致
     if trigger and trigger.get("status") == "claimed" and trigger.get("claimed_at"):
-        claimed = trigger["claimed_at"]
-        try:
-            if isinstance(claimed, str):
-                claimed_dt = datetime.strptime(claimed, "%Y-%m-%d %H:%M:%S")
-            else:
-                claimed_dt = claimed
-            if (datetime.now() - claimed_dt).total_seconds() > TRIGGER_EXEC_TIMEOUT_MIN * 60:
+        age_s = _claimed_age_seconds(trigger["claimed_at"], _gateway_now())
+        if age_s is not None:
+            if age_s > TRIGGER_EXEC_TIMEOUT_MIN * 60:
                 return "human", "孤儿单超时未确认（账实漂移风险）"
-        except (ValueError, TypeError):
-            pass
+            tol_s = _cross_clock_tol_s()
+            if tol_s and age_s < -tol_s:
+                # claimed_at 比进程钟还"未来" ⇒ 该行不是本进程钟写的（DB now() 遗留行 / 跨容器钟源）
+                # 无法用 Python 钟度量年龄 → fail-closed：按已超时处理，转人工确认。
+                return "human", "孤儿单 claimed_at 与进程时钟不同源（超前 %.0fs，按超时转人工）" % (-age_s,)
 
     # ② 歧义：接近熔断线
     pnl_pct = _daily_pnl_pct()

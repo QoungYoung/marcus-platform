@@ -3,7 +3,21 @@
 
 统一封装五张 t_* 表的读写，供 TMonitor / 网关 / Agent / API 复用。
 所有函数幂等、容错（表不存在时降级返回空，不炸主流程）。
+
+## 时钟口径（2026-09-17 修复 P1：DB 真钟 vs Python 进程钟不同源）
+
+`t_triggers.created_at` 由表默认值 `now()`（**DB 服务器时钟**）写入；而回测/重放里 Python 进程钟
+被 `jobs/bt_run_pinned.pin_clock()` 钉到 as-of 日（如 2026-03），DB 钟是真实墙钟（如 2026-09）——
+两者相差数月。修复前拿 **Python 的 cutoff** 去比 **DB 的 created_at**：
+  · 孤儿单清扫恒不触发（实测 2,512 条 pending 永不过期，生产语义是 300s 后 cancelled）；
+  · 顺带 `claimed_at = now()` 也是 DB 钟 → 网关侧 `datetime.now() - claimed_at` 算成负数 → 永不超时。
+规则（**同一个比较，两侧必须同一钟源**）：
+  · `created_at`（DB 默认值）↔ 清扫 cutoff 用 **DB `now()`**（表结构不改；生产两钟一致 ⇒ 行为中性，
+    回测里 created_at 与 now() 同为真实墙钟 ⇒ 清扫恢复生效）。开关 `T_DB_SWEEP_CLOCK=py` 回到旧写法。
+  · `claimed_at` ↔ 网关超时用 **Python 钟**：`claimed_at = :claimed_at`（参数传 `datetime.now()`）。
+    开关 `T_DB_CLAIMED_AT_CLOCK=db` 回到旧写法（`claimed_at = now()`）。
 """
+import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +34,16 @@ def _today() -> str:
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def sweep_clock() -> str:
+    """孤儿单清扫用的钟源：`db`（默认，与 created_at 的 DB 默认值同源）/ `py`（修复前的 Python 钟）。"""
+    return (os.getenv("T_DB_SWEEP_CLOCK", "db") or "db").strip().lower()
+
+
+def claimed_at_clock() -> str:
+    """`claimed_at` 写入用的钟源：`py`（默认，与网关的 Python 钟同源）/ `db`（修复前的 SQL now()）。"""
+    return (os.getenv("T_DB_CLAIMED_AT_CLOCK", "py") or "py").strip().lower()
 
 
 # ────────────────────────────────────────────────────────────────
@@ -393,19 +417,35 @@ def claim_pending_trigger(consumer: str, timeout_seconds: int = 300) -> Optional
     """原子消费一条 pending 事件（UPDATE...WHERE status='pending' RETURNING，防多消费者重复）。
 
     同时把超过 timeout 的 pending 事件按孤儿单处理置 cancelled（见孤儿单处置）。
+
+    时钟口径（2026-09-17 修复 P1，见模块 docstring）：
+      · 清扫：cutoff 与 `created_at` **同源**——created_at 是表默认值 `now()`（DB 钟），
+        故默认用 `now() - make_interval(secs => :timeout)` 在 DB 侧比较；`T_DB_SWEEP_CLOCK=py`
+        回到修复前的"Python cutoff 比 DB created_at"（回测里恒不触发）。
+      · 认领：`claimed_at` 由 **Python 钟**写入（参数传递），与网关的超时判定同源；
+        `T_DB_CLAIMED_AT_CLOCK=db` 回到 `now()`。
     """
+    now_py = datetime.now()          # 单次取时：同一次 claim 内基准一致（也便于测试 monkeypatch）
     try:
         db = SessionLocal()
         try:
             # 孤儿单处置：pending 且创建超过 timeout 未认领 → cancelled
-            cutoff = datetime.now() - timedelta(seconds=timeout_seconds)
-            db.execute(text(
-                "UPDATE t_triggers SET status = 'cancelled', reason = 'orphan_timeout' "
-                "WHERE status = 'pending' AND created_at < :cutoff"
-            ), {"cutoff": cutoff})
-            row = db.execute(text(
+            if sweep_clock() == "py":
+                db.execute(text(
+                    "UPDATE t_triggers SET status = 'cancelled', reason = 'orphan_timeout' "
+                    "WHERE status = 'pending' AND created_at < :cutoff"
+                ), {"cutoff": now_py - timedelta(seconds=timeout_seconds)})
+            else:
+                db.execute(text(
+                    "UPDATE t_triggers SET status = 'cancelled', reason = 'orphan_timeout' "
+                    "WHERE status = 'pending' AND created_at < now() - make_interval(secs => :timeout)"
+                ), {"timeout": float(timeout_seconds)})
+            # 仅替换"时间戳表达式"这一处（常量二选一，无外部输入拼接）
+            ts_expr = "now()" if claimed_at_clock() == "db" else ":claimed_at"
+            claim_sql = (
                 """
-                UPDATE t_triggers SET status = 'claimed', claimed_by = :consumer, claimed_at = now()
+                UPDATE t_triggers SET status = 'claimed', claimed_by = :consumer, claimed_at = """
+                + ts_expr + """
                 WHERE id = (
                     SELECT id FROM t_triggers
                     WHERE status = 'pending'
@@ -416,7 +456,11 @@ def claim_pending_trigger(consumer: str, timeout_seconds: int = 300) -> Optional
                           trigger_price, quote_price, suggest_bid_price, suggest_ask_price,
                           slippage_budget, snapshot, mode, status
                 """
-            ), {"consumer": consumer}).mappings().first()
+            )
+            params: Dict[str, Any] = {"consumer": consumer}
+            if ts_expr == ":claimed_at":
+                params["claimed_at"] = now_py        # Python 钟：与 t_gateway 的超时判定同源
+            row = db.execute(text(claim_sql), params).mappings().first()
             db.commit()
             return dict(row) if row else None
         finally:
