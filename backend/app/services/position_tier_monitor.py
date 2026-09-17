@@ -328,8 +328,20 @@ class PositionTierMonitor:
 
     def evaluate_position_tier(self, symbol: str, float_pnl_pct: float,
                                current_tier: str) -> TierEvaluation:
-        """代码层自动评估加仓层级。"""
-        pnl_pct = float_pnl_pct / 100.0 if abs(float_pnl_pct) > 1 else float_pnl_pct  # 统一为小数
+        """代码层自动评估加仓层级。
+
+        参数 `float_pnl_pct` 的口径 = **百分数**（3.5 表示 +3.5%），与两个调用点一致：
+          · `_check_all_positions`：`(current_price - avg_price) / avg_price * 100`；
+          · `app/api/indicator.py`：`pos.get("float_pnl_pct")`（同口径，且直接与 1.0 / 3.0 比较）。
+
+        ⚠️ 2026-09-17 修复（P0）：旧写法是
+            `pnl_pct = float_pnl_pct / 100.0 if abs(float_pnl_pct) > 1 else float_pnl_pct`
+        —— 对 |浮盈| ≤ 1% 的输入**误判成"已经是小数"**：+0.5% → 0.5 被当成 50% ⇒ 直接
+        `UPGRADE_TO_SPRINT`（25% 上限档）；-0.5% 同理（负数不触发升级但口径同样错）。
+        该监控会在门控通过后**绕过 T 网关直接 `executor.buy()`**，故这是会影响真实下单的 P0。
+        现在口径唯一：入参是百分数，一律 /100。
+        """
+        pnl_pct = float(float_pnl_pct or 0.0) / 100.0   # 百分数 → 小数（不再按量级猜单位）
 
         # 试探仓 → 冲刺仓（跳级）：浮盈 ≥ 3%
         if current_tier in ('probe', 'unknown', '') and pnl_pct >= 0.03:
