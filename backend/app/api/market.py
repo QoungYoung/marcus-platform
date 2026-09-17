@@ -1634,7 +1634,14 @@ def _compute_style_rotation(pro, start_date: str, start_date_10d: str,
         }
         result["style_regime"] = regime_map[p_leader]
         result["consecutive_days"] = min(p_days, f_days)
-        result["suggestion"] = suggestion_map[p_leader]
+        # 2026-09-17 修复（P1）：suggestion_map 的键是 **regime**（"OFFENSE"/"DEFENSE"/"RESOURCE_HEDGE"），
+        # 原来却用 `p_leader`（**篮子**小写："defense"/"tech"/"resource"）取值 → 该分支一旦进入必然
+        # `KeyError: 'defense'`；`/market-diagnosis` 端点里这一步没有 try/except ⇒ **整次诊断 500、当天不落库**
+        # （回测按日重放实测：20260316 是唯一失败天，报错即该 KeyError；其余 125 天正常）。
+        # 修法：用刚算出的 `style_regime` 取值（大小写归一），并保留兜底默认文本（返回结构不变）。
+        result["suggestion"] = suggestion_map.get(
+            str(result["style_regime"]).upper(),
+            "风格轮动信号确认，按对应风格调整仓位")
         logger.info(f"[style_rotation] 触发模式: {result['style_regime']} "
                      f"(价格{p_days}天/资金{f_days}天)")
 
