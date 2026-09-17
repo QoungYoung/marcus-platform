@@ -473,10 +473,25 @@ class PositionTierMonitor:
         checks.append(('PASSED', '全部门控通过'))
         return GateResult(allowed=True, checks=checks, trend_details=trend)
 
+    def _peak_account_id(self, account: Optional[dict] = None) -> str:
+        """峰值权益键的**账户维度**（2026-09-17 修复 P1：峰值原来是全局单键，跨账户/跨 run 污染）。
+
+        优先级：account dict 里的 account_id > executor.account_id > WOLF_POSITION_ACCOUNT >
+        T_MONITOR_ACCOUNT > 'stock'。
+        """
+        for cand in ((account or {}).get('account_id'),
+                     getattr(self.executor, 'account_id', None),
+                     os.getenv('WOLF_POSITION_ACCOUNT'),
+                     os.getenv('T_MONITOR_ACCOUNT')):
+            if cand:
+                return str(cand).strip()
+        return 'stock'
+
     def _get_total_drawdown(self, account: dict) -> float:
         """计算总回撤比例（峰值回撤）：
         drawdown = (current_equity - peak_equity) / peak_equity
         正值表示回撤深度，0 表示无回撤（当前在峰值）。
+        峰值按 **(账户, run)** 分键读取/写入（`app.core.peak_equity`），不再跨账户共用一条。
         """
         try:
             current_equity = account.get('total_asset', 0)
@@ -484,14 +499,15 @@ class PositionTierMonitor:
                 return 0
 
             initial = account.get('initial_capital', 100000)
-            peak_equity = self._load_peak_equity()
+            acct_id = self._peak_account_id(account)
+            peak_equity = self._load_peak_equity(acct_id)
             # 首次运行或无记录时，用 max(初始资金, 当前权益) 作为基准
             if peak_equity <= 0:
                 peak_equity = max(initial, current_equity)
 
             # 更新峰值（如当前权益创新高）
             if current_equity > peak_equity:
-                self._save_peak_equity(current_equity)
+                self._save_peak_equity(current_equity, acct_id)
                 return 0  # 新高，无回撤
 
             if peak_equity <= 0:
@@ -501,15 +517,16 @@ class PositionTierMonitor:
         except Exception:
             return 0
 
-    def _load_peak_equity(self) -> float:
-        """从 PostgreSQL system_state 表加载历史峰值权益"""
+    def _load_peak_equity(self, account_id: Optional[str] = None) -> float:
+        """从 PostgreSQL system_state 表加载该账户的历史峰值权益（键含账户维度）。"""
         from app.core.peak_equity import load_peak_equity
-        return load_peak_equity(fallback=0.0)
+        return load_peak_equity(fallback=0.0,
+                                account_id=account_id or self._peak_account_id())
 
-    def _save_peak_equity(self, equity: float) -> None:
-        """保存新峰值到 PostgreSQL system_state 表"""
+    def _save_peak_equity(self, equity: float, account_id: Optional[str] = None) -> None:
+        """保存该账户的新峰值到 PostgreSQL system_state 表（键含账户维度）。"""
         from app.core.peak_equity import save_peak_equity
-        save_peak_equity(equity)
+        save_peak_equity(equity, account_id=account_id or self._peak_account_id())
 
     def _get_consecutive_losses(self) -> int:
         """获取连续亏损笔数"""

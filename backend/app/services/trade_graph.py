@@ -260,8 +260,10 @@ def _read_portfolio() -> str:
         total_asset = cash + total_cost
 
         from app.core.peak_equity import save_peak_equity, load_peak_equity
-        save_peak_equity(total_asset_market)
-        peak_equity = load_peak_equity(fallback=max(100000, total_asset_market))
+        # 2026-09-17 修复 P1：本函数只读 **stock** 账户（上面的查询都写死 account_id='stock'），
+        # 峰值也必须按账户分键，否则会与其它账户（golden_pit / t）互相污染。
+        save_peak_equity(total_asset_market, account_id='stock')
+        peak_equity = load_peak_equity(fallback=max(100000, total_asset_market), account_id='stock')
 
         today = datetime.now().strftime('%Y-%m-%d')
         today_bought = list(set(
