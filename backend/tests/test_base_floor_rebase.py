@@ -190,6 +190,78 @@ def test_evaluate_three_live_symbols_regain_ammo(tmp_path):
     assert got == {"SZ002409": 100, "SH588170": 11600, "SH512480": 700}
 
 
+# ────────────────────────── no-op rebase 守卫（2026-09-17 修复）──────────────────────────
+
+def test_noop_rebase_returns_no_event():
+    """sellable == min_lot(100) 时 `floor > sel - min_lot` 恒真，但重标结果 == 旧 floor。
+
+    修复前：每次都产出 `{'kind':'rebase', floor:100, old_floor:100}` → 每个轮次写一条
+    `base_floor_rebase` 审计行 + 全量重写状态文件（实测 18,642 条里 16,660 条 = 89.4% 是这种噪声）。
+    修复后：这是 no-op，必须返回 None（floor 不变，语义完全一致）。
+    """
+    # 只有在"锚 ≤ 100 股"（微型仓：cum×ratio ≤ 100）时旧 floor 才 == 重标结果 100；
+    # 累计买入更大时重标是真降（floor 200 → 100），必须继续产出事件（见下一条用例）。
+    for cum in (0, 100, 150, 199, 200):
+        floor, ev = B.compute_floor(cum_buy=cum, sellable=100, ratio=0.5)
+        assert (floor, ev) == (100, None), (cum, floor, ev)
+
+
+def test_noop_rebase_with_existing_rec_returns_no_event():
+    """已认账（rec 存在）且 floor 仍是 100、可卖 100 → 同样是 no-op。"""
+    rec = {"base": 100, "cum_at_base": 400}
+    floor, ev = B.compute_floor(cum_buy=400, sellable=100, ratio=0.5, rec=rec)
+    assert (floor, ev) == (100, None)
+    # 边界：新增买入把 floor 抬到 200 后（仍是唯一一手可卖）→ 重标 200 → 100 是真降，照旧产出事件
+    floor, ev = B.compute_floor(cum_buy=600, sellable=100, ratio=0.5, rec=rec)
+    assert floor == 100 and ev and ev["kind"] == "rebase" and ev["old_floor"] == 200
+
+
+def test_real_rebase_still_returns_event():
+    """floor 真的被重标到更低值（恢复出 T 弹药）→ 必须继续返回事件，别把真认账吞掉。"""
+    floor, ev = B.compute_floor(cum_buy=400, sellable=200, ratio=0.5)
+    assert floor == 100 and ev and ev["kind"] == "rebase"
+    assert ev["old_floor"] == 200 and ev["floor"] == 100 != ev["old_floor"]
+    floor, ev = B.compute_floor(cum_buy=600, sellable=300, ratio=0.5)
+    assert floor == 100 and ev and ev["floor"] != ev["old_floor"]
+    # 大额历史卖超（生产实况 SH588170）
+    floor, ev = B.compute_floor(cum_buy=109000, sellable=23200, ratio=0.5)
+    assert floor == 11600 and ev and ev["kind"] == "rebase"
+
+
+def test_real_reset_still_returns_event():
+    """真清仓 → reset 事件照旧（修复只针对 rebase 的 no-op，不碰 reset）。"""
+    floor, ev = B.compute_floor(cum_buy=109000, sellable=0, ratio=0.5, position=0)
+    assert floor == 0 and ev and ev["kind"] == "reset" and ev["floor"] == 0
+
+
+def test_evaluate_noop_rebase_writes_nothing(tmp_path, monkeypatch):
+    """端到端：no-op 时不写状态文件、不写审计行。"""
+    import app.services.t_base_floor as _B
+    calls = []
+    monkeypatch.setattr(_B, "_audit_trigger", lambda *a, **k: calls.append(a))
+    floor, ev = _B.evaluate("stock", "SH600000", volume=100, cum_buy=200, persist=True)
+    assert (floor, ev) == (100, None)
+    assert calls == [], "no-op rebase 仍在写 base_floor_rebase 审计行"
+    assert not (tmp_path / _B._STATE_NAME).exists(), "no-op rebase 仍在重写状态文件"
+    # 对照：真实 rebase 照常落状态 + 审计
+    floor, ev = _B.evaluate("stock", "SZ002409", volume=200, cum_buy=400, persist=True)
+    assert floor == 100 and ev and ev["kind"] == "rebase"
+    st = json.loads((tmp_path / _B._STATE_NAME).read_text(encoding="utf-8"))
+    assert st["symbols"]["stock:SZ002409"]["base"] == 100
+    assert len(calls) == 1
+
+
+def test_noop_guard_can_be_disabled(monkeypatch):
+    """回退开关：T_BASE_FLOOR_SKIP_NOOP=0 → 回到修复前行为（照旧产出 no-op 事件）。"""
+    monkeypatch.setenv("T_BASE_FLOOR_SKIP_NOOP", "0")
+    floor, ev = B.compute_floor(cum_buy=200, sellable=100, ratio=0.5)
+    assert floor == 100
+    assert ev and ev["kind"] == "rebase"
+    assert ev["old_floor"] == ev["floor"] == 100
+    monkeypatch.setenv("T_BASE_FLOOR_SKIP_NOOP", "1")
+    assert B.compute_floor(cum_buy=200, sellable=100, ratio=0.5) == (100, None)
+
+
 def test_legacy_switch(monkeypatch):
     monkeypatch.setenv("T_BASE_FLOOR_REBASE", "0")
     floor, ev = B.evaluate("stock", "SZ002409", volume=200, cum_buy=400, persist=True)

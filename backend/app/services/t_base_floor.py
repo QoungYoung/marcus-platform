@@ -23,6 +23,8 @@
 
 · `T_BASE_FLOOR_REBASE=0` → 退回旧的「累计买入 × ratio」口径（回滚用）。
 · `T_BASE_FLOOR_AUDIT=0` → 不写 t_triggers 审计行。
+· `T_BASE_FLOOR_SKIP_NOOP=0` → 关闭 no-op 守卫（2026-09-17 修复前行为：重标结果与旧 floor 相同时
+  仍写一条 `base_floor_rebase` 审计行并全量重写状态，占 t_triggers 的 19.2% 纯噪声）。
 · 状态文件：`$DATA_DIR/t_base_floor_rebase.json`（原子写；可人工编辑 bucket_override / buckets）。
 """
 from __future__ import annotations
@@ -57,6 +59,14 @@ _STALE_DAYS = int(os.getenv("T_BASE_RATIO_STALE_DAYS", "7"))
 
 def _enabled() -> bool:
     return os.getenv("T_BASE_FLOOR_REBASE", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _skip_noop_rebase() -> bool:
+    """no-op 守卫开关（2026-09-17 新增，默认开）。
+
+    关闭（`T_BASE_FLOOR_SKIP_NOOP=0`）即回到修复前行为：即使重标结果与旧 floor 相同也写事件。
+    """
+    return os.getenv("T_BASE_FLOOR_SKIP_NOOP", "1").strip().lower() not in ("0", "false", "no")
 
 
 def _audit_enabled() -> bool:
@@ -267,6 +277,15 @@ def compute_floor(cum_buy: int, sellable: int, ratio: float,
         if rec is not None and int(rec.get("base") or 0) <= 0 and int(rec.get("cum_at_base") or 0) == cum:
             return floor, None
         new_floor = _rebase_floor(sel, ratio, min_lot)
+        if new_floor == floor and _skip_noop_rebase():
+            # 2026-09-17 修复：重标结果 = 旧 floor ⇒ 这是 **no-op rebase**，不是真认账。
+            # 触发场景：sellable == min_lot(100) 时 `floor > sel - min_lot` 恒真（右侧 0），
+            # 而 `_rebase_floor` 因 `sel < 2*min_lot` 直接 `return sel` → 新 floor == 旧 floor。
+            # 实测本地 PG 18,642 条 base_floor_rebase 里 16,660 条（89.4%）新旧相同、
+            # 占 t_triggers 总量 19.2%（Top reason「底仓 floor rebase：100 → 100 股…」2,661 次）：
+            # 每次调用都写一条审计行 + 全量重写状态文件，纯噪声且掩盖真实 rebase。
+            # 返回 None 的语义与"写这条事件"完全一致（floor 不变、状态里 base/cum_at_base 也等于旧值）。
+            return floor, None
         return new_floor, {"kind": "rebase", "floor": new_floor, "sellable": sel, "cum_buy": cum,
                            "ratio": float(ratio), "old_floor": floor}
     return floor, None
