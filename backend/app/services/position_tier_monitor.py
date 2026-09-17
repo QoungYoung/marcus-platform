@@ -955,8 +955,13 @@ class PositionTierMonitor:
 
             from datetime import datetime as dt, timedelta
             end_d = dt.now().strftime("%Y%m%d")
-            start_d = (dt.now() - timedelta(days=30)).strftime("%Y%m%d")
-            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=15)
+            # 2026-09-17 修复（P1）：原来写死 `limit=15`（窗口 30 天 ≈ 20 个交易日，再被 limit 截到 15 根），
+            # 但下面的**日线降级分支**要 `len(closes) >= 20` 才算得出 MA20 ⇒ 降级路径下 `ma20` 恒 0
+            # ⇒ 核心项 `ma_align` 恒 False（必失败，"MA多头排列"永远进 failed_items）。
+            # 取 60 根 / 90 天：够 MA20（也够 MA60 与量比口径）；下游只做 closes[-20:] / closes[-10:-5] 等切片，
+            # 多取不会改变任何计算结果。
+            start_d = (dt.now() - timedelta(days=90)).strftime("%Y%m%d")
+            df = pro.daily(ts_code=ts_code, start_date=start_d, end_date=end_d, limit=60)
 
             has_daily = df is not None and not df.empty and len(df) >= 5
             if has_daily:
@@ -1066,15 +1071,23 @@ class PositionTierMonitor:
                     else:
                         # 60分数据不足，降级使用日线
                         if has_daily:
-                            ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
-                            ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
+                            n_bars = len(closes)
+                            ma5 = float(sum(closes[-5:]) / 5) if n_bars >= 5 else 0
+                            ma20 = float(sum(closes[-20:]) / 20) if n_bars >= 20 else 0
                             if ma5 > 0 and ma20 > 0:
                                 checks['ma_align'] = {
                                     'passed': ma5 > ma20,
                                     'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
                                     'threshold': 'MA5 > MA20 (60分不足,日线降级)',
-                                    'detail': '[震荡市60分数据不足,日线降级]'
+                                    'detail': f'[震荡市60分数据不足,日线降级({n_bars}根)]'
                                 }
+                            elif n_bars < 20:
+                                # 2026-09-17：数据不足要**登记缺陷**（带根数），不要静默 False
+                                logger.warning(
+                                    f"[加仓] {symbol} 趋势校验日线不足：{n_bars} 根 < 20 根，无法算 MA20")
+                                checks['ma_align'] = {
+                                    'passed': False, 'value': 'N/A', 'threshold': 'MA10>MA30(60分)',
+                                    'detail': f'数据缺陷：日线仅 {n_bars} 根（需≥20根算 MA20），60分线亦不足'}
                             else:
                                 checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA10>MA30(60分)', 'detail': '60分+日线数据均不足'}
                         else:
@@ -1091,15 +1104,23 @@ class PositionTierMonitor:
                         'detail': f'[{rt_source}]'
                     }
                 elif has_daily:
-                    ma5 = float(sum(closes[-5:]) / 5) if len(closes) >= 5 else 0
-                    ma20 = float(sum(closes[-20:]) / 20) if len(closes) >= 20 else 0
+                    n_bars = len(closes)
+                    ma5 = float(sum(closes[-5:]) / 5) if n_bars >= 5 else 0
+                    ma20 = float(sum(closes[-20:]) / 20) if n_bars >= 20 else 0
                     if ma5 > 0 and ma20 > 0:
                         checks['ma_align'] = {
                             'passed': ma5 > ma20,
                             'value': f'MA5={ma5:.2f} MA20={ma20:.2f}',
                             'threshold': 'MA5 > MA20',
-                            'detail': '[日线降级]'
+                            'detail': f'[日线降级({n_bars}根)]'
                         }
+                    elif n_bars < 20:
+                        # 2026-09-17：取数不足要登记缺陷（带根数），别让"必失败"看起来像"趋势不合格"
+                        logger.warning(
+                            f"[加仓] {symbol} 趋势校验日线不足：{n_bars} 根 < 20 根，无法算 MA20")
+                        checks['ma_align'] = {
+                            'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20',
+                            'detail': f'数据缺陷：日线仅 {n_bars} 根（需≥20根算 MA20）'}
                     else:
                         checks['ma_align'] = {'passed': False, 'value': 'N/A', 'threshold': 'MA5 > MA20', 'detail': 'MA计算异常'}
                 else:
