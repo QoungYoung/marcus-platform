@@ -219,3 +219,42 @@ def test_config_opts_in_only_eod_data_tasks():
     for tid in ("mainline_open_buy", "rotation_switch_agent_morning",
                 "rotation_switch_agent_afternoon", "rotation_switch_arm", "daily_snapshot"):
         assert tid not in opted
+
+
+def test_notification_no_optin_does_not_claim_exhausted(svc):
+    """没 opt-in 的任务失败时不得写「已用尽（共 1/3 次尝试）」——那会让人以为重试过。
+
+    2026-09-18 daily_snapshot（15:01 净值快照）的真实误报：全局 settings.retry.max_attempts=3
+    被当成"最多试 3 次"，实际任务没 opt-in，一次都没重跑。
+    """
+    sent = []
+    svc._qq_notifier = lambda msg, to=None: sent.append(msg)
+    t = _task(notifications={"on_failure": True, "channels": ["qqbot"]})   # 无 retry 覆盖 → 不 opt-in
+    ex = S.JobExecution(id="e3", task_id=t.id, task_name=t.name, status=S.JobStatus.FAILED.value,
+                        started_at=datetime.now(), finished_at=datetime.now(),
+                        error="rc=1", return_code=1, attempt=1, max_attempts=3,
+                        will_retry=False, retry_in=0)
+    svc._send_notifications(t, ex)
+    assert sent, "应当发送失败通知"
+    assert "已用尽" not in sent[0], sent[0]
+    assert "未触发" in sent[0] and "未开启自动重试" in sent[0], sent[0]
+
+
+def test_error_summary_keeps_traceback_tail(svc):
+    """Traceback 摘要必须保结尾（根因在最后一行），否则通知里看不到 ModuleNotFoundError。"""
+    tb = (
+        "Traceback (most recent call last):\n"
+        '  File "/app/scripts/snapshot_portfolio.py", line 29, in <module>\n'
+        "    from app.api.portfolio import save_daily_snapshot  # noqa: E402\n"
+        "    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+        '  File "/app/app/api/__init__.py", line 11, in <module>\n'
+        "    from app.api import portfolio, trades, market, news, strategy, proxy\n"
+        '  File "/app/app/api/portfolio.py", line 22, in <module>\n'
+        "    from trade_direction import (  # noqa: E402  统一方向词表（中英文兼容）\n"
+        "ModuleNotFoundError: No module named 'trade_direction'\n"
+    )
+    out = svc._error_summary(tb, limit=200)
+    assert out.endswith("ModuleNotFoundError: No module named 'trade_direction'"), out
+    assert out.startswith("…(栈已截断"), out
+    # 非 traceback 的普通错误仍取头部
+    assert svc._error_summary("rc=2 boom", limit=5) == "rc=2 "

@@ -827,6 +827,26 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"Failed to save execution log: {e}")
 
+    @staticmethod
+    def _error_summary(error: str, limit: int = 300) -> str:
+        """错误摘要：Traceback 的**根因在最后一行**，从头部截断会把根因切掉。
+
+        2026-09-18 daily_snapshot 的通知就是这样被截断的 —— 用户只看到
+        `File "/app/app/api/__init__.py", line 11, in <module>` 半截栈，
+        真正的 `ModuleNotFoundError: No module named 'trade_direction'`（最后一行）被扔掉。
+        所以：疑似 Traceback 就保尾部（并去掉被切半的首行），普通错误仍取头部。
+        """
+        err = (error or "").strip()
+        if not err:
+            return ""
+        if "Traceback (most recent call last)" not in err:
+            return err[:limit]
+        tail = err[-limit:]
+        nl = tail.find("\n")
+        if nl != -1:
+            tail = tail[nl + 1:]          # 首行可能被切半（如 "…in <module>"），丢掉
+        return "…(栈已截断，以下为结尾)\n" + tail
+
     def _send_notifications(self, task: TaskConfig, execution: JobExecution):
         """发送通知"""
         notifications = task.notifications
@@ -882,7 +902,15 @@ class SchedulerService:
                     lines.append(f"重试: {execution.retry_in}s 后再跑一次"
                                  f"（第 {execution.attempt + 1}/{execution.max_attempts} 次尝试）")
                 elif execution.status == JobStatus.FAILED.value and execution.max_attempts > 1:
-                    lines.append(f"重试: 已用尽（共 {execution.attempt}/{execution.max_attempts} 次尝试）")
+                    # 2026-09-18：max_attempts 可能只是**全局默认值**（settings.retry），任务没 opt-in
+                    # 时一次都不会重跑。原来无脑写"已用尽（共 1/3 次尝试）"→ 看着像重试过 3 次，
+                    # 实际 1 次都没排。这里按真实原因分文案（daily_snapshot 就是这么误报的）。
+                    if execution.attempt > 1:
+                        lines.append(f"重试: 已用尽（共 {execution.attempt}/{execution.max_attempts} 次尝试）")
+                    elif self._retry_policy(task)["enabled"]:
+                        lines.append(f"重试: 排期失败（本应还有 {execution.max_attempts - execution.attempt} 次）")
+                    else:
+                        lines.append(f"重试: 未触发（该任务未开启自动重试，仅 {execution.attempt} 次尝试）")
                 if execution.output:
                     # golden_pit_dca: 从 JSON 中提取 summary_text 作为友好回退
                     output_preview = execution.output
@@ -898,7 +926,7 @@ class SchedulerService:
                         output_preview = output_preview[:500] + "\n... (已截断)"
                     lines.append(f"\n输出:\n{output_preview}")
                 if execution.error:
-                    lines.append(f"\n错误: {execution.error[:300]}")
+                    lines.append(f"\n错误: {self._error_summary(execution.error)}")
 
                 message = "\n".join(filter(None, lines))
                 try:
