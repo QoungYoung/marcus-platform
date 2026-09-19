@@ -33,6 +33,7 @@ from vnpy.trader.constant import Direction, Status
 from vnpy.event import Event, EventEngine
 
 from trade_direction import to_canonical  # noqa: E402 统一方向词表
+from app.core.trading import position_ledger  # noqa: E402 台账护栏（持仓唯一真相）
 
 logger = logging.getLogger(__name__)
 
@@ -302,12 +303,73 @@ class PositionEventListener:
         pass
 
 
+def _apply_ledger_position(cur, conn, symbol: str, led: tuple, today: str, now: str,
+                           engine_volume: int) -> None:
+    """台账护栏命中：把 paper_positions 校准到台账口径（而不是写引擎快照）。"""
+    volume, avg_price = int(led[0]), round(float(led[1]), 6)
+    cur.execute(
+        "SELECT volume, avg_price FROM paper_positions "
+        "WHERE account_id = 'stock' AND symbol = %s",
+        (symbol,),
+    )
+    row = cur.fetchone()
+    if volume <= 0:
+        if row:
+            cur.execute(
+                "DELETE FROM paper_positions WHERE account_id = 'stock' AND symbol = %s",
+                (symbol,),
+            )
+            position_ledger.log_once(
+                f"{symbol}:flat",
+                f"台账护栏：{symbol} 台账已清仓 → 删除持仓行（引擎快照 {engine_volume} 股）")
+    elif row and int(row[0] or 0) == volume and abs(float(row[1] or 0) - avg_price) < 1e-9:
+        pass  # 已与台账一致：不写库（避免每 3 秒一次无意义 UPDATE + 写放大）
+    elif row:
+        cur.execute(
+            "UPDATE paper_positions SET volume = %s, avg_price = %s, updated_at = %s "
+            "WHERE account_id = 'stock' AND symbol = %s",
+            (volume, avg_price, now, symbol),
+        )
+        changed = int(row[0] or 0) != volume
+        position_ledger.log_once(
+            f"{symbol}:{volume}:{avg_price}",
+            f"台账护栏：{symbol} 引擎快照 {engine_volume} 股 → 台账 {volume} 股"
+            f"（均价 {avg_price}）" + ("，已纠正" if changed else "，仅校准均价"))
+    else:
+        cur.execute(
+            "INSERT INTO paper_positions "
+            "(account_id, symbol, entry_date, highest_price, updated_at, "
+            "volume, frozen, avg_price) "
+            "VALUES ('stock', %s, %s, %s, %s, %s, 0, %s)",
+            (symbol, today, avg_price, now, volume, avg_price),
+        )
+        position_ledger.log_once(
+            f"{symbol}:{volume}:{avg_price}",
+            f"台账护栏：{symbol} 台账 {volume} 股（引擎快照 {engine_volume} 股），已补建持仓行")
+    conn.commit()
+    conn.close()
+
+
 def _sync_position(pg_params: dict, params: tuple) -> None:
-    """后台线程: 写入 paper_positions"""
+    """后台线程: 写入 paper_positions。
+
+    2026-09-19 台账护栏（见 position_ledger 模块头注释）：`paper_trades` 有该标的成交时，
+    持仓以**台账 FIFO** 为准，引擎内存快照只作参考 —— 引擎只认走 gateway 的成交，
+    直连 DB 路径落下的成交它看不见，却每 3 秒把过期快照写回（生产实测 SH588170
+    引擎 7000 / 台账 2900 → jobs/recon_account_cash.py 持仓线对账失败、按 7000 推量
+    会超卖 4100 股）。无成交流水（外部同步仓）时才回退旧行为：引擎说多少写多少。
+    开关 `VNPY_POSITION_LEDGER_GUARD=0` 可整体回滚。
+    """
     symbol, volume, frozen, price, now, today = params
     try:
         conn = _get_conn(pg_params)
         cur = conn.cursor()
+        if position_ledger.guard_enabled():
+            led = position_ledger.query_ledger_position(cur, symbol)
+            if led is not None:
+                _apply_ledger_position(cur, conn, symbol, led, today, now,
+                                       engine_volume=int(volume))
+                return
         if volume <= 0:
             cur.execute(
                 "DELETE FROM paper_positions WHERE account_id = 'stock' AND symbol = %s",

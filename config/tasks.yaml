@@ -21,7 +21,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '40 18 * * 1-5'
+    expr: '40 18 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_limit_ladder_scan.py
@@ -46,7 +46,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '40 19 * * 1-5'
+    expr: '40 19 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_review_score.py
@@ -71,7 +71,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '50 18 * * 1-5'
+    expr: '50 18 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_theme_resilience.py
@@ -96,7 +96,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '45 18 * * 1-5'
+    expr: '45 18 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_index_futures.py
@@ -120,7 +120,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '*/30 8-16 * * 1-5'
+    expr: '*/30 8-16 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_neg_event_scan.py
@@ -1046,7 +1046,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '52 18 * * 1-5'
+    expr: '52 18 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_volume_gate.py
@@ -1072,7 +1072,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '31 14 * * 1-5'
+    expr: '31 14 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_weekend_hedge.py
@@ -1096,7 +1096,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '45 19 * * 1-5'
+    expr: '45 19 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/daily_decision.py
@@ -1122,7 +1122,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '50 19 * * 1-5'
+    expr: '50 19 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/daily_archive.py
@@ -1150,7 +1150,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '25 8 * * 1-5'
+    expr: '25 8 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/daily_decision.py
@@ -1180,7 +1180,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '55 18 * * 1-5'
+    expr: '55 18 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_mainline_select.py
@@ -1204,7 +1204,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '*/5 9-11,13-14 * * 1-5'
+    expr: '*/5 9-11,13-14 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/record_orderbook.py
@@ -1227,7 +1227,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '5 15 * * 1-5'
+    expr: '5 15 * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/recon_account_cash.py

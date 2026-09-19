@@ -149,6 +149,21 @@ def main() -> int:
         "ok": abs(drift) <= args.tol and not pos_diff and not unknown_vocab,
     }
 
+    # 失败原因逐条列出（2026-09-19）：三条线里任何一条挂掉，旧文案都只写
+    # 「漂移超阈值」，把「持仓差异 4100 股」误报成现金漂移 —— 排查时极易走错方向。
+    failures = []
+    if abs(drift) > args.tol:
+        failures.append(f"现金漂移 {drift:+,.2f} 元 超阈值 tol={args.tol}")
+    if pos_diff:
+        detail = ", ".join(f"{s} 台账 {v['fifo']} / 库 {v['db']}"
+                           for s, v in sorted(pos_diff.items())[:5])
+        more = f" 等 {len(pos_diff)} 只" if len(pos_diff) > 5 else ""
+        failures.append(f"持仓差异（{detail}{more}）"
+                        "；paper_positions 被非台账写入方覆盖？见 position_ledger 护栏")
+    if unknown_vocab:
+        failures.append(f"表外方向词表 {unknown_vocab}")
+    out["failures"] = failures
+
     if args.json:
         print(json.dumps(out, ensure_ascii=False))
     else:
@@ -157,7 +172,7 @@ def main() -> int:
         print(f"[对账] 重放 {len(rows)} 笔，FIFO 已实现 {realized:,.2f}")
         print(f"[对账] 持仓差异: {pos_diff if pos_diff else '无'}")
         print(f"[对账] 方向词表: {vocab}" + (f" ⚠️ 表外词表 {unknown_vocab}" if unknown_vocab else " ✅"))
-        print("[对账] " + ("✅ 一致" if out["ok"] else f"❌ 漂移超阈值（tol={args.tol}）"))
+        print("[对账] " + ("✅ 一致" if out["ok"] else "❌ 不一致：" + "；".join(failures)))
     return 0 if out["ok"] else 1
 
 
