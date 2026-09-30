@@ -348,6 +348,36 @@ def _normalize_symbol(symbol: str) -> str:
     return "sz" + s
 
 
+def std_symbol(symbol: str) -> str:
+    """股票代码 → **系统标准形态**（SH600519 / SZ000001），与 `t_triggers.symbol`、
+    `paper_positions.symbol` 一致；兼容腾讯（sh600519）/ tushare（600519.SH）/ 裸码（600519）。
+
+    为什么需要（2026-09-17 生产死腿事故）：`_check_profit_take` / 斐波目标路径把
+    `_normalize_symbol()` 的**腾讯小写形态**（sz002587）直接写进 `t_triggers`，
+    而网关账本 `get_sellable_ledger()` 的键来自 `paper_positions`（大写 SZ002587），
+    `validate_order_at` 原样 `ledger.get(symbol)` → 查不到 → 恒判「无足够可卖底仓（裸空拦截）」
+    ⇒ 这类纪律卖腿**结构性执行不了**（生产实测 62 条：profit_take 40 + fib 22，executed=0）。
+    识别不了就原样返回（不猜、不误改）。
+    """
+    s = str(symbol or "").strip().upper()
+    if not s:
+        return s
+    if s.startswith(("SH", "SZ")):
+        return s
+    if "." in s:
+        code, _, market = s.partition(".")
+        if market in ("SH", "SZ") and code:
+            return market + code
+        if market in ("SSE", "SHH"):
+            return "SH" + code
+        if market in ("SZE", "SHZ"):
+            return "SZ" + code
+        return s
+    if s.isdigit() and len(s) == 6:
+        return ("SH" if s.startswith(("6", "9", "5")) else "SZ") + s
+    return s
+
+
 def _to_ts_code(symbol: str) -> str:
     """股票代码 → tushare 格式（600519.SH / 000001.SZ），兼容腾讯格式（sz000636 / sh600519）。"""
     s = symbol.strip().upper()
@@ -377,3 +407,47 @@ def fetch_intraday_minutes_today(symbol: str, freq: str = "1min") -> Optional[Li
         return bars
     mfreq = "m1" if freq == "1min" else "m" + freq.replace("min", "")
     return fetch_tencent_mkline(_normalize_symbol(symbol), freq=mfreq, count=500)
+
+
+def fetch_quote_one(symbol: str, timeout: int = 8):
+    """**全局统一取数**（账本 §9.312）：单只行情，**四种键都兜一遍** ✓。
+
+    为什么需要 ✗：全仓曾有两种写法并存 ——
+      · `fetch_quote_one(x)`      ← 按**原符号**读键
+      · `fetch_tencent_quote([...normalized...]).get(normalized)` ← 按**归一化**读键
+    回测的取数替身 **未必**用同一个键 ⇒ 读错键就拿到空 ⇒ 调用方 `_cur=0` ⇒ **静默跳过** ✗
+    （实测：`_quote_now("SZ002156")` 传字符串 ⇒ `pnone_match` ✗；改列表后仍可能读错键 ✗）
+
+    ⇒ 本函数是**唯一入口** ✓：内部先归一化 ✓，返回时对
+      「原样／小写／大写／归一化」四种键**依次兜底** ✓ —— **只增不减** ✓。
+    """
+    try:
+        from app.services.t_data_sources import _normalize_symbol as _nrm
+    except Exception:
+        _nrm = None
+    keys = []
+    for k in (symbol, str(symbol).lower(), str(symbol).upper()):
+        if k and k not in keys:
+            keys.append(k)
+    try:
+        nk = _nrm(symbol) if _nrm else None
+        if nk and nk not in keys:
+            keys.append(nk)
+    except Exception:
+        pass
+    q = None
+    try:
+        _r = fetch_tencent_quote(list(keys), timeout=timeout) or {}
+    except Exception:
+        _r = {}
+    for k in list(keys) + [str(x).lower() for x in keys] + [str(x).upper() for x in keys]:
+        v = _r.get(k)
+        if isinstance(v, dict) and v:
+            q = v
+            break
+    if q is None:
+        for _k2, _v2 in (_r or {}).items():
+            if isinstance(_v2, dict) and _v2:
+                q = _v2
+                break
+    return q or {}

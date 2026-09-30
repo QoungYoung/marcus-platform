@@ -17,13 +17,20 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.services import t_db
-from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
+from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, fetch_quote_one
 from app.services.t_regime import check_gate, compute_regime, _is_trading_time
 
 MONITOR_INTERVAL = 30       # 秒
 INITIAL_OFFSET = 20         # 错峰启动
-MAX_WORKERS = 5             # 并发取价上限
-JITTER = 3                  # ±3s
+# ── 回测确定性（2026-09-23）：两个开关都**库内默认沿用现状** ⇒ 生产逐字不变 ────────────
+# 为什么需要：实测同配置两臂（T11 vs T12，配置只差一个"触发 0 次"的开关）第 1 天问 AI 的
+#   腿就不同（13 条 vs 7 条），说明回放里混着**运行级非确定性**；其中两项可在此收敛：
+#   ① 并发取价 `MAX_WORKERS`：分批并发 ⇒ 在"时钟被钉住的回放"里腿被评估的时刻受调度影响；
+#   ② jitter：`wait = interval + ((time.time()*1000) % (2J+1) - J)` 用**墙钟**抖动量 ⇒ 每轮间隔随进程变。
+# `WOLF_MON_WORKERS=1` + `WOLF_MON_JITTER=0` 把这两项钉死（只该在回测里开）。
+# 另一项 `PYTHONHASHSEED=0` 必须在**进程启动前**设（不是代码能控的），见臂脚本。
+MAX_WORKERS = max(1, int(os.getenv("WOLF_MON_WORKERS", "5") or 5))   # 并发取价上限
+JITTER = max(0, int(os.getenv("WOLF_MON_JITTER", "3") or 3))         # ±3s（0=不抖）
 MAX_CORE_SYMBOLS = 20       # 核心底仓数量上限
 MIN_TURNOVER_BASE = 0.5     # 量比基准兜底 %
 COOLDOWN_SECONDS = 300      # 同条件去抖冷却（5min）
@@ -34,6 +41,176 @@ T_MONITOR_ACCOUNT = os.getenv("T_MONITOR_ACCOUNT", "stock")
 # 需要临时切回 t 时设 WOLF_POSITION_ACCOUNT=t（不用改调用点）。
 POS_ACCOUNT = os.getenv("WOLF_POSITION_ACCOUNT", T_MONITOR_ACCOUNT)
 T_MONITOR_AUTO_MAINTAIN = os.getenv("T_MONITOR_AUTO_MAINTAIN", "0") == "1"
+print("[TM-BUILD] t_monitor 已加载 诊断版(§9.243) ✓", flush=True)
+
+# ── 形态腿量比补齐（2026-09-24；`WOLF_VOL_RATIO_FILL` 库内默认 0 ⇒ 生产逐位不变）──────────
+# 病灶（账本 §9.13）：`_insert_wolf_trigger` 原先**只从 quote 读** vol_ratio，而**回测取数替身
+#   `fetch_tencent_quote` 不提供该字段** ⇒ `snapshot.vol_ratio` 恒 None ⇒
+#   ① 放量破位门（`wolf_dip_volume_gate`：放量破前低 ⇒ 买腿不执行）对**形态腿/AI 腿**恒 fail-open
+#      —— 实测四条臂 **0 次真实拦截**（日志里 DIP_VOL 只有 [pins] 那行）；
+#   ② AI 被要求判「恐慌放量追跌（**量比骤升**+创新低）」，却拿不到量比 ⇒ 只能从散文里猜
+#      —— 那正是抛硬币的主因（13 个抛硬币节点里 9 个是它；补上量比后稳定度 0.56→0.80）。
+# 条件腿那条路**自己算**（`calc_volume_ratio_at`）⇒ 有数；只有形态腿哑。本补齐用**同一算法**，
+#   基准优先取**该股自己的**近5日同刻换手均值，取不到才退回 `MIN_TURNOVER_BASE`。
+VOL_RATIO_FILL = os.getenv("WOLF_VOL_RATIO_FILL", "0").strip().lower() in ("1", "true", "yes", "on")
+_VR_BASE_CACHE: Dict[Any, Any] = {}
+
+
+def symbol_turnover_base(symbol: str) -> Optional[float]:
+    """该股换手基准（近5日同刻均值 %）；取不到 → None（调用方退回 MIN_TURNOVER_BASE）。按日缓存。"""
+    key = (symbol, datetime.now().strftime("%Y%m%d"))
+    if key in _VR_BASE_CACHE:
+        return _VR_BASE_CACHE[key]
+    val = None
+    try:
+        from app.services.t_turnover_profile import compute_turnover_profile
+        prof = compute_turnover_profile(symbol) or {}
+        val = float(prof.get("same_minute_avg") or 0) or None
+    except Exception:
+        val = None
+    _VR_BASE_CACHE[key] = val
+    return val
+
+
+# ── 回测数据面直读（账本 §9.314 ✓）：加仓检查用 ✓ ─────────────────────────────
+def _sandbox_price(symbol: str, today8: str = "") -> dict:
+    """从**回测数据包**取价（**引擎同源** ✓）：返回 {cur, low, open, res, vr} ✓
+
+    为什么 ✗：回测**离线**（`BT_NET_OFFLINE` ✓）⇒ 联网取数必然空 ⇒ `_cur=0` ⇒ 静默跳过 ✗
+    数据面 ✓：`data/_bt_full/pack_shared/*/stock_daily/<SYM>.json` ✓ ／ `.../m5/<SYM>.json` ✓
+    安全 ✓：**一律按 today8 过滤** ✓（探针里见过补齐到 2026-09-29 的未来数据 ✗）
+    """
+    import glob as _g
+    import json as _j
+    out = {"cur": 0.0, "low": 0.0, "open": 0.0, "high": 0.0, "res": 0.0, "vr": 0.0}
+    _sym = str(symbol or "").upper()
+    _six = _sym[-6:]
+    _roots = []
+    for _pat in ("data/_bt_full/pack_shared/*/stock_daily", "data/_bt_full/*/pack/stock_daily",
+                 "data/_bt_full/pack_shared/*/index_daily"):
+        _roots += _g.glob(_pat)
+    # ① 日线 ✓（当日过滤 ✓ 防未来数据）
+    for _r in _roots:
+        _f = os.path.join(_r, _sym + ".json")
+        if not os.path.exists(_f):
+            continue
+        try:
+            _rows = [b for b in _j.load(open(_f, encoding="utf-8"))
+                     if str(b.get("trade_date") or b.get("date") or "").replace("-", "")[:8]]
+        except Exception:
+            continue
+        _rows.sort(key=lambda b: str(b.get("trade_date") or b.get("date") or ""))
+        _ok = [b for b in _rows
+               if not today8 or str(b.get("trade_date") or b.get("date") or "").replace("-", "")[:8] <= today8]
+        if not _ok:
+            continue
+        _last = _ok[-1]
+        out["cur"] = float(_last.get("close") or 0)
+        out["low"] = float(_last.get("low") or 0)
+        out["open"] = float(_last.get("open") or 0)
+        out["high"] = float(_last.get("high") or 0)          # 账本 §9.344：校验要用 ✓
+        _prev = _ok[:-1][-20:]
+        if _prev:
+            out["res"] = max(float(b.get("high") or 0) for b in _prev)      # 前 20 日最高 ✓
+        _vols = [float(b.get("vol") or 0) for b in _ok[-6:-1]]
+        _lastv = float(_last.get("vol") or 0)
+        if _vols and sum(_vols) > 0 and _lastv > 0:
+            out["vr"] = round(_lastv / (sum(_vols) / len(_vols)), 3)        # 当日量/5日均量 ✓
+        break
+    # ② 当日 m5 ✓（更贴近盘中：取当日最低/最新 ✓）
+    for _pat in ("data/_bt_full/pack_shared/*/m5", "data/_bt_full/*/pack/m5"):
+        for _r in _g.glob(_pat):
+            _f = os.path.join(_r, _sym + ".json")
+            if not os.path.exists(_f):
+                continue
+            try:
+                _d = _j.load(open(_f, encoding="utf-8"))
+            except Exception:
+                continue
+            _bars = _d.get(today8) if isinstance(_d, dict) else None
+            if not _bars and isinstance(_d, dict):
+                _ks = [k for k in _d if str(k).replace("-", "")[:8] == today8]
+                _bars = _d.get(_ks[0]) if _ks else None
+            if _bars:
+                _lo = [float(b.get("low") or b.get("close") or 0) for b in _bars if b]
+                _cl = [float(b.get("close") or 0) for b in _bars if b]
+                if _lo:
+                    out["low"] = min([x for x in _lo if x] or [out["low"]])
+                if _cl:
+                    out["cur"] = _cl[-1] or out["cur"]
+                _hi2 = [float(b.get("high") or 0) for b in _bars if b]
+                if _hi2:
+                    out["high"] = max([x for x in _hi2 if x] or [out["high"]])
+            break
+    return out
+
+
+def wolf_leg_vol_ratio(quote: dict, symbol: Optional[str] = None,
+                       now: Optional[datetime] = None) -> Optional[float]:
+    """形态腿（`wolf_t_rules` / AI 腿）的盘中量比：quote 自带优先；缺则按**条件腿同口径**补算。
+
+    开关 `WOLF_VOL_RATIO_FILL` 关 ⇒ 只返回 quote 自带值（即旧行为，缺则 None）。
+    """
+    try:
+        _v = float((quote or {}).get("vol_ratio") or (quote or {}).get("vr") or 0) or None
+    except Exception:
+        _v = None
+    if _v is not None or not VOL_RATIO_FILL:
+        return _v
+    try:
+        base = symbol_turnover_base(symbol) if symbol else None
+        cond = {"benchmark_turnover_profile": {"same_minute_avg": base}} if base else {}
+        return calc_volume_ratio_at(cond, quote or {}, now or datetime.now())
+    except Exception:
+        return None
+
+
+
+# ── 开盘不追高闸·**条件单补线**（2026-09-23，开关默认 0 ⇒ 生产逐位不变）────────────
+# 背景（实测 bug）：闸门装在 `gateway_execute`，但其守卫是 `if ... and trigger_id`，
+#   而**条件单成交这条路径只传 `condition_id`、不传 `trigger_id`** ⇒
+#   `trend_break_buy` 之类的条件单买入**完全漏过**两类闸（不追高 / 开盘快速拉升）。
+#   实例：T5 的 SH603061 20260414 09:40 买 323.30，当日开盘 308.0 ⇒ 已 +4.97%（阈值 3.0%），
+#   本该被拦却成交；该腿后来是全臂最大亏损腿。SZ001309 20260318 / SZ002294 20260401 同型。
+#   闸门作者本意是覆盖条件腿的（t_monitor 注释："条件腿写 snapshot.fields.quote.open"）。
+# 本补线**只补开盘闸**（不动换手闸/不追高闸），以保持单变量；`WOLF_OC_COND_BUY=0` 时逐位回到旧行为。
+# 语料：狼大 2025-04-15 条件6「如果当日开盘高开快速拉升，或者低开快速拉升想追进去的，
+#       在下午2.00-2.30这个时间段进行回补」＋ 2026-01-12「千万绝对不要开盘买」。
+OC_COND_BUY = os.getenv("WOLF_OC_COND_BUY", "0").strip().lower() in ("1", "true", "yes", "on")
+
+# ── 尾盘未确认 → 必 T 出（2026-09-25；库内默认**关**，回测 pins 置 1）──────────────────
+# 语料（逐字）：2025-06-04「盘中做T尾盘必须出场，**不加仓隔夜**，确保安全」；
+#   2025-08-14「一直到**2点附近不管有没有涨幅我都T完**」；2026-03-05「做T当日出来，**不留过夜**」；
+#   2026-03-17「做T的仓位**当日出来**」；2026-03-31「做T的当日都会出来，不留过夜」；
+#   2026-08-12「T+0 的仓没必要留在里面…平时不留仓位」。
+# 为什么默认关：旧行为是「day_end 已降级: 不做'未确认→必卖'(那批几乎全亏)」—— 那次判断基于当时
+#   （未修计价空间/未做腿型归因）的样本。2026-09-25 按**腿型**重算（正T买腿，见账本 §9.18）：
+#   改为当日 14:45 平掉 ⇒ T13 −16,418→−3,956、T14 −13,458→−3,295、T11 −11,566→−2,078（各改善 0.9~1.2 万），
+#   但 T5 +2,435→−1,382（T5 的正T买靠隔夜持有赚钱）⇒ 仍是**回测里单臂验证**的事项，故不擅自改生产。
+DAY_END_T_OUT = os.getenv("WOLF_DAY_END_T_OUT", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _oc_cond_buy_block(px, quote, kind, hhmm=None):
+    """条件单买入的"开盘快速拉升不追"判定 → (block, why)。
+
+    开关关 / 闸门关 / 缺数 / 异常 ⇒ **一律放行**（fail-open，绝不误拦）；放行时 why 为空串。
+    `hhmm` 不传则用进程时钟 —— 回测里时钟被钉在当日 bar 上，故取到的就是仿真时刻。
+    """
+    if not OC_COND_BUY:
+        return False, ""
+    try:
+        from app.services import wolf_no_chase as _nco
+        if not _nco.open_enabled():
+            return False, ""
+        _ok, _why = _nco.open_verdict(float(px or 0),
+                                      float((quote or {}).get("open") or 0),
+                                      hhmm=hhmm, kind=kind)
+        return (False, "") if _ok else (True, _why)
+    except Exception as _e:
+        print(f"[TMonitor] 条件单开盘闸异常(放行) {kind}: {str(_e)[:80]}")
+        return False, ""
+
+
 # 狼大做T表达式字段(唯一允许)：分时T出(t_sell) + 正T买点(index.intraday_dd 大盘盘中回撤2-3%低吸)
 # + 黄线跌破离场(quote.vwap_break, 狼大8-04『黄线跌破直接走』)
 # T1缩转放(t1_shrink_expand) 已由个股5min验证无预测力(2026-09-02) → 暂缓, 不再作为自动买腿
@@ -55,7 +232,11 @@ def _board_tradable(symbol) -> bool:
     return True
 
 
-WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break", "index.m5_dump", "quote.dip_prev_low")
+WOLF_T_FIELDS = ("minute.m5.t_sell", "index.intraday_dd", "quote.vwap_break", "index.m5_dump", "quote.dip_prev_low",
+                  # 2026-09-26 补（账本 §9.183）：新增腿型的表达式若**只含新字段** ⇒ 会被本白名单**整轮滤掉** ✗
+                  #   · `quote.prev_low_dist_pct`（埋伏腿新触发 ✓ §9.182）
+                  #   · `quote.m5_dump`（低吸 253 合取版 ✓ §9.176）
+                  "quote.prev_low_dist_pct", "quote.m5_dump")
 
 # 254 低吸触发容差（2026-09-15 参数对齐）：狼大 2025-03-06「就是**挂前一天的低点** 能买进去就做正T」
 #   → 语料值 = 0.0（挂前低本身）；历史自设值 0.005（±0.5% 容差）。见 docs/wolf-buy-parameter-ledger.md §2-C1。
@@ -169,6 +350,17 @@ class TMonitor:
         self._daily_maintained = ""
         self._ai_thread: Optional[threading.Thread] = None
         self._wolf_done = set()   # (symbol, trigger_kind, date) 当日去抖，防同一腿反复触发
+        self._nochase_deferred = set()   # (symbol, date) 被"不追高"延后到 14:00–14:30 重评的票（只用于降噪打印）
+        self._line_deferred = set()      # (symbol, date) 挂低位线等待成交的票（狼大 2026-04-10；只用于降噪打印）
+        self._line_bars_cache = {}       # (symbol, date) → 算线用的 as-of 日线（每天只取一次，避免 30s 轮次重复请求）
+        self._hpv_bars_cache = {}        # (symbol, date) → 「位置高∧量能放大」闸用的 as-of 日线（同上）
+        self._hpv_deferred = set()       # (symbol, date) 被该闸挡下的票（只用于降噪打印）
+        self._nobase_deferred = set()    # (symbol, date) 无底仓被挡下的正T买腿（狼大 2026-08-25；只用于降噪打印）
+        self._tw_deferred = set()        # (symbol, date) 被狼大做T时间窗挡下的正T买腿（D2，2026-09-21；只用于降噪打印）
+        self._oc_deferred = set()        # (symbol, date) 被"开盘快速拉升不追"挡下的买腿（D1，2026-09-21；只用于降噪打印）
+        self._core_cap_warned = ""     # 条件标的超上限的当日告警（防刷屏）
+        self._fall_deferred = set()      # (symbol, date) 被"下跌中不买/弱势延后"挡下的买腿（B/C，2026-09-22；只用于降噪打印）
+        self._held_cache = {"at": 0.0, "set": set(), "ok": False}   # 持仓快照（60s TTL；供"挂线只管再买"判范围）
         self._wolf_bought_today = set()  # (symbol, date) 当日正T买入
         self._wolf_sold_today = set()    # (symbol, date) 当日确认制T出已卖
         # ① 建仓初期波段逻辑止损: 建仓日锚点缓存 {(account, symbol, today): 'YYYY-MM-DD'|None}
@@ -228,11 +420,15 @@ class TMonitor:
                             self._start_ai_maintain()
                     self._round()
                     self._settle_tsell_pending()  # 撤销式T出结算(放量过前高→撤销/超时→执行)
+                    self._ambush_warn_trim()      # 指数层预警 ⇒ 埋伏仓减到防御档（账本 §9.205 ✓）
                     self._settle_pullback_sell()  # ②量能分层(2026-09-08): 缩量破位→反抽/尾盘确认离场
                     self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
                     self._check_roundtrip_sell()  # B模型·等量换手: 低吸后反弹≥狼大兑现幅度(默认+3%)卖≤N旧仓
-                    # day_end 已降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
+                    # day_end 默认降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
+                    # 开 WOLF_DAY_END_T_OUT=1 ⇒ 恢复狼大「做T当日出来，不留过夜」(14:45 后未确认即减T仓)
+                    if DAY_END_T_OUT:
+                        self._check_day_end_de_t()
                     self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                     self._check_profit_take()  # 小赚兑现(P0-3, 2026-09-14 开): 浮盈>=阈值→减T半仓(保留底仓)
@@ -244,13 +440,21 @@ class TMonitor:
                     self._check_boll_mid_exit()  # A10 BOLL中轨全止盈(尾盘确认窗, 狼大 2025-05-13)
                     self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
                     self._check_index_level_stop()  # ③ 指数大级别止损(狼大2026-08-27): 转下跌1浪→止损
-                    self._check_logic_time_stop()  # ① 后半句: 13日内未碰前高→逻辑时间离场(狼大2026-03-05)
+                    self._check_logic_time_stop()  # ① 后半句: 13日内未碰前高→逻
+                    self._check_ambush_discipline()  # 埋伏纪律: 固定 N 日 + 宽止损（默认关 ✓）
+                    self._check_intraday_t_stop()  # 日内T仓紧止损（默认关 ✓；狼大 2026-02-02 口径）辑时间离场(狼大2026-03-05)
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
             except Exception as e:
                 self._status["errors"] += 1
                 print(f"[TMonitor] 本轮异常: {e}")
+                # 2026-09-26 用户「加个全局异常处理，统一走QQ推送」✓（账本 §9.238）
+                try:
+                    from app.services import alert_hub as _ah
+                    _ah.note("t_monitor.round", e)
+                except Exception:
+                    pass
             elapsed = (time.time() - round_start) * 1000
             self._status.update({
                 "last_round": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -349,24 +553,13 @@ class TMonitor:
             print(f"[TMonitor] _check_roundtrip_sell 异常: {e}")
 
     def _prev_daily(self, sym, n=5):
-        """最近 n 个交易日的 {close, high, low, vol}（读 data/recent_sync 或 stock_5m_bt）。"""
-        import os as _os, json as _j
-        D=_os.environ.get('DATA_DIR','/app/data')
-        code6=''.join(ch for ch in str(sym) if ch.isdigit())[:6]
-        data={}
-        for root in ['stock_5m_bt','recent_sync']:
-            p=_os.path.join(D,root,code6+'.json')
-            try: d=_j.load(open(p,encoding='utf-8'))
-            except Exception: continue
-            for k,v in d.items():
-                bs=sorted(v,key=lambda x:str(x.get('time') or x.get('trade_time')))
-                if bs: data.setdefault(k, {'close':float(bs[-1]['close']),
-                                           'high':max(float(b['high']) for b in bs),
-                                           'low':min(float(b['low']) for b in bs),
-                                           'vol':sum(float(b.get('vol') or 0) for b in bs)})
-        today=datetime.now().strftime('%Y%m%d')
-        days=sorted(k for k in data if k<today and data[k].get('vol'))
-        return [data[k] for k in days[-n:]]
+        """最近 n 个交易日的 {close, high, low, vol}（委托模块级 `_prev_daily_rows` ✓）。
+
+        2026-09-25（账本 §9.125）：`pass_common_gates` 是**模块级函数**却写了 `self._prev_daily(...)`
+        ⇒ NameError ⇒ **253 语境闸门从未真正生效** ✗（日志 51 次 `异常(放行): name 'self' is not defined`）
+        ⇒ 逻辑提取为模块级函数，方法与闸门共用同一实现 ✓
+        """
+        return _prev_daily_rows(sym, n)
 
     def _daily_dated(self, sym, n=40):
         """最近 n 个交易日的**带日期**日K: [{'date':'YYYYMMDD','close','high','low','vol'}]。
@@ -478,7 +671,30 @@ class TMonitor:
         with open(_os.path.join(D,'wolf_t_cycles.jsonl'),'a',encoding='utf-8') as f:
             f.write(_j.dumps({'at':datetime.now().isoformat(),'symbol':sym,**cyc},ensure_ascii=False)+chr(10))
 
-    def _insert_wolf_trigger(self, sym, kind, quote, reason, account_id=None):
+    def _held_today(self, sym) -> bool:
+        """该票当前是否持有（供 `WOLF_BUY_LINE_SCOPE=rebuy/new` 判"再买 vs 首次建仓"）。
+
+        60s TTL 缓存，避免每个标的每一轮都查库；**读失败时返回 True**（=继续挂线，偏保守）。
+        """
+        import time as _t0
+        try:
+            if _t0.time() - float(self._held_cache.get("at") or 0) > 60.0:
+                _s = set()
+                for _p in (self._positions() or []):
+                    try:
+                        if float(_p.get("volume") or 0) > 0:
+                            _s.add(str(_p.get("symbol")))
+                    except Exception:
+                        continue
+                self._held_cache = {"at": _t0.time(), "set": _s, "ok": True}
+        except Exception:
+            self._held_cache = {"at": _t0.time(), "set": set(), "ok": False}
+        if not self._held_cache.get("ok"):
+            return True                      # 持仓读不到 ⇒ 按"继续挂线"处理（保守）
+        s = str(sym)
+        return (s in self._held_cache["set"]) or (s[:2] + s[2:] in self._held_cache["set"])
+
+    def _insert_wolf_trigger(self, sym, kind, quote, reason, account_id=None, bid=None, line=None):
         """把 wolf_t_rules 命中写成 t_triggers(pending/auto)，复用同一做T执行管道(不直接下单)。
 
         `account_id` 可指定（纪律类卖腿要覆盖 stock 账户，而不是只写 t 账户）；返回触发 id。
@@ -488,15 +704,69 @@ class TMonitor:
             current=float(quote.get('current') or 0)
         except Exception:
             current=0
+        # 2026-09-19：把「当日自低点拉升%／日内分位%」写进快照 —— 供**不追高闸**（wolf_no_chase）
+        #   在执行口判定"是不是冲上去追"（语料 2025-04-03「冲上去一定不能追」；他给的追高正解是
+        #   2025-04-15 条件6「想追进去的…在下午 2.00-2.30 进行回补」）。
+        _dl = float(quote.get('low') or 0)
+        _dh = float(quote.get('high') or 0)
+        _rise = round((current / _dl - 1.0) * 100, 3) if (current > 0 and _dl > 0) else None
+        _quant = round((current - _dl) / (_dh - _dl) * 100, 2) if (_dh > _dl > 0 and current > 0) else None
+        # 2026-09-19：另写「前低 / 当日低 / 量比」——供**放量破位门**（wolf_dip_volume_gate）在执行口判定
+        #   「放量破前低 = 杀跌，不是 254 低吸位」（254 的原话口径是"破前低+缩量"）。
+        #   ⚠️ 2026-09-19 事故：`_prev_daily` 返回的是 **list[{'close','high','low','vol'}]**（按日期列表，
+        #      不是按日期索引的 dict）——首版按 dict 写 ⇒ `.get` 打到 list 上 ⇒ `wolf_t_rules检查异常:
+        #      'list' object has no attribute 'get'` **每个标的都抛** ⇒ 全天零触发（实测 0106 触发 0、
+        #      成交 0）。教训：往 hot path 里加取数必须**容错 + 形状自适应**，且异常绝不能冒泡出去。
+        try:
+            _pdl = self._prev_daily(sym, 5) or []
+            _p_last = _pdl[-1] if isinstance(_pdl, list) and _pdl else (
+                _pdl.get(sorted(str(k) for k in _pdl)[-1]) if isinstance(_pdl, dict) and _pdl else {})
+            _prev_low = float((_p_last or {}).get('low') or 0) if isinstance(_p_last, dict) else 0.0
+        except Exception:
+            _prev_low = 0.0
+        # 2026-09-24：改用 wolf_leg_vol_ratio —— quote 缺 vol_ratio 时按条件腿同口径补算
+        #   （回测取数替身不提供该字段；开关 WOLF_VOL_RATIO_FILL 默认 0 ⇒ 旧行为）
+        _vr = wolf_leg_vol_ratio(quote, symbol=sym)
+        # 2026-09-21（D1）：另写「当日开盘 / 昨收」——供**开盘不追高闸**（wolf_no_chase.open_verdict）
+        #   在执行口判「现价距**当日开盘**已快速拉升多少」（语料 2025-04-15 条件6）。
+        #   ⚠️ 条件腿那条路径的 snapshot 本来就有 `fields.quote.open`；**wolf_t_rules 这条没有**
+        #      ⇒ 不补这两个字段，"开盘不追高"闸在 `wolf_zheng_t_buy`（实测占买成交 84%）上会**静默 fail-open**。
+        try:
+            _op = float(quote.get('open') or 0) or None
+        except Exception:
+            _op = None
+        try:
+            _pc = float(quote.get('pre_close') or 0) or None
+        except Exception:
+            _pc = None
+        _fp = fill_prices(current, bid=bid)
         trig={
             "account_id": account_id or T_MONITOR_ACCOUNT, "condition_id": None, "symbol": sym,
             "event_type": kind, "trigger_price": None, "quote_price": current,
-            "suggest_bid_price": round(current*0.999, 3), "suggest_ask_price": round(current*1.001, 3),
-            "slippage_budget": 0.001,
-            "snapshot": {"quote_time": now, "wolf_rule": reason, "trigger_kind": kind, "source": "wolf_t_rules"},
+            # 2026-09-20：成交价溢价改为可配（`WOLF_FILL_PREMIUM_PCT`，默认 0.1 = 生产现状；
+            #   回测 pins 置 0 ⇒ 成交价 = 成交时报价，砍掉那条无语料依据的 0.1%）。
+            #   买单若由 C 口径给线价（`bid`），则优先用线价。
+            "suggest_bid_price": _fp[0], "suggest_ask_price": _fp[1],
+            "slippage_budget": round(fill_premium_pct() / 100.0, 6),
+            "snapshot": {"quote_time": now, "wolf_rule": reason, "trigger_kind": kind, "source": "wolf_t_rules",
+                         "day_rise_pct": _rise, "day_quantile": _quant, "open": _op, "pre_close": _pc,
+                         "prev_low": (_prev_low or None), "today_low": (_dl or None), "vol_ratio": _vr},
             "mode": "auto",
             "direction": "buy" if kind == "wolf_zheng_t_buy" else "sell",
         }
+        try:
+            from app.services import t_trigger_mute as _tm0
+            if _tm0.is_muted(sym, kind):
+                return None                      # 当日静默（无 T 仓可卖 / G8 已停机）
+        except Exception as _eN0:
+            # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+            from app.services import gate_alarm as _gaNote
+            _gaNote.note("t_monitor:line685", _eN0)
+            pass
+        if ticket_ban_blocked(sym, str(trig.get("direction")) == "buy"):
+            return None                       # G3 删票名单：买入侧不再复发（见 helper docstring）
+        if intraday_crush_blocked(sym, str(trig.get("direction")) == "buy", str(kind or "")):
+            return None                       # C2′+C2″ 盘中午判据
         try:
             tid = t_db.insert_trigger(trig)
             if tid:
@@ -521,7 +791,7 @@ class TMonitor:
                     try:
                         from app.services.t_data_sources import fetch_tencent_quote, _normalize_symbol
                         _ns = _normalize_symbol(sym)
-                        q = fetch_tencent_quote([_ns]).get(_ns) or {}
+                        q = fetch_quote_one(_ns) or {}
                         cur = float(q.get("current") or 0)
                     except Exception:
                         cur = 0.0
@@ -534,7 +804,7 @@ class TMonitor:
                         do_sell, reason_tag = True, "14:45尾盘确认离场"
                     if not do_sell:
                         continue
-                    cap = resolve_sell_cap(sym, account_id=p.get("account_id") or "stock")
+                    cap = resolve_sell_cap(sym, account_id=p.get("account_id") or T_MONITOR_ACCOUNT)
                     vol = min(int(p.get("volume") or 0), cap)
                     vol = (vol // 100) * 100
                     if vol < 100:
@@ -544,10 +814,10 @@ class TMonitor:
                                          reason="[量能分层] %s %s 缩量破位后离场" % (reason_tag, p.get("kind")),
                                          trigger_id=p.get("trig_id"),
                                          decision_source="rule",
-                                         account_id=p.get("account_id") or "stock")
+                                         account_id=p.get("account_id") or T_MONITOR_ACCOUNT)
                     if gw.get("status") == "success":
                         print(f"[TMonitor] 量能分层卖出 {sym} {vol}股@{cur} ({reason_tag})")
-                        self._after_sell(sym, p.get("account_id") or "stock", "custom_support_sell",
+                        self._after_sell(sym, p.get("account_id") or T_MONITOR_ACCOUNT, "custom_support_sell",
                                          "量能分层破位离场（%s）" % reason_tag)
                     del _PULLBACK_SELL[sym]
                 except Exception as e:
@@ -555,6 +825,277 @@ class TMonitor:
                     del _PULLBACK_SELL[sym]
         except Exception as e:
             print(f"[TMonitor] _settle_pullback_sell 异常: {str(e)[:120]}")
+
+    def _ambush_promote_pct(self) -> float:
+        """**转正阈值**（浮盈 %）—— `WOLF_AMBUSH_PROMOTE_PCT`（**库内默认 0 = 关** ✓；pins 10 ✓）。"""
+        try:
+            return abs(float(os.getenv("WOLF_AMBUSH_PROMOTE_PCT", "0") or 0))
+        except Exception:
+            return 0.0
+
+    def _ambush_trail_pct(self) -> float:
+        """转正后的**移动止盈回撤 %**（自**最高价**算）—— `WOLF_AMBUSH_TRAIL_PCT`（默认 10 ✓）。"""
+        try:
+            return abs(float(os.getenv("WOLF_AMBUSH_TRAIL_PCT", "10") or 10))
+        except Exception:
+            return 10.0
+
+    def _quote_now(self, symbols):
+        """**动态取行情** ✓（账本 §9.249）—— 永远读 `t_data_sources` 的**模块属性** ✓。
+
+        为什么 ✗：本模块顶部是 `from app.services.t_data_sources import fetch_tencent_quote` ✗
+          ⇒ **from-import 绑走原对象** ⇒ 回测后来替换模块属性**对它无效** ✗
+          ⇒ 沙箱/回测内无网络 ⇒ 行情空 ⇒ `_cur = 0` ⇒ 纪律**静默失效** ✗（第五次同类坑 ✓）
+        修法：**每次调用时**去模块属性上取 ✓ ⇒ 谁替换都立刻生效 ✓（与"补丁广播"双保险 ✓）
+        """
+        try:
+            import app.services.t_data_sources as _tds
+            # ⚠️ 2026-09-30 全局统一（账本 §9.312）：走**唯一入口** ✓
+            #   原来直接调 `fetch_tencent_quote` ✗ ⇒ 读键方式与其它调用点不一致 ✗
+            #   ⇒ 回测替身下可能拿到空 ⇒ `_cur=0` ⇒ **静默跳过** ✗（加仓就是这么没的 ✗）
+            _one = getattr(_tds, "fetch_quote_one", None)
+            if _one is not None:
+                _syms = symbols if isinstance(symbols, (list, tuple, set)) else [symbols]
+                _out = {}
+                for _s1 in _syms:
+                    _v1 = _one(_s1) or {}
+                    if _v1:
+                        _out[_s1] = _v1
+                        try:
+                            _nn = _tds._normalize_symbol(_s1)
+                            _out.setdefault(_nn, _v1)
+                        except Exception:
+                            pass
+                return _out
+            fn = getattr(_tds, "fetch_tencent_quote", None) or fetch_tencent_quote
+        except Exception:
+            fn = fetch_tencent_quote
+        try:
+            return fn(symbols) or {}
+        except Exception:
+            return {}
+
+    def _promote_on_newhigh(self) -> bool:
+        """转正是否也接受「**碰新高**」（他的口径 ✓）—— `WOLF_AMBUSH_PROMOTE_NEWHIGH`（默认 0 = 关 ✓）。"""
+        return str(os.getenv("WOLF_AMBUSH_PROMOTE_NEWHIGH", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+    def _no_newhigh_exit_days(self) -> int:
+        """**13 日不碰新高 ⇒ 离场**（他原话后半截 ✓）—— `WOLF_AMBUSH_NO_NEWHIGH_EXIT_DAYS`（默认 0 = 关 ✓）。"""
+        try:
+            return max(0, int(float(os.getenv("WOLF_AMBUSH_NO_NEWHIGH_EXIT_DAYS", "0") or 0)))
+        except Exception:
+            return 0
+
+    def _prior_high_before_entry(self, sym: str, entry: str, n: int = 20) -> float:
+        """**买入前 n 个交易日的最高价**（"新高"的参照 ✓）—— 用监控同源日线 ✓。"""
+        try:
+            # ⚠️ 2026-09-26（账本 §9.241）：这次调用**必须**也在 try 里 ✗
+            #   `_daily_dated` 在缓存未命中时会走**回退取数** ⇒ import 到需要 **PySide6** 的模块 ✗
+            #   ⇒ 上一版我只包了纪律主体里那一次 ✗，而**本函数**（碰新高判定 ✓）里这一次**漏了** ✗
+            #   ⇒ 依然整个纪律抛异常 ✓（QQ 告警抓到了 ✓ —— 告警链首次真实立功 ✓）
+            try:
+                _bd = self._daily_dated(sym, 120) or []
+            except Exception:
+                _bd = []
+            # ⚠️ 2026-09-26（账本 §9.265）：**「新高」必须相对「买入之后」** ✓
+            #   他原话：「我说一下我用的 **买入有时间** 然后 **13 日内需要碰新高**或者新高。
+            #          否则这个票呆的意义就不大，**证明自己的买入逻辑和时间**有问题…」✓
+            #   旧写法＝**建仓日之前** 20 根的最高价 ✗ ⇒ 而我们的入场是**突破型**
+            #     ⇒ 买入时价格**已在其上** ⇒ 「碰新高」买入即成立 ⇒ 该判据**空转** ✗
+            #     （实测 4 例中 3 例：002156 39.54>38.72 ✓／603660 11.44>11.24 ✓／603690 33.41>32.88 ✓）
+            #   新写法＝**建仓日（含）当根的最高价** ✓（=「买入后创新高」✓）
+            _after = str(os.getenv("WOLF_NEWHIGH_AFTER_ENTRY", "0")).strip().lower() in ("1", "true", "yes", "on")
+            if _after:
+                for _b in _bd:
+                    _d8 = str(_b.get("date") or _b.get("trade_date") or "").replace("-", "")
+                    _h = _b.get("high") or _b.get("close")
+                    if _d8 == str(entry) and _h:
+                        return float(_h)
+                return 0.0
+            _days = []
+            for _b in _bd:
+                _d8 = str(_b.get("date") or _b.get("trade_date") or "").replace("-", "")
+                _h = _b.get("high")
+                if _d8 and _d8 < str(entry) and _h:
+                    _days.append((_d8, float(_h)))
+            if not _days:
+                return 0.0
+            _days.sort()
+            return max(h for _, h in _days[-n:])
+        except Exception:
+            return 0.0
+
+    def _record_promotion(self, sym: str, day: str, px: float) -> None:
+        """**记录转正日与价**（供"加仓=B"用 ✓）—— 落在 `DATA_DIR/ambush_promoted.json` ✓。"""
+        try:
+            import json as _js2
+            # ⚠️ 账本 §9.244：必须落在**运行根** ✗ —— `DATA_DIR` 是**按日**目录 ✓，
+            #   写在里面 ⇒ 每天一个新文件 ⇒ 3 日窗口**形同虚设** ✗（实测每天重记一次 ✓）
+            _D2 = os.path.dirname(os.environ.get("DATA_DIR", "/app/data")) or "/app/data"
+            _p2 = os.path.join(_D2, "ambush_promoted.json")
+            _cur2 = {}
+            if os.path.exists(_p2):
+                with open(_p2, encoding="utf-8") as _f3:
+                    _cur2 = _js2.load(_f3) or {}
+            if sym not in _cur2:
+                _cur2[sym] = {"pday": str(day), "ppx": float(px or 0), "added": False}
+                with open(_p2, "w", encoding="utf-8") as _f4:
+                    _js2.dump(_cur2, _f4, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _is_ambush_promoted(self, acct: str, sym: str) -> bool:
+        """本仓是否已**转正**（＝最高价曾达 成本×(1+阈值%) ✓）。
+
+        2026-09-26 用户「把"转正"补上」✓（账本 §9.220）——
+        语料：「**13 日内需要碰新高**…否则这个票呆的意义就不大」✓（碰上去了 ⇒ 逻辑成立 ✓）；
+              且 `tranche_ladder.CONFIRM_STAGE_AMBUSH=("缩量止跌","结构到位")` ✓
+              ⇒ 到「**突破/站稳**」就不再是埋伏档 ✓
+        **无需新状态** ✓：`paper_positions.highest_price` 就是"买入后最高价" ✓
+        """
+        _pct = self._ambush_promote_pct()
+        if _pct <= 0:
+            return False
+        try:
+            from sqlalchemy import text as _tp
+            from app.database import SessionLocal
+            with SessionLocal() as _sp:
+                _r = _sp.execute(_tp(
+                    "SELECT COALESCE(highest_price,0), COALESCE(avg_price,0) FROM paper_positions "
+                    "WHERE account_id=:a AND symbol=:s AND COALESCE(volume,0)>0"),
+                    {"a": acct, "s": sym}).fetchone()
+            if not _r:
+                return False
+            _hi, _cost = float(_r[0] or 0), float(_r[1] or 0)
+            return bool(_cost > 0 and _hi >= _cost * (1 + _pct / 100.0))
+        except Exception:
+            return False
+
+    def _ambush_warn_trim(self) -> None:
+        """**指数层预警 ⇒ 埋伏仓减到防御档**（账本 §9.205 ✓）。
+
+        语料：「**趁机在周2前减仓**」✓「明天有冲高**减到 70%**」✓「**等指数企稳**了再打回」✓
+        量化（21 个月 + 样本外分段 ✓）：无预警 **+58.58%／回撤 −21.6%** ✗
+          ⇒ **预警 + 防御档 5 只：+75.93%／回撤 −7.5%** ✓✓（2026 动荡段 +35.12%／−7.9% ✓）
+        开关：`WOLF_AMBUSH_WARN_TRIM`（**库内默认 0 = 关** ✓）＋ `WOLF_AMBUSH_WARN_DEF_CAP`（默认 5 ✓）
+        口径：**每日最多一次** ✓；只动**埋伏仓** ✓；**砍浮亏最深者** ✓（与量化一致 ✓，已标注 ✓）
+        """
+        if str(os.getenv("WOLF_AMBUSH_WARN_TRIM", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            _cap = int(float(os.getenv("WOLF_AMBUSH_WARN_DEF_CAP", "5") or 5))
+        except Exception:
+            _cap = 5
+        if _cap <= 0:
+            return
+        _today = datetime.now().strftime("%Y%m%d")
+        if getattr(self, "_amb_trim_day", None) == _today:
+            return
+        try:
+            if not ambush_warn_active():
+                return
+            self._amb_trim_day = _today
+            from sqlalchemy import text as _tt
+            from app.database import SessionLocal
+            from app.services.t_gateway import gateway_execute
+            from app.services.t_data_sources import fetch_tencent_quote
+            # 2026-09-26 用户「**为什么只有埋伏仓减仓呢，我们不是为了躲避大跌吗**」✓
+            #   ⇒ **作用面改为"全账户"**（`WOLF_WARN_TRIM_SCOPE='account'` ✓；库内默认 `ambush` = 现状 ✓）
+            #   依据：①我们 8 个最差日**全是普跌日** ✓ ⇒ 要躲的是**全账户的大跌** ✓
+            #        ②他原话「明天有冲高**减到 70%**」（2026-03-05）✓ 讲的是**组合层总仓位** ✓
+            _scope = str(os.getenv("WOLF_WARN_TRIM_SCOPE", "ambush") or "ambush").strip().lower()
+            with SessionLocal() as _ss:
+                if _scope == "account":
+                    rows = _ss.execute(_tt(
+                        "SELECT p.symbol, p.volume, p.avg_price FROM paper_positions p "
+                        "WHERE p.account_id=:a AND COALESCE(p.volume,0)>0"),
+                        {"a": T_MONITOR_ACCOUNT}).fetchall()
+                else:
+                    rows = _ss.execute(_tt(
+                        "SELECT p.symbol, p.volume, p.avg_price FROM paper_positions p "
+                        "WHERE p.account_id=:a AND COALESCE(p.volume,0)>0 AND EXISTS ("
+                        " SELECT 1 FROM paper_trades t WHERE t.account_id=:a AND t.symbol=p.symbol "
+                        " AND COALESCE(t.voided,0)=0 AND t.direction LIKE '买%' "
+                        " AND COALESCE(t.reason,'') LIKE :p)"), {"a": T_MONITOR_ACCOUNT, "p": "%wolf_ambush_buy%"}).fetchall()
+            # ── **比例口径**（用户在 §9.222 的观察：只数管不住仓位 ✗）──────────────────
+            #   「预警 ⇒ 总仓位（市值/权益）压到 X%」✓ —— 贴他原话「明天有冲高**减到 70%**」✓
+            #   量化（长样本 ＋ **样本外分割** ✓，均带"转正 10%/回撤 10%"✓）：
+            #     · 只数口径（防御档 5 只，现状）⇒ +152.10%／回撤 **−5.3%**（前段 +46.78%/−5.3%、后段 +63.41%/−5.5%）
+            #     · **比例口径 40%** ⇒ **+541.14%／−9.6%** ✓✓（前段 **+141.44%/−8.5%**、后段 **+140.10%/−10.8%** ✓）
+            #     比例 50% ⇒ +434.32%/−14.4%（后段 −14.5% ✗）；比例 60% ⇒ +299.87%/−12.9%
+            #   ⇒ **比例 40% 两段都稳且收益约 3 倍** ✓（代价：绝对回撤略大 ✗）
+            try:
+                _maxpct = float(os.getenv("WOLF_WARN_TRIM_MAX_PCT", "0") or 0)
+            except Exception:
+                _maxpct = 0.0
+            _mv = 0.0
+            if _maxpct > 0:
+                try:
+                    from sqlalchemy import text as _tm7
+                    from app.database import SessionLocal as _SL7
+                    with _SL7() as _s7:
+                        _mv = float(_s7.execute(_tm7(
+                            "SELECT COALESCE(SUM(volume*avg_price),0) FROM paper_positions "
+                            "WHERE account_id=:a AND COALESCE(volume,0)>0"),
+                            {"a": T_MONITOR_ACCOUNT}).scalar() or 0)
+                except Exception:
+                    _mv = 0.0
+            if len(rows) <= _cap and not (_maxpct > 0 and _mv > 0):
+                print("[TMonitor] 预警降档：持仓 %d 只 ≤ 防御档 %d ⇒ 无需减仓（作用面=%s ✓）"
+                      % (len(rows), _cap, _scope), flush=True)
+                return
+            if _maxpct > 0 and _mv > 0:
+                print("[TMonitor] 预警降档(比例口径)：持仓成本 %.0f ／ 阈值 %.0f%% ⇒ 将按比例减仓 ✓"
+                      % (_mv, _maxpct), flush=True)
+            _qs = [_normalize_symbol(r[0]) for r in rows]
+            _q = fetch_tencent_quote([_normalize_symbol(_s) for _s in (_qs or [])]) or {}
+            rank = []
+            for sym, vol, avg in rows:
+                q = _q.get(_normalize_symbol(sym)) or {}
+                cur = float(q.get("current") or 0)
+                cost = float(avg or 0)
+                if cur > 0 and cost > 0:
+                    rank.append((cur / cost, sym, int(vol), cur))
+            rank.sort()                                   # 浮亏最深在前 ✓
+            # 目标：**只数 ≤ 防御档** ✓ ∧（若开了比例口径）**剩余市值 ≤ 权益×X%** ✓
+            _keep_n = max(0, len(rank) - _cap)
+            if _maxpct > 0 and _mv > 0:
+                try:
+                    from sqlalchemy import text as _te7
+                    from app.database import SessionLocal as _SE7
+                    with _SE7() as _se7:
+                        _cash7 = float(_se7.execute(_te7(
+                            "SELECT COALESCE(available_cash,0) FROM paper_account_info WHERE account_id=:a"),
+                            {"a": T_MONITOR_ACCOUNT}).scalar() or 0)
+                except Exception:
+                    _cash7 = 0.0
+                _eq7 = _cash7 + _mv
+                _target = _eq7 * _maxpct / 100.0
+                _rem = _mv
+                _k7 = 0
+                # ⚠️ 2026-09-30 修（账本 §9.292）：原来这里是 **或** 关系 ✗
+                #   ⇒ 只要「只数 ≤ 防御档」成立就 break ✗ ⇒ **按市值比例该减的一分没减** ✗
+                #   实测：算过 92 次、每次「需减 0 只」✗（持仓 8 只 ≤ 上限 8 ✓）
+                #   现在：**比例口径只以市值为终止条件** ✓（只数档是另一条独立约束 ✓）
+                for _r, _sym7, _vol7, _cur7 in rank:
+                    if str(os.getenv("WOLF_WARN_TRIM_RATIO_STANDALONE", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                        if _rem <= _target:
+                            break
+                    elif _rem <= _target or (len(rank) - _k7) <= _cap:
+                        break
+                    _rem -= _vol7 * _cur7
+                    _k7 += 1
+                _keep_n = max(_keep_n, _k7)               # 取两者中**更严**的 ✓
+                print("[TMonitor] 预警降档(比例)：权益 %.0f ⇒ 目标市值 %.0f；按最弱顺序需减 %d 只 ✓"
+                      % (_eq7, _target, _k7), flush=True)
+            for _r, sym, vol, cur in rank[:_keep_n]:
+                gw = gateway_execute(sym, "sell", cur, vol,
+                                     reason="预警降档（指数层预警 ⇒ %s减到防御档）"
+                                            % ("全账户" if _scope == "account" else "埋伏仓"),
+                                     decision_source="risk", account_id=T_MONITOR_ACCOUNT)
+                print("[TMonitor] 预警降档 %s 卖 %d股@%.2f: %s" % (sym, vol, cur, gw.get("status")), flush=True)
+        except Exception as _eT:
+            print("[TMonitor] 预警降档异常: %s" % str(_eT)[:90], flush=True)
 
     def _settle_tsell_pending(self) -> None:
         """撤销式 T出 结算(2026-09-07): 对 pending 的 high_sell 观察——
@@ -578,7 +1119,7 @@ class TMonitor:
                 last = tb[-1]
                 lc = float(last.get("close") or 0); lv = float(last.get("vol") or 0)
                 dec = _tsell_undo_decide(p["hi"], p["base"], lc, lv, _tm.time() - p["ts"])
-                q = (fetch_tencent_quote([qs]) or {}).get(qs) or {}
+                q = (fetch_tencent_quote([_normalize_symbol(qs)]) or {}).get(qs) or {}
                 cur = float(q.get("current") or 0)
                 if dec == "undo":
                     t_db.update_trigger_status(p["trig_id"], "cancelled",
@@ -588,7 +1129,12 @@ class TMonitor:
                 elif dec == "sell":
                     gw = gateway_execute(sym, "sell", cur if cur > 0 else p.get("last_price", cur),
                                          int(p["volume"]), reason="确认制T出(撤销式延迟无放量新高)",
-                                         decision_source="ai_led", account_id=p.get("account_id", T_MONITOR_ACCOUNT))
+                                         decision_source="ai_led", account_id=p.get("account_id", T_MONITOR_ACCOUNT),
+                                         # 2026-09-26 修（账本 §9.198）：**必须传 trigger_id** ✗
+                                         #   病灶：本调用原先不传 ⇒ 网关 `_turnover_kind()` 取不到腿型 ⇒
+                                         #   **埋伏仓豁免名单匹配不到 ⇒ 放行卖出** ✗（实测 SH603660 01-09
+                                         #   被"确认制T出"卖掉 300 股 ✗，而条件腿那条路已正确 `blocked` ✓）
+                                         trigger_id=p.get("trig_id"))
                     ok = gw.get("status") == "success"
                     t_db.update_trigger_status(p["trig_id"], "executed" if ok else "blocked",
                                                reason=f"确认制T出(延迟确认): {gw.get('status')} | {str(gw.get('reason') or '')[:80]}")
@@ -617,24 +1163,227 @@ class TMonitor:
                 b, rb = zheng_t_buy_quote(q, prev)
                 d, rd = dao_t_sell_quote(q, prev)
                 if b and (sym, 'wolf_zheng_t_buy', today) not in self._wolf_done:
+                    # ── 不追高：开盘/平稳时段的"冲上去"腿 → **不当日丢弃**，延后到 14:00–14:30 重评 ──
+                    #   语料 2025-04-15 条件6「**想追进去的**…在下午 2.00-2.30 这个时间段进行回补」；
+                    #   用户 2026-09-19 拍板 C（A+B）：既要"延后回补"、又把门槛收紧为
+                    #   「拉升≥2% **且** 分位≥85」。做法：不写触发、**也不加 _wolf_done** ⇒ 后续 round
+                    #   （尤其 14:00–14:30）会重新评估；届时 verdict 在窗口内直接放行 ⇒ 腿得以"晚点追"。
+                    _defer_nc = False
                     try:
-                        from app.services.wolf_t_rules import t_cycle_pnl
-                        tb=self._today_bars(sym)
-                        cyc=t_cycle_pnl(tb, 2.5) if tb else None
-                        if cyc:
-                            if cyc.get('sell'):
-                                rb += ' | 正T买@%.2f→确认制T出@%.2f(+%.2f%%/日高+%.2f%%)' % (cyc['buy'], cyc['sell'], cyc['pnl'], cyc['pnl_dayhigh'])
-                            else:
-                                rb += ' | 正T买@%.2f 未确认→黄线/持有至次日/周五减T仓(不强制日结)' % (cyc['buy'])
-                            self._log_cycle(sym, cyc)
-                            if cyc.get('confirm'):
-                                self._wolf_sold_today.add((sym, today))
-                                self._insert_wolf_trigger(sym, 'wolf_confirm_sell', q, '确认制T出(停量+二次不过前高)')
-                    except Exception:
+                        from app.services import wolf_no_chase as _ncz
+                        if _ncz.enabled():
+                            _qc = float(q.get('current') or 0)
+                            _ql = float(q.get('low') or 0)
+                            _qh = float(q.get('high') or 0)
+                            _rz = round((_qc / _ql - 1.0) * 100, 3) if (_qc > 0 and _ql > 0) else None
+                            _qz = round((_qc - _ql) / (_qh - _ql) * 100, 2) if (_qh > _ql > 0 and _qc > 0) else None
+                            _okz, _whyz = _ncz.verdict(_qc, round(_qc * 0.999, 3), rise_pct=_rz, quantile=_qz)
+                            if not _okz and not _ncz.in_pm_window(datetime.now().strftime('%H%M')):
+                                _defer_nc = True
+                                if (sym, today) not in self._nochase_deferred:
+                                    self._nochase_deferred.add((sym, today))
+                                    print("[TMonitor] 不追高→延后到 14:00–14:30 重评 %s: %s"
+                                          % (sym, str(_whyz)[:90]), flush=True)
+                    except Exception as _eN1:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line832", _eN1)
                         pass
-                    self._insert_wolf_trigger(sym, 'wolf_zheng_t_buy', q, rb)
-                    self._wolf_bought_today.add((sym, today))
-                    self._wolf_done.add((sym, 'wolf_zheng_t_buy', today))
+                    # ── D2) 狼大做T时间窗（2026-09-21 用户拍板："把 D2 也补上"）──
+                    #   语料 2025-04-15 条件2「**当日只做上午 9.45-10.00 下午 2.00-2.30 这两个时间段的
+                    #   交易，尽量避免开盘直接买卖和平稳时间的来回T**」。
+                    #   ⚠️ 覆盖范围（`WOLF_TW_KINDS`）：原白名单只有 `low_buy,custom_prevlow`，
+                    #      而 253/254 低吸腿实测**一笔都没成交**（t1–t5 共 143 笔买成交 100% 是
+                    #      `wolf_zheng_t_buy` + `trend_break_buy`）⇒ 只开 `WOLF_TRADE_WINDOW=1` 在本臂
+                    #      **等于没开**（第 N 次同族"静默失效"）。要真生效必须显式把本腿型写进
+                    #      `WOLF_TW_KINDS`（`jobs/bt_env_pins.sh` 已写死并附影响面）。
+                    #   做法与不追高一致：不写触发、**也不加 `_wolf_done`** ⇒ 后续 round（窗口内）重新评估。
+                    _defer_tw = False
+                    try:
+                        from app.services import wolf_trade_window as _twz
+                        if _twz.enabled() and _twz.applies_to('wolf_zheng_t_buy'):
+                            _okw, _whyw = _twz.allowed()
+                            if not _okw:
+                                _defer_tw = True
+                                if (sym, today) not in self._tw_deferred:
+                                    self._tw_deferred.add((sym, today))
+                                    print("[TMonitor] 狼大做T时间窗外→不发正T买腿 %s: %s"
+                                          % (sym, str(_whyw)[:100]), flush=True)
+                    except Exception as _eN2:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line854", _eN2)
+                        pass
+                    # ── D1) 开盘「快速拉升不追」（2026-09-21 用户拍板："把 D1 也补上"）──
+                    #   语料 2025-04-15 条件6「如果当日开盘高开快速拉升，或者低开快速拉升想追进去的，
+                    #   在下午 2.00-2.30 这个时间段进行回补」。
+                    #   ⚠️ 为什么原不追高闸拦不住本腿：它的参照物是**建议买价**，而本腿触发价=现价
+                    #      ⇒ premium 恒 0 ⇒ 天然豁免（实测 0112 苏州科达距开盘 +3.9%/距昨收 +6.4% 照买）。
+                    #      D1 换参照物为**当日开盘价**。
+                    _defer_oc = False
+                    try:
+                        from app.services import wolf_no_chase as _nco
+                        if _nco.open_enabled():
+                            _okq, _whyq = _nco.open_verdict(float(q.get('current') or 0),
+                                                            float(q.get('open') or 0),
+                                                            kind='wolf_zheng_t_buy')
+                            if not _okq:
+                                _defer_oc = True
+                                if (sym, today) not in self._oc_deferred:
+                                    self._oc_deferred.add((sym, today))
+                                    print("[TMonitor] 开盘快速拉升不追 %s: %s" % (sym, str(_whyq)[:110]),
+                                          flush=True)
+                    except Exception as _eN3:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line875", _eN3)
+                        pass
+                    # ── B/C) 买入时点闸（2026-09-22 用户拍板 "A+B+C"）──
+                    #   B `WOLF_FALLING_GATE`：现价 < 当日 VWAP ∧ 前 3 根 5min 连跌 ⇒ 不在下跌中买
+                    #     （语料 2025-06-05「急杀可以买，缓跌不买」；实测该族 246 笔单笔 −108、跨臂 9/10 更差）
+                    #   C `WOLF_WEAK_DEFER`：当日为跌 ∧ 现价 < VWAP 且未到 `WOLF_WEAK_DEFER_HM`(1445)
+                    #     ⇒ 延后到尾盘重评（语料 2025-05-23「尾盘能回来就尾盘买 急什么」）
+                    #   起点个案：环旭电子 601231 2026-03-03 09:40 买 47.39（当日最高 48.50）⇒ 收跌停 43.58。
+                    #   做法与不追高一致：不写触发、**也不加 `_wolf_done`** ⇒ 后续 round 重新评估。
+                    _defer_fall = False
+                    try:
+                        try:
+                            import intraday_crush as _icr2
+                        except ImportError:
+                            from main_line import intraday_crush as _icr2
+                        if _icr2.falling_on() or _icr2.weak_defer_on():
+                            _now2 = datetime.now()
+                            _okf, _whyf = _icr2.timing_verdict(
+                                sym, _now2.strftime("%Y%m%d"), _now2.strftime("%H%M"),
+                                pre_close=float(q.get('pre_close') or 0) or None)
+                            if not _okf:
+                                _defer_fall = True
+                                if (sym, today) not in self._fall_deferred:
+                                    self._fall_deferred.add((sym, today))
+                                    print("[TMonitor] 买入时点闸→本次不执行 %s: %s" % (sym, str(_whyf)[:110]), flush=True)
+                    except Exception as _eN4:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line900", _eN4)
+                        pass
+                    # ── C) 买单必须挂在「低位的线」上（狼大 2026-04-10「找低位的线挂进去…挂远一点」）──
+                    #   语料：黄金分割/均线；自设：线集合与"挂远一点"的最小间距（见 wolf_buy_line 模块头）。
+                    #   碰不到线 ⇒ **不发单**（挂单等待），也不记 done ⇒ 后续 round 继续评估。
+                    _defer_line = False
+                    _line_bid, _line_name = None, None
+                    try:
+                        from app.services import wolf_buy_line as _wl
+                        if _wl.enabled() and _wl.applies(_wl.scope(), self._held_today(sym)):
+                            # 数源（2026-09-20 实测）：`_prev_daily` 在回放里常常只有 0–1 天
+                            #   ⇒ MA10/MA20 恒缺（线集合退化成"昨低"）。改用 `_daily_dated(sym, 40)`
+                            #   （带日期 + 生产有 t_build 实时兜底），拿不到再退回 _prev_daily。
+                            _lb = self._line_bars_cache.get((sym, today), "MISS")
+                            if _lb == "MISS":
+                                _lb = None
+                                # 数源优先级（2026-09-20 实测）：
+                                #   ⓪ `wolf_buy_line.bars_sqlite` —— **回测专用**：直接读 `data/_bt_full/bars.sqlite`
+                                #      （回放的权威日线源，强制 trade_date < 当日）。上面三个源实测都不行（见模块注释）。
+                                #   ① `_fetch_daily_tencent_dated` —— 生产里是腾讯日线兜底；
+                                #   ② `_daily_dated` —— 回放里实测**恒定停在 seed cut（20251231）**，
+                                #      与回放日无关（MA10/MA20 会算错，只用它兜底）；
+                                #   ③ `_prev_daily` —— 常常 0–1 天。
+                                for _get in (lambda: _wl.bars_sqlite(sym, today, 40),
+                                             lambda: _fetch_daily_tencent_dated(sym, 40),
+                                             lambda: self._daily_dated(sym, 40),
+                                             lambda: self._prev_daily(sym, 25)):
+                                    try:
+                                        _cand = _get()
+                                    except Exception:
+                                        _cand = None
+                                    if _cand and len(_cand) >= 2:
+                                        _lb = _cand
+                                        break
+                                self._line_bars_cache[(sym, today)] = _lb
+                            _r = _wl.resolve(_lb or [], sym, today, q)
+                            if _r.get("fire"):
+                                _line_bid, _line_name = _r.get("price"), _r.get("line")
+                                if (sym, today) not in self._line_deferred:
+                                    self._line_deferred.add((sym, today))
+                                    print("[TMonitor] 挂低位线成交 %s: %s @%.3f" % (sym, _r.get("why"), _line_bid or 0), flush=True)
+                            else:
+                                _defer_line = True
+                                if (sym, today) not in self._line_deferred:
+                                    self._line_deferred.add((sym, today))
+                                    print("[TMonitor] 挂低位线等待 %s: %s" % (sym, str(_r.get("why"))[:110]), flush=True)
+                    except Exception as _eN5:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line946", _eN5)
+                        pass
+                    # ── D) 位置高 ∧ 前一日量能放大 ⇒ 不买（2026-09-20；语料「高位看量价」「别山顶接」
+                    #   「冲上去一定不能追」）。离线（y26 78 轮 / draymar 63 轮）：拦掉的轮次实现盈亏
+                    #   +12,704 / +10,373，拦到大亏 7/15、6/11，误伤大赚 1/11、0/10 ⇒ 见
+                    #   backend/app/services/wolf_high_pos_vol.py 模块头与台账。
+                    #   只作用**新开底仓**（WOLF_HPV_SCOPE=new 默认）⇒ 持仓加仓/做T买回不受影响。
+                    _defer_hpv = False
+                    _hpv_why = ""
+                    try:
+                        from app.services import wolf_high_pos_vol as _hpv
+                        if _hpv.enabled() and _hpv.applies(self._held_today(sym)):
+                            _hb = self._hpv_bars_cache.get((sym, today), "MISS")
+                            if _hb == "MISS":
+                                _hb = _hpv.bars_asof(sym, today, 30)
+                                self._hpv_bars_cache[(sym, today)] = _hb
+                            _block, _hpv_why = _hpv.verdict(_hb, held=self._held_today(sym),
+                                                           day=today, symbol=sym)
+                            if _block:
+                                _defer_hpv = True
+                                if (sym, today) not in self._hpv_deferred:
+                                    self._hpv_deferred.add((sym, today))
+                    except Exception as _eN6:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line968", _eN6)
+                        pass
+                    # ── E) 无底仓 ⇒ 不发正T买腿（2026-09-21；语料 2026-08-25「我今天没抄底 没有资格T」
+                    #   「先有低吸仓位才有资格做T」＋2025-04-15 成文流程「尽量不要把做T的仓位变加仓」）。
+                    #   实测（drabj13 全窗）：无底仓正T买腿 89 条 T+3 −2.66%(t=−4.20)、有底仓 66 条 +0.71%；
+                    #   且无底仓腿在网关侧会退化成"重新建仓"（首开非底仓 → 转人工/超时取消，2026-03-24 即此）。
+                    _defer_nobase = False
+                    try:
+                        from app.services import wolf_t_base_gate as _tbg
+                        _okb, _whyb = _tbg.allow(self._held_today(sym))
+                        if not _okb:
+                            _defer_nobase = True
+                            if (sym, today) not in self._nobase_deferred:
+                                self._nobase_deferred.add((sym, today))
+                                print("[TMonitor] 无底仓→不发正T买腿 %s: %s" % (sym, str(_whyb)[:110]), flush=True)
+                    except Exception as _eN7:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line983", _eN7)
+                        pass
+                    if (not _defer_nc and not _defer_line and not _defer_hpv
+                            and not _defer_nobase and not _defer_tw and not _defer_oc
+                            and not _defer_fall):
+                        try:
+                            from app.services.wolf_t_rules import t_cycle_pnl
+                            tb=self._today_bars(sym)
+                            cyc=t_cycle_pnl(tb, 2.5) if tb else None
+                            if cyc:
+                                if cyc.get('sell'):
+                                    rb += ' | 正T买@%.2f→确认制T出@%.2f(+%.2f%%/日高+%.2f%%)' % (cyc['buy'], cyc['sell'], cyc['pnl'], cyc['pnl_dayhigh'])
+                                else:
+                                    rb += ' | 正T买@%.2f 未确认→黄线/持有至次日/周五减T仓(不强制日结)' % (cyc['buy'])
+                                self._log_cycle(sym, cyc)
+                                if cyc.get('confirm'):
+                                    self._wolf_sold_today.add((sym, today))
+                                    self._insert_wolf_trigger(sym, 'wolf_confirm_sell', q, '确认制T出(停量+二次不过前高)')
+                        except Exception as _eN8:
+                            # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                            from app.services import gate_alarm as _gaNote
+                            _gaNote.note("t_monitor:line1001", _eN8)
+                            pass
+                        if _line_name:
+                            rb += ' | 挂线=%s@%.3f（狼大 2026-04-10「低位的线挂进去」）' % (_wl.label(_line_name), _line_bid or 0)
+                        self._insert_wolf_trigger(sym, 'wolf_zheng_t_buy', q, rb, bid=_line_bid, line=_line_name)
+                        self._wolf_bought_today.add((sym, today))
+                        self._wolf_done.add((sym, 'wolf_zheng_t_buy', today))
                 if d and (sym, 'wolf_dao_t_sell', today) not in self._wolf_done:
                     self._insert_wolf_trigger(sym, 'wolf_dao_t_sell', q, rd)
                     self._wolf_done.add((sym, 'wolf_dao_t_sell', today))
@@ -734,7 +1483,7 @@ class TMonitor:
                 return
             acct_of = {_normalize_symbol(p['symbol']): p['account_id'] for p in held}
             xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
-            quotes = fetch_tencent_quote(xq_syms)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq_syms or [])])
             qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
                         'pre_close': float((quotes.get(s) or {}).get('pre_close', 0) or 0)} for s in xq_syms}
             portfolio = {"positions": [{"symbol": _normalize_symbol(p.get('symbol')),
@@ -778,7 +1527,7 @@ class TMonitor:
                 return
             acct_of = {_normalize_symbol(p['symbol']): p['account_id'] for p in held}
             xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
-            quotes = fetch_tencent_quote(xq_syms)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq_syms or [])])
             qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
                         'high': float((quotes.get(s) or {}).get('high', 0) or 0),
                         'vol': float((quotes.get(s) or {}).get('vol', 0) or 0),
@@ -827,7 +1576,10 @@ class TMonitor:
                 try:
                     t_db.update_trigger_status(tid, 'executed' if gw.get('status') == 'success' else 'blocked',
                                                reason=f"中轨全止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
-                except Exception:
+                except Exception as _eN9:
+                    # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                    from app.services import gate_alarm as _gaNote
+                    _gaNote.note("t_monitor:line1200", _eN9)
                     pass
                 self._wolf_done.add((sym, 'wolf_boll_mid_exit', today))
         except Exception as e:
@@ -852,7 +1604,7 @@ class TMonitor:
             if not held:
                 return
             xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in held})
-            quotes = fetch_tencent_quote(xq_syms)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq_syms or [])])
             qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
                         'high': float((quotes.get(s) or {}).get('high', 0) or 0),
                         'pre_close': float((quotes.get(s) or {}).get('pre_close', 0) or 0)} for s in xq_syms}
@@ -875,7 +1627,7 @@ class TMonitor:
     def _index_pct_today(self):
         """上证当日涨跌幅（%）：现价 vs 昨收。取不到 → None（G7 判定退化为 neutral，不猜）。"""
         try:
-            q = fetch_tencent_quote(["sh000001"]).get("sh000001") or {}
+            q = fetch_tencent_quote([_normalize_symbol("sh000001")]).get("sh000001") or {}
             cur = float(q.get("current") or 0)
             pre = float(q.get("pre_close") or 0)
             if cur > 0 and pre > 0:
@@ -902,7 +1654,7 @@ class TMonitor:
                 return
             acct_of = {_normalize_symbol(p['symbol']): p['account_id'] for p in pos_list}
             xq_syms = sorted({_normalize_symbol(p.get('symbol')) for p in pos_list})
-            quotes = fetch_tencent_quote(xq_syms)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq_syms or [])])
             qmap = {s: {'current': float((quotes.get(s) or {}).get('current', 0) or 0),
                         'pre_close': float((quotes.get(s) or {}).get('pre_close', 0) or 0)} for s in xq_syms}
             portfolio = {"positions": [{"symbol": _normalize_symbol(p.get('symbol')),
@@ -974,7 +1726,7 @@ class TMonitor:
             if not held:
                 return
             xq_syms = sorted({_normalize_symbol(p['symbol']) for p in held})
-            quotes = fetch_tencent_quote(xq_syms)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq_syms or [])])
             for p in held:
                 sym = _normalize_symbol(p['symbol'])
                 acct = p['account_id']
@@ -1010,7 +1762,10 @@ class TMonitor:
                 try:
                     t_db.update_trigger_status(tid, 'executed' if gw.get('status') == 'success' else 'blocked',
                                                reason=f"G9 周末避险 {vol}股@{cur} [{acct}]: {gw.get('status')}")
-                except Exception:
+                except Exception as _eN10:
+                    # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                    from app.services import gate_alarm as _gaNote
+                    _gaNote.note("t_monitor:line1383", _eN10)
                     pass
         except Exception as e:
             self._status['errors'] += 1
@@ -1039,7 +1794,7 @@ class TMonitor:
             today = now.strftime('%Y%m%d')
             hhmm = now.strftime('%H%M')
             xq = sorted({_normalize_symbol(p['symbol']) for p in pend})
-            quotes = fetch_tencent_quote(xq)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq or [])])
             for p in pend:
                 sym = _normalize_symbol(p['symbol'])
                 q = quotes.get(sym) or {}
@@ -1097,7 +1852,10 @@ class TMonitor:
                 try:
                     t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
                                                reason=f"G9 回补 {vol}股@{cur} [{p['account']}]: {gw.get('status')}")
-                except Exception:
+                except Exception as _eN11:
+                    # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                    from app.services import gate_alarm as _gaNote
+                    _gaNote.note("t_monitor:line1470", _eN11)
                     pass
         except Exception as e:
             self._status['errors'] += 1
@@ -1120,7 +1878,7 @@ class TMonitor:
             from app.services.t_gateway import gateway_execute, get_sellable_ledger, base_floor_shares
             today = datetime.now().strftime('%Y%m%d')
             xq = sorted({_normalize_symbol(p['symbol']) for p in held})
-            quotes = fetch_tencent_quote(xq)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq or [])])
             for p in held:
                 sym = _normalize_symbol(p['symbol'])
                 acct = p['account_id']
@@ -1143,7 +1901,12 @@ class TMonitor:
                     sellable = int(((get_sellable_ledger(account_id=acct).get(sym) or {}).get('sellable', 0)) or 0)
                 except Exception:
                     sellable = 0
-                vol = (max(sellable - base_floor_shares(acct, sym, volume=sellable), 0) // 100) * 100
+                # --- ledger 9.302 (user caliber): the 0.618 resistance leg must HALVE THE WHOLE position ---
+                #     old: volume = T-sleeve only (sellable - base floor) => only ~100 shares were sold ---
+                if str(os.getenv('WOLF_FIB_HALF_BASE', '0')).strip().lower() in ('1', 'true', 'yes', 'on'):
+                    vol = (max(sellable, 0) // 2 // 100) * 100
+                else:
+                    vol = (max(sellable - base_floor_shares(acct, sym, volume=sellable), 0) // 100) * 100
                 rid = self._insert_wolf_trigger(sym, 'wolf_fib_target_sell', q,
                                                 "[G2 0.618止盈] " + reason, account_id=acct)
                 if vol < 100:
@@ -1154,7 +1917,10 @@ class TMonitor:
                 try:
                     t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
                                                reason=f"G2 0.618止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
-                except Exception:
+                except Exception as _eN12:
+                    # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                    from app.services import gate_alarm as _gaNote
+                    _gaNote.note("t_monitor:line1527", _eN12)
                     pass
         except Exception as e:
             self._status['errors'] += 1
@@ -1178,7 +1944,7 @@ class TMonitor:
             today = datetime.now().strftime('%Y%m%d')
             tok, treason = _stop_time_ok()
             xq = sorted({_normalize_symbol(p['symbol']) for p in held})
-            quotes = fetch_tencent_quote(xq)
+            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq or [])])
             for p in held:
                 sym = _normalize_symbol(p['symbol'])
                 acct = p['account_id']
@@ -1215,7 +1981,10 @@ class TMonitor:
                 try:
                     t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
                                                reason=f"G4 被动止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
-                except Exception:
+                except Exception as _eN13:
+                    # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                    from app.services import gate_alarm as _gaNote
+                    _gaNote.note("t_monitor:line1588", _eN13)
                     pass
         except Exception as e:
             self._status['errors'] += 1
@@ -1299,7 +2068,7 @@ class TMonitor:
                     print(f"[TMonitor] 去弱留强不动作: {res['skip']}", flush=True)
                 return
             today = datetime.now().strftime('%Y%m%d')
-            quotes = fetch_tencent_quote([s["symbol"] for s in res["sells"]])
+            quotes = fetch_tencent_quote([_normalize_symbol(s["symbol"]) for s in res["sells"]])
             for s in res["sells"]:
                 sym = s["symbol"]
                 if (sym, 'wolf_defensive_t_reduce', today) in self._wolf_done:
@@ -1361,7 +2130,10 @@ class TMonitor:
                     if _tkp not in _STOP_HOLD_WARNED:
                         _STOP_HOLD_WARNED.add(_tkp)
                         print("[TMonitor] ⚠️ wave_pivots 已 %d 天未重建（阈值 %d）→ 浪型判定的锚点可能滞后" % (_pa, _lim))
-            except Exception:
+            except Exception as _eN14:
+                # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                from app.services import gate_alarm as _gaNote
+                _gaNote.note("t_monitor:line1734", _eN14)
                 pass
             _widen = os.getenv("WOLF_INDEX_TOP_WIDEN", "1").strip() not in ("0", "false", "no")
             _act = None
@@ -1395,7 +2167,7 @@ class TMonitor:
                     _rows.append((_sym, _sellable))
             if not _rows:
                 return
-            _quotes = fetch_tencent_quote([s for s, _ in _rows])
+            _quotes = fetch_tencent_quote([_normalize_symbol(s for s, _ in _rows)])
             _close_win = _in_close_window()
             for _sym, _sellable in _rows:
                 if (_sym, 'wolf_index_level_stop', _today) in self._wolf_done:
@@ -1421,6 +2193,853 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] index_level_stop异常: {e}")
+
+    def _ambush_entry_day(self, acct: str, sym: str) -> str:
+        """本段持仓的**入场日**（FIFO 口径：按成交**逆序**累加到当前持仓量为止 ✓）。"""
+        try:
+            from sqlalchemy import text as _t
+            from app.database import SessionLocal
+            with SessionLocal() as _s:
+                _rows = _s.execute(_t(
+                    "SELECT trade_date, direction, volume FROM paper_trades "
+                    "WHERE account_id=:a AND symbol=:s AND COALESCE(voided,0)=0 ORDER BY id DESC"),
+                    {"a": acct, "s": sym}).fetchall()
+            # 当前持股数（FIFO 重建的"目标"✓；取不到 ⇒ 回退旧行为 ✓）
+            _target = 0
+            try:
+                from sqlalchemy import text as _tv
+                from app.database import SessionLocal as _SV
+                with _SV() as _sv:
+                    _r = _sv.execute(_tv(
+                        "SELECT COALESCE(volume,0) FROM paper_positions "
+                        "WHERE account_id=:a AND symbol=:s"), {"a": acct, "s": sym}).fetchone()
+                    _target = int((_r[0] if _r else 0) or 0)
+            except Exception:
+                _target = 0
+            _acc = 0
+            _entry = ""
+            for _d, _di, _v in _rows:
+                if str(_di).startswith("买"):
+                    _acc += int(_v or 0)
+                    # ⚠️ 2026-09-26 修（账本 §9.276）：**只有覆盖当前持仓的买日才算"入场"** ✓
+                    #   旧写法「先赋值再判 break」✗ ⇒ 最新一笔是卖就 return 空 ✗
+                    if _target <= 0 or _acc >= _target:
+                        _entry = str(_d).replace("-", "")
+                else:
+                    _acc -= int(_v or 0)
+                # 继续往回走，取**最早**覆盖当前持仓的买日 ✓（**不再 break** ✗）
+            return _entry
+        except Exception as _e:
+            print("[TMonitor] 埋伏纪律：入场日取数失败 %s: %s" % (sym, str(_e)[:60]), flush=True)
+            return ""
+
+    def _check_intraday_t_stop(self) -> None:
+        """**日内 T 仓的紧止损**（`WOLF_T_STOP_PCT`，库内默认 0 = 关 ✓）——狼大 2026-02-02 的口径 ✓。
+
+        他的原话：「尾盘抄底加仓 ⇒ 随后放量跌破新低 ⇒ **亏半个点就把刚加的仓位全部出清**」✓
+        ⇒ 他给的是「**当日新加的短线仓**」一个极紧的止损（**不是**波段建仓 ✓）。
+
+        量化（账本 §9.152，趋势突破腿 43 笔）：
+          · 紧止损 **不能**用在趋势/埋伏腿上 ✗ —— 持有 10 日中位 **+7.26% ⇒ −0.50%/−1.00%** ✗✗
+            （止损只是把赢家变成 −1% 的输家 ✓）
+          · 本函数**只作用于"当天买入"的仓位** ✓（`_entry_day == 今天`），且**排除埋伏腿** ✓
+            （埋伏腿有自己的宽止损纪律 ✓ §9.143）
+        """
+        try:
+            _pct = float(os.getenv("WOLF_T_STOP_PCT", "0") or 0)
+            if _pct <= 0:
+                return
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger
+            _acct = T_MONITOR_ACCOUNT
+            _ledger = get_sellable_ledger(account_id=_acct) or {}
+            _today = datetime.now().strftime("%Y%m%d")
+            _DBG = str(os.getenv("WOLF_AMBUSH_DEBUG", "0")).strip().lower() in ("1", "true", "yes", "on")
+            _pos = self._positions(_acct) or []
+            for _p in _pos:
+                _sym = str(_p.get("symbol") or "")
+                if not _sym or float(_p.get("volume") or 0) <= 0:
+                    continue
+                if (_sym, "wolf_t_stop", _today) in self._wolf_done:
+                    continue
+                if self._ambush_entry_day(_acct, _sym) != _today:
+                    continue                     # 只保护"当天新加"的 T 仓 ✓
+                if self._is_ambush_position(_acct, _sym):
+                    continue                     # 埋伏腿走自己的宽止损 ✓
+                if self._is_trend_position(_acct, _sym):
+                    continue                     # ★ 趋势腿**不加紧止损** ✗ ——
+                    #   量化（账本 §9.152，趋势突破腿 43 笔）：持有 10 日中位 **+7.26% ⇒ −1.00%** ✗✗
+                    #   （紧止损只是把赢家变成 −1% 的输家 ✓）；狼大"亏半个点出清"讲的是**日内加仓** ✓
+                _sellable = int((_ledger.get(_sym) or {}).get("sellable", 0) or 0)
+                if _sellable <= 0:
+                    continue
+                # ⚠️ 2026-09-26 修（账本 §9.228）：必须用**归一化符号**取行情 ✗
+                #   实证：`fetch_tencent_quote([_normalize_symbol("SZ002792")])` ⇒ **`pnone_match`** ✗（取不到 ✓）
+                #         `fetch_tencent_quote([_normalize_symbol("sz002792")])` ⇒ **`sz002792`** ✓（有 current ✓）
+                #   ⇒ 大写符号**永远拿不到现价** ⇒ `_cur=0` ⇒ 该段逻辑**静默失效** ✗
+                _qsym = _normalize_symbol(_sym)
+                _q = fetch_tencent_quote([_normalize_symbol(_qsym)]) or {}
+                _qo = (_q.get(_qsym) or _q.get(_sym) or _q.get(str(_sym).lower()) or {})
+                _cur = float((_qo.get("current") or _qo.get("price") or 0) or 0)
+                _cost = float(_p.get("avg_price") or 0) or 0
+                if _cur <= 0 or _cost <= 0:
+                    continue
+                if _cur <= _cost * (1 - _pct / 100.0):
+                    _why = ("日内T仓紧止损（狼大 2026-02-02「亏半个点出清」）："
+                            "现价 %.2f ≤ 成本 %.2f×(1−%.2f%%)" % (_cur, _cost, _pct))
+                    _gw = gateway_execute(_sym, "sell", _cur, _sellable, reason=_why,
+                                          decision_source="ai_led", account_id=_acct)
+                    print("[TMonitor] 日内T紧止损 %s x%d: %s | %s" % (
+                        _sym, _sellable, str(_gw.get("status"))[:18], _why[:60]), flush=True)
+                    self._wolf_done.add((_sym, "wolf_t_stop", _today))
+        except Exception as _e:
+            print("[TMonitor] 日内T紧止损异常: %s" % str(_e)[:100], flush=True)
+
+    def _is_trend_position(self, acct: str, sym: str) -> bool:
+        """本段持仓是否由**趋势突破腿**建立（买入理由含 `trend_break_buy` ✓）。"""
+        try:
+            from sqlalchemy import text as _t
+            from app.database import SessionLocal
+            with SessionLocal() as _s:
+                _n = _s.execute(_t(
+                    "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND symbol=:s "
+                    "AND COALESCE(voided,0)=0 AND direction LIKE '买%' "
+                    "AND COALESCE(reason,'') LIKE :p"),
+                    {"a": acct, "s": sym, "p": "%trend_break_buy%"}).scalar() or 0
+            return int(_n) > 0
+        except Exception:
+            return False
+
+    def _is_ambush_position(self, acct: str, sym: str) -> bool:
+        """本段持仓是否由**埋伏腿**建立（查买入理由含 `wolf_ambush_buy` ✓）。"""
+        try:
+            from sqlalchemy import text as _t
+            from app.database import SessionLocal
+            with SessionLocal() as _s:
+                _n = _s.execute(_t(
+                    "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND symbol=:s "
+                    "AND COALESCE(voided,0)=0 AND direction LIKE '买%' "
+                    "AND COALESCE(reason,'') LIKE :p"),
+                    {"a": acct, "s": sym, "p": "%wolf_ambush_buy%"}).scalar() or 0
+            return int(_n) > 0
+        except Exception:
+            return False
+
+    # ── 突破加仓／回踩确认加仓（账本 §9.304 ✓ 用户要求 ✓；两个开关**库内默认关** ✓）──
+    # ── B：十字星后不突破 ⇒ 撤/减（账本 §9.340 ✓ 狼大 2026-02-12 原话 ✓；开关默认关 ✓）──
+    def _check_doji_fail(self) -> None:
+        """狼大 2026-02-12 ✓：「**十字星后第二天没有突破，上面卖单一点没撤还加大了…
+        然后板块没有带动效应…所以就撤了**」✓
+
+        · ①**十字星后不突破** ✓ ⇒ 本函数可算（日线档 ＋ 当日过滤 ✓）
+        · ②卖单加大 ✗／③板块无带动 ✗ ⇒ **本仓无对应数据** ✗ ⇒ 日志显式标注"未实现" ✓（不假装 ✓）
+        · 动作 ✓：**减半**（他的通用减仓口径 ✓）
+        """
+        import datetime as _dt
+        if str(os.getenv("WOLF_DOJI_FAIL_EXIT", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            _today = ""
+            try:
+                _b8 = os.path.basename(str(os.environ.get("DATA_DIR", "")).rstrip("/"))
+                _today = _b8 if (len(_b8) == 8 and _b8.isdigit()) else ""
+            except Exception:
+                _today = ""
+            _acct = T_MONITOR_ACCOUNT
+            for _p in self._discipline_positions():
+                _sym = str(_p.get("symbol") or "")
+                _vol = float(_p.get("volume") or 0)
+                if not _sym or _vol <= 0:
+                    continue
+                if self._is_ambush_position(_acct, _sym):
+                    continue
+                _bd = []
+                try:
+                    for _b in (self._daily_dated(_sym, 20) or []):
+                        _d = str(_b.get("date") or _b.get("trade_date") or "").replace("-", "")[:8]
+                        if _d and (not _today or _d <= _today):
+                            _bd.append((_d, _b))
+                except Exception:
+                    _bd = []
+                if len(_bd) < 3:
+                    continue
+                _bd.sort(key=lambda t: t[0])
+                # 找最近一根**十字星**（|收-开| <= 0.15 × 振幅 ✓），且它**不是今天**
+                _do = None
+                for _d, _b in reversed(_bd[:-1][-3:]):
+                    try:
+                        _o, _h, _l, _c = (float(_b.get("open") or 0), float(_b.get("high") or 0),
+                                          float(_b.get("low") or 0), float(_b.get("close") or 0))
+                    except Exception:
+                        continue
+                    if _h > _l and _o > 0 and abs(_c - _o) <= 0.15 * (_h - _l):
+                        _do = (_d, _h, _o, _c)
+                        break
+                if not _do:
+                    continue
+                _dd, _dh, _dop, _dc = _do
+                _td, _tb = _bd[-1]
+                try:
+                    _tc = float(_tb.get("close") or 0)
+                except Exception:
+                    _tc = 0.0
+                if _tc <= 0 or _dh <= 0:
+                    continue
+                if _tc > _dh:
+                    continue                      # **已突破十字星高点** ✓ ⇒ 不触发 ✓
+                _leg = int(max(_vol / 2, 100) // 100 * 100)
+                _rs = ("[B 十字星不突破] 十字星 %s（高 %.2f）⇒ 次日未突破（现 %.2f ≤ %.2f ✓）；"
+                       "⚠️他另两个条件**本仓未实现**：②上面卖单是否加大 ✗ ③板块是否带动 ✗"
+                       "（2026-02-12「十字星后第二天没有突破…所以就撤了」）" % (_dd, _dh, _tc, _dh))
+                _r = gateway_execute(_sym, "sell", _tc, _leg, reason=_rs,
+                                     account_id=_acct, is_stop_loss=True)
+                print("[TMonitor] B 十字星不突破 ⇒ 减半 %s %d股@%.3f: %s｜%s"
+                      % (_sym, _leg, _tc, (_r or {}).get("status"), str((_r or {}).get("reason") or "")[:60]),
+                      flush=True)
+        except Exception as _e:
+            print("[TMonitor] B 十字星退出异常: %s" % str(_e)[:70], flush=True)
+
+    def _check_breakout_add(self) -> None:
+        """狼大原话 ✓：
+          「我的操作是**突破加仓 回踩确认加仓** 中间不做大级别操作 **向下破线止损**」（2022-06-08）
+          「**突破下跌趋势第一根开头我加一半 突破后的第二根红K尾盘 打满**」
+          「**固定仓位50%，剩下的做T等突破或回踩打满**」（2025-02-11）
+          「带量(上证持续2000E以上)**站上2930那再加仓**」（2016-05-17）
+        ⇒ 只对**非埋伏仓** ✓（埋伏仓另有"回踩不破前低"体系 ✓）；每票每轮**最多加 2 次** ✓（他的"最多买 2 笔"）
+        """
+        _bo = str(os.getenv("WOLF_BREAKOUT_ADD", "0")).strip().lower() in ("1", "true", "yes", "on")
+        _rt = str(os.getenv("WOLF_RETEST_ADD", "0")).strip().lower() in ("1", "true", "yes", "on")
+        if not (_bo or _rt):
+            return
+        try:
+            from app.services.t_gateway import gateway_execute
+            _acct = T_MONITOR_ACCOUNT
+            _today = ""
+            try:
+                _b8 = os.path.basename(str(os.environ.get("DATA_DIR", "")).rstrip("/"))
+                _today = _b8 if (len(_b8) == 8 and _b8.isdigit()) else ""
+            except Exception:
+                _today = ""
+            # 记账：{sym: {"n": 次数, "d": 最后加仓日}} ✓（按运行根持久化 ✓）
+            try:
+                from app.services.state_paths import state_dir as _sd
+                _pf = os.path.join(_sd(), "breakout_add.json")
+            except Exception:
+                _pf = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "breakout_add.json")
+            _bk = {}
+            try:
+                if os.path.exists(_pf):
+                    with open(_pf, encoding="utf-8") as _f:
+                        _bk = json.load(_f) or {}
+            except Exception:
+                _bk = {}
+            for _p in self._discipline_positions():
+                _sym = str(_p.get("symbol") or "")
+                _vol = float(_p.get("volume") or 0)
+                if not _sym or _vol <= 0:
+                    continue
+                # ⚠️ 入口留痕（账本 §9.309 补）：能区分"没行情 ✗"／"埋伏仓被排除 ✓"／"额度用尽 ✓"
+                try:
+                    if str(os.getenv("WOLF_ADD_DEBUG", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                        print("[加仓候选·入口] %s 持仓%.0f 埋伏=%s 已加%d次"
+                              % (_sym, _vol, self._is_ambush_position(_acct, _sym),
+                                 int((_bk.get(_sym) or {}).get("n") or 0)), flush=True)
+                except Exception:
+                    pass
+                if self._is_ambush_position(_acct, _sym):
+                    continue                      # 埋伏仓走自己的体系 ✓
+                _st = _bk.get(_sym) or {}
+                # ⚠️ 2026-09-30（账本 §9.321）：**分桶计数** ✓（突破／回踩各自 ≤2 ✓）
+                #   他 2022-06-08「突破加仓 回踩确认加仓」⇒ 两次独立机会 ✓ ⇒ 各自成桶 ✓
+                if int(_st.get("n") or 0) >= 2 and int(_st.get("n_rt") or 0) >= 2:
+                    continue
+                if int(_st.get("n") or 0) >= 2 and str(os.getenv("WOLF_RETEST_ADD_INDEPENDENT", "0")) \
+                        .strip().lower() not in ("1", "true", "yes", "on"):
+                    continue
+                if _today and str(_st.get("d") or "") == _today:
+                    continue                      # 当日只加一次 ✓
+                _q = {}
+                # ⚠️ 2026-09-30 修（账本 §9.310）：行情取数**必须用归一化符号** ✓
+                #   实测：`_quote_now("SZ002156")` ⇒ `{'pnone_match': None}` ✗ ⇒ `_cur=0` ⇒ **静默跳过** ✗
+                #   （这是本仓第 6 次撞同一个坑 ✗ —— 归一化后 `sz002156` 才能取到 ✓）
+                # ⚠️ 2026-09-30 修（账本 §9.310）：`_quote_now(symbols)` 收的是**列表** ✓
+                #   我原先传字符串 ✗ ⇒ 它按"逐字符"处理 ⇒ 返回 `pnone_match` ✗ ⇒ `_cur=0` ⇒ 静默跳过 ✗
+                for _sq in (_normalize_symbol(_sym), str(_sym).lower(), _sym):
+                    try:
+                        _qr = self._quote_now([_sq]) or {}
+                    except Exception:
+                        _qr = {}
+                    _q = _qr.get(_sq) or _qr.get(str(_sq).lower()) or _qr.get(str(_sq).upper()) or {}
+                    if not _q:
+                        for _k2, _v2 in (_qr or {}).items():
+                            if isinstance(_v2, dict) and float(_v2.get("current") or 0) > 0:
+                                _q = _v2
+                                break
+                    if float(_q.get("current") or _q.get("price") or 0) > 0:
+                        break
+                _cur = float(_q.get("current") or _q.get("price") or 0)
+                _low = float(_q.get("low") or 0)
+                _op = float(_q.get("open") or 0)
+                # ⚠️ 账本 §9.314：**优先直读回测数据面** ✓（引擎同源 ✓；离线环境的唯一可靠来源 ✓）
+                _sp = {}
+                try:
+                    _sp = _sandbox_price(_sym, _today) or {}
+                except Exception:
+                    _sp = {}
+                if float(_sp.get("cur") or 0) > 0:
+                    _cur = float(_sp["cur"])
+                    _low = float(_sp.get("low") or _cur)
+                    _op = float(_sp.get("open") or _cur)
+                if _cur <= 0:
+                    # ⚠️ 2026-09-30 修（账本 §9.313）：回测里取数替身**没有旁路报价** ✗
+                    #   ⇒ 改用**当日沙箱的 as-of 日线**（引擎同源 ✓），
+                    #   且**按当日过滤** ✓（防未来数据污染 ✗ —— 探针里见过补齐到 2026-09-29 ✗）
+                    try:
+                        _bd3 = self._daily_dated(_sym, 12) or []
+                        _ok3 = []
+                        for _b3 in _bd3:
+                            _d3 = str(_b3.get("date") or _b3.get("trade_date") or "").replace("-", "")[:8]
+                            if _d3 and (not _today or _d3 <= _today):
+                                _ok3.append(_b3)
+                        if _ok3:
+                            _cl3 = [float(x.get("close") or 0) for x in _ok3 if x.get("close")]
+                            _lo3 = [float(x.get("low") or 0) for x in _ok3 if x.get("low")]
+                            _op3 = [float(x.get("open") or 0) for x in _ok3 if x.get("open")]
+                            if _cl3:
+                                _cur = _cl3[-1]
+                                _low = _lo3[-1] if _lo3 else _cur
+                                _op = _op3[-1] if _op3 else _cur
+                                print("[加仓候选] %s 报价缺失 ⇒ 用当日 as-of 日线兜底 ✓（收%.2f 低%.2f）"
+                                      % (_sym, _cur, _low), flush=True)
+                    except Exception:
+                        pass
+                if _cur <= 0:
+                    # ⚠️ 补响（账本 §9.310）：这里原先**静默** ✗ ⇒ "为什么没加"根本查不到 ✓
+                    try:
+                        print("[加仓候选·跳过] %s 行情取不到（_cur=0；试过 ok/lower/raw ✓）" % _sym,
+                              flush=True)
+                    except Exception:
+                        pass
+                    continue
+                # 关键位＝**前 20 日最高**（与 `trend_break_buy` 的入场口径同源 ✓；
+                #   原写法依赖不存在的 `_snapshot_for` ✗ ⇒ 会恒为 0 ⇒ 功能空转 ✗）
+                _res = float(_sp.get("res") or 0)
+                try:
+                    # ⚠️ 账本 §9.313：**必须按当日过滤** ✓（探针里见过补齐到 2026-09-29 ✗）
+                    _bd2 = self._daily_dated(_sym, 60) or []
+                    _hs = []
+                    for _b2 in _bd2:
+                        _d2 = str(_b2.get("date") or _b2.get("trade_date") or "").replace("-", "")[:8]
+                        _h2 = _b2.get("high")
+                        if _h2 and _d2 and (not _today or _d2 <= _today):
+                            _hs.append((_d2, float(_h2)))
+                    # 当日那根**不算**"前高" ✓ ⇒ 只取严格早于当日的（或最后 20 根 ✓）
+                    _prev = [h for _d, h in _hs if not _today or _d < _today]
+                    if len(_prev) >= 5:
+                        _res = max(_prev[-20:])
+                    elif len(_hs) >= 5:
+                        _res = max([h for _d, h in _hs][:-1] or [h for _d, h in _hs])
+                except Exception:
+                    _res = 0.0
+                _vr = float(_sp.get("vr") or 0)
+                try:
+                    _vr = _vr or float(wolf_leg_vol_ratio(_q, symbol=_sym) or 0)
+                except Exception:
+                    _vr = 0.0
+                if _vr <= 0:
+                    # ⚠️ 账本 §9.313：报价缺失时量比也为 0 ✗ ⇒ 用**当日量/5 日均量**兜底 ✓
+                    try:
+                        _bv2 = []
+                        for _b4 in (self._daily_dated(_sym, 12) or []):
+                            _d4 = str(_b4.get("date") or _b4.get("trade_date") or "").replace("-", "")[:8]
+                            _v4 = _b4.get("vol")
+                            if _v4 and _d4 and (not _today or _d4 <= _today):
+                                _bv2.append((_d4, float(_v4)))
+                        if len(_bv2) >= 2:
+                            _last_v = _bv2[-1][1]
+                            _base = [v for _d5, v in _bv2[-6:-1]] or [v for _d5, v in _bv2[:-1]]
+                            if _base:
+                                _vr = round(_last_v / (sum(_base) / len(_base)), 3)
+                    except Exception:
+                        pass
+                _add_vol = int(max(_vol * 0.5, 100) // 100 * 100)     # 「加一半」✓
+                # ⚠️ 2026-09-30（账本 §9.323）：**两个独立判定** ✓（用户：「不能用 elif」✓）
+                #   他 2022-06-08「**突破加仓 回踩确认加仓**」✓ ⇒ 是**两次机会** ✓
+                #   ⇒ 各自判各自的 ✓：两条都成立 ⇒ **都记录** ✓（由"每日一笔"与"分桶上限"约束 ✓）
+                _fires = []
+                # ⚠️ 2026-09-30（账本 §9.327）：回踩腿加**缩量**判据 ✓（用户「加上」✓）
+                #   他的原话 ✓：「这次回踩力度我感觉有点小，但是**量没杀出来**的话
+                #               这里**不太是进场位**」✓ ⇒ 回踩要**缩量** ✓
+                #   呼应 ✓：「**补仓必须等回落到支撑并缩量，冲高不补**」（2025-06-25）✓
+                #   度量 ✓ `_vr` ＝ 当日量 / 5 日均量 ✓（`_vr < 阈值` ⇒ 缩量 ✓）
+                _rt_max_vr = float(os.getenv("WOLF_RETEST_ADD_MAX_VR", "1.0") or 1.0)
+                _rt_vol_ok = True
+                if str(os.getenv("WOLF_RETEST_ADD_VOL_GATE", "0")).strip().lower() \
+                        in ("1", "true", "yes", "on"):
+                    _rt_vol_ok = (_vr > 0) and (_vr < _rt_max_vr)
+                if _rt and _rt_vol_ok and _res > 0 and _low > 0 and _low <= _res < _cur:
+                    _fires.append(("n_rt", "回踩确认加仓（当日最低 %.2f **回踩到关键位 %.2f 并收回**"
+                                           "（收 %.2f）✓，狼大 2022-06-08「突破加仓 **回踩确认加仓**」✓）"
+                                  % (_low, _res, _cur)))
+                if _bo and _res > 0 and _cur > _res and _vr >= 1.2:
+                    _fires.append(("n", "突破加仓（带量突破关键位 %.3f ✓ 量比 %.2f ✓，狼大 2022-06-08"
+                                        "「突破加仓」/ 2016-05-17「带量站上…再加仓」✓）" % (_res, _vr)))
+                # 分桶额度（突破 ≤2 ✓／回踩 ≤2 ✓；回踩独立于突破 ✓）
+                _fires = [(_b, _w) for (_b, _w) in _fires
+                          if int(_st.get(_b) or 0) < 2
+                          or (_b == "n_rt" and str(os.getenv("WOLF_RETEST_ADD_INDEPENDENT", "0"))
+                              .strip().lower() in ("1", "true", "yes", "on") and int(_st.get("n_rt") or 0) < 2)]
+                if not _fires:
+                    try:
+                        print("[加仓候选·跳过] %s 现价%.2f 关键位%.2f 低%.2f 量比%.2f "
+                              "（突破需 现价>关键位∧量比>=1.2；回踩需 低<=关键位<现价∧缩量）"
+                              "｜已加 突破%d/回踩%d 次"
+                              % (_sym, _cur, _res, _low, _vr, int(_st.get("n") or 0),
+                                 int(_st.get("n_rt") or 0)), flush=True)
+                    except Exception:
+                        pass
+                    continue
+                # **每日一笔**（同票同日 ✓；两条判定都成立时按桶序取第一条 ✓）
+                if _today and str(_st.get("d") or "") == _today:
+                    try:
+                        print("[加仓候选·跳过] %s 今日已加过 ⇒ 延后 ✓（命中 %d 条判定）"
+                              % (_sym, len(_fires)), flush=True)
+                    except Exception:
+                        pass
+                    continue
+                if len(_fires) > 1:
+                    print("[加仓候选] %s **两条判定同时成立** ✓（回踩 ＋ 突破，各自独立 ✓）⇒ "
+                          "**当日名额先给回踩** ✓（挂关键位 ✓、不受加仓口径闸限制 ✓），"
+                          "突破那条留待下一日 ✓" % _sym, flush=True)
+                _bucket, _why = _fires[0]
+                # ⚠️ 2026-09-30（账本 §9.324）：**回踩腿必须买在"关键位"** ✓
+                #   原写法一律用 `_cur`（收盘价 39.97 ✗）⇒ 用户：「回踩的是 39.190，
+                #   为什么加仓价是 39.970？」✗ —— 那是**追高** ✗
+                #   他的口径 ✓：「**回踩确认加仓**」（2022-06-08）＋「**挂前一天的低点 能买进去就做正T**」
+                #   ＋「**冲上去一定不能追**」✓ ⇒ 回踩腿**挂关键位** ✓（当日最低 39.19 ≤ 39.61 ⇒
+                #   **限价单能成交** ✓，回测也真实 ✓）
+                _px = float(_res) if _bucket == "n_rt" and _res > 0 else _cur
+                _r = gateway_execute(_sym, "buy", _px, _add_vol, reason=_why,
+                                     decision_source="risk", account_id=_acct)
+                _ok = str((_r or {}).get("status") or "")
+                _rr = str((_r or {}).get("reason") or "")[:120]
+                _lv = str((_r or {}).get("level") or "")
+                print("[TMonitor] %s 买 %d股@%.3f: %s｜%s｜**被拦理由=%s（%s）**"
+                      % (_sym, _add_vol, _px, _ok, _why[:80], _rr, _lv), flush=True)
+                if _ok in ("success", "submitted", "filled"):
+                    _st = dict(_st)
+                    _st[_bucket] = int(_st.get(_bucket) or 0) + 1
+                    _st["d"] = _today
+                    _st["red"] = bool(_op > 0 and _cur > _op)
+                    _bk[_sym] = _st
+                    try:
+                        with open(_pf, "w", encoding="utf-8") as _f:
+                            json.dump(_bk, _f, ensure_ascii=False, indent=1)
+                    except Exception:
+                        pass
+        except Exception as _e:
+            print("[TMonitor] 突破/回踩加仓异常: %s" % str(_e)[:80], flush=True)
+
+    def _check_ambush_promote_add(self) -> None:
+        """**转正后主动加仓一次** ✓（账本 §9.244；`WOLF_AMBUSH_PROMOTE_ADD=1` ✓）。
+
+        量化口径（长样本 ＋ 样本外分割 ✓）：**转正日 ＋ 3 自然日内 ＋ 价 ≤ 转正日价×1.04 ⇒ 买一次** ✓
+          A 不重置 +524.96%／−10.0%（比例 52.5）｜**B +715.75%／−13.0%（比例 55.1）** ✓✓
+          ｜C"马上加" +664.30% ✗ ⇒ **「不追高 ≤4%」本身创造价值** ✓
+        语料 ✓：「**突破下跌趋势第一根开头我加一半** 突破后的**第二根红K尾盘打满**」✓＋「**不追高**」✓
+
+        ⚠️ 为什么必须"**主动**"✗：实测（§9.244）转正已发生多只 ✓，但 `转正加仓放行` **0 次** ✗ ——
+          因为**没有买入腿愿意买它们**（系统在这两只上产生的全是**卖出/兑现腿** ✗）
+          ⇒ 只做"放行"＝**被动** ✗ ⇒ 与量化的 B 口径**对不上** ✗ ⇒ 这里补上**主动买一次** ✓
+        """
+        if str(os.getenv("WOLF_AMBUSH_PROMOTE_ADD", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            import json as _js
+            _root = os.path.dirname(os.environ.get("DATA_DIR", "/app/data")) or "/app/data"
+            _pf = os.path.join(_root, "ambush_promoted.json")
+            if not os.path.exists(_pf):
+                return
+            with open(_pf, encoding="utf-8") as _f:
+                _rec = _js.load(_f) or {}
+        except Exception:
+            return
+        _acct = T_MONITOR_ACCOUNT
+        _pct = 0.0
+        try:
+            _pct = abs(float(os.getenv("WOLF_AMBUSH_SIZE_PCT", "0") or 0))
+        except Exception:
+            _pct = 0.0
+        if _pct <= 0:
+            return
+        try:
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger
+            _led = get_sellable_ledger(account_id=_acct) or {}
+        except Exception:
+            return
+        # 权益：现金 ＋ 持仓市值（与账户口径一致 ✓）
+        _eqA = 250000.0
+        try:
+            from sqlalchemy import text as _tq
+            from app.database import SessionLocal as _SQ
+            with _SQ() as _sq:
+                _c = float(_sq.execute(_tq(
+                    "SELECT COALESCE(available_cash,0) FROM paper_account_info WHERE account_id=:a"),
+                    {"a": _acct}).scalar() or 0)
+                _m = float(_sq.execute(_tq(
+                    "SELECT COALESCE(SUM(volume*avg_price),0) FROM paper_positions "
+                    "WHERE account_id=:a AND COALESCE(volume,0)>0"), {"a": _acct}).scalar() or 0)
+            _eqA = max(1.0, _c + _m)
+        except Exception:
+            pass
+        _today = datetime.now().strftime("%Y%m%d")
+        _changed = False
+        # ⚠️ 键可能是大写（记录写的是大写 ✓）而持仓 symbol 可能是小写 ✗ ⇒ 统一按大写匹配 ✓（§9.250）
+        _recU = {str(k).upper(): v for k, v in _rec.items()}
+        for _sym, _r in list(_recU.items()):
+            try:
+                if _r.get("added"):
+                    continue
+                _pd = str(_r.get("pday") or "")
+                _ppx = float(_r.get("ppx") or 0)
+                if not _pd or _ppx <= 0:
+                    continue
+                _gap = (datetime.strptime(_today, "%Y%m%d") - datetime.strptime(_pd, "%Y%m%d")).days
+                if _gap < 0 or _gap > 3:
+                    continue
+                _qs = _normalize_symbol(_sym)
+                _q = self._quote_now(_qs) or {}
+                _cur = float(((_q.get(_qs) or _q.get(_sym) or {}).get("current")
+                              or ((_q.get(_qs) or _q.get(_sym) or {}).get("price")) or 0) or 0)
+                if _cur <= 0:
+                    # **回退到日线收盘** ✓（与纪律**同口径** ✓）：行情替身没到位时也能工作 ✓
+                    try:
+                        _bdA = self._daily_dated(_sym, 60) or []
+                        _lastA = [b for b in _bdA if b.get("close")]
+                        if _lastA:
+                            _lastA.sort(key=lambda b: str(b.get("date") or b.get("trade_date") or ""))
+                            _cur = float(_lastA[-1].get("close") or 0) or 0
+                    except Exception:
+                        _cur = 0.0
+                if _cur <= 0:
+                    # **可见性** ✗：行情与日线都空时也必须留痕 ✓（否则与"没跑"分不清 ✓）
+                    if str(os.getenv("WOLF_AMBUSH_DEBUG", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                        print("[埋伏转正加仓·跳过] %s 行情与日线都空 ✗（距转正 %d 天）" % (_sym, _gap), flush=True)
+                    continue
+                if _cur > _ppx * 1.04:
+                    # **不追高**拦住 ✓（量化：B 口径优于"马上加" ✓ —— 这条纪律本身创造价值 ✓）
+                    if str(os.getenv("WOLF_AMBUSH_DEBUG", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                        print("[埋伏转正加仓·跳过] %s 现价 %.2f > 转正价 %.2f×1.04=%.2f（不追高 ✓，距转正 %d 天）"
+                              % (_sym, _cur, _ppx, _ppx * 1.04, _gap), flush=True)
+                    continue
+                # ⚠️ 2026-09-30（账本 §9.344 ✓ 用户：「当天最高才 70.76，为什么买入价是 71？」✗）——
+                #   **成交价必须落在当日区间内** ✓。实测 ✗：SH603228 01-19 以 **71.366** 成交，
+                #   而当日区间是 **68.59 ~ 70.76** ✗（71.366 其实落在 **01-16** 的区间 ✓）
+                #   ⇒ 取数那一档给的是**上一交易日的陈旧行情** ✗ ⇒ 成交价越过了当日最高 ✗
+                #   ⇒ 用**当日 as-of 档**（引擎同源 ✓）校验：越界 ⇒ **收敛到当日收盘** ✓ ＋ 大声留痕 ✓
+                try:
+                    _spA = _sandbox_price(_sym, _today) if "_sandbox_price" in globals() else {}
+                except Exception:
+                    _spA = {}
+                try:
+                    _hA = float((_spA or {}).get("high") or 0) or 0.0
+                except Exception:
+                    _hA = 0.0
+                try:
+                    _lA = float((_spA or {}).get("low") or 0) or 0.0
+                except Exception:
+                    _lA = 0.0
+                if _hA > 0 and _lA > 0 and not (_lA <= _cur <= _hA):
+                    _cur_new = float((_spA or {}).get("cur") or 0) or _cur
+                    print("[TMonitor] 转正加仓成交价越界 %s：取数给 %.3f，当日区间 %.2f~%.2f "
+                          "=> 收敛到当日收盘 %.2f（防不可能成交价）"
+                          % (_sym, _cur, _lA, _hA, _cur_new), flush=True)
+                    _cur = _cur_new if _lA <= _cur_new <= _hA else _hA
+                _sh = int(_eqA * (_pct / 100.0) / _cur) // 100 * 100
+                if _sh < 100:
+                    continue
+                _gw = gateway_execute(_sym, "buy", _cur, _sh,
+                                      reason="埋伏转正加仓（加仓=B：转正日 %s 价 %.2f ⇒ 3 日内且 ≤×1.04 ✓）"
+                                             % (_pd, _ppx),
+                                      decision_source="risk", account_id=_acct)
+                print("[TMonitor] 埋伏转正加仓 %s 买 %d股@%.2f: %s｜理由=%s（转正日 %s 价 %.2f）"
+                      % (_sym, _sh, _cur, str(_gw.get("status"))[:16],
+                         str(_gw.get("reason") or "-")[:60], _pd, _ppx), flush=True)
+                if str(_gw.get("status")) in ("success", "filled", "ok", "accepted"):
+                    _r["added"] = True
+                    _changed = True
+            except Exception as _eA:
+                print("[TMonitor] 转正加仓异常 %s: %s" % (_sym, str(_eA)[:70]), flush=True)
+        if _changed:
+            try:
+                with open(_pf, "w", encoding="utf-8") as _f:
+                    _js.dump(_rec, _f, ensure_ascii=False)
+            except Exception:
+                pass
+
+    def run_discipline_checks(self) -> None:
+        """**纪律检查的"统一入口"** ✓（账本 §9.243）—— 生产主循环与**回测**都必须走它 ✓。
+
+        背景（用户「这次通宇通讯怎么没加仓」追到底的**最终根因** ✓✗）：
+          · 回测 `jobs/bt_prod_run.py` 是**直接调** `mon._round(day)` ＋ 少数 `_arm_*` ✗，
+            而**纪律家族**（含 **`_check_ambush_discipline`** ✓）**不在 `_round()` 里** ✗
+          · ⇒ **回测从不执行这些纪律** ✗✗ ⇒ 埋伏纪律的日志永远是 0 条 ✓
+            （连带：板上减半/被动止盈/13 日规则/G9 避险… 在回测里**全是死的** ✗）
+          ⇒ 修法：把这一族抽成**一个入口** ✓，生产主循环与回测**共用** ✓，杜绝再次分叉 ✓
+        """
+        for _fn in (
+            self._settle_tsell_pending, self._ambush_warn_trim, self._settle_pullback_sell,
+            self._check_plan_triggers, self._check_wolf_t_rules, self._check_roundtrip_sell,
+            self._check_defensive_t_reduce, self._check_board_half, self._check_profit_take,
+            self._check_weekend_hedge, self._check_hedge_refill, self._check_fib_target,
+            self._check_passive_stop, self._check_boll_sell, self._check_boll_mid_exit,
+            self._check_position_discipline, self._check_index_level_stop,
+            self._check_logic_time_stop, self._check_ambush_discipline,
+            self._check_ambush_promote_add,   # **转正后主动加仓一次** ✓（账本 §9.244）
+            self._check_breakout_add,        # **突破加仓／回踩确认加仓** ✓（账本 §9.304 ✓ 两个开关默认关 ✓）
+            self._check_doji_fail,           # **B：十字星后不突破 ⇒ 减半** ✓（账本 §9.340 ✓ 默认关 ✓）
+            self._check_intraday_t_stop,
+        ):
+            try:
+                _fn()
+            except Exception as _eD:
+                try:
+                    from app.services import alert_hub as _ahD
+                    _ahD.note("t_monitor.discipline:%s" % getattr(_fn, "__name__", "?"), _eD)
+                except Exception:
+                    print("[TMonitor] 纪律 %s 异常: %s" % (getattr(_fn, "__name__", "?"), str(_eD)[:80]), flush=True)
+
+    def _check_ambush_discipline(self) -> None:
+        """「埋伏」纪律：**小仓埋伏 ⇒ 固定 N 交易日持有 + 宽止损**（用户 2026-09-25 两步方案之①）。
+
+        量化（账本 §9.143，2,095 个「强势+回调」信号）：
+          · 固定 5 日 **−1.18%** ✗｜20 日 −1.95% ✗｜**40 日 +4.74%（58%）** ✓｜**60 日 +7.05%（60%）** ✓
+          · **紧止损 −10% 是灾难** ✗✗：中位掉到 **−10.49%**、为正 33% ✗
+            （埋伏的入场点本就在回调里 ⇒ 一破线就走 = **刚进就出** ✗；V8 中位持有仅 2 日即证 ✓）
+          · 宽止损 **−20%** 只损失 1.9pp ✓；均线/前低出场 −1.89%/−5.03% ✗ ⇒ **任何价格型出场都在砍赢家** ✗
+        开关（**库内默认 0 = 关** ⇒ 生产零影响 ✓）：`WOLF_AMBUSH_HOLD_DAYS`、`WOLF_AMBUSH_STOP_PCT`
+        """
+        try:
+            _days = int(float(os.getenv("WOLF_AMBUSH_HOLD_DAYS", "0") or 0))
+            _stop = float(os.getenv("WOLF_AMBUSH_STOP_PCT", "0") or 0)
+            if _days <= 0 and _stop <= 0:
+                return
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger
+            _acct = T_MONITOR_ACCOUNT
+            _ledger = get_sellable_ledger(account_id=_acct) or {}
+            _today = datetime.now().strftime("%Y%m%d")
+            for _p in self._positions(_acct):
+                _sym = str(_p.get("symbol") or "")
+                if not _sym or float(_p.get("volume") or 0) <= 0:
+                    continue
+                if (_sym, "wolf_ambush_exit", _today) in self._wolf_done:
+                    continue
+                # 2026-09-26 修（作用面审计 ✓）：**只对本段持仓由埋伏腿建立的票生效** ✗
+                #   原实现遍历**所有持仓** ⇒ 会把趋势腿/低吸腿也按"固定 50 日 + 宽止损 −20%"管 ✗
+                #   —— 那是**埋伏腿专属纪律**，不该外溢 ✓（§9.170）
+                if not self._is_ambush_position(_acct, _sym):
+                    continue
+                _sellable = int((_ledger.get(_sym) or {}).get("sellable", 0) or 0)
+                if _sellable <= 0:
+                    continue
+                _entry = self._ambush_entry_day(_acct, _sym)
+                if not _entry:
+                    continue
+                # ⚠️ 2026-09-26 修（账本 §9.237）：`_daily_dated` 在本地缓存过期时会走**回退取数** ✗
+                #   而该路径会 import **PySide6**（vnpy 依赖 ✗，本机无此模块 ✗）
+                #   ⇒ **整个 `_check_ambush_discipline` 每次都在这里抛异常** ✗✗
+                #   ⇒ 里面**一行都没执行** ✓（实证：`埋伏纪律异常: No module named 'PySide6'` ✗）
+                #   ⇒ 纪律的 50 日/宽止损/转正/最高价更新 **全都静默失效** ✗（这才是根因 ✓）
+                try:
+                    _bd = self._daily_dated(_sym, 90) or []
+                except Exception as _eBD:
+                    print("[TMonitor] 埋伏纪律：日线取数失败(按空处理，不中断纪律) %s: %s"
+                          % (_sym, str(_eBD)[:60]), flush=True)
+                    _bd = []
+                # ── **转正**（账本 §9.220）：浮盈曾达阈值 ⇒ 不再是"埋伏档" ✓
+                #   转正后：①**不再受 50 日/宽止损约束** ✗ ②改走「**自最高价回撤 trail% 出**」✓
+                #   语料：「13 日内需要碰新高…否则这个票呆的意义就不大」✓（碰上去了 ⇒ 逻辑成立 ✓）
+                _qsym2 = _normalize_symbol(_sym)
+                # ⚠️ 2026-09-26 修（账本 §9.241）：**行情源在回测里取不到** ✗
+                #   `t_monitor` 在**模块顶部**就 `from … import fetch_tencent_quote` ✓，
+                #   而回测的 as-of 替身是**之后**替换**模块属性**的 ✗ ⇒ **监控拿到的仍是真函数** ✗
+                #   ⇒ 沙箱/回测内**无网络** ⇒ 行情为空 ⇒ `_cur = 0`
+                #   ⇒ **不更新最高价／不转正／不触发出场** ✗✗（第四层原因 ✓）
+                #   ⇒ 修法：取不到就**回退到日线收盘**（as-of 同源、且复权 ✓）
+                _q = self._quote_now(_qsym2) or {}
+                # ⚠️ 2026-09-26 修（账本 §9.227）：字段名错了 ✗ —— `fetch_tencent_quote` 返回的是
+                #   **`current`**（全仓库口径 ✓），而此处原先读 **`price`** ✗ ⇒ `_cur` 恒为 0
+                #   ⇒ ①**最高价永不更新** ✗（实测 002792 现价 60.78 而最高价仍 44.66 ✗）
+                #      ②**埋伏纪律的两条离场永不触发** ✗（宽止损/50 日都判不出来 ✓）
+                #   ⇒ 两个字段都读（优先 current ✓，兼容 price ✓）
+                # ⚠️ 2026-09-26 修（账本 §9.228）：**键也要归一化** ✗
+                #   病灶：`fetch_tencent_quote` 在回测里返回的键是**归一化符号**（如 sz002792 ✓），
+                #   而 `_q.get(_sym)`（SZ002792 ✗）取不到 ⇒ `_cur` 仍为 0 ⇒ 修复①无效 ✗
+                #   （实证：日志 `sell 100股@52.1` ✓ 而 `highest_price` 仍 44.66 ✗）
+                _qo = (_q.get(_qsym2) or _q.get(_sym) or _q.get(str(_sym).lower()) or {})
+                _cur = float((_qo.get("current") or _qo.get("price") or _qo.get("last") or 0) or 0)
+                if _cur <= 0:
+                    _cur = float(_p.get("last_price") or 0) or 0
+                if _cur <= 0 and _bd:
+                    # 回退：**日线最后一根的收盘**（回测里 `_daily_dated` 为 as-of/复权 ✓）
+                    try:
+                        _lastb = [b for b in _bd if b.get("close")]
+                        if _lastb:
+                            _cur = float(sorted(_lastb, key=lambda b: str(b.get("date") or b.get("trade_date") or ""))[-1].get("close") or 0) or 0
+                    except Exception:
+                        pass
+                _cost = float(_p.get("avg_price") or 0) or 0
+                _promoted = False
+                if self._ambush_promote_pct() > 0:
+                    _hi = float(_p.get("highest_price") or 0) or 0.0
+                    _cost0 = float(_p.get("avg_price") or 0) or 0.0
+                    # ⚠️ 2026-09-26 修（账本 §9.225）：`highest_price` 原先**只有生产端**
+                    #   `stop_loss_monitor._update_highest_price()` 在更新 ✗ ⇒ **回测里它不跑**
+                    #   ⇒ 最高价永远等于成本 ⇒ **转正永远触发不了** ✗（实测 5 只持仓全部 +0.0% ✗）
+                    #   ⇒ 这里**自己更新**（用监控已取到的现价 ✓），并**用更新后的值**判转正 ✓
+                    # **合理性护栏** ✗：只接受与成本同量级的价格（±50% ✓）
+                    #   实证：曾把成本 11.21 的票写成 **9.27** ✗（复权/不复权两个价格空间混用 ✓）
+                    # ⚠️ 2026-09-26 修（账本 §9.272）：**参照物不能是成本** ✗
+                    #   旧写法用「成本 ±50%」⇒ **涨超 50% 的赢家会被当成脏数据清成 0** ✗
+                    #     实证：SZ002792 成本 46.01 ⇒ 上限 69.02 ⇒ 它冲到 **73.35** ✗ ⇒ 被清 0 ✗
+                    #     ⇒ 移动止盈/50 日/宽止损**全部静默失效** ✗ ⇒ 峰值 73.35 一路跌到
+                    #       **45.33** 才被普通腿卖掉（−419.60 ✗，次日反弹 52.17 ✗）
+                    #   新参照＝**当日最后一根日线的收盘** ✓（与现价**同一价格空间** ✓）⇒ 带宽 ±30%
+                    #     ⇒ 仍能拦住"复权/不复权混用"✗（实证 11.21 被写成 9.27 ✗），且**不伤赢家** ✓
+                    _refc = 0.0
+                    try:
+                        _lb = [b for b in _bd if b.get("close")]
+                        if _lb:
+                            _refc = float(sorted(_lb, key=lambda b: str(b.get("date") or b.get("trade_date") or ""))[-1].get("close") or 0)
+                    except Exception:
+                        _refc = 0.0
+                    if _refc > 0 and not (0.7 * _refc <= _cur <= 1.3 * _refc):
+                        _cur = 0.0
+                    if _cur > _hi:
+                        try:
+                            from sqlalchemy import text as _th
+                            from app.database import SessionLocal as _SH
+                            with _SH() as _sh:
+                                _sh.execute(_th(
+                                    "UPDATE paper_positions SET highest_price=:h, updated_at=now() "
+                                    "WHERE account_id=:a AND symbol=:s"),
+                                    {"h": _cur, "a": _acct, "s": _sym})
+                                _sh.commit()
+                            _hi = _cur
+                        except Exception as _eH:
+                            print("[TMonitor] 最高价更新异常(不影响其它): %s" % str(_eH)[:70], flush=True)
+                    # ⚠️ 2026-09-29 修（账本 §9.291）：**持仓行会被成交重写 ⇒ `highest_price` 丢失** ✗
+                    #   实证：成交过的票 `最高=成本` ✗；没成交的才保住（SH603061 255.35 ✓）
+                    #   ⇒ 移动止盈基数被清 ⇒ 永不触发 ✗（002792 留痕 `最高=0.00` 全程 ✗）
+                    #   ⇒ **改从日线档算"入场以来的最高"** ✓（数据驱动 ✓，不受重写影响 ✓）
+                    try:
+                        _hb = []
+                        for _bb in (_bd or []):
+                            _d8b = str(_bb.get("date") or _bb.get("trade_date") or "").replace("-", "")[:8]
+                            if _entry and _d8b >= str(_entry)[:8]:
+                                _hv = _bb.get("high")
+                                if _hv:
+                                    _hb.append(float(_hv))
+                        if _hb:
+                            _peak_bar = max(_hb)
+                            if _peak_bar > _hi:
+                                # 写回 ✓（若行被重写，下次仍能自愈 ✓）
+                                try:
+                                    from sqlalchemy import text as _tb
+                                    from app.database import SessionLocal as _SB
+                                    with _SB() as _sb:
+                                        _sb.execute(_tb(
+                                            "UPDATE paper_positions SET highest_price=:h, updated_at=now() "
+                                            "WHERE account_id=:a AND symbol=:s"),
+                                            {"h": _peak_bar, "a": _acct, "s": _sym})
+                                        _sb.commit()
+                                except Exception:
+                                    pass
+                                _hi = _peak_bar
+                    except Exception:
+                        pass
+                    _promoted = bool(_cost0 > 0 and _hi >= _cost0 * (1 + self._ambush_promote_pct() / 100.0))
+                    # **D 口径**：也接受「**碰新高**」（他的原话 ✓）—— 最高价 > **买入前 20 日最高** ✓
+                    _ph0 = 0.0
+                    if not _promoted and self._promote_on_newhigh():
+                        _ph0 = self._prior_high_before_entry(_sym, _entry)
+                        if _ph0 > 0 and _hi > _ph0:
+                            _promoted = True
+                    if not _promoted:
+                        try:
+                            import json as _jsR
+                            _rootR = os.path.dirname(os.environ.get("DATA_DIR", "/app/data")) or "/app/data"
+                            _pfR = os.path.join(_rootR, "ambush_promoted.json")
+                            if os.path.exists(_pfR):
+                                with open(_pfR, encoding="utf-8") as _fR:
+                                    if str(_sym).upper() in {str(k).upper() for k in (_jsR.load(_fR) or {})}:
+                                        _promoted = True
+                        except Exception:
+                            pass
+                    if _promoted:
+                        # ⚠️ 2026-09-30（账本 §9.345 ✓ 用户：「不是分钟重放吗？」✓ 正是 ✓）——
+                        #   本该用**当根分钟**的价 ✓，实测 ✗：01-19 记下的 `ppx=71.37`，
+                        #   而当日区间是 **68.59~70.76** ✗（71.37 属**上一交易日** ✓）
+                        #   ⇒ `_cur` 的源在**日切时点**仍指向昨日 ✗ ⇒ 日期与价格**错配** ✗
+                        #   ⇒ 记录前先**用当日 as-of 档校验** ✓：越界 ⇒ 收敛到当日收盘 ✓（源头防线 ✓）
+                        _pxR = _cur or _hi
+                        try:
+                            _spR = _sandbox_price(_sym, _today)
+                        except Exception:
+                            _spR = {}
+                        try:
+                            _hR = float((_spR or {}).get("high") or 0) or 0.0
+                            _lR = float((_spR or {}).get("low") or 0) or 0.0
+                            _cR = float((_spR or {}).get("cur") or 0) or 0.0
+                        except Exception:
+                            _hR = _lR = _cR = 0.0
+                        if _hR > 0 and _lR > 0 and not (_lR <= _pxR <= _hR) and _cR > 0:
+                            print("[埋伏纪律] %s 转正价**越界**：取数给 %.3f，当日区间 %.2f~%.2f"
+                                  " => 收敛到当日收盘 %.2f（防跨日错配）"
+                                  % (_sym, _pxR, _lR, _hR, _cR), flush=True)
+                            _pxR = _cR
+                        self._record_promotion(_sym, _today, _pxR)   # 供"加仓=B"用 ✓
+                _held = sum(1 for _b in _bd if str(_b.get("date") or "") >= _entry)
+                # **诊断留痕**（账本 §9.242；`WOLF_AMBUSH_DEBUG=1` ✓）—— 每票每日一行 ✓
+                #   目的：一眼看出"纪律有没有跑到这只票、拿到什么价、转正与否" ✓
+                #   （此前四层原因全因"看不见"才拖了很久 ✗）
+                if str(os.getenv("WOLF_AMBUSH_DEBUG", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                    print("[埋伏纪律] %s 现价=%.2f 成本=%.2f 最高=%.2f 持有=%s日 转正=%s 50日=%s 止盈线=%.2f"
+                          % (_sym, _cur, _cost, float(_p.get("highest_price") or 0), _held,
+                             "是" if _promoted else "否", _days,
+                             (float(_p.get("highest_price") or 0) * (1 - self._ambush_trail_pct() / 100.0))
+                             if _promoted and float(_p.get("highest_price") or 0) > 0 else 0.0), flush=True)
+                _why = ""
+                if _promoted:
+                    # **转正 ⇒ 改走移动止盈**（自最高价回撤 trail% ✓）—— 理由含「埋伏纪律」⇒ 能过总闸 ✓
+                    _trail = self._ambush_trail_pct()
+                    _hi2 = float(_p.get("highest_price") or 0) or 0.0
+                    if _hi2 > 0 and _trail > 0 and _cur > 0 and _cur <= _hi2 * (1 - _trail / 100.0):
+                        _why = ("埋伏纪律：转正移动止盈 现价 %.2f ≤ 最高 %.2f×(1−%.0f%%)"
+                                % (_cur, _hi2, _trail))
+                elif (not _promoted) and self._no_newhigh_exit_days() > 0 and _held >= self._no_newhigh_exit_days():
+                    # **他原话后半截**（账本自记"从未出手" ✓）：13 日内没碰新高 ⇒ 逻辑不成立 ⇒ 离场 ✓
+                    _why = ("埋伏纪律：%d 个交易日内未碰新高（买入前 20 日最高 %.2f，现最高 %.2f）⇒ 离场"
+                            % (self._no_newhigh_exit_days(), _ph0 if '_ph0' in dir() else 0.0, _hi))
+                elif _days > 0 and _held >= _days:
+                    _why = "埋伏纪律：持有 %d/%d 交易日到期 ⇒ 离场" % (_held, _days)
+                elif _stop > 0 and _cost > 0 and _cur > 0 and _cur <= _cost * (1 - _stop / 100.0):
+                    _why = ("埋伏纪律：宽止损 现价 %.2f ≤ 成本 %.2f×(1−%.0f%%)" % (_cur, _cost, _stop))
+                if not _why:
+                    continue
+                _gw = gateway_execute(_sym, "sell", _cur or None, _sellable,
+                                      reason=_why, decision_source="ai_led",
+                                      account_id=_acct)
+                print("[TMonitor] 埋伏纪律离场 %s x%d: %s | %s" % (
+                    _sym, _sellable, _why, str(_gw.get("status"))[:20]), flush=True)
+                self._wolf_done.add((_sym, "wolf_ambush_exit", _today))
+        except Exception as _e:
+            import traceback as _tb
+            print("[TMonitor] 埋伏纪律异常: %s\n%s" % (str(_e)[:100], _tb.format_exc()[-700:]), flush=True)
+            try:
+                from app.services import alert_hub as _ah2
+                _ah2.note("t_monitor.ambush_discipline", _e)
+            except Exception:
+                pass
 
     def _check_logic_time_stop(self) -> None:
         """① 后半句：**建仓初期「逻辑与时间」离场**（2026-09-11，狼大 2026-03-05 同一句原话）。
@@ -1458,7 +3077,7 @@ class TMonitor:
                     _cands.append((_sym, _sellable))
             if not _cands:
                 return
-            _quotes = fetch_tencent_quote([s for s, _ in _cands])
+            _quotes = fetch_tencent_quote([_normalize_symbol(s for s, _ in _cands)])
             _close_win = _in_close_window()
             for _sym, _sellable in _cands:
                 try:
@@ -1585,7 +3204,13 @@ class TMonitor:
             _conn = _pg2.connect(os.getenv("DATABASE_URL",
                                            "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
             _cur = _conn.cursor()
-            _cur.execute("SELECT DISTINCT symbol FROM paper_positions WHERE account_id='stock' AND volume > 0")
+            # ⚠️ 2026-09-19 修：这里原先写死 account_id='stock'（**读生产账户持仓**），却把腿布到
+            #   `T_MONITOR_ACCOUNT` 上 ⇒ 回放里实测：drabjan6 空仓，却因为**生产 stock 账户**持有
+            #   快克智能/科瑞技术，而被布上三条卖出条件单（custom_vwap_sell/high_sell/custom_support_sell,
+            #   publisher=auto_exit），触发后又被 [G8] 拦成 blocked —— 看起来像"错配票又进候选了"。
+            #   生产环境 T_MONITOR_ACCOUNT 默认就是 'stock' ⇒ 本修在生产**逐位不变**，只是回测不再串账户。
+            _cur.execute("SELECT DISTINCT symbol FROM paper_positions WHERE account_id=%s AND volume > 0",
+                         (T_MONITOR_ACCOUNT,))
             syms = [str(r[0]) for r in _cur.fetchall()]
             _cur.close(); _conn.close()
         except Exception as e:
@@ -1627,6 +3252,24 @@ class TMonitor:
         顺带让 V反/探针等 t 账户持仓（T+1 后可卖）每天自动获得做T条件。
         """
         res = {"expired": 0, "filled": 0}
+        # ── 除权复权（`WOLF_EXRIGHTS_ADJUST`，库内默认 0；用户 2026-09-22 拍板"修 3"）──
+        #   必须在**当日任何下单之前**跑一次：除权日的价格按新基准跳低，而我们的持仓是固定股数记账
+        #   ⇒ 不调整的话既会出现假回撤，又会在卖出时按 `paper_trades` 的旧买入价记一笔假亏损
+        #   （实测 T5 唯一一笔 SH603061：−5,960，是账面最大单笔亏损，纯属除权未复权）。
+        #   放在 `_daily_maintain`：每交易日首次轮询前调用一次，生产与回测**同一段代码**。
+        try:
+            from app.services import wolf_exrights as _exr
+            if _exr.enabled():
+                _r = _exr.apply_day(T_MONITOR_ACCOUNT, datetime.now().strftime("%Y%m%d"))
+                if _r.get("adjusted") or _r.get("errors") or _r.get("skipped"):
+                    print("[TMonitor] 除权复权：调整 %d 只 · 跳过 %d · 异常 %d"
+                          % (len(_r.get("adjusted") or []), len(_r.get("skipped") or []),
+                             len(_r.get("errors") or [])), flush=True)
+                    res["exrights"] = {"adjusted": len(_r.get("adjusted") or []),
+                                       "skipped": len(_r.get("skipped") or []),
+                                       "errors": _r.get("errors") or []}
+        except Exception as _exe:
+            print("[TMonitor] 除权复权异常(忽略，按未复权口径继续): %s" % str(_exe)[:100], flush=True)
         try:
             res["expired"] = t_db.expire_daily_conditions()
         except Exception as e:
@@ -1696,7 +3339,10 @@ class TMonitor:
                     if any((c.get("publisher") or "") == "user" for c in acts):
                         res["skipped_user"] += 1
                         continue
-                except Exception:
+                except Exception as _eN15:
+                    # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                    from app.services import gate_alarm as _gaNote
+                    _gaNote.note("t_monitor:line2093", _eN15)
                     pass
                 try:
                     ok = auto_gen_conditions_for_build(sym, avg, trade_date=today)
@@ -1721,13 +3367,76 @@ class TMonitor:
 
         # 2) 当日有效条件（只读目标账户 + 只跑狼大做T表达式条件, 屏蔽其他做T）
         conditions = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
+        if str(os.getenv("WOLF_DEBUG_COND", "") or "").strip():
+            try:
+                _k = {}
+                for _c in conditions:
+                    _k[str(_c.get("trigger_kind"))] = _k.get(str(_c.get("trigger_kind")), 0) + 1
+                print("[DBG_LIST] 账户=%s 取到条件单 %d 条｜腿型=%s" % (T_MONITOR_ACCOUNT, len(conditions), dict(sorted(_k.items(), key=lambda x: -x[1])[:8])), flush=True)
+            except Exception as _eL:
+                print("[DBG_LIST] 失败 %s" % str(_eL)[:60], flush=True)
         conditions = [c for c in conditions if _is_wolf_t_condition(c)]
+        if str(os.getenv("WOLF_DEBUG_COND", "") or "").strip():
+            try:
+                _k2 = {}
+                for _c in conditions:
+                    _k2[str(_c.get("trigger_kind"))] = _k2.get(str(_c.get("trigger_kind")), 0) + 1
+                print("[DBG_LIST] 过滤后 %d 条｜腿型=%s" % (len(conditions), dict(sorted(_k2.items(), key=lambda x: -x[1])[:8])), flush=True)
+            except Exception:
+                pass
         if not conditions:
             return
         self._status["conditions_checked"] = len(conditions)
 
         # 3) 并发取价（核心标的）
-        symbols = list({c["symbol"] for c in conditions})[:MAX_CORE_SYMBOLS]
+        # ⚠️ 2026-09-22 修：原实现 `list({c["symbol"] for c in conditions})[:MAX_CORE_SYMBOLS]`
+        #   —— **集合乱序取前 20** ⇒ 池子一变大就变成"随机 20 只被评估、其余静默不评估"。
+        #   实测（T6 新臂，乙+丙+net 把候选池放大之后）：0105 条件 70 条/36 只、0107 86 条/44 只，
+        #   而上限恒为 20 ⇒ **每天 16–24 只（55%）的条件腿连报价都没取到、当天永远不会触发**
+        #   （002156 的 `trend_break_buy` 就是这么被吞掉的：腿在 t_conditions 里，但没进前 20）。
+        #   现在：①上限可配（`WOLF_MAX_CORE_SYMBOLS`，默认 20 = 旧行为）；
+        #        ②**持仓优先**（止损/卖腿最要紧），其余按代码排序 ⇒ 结果确定、不再随机；
+        #        ③截断时打一条日志（原来完全静默）。
+        try:
+            _cap = max(int(float(os.getenv("WOLF_MAX_CORE_SYMBOLS", str(MAX_CORE_SYMBOLS)) or MAX_CORE_SYMBOLS)), 1)
+        except Exception:
+            _cap = MAX_CORE_SYMBOLS
+        _all_syms = {c["symbol"] for c in conditions}
+        try:
+            _held = {s for s in _all_syms if self._held_today(s)}
+        except Exception:
+            _held = set()
+        # ── 候选优先度排序（2026-09-22 用户拍板："先做 T0/T1/T2-a~d"）──────────────
+        #   `WOLF_CORE_PRIORITY`（**库内默认 0 = 旧行为**：持仓优先 + 代码升序）。
+        #   为什么需要（实测）：C2′ 同日准入是**流式**的 —— 前 K=3 笔免检、之后要 ≥ 运行中位数；
+        #   而开盘后第一轮会把 ~90 只标的的腿**同一轮里全部评估** ⇒ **谁先被评估谁占免检名额**。
+        #   实测拦量：T5 1,432 条 / T6(到 0113) 231 条 ⇒ 顺序不是形式问题。
+        #   分层（零成本、确定性；对齐方向层）：
+        #     T0 持仓票（止损/卖腿必须有报价）
+        #     T1 有卖腿的票（保护动作先评估；「破线直接走」）
+        #     T2a 主题档：mainline_select.mainline > second > 其他（方向层口径）
+        #     T2b 有底仓 > 无底仓 —— 已由 T0 覆盖（同时持仓票必然在最前）
+        #     T2c 在 253/254 低吸腿候选池（当日 legs_switch）内 > 不在
+        #     T2d 代码升序（兜底，保证确定性）
+        try:
+            _prio_on = str(os.getenv("WOLF_CORE_PRIORITY", "0")).strip().lower() in ("1", "true", "yes", "on")
+        except Exception:
+            _prio_on = False
+        if _prio_on:
+            try:
+                symbols = sorted(_all_syms, key=self._core_sort_key(conditions, _held))[:_cap]
+            except Exception as _pre:
+                print("[TMonitor] 候选优先度排序异常(回落代码序): %s" % str(_pre)[:80], flush=True)
+                symbols = (sorted(_held) + sorted(_all_syms - _held))[:_cap]
+        else:
+            symbols = (sorted(_held) + sorted(_all_syms - _held))[:_cap]
+        if len(_all_syms) > _cap:
+            _tk = datetime.now().strftime("%Y%m%d")
+            if getattr(self, "_core_cap_warned", "") != _tk:
+                self._core_cap_warned = _tk
+                print("[TMonitor] ⚠️ 条件标的 %d 只 > 上限 %d（WOLF_MAX_CORE_SYMBOLS）⇒ 本轮只评估"
+                      "持仓优先的前 %d 只，其余 %d 只**本轮不评估**"
+                      % (len(_all_syms), _cap, _cap, len(_all_syms) - _cap), flush=True)
         quotes = self._fetch_quotes_concurrent(symbols)
 
         # 3.5) 止损扫描（持仓标的现价 ≤ stop_loss_price → 止损卖腿，独立于条件触发）
@@ -1805,10 +3514,17 @@ class TMonitor:
                 if _lt:
                     try:
                         from datetime import datetime as _dt
-                        _last = _dt.strptime(_lt, "%Y-%m-%d %H:%M:%S")
+                        # 2026-09-25 修 bug（账本 §9.124）：PG 的 timestamp 列经 psycopg2 取出来是
+                        #   **datetime 对象** ⇒ `strptime(datetime)` 抛 TypeError ⇒ 被 except 吞 ⇒
+                        #   **5 分钟去重冷却在回测里从未生效** ✗（`[GATE-ALARM] … t_monitor:line2252
+                        #   TypeError: strptime() argument 1 must be str` 出现 176 次 ✓ 被新报警机制抓到 ✓）
+                        _last = _lt if isinstance(_lt, _dt) else _dt.strptime(str(_lt), "%Y-%m-%d %H:%M:%S")
                         if (datetime.now() - _last).total_seconds() < 300:
                             continue
-                    except Exception:
+                    except Exception as _eN16:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line2252", _eN16)
                         pass
             try:
                 pos_item = (ledger or {}).get(symbol) or {}
@@ -1816,7 +3532,10 @@ class TMonitor:
                 if cond_kind in ("high_sell_then_buy_back", "high_sell") \
                         and int(pos_item.get("sellable", 0) or 0) <= 0:
                     continue
-            except Exception:
+            except Exception as _eN17:
+                # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                from app.services import gate_alarm as _gaNote
+                _gaNote.note("t_monitor:line2260", _eN17)
                 pass
             try:
                 # 2026-09-09 根治: 条件缺当日换手基准 → 现场补算一次(当日缓存), 0.5% 仅最后保险
@@ -1825,7 +3544,31 @@ class TMonitor:
                 self._check_stop_loss(symbol, quote, ledger)
                 # 构建该标的字段快照（供表达式求值）
                 snapshot = self._build_snapshot(cond, quote, regime_state)
-                if self._evaluate_condition(cond, quote, regime_state, snapshot):
+                _hit_c = self._evaluate_condition(cond, quote, regime_state, snapshot)
+                # 2026-09-26 定向调试（`WOLF_DEBUG_COND`，默认空 = 关闭 ✓，生产零影响 ✓）：
+                #   命中/未命中都打印关键字段 ⇒ 用来分清"**根本没被评估**"还是"评估了但字段不满足" ✓
+                _dbg_c = ""
+                try:
+                    _dbg_c = str(os.getenv("WOLF_DEBUG_COND", "") or "").strip()
+                except Exception:
+                    _dbg_c = ""
+                if _dbg_c and _dbg_c in str(cond.get("trigger_kind") or ""):
+                    try:
+                        _sn = snapshot or {}
+                        _q = _sn.get("quote") or {}
+                        print("[DBG_COND] %s %s hit=%s dip_prev_low=%s prev_low_dist=%s m5_dump=%s cur=%s avg=%s" % (
+                            cond.get("symbol"), cond.get("trigger_kind"), bool(_hit_c),
+                            _q.get("dip_prev_low"), _q.get("prev_low_dist_pct"), _q.get("m5_dump"),
+                            _q.get("current"), _q.get("average")), flush=True)
+                    except Exception as _eD:
+                        print("[DBG_COND] 打印失败: %s" % str(_eD)[:60], flush=True)
+                if _hit_c:
+                    # ── G3「卖出后删票」在**买入执行口**再查一次（2026-09-21）──────────────────
+                    #   语料 2025-02-06「卖出然后删票」/ 2025-04-03「破之前新低的直接删票」。
+                    #   为什么必须在这里查：布腿时的候选域过滤只能挡**新挂的腿**；实测天津普林/苏州科达
+                    #   在 T3 里的买入，腿是**禁令之前**就挂好的（0122/0123/0128 成交的腿挂于 0112–0116），
+                    #   所以「卖出后删票」要真正生效，必须在**腿触发那一刻**再判一次。
+                    #   生产与回测走同一段代码 ⇒ 一处修两边都生效。开关 WOLF_TICKET_BAN_FIX（默认 0）。
                     self._write_trigger(cond, quote, regime_state, snapshot, ledger)
                     written += 1
             except Exception as e:
@@ -1853,7 +3596,10 @@ class TMonitor:
             ct = str(prof.get("computed_at") or "")[:10].replace("-", "")
             if prof.get("same_minute_avg") and ct == today:
                 return
-        except Exception:
+        except Exception as _eN18:
+            # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+            from app.services import gate_alarm as _gaNote
+            _gaNote.note("t_monitor:line2303", _eN18)
             pass
         try:
             from app.services.t_turnover_profile import compute_turnover_profile
@@ -1902,6 +3648,39 @@ class TMonitor:
             print(f"[TMonitor] 指数盘中回撤计算失败: {e}")
             return 0.0
 
+    def _stock_m5_dump(self, symbol: str) -> float:
+        """**个股**最新 5min 单根跌幅%（较前一根收盘；急杀为负；30s TTL/票 ✓）。
+
+        依据（账本 §9.175，9 主题主板逐日）：把"急杀"按**大盘×个股**切开后——
+          · **大盘与个股同时急杀**：+5 中位 **+1.57%**／为正 **61%** ✓✓（唯一正期望 ✓）
+          · 只有**个股**急杀：−0.51%／47% ✗
+          · 只有**大盘**急杀：−0.85%／42% ✗（与语料「指数跳水…不要想着抄底」✓ 一致）
+        语料两层（2025-06-05）：「**主线板块筑底行情**…急杀可以买」（大盘/板块级 ✓）
+          ＋「**板块/个股急杀**…慢慢买」（个股级 ✓）⇒ **合取**才对齐 ✓
+        """
+        try:
+            now = time.time()
+            key = str(symbol or "").upper()
+            ent = _m5_stock_dump_cache.get(key)
+            if ent and now - ent["at"] < 30:
+                return ent["value"]
+            from app.services.t_data_sources import fetch_tencent_mkline
+            pre = "sh" if key.startswith("SH") else "sz"
+            bars = fetch_tencent_mkline(pre + key[2:], freq="m5", count=60)
+            bars = sorted(bars or [], key=lambda b: str(b.get("time")))
+            dump = 0.0
+            if len(bars) >= 2:
+                c0 = float(bars[-1].get("close") or 0)
+                c1 = float(bars[-2].get("close") or 0)
+                if c0 > 0 and c1 > 0:
+                    dump = (c0 - c1) / c1 * 100
+            _m5_stock_dump_cache[key] = {"at": now, "value": round(dump, 3)}
+            return round(dump, 3)
+        except Exception as e:
+            from app.services import gate_alarm as _ga
+            _ga.note("t_monitor:_stock_m5_dump", e)
+            return 0.0
+
     def _index_m5_dump(self) -> float:
         """上证指数最新5min单根跌幅%（较前一根收盘；C档急杀信号≥0.4；30s TTL）。
         狼大'盘中带下来'的分时形态——验证 backtest_zt_signal_compare: 单根>=0.4% 16天 T+1+0.82%。"""
@@ -1922,6 +3701,45 @@ class TMonitor:
             return round(dump, 3)
         except Exception as e:
             print(f"[TMonitor] 指数急杀计算失败: {e}")
+            return 0.0
+
+    def _stock_prev_low(self, symbol: str) -> float:
+        """**前一交易日 5min 最低价**（价格，不是布尔 ✓；30s TTL/票 ✓）。
+
+        用途（账本 §9.182）：埋伏腿要判「**回踩到位但不破**前低」✓
+          · 语料（2026-02-02）：「**大盘没过前低是前提**，观察板块/个股**也没低于前低**是基础条件」✓
+          · 数据：`不破前低 + 50 日` 中位 **+6.29%／为正 63%／回撤 −6.9%** ✓
+            vs `触及前低`（正T 挂单口径 ✗）**+0.46%／回撤 −11.7%** ✗ ⇒ 差 5~8 倍
+        （注意：他 2025-03-06「**挂前一天的低点**，能买进去就做正T」✓ 是**正T 挂单**口径 ⇒
+          对应 `quote.dip_prev_low`（触及 ✓），**不是**埋伏腿该用的那条 ✓）
+        """
+        try:
+            now = time.time()
+            key = str(symbol or "").upper()
+            ent = _prev_low_px_cache.get(key)
+            if ent and now - ent["at"] < 30:
+                return float(ent["value"] or 0)
+            from app.services.t_data_sources import fetch_minute_bars
+            bars = fetch_minute_bars(symbol, freq="m5", count=320) or []
+            _today = datetime.now().strftime("%Y%m%d")
+            groups: Dict[str, list] = {}
+            for b in sorted(bars, key=lambda x: str(x.get("time") or x.get("trade_time"))):
+                t = str(b.get("time") or b.get("trade_time") or "")
+                d8 = t[:10].replace("-", "")
+                if d8 and d8 != _today:
+                    groups.setdefault(d8, []).append(b)
+            val = 0.0
+            if groups:
+                last = groups[sorted(groups)[-1]]
+                lows = [float(x.get("low") or 0) for x in last]
+                lows = [x for x in lows if x > 0]
+                if lows:
+                    val = min(lows)
+            _prev_low_px_cache[key] = {"at": now, "value": val}
+            return val
+        except Exception as _e:
+            from app.services import gate_alarm as _ga
+            _ga.note("t_monitor:_stock_prev_low", _e)
             return 0.0
 
     def _stock_dip_prev_low(self, symbol: str) -> bool:
@@ -1999,6 +3817,29 @@ class TMonitor:
         _s2 = _sup[-2] if len(_sup) >= 2 else _s1
         _r1 = _res[0] if _res else 0.0
         _r2 = _res[1] if len(_res) >= 2 else _r1
+        # ── 狼大口径的准备量（MA13／MA34／量能／"首次"判定 ✓；账本 §9.263）──
+        _ma13_v = _ma34_v = 0.0
+        _vol_ok_v = _first_break_v = False
+        try:
+            _pdk = self._prev_daily(symbol, 34) or []
+            # 注意：`_prev_daily` 返回**截至上一交易日**的序列 ✓（不含当日 ✓）
+            #   ⇒ MA 与"昨收"都从它算 ⇒ "首次跌破"＝**今日跌破、昨日还在上方** ✓
+            if len(_pdk) >= 14:
+                _cl = [float(x.get("close") or 0) for x in _pdk]
+                _vl = [float(x.get("vol") or 0) for x in _pdk]
+                _ma13_v = sum(_cl[-13:]) / 13.0 if len(_cl) >= 13 else 0.0
+                _ma34_v = sum(_cl[-34:]) / 34.0 if len(_cl) >= 34 else 0.0
+                _pma13 = sum(_cl[-14:-1]) / 13.0 if len(_cl) >= 14 else 0.0
+                _pma34 = sum(_cl[-35:-1]) / 34.0 if len(_cl) >= 35 else 0.0
+                _pc = _cl[-1]
+                _v5 = (sum(_vl[-5:]) / 5.0) if len(_vl) >= 5 else 0.0
+                _v1 = float(quote.get("vol", 0) or 0) or _vl[-1]
+                _vol_ok_v = bool(_v5 > 0 and _v1 > _v5 * 1.2)          # 「放量跌破确认」✓
+                _first_break_v = bool(
+                    (_ma13_v > 0 and _cur <= _ma13_v and _pc > _pma13) or
+                    (_ma34_v > 0 and _cur <= _ma34_v and _pc > _pma34))  # 「首次」✓
+        except Exception:
+            pass
         snapshot["quote"] = {
             "current": _cur,
             "open": float(quote.get("open", 0) or 0),
@@ -2014,6 +3855,11 @@ class TMonitor:
             # 分时黄线跌破（狼大8-04『绝对不能破的点就是日均线那条黄线 一旦突发跌破直接走』）
             "vwap_break": bool(_avg > 0 and _cur < _avg),
             "dip_prev_low": self._stock_dip_prev_low(symbol),
+            # 个股 5min 单根跌幅%（急杀为负 ✓）—— 与 index.m5_dump 做**合取**用（账本 §9.175）
+            "m5_dump": self._stock_m5_dump(symbol),
+            # 现价距**前一交易日 5min 最低**的百分比%（>0 = 未破 ✓；≈0~1 = 回踩到位 ✓）—— 埋伏腿触发用（§9.182）
+            "prev_low_dist_pct": (lambda _pl, _cur: (round((_cur / _pl - 1) * 100, 3) if (_pl > 0 and _cur > 0) else None))(
+                self._stock_prev_low(symbol), float(quote.get("current", 0) or 0)),
             # S3 删除(2026-09-10): 原"动态回撤保护 trail_break"(现价≤当日高点×(1-振幅自适应阈值))。
             # 狼大不用百分比移动止损(他用"3-5点兑现"与"收盘破位"), 属审计 §5.2 认定的自造机制 → 已删除。
             # 字段保留但恒 False, 避免存量条件(t_triggers/t_conditions 中引用 quote.trail_break 的表达式)求值报错。
@@ -2022,7 +3868,21 @@ class TMonitor:
             "support_l2": _s2,
             "resistance_l1": _r1,
             "resistance_l2": _r2,
-            "break_support": bool(_s1 > 0 and _cur <= _s1),
+            # ── `break_support` 的**两套口径**（账本 §9.263）──────────────────────────
+            #   旧（自造 ✗）：现价 ≤「现价下方**最近**支撑」（20/60 日低点／局部极值／MA20/60 ✓）
+            #     ⇒ 比狼大**更近** ✗ ⇒ 轻微回落就触发（实测 002156 卖飞 ✓）
+            #   新（**他的原话** ✓，开关 `WOLF_BREAK_SUPPORT_TREND=1` ✓）：
+            #     「**可以不追高 但是卖点只有跌破支撑位**」✓
+            #     「**3日5日最多10日…机构单子一般都是挂在 10日 13日 34**」✓ ⇒ 取 **MA13／MA34** ✓
+            #     「如果这个位置**放量跌破确认**」✓ ＋「**缩量到缺口支撑位的时候不割肉**」✓
+            #     ⇒ **首次跌破 MA13 或 MA34** ∧ **放量（>1.2×5 日均量）** ✓
+            "ma13": _ma13_v,
+            "ma34": _ma34_v,
+            "vol_up_ok": bool(_vol_ok_v),
+            "break_support": (bool(_first_break_v and _vol_ok_v)
+                              if str(os.getenv("WOLF_BREAK_SUPPORT_TREND", "0")).strip().lower()
+                              in ("1", "true", "yes", "on")
+                              else bool(_s1 > 0 and _cur <= _s1)),
         }
         # ── A10 BOLL（2026-09-11, wolf_boll_levels）──
         # 他 2025-04-15「个股在区间震荡的时候碰到了自己各种压力位，比如均线或BOLL上轨」；
@@ -2235,6 +4095,68 @@ class TMonitor:
         except Exception:
             return {"sellable": 0, "volume": 0, "avg_price": 0.0, "pnl_pct": 0.0}
 
+    def _prio_ctx(self, today: str) -> dict:
+        """当日优先度上下文（每天只读一次）：{main, second, theme, pool}。失败 ⇒ 空（回落代码序）。"""
+        c = getattr(self, "_prio_cache", None)
+        if isinstance(c, dict) and c.get("_day") == today:
+            return c
+        import json as _j
+        D = os.environ.get("DATA_DIR", "/app/data")
+        ctx = {"_day": today, "main": "", "second": "", "theme": {}, "pool": set()}
+        try:
+            with open(os.path.join(D, "main_line_state.json"), encoding="utf-8") as f:
+                _ms = (_j.load(f) or {}).get("mainline_select") or {}
+            ctx["main"] = str(_ms.get("mainline") or "")
+            ctx["second"] = str(_ms.get("second") or "")
+        except Exception as _eN19:
+            # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+            from app.services import gate_alarm as _gaNote
+            _gaNote.note("t_monitor:line2698", _eN19)
+            pass
+        for _fn, _is_pool in (("legs_switch.jsonl", True), ("legs.jsonl", False)):
+            try:
+                with open(os.path.join(D, _fn), encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            o = _j.loads(line)
+                        except Exception:
+                            continue
+                        _s = str(o.get("symbol") or "")
+                        if not _s:
+                            continue
+                        if o.get("theme"):
+                            ctx["theme"].setdefault(_s, str(o["theme"]))
+                        if _is_pool:
+                            ctx["pool"].add(_s)
+            except Exception:
+                continue
+        self._prio_cache = ctx
+        if ctx["main"] or ctx["theme"]:
+            print("[TMonitor] 候选优先度上下文：主线=%s 次线=%s 票→主题 %d 只、低吸腿池 %d 只"
+                  % (ctx["main"] or "-", ctx["second"] or "-", len(ctx["theme"]), len(ctx["pool"])), flush=True)
+        return ctx
+
+    def _core_sort_key(self, conditions, held):
+        """T0 持仓 → T1 有卖腿 → T2a 主题档 → T2c 在低吸腿池 → T2d 代码升序。"""
+        ctx = self._prio_ctx(datetime.now().strftime("%Y%m%d"))
+        _sell = {str(c.get("symbol")) for c in (conditions or [])
+                 if str(c.get("direction") or "").strip().lower() == "sell"}
+        _main, _second = ctx.get("main") or "", ctx.get("second") or ""
+        _theme, _pool = ctx.get("theme") or {}, ctx.get("pool") or set()
+
+        def _k(sym):
+            _th = _theme.get(str(sym)) or ""
+            _rank = 0 if (_th and _th == _main) else (1 if (_th and _th == _second) else 2)
+            return (0 if sym in held else 1,          # T0 持仓
+                    0 if sym in _sell else 1,         # T1 有卖腿
+                    _rank,                            # T2a 方向层
+                    0 if sym in _pool else 1,         # T2c 低吸腿候选池
+                    str(sym))                         # T2d 兜底
+        return _k
+
     def _fetch_quotes_concurrent(self, symbols: List[str]) -> Dict[str, Optional[dict]]:
         """并发取价（腾讯 qt 直连），结果统一以归一化代码（sz159516）为键。
 
@@ -2283,13 +4205,18 @@ class TMonitor:
         current = float(quote.get("current", 0) or 0)
         trigger_kind = cond.get("trigger_kind", "low_buy")
         symbol = cond["symbol"]
-        # 滑点预算：0.1%（P4 标定 2-5 tick）
-        slippage = 0.001
+        if ticket_ban_blocked(symbol, _is_buy_side(cond)):
+            return None                       # G3 删票名单：买入侧不再复发
+        if intraday_crush_blocked(symbol, _is_buy_side(cond), str(trigger_kind or "")):
+            return None                       # C2′+C2″ 盘中午判据
+        # 滑点/成交价溢价：默认 0.1%（生产现状）；回测 pins 置 `WOLF_FILL_PREMIUM_PCT=0` 砍掉
+        slippage = fill_premium_pct() / 100.0
         gate = check_gate(trigger_kind, regime_state)
         mode = "human_confirm" if gate["mode"] == "human_confirm" else "auto"
         # 连续命中计数（同条件当日连续命中未实质改善 → 唤醒时提示 AI 调整/冷却）
         consecutive_hits = self._consecutive_hits(cond.get("id"), cond["symbol"])
 
+        _fp2 = fill_prices(current)
         trig = {
             "account_id": cond.get("account_id", T_MONITOR_ACCOUNT),
             "condition_id": cond.get("id"),
@@ -2297,8 +4224,8 @@ class TMonitor:
             "event_type": trigger_kind,
             "trigger_price": cond.get("target_price"),
             "quote_price": current,
-            "suggest_bid_price": round(current * (1 - slippage), 3),
-            "suggest_ask_price": round(current * (1 + slippage), 3),
+            "suggest_bid_price": _fp2[0],
+            "suggest_ask_price": _fp2[1],
             "slippage_budget": slippage,
             "snapshot": {
                 "quote_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -2317,6 +4244,15 @@ class TMonitor:
             "mode": mode,
             "direction": "buy" if _is_buy_side(cond) else "sell",
         }
+        try:
+            from app.services import t_trigger_mute as _tm1
+            if _tm1.is_muted(symbol, trigger_kind):
+                return None                      # 当日静默（该腿今天不再生成重复触发）
+        except Exception as _eN20:
+            # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+            from app.services import gate_alarm as _gaNote
+            _gaNote.note("t_monitor:line2835", _eN20)
+            pass
         trig_id = t_db.insert_trigger(trig)
         if trig_id:
             # 状态机（2026-09-02 修订）：狼大形态条件（分时T出/黄线/急杀/缩量触低等
@@ -2364,12 +4300,27 @@ class TMonitor:
                     if _DR8.enabled():
                         _bars_sh = _fetch_daily_tencent_dated(symbol, 3) or []
                         _st8, _why8 = _DR8.shadow_stop(_bars_sh, 1)
-                        _protect8 = (side == "sell"
-                                     and str(trigger_kind) in ("stop_loss", "custom_support_sell",
-                                                               "wolf_passive_stop_sell"))
-                        if _st8 and not _protect8:
+                        # ⚠️ 2026-09-30（账本 §9.330 ✓ 用户「G8 只管做T类，保护/减仓类照跑」✓）：
+                        #   原保护名单只有 3 个（stop_loss／custom_support_sell／wolf_passive_stop_sell）✗
+                        #   ⇒ **黄线减仓 `custom_vwap_sell` 不在内** ✗ ⇒ 被 G8 当"兑现类"停掉 ✗
+                        #   实测代价：SH603690 01-26 浮亏 −13% 时黄线腿被 G8 静默吃掉 ⇒ 一路走到 −19% ✗
+                        #   ⇒ 按用户口径扩名单（**减仓/保护类照跑** ✓；兑现类仍停 ✓）
+                        _G8_PROTECT_EXTRA = {"custom_vwap_sell", "wolf_defensive_t_reduce",
+                                             "custom_level_sell", "custom_trail_sell",
+                                             "wolf_confirm_sell", "wolf_boll_upper_sell",
+                                             "wolf_board_half_sell"}
+                        _protect8_kinds = {"stop_loss", "custom_support_sell", "wolf_passive_stop_sell"}
+                        if str(os.getenv("WOLF_G8_PROTECT_REDUCE", "0")).strip().lower() \
+                                in ("1", "true", "yes", "on"):
+                            _protect8_kinds |= _G8_PROTECT_EXTRA
+                        _protect8 = (side == "sell" and str(trigger_kind) in _protect8_kinds)
+                        # 2026-09-25 用户拍板：G8 作用面收窄回语料口径（**只停做T**；
+                        #   置 WOLF_G8_KINDS 后建仓类腿型豁免；库内默认空 = 旧行为逐字不变）
+                        if _st8 and not _protect8 and _DR8.applies_to(trigger_kind):
                             _g8_stop, _g8_why = True, _why8
                 except Exception as _ge8:
+                    from app.services import gate_alarm as _ga2
+                    _ga2.alarm("G8:%s" % symbol, _ge8, {"symbol": symbol}, fail_closed=False)
                     print(f"[TMonitor] G8 判定失败（按原口径执行）: {str(_ge8)[:60]}")
                 cond_vol = int(cond.get("volume") or 0)
                 if cond_vol > 0:
@@ -2419,12 +4370,78 @@ class TMonitor:
                         _floor = base_floor_shares(
                             cond.get("account_id", T_MONITOR_ACCOUNT), symbol, volume=sellable)
                         max_sell = max(sellable - _floor, 0) if sellable > _floor else 0
+                        # 2026-09-19 用户拍板 A：**破位/减仓语义**的腿可穿透底仓（语料 2025-11-23/
+                        #   2025-08-13「跌破高开下沿/开盘点位 → 减仓到 40% 甚至更低」）。
+                        #   否则只剩底仓时量恒为 0 ⇒ blocked + 当日静默 ⇒ 只能拖到 14:45 破位清仓
+                        #   （实测 SH600183：jan10 −1,314 / jan11 −1,640 都是这么亏出来的）。
+                        #   穿透量按 _stop_exit_volume 口径：盘中减半、尾盘清仓。
+                        try:
+                            from app.services import t_capacity as _tcap
+                            # 趋势转弱（下跌结构）也允许穿底仓：2026-09-19 深夜补，见 t_capacity 注释
+                            _sw = False
+                            try:
+                                from app.services import wolf_stock_structure as _ssw
+                                _sw = _ssw.is_downtrend(current, self._daily_dated(symbol, 25))
+                            except Exception:
+                                _sw = False
+                            if _tcap.base_penetrate_allowed(trigger_kind, str(cond.get("reason") or ""),
+                                                            struct_weak=_sw):
+                                _pen, _pm = _stop_exit_volume(sellable, _in_close_window(), _floor)
+                                if int(_pen or 0) > max_sell:
+                                    print(f"[TMonitor] 底仓穿透 {symbol} {trigger_kind}: "
+                                          f"{max_sell}→{int(_pen)} 股（{_pm}；"
+                                          f"{'趋势转弱(破MA20且MA10<MA20)' if _sw else '破位/减仓语义'}）", flush=True)
+                                    max_sell = int(_pen)
+                        except Exception as _bpe:
+                            print("[TMonitor] 底仓穿透判定异常(忽略): %s" % str(_bpe)[:80], flush=True)
                         volume = max_sell
                     volume = (volume // 100) * 100
                 # S2 删除(2026-09-10): 原"④破位禁低吸"(现价<=算法波段支撑位 support_l1 → 禁 254/253 低吸)。
                 # 狼大语料无"波段支撑位"概念(他用前低与黄线), 属审计 §5.2 认定的自造机制 → 已删除。
                 # 是否接刀由狼大原口径把关: 254 触前日低+缩量、253 指数急杀, 以及 gateway 硬闸门。
                 exec_ok = False
+                # ── 个股结构门（蓝图:149「下跌不做」；2026-09-19 用户拍板 A）──────────────────
+                #   实测 jan11 0128：SH603019（破 MA5/10/20）−148、SZ002579（破三条均线且给亏损仓加仓）−1,550；
+                #   正T买入腿原先只看形态/价格（低吸价差/量能/regime），不看个股结构 ⇒ 下跌结构里照样接刀。
+                if side == "buy":
+                    try:
+                        from app.services import wolf_stock_structure as _ss
+                        if _ss.enabled():
+                            _ok_ss, _why_ss = _ss.verdict(symbol, current, self._daily_dated(symbol, 25))
+                            if not _ok_ss:
+                                t_db.update_trigger_status(trig_id, "blocked", reason=str(_why_ss)[:250])
+                                print("[TMonitor] 个股结构门拦买腿 %s: %s" % (symbol, str(_why_ss)[:110]), flush=True)
+                                return      # 本腿不执行（_write_trigger 的调用方不取返回值）
+                    except Exception as _sse:
+                        print("[TMonitor] 个股结构门异常(放行) %s: %s" % (symbol, str(_sse)[:70]), flush=True)
+                # ★ HPV 位置闸覆盖「急杀/前低低吸」，放在**两条执行分支之前**（`WOLF_HPV_LOWDIP`，库内默认 0）
+                #   2026-09-25 二次修正（账本 §9.114）：首版打在 `if _no_hold_build:`（253/254 建仓链）内，
+                #   但回测走的是 **gateway 分支**（`_trade_executor is None` ⇒ `_no_hold_build=False`）
+                #   ⇒ 补丁被跳过、601069@20260130 照旧被买入 ✗ ⇒ 现挪到分支之前，两条路都覆盖 ✓
+                try:
+                    import os as _osH2
+                    if side == "buy" and str(trigger_kind) in ("custom_m5dump", "custom_prevlow") \
+                            and str(_osH2.getenv("WOLF_HPV_LOWDIP", "0")).strip() == "1":
+                        from app.services import wolf_high_pos_vol as _hpv3
+                        # 2026-09-25 三次修正（账本 §9.116）：本作用域**没有** `today` ⇒
+                        #   首版用 `today` 直接 NameError ⇒ 被 except 吞掉 ⇒ **fail-open 102 行** ✗
+                        #   改用标准取法（回测里时钟被钉住 ⇒ 拿到的就是模拟当天 ✓，与 line 759 同口径）
+                        _d8h = datetime.now().strftime("%Y%m%d")
+                        if _hpv3.enabled() and _hpv3.applies(self._held_today(symbol)):
+                            _b3, _w3 = _hpv3.verdict(_hpv3.bars_asof(symbol, _d8h, 30),
+                                                     held=self._held_today(symbol))
+                            if _b3:
+                                print("[HPV] 高位放量不买(低吸路径) %s@%s: %s" % (symbol, _d8h, str(_w3)[:90]), flush=True)
+                                t_db.update_trigger_status(trig_id, "blocked", reason="[HPV] " + str(_w3)[:200])
+                                return
+                except Exception as _he3:
+                    # 2026-09-25（账本 §9.117）：**异常不再静默放行** ⇒ 报警落盘 + 可拦（WOLF_GATE_FAIL_CLOSED）
+                    from app.services import gate_alarm as _ga
+                    if _ga.alarm("HPV_低吸路径:%s:%s" % (symbol, trigger_kind), _he3,
+                                 {"symbol": symbol, "kind": str(trigger_kind)}, fail_closed=True):
+                        t_db.update_trigger_status(trig_id, "blocked",
+                                                   reason="[GATE-FAIL-CLOSED] HPV 低吸路径判定异常 ⇒ 拦（待修）")
+                        return
                 # ⑥ 253/254 无底仓建仓 → 走狼大建仓链(而非做T gateway)；注 self._trade_executor 时生效，否则回退 gateway
                 _no_hold_build = (
                     side == "buy"
@@ -2433,6 +4450,24 @@ class TMonitor:
                     and self._trade_executor is not None
                 )
                 if _no_hold_build:
+                    # ★ HPV 位置闸首次覆盖「急杀/前低低吸」（`WOLF_HPV_LOWDIP`，库内默认 0 = 旧行为）
+                    #   2026-09-25 修接线缺口（账本 §9.109）：HPV 判据本就存在、且对 601069@20260130 明确输出
+                    #   「不买」，但它此前只挂在 ~957 的闸门区，`custom_m5dump`/`custom_prevlow` 这条执行路径
+                    #   **没经过它** ⇒ 三个涨停后低开 −8%、上影 91%、量比 2.63 的票被买入 ✗。
+                    try:
+                        import os as _osH
+                        if str(_osH.getenv("WOLF_HPV_LOWDIP", "0")).strip() == "1":
+                            from app.services import wolf_high_pos_vol as _hpv2
+                            if _hpv2.enabled():
+                                _b2, _w2 = _hpv2.verdict(_hpv2.bars_asof(symbol, today, 30),
+                                                         held=self._held_today(symbol))
+                                if _b2:
+                                    print("[HPV] 高位放量不买(低吸路径) %s@%s: %s"
+                                          % (symbol, today, str(_w2)[:90]), flush=True)
+                                    t_db.update_trigger_status(trig_id, "blocked", reason="[HPV] " + str(_w2)[:200])
+                                    return
+                    except Exception as _he2:
+                        print("[HPV] 低吸路径判定异常(放行) %s: %s" % (symbol, str(_he2)[:70]), flush=True)
                     # 2026-09-07 试仓档方向门: 非主线候选(TOP1∪TOP2)标的无底仓不低吸建仓(防乱建)
                     _tier_none = False
                     try:
@@ -2480,6 +4515,14 @@ class TMonitor:
                 elif _g8_stop:
                     t_db.update_trigger_status(trig_id, "blocked", reason="[G8] " + _g8_why)
                     print(f"[TMonitor] G8 上影线停机 {symbol}（{_g8_why}）→ 跳过 {side} {trigger_kind}")
+                    try:    # 2026-09-19：命中即当日静默（狼大「看见出上影线 立马停止做T」= 当日停做 T）
+                        from app.services import t_trigger_mute as _tm2
+                        _tm2.mute(symbol, trigger_kind, "G8 上影线停机: " + str(_g8_why)[:60])
+                    except Exception as _eN21:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line3091", _eN21)
+                        pass
                 elif volume > 0:
                     # 板块级 G3 不做T门(2026-09-07): 持仓所属主题处洗盘收敛期 → 存量T仓不自动T出
                     # (盘前 sector_g3_state.json, 见 apps/main_line/sector_g3.py; env WOLF_NO_T_GATE=1 启用)
@@ -2527,7 +4570,11 @@ class TMonitor:
                                 _q = (snapshot or {}).get("quote") or {}
                                 _sup = float(_q.get("support_l1") or 0)
                                 _vwap = float(_q.get("average") or 0) or float(quote.get("average") or 0)
-                                _ref_up = max(_sup, _vwap)
+                                try:
+                                    _pc = float(_q.get("pre_close") or quote.get("pre_close") or 0)
+                                except Exception:
+                                    _pc = 0.0
+                                _ref_up = pullback_ref_up(_sup, _vwap, _pc)
                                 if _ref_up <= 0:
                                     _ref_up = round(float(current) * 1.005, 4)
                                 _PULLBACK_SELL[symbol] = {"kind": trigger_kind, "trig_id": trig_id,
@@ -2542,16 +4589,32 @@ class TMonitor:
                                 _pb_defer = True
                         except Exception as _pbe:
                             print(f"[TMonitor] pullback defer err: {str(_pbe)[:80]}")
-                    if _g3_block:
+                    # ── 开盘不追高闸·条件单补线（2026-09-23；WOLF_OC_COND_BUY 默认 0）──
+                    # 见文件头 `_oc_cond_buy_block`：条件单路径原先不传 trigger_id ⇒ 网关两台闸门全跳过。
+                    _ocb, _ocwhy = (False, "")
+                    if str(side).lower() in ("buy", "买入"):
+                        _ocb, _ocwhy = _oc_cond_buy_block(current, quote, trigger_kind)
+                    if _ocb:
+                        exec_ok = False
+                        print(f"[TMonitor] 条件单开盘不追高拦截 {symbol} {trigger_kind}: {str(_ocwhy)[:90]}")
+                        t_db.update_trigger_status(trig_id, "blocked",
+                                                   reason="[OC-COND] " + str(_ocwhy)[:200])
+                    elif _g3_block:
                         exec_ok = False
                         print(f"[TMonitor] G3门拦截 {symbol} 卖腿: {_g3_reason}")
                         t_db.update_trigger_status(trig_id, "blocked", reason=_g3_reason + "（G3门）")
                     elif _tsell_defer or _pb_defer:
                         exec_ok = False   # 延迟执行(由 _settle_tsell_pending/_settle_pullback_sell 处理)
                     else:
+                        # 2026-09-26 修：**必须传 `trigger_id`** ✗ —— 本口原先漏传 ⇒
+                        #   网关里靠 trigger_id 的两台闸门（**低吸额度** + **低吸趋势票门**）**全被跳过** ✗
+                        #   实测（T35 一月）：`低吸额度：` 0 行、`低吸趋势票门拦住` 0 行，
+                        #   而低吸仍成交 11 笔、亏 **−6,700** ✗ ⇒ 与"一月仍依赖通富微电"直接相关 ✓
+                        #   （同类教训：HPV 闸曾挂在 `if _no_hold_build:` 分支里 ✗）
                         gw = gateway_execute(symbol, side, current, volume,
                                              reason=f"条件命中自动执行（{trigger_kind}）",
                                              decision_source="ai_led",
+                                             trigger_id=trig_id,
                                              condition_id=cond.get("id"),
                                              account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
                         exec_ok = gw.get("status") == "success"
@@ -2567,12 +4630,107 @@ class TMonitor:
                             trig_id, "executed" if exec_ok else "blocked",
                             reason=f"自动执行 {side} {volume}股 @{current}: {gw.get('status')} | {str(gw.get('reason') or '')[:120]} | level={gw.get('level')}")
                 elif volume <= 0:
+                    # ── ⚠️ 2026-09-30（账本 §9.336 ✓ 用户「跌停了为什么还是没有卖出」✓）──────────
+                    #   **保护/减仓类 ⇒ 穿透底仓止血** ✓（不再被"无T仓可卖"静默 ✗）
+                    #   依据 ✓：语料「**止血动作必须能执行**」；实测代价 ✗：SZ002792 跌停两连
+                    #   （01-14 −10% / 01-15 −10%）期间 量=0 ⇒ **一条卖单都没有** ✗（73.35→46.14 ✓）
+                    _RED_KINDS_B = ("custom_vwap_sell", "custom_support_sell", "custom_level_sell",
+                                    "custom_trail_sell", "wolf_defensive_t_reduce", "wolf_confirm_sell",
+                                    "wolf_boll_upper_sell", "wolf_board_half_sell",
+                                    "wolf_passive_stop_sell", "stop_loss", "wolf_early_swing_sell")
+                    _red_exempt = (side == "sell"
+                                   and str(os.getenv("WOLF_SELL_EXEMPT_REDUCE", "0")).strip().lower()
+                                   in ("1", "true", "yes", "on")
+                                   and str(trigger_kind) in _RED_KINDS_B)
+                    _posv = 0
+                    if _red_exempt:
+                        try:
+                            from app.services.t_gateway import get_sellable_ledger as _gsl2
+                            _posv = int(((_gsl2(account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
+                                          or {}).get(symbol) or {}).get("sellable", 0) or 0)
+                        except Exception:
+                            _posv = 0
+                        # ⚠️ 2026-09-30（账本 §9.342 ✓ 用户「怎么上涨的时候保护性减仓？」✗）——
+                        #   ① **真危难才允许穿透**：浮亏 ✓ 或 真止损/破位类腿 ✓（浮盈时**不得**"止血" ✗）
+                        _TRUE_STOP = ("stop_loss", "wolf_passive_stop_sell",
+                                      "wolf_early_swing_sell", "custom_support_sell")
+                        _cost = 0.0
+                        try:
+                            _cost = float(_p.get("avg_price") or _p.get("cost") or 0) or 0.0
+                        except Exception:
+                            _cost = 0.0
+                        _cur_px = float(current or 0)
+                        _in_loss = bool(_cost > 0 and _cur_px > 0 and _cur_px < _cost)
+                        _is_true_stop = str(trigger_kind) in _TRUE_STOP
+                        if not (_in_loss or _is_true_stop):
+                            print("[TMonitor] 保护/减仓穿透底仓否决 %s：浮盈（现价%.3f >= 成本%.3f）"
+                                  "且腿型 %s 非止损/破位 => 不许止血（他：突破减半剩下的吃溢价）"
+                                  % (symbol, _cur_px, _cost, trigger_kind), flush=True)
+                            _red_exempt = False
+                            _posv = 0
+                        else:
+                            # ② **卖量收敛到"同轮剩余额度"**（持仓一半 − 已减 ✓）⇒ 不再一把清仓 ✗
+                            try:
+                                from app.services import t_gateway as _gwM
+                                from sqlalchemy import text as _thM
+                                from app.database import SessionLocal as _SHM
+                                with _SHM() as _shM:
+                                    _rM = _shM.execute(_thM(
+                                        "SELECT COALESCE(SUM(volume),0) FROM paper_trades "
+                                        "WHERE account_id=:a AND symbol=:s AND direction LIKE '卖%' "
+                                        "AND COALESCE(voided,0)=0 AND trade_date >= ("
+                                        " SELECT MIN(trade_date) FROM paper_trades WHERE account_id=:a "
+                                        " AND symbol=:s AND direction LIKE '买%' AND COALESCE(voided,0)=0)"),
+                                        {"a": cond.get("account_id", T_MONITOR_ACCOUNT), "s": symbol}).fetchone()
+                                    _soldM = int((_rM[0] if _rM else 0) or 0)
+                                _roomM = int(max(_posv // 2 - _soldM, 0) // 100 * 100)
+                                if _roomM < _posv:
+                                    print("[TMonitor] 保护/减仓·穿透底仓**收敛** %s %d→%d 股"
+                                          "（已减 %d／持仓 %d ⇒ 同轮上限一半 ✓）"
+                                          % (symbol, _posv, _roomM, _soldM, _posv), flush=True)
+                                _posv = _roomM
+                            except Exception:
+                                pass
+                    if _red_exempt and _posv > 0:
+                        try:
+                            _gwR = gateway_execute(symbol, "sell", current, _posv,
+                                                   reason="[保护/减仓·穿透底仓止血] " + str(cond.get("reason") or "")[:90],
+                                                   account_id=cond.get("account_id", T_MONITOR_ACCOUNT),
+                                                   trigger_id=trig_id, is_stop_loss=True)
+                            _okR = str((_gwR or {}).get("status") or "") in ("success", "submitted", "filled")
+                            print("[TMonitor] 保护/减仓·穿透底仓止血 %s sell %d股@%.3f: %s｜%s"
+                                  % (symbol, _posv, float(current or 0), (_gwR or {}).get("status"),
+                                     str((_gwR or {}).get("reason") or "")[:60]), flush=True)
+                            t_db.update_trigger_status(
+                                trig_id, "executed" if _okR else "blocked",
+                                reason="保护/减仓·穿透底仓止血 %d股: %s" % (_posv, str((_gwR or {}).get("status"))))
+                            if _okR:
+                                try:
+                                    self._after_sell(symbol, cond.get("account_id", T_MONITOR_ACCOUNT),
+                                                     trigger_kind, str(cond.get("reason") or ""))
+                                except Exception:
+                                    pass
+                            _red_exempt = False     # 已处理 ⇒ 不走下面的静默 ✗
+                        except Exception as _eR:
+                            print("[TMonitor] 穿透底仓止血异常: %s" % str(_eR)[:70], flush=True)
                     # 量推导为 0（卖腿仅剩底仓无T仓可卖 / 无底仓建仓规模不可用）→ 直接标记跳过，
                     # 避免孤儿 pending 事件（降级轮询兜底）；持仓仅100股(底仓)时不再当作"裸空"错误
                     _no_t_shop = (side == "sell")
-                    t_db.update_trigger_status(
-                        trig_id, "blocked",
-                        reason=f"自动执行量推导为 0（{side}，{'仅底仓无T仓可卖，跳过卖出' if _no_t_shop else '无底仓建仓规模不可用'}）")
+                    # ⚠️ 2026-09-30（账本 §9.336 补）：**只有"没走止血"时才标 blocked** ✓
+                    #   否则会把上面刚成功的"穿透底仓止血"**覆盖成 blocked** ✗（审计失真 ✗）
+                    if _red_exempt:
+                        t_db.update_trigger_status(
+                            trig_id, "blocked",
+                            reason=f"自动执行量推导为 0（{side}，{'仅底仓无T仓可卖，跳过卖出' if _no_t_shop else '无底仓建仓规模不可用'}）")
+                    if _no_t_shop and _red_exempt:
+                        try:    # 2026-09-19：无 T 仓可卖 ⇒ 当日该腿静默（实测这一条占 blocked 的 53%）
+                            from app.services import t_trigger_mute as _tm3
+                            _tm3.mute(symbol, trigger_kind, "无T仓可卖（底仓保护）")
+                        except Exception as _eN22:
+                            # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                            from app.services import gate_alarm as _gaNote
+                            _gaNote.note("t_monitor:line3204", _eN22)
+                            pass
                 # 消费式条件自动重建（迭代#56b/57）：本条件已 consumed，该标的仍有
                 # 持仓且无其他 active 条件 → AI 重新评估生成新条件（移动基准）。
                 # 执行后报告 AI = 调 AI 条件生成（含现价），失败回退规则公式。
@@ -2588,7 +4746,10 @@ class TMonitor:
                         fresh_item = (get_sellable_ledger(
                             cond.get("account_id", T_MONITOR_ACCOUNT))
                             .get(symbol) or {})
-                    except Exception:
+                    except Exception as _eN23:
+                        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+                        from app.services import gate_alarm as _gaNote
+                        _gaNote.note("t_monitor:line3221", _eN23)
                         pass
                     pos_volume = int(fresh_item.get("volume") or 0)
                     if not remain and pos_volume > 0:
@@ -2627,12 +4788,15 @@ class TMonitor:
             from app.database import SessionLocal
             db = SessionLocal()
             try:
+                # ⚠️ 2026-09-19：按"当日"比较必须用 **Python 钉钟**（created_at 也由 Python 钟写入）。
+                #   原用 CURRENT_DATE（DB 真钟）⇒ 回放里恒真 ⇒ 连续命中跨日累加（误给 AI"冷却"提示）。
+                _today = datetime.now().strftime("%Y-%m-%d")
                 rows = db.execute(text(
                     "SELECT status FROM t_triggers "
                     "WHERE condition_id = :cid AND symbol = :sym "
-                    "AND created_at::date = CURRENT_DATE "
+                    "AND to_char(created_at, 'YYYY-MM-DD') = :today "
                     "ORDER BY id DESC LIMIT 10"
-                ), {"cid": condition_id, "sym": symbol}).mappings().all()
+                ), {"cid": condition_id, "sym": symbol, "today": _today}).mappings().all()
                 n = 0
                 for r in rows:
                     st = r.get("status")
@@ -2739,13 +4903,31 @@ class TMonitor:
                                 _STOP_HOLD_WARNED.add(_tk_n)
                                 print(f"[TMonitor] ②趋势线提示(不自动卖) {symbol}: {_tv['why']}")
                         if _tv.get("action") in ("exit", "reduce") and _tv.get("line"):
-                            stop_price = float(_tv["line"])
-                            _trend_act = _tv["action"]
-                            _tk_t = (symbol, "trend", datetime.now().strftime('%Y%m%d'))
-                            if _tk_t not in _STOP_HOLD_WARNED:
-                                _STOP_HOLD_WARNED.add(_tk_t)
-                                print(f"[TMonitor] ②趋势线止损({_tv['action']}) {symbol}: {_tv['why']} "
-                                      f"line={stop_price}")
+                            # 2026-09-26 用户「把②趋势线止损/减仓也加进豁免名单」✓（账本 §9.201）：
+                            #   **埋伏仓豁免本规则** ✗ —— 病灶：T35 里埋伏票被它卖了 17 笔 ✓
+                            #   （其中止损 11 笔合计 **−3,246** ✗），而长样本量化显示该形态需 **40~60 日** ✓
+                            #   开关沿用 `WOLF_AMBUSH_SELL_EXEMPT`（库内默认 0 ✓）
+                            _skip_trend = False
+                            if str(os.getenv("WOLF_AMBUSH_SELL_EXEMPT", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                                try:
+                                    if self._is_ambush_position(T_MONITOR_ACCOUNT, symbol):
+                                        if _tk_t not in _STOP_HOLD_WARNED:
+                                            _STOP_HOLD_WARNED.add(_tk_t)
+                                            print(f"[TMonitor] ②趋势线豁免埋伏仓 {symbol}: {_tv['why']}"
+                                                  " （埋伏仓只走 50 交易日 + 宽止损 −20%）", flush=True)
+                                        stop_price = 0.0
+                                        _skip_trend = True      # 2026-09-26：此处**不是循环** ⇒ 用标志位跳过 ✗（原写 continue ⇒ SyntaxError ✗）
+                                except Exception as _eAmbEx:
+                                    print("[TMonitor] ②趋势线豁免查询异常(按不豁免处理): %s"
+                                          % str(_eAmbEx)[:70], flush=True)
+                            if not _skip_trend:
+                                stop_price = float(_tv["line"])
+                                _trend_act = _tv["action"]
+                                _tk_t = (symbol, "trend", datetime.now().strftime('%Y%m%d'))
+                                if _tk_t not in _STOP_HOLD_WARNED:
+                                    _STOP_HOLD_WARNED.add(_tk_t)
+                                    print(f"[TMonitor] ②趋势线止损({_tv['action']}) {symbol}: {_tv['why']} "
+                                          f"line={stop_price}")
             except Exception as _te:
                 print(f"[TMonitor] ②趋势线判定异常(跳过) {symbol}: {str(_te)[:100]}")
             if not stop_price or current > stop_price:
@@ -2799,10 +4981,14 @@ class TMonitor:
             from app.database import SessionLocal
             db = SessionLocal()
             try:
+                # ⚠️ 2026-09-19 修（用户报"买了卖不出去"排查中发现）：原用 CURRENT_DATE（DB 真钟）
+                #   比较 created_at ⇒ 回放里**恒真** ⇒ 某票一旦有过一次 stop_loss 触发，
+                #   **整个回放期间不再止损**（实测 drabjan7 的 SH603660 踩过）。改为 Python 钉钟日。
+                _today = datetime.now().strftime("%Y-%m-%d")
                 done = db.execute(text(
                     "SELECT 1 FROM t_triggers WHERE symbol = :sym AND event_type = 'stop_loss' "
-                    "AND created_at::date = CURRENT_DATE LIMIT 1"
-                ), {"sym": symbol}).scalar()
+                    "AND to_char(created_at, 'YYYY-MM-DD') = :today LIMIT 1"
+                ), {"sym": symbol, "today": _today}).scalar()
             finally:
                 db.close()
             if done:
@@ -2857,6 +5043,36 @@ class TMonitor:
             print(f"[TMonitor] 止损扫描异常 {symbol}: {e}")
 
 
+def fill_premium_pct() -> float:
+    """成交价溢价（%）：`suggest_bid_price = 现价×(1-p/100)`、`suggest_ask_price = 现价×(1+p/100)`。
+
+    **2026-09-20 用户拍板「砍掉」**：这条 0.1% 约定**没有任何语料依据**（代码里字段名自认
+    `slippage_budget`，随 commit 8ae11ed 引入时无引用），而且它**买卖两侧同向**——买侧少付 0.1%（有利）、
+    卖侧少收 0.1%（不利，`t_account.py:311` 取价时**卖单也读 `suggest_bid_price`**）⇒ 往返基本抵消、
+    对盈亏近乎中性，但让**所有成交价系统性比市场低 0.1%**，污染"我们的买点 vs 他的 0.618 位"这类对照。
+    ⇒ 默认仍保持 0.1（**生产零影响**），回测用 `WOLF_FILL_PREMIUM_PCT=0` 关掉它（成交价 = 成交时报价）。
+
+    ⚠️ 不追高闸里那个 `round(_qc*0.999,3)`（`_check_wolf_t_rules` 内）**不是成交价**，而是给闸门的
+    "建议买价"参照（`wolf_no_chase.PREMIUM_PCT` 默认 0 ⇒ 只要 现价>参照 就算"没等到回踩"）；
+    改它会让该闸永远放行 ⇒ 那里保持不变。
+    """
+    try:
+        return max(0.0, float(os.getenv("WOLF_FILL_PREMIUM_PCT", "0.1")))
+    except Exception:
+        return 0.1
+
+
+def fill_prices(current: float, pct: float = None, bid: float = None):
+    """(bid, ask)：给定现价与溢价%，返回建议买价/卖价；`bid` 显式给出时优先（C 口径的挂线价）。"""
+    p = fill_premium_pct() if pct is None else float(pct)
+    try:
+        cur = float(current or 0)
+    except Exception:
+        cur = 0.0
+    _bid = round(float(bid), 3) if bid else round(cur * (1.0 - p / 100.0), 3)
+    return _bid, round(cur * (1.0 + p / 100.0), 3)
+
+
 def _is_wolf_t_condition(cond: Dict[str, Any]) -> bool:
     """只允许狼大做T表达式条件(expression 含 minute.m5.t_sell / t1_shrink_expand); 其他做T条件(V反/探针/默认)不评估。"""
     expr = cond.get("expression")
@@ -2868,6 +5084,11 @@ def _is_wolf_t_condition(cond: Dict[str, Any]) -> bool:
     # WOLF_T_FIELDS字段被_round整轮跳过(155.2/588170黄线都不触发)
     if str(cond.get("trigger_kind") or "") in ("custom_level_sell", "custom_vwap_sell", "custom_trail_sell", "custom_support_sell"):
         return True
+    # 2026-09-21: 趋势/突破腿（trend_break_buy，apps/main_line/trend_channel.py）纳入评估。
+    #   它不含 WOLF_T_FIELDS（表达式是 quote.current/quote.average 的价位条件）⇒ 会被整轮跳过；
+    #   只在通道开关打开时接受，关掉后即便 DB 里还留着旧腿也不会触发（生产零影响）。
+    if str(cond.get("trigger_kind") or "") == "trend_break_buy":
+        return str(os.getenv("WOLF_TREND_CHANNEL", "0")).strip().lower() in ("1", "true", "yes", "on")
     return any(f in s for f in WOLF_T_FIELDS)
 
 
@@ -2959,7 +5180,10 @@ def _t_signals_from_m5(m5):
                         after = closes[hi_idx+1:]
                         sh = float(after.max()) if len(after) else 0
                         t_sell = bool(sh > hi * 0.98 and sh < hi * 1.005)
-    except Exception:
+    except Exception as _eN24:
+        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+        from app.services import gate_alarm as _gaNote
+        _gaNote.note("t_monitor:line3634", _eN24)
         pass
     return t1, t_sell
 
@@ -3050,9 +5274,49 @@ def _fetch_daily_tencent_dated(symbol: str, count: int = 40):
 
 _index_dd_cache = {"at": 0.0, "value": 0.0}
 _m5_dump_cache = {"at": 0.0, "value": 0.0}
+_m5_stock_dump_cache: Dict[str, dict] = {}   # 个股 5min 急杀缓存（按票 ✓）
+_prev_low_px_cache: Dict[str, dict] = {}      # 前一日 5min 最低价缓存（按票 ✓；§9.182）
 # ②量能分层卖(2026-09-08): 缩量破位→反抽减等待状态 + 支撑腿破位禁低吸
 PULLBACK_VOL_RATIO = float(os.getenv("PULLBACK_VOL_RATIO", "1.2"))  # vol_ratio<该值视为缩量
 PULLBACK_END_HM = 1445          # 14:45 后仍未反抽达标 → 尾盘确认离场
+
+
+def pullback_ref_up(sup, vwap, prev_close=0.0) -> float:
+    """「量能分层」等待态的反抽目标位。
+
+    原口径（开关关，**默认**）：`max(支撑 support_l1, 当日均价 VWAP)`。
+    新口径（`WOLF_PULLBACK_REF_UP=1`）：再抬到 `max(支撑, 均价, 前收×(1+WOLF_PULLBACK_REF_UP_PCT%))`，
+      默认 `PCT=0`（即**要求真回到前收**）—— 语义是「缩量破位先不慌，但要真回到前收才卖；当天摸不到就仍按
+      原 14:45 尾盘确认卖出」，不引入隔夜风险、无跨日状态。
+    依据（2026-09-20，五账户实测）：
+      · 该族在 drabj13 是 **17 笔实际 −4,581、+5 日反事实 Δ +7,320（净卖飞）**，量比 0.47–1.39 全为缩量、
+        卖价≈当日收盘；本开关（当日完成）的 Δ = drabj13 +1,075(前收) / +1,386(×1.005)、
+        draby26 +9,336 / +6,511、draymar +8,116 / +4,931、drabq1 +2,940 / +2,724、drabsize +1,074 / +318
+        ⇒ **5/5 账户为正**，受益笔分散（单笔占比 14–33%）。
+      · 对照口径「只延后『反抽到离场位』那一支」**不普适**：drabj13 +2,694 但**单笔占 91%**（去掉最大笔仅 +252），
+        且 **draby26 −3,254、draymar −5,061 反号**（非极值造成）⇒ 故不做那一支，改做本开关。
+      · 目标位敏感性：**前收（PCT=0）在 5 个账户中 4 个优于 ×1.005** ⇒ 取默认 0。
+    `prev_close` 缺失/为 0 ⇒ 退回原口径（fail-safe，行为不变）。
+    """
+    try:
+        r = max(float(sup or 0), float(vwap or 0))
+    except Exception:
+        return 0.0
+    try:
+        if str(os.getenv("WOLF_PULLBACK_REF_UP", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            _pc = float(prev_close or 0)
+            if _pc > 0:
+                try:
+                    _pct = float(os.getenv("WOLF_PULLBACK_REF_UP_PCT", "0"))
+                except Exception:
+                    _pct = 0.0                      # 环境变量写坏 ⇒ 落默认(前收)，而不是放弃抬高
+                r = max(r, _pc * (1.0 + _pct / 100.0))
+    except Exception as _eN25:
+        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+        from app.services import gate_alarm as _gaNote
+        _gaNote.note("t_monitor:line3760", _eN25)
+        pass
+    return round(r, 4)
 _PULLBACK_SELL: Dict[str, dict] = {}   # symbol -> pending(缩量破位待反抽/尾盘确认)
 def _stop_time_ok(now=None):
     """止损**时点约束**（2026-09-10，狼大止损六层之④）→ (ok, reason)。
@@ -3237,6 +5501,12 @@ def get_t_monitor(interval_seconds: int = MONITOR_INTERVAL, trade_executor=None)
 
 
 def start_t_monitor(trade_executor=None) -> bool:
+    """启动 T 监控（**先装全局异常钩子** ✓ —— 用户「统一走QQ推送」✓）。"""
+    try:
+        from app.services import alert_hub as _ah3
+        _ah3.install()
+    except Exception:
+        pass
     monitor = get_t_monitor(trade_executor=trade_executor)
     ok = monitor.start()
     # 桥不可达降级：启动低频轮询兜底线程（消费 pending 事件，执行仍经网关）
@@ -3348,6 +5618,209 @@ def _calc_rsi(closes: List[float], period: int = 6) -> float:
 # 纯函数评估集（now 注入，回测与实时共用；TMonitor 方法为薄转发）
 # ────────────────────────────────────────────────────────────────
 
+def intraday_timing_blocked(symbol: str, is_buy: bool, pre_close: Optional[float] = None) -> bool:
+    """B/C 买入时点闸的**执行口兜底**（2026-09-22 用户拍板 "A+B+C"）。
+
+    B `WOLF_FALLING_GATE`：现价 < 当日 VWAP ∧ 前 3 根 5min 连跌 ⇒ 本次不执行（不在下跌中买）。
+    C `WOLF_WEAK_DEFER`：当日为跌 ∧ 现价 < VWAP 且未到 `WOLF_WEAK_DEFER_HM` ⇒ 延后到尾盘重评。
+    与 `intraday_crush_blocked` 同一族（C2″ 抓"恐慌急杀"，本条抓"缓跌/瀑布"）；取不到分钟档 ⇒ 放行。
+    """
+    if not is_buy:
+        return False
+    try:
+        try:
+            import intraday_crush as _ic
+        except ImportError:
+            from main_line import intraday_crush as _ic
+        if not (_ic.falling_on() or _ic.weak_defer_on()):
+            return False
+        now = datetime.now()
+        ok, why = _ic.timing_verdict(symbol, now.strftime("%Y%m%d"), now.strftime("%H%M"), pre_close=pre_close)
+        if not ok:
+            print("[TMonitor] 买入时点闸拦下买腿 %s：%s" % (symbol, str(why)[:120]), flush=True)
+            return True
+    except Exception as e:
+        print("[TMonitor] 买入时点闸异常(放行) %s: %s" % (symbol, str(e)[:80]))
+    return False
+
+
+def ambush_warn_active() -> bool:
+    """**指数层预警**（账本 §9.205）—— 是否应把埋伏腿降到防御档 ✓。
+
+    语料（逐字 ✓）：「**趁机在周2前减仓**」（2026-03-02）✓｜「明天有冲高**减到 70%**」（2026-03-05）✓
+                「**等指数企稳**了 我打回国算链」（2026-03-20）✓
+    量化（21 个月 ✓，**样本外分段验证 ✓**）：
+      · 无预警 ⇒ +58.58%／**回撤 −21.6%** ✗
+      · **W1(<MA20) + W3(3 日跌占比≥65%) ⇒ 防御档 5 只** ⇒ **+75.93%／回撤 −7.5%** ✓✓
+      · 分段：动荡段（2026）**+35.12%／−7.9%** vs 现状 **+17.96%／−19.0%** ✓✓
+    开关：`WOLF_AMBUSH_WARN_MA`（默认 0 = 关 ✓；>0 ⇒ 指数收盘 < 其 MA_n 视为预警 ✓）
+          ⚠️ **注意（账本 §9.206）**：量化里的 **W3（近 3 日全市场跌占比 ≥65%）在运行时取不到**
+             （需要全市场数据 ✗）⇒ **实际落地的是 W1 单条件（指数收盘 < 日线 MA_n）** ✓
+             而 W1-only 的量化是 **+66.40%／回撤 −8.6%** ✓（略逊于 W1+W3 的 +75.93%／−7.5% ✓ 但仍远好于现状 ✗）
+             `WOLF_AMBUSH_WARN_BREADTH` **仅为占位** ✓（当前不参与判定 ✗，待用可得数据实现后再启用 ✓）
+    指数取 `sh000001`（回测 as-of 层提供 ✓）；取不到 ⇒ **不预警**（fail-open ✓，与量化基线一致 ✓）
+    """
+    try:
+        _ma = int(float(os.getenv("WOLF_AMBUSH_WARN_MA", "0") or 0))
+        _bw = float(os.getenv("WOLF_AMBUSH_WARN_BREADTH", "0") or 0)
+        _dd0 = float(os.getenv("WOLF_AMBUSH_WARN_DAY_DROP", "0") or 0)
+    except Exception:
+        return False
+    if _ma <= 0 and _bw <= 0 and _dd0 <= 0:
+        return False
+    _key = (datetime.now().strftime("%Y%m%d"), _ma, _bw, _dd0)
+    if _AMBUSH_WARN_CACHE.get("key") == _key:
+        return bool(_AMBUSH_WARN_CACHE.get("val"))
+    val = False
+    try:
+        if _ma > 0:
+            # ⚠️ 2026-09-26 修（账本 §9.206）：原先拿 **5min 收盘**直接算均值 ✗
+            #   ⇒ 那其实是"最近 _ma 根 5min"（≈ 100 分钟 ✗），**不是**量化里的**日线 MA20** ✗
+            #   正确做法：把 5min 序列**按交易日聚合出日收盘** ✓，再算日线均线 ✓
+            # 2026-09-26 修（账本 §9.210）：**必须用监控同源**（`DATA_DIR/recent_sync/<code6>.json` ✓）
+            #   病灶：先前用 `fetch_minute_bars("sh000001")` ✗ ⇒ **臂里取不到** ⇒ 静默不预警 ✗
+            #   （而监控自己的 `_daily_dated` 正是读 `recent_sync` ✓ ⇒ 同源即同可用 ✓）
+            import json as _js
+            _D = os.environ.get("DATA_DIR", "/app/data")
+            _pj = os.path.join(_D, "recent_sync", "000001.json")
+            cl = []
+            if os.path.exists(_pj):
+                with open(_pj, encoding="utf-8") as _f:
+                    _dd = _js.load(_f)
+                _days = sorted(str(k) for k in (_dd or {}).keys())
+                for _k in _days:
+                    _bs = _dd.get(_k) or _dd.get(str(_k)) or []
+                    if isinstance(_bs, list) and _bs:
+                        _c = _bs[-1].get("close")
+                        if _c:
+                            cl.append(float(_c))
+                print("[TMonitor] 埋伏预警取数：recent_sync/000001.json ⇒ %d 个交易日 ✓" % len(cl), flush=True)
+            # 2026-09-26 修（账本 §9.211）：`recent_sync` 的 index 文件是**逐日累积**的
+            #   （0105 有 1 天、0106 有 2 天 ✓）⇒ 前期**不够算 MA10** ✗ ⇒ 必须**合并分钟库** ✓
+            #   否则预警要跑到第 11 天才生效 ✗（实测：day2 只取到 1 个交易日 ⇒ fail-open ✗）
+            if len(cl) < _ma + 1:
+                try:
+                    from app.services.t_data_sources import fetch_minute_bars
+                    _bars2 = fetch_minute_bars("sh000001", freq="m5", count=max(400, (_ma + 5) * 60)) or []
+                    _by2: Dict[str, float] = {}
+                    for _b in _bars2:
+                        _t2 = str(_b.get("time") or _b.get("trade_time") or "")
+                        _d82 = _t2[:10].replace("-", "")
+                        _c2 = _b.get("close")
+                        if _d82 and _c2:
+                            _by2[_d82] = float(_c2)          # 升序遍历 ⇒ 末值即当日收盘 ✓
+                    _merge = dict(_by2)
+                    if os.path.exists(_pj):
+                        with open(_pj, encoding="utf-8") as _f2:
+                            _dd2 = _js.load(_f2)
+                        for _k2 in (_dd2 or {}):
+                            _bs2 = _dd2.get(_k2) or []
+                            if isinstance(_bs2, list) and _bs2 and _bs2[-1].get("close"):
+                                _merge[str(_k2)] = float(_bs2[-1]["close"])
+                    cl = [_merge[k] for k in sorted(_merge)]
+                    print("[TMonitor] 埋伏预警取数：recent_sync %d 天 ∪ 分钟库 %d 天 ⇒ 合并 %d 个交易日 ✓"
+                          % (len(cl), len(_by2), len(cl)), flush=True)
+                except Exception as _eM:
+                    print("[TMonitor] 埋伏预警取数：分钟库合并不成 ⇒ %s" % str(_eM)[:70], flush=True)
+            if len(cl) >= _ma + 1:
+                _m = sum(cl[-_ma:]) / _ma
+                val = cl[-1] < _m
+                _why = ("指数 %.2f < MA%d %.2f" % (cl[-1], _ma, _m)) if val else \
+                       ("指数 %.2f ≥ MA%d %.2f" % (cl[-1], _ma, _m))   # 2026-09-26 修：正常时不能也写"指数<MA" ✗
+                # ② **当日急跌**（`WOLF_AMBUSH_WARN_DAY_DROP`，默认 0 = 关 ✓）——
+                #    量化里的 W3b ✓ 且**只用指数自身** ⇒ **运行时可得** ✓（账本 §9.208）
+                #    组合 `指数<MA10 ∨ 当日跌幅≥1.5%`：全样本 **+84.65%／回撤 −8.8%** ✓
+                #      分割：2025 **+30.45%／−6.5%** ✓｜2026 **+43.60%／−10.3%** ✓✓（均优于单用 MA10 ✓）
+                try:
+                    _dd = float(os.getenv("WOLF_AMBUSH_WARN_DAY_DROP", "0") or 0)
+                except Exception:
+                    _dd = 0.0
+                if _dd > 0 and len(cl) >= 2 and cl[-2] > 0:
+                    _ret = (cl[-1] / cl[-2] - 1) * 100
+                    if _ret <= -_dd:
+                        val = True
+                        _why += " ∨ 当日 %+.2f%%" % _ret
+                print("[TMonitor] 埋伏预警判定：指数收盘 %.2f vs MA%d %.2f（%d 个交易日 ✓）⇒ %s（%s）"
+                      % (cl[-1], _ma, _m, len(cl), "预警 ✓" if val else "正常", _why), flush=True)
+            else:
+                print("[TMonitor] 埋伏预警判定：日线不足（%d < MA%d+1）⇒ **不预警**（fail-open）"
+                      % (len(cl), _ma), flush=True)
+    except Exception as _eW:
+        print("[TMonitor] 埋伏预警(指数)取数异常 ⇒ 不预警: %s" % str(_eW)[:70], flush=True)
+    _AMBUSH_WARN_CACHE["key"] = _key
+    _AMBUSH_WARN_CACHE["val"] = val
+    if val:
+        print("[TMonitor] ⚠️ 埋伏预警生效（指数层）⇒ 埋伏腿降防御档 ✓", flush=True)
+    return val
+
+
+_AMBUSH_WARN_CACHE: Dict[str, Any] = {}
+
+
+def intraday_crush_blocked(symbol: str, is_buy: bool, kind: str = "") -> bool:
+    """盘中「急杀分」判据（2026-09-21 C2′+C2″）：买腿**触发那一刻**的形态检查。
+
+    · C2″ 极端门：放量(量比≥1.5) ∧ 跌破前一日低点 ∧ 跌破当日 VWAP ⇒ 拦
+    · C2′ 同日准入：当日触发数 ≥ K 后，只放行急杀分 ≥ 当日已触发中位数的
+    为什么放在触发时：253/254 腿是 08:18 **开盘前**布的，只有那一刻才有分钟级信息。
+    语料方向：2025-06-05「**急杀可以买，缓跌不买**」。开关 `WOLF_CRUSH_GATE`（默认 0）；取不到分钟档 ⇒ 放行。
+    """
+    # 2026-09-26 用户「都按你说的来」✓：**埋伏腿豁免本门**（`WOLF_AMBUSH_SKIP_SLOWDECLINE`，库内默认 0 ✓）
+    #   为什么必须豁免：埋伏的触发本身就是「**温和回踩到位**」⇒ 天然常被判为"缓跌" ✗
+    #   （实测 SH603078：`blocked 缓跌且未命中任何买点：现价 26.540 < 均价 26.708` ✗）
+    #   而量化（§9.182）用的正是「**回踩前低**」（含缓跌 ✓）且为**正**：+6.29%／为正 63% ✓
+    if (str(kind or "") == "wolf_ambush_buy"
+            and str(os.getenv("WOLF_AMBUSH_SKIP_SLOWDECLINE", "0")).strip().lower() in ("1", "true", "yes", "on")):
+        return False
+    if not is_buy:
+        return False
+    try:
+        try:
+            import intraday_crush as _ic
+        except ImportError:
+            from main_line import intraday_crush as _ic
+        if not _ic.enabled():
+            return False
+        now = datetime.now()
+        ok, why, sc = _ic.check(symbol, now.strftime("%Y%m%d"), now.strftime("%H:%M"),
+                                account=(os.getenv("T_MONITOR_ACCOUNT") or ""))
+        if not ok:
+            print("[TMonitor] 盘中午判据拦下买腿 %s：%s（急杀分 %.2f）" % (symbol, why, sc), flush=True)
+            return True
+    except Exception as _eN26:
+        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+        from app.services import gate_alarm as _gaNote
+        _gaNote.note("t_monitor:line4107", _eN26)
+        pass
+    return False
+
+
+def ticket_ban_blocked(symbol: str, is_buy: bool) -> bool:
+    """G3「卖出后删票」买入侧拦截（语料 2025-02-06「卖出然后删票」/ 2025-04-03「破之前新低的直接删票」）。
+
+    2026-09-21 用户："怎么还有天津普林和博敏电子" —— 实测发现：`t_triggers` 有**两条写入路径**
+      （① `_write_trigger` 条件腿 ② `_insert_wolf_trigger` 做T规则腿），我第一版只堵了 ①，
+      而这两只票的复发买入走的是 ② `wolf_zheng_t_buy`。⇒ 收敛成一个 helper，两处都调。
+    开关 `WOLF_TICKET_BAN_FIX`（库内默认 0 ⇒ 生产零影响）；失败 fail-open。
+    """
+    if not is_buy:
+        return False
+    try:
+        try:
+            import ban_filter as _bf
+        except ImportError:
+            from main_line import ban_filter as _bf
+        if _bf.enabled() and _bf.is_banned(symbol):
+            print("[TMonitor] G3 删票名单命中，跳过买腿 %s（账户=%s）" % (symbol, _bf.current_account()), flush=True)
+            return True
+    except Exception as _eN27:
+        # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
+        from app.services import gate_alarm as _gaNote
+        _gaNote.note("t_monitor:line4130", _eN27)
+        pass
+    return False
+
+
 def _is_buy_side(cond: Dict[str, Any]) -> bool:
     """条件执行方向（迭代#58）：direction 显式优先；缺省按 trigger_kind 默认。
 
@@ -3381,6 +5854,33 @@ def evaluate_condition_at(cond: Dict[str, Any], quote: dict, regime_state: dict,
     return evaluate_default_at(cond, quote, regime_state, snapshot, now)
 
 
+def _prev_daily_rows(sym, n=5):
+    """最近 n 个交易日的 {close, high, low, vol}（读 data/recent_sync 或 stock_5m_bt）✓ 模块级。
+
+    从 `TMonitor._prev_daily` 提取（2026-09-25，账本 §9.125）：模块级闸门不能访问 `self` ✗。
+    """
+    import os as _os, json as _j
+    D = _os.environ.get('DATA_DIR', '/app/data')
+    code6 = ''.join(ch for ch in str(sym) if ch.isdigit())[:6]
+    data = {}
+    for root in ['stock_5m_bt', 'recent_sync']:
+        p = _os.path.join(D, root, code6 + '.json')
+        try:
+            d = _j.load(open(p, encoding='utf-8'))
+        except Exception:
+            continue
+        for k, v in d.items():
+            bs = sorted(v, key=lambda x: str(x.get('time') or x.get('trade_time')))
+            if bs:
+                data.setdefault(k, {'close': float(bs[-1]['close']),
+                                    'high': max(float(b['high']) for b in bs),
+                                    'low': min(float(b['low']) for b in bs),
+                                    'vol': sum(float(b.get('vol') or 0) for b in bs)})
+    today = datetime.now().strftime('%Y%m%d')
+    days = sorted(k for k in data if k < today and data[k].get('vol'))
+    return [data[k] for k in days[-n:]]
+
+
 def pass_common_gates(cond: Dict[str, Any], regime_state: dict, now: datetime) -> bool:
     """表达式通过后的通用护栏：regime GATE + 语境(253) + 时段 + 状态机（纯函数）。"""
     trigger_kind = cond.get("trigger_kind", "low_buy")
@@ -3399,7 +5899,7 @@ def pass_common_gates(cond: Dict[str, Any], regime_state: dict, now: datetime) -
                 _wc.path.insert(0, _p)
             from wolf_context import m5dump_allowed
             _ok, _why = m5dump_allowed(symbol=cond.get("symbol"),
-                                       prev_days=self._prev_daily(cond.get("symbol"), 6))
+                                       prev_days=_prev_daily_rows(cond.get("symbol"), 6))
             if not _ok:
                 print(f"[TMonitor] 253语境闸门拦截 {cond.get('symbol')}: {_why}", flush=True)
                 return False
