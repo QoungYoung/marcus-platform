@@ -2595,7 +2595,21 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                               % (symbol, _kw, int(volume or 0), _half, _pos), flush=True)
                         volume = _half
                 # ② **同轮累计 ≤ 50%**（他：「突破减半 **剩下的吃溢价**」✓ ⇒ 不允许再啃 ✗）
-                if not any(x in _rw for x in ("清仓", "加速结束", "避险", "止损", "破位")):
+                # ⚠️ 2026-09-30（账本 §9.367 ✓ 用户「豁免」✓）：**按腿型豁免** ✓
+                #   原豁免只认 reason 关键词 ✗ ⇒ `high_sell`（理由写"高抛卖腿" ✗）不豁免
+                #   ⇒ **跌停日的止损腿被"吃溢价"逻辑拦住** ✗（SZ002792 01-14 实证 ✓）
+                #   他的口径 ✓：「破位收盘确认才走」／「止损只在指数大级别破位」
+                #   ⇒ 个股跌停＝破位 ⇒ 该走 ⇒ 这里按**腿型**放行 ✓
+                _CAP_EXEMPT_KINDS = ("custom_vwap_sell", "custom_support_sell", "custom_level_sell",
+                                     "custom_trail_sell", "wolf_defensive_t_reduce", "wolf_confirm_sell",
+                                     "wolf_boll_upper_sell", "wolf_board_half_sell",
+                                     "wolf_passive_stop_sell", "stop_loss", "wolf_early_swing_sell",
+                                     "high_sell")
+                _cap_exempt_kind = (str(os.getenv("WOLF_SELL_EXEMPT_REDUCE", "0")).strip().lower()
+                                    in ("1", "true", "yes", "on")
+                                    and str(_kw) in _CAP_EXEMPT_KINDS)
+                if (not _cap_exempt_kind) and not any(
+                        x in _rw for x in ("清仓", "加速结束", "避险", "止损", "破位")):
                     _sold = 0
                     try:
                         with _SH2() as _sh3:

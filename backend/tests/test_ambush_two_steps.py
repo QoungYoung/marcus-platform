@@ -311,7 +311,7 @@ def test_ambush_size_dedupe_and_sell_exempt():
     for k, v in (("WOLF_AMBUSH_SIZE_PCT", "'4'"),
                  ("WOLF_AMBUSH_SELL_EXEMPT", "'1'"), ("WOLF_ADJ_MINS_AUTO", "'1'"),
                  # 账本 9.348：本闸**纯自设** ✗ ⇒ 用户「先放开 23 试试」✓ ⇒ 改回默认 0
-                 ("WOLF_AMBUSH_ONE_PER_DAY", "'0'")):
+                 ("WOLF_AMBUSH_ONE_PER_DAY", "'1'")):
         assert ("export %s=%s" % (k, v)) in pins, k
     days = open(os.path.join(_ROOT, "jobs", "bt_days.py"), encoding="utf-8").read()
     assert 'os.getenv("WOLF_ADJ_MINS_AUTO", "0")' in days and "mk_adj_mins.py" in days

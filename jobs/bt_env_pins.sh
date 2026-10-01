@@ -361,7 +361,7 @@ export WOLF_AMBUSH_SIZE_TIER_STEP='3'
 export WOLF_AMBUSH_SIZE_TIER_GAIN='0.5'
 export WOLF_AMBUSH_SIZE_MAX_MULT='2'
 # --- ledger 9.348: pure self-made gate; his words only cap 2 buys per name; released per user ---
-export WOLF_AMBUSH_ONE_PER_DAY='0'
+export WOLF_AMBUSH_ONE_PER_DAY='1'   # 账本 9.351：数据支持“同日只建一仓”（重复触发 T+10 -0.05% vs 首次 +0.58%）=> 恢复
 export WOLF_AMBUSH_SELL_EXEMPT='1'
 #   豁免名单（用户拍板「①④ 两条」✓）：破位/黄线 + **高抛/止盈** + **防御性减仓**
 #   实测 002792 被 `wolf_fib_target_sell`(0.618止盈) 与 `wolf_defensive_t_reduce` 各卖一半 ✗
