@@ -770,3 +770,10 @@ export WOLF_VOL_RATIO_FILL='1'
 
 # --- 账本 §9.370：wake 两段拆分计时（纯观测 ✓，回测专用 ✓）---
 export WOLF_AGENT_SPLIT_TIMING='1'
+
+# --- 账本 §9.372：抓一次发给桥的载荷（纯观测 ✓）---
+export WOLF_AGENT_CAPTURE='1'
+export WOLF_AGENT_CAPTURE_N='2'
+
+# --- 账本 §9.375：并行取回复（只并行“等生成”那一段 ✓；行为不变 ✓）---
+export WOLF_AGENT_PARALLEL='0'   # 实测：每根 bar 只 ~1 条待判 ⇒ 并行无对象 ✗（§9.376）

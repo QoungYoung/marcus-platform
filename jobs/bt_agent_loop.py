@@ -93,6 +93,70 @@ def install_split_timing() -> None:
 
 install_split_timing()   # 导入即装（env 关则零动作 ✓）
 
+_CAP_STATE = {"n": 0, "limit": None}
+
+
+def _ensure_capture() -> None:
+    """每根 bar 调一次 ✓：若当前 `urlopen` 不是我们的壳就重装 ✓（防被 as-of 层顶掉 ✗）"""
+    import os as _os
+    if str(_os.getenv("WOLF_AGENT_CAPTURE", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    import urllib.request as _u
+    if getattr(_u.urlopen, "_wolf_capture", False):
+        return
+    if _CAP_STATE["limit"] is None:
+        _CAP_STATE["limit"] = int(_os.getenv("WOLF_AGENT_CAPTURE_N", "2") or 2)
+    _install_capture_once()
+
+
+def install_agent_capture() -> None:
+    """env WOLF_AGENT_CAPTURE=1 时启用：把发给桥的 /chat 载荷 dump 成 JSONL（默认关 ✓）"""
+    import os as _os
+    if str(_os.getenv("WOLF_AGENT_CAPTURE", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    _CAP_STATE["limit"] = int(_os.getenv("WOLF_AGENT_CAPTURE_N", "2") or 2)
+    _install_capture_once()
+
+
+def _install_capture_once() -> None:
+    import os as _os
+    import json as _j
+    import time as _t
+    import urllib.request as _u
+    path = str(_os.getenv("WOLF_AGENT_CAPTURE_PATH")
+               or "/home/fengx/marcus-platform/.dsh-tmp/wolfbt/agent_msg_dump.jsonl")
+    limit = _CAP_STATE["limit"] or 2
+    state = _CAP_STATE
+    _orig = _u.urlopen
+
+    def _inner(req, *a, **kw):
+        try:
+            url = getattr(req, "full_url", None) or str(req)
+            data = getattr(req, "data", None)
+            if "/chat" in str(url) and data and state["n"] < limit:
+                state["n"] += 1
+                t0 = _t.perf_counter()
+                try:
+                    body = json.loads(bytes(data).decode("utf-8", "replace"))
+                except Exception:
+                    body = {"_raw": str(data)[:200]}
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(_j.dumps({"n": state["n"], "at": _t.strftime("%H:%M:%S"),
+                                       "url": url, "body": body}, ensure_ascii=False) + "\n")
+                print("[bt-agent] 已抓包 #%d（%d 字 ✓）⇒ %s" % (state["n"], len(str(body)), path), flush=True)
+                fh = None
+                t0 = t0
+        except Exception:
+            pass
+        return _orig(req, *a, **kw)
+
+    _inner._wolf_capture = True
+    _u.urlopen = _inner
+    print("[bt-agent] 已启用抓包（/chat 载荷 dump ⇒ %s ✓，最多 %d 条 ✓）" % (path, limit), flush=True)
+
+
+install_agent_capture()   # 导入即装（env 关则零动作 ✓）
+
 
 def real_epoch_now() -> float:
     """**真实**墙上时钟 epoch（秒）。`bt_prod_run` 把 `time.time()` 钉到模拟时刻，故不能用它。"""
@@ -250,16 +314,123 @@ class BtAgentLoop:
         self.stats["skipped_other_account"] += 1
         print("[bt-agent] ⏭ 跳过非本账户触发 #%s（%s）→ 已回写 pending" % (trigger_id, why))
 
+    def _decide_one(self, trig, t_bridge, _t9, _T):
+        """单条触发的判定与记账（串行/并行**共用** ✓ —— 逐字等同原逻辑 ✓）"""
+        tid = int(trig.get("id") or 0)
+        self.stats["claim"] += 1
+        self.stats["claimed_ids"].append(tid)
+        if self.guard is not None:
+            self.guard.set_trigger(trig)
+        try:
+            _p2 = _t9.perf_counter()
+            result = t_bridge.wake_and_decide(trig) or {}
+            _T["wake"] += _t9.perf_counter() - _p2
+        except Exception as e:
+            self.stats["error"] += 1
+            print("[bt-agent] wake_and_decide 异常 #%s: %s → 走降级" % (tid, str(e)[:160]))
+            result = {"status": "wake_failed", "reason": "wake 异常: %s" % str(e)[:120]}
+        finally:
+            if self.guard is not None:
+                self.guard.clear()
+        if result.get("status") != "wake_failed":
+            action = str(result.get("action") or "")
+            key = action if action in ("exec", "wait", "abandon", "update_condition") else "other"
+            self.stats[key] += 1
+            self.stats["by_action"][action or "-"] = self.stats["by_action"].get(action or "-", 0) + 1
+            st = str(result.get("status") or "-")
+            self.stats["by_status"][st] = self.stats["by_status"].get(st, 0) + 1
+            if result.get("fallback"):
+                self.stats["rule_fallback"] += 1
+            if self.verbose:
+                print("[bt-agent] AI 决策完成 #%s %s → %s/%s %s"
+                      % (tid, trig.get("symbol"), st, action,
+                         str(result.get("reason") or "")[:60]))
+        else:
+            self.stats["wake_failed"] += 1
+            self.stats["wake_failed_ids"].append(tid)
+            fallback = t_bridge.agent_review_and_execute(trig) or {}
+            st = str(fallback.get("status") or "-")
+            self.stats["by_status"][st] = self.stats["by_status"].get(st, 0) + 1
+            if self.verbose:
+                print("[bt-agent] 唤醒失败 #%s %s → 降级标记 %s"
+                      % (tid, trig.get("symbol"), st))
+
+    def _claim_batch(self, k: int, t_bridge, _t9, _T) -> list:
+        """按串行同款口径**先认领一批** ✓（账户不符照旧回写 pending ✓）"""
+        batch = []
+        n = 0
+        while len(batch) < k:
+            if self.max_per_poll and n >= self.max_per_poll:
+                print("[bt-agent] ⚠️ 本轮已达 max_per_poll=%d，剩余 pending 留到下一根 bar"
+                      % self.max_per_poll)
+                break
+            if self.max_total and self.stats["claim"] + len(batch) >= self.max_total:
+                print("[bt-agent] ⚠️ 已达 max_total=%d，停止认领（当日预算）" % self.max_total)
+                break
+            _p1 = _t9.perf_counter()
+            trig = self._claim_pending()
+            _T["claim"] += _t9.perf_counter() - _p1
+            if not trig:
+                break
+            if str(trig.get("account_id")) != self.account:
+                self._restore_pending(trig.get("id"), "account_id=%s" % trig.get("account_id"))
+                n += 1
+                continue
+            n += 1
+            batch.append(trig)
+        return batch
+
     # ── 一根 bar 调一次：把可认领的 pending 消费干净 ──
     def poll(self) -> Dict[str, Any]:
         import app.services.t_bridge as t_bridge
         before = json.loads(json.dumps(self.stats, ensure_ascii=False, default=str))
         self.stats["poll_calls"] += 1
+        try:
+            _ensure_capture()            # 账本 §9.372：每根 bar 自愈式保活抓包壳 ✓
+        except Exception:
+            pass
         # ⚠️ 2026-09-30（账本 §9.369）：**三段真实计时**（perf_counter ✓ 不受钉时钟影响 ✓）
         import time as _t9
         _T = self.stats.setdefault("_t", {"claim": 0.0, "wake": 0.0, "loop": 0.0})
         _p0 = _t9.perf_counter()
         _c0, _w0 = _T["claim"], _T["wake"]
+        _par = 0
+        try:
+            _par = int(os.getenv("WOLF_AGENT_PARALLEL", "0") or 0)
+        except Exception:
+            _par = 0
+        if _par >= 2:
+            # 账本 §9.375：**只并行"等生成"** ✓ —— 认领/执行/顺序与原逻辑一致 ✓
+            from concurrent.futures import ThreadPoolExecutor
+            _batch = self._claim_batch(_par, t_bridge, _t9, _T)
+            if _batch:
+                _cache = {}
+                _pw = _t9.perf_counter()
+                try:
+                    with ThreadPoolExecutor(max_workers=_par) as _ex:
+                        _futs = {_ex.submit(t_bridge.wake_agent, _t): _t for _t in _batch}
+                        for _f, _t in _futs.items():
+                            try:
+                                _cache[int(_t.get("id") or 0)] = _f.result()
+                            except Exception as _e:
+                                _cache[int(_t.get("id") or 0)] = None
+                                print("[bt-agent] 并行取回复失败 #%s: %s"
+                                      % (_t.get("id"), str(_e)[:120]))
+                finally:
+                    _T["wake"] += _t9.perf_counter() - _pw
+                _orig_wake = t_bridge.wake_agent
+
+                def _cached_wake(trigger, context=None, **kw):
+                    return _cache.pop(int(trigger.get("id") or 0), None) or _orig_wake(trigger, context=context)
+
+                t_bridge.wake_agent = _cached_wake
+                try:
+                    for _t in _batch:
+                        self._decide_one(_t, t_bridge, _t9, _T)
+                finally:
+                    t_bridge.wake_agent = _orig_wake
+                print("[bt-agent] ⚡ 并行取回复：一次并行 %d 条 ✓（并发 %d 路 ✓）"
+                      % (len(_batch), _par), flush=True)
         n = 0
         while True:
             if self.max_per_poll and n >= self.max_per_poll:
