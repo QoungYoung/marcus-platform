@@ -783,3 +783,6 @@ export WOLF_TRIGGER_PRICE_FILL='1'
 
 # --- 账本 §9.382：as-of 块精简（K线 12→6＋当日首根、持仓只详列本标的 ✓；默认关 ⇒ 生产不变 ✓）---
 export WOLF_ASOF_TRIM='1'
+
+# --- 账本 §9.388：允许「有风险(defense)」档新开仓（他 2026-01-17「有风险就30%」✓；默认关 ⇒ 生产不变 ✓）---
+export WOLF_L2_DEFENSE_ALLOW='1'

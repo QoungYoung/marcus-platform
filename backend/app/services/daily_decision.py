@@ -33,6 +33,18 @@ LAYERS = ["L1_direction", "L2_operation", "L3_position", "L4_picks", "L5_entry",
 
 # L2 档位 → 是否允许**新开仓**（与 wolf_discipline.tier_targets 的档位口径一致）
 BUY_ALLOWED_OPS = ("build", "t_only", "side")
+# ⚠️ 2026-09-30（账本 §9.388 ✓ 用户「修改闸门」✓）：
+#   他 2026-01-17 原话「主升75%以上…调整50% **有风险30%** **下跌就不做**」✓
+#   ⇒ 「有风险(defense)」应当**可以开到 30%** ✓，只有「下跌(exit)」才是"就不做" ✓
+#   而原先 `defense` 被排除在 BUY_ALLOWED_OPS 之外 ✗ ⇒ 与我们自己的分档表
+#   `{"有风险": 30}`（position_tier.total_cap_pct ✓）**自相矛盾** ✗
+#   开关 ✓：`WOLF_L2_DEFENSE_ALLOW`（库内默认 0 ＝ 关 ⇒ 生产逐字不变 ✓）
+def _buy_allowed_ops():
+    import os as _os
+    ops = tuple(BUY_ALLOWED_OPS)
+    if str(_os.getenv("WOLF_L2_DEFENSE_ALLOW", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        ops = ops + ("defense",)
+    return ops
 
 
 def enabled() -> bool:
@@ -145,6 +157,10 @@ def _prev_trade_day(d8: str) -> Optional[str]:
     return v
 
 
+WAVE_LIVE_FIRST = str(os.getenv("WOLF_WAVE_LIVE_FIRST",
+                                 "1" if os.getenv("BT_ASOF_FETCH") else "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _load_wave(d8: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """读波浪状态 + 来源元信息（**这是 2026-09-16 修的新鲜度缺陷的落点**）。
 
@@ -156,6 +172,31 @@ def _load_wave(d8: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
 
     读序：带日期的（两种命名都试）→ 无日期的最新文件；后者用内部 `date` 算 as_of/stale_days。
     """
+    # 2026-09-19（用户拍板 A）：**live 优先**。带日期的 wave_state_*.json 按本函数 docstring 是
+    #   "历史回填产物"，实测它与同日 live 文件冲突：wave_state_2025-12-31.json op=**exit** vs
+    #   wave_state.json op=build ⇒ 决策门读到 exit ⇒ 当日 entry_allowed=False ⇒ **整日新开仓全封**
+    #   （data/_bt_jan2 实测 0105、0115 两天）。开关 WOLF_WAVE_LIVE_FIRST：库内默认关、回测默认开。
+    if WAVE_LIVE_FIRST:
+        w0 = _read_json("wave_state.json", d8)
+        if isinstance(w0, dict) and w0:
+            p0 = os.path.join(data_dir(), "wave_state.json")
+            as_of0 = _norm_date8(w0.get("date") or w0.get("as_of"))
+            # 冲突留痕：同日 dated 回填文件与 live 的 operation 不一致时打一行
+            try:
+                for _n in ("wave_state_%s.json" % d8,
+                           "wave_state_%s-%s-%s.json" % (d8[:4], d8[4:6], d8[6:8])):
+                    _wd = _read_json(_n, d8)
+                    if isinstance(_wd, dict) and _wd:
+                        _o1, _o2 = w0.get("operation"), _wd.get("operation")
+                        if _o1 and _o2 and str(_o1) != str(_o2):
+                            print("[daily_decision] 浪型来源冲突：live(%s)=%s vs 回填(%s)=%s → 按 live"
+                                  % ("wave_state.json", _o1, _n, _o2), flush=True)
+                        break
+            except Exception:
+                pass
+            return w0, {"path": p0, "file": "wave_state.json", "present": True, "kind": "live_first",
+                        "mtime": int(os.path.getmtime(p0)) if os.path.isfile(p0) else None,
+                        "as_of": as_of0, "stale_days": None}
     for name in ("wave_state_{d}.json", "wave_state_{dash}.json"):
         w = _read_json(name, d8)
         if isinstance(w, dict) and w:
@@ -206,7 +247,7 @@ def _l2(wave: Optional[Dict[str, Any]], src: Optional[Dict[str, Any]] = None) ->
     sub = wave.get("sub_level")
     src = src or {}
     val: Dict[str, Any] = {"operation": op, "level": lvl, "sub_level": sub,
-                           "allow_new_position": (str(op) in BUY_ALLOWED_OPS) if op else None}
+                           "allow_new_position": (str(op) in _buy_allowed_ops()) if op else None}
     if src:
         val["wave_source"] = src.get("file") or src.get("path")
         val["wave_as_of"] = src.get("as_of")
@@ -226,8 +267,38 @@ def _l3(tiers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if tiers.get("floor_pct"):
         val["floor_pct"] = tiers["floor_pct"]
         val["floor_note"] = tiers.get("floor_note") or "下限（非上限）"
+    # L3 目标底仓 =**点位→仓位对照表**（语料「3888 收盘没站上 50%…3930 上 70%」；§9.36）
+    #   行为开关默认关 ⇒ 这一块**只做标注**（`level_target_pct`），不改任何判定；
+    #   要让点位表真正驱动建仓缺口 ⇒ `WOLF_TARGET_TABLE_DRIVES_FLOOR=1`（见 t_capacity.base_floor_pct）。
+    try:
+        from app.services import t_capacity as _tc
+        _tbl = _tc.parse_target_table()
+        if _tbl:
+            _lvl = None
+            try:
+                from app.services import t_index_break as _ib
+                _d = ""
+                try:
+                    _d = str(trade_date or "")          # 决策对象生成时通常带当日
+                except Exception:
+                    _d = ""
+                if not _d:
+                    import datetime as _dtx
+                    _d = _dtx.date.today().strftime("%Y%m%d")
+                _lvl = _ib.index_close(_d)
+            except Exception:
+                _lvl = None
+            val["level_table"] = ["%g:%g" % (a, b) for a, b in _tbl]
+            val["level_target_pct"] = _tc.level_target_pct(_lvl)
+            val["level_target_note"] = ("点位表已配置；收盘不可用 ⇒ 目标未算"
+                                        if val["level_target_pct"] is None else "按收盘查表")
+            if _tc.target_drives_floor():
+                val["level_target_drives_floor"] = True
+    except Exception:
+        pass
     return {"value": val,
-            "basis": "wolf_discipline.tier_target_pct（上限=目标）/ tier_floor_pct（下限，仅 build 档）"}
+            "basis": "wolf_discipline.tier_target_pct（上限=目标）/ tier_floor_pct（下限，仅 build 档）"
+                     " / WOLF_TARGET_TABLE（点位→仓位对照表，可选）"}
 
 
 def _l4(picks: Optional[Any]) -> Dict[str, Any]:
@@ -267,6 +338,21 @@ def _l5(l2: Dict[str, Any], gates: Dict[str, Any]) -> Dict[str, Any]:
         blockers.append("L2 档位=%s 不允许新开仓（他 2026-01-17 分档：下跌趋势就不做）"
                         % ((l2.get("value") or {}).get("operation")))
     g10 = gates.get("G10_volume_gate") or {}
+    # ── 指数破位（狼大语料，2026-09-18 落地；`WOLF_INDEX_BREAKDOWN` 默认关）──
+    # 口径＝**收盘跌破大级别 MA60/144/200 中至少 2 根**（由他 5 个发言日实测反推，
+    # 见 `t_index_break` 模块 docstring）。语义按语料：破位 = **持仓的止损/减仓评估**，
+    # **不是禁止买入**（2026-08-24 破位当天他照样"跌破了 按计划打入"）⇒ 这里只记警告，不做 blocker。
+    try:
+        from app.services import t_index_break as _ib
+        if _ib.enabled():
+            _br = _ib.index_breakdown(day if 'day' in dir() else (trade_date or ""))
+            if _br.get("broken"):
+                warnings.append({"level": "warn", "text": "指数破位（%s）→ 持仓止损/减仓评估；"
+                                                          "按语料**不禁止**按预设条件买入" % _br.get("reason")})
+            else:
+                warnings.append({"level": "info", "text": "指数未破位：%s" % _br.get("reason")})
+    except Exception as _be:
+        pass
     if g10.get("breakdown_risk"):
         warnings.append("G10：已跌破关口（破位）→ 按他 2026-08-25 口径这是**止损/减仓评估**，"
                         "不是禁买；但按 2026-08-24 的做法**只按预设条件买**，不追、不临时起意")
@@ -303,9 +389,14 @@ def _gates_state() -> Dict[str, Any]:
     def _g10():
         from app.services.wolf_volume_gate import enabled as en, load as ld
         st = ld() or {}
-        return {"enabled": bool(en()), "as_of": st.get("as_of"),
-                "tag": ((st.get("level") or {}).get("tag")),
-                "breakdown_risk": st.get("breakdown_risk"), "fake_breakout_risk": st.get("fake_breakout_risk")}
+        out = {"enabled": bool(en()), "as_of": st.get("as_of"),
+               "tag": ((st.get("level") or {}).get("tag")),
+               "breakdown_risk": st.get("breakdown_risk"), "fake_breakout_risk": st.get("fake_breakout_risk")}
+        if out["enabled"] and not st:
+            # 开关开着但取数被判陈旧/缺失 ⇒ 明示 stale（避免"看着 enabled=true 其实没数据"）
+            out["stale"] = True
+            out["note"] = "量能状态文件缺失或内容过期（stale guard）→ 本层不参与判定"
+        return out
     def _g9():
         from app.services.wolf_weekend_hedge import enabled as en, load as ld
         st = ld() or {}
