@@ -740,9 +740,24 @@ class TMonitor:
         except Exception:
             _pc = None
         _fp = fill_prices(current, bid=bid)
+        # ⚠️ 2026-09-30（账本 §9.380 ✓ 用户「修复这个问题」✓）：`trigger_price` 原先**写死 None** ✗
+        #   实测 ✓：全表 11,410 条触发里只有 6 条有价（0.1% ✗），而那 6 条都是 `stop_loss`
+        #   （走 `stop_price` 那条路径 ✓）⇒ 这条 wolf 腿路径**一直没填** ✗
+        #   这里**只填"手里真有的价"** ✓：`bid` = C 口径线价 ✓（`line` 是线**名**不是价 ✓）
+        #   纯状态型腿（量能分层/黄线/破位 ✓）本就无单一价位 ⇒ 保持 None ✓（语义成立 ✓）
+        #   开关 ✓：`WOLF_TRIGGER_PRICE_FILL`（库内默认 0 = 关 ⇒ 生产逐字不变 ✓）
+        _tp_fill = None
+        _line_name = None
+        try:
+            if str(os.getenv("WOLF_TRIGGER_PRICE_FILL", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                _tp_fill = float(bid) if bid else None
+                _line_name = (str(line) if line else None)
+        except Exception:
+            _tp_fill = None
+            _line_name = None
         trig={
             "account_id": account_id or T_MONITOR_ACCOUNT, "condition_id": None, "symbol": sym,
-            "event_type": kind, "trigger_price": None, "quote_price": current,
+            "event_type": kind, "trigger_price": _tp_fill, "quote_price": current,
             # 2026-09-20：成交价溢价改为可配（`WOLF_FILL_PREMIUM_PCT`，默认 0.1 = 生产现状；
             #   回测 pins 置 0 ⇒ 成交价 = 成交时报价，砍掉那条无语料依据的 0.1%）。
             #   买单若由 C 口径给线价（`bid`），则优先用线价。
@@ -750,7 +765,8 @@ class TMonitor:
             "slippage_budget": round(fill_premium_pct() / 100.0, 6),
             "snapshot": {"quote_time": now, "wolf_rule": reason, "trigger_kind": kind, "source": "wolf_t_rules",
                          "day_rise_pct": _rise, "day_quantile": _quant, "open": _op, "pre_close": _pc,
-                         "prev_low": (_prev_low or None), "today_low": (_dl or None), "vol_ratio": _vr},
+                         "prev_low": (_prev_low or None), "today_low": (_dl or None), "vol_ratio": _vr,
+                         "line_name": _line_name},
             "mode": "auto",
             "direction": "buy" if kind == "wolf_zheng_t_buy" else "sell",
         }

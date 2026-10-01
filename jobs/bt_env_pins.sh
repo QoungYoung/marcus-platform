@@ -777,3 +777,6 @@ export WOLF_AGENT_CAPTURE_N='2'
 
 # --- 账本 §9.375：并行取回复（只并行“等生成”那一段 ✓；行为不变 ✓）---
 export WOLF_AGENT_PARALLEL='0'   # 实测：每根 bar 只 ~1 条待判 ⇒ 并行无对象 ✗（§9.376）
+
+# --- 账本 §9.380：触发价填线价（仅对“有挂线价”的腿生效 ✓；默认关 ⇒ 生产不变 ✓）---
+export WOLF_TRIGGER_PRICE_FILL='1'
