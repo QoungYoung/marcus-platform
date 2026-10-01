@@ -353,6 +353,15 @@ def main():
                             print("[stock_confirm] 杂毛门(排名前)异常(放行): %s" % str(_e_j)[:90],
                                   file=sys.stderr)
                     _ordered = order_members(_all, close, vol=vol)
+                    # ⚠️ 2026-09-30（账本 §9.405）：**一次性探针** ✓ —— 把真正生效的口径打出来 ✓
+                    #   因 launcher 会覆盖 pins ✗、`/proc/environ` 读不到 ✗ ⇒ 只能让代码自报 ✓
+                    try:
+                        import os as _os5
+                        if str(_os5.getenv("WOLF_CONFIRM_MODE_PROBE", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                            print("[stock_confirm] order_mode=%s ✓ concept=%s members=%d top=%s"
+                                  % (ORDER_MODE, cname, len(_all), _ordered[:5]), file=sys.stderr)
+                    except Exception:
+                        pass
                     _K = pullback_slots()
                     if _K > 0:
                         # 用户两步方案之②：为「回调中的强票」预留 K 个名额 ✓
