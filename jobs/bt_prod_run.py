@@ -1125,6 +1125,24 @@ def main() -> int:
     except Exception as _xoe:
         print("[prod] 挂单作废失败: %s" % str(_xoe)[:100], file=sys.stderr)
 
+    # ── ④.9 **布腿前现算候选**（账本 §9.408 ✓ 用户「要让回测用上我们的改动」✓）────────
+    #   背景 ✓：`stock_confirm_result.json` 原先由**语料一次性预烘焙**（六臂共享同一份 ✓、
+    #          mtime 是两周前 ✓）⇒ 候选排序类改动（`STOCK_CONFIRM_ORDER` ✓）**永远不生效** ✗
+    #   开关 ✓：`WOLF_BT_GEN_CONFIRM`（**库内默认 0 ＝ 关 ⇒ 行为逐字不变** ✓、生产零影响 ✓）
+    #   =1 时：用**当天 as-of 数据**在本臂沙箱内重算这一天的候选 ✓（不碰共享语料 ✓）
+    if str(os.getenv("WOLF_BT_GEN_CONFIRM", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            import subprocess as _sp5
+            _cmd5 = [sys.executable, os.path.join(REPO, "jobs", "bt_gen_confirm.py"),
+                     "--day", day, "--root", a.root, "--bars-db", a.bars_db]
+            _r5 = _sp5.run(_cmd5, capture_output=True, text=True, timeout=900,
+                           env=dict(os.environ), cwd=REPO)
+            _tail5 = ((_r5.stdout or "") + (_r5.stderr or "")).strip().splitlines()
+            print("[bt] 候选现算(子进程) rc=%s ✓｜%s" % (_r5.returncode, _tail5[-1] if _tail5 else ""),
+                  flush=True)
+        except Exception as _e5:
+            print("[bt] 候选现算异常（放行，沿用已有文件）: %s" % str(_e5)[:160], file=sys.stderr, flush=True)
+
     # ⑤ 布腿 = 生产 arm()；条件集合先取"持仓 + 全部已布条件"
     symbols: List[str] = []
     armed: List[dict] = []
