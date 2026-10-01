@@ -403,7 +403,7 @@ export WOLF_CRUSH_STOCK_DROP='3'
                                           # 已实现 −0.51%/名义；趋势突破腿 70 笔 +5.75%。把额度从低吸挪到趋势突破：
                                           # 已实现 +67k → +231k（单位 0.54% → 2.12%），名义占用 −13%。
                                           # 本开关只压低吸腿当日总量（不抬其它腿）；25% ≈ 现状 36%/日 的七成。
-export STOCK_CONFIRM_ORDER='dist20h'
+export STOCK_CONFIRM_ORDER='pop_lead'      # 账本 §9.404：人气/弹性优先（原 dist20h ✓ 单变量切换 ✓）
                                           #   旧行为 = `SELECT ... LIMIT 10` 无 ORDER BY ⇒ 取哪 10 只任意且不可复现
                                           #   （长飞光纤「光通信模块」物理序第 46、中国巨石「PCB」第 37 ⇒ 永远取不到；
                                           #     91% 主题成分不可见）。空/ none = 不改；'dist20h' / 'lead_cond' = 修复模式。
