@@ -767,3 +767,6 @@ export WOLF_G4_REASON_TAG='1'
 #   ① 放量破位门对 AI 腿恒 fail-open（四臂 0 次真实拦截）② AI 被判要求判「量比骤升」却拿不到量比
 #   ⇒ 抛硬币主因（账本 §9.13）。本开关按条件腿同口径补算（基准=该股近5日同刻均值）。
 export WOLF_VOL_RATIO_FILL='1'
+
+# --- 账本 §9.370：wake 两段拆分计时（纯观测 ✓，回测专用 ✓）---
+export WOLF_AGENT_SPLIT_TIMING='1'

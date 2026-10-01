@@ -509,7 +509,14 @@ def test_key_files_compile():
     files = ["backend/app/services/t_monitor.py", "backend/app/services/t_gateway.py",
              "backend/app/services/t_pool.py", "backend/app/services/t_expr.py",
              "jobs/bt_days.py", "jobs/bt_prod_run.py", "jobs/rotation_switch_arm.py",
-             "apps/main_line/switch_builder.py"]
+             "apps/main_line/switch_builder.py",
+             # 账本 §9.371：今天在这里栽过 ✗ —— `ast.parse` 说 OK ✓，但 day-run 报
+             #   `SyntaxError: 'return' outside function (bt_agent_loop.py, line 339)`
+             #   （**这类错只有 compile 会报** ✗）⇒ 把常改的 jobs/services 一并纳入 ✓
+             "jobs/bt_agent_loop.py", "jobs/bt_asof_api.py", "jobs/bt_dashboard.py",
+             "backend/app/services/t_capacity.py", "backend/app/services/t_turnover.py",
+             "backend/app/services/t_data_sources.py", "backend/app/services/t_bridge.py",
+             "backend/app/services/t_ai_agent.py"]
     bad = []
     for f in files:
         p = os.path.join(_ROOT, f)
