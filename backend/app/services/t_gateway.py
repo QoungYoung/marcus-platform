@@ -1437,6 +1437,21 @@ def _leg_gate_exec(symbol: str, account_id: str = ACCOUNT_T, reason: str = "") -
             _th = _tos(symbol)
         except Exception:
             _th = None
+        # ⚠️ 2026-09-30（账本 §9.389 ✓ 用户「把主题参数也一起修掉」✓）：
+        #   原先用 `theme_of_symbol(symbol)` 取"这只票**被贴的**主题" ✗ ⇒ 贴标错就误拒 ✗
+        #   实测：「主类=电池 不属主题[AI/算力/科技]」✗，而当天主线是「新能源/电池」✓
+        #   开关 ✓：`WOLF_EXEC_GATE_THEME_ANY`（库内默认 0 ＝ 关 ⇒ 生产逐字不变 ✓）
+        if str(os.getenv("WOLF_EXEC_GATE_THEME_ANY", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                import theme_main_class as _tmc
+                _mcs = set(_tmc.main_classes(symbol=symbol) or [])
+                _all = set()
+                for _v in (_tmc.THEME_MAIN_CLASS or {}).values():
+                    _all |= set(_v or [])
+                if _mcs and (_mcs & _all):
+                    return None            # 主类命中任一主题 ⇒ 放行 ✓（错配票仍会被下面的原逻辑挡 ✓）
+            except Exception as _e2:
+                print("[gateway] 执行口主题校验(any)异常(放行) %s: %s" % (symbol, str(_e2)[:60]), flush=True)
         _ok, _why = _lg.approve(str(symbol), _th or "", stage="执行")
         if not _ok:
             print("[gateway] 执行口拦下买腿 %s：%s" % (symbol, str(_why)[:120]), flush=True)

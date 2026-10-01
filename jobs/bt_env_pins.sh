@@ -786,3 +786,6 @@ export WOLF_ASOF_TRIM='1'
 
 # --- 账本 §9.388：允许「有风险(defense)」档新开仓（他 2026-01-17「有风险就30%」✓；默认关 ⇒ 生产不变 ✓）---
 export WOLF_L2_DEFENSE_ALLOW='1'
+
+# --- 账本 §9.389：执行口主题闸改为「主类命中任一主题即放行」（默认关 ⇒ 生产不变 ✓）---
+export WOLF_EXEC_GATE_THEME_ANY='1'
