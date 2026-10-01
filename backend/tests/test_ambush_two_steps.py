@@ -514,6 +514,8 @@ def test_key_files_compile():
              #   `SyntaxError: 'return' outside function (bt_agent_loop.py, line 339)`
              #   （**这类错只有 compile 会报** ✗）⇒ 把常改的 jobs/services 一并纳入 ✓
              "jobs/bt_agent_loop.py", "jobs/bt_asof_api.py", "jobs/bt_dashboard.py",
+             "jobs/bt_agent_tools.py",   # 账本 §9.382：这里也栽过 ✗（字符串里嵌 ASCII 双引号）
+
              "backend/app/services/t_capacity.py", "backend/app/services/t_turnover.py",
              "backend/app/services/t_data_sources.py", "backend/app/services/t_bridge.py",
              "backend/app/services/t_ai_agent.py"]

@@ -780,3 +780,6 @@ export WOLF_AGENT_PARALLEL='0'   # 实测：每根 bar 只 ~1 条待判 ⇒ 并�
 
 # --- 账本 §9.380：触发价填线价（仅对“有挂线价”的腿生效 ✓；默认关 ⇒ 生产不变 ✓）---
 export WOLF_TRIGGER_PRICE_FILL='1'
+
+# --- 账本 §9.382：as-of 块精简（K线 12→6＋当日首根、持仓只详列本标的 ✓；默认关 ⇒ 生产不变 ✓）---
+export WOLF_ASOF_TRIM='1'
