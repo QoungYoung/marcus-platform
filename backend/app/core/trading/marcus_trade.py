@@ -758,6 +758,23 @@ class MarcusVNPyExecutor:
                     # ⚠️ 趋势闸可能**提前返回**（"破 5 日线丢"豁免 ✓）⇒ 缓存是 (0,0) ✗
                     #   ⇒ 用**自带的 MA 助手**（同一数据源 ✓、按天缓存 ✓）✓
                     _ma5b, _ma20b = self._ma_pair_421(symbol)
+                    # ── 账本 §9.423 ✓：**当日只减一次** ✓ ────────────────────────────
+                    #   第一次触发 ⇒ 减半 ✓；同一天再次触发同类卖出 ⇒ **挡住** ✓（不再逐步清 ✗）
+                    try:
+                        import time as _t423
+                        _d423 = _t423.strftime("%Y%m%d")
+                        _done423 = getattr(self, "_half_sell_done", None)
+                        if _done423 is None:
+                            self._half_sell_done = {}
+                            _done423 = self._half_sell_done
+                        _k423 = (str(symbol), _d423)
+                        if _k423 in _done423:
+                            risk_data['reason'] = ("当日已减半一次（他 2026-01-12「收黑K破5日线 ⇒ 减仓避一下」✓）"
+                                                   "⇒ 今日不再重复减仓 ✓")
+                            return {'allowed': False, 'reason': risk_data['reason'], 'data': risk_data}
+                    except Exception:
+                        _done423 = None
+                        _k423 = None
                     try:
                         import sys as _sys421d
                         print("[HalfSell诊断] %s side=%s vol=%s held=%s MA5=%s MA20=%s reason=%s"
@@ -775,6 +792,11 @@ class MarcusVNPyExecutor:
                                 "[HalfSell] %s 趋势完好（MA5 %.2f > MA20 %.2f）⇒ 只减半：%s ⇒ %s 股"
                                 % (symbol, _ma5b, _ma20b, volume, _halfb))
                             risk_data['half_sell'] = {'orig': int(volume), 'half': int(_halfb)}
+                            try:
+                                if _k423:
+                                    _done423[_k423] = int(_halfb)   # 账本 §9.423 ✓ 记下"今天已减半"
+                            except Exception:
+                                pass
                             risk_data['adjusted'] = True
                             risk_data['adjusted_volume'] = int(_halfb)
                             risk_data['_half_top'] = int(_halfb)
