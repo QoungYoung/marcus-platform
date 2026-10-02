@@ -772,9 +772,14 @@ class MarcusVNPyExecutor:
                             risk_data['reason'] = ("当日已减半一次（他 2026-01-12「收黑K破5日线 ⇒ 减仓避一下」✓）"
                                                    "⇒ 今日不再重复减仓 ✓")
                             return {'allowed': False, 'reason': risk_data['reason'], 'data': risk_data}
-                    except Exception:
+                    except Exception as _e423x:
                         _done423 = None
                         _k423 = None
+                        try:
+                            import sys as _sys423x
+                            print("[HalfSell护栏] 异常: %s" % str(_e423x)[:110], file=_sys423x.stderr)
+                        except Exception:
+                            pass
                     try:
                         import sys as _sys421d
                         print("[HalfSell诊断] %s side=%s vol=%s held=%s MA5=%s MA20=%s reason=%s"
@@ -795,8 +800,15 @@ class MarcusVNPyExecutor:
                             try:
                                 if _k423:
                                     _done423[_k423] = int(_halfb)   # 账本 §9.423 ✓ 记下"今天已减半"
-                            except Exception:
-                                pass
+                                    import sys as _sys423y
+                                    print("[HalfSell护栏] 已记下今日减半 %s ⇒ %s 股" % (_k423, _halfb),
+                                          file=_sys423y.stderr)
+                                else:
+                                    import sys as _sys423z
+                                    print("[HalfSell护栏] ⚠️ 未能记录（_k423 为空）", file=_sys423z.stderr)
+                            except Exception as _e423y:
+                                import sys as _sys423w
+                                print("[HalfSell护栏] 记录失败: %s" % str(_e423y)[:110], file=_sys423w.stderr)
                             risk_data['adjusted'] = True
                             risk_data['adjusted_volume'] = int(_halfb)
                             risk_data['_half_top'] = int(_halfb)
