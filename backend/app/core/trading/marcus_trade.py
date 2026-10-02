@@ -589,7 +589,7 @@ class MarcusVNPyExecutor:
         }
     
     def check_risk(self, symbol: str, price: float, volume: int, side: str,
-                   skip_trend_constraint: bool = False) -> dict:
+                   skip_trend_constraint: bool = False, reason: str = "") -> dict:
         """
         风控检查（增强版 — 包含回撤熔断、T+1拦截、仓位利用率检查）
         
@@ -732,15 +732,25 @@ class MarcusVNPyExecutor:
                             risk_data['half_sell'] = {'orig': int(volume), 'half': int(_halfb)}
                             risk_data['adjusted'] = True
                             risk_data['adjusted_volume'] = int(_halfb)
-        except Exception:
-            pass
+                            risk_data['_half_top'] = int(_halfb)
+        except Exception as _e421c:
+            try:
+                import sys as _sys421c
+                print("[HalfSell] 分支异常（放行原量）: %s" % str(_e421c)[:120], file=_sys421c.stderr)
+            except Exception:
+                pass
 
         risk_data['status'] = 'passed'
         risk_data['drawdown_pct'] = round(drawdown_pct, 2)
         if 'position_utilization_warning' in risk_data:
             risk_data['status'] = 'passed_with_warning'
         self._log_risk(risk_data)
-        return {'allowed': True, 'reason': '风控通过', 'data': risk_data}
+        _out421 = {'allowed': True, 'reason': '风控通过', 'data': risk_data}
+        # 账本 §9.421 ✓：`sell()` 读的是**顶层** `adjusted/adjusted_volume` ⇒ 这里补上 ✓
+        if risk_data.get('adjusted') and risk_data.get('adjusted_volume'):
+            _out421['adjusted'] = True
+            _out421['adjusted_volume'] = int(risk_data['adjusted_volume'])
+        return _out421
     
     def _log_risk(self, risk_data: dict):
         """记录风控日志"""
@@ -967,7 +977,8 @@ class MarcusVNPyExecutor:
         self._refresh_engine_cash()
         # 风控检查
         risk_result = self.check_risk(symbol, price, volume, 'sell',
-                                      skip_trend_constraint=skip_trend_constraint)
+                                      skip_trend_constraint=skip_trend_constraint,
+                                      reason=reason)   # 账本 §9.421 ✓：让"保命类豁免"能看到理由 ✓
         if not risk_result['allowed']:
             return {
                 'status': 'rejected',
