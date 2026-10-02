@@ -707,6 +707,34 @@ class MarcusVNPyExecutor:
                 )
         
         # 风控通过
+        # ── 账本 §9.421（用户「量化并开关化」）：**趋势完好时"全平"改"减半"** ──
+        #   量化（155,029 个"刚破 MA5 ∧ MA5>MA20"事件）：之后 T+10 **+0.70%**，全市场 **+0.68%**
+        #   ⇒ **破线全平没有数据优势**（卖不到下跌）；他 2026-01-12 原话是「减仓避一下」（不是清仓）
+        #   开关 `WOLF_SELL_HALF_ON_BREAK`（**库内默认 0 ＝ 关 ⇒ 生产逐字不变**）
+        #   保命类豁免：理由含 止损/跌停/破位/防御/清仓 ⇒ **绝不减半**
+        try:
+            import os as _os421b
+            if (side == 'sell' and not skip_trend_constraint
+                    and str(_os421b.getenv("WOLF_SELL_HALF_ON_BREAK", "0")).strip().lower()
+                    in ("1", "true", "yes", "on")):
+                _rs421b = str(risk_data.get('reason') or '') + str(reason or '')
+                if not any(k in _rs421b for k in ("止损", "跌停", "破位", "防御", "清仓", "stop_loss", "defense")):
+                    _ma5b, _ma20b = getattr(self, "_ma_pair_cache", (0.0, 0.0))
+                    _heldb = int(pos.get('volume') or 0)
+                    if (_heldb > 0 and _ma5b and _ma20b and _ma5b > _ma20b
+                            and int(volume) >= int(_heldb * 0.9)):
+                        _halfb = max(100, (int(volume) // 2 // 100) * 100)
+                        if 0 < _halfb < int(volume):
+                            import logging as _lg421b
+                            _lg421b.getLogger(__name__).info(
+                                "[HalfSell] %s 趋势完好（MA5 %.2f > MA20 %.2f）⇒ 只减半：%s ⇒ %s 股"
+                                % (symbol, _ma5b, _ma20b, volume, _halfb))
+                            risk_data['half_sell'] = {'orig': int(volume), 'half': int(_halfb)}
+                            risk_data['adjusted'] = True
+                            risk_data['adjusted_volume'] = int(_halfb)
+        except Exception:
+            pass
+
         risk_data['status'] = 'passed'
         risk_data['drawdown_pct'] = round(drawdown_pct, 2)
         if 'position_utilization_warning' in risk_data:
@@ -740,12 +768,25 @@ class MarcusVNPyExecutor:
         if float_pnl_pct <= -4.0:
             return ""
 
+        # ── 破 5 日线丢（WOLF_MA5_EXIT，库内默认关）：浮亏且收盘跌破 MA5 ⇒ 放行卖出 ──
+        # 语料 docs/wolf-playbook.md「破 5 日线丢」；实测 3 月该约束挡住快克智能卖出 925 次。
+        try:
+            from app.services.wolf_exit_rules import ma5_break_exempt
+            if ma5_break_exempt(symbol, cur_price, avg_cost):
+                return ""
+        except Exception:
+            pass
+
         import time as _time
         # 5分钟缓存，避免频繁 Tushare 调用
         cache_key = f"trend_{symbol}"
         cached = self._trend_constraint_cache.get(cache_key)
         if cached:
             ts, ma5, ma20 = cached
+            try:
+                self._ma_pair_cache = (float(ma5 or 0), float(ma20 or 0))
+            except Exception:
+                pass
             if _time.time() - ts < 300:
                 if ma5 > ma20 > 0:
                     return self._evaluate_trend_divergence(
@@ -777,6 +818,10 @@ class MarcusVNPyExecutor:
             closes = df['close'].values
             ma5 = float(sum(closes[-5:]) / 5)
             ma20 = float(sum(closes[-20:]) / 20)
+            try:
+                self._ma_pair_cache = (ma5, ma20)
+            except Exception:
+                pass
             self._trend_constraint_cache[cache_key] = (_time.time(), ma5, ma20)
 
             if ma5 > ma20 > 0:
