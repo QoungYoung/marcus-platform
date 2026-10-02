@@ -74,6 +74,12 @@ def parse_float_chinese(value):
     return 0.0
 
 
+# ⚠️ 账本 §9.423 ✓：**当日只减一次**的护栏状态必须放**模块级** ✗ 不能放 `self` ✓
+#   实测 ✓：`gateway_execute` **每次调用都新建一个执行器实例** ✗ ⇒ `self` 上的状态存不住 ✓
+#   （日志实证：同一个 (symbol, day) 被连记两次 ⇒ 5000 股之后又减半 2500 股 ✗）
+_HALF_SELL_DONE: dict = {}
+
+
 class MarcusVNPyExecutor:
     """Marcus × VN.PY 交易执行器"""
     
@@ -763,10 +769,7 @@ class MarcusVNPyExecutor:
                     try:
                         import time as _t423
                         _d423 = _t423.strftime("%Y%m%d")
-                        _done423 = getattr(self, "_half_sell_done", None)
-                        if _done423 is None:
-                            self._half_sell_done = {}
-                            _done423 = self._half_sell_done
+                        _done423 = _HALF_SELL_DONE   # 模块级 ✓（跨实例 ✓）
                         _k423 = (str(symbol), _d423)
                         if _k423 in _done423:
                             risk_data['reason'] = ("当日已减半一次（他 2026-01-12「收黑K破5日线 ⇒ 减仓避一下」✓）"
