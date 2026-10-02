@@ -48,10 +48,47 @@ SINGLE_FROM_ARCHIVE = ["main_line_state.json", "latest_hot_sectors.json", "etf_s
                        "wolf_mainline_select.json"]
 STUB_FROM_LIVE = ["rotation_universe_result.json", "rotation_sub_universe.json",
                   "stock_confirm_result.json", "position_class_result.json", "rotation_crowding.json",
-                  "wolf_ticket_ban.json", "etf_theme_map_pi.json", "low_logic.json",
+                  # ⚠️ `wolf_ticket_ban.json` 已从"补桩复制当期活文件"升级为 CARRY_STATE_FILES
+                  #    （逐日结转的真文件）：当期活文件里带 `since=20260915` 这类**未来**禁买记录，
+                  #    钉钟回放到 3 月时 `elapsed_td` 取不到日历 → 回落自然日 → max(负,0)=0 → **整年禁买**。
+                  "etf_theme_map_pi.json", "low_logic.json",
                   "trend_confirm_params.json", "p3_position_tiers.json"]
 ROLLING = ["concept_hist.json", "concept_long_seed.json", "theme_mf_daily.json", "concept_vol.json",
            "index_daily_000001.json"]
+
+# ── 跨日连续状态文件（P0-a / P0-b，2026-09-17 用户拍板）──────────────────────────
+# 这些文件由**日内状态机**读写、并**决定后续行为**（floor / 额度 / 链状态 / 禁买 / 回补 / 换手）。
+# 之前它们落在"软链农场"里 = 指向生产 `data/` 的**当期快照**，两个后果：
+#   ① **as-of 污染**：生产快照里的未来记录参与回放判断 —— 实测 `t_base_floor_rebase.json`
+#      的 `rebased_at=2026-09-16 11:07`、`roundtrip_state.json` 的 `date=20260915`、
+#      `wolf_passive_stop.json` 的 `updated=20260914`、`wolf_ticket_ban.json` 的 `since=20260915`；
+#   ② **跨日不连续**：每天一份新沙箱 → "一次性认账 / 3 日内分步回补 / 两日换手窗口"只在日内成立。
+# 处理：沙箱里一律是**真文件**（绝不留软链），内容 = **上一交易日沙箱**的同名文件；首日/无前值 → `{}`。
+# 纯静态配置（如 `wolf_discipline.json`：人写的阈值开关、日内不变）**不在**此列，保持软链。
+CARRY_STATE_FILES = (
+    "t_base_floor_rebase.json",   # t_base_floor：一次性认账锚（floor 锁死卖腿）
+    "wolf_hedge_refill.json",     # C2b 避险回补腿（t_monitor._check_hedge_refill 读）
+    "wolf_253_chain.json",        # 253→254 分步回补链（"首建" vs "1/3 回补"的分叉点）
+    "tranche_state.json",         # tranche_ladder 档位额度（bought_amt → room）
+    "roundtrip_state.json",       # B 等量换手待卖（两日窗口）
+    "wolf_passive_stop.json",     # G4 被动止盈线（只上移）
+    "position_tiers.json",        # 加仓档位状态（档位监控接入后用；先建真文件防写穿）
+    "wolf_ticket_ban.json",       # G3 破线删票黑名单（TTL 交易日，挡买入侧）
+)
+# 状态文件里"带日期语义"的键：只认这些键，避免把 ttl_td / 价格这类数字误判成日期。
+# **gating**：这些日期参与比较、决定行为（换手两日窗口 / ban TTL / 254 回补窗口 / floor 认账来源）
+#            → 出现"晚于当日"的值 = 该条目来自未来 → 必须剔除；
+# **诊断戳**：只写不读（`tranche_ladder.record_buy` 的 `updated` 用 `pd.Timestamp.now()`，
+#            **绕过钉钟**、必然是真实钟）→ 保留原值，只告警。
+_GATE_DATE_KEYS = ("as_of", "rebased_at", "since", "date", "sell_date", "base_254_date",
+                   "last_refill_date", "last_sell", "last_date", "trade_date")
+_DIAG_DATE_KEYS = ("updated", "upgraded_at", "created_at")
+_DATE_KEYS = _GATE_DATE_KEYS + _DIAG_DATE_KEYS
+# **同一个键在不同文件里的语义不同**：`updated` 在 `wolf_passive_stop.json` 里由
+# `_today8()`（钉钟）写 → 是可信的 provenance（线来自哪天）；而 `tranche_state.json` 的 `updated`
+# 由 `pd.Timestamp.now()` 写（**绕过钉钟**，实测返回真实钟）→ 只能当诊断戳，否则会把
+# `bought_amt`（真正决定档位额度的字段）一起丢掉。
+_EXTRA_GATE_KEYS = {"wolf_passive_stop.json": ("updated",)}
 
 
 def _jload(p, default=None):
@@ -240,6 +277,211 @@ def copy_json(src: str, dst: str, cut: str = "20991231"):
     return {"bytes": os.path.getsize(dst)}
 
 
+# ── ②b 跨日连续状态文件（P0-a / P0-b）────────────────────────────────────────
+def _date_of(v) -> str:
+    """时间戳样式的值 → 8 位 `YYYYMMDD`（`2026-09-16 11:07:29` / `20260916` / `2026-09-16` 都吃）。"""
+    s = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return s[:8] if len(s) >= 8 else ""
+
+
+def _max_date_in(obj, keys=_GATE_DATE_KEYS, _acc=None) -> str:
+    """递归取状态文件里最大的日期（默认只看 `_GATE_DATE_KEYS`＝会**决定行为**的日期）。"""
+    if _acc is None:
+        _acc = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, (dict, list)):
+                _max_date_in(v, keys, _acc)
+            elif str(k) in keys:
+                d = _date_of(v)
+                if d:
+                    _acc.append(d)
+    elif isinstance(obj, list):
+        for v in obj:
+            _max_date_in(v, keys, _acc)
+    return max(_acc) if _acc else ""
+
+
+def prune_future_records(obj, limit: str, gate_keys=_GATE_DATE_KEYS, diag_keys=_DIAG_DATE_KEYS,
+                         _path: str = "", dropped=None, stamps=None):
+    """剔除状态里**晚于 `limit`** 的记录（PIT 纪律：未来记录不许参与当日判断）。
+
+    两类日期键区别对待（2026-09-17 实测踩坑）：
+      · **gating 键**（`date/sell_date/since/base_254_date/rebased_at/as_of/...`）＝比较用、决定行为
+        → 值 > limit 的**条目整条丢掉**（不顶替、不插值）；
+      · **诊断戳**（`updated/upgraded_at`）＝只写不读（`tranche_ladder.record_buy` 用
+        `pd.Timestamp.now()`，**绕过钉钟**→ 必然是"未来"）→ **保留原值**，只在告警里记一笔，
+        否则会把 `bought_amt` 这种真正决定额度的字段一起丢掉。
+    返回 `(清理后的对象, 被丢条目的键路径, 未来诊断戳)`；对象整体不可用（本身来自未来）→ 首项为 None。
+    """
+    gate_keys, diag_keys = set(gate_keys), set(diag_keys)
+    dropped = [] if dropped is None else dropped
+    stamps = [] if stamps is None else stamps
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, (dict, list)) or str(k) not in gate_keys:
+                continue
+            dv = _date_of(v)
+            if dv and dv > limit:
+                dropped.append(_path or "<root>")
+                return None, dropped, stamps
+        out = {}
+        for k, v in obj.items():
+            p = ("%s.%s" % (_path, k)) if _path else str(k)
+            if isinstance(v, (dict, list)):
+                sub, dropped, stamps = prune_future_records(v, limit, gate_keys, diag_keys, p, dropped, stamps)
+                if sub is None or (isinstance(v, dict) and not sub):
+                    continue
+                out[k] = sub
+            elif str(k) in diag_keys:
+                dv = _date_of(v)
+                if dv and dv > limit:
+                    stamps.append("%s=%s" % (p, v))
+                out[k] = v
+            elif str(k) in gate_keys and _date_of(v) > limit:
+                dropped.append(p)
+            else:
+                out[k] = v
+        return out, dropped, stamps
+    if isinstance(obj, list):
+        keep = []
+        for i, v in enumerate(obj):
+            if isinstance(v, (dict, list)):
+                sub, dropped, stamps = prune_future_records(v, limit, gate_keys, diag_keys,
+                                                            "%s[%d]" % (_path, i), dropped, stamps)
+                if sub is None or (isinstance(v, dict) and not sub):
+                    continue
+                keep.append(sub)
+            else:
+                keep.append(v)
+        return keep, dropped, stamps
+    return obj, dropped, stamps
+
+
+def prune_state_obj(name: str, obj, limit: str):
+    """按**文件名**选日期键语义后剔除未来记录（carry 与验收脚本共用同一实现，避免两处分叉）。"""
+    gk = tuple(_GATE_DATE_KEYS) + tuple(_EXTRA_GATE_KEYS.get(name, ()))
+    dk = tuple(k for k in _DIAG_DATE_KEYS if k not in gk)
+    return prune_future_records(obj, limit, gk, dk)
+
+
+def state_digest(path: str) -> dict:
+    """状态文件摘要（打印 / manifest / 验收用）：真文件还是软链 + 条目数 + 关键日期。
+
+    `t_base_floor_rebase.json` 额外给 `symbols / events / max_rebased_at`（验收要看的那三个数）。
+    """
+    if not os.path.lexists(path):
+        return {"kind": "MISSING"}
+    kind = ("SYMLINK->" + os.readlink(path)) if os.path.islink(path) else "REAL"
+    obj = _jload(path, None)
+    if not isinstance(obj, dict):
+        return {"kind": kind, "parse": "fail"}
+    out = {"kind": kind, "bytes": os.path.getsize(path), "keys": len(obj),
+           "max_date": _max_date_in(obj), "max_any_date": _max_date_in(obj, keys=_DATE_KEYS)}
+    syms = obj.get("symbols")
+    if isinstance(syms, dict):
+        ev, mx = 0, ""
+        for rec in syms.values():
+            if not isinstance(rec, dict):
+                continue
+            for e in (rec.get("events") or []):
+                if isinstance(e, dict):
+                    ev += 1
+                    mx = max(mx, _date_of(e.get("rebased_at")))
+        out.update({"symbols": len(syms), "events": ev, "as_of": obj.get("as_of"),
+                    "max_rebased_at": mx or _date_of(obj.get("as_of"))})
+    return out
+
+
+def digest_str(d: dict) -> str:
+    if not d or d.get("kind") == "MISSING":
+        return "MISSING"
+    parts = [str(d.get("kind")), "%dB" % int(d.get("bytes") or 0)]
+    if "events" in d:
+        parts.append("symbols=%s events=%s max_rebased_at=%s"
+                     % (d.get("symbols"), d.get("events"), d.get("max_rebased_at") or "-"))
+    else:
+        parts.append("keys=%s" % d.get("keys"))
+    parts.append("max_date=%s" % (d.get("max_date") or "-"))
+    if d.get("pruned_future"):
+        parts.append("✂️pruned=%d" % len(d["pruned_future"]))
+    if d.get("future_stamps"):
+        parts.append("⚠️future_stamp×%d" % len(d["future_stamps"]))
+    return " ".join(parts)
+
+
+def _carry_state_enabled() -> bool:
+    """`BT_CARRY_STATE=0` → 退回旧行为（软链/当期快照），只在排查时用。"""
+    return str(os.environ.get("BT_CARRY_STATE", "1")).strip().lower() not in ("0", "false", "no")
+
+
+def carry_state_files(sb: str, root: str, day: str, bars_db: str, verbose: bool = True) -> dict:
+    """把**上一交易日沙箱**的跨日状态文件带到本日沙箱（P0-a / P0-b 的核心，幂等）。
+
+    规则（结果只由 `(root, day, bars_db)` 决定；重复调用**逐字节一致**）：
+      · 源 = `<root>/<前一交易日>/<name>`；**绝不读生产 `data/`**；
+      · 源缺失 / 源是"指向生产 `data/` 的软链"（旧布局的当期快照，无法判定 as-of）→ 目标写 `{}`；
+      · 源里的**未来记录**（`rebased_at/date/since/...` > 前一交易日）→ **逐条剔除**（不顶替、不插值），
+        剔干净了就是 `{}`；只写不读的诊断戳（`updated` 等）保留并在告警里记一笔；
+      · 目标**先解链**再写 → 沙箱里永远是**真文件**，写入绝不穿透生产；
+      · 逐文件打印状态摘要（events 数 / max rebased_at），供逐日对账。
+    返回 `{name: 摘要}`（含 `src` 说明来源、`pruned_future`、`future_stamps`、`prev`）。
+    """
+    out: dict = {}
+    if not _carry_state_enabled():
+        print("[carry] ⚠️ BT_CARRY_STATE=0 → 跳过跨日状态结转（旧行为：当期快照/各自一份）", flush=True)
+        return out
+    prev = prev_trade_day(day, bars_db)
+    prev_sb = os.path.join(root, prev)
+    # "生产 data/" 候选：`bt_env.DATA`（DATA_DIR 优先）与 `SRC`（软链农场的源目录）；
+    # 沙箱根自身在 `data/` 下（`data/_bt_year/...`）→ 必须排除，否则沙箱内部软链会被误判成生产软链。
+    prod_roots = []
+    for _r in (globals().get("SRC"), bt_env.DATA):
+        if _r:
+            prod_roots.append(os.path.realpath(_r) + os.sep)
+    sandbox_root = os.path.realpath(root) + os.sep
+    for name in CARRY_STATE_FILES:
+        dst = os.path.join(sb, name)
+        src = os.path.join(prev_sb, name)
+        note, obj = "first_day_empty", {}
+        pruned, stamps = [], []
+        if prev and prev != day and os.path.lexists(src):
+            is_prod_link = False
+            try:
+                if os.path.islink(src):
+                    rp = os.path.realpath(src)
+                    is_prod_link = (not rp.startswith(sandbox_root)
+                                    and any(rp.startswith(p) for p in prod_roots))
+            except OSError:
+                is_prod_link = False
+            if is_prod_link:
+                note = "prev_is_prod_symlink_ignored"
+            else:
+                loaded = _jload(src, None)
+                if isinstance(loaded, dict):
+                    cleaned, pruned, stamps = prune_state_obj(name, loaded, prev)
+                    if cleaned is None:
+                        note = "prev_all_future_records_pruned"
+                    else:
+                        obj = cleaned
+                        note = ("carried_from_%s" % prev) + ("_pruned_future_%d" % len(pruned) if pruned else "")
+                else:
+                    note = "prev_unreadable_ignored"
+        _materialize(dst)                       # 先解链：绝不留软链、绝不写穿生产
+        _jdump(dst, obj)
+        d = state_digest(dst)
+        d.update({"src": note, "prev": prev, "path": dst,
+                  "pruned_future": pruned[:12], "future_stamps": stamps[:12]})
+        out[name] = d
+        if verbose:
+            print("[carry] %s %-26s ← %-34s %s" % (day, name, note, digest_str(d)), flush=True)
+            for _p in pruned[:6]:
+                print("[carry]     ✂️ 剔除未来记录：%s" % _p, flush=True)
+            for _s in stamps[:6]:
+                print("[carry]     ⚠️ 未来诊断戳（保留原值，不决定行为）：%s" % _s, flush=True)
+    return out
+
+
 # ── ② 按日产物：archive → daily_artifacts → 生产 data ──────────
 ART_KEYS = {"mainline_gate": "mainline_gate", "heat_v2": "heat_v2", "trend_confirm_long": "trend_confirm_long",
             "main_line_state": "main_line_state", "latest_hot_sectors": "latest_hot_sectors",
@@ -249,9 +491,15 @@ ART_KEYS = {"mainline_gate": "mainline_gate", "heat_v2": "heat_v2", "trend_confi
 
 
 def from_archive_or_db(name: str, d8: str, dst: str, want_key: str = ""):
-    """按日产物：archive 目录优先 → DB daily_artifacts → 生产 data/ 里的按日文件。"""
+    """按日产物：archive 目录优先 → DB daily_artifacts → 生产 data/ 里的按日文件。
+
+    ⚠️ 三个分支落盘前一律 `_materialize(dst)`：`shutil.copy2` / `_jdump` 都会**跟随符号链接**
+    → 若沙箱里那份已是"指向生产 data/ 的软链"（重跑已有沙箱时会发生），写入就**穿透到生产**
+    （2026-09-17 事故同族；见 ③c-3 防写穿护栏的说明）。
+    """
     cand = os.path.join(SRC, "_archive", d8, name)
     if os.path.exists(cand):
+        _materialize(dst)
         shutil.copy2(cand, dst)
         return {"src": "archive", "path": cand}
     key = want_key or ART_KEYS.get(name.replace(".json", ""), name.replace(".json", ""))
@@ -264,6 +512,7 @@ def from_archive_or_db(name: str, d8: str, dst: str, want_key: str = ""):
         if row and row[0] is not None:
             payload = row[0]
             obj = json.loads(payload) if isinstance(payload, str) else payload
+            _materialize(dst)
             _jdump(dst, obj)
             return {"src": "daily_artifacts", "artifact_key": key, "orig": row[1],
                     "rebuilt": "_rebuilt" in json.dumps(obj)[:2000]}
@@ -271,6 +520,7 @@ def from_archive_or_db(name: str, d8: str, dst: str, want_key: str = ""):
         return {"src": "db_err", "err": str(e)[:80]}
     live = os.path.join(SRC, name)
     if os.path.exists(live):
+        _materialize(dst)
         shutil.copy2(live, dst)
         return {"src": "live_file_STALE?", "path": live}
     return None
@@ -304,6 +554,20 @@ def normalize_state_files(sb: str, cut: str) -> list:
 # 这些文件在沙箱里**由本脚本按 as-of 播种**，但会被"再生类"生产脚本顺手改写（实测：
 # `wolf_mainline_select.py` 会把 `main_line_state.json` 重写 → 用它去选主题/确认域就不是 as-of 了）
 # → 在跑 producer 前**快照**，跑完**还原**（producer 自己负责产出的文件不在此列）。
+def _protect_list():
+    """⚠️ 2026-10-02（账本 §9.419 ✓）：`WOLF_BT_KEEP_MAINLINE=1` ⇒ **保留现算主线** ✓
+
+    为什么 ✓：producer 里**已经跑了 `wolf_mainline_select` 现算** ✓（带 `--as-of cut` ✓），
+    但旧逻辑跑完就把它**还原**成预烘焙语料 ✗（`main_line_source=mainline_select_20260915` ✗，
+    实测 0303 语料判"半导体/芯片" ✗ 而现算判 **新能源/电池** ✓）⇒ 方向错 ⇒ 选票错 ✓
+    开关默认 0 ⇒ 行为逐字不变 ✓；=1 时**不还原 main_line_state.json** ✓（其余照旧 ✓）
+    """
+    _l = list(PROTECT_AFTER_PRODUCERS)
+    if str(os.getenv("WOLF_BT_KEEP_MAINLINE", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        _l = [x for x in _l if x != "main_line_state.json"]
+    return _l
+
+
 PROTECT_AFTER_PRODUCERS = ["main_line_state.json", "mainline_confirm_history.json",
                            "latest_hot_sectors.json", "etf_share_flow.json", "concept_long.json",
                            "theme_inst_flow.json", "wave_pivots.json"]
@@ -493,6 +757,7 @@ def main() -> int:
         upd = str(dd.get("updated_at") or "")[:10].replace("-", "")
         if upd and upd > T:          # 比 T 还晚 = 当日盘后被重写过，不是早间那份
             continue
+        _materialize(os.path.join(sb, "main_line_state.json"))
         shutil.copy2(cand, os.path.join(sb, "main_line_state.json"))
         _picked = {"src": tag, "path": cand, "updated_at": dd.get("updated_at"), "date": dd.get("date"),
                    "main_line": dd.get("main_line")}
@@ -568,7 +833,7 @@ def main() -> int:
                 continue
             os.symlink(srcp, dstp)
             n_links += 1
-        for nm in PRODUCER_OUTPUTS:
+        for nm in list(PRODUCER_OUTPUTS) + list(CARRY_STATE_FILES):
             dstp = os.path.join(sb, nm)
             if os.path.islink(dstp):
                 os.unlink(dstp)
@@ -580,6 +845,63 @@ def main() -> int:
         print("[seed] 沙箱软链 %d 个文件；预建产物占位 %d 个（防写入穿透）" % (n_links, n_real), flush=True)
     except Exception as e:
         print("[seed] 沙箱兜底失败: %s" % str(e)[:90], flush=True)
+
+    # ③c-2 **跨日状态结转**（P0-a / P0-b）：占位建好之后立刻用**上一交易日沙箱**的同名文件覆盖，
+    #     首日/前值不可用（缺 / 是生产软链 / 含未来记录）→ `{}`。幂等；`bt_days.py` 日循环里还会再调一次
+    #     （`--reuse-seeded` / `--skip-seed` 时以那一次为准）。
+    try:
+        man["carry_state"] = {k: {"src": v.get("src"), "kind": v.get("kind"), "events": v.get("events"),
+                                  "max_rebased_at": v.get("max_rebased_at"), "max_date": v.get("max_date"),
+                                  "prev": v.get("prev")}
+                              for k, v in carry_state_files(sb, a.root, T, a.bars_db).items()}
+        _tf = man["carry_state"].get("t_base_floor_rebase.json") or {}
+        print("[seed] 📌 t_base_floor_rebase.json：%s（events=%s, max_rebased_at=%s）"
+              % (_tf.get("kind"), _tf.get("events"), _tf.get("max_rebased_at") or "-"), flush=True)
+    except Exception as _ce:
+        print("[seed] ⚠️ 跨日状态结转失败（不阻断）：%s" % str(_ce)[:120], flush=True)
+
+    # ③c-3 **防写穿护栏**（2026-09-17 实测事故，见 `.dsh-tmp/gap_audit_4items_20260917.md` 的姊妹记录）：
+    #   本步之后的 `regen`（wolf_mainline_select）与 `normalize_state_files` 会**就地改写**
+    #   `main_line_state.json`（`json.dump` 跟随符号链接）。若它是"指向生产 `data/` 的软链"
+    #   —— 只在补桩/取快照**都失败**时才会这样 —— 写入就**穿透到生产文件**。
+    #   实测（本机 08:05）：`data/main_line_state.json` 被覆盖成 cut=20260827 的 as-of 状态
+    #   （date=2026-09-02、updated_at=2026-08-27 09:00），已用 `daily_artifacts(20260915)` +
+    #   `data/_local_inputs/main_line_state.json` 还原。
+    #   护栏：把内容读出来落成**真文件**（内容一字不改，只把"软链"换成"真文件"）。
+    for _nm in ("main_line_state.json", "latest_hot_sectors.json", "mainline_confirm_history.json",
+                "etf_share_flow.json", "concept_long.json", "theme_inst_flow.json",
+                "wave_pivots.json", "wolf_mainline_select.json"):
+        _p = os.path.join(sb, _nm)
+        try:
+            if os.path.islink(_p):
+                _d0 = _jload(_p, None)
+                _materialize(_p)
+                if _d0 is not None:
+                    _jdump(_p, _d0)
+                print("[seed] 🛡️ 防写穿：%s 由软链改为真文件（内容保持不变）" % _nm, flush=True)
+        except Exception as _e:
+            print("[seed] ⚠️ 防写穿处理 %s 失败：%s" % (_nm, str(_e)[:80]), flush=True)
+
+    # ③c-4 **写入穿透自检起点**：从这里开始记录生产 data 下文件的指纹
+    #   （原来这步在 regen+PINNED **之后**才起点 → 漏掉了 wolf_mainline_select / normalize 这段，
+    #    2026-09-17 的 `main_line_state.json` 写穿正是被漏掉的那一段造成的）。
+    def _src_mtimes():
+        """生产 data 下文件的"指纹"：小文件用 md5（准确），大文件用 (size, mtime)。"""
+        import hashlib
+        out = {}
+        for pat in ("*.json", "*.jsonl"):
+            for _p in glob.glob(os.path.join(SRC, pat)):
+                try:
+                    sz = os.path.getsize(_p)
+                    if sz <= 2 * 1024 * 1024:
+                        out[_p] = hashlib.md5(open(_p, "rb").read()).hexdigest()
+                    else:
+                        out[_p] = "%d:%s" % (sz, os.path.getmtime(_p))
+                except OSError:
+                    pass
+        return out
+
+    _mt_before = _src_mtimes()
 
 
     # ③a-1.3 **裁掉未来按日产物**（软链农场会链进当期文件；消费方按"日期最大"取 → 真前视）
@@ -664,7 +986,7 @@ def main() -> int:
         rec("rotation_crowding.json", {"src": "asof_err", "err": str(_e)[:80]})
 
     # ③a-2 regen 前先快照"按 as-of 播种好的"受保护文件（regen 会顺手改写 main_line_state 之类）
-    _snap_seed = snapshot_files(sb, PROTECT_AFTER_PRODUCERS)
+    _snap_seed = snapshot_files(sb, _protect_list())
     man["protected_files"] = sorted(_snap_seed.keys())
 
     # ③ 再生：方向层主线选择（有 --date）
@@ -677,6 +999,7 @@ def main() -> int:
         if not ok:                                   # 脚本可能写到生产 DATA → 取回来
             live = os.path.join(SRC, "wolf_mainline_select.json")
             if os.path.exists(live):
+                _materialize(os.path.join(sb, "wolf_mainline_select.json"))
                 shutil.copy2(live, os.path.join(sb, "wolf_mainline_select.json"))
                 ok = True
         rec("wolf_mainline_select.json(regen)",
@@ -720,25 +1043,31 @@ def main() -> int:
         except Exception as e:
             rec("wave_state.json(regen)", {"src": "regen_llm_err", "err": str(e)[:90]})
 
-    # ③a-0 **写入穿透自检**：记录生产 data 下所有 *.json/*.jsonl 的 mtime，跑完再比一次；
-    #      只要有文件被改动 → 记 man["write_penetration"] 并大声打印（这是"回测改了生产"的告警）。
-    def _src_mtimes():
-        """生产 data 下文件的"指纹"：小文件用 md5（准确），大文件用 (size, mtime)。"""
-        import hashlib
-        out = {}
-        for pat in ("*.json", "*.jsonl"):
-            for _p in glob.glob(os.path.join(SRC, pat)):
-                try:
-                    sz = os.path.getsize(_p)
-                    if sz <= 2 * 1024 * 1024:
-                        out[_p] = hashlib.md5(open(_p, "rb").read()).hexdigest()
-                    else:
-                        out[_p] = "%d:%s" % (sz, os.path.getmtime(_p))
-                except OSError:
-                    pass
-        return out
+    # （写入穿透自检的起点已上移到 ③c-4：必须**覆盖 regen / normalize 段**，见那里的说明。）
 
-    _mt_before = _src_mtimes()
+    # ③d **low_logic 按周承载**（`jobs/bt_low_logic_week.py`）：`position_class.py:124 read_logic()` 会读
+    #     `low_logic.json`，而生产语义是"每周一 08:20 position_class **先读**、low_logic_agent **后写**"
+    #     → 本日 position_class 必须读到**上周（或更早）产出的那份 map**，而不是 repo 9 月 stub；
+    #     周一新写出的 map 只服务**下一周**（跨周因果）。
+    #     ⚠️ 必须在下面 PINNED 跑 position_class **之前**（这是本步骤唯一的正确位置）；
+    #     幂等：结果只取决于"产品扫描 + 产品文件字节"；`bt_days.py` 日循环里还会再调一次
+    #     （`--reuse-seeded` / `--skip-seed` 时以那一次为准）。
+    try:
+        import bt_low_logic_week as _llw
+        man["low_logic_carry"] = _llw.carry_into_sandbox(T, sb, a.root, quiet=True, from_seed=True)
+        _lm = (man["low_logic_carry"].get("effective_map") or {})
+        # 同时登记进 manifest：`_stub_skip` 会让下面 STUB_FROM_LIVE 的循环跳过它，
+        # 所以必须在这里 rec()，否则 `_seed.json.files` 里看不到这一项（审计断链）。
+        rec("low_logic.json", {"src": "low_logic_carry", "from_day": _lm.get("source_day"),
+                               "kind": _lm.get("source_kind"), "md5": _lm.get("md5"),
+                               "n": _lm.get("n_concepts"), "is_repo_stub": _lm.get("is_repo_stub"),
+                               "provenance": os.path.join(sb, "low_logic_provenance.json")})
+        print("[seed] 📌 low_logic.json ← %s（%s, md5=%s%s）：本日 position_class 用的 map"
+              % (_lm.get("source_day") or "-", _lm.get("source_kind"), str(_lm.get("md5"))[:8],
+                 "，⚠️ 仍是 repo 9 月 stub（尚无产品可承载）" if _lm.get("is_repo_stub") else ""), flush=True)
+    except Exception as _lle:
+        man["low_logic_carry"] = {"err": str(_lle)[:160]}
+        print("[seed] ⚠️ low_logic 按周承载失败（不阻断）：%s" % str(_lle)[:160], flush=True)
 
     # ④ as-of 打桩：跑没有 --date 的生产脚本（钉时钟 + 本地日线 + 沙箱 DATA_DIR）
     #    顺序 = 概念高低位 → 子方向 → 方向层池 → 确认域（后面的依赖前面的产物）
@@ -758,7 +1087,7 @@ def main() -> int:
             info = copy_json(src, os.path.join(sb, name)) if os.path.exists(src) else None
             rec(name, (dict(info, src="stub_no_shim") if info else None))
     else:
-        _snap = snapshot_files(sb, PROTECT_AFTER_PRODUCERS)   # producers 前再快照一次（含 wave 之后的最终态）
+        _snap = snapshot_files(sb, _protect_list())   # producers 前再快照一次（含 wave 之后的最终态）
         for name, script, args in PINNED:
             out = os.path.join(sb, name)
             before = os.path.getmtime(out) if os.path.exists(out) else 0
@@ -784,7 +1113,10 @@ def main() -> int:
     #    但它在"补桩名单"里也存在 → 这一轮 copy_json 把**当期快照**盖回去，池退化成写死的
     #    `SUB_UNIVERSE`（room_bottom 变成 国算/算力 这种主题名而不是概念）→ pathA 选不出票 → 0 条腿。
     #    规则：① 名字出现在 PRODUCER_OUTPUTS/PINNED 里的一律跳过；② 目标文件比源文件**新**（= 生产者刚写的）也跳过。
-    _stub_skip = set(PRODUCER_OUTPUTS) | {n for n, _s, _a in PINNED}
+    _stub_skip = set(PRODUCER_OUTPUTS) | set(CARRY_STATE_FILES) | {n for n, _s, _a in PINNED}
+    #     ③ `low_logic.json` 已由上面 ③d 的"按周承载"（bt_low_logic_week）写成**本周该用的那份 map**
+    #        → 决不能被 repo 9 月 stub 盖回去（不能只依赖下面"dst 比 src 新"的时间戳规则）。
+    _stub_skip |= {"low_logic.json"}
     for name in STUB_FROM_LIVE:
         if name in _stub_skip:
             continue
