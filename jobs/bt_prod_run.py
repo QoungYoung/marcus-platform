@@ -1137,9 +1137,10 @@ def main() -> int:
                      "--day", day, "--root", a.root, "--bars-db", a.bars_db]
             _r5 = _sp5.run(_cmd5, capture_output=True, text=True, timeout=900,
                            env=dict(os.environ), cwd=REPO)
-            _tail5 = ((_r5.stdout or "") + (_r5.stderr or "")).strip().splitlines()
-            print("[bt] 候选现算(子进程) rc=%s ✓｜%s" % (_r5.returncode, _tail5[-1] if _tail5 else ""),
-                  flush=True)
+            _all5 = ((_r5.stdout or "") + (_r5.stderr or "")).strip().splitlines()
+            print("[bt] 候选现算(子进程) rc=%s ✓｜输出 %d 行 ✓" % (_r5.returncode, len(_all5)), flush=True)
+            for _ln5 in _all5[-6:]:
+                print("[bt]   │ %s" % _ln5[:180], flush=True)
         except Exception as _e5:
             print("[bt] 候选现算异常（放行，沿用已有文件）: %s" % str(_e5)[:160], file=sys.stderr, flush=True)
 

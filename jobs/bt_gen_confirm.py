@@ -31,6 +31,21 @@ def main() -> int:
     if not os.path.isdir(day_dir):
         os.makedirs(day_dir, exist_ok=True)
     os.chdir(REPO)
+    # 诊断 ✓：把关键路径的存在性/可写性打出来（便于定位 unable to open database file ✗）
+    _probe = {
+        "sandbox": sandbox, "day_dir": day_dir,
+        "bars_db": a.bars_db, "cwd": os.getcwd(),
+        "dbc": os.path.join(day_dir, "stock_pool.db"),
+    }
+    print("[gen_confirm] 诊断 ✓：%s" % _probe, flush=True)
+    for _k, _p in (("bars_db", a.bars_db), ("day_dir", day_dir),
+                   ("stock_pool.db", os.path.join(day_dir, "stock_pool.db"))):
+        try:
+            print("     %-14s 存在=%s ✓ 可写=%s ✓"
+                  % (_k, os.path.exists(_p), os.access(_p if os.path.exists(_p) else os.path.dirname(_p) or ".", os.W_OK)),
+                  flush=True)
+        except Exception as _e:
+            print("     %-14s 检查失败: %s" % (_k, str(_e)[:60]), flush=True)
     sys.path.insert(0, os.path.join(REPO, "jobs"))
     sys.path.insert(0, os.path.join(REPO, "backend"))
     sys.path.insert(0, os.path.join(REPO, "apps", "main_line"))
