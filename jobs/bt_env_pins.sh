@@ -789,3 +789,7 @@ export WOLF_L2_DEFENSE_ALLOW='1'
 
 # --- 账本 §9.389：执行口主题闸改为「主类命中任一主题即放行」（默认关 ⇒ 生产不变 ✓）---
 export WOLF_EXEC_GATE_THEME_ANY='1'
+
+# --- 账本 §9.415：E4 急杀 ➜ 加深急杀条件（他「急杀可以买」✓ ＋ 证据：深急杀≤-5%+近前低 ⇒ +2.98%、胜率62.4% ✓）---
+export WOLF_CRUSH_DEEP_ONLY='1'
+export WOLF_CRUSH_DEEP_PCT='5'
