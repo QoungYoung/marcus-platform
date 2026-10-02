@@ -91,8 +91,6 @@ def main() -> int:
     # ── 账本 §9.450 ✓：回测里**定死**精细化开关（该文件是回测专用 ✓ 生产零影响 ✓） ──
     #   实测 ✓：臂的日运行子进程里该变量**取不到** ✗（pins 有 ✓、手工带 pins 跑有效 ✓）
     #   ⇒ 这里显式设定 ✓，保证「回踩急杀」能进布腿白名单 ✓
-    os.environ.setdefault("WOLF_STAGE_PULLBACK_REFINE", "1")
-    os.environ.setdefault("WOLF_QUALIFIED_THEME_DIP", "1")
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True)
     ap.add_argument("--cut", default="")
@@ -215,6 +213,7 @@ def main() -> int:
         return r
     sb_mod.active_stocks_by = _asb_probe
 
+
     t0 = time.time()
     print("[legs_switch] T=%s cut=%s held=%d（盘前 08:18 路径）" % (a.date, cut, len(held)), flush=True)
     try:      # 诊断：active_stocks_by 的中间结果（top12 / 确认域规模 / 命中）
@@ -233,6 +232,9 @@ def main() -> int:
     except Exception:
         pass
     try:
+                os.path.join(getattr(sb_mod, "DATA", "") or ".", "stock_confirm_result.json")), flush=True)
+        except Exception as _e452:
+            print("[PBR452] err %s" % str(_e452)[:80], flush=True)
         plan = sb_mod.build_plan()
     except Exception as e:
         import traceback
