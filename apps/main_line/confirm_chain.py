@@ -116,6 +116,44 @@ def s1_relax_on() -> bool:
     return str(os.getenv("WOLF_STAGE_S1_RELAX", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
+def confirm_chain(ser, net=None, vol=None, params=None, mainline_act=None, hedge_act=None):
+    """确认链入口 ✓（账本 §9.445 ✓：**包一层**给「下跌中」做精细化 ✓）。
+
+    量化 ✓（§9.444 ✓ 49,942 个「下跌中」票日 ✓，入场＝次日开盘 ✓）：
+      · 当日涨幅 ≥ +3% ⇒ T+5 **+1.09%**、胜率 54% ✓（涨幅 ≤0 ⇒ −0.08~−0.11%、46% ✗）
+      · 距 20 日高 ≤ −15% ⇒ T+5 **+1.24%**、胜率 58% ✓（−8~−4% ⇒ +0.26%、47% ✗）
+      · 量比 ≥ 3 倍（巨量 ✗）⇒ −0.07%、45% ✗ ⇒ **仍拦** ✗
+    开关 ✓：`WOLF_STAGE_PULLBACK_REFINE`（**库内默认 0 ＝ 关 ⇒ 生产逐字不变** ✓）
+    ⚠️ 未接入 ✓：**大盘 5 日 ≤ −4%（急杀 ✓，+1.97%／胜率 68% ✓ = 最强的一条 ✓）**（需把指数喂进确认链 ✓）
+    """
+    out = _confirm_chain_core(ser, net, vol, params, mainline_act, hedge_act)
+    try:
+        if isinstance(out, dict) and out.get("stage") == "下跌中" and pullback_refine_on():
+            c = ser.values.astype(float)
+            last = float(c[-1])
+            pc = float(c[-2]) if len(c) >= 2 else last
+            chg = (last / pc - 1) * 100 if pc > 0 else 0.0
+            c20 = c[-20:] if len(c) >= 20 else c
+            hi = float(c20.max()) if len(c20) else 0.0
+            dd = (last / hi - 1) * 100 if hi > 0 else 0.0
+            vr = None
+            try:
+                if vol is not None and len(vol) >= 5:
+                    v5 = float(vol.iloc[-5:].mean()) if hasattr(vol, "iloc") else float(vol[-5:].mean())
+                    vr = (float(vol.iloc[-1]) / v5) if (v5 and v5 > 0) else None
+            except Exception:
+                vr = None
+            if (chg >= 3.0 or dd <= -15.0) and (vr is None or vr < 3.0):
+                out["stage"] = "回踩急杀"
+                out.setdefault("signals", {})["S1c_回踩急杀"] = {
+                    "chg_pct": round(chg, 2), "dist_c20h_pct": round(dd, 2),
+                    "vol_ratio": (round(vr, 2) if vr is not None else None)}
+                out["desc"] = "S1c 回踩急杀：当日涨幅≥3% 或 距20日高≤-15%（量比<3）⇒ 放行低吸 ✓"
+    except Exception:
+        pass
+    return out
+
+
 def pullback_refine_on() -> bool:
     """精细化「下跌中」拦截（账本 §9.445 ✓）。
 
@@ -128,7 +166,7 @@ def pullback_refine_on() -> bool:
     return str(os.getenv("WOLF_STAGE_PULLBACK_REFINE", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
-def confirm_chain(ser, net=None, vol=None, params=None, mainline_act=None, hedge_act=None):
+def _confirm_chain_core(ser, net=None, vol=None, params=None, mainline_act=None, hedge_act=None):
     """狼大确认链评估。ser: close Series(≥80点)。
     mainline_act: 主线题材响应度 0-1(可选) — F3: 真反弹看主线题材动没动(2026-01-13)
     hedge_act: 避险方向响应度 0-1(可选) — F4: 缩量拉避险(银行/贵金属)=诱多(2026-08-05)
@@ -178,34 +216,6 @@ def confirm_chain(ser, net=None, vol=None, params=None, mainline_act=None, hedge
     out["signals"]["net_stop"] = net_stop
     out["signals"]["vol_z20"] = round(float(_vz_now), 3) if _vz_now is not None else None
     if not s1 and not stop_nq:
-        # ── 账本 §9.445 ✓：精细化「下跌中」的拦截 —— 满足下列**任意一条**且**量比 < 3 倍** ⇒ 放行 ✓ ──
-        #   ① 当日涨幅 ≥ +3%（+1.09%/54% ✓）② 距 20 日高 ≤ −15%（+1.24%/58% ✓）
-        #   开关 `WOLF_STAGE_PULLBACK_REFINE`（库内默认 0 ⇒ 生产逐字不变 ✓）；取不到数据 ⇒ 照旧拦 ✗
-        if pullback_refine_on():
-            try:
-                _last445 = float(last)
-                _chg445 = (_last445 / float(_prev_close) - 1) * 100 if _prev_close else 0.0
-                _c20 = c[-20:] if len(c) >= 20 else c
-                _hi445 = float(_c20.max()) if len(_c20) else 0.0
-                _dd445 = (_last445 / _hi445 - 1) * 100 if _hi445 > 0 else 0.0
-                _vr445 = None
-                try:
-                    if vol is not None and len(vol) >= 5:
-                        _v5 = float(vol.iloc[-5:].mean()) if hasattr(vol, "iloc") else float(vol[-5:].mean())
-                        _vr445 = (float(vol.iloc[-1]) / _v5) if (_v5 and _v5 > 0) else None
-                except Exception:
-                    _vr445 = None
-                _ok445 = bool(_chg445 >= 3.0 or _dd445 <= -15.0)
-                _cap445 = bool(_vr445 is None or _vr445 < 3.0)
-                if _ok445 and _cap445:
-                    out["stage"] = "回踩急杀"
-                    out["signals"]["S1c_回踩急杀"] = {"chg_pct": round(_chg445, 2),
-                                                     "dist_c20h_pct": round(_dd445, 2),
-                                                     "vol_ratio": (round(_vr445, 2) if _vr445 is not None else None)}
-                    out["desc"] = "S1c 回踩急杀（当日涨幅≥3% 或 距20日高≤-15% ∧ 量比<3）：放行低吸 ✓"
-                    return out
-            except Exception:
-                pass
         out["desc"] = "S1未满足: 价格或量能仍在下行"
         return out
     out["stage"] = "缩量止跌" if s1 else "止跌待确认"
