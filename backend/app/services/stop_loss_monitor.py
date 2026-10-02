@@ -1368,11 +1368,11 @@ class StopLossMonitor:
         out = {"vwap": None, "vwap_gap_pct": None, "vwap_break": False,
                "first_high": None, "dist_to_first_high_pct": None, "t_sell_ready": False}
         try:
-            from app.services.t_data_sources import (fetch_tencent_quote,
+            from app.services.t_data_sources import (fetch_tencent_quote, fetch_quote_one,
                                                      _normalize_symbol,
                                                      fetch_tencent_mkline)
             ns = _normalize_symbol(symbol)
-            q = fetch_tencent_quote([ns]).get(ns) or {}
+            q = fetch_quote_one(ns) or {}
             cur = float(q.get("current") or current_price or 0)
             vwap = float(q.get("average") or 0)
             if vwap > 0 and cur > 0:
@@ -1397,6 +1397,28 @@ class StopLossMonitor:
                         out["t_sell_ready"] = bool(_t_signals_from_m5(tb)[1])
                     except Exception:
                         pass
+            except Exception:
+                pass
+            # ── 账本 §9.427 ✓ 用户「收敛到 B5」✓：黄线离场只在「尾盘半小时 ∧ 破当日新低」生效 ──
+            #   量化 ✓（3,482 票日）：全天候"破均价就卖" ⇒ 触发 97% ✓、卖点比当日收盘低 0.45% ✗；
+            #   B5 ⇒ 触发 29% ✓、仅低 0.10% ✓（卖早降 78% ✓、churn 降 70% ✓）
+            #   他 2026-08-04 原话 ✓：「在这个半小时内有个绝对不能破的点…一旦突发跌破直接走」✓
+            #   开关 ✓：`WOLF_VWAP_SELL_B5`（**库内默认 0 ＝ 关 ⇒ 生产逐字不变** ✓）；拿不到分时 ⇒ 旧行为 ✓
+            try:
+                import os as _os427
+                if (str(_os427.getenv("WOLF_VWAP_SELL_B5", "0")).strip().lower() in ("1", "true", "yes", "on")
+                        and out.get("vwap_break")):
+                    _tb427 = locals().get("tb") or []
+                    _hh427 = ""
+                    _lo427 = None
+                    if _tb427:
+                        _last427 = sorted(_tb427, key=lambda x: str(x.get("time")))[-1]
+                        _hh427 = str(_last427.get("time") or "")[-5:]
+                        _los = [float(x.get("low") or 0) for x in _tb427 if float(x.get("low") or 0) > 0]
+                        _lo427 = min(_los) if _los else None
+                    if _hh427 and _lo427 and not (_hh427 >= "14:30" and cur <= float(_lo427) * 1.001):
+                        out["vwap_break"] = False
+                        out["vwap_break_b5_skip"] = "%s/%s" % (_hh427, _lo427)
             except Exception:
                 pass
         except Exception as e:
@@ -1681,7 +1703,7 @@ class StopLossMonitor:
             if _gp.get("stop_close_confirm", True):
                 from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
                 _ns = _normalize_symbol(symbol)
-                _q = fetch_tencent_quote([_ns]).get(_ns) or {}
+                _q = fetch_quote_one(_ns) or {}
                 _now = float(_q.get("current") or 0)
                 _rec = float(_gp.get("stop_recovery_pct", 1.0))
                 if _now > 0 and price > 0 and (_now - price) / price * 100 >= _rec:
