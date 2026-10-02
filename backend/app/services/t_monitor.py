@@ -3869,7 +3869,16 @@ class TMonitor:
             "amount": float(quote.get("amount", 0) or 0),
             "average": _avg,
             # 分时黄线跌破（狼大8-04『绝对不能破的点就是日均线那条黄线 一旦突发跌破直接走』）
-            "vwap_break": bool(_avg > 0 and _cur < _avg),
+            # ⚠️ 账本 §9.427（用户「收敛到 B5」）：**黄线离场只在尾盘半小时 ∧ 破当日新低生效** ✓
+            #   量化（3,482 票日）：全天候破均价 ⇒ 触发 97% ✓、卖点比当日收盘低 0.45% ✗；
+            #   B5 ⇒ 触发 29% ✓、仅低 0.10% ✓（卖早降 78% ✓、churn 降 70% ✓）；
+            #   他 2026-08-04 原话「在这个半小时内有个绝对不能破的点…一旦突发跌破直接走」✓
+            #   开关 `WOLF_VWAP_SELL_B5`（**库内默认 0 ＝ 关 ⇒ 生产逐字不变** ✓）
+            "vwap_break": bool(_avg > 0 and _cur < _avg and (lambda _ok: _ok)(
+                (str(os.getenv("WOLF_VWAP_SELL_B5", "0")).strip().lower() not in ("1", "true", "yes", "on"))
+                or (datetime.now().strftime("%H:%M") >= "14:30"
+                    and float(quote.get("low", 0) or 0) > 0
+                    and _cur <= float(quote.get("low", 0) or 0) * 1.001))),
             "dip_prev_low": self._stock_dip_prev_low(symbol),
             # 个股 5min 单根跌幅%（急杀为负 ✓）—— 与 index.m5_dump 做**合取**用（账本 §9.175）
             "m5_dump": self._stock_m5_dump(symbol),
