@@ -588,6 +588,42 @@ class MarcusVNPyExecutor:
             'realized_pnl': realized_pnl
         }
     
+    def _ma_pair_421(self, symbol: str):
+        """MA5／MA20（账本 §9.421 ✓ 供"全平改减半"用 ✓）。
+
+        ⚠️ 不复用趋势闸的缓存 ✗：趋势闸可能**提前返回**（如"破 5 日线丢"豁免 ✓）
+        而根本没算均线 ⇒ 缓存是 (0,0) ✗。这里用**同一数据源**自己算一遍并缓存 ✓（按天 ✓）。
+        """
+        try:
+            import time as _t421
+            _key = ("ma421", str(symbol))
+            _c = getattr(self, "_trend_constraint_cache", None)
+            if _c is None:
+                self._trend_constraint_cache = {}
+                _c = self._trend_constraint_cache
+            _hit = _c.get(_key)
+            if _hit and (_t421.time() - float(_hit[0]) < 300):
+                return float(_hit[1] or 0), float(_hit[2] or 0)
+            from app.api.indicator import _normalize_to_ts_code
+            from app.core.trading._api_config import get_tushare_pro as _gtp421
+            from datetime import datetime as _dt421, timedelta as _td421
+            _pro = _gtp421()
+            _tsc = _normalize_to_ts_code(symbol)
+            _end = _dt421.now().strftime("%Y%m%d")
+            _start = (_dt421.now() - _td421(days=60)).strftime("%Y%m%d")
+            _df = _pro.daily(ts_code=_tsc, start_date=_start, end_date=_end, limit=30)
+            if _df is None or _df.empty or len(_df) < 20:
+                _c[_key] = (_t421.time(), 0, 0)
+                return 0.0, 0.0
+            _df = _df.sort_values("trade_date", ascending=True)
+            _cl = [float(x) for x in _df["close"].values]
+            _m5 = float(sum(_cl[-5:]) / 5.0)
+            _m20 = float(sum(_cl[-20:]) / 20.0)
+            _c[_key] = (_t421.time(), _m5, _m20)
+            return _m5, _m20
+        except Exception:
+            return 0.0, 0.0
+
     def check_risk(self, symbol: str, price: float, volume: int, side: str,
                    skip_trend_constraint: bool = False, reason: str = "") -> dict:
         """
@@ -719,15 +755,16 @@ class MarcusVNPyExecutor:
                     in ("1", "true", "yes", "on")):
                 _rs421b = str(risk_data.get('reason') or '') + str(reason or '')
                 if not any(k in _rs421b for k in ("止损", "跌停", "破位", "防御", "清仓", "stop_loss", "defense")):
-                    # ⚠️ 趋势闸可能**提前返回**（如 `ma5_break_exempt` 命中 ✓）⇒ MA 缓存可能是空的 ✗
-                    #   ⇒ 这里**主动调一次**（它会算 MA5/MA20 并缓存 ✓，返回的拦截串这里不用 ✓）
+                    # ⚠️ 趋势闸可能**提前返回**（"破 5 日线丢"豁免 ✓）⇒ 缓存是 (0,0) ✗
+                    #   ⇒ 用**自带的 MA 助手**（同一数据源 ✓、按天缓存 ✓）✓
+                    _ma5b, _ma20b = self._ma_pair_421(symbol)
                     try:
-                        self._check_sell_trend_constraint(
-                            symbol, avg_cost=(pos.get('avg_cost') or pos.get('avg_price') or 0),
-                            cur_price=price)
+                        import sys as _sys421d
+                        print("[HalfSell诊断] %s side=%s vol=%s held=%s MA5=%s MA20=%s reason=%s"
+                              % (symbol, side, volume, (pos or {}).get('volume'), _ma5b, _ma20b,
+                                 str(reason or '')[:40]), file=_sys421d.stderr)
                     except Exception:
                         pass
-                    _ma5b, _ma20b = getattr(self, "_ma_pair_cache", (0.0, 0.0))
                     _heldb = int(pos.get('volume') or 0)
                     if (_heldb > 0 and _ma5b and _ma20b and _ma5b > _ma20b
                             and int(volume) >= int(_heldb * 0.9)):
