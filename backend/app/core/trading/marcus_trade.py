@@ -719,6 +719,14 @@ class MarcusVNPyExecutor:
                     in ("1", "true", "yes", "on")):
                 _rs421b = str(risk_data.get('reason') or '') + str(reason or '')
                 if not any(k in _rs421b for k in ("止损", "跌停", "破位", "防御", "清仓", "stop_loss", "defense")):
+                    # ⚠️ 趋势闸可能**提前返回**（如 `ma5_break_exempt` 命中 ✓）⇒ MA 缓存可能是空的 ✗
+                    #   ⇒ 这里**主动调一次**（它会算 MA5/MA20 并缓存 ✓，返回的拦截串这里不用 ✓）
+                    try:
+                        self._check_sell_trend_constraint(
+                            symbol, avg_cost=(pos.get('avg_cost') or pos.get('avg_price') or 0),
+                            cur_price=price)
+                    except Exception:
+                        pass
                     _ma5b, _ma20b = getattr(self, "_ma_pair_cache", (0.0, 0.0))
                     _heldb = int(pos.get('volume') or 0)
                     if (_heldb > 0 and _ma5b and _ma20b and _ma5b > _ma20b
