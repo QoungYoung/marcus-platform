@@ -434,7 +434,29 @@ def falling_v2(f: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Tuple
     # ① 骨架：v1 的"缓跌形状"（形状不坏 ⇒ 直接放行，v2 不新增拦截）
     bad, why1 = falling(f)
     if not bad:
-        return False, ""
+        # ⚠️ 2026-09-30（账本 §9.416 ✓ 用户「改成他的配置，和他保持一致」✓）：
+        #   「形状不坏 ⇒ 直接放行」这条会放走**"杀中买"** ✗ —— 实测该类 **T+10 −4.38%、胜率 9%** ✗✗
+        #   而**深急杀**（相对前收 ≤−5%）⇒ **+3.81%、胜率 77%** ✓✓（他的「急杀可以买」✓）
+        #   故：**跌幅尚浅（> −阈值）∧ 现价 < 当日开盘（当日偏弱）⇒ 不再自动放行** ✗，继续走 E1~E4 ✓
+        #   开关 ✓：`WOLF_CRUSH_NO_MIDCRASH`（**库内默认 0 ＝ 关 ⇒ 生产逐字不变** ✓）
+        if str(os.getenv("WOLF_CRUSH_NO_MIDCRASH", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                _dp = float(os.getenv("WOLF_CRUSH_DEEP_PCT", "5") or 5)
+                _cg = f.get("chg_pct")
+                _op = f.get("open")
+                _shallow = (_cg is None) or (float(_cg) > -_dp)
+                _weak = (_op is not None) and (float(px) < float(_op))
+                if _shallow and _weak:
+                    bad, why1 = True, ("当日跌幅 %s 未达深急杀（≤−%.1f%% ✗）且现价 %.3f < 当日开盘 %.3f（当日偏弱 ✗）"
+                                       "⇒ 不在「杀中」买（账本 §9.416 ✓：该类胜率仅 9%% ✗）"
+                                       % (("%.2f%%" % float(_cg)) if _cg is not None else "缺", _dp,
+                                          float(px), float(_op)))
+                else:
+                    return False, ""
+            except Exception:
+                return False, ""
+        else:
+            return False, ""
     c = ctx or {}
     tol = float(c.get("tol_pct", 1.0) or 1.0)
     crash_pct = float(c.get("crash_pct", 1.5) or 1.5)

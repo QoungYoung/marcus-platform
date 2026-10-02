@@ -793,3 +793,6 @@ export WOLF_EXEC_GATE_THEME_ANY='1'
 # --- 账本 §9.415：E4 急杀 ➜ 加深急杀条件（他「急杀可以买」✓ ＋ 证据：深急杀≤-5%+近前低 ⇒ +2.98%、胜率62.4% ✓）---
 export WOLF_CRUSH_DEEP_ONLY='1'
 export WOLF_CRUSH_DEEP_PCT='5'
+
+# --- 账本 §9.416：**不许在「杀中」买**（实证：该类 T+10 −4.38%、胜率 9% ✗；深急杀 +3.81%、77% ✓）---
+export WOLF_CRUSH_NO_MIDCRASH='1'
