@@ -88,6 +88,11 @@ def resolve_code_dir(date8: str, explicit: str = "") -> str:
     return d if d and os.path.isdir(d) else ""
 
 def main() -> int:
+    # ── 账本 §9.450 ✓：回测里**定死**精细化开关（该文件是回测专用 ✓ 生产零影响 ✓） ──
+    #   实测 ✓：臂的日运行子进程里该变量**取不到** ✗（pins 有 ✓、手工带 pins 跑有效 ✓）
+    #   ⇒ 这里显式设定 ✓，保证「回踩急杀」能进布腿白名单 ✓
+    os.environ.setdefault("WOLF_STAGE_PULLBACK_REFINE", "1")
+    os.environ.setdefault("WOLF_QUALIFIED_THEME_DIP", "1")
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True)
     ap.add_argument("--cut", default="")
@@ -196,8 +201,17 @@ def main() -> int:
     def _asb_probe(stages, *a, **kw):
         r = _orig_asb(stages, *a, **kw)
         n = len((r[0] or {})) if isinstance(r, tuple) else -1
-        print("[diag] build_plan→active_stocks_by(stages=%s) 命中=%s top12=%s"
-              % (stages, n, (r[1] if isinstance(r, tuple) else None)), flush=True)
+        # B2 可审计：把**逐主题生效的 stage 白名单**也打出来（base 还是 base+结构到位/缩量止跌）
+        _eff = {}
+        _sf = kw.get("stages_for")
+        if callable(_sf):
+            for _th in (r[1] if isinstance(r, tuple) and r[1] else []):
+                try:
+                    _eff[_th] = "base+dip" if len(_sf(_th) or ()) > len(stages or ()) else "base"
+                except Exception:
+                    _eff[_th] = "?"
+        print("[diag] build_plan→active_stocks_by(stages=%s 生效=%s) 命中=%s top12=%s"
+              % (stages, _eff or "-", n, (r[1] if isinstance(r, tuple) else None)), flush=True)
         return r
     sb_mod.active_stocks_by = _asb_probe
 
@@ -212,6 +226,13 @@ def main() -> int:
         import traceback; traceback.print_exc()
         print("[diag] active_stocks_by err %s" % str(_de)[:110], flush=True)
     try:
+        _bs = sb_mod.board_stats() if hasattr(sb_mod, "board_stats") else {}
+        if _bs.get("dropped"):
+            print("[legs_switch] 板块权限前置过滤：剔除 %d 只买不到的板 %s（WOLF_PICK_BOARD_EARLY=1）"
+                  % (_bs.get("dropped"), (_bs.get("codes") or [])[:10]), flush=True)
+    except Exception:
+        pass
+    try:
         plan = sb_mod.build_plan()
     except Exception as e:
         import traceback
@@ -225,12 +246,69 @@ def main() -> int:
                                                      ensure_ascii=False)[:300], flush=True)
     out = a.out or os.path.join(sb, "legs_switch.jsonl")
     with open(out, "w", encoding="utf-8") as f:
+        # ── 腿批准闸（共享 leg_gate：主营校验 dsh + 可买门 + 板块权限；开关 WOLF_LEG_GATE）──
+        # 2026-09-18：08:18 路径**原先完全没有可买门**（theme_buyable 只被 09:20 调用），
+        #   于是"门关了照样布腿、照样买入"。此处与 09:20 共用同一 approve()。
+        _lg = None
+        try:
+            import sys as _sys3
+            _p3 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+            if _p3 not in _sys3.path:
+                _sys3.path.insert(0, _p3)
+            import leg_gate as _lg
+        except Exception as _ge:
+            print("[legs_switch] leg_gate 不可用(放行) %s" % str(_ge)[:80], flush=True)
+        _t_pre = time.time()
+        _idx_blocked, _idx_why = (False, "")
+        if _lg is not None:
+            try:
+                _idx_blocked, _idx_why = _lg.index_new_buy_blocked(str(getattr(a, "date", "") or ""))
+            except Exception as _e5:
+                _idx_blocked, _idx_why = False, "ERR " + str(_e5)[:40]
+        # 2026-09-19 提速：写腿前**并发预热**主营/主类判定（每票串行 dsh ~2s ⇒ 曾把这一步拖到 465s/958s）
+        if _lg is not None and recorded.get("buy_new"):
+            try:
+                _n = _lg.prefetch([(b.get("symbol"), b.get("theme")) for b in recorded["buy_new"]])
+                if _n:
+                    print("[legs_switch] 主营判定并发预热 %d 条（命中缓存后逐票判定零等待）" % _n, flush=True)
+            except Exception as _pe:
+                print("[legs_switch] 预热失败(忽略) %s" % str(_pe)[:60], flush=True)
+        if os.getenv("WOLF_STEP_TIMING", "0") not in ("", "0", "false", "no"):
+            print("[timing] legs_switch.预热           %.2fs" % (time.time() - _t_pre), flush=True)
+        _t_gate = time.time()
         for b in recorded["buy_new"]:
+            if _idx_blocked:
+                print("LEG_REJECT %s %s: %s" % (b.get("symbol"), b.get("stage"), _idx_why), flush=True)
+                continue
+            if _lg is not None:
+                try:
+                    # 板块权限回调：WOLF_PICK_BOARD_EARLY=1 时把「账户买不到的板」在 ③ 就拦下并留痕
+                    # （此前 ③ 拿不到 board 回调 ⇒ 日志里一条"板块权限不通过"都没有，只能在 arm 步 ARM_SKIP_BOARD）
+                    _bd = None
+                    if str(os.getenv("WOLF_PICK_BOARD_EARLY", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                        _bd = getattr(sb_mod, "board_ok", None)
+                    _ok3, _why3 = _lg.approve(b.get("symbol"), b.get("theme"), stage=str(b.get("stage") or ""),
+                                              board=_bd)
+                except Exception as _e3:
+                    _ok3, _why3 = True, "ERR " + str(_e3)[:40]
+                if not _ok3:
+                    print("LEG_REJECT %s %s: %s" % (b.get("symbol"), b.get("stage"), _why3), flush=True)
+                    continue
             f.write(json.dumps(dict(b, date=a.date, cut=cut, src="switch_builder_0818"),
                                ensure_ascii=False) + "\n")
+        if os.getenv("WOLF_STEP_TIMING", "0") not in ("", "0", "false", "no"):
+            print("[timing] legs_switch.闸+写腿         %.2fs" % (time.time() - _t_gate), flush=True)
         for s in recorded["sell_old"]:
             f.write(json.dumps(dict(s, date=a.date, cut=cut, src="switch_builder_0818_sell"),
                                ensure_ascii=False) + "\n")
+    try:
+        if _lg is not None and os.getenv("WOLF_STEP_TIMING", "0") not in ("", "0", "false", "no"):
+            _st = _lg.stats()
+            _tm = _st.get("timing_s") or {}
+            print("[timing] leg_gate 分相 %s（calls=%s）"
+                  % (json.dumps(_tm, ensure_ascii=False), _st.get("calls")), flush=True)
+    except Exception:
+        pass
     print("[legs_switch] 写出 %s：买腿 %d / 卖腿 %d | %.0fs"
           % (out, len(recorded["buy_new"]), len(recorded["sell_old"]), time.time() - t0), flush=True)
     return 0
