@@ -760,7 +760,14 @@ class MarcusVNPyExecutor:
                     and str(_os421b.getenv("WOLF_SELL_HALF_ON_BREAK", "0")).strip().lower()
                     in ("1", "true", "yes", "on")):
                 _rs421b = str(risk_data.get('reason') or '') + str(reason or '')
-                if not any(k in _rs421b for k in ("止损", "跌停", "破位", "防御", "清仓", "stop_loss", "defense")):
+                # ⚠️ 账本 §9.428（用户点出 ✓）：**兑现/高抛类必须豁免** ✗
+                #   实测 ✓：`high_sell`（T 出前高 ✓）本来就要按他的「**吃一口减一半**」卖半仓 ✓，
+                #   而我们这条"减半"把它**又砍了一半** ✗（0310：5000⇒2500 ✓、0312：2400⇒1200 ✓）
+                #   ⇒ 本条只该作用于"**因弱而卖**"类（黄线/破位/走弱 ✓）
+                _exempt421 = ("止损", "跌停", "破位", "防御", "清仓", "stop_loss", "defense",
+                              "high_sell", "high_sell_then_buy_back", "profit_take", "board_half",
+                              "fib_target", "高抛", "兑现", "减半")
+                if not any(k in _rs421b for k in _exempt421):
                     # ⚠️ 趋势闸可能**提前返回**（"破 5 日线丢"豁免 ✓）⇒ 缓存是 (0,0) ✗
                     #   ⇒ 用**自带的 MA 助手**（同一数据源 ✓、按天缓存 ✓）✓
                     _ma5b, _ma20b = self._ma_pair_421(symbol)
