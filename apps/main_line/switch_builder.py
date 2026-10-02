@@ -172,7 +172,9 @@ def stages_for_theme(theme, dip=None):
     """
     _base = _stages_for_theme_base(theme, dip)
     try:
-        if str(os.getenv("WOLF_STAGE_PULLBACK_REFINE", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        _sw = str(os.getenv("WOLF_STAGE_PULLBACK_REFINE", "0")).strip().lower() in ("1", "true", "yes", "on")
+        print("[PBR诊断] stages_for_theme(%s) sw=%s base=%s" % (theme, _sw, tuple(_base)), flush=True)
+        if _sw:
             if "回踩急杀" not in _base:
                 return tuple(_base) + ("回踩急杀",)
     except Exception:
