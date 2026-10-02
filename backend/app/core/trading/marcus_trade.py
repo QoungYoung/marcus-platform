@@ -1024,6 +1024,17 @@ class MarcusVNPyExecutor:
         risk_result = self.check_risk(symbol, price, volume, 'sell',
                                       skip_trend_constraint=skip_trend_constraint,
                                       reason=reason)   # 账本 §9.421 ✓：让"保命类豁免"能看到理由 ✓
+        # ⚠️ 2026-10-02（账本 §9.421 ✓）：**卖出也要应用 `adjusted_volume`** ✓
+        #   原先只有 `buy()` 里应用了它 ✗ ⇒ 我们的"全平改减半"算出来了却**执行不到** ✗
+        if risk_result.get('adjusted') and risk_result.get('adjusted_volume'):
+            _old421e = int(volume)
+            volume = int(risk_result['adjusted_volume'])
+            try:
+                import sys as _sys421e
+                print("[风控] 自动调整 %s 卖出数量: %s ⇒ %s 股" % (symbol, _old421e, volume),
+                      file=_sys421e.stderr)
+            except Exception:
+                pass
         if not risk_result['allowed']:
             return {
                 'status': 'rejected',
