@@ -203,7 +203,11 @@ export WOLF_OC_KINDS='*'
 #      同一句 playbook:287，回测驱动 setdefault=1），但它会漏（t 家族窗外仍成交 87 笔）
 #      ⇒ D2 的增量 = "把已有的松窗口收成硬闸"，不是新增规则；用户看数后选择暂不收。
 #   要启用：把下面一行改成 '1' 并加 `WOLF_TW_KINDS='low_buy,custom_prevlow,wolf_zheng_t_buy'`。
-export WOLF_TRADE_WINDOW='0'
+# --- 账本 §9.432：高抛只卖 T 仓额度（≤持仓 20%），底仓不动（他「底仓不动+T仓高抛低吸」✓）---
+export WOLF_HIGH_SELL_T_SLEEVE='1'
+# --- 账本 §9.432：打开做 T 时段窗（他的话：只做 9:45-10:00 与 14:00-14:30 ✓）---
+export WOLF_TRADE_WINDOW='1'
+export WOLF_TW_KINDS='wolf_zheng_t_buy'
 # ── 2026-09-22 三条修复（用户拍板："1 b 3 都修"）──────────────────────────────────
 #   起点：用户问"兆易创新明明是主升，为何我们是亏损" ⇒ 查出不是选股问题，是**赚了那天卖不出去**：
 #   ① 底仓 floor 口径「持仓 < 2 手 ⇒ 整仓即底仓」(`t_base_floor._rebase_floor`) ⇒ 一手仓 T 仓恒为 0；

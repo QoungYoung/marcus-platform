@@ -829,6 +829,34 @@ class MarcusVNPyExecutor:
             except Exception:
                 pass
 
+        # ── 账本 §9.432 ✓ 用户「修复高抛」✓：**高抛只卖 T 仓额度，底仓不动** ────────────
+        #   他 2026-08-04「你们始终**分不清 做T仓位和底仓的区别**」✓＋「**底仓不动**」✓
+        #   2026-09-03「仓位不会低于65%收盘，**日内做T仓位20%**」✓ ⇒ 高抛量 ≤ 持仓 × 20% ✓
+        #   实测病象 ✓：SH600152 买 10,200 ⇒ 高抛**卖 5,200（51%）** ✗（从底仓里出 ✗ ⇒ 错过收益 ✓）
+        #   开关 ✓：`WOLF_HIGH_SELL_T_SLEEVE`（**库内默认 0 ＝ 关 ⇒ 生产逐字不变** ✓）
+        try:
+            import os as _os432
+            if (side == 'sell' and not skip_trend_constraint
+                    and str(_os432.getenv("WOLF_HIGH_SELL_T_SLEEVE", "0")).strip().lower()
+                    in ("1", "true", "yes", "on")):
+                _rs432 = str(risk_data.get('reason') or '') + str(reason or '')
+                _is432 = any(k in _rs432 for k in ("high_sell", "高抛", "high_sell_then_buy_back"))
+                _held432 = int(pos.get('volume') or 0)
+                if _is432 and _held432 > 0:
+                    _cap432 = max(100, int(_held432 * 0.20) // 100 * 100)
+                    if int(volume) > _cap432:
+                        try:
+                            import logging as _lg432
+                            _lg432.getLogger(__name__).info(
+                                "[HighSellT] %s 高抛只动 T 仓额度（20%%）：%s ⇒ %s 股（底仓 %s 股不动）"
+                                % (symbol, volume, _cap432, _held432 - _cap432))
+                        except Exception:
+                            pass
+                        risk_data['adjusted'] = True
+                        risk_data['adjusted_volume'] = int(_cap432)
+        except Exception:
+            pass
+
         risk_data['status'] = 'passed'
         risk_data['drawdown_pct'] = round(drawdown_pct, 2)
         if 'position_utilization_warning' in risk_data:
