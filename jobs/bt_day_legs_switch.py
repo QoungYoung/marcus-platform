@@ -232,9 +232,6 @@ def main() -> int:
     except Exception:
         pass
     try:
-                os.path.join(getattr(sb_mod, "DATA", "") or ".", "stock_confirm_result.json")), flush=True)
-        except Exception as _e452:
-            print("[PBR452] err %s" % str(_e452)[:80], flush=True)
         plan = sb_mod.build_plan()
     except Exception as e:
         import traceback
