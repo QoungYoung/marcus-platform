@@ -80,6 +80,10 @@ def parse_float_chinese(value):
 _HALF_SELL_DONE: dict = {}
 
 
+# ⚠️ 账本 §9.449 ✓：T 仓查询缓存（跨实例 ✓，同 `gateway_execute` 每次新建执行器 ✓）
+_T_SLEEVE_CACHE: dict = {}
+
+
 class MarcusVNPyExecutor:
     """Marcus × VN.PY 交易执行器"""
     
@@ -594,6 +598,50 @@ class MarcusVNPyExecutor:
             'realized_pnl': realized_pnl
         }
     
+    def _t_sleeve_shares(self, symbol: str) -> int:
+        """本票 **T 仓**股数 ✓（账本 §9.449 ✓ 用户 2026-10-03 裁定「低吸买算 T 买」✓）。
+
+        T 仓 = Σ(T 买) − Σ(T 卖) ✓（按账户＋标的 ✓，当日缓存 ✓）
+        读不到台账 ⇒ 返回 0 ✓（**保守：不发高抛** ✓，与"底仓不动"一致 ✓）
+        """
+        try:
+            import os as _os449b
+            import time as _t449
+            _key = (str(getattr(self, "account_id", "") or ""), str(symbol))
+            _hit = _T_SLEEVE_CACHE.get(_key)
+            if _hit and (_t449.time() - float(_hit[0]) < 120):
+                return int(_hit[1])
+            _buy_kinds = ("custom_prevlow", "wolf_zheng_t_buy", "custom_m5dump", "low_buy")
+            _sell_kinds = ("high_sell", "custom_vwap_sell", "custom_support_sell",
+                           "custom_level_sell", "custom_trail_sell")
+            _acc = str(getattr(self, "account_id", "") or "stock")
+            _sym = str(symbol)
+            import psycopg2 as _pg449
+            _dsn = _os449b.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+            _cn = _pg449.connect(_dsn)
+            try:
+                _cn.set_session(readonly=True, autocommit=True)
+                _cu = _cn.cursor()
+                _b = 0
+                _s = 0
+                for _kind in _buy_kinds:
+                    _cu.execute("SELECT coalesce(sum(volume),0) FROM paper_trades "
+                                "WHERE account_id=%s AND symbol=%s AND direction LIKE '买%%' "
+                                "AND reason LIKE %s", (_acc, _sym, "%" + _kind + "%"))
+                    _b += int(_cu.fetchone()[0] or 0)
+                for _kind in _sell_kinds:
+                    _cu.execute("SELECT coalesce(sum(volume),0) FROM paper_trades "
+                                "WHERE account_id=%s AND symbol=%s AND direction LIKE '卖%%' "
+                                "AND reason LIKE %s", (_acc, _sym, "%" + _kind + "%"))
+                    _s += int(_cu.fetchone()[0] or 0)
+            finally:
+                _cn.close()
+            _t = max(0, int(_b - _s))
+            _T_SLEEVE_CACHE[_key] = (_t449.time(), _t)
+            return _t
+        except Exception:
+            return 0
+
     def _ma_pair_421(self, symbol: str):
         """MA5／MA20（账本 §9.421 ✓ 供"全平改减半"用 ✓）。
 
@@ -828,6 +876,37 @@ class MarcusVNPyExecutor:
                 print("[HalfSell] 分支异常（放行原量）: %s" % str(_e421c)[:120], file=_sys421c.stderr)
             except Exception:
                 pass
+
+        # ── 账本 §9.449 ✓ 用户 2026-10-03 裁定「**低吸买算 T 买**」✓ ─────────────────────
+        #   T 仓 = Σ(T 买) − Σ(T 卖) ✓；**无 T 仓 ⇒ 拒卖高抛** ✓（他的「底仓不动 ＋ T仓高抛低吸」✓）
+        #   开关 `WOLF_HIGH_SELL_BY_T_SLEEVE`（**库内默认 0 ＝ 关 ⇒ 生产逐字不变** ✓）
+        try:
+            import os as _os449
+            if (side == 'sell' and not skip_trend_constraint
+                    and str(_os449.getenv("WOLF_HIGH_SELL_BY_T_SLEEVE", "0")).strip().lower()
+                    in ("1", "true", "yes", "on")):
+                _r449 = str(risk_data.get('reason') or '') + str(reason or '')
+                _is449 = any(k in _r449 for k in ("high_sell", "高抛"))
+                if _is449:
+                    _ts449 = self._t_sleeve_shares(symbol)
+                    if _ts449 <= 0:
+                        _why449 = ("无 T 仓不发高抛（他 2026-08-04「底仓不动＋T仓高抛低吸」✓；"
+                                   "用户 2026-10-03 裁定「低吸买算 T 买」✓）（WOLF_HIGH_SELL_BY_T_SLEEVE=1）")
+                        risk_data['reason'] = _why449
+                        risk_data['status'] = 'blocked_no_t_sleeve'
+                        return {'allowed': False, 'reason': _why449, 'data': risk_data}
+                    if int(volume) > _ts449:
+                        try:
+                            import logging as _lg449
+                            _lg449.getLogger(__name__).info(
+                                "[HighSellT] %s 高抛受 **T 仓** 约束：%s ⇒ %s 股（T 仓 %s）"
+                                % (symbol, volume, _ts449, _ts449))
+                        except Exception:
+                            pass
+                        risk_data['adjusted'] = True
+                        risk_data['adjusted_volume'] = int(_ts449)
+        except Exception:
+            pass
 
         # ── 账本 §9.432 ✓ 用户「修复高抛」✓：**高抛只卖 T 仓额度，底仓不动** ────────────
         #   他 2026-08-04「你们始终**分不清 做T仓位和底仓的区别**」✓＋「**底仓不动**」✓
