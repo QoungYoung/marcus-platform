@@ -372,6 +372,50 @@ class TushareRelay:
                 continue
             return out_fields, items
 
+        # ── 账本 §9.478 ✓ 用户要求：**直连 promax 作为"最后一跳"**（绕过源路由/降级/缓存 ✓）──
+
+        #   为什么需要 ✓：实测同一请求**直连 promax 能拿到**（`stk_mins` 50 根 ✓），
+
+        #   而经中继会走完两源后失败 ✗ ⇒ 与其继续猜差异，不如把**已验证可用的直连**作为兜底 ✓
+
+        try:
+
+            import json as _json478, os as _os478, urllib.request as _url478
+
+            _psrc = next((x for x in ordered if getattr(x, "name", "") == "promax"), None)
+
+            _key478 = getattr(_psrc, "key", "") or _os478.getenv("PROMAX_API_KEY", "")
+
+            _base478 = str(getattr(_psrc, "base", "") or "https://pcd.mobcvb.cn/tushare/pro").rstrip("/")
+
+            if _key478 and _psrc is not None:
+
+                import urllib.parse as _up478
+
+                _ttl478 = _env_int("TUSHARE_RELAY_DIRECT_TIMEOUT", 45)
+
+                _q478 = _up478.urlencode({k: v for k, v in (clean or {}).items() if v not in (None, "")})
+
+                _req478 = _url478.Request("%s/%s?%s" % (_base478, api, _q478),
+
+                                           headers={"X-API-KEY": _key478, "User-Agent": "marcus-relay/1.0"})
+
+                with _url478.urlopen(_req478, timeout=_ttl478) as _r478:
+
+                    _j478 = _json478.loads(_r478.read().decode("utf-8", "replace"))
+
+                _d478 = (_j478 or {}).get("data") or {}
+
+                if _d478.get("items"):
+
+                    logger.info("[tushare_relay] %s 直连 promax 兜底成功（%d 行 ✓）", api, len(_d478["items"]))
+
+                    return _d478.get("fields") or [], _d478["items"]
+
+        except Exception as _e478:
+
+            errors.append("direct-promax: %s" % str(_e478)[:80])
+
         raise TushareRelayError(f"{api} 全部数据源失败: " + " | ".join(errors))
 
     def __getattr__(self, name: str):
