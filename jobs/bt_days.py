@@ -28,6 +28,105 @@ ROOT = os.path.join(DATA, "_bt_full")
 TASK_TIMELINE = os.path.join(DATA, "_bt_task_timeline.json")
 
 
+def _future_union_symbols(root: str, day8: str) -> set:
+    """未来某交易日的**候选并集**：直接读该日沙箱里已存在的 leg 文件（磁盘口径，不依赖 DB 现状）。
+
+    为什么用 leg 文件：滚动前瞻预取要覆盖"**后面才会出现的票**"——那些票此刻既不在持仓里、
+    条件也可能还没布防，只有 sandbox 的 legs 文件（全年都在磁盘上）能提前告诉我们它会被用到。
+    """
+    out = set()
+    for fn in ("legs_switch.jsonl", "legs.jsonl"):
+        p2 = os.path.join(root, day8, fn)
+        if not os.path.exists(p2):
+            continue
+        try:
+            for ln in open(p2, encoding="utf-8"):
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    _o = json.loads(ln)
+                except Exception:
+                    continue
+                _sy = _o.get("symbol")
+                if _sy:
+                    out.add(_sy)
+        except Exception:
+            pass
+    return out
+
+
+def _fetch_mins_day(day8: str, syms, out_dir: str, log_path: str, timeout: int = 900) -> int:
+    """按 (标的, 单日) 取 5min 分钟档（缺档自动补齐/前瞻预取共用）。"""
+    if not syms:
+        return 0
+    return run([sys.executable, bt_env.jobs_file("bt_fetch_mins.py"), "--symbols", ",".join(sorted(syms)),
+                "--days", day8, "--freq", "5min", "--out", out_dir, "--index", ""],
+               log_path, timeout=timeout)
+
+
+def _missing_mins_days(root: str, day8: str, syms) -> set:
+    """当日并集名单里，`_bt_full/mins` 缺 5min 分钟档的标的集合（供缺档自动补齐自检）。
+
+    为什么需要（2026-09-17 用户："以后这种能不能自动补齐，不要重跑啊"）：
+    缺分钟档的标的在 `TMonitor._round` 里会被 `if not quote: continue` **静默跳过**，
+    整日不评估 ⇒ 成交/离场都缺，事后只能整年重跑。故当日先补、补不齐就大声记账。
+    """
+    import glob as _glob
+    out = set()
+    base = os.path.join(DATA, "_bt_full", "mins")
+    for sym in syms:
+        code = "".join(ch for ch in str(sym) if ch.isdigit())[:6]
+        if not code:
+            continue
+        if not _glob.glob(os.path.join(base, "*%s*5min*%s*.json" % (code, day8))):
+            out.add(sym)
+    return out
+
+
+def mins_union_account() -> str:
+    """拉分钟名单里「持仓 / 条件单」查询用的账户。
+
+    ⚠️ 2026-09-19 修（用户报：电科数字 SH600850 买了卖不出去、之后再没卖出过）：
+    这段原先**硬编码 account_id='stock'** ⇒ 回测账户（drabjan10 等）自己的持仓不进并集名单
+    ⇒ 它们的分钟档既不检查也不补齐 ⇒ `TMonitor._round` 里 `if not quote: continue` **静默跳过**
+    ⇒ 离场腿整日不评估、仓位冻结（实测 0112~0115 每天有 6 只持仓票「当日无行情」）。
+    生产 T_MONITOR_ACCOUNT 默认就是 'stock' ⇒ 本修**在生产逐位不变**。
+    """
+    return (os.getenv("T_MONITOR_ACCOUNT", "stock") or "stock").strip() or "stock"
+
+
+def mins_union_symbols(formal_legs, cut: str, account: str = ""):
+    """拉分钟名单 = 腿 ∪ 该账户持仓 ∪ 该账户 active/expired 条件单标的。返回 (集合, 统计)。"""
+    acc = account or mins_union_account()
+    legs = {l.get("symbol") for l in (formal_legs or []) if l.get("symbol")}
+    held, conds = set(), set()
+    _dsn = os.environ.get("DATABASE_URL", "")
+    if not _dsn:
+        try:
+            import sys as _s
+            _p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+            if _p not in _s.path:
+                _s.path.insert(0, _p)
+            from db_dsn import dsn as _d
+            _dsn = _d()
+        except Exception:
+            _dsn = "postgresql://marcus:marcus123@127.0.0.1:5432/marcus_trading"
+    try:
+        import psycopg2
+        _conn = psycopg2.connect(_dsn)
+        _cur = _conn.cursor()
+        _cur.execute("SELECT symbol FROM paper_positions WHERE account_id=%s AND volume>0", (acc,))
+        held = {r[0] for r in _cur.fetchall()}
+        _cur.execute("SELECT DISTINCT symbol FROM t_conditions WHERE account_id=%s "
+                     "AND status IN ('active','expired') AND trade_date >= %s", (acc, cut))
+        conds = {r[0] for r in _cur.fetchall()}
+        _cur.close(); _conn.close()
+    except Exception as _se:
+        print("[days] ⚠️ 并集名单取持仓/条件失败（退化为仅腿）: %s" % str(_se)[:90], flush=True)
+    return legs | held | conds, {"legs": len(legs), "held": len(held), "conds": len(conds), "account": acc}
+
+
 def load_timeline(path):
     """逐日 `config/tasks.yaml` 的任务登记表（`data/_bt_task_timeline.json`，由宿主机脚本从
     75 份逐日代码树抽出）→ **时代检查**：某条链当天根本不存在/被停用时，当天就不该布腿。
@@ -103,11 +202,28 @@ def main() -> int:
     ap.add_argument("--prod", action="store_true",
                     help="用**生产代码**跑当日交易（调用 jobs/bt_prod_run.py：本地 PG + 生产布腿/触发/网关/模拟盘），"
                          "替代内置 bt_account 账户层")
+    # 交易腿 agent（LLM）透传给 bt_prod_run.py —— 年跑要带 agent 必须从这里过
+    ap.add_argument("--agent", choices=["on", "off"], default=os.getenv("BT_AGENT", "off"),
+                    help="交易腿 agent 的 LLM 决策层（on = 每触发调 /chat，默认 off）")
+    ap.add_argument("--agent-url", default=os.getenv("BT_AGENT_CHAT_URL", "http://127.0.0.1:13101/chat"),
+                    help="LLM /chat 地址（硬隔离后默认指向本地隔离 dsh 13101）")
+    ap.add_argument("--agent-cache", default=os.getenv("BT_LLM_CACHE", os.path.join(DATA, "_bt_llm_year2")))
+    ap.add_argument("--agent-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])
+    ap.add_argument("--agent-tool-guard", default=os.getenv("BT_AGENT_TOOL_GUARD", "on"),
+                    choices=["on", "off"], help="as-of 工具口径守卫（提示词层）")
     ap.add_argument("--prod-reset-first", action="store_true",
                     help="年跑第一天把本地模拟盘重置为起点（25 万空仓）；只在 start 那天生效")
     ap.add_argument("--prod-only", action="store_true", help="--prod 时不再跑 bt_account（默认两条都跑，互为交叉校验）")
+    # A/B 对照用：独立模拟盘账户（PG 行按 account_id 隔离，不动 stock 主账户）
+    ap.add_argument("--account", default=None, help="生产链模拟盘账户（默认 stock）")
     ap.add_argument("--code-dir", default="",
                     help="强制所有交易日使用同一份代码（默认空=按 rev_map 逐日；全年反事实建议用现行代码）")
+    ap.add_argument("--low-logic-effective", default=os.getenv("BT_LOW_LOGIC_EFFECTIVE", "prod"),
+                    choices=["prod", "same_week"],
+                    help="low_logic.json 承载口径：prod=只用上一个 ISO 周或更早写出的 map（生产跨周因果，默认）；"
+                         "same_week=本周内即时生效（与生产不符，仅做敏感性对比）")
+    ap.add_argument("--low-logic-force", action="store_true",
+                    help="周一该日已有 low_logic_written.json 时也重跑 agent（默认幂等跳过，不重复外呼 LLM）")
     a = ap.parse_args()
 
     if not a.out:
@@ -164,6 +280,57 @@ def main() -> int:
                 by_day[d8] = entry
                 print("[days] %s ⛔ 阻断：%s（跳过两条布腿路径）" % (d8, entry["blocked_reason"]), flush=True)
                 continue
+        # ①b **跨日状态结转**（P0-a / P0-b，2026-09-17）：seed 之后、**跑生产链之前**，把**上一交易日沙箱**
+        #     的状态文件带进本日沙箱（首日 / 前值不可用 → `{}`）。为什么必须在这一步：
+        #       · 这些文件决定行为（floor 锁卖腿 / 档位额度 / 254 分步回补链 / 禁买 / 回补 / 换手窗口），
+        #         软链到生产当期快照 = 未来记录参与当日判断 + 跨日不连续；
+        #       · `--reuse-seeded` / `--skip-seed` 时 seed 不跑 → 只有这里能保证结转。
+        #     幂等：重复跑同一天，结果只由"前一交易日沙箱"决定；失败只告警、不阻断。
+        try:
+            import bt_seed_day as _bsd
+            _carry = _bsd.carry_state_files(sb, a.root, d8, a.bars_db)
+            if _carry:
+                entry["steps"]["carry_state"] = {
+                    k: {"src": v.get("src"), "kind": v.get("kind"), "events": v.get("events"),
+                        "max_rebased_at": v.get("max_rebased_at"), "max_date": v.get("max_date"),
+                        "prev": v.get("prev")} for k, v in _carry.items()}
+                _tf = _carry.get("t_base_floor_rebase.json") or {}
+                print("[days] %s 跨日状态结转：t_base_floor_rebase.json %s（events=%s, max_rebased_at=%s, %s）"
+                      % (d8, _tf.get("kind"), _tf.get("events"), _tf.get("max_rebased_at") or "-",
+                         _tf.get("src")), flush=True)
+        except Exception as _ce:
+            entry["steps"]["carry_state"] = {"err": str(_ce)[:160]}
+            print("[days] %s ⚠️ 跨日状态结转失败（不阻断，继续跑）：%s" % (d8, str(_ce)[:160]), flush=True)
+        # ①c **low_logic 按周承载 + 周内不重算**（`jobs/bt_low_logic_week.py`，2026-09-17 接线）：
+        #     · `position_class.py:124 read_logic()` 读 `low_logic.json`，生产语义 = **周一 08:20 先读后写**
+        #       ⇒ 当日沙箱必须承载"上周（或更早）产出的 map"，周一新产出的 map 只给**下周** position_class 用；
+        #     · 只有**周一**才跑 `bt_low_logic_asof.py`（record/replay 由 `--llm-mode`/`BT_LLM_MODE` 决定），
+        #       产物落 `<沙箱>/low_logic_written.json`（旁挂，**不覆盖**当日 position_class 已经读过的那份）；
+        #     · 审计落 `<沙箱>/low_logic_provenance.json`（本周用的是哪一天的 map / 本日有没有产出 / 给哪一周用）。
+        #     幂等：carry 只由"产品扫描 + 产品文件字节"决定；agent 在该日已有产品时直接跳过（除非 --low-logic-force）。
+        #     seed（PINNED 之前）已做过一次 carry；这一步覆盖 `--reuse-seeded` / `--skip-seed`（seed 没跑）的情况。
+        try:
+            import bt_low_logic_week as _llw
+            _lc = _llw.carry_into_sandbox(d8, sb, a.root, effective=a.low_logic_effective,
+                                          quiet=True, from_seed=False)
+            _la = _llw.run_agent(d8, sb, a.root, mode=a.llm_mode, force=a.low_logic_force, quiet=True)
+            _em = _lc.get("effective_map") or {}
+            entry["steps"]["low_logic"] = {
+                "effective": {"source_day": _em.get("source_day"), "kind": _em.get("source_kind"),
+                              "md5": _em.get("md5"), "n": _em.get("n_concepts"),
+                              "is_repo_stub": _em.get("is_repo_stub"), "bootstrap": _em.get("bootstrap")},
+                "written_this_day": _la,
+                "provenance": os.path.join(sb, "low_logic_provenance.json")}
+            print("[days] %s low_logic：本日 map ← %s（%s, md5=%s%s）｜周一产出：%s"
+                  % (d8, _em.get("source_day") or "-", _em.get("source_kind"), str(_em.get("md5"))[:8],
+                     "，仍是 repo 9 月 stub" if _em.get("is_repo_stub") else "",
+                     ("md5=%s n=%s，%s" % (str(_la.get("product_md5"))[:8], _la.get("product_n"),
+                                           _la.get("applies_to_week") or ""))
+                     if _la.get("product_md5") else (_la.get("skip") or "-")), flush=True)
+        except Exception as _le:
+            entry["steps"]["low_logic"] = {"err": str(_le)[:160]}
+            print("[days] %s ⚠️ low_logic 按周承载/周一产出失败（不阻断，继续跑）：%s"
+                  % (d8, str(_le)[:160]), flush=True)
         # 备份"当天(cut)口径"的确认域，供 08:18 用完还原
         try:
             import shutil
@@ -201,6 +368,28 @@ def main() -> int:
             rc_sw, dts = run(_sw_cmd,
                              os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
             entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
+            # ── 账本 §9.465 ✓：低吸腿「**未命中留痕**」（用户要求 ✓ 默认开 ✓；只加日志、不改判据 ✓）──
+            try:
+                if str(os.getenv("WOLF_LEG_MISS_REPORT", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                    _mr = subprocess.run([sys.executable, bt_env.jobs_file("leg_miss_report.py"),
+                                          "--day", d8, "--sandbox", sb],
+                                         capture_output=True, text=True, timeout=300)
+                    if _mr.returncode == 0:
+                        entry.setdefault("steps", {})["leg_miss_report"] = "ok"
+                    else:
+                        entry.setdefault("steps", {})["leg_miss_report"] = "rc=%s" % _mr.returncode
+            except Exception as _e:
+                entry.setdefault("steps", {})["leg_miss_report"] = "err:%s" % str(_e)[:40]
+        # 留痕（2026-09-19 排查教训）：08:18 布腿器读的就是这份"上一交易日 as-of"确认域，但它随后会被
+        #   当天口径覆盖 ⇒ 事后取证只能靠日志推断。先把这份**运行期产物**落盘成
+        #   `stock_confirm_result_prev0818.json`（只增加一个副本文件，不改任何行为）。
+        try:
+            import shutil as _sh2
+            _src_p = os.path.join(sb, "stock_confirm_result.json")
+            if os.path.exists(_src_p):
+                _sh2.copy2(_src_p, os.path.join(sb, "stock_confirm_result_prev0818.json"))
+        except Exception:
+            pass
         # 08:18 用的是上一交易日确认域 → 跑完必须**还原当天口径**，否则 09:20 路径会看错版本
         try:
             import shutil
@@ -218,8 +407,9 @@ def main() -> int:
                         "--sandbox", sb, "--bars-db", a.bars_db]
             if a.code_dir:
                 _arm_cmd += ["--code-dir", a.code_dir]
+            # 超时 2400 → 5400s（2026-09-20：0211 因 member 判定瞬时排队超时，把整个 run 打死）
             rc_arm, dta = run(_arm_cmd,
-                              os.path.join(a.out, "arm_%s.log" % d8), timeout=2400)
+                              os.path.join(a.out, "arm_%s.log" % d8), timeout=5400)
             entry["steps"]["arm_0920"] = {"rc": rc_arm, "s": round(dta, 1)}
         # ③b **正式口径就地增量**（--formal）：当天腿 → 拉分钟 → 打包 → 账户层续跑
         _formal_legs = []
@@ -238,30 +428,104 @@ def main() -> int:
             # 持仓票的离场腿（`_arm_stock_exit_legs` 布 vwap/support/high_sell）与当日 armed 条件标的
             # → 那些标的没有当日 bars → `TMonitor._round` 里 `if not quote: continue` **静默跳过**
             # → 离场层哑火、仓位冻结（实测 588 个标的日中 196 个缺分钟，占 33%）。
-            _symset = {l.get("symbol") for l in _formal_legs if l.get("symbol")}
-            try:
-                import psycopg2
-                _conn = psycopg2.connect(os.environ.get(
-                    "DATABASE_URL", "postgresql://marcus:marcus123@127.0.0.1:5432/marcus_trading"))
-                _cur = _conn.cursor()
-                _cur.execute("SELECT symbol FROM paper_positions WHERE account_id='stock' AND volume>0")
-                _held = {r[0] for r in _cur.fetchall()}
-                _cur.execute("SELECT DISTINCT symbol FROM t_conditions WHERE account_id='stock' "
-                             "AND status IN ('active','expired') AND trade_date >= %s", (cut,))
-                _conds = {r[0] for r in _cur.fetchall()}
-                _cur.close(); _conn.close()
-                _symset |= _held | _conds
-                print("[days] %s 拉分钟名单=腿%d ∪ 持仓%d ∪ 条件%d = %d"
-                      % (d8, len({l.get("symbol") for l in _formal_legs if l.get("symbol")}),
-                         len(_held), len(_conds), len(_symset)), flush=True)
-            except Exception as _se:
-                print("[days] %s ⚠️ 并集名单取持仓/条件失败（退化为仅腿）: %s" % (d8, str(_se)[:90]), flush=True)
+            # ⚠️ 账户必须用 T_MONITOR_ACCOUNT（回测=drabXX；生产默认 stock）—— 原先硬编码 'stock'
+            #    ⇒ 回测自己的持仓不进名单 ⇒ 分钟档不补 ⇒ 监控静默跳过 ⇒ 持仓票卖不出去（见函数 docstring）
+            _symset, _uc = mins_union_symbols(_formal_legs, cut)
+            print("[days] %s 拉分钟名单=腿%d ∪ 持仓%d ∪ 条件%d = %d（账户=%s）"
+                  % (d8, _uc["legs"], _uc["held"], _uc["conds"], len(_symset), _uc["account"]), flush=True)
             _syms = sorted(x for x in _symset if x)
+            # ── 打包目录：**共享池**（`WOLF_PACK_SHARED`，库内默认 0 = 旧行为逐字不变）──
+            #   2026-09-25 用户拍板「把这个共享打包实现掉」。依据：pack 是**确定性产物** ——
+            #   同一标的在 T25 与 T28 两个臂里 md5 **完全一致**（9d4e441162 ✓）⇒ 每臂各打一份纯浪费 ✗
+            #   （1,081 只 / 642,150 根 bar / 139MB；单日 1.5~2.3 分钟 ⇒ 75 天 ≈ 2~2.9 小时 ✗）。
+            #   置 1 ⇒ 用 `data/_bt_full/pack_shared/<复权口径>_<打包工具md5>/`（跨臂复用 ✓）；
+            #   桶名含口径与**打包工具代码 md5** ⇒ 口径或逻辑一变自动换桶，绝不混用 ✓
             _pack = os.path.join(a.root, "pack")
+            if str(os.getenv("WOLF_PACK_SHARED", "0")).strip() == "1":
+                try:
+                    import hashlib as _hl
+                    _adj = "adj" if str(os.getenv("WOLF_ADJ_PRICE", "0")).strip() == "1" else "raw"
+                    with open(bt_env.jobs_file("bt_pack_mins.py"), "rb") as _fh:
+                        _tool = _hl.md5(_fh.read()).hexdigest()[:8]
+                    _pack = os.path.join(DATA, "_bt_full", "pack_shared", "%s_%s" % (_adj, _tool))
+                    os.makedirs(_pack, exist_ok=True)
+                    print("[days] %s 打包目录=**共享池** %s（WOLF_PACK_SHARED=1 ✓ 跨臂复用）"
+                          % (d8, _pack.replace(DATA + os.sep, "")), flush=True)
+                except Exception as _pe2:
+                    print("[days] 共享打包池初始化失败，回退臂内 pack：%s" % str(_pe2)[:80], flush=True)
             if _syms:
-                run([sys.executable, bt_env.jobs_file("bt_fetch_mins.py"), "--symbols", ",".join(_syms),
-                     "--days", d8, "--freq", "5min", "--out", os.path.join(DATA, "_bt_full", "mins"),
-                     "--index", ""], os.path.join(a.out, "fetchmins_%s.log" % d8), timeout=1800)
+                # ── 缺档自动补齐（2026-09-17 用户："以后这种能不能自动补齐，不要重跑啊"）──
+                # 先补当日缺档再往下跑；补不齐就写进 entry["no_quote"] 并大声打印，
+                # 绝不静默跳过——否则"少做"会被误读成策略选择，事后只能整年重跑。
+                try:
+                    _miss0 = _missing_mins_days(a.root, d8, _syms)
+                    if _miss0:
+                        print("[days] %s 缺分钟档 %d 个 → 自动补齐: %s"
+                              % (d8, len(_miss0), ",".join(sorted(_miss0)[:8])), flush=True)
+                        run([sys.executable, bt_env.jobs_file("bt_backfill_mins_union.py"),
+                             "--start", d8, "--end", d8, "--root", a.root,
+                             "--account", mins_union_account()],      # ⚠️ 账户口径（原先漏传 ⇒ 默认 stock）
+                            os.path.join(a.out, "minsfill_%s.log" % d8), timeout=1200)
+                        _miss1 = _missing_mins_days(a.root, d8, _syms)
+                        if _miss1:
+                            entry["no_quote"] = sorted(_miss1)
+                            print("[days] %s ⚠️ 自动补齐后仍缺 %d 个标的分钟档（当日不评估）: %s"
+                                  % (d8, len(_miss1), ",".join(sorted(_miss1)[:10])), flush=True)
+                        else:
+                            print("[days] %s ✅ 缺档已补齐" % d8, flush=True)
+                except Exception as _me:
+                    print("[days] %s 缺档自动补齐异常（继续跑，缺档会计账）: %s" % (d8, str(_me)[:90]), flush=True)
+                _fetch_mins_day(d8, _syms, os.path.join(DATA, "_bt_full", "mins"),
+                                os.path.join(a.out, "fetchmins_%s.log" % d8), timeout=1800)
+                # ⚠️ 2026-09-19：**复核必须在常规取数之后** —— 上面那次复核在取数之前，
+                #   实测因此打出假的"仍缺 22 个（当日不评估）"，而随后的 fetchmins 其实全取到了。
+                try:
+                    _miss2 = _missing_mins_days(a.root, d8, _syms)
+                    if _miss2:
+                        entry["no_quote"] = sorted(_miss2)
+                        print("[days] %s ⚠️ 取数后仍缺 %d 个标的分钟档（当日不评估）: %s"
+                              % (d8, len(_miss2), ",".join(sorted(_miss2)[:10])), flush=True)
+                    else:
+                        entry.pop("no_quote", None)
+                        print("[days] %s ✅ 当日名单分钟档齐全（%d 个标的）" % (d8, len(_syms)), flush=True)
+                except Exception as _me2:
+                    print("[days] %s 取数后复核异常（忽略）: %s" % (d8, str(_me2)[:80]), flush=True)
+                # ── 滚动前瞻预取（2026-09-17 用户拍板）──
+                # 每天按**未来 K 天的 leg 文件**预取分钟档，堵住"后出现的票当天无数据"这个缺口；
+                # 只在缺档时取、失败不影响当日（当日缺口仍由上面的复检大声记账）。
+                # BT_PREFETCH_DAYS=0 关闭；默认 3。
+                try:
+                    _K = int(os.getenv("BT_PREFETCH_DAYS", "3") or 0)
+                    if _K > 0 and d8 in days:
+                        _i = days.index(d8)
+                        _miss_list = []
+                        for _fd in days[_i + 1:_i + 1 + _K]:
+                            _fs = _future_union_symbols(a.root, _fd)
+                            _fm = _missing_mins_days(a.root, _fd, _fs)
+                            if not _fm:
+                                continue
+                            _fetch_mins_day(_fd, _fm, os.path.join(DATA, "_bt_full", "mins"),
+                                            os.path.join(a.out, "prefetch_%s.log" % _fd), timeout=600)
+                            _left = _missing_mins_days(a.root, _fd, _fs)
+                            _miss_list.append((_fd, len(_fm), len(_left)))
+                        if _miss_list:
+                            print("[days] %s 前瞻预取(%d天)：%s" % (
+                                d8, _K, "；".join("%s 缺%d→仍缺%d" % t for t in _miss_list)), flush=True)
+                except Exception as _pe:
+                    print("[days] %s 前瞻预取异常（不影响当日）: %s" % (d8, str(_pe)[:90]), flush=True)
+                # ── ③ 预取后**补跑一次复权分钟档**（`WOLF_ADJ_MINS_AUTO`，库内默认 0 = 关 ✓）
+                #   病灶（账本 §9.185）：`mk_adj_mins.py` 只对**当时已存在**的原始文件生成过复权档 ✓
+                #   ⇒ **预取/新抓到**的原始文件**不会自动**生成 `mins_adj` ✗
+                #   ⇒ 新票当日"无报价" ✗（实测 SZ000408 0203/0204 ⚠️ 无行情 ✓）
+                if str(os.getenv("WOLF_ADJ_MINS_AUTO", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                    try:
+                        _mk = os.path.join(bt_env.REPO, ".dsh-tmp", "wolfbt", "mk_adj_mins.py")
+                        if os.path.exists(_mk):
+                            run([sys.executable, _mk],
+                                os.path.join(a.out, "adj_mins_%s.log" % d8), timeout=600)
+                            print("[days] %s ✅ 复权分钟档补跑完成（WOLF_ADJ_MINS_AUTO=1）" % d8, flush=True)
+                    except Exception as _ame:
+                        print("[days] %s 复权分钟档补跑异常（不影响当日）: %s" % (d8, str(_ame)[:90]), flush=True)
                 run([sys.executable, bt_env.jobs_file("bt_pack_mins.py"),
                      "--mins", os.path.join(DATA, "_bt_full", "mins"), "--pack", _pack,
                      "--bars-db", a.bars_db], os.path.join(a.out, "pack_%s.log" % d8), timeout=1800)
@@ -279,6 +543,13 @@ def main() -> int:
                            "--out", os.path.join(a.out, "prod_%s.json" % d8)]
                     if a.prod_reset_first and d8 == days[0]:
                         _pc.append("--reset")
+                    if getattr(a, "account", None):
+                        _pc += ["--account", str(a.account)]
+                    # agent 层透传（年跑带 LLM 决策必须显式给，否则子进程默认 off）
+                    if a.agent == "on":
+                        _pc += ["--agent", "on", "--agent-url", a.agent_url,
+                                "--agent-cache", a.agent_cache, "--agent-mode", a.agent_mode,
+                                "--agent-tool-guard", a.agent_tool_guard]
                     _prod_out = os.path.join(a.out, "prod_%s.json" % d8)
                     _rcp, _dtp = run(_pc, os.path.join(a.out, "prod_%s.log" % d8), timeout=10800)
                     entry["steps"]["prod"] = {"rc": _rcp, "s": round(_dtp, 1)}
