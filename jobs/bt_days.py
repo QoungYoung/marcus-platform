@@ -377,37 +377,13 @@ def main() -> int:
                                           "--day", d8, "--root", a.root,
                                           "--account", str(a.account or "drabt35")],
                                          capture_output=True, text=True, timeout=1800)
-                    # ── 账本 §9.514 ✓：**低位方向「辨识度最高老龙头」埋伏候选**（用户「做」✓ 默认开 ✓）──
-            #   他的原话：「之前的**低位方向**…找**辨识度最高老龙头**埋伏，强的留 弱的丢」（2026-09-04）✓
-            try:
-                _al = subprocess.run([sys.executable, bt_env.jobs_file("gen_ambush_lowdip.py")],
-                                     capture_output=True, text=True, timeout=600, env=dict(os.environ, DATA_DIR=sb))
-                entry.setdefault("steps", {})["ambush_lowdip"] = (
-                    "ok" if _al.returncode == 0 else "rc=%s" % _al.returncode)
-                for _l in (_al.stdout or "").splitlines()[:3]:
-                    if _l.strip():
-                        print("[days] %s" % _l.strip()[:130], flush=True)
-            except Exception as _e:
-                entry.setdefault("steps", {})["ambush_lowdip"] = "err:%s" % str(_e)[:40]
-            entry.setdefault("steps", {})["ensure_mins"] = (
+                    entry.setdefault("steps", {})["ensure_mins"] = (
                         "ok" if _em.returncode == 0 else "rc=%s" % _em.returncode)
                     for _l in (":".join(_em.stdout.splitlines()[-2:]) if _em.stdout else "").split("\n"):
                         if _l.strip():
                             print("[days] ensure_mins %s" % _l.strip()[:120], flush=True)
             except Exception as _e:
                 entry.setdefault("steps", {})["ensure_mins"] = "err:%s" % str(_e)[:40]
-            # ── 账本 §9.514 ✓：**低位方向「辨识度最高老龙头」埋伏候选**（用户「做」✓ 默认开 ✓）──
-            try:
-                _al = subprocess.run([sys.executable, bt_env.jobs_file("gen_ambush_lowdip.py")],
-                                     capture_output=True, text=True, timeout=600,
-                                     env=dict(os.environ, DATA_DIR=sb))
-                entry.setdefault("steps", {})["ambush_lowdip"] = (
-                    "ok" if _al.returncode == 0 else "rc=%s" % _al.returncode)
-                for _l in (_al.stdout or "").splitlines()[:3]:
-                    if _l.strip():
-                        print("[days] %s" % _l.strip()[:130], flush=True)
-            except Exception as _e2:
-                entry.setdefault("steps", {})["ambush_lowdip"] = "err:%s" % str(_e2)[:40]
             # ── 账本 §9.465 ✓：低吸腿「**未命中留痕**」（用户要求 ✓ 默认开 ✓；只加日志、不改判据 ✓）──
             try:
                 if str(os.getenv("WOLF_LEG_MISS_REPORT", "1")).strip().lower() in ("1", "true", "yes", "on"):
@@ -601,21 +577,6 @@ def main() -> int:
                         by_day[d8] = entry
                         print("[days] %s ⛔ 生产链失败 rc=%d → 终止年跑（不静默跳过）" % (d8, _rcp), flush=True)
                         break
-                    # ── B6a（2026-10-03 用户拍板 ✓）：低吸腿「**命中后被拦**」逐条留痕 ✓ ──
-                    #   与 `leg_miss_report`（只管"没触线"✗）互补；**只写自己的报告 ✓ 不改判据 ✓**；
-                    #   当日归因用 **id 增量**（prod json 的 triggers 是累加的、无时间字段 ✗）。
-                    try:
-                        if str(os.getenv("WOLF_LOWDIP_BLOCK_REPORT", "1")).strip().lower() in ("1", "true", "yes", "on"):
-                            _br = subprocess.run([sys.executable, bt_env.jobs_file("lowdip_block_report.py"),
-                                                  "--day", d8, "--sandbox", sb, "--summary", a.out],
-                                                 capture_output=True, text=True, timeout=600)
-                            entry.setdefault("steps", {})["lowdip_block_report"] = (
-                                "ok" if _br.returncode == 0 else "rc=%s" % _br.returncode)
-                            for _l in (_br.stdout or "").strip().splitlines()[-2:]:
-                                if _l.strip():
-                                    print("[days] %s" % _l.strip()[:140], flush=True)
-                    except Exception as _be:
-                        entry.setdefault("steps", {})["lowdip_block_report"] = "err:%s" % str(_be)[:40]
                 entry["steps"]["formal"] = {"symbols": len(_syms), "modes": ["hold", "leg"]}
                 print("[days] %s 正式口径已增量更新（%d 个标的）" % (d8, len(_syms)), flush=True)
 
