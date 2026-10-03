@@ -814,3 +814,8 @@ export WOLF_STAGE_PULLBACK_REFINE='1'
 # --- 账本 §9.449：高抛额度 = 本票 T 仓（低吸买算 T 买，用户 2026-10-03 裁定）；无 T 仓 ⇒ 拒卖
 #     他「底仓不动 ＋ T仓高抛低吸」（2026-08-04）；T 仓 = Σ(T买) − Σ(T卖) ---
 export WOLF_HIGH_SELL_BY_T_SLEEVE='1'
+
+# --- 账本 §9.461：主营闸的『数据分』通过路径（用户 2026-10-03：默认打开）---
+#     正宗度=与主题核心成员共享概念比例（数据）；龙头度=主题内成交额/市值分位（as-of）
+export WOLF_THEME_SCORE_ACCEPT='1'
+export WOLF_THEME_SCORE_MIN='0.62'
