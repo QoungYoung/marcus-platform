@@ -1202,11 +1202,27 @@ def main() -> int:
                         continue
                     if L.get("type") == "buy_253/254" or L.get("src") == "switch_builder_0818":
                         r1 = rsa.arm(conn, cur, sym, "custom_m5dump", "buy", rsa.buy_253_expr(), day)
-                        r2 = rsa.arm(conn, cur, sym, "custom_prevlow", "buy", rsa.BUY_254_EXPR, day)
+                        # ★ 账本 §9.520 ✓（用户「排查」✓）：**日运行才是 254 的真正挂载点** ✗
+                        #   为什么之前没关掉 ✓：我只改了 `rotation_switch_arm`（臂那条路 ✗），
+                        #     而**实际挂条件的是本文件**（`bt_prod_run` ✓，两个分支都在挂 ✗）
+                        #   依据 ✓：§9.495 实测**触前低**这条（`custom_prevlow`）负期望（−0.11%／−0.45% ✗），
+                        #     而**他的线位挂单**（`custom_line_dip` ＝ 255 ✓）+1.29%／+0.73% ✓ ⇒ **只关这条** ✗
+                        #   开关 ✓：`WOLF_BUY_254_PREVLOW`（**默认 0 ＝ 不挂** ✓，置 1 ＝ 恢复）
+                        r2 = None
+                        if str(os.getenv("WOLF_BUY_254_PREVLOW", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                            r2 = rsa.arm(conn, cur, sym, "custom_prevlow", "buy", rsa.BUY_254_EXPR, day)
                         armed.append({"symbol": sym, "src": "switch_0818", "253": r1, "254": r2})
                     else:
                         r1 = rsa.arm(conn, cur, sym, "custom_m5dump", "buy", rsa.buy_253_expr(), day)
-                        r2 = rsa.arm(conn, cur, sym, "custom_prevlow", "buy", rsa.BUY_254_EXPR, day)
+                        # ★ 账本 §9.520 ✓（用户「排查」✓）：**日运行才是 254 的真正挂载点** ✗
+                        #   为什么之前没关掉 ✓：我只改了 `rotation_switch_arm`（臂那条路 ✗），
+                        #     而**实际挂条件的是本文件**（`bt_prod_run` ✓，两个分支都在挂 ✗）
+                        #   依据 ✓：§9.495 实测**触前低**这条（`custom_prevlow`）负期望（−0.11%／−0.45% ✗），
+                        #     而**他的线位挂单**（`custom_line_dip` ＝ 255 ✓）+1.29%／+0.73% ✓ ⇒ **只关这条** ✗
+                        #   开关 ✓：`WOLF_BUY_254_PREVLOW`（**默认 0 ＝ 不挂** ✓，置 1 ＝ 恢复）
+                        r2 = None
+                        if str(os.getenv("WOLF_BUY_254_PREVLOW", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                            r2 = rsa.arm(conn, cur, sym, "custom_prevlow", "buy", rsa.BUY_254_EXPR, day)
                         armed.append({"symbol": sym, "src": "arm_0920", "253": r1, "254": r2})
             cur.close()
             conn.close()
