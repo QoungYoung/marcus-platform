@@ -110,9 +110,12 @@ def conds_from_legs(symbol: str, legs_path: str):
     import importlib
     arm = importlib.import_module("rotation_switch_arm")
     _dip255 = [{"id": 1, "trigger_kind": "custom_m5dump", "expression": arm.BUY_253_EXPR,
-             "direction": "buy", "armed": 1},
-            {"id": 2, "trigger_kind": "custom_prevlow", "expression": arm.BUY_254_EXPR,
              "direction": "buy", "armed": 1}]
+    # 账本 §9.515 ✓：**254 是负期望**（§9.495 实测 T+5 均值 −0.11%／中位 −0.45% ✗，
+    #   而他的线组 +1.29%／+0.73% ✓）⇒ 开关 `WOLF_BUY_254`（**默认 0 ＝ 不挂 254** ✓，置 1 ＝ 恢复）
+    if str(os.getenv("WOLF_BUY_254", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        _dip255.append({"id": 2, "trigger_kind": "custom_prevlow", "expression": arm.BUY_254_EXPR,
+                        "direction": "buy", "armed": 1})
     # 账本 §9.497：他的线组买腿（触 13/34/60/144 ＋ 缩量）——开关 `WOLF_BUY_255`（默认 1 ＝ 开）
     if str(os.getenv("WOLF_BUY_255", "1")).strip().lower() in ("1", "true", "yes", "on"):
         _dip255.append({"id": 3, "trigger_kind": "custom_line_dip",

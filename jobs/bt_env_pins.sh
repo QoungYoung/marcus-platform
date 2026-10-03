@@ -849,3 +849,5 @@ export WOLF_THEME_SCORE_DEBUG='1'   # 账本 §9.461 验证期诊断（确认数
 export WOLF_ENSURE_MINS='1'   # 账本 §9.470：当日缺分钟自动补齐（自动读 .env 的 key + 退避重试）
 
 export WOLF_DIP_BREAKLOW_NODROP='1'   # 账本 §9.512：急杀式破前低不否决整条腿（逐日重判）
+
+export WOLF_BUY_254='0'   # 账本 §9.515：254 负期望（§9.495）⇒ 默认不挂
