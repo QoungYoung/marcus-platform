@@ -24944,3 +24944,31 @@ GET https://pcd.mobcvb.cn/tushare/pro/stk_mins?ts_code=603618.SH&freq=5min
 
 - **别用"我们的工具报错"来断言"上游没有"** ✗ —— **先裸调一次上游** ✓（curl ＋ 正确 Header ✓）
 - 今天的两次误判都属于这一类 ✗（①没带 key ②信了工具的自认注释 ✗）
+
+---
+
+## §9.475 **改掉"整进程放弃 stk_mins"**（用户「改掉」✓）—— 已改 ✓，但 CLI 路径**还没走到兜底** ✗
+
+### ① ✅ 已落地的修改 ✓（`jobs/bt_fetch_mins.py` ✓）
+
+| 项 ✓ | 内容 ✓ |
+|---|---|
+| **删掉"整进程放弃"** ✓ | `_SKIP_STK_MINS["flag"] = True` 的置位**去掉** ✓ ⇒ 每次独立尝试 ＋ 退避重试 ✓ |
+| **新增直连 promax 兜底** ✓ | `_direct_promax(ts_code, freq, day)` ✓：直连 `…/pro/stk_mins` ✓、Header `X-API-KEY` ✓、缺 key 时**自动读仓库 `.env`** ✓（绕过中继的 300s 失败缓存 ✓）|
+| 兜底顺序 ✓ | 中继重试 ⇒ **直连 promax** ⇒ 本地 ClickHouse ✓ |
+| 注释纠正 ✓ | 原注释「promax **恒返回** `minute_data_pending`」✗ ⇒ 已改为**实测结论**（拿得到 ✓）＋真因说明 ✓ |
+
+### ② ✅ 直连函数**单独测通过** ✓
+
+```
+_direct_promax("603618.SH", "5min", "20260324")
+⇒ fields=[ts_code,trade_time,freq,open,high,low,close,vol,amount] ✓｜items=**50** ✓
+⇒ 首行 ['603618.SH','2026-03-24 15:00:00','5MIN',20.58,20.76,20.48,20.73,6481300,134010660] ✓
+```
+
+### ③ ⚠️ 但 **CLI 路径还没走到它** ✗
+
+- 加了 `WOLF_MINS_DEBUG=1` 的打印 ⇒ **一次都没出现** ✗ ⇒ 说明流程**在到达兜底之前就结束/跳过了** ✗
+  （可能：`main()` 循环里有**按标的的提前 skip** ✓、或异常提前返回 ✓）
+- ⇒ ⇒ **下一步（一处小跟踪）** ✓：在 `main()` 的标循环里找提前 `continue/return` ✓ ⇒ 接上后
+  **9 个缺口 ＋ 比亚迪 19 天**即可一次补齐 ✓
