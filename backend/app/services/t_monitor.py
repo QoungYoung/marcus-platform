@@ -3759,6 +3759,62 @@ class TMonitor:
             _ga.note("t_monitor:_stock_prev_low", _e)
             return 0.0
 
+    # ── 账本 §9.498 ✓：**他的线组买点（buy_255）的字段产出** ✓ ──────────────────────
+    #   他的原话：「好票跌到事先画好的线（**13/34/60/144**）→ 提前挂单买、与指数无关」✓
+    #   量化（§9.495 ✓）：线组买点 T+5 均值 **+1.29%**／中位 +0.73%／左尾 5.0%
+    #     vs 我们 254 的 **−0.11%／−0.45%／8.3%** ✓
+    #   ⚠️ **无前视** ✓：线只用「**截至前一交易日**」的收盘 ✓；"当天"取 `DATA_DIR` 目录名（回放日 ✓），
+    #      取不到才退 `datetime.now()`（生产 ✓）
+    def _daily_closes_before_today(self, symbol: str):
+        """截至**前一交易日**的日线收盘（relay ✓；缓存 300s ✓；失败 → [] ✓ fail-closed）。"""
+        now = time.time()
+        key = str(symbol)
+        hit = _daily_closes_cache.get(key)
+        if hit and (now - hit[0] < 300):
+            return hit[1]
+        out = []
+        try:
+            import os as _os, sys as _sys
+            _core = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "core")
+            if _core not in _sys.path:
+                _sys.path.insert(0, _core)
+            from tushare_relay import relay_items          # 账本 §9.498：日线走 relay ✓（用户指定）
+            _s = str(symbol).strip().upper()
+            _code = ("%s.%s" % (_s[2:], _s[:2])) if (len(_s) >= 8 and _s[:2] in ("SH", "SZ", "BJ")) else _s
+            _b = _os.path.basename(str(_os.getenv("DATA_DIR") or "").strip())
+            _today = _b if (len(_b) == 8 and _b.isdigit()) else datetime.now().strftime("%Y%m%d")
+            import datetime as _dt
+            _start = (_dt.datetime.strptime(_today, "%Y%m%d") - _dt.timedelta(days=420)).strftime("%Y%m%d")
+            _f, _items = relay_items("daily", ts_code=_code, start_date=_start, end_date=_today)
+            _fi = {k: i for i, k in enumerate(_f or [])}
+            _d_i, _c_i = _fi.get("trade_date"), _fi.get("close")
+            if _d_i is not None and _c_i is not None:
+                out = [float(r[_c_i]) for r in sorted(_items, key=lambda r: str(r[_d_i])) if str(r[_d_i]) < _today]
+        except Exception:
+            out = []
+        _daily_closes_cache[key] = (now, out)
+        return out
+
+    def _ma_lines(self, symbol: str) -> dict:
+        """MA13/34/60/144（截至前一交易日 ✓）。数据不足 → 该根为 0.0（不可用 ✓）。"""
+        cl = self._daily_closes_before_today(symbol) or []
+        out = {}
+        for w in (13, 34, 60, 144):
+            out[w] = (sum(cl[-w:]) / float(w)) if len(cl) >= w else 0.0
+        return out
+
+    def _stock_dip_ma_line(self, symbol: str, low: float, cur: float) -> bool:
+        """当日最低触到某根线（13/34/60/144 ✓）且**收回线上** ⇒ True ✓（配 vol_ratio ≤ 0.9 ✓）。"""
+        try:
+            if not (low > 0 and cur > 0):
+                return False
+            for w, m in (self._ma_lines(symbol) or {}).items():
+                if m and low <= m and cur >= m:
+                    return True
+        except Exception:
+            return False
+        return False
+
     def _stock_dip_prev_low(self, symbol: str) -> bool:
         """个股当日5min最低 ≤ 前一交易日5min最低×(1+tol)（A档：触及/跌破前日低点）。
 
@@ -3881,6 +3937,13 @@ class TMonitor:
                     and float(quote.get("low", 0) or 0) > 0
                     and _cur <= float(quote.get("low", 0) or 0) * 1.001))),
             "dip_prev_low": self._stock_dip_prev_low(symbol),
+            # 账本 §9.498 ✓：**他的线组买点（buy_255）字段**（触 13/34/60/144 ＋ 缩量 ✓）
+            "ma13": (self._ma_lines(symbol) or {}).get(13, 0.0),
+            "ma34": (self._ma_lines(symbol) or {}).get(34, 0.0),
+            "ma60": (self._ma_lines(symbol) or {}).get(60, 0.0),
+            "ma144": (self._ma_lines(symbol) or {}).get(144, 0.0),
+            "dip_ma_line": self._stock_dip_ma_line(symbol, float(quote.get("low", 0) or 0),
+                                                   float(quote.get("current", 0) or 0)),
             # 个股 5min 单根跌幅%（急杀为负 ✓）—— 与 index.m5_dump 做**合取**用（账本 §9.175）
             "m5_dump": self._stock_m5_dump(symbol),
             # 现价距**前一交易日 5min 最低**的百分比%（>0 = 未破 ✓；≈0~1 = 回踩到位 ✓）—— 埋伏腿触发用（§9.182）
@@ -5509,6 +5572,7 @@ def _stop_close_confirm(current: float, stop_price: float, today_bars, prev_dail
         return None
 
 _prev_low_cache = {"at": 0.0, "sym": "", "value": False}
+_daily_closes_cache: Dict[str, Any] = {}   # 账本 §9.498 ✓ 日线收盘缓存（按标的 ✓ 300s ✓）
 
 
 # ── 单例管理（对齐 candidate_pool_monitor 模式） ──
