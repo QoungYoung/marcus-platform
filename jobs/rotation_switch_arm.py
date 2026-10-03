@@ -1259,11 +1259,23 @@ def main():
         #    取不到均线 → 回退 254 原条件（触前低），绝不因此丢腿。
         # 账本 §9.516 ✓：**254 整体开关**（默认 0 ＝ 两条分支都不挂 ✓，只留 253／255）
         #   依据 ✓：§9.495 实测 254 负期望（T+5 均值 −0.11%／中位 −0.45% ✗）vs 他的线组 +1.29%／+0.73% ✓
-        _use254 = str(os.getenv("WOLF_BUY_254", "0")).strip().lower() in ("1", "true", "yes", "on")
-        _ln = (ma_line_price(b["symbol"], today) if (_ma_on and _use254) else None)
+        _use254 = str(os.getenv("WOLF_BUY_254_PREVLOW",
+                                 os.getenv("WOLF_BUY_254", "0"))).strip().lower() in ("1", "true", "yes", "on")
+        # ⚠️ 账本 §9.518 ✓（自查修正 ✗）：**`ma_line` 分支不该受 254 开关影响** ✓
+        #   为什么 ✓：走 `ma_line` 时挂的是 **他的线位（13/34/60/144）** ✓（＝**线组买点语义** ✓，
+        #   §9.495 实测 **+1.29%／+0.73%** ✓）；而 §9.495 测出的**负期望**是
+        #   **`prevlow_fallback`（触前低）**那一条 ✗ ⇒ ⇒ **只该关回退那条** ✓
+        #   开关拆分 ✓：`WOLF_BUY_254_MALINE`（**默认 1 ＝ 保留他的线位挂单** ✓）
+        #              `WOLF_BUY_254_PREVLOW`（**默认 0 ＝ 关掉触前低回退** ✗）
+        _use254_maline = str(os.getenv("WOLF_BUY_254_MALINE", "1")).strip().lower() in ("1", "true", "yes", "on")
+        _ln = (ma_line_price(b["symbol"], today) if (_ma_on and _use254_maline) else None)
         if _ln and _ln.get("v"):
-            rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy",
+            # ★ 账本 §9.519 ✓（用户「能在类型上区分吗」）⇒ **类型上分开** ✓：
+            #   `ma_line`（挂他的线位 ✓）⇒ kind **`custom_line_dip`**（＝**255** ✓，线组买点语义 ✓）
+            #   `prevlow_fallback`（触前低 ✗）⇒ kind **`custom_prevlow`**（＝**254** ✓）
+            rid254 = arm(conn, cur, b["symbol"], "custom_line_dip", "buy",
                          ma_line_expr(_ln["v"]), today)
+            _legtype = "buy_255"
             ma_rows.append({"symbol": b["symbol"], "k": _ln.get("k"),
                             "price": round(float(_ln["v"]), 3),
                             "dist_pct": _ln.get("dist_pct"), "pricing": "ma_line"})
@@ -1272,11 +1284,14 @@ def main():
             #   他的线组 +1.29%／+0.73% ✓）⇒ 开关 `WOLF_BUY_254`（**默认 0 ＝ 不挂 254** ✓，置 1 ＝ 恢复）
             #   ⚠️ 这里是**臂自己挂条件**的真正入口 ✓（`bt_intraday.conds_from_legs` 只是回放侧 ✓）
             rid254 = None
-            if str(os.getenv("WOLF_BUY_254", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            _legtype = None
+            if _use254:
                 rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy", BUY_254_EXPR, today)
+                _legtype = "buy_254"
             ma_rows.append({"symbol": b["symbol"], "pricing": "prevlow_fallback"})
         armed.append({"type": "buy_253", "symbol": b["symbol"], "id": rid253})
-        armed.append({"type": "buy_254", "symbol": b["symbol"], "id": rid254})
+        if _legtype:
+            armed.append({"type": _legtype, "symbol": b["symbol"], "id": rid254})
         # ⑱ 趋势/突破腿（2026-09-21）：现价 ≥ 突破位 且 不追高（≤ +3%）才成交。
         if b.get("src") == "trend" and b.get("level"):
             try:
