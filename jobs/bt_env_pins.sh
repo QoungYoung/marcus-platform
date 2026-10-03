@@ -821,3 +821,5 @@ export WOLF_THEME_SCORE_ACCEPT='1'
 export WOLF_THEME_SCORE_MIN='0.62'
 
 export WOLF_THEME_SCORE_DEBUG='1'   # 账本 §9.461 验证期诊断（确认数据分路径真的跑到）
+
+export WOLF_ENSURE_MINS='1'   # 账本 §9.470：当日缺分钟自动补齐（自动读 .env 的 key + 退避重试）

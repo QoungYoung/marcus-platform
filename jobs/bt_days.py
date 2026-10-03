@@ -368,6 +368,22 @@ def main() -> int:
             rc_sw, dts = run(_sw_cmd,
                              os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
             entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
+            # ── 账本 §9.470 ✓：当日**缺分钟⇒自动补齐（含退避重试）**（用户要求 ✓ 默认开 ✓）──
+            #   为什么必须在这里 ✓：臂每天新布腿 ⇒ 新标的的分钟可能缺 ✗ ⇒ 盘中判断会被**静默跳过** ✗
+            #   （"离场层哑火"同源 ✓）；且**必须自动读 `.env` 的 key** ✓，否则会误判成"上游没有" ✗
+            try:
+                if str(os.getenv("WOLF_ENSURE_MINS", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                    _em = subprocess.run([sys.executable, bt_env.jobs_file("bt_ensure_mins_day.py"),
+                                          "--day", d8, "--root", a.root,
+                                          "--account", str(a.account or "drabt35")],
+                                         capture_output=True, text=True, timeout=1800)
+                    entry.setdefault("steps", {})["ensure_mins"] = (
+                        "ok" if _em.returncode == 0 else "rc=%s" % _em.returncode)
+                    for _l in (":".join(_em.stdout.splitlines()[-2:]) if _em.stdout else "").split("\n"):
+                        if _l.strip():
+                            print("[days] ensure_mins %s" % _l.strip()[:120], flush=True)
+            except Exception as _e:
+                entry.setdefault("steps", {})["ensure_mins"] = "err:%s" % str(_e)[:40]
             # ── 账本 §9.465 ✓：低吸腿「**未命中留痕**」（用户要求 ✓ 默认开 ✓；只加日志、不改判据 ✓）──
             try:
                 if str(os.getenv("WOLF_LEG_MISS_REPORT", "1")).strip().lower() in ("1", "true", "yes", "on"):
