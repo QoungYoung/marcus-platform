@@ -59,7 +59,16 @@ def _asof_day() -> str:
 
 def _bars_db() -> str:
     """as-of 日线库（**只在回测环境存在** ✓；生产没有 ⇒ 本模块失效 ✓）。"""
-    for p in (os.getenv("WOLF_BARS_DB"), os.path.join("data", "_bt_full", "bars.sqlite"),
+    # ⚠️ 实测 ✓：成员校验可能跑在**子进程**里、**cwd 不是仓库根** ✗
+    #   ⇒ 只用相对路径会找不到 bars ⇒ 分=None ⇒ 判定不变（=A 静默失效 ✗）
+    #   ⇒ 这里补一条**基于本文件的绝对路径**（apps/main_line/… ⇒ 仓库根 = 上三层 ✓）
+    try:
+        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    except Exception:
+        _root = ""
+    for p in (os.getenv("WOLF_BARS_DB"),
+              os.path.join(_root, "data", "_bt_full", "bars.sqlite"),
+              os.path.join("data", "_bt_full", "bars.sqlite"),
               os.path.join(os.getenv("DATA_DIR") or "", "bars.sqlite")):
         if p and os.path.exists(p):
             return p
@@ -205,6 +214,9 @@ def score_for(symbol: str, theme: str, concepts: Optional[Sequence[str]] = None)
             mvs = [x["mv"] for x in ld.values()]
             lead = 0.5 * _pct(amts, ld[ts]["amt"]) + 0.5 * _pct(mvs, ld[ts]["mv"])   # 龙头度 ✓
         if lead is None:
+            if str(os.getenv("WOLF_THEME_SCORE_DEBUG", "0")).strip() == "1":
+                print("[TLS] %s/%s ⇒ 无 as-of 日线（bars=%r day=%r）⇒ 不改变判定"
+                      % (symbol, theme, _bars_db(), _asof_day()), flush=True)
             return None, "无 as-of 日线（生产环境即如此 ⇒ 不改变判定）"
         score = 0.5 * purity + 0.5 * lead
         return score, "正宗度=%.3f（共享 %d/%d 概念）｜龙头度=%.3f｜分=%.3f" % (

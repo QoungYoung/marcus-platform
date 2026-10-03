@@ -819,3 +819,5 @@ export WOLF_HIGH_SELL_BY_T_SLEEVE='1'
 #     正宗度=与主题核心成员共享概念比例（数据）；龙头度=主题内成交额/市值分位（as-of）
 export WOLF_THEME_SCORE_ACCEPT='1'
 export WOLF_THEME_SCORE_MIN='0.62'
+
+export WOLF_THEME_SCORE_DEBUG='1'   # 账本 §9.461 验证期诊断（确认数据分路径真的跑到）
