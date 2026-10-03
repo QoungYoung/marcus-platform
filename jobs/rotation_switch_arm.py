@@ -1257,7 +1257,10 @@ def main():
         rid253 = arm(conn, cur, b["symbol"], "custom_m5dump", "buy", BUY_253_EXPR, today)
         # ⑯ 均线挂单真挂腿（2026-09-15，用户指示上线）：254 的挂单价 = 收盘下方最近均线（13/34/60/144）；
         #    取不到均线 → 回退 254 原条件（触前低），绝不因此丢腿。
-        _ln = ma_line_price(b["symbol"], today) if _ma_on else None
+        # 账本 §9.516 ✓：**254 整体开关**（默认 0 ＝ 两条分支都不挂 ✓，只留 253／255）
+        #   依据 ✓：§9.495 实测 254 负期望（T+5 均值 −0.11%／中位 −0.45% ✗）vs 他的线组 +1.29%／+0.73% ✓
+        _use254 = str(os.getenv("WOLF_BUY_254", "0")).strip().lower() in ("1", "true", "yes", "on")
+        _ln = (ma_line_price(b["symbol"], today) if (_ma_on and _use254) else None)
         if _ln and _ln.get("v"):
             rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy",
                          ma_line_expr(_ln["v"]), today)
@@ -1265,7 +1268,12 @@ def main():
                             "price": round(float(_ln["v"]), 3),
                             "dist_pct": _ln.get("dist_pct"), "pricing": "ma_line"})
         else:
-            rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy", BUY_254_EXPR, today)
+            # 账本 §9.516 ✓：**254 负期望**（§9.495：T+5 均值 −0.11%／中位 −0.45% ✗，
+            #   他的线组 +1.29%／+0.73% ✓）⇒ 开关 `WOLF_BUY_254`（**默认 0 ＝ 不挂 254** ✓，置 1 ＝ 恢复）
+            #   ⚠️ 这里是**臂自己挂条件**的真正入口 ✓（`bt_intraday.conds_from_legs` 只是回放侧 ✓）
+            rid254 = None
+            if str(os.getenv("WOLF_BUY_254", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                rid254 = arm(conn, cur, b["symbol"], "custom_prevlow", "buy", BUY_254_EXPR, today)
             ma_rows.append({"symbol": b["symbol"], "pricing": "prevlow_fallback"})
         armed.append({"type": "buy_253", "symbol": b["symbol"], "id": rid253})
         armed.append({"type": "buy_254", "symbol": b["symbol"], "id": rid254})
