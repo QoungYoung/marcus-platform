@@ -22,6 +22,7 @@ BUY_LEG_KINDS = (
     "buy_253",
     "buy_254",
     "wolf_build",
+    "custom_line_dip",
 )
 
 # 低吸类买腿：金额/档位/量能按「低吸」规则处理
@@ -33,7 +34,10 @@ LOWDIP_KINDS = (
     "wolf_253_refill",
     "wolf_254_refill",
     "wolf_254_build",
+    "custom_line_dip",
 )
+
+LINE_DIP_KIND = "custom_line_dip"   # §9.497：他的线组买点（触 13/34/60/144 ＋ 缩量）
 
 PREVLOW_M5_KINDS = ("custom_prevlow", "custom_m5dump")   # 触前低 ＋ 5 分钟急杀
 

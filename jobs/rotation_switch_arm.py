@@ -45,7 +45,9 @@ def held_positions():
     try:
         import psycopg2
         conn = psycopg2.connect(DB); cur = conn.cursor()
-        cur.execute("SELECT symbol, volume FROM paper_positions WHERE account_id='stock' AND volume>0")
+        # 账户跟随 T_MONITOR_ACCOUNT（2026-09-18 修）：原来硬编码 stock ⇒ 用 --account 跑别的账户时，
+        #   "持仓"读的是 stock 的仓，腿表/卖腿全错位。
+        cur.execute("SELECT symbol, volume FROM paper_positions WHERE account_id=%s AND volume>0", (_leg_account(),))
         out = [{"symbol": str(r[0]), "volume": int(r[1] or 0)} for r in cur.fetchall()]
         cur.close(); conn.close(); return out
     except Exception:
@@ -293,11 +295,109 @@ def _banned_from_service():
     for _p in (root, os.path.join(root, "backend")):
         if _p and _p not in sys.path:
             sys.path.insert(0, _p)
+    # 2026-09-21 修：原先写死 ["stock"]，而回测账户是 drabt2/drabt3/… ⇒ **回测臂读不到自己写的禁令**
+    # （生产账户恰好叫 stock 所以只有回测一直是坏的）。实测：天津普林 drabt3:SZ002134 于 20260116 被禁，
+    # T3 在 0128 又买了 1400 股。开关 WOLF_TICKET_BAN_FIX（默认 0 ⇒ 保持历史行为）。
+    try:
+        import ban_filter as _bf
+        _accts = _bf.accounts_to_read()
+    except Exception:
+        _accts = ["stock"]
     from app.services.wolf_ticket_ban import banned_symbols as _bs
-    return _bs(["stock"])
+    return _bs(_accts)
+
+
+# ── 入池硬筛选（选股层，2026-09-18 用户"开始改吧"）────────────────────────────────
+# 语料（层级已对齐）：① 只在"波动大的方向"做、不碰日均波动 2 个点的（wolf-vs-system-mainline.md:160，
+#   2026-08-03）⇒ 方向级；② 不买趋势未扭转的方向（xls2026 0127）⇒ 方向级。
+# 数据：候选的宽主题直接取**腿字段 theme**（与 etf_share_flow.themes 同名，实测未命中 0），
+#   主题指标取该日沙箱 etf_share_flow.json 的 themes[].{d5,d20}（as-of）。
+# 开关 WOLF_PICK_CORPUS_GATE（库内默认 0；回测 setdefault=1）。阈值一律**分位**，不用绝对值。
+PICK_CORPUS_GATE = str(os.getenv("WOLF_PICK_CORPUS_GATE", "0")).strip().lower() in ("1", "true", "yes", "on")
+_PICK_GATE_STATS = {"checked": 0, "skipped_theme": 0, "skipped_trend": 0, "skipped_weak": 0, "errors": 0}
+
+
+def _theme_stats(day=None):
+    """当日主题指标：{theme: {d5, d20}}（读该回放日沙箱 etf_share_flow.json）。失败 → {}。
+
+    ⚠️ 2026-09-18 修：原实现只按固定根列表（_bt_size/_bt_turn/_bt_branch/_bt_qual/_bt_year）找，
+    **漏了 _bt_pick 等其它臂的根**，且用相对路径（腿构建器 CWD 未必是仓库根）⇒ B 臂里返回 {}
+    → 过滤器提前 return → `PICK_FILTER_SKIP` 一条都没有（实测 0），被误读成"筛选无效"。
+    改为 **glob 全根搜索** + 兜底 data/etf_share_flow.json，并把取数成败计数暴露出来。
+    """
+    global _PICK_GATE_STATS
+    try:
+        import glob as _glob
+        import json as _j
+        d = str(day or _today()).replace("-", "")[:8]
+        cands = sorted(_glob.glob(os.path.join("data", "_bt*", d, "etf_share_flow.json")))
+        cands += sorted(_glob.glob(os.path.join("**", "_bt*", d, "etf_share_flow.json"), recursive=False))
+        cands += [os.path.join("data", "etf_share_flow.json")]
+        for q in cands:
+            if not os.path.exists(q):
+                continue
+            o = _j.load(open(q, encoding="utf-8"))
+            out = {}
+            for t in (o.get("themes") or []):
+                out[str(t.get("theme"))] = {"d5": t.get("d5"), "d20": t.get("d20")}
+            if out:
+                _PICK_GATE_STATS["theme_source"] = q
+                _PICK_GATE_STATS["themes"] = len(out)
+                return out
+        _PICK_GATE_STATS["no_theme_file"] = _PICK_GATE_STATS.get("no_theme_file", 0) + 1
+        print("PICK_FILTER_NODATA 未找到 %s 的 etf_share_flow.json（试过 %d 个路径）" % (d, len(cands)), file=sys.stderr)
+        return {}
+    except Exception as e:
+        print("PICK_FILTER_NODATA 读取主题失败: %s" % str(e)[:80], file=sys.stderr)
+        return {}
+
+
+def _corpus_theme_filter(chain, day=None):
+    """按语料做入池硬筛选 + 留痕：返回 (保留的候选, 被剔清单)。fail-open。"""
+    if not PICK_CORPUS_GATE or not chain:
+        return chain, []
+    try:
+        ts = _theme_stats(day)
+        if not ts:
+            return chain, []
+        d20s = sorted(v["d20"] for v in ts.values() if isinstance(v.get("d20"), (int, float)))
+        if not d20s:
+            return chain, []
+        _p60 = d20s[int(len(d20s) * 0.60)] if len(d20s) >= 3 else d20s[0]   # 池内 60 分位（方向趋势）
+        keep, drop = [], []
+        for c in chain:
+            _PICK_GATE_STATS["checked"] += 1
+            th = str((c or {}).get("theme") or "")
+            _st = ts.get(th)
+            if not th or _st is None:
+                _PICK_GATE_STATS["skipped_theme"] += 1
+                drop.append({"symbol": (c or {}).get("symbol"), "theme": th or "-",
+                             "why": "主题无法识别（腿无 theme 且不在主题表）—— 语料要求按【方向】判定"})
+                continue
+            if isinstance(_st.get("d20"), (int, float)) and _st["d20"] < _p60:
+                _PICK_GATE_STATS["skipped_weak"] += 1
+                drop.append({"symbol": c.get("symbol"), "theme": th,
+                             "why": "方向趋势偏弱：主题 d20=%.2f%% < 池内 60 分位 %.2f%%（xls2026 0127「没有扭转趋势我都不看」）" % (_st["d20"], _p60)})
+                continue
+            if not isinstance(_st.get("d5"), (int, float)) or abs(_st.get("d5") or 0) <= 0:
+                _PICK_GATE_STATS["skipped_trend"] += 1
+                drop.append({"symbol": c.get("symbol"), "theme": th,
+                             "why": "方向无波动：主题 d5=%s（语料：只做波动大的方向）" % _st.get("d5")})
+                continue
+            keep.append(c)
+        print("PICK_FILTER_RUN day=%s 候选=%d 保留=%d 剔除=%d（主题表 %s）" % (str(day or _today()), len(chain), len(keep), len(drop), _PICK_GATE_STATS.get("themes")), file=sys.stderr)
+        for _d in drop[:20]:
+            print("PICK_FILTER_SKIP %s theme=%s %s" % (_d["symbol"], _d["theme"], _d["why"]), file=sys.stderr)
+        return keep, drop
+    except Exception as e:
+        _PICK_GATE_STATS["errors"] += 1
+        print("PICK_FILTER_ERR %s" % str(e)[:80], file=sys.stderr)
+        return chain, []
 
 
 def pick_buy(chain, exclude, limit=3, domain_out=None):
+    if PICK_CORPUS_GATE:
+        chain, _dropped = _corpus_theme_filter(chain)
     """路径A 低吸选股(rotation 链关键词匹配的候选域)。
 
     P1-5b(2026-09-10 修, 依狼大 2026-01-16「后排反倒不能去 要看好龙头那些 /
@@ -335,6 +435,11 @@ def pick_buy(chain, exclude, limit=3, domain_out=None):
         print(f"[rotation] 删票黑名单读取失败: {str(_be)[:80]}")
     cands = []
     for ts, names in cm.items():
+        # ★ F2 最前一层（2026-09-25 用户：「把 F2 放在最前面一层，没权限不用过其他任何闸门」）：
+        #   无权限板块的票**在这里直接丢弃** —— 不进关键词匹配、不进市值预筛、不进 leader 评分、
+        #   不进位置闸（LOW/MID）、不进建仓门、不进任何后续闸门。默认关（旧行为逐字不变）。
+        if board_prefilter_enabled() and not board_ok(ts):
+            continue
         if any(norm(k) in norm(n) for n in names for k in kws):
             xq = "SH" + ts[:6] if ts.endswith(".SH") else ("SZ" + ts[:6] if ts.endswith(".SZ") else ts)
             if ts in banned:
@@ -346,6 +451,21 @@ def pick_buy(chain, exclude, limit=3, domain_out=None):
         print(f"[rotation] G3 删票过滤 {len(_skipped)} 只: {_skipped[:8]}")
     if not cands:
         return []
+    # ── ⓪ 卫生过滤（退市 / ST / 北交所）用户 2026-09-21「过滤里去掉退市，ST，北交所的票吧」──
+    #   接在候选域构建处（市值预筛之前）⇒ 脏票不会占掉 WOLF_PICK_BUY_SHORTLIST 的名额。
+    #   as-of：回测走 namechange 当日简称；生产没有 tag ⇒ 用当前名称（就是"当下真实"，口径正确）。
+    #   开关 universe_clean.enabled()，默认关 ⇒ 生产/回测零影响；失败 fail-open。
+    try:
+        import importlib as _ilUC
+        _uc = _ilUC.import_module("universe_clean")
+        if _uc.enabled():
+            _n0 = len(cands)
+            _dis = [(tx[0], _uc.judge(tx[0])[1]) for tx in cands if not _uc.judge(tx[0])[0]]
+            cands = [tx for tx in cands if _uc.judge(tx[0])[0]]
+            if len(cands) != _n0:
+                print(f"[rotation] 卫生过滤 {_n0}→{len(cands)} 剔除={_dis[:6]}")
+    except Exception as _ue:
+        print("[rotation] 卫生过滤异常(fail-open): %s" % str(_ue)[:80])
     # ① 市值预筛(单次全市场调用): 龙头优先于字典序
     # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
     shortlist_n = int(os.getenv("WOLF_PICK_BUY_SHORTLIST", "80"))
@@ -627,9 +747,27 @@ def theme_of_chain(c):
     return None
 
 SELL_EXPR = {"op": "==", "field": "quote.vwap_break", "value": True}
-BUY_253_EXPR = {"and": [{"op": ">=", "field": "index.m5_dump", "value": 0.4},   # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)(253 跌幅阈值)
+BUY_253_EXPR = {"and": [{"op": ">=", "field": "index.m5_dump", "value": 0.4},   # ⚠️表述修正(2026-09-26 用户指出「急杀不是有语料吗」✓)：
+#   · 「**跳水/急杀当买点**」**有语料** ✓ —— 原话「盘面出现**跳水但未到加仓幅度时买回**」
+#     「午后判断**跳水无碍可以买回**」；**但语料写明了前提**：「做T **必须在有底仓的前提下做**
+#     （没底仓就做不了T）」✓
+#   · 因此**不准的是这个实现** ✗：①用**大盘指数** 5 分钟跌幅（语料是个股/板块跳水 ✗）
+#     ②拿它触发**无底仓建仓**（语料要求**有底仓** ✗）。见 docs/wolf-buy-parameter-ledger.md §9.166r-ledger.md §4)(253 跌幅阈值)
                         {"op": ">", "field": "quote.average", "value": 0},
                         {"op": ">", "field": "quote.current", "value": 0}]}
+# ── buy_255 ✓（账本 §9.497 ✓）：**他的线组买点**（好票跌到事先画好的线 ⇒ 提前挂单买、与指数无关）
+#   原话 ✓：「好票跌到事先画好的线（**13/34/60/144**）→ 提前挂单买、与指数无关」→ 跌破最下面那根线就卖
+#            （`docs/wolf-behavior-blueprint.md:218`）
+#   量化 ✓（§9.495）：**T+5 均值 +1.29%、中位 +0.73%、左尾 5.0%** vs 我们 254 的 −0.11%／−0.45%／8.3%
+#   字段 ✓：`quote.dip_ma_line`（触及某根线：13/34/60/144，截至**前一日**算，无前视）＋ `vol_ratio ≤ 0.9`
+#   ⚠️ 依赖 `t_monitor` 产出 `quote.ma13/34/60/144` 与 `quote.dip_ma_line`（见 §9.497 待接项）
+BUY_255_EXPR = {"and": [{"op": "==", "field": "quote.dip_ma_line", "value": True},
+                        {"op": ">", "field": "vol_ratio", "value": 0},
+                        {"op": "<=", "field": "vol_ratio", "value": 0.9},
+                        {"op": ">", "field": "quote.average", "value": 0},
+                        {"op": ">", "field": "quote.current", "value": 0}]}
+
+
 BUY_254_EXPR = {"and": [{"op": "==", "field": "quote.dip_prev_low", "value": True},
                         {"op": ">", "field": "vol_ratio", "value": 0},
                         # 2026-09-07 对齐狼大温和缩量(≤0.9, 同 zheng_t_buy_quote)：0.7 档过严——
@@ -638,8 +776,70 @@ BUY_254_EXPR = {"and": [{"op": "==", "field": "quote.dip_prev_low", "value": Tru
                         {"op": ">", "field": "quote.average", "value": 0},
                         {"op": ">", "field": "quote.current", "value": 0}]}
 
+def buy_253_expr():
+    """低吸腿 253 表达式（开关 `WOLF_CRUSH_CONJUNCT`，**默认 0 = 现状** ✓）。
+
+    打开后 = 「**大盘急杀 ∧ 个股急杀**」**合取** ✓ —— 依据：
+      · 数据（账本 §9.175，9 主题主板逐日，上证当日跌≥1.0% 记作大盘急杀日）：
+        **两者同时急杀** +5 中位 **+1.57%**／为正 **61%** ✓（唯一正期望）
+        只有个股急杀 −0.51%／47% ✗；只有大盘急杀 −0.85%／42% ✗
+      · 语料两层（2025-06-05）：「**主线板块筑底行情**…**急杀可以买**，缓跌不买」（大盘/板块级 ✓）
+        ＋「**板块/个股急杀**，判断杀出比较好的位置…**慢慢买**」（个股级 ✓）⇒ **必须是合取** ✓
+    个股急杀阈值：`WOLF_CRUSH_STOCK_DROP`（默认 3.0 ⇒ 跌 ≥3% ✓，与量化口径一致 ✓）
+    """
+    try:
+        if str(os.getenv("WOLF_CRUSH_CONJUNCT", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+            return BUY_253_EXPR
+        th = abs(float(os.getenv("WOLF_CRUSH_STOCK_DROP", "3.0") or 3.0))
+    except Exception:
+        return BUY_253_EXPR
+    return {"and": [{"op": ">=", "field": "index.m5_dump", "value": 0.4},
+                    {"op": "<=", "field": "quote.m5_dump", "value": -th},
+                    {"op": ">", "field": "quote.average", "value": 0},
+                    {"op": ">", "field": "quote.current", "value": 0}]}
+
+
+def ambush_expr():
+    """**埋伏腿**触发表达式（账本 §9.182）。
+
+    口径 = 「**回踩到位但不破前低**」✓ —— 语料两层各管一种玩法 ✓：
+      · **埋伏/筑底**（2026-02-02）：「**大盘没过前低是前提**，观察板块/个股**也没低于前低**是基础条件」✓
+        ⇒ 本表达式的依据 ✓
+      · **正T 挂单**（2025-03-06）：「就是**挂前一天的低点**，能买进去就做正T」✓
+        ⇒ 那是 `BUY_254_EXPR`（`quote.dip_prev_low`＝**触及**前低 ✓）的依据，**不该**给埋伏腿用 ✗
+
+    数据（强势+回调基座，1,668 信号 ✓）50 日离场：
+      · **不破前低** 中位 **+6.29%／为正 63%／回撤 −6.9%／收益回撤 0.91** ✓✓
+      · 触及前低（现行 254 ✗）中位 **+0.46%／回撤 −11.7%** ✗ ⇒ **差 5~8 倍**
+    开关：`WOLF_AMBUSH_TRIGGER`（`near`=新口径 ✓｜**默认 `touch` = 现状零变化** ✓）；
+          `WOLF_AMBUSH_NEAR_PCT`（回踩到位带，默认 1.0% ✓ ⇒ 0 < 距前低% ≤ 1.0）
+    """
+    try:
+        mode = (os.getenv("WOLF_AMBUSH_TRIGGER", "touch") or "touch").strip().lower()
+        if mode != "near":
+            return BUY_254_EXPR
+        pct = abs(float(os.getenv("WOLF_AMBUSH_NEAR_PCT", "1.0") or 1.0))
+    except Exception:
+        return BUY_254_EXPR
+    return {"and": [{"op": ">", "field": "quote.current", "value": 0},
+                    {"op": ">", "field": "quote.prev_low_dist_pct", "value": 0},        # **未破前低** ✓
+                    {"op": "<=", "field": "quote.prev_low_dist_pct", "value": pct},     # 回踩到位 ✓
+                    {"op": ">", "field": "quote.average", "value": 0}]}
+
+
+def _leg_account() -> str:
+    """布腿账户（2026-09-18 修）：**必须跟随 T_MONITOR_ACCOUNT**。
+
+    背景：本文件原来把账户硬编码成 `stock`（arm/expire_old 两处）⇒ 一旦用 `--account` 跑
+    别的账户（回测 A/B、单臂验证），买腿条件全被写进 stock，而监控器只读自己的账户 ⇒
+    **候选腿的买条件对监控器不可见**，20 天里只成交 3 只既有做T票 ⇒ 曾被我误判成"建仓广度不够"。
+    生产默认仍是 stock（env 未设时逐字不变）。
+    """
+    return (os.getenv("T_MONITOR_ACCOUNT", "stock") or "stock").strip()
+
+
 def expire_old(cur, today):
-    cur.execute("UPDATE t_conditions SET status='expired' WHERE account_id='stock' AND publisher='switch' AND status='active' AND trade_date < %s", (today,))
+    cur.execute("UPDATE t_conditions SET status='expired' WHERE account_id=%s AND publisher='switch' AND status='active' AND trade_date < %s", (_leg_account(), today))
 
 MA_LINE_EXPR_VOL_MAX = 0.9      # 温和缩量（与 254 同口径）
 MA_LINE_MIN_CLOSES = 144         # 至少要够最长的那条线
@@ -710,7 +910,7 @@ def arm(db, cur, symbol, trigger_kind, direction, expr, trade_date):
         print("ARM_SKIP_BOARD", symbol, file=sys.stderr)
         return None
     from app.services import t_db
-    cond = {"account_id": "stock", "symbol": symbol, "trade_date": trade_date,
+    cond = {"account_id": _leg_account(), "symbol": symbol, "trade_date": trade_date,
             "trigger_kind": trigger_kind, "direction": direction,
             "expression": expr, "status": "active", "armed": 1,
             "publisher": "switch"}
@@ -980,6 +1180,37 @@ def main():
                 [(x.get("symbol"), str(x.get("why"))[:48]) for x in _ef_blocked]), file=sys.stderr)
     except Exception as _e_ef:
         print("[rotation_switch_arm] entry_filters err:", str(_e_ef)[:90], file=sys.stderr)
+    # ⑱ 趋势/突破通道（2026-09-21 用户拍板「先加到回测里」）——与「低位埋伏」并列的第二条买点路径。
+    #   语料：2026-02-12「放量突破 一口吃完上面挂单」／2026-01-12「4006站稳三天后量能的暴涨」／
+    #        2025-07-09「放量突破就是牛市最基础的逻辑」／2026-09-03「高开不追」／
+    #        2026-05-11「高位放量滞涨…不追高」。
+    #   为什么必须绕过 stage：stock_confirm_result 的 stage 只有「低位埋伏」一条链，放量上涨的票
+    #   会被判「下跌中」（2026 年 1 月兆易/长电/通富全月如此 ⇒ 一手未买，已复现）。
+    #   ⚠️ 位置：放在 wolf_entry_filters **之后** —— 那些分位门是给低吸腿设计的；本通道自带
+    #      「带量突破 + 站稳 + 高位放量滞涨否证」，不叠加（如需叠加，把本块移到 filter_legs 之前）。
+    #   ⚠️ 开关：WOLF_TREND_CHANNEL（库内默认 0 ⇒ 生产零影响；回测 pins 置 1）。
+    try:
+        import importlib as _ilT
+        _pT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _pT not in sys.path:
+            sys.path.insert(0, _pT)
+        _TC = _ilT.import_module("trend_channel")
+        if _TC.enabled():
+            _tc_rows = _TC.scan_mainline(today, limit=int(os.getenv("WOLF_TREND_SCAN_LIMIT", "400")))
+            _tc_added = 0
+            for _r in _tc_rows:
+                _sym = _r.get("symbol")
+                if not _sym or _sym in held_syms:      # 已持仓的加仓/做T另走既有腿，避免重复
+                    continue
+                buy_legs.append({"symbol": _sym, "chain": "趋势突破", "side": "trend_break",
+                                 "theme": "trend", "src": "trend", "pick_source": "trend",
+                                 "level": _r.get("level"), "desc": _r.get("desc")})
+                _tc_added += 1
+            _TC.shadow_record(today, _tc_rows, extra={"wave_op": wop, "added": _tc_added,
+                                                      "held_excluded": len(_tc_rows) - _tc_added})
+            print("TREND_CHANNEL candidates=%d added=%d" % (len(_tc_rows), _tc_added), file=sys.stderr)
+    except Exception as _e_tc:
+        print("[rotation_switch_arm] trend_channel err:", str(_e_tc)[:90], file=sys.stderr)
     # ③ 可见性（2026-09-14）：把"这次买腿分别来自哪条路"显式打出来 + 落审计文件。
     # 起因：pick_v2 报错会静默回落 legacy 扫描序，路径 A/B 的腿在日志里无法区分 → 上线 6 天无人发现。
     _src_cnt = {}
@@ -1038,6 +1269,20 @@ def main():
             ma_rows.append({"symbol": b["symbol"], "pricing": "prevlow_fallback"})
         armed.append({"type": "buy_253", "symbol": b["symbol"], "id": rid253})
         armed.append({"type": "buy_254", "symbol": b["symbol"], "id": rid254})
+        # ⑱ 趋势/突破腿（2026-09-21）：现价 ≥ 突破位 且 不追高（≤ +3%）才成交。
+        if b.get("src") == "trend" and b.get("level"):
+            try:
+                import importlib as _ilT2
+                _pT2 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+                if _pT2 not in sys.path:
+                    sys.path.insert(0, _pT2)
+                _TC2 = _ilT2.import_module("trend_channel")
+                _ridT = arm(conn, cur, b["symbol"], "trend_break_buy", "buy",
+                            _TC2.expr(b["level"]), today)
+                armed.append({"type": "trend_break", "symbol": b["symbol"], "id": _ridT,
+                              "level": b["level"], "desc": str(b.get("desc") or "")[:80]})
+            except Exception as _et2:
+                print("TREND_ARM_ERR", b.get("symbol"), str(_et2)[:80], file=sys.stderr)
     try:
         json.dump({"date": today, "mode": "enforce" if _ma_on else "shadow",
                    "legs": ma_rows},

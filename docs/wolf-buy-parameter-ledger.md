@@ -25634,3 +25634,30 @@ DATA_DIR=…/20260302 ⇒ theme_qualify_struct("新能源/电池")
   2. `jobs/bt_intraday.conds_from_legs` 挂上它（id 3 ✓，kind `custom_line_dip` ✓）
   3. `t_monitor` 补 `ma60/ma144` 字段 ＋ 该 kind 的求值 ✓（`ma13/ma34` 已有现成算法 ✓）
   4. `t_leg_kinds.py` 把 `custom_line_dip` 加进 `BUY_LEG_KINDS`/`LOWDIP_KINDS` ✓（**一处** ✓）
+
+---
+
+## §9.497 **`buy_255`（他的线组买点）实施进度**（用户「接着做」✓）—— **接线完成 ✓，只差"字段产出"一环** ✗
+
+### ① 已完成 ✓（都验证过 ✓）
+
+| # | 文件 ✓ | 改动 ✓ | 验证 ✓ |
+|---|---|---|---|
+| 1 | `backend/app/services/t_leg_kinds.py` ✓ | 加 `LINE_DIP_KIND = "custom_line_dip"` ✓，并把它并进 `BUY_LEG_KINDS`(11) ✓／`LOWDIP_KINDS`(8) ✓（**只改这一处** ✓）| 自检打印 ✓ |
+| 2 | `jobs/rotation_switch_arm.py` ✓ | 加 **`BUY_255_EXPR`** ✓：`quote.dip_ma_line == True` ∧ `0 < vol_ratio ≤ 0.9` ∧ `quote.average > 0` ∧ `quote.current > 0` ✓ | compile ✓ |
+| 3 | `jobs/bt_intraday.py` ✓ | `conds_from_legs` 追加第 3 条（kind `custom_line_dip` ✓），开关 **`WOLF_BUY_255`（默认 1 ＝ 开）** ✓ | 实测 **返回 3 条** ✓：`custom_m5dump／custom_prevlow／custom_line_dip` ✓ |
+| 4 | 门禁 ✓ | `test_ambush_two_steps` **58 passed** ✓、`preflight` 通过 ✓ | ✓ |
+
+### ② ⚠️ 还差的一环 ✗（**唯一剩余** ✓）
+
+- `t_monitor` 需产出两个字段（`t_monitor.py:3883` 那个快照字典里 ✓，紧挨 `"dip_prev_low"` ✓）：
+  - `quote.ma13／ma34／ma60／ma144` ✓（`ma13/ma34` 的算法**已有现成** ✓，见 `t_monitor` 内 `_ma13_v/_ma34_v` ✓）
+  - `quote.dip_ma_line` ✓（＝"当日最低触到某根线且收回线上" ✓，**线用截至前一日的均值** ⇒ 无前视 ✓）
+- ⚠️ **数据来源** ✗：现有 `_stock_dip_prev_low` 用的是 `fetch_minute_bars(freq="m5", count=320)` ✓（≈6.5 天 ✓）
+  ⇒ **算不了 144 日线** ✗ ⇒ 需要一个**日线**取数助手 ✓（下一步先确认其名称/接口 ✓）
+- ⇒ ⇒ **在此之前 `custom_line_dip` 不会触发** ✓（字段缺失 ⇒ 条件恒假 ⇒ **fail-closed，零风险** ✓）
+
+### ③ 与 254 的关系 ✓（回答用户"254 是不是可以去掉了" ✓）
+
+- 数据支持去掉 ✓（254 T+5 **−0.11%／−0.45%** ✗ vs 线组 **+1.29%／+0.73%** ✓）
+- ⇒ **但先并存** ✓（255 字段接完、臂内验证后再关 254 ✓）；关的方式＝**开关** ✓（`WOLF_BUY_254` ✓），不删代码 ✓
