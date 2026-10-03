@@ -396,6 +396,18 @@ def main() -> int:
                             print("[days] ensure_mins %s" % _l.strip()[:120], flush=True)
             except Exception as _e:
                 entry.setdefault("steps", {})["ensure_mins"] = "err:%s" % str(_e)[:40]
+            # ── 账本 §9.514 ✓：**低位方向「辨识度最高老龙头」埋伏候选**（用户「做」✓ 默认开 ✓）──
+            try:
+                _al = subprocess.run([sys.executable, bt_env.jobs_file("gen_ambush_lowdip.py")],
+                                     capture_output=True, text=True, timeout=600,
+                                     env=dict(os.environ, DATA_DIR=sb))
+                entry.setdefault("steps", {})["ambush_lowdip"] = (
+                    "ok" if _al.returncode == 0 else "rc=%s" % _al.returncode)
+                for _l in (_al.stdout or "").splitlines()[:3]:
+                    if _l.strip():
+                        print("[days] %s" % _l.strip()[:130], flush=True)
+            except Exception as _e2:
+                entry.setdefault("steps", {})["ambush_lowdip"] = "err:%s" % str(_e2)[:40]
             # ── 账本 §9.465 ✓：低吸腿「**未命中留痕**」（用户要求 ✓ 默认开 ✓；只加日志、不改判据 ✓）──
             try:
                 if str(os.getenv("WOLF_LEG_MISS_REPORT", "1")).strip().lower() in ("1", "true", "yes", "on"):
