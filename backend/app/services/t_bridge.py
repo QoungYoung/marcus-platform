@@ -6,9 +6,13 @@
 - AI 主导模式：AI 是唯一决策主体，唤醒后自主看盘决策（exec/wait/abandon/update_condition）
 - 桥不可达降级低频轮询兜底（只标记事件待处理，不自动下单）；Worker 永不直接下单
 """
+from .t_leg_kinds import BUY_LEG_KINDS, is_buy_leg, LOWDIP_KINDS, is_lowdip, PREVLOW_M5_KINDS, is_prevlow_m5  # noqa: F401  §9.496 单一来源
+
+_BUY_LEG_KINDS = BUY_LEG_KINDS   # §9.496 单一来源：加新腿类型只改 t_leg_kinds.py
 import json
 import time
 import urllib.request
+import os
 from typing import Any, Dict, List, Optional
 
 from app.config import get_settings
@@ -81,6 +85,129 @@ def _symbol_t_stats(symbol: str) -> Dict[str, Any]:
         return {"error": str(e)[:100]}
 
 
+# ── 同票历史快照（确定性；`WOLF_AGENT_HISTORY_SNAPSHOT`，库内默认 0）──────────────────────
+# 为什么要有它（2026-09-22 实测的"采样固化"链）：
+#   SH600183 在 0105 10:20 有一条低吸腿，被**确定性**的做T时段窗拦掉（一笔没成交）；但它的
+#   **AI 裁决文本**进了 prompt 的【历史决策参考（最近 3 次）】——T6 那次抽到 `ai_wait`（"现价 72.18
+#   相对本腿低吸基准仍偏高、非深度回踩"），于是 0106 同票 73.88 的腿被 agent 判"高出前次低吸价 +2.35%"⇒ cancelled；
+#   而 T8 抽到 `ai_exec`，历史块里就没有否定锚 ⇒ 同一条腿 executed。**一次采样差异被 prompt 历史固化并放大**。
+#   根因：历史来自 `t_ai_actions` 的**最近 N 条窗口**（条数随各臂决策量变化，锚会被挤出窗口），
+#   且全是自由文本 ⇒ "能不能发现高出低吸"变成运气。
+# 本函数把历史做成**确定性快照**：直接读 `t_triggers`（腿历史，含被拦/取消）+ `paper_trades`（真实成交），
+#   给出**锚点**（前次同票低吸腿价 / 前次买入成交价 / 前次卖出价）与现价相对它们的偏离、
+#   以及本轮（自上次清仓）的买卖笔数。开关关 ⇒ 不注入（与既有 prompt 逐字一致）。
+_HIST_SNAP = str(os.getenv("WOLF_AGENT_HISTORY_SNAPSHOT", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def history_snapshot_on() -> bool:
+    return _HIST_SNAP
+
+
+def symbol_history_snapshot(symbol: str, account_id: Optional[str] = None,
+                            current: Optional[float] = None, limit_legs: int = 6) -> Dict[str, Any]:
+    """该票的**确定性**历史快照（腿历史 + 成交锚点 + 本轮笔数）。取数失败 ⇒ 空 dict（fail-open）。"""
+    out: Dict[str, Any] = {}
+    sym = str(symbol or "").upper()
+    try:
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            # ⚠️ `t_triggers` 没有 trade_date 列（日期只在 created_at 里）—— 2026-09-22 踩过：
+            #    写成 trade_date 会抛错并被本函数的 except 吞掉 ⇒ 快照恒空（静默失效）。
+            rows = db.execute(_text(
+                "SELECT created_at, direction, event_type, quote_price, status, reason "
+                "FROM t_triggers WHERE upper(symbol)=:s AND (:a IS NULL OR account_id=:a) "
+                "ORDER BY created_at DESC, id DESC LIMIT 40"), {"s": sym, "a": account_id}).mappings().all()
+            legs = []
+            for r in rows:
+                legs.append({"day": str(r["created_at"] or "")[:10].replace("-", ""),
+                             "t": str(r["created_at"] or "")[11:16],
+                             "dir": "买" if str(r["direction"]) == "buy" else "卖",
+                             "kind": str(r["event_type"] or ""), "px": float(r["quote_price"] or 0) or None,
+                             "status": str(r["status"] or "")})
+            out["legs"] = legs[:limit_legs]
+            # 锚点①：最近一次**买腿**（含被拦的）价
+            lb = next((x for x in legs if x["dir"] == "买" and x["px"]
+                       and (x["kind"] in _BUY_LEG_KINDS or x["kind"].startswith("buy_"))), None)
+            if lb:
+                out["last_buy_leg"] = lb
+            # 锚点②③：最近一次买入成交价 / 最近一次卖出价 + 本轮笔数
+            trows = db.execute(_text(
+                "SELECT trade_date, direction, price, volume FROM paper_trades "
+                "WHERE upper(symbol)=:s AND (:a IS NULL OR account_id=:a) AND COALESCE(voided,0)=0 "
+                "ORDER BY created_at DESC, id DESC LIMIT 60"), {"s": sym, "a": account_id}).mappings().all()
+            n_buy = n_sell = 0
+            for t in trows:
+                d = str(t["direction"])
+                if d in ("买入", "buy") and "last_buy_fill" not in out:
+                    out["last_buy_fill"] = {"day": str(t["trade_date"] or "")[:10].replace("-", ""),
+                                            "px": float(t["price"] or 0), "vol": int(t["volume"] or 0)}
+                if d in ("卖出", "sell") and "last_sell" not in out:
+                    out["last_sell"] = {"day": str(t["trade_date"] or "")[:10].replace("-", ""),
+                                        "px": float(t["price"] or 0), "vol": int(t["volume"] or 0)}
+            # 本轮（自上次清仓）笔数：按时间倒序累加，遇到"持仓归零"停
+            pos = 0
+            for t in trows:
+                v = int(t["volume"] or 0)
+                if str(t["direction"]) in ("卖出", "sell"):
+                    pos += v; n_sell += 1
+                else:
+                    pos -= v; n_buy += 1
+                    if pos <= 0:
+                        break
+            out["round"] = {"buys": n_buy, "sells": n_sell}
+        finally:
+            db.close()
+    except Exception:
+        return {}
+    try:
+        px = float(current or 0)
+    except Exception:
+        px = 0.0
+    if px > 0:
+        for k, label in (("last_buy_leg", "dev_vs_buy_leg_pct"), ("last_buy_fill", "dev_vs_buy_fill_pct"),
+                         ("last_sell", "dev_vs_last_sell_pct")):
+            a = out.get(k) or {}
+            if a.get("px"):
+                out[label] = round((px / float(a["px"]) - 1.0) * 100.0, 2)
+    return out
+
+
+def render_history_snapshot(snap: Dict[str, Any], symbol: str = "") -> str:
+    """把快照渲染成 prompt 段落（确定性、可核对；无数据 ⇒ 返回空串）。"""
+    if not snap:
+        return ""
+    L = ["【同票历史快照（确定性口径，系统直接给出，不必自己回忆）】"]
+    a = snap.get("last_buy_leg")
+    if a:
+        L.append("- 前次**买腿**（含被拦）：%s %s %s @%s（%s）" % (
+            a.get("day"), a.get("t"), a.get("kind"), a.get("px"),
+            {"blocked": "被拦", "cancelled": "AI取消", "executed": "已成交"}.get(a.get("status"), a.get("status"))))
+    b = snap.get("last_buy_fill")
+    if b:
+        L.append("- 前次**买入成交**：%s @%.2f ×%d 股" % (b.get("day"), b.get("px"), b.get("vol")))
+    s_ = snap.get("last_sell")
+    if s_:
+        L.append("- 前次**卖出**：%s @%.2f ×%d 股" % (s_.get("day"), s_.get("px"), s_.get("vol")))
+    dev = []
+    for k, lbl in (("dev_vs_buy_leg_pct", "距前次买腿价"), ("dev_vs_buy_fill_pct", "距前次买入成交价"),
+                   ("dev_vs_last_sell_pct", "距前次卖出价")):
+        if snap.get(k) is not None:
+            dev.append("%s %+.2f%%" % (lbl, float(snap[k])))
+    if dev:
+        L.append("- 现价相对锚点：" + "；".join(dev) + "（正=已高于该锚，属「追高」证据；负=回踩到该锚下方）")
+    r = snap.get("round") or {}
+    if r.get("buys") or r.get("sells"):
+        L.append("- 本轮（自上次清仓）：买入 %d 笔、卖出 %d 笔（G6 上限 2/2）" % (r.get("buys", 0), r.get("sells", 0)))
+    if snap.get("legs"):
+        L.append("- 最近腿序（新→旧）：" + "，".join(
+            "%s %s %s@%s(%s)" % (x.get("day")[4:], x.get("dir"), x.get("kind"), x.get("px"),
+                                 {"blocked": "拦", "cancelled": "取消", "executed": "成交"}.get(x.get("status"), x.get("status")))
+            for x in snap["legs"][:5]))
+    return "\n".join(L) + "\n"
+
+
 def _outcome_summary(oc: Dict[str, Any]) -> str:
     """outcome 摘要（供唤醒上下文展示）：✅+0.85% / ⛔-1.5%。"""
     try:
@@ -98,12 +225,16 @@ def _consecutive_hits(condition_id: Optional[int], symbol: str) -> int:
         from app.database import SessionLocal
         db = SessionLocal()
         try:
+            # ⚠️ 2026-09-19：与 created_at 的写入钟同源（Python 钉钟）—— 原用 CURRENT_DATE（DB 真钟）
+            #   在回放里恒真 ⇒ 连续命中跨日累加。
+            from datetime import datetime as _dt
+            _today = _dt.now().strftime("%Y-%m-%d")
             rows = db.execute(text(
                 "SELECT status, created_at FROM t_triggers "
                 "WHERE condition_id = :cid AND symbol = :sym "
-                "AND created_at::date = CURRENT_DATE "
+                "AND to_char(created_at, 'YYYY-MM-DD') = :today "
                 "ORDER BY id DESC LIMIT 10"
-            ), {"cid": condition_id, "sym": symbol}).mappings().all()
+            ), {"cid": condition_id, "sym": symbol, "today": _today}).mappings().all()
             n = 0
             for r in rows:
                 # 连续：从最新往前数，遇到 executed/blocked/cancelled 则中断计数
@@ -132,6 +263,9 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     ctx.setdefault("position", _position_summary(symbol))
     ctx.setdefault("recent_decisions", _recent_decisions(symbol))
     ctx.setdefault("symbol_t_stats", _symbol_t_stats(symbol))
+    ctx.setdefault("history_snapshot", symbol_history_snapshot(
+        symbol, account_id=trigger.get("account_id"),
+        current=trigger.get("quote_price"))) if _HIST_SNAP else None
     consec = _consecutive_hits(trigger.get("condition_id"), symbol)
     ctx["consecutive_hits"] = consec
     hit_alert = consec >= AI_CONSECUTIVE_HIT_ALERT
@@ -178,6 +312,10 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
             rs = ((r.get("output") or {}).get("reason") or "")[:60]
             lines.append(f"- {at} {oc_sum} {rs}")
         msg += "\n".join(lines) + "\n"
+    if _HIST_SNAP:
+        _snap_txt = render_history_snapshot(ctx.get("history_snapshot") or {}, symbol)
+        if _snap_txt:
+            msg += _snap_txt
     st = ctx.get("symbol_t_stats") or {}
     if st and st.get("total_decisions"):
         win_rate = st.get("exec_win_rate_pct")
@@ -264,6 +402,19 @@ def agent_review_and_execute(trigger: Dict[str, Any]) -> Dict[str, Any]:
     if escalation == "human":
         t_db.update_trigger_status(trigger_id, "human_confirm", reason=why)
         return {"status": "human_confirm", "trigger_id": trigger_id, "reason": why}
+    if escalation == "agent" and side == "buy":
+        # 2026-09-21：新开仓口径改 AI 审核 ⇒ **在这里真给 AI 一次机会**（本函数只会在
+        # "上一次唤醒失败/异常"后被调用，所以这是一次带新上下文的补审）。
+        # 仍失败 ⇒ 标 await_retry（保留活性，条件再触发时重来），**不再进 human_confirm 黑洞**。
+        try:
+            retry = wake_and_decide(trigger)
+            if retry and retry.get("status") != "wake_failed":
+                return retry
+        except Exception as _e:
+            why = "%s；AI 审核唤醒异常 %s" % (why, str(_e)[:60])
+        t_db.update_trigger_status(trigger_id, "await_retry",
+                                   reason="%s（AI 审核未完成 → 保留活性，等待条件再触发）" % why)
+        return {"status": "await_retry", "trigger_id": trigger_id, "reason": why}
 
     # 2) AI 主导：桥不可达 → 标记待 AI 下次唤醒，不自动下单
     t_db.update_trigger_status(trigger_id, "ai_decided",

@@ -154,13 +154,16 @@ def test_ambush_kind_in_build_kinds():
     ⇒ 无底仓时"建仓规模"只对 `T_BUILD_KINDS` 里的腿型计算 ✓；埋伏腿是**低位先手建仓** ✓
     ⇒ 必须入列 ✓。实测（T35 一月）：布腿 **19 条、触发 0 次** ✗ 就是漏在此处。
     """
-    src = open(os.path.join(_ROOT, "backend", "app", "services", "t_pool.py"), encoding="utf-8").read()
-    i = src.index("T_BUILD_KINDS = (")
-    seg = src[i:src.index(")", i) + 1]
-    assert "wolf_ambush_buy" in seg, "埋伏腿必须在建仓腿型名单里 ✓"
-    br = open(os.path.join(_ROOT, "backend", "app", "services", "t_bridge.py"), encoding="utf-8").read()
-    j = br.index("_BUY_LEG_KINDS = (")
-    assert "wolf_ambush_buy" in br[j:br.index(")", j) + 1]
+    # §9.496：名单已收成**单一来源**（`t_leg_kinds.py`）⇒ 测试改成**查注册表**（检行为，不检源码文本）
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(_ROOT, "backend"))
+    from app.services.t_leg_kinds import BUY_LEG_KINDS, T_BUILD_KINDS
+    assert "wolf_ambush_buy" in T_BUILD_KINDS, "埋伏腿必须在建仓腿型名单里 ✓"
+    assert "wolf_ambush_buy" in BUY_LEG_KINDS, "埋伏腿必须在买腿名单里 ✓"
+    # 防回退：这两处源码里**不应再出现**该字面名单
+    for _rel in ("backend/app/services/t_pool.py", "backend/app/services/t_bridge.py"):
+        assert 'wolf_ambush_buy"' not in open(os.path.join(_ROOT, _rel), encoding="utf-8").read(), \
+            "%s 不应再硬编码腿名单 ✓（§9.496）" % _rel
 
 
 def test_discipline_scope_no_overreach():

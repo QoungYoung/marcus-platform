@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from .t_leg_kinds import T_BUILD_KINDS  # noqa: F401  §9.496 单一来源
+
 """做T系统 · 选股层：可T质量打分 + 三层池（底仓候选池 / 做T实盘池 / 观察池）。
 
 依据 final-t-plan.md §③ 与 spec t-account-trading：
@@ -6,6 +8,7 @@
 - 三层池流转：候选池(仅建仓) → 实盘池(已持仓+可T达标+过regime门+底仓≥下限，唯一可触发) → 观察池(缓冲)。
 - 红线：禁止无底仓标的生成做T条件。
 """
+import os
 import json
 import math
 import time
@@ -38,7 +41,16 @@ MAX_AMP_PCT = 10.0            # 上限（%，>10% 妖票硬拒——波动过野
 # 迭代 #37：000630 窗口 +13.5% 但高抛 +3.6% 即卖光（卖飞踏空）→ amp_scale 0.6→0.75，
 # 高抛跟随波动更充分（振幅 6% → 高抛 +4.5%）
 AMP_SCALE = 0.75              # 条件阈值 = 振幅中位 × 0.75
-MIN_HIGH_SELL_PCT = 1.5       # 高抛触发价下限（成本+1.5%）
+MIN_HIGH_SELL_PCT = 1.5       # 高抛触发价下限（成本+1.5%）——旧默认，保持兼容
+# ── 做T目标幅度对齐狼大语料（2026-09-17 用户拍板"按语料补齐"）──
+# 语料（docs/wolf-behavior-blueprint.md:204/447）：「目标 3-4 个点」「ETF 出 2 个点即合格」
+#   「2 点力度不够就收工」「千万不要 1 个点的波动用糖葫芦战法」（2026-08-20 / 2026-09-02）。
+# 现状 1.5% 只有语料的一半，且贴着他明令别做的"1 个点"红线。
+# 开关**默认关** ⇒ 行为与以前逐字一致；置 1 才把高抛下限抬到 3.0%（ETF 2.0%）。
+# 低吸下限**不动**：语料只给做T目标幅度、未给低吸数值，不自行编造。
+T_TARGET_CORPUS = str(os.getenv("WOLF_T_TARGET_CORPUS", "0")).strip().lower() in ("1", "true", "yes", "on")
+MIN_HIGH_SELL_PCT_CORPUS = 3.0      # 个股：目标 3-4 个点
+MIN_HIGH_SELL_PCT_CORPUS_ETF = 2.0  # ETF：2 个点即合格
 MIN_LOW_BUY_PCT = 2.0         # 低吸触发价下限（成本−2%）
 # 动态止损（对齐 marcus stop_loss_monitor._check_cost_stop 振幅自适应）：
 #   有 HWM（做T持仓有高抛条件≈曾兑现）→ 止损 = max(3%, 振幅×0.40)
@@ -263,7 +275,18 @@ def _median(vals: List[float]) -> float:
 # 做T条件生成（双条件：低吸 + 高抛回补，波动率自适应）——生产/回测共用
 # ────────────────────────────────────────────────────────────────
 
-def build_t_conditions(cost: float, amp_med: Optional[float] = None) -> List[Dict[str, Any]]:
+def _is_etf_sym(symbol: Any) -> bool:
+    """ETF 判定（复用 roundtrip_sell.is_etf，避免各处各写一套）。失败一律当个股。"""
+    try:
+        from app.services.roundtrip_sell import is_etf
+        return bool(symbol) and bool(is_etf(symbol))
+    except Exception:
+        return False
+
+
+def build_t_conditions(cost: float, amp_med: Optional[float] = None,
+                       symbol: Optional[str] = None,
+                       price: Optional[float] = None) -> List[Dict[str, Any]]:
     """生成做T双条件：low_buy（低吸）+ high_sell_then_buy_back（高抛回补）。
 
     Args:
@@ -278,11 +301,41 @@ def build_t_conditions(cost: float, amp_med: Optional[float] = None) -> List[Dic
         stop       = cost × (1 − max(3.0%, amp_med × 0.40))  # 动态止损（marcus 振幅自适应口径）
     """
     amp = float(amp_med or 0.0)
-    high_pct = max(MIN_HIGH_SELL_PCT, amp * AMP_SCALE)
+    _high_floor = MIN_HIGH_SELL_PCT
+    if T_TARGET_CORPUS:
+        # 语料口径：个股目标 3-4 个点起，ETF 2 个点即合格
+        _high_floor = MIN_HIGH_SELL_PCT_CORPUS_ETF if _is_etf_sym(symbol) else MIN_HIGH_SELL_PCT_CORPUS
+    high_pct = max(_high_floor, amp * AMP_SCALE)
     low_pct = max(MIN_LOW_BUY_PCT, amp * AMP_SCALE)
     stop_pct = max(STOP_LOSS_PCT_MIN, amp * STOP_LOSS_AMP_FACTOR)
     sell_target = round(cost * (1 + high_pct / 100), 2)
     target = round(cost * (1 - low_pct / 100), 2)
+    # ── 入场线（狼大语料）：买腿挂"现价下方最近的 13/34/144 均线" ──
+    # 语料「今天踩144就可以上一点啊 另一部分挂在13就行，这两根破了这个标我就不看了」（2021）。
+    # 开关 `WOLF_T_ENTRY_LINES`（回测默认开，见 jobs/bt_prod_run.py）；缺 price/取不到线 → 回退成本公式。
+    if ENTRY_LINES and symbol:
+        try:
+            from app.services import t_entry_lines as _EL
+            _ref = float(price or cost or 0)
+            # ⚠️ 必须**按回放日**取均线，否则会用到未来数据（未来函数）。
+            # 取值优先级：环境变量 → **as-of 状态文件**（bt_prod_run 每根 bar 写入，权威）→ 钉住的进程钟。
+            _day = os.getenv("BT_ASOF_DAY", "")
+            if not _day:
+                try:
+                    import json as _json
+                    _st = os.getenv("BT_ASOF_STATE") or os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+                            os.path.abspath(__file__))))), ".dsh-tmp", "wolfbt", "asof_state.json")
+                    _day = str((_json.load(open(_st, encoding="utf-8")) or {}).get("day") or "").replace("-", "")
+                except Exception:
+                    _day = ""
+            if not _day:
+                _day = datetime.now().strftime("%Y%m%d")
+            _line = _EL.entry_line_target(symbol, _ref, day=_day)
+            if _line and _line > 0:
+                target = round(_line, 2)
+        except Exception:
+            pass
     stop = round(cost * (1 - stop_pct / 100), 2)
     base = {
         "vol_ratio_thresh": 1.5,
@@ -290,7 +343,8 @@ def build_t_conditions(cost: float, amp_med: Optional[float] = None) -> List[Dic
         "time_stop_close": "14:45",
         "start_time": "09:30",
         "end_time": "14:45",
-        "regime_gate": "ALLOWED",
+        # 语料前置门①：开关开启时写**真实**闸门值（此前硬编码 ALLOWED，是死字段）
+        "regime_gate": (current_low_buy_gate() if T_GATE_CORPUS else "ALLOWED"),
         "status": "active",
         "armed": 1,
     }
@@ -433,7 +487,7 @@ def generate_conditions_for_live_pool(regime: str = "ACTIVE") -> List[Dict[str, 
         if avg_price <= 0:
             continue
         amp_med = info.get("amp_median")
-        conds = build_t_conditions(avg_price, amp_med)
+        conds = build_t_conditions(avg_price, amp_med, symbol=symbol)
         for cond in conds:
             cond = {**cond,
                     "account_id": ACCOUNT_T,
@@ -443,3 +497,80 @@ def generate_conditions_for_live_pool(regime: str = "ACTIVE") -> List[Dict[str, 
             if cid:
                 created.append({"condition_id": cid, **cond})
     return created
+
+
+# ── 做T买腿三道前置门（狼大语料，2026-09-17 用户"按语料补齐"）──
+# 语料（docs/wolf-behavior-blueprint.md:204）：「**先有低吸仓位**（没抄到底就没有做 T 资格）
+#   + 位置（3900 以上不做）+ 有量」；2026-08-25「我今天没抄底 没有资格T」；
+#   2026-08-26「指数 3900 以上我连 T 都不做」。
+# 现状缺口：① `regime_gate` 在 build_t_conditions 里硬编码 "ALLOWED" 且 t_monitor 不读（死字段）；
+#   ② `wolf_zheng_t_buy` 是**纯形态触发**（触发价=None、日内回撤 3~5.7%）⇒ 无底仓也会买（接飞刀）；
+#   ③ 无"指数高位/整数关口"位置门。
+# 开关 `WOLF_T_GATE_CORPUS` **默认关** ⇒ 行为与加本段前逐字一致。
+T_GATE_CORPUS = str(os.getenv("WOLF_T_GATE_CORPUS", "0")).strip().lower() in ("1", "true", "yes", "on")
+# 入场线开关（与 t_entry_lines.ENTRY_LINES 同源；回测驱动里 setdefault=1）
+ENTRY_LINES = str(os.getenv("WOLF_T_ENTRY_LINES", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def current_low_buy_gate() -> str:
+    """当日"低吸闸门"（来自 t_regime，取值 BLOCKED / MANUAL_ONLY / ALLOWED）；取数失败 → ALLOWED（放行）。"""
+    try:
+        from app.services.t_regime import compute_regime
+        return str(compute_regime().get("gate_low_buy") or "ALLOWED")
+    except Exception:
+        return "ALLOWED"
+
+
+# ⚠️ 位置门**默认关**（用户 2026-09-18 纠正）：语料那条"指数 3900 以上我连 T 都不做"（08-26）
+#   是**针对 2026-08 那段行情**说的，**不能辐射全局**——整数关口 3800/3900/4000 是时间绑定的水位，
+#   把它当全年硬门 = 用 8 月的坐标去判 1 月的行情。要用必须显式 `WOLF_T_POSITION_GATE=1`，
+#   且应先把关口/量能阈值做成**按当日数据推导**（而非写死），否则只在近月窗口内有意义。
+T_POSITION_GATE = str(os.getenv("WOLF_T_POSITION_GATE", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def position_gate_reason() -> str:
+    """位置门：指数在关键整数关口附近且量能不达突破级 → 诱多风险（狼大"诱多"口径）。
+
+    复用现成机制 `wolf_gap_open`（蓝图 493 行：距 3800/3900/4000 <1% 且未达突破级 → 诱多）。
+    任何异常/字段缺失一律返回 ""（放行）——绝不因取数问题拦真实买腿。
+    """
+    if not T_POSITION_GATE:
+        return ""      # 默认关：8 月的关口水位不适用于全局窗口
+    try:
+        from app.services import wolf_gap_open as G
+        ev = G.evaluate() or {}
+        for k in ("lure", "lure_risk", "is_lure"):
+            if ev.get(k):
+                return "指数处关键整数关口且量能未达突破级（诱多风险）：%s" % str(ev.get("reason") or k)[:60]
+        rs = ev.get("reasons") or []
+        for r in rs if isinstance(rs, list) else []:
+            if "诱多" in str(r) or "整数" in str(r):
+                return "位置门：%s" % str(r)[:80]
+    except Exception:
+        pass
+    return ""
+
+
+def corpus_buy_block(symbol: str, has_position: bool, trigger_kind: str = "") -> str:
+    """做T买腿三道门（返回拦阻原因；""=放行）。开关关 → 永远放行。"""
+    if not T_GATE_CORPUS:
+        return ""
+    g = current_low_buy_gate()
+    if g == "BLOCKED":
+        return "语料前置门①环境：当日 regime 低吸闸门 BLOCKED（防御期/下跌浪，不硬抗向下 ABC）"
+    if g == "MANUAL_ONLY":
+        return "语料前置门①环境：低吸需人工确认（MANUAL_ONLY），回放不自动执行"
+    # ⚠️ 2026-09-18 修正：资格门只约束**做T类**买腿（形态触发的正T/低吸接力），
+    #   **不能拦"挂线建仓"**——语料里挂单/挂线买入（蓝图 218「好票跌到事先画好的线 13/34/60/144 →
+    #   提前挂单买、**与指数无关**」）本就是**主要建仓方式**，与"有没有底仓"无关。
+    #   第 12 代实测：本门把大量 `custom_m5dump` 建仓腿全拦掉 ⇒ 底仓补不上、平均暴露只到 50.4%。
+    # 2026-09-26：补 `wolf_ambush_buy`（**低位埋伏腿＝无底仓先手建仓** ✓）——
+    #   它原先不在此列 ⇒ 无底仓时"建仓规模"算不出来 ⇒ 埋伏腿**连触发都不写** ✗
+    #   （实测 T35 一月：布腿 19 条、触发 **0 次** ✗）
+    T_BUILD_KINDS = T_BUILD_KINDS  # §9.496 单一来源
+    if not has_position and str(trigger_kind or "") not in T_BUILD_KINDS:
+        return "语料前置门②资格：无底仓（没抄到底就没有做 T 资格）——形态类买腿不建仓"
+    r = position_gate_reason()
+    if r:
+        return "语料前置门③位置：%s" % r
+    return ""

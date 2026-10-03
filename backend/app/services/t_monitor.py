@@ -9,6 +9,7 @@
 - 命中 → 写 t_triggers(pending, snapshot{suggest_bid/ask, slippage_budget, confidence})
 - 14:45 后禁新开仓；Worker 永不直接下单
 """
+from .t_leg_kinds import BUY_LEG_KINDS, is_buy_leg, LOWDIP_KINDS, is_lowdip, PREVLOW_M5_KINDS, is_prevlow_m5  # noqa: F401  §9.496 单一来源
 import os
 import threading
 import time
@@ -4360,7 +4361,7 @@ class TMonitor:
                             volume = max(int(sellable * 0.3), 100)
                             # 2026-09-07 试仓档(tranche_ladder): 254/253 低吸且标的在主线候选(ambush/trial)
                             # → 以档位上限放行(可沉淀底仓), 主升确认(normal, -1)走正常; none 保持做T原量
-                            if trigger_kind in ("custom_prevlow", "custom_m5dump"):
+                            if trigger_kind in PREVLOW_M5_KINDS:
                                 try:
                                     import sys as _tl
                                     _tl.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -4445,7 +4446,7 @@ class TMonitor:
                 #   ⇒ 补丁被跳过、601069@20260130 照旧被买入 ✗ ⇒ 现挪到分支之前，两条路都覆盖 ✓
                 try:
                     import os as _osH2
-                    if side == "buy" and str(trigger_kind) in ("custom_m5dump", "custom_prevlow") \
+                    if side == "buy" and str(trigger_kind) in PREVLOW_M5_KINDS \
                             and str(_osH2.getenv("WOLF_HPV_LOWDIP", "0")).strip() == "1":
                         from app.services import wolf_high_pos_vol as _hpv3
                         # 2026-09-25 三次修正（账本 §9.116）：本作用域**没有** `today` ⇒
@@ -4470,7 +4471,7 @@ class TMonitor:
                 # ⑥ 253/254 无底仓建仓 → 走狼大建仓链(而非做T gateway)；注 self._trade_executor 时生效，否则回退 gateway
                 _no_hold_build = (
                     side == "buy"
-                    and trigger_kind in ("custom_m5dump", "custom_prevlow")
+                    and trigger_kind in PREVLOW_M5_KINDS
                     and ((ledger or {}).get(symbol, {}).get("sellable", 0) or 0) <= 0
                     and self._trade_executor is not None
                 )

@@ -25599,3 +25599,38 @@ DATA_DIR=…/20260302 ⇒ theme_qualify_struct("新能源/电池")
 3. ⇒ ⇒ **买点应当换成他的线组** ✓（**是"对齐他"** ✓，不是我自创 ✗）：
    建议**新增 `buy_255` ＝ 触 13/34/60/144 ＋ 缩量** ✓（**开关化、默认开** ✓、数据驱动无名单 ✓）
 4. ⚠️ **caveat** ✓：入场按"线位成交"近似 ✓；未叠加主题/方向过滤 ✓ ⇒ **最终效果需在臂里验证** ✓
+
+---
+
+## §9.496 ★★ **腿类型名单收成单一来源（用户「拒绝硬编码」✓）** —— 6 处硬编码 ⇒ 1 个注册表 ✓
+
+### ① 改了什么 ✓
+
+| 项 ✓ | 内容 ✓ |
+|---|---|
+| **新增** ✓ | `backend/app/services/t_leg_kinds.py` ✓ —— **腿类型唯一来源** ✓：`BUY_LEG_KINDS`(10) ✓、`LOWDIP_KINDS`(7) ✓、`T_BUILD_KINDS`(4) ✓、`PREVLOW_M5_KINDS`(2) ✓ ＋ `is_buy_leg/is_lowdip/is_prevlow_m5` ✓ |
+| **替换的 6 处** ✗⇒✓ | `t_bridge._BUY_LEG_KINDS` ✓、`t_gateway._LOWDIP_KINDS` ✓、`t_monitor` ×3 ✓、**`t_pool.T_BUILD_KINDS`** ✓（就是被测试点名的那处 ✓）|
+| **语义逐字保留** ✓ | 原字面值**原样迁入** ✓；导入后**逐字相等**已断言 ✓（`t_bridge._BUY_LEG_KINDS == 注册表` ✓ 等 ✓）|
+| **测试改成查注册表** ✓ | 原测试是**用文本搜源码**找字面值 ✗（脆弱 ✓）⇒ 改成 `from app.services.t_leg_kinds import …` ＋ **防回退断言** ✓（"这俩文件里不应再出现该字面名单" ✓）|
+
+- ⇒ ⇒ **以后加新腿类型（例 `buy_255`）只改 `t_leg_kinds.py` 一处** ✓（原来要改 5~6 处 ✗，漏一处就**静默失效** ✗）
+- ✅ 门禁 ✓：`test_ambush_two_steps` **58 passed** ✓、`preflight` ✓
+
+### ② 关于「254 是不是可以去掉了」✓
+
+- **数据支持去掉** ✓：254（前一日低点＋缩量）T+5 均值 **−0.11%**、中位 **−0.45%** ✗
+  vs 他的线组 **+1.29% / +0.73%** ✓（§9.495 ✓）
+- ⚠️ **但不建议直接删代码** ✗：254 同时是 `LOWDIP_KINDS`（档位/量能）✓ 与 `T_BUILD_KINDS`（建仓规模）✓ 的成员 ✓，
+  删掉会**同时改变多处行为** ✗ ⇒ 违背"单变量" ✓
+- ⇒ **建议** ✓：**加开关关掉**（`WOLF_BUY_254`，默认按用户定 ✓）＋ **255 并存跑一段** ⇒ 数据确认后再彻底移除 ✓
+
+### ③ ⚠️ 255 的实现进度（诚实交代 ✓）
+
+- ✅ **已完成** ✓：注册表（加 255 只改一处 ✓）
+- ❌ **未完成** ✗：`BUY_255_EXPR` **还没真正加进去** ✗ —— 我先前写到了一处**不存在的路径** ✗
+  （`apps/main_line/rotation_switch_arm.py` ✗；**真文件是 `jobs/rotation_switch_arm.py`** ✓）
+- ⇒ ⇒ 剩下的 4 步（都是小改动 ✓）：
+  1. `jobs/rotation_switch_arm.py` 加 `BUY_255_EXPR` ✓（字段：`quote.ma13/34/60/144` ＋ `vol_ratio ≤ 0.9` ✓）
+  2. `jobs/bt_intraday.conds_from_legs` 挂上它（id 3 ✓，kind `custom_line_dip` ✓）
+  3. `t_monitor` 补 `ma60/ma144` 字段 ＋ 该 kind 的求值 ✓（`ma13/ma34` 已有现成算法 ✓）
+  4. `t_leg_kinds.py` 把 `custom_line_dip` 加进 `BUY_LEG_KINDS`/`LOWDIP_KINDS` ✓（**一处** ✓）

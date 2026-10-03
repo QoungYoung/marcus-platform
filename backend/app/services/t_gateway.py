@@ -8,6 +8,9 @@
 - 当日可卖额度原子账本：卖腿扣减(UPDATE...RETURNING)、买腿回补、卖出在途锁
 - 可卖底仓分档 L0-L3；异常升级 6 类清单；STOP_ALL/日亏熔断；孤儿单处置；滑点/价差过滤
 """
+from .t_leg_kinds import BUY_LEG_KINDS, is_buy_leg, LOWDIP_KINDS, is_lowdip, PREVLOW_M5_KINDS, is_prevlow_m5  # noqa: F401  §9.496 单一来源
+
+_LOWDIP_KINDS = LOWDIP_KINDS     # §9.496 单一来源：加新腿类型只改 t_leg_kinds.py
 from datetime import datetime, timedelta
 import os
 from typing import Any, Dict, Optional, Tuple
@@ -682,8 +685,6 @@ def zt_add_used(account_id: str, day: str, amount: float) -> None:
 #   且名义占用 −13%。⇒ 本开关只**压低吸腿的当日总量**（不抬别的腿；挪动由"趋势突破腿"自己的条件决定）。
 # 口径：`WOLF_LOWDIP_DAY_BUDGET` = 当日低吸腿累计名义 ≤ 该百分比 × 总资产（0 = 关，库内默认）。
 _LD_USED: Dict[Tuple[str, str], float] = {}
-_LOWDIP_KINDS = ("custom_prevlow", "custom_m5dump", "low_buy", "wolf_253_build", "wolf_253_refill",
-                 "wolf_254_refill", "wolf_254_build")
 
 
 def is_lowdip_kind(kind: Optional[str]) -> bool:
