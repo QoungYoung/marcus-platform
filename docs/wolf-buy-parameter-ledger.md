@@ -24760,3 +24760,32 @@ SH603061 −14.4%｜SH603078 −12.9%｜SZ002350 +26.5%｜SZ002850 −8.2%` ⇒ 
 1. 向 **datahubco** 开通 `stk_mins` 接口 ✓（现在 403 ✗）
 2. 或**走东财** ✓ —— 我们生产环境本来就有**东财 5 分钟口** ✓（`push2his.eastmoney.com` ✓）
    ⇒ 用它把这 4 个（乃至"扩大口径后的候选票"✓）补齐 ✓ ← **建议走这条** ✓
+
+---
+
+## §9.469 ★ **promax 有分钟数据 ✓（我此前对 `minute_data_pending` 的解读是错的 ✗）**
+
+### ① ✅ 官方文档与能力查询 ✓
+
+- **能力查询** ✓：`GET https://pcd.mobcvb.cn/tushare/capabilities/stk_mins`（带 `X-API-KEY` ✓）⇒
+  ```json
+  {"name":"stk_mins","category":"Stock minute data","provider":"external","max_limit":100000,
+   "description":"历史分钟: 获取A股分钟数据，支持1min/5min/15min/30min/60min行情",
+   "enabled":true,"methods":["GET"],"fallback_on_empty":true,"probe_supported":true}
+  ```
+  ⇒ ⇒ **`enabled: true`** ✓ —— **promax 确实提供分钟数据** ✓（1/5/15/30/60min ✓）
+- **文档错误码表** ✓（`docs/datahubco/promax.txt:189` ✓）：
+  | 503 | `minute_data_pending` | **分钟数据正在后台补数** | **稍后重试**，不要并发重复提交 ✓ |
+  ⇒ ⇒ 我此前读成"上游没有该数据" ✗ —— **实际是"正在补数、要重试"** ✓✓
+
+### ② ✅ 重试立竿见影 ✓
+
+- 立刻重试那 4 个 ⇒ **`SH600877 20260422` 补上了** ✓（新写 1 个文件 / 48 根 bar ✓）
+- 其余 3 个（`SZ002245 0302/0312`、`SZ002169 0311`）**仍在补** ✗ ⇒ **过一会再重试** ✓
+
+### ③ ⇒ 结论 ✓
+
+1. ✅ **`promax` 有分钟** ✓；`datahubco` 的 `403 api is not available` = **该接口未开通** ✗（两条源的能力不同 ✓）
+2. ⇒ ⇒ **取数策略** ✓：**优先 promax** ✓；遇 `503 minute_data_pending` ⇒ **退避重试** ✓（不是"放弃"✗）
+3. ⚠️ **教训再记一条** ✓：**别把上游的"临时状态码"当成"没有数据"** ✗ —— 先查
+   `capabilities/<iface>` ✓ ＋ 文档错误码表 ✓，再下结论 ✓
