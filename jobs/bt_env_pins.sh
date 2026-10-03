@@ -234,6 +234,11 @@ export WOLF_TURNOVER_TW_EXEMPT='custom_prevlow,wolf_ambush_promote_add'
 # F2 上移：候选「先剔无权限板块、再取前 10」（2026-09-25 用户「打开 F2」；账本 §9.98）
 #   离线反事实：无权限 4 只 37 次占位归零；石大胜华 12→23、天赐材料 4→13、比亚迪 4→5
 export WOLF_PICK_BOARD_PREFILTER='1'
+# ── 板块权限：**打开创业板/科创板**（2026-10-03 用户拍板 ✓「打开科创和创业板权限」✓）────────
+#   背景（未决6）：原先默认 `cyb,bj,kcb` 全排除 ⇒ 系统性丢掉宁德/富临/鹏辉等 300/301、688 系标的 ✗。
+#   用户确认账户**有**创业板/科创板权限 ⇒ 只保留北交所排除。
+#   ⚠️ 生产要同样生效需在其 env 显式设置（本文件只被回测臂 source ✓；生产变更需批准 ✓）。
+export WOLF_PICK_BOARD_EXCLUDE='bj'
 # 08:18 布腿路径（switch_builder）的板块前置过滤（2026-09-19 用户拍板 A；库内默认 0）
 #   证据：该路径写出的腿里约一半是买不到的板（jan10 实测 0106 写 41 条其中 18 只买不到）
 export WOLF_PICK_BOARD_EARLY='1'
@@ -413,6 +418,25 @@ export STOCK_CONFIRM_ORDER='pop_lead'      # 账本 §9.404：人气/弹性优�
                                           #     91% 主题成分不可见）。空/ none = 不改；'dist20h' / 'lead_cond' = 修复模式。
 export STOCK_CONFIRM_MAX='10'             # 每概念取前 N（修复模式下 = 排序后取前 N）
 export STOCK_CONFIRM_FETCH='400'          # 修复模式的取数上限（要覆盖大概念全量成员，如 PCB 200 只）
+# ── B5 取数宽度（2026-10-03 用户拍板「B5」✓）────────────────────────────────────────
+#   缺陷：`LIMIT 400` 无 ORDER BY ⇒ 成员 >400 的大概念被**任意截断**；实测 30 天里 60/375
+#     概念-日（16%）被截断（电池技术/新能源车/半导体概念/国产芯片 各 15 次）；0415 半导体概念
+#     516 只成员丢掉 116 只 ⇒ 那些票**从未参加排序**（不是"排不上"✗）。
+#   修法：上限 max(400, FETCH_MIN=800，覆盖实测最大受判概念 516) ∧ 加 ORDER BY（截断可复现）
+#     ∧ 真截断就打日志（不再静默）。**只在"开启排序"分支生效** ⇒ 生产（ORDER 空）零影响 ✓。
+export WOLF_CONFIRM_FETCH_WIDE='1'
+export WOLF_CONFIRM_FETCH_MIN='800'
+export WOLF_CONFIRM_FETCH_ORDERED='1'
+# ── 候选域留痕（2026-10-03 用户拍板「A」✓）──────────────────────────────────────────
+#   `confirm_domain_trace_<day>.jsonl`：n_raw/board/rank_head/selected/member_rejected/kept，
+#   **只看不选**（判据逐字节不变 ✓）；默认 30 头部，分析时可调到 400。
+export WOLF_CONFIRM_DOMAIN_TRACE='1'
+export WOLF_CONFIRM_TRACE_RANK_N='30'
+# ── B6a 低吸腿「命中后被拦」留痕（2026-10-03 用户拍板「先做 B6a」✓）──────────────────
+#   `jobs/lowdip_block_report.py`：把「254/253 命中 → 被哪道闸拦」按 symbol-day 结构化落盘
+#   （拦因/触发价/距前低/量比/是否成交），**当日归因用 id 增量**（prod json 的 triggers 是累加的 ✗）。
+#   与 leg_miss_report（只管"没触线"）互补；只写自己的报告 ⇒ 判据零影响 ✓。
+export WOLF_LOWDIP_BLOCK_REPORT='1'
 export WOLF_FALLING_GATE_V2=1
                                           # v1 只用当日分时三量（现价<VWAP ∧(逐根走低∨破开盘)）⇒ 不看日线 ⇒
                                           # 强势股回踩与真缓跌同形（实测 601231 0210 被拦 28 条、两天后 +10.9%）。

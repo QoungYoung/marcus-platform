@@ -55,12 +55,73 @@ DB = os.path.join(DATA, "stock_pool.db")
 MAX_STOCKS = int(os.getenv("STOCK_CONFIRM_MAX", "10"))
 # 取数上限（仅"开启排序"时用；要能覆盖大概念的全部成员，如 光通信模块 111 只 / PCB 200 只）
 MAX_FETCH = int(os.getenv("STOCK_CONFIRM_FETCH", "400"))
+
+# ── B5「取数宽度」（用户 2026-10-03 拍板 ✓；**只作用在"开启排序"的那条分支** ⇒ 生产零影响 ✓）──
+#   实测缺陷 ✗（本步留痕量化）：`SELECT ts_code … LIMIT 400` **没有 ORDER BY** ⇒
+#     成员 >400 的大概念被按**数据库物理序任意截断**：窗口 30 天里 **60/375 概念-日（16%）** 被截断
+#     （电池技术/新能源车/半导体概念/国产芯片 各 15 次）；0415 半导体概念 **516 只成员丢掉 116 只**
+#     ⇒ 那些票**从未进入排序**（不是"排不上"，是"没参加"✗）。
+#   修法 ✓（三条各自开关化 ✓，均默认开 ✓）：
+#     · `WOLF_CONFIRM_FETCH_WIDE`（默认 1）= 取数上限提到 `max(STOCK_CONFIRM_FETCH, FETCH_MIN)`；
+#     · `WOLF_CONFIRM_FETCH_MIN`（默认 800）—— 实测受判概念最大成员 516（半导体概念）⇒ 800 够；
+#     · `WOLF_CONFIRM_FETCH_ORDERED`（默认 1）= 加 `ORDER BY ts_code`，让**万一**的截断可复现 ✓；
+#   另：真被截断时**打日志**（原先静默 ✗；按用户「allow/通过 不打日志 ⇒ 验收要看拒绝」的反面，
+#       这里必须把"截断"这种拒绝显式打出来 ✓）。
+#   生产零影响 ✓：生产 `STOCK_CONFIRM_ORDER` 默认空 ⇒ 走旧分支（`LIMIT MAX_STOCKS`），
+#       本条**只在 `ORDER_MODE` 非空时才生效** ✓（已用 guard 的 `STOCK_CONFIRM_ORDER` 默认关核对 ✓）。
+FETCH_WIDE = str(os.getenv("WOLF_CONFIRM_FETCH_WIDE", "1")).strip().lower() in ("1", "true", "yes", "on")
+FETCH_MIN = int(os.getenv("WOLF_CONFIRM_FETCH_MIN", "800"))
+FETCH_ORDERED = str(os.getenv("WOLF_CONFIRM_FETCH_ORDERED", "1")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def fetch_wide_on() -> bool:
+    return FETCH_WIDE
+
+
+def fetch_ordered_on() -> bool:
+    return FETCH_ORDERED
+
+
+def fetch_limit() -> int:
+    """排序分支用的取数上限（0/负数 = 不限 ⇒ 取该概念全部成员）。"""
+    return max(MAX_FETCH, FETCH_MIN) if FETCH_WIDE else MAX_FETCH
+
 # 候选成员排序口径（账本 §9.48/§9.53；**库内默认空 = 逐字旧行为**）：
 #   "" / "none"  = 旧行为（`LIMIT 10` + 数据库物理序 ⇒ 任意且不可复现）
 #   "dist20h"    = 距 20 日收盘高点由近到远（「方向内选强、绝不后排」的可操作实现；四个月回放全正）
 #   "lead_cond"  = 大盘 5 日跌（共振回调）⇒ 按 r5 降序（抗跌优先）；否则退化为 dist20h
 #   "auto"       = lead_cond 的别名（同一条：条件切换）
 ORDER_MODE = str(os.getenv("STOCK_CONFIRM_ORDER", "") or "").strip().lower()
+
+# ── 候选域「宽度留痕」（`WOLF_CONFIRM_DOMAIN_TRACE`，**默认 1 = 开** ✓；用户 2026-10-03 要求）──
+#   为什么需要 ✓：本臂实测「每概念进判级的成员只剩 1~7 只」✗，而事后**分不清**丢在哪一层 ✗：
+#     ① 排序（`pop_lead` 前 MAX_STOCKS 之外）② 板块前置过滤 ③ 窄杂毛门 ④ `len(ser)<40`/不在 close ⑤ 主营校验
+#     ⇒ 本留痕把**每一层的进出**写成 `<DATA>/confirm_domain_trace_<day>.jsonl`（每概念一行 ✓）。
+#   ⚠️ 零影响 ✓：**只看不选** —— 不参与任何判据、不改 `codes`/`stocks`/不改 `stock_confirm_result.json` ✓；
+#      留痕自身失败一律吞掉 ✓（绝不影响判级 ✓）。
+DOMAIN_TRACE = str(os.getenv("WOLF_CONFIRM_DOMAIN_TRACE", "1")).strip().lower() in ("1", "true", "yes", "on")
+# 留痕里保留的**排序头部**长度（默认 30 ⇒ 能看"排第几"而不是只看"进没进前 10"）
+TRACE_RANK_N = int(os.getenv("WOLF_CONFIRM_TRACE_RANK_N", "30"))
+_DOMAIN_TRACE_ROWS = []
+
+
+def domain_trace_on() -> bool:
+    """候选域留痕开关（默认开 ✓；`WOLF_CONFIRM_DOMAIN_TRACE=0` 关 ✓）。"""
+    return DOMAIN_TRACE
+
+
+def _trace_day() -> str:
+    """留痕文件名/所属日 = **沙箱目录名**（`.../20260304` ✓ = "这份候选是给哪一天用的"）。
+
+    ⚠️ 不能取 `WOLF_ASOF_DAY` 当日名 ✗：08:18 用的候选是**上一交易日 as-of** 算的，as-of 日
+       ≠ 使用日；两者都写进记录（`day` / `as_of`）✓。也不能只用 `time.strftime` ✗：
+       回测里 `bt_gen_confirm`/`bt_run_pinned` 的钟是钉的，但 42 天仍会撞名覆盖 ✗。
+    """
+    _b = os.path.basename(os.path.normpath(DATA))
+    if len(_b) == 8 and _b.isdigit():
+        return _b
+    _a = (os.getenv("WOLF_ASOF_DAY") or "").strip()
+    return _a if (len(_a) == 8 and _a.isdigit()) else time.strftime("%Y%m%d")
 
 
 # ── F2「选股域 ⊆ 执行域」**上移**到候选取数（2026-09-25 用户：「打开 F2，看能进名单吗」）────────
@@ -158,6 +219,63 @@ def order_members(codes, close, mode=None, lookback=20, vol=None):
     #   代理 ✓（只用已有数据 ✓）：弹性＝vol[-1]/mean(vol[-60:]) ✓；动量＝close[-1]/close[-21]-1 ✓；
     #                              大涨天数＝近 20 日「日涨幅 ≥9%」的计数 ✓
     #   安全 ✓：数据不足/异常 ⇒ **落回原 dist20h 分支** ✓（fail-open ✓）
+    # ★ 账本 §9.508 ✓（用户「实现」✓）：**纯度优先 ⇒ 同分按成交额** ✓
+    #   为什么 ✓：①「纯度（正宗度）」实测**有效** ✓（§9.506：前 5 均值 **+2.75%** vs 全体 +0.98% ✓）
+    #             ②「成交额」好于全体 ✓（§9.505：前 3 均值 **+1.51%** ✓）—— 且**只在同分时**用 ✓
+    #   为什么需要它 ✓：03-02 那天比亚迪 **纯度 = 1.000（6 个主题概念全中 ✓）**，
+    #     但**并列太多**（一大批 1.000 ✓）⇒ 旧口径按代码序退化 ⇒ 它排**第 11** ⇒ 被 top-10 挡掉 ✗
+    #     ⇒ ⇒ 同分改按**成交额** ⇒ 它（当日**成交额 #1** ✓）**直接排最前** ✓
+    #   口径（**自我包含、无主题参数** ✓）：概念池 = 「本块成员里 ≥20% 都有的概念 ∧ 非全市场通用」✓
+    #   安全 ✓：任何异常 ⇒ 落回原 pop_lead/dist20h 分支 ✓（fail-open ✓）
+    if mode == "purity_amount":
+        try:
+            import os as _os8, sys as _sys8, psycopg2 as _pg8
+            import pandas as _pd8
+            _cols = set(getattr(close, "columns", []))
+            _val = [c for c in codes if c in _cols]
+            if _val and isinstance(close, _pd8.DataFrame):
+                _sys8.path.insert(0, _os8.path.dirname(_os8.path.abspath(__file__)))
+                _dsn = _os8.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+                _conn = _pg8.connect(_dsn, connect_timeout=4)
+                try:
+                    _conn.autocommit = True
+                    _cur = _conn.cursor()
+                    _cur.execute("SET statement_timeout=8000")
+                    _c2 = {}
+                    _ph = ",".join(["%s"] * len(_val))
+                    _cur.execute("SELECT ts_code, concept_name FROM stock_concept_map WHERE ts_code IN (%s)" % _ph, _val)
+                    for _t, _cn in _cur.fetchall():
+                        _c2.setdefault(_t, set()).add(_cn)
+                    _allc = {}
+                    _cur.execute("SELECT concept_name, count(*) FROM stock_concept_map GROUP BY 1")
+                    for _cn, _n in _cur.fetchall():
+                        _allc[_cn] = int(_n)
+                    _cur.execute("SELECT count(DISTINCT ts_code) FROM stock_concept_map")
+                    _tot = int((_cur.fetchone() or [1])[0] or 1)
+                finally:
+                    _conn.close()
+                _pool = set()
+                for _t in _val:
+                    for _cn in _c2.get(_t, ()):
+                        if sum(1 for _x in _val if _cn in _c2.get(_x, ())) >= max(2, int(len(_val) * 0.20)) \
+                                and _allc.get(_cn, 0) <= max(50, int(_tot * 0.20)):
+                            _pool.add(_cn)
+                _pool = sorted(_pool)
+                _amt = {}
+                _last = close[_val].ffill().iloc[-1]
+                for _t in _val:
+                    _v = 0.0
+                    try:
+                        if vol is not None and _t in set(getattr(vol, "columns", [])):
+                            _v = float(vol[_t].ffill().iloc[-1] or 0) * float(_last.get(_t, 0) or 0)
+                    except Exception:
+                        _v = 0.0
+                    _amt[_t] = _v
+                _pur = {_t: (len(_c2.get(_t, set()) & set(_pool)) / float(len(_pool))) if _pool else 0.0 for _t in _val}
+                _ord = sorted(_val, key=lambda _t: (-_pur.get(_t, 0.0), -_amt.get(_t, 0.0), str(_t)))
+                return _ord + [c for c in codes if c not in set(_ord)]
+        except Exception as _e8:
+            print("[stock_confirm] purity_amount 排序失败（退回旧口径）: %s" % str(_e8)[:80], file=sys.stderr)
     if mode == "pop_lead":
         try:
             import pandas as _pd2
@@ -280,6 +398,7 @@ def _fetch_market(days):
 
 def main():
     # EXEC_PROBE
+    del _DOMAIN_TRACE_ROWS[:]          # 同进程重复调用 main() 时不许跨趟累加 ✓（留痕专用 ✓）
     CONFIRM_TOP_N = int(os.getenv("CONFIRM_TOP_N", "3"))
     try:
         import fusion_mainline as fm
@@ -319,17 +438,37 @@ def main():
             names = ["人工智能", "算力概念", "CPO概念", "光通信模块", "液冷概念"]
         names = [n for n in PRIORITY_CONCEPTS if n in names] + [n for n in names if n not in PRIORITY_CONCEPTS]
         for cname in names[:MAX_CONCEPTS]:
+            _tr_n_raw = _tr_n_board = None
+            _tr_board_drop, _tr_junk, _tr_rank, _tr_selected, _tr_short, _tr_rej = [], [], [], [], [], []
+            _tr_trunc = False
             try:
                 cur = con.cursor()
                 if ORDER_MODE not in ("", "none", "off"):
                     # 账本 §9.48：旧口径 = `LIMIT 10` + 无 ORDER BY ⇒ 取哪 10 只**任意且不可复现**
                     # （长飞光纤在「光通信模块」物理序第 46、中国巨石在「PCB」第 37 ⇒ 永远取不到）。
-                    # 开排序后：先取全量成员（上限 MAX_FETCH），再按口径排序取前 MAX_STOCKS。
-                    cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=? LIMIT ?",
-                                (cname, MAX_FETCH))
+                    # 开排序后：先取全量成员（上限见 `fetch_limit()`），再按口径排序取前 MAX_STOCKS。
+                    # B5（2026-10-03 ✓）：上限放宽到 FETCH_MIN=800 ∧ 加 `ORDER BY ts_code`（可复现 ✓）；
+                    #   真被截断就打日志（不再静默 ✗）。
+                    _flim = fetch_limit()
+                    _osql = " ORDER BY ts_code" if fetch_ordered_on() else ""
+                    if _flim and _flim > 0:
+                        cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=?"
+                                    + _osql + " LIMIT ?", (cname, _flim))
+                    else:
+                        cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=?" + _osql,
+                                    (cname,))
                     _all = [r[0] for r in cur.fetchall()]
+                    _tr_n_raw = len(_all)
+                    _tr_trunc = bool(_flim and _flim > 0 and _tr_n_raw >= _flim)
+                    if _tr_trunc:
+                        print("[stock_confirm] ⚠️ 取数上限截断(B5) concept=%s 取到 %d（上限 %d，"
+                              "wide=%s ordered=%s）⇒ 超出部分**没参加排序**"
+                              % (cname, _tr_n_raw, _flim, fetch_wide_on(), fetch_ordered_on()),
+                              file=sys.stderr)
                     if board_prefilter_on():        # F2 上移：先剔无权限板块，再排序取前 10
+                        _tr_board_drop = [[str(c), "board"] for c in _all if not board_ok(c)]
                         _all = [c for c in _all if board_ok(c)]
+                    _tr_n_board = len(_all)
                     # ── 「窄杂毛门」上移到**排名之前**（`WOLF_JUNK_BEFORE_RANK`，库内默认 0）──
                     #   用户 2026-09-25：「窄杂毛门提前，过了这个门才能进排名」✓
                     #   量化（账本 §9.123）：杂毛占判级名额 4.0%（86/2133 个占位）；
@@ -348,11 +487,13 @@ def main():
                             if _drop_j:
                                 print("[stock_confirm] 杂毛门(排名前)剔除 %d 只: %s"
                                       % (len(_drop_j), _drop_j[:4]), file=sys.stderr)
+                            _tr_junk = [[str(a), str(b)] for a, b in _drop_j]
                             _all = _kept_j
                         except Exception as _e_j:
                             print("[stock_confirm] 杂毛门(排名前)异常(放行): %s" % str(_e_j)[:90],
                                   file=sys.stderr)
                     _ordered = order_members(_all, close, vol=vol)
+                    _tr_rank = [str(x) for x in _ordered[:max(0, TRACE_RANK_N)]]
                     # ⚠️ 2026-09-30（账本 §9.405）：**一次性探针** ✓ —— 把真正生效的口径打出来 ✓
                     #   因 launcher 会覆盖 pins ✗、`/proc/environ` 读不到 ✗ ⇒ 只能让代码自报 ✓
                     try:
@@ -408,15 +549,18 @@ def main():
                     cur.execute("SELECT ts_code FROM stock_concept_map WHERE concept_name=? LIMIT ?",
                                 (cname, MAX_STOCKS))
                     codes = [r[0] for r in cur.fetchall()]
+                _tr_selected = [str(x) for x in (codes if isinstance(codes, list) else [])]
             except Exception as ex:
                 print("[stock_confirm] concept err", cname, str(ex)[:60], file=sys.stderr)
                 continue
             stocks = []
             for ts_code in codes:
                 if ts_code not in close.columns:
+                    _tr_short.append([str(ts_code), "not_in_close"])
                     continue
                 ser = close[ts_code].dropna()
                 if len(ser) < 40:
+                    _tr_short.append([str(ts_code), "len_lt_40"])
                     continue
                 v = vol[ts_code].reindex(ser.index)
                 _net = _net_for(ts_code, days[-1] if days else None)
@@ -453,6 +597,7 @@ def main():
                         if _ok:
                             _keep.append(_x)
                         else:
+                            _tr_rej.append([_c, str(_why)[:120]])
                             print("MEMBER_REJECT %s theme=%s 概念=%s dsh=%s" % (_c, mt, cname, _why), file=sys.stderr)
                     if len(_keep) != len(stocks):
                         print("[stock_confirm] 主营校验 %s: %d → %d 只" % (cname, len(stocks), len(_keep)), file=sys.stderr)
@@ -460,6 +605,26 @@ def main():
             except Exception as _me:
                 print("[stock_confirm] 主营校验异常(放行) %s" % str(_me)[:80], file=sys.stderr)
             n_confirm = sum(1 for s in stocks if s["stage"] in ("确认", "突破候选"))
+            if domain_trace_on():          # 只留痕 ✓（不改 out / 不改写盘 ✓）
+                try:
+                    _DOMAIN_TRACE_ROWS.append({
+                        "day": _trace_day(),
+                        "as_of": (os.getenv("WOLF_ASOF_DAY") or "").strip(),
+                        "theme": mt, "concept": cname, "order_mode": ORDER_MODE,
+                        "max_stocks": MAX_STOCKS, "fetch": MAX_FETCH,
+                        "fetch_limit": fetch_limit(), "fetch_wide": fetch_wide_on(),
+                        "fetch_ordered": fetch_ordered_on(), "truncated": bool(_tr_trunc),
+                        "n_raw": _tr_n_raw, "n_after_board": _tr_n_board,
+                        "board_dropped": _tr_board_drop[:50],
+                        "junk_dropped": _tr_junk[:50],
+                        "rank_head": _tr_rank,
+                        "selected": _tr_selected,
+                        "short_dropped": _tr_short,
+                        "member_rejected": _tr_rej,
+                        "kept": [str(x["code"]) for x in stocks],
+                    })
+                except Exception:
+                    pass
             out[cname] = {"theme": mt, "n": len(stocks), "confirm": n_confirm,
                           "ratio": round(n_confirm / max(len(stocks), 1), 2), "stocks": stocks}
             print(f"[stock_confirm] {mt} > {cname} n={len(stocks)} 确认 {n_confirm}", file=sys.stderr)
@@ -467,6 +632,17 @@ def main():
         con.close()
     json.dump(out, open(os.path.join(DATA, "stock_confirm_result.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(f"[stock_confirm] WROTE stock_confirm_result.json 概念:{len(out)} ({time.time()-t0:.0f}s)", file=sys.stderr)
+    # ── 候选域留痕落盘（只写文件 ✓ 不改任何判据 ✓；开关默认开 ✓）──
+    if domain_trace_on() and _DOMAIN_TRACE_ROWS:
+        try:
+            _dp = os.path.join(DATA, "confirm_domain_trace_%s.jsonl" % _trace_day())
+            with open(_dp, "w", encoding="utf-8") as _df:
+                for _r in _DOMAIN_TRACE_ROWS:
+                    _df.write(json.dumps(_r, ensure_ascii=False) + "\n")
+            print("[stock_confirm] 候选域留痕 %d 概念 ⇒ %s" % (len(_DOMAIN_TRACE_ROWS), _dp),
+                  file=sys.stderr)
+        except Exception as _de:
+            print("[stock_confirm] 候选域留痕失败(忽略) %s" % str(_de)[:80], file=sys.stderr)
 
 
 if __name__ == "__main__":
