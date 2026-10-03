@@ -388,7 +388,8 @@ class TushareRelay:
 
             _base478 = str(getattr(_psrc, "base", "") or "https://pcd.mobcvb.cn/tushare/pro").rstrip("/")
 
-            if _key478 and _psrc is not None:
+            _hop478 = str(_os478.getenv("TUSHARE_RELAY_DIRECT_HOP", "1")).strip().lower() in ("1", "true", "yes", "on")
+            if _hop478 and _key478 and _psrc is not None:
 
                 import urllib.parse as _up478
 

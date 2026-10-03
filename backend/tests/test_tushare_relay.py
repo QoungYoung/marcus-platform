@@ -216,7 +216,10 @@ def test_fallback_on_upstream_code_error():
     assert items == [["000001.SZ"]]
 
 
-def test_all_sources_failed_raises():
+def test_all_sources_failed_raises(monkeypatch):
+    # 账本 §9.478：中继新增「**直连 promax 最后一跳**」（默认开）⇒ 它会**绕过注入的假 session**
+    # 去打真网 ✗ ⇒ 本测试（"全源失败必须抛错"）需**显式关掉**该逃生舱 ✓ 才测得到契约 ✓
+    monkeypatch.setenv("TUSHARE_RELAY_DIRECT_HOP", "0")
     relay, session = _relay([DH, PM], [
         FakeResponse({"error": "x"}, status_code=500),
         FakeResponse({"ok": False, "error": "upstream_pool_exhausted"}),
