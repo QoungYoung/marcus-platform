@@ -66,6 +66,30 @@ def main() -> int:
     except Exception:
         pass
     eq = cash + mv
+    # ★ 账本 §9.531 ✓（用户「为什么执着于写 json 而不是落库」✓）：**落库** ✓
+    #   为什么 ✓：文件不原子/不持久/难查询/同一语义散落多份 ✗（今天就吃了 `ambush_promoted.json` 0 个的亏 ✗）
+    #   为什么以前用文件 ✓：①回测沙箱按"天目录"组织（可整目录拷贝/回放 ✓）②多臂并行用独立目录天然隔离 ✓
+    #     ③PG 是**共享库**（本地==云端 ✗）⇒ 回测写库有污染风险 ✗ ⇒ 我们才用 5433 回测库 ✓
+    #   ⇒ ⇒ **分工** ✓：**状态/事件 ⇒ 落库** ✓（可查、可跨账户、可跨重置 ✓）；**按天快照 ⇒ 文件** ✓（回放用 ✓）
+    try:
+        import psycopg2 as _pg
+        _cn = _pg.connect(dsn, connect_timeout=4)
+        try:
+            _cn.autocommit = True
+            _c = _cn.cursor()
+            _c.execute("""CREATE TABLE IF NOT EXISTS bt_nav (
+                account_id text NOT NULL, day text NOT NULL, at text NOT NULL,
+                cash double precision, mv double precision, equity double precision,
+                ret double precision, n_pos integer, created_at timestamptz DEFAULT now(),
+                PRIMARY KEY (account_id, day, at))""")
+            _c.execute("INSERT INTO bt_nav (account_id,day,at,cash,mv,equity,ret,n_pos) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+                       "ON CONFLICT (account_id,day,at) DO NOTHING",
+                       (acc, day, time.strftime("%H:%M:%S"), round(cash, 2), round(mv, 2), round(eq, 2),
+                        round((eq / 250000.0 - 1) * 100, 3), n_pos))
+        finally:
+            _cn.close()
+    except Exception as _e:
+        print("  [nav] 落库失败（文件仍写 ✓）: %s" % str(_e)[:70])
     row = {"day": day, "at": time.strftime("%H:%M:%S"), "account": acc, "cash": round(cash, 2),
            "mv": round(mv, 2), "equity": round(eq, 2), "ret": round((eq / 250000.0 - 1) * 100, 3), "n_pos": n_pos}
     p = os.path.join(os.getenv("DATA_DIR") or os.path.join(REPO, "data", "_bt_t35", day), "nav.jsonl")
