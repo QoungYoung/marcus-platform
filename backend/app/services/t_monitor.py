@@ -974,8 +974,13 @@ class TMonitor:
                 if _jobsS not in _sysS.path:
                     _sysS.path.insert(0, _jobsS)
                 import arm_db as _adbS
-                _cS = _adbS.connect(T_MONITOR_ACCOUNT)
-                _adbS.put_pos_meta(_cS, T_MONITOR_ACCOUNT, sym, str(day), 0.0, float(px or 0),
+                # 账本 §9.540：账户名**臂内自洽**解析（不再默认别的臂名 ✗）
+                _accS = _adbS.resolve_account(getattr(self, 'account_id', '') or '')
+                if not _accS:
+                    print('[monitor] 臂库跳过：未指定账户（T_MONITOR_ACCOUNT/ARM_ACCOUNT 均空）', flush=True)
+                    return
+                _cS = _adbS.connect(_accS)
+                _adbS.put_pos_meta(_cS, _accS, sym, str(day), 0.0, float(px or 0),
                                    True, str(day), float(px or 0))
                 _cS.close()
             except Exception:

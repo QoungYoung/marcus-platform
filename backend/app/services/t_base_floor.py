@@ -192,7 +192,11 @@ def save_state(st: Dict[str, Any]) -> None:
             if _jobsA not in _sysA.path:
                 _sysA.path.insert(0, _jobsA)
             import arm_db as _adbA
-            _accA = os.getenv("T_MONITOR_ACCOUNT", "drabt35") or "drabt35"
+            # 账本 §9.540：**不再默认 drabt35** ✗（否则会把库写进别的臂）；空 ⇒ 留痕跳过 ✓
+            _accA = _adbA.resolve_account()
+            if not _accA:
+                print('[t-base-floor] 臂库跳过：未指定账户（T_MONITOR_ACCOUNT/ARM_ACCOUNT 均空）', flush=True)
+                return
             _cA = _adbA.connect(_accA)
             _adbA.put_state(_cA, _accA, _STATE_NAME, st)
             _cA.close()

@@ -55,10 +55,37 @@ def arm_root() -> str:
     return os.path.join(REPO, "data", "_bt_t35")
 
 
-def db_path(account: str = "", root: str = "") -> str:
-    acc = account or os.getenv("T_MONITOR_ACCOUNT", "drabt35") or "drabt35"
+def resolve_account(account: str = "", root: str = "") -> str:
+    """**臂内自洽**地解析账户名（账本 §9.540：绝不允许跨臂写）。
+
+    规则（按优先级）：
+      1 显式传入 account
+      2 环境 `T_MONITOR_ACCOUNT` / `ARM_ACCOUNT`
+      3 **该臂根下已存在的唯一 `*.sqlite`**（若只有一个 ⇒ 用它，避免新造一个别的账户名）
+      4 都没有 ⇒ 返回 "" ⇒ 调用方**报错/留痕**（**不再默认 drabt35** ✗，那会写进别的臂）
+    """
+    acc = str(account or os.getenv("T_MONITOR_ACCOUNT") or os.getenv("ARM_ACCOUNT") or "").strip()
+    if acc:
+        return acc
     r = root or arm_root()
-    return os.path.join(r, "%s.sqlite" % acc)
+    try:
+        names = [f[:-7] for f in os.listdir(r) if f.endswith(".sqlite")]
+    except Exception:
+        names = []
+    return names[0] if len(names) == 1 else ""
+
+
+def db_path(account: str = "", root: str = "") -> str:
+    acc = resolve_account(account, root)
+    r = root or arm_root()
+    if not acc:
+        raise RuntimeError("arm_db: 该臂未指定账户（T_MONITOR_ACCOUNT/ARM_ACCOUNT 均空，"
+                           "臂根 %s 下也没有唯一 .sqlite）⇒ 拒绝写入，避免跨臂操作" % r)
+    p = os.path.join(r, "%s.sqlite" % acc)
+    rr = os.path.realpath(r)
+    if not os.path.realpath(os.path.dirname(p)).startswith(rr):
+        raise RuntimeError("arm_db: 解析出的库不在本臂根内（%s ⊄ %s）⇒ 拒绝" % (p, rr))
+    return p
 
 
 def connect(account: str = "", root: str = "") -> sqlite3.Connection:
