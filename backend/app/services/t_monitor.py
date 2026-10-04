@@ -2937,7 +2937,12 @@ class TMonitor:
                             from app.database import SessionLocal as _SH
                             with _SH() as _sh:
                                 _sh.execute(_th(
-                                    "UPDATE paper_positions SET highest_price=:h, updated_at=now() "
+                                    # 账本 §9.534 ✓（用户「修复」✓）：**最高价只升不降** ✗ ⇒ 直接赋值会把 HWM 改小 ✗
+                                      #   （实测：反复重置后 `SH603629` 成本 49.03 的记录最高被改成 42.41 ✗
+                                      #    ⇒ 转正判据 `highest_price ≥ 成本×1.1` 永假 ⇒ 不止盈 ✗）
+                                      #   ⇒ 用 `GREATEST` ✓
+                                      "UPDATE paper_positions SET highest_price="
+                                      "GREATEST(COALESCE(highest_price,0), :h), updated_at=now() "
                                     "WHERE account_id=:a AND symbol=:s"),
                                     {"h": _cur, "a": _acct, "s": _sym})
                                 _sh.commit()
@@ -2965,7 +2970,12 @@ class TMonitor:
                                     from app.database import SessionLocal as _SB
                                     with _SB() as _sb:
                                         _sb.execute(_tb(
-                                            "UPDATE paper_positions SET highest_price=:h, updated_at=now() "
+                                            # 账本 §9.534 ✓（用户「修复」✓）：**最高价只升不降** ✗ ⇒ 直接赋值会把 HWM 改小 ✗
+                                      #   （实测：反复重置后 `SH603629` 成本 49.03 的记录最高被改成 42.41 ✗
+                                      #    ⇒ 转正判据 `highest_price ≥ 成本×1.1` 永假 ⇒ 不止盈 ✗）
+                                      #   ⇒ 用 `GREATEST` ✓
+                                      "UPDATE paper_positions SET highest_price="
+                                      "GREATEST(COALESCE(highest_price,0), :h), updated_at=now() "
                                             "WHERE account_id=:a AND symbol=:s"),
                                             {"h": _peak_bar, "a": _acct, "s": _sym})
                                         _sb.commit()
