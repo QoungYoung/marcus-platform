@@ -62,8 +62,15 @@ def main() -> int:
         print("  交易日不足 ✗"); return 0
     px = {d: {r[0]: (float(r[1]), float(r[2])) for r in
               db.execute("SELECT ts_code, close, low FROM bars WHERE trade_date=?", (d,))} for d in days}
+    # 当日全市场等权（用于"降温日"分层 ✓）
+    mkt = {}
+    for i in range(1, len(days)):
+        d, pv = days[i], days[i - 1]
+        rs = [px[d][t][0] / px[pv][t][0] - 1 for t in px[d] if t in px[pv] and px[pv][t][0] > 0]
+        if rs:
+            mkt[d] = st.mean(rs) * 100
     rows = []
-    for i in range(0, len(days) - 10):
+    for i in range(1, len(days) - 10):
         d = days[i]
         for ts, (cl, lo) in px[d].items():
             cs = conc.get(ts)
@@ -88,6 +95,38 @@ def main() -> int:
     if not rows:
         print("  样本为空 ✗"); return 0
     print("  样本 ✓: %d 个 (标的,日)｜窗口 %s~%s（T+10 ✓）" % (len(rows), days[0], days[-1]))
+    # ★ 降温日分层（报告的原始主张：**板块降温时**多题材是否更惨 ✓）
+    cool = [r for r, dd in zip(rows, [days[i] for i in range(0, 0)])] if False else None
+    for thr, lab in ((0.0, "全市场等权 < 0（降温日 ✓）"), (-1.0, "全市场等权 < -1%（明显降温 ✓）")):
+        sel_all = []
+        for i in range(1, len(days) - 10):
+            d = days[i]
+            if mkt.get(d, 0.0) >= thr:
+                continue
+            for ts, (cl, lo) in px[d].items():
+                cs = conc.get(ts)
+                if not cs or cl <= 0:
+                    continue
+                fwd, lows = [], []
+                for k in range(1, 11):
+                    p2 = px[days[i + k]].get(ts)
+                    if not p2:
+                        break
+                    fwd.append(p2[0] / cl - 1)
+                    lows.append(p2[1] / cl - 1)
+                if len(fwd) < 10:
+                    continue
+                sel_all.append((len(cs), len([x for x in cs if x in tc]) if tc else 0,
+                                fwd[-1] * 100, min(lows) * 100, st.pstdev(fwd) * 100))
+        if len(sel_all) < 100:
+            continue
+        print("  ════ %s（样本 %d ✓）════" % (lab, len(sel_all)))
+        for lo_, hi_, glab in [(0, 8, "概念 1~8"), (9, 15, "概念 9~15"), (16, 25, "概念 16~25"), (26, 9999, "概念 26+")]:
+            sel = [r for r in sel_all if lo_ <= r[0] <= hi_]
+            if len(sel) < 30:
+                continue
+            print("     %-12s n=%6d｜T+10 %+6.2f%%｜回撤 %+6.2f%%｜波动 %5.2f%%"
+                  % (glab, len(sel), st.mean(r[2] for r in sel), st.mean(r[3] for r in sel), st.mean(r[4] for r in sel)))
 
     def bucket(name, key, edges):
         print("  ── %s ──" % name)
