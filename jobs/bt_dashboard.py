@@ -52,6 +52,23 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, urlparse, parse_qs
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 try:  # 仓库 .venv 已装 psycopg2；缺失时服务仍可启动，只是账户/成交/持仓为空并给出告警
     import psycopg2
     import psycopg2.extras
@@ -176,7 +193,8 @@ def scan_procs(root: "str | None" = None) -> list[dict]:
         try:
             with open("/proc/%s/cmdline" % pid, "rb") as fh:
                 raw = fh.read()
-        except OSError:
+        except OSError as _e_sil1:
+            _silent_alert("bt_dashboard.py:180", _e_sil1)
             continue
         if not raw:
             continue
@@ -261,7 +279,8 @@ def _tag_log_for_root(root: str, min_mtime: float = 0.0) -> str | None:
             fp = os.path.join(logs_dir, fn)
             try:
                 mt = os.path.getmtime(fp)
-            except OSError:
+            except OSError as _e_sil2:
+                _silent_alert("bt_dashboard.py:265", _e_sil2)
                 continue
             if mt < float(min_mtime or 0.0) - 60:
                 continue
@@ -286,7 +305,8 @@ def live_run_log(root: "str | None" = None) -> str | None:
             continue
         try:
             target = os.readlink("/proc/%d/fd/1" % p["pid"])
-        except OSError:
+        except OSError as _e_sil3:
+            _silent_alert("bt_dashboard.py:290", _e_sil3)
             continue
         if target.startswith(REPO) and target.endswith(".log"):
             return os.path.abspath(target)
@@ -314,7 +334,8 @@ def live_run_log(root: "str | None" = None) -> str | None:
                 if not head_re.search(head):
                     continue
                 mt = os.path.getmtime(fp)
-            except OSError:
+            except OSError as _e_sil4:
+                _silent_alert("bt_dashboard.py:318", _e_sil4)
                 continue
             if best is None or mt > best[0]:
                 best = (mt, fp)
@@ -499,7 +520,8 @@ class Store:
                 continue
             try:
                 st = os.stat(path)
-            except OSError:
+            except OSError as _e_sil5:
+                _silent_alert("bt_dashboard.py:503", _e_sil5)
                 continue
             out.append((m.group(1), path, st.st_mtime, st.st_size))
         out.sort(key=lambda r: r[0])
@@ -677,12 +699,14 @@ class Store:
                                 continue
                             try:
                                 rec = json.loads(line)
-                            except Exception:
+                            except Exception as _e_sil6:
+                                _silent_alert("bt_dashboard.py:681", _e_sil6)
                                 continue
                             sym, theme = rec.get("symbol"), rec.get("theme")
                             if sym and theme:
                                 pairs.setdefault(sym, []).append((day, theme))
-                except OSError:
+                except OSError as _e_sil7:
+                    _silent_alert("bt_dashboard.py:686", _e_sil7)
                     continue
         for sym in pairs:
             pairs[sym].sort()
@@ -825,7 +849,8 @@ class Store:
                 with open("/proc/%d/stat" % pid, "r") as fh:
                     rest = fh.read().rsplit(") ", 1)[1].split()
                 cpu = int(rest[11]) + int(rest[12])          # utime + stime
-            except Exception:
+            except Exception as _e_sil8:
+                _silent_alert("bt_dashboard.py:829", _e_sil8)
                 continue
             io = 0
             try:
@@ -2106,7 +2131,8 @@ def _run_roots() -> list:
                 if fn.endswith(".log"):
                     logs.append({"name": fn, "path": fp, "mtime": os.path.getmtime(fp),
                                  "size": os.path.getsize(fp)})
-        except OSError:
+        except OSError as _e_sil9:
+            _silent_alert("bt_dashboard.py:2110", _e_sil9)
             continue
         days = sorted(d for d in days if d.isdigit())
         logs.sort(key=lambda r: r["mtime"], reverse=True)
@@ -2133,7 +2159,8 @@ def runs_from_logs(max_age_s: float = 900.0) -> list:
             fp = os.path.join(LOGDIR, fn)
             try:
                 mt = os.path.getmtime(fp)
-            except OSError:
+            except OSError as _e_sil10:
+                _silent_alert("bt_dashboard.py:2137", _e_sil10)
                 continue
             if now - mt > max_age_s:
                 continue

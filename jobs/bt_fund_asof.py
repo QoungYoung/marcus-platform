@@ -23,6 +23,23 @@
 """
 import os, sys, json, time, argparse, datetime as dt
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "data")
 ROOT = os.path.join(DATA, "_bt_fund")
 # 参考数据（曾用名 / 已退市名单）与"哪条臂"无关 ⇒ 共用一份，不按 tag 分开，
@@ -149,7 +166,8 @@ def fetch_daily_basic(day, tag):
         try:
             out[_norm(r[0])] = {"pe_ttm": _f(r[2]), "pb": _f(r[3]),
                                 "total_mv": _f(r[4]), "circ_mv": _f(r[5])}
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("bt_fund_asof.py:153", _e_sil1)
             continue
     _dump(p, out)
     return out
@@ -182,12 +200,14 @@ def fetch_fina(period, tag):
     for r in fi:
         try:
             _put(r[0], r[1], r[2], or_yoy=_f(r[3]), netprofit_yoy=_f(r[4]), debt_to_assets=_f(r[5]))
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("bt_fund_asof.py:186", _e_sil2)
             continue
     for r in inc:
         try:
             _put(r[0], r[1], r[2], revenue=_f(r[3]), n_income=_f(r[4]))
-        except Exception:
+        except Exception as _e_sil3:
+            _silent_alert("bt_fund_asof.py:191", _e_sil3)
             continue
     for code, lst in acc.items():
         lst.sort(key=lambda x: x["ann_date"])
@@ -220,7 +240,8 @@ def fetch_fina_by_code(codes, tag, quiet=False):
                 acc.setdefault(k, {"ann_date": str(r[1]), "end_date": str(r[2])})
                 acc[k].update(or_yoy=_f(r[3]), netprofit_yoy=_f(r[4]), debt_to_assets=_f(r[5]),
                               src="fina_indicator")
-            except Exception:
+            except Exception as _e_sil4:
+                _silent_alert("bt_fund_asof.py:224", _e_sil4)
                 continue
         inc = _call("income", "ts_code,ann_date,end_date,revenue,n_income_attr_p", ts_code=code)
         for r in inc:
@@ -230,7 +251,8 @@ def fetch_fina_by_code(codes, tag, quiet=False):
                 k = (str(r[1]), str(r[2]))
                 acc.setdefault(k, {"ann_date": str(r[1]), "end_date": str(r[2])})
                 acc[k].update(revenue=_f(r[3]), n_income=_f(r[4]), src="income")
-            except Exception:
+            except Exception as _e_sil5:
+                _silent_alert("bt_fund_asof.py:234", _e_sil5)
                 continue
         lst = sorted(acc.values(), key=lambda x: (x["ann_date"], x["end_date"]))
         _dump(p, lst)
@@ -279,7 +301,8 @@ def fetch_forecast_day(day, tag):
                 continue
             out[code] = {"ann_date": str(r[1]), "end_date": str(r[2]), "type": (r[3] or "").strip(),
                          "pmin": _f(r[4]), "pmax": _f(r[5]), "summary": (r[6] or "")[:120]}
-        except Exception:
+        except Exception as _e_sil6:
+            _silent_alert("bt_fund_asof.py:283", _e_sil6)
             continue
     _dump(p, out)
     return out
@@ -372,7 +395,8 @@ def fetch_namechange(codes, tag, quiet=False):
                             "end_date": str(r[3]) if r[3] else None,
                             "ann_date": str(r[4]) if r[4] else None,
                             "reason": (r[5] or "").strip()})
-            except Exception:
+            except Exception as _e_sil7:
+                _silent_alert("bt_fund_asof.py:376", _e_sil7)
                 continue
         lst.sort(key=lambda x: x["start_date"])
         _dump(p, lst)
@@ -393,7 +417,8 @@ def fetch_delisted(tag):
         try:
             out[_norm(r[0])] = {"name": (r[1] or "").strip(),
                                 "delist_date": str(r[3]) if r[3] else None}
-        except Exception:
+        except Exception as _e_sil8:
+            _silent_alert("bt_fund_asof.py:397", _e_sil8)
             continue
     _dump(p, out)
     return out
@@ -786,7 +811,8 @@ def fetch_moneyflow_by_code(codes, tag=None, quiet=False, keep_from="20241001"):
             continue
         try:
             rows = _call("moneyflow", "ts_code,trade_date,net_mf_amount", ts_code=c) or []
-        except Exception:
+        except Exception as _e_sil9:
+            _silent_alert("bt_fund_asof.py:790", _e_sil9)
             continue
         series = {}
         for r in rows:
@@ -794,7 +820,8 @@ def fetch_moneyflow_by_code(codes, tag=None, quiet=False, keep_from="20241001"):
                 dd, vv = str(r[1]), r[2]
                 if dd >= str(keep_from) and vv is not None:
                     series[dd] = float(vv)
-            except Exception:
+            except Exception as _e_sil10:
+                _silent_alert("bt_fund_asof.py:798", _e_sil10)
                 continue
         _dump(p, {"ts_code": c, "src": "tushare.moneyflow", "n": len(series), "net_mf_amount": series})
         got += 1

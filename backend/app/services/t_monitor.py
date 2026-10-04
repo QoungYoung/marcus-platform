@@ -29,6 +29,23 @@ from app.services import t_db
 from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, fetch_quote_one
 from app.services.t_regime import check_gate, compute_regime, _is_trading_time
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 MONITOR_INTERVAL = 30       # 秒
 INITIAL_OFFSET = 20         # 错峰启动
 # ── 回测确定性（2026-09-23）：两个开关都**库内默认沿用现状** ⇒ 生产逐字不变 ────────────
@@ -106,7 +123,8 @@ def _sandbox_price(symbol: str, today8: str = "") -> dict:
         try:
             _rows = [b for b in _j.load(open(_f, encoding="utf-8"))
                      if str(b.get("trade_date") or b.get("date") or "").replace("-", "")[:8]]
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("t_monitor.py:110", _e_sil1)
             continue
         _rows.sort(key=lambda b: str(b.get("trade_date") or b.get("date") or ""))
         _ok = [b for b in _rows
@@ -134,7 +152,8 @@ def _sandbox_price(symbol: str, today8: str = "") -> dict:
                 continue
             try:
                 _d = _j.load(open(_f, encoding="utf-8"))
-            except Exception:
+            except Exception as _e_sil2:
+                _silent_alert("t_monitor.py:138", _e_sil2)
                 continue
             _bars = _d.get(today8) if isinstance(_d, dict) else None
             if not _bars and isinstance(_d, dict):
@@ -602,7 +621,8 @@ class TMonitor:
             p = _os.path.join(D, root, code6 + '.json')
             try:
                 d = _j.load(open(p, encoding='utf-8'))
-            except Exception:
+            except Exception as _e_sil3:
+                _silent_alert("t_monitor.py:606", _e_sil3)
                 continue
             for k, v in d.items():
                 bs = sorted(v, key=lambda x: str(x.get('time') or x.get('trade_time')))
@@ -632,7 +652,8 @@ class TMonitor:
                                           'high': float(b.get('high') or 0),
                                           'low': float(b.get('low') or 0),
                                           'vol': float(b.get('vol') or 0)})
-                        except Exception:
+                        except Exception as _e_sil4:
+                            _silent_alert("t_monitor.py:636", _e_sil4)
                             continue
                     if _live:
                         _src = "Tushare/东财"
@@ -697,7 +718,8 @@ class TMonitor:
                     try:
                         if float(_p.get("volume") or 0) > 0:
                             _s.add(str(_p.get("symbol")))
-                    except Exception:
+                    except Exception as _e_sil5:
+                        _silent_alert("t_monitor.py:701", _e_sil5)
                         continue
                 self._held_cache = {"at": _t0.time(), "set": _s, "ok": True}
         except Exception:
@@ -2429,7 +2451,8 @@ class TMonitor:
                     try:
                         _o, _h, _l, _c = (float(_b.get("open") or 0), float(_b.get("high") or 0),
                                           float(_b.get("low") or 0), float(_b.get("close") or 0))
-                    except Exception:
+                    except Exception as _e_sil6:
+                        _silent_alert("t_monitor.py:2433", _e_sil6)
                         continue
                     if _h > _l and _o > 0 and abs(_c - _o) <= 0.15 * (_h - _l):
                         _do = (_d, _h, _o, _c)
@@ -4328,7 +4351,8 @@ class TMonitor:
                             continue
                         try:
                             o = _j.loads(line)
-                        except Exception:
+                        except Exception as _e_sil7:
+                            _silent_alert("t_monitor.py:4332", _e_sil7)
                             continue
                         _s = str(o.get("symbol") or "")
                         if not _s:
@@ -4337,7 +4361,8 @@ class TMonitor:
                             ctx["theme"].setdefault(_s, str(o["theme"]))
                         if _is_pool:
                             ctx["pool"].add(_s)
-            except Exception:
+            except Exception as _e_sil8:
+                _silent_alert("t_monitor.py:4341", _e_sil8)
                 continue
         self._prio_cache = ctx
         if ctx["main"] or ctx["theme"]:
@@ -5481,7 +5506,8 @@ def _fetch_daily_tencent_dated(symbol: str, count: int = 40):
                     continue
                 out.append({"date": _dd, "open": float(r[1]), "close": float(r[2]),
                             "high": float(r[3]), "low": float(r[4]), "vol": float(r[5] or 0)})
-            except (ValueError, IndexError, TypeError):
+            except (ValueError, IndexError, TypeError) as _e_sil9:
+                _silent_alert("t_monitor.py:5485", _e_sil9)
                 continue
         out.sort(key=lambda x: x["date"])
         return out[-int(count):] if out else None
@@ -6101,7 +6127,8 @@ def _prev_daily_rows(sym, n=5):
         p = _os.path.join(D, root, code6 + '.json')
         try:
             d = _j.load(open(p, encoding='utf-8'))
-        except Exception:
+        except Exception as _e_sil10:
+            _silent_alert("t_monitor.py:6105", _e_sil10)
             continue
         for k, v in d.items():
             bs = sorted(v, key=lambda x: str(x.get('time') or x.get('trade_time')))
