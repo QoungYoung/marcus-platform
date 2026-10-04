@@ -26826,3 +26826,36 @@ _pfP = os.path.join(_rootP, "ambush_promoted.json")
 - 监控（`t_monitor._record_promotion` ✓）：写 JSON 之外，**同时落臂库** ✓（`put_pos_meta(…, promoted=True, …)` ✓）
   ⇒ ⇒ **写入与读取都在臂库** ✓ ⇒ 真正"**单一事实来源**" ✓
 - ✅ 门禁 ✓：**58 passed ＋ preflight 通过** ✓
+
+---
+
+## §9.538 ★★ **"还有没有接线 sqlite 的？"** ✓ —— 审计出 **8 个跨日状态**仍在文件里 ✗，已加**通用状态表**并镜像 ✓
+
+### ① 审计结果 ✓（`carry` 结转名单 ✓ = **会影响决策的跨日状态** ✗）
+
+| 文件 ✓ | 性质 ✓ | 现状 ✓ |
+|---|---|---|
+| `position_tiers.json` ✓ | **跨日状态**（仓位档位）✗ | 文件 ✗ |
+| `roundtrip_state.json` ✓ | 跨日状态 ✗ | 文件 ✗ |
+| `t_base_floor_rebase.json` ✓ | **跨日状态**（底仓锚）✗ | ✅ **已镜像** ✓ |
+| `tranche_state.json` ✓ | **跨日状态**（分批）✗ | 文件 ✗ |
+| `wolf_253_chain.json` ✓ | 跨日状态 ✗ | 文件 ✗ |
+| `wolf_hedge_refill.json` ✓ | 跨日状态 ✗ | 文件 ✗ |
+| `wolf_passive_stop.json` ✓ | 跨日状态 ✗ | 文件 ✗ |
+| `wolf_ticket_ban.json` ✓ | **跨日状态**（票禁）✗ | 文件 ✗ |
+| `ambush_promoted.json` ✓ | **转正状态**（已致 bug ✗）| ✅ **已双写＋已镜像** ✓ |
+| `nav.jsonl`／`bt_nav` ✓ | 净值 | ✅ 已落库 ✓ |
+| `member_cache/` ✓ | **缓存**（必须能失效 ✗）| 文件 ✗ |
+
+### ② 已做 ✓
+
+- `arm_db.py` ⇒ 新增 **`arm_state`（通用 KV 表 ✓）** ＋ `put_state/get_state` ✓ ⇒ **一次容纳所有跨日状态** ✓
+- `jobs/sync_carry_state.py` ✓ ⇒ **只读镜像** ✓（不改原逻辑 ⇒ **零风险** ✓；臂根找不到就回退**最新天目录** ✓）
+- 实测 ✓：`arm_state` **3 条**（`t_base_floor_rebase.json` 8.3 KB ✓／`ambush_promoted.json` 974 B ✓／`nav.jsonl` ✓）
+
+### ③ ⇒ 下一步（按价值排序 ✓）
+
+1. **把"写"也切到臂库** ✓（现在只是**镜像** ✓；真正落地要改各自的写入点 ✗）
+   优先：`t_base_floor_rebase` ✓／`position_tiers` ✓／`tranche_state` ✓／`wolf_ticket_ban` ✓（**它们影响决策** ✓）
+2. `member_cache` ⇒ 库 ＋ **必须能失效** ✗（今天的坑 ✓）
+3. `legs_switch.jsonl` 可顺带入 `legs` 表 ✓（当天快照留文件亦可 ✓）
