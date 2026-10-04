@@ -11,6 +11,14 @@
 """
 from .t_leg_kinds import BUY_LEG_KINDS, is_buy_leg, LOWDIP_KINDS, is_lowdip, PREVLOW_M5_KINDS, is_prevlow_m5  # noqa: F401  §9.496 单一来源
 import os
+
+
+def _armdb_root(start: str) -> str:
+    """向上找到含 `jobs/arm_db.py` 的仓库根（账本 §9.539：写死层数会数错 ✗）。"""
+    p = os.path.dirname(start)
+    while p and p != "/" and not os.path.exists(os.path.join(p, "jobs", "arm_db.py")):
+        p = os.path.dirname(p)
+    return p or os.path.dirname(start)
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -962,8 +970,7 @@ class TMonitor:
             #   ⇒ 单一事实来源 ✓，且路径由 `arm_db.db_path()` 统一解析 ⇒ 不会再"找不到文件" ✗
             try:
                 import sys as _sysS
-                _jobsS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                    os.path.abspath(__file__)))), "jobs")
+                _jobsS = os.path.join(_armdb_root(os.path.abspath(__file__)), "jobs")
                 if _jobsS not in _sysS.path:
                     _sysS.path.insert(0, _jobsS)
                 import arm_db as _adbS

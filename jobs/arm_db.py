@@ -39,9 +39,25 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 
+def arm_root() -> str:
+    """臂根目录：显式 root > ARM_ROOT > 由 DATA_DIR 推导 > 回测默认。
+
+    为什么需要（账本 §9.539）：`DATA_DIR` 可能是“臂根”也可能是“臂根/<天>”，
+    不统一推导 ⇒ 生产/回测会写到不同地方（今天 `ambush_promoted.json` 就吃过这个亏）。
+    """
+    r = os.getenv("ARM_ROOT")
+    if r:
+        return r
+    d = str(os.getenv("DATA_DIR") or "").strip()
+    if d:
+        b = os.path.basename(d.rstrip("/"))
+        return os.path.dirname(d.rstrip("/")) if (len(b) == 8 and b.isdigit()) else d
+    return os.path.join(REPO, "data", "_bt_t35")
+
+
 def db_path(account: str = "", root: str = "") -> str:
     acc = account or os.getenv("T_MONITOR_ACCOUNT", "drabt35") or "drabt35"
-    r = root or os.getenv("ARM_ROOT") or os.path.join(REPO, "data", "_bt_t35")
+    r = root or arm_root()
     return os.path.join(r, "%s.sqlite" % acc)
 
 

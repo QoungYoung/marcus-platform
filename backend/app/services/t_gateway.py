@@ -13,6 +13,14 @@ from .t_leg_kinds import BUY_LEG_KINDS, is_buy_leg, LOWDIP_KINDS, is_lowdip, PRE
 _LOWDIP_KINDS = LOWDIP_KINDS     # §9.496 单一来源：加新腿类型只改 t_leg_kinds.py
 from datetime import datetime, timedelta
 import os
+
+
+def _armdb_root(start: str) -> str:
+    """向上找到含 `jobs/arm_db.py` 的仓库根（账本 §9.539：写死层数会数错 ✗）。"""
+    p = os.path.dirname(start)
+    while p and p != "/" and not os.path.exists(os.path.join(p, "jobs", "arm_db.py")):
+        p = os.path.dirname(p)
+    return p or os.path.dirname(start)
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import text
@@ -2779,8 +2787,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             try:
                 if str(os.getenv("WOLF_PROMO_FROM_ARMDB", "1")).strip().lower() in ("1", "true", "yes", "on"):
                     import sys as _sysA
-                    _jobsA = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                        os.path.abspath(__file__)))), "jobs")
+                    _jobsA = os.path.join(_armdb_root(os.path.abspath(__file__)), "jobs")
                     if _jobsA not in _sysA.path:
                         _sysA.path.insert(0, _jobsA)
                     import arm_db as _adbA
