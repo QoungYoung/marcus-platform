@@ -35,6 +35,23 @@ import time
 
 sys.path[:0] = []
 import bt_env  # noqa: E402
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 bt_env.add_paths()
 SRC = os.environ.get("DATA_DIR") or bt_env.DATA
 ROOT = os.path.join(SRC, "_bt_full")
@@ -158,8 +175,8 @@ def prune_future_dated(sb: str, cut: str):
                 try:
                     os.unlink(p)
                     removed.append(os.path.basename(p))
-                except OSError:
-                    pass
+                except OSError as _e_sil1:
+                    _silent_alert("bt_seed_day.py:162", _e_sil1)
     return removed
 
 
@@ -263,8 +280,8 @@ def _materialize(dst: str) -> bool:
         if os.path.islink(dst):
             os.unlink(dst)
             return True
-    except OSError:
-        pass
+    except OSError as _e_sil2:
+        _silent_alert("bt_seed_day.py:267", _e_sil2)
     return False
 
 
@@ -591,8 +608,8 @@ def snapshot_files(sb: str, names) -> dict:
             try:
                 with open(p, "rb") as f:
                     snap[nm] = f.read()
-            except Exception:
-                pass
+            except Exception as _e_sil3:
+                _silent_alert("bt_seed_day.py:595", _e_sil3)
     return snap
 
 
@@ -639,7 +656,8 @@ def themes_from_prod_log(T: str, log_dir: str = ""):
                     continue
                 try:
                     j = json.loads(ln)
-                except Exception:
+                except Exception as _e_sil4:
+                    _silent_alert("bt_seed_day.py:643", _e_sil4)
                     continue
                 blob = (j.get("output") or "") + "\n" + (j.get("error") or "")
                 for key, pat in pats:
@@ -647,7 +665,8 @@ def themes_from_prod_log(T: str, log_dir: str = ""):
                         items = [x.strip().strip("'\"") for x in m.group(1).split(",") if x.strip()]
                         if items and key not in found:
                             found[key] = items
-        except Exception:
+        except Exception as _e_sil5:
+            _silent_alert("bt_seed_day.py:651", _e_sil5)
             continue
     # 当天 derive 用的主主线（`rotation_universe_refresh` 日志：`derive: WROTE rotation_sub_universe.json main=X`）
     main = None
@@ -658,8 +677,8 @@ def themes_from_prod_log(T: str, log_dir: str = ""):
                 if m:
                     main = m.group(1)
                     break
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            _silent_alert("bt_seed_day.py:662", _e_sil6)
         if main:
             break
     themes = found.get("top_confirm") or found.get("mainline_pool") or found.get("gate_confirmed") or []
@@ -897,8 +916,8 @@ def main() -> int:
                         out[_p] = hashlib.md5(open(_p, "rb").read()).hexdigest()
                     else:
                         out[_p] = "%d:%s" % (sz, os.path.getmtime(_p))
-                except OSError:
-                    pass
+                except OSError as _e_sil7:
+                    _silent_alert("bt_seed_day.py:901", _e_sil7)
         return out
 
     _mt_before = _src_mtimes()
@@ -1128,8 +1147,8 @@ def main() -> int:
             if os.path.exists(dst) and os.path.exists(src) and os.path.getmtime(dst) > os.path.getmtime(src):
                 rec(name, {"src": "stub_skipped_newer", "dst_mtime": int(os.path.getmtime(dst))})
                 continue
-        except OSError:
-            pass
+        except OSError as _e_sil8:
+            _silent_alert("bt_seed_day.py:1132", _e_sil8)
         info = copy_json(src, dst) if os.path.exists(src) else None
         rec(name, (dict(info, src="stub", from_=src) if info else None))
 

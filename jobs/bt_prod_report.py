@@ -33,6 +33,23 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path[:0] = []
 import bt_env  # noqa: E402
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 PG_URL = os.getenv("BT_PG_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
 
 
@@ -219,8 +236,8 @@ def main() -> int:
         for r in _q("SELECT ts_code, concept_name FROM stock_concept_map"):
             code6 = str(r["ts_code"]).split(".")[0]
             theme_of.setdefault(code6, []).append(str(r["concept_name"]))
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("bt_prod_report.py:223", _e_sil1)
     by_theme: Dict[str, Dict[str, float]] = collections.defaultdict(lambda: {"n": 0, "pnl": 0.0})
     for t in tr:
         for th in (theme_of.get(str(t["symbol"])[2:8]) or ["(未映射)"])[:3]:

@@ -28,6 +28,23 @@ import time
 
 sys.path[:0] = []
 import bt_env  # noqa: E402
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 bt_env.add_paths()
 
 
@@ -179,8 +196,8 @@ def main() -> int:
     seed = {}
     try:
         seed = json.load(open(os.path.join(sb, "_seed.json"), encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("bt_day_legs.py:183", _e_sil1)
     cut = a.cut or seed.get("cut")
     if not cut:
         print("需要 --cut 或沙箱里有 _seed.json", file=sys.stderr); return 2
@@ -349,8 +366,8 @@ def main() -> int:
         _np = _lgp.prefetch(_pv) if _pv else 0
         if _np:
             print("[legs] 主营判定并发预热 %d 条" % _np, flush=True)
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("bt_day_legs.py:353", _e_sil2)
 
     if qualify and pool:
         pool_legs = int(os.getenv("ROT_POOL_LEGS", "4"))

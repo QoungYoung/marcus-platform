@@ -2,6 +2,23 @@
 """rotation_switch_agent.py — 主线内切换·Agent(Pi/dsh)链级决策 + 模拟盘直接执行（代码护栏兜底）"""
 import os, sys, json, time
 import urllib.request
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "data")
 DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
@@ -15,8 +32,8 @@ def _relay():
     import importlib, pathlib, sys
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil1:
+        _silent_alert("rotation_switch_agent.py:19", _e_sil1)
     for _p in pathlib.Path(__file__).resolve().parents:
         if (_p / "core" / "tushare_relay.py").exists():
             sys.path.insert(0, str(_p / "core"))
@@ -69,8 +86,8 @@ def _concepts():
         for ts, cn in cur.fetchall():
             out.setdefault(str(ts), []).append(str(cn))
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("rotation_switch_agent.py:73", _e_sil2)
     return out
 
 def _chains_of(sym, concepts):
@@ -92,8 +109,8 @@ def _live_price(ts, xq):
         q = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq or [])])
         if q and q.get("current"):
             return float(q["current"])
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("rotation_switch_agent.py:96", _e_sil3)
     return _latest_close(ts)
 
 
@@ -114,8 +131,8 @@ def _bad_stock_set():
             elif str(ft) == 'earnings_bad':
                 bad.add(str(sym))
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("rotation_switch_agent.py:118", _e_sil4)
     return bad
 
 def _sell_st_holdings(positions):
@@ -185,8 +202,8 @@ def _buy_shortlist(chain, exclude, limit=3):
             pos = pc.classify(f)["position"] if f else None
             if pos in ("LOW", "MID"):
                 out.append({"symbol": xq, "ts_code": ts, "position": pos})
-        except Exception:
-            pass
+        except Exception as _e_sil5:
+            _silent_alert("rotation_switch_agent.py:189", _e_sil5)
         time.sleep(0.1)
     return out
 
@@ -206,15 +223,15 @@ def parse_reply(reply):
     for cand in (stripped, t):
         try:
             return json.loads(cand)
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            _silent_alert("rotation_switch_agent.py:210", _e_sil6)
     i, j = t.find("{"), t.rfind("}")
     if i >= 0 and j > i:
         for k in range(j, i, -1):
             try:
                 return json.loads(t[i:k + 1])
-            except Exception:
-                pass
+            except Exception as _e_sil7:
+                _silent_alert("rotation_switch_agent.py:217", _e_sil7)
     return {"parse_failed": True, "raw": reply[:500]}
 
 def build_prompt(ctx):

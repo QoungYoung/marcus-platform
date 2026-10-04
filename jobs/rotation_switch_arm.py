@@ -13,6 +13,23 @@
 用法: python -u jobs/rotation_switch_arm.py  （SWITCH_ARM_DRY=1 只输出不写库）
 """
 import os, sys, json, time
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, "/app/app")
 sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "data")
@@ -62,8 +79,8 @@ def concepts_map():
         for ts, cn in cur.fetchall():
             out.setdefault(str(ts), []).append(str(cn))
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("rotation_switch_arm.py:66", _e_sil1)
     return out
 
 def chains_of(sym, cm):
@@ -83,8 +100,8 @@ def bad_set():
         cur.execute("SELECT symbol FROM risk_flags WHERE flag_type='is_st' AND value='1' OR flag_type='earnings_bad'")
         bad |= {str(r[0]) for r in cur.fetchall()}
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("rotation_switch_arm.py:87", _e_sil2)
     return bad
 
 def _relay():
@@ -93,8 +110,8 @@ def _relay():
     import importlib, pathlib
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil3:
+        _silent_alert("rotation_switch_arm.py:97", _e_sil3)
     for p in pathlib.Path(__file__).resolve().parents:
         if (p / "core" / "tushare_relay.py").exists():
             sys.path.insert(0, str(p / "core"))
@@ -233,8 +250,8 @@ def _select_by_gate(stats, limit, use_board_prefilter=False):
                     leg["ma_line_k"] = _line["k"]
                     leg["ma_line_v"] = _line["v"]
                     leg["ma_line_dist_pct"] = _line["dist_pct"]
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                _silent_alert("rotation_switch_arm.py:237", _e_sil4)
             out.append(leg)
     return out
 
@@ -498,8 +515,8 @@ def pick_buy(chain, exclude, limit=3, domain_out=None):
             stats.append({"ts": ts, "xq": xq, "closes": closes, "lows": lows, "highs": highs,
                           "dom": _dom_feat(closes, lows, highs),
                           "r60": r60, "amt20": amt20, "lim": lim})
-        except Exception:
-            pass
+        except Exception as _e_sil5:
+            _silent_alert("rotation_switch_arm.py:502", _e_sil5)
         time.sleep(0.1)
     if not stats:
         return []
@@ -704,8 +721,8 @@ def _legacy_confirm_pick(theme, exclude, limit=2, concepts=None):
             pos = pc.classify(f)["position"] if f else None
             if pos in ("LOW", "MID"):
                 out.append({"symbol": xq, "ts_code": ts, "position": pos, "theme": theme})
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            _silent_alert("rotation_switch_arm.py:708", _e_sil6)
         time.sleep(0.1)
     return out
 

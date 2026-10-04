@@ -44,6 +44,23 @@ from strategy_chain import StrategyChain
 from _api_config import get_tushare_pro
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 # ============= Tushare 数据获取（右侧交易技术面筛选） =============
 
 def _to_ts_code(symbol: str) -> str:
@@ -1709,7 +1726,7 @@ def get_market_status() -> dict:
             if finance_news:
                 news_sentiment = get_news_sentiment(finance_news)
         except:
-            pass
+            _silent_alert("market_scan.py:1712", None)
         news_impact = {'summary': {}, 'impact_analysis': []}
         if 'news_sentiment' not in dir():
             news_sentiment = {'score': 50, 'positive': 0, 'negative': 0}
@@ -1981,7 +1998,8 @@ def generate_scan_report():
                             })
                         top_pct = df.iloc[0]['pct_change'] if len(df) > 0 else 0
                         break
-                except Exception:
+                except Exception as _e_sil2:
+                    _silent_alert("market_scan.py:1985", _e_sil2)
                     continue
             if concept_flow_concepts:
                 print(f"[概念行情] ✅ Tushare Top {len(concept_flow_concepts)} 领涨概念: "
@@ -2005,8 +2023,8 @@ def generate_scan_report():
             _conn.close()
             if _row:
                 return _row[0]
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("market_scan.py:2009", _e_sil3)
         # Layer 2: Xueqiu 兜底
         try:
             if 'xq' not in dir():
@@ -2014,8 +2032,8 @@ def generate_scan_report():
             _q = xq.get_stock_quote(sym, use_cache=True)
             if _q and _q.get('name'):
                 return _q['name']
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            _silent_alert("market_scan.py:2018", _e_sil4)
         # Layer 3: 彻底查不到才用代码本身
         return sym
 
@@ -2046,7 +2064,7 @@ def generate_scan_report():
                         d = json.loads(row[1])
                         last_close_map[row[0]] = d.get('last_close', 0)
                     except:
-                        pass
+                        _silent_alert("market_scan.py:2049", None)
                 c2.close()
             # 构建 position_analysis（含今日涨跌幅）
             for pos in positions:
@@ -2179,8 +2197,8 @@ def generate_scan_report():
                                   for k in recent if k['close'] > 0]
                         if ranges:
                             atr_map[sym] = round(sum(ranges) / len(ranges), 2)
-                except Exception:
-                    pass
+                except Exception as _e_sil6:
+                    _silent_alert("market_scan.py:2183", _e_sil6)
             position_assessment = assess_positions(position_analysis, catalyst_db, atr_map)
         except Exception as e:
             print(f"[持仓评估] ⚠️ 跳过: {e}", file=sys.stderr)
@@ -2505,8 +2523,8 @@ def generate_scan_report():
         for name, score in ai_scores.items():
             if name not in concept_scores:
                 concept_scores[name] = score
-    except Exception:
-        pass
+    except Exception as _e_sil7:
+        _silent_alert("market_scan.py:2509", _e_sil7)
 
     scan_result = {
         'timestamp': datetime.now().isoformat(),
