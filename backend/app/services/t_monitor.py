@@ -958,6 +958,21 @@ class TMonitor:
                 _cur2[sym] = {"pday": str(day), "ppx": float(px or 0), "added": False}
                 with open(_p2, "w", encoding="utf-8") as _f4:
                     _js2.dump(_cur2, _f4, ensure_ascii=False)
+            # ★ 账本 §9.537 ✓（用户「直接读臂内的 sqlite」✓）：**同步落臂库** ✓（网关读的就是它 ✓）
+            #   ⇒ 单一事实来源 ✓，且路径由 `arm_db.db_path()` 统一解析 ⇒ 不会再"找不到文件" ✗
+            try:
+                import sys as _sysS
+                _jobsS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__)))), "jobs")
+                if _jobsS not in _sysS.path:
+                    _sysS.path.insert(0, _jobsS)
+                import arm_db as _adbS
+                _cS = _adbS.connect(T_MONITOR_ACCOUNT)
+                _adbS.put_pos_meta(_cS, T_MONITOR_ACCOUNT, sym, str(day), 0.0, float(px or 0),
+                                   True, str(day), float(px or 0))
+                _cS.close()
+            except Exception:
+                pass
         except Exception:
             pass
 

@@ -26803,3 +26803,26 @@ backend/app/services/t_gateway.py:2764
 
 - 在 `t_gateway.py:2772~2785` 加**一行留痕** ✓（打出：`_rootP` 路径 ✓／文件里键数 ✓／是否命中 ✓）
   ⇒ 下次跑到转正仓的卖腿时，**一眼就知道卡在哪** ✓
+
+---
+
+## §9.537 ★★★ **"这个现在是不是直接读臂内的 sqlite"** —— **原来不是（读 JSON ✗），现在改成读臂库了** ✓
+
+### ① 原来的实现与它的**脆弱点** ✓（`t_gateway.py:2772~2785` ✓）
+
+```python
+_rootP = os.path.dirname(os.environ.get("DATA_DIR", "/app/data"))   # ← dirname ✗
+_pfP = os.path.join(_rootP, "ambush_promoted.json")
+```
+- ⇒ ⇒ **依赖 `DATA_DIR` 的层级** ✗：`DATA_DIR=<臂根>/<天>` ⇒ `_rootP=<臂根>` ✓ 命中 ✓；
+  **`DATA_DIR=<臂根>`** ⇒ `_rootP=<臂根的父>` ✗ ⇒ **找不到文件** ✗ ⇒ ⇒ **转正仓仍被当"埋伏仓"豁免** ✗
+- ⇒ ⇒ 实测正是如此 ✓：**智光电气 0309 已转正**（记录在案 ✓），**0310 仍被拦 46 次** ✗
+
+### ② 改法（按用户方案 ✓：**读臂库** ✓）
+
+- 网关（`t_gateway.py` ✓）：**先查臂库** `pos_meta.promoted` ✓（`arm_db.db_path()` **统一解析路径** ⇒ **不可能读错** ✓）；
+  未命中/失败 ⇒ 再回退旧 JSON ✓（兼容 ✓）
+  - 开关 ✓：`WOLF_PROMO_FROM_ARMDB`（**默认 1** ✓，置 0 ＝ 只用旧路径 ✓）
+- 监控（`t_monitor._record_promotion` ✓）：写 JSON 之外，**同时落臂库** ✓（`put_pos_meta(…, promoted=True, …)` ✓）
+  ⇒ ⇒ **写入与读取都在臂库** ✓ ⇒ 真正"**单一事实来源**" ✓
+- ✅ 门禁 ✓：**58 passed ＋ preflight 通过** ✓

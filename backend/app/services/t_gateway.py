@@ -2770,6 +2770,33 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             #     ⇒ **网关仍把它当"未转正的埋伏仓"** ✗ ⇒ 所有常规卖腿被"埋伏仓豁免"拦住 ✓
             #     ⇒ 结果：它 **01-05 之后一笔都没成交** ✗（既卖不出、也追不上 ✓）
             #   ⇒ 修法：**直接读转正记录**（`ambush_promoted.json` ✓，全运行共享 ✓）＝单一事实来源 ✓
+            # ★ 账本 §9.537 ✓（用户「这个现在是不是直接读臂内的 sqlite」✓）：**改读臂库** ✓
+            #   为什么 ✓：原实现靠 `_rootP = dirname(DATA_DIR)` ✗ ⇒ **DATA_DIR 层级一变就找不到** ✗
+            #     （`DATA_DIR=<臂根>` 时它去找 `<臂根的父目录>/ambush_promoted.json` ✗ ⇒ 命中不到 ✗
+            #      ⇒ 转正仓仍被当"埋伏仓"豁免 ✗ —— 实测智光电气 0309 已转正 ✓ 但 0310 仍被拦 46 次 ✗）
+            #   ⇒ 臂库 `pos_meta.promoted` 由 `arm_db.db_path()` **统一解析路径** ✓ ⇒ 不可能读错 ✓
+            #   开关 ✓：`WOLF_PROMO_FROM_ARMDB`（**默认 1** ✓，置 0 ＝ 只用旧的 JSON 路径 ✓）
+            try:
+                if str(os.getenv("WOLF_PROMO_FROM_ARMDB", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                    import sys as _sysA
+                    _jobsA = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__)))), "jobs")
+                    if _jobsA not in _sysA.path:
+                        _sysA.path.insert(0, _jobsA)
+                    import arm_db as _adbA
+                    _cA = _adbA.connect(account_id)
+                    _rA = _cA.execute("SELECT promoted FROM pos_meta WHERE account_id=? AND symbol=?",
+                                      (account_id, symbol)).fetchone()
+                    _cA.close()
+                    if _rA and int(_rA[0] or 0) == 1:
+                        _promo_ok = False        # 臂库记录已转正 ⇒ 不再豁免 ✓
+                        print("[gateway] %s 已转正（臂库 ✓ pos_meta.promoted=1）⇒ 交回普通管理 ✓" % symbol,
+                              flush=True)
+                        raise StopIteration      # 跳到下一段（不再看旧 JSON ✓）
+            except StopIteration:
+                pass
+            except Exception as _eA:
+                print("[gateway] 臂库转正查询失败（继续用旧路径 ✓）: %s" % str(_eA)[:70], flush=True)
             try:
                 import json as _jsP
                 _rootP = os.path.dirname(os.environ.get("DATA_DIR", "/app/data")) or "/app/data"
