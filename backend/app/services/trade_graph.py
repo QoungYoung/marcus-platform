@@ -93,8 +93,8 @@ def _get_workspace() -> Path:
         from app.config import get_settings
         if hasattr(get_settings(), 'workspace_path'):
             return get_settings().workspace_path
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        print("[silent:trade_graph.py:96] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
     return Path(__file__).parent.parent.parent.parent.parent
 
 
@@ -307,8 +307,8 @@ def _read_stance_context() -> str:
                 f" / 仓位上限 {pi_conf.get('position_limit', 60)}%"
                 f" — 理由：{pi_conf.get('reason', '无')}\n"
             )
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        print("[silent:trade_graph.py:310] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     return ""
 
 
@@ -332,8 +332,8 @@ def _read_market_regime() -> tuple:
                 return (row.state, row.label, row.suggestion)
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        print("[silent:trade_graph.py:335] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
     return ("unknown", "未知", "⚠️ 今日尚未执行盘前诊断（9:10），无法确定市场结构。禁止按趋势市默认策略操作！")
 
 
@@ -364,8 +364,8 @@ def _read_style_regime() -> dict:
                 }
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        print("[silent:trade_graph.py:367] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
     return {"style_regime": "NEUTRAL", "consecutive_days": 0,
             "suggestion": "", "divergence_warning": None}
 
@@ -486,8 +486,8 @@ def _check_drawdown(portfolio_json: str) -> tuple:
                     f"(当前权益 {current_equity:.0f} / 峰值 {peak_equity:.0f})"
                 )
             return drawdown * 100, False, ""
-    except Exception:
-        pass
+    except Exception as _e_sil5:
+        print("[silent:trade_graph.py:489] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
     return 0.0, False, ""
 
 
@@ -554,8 +554,8 @@ def _call_pi(prompt: str, task_id: str, timeout: int = 600) -> dict:
         error_body = ""
         try:
             error_body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            print("[silent:trade_graph.py:557] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
         logger.error(
             f"[Pi] HTTP {e.code} from {pi_url} ({elapsed:.0f}ms)\n"
             f"     session={session_id}\n"
@@ -602,8 +602,8 @@ def _remove_bought_from_pool(reply: str, execution_id: str):
         for sym in bought:
             pool.mark_promoted(sym)
             logger.info(f"[{execution_id}] [CandidatePool] Promoted {sym}")
-    except Exception:
-        pass
+    except Exception as _e_sil7:
+        print("[silent:trade_graph.py:605] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
 
 
 def _save_trade_report(task_id: str, execution_id: str, reply: str,
@@ -643,8 +643,8 @@ def _check_position_utilization(execution_id: str, position_limit: int, reason: 
                 stance=stance, position_limit=position_limit,
                 reason=f"{reason} | ⚠️ 仓位利用率仅{utilization:.0f}%",
             )
-    except Exception:
-        pass
+    except Exception as _e_sil8:
+        print("[silent:trade_graph.py:646] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -737,8 +737,8 @@ def _read_main_line_context() -> str:
                     else:
                         block += ("- 主线内个股确认: 当前 0 只突破站稳(成分多在回调/止跌中) —— 属买点未触发, 不否定主线方向, "
                                   + "启用已确认主线回调低吸模式(254 等 dip_prev_low), 非放弃建仓。" + chr(10) + chr(10))
-            except Exception:
-                pass
+            except Exception as _e_sil9:
+                print("[silent:trade_graph.py:740] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
         block += ("- 【狼大主线准则③·产业链形态】判断某方向是否为狼大主线：须能拆上中下游/软硬、构成完整产业链。"
                   "请用 get_concept_mapping(主题) 拉全成分股，检查其是否覆盖 上游(材料/芯片/设备)→中游(制造/集成)→下游(应用/终端/服务) 或 软硬两端；"
                   "只覆盖单一环节(如仅下游应用) → 产业链形态不完备，主线可信度下调；覆盖完整上中下游 → 才按主线看待。"
@@ -807,8 +807,8 @@ def _read_stock_confirm_context() -> str:
                     mst = _json2.load(open(mlp, encoding="utf-8"))
                     gg = mst.get("mainline_gate") or {}
                     conf_themes = gg.get("confirmed_candidate") or ([mst.get("main_line")] if mst.get("main_line") else [])
-        except Exception:
-            pass
+        except Exception as _e_sil10:
+            print("[silent:trade_graph.py:810] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
         lines = []
         active_codes = []   # stage=突破候选/确认 的个股(子方向领涨激活, 2026-09-07: 益民600824/爱施德002416被比例遮住漏买)
         total_n = 0; total_c = 0
@@ -849,8 +849,8 @@ def _read_stock_confirm_context() -> str:
                           + f"；TOP3=" + (chr(44).join(f"{k}({s})" for k, s in zip(a['top3'], a['scores'])) or "无") + chr(10)
                           + "- 决策：build→分散吃轮动；t_only→主第1(70%)+2/3试仓；side→主第1(60%)；defense→仅30%仓参与(不追突破, 回踩低吸)；exit→70%仓(只降不空)。"
                           + chr(10) + chr(10))
-        except Exception:
-            pass
+        except Exception as _e_sil11:
+            print("[silent:trade_graph.py:852] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
         return block
     except Exception:
         return ""
@@ -878,8 +878,8 @@ def _read_confirm_context() -> str:
             from main_line import rotation_universe as _ru
             ru = _ru
             avoid = (_ru.proxies().get("crowded_top") or [])
-        except Exception:
-            pass
+        except Exception as _e_sil12:
+            print("[silent:trade_graph.py:881] %s: %s" % (type(_e_sil12).__name__, str(_e_sil12)[:110]), flush=True)
         def in_avoid(nm):
             if not avoid or not ru:
                 return False
@@ -954,8 +954,8 @@ def _read_risk_context() -> str:
                     block += "- 系统性风险开关：level=%s — %s" % (sr.get("level"), (sr.get("advice") or "")) + NL
                     for a in (sr.get("alerts") or []):
                         block += "  · " + a + NL
-        except Exception:
-            pass
+        except Exception as _e_sil13:
+            print("[silent:trade_graph.py:957] %s: %s" % (type(_e_sil13).__name__, str(_e_sil13)[:110]), flush=True)
         return block + NL
     except Exception as e:
         return "## 风控门控（risk_gate）" + NL + "- 计算失败：" + str(e)[:80] + NL + NL
@@ -1026,8 +1026,8 @@ def _read_rotation_gate_context() -> str:
                 room = _p.get("room_bottom") or []
                 crep = _p.get("crowded_represent") or []
                 holdT = _p.get("holdT_top") or []
-        except Exception:
-            pass
+        except Exception as _e_sil14:
+            print("[silent:trade_graph.py:1029] %s: %s" % (type(_e_sil14).__name__, str(_e_sil14)[:110]), flush=True)
         try:
             _p2 = _os.path.join(DATA, "main_line_state.json")
             if _os.path.exists(_p2):
@@ -1037,8 +1037,8 @@ def _read_rotation_gate_context() -> str:
                     fu = (ml.get("fusion") or {}).get(ml_name) or {}
                     score = float(fu.get("score") or 0); conc = float(fu.get("conc") or 0)
                     sucking = bool(score >= 0.85 and conc >= 0.7)
-        except Exception:
-            pass
+        except Exception as _e_sil15:
+            print("[silent:trade_graph.py:1040] %s: %s" % (type(_e_sil15).__name__, str(_e_sil15)[:110]), flush=True)
         if sucking is None: sucking = False
         if healthy is None: healthy = True
         # 主线内判定: 有明确主线 -> inside_mainline=True, 使 build 抽血期得到"主线内细分轮动"而非"禁切出主线/block"
@@ -1098,8 +1098,8 @@ def _read_rotation_switch_context() -> str:
                         + "- 拥挤但有空间(做T积累)：" + "、".join((_ru.get("holdT_top") or [])[:4]) + NL
                         + "- 轮动健康：" + ("是" if _ru.get("rotation_healthy") else "否") + " ｜ 主线抽血：" + ("是" if _ru.get("mainline_sucking") else "否") + NL
                         + "- 双线门(狼大)：主线内 room 可切；防御/资源第二线仅在非build(t_only/side/defense/exit) 且 rotation_healthy 且非抽血时允许，主升明牌吸金期只做主线内" + NL + NL)
-            except Exception:
-                pass
+            except Exception as _e_sil16:
+                print("[silent:trade_graph.py:1101] %s: %s" % (type(_e_sil16).__name__, str(_e_sil16)[:110]), flush=True)
             return ""
         pl = _j.load(open(p, encoding="utf-8"))
         mode = pl.get("mode") or "?"
@@ -1164,8 +1164,8 @@ def _read_wave_context() -> str:
             if reasons:
                 block += f"- 依据：{reasons}" + NL
             return block + NL
-    except Exception:
-        pass
+    except Exception as _e_sil17:
+        print("[silent:trade_graph.py:1167] %s: %s" % (type(_e_sil17).__name__, str(_e_sil17)[:110]), flush=True)
     # 回退：rule-based 结构判定
     try:
         import sys
@@ -1568,8 +1568,8 @@ def node_check_regime_compliance(state: TradeState) -> dict:
             if _re.search(r'买入|加仓|建仓|追|进场', _rep):
                 return {"regime_violation": True,
                         "regime_violation_reason": _wd['directive'] + "（周末降仓日：只允许降T仓、禁止买入/加仓/追）"}
-    except Exception:
-        pass
+    except Exception as _e_sil18:
+        print("[silent:trade_graph.py:1571] %s: %s" % (type(_e_sil18).__name__, str(_e_sil18)[:110]), flush=True)
 
     # 狼大口径(2026-09-03 审计): 去掉平台自研"震荡市仓位≤50%/单票≤8%/必须60分/禁产业链建仓"硬约束。
     if regime == 'oscillation':
@@ -1690,8 +1690,8 @@ def _log_auto_trade_decision(task_id, execution_id, state) -> None:
         _os.makedirs(_os.path.dirname(p), exist_ok=True)
         with open(p, "a", encoding="utf-8") as f:
             f.write(_j.dumps(row, ensure_ascii=False) + chr(10))
-    except Exception:
-        pass
+    except Exception as _e_sil19:
+        print("[silent:trade_graph.py:1693] %s: %s" % (type(_e_sil19).__name__, str(_e_sil19)[:110]), flush=True)
 
 
 def run_trade_decision(task_id: str, execution_id: str, pi_prompt: str) -> TradeState:

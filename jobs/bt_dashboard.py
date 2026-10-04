@@ -216,8 +216,8 @@ def scan_procs(root: "str | None" = None) -> list[dict]:
                     _i = parts.index("--root")
                     if os.path.abspath(parts[_i + 1]) != _r:
                         continue
-                except Exception:
-                    pass
+                except Exception as _e_sil1:
+                    print("[silent:bt_dashboard.py:219] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
             else:
                 _default = os.path.abspath(os.path.join(REPO, "data", "_bt_year"))
                 if _r != _default:
@@ -801,8 +801,8 @@ class Store:
                     out[sym] = [(r[0], r[1]) for r in cur.fetchall() if r[1] is not None]
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            print("[silent:bt_dashboard.py:804] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
         return out
 
     # ── 父进程日志（心跳来源之二）──────────────────────────────────────────
@@ -833,8 +833,8 @@ class Store:
                     for ln in fh:
                         if ln.startswith(("rchar:", "wchar:")):
                             io += int(ln.split(":")[1])
-            except Exception:
-                pass
+            except Exception as _e_sil3:
+                print("[silent:bt_dashboard.py:836] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
             prev = self._proc_seen.get(pid)
             if prev and (cpu > prev[0] or io > prev[1]):
                 out.append(("proc:%d(%s)" % (pid, p.get("kind") or "?"), now))
@@ -895,8 +895,8 @@ class Store:
                     head_lines = [next(fh, "") for _ in range(8)]
                     fh.seek(max(0, st.st_size - 8192))
                     tail_lines = fh.read().splitlines()
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                print("[silent:bt_dashboard.py:898] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
             head = "".join(head_lines)
             m = re.search(r"(\d+)\s*个交易日[：:]\s*(\d{8})\s*[→\-]>?\s*(\d{8})", head)
             info["days_total"] = int(m.group(1)) if m else None
@@ -913,8 +913,8 @@ class Store:
                         m3 = re.match(r"\[days\]\s+(\d{8})\s", line)
                         if m3:
                             started.append(m3.group(1))
-            except Exception:
-                pass
+            except Exception as _e_sil5:
+                print("[silent:bt_dashboard.py:916] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
             info["last_completed"] = completed[-1] if completed else None
             info["completed_count"] = len(completed)
             info["last_started"] = started[-1] if started else None
@@ -1150,8 +1150,8 @@ class Store:
                 newest = max(cands, key=lambda p: os.path.getmtime(p))
                 try:
                     activity.append((tag, os.path.getmtime(newest)))
-                except OSError:
-                    pass
+                except OSError as _e_sil6:
+                    print("[silent:bt_dashboard.py:1153] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
         activity.extend(self._proc_busy(act.get("procs") or []))
         if activity:
             src, last_ts = max(activity, key=lambda r: r[1])
@@ -2046,8 +2046,8 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("[bt_dashboard] ERROR %s\n%s\n" % (exc, traceback.format_exc()))
             try:
                 self._json({"error": "%s: %s" % (type(exc).__name__, str(exc)[:300])}, 500)
-            except Exception:
-                pass
+            except Exception as _e_sil7:
+                print("[silent:bt_dashboard.py:2049] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
 
     def do_HEAD(self):  # noqa: N802
         return self.do_GET()
@@ -2099,8 +2099,8 @@ def _run_roots() -> list:
                 fp = os.path.join(summ, fn)
                 try:
                     mt = max(mt, os.path.getmtime(fp))
-                except OSError:
-                    pass
+                except OSError as _e_sil8:
+                    print("[silent:bt_dashboard.py:2102] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
                 if fn.startswith("prod_") and fn.endswith(".json"):
                     days.append(fn[5:13])
                 if fn.endswith(".log"):
@@ -2159,8 +2159,8 @@ def runs_payload() -> dict:
         cands = [os.path.join(LOGDIR, f) for f in os.listdir(LOGDIR) if f.endswith(".log")]
         if cands:
             newest_log = max(cands, key=os.path.getmtime)
-    except OSError:
-        pass
+    except OSError as _e_sil9:
+        print("[silent:bt_dashboard.py:2162] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
     for pr in procs:
         cmd = pr.get("cmdline") or ""
         m_root = re.search(r"--root\s+(\S+)", cmd)
@@ -2209,8 +2209,8 @@ def runs_payload() -> dict:
             fp = os.path.join(LOGDIR, fn)
             logs.append({"kind": "log", "name": fn, "path": fp,
                          "mtime": os.path.getmtime(fp), "size": os.path.getsize(fp)})
-    except OSError:
-        pass
+    except OSError as _e_sil10:
+        print("[silent:bt_dashboard.py:2212] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
     logs.sort(key=lambda r: r["mtime"], reverse=True)
     return {"running": procs, "roots": _run_roots(), "logs": logs[:80], "now": now_iso()}
 
@@ -2254,8 +2254,8 @@ def main(argv=None) -> int:
         if hasattr(signal, _sig):
             try:
                 signal.signal(getattr(signal, _sig), _graceful)
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as _e_sil11:
+                print("[silent:bt_dashboard.py:2257] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
     sys.stderr.write("[bt_dashboard] 只读服务已启动: http://%s:%d/  (account=%s, root=%s)\n"
                      % (args.host, args.port, args.account, args.root))
     sys.stderr.flush()

@@ -101,3 +101,9 @@ backend/data/
 
 # Agent teams runtime state
 .agent-teams/
+
+# 本地备份/臂库（不入库）
+.env.bak*
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite

@@ -45,8 +45,13 @@ def convert(path: str, apply: bool, counter: list) -> int:
 
     s2 = PAT.sub(repl, s)
     if apply:
+        # ⚠️ 必须**先编译再写盘**（否则多行 except 被截断时会把文件写坏 ✗）
+        try:
+            compile(s2, path, "exec")
+        except SyntaxError as e:
+            print("    %-44s 跳过：转换后语法错误（%s）⇒ 未写盘 ✓" % (os.path.basename(path), str(e)[:50]))
+            return 0
         open(path, "w", encoding="utf-8").write(s2)
-        compile(s2, path, "exec")
     counter[0] += i[0]
     return i[0]
 
