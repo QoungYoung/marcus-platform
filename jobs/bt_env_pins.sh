@@ -851,3 +851,6 @@ export WOLF_ENSURE_MINS='1'   # 账本 §9.470：当日缺分钟自动补齐（�
 export WOLF_DIP_BREAKLOW_NODROP='1'   # 账本 §9.512：急杀式破前低不否决整条腿（逐日重判）
 
 export WOLF_BUY_254='0'   # 账本 §9.515：254 负期望（§9.495）⇒ 默认不挂
+
+export WOLF_BUY_254_MALINE='1'    # §9.518：保留他的线位挂单（线组买点语义）
+export WOLF_BUY_254_PREVLOW='0'   # §9.518：关掉触前低回退（§9.495 负期望）

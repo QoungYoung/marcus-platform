@@ -737,6 +737,17 @@ def _reset_module_caches(mon) -> None:
 
 
 def main() -> int:
+
+    # 账本 §9.543（用户「全局异常处理…异常推送QQ，避免吞异常」）：**安装全局钩子**
+    #   实情：alert_hub 早已写好（落盘 alerts.jsonl + 推 QQ + 防刷屏 + threading.excepthook），
+    #   但**没有入口调用 install()** ⇒ 异常不告警（"没做好"就是这一步）
+    try:
+        import os as _osI
+        _osI.environ.setdefault("WOLF_ALERT_HUB", "1")
+        from app.services import alert_hub as _ahI
+        print("[alert_hub] 全局异常钩子安装: %s" % _ahI.install(), flush=True)
+    except Exception as _eI:
+        print("[alert_hub] 安装失败（不静默）: %s: %s" % (type(_eI).__name__, str(_eI)[:90]), flush=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--day", required=True, help="交易日 YYYYMMDD")
     ap.add_argument("--root", default=os.path.join(bt_env.DATA, "_bt_year"), help="沙箱根")

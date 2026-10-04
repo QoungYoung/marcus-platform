@@ -22,6 +22,16 @@ from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
+# 账本 §9.543：入口即安装全局异常钩子（落盘 ＋ 可选 QQ 推送，避免吞异常）
+try:
+    import os as _osI0
+    _osI0.environ.setdefault("WOLF_ALERT_HUB", "1")
+    from app.services import alert_hub as _ahI0
+    _ahI0.install()
+except Exception as _eI0:
+    print("[alert_hub] 安装失败（不静默）: %s: %s" % (type(_eI0).__name__, str(_eI0)[:90]), flush=True)
+
+
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
