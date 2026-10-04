@@ -21,6 +21,23 @@ from typing import Optional, Dict, List, Any
 
 from app.services.local_data_provider import local_data
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 # ── 加仓层级常量 (与 PositionTierMonitor 一致) ──
@@ -412,8 +429,8 @@ def _check_sector_divergence(symbol: str, float_pnl_pct: float,
             divergence = float_pnl_pct - sector_pct
             if divergence < -3.0:
                 return f'板块背离: 板块{cn_name}({sector_pct:+.1f}%), 个股{float_pnl_pct:+.1f}%, 跑输{divergence:.1f}pp'
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("backtest_monitors.py:416", _e_sil1)
     return None
 
 
@@ -468,8 +485,8 @@ def _check_market_relative(symbol: str, float_pnl_pct: float,
 
         if float_pnl_pct <= -threshold:
             return f'大盘相对(动态): 大盘{market_pct:+.1f}%, 阈值{-threshold}%, 个股{float_pnl_pct:+.1f}%'
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("backtest_monitors.py:472", _e_sil2)
     return None
 
 
@@ -636,8 +653,8 @@ def _check_pool_ready(symbol: str, cur_price: float,
             ma20 = sum(closes[-20:]) / 20
             if ma5 < ma20:
                 return False
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("backtest_monitors.py:640", _e_sil3)
 
     # RSI6 估算 (简化: 近6日涨幅均值)
     try:
@@ -650,7 +667,7 @@ def _check_pool_ready(symbol: str, cur_price: float,
                 rsi6 = 100 - 100 / (1 + rs)
                 if rsi6 >= 85:
                     return False
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("backtest_monitors.py:654", _e_sil4)
 
     return True

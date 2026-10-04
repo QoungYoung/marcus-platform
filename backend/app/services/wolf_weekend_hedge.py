@@ -38,6 +38,23 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 STATE_FILE = "wolf_weekend_hedge.json"
 IDX = "sh000001"          # 腾讯分钟接口用带前缀代码
 CUTOFF_DEFAULT = "14:30"  # 他原话"2点半"
@@ -224,8 +241,8 @@ def _hhmm(s: str) -> int:
             return int(d[:2]) * 60 + int(d[2:4])
         if len(d) == 3:
             return int(d[:1]) * 60 + int(d[1:3])
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wolf_weekend_hedge.py:228", _e_sil1)
     return 0
 
 
@@ -267,12 +284,12 @@ def _cum_vol(bars: Sequence[Dict[str, Any]], day8: str, upto: str) -> Tuple[floa
         if _hhmm(hm) <= cut:
             try:
                 vol += float(b.get("vol") or 0)
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as _e_sil2:
+                _silent_alert("wolf_weekend_hedge.py:271", _e_sil2)
         try:
             close = float(b.get("close"))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as _e_sil3:
+            _silent_alert("wolf_weekend_hedge.py:275", _e_sil3)
     return round(vol, 2), close
 
 
@@ -343,8 +360,8 @@ def effective_shrink_ratio(day8: str, prev8: str, bars: Optional[List[Dict[str, 
         vp, _ = _cum_vol(b, prev8, upto)
         if vt and vp:
             return round(vt / vp, 4), "index_m5"
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("wolf_weekend_hedge.py:347", _e_sil4)
     r = market_shrink_ratio(day8, prev8)
     return (r, "market_amount") if r else (None, "unavailable")
 

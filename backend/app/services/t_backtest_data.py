@@ -29,6 +29,23 @@ from typing import Any, Dict, List, Optional
 
 from app.services.t_data_sources import UA, _brze_rate_limit, _get_brze_pro, _to_ts_code, brze_call
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # 指数代码（与 t_regime.INDEX_SYMBOLS 对齐，tushare 格式）
 INDEX_TS_CODES = {
     "hs300": "000300.SH",
@@ -107,7 +124,8 @@ def resolve_trade_days(start_date: str, end_date: str) -> List[str]:
         for fmt in ("%Y%m%d", "%Y-%m-%d"):
             try:
                 return datetime.strptime(x, fmt)
-            except ValueError:
+            except ValueError as _e_sil1:
+                _silent_alert("t_backtest_data.py:111", _e_sil1)
                 continue
         raise ValueError(f"无法解析日期: {x!r}（应为 YYYYMMDD 或 YYYY-MM-DD）")
 
@@ -285,7 +303,8 @@ def fetch_eastmoney_daily(symbol: str, start_date: str, end_date: str,
                     "low": float(parts[4]),
                     "vol": float(parts[5]),
                 })
-            except (ValueError, IndexError):
+            except (ValueError, IndexError) as _e_sil2:
+                _silent_alert("t_backtest_data.py:289", _e_sil2)
                 continue
         bars.sort(key=lambda b: b["trade_date"])
         return bars if bars else None
@@ -615,8 +634,8 @@ def write_gaps(cache_dir: Path, gaps: List[Dict[str, Any]]):
     if p.exists():
         try:
             existing = json.loads(p.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError) as _e_sil3:
+            _silent_alert("t_backtest_data.py:619", _e_sil3)
     merged = {f"{g.get('type')}|{g.get('key')}|{g.get('trade_date')}": g for g in existing + gaps}
     p.write_text(json.dumps(list(merged.values()), ensure_ascii=False, indent=1), encoding="utf-8")
 
@@ -665,8 +684,8 @@ def prefetch_industry_daily(trade_days: List[str], cache_dir: Path,
     try:
         s0 = datetime.strptime(start, "%Y%m%d") - timedelta(days=lead_days * 2)
         start = s0.strftime("%Y%m%d")
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as _e_sil4:
+        _silent_alert("t_backtest_data.py:669", _e_sil4)
     industries = _fetch_sw_l1_classify()
     if not industries:
         return {"fetched": 0, "gaps": [{"type": "industry_daily", "key": "*",

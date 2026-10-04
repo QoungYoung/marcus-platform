@@ -46,6 +46,23 @@
 import json
 import os
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "/app/data")
 
 # ── 主题浪：trend_confirm 的 track_a.stage 语义（见 trend_confirm.py TREND_CFG / 分层）──
@@ -177,8 +194,8 @@ def theme_of_symbol(symbol):
             for th, names in THEME_CONCEPTS.items():
                 if cons & set(names):
                     return th
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wolf_context.py:181", _e_sil1)
     return None
 
 
@@ -574,8 +591,8 @@ def theme_buyable(theme):
                      "[资金门] 主题[%s] 门检查异常 → 已停止买入：%s" % (theme, str(_e)[:80]))
                 return False, ("选板块第一要素检查异常 → 停止买入（fail-closed，2026-09-15 用户指示）: %s"
                                % str(_e)[:100])
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("wolf_context.py:578", _e_sil2)
     return True, "主题[%s] 可买: stage=%s verdict=%s | %s%s" % (
         theme, stage, st.get("verdict"), dr, tier_note)
 
@@ -622,8 +639,8 @@ def index_level_stop(wave=None, today=None, max_stale_days=None):
             if (d2 - d1).days > n:
                 return False, "指数浪型数据过期(wave_state.date=%s, 距今 %d 天 > %d) → 不触发" % (
                     wd, (d2 - d1).days, n)
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("wolf_context.py:626", _e_sil3)
     if lv in INDEX_STOP_LEVELS:
         return True, "指数大级别止损: level=%s（狼大2026-08-27: 不走大5浪而转为下跌1浪就止损, date=%s）" % (lv, wd or "?")
     return False, "指数级别=%s, 未转下跌 → 不触发" % lv
@@ -690,8 +707,8 @@ def index_top_state(wave=None, today=None, max_stale_days=None):
             d2 = _dt.date(int(_t8[:4]), int(_t8[4:6]), int(_t8[6:8]))
             if (d2 - d1).days > n:
                 return None, "指数浪型数据过期(wave_state.date=%s, 距今 %d 天 > %d) → 不动作" % (wd, (d2 - d1).days, n)
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            _silent_alert("wolf_context.py:694", _e_sil4)
     if lv in INDEX_TOP_ACTION_CLEAR:
         return "clear", "指数大级别转下跌: level=%s（狼大2026-08-27「不走大5浪而转为下跌1浪就止损」, date=%s）" % (lv, wd or "?")
     if lv in INDEX_TOP_LEVELS:

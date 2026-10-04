@@ -11,6 +11,23 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -348,8 +365,8 @@ class LocalDataProvider:
             prev_df = df[prev_mask]
             if not prev_df.empty:
                 pre_close = float(prev_df.sort_values("trade_time").iloc[-1]["close"])
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("local_data_provider.py:352", _e_sil1)
 
         # 5. 真实涨跌幅
         change_pct = round((current_price - pre_close) / pre_close * 100, 2) if pre_close > 0 else 0.0
@@ -431,7 +448,8 @@ class LocalDataProvider:
                         "current": float(w.get("current_price", 0)),
                         "pre_close": float(w.get("pre_close", 0)),
                     })
-            except Exception:
+            except Exception as _e_sil2:
+                _silent_alert("local_data_provider.py:435", _e_sil2)
                 continue
 
         # 2. 主题指数 (从 index_basic 里筛 category='主题指数' 且 has_1min 的)
@@ -452,7 +470,8 @@ class LocalDataProvider:
                                     "current": float(w.get("current_price", 0)),
                                     "pre_close": float(w.get("pre_close", 0)),
                                 })
-                        except Exception:
+                        except Exception as _e_sil3:
+                            _silent_alert("local_data_provider.py:456", _e_sil3)
                             continue
                     # 按涨幅降序
                     result["themes"].sort(key=lambda x: x["pct_change"], reverse=True)
@@ -887,8 +906,8 @@ class LocalDataProvider:
                         direction_discount = 0.85
                         direction_note = f"K线中性{bias:.2f}({n}根)修正0.85x"
                     # bias >= 0.1: 买盘主导, 不修正
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                _silent_alert("local_data_provider.py:891", _e_sil4)
             weight = round(raw_weight * direction_discount, 6)
             basis = "amount_weighted_candle_adj" if direction_discount < 1.0 else "amount_weighted"
             return {

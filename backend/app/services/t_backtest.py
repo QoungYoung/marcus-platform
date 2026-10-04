@@ -20,6 +20,23 @@ from app.services.t_monitor import (_calc_kdj_from_bars, _calc_macd_from_closes,
                                    _calc_rsi, _sma, evaluate_condition_at)
 from app.services.t_regime import compose_regime
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # 成交/费用假设（默认保守口径，design.md D6）
 DEFAULT_SLIPPAGE = 0.001      # 0.1% 滑点（对齐实盘 slippage_budget）
 DEFAULT_FEE_RATE = 0.0005     # 单边手续费（近似）
@@ -592,7 +609,8 @@ class TBacktestEngine:
                             self.symbol, bars_up_to, trade_day, regime, ledger,
                             vol_base, pre_close,
                         )
-                    except Exception:
+                    except Exception as _e_sil1:
+                        _silent_alert("t_backtest.py:596", _e_sil1)
                         continue
                     if self._cond_gate(c, tick_dt, day_trigger_count):
                         continue
@@ -619,8 +637,8 @@ class TBacktestEngine:
                         #   abandon=放弃本标的、update_condition=AI 已提供新条件
                         try:
                             day_conds.remove(c)
-                        except ValueError:
-                            pass
+                        except ValueError as _e_sil2:
+                            _silent_alert("t_backtest.py:623", _e_sil2)
                         if action == "exec":
                             self._maybe_rebuild_conditions(
                                 day_conds, ledger, trade_day, tick_dt,
@@ -720,8 +738,8 @@ class TBacktestEngine:
                 last = datetime.strptime(str(cond["last_triggered_at"]), "%Y-%m-%d %H:%M:%S")
                 if (now - last).total_seconds() < COOLDOWN_SECONDS:
                     return True
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as _e_sil3:
+                _silent_alert("t_backtest.py:724", _e_sil3)
         cid = cond.get("id") or cond.get("_bt_index", 0)
         if day_trigger_count.get(cid, 0) >= MAX_DAILY_TRIGGERS_PER_COND:
             return True
@@ -1696,8 +1714,8 @@ class TCombinedBacktestEngine:
             _rot_cooldown = int(_sp.get("rotation_cooldown_days", t_build._params().get("rotation_cooldown_days", 2)) or 2)
             _rot_min_pct = float(_sp.get("sector_filter_min_pct", float(t_build._params().get("sector_filter_min_pct", 0.0))) or 0.0)
             _rot_min_score = float(_sp.get("cand_score_min", float(t_build._params().get("cand_score_min", 0.78))) or 0.78)
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            _silent_alert("t_backtest.py:1700", _e_sil4)
             pass
 
         def _rot_ind(sym: str) -> Optional[Dict[str, Any]]:

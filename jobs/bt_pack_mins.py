@@ -28,6 +28,23 @@ import sqlite3
 import sys
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 def _iso(t: str) -> str:
     """stk_mins 的 '2026-09-11 09:35:00' → 'YYYY-MM-DD HH:MM:SS'（引擎要求的形态）。"""
     s = str(t).strip().replace("T", " ")
@@ -130,7 +147,8 @@ def _index_daily_from_files(ts_code: str):
                         out.append({"trade_date": d, "open": float(r["open"]), "high": float(r["high"]),
                                     "low": float(r["low"]), "close": float(r["close"]),
                                     "vol": float(r.get("vol") or 0), "amount": float(r.get("amount") or 0)})
-                    except Exception:
+                    except Exception as _e_sil1:
+                        _silent_alert("bt_pack_mins.py:134", _e_sil1)
                         continue
                 if out:
                     return out
@@ -145,7 +163,8 @@ def _index_daily_from_files(ts_code: str):
                                     "close": r.get("close"), "vol": r.get("vol") or 0, "amount": r.get("amount") or 0})
                 if out:
                     return out
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("bt_pack_mins.py:149", _e_sil2)
             continue
     return []
 
@@ -246,8 +265,8 @@ def main() -> int:
             print("[pack] 已跳过（BT_SKIP_PACK / .skip_pack 标记）：产物仅分析工具消费，回放交易链不读",
                   file=sys.stderr)
             return 0
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("bt_pack_mins.py:250", _e_sil3)
     import time as _t
     ap = argparse.ArgumentParser()
     ap.add_argument("--mins", default="/app/data/_bt_full/mins")
@@ -325,8 +344,8 @@ def main() -> int:
     try:
         json.dump({"mins": new_sig, "bars": new_bars, "bars_db": db_sig},
                   open(man_p, "w", encoding="utf-8"), ensure_ascii=False)
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("bt_pack_mins.py:329", _e_sil4)
     print("[pack] %s 打包 %d 根 bar / %d 只标的 → %s（复用 %d 文件 / 重打 %d / 摘除 %d 天，耗时 %.1fs）"
           % ("增量" if inc else "全量", n, len(syms), a.pack, n_reuse, n_repack, n_drop,
              _t.time() - t0))

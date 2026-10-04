@@ -23,6 +23,23 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "/app/data")
 STATE_FILE = os.path.join(DATA, "wolf_ticket_ban.json")
 
@@ -108,8 +125,8 @@ def _cal_days_between(d1: str, d2: str) -> Optional[int]:
             cal = [d for d in (recent_trade_days() or []) if d]
             if cal and a in cal and b in cal:
                 return max(cal.index(b) - cal.index(a), 0)
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("wolf_ticket_ban.py:112", _e_sil1)
         return None
     # ① 本地 bars 库（回测 + 有本地库的环境）：一次区间扫描
     try:
@@ -125,16 +142,16 @@ def _cal_days_between(d1: str, d2: str) -> Optional[int]:
                 con.close()
             if row and row[0] is not None and int(row[0]) > 0:
                 return int(row[0])
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("wolf_ticket_ban.py:129", _e_sil2)
     # ② 窗口版日历（两个日期都在窗口内才可用）
     try:
         from app.services.wolf_weekend_hedge import recent_trade_days
         cal = [d for d in (recent_trade_days() or []) if d]
         if cal and a in cal and b in cal:
             return max(cal.index(b) - cal.index(a), 0)
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("wolf_ticket_ban.py:137", _e_sil3)
     # ③ 生产：中继上的交易日历（可按区间取）
     try:
         from app.services.t_backtest_data import resolve_trade_days
@@ -142,8 +159,8 @@ def _cal_days_between(d1: str, d2: str) -> Optional[int]:
         n = len([d for d in ds if _norm8(d) > a])
         if n > 0:
             return n
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("wolf_ticket_ban.py:146", _e_sil4)
     return None
 
 

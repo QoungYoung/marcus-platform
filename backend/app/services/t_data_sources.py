@@ -18,6 +18,23 @@ from typing import Dict, List, Optional
 
 from app.config import get_settings
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 # ── 全局并发/冷却控制（brze 必须单线程串行；腾讯/新浪可小并发） ──
@@ -208,10 +225,11 @@ def fetch_tencent_mkline(symbol: str, freq: str = "m5", count: int = 320) -> Opt
                 if len(b) > 6 and isinstance(b[6], (int, float, str)):
                     try:
                         item["amount"] = float(b[6])
-                    except (TypeError, ValueError):
-                        pass
+                    except (TypeError, ValueError) as _e_sil1:
+                        _silent_alert("t_data_sources.py:212", _e_sil1)
                 result.append(item)
-            except (IndexError, TypeError, ValueError):
+            except (IndexError, TypeError, ValueError) as _e_sil2:
+                _silent_alert("t_data_sources.py:215", _e_sil2)
                 continue
         result.sort(key=lambda x: x["time"])
         return result if result else None
@@ -256,7 +274,8 @@ def fetch_sina_minline(symbol: str, scale: int = 5, datalen: int = 300) -> Optio
                     "vol": float(r["volume"]),
                     "amount": float(r.get("amount") or 0),
                 })
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError) as _e_sil3:
+                _silent_alert("t_data_sources.py:260", _e_sil3)
                 continue
         result.sort(key=lambda x: x["time"])
         return result if result else None
@@ -433,8 +452,8 @@ def fetch_quote_one(symbol: str, timeout: int = 8):
         nk = _nrm(symbol) if _nrm else None
         if nk and nk not in keys:
             keys.append(nk)
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("t_data_sources.py:437", _e_sil4)
     q = None
     try:
         _r = fetch_tencent_quote(list(keys), timeout=timeout) or {}

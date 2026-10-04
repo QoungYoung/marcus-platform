@@ -9,6 +9,23 @@ rotation_universe.py — P2 主线内"细分宇宙+拥挤度"（2026-09-02）
 用法: python apps/main_line/rotation_universe.py   （worker 每轮可调 proxies()）
 """
 import os, sys, json, collections, datetime
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 DATA = os.environ.get("DATA_DIR", "data")
 POS = os.path.join(DATA, "position_class_result.json")
 HIST = os.path.join(DATA, "concept_hist.json")
@@ -57,8 +74,8 @@ def _load_classified_ext():
                 kws = SUB_UNIVERSE[g]
                 if not any(_norm(k) == _norm(nm) for k in kws):
                     kws.append(nm)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("rotation_universe.py:61", _e_sil1)
 
 _load_classified_ext()
 
@@ -111,8 +128,8 @@ def _save_state(st):
     try:
         os.makedirs(DATA, exist_ok=True)
         json.dump(st, open(os.path.join(DATA, PROXY_STATE), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("rotation_universe.py:115", _e_sil2)
 
 def _apply_hysteresis(raw_healthy, raw_sucking):
     """确认制/惯性: healthy/sucking 需连续 ROT_CONFIRM_DAYS 天稳定才翻转; 单日跳变不生效。
@@ -231,8 +248,8 @@ def proxies(pos=None):
         u = cf.get("universe") or {}
         crowd_real = {k: {"avg_float": (v.get("avg_float_per_held") or 0), "ties": v.get("n_funds_ties") or 0}
                       for k, v in u.items()}
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("rotation_universe.py:235", _e_sil3)
     if crowd_real:
         for s in subs:
             r = crowd_real.get(s) or {}
@@ -264,8 +281,8 @@ def proxies(pos=None):
             for it in (cf.get(key) or [])[:2]:
                 nm = it.get("name") or it.get("symbol")
                 crowded_represent.append("%s(%s)" % (nm, it.get("symbol")))
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("rotation_universe.py:268", _e_sil4)
     return {"mainline_sucking": sucking, "rotation_healthy": healthy,
             "top1_sub": top_s, "top1_share": round(top1_share, 2), "inflow_subs": in_subs,
             "crowded_top": crowded, "holdT_top": holdT, "room_bottom": room_cand, "detail": out_detail,

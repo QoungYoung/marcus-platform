@@ -21,6 +21,23 @@ import re
 import sys
 import time
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 CHAT_URL = os.getenv("MAIN_LINE_CHAT_URL", "http://marcus-dsh:3001/chat")
 TIMEOUT = float(os.getenv("WOLF_LLM_TIMEOUT", "300"))
 DATA = os.environ.get("DATA_DIR", "/app/data")
@@ -62,14 +79,15 @@ def _extract_json(reply):
             o = json.loads(s)
             if isinstance(o, dict) and "items" in o:
                 return o
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("wolf_d12_evidence.py:66", _e_sil1)
             continue
     try:
         o = json.loads(reply.strip())
         if isinstance(o, dict):
             return o
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("wolf_d12_evidence.py:72", _e_sil2)
     return None
 
 
@@ -79,8 +97,8 @@ def call_dsh(sid, message, attempts=4):
     try:
         import urllib3
         urllib3.disable_warnings()
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("wolf_d12_evidence.py:83", _e_sil3)
     last = None
     for k in range(attempts):
         try:
@@ -117,8 +135,8 @@ def main():
     if os.path.exists(OUT) and not force:
         try:
             state = json.load(open(OUT, encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            _silent_alert("wolf_d12_evidence.py:121", _e_sil4)
 
     jobs = []
     for f in files:

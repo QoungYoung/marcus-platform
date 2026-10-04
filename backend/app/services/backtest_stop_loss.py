@@ -18,6 +18,23 @@ from datetime import date as dt_date, datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # 项目根
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
@@ -152,8 +169,8 @@ def _rule_break_low(sym: str, cur_price: float) -> Optional[str]:
                     f"破底止损: {cur_price:.2f} < "
                     f"阶段底{stage_low:.2f}×0.97={stop_price:.2f}"
                 )
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("backtest_stop_loss.py:156", _e_sil1)
     return None
 
 
@@ -198,8 +215,8 @@ def _rule_sector_divergence(sym: str, float_pnl_pct: float,
                         f"板块背离止损: 板块{cn}({sector_pct:+.1f}%), "
                         f"个股{float_pnl_pct:+.1f}%, 跑输{abs(divergence):.1f}pp"
                     )
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("backtest_stop_loss.py:202", _e_sil2)
     return None
 
 
@@ -245,8 +262,8 @@ def _rule_iron_rule2(sym: str, cur_price: float, avg_cost: float,
             return f"铁律二触发({tier}波): 浮亏{float_pnl_pct:.2f}% > T1.5={-t1_5}%"
         elif float_pnl_pct < -t1:
             return f"铁律二触发({tier}波): 浮亏{float_pnl_pct:.2f}% > T1={-t1}%"
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("backtest_stop_loss.py:249", _e_sil3)
     return None
 
 
@@ -284,6 +301,6 @@ def _rule_dynamic(cur_price: float, avg_cost: float, float_pnl_pct: float,
 
         if float_pnl_pct <= -threshold:
             return f"动态止损: 大盘{market_pct:+.1f}%, 止损阈值{-threshold}%, 当前{float_pnl_pct:.2f}%"
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("backtest_stop_loss.py:288", _e_sil4)
     return None

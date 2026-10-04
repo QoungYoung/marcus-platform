@@ -28,6 +28,23 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 def _dsn() -> str:
     """DSN 统一解析（2026-09-19 修 postgres 主机名/.env 端口不对，见 apps/main_line/db_dsn.py）。"""
     try:
@@ -196,8 +213,8 @@ def _asof_anchor() -> str:
         c = str(j.get("cut") or "").replace("-", "")
         if len(c) == 8 and c.isdigit():
             return c
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wolf_theme_vol_fund.py:200", _e_sil1)
     return _prev_trade_day(_today8())
 
 
@@ -270,8 +287,8 @@ def _mf_timeout() -> float:
     try:
         if str(os.getenv("BT_RELAY_OFFLINE", "0")).strip().lower() in ("1", "true", "yes", "on"):
             v = min(v, 1.0)
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("wolf_theme_vol_fund.py:274", _e_sil2)
     return v
 
 
@@ -348,7 +365,8 @@ def _refresh_mf_day(d8: str) -> Dict[str, float]:
         try:
             relay = importlib.import_module(name)
             break
-        except ImportError:
+        except ImportError as _e_sil3:
+            _silent_alert("wolf_theme_vol_fund.py:352", _e_sil3)
             continue
     if relay is None:
         cur = _p
@@ -373,7 +391,8 @@ def _refresh_mf_day(d8: str) -> Dict[str, float]:
     for it in items:
         try:
             by_ts[str(it[i_ts])] = float(it[i_v] or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as _e_sil4:
+            _silent_alert("wolf_theme_vol_fund.py:377", _e_sil4)
             continue
     out = {}
     for th in THEME_CONCEPTS.keys():

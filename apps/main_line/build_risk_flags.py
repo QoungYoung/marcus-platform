@@ -10,6 +10,23 @@
 输出: postgres risk_flags(symbol, flag_type, value, ann_date, source, updated_at)
 """
 import os, sys, json, time, argparse
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 try:
     import psycopg2
 except Exception as e:
@@ -25,8 +42,8 @@ def _relay():
     import importlib, pathlib
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil1:
+        _silent_alert("build_risk_flags.py:29", _e_sil1)
     for p in pathlib.Path(__file__).resolve().parents:
         if (p / "core" / "tushare_relay.py").exists():
             sys.path.insert(0, str(p / "core"))
@@ -55,8 +72,8 @@ def default_watch():
         for r in cur.fetchall():
             if r[0]: out.add(r[0])
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("build_risk_flags.py:59", _e_sil2)
     cp = os.path.join(DATA, "rotation_crowding.json")
     if os.path.exists(cp):
         try:
@@ -64,8 +81,8 @@ def default_watch():
             for key in ("chip_top", "optics_top"):
                 for it in d.get(key) or []:
                     if isinstance(it, dict) and it.get("symbol"): out.add(it["symbol"])
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("build_risk_flags.py:68", _e_sil3)
     return sorted(out)
 
 def fetch_flags(symbol):
@@ -92,8 +109,8 @@ def fetch_flags(symbol):
             pcmax = None
             try:
                 pcmax = float(latest[7]) if latest[7] is not None else None
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                _silent_alert("build_risk_flags.py:96", _e_sil4)
             bad = ftype in BAD_TYPES or ((ftype in ("预减", "略减")) and pcmax is not None and pcmax < -30)
             if bad:
                 flags.append(("earnings_bad", ftype + " pchg_max=" + str(pcmax), ann, "forecast"))
