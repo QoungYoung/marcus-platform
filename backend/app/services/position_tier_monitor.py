@@ -23,6 +23,14 @@
 
 import sys
 import os
+
+
+def _armdb_root(start: str) -> str:
+    """向上找到含 `jobs/arm_db.py` 的仓库根（账本 §9.539：写死层数会数错 ✗）。"""
+    p = os.path.dirname(start)
+    while p and p != "/" and not os.path.exists(os.path.join(p, "jobs", "arm_db.py")):
+        p = os.path.dirname(p)
+    return p or os.path.dirname(start)
 import json
 import time
 import threading
@@ -183,6 +191,25 @@ class PositionTierMonitor:
                 TIER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
                 with open(TIER_STATE_FILE, 'w', encoding='utf-8') as f:
                     json.dump(self.tier_states, f, ensure_ascii=False, indent=2)
+                    # 账本 §9.542（用户「切」）：写文件之外，**同时落臂库** `arm_state`（可查、单一事实来源）。
+                    #   账户名臂内自洽解析（缺失则留痕跳过，绝不写别的臂）；开关 `WOLF_STATE_ARMDB`（默认 1）。
+                    try:
+                        if str(os.getenv("WOLF_STATE_ARMDB", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                            import sys as _sysC
+                            _jobsC = os.path.join(_armdb_root(os.path.abspath(__file__)), "jobs")
+                            if _jobsC not in _sysC.path:
+                                _sysC.path.insert(0, _jobsC)
+                            import arm_db as _adbC
+                            _accC = _adbC.resolve_account()
+                            if not _accC:
+                                print("[armdb] 臂库跳过：未指定账户（T_MONITOR_ACCOUNT/ARM_ACCOUNT 均空）", flush=True)
+                            else:
+                                _cC = _adbC.connect(_accC)
+                                _adbC.put_state(_cC, _accC, "position_tiers.json", self.tier_states)
+                                _cC.close()
+                    except Exception as _eC:
+                        print("[armdb] 臂库写入失败（文件已写）: %s: %s" % (type(_eC).__name__, str(_eC)[:80]), flush=True)
+
         except Exception as e:
             # 2026-09-15 round 27：原来是 debug 级 → 生产静默；改为 warning（只在档位变化时调用，不会刷屏）
             logger.warning(f"[加仓] 层级状态保存失败 {TIER_STATE_FILE}: {e}")

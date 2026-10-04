@@ -9,6 +9,14 @@
 - 全部阈值 env(config), 记账 data/tranche_state.json
 """
 import json, os, math
+
+def _armdb_root(start: str) -> str:
+    """向上找到含 `jobs/arm_db.py` 的仓库根（账本 §9.539：写死层数会数错 ✗）。"""
+    p = os.path.dirname(start)
+    while p and p != "/" and not os.path.exists(os.path.join(p, "jobs", "arm_db.py")):
+        p = os.path.dirname(p)
+    return p or os.path.dirname(start)
+
 import numpy as np
 import pandas as pd
 
@@ -166,9 +174,34 @@ def _state():
 
 
 def _save_state(st):
+    # 账本 §9.542：**目录不存在也要能写**（原来直接 open ⇒ FileNotFoundError ⇒ 被静默吞掉 ✗）
+    try:
+        _d = os.path.dirname(TRIAL_STATE_FILE)
+        if _d:
+            os.makedirs(_d, exist_ok=True)
+    except Exception:
+        pass
     try:
         with open(TRIAL_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False, indent=1)
+            # 账本 §9.542（用户「切」）：写文件之外，**同时落臂库** `arm_state`（可查、单一事实来源）。
+            try:
+                if str(os.getenv("WOLF_STATE_ARMDB", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                    import sys as _sysC
+                    _jobsC = os.path.join(_armdb_root(os.path.abspath(__file__)), "jobs")
+                    if _jobsC not in _sysC.path:
+                        _sysC.path.insert(0, _jobsC)
+                    import arm_db as _adbC
+                    _accC = _adbC.resolve_account()
+                    if not _accC:
+                        print("[armdb] 臂库跳过：未指定账户（T_MONITOR_ACCOUNT/ARM_ACCOUNT 均空）", flush=True)
+                    else:
+                        _cC = _adbC.connect(_accC)
+                        _adbC.put_state(_cC, _accC, "tranche_state.json", st)
+                        _cC.close()
+            except Exception as _eC:
+                print("[armdb] 臂库写入失败（文件已写）: %s: %s" % (type(_eC).__name__, str(_eC)[:80]), flush=True)
+
     except Exception:
         pass
 
