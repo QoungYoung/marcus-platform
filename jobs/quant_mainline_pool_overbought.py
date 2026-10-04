@@ -49,6 +49,7 @@ def main() -> int:
     for d in days:
         cl[d] = {r[0]: float(r[1]) for r in db.execute("SELECT ts_code, close FROM bars WHERE trade_date=?", (d,))}
     idx = {d: i for i, d in enumerate(days)}
+    _skip_n = [0]
     rows = []
     used = 0
     for f in sorted(glob.glob(os.path.join(ROOT, "data", "_bt_t35", "2026*", "wolf_mainline_select.json"))):
@@ -60,7 +61,8 @@ def main() -> int:
             continue
         try:
             j = json.load(open(f, encoding="utf-8"))
-        except Exception:
+        except Exception as _e_q:
+            _skip_n[0] += 1
             continue
         r5 = j.get("r5") or {}
         tops = [k for k, _v in sorted(r5.items(), key=lambda kv: -float(kv[1] or 0))[:a.topk]]

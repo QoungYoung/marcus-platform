@@ -1317,6 +1317,15 @@ def main():
                 if _pT2 not in sys.path:
                     sys.path.insert(0, _pT2)
                 _TC2 = _ilT2.import_module("trend_channel")
+                # ★ 乖离门（账本 §9.577／§9.578 ✓）：乖离 MA20 > 阈值 ⇒ **不发腿**（等回踩 ✓）
+                _bmax = float(os.getenv("WOLF_TREND_BIAS_MAX", "0") or 0)   # 默认 0 = 关 ✓（生产零影响）
+                _m20 = b.get("ma20")
+                if _bmax > 0 and _m20 and float(_m20) > 0:
+                    _bias = (float(b["level"]) / float(_m20) - 1.0) * 100.0
+                    if _bias > _bmax:
+                        print("[rotation_switch_arm] 乖离门拦住 %s：乖离 %.1f%% > %.0f%%（等回踩再买 ✓）"
+                              % (b.get("symbol"), _bias, _bmax), file=sys.stderr)
+                        continue
                 _ridT = arm(conn, cur, b["symbol"], "trend_break_buy", "buy",
                             _TC2.expr(b["level"]), today)
                 armed.append({"type": "trend_break", "symbol": b["symbol"], "id": _ridT,

@@ -191,6 +191,7 @@ def stage(closes: Sequence[float], vols: Sequence[float], p: Optional[Dict[str, 
         return out
     out["stage"] = STAGE_BREAK
     out["level"] = round(c[anchor], 3)
+    out["ma20"] = _ma(c, 20)          # ★ 乖离门用（账本 §9.578 ✓）
     out["anchor"] = anchor
     out["desc"] = "带量突破(第%d根 收%.3f, z=%.2f) + 站稳%d日" % (
         anchor - (n - 1), c[anchor], out["signals"]["breakout_z20"], aged)
@@ -390,13 +391,17 @@ def concept_pick(domain: Sequence[Dict[str, Any]], topk: int = 0, rank_fn=None) 
     return out
 
 
-def expr(level: float, chase_max: Optional[float] = None) -> Dict[str, Any]:
+def expr(level: float, chase_max: Optional[float] = None,
+         ma20: Optional[float] = None) -> Dict[str, Any]:
     """买腿表达式：现价 ≥ 突破位 且 不追高（≤ 突破位×(1+chase_max)）。
 
     语料：2026-02-12「放量突破 一口吃完上面挂单」；2026-09-03「高开不追」。chase_max 为**自设**上限。
     """
     lv = round(float(level), 3)
     cap = round(lv * (1.0 + float(chase_max if chase_max is not None else params()["chase_max"])), 3)
+    # ★ 乖离门（账本 §9.577／§9.578 ✓）放在**布腿阶段**判断 ✓
+    #   ⚠️ 不能在 expr 里用"价格上限"实现 ✗（会与 `现价 ≥ 突破位` 互斥 ⇒ 永不触发 ✗）
+    _ = ma20   # 保留参数（调用方传 MA20 ✓，布腿侧用它 ✓）
     return {"and": [
         {"op": ">=", "field": "quote.current", "value": lv},
         {"op": "<=", "field": "quote.current", "value": cap},
@@ -628,6 +633,7 @@ def scan(day: str, symbols: Optional[Sequence[str]] = None, themes: Optional[Seq
         r = d.get("_stage") or {}
         if r.get("stage") == STAGE_BREAK:
             out.append({"symbol": d["symbol"], "stage": r["stage"], "level": r["level"],
+                        "ma20": r.get("ma20"),
                         "desc": r["desc"], "signals": r.get("signals"),
                         "leader": d.get("leader"), "leader_concept": d.get("leader_concept")})
     # ① 账户权限前置过滤（300/301/688/北交所）：必须在 cap 之前，否则幻影腿会占掉名额。

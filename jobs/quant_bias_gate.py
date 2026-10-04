@@ -57,6 +57,7 @@ def main() -> int:
             return None
         return (p / c0 - 1) * 100
 
+    _skip_n = [0]
     ev = []
     for f in sorted(glob.glob(os.path.join(ROOT, "data", "_bt_t35", "2026*", "wolf_mainline_select.json"))):
         day = os.path.basename(os.path.dirname(f))
@@ -67,7 +68,8 @@ def main() -> int:
             continue
         try:
             j = json.load(open(f, encoding="utf-8"))
-        except Exception:
+        except Exception as _e_q:
+            _skip_n[0] += 1
             continue
         r5 = j.get("r5") or {}
         tops = [k for k, _v in sorted(r5.items(), key=lambda kv: -float(kv[1] or 0))[:a.topk]]

@@ -28,8 +28,8 @@ def pool_for(day: str) -> set:
                     for s in (v.get("stocks") or []):
                         cd = s.get("code") if isinstance(s, dict) else s
                         if cd: out.add(str(cd))
-        except Exception:
-            pass
+        except Exception as _e_p1:
+            print("[pool] 候选文件读取失败 %s: %s" % (p, str(_e_p1)[:60]))
     p2 = os.path.join(base, "legs_switch.jsonl")
     if os.path.exists(p2):
         try:
@@ -40,8 +40,8 @@ def pool_for(day: str) -> set:
                 o = json.loads(line)
                 cd = o.get("symbol") or o.get("code")
                 if cd: out.add(str(cd))
-        except Exception:
-            pass
+        except Exception as _e_p2:
+            print("[pool] 布腿文件读取失败 %s: %s" % (p2, str(_e_p2)[:60]))
     return out
 
 
@@ -54,6 +54,7 @@ def main() -> int:
         cl[d] = {r[0]: float(r[1]) for r in db.execute("SELECT ts_code, close FROM bars WHERE trade_date=?", (d,))}
     idx = {d: i for i, d in enumerate(days)}
     day_dirs = [os.path.basename(p.rstrip("/")) for p in glob.glob(os.path.join(ROOT, "data", "_bt_t35", "2026*"))]
+    _skip_n = [0]
     rows = []
     for day in sorted(set(day_dirs)):
         if day not in idx:
