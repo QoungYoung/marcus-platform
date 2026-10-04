@@ -3512,6 +3512,8 @@ class TMonitor:
     def _round(self):
         """单轮：拉 regime → 读条件 → 并发取价 → 构建字段快照 → 表达式/默认逻辑评估 → 写触发。"""
         _rp_t0 = time.time() if os.getenv("WOLF_ROUND_PROFILE", "0") not in ("0", "", "no") else 0.0
+        if _rp_t0:
+            print("[round-prof] _round 开始（开关生效 ✓）", flush=True)
         # 1) regime 前置（每轮一次，缓存 5s）
         regime_state = compute_regime()
 
