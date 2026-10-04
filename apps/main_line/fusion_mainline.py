@@ -51,18 +51,18 @@ def net_series(a):
 REPORT_COUNTS = {}
 try:
     REPORT_COUNTS = load("replay_report_counts.json")
-except Exception:
-    pass
+except Exception as _e_s1:
+    print("[silent:fusion_mainline.py#1] %s: %s" % (type(_e_s1).__name__, str(_e_s1)[:110]), flush=True)
 CONCENTRATION = {}
 try:
     CONCENTRATION = load("replay_concentration.json")
-except Exception:
-    pass
+except Exception as _e_s2:
+    print("[silent:fusion_mainline.py#2] %s: %s" % (type(_e_s2).__name__, str(_e_s2)[:110]), flush=True)
 BANK_DATA = {}
 try:
     BANK_DATA = load("replay_bank_industry.json")
-except Exception:
-    pass
+except Exception as _e_s3:
+    print("[silent:fusion_mainline.py#3] %s: %s" % (type(_e_s3).__name__, str(_e_s3)[:110]), flush=True)
 
 def norm_catalyst(c, n):
     """研报量归一化(试验后弃用): 研报多≠错(半导体研报多但狼大也认科技主线), 归一化反而引入新偏置 → 系数0=不归一化"""

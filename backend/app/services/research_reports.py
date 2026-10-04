@@ -73,8 +73,8 @@ def fetch_day(d8: str, attempts: Optional[int] = None) -> Dict[str, Any]:
     try:      # 该端点是自签/异常证书，生产一直 verify=False；这里静音噪声警告
         import urllib3
         urllib3.disable_warnings()
-    except Exception:
-        pass
+    except Exception as _e_s1:
+        print("[silent:research_reports.py#1] %s: %s" % (type(_e_s1).__name__, str(_e_s1)[:110]), flush=True)
     n_att = int(attempts or ATTEMPTS)
     last_err = None
     for i in range(1, n_att + 1):
@@ -228,8 +228,8 @@ def backfill(days: Sequence[str], sleep_sec: float = 1.2, save: bool = True) -> 
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_s2:
+            print("[silent:research_reports.py#2] %s: %s" % (type(_e_s2).__name__, str(_e_s2)[:110]), flush=True)
     return out
 
 

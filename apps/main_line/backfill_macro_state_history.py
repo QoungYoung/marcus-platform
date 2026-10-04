@@ -79,8 +79,8 @@ def _cache_bond_rates_once():
         return cache['df']
     try:
         bm.ak.bond_zh_us_rate = _cached
-    except Exception:
-        pass  # 补丁失败则每个日期各自拉一次，不影响正确性
+    except Exception as _e_m1:
+        print("[silent:backfill_macro_state_history.py#1] %s: %s" % (type(_e_m1).__name__, str(_e_m1)[:110]), flush=True)  # 补丁失败则每个日期各自拉一次，不影响正确性
 
 
 def snapshot_for(target):

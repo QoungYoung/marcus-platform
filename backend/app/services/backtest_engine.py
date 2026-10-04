@@ -513,8 +513,8 @@ class BacktestEngine:
                         if min_equity > 0 and min_equity < acc["total_asset"]:
                             intraday_low_equity = round(min_equity, 2)
                             intraday_drawdown_pct = round((1 - min_equity / acc["total_asset"]) * 100, 4)
-                except Exception:
-                    pass  # 静默降级, 不影响主流程
+                except Exception as _e_m1:
+                    print("[silent:backtest_engine.py#1] %s: %s" % (type(_e_m1).__name__, str(_e_m1)[:110]), flush=True)  # 静默降级, 不影响主流程
 
                 # 动态坐标起点：首日总资产 = 100（资产指数）→ 后续天的指数 = 当日总资产/首日总资产×100
                 # 视觉效果: 起点100,涨到110表示盈利10%,跌到95表示亏5%

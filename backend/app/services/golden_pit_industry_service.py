@@ -102,8 +102,8 @@ def get_industry_config() -> Dict[str, Any]:
             try:
                 if v is not None:
                     cfg[k] = float(v)
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as _e_s1:
+                print("[silent:golden_pit_industry_service.py#1] %s: %s" % (type(_e_s1).__name__, str(_e_s1)[:110]), flush=True)
         # 行业池: 配置 JSON 优先，缺失回退内置 24 行业
         raw = sc.get("industry_pool")
         if raw:
