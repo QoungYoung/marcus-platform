@@ -33,6 +33,7 @@ def main() -> int:
         return close_cache[ts]
 
     files = sorted(glob.glob(os.path.join(ROOT, "data/_bt_full/mins/*_5min_*.json")))
+    _skip_n = [0]
     rows = []
     n_used = 0
     for p in files:
@@ -89,7 +90,8 @@ def main() -> int:
             r5 = (nxt(5) / prev - 1) * 100 if nxt(5) else None
             r10 = (nxt(10) / prev - 1) * 100 if nxt(10) else None
             rows.append((ts, day, hit[0], r_rule, r_hold, r5, r10))
-        except Exception:
+        except Exception as _e_q:
+            _skip_n[0] += 1
             continue
     if not rows:
         print("  样本为空 ✗"); return 0
