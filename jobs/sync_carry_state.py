@@ -25,8 +25,12 @@ def main() -> int:
     c = adb.connect(acc, root)
     n = 0
     print("  ── 跨日状态镜像 ✓（只读 ✓）──")
+    # carry 文件可能落在当天目录里（逐日结转）=> 先在臂根找，再在最新天目录找
+    _days = sorted([d for d in os.listdir(root) if d.isdigit() and len(d) == 8]) if os.path.isdir(root) else []
     for fn in CARRY:
         p = os.path.join(root, fn)
+        if not os.path.exists(p) and _days:
+            p = os.path.join(root, _days[-1], fn)
         if not os.path.exists(p):
             print("    %-28s ⇒ 不存在 ✗" % fn); continue
         try:
