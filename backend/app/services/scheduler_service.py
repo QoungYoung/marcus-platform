@@ -27,6 +27,23 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR, EVENT_JOB_MISSED
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -198,9 +215,11 @@ class SchedulerService:
                                     return_code=return_code,
                                 )
                                 self.executions[exec_id] = execution
-                            except Exception:
+                            except Exception as _e_sil1:
+                                _silent_alert("scheduler_service.py:202", _e_sil1)
                                 continue
-                except Exception:
+                except Exception as _e_sil2:
+                    _silent_alert("scheduler_service.py:204", _e_sil2)
                     continue
 
             logger.info(f"Loaded {len(self.executions)} execution records from history")
@@ -266,8 +285,8 @@ class SchedulerService:
             deleted = get_em_cache().prune(keep_days=3)
             if deleted > 0:
                 logger.info(f"🗑️ 东财缓存清理: 删除 {deleted} 个过期文件")
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("scheduler_service.py:270", _e_sil3)
         
         logger.info(f"Scheduler started with {len(self.tasks)} tasks")
 
@@ -280,8 +299,8 @@ class SchedulerService:
         for job in list(self.scheduler.get_jobs()):
             try:
                 self.scheduler.remove_job(job.id)
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                _silent_alert("scheduler_service.py:284", _e_sil4)
         logger.info("Scheduler stopped")
 
     def _get_workspace_path(self) -> Path:
@@ -580,8 +599,8 @@ class SchedulerService:
                                 msgs.append("\n💡 建议：检查以上持仓是否符合离场条件")
                                 try:
                                     self._qq_notifier("\n".join(msgs), self._qq_recipient)
-                                except Exception:
-                                    pass
+                                except Exception as _e_sil5:
+                                    _silent_alert("scheduler_service.py:584", _e_sil5)
                         else:
                             logger.debug(f"[{execution_id}] [time_falsification] 所有持仓均未触发时间证伪")
                     except Exception as e:
@@ -618,8 +637,8 @@ class SchedulerService:
                                 f"[{execution_id}] [time_falsification] "
                                 f"{f['symbol']}: {f['message']}"
                             )
-                except Exception:
-                    pass
+                except Exception as _e_sil6:
+                    _silent_alert("scheduler_service.py:622", _e_sil6)
             return
 
         # === 黄金坑监控任务 ===
@@ -787,8 +806,8 @@ class SchedulerService:
                             msgs.append("\n💡 建议：检查以上持仓是否符合离场条件")
                             try:
                                 self._qq_notifier("\n".join(msgs), self._qq_recipient)
-                            except Exception:
-                                pass
+                            except Exception as _e_sil7:
+                                _silent_alert("scheduler_service.py:791", _e_sil7)
                 except Exception as e:
                     logger.debug(f"[{execution_id}] [time_falsification] 检查跳过: {e}")
 
@@ -966,7 +985,8 @@ class SchedulerService:
                     try:
                         rec = json.loads(line)
                         records.append(rec)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as _e_sil8:
+                        _silent_alert("scheduler_service.py:970", _e_sil8)
                         continue
 
             if not records:
@@ -1651,9 +1671,11 @@ class SchedulerService:
                                 "error": (data.get("error") or "")[:200],
                                 "return_code": data.get("return_code", 0),
                             })
-                        except Exception:
+                        except Exception as _e_sil9:
+                            _silent_alert("scheduler_service.py:1655", _e_sil9)
                             continue
-            except Exception:
+            except Exception as _e_sil10:
+                _silent_alert("scheduler_service.py:1657", _e_sil10)
                 continue
         rows.sort(key=lambda x: x["started_at"], reverse=True)
         return rows[:limit]
@@ -1731,7 +1753,7 @@ class SchedulerService:
         try:
             self.scheduler.remove_job(task_id)
         except:
-            pass
+            _silent_alert("scheduler_service.py:1734", None)
 
         if task.enabled:
             self._add_job(task)
