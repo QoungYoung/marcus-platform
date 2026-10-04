@@ -12,7 +12,7 @@
 用法：`.venv/bin/python jobs/fix_silent_excepts_manual.py --file <path> [--apply]`
 """
 from __future__ import annotations
-import os, re, sys
+import ast, os, re, sys
 
 HELPER = '''
 
@@ -60,10 +60,18 @@ def convert(path: str, apply: bool) -> int:
         print("    %-42s 无静默点 ✓" % name); return 0
     if "_silent_alert" not in "\n".join(lines):
         # ⚠️ 只在**缩进为 0** 的 import 之后注入（否则会插进 `try:` 块里 ✗ —— 今早 bt_days 同款事故）
-        # ★ 必须**顶格**（行首无空白）：缩进的 import 多在 `try:` 块里 ⇒ 注入会插进 try ✗
-        _imps = [k for k, ln in enumerate(lines[:200])
-                 if (ln.startswith("import ") or ln.startswith("from ")) and ln[:1] not in (" ", "\t")]
-        last_imp = max(_imps or [0])
+        # ★★ 用 **AST** 求"最后一个**顶层** import 语句的**结束行**" ✓
+        #   为什么不能用"以 from 开头的最后一行" ✗：多行 import（带括号）会停在**括号内** ✗
+        #   —— 实测 market_reference.py 的 `from app.models.market_orm import (` 正是这样被写坏的 ✗
+        try:
+            _tree = ast.parse("\n".join(lines))
+            _last = 0
+            for _n in _tree.body:
+                if isinstance(_n, (ast.Import, ast.ImportFrom)):
+                    _last = max(_last, getattr(_n, "end_lineno", _n.lineno))
+            last_imp = _last if _last else 0
+        except Exception:
+            last_imp = 0
         lines.insert(last_imp + 1, HELPER)
         sites = [(a + 1, b + 1, c + 1, d, e) for (a, b, c, d, e) in sites]
     for k, (h0, h1, bl, kind, ind) in reversed(list(enumerate(sites))):

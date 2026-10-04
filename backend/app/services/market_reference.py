@@ -22,6 +22,23 @@ from app.models.market_orm import (
     SectorConfig,
 )
 
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 # ---- short TTL caches for hot lookups (remote PG round-trips are expensive) ----
 _NAME_CACHE: dict = {}
 _NAME_CACHE_TS: float = 0.0
@@ -93,8 +110,8 @@ def get_stock_name(symbol: str) -> Optional[str]:
                     name = cfg_row.etf_name.strip()
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("market_reference.py:97", _e_sil1)
     _NAME_CACHE[code] = name
     return name
 
@@ -120,8 +137,8 @@ def get_stock_industry(symbol: str) -> Optional[str]:
                 industry = row.industry
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("market_reference.py:124", _e_sil2)
     _INDUSTRY_CACHE[code] = industry
     return industry
 
