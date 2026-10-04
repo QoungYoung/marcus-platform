@@ -29,6 +29,23 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.544）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先走 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 LAYERS = ["L1_direction", "L2_operation", "L3_position", "L4_picks", "L5_entry", "L6_exit"]
 
 # L2 档位 → 是否允许**新开仓**（与 wolf_discipline.tier_targets 的档位口径一致）
@@ -95,7 +112,8 @@ def _read_json(name: str, d8: str) -> Optional[Any]:
             if os.path.isfile(p):
                 with open(p, encoding="utf-8") as f:
                     return json.load(f)
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("daily_decision.py:99", _e_sil1)
             continue
     return None
 
@@ -192,8 +210,8 @@ def _load_wave(d8: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
                             print("[daily_decision] 浪型来源冲突：live(%s)=%s vs 回填(%s)=%s → 按 live"
                                   % ("wave_state.json", _o1, _n, _o2), flush=True)
                         break
-            except Exception:
-                pass
+            except Exception as _e_sil2:
+                _silent_alert("daily_decision.py:196", _e_sil2)
             return w0, {"path": p0, "file": "wave_state.json", "present": True, "kind": "live_first",
                         "mtime": int(os.path.getmtime(p0)) if os.path.isfile(p0) else None,
                         "as_of": as_of0, "stale_days": None}
@@ -294,8 +312,8 @@ def _l3(tiers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                                         if val["level_target_pct"] is None else "按收盘查表")
             if _tc.target_drives_floor():
                 val["level_target_drives_floor"] = True
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("daily_decision.py:298", _e_sil3)
     return {"value": val,
             "basis": "wolf_discipline.tier_target_pct（上限=目标）/ tier_floor_pct（下限，仅 build 档）"
                      " / WOLF_TARGET_TABLE（点位→仓位对照表，可选）"}
@@ -352,7 +370,7 @@ def _l5(l2: Dict[str, Any], gates: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 warnings.append({"level": "info", "text": "指数未破位：%s" % _br.get("reason")})
     except Exception as _be:
-        pass
+        _silent_alert("daily_decision.py:355", _be)
     if g10.get("breakdown_risk"):
         warnings.append("G10：已跌破关口（破位）→ 按他 2026-08-25 口径这是**止损/减仓评估**，"
                         "不是禁买；但按 2026-08-24 的做法**只按预设条件买**，不追、不临时起意")
@@ -491,8 +509,8 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
                 warns.append("波浪状态的数据日 %s 早于最近已收盘交易日 %s（陈旧 %d 天）→ 08:10 判浪"
                              "**可能没跑成/失败**，L2 档位是旧口径：只按预设条件执行、不据此加仓"
                              % (as_of, exp, sd))
-    except Exception:
-        pass
+    except Exception as _e_sil5:
+        _silent_alert("daily_decision.py:495", _e_sil5)
     obj = {"date": d8, "warnings": warns, "stale": stale,
            "generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
            "layers": layers, "gates": gates, "sources": src, "missing": missing,
@@ -525,8 +543,8 @@ def _load_pg(d8: str) -> Optional[Dict[str, Any]]:
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            _silent_alert("daily_decision.py:529", _e_sil6)
 
 
 def _save_pg(obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -564,15 +582,15 @@ def _save_pg(obj: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         try:
             db.rollback()
-        except Exception:
-            pass
+        except Exception as _e_sil7:
+            _silent_alert("daily_decision.py:568", _e_sil7)
         return {"ok": False, "reason": str(e)[:80]}
     finally:
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil8:
+            _silent_alert("daily_decision.py:575", _e_sil8)
 
 
 def run(d8: Optional[str] = None, save: bool = True) -> Dict[str, Any]:
@@ -617,7 +635,8 @@ def load(d8: Optional[str] = None) -> Dict[str, Any]:
         try:
             with open(p, encoding="utf-8") as f:
                 return json.load(f) or {}
-        except Exception:
+        except Exception as _e_sil9:
+            _silent_alert("daily_decision.py:621", _e_sil9)
             continue
     return {}
 
@@ -637,8 +656,8 @@ def _latest_pg_at_or_before(d8: str) -> Optional[Dict[str, Any]]:
                 return pl if isinstance(pl, dict) else json.loads(pl)
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as _e_sil10:
+        _silent_alert("daily_decision.py:641", _e_sil10)
     return None
 
 
@@ -657,8 +676,8 @@ def latest_within(d8: str, max_age: Optional[int] = None) -> Tuple[Optional[Dict
             stale = (base - _dt.datetime.strptime(str(obj["date"]), "%Y%m%d").date()).days
             if 0 <= stale <= mx:
                 return obj, stale
-        except ValueError:
-            pass
+        except ValueError as _e_sil11:
+            _silent_alert("daily_decision.py:661", _e_sil11)
     # ② 文件镜像兜底：目录里找最近的
     try:
         cands = sorted([f[:-5] for f in os.listdir(decision_dir())
@@ -671,7 +690,8 @@ def latest_within(d8: str, max_age: Optional[int] = None) -> Tuple[Optional[Dict
             continue
         try:
             stale = (base - _dt.datetime.strptime(c, "%Y%m%d").date()).days
-        except ValueError:
+        except ValueError as _e_sil12:
+            _silent_alert("daily_decision.py:675", _e_sil12)
             continue
         if 0 <= stale <= mx:
             return obj, stale
