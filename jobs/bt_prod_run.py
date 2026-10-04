@@ -57,6 +57,23 @@ REPO = bt_env.REPO
 #   迁移本身已 try/except（超时只打 warn）：列早已存在的库里，这个 ALTER 失败**无害**。
 os.environ.setdefault("PGOPTIONS", "-c lock_timeout=5000")
 import bt_local_market as _blm  # noqa: E402
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 LOCAL_DB_URL = os.getenv("BT_PG_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
 _NET_HITS: Dict[str, Any] = {}
 
@@ -277,7 +294,8 @@ class LocalMarket:
         for p in paths:
             try:
                 d = json.load(open(p, encoding="utf-8"))
-            except Exception:
+            except Exception as _e_sil1:
+                _silent_alert("bt_prod_run.py:281", _e_sil1)
                 continue
             dd = str(d.get("date") or "")
             bars = d.get("bars") or []
@@ -519,7 +537,8 @@ def fanout_shims() -> None:
                 if _d is _orig_cls and _orig_cls is not None:
                     setattr(mod, "datetime", datetime.datetime)   # 模拟时钟类 ✓
                     _n_c += 1
-            except Exception:
+            except Exception as _e_sil2:
+                _silent_alert("bt_prod_run.py:523", _e_sil2)
                 continue
         print("[bt] 补丁广播 ✓：行情 %d 处｜时段门 %d 处｜模拟时钟 %d 处" % (_n_a, _n_b, _n_c), flush=True)
     except Exception as _e:

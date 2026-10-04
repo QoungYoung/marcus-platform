@@ -32,7 +32,13 @@ def main() -> int:
                     s = open(p, encoding="utf-8").read()
                 except Exception:
                     continue
-                n = len(PAT.findall(s))
+                # 排除我们自己注入的 `_silent_alert` helper 自带的 `except: pass`（否则每个改过的文件虚高 1 ✗）
+                n = 0
+                for m in PAT.finditer(s):
+                    win = s[max(0, m.start() - 400):m.start()]
+                    if "_ah.note_silent(" in win or "def _silent_alert(" in win:
+                        continue
+                    n += 1
                 if n:
                     hits.append((n, os.path.relpath(p, ROOT)))
     hits.sort(reverse=True)

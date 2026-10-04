@@ -37,6 +37,23 @@ for sub in ("apps/main_line", "jobs", "backend", "core", "config"):
     if os.path.isdir(p):
         sys.path.insert(0, p)
 import fusion_mainline as fm
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 print(json.dumps({"file": fm.__file__, "n": len(fm.THEME_CONCEPTS),
                   "keys": sorted(fm.THEME_CONCEPTS.keys())}, ensure_ascii=False))
 '''
@@ -54,7 +71,8 @@ def prod_expectations(day8: str):
             continue
         try:
             j = json.loads(ln)
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("bt_pick_code_rev.py:58", _e_sil1)
             continue
         blob = (j.get("output") or "") + "\n" + (j.get("error") or "")
         for key, pat in (("top_confirm", r"TOP确认主题:\s*\[([^\]]*)\]"),
@@ -108,8 +126,8 @@ def main() -> int:
         m = json.load(open(os.path.join(a.trees, "rev_map.json"), encoding="utf-8"))
         rev = ((m.get(a.day) or {}).get("rev")) or ""
         mapped = os.path.join(a.trees, "rev_" + rev) if rev else ""
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("bt_pick_code_rev.py:112", _e_sil2)
 
     cands = []
     if mapped and os.path.isdir(mapped):

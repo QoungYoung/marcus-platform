@@ -22,6 +22,23 @@ import shutil
 import sys
 import traceback
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(REPO, "data", "_bt_leader", "mainline_cache")
 # 参与指纹的源文件 ✓（这些一变 ⇒ 主线的算法/口径就变了 ⇒ 缓存必须失效 ✓）
@@ -65,8 +82,8 @@ def main() -> int:
         if not os.path.exists(lp):
             try:
                 os.symlink(os.path.join(REPO, "data", f), lp)
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("bt_gen_mainline.py:69", _e_sil1)
     os.chdir(REPO)
     sys.path.insert(0, os.path.join(REPO, "jobs"))
     sys.path.insert(0, os.path.join(REPO, "backend"))
@@ -83,8 +100,8 @@ def main() -> int:
         brp.install_relay_shim(a.bars_db, day)
         try:
             brp.install_gzcloud_shim(a.bars_db, day)
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("bt_gen_mainline.py:87", _e_sil2)
         from app.services import wolf_mainline_select as WMS
         r = WMS.run(save=True, date8=day)
         if not r or not r.get("ok"):

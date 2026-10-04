@@ -7,6 +7,23 @@ Step2: lhb_foreign_sell 方向感知(海外链/红利核心 map) + p2_gate_log �
 """
 import os, json, datetime as _dt
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 def _path(name):
     try:
         from app.config import get_settings
@@ -41,8 +58,8 @@ def _direction_map():
             fp=os.path.join(str(get_settings().workspace_path), sub, "p2_macro_direction_map.json")
             if os.path.exists(fp):
                 return json.load(open(fp, encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("p2_entry_gate.py:45", _e_sil1)
     return _load("p2_macro_direction_map.json") or {}
 
 def _candidate_dirs(ts_code):
@@ -73,8 +90,8 @@ def _log(symbol, ts_code, out):
         p=_path("p2_gate_log.jsonl")
         with open(p,"a",encoding="utf-8") as f:
             f.write(json.dumps(row,ensure_ascii=False)+"\n")
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("p2_entry_gate.py:77", _e_sil2)
 
 def p2_gate_check(symbol=None, ts_code=None):
     """返回 {hard_block, multiplier, reasons, wave, macro, systemic}。"""

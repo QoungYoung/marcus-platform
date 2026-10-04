@@ -39,6 +39,23 @@ import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import bt_env  # noqa: E402
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 sys.path[:0] = ["/app", "/app/backend", "/app/jobs"]
 
 SELL_VWAP_EXPR = {"op": "==", "field": "quote.vwap_break", "value": True}
@@ -160,7 +177,8 @@ def load_legs(root: str, day: str):
                 continue
             try:
                 j = json.loads(ln)
-            except Exception:
+            except Exception as _e_sil1:
+                _silent_alert("bt_account.py:164", _e_sil1)
                 continue
             sym = str(j.get("symbol") or "").upper()
             if not sym:
@@ -280,7 +298,8 @@ def main() -> int:
             for _sym in list(acct.pos.keys()):
                 try:
                     _bars = bt_tape.load_m5(pack, _sym)
-                except Exception:
+                except Exception as _e_sil2:
+                    _silent_alert("bt_account.py:284", _e_sil2)
                     continue
                 _all = sorted([b for _dd in sorted(_bars) for b in _bars[_dd]], key=lambda b: b["time"])
                 _day_bars = [b for b in _all if str(b["time"])[:10].replace("-", "") == day]

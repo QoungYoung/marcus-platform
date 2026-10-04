@@ -10,6 +10,23 @@
 """
 import os, json
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 _DATA = os.environ.get('DATA_DIR', '/app/data')
 THR_ALLOW = 0.72
 THR_BOUNDARY = 0.65
@@ -30,7 +47,8 @@ def _daily(code):
         p = os.path.join(_DATA, root, '%s.json' % code)
         try:
             d = json.load(open(p, encoding='utf-8'))
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("wolf_judge.py:34", _e_sil1)
             continue
         for k, v in d.items():
             bs = sorted(v, key=lambda x: str(x.get('time') or x.get('trade_time')))
@@ -93,8 +111,8 @@ def _wave_raw(date):
             lv = ws.get('level')
             if lv:
                 return lv
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("wolf_judge.py:97", _e_sil2)
     return 't_only'
 
 

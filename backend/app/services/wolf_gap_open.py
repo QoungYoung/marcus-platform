@@ -47,6 +47,23 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 IDX = "sh000001"
 IDX_TS = "000001.SH"
 
@@ -234,8 +251,8 @@ def index_levels(force: bool = False) -> Dict[str, Any]:
         res = [x.get("price") for x in (lv.get("resistance") or [])]
         if sup and res:
             return {"support": float(sup[0]), "resistance": float(res[0]), "src": "support_resistance"}
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wolf_gap_open.py:238", _e_sil1)
     daily = index_daily()
     if not daily:
         return {"support": None, "resistance": None, "src": "none"}
@@ -301,8 +318,8 @@ def evaluate(now: Optional[float] = None, force: bool = False,
     try:
         from app.services.wolf_index_breadth import cross_recent, whipsaw_recent
         cross, whipsaw = cross_recent(now), whipsaw_recent(now)
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("wolf_gap_open.py:305", _e_sil2)
     if gap is None:
         note.append("开盘/缺口数据不可用")
     if vol is None:

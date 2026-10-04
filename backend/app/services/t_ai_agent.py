@@ -15,6 +15,23 @@ from typing import Any, Dict, List, Optional
 
 from app.services import t_db
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # 决策动作白名单（AI 输出解析后的结构化动作）
 AI_ACTIONS = ("exec", "wait", "abandon", "update_condition")
 
@@ -280,8 +297,8 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                             _leg.setdefault("publisher", "rule")
                             _leg.setdefault("session_id", session_id)
                             upsert_condition(_leg)
-                except Exception:
-                    pass
+                except Exception as _e_sil1:
+                    _silent_alert("t_ai_agent.py:284", _e_sil1)
             except Exception as e:
                 result["condition_error"] = str(e)[:200]
         else:
@@ -582,7 +599,8 @@ def _assess_outcome(symbol: str, side: str, fill_price: float,
                    float(b.get("close") or 0) >= fill_price * 0.985:
                     start_idx = i
                     break
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as _e_sil2:
+                _silent_alert("t_ai_agent.py:586", _e_sil2)
                 continue
         if start_idx is None:
             # 未精确匹配：取当日最后一根之前（保守：从倒数 lookahead 根起算不可靠 → 返回 None）

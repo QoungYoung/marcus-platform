@@ -20,6 +20,23 @@ import json
 import os
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 sys.path[:0] = ["/app", "/app/backend"]
 
 
@@ -69,8 +86,8 @@ def install_leg_fields(TB, pack: str, symbol: str, dip_tol: float):
         try:
             snap["quote"]["dip_prev_low"] = _dip_prev_low(bars_up_to, trade_day)
             snap["index"]["m5_dump"] = _dump_at(str(bars_up_to[-1]["time"]))
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("bt_intraday.py:73", _e_sil1)
         return snap
 
     TB.build_snapshot_at = _build
@@ -103,8 +120,8 @@ def conds_from_legs(symbol: str, legs_path: str):
             if ln:
                 try:
                     legs.append(json.loads(ln))
-                except Exception:
-                    pass
+                except Exception as _e_sil2:
+                    _silent_alert("bt_intraday.py:107", _e_sil2)
     if not any(l.get("symbol") == symbol for l in legs):
         return []
     import importlib

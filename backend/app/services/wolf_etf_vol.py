@@ -17,6 +17,23 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 VOL_THR = 3.0     # 他的话："3个点以上"
 VOL_WIN = 20      # 20 日窗口（我们的代理：他说"波动"，没给窗口）
 
@@ -46,7 +63,8 @@ def amplitude_pct(bars: List[Dict[str, Any]], n: int = VOL_WIN) -> Optional[floa
             if c <= 0:
                 continue
             vals.append((float(b["high"]) - float(b["low"])) / c * 100.0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as _e_sil1:
+            _silent_alert("wolf_etf_vol.py:50", _e_sil1)
             continue
     return sum(vals) / len(vals) if vals else None
 
@@ -81,7 +99,8 @@ def etf_daily(symbol: str, days: int = 40) -> List[Dict[str, Any]]:
             try:
                 out.append({"trade_date": str(it[idx["trade_date"]]), "high": float(it[idx["high"]]),
                             "low": float(it[idx["low"]]), "close": float(it[idx["close"]])})
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError) as _e_sil2:
+                _silent_alert("wolf_etf_vol.py:85", _e_sil2)
                 continue
         return sorted(out, key=lambda x: x["trade_date"])
     except Exception as e:

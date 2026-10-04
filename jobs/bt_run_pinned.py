@@ -27,6 +27,23 @@ import time
 
 sys.path[:0] = []
 import bt_env  # noqa: E402
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 bt_env.add_paths()
 
 
@@ -75,8 +92,8 @@ class GzcloudShim:
                         days = [d for d in self.trade_days() if s2 <= d <= e]
                         print("[pinned] trade_cal 窗口为空(%s→%s) → 回测兜底改用 %s→%s（%d 个交易日）"
                               % (s, e, s2, e, len(days)), file=sys.stderr)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil1:
+                        _silent_alert("bt_run_pinned.py:79", _e_sil1)
                 return f or ["cal_date", "is_open"], [[d, 1] for d in days]
             if api in ("daily", "daily_basic"):
                 cols = [x for x in f if x in ("ts_code", "trade_date", "open", "high", "low", "close",
@@ -153,8 +170,8 @@ def pin_clock(as_of: str):
     try:
         import numpy  # noqa: F401  预热（顺序不能动）
         import pandas  # noqa: F401
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("bt_run_pinned.py:157", _e_sil2)
     d = _dt.datetime(int(as_of[:4]), int(as_of[4:6]), int(as_of[6:8]), 9, 15, 0)
     offset = d.timestamp() - time.time()
     _real_date, _real_dt = _dt.date, _dt.datetime

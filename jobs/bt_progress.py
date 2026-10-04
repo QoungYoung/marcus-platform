@@ -23,6 +23,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bt_env  # noqa: E402
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 def trade_days_total(root: str, bars_db: str, log: str = ""):
     """目标天数：优先取日志首行"`N 个交易日`"（跑批窗口），否则用库里的交易日总数。"""
     if log and os.path.exists(log):
@@ -70,8 +87,8 @@ def legs_detail(root: str, day: str):
             try:
                 j = json.loads(ln)
                 syms.append(j.get("symbol"))
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("bt_progress.py:74", _e_sil1)
     return syms
 
 
@@ -134,8 +151,8 @@ def main() -> int:
             per = span / (n_done - 1)
             left = per * max(total - n_done, 0)
             print("   速度 ≈ %.0f 秒/天（按沙箱目录时间估算）   预计剩余 ≈ %.1f 小时" % (per, left / 3600))
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("bt_progress.py:138", _e_sil2)
 
     run, tun = procs()
     cur = ""

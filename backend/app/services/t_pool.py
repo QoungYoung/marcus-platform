@@ -21,6 +21,23 @@ from app.database import SessionLocal
 from app.services import t_db
 from app.services.t_data_sources import fetch_minute_bars, fetch_tencent_quote
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ACCOUNT_T = "t"
 
 # 参数初值（P4 敏感度扫描后固化）
@@ -334,8 +351,8 @@ def build_t_conditions(cost: float, amp_med: Optional[float] = None,
             _line = _EL.entry_line_target(symbol, _ref, day=_day)
             if _line and _line > 0:
                 target = round(_line, 2)
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("t_pool.py:338", _e_sil1)
     stop = round(cost * (1 - stop_pct / 100), 2)
     base = {
         "vol_ratio_thresh": 1.5,
@@ -546,8 +563,8 @@ def position_gate_reason() -> str:
         for r in rs if isinstance(rs, list) else []:
             if "诱多" in str(r) or "整数" in str(r):
                 return "位置门：%s" % str(r)[:80]
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("t_pool.py:550", _e_sil2)
     return ""
 
 

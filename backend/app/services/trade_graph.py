@@ -31,6 +31,23 @@ from typing import TypedDict, Optional, Dict, Any
 from langgraph.graph import StateGraph, END
 from trade_direction import SELL_WORDS, is_buy, is_sell  # noqa: E402 统一方向词表
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 # 安全门临时旁路开关 —— 设为 True 跳过回撤/熔断检查
@@ -939,7 +956,8 @@ def _read_risk_context() -> str:
                     d = _rg.decide({"symbol": s})
                     if d["decision"] != "allow":
                         lines.append("%s → %s（%s）" % (s, d["decision"], d["reason"][:80]))
-                except Exception:
+                except Exception as _e_sil1:
+                    _silent_alert("trade_graph.py:943", _e_sil1)
                     continue
             if lines:
                 block += "- 当前持仓风险：" + "；".join(lines) + NL
@@ -1007,7 +1025,8 @@ def _read_rotation_gate_context() -> str:
                 from main_line import rotation_gate as _rg
                 rg = _rg
                 break
-            except Exception:
+            except Exception as _e_sil2:
+                _silent_alert("trade_graph.py:1011", _e_sil2)
                 continue
         if rg is None:
             return "## 轮动门控（rotation_gate）" + NL + "- rotation_gate 模块未加载，跳过。" + NL + NL

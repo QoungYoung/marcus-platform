@@ -33,6 +33,23 @@ import logging
 from datetime import datetime, date, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 ENABLED = os.getenv("T_VREB_ENABLED", "0") == "1"
@@ -112,8 +129,8 @@ def fetch_top_gain(top_n: int = SCAN_MAX_DAILY) -> list:
                 df = pro.daily(trade_date=ds)
                 if df is not None and len(df) > 0:
                     dates.append(ds)
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("t_vrebounce.py:116", _e_sil1)
             d -= timedelta(days=1)
             guard += 1
         if len(dates) < 2:
@@ -265,8 +282,8 @@ def _latest_trade_date(pro) -> Optional[str]:
             df = pro.daily(trade_date=ds)
             if df is not None and len(df) > 0:
                 return ds
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("t_vrebounce.py:269", _e_sil2)
     return days[-1] if days else None
 
 

@@ -17,6 +17,23 @@ from typing import Any, Dict, Optional
 
 from app.services.t_data_sources import fetch_tencent_quote
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 US_SYMBOLS = {
     "nasdaq": "usIXIC",
     "sp500": "usINX",
@@ -76,7 +93,8 @@ def _fetch_us10y_fred(timeout: int = 12) -> Optional[Dict[str, Any]]:
                 try:
                     v = float(parts[1]) if parts[1] not in ("", ".") else None
                     rows.append((parts[0], v))
-                except ValueError:
+                except ValueError as _e_sil1:
+                    _silent_alert("t_external_risk.py:80", _e_sil1)
                     continue
         if len(rows) < 2:
             return None
@@ -196,8 +214,8 @@ def compute_market_judgment(as_of: Optional[str] = None) -> Dict[str, Any]:
                     regime = "趋势向下"
                 else:
                     regime = "震荡"
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("t_external_risk.py:200", _e_sil2)
 
     ext = external_risk_snapshot()
     us_risk = bool(ext.get("us_risk"))
