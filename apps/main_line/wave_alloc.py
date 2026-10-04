@@ -13,6 +13,23 @@
 """
 import json, os
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "/app/data")
 
 # wave 档 → (top1权重, top2, top3, invest比例)
@@ -46,8 +63,8 @@ def read_wave_alloc(state_file: str = "wave_state.json") -> dict:
         rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
         for k, v in rank[:3]:
             top3.append(k); scores.append(round(float(v.get("score", 0)), 3))
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wave_alloc.py:50", _e_sil1)
     return {"operation": op, "invest": invest, "w": [w1, w2, w3],
             "top3": top3, "scores": scores}
 

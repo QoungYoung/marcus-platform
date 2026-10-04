@@ -17,6 +17,23 @@ from __future__ import annotations
 import os
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 JOBS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(JOBS)
 DATA = os.environ.get("DATA_DIR") or os.path.join(REPO, "data")
@@ -37,8 +54,8 @@ def _pick_logs():
         try:
             if _g.glob(os.path.join(c, "scheduler_*.jsonl")):
                 return c
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("bt_env.py:41", _e_sil1)
     return _first_dir(os.path.join(REPO, "logs"), os.path.join(DATA, "_bt_full", "_sched"))
 
 

@@ -28,6 +28,23 @@ import re
 import sys
 from pathlib import Path
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ROOT = os.environ.get("AUDIT_ROOT", "/app")
 EXPR = re.compile(r"Path\(__file__\)(?:\.(?:resolve|absolute)\(\))?(\.parents\[\d+\]|(?:\.parent)+)((?:\s*/\s*[\"'][^\"']+[\"'])*)")
 SUFFIX = re.compile(r"[\"']([^\"']+)[\"']")
@@ -77,7 +94,8 @@ def scan(root):
             p = Path(dirpath) / f
             try:
                 src = p.read_text(encoding="utf-8", errors="replace")
-            except Exception:
+            except Exception as _e_sil1:
+                _silent_alert("audit_container_paths.py:81", _e_sil1)
                 continue
             for m in EXPR.finditer(src):
                 n = parents_count(m.group(1))

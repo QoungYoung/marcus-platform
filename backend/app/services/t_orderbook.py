@@ -19,6 +19,23 @@ import urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 QT_URL = "http://qt.gtimg.cn/q="
 TABLE = "t_orderbook_snapshots"
 
@@ -90,8 +107,8 @@ def fetch_depth(symbols: List[str], timeout: int = 8) -> Dict[str, Dict[str, Any
         cur = None
         try:
             cur = float(f[3]) or None
-        except (IndexError, ValueError):
-            pass
+        except (IndexError, ValueError) as _e_sil1:
+            _silent_alert("t_orderbook.py:94", _e_sil1)
         out[sym.upper()] = {"symbol": sym.upper(), "name": f[1] if len(f) > 1 else "",
                             "current": cur, "depth": d, "metrics": depth_metrics(d, cur)}
     return out

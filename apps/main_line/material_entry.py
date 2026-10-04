@@ -8,6 +8,23 @@
 """
 import os, json, datetime
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "data")
 MATERIAL_KWS = ["半导体材料", "光刻胶", "光刻机(胶)", "碳基材料"]
 
@@ -81,8 +98,8 @@ def main():
     print(json.dumps(out, ensure_ascii=False, indent=1))
     try:
         json.dump(out, open(os.path.join(DATA, "material_entry_status.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("material_entry.py:85", _e_sil1)
     return 0
 
 if __name__ == "__main__":

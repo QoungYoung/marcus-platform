@@ -41,8 +41,8 @@ def _silent_alert(where, exc=None):
         try:
             print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
                   str(exc)[:110] if exc is not None else ""), flush=True)
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("backtest_engine.py:44", _e_sil1)
 
 
 logger = logging.getLogger(__name__)

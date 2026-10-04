@@ -34,6 +34,23 @@ from app.services.golden_pit_config import (
 from app.services import golden_pit_sector_service as _sector
 from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 PIT_WINDOW_DAYS = 15
 # 板块选筹回退宽基状态: fund_code -> 最近一次回退日期（用于『信号恢复切回』标注）
 _sector_fallback_state: Dict[str, str] = {}
@@ -1028,8 +1045,8 @@ def _get_holdings_detail() -> List[Dict[str, Any]]:
                 try:
                     entry_dt = datetime.strptime(first_entry, "%Y-%m-%d")
                     days_held = (datetime.now() - entry_dt).days
-                except ValueError:
-                    pass
+                except ValueError as _e_sil1:
+                    _silent_alert("golden_pit_dca_service.py:1032", _e_sil1)
 
             holdings.append({
                 "index_name": index_name or sym,

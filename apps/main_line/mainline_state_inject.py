@@ -5,6 +5,23 @@ Pi(auto_trade 会话)每次读 main_line_state.json 即自动看到: confirmed_c
 只增 'mainline_gate' 字段, 不覆盖原 catalyst/main_line 逻辑。用法: python3 mainline_state_inject.py <date8>
 """
 import sys, os, json
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, '/app')
 DATA = os.environ.get('DATA_DIR', '/app/data')
 
@@ -24,8 +41,8 @@ def _inject(ms, date8):
         cl = json.load(open(os.path.join(DATA, 'concept_long.json'), encoding='utf-8'))
         v = next(iter(cl.get('series', {}).values()))
         dref = v.get('dates')
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("mainline_state_inject.py:28", _e_sil1)
     def dt(idx):
         try:
             if dref and isinstance(idx, int) and 0 <= idx < len(dref): return dref[idx]

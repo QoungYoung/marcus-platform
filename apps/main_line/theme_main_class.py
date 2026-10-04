@@ -20,6 +20,23 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 RULE_ON = str(os.getenv("WOLF_MAIN_CLASS_RULE",
                         "1" if os.getenv("BT_ASOF_FETCH") else "0")).strip().lower() in ("1", "true", "yes", "on")
 
@@ -149,8 +166,8 @@ def decide(symbol: str, theme: str, concepts: Optional[Sequence[str]] = None) ->
                     _STATS["score_in"] = int(_STATS.get("score_in", 0)) + 1
                     return "allow", ("主类=%s 不属主题[%s]，但**数据分通过** ✓：%s（阈值 %.2f）"
                                      % ("/".join(sorted(set(mc))[:4]), theme, _why, _tls.min_score()))
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("theme_main_class.py:153", _e_sil1)
         _STATS["out"] += 1
         return "reject", "主类=%s 不属主题[%s]" % ("/".join(sorted(set(mc))[:4]), theme)
     except Exception as e:

@@ -4,6 +4,23 @@
 因子: mf5(主力5日)/rel(r20)/mf_accel; 权重网格 step0.1 归一。产物 trend_heat_params.json
 """
 import sys, os, json, time
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/apps/main_line')
 DATA = os.environ.get('DATA_DIR', '/app/data')
@@ -47,8 +64,8 @@ def main():
             df = pro.moneyflow_dc(trade_date=d, fields='ts_code,net_amount')
             if df is not None and not df.empty:
                 mf[d] = {str(rr['ts_code']): float(rr['net_amount']) for _, rr in df.iterrows()}
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("trend_heat_calibrate.py:51", _e_sil1)
         time.sleep(0.08)
     print('moneyflow got', len(mf), flush=True)
     row_fac = {}

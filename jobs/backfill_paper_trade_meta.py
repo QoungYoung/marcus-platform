@@ -30,6 +30,23 @@ from pathlib import Path
 import psycopg2
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 def _find_jsonl() -> Path:
     """定位 data/marcus_trades.jsonl（容器内 /app/data，本机从脚本位置向上找仓库根）。"""
     env_dir = os.getenv("MARCUS_DATA_DIR")
@@ -78,7 +95,8 @@ def main() -> int:
             continue
         try:
             rec = json.loads(line)
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("backfill_paper_trade_meta.py:82", _e_sil1)
             continue
         if rec.get("status") != "executed" or rec.get("type") not in ("buy", "sell"):
             continue

@@ -17,6 +17,23 @@ import json
 import os
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 sys.path[:0] = ["/app", "/app/backend"]
 
 
@@ -56,8 +73,8 @@ def main() -> int:
         td = {r[0] for r in c.execute("SELECT DISTINCT trade_date FROM bars WHERE trade_date BETWEEN ? AND ?",
                                       (a.d_from, a.d_to))}
         c.close()
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("bt_compare_legs.py:60", _e_sil1)
     days = sorted(d for d in set(list(mine) + list(theirs)) if not td or d in td)
     rows, tot_hit, tot_prod, tot_mine = [], 0, 0, 0
     print("%-10s %-38s %-38s %s" % ("日期", "生产实盘腿", "回测腿", "重合"))

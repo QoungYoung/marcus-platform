@@ -26,6 +26,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bt_env  # noqa: E402
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 def ts_code(sym: str) -> str:
     s = str(sym).upper()
     return "%s.%s" % (s[2:], s[:2]) if len(s) == 8 and s[:2] in ("SH", "SZ", "BJ") else s
@@ -49,7 +66,8 @@ def load_legs(root: str):
                     continue
                 try:
                     j = json.loads(ln)
-                except Exception:
+                except Exception as _e_sil1:
+                    _silent_alert("bt_report.py:53", _e_sil1)
                     continue
                 sym = str(j.get("symbol") or "").upper()
                 if sym:

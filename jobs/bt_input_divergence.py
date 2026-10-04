@@ -21,6 +21,23 @@ import re
 import sys
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 def prod_universe_from_log(sched_dir: str, day8: str):
     """从 scheduler 日志里取生产 08:05 `rotation_universe_refresh` 的产物（main / subs / 池 JSON）。"""
     p = os.path.join(sched_dir, "scheduler_%s-%s-%s.jsonl" % (day8[:4], day8[4:6], day8[6:]))
@@ -33,7 +50,8 @@ def prod_universe_from_log(sched_dir: str, day8: str):
             continue
         try:
             j = json.loads(ln)
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("bt_input_divergence.py:37", _e_sil1)
             continue
         if j.get("task_id") == "rotation_universe_refresh" and "derive: WROTE" in (j.get("output") or ""):
             out = j

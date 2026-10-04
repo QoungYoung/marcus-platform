@@ -11,6 +11,23 @@ import json
 import os
 from datetime import datetime
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 def _path():
     try:
         from app.config import get_settings
@@ -72,7 +89,8 @@ def read_recent(n=20):
                     continue
                 try:
                     out.append(json.loads(line))
-                except Exception:
+                except Exception as _e_sil1:
+                    _silent_alert("buy_point_log.py:76", _e_sil1)
                     continue
         return out[-n:]
     except Exception:

@@ -8,6 +8,23 @@
 用法(执行层): chain_qualified(chain_name, upto_date) / ts_qualified(ts_code, upto_date) / themes_of_ts(ts)
 """
 import os, json
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 DATA = os.environ.get('DATA_DIR', '/app/data')
 HIST_FILE = os.path.join(DATA, 'mainline_confirm_history.json')   # 历史文件，保留供归档；已无生产者/消费者（gate 删除）
 LOOKBACK_DAYS = 40          # 主升确认资格回看窗(交易日)
@@ -87,8 +104,8 @@ def mainline_top_themes(n=3, upto=None):
                     ths.append(_t2)
             if ths:
                 return ths[:n], (_d or upto)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("mainline_confirm_state.py:91", _e_sil1)
     return None      # 2026-09-13：gate 回退路径已删除（mainline_gate 模块与产物均已废弃）
 
 

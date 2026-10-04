@@ -23,6 +23,23 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -126,8 +143,8 @@ def checkin() -> str:
         raw = ""
         try:
             raw = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("arkvol_checkin.py:130", _e_sil1)
         status = exc.code
         # “今日已签到”属于正常/良性情况，不当作失败（避免每天误报 QQ 失败通知）
         # 服务端以 \uXXXX 转义返回 JSON，需先解码 msg 字段再判断

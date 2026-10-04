@@ -12,6 +12,23 @@ step_refill：254 后 3 个交易日内再次出现放宽量比(≤1.2)的 254 �
 """
 import os, sys, json, asyncio, datetime
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 def _root():
     _d = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return _d
@@ -43,8 +60,8 @@ def save(name, obj):
         os.makedirs(DATA, exist_ok=True)
         with open(os.path.join(DATA, name), "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, indent=1)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wolf_253_build.py:47", _e_sil1)
 
 def run_async(coro):
     loop = asyncio.new_event_loop()

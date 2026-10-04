@@ -44,6 +44,23 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 STATE_FILE = "wolf_review_score.json"
 
 # 原表 15 项（逐字，来自截图转录）
@@ -200,7 +217,8 @@ def _market_flow(date8: Optional[str] = None, days: int = 3) -> Optional[Dict[st
             d = (end - _dt.timedelta(days=back)).strftime("%Y%m%d")
             try:
                 df = pro.moneyflow_mkt_dc(trade_date=d)
-            except Exception:
+            except Exception as _e_sil1:
+                _silent_alert("wolf_review_score.py:204", _e_sil1)
                 continue
             if df is None or len(df) == 0:
                 continue

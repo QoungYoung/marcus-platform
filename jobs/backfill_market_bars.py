@@ -7,6 +7,23 @@
 import os
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 for _p in ("/app", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
     if _p and _p not in sys.path:
         sys.path.insert(0, _p)
@@ -27,8 +44,8 @@ def main():
                     start = v
                 else:
                     end = v
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("backfill_market_bars.py:31", _e_sil1)
     sleep_sec = 0.4
     if "--sleep" in argv:
         try:

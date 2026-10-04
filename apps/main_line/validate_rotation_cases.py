@@ -13,6 +13,23 @@ DATA = os.environ.get("DATA_DIR", "data")
 HIST = os.path.join(DATA, "concept_hist.json")
 import pandas as pd
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # ── 22 case (与 docs/p2-rotation-cases.md 对齐) ─────────────────────────────
 # expect_op_family: build=可主升内轮动 / tside=防御性切低合法 / no=禁止轮动防守 / na=个股纪律不限
 # targets: [(概念关键词, 期望位置)] — 用关键词在 concept_hist 名称里找(取首个>=80日且有数据的)
@@ -181,8 +198,8 @@ def run_wave():
             try:
                 json.dump({k: res.get(k) for k in ("date","level","sub_level","operation","gate","confidence","reasons")},
                           open(cache_p, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("validate_rotation_cases.py:185", _e_sil1)
             print(date, json.dumps(rec, ensure_ascii=False)[:250], file=sys.stderr)
         except Exception as e:
             rec["err"] = str(e)[:160]

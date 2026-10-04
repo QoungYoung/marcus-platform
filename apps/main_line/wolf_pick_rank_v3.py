@@ -38,6 +38,23 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # **默认 = 已验收配置**（2026-09-15 第一版离线验收，见 docs/wolf-pick-rank-v3-eval.md）：
 #   域 = 候选池 ∩ LOW/MID（**去掉 r20≥0 与 rs≥0 两个负贡献闸**）
 #   排序 = LOW 优先；并列用「低位横盘多时」(flat_low_days) 次键
@@ -261,8 +278,8 @@ def theme_r5_quantile(theme: str, as_of: Optional[str] = None) -> Optional[float
             try:
                 with open(cache, "w", encoding="utf-8") as f:
                     _json.dump(data, f, ensure_ascii=False)
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("wolf_pick_rank_v3.py:265", _e_sil1)
         return data.get(theme)
     except Exception as e:
         print("[rank_v3] theme_r5_quantile 失败 %s: %s" % (theme, str(e)[:80]))

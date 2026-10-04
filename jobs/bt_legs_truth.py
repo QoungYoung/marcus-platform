@@ -40,6 +40,23 @@ import os
 import re
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 LEG_TASKS = ("tranche_ladder_report", "rotation_switch_arm")
 
 # 不带前缀的六位代码 → 市场前缀
@@ -147,7 +164,8 @@ def load_sched(sched_dir: str, d_from=None, d_to=None):
                     continue
                 try:
                     j = json.loads(line)
-                except Exception:
+                except Exception as _e_sil1:
+                    _silent_alert("bt_legs_truth.py:151", _e_sil1)
                     continue
                 tid = j.get("task_id")
                 if tid not in LEG_TASKS or j.get("status") != "success":

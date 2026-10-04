@@ -18,6 +18,23 @@ import os
 import sys
 import time
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 for _p in ("/app", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
     if _p and _p not in sys.path:
         sys.path.insert(0, _p)
@@ -149,8 +166,8 @@ def main():
             print("[pm] %d/%d %s 失败 %s: %s" % (i, len(todo), d8, type(e).__name__, str(e)[:70]), flush=True)
             try:
                 db.rollback()
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("backfill_market_bars_promax.py:153", _e_sil1)
         time.sleep(max(0.0, sleep_sec))
     print("[pm] 汇总: 写入 %d 行，失败 %d 天 %s" % (tot, len(errs), errs[:3]), flush=True)
     print("[pm] 覆盖度:", coverage(), flush=True)

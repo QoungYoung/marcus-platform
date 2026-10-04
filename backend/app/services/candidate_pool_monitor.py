@@ -24,6 +24,23 @@ from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 # 适配本地/Docker: 探测包含 core/utils/trade_day_utils.py 的项目根目录
@@ -415,8 +432,8 @@ class CandidatePoolMonitor:
                               grade=getattr(result, "final_grade", ""),
                               tier_cap=getattr(result, "three_tier_cap_pct", None),
                               reason="候选池自动建仓")
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("candidate_pool_monitor.py:419", _e_sil1)
 
             from app.services.candidate_pool import get_candidate_pool
             pool = get_candidate_pool()

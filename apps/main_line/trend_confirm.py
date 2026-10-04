@@ -8,6 +8,23 @@ Wolf 判据规则化: 上升中继结构 = 低点抬高 + 2浪回调不破前低
 用法: python3 trend_confirm.py [--params /app/data/trend_confirm_params.json] [--json out.json]
 """
 import sys, os, json
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/apps/main_line')
 DATA = os.environ.get('DATA_DIR', '/app/data')
@@ -219,8 +236,8 @@ def main():
         try:
             _gp = json.load(open(os.path.join(DATA, 'trend_gate_params.json'), encoding='utf-8'))
             _gate_cfg = (_gp.get('chosen') or {}).get('mode'), (_gp.get('chosen') or {}).get('t')
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("trend_confirm.py:223", _e_sil1)
         gate = None
         if _gate_cfg and _gate_cfg[0] and total > 0:
             m, t = _gate_cfg

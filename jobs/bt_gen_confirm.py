@@ -16,6 +16,23 @@ import os
 import sys
 import traceback
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -55,8 +72,8 @@ def main() -> int:
         brp.install_relay_shim(a.bars_db, cut)
         try:
             brp.install_gzcloud_shim(a.bars_db, cut)
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("bt_gen_confirm.py:59", _e_sil1)
         import stock_confirm_judge as SCJ
         SCJ.DATA = day_dir                     # ← 写到**本臂沙箱这一天** ✓
         SCJ.DB = os.path.join(day_dir, "stock_pool.db")

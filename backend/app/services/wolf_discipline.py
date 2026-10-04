@@ -7,6 +7,23 @@
 from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import os, json
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 _CFG_CACHE = {"at": 0.0, "cfg": None, "src": ""}
 _CFG_TTL = float(os.getenv("WOLF_DISCIPLINE_CFG_TTL", "60"))   # 秒；配置查询频繁(每轮调用), 不能每次打 DB
 # DB 熔断：连续失败后在窗口内不再尝试（本地无 PG / 生产 DB 抖动时，绝不能把监控线程拖住）
@@ -357,7 +374,8 @@ def _read_json_first(name):
             if os.path.exists(p):
                 with open(p, encoding="utf-8") as f:
                     return json.load(f) or {}
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("wolf_discipline.py:361", _e_sil1)
             continue
     return None
 
