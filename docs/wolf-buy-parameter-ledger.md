@@ -27672,3 +27672,37 @@ python -c "import json,glob;fs=sorted(glob.glob('data/_bt_t35d/_summary/prod_202
 - 首日（0105）仍在处理中（11 分钟 ✓，尚无 summary ✓）
 - ⚠️ 看门狗进程**不要用 `pgrep -f` 去杀** ✗（会匹配到自己的命令行 ⇒ 我已因此误杀自己 shell 两次 ✗）
   正确做法：读 `/tmp/wd35d.lock/pid` ✓ 或 `.dsh-tmp/wolfbt/t35d_watchdog.pid` ✓
+
+---
+
+## §9.581 **回测监控台已启动**（2026-10-04 22:5x ✓）
+
+### ① 访问方式 ✓
+
+```
+http://127.0.0.1:8799/
+```
+- 服务 ✓：`jobs/bt_dashboard.py`（**只读** ✓）
+- 启动命令 ✓：
+  ```bash
+  DATABASE_URL='postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading' \
+  .venv/bin/python jobs/bt_dashboard.py --port 8799 --root data/_bt_t35d --account drabt35d
+  ```
+- ⚠️ **必须**把 `DATABASE_URL` 指向**回测库 5433** ✓（否则会读**生产库** ✗）
+- 启动日志 ✓：`.dsh-tmp/wolfbt/logs/dashboard_t35d.log` ✓
+- 实测 ✓：`[bt_dashboard] 只读服务已启动: http://127.0.0.1:8799/ (account=drabt35d, root=data/_bt_t35d)` ✓
+  ⇒ `/api/snapshot` 返回「**已在跟随 pid=5829（_bt_t35d）**」✓（**自动跟随新臂** ✓）
+
+### ② 臂的健康状态（此刻 ✓）
+
+| 项 ✓ | 状态 ✓ |
+|---|---|
+| 臂进程 | pid **5829** ✓（`bt_days.py --start 20260105 --end 20260430 --root data/_bt_t35d` ✓）|
+| 当前阶段 | **建 pin 种子**（子进程 `bt_run_pinned.py --as-of 20251231` ✓）⇒ **慢但正常** ✓ |
+| 已完成天数 | **0** ✓（77 天待跑 ✓）|
+| 看门狗 | 已**成功重启 1 次** ✓（22:43:15「进程已退出 ⇒ 从 20260105 续跑」✓ —— **首次启动的进程随 shell 退出而死 ✗，被看门狗救回 ✓**）|
+
+### ③ 已知小瑕疵（无害 ✓）
+
+- 看板 `days_total` 显示 **170** ✗（实际 77 ✓）⇒ 统计口径不同 ✓，不影响使用 ✓
+- 臂的 stdout **暂未写入** `size_run_t35d.log` ✓（仍在 pin 阶段；进入正式日后会写 ✓）
