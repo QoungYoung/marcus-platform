@@ -166,7 +166,15 @@ def stage(closes: Sequence[float], vols: Sequence[float], p: Optional[Dict[str, 
     out["signals"]["breakout_over_pct"] = round((c[anchor] / max(c[anchor - N:anchor]) - 1) * 100, 3)
     # ---- T2: 突破后站稳 ----
     aged = (n - 1) - anchor
-    if aged > stand_days:
+    # ★ 回踩模式（账本 §9.579 ✓）：乖离门拦住后要挂"回踩腿" ⇒ 突破后允许**更长的回踩窗口** ✓
+    #   否则 T2 的 stand_days(=3) 会让"突破后第 7 日才回踩"的票扫不到 ✗（301511 就是这种 ✓）
+    _pb_days = stand_days
+    try:
+        if str(os.getenv("WOLF_TREND_PULLBACK", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            _pb_days = max(stand_days, int(os.getenv("WOLF_TREND_PULLBACK_DAYS", "10") or 10))
+    except Exception as _e_pd:
+        print("[trend_channel] 读 WOLF_TREND_PULLBACK_DAYS 失败: %s" % str(_e_pd)[:60], file=sys.stderr)
+    if aged > _pb_days:
         out["desc"] = "T2未满足: 突破已过 %d 日(>%d)" % (aged, stand_days)
         return out
     tail = c[anchor:]
@@ -391,6 +399,24 @@ def concept_pick(domain: Sequence[Dict[str, Any]], topk: int = 0, rank_fn=None) 
     return out
 
 
+def expr_pullback(ma20: float, lo: float = 0.95, hi: float = 1.05) -> Dict[str, Any]:
+    """**回踩买腿**表达式（账本 §9.577 的 B 形态 ✓）：
+
+    放量突破后**乖离过大**时，不追高 ✗ ⇒ 改等它**回踩到 MA20 附近**再买 ✓。
+    条件：`MA20×lo <= 现价 <= MA20×hi`（默认 ±5% ✓）∧ 均价 > 0 ✓
+    语料：2025-04-15 条件6「想追进去的…**在下午 2.00-2.30** 回补」✓；
+          2025-03-19「带量突破均线 **缩量回踩均线** 继续带量上涨」✓（他称顶级教科书级别 ✓）
+    量化依据（§9.577 ✓）：乖离 >10% 时改"等回踩到 ≤5%"⇒ 均值 +0.23% ⇒ **+0.40%** ✓、
+          中位 −0.05% ⇒ **+0.00%** ✓、左尾 −8.53% ⇒ **−8.23%** ✓（**三项同时改善** ✓）
+    """
+    m = round(float(ma20), 3)
+    return {"and": [
+        {"op": ">=", "field": "quote.current", "value": round(m * float(lo), 3)},
+        {"op": "<=", "field": "quote.current", "value": round(m * float(hi), 3)},
+        {"op": ">", "field": "quote.average", "value": 0},
+    ]}
+
+
 def expr(level: float, chase_max: Optional[float] = None,
          ma20: Optional[float] = None) -> Dict[str, Any]:
     """买腿表达式：现价 ≥ 突破位 且 不追高（≤ 突破位×(1+chase_max)）。
@@ -497,6 +523,79 @@ def _daily(symbol: str, as_of: str, bars_db: Optional[str] = None) -> Tuple[List
         except Exception:
             rows = []
     return _unpack(rows)
+
+
+def scan_pullback(day: str, symbols: Optional[Sequence[str]] = None,
+                  themes: Optional[Sequence[str]] = None, limit: int = 200,
+                  bars_db: Optional[str] = None) -> List[Dict[str, Any]]:
+    """**回踩候选**（账本 §9.579 ✓）：过去 N 日内有**放量突破** ∧ 现价回到 **MA20±5%** ✓
+
+    ⚠️ 为什么不能靠 `scan()` 放宽：`scan()` 的 T2 要求"**突破后站稳**"（≥突破日收盘×0.97 ✓）
+    ⇒ ⇒ **回踩本身就违反 T2** ✗（301511 0309 收 33.50 < 37.77×0.97=36.64 ✗）⇒ 必须**独立扫描** ✓
+    语料：2025-03-19「带量突破均线 **缩量回踩均线** 继续带量上涨」✓；2025-04-15 条件6「2.00-2.30 回补」✓
+    """
+    if not enabled():
+        return []
+    try:
+        _nd = int(os.getenv("WOLF_TREND_PULLBACK_DAYS", "10") or 10)
+    except Exception as _e_nd:
+        print("[trend_channel] 读 WOLF_TREND_PULLBACK_DAYS 失败: %s" % str(_e_nd)[:50], file=sys.stderr)
+        _nd = 10
+    p = params()
+    syms: List[str] = []
+    if symbols:
+        syms = [str(x) for x in symbols]
+    elif themes:
+        try:
+            import psycopg2
+            import os as _os2
+            dsn = _os2.environ.get("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+            cn = psycopg2.connect(dsn, connect_timeout=10)
+            cn.set_session(readonly=True, autocommit=True)
+            cur = cn.cursor()
+            seen = set()
+            for th in themes:
+                for cn_ in (THEME_CONCEPTS.get(th) or []) if isinstance(globals().get("THEME_CONCEPTS"), dict) else []:
+                    cur.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name=%s", (cn_,))
+                    for (ts_,) in cur.fetchall():
+                        if ts_ not in seen:
+                            seen.add(ts_); syms.append(ts_)
+            cn.close()
+        except Exception as _e_pb:
+            print("[trend_channel] 回踩扫描取池失败: %s" % str(_e_pb)[:80], file=sys.stderr)
+            return []
+    out: List[Dict[str, Any]] = []
+    for sym in syms[:int(limit)]:
+        try:
+            c, v, _a, _m = _daily(sym, day, bars_db)
+            n = len(c)
+            if n < 30 or not v:
+                continue
+            ma20 = _ma(c, 20)
+            if not ma20 or ma20 <= 0:
+                continue
+            cur_px = c[-1]
+            if not (ma20 * 0.95 <= cur_px <= ma20 * 1.05):      # ① 回踩到位 ✓
+                continue
+            broke = False
+            for k in range(1, _nd + 1):
+                i = n - 1 - k
+                if i - 20 < 0:
+                    break
+                if c[i] >= max(c[i - 20:i]) * float(p["mult"]):
+                    z = _z20(v, i)
+                    if z is not None and z >= float(p["vol_z"]):
+                        broke = True; break
+            if not broke:                                       # ② 过去 N 日内有放量突破 ✓
+                continue
+            out.append({"symbol": sym, "stage": "回踩", "level": round(cur_px, 3),
+                        "ma20": round(ma20, 3),
+                        "desc": "回踩买(MA20 %.2f, 现价 %.2f, 距MA20 %+.1f%%)"
+                                % (ma20, cur_px, (cur_px / ma20 - 1) * 100)})
+        except Exception as _e_sb:
+            print("[trend_channel] 回踩扫描 %s 失败: %s" % (sym, str(_e_sb)[:60]), file=sys.stderr)
+            continue
+    return out
 
 
 def scan(day: str, symbols: Optional[Sequence[str]] = None, themes: Optional[Sequence[str]] = None,

@@ -856,3 +856,7 @@ export WOLF_BUY_254_MALINE='1'    # §9.518：保留他的线位挂单（线组�
 export WOLF_BUY_254_PREVLOW='0'   # §9.518：关掉触前低回退（§9.495 负期望）
 
 export WOLF_BREAK_VWAP_HALF='0'   # 9.559 not in use: mean always 0.78-2.96 pts below hold   # 账本 §9.557：破分时黄线⇒减半（回测开；库内默认 0 ⇒ 生产零影响）
+
+# 账本 §9.577/§9.579：乖离门 + 回踩买腿（回测开 ✓；库内默认 0 ⇒ 生产零影响）
+export WOLF_TREND_BIAS_MAX='10'    # 乖离 MA20 >10% ⇒ 不发追高腿
+export WOLF_TREND_PULLBACK='1'     # 改挂回踩腿（等回踩到 MA20±5% ✓）

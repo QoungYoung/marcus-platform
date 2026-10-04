@@ -1323,6 +1323,17 @@ def main():
                 if _bmax > 0 and _m20 and float(_m20) > 0:
                     _bias = (float(b["level"]) / float(_m20) - 1.0) * 100.0
                     if _bias > _bmax:
+                        # ★ 回踩买腿（账本 §9.577 B ✓，开关默认关 ✓）：不追高 ⇒ **等回踩到 MA20±5%** 再买 ✓
+                        if str(os.getenv("WOLF_TREND_PULLBACK", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                            _ridP = arm(conn, cur, b["symbol"], "trend_break_buy", "buy",
+                                        _TC2.expr_pullback(float(_m20)), today)
+                            armed.append({"type": "trend_pullback", "symbol": b["symbol"], "id": _ridP,
+                                          "ma20": round(float(_m20), 3),
+                                          "desc": ("回踩买(乖离%.1f%%>%.0f%% ⇒ 等回踩MA20±5%%) " % (_bias, _bmax))
+                                                  + str(b.get("desc") or "")[:60]})
+                            print("[rotation_switch_arm] 乖离门 ⇒ 改挂回踩腿 %s：乖离 %.1f%% > %.0f%%（等回踩到 MA20±5%% ✓）"
+                                  % (b.get("symbol"), _bias, _bmax), file=sys.stderr)
+                            continue
                         print("[rotation_switch_arm] 乖离门拦住 %s：乖离 %.1f%% > %.0f%%（等回踩再买 ✓）"
                               % (b.get("symbol"), _bias, _bmax), file=sys.stderr)
                         continue
