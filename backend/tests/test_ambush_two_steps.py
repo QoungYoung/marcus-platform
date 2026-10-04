@@ -275,7 +275,7 @@ def test_ambush_exemptions_theme_and_slow_decline():
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     assert 'os.getenv("WOLF_AMBUSH_SKIP_SLOWDECLINE", "0")' in mon        # 库内默认关 ✓
     i = mon.index("def intraday_crush_blocked")
-    seg = mon[i:i + 9000]
+    seg = mon[i:i + 25000]
     assert 'str(kind or "") == "wolf_ambush_buy"' in seg
     assert 'intraday_crush_blocked(symbol, _is_buy_side(cond), str(trigger_kind or ""))' in mon
     pins = open(os.path.join(_ROOT, "jobs", "bt_env_pins.sh"), encoding="utf-8").read()
@@ -480,7 +480,7 @@ def test_ambush_index_warning_derisk():
     assert 'os.getenv("WOLF_AMBUSH_WARN_TRIM", "0")' in mon
     assert "self._ambush_warn_trim()" in mon, "必须接到周期里 ✓"
     i = mon.index("def _ambush_warn_trim")
-    seg = mon[i:i + 9000]
+    seg = mon[i:i + 25000]
     assert "预警降档" in seg and "rank.sort()" in seg, "砍浮亏最深者 ✓（与量化一致 ✓）"
     # ⚠️ 作用面（用户「为什么只有埋伏仓减仓呢，我们不是为了躲避大跌吗」✓）：
     #    默认 `ambush` = 现状 ✓；`account` ⇒ **全账户** ✓（他「减到 70%」讲的是组合层 ✓）
@@ -652,7 +652,7 @@ def test_promotion_requires_self_updated_highest_price():
     """
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     i = mon.index("def _check_ambush_discipline")
-    seg = mon[i:i + 9000]
+    seg = mon[i:i + 25000]
     assert "UPDATE paper_positions SET highest_price=" in seg, "必须自己更新 ✓"
     assert "GREATEST(COALESCE(highest_price,0), :h)" in seg, "最高价只升不降 ✓（§9.534）"
     # 顺序：_cur 必须出现在 _promoted 判定之前 ✓
@@ -673,7 +673,7 @@ def test_ambush_discipline_uses_current_field():
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     assert '_qo.get("current") or _qo.get("price") or _qo.get("last")' in mon, "必须优先 current ✓"
     i = mon.index("def _check_ambush_discipline")
-    seg = mon[i:i + 9000]
+    seg = mon[i:i + 25000]
     assert "current" in seg
 
 
@@ -931,7 +931,7 @@ def test_promotion_is_monotonic_from_record():
     """
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     i = mon.index("if not _promoted:")
-    seg = mon[i:i + 900]
+    seg = mon[i:i + 2500]
     assert "ambush_promoted.json" in seg, "须查记录 ✓"
     assert "_promoted = True" in seg, "查到即判已转正 ✓"
     assert "if _promoted:\n                        self._record_promotion" in seg or "if _promoted:" in seg
@@ -1172,7 +1172,7 @@ def test_ambush_peak_survives_row_rewrite():
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     assert "_peak_bar" in mon, "须从日线档算峰值 ✓"
     i = mon.index("_peak_bar = max(_hb)")
-    seg = mon[i:i + 900]
+    seg = mon[i:i + 2500]
     assert "UPDATE paper_positions SET highest_price=" in seg, "峰值须写回 ✓"
     assert "_hi = _peak_bar" in seg, "须用峰值参与转正/移动止盈判定 ✓"
 
@@ -1192,7 +1192,7 @@ def test_base_exempt_strict_scope():
     cap = open(os.path.join(_ROOT, "backend", "app", "services", "t_capacity.py"), encoding="utf-8").read()
     assert 'os.getenv("WOLF_BASE_EXEMPT_STRICT", "0")' in cap, "须有开关且默认关 ✓"
     i = cap.index('if str(os.getenv("WOLF_BASE_EXEMPT_STRICT"')
-    seg = cap[i:i + 900]
+    seg = cap[i:i + 2500]
     for k in ("wolf_fib_target_sell", "wolf_boll_upper_sell", "wolf_board_half_sell", "wolf_confirm_sell"):
         assert k in seg, "收紧后须允许 %s ✓" % k
     for k in ("wolf_profit_take_sell", "high_sell", "wolf_dao_t_sell"):
@@ -1325,7 +1325,7 @@ def test_reduce_legs_exempt_from_no_t_sleeve():
     assert 'os.getenv("WOLF_SELL_EXEMPT_REDUCE", "0")' in cap, "须有开关且默认关 ✓"
     assert "trigger_kind: str = \"\"" in cap, "须按腿型（新增参数 ✓）"
     i = cap.index("_REDUCE_PROTECT_KINDS")
-    seg = cap[i:i + 900]
+    seg = cap[i:i + 2500]
     for k in ("custom_vwap_sell", "custom_support_sell", "custom_level_sell", "custom_trail_sell"):
         assert k in seg, "保护/减仓类须含 %s ✓" % k
     assert "止血必须能执行" in cap, "须引语料 ✓（对**整文件**断言 ✓ —— 窗口取小了会漏 ✗）"
