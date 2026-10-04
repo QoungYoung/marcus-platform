@@ -27,6 +27,23 @@ from app.services.state_paths import state_path as __state_path  # 跨日状态�
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 def score_mode() -> str:
     """主线打分口径（`WOLF_MAINLINE_SCORE`，**库内默认 r5 = 现状零变化** ✓）。
 
@@ -207,7 +224,8 @@ def score_day(days: Sequence[str], i: int, px: Dict[str, Dict[str, float]],
     for t, v in (share5 or {}).items():
         try:
             fv = float(v)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as _e_sil1:
+            _silent_alert("wolf_mainline_select.py:211", _e_sil1)
             continue
         if fv == fv:
             src5[t] = fv
@@ -316,15 +334,15 @@ def wave_structures(d8: str, themes: Sequence[str]) -> Dict[str, Optional[str]]:
                              encoding="utf-8"))
         v = next(iter(cl.get("series", {}).values()))
         dref = v.get("dates")
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("wolf_mainline_select.py:320", _e_sil2)
 
     def dt(idx):
         try:
             if dref and isinstance(idx, int) and 0 <= idx < len(dref):
                 return dref[idx]
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("wolf_mainline_select.py:327", _e_sil3)
         return idx
 
     for t in (tr.get("themes") or []):
@@ -441,8 +459,8 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                 p = __state_path("wolf_mainline_select.json")
                 with open(p, "w", encoding="utf-8") as f:
                     _json.dump(res, f, ensure_ascii=False, indent=1)
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                _silent_alert("wolf_mainline_select.py:445", _e_sil4)
             try:
                 db.execute(text("""
                     INSERT INTO daily_artifacts (trade_date, artifact_key, payload, src_path)

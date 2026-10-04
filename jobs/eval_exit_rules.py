@@ -39,6 +39,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "jobs"))
 import eval_leg_metrics as M  # noqa: E402
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 CACHE = M.CACHE
 OUT = os.path.join(CACHE, "eval_exit_rules.json")
 
@@ -64,7 +81,8 @@ class BarsV(M.Bars):
                     continue
                 try:
                     self._csvv.setdefault(row[0], {})[row[1]] = float(row[8] or 0)
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as _e_sil1:
+                    _silent_alert("eval_exit_rules.py:68", _e_sil1)
                     continue
 
     def vol_of(self, sym, date8):
@@ -83,8 +101,8 @@ class BarsV(M.Bars):
                     if len(r) >= 6 and str(r[0]) == date8:
                         amt = float(r[5] or 0)
                         return amt  # 只有 amount；VWAP 用 amount 与 close 近似时单独处理
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("eval_exit_rules.py:87", _e_sil2)
         return 0.0
 
 
@@ -103,8 +121,8 @@ def _load_etf_bars():
                         "open": float(r[1] or 0), "high": float(r[2] or 0), "low": float(r[3] or 0),
                         "close": float(r[4] or 0), "amount": float(r[5] or 0),
                         "vol": float(r[6]) if len(r) > 6 else 0.0}
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("eval_exit_rules.py:107", _e_sil3)
     return out
 
 
@@ -126,7 +144,8 @@ def _stock_bar_with_vol(sym, date8):
                         _STOCK_V.setdefault(row[0], {})[row[1]] = {
                             "open": float(row[2]), "high": float(row[3]), "low": float(row[4]),
                             "close": float(row[5]), "amount": float(row[9]), "vol": float(row[8] or 0)}
-                    except (ValueError, IndexError):
+                    except (ValueError, IndexError) as _e_sil4:
+                        _silent_alert("eval_exit_rules.py:130", _e_sil4)
                         continue
     return (_STOCK_V.get(M.norm_symbol(sym)) or {}).get(date8)
 
@@ -189,7 +208,8 @@ class M5Bars(object):
                 try:
                     data = json.load(open(p, encoding="utf-8"))
                     break
-                except Exception:
+                except Exception as _e_sil5:
+                    _silent_alert("eval_exit_rules.py:193", _e_sil5)
                     continue
             self._m[key] = data
         return (self._m[key] or {}).get(str(date8)) or []
@@ -205,7 +225,8 @@ def vwap_series(day_bars):
         try:
             ca += float(b.get("amount") or 0)
             cv += float(b.get("vol") or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as _e_sil6:
+            _silent_alert("eval_exit_rules.py:209", _e_sil6)
             continue
         out.append(round(ca / cv, 4) if cv > 0 else None)
     return out

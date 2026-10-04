@@ -17,6 +17,23 @@ from __future__ import annotations
 
 import argparse, json, os, sqlite3, statistics as st, sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MINS = os.path.join(REPO, "data", "_bt_full", "mins")
 BARS = os.path.join(REPO, "data", "_bt_full", "bars.sqlite")
@@ -71,8 +88,8 @@ def report(day: str, sandbox: str) -> list:
                 if ln:
                     try:
                         legs.append(json.loads(ln))
-                    except Exception:
-                        pass
+                    except Exception as _e_sil1:
+                        _silent_alert("leg_miss_report.py:75", _e_sil1)
     idx_hits = _index_dump_hits(day)
     rows = []
     for lg in legs:
@@ -87,7 +104,8 @@ def report(day: str, sandbox: str) -> list:
             continue
         try:
             b = sorted(json.load(open(pf, encoding="utf-8"))["bars"], key=lambda r: str(r[1]))
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("leg_miss_report.py:91", _e_sil2)
             continue
         pl = _prev_low(ts, day)
         vols = [float(x[6]) for x in b]

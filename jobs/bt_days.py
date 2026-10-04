@@ -23,6 +23,23 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import bt_env  # noqa: E402  （容器/本地两种布局都能跑）
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 DATA = os.environ.get("DATA_DIR") or bt_env.DATA
 ROOT = os.path.join(DATA, "_bt_full")
 TASK_TIMELINE = os.path.join(DATA, "_bt_task_timeline.json")
@@ -46,13 +63,14 @@ def _future_union_symbols(root: str, day8: str) -> set:
                     continue
                 try:
                     _o = json.loads(ln)
-                except Exception:
+                except Exception as _e_sil1:
+                    _silent_alert("bt_days.py:50", _e_sil1)
                     continue
                 _sy = _o.get("symbol")
                 if _sy:
                     out.add(_sy)
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("bt_days.py:55", _e_sil2)
     return out
 
 
@@ -337,8 +355,8 @@ def main() -> int:
             src_c = os.path.join(sb, "stock_confirm_result.json")
             if os.path.exists(src_c):
                 shutil.copy2(src_c, os.path.join(sb, "stock_confirm_result_cut.json"))
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("bt_days.py:341", _e_sil3)
         # ② 08:18 路径：用**上一交易日**的确认域（switch_builder 08:18 跑，confirm 08:20 才刷新）
         prev = prev_trade_day(cut, a.bars_db)
         sw_on = task_on(tl, d8, "tranche_ladder_report")
@@ -404,8 +422,8 @@ def main() -> int:
             _src_p = os.path.join(sb, "stock_confirm_result.json")
             if os.path.exists(_src_p):
                 _sh2.copy2(_src_p, os.path.join(sb, "stock_confirm_result_prev0818.json"))
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            _silent_alert("bt_days.py:408", _e_sil4)
         # 08:18 用的是上一交易日确认域 → 跑完必须**还原当天口径**，否则 09:20 路径会看错版本
         try:
             import shutil
@@ -437,8 +455,8 @@ def main() -> int:
                     if _ln:
                         try:
                             _formal_legs.append(json.loads(_ln))
-                        except Exception:
-                            pass
+                        except Exception as _e_sil5:
+                            _silent_alert("bt_days.py:441", _e_sil5)
         if a.formal:
             # ⚠️ 2026-09-16：拉分钟名单必须是**并集**——只拉"当天布腿标的"会漏掉
             # 持仓票的离场腿（`_arm_stock_exit_legs` 布 vwap/support/high_sell）与当日 armed 条件标的
@@ -590,8 +608,8 @@ def main() -> int:
                     if ln:
                         try:
                             legs.append(json.loads(ln))
-                        except Exception:
-                            pass
+                        except Exception as _e_sil6:
+                            _silent_alert("bt_days.py:594", _e_sil6)
         entry["n_legs"] = len(legs)
         entry["legs"] = [l.get("symbol") for l in legs]
         by_day[d8] = entry
@@ -615,8 +633,8 @@ def _script_in_rev(d8: str, rel: str) -> str:
         p = os.path.join(DATA, "_bt_code", "rev_%s" % rev, rel)
         if rev and os.path.exists(p):
             return p
-    except Exception:
-        pass
+    except Exception as _e_sil7:
+        _silent_alert("bt_days.py:619", _e_sil7)
     return os.path.join(bt_env.REPO, rel)
 
 

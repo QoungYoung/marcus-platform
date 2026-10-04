@@ -19,6 +19,23 @@ from sqlalchemy import text
 from app.database import SessionLocal
 from app.services.t_backtest import TBacktestEngine, caliber_notes
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA_ROOT = Path("data/t_backtest")
 
 # 自动选股逐日顺延上限（交易日）：窗口起始段连续无达标标的时，最多向后滚动多少个交易日
@@ -467,8 +484,8 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
         if progress_cb is not None:
             try:
                 progress_cb(i, total_days)
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("t_backtest_runner.py:471", _e_sil1)
         try:
             as_of = (_dt.strptime(d, "%Y%m%d") - _td(days=1)).strftime("%Y-%m-%d")
         except (ValueError, TypeError):
@@ -527,8 +544,8 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                         "error": str(last_err)[:120] if last_err else "",
                     },
                 }])
-            except Exception:
-                pass
+            except Exception as _e_sil2:
+                _silent_alert("t_backtest_runner.py:531", _e_sil2)
         # 行业过滤事件（add-sector-rotation）：被剔除的候选带行业与 5 日涨幅
         if event_cb is not None and _excl_sent < len(_excluded):
             try:
@@ -539,8 +556,8 @@ def auto_select_symbols_rolling(select_source: str, select_limit: int,
                     "trade_day": d,
                     "data": {"count": len(new_excl), "items": new_excl[-20:]},
                 }])
-            except Exception:
-                pass
+            except Exception as _e_sil3:
+                _silent_alert("t_backtest_runner.py:543", _e_sil3)
 
         if syms:
             print(f"[t-backtest] 自动选股({source}) as_of={as_of} 达标 {len(syms)} 只: {syms[:10]}")
@@ -611,8 +628,8 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 # 自动选股阶段：2% → 8%（按扫描的交易日数均分，避免长时间停在 0%）
                 pct = 2 + round(i / max(n, 1) * 6)
                 update_task_status(task_id, "running", progress=min(pct, 8))
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                _silent_alert("t_backtest_runner.py:615", _e_sil4)
         symbols, selected_start, _scan_err = auto_select_symbols_rolling(
             select_source, select_limit, start, end, progress_cb=_sel_progress,
             aggregate=bool(task.get("rolling_build", False)),
@@ -684,8 +701,8 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
             try:
                 pct = 10 + round(idx / max(len(syms), 1) * 30)
                 update_task_status(task_id, "running", progress=pct)
-            except Exception:
-                pass
+            except Exception as _e_sil5:
+                _silent_alert("t_backtest_runner.py:688", _e_sil5)
             r = btd.prefetch_m5(s, days, task_dir, is_index=False)
             gaps.extend(r.get("gaps", []))
             # 标的日线需覆盖建仓规则所需历史（趋势/风险 ≥40 根）：起始日前推 60 天
@@ -848,8 +865,8 @@ def run_task(task_id: int, cancel_event: Optional[Any] = None) -> Dict[str, Any]
                 db.commit()
             finally:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            _silent_alert("t_backtest_runner.py:852", _e_sil6)
         save_equity(task_id, result.get("equity_curve", []))
         portfolio = dict(result.get("portfolio") or {})
         portfolio["build_decisions"] = result.get("build_decisions", [])
