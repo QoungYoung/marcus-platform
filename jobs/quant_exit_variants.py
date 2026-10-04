@@ -50,6 +50,7 @@ def main() -> int:
         prev = px[days[i - 1]]
         rs = [px[day][t] / prev[t] - 1 for lst in memb.values() for t in lst if t in px[day] and t in prev]
         blk_ret[day] = (st.mean(rs) * 100) if rs else 0.0
+    _skip_n = [0]
     ev = []
     for p in glob.glob(os.path.join(ROOT, "data/_bt_full/mins/*_5min_*.json")):
         b = os.path.basename(p)
@@ -90,7 +91,8 @@ def main() -> int:
             r10 = (nxt(10) / prevc - 1) * 100 if nxt(10) else None
             ev.append({"ts": ts, "day": day, "r_now": r_now, "r5": r5, "r10": r10,
                        "weak": blk_ret.get(day, 0.0) <= 0, "loss3": r_now <= -3.0})
-        except Exception:
+        except Exception as _e_q:
+            _skip_n[0] += 1
             continue
     if not ev:
         print("  样本为空 ✗"); return 0

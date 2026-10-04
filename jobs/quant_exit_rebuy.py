@@ -29,6 +29,7 @@ def main() -> int:
         px[day] = {r[0]: float(r[1]) for r in
                    db.execute("SELECT ts_code, close FROM bars WHERE trade_date=?", (day,))}
     days = sorted(px)
+    _skip_n = [0]
     ev = []
     for p in glob.glob(os.path.join(ROOT, "data/_bt_full/mins/*_5min_*.json")):
         b = os.path.basename(p)
@@ -73,7 +74,8 @@ def main() -> int:
                 if rebuy >= hit[1]:
                     rb = None                        # 回补价不低于卖价 ⇒ 不回补 ✓
             ev.append({"sell": sell, "rb": rb, "h5": hold(5), "h10": hold(10)})
-        except Exception:
+        except Exception as _e_q:
+            _skip_n[0] += 1
             continue
     if not ev:
         print("  样本为空 ✗"); return 0

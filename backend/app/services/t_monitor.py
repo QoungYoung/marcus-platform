@@ -3542,7 +3542,8 @@ class TMonitor:
                     continue
                 try:
                     _j = _js.load(open(_f, encoding="utf-8"))
-                except Exception:
+                except Exception as _e_ld:
+                    print("[TMonitor] break_vwap_half 分钟档读取失败 %s: %s" % (sym, str(_e_ld)[:80]), flush=True)
                     continue
                 _bars = sorted((_j.get("bars") or []), key=lambda x: str(x[1]))
                 if len(_bars) < 3:
