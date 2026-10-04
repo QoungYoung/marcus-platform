@@ -69,28 +69,102 @@ def _save(d: dict) -> None:
         print(f"[BanList] 状态写盘失败: {e}")
 
 
-def _trade_days_between(d1: str, d2: str) -> Optional[int]:
+def cal_fix_on() -> bool:
+    """甲（2026-09-22 用户拍板"都做"）：TTL 的日历口径修复开关。
+
+    **库内默认 0 = 旧行为**（生产逐位不变）；回测由 pins 置 1。
+    开 = ① 本地 bars 库精确区间 → ② 窗口日历 → ③ 生产 relay 日历 → ④ 都取不到时按自然日×5/7 保守估。
+    """
+    return str(os.getenv("WOLF_BAN_TTL_CAL_FIX", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _norm8(x: Any) -> str:
+    d = "".join(ch for ch in str(x or "") if ch.isdigit())
+    return d[:8] if len(d) >= 8 else ""
+
+
+def _cal_days_between(d1: str, d2: str) -> Optional[int]:
+    """`d1 → d2` 之间的交易日数（买=含 d2、不含 d1）。多源取数，取不到返回 None。
+
+    ⚠️ 2026-09-22 修 bug（用户问"兆易创新 0409 止跌企稳为什么没买"时查出）：
+      原实现只走 `wolf_weekend_hedge.recent_trade_days()` —— 那个日历的窗口是
+      **今天−10 自然日 ~ 今天+20 自然日**；**登记日一旦滑出窗口**（删票 TTL 是 13 交易日 ≈ 19 自然日，
+      必然会滑出）⇒ 本函数返回 None ⇒ `elapsed_td` **静默退化成自然日**，
+      而自然日跑得比交易日快 ~1.4 倍 ⇒ **禁令提前约 4 个交易日解除**。
+      实测（T5/drabt5，登记 20260323、TTL=13）：0403 算成 11（真实 9）、0407 算成 15（真实 10）
+      ⇒ 603986 本应禁买到 0411，实际 0406/0407 就放开了。
+    现在按优先级取：① 本地 bars 库区间查询（精确、便宜）→ ② 窗口版日历（两个日期都在窗内时）
+    → ③ 生产 relay 的 `resolve_trade_days`。
+    """
+    a, b = _norm8(d1), _norm8(d2)
+    if not a or not b or b < a:
+        return None
+    if a == b:
+        return 0
+    if not cal_fix_on():
+        # ── 旧行为（默认；生产逐位不变）：只走"今天±(10/20)天"那个窗口日历，出窗即 None ──
+        try:
+            from app.services.wolf_weekend_hedge import recent_trade_days
+            cal = [d for d in (recent_trade_days() or []) if d]
+            if cal and a in cal and b in cal:
+                return max(cal.index(b) - cal.index(a), 0)
+        except Exception:
+            pass
+        return None
+    # ① 本地 bars 库（回测 + 有本地库的环境）：一次区间扫描
+    try:
+        import os as _os
+        import sqlite3 as _sq
+        db = _os.getenv("BT_BARS_DB") or _os.path.join("data", "_bt_full", "bars.sqlite")
+        if _os.path.exists(db):
+            con = _sq.connect("file:%s?mode=ro" % db, uri=True)
+            try:
+                row = con.execute("SELECT COUNT(DISTINCT trade_date) FROM bars WHERE trade_date>? AND trade_date<=?",
+                                  (a, b)).fetchone()
+            finally:
+                con.close()
+            if row and row[0] is not None and int(row[0]) > 0:
+                return int(row[0])
+    except Exception:
+        pass
+    # ② 窗口版日历（两个日期都在窗口内才可用）
     try:
         from app.services.wolf_weekend_hedge import recent_trade_days
         cal = [d for d in (recent_trade_days() or []) if d]
-        if not cal or d1 not in cal or d2 not in cal:
-            return None
-        return max(cal.index(d2) - cal.index(d1), 0)
+        if cal and a in cal and b in cal:
+            return max(cal.index(b) - cal.index(a), 0)
     except Exception:
-        return None
+        pass
+    # ③ 生产：中继上的交易日历（可按区间取）
+    try:
+        from app.services.t_backtest_data import resolve_trade_days
+        ds = resolve_trade_days(a, b) or []
+        n = len([d for d in ds if _norm8(d) > a])
+        if n > 0:
+            return n
+    except Exception:
+        pass
+    return None
 
 
 def elapsed_td(since8: str, today8: Optional[str] = None) -> int:
-    """自登记日以来的交易日数（取不到日历 → 回退自然日）。"""
+    """自登记日以来的交易日数。日历取不到 ⇒ **保守按自然日×5/7 估**（绝不提前解除禁令）。"""
     import datetime as _dt
     t8 = today8 or _today8()
-    n = _trade_days_between(since8, t8)
+    n = _cal_days_between(since8, t8)
     if n is not None:
         return n
     try:
-        return max((_dt.datetime.strptime(t8, "%Y%m%d") - _dt.datetime.strptime(since8, "%Y%m%d")).days, 0)
+        cal = max((_dt.datetime.strptime(t8, "%Y%m%d") - _dt.datetime.strptime(_norm8(since8), "%Y%m%d")).days, 0)
     except Exception:
         return 0
+    if cal_fix_on():
+        # 修复后：日历取不到也**绝不提前解除**（交易日 ≤ 自然日×5/7）
+        print("[BanList] 交易日历不可用，按自然日 %d 的 5/7=%d 保守估算（绝不提前解除）"
+              % (cal, int(cal * 5 / 7)), flush=True)
+        return int(cal * 5 / 7)
+    # 旧行为（开关关，生产逐位一致）：直接按自然日 ⇒ 注意这会让禁令提前约 1/3 解除
+    return cal
 
 
 def ban(account: str, symbol: str, reason: str = "", today8: Optional[str] = None) -> Optional[str]:

@@ -154,7 +154,7 @@ def fetch_realtime(code: str) -> Optional[Dict[str, Any]]:
     try:
         from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
         sym = _normalize_symbol(code)
-        q = fetch_tencent_quote([sym])
+        q = fetch_tencent_quote([_normalize_symbol(sym)])
         item = q.get(sym) or {}
         price = float(item.get("current") or 0)
         if price <= 0:

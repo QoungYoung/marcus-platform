@@ -93,6 +93,74 @@ def key_levels() -> List[float]:
 
 # ───────────────────────── 数据层 ─────────────────────────
 
+def local_enabled() -> bool:
+    """**本地自算量能状态**开关（`WOLF_VOLUME_GATE_LOCAL`，库内默认 0 = 生产逐位不变；回测 pins 置 1）。
+
+    背景（账本 §9.27-A2）：回测日目录里 `wolf_volume_gate.json` 是**软链到 repo 的 9 月文件**
+    （`as_of=20260915` + 9/02–9/15 序列），被 `wolf_stale_guard` 判为未来产物 ⇒ 返回 {} ⇒
+    **他的第一判据"量能（地量/放量）"在整个回测里缺席**。
+    而两市成交额**我们自己就能算**：`Σ bars.amount / 1e5`（千元→亿元），
+    与生产 `market_amount()` 的序列**逐位一致**（20260902–0915 五天误差 0.0，见账本 §9.27-A2）。
+    """
+    return str(os.getenv("WOLF_VOLUME_GATE_LOCAL", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _bars_db() -> str:
+    p = os.getenv("BT_BARS_DB", "")
+    if p:
+        return p
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(os.path.dirname(root), "data", "_bt_full", "bars.sqlite")
+
+
+def market_amount_local(days: Sequence[str], bars_db: str = "") -> Dict[str, float]:
+    """本地日线库版 `market_amount`：{YYYYMMDD: 全市场成交额（亿元）}= Σamount/AMOUNT_KDIV。
+
+    **只取 ≤ 钉住当日的日期**（回放里 `datetime.now()` 已被钉到 as-of 当天）⇒ 无前视。
+    """
+    out: Dict[str, float] = {}
+    try:
+        import sqlite3
+        con = sqlite3.connect("file:%s?mode=ro" % (bars_db or _bars_db()), uri=True)
+        con.execute("PRAGMA temp_store=MEMORY")
+        try:
+            for d in days:
+                d8 = str(d).replace("-", "")[:8]
+                if not d8.isdigit():
+                    continue
+                r = con.execute("SELECT SUM(amount) FROM bars WHERE trade_date=?", (d8,)).fetchone()
+                if r and r[0]:
+                    out[d8] = round(float(r[0]) / AMOUNT_KDIV, 1)
+        finally:
+            con.close()
+    except Exception as e:
+        print(f"[volume_gate] market_amount_local 失败: {type(e).__name__}: {str(e)[:70]}", flush=True)
+    return out
+
+
+def index_closes_local(n: int = 10, csv_path: str = "") -> List[float]:
+    """上证最近 n 个交易日收盘（本地 CSV `指数数据/index_daily/000001.SH.csv`，只取 ≤ 当日）。"""
+    # bars 默认在 <repo>/data/_bt_full/bars.sqlite ⇒ data 根 = 上两级
+    _data = os.path.dirname(os.path.dirname(_bars_db()))
+    p = csv_path or os.path.join(_data, "指数数据", "index_daily", "000001.SH.csv")
+    rows: List[tuple] = []
+    try:
+        import csv as _csv
+        import datetime as _dt
+        today = _dt.date.today().strftime("%Y%m%d")
+        with open(p, encoding="utf-8") as f:
+            for r in _csv.DictReader(f):
+                d = str(r.get("trade_date") or "").replace("-", "")[:8]
+                c = r.get("close")
+                if d.isdigit() and c and d <= today:
+                    rows.append((d, float(c)))
+    except Exception as e:
+        print(f"[volume_gate] index_closes_local 失败: {type(e).__name__}: {str(e)[:70]}", flush=True)
+        return []
+    rows.sort()
+    return [c for _d, c in rows[-int(n):]]
+
+
 def market_amount(days: Sequence[str]) -> Dict[str, float]:
     """{YYYYMMDD: 全市场成交额（亿元）}；`pro.daily(trade_date=)` 单日全市场，1 请求/日。"""
     out: Dict[str, float] = {}
@@ -318,6 +386,29 @@ def run(days: int = 10, save: bool = True, series: Optional[Dict[str, float]] = 
     if series is None:
         if not enabled():
             return {"ok": False, "reason": "disabled"}
+        if local_enabled():
+            # 本地自算（不过网络）：只取 ≤ 钉住当日的交易日
+            try:
+                import datetime as _dt
+                from app.services.t_backtest_data import resolve_trade_days
+                end = _dt.date.today()
+                start = end - _dt.timedelta(days=int(days * 2.2) + 10)
+                ds = resolve_trade_days(start.strftime("%Y%m%d"), end.strftime("%Y%m%d")) or []
+                ds = sorted([str(d)[:8] for d in ds if str(d)[:8].isdigit()])[-int(days):]
+            except Exception:
+                ds = []
+            if not ds:
+                return {"ok": False, "reason": "no_trade_days"}
+            series = market_amount_local(ds)
+            if path is None:
+                path = index_closes_local(10)
+                close = path[-1] if path and close is None else close
+            if not series:
+                return {"ok": False, "reason": "local_series_empty"}
+            res = evaluate(series, close if close is not None else index_close(), path=path)
+            res["close"] = close
+            res["_src"] = "local_bars"
+            return res
         try:
             import datetime as _dt
             from app.services.t_backtest_data import resolve_trade_days
@@ -355,11 +446,32 @@ def run(days: int = 10, save: bool = True, series: Optional[Dict[str, float]] = 
 
 
 def load() -> Dict[str, Any]:
+    """读量能状态。2026-09-19：经内容级陈旧护栏 —— 沙箱里这份固定名 JSON 会带着 repo 的 9 月桩
+    （实测 as_of=20260915 + 9/02–9/15 成交额序列），文件名没有日期、WOLF_ASOF_FILE_FILTER 拦不住，
+    于是 1 月的回放拿 9 月的"地量"判当天。护栏判为陈旧/未来 ⇒ 返回 {}（调用方按无数据处理，fail-open）。
+    """
+    st: Dict[str, Any] = {}
+    try:
+        from app.services import wolf_stale_guard as _sg
+        st = _sg.load_json(_path(), tag="wolf_volume_gate.json") or {}
+    except Exception:
+        st = {}
+    if st:
+        return st
     try:
         with open(_path(), encoding="utf-8") as f:
-            return json.load(f) or {}
+            st = json.load(f) or {}
     except Exception:
-        return {}
+        st = {}
+    if st:
+        return st
+    if local_enabled():
+        try:
+            n = int(float(os.getenv("WOLF_VG_DAYS", "10")))
+        except Exception:
+            n = 10
+        return run(days=n, save=False)
+    return {}
 
 
 def directive() -> str:

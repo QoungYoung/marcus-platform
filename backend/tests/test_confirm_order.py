@@ -72,12 +72,28 @@ class ConfirmOrderTest(unittest.TestCase):
         self.assertIn("MAX_FETCH", src)
         # 关排序时仍走旧 SQL（LIMIT MAX_STOCKS）
         self.assertIn("(cname, MAX_STOCKS))", src, "关排序时仍走旧的 LIMIT MAX_STOCKS 分支")
-        self.assertIn("(cname, MAX_FETCH))", src, "开排序时走全量取数分支")
+        # B5 取数宽度（2026-10-03 用户「B5」）：开排序时走 fetch_limit() ∧ 带 ORDER BY（截断可复现）
+        self.assertIn("fetch_limit()", src, "开排序时必须走 B5 的宽取数上限")
+        self.assertIn('" ORDER BY ts_code"', src, "取数必须带 ORDER BY（否则截断任意且不可复现）")
+        self.assertIn('os.getenv("WOLF_CONFIRM_FETCH_WIDE", "1")', src, "B5 开关须存在（默认开）")
+        self.assertIn('os.getenv("WOLF_CONFIRM_FETCH_ORDERED", "1")', src, "B5 顺序开关须存在（默认开）")
         pins = open(os.path.join(ROOT, "jobs", "bt_env_pins.sh"), encoding="utf-8").read()
         self.assertIn("STOCK_CONFIRM_ORDER", pins)
+        self.assertIn("WOLF_CONFIRM_FETCH_WIDE", pins, "pins 里须有显式取值（防漂）")
         # 账本 §9.404：新增「人气/弹性优先」口径（pop_lead ✓）
         self.assertIn('if mode == "pop_lead"', src, "pop_lead 分支须存在")
         self.assertIn("vol=vol", src, "调用处须把 vol 传进排序")
+
+    def test_b5_fetch_width_switch(self):
+        """B5：开 ⇒ 上限 = max(STOCK_CONFIRM_FETCH, WOLF_CONFIRM_FETCH_MIN)；关 ⇒ 旧上限（逐字不变）。"""
+        self.assertEqual(sc.fetch_limit(), max(sc.MAX_FETCH, sc.FETCH_MIN))
+        self.assertGreaterEqual(sc.FETCH_MIN, 516, "下限要覆盖实测最大受判概念（半导体概念 516 只）")
+        _old = sc.FETCH_WIDE
+        try:
+            sc.FETCH_WIDE = False
+            self.assertEqual(sc.fetch_limit(), sc.MAX_FETCH, "关掉 B5 ⇒ 回到旧上限（生产零影响）")
+        finally:
+            sc.FETCH_WIDE = _old
 
     def test_offline_validation_numbers_are_cited(self):
         """把 §9.53 的验证结论写进代码注释/文档，避免"经验证的口径"被后人改掉。"""

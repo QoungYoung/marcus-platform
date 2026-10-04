@@ -103,3 +103,49 @@ if __name__ == "__main__":
     print(json.dumps({"lines": list(LINES), "shadow": shadow_enabled(), "entry": entry_enabled(),
                       "demo_nearest": nearest_line_below(demo)},
                      ensure_ascii=False, indent=1))
+
+def _bars_db() -> str:
+    """与闸门用的**分钟档同一复权空间**的日线库：分钟目录含 `_adj` ⇒ bars_adj.sqlite，否则 bars.sqlite。"""
+    md = str(os.getenv("WOLF_MINS_DIR") or "")
+    adj = ("_adj" in md) or (not md and str(os.getenv("WOLF_ADJ_PRICE", "0")) in ("1", "true", "yes", "on"))
+    name = "bars_adj.sqlite" if adj else "bars.sqlite"
+    for cand in (os.getenv("BT_BARS_ADJ_DB" if adj else "BT_BARS_DB") or "",
+                 os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                              "data", "_bt_full", name)):
+        if cand and os.path.exists(cand):
+            return cand
+    return ""
+
+
+def daily_closes(symbol: str, day: str, n: int = 150) -> List[float]:
+    """≤day 的最近 n 个日线收盘（升序）；库缺/查不到 ⇒ []（fail-open，调用方据此不介入）。"""
+    db = _bars_db()
+    if not db:
+        return []
+    s = str(symbol or "").upper()
+    code = (s[2:] + "." + s[:2]) if (s[:2] in ("SH", "SZ") and len(s) >= 8) else s
+    try:
+        import sqlite3
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        con.execute("PRAGMA temp_store=MEMORY")
+        rows = con.execute("SELECT close FROM bars WHERE ts_code=? AND trade_date<=? AND close>0 "
+                           "ORDER BY trade_date DESC LIMIT ?", (code, str(day).replace("-", "")[:8], int(n))).fetchall()
+        con.close()
+        return [float(r[0]) for r in reversed(rows)]
+    except Exception as e:
+        print("[ma_line] daily_closes 失败: %s: %s" % (type(e).__name__, str(e)[:60]), flush=True)
+        return []
+
+
+def line_values(symbol: str, day: str, px: Optional[float] = None) -> List[float]:
+    """13/34/60/144 四条均线的**当前值**（供闸门"到线"判据用）；数据不足 ⇒ 只返回能算的那几条。"""
+    vals = daily_closes(symbol, day)
+    if not vals:
+        return []
+    cur = float(px) if px else float(vals[-1])
+    _all = list(vals) + [cur]          # 用"现价"作为最后一个收盘的代理
+    out = []
+    for k in LINES:
+        if len(_all) >= k:
+            out.append(sum(_all[-k:]) / k)
+    return out

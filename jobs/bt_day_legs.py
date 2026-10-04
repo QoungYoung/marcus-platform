@@ -333,6 +333,25 @@ def main() -> int:
             pool = ok_pool
         except Exception as e:
             print("[legs] THEME_BUYABLE_ERR(放行) %s" % str(e)[:110], flush=True)
+    # 2026-09-19 提速：09:20 路径同样逐票串行问 dsh ⇒ 先并发预热当日确认池（与 08:18 共用落盘缓存）
+    try:
+        import leg_gate as _lgp
+        import json as _jsonp
+        with open(os.path.join(sb, "stock_confirm_result.json"), encoding="utf-8") as _fp:
+            _scp = _jsonp.load(_fp) or {}
+        _pv = []
+        for _cn, _v in _scp.items():
+            _th = (_v or {}).get("theme") or _cn
+            if _th not in confirmed_today_set:
+                continue
+            for _s in ((_v or {}).get("stocks") or [])[:40]:
+                _pv.append((str(_s.get("code")), _th))
+        _np = _lgp.prefetch(_pv) if _pv else 0
+        if _np:
+            print("[legs] 主营判定并发预热 %d 条" % _np, flush=True)
+    except Exception:
+        pass
+
     if qualify and pool:
         pool_legs = int(os.getenv("ROT_POOL_LEGS", "4"))
         got = 0
@@ -346,10 +365,32 @@ def main() -> int:
             for cand in _pick:
                 if got >= pool_legs:
                     break
+                # 腿批准闸（与 08:18 共用；此处用**当日**确认域）
+                try:
+                    import leg_gate as _lg2
+                    _ok4, _why4 = _lg2.approve(cand["symbol"], th, stage="确认")
+                except Exception as _e4:
+                    _ok4, _why4 = True, "ERR " + str(_e4)[:40]
+                if not _ok4:
+                    print("LEG_REJECT %s 确认: %s" % (cand["symbol"], _why4), flush=True)
+                    continue
                 legs_out.append({"symbol": cand["symbol"], "chain": th, "side": "mainline_confirmed", "theme": th,
                                  "src": cand.get("pick_source") or "v2", "tier": cand.get("tier")})
                 got += 1
             print("[legs] pathB %-12s → %s" % (th, [c["symbol"] for c in _pick]), flush=True)
+
+    # 弱市不进新票（指数破位 ⇒ 不新开；2026-09-19；开关 WOLF_INDEX_NEW_BUY）
+    try:
+        import leg_gate as _lg3
+        _ib, _iw = _lg3.index_new_buy_blocked()
+        if _ib:
+            _n_before = len(legs_out)
+            for _l in legs_out:
+                print("LEG_REJECT %s %s: %s" % (_l.get("symbol"), _l.get("stage") or "新票", _iw), flush=True)
+            legs_out = []
+            print("[legs] 指数破位 ⇒ 新票腿 %d → 0（持仓做T照旧）" % _n_before, flush=True)
+    except Exception as _e6:
+        print("[legs] 指数闸不可用(放行) %s" % str(_e6)[:80], flush=True)
 
     # 板块前过滤（与生产同一函数）
     _nb = len(legs_out)
@@ -367,10 +408,65 @@ def main() -> int:
     except Exception as e:
         print("[legs] entry_filters ERR %s" % str(e)[:110], flush=True)
 
+    # ⑱ 趋势/突破通道（2026-09-21 用户拍板「先加到回测里」）——与 08:18 / 09:20 两条低吸路径并列的
+    #   第三条买点路径。它**必须绕过 stage 白名单**：stock_confirm_result 的 stage 只有「低位埋伏」
+    #   一条链，放量上涨的票会被判「下跌中」（2026 年 1 月兆易/长电/通富全月如此 ⇒ 一手未买，已复现）。
+    #   语料：2026-02-12「放量突破 一口吃完上面挂单」／2026-01-12「站稳三天后量能的暴涨」。
+    #   开关 WOLF_TREND_CHANNEL（库内默认 0 ⇒ 生产零影响；回测 pins 置 1）。
+    try:
+        _pT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _pT not in sys.path:
+            sys.path.insert(0, _pT)
+        import trend_channel as _TC
+        if _TC.enabled():
+            # ⚠️ as-of 必须用 **cut**（= 前一交易日），不能用 a.date：否则会读到当日日线（未来函数）。
+            # ⚠️ bars_db 必须传入：回测里 rotation_switch_arm._gz 被替换成"本地 bars.sqlite + cut"，
+            #    而本模块的兜底路径要能直读同一个库（2026-09-21 首次接入时因缺这个参数，候选恒为 0）。
+            _trows = _TC.scan_mainline(cut, limit=int(os.getenv("WOLF_TREND_SCAN_LIMIT", "400")),
+                                       bars_db=a.bars_db)
+            _have = {l["symbol"] for l in legs_out}
+            _tadd = 0
+            for _r in _trows:
+                _s = _r.get("symbol")
+                if not _s or _s in held or _s in _have:
+                    continue
+                if not arm.board_ok(_s):      # 账户权限（300/688/北交所）在入腿前就过滤，避免幻影腿
+                    continue
+                _have.add(_s)
+                # ⚠️ side 必须写 "buy"：bt_prod_run.py 只布 `side in (None,"buy")` 的腿（`if side != "buy": continue`），
+                #    写 "trend_break" 会被静默跳过（2026-09-21 实测：0105 布腿 0 条）。
+                #    注：09:20 路径原有的腿写 side="mainline" ⇒ **在本 runner 里从来没被布过**（同一天 A′ 的 35 条腿全部来自
+                #    08:18 的 legs_switch.jsonl）——这是另一件事，不在本次改动范围内，已记台账。
+                legs_out.append({"symbol": _s, "chain": "趋势突破", "side": "buy", "type": "trend_break",
+                                 "theme": "trend", "src": "trend", "level": _r.get("level"),
+                                 "desc": _r.get("desc")})
+                _tadd += 1
+            _TC.shadow_record(a.date, _trows, extra={"added": _tadd, "path": "bt_day_legs"})
+            print("[legs] TREND_CHANNEL 候选=%d 加入=%d %s" % (len(_trows), _tadd,
+                  [r.get("symbol") for r in _trows]), flush=True)
+    except Exception as _et:
+        print("[legs] trend_channel ERR %s" % str(_et)[:110], flush=True)
+
     out = a.out or os.path.join(sb, "legs.jsonl")
     with open(out, "w", encoding="utf-8") as f:
         for l in legs_out:
             f.write(json.dumps(dict(l, date=a.date, cut=cut), ensure_ascii=False) + "\n")
+    # ── 留痕（2026-09-18 用户"加上然后验证"）：此前 _gate_blocked 只进内存、从不落盘，
+    #   导致 09:20 路径"静默 0 条腿"无法归因。这里落盘 + 打印各关计数。
+    try:
+        import json as _j, os as _o
+        _p = _o.path.join(os.path.dirname(_o.path.abspath(__file__)), "..", "data")  # 占位，下面用 day_dir
+        _dd = _o.path.dirname(_o.path.abspath(globals().get("OUT") or __file__))
+        _bp = _o.path.join(_dd, "gate_blocked.jsonl")
+        with open(_bp, "a", encoding="utf-8") as _bf:
+            for _r in (_gate_blocked or []):
+                _bf.write(_j.dumps(_r, ensure_ascii=False) + chr(10))
+        print("[legs] 被拦主题 %d 条 → %s" % (len(_gate_blocked or []), _bp), flush=True)
+        for _r in (_gate_blocked or [])[:8]:
+            print("    BLOCK %s: %s" % (_r.get("theme"), _r.get("why")), flush=True)
+    except Exception as _be:
+        print("[legs] gate_blocked 落盘失败 %s" % str(_be)[:80], flush=True)
+
     print("[legs] 写出 %s：%d 条腿 %s | shim local=%d remote=%d | %.0fs"
           % (out, len(legs_out), [l["symbol"] for l in legs_out], shim.n_local, shim.n_remote, time.time() - t0),
           flush=True)

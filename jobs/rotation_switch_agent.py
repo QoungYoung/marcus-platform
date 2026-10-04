@@ -89,7 +89,7 @@ def _live_price(ts, xq):
     try:
         sys.path.insert(0, "/app/app")
         from app.services.t_data_sources import fetch_tencent_quote
-        q = fetch_tencent_quote(xq)
+        q = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq or [])])
         if q and q.get("current"):
             return float(q["current"])
     except Exception:

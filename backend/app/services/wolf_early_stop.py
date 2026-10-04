@@ -232,8 +232,24 @@ def swing_high_asof(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int
     return max(hi for _, hi in rows)
 
 
+def window_fix_on() -> bool:
+    """「13 日观察窗」的两个 bug 修复开关（`WOLF_LOGIC_WINDOW_FIX`，库内默认 **0** = 旧行为，生产零影响）。
+
+    2026-09-20 用户拍板修（依据：y26 73 轮次归因 —— 未碰前高&亏损 20 轮 −18,664 → 按规则第13日出仅 −2,368
+    （少亏 16,296）；未碰前高&盈利 11 轮少赚 5,476 ⇒ **净 ≈ +10,820 元**，而大赢家（碰过前高 27 轮 +35,942）
+    完全不受影响。实测症状：`_check_logic_time_stop` 每日在跑（0.5–0.9s）却**零离场动作**。
+
+    两个 bug（都在 `made_new_high`）：
+      ① **窗口没截断** —— 扫的是 buy_date 之后的**全部** bar，`any(hi >= ph)` ⇒ 只要将来任意一天碰过前高
+         就判 True ⇒ 时间越往后越必然 True ⇒ 规则**永不触发**；
+      ② 判据用 `>=`，而语料 2026-03-06 原话是「**高于**…**超过了**」= **严格大于**。
+    """
+    return str(os.getenv("WOLF_LOGIC_WINDOW_FIX", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def made_new_high(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int] = None,
-                  days: Optional[int] = None, extra_high: Optional[float] = None) -> Optional[bool]:
+                  days: Optional[int] = None, extra_high: Optional[float] = None,
+                  ref_high: Optional[float] = None) -> Optional[bool]:
     """建仓后 `days`（默认 WOLF_LOGIC_TIME_STOP_DAYS=13）个交易日内**是否碰过/创过前高**。
 
     `extra_high`: 当日**盘中最高**（腾讯 quote 的 high）。
@@ -246,7 +262,12 @@ def made_new_high(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int] 
     bd = _norm_date(buy_date)
     if not bd:
         return None
-    ph = swing_high_asof(bars, buy_date, win)
+    # 新口径（`WOLF_NEWHIGH_AFTER_ENTRY` ✓）：参照＝**建仓日当根的最高价**（"买入后碰新高" ✓）
+    #   旧口径（默认 ✓）：参照＝**建仓日之前 win 根日K 的最高价**（"前高" ✗）
+    if ref_high is not None and ref_high > 0:
+        ph = float(ref_high)
+    else:
+        ph = swing_high_asof(bars, buy_date, win)
     if ph is None:
         return None
     n = int(days if days is not None else _env_int("WOLF_LOGIC_TIME_STOP_DAYS", EARLY_STAGE_DAYS_DEFAULT))
@@ -265,12 +286,27 @@ def made_new_high(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int] 
         eh = float(extra_high or 0)
     except Exception:
         eh = 0.0
-    touched = any(hi >= ph for _, hi in rows)
-    if eh > 0 and eh >= ph:
-        touched = True
+    # ── 2026-09-20 修复（`WOLF_LOGIC_WINDOW_FIX=1`；库内默认 0 = 旧行为）──
+    #   ① 窗口**必须截断**在这 n 个交易日内：他 2026-03-05/06 的原话是
+    #      「**13 日内**需要碰新高或者新高。否则这个票呆的意义就不大」，不是"以后任意一天碰到就算"；
+    #   ② 判据**必须严格大于**前高：他 03-06 说「是不是**高于**抄底底部那根K线的高点…**超过了**就是对的」
+    #      ⇒ `high == ph`（恰好打平）不算碰。
+    _fix = window_fix_on()
+    _all = rows
+    if _fix:
+        rows = _all[:n]
+    if _fix:
+        touched = any(hi > ph for _, hi in rows)
+        if eh > 0 and eh > ph:
+            touched = True
+    else:
+        touched = any(hi >= ph for _, hi in rows)
+        if eh > 0 and eh >= ph:
+            touched = True
     if touched:
         return True
-    return False if len(rows) >= n else None
+    # 「窗口是否已走完」用**全部**后续 bar 判断（不受上面截断影响）
+    return False if len(_all) >= n else None
 
 
 def logic_time_stop(bars: List[Dict[str, Any]], buy_date: Any,
@@ -311,10 +347,19 @@ def logic_time_stop(bars: List[Dict[str, Any]], buy_date: Any,
                        % ne.get("date"))
     d = int(days if days is not None else _env_int("WOLF_LOGIC_TIME_STOP_DAYS", EARLY_STAGE_DAYS_DEFAULT))
     # reason 必须区分三种"不动作"（生产实测踩过: 把"窗口未走完"说成"前高算不出"会误导排查）
-    if swing_high_asof(bars, buy_date, win) is None:
+    _after = str(os.getenv("WOLF_NEWHIGH_AFTER_ENTRY", "0")).strip().lower() in ("1", "true", "yes", "on")
+    _ref_high = None
+    if _after:
+        # 建仓日（含）当根日K 的最高价 ✓（取不到 ⇒ 用当日收盘 ⇒ 再不行 ⇒ None ⇒ 不动作 ✓）
+        _bd8 = _norm_date(buy_date)
+        for _b in bars or []:
+            if _norm_date(_b.get("date")) == _bd8:
+                _ref_high = float(_b.get("high") or _b.get("close") or 0) or None
+                break
+    if _ref_high is None and swing_high_asof(bars, buy_date, win) is None:
         return False, "前高数据不足（建仓日之前不足 %d 根日K）→ 不动作" % (
             int(win if win is not None else _env_int("WOLF_SWING_HIGH_WIN", SWING_WIN_DEFAULT)))
-    m = made_new_high(bars, buy_date, win=win, days=d, extra_high=extra_high)
+    m = made_new_high(bars, buy_date, win=win, days=d, extra_high=extra_high, ref_high=_ref_high)
     if m is True:
         return False, "窗口内已碰过前高 → 买入逻辑成立, 继续持有"
     if m is None:                      # 未碰前高 **且** 窗口还没走完
@@ -392,23 +437,56 @@ def resolve_stop(cond_stop: Optional[float],
             "有利空/意外事件(%s%s) → 不套建仓初期结构线, 退回 stop_loss_price"
             "（狼大2026-03-05: 那是\"别的逻辑\", 非自己逻辑被证伪）"
             % (ne.get("date"), ("·" + ne["note"]) if ne.get("note") else ""))
-    sl = swing_low_asof(bars, buy_date, win)
+    # ── 锚的选择（2026-09-20 用户拍板"先加①②"）────────────────────────────
+    #   语料 2026-03-06「用第一根或者前两根**顶板红K的开盘价和收盘价**做指标计算**进场位置和止损位置**」；
+    #        2025-06-26「到**前两根红K的0.618位置**」；2026-03-05「按我0.618买入…止损就是-6%左右」
+    #   ⇒ 由"0.618 进场 + 止损=锚×0.97 相差 −6%"反推：**锚 = 红K 的开盘价**（买点下方 ≈3.1%）。
+    #   我们原来自设的是"建仓前 13 根最低"（语料未给窗口），实测在买点下方 10.6%~17.9% ⇒ 止损 −13~−14% 且从不触发。
+    #   `WOLF_EARLY_STOP_ANCHOR=redk` 启用红K锚；取不到红K ⇒ fail-open 退回原 swing13。
+    _sl = None
+    _asrc = "swing13"
+    if os.getenv("WOLF_EARLY_STOP_ANCHOR", "swing13").strip().lower() == "redk":
+        try:
+            from app.services.wolf_redk_setup import big_red_open as _bro
+            _ro = _bro(bars, buy_date, symbol=symbol)
+            if _ro:
+                _sl, _asrc = float(_ro), "redk"
+        except Exception:
+            _sl = None
+    sl = _sl if _sl else swing_low_asof(bars, buy_date, win)
     if sl is None:
         return (cs or None), ("stop_loss_price" if cs else "none"), (
             "建仓初期但波段低点数据不足 → 用 stop_loss_price")
     sp = early_stop_price(sl, pct)
     return sp, "wolf_early_swing", (
-        "建仓初期(持有 %d <= %d 交易日): 波段低点 %.3f -%.1f%% → 止损 %.3f（狼大2026-03-05）"
-        % (held, d_days, sl, float(pct if pct is not None else _env_float("WOLF_EARLY_STOP_PCT", STOP_PCT_DEFAULT)), sp))
+        "建仓初期(持有 %d <= %d 交易日, 锚=%s): 波段低点 %.3f -%.1f%% → 止损 %.3f（狼大2026-03-05/03-06）"
+        % (held, d_days, _asrc, sl,
+           float(pct if pct is not None else _env_float("WOLF_EARLY_STOP_PCT", STOP_PCT_DEFAULT)), sp))
 
 
-def first_buy_date(account_id: str, symbol: str) -> Optional[str]:
-    """该标的**首笔未作废买入**的日期 'YYYY-MM-DD'（建仓日锚点）。
+def first_buy_date(account_id: str, symbol: str, per_round: Optional[bool] = None) -> Optional[str]:
+    """该标的**建仓日** 'YYYY-MM-DD'。
+
+    ⚠️ 2026-09-20（用户拍板"先加①②"）：默认仍取**历史首笔**买入（原行为）；当
+    `WOLF_BUY_DATE_PER_ROUND=1` 时改取**本轮建仓日**（= 最近一次持仓归零之后的第一笔买入）。
+    为什么需要：狼大「**买入有时间**」= 每次买入进入自己的 13 日观察窗；而"历史首笔"语义下
+    **卖了又买回**的持仓永远拿不到"建仓初期"保护（窗口早已过期）⇒ 实测 SH603773 三月那笔
+    （首笔在 0119）**既没有结构止损线、也没有"13日不碰新高"的离场**，只剩价位型规则在 −14% 处认亏。
 
     权威口径 = paper_trades（与 stop_loss_monitor._get_holding_days 同源）；
     无成交流水时退回 paper_positions.entry_date（人工录入持仓的情形）。
     任何异常 → None（调用方退回 stop_loss_price）。
     """
+    if per_round is None:
+        per_round = os.getenv("WOLF_BUY_DATE_PER_ROUND", "0").strip().lower() in ("1", "true", "yes", "on")
+    if per_round:
+        try:
+            from app.services.wolf_addon_cap import _fetch_seq, round_start_day
+            _d = round_start_day(_fetch_seq(account_id, symbol))
+            if _d:
+                return "%s-%s-%s" % (_d[:4], _d[4:6], _d[6:8])
+        except Exception:
+            pass
     try:
         from sqlalchemy import text
         from app.database import SessionLocal

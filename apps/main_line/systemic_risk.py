@@ -6,6 +6,7 @@
 输入建议来源: 银行=512800银行ETF / 科技=科创50或半导体ETF / 大光=300308·300502·300394(腾讯qt实时或tushare日线)
 输出: data/systemic_risk.json {level, alerts[], advice}
 """
+from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import os, json, datetime
 
 def double_top(close):
@@ -72,14 +73,14 @@ def evaluate(bank_close=None, tech_close=None, tech_ma20=None, tech_r5=None,
     return {"level": level, "alerts": alerts, "advice": advice, "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 def main():
-    p = os.path.join(os.environ.get("DATA_DIR", "data"), "systemic_inputs.json")
+    p = __state_path("systemic_inputs.json")
     if not os.path.exists(p):
         print("缺少 data/systemic_inputs.json（由行情采集写入）"); return 0
     d = json.load(open(p, encoding="utf-8"))
     out = evaluate(bank_close=d.get("bank_close"), tech_close=d.get("tech_close"),
                    tech_ma20=d.get("tech_ma20"), tech_r5=d.get("tech_r5"),
                    optics=d.get("optics"))
-    json.dump(out, open(os.path.join(os.environ.get("DATA_DIR", "data"), "systemic_risk.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    json.dump(out, open(__state_path("systemic_risk.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(json.dumps(out, ensure_ascii=False, indent=1)); return 0
 
 if __name__ == "__main__":

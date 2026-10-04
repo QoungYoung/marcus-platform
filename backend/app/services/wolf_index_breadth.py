@@ -160,7 +160,7 @@ def _quote_pct(symbol: str) -> Optional[float]:
     """指数当日涨跌幅%（腾讯 qt）。symbol 用小写带前缀写法，如 sh000001。"""
     try:
         from app.services.t_data_sources import fetch_tencent_quote
-        q = (fetch_tencent_quote([symbol]) or {}).get(symbol) or {}
+        q = (fetch_tencent_quote([_normalize_symbol(symbol)]) or {}).get(symbol) or {}
         v = q.get("change_pct")
         return round(float(v), 3) if v is not None else None
     except Exception:

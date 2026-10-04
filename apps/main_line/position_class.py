@@ -29,17 +29,21 @@ def live_hedge_act():
         items=[]
         for _ in range(5):
             try:
-                r=requests.get("https://pcd.mobcvb.cn/tushare/pro/moneyflow_ind_dc",
-                               params={"content_type":"行业","trade_date":d0},
-                               headers={"X-API-Key":K}, verify=False, timeout=30)
-                items=(r.json().get("data") or {}).get("items") or []
+                # 2026-09-19：改走 http_cache（本地缓存 + 硬超时 6s + 负缓存）——
+                #   实测裸直连遇 datahubco 502 时会把 08:18 布腿器拖到 958s。
+                from http_cache import get_json as _gj
+                _j=_gj("https://pcd.mobcvb.cn/tushare/pro/moneyflow_ind_dc",
+                       params={"content_type":"行业","trade_date":d0},
+                       headers={"X-API-Key":K}, asof=d0, verify=False, timeout=30) or {}
+                items=(_j.get("data") or {}).get("items") or []
                 if items: break
             except Exception: pass
             d0=(datetime.now()-timedelta(days=1)).strftime("%Y%m%d")
         if not items: return None
-        fields=(requests.get("https://pcd.mobcvb.cn/tushare/pro/moneyflow_ind_dc",
-                             params={"content_type":"行业","trade_date":d0},
-                             headers={"X-API-Key":K}, verify=False, timeout=30).json().get("data") or {}).get("fields") or []
+        from http_cache import get_json as _gj2
+        fields=((_gj2("https://pcd.mobcvb.cn/tushare/pro/moneyflow_ind_dc",
+                      params={"content_type":"行业","trade_date":d0},
+                      headers={"X-API-Key":K}, asof=d0, verify=False, timeout=30) or {}).get("data") or {}).get("fields") or []
         all_na=[]; hedge=[]
         for it in items:
             z=dict(zip(fields, it))

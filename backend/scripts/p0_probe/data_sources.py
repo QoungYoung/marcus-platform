@@ -320,7 +320,7 @@ def fetch_tencent_quote(symbols: List[str], timeout: int = 8) -> Dict[str, Optio
 
 if __name__ == "__main__":
     # 自检
-    q = fetch_tencent_quote(["sh600519", "sz000001", "sh000300"])
+    q = fetch_tencent_quote([_normalize_symbol("sh600519", "sz000001", "sh000300")])
     for k, v in q.items():
         print(k, "OK" if v else "FAIL", v.get("current") if v else "")
     b = fetch_tencent_mkline("sh600519", "m5", 100)

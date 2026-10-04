@@ -45,7 +45,7 @@ def run(rounds: int = 20, pool: List[str] = None, interval: float = 30.0):
         ok = 0
         # 分批并发（单请求串行模拟，加 jitter；实际监控层用 ThreadPoolExecutor）
         jitter = random.uniform(-3, 3)
-        quotes = fetch_tencent_quote(pool)
+        quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (pool or [])])
         round_ms = (time.time() - t_start) * 1000
         for sym, q in quotes.items():
             if q is None:
@@ -76,7 +76,7 @@ def run(rounds: int = 20, pool: List[str] = None, interval: float = 30.0):
 
     # 指数实时
     print(f"\n=== 指数实时（regime L2 数据前提）===")
-    idx = fetch_tencent_quote(INDEXES)
+    idx = fetch_tencent_quote([_normalize_symbol(_s) for _s in (INDEXES or [])])
     for sym, q in idx.items():
         if q:
             print(f"  {sym} {q['name']}: current={q['current']} change={q['change_pct']}% "

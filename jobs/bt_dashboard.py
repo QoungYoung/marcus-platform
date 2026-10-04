@@ -160,7 +160,7 @@ def compact_day(day: str | None) -> str | None:
     return d if len(d) == 8 and d.isdigit() else None
 
 
-def scan_procs() -> list[dict]:
+def scan_procs(root: "str | None" = None) -> list[dict]:
     """扫 /proc/*/cmdline 找跑批进程（本机没有 ps/pkill）。
 
     ⚠️ 只认「python 解释器 + 脚本参数」这一种形态：编排脚本常用
@@ -198,8 +198,30 @@ def scan_procs() -> list[dict]:
             if base == "bt_dashboard.py":
                 kind = "bt_dashboard"
                 break
+            if base in ("bt_pack_mins.py", "bt_day_legs.py", "bt_day_legs_switch.py",
+                        "bt_seed_day.py", "bt_low_logic_week.py", "bt_low_logic_asof.py",
+                        "bt_account.py", "bt_backfill_mins_union.py"):
+                kind = "bt_job:" + base[:-3]
+                break
         if not kind:
             continue
+        # ── 根目录归属过滤（2026-09-18）─────────────────────────────────────────
+        # 不加这层：另起一个看板看**旧根**时，只要机上有**别的跑批进程**，页面就显示"在跑"
+        # （实测 8799 看 data/_bt_year 却报 alive/proc_found=true、current_day=20260112，
+        #   其实是 8801 那跑 data/_bt_size 的进程被扫到了 ⇒ 用户以为"你跑了两个"）。
+        if root:
+            _r = os.path.abspath(root)
+            if "--root" in parts:
+                try:
+                    _i = parts.index("--root")
+                    if os.path.abspath(parts[_i + 1]) != _r:
+                        continue
+                except Exception:
+                    pass
+            else:
+                _default = os.path.abspath(os.path.join(REPO, "data", "_bt_year"))
+                if _r != _default:
+                    continue
         line = " ".join(parts)
         m = re.search(r"--day\s+(\d{8})", line)
         try:
@@ -220,6 +242,194 @@ def scan_procs() -> list[dict]:
     return out
 
 
+def _tag_log_for_root(root: str, min_mtime: float = 0.0) -> str | None:
+    """按跑批根选日志（2026-09-19 修复"看板追不到新跑批"）。
+
+    实测病灶：跑批进程的 `/proc/<pid>/fd/1` 读出来是 pipe（`readlink` 为空/pipe:[…]）⇒
+    旧逻辑退回 "logs 目录里最新的 .log" —— 而**看板自己的 dashboard.log 永远最新**，
+    于是页面把 `dashboard.log` 当跑批日志钉住：既看不到新日志，days_total 也停在上一跑的 10 天。
+    做法：优先 logs/ 里**文件名含根 tag**（data/_bt_jan6 → jan6）且 mtime ≥ 进程启动时间的日志；
+    否则取 mtime ≥ 启动时间的最新非看板日志。
+    """
+    logs_dir = os.path.join(REPO, ".dsh-tmp", "wolfbt", "logs")
+    tag = os.path.basename(os.path.abspath(root or "")).replace("_bt_", "") or ""
+    best_tag, best_any = None, None
+    try:
+        for fn in os.listdir(logs_dir):
+            if not fn.endswith(".log") or fn == "dashboard.log":
+                continue
+            fp = os.path.join(logs_dir, fn)
+            try:
+                mt = os.path.getmtime(fp)
+            except OSError:
+                continue
+            if mt < float(min_mtime or 0.0) - 60:
+                continue
+            if tag and tag in fn and (best_tag is None or mt > best_tag[0]):
+                best_tag = (mt, fp)
+            if best_any is None or mt > best_any[0]:
+                best_any = (mt, fp)
+    except OSError:
+        return None
+    return (best_tag or best_any or (0.0, None))[1]
+
+
+def live_run_log(root: "str | None" = None) -> str | None:
+    """当前跑批的日志文件 = 活的 bt_days 进程的 stdout（/proc/<pid>/fd/1）。
+
+    为什么需要：跑批可以换日志名（例如硬隔离年跑写 year_prod_iso.log），而仪表盘只认 --log，
+    结果「新开的一跑没被追踪到」——页面停在上一跑的 170/170、current_day=null。
+    以进程 stdout 为准，换名字/换目录都能自动追上。
+    """
+    for p in scan_procs(root):      # 只认本看板根目录的跑批（2026-09-18）
+        if p.get("kind") != "bt_days":
+            continue
+        try:
+            target = os.readlink("/proc/%d/fd/1" % p["pid"])
+        except OSError:
+            continue
+        if target.startswith(REPO) and target.endswith(".log"):
+            return os.path.abspath(target)
+    # 2026-09-18：指定了非默认根时**不做全局回退** —— 否则会把"别的跑的日志"借过来，
+    #   页面显示在跑（实测 8799 看旧根 data/_bt_year，却因借到 data/_bt_size 的日志而报 fresh）。
+    if root:
+        _t = _tag_log_for_root(root)
+        if _t:
+            return _t
+        if os.path.abspath(root) != os.path.abspath(os.path.join(REPO, "data", "_bt_year")):
+            return None
+    # 没有在跑的跑批时：退回「最近一次跑的日志」——logs 目录里最新的、开头带交易日区间头的那份。
+    # （否则跑完以后页面会掉回 --log 默认的老日志，又显示上一跑的 170/170）
+    logs_dir = os.path.join(REPO, ".dsh-tmp", "wolfbt", "logs")
+    head_re = re.compile(r"\d+\s*个交易日[：:]\s*\d{8}")
+    best = None
+    try:
+        for fn in os.listdir(logs_dir):
+            if not fn.endswith(".log"):
+                continue
+            fp = os.path.join(logs_dir, fn)
+            try:
+                with open(fp, "r", encoding="utf-8", errors="replace") as fh:
+                    head = "".join(next(fh, "") for _ in range(8))
+                if not head_re.search(head):
+                    continue
+                mt = os.path.getmtime(fp)
+            except OSError:
+                continue
+            if best is None or mt > best[0]:
+                best = (mt, fp)
+    except OSError:
+        return None
+    return best[1] if best else None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 计价空间自动判定（2026-09-24，「0129 亏了一万多」的真相）
+# ──────────────────────────────────────────────────────────────────────────────
+# 背景：T13/T14 用 `WOLF_ADJ_PRICE=1` ⇒ **成交价与现金都在前复权空间**；而净值重建一直用
+# **不复权** `data/_bt_full/bars.sqlite` 给持仓计价 ⇒ 市值虚影 = Σ 股数 ×(不复权收 − 复权收)。
+# 实测（drabt14，0128 收盘）：SZ003026 1100 股，不复权收 34.740 / 复权收 23.878
+#   （原因：adj_factors.json 里 20260605「10转4.5」倍数 1.4549 被"前复权"提前折进了回测期）
+#   ⇒ 虚影 +11,949，当日持仓虚影合计 +12,166 ⇒ 看板 0128 +9.69%、0129 单日 −11,098，
+#   而真实是 +4.95% / −4,298（虚影全期累计为 0，期末权益不受影响，只错在权益水平/单日/回撤）。
+#
+# 判据：只用行情自身，不读配置、不读 pins ——
+#   逐笔比 |成交价 ÷ 收盘 − 1|，且**只在两套收盘不同**（该票当日之后有除权事件）的成交上判：
+#   正确空间下该比值≈1（只剩盘中偏离），错误空间下≈1/f（f 可达 1.45 ⇒ 差 31%）。多数票胜出。
+def _median(xs: list[float]):
+    if not xs:
+        return None
+    ys = sorted(xs)
+    n = len(ys)
+    return ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2.0
+
+
+def detect_price_space(trades: list[dict], bars_db: str, bars_adj: str = "",
+                       samples: int = 200, min_affected: int = 3, gap: float = 0.03) -> dict:
+    """判定某账户的成交价在哪套价格空间：返回 {'space','n_affected','wins_adj','wins_raw','why',...}。
+
+    · space='adj' ⇒ 曲线/持仓计价必须用 bars_adj.sqlite；
+    · space='raw' ⇒ 用不复权 bars.sqlite（默认；两套无差异时也返回它）。
+    环境变量 `WOLF_CURVE_SPACE=raw|adj` 可强制覆盖（排障用）。
+    """
+    forced = (os.getenv("WOLF_CURVE_SPACE") or "").strip().lower()
+    out = {"space": "raw", "n_affected": 0, "n_used": 0, "wins_adj": 0, "wins_raw": 0,
+           "med_raw": None, "med_adj": None, "why": ""}
+    if forced in ("raw", "adj"):
+        out.update(space=forced, why="WOLF_CURVE_SPACE=%s 强制" % forced)
+        return out
+    if not trades or not bars_adj or not os.path.exists(bars_adj) or not os.path.exists(bars_db):
+        out["why"] = "无复权库或成交为空"
+        return out
+    try:
+        con_raw = sqlite3.connect("file:%s?mode=ro" % quote(bars_db), uri=True, timeout=5.0)
+        con_adj = sqlite3.connect("file:%s?mode=ro" % quote(bars_adj), uri=True, timeout=5.0)
+        con_raw.execute("PRAGMA temp_store=MEMORY")
+        con_adj.execute("PRAGMA temp_store=MEMORY")
+    except Exception as exc:
+        out["why"] = "打开行情库失败: %s" % str(exc)[:60]
+        return out
+    e_raw, e_adj = [], []
+    try:
+        # 取样：① 均匀抽样（覆盖不同日期）∪ ② **每只标的第一笔**（"该票是否受复权影响"是票级属性，
+        # 一笔即够；这样能把"有未来除权事件的票"尽量都覆盖到，避免只抽到 3 笔affected就下结论）。
+        step = max(1, len(trades) // max(1, samples))
+        cand: dict = {}
+        for t in trades[::step][:samples]:
+            cand.setdefault((t.get("symbol"), compact_day(t.get("trade_date")), t.get("price")), t)
+        seen_sym: set = set()
+        for t in trades:
+            sym = t.get("symbol")
+            if sym in seen_sym:
+                continue
+            seen_sym.add(sym)
+            cand.setdefault((sym, compact_day(t.get("trade_date")), t.get("price")), t)
+        for t in list(cand.values())[:samples * 3]:
+            ts_code = to_ts_code(t.get("symbol") or "")
+            day = compact_day(t.get("trade_date"))
+            px = float(t.get("price") or 0)
+            if not ts_code or not day or px <= 0:
+                continue
+            r = con_raw.execute("SELECT close FROM bars WHERE ts_code=? AND trade_date=?",
+                                (ts_code, day)).fetchone()
+            a = con_adj.execute("SELECT close FROM bars WHERE ts_code=? AND trade_date=?",
+                                (ts_code, day)).fetchone()
+            if not r or not a or not r[0] or not a[0]:
+                continue
+            cr, ca = float(r[0]), float(a[0])
+            if abs(cr / ca - 1.0) < gap:      # 两套收盘无差别 ⇒ 对该票无信息
+                continue
+            e_raw.append(abs(px / cr - 1.0))
+            e_adj.append(abs(px / ca - 1.0))
+    finally:
+        con_raw.close()
+        con_adj.close()
+    n = len(e_raw)
+    out["n_affected"] = n
+    if n == 0:
+        out["why"] = "成交票均无复权事件（两套收盘相同）⇒ 用不复权"
+        return out
+    out["n_used"] = n
+    out["med_raw"] = round(_median(e_raw), 5)
+    out["med_adj"] = round(_median(e_adj), 5)
+    wins_adj = sum(1 for x, y in zip(e_raw, e_adj) if y < x * 0.8)
+    wins_raw = sum(1 for x, y in zip(e_raw, e_adj) if x < y * 0.8)
+    out["wins_adj"], out["wins_raw"] = wins_adj, wins_raw
+    m_raw, m_adj = _median(e_raw), _median(e_adj)
+    if wins_adj >= max(min_affected, 0.8 * n):
+        out.update(space="adj", why="%d/%d 笔成交更贴合复权收盘" % (wins_adj, n))
+    elif wins_raw >= max(min_affected, 0.8 * n):
+        out.update(space="raw", why="%d/%d 笔成交更贴合不复权收盘" % (wins_raw, n))
+    elif n >= 2 and wins_adj == n and m_adj is not None and m_raw and m_adj <= 0.5 * m_raw:
+        # 受影响样本少（< min_affected）但**方向完全一致**且中位数差 2 倍以上 ⇒ 仍可判
+        out.update(space="adj", why="%d/%d 笔（小样本）且中位误差 %.4f ≪ %.4f" % (wins_adj, n, m_adj, m_raw))
+    elif n >= 2 and wins_raw == n and m_raw is not None and m_adj and m_raw <= 0.5 * m_adj:
+        out.update(space="raw", why="%d/%d 笔（小样本）且中位误差 %.4f ≪ %.4f" % (wins_raw, n, m_raw, m_adj))
+    else:
+        out["why"] = "样本分歧（adj %d / raw %d，共 %d）⇒ 保守用不复权" % (wins_adj, wins_raw, n)
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Store：把磁盘/PG 的只读视图聚合成快照
 # ──────────────────────────────────────────────────────────────────────────────
@@ -227,6 +437,12 @@ class Store:
     def __init__(self, args: argparse.Namespace):
         self.root = os.path.abspath(args.root)
         self.bars_db = os.path.abspath(args.bars)
+        # 复权日线库（计价空间自动判定用；默认与 --bars 同目录的 bars_adj.sqlite）
+        _ba = getattr(args, "bars_adj", "") or os.path.join(os.path.dirname(self.bars_db), "bars_adj.sqlite")
+        self.bars_adj_db = os.path.abspath(_ba)
+        self._space_cache: dict = {}          # account → (ts, info)
+        self._curve_space = "raw"             # 本轮快照实际采用的计价空间
+        self._curve_space_why = ""
         self.mins_dir = os.path.abspath(args.mins)
         self.log_path = os.path.abspath(args.log)
         self.pg_url = args.pg
@@ -236,6 +452,13 @@ class Store:
         self._lock = threading.RLock()
         self._sig = None
         self._files: dict[str, dict] = {}
+        # ── 自动跟随（用户："不能不换端口自动追踪到最新进程吗"）────────────────────────
+        #   默认开（--no-auto 关闭）：每次快照前若有 role=run 的跑批进程，就把它
+        #   cmdline 里的 --root/--account 切成看板的根/账户并清缓存；没有则保持当前。
+        self.auto_follow = bool(getattr(args, "auto", True))
+        self._follow = {"root": self.root, "account": self.account, "auto": self.auto_follow,
+                        "switches": 0, "reason": "初始"}
+        self._follow_at = 0.0
         self._days: list[str] = []
         self._day_meta: dict[str, dict] = {}
         self._trig_by_id: dict[int, dict] = {}
@@ -250,6 +473,9 @@ class Store:
         self._cal_sig = None
         self._log = {}              # 日志解析结果（按 mtime 缓存）
         self._log_sig = None
+        self._live_log_at = 0.0     # 「当前跑日志」解析时间（按 ttl 缓存）
+        self._proc_seen: dict = {}  # pid → (cpu_ticks, io_bytes) 上次采样（判"在干活"）
+        self._manifest_at = 0.0     # 运行清单逻辑起点缓存（5s）
         self._wave = None
         self._wave_sig = None
         self._pg = {}               # PG 查询结果（按 TTL 缓存）
@@ -299,6 +525,58 @@ class Store:
             "net_hits": data.get("net_hits") or [],
             "bars": data.get("bars") or [],
         }
+
+    def autofollow(self) -> None:
+        """自动跟随最新在跑的跑批（最多每 10s 检查一次）。"""
+        if not self.auto_follow:
+            return
+        now = time.time()
+        if now - self._follow_at < 10.0:
+            return
+        self._follow_at = now
+        try:
+            runs = [p for p in scan_procs(None) if p.get("kind") == "bt_days"]
+        except Exception:
+            runs = []
+        if not runs:                   # 兜底：日志推断（沙箱禁 /proc）
+            runs = [p for p in runs_from_logs() if p.get("kind") == "bt_days"]
+        if not runs:
+            self._follow["reason"] = "无在跑跑批（保持当前根）"
+            return
+        runs.sort(key=lambda p: -(p.get("started_epoch") or 0))
+        p = runs[0]
+        cmd = p.get("cmdline") or ""
+        m_root = re.search(r"--root\s+(\S+)", cmd)
+        if not m_root and p.get("root"):            # 日志推断的记录直接给 root/account
+            m_root = type("M", (), {"group": staticmethod(lambda i=1: p.get("root"))})()
+        m_acc = re.search(r"--account\s+(\S+)", cmd)
+        new_root = os.path.abspath(m_root.group(1)) if m_root else None
+        new_acc = m_acc.group(1) if m_acc else None
+        if not new_acc:
+            try:
+                with open("/proc/%d/environ" % p["pid"], "rb") as fh:
+                    env = fh.read().decode("utf-8", "replace")
+                m2 = re.search(r"T_MONITOR_ACCOUNT=([^\x00\n]+)", env)
+                new_acc = m2.group(1).strip() if m2 else None
+            except Exception:
+                new_acc = None
+        changed = []
+        if new_root and new_root != self.root and os.path.isdir(os.path.join(new_root, "_summary")):
+            self.root = new_root
+            self._files = {}
+            self._log, self._log_sig = {}, None
+            self._live_log_at = 0.0
+            changed.append("root=%s" % os.path.basename(new_root))
+        if new_acc and new_acc != self.account:
+            self.account = new_acc
+            self._pg, self._pg_at, self._pg_err = [], 0.0, None
+            changed.append("account=%s" % new_acc)
+        if changed:
+            self._follow.update({"root": self.root, "account": self.account,
+                                 "switches": self._follow["switches"] + 1,
+                                 "reason": "跟随 pid=%s %s" % (p.get("pid"), ",".join(changed))})
+        else:
+            self._follow["reason"] = "已在跟随 pid=%s（%s）" % (p.get("pid"), os.path.basename(self.root))
 
     def refresh(self) -> None:
         with self._lock:
@@ -425,10 +703,32 @@ class Store:
         return best if best is not None else None
 
     # ── 交易日历（bars.sqlite，只读）────────────────────────────────────────
-    def _sqlite(self) -> sqlite3.Connection:
-        conn = sqlite3.connect("file:%s?mode=ro" % quote(self.bars_db), uri=True, timeout=5.0)
+    def _sqlite(self, path: str = "") -> sqlite3.Connection:
+        conn = sqlite3.connect("file:%s?mode=ro" % quote(path or self.bars_db), uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
         return conn
+
+    # ── 计价空间（2026-09-24）：见模块顶部 detect_price_space 的说明 ──────────
+    def bars_for_space(self, space: str) -> str:
+        """该空间对应的日线库路径（复权库缺失时安全退回不复权）。"""
+        if space == "adj" and os.path.exists(self.bars_adj_db):
+            return self.bars_adj_db
+        return self.bars_db
+
+    def price_space(self, trades: list[dict], account: str = "", force: bool = False) -> str:
+        """带缓存的空间判定（同一账户不重复扫；TTL 用 self.ttl 的 60 倍，切换臂时随账户键失效）。"""
+        acct = account or self.account
+        now = time.time()
+        hit = self._space_cache.get(acct)
+        if hit and not force and now - hit[0] < max(30.0, self.ttl * 60):
+            return hit[1]["space"]
+        info = detect_price_space(trades, self.bars_db, self.bars_adj_db)
+        self._space_cache[acct] = (now, info)
+        return info["space"]
+
+    def price_space_info(self, account: str = "") -> dict:
+        hit = self._space_cache.get(account or self.account)
+        return hit[1] if hit else {}
 
     def calendar(self) -> list[str]:
         with self._lock:
@@ -482,11 +782,15 @@ class Store:
         except Exception:
             return []
 
-    def closes(self, symbols: list[str], start: str, end: str) -> dict[str, list[tuple[str, float]]]:
-        """每个标的在 [start,end] 的收盘序列（升序），供净值重建做「最近 ≤ 当日」取值。"""
+    def closes(self, symbols: list[str], start: str, end: str, bars: str = "") -> dict[str, list[tuple[str, float]]]:
+        """每个标的在 [start,end] 的收盘序列（升序），供净值重建做「最近 ≤ 当日」取值。
+
+        `bars`：显式指定日线库（复权臂必须传 bars_adj.sqlite —— 成交价在前复权空间）。
+        注：日历/个股K线视图仍走 `self.bars_db`（不复权），不在此处改动。
+        """
         out: dict[str, list[tuple[str, float]]] = {}
         try:
-            conn = self._sqlite()
+            conn = self._sqlite(bars)
             try:
                 for sym in symbols:
                     cur = conn.execute(
@@ -502,11 +806,83 @@ class Store:
         return out
 
     # ── 父进程日志（心跳来源之二）──────────────────────────────────────────
+    def _proc_busy(self, procs: list) -> list:
+        """活进程"在干活"信号：/proc/<pid> 的 **CPU 时间或 IO 字节**相比上次采样有增长。
+
+        为什么需要：年跑里 seed/pack 这类步进会连续几分钟**不写任何日志**（实测 bt_pack_mins
+        在 D 状态跑 2~3 分钟），只按文件 mtime 判活会让页面误报"心跳停了"。
+        CPU tick 对 I/O 阻塞型进程不增长，故同时看 rchar/wchar。
+        """
+        out = []
+        now = time.time()
+        for p in procs:
+            pid = p.get("pid")
+            if not pid:
+                continue
+            if p.get("kind") == "bt_dashboard":
+                continue      # 看板自身永远在忙 → 会把真实停摆掩盖成"一直新鲜"
+            try:
+                with open("/proc/%d/stat" % pid, "r") as fh:
+                    rest = fh.read().rsplit(") ", 1)[1].split()
+                cpu = int(rest[11]) + int(rest[12])          # utime + stime
+            except Exception:
+                continue
+            io = 0
+            try:
+                with open("/proc/%d/io" % pid, "r") as fh:
+                    for ln in fh:
+                        if ln.startswith(("rchar:", "wchar:")):
+                            io += int(ln.split(":")[1])
+            except Exception:
+                pass
+            prev = self._proc_seen.get(pid)
+            if prev and (cpu > prev[0] or io > prev[1]):
+                out.append(("proc:%d(%s)" % (pid, p.get("kind") or "?"), now))
+            self._proc_seen[pid] = (cpu, io)
+        return out
+
+    def manifest_start_day(self) -> str:
+        """运行清单里的**逻辑起点**（`run_manifest.json` 的 start_day；续跑时继承上一次）。
+
+        为什么：看板原先按"进程启动时刻"过滤/定窗口，**每次续跑重启都会丢掉之前跑过的日子**
+        （实测曲线只剩 1 个点、已实现 −209 vs PG +10,574）。身份应由持久化清单决定。
+        读不到/格式不对返回 ""（调用方回退到日志头部口径）。
+        """
+        now = time.time()
+        if self._manifest_at and now - self._manifest_at < 5.0:
+            return self._manifest_start
+        self._manifest_at = now
+        _v = ""
+        try:
+            _mf = safe_read_json(os.path.join(REPO, ".dsh-tmp", "wolfbt", "run_manifest.json")) or {}
+            _sd = str(_mf.get("start_day") or "")
+            if re.match(r"^\d{8}$", _sd):
+                _v = _sd
+        except Exception:
+            _v = ""
+        self._manifest_start = _v
+        return _v
+
+    def _refresh_log_path(self) -> None:
+        """把 self.log_path 钉到「当前跑的日志」（活的 bt_days 的 stdout），解析结果按 ttl 缓存。
+
+        换日志文件时必须清掉解析缓存，否则页面会一直显示上一跑的进度。
+        """
+        now = time.time()
+        if now - self._live_log_at < self.ttl:
+            return
+        self._live_log_at = now
+        live = live_run_log(self.root)      # 按根归属，避免借到别的跑的日志
+        if live and live != self.log_path:
+            self.log_path = live
+            self._log, self._log_sig = {}, None
+
     def log_info(self) -> dict:
         with self._lock:
+            self._refresh_log_path()
             try:
                 st = os.stat(self.log_path)
-                sig = (st.st_mtime, st.st_size)
+                sig = (self.log_path, st.st_mtime, st.st_size)
             except OSError:
                 return {"exists": False, "path": self.log_path}
             if self._log_sig == sig and self._log:
@@ -648,7 +1024,7 @@ class Store:
           B. 没有进程时退化为：若文件数明显多于日志里 `cut=` 行数（> +3），
              则以日志的 last_completed 为界，只保留 ≤ 它的产物。
         """
-        procs = scan_procs()
+        procs = scan_procs(self.root)      # 只认本看板根目录的跑批进程（2026-09-18）
         live = [p for p in procs if p["kind"] in ("bt_days", "bt_prod_run")]
         starts = [p.get("started_epoch") for p in live if p.get("started_epoch")]
         run_start = min(starts) if starts else None
@@ -661,13 +1037,26 @@ class Store:
 
         stale: list[str] = []
         rule = "none"
-        if run_start:
+        # 逻辑起点优先（run_manifest.json）：续跑时继承上一次的 start_day，
+        # 否则"按进程启动时刻过滤"会把之前跑过的日子全判成上一次的遗留
+        # （实测：重启后曲线只剩 1 个点、已实现/触发全归零）。
+        _mstart = self.manifest_start_day()
+        if _mstart and re.match(r"^\d{8}$", _mstart):
+            # 有效区间＝[逻辑起点, 本次已跑到的最后一天]：
+            # 下界用清单（续跑继承），上界用主日志的 last_completed——
+            # 否则会把"上一次跑"留下的后半段逐日产物（0122..0914）当成本次结果混进来。
+            _lc = last_completed or ""
+            rule = "manifest-start(%s)+last_completed(%s)" % (_mstart, _lc or "-")
+            stale = [d for d in self._days
+                     if d < _mstart or (bool(_lc) and d > _lc)]
+        elif run_start:
             rule = "proc-start"
             stale = [d for d in self._days if (self._files[d]["_mtime"] or 0) < run_start - 5.0]
         elif self._days and completed_count and len(self._days) > completed_count + 3 and last_completed:
             rule = "log-last-completed"
             stale = [d for d in self._days if d > last_completed]
 
+        sig = (sig, _mstart)
         stale_set = set(stale)
         days = [d for d in self._days if d not in stale_set]
         day_set = set(days)
@@ -724,6 +1113,8 @@ class Store:
     # 快照
     # ──────────────────────────────────────────────────────────────────────
     def snapshot(self) -> dict:
+        self.autofollow()            # 自动跟随最新在跑的跑批（--no-auto 可关）
+        self._refresh_log_path()
         self.refresh()
         warnings: list[dict] = []
         act = self.active_view()          # 只取本次运行产出的逐日产物（排除上一次遗留）
@@ -761,6 +1152,7 @@ class Store:
                     activity.append((tag, os.path.getmtime(newest)))
                 except OSError:
                     pass
+        activity.extend(self._proc_busy(act.get("procs") or []))
         if activity:
             src, last_ts = max(activity, key=lambda r: r[1])
             last_activity = epoch_iso(last_ts)
@@ -775,7 +1167,10 @@ class Store:
             run_start = active_days[0]
         if not run_end and cal:
             run_end = cal[-1]
-        window = [d for d in cal if run_start and run_end and run_start <= d <= run_end]
+        # 窗口起点：清单逻辑起点优先（续跑继承 20260105），否则回退日志头部起点。
+        # 否则续跑后窗口从续跑那天开始，之前已重放的日子（0105-0120）整段消失（实测曲线只剩 1 点）。
+        _wstart = self.manifest_start_day() or run_start
+        window = [d for d in cal if _wstart and run_end and _wstart <= d <= run_end]
         days_total = log.get("days_total") or (len(window) or None)
         last_completed = log.get("last_completed") or (active_days[-1] if active_days else None)
         days_done = len([d for d in window if last_completed and d <= last_completed]) or None
@@ -797,7 +1192,7 @@ class Store:
         if pace and days_total and days_done:
             eta = int(round(pace * max(0, days_total - days_done)))
 
-        fresh = bool(seconds_since is not None and seconds_since <= 60)
+        fresh = bool(seconds_since is not None and seconds_since <= 120)
         heartbeat = {
             "now": now_iso(),
             "last_activity": last_activity,
@@ -836,10 +1231,18 @@ class Store:
 
         initial = float(acc["initial_capital"]) if acc and acc.get("initial_capital") is not None else None
         trades_pg = pg["trades"]
+        # ── 计价空间（2026-09-24）：复权臂（WOLF_ADJ_PRICE=1）成交价在前复权空间，
+        #    净值/持仓必须用**复权收盘**计价，否则持仓市值被放大 f 倍
+        #    （实例：drabt14 0128 虚影 +12,166 ⇒ 单日 +9.69% 实为 +4.95%）。
+        self._curve_space = self.price_space(trades_pg)
+        _sp_info = self.price_space_info() or {}
+        self._curve_space_why = _sp_info.get("why", "")
+        curve_bars = self.bars_for_space(self._curve_space)
 
         # ── 净值重建（口径见页脚/覆盖率面板）───────────────────────────────
         symbols = sorted({t["symbol"] for t in trades_pg} | {p["symbol"] for p in pg["positions"]})
-        curve_start = run_start or (active_days[0] if active_days else None)
+        curve_start = (self.manifest_start_day() or run_start
+                       or (active_days[0] if active_days else None))
         curve_end = last_completed or (active_days[-1] if active_days else None)
         # 曲线要覆盖「窗口内全部交易日」，并且必须含**进行中的那一天**：PG 里当天已有成交，
         # 若曲线停在昨天，重建现金与账户可用现金就不是同口径（差额会被当成误差）。
@@ -861,8 +1264,21 @@ class Store:
         daily: list[dict] = []
         recon_delta = None
         if initial is not None and curve_start and curve_end:
+            # 曲线只画到**本次跑真正重放到的最后一天**：否则会把"当前冻结的持仓"
+            # 用后面的收盘价一路标记到窗口末尾 ⇒ 出现凭空的 +14% 与 -24% 回撤（用户实测"收益乱了"）。
+            # 本次真正重放到哪天：优先主日志的 last_completed（续跑时它=当前进度），
+            # 逐日产物里还有上一次跑留下的后半段，不能拿 max 当进度。
+            _run_last = compact_day((self.log_info() or {}).get("last_completed"))
+            if not _run_last:
+                try:
+                    _ad = (self.active_view() or {}).get("days") or []
+                    _run_last = max(_ad) if _ad else None
+                except Exception:
+                    _run_last = None
+            if _run_last:
+                curve_end = min(curve_end, _run_last)
             cal_win = [d for d in window if curve_start <= d <= curve_end]
-            closes = self.closes(symbols, curve_start, curve_end)
+            closes = self.closes(symbols, curve_start, curve_end, bars=curve_bars)
             ptr = {s: 0 for s in symbols}
             last_close: dict[str, float] = {}
             by_day: dict[str, list[dict]] = {}
@@ -930,19 +1346,43 @@ class Store:
                     "max_dd_pct": round(min(c["dd_pct"] for c in curve), 3),
                 })
                 if account_block["available_cash"] is not None:
-                    recon_delta = round(last["cash"] - account_block["available_cash"], 2)
+                    # ── 对账必须**同日**（2026-09-18 修）──
+                    # 曲线止于 `last_completed`，而 `paper_account_info.available_cash` 是**实时**的：
+                    # 进行中那一天（如 2026-01-12）的成交已经落到 PG，却还没进曲线。
+                    # 原先直接把两者相减 ⇒ 把"进行中日的现金流"误报成"费用模型口径差异"
+                    # （用户实测 -31,517.15 元，实测正好等于当日净卖出扣费额；费用真实残差只有几十元）。
+                    # 修法：按**同一截止日**对账——把「成交日 > curve_end」的现金流从账户现金里剔除，
+                    # 并把该笔现金流单列出来（口径不同就不再混进误差）。
+                    _flow_after = 0.0
+                    _days_after = set()
+                    for _t in trades_pg:
+                        _d = compact_day(_t.get("trade_date"))
+                        if not _d or _d <= (curve_end or ""):
+                            continue
+                        _amt = float(_t["price"]) * int(_t["volume"])
+                        _flow_after += (-_amt * BUY_FEE) if _t["direction"] == "买入" else (_amt * SELL_FEE)
+                        _days_after.add(_d)
+                    if _flow_after:
+                        account_block["cash_in_progress_flow"] = round(_flow_after, 2)
+                        account_block["cash_in_progress_days"] = sorted(_days_after)
+                        account_block["available_cash_same_cut"] = round(
+                            float(account_block["available_cash"]) - _flow_after, 2)
+                        recon_delta = round(last["cash"] - account_block["available_cash_same_cut"], 2)
+                    else:
+                        recon_delta = round(last["cash"] - account_block["available_cash"], 2)
                     account_block["cash_model"] = last["cash"]
                     account_block["cash_delta_vs_account"] = recon_delta
                 account_block["as_of"] = last["date"]
                 account_block["as_of_partial"] = bool(last.get("partial"))
                 account_block["equity_basis"] = "重建口径（见页脚说明）"
+                account_block["price_space"] = self._curve_space
 
         # ── 持仓 ────────────────────────────────────────────────────────────
         positions = []
         last_day_iso = iso_day(curve_end)
         close_map = {}
         if symbols and curve_start and curve_end:
-            for s, seq in self.closes(symbols, curve_start, curve_end).items():
+            for s, seq in self.closes(symbols, curve_start, curve_end, bars=curve_bars).items():
                 if seq:
                     close_map[s] = seq[-1][1]
         cal_sorted = window or cal
@@ -1083,7 +1523,7 @@ class Store:
         # ── 告警 ────────────────────────────────────────────────────────────
         if seconds_since is not None and seconds_since > 60:
             warnings.append({"level": "warn",
-                             "text": "心跳静止：最后活动 %.0f 秒前（%s），超过 60 秒阈值" % (seconds_since, src or "-")})
+                             "text": "心跳静止：最后活动 %.0f 秒前（%s），超过 120 秒阈值（seed/pack 等静默步进已计入进程 CPU/IO 活动）" % (seconds_since, src or "-")})
         if not procs_live:
             if fresh:
                 warnings.append({"level": "info",
@@ -1098,7 +1538,13 @@ class Store:
             warnings.append({"level": "warn", "text": "frozen_cash=%.2f 非零：有委托未落地，账上资金被冻结" % account_block["frozen_cash"]})
         if recon_delta is not None and abs(recon_delta) >= 1.0:
             warnings.append({"level": "info",
-                             "text": "重建现金与账户可用现金差 %.2f 元（费用模型口径差异，非数据缺失）" % recon_delta})
+                             "text": "重建现金与账户可用现金差 %.2f 元（已按同一截止日对账；剩余差异属费用/舍入口径）"
+                                     % recon_delta})
+        if account_block.get("cash_in_progress_flow"):
+            warnings.append({"level": "info",
+                             "text": "进行中日 %s 现金流 %+.2f 元尚未计入曲线（已在同口径对账中剔除，非误差）"
+                                     % ("、".join(account_block.get("cash_in_progress_days") or []),
+                                        account_block["cash_in_progress_flow"])})
         if wave.get("exists") and wave.get("err"):
             warnings.append({"level": "warn", "text": "波浪层 %d/%d 天失败" % (wave["err"], wave["total"])})
         if decision_blocked_days:
@@ -1117,6 +1563,7 @@ class Store:
             warnings.append({"level": "info", "text": "账户 %s 暂无成交（paper_trades 为空）" % self.account})
 
         return {
+            "follow": dict(self._follow),
             "heartbeat": heartbeat,
             "account": account_block,
             "curve": curve,
@@ -1136,6 +1583,12 @@ class Store:
                 "account": self.account,
                 "root": self.root,
                 "bars_db": self.bars_db,
+                "bars_adj_db": self.bars_adj_db,
+                # 本账户成交价所在价格空间（raw=不复权 bars.sqlite / adj=前复权 bars_adj.sqlite）
+                # 以及据此实际用于净值与持仓计价的日线库（2026-09-24 修复计价虚影）
+                "price_space": self._curve_space,
+                "price_space_why": self._curve_space_why,
+                "curve_bars_db": self.bars_for_space(self._curve_space),
                 "mins_dir": self.mins_dir,
                 "log": self.log_path,
                 "sources": ["本地 PG paper_*/t_triggers/stock_pool", "_summary/prod_*.json", "_bt_full/bars.sqlite",
@@ -1154,6 +1607,12 @@ class Store:
         parts.append("净值/回撤为**重建**口径：cash = 起点 + Σ(买入 -(价×量×1.000396) / 卖出 +(价×量×0.999104))，"
                      "再按当日收盘计价（缺失日用最近 ≤ 当日的收盘），equity = cash + 持仓市值；"
                      "曲线覆盖窗口内全部交易日（含没有成交的日子），末点若为进行中的交易日会在页面上标注。")
+        # 计价空间（2026-09-24）：复权臂若用不复权收盘计价，持仓市值会被放大 f 倍（0128 虚影 +1.2 万）
+        _sp = getattr(self, "_curve_space", "raw")
+        parts.append("**计价空间**：本账户成交价判定为 `%s` ⇒ 净值与持仓用 %s 计价（%s）。"
+                     % ("前复权(adj)" if _sp == "adj" else "不复权(raw)",
+                        "`bars_adj.sqlite`" if _sp == "adj" else "`bars.sqlite`",
+                        getattr(self, "_curve_space_why", "") or "无复权事件/样本不足"))
         parts.append("触发按 prod_*.json 的 id 首次出现日归属（这些文件是当日全量快照，已按 id 去重）。")
         parts.append("波浪层 %s/%s 天 ok；分钟缺口为**估算**（armed 标的 × 当日 5min 文件存在性）。"
                      % (wave.get("ok"), wave.get("total")))
@@ -1162,7 +1621,8 @@ class Store:
             parts.append("⚠ 本次统计只用**当前这次跑批**的产物：判定规则 %s，已排除 %d 个上一次遗留的 prod_*.json。"
                          % (rule, stale_n))
         if recon_delta is not None:
-            parts.append("重建现金 vs 账户可用现金差 %.2f 元（费用模型口径差异）。" % recon_delta)
+            parts.append("重建现金 vs 账户可用现金差 %.2f 元（同一截止日口径）。" % recon_delta)
+        # 注：进行中现金流明细已由 warnings 面板给出（本函数作用域没有 account_block，勿在此引用）
         parts.append("跑批进程：%s。" % ("、".join("%s(pid %d)" % (p["kind"], p["pid"]) for p in procs) if procs else "未发现"))
         return " ".join(parts)
 
@@ -1304,6 +1764,139 @@ class Store:
                 out[k] = v
         return out
 
+    # ── 当日盈亏构成（2026-09-22 用户："当下钻能看到成交，但看不到盈亏构成"）──────────
+    #   严格恒等式（与看板自己的净值重建同一套口径）：
+    #     Δequity = Σ 持仓浮动[昨持×（今收−昨收）] + Σ 买入贡献[（今收 − 含费买价）×量]
+    #               + Σ 卖出贡献[（含费卖价 − 今收）×量]
+    #   另附"引擎口径已实现"（Σ paper_trades.profit，相对**成本**）—— 它是用户逐笔看到的那个数，
+    #   与上面三项**口径不同**（前者对成本、后者对昨收/今收），故单列并给出对账差。
+    _TAKE_KINDS = ("wolf_profit_take_sell", "wolf_fib_target_sell", "high_sell", "wolf_confirm_sell")
+    _STOP_KINDS = ("stop_loss", "custom_support_sell", "wolf_passive_stop_sell", "derisk_cut")
+
+    def pnl_breakdown(self, d: str, pg: dict, act: dict) -> dict:
+        """当日盈亏构成（按票 + 按腿型大类 + 对账）。`d` = YYYYMMDD。"""
+        out: dict = {"ok": False, "note": ""}
+        # ① 交易日历 → 前一交易日
+        days = [x for x in (act.get("days") or []) if x <= d]
+        _snap = self.snapshot()                          # 内部有缓存，重复调用不额外取数
+        # ⚠️ `pnl` 在 **daily** 里（曲线 `curve` 只有 equity/cash/mv/realized/float，没有 pnl）
+        row = next((c for c in (_snap.get("daily") or []) if c.get("day") == d), None)
+        crow = next((c for c in (_snap.get("curve") or []) if c.get("day") == d), None)
+        prev = days[-2] if len(days) >= 2 else None
+        # 首日不再直接放弃：账户自初始现金起步 ⇒ 昨持恒为 0，浮动项必为 0，三项分解照样成立，
+        # 且 curve 首日 pnl 就是相对初始资金的 Δ权益 ⇒ 仍可对账（只是"昨收"无从取得）。
+        first_day = prev is None
+        # ② 重放成交，得到"昨持"与"今持"
+        vols_prev: dict = {}
+        vols_eod: dict = {}
+        for t in sorted(pg.get("trades") or [], key=lambda r: r.get("id") or 0):
+            dd = compact_day(t.get("trade_date"))
+            if not dd or dd > d:
+                continue
+            s_ = t["symbol"]
+            v_ = int(t["volume"])
+            if dd < d:
+                vols_prev[s_] = vols_prev.get(s_, 0) + (v_ if t["direction"] == "买入" else -v_)
+            vols_eod[s_] = vols_eod.get(s_, 0) + (v_ if t["direction"] == "买入" else -v_)
+        today_tr = [t for t in (pg.get("trades") or []) if compact_day(t.get("trade_date")) == d]
+        syms = sorted({t["symbol"] for t in today_tr} | {s_ for s_, v_ in vols_eod.items() if v_})
+        # ③ 收盘价（昨收 / 今收）—— 同样必须按账户的计价空间取库
+        _sp = self.price_space(pg.get("trades") or [])
+        cl = self.closes(syms, prev or d, d, bars=self.bars_for_space(_sp)) if syms else {}
+        c_prev: dict = {}
+        c_now: dict = {}
+        for s_ in syms:
+            for dd2, px in (cl.get(s_) or []):
+                if prev is not None and dd2 <= prev:
+                    c_prev[s_] = px
+                if dd2 <= d:
+                    c_now[s_] = px
+        # ④ 三项分解（按票）
+        by_sym: dict = {}
+        def _row(s_):
+            return by_sym.setdefault(s_, {"symbol": s_, "name": self.name_for(s_),
+                                          "float": 0.0, "buy": 0.0, "sell": 0.0,
+                                          "realized": 0.0, "sells": 0, "buys": 0,
+                                          "vol_prev": vols_prev.get(s_, 0), "vol_eod": vols_eod.get(s_, 0),
+                                          "close_prev": c_prev.get(s_), "close": c_now.get(s_)})
+        for s_ in syms:
+            v0, v1 = vols_prev.get(s_, 0), vols_eod.get(s_, 0)
+            p0, p1 = c_prev.get(s_), c_now.get(s_)
+            if v0 and p0 and p1:
+                _row(s_)["float"] += v0 * (p1 - p0)
+            if v1 and not (p0 and p1):
+                if first_day and not v0:
+                    pass                     # 首日昨持 0，浮动项本就为 0，节级 note 已说明，不再逐行重复
+                elif first_day:
+                    _row(s_)["note"] = "首日却有昨持，缺昨收 ⇒ 浮动项未计入"
+                else:
+                    _row(s_)["note"] = "缺收盘价，该票浮动未计入"
+        for t in today_tr:
+            s_ = t["symbol"]; px = float(t["price"]); v_ = int(t["volume"]); p1 = c_now.get(s_)
+            r_ = _row(s_)
+            if t["direction"] == "买入":
+                r_["buys"] += 1
+                if p1:
+                    r_["buy"] += (p1 - px * BUY_FEE) * v_
+            else:
+                r_["sells"] += 1
+                r_["realized"] += float(t.get("profit") or 0.0)
+                if p1:
+                    r_["sell"] += (px * SELL_FEE - p1) * v_
+        for r_ in by_sym.values():
+            r_["total"] = round(r_["float"] + r_["buy"] + r_["sell"], 2)
+            for k_ in ("float", "buy", "sell", "realized"):
+                r_[k_] = round(r_[k_], 2)
+        rows = sorted(by_sym.values(), key=lambda r_: -(abs(r_.get("total") or 0)))
+        # 活库窗口保护：跑批每日 `--prod-reset-first` 会**先清空再重建**活库，读取正好落在
+        # 该窗口时 paper_trades 为空（且被 TTL 缓存）⇒ 会得出"构成 0、对账差 −曲线值"的假象。
+        # 此时不报构成，只回曲线值 + 说明，避免把一个瞬态当成"当日不赚不亏"。
+        if not today_tr and not rows and (row or {}).get("pnl"):
+            out.update({"partial": True, "day": iso_day(d), "prev_day": iso_day(prev) if prev else None,
+                        "curve_pnl": (row or {}).get("pnl"), "curve_equity": (crow or {}).get("equity"),
+                        "note": "活库当前查不到该日流水 —— 跑批每日 reset-first 会短暂清空并重建活库"
+                                "（本次读取落在该窗口，或该日流水已被后续重建覆盖）。曲线盈亏取自逐日产物，"
+                                "不受影响；稍后刷新即可看到构成。"})
+            return out
+        total = round(sum(r_.get("total") or 0 for r_ in rows), 2)
+        realized = round(sum(r_.get("realized") or 0 for r_ in rows), 2)
+        # ⑤ 按腿型大类汇总"引擎口径已实现"
+        cls: dict = {"止盈类": 0.0, "破位/止损类": 0.0, "其他": 0.0}
+        for t in today_tr:
+            if t["direction"] == "买入":
+                continue
+            k_ = parse_kind(t.get("reason")) or ""
+            p_ = float(t.get("profit") or 0.0)
+            if k_ in self._TAKE_KINDS:
+                cls["止盈类"] += p_
+            elif k_ in self._STOP_KINDS:
+                cls["破位/止损类"] += p_
+            else:
+                cls["其他"] += p_
+        notes = ["「引擎口径已实现」= 逐笔 profit（相对成本），与上面三项口径不同（前者对成本、后者对昨收/今收），仅供对照"]
+        if first_day:
+            notes.insert(0, "首日：账户自初始资金起步，昨持恒为 0 ⇒ 浮动项为 0，曲线基准取初始资金")
+        out.update({
+            "ok": True,
+            "day": iso_day(d),
+            "prev_day": iso_day(prev) if prev else None,
+            "first_day": first_day,
+            "rows": rows,
+            "total": total,
+            "float_total": round(sum(r_.get("float") or 0 for r_ in rows), 2),
+            "buy_total": round(sum(r_.get("buy") or 0 for r_ in rows), 2),
+            "sell_total": round(sum(r_.get("sell") or 0 for r_ in rows), 2),
+            "realized_engine": realized,           # Σ profit（相对成本，逐笔口径）
+            "realized_by_class": {k_: round(v_, 2) for k_, v_ in cls.items()},
+            "curve_pnl": (row or {}).get("pnl"),
+            "curve_equity": (crow or {}).get("equity"),
+            "check_diff": (round(total - float((row or {}).get("pnl") or 0.0), 2)
+                           if row and row.get("pnl") is not None else None),
+            "formula": "Δ权益 = 持仓浮动[昨持×(今收−昨收)] + 买入贡献[(今收−含费买价)×量] + 卖出贡献[(含费卖价−今收)×量]",
+            "note": "；".join(notes),
+        })
+        return out
+
     def day_detail(self, day: str) -> dict:
         self.refresh()
         act = self.active_view()
@@ -1339,6 +1932,7 @@ class Store:
             "day": iso_day(d),
             "day_compact": d,
             "date": iso_day(d),
+            "pnl_breakdown": self.pnl_breakdown(d, pg, act),
             "exists": rec is not None,
             "cut": (rec or {}).get("cut"),
             "armed": [dict(a, name=self.name_for(a.get("symbol"))) for a in ((rec or {}).get("armed") or [])],
@@ -1433,6 +2027,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not day:
                     return self._json({"error": "缺少 day 参数，例：/api/day?day=20260302"}, 400)
                 return self._json(self.store.day_detail(day))
+            if route == "/api/runs":
+                return self._json(runs_payload())
+            if route == "/api/log":
+                path = (qs.get("path") or [""])[0].strip()
+                if not path:
+                    return self._json({"error": "缺少 path 参数"}, 400)
+                try:
+                    return self._json(read_log_tail(path, int((qs.get("tail") or ["600"])[0] or 600)))
+                except ValueError as ve:
+                    return self._json({"error": str(ve)}, 400)
             if route == "/favicon.ico":
                 return self._send(b"", "image/x-icon", 204)
             return self._json({"error": "not found", "path": parsed.path}, 404)
@@ -1449,6 +2053,168 @@ class Handler(BaseHTTPRequestHandler):
         return self.do_GET()
 
 
+LOGDIR = os.path.join(REPO, ".dsh-tmp", "wolfbt", "logs")
+
+
+def _allowed_log_path(p: str) -> str:
+    """日志白名单（2026-09-18）：只允许读回测日志——logs/ 目录、或 data/_bt* 下的 .log。"""
+    q = os.path.abspath(p if os.path.isabs(p) else os.path.join(REPO, p))
+    ok = (q.startswith(LOGDIR + os.sep) or q.startswith(os.path.join(REPO, "data", "_bt")))
+    if not ok or not q.endswith(".log") or not os.path.isfile(q):
+        raise ValueError("路径不在允许范围内（只允许 .dsh-tmp/wolfbt/logs/*.log 与 data/_bt*/*.log）")
+    return q
+
+
+def read_log_tail(path: str, tail: int = 600) -> dict:
+    q = _allowed_log_path(path)
+    tail = max(1, min(int(tail or 600), 5000))
+    try:
+        with open(q, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError as e:
+        return {"path": q, "error": str(e)[:120], "lines": []}
+    return {"path": q, "size": os.path.getsize(q), "mtime": os.path.getmtime(q),
+            "total_lines": len(lines), "tail": tail,
+            "truncated": len(lines) > tail, "lines": [ln.rstrip("\n") for ln in lines[-tail:]]}
+
+
+def _run_roots() -> list:
+    """data/_bt* 下已完成/落地的跑批根：天数、首末交易日、最新 mtime、逐日日志清单。"""
+    out = []
+    base = os.path.join(REPO, "data")
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return out
+    for name in names:
+        if not name.startswith("_bt"):
+            continue
+        root = os.path.join(base, name)
+        summ = os.path.join(root, "_summary")
+        if not os.path.isdir(summ):
+            continue
+        days, logs, mt = [], [], 0.0
+        try:
+            for fn in os.listdir(summ):
+                fp = os.path.join(summ, fn)
+                try:
+                    mt = max(mt, os.path.getmtime(fp))
+                except OSError:
+                    pass
+                if fn.startswith("prod_") and fn.endswith(".json"):
+                    days.append(fn[5:13])
+                if fn.endswith(".log"):
+                    logs.append({"name": fn, "path": fp, "mtime": os.path.getmtime(fp),
+                                 "size": os.path.getsize(fp)})
+        except OSError:
+            continue
+        days = sorted(d for d in days if d.isdigit())
+        logs.sort(key=lambda r: r["mtime"], reverse=True)
+        out.append({"kind": "root", "name": name, "root": root, "days": len(days),
+                    "first_day": days[0] if days else None, "last_day": days[-1] if days else None,
+                    "mtime": mt, "logs": logs[:120]})
+    out.sort(key=lambda r: r["mtime"], reverse=True)
+    return out
+
+
+
+def runs_from_logs(max_age_s: float = 900.0) -> list:
+    """**不依赖 /proc** 的跑批发现（沙箱禁止读别的进程 /proc ⇒ scan_procs 永远为空）。
+
+    口径：`<LOGDIR>/size_run_<tag>.log` 若最近 max_age_s 秒内被写过 ⇒ 视为在跑的跑批，
+    合成一条与 scan_procs 同形的记录（source=log 供页面标注）。取不到 ⇒ []。
+    """
+    out = []
+    now = time.time()
+    try:
+        for fn in os.listdir(LOGDIR):
+            if not (fn.startswith("size_run_") and fn.endswith(".log")):
+                continue
+            fp = os.path.join(LOGDIR, fn)
+            try:
+                mt = os.path.getmtime(fp)
+            except OSError:
+                continue
+            if now - mt > max_age_s:
+                continue
+            tag = fn[len("size_run_"):-len(".log")]
+            out.append({"pid": None, "kind": "bt_days", "role": "run", "source": "log",
+                        "cmdline": "(由日志推断：%s)" % fn, "ppid": None,
+                        "root": os.path.join(REPO, "data", "_bt_" + tag),
+                        "account": "drab" + tag, "started_epoch": mt,
+                        "stdout": fp, "follow_log": fp, "elapsed_s": None})
+    except OSError:
+        return []
+    out.sort(key=lambda r: -(r.get("started_epoch") or 0))
+    return out
+
+
+def runs_payload() -> dict:
+    """页面"进程 / 跑批"面板数据：在跑进程 + 已完成跑批根 + 日志文件。"""
+    procs = scan_procs(None)
+    if not procs:                      # 沙箱读不到 /proc ⇒ 由日志 mtime 推断（见 runs_from_logs）
+        procs = runs_from_logs()
+    newest_log = None
+    try:
+        cands = [os.path.join(LOGDIR, f) for f in os.listdir(LOGDIR) if f.endswith(".log")]
+        if cands:
+            newest_log = max(cands, key=os.path.getmtime)
+    except OSError:
+        pass
+    for pr in procs:
+        cmd = pr.get("cmdline") or ""
+        m_root = re.search(r"--root\s+(\S+)", cmd)
+        m_acc = re.search(r"--account\s+(\S+)", cmd)
+        pr["root"] = m_root.group(1) if m_root else None
+        pr["account"] = m_acc.group(1) if m_acc else None
+        # 进程角色（2026-09-18 用户："明确看到在跑进程有两个" —— 面板把所有 bt_* 都列成"在跑"）：
+        #   run=bt_days（真正的跑批）；child=bt_prod_run/bt_day_legs/... （某次跑批的当日子进程，不是第二跑）；
+        #   dashboard=看板自身；service=as-of API 等配套。页面据此分组/置灰并显示父子关系。
+        try:
+            with open("/proc/%d/stat" % pr["pid"], "r") as _fh:
+                pr["ppid"] = int(_fh.read().rsplit(") ", 1)[1].split()[1])
+        except Exception:
+            pr["ppid"] = None
+        _k = str(pr.get("kind") or "")
+        if _k == "bt_days":
+            pr["role"] = "run"
+        elif _k == "bt_dashboard":
+            pr["role"] = "dashboard"
+        elif _k.startswith("bt_job:") or _k == "bt_prod_run":
+            pr["role"] = "child"
+        else:
+            pr["role"] = "service"
+        pr["elapsed_s"] = (round(time.time() - pr["started_epoch"], 1)
+                           if pr.get("started_epoch") else None)
+        try:
+            pr["stdout"] = os.path.realpath("/proc/%d/fd/1" % pr["pid"])
+        except OSError:
+            pr["stdout"] = None
+        if not (pr["stdout"] or "").endswith(".log"):
+            pr["stdout"] = newest_log        # stdout 是管道时退到最新日志（页面直接可看）
+        # 2026-09-19：newest_log 可能就是看板自己的 dashboard.log ⇒ 页面钉错文件。
+        #   这里按根 tag 再算一个 follow_log（排除看板日志），前端"跟随最新"优先用它。
+        try:
+            _st = float(pr.get("started_epoch") or 0)
+            _fl = _tag_log_for_root(pr.get("root") or "", min_mtime=_st) if pr.get("root") else None
+            pr["follow_log"] = _fl or (pr.get("stdout") if (pr.get("stdout") or "").endswith(".log")
+                                       and not (pr.get("stdout") or "").endswith("dashboard.log") else None)
+        except Exception:
+            pr["follow_log"] = pr.get("stdout")
+    logs = []
+    try:
+        for fn in os.listdir(LOGDIR):
+            if not fn.endswith(".log"):
+                continue
+            fp = os.path.join(LOGDIR, fn)
+            logs.append({"kind": "log", "name": fn, "path": fp,
+                         "mtime": os.path.getmtime(fp), "size": os.path.getsize(fp)})
+    except OSError:
+        pass
+    logs.sort(key=lambda r: r["mtime"], reverse=True)
+    return {"running": procs, "roots": _run_roots(), "logs": logs[:80], "now": now_iso()}
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="回测监控只读看板（标准库 + psycopg2）")
     ap.add_argument("--host", default="127.0.0.1")
@@ -1456,10 +2222,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--root", default=os.path.join(REPO, "data", "_bt_year"),
                     help="逐日产物根目录（默认 data/_bt_year）")
     ap.add_argument("--bars", default=os.path.join(REPO, "data", "_bt_full", "bars.sqlite"))
+    ap.add_argument("--bars-adj", dest="bars_adj", default="",
+                    help="前复权日线库（复权臂计价用；默认取 --bars 同目录的 bars_adj.sqlite）")
     ap.add_argument("--mins", default=os.path.join(REPO, "data", "_bt_full", "mins"))
     ap.add_argument("--log", default=os.path.join(REPO, ".dsh-tmp", "wolfbt", "logs", "year_prod.log"))
     ap.add_argument("--pg", default=os.getenv("BT_PG_URL", DEFAULT_PG))
     ap.add_argument("--account", default=os.getenv("BT_ACCOUNT", "stock"))
+    ap.add_argument("--no-auto", dest="auto", action="store_false", default=True,
+                    help="关闭自动跟随最新跑批（默认自动跟随）")
     ap.add_argument("--ttl", type=float, default=3.0, help="PG/快照缓存秒数（默认 3s，页面 10s 轮询）")
     return ap
 

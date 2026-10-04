@@ -28,6 +28,22 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+def _dsn() -> str:
+    """DSN 统一解析（2026-09-19 修 postgres 主机名/.env 端口不对，见 apps/main_line/db_dsn.py）。"""
+    try:
+        import sys as _s2, os as _o2
+        _p2 = _o2.path.dirname(_o2.path.abspath(__file__))
+        if _p2 not in _s2.path:
+            _s2.path.insert(0, _p2)
+        from db_dsn import dsn as _d
+        return _d()
+    except Exception:
+        import os as _o3
+        return _o3.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+
+
+
+
 VOL_WIN = 10        # 他："10日量能"
 ACT_DAYS = 5        # 他："最近一周"
 ACT_NEED = 4        # 他："至少2/3天数以上" → ceil(5 × 2/3) = 4
@@ -99,8 +115,7 @@ def theme_amounts(theme: str, as_of: Optional[str] = None, days: int = VOL_WIN +
         concepts = THEME_CONCEPTS.get(theme) or []
         if not concepts:
             return []
-        conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = psycopg2.connect(_dsn())
         cur = conn.cursor()
         ph = ",".join(["%s"] * len(concepts))
         cur.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name IN (" + ph + ")",
@@ -140,10 +155,65 @@ def _ensure_bars_fresh() -> None:
         for _p in ("/app", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))):
             if os.path.isdir(os.path.join(_p, "backend")) and _p not in _s.path:
                 _s.path.insert(0, _p)
+        # 2026-09-19：**自愈开关化** —— `WOLF_VOLFUND_SELFHEAL`（库内默认 1=生产行为不变；
+        # 回测由 pins 置 0）。理由：自愈会去 relay 取数落库，回放里既慢又不需要
+        # （沙箱的 mkt_bars_daily 已由 as-of 数据准备好）；关掉后本函数直接 fail-open 继续判定。
+        if str(os.getenv("WOLF_VOLFUND_SELFHEAL", "1")).strip().lower() in ("0", "false", "no", "off"):
+            raise RuntimeError("自愈已关(WOLF_VOLFUND_SELFHEAL=0)")
+        from db_dsn import backend_on_path as _bop; _bop()
         from app.services.mkt_bars import ensure_fresh
         ensure_fresh()
     except Exception as _e:
         print("[theme_volfund] bars 自愈跳过: %s" % str(_e)[:80])
+
+
+# ── 资金门 as-of（2026-09-19 用户口径：「主题资金流历史不要用当日的，避免未来函数」）──────────
+# 背景 bug（实测）：`theme_fund_danger` → `theme_nets(theme, days=n+2)` → `_trade_days(None, n)`
+#   走的是 `SELECT DISTINCT trade_date FROM mkt_bars_daily ORDER BY trade_date DESC LIMIT n`
+#   **没有上界** ⇒ 回放里拿到的是**PG 库里最近的 n 个交易日**（本机 = 2026-09 的尾巴），
+#   即用**未来（9 月）的资金流**判 1 月的买入：jan9 跑的 `data/_bt_jan9/20260105/theme_mf_daily.json`
+#   里被追加了 7 个 20260904~0914 的日期就是铁证。
+# 修法：日 T 盘前只能用 **≤ T-1** 的资金流（当日资金流要收盘后才有）⇒ 取 T 的前一交易日做锚。
+FUND_ASOF_ON = str(os.getenv("WOLF_FUND_ASOF",
+                             "1" if os.getenv("BT_ASOF_FETCH") else "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _today8() -> str:
+    from datetime import datetime
+    return datetime.now().strftime("%Y%m%d")
+
+
+def _asof_anchor() -> str:
+    """资金门 as-of 锚 = **决策日的前一交易日**。
+
+    ① 回放：沙箱 _seed.json 的 cut 就是该日的 as-of 边界（最准）；
+    ② 生产：PG 里 < 今日 的最大交易日。
+    """
+    try:
+        p = os.path.join(os.environ.get("DATA_DIR", ""), "_seed.json")
+        with open(p, encoding="utf-8") as f:
+            j = json.load(f) or {}
+        c = str(j.get("cut") or "").replace("-", "")
+        if len(c) == 8 and c.isdigit():
+            return c
+    except Exception:
+        pass
+    return _prev_trade_day(_today8())
+
+
+def _prev_trade_day(d8: str) -> str:
+    """< d8 的最近交易日（资金门 as-of 锚）。取不到 → 空串（调用方回落到旧行为）。"""
+    if not d8:
+        return ""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(_dsn()); cur = conn.cursor()
+        cur.execute("SELECT MAX(trade_date) FROM mkt_bars_daily WHERE trade_date < %s", (d8,))
+        r = cur.fetchone(); cur.close(); conn.close()
+        return str(r[0]) if r and r[0] else ""
+    except Exception as e:
+        print("[theme_volfund] 资金门 as-of 锚取数失败(回落旧行为): %s" % str(e)[:70], flush=True)
+        return ""
 
 
 def _trade_days(as_of: Optional[str], n: int) -> List[str]:
@@ -151,8 +221,7 @@ def _trade_days(as_of: Optional[str], n: int) -> List[str]:
     _ensure_bars_fresh()
     try:
         import psycopg2
-        conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = psycopg2.connect(_dsn())
         cur = conn.cursor()
         if as_of:
             cur.execute("SELECT DISTINCT trade_date FROM mkt_bars_daily WHERE trade_date<=%s "
@@ -172,12 +241,102 @@ def _mf_cache_path() -> str:
     return os.path.join(os.environ.get("DATA_DIR", "/app/data"), "theme_mf_daily.json")
 
 
+# ── moneyflow 取数治理（2026-09-19 定位"布腿器 317s"的真凶）────────────────────────
+# 实测：`theme_fund_danger`（资金门）内部 `theme_nets` → `_refresh_mf_day` → relay 取**全市场**
+#   moneyflow；relay 会尝试远程源（datahubco 502）且**失败不缓存** ⇒ 布腿器对每条腿都重付一次
+#   （9 条腿 ≈ 317s，与 [timing] legs_switch.闸+写腿 316.77s 完全吻合）。
+# 治理：① relay 调用放进线程 + **硬超时**（WOLF_MF_FETCH_TIMEOUT 默认 8s）；
+#       ② 失败按**当日负缓存**静默（WOLF_MF_FAIL_TTL 默认 1800s）：同一天不再重试；
+#       ③ 主题→成分股映射（sqlite 查询）进程内缓存。
+#   语义不变：拿不到数据时仍走原有分支（`WOLF_FUND_GATE_FAILCLOSED` 决定放行/停买）。
+_MF_FAIL: Dict[str, float] = {}
+_MF_DOWN_UNTIL: float = 0.0        # 进程级熔断：任一日取数失败 ⇒ 整个进程在 TTL 内不再试（否则 5 日 × 8s 超时 = 40s/进程）
+_CONCEPT_CODES: Dict[str, set] = {}
+
+
+def _mf_timeout() -> float:
+    """moneyflow 取数硬超时（秒）。
+
+    2026-09-20 追加：**回放里（`BT_RELAY_OFFLINE=1`）再压到 1s**。实测资金门单次调用在回放里要等满
+    10.2s（relay 取全市场 moneyflow 走不通），而 0130（月末＋周五）当天评估了 26 个主题 ⇒ 光等待
+    约 4.4 分钟、单日耗时从 ~3 分钟涨到 ~13 分钟；压到 1s 后单次 0.0s，**判定结果完全不变**
+    （`theme_nets` 两次都返回空，仍走缓存/沿用原分支）。
+    生产不设 `BT_RELAY_OFFLINE` ⇒ 仍是默认 8s，行为不变。
+    """
+    try:
+        v = float(os.getenv("WOLF_MF_FETCH_TIMEOUT", "8"))
+    except Exception:
+        v = 8.0
+    try:
+        if str(os.getenv("BT_RELAY_OFFLINE", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            v = min(v, 1.0)
+    except Exception:
+        pass
+    return v
+
+
+def _mf_fail_ttl() -> float:
+    try:
+        return float(os.getenv("WOLF_MF_FAIL_TTL", "1800"))
+    except Exception:
+        return 1800.0
+
+
+def _relay_items_timed(relay, d8: str):
+    """调 relay 取某日全市场 moneyflow，带**线程硬超时**（DNS/远端卡住也不会拖住调用方）。"""
+    box: Dict[str, Any] = {}
+
+    def _run():
+        try:
+            box["r"] = relay.relay_items("moneyflow", fields="ts_code,trade_date,net_mf_amount",
+                                         trade_date=d8)
+        except Exception as e:
+            box["err"] = "%s: %s" % (type(e).__name__, str(e)[:60])
+    try:
+        import threading
+        th = threading.Thread(target=_run, daemon=True)
+        th.start()
+        th.join(_mf_timeout())
+    except Exception:
+        _run()
+    if "err" in box:
+        print("[theme_volfund] moneyflow 取数失败 %s: %s" % (d8, box["err"]), flush=True)
+    return box.get("r") or ([], [])
+
+
+def _concept_codes(theme: str) -> set:
+    """主题 → 成分股代码集（sqlite，进程内缓存）。"""
+    if theme in _CONCEPT_CODES:
+        return _CONCEPT_CODES[theme]
+    codes: set = set()
+    try:
+        import sqlite3
+        from fusion_mainline import THEME_CONCEPTS
+        cons = THEME_CONCEPTS.get(theme) or []
+        db = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "stock_pool.db")
+        c = sqlite3.connect(db)
+        ph = ",".join(["?"] * len(cons))
+        codes = {str(r[0]) for r in c.execute(
+            "SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name IN (%s)" % ph, cons)}
+        c.close()
+    except Exception:
+        codes = set()
+    _CONCEPT_CODES[theme] = codes
+    return codes
+
+
 def _refresh_mf_day(d8: str) -> Dict[str, float]:
     """取某日**全市场** moneyflow（中继，1 次调用）→ 13 个主题的主力净流入合计（万元）。
 
     ⚠️ 不用 `concept_hist.net_amount`：生产实测该字段是**前值填充**（末 5 日完全相同），
     拿它判"连续 5 日净流出"会恒真/恒假 → 这里改用日频个股资金流（Tushare moneyflow）按成分加总。
     """
+    import time as _t
+    global _MF_DOWN_UNTIL
+    if _t.time() < _MF_DOWN_UNTIL:
+        return {}                      # 进程级熔断：本进程已判定 moneyflow 源不可用
+    if _t.time() < _MF_FAIL.get(str(d8), 0.0):
+        return {}                      # 当日已判定"取不到" ⇒ 不再重试（避免每条腿都等一遍）
     import sys as _s
     _p = os.path.dirname(os.path.abspath(__file__))
     if _p not in _s.path:
@@ -202,9 +361,12 @@ def _refresh_mf_day(d8: str) -> Dict[str, float]:
                 break
             cur = os.path.dirname(cur)
     if relay is None:
+        _MF_FAIL[str(d8)] = _t.time() + _mf_fail_ttl()
         return {}
-    fields, items = relay.relay_items("moneyflow", fields="ts_code,trade_date,net_mf_amount", trade_date=d8)
+    fields, items = _relay_items_timed(relay, d8)
     if not items or not fields:
+        _MF_FAIL[str(d8)] = _t.time() + _mf_fail_ttl()      # 负缓存：当日不再试
+        _MF_DOWN_UNTIL = _t.time() + _mf_fail_ttl()         # 进程级熔断：剩下的日子也不再试
         return {}
     i_ts, i_v = fields.index("ts_code"), fields.index("net_mf_amount")
     by_ts = {}
@@ -214,17 +376,8 @@ def _refresh_mf_day(d8: str) -> Dict[str, float]:
         except (TypeError, ValueError):
             continue
     out = {}
-    for th, cons in THEME_CONCEPTS.items():
-        try:
-            import sqlite3
-            db = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "stock_pool.db")
-            c = sqlite3.connect(db)
-            ph = ",".join(["?"] * len(cons))
-            codes = {str(r[0]) for r in c.execute(
-                "SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name IN (%s)" % ph, cons)}
-            c.close()
-        except Exception:
-            codes = set()
+    for th in THEME_CONCEPTS.keys():
+        codes = _concept_codes(th)
         out[th] = sum(by_ts.get(c, 0.0) for c in codes)
     return out
 
@@ -235,9 +388,6 @@ def theme_nets(theme: str, as_of: Optional[str] = None, days: int = FUND_DAYS + 
     取数：每个交易日 1 次中继调用（全市场），结果按日缓存 `data/theme_mf_daily.json`（13 个主题各一个数）。
     失败/数据不足 → 返回已取到的部分（调用方 fail-open）。
     """
-    dts = _trade_days(as_of, days)
-    if not dts:
-        return []
     path = _mf_cache_path()
     cache: Dict[str, Any] = {}
     try:
@@ -245,6 +395,23 @@ def theme_nets(theme: str, as_of: Optional[str] = None, days: int = FUND_DAYS + 
             cache = json.load(f) or {}
     except Exception:
         cache = {}
+    if not as_of and FUND_ASOF_ON:
+        # 盘前决策只用 ≤ 前一交易日的资金流（避免未来函数；见上文 as-of 说明）
+        as_of = _asof_anchor()
+    dts = _trade_days(as_of, days)
+    if as_of:
+        dts = [str(d) for d in dts if str(d) <= str(as_of)]   # 防御：任何来源的未来日期一律丢掉
+        # 回放里 PG mkt_bars_daily 只有回放期起的数据（实测 min=20260105）⇒ ≤cut 的日子取不到；
+        # 用「资金缓存里 ≤ as_of 的日期」补齐（缓存本身在 seed 时就按 cut 截断过，是 as-of 的）。
+        _cached = sorted(str(d) for d in cache if str(d) <= str(as_of))
+        if _cached:
+            _merged = sorted(set(dts) | set(_cached))
+            if len(_merged) > len(set(dts)):
+                dts = _merged[-days:]
+                print("[theme_volfund] 资金门 as-of：PG 交易日不足，用缓存补齐 → 末日 %s（锚 %s，共 %d 日）"
+                      % (dts[-1], as_of, len(dts)), flush=True)
+    if not dts:
+        return []
     changed = False
     for d in dts:
         if not isinstance(cache.get(d), dict):
@@ -414,3 +581,52 @@ def theme_volfund_ok(theme: str, as_of: Optional[str] = None) -> Tuple[bool, str
                            % why)
         return True, why
     return ok, why
+
+
+# ───────────── 资金门「相对口径」（2026-09-21 用户拍板 B 项）─────────────
+# 语料依据：2025-04-15 条件1「看前一日**流入前5和流出前3**的板块和个股…**避开三日都是流出前3的板块个股**」。
+# 与「绝对口径」（2025-06-16「资金没有 5 日连续流出的」）并存 —— 两条都是他的话；绝对口径在普跌期
+# 几乎把全部主题判危险（实测 2026-01 把趋势通道 5,560 次触发里的 99.9% 挡掉），故补上相对口径供选择。
+# 开关：WOLF_FUND_GATE_MODE=abs（默认，行为逐位不变）| rank（本口径）。
+def mf_cache_load() -> Dict[str, Any]:
+    """读资金流日缓存 {date: {theme: net}}（as-of 截断由调用方负责）。"""
+    try:
+        with open(_mf_cache_path(), encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def rank_danger(series_by_day: Sequence[Dict[str, float]], theme: str, k: int = 3):
+    """**纯函数**：主题在**每一天**都进入当日净流出前 k 名 ⇒ 危险。
+
+    series_by_day：[{theme: net}, ...]，按日期升序；net 越负 = 流出越多。
+    数据不足（该日主题缺失 / 主题数 < k+1）⇒ 判「无危险」（fail-open，与既有 fail 策略一致）。
+    """
+    days = [d for d in (series_by_day or []) if isinstance(d, dict)]
+    if not days:
+        return False, "资金数据不可用 → 放行"
+    hits = []
+    for day in days:
+        vals = {str(t): float(v) for t, v in day.items() if v is not None}
+        if theme not in vals or len(vals) < max(int(k) + 1, 3):
+            return False, "该日主题数不足(%d) → 放行" % len(vals)
+        order = sorted(vals, key=lambda t: vals[t])      # 升序：最负（流出最多）在前
+        hits.append(theme in set(order[:int(k)]))
+    if all(hits):
+        return True, "板块资金危险(相对口径): 主题[%s] 连续 %d 日处于净流出前 %d" % (theme, len(hits), int(k))
+    return False, "板块资金正常(相对口径): 近 %d 日里进入流出前 %d 共 %d 天" % (len(hits), int(k), sum(1 for h in hits if h))
+
+
+def theme_rank_danger(theme: str, as_of: Optional[str] = None,
+                      days: Optional[int] = None, k: Optional[int] = None):
+    """相对口径的资金门（复用同一份日缓存，as-of 与 theme_nets 一致）。"""
+    n = int(days if days is not None else os.getenv("WOLF_THEME_FUND_RANK_DAYS", "3"))
+    kk = int(k if k is not None else os.getenv("WOLF_THEME_FUND_RANK_K", "3"))
+    if not as_of and FUND_ASOF_ON:
+        as_of = _asof_anchor()
+    cache = mf_cache_load()
+    dts = [str(d) for d in sorted(cache) if (not as_of or str(d) <= str(as_of))][-max(n, 1):]
+    if len(dts) < n:
+        return False, "资金日缓存不足(%d/%d) → 放行" % (len(dts), n)
+    return rank_danger([cache[d] for d in dts], theme, kk)

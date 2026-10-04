@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """backfill_market_bars_promax.py — 用 **promax** 源回填 `mkt_bars_daily`（gzcloud token 已失效时的替代）。
 
-背景（2026-09-13）：`TUSHARE_API_URL=https://ts.gyzcloud.top/api` 的 token 报
+背景（2026-09-13）：`TUSHARE_API_URL=https://pcd.mobcvb.cn/tushare/pro` 的 token 报
 「**Token无效或已过期，请联系客服续费**」→ 2025 回填 0 行。实测 **promax**（`PROMAX_URL` + `X-API-Key`）
 的 `/daily`、`/daily_basic`、`/trade_cal` 均 200 可用 → 改走它。
 

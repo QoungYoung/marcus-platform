@@ -184,36 +184,152 @@ def write_stock_daily(pack: str, symbols, bars_db: str):
     c.close()
 
 
+def _sig(path: str):
+    """文件签名 (mtime, size)；取不到返回 None。"""
+    try:
+        st = os.stat(path)
+        return [int(st.st_mtime), int(st.st_size)]
+    except OSError:
+        return None
+
+
+def _split_name(fname: str):
+    """`000001_SH_5min_20260911.json` → (ts_code, symbol, day8)。"""
+    parts = fname[:-5].split("_")
+    if len(parts) < 4:
+        return None, None, None
+    code, mkt, _freq, day = parts[0], parts[1], parts[2], parts[3]
+    ts = "%s.%s" % (code, mkt)
+    sym = (mkt + code) if mkt in ("SH", "SZ") else ts
+    return ts, sym, day
+
+
+def _drop_day(pack: str, sub: str, key: str, day: str) -> None:
+    """源文件被删除时，把该天从 pack 里摘掉（保持"pack 是分钟缓存的纯函数"语义）。"""
+    p = os.path.join(pack, sub, "%s.json" % key)
+    if not os.path.exists(p):
+        return
+    try:
+        cur = json.load(open(p, encoding="utf-8")) or {}
+    except Exception:
+        return
+    if day in cur:
+        cur.pop(day, None)
+        json.dump(cur, open(p, "w", encoding="utf-8"), ensure_ascii=False)
+
+
+def _pack_hint() -> str:
+    """argparse 之前粗略取 `--pack`（用于 `.skip_pack` 标记判定）。"""
+    import sys as _s
+    argv = _s.argv
+    for i, x in enumerate(argv):
+        if x == "--pack" and i + 1 < len(argv):
+            return argv[i + 1]
+        if x.startswith("--pack="):
+            return x.split("=", 1)[1]
+    return ""
+
+
 def main() -> int:
+    # ── 2026-09-20：回放里可跳过打包 ─────────────────────────────────────────
+    # 为什么：`--prod-only` 回放链里 **没有任何消费者** —— `bt_prod_run` 不读 pack（它读 `--mins`），
+    #   读 pack 的 `bt_account` 那一步又被 `--prod-only` 跳过；而当天若有新取的分钟档，
+    #   打包就要重打上百个文件（实测 112–447s；无变化时 0.1s）。
+    # 安全性：产物随时可用本脚本从 `data/_bt_full/mins` 重建，消费方只有
+    #   bt_account / bt_intraday / bt_reconcile 三个分析工具。
+    # 开关：env `BT_SKIP_PACK=1`，或运行根下放标记文件 `.skip_pack`（可在不改父进程 env 时即时生效）。
+    try:
+        import os as _os
+        _root = _os.path.dirname(_os.path.abspath(_pack_hint() or "."))
+        if (str(_os.getenv("BT_SKIP_PACK", "0")).strip().lower() in ("1", "true", "yes", "on")
+                or (_root and _os.path.exists(_os.path.join(_root, ".skip_pack")))):
+            print("[pack] 已跳过（BT_SKIP_PACK / .skip_pack 标记）：产物仅分析工具消费，回放交易链不读",
+                  file=sys.stderr)
+            return 0
+    except Exception:
+        pass
+    import time as _t
     ap = argparse.ArgumentParser()
     ap.add_argument("--mins", default="/app/data/_bt_full/mins")
     ap.add_argument("--pack", default="/app/data/_bt_full/pack")
     ap.add_argument("--bars-db", default="/app/data/_bt_full/bars.sqlite")
     ap.add_argument("--index-sh", default="000001.SH")
     a = ap.parse_args()
+    t0 = _t.time()
+    inc = str(os.environ.get("BT_PACK_INCREMENTAL", "1")).strip().lower() not in ("0", "false", "no", "off")
+    man_p = os.path.join(a.pack, "_pack_manifest.json")
+    man = {}
+    if inc and os.path.exists(man_p):
+        try:
+            man = json.load(open(man_p, encoding="utf-8")) or {}
+        except Exception:
+            man = {}
+    prev = (man.get("mins") or {}) if inc else {}
+    prev_bars = (man.get("bars") or {}) if inc else {}
+    prev_daily_sig = man.get("bars_db") if inc else None
+
     files = sorted(f for f in os.listdir(a.mins) if f.endswith(".json"))
     syms, n = set(), 0
+    new_sig, new_bars = {}, {}
+    n_reuse = n_repack = n_drop = 0
     for f in files:
-        parts = f[:-5].split("_")          # 000001_SH_5min_20260911
-        if len(parts) < 4:
+        fp = os.path.join(a.mins, f)
+        sg = _sig(fp)
+        ts, sym, day = _split_name(f)
+        if sym is None:
             continue
-        code, mkt, freq, day = parts[0], parts[1], parts[2], parts[3]
-        ts = "%s.%s" % (code, mkt)
-        bars = load_mins_file(os.path.join(a.mins, f))
+        if prev.get(f) == sg:                       # ← 增量：源文件没变 → 不读不聚合不写
+            new_sig[f] = sg
+            new_bars[f] = int(prev_bars.get(f, 0))
+            n += new_bars[f]
+            n_reuse += 1
+            if ts != a.index_sh:
+                syms.add(sym)
+            continue
+        bars = load_mins_file(fp)
         if not bars:
             continue
-        bars = aggregate_5min(bars)          # ← 关键：同槽多行先聚合
+        bars = aggregate_5min(bars)
         if ts == a.index_sh:
             write_m5(a.pack, "sh", bars, sub="index_m5")
         else:
-            sym = (mkt + code) if mkt in ("SH", "SZ") else ts
             write_m5(a.pack, sym, bars, sub="m5")
             syms.add(sym)
         n += len(bars)
-    write_index_daily(a.pack, a.index_sh, a.bars_db)
-    write_stock_daily(a.pack, sorted(syms), a.bars_db)
-    print("[pack] 打包 %d 根 bar / %d 只标的 → %s（index_m5/sh + index_daily + stock_daily）"
-          % (n, len(syms), a.pack))
+        n_repack += 1
+        new_sig[f] = sg
+        new_bars[f] = len(bars)
+    if inc:                                          # 源文件消失 → 摘掉对应天
+        for f in set(prev) - set(new_sig):
+            ts, sym, day = _split_name(f)
+            if sym is None or not day:
+                continue
+            _drop_day(a.pack, "index_m5" if ts == a.index_sh else "m5",
+                      "sh" if ts == a.index_sh else sym, day)
+            n_drop += 1
+
+    # 日线部分：bars.sqlite 未变且文件在 → 跳过（否则重建）
+    db_sig = _sig(a.bars_db)
+    if inc and prev_daily_sig == db_sig and os.path.exists(
+            os.path.join(a.pack, "index_daily", "%s.json" % a.index_sh)):
+        pass                                   # 指数日线未变 → 跳过
+    else:
+        write_index_daily(a.pack, a.index_sh, a.bars_db)
+    if inc and prev_daily_sig == db_sig:       # 日线库未变 → 只补缺失的标的
+        miss = [s for s in sorted(syms)
+                if not os.path.exists(os.path.join(a.pack, "stock_daily", "%s.json" % s))]
+        if miss:
+            write_stock_daily(a.pack, miss, a.bars_db)
+    else:
+        write_stock_daily(a.pack, sorted(syms), a.bars_db)
+    try:
+        json.dump({"mins": new_sig, "bars": new_bars, "bars_db": db_sig},
+                  open(man_p, "w", encoding="utf-8"), ensure_ascii=False)
+    except Exception:
+        pass
+    print("[pack] %s 打包 %d 根 bar / %d 只标的 → %s（复用 %d 文件 / 重打 %d / 摘除 %d 天，耗时 %.1fs）"
+          % ("增量" if inc else "全量", n, len(syms), a.pack, n_reuse, n_repack, n_drop,
+             _t.time() - t0))
     return 0
 
 

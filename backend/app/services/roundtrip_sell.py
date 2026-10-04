@@ -14,6 +14,7 @@
   → 原值 0.008(+0.8%) 属**自设的小止盈**，与狼大兑现口径相反（0.8% 连他说的"波动连手续费都不够"那档都不到）。
      现改为 **默认 0.03（狼大区间 3-5 个点的下沿）**，可 `WOLF_ROUNDTRIP_SELL_UP` 覆盖（如 0.05 取上沿）。
 """
+from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import json
 import os
 from datetime import date, datetime
@@ -41,7 +42,7 @@ def sell_up_for(symbol) -> float:
     """该标的的等量换手兑现幅度（ETF 2 个点 / 个股 3 个点）。"""
     return ROUNDTRIP_SELL_UP_ETF if is_etf(symbol) else ROUNDTRIP_SELL_UP
 ROUNDTRIP_ENABLED = str(os.environ.get("WOLF_ROUNDTRIP_SELL", "1")) == "1"
-STATE_FILE = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "roundtrip_state.json")
+STATE_FILE = __state_path("roundtrip_state.json")
 MAX_AGE_DAYS = 5               # 状态保留天数（自然日）
 
 

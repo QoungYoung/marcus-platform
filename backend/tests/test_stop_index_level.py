@@ -171,3 +171,18 @@ class TestIndexLevelStopWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_stale_guard_with_dashed_date():
+    """⚠️ 回归：wave_state.json 的 date 带横杠（"2026-09-10"）—— 原实现切字符串会静默失效。"""
+    import sys as _s, os as _o
+    _s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__)))), "apps", "main_line"))
+    import wolf_context as WC
+    stale = {"level": "d4", "sub_level": "4-2", "date": "2026-09-10"}
+    act, why = WC.index_top_state(stale, today="20260914")     # 09-14 − 09-10 = 4 天 > 3
+    assert act is None and "过期" in why, (act, why)
+    ok, why2 = WC.index_level_stop(stale, today="20260914")    # 旧函数同样要拦住
+    assert ok is False and "过期" in why2, (ok, why2)
+    fresh = {"level": "d4", "sub_level": "4-2", "date": "2026-09-14"}
+    assert WC.index_top_state(fresh, today="20260914")[0] == "reduce"
+    assert WC.index_level_stop({"level": "down", "date": "2026-09-14"}, today="20260914")[0] is True

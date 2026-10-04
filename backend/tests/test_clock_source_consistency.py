@@ -14,8 +14,15 @@
 
 | 比较 | 钟源 | 回退开关 |
 | --- | --- | --- |
-| `created_at`（DB 默认 now()）↔ 清扫 cutoff | **DB**（`now() - make_interval(secs => :timeout)`） | `T_DB_SWEEP_CLOCK=py` |
+| `t_triggers.created_at` 写入 | **Python**（`insert_trigger` 传 `datetime.now()`） | — |
+| `created_at` ↔ 清扫 cutoff | **Python**（`created_at < :cutoff`） | `T_DB_SWEEP_CLOCK=db` |
 | `claimed_at` ↔ 网关超时 | **Python**（`claimed_at = :claimed_at` 传 `datetime.now()`） | `T_DB_CLAIMED_AT_CLOCK=db` |
+
+**2026-09-19 二次修（用户拍板 A）**：上一版只让"清扫"这一处同源，但 `created_at` 仍是 DB 默认 `now()`，
+于是**所有按"当日"比较**的地方（`t_monitor._check_stop_loss` 去重、`t_monitor/_bridge._consecutive_hits`、
+`t_gateway` 当日正T计数）在回放里恒不成立（`bt_asof_fetch` 把 `CURRENT_DATE` 改成回放日，而 created_at
+是九月）⇒ 去重与计数全部失效（偏松、AI 收不到"连续命中"提示）。现把写入钟改成 Python，并按日比较
+统一用 `to_char(created_at,'YYYY-MM-DD') = :today`（Python 钉钟日）。
 
 网关另加一条 fail-closed 兜底：claimed_at 比进程钟"未来"超过容忍秒数（跨钟源遗留行）→ 按已超时转 human
 （`T_GATE_CROSS_CLOCK_TIMEOUT=0` 可关）。
@@ -54,6 +61,12 @@ class _FakeResult:
         return self
 
     def first(self):
+        return self._row
+
+    def fetchone(self):
+        """insert_trigger 走 `.fetchone()` 取 RETURNING id ⇒ 返回元组形态。"""
+        if isinstance(self._row, dict) and "id" in self._row:
+            return (self._row["id"],)
         return self._row
 
 
@@ -98,22 +111,70 @@ def _claim(monkeypatch, **env):
 
 # ────────────────────────── 清扫：与 created_at 同源（DB 钟）──────────────────────────
 
-def test_orphan_sweep_uses_db_clock_like_created_at(monkeypatch):
-    """默认：cutoff 与 created_at 同源（都在 DB 侧算）——回测里 Python 与 DB 差数月也不会失配。"""
+def test_orphan_sweep_uses_python_clock_like_created_at(monkeypatch):
+    """默认：cutoff 与 created_at **同源（都用 Python 钉钟）** —— 2026-09-19 起 created_at 由
+    insert_trigger 显式用 datetime.now() 写入，故清扫也必须用 Python cutoff。"""
     (sql, params), _claim_sql, _ = _claim(monkeypatch)
-    assert "created_at < now() - make_interval(secs => :timeout)" in sql
-    assert params == {"timeout": 300.0}
-    assert "cutoff" not in params, "又把 Python cutoff 拿去比 DB created_at 了"
-
-
-def test_orphan_sweep_legacy_python_cutoff(monkeypatch):
-    """回退开关：T_DB_SWEEP_CLOCK=py → 修复前行为（Python cutoff 比 DB created_at）。"""
-    (sql, params), _claim_sql, _ = _claim(monkeypatch, T_DB_SWEEP_CLOCK="py")
     assert "created_at < :cutoff" in sql
     assert params["cutoff"] == PINNED - timedelta(seconds=300)
 
 
+def test_orphan_sweep_legacy_db_clock(monkeypatch):
+    """回退开关：T_DB_SWEEP_CLOCK=db → 旧口径（DB 侧 now() 比较；与 DB 钟写入的遗留行同源）。"""
+    (sql, params), _claim_sql, _ = _claim(monkeypatch, T_DB_SWEEP_CLOCK="db")
+    assert "created_at < now() - make_interval(secs => :timeout)" in sql
+    assert params == {"timeout": 300.0}
+
+
 # ────────────────────────── 认领：claimed_at 用 Python 钟 ──────────────────────────
+
+# ────────────────────────── 写入钟：created_at 用 Python 钉钟 ──────────────────────────
+
+def test_insert_trigger_writes_python_clock(monkeypatch):
+    """`insert_trigger` 必须**显式**用 Python 钟写 created_at（回放里 = as-of）。
+
+    2026-09-19 用户拍板 A：原先靠表默认 now()（DB 真钟）⇒ 回放里 created_at 是九月，
+    而所有"当日"比较用的是钉钟日 ⇒ 止损去重 / 连续命中 / 当日正T计数**全部恒为 0**（去重与计数失效）。
+    """
+    sess = _FakeSession(row={"id": 7})
+    monkeypatch.setattr(t_db, "SessionLocal", lambda: sess)
+    monkeypatch.setattr(t_db, "datetime", _PinnedDT)
+    tid = t_db.insert_trigger({"symbol": "SH600850", "event_type": "wolf_dao_t_sell",
+                               "account_id": "drabjan10", "status": "pending"})
+    assert tid == 7
+    sql, params = sess.calls[0]
+    assert "created_at" in sql and ":created_at" in sql, sql
+    assert params["created_at"] == PINNED, params
+
+
+def test_reason超长被截断不丢状态(monkeypatch):
+    """`t_triggers.reason` 是 varchar(256)：超长会让整条 UPDATE/INSERT 抛错 ⇒ 状态回写静默丢失（夜间自查发现）。"""
+    sess = _FakeSession(row={"id": 9})
+    monkeypatch.setattr(t_db, "SessionLocal", lambda: sess)
+    ok = t_db.update_trigger_status(9, "blocked", reason="x" * 900)
+    assert ok is True
+    sql, params = sess.calls[0]
+    assert len(params["reason"]) == 256, len(params["reason"])
+    sess2 = _FakeSession(row={"id": 10})
+    monkeypatch.setattr(t_db, "SessionLocal", lambda: sess2)
+    assert t_db.insert_trigger({"symbol": "SH600183", "reason": "y" * 800}) == 10
+    assert len(sess2.calls[0][1]["reason"]) == 256
+
+
+def test_按日比较不再用_DB_真钟():
+    """回归护栏：trigger 的"当日"比较不得再用 `created_at::date = CURRENT_DATE`（DB 真钟）。
+
+    回放里 `bt_asof_fetch` 会把 `CURRENT_DATE` 改写成回放日，而 created_at 若走 DB 默认值则是九月
+    ⇒ 比较恒不成立。必须用 `to_char(created_at, 'YYYY-MM-DD') = :today`（today 来自 Python 钉钟）。
+    """
+    src_mon = (REPO_ROOT / "backend" / "app" / "services" / "t_monitor.py").read_text(encoding="utf-8")
+    src_bri = (REPO_ROOT / "backend" / "app" / "services" / "t_bridge.py").read_text(encoding="utf-8")
+    for name, src in (("t_monitor.py", src_mon), ("t_bridge.py", src_bri)):
+        # 允许注释里提到旧写法，只禁止**可执行 SQL** 里出现
+        code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("#"))
+        assert "created_at::date = CURRENT_DATE" not in code, "%s 又用 DB 真钟做按日比较了" % name
+        assert "to_char(created_at, 'YYYY-MM-DD') = :today" in code or "_consecutive_hits" not in code, name
+
 
 def test_claim_writes_python_clock_not_db_now(monkeypatch):
     """claimed_at 必须等于"调用时 Python 钟"（回测里 = as-of，而不是 DB 真钟 2026-09）。"""

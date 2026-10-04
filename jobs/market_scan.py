@@ -2759,7 +2759,7 @@ def cleanup_st_holdings_once():
                 continue
             try:
                 from app.services.t_data_sources import fetch_tencent_quote
-                q = fetch_tencent_quote(sym)
+                q = fetch_tencent_quote([_normalize_symbol(_s) for _s in (sym or [])])
                 price = float(q.get("current")) if q and q.get("current") else 0.0
             except Exception:
                 price = 0.0

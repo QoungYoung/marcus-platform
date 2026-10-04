@@ -16,6 +16,7 @@ LangGraph 交易决策流程编排
   - Pi 只负责分析判断和下单执行，工具集可以更聚焦
 """
 
+from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import os
 import json
 import logging
@@ -654,7 +655,7 @@ def _read_main_line_context() -> str:
     """read main_line_state -> context block for trade prompt."""
     try:
         import json as _json
-        path = os.getenv("MAIN_LINE_STATE_FILE", os.path.join(os.environ.get("DATA_DIR", "data"), "main_line_state.json"))
+        path = os.getenv("MAIN_LINE_STATE_FILE", __state_path("main_line_state.json"))
         if not os.path.exists(path):
             return ""
         with open(path, encoding="utf-8") as f:
@@ -724,7 +725,7 @@ def _read_main_line_context() -> str:
                       + chr(10).join(lines) + chr(10) + chr(10))
             # 农业全子概念个股确认概览(读 stock_confirm_result 全部子概念, 不截断前5)
             try:
-                scp = os.path.join(os.environ.get("DATA_DIR", "data"), "stock_confirm_result.json")
+                scp = __state_path("stock_confirm_result.json")
                 if os.path.exists(scp):
                     sc = _json.load(open(scp, encoding="utf-8"))
                     sc_ok = []
@@ -754,7 +755,7 @@ def _read_position_context() -> str:
     try:
         import json as _json
         from collections import Counter as _Counter
-        path = os.path.join(os.environ.get("DATA_DIR", "data"), "position_class_result.json")
+        path = __state_path("position_class_result.json")
         if not os.path.exists(path):
             return ""
         with open(path, encoding="utf-8") as f:
@@ -780,7 +781,7 @@ def _read_stock_confirm_context() -> str:
     """read stock_confirm_result -> 主线概念成分股确认比例(个股层确认: 三层联动之三)"""
     try:
         import json as _json
-        path = os.path.join(os.environ.get("DATA_DIR", "data"), "stock_confirm_result.json")
+        path = __state_path("stock_confirm_result.json")
         if not os.path.exists(path):
             return ""
         with open(path, encoding="utf-8") as f:
@@ -801,7 +802,7 @@ def _read_stock_confirm_context() -> str:
             if isinstance(_ms3, dict) and _ms3.get("mainline"):
                 conf_themes = [t for t in ([_ms3.get("mainline")] + list(_ms3.get("pool") or [])) if t]
             else:
-                mlp = os.path.join(os.environ.get("DATA_DIR", "data"), "main_line_state.json")
+                mlp = __state_path("main_line_state.json")
                 if os.path.exists(mlp):
                     mst = _json2.load(open(mlp, encoding="utf-8"))
                     gg = mst.get("mainline_gate") or {}
@@ -860,7 +861,7 @@ def _read_confirm_context() -> str:
     try:
         import json as _json
         from collections import Counter as _Counter
-        path = os.path.join(os.environ.get("DATA_DIR", "data"), "position_class_result.json")
+        path = __state_path("position_class_result.json")
         if not os.path.exists(path):
             return ""
         with open(path, encoding="utf-8") as f:

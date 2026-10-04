@@ -117,7 +117,7 @@ def symbol_themes(symbol):
     try:
         from app.services.t_data_sources import fetch_tencent_quote
         qsym = ex.lower() + code6          # 腾讯符号: sh588170
-        q = (fetch_tencent_quote([qsym]) or {}).get(qsym) or {}
+        q = (fetch_tencent_quote([_normalize_symbol(qsym)]) or {}).get(qsym) or {}
         name = str(q.get("name") or "")
     except Exception:
         name = ""

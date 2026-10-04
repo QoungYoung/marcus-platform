@@ -43,6 +43,48 @@ IDX = "sh000001"          # 腾讯分钟接口用带前缀代码
 CUTOFF_DEFAULT = "14:30"  # 他原话"2点半"
 
 
+# ── 执行层开关（2026-09-18 用户"补一个执行层开关"）────────────────────────────
+# 现状：本模块只到**提示层**（`directive()` 注入纪律上下文）；语料那条
+#   「2点半若仍缩量不拉升 → 把这两天T进去的仓位出来一半、65% 过周末、周一拿回」（2026-08-21 14:20）
+#   **没有任何执行动作**。执行层由 `WOLF_WEEKEND_HEDGE_EXEC` 控制（**默认关**）；
+#   回测侧默认开（`jobs/bt_prod_run.py` setdefault），生产零影响。
+def exec_enabled() -> bool:
+    return os.getenv("WOLF_WEEKEND_HEDGE_EXEC", "0").strip().lower() not in ("0", "false", "no", "")
+
+
+def exec_plan(res: Dict[str, Any], bought_today: Optional[Dict[str, int]] = None,
+              lot: int = 100, enabled: Optional[bool] = None) -> Dict[str, Any]:
+    """避险执行计划（纯函数，便于单测）。
+
+    语料口径：**减"这两天 T 进去的仓位"的一半**（不是减底仓）＋**收盘仓位目标 ≤65%**＋
+    **当日不再新开仓/加仓**（周一确认安全后再拿回）。
+    返回 {active, sells:[(symbol, vol)], block_new_buys, target_pct, reason}。
+    开关关 / 条件未成立 → active=False、不下任何指令（与旧行为一致）。
+    """
+    on = exec_enabled() if enabled is None else bool(enabled)
+    out = {"active": False, "sells": [], "block_new_buys": False,
+           "target_pct": float((res or {}).get("target_pct") or 0.65), "reason": ""}
+    if not on:
+        out["reason"] = "执行层开关关（仅提示）"
+        return out
+    if not (res or {}).get("active"):
+        out["reason"] = (res or {}).get("reason") or "条件未成立"
+        return out
+    step = max(int(lot or 100), 1)
+    for sym, vol in (bought_today or {}).items():
+        try:
+            half = int(int(vol) // 2 // step) * step
+        except Exception:
+            half = 0
+        if half > 0:
+            out["sells"].append((sym, half))
+    out["active"] = True
+    out["block_new_buys"] = True
+    out["reason"] = ("周末/长假前避险条件成立 → 卖出近两日 T 进仓位的一半 %s，"
+                     "收盘目标 ≤%.0f%%，当日不再新开仓/加仓" % (out["sells"], out["target_pct"] * 100))
+    return out
+
+
 def enabled() -> bool:
     """`WOLF_WEEKEND_HEDGE` 默认 **0（关）**。"""
     return os.getenv("WOLF_WEEKEND_HEDGE", "0").strip().lower() not in ("0", "false", "no", "")
@@ -244,14 +286,103 @@ def index_m5() -> List[Dict[str, Any]]:
         return []
 
 
+# ── 量能源替代（2026-09-18，用户"按这个改"）────────────────────────────────
+# 实测：本地指数分钟文件（`data/_bt_full/mins/000001_SH_5min_<day>.json`）**只有收盘价有值**，
+#   成交量/成交额两列**全为 null**，且没有 1 分钟指数文件 ⇒ `still_shrinking(ratio=None)` 恒不成立
+#   ⇒ 避险规则会**静默沉默**。改法：缩量判定改用**全市场成交额**（也更贴他原话
+#   「量能放到 1500E / 2000E」——那是市场总额，不是指数成交量）。
+# 数据源：PG `mkt_bars_daily.amount` 当日/昨日求和（一次查询，快、PIT 有界：只取 ≤ 当日的日期）。
+def market_amount(day8: str) -> Optional[float]:
+    """全市场成交额，**单位＝千元**（tushare `daily.amount` 原生口径；与 `bars.sqlite` 完全一致）。
+
+    ⚠️ 2026-09-18 教训：我最初把它当"元"再除以 1e8，读成"约 30 亿"，其实**是我的换算标签写错了**——
+    20260109 求和 = **3,152,368,298 千元 = 3.15 万亿元/日**（与 tushare 口径、`bars.sqlite` 逐值一致）。
+    换算：千元 → 元 ×1e3；→ 亿元 ÷1e5；→ 万亿元 ÷1e9。
+    取数失败 → None。
+    """
+    try:
+        import psycopg2
+        d = str(day8).replace("-", "")
+        conn = psycopg2.connect(os.getenv("DATABASE_URL", ""))
+        try:
+            cur = conn.cursor()
+            # ⚠️ `mkt_bars_daily.trade_date` 存的是 **'YYYYMMDD'**（实测 '20260914'），
+            #    不是 'YYYY-MM-DD'；用带横杠的形式查会**静默返回 0 行**（2026-09-18 踩到）
+            cur.execute("SELECT COALESCE(SUM(amount),0) FROM mkt_bars_daily WHERE trade_date=%s", (d,))
+            v = float((cur.fetchone() or [0])[0] or 0)
+        finally:
+            conn.close()
+        return v if v > 0 else None
+    except Exception:
+        return None
+
+
+def market_amount_yi(day8: str) -> Optional[float]:
+    """全市场成交额（**亿元**，便于与语料的 1500E/2000E 同量纲对话）。"""
+    v = market_amount(day8)
+    return round(v / 1e5, 1) if v else None
+
+
+def market_shrink_ratio(day8: str, prev8: str) -> Optional[float]:
+    """市场级缩量比 = 当日成交额 / 上一交易日成交额（日级；他原话的 1500E/2000E 就是这一量纲）。"""
+    a, b = market_amount(day8), market_amount(prev8)
+    if not a or not b:
+        return None
+    return round(a / b, 4)
+
+
+def effective_shrink_ratio(day8: str, prev8: str, bars: Optional[List[Dict[str, Any]]] = None,
+                           upto: str = "14:30") -> Tuple[Optional[float], str]:
+    """取"缩量比"：优先**指数分钟量比**（同期），不可得 → 回落**市场成交额日级比**。
+
+    返回 (ratio, source)；两者都不可得 → (None, "unavailable")。
+    """
+    try:
+        b = bars if bars is not None else index_m5()
+        vt, _ = _cum_vol(b, day8, upto)
+        vp, _ = _cum_vol(b, prev8, upto)
+        if vt and vp:
+            return round(vt / vp, 4), "index_m5"
+    except Exception:
+        pass
+    r = market_shrink_ratio(day8, prev8)
+    return (r, "market_amount") if r else (None, "unavailable")
+
+
 def recent_trade_days() -> List[str]:
     """含**未来**交易日（判断"下一个交易日间隔"必需）。"""
+    # ── 本地日历优先（2026-09-18 修"回放里日历只有 6 天"）──
+    # 根因：`resolve_trade_days` 主源走 tushare 中继/as-of 网关，**在回放里被夹到 ≤ 回放日**
+    #   ⇒ 拿不到"未来交易日"，而本函数**必须含未来交易日**（判断"下一个交易日间隔几天"）。
+    #   交易日历是**公开日历信息**（知道 20260112 是交易日不构成未来函数，行情/价格才算），
+    #   故这里优先用**本地 bars.sqlite 的 distinct trade_date**（覆盖 20250102→20260914，PIT 无关价格）。
+    try:
+        import datetime as _dt
+        import os as _os
+        import sqlite3 as _sq
+        _s = (_dt.date.today() - _dt.timedelta(days=10)).strftime("%Y%m%d")
+        _e = (_dt.date.today() + _dt.timedelta(days=20)).strftime("%Y%m%d")
+        _db = _os.getenv("BT_BARS_DB", "data/_bt_full/bars.sqlite")
+        _c = _sq.connect(_db)
+        _rows = _c.execute("SELECT DISTINCT trade_date FROM bars WHERE trade_date>=? AND trade_date<=? ORDER BY trade_date",
+                           (_s, _e)).fetchall()
+        _c.close()
+        _loc = sorted({str(r[0]).replace("-", "")[:8] for r in _rows if str(r[0]).replace("-", "")[:8].isdigit()})
+        if len(_loc) >= 5:          # 至少够判断"今→下一个交易日"的间隔
+            return _loc
+        print("[weekend_hedge] 本地日历不足(%d)，回落 tushare 中继" % len(_loc))
+    except Exception as _le:
+        print("[weekend_hedge] 本地日历失败(%s)，回落中继" % str(_le)[:60])
     try:
         import datetime as _dt
         from app.services.t_backtest_data import resolve_trade_days
         start = (_dt.date.today() - _dt.timedelta(days=10)).strftime("%Y%m%d")
         end = (_dt.date.today() + _dt.timedelta(days=20)).strftime("%Y%m%d")
-        return sorted({str(d)[:8] for d in (resolve_trade_days(start, end) or []) if str(d)[:8].isdigit()})
+        # ⚠️ 2026-09-18 修：`resolve_trade_days` 可能返回 **'YYYY-MM-DD'**，旧写法 `str(d)[:8]`
+        #  会得到 '2026-01-' → `.isdigit()` 为假 → **日历被过滤成空** ⇒ `is_pre_break_day` 恒返回
+        #  today_not_in_calendar ⇒ **周末避险永远不触发**（实测 0109 日志："避险未成立: today_not_in_calendar"）。
+        return sorted({str(d).replace("-", "")[:8] for d in (resolve_trade_days(start, end) or [])
+                       if str(d).replace("-", "")[:8].isdigit()})
     except Exception as e:
         print(f"[weekend_hedge] 交易日历失败: {type(e).__name__}: {str(e)[:70]}")
         return []
@@ -281,10 +412,20 @@ def run(save: bool = True, bars: Optional[List[Dict[str, Any]]] = None,
     t_vol, t_close = _cum_vol(bars, today8, hhmm)
     y_vol, y_close = _cum_vol(bars, prev8, hhmm) if prev8 else (0.0, None)
     ratio = shrink_ratio(t_vol, y_vol)
+    # ── 量能源回落（2026-09-18 用户"按这个改"）──
+    # 本地指数分钟文件**只有收盘价、量能两列全 null** ⇒ `ratio` 恒 None ⇒ 规则**静默沉默**。
+    # 故指数口径取不到量比时，回落**全市场成交额日级比**（`market_amount`，tushare 千元口径）。
+    ratio_source = "index_m5" if ratio is not None else ""
+    if ratio is None and prev8:
+        try:
+            ratio, ratio_source = effective_shrink_ratio(today8, prev8, bars, hhmm)
+        except Exception:
+            ratio, ratio_source = None, "unavailable"
     idx_pct = None
     if t_close and y_close:
         idx_pct = round((t_close - y_close) / y_close * 100.0, 3)
     res = evaluate(hhmm, pre, ratio, idx_pct)
+    res["ratio_source"] = ratio_source or "unavailable"
     res.update({"ok": True, "as_of": today8, "hhmm": hhmm,
                 "today_vol": t_vol, "prev_day": prev8, "prev_vol": y_vol,
                 "index_close": t_close})

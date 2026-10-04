@@ -55,6 +55,27 @@ DATA = os.environ.get("DATA_DIR", "/app/data")
 # window_limited= 历史不足，不硬判                                   → 不允许（宁可不接）
 THEME_STAGE_ALLOW = {"confirmed"}
 
+# ── 语料档位（2026-09-19 用户拍板）：把"结构未确认 ⇒ 硬拦"改成"档位" ──
+# 语料依据：狼大 2026-01-17「主升趋势就75%以上…调整就50% 有风险就30 下跌趋势就不做」+「不接急杀」；
+#   语料里**没有**"主题结构确认才买"这条硬闸。
+# 实测（data/_bt_m56 0202→0331，按 trade id 去重）：二元硬闸把半导体/AI 主题的腿 100% 拦掉
+#   （221 条 = 127 AI + 94 半导体，占被拦腿 60%），平均仓位只有 13~20%、现金 85% ⇒ 上涨吃不满。
+# 档位口径：confirmed → 1.0（满档）；suspect/not_confirmed/window_limited → 0.5（半档）；
+#   个股破位/急杀 → 0（不买，由 leg_gate 第 ④ 步按个股日线判）。
+# 开关 WOLF_THEME_TIER_GATE：库内默认关（生产逐位不变），回测（BT_ASOF_FETCH）默认开。
+TIER_GATE_ON = str(os.getenv("WOLF_THEME_TIER_GATE",
+                             "1" if os.getenv("BT_ASOF_FETCH") else "0")).strip().lower() in ("1", "true", "yes", "on")
+THEME_STAGE_TIER = {"confirmed": 1.0, "suspect": 0.5, "not_confirmed": 0.5, "window_limited": 0.5}
+
+# ── as-of 文件过滤（2026-09-19）──
+# 背景 bug：本模块 `_latest()` 取 DATA 下**日期字符串最大**的文件，而回放沙箱每个天目录都带
+#   repo 的 9 月桩（trend_confirm_20260904.json / theme_volfund_shadow_20260915.json），
+#   比回放日"未来" ⇒ 闸读的是 9 月那份（未来函数）。打开本开关后跳过晚于"当日"的文件。
+# 库内默认关（生产无未来文件 ⇒ 行为逐位不变），回测默认开。
+ASOF_FILE_FILTER = str(os.getenv("WOLF_ASOF_FILE_FILTER",
+                                 "1" if os.getenv("BT_ASOF_FETCH") else "0")).strip().lower() in ("1", "true", "yes", "on")
+_ASOF_SKIP_SEEN = {}
+
 # ── 大盘浪：仅"真正系统性下跌"才拦（不参与方向判定）──
 SYSTEMIC_BLOCK_SUB = {"C杀", "衰竭浪", "双头/M顶", "4-5", "失败5"}
 SYSTEMIC_BLOCK_LEVEL = {"down"}
@@ -71,19 +92,37 @@ def _load(name):
         return {}
 
 
+def _today8():
+    """钉住的"当日"（回放里被 bt_run_pinned 偏移到 as-of 当天）。"""
+    from datetime import datetime
+    return datetime.now().strftime("%Y%m%d")
+
+
 def _latest(prefix):
-    """取 DATA 下 <prefix><YYYYMMDD>[*].json 中日期最大者。
+    """取 DATA 下 <prefix><YYYYMMDD>[*].json 中日期最大者（`WOLF_ASOF_FILE_FILTER=1` 时跳过未来文件）。
 
     注意命名不统一：`mainline_gate_<date>.json` 与 `trend_confirm_<date>_long.json`
     （后者带 `_long` 后缀）→ 不能按"固定切片长度"取日期，须正则抓前 8 位数字。
+    2026-09-19：加 as-of 过滤（否则会读到沙箱里 repo 的 9 月桩，见文件头注释）。
     """
     import glob
     import re
     best, bd = None, ""
+    t8 = _today8() if ASOF_FILE_FILTER else ""
+    skipped = []
     for f in glob.glob(os.path.join(DATA, prefix + "*.json")):
         m = re.match(r"(\d{8})", os.path.basename(f)[len(prefix):])
-        if m and m.group(1) > bd:
+        if not m:
+            continue
+        if t8 and m.group(1) > t8:
+            skipped.append(os.path.basename(f))
+            continue
+        if m.group(1) > bd:
             bd, best = m.group(1), f
+    if skipped and _ASOF_SKIP_SEEN.get(prefix) != tuple(sorted(skipped)):
+        _ASOF_SKIP_SEEN[prefix] = tuple(sorted(skipped))
+        print("[wolf_context] as-of 过滤：跳过未来文件 %s（当日=%s，%d 个：%s）"
+              % (prefix, t8, len(skipped), ", ".join(sorted(skipped)[:4])), flush=True)
     return best, bd
 
 
@@ -228,6 +267,17 @@ def theme_fund_danger(theme, days=None):
     """
     # 2026-09-15 参数对齐（P2）：他的同族口径是 **5 日**（2025-06-16「资金没有**5日**连续流出的」），
     # 原默认 3 是自设（参数总账 §3-11）。调用方若显式传 days 不受影响；env 可覆写。
+    # 2026-09-21（用户拍板 B 项）：补**相对口径** —— 2025-04-15 条件1
+    #   「看前一日流入前5和流出前3的板块和个股…避开三日都是流出前3的板块个股」。
+    #   开关 WOLF_FUND_GATE_MODE=abs（默认 ⇒ 本函数以下行为**逐位不变**）| rank。
+    #   为什么需要：绝对口径（近 N 日净流入全为负）在普跌期会把几乎所有主题判危险 ——
+    #   实测 T1 的 5,560 次趋势腿触发里 99.9% 被它挡掉。
+    if str(os.getenv("WOLF_FUND_GATE_MODE", "abs")).strip().lower() in ("rank", "rank3", "rel"):
+        try:
+            from wolf_theme_vol_fund import theme_rank_danger as _trd
+            return _trd(theme)
+        except Exception as _e_rank:
+            return False, "相对口径不可用(%s) → 放行" % str(_e_rank)[:60]
     n = int(days if days is not None else os.getenv("WOLF_THEME_FUND_DAYS", "5"))
     try:
         import sys as _s
@@ -249,6 +299,8 @@ def theme_fund_danger(theme, days=None):
         if _p2 not in _s2.path:
             _s2.path.insert(0, _p2)
         from wolf_theme_vol_fund import theme_nets as _tn
+        # ⚠️ 2026-09-19：不传 as_of ⇒ 旧行为拿库里"最近 n 个交易日"（回放里=未来 9 月数据，jan9 铁证）；
+        #   现由 wolf_theme_vol_fund 在 WOLF_FUND_ASOF 打开时锚到**前一交易日**（用户口径：不要用当日的）。
         _nets = [x for x in (_tn(theme, days=n + 2) or []) if x is not None]
     except Exception as _e_nets:
         print("[wolf_context] theme_fund relay 序列不可用: %s" % str(_e_nets)[:80])
@@ -342,6 +394,129 @@ def slow_decline(prev_days, days=None, min_drop_pct=None, max_drop_pct=None, flu
         cum, worst)
 
 
+# ── B：主题资格「结构未破 ∧ 指数未破位 ⇒ 不撤资格」（2026-09-19 用户拍板）────────────
+# 背景（用户：狼大一月也在做半导体，为什么他确认了）：他的「确认」是**波浪/结构成立且趋势没破**
+#   （2026-01-26「指数没破位就没有悲观的理由」、2026-01-27「趋势不破就不看空」；2025-12-30「下周开始做半导体」），
+#   而我们的判据是 trend_confirm 的「近 5 日创 60 日新高」⇒ 1 月半导体高位回踩不创新高，天天 not_confirmed，
+#   于是我们只能半档零星做。B 即把资格口径改回他的：**未创新低（结构未破）∧ 指数未破位 ⇒ 资格不撤**。
+# 开关 WOLF_THEME_QUALIFY_STRUCT：库内默认关（生产逐位不变）、回测开。
+QUALIFY_STRUCT_ON = str(os.getenv("WOLF_THEME_QUALIFY_STRUCT",
+                                  "1" if os.getenv("BT_ASOF_FETCH") else "0")).strip().lower() in ("1", "true", "yes", "on")
+_QUAL_CACHE = {}
+
+
+def _theme_index_series(theme):
+    """主题等权合成指数（与 trend_confirm.theme_index 同口径，吃 concept_hist.json）。"""
+    try:
+        names = None
+        try:
+            from fusion_mainline import THEME_CONCEPTS
+            names = THEME_CONCEPTS.get(theme) or []
+        except Exception:
+            names = []
+        by = _concept_hist_by_name()
+        series = [dict(by[n], name=n) for n in names if n in by]
+        if not series:
+            return None
+        import sys as _s3
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in _s3.path:
+            _s3.path.insert(0, _here)
+        from trend_confirm import theme_index
+        idx, _dates = theme_index(series, names)
+        return idx
+    except Exception:
+        return None
+
+
+def _index_not_broken(day=""):
+    """指数未破位（复用 t_index_break.index_breakdown：收盘跌破 MA60/144/200 中 ≥2 根 = 破位）。"""
+    try:
+        import sys as _s4
+        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _be = os.path.join(_root, "backend")
+        if _be not in _s4.path:
+            _s4.path.insert(0, _be)
+        from app.services.t_index_break import index_breakdown
+        from datetime import datetime as _dt2
+        j = index_breakdown(str(day or "").replace("-", "") or _dt2.now().strftime("%Y%m%d"))
+        if j.get("broken"):
+            return False, "指数破位(跌破 %s)" % (j.get("below"),)
+        return True, "指数未破位"
+    except Exception as e:
+        return True, "指数破位判定失败(fail-open): %s" % str(e)[:40]
+
+
+def theme_qualify_struct(theme, fresh_days=20, look_days=60, day=""):
+    """B：主题资格不撤 = **未创新低（结构未破）∧ 指数未破位**。返回 (ok, why)。
+
+    结构未破口径：主题等权指数「最近 fresh_days 日最低 ≥ 最近 look_days 日最低」（= 没跌破前低）。
+    数据不足/异常 → (False, 原因)（fail-closed 到旧口径：仍按 stage 判，不会因此放行）。
+    """
+    if not QUALIFY_STRUCT_ON:
+        return False, "B 关(WOLF_THEME_QUALIFY_STRUCT=0)"
+    if not theme:
+        return False, "主题未知"
+    key = "%s|%d|%d|%s" % (theme, fresh_days, look_days, day)
+    if key in _QUAL_CACHE:
+        return _QUAL_CACHE[key]
+    out = (False, "无法判定")
+    try:
+        idx = _theme_index_series(theme)
+        if not idx or len(idx) < look_days:
+            out = (False, "主题指数序列不足(%d)" % (len(idx or [])))
+        else:
+            # ⚠️ 2026-09-19 修：原写成「近 fresh 日最低 ≥ 近 look 日最低」，但 fresh 窗口是 look 窗口的
+            #   子集 ⇒ 子集最小值恒 ≥ 全集最小值 ⇒ 该判据**永远为真**（结构判据形同虚设，只剩指数闸）。
+            #   正确口径 = **近 fresh 日最低 vs 之前 (look-fresh) 日最低**：近期低点没跌穿更早的低点 ⇒ 未创新低。
+            lo_fresh = min(idx[-fresh_days:])
+            lo_prior = min(idx[-look_days:-fresh_days])
+            if lo_fresh < lo_prior:
+                out = (False, "结构已破：近 %d 日创新低(%.1f < 前 %d 日最低 %.1f)"
+                       % (fresh_days, lo_fresh, look_days - fresh_days, lo_prior))
+            else:
+                ok_i, why_i = _index_not_broken(day)
+                # ⚠️ 账本 §9.494 ✓（用户「直接改」✓）：**买侧忽略"指数破位"** ✓
+                #   他的原话：「好票跌到事先画好的线（13/34/60/144）→ **提前挂单买、与指数无关**」✓
+                #   量化（§9.493 ✓）：**破位期的低吸明显更好**（T+5 均值 +4.07% vs +0.81%、中位 +3.09% vs +0.31%、
+                #   **左尾 1.1% vs 4.0%**）✓ ⇒ ⇒ "指数破位"只该用于**卖/止损** ✓
+                #   开关 ✓：`WOLF_BUY_IGNORE_INDEX_BREAK`（**默认 1** ✓，置 0 ＝ 恢复旧口径 ✓）
+                if str(os.getenv("WOLF_BUY_IGNORE_INDEX_BREAK", "1")).strip().lower() in ("1", "true", "yes", "on"):
+                    ok_i, why_i = True, "买侧忽略指数破位 ✓(§9.494)"
+                out = ((True, "资格不撤：未创新低(近%d日最低 %.1f ≥ 前%d日最低 %.1f) ∧ %s"
+                        % (fresh_days, lo_fresh, look_days - fresh_days, lo_prior, why_i)) if ok_i
+                       else (False, "结构未破但 %s" % why_i))
+    except Exception as e:
+        out = (False, "判定异常: %s" % str(e)[:50])
+    _QUAL_CACHE[key] = out
+    return out
+
+
+def theme_tier_factor(theme, day=""):
+    """主题档位系数（语料档位）：confirmed→1.0；suspect/not_confirmed/window_limited→0.5。
+
+    数据缺失/异常 → 1.0（fail-open，维持"数据缺失不封死买路"的既有口径）。
+    返回 (factor, reason)；`WOLF_THEME_TIER_GATE=0` 时恒为 1.0（库内默认，生产逐位不变）。
+    """
+    if not TIER_GATE_ON:
+        return 1.0, "档位闸关(WOLF_THEME_TIER_GATE=0)"
+    if not theme:
+        return 1.0, "主题未知 → 满档(fail-open)"
+    try:
+        st = theme_structure(theme)
+        stage = str(st.get("stage") or "")
+        if not stage:
+            return 1.0, "主题浪数据缺失 → 满档(fail-open)"
+        if stage != "confirmed":
+            _ok_b, _why_b = theme_qualify_struct(theme, day=day)
+            if _ok_b:
+                return 1.0, "主题[%s] stage=%s，但 %s ⇒ 仓位×1.0（B 资格不撤）" % (theme, stage, _why_b)
+        f = float(THEME_STAGE_TIER.get(stage, 0.0))
+        return f, "主题[%s] stage=%s ⇒ 仓位×%.1f" % (theme, stage, f)
+    except Exception as e:
+        return 1.0, "档位判定异常 → 满档(fail-open): %s" % str(e)[:60]
+
+
 def theme_buyable(theme):
     """主题是否可买 = **结构**(P1-3) ∧ **资金**(P2-2)。**单一定义处**, 供 253 与布腿器共用。
 
@@ -353,11 +528,21 @@ def theme_buyable(theme):
     stage = str(st.get("stage") or "")
     if not stage:
         return True, "主题浪数据缺失(theme=%s) → 放行" % theme
+    tier_note = ""
     if stage not in THEME_STAGE_ALLOW:
-        return False, "结构未确认: 主题[%s] stage=%s verdict=%s（不在急杀那一刻接/不新开）" % (
-            theme, stage, st.get("verdict"))
+        # 档位闸打开时：不硬拦，改由"仓位系数"体现（语料档位；破位/急杀另由 leg_gate ④ 拦）；
+        # **资金门（P2-2）照旧生效** —— 结构没确认只降档，不是无条件放行。
+        _tier_ok = False
+        if TIER_GATE_ON:
+            _tf, _tfr = theme_tier_factor(theme)
+            if _tf > 0:
+                _tier_ok = True
+                tier_note = " | 档位放行: %s" % _tfr
+        if not _tier_ok:
+            return False, "结构未确认: 主题[%s] stage=%s verdict=%s（不在急杀那一刻接/不新开）" % (
+                theme, stage, st.get("verdict"))
     if os.getenv("WOLF_THEME_FUND", "1").strip() in ("0", "false", "no"):
-        return True, "主题[%s] 结构已确认(stage=%s); 资金维度已关闭(WOLF_THEME_FUND=0)" % (theme, stage)
+        return True, "主题[%s] 结构已确认(stage=%s); 资金维度已关闭(WOLF_THEME_FUND=0)" % (theme, stage) + tier_note
     dg, dr = theme_fund_danger(theme)
     if dg:
         return False, dr
@@ -391,7 +576,8 @@ def theme_buyable(theme):
                                % str(_e)[:100])
         except Exception:
             pass
-    return True, "主题[%s] 可买: stage=%s verdict=%s | %s" % (theme, stage, st.get("verdict"), dr)
+    return True, "主题[%s] 可买: stage=%s verdict=%s | %s%s" % (
+        theme, stage, st.get("verdict"), dr, tier_note)
 
 
 def index_level_stop(wave=None, today=None, max_stale_days=None):

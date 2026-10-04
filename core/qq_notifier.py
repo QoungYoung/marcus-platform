@@ -38,7 +38,14 @@ def _load_env():
                     key, _, val = line.partition("=")
                     key, val = key.strip(), val.strip().strip('"').strip("'")
                     if key:
-                        os.environ[key] = val  # always override
+                        # ⚠️ 2026-09-26 修（账本 §9.246）：**已显式注入的关键变量不得覆盖** ✗
+                        #   事故：`import qq_notifier` ⇒ `DATABASE_URL` 被 .env 里的 18789 覆盖 ✗
+                        #   ⇒ 本进程后续**所有数据库连接全废** ✗（实测：回测 0 成交 ✓）
+                        _KEEP = ("DATABASE_URL", "DATA_DIR", "T_MONITOR_ACCOUNT",
+                                 "WOLF_BT_ALWAYS_TRADING", "WOLF_ALERT_QQ", "WOLF_ALERT_QQ_TO")
+                        if key in _KEEP and os.environ.get(key):
+                            continue          # 已在环境里 ⇒ 保留调用方的值 ✓
+                        os.environ[key] = val  # 其余照旧 ✓
             print(f"[QQ] Loaded .env from {_env_file}", file=sys.stderr)
         except Exception as e:
             print(f"[QQ] Failed to load .env: {e}", file=sys.stderr)

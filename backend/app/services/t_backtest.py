@@ -840,6 +840,8 @@ class TBacktestEngine:
             }})
             summary["blocked"] += 1
             return
+        if check.get("clamp_volume"):        # 买腿超上限 ⇒ 缩量成交（WOLF_BUY_CAP_CLAMP=1）
+            volume = int(check["clamp_volume"])
 
         if side == "buy":
             trade = ledger.do_buy(exec_price, volume, self.slippage, self.fee_rate)
@@ -990,6 +992,8 @@ class TBacktestEngine:
             }})
             summary["blocked"] += 1
             return
+        if check.get("clamp_volume"):        # 同上：缩量成交
+            volume = int(check["clamp_volume"])
         trade = ledger.do_buy(exec_price, volume, self.slippage, self.fee_rate)
         summary["executed"] += 1
         self.events.append({"type": "trade", "data": {

@@ -53,7 +53,9 @@ def main() -> int:
     ap.add_argument("--start", default="20260105")
     ap.add_argument("--end", default="20260914")
     ap.add_argument("--root", default=os.path.join(bt_env.DATA, "_bt_year"))
-    ap.add_argument("--account", default="stock")
+    # ⚠️ 2026-09-19：默认必须跟 T_MONITOR_ACCOUNT（回测=drabXX，生产默认 stock）—— 原先写死 'stock'
+    #    ⇒ 回测里"持仓并集 3 只"（拿的是生产账户）⇒ 该补的持仓票一个都不补（实测 jan10 首日 22 只全缺）
+    ap.add_argument("--account", default=os.getenv("T_MONITOR_ACCOUNT", "stock") or "stock")
     ap.add_argument("--limit", type=int, default=0, help="只补前 N 个 (标的,日)（试跑用）")
     ap.add_argument("--check-only", action="store_true")
     ap.add_argument("--sleep", type=float, default=0.0)

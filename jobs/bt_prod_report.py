@@ -130,7 +130,8 @@ def _leg_kind(reason: str) -> str:
     if m:
         return m.group(1)
     r = str(reason or "")
-    for k in ("stop_loss", "high_sell", "custom_vwap_sell", "custom_support_sell", "custom_prevlow",
+    for k in ("wolf_ambush_buy", "stop_loss", "high_sell", "custom_vwap_sell", "custom_support_sell",
+                  "custom_prevlow",
               "custom_m5dump", "wolf_zheng_t_buy", "wolf_defensive_t_reduce", "wolf_profit_take_sell"):
         if k in r:
             return k

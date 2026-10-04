@@ -45,7 +45,7 @@ def bench(name, fn, rounds=5):
 print("=== 实时性对比（每源5次串行，间隔1.5s）===\n")
 
 # 免费源
-bench("腾讯qt 实时行情(1只)", lambda: fetch_tencent_quote([SYM]))
+bench("腾讯qt 实时行情(1只)", lambda: fetch_tencent_quote([_normalize_symbol(SYM)]))
 bench("腾讯ifzq m1 分钟线(500根)", lambda: fetch_tencent_mkline(SYM, "m1", 500))
 bench("新浪 m1 分钟线(300根)", lambda: fetch_sina_minline(SYM, 1, 300))
 

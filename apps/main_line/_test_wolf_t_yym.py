@@ -34,7 +34,7 @@ def prev_daily(n=5):
         out.append({'close':float(bs[-1]['close']),'high':max(float(b['high']) for b in bs),'low':min(float(b['low']) for b in bs),'vol':sum(float(b.get('vol') or 0) for b in bs)})
     return out
 # today quote
-q=fetch_tencent_quote(['sh603259']).get('sh603259')
+q=fetch_tencent_quote([_normalize_symbol('sh603259')]).get('sh603259')
 print('quote:', q, flush=True)
 prev=prev_daily()
 print('prev_daily:', json.dumps([{'close':round(x['close'],2),'high':x['high'],'low':x['low'],'vol':round(x['vol'],0)} for x in prev],ensure_ascii=False), flush=True)

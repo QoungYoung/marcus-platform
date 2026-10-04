@@ -90,6 +90,17 @@ def main() -> int:
             _cn.close()
     except Exception as _e:
         print("  [nav] 落库失败（文件仍写 ✓）: %s" % str(_e)[:70])
+    # ★ 账本 §9.533 ✓（用户方案：「每个臂做一个 sqlite，数据落库 ⇒ 不用存这么多 json，且都能查」✓）
+    try:
+        import sys as _sys2
+        _sys2.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import arm_db as _adb
+        _c2 = _adb.connect(acc)
+        _adb.put_nav(_c2, acc, day, round(cash, 2), round(mv, 2), round(eq, 2),
+                     round((eq / 250000.0 - 1) * 100, 3), n_pos)
+        _c2.close()
+    except Exception as _e2:
+        print("  [nav] 写臂库失败: %s" % str(_e2)[:60])
     row = {"day": day, "at": time.strftime("%H:%M:%S"), "account": acc, "cash": round(cash, 2),
            "mv": round(mv, 2), "equity": round(eq, 2), "ret": round((eq / 250000.0 - 1) * 100, 3), "n_pos": n_pos}
     p = os.path.join(os.getenv("DATA_DIR") or os.path.join(REPO, "data", "_bt_t35", day), "nav.jsonl")

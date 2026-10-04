@@ -89,6 +89,24 @@ def has_upper_shadow(bar: Optional[Dict[str, Any]], ratio: Optional[float] = Non
     return (h - max(o, c)) >= r * (h - l)
 
 
+def kinds() -> List[str]:
+    """G8 的**作用面**（腿型白名单）。库内默认**空** ⇒ 旧行为「拦全部买腿/兑现类卖腿」（生产零影响）。
+
+    2026-09-25 用户拍板：语料 2025-07-17「看见出上影线 **立马停止做T**」只该管**做T类**，
+    建仓类腿型（trend_break_buy / buy_253 / buy_254 / custom_prevlow …）应豁免。
+    回测由 `jobs/bt_env_pins.sh` 置做T类白名单。
+    """
+    return [x.strip() for x in os.getenv("WOLF_G8_KINDS", "").split(",") if x.strip()]
+
+
+def applies_to(trigger_kind: Optional[str]) -> bool:
+    """该腿型是否受 G8 约束。白名单为空 ⇒ 一律 True（**旧行为逐字不变**）。"""
+    ks = kinds()
+    if not ks:
+        return True
+    return str(trigger_kind or "").strip() in ks
+
+
 def shadow_stop(bars: List[dict], lookback: int = 1) -> Tuple[bool, str]:
     """最近 lookback 根**已完成**日线是否触发"停机"。返回 (stop, reason)。"""
     if not bars:

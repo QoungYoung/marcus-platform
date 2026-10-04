@@ -199,7 +199,7 @@ def t_conditions_generate_ai(payload: dict = None):
         current = None
         try:
             ns = _normalize_symbol(sym)
-            q = fetch_tencent_quote([ns])
+            q = fetch_tencent_quote([_normalize_symbol(ns)])
             q0 = (q or {}).get(ns) or {}
             current = float(q0.get("current") or 0) or None
         except Exception:

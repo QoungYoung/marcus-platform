@@ -15,6 +15,20 @@ LIMITUP_PCT = 9.7         # ⛔自设(无语料依据, 见 docs/wolf-buy-paramet
 RANK_WIN = 60             # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)(窗口)
 
 
+def _dsn() -> str:
+    """DSN 统一解析（2026-09-19 修 postgres 主机名/.env 端口不对，见 apps/main_line/db_dsn.py）。"""
+    try:
+        import sys as _s2, os as _o2
+        _p2 = _o2.path.dirname(_o2.path.abspath(__file__))
+        if _p2 not in _s2.path:
+            _s2.path.insert(0, _p2)
+        from db_dsn import dsn as _d
+        return _d()
+    except Exception:
+        import os as _o3
+        return _o3.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+
+
 def _relay():
     """加载 core/tushare_relay.py —— 2026-09-13: gzcloud 代理 token 失效，统一改走
     datahubco（基础接口，快）+ promax（聚合接口）中继。"""
@@ -74,7 +88,7 @@ def bad_set():
     bad = set()
     try:
         import psycopg2
-        conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = psycopg2.connect(_dsn())
         cur = conn.cursor()
         cur.execute("SELECT ts_code FROM stock_pool WHERE is_st=1 OR name LIKE 'ST%' OR name LIKE '*ST%'")
         bad |= {str(r[0]) for r in cur.fetchall()}
@@ -88,7 +102,7 @@ def bad_set():
 def cross_concepts():
     try:
         import psycopg2
-        conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = psycopg2.connect(_dsn())
         cur = conn.cursor()
         cur.execute("SELECT ts_code, concept_name FROM stock_concept_map")
         cm = {}
@@ -142,8 +156,16 @@ def _banned_from_service():
     for _p in (root, os.path.join(root, "backend")):
         if _p and _p not in sys.path:
             sys.path.insert(0, _p)
+    # 2026-09-21 修：原先写死 ["stock"]，而回测账户是 drabt2/drabt3/… ⇒ **回测臂读不到自己写的禁令**
+    # （生产账户恰好叫 stock 所以只有回测一直是坏的）。实测：天津普林 drabt3:SZ002134 于 20260116 被禁，
+    # T3 在 0128 又买了 1400 股。开关 WOLF_TICKET_BAN_FIX（默认 0 ⇒ 保持历史行为）。
+    try:
+        import ban_filter as _bf
+        _accts = _bf.accounts_to_read()
+    except Exception:
+        _accts = ["stock"]
     from app.services.wolf_ticket_ban import banned_symbols as _bs
-    return _bs(["stock"])
+    return _bs(_accts)
 
 
 def theme_quantile_keep(rows, pct=None, key="leader"):
@@ -232,6 +254,17 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     if not uni:
         print("WOLF_PICK NO_CONFIRM_UNIVERSE", theme, file=sys.stderr); return _st("no_universe", "confirm_universe 无该主题")
     members = sorted({ts for lst in uni.values() for ts in lst})
+    # ⓪ 卫生过滤（退市 / ST / 北交所）2026-09-21 用户拍板"生产也打开"。
+    #   注：bad_set() 只覆盖 ST 形态的名字，**不覆盖"退"**；这里补上，并统一走 universe_clean 的 as-of 判据。
+    try:
+        import universe_clean as _uc            # 同目录，直接 import
+        if _uc.enabled():
+            _m0 = len(members)
+            members = [t for t in members if _uc.judge(t)[0]]
+            if len(members) != _m0:
+                print(f"WOLF_PICK CLEAN {_m0}→{len(members)}", file=sys.stderr)
+    except Exception as _ue:
+        print(f"WOLF_PICK CLEAN_ERR {str(_ue)[:80]}", file=sys.stderr)
     names = names_map(); bad = bad_set(); cm = cross_concepts()
     theme_cons = set(uni.keys())
     # 拥挤黑名单(crowding_blacklist.json)已于 2026-09-13 真删(D15 事件研究证"拦反" + 用户指令)：

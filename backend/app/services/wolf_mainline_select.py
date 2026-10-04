@@ -23,8 +23,26 @@
 from __future__ import annotations
 
 import json
+from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+def score_mode() -> str:
+    """主线打分口径（`WOLF_MAINLINE_SCORE`，**库内默认 r5 = 现状零变化** ✓）。
+
+    用户要求（2026-09-26）：「**用代码算出主线，让他与我一致；方向池不能硬编码语料**」✓
+      ⇒ 语料**只作验收标签**（`docs/wolf-vs-system-compare.md` 的 109 天逐日标注 ✓），
+        打分只能用**行情** ✓。
+
+    实测（账本 §9.157/§9.158，n=59 可算日）——「他的方向落在我们 top3 的比例」：
+      · `r5`（现状）：top3 **49%**，中位名次 4（按月 01:57%｜02:38%｜03:43%｜04:56%）
+      · `combo`（本开关）：top3 **80%** ✓，中位名次 **2**（按月 01:71%｜02:**85%**｜03:71%｜04:**89%**）
+      · 收益侧（五项版实测）：`r5` 主线之后 +5 中位 **−0.31%** ✗ vs `combo` **+0.91%** ✓（为正 59%）
+    `combo` 四项（**只需价格** ⇒ 本模块的 `px` 就够 ✓）：
+      `rs5`（5 日超额）＋`rs20`（20 日超额）＋`lu`（近 5 日涨停家数）＋`breadth`（站上 20 日均线比例）
+    """
+    return (os.getenv("WOLF_MAINLINE_SCORE", "r5") or "r5").strip().lower()
+
 
 THEMES = ["AI/算力/科技", "半导体/芯片", "医药", "新能源/电池", "机器人/智能制造", "汽车/智驾",
           "消费/内需", "农业", "电力/公用", "稳增长/基建", "资源/周期", "金融", "军工/航天"]
@@ -144,7 +162,30 @@ def score_day(days: Sequence[str], i: int, px: Dict[str, Dict[str, float]],
     for th in uni:
         if r5.get(th) is None:
             continue
-        scores[th] = round(r5[th], 6)                      # ← 主信号：有没有行情
+        if score_mode() == "combo":
+            # 四项组合（账本 §9.158：与他 top3 一致度 49% ⇒ 80% ✓；收益侧亦更优 ✓）
+            _mem = uni.get(th) or []
+            _lu = 0
+            for _c in _mem:
+                for _k in range(max(1, i - 4), i + 1):
+                    _a = (px.get(days[_k - 1]) or {}).get(_c)
+                    _b2 = (px.get(days[_k]) or {}).get(_c)
+                    if _a and _b2 and (_b2 / _a - 1) * 100 >= 9.8:
+                        _lu += 1
+            _above = _tot = 0
+            for _c in _mem:
+                _cl = [(px.get(days[_k]) or {}).get(_c) for _k in range(max(0, i - 19), i + 1)]
+                _cl = [x for x in _cl if x]
+                if len(_cl) >= 15:
+                    _tot += 1
+                    if _cl[-1] > sum(_cl) / len(_cl):
+                        _above += 1
+            _rs5 = float(r5.get(th) or 0.0)
+            _rs20 = float(r20.get(th) or 0.0)
+            _br = (_above / _tot * 100) if _tot else 50.0
+            scores[th] = round(_rs5 / 5.0 + _rs20 / 10.0 + _lu * 0.5 + (_br - 50) / 50.0, 6)
+        else:
+            scores[th] = round(r5[th], 6)                  # ← 现状：主信号=有没有行情
         diag[th] = {
             "r5": round(r5[th], 4),
             "accel": None if (r5p.get(th) is None) else round(r5[th] - r5p[th], 4),   # 诊断（未进球）
@@ -271,7 +312,7 @@ def wave_structures(d8: str, themes: Sequence[str]) -> Dict[str, Optional[str]]:
         return out
     dref = None
     try:
-        cl = _json.load(open(os.path.join(os.environ.get("DATA_DIR", "/app/data"), "concept_long.json"),
+        cl = _json.load(open(__state_path("concept_long.json"),
                              encoding="utf-8"))
         v = next(iter(cl.get("series", {}).values()))
         dref = v.get("dates")
@@ -397,7 +438,7 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                              "note": "consistency 口径=他股票主线层；accel/breadth/联动/龙头 均已实测无效，仅作诊断"}
         if save:
             try:
-                p = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "wolf_mainline_select.json")
+                p = __state_path("wolf_mainline_select.json")
                 with open(p, "w", encoding="utf-8") as f:
                     _json.dump(res, f, ensure_ascii=False, indent=1)
             except Exception:
@@ -458,7 +499,7 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
 def load() -> Dict[str, Any]:
     import json as _json
     try:
-        with open(os.path.join(os.environ.get("DATA_DIR", "/app/data"), "wolf_mainline_select.json"),
+        with open(__state_path("wolf_mainline_select.json"),
                   encoding="utf-8") as f:
             return _json.load(f) or {}
     except Exception:

@@ -20,12 +20,13 @@
 
 纯状态模块（不直接下单）：下单由 TMonitor._check_hedge_refill() 走 gateway 唯一通道。
 """
+from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import json
 import os
 from datetime import date, datetime
 from typing import Optional, Tuple
 
-STATE_FILE = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "wolf_hedge_refill.json")
+STATE_FILE = __state_path("wolf_hedge_refill.json")
 MAX_AGE_DAYS = 10          # 状态保留天数（自然日），过期条目清理
 
 

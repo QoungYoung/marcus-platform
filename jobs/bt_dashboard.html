@@ -236,6 +236,10 @@ body:not(.has-gsap) .lamp--live { animation: lamp-breathe var(--dur-lamp) var(--
 .tbl th[aria-sort="descending"] button::after { content: "↓"; color: var(--color-accent-strong); }
 .tbl th[aria-sort="ascending"] button::after { content: "↑"; color: var(--color-accent-strong); }
 .scroll-x { overflow-x: auto; }
+  /* 原因列：默认省略号截断；悬停显示 title 全文；点击展开／收起（.open） */
+  td.rsn { cursor: help; max-width: 34rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.rsn.open { white-space: normal; word-break: break-word; max-width: 62rem; }
+
 @media (max-width: 63.99rem) {
   .tbl--cards thead { display: none; }
   .tbl--cards tbody, .tbl--cards tr, .tbl--cards td { display: block; }
@@ -571,6 +575,16 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
+  }
+
+  // 原因列：默认截断显示，**悬停看全文（title）**、**点击就地展开/收起**。
+  // 为什么：原因里带关键归因（"as-of 13:15 现价…"/"[G6] …"/"无底仓卖腿不送审…"），
+  // 只截断到 90~120 字时最关键的后半段（结论/闸门成因）常被吃掉，出现"as-of 13…"这种看不清。
+  function reasonCell(t, n) {
+    var full = String((t && t.reason) || '');
+    if (!full) return '<td data-label="原因">—</td>';
+    var short = full.length > n ? full.slice(0, n) + '…' : full;
+    return '<td data-label="原因" class="rsn" title="' + esc(full) + '">' + esc(short) + '</td>';
   }
   function isNum(v) { return typeof v === 'number' && isFinite(v); }
   function fmt(v, dp) {
@@ -1264,7 +1278,7 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
             '<td data-label="类型"><span class="mono dim">' + esc(t.event_type) + '</span></td>' +
             '<td data-label="状态"><span class="badge badge--' + st + '">' + esc(t.status) + '</span></td>' +
             '<td class="num" data-label="价">' + esc(isNum(t.price) ? fmt(t.price, 3) : '—') + '</td>' +
-            '<td data-label="原因">' + esc((t.reason || '').slice(0, 90)) + '</td></tr>';
+            reasonCell(t, 90) + '</tr>';
         }).join('') + '</tbody></table></div>';
     }
     fade150(box);
@@ -1350,6 +1364,62 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     G.to(pane, { y: 8, opacity: 0, duration: G.cap(0.2), ease: 'power2.in',
       onComplete: function () { pane.hidden = true; pane.style.opacity = ''; drawDaily(); } });
   }
+  // 当日盈亏构成（后端 /api/day → pnl_breakdown）：三项分解 + 与「每日盈亏」曲线对账
+  function dayPnl(b) {
+    if (b && b.partial) {   // 活库重建窗口：只报曲线值，不报构成（避免把瞬态当"当日不赚不亏"）
+      return '<h3 class="pane__meta" style="margin:var(--space-md) 0 var(--space-2xs)">当日盈亏构成 · ' + esc(b.day || '') + '</h3>' +
+        '<div class="kpis" style="padding:0 0 var(--space-sm)">' +
+        '<div class="kpi"><span class="kpi__k">曲线盈亏</span><span class="kpi__v' + cls(b.curve_pnl) + '">' + esc(money(b.curve_pnl)) + '</span></div>' +
+        '</div>' + emptyState('活库暂无该日流水', b.note || '');
+    }
+    if (!b || !b.ok) {
+      return '<h3 class="pane__meta" style="margin:var(--space-md) 0 var(--space-2xs)">当日盈亏构成</h3>' +
+        emptyState('该日无盈亏构成', (b && b.note) || '需要前一交易日与当日收盘价才能分解。');
+    }
+    var kpi = function (k, v, c) {
+      return '<div class="kpi"><span class="kpi__k">' + esc(k) + '</span>' +
+        '<span class="kpi__v' + (c || '') + '">' + esc(v) + '</span></div>';
+    };
+    var cby = b.realized_by_class || {};
+    var bad = isNum(b.check_diff) && Math.abs(b.check_diff) >= 1;   // ≥1 元才提示口径差
+    return '<h3 class="pane__meta" style="margin:var(--space-md) 0 var(--space-2xs)">当日盈亏构成 · 对账 ' +
+        '<span class="dim" style="font-weight:400">（' + (b.prev_day ? esc(b.prev_day) + ' → ' + esc(b.day || '') : esc(b.day || '') + ' · 首日') + '）</span></h3>' +
+      '<div class="kpis" style="padding:0 0 var(--space-sm)">' +
+      kpi('曲线盈亏', money(b.curve_pnl), cls(b.curve_pnl)) +
+      kpi('构成合计', money(b.total), cls(b.total)) +
+      kpi('对账差', isNum(b.check_diff) ? fmt(b.check_diff, 2) : '—', bad ? ' num--down' : '') +
+      kpi('引擎口径已实现', money(b.realized_engine), cls(b.realized_engine)) +
+      '</div>' +
+      '<p class="dim" style="margin:0 0 var(--space-sm)">本日：持仓浮动 <span class="' + cls(b.float_total) + '">' + esc(sgn(b.float_total)) +
+        '</span> ＋ 买入贡献 <span class="' + cls(b.buy_total) + '">' + esc(sgn(b.buy_total)) +
+        '</span> ＋ 卖出贡献 <span class="' + cls(b.sell_total) + '">' + esc(sgn(b.sell_total)) +
+        '</span> ＝ <span class="' + cls(b.total) + '">' + esc(sgn(b.total)) + '</span>' +
+        '　·　按腿型引擎已实现：止盈类 <span class="' + cls(cby['止盈类']) + '">' + esc(sgn(cby['止盈类'])) +
+        '</span>　破位/止损类 <span class="' + cls(cby['破位/止损类']) + '">' + esc(sgn(cby['破位/止损类'])) +
+        '</span>　其他 <span class="' + cls(cby['其他']) + '">' + esc(sgn(cby['其他'])) + '</span>' +
+        '<br>' + esc(b.formula || '') + '</p>' +
+      ((b.rows || []).length ? '<div class="scroll-x"><table class="tbl tbl--cards"><thead><tr>' +
+        '<th scope="col">标的</th><th scope="col">名称</th><th class="num" scope="col">昨持</th><th class="num" scope="col">今持</th>' +
+        '<th class="num" scope="col">昨收</th><th class="num" scope="col">今收</th><th class="num" scope="col">浮动</th>' +
+        '<th class="num" scope="col">买入贡献</th><th class="num" scope="col">卖出贡献</th><th class="num" scope="col">合计</th>' +
+        '<th class="num" scope="col">引擎已实现</th></tr></thead><tbody>' +
+        b.rows.map(function (r) {
+          return '<tr data-sym="' + esc(r.symbol) + '" tabindex="0" title="' + esc((r.name || '') + ' ' + r.symbol) + '">' +
+            '<td data-label="标的"><span class="mono">' + esc(r.symbol) + '</span>' +
+              (r.note ? ' <span class="dim">' + esc(r.note) + '</span>' : '') + '</td>' +
+            '<td data-label="名称">' + (r.name ? esc(r.name) : '—') + '</td>' +
+            '<td class="num" data-label="昨持">' + esc(fmt(r.vol_prev, 0)) + '</td>' +
+            '<td class="num" data-label="今持">' + esc(fmt(r.vol_eod, 0)) + '</td>' +
+            '<td class="num" data-label="昨收">' + (isNum(r.close_prev) ? esc(fmt(r.close_prev, 2)) : '—') + '</td>' +
+            '<td class="num" data-label="今收">' + (isNum(r.close) ? esc(fmt(r.close, 2)) : '—') + '</td>' +
+            '<td class="num' + cls(r.float) + '" data-label="浮动">' + esc(sgn(r.float)) + '</td>' +
+            '<td class="num' + cls(r.buy) + '" data-label="买入贡献">' + esc(sgn(r.buy)) + '</td>' +
+            '<td class="num' + cls(r.sell) + '" data-label="卖出贡献">' + esc(sgn(r.sell)) + '</td>' +
+            '<td class="num' + cls(r.total) + '" data-label="合计">' + esc(sgn(r.total)) + '</td>' +
+            '<td class="num' + cls(r.realized) + '" data-label="引擎已实现">' + esc(sgn(r.realized)) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : emptyState('该日无持仓也无成交', '')) +
+      (b.note ? '<p class="dim" style="margin:var(--space-xs) 0 0">' + esc(b.note) + '</p>' : '');
+  }
   function renderDay() {
     if (!S.day) { return; }
     var box = $('day-body');
@@ -1371,6 +1441,7 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
         .map(function (kv) {
           return '<div class="kpi"><span class="kpi__k">' + esc(kv[0]) + '</span><span class="kpi__v">' + esc(kv[1]) + '</span></div>';
         }).join('') + '</div>' +
+      dayPnl(d.pnl_breakdown) +
       '<div class="grid-2">' +
       '<div><h3 class="pane__meta" style="margin-block-end:var(--space-2xs)">当日成交</h3>' +
       (d.trades.length ? '<div class="scroll-x"><table class="tbl tbl--cards"><thead><tr><th scope="col">时间</th><th scope="col">标的</th><th scope="col">名称</th><th scope="col">方向</th><th class="num" scope="col">价</th><th class="num" scope="col">量</th><th class="num" scope="col">已实现</th><th scope="col">腿型</th></tr></thead><tbody>' +
@@ -1407,7 +1478,7 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
             '<td data-label="类型"><span class="mono dim">' + esc(t.event_type) + '</span></td>' +
             '<td data-label="状态"><span class="badge badge--' + st + '">' + esc(t.status) + '</span></td>' +
             '<td class="num" data-label="价">' + esc(isNum(t.price) ? fmt(t.price, 3) : '—') + '</td>' +
-            '<td data-label="原因">' + esc((t.reason || '').slice(0, 120)) + '</td></tr>';
+            reasonCell(t, 120) + '</tr>';
         }).join('') + '</tbody></table></div>' : emptyState('当日无触发')) +
       dayArmed(d);
     fade150(box);
@@ -1540,7 +1611,7 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
             '<td data-label="类型"><span class="mono dim">' + esc(t.event_type) + '</span></td>' +
             '<td data-label="状态"><span class="badge badge--' + s + '">' + esc(t.status) + '</span></td>' +
             '<td class="num" data-label="价">' + esc(isNum(t.price) ? fmt(t.price, 3) : '—') + '</td>' +
-            '<td data-label="原因">' + esc((t.reason || '').slice(0, 110)) + '</td></tr>';
+            reasonCell(t, 110) + '</tr>';
         }).join('') + '</tbody></table></div>' : emptyState('该标的无触发')) +
       '</div></div>' +
       '<h3 class="pane__meta" style="margin:var(--space-sm) 0 var(--space-2xs)">触发快照字段（t_triggers.snapshot）</h3>' +
@@ -1870,6 +1941,140 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
   bind();
   poll();
   schedule();
+
+  // 原因列点击展开/收起（事件委托：表格每次轮询都重绘）
+  document.addEventListener('click', function (e) {
+    var td = e.target && e.target.closest ? e.target.closest('td.rsn') : null;
+    if (td) { td.classList.toggle('open'); }
+  });
+})();
+</script>
+<!-- ── 进程 / 跑批（2026-09-18 用户要求：可选正在跑的进程与已完成落地的跑批看日志）── -->
+<section class="pane" id="runs-pane" style="margin-top:18px">
+  <div class="pane__hd">
+    <span class="pane__ttl">进程 / 跑批</span>
+    <span class="pane__meta" id="runs-meta">加载中…</span>
+    <button class="btn btn--ghost" id="runs-refresh" type="button">刷新</button>
+    <label class="pane__meta" style="margin-left:10px"><input type="checkbox" id="runs-follow" checked> 跟随最新</label>
+  </div>
+  <div class="pane__bd" style="display:grid;grid-template-columns:minmax(260px,340px) 1fr;gap:14px;align-items:start">
+    <div id="runs-list" class="mono" style="max-height:460px;overflow:auto;font-size:12px;line-height:1.5"></div>
+    <div>
+      <div class="pane__meta mono" id="runs-logpath" style="word-break:break-all">未选择</div>
+      <pre id="runs-log" class="mono" style="max-height:460px;overflow:auto;white-space:pre-wrap;font-size:12px;background:rgba(0,0,0,.18);padding:10px;border-radius:8px;margin:6px 0 0">点击左侧任意进程 / 跑批 / 日志查看尾部输出</pre>
+    </div>
+  </div>
+</section>
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+  function kb(n) { n = Number(n) || 0; return n > 1048576 ? (n / 1048576).toFixed(1) + "MB" : n > 1024 ? (n / 1024).toFixed(0) + "KB" : n + "B"; }
+  function hhmm(ts) { if (!ts) { return "—"; } var d = new Date(ts * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2); }
+  var S = { sel: null, selName: "", data: null };
+  function item(label, sub, path, cls) {
+    if (!path) { return '<div style="opacity:.5">' + esc(label) + " " + esc(sub || "") + "</div>"; }
+    var on = S.sel === path ? "background:rgba(120,180,255,.18);" : "";
+    return '<div class="runs-item" data-path="' + esc(path) + '" data-name="' + esc(label) + '"' +
+      ' style="cursor:pointer;padding:2px 6px;border-radius:6px;' + on + '" title="' + esc(path) + '">' +
+      esc(label) + ' <span style="opacity:.6">' + esc(sub || "") + "</span></div>";
+  }
+  function render(d) {
+    S.data = d;
+    var h = [];
+    var run = d.running || [];
+    var runs = run.filter(function (p) { return p.role === "run"; });
+    var kids = run.filter(function (p) { return p.role === "child"; });
+    var others = run.filter(function (p) { return p.role === "dashboard" || p.role === "service"; });
+    h.push('<div style="opacity:.6;margin:2px 0 4px">在跑跑批（' + runs.length + "）</div>");
+    if (!runs.length) { h.push('<div style="opacity:.5">无</div>'); }
+    runs.forEach(function (p) {
+      var rn = p.root ? p.root.split("/").pop() : "";
+      h.push(item("● " + p.kind + " pid=" + p.pid, (p.day || "") + " " + rn + " " + (p.elapsed_s != null ? Math.round(p.elapsed_s) + "s" : "") + (p.account ? " @" + p.account : ""), p.stdout));
+      kids.filter(function (k) { return k.ppid === p.pid; }).forEach(function (k) {
+        h.push(item("&nbsp;&nbsp;└ " + k.kind.replace("bt_job:", "") + " pid=" + k.pid, (k.day || "") + " " + (k.elapsed_s != null ? Math.round(k.elapsed_s) + "s" : ""), k.stdout));
+      });
+    });
+    var orphan = kids.filter(function (k) { return !runs.some(function (r) { return r.pid === k.ppid; }); });
+    orphan.forEach(function (k) { h.push(item("&nbsp;&nbsp;· " + k.kind + " pid=" + k.pid, k.day || "", k.stdout)); });
+    if (others.length) {
+      h.push('<div style="opacity:.45;margin:8px 0 3px">配套进程（看板 / 取数服务，非第二跑）</div>');
+      others.forEach(function (p) { h.push('<div style="opacity:.45;padding-left:6px">· ' + esc(p.kind) + " pid=" + p.pid + "</div>"); });
+    }
+    h.push('<div style="opacity:.6;margin:10px 0 4px">已完成跑批（按根目录，' + (d.roots || []).length + "）</div>");
+    (d.roots || []).forEach(function (r) {
+      h.push('<div style="margin-top:6px;opacity:.9">▣ ' + esc(r.name) + ' <span style="opacity:.6">' + r.days + " 天 " + esc((r.first_day || "?") + "→" + (r.last_day || "?")) + " · " + hhmm(r.mtime) + "</span></div>");
+      (r.logs || []).slice(0, 10).forEach(function (g) { h.push(item("&nbsp;&nbsp;· " + g.name, kb(g.size) + " " + hhmm(g.mtime), g.path)); });
+      h.push('<div class="runs-more" data-root="' + esc(r.name) + '" style="cursor:pointer;opacity:.6;padding-left:10px">… 全部 ' + (r.logs || []).length + " 个日志（点击展开）</div>");
+    });
+    h.push('<div style="opacity:.6;margin:10px 0 4px">日志文件（logs/ 最近 ' + (d.logs || []).length + "）</div>");
+    (d.logs || []).slice(0, 25).forEach(function (g) { h.push(item("· " + g.name, kb(g.size) + " " + hhmm(g.mtime), g.path)); });
+    $("runs-list").innerHTML = h.join("");
+    // 默认选中**最新启动的跑批**（started_epoch 最大）；用户手动点选过就不再抢
+    var _cand = run.filter(function (p) { return p.role === "run" && p.stdout; });
+    _cand.sort(function (a, b) { return (b.started_epoch || 0) - (a.started_epoch || 0); });
+    var act = _cand[0] || run.filter(function (p) { return p.stdout; })[0];
+    $("runs-meta").textContent = "在跑 " + run.length + " · 跑批根 " + (d.roots || []).length + " · 日志 " + (d.logs || []).length + " · " + hhmm(Math.floor(Date.now() / 1000));
+    // 2026-09-19：跟随最新时**自动切到新跑批的日志**（原先只在首次选一次 ⇒ 新跑批开了页面还停在旧日志）
+    function autoTarget() {
+      var dd = S.data || {};
+      var rr = (dd.running || []).filter(function (x) { return x.role === "run"; });
+      rr.sort(function (a, b) { return (b.started_epoch || 0) - (a.started_epoch || 0); });
+      var a2 = rr[0] || (dd.running || [])[0];
+      if (!a2) { return null; }
+      var p2 = a2.follow_log || a2.stdout;
+      return p2 ? { path: p2, name: a2.kind + " pid=" + a2.pid } : null;
+    }
+    S.autoTarget = autoTarget;
+    var _t0 = autoTarget();
+    if ($("runs-follow").checked && _t0 && _t0.path && _t0.path !== S.sel) {
+      openLog(_t0.path, _t0.name);
+    } else if (!S.sel && act) {
+      openLog(act.follow_log || act.stdout, act.kind + " pid=" + act.pid);
+    }
+  }
+  function openLog(path, name) {
+    S.sel = path; S.selName = name || path;
+    $("runs-logpath").textContent = S.selName + "  →  " + path;
+    fetch("/api/log?tail=1500&path=" + encodeURIComponent(path), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.error) { $("runs-log").textContent = "读取失败：" + j.error; return; }
+        $("runs-log").textContent = (j.lines || []).join("\n") || "（空文件）";
+        $("runs-logpath").textContent = S.selName + "  ·  " + kb(j.size) + " · " + j.total_lines + " 行" + (j.truncated ? "（只看最后 " + j.tail + " 行）" : "") + "  →  " + j.path;
+        if ($("runs-follow").checked) { var el = $("runs-log"); el.scrollTop = el.scrollHeight; }
+        render(S.data || { running: [], roots: [], logs: [] });
+      })
+      .catch(function (e) { $("runs-log").textContent = "读取失败：" + e; });
+  }
+  function load() {
+    fetch("/api/runs", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) { render(d); })
+      .catch(function (e) { $("runs-meta").textContent = "加载失败：" + e; });
+  }
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    if (!t || !t.closest) { return; }
+    var it = t.closest(".runs-item");
+    if (it) { openLog(it.getAttribute("data-path"), it.getAttribute("data-name")); return; }
+    var more = t.closest(".runs-more");
+    if (more && S.data) {
+      var nm = more.getAttribute("data-root");
+      var r = (S.data.roots || []).filter(function (x) { return x.name === nm; })[0];
+      if (r) {
+        var html = (r.logs || []).map(function (g) { return item("&nbsp;&nbsp;· " + g.name, kb(g.size) + " " + hhmm(g.mtime), g.path); }).join("");
+        more.outerHTML = html;
+      }
+    }
+  });
+  $("runs-refresh").addEventListener("click", load);
+  load();
+  setInterval(function () {
+    load();
+    if (!$("runs-follow").checked) { return; }
+    var t = S.autoTarget ? S.autoTarget() : null;
+    if (t && t.path && t.path !== S.sel) { openLog(t.path, t.name); }   // 新跑批 → 自动切日志
+    else if (S.sel) { openLog(S.sel, S.selName); }                      // 同一份 → 刷新内容
+  }, 15000);
 })();
 </script>
 </body>

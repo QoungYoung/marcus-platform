@@ -4,18 +4,23 @@
 统一封装五张 t_* 表的读写，供 TMonitor / 网关 / Agent / API 复用。
 所有函数幂等、容错（表不存在时降级返回空，不炸主流程）。
 
-## 时钟口径（2026-09-17 修复 P1：DB 真钟 vs Python 进程钟不同源）
+## 时钟口径（2026-09-17 首修；2026-09-19 用户拍板 A：全表统一到 **Python 进程钟**）
 
-`t_triggers.created_at` 由表默认值 `now()`（**DB 服务器时钟**）写入；而回测/重放里 Python 进程钟
-被 `jobs/bt_run_pinned.pin_clock()` 钉到 as-of 日（如 2026-03），DB 钟是真实墙钟（如 2026-09）——
-两者相差数月。修复前拿 **Python 的 cutoff** 去比 **DB 的 created_at**：
-  · 孤儿单清扫恒不触发（实测 2,512 条 pending 永不过期，生产语义是 300s 后 cancelled）；
-  · 顺带 `claimed_at = now()` 也是 DB 钟 → 网关侧 `datetime.now() - claimed_at` 算成负数 → 永不超时。
-规则（**同一个比较，两侧必须同一钟源**）：
-  · `created_at`（DB 默认值）↔ 清扫 cutoff 用 **DB `now()`**（表结构不改；生产两钟一致 ⇒ 行为中性，
-    回测里 created_at 与 now() 同为真实墙钟 ⇒ 清扫恢复生效）。开关 `T_DB_SWEEP_CLOCK=py` 回到旧写法。
-  · `claimed_at` ↔ 网关超时用 **Python 钟**：`claimed_at = :claimed_at`（参数传 `datetime.now()`）。
-    开关 `T_DB_CLAIMED_AT_CLOCK=db` 回到旧写法（`claimed_at = now()`）。
+回测/重放里 Python 进程钟被 `jobs/bt_run_pinned.pin_clock()` 钉到 as-of 日（如 2026-01），
+而 DB 服务器钟是真实墙钟（如 2026-09）——**两者相差数月**。凡"一个字段写入用一个钟、比较用另一个钟"
+的写法都会在回放里失真。2026-09-19 起统一：
+
+| 字段/比较 | 钟源 | 回退开关 |
+| --- | --- | --- |
+| `t_triggers.created_at` | **Python**（`insert_trigger` 显式传 `datetime.now()`；不再依赖表默认 `now()`） | — |
+| 孤儿单清扫 cutoff | **Python**（`created_at < :cutoff`） | `T_DB_SWEEP_CLOCK=db` 用 `now() - make_interval(...)` |
+| `claimed_at` ↔ 网关超时 | **Python**（`claimed_at = :claimed_at`） | `T_DB_CLAIMED_AT_CLOCK=db` |
+| 按"当日"去重/计数（止损去重、连续命中、当日正T计数） | **Python 钉钟日**（`to_char(created_at,'YYYY-MM-DD') = :today`） | — |
+
+生产里两钟一致 ⇒ 全部逐位中性；回放里 `created_at` 现在等于**回放日**，与"今天"比较同源。
+2026-09-17 的旧口径（created_at 走 DB 默认值 + 清扫用 DB `now()`）在回放里会让按日比较**恒不成立**
+（`bt_asof_fetch` 会把 SQL 里的 `CURRENT_DATE` 改写成回放日，而 created_at 仍是九月）——
+实测后果：止损当日去重、连续命中计数、当日正T买入计数**全部恒为 0**（偏松，AI 收不到"连续命中"提示）。
 """
 import os
 from datetime import datetime, timedelta
@@ -37,8 +42,15 @@ def _now() -> str:
 
 
 def sweep_clock() -> str:
-    """孤儿单清扫用的钟源：`db`（默认，与 created_at 的 DB 默认值同源）/ `py`（修复前的 Python 钟）。"""
-    return (os.getenv("T_DB_SWEEP_CLOCK", "db") or "db").strip().lower()
+    """孤儿单清扫用的钟源：`py`（**默认**，与 created_at 的写入钟同源）/ `db`（旧口径，DB now()）。
+
+    ⚠️ 2026-09-19 变更（用户拍板 A）：`created_at` 改由 **Python 进程钟**写入（见 insert_trigger），
+    故清扫也必须用 Python cutoff。生产两钟一致 ⇒ 行为中性；回放里 Python 被钉到 as-of，
+    与写入钟同源 ⇒ 孤儿单清扫按 300s 正常生效（旧口径下 DB 钟写、DB 钟比，看起来"能用"，
+    但同一张表里按日去重（t_monitor/t_bridge/t_gateway）全都在拿 DB 钟的 created_at 比 Python 钟的
+    "今天" ⇒ 回放里恒真/恒假，实测会让某票止损一次后**整个回放期间不再止损**，以及连续命中计数跨日累加）。
+    """
+    return (os.getenv("T_DB_SWEEP_CLOCK", "py") or "py").strip().lower()
 
 
 def claimed_at_clock() -> str:
@@ -380,11 +392,11 @@ def insert_trigger(trig: Dict[str, Any], status: str = "pending") -> Optional[in
                 INSERT INTO t_triggers (
                     account_id, condition_id, symbol, event_type,
                     trigger_price, quote_price, suggest_bid_price, suggest_ask_price,
-                    slippage_budget, snapshot, status, mode, reason, direction
+                    slippage_budget, snapshot, status, mode, reason, direction, created_at
                 ) VALUES (
                     :account_id, :condition_id, :symbol, :event_type,
                     :trigger_price, :quote_price, :suggest_bid_price, :suggest_ask_price,
-                    :slippage_budget, :snapshot, :status, :mode, :reason, :direction
+                    :slippage_budget, :snapshot, :status, :mode, :reason, :direction, :created_at
                 )
                 RETURNING id
                 """
@@ -401,8 +413,14 @@ def insert_trigger(trig: Dict[str, Any], status: str = "pending") -> Optional[in
                 "slippage_budget": trig.get("slippage_budget"),
                 "snapshot": _to_jsonb(trig.get("snapshot")),
                 "mode": trig.get("mode", "auto"),
-                "reason": trig.get("reason"),
+                # 同上：reason 列宽 256，超长会让 INSERT 整体失败 ⇒ 触发直接丢，必须截断
+                "reason": (None if trig.get("reason") is None else str(trig.get("reason"))[:256]),
                 "direction": trigger_direction(trig),
+                # ⚠️ 2026-09-19：created_at 由 **Python 进程钟**显式写入（回放里 = 钉住的 as-of）。
+                #   原先是表默认 now() = DB 真钟 ⇒ 回放里 created_at 与所有"今天"比较不同源：
+                #   止损去重恒真（一次止损 ⇒ 整轮回放不再止损）、连续命中跨日累加、当日正T计数恒 0。
+                #   生产两钟一致 ⇒ 逐位不变。
+                "created_at": datetime.now(),
             }).fetchone()
             db.commit()
             return row[0] if row else None
@@ -418,10 +436,9 @@ def claim_pending_trigger(consumer: str, timeout_seconds: int = 300) -> Optional
 
     同时把超过 timeout 的 pending 事件按孤儿单处理置 cancelled（见孤儿单处置）。
 
-    时钟口径（2026-09-17 修复 P1，见模块 docstring）：
-      · 清扫：cutoff 与 `created_at` **同源**——created_at 是表默认值 `now()`（DB 钟），
-        故默认用 `now() - make_interval(secs => :timeout)` 在 DB 侧比较；`T_DB_SWEEP_CLOCK=py`
-        回到修复前的"Python cutoff 比 DB created_at"（回测里恒不触发）。
+    时钟口径（2026-09-19 统一到 Python 进程钟，见模块 docstring）：
+      · 清扫：cutoff 与 `created_at` **同源**——created_at 由 Python 钟写入 ⇒ 默认用 Python cutoff
+        （`created_at < :cutoff`）；`T_DB_SWEEP_CLOCK=db` 回到 DB 侧 `now() - make_interval(...)`。
       · 认领：`claimed_at` 由 **Python 钟**写入（参数传递），与网关的超时判定同源；
         `T_DB_CLAIMED_AT_CLOCK=db` 回到 `now()`。
     """
@@ -477,7 +494,11 @@ def update_trigger_status(trigger_id: int, status: str, reason: Optional[str] = 
         db = SessionLocal()
         try:
             sql = "UPDATE t_triggers SET status = :status, reason = :reason"
-            params: Dict[str, Any] = {"status": status, "reason": reason, "id": trigger_id}
+            # ⚠️ 2026-09-19 深夜修（夜间自查发现）：`t_triggers.reason` 是 **varchar(256)**，超长会让整条
+            #   UPDATE 抛 StringDataRightTruncation ⇒ **状态回写静默丢失**（实测各臂 1~9 条）。统一截断。
+            params: Dict[str, Any] = {"status": status,
+                                      "reason": (None if reason is None else str(reason)[:256]),
+                                      "id": trigger_id}
             if status == "executed":
                 sql += ", executed_at = now()"
             if executed_price is not None:

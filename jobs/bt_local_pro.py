@@ -43,11 +43,26 @@ def install_net_offline() -> Dict[str, int]:
             os.environ[_k] = (("," + _cur) if _cur else "") .join([""]) if False else (
                 (_cur + "," if _cur else "") + ",".join(_add))
 
+    # 取数网关白名单（2026-09-17）：接入**自家数据提供方**时，必须同时给断网保护留口子——
+    # 否则"钩子取不到数 → 回退原函数 → 原函数再撞断网"，失败数不降反增（实测 337→1109）。
+    # 仅在 `BT_ASOF_FETCH=1` 时生效；主机可用 `BT_ASOF_FETCH_HOSTS`（逗号分隔）覆盖。
+    # PIT 由网关保证（as-of 强制夹取 + 日期/时刻双截断），见 jobs/bt_asof_fetch.py。
+    _asof_on = str(os.environ.get("BT_ASOF_FETCH", "0")).strip().lower() in ("1", "true", "yes", "on")
+    # ⚠️ 默认**空名单**（2026-09-17 修正）：取数网关已改用 `http.client` 直连，**本就不经过本层**
+    # ⇒ 不需要放行任何主机。而放行会连带打开**生产代码自己的**外部直连（实测 `_check_defensive_t_reduce`
+    # 里直连 datahubco 的 `index_member_all` 被放行后单日耗时 140s）⇒ 默认保持"全网阻断 + 网关直连"。
+    # 需要临时放行某些主机时显式设 `BT_ASOF_FETCH_HOSTS=host1,host2`。
+    _asof_hosts = tuple(h.strip().lower() for h in (
+        os.environ.get("BT_ASOF_FETCH_HOSTS") or ""
+    ).split(",") if h.strip()) if _asof_on else ()
+
     def _is_local(url) -> bool:
         """本机回环地址**放行**：本地 LLM 隧道（波浪/交易腿 agent，127.0.0.1:13001）
         与本地 PG 都在这条路径上，切断它们会把 agent 一起切掉（实测：波浪步 rc=1，
         报 `BT_NET_OFFLINE: http://127.0.0.1:13001/chat`）。"""
         u = str(url)
+        if _asof_hosts and any(h in u.lower() for h in _asof_hosts):
+            return True          # 自家数据提供方（datahubco / promax），PIT 由取数网关保证
         return ("127.0.0.1" in u) or ("localhost" in u) or ("[::1]" in u) or ("0.0.0.0" in u)
 
     def _note(url) -> None:
@@ -67,10 +82,16 @@ def install_net_offline() -> Dict[str, int]:
         _rsr = requests.sessions.Session.request
 
         def _mk(fn, url, *a, **kw):
-            if _is_local(url):
+            # ⚠️ 2026-09-20 修（405 Method Not Allowed 的真因）：调用方可能传 **Request 对象**
+            #   （如 `theme_member_llm` 的 POST /chat）。判定可以看 full_url，但**必须把原对象原样转交** ——
+            #   旧写法把 Request 降级成 URL 字符串 ⇒ urllib 走 **GET**（data/method 全丢）⇒ 对只收 POST
+            #   的 `/chat` 得到 405。实测定位于 pinned 子进程：裸 socket / http.client / 新建 opener 全 200，
+            #   只有全局 `urlopen(Request)` 是 405。影响所有在回放子进程里用 urllib POST 的代码。
+            _u = getattr(url, "full_url", url)
+            if _is_local(_u):
                 return fn(url, *a, **kw)
-            _note(url)
-            raise _NetOffline("BT_NET_OFFLINE: %s" % str(url)[:80])
+            _note(_u)
+            raise _NetOffline("BT_NET_OFFLINE: %s" % str(_u)[:80])
 
         requests.get = lambda url, *a, **kw: _mk(_rg, url, *a, **kw)
         requests.post = lambda url, *a, **kw: _mk(_rp, url, *a, **kw)
@@ -85,7 +106,9 @@ def install_net_offline() -> Dict[str, int]:
     try:
         import urllib.request as _ur
         _ruo = _ur.urlopen
-        _ur.urlopen = lambda url, *a, **kw: _mk(_ruo, getattr(url, "full_url", url), *a, **kw)
+        # ⚠️ 2026-09-20 修：必须把 **原对象**（可能是 Request）转交 `_mk`；
+        #   旧写法把 `full_url` 字符串传进去 ⇒ Request 被降级 ⇒ POST 变 GET ⇒ 405。
+        _ur.urlopen = lambda url, *a, **kw: _mk(_ruo, url, *a, **kw)
     except Exception:
         pass
     return _NET_HITS
@@ -236,6 +259,16 @@ def install_local_pro(market: Any, cut: str, relay_fn=None) -> "_LocalPro":
             patched.append("TushareRelay.relay_items")
         except Exception as e:
             print("[localpro] TushareRelay 打补丁失败：%s" % str(e)[:80], file=sys.stderr)
+    # ── DB 真钟 vs 钉钟「每 bar 对账」（P1-a，2026-09-17）────────────────────────────
+    # 为什么挂在这里：`bt_prod_run` 在**钉好钟、装完所有替身之后、进 bar 循环之前**调用本函数，
+    # 并把 `LocalMarket` 实例传进来；而 `market.write_recent_sync(...)` 是**每根 bar 的第一件事**
+    # → 用它做"每 bar 一次"的钩子：jobs/ 侧不必改 `bt_prod_run.py`，更不动任何生产代码。
+    # 详见 jobs/bt_clock_recon.py（问题、最小修法、为什么不动 created_at）。
+    try:
+        import bt_clock_recon
+        bt_clock_recon.install(market=market)
+    except Exception as e:
+        print("[localpro] clock_recon 装配失败（不阻断）：%s" % str(e)[:100], file=sys.stderr)
     print("[localpro] 已接管 tushare 客户端：%s" % patched, file=sys.stderr)
     return pro
 

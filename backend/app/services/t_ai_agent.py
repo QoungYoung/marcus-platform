@@ -9,6 +9,7 @@ AI 是选股/操作/条件/复盘的唯一决策主体，本模块承接 AI 决�
 安全边界：所有执行仍经网关（gateway_execute / build_t_position），本模块不直接下单。
 """
 import json
+import os
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +17,46 @@ from app.services import t_db
 
 # 决策动作白名单（AI 输出解析后的结构化动作）
 AI_ACTIONS = ("exec", "wait", "abandon", "update_condition")
+
+# ── G4 成交的**可观测性标记**（2026-09-23；开关默认 0 ⇒ 生产逐位不变）──────────────
+# 病灶（实测，自动开发第 2 轮）：G4「被动止盈线只上移、不破不卖」(狼大 2025-06-09/2026-07-01)
+#   **一直在正常工作**（T5 触发 20 次、成交 5 笔；T9/T10/T11/T12 各 1 笔），
+#   但成交的 `reason` 是 AI 自己写的自由文本，实测写成「**被动止损**卖腿触发/命中/兑现/按触发快照执行」
+#   ⇒ 复盘/账本用 `reason LIKE '%被动止盈%'` 统计 G4 效果时**一笔都查不到**，
+#   导致连续两次误判「G4 在回测里失效」（第一次误在查了被清理的 `t_triggers` 表）。
+#   ⇒ 本标记只给**归因文本**加一个稳定前缀。
+# ⚠️ 2026-09-23 自我更正：最初用 `[G4 被动止盈] ` 作前缀，但**成交 reason 是会被决策逻辑读的** ——
+#   · `t_capacity._BASE_EXEMPT_TAKE_KW = ("高抛","止盈","吃一口","兑现","减半")`：命中就计入
+#     "本轮止盈类穿透"名额（默认上限 2），并决定这笔卖腿**能否穿透底仓**；
+#     ⚠️ **2026-09-30 更新（账本 §9.299／§9.301）**：该表已按用户口径**收窄** ——
+#       开关 `WOLF_BASE_EXEMPT_STRICT` 打开后（回测 pins 默认开 ✓）：
+#         可动底仓（全仓减半）＝ `wolf_fib_target_sell`(0.618 压力位 ✓)／`wolf_boll_upper_sell`(BOLL 上轨 ✓)／
+#                              `wolf_board_half_sell`(板上/加速 ✓)／`wolf_confirm_sell`(加速结束 ✓)
+#         关键词表 ＝ ("压力位","上轨","板上","加速结束","突破") ✓
+#         做T类（`wolf_profit_take_sell`／`high_sell`／`wolf_dao_t_sell`）**移出** ⇒ **只动 T 仓** ✓
+#       用户口径 ✓：「**浮盈≥3% 就兑现**」**只针对做T** ✓，**不是全仓** ✗；全仓只在
+#         「**突破／压力位／加速结束**」减半 ✓
+#     ⚠️ 另记（防误读 ✓）：**AI 的自由措辞不决定能否穿透** ✗ —— 只有代码里的这两张表决定 ✓；
+#       实测 `profit_take` 腿嘴上说"高抛卖腿" ✓，但执行走的是 `跳过方案③ T仓上限 100 股` ✓（＝只动 T 仓 ✓）。
+#   · `t_protect.PROTECT_KW` 含「被动止盈」（传统模式用）。
+#   原前缀含「止盈/被动止盈」⇒ **会给原本不匹配的 G4 腿新增匹配 ⇒ 改变行为**（我原先"不参与任何交易判定"
+#   的说法是错的）。改为 `[G4] `（对上述两张关键词表**零命中**，已逐条核验）⇒ 现在才是可证明中性的。
+#   另：回测里 `WOLF_PROTECT_STRUCTURED=1`，`t_protect` 只认结构化腿型、reason 不参与 ⇒ 那条路本来就不受影响。
+G4_REASON_TAG = os.getenv("WOLF_G4_REASON_TAG", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _tag_g4_reason(reason: str, trigger: Optional[Dict[str, Any]]) -> str:
+    """G4 腿的 reason 加 `[G4 被动止盈]` 前缀（开关关/非 G4/已有标记 ⇒ 原样返回）。"""
+    if not G4_REASON_TAG:
+        return reason
+    try:
+        if str((trigger or {}).get("event_type") or "").strip() != "wolf_passive_stop_sell":
+            return reason
+        if "[G4" in (reason or ""):
+            return reason
+        return "[G4] " + (reason or "AI 决策执行")
+    except Exception:
+        return reason
 
 
 def _today() -> str:
@@ -202,7 +243,7 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                 gw = gateway_execute(symbol, side, price, volume,
                                      condition_id=(trigger or {}).get("condition_id"),
                                      trigger_id=trigger_id,
-                                     reason=reason or "AI 决策执行",
+                                     reason=_tag_g4_reason(reason or "AI 决策执行", trigger),
                                      decision_source="ai_led",
                                      account_id=(trigger or {}).get("account_id") or "stock")
             result["gateway"] = gw

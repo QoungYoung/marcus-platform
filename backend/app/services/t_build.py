@@ -16,6 +16,7 @@
 """
 import json
 import math
+import os
 import threading
 import time
 from datetime import datetime
@@ -108,6 +109,20 @@ BUILD_PARAMS_DEFAULT = {
 # regime → 参数档位
 REGIME_TIER = {"ACTIVE": "std", "CAUTIOUS": "cons", "HALT": "cons"}
 
+# ── 建仓规模三旋钮（2026-09-18 用户"都改"；WOLF_BUILD_SIZE_CORPUS，库内默认 0）────────
+# 实测依据（暖启 ON 臂 0105→0203，按 trade id 去重）：18 笔买入里 7 笔 24–28k（= 单笔 10% 满额，
+#   与默认参数完全吻合）、11 笔 ≤10k（7 笔仅 100 股 ≈ 2,000 元），**22 天只买到 3 只标的** ⇒
+#   净暴露长期 ~11%，与用户"底仓到不了 65%"一致。三个旋钮：
+#   A. single_order_pct.std 10%→15%（25k→37.5k，4–5 笔到 65%）；
+#   B. 建仓"少笔足量"：单笔至少取 缺口/3（BUILD_STEP_FRACTION），但仍受单标上限约束；
+#   C. total_floor_cap.std 55%→65%（语料"底仓 ≥65% + 日内T 20%"）。
+# 只动 std 档（ACTIVE＝高频档）；cons/agg 保持原样，避免顺手改掉谨慎/激进口径。
+# DB(t_build_params) 里显式写过的 key **优先**（本覆盖不夺权）。库内默认关 ⇒ 生产逐位不变。
+WOLF_BUILD_SIZE_CORPUS = str(os.getenv("WOLF_BUILD_SIZE_CORPUS", "0")).strip().lower() in ("1", "true", "yes", "on")
+BUILD_SIZE_CORPUS_OVERRIDES = {"single_order_pct": {"std": 0.15}, "total_floor_cap": {"std": 0.65}}
+BUILD_STEP_FRACTION = 3.0          # 与 t_capacity 同一口径：缺口分 3 步补满
+
+
 
 def clamp01(x: Any) -> float:
     """夹取到 [0,1]（行业强度/权重用）。"""
@@ -119,10 +134,23 @@ def clamp01(x: Any) -> float:
 
 
 def _params() -> Dict[str, Any]:
-    """合并 t_build_params 覆盖默认参数（DB 优先，缺省回退默认初值）。"""
+    """合并 t_build_params 覆盖默认参数（DB 优先，缺省回退默认初值）。
+
+    `WOLF_BUILD_SIZE_CORPUS=1` 时把 std 档的单笔/总量上限提到语料口径（见 BUILD_SIZE_CORPUS_OVERRIDES）；
+    **DB 显式写过的 key 优先**，本覆盖只在 DB 未指定该档时生效（不夺权）。
+    """
     stored = t_db.get_build_params() or {}
     merged = dict(BUILD_PARAMS_DEFAULT)
     merged.update(stored)
+    if WOLF_BUILD_SIZE_CORPUS:
+        for _k, _d in BUILD_SIZE_CORPUS_OVERRIDES.items():
+            _stored_v = stored.get(_k)
+            _base = dict(merged.get(_k) or {})
+            for _tier, _v in _d.items():
+                if isinstance(_stored_v, dict) and _tier in _stored_v:
+                    continue                      # DB 明确给了这一档 → 不覆盖
+                _base[_tier] = _v
+            merged[_k] = _base
     return merged
 
 
@@ -824,7 +852,41 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
     per_symbol_max = net * per_symbol_pct
     total_max = net * total_pct
 
+    # B) 建仓"少笔足量"（WOLF_BUILD_SIZE_CORPUS=1）：单笔至少取 "缺口/步数"，
+    #    但仍受单标剩余空间约束（不允许一票顶到上限）；短线档（trend_break 等）不参与。
+    #    副作用（正向）：单笔 ≤ 缺口 ⇒ `总底仓超上限` 这条误拒不再触发。
+    if WOLF_BUILD_SIZE_CORPUS and mode not in ("trend_break", "vrebounce", "vreb_etf", "mom_etf"):
+        try:
+            _gap = max(0.0, float(total_max) - float(total_floor_value or 0.0))
+            _step = _gap / BUILD_STEP_FRACTION
+            if _step > single_max:
+                single_max = _step
+            _room = float(per_symbol_max) - float(symbol_value or 0.0)
+            if _room > 0:
+                single_max = min(single_max, _room)
+            # 单笔不得超过缺口本身：否则缺口小于"单笔上限"时会被下面的
+            # `总底仓超上限` 误拒（实测 floor=135,000/目标 162,500、单笔 37,500 ⇒ 拒单）。
+            if _gap > 0:
+                single_max = min(single_max, _gap)
+        except Exception:
+            pass
+
+    # ── 主题档位系数（语料档位；WOLF_THEME_TIER_GATE，库内默认关）──
+    # confirmed ⇒ ×1.0；suspect/not_confirmed/window_limited ⇒ ×0.5（半档）；
+    # 个股破位/急杀不由这里判（leg_gate ④ 直接不布腿）。
+    tier_factor = 1.0
+    try:
+        from wolf_context import theme_of_symbol, theme_tier_factor
+        _tf, _tfr = theme_tier_factor(theme_of_symbol(symbol))
+        tier_factor = float(_tf)
+        if tier_factor != 1.0 and tier_factor > 0:
+            single_max = single_max * tier_factor
+    except Exception:
+        tier_factor = 1.0
+
     reasons = []
+    if tier_factor <= 0:
+        reasons.append("主题档位=0（不买）")
     if symbol_value >= per_symbol_max:
         reasons.append(f"单标底仓已达上限（{symbol_value:.0f} ≥ {per_symbol_max:.0f}）")
     # mom_etf 短线档不做总底仓上限（目标 ≤3 只 × 单笔 30% 自约束，避免账户已持底仓时锁死建仓）
@@ -855,6 +917,7 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
         "current_floor_value": round(total_floor_value, 2),
         "symbol_value": round(symbol_value, 2),
         "suggest_volume": suggest_volume,
+        "tier_factor": round(tier_factor, 3),
         "reason": "; ".join(reasons) or ("建议股数不足 100" if suggest_volume < 100 else ""),
     }
 
@@ -870,7 +933,7 @@ def suggest_build_volume(symbol: str, price: Optional[float] = None) -> Dict[str
         if not price or price <= 0:
             from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote
             ns = _normalize_symbol(symbol)
-            q = fetch_tencent_quote([ns])
+            q = fetch_tencent_quote([_normalize_symbol(ns)])
             q0 = (q or {}).get(ns) or {}
             price = float(q0.get("current") or 0)
         if price <= 0:
