@@ -180,8 +180,8 @@ def upsert_artifacts(d8: str, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
                 except Exception:
                     try:
                         db.rollback()
-                    except Exception:
-                        pass
+                    except Exception as _e_sil1:
+                        print("[silent:daily_archive.py:183] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
         db.commit()
     except Exception as e:
         out["ok"] = False
@@ -190,8 +190,8 @@ def upsert_artifacts(d8: str, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            print("[silent:daily_archive.py:193] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     return out
 
 
@@ -216,8 +216,8 @@ def load_artifacts(d8: str, keys: Optional[List[str]] = None) -> Dict[str, Any]:
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            print("[silent:daily_archive.py:219] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
 
 
 def enabled() -> bool:
@@ -342,8 +342,8 @@ def backfill(dates: Sequence[str], save: bool = True, dry_run: bool = False) -> 
                     for e in entries:
                         import shutil as _sh
                         _sh.copy2(e["src"], os.path.join(dest, e["name"]))
-                except Exception:
-                    pass
+                except Exception as _e_sil4:
+                    print("[silent:daily_archive.py:345] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
             ups = upsert_artifacts(d8, entries)
         rep["days"][d8] = {"files": len(entries), "keys": keys, "upserted": ups.get("upserted", 0),
                            "skipped": ups.get("skipped"), "errors": ups.get("errors")}
@@ -358,8 +358,8 @@ def backfill(dates: Sequence[str], save: bool = True, dry_run: bool = False) -> 
                 os.makedirs(os.path.join(data_dir(), "_archive"), exist_ok=True)
                 with open(os.path.join(data_dir(), "_archive", "_backfill_report.json"), "w", encoding="utf-8") as f:
                     json.dump(rep, f, ensure_ascii=False, indent=1)
-            except Exception:
-                pass
+            except Exception as _e_sil5:
+                print("[silent:daily_archive.py:361] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
     print("[archive] 回填 %d 天，共 %d 条入库" % (len(rep["days"]), total))
     for d8, r in sorted(rep["days"].items()):
         print("   %s  文件 %2d → key %s" % (d8, r["files"], ",".join(r["keys"]) or "（无）"))
@@ -414,8 +414,8 @@ def upsert_payloads(d8: str, payloads: Dict[str, Any], src: str = "rebuilt",
                 out["errors"].append("%s/%s:%s" % (d8, key, str(ex)[:60]))
                 try:
                     save.rollback()
-                except Exception:
-                    pass
+                except Exception as _e_sil6:
+                    print("[silent:daily_archive.py:417] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
         db.commit()
     except Exception as e:
         out["ok"] = False
@@ -424,8 +424,8 @@ def upsert_payloads(d8: str, payloads: Dict[str, Any], src: str = "rebuilt",
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil7:
+            print("[silent:daily_archive.py:427] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
     return out
 
 
@@ -476,8 +476,8 @@ def import_replay_artifacts(root: Optional[str] = None, save: bool = True, dry_r
             with open(os.path.join(data_dir(), "_archive", "_replay_import_report.json"), "w",
                       encoding="utf-8") as f:
                 json.dump(rep, f, ensure_ascii=False, indent=1)
-        except Exception:
-            pass
+        except Exception as _e_sil8:
+            print("[silent:daily_archive.py:479] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
     print("[archive] 导入回放产物：%d 天，共 %d 条" % (len(rep["days"]), rep["total_upserted"]))
     return {"ok": True, **rep}
 
@@ -546,8 +546,8 @@ def db_snapshot(d8: str, dest: Optional[str] = None) -> Dict[str, Any]:
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil9:
+            print("[silent:daily_archive.py:549] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
     return out
 
 

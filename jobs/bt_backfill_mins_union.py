@@ -43,8 +43,8 @@ def _legs_symbols(sb: str) -> set:
             if ln:
                 try:
                     out.add(json.loads(ln).get("symbol"))
-                except Exception:
-                    pass
+                except Exception as _e_sil1:
+                    print("[silent:bt_backfill_mins_union.py:46] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
     return {s for s in out if s}
 
 
@@ -86,8 +86,8 @@ def main() -> int:
         if os.path.exists(pj):
             try:
                 syms |= set((json.load(open(pj, encoding="utf-8")) or {}).get("symbols") or [])
-            except Exception:
-                pass
+            except Exception as _e_sil2:
+                print("[silent:bt_backfill_mins_union.py:89] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
         for s in sorted(x for x in syms if x):
             total += 1
             if _have(s, d):

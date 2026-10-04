@@ -164,8 +164,8 @@ def negative_event(symbol: Any, buy_date: Any = None, today: Any = None,
                 d2 = _dt.date(int(td[:4]), int(td[4:6]), int(td[6:8]))
                 if (d2 - d1).days > n:
                     return None
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                print("[silent:wolf_early_stop.py:167] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
         return {"date": ed, "note": str(rec.get("note") or "")}
     except Exception:
         return None
@@ -485,8 +485,8 @@ def first_buy_date(account_id: str, symbol: str, per_round: Optional[bool] = Non
             _d = round_start_day(_fetch_seq(account_id, symbol))
             if _d:
                 return "%s-%s-%s" % (_d[:4], _d[4:6], _d[6:8])
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            print("[silent:wolf_early_stop.py:488] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     try:
         from sqlalchemy import text
         from app.database import SessionLocal

@@ -99,18 +99,18 @@ def install_net_offline() -> Dict[str, int]:
             requests.sessions.Session.request = (lambda self, method, url, *a, **kw:
                                                  _mk(lambda u, *aa, **kk: _rsr(self, method, u, *aa, **kk),
                                                      url, *a, **kw))
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as _e_sil1:
+            print("[silent:bt_local_pro.py:102] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
+    except Exception as _e_sil2:
+        print("[silent:bt_local_pro.py:104] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     try:
         import urllib.request as _ur
         _ruo = _ur.urlopen
         # ⚠️ 2026-09-20 修：必须把 **原对象**（可能是 Request）转交 `_mk`；
         #   旧写法把 `full_url` 字符串传进去 ⇒ Request 被降级 ⇒ POST 变 GET ⇒ 405。
         _ur.urlopen = lambda url, *a, **kw: _mk(_ruo, url, *a, **kw)
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        print("[silent:bt_local_pro.py:112] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
     return _NET_HITS
 
 
@@ -302,8 +302,8 @@ def mark_goldenpit_degraded() -> bool:
                     c = dict(self._status_cache)
                     c["_source"] = "cached"
                     return c
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            print("[silent:bt_local_pro.py:305] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
         return self._degraded_status("回测：外部数据源不可用（BT_NET_OFFLINE）")
 
     GoldenPitService.get_status = _fast_get_status
