@@ -342,7 +342,7 @@ export WOLF_ALERT_HUB='1'
 export WOLF_ALERT_QQ='1'
 export WOLF_ALERT_QQ_TO='BF1510663A6C14D6E00E42B46108F51E'
 export WOLF_ALERT_DEDUP_SEC='600'
-export WOLF_ALERT_MAX_PER_HOUR='20'
+export WOLF_ALERT_MAX_PER_HOUR='200'   # 9.554: 20 was eaten by missing-file noise
 export WOLF_AMBUSH_TRAIL_PCT='10'
 #   **同时持仓上限**（账本 §9.196）：不限 ⇒ +97%／回撤 **−34.3%** ✗｜**≤15 ⇒ +58.6%／−21.6%** ✓
 #     动机：2026-07「止损群」同一周 6 只各亏 ~5,000 ⇒ 单月 −30.6% ✗（用户拍板 ≤15 ✓）

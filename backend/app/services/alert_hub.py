@@ -145,6 +145,14 @@ def note_silent(where: str, exc: Optional[BaseException] = None, msg: str = "") 
 
     与 `note()` 一样：**绝不抛** ✓；QQ 仍受去重(600s)/限流(20 条/小时)约束 ⇒ **不会刷屏** ✓。
     """
+    # 账本 §9.554：**缺文件类**（FileNotFoundError）在回测里高频且无害（旧生产目录必然缺 ✗）
+    #   ⇒ 只 print、不落盘、不推 QQ ⇒ **不占限流额度** ✓（否则真异常会被吃掉 ✗）
+    if isinstance(exc, FileNotFoundError):
+        try:
+            print("[silent:%s] FileNotFoundError: %s" % (where, str(exc)[:110]), flush=True)
+        except Exception:
+            pass
+        return
     try:
         note("silent:" + str(where), exc, msg)
     except Exception as _e_sil5:
