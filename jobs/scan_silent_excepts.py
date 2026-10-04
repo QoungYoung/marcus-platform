@@ -14,6 +14,7 @@ PAT = re.compile(r"except[^:]*:\s*\n\s*(pass|continue)\s*(#.*)?$", re.M)
 
 
 def main() -> int:
+    check = "--check" in sys.argv          # 账本 §9.548：防回潮模式（有静默点 ⇒ 退出码 1）
     top, scan = 20, ["backend/app/services", "apps/main_line", "jobs"]
     for i, a in enumerate(sys.argv):
         if a == "--top" and i + 1 < len(sys.argv): top = int(sys.argv[i + 1])
@@ -49,6 +50,11 @@ def main() -> int:
         print("    %4d 处  %s" % (n, p))
     print("  ⇒ 合计 %d 处，涉及 %d 个文件 ✓（全量：去掉 --top 限制）" % (tot, len(hits)))
     print("  ⇒ 建议：**影响决策/状态/I-O 的**优先改（监控、网关、状态文件、取数）✓")
+    if check and tot > 0:
+        print("  ✗ 防回潮：出现 %d 处静默吞异常 ⇒ 请改成留痕（print / alert_hub.note_silent）" % tot)
+        return 1
+    if check:
+        print("  ✓ 防回潮：全仓 **0 处**静默吞异常 ✓")
     return 0
 
 
