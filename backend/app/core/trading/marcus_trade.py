@@ -485,7 +485,7 @@ class MarcusVNPyExecutor:
         """
         if self.engine is not None:
             raw = self.engine.get_account_info()
-            initial_capital = parse_float_chinese(raw.get('初始资金', 1000000))
+            initial_capital = parse_float_chinese(raw.get('初始资金', 250000))  # §9.586: 与全系统一致(25万)
             available_cash = parse_float_chinese(raw.get('可用资金', 0))
             frozen_cash = parse_float_chinese(raw.get('冻结资金', 0))
 
@@ -550,7 +550,7 @@ class MarcusVNPyExecutor:
                 }
 
         raw = self.engine.get_account_info()
-        initial_capital = parse_float_chinese(raw.get('初始资金', 1000000))
+        initial_capital = parse_float_chinese(raw.get('初始资金', 250000))  # §9.586: 与全系统一致(25万)
         available_cash = parse_float_chinese(raw.get('可用资金', 0))
         frozen_cash = parse_float_chinese(raw.get('冻结资金', 0))
 
