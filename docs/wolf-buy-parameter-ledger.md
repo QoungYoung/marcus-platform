@@ -27744,3 +27744,35 @@ http://127.0.0.1:8799/
 - 清理进程时用 `ps | grep ... | kill` ✗ ⇒ **匹配到了我自己的 `bash -c` 命令行** ⇒ **误杀自己的 shell** ✗（两次 ✓）
 - ⇒ ⇒ **正确做法** ✓：**只按 pid 文件 / 日志里的 pid** 杀 ✓；或用 `/proc/<pid>/exe`＋cmdline **前缀**匹配 ✓
   绝不用「cmdline 包含某字符串」✗（我自己的命令行里就含有那些字符串 ✓）
+
+---
+
+## §9.583 **真凶:docker 容器 `marcus-dsh` 在 OOM 循环** ✗ ⇒ LLM 长期不可用 ⇒ pin 永远跑不完
+
+### ① 三层根因（全部实测 ✓）
+
+| 层 ✓ | 证据 ✓ | 修法 ✓ |
+|---|---|---|
+| **① 回测侧全部指向 13001** ✓ | 进程 socket 停在 **`SYN-SENT` → 127.0.0.1:13001** ✓ | 起 **`llm_forward.py`**（13001 ⇒ 3001 ✓）|
+| **② 真正的服务在容器 3001** ✓ | `marcus-dsh` ✓，`/health` ⇒ `{"status":"ok"}` ✓ | 容器本就该跑 ✓ |
+| ★ **③ 容器每 ~40 秒 OOM 重启** ✗ | 日志：**`FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory`** ✗；`RestartCount` **10→11**（20 秒内 ✓）| **`docker update --memory 4g`** ＋ 重启 ✓ |
+
+- ⇒ ⇒ **完整链条** ✓：容器 OOM 循环 ⇒ **LLM 时常不可用** ⇒ pin 的每个文件**等超时**（**1 文件/14 分钟** ✗）⇒ **每次重启从头再来** ⇒ **0 天完成 ⇒ 0 交易** ✓
+- ⚠️ 注意 ✓：容器 `OOMKilled=false` ✗ —— 是 **V8 堆上限**（~1GB ✗）而非 **cgroup 限制** ✗
+
+### ② 修复后的效果（实测 ✓）
+
+- 容器：**`Memory=4G`** ✓，重启后 **`RestartCount=1` 稳定** ✓，`/health` ⇒ **200** ✓
+- ★ **pin 已跑完** ✓ ⇒ 日流水线**推进到 `ensure_mins`** ✓（日志：`✅ 无缺口` ✓）
+- `_summary/` 已出现 **`arm_/confirm_/switch_20260105.log`** ✓（该日在处理中 ✓）
+
+### ③ 看板注意 ✓
+
+- 看板的「父进程日志」面板**写死** `year_prod.log` ✗（那是**别的臂**的 ✓）
+- ⇒ ⇒ **我们的臂日志**要看：`.dsh-tmp/wolfbt/logs/size_run_t35d.log` ✓
+  或用接口：`/api/log?tail=1500&path=…%2Fsize_run_t35d.log` ✓
+
+### ④ 待办（可选 ✓）
+
+- **给容器显式设 `NODE_OPTIONS=--max-old-space-size=3072`** ✓（需**重建容器** ✓ —— 两个卷都是持久化的 ⇒ 安全 ✓）⇒ 可**彻底消除** OOM 重启 ✓
+- 给 `llm_forward.py` 加守护（它挂了 pin 会再卡 ✓）
