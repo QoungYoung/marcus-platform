@@ -28,6 +28,9 @@ def main() -> int:
             for fn in files:
                 if not fn.endswith(".py"):
                     continue
+                # 白名单：alert_hub 自身必须用 pass ✗⇒✓（否则 note_silent 内部失败会再调自己 ⇒ 无限递归 ✗）
+                if fn == "alert_hub.py":
+                    continue
                 p = os.path.join(dirpath, fn)
                 try:
                     s = open(p, encoding="utf-8").read()

@@ -26,23 +26,6 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-
-def _silent_alert(where, exc=None):
-    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
-
-    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
-    """
-    try:
-        from app.services import alert_hub as _ah
-        _ah.note_silent(where, exc)
-    except Exception:
-        try:
-            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
-                  str(exc)[:110] if exc is not None else ""), flush=True)
-        except Exception:
-            pass
-
-
 _LOCK = threading.Lock()
 _SEEN: Dict[str, float] = {}
 _SENT_TS: list = []
@@ -61,12 +44,19 @@ def _i(name: str, dflt: int) -> int:
 
 
 def _alerts_path() -> str:
-    d = os.environ.get("DATA_DIR", "/app/data")
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception as _e_sil1:
-        _silent_alert("alert_hub.py:51", _e_sil1)
-    return os.path.join(d, "alerts.jsonl")
+    """告警落盘路径（账本 §9.551）：`DATA_DIR` 不可写时**回退**到 TMPDIR ⇒ 不再刷 FileNotFoundError ✗。"""
+    for cand in (os.environ.get("DATA_DIR"), os.path.join(os.environ.get("TMPDIR", "/tmp"), "marcus_alerts")):
+        if not cand:
+            continue
+        try:
+            os.makedirs(cand, exist_ok=True)
+            _p = os.path.join(cand, "alerts.jsonl")
+            with open(_p, "a", encoding="utf-8"):
+                pass
+            return _p
+        except Exception:
+            continue
+    return "/dev/null"
 
 
 def _fmt(where: str, exc: Optional[BaseException], msg: str = "") -> str:
@@ -110,7 +100,7 @@ def push_qq(text: str) -> bool:
             if _dsn_bak is not None and os.environ.get("DATABASE_URL") != _dsn_bak:
                 os.environ["DATABASE_URL"] = _dsn_bak     # **还原** ✗ ⇒ 不再污染本进程 ✓
         except Exception as _e_sil2:
-            _silent_alert("alert_hub.py:96", _e_sil2)
+            pass
 
 
 def note(where: str, exc: Optional[BaseException] = None, msg: str = "", ctx: Optional[Dict[str, Any]] = None) -> None:
@@ -128,7 +118,7 @@ def note(where: str, exc: Optional[BaseException] = None, msg: str = "", ctx: Op
             with open(_alerts_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as _e_sil3:
-            _silent_alert("alert_hub.py:114", _e_sil3)
+            pass
         print(line, flush=True)
         if not _env_on("WOLF_ALERT_QQ", "0"):
             return
@@ -147,7 +137,7 @@ def note(where: str, exc: Optional[BaseException] = None, msg: str = "", ctx: Op
             _LAST_BODY = line
         push_qq(line)
     except Exception as _e_sil4:
-        _silent_alert("alert_hub.py:133", _e_sil4)
+        pass
 
 
 def note_silent(where: str, exc: Optional[BaseException] = None, msg: str = "") -> None:
@@ -158,7 +148,7 @@ def note_silent(where: str, exc: Optional[BaseException] = None, msg: str = "") 
     try:
         note("silent:" + str(where), exc, msg)
     except Exception as _e_sil5:
-        _silent_alert("alert_hub.py:144", _e_sil5)
+        pass
 
 
 def install() -> bool:
@@ -173,11 +163,11 @@ def install() -> bool:
         try:
             note("sys.excepthook", value if value is not None else Exception(str(etype)), "")
         except Exception as _e_sil6:
-            _silent_alert("alert_hub.py:159", _e_sil6)
+            pass
         try:
             _prev(etype, value, tb)
         except Exception as _e_sil7:
-            _silent_alert("alert_hub.py:163", _e_sil7)
+            pass
 
     sys.excepthook = _hook  # type: ignore
     try:
@@ -188,16 +178,16 @@ def install() -> bool:
                 note("threading.excepthook[%s]" % getattr(args.thread, "name", "?"),
                      getattr(args, "exc_value", None), "")
             except Exception as _e_sil8:
-                _silent_alert("alert_hub.py:174", _e_sil8)
+                pass
             try:
                 if _prev_th:
                     _prev_th(args)  # type: ignore
             except Exception as _e_sil9:
-                _silent_alert("alert_hub.py:179", _e_sil9)
+                pass
 
         threading.excepthook = _thook  # type: ignore
     except Exception as _e_sil10:
-        _silent_alert("alert_hub.py:183", _e_sil10)
+        pass
     install._done = True  # type: ignore
     note("alert_hub", None, "全局异常钩子已安装 ✓（QQ 推送=%s）" % ("开" if _env_on("WOLF_ALERT_QQ", "0") else "关（只落盘）"))
     return True
