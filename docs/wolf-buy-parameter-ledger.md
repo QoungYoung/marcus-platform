@@ -26859,3 +26859,28 @@ _pfP = os.path.join(_rootP, "ambush_promoted.json")
    优先：`t_base_floor_rebase` ✓／`position_tiers` ✓／`tranche_state` ✓／`wolf_ticket_ban` ✓（**它们影响决策** ✓）
 2. `member_cache` ⇒ 库 ＋ **必须能失效** ✗（今天的坑 ✓）
 3. `legs_switch.jsonl` 可顺带入 `legs` 表 ✓（当天快照留文件亦可 ✓）
+
+---
+
+## §9.541 **定位：`position_tiers`／`tranche_state` 的真实写入点** ✓（用户「先定位」✓）
+
+> ⚠️ **避坑** ✓：全仓 `grep` 时**最先命中的是 `data/_bt_code_year/rev_*/…` 历史代码快照** ✗
+> ⇒ 必须**排除历史快照**，只看活代码 ✓（否则会照着旧版本改 ✗）
+
+| 状态文件 ✓ | 归属 ✓（活代码 ✓）| **写入函数** ✓ | 路径来源 ✓ |
+|---|---|---|---|
+| **`position_tiers.json`** ✓ | `backend/app/services/position_tier_monitor.py` ✓ | **`_save_tier_states()`** ✓（L179~185：`open(TIER_STATE_FILE,'w')` ＋ `json.dump(self.tier_states,…)` ✓）| `TIER_STATE_FILE = _state_dir() / "position_tiers.json"` ✓（L61 ✓）|
+| **`tranche_state.json`** ✓ | `apps/main_line/tranche_ladder.py` ✓ | **`_save_state(st)`** ✓（L168~171：`open(TRIAL_STATE_FILE,"w")` ＋ `json.dump` ✓）| `DATA = os.getenv("DATA_DIR","/app/data")` ✓ ⇒ `TRIAL_STATE_FILE = DATA/tranche_state.json` ✓（L15/L28 ✓）|
+
+### ⚠️ 两个坑（改之前必须知道 ✓）
+
+1. **路径直接用 `DATA_DIR`** ✗ ⇒ 回测里 `DATA_DIR=<臂>/<天>` ⇒ 文件落在**天目录**里 ✗
+   ⇒ 所以它需要 **carry 逐日结转** ✓（这也是它出现在 `bt_days` carry 名单里的原因 ✓）
+   —— `position_tier_monitor._state_dir()` 可能有**向上查找**逻辑 ✓（`test_tier_state_path.py` 就是在验这个 ✓）
+2. **失败路径偏静默** ✗：`position_tier_monitor` 只 `logger.warning` ✓；`tranche_ladder` 的 save 需再看 ✓
+   ⇒ 按 §9.539 的教训：**新接线的地方失败必须留痕** ✓
+
+### ✅ 确认这两处在回测里**确实被调用** ✓
+
+`jobs/bt_days.py` ✓／`jobs/bt_seed_day.py` ✓／`backend/app/services/t_monitor.py` ✓／
+`apps/main_line/switch_builder.py` ✓ ⇒ 所以"切臂库"对它们**是有效的** ✓
