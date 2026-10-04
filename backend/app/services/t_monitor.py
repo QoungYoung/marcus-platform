@@ -3511,6 +3511,7 @@ class TMonitor:
 
     def _round(self):
         """单轮：拉 regime → 读条件 → 并发取价 → 构建字段快照 → 表达式/默认逻辑评估 → 写触发。"""
+        _rp_t0 = time.time() if os.getenv("WOLF_ROUND_PROFILE", "0") not in ("0", "", "no") else 0.0
         # 1) regime 前置（每轮一次，缓存 5s）
         regime_state = compute_regime()
 
@@ -3591,6 +3592,9 @@ class TMonitor:
                       "持仓优先的前 %d 只，其余 %d 只**本轮不评估**"
                       % (len(_all_syms), _cap, _cap, len(_all_syms) - _cap), flush=True)
         quotes = self._fetch_quotes_concurrent(symbols)
+        if _rp_t0:
+            _rp_q = time.time() - _rp_t0
+            print("[round-prof] 行情取数 " + ("%.2fs" % _rp_q) + "（" + str(len(symbols)) + " 票）", flush=True)
 
         # 3.5) 止损扫描（持仓标的现价 ≤ stop_loss_price → 止损卖腿，独立于条件触发）
         try:
