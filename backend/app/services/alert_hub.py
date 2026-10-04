@@ -189,5 +189,6 @@ def install() -> bool:
     except Exception as _e_sil10:
         pass
     install._done = True  # type: ignore
-    note("alert_hub", None, "全局异常钩子已安装 ✓（QQ 推送=%s）" % ("开" if _env_on("WOLF_ALERT_QQ", "0") else "关（只落盘）"))
+    # 账本 §9.553：这句**不能走 note()** ✗（note 会落盘 + 推 QQ ⇒ 臂每天一条 ⇒ 像"一直发"）
+    print("[alert_hub] 全局异常钩子已安装（QQ 推送=%s ✓）" % ("开" if _env_on("WOLF_ALERT_QQ", "0") else "关"), flush=True)
     return True
