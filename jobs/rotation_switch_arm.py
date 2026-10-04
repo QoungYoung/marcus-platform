@@ -1226,6 +1226,23 @@ def main():
             _TC.shadow_record(today, _tc_rows, extra={"wave_op": wop, "added": _tc_added,
                                                       "held_excluded": len(_tc_rows) - _tc_added})
             print("TREND_CHANNEL candidates=%d added=%d" % (len(_tc_rows), _tc_added), file=sys.stderr)
+            # ★ 回踩候选（账本 §9.579 ✓，开关默认关 ✓）
+            try:
+                if str(os.getenv("WOLF_TREND_PULLBACK", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                    _prows = _TC.scan_pullback(today, limit=int(os.getenv("WOLF_TREND_SCAN_LIMIT", "400")))
+                    _pc_added = 0
+                    for _r in _prows:
+                        _sym2 = _r.get("symbol")
+                        if not _sym2 or _sym2 in held_syms:
+                            continue
+                        buy_legs.append({"symbol": _sym2, "chain": "趋势回踩", "side": "trend_pullback",
+                                         "theme": "trend", "src": "trend", "pick_source": "trend",
+                                         "level": _r.get("level"), "ma20": _r.get("ma20"),
+                                         "desc": _r.get("desc")})
+                        _pc_added += 1
+                    print("TREND_PULLBACK candidates=%d added=%d" % (len(_prows), _pc_added), file=sys.stderr)
+            except Exception as _e_pc:
+                print("[rotation_switch_arm] trend_pullback err:", str(_e_pc)[:90], file=sys.stderr)
     except Exception as _e_tc:
         print("[rotation_switch_arm] trend_channel err:", str(_e_tc)[:90], file=sys.stderr)
     # ③ 可见性（2026-09-14）：把"这次买腿分别来自哪条路"显式打出来 + 落审计文件。
