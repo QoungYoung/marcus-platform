@@ -653,7 +653,8 @@ def test_promotion_requires_self_updated_highest_price():
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     i = mon.index("def _check_ambush_discipline")
     seg = mon[i:i + 9000]
-    assert "UPDATE paper_positions SET highest_price=:h" in seg, "必须自己更新 ✓"
+    assert "UPDATE paper_positions SET highest_price=" in seg, "必须自己更新 ✓"
+    assert "GREATEST(COALESCE(highest_price,0), :h)" in seg, "最高价只升不降 ✓（§9.534）"
     # 顺序：_cur 必须出现在 _promoted 判定之前 ✓
     a = seg.index('_cur = float((_qo.get("current") or _qo.get("price") or _qo.get("last") or 0) or 0)')
     b = seg.index("_promoted = False")
@@ -1172,7 +1173,7 @@ def test_ambush_peak_survives_row_rewrite():
     assert "_peak_bar" in mon, "须从日线档算峰值 ✓"
     i = mon.index("_peak_bar = max(_hb)")
     seg = mon[i:i + 900]
-    assert "UPDATE paper_positions SET highest_price=:h" in seg, "峰值须写回 ✓"
+    assert "UPDATE paper_positions SET highest_price=" in seg, "峰值须写回 ✓"
     assert "_hi = _peak_bar" in seg, "须用峰值参与转正/移动止盈判定 ✓"
 
 
