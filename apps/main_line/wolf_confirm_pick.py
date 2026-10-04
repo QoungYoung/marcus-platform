@@ -8,6 +8,23 @@ v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低×(1+WO
 用法: python3 apps/main_line/wolf_confirm_pick.py --theme 农业 --as-of 20260902 [--limit 2]
 """
 import os, sys, json, time, glob, urllib.request, statistics
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, "/app/app"); sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "/app/data")
 MIN_AMT20_YI = 1.0      # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
@@ -35,8 +52,8 @@ def _relay():
     import importlib
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil1:
+        _silent_alert("wolf_confirm_pick.py:39", _e_sil1)
     cur = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
         if os.path.exists(os.path.join(cur, "core", "tushare_relay.py")):
@@ -95,8 +112,8 @@ def bad_set():
         cur.execute("SELECT symbol FROM risk_flags WHERE (flag_type='is_st' AND value='1') OR flag_type='earnings_bad'")
         bad |= {str(r[0]) for r in cur.fetchall()}
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("wolf_confirm_pick.py:99", _e_sil2)
     return bad
 
 def cross_concepts():
@@ -132,8 +149,8 @@ def theme_etf(theme):
                         xq = ("SH" if ts.endswith(".SH") else "SZ") + ts[:6]
                         return {"symbol": xq, "ts_code": ts, "name": p[0].get("name", ""),
                                 "reason": p[0].get("reason", "")}
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("wolf_confirm_pick.py:136", _e_sil3)
     return None
 
 def _dip_tol():
@@ -289,8 +306,8 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     try:
         for x in gz("daily_basic", {"trade_date": AS}, "ts_code,total_mv"):
             mv[str(x[0])] = float(x[1])
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("wolf_confirm_pick.py:293", _e_sil4)
     scored = []
     for ts, rows in kl.items():
         nm = names.get(ts, ts)
@@ -332,7 +349,8 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                     amp = (float(seg_h[k]) - float(seg_l[k])) / float(seg_c[k])
                     if amp < 0.02 and (seg_c[k] - lo20) <= 0.5 * rng:
                         flat_low += 1
-                except (TypeError, ValueError):
+                except (TypeError, ValueError) as _e_sil5:
+                    _silent_alert("wolf_confirm_pick.py:336", _e_sil5)
                     continue
         scored.append({"ts": ts, "name": nm, "xq": xq, "amt20": amt20, "r60": r60, "r20": r20,
                        "flat_low_days": flat_low, "hist": len(closes),
@@ -546,8 +564,8 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     try:
         json.dump(info, open(os.path.join(DATA, f"pick_wolf_{theme}_{AS}_v21.json"), "w"),
                   ensure_ascii=False, indent=1)
-    except Exception:
-        pass
+    except Exception as _e_sil6:
+        _silent_alert("wolf_confirm_pick.py:550", _e_sil6)
     print(f"[WOLF_PICK_C] {theme} 容量≈{cap_yi:.0f}亿 | 风向标={info['wind_flag']} | "
           f"位置闸命中 {len(t1)} 只 | ETF兜底={etf_used}", file=sys.stderr)
     if debug:

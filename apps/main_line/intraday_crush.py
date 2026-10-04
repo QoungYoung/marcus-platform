@@ -29,6 +29,23 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ENV = "WOLF_CRUSH_GATE"
 
 
@@ -124,7 +141,8 @@ def _upto(bars: List[Any], hhmm: str) -> List[Tuple[str, float, float, float, fl
             t = str(b[1])[11:16]
             if _hm(t) <= cut:
                 out.append((t, float(b[2]), float(b[3]), float(b[4]), float(b[5]), float(b[6]), float(b[7])))
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("intraday_crush.py:128", _e_sil1)
             continue
     return sorted(out)
 
@@ -144,7 +162,8 @@ def _prev_close(code: str, day: str) -> Optional[float]:
                 # ⚠️ 分时文件是**倒序**（15:00 在前 ✗）⇒ 必须按时间戳取**最后一根** ✓
                 _last = max(bars, key=lambda b: str(b[1]))
                 return float(_last[5])
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("intraday_crush.py:148", _e_sil2)
             continue
     return None
 
@@ -162,7 +181,8 @@ def _prev_low(code: str, day: str) -> Optional[float]:
             bars = json.load(open(os.path.join(d, fn), encoding="utf-8")).get("bars") or []
             if bars:
                 return min(float(b[3]) for b in bars)
-        except Exception:
+        except Exception as _e_sil3:
+            _silent_alert("intraday_crush.py:166", _e_sil3)
             continue
     return None
 
@@ -198,7 +218,8 @@ def feats(code: str, day: str, hhmm: str, min_bars: int = 3) -> Optional[Dict[st
                 u0 = _upto(b0, hhmm)
                 if u0:
                     refs.append(sum(x[5] for x in u0))
-            except Exception:
+            except Exception as _e_sil4:
+                _silent_alert("intraday_crush.py:202", _e_sil4)
                 continue
     vr = (cv / (sum(refs) / len(refs))) if refs else None
     pl = _prev_low(code, day)
@@ -484,7 +505,8 @@ def falling_v2(f: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Tuple
             if day_lo is not None and float(day_lo) < float(lv) and px >= float(lv):
                 return False, ("命中买点 E3 破一下当天拉回：当日低 %.3f < %.3f 且现价 %.3f 已收回"
                                "（语料「不破 60 日线或破一下当天拉回」）" % (float(day_lo), float(lv), px))
-        except Exception:
+        except Exception as _e_sil5:
+            _silent_alert("intraday_crush.py:488", _e_sil5)
             continue
     # ⑤ E4 急杀（近 2 根跌幅 + 放量）
     try:
@@ -504,8 +526,8 @@ def falling_v2(f: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Tuple
                            "（语料 2025-06-05「急杀可以买，缓跌不买」，账本 §9.413 深急杀边界 ✓）"
                            % (float(drop2), crash_pct, ("%.2f" % float(vr)) if vr else "缺", crash_vr,
                               ("%.2f%%" % float(_chg)) if _chg is not None else "缺", _deep_pct))
-    except Exception:
-        pass
+    except Exception as _e_sil6:
+        _silent_alert("intraday_crush.py:508", _e_sil6)
     # ⑥ 都不命中 ⇒ 拦（真缓跌）
     _nearest = min([abs(px / lv - 1) * 100 for lv in lines], default=None)
     _pl_d = (abs(px / float(pl) - 1) * 100) if pl else None

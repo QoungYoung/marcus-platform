@@ -31,6 +31,23 @@ from app.services.t_gateway import (ACCOUNT_T, MAX_DAILY_TURNOVER_RATIO,
                                     get_sellable_ledger, t_net_asset)
 from app.services.t_regime import compute_regime
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # ────────────────────────────────────────────────────────────────
 # 建仓参数（分档初值，P4 敏感度扫描后固化；可被 t_build_params 覆盖）
 # ────────────────────────────────────────────────────────────────
@@ -282,7 +299,8 @@ def _fetch_daily_bars_tushare(symbol: str, count: int = 40, as_of: Optional[str]
                     "vol": float(r["vol"]),
                     "amount": float(r.get("amount") or 0),
                 })
-            except (ValueError, TypeError, KeyError):
+            except (ValueError, TypeError, KeyError) as _e_sil1:
+                _silent_alert("t_build.py:286", _e_sil1)
                 continue
         bars.sort(key=lambda x: x["date"])
         return bars[-count:] if bars else None
@@ -325,7 +343,8 @@ def _fetch_daily_bars_eastmoney(symbol: str, count: int = 40, as_of: Optional[st
                     "date": parts[0], "open": float(parts[1]), "close": float(parts[2]),
                     "high": float(parts[3]), "low": float(parts[4]), "vol": float(parts[5]),
                 })
-            except (ValueError, IndexError):
+            except (ValueError, IndexError) as _e_sil2:
+                _silent_alert("t_build.py:329", _e_sil2)
                 continue
         return bars or None
     except Exception as e:
@@ -745,7 +764,8 @@ def scan_t_candidates_historical(symbols: List[str],
     for sym in symbols:
         try:
             bars = load_stock_daily(sym, d, as_of=as_of)
-        except Exception:
+        except Exception as _e_sil3:
+            _silent_alert("t_build.py:749", _e_sil3)
             continue
         if not bars or len(bars) < 5:
             continue
@@ -868,8 +888,8 @@ def build_sizing(symbol: str, price: float, net_asset: Optional[float] = None,
             # `总底仓超上限` 误拒（实测 floor=135,000/目标 162,500、单笔 37,500 ⇒ 拒单）。
             if _gap > 0:
                 single_max = min(single_max, _gap)
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            _silent_alert("t_build.py:872", _e_sil4)
 
     # ── 主题档位系数（语料档位；WOLF_THEME_TIER_GATE，库内默认关）──
     # confirmed ⇒ ×1.0；suspect/not_confirmed/window_limited ⇒ ×0.5（半档）；
@@ -1206,8 +1226,8 @@ def build_gateway_execute(symbol: str, price: float, volume: int,
             if event_id:
                 t_db.update_build_event(event_id, status="rejected", reason=msg)
             return {"status": "blocked", "reason": msg, "level": "HARD"}
-    except ImportError:
-        pass
+    except ImportError as _e_sil5:
+        _silent_alert("t_build.py:1210", _e_sil5)
     # 0) 审计先行（记录请求）
     regime = compute_regime().get("regime", "ACTIVE")
     before = _positions_value(symbol)[1] if symbol else {}

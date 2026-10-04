@@ -20,6 +20,23 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -33,8 +50,8 @@ _SLOW_LOG = str(os.getenv("WOLF_SLOW_LOG", "1")).strip().lower() in ("1", "true"
 def _tick(name: str, t0: float) -> None:
     try:
         _TIMING[name] = _TIMING.get(name, 0.0) + (time.time() - t0)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("leg_gate.py:37", _e_sil1)
 
 # ── ④ 个股「不接急杀」（语料口径；仅 WOLF_THEME_TIER_GATE=1 时生效）──
 # 2026-09-19 用户拍板两步走：①去掉 MA20 硬判（语料里没有均线口径）；②**再去掉"急杀"**
@@ -183,8 +200,8 @@ def _record_member_reject(symbol: str, theme: str, concepts: List[str], why: str
             _f.write(_json.dumps({"date": _d8, "symbol": symbol, "theme": theme,
                                   "concepts": concepts[:12], "dsh": why},
                                  ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("leg_gate.py:187", _e_sil2)
 
 
 def _concepts_of(symbol: str) -> List[str]:
@@ -249,7 +266,8 @@ def prefetch(pairs, workers: Optional[int] = None) -> int:
     for pr in (pairs or []):
         try:
             sym, th = pr[0], pr[1]
-        except Exception:
+        except Exception as _e_sil3:
+            _silent_alert("leg_gate.py:253", _e_sil3)
             continue
         cs = _cof(str(sym)) if _cof else []
         items.append((str(sym), cs, str(th)))
@@ -276,10 +294,10 @@ def prefetch(pairs, workers: Optional[int] = None) -> int:
                         for sym, cs in its:
                             if _cached(sym, cs, th) is not None:
                                 _batched.add((sym, th))
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                    except Exception as _e_sil4:
+                        _silent_alert("leg_gate.py:280", _e_sil4)
+    except Exception as _e_sil5:
+        _silent_alert("leg_gate.py:282", _e_sil5)
 
     # ② 单票兜底：批量没覆盖到的
     _left = [it for it in items if (it[0], it[2]) not in _batched and (it[0], it[2]) not in _failed]
@@ -370,8 +388,8 @@ def approve(symbol: str, theme: str, concepts: Optional[List[str]] = None, stage
                     print("[leg_gate] %s 破前低未缩量 ⇒ **不否决整条腿**（逐日重判 ✓ §9.512）：%s"
                           % (symbol, str(_bw)[:90]), flush=True)
                     _bk, _bw = False, ""
-            except Exception:
-                pass
+            except Exception as _e_sil6:
+                _silent_alert("leg_gate.py:374", _e_sil6)
             if _bk:
                 _tick("break_index", _tp)
                 _STATS["rej_break"] += 1

@@ -43,6 +43,23 @@ _STATS: Dict[str, int] = {"calls": 0, "mem_hit": 0, "disk_hit": 0, "neg_hit": 0,
 import hashlib as _hashlib
 import threading as _threading
 import time as _time
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 _LOCK = _threading.Lock()
 
 
@@ -99,8 +116,8 @@ def neg_put(symbol: str, concepts, theme: str, why: str = "batch_fail") -> None:
         _disk_put(_ckey(symbol, theme, concepts), (True, "neg_cache"), err=why)
         with _LOCK:
             _CACHE[(str(symbol), str(theme))] = (True, "neg_cache")
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("theme_member_llm.py:103", _e_sil1)
 
 
 def _ckey(symbol: str, theme: str, concepts) -> str:
@@ -157,8 +174,8 @@ def _ask_llm(prompt: str, timeout: Optional[float] = None) -> str:
             _r = _hashlib.sha1(("%s|%d" % (str(prompt)[:64], _i)).encode()).digest()[0] / 255.0
             try:
                 _time.sleep(max(0.0, _base * (1.0 + 0.4 * (2.0 * _r - 1.0))))
-            except Exception:
-                pass
+            except Exception as _e_sil2:
+                _silent_alert("theme_member_llm.py:161", _e_sil2)
             _STATS["retry"] += 1
         try:
             _STATS["llm"] += 1
@@ -178,8 +195,8 @@ def _ask_llm(prompt: str, timeout: Optional[float] = None) -> str:
                     _body = str(e.read()[:100])
                 e.dsh_diag = "url=%s method=%s status=%s body=%s" % (
                     getattr(req, "full_url", ENDPOINT), getattr(req, "method", "?"), _st, _body.replace("\n", " ")[:80])
-            except Exception:
-                pass
+            except Exception as _e_sil3:
+                _silent_alert("theme_member_llm.py:182", _e_sil3)
     raise last if last else RuntimeError("member_llm: unknown failure")
 
 
@@ -229,8 +246,8 @@ def needs_dsh(symbol: str, concepts, theme: str) -> bool:
     try:
         if _in_whitelist(symbol):
             return False
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("theme_member_llm.py:233", _e_sil4)
     try:
         from theme_main_class import decide as _mc
         _v, _ = _mc(str(symbol), str(theme), concepts)
@@ -328,8 +345,8 @@ def is_member(symbol: str, concepts: List[str], theme: str) -> Tuple[bool, str]:
             if not DSH_VETO:
                 return True, "主类:%s" % _mwhy          # 旧行为（库内默认）
             _mc_allow = "主类allow→dsh:%s" % _mwhy      # ④：继续走 dsh，dsh 有权否决
-    except Exception:
-        pass
+    except Exception as _e_sil5:
+        _silent_alert("theme_member_llm.py:332", _e_sil5)
 
     def _tag(res):                                       # dsh 否决时把"主类原判 allow"写进理由，便于审计
         try:
@@ -387,7 +404,8 @@ def prefetch(items, workers: int = 6) -> int:
         for it in (items or []):
             try:
                 sym, ccs, th = it[0], it[1], it[2]
-            except Exception:
+            except Exception as _e_sil6:
+                _silent_alert("theme_member_llm.py:391", _e_sil6)
                 continue
             k = (str(sym), str(th))
             if k in _seen:

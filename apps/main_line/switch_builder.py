@@ -7,6 +7,23 @@
 SWITCH_AUTO_EXEC=1 → 直接布腿到 t_conditions(TMonitor 低吸/卖腿触发执行); 默认 DRY 只写清单。
 """
 import json, os, sys
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, "/app/jobs")   # rotation_switch_arm(生产)
 DATA = os.environ.get("DATA_DIR", "/app/data")
@@ -38,8 +55,8 @@ def fusion_top3():
         from mainline_confirm_state import mainline_top_themes
         _gt = mainline_top_themes(3)
         if _gt: return _gt[0]
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("switch_builder.py:42", _e_sil1)
     ml = _load("main_line_state.json")
     fus = ml.get("fusion") or {}
     rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
@@ -115,8 +132,8 @@ def board_ok(symbol_or_code):
             _s6.path.append(_jr)
         from rotation_switch_arm import board_ok as _bk
         return bool(_bk(s))
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("switch_builder.py:119", _e_sil2)
     try:
         from wolf_confirm_pick import board_allowed as _ba
         return bool(_ba(s[2:] + "." + s[:2]))
@@ -157,8 +174,8 @@ def _stages_for_theme_base(theme, dip=None):
         _ok, _why = _wc.theme_qualify_struct(theme)
         if _ok:
             return BASE_STAGES + DIP_STAGES + _extra
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("switch_builder.py:161", _e_sil3)
     return BASE_STAGES
 
 
@@ -175,8 +192,8 @@ def stages_for_theme(theme, dip=None):
         if str(os.getenv("WOLF_STAGE_PULLBACK_REFINE", "0")).strip().lower() in ("1", "true", "yes", "on"):
             if "回踩急杀" not in _base:
                 return tuple(_base) + ("回踩急杀",)
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        _silent_alert("switch_builder.py:179", _e_sil4)
     return _base
 
 def theme_top12(n=2):
@@ -211,8 +228,8 @@ def theme_top12(n=2):
             _t = _gt[0] if _gt else None
             if _t:
                 return list(_t), "pool"
-        except Exception:
-            pass
+        except Exception as _e_sil5:
+            _silent_alert("switch_builder.py:215", _e_sil5)
     ml = _load("main_line_state.json"); fus = ml.get("fusion") or {}
     return [k for k, _ in sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:n]], "fusion"
 
@@ -455,8 +472,8 @@ def build_plan():
     try:
         with open(PLAN_FILE, "w", encoding="utf-8") as f:
             json.dump(plan, f, ensure_ascii=False, indent=1)
-    except Exception:
-        pass
+    except Exception as _e_sil6:
+        _silent_alert("switch_builder.py:459", _e_sil6)
     return plan
 
 

@@ -51,6 +51,23 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Sequence
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 IDX_TS = "000001.SH"
 STATE_FILE = "wolf_volume_gate.json"
 AMOUNT_KDIV = 1e5  # tushare amount 单位千元 → 亿元
@@ -86,7 +103,8 @@ def key_levels() -> List[float]:
             continue
         try:
             out.append(float(x))
-        except ValueError:
+        except ValueError as _e_sil1:
+            _silent_alert("wolf_volume_gate.py:90", _e_sil1)
             continue
     return sorted(out)
 
@@ -177,7 +195,8 @@ def market_amount(days: Sequence[str]) -> Dict[str, float]:
                 continue
             try:
                 total = float(df["amount"].astype(float).sum())
-            except Exception:
+            except Exception as _e_sil2:
+                _silent_alert("wolf_volume_gate.py:181", _e_sil2)
                 continue
             if total > 0:
                 out[str(d).replace("-", "")] = round(total / AMOUNT_KDIV, 1)
