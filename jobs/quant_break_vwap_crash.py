@@ -57,7 +57,7 @@ def main() -> int:
                 lastc = cc if cc else lastc
             if not hit:
                 continue
-            ev.append({"px": hit[0], "drop": hit[1], "e": prevc, "t10": t10})
+            ev.append({"px": hit[0], "drop": hit[1], "e": prevc, "t10": t10, "day": day})
         except Exception as _e_q:
             _skip_n[0] += 1
             continue
@@ -80,9 +80,19 @@ def main() -> int:
         print("    %-28s n=%5d（%.0f%%）｜减半 均值 %+6.2f%% 中位 %+6.2f%%｜持有 均值 %+6.2f%% 中位 %+6.2f%% 左尾 %+7.2f%%｜差 %+6.2f 个点"
               % (name, len(sel), 100.0 * len(sel) / len(ev), st.mean(v), st.median(v),
                  st.mean(h), st.median(h), h[int(len(h) * 0.05)], st.mean(v) - st.mean(h)))
+    # ★ 按窗口分层（§9.563 ✓：上次只出全窗口 ✗）
+    for d0, d1, tag in WINDOWS:
+        sub = [r for r in ev if d0 <= r["day"] <= d1]
+        if not sub:
+            continue
+        print("  ── %s（事件 %d ✓）──" % (tag, len(sub)))
+        show("  B 普通版", sub)
+        for X in XS:
+            show("  急杀版 跌>=%.0f%%" % X, [r for r in sub if r["drop"] <= -X])
+    print("  ── 全窗口汇总 ──")
     show("B 普通版（任意破线 ✓）", ev)
     for X in XS:
-        show("急杀版 破线 ∧ 跌≥%.0f%% 减半" % X, [r for r in ev if r["drop"] <= -X])
+        show("急杀版 破线 ∧ 跌>=%.0f%% 减半" % X, [r for r in ev if r["drop"] <= -X])
     return 0
 
 
