@@ -92,14 +92,44 @@ def defensive_t_reduce_index(sym, idx_code, sym_hi_now, sym_hi_prev, idx_hi_now,
 
 
 _SW_MEMBER_CACHE = {}
+_DH_OFFLINE = {"hit": False}   # 账本 §9.552：datahubco 一旦失败 ⇒ 记住"离线"⇒ 后续**全部短路** ✗⇒✓
+_DH_FAIL_N = {"n": 0}
+
+
+def dh_offline_short() -> bool:
+    """离线短路开关（`WOLF_DH_OFFLINE_SHORT`，默认 1 ＝ 开 ✓）。"""
+    return str(os.getenv("WOLF_DH_OFFLINE_SHORT", "1")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def resolve_sw_sector(sym):
     """个股→申万一级行业指数代码(801150.SI 医药生物/801080.SI 电子等). 用 datahubco index_member_all(ts_code) 反查 l1_code.
     泛化: 非科技也适用(药明→医药生物, 华林→非银金融). 缓存避免反复请求."""
     s=str(sym)
     if s in _SW_MEMBER_CACHE: return _SW_MEMBER_CACHE[s]
+    # ★ 账本 §9.552：回测里**离线**时，每遇到一个新标的就重发一次请求 ✗
+    #   实测单日 **48 次**（每轮一次 ✗，`_check_defensive_t_reduce` 每轮查不同标的 ✓）
+    #   ⇒ 一次失败就记住"离线" ⇒ 后续**直接返回 None** ✓（省掉每轮的失败请求 ✗⇒✓）
+    if dh_offline_short() and _DH_OFFLINE["hit"]:
+        _SW_MEMBER_CACHE[s] = None
+        return None
     ts = _norm_ts(s)   # 2026-09-10 修复: 原先对 xq 前缀(SH600001)会拼出垃圾 ts_code → 查不到 → 机制永不触发
-    items, fields = _dh_get('index_member_all', ts_code=ts)
+    try:
+        items, fields = _dh_get('index_member_all', ts_code=ts)
+    except Exception as _e_dh:
+        _DH_FAIL_N["n"] += 1
+        if dh_offline_short():
+            _DH_OFFLINE["hit"] = True
+            print("[index-ctx] datahubco 不可用 ⇒ 本轮起**离线短路**（已失败 %d 次）: %s"
+                  % (_DH_FAIL_N["n"], str(_e_dh)[:80]), flush=True)
+        _SW_MEMBER_CACHE[s] = None
+        return None
     if not items or not fields:
+        # ⚠️ 实测：离线时 datahubco **不抛异常、返回空** ✗ ⇒ 这里也要计数（连续 3 次空 ⇒ 判离线 ✓）
+        _DH_FAIL_N["n"] += 1
+        if dh_offline_short() and _DH_FAIL_N["n"] >= 3 and not _DH_OFFLINE["hit"]:
+            _DH_OFFLINE["hit"] = True
+            print("[index-ctx] datahubco 连续 %d 次返回空 ⇒ **离线短路**（后续直接返回 None ✓）" % _DH_FAIL_N["n"],
+                  flush=True)
         _SW_MEMBER_CACHE[s]=None; return None
     fmap={f:i for i,f in enumerate(fields)}
     l1 = items[0][fmap['l1_code']] if 'l1_code' in fmap else None
