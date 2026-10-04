@@ -11,6 +11,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from confirm_chain import confirm_chain
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 # ── 个股逐日资金流 as-of（2026-09-22 用户："停掉 T6 立刻改完再重起"）────────────────────
 #   背景：本文件原先写死 `confirm_chain(ser, None, v)` ⇒ S1 的「抛压减弱(net_stop)」从未参与判级，
 #   而它驱动的正是 253/254 低吸腿的候选池（兆易创新 0408 被判「下跌中」的机制之一）。
@@ -24,8 +41,8 @@ def _fund_mod():
     import importlib
     try:
         return importlib.import_module("bt_fund_asof")
-    except ImportError:
-        pass
+    except ImportError as _e_sil1:
+        _silent_alert("stock_confirm_judge.py:28", _e_sil1)
     import pathlib
     for p in pathlib.Path(__file__).resolve().parents:
         cand = p / "jobs" / "bt_fund_asof.py"
@@ -354,8 +371,8 @@ def _relay():
     import importlib, pathlib
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil2:
+        _silent_alert("stock_confirm_judge.py:358", _e_sil2)
     for p in pathlib.Path(__file__).resolve().parents:
         if (p / "core" / "tushare_relay.py").exists():
             sys.path.insert(0, str(p / "core"))
@@ -409,8 +426,8 @@ def main():
             from mainline_confirm_state import mainline_top_themes
             _gt = mainline_top_themes(CONFIRM_TOP_N)
             if _gt: themes = _gt[0]
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("stock_confirm_judge.py:413", _e_sil3)
         if not themes:
             # 2026-09-13：fusion 已随研报线删除 → 直接落方向层主线
             themes = [st.get("main_line") or "AI/算力/科技"]
@@ -501,8 +518,8 @@ def main():
                         if str(_os5.getenv("WOLF_CONFIRM_MODE_PROBE", "0")).strip().lower() in ("1", "true", "yes", "on"):
                             print("[stock_confirm] order_mode=%s ✓ concept=%s members=%d top=%s"
                                   % (ORDER_MODE, cname, len(_all), _ordered[:5]), file=sys.stderr)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil4:
+                        _silent_alert("stock_confirm_judge.py:505", _e_sil4)
                     _K = pullback_slots()
                     if _K > 0:
                         # 用户两步方案之②：为「回调中的强票」预留 K 个名额 ✓
@@ -623,8 +640,8 @@ def main():
                         "member_rejected": _tr_rej,
                         "kept": [str(x["code"]) for x in stocks],
                     })
-                except Exception:
-                    pass
+                except Exception as _e_sil5:
+                    _silent_alert("stock_confirm_judge.py:627", _e_sil5)
             out[cname] = {"theme": mt, "n": len(stocks), "confirm": n_confirm,
                           "ratio": round(n_confirm / max(len(stocks), 1), 2), "stocks": stocks}
             print(f"[stock_confirm] {mt} > {cname} n={len(stocks)} 确认 {n_confirm}", file=sys.stderr)

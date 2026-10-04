@@ -10,6 +10,23 @@
 """
 import os, sys, json, time, argparse
 from datetime import date, datetime
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps"))
 try:
@@ -31,8 +48,8 @@ def _relay():
     import importlib, pathlib, sys
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil1:
+        _silent_alert("build_earnings_calendar.py:35", _e_sil1)
     for _p in pathlib.Path(__file__).resolve().parents:
         if (_p / "core" / "tushare_relay.py").exists():
             sys.path.insert(0, str(_p / "core"))
@@ -49,8 +66,8 @@ def watch():
     try:
         from build_risk_flags import default_watch
         out |= set(default_watch())
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("build_earnings_calendar.py:53", _e_sil2)
     return sorted(out)
 
 def deadline_for(end):
@@ -66,8 +83,8 @@ def name_of(sym):
             cur.execute("SELECT name FROM stock_pool WHERE ts_code=%s", (sym,))
             r = cur.fetchone(); cur.close(); conn.close()
             return str(r[0]) if r else ""
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("build_earnings_calendar.py:70", _e_sil3)
     return ""
 
 def fetch_one(sym):
@@ -84,8 +101,8 @@ def fetch_one(sym):
             for it in call("express", {"ts_code": sym}, "ts_code,ann_date,end_date,revenue"):
                 out.append({"ann": str(it[1] or ""), "end": str(it[2] or ""), "type": "express",
                             "pcmax": None, "src": "express"})
-        except Exception:
-            pass
+        except Exception as _e_sil4:
+            _silent_alert("build_earnings_calendar.py:88", _e_sil4)
     return sorted([x for x in out if x["ann"]], key=lambda x: x["ann"])
 
 def fetch_disclosure(sym):
@@ -95,7 +112,8 @@ def fetch_disclosure(sym):
             for it in call("disclosure_date", {"ts_code": sym, "end_date": end}, "ts_code,ann_date,end_date,pre_date,actual_date"):
                 if len(it) >= 5:
                     out[str(it[2] or "")] = {"ann_date": str(it[1] or ""), "pre_date": str(it[3] or ""), "actual_date": str(it[4] or "")}
-        except Exception:
+        except Exception as _e_sil5:
+            _silent_alert("build_earnings_calendar.py:99", _e_sil5)
             continue
     return out
 
@@ -122,8 +140,8 @@ def main():
         try:
             if dline:
                 dd = (datetime.strptime(dline, "%Y%m%d").date() - datetime.strptime(ref, "%Y%m%d").date()).days
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            _silent_alert("build_earnings_calendar.py:126", _e_sil6)
         rows.append({"symbol": sym, "name": name_of(sym), "end_date": latest["end"], "ann_date": latest["ann"],
                      "pre_date": pre_date, "actual_date": actual_date, "type": latest["type"],
                      "source": latest["src"], "disclosed": disclosed, "bad": bad,

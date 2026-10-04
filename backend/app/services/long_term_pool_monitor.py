@@ -21,6 +21,23 @@ from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 # 适配本地/Docker: 探测包含 core/utils/trade_day_utils.py 的项目根目录
@@ -79,8 +96,8 @@ def _rank_candidate(result) -> float:
             score -= 0.15 * max(0.0, min(pct / 50.0, 2.0))
         if result.buy_confirmation and getattr(result.buy_confirmation, "change_pct", 0) > 5:
             score -= 0.10
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("long_term_pool_monitor.py:83", _e_sil1)
     return round(score, 3)
 
 
@@ -261,8 +278,8 @@ class LongTermPoolMonitor:
             pi_conf = chain.get_pi_confirmation()
             if pi_conf:
                 return pi_conf.get('stance', 'yellow')
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("long_term_pool_monitor.py:265", _e_sil2)
         return 'yellow'
 
     # ── 弱市切红利ETF（可选开关）──
@@ -331,8 +348,8 @@ class LongTermPoolMonitor:
         today_buys = set()
         try:
             today_buys = set(self.executor._get_today_buy_symbols() or set())
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("long_term_pool_monitor.py:335", _e_sil3)
 
         if weak:
             # ── 清个股（保留 ETF、T+1 不卖）──
@@ -435,8 +452,8 @@ class LongTermPoolMonitor:
                     sym = entry.get("symbol", "")
                     if sym and sym not in held_symbols:
                         pool.reset_to_active(sym)
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                _silent_alert("long_term_pool_monitor.py:439", _e_sil4)
 
         active = pool.get_active()
         if not active:
@@ -661,8 +678,8 @@ class LongTermPoolMonitor:
                               grade=getattr(result, "final_grade", ""),
                               tier_cap=getattr(result, "three_tier_cap_pct", None),
                               score=score, reason="长期候选池自动建仓")
-            except Exception:
-                pass
+            except Exception as _e_sil5:
+                _silent_alert("long_term_pool_monitor.py:665", _e_sil5)
 
             msg = (
                 f"✅ [长期候选池] 自动建仓: {symbol} {name} "

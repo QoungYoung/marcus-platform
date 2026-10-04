@@ -15,6 +15,23 @@ from __future__ import annotations
 
 import argparse, os, subprocess, sys, time
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -38,8 +55,8 @@ def load_env_keys() -> int:
             if k and k not in os.environ:
                 os.environ[k] = v
                 n += 1
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("bt_ensure_mins_day.py:42", _e_sil1)
     return n
 
 

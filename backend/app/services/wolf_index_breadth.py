@@ -39,6 +39,23 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 _CACHE: Dict[str, Any] = {"at": 0.0, "value": None}
 _LOCK = threading.Lock()
 # spread 采样序列（A9 谨慎4条里"黄线迅速下穿白线 / 黄白线交织"需要**走向**不只是瞬时值）。
@@ -220,8 +237,8 @@ def huang_bai(force: bool = False) -> Optional[Dict[str, Any]]:
         _CACHE.update({"at": now, "value": val})
         try:
             _hist().append((now, spread))       # 供 cross_recent/whipsaw（A9 谨慎条件）用
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("wolf_index_breadth.py:224", _e_sil1)
         return val
     finally:
         _LOCK.release()
