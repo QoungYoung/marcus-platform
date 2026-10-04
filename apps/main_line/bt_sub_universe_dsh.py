@@ -6,6 +6,23 @@
 用法: python -u apps/main_line/bt_sub_universe_dsh.py [--dates 2025-09-18,2025-09-19,2026-01-17,2026-02-25,2026-08-27]
 """
 import os, sys, json, time, re, collections, urllib.request
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from fusion_mainline import THEME_CONCEPTS
@@ -120,8 +137,8 @@ def dsh_subs(theme, concepts):
         try:
             r2 = dsh_merge(theme, r1, concepts)
             if r2: return r2
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("bt_sub_universe_dsh.py:124", _e_sil1)
     return r1
 
 def dsh_merge(theme, groups, concepts):

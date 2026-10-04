@@ -8,6 +8,23 @@ v3 相对 v2: rejected 不再静默丢弃——每个被规则拒绝的候选都
 输出: data/chain_map_{date}.json + data/chain_map_{date}_v2_cmp.json + data/chain_kw_suggestions.json(追加)
 """
 import sys, os, json, sqlite3, time, requests, urllib3
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/apps/main_line')
 urllib3.disable_warnings()
@@ -1335,8 +1352,8 @@ def fina_fetch_raw(pro, ts, force=False):
             df = df.sort_values('bz_sales', ascending=False)
             items = [{'bz': str(r.get('bz_item') or '')[:40], 'sales': float(r.get('bz_sales') or 0)}
                      for _, r in df[~df['bz_item'].isin(['行业', '产品', '地区'])].head(10).iterrows()]
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("chain_map.py:1339", _e_sil1)
     FINA_CACHE[ts] = {'t': time.time(), 'items': items}
     _FINA_MISS += 1
     time.sleep(0.05)

@@ -16,6 +16,23 @@ DATA = os.environ.get("DATA_DIR", "data")
 
 from rotation_universe import get_sub_universe, _norm  # 动态主线子方向(开集taxonomy)
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 def main():
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
@@ -86,8 +103,8 @@ def main():
     print("WROTE", os.path.join(DATA, "rotation_crowding_%s.json" % end))
     try:
         json.dump(out, open(os.path.join(DATA, "rotation_crowding.json"), "w", encoding="utf-8"), ensure_ascii=False)  # 生产默认镜像
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("build_crowding.py:90", _e_sil1)
     for sub, d in universe.items():
         print("%-14s n_con=%d held=%d ties=%d sum_float=%.1f avg=%.4f" % (
             sub, d["n_concepts"], d["n_held"], d["n_funds_ties"], d["sum_float"], d["avg_float_per_held"]))

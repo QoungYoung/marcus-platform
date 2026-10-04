@@ -7,6 +7,23 @@
 """
 import os, sys, json, urllib.request, gzip, time, collections, datetime as _dt
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import position_class as pc
@@ -29,8 +46,8 @@ def _relay():
     import importlib, pathlib, sys
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil1:
+        _silent_alert("backtest_crowding_stock_level.py:33", _e_sil1)
     for _p in pathlib.Path(__file__).resolve().parents:
         if (_p / "core" / "tushare_relay.py").exists():
             sys.path.insert(0, str(_p / "core"))

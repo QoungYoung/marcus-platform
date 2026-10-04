@@ -16,6 +16,23 @@ import numpy as np
 import os
 import pandas as pd
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 def min15_stand(bars, look=20, stand_n=3):
     """15分钟级站稳(2026-03-17 狼大: 3个15分钟站稳中轨):
     bars: 当日15min K线列表[{trade_time, close,...}] 或 close列表
@@ -149,8 +166,8 @@ def confirm_chain(ser, net=None, vol=None, params=None, mainline_act=None, hedge
                     "chg_pct": round(chg, 2), "dist_c20h_pct": round(dd, 2),
                     "vol_ratio": (round(vr, 2) if vr is not None else None)}
                 out["desc"] = "S1c 回踩急杀：当日涨幅≥3% 或 距20日高≤-15%（量比<3）⇒ 放行低吸 ✓"
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("confirm_chain.py:153", _e_sil1)
     return out
 
 
