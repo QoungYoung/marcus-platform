@@ -451,6 +451,7 @@ class TMonitor:
                     self._ambush_warn_trim()      # 指数层预警 ⇒ 埋伏仓减到防御档（账本 §9.205 ✓）
                     self._settle_pullback_sell()  # ②量能分层(2026-09-08): 缩量破位→反抽/尾盘确认离场
                     self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
+                    self._check_break_vwap_half()
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
                     self._check_roundtrip_sell()  # B模型·等量换手: 低吸后反弹≥狼大兑现幅度(默认+3%)卖≤N旧仓
                     # day_end 默认降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
@@ -3508,6 +3509,67 @@ class TMonitor:
         self._status["ai_maintain_running"] = False
         self._status["ai_maintained"] = f"{datetime.now():%Y-%m-%d %H:%M} {res}"
         print(f"[TMonitor] AI维护完成: {res}")
+
+
+    def _check_break_vwap_half(self) -> None:
+        """**破分时黄线 ⇒ 减半**（账本 §9.557 ✓，用户「落地 B」✓）。
+
+        **他的原话**：「**破分时黄线直接走**」✓（本版按跨月量化取**减半**✓ 而非全清 ✗：
+          · 全清(R0)：均值三个月**全为负** ✗、左尾最好 ✓
+          · **减半(B)：中位三个月全正 ✓、左尾比"持有"改善 3.0~9.7 个点 ✓、均值仅损失 1.0~2.3 个点 ✓**）
+        口径 ✓：当日**累计 VWAP**（Σ成交额/Σ成交量）＝ 分时黄线 ✓；09:35 起**首次** 价 < VWAP ⇒ **减半** ✓。
+        开关 ✓：`WOLF_BREAK_VWAP_HALF`（**库内默认 0 ＝ 关** ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）。
+        """
+        try:
+            if str(os.getenv("WOLF_BREAK_VWAP_HALF", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+                return
+            today = datetime.now().strftime("%Y%m%d")
+            held = [p for p in self._positions() if float(p.get("volume") or 0) > 0]
+            if not held:
+                return
+            from app.services.t_gateway import gateway_execute, get_sellable_ledger
+            import json as _js
+            from app.services.t_rules import _normalize_symbol  # noqa
+            _root = os.path.dirname(os.environ.get("DATA_DIR") or "")
+            for p in held:
+                sym = _normalize_symbol(p["symbol"])
+                if (sym, "break_vwap_half", today) in self._wolf_done:
+                    continue
+                _b = sym[2:] if len(sym) > 2 else sym
+                _ex = sym[:2]
+                _f = os.path.join(_root, "_bt_full", "mins", "%s_%s_5min_%s.json" % (_b, _ex, today))
+                if not os.path.exists(_f):
+                    continue
+                try:
+                    _j = _js.load(open(_f, encoding="utf-8"))
+                except Exception:
+                    continue
+                _bars = sorted((_j.get("bars") or []), key=lambda x: str(x[1]))
+                if len(_bars) < 3:
+                    continue
+                ca = cv = 0.0
+                hit = None
+                for x in _bars:
+                    t = str(x[1])[-8:-3]
+                    cc = float(x[5] or 0); vv = float(x[6] or 0); aa = float(x[7] or 0) or cc * vv
+                    ca += aa; cv += vv
+                    _vw = (ca / cv) if cv else 0
+                    if t >= "09:35" and _vw and cc and cc < _vw:
+                        hit = (t, cc)
+                        break
+                if not hit:
+                    continue
+                sellable = int((get_sellable_ledger().get(sym) or {}).get("sellable") or 0)
+                vol = ((sellable // 2) // 100) * 100
+                if vol < 100:
+                    continue
+                self._wolf_done.add((sym, "break_vwap_half", today))
+                gateway_execute(sym, "sell", hit[1], vol,
+                               reason="破分时黄线⇒**减半**（狼大「破分时黄线直接走」；本版按 §9.557 跨月量化取减半 ✓）",
+                               trigger_kind="break_vwap_half", decision_source="ai_led", is_stop_loss=False)
+                print("[TMonitor] 破分时黄线⇒减半 %s %d股@%.3f（%s ✓）" % (sym, vol, hit[1], hit[0]), flush=True)
+        except Exception as _e_bv:
+            print("[TMonitor] break_vwap_half 异常：%s" % str(_e_bv)[:100], flush=True)
 
     def _round(self):
         """单轮：拉 regime → 读条件 → 并发取价 → 构建字段快照 → 表达式/默认逻辑评估 → 写触发。"""

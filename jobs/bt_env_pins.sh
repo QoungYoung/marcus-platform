@@ -854,3 +854,5 @@ export WOLF_BUY_254='0'   # 账本 §9.515：254 负期望（§9.495）⇒ 默�
 
 export WOLF_BUY_254_MALINE='1'    # §9.518：保留他的线位挂单（线组买点语义）
 export WOLF_BUY_254_PREVLOW='0'   # §9.518：关掉触前低回退（§9.495 负期望）
+
+export WOLF_BREAK_VWAP_HALF='1'   # 账本 §9.557：破分时黄线⇒减半（回测开；库内默认 0 ⇒ 生产零影响）

@@ -1331,7 +1331,7 @@ def main() -> int:
         bars = [b for b in bars if (not lo or b >= lo) and (not hi or b <= hi)]
     log: List[dict] = []
     step_secs: Dict[str, float] = {}
-    checks = ("_round", "_settle_tsell_pending", "_settle_pullback_sell", "_check_wolf_t_rules",
+    checks = ("_round", "_check_break_vwap_half", "_settle_tsell_pending", "_settle_pullback_sell", "_check_wolf_t_rules",
               "_check_roundtrip_sell", "_check_defensive_t_reduce", "_check_board_half",
               "_check_profit_take", "_check_weekend_hedge", "_check_hedge_refill", "_check_fib_target",
               "_check_passive_stop", "_check_boll_sell", "_check_boll_mid_exit",
