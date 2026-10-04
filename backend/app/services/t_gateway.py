@@ -99,8 +99,12 @@ def base_floor_shares(account_id: str, symbol: str, volume: Optional[int] = None
         from app.services.wolf_exit_rules import floor_exempt
         if floor_exempt(account_id, symbol):
             return 0
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("t_gateway.py:102", _e_sil1)
+        except Exception:
+            print("[silent:t_gateway.py:102] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
     try:
         from app.services.t_base_floor import base_floor_shares as _impl
         return _impl(account_id, symbol, volume=volume,
@@ -1180,8 +1184,12 @@ def _limit_status(quote: dict, side: str) -> str:
             return "block"
         if side == "sell" and chg >= 9.8:
             return "block"
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as _e_sil2:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("t_gateway.py:1183", _e_sil2)
+        except Exception:
+            print("[silent:t_gateway.py:1183] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     return "ok"
 
 
@@ -1302,15 +1310,23 @@ def _turnover_kind(trigger_id: Optional[int], condition_id: Optional[int]) -> st
             _k = str(_t.get("event_type") or "").strip()
             if _k:
                 return _k
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("t_gateway.py:1305", _e_sil3)
+        except Exception:
+            print("[silent:t_gateway.py:1305] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
     try:
         if condition_id:
             from app.services import t_db as _tdb
             _c = _tdb.get_condition(int(condition_id)) or {}
             return str(_c.get("trigger_kind") or "").strip()
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("t_gateway.py:1312", _e_sil4)
+        except Exception:
+            print("[silent:t_gateway.py:1312] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
     return ""
 
 
@@ -1385,8 +1401,12 @@ def classify_escalation(symbol: str, side: str, trigger: Optional[dict] = None,
             from app.services import wolf_t_base_gate as _tbg
             if _tbg.ai_review():
                 return "agent", "首开非底仓标的（新开仓风险）→ 改由 AI 审核"
-        except Exception:
-            pass
+        except Exception as _e_sil5:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_gateway.py:1388", _e_sil5)
+            except Exception:
+                print("[silent:t_gateway.py:1388] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
         return "human", "首开非底仓标的（新开仓风险）"
 
     # ⑥ 孤儿单/账实不一致
@@ -1525,8 +1545,12 @@ def _log_decision_refusal(symbol: str, why: str, shadow: bool, account_id: str =
                             "note": note}, ensure_ascii=False)
         with open(os.path.join(_dir, "decision_gate_log.jsonl"), "a", encoding="utf-8") as f:
             f.write(line + "\n")
-    except Exception:
-        pass
+    except Exception as _e_sil6:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("t_gateway.py:1528", _e_sil6)
+        except Exception:
+            print("[silent:t_gateway.py:1528] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
 
 
 def _trade_cap() -> int:
@@ -1677,8 +1701,12 @@ def _wave_hold_action() -> str:
                     _b = _dw.datetime.strptime(_base, "%Y%m%d")
                     if abs((_b - _a).days) > 10:
                         continue
-                except Exception:
-                    pass
+                except Exception as _e_sil7:
+                    try:
+                        from app.services import alert_hub as _ah_sil
+                        _ah_sil.note_silent("t_gateway.py:1680", _e_sil7)
+                    except Exception:
+                        print("[silent:t_gateway.py:1680] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
             return _op
     except Exception:
         return ""
@@ -1735,12 +1763,20 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                 if trigger_id:
                     try:
                         t_db.update_trigger_status(trigger_id, "blocked", reason="G3 删票名单：卖出后不再买入")
-                    except Exception:
-                        pass
+                    except Exception as _e_sil8:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_gateway.py:1738", _e_sil8)
+                        except Exception:
+                            print("[silent:t_gateway.py:1738] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
                 return {"status": "blocked", "reason": "G3 删票名单：该票已按语料『卖出后删票』登记，禁止再买入",
                         "level": "TICKET_BAN"}
-        except Exception:
-            pass
+        except Exception as _e_sil9:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_gateway.py:1742", _e_sil9)
+            except Exception:
+                print("[silent:t_gateway.py:1742] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
     from app.core.trading.marcus_trade import MarcusVNPyExecutor
     from paper_engine import PaperTradingEngine
 
@@ -1812,8 +1848,12 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                         with open(_pfT, encoding="utf-8") as _fT:
                             if str(symbol).upper() in {str(k).upper() for k in (_jsT.load(_fT) or {})}:
                                 _tkA = "wolf_promoted_normal"     # 不在做T白名单 ⇒ `applies_to` False ✓
-                except Exception:
-                    pass
+                except Exception as _e_sil10:
+                    try:
+                        from app.services import alert_hub as _ah_sil
+                        _ah_sil.note_silent("t_gateway.py:1815", _e_sil10)
+                    except Exception:
+                        print("[silent:t_gateway.py:1815] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
             _tok, _twhy = _tw.check(symbol, side, float(price or 0), account_id,
                                     reason=reason, is_stop_loss=is_stop_loss,
                                     trigger_kind=(_tkA or _turnover_kind(trigger_id, condition_id)))
@@ -2800,8 +2840,12 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                         print("[gateway] %s 已转正（臂库 ✓ pos_meta.promoted=1）⇒ 交回普通管理 ✓" % symbol,
                               flush=True)
                         raise StopIteration      # 跳到下一段（不再看旧 JSON ✓）
-            except StopIteration:
-                pass
+            except StopIteration as _e_sil11:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("t_gateway.py:2803", _e_sil11)
+                except Exception:
+                    print("[silent:t_gateway.py:2803] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
             except Exception as _eA:
                 print("[gateway] 臂库转正查询失败（继续用旧路径 ✓）: %s" % str(_eA)[:70], flush=True)
             try:
@@ -2819,8 +2863,12 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                             _promo_ok = False        # 已转正 ⇒ **不再豁免** ✓（交回普通管理 ✓）
                             print("[gateway] %s 已转正（记录 ✓）⇒ 不再享受埋伏豁免，交回普通管理 ✓" % symbol,
                                   flush=True)
-            except Exception:
-                pass
+            except Exception as _e_sil12:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("t_gateway.py:2822", _e_sil12)
+                except Exception:
+                    print("[silent:t_gateway.py:2822] %s: %s" % (type(_e_sil12).__name__, str(_e_sil12)[:110]), flush=True)
             try:
                 _pp = float(os.getenv("WOLF_AMBUSH_PROMOTE_PCT", "0") or 0)
                 if _pp > 0:
@@ -2925,10 +2973,18 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     from app.services import t_capacity as _tcr2
                     if _tcr2.leg_ratio() > 0:
                         _tcr2.ratio_state_add(_day_ok, _amt_ok)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as _e_sil13:
+                    try:
+                        from app.services import alert_hub as _ah_sil
+                        _ah_sil.note_silent("t_gateway.py:2928", _e_sil13)
+                    except Exception:
+                        print("[silent:t_gateway.py:2928] %s: %s" % (type(_e_sil13).__name__, str(_e_sil13)[:110]), flush=True)
+        except Exception as _e_sil14:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_gateway.py:2930", _e_sil14)
+            except Exception:
+                print("[silent:t_gateway.py:2930] %s: %s" % (type(_e_sil14).__name__, str(_e_sil14)[:110]), flush=True)
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "executed",
                                        executed_price=float(result.get("price", price) or price))

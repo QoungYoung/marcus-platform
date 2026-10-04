@@ -218,8 +218,12 @@ def ratio_of(bucket: str) -> float:
     if raw not in (None, ""):
         try:
             return max(float(raw), 0.0)
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_base_floor.py:221", _e_sil1)
+            except Exception:
+                print("[silent:t_base_floor.py:221] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
     return float(_BUCKET_DEFAULT[b])
 
 
@@ -798,6 +802,10 @@ def maintain(accounts: Tuple[str, ...] = ("stock",), persist: bool = True) -> Di
                 out[key].append(f"{sym}(可卖{sel}/底仓{floor})")
     try:
         out["bucket"] = resolve_ratio()[1]
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("t_base_floor.py:801", _e_sil2)
+        except Exception:
+            print("[silent:t_base_floor.py:801] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     return out

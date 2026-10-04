@@ -84,8 +84,8 @@ def _pin_clock_dynamic():
     try:
         import numpy  # noqa: F401  ← 预热 C 扩展（顺序不能动，见 bt_run_pinned 注释）
         import pandas  # noqa: F401
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        print("[silent:bt_prod_run.py:87] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
     _real_date, _real_dt = _dt.date, _dt.datetime
 
     class _Date(_real_date):
@@ -671,8 +671,8 @@ def install_vnpy_stubs() -> None:
         import PySide6  # noqa: F401
         print("[stub] 检测到真实 vnpy/PySide6，无需替身", file=sys.stderr)
         return
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        print("[silent:bt_prod_run.py:674] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     stub = os.getenv("BT_STUB_DIR") or os.path.join(REPO, "jobs", "bt_stubs")
     if os.path.isdir(stub):
         sys.path.insert(0, stub)
@@ -721,19 +721,19 @@ def _reset_module_caches(mon) -> None:
         import app.services.t_regime as tr
         tr._regime_cache["result"] = None
         tr._regime_cache["ts"] = 0
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        print("[silent:bt_prod_run.py:724] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
     try:
         mon._dated_cache.clear()
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        print("[silent:bt_prod_run.py:728] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
     try:
         import app.services.t_data_sources as tds
         for attr in ("_QUOTE_CACHE", "_RT_CACHE"):
             if hasattr(tds, attr):
                 getattr(tds, attr).clear()
-    except Exception:
-        pass
+    except Exception as _e_sil5:
+        print("[silent:bt_prod_run.py:735] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
 
 
 def main() -> int:
@@ -800,8 +800,8 @@ def main() -> int:
     cut = ""
     try:
         cut = str((json.load(open(os.path.join(day_dir, "_seed.json"), encoding="utf-8")) or {}).get("cut") or "")
-    except Exception:
-        pass
+    except Exception as _e_sil6:
+        print("[silent:bt_prod_run.py:803] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
     if not cut:
         print("⛔ 沙箱缺 _seed.json/cut（先用 bt_seed_day.py 造）", file=sys.stderr)
         return 2
@@ -820,8 +820,8 @@ def main() -> int:
         try:
             from app.config import get_settings
             get_settings.cache_clear()
-        except Exception:
-            pass
+        except Exception as _e_sil7:
+            print("[silent:bt_prod_run.py:823] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
     for sub in ("backend", "apps/paper-trading", "apps/main_line", "core", "jobs", ""):
         p = os.path.join(REPO, sub) if sub else REPO
         if os.path.isdir(p) and p not in sys.path:
@@ -1288,8 +1288,8 @@ def main() -> int:
             s = c.get("symbol")
             if s and s not in symbols:
                 symbols.append(s)
-    except Exception:
-        pass
+    except Exception as _e_sil8:
+        print("[silent:bt_prod_run.py:1291] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
     symbols = sorted(set(symbols))
     idx_syms = [a.index]
 
@@ -1502,8 +1502,8 @@ def main() -> int:
         _tm.round_timing_reset()
         try:
             _tm.stop_scan_reset()       # 异常计数与耗时同频清零
-        except Exception:
-            pass
+        except Exception as _e_sil9:
+            print("[silent:bt_prod_run.py:1505] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
     except Exception as _te:
         print("[prod] _round 细分打印失败: %s" % str(_te)[:80], file=sys.stderr)
     try:
@@ -1518,8 +1518,8 @@ def main() -> int:
                   "SQL 真钟改写 %s 次（错误 %s）"
                   % (_pit.get("calls"), _pit.get("fetched"), _pit.get("cut"),
                      _sq.get("rewrites"), _sq.get("errors")), file=sys.stderr)
-    except Exception:
-        pass
+    except Exception as _e_sil10:
+        print("[silent:bt_prod_run.py:1521] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
     if _NET_HITS:
         print("[net] 被拦下的出网尝试: %s" % sorted(_NET_HITS.items(), key=lambda kv: -kv[1])[:15], file=sys.stderr)
     if getattr(localpro, "unserved", None):

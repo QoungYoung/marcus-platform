@@ -4,6 +4,7 @@
 ② 板上减半止盈: 持仓当日触及/接近涨停(10%板→>=9.5%, 20%板→>=19.5%) 且本轮浮盈>=阈值 → 板上减半锁定
 纯函数模块, 供 trade_graph 注入 context + 合规检查; 不直接下单。
 """
+from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import os, json
 
 _CFG_CACHE = {"at": 0.0, "cfg": None, "src": ""}
@@ -121,12 +122,16 @@ def save_cfg(cfg, updated_by="api"):
     global _CFG_CACHE
     ok = _cfg_db_write(cfg, updated_by)
     try:
-        p = os.path.join(os.environ.get("DATA_DIR", "data"), "wolf_discipline.json")
+        p = __state_path("wolf_discipline.json")
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:129", _e_sil1)
+        except Exception:
+            print("[silent:wolf_discipline.py:129] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
     _CFG_CACHE = {"at": 0.0, "cfg": None, "src": ""}
     return ok
 
@@ -322,12 +327,20 @@ def _data_candidates():
         out.append(dd)
     try:
         out.append(os.path.join(_ws_root(), "data"))
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:326", _e_sil2)
+        except Exception:
+            print("[silent:wolf_discipline.py:326] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     try:
         out.append(os.path.join(os.getcwd(), "data"))
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:330", _e_sil3)
+        except Exception:
+            print("[silent:wolf_discipline.py:330] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
     out.append("data")
     seen, uniq = set(), []
     for d in out:
@@ -512,16 +525,24 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
         _d = _hb_dir()
         if _d:
             parts.append("📊 " + _d)
-    except Exception:
-        pass
+    except Exception as _e_sil4:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:516", _e_sil4)
+        except Exception:
+            print("[silent:wolf_discipline.py:516] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
     # A5 日内做T时间窗（2026-09-11）：他 2025-04-15 条件2「当日只做 9:45-10:00 / 14:00-14:30」
     try:
         from app.services.wolf_trade_window import directive as _tw_dir
         _d2 = _tw_dir()
         if _d2:
             parts.append(_d2)
-    except Exception:
-        pass
+    except Exception as _e_sil5:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:524", _e_sil5)
+        except Exception:
+            print("[silent:wolf_discipline.py:524] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
     # B4 涨停梯队/连板结构（2026-09-11）：他 2025-04-21「看涨停板方向…判断板块的强弱
     # 从而推断出接下来要做的方向」→ 盘后产出，供**次日方向**判断
     try:
@@ -529,8 +550,12 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
         _d3 = _ll_dir()
         if _d3:
             parts.append(_d3)
-    except Exception:
-        pass
+    except Exception as _e_sil6:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:533", _e_sil6)
+        except Exception:
+            print("[silent:wolf_discipline.py:533] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
     # A6/A9 高低开+跳空缺口+量能实时对比（2026-09-11）：他 2025-04-15 条件4 的两个现象
     # + 其后"操作谨慎，尽量不要加仓进场"的 4 条
     try:
@@ -538,64 +563,96 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
         _d4 = _go_dir()
         if _d4:
             parts.append(_d4)
-    except Exception:
-        pass
+    except Exception as _e_sil7:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:542", _e_sil7)
+        except Exception:
+            print("[silent:wolf_discipline.py:542] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
     # A10 BOLL 上轨（2026-09-11）：他 2025-04-15 当日卖出条件之一 + 2026-04-29 明确动作
     try:
         from app.services.wolf_boll_levels import directive as _boll_dir
         _d10 = _boll_dir(portfolio, quotes)
         if _d10:
             parts.append(_d10)
-    except Exception:
-        pass
+    except Exception as _e_sil8:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:550", _e_sil8)
+        except Exception:
+            print("[silent:wolf_discipline.py:550] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
     # C1 利润垫（2026-09-11）：他 2026-01-27「这个钱取一半留一半…仓位就比没有利润垫要大了」
     try:
         from app.services.wolf_profit_cushion import directive as _pc_dir
         _d9 = _pc_dir(portfolio)
         if _d9:
             parts.append(_d9)
-    except Exception:
-        pass
+    except Exception as _e_sil9:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:558", _e_sil9)
+        except Exception:
+            print("[silent:wolf_discipline.py:558] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
     # A3 期指多空 → 次日黄白线预判（2026-09-11）：他 2025-04-15 条件1
     try:
         from app.services.wolf_index_futures import directive as _if_dir
         _d8 = _if_dir()
         if _d8:
             parts.append(_d8)
-    except Exception:
-        pass
+    except Exception as _e_sil10:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:566", _e_sil10)
+        except Exception:
+            print("[silent:wolf_discipline.py:566] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
     # C2 方向层「跌得少、弹得早」（2026-09-11）：他 2026-01-27 调整期第二步
     try:
         from app.services.wolf_theme_resilience import directive as _tr_dir
         _d7 = _tr_dir()
         if _d7:
             parts.append(_d7)
-    except Exception:
-        pass
+    except Exception as _e_sil11:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:574", _e_sil11)
+        except Exception:
+            print("[silent:wolf_discipline.py:574] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
     # B1 复盘打分表（2026-09-11）：他 2025-04-21「…推断出明天的指数前2小时的大致方向」
     try:
         from app.services.wolf_review_score import directive as _rs_dir
         _d6 = _rs_dir()
         if _d6:
             parts.append(_d6)
-    except Exception:
-        pass
+    except Exception as _e_sil12:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:582", _e_sil12)
+        except Exception:
+            print("[silent:wolf_discipline.py:582] %s: %s" % (type(_e_sil12).__name__, str(_e_sil12)[:110]), flush=True)
     # A8 条件6 回补窗口（2026-09-11）：他 2025-04-15「…在下午2.00-2.30这个时间段进行回补」
     try:
         from app.services.wolf_refill import directive as _rf_dir
         _d5 = _rf_dir()
         if _d5:
             parts.append(_d5)
-    except Exception:
-        pass
+    except Exception as _e_sil13:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:590", _e_sil13)
+        except Exception:
+            print("[silent:wolf_discipline.py:590] %s: %s" % (type(_e_sil13).__name__, str(_e_sil13)[:110]), flush=True)
     # G10 量能门槛（2026-09-12）：他 2026-09-03「这里不上3WE的突破就是诱多」+ 2026-08-20「2WE是地量了」
     try:
         from app.services.wolf_volume_gate import directive as _vg_dir
         _dvg = _vg_dir()
         if _dvg:
             parts.append(_dvg)
-    except Exception:
-        pass
+    except Exception as _e_sil14:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:598", _e_sil14)
+        except Exception:
+            print("[silent:wolf_discipline.py:598] %s: %s" % (type(_e_sil14).__name__, str(_e_sil14)[:110]), flush=True)
     # G9 周末/长假前避险（2026-09-12）：他 2026-08-21 14:20「2点半 如果还是缩量 还是不拉升
     # 我会先把这两天T进去的仓位出来一半…65%仓位过周末」——注意与既有 weekend_de_risk 的区别：
     # 后者只看"周五+仓位阈值"，本模块补上他原话里的**缩量 ∧ 未拉升**两个前提
@@ -604,8 +661,12 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
         _dwh = _wh_dir()
         if _dwh:
             parts.append(_dwh)
-    except Exception:
-        pass
+    except Exception as _e_sil15:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("wolf_discipline.py:608", _e_sil15)
+        except Exception:
+            print("[silent:wolf_discipline.py:608] %s: %s" % (type(_e_sil15).__name__, str(_e_sil15)[:110]), flush=True)
     if pc.get("directive"):
         parts.append(pc["directive"])
     if wd.get("active"):

@@ -96,8 +96,12 @@ def _load_cfg():
                 d = json.load(open(p, encoding="utf-8"))
                 if d.get("wave"):
                     return d
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("position_tier.py:99", _e_sil1)
+                except Exception:
+                    print("[silent:position_tier.py:99] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
     return DEFAULT_CFG
 
 
@@ -214,8 +218,12 @@ def _tier_cash_floor(op, fallback):
         t = WD.tier_target_pct(op)
         if t is not None:
             return round(max(0.0, 100.0 - float(t)), 1)
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("position_tier.py:217", _e_sil2)
+        except Exception:
+            print("[silent:position_tier.py:217] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
     return float(fallback or 0)
 
 

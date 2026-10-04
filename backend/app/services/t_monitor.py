@@ -462,8 +462,12 @@ class TMonitor:
                 try:
                     from app.services import alert_hub as _ah
                     _ah.note("t_monitor.round", e)
-                except Exception:
-                    pass
+                except Exception as _e_sil1:
+                    try:
+                        from app.services import alert_hub as _ah_sil
+                        _ah_sil.note_silent("t_monitor.py:465", _e_sil1)
+                    except Exception:
+                        print("[silent:t_monitor.py:465] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
             elapsed = (time.time() - round_start) * 1000
             self._status.update({
                 "last_round": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -889,8 +893,12 @@ class TMonitor:
                         try:
                             _nn = _tds._normalize_symbol(_s1)
                             _out.setdefault(_nn, _v1)
-                        except Exception:
-                            pass
+                        except Exception as _e_sil2:
+                            try:
+                                from app.services import alert_hub as _ah_sil
+                                _ah_sil.note_silent("t_monitor.py:892", _e_sil2)
+                            except Exception:
+                                print("[silent:t_monitor.py:892] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
                 return _out
             fn = getattr(_tds, "fetch_tencent_quote", None) or fetch_tencent_quote
         except Exception:
@@ -983,10 +991,18 @@ class TMonitor:
                 _adbS.put_pos_meta(_cS, _accS, sym, str(day), 0.0, float(px or 0),
                                    True, str(day), float(px or 0))
                 _cS.close()
+            except Exception as _e_sil3:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("t_monitor.py:986", _e_sil3)
+                except Exception:
+                    print("[silent:t_monitor.py:986] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
+        except Exception as _e_sil4:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_monitor.py:988", _e_sil4)
             except Exception:
-                pass
-        except Exception:
-            pass
+                print("[silent:t_monitor.py:988] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
 
     def _is_ambush_promoted(self, acct: str, sym: str) -> bool:
         """本仓是否已**转正**（＝最高价曾达 成本×(1+阈值%) ✓）。
@@ -2487,8 +2503,12 @@ class TMonitor:
                         print("[加仓候选·入口] %s 持仓%.0f 埋伏=%s 已加%d次"
                               % (_sym, _vol, self._is_ambush_position(_acct, _sym),
                                  int((_bk.get(_sym) or {}).get("n") or 0)), flush=True)
-                except Exception:
-                    pass
+                except Exception as _e_sil5:
+                    try:
+                        from app.services import alert_hub as _ah_sil
+                        _ah_sil.note_silent("t_monitor.py:2490", _e_sil5)
+                    except Exception:
+                        print("[silent:t_monitor.py:2490] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
                 if self._is_ambush_position(_acct, _sym):
                     continue                      # 埋伏仓走自己的体系 ✓
                 _st = _bk.get(_sym) or {}
@@ -2554,15 +2574,23 @@ class TMonitor:
                                 _op = _op3[-1] if _op3 else _cur
                                 print("[加仓候选] %s 报价缺失 ⇒ 用当日 as-of 日线兜底 ✓（收%.2f 低%.2f）"
                                       % (_sym, _cur, _low), flush=True)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil6:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:2557", _e_sil6)
+                        except Exception:
+                            print("[silent:t_monitor.py:2557] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
                 if _cur <= 0:
                     # ⚠️ 补响（账本 §9.310）：这里原先**静默** ✗ ⇒ "为什么没加"根本查不到 ✓
                     try:
                         print("[加仓候选·跳过] %s 行情取不到（_cur=0；试过 ok/lower/raw ✓）" % _sym,
                               flush=True)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil7:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:2564", _e_sil7)
+                        except Exception:
+                            print("[silent:t_monitor.py:2564] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
                     continue
                 # 关键位＝**前 20 日最高**（与 `trend_break_buy` 的入场口径同源 ✓；
                 #   原写法依赖不存在的 `_snapshot_for` ✗ ⇒ 会恒为 0 ⇒ 功能空转 ✗）
@@ -2603,8 +2631,12 @@ class TMonitor:
                             _base = [v for _d5, v in _bv2[-6:-1]] or [v for _d5, v in _bv2[:-1]]
                             if _base:
                                 _vr = round(_last_v / (sum(_base) / len(_base)), 3)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil8:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:2606", _e_sil8)
+                        except Exception:
+                            print("[silent:t_monitor.py:2606] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
                 _add_vol = int(max(_vol * 0.5, 100) // 100 * 100)     # 「加一半」✓
                 # ⚠️ 2026-09-30（账本 §9.323）：**两个独立判定** ✓（用户：「不能用 elif」✓）
                 #   他 2022-06-08「**突破加仓 回踩确认加仓**」✓ ⇒ 是**两次机会** ✓
@@ -2639,16 +2671,24 @@ class TMonitor:
                               "｜已加 突破%d/回踩%d 次"
                               % (_sym, _cur, _res, _low, _vr, int(_st.get("n") or 0),
                                  int(_st.get("n_rt") or 0)), flush=True)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil9:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:2642", _e_sil9)
+                        except Exception:
+                            print("[silent:t_monitor.py:2642] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
                     continue
                 # **每日一笔**（同票同日 ✓；两条判定都成立时按桶序取第一条 ✓）
                 if _today and str(_st.get("d") or "") == _today:
                     try:
                         print("[加仓候选·跳过] %s 今日已加过 ⇒ 延后 ✓（命中 %d 条判定）"
                               % (_sym, len(_fires)), flush=True)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil10:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:2650", _e_sil10)
+                        except Exception:
+                            print("[silent:t_monitor.py:2650] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
                     continue
                 if len(_fires) > 1:
                     print("[加仓候选] %s **两条判定同时成立** ✓（回踩 ＋ 突破，各自独立 ✓）⇒ "
@@ -2678,8 +2718,12 @@ class TMonitor:
                     try:
                         with open(_pf, "w", encoding="utf-8") as _f:
                             json.dump(_bk, _f, ensure_ascii=False, indent=1)
-                    except Exception:
-                        pass
+                    except Exception as _e_sil11:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:2681", _e_sil11)
+                        except Exception:
+                            print("[silent:t_monitor.py:2681] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
         except Exception as _e:
             print("[TMonitor] 突破/回踩加仓异常: %s" % str(_e)[:80], flush=True)
 
@@ -2733,8 +2777,12 @@ class TMonitor:
                     "SELECT COALESCE(SUM(volume*avg_price),0) FROM paper_positions "
                     "WHERE account_id=:a AND COALESCE(volume,0)>0"), {"a": _acct}).scalar() or 0)
             _eqA = max(1.0, _c + _m)
-        except Exception:
-            pass
+        except Exception as _e_sil12:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_monitor.py:2736", _e_sil12)
+            except Exception:
+                print("[silent:t_monitor.py:2736] %s: %s" % (type(_e_sil12).__name__, str(_e_sil12)[:110]), flush=True)
         _today = datetime.now().strftime("%Y%m%d")
         _changed = False
         # ⚠️ 键可能是大写（记录写的是大写 ✓）而持仓 symbol 可能是小写 ✗ ⇒ 统一按大写匹配 ✓（§9.250）
@@ -2817,8 +2865,12 @@ class TMonitor:
             try:
                 with open(_pf, "w", encoding="utf-8") as _f:
                     _js.dump(_rec, _f, ensure_ascii=False)
-            except Exception:
-                pass
+            except Exception as _e_sil13:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("t_monitor.py:2820", _e_sil13)
+                except Exception:
+                    print("[silent:t_monitor.py:2820] %s: %s" % (type(_e_sil13).__name__, str(_e_sil13)[:110]), flush=True)
 
     def run_discipline_checks(self) -> None:
         """**纪律检查的"统一入口"** ✓（账本 §9.243）—— 生产主循环与**回测**都必须走它 ✓。
@@ -2929,8 +2981,12 @@ class TMonitor:
                         _lastb = [b for b in _bd if b.get("close")]
                         if _lastb:
                             _cur = float(sorted(_lastb, key=lambda b: str(b.get("date") or b.get("trade_date") or ""))[-1].get("close") or 0) or 0
-                    except Exception:
-                        pass
+                    except Exception as _e_sil14:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:2932", _e_sil14)
+                        except Exception:
+                            print("[silent:t_monitor.py:2932] %s: %s" % (type(_e_sil14).__name__, str(_e_sil14)[:110]), flush=True)
                 _cost = float(_p.get("avg_price") or 0) or 0
                 _promoted = False
                 if self._ambush_promote_pct() > 0:
@@ -3006,11 +3062,19 @@ class TMonitor:
                                             "WHERE account_id=:a AND symbol=:s"),
                                             {"h": _peak_bar, "a": _acct, "s": _sym})
                                         _sb.commit()
-                                except Exception:
-                                    pass
+                                except Exception as _e_sil15:
+                                    try:
+                                        from app.services import alert_hub as _ah_sil
+                                        _ah_sil.note_silent("t_monitor.py:3009", _e_sil15)
+                                    except Exception:
+                                        print("[silent:t_monitor.py:3009] %s: %s" % (type(_e_sil15).__name__, str(_e_sil15)[:110]), flush=True)
                                 _hi = _peak_bar
-                    except Exception:
-                        pass
+                    except Exception as _e_sil16:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("t_monitor.py:3012", _e_sil16)
+                        except Exception:
+                            print("[silent:t_monitor.py:3012] %s: %s" % (type(_e_sil16).__name__, str(_e_sil16)[:110]), flush=True)
                     _promoted = bool(_cost0 > 0 and _hi >= _cost0 * (1 + self._ambush_promote_pct() / 100.0))
                     # **D 口径**：也接受「**碰新高**」（他的原话 ✓）—— 最高价 > **买入前 20 日最高** ✓
                     _ph0 = 0.0
@@ -3027,8 +3091,12 @@ class TMonitor:
                                 with open(_pfR, encoding="utf-8") as _fR:
                                     if str(_sym).upper() in {str(k).upper() for k in (_jsR.load(_fR) or {})}:
                                         _promoted = True
-                        except Exception:
-                            pass
+                        except Exception as _e_sil17:
+                            try:
+                                from app.services import alert_hub as _ah_sil
+                                _ah_sil.note_silent("t_monitor.py:3030", _e_sil17)
+                            except Exception:
+                                print("[silent:t_monitor.py:3030] %s: %s" % (type(_e_sil17).__name__, str(_e_sil17)[:110]), flush=True)
                     if _promoted:
                         # ⚠️ 2026-09-30（账本 §9.345 ✓ 用户：「不是分钟重放吗？」✓ 正是 ✓）——
                         #   本该用**当根分钟**的价 ✓，实测 ✗：01-19 记下的 `ppx=71.37`，
@@ -3092,8 +3160,12 @@ class TMonitor:
             try:
                 from app.services import alert_hub as _ah2
                 _ah2.note("t_monitor.ambush_discipline", _e)
-            except Exception:
-                pass
+            except Exception as _e_sil18:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("t_monitor.py:3095", _e_sil18)
+                except Exception:
+                    print("[silent:t_monitor.py:3095] %s: %s" % (type(_e_sil18).__name__, str(_e_sil18)[:110]), flush=True)
 
     def _check_logic_time_stop(self) -> None:
         """① 后半句：**建仓初期「逻辑与时间」离场**（2026-09-11，狼大 2026-03-05 同一句原话）。
@@ -3436,8 +3508,12 @@ class TMonitor:
                 for _c in conditions:
                     _k2[str(_c.get("trigger_kind"))] = _k2.get(str(_c.get("trigger_kind")), 0) + 1
                 print("[DBG_LIST] 过滤后 %d 条｜腿型=%s" % (len(conditions), dict(sorted(_k2.items(), key=lambda x: -x[1])[:8])), flush=True)
-            except Exception:
-                pass
+            except Exception as _e_sil19:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("t_monitor.py:3439", _e_sil19)
+                except Exception:
+                    print("[silent:t_monitor.py:3439] %s: %s" % (type(_e_sil19).__name__, str(_e_sil19)[:110]), flush=True)
         if not conditions:
             return
         self._status["conditions_checked"] = len(conditions)
@@ -3948,8 +4024,12 @@ class TMonitor:
                 _first_break_v = bool(
                     (_ma13_v > 0 and _cur <= _ma13_v and _pc > _pma13) or
                     (_ma34_v > 0 and _cur <= _ma34_v and _pc > _pma34))  # 「首次」✓
-        except Exception:
-            pass
+        except Exception as _e_sil20:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_monitor.py:3951", _e_sil20)
+            except Exception:
+                print("[silent:t_monitor.py:3951] %s: %s" % (type(_e_sil20).__name__, str(_e_sil20)[:110]), flush=True)
         snapshot["quote"] = {
             "current": _cur,
             "open": float(quote.get("open", 0) or 0),
@@ -4815,8 +4895,12 @@ class TMonitor:
                                           "（已减 %d／持仓 %d ⇒ 同轮上限一半 ✓）"
                                           % (symbol, _posv, _roomM, _soldM, _posv), flush=True)
                                 _posv = _roomM
-                            except Exception:
-                                pass
+                            except Exception as _e_sil21:
+                                try:
+                                    from app.services import alert_hub as _ah_sil
+                                    _ah_sil.note_silent("t_monitor.py:4818", _e_sil21)
+                                except Exception:
+                                    print("[silent:t_monitor.py:4818] %s: %s" % (type(_e_sil21).__name__, str(_e_sil21)[:110]), flush=True)
                     if _red_exempt and _posv > 0:
                         try:
                             _gwR = gateway_execute(symbol, "sell", current, _posv,
@@ -4834,8 +4918,12 @@ class TMonitor:
                                 try:
                                     self._after_sell(symbol, cond.get("account_id", T_MONITOR_ACCOUNT),
                                                      trigger_kind, str(cond.get("reason") or ""))
-                                except Exception:
-                                    pass
+                                except Exception as _e_sil22:
+                                    try:
+                                        from app.services import alert_hub as _ah_sil
+                                        _ah_sil.note_silent("t_monitor.py:4837", _e_sil22)
+                                    except Exception:
+                                        print("[silent:t_monitor.py:4837] %s: %s" % (type(_e_sil22).__name__, str(_e_sil22)[:110]), flush=True)
                             _red_exempt = False     # 已处理 ⇒ 不走下面的静默 ✗
                         except Exception as _eR:
                             print("[TMonitor] 穿透底仓止血异常: %s" % str(_eR)[:70], flush=True)
@@ -5266,8 +5354,12 @@ def _bar_date8(raw) -> str:
     if len(parts) >= 3:
         try:
             return "%04d%02d%02d" % (int(parts[0]), int(parts[1]), int(parts[2]))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as _e_sil23:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_monitor.py:5269", _e_sil23)
+            except Exception:
+                print("[silent:t_monitor.py:5269] %s: %s" % (type(_e_sil23).__name__, str(_e_sil23)[:110]), flush=True)
     digits = "".join(ch for ch in head if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else ""
 
@@ -5643,8 +5735,12 @@ def start_t_monitor(trade_executor=None) -> bool:
     try:
         from app.services import alert_hub as _ah3
         _ah3.install()
-    except Exception:
-        pass
+    except Exception as _e_sil24:
+        try:
+            from app.services import alert_hub as _ah_sil
+            _ah_sil.note_silent("t_monitor.py:5646", _e_sil24)
+        except Exception:
+            print("[silent:t_monitor.py:5646] %s: %s" % (type(_e_sil24).__name__, str(_e_sil24)[:110]), flush=True)
     monitor = get_t_monitor(trade_executor=trade_executor)
     ok = monitor.start()
     # 桥不可达降级：启动低频轮询兜底线程（消费 pending 事件，执行仍经网关）
@@ -6057,8 +6153,12 @@ def pass_common_gates(cond: Dict[str, Any], regime_state: dict, now: datetime) -
             last = datetime.strptime(str(cond["last_triggered_at"]), "%Y-%m-%d %H:%M:%S")
             if (now - last).total_seconds() < COOLDOWN_SECONDS:
                 return False
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as _e_sil25:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_monitor.py:6060", _e_sil25)
+            except Exception:
+                print("[silent:t_monitor.py:6060] %s: %s" % (type(_e_sil25).__name__, str(_e_sil25)[:110]), flush=True)
     return True
 
 
@@ -6088,8 +6188,12 @@ def evaluate_default_at(cond: Dict[str, Any], quote: dict, regime_state: dict,
             last = datetime.strptime(str(cond["last_triggered_at"]), "%Y-%m-%d %H:%M:%S")
             if (now - last).total_seconds() < COOLDOWN_SECONDS:
                 return False
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as _e_sil26:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("t_monitor.py:6091", _e_sil26)
+            except Exception:
+                print("[silent:t_monitor.py:6091] %s: %s" % (type(_e_sil26).__name__, str(_e_sil26)[:110]), flush=True)
 
     # 3) 价格到位（低吸：current ≤ target；高抛：current ≥ sell_target）
     # 修复（迭代#58）：high_sell 与 high_sell_then_buy_back 同样检查高抛目标——

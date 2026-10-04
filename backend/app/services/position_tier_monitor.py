@@ -560,8 +560,12 @@ class PositionTierMonitor:
         try:
             if self.executor and hasattr(self.executor, '_consecutive_losses'):
                 return self.executor._consecutive_losses
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:563", _e_sil1)
+            except Exception:
+                print("[silent:position_tier_monitor.py:563] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
         return 0
 
     def _check_protection_line(self, symbol: str, current_price: float,
@@ -708,8 +712,12 @@ class PositionTierMonitor:
         try:
             from app.config import get_settings
             settings = get_settings()
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:711", _e_sil2)
+            except Exception:
+                print("[silent:position_tier_monitor.py:711] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
 
         api_key = settings.DEEPSEEK_API_KEY if settings else ''
         api_host = settings.DEEPSEEK_API_HOST if settings else 'api.deepseek.com'
@@ -782,8 +790,12 @@ class PositionTierMonitor:
                 if match:
                     try:
                         return _json.loads(match.group())
-                    except _json.JSONDecodeError:
-                        pass
+                    except _json.JSONDecodeError as _e_sil3:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("position_tier_monitor.py:785", _e_sil3)
+                        except Exception:
+                            print("[silent:position_tier_monitor.py:785] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
                 logger.warning(f"[加仓] AI返回content非JSON: {content[:200]}")
                 return {'matched': False, 'matched_concept': '', 'in_which': 'none', 'reason': 'AI返回content非JSON格式'}
         except Exception as e:
@@ -1078,8 +1090,12 @@ class PositionTierMonitor:
                 else:
                     sector_net, sector_name = self._fetch_sector_flow(symbol)
                     self._trend_cache[cache_key] = (time.time(), sector_net, sector_name)
-            except Exception:
-                pass
+            except Exception as _e_sil4:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("position_tier_monitor.py:1081", _e_sil4)
+                except Exception:
+                    print("[silent:position_tier_monitor.py:1081] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
 
             checks['sector_flow'] = {
                 'passed': sector_net > 0,
@@ -1185,8 +1201,12 @@ class PositionTierMonitor:
                 else:
                     main_net_today = self._fetch_moneyflow_today(symbol)
                     self._trend_cache[cache_key] = (time.time(), main_net_today)
-            except Exception:
-                pass
+            except Exception as _e_sil5:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("position_tier_monitor.py:1188", _e_sil5)
+                except Exception:
+                    print("[silent:position_tier_monitor.py:1188] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
 
             checks['moneyflow'] = {
                 'passed': main_net_today > 0,
@@ -1247,8 +1267,12 @@ class PositionTierMonitor:
                 if sector:
                     # main_net 单位为万元
                     return sector.get('main_net', 0), sector.get('name', '')
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1250", _e_sil6)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1250] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
         return 0, ''
 
     def _fetch_moneyflow_today(self, symbol: str) -> float:
@@ -1264,8 +1288,12 @@ class PositionTierMonitor:
             data = _query_stock_flow(ts_code)
             if data:
                 return float(data.get('main_net', 0))
-        except Exception:
-            pass
+        except Exception as _e_sil7:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1267", _e_sil7)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1267] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
         return 0.0
 
     def _check_limit_up(self, symbol: str) -> tuple:
@@ -1349,8 +1377,12 @@ class PositionTierMonitor:
                         tier = "中波"
                     else:
                         tier = "高波"
-        except Exception:
-            pass
+        except Exception as _e_sil8:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1352", _e_sil8)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1352] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
 
         self._amplitude_cache[symbol] = (tier, round(avg_amp, 2), today)
         return tier, avg_amp
@@ -1521,8 +1553,12 @@ class PositionTierMonitor:
             for pos in positions:
                 if pos.get('symbol') == symbol:
                     return pos.get('current_price', 0) * pos.get('volume', 0)
-        except Exception:
-            pass
+        except Exception as _e_sil9:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1524", _e_sil9)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1524] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
         return 0.0
 
     def _get_total_position_market_value(self) -> float:
@@ -1533,8 +1569,12 @@ class PositionTierMonitor:
             for pos in positions:
                 total += pos.get('current_price', 0) * pos.get('volume', 0)
             return total
-        except Exception:
-            pass
+        except Exception as _e_sil10:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1536", _e_sil10)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1536] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
         return 0.0
 
     def _get_position_avg_price(self, symbol: str) -> float:
@@ -1544,8 +1584,12 @@ class PositionTierMonitor:
             for pos in positions:
                 if pos.get('symbol') == symbol:
                     return pos.get('avg_price', 0)
-        except Exception:
-            pass
+        except Exception as _e_sil11:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1547", _e_sil11)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1547] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
         return 0.0
 
     def _get_position_tier(self, symbol: str) -> str:
@@ -1823,8 +1867,12 @@ class PositionTierMonitor:
             pi_conf = chain.get_pi_confirmation()
             if pi_conf:
                 return pi_conf.get('stance', 'yellow')
-        except Exception:
-            pass
+        except Exception as _e_sil12:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1826", _e_sil12)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1826] %s: %s" % (type(_e_sil12).__name__, str(_e_sil12)[:110]), flush=True)
         return 'yellow'
 
     # ── 通知管理 ──
@@ -1853,8 +1901,12 @@ class PositionTierMonitor:
             log_file = self.log_dir / f"tier_notifications_{today}.jsonl"
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(notif, ensure_ascii=False) + '\n')
-        except Exception:
-            pass
+        except Exception as _e_sil13:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("position_tier_monitor.py:1856", _e_sil13)
+            except Exception:
+                print("[silent:position_tier_monitor.py:1856] %s: %s" % (type(_e_sil13).__name__, str(_e_sil13)[:110]), flush=True)
 
     def _send_execution_qq_notification(self, symbol: str, evaluation: TierEvaluation,
                                          gate: GateResult, add_shares: int,

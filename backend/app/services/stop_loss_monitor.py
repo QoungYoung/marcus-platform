@@ -141,8 +141,12 @@ class StopLossMonitor:
             try:
                 from core.utils.strategy_chain import StrategyChain
                 self._strategy_chain = StrategyChain()
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("stop_loss_monitor.py:144", _e_sil1)
+                except Exception:
+                    print("[silent:stop_loss_monitor.py:144] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
         return self._strategy_chain
 
     # ── 生命周期 ──
@@ -198,8 +202,12 @@ class StopLossMonitor:
                     "nearest_trigger": {"rule": None, "distance_pct": None, "danger_level": "no_data"},
                     "rule_distances": {},
                 }
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:201", _e_sil2)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:201] %s: %s" % (type(_e_sil2).__name__, str(_e_sil2)[:110]), flush=True)
 
         # 2. 尝试计算止损距离，合并到持仓数据中
         try:
@@ -207,8 +215,12 @@ class StopLossMonitor:
             for sp in stop_positions:
                 sym = sp.get("symbol", "")
                 positions_map[sym] = sp  # 有止损数据则覆盖基础数据
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:210", _e_sil3)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:210] %s: %s" % (type(_e_sil3).__name__, str(_e_sil3)[:110]), flush=True)
 
         positions = list(positions_map.values())
 
@@ -298,8 +310,12 @@ class StopLossMonitor:
             if self.executor:
                 try:
                     self.executor.reset_consecutive_losses()
-                except Exception:
-                    pass
+                except Exception as _e_sil4:
+                    try:
+                        from app.services import alert_hub as _ah_sil
+                        _ah_sil.note_silent("stop_loss_monitor.py:301", _e_sil4)
+                    except Exception:
+                        print("[silent:stop_loss_monitor.py:301] %s: %s" % (type(_e_sil4).__name__, str(_e_sil4)[:110]), flush=True)
 
     # ── 持仓天数 ──
 
@@ -320,8 +336,12 @@ class StopLossMonitor:
                 from datetime import date as dt_date
                 first_dt = dt_date.fromisoformat(first_date)
                 return (dt_date.today() - first_dt).days
-        except Exception:
-            pass
+        except Exception as _e_sil5:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:323", _e_sil5)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:323] %s: %s" % (type(_e_sil5).__name__, str(_e_sil5)[:110]), flush=True)
         return None
 
     # ── HWM 辅助（P0-2: 监控器内部直接更新） ──
@@ -331,8 +351,12 @@ class StopLossMonitor:
         try:
             if self.executor and hasattr(self.executor, 'engine'):
                 self.executor.engine.update_position_meta(symbol, highest_price=current_price)
-        except Exception:
-            pass
+        except Exception as _e_sil6:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:334", _e_sil6)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:334] %s: %s" % (type(_e_sil6).__name__, str(_e_sil6)[:110]), flush=True)
 
     def _ensure_hwm(self, symbol: str, current_price: float) -> dict:
         """确保 HWM 已更新并返回最新数据"""
@@ -341,8 +365,12 @@ class StopLossMonitor:
             if chain and current_price > 0:
                 chain.update_high_water_mark(symbol, current_price)
                 return chain.get_high_water_mark(symbol) or {}
-        except Exception:
-            pass
+        except Exception as _e_sil7:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:344", _e_sil7)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:344] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
         return {}
 
     # ── 核心检查逻辑 ──
@@ -501,8 +529,12 @@ class StopLossMonitor:
                 hwm = hwm_data.get('high_price', 0)
                 if hwm > stage_low:
                     hwm_stop = hwm * 0.90
-            except Exception:
-                pass
+            except Exception as _e_sil8:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("stop_loss_monitor.py:504", _e_sil8)
+                except Exception:
+                    print("[silent:stop_loss_monitor.py:504] %s: %s" % (type(_e_sil8).__name__, str(_e_sil8)[:110]), flush=True)
 
             stop_price = max(base_stop, hwm_stop)
 
@@ -538,8 +570,12 @@ class StopLossMonitor:
                 if hwm_data:
                     hwm = hwm_data.get('high_price', 0)
                     hwm_days = hwm_data.get('days_since_high', 0)
-        except Exception:
-            pass
+        except Exception as _e_sil9:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:541", _e_sil9)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:541] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
 
         max_profit_pct = (
             round((hwm - avg_price) / avg_price * 100, 2)
@@ -772,8 +808,12 @@ class StopLossMonitor:
                             f'板块背离止损[{threshold_label}]：板块{sector_name}({sector_pct:+.2f}%)，'
                             f'个股{float_pnl_pct:+.2f}%，跑输 {abs(divergence):.1f}pp'
                         )
-        except Exception:
-            pass
+        except Exception as _e_sil10:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:775", _e_sil10)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:775] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
 
         return None
 
@@ -849,8 +889,12 @@ class StopLossMonitor:
                         tier = "中波"
                     else:
                         tier = "高波"
-        except Exception:
-            pass
+        except Exception as _e_sil11:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:852", _e_sil11)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:852] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
 
         self._amplitude_cache[symbol] = (tier, round(avg_amp, 2), today)
         return tier
@@ -893,8 +937,12 @@ class StopLossMonitor:
                         f'铁律二-HWM保本：曾浮盈 +{max_profit_pct:.1f}%'
                         f'（最高 {hwm:.2f}）→ 现亏损 {float_pnl_pct:.2f}% → 保本离场'
                     )
-        except Exception:
-            pass
+        except Exception as _e_sil12:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:896", _e_sil12)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:896] %s: %s" % (type(_e_sil12).__name__, str(_e_sil12)[:110]), flush=True)
 
         # ── 振幅分档保护线 ──
         amplitude_tier = self._get_amplitude_tier(symbol)
@@ -970,8 +1018,12 @@ class StopLossMonitor:
                     # Streak broken — reset
                     self._overbought_history[symbol] = []
                     return 0
-            except ValueError:
-                pass
+            except ValueError as _e_sil13:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("stop_loss_monitor.py:973", _e_sil13)
+                except Exception:
+                    print("[silent:stop_loss_monitor.py:973] %s: %s" % (type(_e_sil13).__name__, str(_e_sil13)[:110]), flush=True)
             return len(history)
 
         return 0
@@ -1255,8 +1307,12 @@ class StopLossMonitor:
                     _nm = _gsn(symbol)
                     if _nm:
                         name = str(_nm)
-                except Exception:
-                    pass
+                except Exception as _e_sil14:
+                    try:
+                        from app.services import alert_hub as _ah_sil
+                        _ah_sil.note_silent("stop_loss_monitor.py:1258", _e_sil14)
+                    except Exception:
+                        print("[silent:stop_loss_monitor.py:1258] %s: %s" % (type(_e_sil14).__name__, str(_e_sil14)[:110]), flush=True)
             avg_price = pos.get('avg_price', 0)
             current_price = pos.get('current_price', 0)
             total_volume = pos.get('volume', 0)
@@ -1395,10 +1451,18 @@ class StopLossMonitor:
                     try:
                         from app.services.t_monitor import _t_signals_from_m5
                         out["t_sell_ready"] = bool(_t_signals_from_m5(tb)[1])
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as _e_sil15:
+                        try:
+                            from app.services import alert_hub as _ah_sil
+                            _ah_sil.note_silent("stop_loss_monitor.py:1398", _e_sil15)
+                        except Exception:
+                            print("[silent:stop_loss_monitor.py:1398] %s: %s" % (type(_e_sil15).__name__, str(_e_sil15)[:110]), flush=True)
+            except Exception as _e_sil16:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("stop_loss_monitor.py:1400", _e_sil16)
+                except Exception:
+                    print("[silent:stop_loss_monitor.py:1400] %s: %s" % (type(_e_sil16).__name__, str(_e_sil16)[:110]), flush=True)
             # ── 账本 §9.427 ✓ 用户「收敛到 B5」✓：黄线离场只在「尾盘半小时 ∧ 破当日新低」生效 ──
             #   量化 ✓（3,482 票日）：全天候"破均价就卖" ⇒ 触发 97% ✓、卖点比当日收盘低 0.45% ✗；
             #   B5 ⇒ 触发 29% ✓、仅低 0.10% ✓（卖早降 78% ✓、churn 降 70% ✓）
@@ -1419,8 +1483,12 @@ class StopLossMonitor:
                     if _hh427 and _lo427 and not (_hh427 >= "14:30" and cur <= float(_lo427) * 1.001):
                         out["vwap_break"] = False
                         out["vwap_break_b5_skip"] = "%s/%s" % (_hh427, _lo427)
-            except Exception:
-                pass
+            except Exception as _e_sil17:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("stop_loss_monitor.py:1422", _e_sil17)
+                except Exception:
+                    print("[silent:stop_loss_monitor.py:1422] %s: %s" % (type(_e_sil17).__name__, str(_e_sil17)[:110]), flush=True)
         except Exception as e:
             print(f"[StopLoss] 动态离场距离计算失败 {symbol}: {e}")
         return out
@@ -1444,8 +1512,12 @@ class StopLossMonitor:
                 hwm = hwm_data.get('high_price', 0)
                 if hwm > stage_low:
                     hwm_stop = hwm * 0.90
-            except Exception:
-                pass
+            except Exception as _e_sil18:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("stop_loss_monitor.py:1447", _e_sil18)
+                except Exception:
+                    print("[silent:stop_loss_monitor.py:1447] %s: %s" % (type(_e_sil18).__name__, str(_e_sil18)[:110]), flush=True)
 
             stop_price = max(base_stop, hwm_stop)
             return round((current_price - stop_price) / current_price * 100, 2)
@@ -1469,8 +1541,12 @@ class StopLossMonitor:
                     hwm = hwm_data.get('high_price', 0)
                     if hwm and hwm > avg_price:
                         max_profit_pct = round((hwm - avg_price) / avg_price * 100, 2)
-        except Exception:
-            pass
+        except Exception as _e_sil19:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:1472", _e_sil19)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:1472] %s: %s" % (type(_e_sil19).__name__, str(_e_sil19)[:110]), flush=True)
 
         # 曾大盈(≥5%) → 不在成本止损范围内，交给规则2
         if max_profit_pct >= 5:
@@ -1520,8 +1596,12 @@ class StopLossMonitor:
                     sector_pct = sector_info.get('pct_change', 0) if isinstance(sector_info, dict) else 0
                     divergence = float_pnl_pct - sector_pct
                     return round(divergence + threshold_abs, 2)
-        except Exception:
-            pass
+        except Exception as _e_sil20:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:1523", _e_sil20)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:1523] %s: %s" % (type(_e_sil20).__name__, str(_e_sil20)[:110]), flush=True)
 
         return None
 
@@ -1537,8 +1617,12 @@ class StopLossMonitor:
                 max_profit_pct = round((hwm - avg_price) / avg_price * 100, 2)
                 if max_profit_pct >= 5:
                     return round(float_pnl_pct + 1.0, 2)  # distance to -1%
-        except Exception:
-            pass
+        except Exception as _e_sil21:
+            try:
+                from app.services import alert_hub as _ah_sil
+                _ah_sil.note_silent("stop_loss_monitor.py:1540", _e_sil21)
+            except Exception:
+                print("[silent:stop_loss_monitor.py:1540] %s: %s" % (type(_e_sil21).__name__, str(_e_sil21)[:110]), flush=True)
 
         # 振幅分档保护线
         amplitude_tier = self._get_amplitude_tier(symbol)
@@ -1589,8 +1673,12 @@ class StopLossMonitor:
             try:
                 amp_pct = self._get_amplitude_pct(symbol)
                 amp_threshold = amp_pct * 0.4
-            except Exception:
-                pass
+            except Exception as _e_sil22:
+                try:
+                    from app.services import alert_hub as _ah_sil
+                    _ah_sil.note_silent("stop_loss_monitor.py:1592", _e_sil22)
+                except Exception:
+                    print("[silent:stop_loss_monitor.py:1592] %s: %s" % (type(_e_sil22).__name__, str(_e_sil22)[:110]), flush=True)
 
         threshold = -max(market_threshold, amp_threshold)
         return round(float_pnl_pct - threshold, 2)  # distance to dynamic stop
