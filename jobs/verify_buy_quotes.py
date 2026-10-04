@@ -24,6 +24,23 @@ import os
 import re
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, ".dsh-tmp", "buyside", "buy_quotes_verify.json")
 LEDGER = os.path.join(ROOT, "docs", "wolf-buy-parameter-ledger.md")
@@ -80,7 +97,8 @@ def load_xlsx(path, kws=None):
     for sh in xl.sheet_names:
         try:
             df = xl.parse(sh, header=None, dtype=str)
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("verify_buy_quotes.py:84", _e_sil1)
             continue
         cells = []
         for col in df.columns:

@@ -30,6 +30,23 @@ sys.path.insert(0, HERE)
 
 import eval_leg_metrics as M  # noqa: E402
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 GRID_PCT = (0.0, 0.005, 0.01, 0.015, 0.02, 0.03, 0.05)
 GRID_ROUNDS = (2, 3, 5, 99)
 
@@ -42,8 +59,8 @@ def _load_eval():
     sys.argv = ["eval_exit_rules.py", "--accounts", "stock"]
     try:
         spec.loader.exec_module(mod)
-    except SystemExit:
-        pass
+    except SystemExit as _e_sil1:
+        _silent_alert("eval_roundtrip_confirm.py:46", _e_sil1)
     finally:
         sys.argv = old
     return mod

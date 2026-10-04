@@ -16,6 +16,23 @@ import sys
 import time
 from typing import Any, Dict, List
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 sys.path.insert(0, "/app")
 sys.path.insert(0, "/app/backend")
 
@@ -68,8 +85,8 @@ def map_via_llm(dirs: List[str], batch: int = 60) -> Dict[str, str]:
     try:
         import urllib3
         urllib3.disable_warnings()
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wolf_map_dirs_to_themes.py:72", _e_sil1)
     out: Dict[str, str] = {}
     for i in range(0, len(dirs), batch):
         chunk = dirs[i:i + batch]

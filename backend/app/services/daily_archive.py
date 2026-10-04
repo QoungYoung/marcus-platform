@@ -26,6 +26,23 @@ import os
 import shutil
 from typing import Any, Dict, List, Optional
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # ── 需要快照的文件（生产 /app/data 实测清单，2026-09-12）──
 # 1) 带日期型：按当天日期拼接
 PER_DATE = [
@@ -330,7 +347,8 @@ def backfill(dates: Sequence[str], save: bool = True, dry_run: bool = False) -> 
             try:
                 entries.append({"name": os.path.basename(src), "src": src, "size": os.path.getsize(src),
                                 "sha256_16": _sha256(src), "mtime": int(os.path.getmtime(src))})
-            except Exception:
+            except Exception as _e_sil1:
+                _silent_alert("daily_archive.py:334", _e_sil1)
                 continue
         keys = sorted([k for k in (artifact_key(e["name"], d8) for e in entries) if k])
         ups = {"upserted": 0, "skipped": [], "errors": ["dry_run"]}
@@ -458,7 +476,8 @@ def import_replay_artifacts(root: Optional[str] = None, save: bool = True, dry_r
             try:
                 with open(f, encoding="utf-8") as fh:
                     obj = json.load(fh)
-            except Exception:
+            except Exception as _e_sil2:
+                _silent_alert("daily_archive.py:462", _e_sil2)
                 continue
             if not isinstance(obj, dict):
                 continue

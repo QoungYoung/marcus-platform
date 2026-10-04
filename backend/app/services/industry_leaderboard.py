@@ -19,6 +19,23 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 # ── 缓存 ──
@@ -31,8 +48,8 @@ def _get_data_dir() -> Path:
     try:
         from app.config import get_settings
         return get_settings().data_dir
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("industry_leaderboard.py:35", _e_sil1)
     candidates = [
         Path(__file__).resolve().parents[3] / "data",
         Path(os.getcwd()) / "data",
@@ -1003,8 +1020,8 @@ class IndustryLeaderboardService:
             try:
                 from app.services.market_reference import get_stock_name_by_ts_code
                 name = get_stock_name_by_ts_code(symbol) or ""
-            except Exception:
-                pass
+            except Exception as _e_sil2:
+                _silent_alert("industry_leaderboard.py:1007", _e_sil2)
 
             return {
                 "symbol": symbol, "name": name, "benchmark_date": benchmark_date_actual,

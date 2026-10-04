@@ -4,6 +4,23 @@ import numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fusion_mainline as fm
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "/app/data")
 
 # 收敛判据(板块级 G3, 全自动·无 ETF 硬编码, 2026-09-07):
@@ -39,8 +56,8 @@ def concept_frame(theme):
         a = hist[c]
         try:
             cl[c] = pd.Series(dict(zip(a["dates"], a["close"])), dtype=float)
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("sector_g3.py:43", _e_sil1)
     if not cl:
         return None, codes
     px = pd.DataFrame(cl).sort_index().ffill()
@@ -108,8 +125,8 @@ def symbol_themes(symbol):
             if theme == "银行": continue
             if cnames & set(names):
                 out.append(theme)
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("sector_g3.py:112", _e_sil2)
     if out:
         return out
     # ETF/无概念行: 名称关键词匹配

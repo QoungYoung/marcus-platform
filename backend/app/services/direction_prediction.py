@@ -18,6 +18,23 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 # ── 特征配置（26 维：18 个股 + 7 行业）────────────────────────
@@ -60,8 +77,8 @@ def _get_data_dir() -> Path:
     try:
         from app.config import get_settings
         return get_settings().data_dir
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("direction_prediction.py:64", _e_sil1)
     candidates = [Path(__file__).resolve().parents[3] / "data", Path.cwd() / "data"]
     for c in candidates:
         if c.exists():
@@ -312,8 +329,8 @@ def fetch_index_features(pro, end_date: str,
         try:
             df = pro.index_daily(ts_code=index_code, start_date=start_date,
                                  end_date=end_date)
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("direction_prediction.py:316", _e_sil2)
 
         if df is None or df.empty:
             try:

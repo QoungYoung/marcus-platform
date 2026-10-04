@@ -21,6 +21,23 @@ import json
 import os
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORPUS_TOTAL_CAP = {"build": 75, "t_only": 50, "side": 50, "defense": 30, "exit": 0}   # 2026-01-17 他的话
 
@@ -119,8 +136,8 @@ def c4_etf_vol(data_dir, date8):
         cur.execute("SELECT DISTINCT symbol FROM paper_positions WHERE account_id='stock' AND volume>0")
         syms += [str(r[0]) for r in cur.fetchall()]
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("shadow_daily.py:123", _e_sil1)
     syms = sorted({s for s in syms if V.is_etf(s)})
     rows = {}
     for s in syms[:20]:

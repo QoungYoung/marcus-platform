@@ -37,6 +37,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 
 from _api_config import get_tushare_pro
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # ═══════════════════════════════════════════════════════
 # 内部工具
 # ═══════════════════════════════════════════════════════
@@ -79,8 +96,8 @@ def _lookup_industry(symbol: str) -> str:
         conn.close()
         if row and row[0]:
             return row[0]
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("fund_flow.py:83", _e_sil1)
     return "其他"
 
 

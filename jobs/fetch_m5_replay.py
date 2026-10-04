@@ -23,6 +23,23 @@ import json
 import sys
 from pathlib import Path
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "jobs"))
 sys.path.insert(0, str(ROOT / "backend"))
@@ -128,8 +145,8 @@ def main() -> int:
         try:
             man = json.loads(man_p.read_text(encoding="utf-8"))
             man["results"] = man.get("results") or {}
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError) as _e_sil1:
+            _silent_alert("fetch_m5_replay.py:132", _e_sil1)
     gaps, done, fetched = list(man.get("gaps") or []), 0, 0
     for sym, days in sorted(need.items()):
         prev = man["results"].get(sym) or {}

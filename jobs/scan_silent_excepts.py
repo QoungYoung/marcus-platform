@@ -30,7 +30,8 @@ def main() -> int:
                 p = os.path.join(dirpath, fn)
                 try:
                     s = open(p, encoding="utf-8").read()
-                except Exception:
+                except Exception as _e_sil1:
+                    _silent_alert("scan_silent_excepts.py:33", _e_sil1)
                     continue
                 # 排除我们自己注入的 `_silent_alert` helper 自带的 `except: pass`（否则每个改过的文件虚高 1 ✗）
                 n = 0

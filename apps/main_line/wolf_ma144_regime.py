@@ -29,6 +29,23 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "/app/data")
 MA_N = 144                      # 他的话（日K144线）
 
@@ -71,7 +88,8 @@ def _norm(rows: Any) -> List[Tuple[str, float]]:
             if d is None or c is None:
                 continue
             out.append((str(d)[:8], float(c)))
-        except (TypeError, ValueError, IndexError):
+        except (TypeError, ValueError, IndexError) as _e_sil1:
+            _silent_alert("wolf_ma144_regime.py:75", _e_sil1)
             continue
     out.sort(key=lambda x: x[0])
     return out
@@ -85,7 +103,8 @@ def _from_relay(code: str, start: str) -> List[Tuple[str, float]]:
         try:
             relay = importlib.import_module(name)
             break
-        except ImportError:
+        except ImportError as _e_sil2:
+            _silent_alert("wolf_ma144_regime.py:89", _e_sil2)
             continue
     if relay is None:
         _p = os.path.dirname(os.path.abspath(__file__))

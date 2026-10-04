@@ -59,6 +59,23 @@ from strategy_chain import StrategyChain
 from akshare_engine_enhanced import AKShareEnhancedEngine
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 # ── 方案 B：概念板块行情获取（量价驱动） ──────────────────────────
 
 def get_hot_concepts_by_flow(top_n: int = 10) -> list:
@@ -156,7 +173,8 @@ def get_hot_concepts_by_flow(top_n: int = 10) -> list:
                                     c['source'] = 'em_realtime+tushare_supplement'
                             print(f"[热点概念] ✅ Tushare 量价补充完成 (date={attempt_date})", file=sys.stderr)
                             break
-                    except Exception:
+                    except Exception as _e_sil1:
+                        _silent_alert("pre_market_scan.py:160", _e_sil1)
                         continue
         except Exception as e:
             print(f"[热点概念] Tushare 量价补充失败(非致命): {e}", file=sys.stderr)

@@ -24,6 +24,23 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 BATCH = 2000
 
 
@@ -173,8 +190,8 @@ def backfill(start8: str, end8: str, sleep_sec: float = 0.4, save: bool = True,
                 print(f"[mkt_bars] {i}/{len(ds)} {d8} 失败: {type(e).__name__}: {str(e)[:70]}")
                 try:
                     db.rollback()
-                except Exception:
-                    pass
+                except Exception as _e_sil1:
+                    _silent_alert("mkt_bars.py:177", _e_sil1)
             time.sleep(max(0.0, float(sleep_sec)))
     except Exception as e:
         out["ok"] = False
@@ -183,8 +200,8 @@ def backfill(start8: str, end8: str, sleep_sec: float = 0.4, save: bool = True,
         try:
             if db is not None:
                 db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("mkt_bars.py:187", _e_sil2)
     return out
 
 

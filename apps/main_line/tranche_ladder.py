@@ -20,6 +20,23 @@ def _armdb_root(start: str) -> str:
 import numpy as np
 import pandas as pd
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get("DATA_DIR", "/app/data")
 # env 化阈值(不硬编码)
 AMBUSH_SINGLE_PCT = float(os.getenv("AMBUSH_SINGLE_PCT", "1"))     # 单次 ≤净值 %
@@ -179,8 +196,8 @@ def _save_state(st):
         _d = os.path.dirname(TRIAL_STATE_FILE)
         if _d:
             os.makedirs(_d, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("tranche_ladder.py:183", _e_sil1)
     try:
         with open(TRIAL_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False, indent=1)
@@ -202,8 +219,8 @@ def _save_state(st):
             except Exception as _eC:
                 print("[armdb] 臂库写入失败（文件已写）: %s: %s" % (type(_eC).__name__, str(_eC)[:80]), flush=True)
 
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("tranche_ladder.py:206", _e_sil2)
 
 
 def _net_asset(account_id="stock"):

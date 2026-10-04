@@ -15,6 +15,23 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wolf_d12_evidence import call_dsh, _extract_json, slices_for, DATA   # noqa: E402
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 OUT = os.path.join(DATA, "wolf_overseas_evidence.json")
 FILES = [os.path.join(DATA, "corpus", "wolf-daily-log-xls2026.md"),
          os.path.join(DATA, "corpus", "wolf-daily-log-nga.md")]
@@ -48,8 +65,8 @@ def main():
     if os.path.exists(OUT):
         try:
             state = json.load(open(OUT, encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("wolf_overseas_evidence.py:52", _e_sil1)
     jobs = []
     for f in FILES:
         if not os.path.exists(f):

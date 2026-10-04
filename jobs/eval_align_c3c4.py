@@ -17,6 +17,23 @@ import json
 import os
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".dsh-tmp", "wolfbt"))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
@@ -63,7 +80,8 @@ def _etf_daily_until(sym, end8, want=40):
         try:
             bars.append({"trade_date": str(it[idx["trade_date"]]), "high": float(it[idx["high"]]),
                          "low": float(it[idx["low"]]), "close": float(it[idx["close"]])})
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError) as _e_sil1:
+            _silent_alert("eval_align_c3c4.py:67", _e_sil1)
             continue
     return sorted(bars, key=lambda x: x["trade_date"])[-want:]
 

@@ -1,6 +1,23 @@
 # -*- coding: utf-8 -*-
 """关键点重放 wave_agent：看 ③层 level=='down'（及顶态）在他"结束/尾段"声明上准不准。"""
 import json, os, sys
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 ROOT = "/app" if os.path.isdir("/app/app") else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "apps", "main_line"))
 DATA = os.environ.get("DATA_DIR", os.path.join(ROOT, "data"))
@@ -21,8 +38,8 @@ def main():
                 j = json.load(open(cp, encoding="utf-8"))
                 if j.get("level"):
                     rec = {k: j.get(k) for k in ("level", "sub_level", "operation")}; rec["src"] = "cache"
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("check_wave_agent_turningpoints.py:25", _e_sil1)
         if rec is None:
             try:
                 f = wa.index_features(d)

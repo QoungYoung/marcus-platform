@@ -25,6 +25,23 @@ from app.database import SessionLocal                      # noqa: E402
 from sqlalchemy import text                                 # noqa: E402
 from app.services import wolf_mainline_select as MS          # noqa: E402
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DATA = os.environ.get('DATA_DIR', '/app/data')
 
 
@@ -50,8 +67,8 @@ def main():
             day = (dd.get('date') or '').replace('-', '')
             if len(day) == 8 and dd.get('stock'):
                 snaps[day] = dd['stock']
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("mk_mainline_cmp_wolf.py:54", _e_sil1)
     sdays = sorted(snaps)
     # 口径阈值冻结为常量：data/crowding_blacklist.json 与其机制已于 2026-09-13 真删
     # （D15 事件研究证「拦反」+ 用户指令）。本脚本是离线对照工具，不再依赖该产物文件。

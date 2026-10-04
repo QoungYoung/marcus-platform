@@ -8,6 +8,23 @@
 import json, os
 from datetime import datetime
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 DSN = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 PIVOTS_FILE = os.getenv("WAVE_PIVOTS_FILE", os.path.join(os.getenv("DATA_DIR", "/app/data"), "wave_pivots.json"))
 
@@ -99,6 +116,6 @@ def age_days(symbol="000001.SH"):
             conn.close()
         if r and r[0]:
             return (datetime.now() - r[0]).days
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("wave_pivots_pg.py:103", _e_sil1)
     return None
