@@ -1,3 +1,20 @@
+def _safe_float(v, default=None, where=""):
+    """安全解析浮点（账本 §9.585 ✓）：**空串/None/非法** ⇒ 返回 default 并**留痕** ✓
+
+    背景 ✓：2026-10-05 回测报 `ValueError: could not convert string to float: ''`
+    （`wolf_confirm_pick.py` 的 `mv[str(x[0])] = float(x[1])` ✓）——
+    静默点治理把原本被吞掉的错误暴露出来 ✓ ⇒ 这里显式处理 ✓
+    """
+    if v is None or v == "":
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError) as _e_sf:
+        print("[wolf_confirm_pick] 数值解析失败 %s=%r（%s）⇒ 用 %r" % (where, v, str(_e_sf)[:40], default),
+              file=sys.stderr)
+        return default
+
+
 # -*- coding: utf-8 -*-
 """wolf_confirm_pick.py — confirm_pick 狼大化 v2.1 (三层: 等待池+位置闸+ETF兜底+风向标监控)
 拍板(2026-09-09): A=确认链成分候选域 / B=老龙头等权标签 / C=主题容量提示 / D=20日成交额<1亿硬切
@@ -133,7 +150,8 @@ def fetch_daily(ts, end):
     rows = gz("daily", {"ts_code": ts, "start_date": "20260301", "end_date": end},
               "ts_code,trade_date,close,low,amount,high")
     # rows: (trade_date, close, low, amount, high)  —— high 为 2026-09-15 v3 排序新增（flat_low_days）
-    return sorted((str(x[1]), float(x[2]), float(x[3]), float(x[4]),
+    return sorted((str(x[1]), _safe_float(x[2], where="seg_o"), _safe_float(x[3], where="seg_h"),
+                   _safe_float(x[4], where="seg_l"),
                    (float(x[5]) if len(x) > 5 and x[5] not in (None, "") else None)) for x in rows)
 
 def theme_etf(theme):
@@ -305,7 +323,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
         time.sleep(0.1)
     try:
         for x in gz("daily_basic", {"trade_date": AS}, "ts_code,total_mv"):
-            mv[str(x[0])] = float(x[1])
+            mv[str(x[0])] = _safe_float(x[1], where="mv")
     except Exception as _e_sil4:
         _silent_alert("wolf_confirm_pick.py:293", _e_sil4)
     scored = []

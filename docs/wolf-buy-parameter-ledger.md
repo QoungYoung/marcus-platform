@@ -27810,3 +27810,38 @@ http://127.0.0.1:8799/
 1. **首日跑完** ⇒ `prod_20260105.json` ✓（届时能看到第一批交易 ✓）
 2. **0309**：`scan_pullback` 应在该日扫到 **301511**（单测已验证 ✓）⇒ 看**实际是否回踩买入** ✓
 3. `grep TREND_PULLBACK|乖离门 .dsh-tmp/wolfbt/logs/size_run_t35d.log` ✓
+
+---
+
+## §9.585 **修 `float('')` 崩溃** —— 静默点治理暴露出一个**真 bug** ✓（有实际影响 ✗）
+
+### ① 告警来源（完全对上 ✓）
+
+用户收到的：
+```
+[ALERT] silent:wolfconfirmpick.py:293 | ValueError: could not convert string to float: ''
+```
+- ⇒ **`wolf_confirm_pick.py:293` 不是行号** ✗ —— 它是代码里**写死的标签** ✓：
+  ```python
+  try:
+      for x in gz("daily_basic", {"trade_date": AS}, "ts_code,total_mv"):
+          mv[str(x[0])] = float(x[1])        # ← 空串在这里炸 ✗
+  except Exception as _e_sil4:
+      _silent_alert("wolf_confirm_pick.py:293", _e_sil4)   # ← 告警标签 ✓
+  ```
+- ⇒ ⇒ **这正说明静默点治理有效** ✓ —— 原本这里 `except: pass` ✗，错误被**吞掉** ✓
+
+### ② ★ 影响（不只是一个错误日志 ✓）
+
+- `daily_basic` 一次返回**全市场**的 `total_mv` ✓ ⇒ 循环里**任意一行**的空串 ✗ ⇒ **整个循环中断** ✗
+  ⇒ ⇒ **`mv`（市值映射）会残缺失效** ✗ ⇒ **候选打分会静默劣化** ✓（而不只是打一条错误 ✓）
+- ⇒ ⇒ 所以这是个**真 bug** ✓，不是噪声 ✓
+
+### ③ 修法 ✓
+
+- 新增 **`_safe_float(v, default=None, where="")`** ✓：**空串/None/非法 ⇒ 返回 default ＋ `print` 留痕** ✓（不吞 ✓）
+- 改了两处 ✓：
+  - `mv[str(x[0])] = _safe_float(x[1], where="mv")` ✓
+  - 多列解析 `seg_o/seg_h/seg_l` 也包上 ✓
+- **自测 ✓**：`''` ⇒ None ✓｜`None` ⇒ None ✓｜`'abc'` ⇒ None ✓（留痕 ✓）｜`'3.5'` ⇒ 3.5 ✓｜`3` ⇒ 3.0 ✓
+- **门禁 ✓**：`58 passed` ✓｜**防回潮 0 处** ✓
