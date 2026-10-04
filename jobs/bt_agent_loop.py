@@ -49,6 +49,23 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 try:                                    # 单独跑本文件时把仓库布局塞进 sys.path（被 bt_prod_run import 时已就位）
     import bt_env                      # noqa: F401
     bt_env.add_paths()
@@ -146,8 +163,8 @@ def _install_capture_once() -> None:
                 print("[bt-agent] 已抓包 #%d（%d 字 ✓）⇒ %s" % (state["n"], len(str(body)), path), flush=True)
                 fh = None
                 t0 = t0
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("bt_agent_loop.py:150", _e_sil1)
         return _orig(req, *a, **kw)
 
     _inner._wolf_capture = True
@@ -289,8 +306,8 @@ class BtAgentLoop:
         except Exception as e:
             try:
                 db.rollback()
-            except Exception:
-                pass
+            except Exception as _e_sil2:
+                _silent_alert("bt_agent_loop.py:293", _e_sil2)
             print("[bt-agent] claim 失败: %s" % str(e)[:200])
             return None
         finally:
@@ -387,8 +404,8 @@ class BtAgentLoop:
         self.stats["poll_calls"] += 1
         try:
             _ensure_capture()            # 账本 §9.372：每根 bar 自愈式保活抓包壳 ✓
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("bt_agent_loop.py:391", _e_sil3)
         # ⚠️ 2026-09-30（账本 §9.369）：**三段真实计时**（perf_counter ✓ 不受钉时钟影响 ✓）
         import time as _t9
         _T = self.stats.setdefault("_t", {"claim": 0.0, "wake": 0.0, "loop": 0.0})

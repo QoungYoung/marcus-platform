@@ -25,6 +25,23 @@ import os
 import time
 from typing import Any, Dict, Optional, Tuple, List
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 BASE_FLOOR_PCT = 65.0        # 语料：仓位不会低于 65% 收盘（底仓下限目标）
 T_SLEEVE_PCT = 20.0          # 语料：日内做T仓位 20%
 def _build_step() -> float:
@@ -173,7 +190,8 @@ def parse_target_table(spec: Optional[str] = None) -> List[Tuple[float, float]]:
         a, b = part.split(":", 1)
         try:
             out.append((float(a), float(b)))
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("t_capacity.py:177", _e_sil1)
             continue
     out.sort(key=lambda x: x[0])
     return out
@@ -223,7 +241,8 @@ def parse_phase_table(spec: Optional[str] = None) -> Dict[str, float]:
         k, v = part.split(":", 1)
         try:
             out[k.strip().lower()] = float(v)
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("t_capacity.py:227", _e_sil2)
             continue
     return out
 
@@ -599,7 +618,8 @@ def account_equity(account_id: str, ledger: Optional[dict] = None,
                 for _s, it in (ledger or {}).items():
                     try:
                         pv += float(it.get("volume") or 0) * float(it.get("avg_price") or it.get("cost") or 0)
-                    except Exception:
+                    except Exception as _e_sil3:
+                        _silent_alert("t_capacity.py:603", _e_sil3)
                         continue
             else:
                 cur.execute("SELECT COALESCE(SUM(volume*avg_price),0) FROM paper_positions WHERE account_id=%s",

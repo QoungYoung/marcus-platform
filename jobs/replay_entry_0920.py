@@ -23,6 +23,23 @@ import os
 import sys
 import time
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 sys.path[:0] = ["/app", "/app/apps/main_line", "/app/jobs", "/app/core"]
 DATA = os.environ.get("DATA_DIR", "/app/data")
 
@@ -127,7 +144,8 @@ def legs_from_log(date8: str):
     for p in sorted(glob.glob(os.path.join("/app/logs/rotation_switch_arm", "*.json"))):
         try:
             j = json.load(open(p, encoding="utf-8"))
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("replay_entry_0920.py:131", _e_sil1)
             continue
         if not str(j.get("started_at") or "").startswith("%s-%s-%s" % (date8[:4], date8[4:6], date8[6:])):
             continue
@@ -137,7 +155,8 @@ def legs_from_log(date8: str):
                 try:
                     chains = ast.literal_eval(ln.split("buy_chains", 1)[1].split(" buy_legs")[0].strip())
                     legs = ast.literal_eval(ln.split("buy_legs", 1)[1].strip())
-                except Exception:
+                except Exception as _e_sil2:
+                    _silent_alert("replay_entry_0920.py:141", _e_sil2)
                     continue
                 return {"file": os.path.basename(p), "chains": chains, "legs": legs}
     return {}

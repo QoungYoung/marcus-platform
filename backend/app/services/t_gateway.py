@@ -31,6 +31,23 @@ from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, 
 from app.services.t_regime import compute_regime
 from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ACCOUNT_T = "t"
 
 # ── 狼大做T标的"底仓保留"股数（默认 100 股 = 药明底仓铁律口径）──
@@ -547,7 +564,8 @@ def _max_buy_volume_ex(symbol: str, tier: str, ledger: Optional[dict] = None,
                     for _s, _it in (ledger or {}).items():
                         try:
                             _pv += float(_it.get("volume") or 0) * float(_it.get("avg_price") or 0)
-                        except Exception:
+                        except Exception as _e_sil1:
+                            _silent_alert("t_gateway.py:551", _e_sil1)
                             continue
                     # 传"无上限"进去，让两分法自己决定收敛：建仓→缺口/3 上限 + 最小有效规模；
                     # 做T/加仓→20% 日内T 预算上限。（旧行为在开关关时就是无上限，故这里不额外收紧）
@@ -585,7 +603,8 @@ def _max_buy_volume_ex(symbol: str, tier: str, ledger: Optional[dict] = None,
                 for _s_b, _it_b in (ledger or {}).items():
                     try:
                         _pv_b += float(_it_b.get("volume") or 0) * float(_it_b.get("avg_price") or 0)
-                    except Exception:
+                    except Exception as _e_sil2:
+                        _silent_alert("t_gateway.py:589", _e_sil2)
                         continue
                 _v_b, _why_b = _capb.clamp_buy_volume(10 ** 9, float(price), float(_eq_b), _pv_b,
                                                       is_build=True)
@@ -830,7 +849,8 @@ def build_size_floor(symbol: str, price: float, volume: int,
         for _s, _it in (_led or {}).items():
             try:
                 pv += float(_it.get("volume") or 0) * float(_it.get("avg_price") or 0)
-            except Exception:
+            except Exception as _e_sil3:
+                _silent_alert("t_gateway.py:834", _e_sil3)
                 continue
         anchor_v, why = _capf.clamp_buy_volume(10 ** 9, float(price), float(eq), pv, is_build=True)
         cash = _account_available_cash(account_id)

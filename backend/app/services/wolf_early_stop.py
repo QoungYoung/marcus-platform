@@ -67,6 +67,23 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 # 狼大 2026-03-05 原话里的数字（默认值全部有出处，不另设"调参"）
 EARLY_STAGE_DAYS_DEFAULT = 13
 SWING_WIN_DEFAULT = 13
@@ -190,7 +207,8 @@ def swing_low_asof(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int]
             continue
         try:
             lo = float(b.get("low") or 0)
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("wolf_early_stop.py:194", _e_sil1)
             continue
         if lo > 0:
             rows.append((d, lo))
@@ -221,7 +239,8 @@ def swing_high_asof(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int
             continue
         try:
             hi = float(b.get("high") or 0)
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("wolf_early_stop.py:225", _e_sil2)
             continue
         if hi > 0:
             rows.append((d, hi))
@@ -278,7 +297,8 @@ def made_new_high(bars: List[Dict[str, Any]], buy_date: Any, win: Optional[int] 
             continue
         try:
             hi = float(b.get("high") or 0)
-        except Exception:
+        except Exception as _e_sil3:
+            _silent_alert("wolf_early_stop.py:282", _e_sil3)
             continue
         rows.append((d, hi))
     rows.sort(key=lambda x: x[0])

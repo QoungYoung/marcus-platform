@@ -44,6 +44,23 @@ import statistics as st
 import sys
 from datetime import datetime
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
 CACHE = os.path.join(ROOT, os.environ.get("LEG_CACHE_DIR", ".dsh-tmp/wolfbt/legmetrics"))
@@ -93,7 +110,8 @@ def _ts(s):
     for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
             return datetime.strptime(s, fmt)
-        except ValueError:
+        except ValueError as _e_sil1:
+            _silent_alert("eval_leg_metrics.py:97", _e_sil1)
             continue
     try:
         return datetime.strptime(s[:19], "%Y-%m-%d %H:%M:%S")
@@ -196,8 +214,8 @@ def fetch_paper_trades(refresh=False):
     try:
         cur.execute("SELECT account_id, initial_capital FROM paper_accounts")
         accounts = {r[0]: float(r[1] or 0) for r in cur.fetchall()}
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("eval_leg_metrics.py:200", _e_sil2)
     conn.close()
     meta = {"_source": "PG paper_trades", "_pulled_at": datetime.now().isoformat(timespec="seconds"),
             "_rebuilt": True, "_n": len(rows), "_accounts": accounts}
@@ -368,7 +386,8 @@ class Bars(object):
                 sym, d = row[0], row[1]
                 try:
                     o, h, l, c, amt = float(row[2]), float(row[3]), float(row[4]), float(row[5]), float(row[9])
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as _e_sil3:
+                    _silent_alert("eval_leg_metrics.py:372", _e_sil3)
                     continue
                 self._csv.setdefault(sym, []).append((d, o, h, l, c, amt))
         for v in self._csv.values():

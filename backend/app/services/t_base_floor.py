@@ -45,6 +45,23 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 MIN_LOT = 100                    # 一手；也是"至少留一条腿"的可卖额度
 _STATE_NAME = "t_base_floor_rebase.json"
 _MAX_EVENTS = 30                 # 每标的保留最近 N 条认账/重置事件（审计）
@@ -397,7 +414,8 @@ def index_not_broken_prev_low(day: str = "", stale_days: int = 10,
                     _b = datetime.strptime(d8, "%Y%m%d")
                     if abs((_b - _a).days) > int(stale_days):
                         continue
-                except Exception:
+                except Exception as _e_sil1:
+                    _silent_alert("t_base_floor.py:401", _e_sil1)
                     continue
             return bool(rows[-1][1] >= rows[-2][2])
         return None
@@ -426,7 +444,8 @@ def exposure_pct(account_id: str = "stock", ttl: float = 30.0) -> Optional[float
         for _s, it in led.items():
             try:
                 pv += float((it or {}).get("volume") or 0) * float((it or {}).get("avg_price") or 0)
-            except Exception:
+            except Exception as _e_sil2:
+                _silent_alert("t_base_floor.py:430", _e_sil2)
                 continue
         v = pv / float(eq) * 100.0
         _EXPO_CACHE.update({"at": now, "acct": account_id, "v": v})
@@ -488,7 +507,8 @@ def wave_bucket() -> Optional[str]:
             b = OP_BUCKET.get(str((st or {}).get("operation") or "").strip().lower())
             if b:
                 return b
-        except Exception:
+        except Exception as _e_sil3:
+            _silent_alert("t_base_floor.py:492", _e_sil3)
             continue
     return None
 

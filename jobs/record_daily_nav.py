@@ -15,6 +15,23 @@
 from __future__ import annotations
 import json, os, sqlite3, sys, time
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -60,11 +77,11 @@ def main() -> int:
                                      "ORDER BY trade_date DESC LIMIT 1", (conv(sym), day)))
                 if rr:
                     mv += float(rr[0][0] or 0) * int(vol or 0)
-            except Exception:
-                pass
+            except Exception as _e_sil1:
+                _silent_alert("record_daily_nav.py:64", _e_sil1)
         cc.close()
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("record_daily_nav.py:67", _e_sil2)
     eq = cash + mv
     # ★ 账本 §9.531 ✓（用户「为什么执着于写 json 而不是落库」✓）：**落库** ✓
     #   为什么 ✓：文件不原子/不持久/难查询/同一语义散落多份 ✗（今天就吃了 `ambush_promoted.json` 0 个的亏 ✗）

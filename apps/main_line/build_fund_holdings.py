@@ -5,6 +5,23 @@
 用法: python -u apps/main_line/build_fund_holdings.py [top_n] [end_date]
 """
 import os, sys, json, time
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 try:
     import psycopg2
 except Exception as e:
@@ -18,8 +35,8 @@ def _relay():
     import importlib, pathlib
     try:
         return importlib.import_module("tushare_relay")
-    except ImportError:
-        pass
+    except ImportError as _e_sil1:
+        _silent_alert("build_fund_holdings.py:22", _e_sil1)
     for p in pathlib.Path(__file__).resolve().parents:
         if (p / "core" / "tushare_relay.py").exists():
             sys.path.insert(0, str(p / "core"))
@@ -42,7 +59,8 @@ def _latest_share_date():
         ds = (_date.today() - _td(days=back)).strftime("%Y%m%d")
         try:
             it = call("fund_share", {"trade_date": ds}, "ts_code,trade_date,fd_share")
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("build_fund_holdings.py:46", _e_sil2)
             continue
         if it: return ds
     return "20260827"
@@ -65,7 +83,8 @@ def main():
     for row in share:
         try:
             code = row[0]; sh = float(row[2] or 0)
-        except Exception:
+        except Exception as _e_sil3:
+            _silent_alert("build_fund_holdings.py:69", _e_sil3)
             continue
         if sh > best.get(code, 0): best[code] = sh
     funds = sorted(best, key=lambda c: best[c], reverse=True)[:top_n]

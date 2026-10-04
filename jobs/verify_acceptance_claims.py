@@ -20,6 +20,23 @@ import os
 import re
 import sys
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = os.path.join(ROOT, "docs", "wolf-buy-alignment-acceptance.md")
 LEDGER = os.path.join(ROOT, "docs", "wolf-buy-parameter-ledger.md")
@@ -51,7 +68,8 @@ def code_knobs(files):
     for p in files:
         try:
             tree = ast.parse(open(p, encoding="utf-8").read())
-        except Exception:
+        except Exception as _e_sil1:
+            _silent_alert("verify_acceptance_claims.py:55", _e_sil1)
             continue
         rel = os.path.relpath(p, ROOT)
         # ① 先建"常量名 → env 键"映射（NAME = "WOLF_XXX"），供 ② 里 `os.getenv(NAME, "<default>")` 解析
@@ -94,7 +112,8 @@ def shadow_writers(files):
     for p in files:
         try:
             src = open(p, encoding="utf-8").read()
-        except Exception:
+        except Exception as _e_sil2:
+            _silent_alert("verify_acceptance_claims.py:98", _e_sil2)
             continue
         rel = os.path.relpath(p, ROOT)
         for m in re.finditer(r"[\"']([^\"']*shadow[^\"']*)[\"']", src, flags=re.I):
@@ -111,8 +130,8 @@ def main():
     text = open(args.doc, encoding="utf-8").read()
     try:
         text += "\n" + open(args.ledger, encoding="utf-8").read()
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("verify_acceptance_claims.py:115", _e_sil3)
     raw = {k for k in re.findall(r"\b([A-Z][A-Z0-9_]{3,})\b", text) if k.startswith(PREFIX)}
     mentioned = sorted(k for k in raw if not k.endswith("_") and len(k) > 4)
     shadows_mentioned = sorted(set(re.findall(r"([a-z0-9_]+_shadow_[a-z0-9_*<>]*)", text)))

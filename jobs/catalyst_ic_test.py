@@ -23,6 +23,23 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
 sys.path.insert(0, "/app")
 sys.path.insert(0, "/app/backend")
 sys.path.insert(0, "/app/apps/main_line")
@@ -145,8 +162,8 @@ def load_data() -> Tuple[Dict[str, Dict[str, float]], Dict[str, List[str]], List
             if n:
                 cov.append("%s=%d" % (th, n))
         print("[ic] confirm_universe 覆盖: %s" % (", ".join(cov) or "无"), flush=True)
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("catalyst_ic_test.py:149", _e_sil1)
     return px, uni, reports
 
 
@@ -176,13 +193,13 @@ def main() -> int:
     if "--h" in argv:
         try:
             hs = [int(x) for x in argv[argv.index("--h") + 1].split(",")]
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("catalyst_ic_test.py:180", _e_sil2)
     if "--window" in argv:
         try:
             window = int(argv[argv.index("--window") + 1])
-        except Exception:
-            pass
+        except Exception as _e_sil3:
+            _silent_alert("catalyst_ic_test.py:185", _e_sil3)
 
     px, uni, reports = load_data()
     days = sorted(px.keys())

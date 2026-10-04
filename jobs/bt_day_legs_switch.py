@@ -27,6 +27,23 @@ import time
 
 sys.path[:0] = []
 import bt_env  # noqa: E402
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
 bt_env.add_paths()
 
 
@@ -115,8 +132,8 @@ def main() -> int:
     seed = {}
     try:
         seed = json.load(open(os.path.join(sb, "_seed.json"), encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as _e_sil1:
+        _silent_alert("bt_day_legs_switch.py:119", _e_sil1)
     cut = a.cut or seed.get("cut") or a.date
     os.environ["DATA_DIR"] = sb
     # 生产 08:18 的 `tranche_ladder_report.py` 会 `os.environ.setdefault("SWITCH_AUTO_EXEC", "1")`
@@ -229,8 +246,8 @@ def main() -> int:
         if _bs.get("dropped"):
             print("[legs_switch] 板块权限前置过滤：剔除 %d 只买不到的板 %s（WOLF_PICK_BOARD_EARLY=1）"
                   % (_bs.get("dropped"), (_bs.get("codes") or [])[:10]), flush=True)
-    except Exception:
-        pass
+    except Exception as _e_sil2:
+        _silent_alert("bt_day_legs_switch.py:233", _e_sil2)
     try:
         plan = sb_mod.build_plan()
     except Exception as e:
@@ -306,8 +323,8 @@ def main() -> int:
             _tm = _st.get("timing_s") or {}
             print("[timing] leg_gate 分相 %s（calls=%s）"
                   % (json.dumps(_tm, ensure_ascii=False), _st.get("calls")), flush=True)
-    except Exception:
-        pass
+    except Exception as _e_sil3:
+        _silent_alert("bt_day_legs_switch.py:310", _e_sil3)
     print("[legs_switch] 写出 %s：买腿 %d / 卖腿 %d | %.0fs"
           % (out, len(recorded["buy_new"]), len(recorded["sell_old"]), time.time() - t0), flush=True)
     return 0

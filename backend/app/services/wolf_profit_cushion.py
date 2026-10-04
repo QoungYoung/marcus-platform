@@ -31,6 +31,23 @@ import os
 from typing import Any, Dict, Optional
 
 
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
+
+    优先 `alert_hub.note_silent`（落盘 alerts.jsonl；QQ 受去重/限流约束）；不可用时退回 print。**绝不抛** ✓。
+    """
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+
 def enabled() -> bool:
     return os.getenv("WOLF_PROFIT_CUSHION", "1").strip() not in ("0", "false", "no")
 
@@ -95,8 +112,8 @@ def _read_realized(account: str) -> Optional[float]:
         print(f"[cushion] 读 paper_trades 失败: {type(e).__name__}: {str(e)[:70]}")
         try:
             db.rollback()          # 失败后事务已 abort → 不 rollback 的话兜底查询必挂（实测踩过）
-        except Exception:
-            pass
+        except Exception as _e_sil1:
+            _silent_alert("wolf_profit_cushion.py:99", _e_sil1)
     try:
         row = db.execute(text(
             "SELECT COALESCE(SUM(realized_pnl), 0) FROM t_daily_state WHERE account_id = :a"
@@ -108,8 +125,8 @@ def _read_realized(account: str) -> Optional[float]:
     finally:
         try:
             db.close()
-        except Exception:
-            pass
+        except Exception as _e_sil2:
+            _silent_alert("wolf_profit_cushion.py:112", _e_sil2)
 
 
 def realized_total(account: str = "t", force: bool = False) -> Optional[float]:
@@ -159,8 +176,8 @@ def _principal(portfolio: Optional[Dict[str, Any]], realized: float,
         try:
             if v and float(v) > 0:
                 return float(v), f"portfolio.{k}"
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as _e_sil3:
+            _silent_alert("wolf_profit_cushion.py:163", _e_sil3)
     env = _env_f("WOLF_CUSHION_PRINCIPAL", 0)
     if env > 0:
         return env, "env WOLF_CUSHION_PRINCIPAL"
