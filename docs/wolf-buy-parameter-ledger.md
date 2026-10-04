@@ -26913,3 +26913,32 @@ _pfP = os.path.join(_rootP, "ambush_promoted.json")
 
 - 收益已证明 ✓：**第一批 104 处 ⇒ 关键路径全部留痕** ✓（`alert_hub.note_silent` ✓，QQ 限流去重 ✓）
 - ⚠️ 也说明 ✓：**全量自动改写风险高** ✗ ⇒ 剩余 540 处**不追求一次清完** ✓，按"**影响决策/状态/I-O**"优先级批处理 ✓
+
+---
+
+## §9.546 **静默点治理收官：696 ⇒ 10 处（−98.6%）** ✓ ＋ **4 个文件标记为需人工** ✗
+
+### ① 总账 ✓
+
+- 覆盖 ✓：监控 ✓／网关 ✓／止损 ✓／`leg_gate` ✓／`switch_builder` ✓／`theme_member_llm` ✓／`wolf_confirm_pick` ✓／
+  `stock_confirm_judge` ✓／状态文件（`t_base_floor`／`tranche_ladder`／`position_tier_monitor`）✓／
+  **驱动器**（`bt_days`／`bt_prod_run`）✓ …
+- 出口统一 ✓：**关键文件 ⇒ `alert_hub.note_silent`**（落盘 `alerts.jsonl` ＋ QQ **去重 600s／限流 20 条每小时** ✓）；
+  其余 ⇒ `print`／模块内 `_silent_alert` 留痕 ✓
+- ★ **零文件被写坏** ✓：硬门槛（**先 `compile()` 再写盘**）今天**拦下 6 次** ✓
+
+### ② 剩余 10 处／6 文件 ✓（**不追求清零** ✓）
+
+| 文件 ✓ | 处数 ✓ | 状态 ✓ |
+|---|---|---|
+| `apps/main_line/fusion_mainline.py` ✓ | 3 ✗ | ⚠️ 转换后语法错 ⇒ 被拦下（**未写盘** ✓）⇒ **转人工** ✓ |
+| `backend/app/services/research_reports.py` ✓ | 2 ✗ | ⚠️ 同上 ⇒ **转人工** ✓ |
+| `backend/app/services/market_reference.py` ✓ | 2 ✗ | ⚠️ 同上 ⇒ **转人工** ✓ |
+| `golden_pit_industry_service.py` ✓ | 1 ✗ | ⚠️ `unindent does not match` ⇒ **转人工** ✓ |
+| `backtest_engine.py`／`backfill_macro_state_history.py` ✓ | 1／1 ✓ | 形态特殊（工具未识别）⇒ 低优先 ✓ |
+
+### ③ ⇒ 三次尝试后的结论 ✓（诚实 ✓）
+
+- 这 4 个文件**不是 Tab/空格问题** ✓（实测 tab 行 = 0 ✓）；也不是"注入点插进 try"✗（已修 ✓ 仍失败 ✓）
+- ⇒ 它们属于**转换器无法安全处理**的形态 ✗ ⇒ ⇒ **"宁可不改"** ✓ —— 而**硬门槛保证它们一直没被写坏** ✓
+- ⇒ 价值判断 ✓：这 10 处的**边际收益**已远低于**改坏文件的风险** ✗ ⇒ **停止自动改** ✓，留给人工 ✓

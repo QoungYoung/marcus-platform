@@ -59,7 +59,11 @@ def convert(path: str, apply: bool) -> int:
     if not sites:
         print("    %-42s 无静默点 ✓" % name); return 0
     if "_silent_alert" not in "\n".join(lines):
-        last_imp = max([k for k, ln in enumerate(lines[:120]) if ln.startswith(("import ", "from "))] or [0])
+        # ⚠️ 只在**缩进为 0** 的 import 之后注入（否则会插进 `try:` 块里 ✗ —— 今早 bt_days 同款事故）
+        # ★ 必须**顶格**（行首无空白）：缩进的 import 多在 `try:` 块里 ⇒ 注入会插进 try ✗
+        _imps = [k for k, ln in enumerate(lines[:200])
+                 if (ln.startswith("import ") or ln.startswith("from ")) and ln[:1] not in (" ", "\t")]
+        last_imp = max(_imps or [0])
         lines.insert(last_imp + 1, HELPER)
         sites = [(a + 1, b + 1, c + 1, d, e) for (a, b, c, d, e) in sites]
     for k, (h0, h1, bl, kind, ind) in reversed(list(enumerate(sites))):
