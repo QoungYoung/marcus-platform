@@ -883,3 +883,6 @@ export TMPDIR='/tmp'
 
 # ★ 账本 §9.633 ✓：会话按窗口轮换（默认 600 秒 ✓）⇒ 会话不膨胀 ⇒ fork 代价可控 ✓
 export WOLF_AGENT_SESSION_WINDOW='600'
+
+# ★ 账本 §9.634：卖腿+无持仓 ⇒ 不唤醒 LLM（与 AI 结论一致 ✓；库内默认 0）
+export WOLF_AGENT_SKIP_MOOT_SELL='1'

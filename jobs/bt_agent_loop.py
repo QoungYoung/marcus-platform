@@ -198,6 +198,9 @@ class BtAgentLoop:
                  run_since: Optional[float] = None,
                  max_per_poll: int = 200, max_total: int = 0,
                  verbose: bool = True, guard: Optional[Any] = None):
+        # ★ §9.634：机械挡掉"卖腿但未持有"的唤醒（默认关 ⇒ 生产零影响 ✓）
+        self.skip_moot_sell = str(os.getenv("WOLF_AGENT_SKIP_MOOT_SELL", "0")).strip().lower() in ("1", "true", "yes", "on")
+        self._held_cache = None
         self.account = str(account)
         self.consumer = str(consumer)
         self.timeout_seconds = int(timeout_seconds)
@@ -331,6 +334,40 @@ class BtAgentLoop:
         self.stats["skipped_other_account"] += 1
         print("[bt-agent] ⏭ 跳过非本账户触发 #%s（%s）→ 已回写 pending" % (trigger_id, why))
 
+    def _is_moot_sell(self, trig) -> Optional[str]:
+        """机械判定：**卖腿 + 未持有该标的** ⇒ 一定无意义（返回原因串 ✓；否则 None ✓）。
+
+        与 LLM 的结论一致（它原话就是「卖腿无弹药：as-of 持仓明细不含 <标的>」✓）
+        所以这**不改变策略** ✓ —— 只是省掉一次没有信息量的 LLM 往返 ✓。
+        """
+        try:
+            _dir = str(trig.get("direction") or "").lower()
+            _et = str(trig.get("event_type") or "").lower()
+            if not (_dir.startswith("sell") or "sell" in _et or "high" in _et):
+                return None
+            _sym = str(trig.get("symbol") or "")
+            if not _sym:
+                return None
+            _held = self._held_symbols()
+            if _sym in _held:
+                return None
+            return ("as-of持仓明细不含 %s（机械判定：无持仓 ⇒ 卖腿无信息量 ✓，与 AI 结论一致 ✓）" % _sym)
+        except Exception as _e_ms:
+            print("[bt-agent] _is_moot_sell 判定失败（放行 ✓）: %s" % str(_e_ms)[:90], flush=True)
+            return None
+
+    def _held_symbols(self):
+        """本账户可卖持仓（缓存 ✓ —— 与 `bt_prod_run` 用的是同一个 API ✓）。"""
+        try:
+            if getattr(self, "_held_cache", None) is not None:
+                return self._held_cache
+            from app.services.t_gateway import get_sellable_ledger
+            self._held_cache = set(get_sellable_ledger(self.account).keys())
+            return self._held_cache
+        except Exception as _e_h:
+            print("[bt-agent] 读取持仓失败（放行 ✓）: %s" % str(_e_h)[:90], flush=True)
+            return set()
+
     def _decide_one(self, trig, t_bridge, _t9, _T):
         """单条触发的判定与记账（串行/并行**共用** ✓ —— 逐字等同原逻辑 ✓）"""
         tid = int(trig.get("id") or 0)
@@ -338,17 +375,33 @@ class BtAgentLoop:
         self.stats["claimed_ids"].append(tid)
         if self.guard is not None:
             self.guard.set_trigger(trig)
-        try:
-            _p2 = _t9.perf_counter()
-            result = t_bridge.wake_and_decide(trig) or {}
-            _T["wake"] += _t9.perf_counter() - _p2
-        except Exception as e:
-            self.stats["error"] += 1
-            print("[bt-agent] wake_and_decide 异常 #%s: %s → 走降级" % (tid, str(e)[:160]))
-            result = {"status": "wake_failed", "reason": "wake 异常: %s" % str(e)[:120]}
-        finally:
-            if self.guard is not None:
-                self.guard.clear()
+        # ★ 账本 §9.634（用户：agent loop 好慢，得解决 ✓）：
+        #   实测 11 天 ✓：唤醒 833 次 ⇒ **abandon 457 次（55%）** ✗
+        #     其中绝大多数是「卖腿无弹药：as-of 持仓明细不含该标的」✗
+        #     ⇒ **拿"账号没有这个标的"去问 LLM** ⇒ 每次 0.8~1.5 秒 ✗
+        #   而 agent loop 的 **96~97% 时间就是在等这个 HTTP 回合** ✗
+        #   ⇒ 这里做**机械预判** ✓：卖腿 + 未持有该标的 ⇒ 直接记 abandon ✓
+        #     **与 LLM 自己的结论完全一致** ✓（LLM 原话就是"持仓明细不含该标的"✓）
+        #     ⇒ **不改变任何策略语义** ✓，只是**省掉一次没有信息量的往返** ✓
+        #   开关 `WOLF_AGENT_SKIP_MOOT_SELL`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
+        _moot = self._is_moot_sell(trig) if getattr(self, "skip_moot_sell", False) else None
+        if _moot:
+            self.stats["skip_moot"] = self.stats.get("skip_moot", 0) + 1
+            self.stats["by_action"]["abandon"] = self.stats["by_action"].get("abandon", 0) + 1
+            result = {"status": "abandoned", "action": "abandon", "trigger_id": tid,
+                      "reason": _moot}
+        else:
+            try:
+                _p2 = _t9.perf_counter()
+                result = t_bridge.wake_and_decide(trig) or {}
+                _T["wake"] += _t9.perf_counter() - _p2
+            except Exception as e:
+                self.stats["error"] += 1
+                print("[bt-agent] wake_and_decide 异常 #%s: %s → 走降级" % (tid, str(e)[:160]))
+                result = {"status": "wake_failed", "reason": "wake 异常: %s" % str(e)[:120]}
+            finally:
+                if self.guard is not None:
+                    self.guard.clear()
         if result.get("status") != "wake_failed":
             action = str(result.get("action") or "")
             key = action if action in ("exec", "wait", "abandon", "update_condition") else "other"

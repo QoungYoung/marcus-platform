@@ -59,11 +59,27 @@ def _position_summary(symbol: str) -> Dict[str, Any]:
 
 
 def _recent_decisions(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """最近 N 次 AI 决策（t_ai_actions 倒序，含 outcome 结果摘要），唤醒上下文供 AI 参考历史判断。"""
+    """最近 N 次 AI 决策（t_ai_actions 倒序，含 outcome 结果摘要），唤醒上下文供 AI 参考历史判断。
+
+    ★ 账本 §9.635（用户：agent loop 好慢，精简唤醒上下文 ✓）：
+      实测单条 ~1.2 KB ⇒ 5 条 **9345 字符** ✗，其中最大一块是 **`input_snapshot`（683 字符/条 ✗）**
+      —— 它装的是**我们这次消息里已经写过去的同一个触发** ✗ ⇒ **纯冗余** ✓
+      ⇒ 默认**去掉** `input_snapshot` ✓（保留 action/output/gateway_result 等**决策与结果** ✓）
+      ⇒ 5 条上下文约 **9.3 KB ⇒ ~6 KB** ✓（省 ~27% payload ✓）
+      开关 `WOLF_AGENT_TRIM_RECENT`（默认 **1** ✓；设 0 恢复旧行为 ✓）
+    """
     try:
-        return t_db.list_ai_actions(symbol=symbol, limit=limit)
+        rows = t_db.list_ai_actions(symbol=symbol, limit=limit)
     except Exception:
         return []
+    if str(os.getenv("WOLF_AGENT_TRIM_RECENT", "1")).strip().lower() in ("0", "false", "no", ""):
+        return rows
+    out = []
+    for r in (rows or []):
+        if isinstance(r, dict):
+            r = {k: v for k, v in r.items() if k != "input_snapshot"}
+        out.append(r)
+    return out
 
 
 def _symbol_t_stats(symbol: str) -> Dict[str, Any]:
