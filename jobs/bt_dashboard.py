@@ -2274,15 +2274,47 @@ def day_progress(root: str, account: str = "") -> dict:
                   ("summary", "写当日汇总")]
         out["stages"] = [{"key": k, "label": v, "state": "pending"} for k, v in STAGES]
         # 从日志尾部推当前阶段 ✓
-        f = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")
+        # ★ 账本 §9.611 ✓：**取最新鲜的那份日志** ✗ —— 天级日志只在阶段边界写 ✓
+        #   只看它 ⇒ 会"看起来卡住"✗（用户 2026-10-05 因此以为卡住 ✓）
+        #   ⇒ 在 天级日志 与 当日/隔日各阶段日志 里，挑 mtime 最新的那份 ✓
+        _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _cands = [os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")]
+        _summ = os.path.join(root, "_summary")
+        for _pat in ("*_%s.log" % cur, "*_%s.log" % (day_dirs[day_dirs.index(cur) + 1]
+                                                    if cur in day_dirs and day_dirs.index(cur) + 1 < len(day_dirs) else cur),
+                     "switch_*.log", "confirm_*.log", "arm_*.log"):
+            try:
+                _cands += sorted(_g.glob(os.path.join(_summ, _pat)), key=os.path.getmtime)[-2:]
+            except Exception:
+                pass
+        f, _best = None, -1.0
+        for _c in _cands:
+            try:
+                if os.path.isfile(_c) and os.path.getmtime(_c) > _best:
+                    f, _best = _c, os.path.getmtime(_c)
+            except Exception:
+                pass
+        out["log_file"] = os.path.basename(f) if f else ""
         lines = []
-        if os.path.isfile(f):
+        if f and os.path.isfile(f):
             out["log_mtime"] = os.path.getmtime(f)
+            out["log_age_s"] = max(0, int(__import__("time").time() - out["log_mtime"]))
             with open(f, encoding="utf-8", errors="replace") as fh:
                 lines = fh.readlines()[-400:]
         tail = "".join(lines)
+        # ★ 账本 §9.611 ✓：**阶段优先按"最新阶段日志的文件名"判定** ✓（永远正确 ✓）
+        #   原因：天级日志只在阶段边界写 ✗，而各阶段日志名已直接标明阶段 ✓
+        _bn = (out.get("log_file") or "")
         stage = ""
+        _byname = (("minsfill_", "ensure_mins"), ("fetchmins_", "ensure_mins"), ("adj_mins_", "ensure_mins"),
+                   ("pack_", "pack"), ("arm_", "legs"), ("confirm_", "legs"), ("switch_", "legs"),
+                   ("prod_", "prod"))
+        for _pre, _st in _byname:
+            if _bn.startswith(_pre):
+                stage = _st
+                break
+        # 兜底：再按日志内容找标记 ✓
+        if not stage:
         for k in ("summary", "prod", "legs", "pack", "ensure_mins", "low_logic", "carry"):
             pat = {"carry": "跨日状态结转", "low_logic": "low_logic：", "ensure_mins": "ensure_mins",
                    "pack": "打包目录", "legs": "拉分钟名单", "prod": "prod_2026", "summary": "prod_2026"}[k]
@@ -2317,14 +2349,37 @@ def day_progress(root: str, account: str = "") -> dict:
                                    connect_timeout=6)
                 _cn.set_session(readonly=True, autocommit=True)
                 _c2 = _cn.cursor()
+                # ★ 按**仿真时间**排序（账本 §9.592 ✓）：原先按 id（写入顺序 ✗）⇒ 列表时间乱序 ✗
                 _c2.execute("SELECT created_at::text, symbol, direction, volume, price FROM paper_trades "
-                            "WHERE account_id=%s ORDER BY id DESC LIMIT 20", (account,))
+                            "WHERE account_id=%s ORDER BY created_at DESC, id DESC LIMIT 30", (account,))
+                # 取"最新 30 条"后由前端按时间正序展示 ✓（SQL 用 DESC 才能拿到最新的 ✓）
                 for _r in _c2.fetchall():
                     out["trades_pg"].append({"t": str(_r[0])[11:19], "d": str(_r[0])[:10], "sym": _r[1],
                                              "dir": _r[2], "vol": _r[3], "px": float(_r[4] or 0)})
                 _cn.close()
             except Exception as _e_pg:
                 print("[dashboard] day_progress 取成交失败: %s" % str(_e_pg)[:70], flush=True)
+        # ★ 股票名称映射（账本 §9.593 ✓）：stock_pool ⇒ {6位代码: 名称} ✓
+        out["names"] = {}
+        try:
+            _syms = {str(t.get("sym") or "") for t in (out.get("trades_pg") or [])}
+            _syms |= {str(e.get("text") or "").split(" ")[0] for e in (out.get("events") or [])}
+            _codes = sorted({x[-6:] for x in _syms if len(x) >= 6 and x[-6:].isdigit()})
+            if _codes:
+                import psycopg2 as _pg3
+                _cn3 = _pg3.connect(os.environ.get("DATABASE_URL") or
+                                    "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading",
+                                    connect_timeout=6)
+                _cn3.set_session(readonly=True, autocommit=True)
+                _c3 = _cn3.cursor()
+                _c3.execute("SELECT ts_code, name FROM stock_pool WHERE ts_code = ANY(%s) OR symbol = ANY(%s)",
+                            (["%s.SH" % c for c in _codes] + ["%s.SZ" % c for c in _codes],
+                             _codes))
+                for _ts, _nm in _c3.fetchall():
+                    out["names"][str(_ts).split(".")[0][-6:]] = str(_nm or "")
+                _cn3.close()
+        except Exception as _e_nm:
+            print("[dashboard] day_progress 取名称失败: %s" % str(_e_nm)[:70], flush=True)
     except Exception as _e_dp:
         print("[dashboard] day_progress 失败: %s" % str(_e_dp)[:80], flush=True)
         out["ok"] = False
