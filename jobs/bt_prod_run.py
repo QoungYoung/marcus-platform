@@ -1580,7 +1580,22 @@ def main() -> int:
         #   我上一版把兜底写成 `(lambda: {})()` ✗ ⇒ 调用方取 `_rt["secs"]` ✗ ⇒ **KeyError** ✗
         #   ⇒ 改为**全部用 `.get()`** ✓（缺字段就跳过 ✓）+ 外层 try 兜住 ✓
         #      ⇒ **这只是"日终诊断打印"** ✗ ⇒ 绝不该影响跑批 ✓
-        _rt = (getattr(_tm, "round_timing", None) or (lambda: {}))() or {}
+        # ★ 账本 §9.656 ✓（用户 QQ：`bt_prod_run.py:809  module 'app.services.t_monitor'
+        #   has no attribute 'persist_throttle_stats'` ✗ 且打印里全是 None ✗）：
+        #   实测 ✓：本块引用的 **5 个函数在 t_monitor 里全都不存在** ✗
+        #     `round_timing`／`round_timing_reset`／`persist_throttle_stats`／
+        #     `stop_gate_stats`／`gate_corpus_stats` ✓
+        #   ⇒ **这块"日终诊断"从来没成功过** ✗（写成了一版"计划中的 API" ✓）
+        #   ⇒ 现在 ✓：**先探测** ✓ ⇒ 缺任何一个就**一行说明后跳过** ✓
+        #     ⇒ 不再刷异常、不再打一屏 `None` ✗；**函数真做出来时会自动启用** ✓
+        _need = ("round_timing", "round_timing_reset", "persist_throttle_stats",
+                 "stop_gate_stats", "gate_corpus_stats")
+        _miss = [n for n in _need if not hasattr(_tm, n)]
+        if _miss:
+            print("[prod] _round 细分诊断**不可用**：t_monitor 缺 %s ⇒ 跳过（账本 §9.656 ✓；"
+                  "这些函数从未实现过 ✗，实现后本块自动启用 ✓）" % ",".join(_miss), file=sys.stderr)
+            raise StopIteration
+        _rt = _tm.round_timing() or {}
         _seg = " ".join("%s=%.1f" % (k, v) for k, v in (_rt.get("secs") or {}).items())
         print("[prod] _round 细分(s)：%s | bars=%s triggers=%s"
               % (_seg, _rt.get("bars", "-"), _rt.get("triggers", "-")), file=sys.stderr)
