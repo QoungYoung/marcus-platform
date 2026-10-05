@@ -337,7 +337,7 @@ def _l4(picks: Optional[Any]) -> Dict[str, Any]:
             "basis": "stock_confirm_result.json（当日覆盖型）"}
 
 
-def _l5(l2: Dict[str, Any], gates: Dict[str, Any]) -> Dict[str, Any]:
+def _l5(l2: Dict[str, Any], gates: Dict[str, Any], d8: str = "") -> Dict[str, Any]:
     """L5 买点：**是否允许开新仓** + 前置条件 + 拦阻项 + 警告（把会拦掉 L1–L4 结论的闸门显式化）。
 
     ⚠️ 拦阻项必须**逐条有语料支撑**（这是本项目的红线，2026-09-12 修过一次）：
@@ -363,7 +363,10 @@ def _l5(l2: Dict[str, Any], gates: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from app.services import t_index_break as _ib
         if _ib.enabled():
-            _br = _ib.index_breakdown(day if 'day' in dir() else (trade_date or ""))
+            # ★ 账本 §9.616 ✓：原表达式 `day if 'day' in dir() else (trade_date or "")` ✗
+            #   在本作用域里 **两个名字都不存在** ✗ ⇒ 每天 4 条 `NameError` ✗ ⇒ **指数破位检查静默失效** ✗
+            #   ⇒ 改为由调用方 `build(d8, …)` 传入 ✓
+            _br = _ib.index_breakdown(str(d8 or ""))
             if _br.get("broken"):
                 warnings.append({"level": "warn", "text": "指数破位（%s）→ 持仓止损/减仓评估；"
                                                           "按语料**不禁止**按预设条件买入" % _br.get("reason")})
@@ -476,7 +479,7 @@ def build(d8: str, gate: Optional[Dict[str, Any]] = None, wave: Optional[Dict[st
         except Exception:
             tiers = {}
     layers = {"L1_direction": _l1(None, ms), "L2_operation": l2, "L3_position": _l3(tiers),
-              "L4_picks": _l4(picks), "L5_entry": _l5(l2, gates), "L6_exit": _l6(gates)}
+              "L4_picks": _l4(picks), "L5_entry": _l5(l2, gates, d8), "L6_exit": _l6(gates)}
     src = sources if sources is not None else {
         # "gate": 2026-09-13 删除——mainline_gate 模块与产物已废弃（主线判定唯一＝方向层池判定）
         # 2026-09-16：wave_dated/wave_latest 两个键合并成 "wave"（带 kind/as_of/stale_days），

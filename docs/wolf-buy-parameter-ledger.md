@@ -28662,3 +28662,37 @@ const FORK_SEED = String(process.env.BRIDGE_FORK_SEED === undefined ? "1"
 - **实测** ✓：对真实库 `data/_bt_t35d/drabt35d.sqlite` 跑同一查询 ⇒ **成功** ✓
   （库内 `pos_meta` 现有行：见下 ✓）
 - 为什么没早发现 ✓：**fail-open 掩盖了它** ✗（只在日志里留一行 ✓）⇒ 属于"静默降级"的典型 ✓
+
+---
+
+## §9.615 **看板：日志尾加长 ＋ 暂停 ＋ 告警回看** ✓（用户「QQ 推送没看完就刷过去」✓）
+
+- **日志尾 8 ⇒ 300 行** ✓（`max-height: 10em ⇒ 30em` ✓、可滚 ✓）
+- ★ **「⏸ 暂停刷新」按钮** ✓：阅读时冻结，不再被 5 秒刷新冲掉 ✓
+- ★★ **新增「告警 / 推送回看」面板** ✓：读 `<DATA_DIR>/<当日 与 前一日>/alerts.jsonl` ✓
+  （`alert_hub` 的落盘位置 ✓）⇒ **倒序显示**（最新在上 ✓）＋ 日期/时刻 ✓
+- ⚠️ 我第一版的解析写成了 `_js.loads` ✗（该文件里只有 `json` ✓）⇒ 退化成 `raw` ✓ ⇒ **已改** ✓
+
+---
+
+## §9.616 **★ 告警面板立刻抓出两个真 bug（每天 48 ＋ 4 次 ✗）**
+
+### ① `bt_prod_run.py` ✗（**严重** ✓）
+
+```python
+setattr(mod, "datetime", datetime.datetime)   # ✗ NameError: name 'datetime' is not defined
+```
+- 该文件导入的是 **`datetime as _dt`** ✓ ⇒ **`datetime` 这个名字根本不存在** ✗
+- ⇒ ⇒ **"模拟时钟广播"整段每模块都失败** ✗✗ ⇒ **`datetime.now()` 未被钉到模拟日** ✗
+  ⇒ 这是**未来函数防线**的一环 ✗ ⇒ 属**正确性问题** ✓（不只是噪声 ✓）
+- **修法** ✓：改 `_dt.datetime` ✓
+
+### ② `daily_decision.py` ✗
+
+```python
+_br = _ib.index_breakdown(day if 'day' in dir() else (trade_date or ""))   # ✗ 两个名字都不在
+```
+- 所在函数 `_l5(l2, gates)` ✗ **既无 `day` 也无 `trade_date`** ✗ ⇒ 每天 4 次 `NameError` ✗
+  ⇒ **"指数破位"检查静默失效** ✗
+- **修法** ✓：`_l5(l2, gates, d8="")` ✓ ⇒ 调用点 `_l5(l2, gates, d8)` ✓（`d8` 就是 `build(d8, …)` 的日期 ✓）
+  ⇒ 内部改 `_ib.index_breakdown(str(d8 or ""))` ✓

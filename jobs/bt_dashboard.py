@@ -2315,12 +2315,12 @@ def day_progress(root: str, account: str = "") -> dict:
                 break
         # 兜底：再按日志内容找标记 ✓
         if not stage:
-        for k in ("summary", "prod", "legs", "pack", "ensure_mins", "low_logic", "carry"):
-            pat = {"carry": "跨日状态结转", "low_logic": "low_logic：", "ensure_mins": "ensure_mins",
-                   "pack": "打包目录", "legs": "拉分钟名单", "prod": "prod_2026", "summary": "prod_2026"}[k]
-            if pat in tail:
-                stage = k
-                break
+            for k in ("summary", "prod", "legs", "pack", "ensure_mins", "low_logic", "carry"):
+                pat = {"carry": "跨日状态结转", "low_logic": "low_logic：", "ensure_mins": "ensure_mins",
+                       "pack": "打包目录", "legs": "拉分钟名单", "prod": "prod_2026", "summary": "prod_2026"}[k]
+                if pat in tail:
+                    stage = k
+                    break
         out["stage"] = stage
         idx = [x["key"] for x in out["stages"]].index(stage) if stage in [x["key"] for x in out["stages"]] else -1
         for i, st in enumerate(out["stages"]):
@@ -2338,7 +2338,33 @@ def day_progress(root: str, account: str = "") -> dict:
                         g.get("symbol"), g.get("event_type"), g.get("status"))})
             except Exception as _e_ev:
                 print("[dashboard] day_progress 读 summary 失败: %s" % str(_e_ev)[:60], flush=True)
-        out["log_tail"] = [ln.rstrip("\n")[:150] for ln in lines[-8:]]
+        out["log_tail"] = [ln.rstrip("\n")[:200] for ln in lines[-300:]]
+        # ★ 账本 §9.615 ✓：**告警也要能回看**（用户「QQ 推送没看完就刷过去了」✓）
+        #   落盘位置 = `<DATA_DIR>/<当日>/alerts.jsonl` ✓（alert_hub._alerts_path ✓）
+        #   示例: data/_bt_t35d/20260107/alerts.jsonl ✓
+        out["alerts"] = []
+        out["alerts_file"] = ""
+        _seen = []
+        for _d in ([cur] if cur else []) + ([day_dirs[day_dirs.index(cur) - 1]]
+                                            if cur and cur in day_dirs and day_dirs.index(cur) > 0 else []):
+            _seen.append(os.path.join(root, _d, "alerts.jsonl"))
+        for _p in _seen:
+            if not os.path.isfile(_p):
+                continue
+            try:
+                with open(_p, encoding="utf-8", errors="replace") as _fh:
+                    _al = _fh.readlines()[-80:]
+                for _ln in _al:
+                    try:
+                        _j = json.loads(_ln)
+                    except Exception:
+                        _j = {"raw": _ln.rstrip()[:300]}
+                    _j["_day"] = os.path.basename(os.path.dirname(_p))
+                    out["alerts"].append(_j)
+                out["alerts_file"] = os.path.basename(os.path.dirname(_p)) + "/alerts.jsonl"
+            except Exception as _e_al:
+                print("[dashboard] day_progress 读告警失败: %s" % str(_e_al)[:60], flush=True)
+        out["alerts"] = out["alerts"][-80:]
         # ★ 当日成交（带真实时刻 ✓，从 PG 取 ⇒ 「什么时刻发生了什么事」✓）
         out["trades_pg"] = []
         if account and cur:

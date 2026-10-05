@@ -535,7 +535,10 @@ def fanout_shims() -> None:
                     _n_b += 1
                 _d = getattr(mod, "datetime", None)
                 if _d is _orig_cls and _orig_cls is not None:
-                    setattr(mod, "datetime", datetime.datetime)   # 模拟时钟类 ✓
+                    # ★ 账本 §9.616：本文件导入的是 **`datetime as _dt`** ✗ ⇒
+                    #   原写 `datetime.datetime` 会 **NameError** ✗ ⇒ **模拟时钟广播整段失效** ✗
+                    #   （实测每天 48 条告警 ✓）⇒ 改用 `_dt.datetime` ✓
+                    setattr(mod, "datetime", _dt.datetime)   # 模拟时钟类 ✓
                     _n_c += 1
             except Exception as _e_sil2:
                 _silent_alert("bt_prod_run.py:523", _e_sil2)

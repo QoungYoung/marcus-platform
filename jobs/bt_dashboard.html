@@ -340,7 +340,11 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
   @media (min-width: 64rem) { .pg-cols { grid-template-columns: minmax(0, 3fr) minmax(0, 4fr); } }
   .pg-ev { font-size: 12px; line-height: 1.8; font-family: var(--font-mono); }
   .pg-ev .t { opacity: .6; margin-right: 6px; }
-  .pg-log { font-size: 11px; line-height: 1.6; font-family: var(--font-mono); opacity: .6; max-height: 10em; overflow: auto; }
+  .pg-log { font-size: 11px; line-height: 1.6; font-family: var(--font-mono); opacity: .75; max-height: 30em; overflow: auto; }
+  .pg-al { font-size: 11.5px; line-height: 1.7; font-family: var(--font-mono); max-height: 22em; overflow: auto; }
+  .pg-al .hd { color: #f88; }
+  .pg-pause { cursor: pointer; user-select: none; font-size: 11px; border: 1px solid var(--color-rule);
+    border-radius: 6px; padding: 1px 7px; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -402,8 +406,12 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
           <div class="pg-ev" id="prog-events"></div>
         </div>
         <div>
-          <div class="pane__meta" style="margin-bottom:4px">实时日志尾 <span id="prog-logf" style="opacity:.7"></span></div>
+          <div class="pane__meta" style="margin-bottom:4px">实时日志尾（最多 300 行）
+            <span id="prog-logf" style="opacity:.7"></span>
+            <span class="pg-pause" id="prog-pause">⏸ 暂停刷新</span></div>
           <div class="pg-log" id="prog-log"></div>
+          <div class="pane__meta" style="margin:8px 0 4px">告警 / 推送回看 <span id="prog-alf" style="opacity:.7"></span></div>
+          <div class="pg-al" id="prog-alerts"></div>
         </div>
       </div>
     </div>
@@ -2119,6 +2127,7 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
   function el(id) { return document.getElementById(id); }
   function esc(x) { return String(x == null ? '' : x).replace(/[&<>]/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+  var PAUSED = false;
   async function tick() {
     try {
       var r = await fetch('/api/progress', { cache: 'no-store' });
@@ -2146,11 +2155,29 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
           ' ' + (nm ? '<b>' + esc(nm) + '</b> ' : '') + esc(t.sym) + ' ' + esc(t.dir) + ' ' + esc(t.vol) + '@' + esc(t.px) + '</div>'; }).join('')
         : '<div style="opacity:.55">（当日暂无成交）</div>';
       el('prog-events').innerHTML = ev;
-      el('prog-log').innerHTML = (j.log_tail || []).slice(-8).map(function (l) {
-        return '<div>' + esc(l) + '</div>'; }).join('');
+      if (!PAUSED) {
+        el('prog-log').innerHTML = (j.log_tail || []).map(function (l) {
+          return '<div>' + esc(l) + '</div>'; }).join('');
+        var al = (j.alerts || []).slice().reverse();
+        el('prog-alerts').innerHTML = al.length ? al.map(function (a) {
+          var t = a.at || a.ts || a.time || '';
+          var txt = a.text || a.msg || a.message || a.raw || JSON.stringify(a);
+          return '<div><span class="hd">[' + esc(a._day || '') + ' ' + esc(String(t).slice(11, 19) || String(t).slice(-8)) + ']</span> ' +
+            esc(String(txt).slice(0, 300)) + '</div>';
+        }).join('') : '<div style="opacity:.5">（暂无告警 ✓）</div>';
+        el('prog-alf').textContent = j.alerts_file || '';
+      }
       var ag = j.log_age_s;
       el('prog-logf').textContent = (j.log_file || '') + (ag == null ? '' : ('（' + (ag < 90 ? ag + ' 秒前' : Math.round(ag / 60) + ' 分钟前') + '）'));
     } catch (e) { /* 看板自身不抛 ✓ */ }
+  }
+  var _pb = document.getElementById('prog-pause');
+  if (_pb) {
+    _pb.addEventListener('click', function () {
+      PAUSED = !PAUSED;
+      _pb.textContent = PAUSED ? '▶ 继续刷新' : '⏸ 暂停刷新';
+      _pb.style.background = PAUSED ? 'rgba(255,120,120,.18)' : '';
+    });
   }
   tick();
   setInterval(tick, 5000);
