@@ -2038,6 +2038,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "GSAP 未安装：%s 不存在（页面会自动降级为无动效）" % GSAP_PATH}, 404)
                 return self._file(GSAP_PATH, "application/javascript; charset=utf-8",
                                   cache="public, max-age=3600")
+            if route == "/api/progress":
+                return self._json(day_progress(self.store.root, getattr(self.store, "account", "") or ""))
             if route == "/api/snapshot":
                 return self._json(self.store.snapshot())
             if route == "/api/symbol":
@@ -2240,6 +2242,94 @@ def runs_payload() -> dict:
         print("[silent:bt_dashboard.py:2212] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
     logs.sort(key=lambda r: r["mtime"], reverse=True)
     return {"running": procs, "roots": _run_roots(), "logs": logs[:80], "now": now_iso()}
+
+
+def day_progress(root: str, account: str = "") -> dict:
+    """**当日进度 + 事件时间线**（账本 §9.588 ✓）——「走到什么时刻、发生了什么事」✓
+
+    返回 ✓：
+      · `day`／`day_index`／`days_total`（进度条用 ✓）
+      · `stage`（当前阶段 ✓）＋ `stages`（阶段清单，含 done/current ✓）
+      · `events`（当日成交/触发，带时间 ✓）
+      · `log_tail`（最近几行原始日志 ✓）
+    """
+    import glob as _g
+    import json as _j
+    import re as _re
+    import time as _t
+    out = {"ok": True, "day": None, "day_index": 0, "days_total": 0,
+           "stage": "", "stages": [], "events": [], "log_tail": [], "log_mtime": None}
+    try:
+        day_dirs = sorted(os.path.basename(p) for p in _g.glob(os.path.join(root, "2026*")) if os.path.isdir(p))
+        out["days_total"] = len(day_dirs)
+        summ = os.path.join(root, "_summary")
+        done = {os.path.basename(p)[5:13] for p in _g.glob(os.path.join(summ, "prod_2026*.json"))}
+        pend = [d for d in day_dirs if d not in done]
+        cur = pend[0] if pend else (day_dirs[-1] if day_dirs else None)
+        out["day"] = cur
+        out["day_index"] = (day_dirs.index(cur) + 1) if cur in day_dirs else 0
+        # 阶段清单（按真实流水线顺序 ✓）
+        STAGES = [("carry", "跨日结转"), ("low_logic", "low_logic"), ("ensure_mins", "补分钟档"),
+                  ("pack", "打包分钟"), ("legs", "布腿/候选"), ("prod", "生产链(触发→网关→模拟盘)"),
+                  ("summary", "写当日汇总")]
+        out["stages"] = [{"key": k, "label": v, "state": "pending"} for k, v in STAGES]
+        # 从日志尾部推当前阶段 ✓
+        f = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")
+        lines = []
+        if os.path.isfile(f):
+            out["log_mtime"] = os.path.getmtime(f)
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()[-400:]
+        tail = "".join(lines)
+        stage = ""
+        for k in ("summary", "prod", "legs", "pack", "ensure_mins", "low_logic", "carry"):
+            pat = {"carry": "跨日状态结转", "low_logic": "low_logic：", "ensure_mins": "ensure_mins",
+                   "pack": "打包目录", "legs": "拉分钟名单", "prod": "prod_2026", "summary": "prod_2026"}[k]
+            if pat in tail:
+                stage = k
+                break
+        out["stage"] = stage
+        idx = [x["key"] for x in out["stages"]].index(stage) if stage in [x["key"] for x in out["stages"]] else -1
+        for i, st in enumerate(out["stages"]):
+            st["state"] = "done" if (idx >= 0 and i < idx) else ("current" if i == idx else "pending")
+        # 事件（当日成交/触发 ✓）
+        sp = os.path.join(summ, "prod_%s.json" % cur) if cur else ""
+        if sp and os.path.isfile(sp):
+            try:
+                j = _j.load(open(sp, encoding="utf-8"))
+                for t in (j.get("trades") or []):
+                    out["events"].append({"kind": "trade", "text": "%s %s %s@%s" % (
+                        t.get("symbol"), t.get("direction"), t.get("volume"), t.get("price"))})
+                for g in (j.get("triggers") or [])[:40]:
+                    out["events"].append({"kind": "trigger", "text": "%s %s %s" % (
+                        g.get("symbol"), g.get("event_type"), g.get("status"))})
+            except Exception as _e_ev:
+                print("[dashboard] day_progress 读 summary 失败: %s" % str(_e_ev)[:60], flush=True)
+        out["log_tail"] = [ln.rstrip("\n")[:150] for ln in lines[-8:]]
+        # ★ 当日成交（带真实时刻 ✓，从 PG 取 ⇒ 「什么时刻发生了什么事」✓）
+        out["trades_pg"] = []
+        if account and cur:
+            try:
+                import psycopg2 as _pg2
+                _cn = _pg2.connect(os.environ.get("DATABASE_URL") or
+                                   "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading",
+                                   connect_timeout=6)
+                _cn.set_session(readonly=True, autocommit=True)
+                _c2 = _cn.cursor()
+                _c2.execute("SELECT created_at::text, symbol, direction, volume, price FROM paper_trades "
+                            "WHERE account_id=%s ORDER BY id DESC LIMIT 20", (account,))
+                for _r in _c2.fetchall():
+                    out["trades_pg"].append({"t": str(_r[0])[11:19], "d": str(_r[0])[:10], "sym": _r[1],
+                                             "dir": _r[2], "vol": _r[3], "px": float(_r[4] or 0)})
+                _cn.close()
+            except Exception as _e_pg:
+                print("[dashboard] day_progress 取成交失败: %s" % str(_e_pg)[:70], flush=True)
+    except Exception as _e_dp:
+        print("[dashboard] day_progress 失败: %s" % str(_e_dp)[:80], flush=True)
+        out["ok"] = False
+        out["error"] = str(_e_dp)[:120]
+    return out
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
