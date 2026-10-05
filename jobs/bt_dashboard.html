@@ -385,18 +385,27 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
 
 <main class="desk" id="desk">
 
-  <section class="pane" id="pane-progress" aria-labelledby="prog-h">
+  <section class="pane pane--progress" id="pane-progress" aria-labelledby="prog-h">
     <div class="pane__hd">
       <div class="pane__ttl"><h2 id="prog-h">当日进度</h2>
         <span class="pane__meta">走到什么时刻 · 发生了什么（每 5 秒刷新）</span></div>
       <span class="pane__meta" id="prog-day">—</span>
     </div>
-    <div style="padding:8px 12px">
-      <div class="meter" role="progressbar" aria-label="当日阶段进度" style="height:10px">
+    <div class="pane__bd">
+      <div class="meter" role="progressbar" aria-label="当日阶段进度" style="height:8px">
         <span class="meter__fill" id="prog-fill" style="width:0%"></span>
       </div>
-      <div id="prog-stages" style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0;font-size:12px"></div>
-      <div id="prog-events" style="font-size:12px;line-height:1.7"></div>
+      <div class="pg-rail" id="prog-rail"></div>
+      <div class="pg-cols">
+        <div>
+          <div class="pane__meta" style="margin-bottom:4px">事件（成交带真实时刻 / 触发）</div>
+          <div class="pg-ev" id="prog-events"></div>
+        </div>
+        <div>
+          <div class="pane__meta" style="margin-bottom:4px">实时日志尾</div>
+          <div class="pg-log" id="prog-log"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -2114,23 +2123,24 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     try {
       var r = await fetch('/api/progress', { cache: 'no-store' });
       var j = await r.json();
-      var day = j.day || '—';
-      el('prog-day').textContent = day + '（第 ' + (j.day_index || 0) + ' / ' + (j.days_total || 0) + ' 天）';
-      var stages = j.stages || [];
-      var cur = 0;
-      stages.forEach(function (s, i) { if (s.state === 'done') cur = i + 1; if (s.state === 'current') cur = i + 1; });
+      el('prog-day').textContent = (j.day || '—') + '（第 ' + (j.day_index || 0) + ' / ' + (j.days_total || 0) + ' 天）';
+      var stages = j.stages || [], cur = 0;
+      stages.forEach(function (s, i) { if (s.state !== 'pending') cur = i + 1; });
       el('prog-fill').style.width = (stages.length ? Math.round(100 * cur / stages.length) : 0) + '%';
-      el('prog-stages').innerHTML = stages.map(function (s) {
+      el('prog-rail').innerHTML = stages.map(function (s, i) {
         var mk = s.state === 'done' ? '✅' : (s.state === 'current' ? '▶️' : '⬜');
-        return '<span>' + mk + ' ' + esc(s.label) + '</span>';
+        var cls = s.state === 'done' ? 'pg-st pg-st--done' : (s.state === 'current' ? 'pg-st pg-st--cur' : 'pg-st');
+        return (i ? '<span class="pg-sep"></span>' : '') + '<span class="' + cls + '">' + mk + ' ' + esc(s.label) + '</span>';
       }).join('');
-      var ev = (j.events || []).slice(0, 12).map(function (e) {
-        return '<div>' + (e.kind === 'trade' ? '💰 ' : '⚡ ') + esc(e.text) + '</div>';
-      }).join('');
-      var lt = (j.log_tail || []).slice(-5).map(function (l) { return '<div style="opacity:.6">' + esc(l) + '</div>'; }).join('');
-      el('prog-events').innerHTML = (ev || '<div style="opacity:.6">（当日暂无成交/触发）</div>') +
-        '<div style="margin-top:6px;border-top:1px solid rgba(255,255,255,.08);padding-top:6px">' + lt + '</div>';
-    } catch (e) { /* 静默重试（看板自身不抛 ✓） */ }
+      var pg = j.trades_pg || [];
+      var ev = pg.length ? pg.slice(0, 20).map(function (t) {
+        return '<div><span class="t">' + esc(t.t) + '</span>' + (String(t.dir).indexOf('买') >= 0 ? '💰' : '💸') +
+          ' ' + esc(t.sym) + ' ' + esc(t.dir) + ' ' + esc(t.vol) + '@' + esc(t.px) + '</div>'; }).join('')
+        : '<div style="opacity:.55">（当日暂无成交）</div>';
+      el('prog-events').innerHTML = ev;
+      el('prog-log').innerHTML = (j.log_tail || []).slice(-8).map(function (l) {
+        return '<div>' + esc(l) + '</div>'; }).join('');
+    } catch (e) { /* 看板自身不抛 ✓ */ }
   }
   tick();
   setInterval(tick, 5000);
