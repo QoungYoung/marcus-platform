@@ -137,10 +137,20 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
     if not w:
         return {"gate": "ALLOWED", "why": "wave_state 不可得 ⇒ 放行 ✓"}
     try:
-        stop = bool(_wc.index_level_stop(wave=w, today=None))
+        # ★ 账本 §9.659 修正 ✓（自测抓到 ✗，**致命**）：
+        #   `index_level_stop()` 返回的是**元组** `(bool, str)` ✗
+        #     ⇒ 我先前写 `bool(...)` ⇒ **`(False, "不触发")` 是"非空元组" ⇒ 恒为真** ✗✗
+        #     ⇒ **把所有触发都判成 BLOCKED** ✗（回测会几乎没有交易 ✗）
+        #   ⇒ 必须**解包取第一个元素** ✓（并兼容只返回 bool 的旧签名 ✓）
+        _raw = _wc.index_level_stop(wave=w, today=None)
+        if isinstance(_raw, tuple):
+            stop, _why = (list(_raw) + [""])[:2]
+        else:
+            stop, _why = bool(_raw), ""
     except Exception as _e_s:
         print("[wave_gate] index_level_stop 失败 ⇒ 放行: %s" % str(_e_s)[:90], file=sys.stderr, flush=True)
         return {"gate": "ALLOWED", "why": "index_level_stop 异常（放行 ✓）"}
-    if stop:
-        return {"gate": "BLOCKED", "why": "指数大级别转下跌1浪（wave_state.level=down ✓ 狼大口径 ✓）"}
-    return {"gate": "ALLOWED", "why": "wave_state.level=%s（非 down ✓）" % str(w.get("level"))}
+    if bool(stop):
+        return {"gate": "BLOCKED",
+                "why": "指数大级别转下跌1浪（狼大口径 ✓）：%s" % str(_why or w.get("level"))[:80]}
+    return {"gate": "ALLOWED", "why": str(_why or ("wave_state.level=%s（非 down ✓）" % str(w.get("level"))))[:100]}
