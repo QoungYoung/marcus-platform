@@ -90,7 +90,7 @@ export WOLF_MEMBER_PREWARM_WORKERS='1'     # 单票兜底并发（主路径已�
 export WOLF_MEMBER_LLM_URL='http://127.0.0.1:13001/chat'
 export WOLF_MEMBER_BATCH='1'               # 主路径改**批量**：一次判 20–40 只（实测 40 只 10.0s），请求数 344/天→9–18/天。
 export WOLF_MEMBER_BATCH_SIZE='40'          # 每批只数（实测 n=25 → 18.9s；n=40 → 10.0s，都远低于 20s 超时）。
-export WOLF_MEMBER_BATCH_TIMEOUT='60'      # 批量专属超时：n=25 实测 18.9s、卡在 20s 边缘 ⇒ 必超时后退化成逐票兜底
+export WOLF_MEMBER_BATCH_TIMEOUT='90'      # 批量专属超时：n=25 实测 18.9s、卡在 20s 边缘 ⇒ 必超时后退化成逐票兜底
 export WOLF_MEMBER_BATCH_RETRY='1'         # 整批重试 1 次（一次请求覆盖 N 只，比逐票重试划算得多）
 export WOLF_MEMBER_FAIL_FAST='1'           # 批量失败后**不再逐票兜底**（0212 实测 18 票 × 42s ≈ 756s 全白等）
 export WOLF_MEMBER_RETRY='1'                # 失败退避重试次数（2→1：失败是 fail-open，0211 实测重试只是白等，单次失败成本 66s→42s）
