@@ -124,8 +124,8 @@ def _install_subprocess_rc() -> bool:
                     if isinstance(cmd, (list, tuple)):
                         cmd = " ".join(os.path.basename(str(x)) for x in cmd[:4])
                     _emit("subprocess", "subprocess.run", "rc=%s cmd=%s" % (rc, str(cmd)[:120]))
-            except Exception:
-                pass
+            except Exception as _e_s:
+                print("[silent-fix] %s: %s" % (__name__, str(_e_s)[:70]), flush=True)
             return r
 
         _run._marcus_wrapped = True

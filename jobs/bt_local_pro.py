@@ -137,8 +137,8 @@ def _is_allowed(u) -> bool:
     except Exception as _e_ah:
         try:
             sys.stderr.write("[net-offline] _is_allowed 失败: %s\n" % str(_e_ah)[:70])
-        except Exception:
-            pass
+        except Exception as _e_s:
+            print("[silent-fix] %s: %s" % (__name__, str(_e_s)[:70]), flush=True)
         return False
 
 
