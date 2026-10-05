@@ -741,8 +741,10 @@ def test_alert_hub_unified_qq_push():
     #   **回测里 QQ 置 0** ✓（`WOLF_ALERT_HUB` 钩子仍开 ✓ ⇒ 全部**落盘** ✓，看板可查 ✓）
     #   ★ 契约的**灵魂不变** ✓：钩子必开 ✓、必落盘 ✓、收件人必在 ✓、防刷屏必在 ✓
     #     变的只是"回测要不要真的打扰人" ✓ —— 生产仍按 `WOLF_ALERT_QQ=1` 推 ✓
-    assert "export WOLF_ALERT_HUB='1'" in pins, "钩子必须开（落盘靠它）✓"
-    assert "export WOLF_ALERT_QQ='0'" in pins, "回测不推 QQ（用户要求止噪）✓"
+    # ★ 账本 §9.644 ✓（用户：「怎么全都不通知了」✗）：**恢复推送** ✓
+    #   止噪不靠"关推送" ✗，而靠**过滤器**（路径只认仓库 ✓、类型只留真失败 ✓、note_silent 只落盘 ✓）
+    assert "export WOLF_ALERT_HUB='1'" in pins, "钩子必须开（落盘＋推送靠它）✓"
+    assert "export WOLF_ALERT_QQ='1'" in pins, "真失败必须能推出去 ✓"
     assert "export WOLF_ALERT_QQ_TO=" in pins, "收件人须写进 pins ✓"
 
 
