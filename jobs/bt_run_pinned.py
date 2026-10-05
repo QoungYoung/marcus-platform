@@ -260,8 +260,25 @@ class RelayShim:
 
     def _trade_days(self):
         if not hasattr(self, "_td_cache") or self._td_cache is None:
-            self._td_cache = [r[0] for r in self._conn().execute(
-                "SELECT DISTINCT trade_date FROM bars ORDER BY trade_date")]
+            try:
+                self._td_cache = [r[0] for r in self._conn().execute(
+                    "SELECT DISTINCT trade_date FROM bars ORDER BY trade_date")]
+            except Exception as _e_td:
+                # ★ 账本 §9.627 ✓：**在失败点把"真实路径 + 大小 + 表清单"打出来** ✗
+                #   背景 ✓：实测 `connect` **成功**（仪表没触发 ✗）但 `execute` 失败 ✗
+                #   ⇒ 典型症状是"路径不存在 ⇒ sqlite 建了个空库 ⇒ no such table: bars" ✗✓
+                import os as _os2
+                _p = str(getattr(self, "bars_db", "?"))
+                _sz = _os2.path.getsize(_p) if _os2.path.exists(_p) else -1
+                _tabs = []
+                try:
+                    _tabs = [r[0] for r in self._conn().execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' LIMIT 8")]
+                except Exception as _e2:
+                    _tabs = ["<查表也失败: %s>" % str(_e2)[:50]]
+                print("[shim] ✗ _trade_days 失败: %s｜bars_db=%r｜大小=%s｜CWD=%r｜表=%s｜env DATA_DIR=%r"
+                      % (str(_e_td)[:90], _p, _sz, _os2.getcwd(), _tabs, _os2.environ.get("DATA_DIR")), flush=True)
+                raise
         return self._td_cache
 
     def relay_items(self, api_name: str, fields: str = "", **params):

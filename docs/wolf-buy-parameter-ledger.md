@@ -29014,3 +29014,35 @@ else rm -rf "$ROOT"; mkdir -p "$ROOT" # ⇒ 删沙箱 ＋ 重新 seed ✓
 - 修掉本轮新增的 3 处静默点 ✓（`bt_local_pro`／`alert_exceptions`／`scan_unwired_failures` ✓）
 - 门 ✓：**58 passed** ✓｜**防回潮 0 处** ✓
 - 重启 ✓（从 0106 续 ✓）⇒ 信息类不再打扰 ✓
+
+---
+
+## §9.627 **★ `候选现算 rc=1` 的真凶：没设 `TMPDIR`** ✓（用户一路追问到底 ✓）
+
+### ① 排查过程（逐步排除 ✓）
+
+| 步骤 ✓ | 结果 ✓ |
+|---|---|
+| 我先前的 `NameError: sqlite3` ✗ | 已修 ✓ —— **但不是本条** ✗ |
+| 库文件本身 ✓ | **在**（302 MB ✓）、**有 `bars` 表** ✓、**224 万行** ✓、只读/读写都能开 ✓ |
+| 失败点定位 ✓ | `connect` **成功**（诊断里能列出表 ✓）⇒ ★ **失败的是那条 `SELECT DISTINCT … ORDER BY`** ✗ |
+| ★ **决定性 A/B** ✓ | **`TMPDIR=/tmp`** ⇒ **✅ 成功、413 天** ✓；**不设 `TMPDIR`** ⇒ **✗ 复现失败**（手工跑也失败 ✓）|
+
+### ② 真因 ✓
+
+- SQLite 的 **`SELECT DISTINCT trade_date FROM bars ORDER BY trade_date`**（**225 万行** ✓）
+  **需要临时文件** ✗ ⇒ 而**本环境默认临时目录不可写** ⇒ 报 **`unable to open database file`** ✗
+- ⇒ ⇒ **`候选现算` 每天都在失败** ✗（走 **fail-open** ⇒ 没人发现 ✗）
+
+### ③ 修法 ✓
+
+- **pins 里显式** `export TMPDIR='/tmp'` ✓（pins 在**起臂前**被 `set -a; . pins` source ✓ ⇒ 生效 ✓）
+- 实测 ✓：`[gen_confirm] ✅ 已现算 20260106 的候选 ✓（order=purity_amount ✓）`
+- ⚠️ **顺手纠错** ✓：我在**启动器末尾**追加的那 8 个 `export`（`TMPDIR`／`WOLF_ALERT_*`／`BT_NET_ALLOW_HOSTS` 等 ✗）
+  **全都写在"起 `bt_days` 之后"** ✗ ⇒ **对臂无效** ✗（真正生效的是 **pins** 里那份 ✓）
+  ⇒ 已**删除启动器里的冗余行** ✓（`bash -n` ✓），避免下次再被误导 ✓
+
+### ④ 教训 ✓
+
+- **追加环境变量必须确认"在起臂之前"** ✗（本次 8 个全部位置错误 ✗，靠 pins 兜住 ✓）
+- **跨目录/临时文件的失败容易被误判成"路径不存在"** ✗ ⇒ 本次靠 **A/B（设/不设 `TMPDIR`）** 一击定位 ✓
