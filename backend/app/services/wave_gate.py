@@ -132,10 +132,12 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
         import wolf_context as _wc                       # apps/main_line/wolf_context.py ✓
     except Exception as _e_i:
         print("[wave_gate] 导入 wolf_context 失败 ⇒ 放行: %s" % str(_e_i)[:90], file=sys.stderr, flush=True)
-        return {"gate": "ALLOWED", "why": "wolf_context 不可用（放行 ✓）"}
+        return {"allowed": True, "mode": "auto", "regime": "ACTIVE", "gate": "ALLOWED",
+                "why": "wolf_context 不可用（放行 ✓）"}
     w = wave or ensure_wave(as_of=as_of)
     if not w:
-        return {"gate": "ALLOWED", "why": "wave_state 不可得 ⇒ 放行 ✓"}
+        return {"allowed": True, "mode": "auto", "regime": "ACTIVE", "gate": "ALLOWED",
+                "why": "wave_state 不可得 ⇒ 放行 ✓"}
     try:
         # ★ 账本 §9.659 修正 ✓（自测抓到 ✗，**致命**）：
         #   `index_level_stop()` 返回的是**元组** `(bool, str)` ✗
@@ -149,8 +151,17 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
             stop, _why = bool(_raw), ""
     except Exception as _e_s:
         print("[wave_gate] index_level_stop 失败 ⇒ 放行: %s" % str(_e_s)[:90], file=sys.stderr, flush=True)
-        return {"gate": "ALLOWED", "why": "index_level_stop 异常（放行 ✓）"}
+        return {"allowed": True, "mode": "auto", "regime": "ACTIVE", "gate": "ALLOWED",
+                "why": "index_level_stop 异常（放行 ✓）"}
+    # ★ 账本 §9.659 再修正 ✓（用户 QQ：`t_monitor.py:3597/4501/6201/6258  raise×N：'allowed'` ✗）：
+    #   我上一版只返回 `{"gate","why"}` ✗ ⇒ 而调用方取 `gate["allowed"]` ✗ ⇒ **KeyError 刷屏** ✗✗
+    #   ⇒ 必须与旧 `t_regime.check_gate` **同形状** ✓：
+    #     `{"allowed": bool, "mode": "auto"|"human_confirm"|"blocked", "regime": str}` ✓
+    #     （`gate`／`why` 作为**附加键**保留 ✓，不影响调用方 ✓）
     if bool(stop):
-        return {"gate": "BLOCKED",
+        return {"allowed": False, "mode": "blocked", "regime": "down" if False else "HALT",
+                "gate": "BLOCKED",
                 "why": "指数大级别转下跌1浪（狼大口径 ✓）：%s" % str(_why or w.get("level"))[:80]}
-    return {"gate": "ALLOWED", "why": str(_why or ("wave_state.level=%s（非 down ✓）" % str(w.get("level"))))[:100]}
+    return {"allowed": True, "mode": "auto", "regime": "ACTIVE",
+            "gate": "ALLOWED",
+            "why": str(_why or ("wave_state.level=%s（非 down ✓）" % str(w.get("level"))))[:100]}
