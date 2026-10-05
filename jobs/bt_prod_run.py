@@ -1576,10 +1576,14 @@ def main() -> int:
     try:
         import app.services.t_monitor as _tm
         # ★ 账本 §9.648 ✓：`t_monitor.round_timing` 实测**不存在** ✗ ⇒ 用 getattr 兜底 ✓
-        _rt = (getattr(_tm, "round_timing", None) or (lambda: {}))()
-        _seg = " ".join("%s=%.1f" % (k, v) for k, v in _rt["secs"].items())
-        print("[prod] _round 细分(s)：%s | bars=%d triggers=%d"
-              % (_seg, _rt["bars"], _rt["triggers"]), file=sys.stderr)
+        # ★ 账本 §9.648 修正 ✓（用户 QQ：`bt_prod_run.py:809  raise×1：'secs'` ✗）：
+        #   我上一版把兜底写成 `(lambda: {})()` ✗ ⇒ 调用方取 `_rt["secs"]` ✗ ⇒ **KeyError** ✗
+        #   ⇒ 改为**全部用 `.get()`** ✓（缺字段就跳过 ✓）+ 外层 try 兜住 ✓
+        #      ⇒ **这只是"日终诊断打印"** ✗ ⇒ 绝不该影响跑批 ✓
+        _rt = (getattr(_tm, "round_timing", None) or (lambda: {}))() or {}
+        _seg = " ".join("%s=%.1f" % (k, v) for k, v in (_rt.get("secs") or {}).items())
+        print("[prod] _round 细分(s)：%s | bars=%s triggers=%s"
+              % (_seg, _rt.get("bars", "-"), _rt.get("triggers", "-")), file=sys.stderr)
         # 止损扫描"是否空转"必须与耗时同屏：缓存省了多少 + 扫描异常条数（>0 = 止损判定被吞，绝不等于优化）
         _sc = _rt.get("stop_cond_cache") or {}
         try:
