@@ -737,7 +737,12 @@ def test_alert_hub_unified_qq_push():
     bp = open(os.path.join(_ROOT, "jobs", "bt_prod_run.py"), encoding="utf-8").read()
     assert "_ahP.install()" in bp, "回测驱动也须安装 ✓"
     pins = open(os.path.join(_ROOT, "jobs", "bt_env_pins.sh"), encoding="utf-8").read()
-    assert "export WOLF_ALERT_HUB='1'" in pins and "export WOLF_ALERT_QQ='1'" in pins
+    # ★ 账本 §9.643 ✓（用户 2026-10-05：「机器人疯狂推送,我要烦死了」✗）：
+    #   **回测里 QQ 置 0** ✓（`WOLF_ALERT_HUB` 钩子仍开 ✓ ⇒ 全部**落盘** ✓，看板可查 ✓）
+    #   ★ 契约的**灵魂不变** ✓：钩子必开 ✓、必落盘 ✓、收件人必在 ✓、防刷屏必在 ✓
+    #     变的只是"回测要不要真的打扰人" ✓ —— 生产仍按 `WOLF_ALERT_QQ=1` 推 ✓
+    assert "export WOLF_ALERT_HUB='1'" in pins, "钩子必须开（落盘靠它）✓"
+    assert "export WOLF_ALERT_QQ='0'" in pins, "回测不推 QQ（用户要求止噪）✓"
     assert "export WOLF_ALERT_QQ_TO=" in pins, "收件人须写进 pins ✓"
 
 
@@ -845,7 +850,7 @@ def test_dual_source_audit_fixes():
     assert "_sys.modules.items()" in seg, "须遍历已导入模块 ✓"
     assert 'setattr(mod, "fetch_tencent_quote", _fake)' in seg, "行情替身广播 ✓"
     assert 'setattr(mod, "_is_trading_time"' in seg, "时段门广播 ✓"
-    assert 'setattr(mod, "datetime", datetime.datetime)' in seg, "模拟时钟广播 ✓"
+    assert 'setattr(mod, "datetime", _dt.datetime)' in seg, "模拟时钟广播 ✓（§9.616：本文件导入的是 datetime as _dt，原 datetime.datetime 会 NameError ✗）"
     assert "_REAL_DATETIME_CLS" in bp, "须记录原类以识别待替换模块 ✓"
 
 

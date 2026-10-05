@@ -270,8 +270,11 @@ def _norm_bar(b) -> dict:
         #   ⇒ 判据与 `bt_pack_mins.py:76` 完全一致 ✓：
         #     **列数 >= 9 且 b[2] 不是数值（就是 freq 字符串 ✓）⇒ 下标整体后移 1** ✓
         _off = 1 if (len(b) >= 9 and not isinstance(b[2], (int, float))) else 0
-        t, o, h, l, c, v, amt = (b[1 + _off], b[2 + _off], b[3 + _off], b[4 + _off],
-                                 b[5 + _off], b[6 + _off], b[7 + _off])
+        # ⚠️ 注意 ✓：**`t` 不动** ✗（`b[1]` 恒为时间 ✓，实测 9 列的 `b[2]` 才是 freq='5MIN' ✓）
+        #   我第一版把 `t` 也后移了 ✗ ⇒ time 变成 '5MIN' ✗ ⇒ 自查发现并纠正 ✓
+        t = b[1]
+        o, h, l, c, v, amt = (b[2 + _off], b[3 + _off], b[4 + _off],
+                              b[5 + _off], b[6 + _off], b[7 + _off])
         # ⚠️ 指数走本地 ClickHouse 兜底时**只有 close**（open/high/low 为 null，实测 20260105 的
         #    `000001_SH_5min_20260105.json`）→ 用 close 兜住，否则 float(None) 直接 KeyError/TypeError
         #    （指数只用于 `index.m5_dump` / `index.intraday_dd`，两处都只读 close/high）。

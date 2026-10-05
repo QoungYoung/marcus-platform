@@ -29276,3 +29276,36 @@ cli.settimeout(None)     # ★ 下行 pump 同样 ✓（body 读完后就取消 
 - **QQ** ⇒ **只给"真失败"** ✓（`ValueError`／`KeyError`／`OperationalError`／`rc≠0` ✓）
 - **落盘（看板可回看 ✓）** ⇒ **+ 降级类 ＋ 预期内 raise** ✓
 - 开关 ✓：`WOLF_ALERT_ON_RAISE`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
+
+---
+
+## §9.643 **止住 QQ 刷屏 ＋ 修三条真 bug** ✓
+
+### ① ★ 止噪（用户：「机器人疯狂的给我推送消息，我要烦死了」✗）
+
+- `jobs/bt_env_pins.sh`：**`WOLF_ALERT_QQ` 1 ⇒ 0** ✓ ⇒ **回测不再推 QQ** ✗
+- **一切照旧落盘** ✓（`<DATA_DIR>/<日>/alerts.jsonl` ✓ ⇒ 看板「告警回看」可查 ✓）
+- `WOLF_ALERT_HUB` **仍为 1** ✓（钩子开着才能落盘 ✓）
+- **生产**另行置 `WOLF_ALERT_QQ=1` ✓
+- 契约测试 `test_alert_hub_unified_qq_push` **同步更新** ✓（灵魂不变：钩子必开 ✓、
+  必落盘 ✓、收件人必在 ✓、防刷屏必在 ✓；变的只是"回测要不要打扰人" ✓）
+
+### ② 三条真 bug（全靠用户贴 QQ 发现 ✓）
+
+| 告警 ✗ | 真因 | 影响 |
+|---|---|---|
+| `t_monitor.py:2490 name 'json' is not defined` ✗ | 用了**裸 `json.`** 而全文无 `import json`（别处用 `_json` ✓）| 该处**必抛** ⇒ 走兜底 ✗ |
+| ★ `wolf_index_breadth.py:176 name '_normalize_symbol' is not defined` ✗ ×336 | **漏导入**（定义在 `t_data_sources` ✓）| ★ **黄白线（指数广度）判据长期退化** ✗ |
+| `bt_prod_run.py:250 could not convert string to float: '5MIN'` ✗ | `_norm_bar` 按 **8 列**读 ⇒ **9 列**文件（带 `freq` ✓）的 `b[2]='5MIN'` 被当 open ✗ | ★ **整根 bar 被静默丢弃** ✗（真数据丢失 ✓）|
+| `wolf_high_pos_vol.py:123 float('')` ✗ ×378 | `_f('')` 走 except（**行为本来不变** ✓）| 仅噪音 ✓（先挡空串 ✓）|
+
+- `_norm_bar` 修法与 `bt_pack_mins.py:76` **同一判据** ✓（列数 ≥9 且 `b[2]` 非数值 ⇒ 下标后移 1 ✓）
+- ⚠️ **我第一版把 `t` 也后移了** ✗ ⇒ `time='5MIN'` ✗ ⇒ **自查（打印 9 列/8 列对照）当场抓到** ✓ 并纠正 ✓
+  ⇒ 现在两者**逐字段一致** ✓
+
+### ③ 噪音分类（重启后只落盘 ✓）
+
+`_QUIET_TYPES`（8 类 ✓）：`ImportError`／`ModuleNotFoundError`／`AttributeError`／
+`FileNotFoundError`／`JSONDecodeError`／`UnicodeDecodeError`／`NetOffline`／`TushareRelayError`
+⇒ 覆盖：pandas 内部（另由**路径过滤**挡住 ✓）、可选依赖守卫、monkey-patch 探针、
+可选文件缺失、503 空响应、断网 shim ✓
