@@ -64,7 +64,8 @@ def scan_file(path: str):
         if isinstance(node, ast.If):
             try:
                 test = ast.unparse(node.test)
-            except Exception:
+            except Exception as _e_t:
+                print("[scan_unwired] test 解析跳过: %s" % str(_e_t)[:70], flush=True)
                 continue
             if any(h in test for h in FAIL_HINTS):
                 seg = ast.Module(body=node.body, type_ignores=[])
