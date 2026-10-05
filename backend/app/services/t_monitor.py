@@ -2495,6 +2495,11 @@ class TMonitor:
           「带量(上证持续2000E以上)**站上2930那再加仓**」（2016-05-17）
         ⇒ 只对**非埋伏仓** ✓（埋伏仓另有"回踩不破前低"体系 ✓）；每票每轮**最多加 2 次** ✓（他的"最多买 2 笔"）
         """
+        # ★ 账本 §9.641 补 ✓（用户：这条**刚刚还在推** ✗ ⇒ 是**在跑的** ✓）：
+        #   本方法在 2521/2749 用 `_json.load/dump` ✗，但**方法内没有导入** ✗
+        #   ⇒ 我上一版只把 `json.` 改名成 `_json.` ⇒ **错误照旧（换了名字）** ✗
+        #   ⇒ 现在补上**局部导入** ✓（与文件里其余四处同一写法 ✓）
+        import json as _json
         _bo = str(os.getenv("WOLF_BREAKOUT_ADD", "0")).strip().lower() in ("1", "true", "yes", "on")
         _rt = str(os.getenv("WOLF_RETEST_ADD", "0")).strip().lower() in ("1", "true", "yes", "on")
         if not (_bo or _rt):
