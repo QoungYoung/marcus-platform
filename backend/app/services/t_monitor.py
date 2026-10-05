@@ -2518,7 +2518,7 @@ class TMonitor:
             try:
                 if os.path.exists(_pf):
                     with open(_pf, encoding="utf-8") as _f:
-                        _bk = json.load(_f) or {}
+                        _bk = _json.(_f) or {}
             except Exception:
                 _bk = {}
             for _p in self._discipline_positions():
@@ -2746,7 +2746,7 @@ class TMonitor:
                     _bk[_sym] = _st
                     try:
                         with open(_pf, "w", encoding="utf-8") as _f:
-                            json.dump(_bk, _f, ensure_ascii=False, indent=1)
+                            _json.(_bk, _f, ensure_ascii=False, indent=1)
                     except Exception as _e_sil11:
                         try:
                             from app.services import alert_hub as _ah_sil

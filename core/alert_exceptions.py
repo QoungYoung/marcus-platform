@@ -44,7 +44,11 @@ def _should_ignore(exc_type) -> bool:
 #     · `ImportError`／`ModuleNotFoundError` ⇒ 可选依赖守卫 ✓（`vnpy`／`core.xueqiu_engine` ✓）
 #     · `AttributeError` ⇒ 探针式 `getattr`（我们自己的 shim ✓，实测 `__init__.py:19` ✓）
 #   其余（`ValueError`／`KeyError`／`OperationalError` … ✓）⇒ 照常**推 QQ** ✓
-_QUIET_TYPES = ("ImportError", "ModuleNotFoundError", "AttributeError")
+# ★ 追加 ✓（用户贴来的那屏 ✓）：`FileNotFoundError` 也是**降级类** ✗
+#   （可选文件缺失 ⇒ 走兜底 ✓，实测 `wolf_weekend_hedge.json`／`round_trip_state.json`／
+#     `trigger_mute_<日>.json`／`stock_5m_bt/<code>.json` ✓）⇒ **只落盘、不推 QQ** ✓
+_QUIET_TYPES = ("ImportError", "ModuleNotFoundError", "AttributeError", "FileNotFoundError",
+                "JSONDecodeError", "UnicodeDecodeError")
 
 
 def _emit(kind: str, where: str, exc) -> None:
