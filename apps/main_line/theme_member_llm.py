@@ -391,7 +391,9 @@ def is_member(symbol: str, concepts: List[str], theme: str) -> Tuple[bool, str]:
     return _tag(out)
 
 
-def prefetch(items, workers: int = 6) -> int:
+def prefetch(items, workers: int = int(os.getenv("WOLF_MEMBER_PREFETCH_WORKERS", "6") or 6)) -> int:
+    # ★ 账本 §9.657 ✓：**默认 6 路并发** ✗ ⇒ 单模型排队 ✗ ⇒ 延迟 ×N ✓
+    #   ⇒ `WOLF_MEMBER_PREFETCH_WORKERS` 可调 ✓（库内默认仍 6 ⇒ 生产零影响 ✓）
     """并发预热判定缓存（items = [(symbol, concepts, theme), ...]）。返回预热条数。
 
     为什么需要：布腿器是逐票串行调用（每票 ~2s）⇒ 一天几十票就是几分钟（0106 switch 实测 465s）。

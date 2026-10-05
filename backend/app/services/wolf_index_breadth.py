@@ -39,6 +39,14 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
+# ★ 账本 §9.642 ✓（用户 QQ 告警 `wolf_index_breadth.py:176  name '_normalize_symbol'
+#   is not defined` ✗ ×336 ✓ —— **每算一次广度就报一次** ✓）：
+#   **漏导入** ✗ —— 与 `t_monitor` 的裸 `json.` 同类 ✓
+#   ⇒ `_normalize_symbol` 定义在 `t_data_sources` ✓（照 `t_monitor.py:29` 的写法 ✓）
+#   ⇒ **影响** ✓：黄白线（指数广度）这条取数路径**每次抛异常** ⇒ 走兜底 ✗
+#     ⇒ 可能让"黄线/白线"判定**长期退化** ✗（狼大体系里这是**关键闸门** ✓）
+from app.services.t_data_sources import _normalize_symbol  # noqa: E402
+
 
 def _silent_alert(where, exc=None):
     """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。

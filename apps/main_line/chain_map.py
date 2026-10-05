@@ -1287,7 +1287,14 @@ VERIFY_POOL_CONCEPT_N = 6
 AI_CONF_MIN = 0.85
 AI_BORDERLINE_MIN = 0.5
 AI_MAX_PER_SEG = 10
-AI_WORKERS = 4   # 2026-09-09: AI 裁决并发(15主题全量曾>900s超时)
+# ★ 账本 §9.657 ✓（用户：查模型慢 10 倍 ✗）：**并发是"单模型排队"的元凶** ✗
+#   实测 ✓：同一 25 只批量 健康时 18.9s ✓ ⇒ 最近 >193s ✗（~10 倍）
+#     而这里是 **4 路并发** ✓（`theme_member_llm.prefetch` 还可再加 6 ✗）
+#     ⇒ 请求同时打到**同一个模型** ⇒ **排队** ✗ ⇒ 单个请求延迟 ~N 倍 ✓
+#   ⇒ 改为**环境可调** ✓：`WOLF_AI_WORKERS`（**库内默认仍 4** ✓ ⇒ 生产零影响 ✓；
+#     回测拟设 **1~2** ✗ ⇒ 用"少并发"换"每次都快" ✓）
+import os as _os_aw
+AI_WORKERS = max(1, int(_os_aw.getenv("WOLF_AI_WORKERS", "4") or 4))   # 2026-09-09: AI 裁决并发
 
 def concept_stocks(db, cname, limit):
     try:
