@@ -872,3 +872,5 @@ export WOLF_BT_ALSO_STOCK5MBT='1'   # 账本 §9.618：回测同时写 stock_5m_
 export WOLF_ALERT_FROM_LOGGING='1'   # 账本 §9.623：logging(WARNING+) 接告警中心（库内默认 0 ⇒ 生产零影响）
 
 export WOLF_ALERT_ON_RAISE='1'   # 账本 §9.624：异常抛出点接告警（库内默认 0 ⇒ 生产零影响）
+
+export BT_NET_ALLOW_HOSTS='bots.qq.com,api.sgroup.qq.com'   # 账本 §9.625：回测放行 QQ 推送域名（库内默认空 ⇒ 行为不变）

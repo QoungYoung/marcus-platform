@@ -88,7 +88,7 @@ def install_net_offline() -> Dict[str, int]:
             #   的 `/chat` 得到 405。实测定位于 pinned 子进程：裸 socket / http.client / 新建 opener 全 200，
             #   只有全局 `urlopen(Request)` 是 405。影响所有在回放子进程里用 urllib POST 的代码。
             _u = getattr(url, "full_url", url)
-            if _is_local(_u):
+            if _is_local(_u) or _is_allowed(_u):
                 return fn(url, *a, **kw)
             _note(_u)
             raise _NetOffline("BT_NET_OFFLINE: %s" % str(_u)[:80])
@@ -116,6 +116,30 @@ def install_net_offline() -> Dict[str, int]:
 
 _QUERY: Dict[str, Any] = {}
 _RELAY_FN: Dict[str, Any] = {}
+
+
+
+def _is_allowed(u) -> bool:
+    """★ 账本 §9.625 ✓：**出网白名单**（用户："QQ 没收到" ✓）
+
+    背景 ✓：回测默认 `BT_NET_OFFLINE=1` 切断一切出网 ✓（防 relay 30-60s 重试 ✓），
+      但它把 **QQ 推送**（`bots.qq.com` 取 token ＋ `api.sgroup.qq.com` 发消息 ✓）**也拦了** ✗
+      ⇒ 实测 `[QQ] AccessToken failed: BT_NET_OFFLINE: https://bots.qq.com/...` ✗
+    做法 ✓：`BT_NET_ALLOW_HOSTS`（逗号分隔 ✓，**默认空 ⇒ 行为完全不变** ✓）命中即放行 ✓
+    """
+    try:
+        import os as _os
+        hosts = [x.strip().lower() for x in str(_os.getenv("BT_NET_ALLOW_HOSTS", "")).split(",") if x.strip()]
+        if not hosts:
+            return False
+        low = str(u).lower()
+        return any(h in low for h in hosts)
+    except Exception as _e_ah:
+        try:
+            sys.stderr.write("[net-offline] _is_allowed 失败: %s\n" % str(_e_ah)[:70])
+        except Exception:
+            pass
+        return False
 
 
 def set_query_fn(fn) -> None:

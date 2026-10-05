@@ -28955,3 +28955,36 @@ else rm -rf "$ROOT"; mkdir -p "$ROOT" # ⇒ 删沙箱 ＋ 重新 seed ✓
 - 开关 **`WOLF_ALERT_ON_RAISE`**（**库内默认 0** ⇒ **生产零影响** ✓；pins ＋ 两启动器置 1 ✓）
 - `bt_days.py` ＋ `bt_prod_run.py` 末尾自动 `install()` ✓
 - 门 ✓：**58 passed** ✓｜**防回潮 0 处** ✓
+
+---
+
+## §9.625 **"我看到了告警，但 QQ 没收到"** ✓ —— **回测的断网模式把 QQ 也拦了** ✗
+
+### ① 真凶（臂日志原文 ✓）
+
+```
+[QQ] AccessToken failed: BT_NET_OFFLINE: https://bots.qq.com/app/getAppAccessToken
+```
+- 回测默认 **`BT_NET_OFFLINE=1`** ✓（防 relay 30-60s 重试 ✓）⇒ **切断一切出网** ✗
+  ⇒ ⇒ 把 **QQ 推送**（`bots.qq.com` 取 token ＋ `api.sgroup.qq.com` 发消息 ✓）**也拦了** ✗
+- ⇒ 而**手工测能通** ✓（没带那个环境 ✗）⇒ 所以"看着像没接" ✗，其实是**被断网挡了** ✓
+
+### ② 修法 ✓：出网**白名单**（默认空 ⇒ 行为完全不变 ✓）
+
+- `jobs/bt_local_pro.py` ✓ 新增 **`_is_allowed(u)`** ✓：读 **`BT_NET_ALLOW_HOSTS`**（逗号分隔 ✓）
+  ⇒ 在断网判定的**放行分支**里与 `_is_local` 并列 ✓（**不改任何既有判定顺序** ✓）
+- pins ＋ 两启动器置 ✓：`BT_NET_ALLOW_HOSTS='bots.qq.com,api.sgroup.qq.com'` ✓
+- **实测 ✓**：
+  · 白名单内 ⇒ `push_qq` 路径通 ✓、`send_c2c_message ⇒ True` ✓ 并打印
+    `[QQ] Message sent -> BF1510…` ✓
+  · 白名单外 ⇒ 仍被拦 ✓（`BT_NET_OFFLINE: https://example.com` ✓）
+- ⇒ **`note()` 类告警（ERROR／规则未生效／子进程 rc≠0 ✓）现在会真的推到 QQ** ✓
+
+### ③ 当前的告警三层网（汇总 ✓）
+
+| 层 ✓ | 覆盖 ✓ | 推送策略 ✓ |
+|---|---|---|
+| **异常抛出点**（§9.624 ✓ `sys.monitoring` ✓）| 被 `try/except` 吞掉的异常 ✓ | `note` ⇒ **落盘 ＋ 推 QQ** ✓（去重 600s ✓）|
+| **logging 桥**（§9.623 ✓）| `logger.warning/error` ✓ | WARNING ⇒ **只落盘** ✓；ERROR ⇒ **推** ✓ |
+| **子进程 rc≠0**（§9.622 ✓）| 子进程失败 ✓ | **推** ✓ |
+| **`note_silent`** ✓ | 静默点／文件缺失 ✓ | **只落盘** ✓（防刷屏 ✓）|
