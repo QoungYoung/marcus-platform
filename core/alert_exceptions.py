@@ -146,15 +146,33 @@ def _install_monitoring() -> bool:
             # ★ 回调自身绝不抛 ✓，但**留痕** ✓（防回潮门要求；stderr 不经 logger ⇒ 不递归 ✓）
             sys.stderr.write("[alert_exc] on_raise 失败: %s\n" % str(_e_or)[:80])
 
-    try:
-        mon.use_tool_id(TOOL, "marcus-alert")
-        mon.register_callback(TOOL, mon.events.RAISE, _on_raise)
-        mon.set_events(TOOL, mon.events.RAISE)
-        _STATE["monitoring"] = TOOL
-        return True
-    except Exception as e:
-        sys.stderr.write("[alert_exc] monitoring 安装失败: %s\n" % str(e)[:90])
-        return False
+    # ★ 账本 §9.652 ✓（用户贴来 `alert_exceptions.py:96  tool 3 is already in use` ✗）：
+    #   真因 ✓：`sys.monitoring` 的 **tool id 有限且互斥** ✗ ⇒ 同进程**装两次**
+    #     （或别的工具占了 3 ✓）⇒ `use_tool_id(3, …)` 抛 ✗ ⇒ **钩子静默失效** ✗
+    #   ⇒ 改为：**在候选 id 里挑一个空闲的** ✓（先 `get_tool(id)` 查占用 ✓，
+    #     再 `use_tool_id` ✓；任一可用即装 ✓；全占满才放弃 ✓ 并**大声报** ✓）
+    _mon = getattr(sys, "monitoring", None)
+    _last = ""
+    for _tid in (3, 4, 5, 2):
+        try:
+            if _mon is not None and getattr(_mon, "get_tool", None):
+                if _mon.get_tool(_tid) is not None:
+                    continue                      # 该 id 已被占 ⇒ 试下一个 ✓
+            mon.use_tool_id(_tid, "marcus-alert")
+            mon.register_callback(_tid, mon.events.RAISE, _on_raise)
+            mon.set_events(_tid, mon.events.RAISE)
+            _STATE["monitoring"] = _tid
+            if _tid != TOOL:
+                sys.stderr.write("[alert_exc] tool id 3 被占 ⇒ 改用 %d ✓\n" % _tid)
+            return True
+        except Exception as _e_t:
+            _last = str(_e_t)[:80]
+            try:
+                mon.free_tool_id(_tid)            # 清掉半装状态 ✓ 再试下一个 ✓
+            except Exception as _e_f:
+                sys.stderr.write("[alert_exc] free_tool_id(%d) 失败: %s\n" % (_tid, str(_e_f)[:60]))
+    sys.stderr.write("[alert_exc] monitoring 全部 id 都不可用: %s\n" % _last)
+    return False
 
 
 def _install_subprocess_rc() -> bool:
