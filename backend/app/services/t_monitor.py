@@ -2149,6 +2149,16 @@ class TMonitor:
             if res.get("skip") or not res.get("sells"):
                 if res.get("skip"):
                     print(f"[TMonitor] 去弱留强不动作: {res['skip']}", flush=True)
+                    # ★ 账本 §9.619 ✓：**"规则因门槛未生效"要推 QQ** ✓（用户 2026-10-05 要求 ✓）
+                    #   为什么 ✓：这类"规则没跑"比"文件缺失"重要得多 —— 它意味着**策略少了一道判据** ✗
+                    #   （本次实例：`去弱留强不动作: 持仓有效样本 2 < 门槛 3` ✓，根因是主题判定
+                    #     `not_confirmed` ✓ ⇒ 规则遵命 ✓；但**必须让人看见** ✓）
+                    #   推送受 alert_hub 的去重(600s)/限流约束 ⇒ 不会刷屏 ✓；`note` 绝不抛 ✓
+                    try:
+                        from app.services import alert_hub as _ah_disc
+                        _ah_disc.note("t_monitor.去弱留强", msg="不动作: %s" % str(res.get("skip"))[:200])
+                    except Exception as _e_d1:
+                        _silent_alert("t_monitor.py:2151", _e_d1)
                 return
             today = datetime.now().strftime('%Y%m%d')
             quotes = fetch_tencent_quote([_normalize_symbol(s["symbol"]) for s in res["sells"]])
