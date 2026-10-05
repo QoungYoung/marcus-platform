@@ -5,6 +5,8 @@ import { homedir } from 'node:os';
 import { readdir, rm, stat } from 'node:fs/promises';
 
 const name = "dsh-marcus-bridge";
+// ★ 账本 §9.610：fork 迁移是否**复制历史**（默认 1 = 原行为 ✓）
+const FORK_SEED = String(process.env.BRIDGE_FORK_SEED === undefined ? "1" : process.env.BRIDGE_FORK_SEED).trim() !== "0";
 const inject = ["webServer","agents","tools"];
 
 // ═══ 可选全局出站代理（web_search / LLM 出站 fetch 共用 undici 全局 dispatcher）═══
@@ -1197,7 +1199,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
           agentOptions: { provider: 'deepseek-official', model: modelId },
           meta: { cwd: process.env.MARCUS_WORKSPACE || '/app' },
           setup: makeAgentSetup(mode, newSessionId),
-          ...(seed.length ? { seed } : {}),
+          ...(FORK_SEED && seed.length ? { seed } : {}),
         });
         handle._ts = Date.now();
         sessions.set(mode + ':' + newSessionId, handle);

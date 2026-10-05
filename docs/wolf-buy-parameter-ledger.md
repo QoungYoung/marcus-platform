@@ -28499,3 +28499,45 @@ DSH rc.6 bug（会话 driver 起不来）
 3. **内存峰值 < 12 GB** ✓
 - ⇒ 三条都成立 ⇒ **本轮回测可用** ✓（仍是**缓解** ✓，不是根治 ✗）
 - ⇒ 我已在守护/监控里盯这三条 ✓
+
+---
+
+## §9.610 **方案 B 落地：fork 迁移不再复制历史** ✓（开关默认保持生产行为 ✓）
+
+### ① 改了什么 ✓
+
+- **容器内真实桥文件** ✓：`/root/.dsh/profiles/service/node_modules/dsh-dsh-marcus-bridge/lib/index.js` ✓
+  （★ 与仓库副本 `docker/dsh/bridge/lib/index.js` **不是同一版本** ✗：容器 90,152 字节／仓库 109,610 ✓
+   ⇒ 我**没有覆盖** ✗，只在**各自**加了同一道门 ✓）
+- **保留 `dispose`** ✓（它释放内存 ✓，是有益的 ✓）；**只去掉"复制历史"** ✗：
+```js
+// 新增（默认 1 = 原行为 ✓）
+const FORK_SEED = String(process.env.BRIDGE_FORK_SEED === undefined ? "1"
+                                 : process.env.BRIDGE_FORK_SEED).trim() !== "0";
+// 原来
+...(seed.length ? { seed } : {})
+// 现在
+...(FORK_SEED && seed.length ? { seed } : {})      ← 回测置 0 ⇒ **不复制** ✓
+```
+
+### ② 部署（都在**持久卷** `/root/.dsh` 里 ✓ ⇒ 重启保留 ✓）
+
+| 步骤 ✓ | 结果 ✓ |
+|---|---|
+| 取出 → 本地改 → 放回（`docker cp` ✓）| 容器内 `FORK_SEED` **2 处** ✓、`node --check` 通过 ✓ |
+| 仓库副本加同一道门 ✓ | **2 处** ✓（版本控制 ✓，`node --check` ✓）|
+| `recreate_dsh.py` 加 env ✓ | `BRIDGE_FORK_SEED=0` ✓（在 `envs` 列表里 ✓）|
+| 重建容器 ✓ | **RC=0** ✓、**堆上限 12336 MB** ✓、`BRIDGE_FORK_SEED=0` ✓、`13001` ✓ |
+
+### ③ 为什么这样能减内存 ✓
+
+- DSH rc.6 的 bug 会**反复 fork** ✗ ⇒ 每次 fork **整份复制事件历史** ✗（实测 `seed 47387` ✓）
+- ⇒ 置 0 后：**新会话从空开始** ✓ ⇒ 复制那部分**直接归零** ✓
+- ⚠️ 代价 ✓：fork 后**丢失上下文** ✗ —— 但**回测的每个 prompt 都是自包含的** ✓ ⇒ 无影响 ✓
+- ⚠️ **生产保持原样** ✓（env 不设 ⇒ 默认 1 ✓）
+
+### ④ 验收判据 ✓
+
+1. 桥的 fork 日志出现 **`（seed 0 事件）`** ✓ ← **开关生效的铁证** ✓
+2. 密集调用期内存峰值 **明显低于** 之前（此前约 **2.7 GiB/分钟** ✗）
+3. `RC` 保持 **0** ✓、`RemoteDisconnected` 显著减少 ✓
