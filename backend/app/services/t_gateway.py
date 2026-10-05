@@ -2852,7 +2852,9 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                         _sysA.path.insert(0, _jobsA)
                     import arm_db as _adbA
                     _cA = _adbA.connect(account_id)
-                    _rA = _cA.execute("SELECT promoted FROM pos_meta WHERE account_id=? AND symbol=?",
+                    # ★ 账本 §9.614：列名修正 ✗ —— `arm_db.SCHEMA` 里是 **`account`** ✓，原写 `account_id` ✗
+                    #   ⇒ 该查询**永远抛** `no such column: account_id` ✗ ⇒ **永远走兜底** ✗
+                    _rA = _cA.execute("SELECT promoted FROM pos_meta WHERE account=? AND symbol=?",
                                       (account_id, symbol)).fetchone()
                     _cA.close()
                     if _rA and int(_rA[0] or 0) == 1:

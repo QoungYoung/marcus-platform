@@ -28636,3 +28636,29 @@ const FORK_SEED = String(process.env.BRIDGE_FORK_SEED === undefined ? "1"
 - **不要在中间层"统一覆盖"调用方的关键参数** ✗ —— 哪怕动机是"统一治理内存" ✓
 - 中间层应**只补缺**（没有才注入 ✓），而不是**改写** ✓
 - 且：**先做对照实验再改** ✓（这次是用户的直觉先到 ✓，我该更早做那个四 mode 实验 ✓）
+
+---
+
+## §9.614 **网关读臂库的列名写错** ✗（`account_id` ⇒ `account` ✓）
+
+### ① 现象 ✓
+
+```
+[gateway] 臂库转正查询失败（继续用旧路径 ✓）: no such column: account_id
+```
+
+### ② 根因 ✓（一行 ✗）
+
+| ✓ | 内容 ✓ |
+|---|---|
+| `jobs/arm_db.py` 的 `SCHEMA` ✓ | `pos_meta(account TEXT, symbol TEXT, …, promoted …, PRIMARY KEY (account, symbol))` ✓ |
+| 网关查询 ✗ | `SELECT promoted FROM pos_meta WHERE **account_id**=? AND symbol=?` ✗ |
+| ⇒ 后果 ✓ | **永远抛** `no such column: account_id` ✗ ⇒ **永远走旧 JSON 兜底** ✗（功能静默降级 ✗）|
+| 范围 ✓ | 全仓**只此一处** ✓（`t_gateway.py:2855` ✓）|
+
+### ③ 修法 ✓
+
+- 改为 `WHERE account=? AND symbol=?` ✓（与 `arm_db.SCHEMA` 一致 ✓），保留 fail-open ✓
+- **实测** ✓：对真实库 `data/_bt_t35d/drabt35d.sqlite` 跑同一查询 ⇒ **成功** ✓
+  （库内 `pos_meta` 现有行：见下 ✓）
+- 为什么没早发现 ✓：**fail-open 掩盖了它** ✗（只在日志里留一行 ✓）⇒ 属于"静默降级"的典型 ✓
