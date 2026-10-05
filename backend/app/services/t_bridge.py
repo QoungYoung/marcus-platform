@@ -74,12 +74,31 @@ def _recent_decisions(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
         return []
     if str(os.getenv("WOLF_AGENT_TRIM_RECENT", "1")).strip().lower() in ("0", "false", "no", ""):
         return rows
+    # ★ 账本 §9.635 ✓（用户：「省的都是什么提示词」⇒ **连问两次才发现正确边界** ✗）：
+    #   实测记录结构 ✓：`input_snapshot = {"context": …, "trigger": {…, "snapshot": {…}}}`
+    #     ① `trigger` 的**外层字段**（id/mode/status/symbol/quote_price/suggest_* ✓）
+    #        ⇒ **与消息里【做T触发】那段重复** ✗ ⇒ **可删** ✓
+    #     ② ★ **`trigger.snapshot`** ⇒ **规则证据**（`wolf_rule` 原话 ✓、`vol_ratio` ✓、
+    #        `day_quantile` ✓、`day_rise_pct` ✓、`prev_low`/`today_low` ✓、`quote_time` ✓）
+    #        ⇒ **AI 决策理由直接引用** ✗（实测原话：「现价+3.73% 且日内分位76.4 非恐慌放量创新低」✓）
+    #        ⇒ ⇒ **必须保留** ✓✓
+    #   ⇒ 最终：**只留 `trigger.snapshot`** ✓，删 `trigger` 的其余外层字段 ✓
     out = []
     for r in (rows or []):
-        if isinstance(r, dict):
-            r = {k: v for k, v in r.items() if k != "input_snapshot"}
-        out.append(r)
-    return out
+        if not isinstance(r, dict):
+            out.append(r); continue
+        sn = r.get("input_snapshot")
+        if not isinstance(sn, dict):
+            out.append(r); continue
+        tr = sn.get("trigger")
+        if not isinstance(tr, dict):
+            out.append(r); continue
+        r2 = dict(r)
+        sn2 = dict(sn)
+        sn2["trigger"] = {"snapshot": tr.get("snapshot")}     # ★ 只留规则证据 ✓
+        r2["input_snapshot"] = sn2
+        out.append(r2)
+        return out
 
 
 def _symbol_t_stats(symbol: str) -> Dict[str, Any]:

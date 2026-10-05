@@ -29172,3 +29172,20 @@ else:      result = t_bridge.wake_and_decide(trig) or {}
 ### ⑤ 验收 ✓
 
 - 看 **0120**：`skip_moot` 计数 ✓｜`abandon` 占比（0119 是 **82%** ✗）✓｜`_agent_loop`（0119 是 **708 秒** ✗）✓｜`wake_failed` ✓
+
+### ⑥ §9.635 修正（用户：「省的都是什么提示词」⇒ **连问两次才对准边界** ✗）
+
+| 版本 ✓ | 削掉了什么 ✗ | 结果 ✓ |
+|---|---|---|
+| **v1（错 ✗）** | 整块删 `input_snapshot` ✗ | ★ **连规则证据一起删了** ✗（AI 看不到 `wolf_rule` 原话与两个分位数 ✓）|
+| **v2（仍错 ✗）** | 以为 `snapshot` 在**外层** ✗ ⇒ 实测 `input_snapshot.snapshot` **不存在** ✗ | 证据仍在 ✔ 但**没删对地方** ✗ |
+| **v3（对 ✓）** | ★ **只留 `trigger.snapshot`** ✓，删 `trigger` 的**外层字段** ✓ | **9242 ⇒ 1149 字符（省 88%）** ✓ 且**12 个证据字段全在** ✓ |
+
+- **删掉的外层字段**（逐个在消息【做T触发】里已有 ✓）：`id`／`symbol`／`quote_price`／
+  `suggest_bid_price`／`suggest_ask_price`／`trigger_price`／`condition_id`／`direction`／
+  `account_id`／`event_type`／`mode`／`status`／`slippage_budget` ✓
+- **保留的证据字段**（AI 决策理由直接引用 ✗）：`wolf_rule` ✓／`vol_ratio` ✓／`day_quantile` ✓／
+  `day_rise_pct` ✓／`prev_low`／`today_low`／`open`／`pre_close`／`quote_time`／`trigger_kind`／
+  `source`／`line_name` ✓
+- ★ **教训** ✓：**"看起来冗余"的字段要**打印原文**确认** ✗ —— 本次两层嵌套
+  （`input_snapshot.trigger.snapshot` ✓）连看两版才看准 ✓；削完必须**断言关键字段仍在** ✓
