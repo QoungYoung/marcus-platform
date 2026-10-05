@@ -59,6 +59,30 @@ os.environ.setdefault("PGOPTIONS", "-c lock_timeout=5000")
 import bt_local_market as _blm  # noqa: E402
 
 
+
+def _atomic_json_dump(payload, path):
+    """★ 账本 §9.628 ✓：**原子写** ✗（用户报 `Extra data` ✓）
+
+    背景 ✓：`t_monitor` 读 `recent_sync/<code6>.json` 时会报
+      `JSONDecodeError: Extra data: line 1 column N` ✗ —— 因为写方
+      `open(p, "w") + json.dump(...)` **不是原子的** ✗，读者能读到**半截** ✗。
+    做法 ✓：写同目录临时文件 ⇒ `os.replace`（同分区 ⇒ 原子 ✓）⇒ 读者只会看到
+      **旧版本或新版本**，不会是半截 ✓。与 `bt_prod_run.py:194-196` 既有范式一致 ✓。
+    """
+    import json as _j
+    import os as _o
+    tmp = "%s.tmp.%d" % (path, _o.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as _f:
+            _j.dump(payload, _f)
+        _o.replace(tmp, path)
+    except Exception as _e:
+        try:
+            _o.remove(tmp)
+        except Exception as _e2:
+            print("[atomic] 清理临时文件失败: %s" % str(_e2)[:60], flush=True)
+        raise
+
 def _silent_alert(where, exc=None):
     """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
 
@@ -470,8 +494,7 @@ class LocalMarket:
                     continue
                 payload[d] = [b for b in bs if d < self.day or str(b.get("time"))[11:16] <= hhmm]
             p = os.path.join(root, _code6(sym) + ".json")
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(payload, f)
+            _atomic_json_dump(payload, p)          # ★ §9.628 原子写 ✓
             # ★ 账本 §9.618 ✓：**同时写 `stock_5m_bt`**（生产里它也是合法的源 ✓，
             #   见 `apps/main_line/fetch_brze_target_5min.py`：`输出: data/stock_5m_bt/<code6>.json {date: [bars]}` ✓）
             #   为什么 ✓：各调用方的读取顺序**不一致** ✗（`plan_runner` 先读 `stock_5m_bt` ✗、
@@ -483,8 +506,7 @@ class LocalMarket:
                 try:
                     _r2 = os.path.join(data_dir, "stock_5m_bt")
                     os.makedirs(_r2, exist_ok=True)
-                    with open(os.path.join(_r2, _code6(sym) + ".json"), "w", encoding="utf-8") as _f2:
-                        json.dump(payload, _f2)
+                    _atomic_json_dump(payload, os.path.join(_r2, _code6(sym) + ".json"))   # ★ §9.628 ✓
                 except Exception as _e_s5:
                     print("[bt] 写 stock_5m_bt 失败 %s: %s" % (_code6(sym), str(_e_s5)[:60]), flush=True)
 
@@ -1413,6 +1435,16 @@ def main() -> int:
                          _ag_delta.get("wait", 0), _ag_delta.get("abandon", 0),
                          _ag_delta.get("update_condition", 0), _ag_delta.get("wake_failed", 0)),
                       file=sys.stderr)
+                # ★ 账本 §9.632 ✓（用户问「失败后补上了吗」✓）：
+                #   唤醒失败**不是丢弃** ✗ —— `bt_agent_loop` 会走 `t_bridge.agent_review_and_execute(trig)`
+                #   **规则兜底** ✓（记账在 `by_status` ✓）⇒ 这里把**兜底结果也打出来** ✓
+                #   ⇒ 否则只看 `wake_failed=N` 会误以为"这 N 条没人管" ✗
+                _fb = {k: v for k, v in (_ag_delta.get("by_status") or {}).items()
+                       if str(k) not in ("-", "")}
+                if _ag_delta.get("wake_failed"):
+                    print("[prod] %s 唤醒失败 %d 条 ⇒ **已走规则兜底** ✓（按状态: %s）"
+                          % (hhmm, _ag_delta.get("wake_failed"), _fb or {"（无状态记录）": 0}),
+                          file=sys.stderr)
         n1 = _count_triggers(a.account)
         nt = _count_trades(a.account)
         _bar_row = {"hhmm": hhmm, "triggers": n1 - n0, "trades_total": nt}
@@ -1647,10 +1679,20 @@ def _account_info(account: str):
 #   WARNING ⇒ 只落盘（看板可见 ✓）；ERROR ⇒ 落盘 ＋ 推 QQ ✓；**无需改任何调用点** ✓
 #   开关 `WOLF_ALERT_FROM_LOGGING`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
 try:
-    from core import alert_logging as _al_log
-    _al_log.install()
+    # ★ 账本 §9.638 ✓（用户连问"这个也不推送QQ"✗ ⇒ 查出**钩子根本没装上** ✓）：
+    #   实测 ✓：`from core import …` 在回测子进程里**失败** ✗（`No module named 'core'` /
+    #   `cannot import name 'alert_exceptions' from 'core'` ⇒ 环境里已有**另一个 core 包** ✗）
+    #   ⇒ **两个钩子全部静默失效** ✗ ⇒ 于是"该推的一条都没推" ✓✓
+    #   ⇒ 改成**按文件路径导入** ✓（与 `alert_hub.push_qq` 同一套路 ✓，不依赖 sys.path ✓）
+    import importlib.util as _ilu_a
+    _root_a = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # ★ 用 __file__ 推导（不依赖 REPO 变量 ✓）
+    _p_a = os.path.join(_root_a, "core", "alert_logging.py")
+    _sp_a = _ilu_a.spec_from_file_location("marcus_alert_logging", _p_a)
+    _m_a = _ilu_a.module_from_spec(_sp_a)
+    _sp_a.loader.exec_module(_m_a)
+    _m_a.install()
 except Exception as _e_al_log:
-    print("[bt] alert_logging 安装跳过: %s" % str(_e_al_log)[:70], flush=True)
+    print("[bt] alert_logging 安装失败: %s" % str(_e_al_log)[:90], flush=True)
 
 
 # ★ 账本 §9.624 ✓：**异常抛出点**接告警（用户："抛出异常来你推送给我不就行吗" ✓）
@@ -1659,10 +1701,15 @@ except Exception as _e_al_log:
 #   只报自家代码 ✓、按 (文件,行,类型) 去重 600 秒 ✓ ⇒ 不刷屏 ✓
 #   开关 `WOLF_ALERT_ON_RAISE`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
 try:
-    from core import alert_exceptions as _al_exc
-    _al_exc.install()
+    import importlib.util as _ilu_e            # ★ §9.638：按路径导入 ✓（不依赖 sys.path ✓）
+    _root_e = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _p_e = os.path.join(_root_e, "core", "alert_exceptions.py")
+    _sp_e = _ilu_e.spec_from_file_location("marcus_alert_exceptions", _p_e)
+    _m_e = _ilu_e.module_from_spec(_sp_e)
+    _sp_e.loader.exec_module(_m_e)
+    _m_e.install()
 except Exception as _e_al_exc:
-    print("[bt] alert_exceptions 安装跳过: %s" % str(_e_al_exc)[:70], flush=True)
+    print("[bt] alert_exceptions 安装失败: %s" % str(_e_al_exc)[:90], flush=True)
 
 if __name__ == "__main__":
     sys.exit(main())

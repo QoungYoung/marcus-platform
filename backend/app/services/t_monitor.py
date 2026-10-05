@@ -5267,7 +5267,17 @@ class TMonitor:
                                   f"cur={current}: {_v.get('reason')}")
                         return
                 except Exception as _ge:
+                    # ★ 账本 §9.638 ✓（用户：「这个也不推送QQ」✗）：
+                    #   **按我们的三分类，这条属于"真失败"** ✓ —— 它意味着
+                    #   **收盘确认守卫没跑成** ✗（正是狼大"等收盘确认破位才出"那道闸 ✓）
+                    #   ⇒ 只 print 不够 ✗ ⇒ **落盘 ＋ 推 QQ** ✓（受去重/限流约束 ✓）
                     print(f"[TMonitor] 止损守卫异常(按原口径执行) {symbol}: {str(_ge)[:100]}")
+                    try:
+                        from app.services import alert_hub as _ah_sc
+                        _ah_sc.note("t_monitor.止损守卫", msg="%s（按原口径执行 ✓）: %s"
+                                    % (symbol, str(_ge)[:180]))
+                    except Exception as _e_sc:
+                        print("[TMonitor] 止损守卫留痕失败: %s" % str(_e_sc)[:70], flush=True)
             # ── ④ 止损时点约束（2026-09-10）──
             # 狼大 2026-03-23:「每天的止损绝对不应该是下午1点到2点半这个时间。。。要么你早上卖 要么你尾盘卖」。
             # 该时段(默认 [13:00,14:30)) 只预警不执行; 收盘清仓(>=14:55)不受影响。

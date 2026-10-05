@@ -104,6 +104,19 @@ def _missing_mins_days(root: str, day8: str, syms) -> set:
 
 def mins_union_account() -> str:
     """拉分钟名单里「持仓 / 条件单」查询用的账户。
+            # ★ 账本 §9.639 ✓（用户要求：每日起跑前数据体检 ✓）
+            #   核对 `mins_adj/<日>` 档数 ≥ 当日名单 ✓ ⇒ 不达标就告警 ＋ 自动补齐 ✓
+            #   （20260120 出过「19/43 标的当日无行情」✗，根因是复权崩溃 ✓）
+            try:
+                import subprocess as _sp_c
+                _r_c = _sp_c.run([sys.executable, bt_env.jobs_file("bt_check_day_data.py"),
+                                  "--day", d8, "--root", str(a.out), "--fix"],
+                                 capture_output=True, text=True, timeout=1200)
+                _o_c = (str(_r_c.stdout or "") + str(_r_c.stderr or "")).strip().splitlines()
+                print("[days] %s 数据体检 rc=%s ⇒ %s" % (d8, _r_c.returncode,
+                      " ｜ ".join(_o_c[-2:])[:220]), flush=True)
+            except Exception as _e_c:
+                print("[days] %s 数据体检失败（不阻断 ✓）: %s" % (d8, str(_e_c)[:90]), flush=True)
 
     ⚠️ 2026-09-19 修（用户报：电科数字 SH600850 买了卖不出去、之后再没卖出过）：
     这段原先**硬编码 account_id='stock'** ⇒ 回测账户（drabjan10 等）自己的持仓不进并集名单
@@ -643,10 +656,20 @@ def _script_in_rev(d8: str, rel: str) -> str:
 #   WARNING ⇒ 只落盘（看板可见 ✓）；ERROR ⇒ 落盘 ＋ 推 QQ ✓；**无需改任何调用点** ✓
 #   开关 `WOLF_ALERT_FROM_LOGGING`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
 try:
-    from core import alert_logging as _al_log
-    _al_log.install()
+    # ★ 账本 §9.638 ✓（用户连问"这个也不推送QQ"✗ ⇒ 查出**钩子根本没装上** ✓）：
+    #   实测 ✓：`from core import …` 在回测子进程里**失败** ✗（`No module named 'core'` /
+    #   `cannot import name 'alert_exceptions' from 'core'` ⇒ 环境里已有**另一个 core 包** ✗）
+    #   ⇒ **两个钩子全部静默失效** ✗ ⇒ 于是"该推的一条都没推" ✓✓
+    #   ⇒ 改成**按文件路径导入** ✓（与 `alert_hub.push_qq` 同一套路 ✓，不依赖 sys.path ✓）
+    import importlib.util as _ilu_a
+    _root_a = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # ★ 用 __file__ 推导（不依赖 REPO 变量 ✓）
+    _p_a = os.path.join(_root_a, "core", "alert_logging.py")
+    _sp_a = _ilu_a.spec_from_file_location("marcus_alert_logging", _p_a)
+    _m_a = _ilu_a.module_from_spec(_sp_a)
+    _sp_a.loader.exec_module(_m_a)
+    _m_a.install()
 except Exception as _e_al_log:
-    print("[bt] alert_logging 安装跳过: %s" % str(_e_al_log)[:70], flush=True)
+    print("[bt] alert_logging 安装失败: %s" % str(_e_al_log)[:90], flush=True)
 
 
 # ★ 账本 §9.624 ✓：**异常抛出点**接告警（用户："抛出异常来你推送给我不就行吗" ✓）
@@ -655,10 +678,15 @@ except Exception as _e_al_log:
 #   只报自家代码 ✓、按 (文件,行,类型) 去重 600 秒 ✓ ⇒ 不刷屏 ✓
 #   开关 `WOLF_ALERT_ON_RAISE`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
 try:
-    from core import alert_exceptions as _al_exc
-    _al_exc.install()
+    import importlib.util as _ilu_e            # ★ §9.638：按路径导入 ✓（不依赖 sys.path ✓）
+    _root_e = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _p_e = os.path.join(_root_e, "core", "alert_exceptions.py")
+    _sp_e = _ilu_e.spec_from_file_location("marcus_alert_exceptions", _p_e)
+    _m_e = _ilu_e.module_from_spec(_sp_e)
+    _sp_e.loader.exec_module(_m_e)
+    _m_e.install()
 except Exception as _e_al_exc:
-    print("[bt] alert_exceptions 安装跳过: %s" % str(_e_al_exc)[:70], flush=True)
+    print("[bt] alert_exceptions 安装失败: %s" % str(_e_al_exc)[:90], flush=True)
 
 if __name__ == "__main__":
     sys.exit(main())
