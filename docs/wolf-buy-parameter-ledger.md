@@ -29309,3 +29309,21 @@ cli.settimeout(None)     # ★ 下行 pump 同样 ✓（body 读完后就取消 
 `FileNotFoundError`／`JSONDecodeError`／`UnicodeDecodeError`／`NetOffline`／`TushareRelayError`
 ⇒ 覆盖：pandas 内部（另由**路径过滤**挡住 ✓）、可选依赖守卫、monkey-patch 探针、
 可选文件缺失、503 空响应、断网 shim ✓
+
+---
+
+## §9.645 **"第三方内部异常不报，会不会影响我们计算？"** ✓（用户追问 ✓）
+
+### ① 判断依据（证据 ✓）
+
+- 这些 raise 的**抛点在第三方自己的文件里** ✓：实测 `pandas/core/dtypes/cast.py`／`dtypes.py` ✓
+- 实测 ✓：`pd.api.types.pandas_dtype('M8')` 在本环境（pandas **3.0.5**／numpy **2.5.2**）**并不抛** ✗
+  ⇒ 说明那条路径**库自己处理掉了** ✓ ⇒ 属于 **dtype 注册表探测/回落** ＝ **控制流** ✓
+- 结果侧佐证 ✓：0120 产物正常（**51 笔成交**／2795 触发／`market_missing: []`／`decision.ok: True` ✓）
+
+### ② ★ 但"看起来无害"≠"已证实" ✗ ⇒ **改掉"直接丢弃"** ✗
+
+- **新行为** ✓：第三方的 raise ⇒ **落盘（`where` 带 `文件:行`，带 `×N` 计数 ✓）**、**不推 QQ** ✗
+- ⇒ 好处 ✓：①**不打扰** ✓ ②**信息不丢** ✓ ⇒ **我（和看板）能看到哪一类在涨** ✓
+  ⇒ **涨得快的那类 = 真信号** ✓（届时再逐个查 ✓）
+- 三档彻底分明 ✓：**QQ**＝真失败 ✓｜**落盘**＝降级类／预期内 raise／**第三方 raise（带计数）** ✓｜**不记**＝无 ✓

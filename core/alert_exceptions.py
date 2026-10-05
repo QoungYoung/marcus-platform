@@ -80,7 +80,8 @@ def _emit(kind: str, where: str, exc) -> None:
             _ah = None
         if _ah is None:
             return
-        _quiet = any(t in type(exc).__name__ for t in _QUIET_TYPES)
+        _quiet = (kind.startswith("第三方")
+                  or any(t in type(exc).__name__ for t in _QUIET_TYPES))
         if _quiet:
             _ah.note_silent(where, msg="%s×%d：%s" % (kind, max(1, n), str(exc)[:260]))   # 只落盘 ✓
         else:
@@ -127,7 +128,15 @@ def _install_monitoring() -> bool:
             f = getattr(code, "co_filename", "?")
             fs = str(f)
             if not _is_ours(fs):
-                return                      # 第三方/标准库/解释器/临时串 ✗ ⇒ 不报 ✓
+                # ★ 账本 §9.645 ✓（用户追问：「第三方内部异常不报,这种不会影响我们计算吗」✗）：
+                #   判断 ✓：这些 raise 的**抛点在第三方自己的文件里** ✓（实测
+                #     `pandas/core/dtypes/{cast,dtypes}.py` ✓），且 `pandas_dtype('M8')` 实测**不抛** ✓
+                #     ⇒ 绝大多数是**库自身的 dtype 探测/回落** ✓ = 控制流 ✓
+                #   ⇒ 但"看起来无害"≠"已证实" ✗ ⇒ **不再直接丢弃** ✗：
+                #     **落盘（带计数 ✓、受去重约束 ✓）** ✓、**不推 QQ** ✗
+                #     ⇒ 我（和看板）能看到**哪一类在涨** ✓；涨得快的 ⇒ **就是真信号** ✓✓
+                _emit("第三方的raise", "%s:%s" % (os.path.basename(fs), getattr(code, "co_firstlineno", 0)), exc)
+                return
             if isinstance(exc, (ModuleNotFoundError, ImportError)):
                 return                      # ★ 可选依赖的 import 守卫是**预期**行为 ✗（如 vnpy ✓）
             name = os.path.basename(fs)
