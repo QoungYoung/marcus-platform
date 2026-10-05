@@ -1203,7 +1203,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
         });
         handle._ts = Date.now();
         sessions.set(mode + ':' + newSessionId, handle);
-        console.warn('[Bridge] 会话已 fork 迁移: ' + oldKey.slice(-20) + ' -> ' + newSessionId.slice(-24) + '（seed ' + seed.length + ' 事件）');
+        console.warn('[Bridge] 会话已 fork 迁移: ' + oldKey.slice(-20) + ' -> ' + newSessionId.slice(-24) + '（seed ' + seed.length + ' 事件' + (FORK_SEED ? '' : '，**未使用**（BRIDGE_FORK_SEED=0 ✓）') + '）');
         return { agent: handle.agent, sessionId: newSessionId };
       } catch (e) {
         console.error('[Bridge] fork 迁移失败: ' + (e && e.message ? e.message : e));
