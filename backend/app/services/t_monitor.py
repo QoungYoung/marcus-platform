@@ -27,7 +27,19 @@ from typing import Any, Dict, List, Optional
 
 from app.services import t_db
 from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, fetch_quote_one
-from app.services.t_regime import check_gate, compute_regime, _is_trading_time
+from app.services.t_regime import check_gate as _rg_check_gate, compute_regime, _is_trading_time
+# ★ 账本 §9.659 ✓（用户：「只依据 wave_state，缺失就现场补，去掉这个」）
+#   环境门改为**可切换** ✓：`WOLF_WAVE_GATE_ONLY=1` ⇒ 用**狼大的浪型口径** ✓
+#   （`wave_gate.check_gate` ✓：`wave_state.level == down` ⇒ BLOCKED ✓，缺档**现场补** ✓）
+#   默认 0 ⇒ 仍走旧 `t_regime` ✓ ⇒ **生产行为逐位不变** ✓
+def check_gate(kind="low_buy", regime_state=None):
+    try:
+        from app.services.wave_gate import enabled as _wg_on, check_gate as _wg_check
+        if _wg_on():
+            return _wg_check(kind)
+    except Exception as _e_wg:
+        print("[t_monitor] wave_gate 不可用 ⇒ 回退 t_regime: %s" % str(_e_wg)[:80], flush=True)
+    return _rg_check_gate(kind, regime_state)
 
 
 def _silent_alert(where, exc=None):

@@ -28,7 +28,18 @@ from sqlalchemy import text
 from app.database import SessionLocal
 from app.services import t_db
 from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, std_symbol
-from app.services.t_regime import compute_regime
+from app.services.t_regime import compute_regime as _rg_compute_regime
+# ★ 账本 §9.659 ✓：环境门可切到**狼大浪型口径** ✓（`WOLF_WAVE_GATE_ONLY=1` ✓）
+def compute_regime(*a, **k):
+    try:
+        from app.services.wave_gate import enabled as _wg_on, check_gate as _wg_check
+        if _wg_on():
+            g = _wg_check("low_buy")
+            return {"regime": "HALT" if g.get("gate") == "BLOCKED" else "ACTIVE",
+                    "gate_low_buy": g.get("gate"), "why": g.get("why"), "src": "wave_gate"}
+    except Exception as _e_wg2:
+        print("[t_gateway] wave_gate 不可用 ⇒ 回退 t_regime: %s" % str(_e_wg2)[:80], flush=True)
+    return _rg_compute_regime(*a, **k)
 from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 

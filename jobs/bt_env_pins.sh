@@ -901,3 +901,14 @@ export WOLF_AGENT_SKIP_MOOT_SELL='1'
 # ★ 账本 §9.654 ✓：唤醒 agent 的等待（实测 LLM 回合可达 ~193 秒 ✗ ⇒ 90 必超时 ✗）
 #   与 WOLF_MEMBER_BATCH_TIMEOUT=240 对齐 ✓；生产不设此项 ⇒ 仍用库内默认 90 ✓
 export WOLF_WAKE_TIMEOUT='240'
+
+# ★ 账本 §9.657 ✓：**降并发换低延迟**（实测并发 ~10 路 ⇒ 单次延迟 ×N ✗）
+#   单模型服务 ⇒ 串行反而更快 ✓（不再排队 + 不再超时 ✓）
+export WOLF_AI_WORKERS='1'
+export WOLF_MEMBER_PREFETCH_WORKERS='1'
+
+# ★ 账本 §9.659 ✓（用户：「只依据 wave_state，缺失就现场补，去掉这个」）
+#   ⇒ 环境门改用**狼大浪型口径**（`wave_state.level==down` ⇒ BLOCKED ✓）
+#     缺档**现场补**（`wave_level.judge_wave` ✓）；补不出来 ⇒ **放行** ＋ 告警 ✓
+#   库内默认 0 ⇒ 生产仍走旧 t_regime ✓（生产零影响 ✓）
+export WOLF_WAVE_GATE_ONLY='1'
