@@ -1575,7 +1575,8 @@ def main() -> int:
     # `_round` 细分计时（2026-09-17 用户要求装）：日终打印各段耗时，按数据决定下一步优化
     try:
         import app.services.t_monitor as _tm
-        _rt = _tm.round_timing()
+        # ★ 账本 §9.648 ✓：`t_monitor.round_timing` 实测**不存在** ✗ ⇒ 用 getattr 兜底 ✓
+        _rt = (getattr(_tm, "round_timing", None) or (lambda: {}))()
         _seg = " ".join("%s=%.1f" % (k, v) for k, v in _rt["secs"].items())
         print("[prod] _round 细分(s)：%s | bars=%d triggers=%d"
               % (_seg, _rt["bars"], _rt["triggers"]), file=sys.stderr)
@@ -1609,7 +1610,9 @@ def main() -> int:
               % (_sc.get("hit"), _sc.get("miss"), _rt.get("stop_scan_err"),
                  ("（首例 %s）" % _rt.get("stop_scan_first")) if _rt.get("stop_scan_err") else ""),
               file=sys.stderr)
-        _tm.round_timing_reset()
+        _rr = getattr(_tm, "round_timing_reset", None)
+        if callable(_rr):
+            _rr()
         try:
             _tm.stop_scan_reset()       # 异常计数与耗时同频清零
         except Exception as _e_sil9:
@@ -1692,7 +1695,13 @@ def _trade_rows(account: str):
 
 def _position_rows(account: str):
     try:
-        return _q("SELECT symbol, direction, volume, avg_price, entry_date FROM paper_positions "
+        # ★ 账本 §9.648 ✓（用户贴来 `column "direction" does not exist` ✗）：
+        #   实测 `paper_positions` 的真实列 ✓：
+        #     symbol/entry_date/highest_price/updated_at/volume/frozen/avg_price/account_id
+        #   ⇒ **没有 `direction`** ✗ ⇒ 该查询**每次必抛** ✗ ⇒ 调用方 `return []` ✗
+        #     ⇒ **"持仓"在汇总里恒为空** ✗（同类症状：AI 看到"持仓明细不含该标的" ⇒ abandon ✓）
+        #   ⇒ 本函数只用于**汇总 JSON** ✓（调用处 1548）⇒ **去掉该列** ✓（其余列照旧 ✓）
+        return _q("SELECT symbol, volume, avg_price, entry_date FROM paper_positions "
                   "WHERE account_id=%s AND volume>0 ORDER BY symbol", (account,))
     except Exception:
         return []
