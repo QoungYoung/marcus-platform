@@ -472,6 +472,21 @@ class LocalMarket:
             p = os.path.join(root, _code6(sym) + ".json")
             with open(p, "w", encoding="utf-8") as f:
                 json.dump(payload, f)
+            # ★ 账本 §9.618 ✓：**同时写 `stock_5m_bt`**（生产里它也是合法的源 ✓，
+            #   见 `apps/main_line/fetch_brze_target_5min.py`：`输出: data/stock_5m_bt/<code6>.json {date: [bars]}` ✓）
+            #   为什么 ✓：各调用方的读取顺序**不一致** ✗（`plan_runner` 先读 `stock_5m_bt` ✗、
+            #   `wolf_judge` 先读 `recent_sync` ✓）⇒ 只提供 recent_sync 时"半个调用方"第一次必失败 ✗
+            #   （`t_monitor.py:6105` 假警报的来源 ✓）
+            #   写一份同格式 ⇒ ①零异常 ✓ ②两种顺序都通 ✓ ③顺带**补覆盖**（监视器「去弱留强」✓）
+            #   开关 `WOLF_BT_ALSO_STOCK5MBT`（**库内默认 0** ✓；回测置 1 ✓）
+            if str(os.getenv("WOLF_BT_ALSO_STOCK5MBT", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    _r2 = os.path.join(data_dir, "stock_5m_bt")
+                    os.makedirs(_r2, exist_ok=True)
+                    with open(os.path.join(_r2, _code6(sym) + ".json"), "w", encoding="utf-8") as _f2:
+                        json.dump(payload, _f2)
+                except Exception as _e_s5:
+                    print("[bt] 写 stock_5m_bt 失败 %s: %s" % (_code6(sym), str(_e_s5)[:60]), flush=True)
 
 
 def install_clock_shim() -> None:

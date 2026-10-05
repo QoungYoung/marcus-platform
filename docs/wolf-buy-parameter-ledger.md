@@ -28731,3 +28731,26 @@ if isinstance(exc, FileNotFoundError):
 - ⇒ 监视器的「**去弱留强**」因此报 `持仓有效样本 2 < 门槛 3` ✗ ⇒ **规则当日未生效** ✗
 - ⇒ **根因待查** ✓：`write_recent_sync`（回测市场模型 ✓）只写**部分标的** ✗
   ⇒ 需要确认"应写哪些"（持仓 ∪ 当日腿 ∪ 关注池 ✗）并补齐 ✓
+
+---
+
+## §9.618 **"回测里 `stock_5m_bt` 永远不存在，为什么还走这一步"** ✓（用户提问 ✓）
+
+### ① 为什么代码里还留着它 ✓ —— **那是刻意的设计** ✓
+
+| ✓ | 事实 ✓ |
+|---|---|
+| **生产里 `stock_5m_bt` 是合法主源** ✓ | 由 `apps/main_line/fetch_brze_target_5min.py` 写 ✓（`输出: data/stock_5m_bt/<code6>.json {date: [bars]}` ✓）|
+| **回测的口径** ✓ | `write_recent_sync` 的 docstring 写得很明确 ✓：<br>「生产 `t_monitor._today_bars/_prev_daily/_daily_dated`、`plan_runner._daily_close`、`wolf_judge._daily` 都读它。口径（**不改生产代码，喂它真实格式的数据** ✓）」|
+| ⇒ 为什么会有"必失败的那一步" ✗ | 各调用方的**读取顺序不一致** ✗：`plan_runner`＝**`stock_5m_bt` 先** ✗｜`wolf_judge`＝**`recent_sync` 先** ✓<br>⇒ 回测只喂 `recent_sync` ⇒ **"先读 stock_5m_bt"的那一半**必然第一次失败 ✗（假警报来源 ✓）|
+
+### ② 更干净的修法（已落地 ✓，**纯回测代码** ✓）
+
+- 在**回测**里 **同时写一份 `stock_5m_bt`（同格式 ✓）**：
+  - `jobs/bt_local_market.py` ✓ ＋ `jobs/bt_prod_run.py` ✓ 的 `write_recent_sync` 末尾，
+    紧跟 `recent_sync` 之后**再写** `<data_dir>/stock_5m_bt/<code6>.json`（同一 `payload` ✓）
+  - 开关 **`WOLF_BT_ALSO_STOCK5MBT`** ✓（**库内默认 0** ✓ ⇒ **生产零影响** ✓；pins ＋ 两个启动器置 1 ✓）
+- **三赢** ✓：①**零异常** ✓（第一次就读到 ✓）②**两种顺序都通** ✓ ③★ **顺带补覆盖**
+  ⇒ 监视器「**去弱留强**」的 `持仓有效样本 2 < 门槛 3` 应能恢复 ✓
+- **门 ✓**：`58 passed` ✓｜**防回潮 0 处** ✓
+- ⚠️ **当前臂**（80954 ✓）的进程环境里**没有**这个开关（起臂早于本次改动 ✓）⇒ **下一轮起臂生效** ✓
