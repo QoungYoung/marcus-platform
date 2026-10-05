@@ -139,8 +139,17 @@ def _upto(bars: List[Any], hhmm: str) -> List[Tuple[str, float, float, float, fl
     for b in bars:
         try:
             t = str(b[1])[11:16]
+            # ★ 账本 §9.649 ✓（用户 QQ: `intraday_crush.py:136 could not convert string to
+            #   float: '5MIN'` ✗ **×225/237/166/174** ✓ —— 每分钟几百次 ✓）：
+            #   真因与 §9.643 的 `_norm_bar` **完全同一类** ✗：
+            #     **9 列**分钟档（`[ts_code, t, freq='5MIN', o,h,l,c,vol,amount]` ✓）
+            #     被按 **8 列**读 ✗ ⇒ `float(b[2])` = `float('5MIN')` ⇒ 每根 bar 抛一次 ✗
+            #   ⇒ 判据与 `bt_pack_mins.py:76` 一致 ✓：列数 ≥9 且 `b[2]` 非数值 ⇒ **下标后移 1** ✓
+            #   （`t` 仍取 `b[1]` ✓ —— 与 §9.643 的坑一致 ✓）
+            _off = 1 if (len(b) >= 9 and not isinstance(b[2], (int, float))) else 0
             if _hm(t) <= cut:
-                out.append((t, float(b[2]), float(b[3]), float(b[4]), float(b[5]), float(b[6]), float(b[7])))
+                out.append((t, float(b[2 + _off]), float(b[3 + _off]), float(b[4 + _off]),
+                            float(b[5 + _off]), float(b[6 + _off]), float(b[7 + _off])))
         except Exception as _e_sil1:
             _silent_alert("intraday_crush.py:128", _e_sil1)
             continue
