@@ -29046,3 +29046,48 @@ else rm -rf "$ROOT"; mkdir -p "$ROOT" # ⇒ 删沙箱 ＋ 重新 seed ✓
 
 - **追加环境变量必须确认"在起臂之前"** ✗（本次 8 个全部位置错误 ✗，靠 pins 兜住 ✓）
 - **跨目录/临时文件的失败容易被误判成"路径不存在"** ✗ ⇒ 本次靠 **A/B（设/不设 `TMPDIR`）** 一击定位 ✓
+
+---
+
+## §9.630 **`t-bridge 唤醒 Agent 失败: RemoteDisconnected` 的真因：转发器 body 没读满** ✗（我引入的 ✓）
+
+### ① 真凶（`llm_forward.py` 的 `handle` ✓）
+
+```python
+# 原来 ✗
+body = rest[:clen] if clen else b""      # ← 只取"当前已到达的字节" ✗
+tail = rest[clen:] if clen else rest
+```
+- **HTTP body 常分多个 TCP 包到达**（头部一个包、body 两三个 ✓）⇒
+  原实现把**截断的 body** 转发给上游 ✗ ⇒ 桥拿到**畸形请求** ⇒ **直接关连接** ✗
+  ⇒ ⇒ 客户端（`t_bridge` 用 urllib ✓）看到 **`RemoteDisconnected`** ✓✓
+- 这也解释了「**第 1/2 次**失败」✓：重试时数据恰好一个包到齐 ⇒ 成功 ✓（**偶发** ✓）
+
+### ② 修法 ✓
+
+```python
+if clen:
+    cli.settimeout(10)
+    while len(rest) < clen:        # ★ 读满 ✓（10s 保护 ✓ 防半连接挂死 ✓）
+        _chunk = cli.recv(BUF)
+        if not _chunk:
+            break
+        rest += _chunk
+```
+
+### ③ 实测（决定性 ✓）
+
+| 场景 ✓ | 结果 ✓ |
+|---|---|
+| `/health` ✓ | `{"status":"ok","sessions":403}` ✓ |
+| **单包 POST** ✓ | `{"reply":"收到"…}` ✓ |
+| ★ **分两包 POST**（模拟真实 ✓） | **`HTTP/1.1 200 OK` ＋ `reply=收到`** ✓✓ |
+
+- ⇒ **修复前**：分两包 ⇒ 截断 ⇒ 上游关连接 ⇒ `RemoteDisconnected` ✗
+- ⇒ **修复后**：读满 ⇒ 正常 200 ✓
+
+### ④ 教训 ✓
+
+- **写 TCP/HTTP 代理时，`recv` 一次不代表收完** ✗ —— 必须**按 `Content-Length` 读满** ✓
+  （这是代理类代码最常见的坑 ✓）
+- ⇒ 而这个坑**是我自己埋的** ✗（§9.604 引入转发器时 ✓）⇒ 也解释了**今天早些时候那批"偶发"唤醒失败** ✓
