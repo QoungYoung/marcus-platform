@@ -897,3 +897,7 @@ export WOLF_AGENT_SKIP_MOOT_SELL='1'
 #     · 类型过滤：ImportError/FileNotFoundError/AttributeError/NetOffline … ⇒ 只落盘 ✓
 #     · note_silent 只落盘 ✓（降级类不推 ✓）
 #   仍受去重（600s ✓）＋ 限流（200/小时 ✓）约束 ⇒ 不会刷屏 ✓
+
+# ★ 账本 §9.654 ✓：唤醒 agent 的等待（实测 LLM 回合可达 ~193 秒 ✗ ⇒ 90 必超时 ✗）
+#   与 WOLF_MEMBER_BATCH_TIMEOUT=240 对齐 ✓；生产不设此项 ⇒ 仍用库内默认 90 ✓
+export WOLF_WAKE_TIMEOUT='240'

@@ -23,8 +23,13 @@ from app.services.t_regime import compute_regime
 # 唤醒降级轮询（桥不可达兜底）
 FALLBACK_POLL_INTERVAL = 30.0
 # AI 主导唤醒（wake_agent POST /chat 等 LLM 决策）：超时+重试（LLM turn 可能>30s，避免瞬时失败直接丢）
-WAKE_TIMEOUT = 90          # 单次 HTTP 等待秒数（原 30 太短）
-WAKE_RETRY = 2             # 失败重试次数
+# ★ 账本 §9.654 ✓（用户 QQ：`t_bridge.py:288  Read timed out. (read timeout=90)` ✗）：
+#   实测 ✓：LLM 一次回合可达 **~193 秒** ✗（§9.646 的 25 只批量 ✓）
+#     ⇒ 90 秒 ⇒ **必超时** ✗ ⇒ 触发 `WAKE_RETRY=2` 再等一轮 ✗ ⇒ **净亏**（该条唤醒仍失败 ✓）
+#   ⇒ 改为**环境可调** ✓：`WOLF_WAKE_TIMEOUT`（**库内默认仍 90** ✓ ⇒ 生产零影响 ✓；
+#     回测 pins 置 **240** ✓ 与批量超时对齐 ✓）
+WAKE_TIMEOUT = int(os.getenv("WOLF_WAKE_TIMEOUT", "90") or 90)   # 单次 HTTP 等待秒数
+WAKE_RETRY = int(os.getenv("WOLF_WAKE_RETRY", "2") or 2)         # 失败重试次数
 # 本地条件单（卖出端秒级）在网关内通过 t_conditions 价位判断承载（见 t_monitor）
 # AI 主导模式下连续命中未实质改善的阈值（≥N 次提示 AI 调整/冷却条件）
 AI_CONSECUTIVE_HIT_ALERT = 3
