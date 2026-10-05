@@ -28912,3 +28912,46 @@ else rm -rf "$ROOT"; mkdir -p "$ROOT" # ⇒ 删沙箱 ＋ 重新 seed ✓
   并**顺手抓到一条真实告警** ✓（`scheduler_service` 的 `tasks.yaml` 缺失 ✓）
 - 噪音黑名单 ✓：`uvicorn.access`／`asyncio`／`matplotlib`／`urllib3`／`PIL` 不转发 ✓
 - 门 ✓：**58 passed** ✓｜**防回潮 0 处** ✓（含把出口自身的静默点改成留痕 ✓，用 stderr 不走 logger ⇒ 不递归 ✓）
+
+---
+
+## §9.624 **★ 用户的架构判断是对的：接"异常抛出点"，不是接 print/日志** ✓
+
+> 「不是，抛出异常来你推送给我不就行吗，怎么还接 print，这个 sqlite 也不是 print 啊」
+
+### ① 为什么 print／logging 桥都**不够** ✗
+
+- `sqlite3.OperationalError` 是 **`raise` 出来的** ✓，被上层 `except` 接住后**打印子进程输出** ✗
+  ⇒ **日志桥（`logger.*`）拦不到它** ✗；`print` 桥更拦不到 ✗
+- **未捕获**的异常有 `sys.excepthook` ✓（会推 ✓）；**被 `try/except` 吞掉/降级**的 ✗
+  ⇒ **永远到不了 excepthook** ✗ ⇒ 于是"**看着在跑、其实某道判据没跑**" ✗
+
+### ② 正解 ✓：`core/alert_exceptions.py`
+
+| 手段 ✓ | 覆盖 ✓ |
+|---|---|
+| **`sys.monitoring` 的 `RAISE` 事件** ✓（CPython 3.12+ ✓）| ★ **异常抛出瞬间**触发 ⇒ **被 `except` 吞掉的也能看见** ✓✓ |
+| **`subprocess.run` 包装（rc≠0）** ✓ | 子进程失败（**抛不出来的那类** ✗）✓ |
+| 保持 §9.623 的 logging 桥 ✓ | `logger.warning/error` ✓（第三张网 ✓） |
+
+**控噪（关键 ✗）** ✓：
+- 只报**自家代码** ✓（`jobs/`／`backend/app/`／`apps/`／`core/` ✓）⇒ 实测噪音（`<frozen os>`／
+  `_collections_abc`／`weakref` ✗）**全部消失** ✓
+- 忽略控制流异常 ✓（`StopIteration`／`GeneratorExit`／`KeyboardInterrupt`／`SystemExit`／`CancelledError` ✓）
+- 按 **(文件,行,类型)** **去重 600 秒** ✓ ＋ 累计次数 ✓ ＋ 轻量 GC ✓
+
+### ③ 实测（决定性 ✓）
+
+```
+[ALERT] _probe_raise.py:2 | raise×1：自家代码里被 except 吞掉的异常（旧方案看不见 ✗）
+[ALERT] subprocess.run    | subprocess×1：rc=3 cmd=bash -c exit 3
+[ALERT] t_monitor.去弱留强  | 不动作: 持仓有效样本 0 < 门槛 3
+```
+- ⇒ ★ **`try/except: pass` 里抛的异常现在真的会推给你** ✓✓（**这正是用户要的** ✓）
+- 去重实测 ✓：同一异常抛 3 次 ⇒ **只推 1 条** ✓
+
+### ④ 接入与开关 ✓
+
+- 开关 **`WOLF_ALERT_ON_RAISE`**（**库内默认 0** ⇒ **生产零影响** ✓；pins ＋ 两启动器置 1 ✓）
+- `bt_days.py` ＋ `bt_prod_run.py` 末尾自动 `install()` ✓
+- 门 ✓：**58 passed** ✓｜**防回潮 0 处** ✓

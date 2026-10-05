@@ -1,0 +1,154 @@
+# -*- coding: utf-8 -*-
+"""alert_exceptions.py —— **在"异常抛出点"接告警**（账本 §9.624 ✓）
+
+## 用户的判断（对的 ✓）
+
+> 「不是，抛出异常来你推送给我不就行吗，怎么还接 print，这个 sqlite 也不是 print 啊」
+
+- ★ **接 print / 接 logging 都不够** ✗：`sqlite3.OperationalError` 是 **`raise` 出来的** ✓，
+  被上层 `except` 接住后**打印子进程输出** ✗ ⇒ **日志桥拦不到它** ✗
+- ★ **未捕获**的异常有 `sys.excepthook` ✓（会推 ✓）；**被 `try/except` 吞掉/降级**的 ✗
+  ⇒ **到不了 excepthook** ✗✓ ⇒ 于是"**看着在跑、其实某道判据没跑**" ✗
+
+## 做法 ✓
+
+用 **`sys.monitoring`**（CPython 3.12+ ✓）监听 **`RAISE` 事件** ✗ —— 它**在异常抛出瞬间**触发 ✓，
+**无论后面是否被 catch** ✓ ⇒ ⇒ 真正做到"**抛出异常就推给你**" ✓
+- **控噪** ✓（关键 ✗）：①忽略控制流异常（`StopIteration`／`GeneratorExit`／`KeyboardInterrupt`／
+  `SystemExit`／`asyncio.CancelledError` ✓）②**按 (文件,行,类型) 硬去重** ✓（默认 600 秒一次 ✓，
+  并累计次数 ✓）③**只报"首次"** ✓ ⇒ 输出量有界 ✓
+- 开关 ✓：`WOLF_ALERT_ON_RAISE=1`（**库内默认 0** ⇒ 生产零影响 ✓）
+- 另配 ✓：`subprocess.run` 的 **rc≠0** 也统一接上 ✓（子进程失败 = 抛不出来的那类 ✗）
+"""
+from __future__ import annotations
+import os
+import sys
+import threading
+import time
+
+_STATE = {"installed": False, "seen": {}, "counts": {}}
+_LOCK = threading.Lock()
+_IGNORE = ("StopIteration", "GeneratorExit", "KeyboardInterrupt", "SystemExit", "CancelledError")
+_DEDUP_SEC = 600.0
+_last_gc = [0.0]
+
+
+def _should_ignore(exc_type) -> bool:
+    name = getattr(exc_type, "__name__", str(exc_type))
+    return any(x in name for x in _IGNORE)
+
+
+def _emit(kind: str, where: str, exc) -> None:
+    """按 (where, 类型) 去重后转发给 alert_hub.note（落盘 ＋ 推 QQ ✓）。"""
+    try:
+        etype = type(exc).__name__ if not isinstance(exc, str) else "str"
+        key = "%s|%s|%s" % (kind, where, etype)
+        now = time.time()
+        with _LOCK:
+            last = _STATE["seen"].get(key, 0.0)
+            _STATE["counts"][key] = _STATE["counts"].get(key, 0) + 1
+            if now - last < _DEDUP_SEC:
+                return
+            _STATE["seen"][key] = now
+            n = _STATE["counts"][key]
+            _STATE["counts"][key] = 0
+            # 轻量 GC：防止长期运行字典膨胀 ✓
+            if len(_STATE["seen"]) > 4000 and now - _last_gc[0] > 60:
+                _STATE["seen"] = {k: v for k, v in _STATE["seen"].items() if now - v < _DEDUP_SEC}
+                _last_gc[0] = now
+        try:
+            from app.services import alert_hub as _ah
+        except Exception:
+            _ah = None
+        if _ah is None:
+            return
+        _ah.note(where, msg="%s×%d：%s" % (kind, max(1, n), str(exc)[:260]))
+    except Exception as _e:
+        try:
+            sys.stderr.write("[alert_exc] emit 失败: %s\n" % str(_e)[:80])
+        except Exception as _e_r:
+            sys.stderr.write("[alert_exc] 内部异常: %s\n" % str(_e_r)[:80])
+
+
+def _install_monitoring() -> bool:
+    """RAISE 事件（异常抛出瞬间 ✓，含被 catch 的 ✓）。"""
+    mon = getattr(sys, "monitoring", None)
+    if mon is None:
+        return False
+    TOOL = 3  # 任意未占用槽位 ✓（PROFILER_ID 等由解释器保留 ✓）
+
+    # ★ 只报"我们自己的代码" ✓（否则会被标准库/解释器的控制流异常淹没 ✗：
+    #   实测噪音来自 `<frozen os>`／`_collections_abc`／`weakref` 等 ✓）
+    _OURS = ("/jobs/", "/backend/app/", "/apps/", "/core/", "/main_line/")
+
+    def _on_raise(code, offset, exc):
+        try:
+            if _should_ignore(type(exc)):
+                return
+            f = getattr(code, "co_filename", "?")
+            fs = str(f)
+            if fs.startswith("<") or not any(p in fs for p in _OURS):
+                return                      # 标准库/解释器/临时串 ✗ ⇒ 不报 ✓
+            name = os.path.basename(fs)
+            line = getattr(code, "co_firstlineno", 0)
+            _emit("raise", "%s:%s" % (name, line), exc)
+        except Exception as _e_or:
+            # ★ 回调自身绝不抛 ✓，但**留痕** ✓（防回潮门要求；stderr 不经 logger ⇒ 不递归 ✓）
+            sys.stderr.write("[alert_exc] on_raise 失败: %s\n" % str(_e_or)[:80])
+
+    try:
+        mon.use_tool_id(TOOL, "marcus-alert")
+        mon.register_callback(TOOL, mon.events.RAISE, _on_raise)
+        mon.set_events(TOOL, mon.events.RAISE)
+        _STATE["monitoring"] = TOOL
+        return True
+    except Exception as e:
+        sys.stderr.write("[alert_exc] monitoring 安装失败: %s\n" % str(e)[:90])
+        return False
+
+
+def _install_subprocess_rc() -> bool:
+    """`subprocess.run/Popen` ⇒ **rc≠0 时推一条** ✓（子进程无法"抛"给父进程 ✗）。"""
+    try:
+        import subprocess as _sp
+        if getattr(_sp.run, "_marcus_wrapped", False):
+            return True
+        _orig_run = _sp.run
+
+        def _run(*a, **kw):
+            r = _orig_run(*a, **kw)
+            try:
+                rc = int(getattr(r, "returncode", 0) or 0)
+                if rc != 0:
+                    cmd = a[0] if a else kw.get("args")
+                    if isinstance(cmd, (list, tuple)):
+                        cmd = " ".join(os.path.basename(str(x)) for x in cmd[:4])
+                    _emit("subprocess", "subprocess.run", "rc=%s cmd=%s" % (rc, str(cmd)[:120]))
+            except Exception:
+                pass
+            return r
+
+        _run._marcus_wrapped = True
+        _sp.run = _run
+        return True
+    except Exception as e:
+        sys.stderr.write("[alert_exc] subprocess 包装失败: %s\n" % str(e)[:90])
+        return False
+
+
+def install(level: int = 0) -> bool:
+    """幂等安装 ✓；返回是否安装 ✓（开关 `WOLF_ALERT_ON_RAISE` 默认 0 ✓）。"""
+    if _STATE["installed"]:
+        return True
+    if str(os.getenv("WOLF_ALERT_ON_RAISE", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+        return False
+    ok_mon = _install_monitoring()
+    ok_sp = _install_subprocess_rc()
+    _STATE["installed"] = True
+    sys.stderr.write("[alert_exc] ✅ 异常抛出点已接告警 ✓（monitoring=%s ✓｜subprocess rc=%s ✓）\n"
+                     % (ok_mon, ok_sp))
+    return ok_mon or ok_sp
+
+
+if __name__ == "__main__":
+    print(install())

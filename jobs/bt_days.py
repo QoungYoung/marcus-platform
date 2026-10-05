@@ -648,5 +648,17 @@ try:
 except Exception as _e_al_log:
     print("[bt] alert_logging 安装跳过: %s" % str(_e_al_log)[:70], flush=True)
 
+
+# ★ 账本 §9.624 ✓：**异常抛出点**接告警（用户："抛出异常来你推送给我不就行吗" ✓）
+#   ① `sys.monitoring` 的 RAISE ⇒ **被 try/except 吞掉的异常也能看见** ✓
+#   ② `subprocess.run` 的 rc≠0 ⇒ 子进程失败也推 ✓
+#   只报自家代码 ✓、按 (文件,行,类型) 去重 600 秒 ✓ ⇒ 不刷屏 ✓
+#   开关 `WOLF_ALERT_ON_RAISE`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
+try:
+    from core import alert_exceptions as _al_exc
+    _al_exc.install()
+except Exception as _e_al_exc:
+    print("[bt] alert_exceptions 安装跳过: %s" % str(_e_al_exc)[:70], flush=True)
+
 if __name__ == "__main__":
     sys.exit(main())

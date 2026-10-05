@@ -870,3 +870,5 @@ export WAVE_CHAT_URL='http://127.0.0.1:13001/chat'   # 账本 §9.602：low_logi
 export WOLF_BT_ALSO_STOCK5MBT='1'   # 账本 §9.618：回测同时写 stock_5m_bt（库内默认 0 ⇒ 生产零影响）
 
 export WOLF_ALERT_FROM_LOGGING='1'   # 账本 §9.623：logging(WARNING+) 接告警中心（库内默认 0 ⇒ 生产零影响）
+
+export WOLF_ALERT_ON_RAISE='1'   # 账本 §9.624：异常抛出点接告警（库内默认 0 ⇒ 生产零影响）

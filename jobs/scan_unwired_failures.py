@@ -48,7 +48,8 @@ def _has(node, hints) -> bool:
 def scan_file(path: str):
     try:
         tree = ast.parse(open(path, encoding="utf-8").read())
-    except Exception:
+    except Exception as _e_scan:
+        print("[scan_unwired] 跳过（解析失败）%s: %s" % (path, str(_e_scan)[:70]), flush=True)
         return []
     out = []
     for node in ast.walk(tree):
