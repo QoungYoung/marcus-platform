@@ -638,5 +638,15 @@ def _script_in_rev(d8: str, rel: str) -> str:
     return os.path.join(bt_env.REPO, rel)
 
 
+
+# ★ 账本 §9.623 ✓：把 logging(WARNING+) 接到告警中心（用户质问"怎么这么多没接的" ✓）
+#   WARNING ⇒ 只落盘（看板可见 ✓）；ERROR ⇒ 落盘 ＋ 推 QQ ✓；**无需改任何调用点** ✓
+#   开关 `WOLF_ALERT_FROM_LOGGING`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
+try:
+    from core import alert_logging as _al_log
+    _al_log.install()
+except Exception as _e_al_log:
+    print("[bt] alert_logging 安装跳过: %s" % str(_e_al_log)[:70], flush=True)
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -868,3 +868,5 @@ export WOLF_MINS_1MIN_FALLBACK='1'   # 账本 §9.600：5min 拿不到时用 1mi
 export WAVE_CHAT_URL='http://127.0.0.1:13001/chat'   # 账本 §9.602：low_logic/wave agent 的 LLM 端点（原默认 marcus-dsh:3001 在回测里解析不到⇒挂住⇒烧满 30 分钟超时 ✗）
 
 export WOLF_BT_ALSO_STOCK5MBT='1'   # 账本 §9.618：回测同时写 stock_5m_bt（库内默认 0 ⇒ 生产零影响）
+
+export WOLF_ALERT_FROM_LOGGING='1'   # 账本 §9.623：logging(WARNING+) 接告警中心（库内默认 0 ⇒ 生产零影响）

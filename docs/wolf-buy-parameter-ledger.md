@@ -28887,3 +28887,28 @@ else rm -rf "$ROOT"; mkdir -p "$ROOT" # ⇒ 删沙箱 ＋ 重新 seed ✓
 
 - **插桩/重构时,必须把原作用域依赖（如函数内 import ✗）一并搬过去** ✓
 - **`compile` 不够** ✗：`NameError` 是**运行期**错误 ✓ ⇒ 插桩后**必须跑一次自测** ✓（本次已补 ✓）
+
+---
+
+## §9.623 **"全局异常做完了吗"审计** ✓ —— **1892 处没接** ✗ ⇒ 改为**接出口** ✓
+
+### ① 审计（新增 `jobs/scan_unwired_failures.py` ✓，AST ✓）
+
+- 判据 ✓：① `except` 里有 `print/log` 但**无 `note`** ✗　② `if rc≠0 / is None / 失败…` 分支里只有 print ✗
+- **实测 ✓：1892 处／396 个文件** ✗（Top：`t_backtest_runner` 35 ✗／`position_tier_monitor` 34 ✗／
+  `rotation_switch_arm` 34 ✗／`scheduler_service` 32 ✗／`market_scan` 30 ✗ …）
+- ⇒ 而 `scan_silent_excepts.py`（治 `except: pass` ✓）今天报 **0 处** ✓
+  ⇒ ⇒ **说明只治了"静默吞"✗，没治"有日志但没人被告知"✗** —— 用户质问成立 ✓
+
+### ② 正解：**接出口，不接点** ✓（1,892 处逐点改不现实 ✗）
+
+- 新增 **`core/alert_logging.py`** ✓：一个 **root logger handler** ✓
+  · **WARNING** ⇒ `note_silent`（**只落盘** ✓ ⇒ 看板「告警回看」可见 ✓，**不推 QQ** ✓ 防刷屏 ✓）
+  · **ERROR**   ⇒ `note`（**落盘 ＋ 推 QQ** ✓，受去重/限流 ✓）
+  · **无需改任何调用点** ✓ —— 一次覆盖全部 `logging` 用户 ✓
+- 开关 ✓：`WOLF_ALERT_FROM_LOGGING`（**库内默认 0** ⇒ 生产零影响 ✓；pins ＋ 两启动器置 1 ✓）
+- 接入 ✓：`bt_days.py` ＋ `bt_prod_run.py` 末尾自动 `install()` ✓
+- **自测 ✓**：`WARNING` ⇒ 只落盘 ✓；`ERROR` ⇒ 落盘＋推送 ✓；
+  并**顺手抓到一条真实告警** ✓（`scheduler_service` 的 `tasks.yaml` 缺失 ✓）
+- 噪音黑名单 ✓：`uvicorn.access`／`asyncio`／`matplotlib`／`urllib3`／`PIL` 不转发 ✓
+- 门 ✓：**58 passed** ✓｜**防回潮 0 处** ✓（含把出口自身的静默点改成留痕 ✓，用 stderr 不走 logger ⇒ 不递归 ✓）
