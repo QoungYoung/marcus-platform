@@ -451,7 +451,14 @@ class LLMReplay:
             body = kw.get("json")
             if not isinstance(body, dict):
                 return kw
-            sid = "bt:%s:%s" % (self.agent, self.as_of)
+            # ★ 账本 §9.633 ✓（用户问「fork 迁移该怎么办」✓）：**按"窗口"轮换会话** ✗
+            #   实测 ✓：按天(`bt:t_leg:<日>` ✓)一天涨到 **seed 28355 事件** ✗
+            #     ⇒ 桥每次 **fork 迁移都要整份复制** ✗（30 分钟 18 次 fork ✓）
+            #   现在 ✓：同一 **窗口**（默认 600 秒 ✓）内复用同一会话 ⇒ 既"热"又不膨胀 ✓
+            #     ⇒ fork 即使发生 ✓，代价也从"复制 2.8 万事件"降到"复制几百事件" ✓
+            #   `WOLF_AGENT_SESSION_WINDOW` 可调 ✓
+            _win = max(60, int(os.getenv("WOLF_AGENT_SESSION_WINDOW", "600") or 600))
+            sid = "bt:%s:%s:w%d" % (self.agent, self.as_of, int(time.time() // _win))
             if body.get("session_id") == sid:
                 return kw
             kw2 = dict(kw)

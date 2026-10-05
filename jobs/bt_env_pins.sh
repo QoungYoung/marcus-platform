@@ -874,3 +874,12 @@ export WOLF_ALERT_FROM_LOGGING='1'   # 账本 §9.623：logging(WARNING+) 接告
 export WOLF_ALERT_ON_RAISE='1'   # 账本 §9.624：异常抛出点接告警（库内默认 0 ⇒ 生产零影响）
 
 export BT_NET_ALLOW_HOSTS='bots.qq.com,api.sgroup.qq.com'   # 账本 §9.625：回测放行 QQ 推送域名（库内默认空 ⇒ 行为不变）
+
+# ★ 账本 §9.627 ✓（用户追查到底 ✓）：**必须显式设 TMPDIR** ✗
+#   真凶 ✓：SQLite 的 `SELECT DISTINCT … ORDER BY`（2.25M 行 ✓）需要**临时文件** ✗
+#        而本环境**默认临时目录不可写** ⇒ 报 `unable to open database file` ✗
+#        ⇒ 实测：`TMPDIR=/tmp` ✅ 成功（413 天 ✓）；不设 ✗ 失败 ⇒ **候选现算每天静默失败** ✗
+export TMPDIR='/tmp'
+
+# ★ 账本 §9.633 ✓：会话按窗口轮换（默认 600 秒 ✓）⇒ 会话不膨胀 ⇒ fork 代价可控 ✓
+export WOLF_AGENT_SESSION_WINDOW='600'
