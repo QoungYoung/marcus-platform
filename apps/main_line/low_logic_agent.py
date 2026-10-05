@@ -18,7 +18,11 @@ def ld(p, dflt=None):
     except Exception: return dflt
 def call_agent(prompt, session="lowlogic_"):
     try:
-        r=requests.post(CHAT_URL, json={"message":prompt,"session_id":session+str(int(time.time()))}, headers={"Content-Type":"application/json"}, timeout=180, verify=False)
+        # ★ 账本 §9.602 ✓：**超时开关化**（默认 180 秒 ✓）
+        #   原实现没有 timeout ✗ ⇒ 端点不可达时会**挂住** ⇒ 外层 subprocess 只能等满 1800 秒 ✗
+        #   （实测回测里默认端点 marcus-dsh:3001 HTTP 000 不通 ✗ ⇒ low_logic 白烧）
+        _to = float(os.getenv("LOW_LOGIC_LLM_TIMEOUT", "180") or 180)
+        r=requests.post(CHAT_URL, json={"message":prompt,"session_id":session+str(int(time.time()))}, timeout=_to, headers={"Content-Type":"application/json"}, verify=False)
         r.raise_for_status(); return r.json().get("reply","")
     except Exception as e: return "ERR:"+str(e)[:120]
 

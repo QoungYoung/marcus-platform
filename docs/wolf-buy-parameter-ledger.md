@@ -28212,3 +28212,46 @@ RESUME_FROM=20260105  .dsh-tmp/wolfbt/_run_t35d_exec.sh    # 干净重跑 ✓
 - 全库 5min 档：**8 列 16,909 个** ✓、**9 列 26 个** ✗（直连路径写入的 ✓）
 - 而 **`bt_pack_mins.load_mins_file` 按位置解析 8 列** ✗ ⇒ 对这 **26 个 9 列文件会误读**
   （`b[2]` 是 freq 字符串 ⇒ OHLC 变 None ⇒ 回退用 `b[5]`＝**low** ✗）⇒ **建议后续修** ✓
+
+---
+
+## §9.601 **`load_mins_file` 兼容 8/9 列** ✓（并规范化 26 个 9 列档 ✓）
+
+- **问题** ✓：`bt_pack_mins.load_mins_file` **按位置解析 8 列** ✗ ⇒ 对直连路径写的 **9 列**档（多一个 `freq`）
+  会误读：`b[2]`＝`'5MIN'` ⇒ `_num` ⇒ None ⇒ OHLC 回退用 `b[5]`＝**low** ✗
+- **修法** ✓：
+  1. loader 加 **形状判定** ✓：`len(b) >= 9` **且** `b[2]` 非数值 ⇒ 偏移 1 ✓
+  2. **规范化** 26 个 9 列档 ⇒ 改写成 8 列（备份 `.dsh-tmp/wolfbt/backup/mins9/` ✓）
+- **实测 ✓**：同一根 bar 的两种列形**解析结果完全一致** ✓；全库复核 ⇒ **16,937 个全是 8 列** ✓
+
+---
+
+## §9.602 **`low_logic` 为什么慢** ✓（端点不可达 ✗ ＋ 无 timeout ✗）
+
+### ① 两处硬伤（代码原文 ✓）
+
+```python
+# apps/main_line/low_logic_agent.py:11
+CHAT_URL = os.getenv("WAVE_CHAT_URL", "http://marcus-dsh:3001/chat")   # ← 容器内主机名 ✗
+# :21（原）
+r = requests.post(CHAT_URL, json={...}, timeout=180, verify=False)     # ← 有 timeout 但端点不通 ✗
+# jobs/bt_low_logic_week.py:361
+subprocess.run(cmd, ..., timeout=1800)                                # ← 外层 30 分钟超时 ✗
+```
+- **实测** ✓：`curl http://marcus-dsh:3001/health ⇒ HTTP 000` ✗（**本机解析不到该主机名** ✗）
+- ⇒ ⇒ 于是：**agent 每次外呼都打不通** ✗ ⇒ 最坏情况**烧满 1800 秒** ✗ ⇒ **`low_logic` 慢** ✓
+
+### ② 修法 ✓
+
+| 修法 ✓ | 内容 ✓ |
+|---|---|
+| **端点** ✓ | `WAVE_CHAT_URL='http://127.0.0.1:13001/chat'` ✓ ⇒ 已写入 `bt_env_pins.sh` ✓ ＋ 两个启动器 ✓（**回测专用** ✓，生产仍用容器内地址 ✓）|
+| **超时** ✓ | `LOW_LOGIC_LLM_TIMEOUT` ✓（默认 **180 秒** ✓）⇒ 代码里 `timeout=_to` ✓ |
+| ⚠️ 我的失误 ✓ | 第一版补丁**重复了 `timeout=` 关键字** ⇒ `SyntaxError` ✗（原行末尾本就有 `timeout=180` ✗）⇒ **当即修好** ✓ |
+
+### ③ ★ 重要澄清：`no_product` **不是错误** ✓
+
+- 手动跑一次 ✓：`DATA_DIR=data/_bt_t35d/20260105 … python apps/main_line/low_logic_agent.py` ⇒
+  **「无 LOW 概念, 跳过」** ✓
+- ⇒ ⇒ 当天**没有 LOW 概念** ⇒ agent **正确地跳过** ✓ ⇒ 日志写 `no_product` ✓（**不是失败** ✗）
+- 且 `low_logic.json` ✓ ＋ `low_logic_provenance.json` ✓ **都已写出** ✓

@@ -71,8 +71,18 @@ def load_mins_file(path: str):
             t = b.get("trade_time") or b.get("time"); o, h, l, c = (_num(b.get(k)) for k in ("open","high","low","close"))
             v, amt = _num(b.get("vol")) or 0.0, _num(b.get("amount")) or 0.0
         else:
-            t = b[1]; o, h, l, c = _num(b[2]), _num(b[3]), _num(b[4]), _num(b[5])
-            v, amt = (_num(b[6]) or 0.0), (_num(b[7]) or 0.0)
+            # ★ 账本 §9.601 ✓：兼容 **8 列**（[ts,time,o,h,l,c,v,amt] ✓）与
+            #   **9 列**（多一个 freq：直连 promax 路径写入的 ✓，全库实测 26 个 ✗）
+            #   判据：列数 >= 9 **且** b[2] 非数值（就是 freq 字符串如 '5MIN' ✓）⇒ 偏移 1 ✓
+            _col_off = 0
+            try:
+                if len(b) >= 9 and _num(b[2]) is None:
+                    _col_off = 1
+            except Exception:
+                _col_off = 0
+            t = b[1]
+            o, h, l, c = _num(b[2 + _col_off]), _num(b[3 + _col_off]), _num(b[4 + _col_off]), _num(b[5 + _col_off])
+            v, amt = (_num(b[6 + _col_off]) or 0.0), (_num(b[7 + _col_off]) or 0.0)
         # ⚠️ **指数**的分钟上游只给收盘价（实测 `000001.SH` 的 5min 行是 [ts, time, None,None,None,close,None,None]）
         #    → 旧实现把"OHLC 有 None"的行全丢 → 指数 m5 变空 → `index.m5_dump` 恒 0 → 253 条件永不成立
         #    （2026-01 回测踩坑：51 个腿-标的日 0 触发）。指数只做"5min 跌幅"判定 → 用收盘价兜底 OHLC。

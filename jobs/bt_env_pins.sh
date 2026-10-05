@@ -864,3 +864,5 @@ export WOLF_TREND_PULLBACK='1'     # 改挂回踩腿（等回踩到 MA20±5% ✓
 export WOLF_AGENT_SESSION_PER_DAY='1'   # 账本 §9.596：回测每天独立 session_id（库内默认 0 ⇒ 生产零影响）
 
 export WOLF_MINS_1MIN_FALLBACK='1'   # 账本 §9.600：5min 拿不到时用 1min 回退＋本地聚合（库内默认 0 ⇒ 生产零影响）
+
+export WAVE_CHAT_URL='http://127.0.0.1:13001/chat'   # 账本 §9.602：low_logic/wave agent 的 LLM 端点（原默认 marcus-dsh:3001 在回测里解析不到⇒挂住⇒烧满 30 分钟超时 ✗）
