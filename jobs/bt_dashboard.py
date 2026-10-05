@@ -1243,7 +1243,12 @@ class Store:
         }
 
         if not self._days:
-            warnings.append({"level": "info", "text": "未发现逐日产物 data/_bt_year/_summary/prod_*.json —— 跑批尚未产出任何一天"})
+            # ★ 账本 §9.653 ✓（用户看到诊断里写 `data/_bt_year` ✗ ⇒ 与本轮 `--root` 不符 ✓）：
+            #   真因 ✓：**这条文案把路径写死了** ✗（实际扫描用的是 `self.root` ✓）
+            #     ⇒ 显示成 `data/_bt_year` ⇒ 让人以为"看板在看别的目录" ✗✓
+            #   ⇒ 改为按**真实 root** 生成文案 ✓
+            warnings.append({"level": "info", "text": "未发现逐日产物 %s/_summary/prod_*.json —— 跑批尚未产出任何一天"
+                             % os.path.relpath(self.root, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))})
         elif not active_days:
             warnings.append({"level": "warn", "text": "所有 prod_*.json 都被判定为上一次跑批的遗留产物，本次运行尚无产出"})
 
@@ -2286,6 +2291,20 @@ def day_progress(root: str, account: str = "") -> dict:
         #     阶段日志作为**并列候选**保留 ✓（按 mtime 兜底 ✓）
         _cands = [os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")]
         _summ = os.path.join(root, "_summary")
+        # ★ 账本 §9.655 补 ✓（用户：「怎么不打印了」✗ ⇒ 查出候选里**缺了"上一天的阶段日志"** ✗）：
+        #   实测 ✓：Day2 跑完（`prod_20260106.json` ✓）后，Day3 的 `bt_day_legs` 要跑 **19+ 分钟** ✗，
+        #     而这段时间**最新鲜的文件是 `prod_20260106.log`** ✗（前一日的 ✓）
+        #     ⇒ 原候选只找 `*_<cur>.log`（= 20260107 ✗）⇒ **永远选不到它** ✗ ⇒ 日志尾"像死了" ✗
+        #   ⇒ 追加：**按 mtime 取全局最新的 3 个阶段日志** ✓（**不限日期** ✓）
+        _allstage = []
+        for _p2 in _g.glob(os.path.join(_summ, "*_2026????.log")):
+            try:
+                _allstage.append((os.path.getmtime(_p2), _p2))
+            except Exception as _e_a2:
+                print("[dashboard] 阶段日志取样失败: %s" % str(_e_a2)[:60], flush=True)
+        for _mt2, _p2 in sorted(_allstage)[-3:]:
+            if _p2 not in _cands:
+                _cands.append(_p2)
         for _pat in ("*_%s.log" % cur, "*_%s.log" % (day_dirs[day_dirs.index(cur) + 1]
                                                     if cur in day_dirs and day_dirs.index(cur) + 1 < len(day_dirs) else cur),
                      "switch_*.log", "confirm_*.log", "arm_*.log"):
@@ -2298,11 +2317,31 @@ def day_progress(root: str, account: str = "") -> dict:
         #     ⇒ 于是显示那份 ✗；而它在"等 LLM 批量"时**几分钟不写** ✗ ⇒ **看起来像卡住/像旧日志** ✓
         #   ⇒ 改为：**优先臂自己的日志** ✓（`.dsh-tmp/wolfbt/logs/size_run_t35d.log` ✓，
         #     它每步都写 ✓ ⇒ 永远在动 ✓）；臂日志不存在时才按 mtime 兜底 ✓
+        # ★ 账本 §9.655 ✓（用户：「怎么不打印了」✗）：
+        #   真相 ✓：**臂日志在 `legs` 阶段会静默十几分钟** ✗（那阶段的输出写在
+        #     `arm_<日>.log` ✓ = LLM 批量判定 ✓）⇒ 钉死臂日志 ⇒ **看起来像死了** ✗
+        #   ⇒ 改为**新鲜度感知** ✓：**默认钉臂日志** ✓；若臂日志**超过 60 秒**没写 ✗
+        #     且**别的候选更新** ✓ ⇒ **切到那份** ✓（阶段日志 ✓，正好显示 LLM 进度 ✓）
+        #     其他时候仍钉臂日志 ✓（避免 §9.650 之前那种"来回跳"✓）
         _arm = os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")
+        f, _best = None, -1.0
         if os.path.isfile(_arm):
-            f, _best = _arm, os.path.getmtime(_arm)
-        else:
-            f, _best = None, -1.0
+            _amt = os.path.getmtime(_arm)
+            _stale = (__import__("time").time() - _amt) > 60
+            _newer = None
+            if _stale:
+                for _c3 in _cands:
+                    try:
+                        if os.path.isfile(_c3) and os.path.getmtime(_c3) > _amt + 5:
+                            if _newer is None or os.path.getmtime(_c3) > os.path.getmtime(_newer):
+                                _newer = _c3
+                    except Exception as _e_c3:
+                        print("[dashboard] 候选检查失败: %s" % str(_e_c3)[:60], flush=True)
+            if _newer:
+                f, _best = _newer, os.path.getmtime(_newer)
+                out["log_switched_from_arm"] = True
+            else:
+                f, _best = _arm, _amt
         for _c in ([] if f else _cands):
             try:
                 if os.path.isfile(_c) and os.path.getmtime(_c) > _best:

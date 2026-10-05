@@ -166,7 +166,8 @@ def _rows_to_dicts(rows):
                 lo = lo if lo is not None else c
             out.append({"time": str(t)[:19].replace("T", " "), "open": o, "high": h, "low": lo, "close": c,
                         "vol": _f(v) or 0.0, "amount": _f(amt) or 0.0})
-        except Exception:
+        except Exception as _e_rd:
+            print("[mins] 行解析跳过: %s" % str(_e_rd)[:60], file=sys.stderr)
             continue
     return out
 

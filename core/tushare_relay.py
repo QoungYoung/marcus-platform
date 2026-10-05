@@ -368,7 +368,13 @@ class TushareRelay:
                 if _is_request_shape_error(exc):
                     self._demote(source, api, str(exc))
                 if len(ordered) > 1:
-                    logger.warning("[tushare_relay] %s 走 %s 失败，尝试下一源: %s", api, source.name, exc)
+                    # ★ 账本 §9.629 ✓（用户 2026-10-05：「兜底成功的就不要打印这个日志了」✓）：
+                    #   这是**逐源失败**的中间提示 ✓ —— 后面**还有源**、且**几乎总能兜住** ✓
+                    #   ⇒ 之前用 `logger.warning` ✗ ⇒ 既刷屏 ✗ **又被 logging 桥接进告警落盘** ✗✗
+                    #   ⇒ 降级为 **debug** ✓：默认不打印 ✓、不进告警 ✓
+                    #   ⇒ 真正的失败仍会从**最后一行**出来 ✓（`raise TushareRelayError('… 全部数据源失败')` ✓
+                    #      ⇒ 调用方打印 `[mins] … 失败:` ✓ ⇒ 那条**是 WARNING+ ⇒ 会告警** ✓）
+                    logger.debug("[tushare_relay] %s 走 %s 失败，尝试下一源: %s", api, source.name, exc)
                 continue
             return out_fields, items
 

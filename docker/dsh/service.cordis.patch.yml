@@ -47,6 +47,7 @@
     - id: dsh-marcus-bridge
       name: dsh-dsh-marcus-bridge
 
-    # 做T会话专用上下文压缩：t-agent-* 会话用股票投资信息优先的摘要指令
-    - id: dsh-t-compaction
-      name: dsh-t-compaction
+    # ★ 2026-10-05 ✓（用户：「dsh-t-compaction 不要了」✓）：
+    #   新版 DSH **自带压缩链** ✓（`dsh-compaction-basic` ＋ `dsh-compaction-tool-result-pruner`
+    #   ＋ `dsh-command-compact` ✓）⇒ 自研的 `dsh-t-compaction` **不再需要** ✓
+    #   注 ✓：**升级镜像前**，在用容器仍需它 ✓（这次只改**升级后的配置** ✓）
