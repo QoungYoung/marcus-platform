@@ -65,8 +65,8 @@ def _silent_alert(where, exc=None):
         try:
             print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
                   str(exc)[:110] if exc is not None else ""), flush=True)
-        except Exception:
-            pass
+        except Exception as _e_p9:
+            print("[dashboard] 忽略: %s" % str(_e_p9)[:70], flush=True)
 
 
 try:  # 仓库 .venv 已装 psycopg2；缺失时服务仍可启动，只是账户/成交/持仓为空并给出告警
@@ -2278,6 +2278,12 @@ def day_progress(root: str, account: str = "") -> dict:
         #   只看它 ⇒ 会"看起来卡住"✗（用户 2026-10-05 因此以为卡住 ✓）
         #   ⇒ 在 天级日志 与 当日/隔日各阶段日志 里，挑 mtime 最新的那份 ✓
         _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # ★ 账本 §9.650 ✓（用户：「看板上还是上一次回测的日志」✗）：
+        #   实测 ✓：看板没错（给的是**本轮**的 `arm_20260105.log` ✓）
+        #     但那是**阶段日志** ✗ ⇒ 跑到"等 LLM 批量"的阶段时会**几分钟没有新行** ✗
+        #     ⇒ 看起来像"卡在上一轮" ✗✓
+        #   ⇒ 改为**优先"臂自己的日志"** ✓（`size_run_t35d.log` ✓：它每步都写 ✓ ⇒ 永远是活的 ✓），
+        #     阶段日志作为**并列候选**保留 ✓（按 mtime 兜底 ✓）
         _cands = [os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")]
         _summ = os.path.join(root, "_summary")
         for _pat in ("*_%s.log" % cur, "*_%s.log" % (day_dirs[day_dirs.index(cur) + 1]
@@ -2285,15 +2291,24 @@ def day_progress(root: str, account: str = "") -> dict:
                      "switch_*.log", "confirm_*.log", "arm_*.log"):
             try:
                 _cands += sorted(_g.glob(os.path.join(_summ, _pat)), key=os.path.getmtime)[-2:]
-            except Exception:
-                pass
-        f, _best = None, -1.0
-        for _c in _cands:
+            except Exception as _e_g:
+                print("[dashboard] glob 失败: %s" % str(_e_g)[:60], flush=True)
+        # ★ 账本 §9.650 ✓（用户：「看板上还是上一次回测的日志」✗）：
+        #   真因 ✓：这里**按 mtime 挑最新** ✗ ⇒ 阶段日志（`arm_<日>.log` ✓）常比臂日志**新 10 秒** ✓
+        #     ⇒ 于是显示那份 ✗；而它在"等 LLM 批量"时**几分钟不写** ✗ ⇒ **看起来像卡住/像旧日志** ✓
+        #   ⇒ 改为：**优先臂自己的日志** ✓（`.dsh-tmp/wolfbt/logs/size_run_t35d.log` ✓，
+        #     它每步都写 ✓ ⇒ 永远在动 ✓）；臂日志不存在时才按 mtime 兜底 ✓
+        _arm = os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")
+        if os.path.isfile(_arm):
+            f, _best = _arm, os.path.getmtime(_arm)
+        else:
+            f, _best = None, -1.0
+        for _c in ([] if f else _cands):
             try:
                 if os.path.isfile(_c) and os.path.getmtime(_c) > _best:
                     f, _best = _c, os.path.getmtime(_c)
-            except Exception:
-                pass
+            except Exception as _e_g2:
+                print("[dashboard] glob 失败: %s" % str(_e_g2)[:60], flush=True)
         out["log_file"] = os.path.basename(f) if f else ""
         lines = []
         if f and os.path.isfile(f):
@@ -2304,7 +2319,26 @@ def day_progress(root: str, account: str = "") -> dict:
         tail = "".join(lines)
         # ★ 账本 §9.611 ✓：**阶段优先按"最新阶段日志的文件名"判定** ✓（永远正确 ✓）
         #   原因：天级日志只在阶段边界写 ✗，而各阶段日志名已直接标明阶段 ✓
-        _bn = (out.get("log_file") or "")
+        # ★ 账本 §9.651 ✓（用户：「为什么页面上进度显示是补分钟档」✗）：
+        #   副作用 ✓：§9.650 把**日志面板**钉在臂日志上（`size_run_t35d.log` ✓），
+        #     而这里**优先用"日志面板的文件名"判阶段** ✗ ⇒ 臂日志匹配不上任何前缀 ✗
+        #     ⇒ 退化成"按内容找" ✓ ⇒ 尾巴里有 `ensure_mins` ⇒ **误报"补分钟档"** ✗✓
+        #   ⇒ 解耦 ✓：**阶段判定另取"最新的阶段日志"** ✓（与日志面板显示哪份无关 ✓）
+        _stage_files = []
+        for _c2 in _cands:
+            _b2 = os.path.basename(_c2)
+            if _b2.startswith(("minsfill_", "fetchmins_", "adj_mins_", "pack_",
+                               "arm_", "confirm_", "switch_", "prod_")):
+                try:
+                    _stage_files.append((os.path.getmtime(_c2), _b2))
+                except Exception as _e_p9:
+                    print("[dashboard] 忽略: %s" % str(_e_p9)[:70], flush=True)
+        _bn = ""
+        if _stage_files:
+            _bn = sorted(_stage_files)[-1][1]          # ★ 最新的**阶段日志** ✓
+        elif (out.get("log_file") or "").startswith(("minsfill_", "fetchmins_", "adj_mins_",
+                                                     "pack_", "arm_", "confirm_", "switch_", "prod_")):
+            _bn = out.get("log_file")                  # 兜底：面板文件本身就是阶段日志 ✓
         stage = ""
         _byname = (("minsfill_", "ensure_mins"), ("fetchmins_", "ensure_mins"), ("adj_mins_", "ensure_mins"),
                    ("pack_", "pack"), ("arm_", "legs"), ("confirm_", "legs"), ("switch_", "legs"),
