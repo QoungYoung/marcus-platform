@@ -28027,3 +28027,42 @@ docker logs … ⇒ [Bridge] 会话已 fork 迁移: chat:default -> default_m179
 
 - 臂 **27536** 未受影响 ✓ ⇒ **已完成 3 天**（0105/0106/0107 ✓），正在跑 **0108** ✓
 - 容器 `/health` ⇒ 200 ✓（直连与经 13001 转发均 ✓）
+
+---
+
+## §9.595 **为什么会有 4.5 万个会话事件** ✓ —— 三个原因（桥的代码里写明了 ✓）
+
+### ① 桥的实现（`docker/dsh/bridge/lib/index.js` ✓，就在我们仓库里）
+
+```js
+const { message, session_id, mode, model, thinking_level } = body;
+const sessionId = session_id || 'default';                 ← ① 支持指定会话（我们没传 ✗）
+const SESSION_TTL_MS      = 45 * 60 * 1000;                ← 空闲 45 分钟回收 ✓
+const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;      ← ② chat 模式 **30 天** ✗
+// ③ 坏会话 fork 迁移（DSH rc.6 resume 边界 bug：多次中断的会话 driver 不启动，
+//    消息 spliced 后 turn 不 claim → 空回复。fork 保留已完成对话历史，新 driver 可正常跑）
+```
+
+### ② 三个原因 ✓
+
+| # | 原因 ✓ | 证据 ✓ |
+|---|---|---|
+| **①** | **所有调用共用 `default` 会话** ✗（臂的 `--agent-url` 没传 `session_id` ✗）⇒ **跨天／跨轮／跨工具全部堆在一起** ✗ | `WOLF_MEMBER_LLM_URL=http://127.0.0.1:13001/chat` ✓（无 session 字段 ✗）|
+| **②** | **chat 模式 TTL 30 天** ✗ ⇒ 会话**几乎不回收** ✓ | 代码常量 ✓ |
+| **③** | ★ **DSH rc.6 的 resume bug** ✗ ⇒ 会话被中断后 **driver 不启动** ⇒ **空回复** ✗ ⇒ 桥 **fork 迁移（复制全部历史）** ✗ ⇒ **事件翻倍再翻倍** ✗ | 日志：`runAgentTurn 空回复` ✗ ＋ `会话已 fork 迁移 …（seed 45865 事件）` ✗ |
+- ⇒ ⇒ **而且是"每回合"就在爆** ✓：日志里单回合事件分布
+  `{agent/inbox/spliced: **9999**, step/start: **3751**, user/message: **3752**}` ✗ ⇒ **一次对话几千个事件** ✗
+- ⇒ ⇒ 叠加起来 ⇒ **4.5 万事件** ⇒ **node 堆爆** ⇒ **OOM 重启（66+ 次）** ⇒ **每次重启又可能触发 fork** ✗ ⇒ **正反馈** ✓
+
+### ③ 已做的缓解（三层 ✓）
+
+| 缓解 ✓ | 状态 ✓ |
+|---|---|
+| **堆上限 3072 ⇒ 8192** ✓ | 实测 **8240 MB** ✓ |
+| **守护每 15 分钟重置会话** ✓ | 新守护 pid **62593** ✓（`POST /reset` ✓）|
+| **起臂时重置会话** ✓ | 已加到 `_run_t35d_exec.sh` ✓ ＋ 模板 `_run_t35c_exec.sh` ✓ |
+
+### ④ 更彻底的修法（未做，需改客户端 ✗）
+
+- 让**每一天用独立的 `session_id`** ✓（`/chat` 支持 ✓，但需要 agent 客户端把 `session_id` 传进去 ✗）
+  ⇒ 从根上避免"跨天累积" ✓ ⇒ **建议作为后续项** ✓
