@@ -629,8 +629,10 @@ def install_data_shims(market: "LocalMarket1m", hhmm_ref: Dict[str, str]):
     for mod in list(sys.modules.values()):
         try:
             _d = vars(mod)
-        except TypeError:
-            continue                      # 少数模块没有 __dict__ ✓（跳过 ✓）
+        except TypeError as _e_vd:
+            print("[shim] 跳过无 __dict__ 的模块 %s: %s"
+                  % (getattr(mod, "__name__", "?"), str(_e_vd)[:50]), file=sys.stderr, flush=True)
+            continue
         for k, old in origs.items():
             if old is not None and _d.get(k) is old:
                 try:
