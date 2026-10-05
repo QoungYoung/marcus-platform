@@ -28785,3 +28785,35 @@ except Exception as _e_d1:
 - 「文件缺失」多为**假警报** ✗（兜底会成功 ✓）；而「**规则没跑**」意味着**策略少了一道判据** ✗
   ⇒ ⇒ 是**策略行为差异**，必须让人看见 ✓
 - 门 ✓：`58 passed` ✓｜**防回潮 0 处** ✓
+
+---
+
+## §9.620 **★ 验证 §9.616 的 `datetime` 修复：语义正确、且影响面很大** ✓
+
+### ① 钉钟的真机制（`bt_prod_run.py` ✓）
+
+```python
+# :132  _REAL_DATETIME_CLS = _dm.datetime     ← 捕获**真实类**（钉钟前 ✓）
+# :135  _dt.datetime = _Datetime              ← ★ 把**模拟类**装到 datetime 模块上 ✓
+# :538  _orig_cls = _REAL_DATETIME_CLS
+# :556  setattr(mod, "datetime", _dt.datetime)  ← 我改的那一行 ✓（原来写 `datetime.datetime` ✗）
+```
+- ⇒ ⇒ 所以 `_dt.datetime` **运行时就是模拟类** ✓ ⇒ **我的改法与原作者意图完全一致** ✓
+  （原写法 `datetime.datetime` 只是**名字不存在** ✗ ⇒ `NameError` ⇒ **广播从未生效** ✗）
+
+### ② 实测（复刻真流程 ✓）
+
+| 步骤 ✓ | 结果 ✓ |
+|---|---|
+| 钉钟前 ✓ | `_dt.datetime = <class 'datetime.datetime'>` ✓ |
+| 调 `_pin_clock_dynamic()` 后 ✓ | `_dt.datetime = <class 'bt_prod_run._pin_clock_dynamic.<locals>._Datetime'>` ✓（**模拟类** ✓）|
+| 复刻广播那一行 ✓ | 目标模块的 `datetime` ⇒ **模拟类** ✓✓ |
+| 守卫 ✓ | `_REAL_DATETIME_CLS` **钉钟前为 `None`** ✓ ⇒ `_orig_cls is not None` 的门要求"先钉钟再广播" ✓（真流程正是如此 ✓）|
+
+### ③ ⇒ 影响面（为什么这个 bug 重要 ✓）
+
+- **修好之前** ✗：`setattr` 抛 `NameError` ⇒ **每个模块的广播都失败** ✗（每天 48 条 ✓）
+  ⇒ ⇒ **那些模块里的 `datetime.now()` 根本没被钉到模拟日** ✗ ⇒ **未来函数防线缺了一环** ✗
+- **修好之后** ✓：凡是"还持有真实类"的模块**都被换成模拟类** ✓ ⇒ 防线补齐 ✓
+- 佐证 ✓：告警里 `datetime` 错的历史分布 **0105＝60／0106＝48／0107＝48** ✗ ⇒ **每轮必现** ✓；
+  **0108（本轮）尚无 alerts.jsonl** ✓ ⇒ 需观察是否归零 ✓（**验收判据** ✓）
