@@ -2862,14 +2862,21 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                         print("[gateway] %s 已转正（臂库 ✓ pos_meta.promoted=1）⇒ 交回普通管理 ✓" % symbol,
                               flush=True)
                         raise StopIteration      # 跳到下一段（不再看旧 JSON ✓）
-            except StopIteration as _e_sil11:
-                try:
-                    from app.services import alert_hub as _ah_sil
-                    _ah_sil.note_silent("t_gateway.py:2803", _e_sil11)
-                except Exception:
-                    print("[silent:t_gateway.py:2803] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
+            except StopIteration:
+                # ★ 账本 §9.631 ✓（用户报 `silent:t_gateway.py:2803 | StopIteration` ✓）：
+                #   `raise StopIteration` 是**故意的控制流** ✓（跳到下一段、不再看旧 JSON ✓）
+                #   ⇒ **绝不能当异常留痕** ✗ —— 原实现却把它 `note_silent` 了 ✗
+                #   ⇒ 于是**每次命中"已转正"都自报一条假告警** ✗（每命中一次刷一条 ✓）
+                #   ⇒ 现在只**留一行 print** ✓（满足"不静默"✓，但**不进告警** ✗）
+                print("[gateway] 转正命中 ⇒ 走控制流跳转（非异常 ✓）", flush=True)
             except Exception as _eA:
+                # ★ 真失败（查询挂了 ⇒ 走旧 JSON 兜底 ✓）⇒ **落盘留痕** ✓（只落盘、不推 QQ ✓）
                 print("[gateway] 臂库转正查询失败（继续用旧路径 ✓）: %s" % str(_eA)[:70], flush=True)
+                try:
+                    from app.services import alert_hub as _ah_g2
+                    _ah_g2.note_silent("t_gateway.臂库转正", _eA)
+                except Exception as _e_g2:
+                    print("[gateway] 臂库转正留痕失败: %s" % str(_e_g2)[:60], flush=True)
             try:
                 import json as _jsP
                 _rootP = os.path.dirname(os.environ.get("DATA_DIR", "/app/data")) or "/app/data"

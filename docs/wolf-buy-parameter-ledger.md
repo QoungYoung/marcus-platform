@@ -29091,3 +29091,31 @@ if clen:
 - **写 TCP/HTTP 代理时，`recv` 一次不代表收完** ✗ —— 必须**按 `Content-Length` 读满** ✓
   （这是代理类代码最常见的坑 ✓）
 - ⇒ 而这个坑**是我自己埋的** ✗（§9.604 引入转发器时 ✓）⇒ 也解释了**今天早些时候那批"偶发"唤醒失败** ✓
+
+---
+
+## §9.631 **`silent:t_gateway.py:2803 | StopIteration` 是误报** ✗（自伤式 ✓）
+
+### ① 原文（`t_gateway.py` 臂库转正查询 ✓）
+
+```python
+if _rA and int(_rA[0] or 0) == 1:
+    _promo_ok = False
+    print("[gateway] %s 已转正（臂库 ✓ pos_meta.promoted=1）⇒ 交回普通管理 ✓" % symbol)
+    raise StopIteration          # ★ **故意的控制流** ✓（跳到下一段、不再看旧 JSON ✓）
+except StopIteration as _e_sil11:
+    _ah_sil.note_silent("t_gateway.py:2803", _e_sil11)   # ✗ 把"故意跳转"当异常留痕 ✗
+```
+- ⇒ ⇒ **每次命中"已转正"就自报一条假告警** ✗（**每命中一次刷一条** ✓）
+- ⇒ ⇒ 而且它**反过来证明**：**§9.614 的列名修复生效了** ✓
+  （查询不再抛 `no such column` ✓ ⇒ 真能读到 `promoted=1` ✓ ⇒ 才走到这里 ✓）
+
+### ② 修法 ✓
+
+| 分支 ✓ | 处理 ✓ |
+|---|---|
+| **`except StopIteration`**（故意跳转 ✓）| **只 print 一行** ✓（满足"不静默"✓、**不进告警** ✗）|
+| **`except Exception`**（查询真挂 ✗ ⇒ 走旧 JSON 兜底 ✓）| **`note_silent`** ✓（**落盘** ✓、不推 QQ ✓）|
+
+- 门 ✓：**58 passed** ✓｜**防回潮 0 处** ✓
+- ⚠️ 生效时机 ✓：**下一次起臂**（当前臂是旧代码 ✗ ⇒ 还会刷这条假告警 ✓，可忽略 ✓）
