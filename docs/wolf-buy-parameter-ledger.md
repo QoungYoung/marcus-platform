@@ -29189,3 +29189,40 @@ else:      result = t_bridge.wake_and_decide(trig) or {}
   `source`／`line_name` ✓
 - ★ **教训** ✓：**"看起来冗余"的字段要**打印原文**确认** ✗ —— 本次两层嵌套
   （`input_snapshot.trigger.snapshot` ✓）连看两版才看准 ✓；削完必须**断言关键字段仍在** ✓
+
+---
+
+## §9.636 **批量判定仍失败的真凶：转发器的 socket 超时没清掉** ✗（我引入的 ✓）
+
+### ① 真凶 ✓
+
+```python
+up = socket.create_connection(TARGET, timeout=10)   # ★ 超时**会一直留在 socket 上** ✗
+...
+def _pump(src, dst, tag):        # 转发线程
+    data = src.recv(BUF)         # ⇒ **静默 10 秒就抛 timeout** ✗
+    ...
+    finally:
+        for s in (src, dst): s.shutdown(SHUT_RDWR)   # ⇒ 两侧一起关 ✗
+```
+- **LLM 一次回合要 18~30 秒** ✓（批量 38 只 ✓）⇒ **中间必然有 >10 秒无字节** ✗
+  ⇒ `recv` 超时 ⇒ **关连接** ⇒ 客户端看到 **`RemoteDisconnected`** ✓✓
+- 这解释了「**单只/小批量能过、批量必挂**」✗✓（小请求在 10 秒内就返回了 ✓）
+
+### ② 修法 ✓
+
+```python
+up = socket.create_connection(TARGET, timeout=10)
+up.settimeout(None)      # ★ 连接成功后**取消超时**（长连接必须阻塞读 ✓）
+...
+cli.settimeout(None)     # ★ 下行 pump 同样 ✓（body 读完后就取消 ✓）
+```
+- 语义 ✓：**超时只管"连接建立"** ✓（那是 10 秒该管的 ✓）；**连接后进入阻塞读** ✓
+- 与 §9.630（body 未读满 ✗）是**两个不同**的 bug ✓ —— 前者修的是**上行截断** ✓，
+  本条修的是**下行被超时掐断** ✓
+
+### ③ 教训 ✓
+
+- **`socket.create_connection(timeout=…)` 之后必须 `settimeout(None)`** ✗ ——
+  否则这个超时会**悄悄沿用**到后续所有 `recv` ✓（写代理/长连接最容易踩 ✓）
+- ⇒ 而这**两个 bug 都是我 §9.604 引入转发器时埋的** ✗（上行截断 ＋ 下行超时 ✓）
