@@ -6192,14 +6192,26 @@ def _prev_daily_rows(sym, n=5):
     D = _os.environ.get('DATA_DIR', '/app/data')
     code6 = ''.join(ch for ch in str(sym) if ch.isdigit())[:6]
     data = {}
+    # ★ 账本 §9.617 ✓：**只在"两个源都失败"时才留痕** ✗
+    #   原实现逐 root 报警 ⇒ 回测里 `stock_5m_bt` 永远不存在 ✗ ⇒ **每只票都抛一条假警报** ✗
+    #   （实测 t_monitor.py:6105 是当日告警的一大来源 ✓）而真正的兜底 `recent_sync` 随后成功 ✓
+    #   ⇒ 行为完全不变（顺序与兜底都不动 ✓），只是**不再报假警** ✓
+    _miss10 = None
+    d = None
     for root in ['stock_5m_bt', 'recent_sync']:
         p = _os.path.join(D, root, code6 + '.json')
         try:
             d = _j.load(open(p, encoding='utf-8'))
+            _miss10 = None
+            break
         except Exception as _e_sil10:
-            _silent_alert("t_monitor.py:6105", _e_sil10)
+            _miss10 = _e_sil10
             continue
-        for k, v in d.items():
+    if d is None:
+        if _miss10 is not None:
+            _silent_alert("t_monitor.py:6105", _miss10)
+        return []
+    for k, v in d.items():
             bs = sorted(v, key=lambda x: str(x.get('time') or x.get('trade_time')))
             if bs:
                 data.setdefault(k, {'close': float(bs[-1]['close']),
