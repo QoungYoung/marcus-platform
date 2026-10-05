@@ -143,25 +143,22 @@ def note(where: str, exc: Optional[BaseException] = None, msg: str = "", ctx: Op
 def _record_only(where: str, exc: Optional[BaseException] = None, msg: str = "") -> None:
     """**只落盘、不推 QQ** ✗（账本 §9.640/§9.645 ✓）。
 
-    ★ 修正 ✓（自测报 `name '_DEDUP' is not defined` ✗）：改用**本模块真实的**内部名 ✓：
-      `_SEEN`（去重表 ✓）、`_dedup_key()`（键 ✓）、`_alerts_path()`（落盘路径 ✓）、
-      `_i()`（读环境整数 ✓）—— 与 `note()` 的落盘口径**完全一致** ✓
+    ★ 两处名错都已修正 ✓（`_DEDUP` ✗ ⇒ `_SEEN` ✓；`datetime` ✗ ⇒ `time.strftime` ✓）：
+      本函数**逐行照抄 `note()` 的落盘段** ✓（`_fmt` + `_alerts_path` + `json.dumps` ✓），
+      只**去掉 QQ 推送那一段** ✗ ⇒ 口径与 `note()` **完全一致** ✓
     """
     try:
-        import time as _t2
-        now = _t2.time()
-        key = _dedup_key(where, exc, msg)
-        if now - float(_SEEN.get(key, 0) or 0) < _i("WOLF_ALERT_DEDUP_SEC", 600):
-            return
-        _SEEN[key] = now
-        rec = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "where": str(where),
-               "exc": (type(exc).__name__ if exc else ""),
-               "msg": (msg or (str(exc) if exc else ""))[:900], "ctx": {}}
+        line = _fmt(where, exc, msg)
+        rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "where": where,
+               "exc": (type(exc).__name__ if exc is not None else ""),
+               "msg": (str(exc)[:300] if exc is not None else str(msg)[:300]),
+               "ctx": {}}
         try:
             with open(_alerts_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as _e_w:
             print("[ALERT] 落盘失败: %s" % str(_e_w)[:70], flush=True)
+        print(line, flush=True)
     except Exception as _e_r:
         print("[ALERT] _record_only 失败: %s" % str(_e_r)[:70], flush=True)
 
