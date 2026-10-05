@@ -140,6 +140,33 @@ def note(where: str, exc: Optional[BaseException] = None, msg: str = "", ctx: Op
         pass
 
 
+def _record_only(where: str, exc: Optional[BaseException] = None, msg: str = "") -> None:
+    """**只落盘、不推 QQ** ✗（账本 §9.640 ✓）—— 供 `note_silent` 使用 ✓。
+
+    与 `note()` 共用去重记账 ✓，但**跳过 QQ 推送** ✓；
+    看板「告警回看」仍能查到 ✓（用户要"看得见"✓、但不要"被打扰"✓）。
+    """
+    try:
+        import time as _t2
+        key = "%s|%s|%s" % (where, type(exc).__name__ if exc else "", (msg or "")[:60])
+        now = _t2.time()
+        if now - _DEDUP.get(key, 0.0) < _DEDUP_SEC:
+            return
+        _DEDUP[key] = now
+        line = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "where": str(where),
+                "exc": (type(exc).__name__ if exc else ""),
+                "msg": (msg or (str(exc) if exc else ""))[:900], "ctx": {}}
+        try:
+            p = _alerts_path()
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        except Exception as _e_w:
+            print("[ALERT] 落盘失败: %s" % str(_e_w)[:70], flush=True)
+    except Exception as _e_r:
+        print("[ALERT] _record_only 失败: %s" % str(_e_r)[:70], flush=True)
+
+
 def note_silent(where: str, exc: Optional[BaseException] = None, msg: str = "") -> None:
     """**静默点专用**出口（账本 §9.543）：原来 `except …: pass` ⇒ 现在至少留痕。
 
@@ -154,7 +181,12 @@ def note_silent(where: str, exc: Optional[BaseException] = None, msg: str = "") 
             pass
         return
     try:
-        note("silent:" + str(where), exc, msg)
+        # ★ 账本 §9.640 ✓（用户：「这种信息类的还告警吗？没必要吧」的延伸 ✓）：
+        #   按我们自己的三分类 —— 「**降级/放行**」⇒ **只落盘** ✓、**不推 QQ** ✗
+        #   旧实现调 `note()` ✗ ⇒ 于是 `silent:` 类（WARNING 桥、文件缺失、降级 ✓）
+        #   **全部推到 QQ** ✗ ⇒ 实测用户收到一串 `silent:log:schedulerservice.py:232` ✗✓
+        #   ⇒ 改为只记账（`_record_only` ✓ ⇒ 落盘 ✓ + 看板可回看 ✓，**不推** ✓）
+        _record_only("silent:" + str(where), exc, msg)
     except Exception as _e_sil5:
         pass
 

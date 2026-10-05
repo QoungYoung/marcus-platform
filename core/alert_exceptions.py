@@ -38,6 +38,15 @@ def _should_ignore(exc_type) -> bool:
     return any(x in name for x in _IGNORE)
 
 
+# ★ 账本 §9.640 ✓（用户贴来 QQ 里的 pandas/vnpy 噪音 ✗）：
+#   **"预期内的 raise"**（可选依赖探测／monkey-patch 探针／`getattr` 守卫 ✓）
+#   不该推 QQ ✗ ⇒ 只**落盘**（看板可查 ✓）：
+#     · `ImportError`／`ModuleNotFoundError` ⇒ 可选依赖守卫 ✓（`vnpy`／`core.xueqiu_engine` ✓）
+#     · `AttributeError` ⇒ 探针式 `getattr`（我们自己的 shim ✓，实测 `__init__.py:19` ✓）
+#   其余（`ValueError`／`KeyError`／`OperationalError` … ✓）⇒ 照常**推 QQ** ✓
+_QUIET_TYPES = ("ImportError", "ModuleNotFoundError", "AttributeError")
+
+
 def _emit(kind: str, where: str, exc) -> None:
     """按 (where, 类型) 去重后转发给 alert_hub.note（落盘 ＋ 推 QQ ✓）。"""
     try:
@@ -62,7 +71,11 @@ def _emit(kind: str, where: str, exc) -> None:
             _ah = None
         if _ah is None:
             return
-        _ah.note(where, msg="%s×%d：%s" % (kind, max(1, n), str(exc)[:260]))
+        _quiet = any(t in type(exc).__name__ for t in _QUIET_TYPES)
+        if _quiet:
+            _ah.note_silent(where, msg="%s×%d：%s" % (kind, max(1, n), str(exc)[:260]))   # 只落盘 ✓
+        else:
+            _ah.note(where, msg="%s×%d：%s" % (kind, max(1, n), str(exc)[:260]))          # 落盘 ＋ 推 ✓
     except Exception as _e:
         try:
             sys.stderr.write("[alert_exc] emit 失败: %s\n" % str(_e)[:80])
@@ -79,7 +92,24 @@ def _install_monitoring() -> bool:
 
     # ★ 只报"我们自己的代码" ✓（否则会被标准库/解释器的控制流异常淹没 ✗：
     #   实测噪音来自 `<frozen os>`／`_collections_abc`／`weakref` 等 ✓）
-    _OURS = ("/jobs/", "/backend/app/", "/apps/", "/core/", "/main_line/")
+    # ★ 账本 §9.640 ✓（用户贴来 QQ 里的 pandas 噪音 ✗）：
+    #   旧写法 `_OURS = ("/jobs/", "/backend/app/", "/apps/", "/core/", "/main_line/")` **有漏洞** ✗：
+    #     `/core/` 会匹配 **`site-packages/pandas/core/dtypes.py`** ✗
+    #     ⇒ pandas/numpy 内部的**控制流异常**（`CategoricalDtype from 'M8'` 之类 ✓）
+    #       被当成"自家代码"报了出来 ✗ ⇒ **QQ 被刷屏** ✗✓
+    #   ⇒ 改为：**只认"仓库根目录前缀"** ✓（安装时按本文件位置算出 ✓，天然可移植 ✓）
+    #     ＋ 明确**排除**第三方目录（`site-packages`／`dist-packages`／`.venv` ✓）
+    _ROOT_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
+    _THIRD = ("/site-packages/", "/dist-packages/", "/.venv/", "/node_modules/")
+
+    def _is_ours(fs: str) -> bool:
+        if fs.startswith("<"):
+            return False
+        if not fs.startswith(_ROOT_PREFIX):
+            return False
+        if any(t in fs for t in _THIRD):
+            return False
+        return True
 
     def _on_raise(code, offset, exc):
         try:
@@ -87,8 +117,10 @@ def _install_monitoring() -> bool:
                 return
             f = getattr(code, "co_filename", "?")
             fs = str(f)
-            if fs.startswith("<") or not any(p in fs for p in _OURS):
-                return                      # 标准库/解释器/临时串 ✗ ⇒ 不报 ✓
+            if not _is_ours(fs):
+                return                      # 第三方/标准库/解释器/临时串 ✗ ⇒ 不报 ✓
+            if isinstance(exc, (ModuleNotFoundError, ImportError)):
+                return                      # ★ 可选依赖的 import 守卫是**预期**行为 ✗（如 vnpy ✓）
             name = os.path.basename(fs)
             line = getattr(code, "co_firstlineno", 0)
             _emit("raise", "%s:%s" % (name, line), exc)

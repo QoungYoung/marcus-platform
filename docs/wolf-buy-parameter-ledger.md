@@ -29257,3 +29257,22 @@ cli.settimeout(None)     # ★ 下行 pump 同样 ✓（body 读完后就取消 
 
 - 原来只在完成行打印 `坏文件 N` ✓ ⇒ 现**`N > 0` 即告警** ✓（`mk_adj_mins.坏文件` ⇒ 落盘 ＋ 推 QQ ✓）
 - 因为坏文件 = **该标的当日没有可用复权档** ✗ ⇒ 下游表现成「**当日无行情**」✗（0120 的根因 ✓）
+
+---
+
+## §9.640 **QQ 收到噪音：`silent:` 与"预期内 raise"** ✗（用户贴来一屏 ✓）
+
+### ① 两类噪音（都查实了 ✓）
+
+| 噪音 ✓ | 真因 ✗ | 修法 ✓ |
+|---|---|---|
+| **`[ALERT] silent:log:schedulerservice.py:232 …`** | ★ **`note_silent` 内部调了 `note()`** ✗ ⇒ **降级类也推 QQ** ✗（违反我们自己的三分类 ✓）| 新增 **`_record_only`** ✓ ⇒ `note_silent` **只落盘** ✓ |
+| **`dtypes.py:355 raise×1：Cannot construct a 'CategoricalDtype' from 'M8'`** 等 9 条 ✗ | `_OURS` 里的 **`/core/`** 匹配到 **`site-packages/pandas/core/`** ✗ | `_OURS` ⇒ **仓库根前缀 ＋ 排除 `site-packages`/`.venv`/`node_modules`** ✓ |
+| **`bt_asof_fetch.py:411：No module named 'core.xueqiu_engine'`** ✗ | 可选依赖的 **import 守卫**（预期 ✓）| **`ImportError`/`ModuleNotFoundError` ⇒ 只落盘** ✓ |
+| **`__init__.py:19：module 'pandas.core.internals' has no attribute 'fetch_tencent_quote'`** ✗ | ★ **我们自己的 monkey-patch 探针**（`getattr` 守卫 ✓）—— 查证后确认**不是过滤器漏** ✓ | **`AttributeError` ⇒ 只落盘** ✓ |
+
+### ② 原则（与三分类一致 ✓）
+
+- **QQ** ⇒ **只给"真失败"** ✓（`ValueError`／`KeyError`／`OperationalError`／`rc≠0` ✓）
+- **落盘（看板可回看 ✓）** ⇒ **+ 降级类 ＋ 预期内 raise** ✓
+- 开关 ✓：`WOLF_ALERT_ON_RAISE`（库内默认 0 ⇒ 生产零影响 ✓；回测 pins 置 1 ✓）
