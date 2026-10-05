@@ -227,6 +227,20 @@ class RelayShim:
         self.offline_calls = {}
 
     def _conn(self):
+        # ★ 账本 §9.622 ✓：**打开失败时把"真实路径 + CWD + 是否存在"打出来** ✗
+        #   背景（用户报错 ✓）：`sqlite3.OperationalError: unable to open database file` ✗
+        #   而手工测同一路径**能打开** ✓ ⇒ 说明失败时的路径/CWD 与我们想的不一样 ✗
+        #   ⇒ 与其猜 ✗，不如**让错误自证** ✓（只加打印 ✓，行为不变 ✓）
+        import sqlite3        # ★ 必须在这里 import ✗（原实现在本函数内 import ✓；我第一版漏了 ⇒ NameError ✗）
+        try:
+            return sqlite3.connect(self.bars_db, check_same_thread=False)
+        except Exception as _e_c:
+            import os as _os
+            print("[shim] ✗ self.bars_db 打开失败: %r｜CWD=%r｜存在=%s｜绝对=%r｜env DATA_DIR=%r"
+                  % (self.bars_db, _os.getcwd(), _os.path.exists(str(self.bars_db)),
+                     _os.path.abspath(str(self.bars_db)), _os.environ.get("DATA_DIR")), flush=True)
+            raise
+    def _conn_unused_keep_ref(self):
         import sqlite3
         c = sqlite3.connect(self.bars_db, check_same_thread=False)
         return c

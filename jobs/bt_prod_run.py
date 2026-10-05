@@ -1187,6 +1187,16 @@ def main() -> int:
                            env=dict(os.environ), cwd=REPO)
             _all5 = ((_r5.stdout or "") + (_r5.stderr or "")).strip().splitlines()
             print("[bt] 候选现算(子进程) rc=%s ✓｜输出 %d 行 ✓" % (_r5.returncode, len(_all5)), flush=True)
+            # ★ 账本 §9.622 ✓：**子进程失败要留痕并推 QQ** ✓（用户问"这些为什么都不发给我" ✓）
+            #   为什么 ✓：`候选现算 rc≠0` 意味着**候选/确认这一环没跑** ✗ = 策略少了一道判据 ✓
+            #   与"文件缺失"不同 ✗：那是假警报居多 ✓；这类是**真没跑** ✓
+            if int(_r5.returncode or 0) != 0:
+                try:
+                    from app.services import alert_hub as _ah5
+                    _ah5.note("bt_prod_run.候选现算", msg="子进程 rc=%s，尾部输出: %s"
+                              % (_r5.returncode, " ｜ ".join(str(x)[:120] for x in (_all5 or [])[-6:])))
+                except Exception as _e_n5:
+                    print("[bt] 候选现算留痕失败: %s" % str(_e_n5)[:70], flush=True)
             for _ln5 in _all5[-6:]:
                 print("[bt]   │ %s" % _ln5[:180], flush=True)
         except Exception as _e5:
