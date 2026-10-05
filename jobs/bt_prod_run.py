@@ -263,7 +263,15 @@ def _norm_bar(b) -> dict:
                 d[k] = 0.0
         return d
     try:
-        t, o, h, l, c, v, amt = b[1], b[2], b[3], b[4], b[5], b[6], b[7]
+        # ★ 账本 §9.643 ✓（用户 QQ 告警 `could not convert string to float: '5MIN'` ✗）：
+        #   **形状不一致的文件**（9 列：`[ts_code, t, freq='5MIN', o,h,l,c,vol,amount]` ✓）
+        #     会被按 8 列读 ✗ ⇒ `o = b[2] = '5MIN'` ✗ ⇒ `float('5MIN')` 抛 TypeError
+        #     ⇒ **整根 bar 被丢弃** ✗（静默数据丢失 ✓，实测 0120 的 `float('5MIN')` ✓）
+        #   ⇒ 判据与 `bt_pack_mins.py:76` 完全一致 ✓：
+        #     **列数 >= 9 且 b[2] 不是数值（就是 freq 字符串 ✓）⇒ 下标整体后移 1** ✓
+        _off = 1 if (len(b) >= 9 and not isinstance(b[2], (int, float))) else 0
+        t, o, h, l, c, v, amt = (b[1 + _off], b[2 + _off], b[3 + _off], b[4 + _off],
+                                 b[5 + _off], b[6 + _off], b[7 + _off])
         # ⚠️ 指数走本地 ClickHouse 兜底时**只有 close**（open/high/low 为 null，实测 20260105 的
         #    `000001_SH_5min_20260105.json`）→ 用 close 兜住，否则 float(None) 直接 KeyError/TypeError
         #    （指数只用于 `index.m5_dump` / `index.intraday_dd`，两处都只读 close/high）。

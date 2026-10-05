@@ -339,7 +339,7 @@ export WOLF_STATE_ROOT="$PWD/data/_bt_t35"
 export WOLF_BT_ALWAYS_TRADING='1'
 export WOLF_AMBUSH_DEBUG='1'
 export WOLF_ALERT_HUB='1'
-export WOLF_ALERT_QQ='1'
+export WOLF_ALERT_QQ='0'
 export WOLF_ALERT_QQ_TO='BF1510663A6C14D6E00E42B46108F51E'
 export WOLF_ALERT_DEDUP_SEC='600'
 export WOLF_ALERT_MAX_PER_HOUR='200'   # 9.554: 20 was eaten by missing-file noise
@@ -886,3 +886,7 @@ export WOLF_AGENT_SESSION_WINDOW='600'
 
 # ★ 账本 §9.634：卖腿+无持仓 ⇒ 不唤醒 LLM（与 AI 结论一致 ✓；库内默认 0）
 export WOLF_AGENT_SKIP_MOOT_SELL='1'
+
+# ★ 账本 §9.643 ✓（用户 2026-10-05：「机器人疯狂推送,我要烦死了」✗）：
+#   **回测不再推 QQ** ✗ —— 全部告警仍**落盘**（看板「告警回看」可查 ✓、我也在看 ✓）
+#   生产环境另行置 1 ✓（`WOLF_ALERT_QQ=1` ✓）
