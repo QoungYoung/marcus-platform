@@ -2863,11 +2863,8 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                               flush=True)
                         raise StopIteration      # 跳到下一段（不再看旧 JSON ✓）
             except StopIteration:
-                # ★ 账本 §9.631 ✓（用户报 `silent:t_gateway.py:2803 | StopIteration` ✓）：
-                #   `raise StopIteration` 是**故意的控制流** ✓（跳到下一段、不再看旧 JSON ✓）
-                #   ⇒ **绝不能当异常留痕** ✗ —— 原实现却把它 `note_silent` 了 ✗
-                #   ⇒ 于是**每次命中"已转正"都自报一条假告警** ✗（每命中一次刷一条 ✓）
-                #   ⇒ 现在只**留一行 print** ✓（满足"不静默"✓，但**不进告警** ✗）
+                # ★ §9.631 ✓：`raise StopIteration` 是**故意控制流** ✗ ⇒ 不能当异常留痕
+                #   （原来它 `note_silent` 了自己 ⇒ 每命中一次刷一条假告警 ✗）
                 print("[gateway] 转正命中 ⇒ 走控制流跳转（非异常 ✓）", flush=True)
             except Exception as _eA:
                 # ★ 真失败（查询挂了 ⇒ 走旧 JSON 兜底 ✓）⇒ **落盘留痕** ✓（只落盘、不推 QQ ✓）
