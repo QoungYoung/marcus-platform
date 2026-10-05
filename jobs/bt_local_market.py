@@ -57,6 +57,30 @@ sys.path[:0] = []
 import bt_env  # noqa: E402
 
 
+
+def _atomic_json_dump(payload, path):
+    """★ 账本 §9.628 ✓：**原子写** ✗（用户报 `Extra data` ✓）
+
+    背景 ✓：`t_monitor` 读 `recent_sync/<code6>.json` 时会报
+      `JSONDecodeError: Extra data: line 1 column N` ✗ —— 因为写方
+      `open(p, "w") + json.dump(...)` **不是原子的** ✗，读者能读到**半截** ✗。
+    做法 ✓：写同目录临时文件 ⇒ `os.replace`（同分区 ⇒ 原子 ✓）⇒ 读者只会看到
+      **旧版本或新版本**，不会是半截 ✓。与 `bt_prod_run.py:194-196` 既有范式一致 ✓。
+    """
+    import json as _j
+    import os as _o
+    tmp = "%s.tmp.%d" % (path, _o.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as _f:
+            _j.dump(payload, _f)
+        _o.replace(tmp, path)
+    except Exception as _e:
+        try:
+            _o.remove(tmp)
+        except Exception as _e2:
+            print("[atomic] 清理临时文件失败: %s" % str(_e2)[:60], flush=True)
+        raise
+
 def _silent_alert(where, exc=None):
     """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
 
@@ -498,8 +522,7 @@ class LocalMarket1m:
                                        "close": bs[-1]["close"], "vol": sum(b["vol"] for b in bs),
                                        "amount": sum(b["amount"] for b in bs), "_daily_agg": True}]
             p = os.path.join(root, _code6(sym) + ".json")
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(payload, f)
+            _atomic_json_dump(payload, p)          # ★ §9.628 原子写 ✓
             # ★ 账本 §9.618 ✓：**同时写 `stock_5m_bt`**（生产里它也是合法的源 ✓，
             #   见 `apps/main_line/fetch_brze_target_5min.py`：`输出: data/stock_5m_bt/<code6>.json {date: [bars]}` ✓）
             #   为什么 ✓：各调用方的读取顺序**不一致** ✗（`plan_runner` 先读 `stock_5m_bt` ✗、
@@ -511,8 +534,7 @@ class LocalMarket1m:
                 try:
                     _r2 = os.path.join(data_dir, "stock_5m_bt")
                     os.makedirs(_r2, exist_ok=True)
-                    with open(os.path.join(_r2, _code6(sym) + ".json"), "w", encoding="utf-8") as _f2:
-                        json.dump(payload, _f2)
+                    _atomic_json_dump(payload, os.path.join(_r2, _code6(sym) + ".json"))   # ★ §9.628 ✓
                 except Exception as _e_s5:
                     print("[bt] 写 stock_5m_bt 失败 %s: %s" % (_code6(sym), str(_e_s5)[:60]), flush=True)
 
@@ -597,10 +619,25 @@ def install_data_shims(market: "LocalMarket1m", hhmm_ref: Dict[str, str]):
     for k, v in names.items():
         setattr(tds, k, v)
     n = 0
+    # ★ 账本 §9.658 ✓（用户贴来一屏 `第三方的raise` ✗）：
+    #   真凶 ✓：旧写法用 **`getattr(mod, k, None)`** 遍历 `sys.modules` ✗
+    #     ⇒ **模块的 `__getattr__` 会被触发** ✗ ⇒ `typing` 的惰性求值（`__typing_subst__` ✓）
+    #       会被跑几千次 ✓（实测 `typing.py:478/1178 ×2228/2126` ✗）
+    #       ＋ `inspect.getsource` 去**读源码**（`read ×444` ✗）⇒ **纯浪费** ✓
+    #   ⇒ 改为 **`vars(mod)`** ✓（**只查模块字典，不触发任何 `__getattr__`** ✓✓）
+    #     语义完全等价 ✓（我们只关心"模块字典里有没有这个名字"✓）
     for mod in list(sys.modules.values()):
+        try:
+            _d = vars(mod)
+        except TypeError:
+            continue                      # 少数模块没有 __dict__ ✓（跳过 ✓）
         for k, old in origs.items():
-            if old is not None and getattr(mod, k, None) is old:
-                setattr(mod, k, names[k])
+            if old is not None and _d.get(k) is old:
+                try:
+                    setattr(mod, k, names[k])
+                except Exception as _e_sm:
+                    print("[shim] 替换 %s.%s 失败: %s" % (getattr(mod, "__name__", "?"), k, str(_e_sm)[:60]),
+                          file=sys.stderr, flush=True)
                 n += 1
     print("[shim] 1min 数据源替身已装（频率感知）：%s（另有 %d 处 from-import 引用被换）"
           % (",".join(names), n), file=sys.stderr)
