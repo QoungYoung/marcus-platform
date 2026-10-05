@@ -434,7 +434,37 @@ class LLMReplay:
         except Exception as e:
             print("[bt_llm] miss prompt 落盘失败: %s" % str(e)[:80])
 
+    def _with_session(self, url: str, kw: Dict[str, Any]) -> Dict[str, Any]:
+        """★ 给 `/chat` 注入**按天**的 `session_id`（账本 §9.596 ✓，开关默认关 ✓）
+
+        为什么 ✓：桥的会话默认**共用 `default`** ✗、chat 模式 TTL **30 天** ✗，
+        再叠加 DSH rc.6 的 resume bug（中断 ⇒ 空回复 ⇒ 桥 fork 复制全部历史 ✗）
+        ⇒ 实测会话涨到 **4.5 万事件** ⇒ node 堆爆 ⇒ OOM 重启 66+ 次 ✗
+        做法 ✓：每天一个会话（`bt:<agent>:<as_of>` ✓）⇒ 历史**不跨天累积** ✓
+        位置 ✓：放在**真正外呼之前** ✓ ⇒ **不影响缓存键**（prompt/sha 已算好 ✓）
+        """
+        try:
+            if str(os.getenv("WOLF_AGENT_SESSION_PER_DAY", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+                return kw
+            if "/chat" not in str(url):
+                return kw
+            body = kw.get("json")
+            if not isinstance(body, dict):
+                return kw
+            sid = "bt:%s:%s" % (self.agent, self.as_of)
+            if body.get("session_id") == sid:
+                return kw
+            kw2 = dict(kw)
+            nb = dict(body)
+            nb["session_id"] = sid
+            kw2["json"] = nb
+            return kw2
+        except Exception as _e_ws:
+            print("[bt_llm] session_id 注入失败: %s" % str(_e_ws)[:60], flush=True)
+            return kw
+
     def _record(self, url: str, kw: Dict[str, Any], prompt: str, psha: str) -> Any:
+        kw = self._with_session(url, kw)          # ★ 按天会话（账本 §9.596 ✓）
         resp = self.real_post(url, **kw)
         try:
             payload = resp.json()
