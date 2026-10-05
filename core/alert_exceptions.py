@@ -47,8 +47,13 @@ def _should_ignore(exc_type) -> bool:
 # ★ 追加 ✓（用户贴来的那屏 ✓）：`FileNotFoundError` 也是**降级类** ✗
 #   （可选文件缺失 ⇒ 走兜底 ✓，实测 `wolf_weekend_hedge.json`／`round_trip_state.json`／
 #     `trigger_mute_<日>.json`／`stock_5m_bt/<code>.json` ✓）⇒ **只落盘、不推 QQ** ✓
+# ★ 追加 ✓（用户再贴一屏 ✓）：
+#   · **`NetOffline`** ⇒ 回测**故意**断网时抛的（`BT_NET_OFFLINE` ✓，
+#     实测 `wolf_index_context.py:104 … datahubco.com/…/index_member_all` ✓）
+#     ⇒ **预期行为** ✗ ⇒ 只落盘 ✓
+#   · `No module named 'core.realtime_indicators'`（`bt_agent_tools.py:275` ✓）⇒ 已被 ImportError 覆盖 ✓
 _QUIET_TYPES = ("ImportError", "ModuleNotFoundError", "AttributeError", "FileNotFoundError",
-                "JSONDecodeError", "UnicodeDecodeError")
+                "JSONDecodeError", "UnicodeDecodeError", "NetOffline", "TushareRelayError")
 
 
 def _emit(kind: str, where: str, exc) -> None:
