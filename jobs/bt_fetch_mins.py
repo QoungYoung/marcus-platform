@@ -131,6 +131,67 @@ def _dedup(items, key_idx: int = 1):
     return out
 
 
+
+# ── ★ 账本 §9.600 ✓：**5min 拿不到时用 1min 回退**（用户实测发现 ✓）────────────
+# 实测（2026-10-05 ✓，直连 promax ✓）：
+#   freq=5MIN / 5min ⇒ **HTTP 202 + 0 行**（含"本地明明有 5min 档"的对照组 ✗）
+#   freq=1min       ⇒ **HTTP 200 code=0 ＋ 242 行** ✓（完整交易日 ✓）
+# ⇒ ⇒ 所谓 `minute_data_pending`（文档写"后台补数中"）对**不支持的 freq** 也会返回 ✗
+#     ⇒ 表现为「缺分钟档 ⇒ 当日不评估」✗（实测 SH603890 / SZ002428 的 0105 ✓）
+# 做法：5min 全路失败 ⇒ 取 **1min** ⇒ **本地聚合成 5min**（复用 bt_pack_mins.aggregate_5min ✓）
+#      输出与现有 5min 档**完全同形**（8 列 ✓、时间**降序** ✓）⇒ 下游零改动 ✓
+
+
+def _rows_to_dicts(rows):
+    """把 8 列（[ts,time,o,h,l,c,v,amt]）或 9 列（多一个 freq ✓）行统一成 dict ✓。"""
+    out = []
+    for r in rows or []:
+        try:
+            if len(r) >= 9:
+                t, o, h, lo, c, v, amt = r[1], r[3], r[4], r[5], r[6], r[7], r[8]
+            else:
+                t, o, h, lo, c, v, amt = r[1], r[2], r[3], r[4], r[5], r[6], r[7]
+
+            def _f(x):
+                try:
+                    return float(x)
+                except (TypeError, ValueError):
+                    return None
+            o, h, lo, c = _f(o), _f(h), _f(lo), _f(c)
+            if c is None:
+                continue
+            if o is None or h is None or lo is None:
+                o = o if o is not None else c
+                h = h if h is not None else c
+                lo = lo if lo is not None else c
+            out.append({"time": str(t)[:19].replace("T", " "), "open": o, "high": h, "low": lo, "close": c,
+                        "vol": _f(v) or 0.0, "amount": _f(amt) or 0.0})
+        except Exception:
+            continue
+    return out
+
+
+def _fallback_1min_to_5min(ts_code, day):
+    """1min ⇒ 聚合成 5min（**8 列、时间降序** ✓，与现有 5min 档同形 ✓）。"""
+    bars1 = fetch(ts_code, "1min", day, tries=1)
+    if not bars1:
+        return []
+    ds = _rows_to_dicts(bars1)
+    if not ds:
+        return []
+    try:
+        import bt_pack_mins as _PM
+        agg = _PM.aggregate_5min(ds)
+    except Exception as e:
+        print("[mins] 1min 聚合失败 %s %s: %s" % (ts_code, day, str(e)[:70]), file=sys.stderr)
+        return []
+    out = [[ts_code, b["time"], b["open"], b["high"], b["low"], b["close"], b["vol"], b["amount"]] for b in agg]
+    out.reverse()                     # 与现有 5min 档一致：时间**降序** ✓
+    print("[mins] %s %s 走 **1min 回退** ⇒ 聚合 5min %d 根（原 1min %d 根 ✓）"
+          % (ts_code, day, len(out), len(ds)), file=sys.stderr)
+    return out
+
+
 def fetch(ts_code: str, freq: str, day: str, tries: int = 3):
     """先 `stk_mins`（promax，历史全）；失败再退本地 ClickHouse `a_share_mins`
     （列序不同：ts_code,trade_time,freq,open,high,low,close,vol,amount —— 必须显式对齐，
@@ -185,6 +246,15 @@ def fetch(ts_code: str, freq: str, day: str, tries: int = 3):
             return out
     except Exception as e2:
         err = "%s | a_share_mins: %s" % (err, str(e2)[:70])
+    # ★ 账本 §9.600 ✓：**1min 回退**（5min 全路失败时 ✓；开关默认关 ✓）
+    if str(os.getenv("WOLF_MINS_1MIN_FALLBACK", "0")).strip().lower() in ("1", "true", "yes", "on") \
+            and str(freq).lower() != "1min":
+        try:
+            _fb = _fallback_1min_to_5min(ts_code, day)
+            if _fb:
+                return _fb
+        except Exception as _e_fb:
+            print("[mins] 1min 回退异常 %s %s: %s" % (ts_code, day, str(_e_fb)[:70]), file=sys.stderr)
     print("[mins] %s %s 失败: %s" % (ts_code, day, err), file=sys.stderr)
     return []
 
