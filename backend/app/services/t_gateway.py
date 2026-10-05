@@ -35,8 +35,13 @@ def compute_regime(*a, **k):
         from app.services.wave_gate import enabled as _wg_on, check_gate as _wg_check
         if _wg_on():
             g = _wg_check("low_buy")
-            return {"regime": "HALT" if g.get("gate") == "BLOCKED" else "ACTIVE",
-                    "gate_low_buy": g.get("gate"), "why": g.get("why"), "src": "wave_gate"}
+            # ★ 补齐旧 compute_regime 的键 ✓（§9.659 再修正：避免下游取键 KeyError ✗）
+            _g = g.get("gate")
+            return {"regime": "HALT" if _g == "BLOCKED" else "ACTIVE",
+                    "gate_low_buy": _g, "gate_high_sell": _g,
+                    "interpret_sign": 1, "index_drop": 0.0,
+                    "state": g.get("mode") or "auto",
+                    "why": g.get("why"), "src": "wave_gate"}
     except Exception as _e_wg2:
         print("[t_gateway] wave_gate 不可用 ⇒ 回退 t_regime: %s" % str(_e_wg2)[:80], flush=True)
     return _rg_compute_regime(*a, **k)
