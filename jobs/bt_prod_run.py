@@ -1255,7 +1255,27 @@ def main() -> int:
                     ln = ln.strip()
                     if not ln:
                         continue
-                    L = json.loads(ln)
+                    # ★ 账本 §9.647 ✓（用户报 `20260121 ⛔ 生产链失败 rc=3` ✗）：
+                    #   实测现场 ✓：`legs_switch.jsonl` **54 行里有 1 行被截断** ✗
+                    #     （写方是**逐行 append** ✓ ⇒ 进程被 kill 时会留下半行 ✗ ——
+                    #       我今天为了改 bug 反复重启，就是这么留下的 ✓）
+                    #   ⇒ 旧代码 `json.loads(ln)` **没有容错** ✗ ⇒ 抛 JSONDecodeError
+                    #     ⇒ `⛔ 布腿失败` ⇒ **整条年跑终止** ✗✗（代价极大 ✗）
+                    #   ⇒ 改为**跳过坏行 ＋ 大声记账** ✓（既不终止 ✓，也不静默 ✗）
+                    try:
+                        L = json.loads(ln)
+                    except Exception as _e_j:
+                        print("[bt] ⚠️ 跳过坏行 %s: %s（原始: %s）" % (fn, str(_e_j)[:60], ln[:80]),
+                              file=sys.stderr, flush=True)
+                        try:
+                            from app.services import alert_hub as _ah_lj
+                            _ah_lj.note("bt_prod_run.布腿坏行", msg="%s: %s（已跳过，继续跑 ✓）"
+                                        % (fn, str(_e_j)[:80]))
+                        except Exception as _e_lj:
+                            print("[bt] 坏行告警失败: %s" % str(_e_lj)[:60], file=sys.stderr, flush=True)
+                        continue
+                    if not isinstance(L, dict):
+                        continue
                     side = str(L.get("side") or "buy")
                     if side != "buy":
                         continue
