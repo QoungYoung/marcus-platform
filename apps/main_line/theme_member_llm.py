@@ -416,8 +416,36 @@ def prefetch(items, workers: int = int(os.getenv("WOLF_MEMBER_PREFETCH_WORKERS",
             _jobs.append((sym, ccs, th))
         if not _jobs:
             return 0
+        # ★ 账本 §9.660 ✓（用户：「让我知道布腿进度、候选进度、总计多少腿、布了多少、还剩多少」）：
+        #   这一段是布腿里**最久**的 ✗（每条候选都要问一次 dsh ✓）⇒ 之前**一句进度都不打** ✗
+        #   ⇒ 现在**逐条报进度 ＋ 已用时长 ＋ 均值 ＋ 预计剩余** ✓（串行时可精确外推 ✓）
+        import time as _t7
+        import threading as _th7
+        _t7_0 = _t7.time()
+        _tot = len(_jobs)
+        _cnt = {"n": 0}
+        _lk7 = _th7.Lock()
+        print("[member_llm] ★ 候选预热开始 %d 条（并发 %d）" % (_tot, max(1, int(workers))), flush=True)
+
+        def _one7(a):
+            try:
+                _r7 = is_member(a[0], a[1], a[2])
+            except Exception as _e_pf:
+                _silent_alert("theme_member_llm.py:prefetch", _e_pf)
+                _r7 = None
+            with _lk7:
+                _cnt["n"] += 1
+                _n7 = _cnt["n"]
+            if _n7 <= 30 or _n7 % 5 == 0 or _n7 == _tot:
+                _el = _t7.time() - _t7_0
+                _avg = _el / max(1, _n7)
+                print("[member_llm] 预热 %d/%d %s × %s｜已 %.0fs｜均 %.1fs｜剩 ~%.0fs"
+                      % (_n7, _tot, a[0], a[2], _el, _avg, _avg * (_tot - _n7)), flush=True)
+            return _r7
+
         with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
-            list(ex.map(lambda a: is_member(a[0], a[1], a[2]), _jobs))
+            list(ex.map(_one7, _jobs))
+        print("[member_llm] ★ 候选预热完成 %d 条（%.0fs ✓）" % (_tot, _t7.time() - _t7_0), flush=True)
         return len(_jobs)
     except Exception:
         return 0

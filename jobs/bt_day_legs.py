@@ -324,7 +324,14 @@ def main() -> int:
     print("[legs] 买链=%s" % buy_chains, flush=True)
 
     dom, legs_out = [], []
-    for chain, side in buy_chains[:2]:
+    # ★ 账本 §9.660 ✓（用户：「让我知道布腿进度、候选进度、总计多少腿、布了多少、还剩多少腿」）：
+    #   布腿期是全程**最久的黑箱** ✗（十几分钟 ✓）⇒ 这里先给**总计划**，再逐单元报进度 ✓
+    _lgT0 = time.time()
+    print("[legs] ★ 计划: pathA 链 %d 条（最多取前 2）+ pathB 主题 ≤%d 个｜已布 0 腿｜开始计时 ✓"
+          % (len(buy_chains), max(0, len(confirmed_today_set) - 1)), flush=True)
+    for _iA, (chain, side) in enumerate(buy_chains[:2], 1):
+        print("[legs] ★ 进度 pathA %d/%d 链=%s｜已布 %d 腿｜%.0fs"
+              % (_iA, min(2, len(buy_chains)), chain, len(legs_out), time.time() - _lgT0), flush=True)
         try:
             picks = arm.pick_buy(chain, exclude=held, limit=3, domain_out=dom)
         except Exception as e:
@@ -363,7 +370,12 @@ def main() -> int:
                 continue
             for _s in ((_v or {}).get("stocks") or [])[:40]:
                 _pv.append((str(_s.get("code")), _th))
+        print("[legs] ★ 候选预热开始: %d 条（**布腿最久的一步** ✗ ⇒ 下面逐条报进度 ✓）｜已布 %d 腿"
+              % (len(_pv), len(legs_out)), flush=True)
+        _t_pv = time.time()
         _np = _lgp.prefetch(_pv) if _pv else 0
+        print("[legs] ★ 候选预热完成: %d 条（%.0fs ✓）｜已布 %d 腿"
+              % (_np, time.time() - _t_pv, len(legs_out)), flush=True)
         if _np:
             print("[legs] 主营判定并发预热 %d 条" % _np, flush=True)
     except Exception as _e_sil2:
@@ -372,7 +384,12 @@ def main() -> int:
     if qualify and pool:
         pool_legs = int(os.getenv("ROT_POOL_LEGS", "4"))
         got = 0
-        for th in pool:
+        print("[legs] ★ 计划 pathB: 主题 %d 个，目标腿 %d 条（当前已布 %d 腿 ✓）"
+              % (len(pool), pool_legs, len(legs_out)), flush=True)
+        for _iB, th in enumerate(pool, 1):
+            print("[legs] ★ 进度 pathB %d/%d theme=%s｜已布 %d 腿｜还差 %d 腿到目标｜剩 %d 主题｜%.0fs"
+                  % (_iB, len(pool), th, len(legs_out), max(0, pool_legs - got),
+                     len(pool) - _iB, time.time() - _lgT0), flush=True)
             if got >= pool_legs:
                 break
             try:
