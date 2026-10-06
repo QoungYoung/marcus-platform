@@ -295,11 +295,10 @@ def _l3(tiers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             _lvl = None
             try:
                 from app.services import t_index_break as _ib
+                # ★ 账本 §9.714 ✓（扫描器扫出）：`_l3(tiers)` **没有 trade_date 参数** ✗
+                #   ⇒ 原写法 `str(trade_date or "")` **每次都抛 NameError** ✗ 再被 except 吞掉 ⇒ `_d=""` ✓
+                #   ⇒ 这里直接取兜底（**行为逐位不变** ✓），只去掉无意义的异常 ✓
                 _d = ""
-                try:
-                    _d = str(trade_date or "")          # 决策对象生成时通常带当日
-                except Exception:
-                    _d = ""
                 if not _d:
                     import datetime as _dtx
                     _d = _dtx.date.today().strftime("%Y%m%d")

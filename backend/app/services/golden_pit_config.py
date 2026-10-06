@@ -7,6 +7,8 @@ greed（默认，超跌+板块贪婪 arkvol funds-greed）或 moneyflow（超跌
 GOLDEN_PIT_SECTOR_SPLIT_ENABLED 灰度开关控制 dry-run 展示 / 实际执行；
 开关与参数均从仓库根目录 .env 读取（经 app.config.Settings）。"""
 import logging
+# ★ 账本 §9.714 ✓（扫描器 jobs/scan_undefined_names.py 扫出：本文件用了 datetime/timedelta 但从未导入 ✗）
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 from app.config import get_settings
 

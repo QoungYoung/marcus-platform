@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """黄金坑报告与预警 — 盘前报告、阈值穿越预警、自然语言解读。"""
+import logging
+# ★ 账本 §9.714 ✓（扫描器扫出：下面 3 处 `logger.` 从未定义 ✗）
+logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
 from app.services.golden_pit_config import (
@@ -15,7 +18,11 @@ from app.services.golden_pit_repository import load_previous_percentile
 def format_morning_report(status: Dict[str, Any]) -> str:
     """生成 QQ 盘前报告 (8:50 AM)。"""
     if status is None:
-        status = self.get_status()
+        # ★ 账本 §9.714 ✓（扫描器扫出：本函数是**模块级函数** ✗，`self` 从来不存在 ✗
+        #   —— 早期从类方法重构成函数时的残留 ✓）⇒ 改为**显式报错** ✓
+        #   行为影响 ✓：合法调用（传 status ✓）**完全不变** ✓；只有"不传"这条**本就必崩**的路径
+        #   从 `NameError: name 'self' is not defined` 变成可读的 ValueError ✓
+        raise ValueError("format_morning_report(status) 必须传入 status（不能为空 ✓）")
 
     as_of = status["as_of"]
     window = status["golden_pit_window"]
