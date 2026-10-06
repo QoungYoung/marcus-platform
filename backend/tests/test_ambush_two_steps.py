@@ -1363,8 +1363,17 @@ def test_promote_add_requires_true_promotion_and_not_limitdown():
     #   本函数**不得**再自创一套（我一度加了"只用 +10% 复核"✗ ⇒ 等于偷偷改口径 ✗ ⇒ 已撤 ✓）
     assert "self._is_ambush_promoted(_acct, _sym)" not in seg, \
         "不得在本函数里另立转正口径（口径只在 _promoted 一处 ✓）"
-    # ★ 用户明确要求的这条要保留：**跌停日不加仓**（泰胜风能 01-26 案例 ✓）
-    assert "_chgA <= -8.0" in seg, "当日 ≤ −8%（近跌停/破位）不许加仓 ✓"
-    assert "近跌停/破位" in seg, "跳过理由须留痕 ✓"
-    assert seg.index("_chgA <= -8.0") < seg.index('gateway_execute(_sym, "buy"'), \
-        "跌停闸必须在发单之前 ✓"
+    # ★★ 用户 2026-10-07 纠正：「**不是跌停不加仓，而是下跌趋势不转正**！
+    #    你要参考普通仓的加仓逻辑！」✗
+    #    ⇒ 修法在**转正判定**（`_promoted` 链）上加**个股趋势闸** ✓
+    #      （参照 t_chop_guard.add_allowed「指数未重回上涨趋势⇒不加仓」✓
+    #        与 t_build.trend_gate「MA20 方向/均线排列/反弹陷阱」✓）
+    #    ⇒ 并撤掉我先前加的"跌停闸"✗（治症状 ✗）
+    assert "_chgA" not in seg, '不得再用「当日跌幅」闸（用户：不是跌停的事 ✗）'
+    mon_all = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
+    assert "from app.services.t_build import trend_gate" in mon_all, "转正必须过个股趋势闸 ✓"
+    assert "下跌趋势不转正" in mon_all, "须留痕说明（下跌趋势不转正 ✓）"
+    j = mon_all.index("from app.services.t_build import trend_gate")
+    segT = mon_all[max(0, j - 1400):j + 900]
+    assert "_okT, _whyT" in segT and "_promoted = False" in segT, \
+        "趋势闸不通过 ⇒ 必须把 _promoted 置 False（不转正 ✓）"

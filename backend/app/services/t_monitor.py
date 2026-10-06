@@ -2924,27 +2924,9 @@ class TMonitor:
                 #   「+10% 或 碰新高（WOLF_AMBUSH_PROMOTE_NEWHIGH）」**偷偷改成「只有 +10%」** ✗
                 #   ⇒ **已撤掉** ✓。转正判定**只有一处**（上面 `_promoted` 那条链 ✓，含碰新高 ✓）；
                 #     本函数只负责"+3 日内 ∧ ≤ 转正价×1.04 ⇒ 主动买一次" ✓
-                # ② ★ 账本 §9.703 ✓（用户 2026-10-07 复盘：「泰胜风能 当日跌停，但这时候转正加仓」✗）——
-                #   原实现只查「转正日 +3 日内」与「价 ≤ 转正价×1.04」✗ ⇒ **跌停日照样加仓** ✗
-                #   （网关别处的「近跌停 ⇒ L0 ⇒ 今日不做T买腿」✗管不到这里：本腿 decision_source=risk ✓）
-                #   ⇒ 用日线算**当日涨跌幅** ✓：≤ −8% （近跌停）⇒ 当日不加仓 ✓
-                #     语料口径 ✓：破位不算转正／不追、不接刀 ✓
-                _chgA = None
-                try:
-                    _bdC = self._daily_dated(_sym, 60) or []
-                    _rowsC = [b for b in _bdC if b.get("close")]
-                    _rowsC.sort(key=lambda b: str(b.get("date") or b.get("trade_date") or ""))
-                    if len(_rowsC) >= 2:
-                        _pc = float(_rowsC[-2].get("close") or 0)
-                        if _pc > 0 and _cur > 0:
-                            _chgA = (_cur / _pc - 1.0) * 100.0
-                except Exception as _ePA1:
-                    _chgA = None
-                    print("[埋伏转正加仓] %s 涨跌幅计算失败(放行): %s" % (_sym, str(_ePA1)[:60]), flush=True)
-                if _chgA is not None and _chgA <= -8.0:
-                    print("[埋伏转正加仓·跳过] %s 当日 %.2f%%（近跌停/破位）⇒ 不加仓 ✓（转正日 %s）"
-                          % (_sym, _chgA, _pd), flush=True)
-                    continue
+                # ⚠️ 2026-10-07（用户纠正 ✓）：「**不是跌停不加仓，而是下跌趋势不转正**」——
+                #   我一度在这里加「当日 ≤ −8% ⇒ 不加仓」✗ ⇒ **已撤** ✓（那是治症状 ✗）。
+                #   真正的修法在**转正判定**那一条链上（见 `_promoted` 处的**趋势闸** ✓）。
                 _sh = int(_eqA * (_pct / 100.0) / _cur) // 100 * 100
                 if _sh < 100:
                     continue
@@ -3202,6 +3184,30 @@ class TMonitor:
                     #     ⇒ ①②两条口径**当时都不成立** ✗ ⇒ 那 `_promoted` 为什么会为真 ✗？
                     #   ⇒ 不再靠推理 ✓（今晚已多次猜错 ✗）：**在记录点留痕"到底哪条成立"** ✗
                     #     ⇒ 下次一发生，日志直接说明原因 ✓（含四个关键数字 ✓）
+                    # ★★ 账本 §9.705 ✓（用户 2026-10-07 纠正 ✓）：
+                    #   「**不是跌停不加仓，而是下跌趋势不转正**！你要参考**普通仓的加仓逻辑**！」
+                    #   参照系（现成的 ✓，两处口径一致 ✓）：
+                    #     · `t_chop_guard.add_allowed`：指数未重回上涨趋势 ⇒ **不加仓** ✓
+                    #       （其语料原文 2026-01-27：「不要在没有**突破重回上涨趋势**的时候，
+                    #         把本来已经减出去的仓位加进去」✓ —— 正是本条的由来 ✓）
+                    #     · `t_build.trend_gate`：个股侧「MA20 方向 + 均线排列 + 反弹陷阱」✓
+                    #       —— MA20 下行 ⇒ 拒绝 ✓（"右侧思维"：短期回踩要在中期上升通道里 ✓）
+                    #   ⇒ 转正**必须**过个股趋势闸 ✓：**下跌趋势里不转正** ✗ ⇒ 自然也不加仓 ✓
+                    #     （芳源股份 01-26：当日最高 10.410 < 前 20 日最高 10.730 / 成本×1.1=10.824，
+                    #      本是**下跌趋势中的反抽** ✗ ⇒ 不该转正 ✓ 这正是用户指出的病 ✓）
+                    if _promoted:
+                        try:
+                            from app.services.t_build import trend_gate as _tg
+                            _bdT = self._daily_dated(_sym, 40) or []
+                            _okT, _whyT = _tg(_sym, bars=_bdT or None, as_of=_today)
+                            if not _okT:
+                                print("[埋伏转正·趋势闸拦下] %s ⇒ %s（下跌趋势不转正 ✓）"
+                                      % (_sym, str(_whyT)[:80]), flush=True)
+                                _promoted = False
+                            else:
+                                print("[埋伏转正·趋势闸通过] %s ⇒ %s" % (_sym, str(_whyT)[:60]), flush=True)
+                        except Exception as _eTG:
+                            print("[埋伏转正·趋势闸异常(放行) %s: %s" % (_sym, str(_eTG)[:70]), flush=True)
                     if _promoted:
                         try:
                             print("[埋伏转正·判据留痕] %s 成本=%.3f 最高=%.3f 阈值=%.1f%% "
