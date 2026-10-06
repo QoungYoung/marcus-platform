@@ -49,6 +49,7 @@ import time
 
 # ★ 账本 §9.684 ✓：已焐热的 session_id 集合（模块级 ✓；**必须在 from __future__ 之后** ✗）
 _PREWARMED = set()
+_rr = [0]   # ★ §9.691：会话槽轮转计数器（配合 WOLF_AGENT_SESSION_SLOTS ✓）
 from typing import Any, Dict, List, Optional
 
 
@@ -461,7 +462,9 @@ class LLMReplay:
             #     ⇒ fork 即使发生 ✓，代价也从"复制 2.8 万事件"降到"复制几百事件" ✓
             #   `WOLF_AGENT_SESSION_WINDOW` 可调 ✓
             _win = max(60, int(os.getenv("WOLF_AGENT_SESSION_WINDOW", "600") or 600))
-            sid = "bt:%s:%s:w%d" % (self.agent, self.as_of, int(time.time() // _win))
+            _slots = max(1, int(os.getenv("WOLF_AGENT_SESSION_SLOTS", "6") or 6))   # ★ §9.691：并发会话槽 ✓
+            _rr[0] = (_rr[0] + 1) % _slots
+            sid = "bt:%s:%s:w%d:c%d" % (self.agent, self.as_of, int(time.time() // _win), _rr[0])
             if body.get("session_id") == sid:
                 return kw
             # ★ 账本 §9.684 ✓（用户：「加上」✓）：发现**新会话**先发一个极小请求把它焐热 ✓
