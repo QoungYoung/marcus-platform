@@ -2651,10 +2651,13 @@ get_stock_quote / get_t_realtime_indicators 补数，禁止仅凭自述理由放
         //   **空闲 TTL 扫描** ✓：会话"最后一次活动"超过 TTL **且不在跑** ⇒ 销毁 ✓
         //     · 语义 ✓ = 真实的"会话结束就销毁"（回合结束后空闲到 TTL 就清 ✓）
         //     · **绝不打断在跑的回合** ✓（locks 有它 ⇒ 跳过 ✓；TTL 默认 600s > 回合上限 240s ✓）
-        //     · 阈值 ✓：`DSH_SESSION_TTL_SEC`（默认 600 秒 ✓；设 0 ⇒ 关闭 ✓）
+        //     · 阈值 ✓：`DSH_SESSION_TTL_SEC`（**默认 1800 秒 ✓**；设 0 ⇒ 关闭 ✓）
+        //       ★ 账本 §9.676 ✓（用户:「会造成OOM吗」✓）：实测**单会话 12.9 MiB** ✓、
+        //         唤醒间隔中位 **5 分钟** ✓ ⇒ 原 600 秒会销毁掉一部分会话 ⇒ 冷启动 **95 秒** ✗；
+        //         1800 秒 ⇒ 活跃会话约 20~30 个 ⇒ **260~390 MiB** ✓（限额已提到 **4 GiB** ✓ ⇒ 余量 10 倍 ✓）
         setInterval(async () => {
           try {
-            const ttl = parseInt(process.env.DSH_SESSION_TTL_SEC || '600', 10);
+            const ttl = parseInt(process.env.DSH_SESSION_TTL_SEC || '1800', 10);
             if (!ttl || ttl <= 0) { return; }
             const now = Date.now();
             let n = 0;
