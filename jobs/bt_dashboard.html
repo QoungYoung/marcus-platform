@@ -1590,7 +1590,7 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
   // ── 个股详情（标题 = 名称 (代码)）──────────────────────────────────────
   function openSymbol(sym) {
     var dlg = $('sym-dlg');
-    S.sym = sym; S.symData = null; S.symErr = null; S.kHover = -1;
+    S.sym = sym; S.symData = null; S.symErr = null; S.kHover = -1; S.kView = null; S.kAsof = ""; S.kDrag = null;
     $('sym-h').textContent = sym;
     $('sym-meta').textContent = '读取中…';
     $('sym-body').innerHTML = emptyState('读取 ' + sym + ' …', '/api/symbol?symbol=' + sym);
@@ -1671,6 +1671,9 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     if (cv) {
       var bars = d.bars || [], trades = d.trades || [], trigs = d.triggers || [];
       S.kGrow = null;
+      S.kAsof = d.asof_day || "";
+      S.kArgs = { cv: cv, bars: bars, trades: trades, trigs: trigs, pos: p };
+      if (!S.kView || S.kViewFor !== (d.symbol || "")) { K_initView(bars, d.window); S.kViewFor = d.symbol || ""; }
       drawKline(cv, bars, trades, trigs, p);
       if (G.on && !G.reduced && bars.length) {
         // 蜡烛按时间从左到右生长：整体 ≤0.5s（每根延迟 ≤10ms，单根 250ms）
@@ -1683,19 +1686,80 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
           drawKline(cv, bars, trades, trigs, p);
         }, function () { S.kGrow = null; drawKline(cv, bars, trades, trigs, p); });
       }
-      cv.onmousemove = function (ev) {
+      function K_len() { return K_slice(bars).n; }
+      function K_at(ev) {
         var r = cv.getBoundingClientRect();
         var iw = r.width - K_PAD.l - K_PAD.r;
-        var i = Math.floor((ev.clientX - r.left - K_PAD.l) / (iw / Math.max(1, bars.length)));
-        S.kHover = (i >= 0 && i < bars.length) ? i : -1;
+        return Math.floor((ev.clientX - r.left - K_PAD.l) / (iw / Math.max(1, K_len())));
+      }
+      cv.onmousemove = function (ev) {
+        if (S.kDrag) {                                     // ★ 拖动平移 ✓
+          var full = bars.length || 1;
+          var dx = ev.clientX - S.kDrag.x;
+          var v = S.kView || { i0: 0, i1: full - 1 };
+          var m = v.i1 - v.i0 + 1;
+          var shift = Math.round(-dx / Math.max(1, (cv.getBoundingClientRect().width - K_PAD.l - K_PAD.r) / m));
+          var i0 = Math.max(0, Math.min(full - m, S.kDrag.i0 + shift));
+          S.kView = { i0: i0, i1: i0 + m - 1 };
+          S.kHover = -1;
+          drawKline(cv, bars, trades, trigs, p);
+          return;
+        }
+        var i = K_at(ev), len = K_len();
+        S.kHover = (i >= 0 && i < len) ? i : -1;
         drawKline(cv, bars, trades, trigs, p);
       };
-      cv.onmouseleave = function () { S.kHover = -1; drawKline(cv, bars, trades, trigs, p); };
+      cv.onmousedown = function (ev) {
+        var v = S.kView || { i0: 0, i1: (bars.length || 1) - 1 };
+        S.kDrag = { x: ev.clientX, i0: v.i0 };
+        cv.style.cursor = 'grabbing';
+        if (ev.preventDefault) { ev.preventDefault(); }
+      };
+      cv.onmouseup = function () { S.kDrag = null; cv.style.cursor = ''; };
+      cv.onmouseleave = function () { S.kHover = -1; S.kDrag = null; cv.style.cursor = ''; drawKline(cv, bars, trades, trigs, p); };
+      if (cv.onwheel !== undefined) {                       // ★ 滚轮缩放（以光标处为中心 ✓）
+        cv.onwheel = function (ev) {
+          if (ev.preventDefault) { ev.preventDefault(); }
+          var full = bars.length || 0;
+          if (!full) { return; }
+          var v = S.kView || { i0: 0, i1: full - 1 };
+          var m = v.i1 - v.i0 + 1;
+          var k = ev.deltaY > 0 ? 1.18 : 0.85;
+          var nm = Math.max(8, Math.min(full, Math.round(m * k)));
+          var r = cv.getBoundingClientRect();
+          var frac = Math.min(1, Math.max(0, (ev.clientX - r.left - K_PAD.l) / Math.max(1, (r.width - K_PAD.l - K_PAD.r))));
+          var i0 = Math.round(v.i0 + frac * m - frac * nm);
+          i0 = Math.max(0, Math.min(full - nm, i0));
+          S.kView = { i0: i0, i1: i0 + nm - 1 };
+          S.kHover = -1;
+          drawKline(cv, bars, trades, trigs, p);
+        };
+      }
+      cv.ondblclick = function () { K_initView(bars, (S.symData || {}).window); S.kHover = -1; drawKline(cv, bars, trades, trigs, p); };
     }
     fade150(box);
   }
 
-  function drawKline(cv, bars, trades, trigs, pos) {
+  // ★ 账本 §9.678 K线视图（缩放/平移；默认 [日线首根 → 回测当前日] ✓）
+  //   用户：「K线可以放大缩小调整范围，默认是从 b 到正在回测日期的K线范围」✓
+  //   as-of 之后仍会画出来（只有你看 ✓），但会画竖线 + 阴影标注「回测当前日」✓，别当已知 ✗
+  function K_initView(full, win) {
+    var a = 0, b = full.length - 1;
+    if (win && win[0]) { for (var i = 0; i < full.length; i++) { if (full[i].day >= win[0]) { a = i; break; } } }
+    if (win && win[1]) { for (var j = full.length - 1; j >= 0; j--) { if (full[j].day <= win[1]) { b = j; break; } } }
+    if (b < a) { b = full.length - 1; }
+    S.kView = { i0: a, i1: b };
+  }
+  function K_slice(full) {
+    var v = S.kView || { i0: 0, i1: full.length - 1 };
+    var i0 = Math.max(0, Math.min(v.i0, Math.max(0, full.length - 1)));
+    var i1 = Math.max(i0, Math.min(v.i1, Math.max(0, full.length - 1)));
+    var asof = S.kAsof || '', ai = -1;
+    for (var i = i0; i <= i1; i++) { if (asof && full[i] && full[i].day <= asof) { ai = i - i0; } }
+    return { bars: full.slice(i0, i1 + 1), i0: i0, asofIdx: ai, n: i1 - i0 + 1 };
+  }
+  function drawKline(cv, barsAll, trades, trigs, pos) {
+    var _vs = K_slice(barsAll || []), bars = _vs.bars;   // ★ §9.678 只在此切片，其余逻辑原样 ✓
     var f = fit(cv), ctx = f.ctx, w = f.w, hgt = f.h;
     if (!bars.length) { text(ctx, '该窗口内没有日线（bars.sqlite 无此标的）', w / 2, hgt / 2, tok('--color-muted'), 13, 'center'); return; }
     var padL = K_PAD.l, padR = K_PAD.r, padT = K_PAD.t, padB = K_PAD.b;
@@ -1744,6 +1808,18 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
         });
         ctx.stroke(); ctx.restore();
       });
+    }
+    // ★ 账本 §9.678：as-of 分界（竖线 + 未来段阴影 + 标注 ✓）
+    if (_vs.asofIdx >= 0 && _vs.asofIdx < bars.length - 1) {
+      var xa = X(_vs.asofIdx) + step / 2;
+      ctx.save();
+      ctx.fillStyle = tok('--color-chart-sell'); ctx.globalAlpha = 0.06;
+      ctx.fillRect(xa, padT, padL + iw - xa, vTop + volH - 2 - padT);
+      ctx.restore();
+      line(ctx, xa, padT, xa, vTop + volH - 2, tok('--color-chart-sell'), 1.2, [4, 3]);
+      text(ctx, '回测当前日 ' + (_vs.bars[_vs.asofIdx] ? _vs.bars[_vs.asofIdx].day : '') + '｜右侧 ' +
+        (bars.length - 1 - _vs.asofIdx) + ' 根为未来（仅供查看）', xa + 5, padT + 11,
+        tok('--color-chart-sell'), 11, 'left');
     }
     var vTop = padT + priceH + 8;
     bars.forEach(function (b, i) {

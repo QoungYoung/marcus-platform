@@ -1701,7 +1701,14 @@ class Store:
         #   ⇒ 修法 ✓：**上界取两者较大值** ✓（续跑当天没完成时用 start ✓），下界由 limit 回看 ✓
         #     ⇒ 既能出图（最近 400 根 ≤ 上界 ✓），又不越过 as-of 边界 ✓
         _hi = max(str(start or ""), str(last_completed or "")) or ""
-        bars = self.bars_for(symbol, "19900101", _hi, 400) if _hi else []
+        # ★ 账本 §9.678 ✓（用户：「你可以画出来，因为只有我有看，然后K线可以放大缩小调整范围，
+        #   默认是从 b 到正在回测日期的K线范围」✓）：
+        #   ⇒ **取全量日线**（含 as-of 之后的 ✓），并把"回测当前日"一并返回 ✓
+        #     ⇒ 前端**默认视图** = [首根 → 当前回测日] ✓；用户可缩放/平移看到未来段 ✓
+        #     ⇒ 未来段**画出来但标注**（竖线 + 阴影 ✓）—— 只有你一个人看 ✓，但别把未来当已知 ✗
+        bars = self.bars_for(symbol, "19900101", "99991231", 4000)
+        _asof = _hi
+        _future_n = len([b for b in bars if str(b.get("day", "")).replace("-", "") > _asof]) if _asof else 0
         sym_name = self.name_for(symbol)
         trades = []
         for t in pg["trades"]:
@@ -1790,8 +1797,14 @@ class Store:
             #   原样返回 [run_start, last_completed] ⇒ 续跑时是**反的**（`2026-01-08 → 2026-01-07` ✗），
             #     看起来像"只能看这两天" ✗，其实 bars 里已含**回测前的历史** ✓（实测 2025-01-02 起 237 根 ✓）
             #   ⇒ 改为回报**实际日线范围** ✓（无 bars 时退回原值 ✓）
-            "window": ([iso_day(bars[0]["day"]), iso_day(bars[-1]["day"])] if bars
-                       else [iso_day(start), iso_day(last_completed)]),
+            # ★ 账本 §9.678 ✓：`window` = **默认视图**（首根 → 回测当前日 ✓，用户指定 ✓）；
+            #   `asof_day` = 回测当前日（前端在此画竖线 ✓）；`future_n` = 之后还有多少根 ✓
+            "window": ([iso_day(bars[0]["day"]), iso_day(_asof)] if (bars and _asof)
+                       else ([iso_day(bars[0]["day"]), iso_day(bars[-1]["day"])] if bars
+                             else [iso_day(start), iso_day(last_completed)])),
+            "asof_day": iso_day(_asof) if _asof else None,
+            "future_n": _future_n,
+            "bars_span": ([iso_day(bars[0]["day"]), iso_day(bars[-1]["day"])] if bars else []),
             "bars": bars,
             "trades": trades,
             "triggers": trigs[-300:],
