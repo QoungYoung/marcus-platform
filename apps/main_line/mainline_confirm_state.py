@@ -54,6 +54,39 @@ def theme_of_chain(chain):
             return th
     return None
 
+def _themes_confirmed_in_window(hist, upto_date):
+    """近 LOOKBACK_DAYS 交易日内的确认主题集
+
+    ★ 账本 §9.700 ✓（我用 jobs/scan_undefined_names.py 静态扫描发现 ⇒ 随后用 git log -S 确认）：
+      commit 21ac2ac「refactor(wolf): 真删负向机制…」**删掉了本函数** ✗，
+      但 chain_qualified() 第 65 行**仍在调用它** ✗
+      ⇒ 任何调用链 ⇒ `NameError: name '_themes_confirmed_in_window' is not defined` ✗
+      ⇒ 而 chain_qualified 被**生产路径**使用（switch_builder.py / stock_confirm_judge.py ✓）
+      ⇒ 现从旧版本副本（data/_bt_code_year/rev_9eabc…/apps/main_line/mainline_confirm_state.py:42 ✓）
+        原样恢复 ✓（依赖 _days_upto ✓ 与 LOOKBACK_DAYS ✓ —— 二者当前文件都在 ✓）
+    """
+    days = _days_upto(upto_date)
+    if days:
+        window = set(days[-LOOKBACK_DAYS:])
+    else:
+        # fallback: 日历 75 天近似
+        import datetime as _dt
+        u = _dt.date(int(upto_date[:4]), int(upto_date[4:6]), int(upto_date[6:]))
+        window = set()
+        for d in hist.get('dates', {}):
+            try:
+                dd = _dt.date(int(d[:4]), int(d[4:6]), int(d[6:]))
+                if (u - dd).days <= 75:
+                    window.add(d)
+            except Exception as _e_w:
+                _silent_alert('mainline_confirm_state.py:window', _e_w)
+    out = set()
+    for d in hist.get('dates', {}):
+        if d in window:
+            out.update(hist['dates'][d])
+    return sorted(out)
+
+
 def chain_qualified(chain, upto_date=None):
     """执行层低吸资格: 链所属主题近 LOOKBACK 日内曾 confirmed_candidate"""
     from datetime import date as _d

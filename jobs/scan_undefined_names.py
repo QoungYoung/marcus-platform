@@ -57,6 +57,9 @@ def scan_file(path: str) -> List[Tuple[int, str, str]]:
         return []
     mod = _bound(tree)
     mod |= BUILTINS
+    # 模块自带 dunder（__file__/__name__/__doc__/__package__ 等 ✓）+ 常见注解名 ✓
+    mod |= {'__file__', '__name__', '__doc__', '__package__', '__spec__', '__loader__',
+            '__builtins__', '__debug__', 'annotations'}
     bad: List[Tuple[int, str, str]] = []
     lines = src.split('\n')
 
@@ -69,7 +72,7 @@ def scan_file(path: str) -> List[Tuple[int, str, str]]:
             elif isinstance(c, ast.Name) and isinstance(c.ctx, ast.Load):
                 if not any(c.id in s for s in stack):
                     bad.append((c.lineno, ' > '.join(names) or '<module>',
-                                lines[c.lineno - 1].strip()[:100]))
+                                ('未定义名=%s | ' % c.id) + lines[c.lineno - 1].strip()[:96]))
             else:
                 walk(c, stack, names)
 
