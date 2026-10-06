@@ -148,8 +148,15 @@ def _upto(bars: List[Any], hhmm: str) -> List[Tuple[str, float, float, float, fl
             #   （`t` 仍取 `b[1]` ✓ —— 与 §9.643 的坑一致 ✓）
             _off = 1 if (len(b) >= 9 and not isinstance(b[2], (int, float))) else 0
             if _hm(t) <= cut:
-                out.append((t, float(b[2 + _off]), float(b[3 + _off]), float(b[4 + _off]),
-                            float(b[5 + _off]), float(b[6 + _off]), float(b[7 + _off])))
+                # ★ 账本 §9.699 ✓（用户 10-07 报警：
+                #   `intradaycrush.py:136 float() argument must be ... not NoneType` ✗ ×138）：
+                #   分钟档里某个字段可能是 **None** ✗ ⇒ 直接 float() 抛 ⇒ 该根 bar 丢 ✗
+                #   ⇒ **跳过这根 bar**（不伪造 0.0 ✗ —— 0 会污染 min/max/low 判定 ✓）
+                try:
+                    out.append((t, float(b[2 + _off]), float(b[3 + _off]), float(b[4 + _off]),
+                                float(b[5 + _off]), float(b[6 + _off]), float(b[7 + _off])))
+                except (TypeError, ValueError):
+                    continue   # 该根字段缺失/非法 ⇒ 跳过（保持序列只含有效 bar ✓）
         except Exception as _e_sil1:
             _silent_alert("intraday_crush.py:128", _e_sil1)
             continue

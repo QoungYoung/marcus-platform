@@ -5311,6 +5311,14 @@ class TMonitor:
                             if str(os.getenv("WOLF_AMBUSH_SELL_EXEMPT", "0")).strip().lower() in ("1", "true", "yes", "on"):
                                 try:
                                     if self._is_ambush_position(T_MONITOR_ACCOUNT, symbol):
+                                        # ★ 账本 §9.699 ✓（用户 10-07 报警：
+                                        #   `tmonitor.py:5213 cannot access local variable _tk_t` ✗ ×18）：
+                                        #   真因 ✗：本分支**先用 _tk_t**，而它要到下面 5326 行（不豁免路径）才赋值
+                                        #     ⇒ 只要命中埋伏豁免就抛 ⇒ **5318/5319 的 stop_price=0.0 与
+                                        #       _skip_trend=True 永不执行** ⇒ **埋伏仓豁免完全失效** ✗
+                                        #       （正是注释里那句「T35 里埋伏票被它卖了 17 笔」的机制 ✓）
+                                        #   ⇒ 先建 key 再判断 ✓（键名带 exempt 以区分下面的趋势线告警 ✓）
+                                        _tk_t = (symbol, "trend_exempt", datetime.now().strftime('%Y%m%d'))
                                         if _tk_t not in _STOP_HOLD_WARNED:
                                             _STOP_HOLD_WARNED.add(_tk_t)
                                             print(f"[TMonitor] ②趋势线豁免埋伏仓 {symbol}: {_tv['why']}"
