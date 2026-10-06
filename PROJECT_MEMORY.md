@@ -3341,6 +3341,22 @@ T22 遗留物（作记录，不可用于对比）：沙箱 data/_bt_t22/（75 �
 【验收（实测）】唤醒耗时 样本 160：均 8.4 秒 / 中位 4.7 / p90 13.1 / 最大 124（改前均 36.8 / max 102）；桥侧 Read timed out = 0；空回复 2/10 分钟。
 【顺带修掉的旧缺陷】看门狗 20 秒探针每分钟误杀转发器；转发器 _pump 关闭逻辑（Bad file descriptor 刷屏）；会话 TTL 600⇒1800 秒、内存限额 512MiB⇒4GiB（原来 35 个会话就 OOM）；逐日产物未按日过滤（0108 显示 0112）；盘前不成交；加仓腿去未来函数；会话焐热。
 【提交】§9.677 ~ §9.698 共 22 笔，工作区 0 未提交。
+- [2026-10-07 06:41] [工作记录] §9.700 静态扫描挖出并修复 11 处真 NameError（含 3 条生产路径） — 做法：新写 jobs/scan_undefined_names.py（按作用域静态查"用了但作用域里没有"的名字，AST 实现）。
+它一次性挖出多类真 bug，逐条用 git log -S / 定义处核对后修复：
+1) apps/main_line/mainline_confirm_state.py：commit 21ac2ac「真删负向机制」删掉了 _themes_confirmed_in_window 的定义，
+   但 chain_qualified() 仍在调用 ⇒ 任何调用链 NameError；而它被 switch_builder.py / stock_confirm_judge.py 使用。
+   已从旧版本副本（data/_bt_code_year/rev_9eabc…/…:42）原样恢复 + 冒烟测试通过。
+2) jobs/market_scan.py：调用 analyze_news_with_deepseek 但只 import 了 filter_news_with_deepseek ⇒ 补 import（函数在 core/deepseek/deepseek_analyzer.py:85）。
+3) jobs/scan_silent_excepts.py：调用从未定义的 _silent_alert ⇒ 换成自包含 print。
+4) 5 个文件调用 _normalize_symbol 但没导入（market_scan / sector_g3 / rotation_switch_agent / tmon_check / _test_wolf_t_yym）⇒ 补同一模块导入。
+5) 批量补漏导入：etf_selector(import sqlite3)、industry_keywords(Path)、rotation_switch_dryrun(time)、
+   t_sensitivity_scan(typing)、backtest_wolf_dip_254/ab_wolf_gates(DATA 常量)。
+6) 生产服务两处：t_turnover_profile(_normalize_symbol)、golden_pit_dca_service(GoldenPitService，局部导入避免循环)。
+另修：jobs/bt_days.py 提到的 _tk_t 先用后赋值（§9.699）让"埋伏仓豁免"完全失效；intraday_crush 的 float(None) ×138。
+未处理并已登记：backend/scripts/p0_probe/* 三处 _normalize_symbol（探针脚本，其本地 data_sources 的同名函数是 3 参数签名，与主线不同）。
+已知假阳性（工具局限，勿改）：jobs/bt_pick_code_rev.py 的 _silent_alert（第 42 行确为模块级定义）；
+apps/main_line/position_class.py 的 ML / trend_channel 的 THEME_CONCEPTS / chain_dict_refine 的 AGRI_V06（均有 globals() 守卫或 if False 死分支）。
+工具限制：查不出 UnboundLocalError（"局部变量在赋值前被引用"），那类要靠运行时 traceback；命中需逐条人工确认。
 
 ## 经验教训 Lessons Learned
 

@@ -59,6 +59,15 @@ def _alerts_path() -> str:
     return "/dev/null"
 
 
+def _hostname() -> str:
+    """本机名（账本 §9.701：告警要能看出是哪个部署 ✓）。失败返回 ? ✓。"""
+    try:
+        import socket as _sk
+        return _sk.gethostname()
+    except Exception:
+        return "?"
+
+
 def _origin(depth: int = 0) -> str:
     """告警来源的**真实路径** ＋ 主机 ＋ pid（账本 §9.701 ✓；用户：让 QQ 把路径也推过来）。
 
@@ -142,7 +151,9 @@ def note(where: str, exc: Optional[BaseException] = None, msg: str = "", ctx: Op
         rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "where": where,
                "exc": (type(exc).__name__ if exc is not None else ""),
                "msg": (str(exc)[:300] if exc is not None else str(msg)[:300]),
-               "ctx": (ctx or {})}
+               "ctx": (ctx or {}),
+               # ★ 账本 §9.701（用户：让 QQ 把路径推过来）：落盘也带来源 ⇒ 可按部署筛选
+               "origin": _origin(), "host": _hostname(), "pid": os.getpid()}
         try:
             with open(_alerts_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -181,7 +192,9 @@ def _record_only(where: str, exc: Optional[BaseException] = None, msg: str = "")
         rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "where": where,
                "exc": (type(exc).__name__ if exc is not None else ""),
                "msg": (str(exc)[:300] if exc is not None else str(msg)[:300]),
-               "ctx": {}}
+               "ctx": {},
+               # ★ 账本 §9.701：落盘带来源 ⇒ 可按部署筛选
+               "origin": _origin(), "host": _hostname(), "pid": os.getpid()}
         try:
             with open(_alerts_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
