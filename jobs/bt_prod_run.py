@@ -1554,7 +1554,7 @@ def main() -> int:
 
     # ⑧ 汇总
     res = {"day": day, "cut": cut, "symbols": symbols, "armed": armed,
-           "triggers": _trigger_rows(a.account), "trades": _trade_rows(a.account),
+           "triggers": _trigger_rows(a.account, str(day)), "trades": _trade_rows(a.account, str(day)),
            "positions": _position_rows(a.account), "account": _account_info(a.account),
            "bars": log, "market_missing": sorted(market.missing),
            "decision": {"cut": cut, "ok": dec_res.get("ok"),
@@ -1706,16 +1706,35 @@ def _count_trades(account: str) -> int:
         return 0
 
 
-def _trigger_rows(account: str):
+def _trigger_rows(account: str, day: str = ""):
+    # ★ 账本 §9.681 ✓（用户：「0108买入的为什么显示是0112买入的」✗）：
+    #   真因 ✗：本函数**完全没有按日过滤** —— 它把该账户的**全部**触发（含其它交易日的）
+    #     一起塞进"正在写的那一天"的 prod_<day>.json ✗
+    #     ⇒ 重跑某天时，若库里已有**更晚**交易日的触发（如 0112 的埋伏买），
+    #       就会被写进 0108/0109 的文件 ⇒ 看板"触发流水"在 0108 显示 0112 的成交 ✗
+    #   ⇒ 修法 ✓：按**触发自身的模拟日**过滤（`created_at` 落的是模拟时间 ✓，
+    #     实测 0112 那笔是 `created_at=2026-01-12 09:40` ✓；`executed_at` 才是真实墙钟 ✗）
     try:
+        _d = str(day or "").replace("-", "")
+        if len(_d) == 8:
+            _iso = "%s-%s-%s" % (_d[:4], _d[4:6], _d[6:8])
+            return _q("SELECT id, symbol, event_type, status, trigger_price, quote_price, "
+                      "left(coalesce(reason,''),200) reason FROM t_triggers "
+                      "WHERE account_id=%s AND created_at::date = %s::date ORDER BY id", (account, _iso))
         return _q("SELECT id, symbol, event_type, status, trigger_price, quote_price, left(coalesce(reason,''),200) reason "
                   "FROM t_triggers WHERE account_id=%s ORDER BY id", (account,))
     except Exception:
         return []
 
 
-def _trade_rows(account: str):
+def _trade_rows(account: str, day: str = ""):
     try:
+        _d = str(day or "").replace("-", "")
+        if len(_d) == 8:
+            # ★ 账本 §9.681 ✓：成交同样**按日过滤**（`trade_date` 是日期列 ✓ 实测 `2026-01-12` ✓）
+            _iso = "%s-%s-%s" % (_d[:4], _d[4:6], _d[6:8])
+            return _q("SELECT id, symbol, direction, price, volume, amount, reason, created_at FROM paper_trades "
+                      "WHERE account_id=%s AND coalesce(voided,0)=0 AND trade_date = %s::date ORDER BY id", (account, _iso))
         return _q("SELECT id, symbol, direction, price, volume, amount, reason, created_at FROM paper_trades "
                   "WHERE account_id=%s AND coalesce(voided,0)=0 ORDER BY id", (account,))
     except Exception:
