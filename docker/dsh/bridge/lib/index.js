@@ -1309,6 +1309,24 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                 const removed = await purgeSessionLineage(m, base);
                 console.log('[Bridge] /reset: session_id=' + sid + ' base=' + base + ' 内存句柄释放=' + disposed + ' 持久化目录删除=' + removed);
               }
+              else {
+                // ★ 账本 §9.668 ✓（用户：「会话结束自动销毁」✓）：
+                //   `/reset` **不带 session_id** 时原本**整段被跳过** ✗
+                //     ⇒ 看门狗每 5 分钟调一次却**什么都没销毁** ✗ ⇒ 会话累积 63 个、容器涨到 12.68 GiB ✗
+                //   ⇒ 语义修正 ✓：不带 session_id = **销毁全部会话** ✓（看门狗正是这么调的 ✓）
+                let _n = 0;
+                for (const [key, handle] of [...sessions]) {
+                  try {
+                    if (handle && typeof handle.dispose === 'function') { await handle.dispose(); }
+                  } catch (e) {
+                    console.warn('[Bridge] /reset(全部) dispose 失败: ' + key + ': ' + (e && e.message ? e.message : e));
+                  }
+                  sessions.delete(key);
+                  locks.delete(key);
+                  _n += 1;
+                }
+                console.log('[Bridge] /reset(无 session_id) ⇒ 销毁全部会话: ' + _n + ' 个 ✓');
+              }
               json(res, 200, { status: 'reset' });
             } catch (e) {
               console.error('[Bridge] /reset error:', e);
