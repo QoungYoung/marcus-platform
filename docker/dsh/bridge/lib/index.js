@@ -638,7 +638,7 @@ function apply(ctx) {
       await agent.whenIdle();
       let text = '';
       let started = false;
-      for (const event of agent.session.events) {
+      for (const event of _sessionEvents(agent)) {
         if (event.seq < firstSeq) continue;
         if (event.type === 'turn/start') { started = true; continue; }
         if (!started) continue;
@@ -780,7 +780,7 @@ function apply(ctx) {
       // 兜底：adapter 不发射 text-delta 时，回退 runAgentTurn 式整段提取
       if (!text) {
         let started = false;
-        for (const event of agent.session.events) {
+        for (const event of _sessionEvents(agent)) {
           if (event.seq < firstSeq) continue;
           if (event.type === 'turn/start') { started = true; continue; }
           if (!started) continue;
@@ -1237,6 +1237,38 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       }
     }
 
+// ★ 账本 §9.675 ✓（0.2.x 兼容 ✓）：**会话事件流的取法两版不同** ✗
+//   实测 ✓：0.1.0-rc.6 是 `agent.session.events`（可迭代 ✓）；
+//     0.2.0-rc.2 换成 `agent.session.history`（`dsh-session` 里 history 出现 25 次 ✓、events 仅 1 处 ✗）
+//     ⇒ 用这个助手**两版通吃** ✓（取不到就给空数组 ✓ ⇒ 绝不因换代而 500 ✗）
+function _sessionEvents(agent) {
+  try {
+    const s = agent && agent.session;
+    if (!s) { return []; }
+    if (s.history && typeof s.history[Symbol.iterator] === 'function') { return s.history; }
+    if (typeof s.history === 'function') { const h = s.history(); if (h && typeof h[Symbol.iterator] === 'function') { return h; } }
+    if (s.events && typeof s.events[Symbol.iterator] === 'function') { return s.events; }
+    if (typeof s.events === 'function') { const e = s.events(); if (e && typeof e[Symbol.iterator] === 'function') { return e; } }
+    // ★ 账本 §9.675 ✓：**0.2.x 的实际形态**（运行时探形实测 ✓ —— 不再靠猜 ✓）
+    //   keys 里有 `eventsSnapshot`（属性 ✓）、proto 上有 `snapshotEvents()`/`ownEvents()`/`eventAt()`（方法 ✓）
+    //   0.1.0-rc.6 的 `session.events` 在 0.2.x 已不存在 ⇒ 用这三个 ✓
+    if (s.eventsSnapshot && typeof s.eventsSnapshot[Symbol.iterator] === 'function') { return s.eventsSnapshot; }
+    if (typeof s.snapshotEvents === 'function') { const a = s.snapshotEvents(); if (a && typeof a[Symbol.iterator] === 'function') { return a; } }
+    if (typeof s.ownEvents === 'function') { const a = s.ownEvents(); if (a && typeof a[Symbol.iterator] === 'function') { return a; } }
+    // ★ 账本 §9.675 ✓：**运行时探形**（不猜 ✓）—— 打出自有键/原型方法/history 与 events 的类型长度 ✓
+    const _own = (() => { try { return Object.keys(s); } catch (e) { return []; } })();
+    const _proto = (() => { try { return Object.getOwnPropertyNames(Object.getPrototypeOf(s)); } catch (e) { return []; } })();
+    const _ty = (v) => { try { return v === null ? 'null' : (Array.isArray(v) ? ('array[' + v.length + ']') : typeof v); } catch (e) { return '?'; } };
+    console.warn('[Bridge] _sessionEvents 探形 ✓ keys=' + JSON.stringify(_own.slice(0, 30))
+      + ' proto=' + JSON.stringify(_proto.slice(0, 40))
+      + ' history=' + _ty(s.history) + ' events=' + _ty(s.events)
+      + ' seq=' + _ty(s.seq) + ' messages=' + _ty(s.messages));
+  } catch (e) {
+    console.warn('[Bridge] _sessionEvents 异常（按空处理 ✓）: ' + (e && e.message ? e.message : e));
+  }
+  return [];
+}
+
     async function runAgentTurn(agent, message) {
       // 修复 resume 后 driver 卡住：cancel 收敛（无活动时 no-op；卡住时 abort 并让
       // driver 回到 idle，随后 followup 才能正常开启 turn）
@@ -1274,7 +1306,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       // 从事件流取本回合最后 assistant 文本（对齐 headless runner 的 summarize）
       let text = '';
       let started = false;
-      for (const event of agent.session.events) {
+      for (const event of _sessionEvents(agent)) {
         if (event.seq < firstSeq) continue;
         if (event.type === 'turn/start') { started = true; continue; }
         if (!started) continue;
@@ -1289,7 +1321,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       if (!text) {
         const types = {};
         let started2 = false;
-        for (const ev of agent.session.events) {
+        for (const ev of _sessionEvents(agent)) {
           if (ev.type === 'turn/start') { started2 = true; continue; }
           if (!started2) continue;
           types[ev.type] = (types[ev.type] || 0) + 1;

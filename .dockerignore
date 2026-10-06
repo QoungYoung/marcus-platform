@@ -1,16 +1,16 @@
-node_modules
-.git
-.venv
-__pycache__
-*.pyc
-.DS_Store
-logs/
+# ★ 账本 §9.673 ✓（实测 ✗：build 卡在 checking context ⇒ 整个仓库含 data/ 被当上下文 ✗，
+#   且撞上 root 属主的 __pycache__/*.pyc ⇒ no permission to read ✗）
 data/
-memory/
-docs/
-*.txt
-.env
-.env.local
-frontend/node_modules
-servers/pi-server/node_modules
-servers/pi-server/dist
+.dsh-tmp/
+.venv/
+.git/
+node_modules/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+logs/
+frontend/node_modules/
+backend/logs/
+*.sqlite
+*.sqlite-journal
+backup/

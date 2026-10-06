@@ -1,0 +1,79 @@
+# Marcus Platform DSH Server Dockerfile
+# 用 DeepSeek Harness (DSH) 替代 Pi Server 的常驻 Agent HTTP 服务
+# Build: docker build -f docker/Dockerfile.dsh -t marcus-dsh .
+#
+# 构建策略（服务器国际出口慢，全走国内源）：
+#   - 基础镜像 node:20-slim（服务器本地已有，避免从 Docker Hub 拉取 200MB）
+#   - 删除 node20 残留后，从 npmmirror 下载 node22 官方二进制完整覆盖
+#     （DSH loader 需要 node:module.stripTypeScriptTypes，Node >=22.18；
+#       npmmirror 实测 15MB/s，5 秒拉完 30MB；npm 也随之换成 22 配套版）
+#   - apt 工具链走阿里云源；npm 走 npmmirror（环境变量方式）
+#   - agent-teams 从本地 tarball 安装（GitHub 国际出口慢，本地 6.1MB 打包上传）
+
+FROM node:20-slim
+
+WORKDIR /app
+
+# 1) node-pty 等原生模块需要编译工具链（node-gyp）
+#    阿里云源加速（HTTP 避免基础镜像证书问题）；xz-utils 解压 node tar.xz
+RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null; \
+    apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ git ca-certificates curl xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+# 2) 干净的 Node 22：删掉 node20 全部残留（含旧 npm），完整解压 node22 官方 tar
+#    （避免新旧 npm/node 混用导致的 Class extends undefined 崩溃）
+RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/bin/node /usr/local/include/node /usr/local/share/man/man1/node.1 \
+ && curl -fsSL -o /tmp/node22.tar.xz https://npmmirror.com/mirrors/node/v22.20.0/node-v22.20.0-linux-x64.tar.xz \
+ && tar -xJf /tmp/node22.tar.xz -C /usr/local --strip-components=1 \
+ && rm -f /tmp/node22.tar.xz \
+ && node --version && npm --version
+
+# 3) 国内 npm 镜像加速（环境变量，避免构建环境差异）
+ENV npm_config_registry=https://registry.npmmirror.com
+
+# 3b) DeepSeek 默认端点：服务器 key 走 OpenCode 网关，DEEPSEEK_BASE_URL 由运行环境注入（见 docker-compose 的 dsh 服务）
+
+# 4) 全局安装 dsh CLI（bundles: dsh-base 等随主包依赖解析）+ pnpm9（node 20/22 兼容）
+RUN npm install -g @deepseek-ai/dsh@0.2.0-rc.2 pnpm@9
+
+# 5) 手工初始化 service profile（manifest 声明 bundles=[dsh-base]）
+RUN mkdir -p /root/.dsh/profiles/service \
+ && printf '{\n  "name": "dsh-profile-service",\n  "private": true,\n  "dependencies": {},\n  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base"] } }\n}\n' > /root/.dsh/profiles/service/package.json \
+ && printf 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n' > /root/.dsh/profiles/service/pnpm-workspace.yaml \
+ && printf '# service profile patch\n[]\n' > /root/.dsh/profiles/service/cordis.patch.yml
+
+# 6) 安装 registry 插件（host-webserver / code-runtime）
+RUN cd /root/.dsh/profiles/service \
+ && pnpm add @deepseek-ai/dsh-host-webserver@0.2.0-rc.2 @deepseek-ai/dsh-tool-fs@0.2.0-rc.2 --ignore-workspace-root-check 2>&1 | tail -3
+
+
+# 8) dsh-marcus-bridge 插件（Pi Server 兼容 HTTP 桥接）
+#    从构建上下文 COPY（由 scripts/specs/dsh-marcus-bridge.spec.json 生成）
+#    ⚠️ 不再 COPY 进 /root/.dsh/profiles/... —— compose 的 dsh-data volume 挂载在
+#    /root/.dsh 会遮蔽镜像内的插件文件（首启后镜像重建无法更新 volume 内文件）。
+#    改为 COPY 到 /opt/dsh-plugins/（volume 外），由 entrypoint.sh 启动时同步覆盖。
+COPY docker/dsh/bridge/package.json /opt/dsh-plugins/dsh-dsh-marcus-bridge/package.json
+COPY docker/dsh/bridge/lib/index.js /opt/dsh-plugins/dsh-dsh-marcus-bridge/lib/index.js
+
+# 8b) dsh-t-compaction 插件（做T会话专用上下文压缩：股票投资信息优先摘要）
+COPY docker/dsh/t-compaction/package.json /opt/dsh-plugins/dsh-t-compaction/package.json
+COPY docker/dsh/t-compaction/lib/index.js /opt/dsh-plugins/dsh-t-compaction/lib/index.js
+
+# 9) 覆盖 service profile 的用户 patch（webserver host 0.0.0.0 + code-runtime + bridge + t-compaction）
+#    同样放入 /opt/dsh-plugins/（同步到 volume 中的 profiles/service/）
+COPY docker/dsh/service.cordis.patch.yml.020 /opt/dsh-plugins/cordis.patch.yml
+
+# 9b) 启动入口：先把镜像内最新插件/patch 同步进 volume（/root/.dsh），再 exec dsh
+COPY docker/dsh/entrypoint.sh /opt/dsh-plugins/entrypoint.sh
+RUN chmod +x /opt/dsh-plugins/entrypoint.sh
+
+# 会话/技能目录
+RUN mkdir -p /app/sessions /app/skills
+
+# Expose HTTP port (Pi Server 兼容契约)
+EXPOSE 3001
+
+# 常驻启动 service profile（经 entrypoint 同步插件后 exec dsh）
+CMD ["bash", "/opt/dsh-plugins/entrypoint.sh"]

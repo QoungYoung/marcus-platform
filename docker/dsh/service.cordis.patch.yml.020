@@ -1,0 +1,45 @@
+# Marcus service profile patch — 无 GUI 的常驻 DSH 服务（替代 Pi Server）
+# 叠加在 dsh-base 之上：插入 webserver（host 0.0.0.0）与 code-runtime，
+# dsh-marcus-bridge 插件在此注册 /chat /health /reset 端点。
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+# 共享 HMR 行关闭（服务端无浏览器）
+- id: hmr
+  disabled: true
+
+- id: tools
+  config:
+    # 与 headless 一致：Code Mode 作为核心执行能力
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+# 文件沙箱：桥接会话默认 workspace-write（工作区 /app + /tmp 可写），
+# 覆盖 dsh-base 的 read-only 兜底；审批保持 ask（headless 下越权升级会失败关闭，属预期安全行为）
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: /app
+
+# web_search：走 OpenCode 网关（Anthropic 兼容 /v1/messages + web_search_20250305 server tool，已实测可用），
+# key 复用网关 key（DEEPSEEK_API_KEY，服务器 .env 已注入，无需新 key）；
+# 端点默认网关，可用 DEEPSEEK_SEARCH_BASE_URL 覆盖（如切回 DeepSeek 官方 https://api.deepseek.com/anthropic/v1）
+- id: web-search-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseURL: !!js process.env.DEEPSEEK_SEARCH_BASE_URL ?? 'https://opencode.ai/zen/go/v1'
+
+- insert:
+
+    # 常驻 HTTP 服务器：暴露 0.0.0.0 供 compose 网络内其他容器访问
+    - id: webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      config:
+        host: '0.0.0.0'
+        port: !!js parseInt(process.env.PI_SERVER_PORT || '3001', 10)
+
+    # Marcus 桥接插件：POST /chat /health /reset（Pi Server 兼容契约）
+    - id: dsh-marcus-bridge
+      name: dsh-dsh-marcus-bridge
