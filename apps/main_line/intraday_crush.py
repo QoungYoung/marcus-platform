@@ -133,6 +133,10 @@ def _hm(x: Any) -> str:
     return d[:4] if len(d) >= 4 else d.zfill(4)
 
 
+# ★ 账本 §9.699 ✓：本仓「防回潮」要求 —— 静默吞异常必须留痕 ✗
+_CRUSH_BAD_BARS = 0
+
+
 def _upto(bars: List[Any], hhmm: str) -> List[Tuple[str, float, float, float, float, float, float]]:
     out = []
     cut = _hm(hhmm)
@@ -155,8 +159,14 @@ def _upto(bars: List[Any], hhmm: str) -> List[Tuple[str, float, float, float, fl
                 try:
                     out.append((t, float(b[2 + _off]), float(b[3 + _off]), float(b[4 + _off]),
                                 float(b[5 + _off]), float(b[6 + _off]), float(b[7 + _off])))
-                except (TypeError, ValueError):
-                    continue   # 该根字段缺失/非法 ⇒ 跳过（保持序列只含有效 bar ✓）
+                except (TypeError, ValueError) as _e_bad:
+                    # ★ §9.699 ✓：**留痕**（防回潮规则 ✓）—— 前 3 次 + 每 500 次打一行 ✓
+                    global _CRUSH_BAD_BARS
+                    _CRUSH_BAD_BARS += 1
+                    if _CRUSH_BAD_BARS <= 3 or _CRUSH_BAD_BARS % 500 == 0:
+                        print("[intraday_crush] 跳过字段缺失的 bar #%d: %s"
+                              % (_CRUSH_BAD_BARS, str(_e_bad)[:70]), flush=True)
+                    continue
         except Exception as _e_sil1:
             _silent_alert("intraday_crush.py:128", _e_sil1)
             continue
