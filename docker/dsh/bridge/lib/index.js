@@ -8,6 +8,12 @@ import { readdir, rm, stat } from 'node:fs/promises';
 const name = "dsh-marcus-bridge";
 // ★ 账本 §9.610：fork 迁移是否**复制历史**（默认 1 = 原行为 ✓）
 const FORK_SEED = String(process.env.BRIDGE_FORK_SEED === undefined ? "1" : process.env.BRIDGE_FORK_SEED).trim() !== "0";
+// ★ 账本 §9.687 ✓（用户：「马上做」✓，回应"桥少重试/早返回"）：空回复重试上限 ✓
+//   旧行为 ✗：①空回复 ⇒ 销毁重建重试（一个完整回合 ✓）②**再空** ⇒ fork 迁移 ＋ **又一回合** ✗
+//     ⇒ 最坏 **3 个完整回合** ✗ ⇒ 客户端等 >240 秒 ⇒ 成批 read timeout ✓
+//   ⇒ 默认 **1**（只留"销毁重建"那一级 ✓，**去掉 fork 二级重试** ✗）；
+//     设 2 = 旧行为（回退用 ✓）；设 0 = 完全不重试、立刻返回空 ✓
+const EMPTY_RETRY_MAX = parseInt(process.env.BRIDGE_EMPTY_RETRY_MAX || "1", 10);
 const inject = ["webServer","agents","tools"];
 
 // ═══ 可选全局出站代理（web_search / LLM 出站 fetch 共用 undici 全局 dispatcher）═══
@@ -642,6 +648,15 @@ function apply(ctx) {
         if (event.seq < firstSeq) continue;
         if (event.type === 'turn/start') { started = true; continue; }
         if (!started) continue;
+        // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
+        try {
+          if (!globalThis.__attProbe) {
+            if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
+              globalThis.__attProbe = 1;
+              console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
+            }
+          }
+        } catch (e) {}
         if (event.type === 'assistant/message') {
           const joined = (event.data.message.content || [])
             .filter((b) => b.type === 'text')
@@ -784,6 +799,15 @@ function apply(ctx) {
           if (event.seq < firstSeq) continue;
           if (event.type === 'turn/start') { started = true; continue; }
           if (!started) continue;
+        // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
+        try {
+          if (!globalThis.__attProbe) {
+            if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
+              globalThis.__attProbe = 1;
+              console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
+            }
+          }
+        } catch (e) {}
           if (event.type === 'assistant/message') {
             const joined = (event.data.message.content || [])
               .filter((b) => b.type === 'text')
@@ -828,6 +852,8 @@ function apply(ctx) {
         }
         let finalSessionId = sessionId;
         if (!reply || reply === '(无回复)') {
+          if (EMPTY_RETRY_MAX >= 2) {   // ★ §9.687 ✓：默认 1 ⇒ 跳过这一级 ✗
+          }   // ← §9.687 二级重试（fork 迁移）到此为止 ✓
           // 二次空回复：fork 迁移（保留历史，新 driver）
           const migrated = await migrateForkedSession(sessionId, chatMode, model, thinking_level, agent);
           if (migrated) {
@@ -1310,6 +1336,15 @@ function _sessionEvents(agent) {
         if (event.seq < firstSeq) continue;
         if (event.type === 'turn/start') { started = true; continue; }
         if (!started) continue;
+        // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
+        try {
+          if (!globalThis.__attProbe) {
+            if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
+              globalThis.__attProbe = 1;
+              console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
+            }
+          }
+        } catch (e) {}
         if (event.type === 'assistant/message') {
           const joined = (event.data.message.content || [])
             .filter((b) => b.type === 'text')
@@ -1433,6 +1468,8 @@ function _sessionEvents(agent) {
                 }
                 let finalSessionId = sessionId;
                 if (!reply || reply === '(无回复)') {
+                  if (EMPTY_RETRY_MAX >= 2) {   // ★ §9.687 ✓：默认 1 ⇒ 跳过这一级 ✗
+                  }   // ← §9.687 二级重试（fork 迁移）到此为止 ✓
                   // 二次空回复：DSH resume 边界 bug 无法自愈 → fork 迁移（保留历史，新 driver）
                   const migrated = await migrateForkedSession(sessionId, chatMode, model, thinking_level, agent);
                   if (migrated) {

@@ -135,7 +135,7 @@ services:
       # DeepSeek 端点：服务器 key 走 OpenCode 网关（.env 的 DEEPSEEK_API_HOST，如 opencode.ai/zen/go）
       DEEPSEEK_BASE_URL: ${DEEPSEEK_API_HOST:-https://opencode.ai/zen/go}/v1
       DEEPSEEK_SEARCH_BASE_URL: https://api.deepseek.com/anthropic/v1
-      DEEPSEEK_MODEL: deepseek-v4-flash
+      DEEPSEEK_MODEL: deepseek-flash
     ports:
       - "3001:3001"
     volumes:

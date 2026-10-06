@@ -34,6 +34,23 @@
 - insert:
 
     # 常驻 HTTP 服务器：暴露 0.0.0.0 供 compose 网络内其他容器访问
+    # ★ 账本 §9.690 ✓（用户「立即停跑批，开始修复」✓）：**必须挂载 provider 适配器** ✓
+    #   实测 ✗：只装包不注册 ⇒ 桥仍报 no adapter registered for provider "deepseek-official" ✓
+    - id: llm-deepseek
+      name: '@deepseek-ai/dsh-llm-deepseek'
+
+    # ★ 账本 §9.690 补 ✓：**provider 注册**由 api-key 插件负责 ✓（传输包只导出库 ✗）
+    #   README 原文：「Register authentication and model discovery for `deepseek-official`」✓
+    #   `apiKeyEnv` 默认即 `DEEPSEEK_API_KEY` ✓（环境已设 ✓）；baseURL 走官方端点 ✓
+    - id: llm-deepseek-key
+      name: '@deepseek-ai/dsh-llm-deepseek-api-key'
+      config:
+        apiKeyEnv: DEEPSEEK_API_KEY
+        # ★ 账本 §9.690 补2 ✓：**endpoint 也必须给** ✗ —— 只给 apiKeyEnv 会在加载时
+        #   抛 `TypeError: Invalid URL`（实测 ✓，插件加载失败 ⇒ provider 未注册 ⇒ NO_ADAPTER ✓）
+        #   代码里读的字段名实测是 ⇒ `config.baseURL` ✓
+        baseURL: https://api.deepseek.com/anthropic
+
     - id: webserver
       name: '@deepseek-ai/dsh-host-webserver'
       config:

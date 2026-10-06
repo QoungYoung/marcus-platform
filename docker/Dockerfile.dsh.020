@@ -46,7 +46,13 @@ RUN mkdir -p /root/.dsh/profiles/service \
 
 # 6) 安装 registry 插件（host-webserver / code-runtime）
 RUN cd /root/.dsh/profiles/service \
- && pnpm add @deepseek-ai/dsh-host-webserver@0.2.0-rc.2 @deepseek-ai/dsh-tool-fs@0.2.0-rc.2 --ignore-workspace-root-check 2>&1 | tail -3
+ && pnpm add @deepseek-ai/dsh-host-webserver@0.2.0-rc.2 @deepseek-ai/dsh-tool-fs@0.2.0-rc.2 \
+              @deepseek-ai/dsh-llm-deepseek@0.2.0-rc.2 \
+              @deepseek-ai/dsh-llm-deepseek-api-key@0.2.0-rc.2 \
+              --ignore-workspace-root-check 2>&1 | tail -3
+# ★ 账本 §9.690 ✓（用户「立即停跑批，开始修复」✓）：**必须挂载 provider 适配器** ✓
+#   实测 ✗：0.2 镜像漏装它 ⇒ 桥报 no adapter registered for provider "deepseek-official" ✓
+#     （0.1 时代适配器随 dsh-base 一起来 ✓；0.2 拆成独立包 @deepseek-ai/dsh-llm-deepseek ✓）
 
 
 # 8) dsh-marcus-bridge 插件（Pi Server 兼容 HTTP 桥接）
