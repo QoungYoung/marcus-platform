@@ -150,7 +150,10 @@ def _install_monitoring() -> bool:
                 #   ⇒ 结论 ✓：**它不是"超时"** ✗（真正的超时是
                 #     `HTTPConnectionPool(...)Read timed out. (read timeout=90)` ✓ —— 那个已由
                 #     `WOLF_WAKE_TIMEOUT=240` 修掉 ✓）⇒ 本条**不再记入告警流** ✗
-                if isinstance(exc, KeyError) and str(exc).startswith("PoolKey("):
+                #   ★ 自测纠正 ✓：`str(KeyError(x))` 是**带引号的 repr** ✗
+                #     （`"'PoolKey(...)'"` ✓）⇒ 不能用 startswith ✗ ⇒ 用"前 40 字里包含" ✓
+                _s_pk = str(exc)
+                if isinstance(exc, KeyError) and "PoolKey(" in _s_pk[:40]:
                     return
                 _emit("第三方的raise", "%s:%s" % (os.path.basename(fs), getattr(code, "co_firstlineno", 0)), exc)
                 return
