@@ -248,10 +248,48 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
     #   ⇒ 必须与旧 `t_regime.check_gate` **同形状** ✓：
     #     `{"allowed": bool, "mode": "auto"|"human_confirm"|"blocked", "regime": str}` ✓
     #     （`gate`／`why` 作为**附加键**保留 ✓，不影响调用方 ✓）
+    # ★★ 账本 §9.712 ✓（用户口径原文：「**止损只在指数大级别破位**」✓）：
+    #   ⇒ 指数大级别破位是**触发止损的时机** ✗，**不是"禁止卖出"** ✓
+    #   ⇒ ⇒ **卖类（`high_sell*`）永不拦** ✓ —— 这是今晚验证里发现的真问题 ✗
+    #     （旧实现在 down 时把买、卖一起 BLOCKED ✗ ⇒ 破位时**反而卖不出去** ✗，与口径相反 ✓）
+    _kind_s = str(kind or "low_buy")
+    if _kind_s in ("high_sell", "high_sell_then_buy_back"):
+        return {"allowed": True, "mode": "auto", "regime": "down",
+                "gate": "ALLOWED",
+                "why": "卖类不受环境门限制 ✓（口径：破位是止损的**触发**，不是禁止卖出 ✓）：%s"
+                       % str(_why or w.get("level"))[:60]}
     if bool(stop):
         return {"allowed": False, "mode": "blocked", "regime": "down" if False else "HALT",
                 "gate": "BLOCKED",
                 "why": "指数大级别转下跌1浪（狼大口径 ✓）：%s" % str(_why or w.get("level"))[:80]}
+    # ★★ 账本 §9.711 ✓（用户 2026-10-07：「接进去」✓ —— 把**真实的 `operation`** 接进闸门 ✓）：
+    #   语义**照抄** `apps/main_line/wave_agent.py:259-272`（狼大口径原文 ✓，不自己编 ✗）：
+    #     build    建仓/追（主升、d3+3-3、d1/上升浪、W底确认）        ⇒ 买类 **放行** ✓
+    #     t_only   只做T**不追不新建主升**（4-4、4-2/B反、3-4、ABC高位）⇒ 买类 **拦** ✗（T仓仍可动 ✓）
+    #     side     观望/调仓换股（4-3筑底、大2、ABC、3-2回调…）        ⇒ 买类 **MANUAL_ONLY**（人工确认 ✓）
+    #     defense  防御**不建仓**                                     ⇒ 买类 **拦** ✗
+    #     exit     兑现**降仓**（d5/末段防顶）                        ⇒ 买类 **拦** ✗
+    #   ★ **卖类（`high_sell*`）永不拦** ✓ —— 与全仓既有原则一致（止血/兑现动作必须能执行 ✓）
+    #   开关：`WOLF_WAVE_OP_GATE`（**库内默认 0** ⇒ 生产零影响 ✓；回测由 pins 置 1 ✓）
+    _op_on = str(os.getenv("WOLF_WAVE_OP_GATE", "0")).strip().lower() in ("1", "true", "yes", "on")
+    if _op_on:
+        _kind = str(kind or "low_buy")
+        _is_sell = _kind in ("high_sell", "high_sell_then_buy_back")
+        _op = str((w or {}).get("operation") or "").strip().lower()
+        if (not _is_sell) and _op in ("t_only", "defense", "exit"):
+            return {"allowed": False, "mode": "blocked",
+                    "regime": str((w or {}).get("level") or ""),
+                    "gate": "BLOCKED",
+                    "why": "浪型 operation=%s（狼大口径：%s）⇒ 买类不放行 ✓"
+                           % (_op, {"t_only": "只做T不追不新建主升", "defense": "防御不建仓",
+                                    "exit": "兑现降仓"}.get(_op, ""))}
+        if (not _is_sell) and _op == "side":
+            return {"allowed": True, "mode": "human_confirm",
+                    "regime": str((w or {}).get("level") or ""),
+                    "gate": "MANUAL_ONLY",
+                    "why": "浪型 operation=side（观望/调仓换股）⇒ 买类需人工确认 ✓"}
+        if (not _is_sell) and not _op:
+            print("[wave_gate] operation 缺失 ⇒ 买类按 level 判（保守 ✓）", file=sys.stderr, flush=True)
     return {"allowed": True, "mode": "auto", "regime": "ACTIVE",
             "gate": "ALLOWED",
             "why": str(_why or ("wave_state.level=%s（非 down ✓）" % str(w.get("level"))))[:100]}

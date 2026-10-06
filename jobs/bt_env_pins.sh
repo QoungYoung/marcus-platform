@@ -991,3 +991,10 @@ export WOLF_BT_THINKING_LEVEL='low'
 export WOLF_BUY_DEDUP='1'
 export WOLF_BUY_DEDUP_MIN='5'
 
+
+# ★ 账本 §9.711 ✓（用户 2026-10-07：「接进去」✓）：把**真实的 operation** 接进环境门 ✓
+#   语义照抄 wave_agent.py:259-272（狼大原文 ✓）：
+#     build ⇒ 买类放行 ✓｜t_only / defense / exit ⇒ 买类**拦** ✗｜side ⇒ 买类 MANUAL_ONLY（人工确认 ✓）
+#     ★ 卖类（high_sell*）**永不拦** ✓（止血/兑现必须能执行 ✓）
+#   库内默认 0 ⇒ 生产零影响 ✓；回测打开 ✓
+export WOLF_WAVE_OP_GATE='1'
