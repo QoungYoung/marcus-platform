@@ -983,3 +983,10 @@ export WOLF_SESSION_PREWARM='1'
 #   ⇒ 回测唤醒注入 thinking_level=low ✓（只影响回测 ✓；库内默认空 ⇒ 生产零影响 ✓）
 #   ★ 注意：这会改变模型"想多久"⇒ 严格说是**口径变化** ✗（用户已同意试一天 ✓）
 export WOLF_BT_THINKING_LEVEL='low'
+
+# ★ 账本 §9.702 ✓（用户 2026-10-07 回测复盘）：
+#   汇成股份 SH688403 2026-01-21 **14:00 与 14:05 各买 23.05×2400**（同价同量 ✗）
+#     ⇒ 建仓类买腿的**同价重复互斥** ✓（镜像卖出侧的 t_sell_dedup ✓）
+#   ★ 转正加仓 / 做T回补**不受本闸约束** ✓（那本来就是合法的第二笔 ✓）
+export WOLF_BUY_DEDUP='1'
+export WOLF_BUY_DEDUP_MIN='5'

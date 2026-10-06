@@ -2795,6 +2795,27 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
         except Exception as _sde:
             print("[gateway] 同价去重闸异常(放行): %s" % str(_sde)[:80], flush=True)
 
+    # 0.66) ★ 账本 §9.702 ✓（用户 2026-10-07 回测复盘）：**建仓类买腿的同价重复互斥**
+    #   实测 ✗：汇成股份 SH688403 2026-01-21 **14:00 与 14:05 各买 23.05×2400**（同价同量 ✗）
+    #     —— G6「一票最多买 2 笔」按**笔数**算 ⇒ 恰好 2 笔**在上限内**，放行 ✗；
+    #     而 t_sell_dedup 只管卖出 ✗ ⇒ 没人管"同一分钟同价重复建仓" ✓
+    #   口径（与卖出侧同款 ✓）：建仓类腿在「同标的 + WOLF_BUY_DEDUP_MIN 分钟内 + 同价 ±0.5% 已成交过」
+    #     ⇒ 本次不执行（先到者成交 ✓）；**转正加仓/做T回补不受约束** ✓（那本来就是合法的第二笔 ✓）
+    #   开关：WOLF_BUY_DEDUP（**库内默认 0** ⇒ 生产零影响 ✓；回测由 pins 置 1 ✓）
+    if str(side).lower() in ("buy", "买入"):
+        try:
+            from app.services import t_buy_dedup as _bd
+            if _bd.enabled():
+                _okb, _whyb = _bd.check(account_id, symbol, float(price or 0),
+                                        trigger_kind=_turnover_kind(trigger_id, condition_id),
+                                        reason=reason)
+                if not _okb:
+                    if trigger_id:
+                        t_db.update_trigger_status(trigger_id, "blocked", reason=str(_whyb)[:250])
+                    return {"status": "blocked", "reason": _whyb, "level": "BUY_DEDUP"}
+        except Exception as _bde:
+            print("[gateway] 建仓同价去重闸异常(放行): %s" % str(_bde)[:80], flush=True)
+
     # 0.7) G6（2026-09-14）**一个票最多买 2 笔、卖 2 笔**（狼大 2025-02-07「一个票最多买2笔 卖2笔
     #      后面如果是主升浪的话越动收益越低」）—— 每日每标的成交笔数上限，落在**唯一下单入口**：
     #      · 覆盖所有买入路径（低吸/回补/加仓/ETF 调仓…）；
