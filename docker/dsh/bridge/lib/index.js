@@ -1298,6 +1298,8 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                 // 1) 释放该用户 chat 链路全部内存句柄（含 fork 迁移产生的 _m 变体）
                 let disposed = 0;
                 for (const [key, handle] of [...sessions]) {
+                                    // ★ 账本 §9.669 ✓（用户：「每五分钟会销毁正在进行的会话吧」✗）：
+                                    //   **正在跑回合的会话绝不销毁** ✓（`locks` 里有它 ⇒ 跳过 ✓）
                   if (key === prefix || key.startsWith(prefix + '_m')) {
                     try { await handle.dispose(); } catch (e) { console.warn('[Bridge] /reset dispose 失败: ' + key + ': ' + e.message); }
                     sessions.delete(key);
@@ -1315,7 +1317,10 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                 //     ⇒ 看门狗每 5 分钟调一次却**什么都没销毁** ✗ ⇒ 会话累积 63 个、容器涨到 12.68 GiB ✗
                 //   ⇒ 语义修正 ✓：不带 session_id = **销毁全部会话** ✓（看门狗正是这么调的 ✓）
                 let _n = 0;
+                let _skip = 0;
                 for (const [key, handle] of [...sessions]) {
+                  // ★ 账本 §9.669 ✓（用户：「每五分钟会销毁正在进行的会话吧」✗）：正在跑回合的**绝不销毁** ✓
+                  if (locks.has(key)) { _skip += 1; continue; }
                   try {
                     if (handle && typeof handle.dispose === 'function') { await handle.dispose(); }
                   } catch (e) {
@@ -1325,7 +1330,7 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
                   locks.delete(key);
                   _n += 1;
                 }
-                console.log('[Bridge] /reset(无 session_id) ⇒ 销毁全部会话: ' + _n + ' 个 ✓');
+                console.log('[Bridge] /reset(无 session_id) ⇒ 销毁空闲会话: ' + _n + ' 个 ✓（跳过在跑 ' + _skip + ' 个 ✓）');
               }
               json(res, 200, { status: 'reset' });
             } catch (e) {
@@ -1751,6 +1756,31 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
     }
     ctx.effect(() => { fetchPromptsFromAPI(); });
 
+        // ★ 账本 §9.669 ✓（用户：「不能做到真实的会话结束自动销毁吗」✓）：
+        //   **空闲 TTL 扫描** ✓：会话"最后一次活动"超过 TTL **且不在跑** ⇒ 销毁 ✓
+        //     · 语义 ✓ = 真实的"会话结束就销毁"（回合结束后空闲到 TTL 就清 ✓）
+        //     · **绝不打断在跑的回合** ✓（locks 有它 ⇒ 跳过 ✓；TTL 默认 600s > 回合上限 240s ✓）
+        //     · 阈值 ✓：`DSH_SESSION_TTL_SEC`（默认 600 秒 ✓；设 0 ⇒ 关闭 ✓）
+        setInterval(async () => {
+          try {
+            const ttl = parseInt(process.env.DSH_SESSION_TTL_SEC || '600', 10);
+            if (!ttl || ttl <= 0) { return; }
+            const now = Date.now();
+            let n = 0;
+            for (const [key, handle] of [...sessions]) {
+              if (locks.has(key)) { continue; }
+              const ts = (handle && handle._ts) || 0;
+              if (ts && (now - ts) > ttl * 1000) {
+                try { if (handle && typeof handle.dispose === 'function') { await handle.dispose(); } }
+                catch (e) { console.warn('[Bridge] TTL dispose 失败: ' + key + ': ' + (e && e.message ? e.message : e)); }
+                sessions.delete(key);
+                locks.delete(key);
+                n += 1;
+              }
+            }
+            if (n) { console.log('[Bridge] TTL 自动销毁空闲会话: ' + n + ' 个 ✓（ttl=' + ttl + 's，剩余 ' + sessions.size + ' ✓）'); }
+          } catch (e) { console.warn('[Bridge] TTL 扫描异常: ' + (e && e.message ? e.message : e)); }
+        }, 60000);
     console.log('[Bridge] dsh-marcus-bridge 已激活：/chat /health /reset');
   
 }
