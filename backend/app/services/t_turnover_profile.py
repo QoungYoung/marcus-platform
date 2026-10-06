@@ -75,6 +75,7 @@ def compute_turnover_profile(symbol: str, n_days: int = 5,
     # ── 兜底：腾讯 m5 量代理 ──
     try:
         from app.services.t_data_sources import fetch_tencent_quote, fetch_minute_bars
+        from app.services.t_data_sources import _normalize_symbol   # ★ §9.700：补漏导入 ✓
         q = fetch_tencent_quote([_normalize_symbol(_to_tencent_symbol(symbol))]).get(_to_tencent_symbol(symbol)) or {}
         cur_tr = float(q.get("turnover_rate") or 0)
         cur_vol = float(q.get("vol") or 0)

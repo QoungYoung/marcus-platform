@@ -463,6 +463,11 @@ def _get_sector_holdings(fund_code: str) -> List[Dict[str, Any]]:
 def _check_sector_down_turn(etf_code: str, down_days: Optional[int] = None) -> bool:
     """板块 ETF 二次拐点: 最近 N 日收盘连续回落（价格驱动）。"""
     try:
+        # ★ 账本 §9.700 ✓（静态扫描发现）：GoldenPitService 定义在
+        #   app/services/golden_pit_service.py:65 ✓，但本文件**从未导入它** ✗
+        #   ⇒ _check_sector_down_turn() 一跑就 NameError（生产 DCA 路径 ✗）
+        #   ⇒ 按本文件既有风格用**函数内局部导入** ✓（第 128/1135 行同款 ✓，避免循环导入 ✗）
+        from app.services.golden_pit_service import GoldenPitService
         bars = GoldenPitService._fetch_tushare_kline(etf_code, limit=40)
         closes = [float(b["close"]) for b in bars if b.get("close")]
         n = down_days or int(_sector.get_sector_params(etf_code).get("exit_down_days")
