@@ -37,7 +37,11 @@ from trade_day_utils import is_today_trade_day
 from xueqiu_engine import XueqiuEngine
 from akshare_engine import AKShareEngine
 from news_analyzer import get_news_analysis, get_stock_news, get_news_sentiment_simple, get_hot_sectors_from_cache
-from deepseek_analyzer import filter_news_with_deepseek, _call_deepseek_api
+from deepseek_analyzer import filter_news_with_deepseek, _call_deepseek_api, \
+    analyze_news_with_deepseek   # ★ 账本 §9.700 ✓（静态扫描发现）
+#   真因 ✗：第 1579 行调用 analyze_news_with_deepseek 却没导入
+#     ⇒ get_news_sentiment() 一跑就 NameError（生产新闻情绪路径 ✗）
+#   依据 ✓：该函数确实存在 ⇒ core/deepseek/deepseek_analyzer.py:85 ✓
 from strategy_chain import StrategyChain
 
 # Tushare 数据获取

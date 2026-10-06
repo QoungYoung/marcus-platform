@@ -35,7 +35,10 @@ def main() -> int:
                 try:
                     s = open(p, encoding="utf-8").read()
                 except Exception as _e_sil1:
-                    _silent_alert("scan_silent_excepts.py:33", _e_sil1)
+                    # ★ 账本 §9.700 ✓：本文件**从未定义** _silent_alert ✗
+                    #   ⇒ 真走这个分支就 NameError（把原始异常也吞掉 ✗）⇒ 换成自包含 print ✓
+                    print("[scan-silent] 读文件失败 %s: %s"
+                          % (p, str(_e_sil1)[:80]), flush=True)
                     continue
                 # 排除我们自己注入的 `_silent_alert` helper 自带的 `except: pass`（否则每个改过的文件虚高 1 ✗）
                 n = 0
