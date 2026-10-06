@@ -3196,7 +3196,24 @@ class TMonitor:
                                 _ah_sil.note_silent("t_monitor.py:3030", _e_sil17)
                             except Exception:
                                 print("[silent:t_monitor.py:3030] %s: %s" % (type(_e_sil17).__name__, str(_e_sil17)[:110]), flush=True)
+                    # ★ 账本 §9.704 ✓（用户 2026-10-07：「芳源股份 未转正就加仓」✗）：
+                    #   **实测对不上** ✗ —— 芳源 01-26 当天最高只有 10.410，
+                    #     而 买入前 20 日最高 = 10.730 ✗、成本×1.10 = 10.824 ✗
+                    #     ⇒ ①②两条口径**当时都不成立** ✗ ⇒ 那 `_promoted` 为什么会为真 ✗？
+                    #   ⇒ 不再靠推理 ✓（今晚已多次猜错 ✗）：**在记录点留痕"到底哪条成立"** ✗
+                    #     ⇒ 下次一发生，日志直接说明原因 ✓（含四个关键数字 ✓）
                     if _promoted:
+                        try:
+                            print("[埋伏转正·判据留痕] %s 成本=%.3f 最高=%.3f 阈值=%.1f%% "
+                                  "⇒ ①浮盈线=%.3f(%s) ②碰新高线=%.3f(%s)"
+                                  % (_sym, _cost0, _hi, self._ambush_promote_pct(),
+                                     _cost0 * (1 + self._ambush_promote_pct() / 100.0),
+                                     "成立" if (_cost0 > 0 and _hi >= _cost0 * (1 + self._ambush_promote_pct() / 100.0)) else "不成立",
+                                     locals().get("_ph0", 0.0),
+                                     "成立" if (locals().get("_ph0", 0) > 0 and _hi > locals().get("_ph0", 0)) else "不成立"),
+                                  flush=True)
+                        except Exception as _ePAD:
+                            print("[埋伏转正·判据留痕] 打印失败: %s" % str(_ePAD)[:60], flush=True)
                         # ⚠️ 2026-09-30（账本 §9.345 ✓ 用户：「不是分钟重放吗？」✓ 正是 ✓）——
                         #   本该用**当根分钟**的价 ✓，实测 ✗：01-19 记下的 `ppx=71.37`，
                         #   而当日区间是 **68.59~70.76** ✗（71.37 属**上一交易日** ✓）
