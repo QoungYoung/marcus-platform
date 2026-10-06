@@ -2586,6 +2586,27 @@ class TMonitor:
                                 break
                     if float(_q.get("current") or _q.get("price") or 0) > 0:
                         break
+                # ★ 账本 §9.682 ✓（用户：「为什么9点十五能买入，还没开盘呢」✗）：
+                #   实测 ✗：本检查在当天**第一根 bar（09:15 = 集合竞价，只报单不成交）**上也会跑 ✓
+                #     而它当时用的 `_low`/`_cur` 是**当日整根日线**的低点与收盘 ✗
+                #     ⇒ 条件 `_low <= _res < _cur` 用到了"收盘后才知道"的值 ⇒ **未来函数** ✓
+                #       （实测那笔：_low=89.26 = 全天最低 ✗、_cur=98.00 = 当日收 ✗，而成交时刻写 09:15 ✗）
+                #   ⇒ 本开关（库内**默认关** ✓ ⇒ 生产逐位不变 ✓）打开后：
+                #     ①`hhmm < 0930` ⇒ **直接不判**（开盘前没有可信的盘中价 ✓）
+                #     ②取数**绝不用"当日日线"** ✗ ⇒ 拿不到 as-of 盘中价就**跳过**（宁可不做 ✓）
+                _asof_guard = str(os.getenv("WOLF_RETEST_ADD_ASOF_GUARD", "0")).strip().lower() \
+                    in ("1", "true", "yes", "on")
+                # ★ 取时刻**必须走 `datetime.now()`** ✓ —— 本文件其它处（1814/1888 行）都用它 ✓，
+                #   而**回测里时钟被钉在当日 bar 上** ✓ ⇒ 它返回的就是**仿真时刻** ✓；
+                #   我自己先用 `utcnow()+8h` ✗ 会**绕过钉住** ⇒ 时段闸恒不生效 ✗（已改回 ✓）
+                _hm0 = ""
+                if _asof_guard:
+                    try:
+                        _hm0 = datetime.now().strftime("%H%M")
+                    except Exception:
+                        _hm0 = ""
+                    if _hm0 and _hm0 < "0930":
+                        return
                 _cur = float(_q.get("current") or _q.get("price") or 0)
                 _low = float(_q.get("low") or 0)
                 _op = float(_q.get("open") or 0)
@@ -2614,6 +2635,12 @@ class TMonitor:
                             _cl3 = [float(x.get("close") or 0) for x in _ok3 if x.get("close")]
                             _lo3 = [float(x.get("low") or 0) for x in _ok3 if x.get("low")]
                             _op3 = [float(x.get("open") or 0) for x in _ok3 if x.get("open")]
+                            if _cl3 and _asof_guard:
+                                # ★ §9.682 ✓：**当日日线 = 未来数据** ✗ ⇒ 开关打开时**不用它**
+                                #   （宁可不加仓 ✓，也不拿收盘价/全天最低去判早晨的腿 ✗）
+                                print("[加仓候选·跳过] %s 只有当日日线、无 as-of 盘中价 ⇒ 按未来函数防护跳过 ✓（%s）"
+                                      % (_sym, _hm0), flush=True)
+                                return
                             if _cl3:
                                 _cur = _cl3[-1]
                                 _low = _lo3[-1] if _lo3 else _cur
