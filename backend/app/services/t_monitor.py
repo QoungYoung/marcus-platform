@@ -30,6 +30,28 @@ from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, 
 # ★ 账本 §9.709 ✓（用户：「旧的 t_regime 直接删掉，已证明是负收益」）：
 #   环境门只用**狼大浪型** ✓（`_is_trading_time` 是**交易时段工具**、与收益无关 ⇒ 保留 ✓）
 from app.services.t_regime import _is_trading_time
+# ★ 账本 §9.713 ✓（测试 test_monitor_wired_markers 早已断言这一点 ✗ —— 原文：「止损口径未挂进 _check_stop_loss」✓）：
+#   用户口径 ✓：「**止损只在指数大级别破位**」＋「地量不割」
+#   `t_playbook.stop_allowed()` 实现完整 ✓，但 **`_check_stop_loss` 从未调用它** ✗
+#     ⇒ "写了模块没挂上" ✗（正是那条测试防的事 ✓，它一直在报红 ✓，是我先前误判为"改名遗留"✗）
+#   ⇒ 现挂上 ✓（见 `_check_stop_loss` 开头 ✓）；下面这个名字供测试/文档引用 ✓
+from app.services.t_playbook import STOP_BY_BREAK as STOP_BY_INDEX_BREAK
+
+
+# ★ 账本 §9.713 ✓：**轮次度量**（`round_timing()`）—— 测试 `test_monitor_wired_markers` 一直在断言它 ✓
+#   用途 ✓：让「闸门到底拦了几次」**看得见** ✗（今晚反复吃亏的正是"看不见" ✗）
+#   口径 ✓：只累加、不清零（进程内单调 ✓）；键名与测试一致 ✓（`stop_gate_skip` ✓）
+_ROUND_TIMING = {"stop_gate_skip": 0, "stop_gate_pass": 0, "stop_gate_error": 0}
+
+
+def round_timing() -> dict:
+    """本轮/进程内的**止损闸度量** ✓（键：stop_gate_skip / stop_gate_pass / stop_gate_error ✓）。"""
+    try:
+        return dict(_ROUND_TIMING)
+    except Exception as _e_rt:
+        print("[TMonitor] round_timing 失败: %s" % str(_e_rt)[:60], flush=True)
+        return {}
+
 from app.services.wave_gate import gate_regime as compute_regime   # 波浪版替身 ✓
 # ★ 账本 §9.659 ✓（用户：「只依据 wave_state，缺失就现场补，去掉这个」）
 #   环境门改为**可切换** ✓：`WOLF_WAVE_GATE_ONLY=1` ⇒ 用**狼大的浪型口径** ✓
@@ -5351,6 +5373,24 @@ class TMonitor:
             current = float(quote.get("current", 0) or 0)
             if current <= 0:
                 return
+            # ★★ 账本 §9.713 ✓：**止损只在指数大级别破位**（＋地量不割）——
+            #   实现见 `t_playbook.stop_allowed` ✓；本处是**唯一接线点** ✓
+            #   开关 `WOLF_STOP_BY_INDEX_BREAK`（默认 **0** ⇒ 生产零影响 ✓、行为逐位不变 ✓）
+            if STOP_BY_INDEX_BREAK:
+                try:
+                    from app.services import t_playbook as _pb
+                    from app.services.wave_gate import check_gate as _wg_c, sim_day8 as _sd8
+                    _ix_down = (str((_wg_c("low_buy", as_of=_sd8() or None) or {}).get("regime")) == "down")
+                    _dry = bool(quote.get("volume_dry") or quote.get("dry"))
+                    _st = _pb.stop_allowed(_ix_down, volume_dry=_dry) or {}
+                    if not _st.get("ok"):
+                        _ROUND_TIMING["stop_gate_skip"] += 1
+                        print("[TMonitor] %s 止损跳过：%s" % (symbol, str(_st.get("why"))[:80]), flush=True)
+                        return
+                    _ROUND_TIMING["stop_gate_pass"] += 1
+                except Exception as _e_sb:
+                    _ROUND_TIMING["stop_gate_error"] += 1
+                    print("[TMonitor] 指数破位闸异常(放行): %s" % str(_e_sb)[:70], flush=True)
             stop_price = None
             conds = t_db.list_active_conditions(symbol=symbol,
                                                 account_id=T_MONITOR_ACCOUNT)
