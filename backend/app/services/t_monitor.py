@@ -32,14 +32,43 @@ from app.services.t_regime import check_gate as _rg_check_gate, compute_regime, 
 #   环境门改为**可切换** ✓：`WOLF_WAVE_GATE_ONLY=1` ⇒ 用**狼大的浪型口径** ✓
 #   （`wave_gate.check_gate` ✓：`wave_state.level == down` ⇒ BLOCKED ✓，缺档**现场补** ✓）
 #   默认 0 ⇒ 仍走旧 `t_regime` ✓ ⇒ **生产行为逐位不变** ✓
-def check_gate(kind="low_buy", regime_state=None):
+def _sim_day8() -> str:
+    """当前**模拟日**（回测里 = `DATA_DIR` 的末段 ✓；生产里退化为今天 ✓）。
+
+    ★ 账本 §9.708 ✓（用户 2026-10-07：「还没做波浪判据?」✗ —— 查出来真因是这里）：
+      实测日志 ✗：`357 × [wave_gate] wave_state 过期 11 天 ⇒ 现场补（**as_of=-**）`
+              ＋ `357 × judge_wave 无有效 level（'无数据'）⇒ 不写回，沿用旧档`
+      ⇒ 调用方 `check_gate(kind)` **没传 as_of** ✗ ⇒ `judge_wave(None)` 只能返回"无数据" ✗
+        ⇒ 现场补永远失败 ⇒ **一直沿用旧档** ⇒ 狼大浪型闸**形同虚设** ✗（买入理由里只剩旧 regime ✓）
+      ⇒ 本函数给出模拟日 ⇒ 现场补能判**当天** ✓
+    """
     try:
-        from app.services.wave_gate import enabled as _wg_on, check_gate as _wg_check
-        if _wg_on():
-            return _wg_check(kind)
+        _seg = os.path.basename(os.path.normpath(os.environ.get("DATA_DIR", "") or ""))
+        if len(_seg) == 8 and _seg.isdigit():
+            return _seg
+    except Exception as _e_seg:
+        # ★ §9.709 ✓：留痕（防回潮 ✓）—— 取模拟日失败不致命，但要能看见 ✓
+        print("[t_monitor] _sim_day8 取 DATA_DIR 末段失败: %s" % str(_e_seg)[:70], flush=True)
+    try:
+        import datetime as _d8
+        return _d8.datetime.now().strftime("%Y%m%d")
+    except Exception:
+        return ""
+
+
+def check_gate(kind="low_buy", regime_state=None):
+    """环境门 —— **只用狼大浪型口径** ✓（账本 §9.709 ✓）。
+
+    ★ 用户 2026-10-07：「旧的 t_regime 直接删掉，这个东西已经证明是负收益了」✓
+      ⇒ 不再回退 `t_regime` ✗；`wave_gate` 不可用/取不到浪型时**放行** ✓（fail-open ✓，不假装有闸 ✓）。
+    """
+    try:
+        from app.services.wave_gate import check_gate as _wg_check
+        return _wg_check(kind, as_of=_sim_day8() or None)
     except Exception as _e_wg:
-        print("[t_monitor] wave_gate 不可用 ⇒ 回退 t_regime: %s" % str(_e_wg)[:80], flush=True)
-    return _rg_check_gate(kind, regime_state)
+        print("[t_monitor] wave_gate 不可用 ⇒ **放行**（不再回退 t_regime ✓）: %s" % str(_e_wg)[:80], flush=True)
+        return {"allowed": True, "mode": "auto", "regime": "ACTIVE", "gate": "ALLOWED",
+                "why": "wave_gate 不可用（放行 ✓）"}
 
 
 def _silent_alert(where, exc=None):

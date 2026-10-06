@@ -31,10 +31,19 @@ from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, 
 from app.services.t_regime import compute_regime as _rg_compute_regime
 # ★ 账本 §9.659 ✓：环境门可切到**狼大浪型口径** ✓（`WOLF_WAVE_GATE_ONLY=1` ✓）
 def compute_regime(*a, **k):
+    """环境门 —— **只用狼大浪型口径** ✓（账本 §9.709 ✓：用户「旧的 t_regime 直接删掉，已证明是负收益」✓）。"""
     try:
-        from app.services.wave_gate import enabled as _wg_on, check_gate as _wg_check
-        if _wg_on():
-            g = _wg_check("low_buy")
+        from app.services.wave_gate import check_gate as _wg_check
+        if True:
+            _seg8 = ""
+            try:
+                _sg = os.path.basename(os.path.normpath(os.environ.get("DATA_DIR", "") or ""))
+                if len(_sg) == 8 and _sg.isdigit():
+                    _seg8 = _sg
+            except Exception:
+                _seg8 = ""
+            # ★ §9.708 ✓：必须把**模拟日**传进去 ✗（否则现场补只能拿 None ⇒ "无数据" ⇒ 沿用旧档 ✗）
+            g = _wg_check("low_buy", as_of=_seg8 or None)
             # ★ 补齐旧 compute_regime 的键 ✓（§9.659 再修正：避免下游取键 KeyError ✗）
             _g = g.get("gate")
             return {"regime": "HALT" if _g == "BLOCKED" else "ACTIVE",
@@ -43,8 +52,10 @@ def compute_regime(*a, **k):
                     "state": g.get("mode") or "auto",
                     "why": g.get("why"), "src": "wave_gate"}
     except Exception as _e_wg2:
-        print("[t_gateway] wave_gate 不可用 ⇒ 回退 t_regime: %s" % str(_e_wg2)[:80], flush=True)
-    return _rg_compute_regime(*a, **k)
+        print("[t_gateway] wave_gate 不可用 ⇒ **放行**（不再回退 t_regime ✓）: %s" % str(_e_wg2)[:80], flush=True)
+    return {"regime": "ACTIVE", "gate_low_buy": "ALLOWED", "gate_high_sell": "ALLOWED",
+            "interpret_sign": 1, "index_drop": 0.0, "state": "auto",
+            "why": "wave_gate 不可用（放行 ✓）", "src": "wave_gate_fallback"}
 from trade_direction import is_buy, is_sell  # noqa: E402 统一方向词表
 
 

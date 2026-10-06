@@ -72,6 +72,30 @@ def _stale_days(wave: dict) -> Optional[int]:
         return None
 
 
+# ★ 账本 §9.709 ✓（用户 2026-10-07：「旧的 t_regime 直接删掉，这个东西已经证明是负收益了」✓）：
+#   现场补的**中文浪名 → level/operation 映射** ✓（此前解析不上 ⇒ 永远沿用旧档 ✗，实测旧档陈旧 244 天 ✗）
+#   实测 judge_wave 的输出（决定性 ✓）：2026-01-26 ⇒ 『主升浪』；2026-02-06 ⇒ 『震荡/待明确』
+#   映射口径（**最保守**，可再按用户口径调整 ✓）：
+#     · 主升/推动/上升/突破 ⇒ level=d3、operation=build（**参与** ✓）
+#     · 震荡/待明确/无序   ⇒ level=d3、operation=t_only（★ **只允许补仓/做T，不新开** ✓）
+#     · 下跌/破位/调整     ⇒ level=down、operation=defense（**禁买** ✓ —— 对齐「指数破位不新开票」✓）
+_LABEL_MAP = (
+    (("主升", "推动", "上升", "突破", "上行"), "d3", "build"),
+    (("震荡", "待明确", "无序", "横盘", "整理"), "d3", "t_only"),
+    (("下跌", "破位", "调整", "下行", "杀跌"), "down", "defense"),
+)
+
+
+def _map_label(lbl: str):
+    """中文浪名 ⇒ (level, operation)。认不出 ⇒ (\"\", \"\")（不写回 ✓ 保守 ✓）。"""
+    t = str(lbl or "")
+    for keys, lv, op in _LABEL_MAP:
+        for k in keys:
+            if k in t:
+                return lv, op
+    return "", ""
+
+
 def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Optional[dict]:
     """读 `wave_state` ✓；**缺失/过期 ⇒ 现场补** ✓（并写回 ✓）。补不出来返回 None ✓。"""
     w = _load_wave()
@@ -99,6 +123,17 @@ def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Option
         if isinstance(inner, dict):
             got.update({k: inner.get(k) for k in ("level", "sub_level", "operation", "confidence", "reasons")})
         got["level"] = got.get("level") or ""
+        # ★ §9.709 ✓：中文浪名 ⇒ level/operation（此前解析不上 ⇒ 永远吃旧档 ✗）
+        if not got["level"] or got["level"] in ("无数据", "None", "?"):
+            _lv, _op = _map_label(str(lbl))
+            if _lv:
+                got["level"] = _lv
+                got.setdefault("operation", None)
+                if not got.get("operation"):
+                    got["operation"] = _op
+                got["label"] = str(lbl)[:40]
+                print("[wave_gate] 浪名映射 ✓ %r ⇒ level=%s operation=%s"
+                      % (str(lbl)[:24], _lv, _op), file=sys.stderr, flush=True)
         # ★ 修正 ✓：**只有拿到有效 level 才写回** ✗（自测里 `judge_wave` 返回"无数据"
         #   也能写回 ⇒ 把好的档覆盖成 `level="无数据"` ✗✗ —— 事故 ✓）
         if not got["level"] or got["level"] in ("无数据", "None", "?"):
