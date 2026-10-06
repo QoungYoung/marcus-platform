@@ -13,6 +13,7 @@
 """
 import os, sys, json
 from datetime import datetime
+import time   # ★ §9.700：补漏导入 ✓
 
 
 def _silent_alert(where, exc=None):

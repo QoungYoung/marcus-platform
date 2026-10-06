@@ -14,6 +14,7 @@ from typing import List, Dict, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.workspace_detector import WORKSPACE, XUEQIU_DIR, AKSHARE_DIR, DATA_DIR
 from core.xueqiu_engine import XueqiuEngine
+import sqlite3   # ★ §9.700：补漏导入（否则 NameError ✗）
 
 
 

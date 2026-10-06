@@ -6,6 +6,7 @@
 用法: python -u apps/main_line/backtest_wolf_dip_254.py
 """
 import os, sys, json, urllib.request, gzip, time, datetime as _dt
+DATA = os.environ.get('DATA_DIR', '/app/data')   # ★ §9.700：补常量（其它 main_line 脚本同口径 ✓）
 
 
 def _silent_alert(where, exc=None):

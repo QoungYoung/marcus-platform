@@ -4,6 +4,7 @@
 输出: data/crowding_pit/ab_gate_hits.json
 """
 import os,json,urllib.request,gzip,math
+DATA = os.environ.get('DATA_DIR', '/app/data')   # ★ §9.700：补常量 ✓
 
 
 def _silent_alert(where, exc=None):

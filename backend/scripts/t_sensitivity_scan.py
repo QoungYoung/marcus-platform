@@ -13,6 +13,7 @@ import argparse
 import json
 import sys
 from typing import Dict, List
+from typing import Any, Dict, List, Optional   # ★ §9.700：补漏导入 ✓
 
 # 待扫描参数（分档初值，来自 final-t-plan.md §②）
 PARAMS = {
