@@ -513,8 +513,8 @@ class LLMReplay:
                 _nb = kw.get("json") or {}
                 _plen = len(_nb.get("message") or "")
                 _rlen = len(str(getattr(resp, "text", "") or ""))
-                print("[bt_llm] 一次唤醒 ⇒ %6.2f 秒｜prompt %5d 字符｜reply %5d 字符｜会话 %s"
-                      % (_dt, _plen, _rlen, str(_nb.get("session_id"))[-16:]), flush=True)
+                print("[bt_llm] %s 一次唤醒 ⇒ %6.2f 秒｜prompt %5d 字符｜reply %5d 字符｜会话 %s"
+                      % (_t9.strftime("%H:%M:%S"), _dt, _plen, _rlen, str(_nb.get("session_id"))[-16:]), flush=True)
             except Exception:
                 pass
         except Exception:

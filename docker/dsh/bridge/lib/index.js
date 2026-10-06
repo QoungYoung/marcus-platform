@@ -650,9 +650,8 @@ function apply(ctx) {
         if (!started) continue;
         // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
         try {
-          if (!globalThis.__attProbe) {
+          if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {   // ★ §9.696：打 6 条 ✓
             if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-              globalThis.__attProbe = 1;
               console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
             }
           }
@@ -801,9 +800,8 @@ function apply(ctx) {
           if (!started) continue;
         // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
         try {
-          if (!globalThis.__attProbe) {
+          if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {   // ★ §9.696：打 6 条 ✓
             if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-              globalThis.__attProbe = 1;
               console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
             }
           }
@@ -1338,9 +1336,8 @@ function _sessionEvents(agent) {
         if (!started) continue;
         // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
         try {
-          if (!globalThis.__attProbe) {
+          if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {   // ★ §9.696：打 6 条 ✓
             if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-              globalThis.__attProbe = 1;
               console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
             }
           }

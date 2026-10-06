@@ -46,6 +46,20 @@
       name: '@deepseek-ai/dsh-llm-deepseek-api-key'
       config:
         apiKeyEnv: DEEPSEEK_API_KEY
+        # ★ 账本 §9.696 ✓（用户「123都加上」✓）：按适配器 README 的字段表降档 ✗
+        #   实测 ✓：一次回合 370 秒 = 上游每次 ~60 秒失败 × **重试 6 次**（assistant/attempt:6）
+        #     · reasoningEffort 默认 **high** ⇒ 降 **low** ✓（模型是推理模型 ✓）
+        #     · streamIdleTimeoutMs 默认 **300000（5 分钟）** ⇒ 降 **60000** ✓
+        #     · retryPolicy 默认「normal, **5 retries**」⇒ **maxRetries: 1** ✓（执行器 dsh-llm-retry ✓）
+        #   ⇒ 单次回合最坏 60~120 秒 ✓（而非 370 ✗）⇒ 排队者不再集体 420 秒超时 ✓
+        reasoningEffort: low
+        streamIdleTimeoutMs: 60000
+        # ★ §9.696 修正 ✓：schema 校验报错原文 ⇒
+        #   $.retryPolicy expected { mode: "normal", maxRetries?: number, … }
+        #   ⇒ **mode 是必填** ✗（我第一版漏了 ⇒ ValidationError ✓）
+        retryPolicy:
+          mode: normal
+          maxRetries: 1
         # ★ 账本 §9.690 补2 ✓：**endpoint 也必须给** ✗ —— 只给 apiKeyEnv 会在加载时
         #   抛 `TypeError: Invalid URL`（实测 ✓，插件加载失败 ⇒ provider 未注册 ⇒ NO_ADAPTER ✓）
         #   代码里读的字段名实测是 ⇒ `config.baseURL` ✓
