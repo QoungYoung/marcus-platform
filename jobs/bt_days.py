@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import os
 import subprocess
 import sys
 import time
@@ -206,7 +207,14 @@ def run(cmd, log_path, timeout=3600):
     t0 = time.time()
     with open(log_path, "w") as f:
         rc = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=timeout)
-    return rc, time.time() - t0
+    _dt = time.time() - t0
+    # ★ 账本 §9.693 ✓（用户「加上」✓）：每个子阶段自己报用时 ✓ —— 用来定位 26 分钟到底花在哪 ✗
+    try:
+        _base = os.path.basename(str(cmd[1] if isinstance(cmd, (list, tuple)) and len(cmd) > 1 else cmd))
+        print('[days] ⏱ 子步骤 %s ⇒ %d 秒 (rc=%s)' % (_base, int(_dt), rc), flush=True)
+    except Exception:
+        pass
+    return rc, _dt
 
 
 def main() -> int:

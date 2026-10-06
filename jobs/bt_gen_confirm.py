@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 import sys
 import traceback
 
@@ -42,6 +43,7 @@ def main() -> int:
     ap.add_argument("--root", default=os.path.join(REPO, "data", "_bt_t35"))
     ap.add_argument("--bars-db", default=os.path.join(REPO, "data", "_bt_full", "bars.sqlite"))
     a = ap.parse_args()
+    _t0 = time.time()   # ★ §9.693 ✓：本作业自己的用时 ✓
     day = str(a.day).replace("-", "")
     sandbox = a.root if os.path.isabs(a.root) else os.path.join(REPO, a.root)
     day_dir = os.path.join(sandbox, day)
@@ -81,6 +83,7 @@ def main() -> int:
         SCJ.main()
         print("[gen_confirm] ✅ 已现算 %s 的候选 ✓（order=%s ✓｜DATA=%s ✓）"
               % (day, os.getenv("STOCK_CONFIRM_ORDER"), day_dir), flush=True)
+        print('[gen_confirm] ⏱ 用时 %d 秒（day=%s ✓）' % (int(time.time() - _t0), day), flush=True)
         return 0
     except Exception as e:
         print("[gen_confirm] ❌ 现算失败（调用方 fail-open ✓）: %s\n%s"
