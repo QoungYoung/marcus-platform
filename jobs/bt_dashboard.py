@@ -374,6 +374,16 @@ def detect_price_space(trades: list[dict], bars_db: str, bars_adj: str = "",
     环境变量 `WOLF_CURVE_SPACE=raw|adj` 可强制覆盖（排障用）。
     """
     forced = (os.getenv("WOLF_CURVE_SPACE") or "").strip().lower()
+    # ★ 账本 §9.666 ✓（用户：「持仓明细…你觉得没影响吗」「你不能统一一下吗」✗）：
+    #   实测 ✗：面板把**复权成本**(168.666 ✓)与**原始现价**(246.200 ✗)混着算
+    #     ⇒ 浮盈显示 **+45.97%**（真实 **+3.31%** ✗）⇒ **虚增约 14 倍** ✗✗
+    #   根因 ✓：自动探测偶尔判成 raw ✗，而成交/成本在**复权**空间 ✓
+    #   ⇒ 修法 ✓：**回测臂自己就知道口径** —— `WOLF_ADJ_PRICE=1` ⇒ 复权空间 ✓
+    #     （优先级低于显式 `WOLF_CURVE_SPACE` ✓）⇒ 成本/现价/净值曲线**三者同尺** ✓
+    if forced not in ("raw", "adj"):
+        _adjp = (os.getenv("WOLF_ADJ_PRICE") or "").strip().lower()
+        if _adjp in ("1", "true", "yes", "on"):
+            forced = "adj"
     out = {"space": "raw", "n_affected": 0, "n_used": 0, "wins_adj": 0, "wins_raw": 0,
            "med_raw": None, "med_adj": None, "why": ""}
     if forced in ("raw", "adj"):
