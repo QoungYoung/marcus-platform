@@ -318,6 +318,13 @@ def approve(symbol: str, theme: str, concepts: Optional[List[str]] = None, stage
     #   共享腿闸 ⇒ 所有布腿来源都被覆盖（实测回测腿里确实混进过 7 只北交所 + 3 只 ST）。
     #   as-of 正确：回测用 namechange 重建当日简称（不是今天的名字）；生产没 tag ⇒ 用当下快照（正确口径）。
     #   开关默认关（universe_clean.enabled()），失败 fail-open。
+    #   ★ 账本 §9.670 补注 ✓（用户：「过滤里去掉退市、ST、北交所的票为什么没有对这里生效？」✗）：
+    #     「放最前面」是**在本函数内部**最前面 ✓ —— 但**本函数（approve）在调用链上晚于
+    #       `prefetch`（成员判定）** ✗ ⇒ **省不到那批 LLM 调用** ✗
+    #       （实测：卡到超时的正是 `920252.BJ／920239.BJ` ✓ —— 它们先被 LLM 判过，才在这里被拦 ✓）
+    #       能省的只是 ① 主营校验之后的部分 ✓；**脏腿仍会被拦** ✓ ⇒ 腿是干净的 ✓（实测 20 条腿里北交所 0 条 ✓）
+    #     ⇒ ⇒ **LLM 入口的同源过滤已另建于 `theme_member_llm.needs_dsh`** ✓
+    #        （同一口径 `universe_clean.judge` = 退市/ST/北交所 ✓，fail-open ✓）
     _tp = time.time()
     try:
         import importlib as _ilUC
