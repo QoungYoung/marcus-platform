@@ -29,8 +29,6 @@ wave agent 每交易日**只调 1 次** `/chat`，而交易腿 agent（`t_bridge
 ## 用法
 ```python
 from bt_llm_replay import LLMReplay
-
-
 llm = LLMReplay(agent="t_leg", as_of="20260107", cache_dir="/app/data/_bt_llm_year2")  # 模式读 env
 llm.install(t_bridge); llm.install(t_ai_agent)     # requests / urllib 两种调用面都换掉
 ... 正常跑生产链 ...
@@ -42,16 +40,15 @@ env：
   `BT_LLM_CACHE` = 缓存根目录（默认 `<DATA_DIR>/_bt_llm`）
   `BT_LLM_STRICT`= 1（默认）prompt 不一致即报错；0 只警告
 """
-
-# ★ 账本 §9.684 ✓：已焐热的 session_id 集合（**必须在 docstring 之后** ✗ ——
-#   我前一版把它插进了 docstring 里 ⇒ 只是文字 ⇒ `NameError` ✓；AST 校验当场抓到 ✓）
-_PREWARMED = set()
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import time
+
+# ★ 账本 §9.684 ✓：已焐热的 session_id 集合（模块级 ✓；**必须在 from __future__ 之后** ✗）
+_PREWARMED = set()
 from typing import Any, Dict, List, Optional
 
 
@@ -467,25 +464,22 @@ class LLMReplay:
             sid = "bt:%s:%s:w%d" % (self.agent, self.as_of, int(time.time() // _win))
             if body.get("session_id") == sid:
                 return kw
-            # ★ 账本 §9.684 ✓（用户：「加上」✓，回应「有这么多同时请求吗，不是说串行吗」✗）：
-            #   实测 ✓：重启后当天的**第一批调用**会撞上**冷启动（~95 秒 ✗）** ⇒ 11 个调用点
-            #     同会话排队 ＋ 各自重试 ⇒ 尾部超 240 秒 ⇒ 成批 `read timeout=240` ✓
-            #   ⇒ 发现**新会话**时，先发一个**极小的焐热请求** ✓（把冷启动提前吃掉 ✓）
-            #     ⇒ 此后同一会话的调用都在**热**状态（实测 ~6 秒 ✓）
-            #   开关 ✓：`WOLF_SESSION_PREWARM`（库内默认 0 ⇒ 生产零影响 ✓；pins 打开 ✓）
+            # ★ 账本 §9.684 ✓（用户：「加上」✓）：发现**新会话**先发一个极小请求把它焐热 ✓
+            #   （实测冷 ~95 秒 ✗、热 ~6 秒 ✓ ⇒ 重启后第一批调用的 240 秒成批超时由此而来 ✓）
+            #   开关 WOLF_SESSION_PREWARM（库内默认 0 ⇒ 生产零影响 ✓；pins 打开 ✓）
             try:
                 _pw_on = str(os.getenv("WOLF_SESSION_PREWARM", "0")).strip().lower() in ("1", "true", "yes", "on")
                 if _pw_on and sid not in _PREWARMED:
                     _PREWARMED.add(sid)
                     import json as _j_pw
                     import urllib.request as _u_pw
-                    _req_pw = _u_pw.Request(str(url),
-                                            data=_j_pw.dumps({"message": "只回两字: 就绪", "session_id": sid}).encode(),
-                                            headers={"Content-Type": "application/json"})
-                    _t0_pw = time.time()
-                    with _u_pw.urlopen(_req_pw, timeout=float(os.getenv("WOLF_SESSION_PREWARM_TIMEOUT", "200") or 200)) as _rp_pw:
-                        _rp_pw.read()
-                    print("[bt_llm] 会话焐热完成 ✓ %s（%.1f 秒）" % (str(sid)[-26:], time.time() - _t0_pw), flush=True)
+                    _rq = _u_pw.Request(str(url),
+                                       data=_j_pw.dumps({"message": "只回两字: 就绪", "session_id": sid}).encode(),
+                                       headers={"Content-Type": "application/json"})
+                    _tt = time.time()
+                    with _u_pw.urlopen(_rq, timeout=float(os.getenv("WOLF_SESSION_PREWARM_TIMEOUT", "200") or 200)) as _rs:
+                        _rs.read()
+                    print("[bt_llm] 会话焐热完成 ✓ %s（%.1f 秒）" % (str(sid)[-26:], time.time() - _tt), flush=True)
             except Exception as _e_pw:
                 print("[bt_llm] 会话焐热失败（继续 ✓）: %s" % str(_e_pw)[:70], flush=True)
             kw2 = dict(kw)
