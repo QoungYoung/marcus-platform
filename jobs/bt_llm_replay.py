@@ -488,6 +488,13 @@ class LLMReplay:
             kw2 = dict(kw)
             nb = dict(body)
             nb["session_id"] = sid
+            # ★ 账本 §9.694 ✓（用户：「把回测唤醒的 thinking/effort 降到 low 试一天」✓）
+            #   实测 ✓：0107 单次唤醒 4~88 秒（均值 36.8 ✓），prompt 规模相同 ⇒ 抖动来自推理长度 ✗
+            #   模型 deepseek-flash 的 effort 默认 high ✗ ⇒ 回测唤醒降到 low ✓（只影响回测 ✓）
+            #   开关 ✓：WOLF_BT_THINKING_LEVEL（库内默认空 ⇒ 不注入 ⇒ 生产零影响 ✓）
+            _lvl9 = (os.getenv('WOLF_BT_THINKING_LEVEL') or '').strip()
+            if _lvl9:
+                nb['thinking_level'] = _lvl9
             kw2["json"] = nb
             return kw2
         except Exception as _e_ws:
