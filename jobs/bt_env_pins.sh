@@ -924,3 +924,8 @@ export WOLF_FALLING_GATE_COND='1'
 #   库内默认 0 ⇒ 生产逐位不变 ✓
 export WOLF_TREND_DAY_WINDOW='1'
 export WOLF_COND_TIME_WINDOW='1'
+
+# ★ 账本 §9.665 ✓（用户拍板「做」✓）：**腿缓存**——指纹(内容 md5)一致就跳过重算 ✓
+#   实测每轮全量重跑要重算 77 天的腿(30~40 秒/天 ≈ 45 分钟 ✗) ⇒ 只改执行闸时可复用 ✓
+#   库内默认 0 ⇒ 生产逐位不变 ✓
+export WOLF_LEGS_CACHE='1'

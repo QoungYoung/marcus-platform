@@ -171,6 +171,65 @@ def resolve_code_dir(date8: str, explicit: str = "") -> str:
     d = os.path.join(root, "rev_%s" % rev) if rev else ""
     return d if d and os.path.isdir(d) else ""
 
+# ── 腿缓存（账本 §9.665 ✓ 用户拍板「做」✓）──────────────────────────────────────
+#   动机 ✓：每次全量重跑都要重算 77 天的腿（实测 30~40 秒/天 ⇒ 约 45 分钟 ✗），
+#     而**只改执行闸**的轮次里"腿的输入"完全没变 ⇒ 本可复用 ✓
+#   关键设计 ✓：指纹**必须用内容哈希** ✗ 不能用 mtime ——
+#     沙箱输入（`stock_confirm_result.json` 等 ✓）是**当天前序阶段重新生成的** ✗
+#     ⇒ mtime 每次都变 ⇒ 缓存永远 miss ✗（这是踩过的坑 ✓）
+#   指纹 = ①布腿相关**代码文件的内容 md5** ✓ ②当日沙箱**关键输入文件的内容 md5** ✓
+#          ③`held`（DB 重建的持仓 ✓）④影响布腿的 env ✓
+#   命中条件 ✓：指纹一致 **且** `legs.jsonl` 存在 ⇒ **跳过重算** ✓（返回 0 ✓）
+#   开关 ✓：`WOLF_LEGS_CACHE`（**库内默认 0 ⇒ 生产逐位不变** ✓；回测 pins 置 1 ✓）
+LEGS_CACHE = os.getenv("WOLF_LEGS_CACHE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+_LEG_CODE_FILES = (
+    "jobs/bt_day_legs.py", "jobs/rotation_switch_arm.py", "apps/main_line/trend_channel.py",
+    "apps/main_line/leg_gate.py", "apps/main_line/wolf_context.py",
+    "apps/main_line/theme_member_llm.py", "apps/main_line/theme_member_batch.py",
+    "apps/main_line/stock_confirm_judge.py", "apps/main_line/chain_map.py",
+    "apps/main_line/intraday_crush.py", "apps/main_line/theme_main_class.py",
+)
+_LEG_INPUT_FILES = (
+    "_seed.json", "stock_confirm_result.json", "wave_state.json",
+    "rotation_universe_result.json", "main_line_state.json", "legs_switch.jsonl",
+)
+_LEG_ENV_KEYS = (
+    "WOLF_TREND_DAY_WINDOW", "ROT_POOL_LEGS", "WOLF_MEMBER_BATCH",
+    "WOLF_MEMBER_BATCH_SIZE", "WOLF_INDEX_NEW_BUY", "WOLF_PACK_SHARED",
+    "WOLF_ADJ_PRICE", "WOLF_BT_ALWAYS_TRADING",
+)
+
+
+def _md5_of(path: str) -> str:
+    """文件**内容**的 md5 ✓（读不到 ⇒ 记 missing ✓，绝不因此崩 ✗）。"""
+    import hashlib as _h
+    try:
+        with open(path, "rb") as f:
+            return _h.md5(f.read()).hexdigest()
+    except Exception as _e_m:
+        return "missing:%s" % str(_e_m)[:30]
+
+
+def legs_fingerprint(sb: str, day: str, held: str = "") -> str:
+    """腿结果的指纹 ✓（任一输入/代码变了 ⇒ 指纹就变 ⇒ 重算 ✓）。"""
+    import hashlib as _h
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    parts = ["day=%s" % day, "held=%s" % held]
+    for k in _LEG_ENV_KEYS:
+        parts.append("%s=%s" % (k, os.getenv(k, "")))
+    for rel in _LEG_CODE_FILES:
+        parts.append("code:%s=%s" % (rel, _md5_of(os.path.join(root, rel))))
+    for rel in _LEG_INPUT_FILES:
+        parts.append("in:%s=%s" % (rel, _md5_of(os.path.join(sb, rel))))
+    return _h.md5("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def legs_cache_path(sb: str) -> str:
+    return os.path.join(sb, ".legs_fp.json")
+
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True, help="决策日 T（如 20260911）")
@@ -202,6 +261,25 @@ def main() -> int:
     if not cut:
         print("需要 --cut 或沙箱里有 _seed.json", file=sys.stderr); return 2
     os.environ["DATA_DIR"] = sb
+
+    # ★ 账本 §9.665 ✓：**腿缓存**——指纹一致且 legs.jsonl 在 ⇒ 直接复用、跳过重算 ✓
+    #   （放在 pin/装 shim 之前 ✓：命中时这些都不需要 ✓）
+    if LEGS_CACHE and not a.out:
+        try:
+            _fp = legs_fingerprint(sb, a.date, a.held or ("db" if a.held_from_db else ""))
+            _cp = legs_cache_path(sb)
+            _lp = os.path.join(sb, "legs.jsonl")
+            if os.path.isfile(_cp) and os.path.isfile(_lp):
+                _old = json.load(open(_cp, encoding="utf-8")) or {}
+                if str(_old.get("fp")) == _fp:
+                    _n = sum(1 for _ in open(_lp, encoding="utf-8"))
+                    print("[legs] ★ 腿缓存命中 ✓ 跳过重算（%s，%d 条腿，指纹 %.8s ✓）"
+                          % (a.date, _n, _fp), flush=True)
+                    return 0
+                print("[legs] 腿缓存**指纹不符** ⇒ 重算（旧 %.8s vs 新 %.8s ✗）"
+                      % (str(_old.get("fp"))[:8], _fp[:8]), flush=True)
+        except Exception as _e_lc:
+            print("[legs] 腿缓存检查失败(按未命中继续 ✓): %s" % str(_e_lc)[:90], flush=True)
 
     # 钉时钟（含 time.strftime/localtime）+ 钉取数：否则 09-11 的代码会 glob 到"最新那天的 gate/文件"
     try:
@@ -485,6 +563,18 @@ def main() -> int:
     with open(out, "w", encoding="utf-8") as f:
         for l in legs_out:
             f.write(json.dumps(dict(l, date=a.date, cut=cut), ensure_ascii=False) + "\n")
+
+            # ★ 账本 §9.665 ✓：**写指纹** ✓（下次同输入 ⇒ 直接命中、跳过重算 ✓）
+            if LEGS_CACHE and not a.out:
+                try:
+                    _fpw = legs_fingerprint(sb, a.date, a.held or ("db" if a.held_from_db else ""))
+                    with open(legs_cache_path(sb), "w", encoding="utf-8") as _fc:
+                        json.dump({"fp": _fpw, "day": a.date, "n": len(legs_out),
+                                   "at": __import__("time").strftime("%Y-%m-%d %H:%M:%S")},
+                                  _fc, ensure_ascii=False)
+                    print("[legs] ★ 腿缓存已写 ✓（%s，%d 条腿，指纹 %.8s）" % (a.date, len(legs_out), _fpw), flush=True)
+                except Exception as _e_lw:
+                    print("[legs] 腿缓存写入失败(不影响腿 ✓): %s" % str(_e_lw)[:90], flush=True)
     # ── 留痕（2026-09-18 用户"加上然后验证"）：此前 _gate_blocked 只进内存、从不落盘，
     #   导致 09:20 路径"静默 0 条腿"无法归因。这里落盘 + 打印各关计数。
     try:
