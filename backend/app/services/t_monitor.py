@@ -3613,6 +3613,20 @@ class TMonitor:
             except Exception as _eL:
                 print("[DBG_LIST] 失败 %s" % str(_eL)[:60], flush=True)
         conditions = [c for c in conditions if _is_wolf_t_condition(c)]
+        # ★ 账本 §9.664 ✓：**按 `start_time`/`end_time` 过滤** ✓（出窗 ⇒ 本轮不评估、不写触发 ✗）
+        if COND_TIME_WINDOW:
+            _keep = []
+            for _c in conditions:
+                if cond_window_ok(_c):
+                    _keep.append(_c)
+                else:
+                    _k = (str(_c.get("symbol")), str(_c.get("trigger_kind")))
+                    if _k not in _WINDOW_SKIPPED:
+                        _WINDOW_SKIPPED.add(_k)
+                        print("[TMonitor] 时间窗外→本轮不发腿 %s %s: %s–%s（now=%s ✓ 语料 2025-04-15 条件6、2025-05-23、2026-01-12）"
+                              % (_k[0], _k[1], _c.get("start_time"), _c.get("end_time"),
+                                 datetime.now().strftime("%H%M")), flush=True)
+            conditions = _keep
         if str(os.getenv("WOLF_DEBUG_COND", "") or "").strip():
             try:
                 _k2 = {}
@@ -6008,6 +6022,34 @@ COND_TIMING = os.getenv("WOLF_FALLING_GATE_COND", "0").strip().lower() in ("1", 
 def cond_timing_on() -> bool:
     """条件单（只传 condition_id 的那条路 ✓）是否也走 B/C 买入时点闸 ✓。"""
     return COND_TIMING
+
+
+# ★ 账本 §9.664 ✓：**认 `t_conditions.start_time`/`end_time`** ✓
+#   实测 ✗：两列本来就有 ✓、`upsert_condition` 也支持 ✓，但**监视线从来不读** ✗
+#   ⇒ 布腿端写进去的"当日时间窗"完全没生效 ✗（突破腿 14:00–14:30 这条 T3 就是靠它 ✓）
+#   ⇒ 开关 `WOLF_COND_TIME_WINDOW`（**库内默认 0 ⇒ 生产逐位不变** ✓；回测 pins 置 1）
+COND_TIME_WINDOW = os.getenv("WOLF_COND_TIME_WINDOW", "0").strip().lower() in ("1", "true", "yes", "on")
+_WINDOW_SKIPPED = set()
+
+
+def cond_window_ok(cond) -> bool:
+    """条件是否在**当日允许的时间窗**内 ✓（无窗 ⇒ 恒 True ✓，绝不因缺字段而拦 ✗）。"""
+    if not COND_TIME_WINDOW:
+        return True
+    try:
+        st = str((cond or {}).get("start_time") or "").strip()
+        et = str((cond or {}).get("end_time") or "").strip()
+        if not st and not et:
+            return True
+        hm = datetime.now().strftime("%H%M")
+        if st and hm < st:
+            return False
+        if et and hm > et:
+            return False
+        return True
+    except Exception as _e_w:
+        print("[TMonitor] 时间窗判定失败(放行 ✓): %s" % str(_e_w)[:70], flush=True)
+        return True
 
 
 def intraday_timing_blocked(symbol: str, is_buy: bool, pre_close: Optional[float] = None) -> bool:

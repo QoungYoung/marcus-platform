@@ -917,7 +917,11 @@ def ma_line_enabled():
     return os.getenv("WOLF_MA_LINE_ENTRY", "0").strip().lower() in ("1", "true", "yes")
 
 
-def arm(db, cur, symbol, trigger_kind, direction, expr, trade_date):
+def arm(db, cur, symbol, trigger_kind, direction, expr, trade_date,
+        start_time=None, end_time=None):
+    # ★ 账本 §9.664 ✓（用户拍板「补上 T3」✓）：**支持"当日时间窗"字段** ✓
+    #   `t_conditions` 本来就有 start_time/end_time 两列 ✓（upsert_condition 也支持 ✓）
+    #   ⇒ 这里只是把它们透传下去 ✓；**是否设窗由调用方决定** ✓（生产默认不设 ⇒ 行为不变 ✓）
     # 2026-09-10 账户权限: 无权限板块(创业板/科创板/北交所)不布腿
     _ex = [x.strip() for x in os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb").split(",") if x.strip()]
     _s = str(symbol); _p = _s[:2]; _c = _s[2:8]
@@ -931,6 +935,10 @@ def arm(db, cur, symbol, trigger_kind, direction, expr, trade_date):
             "trigger_kind": trigger_kind, "direction": direction,
             "expression": expr, "status": "active", "armed": 1,
             "publisher": "switch"}
+    if start_time:
+        cond["start_time"] = start_time
+    if end_time:
+        cond["end_time"] = end_time
     # 2026-09-09 修复: arm 当日新布缺 benchmark -> vol_ratio 用 MIN_TURNOVER_BASE(0.5%) 兜底
     # 被放大~10x -> vol_ratio<=0.9 恒不成立 -> 254 腿布腿当天全程哑火(478-489 全 0 触发;
     # 对照 07:26 switch_builder 带 benchmark 的腿 254 正常触发)。与 TMonitor 跨日结转同函数补基准。

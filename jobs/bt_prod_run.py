@@ -1289,8 +1289,18 @@ def main() -> int:
                             if _p3 not in sys.path:
                                 sys.path.insert(0, _p3)
                             import trend_channel as _TC3
+                            # ★ 账本 §9.664 ✓（用户拍板「补上 T3」✓）：**突破腿只在 14:00–14:30 成交** ✓
+                            #   语料 ✓：2025-04-15 条件6「如果当日开盘高开快速拉升，或者低开快速拉升
+                            #     **想追进去的，在下午 2.00-2.30 这个时间段进行回补**」；
+                            #     2025-05-23「尾盘能回来就尾盘买 急什么」；2026-01-12「买点只有尾盘」
+                            #   `trend_channel.py` 自述里把这条记为「**本版未做**」✗ ⇒ 实测 0106
+                            #     10:15(112.90)／10:25(112.73) 都在**盘中追入** ✗
+                            #   ⇒ 开关 `WOLF_TREND_DAY_WINDOW`（**库内默认 0 ⇒ 生产逐位不变** ✓；回测 pins 置 1）
+                            _tw_on = os.getenv("WOLF_TREND_DAY_WINDOW", "0").strip().lower() in ("1", "true", "yes", "on")
+                            _tw = ("1400", "1430") if _tw_on else (None, None)
                             rT = rsa.arm(conn, cur, sym, "trend_break_buy", "buy",
-                                         _TC3.expr(L["level"]), day)
+                                         _TC3.expr(L["level"]), day,
+                                         start_time=_tw[0], end_time=_tw[1])
                             armed.append({"symbol": sym, "src": "trend", "trend": rT,
                                           "level": L.get("level")})
                         except Exception as _eT:

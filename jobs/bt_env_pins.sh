@@ -918,3 +918,9 @@ export WOLF_WAVE_GATE_ONLY='1'
 #   语料 ✓：2025-06-05「急杀可以买，缓跌不买」；2025-04-03「冲上去一定不能追」
 #   库内默认 0 ⇒ 生产逐位不变 ✓
 export WOLF_FALLING_GATE_COND='1'
+
+# ★ 账本 §9.664 ✓（用户拍板「补上 T3」✓）：突破腿**只在 14:00–14:30 成交** ✓
+#   语料 2025-04-15 条件6「想追进去的…在下午 2.00-2.30 这个时间段进行回补」
+#   库内默认 0 ⇒ 生产逐位不变 ✓
+export WOLF_TREND_DAY_WINDOW='1'
+export WOLF_COND_TIME_WINDOW='1'
