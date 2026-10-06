@@ -440,7 +440,7 @@ def test_trend_stop_exempts_ambush():
     """
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     i = mon.index('②趋势线豁免埋伏仓')
-    seg = mon[i - 900:i + 500]
+    seg = mon[i - 1800:i + 500]   # ★ §9.703：左侧放宽（我加的注释把上游行挤出去了 ✗）
     assert 'os.getenv("WOLF_AMBUSH_SELL_EXEMPT", "0")' in seg
     assert "self._is_ambush_position(T_MONITOR_ACCOUNT, symbol)" in seg, "必须传两参数 ✓"
     assert "stop_price = 0.0" in seg and "continue" in seg
@@ -633,7 +633,7 @@ def test_warn_derisk_ratio_scope():
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     assert 'os.getenv("WOLF_WARN_TRIM_MAX_PCT", "0")' in mon
     i = mon.index('os.getenv("WOLF_WARN_TRIM_MAX_PCT"')
-    seg = mon[i:i + 7000]
+    seg = mon[i:i + 9000]
     assert "_target = _eq7 * _maxpct / 100.0" in seg, "目标＝权益×X% ✓"
     assert "_keep_n = max(_keep_n, _k7)" in seg, "取「只数」与「比例」中更严者 ✓"
     assert "预警降档(比例)" in seg
@@ -805,7 +805,7 @@ def test_promotion_record_persists_and_active_add():
     assert "def _check_ambush_promote_add(self)" in mon
     assert "self._check_ambush_promote_add," in mon, "须挂进统一入口 ✓"
     i = mon.index("def _check_ambush_promote_add")
-    seg = mon[i:i + 7000]
+    seg = mon[i:i + 9000]
     assert "_ppx * 1.04" in seg, "溢价 ≤4% ✓（不追高 ✓）"
     assert "_gap > 3" in seg and "_gap < 0" in seg, "3 自然日窗口 ✓"
     assert 'gateway_execute(_sym, "buy"' in seg, "必须**主动**买 ✓（不是只放行 ✗）"
@@ -898,7 +898,7 @@ def test_promote_add_has_visibility_when_no_quote():
     """
     mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
     i = mon.index("def _check_ambush_promote_add")
-    seg = mon[i:i + 7000]
+    seg = mon[i:i + 9000]
     assert "回退到日线收盘" in seg, "行情取不到时须回退日线收盘 ✓（与纪律同口径 ✓）"
     assert "行情与日线都空" in seg, "都空时仍要留痕 ✓"
     assert seg.count("埋伏转正加仓·跳过") >= 2, "两种跳过原因都要留痕 ✓"
@@ -1341,3 +1341,30 @@ def test_reduce_legs_exempt_from_no_t_sleeve():
         "网关须**透传腿型** ✓（否则参数拿不到 ✗）"
     pins = open(os.path.join(_ROOT, "jobs", "bt_env_pins.sh"), encoding="utf-8").read()
     assert "export WOLF_SELL_EXEMPT_REDUCE='1'" in pins
+
+
+def test_promote_add_requires_true_promotion_and_not_limitdown():
+    """★ 用户 2026-10-07 复盘的两条硬要求（账本 §9.703 ✓）：
+
+    ① 「芳源股份 (SH688148) **未转正前不能加仓**」✗
+       —— 病灶：`_promoted` 的兜底分支（读 ambush_promoted.json）是**粘性**的 ✗，
+          只要曾记过一次就永远为真 ⇒ **加仓把成本抬高后**已不满足「最高 ≥ 成本×(1+10%)」✗，
+          仍按"已转正"加仓 ✓ ⇒ 现要求在**发单前**用 DB 口径**重新验一次** ✓
+    ② 「泰胜风能 (SZ300129) **当日跌停，但这时候转正加仓**」✗
+       —— 原实现只查「转正日 +3 日内」与「价 ≤ 转正价×1.04」✗ ⇒ 跌停日照样买 ✗
+          （网关的"近跌停⇒L0⇒不做T买腿"管不到它：本腿 decision_source=risk ✓）
+          ⇒ 现要求用日线算**当日涨跌幅**，≤ −8% ⇒ 当日不加仓 ✓
+    """
+    mon = open(os.path.join(_ROOT, "backend", "app", "services", "t_monitor.py"), encoding="utf-8").read()
+    i = mon.index("def _check_ambush_promote_add")
+    seg = mon[i:i + 12000]
+    # ★ 口径纠偏（用户 2026-10-07：「埋伏仓转正口径不变，没让你改这个」✗）：
+    #   **转正判定只有一处**（`_promoted` 那条链：+10% 或 碰新高 或 记录回退 ✓）——
+    #   本函数**不得**再自创一套（我一度加了"只用 +10% 复核"✗ ⇒ 等于偷偷改口径 ✗ ⇒ 已撤 ✓）
+    assert "self._is_ambush_promoted(_acct, _sym)" not in seg, \
+        "不得在本函数里另立转正口径（口径只在 _promoted 一处 ✓）"
+    # ★ 用户明确要求的这条要保留：**跌停日不加仓**（泰胜风能 01-26 案例 ✓）
+    assert "_chgA <= -8.0" in seg, "当日 ≤ −8%（近跌停/破位）不许加仓 ✓"
+    assert "近跌停/破位" in seg, "跳过理由须留痕 ✓"
+    assert seg.index("_chgA <= -8.0") < seg.index('gateway_execute(_sym, "buy"'), \
+        "跌停闸必须在发单之前 ✓"

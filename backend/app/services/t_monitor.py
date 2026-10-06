@@ -2919,6 +2919,32 @@ class TMonitor:
                           "=> 收敛到当日收盘 %.2f（防不可能成交价）"
                           % (_sym, _cur, _lA, _hA, _cur_new), flush=True)
                     _cur = _cur_new if _lA <= _cur_new <= _hA else _hA
+                # ⚠️ 2026-10-07（用户纠正 ✓）：「**埋伏仓转正口径不变**，没让你改这个」✗ ——
+                #   我一度在这里加了"只用 +10% 浮盈 复核"✗ ⇒ 那等于**把口径从
+                #   「+10% 或 碰新高（WOLF_AMBUSH_PROMOTE_NEWHIGH）」**偷偷改成「只有 +10%」** ✗
+                #   ⇒ **已撤掉** ✓。转正判定**只有一处**（上面 `_promoted` 那条链 ✓，含碰新高 ✓）；
+                #     本函数只负责"+3 日内 ∧ ≤ 转正价×1.04 ⇒ 主动买一次" ✓
+                # ② ★ 账本 §9.703 ✓（用户 2026-10-07 复盘：「泰胜风能 当日跌停，但这时候转正加仓」✗）——
+                #   原实现只查「转正日 +3 日内」与「价 ≤ 转正价×1.04」✗ ⇒ **跌停日照样加仓** ✗
+                #   （网关别处的「近跌停 ⇒ L0 ⇒ 今日不做T买腿」✗管不到这里：本腿 decision_source=risk ✓）
+                #   ⇒ 用日线算**当日涨跌幅** ✓：≤ −8% （近跌停）⇒ 当日不加仓 ✓
+                #     语料口径 ✓：破位不算转正／不追、不接刀 ✓
+                _chgA = None
+                try:
+                    _bdC = self._daily_dated(_sym, 60) or []
+                    _rowsC = [b for b in _bdC if b.get("close")]
+                    _rowsC.sort(key=lambda b: str(b.get("date") or b.get("trade_date") or ""))
+                    if len(_rowsC) >= 2:
+                        _pc = float(_rowsC[-2].get("close") or 0)
+                        if _pc > 0 and _cur > 0:
+                            _chgA = (_cur / _pc - 1.0) * 100.0
+                except Exception as _ePA1:
+                    _chgA = None
+                    print("[埋伏转正加仓] %s 涨跌幅计算失败(放行): %s" % (_sym, str(_ePA1)[:60]), flush=True)
+                if _chgA is not None and _chgA <= -8.0:
+                    print("[埋伏转正加仓·跳过] %s 当日 %.2f%%（近跌停/破位）⇒ 不加仓 ✓（转正日 %s）"
+                          % (_sym, _chgA, _pd), flush=True)
+                    continue
                 _sh = int(_eqA * (_pct / 100.0) / _cur) // 100 * 100
                 if _sh < 100:
                     continue
