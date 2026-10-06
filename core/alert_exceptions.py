@@ -135,6 +135,23 @@ def _install_monitoring() -> bool:
                 #   ⇒ 但"看起来无害"≠"已证实" ✗ ⇒ **不再直接丢弃** ✗：
                 #     **落盘（带计数 ✓、受去重约束 ✓）** ✓、**不推 QQ** ✗
                 #     ⇒ 我（和看板）能看到**哪一类在涨** ✓；涨得快的 ⇒ **就是真信号** ✓✓
+                # ★ 账本 §9.662 ✓（用户贴来一屏 `PoolKey(key_host='127.0.0.1', key_port=13001, ...)` ✗
+                #   并问「这个超时还是有，解决了吗」✓）：
+                #   **证明它是"库内已捕获的控制流"，不是连接失败** ✓：
+                #     · 抛点是 `urllib3/_collections.py` 的 `RecentlyUsedContainer` ✓
+                #       （第 93 行 `__getitem__`、第 100 行 `__setitem__` ✓ —— 都是**函数定义行** ✓）
+                #     · `__setitem__` 里**紧跟着就写了 `except KeyError:`**（第 110 行 ✓）
+                #       ⇒ 它 pop 一个不存在的 pool_key 是**设计内的正常路径** ✗
+                #     · `__getitem__` 的 KeyError 也被 `MutableMapping.get()` 捕获 ✓
+                #     · 我们的 RAISE 钩子**在抛出瞬间**触发（**即使马上被捕获** ✓）
+                #       ⇒ 于是这些"正常未命中"被当成异常记录下来了 ✗
+                #     · 实测 ✓：正常调用 13001（HTTP 200 ✓）**不会产生**这类记录 ✓；
+                #       且当日 `wake_failed=0` ✓ ⇒ **没有丢任何 LLM 调用** ✓
+                #   ⇒ 结论 ✓：**它不是"超时"** ✗（真正的超时是
+                #     `HTTPConnectionPool(...)Read timed out. (read timeout=90)` ✓ —— 那个已由
+                #     `WOLF_WAKE_TIMEOUT=240` 修掉 ✓）⇒ 本条**不再记入告警流** ✗
+                if isinstance(exc, KeyError) and str(exc).startswith("PoolKey("):
+                    return
                 _emit("第三方的raise", "%s:%s" % (os.path.basename(fs), getattr(code, "co_firstlineno", 0)), exc)
                 return
             if isinstance(exc, (ModuleNotFoundError, ImportError)):
