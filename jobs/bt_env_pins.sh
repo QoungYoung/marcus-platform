@@ -90,7 +90,7 @@ export WOLF_MEMBER_PREWARM_WORKERS='1'     # 单票兜底并发（主路径已�
 export WOLF_MEMBER_LLM_URL='http://127.0.0.1:13001/chat'
 export WOLF_MEMBER_BATCH='1'               # 主路径改**批量**：一次判 20–40 只（实测 40 只 10.0s），请求数 344/天→9–18/天。
 export WOLF_MEMBER_BATCH_SIZE='40'          # 每批只数（实测 n=25 → 18.9s；n=40 → 10.0s，都远低于 20s 超时）。
-export WOLF_MEMBER_BATCH_TIMEOUT='240'   # 账本 §9.646：实测 25 只批量 >193 秒（旧值 18.9s ✗）⇒ 90 必超时
+export WOLF_MEMBER_BATCH_TIMEOUT='420'   # 账本 §9.646：实测 25 只批量 >193 秒（旧值 18.9s ✗）⇒ 90 必超时
 export WOLF_MEMBER_BATCH_RETRY='1'         # 整批重试 1 次（一次请求覆盖 N 只，比逐票重试划算得多）
 export WOLF_MEMBER_FAIL_FAST='1'           # 批量失败后**不再逐票兜底**（0212 实测 18 票 × 42s ≈ 756s 全白等）
 export WOLF_MEMBER_RETRY='1'                # 失败退避重试次数（2→1：失败是 fail-open，0211 实测重试只是白等，单次失败成本 66s→42s）
@@ -907,7 +907,7 @@ export WOLF_AGENT_SKIP_MOOT_SELL='1'
 
 # ★ 账本 §9.654 ✓：唤醒 agent 的等待（实测 LLM 回合可达 ~193 秒 ✗ ⇒ 90 必超时 ✗）
 #   与 WOLF_MEMBER_BATCH_TIMEOUT=240 对齐 ✓；生产不设此项 ⇒ 仍用库内默认 90 ✓
-export WOLF_WAKE_TIMEOUT='240'
+export WOLF_WAKE_TIMEOUT='420'
 
 # ★ 账本 §9.657 ✓：**降并发换低延迟**（实测并发 ~10 路 ⇒ 单次延迟 ×N ✗）
 #   单模型服务 ⇒ 串行反而更快 ✓（不再排队 + 不再超时 ✓）
@@ -956,3 +956,13 @@ export WOLF_NO_PREOPEN_EXEC='1'
 #   ⇒ 发现新 session_id 时先发一个极小请求（只回两字）把冷启动提前吃掉 ✓，之后都是热会话（~6 秒 ✓）
 #   库内默认 0 ⇒ **生产零影响** ✓
 export WOLF_SESSION_PREWARM='1'
+
+# ★ 账本 §9.685 ✓（用户 17:16 再报一批 240 秒超时；当晚实测后改判 ✓）：
+#   两个旧假设被推翻 ✗：
+#     ① 40 只批量实测只要 13.3 秒 —— 旧记录「>193 秒」是「23 个工具/占位 prompt/0.1 框架」
+#        那个年代的口径 ✓；之后 工具 23⇒8、真 prompt、DSH 0.2 都上了 ✓
+#     ② 会话焐热实测 3~13 秒 —— 不是我代理测的 95 秒 ✗
+#   而超时点落在 bt_llm_replay.real_post（**真实外呼** ✓，不是本地锁 ✗）
+#   ⇒ 结论 ✓：>240 秒是**网关侧偶发 stall** ✗，不是我们的逻辑错 ✓
+#   ⇒ 给足余量 ✓：240 ⇒ **420 秒**（≈ 观测 p99 的 4 倍 ✓）
+#   库内默认不变 ⇒ 生产零影响 ✓；pins 改动 ⇒ 下一批子进程生效（无需重启 ✓）
