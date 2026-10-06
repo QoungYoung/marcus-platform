@@ -695,7 +695,16 @@ def test_promotion_D_and_add_B():
     assert "ambush_promoted.json" in mon, "转正日须落盘（供加仓=B 用 ✓）"
     i = mon.index("def _check_ambush_discipline")
     seg = mon[i:i + 12000]
-    assert "_prior_high_before_entry(_sym, _entry)" in seg, "B 口径：碰买入前 20 日最高 ✓"
+    # ★ 账本 §9.707 ✓（用户 2026-10-07：「不是跌停不加仓，而是**下跌趋势不转正**」✓）：
+    #   本条文档本来就写着「B＝碰新高＝最高 > **买入前 20 日最高**（他的口径 ✓）」✓，
+    #   但实现里这一处**没传 after 参数** ✗ ⇒ 被"持有纪律"那个开关
+    #   `WOLF_NEWHIGH_AFTER_ENTRY=1` 悄悄改成"买入**当日**"参照 ✗
+    #   ⇒ 买入后随便涨一点就"碰新高"成立 ⇒ **下跌趋势里也被判转正** ✗（芳源/泰胜两案 ✓）
+    #   ⇒ 现将转正处**显式传 after=False**（强制买入前参照 ✓，与本文档口径一致 ✓）
+    assert "_prior_high_before_entry(_sym, _entry, after=False)" in seg, \
+        "B 口径：碰新高的参照必须是**买入前** 20 日最高 ✓（不受 NEWHIGH_AFTER_ENTRY 影响 ✓）"
+    assert "def _prior_high_before_entry(self, sym: str, entry: str, n: int = 20, after: Optional[bool] = None)" in mon, \
+        "参照函数须提供 after 参数（持有纪律仍可用开关 ✓、转正强制买入前 ✓）"
     assert "日内未碰新高" in mon, "13 日离场须实现 ✓（对整文件断言 —— 窗口取小了会漏 ✗）"
     gw = open(os.path.join(_ROOT, "backend", "app", "services", "t_gateway.py"), encoding="utf-8").read()
     assert 'os.getenv("WOLF_AMBUSH_PROMOTE_ADD", "0")' in gw

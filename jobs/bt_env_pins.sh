@@ -990,3 +990,4 @@ export WOLF_BT_THINKING_LEVEL='low'
 #   ★ 转正加仓 / 做T回补**不受本闸约束** ✓（那本来就是合法的第二笔 ✓）
 export WOLF_BUY_DEDUP='1'
 export WOLF_BUY_DEDUP_MIN='5'
+

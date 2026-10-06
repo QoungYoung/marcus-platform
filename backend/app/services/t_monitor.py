@@ -954,7 +954,16 @@ class TMonitor:
         except Exception:
             return 0
 
-    def _prior_high_before_entry(self, sym: str, entry: str, n: int = 20) -> float:
+    def _prior_high_before_entry(self, sym: str, entry: str, n: int = 20, after: Optional[bool] = None) -> float:
+        """买入前 n 个交易日的最高价（"新高"的参照 ✓）。
+
+        ★ 账本 §9.707 ✓（用户 2026-10-07：「不是跌停不加仓，而是**下跌趋势不转正**」✓）：
+          本函数原按开关 `WOLF_NEWHIGH_AFTER_ENTRY` 在"买入**当日**"与"买入**前**"两版参照间切换 ✓；
+          但那个开关服务的是**持有纪律**（「13 日内碰新高，否则这票呆的意义不大」✓ 账本 §9.265 ✓），
+          与**转正/加仓资格**是**两条规则** ✗ ⇒ 加参数 `after` 供"转正"单独指定：
+            `after=False` ⇒ 强制取**买入前**参照 ✓（真突破前高才算转正 ✓ ⇒ 下跌趋势里不转正 ✓）
+            `after=None`  ⇒ 沿用开关（旧的持有纪律口径**逐位不变** ✓）
+        """
         """**买入前 n 个交易日的最高价**（"新高"的参照 ✓）—— 用监控同源日线 ✓。"""
         try:
             # ⚠️ 2026-09-26（账本 §9.241）：这次调用**必须**也在 try 里 ✗
@@ -972,7 +981,8 @@ class TMonitor:
             #     ⇒ 买入时价格**已在其上** ⇒ 「碰新高」买入即成立 ⇒ 该判据**空转** ✗
             #     （实测 4 例中 3 例：002156 39.54>38.72 ✓／603660 11.44>11.24 ✓／603690 33.41>32.88 ✓）
             #   新写法＝**建仓日（含）当根的最高价** ✓（=「买入后创新高」✓）
-            _after = str(os.getenv("WOLF_NEWHIGH_AFTER_ENTRY", "0")).strip().lower() in ("1", "true", "yes", "on")
+            _after = (str(os.getenv("WOLF_NEWHIGH_AFTER_ENTRY", "0")).strip().lower() in ("1", "true", "yes", "on")
+                      if after is None else bool(after))
             if _after:
                 for _b in _bd:
                     _d8 = str(_b.get("date") or _b.get("trade_date") or "").replace("-", "")
@@ -3160,7 +3170,9 @@ class TMonitor:
                     # **D 口径**：也接受「**碰新高**」（他的原话 ✓）—— 最高价 > **买入前 20 日最高** ✓
                     _ph0 = 0.0
                     if not _promoted and self._promote_on_newhigh():
-                        _ph0 = self._prior_high_before_entry(_sym, _entry)
+                        # ★ §9.707 ✓：「转正」要**真突破买入前的高点** ✓（下跌趋势里不转正 ✗）
+                        #   ⇒ 强制 `after=False`（**不受**"持有纪律"那个开关影响 ✓）
+                        _ph0 = self._prior_high_before_entry(_sym, _entry, after=False)
                         if _ph0 > 0 and _hi > _ph0:
                             _promoted = True
                     if not _promoted:
@@ -3195,6 +3207,26 @@ class TMonitor:
                     #   ⇒ 转正**必须**过个股趋势闸 ✓：**下跌趋势里不转正** ✗ ⇒ 自然也不加仓 ✓
                     #     （芳源股份 01-26：当日最高 10.410 < 前 20 日最高 10.730 / 成本×1.1=10.824，
                     #      本是**下跌趋势中的反抽** ✗ ⇒ 不该转正 ✓ 这正是用户指出的病 ✓）
+                    if _promoted:
+                        # ★★ 账本 §9.706 ✓（用户 2026-10-07：「**下跌趋势不转正**！参考**普通仓的加仓逻辑**」✓）：
+                        #   参照系就是现成的这一条（普通仓加仓闸 ✓）：
+                        #     `t_chop_guard.index_ctx` ⇒ `uptrend = 指数 close ≥ MA5 且 MA5 ≥ MA20` ✓
+                        #     其语料原文（2026-01-27）：「不要在没有**突破重回上涨趋势**的时候，
+                        #       把本来已经减出去的仓位加进去」✓
+                        #   ⇒ **指数未重回上涨趋势 ⇒ 不转正** ✗（下跌趋势里不转正 ✓）⇒ 自然也不加仓 ✓
+                        try:
+                            from app.services import t_chop_guard as _cgT
+                            _ctxT = _cgT.index_ctx(_today) or {}
+                            _upT = bool(_ctxT.get("uptrend"))
+                            print("[埋伏转正·指数趋势] %s 指数(日=%s 收=%s MA5=%s MA20=%s) ⇒ 重回上涨趋势=%s"
+                                  % (_sym, _ctxT.get("day"), _ctxT.get("close"), _ctxT.get("ma5"),
+                                     _ctxT.get("ma20"), _upT), flush=True)
+                            if not _upT:
+                                print("[埋伏转正·指数未重回上涨趋势 ⇒ 不转正] %s（%s）"
+                                      % (_sym, "语料 2026-01-27：不要在没有突破重回上涨趋势时加仓 ✓"), flush=True)
+                                _promoted = False
+                        except Exception as _eIT:
+                            print("[埋伏转正·指数趋势异常(放行) %s: %s" % (_sym, str(_eIT)[:70]), flush=True)
                     if _promoted:
                         try:
                             from app.services.t_build import trend_gate as _tg
