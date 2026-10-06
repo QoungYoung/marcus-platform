@@ -1241,7 +1241,7 @@ class Store:
         if pace and days_total and days_done:
             eta = int(round(pace * max(0, days_total - days_done)))
 
-        fresh = bool(seconds_since is not None and seconds_since <= 120)
+        fresh = bool(seconds_since is not None and seconds_since <= 300)
         heartbeat = {
             "now": now_iso(),
             "last_activity": last_activity,
@@ -1577,7 +1577,7 @@ class Store:
         # ── 告警 ────────────────────────────────────────────────────────────
         if seconds_since is not None and seconds_since > 60:
             warnings.append({"level": "warn",
-                             "text": "心跳静止：最后活动 %.0f 秒前（%s），超过 120 秒阈值（seed/pack 等静默步进已计入进程 CPU/IO 活动）" % (seconds_since, src or "-")})
+                             "text": "心跳静止：最后活动 %.0f 秒前（%s），超过 300 秒阈值（seed/pack 等静默步进已计入进程 CPU/IO 活动）" % (seconds_since, src or "-")})
         if not procs_live:
             if fresh:
                 warnings.append({"level": "info",
