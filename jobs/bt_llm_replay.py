@@ -496,7 +496,22 @@ class LLMReplay:
 
     def _record(self, url: str, kw: Dict[str, Any], prompt: str, psha: str) -> Any:
         kw = self._with_session(url, kw)          # ★ 按天会话（账本 §9.596 ✓）
-        resp = self.real_post(url, **kw)
+        # ★ 账本 §9.692 ✓（用户：「我要看一次唤醒的耗时分配」✓）：**每次唤醒计时** ✓
+        try:
+            import time as _t9
+            _t0 = _t9.time()
+            resp = self.real_post(url, **kw)
+            _dt = _t9.time() - _t0
+            try:
+                _nb = kw.get("json") or {}
+                _plen = len(_nb.get("message") or "")
+                _rlen = len(str(getattr(resp, "text", "") or ""))
+                print("[bt_llm] 一次唤醒 ⇒ %6.2f 秒｜prompt %5d 字符｜reply %5d 字符｜会话 %s"
+                      % (_dt, _plen, _rlen, str(_nb.get("session_id"))[-16:]), flush=True)
+            except Exception:
+                pass
+        except Exception:
+            raise
         try:
             payload = resp.json()
         except Exception:
