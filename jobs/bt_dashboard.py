@@ -786,10 +786,14 @@ class Store:
             self._cal, self._cal_sig = days, sig
             return days
 
-    def bars_for(self, symbol: str, start: str, end: str, limit: int = 400) -> list[dict]:
+    def bars_for(self, symbol: str, start: str, end: str, limit: int = 400, bars: str = "") -> list[dict]:
+        """日线序列 ✓。★ 账本 §9.667：**默认跟随计价空间** ✓（复权臂 ⇒ bars_adj.sqlite ✓）；显式传 `bars` 时以传入为准 ✓。"""
         ts = to_ts_code(symbol)
         try:
-            conn = self._sqlite()
+            # ★ 账本 §9.667 ✓（用户：「个股K线图用的 还是不复权的」✗）：
+            #   修法 ✓：K 线库**跟随计价空间** ✓ —— 与成本/现价/净值曲线同尺 ✓
+            #     （复权臂 ⇒ `bars_adj.sqlite` ✓；显式传 bars 时以传入为准 ✓）
+            conn = self._sqlite(bars or self.bars_for_space(self._curve_space))
             try:
                 cur = conn.execute(
                     "SELECT trade_date, open, high, low, close, pre_close, pct_chg, vol, amount "
