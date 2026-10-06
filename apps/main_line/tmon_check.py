@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 import sys
 sys.path.insert(0, "/app/app")
-from app.services.t_data_sources import fetch_tencent_quote, fetch_minute_bars
+from app.services.t_data_sources import fetch_tencent_quote, fetch_minute_bars, \
+    _normalize_symbol   # ★ §9.700：补漏导入（否则 NameError ✗）
 q = fetch_tencent_quote([_normalize_symbol("sh588170")])
 print("fetch_tencent_quote sh588170:", (q.get("sh588170") or {}).get("current") if q else None, "| prev_close", (q.get("sh588170") or {}).get("prev_close") if q else None)
 b = fetch_minute_bars("sh588170", "m5", 320)

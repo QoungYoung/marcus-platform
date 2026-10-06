@@ -132,7 +132,8 @@ def symbol_themes(symbol):
     # ETF/无概念行: 名称关键词匹配
     name = ""
     try:
-        from app.services.t_data_sources import fetch_tencent_quote
+        from app.services.t_data_sources import fetch_tencent_quote, \
+            _normalize_symbol   # ★ §9.700：补漏导入（否则 NameError ✗）
         qsym = ex.lower() + code6          # 腾讯符号: sh588170
         q = (fetch_tencent_quote([_normalize_symbol(qsym)]) or {}).get(qsym) or {}
         name = str(q.get("name") or "")

@@ -57,10 +57,25 @@ def scan_file(path: str) -> List[Tuple[int, str, str]]:
         return []
     mod = _bound(tree)
     mod |= BUILTINS
+    # ★ 有 from __future__ import annotations ⇒ 注解不求值 ⇒ 注解里的名字不算未定义 ✓
+    _fut = any(isinstance(n, ast.ImportFrom) and n.module == '__future__'
+               and any(a.name == 'annotations' for a in n.names) for n in tree.body)
     # 模块自带 dunder（__file__/__name__/__doc__/__package__ 等 ✓）+ 常见注解名 ✓
     mod |= {'__file__', '__name__', '__doc__', '__package__', '__spec__', '__loader__',
             '__builtins__', '__debug__', 'annotations'}
     bad: List[Tuple[int, str, str]] = []
+    ann_lines: Set[int] = set()
+    if _fut:
+        for n in ast.walk(tree):
+            a = getattr(n, 'annotation', None)
+            if a is not None:
+                for x in ast.walk(a):
+                    if hasattr(x, 'lineno'):
+                        ann_lines.add(x.lineno)
+            if getattr(n, 'returns', None) is not None:
+                for x in ast.walk(n.returns):
+                    if hasattr(x, 'lineno'):
+                        ann_lines.add(x.lineno)
     lines = src.split('\n')
 
     def walk(node: ast.AST, stack: List[Set[str]], names: List[str]) -> None:
@@ -70,7 +85,9 @@ def scan_file(path: str) -> List[Tuple[int, str, str]]:
             elif isinstance(c, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
                 walk(c, stack + [_bound(c)], names + ['<lambda/comp>'])
             elif isinstance(c, ast.Name) and isinstance(c.ctx, ast.Load):
-                if not any(c.id in s for s in stack):
+                if c.lineno in ann_lines:
+                    pass   # 注解上下文 ⇒ 不求值 ⇒ 跳过 ✓
+                elif not any(c.id in s for s in stack):
                     bad.append((c.lineno, ' > '.join(names) or '<module>',
                                 ('未定义名=%s | ' % c.id) + lines[c.lineno - 1].strip()[:96]))
             else:

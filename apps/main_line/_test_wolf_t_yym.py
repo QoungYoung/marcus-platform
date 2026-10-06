@@ -2,7 +2,8 @@
 import os, sys, json, time
 from datetime import date, timedelta, datetime
 sys.path.insert(0, '/app'); sys.path.insert(0, '/app/app')
-from app.services.t_data_sources import fetch_brze_stk_mins, fetch_tencent_quote
+from app.services.t_data_sources import fetch_brze_stk_mins, fetch_tencent_quote, \
+    _normalize_symbol   # ★ §9.700：补漏导入（否则 NameError ✗）
 from app.services.wolf_t_rules import zheng_t_buy_quote, dao_t_sell_quote
 OUT='/app/data/recent_sync'
 def weekdays(d0s,d1s):
