@@ -59,10 +59,39 @@ def _alerts_path() -> str:
     return "/dev/null"
 
 
+def _origin(depth: int = 0) -> str:
+    """告警来源的**真实路径** ＋ 主机 ＋ pid（账本 §9.701 ✓；用户：让 QQ 把路径也推过来）。
+
+    QQ 上原来只有 `tmonitor.py:4565`（**只有文件名** ✗）⇒ 分不清是哪个部署/哪份代码 ✗
+    （本地仓库、钉住副本、云端都可能同名 ✓）⇒ 从调用栈取第一个**不在告警体系内**的帧，
+    给出绝对路径 ＋ hostname ＋ pid ✓；任何失败都返回占位，**绝不抛** ✗。
+    """
+    path = '?'
+    try:
+        import socket as _sk
+        host = _sk.gethostname()
+    except Exception:
+        host = '?'
+    try:
+        _skip = {'alert_hub.py', 'alert_logging.py', 'alert_exceptions.py'}
+        f = sys._getframe(2 + max(0, depth))
+        while f is not None and os.path.basename(f.f_code.co_filename) in _skip:
+            f = f.f_back
+        if f is not None:
+            path = '%s:%d' % (os.path.abspath(f.f_code.co_filename), f.f_lineno)
+    except Exception:
+        pass
+    try:
+        return '%s @%s[%d]' % (path, host, os.getpid())
+    except Exception:
+        return path
+
+
 def _fmt(where: str, exc: Optional[BaseException], msg: str = "") -> str:
     _t = type(exc).__name__ if exc is not None else ""
     _m = str(exc)[:200] if exc is not None else str(msg)[:200]
-    return "[ALERT] %s | %s%s" % (where, _t, (": " + _m) if _m else "")
+    # ★ §9.701 ✓：附上**真实来源路径 + 主机 + pid**（用户要求 QQ 推路径 ✓）
+    return "[ALERT] %s | %s%s\n  ⇐ %s" % (where, _t, (": " + _m) if _m else "", _origin())
 
 
 def _dedup_key(where: str, exc: Optional[BaseException], msg: str) -> str:
