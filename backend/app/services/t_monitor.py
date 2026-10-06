@@ -4652,6 +4652,19 @@ class TMonitor:
             # 迭代#58：无底仓买腿 = 条件单建仓，量按建仓规模（单笔上限÷现价）。
             # 执行完成后报告 AI 复盘并重建新条件。
             try:
+                # ★ 账本 §9.683 ✓（用户：「限制它改为从9点30开始交易，跳过9点30之前的时刻」✓）：
+                #   实测 ✗：本"自动执行"分支在**盘前阶段**（布腿/arming 时，回测时钟停在锚点 09:15 ✗）
+                #     也会跑 ⇒ 出现「09:15 买入」这种**集合竞价不成交**的成交 ✓
+                #     （而且那一刻只有"当日日线"可取 ⇒ 连带的**未来函数** ✓，见 §9.682）
+                #   ⇒ 本开关（库内**默认关** ⇒ 生产逐位不变 ✓；pins 打开 ⇒ 回测生效 ✓）：
+                #     **盘前只看不成交** ✓ —— 触发照常写入（供审计/复盘 ✓），但**不落成交** ✓
+                if str(os.getenv("WOLF_NO_PREOPEN_EXEC", "0")).strip().lower() \
+                        in ("1", "true", "yes", "on"):
+                    _hmx = datetime.now().strftime("%H%M")
+                    if _hmx < "0930":
+                        print("[TMonitor] 盘前 %s <09:30 ⇒ 只写触发、不成交 ✓（%s %s mode=%s）"
+                              % (_hmx, cond.get("symbol"), trigger_kind, mode), flush=True)
+                        return
                 from app.services.t_gateway import gateway_execute
                 side = "buy" if _is_buy_side(cond) else "sell"
                 # G8（2026-09-14）狼大 2025-07-17「任何时候 看见机器人板块出上影线 立马停止做T」：

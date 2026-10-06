@@ -1417,6 +1417,16 @@ def main() -> int:
 
     # ⑦ 逐 bar 驱动
     bars = list(_blm.BAR_MINUTES_1M if getattr(market, "mode", "5m") == "1m" else BAR_MINUTES)
+    # ★ 账本 §9.683 ✓（用户：「限制它改为从9点30开始交易，跳过9点30之前的时刻」✓）：
+    #   实测 ✗：本循环的时刻表从 **09:15** 起（bt_run_pinned 把时钟锚在当日 09:15 ✗），
+    #     而 09:15~09:25 是**集合竞价**（只报单、不成交 ✓）⇒ 在那些 bar 上跑完整检查链 ✗
+    #     ⇒ 会出现「09:15 买入」这种不可能的成交 ✓（更糟的是当时只有**当日日线**可取 ⇒ 未来函数 ✓）
+    #   ⇒ 本循环**只跑盘中(≥09:30)** ✓；盘前的 09:20 布腿/arming 是**正当的**（盘前决策 ✓）⇒ 不在本循环 ✓
+    _pre = [b for b in bars if str(b) < "0930"]
+    if _pre:
+        print("[prod] 跳过盘前 bar %d 个（%s…）：集合竞价不成交 ✓（账本 §9.683）"
+              % (len(_pre), ",".join(str(x) for x in _pre[:4])), file=sys.stderr)
+    bars = [b for b in bars if str(b) >= "0930"]
     if a.hours:
         lo, _, hi = a.hours.partition("-")
         bars = [b for b in bars if (not lo or b >= lo) and (not hi or b <= hi)]
