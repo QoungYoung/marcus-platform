@@ -148,8 +148,9 @@ services:
       - "3001:3001"
     volumes:
       - ../data:/app/data
-      # DSH 会话持久化（重启后恢复对话）
-      - dsh-data:/root/.dsh
+      # 只持久化 DSH 会话状态；profile 代码（bridge/npm 依赖/patch）由镜像控制，
+      # 避免旧卷里的代码覆盖镜像更新（卷不再覆盖代码）
+      - dsh-sessions:/root/.dsh/sessions
     depends_on:
       backend:
         condition: service_healthy
@@ -161,6 +162,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.frontend
     container_name: marcus-frontend
+    restart: unless-stopped
     deploy:
       resources:
         limits:
@@ -173,4 +175,4 @@ services:
 
 volumes:
   pgdata:
-  dsh-data:
+  dsh-sessions:

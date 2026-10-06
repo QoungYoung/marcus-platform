@@ -537,6 +537,31 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: main_wave_scan
+  name: 主升浪涨停池扫描
+  description: 15:10 收盘后扫描当日涨停/连板股，主升浪五维评价+评分排序（复刻短线炒股分析员）
+  enabled: true
+  schedule:
+    type: cron
+    expr: 10 15 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/main_wave_analyzer.py
+    args:
+    - --candidates
+    - zt
+    - --limit
+    - '8'
+  output:
+    log_file: logs/main_wave_scan_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
 - id: arkvol_checkin
   name: ArkVol 每日签到
   description: 每日自动签到 arkvol.com，维持/获取每日免费额度

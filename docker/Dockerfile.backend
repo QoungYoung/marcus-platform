@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
 COPY backend/requirements.txt .
 
 # curl_cffi 从 PyPI 官方源安装 (阿里云镜像缺 Python 3.11 对应版本)
-RUN pip install --no-cache-dir curl_cffi>=0.7.0
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ curl_cffi>=0.7.0
 
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ PySide6 vnpy vnpy_paperaccount

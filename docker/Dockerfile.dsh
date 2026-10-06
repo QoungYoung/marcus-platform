@@ -36,7 +36,18 @@ ENV npm_config_registry=https://registry.npmmirror.com
 # 3b) DeepSeek 默认端点：服务器 key 走 OpenCode 网关，DEEPSEEK_BASE_URL 由运行环境注入（见 docker-compose 的 dsh 服务）
 
 # 4) 全局安装 dsh CLI（bundles: dsh-base 等随主包依赖解析）+ pnpm9（node 20/22 兼容）
-RUN npm install -g @deepseek-ai/dsh@0.1.0-rc.6 pnpm@9
+RUN npm install -g @deepseek-ai/dsh@0.1.0-rc.7 pnpm@9
+
+# 4b) 修复 @deepseek-ai/dsh-llm-deepseek 流式工具名被 null 覆盖的问题：
+#     DeepSeek 流式接口只在 tool_call 第一块带 function.name，后续块发 name:null，
+#     原代码 `if (name !== void 0)` 只排除了 undefined、不排除 null，导致用 null 覆盖正确工具名
+#     → tool 名变空 → "unknown tool \"\"" → 模型空工具名死循环/空回复。
+#     改为 `if (call.function?.name)`（null / 空串均不覆盖），根治该问题。
+RUN sed -i 's/if (call.function?.name !== void 0) block.name = call.function.name;/if (call.function?.name) block.name = call.function.name;/' \
+    /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js \
+ && grep -q 'if (call.function?.name) block.name = call.function.name;' \
+    /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js \
+ && echo "[DSH4b] dsh-llm-deepseek 空工具名补丁已生效"
 
 # 5) 手工初始化 service profile（manifest 声明 bundles=[dsh-base]）
 RUN mkdir -p /root/.dsh/profiles/service \
@@ -46,7 +57,7 @@ RUN mkdir -p /root/.dsh/profiles/service \
 
 # 6) 安装 registry 插件（host-webserver / code-runtime）
 RUN cd /root/.dsh/profiles/service \
- && pnpm add @deepseek-ai/dsh-host-webserver@0.1.0-rc.6 @deepseek-ai/dsh-code-runtime-worker-thread@0.1.0-rc.6 --ignore-workspace-root-check 2>&1 | tail -3
+ && pnpm add @deepseek-ai/dsh-host-webserver@0.1.0-rc.7 @deepseek-ai/dsh-code-runtime-worker-thread@0.1.0-rc.7 --ignore-workspace-root-check 2>&1 | tail -3
 
 # 7) agent-teams 本地 tarball 手动解包（声明 dsh.bundle，加入 bundles 层；
 #    pnpm add 会因 peerDeps 的 UI 包缺失中断，服务端不需要 UI）
