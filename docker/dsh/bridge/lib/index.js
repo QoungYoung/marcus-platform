@@ -650,9 +650,10 @@ function apply(ctx) {
         if (!started) continue;
         // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
         try {
-          if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {   // ★ §9.696：打 6 条 ✓
-            if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-              console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
+          if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
+            // ★ §9.696 修正 ✓：计数**放在类型判断内部**（否则打的是「前 6 个事件」✗）
+            if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {
+              console.warn('[Bridge] ★att探形 #' + globalThis.__attProbe + ' type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
             }
           }
         } catch (e) {}
@@ -738,7 +739,32 @@ function apply(ctx) {
     // 心跳：模型思考/工具调用阶段无 text-delta，客户端 sock_read 会被静默误杀
     // （2026-08-28 实测 121s 静默 → 超时）；每 20s 无输出时发 heartbeat 保活。
     const STREAM_HEARTBEAT_MS = 20000;
-    async function runAgentTurnStreaming(agent, message, onDelta, onHeartbeat) {
+    // ★ 账本 §9.697 ✓（用户「123都加上」✓、②）：
+    //   实测 ✓：一次回合 370 秒 = 上游每次 ~60 秒失败 × 重试 6 次 ✗
+    //     ⇒ 桥在这期间**持有该会话的锁** ✗ ⇒ 同会话调用全部排队 ⇒ 客户端集体 420 秒超时 ✓
+    //   ⇒ 本包装器给回合加**时长上限** ✓：到点**中止等待**（放弃该回合 ✓）
+    //     ⇒ 外层 finally 立刻释放锁 ✓ ⇒ 排队者马上继续 ✓（不再集体超时 ✓）
+    //   默认 **0 = 关闭** ✓（生产零影响 ✓；本项目在 docker/.env 里打开 ✓）
+    const BRIDGE_TURN_TIMEOUT_MS = parseInt(process.env.BRIDGE_TURN_TIMEOUT_MS || '0', 10);
+    function withTurnTimeout(p, what) {
+      if (!BRIDGE_TURN_TIMEOUT_MS || BRIDGE_TURN_TIMEOUT_MS <= 0) return p;
+      let _t = null;
+      const guard = new Promise(function (resolve) {
+        _t = setTimeout(function () {
+          console.warn('[Bridge] 回合超时 ' + BRIDGE_TURN_TIMEOUT_MS + 'ms ⇒ 放弃该回合并释放锁（' + what + '）');
+          resolve('(无回复)');
+        }, BRIDGE_TURN_TIMEOUT_MS);
+      });
+      return Promise.race([p, guard]).then(function (v) { clearTimeout(_t); return v; },
+                                           function (e) { clearTimeout(_t); throw e; });
+    }
+    function runAgentTurn(agent, message) {
+      return withTurnTimeout(_runAgentTurnImpl(agent, message), 'chat');
+    }
+    function runAgentTurnStreaming(agent, message, onDelta, onHeartbeat) {
+      return withTurnTimeout(_runAgentTurnStreamingImpl(agent, message, onDelta, onHeartbeat), 'stream');
+    }
+    async function _runAgentTurnStreamingImpl(agent, message, onDelta, onHeartbeat) {
       // 收敛 + inbox 清理（与 runAgentTurn 同源：修复 resume 后 driver 卡住/残留输入）
       try { if (agent.cancel) agent.cancel('pre-turn-converge'); } catch (e) { console.warn('[Bridge] cancel 收敛失败: ' + (e && e.message ? e.message : e)); }
       try { await agent.whenIdle(); } catch (e) { console.warn('[Bridge] 收敛等待失败: ' + (e && e.message ? e.message : e)); }
@@ -800,9 +826,10 @@ function apply(ctx) {
           if (!started) continue;
         // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
         try {
-          if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {   // ★ §9.696：打 6 条 ✓
-            if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-              console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
+          if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
+            // ★ §9.696 修正 ✓：计数**放在类型判断内部**（否则打的是「前 6 个事件」✗）
+            if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {
+              console.warn('[Bridge] ★att探形 #' + globalThis.__attProbe + ' type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
             }
           }
         } catch (e) {}
@@ -1293,7 +1320,7 @@ function _sessionEvents(agent) {
   return [];
 }
 
-    async function runAgentTurn(agent, message) {
+    async function _runAgentTurnImpl(agent, message) {
       // 修复 resume 后 driver 卡住：cancel 收敛（无活动时 no-op；卡住时 abort 并让
       // driver 回到 idle，随后 followup 才能正常开启 turn）
       try {
@@ -1336,9 +1363,10 @@ function _sessionEvents(agent) {
         if (!started) continue;
         // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
         try {
-          if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {   // ★ §9.696：打 6 条 ✓
-            if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-              console.warn('[Bridge] ★att探形 type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
+          if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
+            // ★ §9.696 修正 ✓：计数**放在类型判断内部**（否则打的是「前 6 个事件」✗）
+            if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {
+              console.warn('[Bridge] ★att探形 #' + globalThis.__attProbe + ' type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
             }
           }
         } catch (e) {}
