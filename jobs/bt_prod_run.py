@@ -1743,8 +1743,12 @@ def _trade_rows(account: str, day: str = ""):
         if len(_d) == 8:
             # ★ 账本 §9.681 ✓：成交同样**按日过滤**（`trade_date` 是日期列 ✓ 实测 `2026-01-12` ✓）
             _iso = "%s-%s-%s" % (_d[:4], _d[4:6], _d[6:8])
+            # ★ 账本 §9.681 修正 ✓（用户贴来 `operator does not exist: text = date` ✗）：
+            #   实测 `paper_trades.trade_date` 是 **text** 列 ✗（不是 date ✓）⇒ `= %s::date` 直接报错 ✓
+            #   ⇒ 改为**按文本比**，且**两种格式都试** ✓（`2026-01-12` 与 `20260112` ✓，永不再炸 ✓）
             return _q("SELECT id, symbol, direction, price, volume, amount, reason, created_at FROM paper_trades "
-                      "WHERE account_id=%s AND coalesce(voided,0)=0 AND trade_date = %s::date ORDER BY id", (account, _iso))
+                      "WHERE account_id=%s AND coalesce(voided,0)=0 AND trade_date::text IN (%s, %s) ORDER BY id",
+                      (account, _iso, _d))
         return _q("SELECT id, symbol, direction, price, volume, amount, reason, created_at FROM paper_trades "
                   "WHERE account_id=%s AND coalesce(voided,0)=0 ORDER BY id", (account,))
     except Exception:
