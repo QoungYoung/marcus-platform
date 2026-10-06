@@ -225,7 +225,7 @@ class TGatewayTest(_PGTestCase):
         m_regime.return_value = {"regime": "ACTIVE"}
         m_ledger.return_value = {"600519": {"sellable": 1000, "avg_price": 100.0}}
         m_quote.return_value = {"current": 100.0, "change_pct": -1.0}
-        r = t_gateway.validate_order("600519", "buy", 100.0, 100)
+        r = t_gateway.validate_order("600519", "buy", 100.0, 100, condition_id=1)   # ★ §9.715
         self.assertFalse(r["pass"])
         self.assertIn("STOP_ALL", r["reason"])
         t_db.set_stop_all(False, "")
@@ -239,7 +239,7 @@ class TGatewayTest(_PGTestCase):
         # 无底仓标的 → 硬闸门拦截（禁止无底仓建仓式做T）
         m_ledger.return_value = {}
         m_quote.return_value = {"current": 10.0, "change_pct": 0.0}
-        r = t_gateway.validate_order("000001", "buy", 10.0, 1000)
+        r = t_gateway.validate_order("000001", "buy", 10.0, 1000, condition_id=1)   # ★ §9.715
         self.assertFalse(r["pass"])
         self.assertIn("无底仓", r["reason"])
         # 有底仓但买腿超上限
@@ -269,7 +269,7 @@ class TGatewayTest(_PGTestCase):
         m_regime.return_value = {"regime": "ACTIVE"}
         m_ledger.return_value = {"600519": {"sellable": 1000, "avg_price": 100.0}}
         m_quote.return_value = {"current": 99.0, "change_pct": -1.0}
-        r = t_gateway.validate_order("600519", "buy", 99.0, 100)
+        r = t_gateway.validate_order("600519", "buy", 99.0, 100, condition_id=1)   # ★ §9.715：走条件单路径（生产真实 ✓，绕开"无底仓裸买"前置闸 ✓）
         self.assertTrue(r["pass"], f"应放行: {r}")
 
 

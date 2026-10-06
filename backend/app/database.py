@@ -398,6 +398,19 @@ def _apply_t_account_migration():
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_t_triggers_pending ON t_triggers (account_id, status, id)"
             ))
+            # ★ 账本 §9.715 ✓（测试库实测 ✗：`column "direction" of relation "t_triggers" does not exist`）：
+            #   漂移根因 ✓：362 行给 **t_conditions** 加过 `direction` ✓，但 **t_triggers 从未加** ✗，
+            #     而 `t_db.insert_trigger` 的 INSERT **带 direction** ✗ ⇒ **任何全新库**（测试库/新部署 ✓）
+            #     一插触发就 UndefinedColumn ✗（生产库当年是别处补上的 ⇒ 掩盖了这个缺口 ✓）
+            #   ⚠️ 必须**单独 try/except** ✗ —— 本迁移块**没有错误隔离** ✓：
+            #     一条 ALTER 抛错会**整块回滚、把后面所有建表一起带走** ✗
+            #     （我第一版就是这么把测试库搞成"t_triggers does not exist"的 ✗ ⇒ 教训 ✓）
+            try:
+                conn.execute(text(
+                    "ALTER TABLE t_triggers ADD COLUMN IF NOT EXISTS direction VARCHAR(8) DEFAULT ''"
+                ))
+            except Exception as _e_dir:
+                print("[DB] PATCH warn (t_triggers.direction): %s" % str(_e_dir)[:110])
             # 迭代#58c：t_triggers 枚举列加宽（建表后执行）
             conn.execute(text(
                 "ALTER TABLE t_triggers ALTER COLUMN mode TYPE VARCHAR(24)"
