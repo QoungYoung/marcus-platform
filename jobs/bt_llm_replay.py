@@ -30,10 +30,7 @@ wave agent 每交易日**只调 1 次** `/chat`，而交易腿 agent（`t_bridge
 ```python
 from bt_llm_replay import LLMReplay
 
-# ★ 账本 §9.684 ✓：已焐热的 session_id 集合（模块级 ✓ —— 上一版我错插到函数内 ⇒ NameError ✗）
-_PREWARMED = set()
 
-# ★ 账本 §9.684 ✓：已焐热的 session_id 集合（每会话只焐一次 ✓）
 llm = LLMReplay(agent="t_leg", as_of="20260107", cache_dir="/app/data/_bt_llm_year2")  # 模式读 env
 llm.install(t_bridge); llm.install(t_ai_agent)     # requests / urllib 两种调用面都换掉
 ... 正常跑生产链 ...
@@ -45,6 +42,10 @@ env：
   `BT_LLM_CACHE` = 缓存根目录（默认 `<DATA_DIR>/_bt_llm`）
   `BT_LLM_STRICT`= 1（默认）prompt 不一致即报错；0 只警告
 """
+
+# ★ 账本 §9.684 ✓：已焐热的 session_id 集合（**必须在 docstring 之后** ✗ ——
+#   我前一版把它插进了 docstring 里 ⇒ 只是文字 ⇒ `NameError` ✓；AST 校验当场抓到 ✓）
+_PREWARMED = set()
 from __future__ import annotations
 
 import hashlib
