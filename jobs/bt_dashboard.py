@@ -789,6 +789,16 @@ class Store:
     def bars_for(self, symbol: str, start: str, end: str, limit: int = 400, bars: str = "") -> list[dict]:
         """日线序列 ✓。★ 账本 §9.667：**默认跟随计价空间** ✓（复权臂 ⇒ bars_adj.sqlite ✓）；显式传 `bars` 时以传入为准 ✓。"""
         ts = to_ts_code(symbol)
+        # ★ 账本 §9.677 ✓（用户：「点个股出不来K线了，提示 bars.sqlite 无此标的」✗）：
+        #   实测根因 ✓：两个库的 `trade_date` 都是**紧凑格式**（`20260914` ✓），
+        #     而调用方（symbol_detail/refresh）传进来的是**日志里的 ISO 窗口**（`2026-01-08` ✗）
+        #     ⇒ `trade_date <= '2026-01-07'` 恒假（'20260108' > '2026-01-07' ✓ 字典序）
+        #     ⇒ 查询 0 行 ⇒ 前端显示「该窗口内没有日线（bars.sqlite 无此标的）」✗
+        #   ⇒ 修法 ✓：**入口统一归一化成紧凑格式** ✓（两种格式都吃 ✓；空值不动 ✓）
+        def _compact(d) -> str:
+            t = str(d or "").strip()
+            return t.replace("-", "").replace("/", "") if t else t
+        start, end = _compact(start), _compact(end)
         try:
             # ★ 账本 §9.667 ✓（用户：「个股K线图用的 还是不复权的」✗）：
             #   修法 ✓：K 线库**跟随计价空间** ✓ —— 与成本/现价/净值曲线同尺 ✓
@@ -1683,7 +1693,15 @@ class Store:
         last_completed = log.get("last_completed") or (active_days[-1] if active_days else None)
         start = log.get("run_start") or (active_days[0] if active_days else None)
         pg = self.pg_fetch()
-        bars = self.bars_for(symbol, start, last_completed, 400) if (start and last_completed) else []
+        # ★ 账本 §9.677 修正 ✓（用户：「点个股出不来K线了，提示 bars.sqlite 无此标的」✗）：
+        #   真因 ✗：**续跑后窗口是反的** —— 日志头被续跑改写成 `20260108 → 20260430` ✓，
+        #     而 `last_completed`（[days] cut= 行）还是 **20260107** ✗ ⇒ `symbol_detail` 传
+        #     `start=0108, end=0107` ⇒ SQL `trade_date>=0108 AND <=0107` **恒空** ✗ ⇒ 前端显示
+        #     「该窗口内没有日线（bars.sqlite 无此标的）」✗（**不是真的没这只票** ✓）
+        #   ⇒ 修法 ✓：**上界取两者较大值** ✓（续跑当天没完成时用 start ✓），下界由 limit 回看 ✓
+        #     ⇒ 既能出图（最近 400 根 ≤ 上界 ✓），又不越过 as-of 边界 ✓
+        _hi = max(str(start or ""), str(last_completed or "")) or ""
+        bars = self.bars_for(symbol, "19900101", _hi, 400) if _hi else []
         sym_name = self.name_for(symbol)
         trades = []
         for t in pg["trades"]:
