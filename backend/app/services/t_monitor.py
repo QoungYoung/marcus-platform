@@ -4916,7 +4916,23 @@ class TMonitor:
                     _ocb, _ocwhy = (False, "")
                     if str(side).lower() in ("buy", "买入"):
                         _ocb, _ocwhy = _oc_cond_buy_block(current, quote, trigger_kind)
-                    if _ocb:
+                    # ★ 账本 §9.663 ✓（用户拍板「改」✓）：**条件单补上 B/C 买入时点闸** ✓
+                    #   实测 ✗：同一轮、同一价 112.900 —— trend_break_buy 成交了 ✗，紧接着同一价被判「不执行」✗
+                    #   ⇒ 本分支只对"购买方向 + 开关打开"生效 ✓；开关默认 0 ⇒ **生产逐位不变** ✓
+                    _cond_tb = False
+                    if str(side).lower() in ("buy", "买入") and cond_timing_on():
+                        try:
+                            _pcq = float(quote.get("pre_close") or 0) or None
+                        except Exception as _epcq:
+                            _pcq = None
+                            print("[TMonitor] 条件单买入时点闸 pre_close 解析失败(按 None 继续 ✓): %s" % str(_epcq)[:60], flush=True)
+                        _cond_tb = intraday_timing_blocked(symbol, True, pre_close=_pcq)
+                    if _cond_tb:
+                        exec_ok = False
+                        print("[TMonitor] 条件单买入时点闸拦截 %s %s: 不在下跌中买（B/C ✓）" % (symbol, trigger_kind), flush=True)
+                        t_db.update_trigger_status(trig_id, "blocked",
+                                                   reason="[COND-TIMING] 条件单买入时点闸：不在下跌中买（B/C）")
+                    elif _ocb:
                         exec_ok = False
                         print(f"[TMonitor] 条件单开盘不追高拦截 {symbol} {trigger_kind}: {str(_ocwhy)[:90]}")
                         t_db.update_trigger_status(trig_id, "blocked",
@@ -5978,6 +5994,21 @@ def _calc_rsi(closes: List[float], period: int = 6) -> float:
 # ────────────────────────────────────────────────────────────────
 # 纯函数评估集（now 注入，回测与实时共用；TMonitor 方法为薄转发）
 # ────────────────────────────────────────────────────────────────
+
+# ★ 账本 §9.663 ✓（用户拍板「改」✓）：**条件单路径的 B/C 买入时点闸** ✓
+#   实测 ✗（0106 SH688372）：同一轮、**同一价 112.900** —— `trend_break_buy` **成交了** ✗，
+#   紧接着同一价又被判「买入时点闸→本次不执行（不在下跌中买）」✗ ⇒ **条件单漏过该闸** ✓
+#   （正T买腿那条路有闸 ✓；网关 0.2c 的 B/C 段在本路径下实测也没拦住 ✗）
+#   语料 ✓：2025-06-05「急杀可以买，缓跌不买」；2025-04-03「冲上去一定不能追」；
+#           2025-05-23「尾盘能回来就尾盘买 急什么」；2026-01-12「买点只有尾盘」
+#   ⇒ 开关 `WOLF_FALLING_GATE_COND`（**库内默认 0 ⇒ 生产逐位不变** ✓；回测 pins 置 1 ✓）
+COND_TIMING = os.getenv("WOLF_FALLING_GATE_COND", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def cond_timing_on() -> bool:
+    """条件单（只传 condition_id 的那条路 ✓）是否也走 B/C 买入时点闸 ✓。"""
+    return COND_TIMING
+
 
 def intraday_timing_blocked(symbol: str, is_buy: bool, pre_close: Optional[float] = None) -> bool:
     """B/C 买入时点闸的**执行口兜底**（2026-09-22 用户拍板 "A+B+C"）。

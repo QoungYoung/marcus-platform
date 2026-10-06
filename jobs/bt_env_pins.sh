@@ -912,3 +912,9 @@ export WOLF_MEMBER_PREFETCH_WORKERS='1'
 #     缺档**现场补**（`wave_level.judge_wave` ✓）；补不出来 ⇒ **放行** ＋ 告警 ✓
 #   库内默认 0 ⇒ 生产仍走旧 t_regime ✓（生产零影响 ✓）
 export WOLF_WAVE_GATE_ONLY='1'
+
+# ★ 账本 §9.663 ✓（用户拍板「改」✓）：**条件单路径也走 B/C 买入时点闸** ✓
+#   实测 ✗（0106 SH688372）: 同一轮同一价 112.900 —— trend_break_buy 成交了 ✗，紧接着同价被判不执行 ✗
+#   语料 ✓：2025-06-05「急杀可以买，缓跌不买」；2025-04-03「冲上去一定不能追」
+#   库内默认 0 ⇒ 生产逐位不变 ✓
+export WOLF_FALLING_GATE_COND='1'
