@@ -243,21 +243,22 @@ def needs_dsh(symbol: str, concepts, theme: str) -> bool:
     批量校验用它筛掉不必问的票 —— 否则会把"主类已拒"的票也塞进 prompt 白花 token，
     还可能让 dsh 的结论覆盖确定性规则（口径不允许，见 is_member 的注释）。
     """
-    # ★ 账本 §9.670 ✓（用户：「每次5个还这么慢吗」✗）：
-    #   实测 ✗：判 153 条**平均 0.8s/条** ✓（很快），但少数几条卡到超时 ✗
-    #     （920252.BJ／920239.BJ ✓）⇒ 均值被拉到 2.6s ✗、总时长翻倍 ✗
-    #   而**北交所按口径永远不会布腿** ✓（用户 2026-09-21「过滤里去掉退市，ST，北交所的票吧」✓；
-    #     `universe_clean.is_bj` ✓ 代码规则、无未来函数 ✓）⇒ 判它 = **纯浪费 + 拖慢** ✗
-    #   ⇒ 直接判"不需要问" ✓（与"主类已拒/白名单"同性质 ✓；import 失败 ⇒ 不跳过 ✓）
+    # ★ 账本 §9.670 ✓（用户：「过滤里去掉退市、ST、北交所的票为什么没有对这里生效？」✗）
+    #   查明 ✓：过滤**确实开着**（pins:152-156 WOLF_UNIVERSE_CLEAN* 全 =1 ✓），但它装在
+    #     `leg_gate.approve()`（**腿批准闸** ✓）里，而 approve 是在**成员判定之后**才调用的 ✗
+    #     ⇒ **LLM 判定在前、卫生过滤在后** ✗ ⇒ 脏票已经被判过了（白花调用 ✗）
+    #       （过滤本身有效 ✓：实测回测腿里 **0 只北交所** ✓，没有脏腿 ✓）
+    #   ⇒ 修法 ✓：把**同一口径**（universe_clean.judge = 退市/ST/北交所 ✓）搬到
+    #     **LLM 路径的共同入口**（本函数 ✓，批量与单票都先问它 ✓）⇒ 判定与过滤同源 ✓
+    #   ⇒ fail-open ✓：import/判定异常 ⇒ 不跳过（绝不因过滤故障而少判 ✓）
     try:
-        import universe_clean as _uc_bj
-        if _uc_bj.clean_bj() and _uc_bj.is_bj(symbol):
-            return False
-    except Exception as _e_bj:
-        _silent_alert("theme_member_llm.py:bj", _e_bj)
-    try:
-        if _in_whitelist(symbol):
-            return False
+        import universe_clean as _uc_all
+        if _uc_all.enabled():
+            _ok_all, _why_all = _uc_all.judge(str(symbol))
+            if not _ok_all:
+                return False
+    except Exception as _e_uc:
+        _silent_alert("theme_member_llm.py:universe_clean", _e_uc)
     except Exception as _e_sil4:
         _silent_alert("theme_member_llm.py:233", _e_sil4)
     try:
