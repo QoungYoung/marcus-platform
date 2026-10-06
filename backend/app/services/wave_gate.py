@@ -72,28 +72,56 @@ def _stale_days(wave: dict) -> Optional[int]:
         return None
 
 
-# ★ 账本 §9.709 ✓（用户 2026-10-07：「旧的 t_regime 直接删掉，这个东西已经证明是负收益了」✓）：
-#   现场补的**中文浪名 → level/operation 映射** ✓（此前解析不上 ⇒ 永远沿用旧档 ✗，实测旧档陈旧 244 天 ✗）
-#   实测 judge_wave 的输出（决定性 ✓）：2026-01-26 ⇒ 『主升浪』；2026-02-06 ⇒ 『震荡/待明确』
-#   映射口径（**最保守**，可再按用户口径调整 ✓）：
-#     · 主升/推动/上升/突破 ⇒ level=d3、operation=build（**参与** ✓）
-#     · 震荡/待明确/无序   ⇒ level=d3、operation=t_only（★ **只允许补仓/做T，不新开** ✓）
-#     · 下跌/破位/调整     ⇒ level=down、operation=defense（**禁买** ✓ —— 对齐「指数破位不新开票」✓）
-_LABEL_MAP = (
-    (("主升", "推动", "上升", "突破", "上行"), "d3", "build"),
-    (("震荡", "待明确", "无序", "横盘", "整理"), "d3", "t_only"),
-    (("下跌", "破位", "调整", "下行", "杀跌"), "down", "defense"),
-)
+def _find_archived(sim8: str) -> Optional[dict]:
+    """按**归档链**找当天的 wave_state ✓（账本 §9.710 ✓）。
 
+    ★ 用户 2026-10-07 纠正 ✓：「我们哪有中文浪名，用的不是统一的 **4-3 side** 这种吗」✓
+      ⇒ 真实格式（归档原文 ✓）：`level: d3` ＋ `sub_level: 3-4` ＋ `operation: t_only|build|side|defense|exit`
+      ⇒ 我先前把"现场补"接到了 **`wave_level.judge_wave`（本地判官 ✗）** ⇒ 它给的是**中文浪名** ✗
+        ⇒ 与闸门要的 `level` 格式**对不上** ⇒ 永远"沿用旧档" ✗（而那份旧档可能陈旧很多天 ✗）
 
-def _map_label(lbl: str):
-    """中文浪名 ⇒ (level, operation)。认不出 ⇒ (\"\", \"\")（不写回 ✓ 保守 ✓）。"""
-    t = str(lbl or "")
-    for keys, lv, op in _LABEL_MAP:
-        for k in keys:
-            if k in t:
-                return lv, op
-    return "", ""
+    说明 ✓：**每天的 wave_state 早就存在** ✓（跑批按天复制 ✓；原始在 `data/_bt_year/<day>/` ✓）
+      ⇒ 闸门**根本不需要现场补** ✗ ⇒ 先按归档链找 ✓，找到就用 ✓（四层 ✓，全部只读文件 ✓）：
+        ① `DATA_DIR/wave_state.json`（当天档 ✓）
+        ② `DATA_DIR/wave_state_<YYYY-MM-DD>.json`（带日期档 ✓）
+        ③ `<arm_root>/wave_state_history/<sim8>.json`（历史目录 ✓）
+        ④ 原始天目录 `data/_bt_year/<sim8>/wave_state.json`（跑批的复制源 ✓）
+    """
+    import glob as _g
+    cands = []
+    _d = os.environ.get("DATA_DIR") or ""
+    if _d:
+        _d = str(_d).rstrip("/")
+        cands.append(os.path.join(_d, "wave_state.json"))
+        if len(sim8) == 8:
+            cands.append(os.path.join(_d, "wave_state_%s-%s-%s.json" % (sim8[:4], sim8[4:6], sim8[6:8])))
+        _root = os.path.dirname(_d)
+        if len(sim8) == 8:
+            cands.append(os.path.join(_root, "wave_state_history", sim8 + ".json"))
+            cands.append(os.path.join(_root, "wave_state_by_day", sim8 + ".json"))
+            cands.append(os.path.join(_root, sim8, "wave_state.json"))
+    if len(sim8) == 8:
+        # ★ §9.710 修正 ✓：跑批的**复制源**是 `<...>/data/_bt_year/<day>/`
+        #   （`DATA_DIR` = `<...>/data/_bt_t35d/<day>` ⇒ 往上两级是 `<...>/data` ✓）
+        #   ⚠️ 不能用 `_REPO` ✗ —— 它是 **backend 目录**（实测 ✓），不是仓库根 ✗
+        _d2 = str(os.environ.get("DATA_DIR") or "").rstrip("/")
+        if _d2:
+            _data_dir = os.path.dirname(os.path.dirname(_d2))      # <...>/data ✓
+            cands.append(os.path.join(_data_dir, "_bt_year", sim8, "wave_state.json"))
+        cands.append(os.path.join(os.path.dirname(_REPO), "data", "_bt_year", sim8, "wave_state.json"))
+    for c in cands:
+        try:
+            if not os.path.exists(c):
+                continue
+            with open(c, encoding="utf-8") as f:
+                j = json.load(f) or {}
+            if str(j.get("level") or "").strip():
+                print("[wave_gate] 归档命中 ✓ %s（level=%s op=%s）" % (c[-58:], j.get("level"), j.get("operation")),
+                      file=sys.stderr, flush=True)
+                return j
+        except Exception as _e_c:
+            print("[wave_gate] 归档读取失败 %s: %s" % (str(c)[-40:], str(_e_c)[:60]), file=sys.stderr, flush=True)
+    return None
 
 
 def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Optional[dict]:
@@ -103,6 +131,18 @@ def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Option
     ok = bool(w) and (age is None or age <= max_stale_days)
     if ok:
         return w
+    # ★ §9.710 ✓：先按**归档链**找当天的真实档 ✓（每天的档早就存在 ✓ ⇒ 不需要现场补 ✗）
+    _aw = _find_archived(sim_day8())
+    if _aw:
+        try:
+            os.makedirs(os.path.dirname(_wave_path()), exist_ok=True)
+            with open(_wave_path(), "w", encoding="utf-8") as f:
+                json.dump(_aw, f, ensure_ascii=False, indent=1)
+            print("[wave_gate] ✅ 已用归档回填 %s（level=%s ✓）" % (_wave_path()[-46:], _aw.get("level")),
+                  file=sys.stderr, flush=True)
+        except Exception as _e_w2:
+            print("[wave_gate] 回填写回失败（不影响判据 ✓）: %s" % str(_e_w2)[:60], file=sys.stderr, flush=True)
+        return _aw
     print("[wave_gate] wave_state %s ⇒ **现场补**（as_of=%s ✓）"
           % ("缺失" if not w else "过期 %s 天" % age, as_of or "-"), file=sys.stderr, flush=True)
     try:
@@ -123,17 +163,6 @@ def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Option
         if isinstance(inner, dict):
             got.update({k: inner.get(k) for k in ("level", "sub_level", "operation", "confidence", "reasons")})
         got["level"] = got.get("level") or ""
-        # ★ §9.709 ✓：中文浪名 ⇒ level/operation（此前解析不上 ⇒ 永远吃旧档 ✗）
-        if not got["level"] or got["level"] in ("无数据", "None", "?"):
-            _lv, _op = _map_label(str(lbl))
-            if _lv:
-                got["level"] = _lv
-                got.setdefault("operation", None)
-                if not got.get("operation"):
-                    got["operation"] = _op
-                got["label"] = str(lbl)[:40]
-                print("[wave_gate] 浪名映射 ✓ %r ⇒ level=%s operation=%s"
-                      % (str(lbl)[:24], _lv, _op), file=sys.stderr, flush=True)
         # ★ 修正 ✓：**只有拿到有效 level 才写回** ✗（自测里 `judge_wave` 返回"无数据"
         #   也能写回 ⇒ 把好的档覆盖成 `level="无数据"` ✗✗ —— 事故 ✓）
         if not got["level"] or got["level"] in ("无数据", "None", "?"):
