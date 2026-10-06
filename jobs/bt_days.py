@@ -211,8 +211,9 @@ def run(cmd, log_path, timeout=3600):
     try:
         _base = os.path.basename(str(cmd[1] if isinstance(cmd, (list, tuple)) and len(cmd) > 1 else cmd))
         print('[days] ⏱ 子步骤 %s ⇒ %d 秒 (rc=%s)' % (_base, int(_dt), rc), flush=True)
-    except Exception:
-        pass
+    except Exception as _e_d1:
+        # ★ §9.699 ✓：留痕（防回潮 ✓）
+        print("[days] 阶段计时打印失败（不影响主流程 ✓）: %s" % str(_e_d1)[:70], flush=True)
     return rc, _dt
 
 
