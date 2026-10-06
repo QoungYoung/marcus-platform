@@ -532,7 +532,7 @@ ENTRY_LINES = str(os.getenv("WOLF_T_ENTRY_LINES", "0")).strip().lower() in ("1",
 def current_low_buy_gate() -> str:
     """当日"低吸闸门"（来自 t_regime，取值 BLOCKED / MANUAL_ONLY / ALLOWED）；取数失败 → ALLOWED（放行）。"""
     try:
-        from app.services.t_regime import compute_regime
+        from app.services.wave_gate import gate_regime as compute_regime   # ★ §9.709：波浪口径 ✓
         return str(compute_regime().get("gate_low_buy") or "ALLOWED")
     except Exception:
         return "ALLOWED"

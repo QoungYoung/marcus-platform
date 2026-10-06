@@ -160,6 +160,32 @@ def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Option
         return None
 
 
+def sim_day8() -> str:
+    """当前**模拟日**（回测 = `DATA_DIR` 末段 ✓；生产退化为今天 ✓）。账本 §9.709 ✓。"""
+    try:
+        _seg = os.path.basename(os.path.normpath(os.environ.get("DATA_DIR", "") or ""))
+        if len(_seg) == 8 and _seg.isdigit():
+            return _seg
+    except Exception as _e_seg:
+        print("[wave_gate] sim_day8 取 DATA_DIR 末段失败: %s" % str(_e_seg)[:70], flush=True)
+    try:
+        import datetime as _d8
+        return _d8.datetime.now().strftime("%Y%m%d")
+    except Exception as _e_d8:
+        print("[wave_gate] sim_day8 取今天失败: %s" % str(_e_d8)[:70], flush=True)
+        return ""
+
+
+def gate_regime(kind: str = "low_buy") -> Dict[str, Any]:
+    """旧 `t_regime.compute_regime` 的**波浪版**替身 ✓（同键 ✓，供 t_bridge / t_pool / t_monitor 复用 ✓）。"""
+    g = check_gate(kind, as_of=sim_day8() or None)
+    _gate = g.get("gate")
+    return {"regime": "HALT" if _gate == "BLOCKED" else "ACTIVE",
+            "gate_low_buy": _gate, "gate_high_sell": _gate,
+            "interpret_sign": 1, "index_drop": 0.0,
+            "state": g.get("mode") or "auto", "why": g.get("why"), "src": "wave_gate"}
+
+
 def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
                as_of: Optional[str] = None) -> Dict[str, Any]:
     """**狼大口径**的环境门 ✓（与旧 `t_regime.check_gate` 同返回形状 ✓）。"""

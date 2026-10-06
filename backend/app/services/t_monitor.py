@@ -27,7 +27,10 @@ from typing import Any, Dict, List, Optional
 
 from app.services import t_db
 from app.services.t_data_sources import _normalize_symbol, fetch_tencent_quote, fetch_quote_one
-from app.services.t_regime import check_gate as _rg_check_gate, compute_regime, _is_trading_time
+# ★ 账本 §9.709 ✓（用户：「旧的 t_regime 直接删掉，已证明是负收益」）：
+#   环境门只用**狼大浪型** ✓（`_is_trading_time` 是**交易时段工具**、与收益无关 ⇒ 保留 ✓）
+from app.services.t_regime import _is_trading_time
+from app.services.wave_gate import gate_regime as compute_regime   # 波浪版替身 ✓
 # ★ 账本 §9.659 ✓（用户：「只依据 wave_state，缺失就现场补，去掉这个」）
 #   环境门改为**可切换** ✓：`WOLF_WAVE_GATE_ONLY=1` ⇒ 用**狼大的浪型口径** ✓
 #   （`wave_gate.check_gate` ✓：`wave_state.level == down` ⇒ BLOCKED ✓，缺档**现场补** ✓）

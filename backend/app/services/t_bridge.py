@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from app.config import get_settings
 from app.services import t_db
 from app.services.t_gateway import classify_escalation
-from app.services.t_regime import compute_regime
+from app.services.wave_gate import gate_regime as compute_regime   # ★ §9.709：波浪口径 ✓
 
 # 唤醒降级轮询（桥不可达兜底）
 FALLBACK_POLL_INTERVAL = 30.0
