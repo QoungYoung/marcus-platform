@@ -1786,7 +1786,12 @@ class Store:
             "name": sym_name,
             "ts_code": to_ts_code(symbol),
             "theme": self.theme_for(symbol, last_completed),
-            "window": [iso_day(start), iso_day(last_completed)],
+            # ★ 账本 §9.677 补 ✓（用户：「那我也得能看以前的日线啊」✓）：
+            #   原样返回 [run_start, last_completed] ⇒ 续跑时是**反的**（`2026-01-08 → 2026-01-07` ✗），
+            #     看起来像"只能看这两天" ✗，其实 bars 里已含**回测前的历史** ✓（实测 2025-01-02 起 237 根 ✓）
+            #   ⇒ 改为回报**实际日线范围** ✓（无 bars 时退回原值 ✓）
+            "window": ([iso_day(bars[0]["day"]), iso_day(bars[-1]["day"])] if bars
+                       else [iso_day(start), iso_day(last_completed)]),
             "bars": bars,
             "trades": trades,
             "triggers": trigs[-300:],
