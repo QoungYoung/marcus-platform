@@ -128,7 +128,11 @@ def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Option
     """读 `wave_state` ✓；**缺失/过期 ⇒ 现场补** ✓（并写回 ✓）。补不出来返回 None ✓。"""
     w = _load_wave()
     age = _stale_days(w) if w else None
-    ok = bool(w) and (age is None or age <= max_stale_days)
+    # ★★ 账本 §9.738 ✓：原判据**只有上界** ✗（`age <= max_stale_days`）
+    #   ⇒ 归档来自**模拟日之后**（真实世界的档 ✗）时 age 为**负** ⇒ `-231 <= 10` **为真** ✗
+    #   ⇒ 实测:模拟日 2026-01-15 取到 **date=2026-04-03 / operation=defense** ✗ ⇒ 假 HALT ✗
+    #   ⇒ 修 ✓：**加下界** —— 归档日期必须 **≤ 模拟日**（0 <= age）✓
+    ok = bool(w) and (age is None or (0 <= age <= max_stale_days))
     if ok:
         return w
     # ★ §9.710 ✓：先按**归档链**找当天的真实档 ✓（每天的档早就存在 ✓ ⇒ 不需要现场补 ✗）
@@ -234,7 +238,9 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
         #     ⇒ 我先前写 `bool(...)` ⇒ **`(False, "不触发")` 是"非空元组" ⇒ 恒为真** ✗✗
         #     ⇒ **把所有触发都判成 BLOCKED** ✗（回测会几乎没有交易 ✗）
         #   ⇒ 必须**解包取第一个元素** ✓（并兼容只返回 bool 的旧签名 ✓）
-        _raw = _wc.index_level_stop(wave=w, today=None)
+        # ★★ 账本 §9.738 ✓：原传 `today=None` ✗ ⇒ `if today and wd …` **直接短路** ✗
+        #   ⇒ 狼大原判据里的"新鲜度护栏"**从未执行** ✓ ⇒ 过期/未来档照样能触发清仓级判断 ✗
+        _raw = _wc.index_level_stop(wave=w, today=(as_of or sim_day8() or None))
         if isinstance(_raw, tuple):
             stop, _why = (list(_raw) + [""])[:2]
         else:

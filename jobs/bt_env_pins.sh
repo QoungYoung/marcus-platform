@@ -997,7 +997,14 @@ export WOLF_BUY_DEDUP_MIN='5'
 #     build ⇒ 买类放行 ✓｜t_only / defense / exit ⇒ 买类**拦** ✗｜side ⇒ 买类 MANUAL_ONLY（人工确认 ✓）
 #     ★ 卖类（high_sell*）**永不拦** ✓（止血/兑现必须能执行 ✓）
 #   库内默认 0 ⇒ 生产零影响 ✓；回测打开 ✓
-export WOLF_WAVE_OP_GATE='1'
+# ★★ 账本 §9.738 ✓（用户 2026-10-07：「**①按狼大原判据**」＋「九月份不是4-4或者4-3吗，怎么是一浪」✗）：
+#   我此前加的 `operation in (t_only/defense/exit) ⇒ 买类不放行` ✗ **实测就是它在拦** ✓：
+#     真环境复算 ⇒ ensure_wave 取到 **date=2026-04-03（模拟日之后 ✗）** 的档，operation=defense ✗
+#     ⇒ check_gate 返回 why=「浪型 operation=defense（狼大口径：防御不建仓）⇒ 买类不放行」✗
+#   ⇒ 而**狼大原判据**只有一条 ✓：`index_level_stop` = 「**只看指数大级别**，不走大5浪而转下跌1浪就止损」✓
+#     （`INDEX_STOP_LEVELS = {"down"}` ✓ 只认 level==down ✓）⇒ 对 d4/4-4、d4/4-1 **都不触发** ✓
+#   ⇒ ⇒ **关掉我这条** ✓（不私自加规则 ✓），环境门回归狼大原判据 ✓
+export WOLF_WAVE_OP_GATE='0'
 
 # ★ 账本 §9.718 ✓（用户 2026-10-07 复盘拍板「强的留 弱的丢」✓）：
 #   实测病灶 ✗：SZ002156 被一路卖到 **0 股**（01-08~01-19 六笔 ✓），而它随后涨到 **56.78** ✗
