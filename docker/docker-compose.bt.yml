@@ -1,0 +1,16 @@
+# 回测专用 override（账本 §9.750）
+#
+# 用户边界：**生产应当能查询所有工具**；回测需要"0 工具"隔离。
+# 桥的语义（docker/dsh/bridge/lib/index.js:79-98）：
+#   · 白名单文件**不存在** ⇒ 全量注册（**全工具**）← 生产要这一档
+#   · 文件存在且为空   ⇒ 只注册 **0** 个 ← 回测要这一档
+# 容器内 /root/.dsh 是**只读**挂载 ⇒ 无法在容器内写该文件 ⇒ 只能靠"挂不同文件"切换
+#
+# 用法：
+#   生产/日常： docker compose -f docker/docker-compose.yml up -d            # 无挂载 ⇒ 全工具 ✓
+#   回测：      cd docker && docker compose -f docker-compose.yml -f docker-compose.bt.yml up -d marcus-dsh
+#               （或给现有容器补挂：见 jobs/bt_tools_allow.sh 的提示）
+services:
+  marcus-dsh:
+    volumes:
+      - ./bt_tools_allow.txt:/root/.dsh/bt_tools_allow.txt:ro   # 空文件 ⇒ 回测只注册 0 个工具 ✓

@@ -7,10 +7,12 @@
 set -u
 C="${DSH_CONTAINER:-marcus-dsh}"
 case "${1:-}" in
-  off)  docker exec "$C" sh -c 'mkdir -p /root/.dsh && : > /root/.dsh/bt_tools_allow.txt' \
-          && echo "[tools] 已写空清单 ⇒ 重启后**只注册 0 个** ✓（回测 ✓）" ;;
-  all)  docker exec "$C" sh -c 'rm -f /root/.dsh/bt_tools_allow.txt' \
-          && echo "[tools] 已删除清单 ⇒ 重启后**全工具** ✓（生产/上线 ✓）" ;;
+  # ⚠️ 容器内 /root/.dsh 是**只读**挂载 ⇒ 容器内改不了该文件 ✗
+  #    ⇒ 只能"挂不同的文件"切换：回测挂空文件 ✓、生产不挂 ✓（见 docker-compose.bt.yml ✓）
+  off)  echo "[tools] 回测（0 工具）：用 override 起容器 ⇒"
+        echo "        cd docker && docker compose -f docker-compose.yml -f docker-compose.bt.yml up -d marcus-dsh" ;;
+  all)  echo "[tools] 生产（全工具）：用**基础** compose 起容器（不挂白名单）⇒"
+        echo "        cd docker && docker compose -f docker-compose.yml up -d marcus-dsh" ;;
   *)    echo "用法: bash jobs/bt_tools_allow.sh off|all"; exit 2 ;;
 esac
 echo "[tools] 注意：桥在**启动时**读取 ⇒ 需重启容器生效：docker restart $C"
