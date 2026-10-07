@@ -459,6 +459,70 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         "mode": "trade",
         "decision_mode": "ai_led",
     }
+    # ★★★★ 账本 §9.736 ✓（用户 2026-10-07：「**还是有震荡市不是浪型**」✗）：
+    #   实测 ✗：消息里**完全没有浪型闸结论** ⇒ AI 只好编「震荡市」填空 ✗
+    #   真值就在快照 `fields` 里 ✓（抽 40 条样本，三个子块齐全 ✓）：
+    #     · regime ⇒ state=HALT|ACTIVE ＋ gate_low_buy/gate_high_sell=ALLOWED|BLOCKED|MANUAL_ONLY
+    #     · index  ⇒ 大盘 sh_drop / 黄白线 huang_bai_side / intraday_dd …
+    #     · tech   ⇒ MA5/10/20/60 ＋ KDJ ＋ RSI6/12/24 ＋ MACD
+    #   ★ 更正此前误判 ✗：RSI 等**一直在数据里** ✓（fields.tech ✓），并非"AI 在编" ✗，
+    #     只是**没渲染进消息** ✗ ⇒ 本次一并注入 ✓
+    _f = trigger.get("snapshot") if isinstance(trigger, dict) else None
+    if isinstance(_f, str):
+        try:
+            import json as _js_f2
+            _f = _js_f2.loads(_f) or {}
+        except Exception:
+            _f = {}
+    _f = (_f or {}).get("fields") if isinstance(_f, dict) else None
+    if isinstance(_f, str):
+        try:
+            import json as _js_f3
+            _f = _js_f3.loads(_f)
+        except Exception:
+            _f = None
+    if isinstance(_f, dict):
+        _rg = _f.get("regime") or {}
+        if isinstance(_rg, dict) and _rg:
+            _gt = " ".join("%s=%s" % (str(k).replace("gate_", ""), v)
+                           for k, v in _rg.items() if str(k).startswith("gate_"))
+            _sign = _rg.get("interpret_sign")
+            msg += ("【浪型闸】state=%s %s%s\n"
+                    % (_rg.get("state"), _gt,
+                       (" sign=%s" % _sign) if _sign is not None else ""))
+        _ix = _f.get("index") or {}
+        if isinstance(_ix, dict) and _ix:
+            _pix = []
+            for _k in ("sh_drop", "sz_drop", "hs300_drop", "intraday_dd",
+                       "huang_bai_side", "huang_bai_index", "huang_bai_equal",
+                       "bai_on_top", "m5_dump"):
+                _v = _ix.get(_k)
+                if _v is None:
+                    continue
+                if isinstance(_v, bool):
+                    _pix.append("%s=%s" % (_k, "T" if _v else "F"))
+                else:
+                    try:
+                        _pix.append("%s=%.3f" % (_k, float(_v)))
+                    except Exception:
+                        _pix.append("%s=%s" % (_k, str(_v)[:10]))
+            if _pix:
+                msg += "【大盘/黄白线】" + " ".join(_pix) + "\n"
+        _tc = _f.get("tech") or {}
+        if isinstance(_tc, dict) and _tc:
+            _ptc = []
+            for _k in ("ma5", "ma10", "ma20", "ma60", "kdj_k", "kdj_d", "kdj_j",
+                       "rsi_6", "rsi_12", "rsi_24", "macd_bar", "macd_dea", "macd_dif"):
+                _v = _tc.get(_k)
+                if _v is None:
+                    continue
+                try:
+                    _ptc.append("%s=%.2f" % (_k, float(_v)))
+                except Exception:
+                    _ptc.append("%s=%s" % (_k, str(_v)[:10]))
+            if _ptc:
+                msg += "【技术指标】" + " ".join(_ptc) + "\n"
+
     reply = None
     for attempt in range(1, WAKE_RETRY + 1):
         try:
