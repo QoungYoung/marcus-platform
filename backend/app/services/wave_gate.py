@@ -349,6 +349,45 @@ def classify_buy_leg(kind: str) -> str:
     return "other"
 
 
+def _wave_from_sandbox_day(sim8: str) -> Optional[dict]:
+    """★ 账本 §9.755 ✓（2026-10-07 实测漏放 ✗）：直接从**当天沙箱天目录**读档 ✓
+
+    为什么必须补 ✗：`ensure_wave` 走的是**归档链**（`_bt_year/<sim8>/wave_state.json` 等 ✓），
+      **不含沙箱天目录** ✗ ⇒ 跑批里 `DATA_DIR` 指向别处时查不到 ✗ ⇒ 浪型为空 ⇒
+      `cond_buy_wave_block` 走「operation 缺失 ⇒ 放行」⇒ **该拦的建仓腿被漏放** ✗
+      实测 ✗：`2026-02-06 SH600986 trend_break_buy ¥101,104`（当天 `op=t_only` ✗）
+        触发记录原文：`自动执行 buy 7100股 @14.24: success | 条件命中自动执行 | **level=None**` ✗
+    候选（按优先级 ✓，全部**as-of 正确**：天目录里的那份就是当天该用的档 ✓）：
+      `$BT_ROOT/<sim8>/wave_state.json` ⇒ `data/_bt_t35d/<sim8>/wave_state.json`
+      ⇒ `data/<sim8>/wave_state.json`
+    """
+    if not sim8:
+        return None
+    d8 = str(sim8).replace('-', '')[:8]
+    dash = '%s-%s-%s' % (d8[:4], d8[4:6], d8[6:8]) if len(d8) == 8 else d8
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    roots = []
+    _r = str(os.getenv('BT_ROOT') or '').strip()
+    if _r:
+        roots.append(_r)
+    roots += [os.path.join(repo, 'data', '_bt_t35d'), os.path.join(repo, 'data')]
+    for _root in roots:
+        for name in ('wave_state.json', 'wave_state_%s.json' % dash):
+            c = os.path.join(_root, d8, name)
+            try:
+                if not os.path.exists(c):
+                    continue
+                with open(c, encoding='utf-8') as fh:
+                    j = json.load(fh) or {}
+                if str(j.get('level') or '').strip():
+                    print('[wave_gate] 条件单浪型闸：天目录命中 ✓ %s（level=%s op=%s ✓）'
+                          % (c[-52:], j.get('level'), j.get('operation')), file=sys.stderr, flush=True)
+                    return j
+            except Exception:
+                continue
+    return None
+
+
 def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
     """条件单买入是否被**浪型**拦下 ⇒ `(blocked: bool, why: str)` ✓
 
@@ -363,7 +402,14 @@ def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
         return False, ""                     # ★ 卖类永不放行限制 ✓
     if str(os.getenv("WOLF_WAVE_COND_GATE", "0")).strip().lower() not in ("1", "true", "yes", "on"):
         return False, ""
-    w = ensure_wave(as_of=as_of or sim_day8() or None)
+    _asof = as_of or sim_day8() or None
+    # ★★ 账本 §9.755 ✓（2026-10-07 实测 ✗）：**天目录优先**，归档链只作兜底 ✓
+    #   为什么必须反过来 ✗：归档链（`ensure_wave`）在跑批里会命中**陈旧/无关档** ✗ ——
+    #     实测 0206 那天它返回 `d3/3-5·exit（date=2026-01-14）` ✗（而当天真档是 `d3/3-4·t_only` ✓）
+    #     ⇒ 先前的写法只在"operation 为空"时才兜底 ✗ ⇒ 陈旧档**非空** ⇒ 兜底不触发 ✗
+    #     ⇒ 结果：①该拦的建仓腿**拦错理由** ✗ ②`exit` 语义把 **T 腿/埋伏也一起拦掉** ✗（过严 ✗）
+    #   而**天目录里的那份**是跑批"按天复制"的 ✓ ⇒ 天然是当天该用的 as-of 档 ✓ ⇒ 优先用它 ✓
+    w = _wave_from_sandbox_day(str(_asof or "")) or ensure_wave(as_of=_asof)
     op = str((w or {}).get("operation") or "").strip().lower()
     lv = str((w or {}).get("level") or "")
     sb = str((w or {}).get("sub_level") or "")
