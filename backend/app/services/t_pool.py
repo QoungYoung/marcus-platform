@@ -348,7 +348,11 @@ def build_t_conditions(cost: float, amp_med: Optional[float] = None,
                     _day = ""
             if not _day:
                 _day = datetime.now().strftime("%Y%m%d")
-            _line = _EL.entry_line_target(symbol, _ref, day=_day)
+            # ★ 账本 §9.748 ✓（用户 2026-10-07 选 A ✓）：入场线**再受「成本×1.04」夹住** ✓
+            #   —— 否则「现价下方最近的均线」仍可能高于上限 ✗ ⇒ 触发即被「加仓口径」拦 ✗
+            #      （实测 ✗：T 买腿 37 触发 ⇒ 30 拦，其中 **24 次触发价 > 首笔×1.04** ✓）
+            #   `capped_line_target` 在开关关时**逐字**等于 `entry_line_target` ✓（零影响 ✓）
+            _line = _EL.capped_line_target(symbol, _ref, cost, day=_day)
             if _line and _line > 0:
                 target = round(_line, 2)
         except Exception as _e_sil1:
