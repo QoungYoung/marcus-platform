@@ -1039,4 +1039,11 @@ export BT_NET_OFFLINE='1'
 #   代码侧开关默认 0 ✓（**生产逐位不变** ✓）；回测在这里置 1 ✓
 export WOLF_WAVE_COND_GATE='1'
 # 埋伏腿在 t_only 下：默认 block（它是**新开仓** ✓）；要放行改成 allow ✓
-export WOLF_WAVE_COND_AMBUSH='block'
+# ★★ 账本 §9.746 补 ✓（用户 2026-10-07 拍板：「**wolf_ambush_buy 可以放行**」✓）：
+#   埋伏腿＝**小仓预埋**（每笔 4% 档 ✓、低位挂单、非追高 ✓、非"新建主升" ✓）
+#   ⇒ 按狼大口径「t_only = 只做T、**不追不新建主升**」✓，它**不属被禁的那一类** ✓ ⇒ **放行** ✓
+#   （我先前默认 block ✗ 是按"新开仓一律保守"的私心 ✓ —— 已按你的判断改回 ✓）
+export WOLF_WAVE_COND_AMBUSH='allow'
+# 未归类的买入腿（`custom_buy` 等 ✓）：**默认 block** ✓（保守 ✓）
+#   ⇒ 若你有自定义腿想放行，改 allow ✓（本次用户只拍板了埋伏 ✓，此项未动 ✓）
+export WOLF_WAVE_COND_OTHER='block'
