@@ -1007,3 +1007,17 @@ export WOLF_WAVE_OP_GATE='1'
 #   口径 ✓：**趋势强（MA 多头/未破位 ⇒ 复用 t_build.trend_gate ✓）时，做T减仓腿只动 T 仓、不碰底仓** ✓
 #     ★ 止损腿永不介入 ✓（「止血动作必须能执行」✓ 优先 ✓）
 export WOLF_STRONG_TREND_T_ONLY='1'
+
+# ★★ 账本 §9.734 ✓（用户 2026-10-07「逐个修复」＋「…是存在的」✓ 纠错后定位 ✓）：
+#   现象 ✗：跑批期间反复出现 `[ALERT] qqnotifier.py:132 | <urlopen error [Errno 101] Network is unreachable>`
+#     —— 是**本机跑批**发的 ✓（告警里的路径被 QQ 的 Markdown 吃了下划线 ✗，
+#        真路径 = `data/_bt_t35d/_farm/20260114/core/qq_notifier.py` ✓ 实测存在 ✓）
+#   根因 ✓（两环）：
+#     ① 守卫 `bt_local_pro.install_net_offline()` 只拦 `requests.*` 与 `urllib.request.urlopen` ✓，
+#        而 `bt_agent_loop._ensure_capture()` **每根 bar 重装 urlopen 壳** ✓（注释：防被 as-of 层顶掉 ✗）
+#        ⇒ 顺序不巧时**把守卫顶掉** ✗ ⇒ QQ 调用直连 ⇒ OS 级 Errno 101 ✗
+#     ② 守卫的开关 `BT_NET_OFFLINE` 在 `bt_prod_run` 里**只读不写**（`getenv(..., "1")` ✓）
+#        ⇒ **子进程环境里没有它** ✗ ⇒ 子进程侧的守卫/早退都失灵 ✗
+#   修 ✓：**在 pins 里显式 export** ⇒ 所有子进程（bt_agent_loop / bt_day_legs / bt_llm_replay …）都看得见 ✓
+#     ⇒ ①`qq_notifier` 的离线早退生效 ✓ ②守卫按 1 自装 ✓ ③告警噪声消失 ✓
+export BT_NET_OFFLINE='1'
