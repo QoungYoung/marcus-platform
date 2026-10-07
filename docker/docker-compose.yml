@@ -154,7 +154,14 @@ services:
     ports:
       - "3001:3001"
     volumes:
-      - ./bt_tools_allow.txt:/root/.dsh/bt_tools_allow.txt:ro   # ★ §9.722 回测工具白名单（持久化 ✓）
+      # ★★ 账本 §9.750 ✓（用户 2026-10-07「生产应当能查询所有工具」✗ + 「准备上线」✓）：
+      #   原挂载把**空白**的 bt_tools_allow.txt 挂进容器 ✗ ⇒ 桥视为「白名单=空」⇒ **只注册 0 个工具** ✗
+      #   ⇒ 生产将**查不到任何工具** ✗（正是上线前必须拆掉的 ✓）
+      #   ★ 桥的语义 ✓（docker/dsh/bridge/lib/index.js:79-98 ✓）：
+      #       · 文件**不存在** ⇒ TOOL_ALLOW=null ⇒ **全量注册（全工具 ✓）**
+      #       · 文件存在且为空 ⇒ **只注册 0 个** ✗；文件存在有内容 ⇒ 只注册清单内 ✓
+      #   ⇒ 生产：**不挂**（= 全工具 ✓）；回测：运行时在容器内写该文件 ✓
+      #     （见 `jobs/bt_tools_allow.sh off|all` ✓ —— 回测专用，不进生产 ✓）
       # ★ 账本 §9.727 ✓（本轮追出 ✗）：镜像里烤的 /opt/dsh-plugins/cordis.patch.yml 是**旧版**（2562 字节 ✗，
       #   而仓库 .020 已是 3935 ✓ 含 LLM 适配器配置 ✓）⇒ 每次启动 entrypoint 都用旧版覆盖 profile ✗
       #   ⇒ `llm-deepseek-key` 缺 baseURL/reasoningEffort/streamIdleTimeoutMs ⇒ 「Invalid URL」✗ ⇒ AI 空转 ✗
