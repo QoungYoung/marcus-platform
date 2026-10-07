@@ -476,6 +476,28 @@ class Store:
         self._curve_space_why = ""
         self.mins_dir = os.path.abspath(args.mins)
         self.log_path = os.path.abspath(args.log)
+        # ★★ 账本 §9.735 补 ✓：**显式给了 --log 且文件存在 ⇒ 视为人工指定，不许被自动跟随覆盖** ✗
+        self._log_explicit = bool(getattr(args, "log", "")) and os.path.exists(self.log_path)
+        # ★★ 账本 §9.735 补 ✓（用户：「现价取的是最新价格，要取当前回测日价格」✗）：
+        #   看板的"当前回测日"来自**主日志**（`grep '[days] <日> cut='` ✓）⇒ **没给 --log 就推不出来** ✗
+        #   ⇒ `last_completed=None` ⇒ `curve_end` 退化到"最后一个天目录（= 全窗口末 ✗）"
+        #   ⇒ 持仓/详情一律显示**未来价** ✗（未来函数 ✓；实测过 ✓）
+        #   ⇒ 这里补一条**自愈**：未显式给 --log 时，按 --root 的臂名自动找主日志 ✓
+        # ★★ 判据必须是"**文件不存在**" ✗，不能是"属性为空" —— 因为 `--log` 有默认值
+        #   （`<REPO>/.dsh-tmp/wolfbt/logs/year_prod.log` ✓ 恒非空 ✗，而该文件通常不存在 ✗）
+        if not os.path.exists(getattr(self, "log_path", "") or ""):
+            import glob as _g_lp
+            _tag = os.path.basename(os.path.normpath(self.root or "")) or ""
+            _cands = []
+            for _pat in ("size_run_%s.log", "size_run_%s.log", "run_%s.log", "size_run_*.log"):
+                _cands += sorted(_g_lp.glob(os.path.join(".dsh-tmp/wolfbt/logs", _pat % _tag.lstrip("_"))),
+                                key=lambda p: os.path.getmtime(p), reverse=True)
+            if not _cands:
+                _cands = sorted(_g_lp.glob(".dsh-tmp/wolfbt/logs/size_run_*.log"),
+                                key=lambda p: os.path.getmtime(p), reverse=True)
+            if _cands:
+                self.log_path = os.path.abspath(_cands[0])
+                print("[dashboard] --log 未给 ⇒ 自动选用 %s ✓" % self.log_path, flush=True)
         self.pg_url = args.pg
         self.account = args.account
         self.ttl = max(0.5, float(args.ttl))
@@ -938,7 +960,14 @@ class Store:
         if now - self._live_log_at < self.ttl:
             return
         self._live_log_at = now
-        live = live_run_log(self.root)      # 按根归属，避免借到别的跑的日志
+        # ★★ 账本 §9.735 补 ✓（用户：「现价取的是最新价格，要取当前回测日价格」✗）：
+        #   原实现**无条件**用"在跑那轮的日志"覆盖 self.log_path ✗
+        #   ⇒ 续跑那轮是用 `> run_t35d_resume_*.out` 起的（stdout ✗），
+        #     而驱动自己写的是 `size_run_t35d.log` ✓ ⇒ live 指到前者 ⇒ 解析不到 `cut=` 行 ✗
+        #   ⇒ `last_completed=None` ⇒ `curve_end` 退化到全窗口末 ⇒ 显示**未来价** ✗
+        #   ⇒ 修 ✓：人工显式指定且文件存在时，**优先尊重人工** ✓
+        if getattr(self, "_log_explicit", False) and os.path.exists(self.log_path):
+            return
         if live and live != self.log_path:
             self.log_path = live
             self._log, self._log_sig = {}, None
@@ -1752,7 +1781,17 @@ class Store:
                     "highest_price": p.get("highest_price"),
                 }
                 if bars:
-                    last = bars[-1]["close"]
+                    # ★★ 账本 §9.735 ✓（用户 2026-10-07：「持仓 900 股 · 成本 56.770 · 现价 51.580 ·
+                    #   浮动 -4,671.00（-9.14%）… 这个现价取的是**最新价格**，要取**当前回测日**价格」✗）
+                    #   病灶 ✓：这里 `bars[-1]` 取的是**全库最后一根**（= 最新价 ✗）
+                    #     —— 而上面的全量查询是 §9.678 的**有意设计** ✓（K 线图要含未来段并标注 ✓，
+                    #        `_future_n` 也依赖它 ✓）⇒ **不能动查询上界** ✗
+                    #   ⇒ 只把**计价**用的 last 限定到「当前回测日及之前」✓（`_asof` = 回测当前日 ✓）
+                    #   ⇒ 与列表页那条（用 `closes(..., curve_end)` ✓）**同一把尺** ✓
+                    _asof8 = str(_asof or "").replace("-", "")
+                    _bars_asof = [b for b in bars
+                                  if not _asof8 or str(b.get("day", "")).replace("-", "") <= _asof8]
+                    last = (_bars_asof or bars)[-1]["close"]
                     position["last"] = last
                     position["pnl"] = round((last - position["avg_price"]) * position["volume"], 2)
                     position["pnl_pct"] = (round((last - position["avg_price"]) / position["avg_price"] * 100.0, 3)
