@@ -357,9 +357,8 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"update_condition 附新 condition 重建（**唯一可用方式** ✓；回测内工具已全屏蔽 ✓，"
         f"create_t_condition 不可调用 ✗）；"
         f"不重建则本标的今日不再有触发条件。"
-        f"如需更多数据可调用查询工具（get_stock_quote 实时行情 / get_t_realtime_indicators 技术指标"
-        f"/ get_intraday_minute 分钟K线 / get_portfolio_positions 持仓 / get_stock_moneyflow 资金流"
-        f"/ get_market_state 大盘），不必只依赖本快照。"
+        f"（本消息已含决策所需全部字段 ✓；回测内**工具已全屏蔽** ✗，"
+        f"任何「调用查询工具」的路径都不存在 ✓）"
     )
     # 历史模式段：最近决策结果 + 标的做T统计（决策 checklist 依据）
     # ★ 账本 §9.728 ✓：**持仓摘要之前算完就丢** ✗ —— `ctx["position"]` 从未渲染进消息 ✓
