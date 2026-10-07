@@ -161,6 +161,8 @@ services:
       #   ⇒ 且 /opt/dsh-plugins **不在卷上** ✗ ⇒ docker cp 也会被"重建镜像层"覆盖 ✓
       #   故：直接**只读挂载**仓库版到该路径 ✓（entrypoint 会把它同步进 profile ✓；重建容器也不丢 ✓）
       - ./dsh/service.cordis.patch.yml.020:/opt/dsh-plugins/cordis.patch.yml:ro
+      # ★ 账本 §9.728 ✓：桥源码也走挂载（镜像里那份是旧的 ✗ ⇒ 空白名单会走"全量注册"✗）
+      - ./dsh/bridge/lib/index.js:/opt/dsh-plugins/dsh-dsh-marcus-bridge/lib/index.js:ro
       - ../data:/app/data
       # 只持久化 DSH 会话状态；profile 代码（bridge/npm 依赖/patch）由镜像控制，
       # 避免旧卷里的代码覆盖镜像更新（卷不再覆盖代码）

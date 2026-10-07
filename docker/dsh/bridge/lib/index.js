@@ -77,7 +77,13 @@ function apply(ctx) {
       let TOOL_ALLOW = null;
       try {
         const _raw = readFileSync('/root/.dsh/bt_tools_allow.txt', 'utf8');
-        if (_raw && _raw.trim()) {
+        // ★★ 账本 §9.728 ✓（用户 2026-10-07「全屏蔽，改成直接置入数据」）：
+        //   原写法 `if (_raw && _raw.trim())` ✗ —— **空文件**时条件不成立 ⇒ TOOL_ALLOW 留 null ✗
+        //   ⇒ register() 判 `TOOL_ALLOW && …` ⇒ **全量注册** ✗（含 place_order 等写工具 ✗）
+        //   ⇒ 与文件注释「空文件 ⇒ 一个都不注册」**不符** ✗（实测：置空后仍注册全部 ✓）
+        //   修 ✓：**文件成功读到**（哪怕为空）⇒ 它就是权威清单 ⇒ 空 ⇒ new Set() ⇒ **0 个工具** ✓
+        //   只有「读不到/抛异常」才回退全量 ✓（保留安全网 ✓）
+        {
           TOOL_ALLOW = new Set(_raw.split(/\s+/).map((s) => s.trim()).filter(Boolean));
           console.log('[Bridge] 工具允许清单生效 ✓ 只注册 ' + TOOL_ALLOW.size + ' 个（其余跳过 ✓）');
         }

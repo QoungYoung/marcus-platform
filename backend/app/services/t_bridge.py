@@ -332,7 +332,11 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"你是做T决策者：本次触发已命中你的监控条件并通过系统规则预筛——**默认动作=exec（执行）**。"
         f"仅当存在客观证据时才 wait/abandon，且 reason 必须写明具体证据："
         f"① 现价与目标价/建议价脱节（差>1%）；② 已跌破止损；③ regime 禁自动；④ 恐慌放量追跌（量比骤升+创新低）。"
-        f"信息不足不等于 wait——若快照缺现价/量能，请先调用查询工具补数再判。"
+        # ★ 账本 §9.728 ✓（用户 2026-10-07「全屏蔽，改成直接置入数据」）：
+        #   工具已**全屏蔽**（桥只注册 0 个 ✓）⇒ 原句「请先调用查询工具补数」成了**死指令** ✗
+        #   ⇒ 改为：**决策所需数据已随本消息置入** ✓；数据确实不足时按 wait/abandon 处理 ✓
+        f"信息不足不等于 wait——但**决策所需的现价/量比/日内分位/持仓/规则证据已随本消息给出** ✓，"
+        f"**无需也无法调用查询工具**（回测内已全屏蔽 ✓）；若本消息确实缺关键字段，请按 wait/abandon 处理并写明缺什么。"
         f"输出决策 JSON："
         f'{{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", '
         f'"condition": {{...}}}}（condition 仅在 update_condition 时提供，含 symbol/trigger_kind/target_price 等）。'
@@ -348,6 +352,21 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"/ get_market_state 大盘），不必只依赖本快照。"
     )
     # 历史模式段：最近决策结果 + 标的做T统计（决策 checklist 依据）
+    # ★ 账本 §9.728 ✓：**持仓摘要之前算完就丢** ✗ —— `ctx["position"]` 从未渲染进消息 ✓
+    #   ⇒ 而「当前持仓（可卖/成本/盈亏）」正是工具被屏蔽后最需要的数据 ✓ ⇒ 这里补渲染 ✓
+    _pos = ctx.get("position") or {}
+    if isinstance(_pos, dict) and _pos and not _pos.get("error"):
+        try:
+            _pv = int(_pos.get("volume") or 0)
+            _sv = int(_pos.get("sellable") or 0)
+            _cost = float(_pos.get("avg_price") or 0)
+            _pnl = _pos.get("pnl_pct")
+            msg += ("【当前持仓】%s 持仓 %d 股（可卖 %d）｜成本 %.3f｜浮动盈亏 %s｜"
+                    "（底仓不可卖 ✓ 卖腿只动 T 仓）\n"
+                    % (symbol, _pv, _sv, _cost,
+                       ("%.2f%%" % float(_pnl)) if _pnl is not None else "—"))
+        except Exception as _e_pos:
+            print("[t-bridge] 持仓渲染失败(跳过): %s" % str(_e_pos)[:70], flush=True)
     recents = ctx.get("recent_decisions") or []
     if recents:
         lines = ["【历史决策参考（最近 " + str(len(recents)) + " 次，含结果）】"]
