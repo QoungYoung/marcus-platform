@@ -14,6 +14,8 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 # ★ 该卷目录是 **root 所有** ✗（实测 Permission denied ✓）⇒ 一律**通过容器**读写 ✓
 ALLOW_IN_CT=/root/.dsh/bt_tools_allow.txt
+# ★ §9.722 ✓：容器内那个是**只读挂载** ✗ ⇒ 写入一律改**仓库文件** ✓
+ALLOW_REPO=docker/bt_tools_allow.txt
 ENVF=docker/.env
 BACKUP=".dsh-tmp/wolfbt/bridge_backup/bt_tools_allow.prod.txt"
 PROD_API='http://backend:8000/api/v1'
@@ -28,15 +30,15 @@ list_t_ai_actions'
 _cmd="${1:-status}"
 case "$_cmd" in
   status)
-    echo "[bt_bridge_mode] 清单 ⇒ $(docker exec marcus-dsh sh -lc "grep -cvE '^#|^$' $ALLOW_IN_CT" 2>/dev/null) 个工具"
-    docker exec marcus-dsh sh -lc "grep -vE '^#|^$' $ALLOW_IN_CT" 2>/dev/null | sed 's/^/    /'
+    echo "[bt_bridge_mode] 清单 ⇒ $(grep -cve '^$' "$ALLOW_REPO" 2>/dev/null) 个工具"
+    grep -ve '^$' "$ALLOW_REPO" 2>/dev/null | sed 's/^/    /'
     echo "[bt_bridge_mode] docker/.env 里的 MARCUS_API_URL ⇒ $(grep -E '^MARCUS_API_URL=' "$ENVF" 2>/dev/null || echo '（未设，用 compose 默认 = 生产 ✗）')"
     echo "[bt_bridge_mode] 桥容器实际值 ⇒ $(docker exec marcus-dsh sh -lc 'echo $MARCUS_API_URL' 2>/dev/null)"
     ;;
   on)
     mkdir -p "$(dirname "$BACKUP")" 2>/dev/null
     [ -f "$BACKUP" ] || docker exec marcus-dsh sh -lc "cat $ALLOW_IN_CT" > "$BACKUP" 2>/dev/null
-    printf '%s\n' "$BT_TOOLS" | docker exec -i marcus-dsh sh -lc "cat > $ALLOW_IN_CT"
+    printf '%s\n' "$BT_TOOLS" > "$ALLOW_REPO"
     sed -i "s#^MARCUS_API_URL=.*#MARCUS_API_URL=$BT_API#" "$ENVF" 2>/dev/null
     grep -q '^MARCUS_API_URL=' "$ENVF" 2>/dev/null || printf 'MARCUS_API_URL=%s\n' "$BT_API" >> "$ENVF"
     echo "[bt_bridge_mode] ✅ 已切到回测模式（清单 $(printf '%s' "$BT_TOOLS" | wc -l) 个 ✓；API=$BT_API ✓）"
@@ -50,7 +52,7 @@ case "$_cmd" in
     echo "[bt_bridge_mode] ⚠️ 需重启桥才生效： docker compose -f docker/docker-compose.yml up -d --force-recreate dsh"
     ;;
   off)
-    if [ -f "$BACKUP" ]; then docker exec -i marcus-dsh sh -lc "cat > $ALLOW_IN_CT" < "$BACKUP"; else docker exec -i marcus-dsh sh -lc "cat > $ALLOW_IN_CT" < /dev/null; fi
+    if [ -f "$BACKUP" ]; then cp -a "$BACKUP" "$ALLOW_REPO"; else : > "$ALLOW_REPO"; fi
     sed -i "s#^MARCUS_API_URL=.*#MARCUS_API_URL=$PROD_API#" "$ENVF" 2>/dev/null
     echo "[bt_bridge_mode] ✅ 已恢复（清单还原 ✓；API=$PROD_API ✓）"
     echo "[bt_bridge_mode] ⚠️ 需重启桥才生效"

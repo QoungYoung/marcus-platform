@@ -147,6 +147,7 @@ services:
     ports:
       - "3001:3001"
     volumes:
+      - ./bt_tools_allow.txt:/root/.dsh/bt_tools_allow.txt:ro   # ★ §9.722 回测工具白名单（持久化 ✓）
       - ../data:/app/data
       # 只持久化 DSH 会话状态；profile 代码（bridge/npm 依赖/patch）由镜像控制，
       # 避免旧卷里的代码覆盖镜像更新（卷不再覆盖代码）
