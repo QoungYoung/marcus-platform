@@ -423,7 +423,7 @@ tasks:
 - id: weekly_reflect
   name: 周度反思
   description: 每周五收盘后 Pi 使用 DeepSeek-v4-pro 最高思考模式深度反思整周策略执行
-  enabled: true
+  enabled: false   # ★ 用户 2026-10-07 拍板关闭
   type: pi_reflect
   pi_prompt: weekly
   schedule:
@@ -565,7 +565,7 @@ tasks:
 - id: arkvol_checkin
   name: ArkVol 每日签到
   description: 每日自动签到 arkvol.com，维持/获取每日免费额度
-  enabled: true
+  enabled: false   # ★ 用户 2026-10-07 拍板关闭
   schedule:
     type: cron
     expr: 5 8 * * *
