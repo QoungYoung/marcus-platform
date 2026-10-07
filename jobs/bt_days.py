@@ -267,6 +267,29 @@ def main() -> int:
 
     if not a.out:
         a.out = os.path.join(a.root, "_summary")
+        # ★★ 账本 §9.723 ✓（用户 2026-10-07：「又没复权统一，之前不是已经统一了吗」✗）：
+        #   看板的口径判断原本只靠 ①显式 WOLF_CURVE_SPACE ②WOLF_ADJ_PRICE 环境变量 ③自动探测
+        #   ⇒ 而**看门狗启动看板时不带环境变量** ✗ ⇒ 退回自动探测 ⇒ 复权库缺失时**安全退回 raw** ✗
+        #     ⇒ 把**复权成本**与**原始现价**混算 ✗（实测：真实 +3.31% 显示成 +45.97% ✗）
+        #   ⇒ 修法 ✓：**跑批自己声明口径** —— 启动时把"本臂实际生效的复权开关"写进
+        #     `<root>/_caliber.json` ✓ ⇒ 看板优先读它 ✓（不再靠猜、不再依赖外部 env ✓）
+        try:
+            import json as _jc
+            _adj_eff = str(os.getenv("WOLF_ADJ_PRICE", "")).strip().lower() in ("1", "true", "yes", "on")
+            _cal = {
+                "adj_price": bool(_adj_eff),
+                "exrights_adjust": str(os.getenv("WOLF_EXRIGHTS_ADJUST", "")).strip().lower() in ("1", "true", "yes", "on"),
+                "account": str(os.getenv("T_MONITOR_ACCOUNT", "") or ""),
+                "root": str(a.root),
+                "start": str(a.start), "end": str(a.end),
+                "written_by": "jobs/bt_days.py §9.723",
+            }
+            with open(os.path.join(a.root, "_caliber.json"), "w", encoding="utf-8") as _fc:
+                _jc.dump(_cal, _fc, ensure_ascii=False, indent=1)
+            print("[days] 口径标记已写 ⇒ %s（adj_price=%s ✓）" % (
+                os.path.join(a.root, "_caliber.json"), _cal["adj_price"]), flush=True)
+        except Exception as _e_cal:
+            print("[days] 口径标记写入失败(不影响跑批): %s" % str(_e_cal)[:90], flush=True)
     os.makedirs(a.out, exist_ok=True)
     tl = {} if a.no_era_gating else load_timeline(a.task_timeline)
     if a.no_era_gating:

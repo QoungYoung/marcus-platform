@@ -756,7 +756,24 @@ class Store:
         hit = self._space_cache.get(acct)
         if hit and not force and now - hit[0] < max(30.0, self.ttl * 60):
             return hit[1]["space"]
+        # ★★ 账本 §9.723 ✓：**优先读跑批自报的口径**（`<root>/_caliber.json` ✓）
+        #   优先级：显式 WOLF_CURVE_SPACE ✓ > **标记文件** ✓ > WOLF_ADJ_PRICE ✓ > 自动探测 ✓
+        #   ⇒ 看板不再依赖"启动它的进程恰好带了 env" ✗（看门狗就没带 ✗ ⇒ 混算 ✓）
+        _mk = os.path.join(self.root, "_caliber.json")
+        _marker = None
+        try:
+            if os.path.exists(_mk):
+                with open(_mk, encoding="utf-8") as _fm:
+                    _marker = bool((json.load(_fm) or {}).get("adj_price"))
+        except Exception as _e_mk:
+            _marker = None
+            print("[dashboard] 口径标记读取失败(退回自动探测): %s" % str(_e_mk)[:80], flush=True)
         info = detect_price_space(trades, self.bars_db, self.bars_adj_db)
+        if _marker is not None:
+            _forced_env = (os.getenv("WOLF_CURVE_SPACE") or "").strip().lower()
+            if _forced_env not in ("raw", "adj"):
+                info["space"] = "adj" if _marker else "raw"
+                info["why"] = "跑批自报口径 <%s>（adj_price=%s ✓ §9.723）" % (_mk, _marker)
         self._space_cache[acct] = (now, info)
         return info["space"]
 
