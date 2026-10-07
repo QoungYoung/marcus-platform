@@ -130,19 +130,15 @@ def get_access_token() -> Optional[str]:
 
 
 def send_c2c_message(openid: str, content: str, msg_id: str = "", event_id: str = "") -> bool:
-    # ★★ 账本 §9.733 ✓（用户 2026-10-07「逐个修复」✓）：
-    #   实测告警 ✗ `qqnotifier.py:132 | <urlopen error [Errno 101] Network is unreachable>`
-    #   —— **OS 级**错误 ✗ ⇒ 说明那次调用**绕过了** `bt_local_pro` 的守卫 ✓
-    #     （典型成因：`from urllib.request import urlopen` 的 **from-import 陷阱** ✗，
-    #      同 §9.249 那次 `_quote_now` 的坑 ✓ —— 守卫改的是模块属性，绑走的旧对象不受影响 ✓）
-    #   ⇒ 回测/离线模式下**根本不该尝试发送** ✓ ⇒ 这里加**早退** ✓（先于任何网络动作 ✓）
-    #   ⇒ 生产不受影响 ✓（仅在 `BT_NET_OFFLINE` 为真时早退 ✓）
-    try:
-        if str(os.getenv("BT_NET_OFFLINE", "")).strip().lower() in ("1", "true", "yes", "on"):
-            print("[QQ] 回测/离线模式 ⇒ 跳过发送（BT_NET_OFFLINE=1 ✓）", file=sys.stderr)
-            return False
-    except Exception:
-        pass
+    # ★★ 账本 §9.745 ✓（用户 2026-10-07「怎么没有 QQ 推送了」✗ —— **是我改坏的** ✗）：
+    #   我曾在 §9.733 这里加过**无条件早退** ✗：
+    #       if BT_NET_OFFLINE 为真: return False
+    #   ⇒ 本意只是去掉回测里"发不出去还报错"的噪声 ✓，
+    #     但后果是**把 QQ 推送整条掐掉** ✗ —— 连用户要看的【ALERT】告警也一起没了 ✗
+    #   ★ 而项目里**早有正确机制** ✓（`jobs/bt_local_pro._is_allowed` ✓，账本 §9.625 ✓，注释原话
+    #     就是「用户："QQ 没收到" ✓」）：用 `BT_NET_ALLOW_HOSTS=bots.qq.com,api.sgroup.qq.com`
+    #     让**守卫放行 QQ 域名** ✓，其余出网仍拦 ✓ ⇒ 既有推送 ✓ 又无噪声 ✓
+    #   ⇒ ⇒ 故**删除此早退** ✓（恢复原语义），改由 pins 设置白名单 ✓
     """
     Send C2C private message via HTTP API.
     
