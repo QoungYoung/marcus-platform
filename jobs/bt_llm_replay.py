@@ -479,10 +479,10 @@ class LLMReplay:
                     _rq = _u_pw.Request(str(url),
                                        data=_j_pw.dumps({"message": "只回两字: 就绪", "session_id": sid}).encode(),
                                        headers={"Content-Type": "application/json"})
-                    _tt = time.time()
+                    _tt = time.perf_counter()
                     with _u_pw.urlopen(_rq, timeout=float(os.getenv("WOLF_SESSION_PREWARM_TIMEOUT", "200") or 200)) as _rs:
                         _rs.read()
-                    print("[bt_llm] 会话焐热完成 ✓ %s（%.1f 秒）" % (str(sid)[-26:], time.time() - _tt), flush=True)
+                    print("[bt_llm] 会话焐热完成 ✓ %s（%.1f 秒）" % (str(sid)[-26:], time.perf_counter() - _tt), flush=True)
             except Exception as _e_pw:
                 print("[bt_llm] 会话焐热失败（继续 ✓）: %s" % str(_e_pw)[:70], flush=True)
             kw2 = dict(kw)
@@ -506,9 +506,14 @@ class LLMReplay:
         # ★ 账本 §9.692 ✓（用户：「我要看一次唤醒的耗时分配」✓）：**每次唤醒计时** ✓
         try:
             import time as _t9
-            _t0 = _t9.time()
+            # ★★ 账本 §9.725 ✓（本次自查发现 ✗）：**必须用 perf_counter** ——
+            #   回测 `jobs/bt_prod_run.py:175` 把 `time.time = _now_ts` **钉到模拟钟** ✗
+            #   ⇒ 用它计时会出**负值**（实测「一次唤醒 ⇒ -0.06 秒」✗）
+            #   ⇒ 之前报的"中位 10.9s / 34.8s"其实是**模拟钟差值、不是真实耗时** ✗（此处更正 ✓）
+            #   ⇒ `perf_counter` **不在被钉名单** ✓（bt_prod_run.py:115 自己就这么写的 ✓）
+            _t0 = _t9.perf_counter()
             resp = self.real_post(url, **kw)
-            _dt = _t9.time() - _t0
+            _dt = _t9.perf_counter() - _t0
             try:
                 _nb = kw.get("json") or {}
                 _plen = len(_nb.get("message") or "")
