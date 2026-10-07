@@ -5116,11 +5116,30 @@ class TMonitor:
                             _pcq = None
                             print("[TMonitor] 条件单买入时点闸 pre_close 解析失败(按 None 继续 ✓): %s" % str(_epcq)[:60], flush=True)
                         _cond_tb = intraday_timing_blocked(symbol, True, pre_close=_pcq)
+                    # ★★ 账本 §9.746 ✓（用户 2026-10-07：「**条件命中自动执行也要过波浪浪型检查**」✓）：
+                    #   本分支（条件单自动执行 ✓）原先**完全不经过浪型闸** ✗ ⇒ 实测 `t_only` 那几天
+                    #   仍成交 `trend_break_buy`（趋势突破建仓 ✗ = 狼大说的"新建主升" ✗）：
+                    #     SH688403 汇成 ¥101,420 ✓、0105 SZ002156 ¥98,575 ✓、0114 SZ300346 ¥96,509 ✓
+                    #   ⇒ 语义**逐字照抄狼大** ✓（见 `wave_gate.cond_buy_wave_block` 的说明 ✓）；
+                    #     开关 `WOLF_WAVE_COND_GATE` **库内默认 0** ⇒ 生产逐位不变 ✓（回测由 pins 置 1 ✓）
+                    #   卖类不受影响 ✓（只在买入方向调用 ✓ —— 止血/兑现必须能执行 ✓）
+                    _wgb, _wgwhy = (False, "")
+                    if str(side).lower() in ("buy", "买入"):
+                        try:
+                            from app.services.wave_gate import cond_buy_wave_block as _cbwb
+                            _wgb, _wgwhy = _cbwb(trigger_kind)
+                        except Exception as _ewg:
+                            _wgb, _wgwhy = False, ""
+                            print("[TMonitor] 条件单浪型闸异常(放行 ✓): %s" % str(_ewg)[:80], flush=True)
                     if _cond_tb:
                         exec_ok = False
                         print("[TMonitor] 条件单买入时点闸拦截 %s %s: 不在下跌中买（B/C ✓）" % (symbol, trigger_kind), flush=True)
                         t_db.update_trigger_status(trig_id, "blocked",
                                                    reason="[COND-TIMING] 条件单买入时点闸：不在下跌中买（B/C）")
+                    elif _wgb:
+                        exec_ok = False
+                        print("[TMonitor] 条件单浪型闸拦截 %s %s: %s" % (symbol, trigger_kind, str(_wgwhy)[:110]), flush=True)
+                        t_db.update_trigger_status(trig_id, "blocked", reason="[WAVE-COND] " + str(_wgwhy)[:200])
                     elif _ocb:
                         exec_ok = False
                         print(f"[TMonitor] 条件单开盘不追高拦截 {symbol} {trigger_kind}: {str(_ocwhy)[:90]}")

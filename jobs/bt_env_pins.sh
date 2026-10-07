@@ -1028,3 +1028,15 @@ export WOLF_STRONG_TREND_T_ONLY='1'
 #   修 ✓：**在 pins 里显式 export** ⇒ 所有子进程（bt_agent_loop / bt_day_legs / bt_llm_replay …）都看得见 ✓
 #     ⇒ ①`qq_notifier` 的离线早退生效 ✓ ②守卫按 1 自装 ✓ ③告警噪声消失 ✓
 export BT_NET_OFFLINE='1'
+
+# ★★ 账本 §9.746 ✓（用户 2026-10-07：「**条件命中自动执行也要过波浪浪型检查**」✓）：
+#   条件单自动执行那条路原先**不过任何浪型闸** ✗ ⇒ `t_only` 那几天仍成交
+#   `trend_break_buy`（趋势突破建仓 ✗ = 狼大说的"新建主升" ✗）：
+#     SH688403 汇成 ¥101,420 ✓、0105 SZ002156 ¥98,575 ✓、0114 SZ300346 ¥96,509 ✓
+#   ⇒ 语义逐字照抄狼大（`apps/main_line/wave_agent.py:259-272` ✓）：
+#       build ⇒ 放行 ✓｜defense/exit ⇒ 拦所有买 ✗｜side ⇒ 需人工(条件单不自动 ✗)
+#       t_only ⇒ T 腿放行 ✓；建仓/主升腿拦 ✗；埋伏腿由 WOLF_WAVE_COND_AMBUSH 定 ✓
+#   代码侧开关默认 0 ✓（**生产逐位不变** ✓）；回测在这里置 1 ✓
+export WOLF_WAVE_COND_GATE='1'
+# 埋伏腿在 t_only 下：默认 block（它是**新开仓** ✓）；要放行改成 allow ✓
+export WOLF_WAVE_COND_AMBUSH='block'

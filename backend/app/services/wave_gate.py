@@ -299,3 +299,106 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
     return {"allowed": True, "mode": "auto", "regime": "ACTIVE",
             "gate": "ALLOWED",
             "why": str(_why or ("wave_state.level=%s（非 down ✓）" % str(w.get("level"))))[:100]}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# **条件命中自动执行**也要过浪型检查（账本 §9.746 ✓）
+#
+# 用户 2026-10-07：「**条件命中自动执行也要过波浪浪型检查**」✓
+#
+# 背景 ✗：自动执行那条路（`t_monitor` 里 `reason=条件命中自动执行（<kind>）` ✓）
+#   原先**不经过任何浪型闸** ✗ —— 它只过「开盘不追高 / B·C 买点 / G3」等闸 ✓
+#   ⇒ 实测：`t_only` 那几天仍成交 `trend_break_buy`（趋势突破建仓 ✗）
+#     （SH688403 汇成 ¥101,420 ✗、以及 0105 SZ002156 ¥98,575、0114 SZ300346 ¥96,509 ✓）
+#   ⇒ 而狼大口径原文（`apps/main_line/wave_agent.py:259-272` ✓）明说：
+#       `t_only` ⇒ 「只做T、**不追不新建主升**」✓ ⇒ **趋势突破建仓正是"新建主升"** ✗
+#
+# 判定（**逐字照抄狼大，不自己编** ✓）：
+#   operation = build     ⇒ 放行 ✓（建仓/追正是它允许的 ✓）
+#   operation = defense   ⇒ **拦所有买** ✗（防御不建仓 ✓）
+#   operation = exit      ⇒ **拦所有买** ✗（兑现降仓 ✓）
+#   operation = side      ⇒ **不自动执行** ✗（观望/调仓换股 ⇒ 买类需人工确认 ✓，
+#                            自动路径没法问人 ⇒ 交给 AI/人工，不由条件单直接落 ✓）
+#   operation = t_only    ⇒ 按**腿型**分：
+#                             · T 腿（`wolf_zheng_t_buy` 等 ✓）⇒ **放行** ✓（它就是"只做T" ✓）
+#                             · 建仓/主升腿（`trend_break_buy` / `wolf_build` /
+#                               `buy_253` / `buy_254` ✓）⇒ **拦** ✗（不新建主升 ✓）
+#                             · 埋伏腿（`*ambush*` ✓）⇒ 由 `WOLF_WAVE_COND_AMBUSH` 定 ✓
+#                               （**默认 block** ✓ —— 它是**新开仓** ✓；要放行设 allow ✓）
+#   operation 缺失        ⇒ **放行** ✓ ＋ 打一行日志 ✓（不静默整片禁买 ✗）
+#
+# 开关 ✓：`WOLF_WAVE_COND_GATE`（**库内默认 0** ⇒ 生产逐位不变 ✓；回测由 pins 置 1 ✓）
+# 卖类 ✓：**永不由本函数拦** ✗（调用方只对买入方向调用 ✓；止血/兑现必须能执行 ✓）
+# ══════════════════════════════════════════════════════════════════════════
+
+# 腿型分类（按 trigger_kind ✓；命中即归类 ✓）
+_T_LEG_KEYS = ("wolf_zheng_t_buy", "zheng_t", "t_buy", "sell_then_buy_back", "t_low_buy")
+_BUILD_LEG_KEYS = ("trend_break_buy", "wolf_build", "buy_253", "buy_254", "build")
+_AMBUSH_LEG_KEYS = ("ambush",)
+
+
+def classify_buy_leg(kind: str) -> str:
+    """把买入腿型归成 `t` / `build` / `ambush` / `other` ✓（只按名字 ✓，不猜语义 ✓）"""
+    k = str(kind or "").strip().lower()
+    if any(x in k for x in _AMBUSH_LEG_KEYS):
+        return "ambush"
+    if any(x in k for x in _T_LEG_KEYS):
+        return "t"
+    if any(x in k for x in _BUILD_LEG_KEYS):
+        return "build"
+    return "other"
+
+
+def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
+    """条件单买入是否被**浪型**拦下 ⇒ `(blocked: bool, why: str)` ✓
+
+    · 开关关（默认 ✓）⇒ 恒 `(False, "")` ✓（生产零影响 ✓）
+    · ★ **卖类永不拦** ✓ —— 本函数**自带**这层保护 ✓（不依赖调用方 ✓）：
+      止血/兑现/减仓必须能执行 ✓（与 `check_gate` 里"卖类不受环境门限制"同一条原则 ✓）
+    · ★ **未归类**的买入（`custom_buy` 等 ✓）由 `WOLF_WAVE_COND_OTHER` 定 ✓
+      （**默认 block** ✓ —— 未知腿型在 t_only 下保守处理 ✓；要放行设 allow ✓）
+    """
+    _k = str(kind or "").strip().lower()
+    if any(t in _k for t in ("sell", "reduce")):
+        return False, ""                     # ★ 卖类永不放行限制 ✓
+    if str(os.getenv("WOLF_WAVE_COND_GATE", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+        return False, ""
+    w = ensure_wave(as_of=as_of or sim_day8() or None)
+    op = str((w or {}).get("operation") or "").strip().lower()
+    lv = str((w or {}).get("level") or "")
+    sb = str((w or {}).get("sub_level") or "")
+    _wd = str((w or {}).get("date") or "?")
+    tag = "%s/%s" % (lv or "?", sb or "?")
+    if not op:
+        print("[wave_gate] 条件单浪型闸：operation 缺失（%s）⇒ 放行 ✓" % tag, file=sys.stderr, flush=True)
+        return False, ""
+    if op == "build":
+        return False, ""
+    if op in ("defense", "exit"):
+        return True, ("浪型 %s·%s ⇒ 建仓类不放行 ✓（狼大口径：%s，档 date=%s）"
+                      % (tag, op, "防御不建仓" if op == "defense" else "兑现降仓", _wd))
+    if op == "side":
+        return True, ("浪型 %s·side ⇒ 买类需人工确认 ✓，**条件单不自动执行** ✗（档 date=%s）" % (tag, _wd))
+    if op == "t_only":
+        cls = classify_buy_leg(kind)
+        if cls == "t":
+            return False, ""
+        if cls == "ambush":
+            _amb = str(os.getenv("WOLF_WAVE_COND_AMBUSH", "block")).strip().lower()
+            if _amb in ("allow", "1", "true", "yes"):
+                return False, ""
+            return True, ("浪型 %s·t_only ⇒ 埋伏腿是**新开仓** ✗，条件单不自动执行 ✓"
+                          "（要放行设 WOLF_WAVE_COND_AMBUSH=allow ✓；档 date=%s）" % (tag, _wd))
+        if cls == "other":
+            _oth = str(os.getenv("WOLF_WAVE_COND_OTHER", "block")).strip().lower()
+            if _oth in ("allow", "1", "true", "yes"):
+                return False, ""
+            return True, ("浪型 %s·t_only ⇒ 「只做T、**不追不新建主升**」✓，本腿（%s）**未归类** ✗"
+                          "⇒ 保守拦下 ✓（要放行设 WOLF_WAVE_COND_OTHER=allow ✓；档 date=%s）"
+                          % (tag, str(kind)[:28], _wd))
+        return True, ("浪型 %s·t_only ⇒ 「只做T、**不追不新建主升**」✓，"
+                      "本腿（%s，归类=%s）属建仓/主升 ✗ 不放行（档 date=%s）"
+                      % (tag, str(kind)[:28], cls, _wd))
+    # 未知 operation ⇒ 放行 ＋ 留痕 ✓（不静默整片禁买 ✗）
+    print("[wave_gate] 条件单浪型闸：未知 operation=%s（%s）⇒ 放行 ✓" % (op, tag), file=sys.stderr, flush=True)
+    return False, ""
