@@ -323,6 +323,44 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"建议买价={trigger.get('suggest_bid_price')} 建议卖价={trigger.get('suggest_ask_price')} "
         f"事件#{trigger.get('id')} 条件#{trigger.get('condition_id')}。"
     )
+    # ★★ 账本 §9.730 ✓（用真实消息核对后实测 ✗）：**规则证据根本没进消息** ——
+    #   消息里只有「触发价/现价/建议买价/建议卖价」✗，而决策理由却在大批量引用
+    #   「量比 X」「日内分位 Y」「规则原文」✗（引用率：量比 52% ✓、止损 46% ✓、分位 40% ✓）
+    #   ⇒ 这些值**在 t_triggers.snapshot 里全都有** ✓（200 条抽样已验证字段全集 ✓）
+    #     但从未渲染进唤醒消息 ✗（§9.635 又把历史记录里的 `input_snapshot` 裁掉了 ✓）
+    #   ⇒ ⇒ **等于让 AI 引用它没收到的数字** ✗ ⇒ 这里把**最高频的 5 项**补渲染 ✓
+    #   （按用户「够用即可」口径 ✓：只补被真正引用的，不补 MA/RSI/分钟/资金流 ✗）
+    _sn = trigger.get("snapshot")
+    if isinstance(_sn, str):
+        try:
+            import json as _js_sn
+            _sn = _js_sn.loads(_sn)
+        except Exception:
+            _sn = None
+    if isinstance(_sn, dict) and _sn:
+        _parts = []
+        for _k, _label, _fmt in (
+            ("vol_ratio", "量比", "%.2f"),
+            ("day_quantile", "日内分位", "%.1f"),
+            ("day_rise_pct", "当日涨幅", "%+.2f%%"),
+            ("prev_low", "前低", "%.3f"),
+            ("today_low", "今日最低", "%.3f"),
+            ("amplitude", "振幅", "%.2f%%"),
+            ("turnover_rate", "换手", "%.2f%%"),
+            ("slippage_budget", "滑点预算", "%.3f"),
+        ):
+            _v = _sn.get(_k)
+            if _v is None:
+                continue
+            try:
+                _parts.append("%s=" % _label + (_fmt % float(_v)))
+            except Exception:
+                _parts.append("%s=%s" % (_label, str(_v)[:12]))
+        if _parts:
+            msg += "【快照证据】" + " ".join(_parts) + "\n"
+        _rule = _sn.get("wolf_rule")
+        if _rule:
+            msg += "【规则原文】%s\n" % str(_rule)[:220]
     # 高抛卖腿是兑现利润的正向动作：连续命中告警不适用于高抛（高抛越多越好）
     if hit_alert and trigger.get("event_type") != "high_sell_then_buy_back":
         msg += (f"⚠️ 该条件已连续命中 {consec} 次且未见实质改善——你必须二选一："
