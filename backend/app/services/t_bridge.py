@@ -496,10 +496,14 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
                 if isinstance(_v, bool):
                     _pix.append("%s=%s" % (_k, "T" if _v else "F"))
                 else:
-                    try:
+                    # ★★ 账本 §9.737 ✓（实测告警 ✗ `could not convert string to float: 'bai'`）：
+                    #   `huang_bai_side` 是**字符串** "huang"/"bai" ✗ ⇒ 直接 float() 必炸 ✓
+                    #   而项目的"静默留痕"钩子会把**被吞掉的异常**照报成 ALERT ✓
+                    #   ⇒ 修法不是"吞掉"，而是**根本不抛** ✓：先判类型，字符串原样渲染 ✓
+                    if isinstance(_v, (int, float)) and not isinstance(_v, bool):
                         _pix.append("%s=%.3f" % (_k, float(_v)))
-                    except Exception:
-                        _pix.append("%s=%s" % (_k, str(_v)[:10]))
+                    else:
+                        _pix.append("%s=%s" % (_k, str(_v)[:12]))
             if _pix:
                 msg += "【大盘/黄白线】" + " ".join(_pix) + "\n"
         _tc = _f.get("tech") or {}
@@ -510,10 +514,10 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
                 _v = _tc.get(_k)
                 if _v is None:
                     continue
-                try:
+                if isinstance(_v, (int, float)) and not isinstance(_v, bool):
                     _ptc.append("%s=%.2f" % (_k, float(_v)))
-                except Exception:
-                    _ptc.append("%s=%s" % (_k, str(_v)[:10]))
+                else:
+                    _ptc.append("%s=%s" % (_k, str(_v)[:12]))
             if _ptc:
                 msg += "【技术指标】" + " ".join(_ptc) + "\n"
     payload = {
