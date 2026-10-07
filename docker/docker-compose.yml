@@ -116,6 +116,18 @@ services:
       resources:
         limits:
           memory: 4G
+    # ★★ 账本 §9.751 ✓（用户 2026-10-07：「dsh 镜像我们升级过了…**生产也要使用新版 dsh**」✓）：
+    #   原先只写 `build:` ⇒ 镜像名只由 compose 工程隐含决定（`docker-dsh` ✗ 无版本 ✗）
+    #   ⇒ 生产可能**沿用旧镜像 / 在本机重建成不同版本** ✗ ⇒ 版本不可控 ✗
+    #   ⇒ 现在**显式钉版本** ✓：`image: marcus-dsh:0.2rc4` ✓（与 `docker-dsh:latest` 同一 ID ✓）
+    #      `build:` 保留 ✓ ⇒ 本地仍可重建，且**重建后自动打上这个版本标签** ✓
+    #   生产上线 ✓（二选一，服务名是 `dsh` ✓）：
+#     · `docker compose build dsh` ⇒ 用仓库当前 Dockerfile 重建并打上该标签 ✓（**推荐** ✓ 版本可控 ✓）
+#     · `docker pull marcus-dsh:0.2rc4`（若已推registry ✓）
+#   然后 `docker compose up -d dsh` ✓（会按新镜像重建容器 ✓）
+    #   ★ 只读挂载 `/opt/dsh-plugins/cordis.patch.yml`（§9.727 ✓）**保留** ✓：
+    #     新版镜像里已是 3935 字节 ✓（实测 ✓），但仍留作"双保险" ✓（防镜像层再被旧版覆盖 ✗）
+    image: marcus-dsh:0.2rc4
     build:
       context: ..
       dockerfile: docker/Dockerfile.dsh.020
