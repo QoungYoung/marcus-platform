@@ -63,7 +63,7 @@ def _position_summary(symbol: str) -> Dict[str, Any]:
         return {"symbol": symbol, "error": str(e)[:100]}
 
 
-def _recent_decisions(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
+def _recent_decisions(symbol: str, limit: int = 3) -> List[Dict[str, Any]]:
     """最近 N 次 AI 决策（t_ai_actions 倒序，含 outcome 结果摘要），唤醒上下文供 AI 参考历史判断。
 
     ★ 账本 §9.635（用户：agent loop 好慢，精简唤醒上下文 ✓）：
@@ -340,6 +340,13 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"输出决策 JSON："
         f'{{"action": "exec|wait|abandon|update_condition", "reason": "一句话理由", '
         f'"condition": {{...}}}}（condition 仅在 update_condition 时提供，含 symbol/trigger_kind/target_price 等）。'
+        # ★★ 账本 §9.729 ✓（本轮实测 ✗）：**AI 在编指标** ——
+        #   抽样 200 条触发快照：**没有任何 RSI/KDJ/MACD 字段** ✗
+        #   但 164 条决策里 **38 条（23%）** 的理由引用了它们 ✗；而工具全程只被调过 3 次 ✓
+        #   ⇒ **绝大多数是编出来的** ✗（编造依据 ≠ 对齐狼大 ✓）⇒ 明确禁止 ✓
+        f"★ 判定只能用**本消息已给出**的字段（现价/建议价/止损线/量比/日内分位/涨幅/前低/"
+        f"规则证据/持仓/regime/历史决策）✓；**本消息未提供的指标一律不得引用** ✗"
+        f"（RSI/KDJ/MACD/均线/资金流/分钟走势等 **均不在数据内** ✗，写了就是编造 ✓）。"
         f"exec 将按触发快照的『建议价』执行（低吸用建议买价、高抛用建议卖价）。"
         f"数量可选：① 不输出 volume/amount → 系统按可卖底仓档位自动推导；"
         f"② 在 JSON 输出建议量 volume(股,100整数倍) 或 amount(金额元) → 系统按 min(建议量, 档位上限) 执行，"
@@ -373,7 +380,7 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     recents = ctx.get("recent_decisions") or []
     if recents:
         lines = ["【历史决策参考（最近 " + str(len(recents)) + " 次，含结果）】"]
-        for r in recents[:5]:
+        for r in recents[:3]:
             at = r.get("action_type", "")
             oc = r.get("outcome") or {}
             oc_sum = _outcome_summary(oc) if oc else "（无结果）"
