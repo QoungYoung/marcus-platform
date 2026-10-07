@@ -133,7 +133,14 @@ services:
       # DSH 文件沙箱：workspace-write（/app 工作区 + /tmp 可写），否则桥接会话只读
       DSH_PERMISSION_MODE: workspace-write
       # DeepSeek 端点：服务器 key 走 OpenCode 网关（.env 的 DEEPSEEK_API_HOST，如 opencode.ai/zen/go）
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_API_HOST:-https://opencode.ai/zen/go}/v1
+      # ★ 账本 §9.724 ✓（用户 2026-10-07「前三天怎么这么快」⇒ 追出 AI 全程空转 ✗）：
+      #   原写法 `${DEEPSEEK_API_HOST:-…}/v1` ✗ —— 而 .env 里 DEEPSEEK_API_HOST **没有协议头** ✗
+      #   ⇒ 拼出 `api.deepseek.com/v1` ⇒ 适配器 `TypeError: Invalid URL` ✗
+      #   ⇒ **provider 三个条目全不激活** ✗ ⇒ 回合里没有模型 ⇒ 每次唤醒**空回复** ✗
+      #   ⇒ 系统退回「规则兜底」⇒ 表面"跑得飞快"（1 秒/次 ✓）实则 **AI 全程没参与** ✗
+      #   ★ 修为：**直接用完整 URL**（带协议头 ＋ `/anthropic` 路径 ✓，与官方 Anthropic 兼容端点一致 ✓）
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/anthropic}
+      DEEPSEEK_API_HOST: ${DEEPSEEK_API_HOST:-api.deepseek.com}
       DEEPSEEK_SEARCH_BASE_URL: https://api.deepseek.com/anthropic/v1
       DEEPSEEK_MODEL: deepseek-flash
       # ★ 账本 §9.697 ✓（② 桥侧回合超时）：默认 0=关 ✓（生产零影响 ✓）
