@@ -647,6 +647,78 @@ def _bridge_base_url() -> str:
     return raw.rsplit("/", 1)[0] if "/" in raw else raw
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# A-2（账本 §9.749 ✓，用户 2026-10-07「继续」✓）：**AI 写的低吸挂价也要夹**
+#
+# 为什么 ✗：§9.748 把「入场线」夹上了上限 ✓，但实测发现那批被拦的高价触发
+#   （如 `SZ002792@52.10` ✓）**不是**来自入场线（入场线算 41.28 ✓ 远低于上限 ✗）
+#   ⇒ 它们来自**这条路** ✗：`quote_price=现价` 交给 AI ⇒ AI 基于现价设"低吸"条件 ✗
+#   ⇒ 一触发就被「加仓口径（高于本轮首笔买入价 +4.0%）」拦 ✗
+#      （实测：`wolf_zheng_t_buy` 37 触发 ⇒ 30 拦，24 次 > 首笔×1.04，成交仅 2 笔 ✓）
+#
+# 依据 ✓（**提示词原文**，不自己编 ✗）：`prompt_seeds.py:973-976`
+#   「★ **关键位优先（用户口径原文）**：好票跌到事先画好的线（13/34/60/144 等）…
+#     选最贴近现价的那条线；**严禁挂现价 / 市价 / 成本附近** ✗」
+#   ＋ 狼大：「怕忍不住买回来…**找低位的线挂进去 挂远一点**」（2026-04-10）
+#
+# 做法 ✓：返回前把**低吸类**条件的挂价夹到
+#   `min(现价下方最近均线, cost × (1+cap%))` ✓；无关键位可用时 ⇒ 只夹到上限 ✓
+# 开关 ✓：`WOLF_T_BUY_CAP_104`（**库内默认 0 ⇒ 生产逐位不变** ✓，与 §9.748 同一开关 ✓）
+# 关掉时 ✓：**逐字原样返回** ✓（零影响 ✓）
+# ══════════════════════════════════════════════════════════════════════════
+_LOW_BUY_KINDS = ("low_buy", "wolf_zheng_t_buy", "custom_prevlow", "panic_vibrate")
+
+
+def _cap_ai_low_buy(symbol: str, cost: float, quote_price: Optional[float],
+                    conditions: list) -> list:
+    """把 AI 生成的**低吸挂价**夹到 `min(关键位, 成本×1.04)` ✓（开关关 ⇒ 原样 ✓）"""
+    try:
+        if str(os.getenv("WOLF_T_BUY_CAP_104", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+            return conditions
+        c0 = float(cost or 0)
+        if c0 <= 0 or not conditions:
+            return conditions
+        pct = float(os.getenv("WOLF_T_BUY_CAP_PCT", "4.0") or 4.0)
+        cap = round(c0 * (1.0 + pct / 100.0), 2)
+        day = os.getenv("BT_ASOF_DAY", "") or ""
+        if not day:
+            try:
+                _st = os.getenv("BT_ASOF_STATE") or os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__))))), ".dsh-tmp", "wolfbt", "asof_state.json")
+                day = str((json.load(open(_st, encoding="utf-8")) or {}).get("day") or "").replace("-", "")
+            except Exception:
+                day = ""
+        limit = cap
+        try:
+            from app.services import t_entry_lines as _EL
+            _ln = _EL.capped_line_target(symbol, float(quote_price or c0), c0, day=day)
+            if _ln and float(_ln) > 0:
+                limit = min(cap, round(float(_ln), 2))
+        except Exception as _e_ln:
+            print(f"[t-bridge] 低吸夹上限：取关键位失败 ⇒ 只用上限 {cap}: {str(_e_ln)[:60]}")
+        n = 0
+        for cd in conditions:
+            try:
+                k = str(cd.get("trigger_kind") or cd.get("kind") or "")
+                if not any(t in k for t in _LOW_BUY_KINDS):
+                    continue
+                t = cd.get("target_price", cd.get("trigger_price"))
+                if t is None:
+                    continue
+                if float(t) > limit:
+                    cd["target_price"] = round(limit, 2)
+                    n += 1
+            except Exception:
+                continue
+        if n:
+            print(f"[t-bridge] 低吸挂价夹上限 {symbol}: {n} 条 ⇒ ≤{limit}（成本{c0}×1+{pct}%，关键位口径 ✓）")
+        return conditions
+    except Exception as _e_cap:
+        print(f"[t-bridge] 低吸夹上限异常(原样返回 ✓): {str(_e_cap)[:70]}")
+        return conditions
+
+
 def generate_conditions(symbol: str, cost: float, amp_med: Optional[float] = None,
                         trend: Optional[dict] = None, regime: Optional[dict] = None,
                         context: Optional[dict] = None, session_id: Optional[str] = None,
@@ -696,6 +768,9 @@ def generate_conditions(symbol: str, cost: float, amp_med: Optional[float] = Non
                 return None
             result = {"conditions": conditions, "source": source,
                       "reason": body.get("reason") or "AI 生成"}
+            # ★ A-2（§9.749 ✓）：AI 写的低吸挂价夹到 min(关键位, 成本×1.04) ✓
+            #   —— 否则 AI 拿现价挂"低吸"✗ ⇒ 一触发就被「加仓口径」拦 ✗
+            result["conditions"] = _cap_ai_low_buy(symbol, cost, quote_price, result["conditions"])
             if use_cache:
                 _cond_gen_cache[cache_key] = result
             print(f"[t-bridge] AI 条件生成 {symbol} → {len(conditions)} 条 (source={source}, "
