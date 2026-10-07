@@ -1386,3 +1386,35 @@ def test_promote_add_requires_true_promotion_and_not_limitdown():
     segT = mon_all[max(0, j - 1400):j + 900]
     assert "_okT, _whyT" in segT and "_promoted = False" in segT, \
         "趋势闸不通过 ⇒ 必须把 _promoted 置 False（不转正 ✓）"
+
+
+def test_strong_trend_t_only_guard():
+    """★ 用户 2026-10-07 复盘拍板「**强的留 弱的丢**」—— 趋势强时做T减仓腿只动 T 仓（账本 §9.718 ✓）。
+
+    病灶（实测 ✓）：SZ002156 被**一路卖到 0 股** ✗（01-08~01-19 六笔：40.47/42.39/43.15/42.66/40.30/46.68 ✓），
+      而它随后涨到 **56.78** ✗ ⇒ 该票「已实现 +4,212」vs「持有不动 **+31,054**」⇒ 差 **−26,842** ✗
+      —— 全样本里**唯一**明确的"操作反噬" ✓（其余 18 只操作都是正贡献 ✓）。
+    根因 ✓：卖腿底仓 floor 只作用于「止盈类」✓，而它的卖出理由是「防御性减仓」「量能分层离场」✗
+      ⇒ 被豁免 ⇒ **底仓被一起卖掉** ✗。
+
+    口径（照用户原话 ✓）：**趋势强（MA 多头/未破位）⇒ 做T减仓腿只动 T 仓、不碰底仓** ✓
+      · 判据**复用建仓那道** `t_build.trend_gate` ✓（不另立口径 ✓）
+      · ★ **止损腿永不介入** ✓（「止血动作必须能执行」✓ 优先 ✓）
+      · 开关 `WOLF_STRONG_TREND_T_ONLY`（**库内默认 0** ⇒ 生产零影响 ✓；pins 置 1 ✓）
+    """
+    import os
+    gw = open(os.path.join(_ROOT, "backend", "app", "services", "t_gateway.py"), encoding="utf-8").read()
+    assert 'os.getenv("WOLF_STRONG_TREND_T_ONLY", "0")' in gw, "须有开关且**库内默认关** ✓"
+    assert "def strong_trend(symbol: str) -> bool:" in gw, "须有趋势强判定 ✓"
+    assert "from app.services.t_build import trend_gate as _tg" in gw, "判据须**复用建仓那道**（不另立口径 ✓）"
+    assert "_STRONG_TREND_CACHE" in gw and "(标的, 模拟日)" in gw, "须有 (标的,模拟日) 缓存 ✓"
+    # force 语义：止损腿永不 force ✓
+    assert "if is_stop_loss and force:" in gw and "force = False" in gw, "止损腿永不受 force 约束 ✓"
+    assert "force: bool = False" in gw, "sell_floor_cap 须支持 force ✓"
+    # 调用点：趋势强 ⇒ force ✓，且在**卖腿**分支里 ✓
+    i = gw.index("_force_floor = False")
+    seg = gw[max(0, i - 700):i + 900]
+    assert 'if _STRONG_T_ONLY and not is_stop_loss:' in seg, "止损腿不得进入 force 判定 ✓"
+    assert "force=_force_floor" in seg, "须把 force 传进 sell_floor_cap ✓"
+    pins = open(os.path.join(_ROOT, "jobs", "bt_env_pins.sh"), encoding="utf-8").read()
+    assert "export WOLF_STRONG_TREND_T_ONLY='1'" in pins, "回测须打开 ✓"

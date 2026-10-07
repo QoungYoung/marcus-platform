@@ -223,6 +223,67 @@ _BUILD_CAP_KINDS = {k.strip() for k in str(os.getenv(
 _SELL_FLOOR_ENFORCE = os.getenv("WOLF_SELL_FLOOR_ENFORCE", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+# ★★ 账本 §9.718 ✓（用户 2026-10-07 复盘拍板方向 ✓：「**强的留 弱的丢**」）：
+#   问题（实测 ✓）：SZ002156 被**一路卖到 0 股** ✗ ——
+#     01-05/06 建仓 1800 股 ⇒ 01-08~01-19 六笔卖出（40.47/42.39/43.15/42.66/40.30/46.68 ✓）⇒ 持 0 ✗
+#     而它随后涨到 **56.78** ✗ ⇒ 该票"已实现 +4,212" vs "持有不动 **+31,054**" ⇒ **差 −26,842** ✗
+#       （全样本里**唯一**明确的"操作反噬"✓；其余 18 只操作都是正贡献 ✓）
+#   根因 ✓：卖腿 floor（`WOLF_SELL_FLOOR_ENFORCE` ✓）**只作用于"止盈类"** ✓，
+#     而该票的卖出理由多是「**防御性减仓**」「**量能分层离场**」「前次 wait 的④已不成立」✗
+#     ⇒ 被 `sell_floor_applies` **豁免** ✓ ⇒ **底仓被一起卖掉** ✗
+#     本意（"止血动作必须能执行"✓）没错 ✓，但**趋势强时**这类减仓**不是止血**、是做T噪声 ✗
+#   口径（照用户原话 ✓）：**趋势强（MA 多头/未破位 ✓）时，做T的减仓腿只动 T 仓、不碰底仓** ✓
+#     判据复用建仓那道 **`t_build.trend_gate`** ✓（同一套 MA20 方向/均线排列/反弹陷阱 ✓，不另立口径 ✓）
+#     ★ **止损腿（is_stop_loss=True）永不介入** ✓ —— 「止血动作必须能执行」✓ 仍优先 ✓
+#   开关：`WOLF_STRONG_TREND_T_ONLY`（**库内默认 0** ⇒ 生产零影响 ✓；回测由 pins 置 1 ✓）
+_STRONG_T_ONLY = str(os.getenv("WOLF_STRONG_TREND_T_ONLY", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def strong_trend_t_only_enabled() -> bool:
+    """开关是否打开 ✓（供测试与自检 ✓）。"""
+    return bool(_STRONG_T_ONLY)
+
+
+def _sim_day8() -> str:
+    """当前**模拟日**（回测 = DATA_DIR 末段 ✓；生产 = 今天 ✓）。与 wave_gate.sim_day8 同口径 ✓。"""
+    try:
+        _seg = os.path.basename(os.path.normpath(os.environ.get("DATA_DIR", "") or ""))
+        if len(_seg) == 8 and _seg.isdigit():
+            return _seg
+    except Exception as _e_sd:
+        print("[gateway] _sim_day8 取 DATA_DIR 末段失败: %s" % str(_e_sd)[:60], flush=True)
+    try:
+        import datetime as _d8
+        return _d8.datetime.now().strftime("%Y%m%d")
+    except Exception:
+        return ""
+
+
+_STRONG_TREND_CACHE: Dict[str, bool] = {}
+
+
+def strong_trend(symbol: str) -> bool:
+    """该标的当前是否**趋势强** ✓ —— 复用建仓判据 `t_build.trend_gate`（不另立口径 ✓）。
+
+    ★ 缓存粒度 = **(标的, 模拟日)** ✓：卖腿可能一分钟来好几条 ✓，而趋势判据一天内不变 ✓
+      ⇒ 避免每条卖腿都去取数（实测取数在离线环境会**卡住** ✗ ⇒ 缓存同时也是一道保险 ✓）。
+    取数失败/判据异常 ⇒ **False**（= 不介入 ⇒ 保持旧行为 ✓，fail-safe ✓）。
+    """
+    _key = "%s|%s" % (str(symbol or ""), _sim_day8())
+    if _key in _STRONG_TREND_CACHE:
+        return _STRONG_TREND_CACHE[_key]
+    _res = False
+    try:
+        from app.services.t_build import trend_gate as _tg
+        _ok, _why = _tg(symbol)
+        _res = bool(_ok)
+    except Exception as _e_st:
+        print("[gateway] 趋势强判定失败(不介入): %s" % str(_e_st)[:70], flush=True)
+        _res = False
+    _STRONG_TREND_CACHE[_key] = _res
+    return _res
+
+
 def sell_floor_applies(reason: str = "", is_stop_loss: bool = False, kind: str = "") -> bool:
     """底仓 floor 是否作用于这笔卖腿 —— **只作用于「止盈类」**（与网关 0.5d 方案③同一判据）。
 
@@ -251,14 +312,20 @@ def sell_floor_applies(reason: str = "", is_stop_loss: bool = False, kind: str =
 def sell_floor_cap(account_id: str, symbol: str, volume: int,
                    sellable: Optional[int] = None,
                    reason: str = "", is_stop_loss: bool = False,
-                   kind: str = "") -> Tuple[int, str]:
-    """把**止盈类**卖腿量收敛到 T 仓空间。返回 (允许卖量, 归因)。默认关/非止盈类 ⇒ 原值。"""
+                   kind: str = "", force: bool = False) -> Tuple[int, str]:
+    """把**止盈类**卖腿量收敛到 T 仓空间。返回 (允许卖量, 归因)。默认关/非止盈类 ⇒ 原值。
+
+    `force=True`（账本 §9.718 ✓）：**趋势强**时对**减仓/离场类**也生效 ✓
+      —— 仍然**只收紧、不放大** ✓，且**止损腿永不 force** ✓（止血优先 ✓）。
+    """
     v = int(volume or 0)
     if v <= 0:
         return v, "底仓floor未介入（无量）"
     if not _SELL_FLOOR_ENFORCE:
         return v, "底仓floor未介入（WOLF_SELL_FLOOR_ENFORCE=0）"
-    if not sell_floor_applies(reason, is_stop_loss, kind):
+    if is_stop_loss and force:
+        force = False          # ★ 止损腿永不 force ✓（「止血动作必须能执行」✓）
+    if not force and not sell_floor_applies(reason, is_stop_loss, kind):
         return v, "底仓floor未介入（非止盈类：止损/破位/减仓/未知一律放行）"
     try:
         sel = int(sellable) if sellable is not None else \
@@ -2987,8 +3054,14 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     #   一起卖掉（详见模块顶部该开关的病灶说明）。这里把**止盈类**卖量收敛到 T 仓空间，只收紧、不放大；
     #   ⚠️ 判据必须是**正向**的"是不是止盈腿"——用"豁免关键词"会被文案「未破止损」骗到（见 sell_floor_applies）。
     if str(side).lower() in ("sell", "卖出"):
+        # ★ §9.718 ✓：趋势强 ⇒ **减仓/离场类也只动 T 仓**（"强的留" ✓）—— 只收紧、不放大 ✓
+        _force_floor = False
+        if _STRONG_T_ONLY and not is_stop_loss:
+            _force_floor = strong_trend(symbol)
+            if _force_floor:
+                print("[gateway] %s 趋势强 ⇒ 卖腿只动 T 仓（§9.718 ✓，不碰底仓）" % symbol, flush=True)
         _capv, _capwhy = sell_floor_cap(account_id, symbol, volume,
-                                        reason=reason, is_stop_loss=is_stop_loss)
+                                        reason=reason, is_stop_loss=is_stop_loss, force=_force_floor)
         if _capv != int(volume or 0):
             if _capv <= 0:
                 _m = "底仓floor：%s 止盈腿收敛为 0（%s）⇒ 拒绝（非止盈类不受此限）" % (symbol, _capwhy)
