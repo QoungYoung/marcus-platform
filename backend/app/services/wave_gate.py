@@ -363,6 +363,20 @@ def _wave_from_sandbox_day(sim8: str) -> Optional[dict]:
     """
     if not sim8:
         return None
+    # ★★ 账本 §9.755 补 ✓（用户 2026-10-07「生产不受影响吧」✗）：**仅回测模式启用** ✓
+    #   为什么必须加这道护栏 ✗：本函数会去看 `data/_bt_t35d/<日期>/wave_state.json` 这类
+    #     **回测沙箱产物** ✗ ⇒ 生产若在同机部署、且沙箱里恰好有"今天"的档 ✗
+    #     ⇒ 生产就可能**误读回测档** ✗（口径被回测数据污染 ✗）—— 这是绝不能有的 ✗
+    #   ⇒ 判据 ✓：只要进程带任何**回测专用**环境变量 ⇒ 才认为是回测 ✓
+    #      （`BT_ROOT` / `WOLF_SIM_DAY` / `BT_ASOF_DAY` / `BT_ASOF_STATE` / `BT_NET_OFFLINE=1`）
+    #   ⇒ 生产（这些都不设 ✓）⇒ 本函数**直接返回 None** ✓ ⇒ 回落到 `ensure_wave` ✓
+    #      ＝ **生产行为逐位不变** ✓（守"生产零影响"✓）
+    _bt = any(str(os.getenv(k) or '').strip() for k in
+              ('BT_ROOT', 'WOLF_SIM_DAY', 'BT_ASOF_DAY', 'BT_ASOF_STATE'))
+    if not _bt:
+        _bt = str(os.getenv('BT_NET_OFFLINE', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    if not _bt:
+        return None
     d8 = str(sim8).replace('-', '')[:8]
     dash = '%s-%s-%s' % (d8[:4], d8[4:6], d8[6:8]) if len(d8) == 8 else d8
     repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
