@@ -155,6 +155,12 @@ services:
       - "3001:3001"
     volumes:
       - ./bt_tools_allow.txt:/root/.dsh/bt_tools_allow.txt:ro   # ★ §9.722 回测工具白名单（持久化 ✓）
+      # ★ 账本 §9.727 ✓（本轮追出 ✗）：镜像里烤的 /opt/dsh-plugins/cordis.patch.yml 是**旧版**（2562 字节 ✗，
+      #   而仓库 .020 已是 3935 ✓ 含 LLM 适配器配置 ✓）⇒ 每次启动 entrypoint 都用旧版覆盖 profile ✗
+      #   ⇒ `llm-deepseek-key` 缺 baseURL/reasoningEffort/streamIdleTimeoutMs ⇒ 「Invalid URL」✗ ⇒ AI 空转 ✗
+      #   ⇒ 且 /opt/dsh-plugins **不在卷上** ✗ ⇒ docker cp 也会被"重建镜像层"覆盖 ✓
+      #   故：直接**只读挂载**仓库版到该路径 ✓（entrypoint 会把它同步进 profile ✓；重建容器也不丢 ✓）
+      - ./dsh/service.cordis.patch.yml.020:/opt/dsh-plugins/cordis.patch.yml:ro
       - ../data:/app/data
       # 只持久化 DSH 会话状态；profile 代码（bridge/npm 依赖/patch）由镜像控制，
       # 避免旧卷里的代码覆盖镜像更新（卷不再覆盖代码）
