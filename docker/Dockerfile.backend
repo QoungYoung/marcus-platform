@@ -2,6 +2,7 @@
 # Marcus Platform Backend Dockerfile
 
 FROM python:3.11-slim
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple   # ★ §9.753：可用 --build-arg 覆盖（默认清华源 ✓ 实测比公网 aliyun 快数百倍 ✓）
 
 WORKDIR /app
 
@@ -23,10 +24,10 @@ RUN apt-get update && apt-get install -y \
 COPY backend/requirements.txt .
 
 # curl_cffi 从 PyPI 官方源安装 (阿里云镜像缺 Python 3.11 对应版本)
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ curl_cffi>=0.7.0
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} curl_cffi>=0.7.0
 
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ PySide6 vnpy vnpy_paperaccount
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} PySide6 vnpy vnpy_paperaccount
 
 # Copy backend code
 COPY backend/ .

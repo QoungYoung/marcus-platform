@@ -11,6 +11,7 @@
 #   - agent-teams 从本地 tarball 安装（GitHub 国际出口慢，本地 6.1MB 打包上传）
 
 FROM node:20-slim
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple   # ★ §9.753：可用 --build-arg 覆盖（默认清华源 ✓ 实测比公网 aliyun 快数百倍 ✓）
 
 WORKDIR /app
 

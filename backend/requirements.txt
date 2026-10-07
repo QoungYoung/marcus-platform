@@ -42,3 +42,9 @@ langgraph>=1.2.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.6
 pyyaml>=6.0.1
+
+# ★★ 账本 §9.753：SQLAlchemy 的 `postgresql+psycopg://`（psycopg **v3**）方言需要它 ✓
+#   实测事故 ✗：生产 .env 的 DATABASE_URL 用 `+psycopg` ⇒ 而本文件只声明了 psycopg2(v2) ✗
+#     ⇒ 新镜像缺 v3 ⇒ backend 启动即 `ModuleNotFoundError: No module named psycopg` ✗（崩溃循环 ✓）
+#   旧镜像当年能用，是因为**人工补装过** ✗ —— 依赖必须写进声明 ✓
+psycopg[binary]>=3.1
