@@ -1017,3 +1017,64 @@ get_stock_quote / get_t_realtime_indicators 补数，禁止仅凭自述理由放
 - 所有下单经网关（熔断/STOP_ALL/涨跌停/三档资金/日上限/单票上限），ai_led 不豁免""",
     },
 }
+
+
+# ★★ 账本 §9.720 ✓（用户 2026-10-07：「不是吧，我们做T用这个提示词？」✗ —— 追查证实 ✓）：
+#   实测 ✓：做T唤醒 payload = {mode:"trade", session_id:"t-agent-<sym>"} ⇒ 桥取
+#     `TRADE_SYSTEM_PROMPT`（21,581 字符 ✗）**并且**给 t-agent 会话**额外挂** `T_BUILD_SYSTEM_PROMPT`（4,589 ✗）
+#     ⇒ 每次唤醒 system prompt **26,170 字符** ✗，其中约 1/3 是**建仓/选股/报告**内容（做T用不到 ✗）
+#   ⇒ 本函数**从 TRADE 派生**做T专用版（**纯减法、不新增任何规则** ✓；且不重复维护 ✓）：
+#     切掉 18 段明确与本角色无关的（产业链建仓计划 2,319 ✗、选股分析 856 ✗、主营业务纯度 878 ✗、
+#     全天锁定 1,767 ✗、资金强度 190 ✗、3.2/3.5 ✗、候选池 246 ✗、报告类 1,100+ ✗）
+#     ★ **保留** `T_BUILD_SYSTEM_PROMPT` 的挂载 ✓ —— 「监控条件发布规范」＋「关键位优先」**在里面** ✓，
+#       砍了就会让 AI 不知道"条件怎么发"✗（我第一版差点这么干 ✗，靠对账才发现 ✓）
+#   ⇒ 结果 ✓：13,190 ＋ 4,589 = **17,779 字符**（省 **32%** ✓）
+_SLIM_CUT_TITLES = (
+    '### 候选池（参考列表，非自动执行）',
+    '### 第三步：选股分析',
+    '#### 3.2 领涨股状态检查',
+    '#### 3.3 产业链建仓计划',
+    '### 3.5 产业链内标的排序与买入确认',
+    '#### a. 资金强度排序（选谁）',
+    '#### b. 主营业务纯度与利润优选（同环节内优中选优）',
+    '#### c. 买入确认规则（怎么买）',
+    '#### d. **全天锁定 + 次日切换**：',
+    '### 第五步：执行下单',
+    '### 第六步：持仓检查',
+    '### 产业链建仓计划',
+    '### 产业链全景',
+    '### 市场环境',
+    '### 持仓快照',
+    '### 组合风险',
+    '### 风险监控',
+    '### 策略评估',
+)
+
+
+def _derive_t_trade_prompt(full: str) -> str:
+    """从 TRADE_SYSTEM_PROMPT **纯减法**派生"做T专用"版（§9.720 ✓）。
+
+    逐字匹配**顶层标题**切段 ✓（不靠关键词猜 ✓）；只切明确与本角色无关的段 ✓。
+    认不出标题 ⇒ **原样保留** ✓（宁可多留、绝不误删 ✓）。
+    """
+    import re as _re
+    lines = full.split('\n')
+    idx = [i for i, ln in enumerate(lines) if _re.match(r'^#{1,4}\s', ln.strip())]
+    drop = set()
+    for k, i in enumerate(idx):
+        if lines[i].strip() in _SLIM_CUT_TITLES:
+            j = idx[k + 1] if k + 1 < len(idx) else len(lines)
+            for x in range(i, j):
+                drop.add(x)
+    return '\n'.join(ln for x, ln in enumerate(lines) if x not in drop)
+
+
+try:
+    _trade_full = str(PROMPT_SEEDS.get('TRADE_SYSTEM_PROMPT', {}).get('content') or '')
+    if _trade_full:
+        PROMPT_SEEDS['T_TRADE_SYSTEM_PROMPT'] = {
+            'label': '做T专用系统提示（自 TRADE 纯减法派生 ✓ §9.720）',
+            'content': _derive_t_trade_prompt(_trade_full),
+        }
+except Exception as _e_slim:
+    print('[prompt_seeds] 派生 T_TRADE_SYSTEM_PROMPT 失败: %s' % str(_e_slim)[:80])

@@ -14,6 +14,11 @@ const FORK_SEED = String(process.env.BRIDGE_FORK_SEED === undefined ? "1" : proc
 //   ⇒ 默认 **1**（只留"销毁重建"那一级 ✓，**去掉 fork 二级重试** ✗）；
 //     设 2 = 旧行为（回退用 ✓）；设 0 = 完全不重试、立刻返回空 ✓
 const EMPTY_RETRY_MAX = parseInt(process.env.BRIDGE_EMPTY_RETRY_MAX || "1", 10);
+// ★ 账本 §9.720 ✓（用户 2026-10-07：「不是吧，我们做T用这个提示词？」）：
+//   做T会话（t-agent-*）原取**通用** `TRADE_SYSTEM_PROMPT`（21.6KB ✗，含建仓/选股/报告 SOP）；
+//   `T_TRADE_SYSTEM_PROMPT` = 后端**纯减法派生**的自专用版（13.2KB ✓，规则一条不新增 ✓）。
+//   **默认 0 = 关**（行为逐字不变 ✓）；置 1 启用（**需重启桥** ✓）。
+const T_SLIM_PROMPT = String(process.env.BRIDGE_T_SLIM_PROMPT || '0').trim() !== '0';
 const inject = ["webServer","agents","tools"];
 
 // ═══ 可选全局出站代理（web_search / LLM 出站 fetch 共用 undici 全局 dispatcher）═══
@@ -1066,7 +1071,8 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       const isTAgentSession = String(sessionId || '').includes('t-agent-');
       const isConditionsMode2 = mode === 'conditions';
       const isBacktestReview = mode === 'backtest';
-      const systemPrompt = getPrompt(mode === 'trade' ? 'TRADE_SYSTEM_PROMPT' : 'CHAT_SYSTEM_PROMPT');
+      const _tName1 = (isTAgentSession && T_SLIM_PROMPT) ? 'T_TRADE_SYSTEM_PROMPT' : 'TRADE_SYSTEM_PROMPT';
+      const systemPrompt = getPrompt(mode === 'trade' ? _tName1 : 'CHAT_SYSTEM_PROMPT');
       const tBuildFull = getPrompt('T_BUILD_SYSTEM_PROMPT');
       const tBuildPrompt = (isTAgentSession && !isConditionsMode2) ? getPrompt('T_BUILD_SYSTEM_PROMPT') : '';
       const CONDITIONS_SYSTEM_PROMPT = [
@@ -1184,7 +1190,10 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       // 不需要深度推理——medium 推理 1.5-3min 导致回测 120s 超时回退规则（迭代#55b）
       const thinkingLevel = thinkingLevelOverride || (
         mode === 'trade' ? 'high' : (mode === 'conditions' ? 'low' : 'medium'));
-      const systemPrompt = getPrompt(mode === 'trade' ? 'TRADE_SYSTEM_PROMPT' : 'CHAT_SYSTEM_PROMPT');
+      // ★ §9.720 ✓：做T会话改用派生精简版（开关默认关 ✓）；isTAgentSession 在其后定义 ⇒ 此处内联判断 ✓
+      const _tAgentHere = String(sessionId || '').includes('t-agent-');
+      const _tName2 = (_tAgentHere && T_SLIM_PROMPT) ? 'T_TRADE_SYSTEM_PROMPT' : 'TRADE_SYSTEM_PROMPT';
+      const systemPrompt = getPrompt(mode === 'trade' ? _tName2 : 'CHAT_SYSTEM_PROMPT');
       // 做T会话（t-agent-*）附加底仓建仓工作流指引
       const isTAgentSession = String(sessionId || '').includes('t-agent-');
       // 条件生成会话（conditions 模式）：不注入 T_BUILD/BACKTEST_REVIEW，避免三重角色冲突
