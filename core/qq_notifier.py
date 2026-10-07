@@ -130,6 +130,19 @@ def get_access_token() -> Optional[str]:
 
 
 def send_c2c_message(openid: str, content: str, msg_id: str = "", event_id: str = "") -> bool:
+    # ★★ 账本 §9.733 ✓（用户 2026-10-07「逐个修复」✓）：
+    #   实测告警 ✗ `qqnotifier.py:132 | <urlopen error [Errno 101] Network is unreachable>`
+    #   —— **OS 级**错误 ✗ ⇒ 说明那次调用**绕过了** `bt_local_pro` 的守卫 ✓
+    #     （典型成因：`from urllib.request import urlopen` 的 **from-import 陷阱** ✗，
+    #      同 §9.249 那次 `_quote_now` 的坑 ✓ —— 守卫改的是模块属性，绑走的旧对象不受影响 ✓）
+    #   ⇒ 回测/离线模式下**根本不该尝试发送** ✓ ⇒ 这里加**早退** ✓（先于任何网络动作 ✓）
+    #   ⇒ 生产不受影响 ✓（仅在 `BT_NET_OFFLINE` 为真时早退 ✓）
+    try:
+        if str(os.getenv("BT_NET_OFFLINE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            print("[QQ] 回测/离线模式 ⇒ 跳过发送（BT_NET_OFFLINE=1 ✓）", file=sys.stderr)
+            return False
+    except Exception:
+        pass
     """
     Send C2C private message via HTTP API.
     

@@ -5171,11 +5171,21 @@ class TMonitor:
                                    and str(trigger_kind) in _RED_KINDS_B)
                     _posv = 0
                     if _red_exempt:
+                        # ★★ 账本 §9.732 ✓（用户 2026-10-07「逐个修复」✓）：
+                        #   实测告警 ✗ `tmonitor.py:4700 | name 'p' is not defined ⇐ :5186`
+                        #   ⇒ 下面 5186 行用了 `_p`，但这里**只算了 `_posv`、从没定义 `_p`** ✗
+                        #   ⇒ `NameError` 被 `except Exception` **静默吞掉** ⇒ `_cost=0` ⇒
+                        #      「真危难才允许穿透」判据里 `_in_loss` 恒 False ✗
+                        #      ⇒ **保护性减仓的"浮亏穿透"整段失效** ✗（上涨途中照旧"止血"✗）
+                        #   修 ✓：同一次台账读取里**一并取出该标的持仓** ⇒ `_p` 两条路径都有定义 ✓
+                        _p = {}
                         try:
                             from app.services.t_gateway import get_sellable_ledger as _gsl2
-                            _posv = int(((_gsl2(account_id=cond.get("account_id", T_MONITOR_ACCOUNT))
-                                          or {}).get(symbol) or {}).get("sellable", 0) or 0)
+                            _led2 = (_gsl2(account_id=cond.get("account_id", T_MONITOR_ACCOUNT)) or {})
+                            _p = (_led2.get(symbol) or {})
+                            _posv = int((_p or {}).get("sellable", 0) or 0)
                         except Exception:
+                            _p = {}
                             _posv = 0
                         # ⚠️ 2026-09-30（账本 §9.342 ✓ 用户「怎么上涨的时候保护性减仓？」✗）——
                         #   ① **真危难才允许穿透**：浮亏 ✓ 或 真止损/破位类腿 ✓（浮盈时**不得**"止血" ✗）
