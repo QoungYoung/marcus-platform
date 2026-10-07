@@ -2379,6 +2379,44 @@ def day_progress(root: str, account: str = "") -> dict:
         cur = pend[0] if pend else (day_dirs[-1] if day_dirs else None)
         out["day"] = cur
         out["day_index"] = (day_dirs.index(cur) + 1) if cur in day_dirs else 0
+        # ★★ 账本 §9.739 ✓（用户 2026-10-07：「在当日进度这一行…后面加上**当日判定浪型**」✓）：
+        #   数据源 = **当天沙箱自己的 `wave_state.json`** ✓（跑批按天复制 ✓，格式统一 ✓）：
+        #     `{"date": "2026-01-15", "level": "d3", "sub_level": "3-4", "operation": "t_only", ...}`
+        #     ⇒ 显示成 `d3/3-4 · t_only` ✓（date 一并带上，便于核对 as-of ✓）
+        #   兜底链 ✓：`<root>/<day>/wave_state.json` ⇒ `<root>/<day>/wave_state_<Y-M-D>.json`
+        #             ⇒ `data/_bt_year/<day>/wave_state.json` ✓（与 wave_gate 的归档链同源 ✓）
+        out["wave"] = None
+        out["wave_text"] = ""
+        try:
+            import json as _jw
+            _wj = None
+            _cands_w = [os.path.join(root, cur, "wave_state.json")] if cur else []
+            if cur and len(str(cur)) == 8:
+                _cands_w.append(os.path.join(root, cur, "wave_state_%s-%s-%s.json"
+                                             % (str(cur)[:4], str(cur)[4:6], str(cur)[6:8])))
+                _cands_w.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(root))),
+                                             "_bt_year", str(cur), "wave_state.json"))
+            for _cw in _cands_w:
+                try:
+                    with open(_cw, encoding="utf-8") as _f_w:
+                        _j2 = _jw.load(_f_w) or {}
+                    if str(_j2.get("level") or "").strip():
+                        _wj = _j2
+                        out["wave_src"] = _cw[-52:]
+                        break
+                except Exception:
+                    continue
+            if _wj:
+                _lv = str(_wj.get("level") or "")
+                _sb = str(_wj.get("sub_level") or "")
+                _op = str(_wj.get("operation") or "")
+                out["wave"] = {"level": _lv, "sub_level": _sb, "operation": _op,
+                               "date": str(_wj.get("date") or ""),
+                               "confidence": _wj.get("confidence")}
+                out["wave_text"] = "%s%s · %s（档 date=%s）" % (
+                    _lv, ("/" + _sb) if _sb else "", _op or "—", str(_wj.get("date") or "—"))
+        except Exception as _e_wv:
+            print("[dashboard] 当日浪型读取失败: %s" % str(_e_wv)[:80], flush=True)
         # 阶段清单（按真实流水线顺序 ✓）
         STAGES = [("carry", "跨日结转"), ("low_logic", "low_logic"), ("ensure_mins", "补分钟档"),
                   ("pack", "打包分钟"), ("legs", "布腿/候选"), ("prod", "生产链(触发→网关→模拟盘)"),

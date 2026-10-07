@@ -2208,7 +2208,8 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     try {
       var r = await fetch('/api/progress', { cache: 'no-store' });
       var j = await r.json();
-      el('prog-day').textContent = (j.day || '—') + '（第 ' + (j.day_index || 0) + ' / ' + (j.days_total || 0) + ' 天）';
+      el('prog-day').textContent = (j.day || '—') + '（第 ' + (j.day_index || 0) + ' / ' + (j.days_total || 0) + ' 天）'
+        + (j.wave_text ? '　【当日判定浪型】' + j.wave_text : '　【当日判定浪型】—');
       var stages = j.stages || [], cur = 0;
       stages.forEach(function (s, i) { if (s.state !== 'pending') cur = i + 1; });
       el('prog-fill').style.width = (stages.length ? Math.round(100 * cur / stages.length) : 0) + '%';
