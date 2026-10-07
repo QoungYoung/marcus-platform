@@ -777,7 +777,15 @@ def _farm_root(day_dir: str) -> str:
             os.symlink(src, dst)
     dst = os.path.join(farm, "data")
     if os.path.lexists(dst):
-        os.unlink(dst)
+        # ★★ 账本 §9.731 ✓（本轮实测炸过一次 ✗）：原实现只 `os.unlink(dst)` ——
+        #   它假定 dst 一定是**软链** ✓；实跑遇到**真目录**（残留/半成品 ✓）⇒
+        #   `IsADirectoryError` ✗ ⇒ 生产链 rc=1 ⇒ 驱动按规矩**终止年跑** ✗（0108 就是这么停的 ✓）
+        #   ⇒ 改成按类型分派 ✓：目录 ⇒ rmtree ✓；其他 ⇒ unlink ✓（两种都能自愈 ✓）
+        if os.path.isdir(dst) and not os.path.islink(dst):
+            import shutil as _sh_farm
+            _sh_farm.rmtree(dst, ignore_errors=True)
+        else:
+            os.unlink(dst)
     os.symlink(day_dir, dst)
     return farm
 
