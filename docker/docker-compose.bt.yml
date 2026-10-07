@@ -8,9 +8,9 @@
 #
 # 用法：
 #   生产/日常： docker compose -f docker/docker-compose.yml up -d            # 无挂载 ⇒ 全工具 ✓
-#   回测：      cd docker && docker compose -f docker-compose.yml -f docker-compose.bt.yml up -d marcus-dsh
+#   回测：      cd docker && docker compose -f docker-compose.yml -f docker-compose.bt.yml up -d dsh
 #               （或给现有容器补挂：见 jobs/bt_tools_allow.sh 的提示）
 services:
-  marcus-dsh:
+  dsh:          # ★ 必须与基础 compose 的服务名一致（`dsh` ✓ 不是容器名 `marcus-dsh` ✗）
     volumes:
       - ./bt_tools_allow.txt:/root/.dsh/bt_tools_allow.txt:ro   # 空文件 ⇒ 回测只注册 0 个工具 ✓
