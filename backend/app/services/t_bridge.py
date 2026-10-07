@@ -103,7 +103,13 @@ def _recent_decisions(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
         sn2["trigger"] = {"snapshot": tr.get("snapshot")}     # ★ 只留规则证据 ✓
         r2["input_snapshot"] = sn2
         out.append(r2)
-        return out
+    # ★★ 账本 §9.716 ✓（修 ④ 时抓到的**真 bug** ✗）：
+    #   原第 106 行的 `return out` **缩进在 for 循环里** ✗ ⇒
+    #     ① 最多只返回**第一条**历史决策 ✗ —— 而本函数签名/prompt 都写着「最近 5 次」✗（名不副实 ✓）
+    #     ② 若第一条**没有 `input_snapshot`**（= 老记录/测试夹具 ✓），上面会 `continue` ✗
+    #        ⇒ 循环自然结束 ⇒ **函数隐式返回 None** ✗ ⇒ 调用方拿到 None ⇒ 历史块**整段消失** ✗
+    #   ⇒ 归位到**函数级** ✓：所有条目都处理 ✓，且**永不返回 None** ✓
+    return out
 
 
 def _symbol_t_stats(symbol: str) -> Dict[str, Any]:

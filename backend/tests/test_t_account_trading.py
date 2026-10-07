@@ -223,7 +223,7 @@ class TGatewayTest(_PGTestCase):
         from app.services import t_db, t_gateway
         t_db.set_stop_all(True, "test")
         m_regime.return_value = {"regime": "ACTIVE"}
-        m_ledger.return_value = {"600519": {"sellable": 1000, "avg_price": 100.0}}
+        m_ledger.return_value = {"SH600519": {"sellable": 1000, "avg_price": 100.0}}   # ★ §9.715：键须归一化 ✓
         m_quote.return_value = {"current": 100.0, "change_pct": -1.0}
         r = t_gateway.validate_order("600519", "buy", 100.0, 100, condition_id=1)   # ★ §9.715
         self.assertFalse(r["pass"])
@@ -239,11 +239,11 @@ class TGatewayTest(_PGTestCase):
         # 无底仓标的 → 硬闸门拦截（禁止无底仓建仓式做T）
         m_ledger.return_value = {}
         m_quote.return_value = {"current": 10.0, "change_pct": 0.0}
-        r = t_gateway.validate_order("000001", "buy", 10.0, 1000, condition_id=1)   # ★ §9.715
+        r = t_gateway.validate_order("000001", "buy", 10.0, 1000)   # ★ §9.715：本段测的就是"无底仓裸买"闸 ✓ 故不带条件 ✓
         self.assertFalse(r["pass"])
         self.assertIn("无底仓", r["reason"])
         # 有底仓但买腿超上限
-        m_ledger.return_value = {"000001": {"sellable": 500, "avg_price": 10.0}}
+        m_ledger.return_value = {"SZ000001": {"sellable": 500, "avg_price": 10.0}}   # ★ §9.715：键须归一化（网关按 SZ000001 查 ✓）
         r = t_gateway.validate_order("000001", "buy", 10.0, 600)
         self.assertFalse(r["pass"])
         self.assertIn("上限", r["reason"])
@@ -254,7 +254,7 @@ class TGatewayTest(_PGTestCase):
     def test_limit_down_block(self, m_regime, m_ledger, m_quote):
         from app.services import t_db, t_gateway
         m_regime.return_value = {"regime": "ACTIVE"}
-        m_ledger.return_value = {"600519": {"sellable": 1000, "avg_price": 100.0}}
+        m_ledger.return_value = {"SH600519": {"sellable": 1000, "avg_price": 100.0}}   # ★ §9.715：键须归一化 ✓
         m_quote.return_value = {"current": 100.0, "change_pct": -9.9}  # 跌停
         r = t_gateway.validate_order("600519", "buy", 100.0, 100)
         self.assertFalse(r["pass"])
@@ -267,7 +267,7 @@ class TGatewayTest(_PGTestCase):
         from app.services import t_db, t_gateway
         t_db.set_stop_all(False, "")
         m_regime.return_value = {"regime": "ACTIVE"}
-        m_ledger.return_value = {"600519": {"sellable": 1000, "avg_price": 100.0}}
+        m_ledger.return_value = {"SH600519": {"sellable": 1000, "avg_price": 100.0}}   # ★ §9.715：键须归一化 ✓
         m_quote.return_value = {"current": 99.0, "change_pct": -1.0}
         r = t_gateway.validate_order("600519", "buy", 99.0, 100, condition_id=1)   # ★ §9.715：走条件单路径（生产真实 ✓，绕开"无底仓裸买"前置闸 ✓）
         self.assertTrue(r["pass"], f"应放行: {r}")
@@ -536,7 +536,10 @@ class TAiLedTest(_PGTestCase):
         """唤醒 payload 含历史决策结果与标的做T统计（反馈闭环上下文）。"""
         from app.services import t_bridge, t_db
         # 预置一条带 outcome 的 exec 决策
-        t_db.insert_ai_action("t-agent-600519", "2026-08-15", "600519", "ai_exec",
+        # ★ §9.715：必须用**当天**日期 ✓ —— `_recent_decisions` 取"最近 N 次" ✓，
+        #   写 2026-08-15 这种老日期会被 recency 过滤掉 ✗ ⇒ 消息里就没有【历史决策参考】✗
+        import datetime as _dt
+        t_db.insert_ai_action("t-agent-600519", _dt.datetime.now().strftime("%Y-%m-%d"), "600519", "ai_exec",
                               output={"reason": "回踩"}, gateway_result={"status": "success"},
                               outcome={"side": "buy", "pct_change": 0.85})
         fake_resp = json.dumps({"reply": "ok"}).encode("utf-8")
@@ -563,8 +566,11 @@ class TAiLedTest(_PGTestCase):
                                     input_snapshot={"trigger": {"suggest_bid_price": 10.0}},
                                     output={"side": "buy"},
                                     gateway_result={"status": "success", "price": 10.0})
-        fake_bars = [{"time": f"2026-08-15 10:{m:02d}:00", "open": 10.0, "close": 10.05 + 0.02 * k,
-                      "high": 10.1 + 0.02 * k, "low": 9.99}
+        # ★ §9.715：time 必须是**腾讯格式 YYYYMMDDHHMM** ✓
+        #   （实现按 `str(time)[:8]` 取当日 ✓；旧的 ISO 写法 `2026-08-15 10:05:00` ✗ 会让 [:8] = `2026-08-` ✗
+        #     ⇒ 当日 bar 为空 ⇒ `_assess_outcome` 返回 None ⇒ filled=0 ✗ —— 这正是本测试原本报红的原因 ✓）
+        fake_bars = [{"time": "20260815" + "%02d%02d" % (10, m), "open": 10.0,
+                      "close": 10.05 + 0.02 * k, "high": 10.1 + 0.02 * k, "low": 9.99}
                      for k, m in enumerate(range(5, 35, 5))]
         with patch("app.services.t_data_sources.fetch_tencent_mkline", return_value=fake_bars):
             r = t_ai_agent.record_outcome(symbol="SH600000", trade_date="2026-08-15")
