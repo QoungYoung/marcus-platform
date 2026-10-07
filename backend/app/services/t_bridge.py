@@ -453,12 +453,6 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         "不要因为之前 wait 过就继续 wait）；"
         "⑤ 连续命中：低吸条件已达告警阈值可调整或等待冷却，高抛不适用冷却。"
     )
-    payload = {
-        "message": msg,
-        "session_id": _agent_session.setdefault(symbol, f"t-agent-{symbol}"),
-        "mode": "trade",
-        "decision_mode": "ai_led",
-    }
     # ★★★★ 账本 §9.736 ✓（用户 2026-10-07：「**还是有震荡市不是浪型**」✗）：
     #   实测 ✗：消息里**完全没有浪型闸结论** ⇒ AI 只好编「震荡市」填空 ✗
     #   真值就在快照 `fields` 里 ✓（抽 40 条样本，三个子块齐全 ✓）：
@@ -522,6 +516,12 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
                     _ptc.append("%s=%s" % (_k, str(_v)[:10]))
             if _ptc:
                 msg += "【技术指标】" + " ".join(_ptc) + "\n"
+    payload = {
+        "message": msg,
+        "session_id": _agent_session.setdefault(symbol, f"t-agent-{symbol}"),
+        "mode": "trade",
+        "decision_mode": "ai_led",
+    }
 
     reply = None
     for attempt in range(1, WAKE_RETRY + 1):
