@@ -36,9 +36,16 @@ def _silent_alert(where, exc=None):
 for _p in ("/app/app", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
-pp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
-if pp not in sys.path:
-    sys.path.insert(0, pp)
+# §9.770（用户 2026-10-08：「开始修复」）：★ 原来只加了 `apps/main_line` ✗，
+# 但脚本在 make_executor() 里要 `from paper_engine import PaperTradingEngine` ✓，
+# 而 `paper_engine.py` 在 **`apps/paper-trading/`** ✗ ⇒ 该目录不在 sys.path ⇒
+# 每次执行必然 `ModuleNotFoundError: No module named 'paper_engine'` ✗
+# ⇒ ⇒ 这是「生产腿数只有回测约 1/4」的关键原因之一（**建仓腿根本没产出来** ✗）。
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _d in ("apps/main_line", "apps/paper-trading", "apps", "core"):
+    _p = os.path.join(_root, _d)
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 DATA = os.environ.get("DATA_DIR", "data")
 
