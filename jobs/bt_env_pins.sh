@@ -10,6 +10,27 @@
 #
 # 约定：新增回测开关一律（1）写进本文件（2）在 jobs/bt_prod_run.py 的 setdefault 里留同名同值兜底。
 
+# ── 2026-10-08 口径对账（用户追问「为什么这几个回测没有」⇒ 查清来源结构）──
+#   回测有效值 = ① 本文件（手工覆盖，**最后** source）> ② `.dsh-tmp/wolfbt/bt_env_prod.env`
+#                （由**生产容器**生成的主层）> ③ 库内默认
+#   ⚠️ 实测：本机那份 ② 的 mtime = **2026-09-19** ⇒ **已 3 周未重生成** ✗
+#      ⇒ 09-19 之后生产**新增/改值**的开关，回测一律沿用旧值或库内默认 ✗
+#      ⇒ 跑回测前应先重生成：`python jobs/bt_env_from_prod.py`（会改回测 env ⇒ 需拍板）
+#      对账脚本（只读）：`.dsh-tmp/prod/three_way.py` / `real_diff.py`
+#      2026-10-08 实测：回测有效值 != 今日生产的键共 **90** 个（约 66 个是"本文件有、生产未设→默认"）
+# 三个最易误判的键（逐键核过 ✓）：
+#   · `WOLF_MAINLINE_SELECT` —— **回测有** ✓：② 快照 line 39 = '1' ✓，且 `jobs/bt_gen_mainline.py:96`
+#     在"逐日再生主线"时再设 1 ✓（日常驱动只读沙箱 `main_line_state.json`/`wolf_mainline_select.json` ✓）
+#     ⇒ **不是**"生产独有"，别当分叉 ✗
+#   · `WOLF_TIER_STATE_FIX` —— **两边都不生效** ✓：全仓唯一读取处 `position_tier_monitor.py:60`，
+#     而该 monitor 在生产 `backend/app/worker_main.py:104` 被**注释停用** ✓、回测四个驱动也都不跑它 ✓
+#     ⇒ 2026-10-08 已从生产 `.env` 删除（删了零影响 ✓）
+#   · `WOLF_QUALITY_JUDGE` —— **真分叉** ✓（生产 2026-10-08 接 §9.763「agent 判质地」= 1；
+#     回测 = 库内默认 0 = 关，且 ② 快照里**没有**它 —— 该模块比快照新 ✗）
+#     ⇒ 用户 2026-10-08 拍板「**生产保留、回测暂不补**」✓（它是 LLM 型闸：用 `PI_SERVER_URL=http://dsh:3001/chat`，
+#       模块 docstring 明令**禁止**用回测的 `127.0.0.1:13001`；回测要覆盖需像 `bt_agent_loop`/`bt_llm_replay`
+#       那样接录制/回放 ⇒ 属"生产多一道 avoid 硬拦 ⇒ 少买"的口径差 ✓）
+
 # ── 本轮（2026-09-19）拍板：关掉生产打开、而语料/审计未支持的闸 ──
 export WOLF_THEME_VOLFUND_GATE='0'        # 选板块第一要素：模块 docstring 明写"默认关、开启需拍板"，生产却开着
 export WOLF_THEME_VOLFUND_SHADOW='0'      # 选板块第一要素【影子】也关：每次判定都取数（实测布腿器 35s/腿头号嫌疑）
