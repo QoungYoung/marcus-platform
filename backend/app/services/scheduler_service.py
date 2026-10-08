@@ -263,6 +263,36 @@ class SchedulerService:
         was_paused = self.scheduler.state == STATE_PAUSED
 
         # Add jobs from config
+        # §9.769（用户 2026-10-08）：★ 启动时**全校验 cron 并打一行汇总** ✗ ——
+        # 起因：13 个任务（含主线判定）因 4 段表达式**静默不排期**约 20 天而无人察觉 ✗。
+        # 判据：只要出现 `next_run_time=None`，日志里必须能一眼看出「谁不合法」✓
+        _bad_cron = []
+        for _tid, _task in self.tasks.items():
+            if not _task.enabled:
+                continue
+            _sch = _task.schedule or {}
+            if _sch.get('type') != 'cron':
+                continue
+            _e = str(_sch.get('expr') or '')
+            if len(_e.split()) != 5:
+                _bad_cron.append((_tid, _e, len(_e.split())))
+        _enabled_cron = sum(
+            1 for _t in self.tasks.values()
+            if _t.enabled and (_t.schedule or {}).get('type') == 'cron'
+        )
+        _sum_msg = (
+            f"[SCHED-CRON-CHECK] 启用任务中 cron 型 {_enabled_cron} 个 ⇒ "
+            f"合法 {_enabled_cron - len(_bad_cron)} ｜ ★ 不合法 {len(_bad_cron)}"
+            + ("" if not _bad_cron else "（这些**不会排期** ✗：" +
+               "；".join(f"{i}={e!r}（{n} 段）" for i, e, n in _bad_cron) + "）")
+        )
+        if _bad_cron:
+            print(_sum_msg, file=sys.stderr, flush=True)
+            logger.error(_sum_msg)
+        else:
+            print(_sum_msg, file=sys.stdout, flush=True)
+            logger.info(_sum_msg)
+
         for task_id, task in self.tasks.items():
             if task.enabled:
                 self._add_job(task)
@@ -384,7 +414,19 @@ class SchedulerService:
             # Parse cron expression: "35 9,10,13 * * 1-5"
             parts = expr.split()
             if len(parts) != 5:
-                logger.error(f"Invalid cron expression: {expr}")
+                # §9.769（用户 2026-10-08）：★ 这条错误**以前只写 logger.error**，
+                # 结果 13 个任务自 949ec7a 起「静默不排期」而**没人看见** ✗（日志里查不到）。
+                # 现改为**多通道大声报**：stderr（docker logs 必见）＋ logger ＋ 告警通道。
+                _msg = (
+                    f"[SCHED-CRON-BAD] 任务 {task.id} 的 cron 表达式**不是 5 段** ⇒ **不会排期** ✗ "
+                    f"expr={expr!r} 段数={len(parts)}（应为 5：分 时 日 月 周，例：55 18 * * mon-fri）"
+                )
+                print(_msg, file=sys.stderr, flush=True)
+                logger.error(_msg)
+                try:
+                    _silent_alert("scheduler_service.py:_add_job", ValueError(_msg))
+                except Exception:
+                    pass
                 return
 
             minute, hour, day, month, day_of_week = parts
