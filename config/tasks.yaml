@@ -222,9 +222,9 @@ tasks:
     - qqbot
   depends_on: []
 - id: mainline_open_buy
-  name: 主线候选开盘建仓 (E01/E02 intent_open) [已并入9:35 agent，停用作DRY观测]
-  description: 已并入 9:35 auto_trade_morning agent(按指令+上下文判断)；本任务仅作 DRY 观测(MAINLINE_OPEN_BUY_DRY=1)，默认停用避免与 agent 抢单
-  enabled: false
+  name: 主线候选开盘建仓 (E01/E02 intent_open) [2026-10-08 用户拍板：打开]
+  description: 9:31 主线候选开盘一次性建仓(probe 档)。2026-10-08 用户拍板「打开」⇒ enabled true（原为 DRY 观测 + 停用）；诊断写 data/mainline_open_{date}.json；MAINLINE_OPEN_BUY_DRY=1 可随时回退 DRY
+  enabled: true
   schedule:
     type: cron
     expr: 31 9 * * mon-fri

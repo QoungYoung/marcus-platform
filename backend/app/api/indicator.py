@@ -2339,6 +2339,23 @@ async def check_entry_filters(req: EntryCheckRequest):
             amplitude_val = float(quote.get("amplitude", 0) or 0)
             rsr = quote.get("rsr")
             intraday_percentile = quote.get("intraday_percentile")
+            # ★ §9.772（2026-10-08，用户拍板「修」）：腾讯行情解析器**不产出** intraday_percentile ✗
+            #   （`core/xueqiu_engine._parse_tencent_quote` 的 dict 里没有该键 ✓，也没有 rsr ✓）
+            #   ⇒ 生产**永远**拿不到分位 ⇒ 1d 段 fail-closed 把所有自动建仓通道整片跳过 ✗
+            #   （容器内实证 ✓：15/15 候选 data_unavailable:日内分位 ⇒ built=0 ✓）
+            #   而回测侧是**现算**的 ✓（`backend/app/api/backtest.py:3791`：
+            #     (close - day_low) / (day_high - day_low) * 100 ✓）
+            #   ⇒ 这里补**同口径**兜底 ✓：当日成交区间内的相对位置 ✓
+            #     （开盘前 high==low ⇒ 仍为 None ⇒ fail-closed 保留 ✓ 不会凭空造数 ✓）
+            if intraday_percentile is None:
+                try:
+                    _ih = float(quote.get("high") or 0)
+                    _il = float(quote.get("low") or 0)
+                    _ic = float(quote.get("current") or 0)
+                    if _ih > _il > 0 and _ic > 0:
+                        intraday_percentile = round((_ic - _il) / (_ih - _il) * 100, 1)
+                except Exception:
+                    intraday_percentile = None
             avg_price = quote.get("avg_price")
             # 估算量比（volume / avg_volume，简化用换手率参照）
             if volume_ratio is None and turnover_rate > 0:
