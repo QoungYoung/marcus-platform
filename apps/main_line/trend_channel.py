@@ -451,6 +451,62 @@ def _unpack(rows) -> Tuple[List[float], List[float], List[float], List[float]]:
         return [], [], [], []
 
 
+def _pg_daily_on() -> bool:
+    """生产是否用本地 PG `mkt_bars_daily` 取日线（2026-10-08 用户拍板「A」）。
+
+    ⚠️ **回测默认关**：`BT_ASOF_FETCH`（回测 pins/快照恒设 ✓）⇒ 走原路（as-of 沙箱 / bars.sqlite / relay shim）✓
+       显式 `WOLF_TREND_DAILY_PG=0|1` 可覆盖 ✓（默认：非回测 ⇒ 1 ✓）
+    """
+    v = os.getenv("WOLF_TREND_DAILY_PG")
+    if v is not None and str(v).strip() != "":
+        return str(v).strip().lower() in ("1", "true", "yes", "on")
+    return not os.getenv("BT_ASOF_FETCH")
+
+
+_PG_CONN = [None]
+
+
+def _pg_conn():
+    """复用一条 PG 连接（每次 scan 成百上千票 ⇒ 别一票一连 ✗）。失败 ⇒ None ✓"""
+    import psycopg2
+    c = _PG_CONN[0]
+    if c is not None:
+        try:
+            if c.closed == 0:
+                return c
+        except Exception:
+            pass
+    c = psycopg2.connect(os.environ.get("DATABASE_URL")
+                         or "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+    _PG_CONN[0] = c
+    return c
+
+
+def _pg_daily(ts: str, start: str, as_of: str) -> List[Any]:
+    """取 (ts_code, trade_date, close, vol, amount, total_mv)，按日期升序（与 `_unpack` 的列序一致 ✓）。
+
+    ≤ as_of ⇒ **无未来函数** ✓（与回测 `bars.sqlite` 的 `trade_date<=as_of` 同口径 ✓）
+    """
+    try:
+        conn = _pg_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT ts_code, trade_date, close, vol, amount, total_mv FROM mkt_bars_daily "
+                    "WHERE ts_code=%s AND trade_date>=%s AND trade_date<=%s ORDER BY trade_date",
+                    (ts, str(start), str(as_of)))
+        rows = list(cur.fetchall())
+        cur.close()
+        return rows
+    except Exception as _e:
+        try:
+            if _PG_CONN[0] is not None:
+                _PG_CONN[0].close()
+        except Exception:
+            pass
+        _PG_CONN[0] = None
+        print("[trend_channel] PG 日线取数失败(回落 relay): %s" % str(_e)[:90], flush=True)
+        return []
+
+
 def _daily(symbol: str, as_of: str, bars_db: Optional[str] = None) -> Tuple[List[float], List[float], List[float], List[float]]:
     """取 as-of 日线（收盘/量）。
 
@@ -489,6 +545,19 @@ def _daily(symbol: str, as_of: str, bars_db: Optional[str] = None) -> Tuple[List
         except Exception:
             rows = []
         return _unpack(rows)
+    # ⓪′ 生产快路（2026-10-08 用户拍板「A」）：本地 PG `mkt_bars_daily` ✓
+    #   为什么：原路径 ① 是**一票一次外网 relay**（实测 1.50~1.57 s/票 ⇒ 200 票 ≈ 10 分钟 ✗，
+    #     而 ⑱ 块要扫两遍 ⇒ 更久 ✗）；生产 PG 里**本来就有**全市场日线
+    #     （`mkt_bars_daily`：2,543,452 行 / 5,623 只 / 2024-11-01→2026-10-08 ✓，
+    #      字段 close/vol/amount/total_mv 正是 `_unpack` 要的四列 ✓；`wolf_theme_vol_fund.theme_amounts` 已在读它 ✓）
+    #   ⇒ 一票一次 SQL ≈ 毫秒 ✓。取不到 / 出错 ⇒ **回落** ① relay（fail-open，不改变语义 ✓）。
+    if _pg_daily_on():
+        rows = _pg_daily(ts, start, as_of)
+        if rows:
+            try:
+                return _unpack(rows)
+            except Exception:
+                rows = []
     # ① 与 pipeline 同源
     try:
         import importlib
