@@ -3374,6 +3374,20 @@ apps/main_line/position_class.py 的 ML / trend_channel 的 THEME_CONCEPTS / cha
 · §9.773 埋伏腿名单路径 `DATA_DIR or "."` → `DATA_DIR or "data"`（3 文件 4 处；回测 DATA_DIR 已设 ⇒ 零影响）。★ 教训：不要给生产设 DATA_DIR=/app/data —— t_monitor 多处按 dirname(DATA_DIR) 当「运行根」（1066/2883/3235，§9.244 注释），生产正是靠 DATA_DIR 未设才落到 /app/data ✓；设了会改成易失的 /app ✗。
 手跑 mainline_open_buy：built=0 skip=15 = 14×hard_block(P2 margin_burst) + 1×data_unavailable(主力资金, 000963.SZ) ⇒ 分位闸已消失，剩 P2 规则闸（未绕过）。
 遗留：moneyflow 走 81.70.44.68:8199 失败且 datahubco 报 unknown api_name: moneyflow_dc；gen_ambush_lowdip.py 生产缺 bars 表（sqlite）⇒ 跑不动（无读者、未排期）。
+- [2026-10-08 20:08] [工作记录] §9.774 生产口径对齐回测：3 键改值 + 6 键关闸 + 删 3 死键（含"32 个不能盲关"的判据） — 2026-10-08 用户四条拍板，已改生产 .env 并 up -d 生效（容器内核对 ✓）：
+
+1) WOLF_THEME_VOLFUND_GATE 1→0 ★ 就是"生产腿少"的主因：pins 注释原文「模块 docstring 明写默认关、开启需拍板，生产却开着」⇒ 生产 08:18/09:20 日志里 `SKIP_THEME_NOT_BUYABLE … 选板块第一要素未过(量能不活跃)` 全来自这个门 ⇒ 三个主线主题全灭 ⇒ buy_new=[] ⇒ 08:18 一条腿都不发。回测此键=0。
+2) WOLF_PICK_MAX_LEGS 3→8（用户 09-19 已拍板 8，生产 env 还是 3 = 历史残留 ⇒ 每天买腿上限只有回测的 3/8）。
+3) WOLF_TRADE_WINDOW 0→1（作用域 WOLF_TW_KINDS=wolf_zheng_t_buy；253/254 低吸腿不在名单里是代码注释写明的故意设计）。
+4) 关掉「只在生产、bt_env_pins.sh 未覆盖」的 6 个建仓/选股侧闸：WOLF_LINE_REGIME_GATE / WOLF_STEP_REFILL / WOLF_MA_LINE_ENTRY / WOLF_ETF_VOL_GATE / WOLF_T_ENTRY_LINES / WOLF_FUND_GATE_FAILCLOSED（★ 后者库内默认=1 ⇒ 必须显式写 0，删行无效）。删除 2 个死键 WOLF_JUDGE_CATALYST / WOLF_MAINLINE_GATE_STEP（全仓库无读取处）+ 删除 WOLF_TREND_VOL_RATIO 行（生产 1.0 vs 库内默认 1.2 ⇒ 删行=与回测一致）。
+
+判据/边界（本轮确立）：
+· 用 `os.walk` 全仓找 getenv 默认值 + 与 `jobs/bt_env_pins.sh` 逐键对照 ⇒ 生产独有且默认不同的开关=回测没验证过的规则。工具：.dsh-tmp/prod/env_compare.py（产出 env_compare.md：A 异值/B 只在 pins/C 只在生产）+ keys32.py。
+· 不含糊关：32 个里 5 个本来就是 0、6 个是数值/路径（WOLF_SW_CACHE 是 §9.762 修复、不能设 0）、4 个是结构件（WOLF_MAINLINE_SELECT 关了主线选择停摆、WOLF_QUALITY_JUDGE 是 §9.763 用户拍板）、5 个是卖出风控（WOLF_TREND_STOP/CUSHION_CAP/BOLL_MID_EXIT/WEEKEND_HEDGE）⇒ 关掉=不再止损/止盈，与用户目标相反 ⇒ 用户选"只关建仓/选股侧 6 个"。
+· SWITCH_EXEC_ENABLED=1 实际无效（它只在 15:25 rotation_switch_dryrun 里读，而该任务 enabled: false）。
+· 生产 /opt/marcus-platform/.env 是 **gitignored**（.gitignore:2）⇒ 改 env 不会弄脏服务器工作区 ✓；备份 .env.bak-20261008-scanlimit / -rules / -close6 保留。
+· 镜像仓 docker/prod.wolf.env 同步更新（§9.774 commit 165e6f8，已推 ghdirect main；ghfast 代理时通时断，直连 GitHub 更稳）。
+· 未动（按用户选择保留）：WOLF_TREND_STOP / WOLF_TREND_WEAK_NO_VOL / WOLF_CUSHION_CAP / WOLF_BOLL_MID_EXIT / WOLF_WEEKEND_HEDGE（风控）；WOLF_MAINLINE_SELECT / WOLF_QUALITY_JUDGE / WOLF_TIER_STATE_FIX / SWITCH_EXEC_ENABLED（结构/修复）；数值类；已为 0 的 5 个。
 
 ## 经验教训 Lessons Learned
 
