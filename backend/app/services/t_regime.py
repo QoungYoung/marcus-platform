@@ -8,8 +8,9 @@
 - 合成输出三态 ACTIVE/CAUTIOUS/HALT + 量能解读符号；写入 t_regime_state
 - TMonitor 写 t_triggers 前先过 GATE（BLOCKED 不写 / MANUAL_ONLY 挂人）
 """
+import time
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from app.services import t_db
 from app.services.t_data_sources import fetch_tencent_quote
@@ -33,6 +34,41 @@ _CACHE_TTL = 5.0
 #   ★ 取不到日历时**退回 weekday 规则**（fail-open ⇒ 与旧行为一致 ✓ 不会因日历故障停掉交易 ✓）。
 _CAL_CACHE: Dict[str, Optional[bool]] = {"day": "", "is_open": None}
 
+# ── 指数报价时间戳缓存（2026-10-08 用户要求「加上缓存」）──────────────────────────
+#   原来每轮（TMonitor 约 30s）都发一次 `https://qt.gtimg.cn/q=sh000001`（该函数**无缓存**）
+#   ⇒ 09:40~15:00 约 2 次/分钟 ✗。现在默认 **300s** 查一次 ✓（`WOLF_CAL_QUOTE_TTL` 可调；≤0 = 不缓存）。
+#   ★ **非对称 TTL**：判「开市」用完整 TTL；判「休市」最多缓存 60s ✓
+#     （万一开盘那一刻报价尚未刷新而误判休市 ⇒ 只跳 1~2 轮而不是 5 分钟 ✓）
+#   ★ 判据不缓存"失败"：取不到 ⇒ 返回 None（当轮交给日历/星期兜底 ✓ 不留脏缓存 ✓）
+_QUOTE_CACHE: Dict[str, Any] = {"day": "", "at": 0.0, "dt": "", "verdict": False}
+
+
+def _quote_dt(now: Optional[datetime] = None) -> Optional[str]:
+    """指数（上证 sh000001）报价时间戳的日期部分（YYYYMMDD），带缓存；取不到 ⇒ None。"""
+    now = now or datetime.now()
+    d8 = now.strftime("%Y%m%d")
+    try:
+        ttl = float(os.getenv("WOLF_CAL_QUOTE_TTL", "300") or 300)
+    except Exception:
+        ttl = 300.0
+    c = _QUOTE_CACHE
+    if ttl > 0 and c.get("day") == d8 and c.get("dt"):
+        _age = time.monotonic() - float(c.get("at") or 0.0)
+        _lim = ttl if c.get("verdict") else min(ttl, 60.0)
+        if _age < _lim:
+            return str(c["dt"])
+    try:
+        from app.services.t_data_sources import fetch_tencent_quote
+        q = (fetch_tencent_quote(["sh000001"]) or {}).get("sh000001") or {}
+        _dq = str(q.get("quote_dt") or "")[:8]
+    except Exception as _e:
+        print("[t_regime] 行情时间戳判据失败(继续用日历/星期): %s" % str(_e)[:70], flush=True)
+        return None
+    if not (len(_dq) == 8 and _dq.isdigit()):
+        return None
+    c.update({"day": d8, "at": time.monotonic(), "dt": _dq, "verdict": (_dq == d8)})
+    return _dq
+
 
 def _is_trading_day(now: Optional[datetime] = None) -> bool:
     """今天是不是**交易日**（含节假日；2026-10-08 修，用户拍板「修」）。
@@ -49,20 +85,15 @@ def _is_trading_day(now: Optional[datetime] = None) -> bool:
     now = now or datetime.now()
     d8 = now.strftime("%Y%m%d")
     hm = now.hour * 100 + now.minute
-    # ① 行情时间戳（09:40 之后采信）
+    # ① 行情时间戳（09:40 之后采信；**带缓存**，见 `_quote_dt`）
     if hm >= 940:
-        try:
-            from app.services.t_data_sources import fetch_tencent_quote
-            q = (fetch_tencent_quote(["sh000001"]) or {}).get("sh000001") or {}
-            _dq = str(q.get("quote_dt") or "")[:8]
-            if len(_dq) == 8 and _dq.isdigit():
-                if _dq != d8 and _CAL_CACHE.get("closed_logged") != d8:
-                    _CAL_CACHE["closed_logged"] = d8
-                    print("[t_regime] ★ 行情时间戳=%s ≠ 今天 %s ⇒ 判为**休市**（节假日/停市）⇒ 本轮不评估、不发腿"
-                          % (_dq, d8), flush=True)
-                return _dq == d8
-        except Exception as _e:
-            print("[t_regime] 行情时间戳判据失败(继续用日历/星期): %s" % str(_e)[:70], flush=True)
+        _dq = _quote_dt(now)
+        if _dq:
+            if _dq != d8 and _CAL_CACHE.get("closed_logged") != d8:
+                _CAL_CACHE["closed_logged"] = d8
+                print("[t_regime] ★ 行情时间戳=%s ≠ 今天 %s ⇒ 判为**休市**（节假日/停市）⇒ 本轮不评估、不发腿"
+                      % (_dq, d8), flush=True)
+            return _dq == d8
     # ② 交易日历（每天只查一次；只采信"休市"）
     if _CAL_CACHE.get("day") != d8:
         _CAL_CACHE["day"] = d8
