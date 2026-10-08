@@ -1205,7 +1205,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '55 18 * mon-fri'
+    expr: '55 18 * * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_mainline_select.py
