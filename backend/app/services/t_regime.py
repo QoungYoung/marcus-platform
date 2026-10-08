@@ -8,6 +8,7 @@
 - 合成输出三态 ACTIVE/CAUTIOUS/HALT + 量能解读符号；写入 t_regime_state
 - TMonitor 写 t_triggers 前先过 GATE（BLOCKED 不写 / MANUAL_ONLY 挂人）
 """
+import os
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -43,8 +44,12 @@ _CAL_CACHE: Dict[str, Optional[bool]] = {"day": "", "is_open": None}
 _QUOTE_CACHE: Dict[str, Any] = {"day": "", "at": 0.0, "dt": "", "verdict": False}
 
 
-def _quote_dt(now: Optional[datetime] = None) -> Optional[str]:
-    """指数（上证 sh000001）报价时间戳的日期部分（YYYYMMDD），带缓存；取不到 ⇒ None。"""
+def _quote_dt(now: Optional[datetime] = None) -> tuple:
+    """指数（上证 sh000001）报价时间戳的日期部分（YYYYMMDD），带缓存。
+
+    返回 `(dq, fresh)`：`dq` 取不到 ⇒ `(None, False)`；`fresh=True` 表示**本次真的发了请求**
+      （缓存命中 ⇒ False ✓ —— 连续确认只数新鲜观测，不数缓存命中 ✓）。
+    """
     now = now or datetime.now()
     d8 = now.strftime("%Y%m%d")
     try:
@@ -54,20 +59,68 @@ def _quote_dt(now: Optional[datetime] = None) -> Optional[str]:
     c = _QUOTE_CACHE
     if ttl > 0 and c.get("day") == d8 and c.get("dt"):
         _age = time.monotonic() - float(c.get("at") or 0.0)
-        _lim = ttl if c.get("verdict") else min(ttl, 60.0)
+        # ★ 判「开市」用完整 TTL(默认 300s)；判「休市」只缓存 20s ⇒ 连续确认能在 ~1 分钟内完成 ✓
+        _lim = ttl if c.get("verdict") else min(ttl, 20.0)
         if _age < _lim:
-            return str(c["dt"])
+            return str(c["dt"]), False
     try:
         from app.services.t_data_sources import fetch_tencent_quote
         q = (fetch_tencent_quote(["sh000001"]) or {}).get("sh000001") or {}
         _dq = str(q.get("quote_dt") or "")[:8]
     except Exception as _e:
         print("[t_regime] 行情时间戳判据失败(继续用日历/星期): %s" % str(_e)[:70], flush=True)
-        return None
+        return None, False
     if not (len(_dq) == 8 and _dq.isdigit()):
-        return None
+        return None, False
     c.update({"day": d8, "at": time.monotonic(), "dt": _dq, "verdict": (_dq == d8)})
-    return _dq
+    return _dq, True
+
+
+# ── 「疑似休市」连续确认 + 每日一次告警（2026-10-08 用户要求三条都做）───────────
+#   为什么要确认：「休市」是**否决整场**的结论 ⇒ 单次观测就下结论风险不对称 ✗
+#   为什么缓存命中不计数：否则 5 分钟一次缓存也会在 3 轮内凑满"确认次数"（假确认 ✗）
+_CLOSED: Dict[str, Any] = {"day": "", "n": 0, "alerted": False}
+
+
+def _closed_confirm_n() -> int:
+    """确认所需**新鲜观测**次数（`WOLF_CAL_CLOSED_CONFIRM`，默认 3）"""
+    try:
+        return max(1, int(os.getenv("WOLF_CAL_CLOSED_CONFIRM", "3") or 3))
+    except Exception:
+        return 3
+
+
+def _closed_seen(d8: str, fresh: bool) -> int:
+    c = _CLOSED
+    if c.get("day") != d8:
+        c.update({"day": d8, "n": 0, "alerted": False})
+    if fresh:
+        c["n"] = int(c.get("n") or 0) + 1
+    return int(c.get("n") or 0)
+
+
+def _closed_clear(d8: str) -> None:
+    """见到「开市」⇒ 立刻清零（不残留昨天的计数 ✓）"""
+    if _CLOSED.get("day") != d8 or _CLOSED.get("n"):
+        _CLOSED.update({"day": d8, "n": 0})
+
+
+def _closed_alert(d8: str, dq: str) -> None:
+    """判休市 ⇒ **每天一次** QQ 告警（`WOLF_CAL_ALERT=0` 可关）✓"""
+    if _CLOSED.get("alerted"):
+        return
+    if str(os.getenv("WOLF_CAL_ALERT", "1")).strip().lower() in ("0", "false", "no", "off"):
+        _CLOSED["alerted"] = True
+        return
+    _CLOSED["alerted"] = True
+    msg = ("[交易日门] 指数报价时间戳=%s ≠ 今天 %s ⇒ 判为**休市**（节假日/停市）："
+           "TMonitor 今日不评估、不发腿（已连续 %d 次新鲜观测确认）" % (dq, d8, _closed_confirm_n()))
+    print("[t_regime] ★ " + msg, flush=True)
+    try:
+        from app.services import alert_hub as _ah
+        _ah.push_qq(msg)
+    except Exception as _e:
+        print("[t_regime] 休市告警推送失败: %s" % str(_e)[:80], flush=True)
 
 
 def _is_trading_day(now: Optional[datetime] = None) -> bool:
@@ -85,15 +138,19 @@ def _is_trading_day(now: Optional[datetime] = None) -> bool:
     now = now or datetime.now()
     d8 = now.strftime("%Y%m%d")
     hm = now.hour * 100 + now.minute
-    # ① 行情时间戳（09:40 之后采信；**带缓存**，见 `_quote_dt`）
-    if hm >= 940:
-        _dq = _quote_dt(now)
+    # ① 行情时间戳（**09:30 起**采信；带缓存 + 连续确认 + 每日一次告警）
+    #   为什么 09:30 而不是 09:40：实测交易日 **09:31:05** 的第一条触发已带当日价（SZ002156 57.193
+    #   vs 节前收盘 56.9 ✓）⇒ 集合竞价后报价即为当日 ✓；收紧后假期 09:30–09:40 的约 20 轮空跑也省掉 ✓
+    if hm >= 930:
+        _dq, _fresh = _quote_dt(now)
         if _dq:
-            if _dq != d8 and _CAL_CACHE.get("closed_logged") != d8:
-                _CAL_CACHE["closed_logged"] = d8
-                print("[t_regime] ★ 行情时间戳=%s ≠ 今天 %s ⇒ 判为**休市**（节假日/停市）⇒ 本轮不评估、不发腿"
-                      % (_dq, d8), flush=True)
-            return _dq == d8
+            if _dq == d8:
+                _closed_clear(d8)
+                return True
+            if _closed_seen(d8, _fresh) >= _closed_confirm_n():
+                _closed_alert(d8, _dq)
+                return False
+            return now.weekday() < 5      # 确认期内**先按旧行为**（不跳 ✓ 避免单次抖动误判）
     # ② 交易日历（每天只查一次；只采信"休市"）
     if _CAL_CACHE.get("day") != d8:
         _CAL_CACHE["day"] = d8
