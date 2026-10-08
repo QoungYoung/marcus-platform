@@ -18,6 +18,13 @@ x-backend-common: &backend-common
     PYTHONUNBUFFERED: "1"
     # 容器内以 root 运行会往源码目录写 pycache（属主变 root）；关闭字节码缓存
     PYTHONDONTWRITEBYTECODE: "1"
+    # ★★ 账本 §9.762 ✓（用户拍板「开」✓；实测生产里规则 inert ✗）：
+    #   容器里模块用 __file__ 上溯推「仓库根」✗ ⇒ /app/app/services/… 上溯得 **/** ✗
+    #   ⇒ 它去找 `/data/sw_members_cache.json` ✗（而文件实际在 `/app/data/…` ✓）⇒ fail-open ✗
+    #   ★ 锚点里本来就有 `../data:/app/data` ✓ ⇒ 缓存**本来就可见** ✓ ⇒ **无需加挂载** ✗
+    #     （加单文件挂载反而会遮蔽目录挂载 ✗）
+    #   ⇒ 这里显式指定路径 ✓（模块第一顺位读 WOLF_SW_CACHE ✓，不再依赖上溯 ✗）
+    WOLF_SW_CACHE: /app/data/sw_members_cache.json
   volumes:
     - ../data:/app/data
     - ../apps:/app/apps:ro

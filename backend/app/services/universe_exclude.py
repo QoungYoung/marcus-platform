@@ -52,6 +52,14 @@ def enabled() -> bool:
 
 
 def _repo() -> str:
+    # ★★ 账本 §9.762 ✓：容器里 `__file__` 上溯会得到 **/** ✗（代码在 /app/app/services ✓）
+    #   ⇒ 优先用 compose 注入的 `MARCUS_WORKSPACE`（= /app ✓）或存在的 /app ✓
+    for _k in ('MARCUS_WORKSPACE',):
+        _v = str(os.getenv(_k) or '').strip()
+        if _v and os.path.isdir(os.path.join(_v, 'data')):
+            return _v
+    if os.path.isdir('/app/data'):
+        return '/app'
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
