@@ -5123,6 +5123,23 @@ class TMonitor:
                     #   ⇒ 语义**逐字照抄狼大** ✓（见 `wave_gate.cond_buy_wave_block` 的说明 ✓）；
                     #     开关 `WOLF_WAVE_COND_GATE` **库内默认 0** ⇒ 生产逐位不变 ✓（回测由 pins 置 1 ✓）
                     #   卖类不受影响 ✓（只在买入方向调用 ✓ —— 止血/兑现必须能执行 ✓）
+                    # ★★ 账本 §9.758 ✓（用户拍板：「**能否直接去掉商业航天和光伏相关行业的票**」✓
+                    #   →「申万行业呢」✓ →「推进」✓ →「做吧」✓）：
+                    #   口径 ✓：光伏 ＝ 申万 `l2=光伏设备` ∪ `l3 LIKE 光伏%`（含逆变器/硅料/发电 ✓）；
+                    #     商业航天 ＝ 申万 `航天装备` ∪ 概念（商业航天/卫星互联网/北斗导航）
+                    #     里名字含「航天/卫星/宇航」的 ✓（★ **收紧掉裸「星」** ✗ —— 否则误抓
+                    #     `星宇股份(601799)` 车灯 ✗／`星源材质(300568)` 锂电隔膜 ✗）
+                    #   ★ as-of ✓：申万自带 `in_date/out_date` ⇒ 回测里按当日重建 ✓（**不再 fail-open** ✗）
+                    #   开关 `WOLF_UNIVERSE_EXCLUDE` **库内默认 0** ⇒ **生产逐位不变** ✓（回测由 pins 置 1 ✓）
+                    #   卖类不受影响 ✓（只在买入方向调用 ✓）；取不到名单 ⇒ **放行**（fail-open ✓）
+                    _exb, _exwhy = (False, "")
+                    if str(side).lower() in ("buy", "买入"):
+                        try:
+                            from app.services.universe_exclude import check as _ux_check
+                            _exb, _exwhy = _ux_check(symbol, day=(os.getenv("BT_ASOF_DAY", "") or None))
+                        except Exception as _eex:
+                            _exb, _exwhy = False, ""
+                            print("[TMonitor] 行业排除闸异常(放行 ✓): %s" % str(_eex)[:80], flush=True)
                     _wgb, _wgwhy = (False, "")
                     if str(side).lower() in ("buy", "买入"):
                         try:
@@ -5136,6 +5153,10 @@ class TMonitor:
                         print("[TMonitor] 条件单买入时点闸拦截 %s %s: 不在下跌中买（B/C ✓）" % (symbol, trigger_kind), flush=True)
                         t_db.update_trigger_status(trig_id, "blocked",
                                                    reason="[COND-TIMING] 条件单买入时点闸：不在下跌中买（B/C）")
+                    elif _exb:
+                        exec_ok = False
+                        print("[TMonitor] 行业排除闸拦截 %s %s: %s" % (symbol, trigger_kind, str(_exwhy)[:110]), flush=True)
+                        t_db.update_trigger_status(trig_id, "blocked", reason="[EXCL] " + str(_exwhy)[:200])
                     elif _wgb:
                         exec_ok = False
                         print("[TMonitor] 条件单浪型闸拦截 %s %s: %s" % (symbol, trigger_kind, str(_wgwhy)[:110]), flush=True)
