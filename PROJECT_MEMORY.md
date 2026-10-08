@@ -3357,6 +3357,24 @@ T22 遗留物（作记录，不可用于对比）：沙箱 data/_bt_t22/（75 �
 已知假阳性（工具局限，勿改）：jobs/bt_pick_code_rev.py 的 _silent_alert（第 42 行确为模块级定义）；
 apps/main_line/position_class.py 的 ML / trend_channel 的 THEME_CONCEPTS / chain_dict_refine 的 AGRI_V06（均有 globals() 守卫或 if False 死分支）。
 工具限制：查不出 UnboundLocalError（"局部变量在赋值前被引用"），那类要靠运行时 traceback；命中需逐条人工确认。
+- [2026-10-08 18:33] [工作记录] 生产布腿链根因（§9.771/§9.772）：core 遮蔽、日内分位恒缺失、趋势通道未生效、埋伏腿双断点 — 2026-10-08 生产「腿少且建仓类腿=0」根因（均有容器内/DB 原始证据）：
+
+1) 建仓类腿从来为 0：t_conditions 全历史（08-15 起、19 种腿型）无 trend_break_buy / wolf_ambush_buy。
+   · trend_break_buy 唯一生产写腿口 = jobs/rotation_switch_arm.py ⑱（开关 WOLF_TREND_CHANNEL，现在=1）；10-06/07/08 三次 09:20 运行的完整 stdout+stderr（logs/debug/<id>_debug.txt）无任何 trend 行 ⇒ 当时 enabled()=False（.env/容器 11:29 才更新 ⇒ 09:20 那趟用旧 env）。只读探针：enabled=True、扫 8 票命中 1、16 票命中 3 ⇒ 通道可用，只是从没开过。
+   · wolf_ambush_buy 双断点：① 名单文件 ambush_candidates.json 生产不存在（写它的 stock_confirm_judge 需 WOLF_PICK_PULLBACK_SLOTS>0，库内默认 0，今日 08:20 日志无「回调名额」行）；② 路径用 `DATA_DIR or "."` 而容器 DATA_DIR 为空 ⇒ 落 /app/ambush_candidates.json（不在任何挂载、容器重建即丢）。全库仅 4 处用该模式：switch_builder.py:332/397、stock_confirm_judge.py:548、jobs/gen_ambush_lowdip.py:95。
+2) built=0 真因不是 realtime_indicators：check_entry_filters 只从雪球/腾讯 quote 取 intraday_percentile，而 core/xueqiu_engine._parse_tencent_quote 返回的 dict 根本没这个键（也没 rsr）⇒ 生产分位永远 None ⇒ 1d 段 fail-closed。回测是现算的（backend/app/api/backtest.py:3791）。
+3) P2 宏观 margin_burst（macro_state.json margin_net_buy=-392亿≤-100亿）硬拦所有新开仓 ⇒ 即使修好分位当天也 built=0（规则，非 bug）。
+4) WOLF_TREND_SCAN_LIMIT=0（回测专用口径：0=扫全部）同步到生产 ⇒ relay 1.5s/票 × 642 票 ≈ 16 分钟 > job_timeout 900s ⇒ 09:20 会整趟被杀（连卖腿都丢）。
+5) legs.jsonl/legs_switch.jsonl 不是布腿入口，只被 t_monitor._prio_ctx 当优先度上下文读（4608 行）⇒ 用户原计划 step2 前提不成立。
+6) 「07:46 那批腿」= worker 当天 07:46 重启触发的 TMonitor「启动即补腿」（t_monitor.py:494-495；_is_trading_time 是 09:30-11:30/13:00-15:00，不存在 07:46 定时任务）。
+
+已改（commits ab4c6f0 §9.771、d24edb7 §9.772，已 push origin 并在服务器 git pull + up -d backend worker）：
+· jobs/mainline_open_buy.py 把仓库根压到 sys.path 最前（修 /app/app/core 遮蔽 core.realtime_indicators）；容器内验证 core.__path__=['/app/core'] ✓
+· backend/app/api/indicator.py 补日内分位兜底（用 quote 的 high/low/current 现算，与回测同口径）；验证 data_unavailable=[] ✓、L1「✅日内分位(58%)」
+· WOLF_TREND_SCAN_LIMIT 0→200（.env + docker/prod.wolf.env）
+· config/tasks.yaml mainline_open_buy enabled: false→true（注意 enable_task() 不落盘，开机只认 YAML）
+手跑 mainline_open_buy：built=0 skip=15 = 14×hard_block(P2 margin_burst) + 1×data_unavailable(主力资金, 000963.SZ) ⇒ 分位闸已消失，剩 P2 规则闸。
+遗留：moneyflow 走 81.70.44.68:8199 失败且 datahubco 报 unknown api_name: moneyflow_dc；AMBUSH 路径待修（待用户拍板）。
 
 ## 经验教训 Lessons Learned
 

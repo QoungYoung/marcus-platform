@@ -329,7 +329,8 @@ def _arm_legs(plan):
     if not _ambush:
         try:
             import json as _js3
-            _ap2 = os.path.join(os.environ.get("DATA_DIR") or ".", "ambush_candidates.json")
+            # §9.773：默认 "."→"data"（生产 DATA_DIR 未设 ⇒ "."=/app 不在挂载里、容器重建即丢 ✗；回测已设 DATA_DIR ⇒ 本行零影响 ✓）
+            _ap2 = os.path.join(os.environ.get("DATA_DIR") or "data", "ambush_candidates.json")
             if os.path.exists(_ap2):
                 _ambush = {str(x) for x in (_js3.load(open(_ap2, encoding="utf-8")) or {}).get("symbols") or []}
         except Exception as _ae2:
@@ -394,7 +395,8 @@ def build_plan():
     #     否则执行口的「主营/主类校验」会把它挡掉 ✗（白排一条腿 ✓）
     try:
         import json as _js4
-        _ap3 = os.path.join(os.environ.get("DATA_DIR") or ".", "ambush_candidates.json")
+        # §9.773：同 _ap2 —— 默认 "."→"data"（生产 ⇒ /app/data 持久 ✓；回测 DATA_DIR 已设 ⇒ 零影响 ✓）
+        _ap3 = os.path.join(os.environ.get("DATA_DIR") or "data", "ambush_candidates.json")
         if os.path.exists(_ap3):
             _amb = (_js4.load(open(_ap3, encoding="utf-8")) or {}).get("symbols") or []
             print("[switch_builder] 埋伏候选文件读到 %d 只" % len(_amb), flush=True)

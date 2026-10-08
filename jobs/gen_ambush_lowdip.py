@@ -92,7 +92,8 @@ def main() -> int:
                            "amount": round(amt.get(t, 0.0), 0)})
             if low_ok and t not in out:
                 out.append(t)
-    p = os.path.join(os.getenv("DATA_DIR") or ".", "ambush_lowdip_candidates.json")
+    # §9.773：默认 "."→"data"（生产 DATA_DIR 未设 ⇒ "."=/app 不在挂载里、容器重建即丢 ✗；回测已设 DATA_DIR ⇒ 零影响 ✓）
+    p = os.path.join(os.getenv("DATA_DIR") or "data", "ambush_lowdip_candidates.json")
     try:
         json.dump({"day": day, "symbols": out, "detail": detail}, open(p, "w", encoding="utf-8"), ensure_ascii=False)
         print("  [ambush_lowdip] %s ⇒ 低位方向命中 %d 只 ✓｜写 %s ✓" % (day, len(out), os.path.basename(p)))

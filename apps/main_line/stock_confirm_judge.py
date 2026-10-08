@@ -545,7 +545,8 @@ def main():
                         #   （文件里 `{"day":"","symbols":[]}` 而日志明明选了 3 只 ✗ ⇒ 埋伏腿永远拿不到 ✓）
                         try:
                             import json as _js2
-                            _ap = os.path.join(os.environ.get("DATA_DIR") or ".", "ambush_candidates.json")
+                            # §9.773：默认 "."→"data"（生产 DATA_DIR 未设 ⇒ "."=/app 易失 ⇒ 写法跟读法必须同时改 ✓；回测已设 DATA_DIR ⇒ 零影响 ✓）
+                            _ap = os.path.join(os.environ.get("DATA_DIR") or "data", "ambush_candidates.json")
                             _old = []
                             try:
                                 _old = list((_js2.load(open(_ap, encoding="utf-8")) or {}).get("symbols") or [])
