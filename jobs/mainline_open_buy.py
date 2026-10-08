@@ -46,6 +46,14 @@ for _d in ("apps/main_line", "apps/paper-trading", "apps", "core"):
     _p = os.path.join(_root, _d)
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
+# ★ §9.771（2026-10-08）：**仓库根必须排在 sys.path 最前** —— 上面把 `/app/app` 也插进来了 ✓，
+#   而 `/app/app/core/` 是一个**真的 `core` 包**（backend 的 core 子包 ✓）✗
+#   ⇒ `import core` 命中它 ✗ ⇒ `from core.realtime_indicators import …` 永远
+#     `ModuleNotFoundError: No module named 'core.realtime_indicators'` ✗
+#   （容器内实测复现 ✓：`core.__path__=['/app/app/core']` ✗，警告原文即此 ✓）
+#   ⇒ 本行把它压到最前 ⇒ `core` = 仓库根的 `core/` ✓（backend 侧 `app.core.*` 不受影响 ✓）
+if _root not in sys.path:
+    sys.path.insert(0, _root)
 
 DATA = os.environ.get("DATA_DIR", "data")
 
