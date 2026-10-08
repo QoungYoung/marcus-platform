@@ -3368,13 +3368,12 @@ apps/main_line/position_class.py 的 ML / trend_channel 的 THEME_CONCEPTS / cha
 5) legs.jsonl/legs_switch.jsonl 不是布腿入口，只被 t_monitor._prio_ctx 当优先度上下文读（4608 行）⇒ 用户原计划 step2 前提不成立。
 6) 「07:46 那批腿」= worker 当天 07:46 重启触发的 TMonitor「启动即补腿」（t_monitor.py:494-495；_is_trading_time 是 09:30-11:30/13:00-15:00，不存在 07:46 定时任务）。
 
-已改（commits ab4c6f0 §9.771、d24edb7 §9.772，已 push origin 并在服务器 git pull + up -d backend worker）：
-· jobs/mainline_open_buy.py 把仓库根压到 sys.path 最前（修 /app/app/core 遮蔽 core.realtime_indicators）；容器内验证 core.__path__=['/app/core'] ✓
-· backend/app/api/indicator.py 补日内分位兜底（用 quote 的 high/low/current 现算，与回测同口径）；验证 data_unavailable=[] ✓、L1「✅日内分位(58%)」
-· WOLF_TREND_SCAN_LIMIT 0→200（.env + docker/prod.wolf.env）
-· config/tasks.yaml mainline_open_buy enabled: false→true（注意 enable_task() 不落盘，开机只认 YAML）
-手跑 mainline_open_buy：built=0 skip=15 = 14×hard_block(P2 margin_burst) + 1×data_unavailable(主力资金, 000963.SZ) ⇒ 分位闸已消失，剩 P2 规则闸。
-遗留：moneyflow 走 81.70.44.68:8199 失败且 datahubco 报 unknown api_name: moneyflow_dc；AMBUSH 路径待修（待用户拍板）。
+已改（commits ab4c6f0 §9.771、d24edb7 §9.772、c2d977b §9.773）：
+· §9.771 jobs/mainline_open_buy.py 把仓库根压到 sys.path 最前（修 /app/app/core 遮蔽 core.realtime_indicators）；容器内验证 core.__path__=['/app/core'] ✓
+· §9.772 backend/app/api/indicator.py 补日内分位兜底（用 quote 的 high/low/current 现算，与回测同口径）；验证 data_unavailable=[] ✓、L1「✅日内分位(58%)」；WOLF_TREND_SCAN_LIMIT 0→200（.env + docker/prod.wolf.env）；config/tasks.yaml mainline_open_buy enabled: false→true（注意 enable_task() 不落盘，开机只认 YAML）
+· §9.773 埋伏腿名单路径 `DATA_DIR or "."` → `DATA_DIR or "data"`（3 文件 4 处；回测 DATA_DIR 已设 ⇒ 零影响）。★ 教训：不要给生产设 DATA_DIR=/app/data —— t_monitor 多处按 dirname(DATA_DIR) 当「运行根」（1066/2883/3235，§9.244 注释），生产正是靠 DATA_DIR 未设才落到 /app/data ✓；设了会改成易失的 /app ✗。
+手跑 mainline_open_buy：built=0 skip=15 = 14×hard_block(P2 margin_burst) + 1×data_unavailable(主力资金, 000963.SZ) ⇒ 分位闸已消失，剩 P2 规则闸（未绕过）。
+遗留：moneyflow 走 81.70.44.68:8199 失败且 datahubco 报 unknown api_name: moneyflow_dc；gen_ambush_lowdip.py 生产缺 bars 表（sqlite）⇒ 跑不动（无读者、未排期）。
 
 ## 经验教训 Lessons Learned
 
