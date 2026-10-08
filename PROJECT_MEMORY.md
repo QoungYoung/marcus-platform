@@ -6167,6 +6167,21 @@ V1 固定 5 日（≈我们现行腿口径）**−1.18%**/44%/−4.2%/−0.28/5 
 4) 不要在跑批运行期间重启容器/转发器/臂；必须动时先停臂，动完用 RESUME_FROM=<当天> 续跑。
 5) Python 补丁脚本里绝不放 ASCII 双引号（用「」）；多行字符串 += 拼接最容易写坏（今晚挂了 5 次）⇒ 改用 sed/heredoc。
 6) 不要自己编造约束（我反复说"上下文耗尽了"当理由，实际没有依据）——有疑问先量，量不到就问。
+- [2026-10-08 21:46] [经验教训] §9.779 修两处交易日/数据口径：节假日门（行情时间戳判据）+ 日线分页截断 — ★ 2026-10-08 用户拍板「修」两处口径不一致（§9.779）：
+
+① **TMonitor 的"交易日"只看星期、不看节假日** ✗（`backend/app/services/t_regime.py::_is_trading_time`：`weekday()<5` + 时段）。
+   实测：2026-09-25（中秋）与 10-01~10-07（国庆）**照跑** —— 09-25 写 432 行 t_triggers（含 2 笔 executed 卖腿）、假期每天约 470 行（全 blocked/info）⇒ 白跑+写库噪声；**未造成成交** ✓（paper_trades 这些天 0 行、paper_positions(stock)=0）。
+   修法（三层 fail-open）：① **行情时间戳判据**（最可靠、离线）：指数报价 `quote_dt`（腾讯字段[30] = YYYYMMDDHHMMSS）的日期 ≠ 今天 ⇒ 判休市 ✓（实测假期报价冻结在上一交易日：10-01~10-07 价格恒为 56.900 = 09-30 收盘 ✓）；**09:40 前不采信**（开盘前带上一日时间戳）；② 日历（`mkt_bars.trade_days`）**只采信"休市"结论**；③ 退回 weekday（旧行为，零回归）。
+   ★ 关键坑：`mkt_bars.trade_days` 在生产**不可靠** —— 实测 `trade_cal` 报 `tenant key expired` / 连发触发限流（"multiple unauthorized access attempts, remaining 349s"）后**降级成"周一~周五全算交易日"** ✗ ⇒ 任何"用 trade_days 判节假日"的方案都会静默失效，必须用行情自身判据。
+   新增 `t_data_sources.fetch_tencent_quote` 返回键 `quote_dt`（只新增键，不动既有 ✓）。
+   验证：`_is_trading_day(2026-10-08)=True` ✓、`10-01/10-05/09-25/10-10=False` ✓、盘前 09:35 走星期兜底 ✓。
+
+② **mkt_bars 单页截断（5000 行上限）** ✗：`mkt_bars.day_rows` 原来 `pro.daily(trade_date=d8)` 依赖中继自带翻页，但实测 `mkt_bars_daily` 的 **20260921/22/23/24/28 各只有 5000 行**（其它交易日 5557~5561）⇒ 那几天主题等权/成交额份额基准少约 560 只 ⇒ 主线 r5 窗口正好包含 09-24/09-28 ⇒ 打分被污染。
+   修法：新增 `_fetch_paged(pro, api, d8)` —— **显式带 offset 翻页**（中继 `_fetch_pages`：`paginate = not explicit_offset` ⇒ 翻页由我们掌控 ✓）、按 ts_code 去重、失败返回已取部分；`day_rows` 的 daily 与 daily_basic 都改走它 ✓。
+   验证+回补：单日取数 20260924 由 5000 → **5557** ✓；`MB.backfill('20260921','20260928', days=[5 天])` 写入 27777 行 ✓ ⇒ 计数 5553/5554/5556/5557/5557 ✓。
+
+★ 部署教训：**bind mount 的 py 改动对"常驻进程"（worker/backend）不自动生效** —— `docker compose up -d backend worker` 在 compose 配置没变时是 **no-op** ✗（容器不会重启）⇒ 必须 `docker restart marcus-worker marcus-backend`（子进程型任务如 09:20 布腿器才是"改完即生效"）。
+   提交：§9.779（backend/app/services/{t_regime,t_data_sources,mkt_bars}.py）。
 
 ## 行动指南 Action Guide
 

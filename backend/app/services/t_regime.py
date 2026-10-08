@@ -26,10 +26,63 @@ _regime_cache: Dict[str, object] = {"ts": 0, "result": None}
 _CACHE_TTL = 5.0
 
 
-def _is_trading_time(now: Optional[datetime] = None) -> bool:
-    """A 股交易时段门控（9:30-11:30 / 13:00-15:00，周一至周五）。"""
+# ── 交易日日历（2026-10-08 修，用户拍板「修」）──────────────────────────────────
+#   原实现只看 `weekday() >= 5` ✗ ⇒ **节假日照跑**：实测 2026-09-25（中秋）与 10-01~10-07（国庆）
+#   TMonitor 仍在评估并写 t_triggers（09-25 共 432 行、假期每天约 470 行 ✓ 状态全为 blocked/info ✓
+#   未造成成交 ✓ —— 但白跑 + 写库噪声 ✗）。这里加一层日历门 ✓。
+#   ★ 取不到日历时**退回 weekday 规则**（fail-open ⇒ 与旧行为一致 ✓ 不会因日历故障停掉交易 ✓）。
+_CAL_CACHE: Dict[str, Optional[bool]] = {"day": "", "is_open": None}
+
+
+def _is_trading_day(now: Optional[datetime] = None) -> bool:
+    """今天是不是**交易日**（含节假日；2026-10-08 修，用户拍板「修」）。
+
+    判据优先级（每层都有 fail-open 兜底 ⇒ **不会因数据源故障停掉交易** ✓）：
+      ① **行情自身**（最可靠、离线 ✓）：指数报价**时间戳**的日期 ≠ 今天 ⇒ **休市** ✓
+         实测：节假日腾讯报价冻结在**上一交易日**（10-01~10-07 价格恒为 56.900 = 09-30 收盘 ✓）
+         ⚠️ **09:40 前不采信**（开盘前报价仍带上一日时间戳 ✗）；取不到报价 ⇒ 进 ②
+      ② **交易日历**（`mkt_bars.trade_days`）：★ 生产实测该源**当前不可靠** ——
+         `trade_cal` 报 `tenant key expired` / 连发触发限流后**降级成"周一~周五全算交易日"** ✗
+         ⇒ **只采信它的"休市"结论** ✓（"开市"不采信，交给 ①③）
+      ③ 退回 `weekday() < 5`（**旧行为** ✓ 零回归）
+    """
     now = now or datetime.now()
-    if now.weekday() >= 5:
+    d8 = now.strftime("%Y%m%d")
+    hm = now.hour * 100 + now.minute
+    # ① 行情时间戳（09:40 之后采信）
+    if hm >= 940:
+        try:
+            from app.services.t_data_sources import fetch_tencent_quote
+            q = (fetch_tencent_quote(["sh000001"]) or {}).get("sh000001") or {}
+            _dq = str(q.get("quote_dt") or "")[:8]
+            if len(_dq) == 8 and _dq.isdigit():
+                if _dq != d8 and _CAL_CACHE.get("closed_logged") != d8:
+                    _CAL_CACHE["closed_logged"] = d8
+                    print("[t_regime] ★ 行情时间戳=%s ≠ 今天 %s ⇒ 判为**休市**（节假日/停市）⇒ 本轮不评估、不发腿"
+                          % (_dq, d8), flush=True)
+                return _dq == d8
+        except Exception as _e:
+            print("[t_regime] 行情时间戳判据失败(继续用日历/星期): %s" % str(_e)[:70], flush=True)
+    # ② 交易日历（每天只查一次；只采信"休市"）
+    if _CAL_CACHE.get("day") != d8:
+        _CAL_CACHE["day"] = d8
+        _CAL_CACHE["is_open"] = None
+        try:
+            from app.services.mkt_bars import trade_days      # 与 sync_mkt_bars 同一日历源 ✓
+            _CAL_CACHE["is_open"] = d8 in set(trade_days(d8, d8) or [])
+        except Exception as _e:
+            _CAL_CACHE["is_open"] = None
+            print("[t_regime] 交易日历取数失败 ⇒ 退回 weekday 判定: %s" % str(_e)[:80], flush=True)
+    if _CAL_CACHE.get("is_open") is False:
+        return False
+    # ③ 星期兜底（旧行为）
+    return now.weekday() < 5
+
+
+def _is_trading_time(now: Optional[datetime] = None) -> bool:
+    """A 股交易时段门控（**交易日** ∧ 9:30-11:30 / 13:00-15:00）。"""
+    now = now or datetime.now()
+    if not _is_trading_day(now):
         return False
     hm = now.hour * 100 + now.minute
     return (930 <= hm <= 1130) or (1300 <= hm <= 1500)

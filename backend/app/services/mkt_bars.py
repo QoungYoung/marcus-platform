@@ -79,15 +79,53 @@ def st_map() -> Dict[str, bool]:
     return out
 
 
+def _fetch_paged(pro, api: str, d8: str, page: int = 5000, max_pages: int = 12, **kw):
+    """按 offset **显式翻页**取某日全市场数据（2026-10-08 修，用户拍板「修」）。
+
+    为什么：中继（`core/tushare_relay`）自带翻页 ✓，但**实测仍出现正好一页的截断** ✗ ——
+      `mkt_bars_daily` 里 `20260921/22/23/24/28` **各只有 5000 行**（其它交易日 5557~5561 ✓）
+      ⇒ 那几天的主题等权/成交额份额基准少约 560 只 ✗（主线 r5 窗口正好包含 09-24/09-28 ✓）。
+    做法：显式带 `offset` ⇒ 中继判定「调用方自己翻页」（`_fetch_pages`: `paginate = not explicit_offset` ✓）
+      ⇒ 翻页由本函数掌控 ✓；按 `ts_code` 去重 ✓；失败按已取到部分返回（不抛 ✓）。
+    """
+    frames, seen = [], set()
+    for i in range(max_pages):
+        try:
+            df = getattr(pro, api)(trade_date=d8, offset=i * page, limit=page, **kw)
+        except Exception as e:
+            print(f"[mkt_bars] {api}({d8}) 第 {i + 1} 页失败: {type(e).__name__}: {str(e)[:60]}")
+            break
+        n = 0 if df is None else len(df)
+        if n == 0:
+            break
+        try:
+            if "ts_code" in df.columns:
+                df = df[~df["ts_code"].astype(str).isin(seen)]
+                seen.update(str(x) for x in df["ts_code"].tolist())
+        except Exception:
+            pass
+        if len(df):
+            frames.append(df)
+        if n < page:
+            break
+    if not frames:
+        return None
+    try:
+        import pandas as pd
+        return pd.concat(frames, ignore_index=True)
+    except Exception:
+        return frames[0]
+
+
 def day_rows(d8: str, sts: Optional[Dict[str, bool]] = None) -> List[Dict[str, Any]]:
     """取某日全市场日线（+市值/换手），返回可入库的行列表。"""
     pro = _pro()
-    df = pro.daily(trade_date=d8)
+    df = _fetch_paged(pro, "daily", d8)
     if df is None or len(df) == 0:
         return []
     basics: Dict[str, Any] = {}
     try:
-        b = pro.daily_basic(trade_date=d8, fields="ts_code,total_mv,turnover_rate")
+        b = _fetch_paged(pro, "daily_basic", d8, fields="ts_code,total_mv,turnover_rate")
         if b is not None and len(b):
             for ts, mv, tr in zip([str(x) for x in b["ts_code"]], b["total_mv"], b["turnover_rate"]):
                 basics[ts] = (mv, tr)

@@ -344,6 +344,11 @@ def fetch_tencent_quote(symbols: List[str], timeout: int = 8) -> Dict[str, Optio
                     "amplitude": amplitude,
                     "average": average,
                     "change_pct": round((current - pre_close) / pre_close * 100, 2) if pre_close else 0.0,
+                    # ★ 2026-10-08 加（用户拍板「修」）：腾讯 [30] 是**行情时间戳**（YYYYMMDDHHMMSS ✓）
+                    #   用途：`t_regime._is_trading_day` 判**节假日**——休市时它冻结在**上一交易日** ✓
+                    #   （实测 10-01~10-07 价格恒为 56.900 = 09-30 收盘 ⇒ 时间戳也停在 09-30 ✓）
+                    #   ⚠️ 只**新增**键 ✓ 不动既有键 ⇒ 对既有调用方零影响 ✓
+                    "quote_dt": (fields[30] if len(fields) > 30 else ""),
                     "elapsed_s": round(elapsed, 3),
                 }
             except (ValueError, IndexError):
