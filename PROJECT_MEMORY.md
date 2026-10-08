@@ -3388,6 +3388,31 @@ apps/main_line/position_class.py 的 ML / trend_channel 的 THEME_CONCEPTS / cha
 · 生产 /opt/marcus-platform/.env 是 **gitignored**（.gitignore:2）⇒ 改 env 不会弄脏服务器工作区 ✓；备份 .env.bak-20261008-scanlimit / -rules / -close6 保留。
 · 镜像仓 docker/prod.wolf.env 同步更新（§9.774 commit 165e6f8，已推 ghdirect main；ghfast 代理时通时断，直连 GitHub 更稳）。
 · 未动（按用户选择保留）：WOLF_TREND_STOP / WOLF_TREND_WEAK_NO_VOL / WOLF_CUSHION_CAP / WOLF_BOLL_MID_EXIT / WOLF_WEEKEND_HEDGE（风控）；WOLF_MAINLINE_SELECT / WOLF_QUALITY_JUDGE / WOLF_TIER_STATE_FIX / SWITCH_EXEC_ENABLED（结构/修复）；数值类；已为 0 的 5 个。
+- [2026-10-08 20:41] [工作记录] 回测 env 双层结构与生产对齐（§9.775/§9.776）：47 条桶①已同步、桶②③保留 — ★ 回测 env 是「两层」，这决定了"生产 vs 回测"的一切对账（2026-10-08 查清）：
+  回测有效值 = ① 臂脚本显式（如 .dsh-tmp/wolfbt/_run_t35d_exec.sh，T22 全启用包）> ② jobs/bt_env_pins.sh（手工覆盖层，294 条）
+             > ③ .dsh-tmp/wolfbt/bt_env_prod.env（jobs/bt_env_from_prod.py 从**生产容器**生成；本机那份 mtime=2026-09-19 ⇒ 3 周未重生成）
+             > ④ 库内默认。
+  ⇒ **"pins 里没有" ≠ "回测没有"**：可能从 ③ 快照拿到生产当时的值。我 10-08 第一轮误判就栽在这（用 pins vs 生产两方对照）。
+
+★ 我第一轮的误改与回滚（教训）：
+  误把 WOLF_FUND_GATE_FAILCLOSED / LINE_REGIME_GATE / ETF_VOL_GATE / MA_LINE_ENTRY / STEP_REFILL 设为 0、删掉 WOLF_TREND_VOL_RATIO 行（理由是"pins 没有=回测没覆盖"）
+  ⇒ 实际 ③ 快照里它们是 1/1/1/1/1/1.0 ⇒ **生产被改得比回测更宽松** ✗ ⇒ 已全部回滚为 1 / 1.0（.env.bak-20261008-alignarm）。
+  只有 WOLF_T_ENTRY_LINES 是对的（③ 里没有 ⇒ 回测本来就是默认 0）。
+
+★ 对账工具（只读，可复用）：.dsh-tmp/prod/align_arm.py ⇒ align_arm_table.md（臂>pins>快照>默认 vs 生产容器 env）；
+  bucket.py 分三桶；make_bucket1.py 生成同步清单。10-08 实测：336 键里 92 差异 = 18 回测专用族（正确未同步）+ 74 真需判定。
+
+★ 用户 2026-10-08 拍板「与最新回测臂(T22/t35d)保持一致」⇒ 已同步 **桶① 47 条策略口径**进生产（.env.bak-20261008-bucket1 可回滚）：
+  ADDON_CAP/ADDON_MAX_BUYS/CALDAYS、BASE_HALF_CAP、BASE_EXEMPT_STRICT、BREAKOUT_ADD、BUILD_CAP_ANCHOR、BUILD_SIZE_FLOOR、
+  CORE_PRIORITY、G8_PROTECT_REDUCE、BAN_TTL_CAL_FIX、FIB_HALF_BASE、S1_VOL_REQUIRED、STAGE_S1_RELAX、NEWHIGH_AFTER_ENTRY、
+  PROTECT_STRUCTURED、WEAK_DEFER、PROMOTE_ADD_EXEMPT、VOLUME_GATE_LOCAL、ZT_DAY_BUDGET=10、ZHENGT_MAX_NOTIONAL=10、
+  COOLDOWN_REAL_DAYS/SCOPE=both、LOWDIP_ON_TREND_ONLY、FUND_GATE_MODE=rank、MAINLINE_SCORE=combo、EARLY_STOP_ANCHOR=redk、
+  FILL_PREMIUM_PCT=0、MEMBER_BATCH*/DSH_VETO/FAIL_FAST/LLM_TIMEOUT=20/NEG_TTL=120/RETRY/BACKOFF、MF_FETCH_MAX=80/ON_MISS、
+  WARN_TRIM_MAX_PCT=40/SCOPE=account、IDX_MINS1_FALLBACK、LOGIC_WINDOW_FIX、PRESCREEN_CACHE、STOP_COND_CACHE、STOP_SCAN_ONCE_PER_BAR、STOCK_CONFIRM_ORDER=purity_amount。
+  **未同步**（有意）：桶② 13 条回测环境/端点/路径（含 WOLF_MEMBER_LLM_URL=127.0.0.1:13001 ＝用户红线 ✗）；
+  桶③ 10 条生产更严/需单独拍板（QUALITY_JUDGE=1、SW_CACHE、TREND_SCAN_LIMIT=200、PICK_BOARD_EXCLUDE=cyb,bj,kcb、VOLFUND_SELFHEAL=1、GAP_CAUTION=0、MAX_CORE_SYMBOLS、TIER_STATE_FIX 等）。
+  ★ 遗留待拍板：WOLF_MAX_CORE_SYMBOLS（回测 150 / 生产默认 20）—— t_monitor 注释实测"上限恒 20 ⇒ 每天 16~24 只条件腿连报价都没取到、当天永不触发" ⇒ 倾向该同步 150。
+  同步后生产容器 WOLF_ 计数 224 → 270；改完必须 `docker compose -f docker-compose.yml up -d backend worker`（restart 不重读 env）。
 
 ## 经验教训 Lessons Learned
 
