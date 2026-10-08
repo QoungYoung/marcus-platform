@@ -55,6 +55,33 @@ def _repo() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
+def _warn(msg: str) -> None:
+    """★ §9.759 ✓：醒目告警（stderr ＋ 项目既有告警通道若可用 ✓）；绝不抛 ✓"""
+    try:
+        sys.stderr.write('[SW-CACHE] ✗ %s\n' % str(msg)[:200])
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        from app.services import gate_alarm as _ga     # 项目既有 ✓（不可用就算了 ✓）
+        _ga.note('universe_exclude', RuntimeError('[SW-CACHE] %s' % str(msg)[:160]))
+    except Exception:
+        pass
+
+
+def _warn_if_stale(path: str) -> None:
+    """缓存**过期** ⇒ 报警 ✓（默认 7 天 ✓；★ 行为不变 ⇒ 仍放行 ✓）"""
+    try:
+        import time as _t
+        days = float(os.getenv('WOLF_SW_CACHE_MAX_AGE_DAYS', '7') or 7)
+        age = (_t.time() - os.path.getmtime(path)) / 86400.0
+        if days > 0 and age > days:
+            _warn('申万缓存已过期（%.1f 天 > %.1f 天 ✓）⇒ 建议刷新：'
+                  '`jobs/bt_refresh_sw_cache.py` ✓ ｜ %s' % (age, days, path))
+    except Exception:
+        pass
+
+
 def _sw_cache_path() -> Optional[str]:
     """申万缓存查找顺序 ✓：`WOLF_SW_CACHE` → `data/sw_members_cache.json` → `.dsh-tmp/prod/…` ✓"""
     cands: List[str] = []
@@ -65,7 +92,13 @@ def _sw_cache_path() -> Optional[str]:
     cands.append(os.path.join(_repo(), ".dsh-tmp", "prod", "sw_members_cache.json"))
     for c in cands:
         if c and os.path.exists(c):
+            _warn_if_stale(c)          # ★ §9.759 ✓：过期 ⇒ 大声报警（行为不变 ✓ 仍放行 ✓）
             return c
+    # ★ §9.759 ✓（用户 2026-10-07 拍板 ✓）：缓存**缺失** ⇒ 必须**大声报警** ✗
+    #   为什么 ✗：缺失时本模块 **fail-open 放行** ✓ ⇒ 「规则看着有、实际没生效」✗
+    #     —— 今晚反复吃亏的形态 ✓ ⇒ 至少要在日志里喊出来 ✓（**不改语义** ✗）
+    _warn('申万缓存**缺失**（找过 %s）⇒ 行业排除规则将 **fail-open 放行** ✗ '
+          '请先跑 `jobs/bt_refresh_sw_cache.py` ✓' % '；'.join(x for x in cands if x))
     return None
 
 
