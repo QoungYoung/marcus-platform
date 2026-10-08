@@ -5148,6 +5148,27 @@ class TMonitor:
                         except Exception as _ewg:
                             _wgb, _wgwhy = False, ""
                             print("[TMonitor] 条件单浪型闸异常(放行 ✓): %s" % str(_ewg)[:80], flush=True)
+                    # ★★ 账本 §9.764 ✓（用户拍板：「agent 判质地接生产」✓）：
+                    #   验证结论 ✓（`.dsh-tmp/prod/quality_judge_result.json` ✓）：`avoid` 召回 4/4 ✓／误伤 0 ✓；
+                    #     ★ 但 **`caution` 在下跌趋势里几乎对所有票都给** ✗ ⇒ v1 **只让 `avoid` 硬拦** ✓，
+                    #       `caution`/`ok` **不改行为** ✓（不做降档 ✗ —— 那要动仓位逻辑 ✓ 风险大 ✓）
+                    #   ★ 成本 ✓：单只 **~33 秒** ✗ ⇒ **只对「首次建仓」问** ✓（`_held_today` ＝ 项目既有口径 ✓）
+                    #     ＋ 且 ★ **惰性**：只有更便宜的闸（时点/行业/浪型/开盘追高）都没拦时才调 ✓
+                    #   ★ 失败一律 **fail-open 放行 ＋ 醒目告警** ✓（模块内已实现 ✓）
+                    #   开关 `WOLF_QUALITY_JUDGE` **库内默认 0** ✓ ⇒ 未配 env 的部署**逐位不变** ✓
+                    #   卖类不受影响 ✓（只在买入方向调用 ✓）
+                    _qb, _qbwhy = (False, '')
+                    if ((not _cond_tb) and (not _exb) and (not _wgb) and (not _ocb)
+                            and str(side).lower() in ('buy', '买入')):
+                        try:
+                            if not self._held_today(symbol):
+                                from app.services.quality_judge import judge as _qj_judge
+                                _qb, _qbwhy = _qj_judge(symbol)
+                            else:
+                                _qb, _qbwhy = False, ''
+                        except Exception as _eqj:
+                            _qb, _qbwhy = False, ''
+                            print('[TMonitor] 质地闸异常(放行 ✓): %s' % str(_eqj)[:80], flush=True)
                     if _cond_tb:
                         exec_ok = False
                         print("[TMonitor] 条件单买入时点闸拦截 %s %s: 不在下跌中买（B/C ✓）" % (symbol, trigger_kind), flush=True)
@@ -5161,6 +5182,10 @@ class TMonitor:
                         exec_ok = False
                         print("[TMonitor] 条件单浪型闸拦截 %s %s: %s" % (symbol, trigger_kind, str(_wgwhy)[:110]), flush=True)
                         t_db.update_trigger_status(trig_id, "blocked", reason="[WAVE-COND] " + str(_wgwhy)[:200])
+                    elif _qb:
+                        exec_ok = False
+                        print('[TMonitor] 质地闸拦截 %s %s: %s' % (symbol, trigger_kind, str(_qbwhy)[:110]), flush=True)
+                        t_db.update_trigger_status(trig_id, 'blocked', reason='[QUALITY] ' + str(_qbwhy)[:180])
                     elif _ocb:
                         exec_ok = False
                         print(f"[TMonitor] 条件单开盘不追高拦截 {symbol} {trigger_kind}: {str(_ocwhy)[:90]}")
