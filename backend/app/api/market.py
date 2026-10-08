@@ -528,11 +528,19 @@ def get_stock_moneyflow(
 
     # ── 优先：东财实时个股接口（7×24 可用，盘后返回收盘快照）──
     # 2026-09-08(C方案): 东财实时(EM_PROXY/8199隧道)异常时不再上抛——转Tushare日频降级
-    try:
-        flow = _query_stock_flow(ts_code)
-    except Exception as _em_e:
-        print(f"[moneyflow] 东财实时失败, 转Tushare日频: {str(_em_e)[:120]}", flush=True)
-        flow = None
+    # ★ 2026-10-08 用户拍板「暂时去掉实时资金流」（与**回测口径**对齐 ✓）：
+    #   回测里**根本没有实时资金流**（`entry_filter_offline.py` 用 `moneyflow.parquet` 日频 ✓），
+    #   而生产每次调用都要先撞一次 `EM_PROXY_URL=http://81.70.44.68:8199`（实测必失败 + 白等 ✗）。
+    #   ⇒ `WOLF_MF_REALTIME=0` 跳过东财实时、直接走下面的 Tushare 日频 ✓；默认 1 = 原行为 ✓ 可回退 ✓
+    flow = None
+    if str(os.getenv("WOLF_MF_REALTIME", "1")).strip().lower() in ("0", "false", "no", "off"):
+        print("[moneyflow] 实时源已关(WOLF_MF_REALTIME=0) ⇒ 直走 Tushare 日频", flush=True)
+    else:
+        try:
+            flow = _query_stock_flow(ts_code)
+        except Exception as _em_e:
+            print(f"[moneyflow] 东财实时失败, 转Tushare日频: {str(_em_e)[:120]}", flush=True)
+            flow = None
     if flow:
         # ── 计算资金效率指数 ──
         capital_efficiency = None

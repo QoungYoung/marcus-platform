@@ -3413,6 +3413,23 @@ apps/main_line/position_class.py 的 ML / trend_channel 的 THEME_CONCEPTS / cha
   桶③ 10 条生产更严/需单独拍板（QUALITY_JUDGE=1、SW_CACHE、TREND_SCAN_LIMIT=200、PICK_BOARD_EXCLUDE=cyb,bj,kcb、VOLFUND_SELFHEAL=1、GAP_CAUTION=0、MAX_CORE_SYMBOLS、TIER_STATE_FIX 等）。
   ★ 遗留待拍板：WOLF_MAX_CORE_SYMBOLS（回测 150 / 生产默认 20）—— t_monitor 注释实测"上限恒 20 ⇒ 每天 16~24 只条件腿连报价都没取到、当天永不触发" ⇒ 倾向该同步 150。
   同步后生产容器 WOLF_ 计数 224 → 270；改完必须 `docker compose -f docker-compose.yml up -d backend worker`（restart 不重读 env）。
+- [2026-10-08 22:16] [工作记录] §9.781 生产暂时去掉实时资金流（对齐回测）—— WOLF_MF_REALTIME=0 + WOLF_MF_MISSING_SOFT=1 — ★ 2026-10-08 用户拍板「暂时去掉实时资金流（与回测对齐）」⇒ 已实现 + 已部署（§9.781）。
+
+**依据（回测确实没有实时资金流 ✓）**：`backend/app/services/entry_filter_offline.py`（离线/回测入场过滤）文件头写「数据源: stock_daily.parquet + moneyflow.parquet（**替代 Xueqiu + 实时指标 API**）」；层内注释：「1c RSR — 跳过(雪球专有)」「1d 日内分位 — 跳过(无盘中数据)」「1e 资金效率 — 跳过(简化)」；Layer2 用离线**日频** moneyflow，且「`[WARN] 资金流向数据不足，跳过Layer 2`」并**放行**（fail-open，layer2_passed 默认 True）。而生产 `check_entry_filters` 走 `get_stock_moneyflow`（东财实时 EM_PROXY 81.70.44.68:8199 ⇒ 实测必失败 + 白等）→ 失败后「主力资金」进 `data_unavailable` ⇒ mainline_open_buy 等自动通道**整单跳过** ✗。
+
+**两个开关（都可回退）**：
+1. `WOLF_MF_REALTIME`（`backend/app/api/market.py::get_stock_moneyflow`，默认 1=原行为）：=0 ⇒ **跳过东财实时**，直走 Tushare 日频（=回测的资金数据口径）✓
+2. `WOLF_MF_MISSING_SOFT`（`backend/app/api/indicator.py::check_entry_filters`，默认 0=原行为）：=1 ⇒ 「主力资金」缺失按**软缺失**处理（只留痕、不进 `data_unavailable`、不拦买 ✓ 对齐回测 fail-open）
+
+**生产 .env 已设**：`WOLF_MF_REALTIME=0`、`WOLF_MF_MISSING_SOFT=1`（备份 `.env.bak-20261008-mfsoft`）。
+
+**验证（容器内，改后）**：
+- 日志只出现「[moneyflow] 实时源已关(WOLF_MF_REALTIME=0) ⇒ 直走 Tushare 日频」✓，**不再**出现 `HTTPConnectionPool(host='81.70.44.68', port=8199)` ✗
+- 600276.SH 与 **000963.SZ**（改前正是它报 `data_unavailable:主力资金` ✗）现在都是 `data_unavailable=[]` ✓，且 L2 拿到真数据（000963「✅ 5日主力(1.04亿) > 10日(0.52亿)」✓）
+- 明细里新增显式说明「ℹ️ 资金=日频(截至最近交易日)，今日盘中主力未覆盖 → 跳过今日出货检查」
+
+★ **踩坑（又一次）**：env 改动用 `docker restart` **不重读 env_file** ✗（容器 env 仍是旧的，实测 `env | grep WOLF_MF_REALTIME` 为空 ✗）⇒ 必须 `cd /opt/marcus-platform/docker && docker compose -f docker-compose.yml up -d backend worker`（重建容器 ✓ 顺带也加载 bind-mount 的新代码 ✓）；纯代码改动才用 `docker restart`。
+★ 探针脚本自身注意：`sys.path.insert(0,'/app')` 之后再 `insert(0,'/app/app')` 会让 `import core` 命中 `/app/app/core` ✗（§9.771 同族坑）⇒ 探针里应只插 `/app`（或把 `/app` 放在最后插）。
 
 ## 经验教训 Lessons Learned
 

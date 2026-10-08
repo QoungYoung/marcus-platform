@@ -2794,7 +2794,15 @@ async def check_entry_filters(req: EntryCheckRequest):
     else:
         capital_details.append("⚠️ 资金流向数据不可用，跳过主力行为检查")
         layer2_grade = "⚠️数据缺失"
-        data_unavailable.append("主力资金")   # fail-closed：自动通道看到即跳过并QQ通知
+        # ★ 2026-10-08 用户拍板「暂时去掉实时资金流」（与**回测口径**对齐 ✓）：
+        #   回测的 `backend/app/services/entry_filter_offline.py` 在资金序列不足时是
+        #   `[WARN] 资金流向数据不足，跳过Layer 2` 并**放行**（fail-open ✓，Layer2 默认 passed=True ✓），
+        #   而这里会把「主力资金」塞进 `data_unavailable` ⇒ 自动通道（mainline_open_buy 等）**整单跳过** ✗
+        #   ⇒ `WOLF_MF_MISSING_SOFT=1` 时按**软缺失**处理（只留痕、不拦买 ✓）；默认 0 = 原行为 ✓ 可回退 ✓
+        if str(os.getenv("WOLF_MF_MISSING_SOFT", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            capital_details.append("ℹ️ 主力资金软缺失（WOLF_MF_MISSING_SOFT=1 ⇒ 按回测口径跳过资金层，不拦买）")
+        else:
+            data_unavailable.append("主力资金")   # fail-closed：自动通道看到即跳过并QQ通知
 
     layer2 = LayerResult(
         passed=layer2_passed,
