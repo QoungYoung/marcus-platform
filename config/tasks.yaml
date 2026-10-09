@@ -17,11 +17,11 @@ settings:
 tasks:
 - id: wolf_limit_ladder_scan
   name: 涨停梯队/连板结构（B4）
-  description: 盘后拉涨跌停/炸板明细→按主题+行业聚合涨停梯队(家数/最高连板/1-2-3+分布/炸板)→写 wolf_limit_ladder.json（狼大 2025-04-21 复盘流程：判断板块强弱、推断次日方向）
+  description: 次日盘前拉涨跌停/炸板明细→按主题+行业聚合涨停梯队(家数/最高连板/1-2-3+分布/炸板)→写 wolf_limit_ladder.json（狼大 2025-04-21 复盘流程：判断板块强弱、推断次日方向）。★ 2026-10-09 从 18:40 改到 08:05：中继 promax limit_list_d 当晚不发布（10-08 晚 3 次尝试全 0 行 failed；10-09 早同一接口 88 行 ✓）⇒ 必须在次日盘前跑
   enabled: true
   schedule:
     type: cron
-    expr: '40 18 * * mon-fri'
+    expr: '5 8 * * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/wolf_limit_ladder_scan.py
@@ -39,11 +39,37 @@ tasks:
   retry:
     enabled: true
 
+- id: wolf_eod_review_chain
+  name: 盘后复盘链（A3+C2+B1）
+  description: '★ 2026-10-09 新增（用户「这几个不能合并成一个任务吗」）：把 A3 股指期货多空→次日黄白线、C2 跌得少弹得早、B1 每日复盘打分表 三条**合并为一条链**（原来 18:45/18:50/19:40 三个 cron）。理由：三条都是"盘后算→次日盘前读"、且各自开头都调 wolf_eod.gate() 做 EOD 就绪守卫；合并后 1 个 cron/1 份日志/1 次告警，产物时效一致；实测耗时 27s+0s+69s≈100s ≪ 900s 超时。隔离性：链内逐步 try/except，任一步失败不阻断后续，最后汇总退出码（有失败 ⇒ failed + QQ）。B4（涨停梯队）不并入：其中继源当晚不发布，须跑次日盘前 08:05。
+
+    '
+  enabled: true
+  schedule:
+    type: cron
+    expr: '45 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_eod_review_chain.py
+    args: []
+  output:
+    log_file: logs/wolf_eod_review_chain_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+
 - id: wolf_review_score_run
   name: 每日复盘打分表（B1）
   description: 按狼大 2025-04-21 复盘表打分（前8项各1分、外围各0.1分、两倍差判多空）→ 预判次日前2小时方向，写
-    wolf_review_score.json
-  enabled: true
+    wolf_review_score.json（★ 2026-10-09 起由 wolf_eod_review_chain 统一调度，本任务置 enabled:false 保留手动触发）
+  enabled: false
   schedule:
     type: cron
     expr: '40 19 * * mon-fri'
@@ -67,8 +93,8 @@ tasks:
 - id: wolf_theme_resilience
   name: 方向层「跌得少弹得早」（C2）
   description: 调整期内按全市场中位基准算各主题的「跌得少/弹得早」（狼大 2026-01-27 调整期第二步）→ 写
-    wolf_theme_resilience.json，给出方向优先级
-  enabled: true
+    wolf_theme_resilience.json，给出方向优先级（★ 2026-10-09 起由 wolf_eod_review_chain 统一调度，本任务置 enabled:false 保留手动触发）
+  enabled: false
   schedule:
     type: cron
     expr: '50 18 * * mon-fri'
@@ -92,8 +118,8 @@ tasks:
 - id: wolf_index_futures
   name: 股指期货多空 → 次日黄白线预判（A3）
   description: 拉 fut_holding 多空单**增减**（口径按狼大 2026-01-23）→ 预判次日开盘黄线/白线在上，写
-    wolf_index_futures.json（实测命中率约51%，仅提示不参与硬门）
-  enabled: true
+    wolf_index_futures.json（实测命中率约51%，仅提示不参与硬门）（★ 2026-10-09 起由 wolf_eod_review_chain 统一调度，本任务置 enabled:false 保留手动触发）
+  enabled: false
   schedule:
     type: cron
     expr: '45 18 * * mon-fri'

@@ -85,6 +85,12 @@ def fetch(date8: str) -> Optional[List[Dict[str, Any]]]:
         pro = get_tushare_pro()
         df = pro.limit_list_d(trade_date=date8)
         if df is None or len(df) == 0:
+            # ★ 2026-10-09：原来这里**静默 return None** ⇒ 上层只看到 `fetch_failed`，分不清
+            #   "接口报错" 与 "该日数据还没发布" ✗。实测根因是**发布时机**：
+            #   2026-10-08 晚 18:40 三次尝试全 0 行（failed）；**10-09 早上同一接口返回 88 行** ✓
+            #   ⇒ 本任务已改到**次日 08:05**（见 config/tasks.yaml），这里把 0 行说清楚 ✓
+            print(f"[limit_ladder] 取数为空({date8}): 中继 limit_list_d 返回 0 行"
+                  f" ⇒ 该日 EOD 尚未发布（promax 当晚不发布，次日盘前才有 ✓）")
             return None
         out = []
         for _, r in df.iterrows():
