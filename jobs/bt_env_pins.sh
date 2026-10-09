@@ -144,6 +144,11 @@ export WOLF_TREND_MAX_LEGS='8'
 #   落库位置 data/_bt_fund/<tag>/（按 ann_date ≤ cut 严格 as-of；同一报告期多次修订取当时的版本）。
 #   **2026-09-21 用户拍板：T2 停、T3 起 ⇒ 三个子开关在 pins 里置 1**（T3 = 新尺子全开的那一臂）。
 #     置 0 可复现 T2 口径（v2 无基本面版）。改 pins 只影响**新启动**的 run。
+# ★ 2026-10-09 用户拍板「把 V2 上线到生产」⇒ 生产 .env 已置 `WOLF_LEADER_V2=1`（备份
+#   `.env.bak-20261009-leaderv2` ✓）；**这里同步置 1 以保持"生产=回测"口径一致** ✓
+#   ⚠️ 修 §9.787 的坑：`WOLF_LEADER_V2` 是**本体**——只开下面三个子开关**不算启用** ✗
+#      （`leader_v2.enabled()` 只看本体；子开关在 v2 关闭时全部惰性 ✗）
+export WOLF_LEADER_V2='1'                 # ★ 本体：启用 v2 龙头尺子（对齐生产 ✓）
 export WOLF_LEADER_V2_EARN='1'            # 基本面业绩（G5 硬门 + 权重 5.0）
 export WOLF_LEADER_V2_CHAIN='1'           # 产业链核心中枢（权重 3.0）
 export WOLF_LEADER_V2_VAL='1'             # 估值便宜/反转（权重 0.5）
