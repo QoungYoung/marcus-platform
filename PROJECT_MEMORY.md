@@ -6199,6 +6199,21 @@ V1 固定 5 日（≈我们现行腿口径）**−1.18%**/44%/−4.2%/−0.28/5 
 
 ★ 部署教训：**bind mount 的 py 改动对"常驻进程"（worker/backend）不自动生效** —— `docker compose up -d backend worker` 在 compose 配置没变时是 **no-op** ✗（容器不会重启）⇒ 必须 `docker restart marcus-worker marcus-backend`（子进程型任务如 09:20 布腿器才是"改完即生效"）。
    提交：§9.779（backend/app/services/{t_regime,t_data_sources,mkt_bars}.py）。
+- [2026-10-09 08:13] [经验教训] §9.784 告警落盘从 /tmp 改到 /app/data（持久）＋ 日志/异常推送与回测臂的一致性核对 — ★ 2026-10-09 用户问「最后一个回测臂的日志和异常推送同步到生产了吗」⇒ 核对结论 + 修掉一个落盘缺口（§9.784）：
+
+**异常推送：本来已一致、且生产实测可用** ✓
+- 生产环境（实测）：`WOLF_ALERT_HUB=1`、`WOLF_ALERT_QQ=1`、`WOLF_ALERT_QQ_TO=BF1510663A6C14D6E00E42B46108F51E`、`WOLF_ALERT_DEDUP_SEC=600`、`WOLF_ALERT_MAX_PER_HOUR=200`、`WOLF_ALERT_FROM_LOGGING=1`、`WOLF_ALERT_ON_RAISE=1`
+- 与臂（`_run_t35d_exec.sh:274-275`）/pins（`362-366`、`893`、`895`）**逐键一致**；且**早在我动手之前就在生产**（最早备份 `.env.bak-20261008-scanlimit` 里 7 个 ALERT 键，HUB/QQ/QQ_TO 在 229-231 行）⇒ 来自用户之前的 196 条同步
+- 生产日志实证：`[alert_hub] 全局异常钩子已安装（QQ 推送=开 ✓）`＋`安装: True`；当晚实测投递成功（`[QQ] AccessToken obtained` / `[QQ] Message sent -> BF151…`）
+- 回测专属推送项**正确地未进生产**：`BT_NET_OFFLINE`、`BT_NET_ALLOW_HOSTS`、`WAVE_CHAT_URL=127.0.0.1:13001` ✓
+
+**日志：一致** ✓ `PYTHONUNBUFFERED=1`（compose）、`WOLF_SLOW_LOG`（两边都未设 ⇒ 默认 1 ⇒ 都开）；回测专属 `TMPDIR=/tmp`、`WOLF_ROUND_PROFILE`、`WOLF_STEP_TIMING`、`WOLF_CONFIRM_MODE_PROBE` 生产均未设/为 0 ✓
+
+**★ 修掉的缺口（本轮）**：`alert_hub._alerts_path()` 候选链原来是 `DATA_DIR → TMPDIR/marcus_alerts`；生产 **DATA_DIR 未设** ⇒ 落到 `/tmp/marcus_alerts/alerts.jsonl`（容器可写层、**重建即丢** ✗；实测两容器该目录都不存在、宿主 `data/alerts.jsonl` 也不存在 ⇒ 告警**无档可查** ✗，只有 QQ 推送那条路是好的 ✓）。
+修法 ✓：候选链插入 **`/app/data`**（compose bind mount ＝宿主 `./data` ⇒ 持久 ✓），且**只在 `os.path.isdir("/app/data")` 为真时加入** ⇒ 本地/回测（无该目录）逐位不变 ✓，回测 `DATA_DIR` 已设（按日沙箱）⇒ 首选项命中 ⇒ 同样零影响 ✓。
+验证 ✓：探针（用 `_record_only` ⇒ 不推 QQ）⇒ `alerts_path = /app/data/alerts.jsonl`、写入成功、**宿主 `/opt/marcus-platform/data/alerts.jsonl` 可见（226B，08:13）** ✓。
+
+★ 教训：这个平台的"默认路径回退"很容易落到容器 `/tmp`（本轮第 3 例：埋伏名单 /app/ambush_candidates.json、SW 缓存上溯 `/data/…`（§9.762）、告警 `/tmp/marcus_alerts`）⇒ 凡是靠 `os.environ.get("DATA_DIR") or <某种退化>` 的路径，都要核对**生产 DATA_DIR 是否设**（当前：**未设**）。
 
 ## 行动指南 Action Guide
 

@@ -44,8 +44,22 @@ def _i(name: str, dflt: int) -> int:
 
 
 def _alerts_path() -> str:
-    """告警落盘路径（账本 §9.551）：`DATA_DIR` 不可写时**回退**到 TMPDIR ⇒ 不再刷 FileNotFoundError ✗。"""
-    for cand in (os.environ.get("DATA_DIR"), os.path.join(os.environ.get("TMPDIR", "/tmp"), "marcus_alerts")):
+    """告警落盘路径（账本 §9.551）：`DATA_DIR` 不可写时**回退**到 TMPDIR ⇒ 不再刷 FileNotFoundError ✗。
+
+    ★ 2026-10-09 修（用户拍板「修复」）：回退链里**插入 `/app/data`** ✓
+      原因（实测 ✗）：**生产 `DATA_DIR` 未设** ⇒ 原来直接回退到 `TMPDIR/marcus_alerts`
+      = `/tmp/marcus_alerts/alerts.jsonl` ⇒ **容器内可写层、重建容器即丢** ✗
+      （实测两容器 `/tmp/marcus_alerts/` 均不存在、宿主 `data/alerts.jsonl` 也不存在 ⇒ 告警**无档可查** ✗，
+        而 QQ 推送那条路是好的 ✓）
+      ⇒ `/app/data` 是 compose 的 **bind mount（持久 ✓ 宿主 `./data` ✓）** ⇒ 落盘可留档 ✓
+      ⚠️ 只在**目录已存在**时才加入候选 ⇒ 本地/回测（无 `/app/data`）行为**逐位不变** ✓；
+         回测里 `DATA_DIR` 已设（按日沙箱 ✓）⇒ 首选项命中 ⇒ 同样零影响 ✓
+    """
+    _cands = [os.environ.get("DATA_DIR")]
+    if os.path.isdir("/app/data"):
+        _cands.append("/app/data")
+    _cands.append(os.path.join(os.environ.get("TMPDIR", "/tmp"), "marcus_alerts"))
+    for cand in _cands:
         if not cand:
             continue
         try:
