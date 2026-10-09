@@ -312,7 +312,18 @@ def _pct_rank(vals: Sequence[float]) -> List[float]:
 
 def hard_gates(stock: Dict[str, Any], ctx: Dict[str, Any],
                mv_topn_n: Optional[int] = None) -> Tuple[bool, List[str]]:
-    """他的前提 + 3 要点里可算的项。返回 (是否全部满足, 未通过原因列表)。"""
+    """他的前提 + 3 要点里可算的项。返回 (是否全部满足, 未通过原因列表)。
+
+    ★ 2026-10-09（用户「G1/G4 边界敏感你怎么看」⇒ 上加两个**默认=现状**的容差开关 ✓）：
+      · `WOLF_LEADER_V2_G4_TOL`（默认 0.0）：G4 由 `close >= ma5` 放宽为
+        `close >= ma5*(1-tol)` —— 治**千分位噪声**（实测 `G4 未维持5日线上(37.70<37.70)` ✗：
+        两边显示相同却在千分位上有差 ⇒ 纯数值抖动决定进出 ✗）。狼大原话「维持5日线上」是
+        **定性**（贴着线走）⇒ 0.2% 容差不改语义 ✓；默认 0 ⇒ **逐位等于旧行为** ✓
+      · `WOLF_LEADER_V2_G1_MIN_MEMBERS`（默认 0 = 不豁免）：当前域内成员数 < N 时 **G1 不参与判定**
+        —— 治**小概念等权收益的统计噪声**（实测封测组只剩 5 只 ⇒ 等权 +1.04% 判决"板块强不强"
+        不可靠 ✗，与项目既有"样本不足 ⇒ fail-open"惯例一致 ✓）。默认 0 ⇒ **不豁免** ✓
+      ⚠️ 两者都只在显式设置时生效 ⇒ **上线前必须先出离线对照** ✓（腿数 + 换入换出票的后续超额 ✓）
+    """
     miss: List[str] = []
     try:
         s20 = float(stock.get("ret20")) if stock.get("ret20") is not None else None
@@ -320,7 +331,14 @@ def hard_gates(stock: Dict[str, Any], ctx: Dict[str, Any],
         i20 = float(ctx.get("index_ret20")) if ctx.get("index_ret20") is not None else None
     except Exception:
         s20 = c20 = i20 = None
-    if c20 is not None and i20 is not None and not (c20 > i20):
+    # G1（可被"小概念豁免"跳过 ✓）
+    try:
+        _g1_min = int(float(os.getenv("WOLF_LEADER_V2_G1_MIN_MEMBERS", "0") or 0))
+    except Exception:
+        _g1_min = 0
+    _n_mem = ctx.get("n_members")
+    _g1_skip = bool(_g1_min > 0 and _n_mem is not None and int(_n_mem) < _g1_min)
+    if not _g1_skip and c20 is not None and i20 is not None and not (c20 > i20):
         miss.append("G1 板块不强于大盘(%.2f<=%.2f)" % (c20, i20))
     if s20 is not None and c20 is not None and not (s20 > c20):
         miss.append("G2 个股不强于板块(%.2f<=%.2f)" % (s20, c20))
@@ -329,8 +347,15 @@ def hard_gates(stock: Dict[str, Any], ctx: Dict[str, Any],
     if rank is not None and n > 0 and int(rank) > n:
         miss.append("G3 非板块内总市值前%d(第%d)" % (n, int(rank)))
     close, ma5 = stock.get("close"), stock.get("ma5")
-    if close is not None and ma5 is not None and not (float(close) >= float(ma5)):
-        miss.append("G4 未维持5日线上(%.2f<%.2f)" % (float(close), float(ma5)))
+    try:
+        _g4_tol = float(os.getenv("WOLF_LEADER_V2_G4_TOL", "0") or 0)
+    except Exception:
+        _g4_tol = 0.0
+    if close is not None and ma5 is not None:
+        _floor = float(ma5) * (1.0 - _g4_tol) if _g4_tol > 0 else float(ma5)
+        if not (float(close) >= _floor):
+            miss.append("G4 未维持5日线上(%.2f<%.2f%s)"
+                        % (float(close), float(ma5), "，容差%.2f%%" % (_g4_tol * 100) if _g4_tol > 0 else ""))
     # G5 基本面业绩（他的 3 要点②"营收拐点/扭亏/增速加速（要看基本面）"）
     #    只在业绩块开关打开且**确实取到数据**时才判；数据缺失一律放行（fail-open）。
     ef = stock.get("earn_flag")
@@ -360,6 +385,10 @@ def rank_concept(members: Sequence[Dict[str, Any]], ctx: Dict[str, Any],
     ctx = dict(ctx or {})
     if index_ret20 is not None:
         ctx["index_ret20"] = index_ret20
+    # ★ 2026-10-09：把**当前域内的成员数**传给硬门 ✓
+    #   —— G1 的"小概念豁免"（`WOLF_LEADER_V2_G1_MIN_MEMBERS`）需要它 ✓；
+    #      不设置该开关时**完全不参与判定** ⇒ 行为与旧版逐位一致 ✓
+    ctx["n_members"] = len(members)
     for src, dst in (("ret20", "money_effect"), ("mv", "size"), ("ret5", "linkage")):
         vals = [(m.get(src) if m.get(src) is not None else -1e9) for m in members]
         for m, v in zip(members, _pct_rank(vals)):
