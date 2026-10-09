@@ -1593,7 +1593,7 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     S.sym = sym; S.symData = null; S.symErr = null; S.kHover = -1; S.kView = null; S.kAsof = ""; S.kDrag = null;
     $('sym-h').textContent = sym;
     $('sym-meta').textContent = '读取中…';
-    $('sym-body').innerHTML = emptyState('读取 ' + sym + ' …', '/api/symbol?symbol=' + sym);
+    $('sym-body').innerHTML = emptyState('读取 ' + sym + ' …', '/api/symbol?symbol=' + sym + (S.day ? ('&day=' + String(S.day).replace(/-/g, '')) : ''));
     if (!dlg.open) {
       if (G.on && !G.reduced) {
         G.fromTo(dlg, { scale: 0.98, opacity: 0 },
@@ -1603,7 +1603,10 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     }
     var first = dlg.querySelector('[data-focus-first]');
     if (first) { try { first.focus({ preventScroll: true }); } catch (e) { first.focus(); } }
-    getJSON('/api/symbol?symbol=' + encodeURIComponent(sym)).then(function (j) {
+    // ★ 2026-10-09 修：「现价 135 明显不对」——把**当前查看的那天**一起传过去 ✓
+    //   （后端据此按该日计价；不传则仍是回测最新日 ✓）
+    var _dayArg = S.day ? ('&day=' + String(S.day).replace(/-/g, '')) : '';
+    getJSON('/api/symbol?symbol=' + encodeURIComponent(sym) + _dayArg).then(function (j) {
       S.symData = j; renderSymbol();
     }).catch(function (e) { S.symErr = String(e.message || e); renderSymbol(); });
   }

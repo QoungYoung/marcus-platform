@@ -1729,7 +1729,7 @@ class Store:
     # ──────────────────────────────────────────────────────────────────────
     # 个股 / 单日
     # ──────────────────────────────────────────────────────────────────────
-    def symbol_detail(self, symbol: str) -> dict:
+    def symbol_detail(self, symbol: str, day: str = "") -> dict:
         self.refresh()
         act = self.active_view()
         if not SYMBOL_RE.match(symbol or ""):
@@ -1747,6 +1747,16 @@ class Store:
         #   ⇒ 修法 ✓：**上界取两者较大值** ✓（续跑当天没完成时用 start ✓），下界由 limit 回看 ✓
         #     ⇒ 既能出图（最近 400 根 ≤ 上界 ✓），又不越过 as-of 边界 ✓
         _hi = max(str(start or ""), str(last_completed or "")) or ""
+        # ★ 2026-10-09 修（用户：「合合信息显示的现价是 135，明显不对」）：
+        #   病灶 ✗：持仓计价固定用 `_asof = _hi`（**回测跑到的最新日**）⇒ 用户在看 **0105** 的持仓，
+        #     价格却取自两三个月后的最后一天 ✗。实证：合合信息(SH688615) 前复权 0105=174.24、
+        #     回测最新日附近≈**135** ✗；而该持仓成本是 0105 的前复权 **169.54** ✓
+        #     ⇒ 前端显示「现价 135 / 浮动 −2 万」明显不对 ✗（成本与现价不在同一天 ✗）
+        #   ⇒ 修法 ✓：**按"当前查看的那天"计价**（前端把它正在看的 `S.day` 传进来 ✓，见 bt_dashboard.html）；
+        #     不传 `day` 时保持原行为（= 回测最新日 ✓，向后兼容 ✓）；两者都仍受 `≤ asof` 约束 ✓
+        _vd = str(day or "").replace("-", "")[:8]
+        if _vd and _vd.isdigit() and (not _hi or _vd <= _hi):
+            _hi = _vd              # 详情页计价日 = 用户正在看的那天 ✓
         # ★ 账本 §9.678 ✓（用户：「你可以画出来，因为只有我有看，然后K线可以放大缩小调整范围，
         #   默认是从 b 到正在回测日期的K线范围」✓）：
         #   ⇒ **取全量日线**（含 as-of 之后的 ✓），并把"回测当前日"一并返回 ✓
@@ -2159,7 +2169,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "缺少 symbol 参数，例：/api/symbol?symbol=SH600977"}, 400)
                 if not SYMBOL_RE.match(sym):
                     return self._json({"error": "symbol 形态应为 SH600977 / SZ000001 / BJ920139，收到 %r" % sym}, 400)
-                return self._json(self.store.symbol_detail(sym))
+                # ★ 2026-10-09：把"当前查看的那天"透传给详情页计价（不传=回测最新日 ✓）
+                _sym_day = (qs.get("day") or qs.get("date") or [""])[0].strip()
+                return self._json(self.store.symbol_detail(sym, _sym_day))
             if route == "/api/day":
                 day = (qs.get("day") or qs.get("date") or [""])[0].strip()
                 if not day:
