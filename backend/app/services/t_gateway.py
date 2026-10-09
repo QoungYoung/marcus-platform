@@ -1830,6 +1830,7 @@ def _wave_hold_action() -> str:
 def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     condition_id: Optional[int] = None,
                     trigger_id: Optional[int] = None,
+                    kind: str = "",
                     reason: str = "",
                     decision_source: str = "agent",
                     is_stop_loss: bool = False,
@@ -1842,6 +1843,20 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     is_stop_loss: 止损离场卖腿——豁免日亏损熔断/回转额上限（止血动作必须执行）。
     执行器失败/被拒 → 更新 t_triggers 为 blocked + 审计。
     """
+
+    # ── ★ 2026-10-09（用户拍板「1」＝修 bug）**腿型解析兜底** ────────────────────────────
+    #   病灶 ✗：`_turnover_kind(trigger_id, condition_id)` 在 **trigger_id 缺失/取不到**
+    #     且 condition_id 也取不到时返回 **空串** ⇒ 下游所有 `if _k == "wolf_ambush_buy"` 的分支
+    #     **整段跳过** ✗（埋伏"小仓档" 4% 上限、以及"补到 2 手"豁免都没了 ✗）
+    #     ⇒ 实测后果：回测臂里埋伏腿按**普通建仓规模**成交（合合信息 500 股 @168.666 = 84,333 元
+    #       = 账户 **33.7%** ✗，是 `WOLF_AMBUSH_SIZE_PCT=4`(≈10,000 元) 的 **4.2 倍** ✗），
+    #       与 2026-09-26 用户提过的同一句（藏格矿业 800 股 ≈ 27% ✗）同源 ✓
+    #   修法 ✓（**只收紧、不放宽** ⇒ 不会让任何之前被拦的东西放行 ✓）：
+    #     ① 新增可选入参 `kind`：调用方**已知腿型**时直接传 ⇒ 优先采信 ✓（默认 "" ⇒ 旧行为 ✓）
+    #     ② 取不到时再看 `reason` 里有没有点名 `wolf_ambush_buy` ⇒ 按其处理 ✓
+    _kind_gw = str(kind or "").strip() or str(_turnover_kind(trigger_id, condition_id) or "").strip()
+    if not _kind_gw and "wolf_ambush_buy" in str(reason or ""):
+        _kind_gw = "wolf_ambush_buy"
 
     # ── 浪型"不动"闸（账本 §9.287 ✓）：操作=参与（build/side/t_only）⇒ 当天不做**减仓性**操作 ✓
     if side == "sell" and not is_stop_loss:
@@ -2423,10 +2438,8 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     except Exception:
         _amb_pct = 0.0
     if side == "buy" and _amb_pct > 0 and int(volume or 0) > 0:
-        try:
-            _k_amb = _turnover_kind(trigger_id, condition_id) if trigger_id else ""
-        except Exception:
-            _k_amb = ""
+        # ★ 2026-10-09：改用入口处解析好的 `_kind_gw`（含 kind 入参 + reason 兜底 ✓）
+        _k_amb = _kind_gw
         if str(_k_amb) == "wolf_ambush_buy":
             # ── **同时持仓上限**（`WOLF_AMBUSH_MAX_POSITIONS`，库内默认 0 = 关 ✓）──────
             #   量化（账本 §9.196，全历史 21 个月 ✓）：
@@ -2501,10 +2514,41 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             if _eq > 0 and float(price or 0) > 0:
                 # 2026-09-26 用户「必须是整百股」✓：先算原始量，再**向下取整到 100 的整数倍** ✗
                 _cap = (int(_eq * (_amb_pct * _amb_mult) / 100.0 / float(price)) // 100) * 100
+                # ★ 2026-10-09 修（用户「埋伏腿是不是买的有点太多了」⇒ 拍板「1」修 bug）：
+                #   病灶 ✗：`_cap < 100` 时**整段静默跳过** ⇒ **高价股拿不到任何上限** ✗
+                #     实测合合信息 168.666 元：4%×250,000÷168.666 = 59 股 ⇒ `_cap=(59//100)*100=0`
+                #     ⇒ 600 股（40.5%）照单全收 ✗✗（t37 里 500 股 = 84,333 元 = 账户 33.7% ✗）
+                #   修法 ✓（**只收紧**）：买不起 1 手时——若 **1 手** 仍在上限额度内
+                #     （`PCT×MAX_MULT`）就**压到最小 1 手** ✓；连 1 手都超上限 ⇒
+                #     按 `WOLF_AMBUSH_SKIP_MIN_LOTS`（默认 1 ⇒ 跳过该买腿 ✓，生产本就是 1 ✓）
+                try:
+                    _max_mult = float(os.getenv("WOLF_AMBUSH_SIZE_MAX_MULT", "2") or 2)
+                except Exception:
+                    _max_mult = 2.0
                 if _cap >= 100 and int(volume) > _cap:
                     print("[gateway] 埋伏小仓档：%s %d→%d 股（权益 %.0f×%.1f%%÷%.2f）"
                           % (symbol, int(volume), _cap, _eq, _amb_pct, float(price)), flush=True)
                     volume = _cap
+                elif _cap < 100:
+                    _hi_budget = _eq * (_amb_pct * max(1.0, _max_mult)) / 100.0
+                    _one_lot_amt = float(price) * 100.0
+                    _skip_min = str(os.getenv("WOLF_AMBUSH_SKIP_MIN_LOTS", "1")).strip().lower() in ("1", "true", "yes", "on")
+                    if _one_lot_amt <= _hi_budget and int(volume) > 100:
+                        print("[gateway] 埋伏小额试仓：%s %d→100 股（%.1f%% 额度 %.0f 元买不起 1 手 %.0f 元 "
+                              "⇒ 压到最小 1 手，仍在上限 %.1f%% 内 ✓）"
+                              % (symbol, int(volume), _amb_pct, _eq * _amb_pct / 100.0, _one_lot_amt,
+                                 _amb_pct * max(1.0, _max_mult)), flush=True)
+                        volume = 100
+                    elif _one_lot_amt > _hi_budget:
+                        _why_amb = ("埋伏小额试仓买不起：现价 %.2f × 100 股 = %.0f 元 > 上限额度 %.0f 元"
+                                    "（权益 %.0f × %.1f%% × %.1f）⇒ %s"
+                                    % (float(price), _one_lot_amt, _hi_budget, _eq, _amb_pct,
+                                       max(1.0, _max_mult), "跳过" if _skip_min else "保持旧行为(不放行上限 ✗)"))
+                        print("[gateway] %s %s" % (symbol, _why_amb), flush=True)
+                        if _skip_min:
+                            if trigger_id:
+                                t_db.update_trigger_status(int(trigger_id), "blocked", reason=_why_amb[:250])
+                            return {"status": "blocked", "reason": _why_amb, "level": "AMBUSH_MIN_LOT"}
     # 同日去重（`WOLF_AMBUSH_ONE_PER_DAY`，**库内默认 0 = 关** ✓）
     #   实测藏格矿业 01-30 **同日触发两次 ⇒ 买了两笔（400+400）** ✗
     if (side == "buy" and str(os.getenv("WOLF_AMBUSH_ONE_PER_DAY", "0")).strip().lower() in ("1", "true", "yes", "on")):
@@ -2835,10 +2879,8 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             #   而**埋伏腿不做 T** ✓、要**长持 50 日** ✓ ⇒ 该理由**不适用** ✗ ⇒ 豁免 ✓
             _skip_min = str(os.getenv("WOLF_AMBUSH_SKIP_MIN_LOTS", "0")).strip().lower() in ("1", "true", "yes", "on")
             if _skip_min:
-                try:
-                    _k_bl = _turnover_kind(trigger_id, condition_id) if trigger_id else ""
-                except Exception:
-                    _k_bl = ""
+                # ★ 2026-10-09：同上，改用 `_kind_gw` ✓
+                _k_bl = _kind_gw
                 if str(_k_bl) == "wolf_ambush_buy":
                     print("[gateway] 埋伏腿豁免「补到 2 手」：%s 保持 %d 股（小仓 %s%% ✓）"
                           % (symbol, int(volume or 0), os.getenv("WOLF_AMBUSH_SIZE_PCT", "?")), flush=True)
