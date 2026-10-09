@@ -6214,6 +6214,30 @@ V1 固定 5 日（≈我们现行腿口径）**−1.18%**/44%/−4.2%/−0.28/5 
 验证 ✓：探针（用 `_record_only` ⇒ 不推 QQ）⇒ `alerts_path = /app/data/alerts.jsonl`、写入成功、**宿主 `/opt/marcus-platform/data/alerts.jsonl` 可见（226B，08:13）** ✓。
 
 ★ 教训：这个平台的"默认路径回退"很容易落到容器 `/tmp`（本轮第 3 例：埋伏名单 /app/ambush_candidates.json、SW 缓存上溯 `/data/…`（§9.762）、告警 `/tmp/marcus_alerts`）⇒ 凡是靠 `os.environ.get("DATA_DIR") or <某种退化>` 的路径，都要核对**生产 DATA_DIR 是否设**（当前：**未设**）。
+- [2026-10-09 08:18] [经验教训] §9.785 波浪判定「假成功」根因与修复：CSV 仅 44 行 + 数据不足静默退出 0 — ★ 2026-10-09 用户报「波浪判定今天没跑起来吗？我看是成功的」⇒ 查出**假成功 + 静默空转**（§9.785）：
+
+**现象**：`wave_judge`（08:10）执行记录 `status=success / return_code=0 / output="no data" / 耗时 1.3 秒` ✗。
+
+**根因链（三天三态）**：
+- 10-07 08:10 ✅ 真成功（53s，LLM 被调用，`wave_state.json` 写入）
+- 10-08 08:10 ❌ `rc=1`：`load_close()` 找不到 CSV ⇒ 回退读 `.parquet` ⇒ `ImportError: pyarrow/fastparquet`（**容器里没有 parquet 引擎** ✗）
+- 10-09 08:10 ⚠️ `rc=0`"no data"：CSV 存在但**只有 44 行**（2026-08-03→10-08）⇒ `index_features()` 要求 `len(cs)>=200` ⇒ 返回 None ⇒ `print('no data'); return` ⇒ **退出码 0 ⇒ 调度器记 success** ✗
+- CSV 的 mtime = **2026-10-08 16:30:02** = `index_daily_refresh`（16:30）**首次创建**；`jobs/refresh_index_daily.py` 默认 `--start='20260801'`（源码里写死）⇒ 只拉 44 个交易日 ✗（而该脚本注释还写着"绝不直接覆盖（教训：曾把 09-02~09-10 截断）"——同类事故重演）
+- 后果：`data/wave_state.json` **停在 10-07**（两天未更新）⇒ 09:20 布腿器读到的浪型是两天前的 ✗
+
+**修复（§9.785，4 处）**：
+1. `jobs/refresh_index_daily.py`：`--start` 默认改为 **今天-900 天**（≈600 根 ✓），并**合并后 <250 行时打醒目告警** ✓（根因）
+2. `apps/main_line/wave_agent.py::_heal_history()` 新增：CSV 缺失/不足 `WAVE_MIN_BARS`(默认 250) ⇒ 用同一 `_ts_pro()` 拉**足够历史**并合并落盘 ✓（不再依赖 16:30 任务给对窗口；也不再依赖不可用的 parquet ✓）
+3. `load_close()`：不足 ⇒ 自愈；仍不足 ⇒ **抛错**（去掉 parquet 兜底/明确报错 ✓）
+4. `main()`：数据不可用 ⇒ **`SystemExit(3)`**；LLM 无有效回复或 `operation` 非法 ⇒ **`SystemExit(4)` 且不写 state**（原来会补 `operation='side'` ⇒ 用假浪型污染 gate ✗）⇒ 调度器记 failed + 按 tasks.yaml 的 `on_failure` 推 QQ ✓（不再假成功 ✗）
+
+**验证（当天修复上线）**：
+- `refresh_index_daily.py`（修后）：现有 43 行 → 新拉 596 行（2024-04-22→2026-10-08）⇒ 合并 **596 行** ✓；CSV 现 597 行（含表头）✓
+- 重跑 `wave_agent.py`：**rc=0** ✓，`data/wave_state.json` 更新为 **date=2026-10-08 | level=d4 | sub=4-5 | operation=defense | conf=0.56** ✓
+  reasons 原文：「收3811.9，失守MA5/20/60（3839/3899/3901）且远低于MA200=4009…处30日箱体0%分位、创30日新低，5/13以来为大4浪调整」
+  ⇒ ★ **operation=defense ⇒ 今天布腿器按防御档（不新建主升）** ✓（比之前读到 10-07 旧值正确）
+
+★ 教训（本平台第 4 例"路径/窗口退化"）：凡是"由某个刷新任务维护的数据文件"，都要核对**该任务的默认窗口是否覆盖消费方的需求**（本例：wave_agent 要 ≥250 根，刷新任务默认只给 44 行 ✗），并且**消费方数据不足必须非零退出**——否则调度器永远显示"成功"，问题只能靠人去翻 output ✗（用户这次就是这么发现的）。
 
 ## 行动指南 Action Guide
 

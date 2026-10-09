@@ -23,7 +23,12 @@ DATA = os.environ.get("DATA_DIR", os.path.join(ROOT, "data"))
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--code", default="000001.SH")
-    ap.add_argument("--start", default="20260801")
+    # ★ 2026-10-09 修：默认起点原来写死 `20260801` ⇒ 只拉 **44 个交易日** ✗
+    #   ⇒ `wave_agent` 需要 ≥250 根做结构判定 ⇒ 判定空转、`wave_state.json` 停在 10-07 ✗
+    #   （实测：2026-10-09 08:10「波浪判定」output=no data、rc=0 假成功；CSV 仅 44 行、mtime=10-08 16:30）
+    #   ⇒ 改为**拉足历史**（默认 900 个自然日 ≈ 600 根日线 ✓，合并语义不变 ⇒ 不会截断旧行 ✓）
+    ap.add_argument("--start", default=(__import__("datetime").date.today()
+                                       - __import__("datetime").timedelta(days=900)).strftime("%Y%m%d"))
     ap.add_argument("--dir", default=os.path.join(DATA, "指数数据", "index_daily"))
     ap.add_argument("--dry", action="store_true")
     args = ap.parse_args()
@@ -47,6 +52,10 @@ def main() -> int:
     print("[refresh] 新拉 %d 行，%s → %s" % (len(df), str(df["trade_date"].min())[:10], str(df["trade_date"].max())[:10]))
     merged = pd.concat([old, df]).drop_duplicates(subset=["trade_date"], keep="last").sort_values("trade_date")
     print("[refresh] 合并后 %d 行，%s → %s" % (len(merged), str(merged["trade_date"].min())[:10], str(merged["trade_date"].max())[:10]))
+    # ★ 2026-10-09：联动告警 —— `wave_agent` 需要 ≥250 根做结构判定（`WAVE_MIN_BARS`）✓
+    if len(merged) < 250:
+        print("[refresh] ⚠️⚠️ 合并后仅 %d 行（< 250）⇒ wave_agent 会判**数据不足**并失败 ✗；"
+              "请用更大的 --start（默认已=今天-900 天）" % len(merged))
     if args.dry:
         print("[refresh] --dry，不写文件"); return 0
     os.makedirs(args.dir, exist_ok=True)

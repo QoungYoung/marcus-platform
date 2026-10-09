@@ -11,6 +11,12 @@ CHAT_URL=os.getenv('WAVE_CHAT_URL','http://marcus-dsh:3001/chat')
 STATE_FILE=os.getenv('WAVE_STATE_FILE','data/wave_state.json')
 CSV='data/指数数据/index_daily/000001.SH.csv'
 BT=chr(96)*3  # 代码围栏
+# ★ 2026-10-09 修（用户：「波浪判定今天没跑起来吗？我看是成功的」）：
+#   结构判定所需**最少日线根数**。原来写死 200，且**数据不足时静默 `print('no data'); return`** ⇒
+#   退出码 0 ⇒ 调度器记 **success** ✗（假成功）。2026-10-09 实测：16:30 刷新任务用默认 `--start 20260801`
+#   只写出 **44 行** ⇒ 判定空转、`wave_state.json` 停在 10-07 ✗（09:20 布腿器读到两天前的浪型 ✗）。
+#   现在：不足 ⇒ 先**自愈补齐**（`_heal_history`）⇒ 仍不足 ⇒ **非零退出**（failed + QQ 通知 ✓）。
+MIN_BARS=int(os.getenv('WAVE_MIN_BARS','250'))
 
 def _ts_pro():
     """Tushare 客户端（2026-09-13 起走 datahubco+promax 中继，替代已失效的 gzcloud 代理）。"""
@@ -123,11 +129,58 @@ def get_market_context(date):
     ctx['gjd']=get_gjd_flow(date)   # 真实GJD/宽基ETF(510300/510050)份额净申赎
     return ctx
 
+def _heal_history():
+    """指数日线自愈（2026-10-09 修）：CSV 缺失/过短 ⇒ 用中继拉**足够历史**（默认 900 天）合并落盘 ✓。
+
+    ⚠️ 为什么必须有它：原来 `load_close()` 在 CSV 缺失时**回退读 `.parquet`**，
+      而**容器里没有 pyarrow/fastparquet** ⇒ `ImportError` ✗（2026-10-08 就是这样 rc=1 失败）；
+      CSV 存在但过短时上层又只 `print('no data')` 静默退出 ✗ ⇒ 两条路都让浪型判定停摆 ✗。
+    """
+    try:
+        pro=_ts_pro()
+        if pro is None:
+            print('[wave] 自愈失败：tushare 中继不可用', file=sys.stderr); return None
+        import datetime as _dt
+        end=_dt.date.today().strftime('%Y%m%d')
+        start=(_dt.date.today()-_dt.timedelta(days=int(os.getenv('WAVE_HEAL_DAYS','900')))).strftime('%Y%m%d')
+        df=pro.index_daily(ts_code='000001.SH', start_date=start, end_date=end)
+        if df is None or not len(df):
+            print('[wave] 自愈失败：index_daily 返回空', file=sys.stderr); return None
+        df=df.copy(); df['trade_date']=pd.to_datetime(df['trade_date'], format='%Y%m%d')
+        old=pd.DataFrame()
+        if os.path.exists(CSV):
+            try: old=pd.read_csv(CSV, parse_dates=['trade_date'])
+            except Exception: old=pd.DataFrame()
+        merged=pd.concat([old, df]).drop_duplicates(subset=['trade_date'], keep='last').sort_values('trade_date')
+        keep=[c for c in ('trade_date','open','high','low','close','vol','amount','pre_close','pct_chg','change') if c in merged.columns]
+        os.makedirs(os.path.dirname(CSV), exist_ok=True)
+        merged[keep].to_csv(CSV, index=False)
+        print('[wave] 指数日线自愈：新拉 %d 行，合并后 %d 行（%s → %s）⇒ %s'
+              % (len(df), len(merged), str(merged['trade_date'].min())[:10], str(merged['trade_date'].max())[:10],
+                 os.path.abspath(CSV)), file=sys.stderr)
+        return pd.Series(merged['close'].values, index=pd.DatetimeIndex(merged['trade_date']))
+    except Exception as e:
+        print('[wave] 自愈失败：%s: %s' % (type(e).__name__, str(e)[:100]), file=sys.stderr)
+        return None
+
+
 def load_close():
+    """指数收盘序列。不足 `MIN_BARS` 根 ⇒ 自愈；仍不足 ⇒ **抛错**（不再静默/不再依赖不可用的 parquet ✓）。"""
+    cs=None
     if os.path.exists(CSV):
-        df=pd.read_csv(CSV, parse_dates=['trade_date'])
-        return pd.Series(df['close'].values, index=pd.DatetimeIndex(df['trade_date']))
-    return pd.read_parquet('data/指数数据/index_daily/000001.SH.parquet')['close']
+        try:
+            df=pd.read_csv(CSV, parse_dates=['trade_date'])
+            cs=pd.Series(df['close'].values, index=pd.DatetimeIndex(df['trade_date']))
+        except Exception as e:
+            print('[wave] 读 CSV 失败（将自愈）: %s' % str(e)[:80], file=sys.stderr)
+            cs=None
+    if cs is None or len(cs) < MIN_BARS:
+        print('[wave] 指数日线不足（现有 %s 行 < %d）⇒ 触发自愈' % (0 if cs is None else len(cs), MIN_BARS), file=sys.stderr)
+        cs=_heal_history()
+    if cs is None or len(cs) < MIN_BARS:
+        raise RuntimeError('指数日线不可用/不足（CSV=%s，现有 %s 行，需要 ≥%d 根）'
+                           % (os.path.abspath(CSV), 0 if cs is None else len(cs), MIN_BARS))
+    return cs
 
 PIVOTS_FILE = os.getenv("WAVE_PIVOTS_FILE", "data/wave_pivots.json")
 
@@ -329,16 +382,31 @@ def main():
         if '=' in _s.argv[1]: date=_s.argv[1].split('=',1)[1]
         elif len(_s.argv)>2: date=_s.argv[2]
     _ensure_index_fresh()   # 自愈：确保指数日线到最近收盘，wave 判定 date=昨日
-    f=index_features(date)
-    if f is None: print('no data'); return
+    # ★ 2026-10-09：数据不可用 ⇒ **非零退出**（原来 `print('no data'); return` ⇒ rc=0 ⇒ 调度器记 success ✗）
+    try:
+        f=index_features(date)
+    except Exception as e:
+        print('[wave] ❌ 指数结构取数失败（%s: %s）⇒ 浪型判定无法进行，非零退出'
+              % (type(e).__name__, str(e)[:160]), file=sys.stderr)
+        raise SystemExit(3)
+    if f is None:
+        print('[wave] ❌ 指数结构数据不足（< %d 根）⇒ 浪型判定无法进行，非零退出（不再静默返回 0 ✗）' % MIN_BARS,
+              file=sys.stderr)
+        raise SystemExit(3)
     print('[*] 指数结构:', json.dumps(f, ensure_ascii=False), file=sys.stderr)
     prompt=build_prompt(f)
     reply=call_agent(prompt)
     res=parse(reply)
+    # ★ 2026-10-09：LLM 无有效回复 ⇒ **不写 state**（原来会补 `operation='side'` ⇒ 用假浪型污染 gate ✗）
+    if (not isinstance(res, dict)) or res.get('parse_failed') or not res.get('operation'):
+        print('[wave] ❌ 波浪 agent 无有效回复（中继/LLM 异常？）⇒ 不写 wave_state、非零退出；reply=%s'
+              % str(reply)[:160], file=sys.stderr)
+        raise SystemExit(4)
     res['date']=f['date']; res['features']=f
     # 校验 operation 取值，避免空/异常值污染 gate
-    if not res.get('operation'):
-        res['operation']='side'
+    if res.get('operation') not in ('build','t_only','side','defense','exit'):
+        print('[wave] ❌ operation 取值非法: %r ⇒ 非零退出（不写 state）' % res.get('operation'), file=sys.stderr)
+        raise SystemExit(4)
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE,'w',encoding='utf-8') as fp: json.dump(res, fp, ensure_ascii=False, indent=2)
     print(json.dumps(res, ensure_ascii=False, indent=2))
