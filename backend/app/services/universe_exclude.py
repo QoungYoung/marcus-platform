@@ -30,6 +30,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys          # ★ 2026-10-09 修：`_warn()` 用 `sys.stderr.write` 但**从来没 import sys** ✗
+                   #   ⇒ `NameError: name 'sys' is not defined`（被本地 try/except 吞掉 ⇒ stderr 告警**静默丢失** ✗，
+                   #      同时被告警通道记录成一条 raise ⇒ 回测臂日志/日目录 alerts.jsonl 里能看到 ✓）。
+                   #   影响面：**只是告警输出**（`_warn_if_stale` 注释已注明"行为不变 ⇒ 仍放行 ✓"）
+                   #   ⇒ 排除逻辑本身不受影响 ✓ ⇒ 不改变回测/生产的选股结果 ✓
 from typing import Any, Dict, List, Optional, Tuple
 
 ENV = "WOLF_UNIVERSE_EXCLUDE"
