@@ -772,13 +772,16 @@ def scan(day: str, symbols: Optional[Sequence[str]] = None, themes: Optional[Seq
     #   而封测龙头长电科技（r60 −4.4%）排到 463/885 —— 用"整主题一把尺"把细分概念龙头挤出门外。
     topk = int(_f("WOLF_TREND_CONCEPT_TOPK", 2))          # 分类龙头 + 龙2
     # ── v2 优先（2026-09-21 用户拍板"向他对齐"）：WOLF_LEADER_V2=1 时用 leader_v2 ──
+    #   ★ 2026-10-09：这里**打印一次实际生效的尺子**，并且当"子开关已开但本体未开"时**醒目告警** ✓
+    #     （修静默失效：t3→t36 的臂只设了子开关 ⇒ 实际一直走 v1 却从不报错 ✗；行为语义未改 ✓）
     try:
         import importlib as _ilV
-        _lv2 = _ilV.import_module("leader_v2")
-        if not _lv2.enabled():
-            _lv2 = None
-    except Exception:
+        _lmod = _ilV.import_module("leader_v2")
+        _lmod.warn_if_misconfigured()
+        _lv2 = _lmod if _lmod.enabled() else None
+    except Exception as _eLV:
         _lv2 = None
+        print("[trend_channel] leader_v2 不可用（按 v1 走）: %s" % str(_eLV)[:80], flush=True)
     if _lv2 is not None:
         kept = _v2_pick(domain, themes, day, _lv2, topk=topk)
     mode = str(os.getenv("WOLF_TREND_LEADER_MODE", "concept")).strip().lower()

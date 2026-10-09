@@ -6256,6 +6256,32 @@ V1 固定 5 日（≈我们现行腿口径）**−1.18%**/44%/−4.2%/−0.28/5 
 - 部署：SFTP 3 文件 + `docker restart marcus-worker marcus-backend`（tasks.yaml 只在启动时读 ⇒ **必须重启**才生效 ✓）⇒ 日志 `Loaded 60 tasks from config` ✓（59+1）
 
 ★ 教训：本平台大量"盘后"任务依赖**第三方 EOD 发布时机**，而 tasks.yaml 的时刻是按"收盘后"拍的 ⇒ 只要源比 18:40 晚，任务就会**每晚稳定失败**（且产物静默陈旧）；排查这类问题的正确顺序是：**先直连数据源看它现在能不能返回（本例 88 行 ✓）**，再看任务日志里"到底是报错还是 0 行"（本例是静默 0 行 ✗）⇒ 结论往往不是"源坏了"而是"跑早了"。
+- [2026-10-09 10:02] [经验教训] §9.787 修 WOLF_LEADER_V2 静默失效：尺子打印+错配告警（语义未改）＋ 生产也一直走 v1 — ★ 2026-10-09 用户拍板「先修静默失效」⇒ 修 `WOLF_LEADER_V2` 的口径错配（§9.787）。
+
+**为什么是"静默失效"**（实测 ✗）：
+- `apps/main_line/leader_v2.py::enabled()` = `getenv("WOLF_LEADER_V2","0")` ⇒ **只看本体**
+- 而 **t3→t36 的全部臂脚本**（40+ 个 `_run_t*.sh`）**只设子开关** `WOLF_LEADER_V2_EARN/CHAIN/VAL=1`（+`_MV_TOPN=5`），**没有一本体** ⇒ `enabled()` 恒 False ⇒ `trend_channel.py` 里 `_lv2=None` ⇒ 子开关**全部惰性**（它们只在 `leader_v2.py` 内部被读 ✓ grep 证实）
+- ⇒ 台账「A3 | leader v2 三项全开」记录**误导**：那些臂实际跑的还是 **v1 尺子（含"涨停数 lim"因子 ⇒ 奖励游资妖股）** ✗，且**从不报错** ✓
+- ★ 生产同样中招：实测生产 env `WOLF_LEADER_V2` **未设** 而 `EARN/CHAIN/VAL='1'` ⇒ **生产也一直走 v1** ✗（这正好解释了"非龙头妖股为何入选"）
+- 另：`_run_t*` 与 T2 的差异还混了 `WOLF_UNIVERSE_CLEAN=1` / `WOLF_TREND_SCAN_LIMIT=0` ⇒ 即便做 T3 vs T2 对比也**无法归因给 v2** ✗；台账里只有"早期读数计划"，**没有落地的收益对比** ⇒ **v2 至今没有收益口径的量化验证**
+- 现存最强证据反而是**负向**：台账 B8 单独量过 v2 的 G3「板块内总市值前 5」⇒ 前 5 更差（−1.46%）、6~25 更好（+1.4%）、反向非单调 ⇒ ❌ 不建议
+
+**修法（§9.787，**不改行为** ✓ 只让错配再也无法静默）**：
+- `leader_v2.py` 新增 `sub_switches_on()` / `ruler()`（"v1"/"v2"）/ `warn_if_misconfigured()`（每进程一次打印 ✓ 绝不抛 ✓）：
+  本体=1 ⇒ 打印「尺子 = **v2**」；本体未开但子开关有开 ⇒ 打印 **⚠️⚠️「尺子 = v1，子开关全部惰性，要启用请设 WOLF_LEADER_V2=1」**；两者皆无 ⇒ 打印「尺子 = v1」
+- `trend_channel.py` 的尺子选择块改为：`_lmod.warn_if_misconfigured()` + `_lv2 = _lmod if _lmod.enabled() else None`（语义不变 ✓）
+- ⚠️ 刻意**不**把"子开关=1 自动当启用"：那会**追溯改变仍在跑的臂**的口径 ✗ ⇒ 要真启用必须显式 `WOLF_LEADER_V2=1`，并在 A/B 里作为独立一臂验证 ✓
+
+**验证（生产容器内实测）**：
+```
+生产 env: WOLF_LEADER_V2=None  EARN='1' CHAIN='1' VAL='1' MV_TOPN=None
+① 实际生效尺子 = v1 （enabled=False, 子开关=[EARN,CHAIN,VAL]）
+   [leader_v2] ⚠️⚠️ 龙头尺子 = **v1**（本体未开），但检测到已开的 v2 子开关：… ⇒ 全部惰性 ✗
+② 显式 WOLF_LEADER_V2=1 ⇒ 尺子 = **v2**，打印「尺子 = **v2**（WOLF_LEADER_V2=1 ✓ 子开关=…）」
+```
+部署：SFTP 两文件；★ **无需重启容器** —— `trend_channel`/`leader_v2` 只被**子进程任务** `jobs/rotation_switch_arm.py`（importlib 导入，见 1222/1344 行）与回测驱动导入，**不在常驻进程内** ✓（已 grep 证实；`t_monitor.py:5733` 只是注释引用）
+
+**下一步（待用户拍板）**：跑一个"**只差 `WOLF_LEADER_V2` 本体**"的 A/B（复制 `_run_t36_exec.sh`，同窗口同期），产出收益/PF/胜率/回撤对照 ⇒ 这才是 v2 的第一份量化验证 ✓；生产在 A/B 出结果前**不动** ✓。
 
 ## 行动指南 Action Guide
 

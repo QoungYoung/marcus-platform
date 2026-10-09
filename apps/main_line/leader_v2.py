@@ -102,7 +102,52 @@ MISSING: Tuple[str, ...] = (
 
 
 def enabled() -> bool:
+    """v2 是否启用（**只看本体** `WOLF_LEADER_V2`，默认 0）—— 语义**未改** ✓。"""
     return str(os.getenv(ENV, "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+# ── ★ 2026-10-09 修「静默失效」（用户拍板「先修静默失效」）────────────────────────
+#   背景（实测 ✗）：t3→t36 的臂脚本**只设子开关**（EARN/CHAIN/VAL=1）却**没设本体**
+#   `WOLF_LEADER_V2` ⇒ `enabled()` 恒 False ⇒ `trend_channel` 里 `_lv2 = None` ⇒
+#   子开关**全部惰性**（只在 v2 内部被读）✗ ⇒ 台账「A3 leader v2 三项全开」实际跑的
+#   还是 **v1（含"涨停数 lim"因子 ⇒ 奖励游资妖股）** ✗，而且**从不报错** ✗✗。
+#   本函数**不改行为**（是否启用仍由本体决定 ✓），只保证这种错配**再也不会静默** ✓。
+#   ⚠️ 刻意**不**把"子开关=1"自动当作启用：那会**追溯改变仍在跑的臂**的口径 ✗；
+#      要真正启用请显式设 `WOLF_LEADER_V2=1`（并在 A/B 里作为独立一臂验证 ✓）。
+_SUB_SWITCHES = ("WOLF_LEADER_V2_EARN", "WOLF_LEADER_V2_CHAIN", "WOLF_LEADER_V2_VAL")
+_WARNED = {"done": False}
+
+
+def sub_switches_on():
+    """已开的 v2 子开关（用于审计/告警）✓"""
+    return [k for k in _SUB_SWITCHES if _on(k)]
+
+
+def ruler() -> str:
+    """当前实际生效的龙头尺子名（供日志/产物标注 ✓）"""
+    return "v2" if enabled() else "v1"
+
+
+def warn_if_misconfigured() -> None:
+    """打印**一次**(每进程)实际生效的尺子；子开关开而本体未开 ⇒ **醒目告警** ✓（绝不抛 ✓）"""
+    try:
+        if _WARNED["done"]:
+            return
+        _WARNED["done"] = True
+        if enabled():
+            print("[leader_v2] 龙头尺子 = **v2**（WOLF_LEADER_V2=1 ✓ 子开关=%s）"
+                  % (",".join(sub_switches_on()) or "无"), flush=True)
+            return
+        _subs = sub_switches_on()
+        if _subs:
+            print("[leader_v2] ⚠️⚠️ 龙头尺子 = **v1**（本体 WOLF_LEADER_V2 未开）"
+                  "，但检测到已开的 v2 子开关：%s ✗\n"
+                  "             ⇒ v2 关闭时这些子开关**全部惰性**（不生效）✗；"
+                  "要真正启用请显式设 WOLF_LEADER_V2=1 ✓" % ",".join(_subs), flush=True)
+        else:
+            print("[leader_v2] 龙头尺子 = v1（未启用 v2）", flush=True)
+    except Exception as _e:
+        print("[leader_v2] 尺子告警失败: %s" % str(_e)[:80], flush=True)
 
 
 def mv_topn() -> int:
