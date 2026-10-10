@@ -335,11 +335,19 @@ def _arm_legs(plan):
                 _ambush = {str(x) for x in (_js3.load(open(_ap2, encoding="utf-8")) or {}).get("symbols") or []}
         except Exception as _ae2:
             print("[switch_builder] 埋伏候选读取失败(按无埋伏处理): %s" % str(_ae2)[:70], flush=True)
-    print("[switch_builder] _arm_legs 埋伏名单 %d 只" % len(_ambush), flush=True)
+    # ★ 2026-10-10 修（用户「1」✓）：**统一按 6 位代码比对** ✗
+    #   病灶：候选文件里存的是 **ts_code 形态**（`000505.SZ` ✓），而下面比对用的是 `sym="SZ000505"`
+    #     与 `code="000505"` ✗ ⇒ **兜底路径永远匹配不上** ✗ ⇒ 埋伏腿形同死代码 ✓
+    #     （实测 2026-09-09 候选 11 只、当年 `wolf_ambush_buy` 布腿数 = **0** ✗；主路径 `plan["ambush"]`
+    #      用的是 6 位代码 ✓ 不受影响，所以平时看不出问题 ✗）
+    _ambush_codes = {str(x).strip().split(".")[0].zfill(6) for x in _ambush if str(x).strip()}
+    print("[switch_builder] _arm_legs 埋伏名单 %d 只（归一 6 位后 %d 个 ✓）"
+          % (len(_ambush), len(_ambush_codes)), flush=True)
     for b in plan.get("buy_new") or []:
         code = b["code"]
-        sym = ("SH" if str(code)[0] == "6" else "SZ") + str(code)
-        if sym in _ambush or str(code) in _ambush:
+        _c6 = str(code).strip().split(".")[0].zfill(6)
+        sym = ("SH" if _c6[0] == "6" else "SZ") + _c6
+        if _c6 in _ambush_codes or sym in _ambush or str(code) in _ambush:
             rid_a = arm(conn, cur, sym, "wolf_ambush_buy", "buy", BUY_253_EXPR, today)
             armed.append({"type": "wolf_ambush_buy", "symbol": sym, "253": rid_a})
             continue
