@@ -402,6 +402,46 @@ def _wave_from_sandbox_day(sim8: str) -> Optional[dict]:
     return None
 
 
+def _cond_fail_policy() -> str:
+    """浪型**取不到/无法判定**时的策略：`open`（默认，放行 ＋ 留痕 ✓）/ `close`（保守拦截 ✓）。
+
+    ★ 2026-10-10（用户「改」✓）：实测事故 —— 回测里 LLM 隧道不在 ⇒ 当天 `wave_state` 缺失 ✗
+      ⇒ `op` 为空 ⇒ **fail-open 放行** ✗ ⇒ `t_only` 那一天照样成交 `trend_break_buy`（正邦科技 ✗）
+      （同日志还能看到`时间窗外→本轮不发腿`只挡时间窗 ✓、浪型闸那道口子却静默放行 ✗）
+    ⇒ 回测/批量场景应取 **close**（保守拦截 ✓）；生产默认仍是 **open** ⇒ **行为逐位不变** ✓
+    """
+    return str(os.getenv("WOLF_WAVE_COND_FAIL", "open")).strip().lower()
+
+
+def _cond_fail_record(kind: str, op: str, tag: str, decision: str, where: str) -> None:
+    """fail 决策**显式留痕 ＋ 计数** ✓（原来只有一行 stderr ⇒ 对账时看不见 ✗）"""
+    try:
+        import logging as _lg
+        _lg.warning("[wave_gate] 条件单浪型闸 %s：kind=%s op=%r tag=%s where=%s"
+                    % (decision, str(kind)[:32], op, tag, where))
+    except Exception:
+        pass
+    try:
+        import json as _js, time as _tm
+        _d = str(os.getenv("DATA_DIR") or "").strip() or \
+             os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                 os.path.dirname(os.path.abspath(__file__))))), "data")
+        _f = os.path.join(_d, "wave_gate_events.jsonl")
+        with open(_f, "a", encoding="utf-8") as _fh:
+            _fh.write(_js.dumps({"ts": _tm.strftime("%Y-%m-%d %H:%M:%S"), "event": "cond_wave_fail",
+                                 "decision": decision, "kind": str(kind or ""), "op": str(op or ""),
+                                 "tag": tag, "where": where, "sim_day": sim_day8() or ""},
+                                ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    try:
+        print("[wave_gate] 条件单浪型闸 %s：kind=%s op=%r（%s，%s）⇒ %s"
+              % (decision, str(kind)[:32], op, tag, where,
+                 "拦下 ✗" if decision == "FAIL-CLOSE" else "放行 ✓"), flush=True)
+    except Exception:
+        pass
+
+
 def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
     """条件单买入是否被**浪型**拦下 ⇒ `(blocked: bool, why: str)` ✓
 
@@ -430,7 +470,12 @@ def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
     _wd = str((w or {}).get("date") or "?")
     tag = "%s/%s" % (lv or "?", sb or "?")
     if not op:
-        print("[wave_gate] 条件单浪型闸：operation 缺失（%s）⇒ 放行 ✓" % tag, file=sys.stderr, flush=True)
+        # ★ 2026-10-10：op 缺失 = 浪型**不可用** ⇒ 由 `WOLF_WAVE_COND_FAIL` 决定（默认 open ✓）
+        if _cond_fail_policy() == "close":
+            _cond_fail_record(kind, op, tag, "FAIL-CLOSE", "operation 缺失（浪型不可用）")
+            return True, ("浪型不可用（operation 缺失，%s）⇒ **保守拦截** ✗"
+                          "（回测口径 WOLF_WAVE_COND_FAIL=close ✓；要放行设 open ✓）" % tag)
+        _cond_fail_record(kind, op, tag, "FAIL-OPEN", "operation 缺失（浪型不可用）")
         return False, ""
     if op == "build":
         return False, ""
@@ -459,6 +504,10 @@ def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
         return True, ("浪型 %s·t_only ⇒ 「只做T、**不追不新建主升**」✓，"
                       "本腿（%s，归类=%s）属建仓/主升 ✗ 不放行（档 date=%s）"
                       % (tag, str(kind)[:28], cls, _wd))
-    # 未知 operation ⇒ 放行 ＋ 留痕 ✓（不静默整片禁买 ✗）
-    print("[wave_gate] 条件单浪型闸：未知 operation=%s（%s）⇒ 放行 ✓" % (op, tag), file=sys.stderr, flush=True)
+    # 未知 operation ⇒ 默认放行 ＋ 留痕；`WOLF_WAVE_COND_FAIL=close` ⇒ 保守拦截 ✓
+    if _cond_fail_policy() == "close":
+        _cond_fail_record(kind, op, tag, "FAIL-CLOSE", "未知 operation")
+        return True, ("浪型 operation=%s 未知（%s）⇒ **保守拦截** ✗"
+                      "（WOLF_WAVE_COND_FAIL=close ✓；要放行设 open ✓）" % (op, tag))
+    _cond_fail_record(kind, op, tag, "FAIL-OPEN", "未知 operation")
     return False, ""

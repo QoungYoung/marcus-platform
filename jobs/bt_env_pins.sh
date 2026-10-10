@@ -107,6 +107,13 @@ export WOLF_MEMBER_LLM_TIMEOUT='20'       # 主营判定 dsh 超时（25s→8s�
 #   串行服务下并发不涨吞吐（≈0.4 次/秒恒定），只会制造超时 ⇒ 抬高超时是唯一 env 侧修法。
 export WOLF_MEMBER_NEG_TTL='120'           # 失败负缓存 1800s→120s：否则一次抖动会把闸门关半小时。
 export WOLF_MEMBER_PREWARM_WORKERS='1'     # 单票兜底并发（主路径已是批量）：串行服务下并发只涨延迟不涨吞吐。
+# ★ 2026-10-10（用户「改」✓）：浪型**取不到**时的策略 = **保守拦截**（回测口径 ✓）
+#   事故：回测里 LLM 隧道不在 ⇒ 当天 wave_state 缺失 ⇒ op 为空 ⇒ 旧逻辑 **fail-open 放行** ✗
+#         ⇒ `t_only` 那天照样成交 `trend_break_buy`（正邦科技 SZ002157 ✗，14:00/14:10 两笔 ✗）
+#   现策略：`close` ⇒ 拦下并写 `wave_gate_events.jsonl`（含 kind/op/tag/decision ✓ 可计数 ✓）
+#   ⚠️ 生产不设此项 ⇒ `WOLF_WAVE_COND_FAIL` 默认 `open` ⇒ **生产行为逐位不变** ✓
+export WOLF_WAVE_COND_FAIL='close'
+
 # 主营校验的 LLM 端点：**默认是 13101（已死）** ⇒ 必须显式指向活的 13001，否则逐票超时重试（一天几小时）
 export WOLF_MEMBER_LLM_URL='http://127.0.0.1:13001/chat'
 export WOLF_MEMBER_BATCH='1'               # 主路径改**批量**：一次判 20–40 只（实测 40 只 10.0s），请求数 344/天→9–18/天。
