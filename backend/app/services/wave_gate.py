@@ -413,6 +413,54 @@ def _cond_fail_policy() -> str:
     return str(os.getenv("WOLF_WAVE_COND_FAIL", "open")).strip().lower()
 
 
+_FAIL_ALERTED: dict = {}
+_FAIL_COUNT: dict = {}
+
+
+def _cond_is_backtest() -> bool:
+    """是否回测/批量环境（与 `_wave_from_sandbox_day` 同判据 ✓）—— 回测不推 QQ（避免刷屏 ✗）。"""
+    for k in ("BT_ROOT", "WOLF_SIM_DAY", "BT_ASOF_DAY", "BT_ASOF_STATE"):
+        if str(os.getenv(k) or "").strip():
+            return True
+    return str(os.getenv("BT_NET_OFFLINE", "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _cond_fail_alert(kind: str, op: str, tag: str, decision: str, where: str) -> None:
+    """浪型**不可用** ⇒ **推送 QQ**（每天一次 ✓ — 用户 2026-10-10：「不可用的时候推送QQ，不建仓」✓）
+
+    · 每天**只推一条** ✓（同一天多轮多腿只累计计数 ✓，避免刷屏 ✗）
+    · 回测环境**不推** ✓（`BT_ROOT`/`WOLF_SIM_DAY`/… 在场 ⇒ 只落盘计数 ✓；要推设 `WOLF_WAVE_COND_QQ_BT=1` ✓）
+    · 推送失败只留痕 ✓（绝不因为告警失败影响交易判定 ✗）
+    """
+    try:
+        import time as _tm
+        _d = _tm.strftime("%Y-%m-%d")
+    except Exception:
+        _d = "?"
+    try:
+        _FAIL_COUNT[_d] = int(_FAIL_COUNT.get(_d, 0)) + 1
+    except Exception:
+        pass
+    if _FAIL_ALERTED.get(_d):
+        return
+    _FAIL_ALERTED[_d] = True
+    _bt = _cond_is_backtest() and str(os.getenv("WOLF_WAVE_COND_QQ_BT", "0")).strip().lower() not in ("1", "true", "yes", "on")
+    _msg = ("[浪型闸] ⚠️ 浪型**不可用**（%s）⇒ **本腿不建仓** ✓（保守口径 %s）｜腿型=%s 档=%s 当日累计=%d 次%s"
+            % (where, decision, str(kind)[:28], tag, _FAIL_COUNT.get(_d, 1),
+               "（回测环境：仅计数不推送 ✓）" if _bt else ""))
+    print("[wave_gate] ★ " + _msg, flush=True)
+    if _bt:
+        return
+    try:
+        from app.services import alert_hub as _ah
+        _ah.push_qq(_msg)
+    except Exception as _e:
+        try:
+            print("[wave_gate] 浪型不可用告警推送失败: %s" % str(_e)[:80], flush=True)
+        except Exception:
+            pass
+
+
 def _cond_fail_record(kind: str, op: str, tag: str, decision: str, where: str) -> None:
     """fail 决策**显式留痕 ＋ 计数** ✓（原来只有一行 stderr ⇒ 对账时看不见 ✗）"""
     try:
@@ -438,6 +486,11 @@ def _cond_fail_record(kind: str, op: str, tag: str, decision: str, where: str) -
         print("[wave_gate] 条件单浪型闸 %s：kind=%s op=%r（%s，%s）⇒ %s"
               % (decision, str(kind)[:32], op, tag, where,
                  "拦下 ✗" if decision == "FAIL-CLOSE" else "放行 ✓"), flush=True)
+    except Exception:
+        pass
+    # ★ 2026-10-10（用户：「不可用的时候推送QQ，不建仓」✓）：浪型不可用 ⇒ 推送 QQ（每天一次 ✓）
+    try:
+        _cond_fail_alert(kind, op, tag, decision, where)
     except Exception:
         pass
 
