@@ -15,6 +15,9 @@
   · `r5`     = 近 5 日超额                     —— "有没有行情"（趋势存在性）
   · `breadth_chg` = 成分股站上 MA20 比例的 5 日变化 —— 参与面是否在扩散
   · `lead`   = 带动板块（券商/银行篮子）近 5 日超额 —— "大资金认不认"（风险偏好）
+             ⚠️ 它**不是** r5 的基准 ✗：r5 的基准是 `allc`（全市场等权 ✓，见 `score_day(..., market_codes)`）。
+             对账/复算请**复用本模块的 `load_universe()` + `score_day()`** ✓，不要另取近似
+             （实测教训：用"当日面板全码"近似 ⇒ 与 `allc` 差 6 只标的 ⇒ 主题 r5 符号翻转 ✗）。
   · 横截面 z 标准化后加权求和（权重可用 env 覆盖，便于验收式迭代，不做无依据调参）
 
 **诚实边界**：本层只做"方向排序"，不做选股/择时；所有输入都是当日及以前（PIT）。
@@ -237,12 +240,22 @@ def score_day(days: Sequence[str], i: int, px: Dict[str, Dict[str, float]],
     cand = ([t for t in gs if t in pool] or pool) if use_gate() else pool
     order = [t for t in cand if t in scores]
     order.sort(key=lambda t: -scores[t])
-    out = {"date": days[i], "r5": {t: scores[t] for t in order[:6]},
+    # ★ 2026-10-10（用户「落地」✓）：导出**池内可见集**（pool_top ∪ pool ∪ 上榜 ✓）
+    #   病灶 ✗：原来只导出 `order[:6]` ⇒ 被 "r5>0" 筛掉的主题在产物里**看不见** ✗
+    #     ⇒ 外部会误判成"r5 缺失" ✗（实测 10-08 池 top3 里两个被筛掉，产物只剩 1 个 ✗）
+    _view: List[str] = []
+    for _t in list(pool_top) + list(pool) + list(order):
+        if _t in scores and _t not in _view:
+            _view.append(_t)
+    _view = _view[:12]
+    out = {"date": days[i], "r5": {t: scores[t] for t in _view},
+           "r5_view_note": "r5/diag 含 pool_top ∪ pool ∪ 上榜（不是只前 6 名 ✓）",
+           "dropped_by_r5": [t for t in pool_top if t in scores and t not in pool],
            "rank_all": [t for t, _ in ranked],
            "rank_in_gate": order,
            "mainline": order[0] if order else None,
            "second": order[1] if len(order) > 1 else None,
-           "gate_n": len(gs), "diag": {t: diag[t] for t in order[:6]},
+           "gate_n": len(gs), "diag": {t: diag[t] for t in _view},
            "pool": pool, "pool_top": pool_top, "pool_n": len(pool),
            "pool_k": int(pool_k),
            "pool_share5": {t: round(src5.get(t, 0.0), 4) for t in pool_top},
@@ -404,8 +417,10 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
         uni, lead, allc = load_universe()
         if not uni:
             return {"ok": False, "reason": "no_universe"}
+        _basis_src = "stock_pool"
         if not allc:   # 基准兜底：面板全部代码（与 eval 脚本的全市场等权口径一致）
             allc = sorted({x for d in px.values() for x in d})
+            _basis_src = "panel_all(fallback)"
         ma20 = wide.rolling(20).mean(); above = (wide > ma20)
         breadth = {d: {th: (sum(1 for c in uni[th] if bool(above.loc[d].get(c, False))) / max(1, len(uni[th])))
                        for th in uni} for d in idx}
@@ -430,6 +445,17 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                         share5=share5, pool_k=pool_k())
         if not res:
             return {"ok": False, "reason": "insufficient_history"}
+        # ★ 2026-10-10（用户「落地」✓）：**把口径写进产物** ✗
+        #   背景：同一件事出现过两个数字（我用"当日面板全码"当全市场 ⇒ 新能源/电池 −0.085% ✗，
+        #   模块用 `allc`(stock_pool 全市场) ⇒ +0.083% ✓）—— 差 6 只标的 ⇒ **符号翻转** ✗。
+        #   ⇒ 从此产物自带基准标签与成员数 ✓，外部/对账不必再猜 ✗。
+        res["market_basis"] = {
+            "label": "全市场等权",
+            "src": _basis_src,
+            "n": len(allc),
+            "note": ("r5 = 主题等权收益 − 本篮子等权收益；`lead`（券商/银行/保险/多元金融）"
+                     "仅作诊断因子，**不参与 r5** ✓"),
+        }
         # 池内主题的浪型文本（原挂在 gate 摘要里，2026-09-13 起挂到方向层主线）
         try:
             _pos = [t for t in ([res.get("mainline")] + list(res.get("second") and [res["second"]] or [])
@@ -497,6 +523,7 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                     "pool_k": res.get("pool_k"), "pool_share5": res.get("pool_share5") or {},
                     "candidates": res.get("rank_in_gate") or [], "r5": res.get("r5") or {},
                     "themes": res.get("themes") or [], "use_gate": res.get("use_gate"),
+                    "market_basis": res.get("market_basis"), "dropped_by_r5": res.get("dropped_by_r5"),
                     "note": "方向层主线 = 池(量能占比topK ∩ r5>0) → 池内 r5 top1；与他股票主线层对齐 recall 75%/top1 54%/top3 85%",
                 }
                 # ★ 2026-10-10（用户「这是个生产问题」✓）：**清掉陈旧键** ✗
