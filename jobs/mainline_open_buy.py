@@ -106,6 +106,18 @@ def enumerate_symbols(ml_state):
     return out
 
 def run_async(coro):
+    """跑协程；**同步返回值也照收** ✓（2026-10-12 用户「开始修」）。
+
+    ★ 病灶：`calc_position` 是**同步**函数（`backend/app/api/indicator.py:1512 def calc_position`），
+      却被 `run_async(calc_position(...))` 包 ⇒ `loop.run_until_complete(普通对象)`
+      ⇒ 每只候选都报 `An asyncio.Future, a coroutine or an awaitable is required` ✗
+    实测：20261012 诊断 15 只里 **13 只 error** ⇒ `built=[]`（当天一单没建 ✗，且**静默**：只写诊断 ✓）；
+      20261008 `error=0`（那天 14 只都在第一道闸 `hard_block` ⇒ 没走到 calc_position ⇒ 潜伏未暴露 ✓）
+    修法：非 awaitable 直接原样返回 ✓（`check_entry_filters` 仍是 async ⇒ 照旧 run_until_complete ✓）
+    """
+    import inspect as _insp
+    if not _insp.isawaitable(coro):
+        return coro
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(coro)
