@@ -2113,6 +2113,292 @@ class Store:
 # ──────────────────────────────────────────────────────────────────────────────
 # HTTP
 # ──────────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# ★ 2026-10-12（用户：「给回测控制台加上选日期回测的功能，再加上暂停继续停止按钮」）
+#   控制台运行臂：**选日期 → 开跑 → 暂停/继续/停止** ✓
+#   设计要点（沿用现有做法，口径零漂移 ✓）：
+#     · 不另造一套 env ✗ —— 直接**复制最近一次的臂脚本** `_run_t*_exec.sh`，只替换
+#       `TAG=/PORT=` 与 `START=/END=` ✓ ⇒ 与最近一次回测的口径**逐位一致** ✓（模板记进状态文件 ✓ 可审计 ✓）
+#     · 用 `Popen(..., start_new_session=True)` ⇒ 启动脚本成为**会话/进程组首** ⇒
+#       暂停/继续/停止 = 对**整组**发 SIGSTOP/SIGCONT/SIGTERM ✓（子进程（bt_days/bt_prod_run…）一起管 ✓）
+#     · 状态落盘 `.dsh-tmp/wolfbt/console_run.json` ✓（tag/pid/pgid/窗口/root/account/port/模板/时间 ✓）
+#     · 暂停语义：整组 SIGSTOP（含当日子进程）✓；继续 = SIGCONT ✓；停止 = SIGTERM（优雅退出 ✓）
+# ══════════════════════════════════════════════════════════════════════════
+RUN_DIR = os.path.join(REPO, ".dsh-tmp", "wolfbt")
+CONSOLE_STATE = os.path.join(RUN_DIR, "console_run.json")
+DATE_MIN, DATE_MAX = "20260105", "20260930"
+
+
+def _now_str() -> str:
+    """控制台时间戳（用 time.strftime，避免与模块里的 datetime 导入形态冲突 ✓）"""
+    import time as _t
+    return _t.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _cstate() -> dict:
+    try:
+        with open(CONSOLE_STATE, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _csave(d: dict) -> None:
+    try:
+        os.makedirs(RUN_DIR, exist_ok=True)
+        tmp = CONSOLE_STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(d, fh, ensure_ascii=False, indent=1)
+        os.replace(tmp, CONSOLE_STATE)
+    except Exception as exc:
+        sys.stderr.write("[bt_dashboard] 写 console_run.json 失败: %s\n" % str(exc)[:120])
+
+
+def _proc_state(pid) -> str:
+    """返回 /proc/<pid>/stat 的状态字符（R/S/T/Z…）；进程不存在返回 ""。"""
+    try:
+        with open("/proc/%d/stat" % int(pid), encoding="utf-8") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0]
+    except Exception:
+        return ""
+
+
+def _port_free(port: int) -> bool:
+    import socket as _sk
+    with _sk.socket() as sk:
+        sk.settimeout(0.3)
+        return sk.connect_ex(("127.0.0.1", int(port))) != 0
+
+
+def _pick_port(lo: int = 13295, hi: int = 13360) -> int:
+    for p in range(lo, hi):
+        if _port_free(p):
+            return p
+    return lo
+
+
+def _newest_exec_script() -> str:
+    import glob as _g
+    cands = [p for p in _g.glob(os.path.join(RUN_DIR, "_run_t*_exec.sh"))
+             if os.path.isfile(p) and "_run_tmpl" not in p]
+    if not cands:
+        return ""
+    return max(cands, key=os.path.getmtime)
+
+
+def _clean_date(x: str) -> str:
+    s = "".join(ch for ch in str(x or "") if ch.isdigit())
+    return s[:8]
+
+
+def _tag_procs(tag: str) -> list:
+    """按 **tag** 找这条臂的全部进程 ✓ —— 返回 [(pid, state, pgid, cmd)]。
+
+    ★ 为什么必须按 tag ✗：臂脚本用 `nohup … &`/`setsid` 起 driver ⇒ driver 与 as-of API
+      各自在**自己的进程组**里（实测：driver+子进程 pgid=8924、asof_api pgid=8896），
+      而**启动脚本自身的组(8518)是空的** ✗ ⇒ 只按 launcher 的 pgid 判定 ⇒ 误判"已结束" ✗。
+      这些进程的 cmdline 都带 `--root …/_bt_<tag>`（driver/prod_run ✓）或 `--state-file …_<tag>.json`
+      （asof_api ✓）⇒ 用 tag 就能把它们全找出来 ✓（也顺带覆盖 `bt_prod_run.py` 子进程 ✓）。
+    """
+    t = str(tag or "").strip()
+    if not t:
+        return []
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            cmd = open("/proc/%s/cmdline" % d, "rb").read().decode("utf-8", "replace").replace("\x00", " ").strip()
+            if not cmd or ("_bt_%s" % t) not in cmd and ("_%s.json" % t) not in cmd:
+                continue
+            st = open("/proc/%s/stat" % d, encoding="utf-8").read().rsplit(")", 1)[1].split()
+            out.append((int(d), st[0], int(st[2]), cmd[:70]))
+        except Exception:
+            continue
+    return sorted(out)
+
+
+def _pgid_members(pgid) -> list:
+    """列出某进程组里的 (pid, state, pgid, cmdline 前 60 字) ✓
+
+    ★ 为什么需要 ✗：臂启动脚本 `_run_*_exec.sh` 起完 `bt_days.py` 后**自己就退出了** ✓
+      ⇒ 只看 leader(pid) 会误判"已结束" ✗（leader 变僵尸/消失，而 driver 仍在同组里跑 ✓）。
+      实测：`proc=Z` 但 driver 还活着 ⇒ 暂停按钮会被误拒 ✗ ⇒ 改为**按进程组**判定 ✓。
+    """
+    out = []
+    try:
+        pg = int(pgid)
+    except Exception:
+        return out
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            st = open("/proc/%s/stat" % d, encoding="utf-8").read()
+            rest = st.rsplit(")", 1)[1].split()
+            if int(rest[2]) != pg:          # field5 = pgrp（去掉 comm 后 rest[0]=state, rest[2]=pgrp ✓）
+                continue
+            try:
+                cmd = open("/proc/%s/cmdline" % d, "rb").read().decode("utf-8", "replace").replace("\x00", " ").strip()
+            except Exception:
+                cmd = ""
+            out.append((int(d), rest[0], int(rest[2]), cmd[:60]))   # (pid, state, pgid, cmd) ✓ 与 _tag_procs 对齐
+        except Exception:
+            continue
+    return out
+
+
+def arm_start(start: str, end: str, force: bool = False, quiet: bool = False) -> dict:
+    """按日期起一条臂（复制最近臂脚本 ⇒ 口径一致 ✓）。返回 {ok, msg, state}。"""
+    st0 = _cstate()
+    _live = [m for m in _tag_procs(st0.get("tag")) if m[1] != "Z"] or \
+            [m for m in _pgid_members(st0.get("pgid") or st0.get("pid")) if m[1] != "Z"]
+    if _live and not force:
+        return {"ok": False, "msg": "已有回测在跑（tag=%s 进程组 %s 里还有 %d 个进程）⇒ 先停止，或带 force=1"
+                % (st0.get("tag"), st0.get("pgid"), len(_live)), "state": arm_payload()}
+    d1, d2 = _clean_date(start), _clean_date(end)
+    if len(d1) != 8 or len(d2) != 8:
+        return {"ok": False, "msg": "日期需为 8 位（YYYYMMDD），收到 %r / %r" % (start, end), "state": arm_payload()}
+    if d1 > d2:
+        return {"ok": False, "msg": "开始日期 %s 晚于结束日期 %s" % (d1, d2), "state": arm_payload()}
+    if not (DATE_MIN <= d1 <= DATE_MAX) or not (DATE_MIN <= d2 <= DATE_MAX):
+        return {"ok": False, "msg": "日期需落在 %s–%s（本地数据边界）" % (DATE_MIN, DATE_MAX), "state": arm_payload()}
+    tmpl = _newest_exec_script()
+    if not tmpl:
+        return {"ok": False, "msg": "找不到臂脚本模板（.dsh-tmp/wolfbt/_run_t*_exec.sh）⇒ 请先手工跑过一次回测",
+                "state": arm_payload()}
+    try:
+        with open(tmpl, encoding="utf-8") as fh:
+            body = fh.read()
+    except Exception as exc:
+        return {"ok": False, "msg": "读模板失败: %s" % str(exc)[:120], "state": arm_payload()}
+    tag = "c" + _now_str().replace("-", "").replace(":", "").replace(" ", "")[2:12]
+    port = _pick_port()
+    newp = os.path.join(RUN_DIR, "_run_%s_exec.sh" % tag)
+    import re as _re
+    body2, n1 = _re.subn(r"TAG=[A-Za-z0-9_]+;\s*PORT=[0-9]+", "TAG=%s; PORT=%d" % (tag, port), body, count=1)
+    body2, n2 = _re.subn(r"START=[0-9]{8};\s*END=[0-9]{8}", "START=%s; END=%s" % (d1, d2), body2, count=1)
+    if not (n1 and n2):
+        return {"ok": False, "msg": "模板缺少 TAG/PORT/START/END 行 ⇒ 未启动（模板=%s）" % os.path.basename(tmpl),
+                "state": arm_payload()}
+    if quiet:
+        # ★ 2026-10-12（用户收到测试臂的 QQ 告警 ⇒ 追问）：控制台可选**静默** ✓
+        #   臂脚本默认 `WOLF_ALERT_QQ=1`（异常推 QQ ✓ 600s 去重）⇒ 试验性回测会刷用户 QQ ✗
+        #   ⇒ 勾「静默」：在生成的臂脚本末尾追加 `export WOLF_ALERT_QQ=0`
+        #     （仍保留 `WOLF_ALERT_HUB=1` ⇒ 继续落盘 alerts.jsonl ✓ 只是不推 QQ ✓）
+        body2 += ("\n# ★ 控制台「静默」选项：不推 QQ（仍落盘 alerts.jsonl ✓）\n"
+                  "export WOLF_ALERT_QQ='0'\n")
+    with open(newp, "w", encoding="utf-8") as fh:
+        fh.write(body2)
+    os.chmod(newp, 0o755)
+    logp = os.path.join(LOGDIR, "size_run_%s.log" % tag)
+    state = {"tag": tag, "start": d1, "end": d2, "port": port, "root": "data/_bt_%s" % tag,
+             "account": "drab%s" % tag, "script": newp, "template": os.path.basename(tmpl),
+             "log": logp, "quiet": bool(quiet), "started_at": _now_str(),
+             "pid": None, "pgid": None, "stopped_at": None}
+    try:
+        import subprocess as _sp          # ★ 本地导入（模块顶层没 import subprocess ✓）
+        os.makedirs(LOGDIR, exist_ok=True)
+        fh = open(logp, "ab")
+        proc = _sp.Popen(["bash", newp], cwd=REPO, stdout=fh, stderr=_sp.STDOUT,
+                                stdin=_sp.DEVNULL, start_new_session=True)
+        state["pid"], state["pgid"] = proc.pid, os.getpgid(proc.pid)
+        _csave(state)
+        return {"ok": True, "msg": "已启动 %s：%s→%s（模板 %s，pid=%s ✓）"
+                % (tag, d1, d2, os.path.basename(tmpl), proc.pid), "state": arm_payload()}
+    except Exception as exc:
+        _csave(state)
+        return {"ok": False, "msg": "启动失败: %s" % str(exc)[:160], "state": arm_payload()}
+
+
+def arm_control(action: str) -> dict:
+    """暂停/继续/停止（对**整组**发信号 ✓）。"""
+    import signal as _sig
+    st = _cstate()
+    pid = st.get("pid")
+    if not pid and not st.get("pgid"):
+        return {"ok": False, "msg": "没有可控制的回测（先「开始回测」）", "state": arm_payload()}
+    pgid = st.get("pgid") or pid
+    _procs = [m for m in _tag_procs(st.get("tag")) if m[1] != "Z"]
+    if not _procs:
+        _procs = [m for m in _pgid_members(pgid) if m[1] != "Z"]
+    if not _procs:
+        return {"ok": False, "msg": "该回测已结束（tag=%s 的进程已全部退出）" % st.get("tag"),
+                "state": arm_payload()}
+    # ★ 安全（2026-10-12 实测踩到 ✗）：**只对"按 tag 找到的进程组"发信号** ✓
+    #   · 不要并上 state 里的 launcher pgid ✗ —— launcher 早已退出/僵尸，其组号可能被**复用**
+    #     ⇒ 实测把**自己的工具调用 shell** 一起 TERM 了 ✗（输出 `[killed by signal: SIGTERM]`）
+    #   · 再排除"本进程自己的组" ✓（绝不自杀 ✓）
+    _self_pg = os.getpgid(0)
+    _pgids = sorted({m[2] for m in _procs if m[2] != _self_pg and m[0] != os.getpid()})
+    act = str(action or "").strip().lower()
+    try:
+        if act == "pause":
+            for _g in _pgids:
+                try:
+                    os.killpg(int(_g), _sig.SIGSTOP)
+                except ProcessLookupError:
+                    pass
+            st["paused_at"] = _now_str()
+            _csave(st)
+            return {"ok": True, "msg": "已暂停（SIGSTOP → 进程组 %s ✓，%d 个进程）" % (_pgids, len(_procs)), "state": arm_payload()}
+        if act in ("resume", "continue"):
+            for _g in _pgids:
+                try:
+                    os.killpg(int(_g), _sig.SIGCONT)
+                except ProcessLookupError:
+                    pass
+            st.pop("paused_at", None)
+            _csave(st)
+            return {"ok": True, "msg": "已继续（SIGCONT → 进程组 %s ✓）" % _pgids, "state": arm_payload()}
+        if act == "stop":
+            for _g in _pgids:                       # 先 CONT（免得停在 T 状态下 TERM 不生效 ✓）
+                try:
+                    os.killpg(int(_g), _sig.SIGCONT)
+                except ProcessLookupError:
+                    pass
+            for _g in _pgids:
+                try:
+                    os.killpg(int(_g), _sig.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            st["stopped_at"] = _now_str()
+            _csave(st)
+            return {"ok": True, "msg": "已发送停止（SIGTERM → 进程组 %s ✓）" % _pgids, "state": arm_payload()}
+        return {"ok": False, "msg": "未知动作 %r（pause/resume/stop）" % action, "state": arm_payload()}
+    except Exception as exc:
+        return {"ok": False, "msg": "%s 失败: %s" % (act or "?", str(exc)[:140]), "state": arm_payload()}
+
+
+def arm_payload() -> dict:
+    """控制台用：当前臂状态 + 存活/暂停 + 该臂进度（当前天 ✓）。"""
+    st = dict(_cstate())
+    pid = st.get("pid")
+    _mem = _tag_procs(st.get("tag")) or _pgid_members(st.get("pgid") or pid)
+    _live = [m for m in _mem if m[1] != "Z"]
+    st["pgids"] = sorted({m[2] for m in _live})
+    st["procs"] = [{"pid": m[0], "state": m[1], "pgid": m[2], "cmd": m[3]} for m in _mem][:8]
+    st["n_procs"] = len(_live)
+    st["alive"] = bool(_live)
+    st["paused"] = bool(_live) and all(m[1] == "T" for m in _live)
+    st["proc_state"] = (_live[0][1] if _live else ("gone" if pid else ""))
+    _drv = [m for m in _live if ("bt_days.py" in m[3] or "bt_prod_run.py" in m[3] or "bt_seed_day" in m[3])]
+    st["driver"] = ({"pid": _drv[0][0], "cmd": _drv[0][3]} if _drv else None)
+    try:
+        if st.get("root") and os.path.isdir(st["root"]):
+            pr = day_progress(st["root"], st.get("account") or "")
+            st["day"] = pr.get("day")
+            st["day_index"] = pr.get("day_index")
+            st["days_total"] = pr.get("days_total")
+            st["wave_text"] = pr.get("wave_text")
+    except Exception as exc:
+        st["progress_error"] = str(exc)[:120]
+    st["templates"] = [os.path.basename(p) for p in sorted(
+        __import__("glob").glob(os.path.join(RUN_DIR, "_run_t*_exec.sh")))][-5:]
+    return st
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "bt-dashboard/1.0"
     protocol_version = "HTTP/1.1"
@@ -2179,6 +2465,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.store.day_detail(day))
             if route == "/api/runs":
                 return self._json(runs_payload())
+            if route == "/api/arm":
+                return self._json(arm_payload())
             if route == "/api/log":
                 path = (qs.get("path") or [""])[0].strip()
                 if not path:
@@ -2198,6 +2486,42 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "%s: %s" % (type(exc).__name__, str(exc)[:300])}, 500)
             except Exception as _e_sil7:
                 print("[silent:bt_dashboard.py:2049] %s: %s" % (type(_e_sil7).__name__, str(_e_sil7)[:110]), flush=True)
+
+    def do_POST(self):  # noqa: N802
+        """★ 2026-10-12（用户「选日期回测 + 暂停/继续/停止」）：控制台控制接口 ✓"""
+        try:
+            parsed = urlparse(self.path)
+            route = parsed.path.rstrip("/") or "/"
+            try:
+                _n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(_n) or b"{}") if _n else {}
+            except Exception:
+                body = {}
+            qs = parse_qs(parsed.query)
+
+            def _arg(k, dflt=""):
+                v = body.get(k)
+                if v in (None, ""):
+                    v = (qs.get(k) or [dflt])[0]
+                return v
+
+            if route == "/api/run":
+                return self._json(arm_start(_arg("start"), _arg("end"),
+                                            force=str(_arg("force", "0")).lower() in ("1", "true", "yes"),
+                                            quiet=str(_arg("quiet", "1")).lower() in ("1", "true", "yes")))
+            if route == "/api/control":
+                return self._json(arm_control(_arg("action")))
+            if route == "/api/arm":
+                return self._json(arm_payload())
+            return self._json({"error": "not found", "path": parsed.path}, 404)
+        except BrokenPipeError:
+            return
+        except Exception as exc:
+            sys.stderr.write("[bt_dashboard] POST ERROR %s\n%s\n" % (exc, traceback.format_exc()))
+            try:
+                self._json({"ok": False, "msg": "%s: %s" % (type(exc).__name__, str(exc)[:300])}, 500)
+            except Exception:
+                pass
 
     def do_HEAD(self):  # noqa: N802
         return self.do_GET()
@@ -2384,11 +2708,53 @@ def day_progress(root: str, account: str = "") -> dict:
            "stage": "", "stages": [], "events": [], "log_tail": [], "log_mtime": None}
     try:
         day_dirs = sorted(os.path.basename(p) for p in _g.glob(os.path.join(root, "2026*")) if os.path.isdir(p))
-        out["days_total"] = len(day_dirs)
         summ = os.path.join(root, "_summary")
+        # ★ 2026-10-10（用户：看板进度滞后 ⇒ 「以当日步骤日志为准」✓）
+        #   病灶 ✗：原来用 `len(day_dirs)` 当 `days_total` ⇒ 只反映"**已存在**的天目录数"
+        #     （沙箱里可能只有 10~12 个空壳 ✗），而真实窗口是 21 个交易日 ✗；
+        #     且"完成"只看 `prod_*.json` ✗ ⇒ 看不出"当天跑到哪一步"。
+        #   修法 ✓：① `days_total` 优先取**跑批日志里的窗口**（`N 个交易日` / `START → END` ✓），
+        #            退化才用天目录数 ✓；
+        #          ② `cur` = **有当日步骤日志**（`_summary/<step>_<day>.log` ✓）的最大那天
+        #             （它还没写完 prod 汇总 = 正在跑 ✓）；否则第一个还没有 prod 汇总的天 ✓；
+        #          ③ 完成判据仍以 `prod_*.json` 为准 ✓（步骤日志只是"跑过"✓）。
+        _win = None
+        _ndays = None
+        try:
+            _lg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               ".dsh-tmp", "wolfbt", "logs")
+            _lp = _g.glob(os.path.join(_lg, "size_run_*.log"))
+            if _lp:
+                _txt = open(max(_lp, key=os.path.getmtime), encoding="utf-8", errors="replace").read()
+                import re as _re2
+                _m2 = _re2.findall(r"(\d{8})\s*→\s*(\d{8})", _txt)
+                if _m2:
+                    _win = (_m2[-1][0], _m2[-1][1])
+                # ★ 驱动自己会打印「**N 个交易日**：START → END」✓ ⇒ 这是窗口的权威口径 ✓
+                _m3 = _re2.findall(r"(\d+)\s*个交易日", _txt)
+                if _m3:
+                    _ndays = int(_m3[-1])
+        except Exception:
+            _win = None
+            _ndays = None
+        if _ndays:
+            out["days_total"] = _ndays
+        elif _win:
+            _wd = [d for d in day_dirs if _win[0] <= d <= _win[1]]
+            out["days_total"] = len(_wd) if _wd else len(day_dirs)
+        else:
+            out["days_total"] = len(day_dirs)
         done = {os.path.basename(p)[5:13] for p in _g.glob(os.path.join(summ, "prod_2026*.json"))}
+        _stepped = set()
+        for _p in _g.glob(os.path.join(summ, "*_2026*.log")):
+            _b = os.path.basename(_p)
+            for _tok in _b.replace(".", "_").split("_"):
+                if len(_tok) == 8 and _tok.isdigit() and _tok[:4] == "2026":
+                    _stepped.add(_tok)
+        out["stepped_days"] = sorted(_stepped)
+        _in_prog = sorted(d for d in _stepped if d not in done and d in day_dirs)
         pend = [d for d in day_dirs if d not in done]
-        cur = pend[0] if pend else (day_dirs[-1] if day_dirs else None)
+        cur = (_in_prog[-1] if _in_prog else (pend[0] if pend else (day_dirs[-1] if day_dirs else None)))
         out["day"] = cur
         out["day_index"] = (day_dirs.index(cur) + 1) if cur in day_dirs else 0
         # ★★ 账本 §9.739 ✓（用户 2026-10-07：「在当日进度这一行…后面加上**当日判定浪型**」✓）：
