@@ -413,6 +413,12 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
       <input id="run-quiet" type="checkbox" checked> 静默(不推QQ)
     </label>
     <button class="btn" id="run-go">开始回测</button>
+    <span style="display:flex;gap:8px;align-items:center;font-size:12px;margin-left:6px" title="两条本地隧道（会自己断）">
+      隧道
+      <span class="lamp lamp--dead" id="tn-llm" role="img" aria-label="LLM 隧道 13001"></span><span class="mut">13001</span>
+      <span class="lamp lamp--dead" id="tn-pg" role="img" aria-label="PG 隧道 15432"></span><span class="mut">15432</span>
+      <button class="btn btn--ghost" id="tn-restart">重启隧道</button>
+    </span>
     <button class="btn btn--ghost" id="run-pause">暂停</button>
     <button class="btn btn--ghost" id="run-resume">继续</button>
     <button class="btn btn--ghost" id="run-stop">停止</button>
@@ -438,8 +444,21 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
                     ' 模板=' + (ts.template || '—') + ' 启动=' + (ts.started_at || '—') +
                     (ts.stopped_at ? (' 停止=' + ts.stopped_at) : '') + (ts.msg ? (' · ' + ts.msg) : '');
   }
+  function fmtTunnels(tn) {
+    if (!tn) { return; }
+    var map = { 'tn-llm': tn.llm, 'tn-pg': tn.pg };
+    Object.keys(map).forEach(function (id) {
+      var el = $(id), v = map[id];
+      if (!el) { return; }
+      var up = v && v.up;
+      el.className = 'lamp ' + (up ? 'lamp--live' : 'lamp--dead');
+      el.title = (v && v.label ? v.label : '') + ' 端口 ' + (v ? v.port : '?') + (up ? ' ✓ 在跑' : ' ✗ 不通');
+    });
+  }
   function poll() {
-    fetch('/api/arm', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(fmt).catch(function () {});
+    fetch('/api/arm', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      fmt(d); fmtTunnels(d.tunnels);
+    }).catch(function () {});
   }
   function post(url, body) {
     if (busy) { return; }
@@ -467,6 +486,16 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
   $('run-stop').addEventListener('click', function () {
     if (!confirm('停止当前控制台发起的回测？（SIGTERM 整组；已跑完的天保留）')) { return; }
     post('/api/control', { action: 'stop' });
+  });
+  $('tn-restart').addEventListener('click', function () {
+    if (busy) { return; }
+    busy = true;
+    fetch('/api/tunnels', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'restart' }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { fmtTunnels(j); alert('隧道：' + (j.msg || '') + '\n' + JSON.stringify({ llm: (j.llm || {}).up, pg: (j.pg || {}).up })); })
+      .catch(function (e) { alert('重启隧道失败：' + e); })
+      .then(function () { busy = false; poll(); });
   });
   poll();
   setInterval(poll, 5000);

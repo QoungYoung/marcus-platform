@@ -1287,7 +1287,16 @@ class Store:
         if pace and days_total and days_done:
             eta = int(round(pace * max(0, days_total - days_done)))
 
-        fresh = bool(seconds_since is not None and seconds_since <= 300)
+        # ★ 2026-10-12（用户「加上」）：静默阈值 300s → **可配、默认 900s** ✓
+        #   实测：`bt_run_pinned` 一步因 LLM 超时跑了 **549 秒**（该步 CPU/IO 都不增长 ⇒
+        #     `_proc_busy` 也判不出活动 ✓）⇒ 300s 阈值必然假警 ✗ ⇒ 提到 900s ✓
+        #   （进程 CPU/IO 活动本来就已经计入 `activity` ✓，见上方 `_proc_busy` ✓）
+        _stall_sec = 900
+        try:
+            _stall_sec = int(os.getenv("BT_DASH_STALL_SEC", "900") or 900)
+        except Exception:
+            _stall_sec = 900
+        fresh = bool(seconds_since is not None and seconds_since <= _stall_sec)
         heartbeat = {
             "now": now_iso(),
             "last_activity": last_activity,
@@ -1621,9 +1630,11 @@ class Store:
         }
 
         # ── 告警 ────────────────────────────────────────────────────────────
-        if seconds_since is not None and seconds_since > 60:
+        if seconds_since is not None and not fresh:
             warnings.append({"level": "warn",
-                             "text": "心跳静止：最后活动 %.0f 秒前（%s），超过 300 秒阈值（seed/pack 等静默步进已计入进程 CPU/IO 活动）" % (seconds_since, src or "-")})
+                             "text": ("心跳静止：最后活动 %.0f 秒前（%s），超过 %d 秒阈值"
+                                      "（进程 CPU/IO 活动已计入；LLM/网络超时等阻塞步进会真的不活动 ✓；"
+                                      "可用 BT_DASH_STALL_SEC 调整）") % (seconds_since, src or "-", _stall_sec)})
         if not procs_live:
             if fresh:
                 warnings.append({"level": "info",
@@ -2219,6 +2230,56 @@ def _tag_procs(tag: str) -> list:
     return sorted(out)
 
 
+TUNNELS = (("llm", 13001, "LLM（波浪/主营校验/agent）", "local_llm.py"),
+           ("pg", 15432, "PG（生产只读查询）", "local_pg_serve.py"))
+
+
+def _port_open(port: int, timeout: float = 0.5) -> bool:
+    import socket as _sk
+    try:
+        with _sk.socket() as sk:
+            sk.settimeout(timeout)
+            return sk.connect_ex(("127.0.0.1", int(port))) == 0
+    except Exception:
+        return False
+
+
+def tunnel_status() -> dict:
+    """两条本地隧道存活情况 ✓（隧道会自己断 —— 项目记忆：断了要重启 ✓）。"""
+    out = {}
+    for key, port, label, script in TUNNELS:
+        out[key] = {"port": port, "from": "127.0.0.1", "up": _port_open(port),
+                    "label": label, "script": os.path.join(RUN_DIR, script)}
+    out["ok"] = all(v["up"] for v in out.values() if isinstance(v, dict))
+    return out
+
+
+def tunnel_restart() -> dict:
+    """一键重启两条隧道（`setsid` 独立会话 ⇒ 不随看板/shell 退出 ✓）。"""
+    import subprocess as _sp
+    msgs = []
+    for key, port, label, script in TUNNELS:
+        if _port_open(port):
+            msgs.append("%s: 已在跑（%d ✓）跳过" % (key, port))
+            continue
+        p = os.path.join(RUN_DIR, script)
+        if not os.path.exists(p):
+            msgs.append("%s: 缺脚本 %s" % (key, script))
+            continue
+        log = "/tmp/%s_tunnel.log" % key
+        try:
+            with open(log, "ab") as fh:
+                _sp.Popen([sys.executable, p], cwd=REPO, stdout=fh, stderr=_sp.STDOUT,
+                          stdin=_sp.DEVNULL, start_new_session=True)
+            msgs.append("%s: 已启动（%s）" % (key, log))
+        except Exception as exc:
+            msgs.append("%s: 启动失败 %s" % (key, str(exc)[:80]))
+    time.sleep(6)
+    st = tunnel_status()
+    st["msg"] = "；".join(msgs)
+    return st
+
+
 def _pgid_members(pgid) -> list:
     """列出某进程组里的 (pid, state, pgid, cmdline 前 60 字) ✓
 
@@ -2394,6 +2455,7 @@ def arm_payload() -> dict:
             st["wave_text"] = pr.get("wave_text")
     except Exception as exc:
         st["progress_error"] = str(exc)[:120]
+    st["tunnels"] = tunnel_status()
     st["templates"] = [os.path.basename(p) for p in sorted(
         __import__("glob").glob(os.path.join(RUN_DIR, "_run_t*_exec.sh")))][-5:]
     return st
@@ -2467,6 +2529,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(runs_payload())
             if route == "/api/arm":
                 return self._json(arm_payload())
+            if route == "/api/tunnels":
+                return self._json(tunnel_status())
             if route == "/api/log":
                 path = (qs.get("path") or [""])[0].strip()
                 if not path:
@@ -2513,6 +2577,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(arm_control(_arg("action")))
             if route == "/api/arm":
                 return self._json(arm_payload())
+            if route == "/api/tunnels":
+                act = str(_arg("action", "status")).lower()
+                if act in ("restart", "start", "up"):
+                    return self._json(tunnel_restart())
+                return self._json(tunnel_status())
             return self._json({"error": "not found", "path": parsed.path}, 404)
         except BrokenPipeError:
             return
