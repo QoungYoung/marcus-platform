@@ -86,7 +86,34 @@ def _resolve_intent(wave_op):
         return "probe"
     return None
 
-def enumerate_symbols(ml_state):
+def _board_of(ts: str) -> str:
+    """标所属板块代码：cyb(300/301) / kcb(688/689) / bj(4/8/920) / 主板='' ✓"""
+    c = str(ts or "").strip().upper()
+    c = c.split(".")[0] if "." in c else c
+    if c.startswith(("688", "689")):
+        return "kcb"
+    if c.startswith(("300", "301")):
+        return "cyb"
+    if c.startswith(("920",)) or (c[:1] in ("4", "8")):
+        return "bj"
+    return ""
+
+
+def board_excluded() -> set:
+    """账户板块权限（**与 `rotation_switch_arm.board_ok` / `switch_builder.board_ok` 同一口径** ✓）
+
+    ★ 2026-10-12 用户拍板「A」：这条"主线候选建仓"路径此前**没套板块过滤** ✗
+      ⇒ 候选里出现 300750/300014/300207/301217/301511/688146 ✗（实测 `mainline_open_20261012.json`）
+      ⇒ 与选股/布腿口径不一致 ✓ ⇒ 现统一读 `WOLF_PICK_BOARD_EXCLUDE`（默认 `cyb,bj,kcb` ✓）。
+    """
+    return {x.strip().lower() for x in (os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb") or "").split(",") if x.strip()}
+
+
+def board_ok(ts: str) -> bool:
+    return _board_of(ts) not in board_excluded()
+
+
+def enumerate_symbols(ml_state, drop_excluded: bool = True):
     try:
         from market_reference import get_component_stocks
     except Exception:
@@ -103,6 +130,8 @@ def enumerate_symbols(ml_state):
             for ts in (get_component_stocks(cname, "concept", limit=10) or []):
                 if ts and ts not in seen:
                     seen.add(ts); out.append(ts)
+    if drop_excluded:
+        out = [t for t in out if board_ok(t)]          # ★ 板块口径与选股/布腿一致 ✓
     return out
 
 def run_async(coro):
@@ -151,7 +180,12 @@ def main():
     if not intent:
         print("[intent_open] wave op=%s 非建仓档(defense/exit) → 不新建" % op)
         return
-    symbols = enumerate_symbols(ml)
+    _raw = enumerate_symbols(ml, drop_excluded=False)
+    _dropped_board = [t for t in _raw if not board_ok(t)]
+    symbols = [t for t in _raw if board_ok(t)]         # ★ 用户拍板「A」：与选股口径对齐 ✓
+    if _dropped_board:
+        print("[intent_open] 板块权限剔除 %d 只（WOLF_PICK_BOARD_EXCLUDE=%s）：%s"
+              % (len(_dropped_board), os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb"), _dropped_board[:8]))
     if not symbols:
         print("[intent_open] 主线候选枚举为空 → fail-closed 不建仓")
         return
@@ -166,6 +200,7 @@ def main():
     from app.services.buy_point_log import log_buy_point
     executor = make_executor()
     diag = {"date": today, "op": op, "intent": intent, "main_line": ml.get("main_line"),
+            "board_excluded": _dropped_board, "board_rule": os.getenv("WOLF_PICK_BOARD_EXCLUDE", "cyb,bj,kcb"),
             "reasons": {}, "built": []}
     for i, ts in enumerate(symbols[:15]):
         sym = ts
