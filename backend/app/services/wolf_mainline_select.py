@@ -248,8 +248,21 @@ def score_day(days: Sequence[str], i: int, px: Dict[str, Dict[str, float]],
         if _t in scores and _t not in _view:
             _view.append(_t)
     _view = _view[:12]
+    _mode = score_mode()
+    _pool_rule = ("pool_top(量能占比 topK) ∩ score>0；score="
+                  + ("r5/5 + r20/10 + lead×0.5 + (breadth−50)/50（combo ✓）" if _mode == "combo"
+                     else "近5日超额 r5（r5 模式 ✓）"))
     out = {"date": days[i], "r5": {t: scores[t] for t in _view},
-           "r5_view_note": "r5/diag 含 pool_top ∪ pool ∪ 上榜（不是只前 6 名 ✓）",
+           # ★ 2026-10-10（用户「加上」✓）：把**模式与池规则**一并写进产物（口径三件套 ✓）
+           #   病灶：键名 `r5` 在 combo 模式下装的是**综合评分** ✗（实测 1188/766/713 ✓ 而非百分比 ✗），
+           #     且池门槛随模式变（combo ⇒ score>0 ✓ / r5 ⇒ r5>0 ✓）⇒ 不写明就会再出"两个数字" ✗。
+           #   `r5_raw` = **真正的近 5 日超额**（取自 diag ✓），看百分比请用它 ✓。
+           "score_mode": _mode,
+           "pool_rule": _pool_rule,
+           "r5_key_note": ("本键内容随 score_mode 变化（r5 ⇒ 近5日超额；combo ⇒ 综合评分 ✗）；"
+                           "要看真实百分比请用 `r5_raw` ✓"),
+           "r5_raw": {t: (diag.get(t) or {}).get("r5") for t in _view},
+           "r5_view_note": "r5/diag/r5_raw 含 pool_top ∪ pool ∪ 上榜（不是只前 6 名 ✓）",
            "dropped_by_r5": [t for t in pool_top if t in scores and t not in pool],
            "rank_all": [t for t, _ in ranked],
            "rank_in_gate": order,
@@ -524,6 +537,8 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                     "candidates": res.get("rank_in_gate") or [], "r5": res.get("r5") or {},
                     "themes": res.get("themes") or [], "use_gate": res.get("use_gate"),
                     "market_basis": res.get("market_basis"), "dropped_by_r5": res.get("dropped_by_r5"),
+                    "score_mode": res.get("score_mode"), "pool_rule": res.get("pool_rule"),
+                    "r5_raw": res.get("r5_raw"), "r5_key_note": res.get("r5_key_note"),
                     "note": "方向层主线 = 池(量能占比topK ∩ r5>0) → 池内 r5 top1；与他股票主线层对齐 recall 75%/top1 54%/top3 85%",
                 }
                 # ★ 2026-10-10（用户「这是个生产问题」✓）：**清掉陈旧键** ✗
