@@ -499,6 +499,36 @@ def run(save: bool = True, date8: Optional[str] = None) -> Dict[str, Any]:
                     "themes": res.get("themes") or [], "use_gate": res.get("use_gate"),
                     "note": "方向层主线 = 池(量能占比topK ∩ r5>0) → 池内 r5 top1；与他股票主线层对齐 recall 75%/top1 54%/top3 85%",
                 }
+                # ★ 2026-10-10（用户「这是个生产问题」✓）：**清掉陈旧键** ✗
+                #   病灶：本块是「读旧 state → 只改几个键 → 写回」⇒ 旧键**永久残留** ✗
+                #     实测生产 main_line_state.json：`mainline_select_rows`（与 `date`）停在 **2026-09-13** ✗
+                #     （那时主线字段还由 08:00 的 main_line_judge 写 ✓），而 `main_line` 已是 10-08 的
+                #     「新能源/电池」✓ ⇒ 两处标注互相矛盾 ✗：旧 rows 把「半导体/芯片」标成 is_mainline ✗
+                #     还带着 09-13 的浪型文本（"创新高但2浪形态不全(疑似V反/平台)" ✗ ⇒ 早过期的判断 ✓）
+                #   修法：按**当天** select 结果重建 rows ✓（mainline/second/pool/pool_top 的并集 ✓，
+                #     `is_mainline` 取等值 ✓，r5/share5/浪型优先取当天 `themes` ✓），并把 `date` 刷成当天 ✓
+                _ml = res.get("mainline")
+                _union = []
+                for _t in ([_ml, res.get("second")] + list(res.get("pool") or []) + list(res.get("pool_top") or [])):
+                    if _t and _t not in _union:
+                        _union.append(_t)
+                _by = {t.get("theme"): t for t in (res.get("themes") or []) if isinstance(t, dict)}
+                _new_rows = []
+                for _t in _union:
+                    _e = _by.get(_t) or {}
+                    _new_rows.append({
+                        "theme": _t,
+                        "is_mainline": _t == _ml,
+                        "in_pool": _t in (res.get("pool") or []) or _t in (res.get("pool_top") or []),
+                        "r5": _e.get("r5") if _e else (res.get("r5") or {}).get(_t),
+                        "share5": _e.get("share5") if _e else (res.get("pool_share5") or {}).get(_t),
+                        "wave_structure": _e.get("wave_structure"),
+                    })
+                _ms["mainline_select_rows"] = _new_rows
+                _dd = str(d8)
+                _ms["date"] = ("%s-%s-%s" % (_dd[:4], _dd[4:6], _dd[6:8])) if len(_dd) == 8 else _dd
+                print("[mainline] state rows 重建 %d 行（is_mainline=%s ✓ date=%s ✓）"
+                      % (len(_new_rows), _ml, _ms["date"]), flush=True)
                 _ms["updated_at"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 with open(_sp, "w", encoding="utf-8") as _f:
                     _json.dump(_ms, _f, ensure_ascii=False, indent=1)
