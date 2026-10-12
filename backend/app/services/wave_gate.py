@@ -219,6 +219,39 @@ def gate_regime(kind: str = "low_buy") -> Dict[str, Any]:
             "state": g.get("mode") or "auto", "why": g.get("why"), "src": "wave_gate"}
 
 
+def wave_summary(kind: str = "low_buy", wave: Optional[dict] = None,
+                 as_of: Optional[str] = None) -> Dict[str, Any]:
+    """**浪型档位**的人话摘要 ✓（用户 2026-10-12：「改用浪型做判据，不要 regime/震荡」✗）
+
+    返回键：level / sub_level / operation / date / gate / mode / allowed / why / text ✓
+      · `text` 例：`d4/4-2 · t_only（只做T、不追不新建主升）｜本腿判定：允许自动 ✓`
+      · 语义**照抄** `apps/main_line/wave_agent.py` 的 operation 表（狼大原文 ✓，不自己编 ✗）：
+        build=建仓/追 ⇒ 放行｜t_only=只做T不追不新建主升 ⇒ 买类拦｜side=观望/调仓换股 ⇒ 买类人工确认
+        defense=防御不建仓 ⇒ 买类拦｜exit=兑现降仓 ⇒ 买类拦；**卖类（high_sell*）永不拦** ✓
+    """
+    _OP_CN = {"build": "建仓/追（主升/上升浪 ⇒ 放行）",
+              "t_only": "只做T、不追不新建主升",
+              "side": "观望/调仓换股（买类需人工确认）",
+              "defense": "防御不建仓",
+              "exit": "兑现降仓"}
+    try:
+        w = wave or ensure_wave(as_of=as_of or (sim_day8() or None))
+    except Exception:
+        w = wave
+    g = check_gate(kind=kind, wave=w, as_of=as_of) or {}
+    lv = str((w or {}).get("level") or "")
+    sb = str((w or {}).get("sub_level") or "")
+    op = str((w or {}).get("operation") or "").strip().lower()
+    tag = "%s%s" % (lv or "?", ("/" + sb) if sb else "")
+    _gate = str(g.get("gate") or "")
+    _verdict = {"ALLOWED": "允许自动 ✓", "MANUAL_ONLY": "需人工确认 ✗", "BLOCKED": "拦下 ✗"}.get(_gate, _gate)
+    txt = "%s · %s（%s）｜本腿判定：%s" % (tag, op or "?", _OP_CN.get(op, "未知档"), _verdict)
+    return {"level": lv, "sub_level": sb, "operation": op,
+            "date": str((w or {}).get("date") or ""), "gate": _gate,
+            "mode": str(g.get("mode") or ""), "allowed": bool(g.get("allowed")),
+            "why": str(g.get("why") or ""), "text": txt}
+
+
 def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
                as_of: Optional[str] = None) -> Dict[str, Any]:
     """**狼大口径**的环境门 ✓（与旧 `t_regime.check_gate` 同返回形状 ✓）。"""

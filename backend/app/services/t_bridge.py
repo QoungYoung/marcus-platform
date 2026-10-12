@@ -369,7 +369,13 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     msg += (
         f"你是做T决策者：本次触发已命中你的监控条件并通过系统规则预筛——**默认动作=exec（执行）**。"
         f"仅当存在客观证据时才 wait/abandon，且 reason 必须写明具体证据："
-        f"① 现价与目标价/建议价脱节（差>1%）；② 已跌破止损；③ regime 禁自动；④ 恐慌放量追跌（量比骤升+创新低）。"
+        # ★ 2026-10-12（用户：「关掉 regime 这个闸门，改用**浪型**判据」✗——已提过多次 ✓）
+        #   原文写「③ regime 禁自动」✗ ⇒ AI 照抄成「regime=震荡不禁自动」✗（"震荡"其实来自
+        #   `indicator.py` 的市场风格分类 ✓，根本不是闸门 ✓）⇒ 现改为**浪型档位** ✓
+        f"① 现价与目标价/建议价脱节（差>1%）；② 已跌破止损；"
+        f"③ **浪型档位**不允许自动执行（看上方【浪型档位】：t_only=只做T不追不新建主升 / "
+        f"defense=防御不建仓 / exit=兑现降仓 / side=需人工确认；**卖类不受限** ✓）；"
+        f"④ 恐慌放量追跌（量比骤升+创新低）。"
         # ★ 账本 §9.728 ✓（用户 2026-10-07「全屏蔽，改成直接置入数据」）：
         #   工具已**全屏蔽**（桥只注册 0 个 ✓）⇒ 原句「请先调用查询工具补数」成了**死指令** ✗
         #   ⇒ 改为：**决策所需数据已随本消息置入** ✓；数据确实不足时按 wait/abandon 处理 ✓
@@ -383,7 +389,7 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         #   但 164 条决策里 **38 条（23%）** 的理由引用了它们 ✗；而工具全程只被调过 3 次 ✓
         #   ⇒ **绝大多数是编出来的** ✗（编造依据 ≠ 对齐狼大 ✓）⇒ 明确禁止 ✓
         f"★ 判定只能用**本消息已给出**的字段（现价/建议价/止损线/量比/日内分位/涨幅/前低/"
-        f"规则证据/持仓/regime/历史决策）✓；**本消息未提供的指标一律不得引用** ✗"
+        f"规则证据/持仓/**浪型档位**/历史决策）✓；**本消息未提供的指标一律不得引用** ✗"
         f"（RSI/KDJ/MACD/均线/资金流/分钟走势等 **均不在数据内** ✗，写了就是编造 ✓）。"
         f"exec 将按触发快照的『建议价』执行（低吸用建议买价、高抛用建议卖价）。"
         f"数量可选：① 不输出 volume/amount → 系统按可卖底仓档位自动推导；"
@@ -476,14 +482,22 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         except Exception:
             _f = None
     if isinstance(_f, dict):
+        # ★ 2026-10-12：优先渲染**人话浪型档位** ✓（`snapshot["wave"]`，由 t_monitor 注入 ✓）
+        _wv = _f.get("wave") if isinstance(_f, dict) else None
+        if isinstance(_wv, dict) and (_wv.get("text") or _wv.get("operation")):
+            _wtxt = str(_wv.get("text") or "")
+            _wwhy = str(_wv.get("why") or "")
+            _wdate = str(_wv.get("date") or "")
+            msg += ("【浪型档位】%s%s%s\n"
+                    % (_wtxt,
+                       ("｜%s" % _wwhy) if _wwhy else "",
+                       ("（档 date=%s）" % _wdate) if _wdate else ""))
+        # 兼容回退：没有 wave 段时，仍按旧的 regime 子块渲染 ✓（不再当作"判据" ✗）
         _rg = _f.get("regime") or {}
-        if isinstance(_rg, dict) and _rg:
+        if not (isinstance(_wv, dict) and _wv.get("operation")) and isinstance(_rg, dict) and _rg:
             _gt = " ".join("%s=%s" % (str(k).replace("gate_", ""), v)
                            for k, v in _rg.items() if str(k).startswith("gate_"))
-            _sign = _rg.get("interpret_sign")
-            msg += ("【浪型闸】state=%s %s%s\n"
-                    % (_rg.get("state"), _gt,
-                       (" sign=%s" % _sign) if _sign is not None else ""))
+            msg += ("【浪型档位】（兼容回退：state=%s %s）\n" % (_rg.get("state"), _gt))
         _ix = _f.get("index") or {}
         if isinstance(_ix, dict) and _ix:
             _pix = []

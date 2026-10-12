@@ -4410,13 +4410,24 @@ class TMonitor:
         # 企稳引用（minute.m1.bounce → quote.stabilised）
         m1_bounce = bool(snapshot.get("minute", {}).get("m1", {}).get("bounce", False))
         snapshot["quote"]["stabilised"] = m1_bounce
-        # regime.*
+        # regime.*（**兼容保留** ✗：老条件表达式可能引用它 ⇒ 不删键 ✓）
         snapshot["regime"] = {
             "state": regime_state.get("regime", "ACTIVE"),
             "gate_low_buy": regime_state.get("gate_low_buy", "ALLOWED"),
             "gate_high_sell": regime_state.get("gate_high_sell", "ALLOWED"),
             "interpret_sign": int(regime_state.get("interpret_sign", 1)),
         }
+        # ★ 2026-10-12（用户：「改用浪型做判据，不要 regime/震荡」✗）：**浪型档位**进快照 ✓
+        #   病灶：快照只有 regime 的 HALT/ACTIVE + gate 标志 ✗ ⇒ 唤醒消息只能印机器话 ✗
+        #     ⇒ AI 只好写「regime=震荡不禁自动」✗（用户反复提过多次 ✓）
+        #   ⇒ 补 `snapshot["wave"]`（level/sub_level/operation/date/gate 判定 + 人话 text ✓），
+        #     唤醒消息据此渲染【浪型档位】✓
+        try:
+            from app.services.wave_gate import wave_summary as _ws
+            snapshot["wave"] = _ws(kind=("high_sell" if str(cond.get("trigger_kind") or "").startswith("high_sell")
+                                         else "low_buy"))
+        except Exception as _e_ws:
+            snapshot["wave"] = {}
         # position.*（监控账户持仓）
         snapshot["position"] = self._build_position_snapshot(
             symbol, cond.get("account_id", T_MONITOR_ACCOUNT))
