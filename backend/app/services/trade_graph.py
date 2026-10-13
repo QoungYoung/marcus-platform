@@ -1052,10 +1052,17 @@ def _read_rotation_gate_context() -> str:
             if _os.path.exists(_p2):
                 ml = _json.load(open(_p2, encoding="utf-8"))
                 ml_name = ml.get("main_line") or "?"
-                if sucking is None:  # fusion 兜底代理
-                    fu = (ml.get("fusion") or {}).get(ml_name) or {}
-                    score = float(fu.get("score") or 0); conc = float(fu.get("conc") or 0)
-                    sucking = bool(score >= 0.85 and conc >= 0.7)
+                if sucking is None:
+                    # ★ 2026-10-13（口径对齐 §9.829）：原先用 `main_line_state.fusion` 做兜底代理 ✗，
+                    #   而该字段自 2026-09-13 迁移起**已被有意移除**（mainline_state_inject 会 pop 掉它 ✓）
+                    #   ⇒ 兜底恒为空 ⇒ 静默降级 ✗ ⇒ 现改用**方向层** `mainline_select.r5`（同源 ✓）；
+                    #   仍取不到 ⇒ 保持 None（不再假装有代理 ✓）
+                    _ms = ml.get("mainline_select") or {}
+                    _r5 = ((_ms.get("r5") or {}).get(ml_name)) if isinstance(_ms.get("r5"), dict) else None
+                    if _r5 is not None:
+                        sucking = bool(float(_r5) >= 0.05)   # r5>0 = 相对强度为正（方向层口径 ✓）
+                    else:
+                        print("[trade_graph] fusion 已退役且 r5 缺失 ⇒ 不做 sucking 兜底 ✓", flush=True)
         except Exception as _e_sil15:
             print("[silent:trade_graph.py:1040] %s: %s" % (type(_e_sil15).__name__, str(_e_sil15)[:110]), flush=True)
         if sucking is None: sucking = False

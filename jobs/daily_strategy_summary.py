@@ -82,18 +82,24 @@ def mk_report():
     # ── 二、主线判定 ──
     L.append("## 二、主线判定（main_line_state）")
     mainline = ml.get("main_line") or "?"
-    fusion = ml.get("fusion") or {}
-    msc = (fusion.get(mainline) or {})
-    L.append("- 主线：**%s**（融合分 %s，catalyst %s，fund %s，rel %s，conc %s）｜候选：%s" % (
-        mainline, fnum(msc, "score"), fnum(msc, "catalyst"), fnum(msc, "fund"),
-        fnum(msc, "rel"), fnum(msc, "conc"), "、".join(ml.get("candidates") or []) or "无"))
-    top = sorted(fusion.items(), key=lambda kv: -(float(kv[1].get("score") or 0)))[:4]
+    # ★ 2026-10-13（§9.829）：`fusion` 自 2026-09-13 起已退役 ✗ ⇒ 摘要改印**方向层**口径 ✓
+    #   （原先固定印「融合分 ?」✗ —— 用户 2026-10-13 看到的正是这个 ✓）
+    _ms = ml.get("mainline_select") or {}
+    _r5 = _ms.get("r5") if isinstance(_ms.get("r5"), dict) else {}
+    _msd = _ms.get("date") or "-"
+    L.append("- 主线：**%s**（方向层 r5 %s；mainline_select date=%s）｜候选：%s｜来源：%s" % (
+        mainline, (("%+.3f" % float(_r5.get(mainline))) if isinstance(_r5.get(mainline), (int, float)) else "无"),
+        _msd, "、".join(ml.get("candidates") or []) or "无", ml.get("main_line_source") or "-"))
+    _sel = [t for t in (_ms.get("mainline"), _ms.get("second")) if t]
+    top = [(t, {"score": _r5.get(t)}) for t in _sel]
     if top:
         L.append("- 前4主题分数：")
         for th, s in top:
             L.append("   - %s：%s（fund %s / rel %s / conc %s / cat %s）" % (
                 th, fnum(s, "score"), fnum(s, "fund"), fnum(s, "rel"), fnum(s, "conc"), fnum(s, "catalyst")))
-    cat_all_zero = all((s.get("catalyst") or 0) == 0 for s in fusion.values()) if fusion else True
+    # ★ §9.829：`fusion` 已退役 ⇒ 催化全零的判据改为"方向层无 r5 正值"（不再读 fusion ✗）
+    _r5v = [v for v in _r5.values() if isinstance(v, (int, float))]
+    cat_all_zero = (not _r5v) or all(v <= 0 for v in _r5v)
     L.append("- 催化：%s" % ("全为0（无消息催化的存量博弈）" if cat_all_zero else "部分主题有催化（事件驱动）"))
     L.append("")
 

@@ -868,8 +868,12 @@ def theme_concepts(themes: Optional[Sequence[str]] = None) -> List[str]:
                 # ⚠️ 必须取 **TOP2**（与 pipeline 的资格集合 mainline_today = TOP1∪TOP2 对齐）：
                 #    只取 TOP1 会漏掉当日次主线 —— 2026-01 的 TOP1=AI/算力/科技 会把半导体概念整条排除，
                 #    兆易创新/长电科技这类"次主线里的突破票"就永远进不了候选（2026-09-21 实测）。
-                _rest = [k for k, _ in sorted((st.get("fusion") or {}).items(),
-                                              key=lambda kv: -((kv[1] or {}).get("score") or 0)) if k != _ml][:1]
+                # ★ 2026-10-13（§9.829）：原用 `fusion` 排序 ✗（该字段 2026-09-13 起已退役 ✓）
+                #   ⇒ 改用**方向层** `mainline_select`（mainline + second ✓）—— 这正是本注释想要的 TOP1∪TOP2 ✓
+                _ms = st.get("mainline_select") or {}
+                _rest = [t for t in [_ms.get("second")] if t and t != _ml]
+                if not _rest:
+                    _rest = [t for t in (st.get("candidates") or []) if t and t != _ml][:1]
                 th = [_ml] + _rest
             except Exception:
                 th = ["AI/算力/科技"]

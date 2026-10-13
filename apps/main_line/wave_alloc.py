@@ -55,14 +55,24 @@ def read_wave_alloc(state_file: str = "wave_state.json") -> dict:
     st = _load(state_file)
     op = str(st.get("operation") or DEFAULT_OP)
     w1, w2, w3, invest = WAVE_ALLOC.get(op, WAVE_ALLOC[DEFAULT_OP])
-    # fusion top3(分数序)
+    # ★ 2026-10-13（§9.829）：`fusion` 自 2026-09-13 起已被移除 ✗ ⇒ 改用**方向层**同源清单 ✓
+    #   （与布腿器 `switch_builder.theme_top12` 同一来源 ✓；分数用 `mainline_select.r5` ✓）
     top3, scores = [], []
     try:
         ml = _load("main_line_state.json")
-        fus = ml.get("fusion") or {}
-        rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
-        for k, v in rank[:3]:
-            top3.append(k); scores.append(round(float(v.get("score", 0)), 3))
+        _ms = ml.get("mainline_select") or {}
+        _names = [t for t in (_ms.get("mainline"), _ms.get("second")) if t]
+        if not _names:
+            _names = [str(x) for x in (ml.get("candidates") or []) if x][:3]
+        _r5 = _ms.get("r5") if isinstance(_ms.get("r5"), dict) else {}
+        for k in _names[:3]:
+            top3.append(k)
+            try:
+                scores.append(round(float(_r5.get(k)), 3))
+            except Exception:
+                scores.append(None)
+        if not _names:
+            print("[wave_alloc] 方向层清单缺失 ⇒ top3 空（不再回落已退役的 fusion ✗）", flush=True)
     except Exception as _e_sil1:
         _silent_alert("wave_alloc.py:50", _e_sil1)
     return {"operation": op, "invest": invest, "w": [w1, w2, w3],
