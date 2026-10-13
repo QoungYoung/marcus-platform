@@ -147,7 +147,7 @@ def main():
         if not os.path.exists(sf):
             return None, {"reason": "no_state"}
         state = load(f"main_line_state_{l['date']}.json")
-        sig = fm.theme_signals(hist, l["date"], {"catalyst": state.get("catalyst") or {}})
+        sig = fm.theme_signals(hist, l["date"], {"catalyst": __import__("mstate_retired").get_retired(state, "catalyst", {}, "wolf_match")})
         bk = fm.bank_signals(l["date"])
         if bk: sig["银行"] = bk
         else: sig.pop("银行", None)

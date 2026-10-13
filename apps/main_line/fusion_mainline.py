@@ -194,7 +194,7 @@ def theme_signals(hist, dt, state):
         order = arr.argsort().argsort()
         return {k: (order[i] + 1) / len(arr) for i, k in enumerate(NON_BANK)}
     fund_p = pct(fund); rel_p = pct(rel)
-    cat = state.get("catalyst") or {}
+    cat = __import__("mstate_retired").get_retired(state, "catalyst", {}, "fusion_mainline") or {}
     counts = REPORT_COUNTS.get(dt, {})
     conc_p = theme_conc(hist, dt)   # 资金集中度(net_amount占比, 9概念主题间百分位)
     for th in MAIN_THEMES:

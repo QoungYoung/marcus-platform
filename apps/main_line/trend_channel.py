@@ -248,7 +248,7 @@ def _v2_theme_meta(themes: Sequence[str]) -> Dict[str, Any]:
     data = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(here)), "data"))
     try:
         st = json.load(open(os.path.join(data, "main_line_state.json"), encoding="utf-8"))
-        for k, v in (st.get("catalyst") or {}).items():
+        for k, v in (__import__("mstate_retired").get_retired(st, "catalyst", {}, "trend_channel") or {}).items():
             try:
                 out["catalyst"][str(k)] = float(v)
             except Exception as _e_sil3:

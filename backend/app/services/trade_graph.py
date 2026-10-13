@@ -723,7 +723,7 @@ def _read_main_line_context() -> str:
                       + "2026 超额 +1.03%(t=3.37)、2025 +0.34%(t=3.01)；详见 docs/wolf-structural-pool.md" + chr(10)
                       + "- 说明：他在**期货/商品**（油/金）与**超短题材**（军工打短）上的动作不属于本层对照集。" + chr(10) + chr(10))
         # 2026-09-09 主线门(gate)结构资格闸摘要 + 主线浪型 + 农业全子概念确认(防前5截断)
-        g = st.get("mainline_gate") or {}
+        g = __import__("mstate_retired").get_retired(st, "mainline_gate", {}, "trade_graph:726") or {}
         if g:
             gth = g.get("themes") or []
             conf_l = g.get("confirmed_candidate") or []
@@ -822,7 +822,7 @@ def _read_stock_confirm_context() -> str:
                 mlp = __state_path("main_line_state.json")
                 if os.path.exists(mlp):
                     mst = _json2.load(open(mlp, encoding="utf-8"))
-                    gg = mst.get("mainline_gate") or {}
+                    gg = __import__("mstate_retired").get_retired(mst, "mainline_gate", {}, "trade_graph:825") or {}
                     conf_themes = gg.get("confirmed_candidate") or ([mst.get("main_line")] if mst.get("main_line") else [])
         except Exception as _e_sil10:
             print("[silent:trade_graph.py:810] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)

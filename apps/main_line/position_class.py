@@ -108,7 +108,8 @@ def load_theme_hot():
     theme_cat={}; hot=set()
     # 优先用 main_line_state.catalyst(theme->catalyst, 在线)，其次 wolf_theme_features(已迁移, 若在则读)
     st=_load_json(ML) if "ML" in globals() else _load_json(os.path.join(DATA,"main_line_state.json"))
-    for k,v in (st.get("catalyst") or {}).items(): theme_cat[k]=float(v or 0)
+    from mstate_retired import get_retired as _gr
+    for k,v in (_gr(st, "catalyst", {}, "position_class") or {}).items(): theme_cat[k]=float(v or 0)
     if not theme_cat and os.path.exists(THEME):
         try:
             df=pd.read_csv(THEME)

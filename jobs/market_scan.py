@@ -2616,7 +2616,7 @@ def _read_wolf_context(indices=None) -> str:
     if ml:
         main_line = ml.get("main_line") or ""
         cands = ml.get("candidates") or []
-        cat = ml.get("catalyst") or {}
+        cat = __import__("sys").path and __import__("mstate_retired").get_retired(ml, "catalyst", {}, "market_scan") or {}
         s = f"- **主线**：{main_line}"
         if cands:
             s += f"（候选：{'、'.join(str(c) for c in cands)}）"

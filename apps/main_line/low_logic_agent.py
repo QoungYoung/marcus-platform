@@ -44,7 +44,7 @@ def main():
         fe=v.get("features",{}); fs=v.get("fund_flow",{})
         rows.append(f"- {v['name']}: 距1年高={fe.get('vs_1y_high_pct')}% 箱体={fe.get('box_pos_pct')}% r20={fe.get('r20')}% 主力净流入={fs.get('strength')}亿 连续={fs.get('conv')}天")
     prompt=("你是狼大'低位看逻辑'评判 agent。下面列出若干个被判定为【低位(超跌)】的东财概念，请判断每个的【题材逻辑/景气/催化】质量(是否值得埋伏低吸)，只评逻辑、不评点位/不判买卖。\n"
-            "背景：主线= "+str(ml.get("main_line"))+" (catalyst: "+str(ml.get("catalyst"))+")\n"
+            "背景：主线= "+str(ml.get("main_line"))+" (catalyst: "+str(_gr(ml, "catalyst", None, "low_logic_agent"))+")\n"
             "主题催化： "+str(cat)+"\n"
             "热点概念： "+str(hot)+"\n"
             "【LOW概念列表】\n"+"\n".join(rows)+"\n"

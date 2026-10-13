@@ -63,7 +63,7 @@ def _read_wolf_context() -> str:
         cands = ml.get("candidates") or []
         if cands:
             s += "（候选：" + "、".join(str(c) for c in cands) + "）"
-        cat = ml.get("catalyst") or {}
+        cat = __import__("mstate_retired").get_retired(ml, "catalyst", {}, "morning_diagnosis") or {}
         top = sorted(((k, v) for k, v in cat.items() if v), key=lambda kv: -kv[1])[:3]
         if top:
             s += " ｜ catalyst " + "、".join(f"{k}:{v}" for k, v in top)

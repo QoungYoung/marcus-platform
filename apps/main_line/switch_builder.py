@@ -58,7 +58,8 @@ def fusion_top3():
     except Exception as _e_sil1:
         _silent_alert("switch_builder.py:42", _e_sil1)
     ml = _load("main_line_state.json")
-    fus = ml.get("fusion") or {}
+    # ★ §9.830：fusion 已退役（2026-09-13）⇒ 显式告警；主源为 WOLF_THEME_SRC=mainline_select ✓
+    fus = __import__("mstate_retired").get_retired(ml, "fusion", {}, "switch_builder:61") or {}
     rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
     return [k for k, _ in rank[:3]]
 
@@ -230,7 +231,8 @@ def theme_top12(n=2):
                 return list(_t), "pool"
         except Exception as _e_sil5:
             _silent_alert("switch_builder.py:215", _e_sil5)
-    ml = _load("main_line_state.json"); fus = ml.get("fusion") or {}
+    ml = _load("main_line_state.json")
+    fus = __import__("mstate_retired").get_retired(ml, "fusion", {}, "switch_builder:233") or {}
     return [k for k, _ in sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:n]], "fusion"
 
 

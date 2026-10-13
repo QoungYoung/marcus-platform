@@ -89,7 +89,8 @@ def fusion_top12():
     except Exception as _e_tt:
         print("[tranche_ladder] 复用布腿器主题源失败(回退 fusion ✓): %s" % str(_e_tt)[:70], flush=True)
     ml = _load("main_line_state.json", {})
-    fus = ml.get("fusion") or {}
+    # ★ §9.830：最后兜底才读 fusion（已退役 ✓，恒为空 ✓ 仅告警）
+    fus = __import__("mstate_retired").get_retired(ml, "fusion", {}, "tranche_ladder") or {}
     rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
     if rank:
         return [k for k, _ in rank[:2]]
