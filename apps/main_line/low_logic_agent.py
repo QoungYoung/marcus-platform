@@ -6,6 +6,7 @@ low_logic_agent.py — 低位看逻辑(AI判定)。对 position_class 判为 LOW
 复用 wave_agent 的 dsh /chat 链路。运行于 worker 容器。
 """
 import os, sys, json, time, requests
+from mstate_retired import get_retired as _gr  # §9.830 已退役字段读取（缺此行曾致 NameError ✗）
 sys.path.insert(0,"/app")
 import pandas as pd
 CHAT_URL=os.getenv("WAVE_CHAT_URL","http://marcus-dsh:3001/chat")
