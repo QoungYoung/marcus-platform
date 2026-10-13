@@ -1,0 +1,258 @@
+[
+ {
+  "day": "20260105",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "update_condition",
+  "after": "wait",
+  "why": "缓跌（未创新低、未放量、大盘未急杀）⇒ 语料：缓跌不买 ✗"
+ },
+ {
+  "day": "20260105",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "update_condition",
+  "after": "wait",
+  "why": "缓跌（未创新低、未放量、大盘未急杀）⇒ 语料：缓跌不买 ✗"
+ },
+ {
+  "day": "20260105",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "wait",
+  "after": "wait",
+  "why": "缓跌（未创新低、未放量、大盘未急杀）⇒ 语料：缓跌不买 ✗"
+ },
+ {
+  "day": "20260105",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "update_condition",
+  "after": "wait",
+  "why": "缓跌（未创新低、未放量、大盘未急杀）⇒ 语料：缓跌不买 ✗"
+ },
+ {
+  "day": "20260106",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "wait",
+  "after": "wait",
+  "why": "放量低吸（量比 3.84>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260106",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "update_condition",
+  "after": "wait",
+  "why": "缓跌（未创新低、未放量、大盘未急杀）⇒ 语料：缓跌不买 ✗"
+ },
+ {
+  "day": "20260107",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 1.56>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260107",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 1.13>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260107",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "abandon",
+  "after": "wait",
+  "why": "放量低吸（量比 0.95>0.9）⇒ 语料只做「缩量接」✗；追早盘已涨方向（涨幅 +10.8% 且日内分位 10"
+ },
+ {
+  "day": "20260107",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "update_condition",
+  "after": "wait",
+  "why": "放量低吸（量比 0.95>0.9）⇒ 语料只做「缩量接」✗；追早盘已涨方向（涨幅 +10.8% 且日内分位 10"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 1.94>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "wait",
+  "after": "wait",
+  "why": "放量低吸（量比 4.30>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "abandon",
+  "after": "wait",
+  "why": "放量低吸（量比 1.14>0.9）⇒ 语料只做「缩量接」✗；追早盘已涨方向（涨幅 +6.4% 且日内分位 98）"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "update_condition",
+  "after": "wait",
+  "why": "放量低吸（量比 1.12>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 1.94>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 4.30>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "abandon",
+  "after": "wait",
+  "why": "放量低吸（量比 1.07>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 1.94>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260108",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "wait",
+  "after": "wait",
+  "why": "放量低吸（量比 4.30>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260109",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 3.80>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260109",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 4.79>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260109",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "update_condition",
+  "after": "wait",
+  "why": "放量低吸（量比 5.00>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260109",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 3.80>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260109",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 4.79>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260109",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 4.79>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260112",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 7.59>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260112",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 6.51>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260112",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 9.45>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260112",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 7.59>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260112",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 4.97>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260112",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 9.45>0.9）⇒ 语料只做「缩量接」✗"
+ },
+ {
+  "day": "20260112",
+  "event": "wolf_zheng_t_buy",
+  "oracle": "wait",
+  "before": "exec",
+  "after": "wait",
+  "why": "放量低吸（量比 7.59>0.9）⇒ 语料只做「缩量接」✗"
+ }
+]

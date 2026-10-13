@@ -311,6 +311,10 @@ def _corpus_buy_flags(trigger: dict) -> Optional[dict]:
     """
     if str(os.getenv("WOLF_T_BUY_CORPUS_RULES", "0")).strip().lower() not in ("1", "true", "yes", "on"):
         return None
+    # ★ 只对**低吸类**触发渲染（2026-10-13 补 ✗）：卖腿/减仓腿不该出现「低吸判据」✗
+    _kind = str(trigger.get("event_type") or trigger.get("trigger_kind") or "").lower()
+    if _kind and not any(k in _kind for k in ("buy", "dip", "253", "254")):
+        return None
     _sn = trigger.get("snapshot") if isinstance(trigger, dict) else None
     if isinstance(_sn, str):
         try:
