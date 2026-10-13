@@ -296,6 +296,66 @@ def _consecutive_hits(condition_id: Optional[int], symbol: str) -> int:
         return 0
 
 
+def _corpus_buy_flags(trigger: dict) -> Optional[dict]:
+    """★ 2026-10-12（用户「补上吧」）：把**狼大关于低吸的成文判据**接进做T低吸腿 ✓
+
+    开关 `WOLF_T_BUY_CORPUS_RULES`（**默认 0 = 现状零变化** ✓，回测/生产可 A/B ✓）。
+    全部用**本消息已有的字段**判（不新增数据 ✗、不编判据 ✗），每条带语料出处 ✓：
+      R12 2025-03-06「挂前一天的低点…**能买进去就做正T**」＋「**缩量**才接」
+          ⇒ `vol_ratio > 0.9`（放量）时**不接** ✗
+      R-追高 语料「如果这里去追早上涨的方向的 **我会直接耻笑**」
+          ⇒ `day_rise_pct ≥ 5%` 且 `day_quantile ≥ 90` ⇒ **不接** ✗
+      R16 2025-06-05「**急杀可以买，缓跌不买**」——注意**适用范围=大盘/板块级** ✓
+          ⇒ (a) 大盘也急杀（`index.sh_drop ≤ -0.8`）且个股急杀 ⇒ **可接** ✓（唯一正期望：中位 +1.57% ✓）
+             (b) 个股缓跌（未放量、未创新低、大盘未急杀）⇒ **不接** ✗
+    """
+    if str(os.getenv("WOLF_T_BUY_CORPUS_RULES", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    _sn = trigger.get("snapshot") if isinstance(trigger, dict) else None
+    if isinstance(_sn, str):
+        try:
+            import json as _js
+            _sn = _js.loads(_sn) or {}
+        except Exception:
+            _sn = {}
+    if not isinstance(_sn, dict):
+        _sn = {}
+    _f = _sn.get("fields") if isinstance(_sn.get("fields"), dict) else {}
+    def _num(k, dflt=None):
+        for src in (_sn, _f):
+            v = src.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+        return dflt
+    vr = _num("vol_ratio")
+    rise = _num("day_rise_pct")
+    q = _num("day_quantile")
+    low = _num("today_low")
+    prev_low = _num("prev_low")
+    sh_drop = _num("sh_drop", _num("index_sh_drop"))
+    idx = _f.get("index") if isinstance(_f.get("index"), dict) else {}
+    if sh_drop is None and isinstance(idx.get("sh_drop"), (int, float)):
+        sh_drop = float(idx["sh_drop"])
+    why = []
+    verdict = None                      # None=无结论；"buy"=可接；"skip"=不接
+    new_low = bool(low is not None and prev_low is not None and low < prev_low)
+    if vr is not None and vr > 0.9:
+        verdict, _r = "skip", "放量低吸（量比 %.2f>0.9）⇒ 语料只做「缩量接」✗" % vr
+        why.append(_r)
+    if rise is not None and q is not None and rise >= 5.0 and q >= 90.0:
+        verdict, _r = "skip", "追早盘已涨方向（涨幅 %+.1f%% 且日内分位 %.0f）⇒ 语料：会直接耻笑 ✗" % (rise, q)
+        why.append(_r)
+    if sh_drop is not None and sh_drop <= -0.8 and new_low:
+        verdict, _r = "buy", "大盘与个股同时急杀（大盘 %+.1f%%）⇒ 语料：急杀可以买 ✓（该组合中位 +1.57%%）" % sh_drop
+        why.append(_r)
+    elif not new_low and (vr is None or vr <= 0.9) and (sh_drop is None or sh_drop > -0.8) and (rise is None or rise < 5.0):
+        verdict, _r = "skip", "缓跌（未创新低、未放量、大盘未急杀）⇒ 语料：缓跌不买 ✗"
+        why.append(_r)
+    if not why:
+        return None
+    return {"verdict": verdict, "why": "；".join(why[:2])}
+
+
 def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optional[str]:
     """Worker 命中后主动唤醒做T Agent（POST /chat，附触发上下文）。
 
@@ -376,6 +436,9 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         f"③ **浪型档位**不允许自动执行（看上方【浪型档位】：t_only=只做T不追不新建主升 / "
         f"defense=防御不建仓 / exit=兑现降仓 / side=需人工确认；**卖类不受限** ✓）；"
         f"④ 恐慌放量追跌（量比骤升+创新低）。"
+        # ★ 语料判据开关打开时，④ 让位给【语料判据·低吸】（口径：只个股恐慌≠大盘级急杀 ✓）
+        f"（④ 仅指**只个股**放量追跌 ✗；若为**大盘与个股同时急杀**，语料是「急杀可以买」✓ —— "
+        f"以【语料判据·低吸】为准 ✓）"
         # ★ 账本 §9.728 ✓（用户 2026-10-07「全屏蔽，改成直接置入数据」）：
         #   工具已**全屏蔽**（桥只注册 0 个 ✓）⇒ 原句「请先调用查询工具补数」成了**死指令** ✗
         #   ⇒ 改为：**决策所需数据已随本消息置入** ✓；数据确实不足时按 wait/abandon 处理 ✓
@@ -482,6 +545,14 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
         except Exception:
             _f = None
     if isinstance(_f, dict):
+        # ★ 2026-10-12（用户「补上吧」）：低吸腿补**狼大成文判据**（开关默认关 ✓）
+        _cf = _corpus_buy_flags(trigger)
+        if _cf:
+            # ★ 用词要精确（实测 B3 被写成 abandon ✗）：他「不追」= **不做这次**，
+            #   但要**继续等更好的位置** ⇒ 应 wait ✓，不是 abandon（abandon 会把条件销毁 ✗）
+            msg += "【语料判据·低吸】%s ⇒ %s\n" % (
+                _cf.get("why"), "**可接 ✓**（仍按你判断）" if _cf.get("verdict") == "buy"
+                else "**本次不接 ✗ ⇒ 只能 wait（保留条件等更好位置 ✓，不要 abandon ✗）**")
         # ★ 2026-10-12：优先渲染**人话浪型档位** ✓（`snapshot["wave"]`，由 t_monitor 注入 ✓）
         _wv = _f.get("wave") if isinstance(_f, dict) else None
         if isinstance(_wv, dict) and (_wv.get("text") or _wv.get("operation")):
