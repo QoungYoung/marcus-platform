@@ -2392,7 +2392,33 @@ def arm_control(action: str) -> dict:
     #     ⇒ 实测把**自己的工具调用 shell** 一起 TERM 了 ✗（输出 `[killed by signal: SIGTERM]`）
     #   · 再排除"本进程自己的组" ✓（绝不自杀 ✓）
     _self_pg = os.getpgid(0)
-    _pgids = sorted({m[2] for m in _procs if m[2] != _self_pg and m[0] != os.getpid()})
+    _tag = str(st.get("tag") or "").strip()
+    _pgids = []
+    for _g in sorted({m[2] for m in _procs if m[2] != _self_pg and m[0] != os.getpid()}):
+        # ★ 整组校验（2026-10-13 实测 ✗）：pgid 可能被**复用** ⇒ 只按组号发信号会误伤无辜 ✗
+        #   （上一轮就是这样 SIGSTOP 掉了我自己的工具 shell ✗）⇒ 必须确认**整组成员**都属于本臂 ✓
+        _members = [(d, _st, _cmd) for d, _st, _pg, _cmd in _pgid_members(_g)] if False else None
+        _ok = True
+        _n = 0
+        for _d in os.listdir("/proc"):
+            if not _d.isdigit():
+                continue
+            try:
+                _st2 = open("/proc/%s/stat" % _d, encoding="utf-8").read().rsplit(")", 1)[1].split()
+                if int(_st2[2]) != int(_g):
+                    continue
+                _cmd2 = open("/proc/%s/cmdline" % _d, "rb").read().decode("utf-8", "replace").replace("\x00", " ")
+            except Exception:
+                continue
+            _n += 1
+            if _tag and ("_bt_%s" % _tag) not in _cmd2 and ("_%s.json" % _tag) not in _cmd2:
+                _ok = False
+                break
+        if _ok and _n:
+            _pgids.append(_g)
+    if not _pgids:
+        return {"ok": False, "msg": "本臂的进程组校验未通过（可能已退出或组号被复用 ✓ 已保护不误伤 ✗）",
+                "state": arm_payload()}
     act = str(action or "").strip().lower()
     try:
         if act == "pause":
