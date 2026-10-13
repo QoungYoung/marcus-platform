@@ -41,17 +41,24 @@ DATA = os.environ.get("DATA_DIR", "data")
 
 
 def _relay():
-    """加载 core/tushare_relay.py（datahubco + promax，替代已失效的 gzcloud 代理）。"""
+    """加载 core/tushare_relay.py（datahubco + promax，替代已失效的 gzcloud 代理）。
+
+    2026-10-13：原实现先裸 `import tushare_relay`，失败才去找 core/ 并记一条静默告警 ⇒
+    每天输出里都有一条 "silent:…ModuleNotFoundError: No module named 'tushare_relay'"，
+    排查 systemic_risk_monitor 失败时被它带偏（真因是 `import systemic_risk` 找不到 app 包）。
+    现在**先找 core/ 再 import**，只在确实找不到时才报错 ⇒ 输出干净、告警不再误导。
+    """
     import importlib, pathlib
-    try:
-        return importlib.import_module("tushare_relay")
-    except ImportError as _e_sil1:
-        _silent_alert("build_systemic_inputs.py:20", _e_sil1)
     for p in pathlib.Path(__file__).resolve().parents:
         if (p / "core" / "tushare_relay.py").exists():
-            sys.path.insert(0, str(p / "core"))
+            sp = str(p / "core")
+            if sp not in sys.path:
+                sys.path.insert(0, sp)
             return importlib.import_module("tushare_relay")
-    raise ImportError("core/tushare_relay.py 未找到")
+    try:
+        return importlib.import_module("tushare_relay")
+    except ImportError as _e:
+        raise ImportError("core/tushare_relay.py 未找到") from _e
 
 
 def call(api, params, fields):
