@@ -32,7 +32,10 @@ echo "   （共 $(echo "$CHANGED" | wc -l) 个文件）"
 # 1) 需重启判定
 if echo "$CHANGED" | grep -qE '^(backend/|apps/|config/|docker/)'; then
   # 2) 有链在跑就别重启 ✗
-  if docker exec marcus-worker sh -lc 'for p in /proc/[0-9]*; do c=$(tr "\0" " " < $p/cmdline 2>/dev/null); case "$c" in *daily_inputs_chain*|*build_concept_long*|*trend_confirm*) echo HIT; break;; esac; done' 2>/dev/null | grep -q HIT; then
+  #    ★ 2026-10-13 修：必须排除探测 shell 自己（$$ 与 $PPID）—— 它的 cmdline 里就写着
+  #    daily_inputs_chain / build_concept_long / trend_confirm 这些关键词 ⇒ 不排除则恒 HIT，
+  #    于是每次部署都"检测到盘后链正在跑"、**容器重启永不发生**（backend/app 改动静默不生效）。
+  if docker exec marcus-worker sh -lc 'me=$$; pp=$PPID; for p in /proc/[0-9]*; do pid=${p#/proc/}; case "$pid" in "$me"|"$pp") continue;; esac; c=$(tr "\0" " " < $p/cmdline 2>/dev/null); case "$c" in *daily_inputs_chain*|*build_concept_long*|*trend_confirm*) echo "HIT $pid"; break;; esac; done' 2>/dev/null | grep -q HIT; then
     echo "⚠️ 检测到盘后链正在跑 ⇒ **本次不重启** ✗（代码已更新 ✓；链跑完再执行一次本脚本即可 ✓）"
     exit 0
   fi
