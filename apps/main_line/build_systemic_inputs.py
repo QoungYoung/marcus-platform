@@ -8,6 +8,18 @@
 """
 import os, sys, json, time, datetime
 
+# ★ 2026-10-13：调度器以 `python apps/main_line/build_systemic_inputs.py`（cwd=/app）拉起，
+#   sys.path[0] 只有 apps/main_line ⇒ 末尾 `import systemic_risk` 里那句
+#   `from app.services.state_paths import …` 找不到 `app` 包（容器里 app 包在 /app/app，
+#   需 /app 在 sys.path；本地 checkout 需 <repo>/backend）⇒ 每天 15:05 只写出
+#   systemic_inputs.json、**systemic_risk.json 自 10-07 起不再刷新**，退出码 1
+#   （通知里显示的还是更早那条 tushare_relay 静默告警，指错方向）。补上入口路径。
+_ROOT = "/app" if os.path.isdir("/app/app") else os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+for _p in (_ROOT, os.path.join(_ROOT, "backend"), os.path.dirname(os.path.abspath(__file__))):
+    if _p and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 
 def _silent_alert(where, exc=None):
     """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
