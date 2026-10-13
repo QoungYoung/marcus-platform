@@ -105,6 +105,47 @@ def _resolve_order_prefix(account_id: str) -> str:
     return acc + suffix
 
 
+def _paper_schema_migrated(cursor) -> bool:
+    """paper 多账户迁移是否已完成（True ⇒ _init_database 跳过全部迁移 DDL，零锁）。
+
+    判据：5 张账本表都有 account_id 列，且 paper_positions / paper_daily_snapshot /
+    paper_account_info 的主键已是迁移后形态。任一不满足即按未迁移处理（照旧跑幂等 DDL）。
+
+    2026-10-13：见 _init_database 中该判断的来由（DDL 无限锁等待 → paper_trades 全表
+    读写堵死 → 盘中扫描 3600s 超时）。
+    """
+    try:
+        cursor.execute(
+            "SELECT"
+            " (SELECT count(*) FROM information_schema.columns"
+            "   WHERE table_name='paper_orders' AND column_name='account_id'),"
+            " (SELECT count(*) FROM information_schema.columns"
+            "   WHERE table_name='paper_trades' AND column_name='account_id'),"
+            " (SELECT count(*) FROM information_schema.columns"
+            "   WHERE table_name='paper_positions' AND column_name='account_id'),"
+            " (SELECT count(*) FROM information_schema.columns"
+            "   WHERE table_name='paper_daily_snapshot' AND column_name='account_id'),"
+            " (SELECT count(*) FROM information_schema.columns"
+            "   WHERE table_name='paper_account_info' AND column_name='account_id'),"
+            " (SELECT array_agg(a.attname) FROM pg_index i"
+            "   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)"
+            "   WHERE i.indrelid='paper_positions'::regclass AND i.indisprimary),"
+            " (SELECT array_agg(a.attname) FROM pg_index i"
+            "   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)"
+            "   WHERE i.indrelid='paper_daily_snapshot'::regclass AND i.indisprimary),"
+            " (SELECT array_agg(a.attname) FROM pg_index i"
+            "   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)"
+            "   WHERE i.indrelid='paper_account_info'::regclass AND i.indisprimary)"
+        )
+        row = cursor.fetchone()
+    except Exception:
+        return False
+    if not row or any(int(v or 0) <= 0 for v in row[:5]):
+        return False
+    want = [{"account_id", "symbol"}, {"account_id", "trade_date"}, {"account_id"}]
+    return all(set(row[i] or ()) == want[i - 5] for i in range(5, 8))
+
+
 class PaperTradingEngine:
     """
     持久化模拟交易引擎
@@ -578,21 +619,30 @@ class PaperTradingEngine:
             ('golden_pit', '黄金坑 DCA', 'golden_pit', 200000.0, 1, datetime.now().isoformat())
         )
         # 幂等迁移：存量表补 account_id 列（默认 stock），重建复合主键
-        cursor.execute("ALTER TABLE paper_orders ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
-        cursor.execute("ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
-        cursor.execute("ALTER TABLE IF EXISTS paper_capital_adjustments ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
-        cursor.execute("ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
-        cursor.execute('ALTER TABLE paper_positions DROP CONSTRAINT IF EXISTS paper_positions_pkey')
-        cursor.execute('ALTER TABLE paper_positions ADD PRIMARY KEY (account_id, symbol)')
-        cursor.execute("ALTER TABLE paper_daily_snapshot ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
-        cursor.execute('ALTER TABLE paper_daily_snapshot DROP CONSTRAINT IF EXISTS paper_daily_snapshot_pkey')
-        cursor.execute('ALTER TABLE paper_daily_snapshot ADD PRIMARY KEY (account_id, trade_date)')
-        cursor.execute("ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS account_id VARCHAR(16)")
-        cursor.execute('ALTER TABLE paper_account_info DROP CONSTRAINT IF EXISTS paper_account_info_pkey')
-        cursor.execute('ALTER TABLE paper_account_info DROP COLUMN IF EXISTS id')
-        cursor.execute("UPDATE paper_account_info SET account_id = 'stock' WHERE account_id IS NULL")
-        cursor.execute('ALTER TABLE paper_account_info ALTER COLUMN account_id SET NOT NULL')
-        cursor.execute('ALTER TABLE paper_account_info ADD PRIMARY KEY (account_id)')
+        # ★ 2026-10-13 生产事故修复（盘中扫描 3600s 超时真因）：这段 DDL 全都要
+        #   ACCESS EXCLUSIVE，原来**每次** engine 初始化都无条件执行；只要有一个长事务
+        #   （worker 侧 idle in transaction 的只读查询）持 ACCESS SHARE，DDL 就无限排队，
+        #   并把之后所有 paper_trades 读写一起堵死；而被调度器 kill 的子进程留下的 PG
+        #   后端仍卡在锁等待、不会感知客户端已死 ⇒ 锁永不释放、后续任务继续超时。
+        #   ⇒ 已迁移（列 + 主键齐备）就一条 DDL 都不发；确需迁移时 lock_timeout=3s，
+        #     宁可失败等下轮重试，也绝不做无限锁等待。
+        if not _paper_schema_migrated(cursor):
+            cursor.execute("SET LOCAL lock_timeout = '3s'")
+            cursor.execute("ALTER TABLE paper_orders ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+            cursor.execute("ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+            cursor.execute("ALTER TABLE IF EXISTS paper_capital_adjustments ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+            cursor.execute("ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+            cursor.execute('ALTER TABLE paper_positions DROP CONSTRAINT IF EXISTS paper_positions_pkey')
+            cursor.execute('ALTER TABLE paper_positions ADD PRIMARY KEY (account_id, symbol)')
+            cursor.execute("ALTER TABLE paper_daily_snapshot ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'")
+            cursor.execute('ALTER TABLE paper_daily_snapshot DROP CONSTRAINT IF EXISTS paper_daily_snapshot_pkey')
+            cursor.execute('ALTER TABLE paper_daily_snapshot ADD PRIMARY KEY (account_id, trade_date)')
+            cursor.execute("ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS account_id VARCHAR(16)")
+            cursor.execute('ALTER TABLE paper_account_info DROP CONSTRAINT IF EXISTS paper_account_info_pkey')
+            cursor.execute('ALTER TABLE paper_account_info DROP COLUMN IF EXISTS id')
+            cursor.execute("UPDATE paper_account_info SET account_id = 'stock' WHERE account_id IS NULL")
+            cursor.execute('ALTER TABLE paper_account_info ALTER COLUMN account_id SET NOT NULL')
+            cursor.execute('ALTER TABLE paper_account_info ADD PRIMARY KEY (account_id)')
 
         # 索引
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades (symbol)')

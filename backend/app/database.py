@@ -28,6 +28,50 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expi
 Base = declarative_base()
 
 
+def _lock_timeout(conn, seconds: float = 3.0):
+    """迁移专用：DDL 锁等待上限（默认 3s），只作用于当前迁移事务。
+
+    2026-10-13 生产事故：`_apply_paper_account_migration` 的 `ALTER TABLE paper_trades
+    ADD COLUMN IF NOT EXISTS account_id` 撞上一条 `idle in transaction` 的只读查询
+    （持 ACCESS SHARE）⇒ ACCESS EXCLUSIVE 无限排队，paper_trades 全部读写被堵死
+    （盘中扫描 3600s 超时被 kill；而被 kill 的子进程留下的 PG 后端仍卡在锁等待、
+    不会感知客户端已死 ⇒ 锁永不释放）。迁移 DDL 都是幂等的（IF EXISTS / IF NOT
+    EXISTS），失败无害、下轮 init_db 重试即可 ⇒ 宁可 3s 失败，也绝不无限等待。
+    """
+    from sqlalchemy import text as _text
+    conn.execute(_text(f"SET LOCAL lock_timeout = '{seconds}s'"))
+
+
+def _paper_schema_migrated(inspector, tables) -> bool:
+    """paper 多账户迁移是否已完成（True ⇒ 跳过该迁移的全部 DDL，零 ACCESS EXCLUSIVE）。
+
+    判据：5 张账本表都有 account_id 列，且三张表主键已是迁移后形态。任一不满足即按
+    未迁移处理（照旧跑一遍幂等 DDL）。来由同 `_lock_timeout`（2026-10-13 事故）。
+    """
+    want_pk = {
+        "paper_positions": {"account_id", "symbol"},
+        "paper_daily_snapshot": {"account_id", "trade_date"},
+        "paper_account_info": {"account_id"},
+    }
+    try:
+        for t in ("paper_orders", "paper_trades", "paper_positions",
+                  "paper_daily_snapshot", "paper_account_info"):
+            if t not in tables:
+                return False
+            if "account_id" not in {c["name"] for c in inspector.get_columns(t)}:
+                return False
+        if "seed_initial_capital" not in {
+                c["name"] for c in inspector.get_columns("paper_account_info")}:
+            return False
+        for t, cols in want_pk.items():
+            got = set(inspector.get_pk_constraint(t).get("constrained_columns") or [])
+            if got != cols:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def get_db():
     """FastAPI 依赖：获取数据库会话。"""
     db = SessionLocal()
@@ -141,6 +185,7 @@ def _apply_schema_patches():
         inspector = inspect(engine)
         existing_tables = set(inspector.get_table_names())
         with engine.begin() as conn:
+            _lock_timeout(conn)
             for table, col, ddl in patches:
                 if table not in existing_tables:
                     continue
@@ -174,6 +219,7 @@ def _apply_worker_control_migration():
 
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS worker_status (
@@ -214,20 +260,27 @@ def _apply_paper_account_migration():
         inspector = inspect(engine)
         tables = set(inspector.get_table_names())
 
+        # ★ 2026-10-13：结构已迁移（列 + 主键齐备）就跳过**需要 ACCESS EXCLUSIVE 的 DDL**
+        #   —— 见 _lock_timeout 注释（DDL 无限锁等待会堵死 paper_trades 全部读写）。
+        #   注意只跳过 DDL：注册表创建/账号播种/种子回填照旧执行（幂等，且不需要 ACCESS EXCLUSIVE）。
+        migrated = _paper_schema_migrated(inspector, tables)
+
         # 1) 各账本表增加 account_id 列（存量数据默认归入 stock 账户）
         account_col_tables = [
             "paper_orders", "paper_trades", "paper_positions",
             "paper_daily_snapshot", "paper_capital_adjustments",
         ]
         with engine.begin() as conn:
-            for t in account_col_tables:
-                if t not in tables:
-                    continue
-                conn.execute(text(
-                    f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'"
-                ))
+            _lock_timeout(conn)
+            if not migrated:
+                for t in account_col_tables:
+                    if t not in tables:
+                        continue
+                    conn.execute(text(
+                        f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS account_id VARCHAR(16) NOT NULL DEFAULT 'stock'"
+                    ))
             # 2) paper_account_info：id → account_id 主键
-            if "paper_account_info" in tables:
+            if not migrated and "paper_account_info" in tables:
                 conn.execute(text("ALTER TABLE paper_account_info DROP CONSTRAINT IF EXISTS paper_account_info_pkey"))
                 conn.execute(text("ALTER TABLE paper_account_info DROP COLUMN IF EXISTS id"))
                 conn.execute(text("ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS account_id VARCHAR(16)"))
@@ -235,11 +288,11 @@ def _apply_paper_account_migration():
                 conn.execute(text("ALTER TABLE paper_account_info ALTER COLUMN account_id SET NOT NULL"))
                 conn.execute(text("ALTER TABLE paper_account_info ADD PRIMARY KEY (account_id)"))
             # 3) paper_positions：symbol 主键 → (account_id, symbol) 复合主键
-            if "paper_positions" in tables:
+            if not migrated and "paper_positions" in tables:
                 conn.execute(text("ALTER TABLE paper_positions DROP CONSTRAINT IF EXISTS paper_positions_pkey"))
                 conn.execute(text("ALTER TABLE paper_positions ADD PRIMARY KEY (account_id, symbol)"))
             # 4) paper_daily_snapshot：trade_date 主键 → (account_id, trade_date) 复合主键
-            if "paper_daily_snapshot" in tables:
+            if not migrated and "paper_daily_snapshot" in tables:
                 conn.execute(text("ALTER TABLE paper_daily_snapshot DROP CONSTRAINT IF EXISTS paper_daily_snapshot_pkey"))
                 conn.execute(text("ALTER TABLE paper_daily_snapshot ADD PRIMARY KEY (account_id, trade_date)"))
             # 5) 账户索引
@@ -293,9 +346,10 @@ def _apply_paper_account_migration():
                 "  AND NOT EXISTS (SELECT 1 FROM paper_account_info i WHERE i.account_id = p.account_id)"
             ), {"now": now})
             # 8) seed_initial_capital：真实历史种子，权益曲线回放用（不被资金调整改动）
-            conn.execute(text(
-                "ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS seed_initial_capital DOUBLE PRECISION"
-            ))
+            if not migrated:
+                conn.execute(text(
+                    "ALTER TABLE paper_account_info ADD COLUMN IF NOT EXISTS seed_initial_capital DOUBLE PRECISION"
+                ))
             conn.execute(text(
                 "UPDATE paper_account_info SET seed_initial_capital = initial_capital WHERE seed_initial_capital IS NULL"
             ))
@@ -313,6 +367,7 @@ def _apply_t_account_migration():
 
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             # 1) t 账户注册进 paper_accounts（独立资金，与 stock/golden_pit 隔离）
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn.execute(text(
@@ -498,6 +553,7 @@ def _apply_t_build_migration():
 
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             # 1) t_build_events — 底仓建仓审计/状态流（独立于 t_triggers 做T事件流）
             conn.execute(text(
                 """
@@ -588,6 +644,7 @@ def _apply_daily_artifacts_migration():
     from sqlalchemy import text
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS daily_artifacts (
@@ -619,6 +676,7 @@ def _apply_mkt_bars_migration():
     from sqlalchemy import text
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS mkt_bars_daily (
@@ -650,6 +708,7 @@ def _apply_research_reports_migration():
     from sqlalchemy import text
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS research_reports_daily (
@@ -701,6 +760,7 @@ def _apply_wolf_discipline_migration():
     from sqlalchemy import text      # 各迁移函数都自带这个 import（模块级没有 text，漏了会静默 warn）
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS wolf_discipline_config (
@@ -731,6 +791,7 @@ def _apply_vreb_daily_migration():
 
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             conn.execute(text(
                 """
                 CREATE TABLE IF NOT EXISTS t_vreb_daily (
@@ -764,6 +825,7 @@ def _apply_t_backtest_migration():
 
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             # 1) 任务
             conn.execute(text(
                 """
@@ -901,6 +963,7 @@ def _apply_ai_led_migration():
     from sqlalchemy import text
     try:
         with engine.begin() as conn:
+            _lock_timeout(conn)
             # 1) t_ai_actions — AI 决策审计（每步决策可追溯）
             conn.execute(text(
                 """
