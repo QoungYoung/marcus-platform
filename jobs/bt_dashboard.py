@@ -2890,6 +2890,83 @@ def day_progress(root: str, account: str = "") -> dict:
                     _lv, ("/" + _sb) if _sb else "", _op or "—", str(_wj.get("date") or "—"))
         except Exception as _e_wv:
             print("[dashboard] 当日浪型读取失败: %s" % str(_e_wv)[:80], flush=True)
+        # ★★ §9.837 ✓（用户 2026-10-13：「回测监控台也加上主线浪型显示」✓）：
+        #   第二个浪型 = **主线板块浪型** ✓
+        #     ① 当日主线/次主线 ← `main_line_state.json` 的 `mainline_select{mainline,second}` ✓
+        #     ② 各自的结构确认档 ← `trend_confirm_<day>_long.json` 的 `themes[].track_a.stage`
+        #        （not_confirmed / suspect / confirmed ✓；缺 track_a 用 track_b ✓）
+        #   同时显示该臂的浪型口径（`WOLF_WAVE_SCOPE` / `WOLF_WAVE_BUILD_SOFT` ✓，从臂脚本反查 ✓）
+        out["mainline_wave"] = None
+        out["mainline_wave_text"] = ""
+        out["wave_scope_text"] = ""
+        try:
+            import json as _jm
+            _day8 = "".join(ch for ch in str(cur or "") if ch.isdigit())[:8]
+            _mlj = None
+            for _cm in ([os.path.join(root, str(cur), "main_line_state.json")] if cur else []) + \
+                       [os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(root))),
+                                     "_bt_year", _day8, "main_line_state.json")]:
+                try:
+                    with open(_cm, encoding="utf-8") as _f_m:
+                        _mlj = _jm.load(_f_m) or {}
+                    out["mainline_src"] = _cm[-48:]
+                    break
+                except Exception:
+                    continue
+            _trj = None
+            # ★ 文件名里的日期 = **该结构的 as-of 日** ✓（实测比当前跑批日**早一天** ✓，
+            #   例：跑 20260506 时种子里是 `trend_confirm_20260429_long.json` ✓）
+            #   ⇒ 用 glob 取"**≤ 当前日的最新一份**" ✓（不要死写当天 ✗）
+            import glob as _glob
+            _rootd = os.path.dirname(os.path.dirname(os.path.abspath(root)))
+            _tcs = []
+            for _pat in (os.path.join(root, str(cur), "trend_confirm_*_long.json"),
+                         os.path.join(_rootd, "data", "trend_confirm_*_long.json"),
+                         os.path.join(_rootd, "_bt_year", _day8, "trend_confirm_*_long.json"),
+                         os.path.join(root, "_summary", "trend_confirm_*_long.json")):
+                _tcs += [f for f in _glob.glob(_pat)
+                         if re.search(r"(\d{8})", os.path.basename(f))
+                         and re.search(r"(\d{8})", os.path.basename(f)).group(1) <= _day8]
+            _tcs.sort(key=lambda f: re.search(r"(\d{8})", os.path.basename(f)).group(1), reverse=True)
+            for _ct in _tcs[:1]:
+                try:
+                    with open(_ct, encoding="utf-8") as _f_t:
+                        _trj = _jm.load(_f_t) or {}
+                    break
+                except Exception:
+                    continue
+            _stage = {}
+            for _t in ((_trj or {}).get("themes") or []):
+                _a = (_t.get("track_a") or {}).get("stage") or (_t.get("track_b") or {}).get("stage") or ""
+                _stage[str(_t.get("theme") or "")] = (str(_a), bool(_t.get("gate")), str(_t.get("gate_rule") or ""))
+            _ms = ((_mlj or {}).get("mainline_select") or {}) if _mlj else {}
+            _th = [t for t in (_ms.get("mainline"), _ms.get("second")) if t]
+            _rows = []
+            for _i, _t in enumerate(_th):
+                _st, _g, _gr = _stage.get(_t, ("—", False, ""))
+                _rows.append({"theme": _t, "role": ("主线" if _i == 0 else "次主线"),
+                              "stage": _st, "gate": _g, "gate_rule": _gr})
+            out["mainline_wave"] = {"as_of": str((_mlj or {}).get("date") or _day8), "rows": _rows}
+            if _rows:
+                out["mainline_wave_text"] = " ／ ".join(
+                    "%s %s·%s" % (r["role"], r["theme"], r["stage"]) for r in _rows)
+            else:
+                out["mainline_wave_text"] = "（无主线 select ✗）"
+            # 该臂的浪型口径（臂脚本里反查 ✓）
+            _tag = os.path.basename(str(root).rstrip("/"))
+            _tag = _tag[4:] if _tag.startswith("_bt_") else _tag   # ✓ 目录名是 _bt_<tag> ⇒ 去掉前缀 ✗
+            _sc = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               ".dsh-tmp", "wolfbt", "_run_%s_exec.sh" % _tag)
+            if os.path.exists(_sc):
+                _txt = open(_sc, encoding="utf-8", errors="replace").read()
+                _kv = []
+                for _k in ("WOLF_WAVE_SCOPE", "WOLF_WAVE_BUILD_SOFT", "WOLF_WAVE_COND_GATE"):
+                    _mm = re.search(r"^export %s=['\"]?([^'\"\n]+)" % _k, _txt, re.M)
+                    if _mm:
+                        _kv.append("%s=%s" % (_k.replace("WOLF_WAVE_", ""), _mm.group(1)))
+                out["wave_scope_text"] = " ".join(_kv)
+        except Exception as _e_mw:
+            print("[dashboard] 主线浪型读取失败: %s" % str(_e_mw)[:80], flush=True)
         # 阶段清单（按真实流水线顺序 ✓）
         STAGES = [("carry", "跨日结转"), ("low_logic", "low_logic"), ("ensure_mins", "补分钟档"),
                   ("pack", "打包分钟"), ("legs", "布腿/候选"), ("prod", "生产链(触发→网关→模拟盘)"),

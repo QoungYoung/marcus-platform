@@ -438,7 +438,8 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
     var st = ts.alive ? (ts.paused ? '已暂停' : '运行中') : '已结束';
     a.textContent = ts.tag + ' · ' + st + ' · ' + (ts.start || '?') + '→' + (ts.end || '?') +
                     (ts.day ? (' · 当前 ' + ts.day + ' (' + (ts.day_index || 0) + '/' + (ts.days_total || 0) + ')') : '') +
-                    (ts.wave_text ? (' · ' + ts.wave_text) : '');
+                    (ts.wave_text ? (' · ' + ts.wave_text) : '') +
+                    (ts.mainline_wave_text ? ('　【主线浪型】' + ts.mainline_wave_text) : '');
     d.textContent = 'pid=' + (ts.pid || '—') + ' pgid=' + (ts.pgid || '—') + ' port=' + (ts.port || '—') +
                     ' root=' + (ts.root || '—') + ' account=' + (ts.account || '—') +
                     ' 模板=' + (ts.template || '—') + ' 启动=' + (ts.started_at || '—') +
@@ -2327,7 +2328,9 @@ dialog.sheet::backdrop { background: var(--color-scrim); }
       var r = await fetch('/api/progress', { cache: 'no-store' });
       var j = await r.json();
       el('prog-day').textContent = (j.day || '—') + '（第 ' + (j.day_index || 0) + ' / ' + (j.days_total || 0) + ' 天）'
-        + (j.wave_text ? '　【当日判定浪型】' + j.wave_text : '　【当日判定浪型】—');
+        + (j.wave_text ? '　【大盘浪型】' + j.wave_text : '　【大盘浪型】—')
+        + (j.mainline_wave_text ? '　【主线浪型】' + j.mainline_wave_text : '　【主线浪型】—')
+        + (j.wave_scope_text ? '　【本臂口径】' + j.wave_scope_text : '');
       var stages = j.stages || [], cur = 0;
       stages.forEach(function (s, i) { if (s.state !== 'pending') cur = i + 1; });
       el('prog-fill').style.width = (stages.length ? Math.round(100 * cur / stages.length) : 0) + '%';
