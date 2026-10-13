@@ -28,12 +28,25 @@ def main():
     for i, a in enumerate(sys.argv[1:]):
         if a == '--date': date8 = sys.argv[i + 2]
     py = sys.executable
-    # 1) concept_long 增量(未到当日才全量)
+    # 1) concept_long（★ 2026-10-13 用户选 B ✓：跳过条件放宽到"**上一交易日**"）
+    #    旧行为 ✗：只有 `end >= 当日` 才跳过 ⇒ 盘后当日数据尚未就绪 / 隔了周末 ⇒ 仍判"不新鲜"
+    #              ⇒ 触发 `build_concept_long 20250101` **全量**（~40 分钟 ✗）
+    #    新行为 ✓：`end >= 上一交易日` 即视为新鲜 ⇒ skip ✓
+    #      （配套 A ✓：真增量已实现 ⇒ 真缺天也能秒级补齐 ✓，不再靠全量兜 ✗）
     try:
         cl = json.load(open(os.path.join(DATA, 'concept_long.json'), encoding='utf-8'))
         end = (cl.get('meta') or {}).get('end')
-        if end and end >= date8:
-            print('[build] concept_long 已到 %s, skip' % end, flush=True)
+        _prev_td = None
+        try:
+            sys.path.insert(0, APP)
+            from build_concept_long import cal as _cal
+            _tds = [d for d in _cal('20250101', date8) if d <= date8]
+            _prev_td = _tds[-2] if len(_tds) >= 2 else (_tds[-1] if _tds else None)
+        except Exception as _e_td:
+            print('[build] 交易日历取不到(按当日判断 ✓): %s' % str(_e_td)[:70], flush=True)
+        if end and (end >= date8 or (_prev_td and end >= _prev_td)):
+            print('[build] concept_long 已到 %s（新鲜判定：>=%s ✓）, skip'
+                  % (end, _prev_td or date8), flush=True)
         else:
             sh('build_concept_long', [py, os.path.join(APP, 'build_concept_long.py'), '20250101'])
     except Exception as e:

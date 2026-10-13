@@ -86,6 +86,99 @@ def main():
         for ts in rows: ts_conc.setdefault(ts, []).append(c)
     all_ts = list(ts_conc)
     print('concepts', len(members), 'members', len(all_ts), flush=True)
+    # ── ★ 2026-10-13（用户选 A ✓）：**真增量**（additive ✓：旧的"全量"路径原样保留 ✓）──────
+    #   病灶 ✗：只有"跳过 or 从 20250101 全量"（一次 ~40 分钟 ✗）
+    #   做法 ✓：读旧 concept_long.json ⇒ 只算 (旧 end, 今天] ⇒ **追加**到旧序列尾 ✓
+    #   开关 `CONCEPT_LONG_INCREMENTAL`（默认 1 ✓，置 0 回老行为 ✓）；
+    #   任何不一致（旧文件坏/概念缺/旧收盘取不到）⇒ 打印原因并**回退全量** ✓
+    _fp = os.path.join(DATA, 'concept_long_seed.json' if seed_mode else 'concept_long.json')
+    if (not seed_mode
+            and str(os.getenv('CONCEPT_LONG_INCREMENTAL', '1')).strip().lower() not in ('0', 'false', 'no')
+            and os.path.exists(_fp)):
+        try:
+            _old = json.load(open(_fp, encoding='utf-8'))
+            _oend = str(((_old.get('meta') or {}).get('end')) or '')
+            _oser = _old.get('series') or {}
+            _miss = [c for c in members if c not in _oser]
+            if _oend and _oend < end and not _miss:
+                _cal0 = cal('20250101', _oend)
+                _seed_d = _cal0[-1] if _cal0 else _oend
+                _rows0 = gz({'trade_date': _seed_d})
+                _last0 = {}
+                for _x in _rows0:
+                    try:
+                        _last0[_x[0]] = float(_x[1])
+                    except Exception:
+                        pass
+                _new = [d for d in cal(_oend, end) if _oend < d <= end]
+                if _last0 and _new:
+                    _dates = {}
+                    _cum = {}
+                    for c in members:
+                        _dates[c] = list(_oser[c].get('dates') or [])
+                        _cum[c] = list(_oser[c].get('close') or [])
+                    _first = {c: bool(_dates[c]) for c in members}
+                    _last = dict(_last0)
+                    print('[inc] 增量 ✓ 旧 end=%s（seed=%s，%d 只收盘）⇒ 追加 %d 天 ✓'
+                          % (_oend, _seed_d, len(_last0), len(_new)), flush=True)
+                    _t0i = time.time()
+                    for _di, _d in enumerate(_new):
+                        _px = {}
+                        for _x in gz({'trade_date': _d}):
+                            try:
+                                _px[_x[0]] = float(_x[1])
+                            except Exception:
+                                pass
+                        for _c, _mts in members.items():
+                            _tot = 0.0
+                            _n = 0
+                            for _ts in _mts:
+                                _pr = _last.get(_ts)
+                                _cn = _px.get(_ts)
+                                if _pr is not None:
+                                    if _cn is not None:
+                                        _tot += (_cn / _pr - 1.0)
+                                    _n += 1
+                            if _n > 0:
+                                _p = _tot / _n
+                                if not _first[_c]:
+                                    _cum[_c].append(100.0)
+                                    _dates[_c].append(_d)
+                                    _first[_c] = True
+                                _cum[_c].append(_cum[_c][-1] * (1.0 + _p))
+                                _dates[_c].append(_d)
+                            elif _first[_c]:
+                                _cum[_c].append(_cum[_c][-1])
+                                _dates[_c].append(_d)
+                        for _ts, _cn in _px.items():
+                            if _ts in ts_conc:
+                                _last[_ts] = _cn
+                        if (_di + 1) % 20 == 0 or _di == len(_new) - 1:
+                            print('[inc] day %d / %d %s %.0fs' % (_di + 1, len(_new), _d, time.time() - _t0i), flush=True)
+                    # 一致性自检 ✓（长度对齐 + 不倒退 ✓）⇒ 不过就回退全量 ✗
+                    _bad = [c for c in members if len(_dates[c]) != len(_cum[c])]
+                    _series = {c: {'dates': _dates[c], 'close': _cum[c]} for c in members}
+                    if _bad:
+                        print('[inc] 自检失败(长度不齐 %d 个概念) ⇒ 回退全量 ✗' % len(_bad), flush=True)
+                    else:
+                        _out = {'meta': {'generator': 'build_concept_long_v1',
+                                         'start': start, 'end': end,
+                                         'source': 'gzcloud daily 全市场等权pct累计',
+                                         'concepts': len(_series), 'members': len(all_ts),
+                                         'note': '未复权已用pct环比规避; 停牌沿用昨收',
+                                         'incremental': True, 'appended_days': len(_new),
+                                         'prev_end': _oend},
+                                'series': _series}
+                        json.dump(_out, open(_fp, 'w', encoding='utf-8'), ensure_ascii=False)
+                        print('WROTE(inc) %s size %d KB, appended %d 天 ✓'
+                              % (_fp, os.path.getsize(_fp) // 1024, len(_new)), flush=True)
+                        return
+                else:
+                    print('[inc] 无需追加（new=%d，旧收盘=%d）⇒ 检查是否已最新 ✓' % (len(_new), len(_last0)), flush=True)
+            else:
+                print('[inc] 不满足增量条件（旧 end=%s，缺概念 %d 个）⇒ 全量 ✓' % (_oend or '-', len(_miss)), flush=True)
+        except Exception as _e_inc:
+            print('[inc] 增量失败 ⇒ 回退全量 ✗: %s: %s' % (type(_e_inc).__name__, str(_e_inc)[:100]), flush=True)
     opens = [d for d in cal(start, end) if d >= start]
     print('days', len(opens), start, '->', end, flush=True)
     last = {}                     # ts -> prev close
