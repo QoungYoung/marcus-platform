@@ -67,11 +67,39 @@ def _load(name, default=None):
 
 
 def fusion_top12():
-    """fusion TOP1∪TOP2 (当日, 运行时)"""
+    """主线候选 TOP1∪TOP2（**与布腿器同源** ✓，2026-10-13 口径对齐 §9.828）
+
+    病灶 ✗（生产实测）：本函数原先**只读 `main_line_state.json` 的 `fusion`** ✗，
+      而 `fusion` 自 2026-09-11 起就没再写入过 ✗ ⇒ 返回 **空** ⇒ `tier_for()` 对**所有标的**都判
+      `none` ⇒ 执行口"试仓档方向门"把**每一笔低吸建仓**都拦成
+      「非主线候选TOP1∪TOP2, 不低吸建仓(试仓档)」✗✗
+      （实测 2026-10-13：SZ002074 ×7、SH600884 ×4 全被此拦 ✓ —— 布腿器却按 `mainline_select`
+        把它们布进了 新能源/电池 ✓ ⇒ **两条链读同一文件的不同字段** ✗）
+    修法：**复用布腿器的唯一实现** `switch_builder.theme_top12` ✓（它支持 `WOLF_THEME_SRC`
+      = fusion/mainline_select/pool ✓）；取不到时回落到老逻辑 ✓；仍为空则由调用方**放行** ✓（fail-open ✓）
+    """
+    try:
+        import sys as _s2
+        _s2.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from switch_builder import theme_top12 as _tt12
+        _t, _src = _tt12(2)
+        if _t:
+            return list(_t)
+        print("[tranche_ladder] theme_top12 为空（源=%s）⇒ 回退 fusion ✓" % _src, flush=True)
+    except Exception as _e_tt:
+        print("[tranche_ladder] 复用布腿器主题源失败(回退 fusion ✓): %s" % str(_e_tt)[:70], flush=True)
     ml = _load("main_line_state.json", {})
     fus = ml.get("fusion") or {}
     rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
-    return [k for k, _ in rank[:2]]
+    if rank:
+        return [k for k, _ in rank[:2]]
+    # ★ 再回退：用当日主线 + candidates（同文件里**确实存在**的字段 ✓）
+    cand = [str(x) for x in (ml.get("candidates") or []) if x]
+    _ml = str(ml.get("main_line") or "")
+    out = ([_ml] if _ml else []) + [c for c in cand if c != _ml]
+    if out:
+        print("[tranche_ladder] fusion 缺失 ⇒ 回退 candidates ✓：%s" % out[:2], flush=True)
+    return out[:2]
 
 
 def wave_operation():
@@ -134,6 +162,16 @@ def tier_for(symbol):
         themes = symbol_themes(symbol)
     except Exception:
         themes = []
+    if not top12:
+        # ★ fail-open（2026-10-13 ✓）：候选清单**空**说明数据缺失 ✗ ⇒ 不许静默拦光所有建仓 ✗
+        try:
+            from app.services import alert_hub as _ah3
+            _ah3.push_qq("🟠 tranche_ladder 主线候选为空 ⇒ 试仓档门**放行**（fail-open ✓，"
+                         "请查 main_line_state.fusion 是否还在写 ✗）")
+        except Exception:
+            pass
+        print("[tranche_ladder] 主线候选为空 ⇒ 放行（fail-open ✓）", flush=True)
+        return "trial", "主线候选缺失 ⇒ fail-open 放行(试仓档)"
     if not themes or not (set(themes) & set(top12)):
         return "none", f"不在主线候选TOP1∪TOP2(themes={themes})"
     stage = _stage_of(symbol)
