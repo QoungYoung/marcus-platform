@@ -528,6 +528,36 @@ def _cond_fail_record(kind: str, op: str, tag: str, decision: str, where: str) -
         pass
 
 
+def cond_buy_wave_verdict(kind: str = "low_buy", as_of: Optional[str] = None) -> Dict[str, Any]:
+    """★ 2026-10-13（用户：「这个要改成 agent 确认，我可没收到任何确认通知」✓）：
+
+    把 `cond_buy_wave_block` 的"拦"细分成三种**处置**（调用方据此分流 ✓）：
+      · `auto`          —— 放行（自动执行 ✓）
+      · `agent_confirm` —— **浪型 side（观望/调仓换股）** ⇒ 不自动执行 ✗，**送 agent 确认** ✓
+        （原先等于"人工确认"✗：既不通知、也永不执行 ✗ —— 实测生产 `[WAVE-COND] …side⇒买类需人工确认`
+          连续拦了 24 次（SH600025 2026-10-13）而用户**没收到任何通知** ✗）
+      · `block`         —— 硬拦（defense/exit/t_only 建仓类/FAIL-CLOSE ✓）
+
+    开关 `WOLF_WAVE_SIDE_AGENT_CONFIRM`（**默认 1 = 开启 agent 确认 ✓**；置 0 回到旧行为：直接拦 ✗）
+    """
+    blocked, why = cond_buy_wave_block(kind=kind, as_of=as_of)
+    op = ""
+    try:
+        _asof = as_of or sim_day8() or None
+        w = _wave_from_sandbox_day(str(_asof or "")) or ensure_wave(as_of=_asof)
+        op = str((w or {}).get("operation") or "").strip().lower()
+    except Exception:
+        op = ""
+    if not blocked:
+        mode = "auto"
+    elif op == "side" and str(os.getenv("WOLF_WAVE_SIDE_AGENT_CONFIRM", "1")).strip().lower() \
+            not in ("0", "false", "no"):
+        mode = "agent_confirm"
+    else:
+        mode = "block"
+    return {"blocked": bool(blocked), "mode": mode, "op": op, "why": str(why or "")}
+
+
 def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
     """条件单买入是否被**浪型**拦下 ⇒ `(blocked: bool, why: str)` ✓
 

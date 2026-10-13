@@ -5192,9 +5192,57 @@ class TMonitor:
                         print("[TMonitor] 行业排除闸拦截 %s %s: %s" % (symbol, trigger_kind, str(_exwhy)[:110]), flush=True)
                         t_db.update_trigger_status(trig_id, "blocked", reason="[EXCL] " + str(_exwhy)[:200])
                     elif _wgb:
-                        exec_ok = False
-                        print("[TMonitor] 条件单浪型闸拦截 %s %s: %s" % (symbol, trigger_kind, str(_wgwhy)[:110]), flush=True)
-                        t_db.update_trigger_status(trig_id, "blocked", reason="[WAVE-COND] " + str(_wgwhy)[:200])
+                        # ★ 2026-10-13（用户：「改成 agent 确认，我没收到任何确认通知」✓）：
+                        #   浪型 `side`（观望/调仓换股）**不自动执行** ✓ —— 但旧行为等于"永不执行 + 不通知" ✗
+                        #   ⇒ 现改为**送 agent 确认** ✓（并把请求推 QQ ✓，让用户能看到 ✓）
+                        _vfm = "block"
+                        try:
+                            from app.services.wave_gate import cond_buy_wave_verdict as _cwv
+                            _vf = _cwv(trigger_kind) or {}
+                            _vfm = str(_vf.get("mode") or "block")
+                        except Exception as _ecwv:
+                            _vfm = "block"
+                            print("[TMonitor] 浪型 verdict 判定异常(按硬拦 ✓): %s" % str(_ecwv)[:70], flush=True)
+                        if _vfm == "agent_confirm":
+                            exec_ok = False          # 仍不走"条件单自动执行" ✓，但改送 agent ✓
+                            print("[TMonitor] 浪型 side ⇒ **转 agent 确认** %s %s: %s"
+                                  % (symbol, trigger_kind, str(_wgwhy)[:100]), flush=True)
+                            t_db.update_trigger_status(
+                                trig_id, "pending",
+                                reason="[WAVE-CONFIRM] " + str(_wgwhy)[:180] + " ⇒ 已送 agent 确认 ✓")
+                            try:
+                                from app.services import alert_hub as _ah2
+                                _ah2.push_qq("🟡 浪型 side ⇒ 需 agent 确认（原先「人工确认」既不通知也不执行 ✗）\n"
+                                             "标的 %s｜腿型 %s｜报价 %s\n%s"
+                                             % (symbol, trigger_kind,
+                                                str((quote or {}).get("current") or "-"), str(_wgwhy)[:160]))
+                            except Exception as _eqq:
+                                print("[TMonitor] 确认通知发送失败: %s" % str(_eqq)[:60], flush=True)
+                            try:
+                                import threading as _th
+                                from app.services.t_bridge import wake_agent as _wa
+
+                                def _wake_side_confirm(_tid=trig_id, _sym=symbol, _kind=trigger_kind):
+                                    try:
+                                        _trg = t_db.get_trigger(int(_tid)) if hasattr(t_db, "get_trigger") else None
+                                    except Exception:
+                                        _trg = None
+                                    _trg = _trg or {"id": _tid, "symbol": _sym, "event_type": _kind,
+                                                    "trigger_kind": _kind,
+                                                    "current": (quote or {}).get("current")}
+                                    try:
+                                        _wa(_trg, {"note": "浪型 side ⇒ agent 确认"})
+                                    except Exception as _ew:
+                                        print("[TMonitor] 转 agent 确认失败: %s" % str(_ew)[:80], flush=True)
+                                _th.Thread(target=_wake_side_confirm, daemon=True).start()
+                            except Exception as _eth:
+                                print("[TMonitor] 转 agent 确认线程启动失败: %s" % str(_eth)[:70], flush=True)
+                        else:
+                            exec_ok = False
+                            print("[TMonitor] 条件单浪型闸拦截 %s %s: %s"
+                                  % (symbol, trigger_kind, str(_wgwhy)[:110]), flush=True)
+                            t_db.update_trigger_status(trig_id, "blocked",
+                                                       reason="[WAVE-COND] " + str(_wgwhy)[:200])
                     elif _qb:
                         exec_ok = False
                         print('[TMonitor] 质地闸拦截 %s %s: %s' % (symbol, trigger_kind, str(_qbwhy)[:110]), flush=True)
