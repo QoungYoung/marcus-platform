@@ -123,12 +123,39 @@ def local_enabled() -> bool:
     return str(os.getenv("WOLF_VOLUME_GATE_LOCAL", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _data_root() -> str:
+    """本地数据根（`data/` 目录）：`DATA_DIR` → `MARCUS_WORKSPACE/data` → 仓库根 → `/app/data`。
+
+    2026-10-13 事故：原实现用 `dirname³(__file__)` 推"仓库根"，容器里代码挂在
+    `/app/app/services/…`（**没有 `backend/` 这一层**）⇒ 推到 `/` ⇒ bars 库被拼成
+    `/data/_bt_full/bars.sqlite`（容器无 `/data`）⇒ sqlite `unable to open database file`；
+    指数 CSV 又被拼成 `/data/指数数据/…` ⇒ FileNotFoundError。本地 checkout 是
+    `<repo>/backend/app/services/…` 才恰好算得对 ⇒ 只在容器/生产暴露。
+    注意：向上找不能只看 `data/`（`backend/data` 这类运行时目录也存在），必须同时有
+    `jobs/`+`apps/` 才算仓库根。
+    """
+    env = str(os.environ.get("DATA_DIR", "")).strip()
+    if env:
+        return env
+    ws = str(os.environ.get("MARCUS_WORKSPACE", "")).strip()
+    if ws:
+        return os.path.join(ws, "data")
+    fallback = ""
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        d = os.path.dirname(d)
+        if os.path.isdir(os.path.join(d, "data")):
+            if os.path.isdir(os.path.join(d, "jobs")) and os.path.isdir(os.path.join(d, "apps")):
+                return os.path.join(d, "data")
+            fallback = fallback or os.path.join(d, "data")
+    return fallback or "/app/data"
+
+
 def _bars_db() -> str:
     p = os.getenv("BT_BARS_DB", "")
     if p:
         return p
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(os.path.dirname(root), "data", "_bt_full", "bars.sqlite")
+    return os.path.join(_data_root(), "_bt_full", "bars.sqlite")
 
 
 def market_amount_local(days: Sequence[str], bars_db: str = "") -> Dict[str, float]:
@@ -158,8 +185,7 @@ def market_amount_local(days: Sequence[str], bars_db: str = "") -> Dict[str, flo
 
 def index_closes_local(n: int = 10, csv_path: str = "") -> List[float]:
     """上证最近 n 个交易日收盘（本地 CSV `指数数据/index_daily/000001.SH.csv`，只取 ≤ 当日）。"""
-    # bars 默认在 <repo>/data/_bt_full/bars.sqlite ⇒ data 根 = 上两级
-    _data = os.path.dirname(os.path.dirname(_bars_db()))
+    _data = _data_root()
     p = csv_path or os.path.join(_data, "指数数据", "index_daily", "000001.SH.csv")
     rows: List[tuple] = []
     try:
@@ -423,6 +449,9 @@ def run(days: int = 10, save: bool = True, series: Optional[Dict[str, float]] = 
                 path = index_closes_local(10)
                 close = path[-1] if path and close is None else close
             if not series:
+                print("[volume_gate] 本地 bars 序列为空 → 查 BT_BARS_DB / data/_bt_full/bars.sqlite；"
+                      "生产环境 WOLF_VOLUME_GATE_LOCAL 应为 0（该开关是回测 pins，误留生产会让本任务"
+                      "只走本地回测数据而必失败）", flush=True)
                 return {"ok": False, "reason": "local_series_empty"}
             res = evaluate(series, close if close is not None else index_close(), path=path)
             res["close"] = close
