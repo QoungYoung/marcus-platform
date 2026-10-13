@@ -1827,6 +1827,21 @@ def _wave_hold_action() -> str:
     return ""
 
 
+def _falling_gate_exempt(trigger_kind) -> bool:
+    """★ 2026-10-13（用户「做吧」）：**B/C 买入时点闸的豁免名单**（默认空 ⇒ 行为逐位不变 ✓）
+
+    依据（`scripts/dip_buy_deep.py` 离线实测 ✓）：被 `[COND-TIMING]` 拦下的买点，若按 `quote_price` 买入，
+      · `wolf_ambush_buy` 46 笔：**当日收盘 +1.34%／次日收盘 +7.76%** ✓
+      · `trend_break_buy` 18 笔：当日 +0.66%／次日 +2.22% ✓
+      · 且被拦触发的**位置均值 0.18～0.25（低位占比 67～80%）** ✗ ⇒ 疑**误拦低位好点** ✓
+    ⇒ 提供名单开关交由**对照回测**定论 ✓（粗口径局限：未含 T 腿止盈/止损逻辑 ✗、被拦者无反事实成交价 ✗）
+    env：`WOLF_FALLING_GATE_EXEMPT_LEGS=wolf_ambush_buy,trend_break_buy`（逗号分隔 ✓）
+    """
+    raw = os.getenv("WOLF_FALLING_GATE_EXEMPT_LEGS", "") or ""
+    kinds = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    return bool(kinds) and str(trigger_kind or "").strip().lower() in kinds
+
+
 def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     condition_id: Optional[int] = None,
                     trigger_id: Optional[int] = None,
@@ -2082,7 +2097,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     #   起点个案：环旭电子 601231 2026-03-03 —— 09:40 的 `wolf_zheng_t_buy` 因理由含「未跌破止损」
     #   被换手闸整段旁路（见 t_turnover 的 A 修复），买在 47.39（当日最高 48.50）⇒ 当日收跌停 43.58。
     #   数据源与 C2′/C2″ 同一套分钟档（`intraday_crush`）；取不到 ⇒ fail-open。
-    if str(side).lower() in ("buy", "买入"):
+    if str(side).lower() in ("buy", "买入") and not _falling_gate_exempt(kind):
         try:
             try:
                 import intraday_crush as _icg

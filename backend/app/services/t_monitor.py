@@ -5126,7 +5126,9 @@ class TMonitor:
                         except Exception as _epcq:
                             _pcq = None
                             print("[TMonitor] 条件单买入时点闸 pre_close 解析失败(按 None 继续 ✓): %s" % str(_epcq)[:60], flush=True)
-                        _cond_tb = intraday_timing_blocked(symbol, True, pre_close=_pcq)
+                        # ★ 豁免名单（默认空 ✓）：命中则**跳过** B/C 闸 ⇒ 交给对照回测定论 ✓
+                        _cond_tb = (False if _falling_gate_exempt(trigger_kind)
+                                    else intraday_timing_blocked(symbol, True, pre_close=_pcq))
                     # ★★ 账本 §9.746 ✓（用户 2026-10-07：「**条件命中自动执行也要过波浪浪型检查**」✓）：
                     #   本分支（条件单自动执行 ✓）原先**完全不经过浪型闸** ✗ ⇒ 实测 `t_only` 那几天
                     #   仍成交 `trend_break_buy`（趋势突破建仓 ✗ = 狼大说的"新建主升" ✗）：
@@ -6337,6 +6339,21 @@ def cond_window_ok(cond) -> bool:
     except Exception as _e_w:
         print("[TMonitor] 时间窗判定失败(放行 ✓): %s" % str(_e_w)[:70], flush=True)
         return True
+
+
+def _falling_gate_exempt(trigger_kind) -> bool:
+    """★ 2026-10-13（用户「做吧」）：**B/C 买入时点闸的豁免名单**（默认空 ⇒ 行为逐位不变 ✓）
+
+    依据（`scripts/dip_buy_deep.py` 离线实测 ✓）：被 `[COND-TIMING]` 拦下的买点，若按 `quote_price` 买入，
+      · `wolf_ambush_buy` 46 笔：**当日收盘 +1.34%／次日收盘 +7.76%** ✓
+      · `trend_break_buy` 18 笔：当日 +0.66%／次日 +2.22% ✓
+      · 且被拦触发的**位置均值 0.18～0.25（低位占比 67～80%）** ✗ ⇒ 疑**误拦低位好点** ✓
+    ⇒ 提供名单开关交由**对照回测**定论 ✓（粗口径局限：未含 T 腿止盈/止损逻辑 ✗、被拦者无反事实成交价 ✗）
+    env：`WOLF_FALLING_GATE_EXEMPT_LEGS=wolf_ambush_buy,trend_break_buy`（逗号分隔 ✓）
+    """
+    raw = os.getenv("WOLF_FALLING_GATE_EXEMPT_LEGS", "") or ""
+    kinds = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    return bool(kinds) and str(trigger_kind or "").strip().lower() in kinds
 
 
 def intraday_timing_blocked(symbol: str, is_buy: bool, pre_close: Optional[float] = None) -> bool:
