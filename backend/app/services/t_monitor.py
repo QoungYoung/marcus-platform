@@ -5198,7 +5198,7 @@ class TMonitor:
                         _vfm = "block"
                         try:
                             from app.services.wave_gate import cond_buy_wave_verdict as _cwv
-                            _vf = _cwv(trigger_kind) or {}
+                            _vf = _cwv(trigger_kind, symbol=symbol) or {}
                             _vfm = str(_vf.get("mode") or "block")
                         except Exception as _ecwv:
                             _vfm = "block"

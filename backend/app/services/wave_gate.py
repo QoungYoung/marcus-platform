@@ -366,7 +366,10 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
 
 # 腿型分类（按 trigger_kind ✓；命中即归类 ✓）
 _T_LEG_KEYS = ("wolf_zheng_t_buy", "zheng_t", "t_buy", "sell_then_buy_back", "t_low_buy")
-_BUILD_LEG_KEYS = ("trend_break_buy", "wolf_build", "buy_253", "buy_254", "build")
+# ★ 2026-10-13：补入**低吸建仓**类腿型 ✓（原先 `low_buy` 落进 other ⇒ 浪型软处理覆盖不到 ✗；
+#   归类本身不改变行为 ✗：SOFT=0 时 t_only/defense 对 build 与 other 都仍是"拦" ✓）
+_BUILD_LEG_KEYS = ("trend_break_buy", "wolf_build", "buy_253", "buy_254", "build",
+                   "low_buy", "dip_buy", "pullback_buy")
 _AMBUSH_LEG_KEYS = ("ambush",)
 
 
@@ -528,7 +531,7 @@ def _cond_fail_record(kind: str, op: str, tag: str, decision: str, where: str) -
         pass
 
 
-def cond_buy_wave_verdict(kind: str = "low_buy", as_of: Optional[str] = None) -> Dict[str, Any]:
+def cond_buy_wave_verdict(kind: str = "low_buy", as_of: Optional[str] = None, symbol: str = "") -> Dict[str, Any]:
     """★ 2026-10-13（用户：「这个要改成 agent 确认，我可没收到任何确认通知」✓）：
 
     把 `cond_buy_wave_block` 的"拦"细分成三种**处置**（调用方据此分流 ✓）：
@@ -540,7 +543,7 @@ def cond_buy_wave_verdict(kind: str = "low_buy", as_of: Optional[str] = None) ->
 
     开关 `WOLF_WAVE_SIDE_AGENT_CONFIRM`（**默认 1 = 开启 agent 确认 ✓**；置 0 回到旧行为：直接拦 ✗）
     """
-    blocked, why = cond_buy_wave_block(kind=kind, as_of=as_of)
+    blocked, why = cond_buy_wave_block(kind=kind, as_of=as_of, symbol=symbol)
     op = ""
     try:
         _asof = as_of or sim_day8() or None
@@ -558,7 +561,108 @@ def cond_buy_wave_verdict(kind: str = "low_buy", as_of: Optional[str] = None) ->
     return {"blocked": bool(blocked), "mode": mode, "op": op, "why": str(why or "")}
 
 
-def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
+def wave_scope() -> str:
+    """★ 2026-10-13（用户拍板 ✓）：浪型判定的**范围** —— `index`（默认，现状 ✓）| `mainline`（主线板块 ✓）
+
+    两个浪型 ✓：
+      · **大盘浪型** = `wave_state`（level/sub_level/operation ✓）—— 现有实现 ✓
+      · **主线板块浪型** = 当日主线/次主线主题的**结构确认档**（`trend_confirm_<d>_long.json`
+        的 `themes[].track_a.stage` ✓：not_confirmed / suspect / confirmed ✓）
+    口径依据（原话 ✓）：2025-06-05「…但是**主线板块筑底行情**…**急杀可以买，缓跌不买**」✓；
+      2016-04-13「**看个股 不要看指数**」✓ —— 板块级为主判据 ✓
+    """
+    return str(os.getenv("WOLF_WAVE_SCOPE", "index")).strip().lower()
+
+
+def _mainline_themes(as_of: Optional[str] = None):
+    """当日主线/次主线（方向层口径 ✓，与布腿器同源 ✓）"""
+    try:
+        p = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "main_line_state.json")
+        with open(p, encoding="utf-8") as f:
+            m = json.load(f)
+        ms = m.get("mainline_select") or {}
+        out = [t for t in (ms.get("mainline"), ms.get("second"), m.get("main_line")) if t]
+        seen = []
+        for t in out:
+            if t not in seen:
+                seen.append(t)
+        return seen
+    except Exception:
+        return []
+
+
+def theme_stage(theme: str, as_of: Optional[str] = None) -> str:
+    """主题的**结构确认档**（track_a 优先、缺失用 track_b ✓，`trend_confirm_<d>_long.json` ✓）"""
+    if not theme:
+        return ""
+    d8 = "".join(ch for ch in str(as_of or sim_day8() or "") if ch.isdigit())[:8]
+    for cand in (os.path.join(os.environ.get("DATA_DIR", "/app/data"), "trend_confirm_%s_long.json" % d8),
+                 os.path.join(os.environ.get("DATA_DIR", "/app/data"), "trend_confirm_%s.json" % d8)):
+        try:
+            with open(cand, encoding="utf-8") as f:
+                tr = json.load(f)
+        except Exception:
+            continue
+        for t in (tr.get("themes") or []):
+            if t.get("theme") == theme:
+                return str(((t.get("track_a") or {}).get("stage"))
+                           or ((t.get("track_b") or {}).get("stage")) or "")
+    return ""
+
+
+def symbol_mainline_stage(symbol: str, as_of: Optional[str] = None):
+    """该票是否属于当日主线/次主线主题，及其结构档 ⇒ `(theme, stage)`；不属于 ⇒ `("", "")` ✓"""
+    if not symbol:
+        return "", ""
+    ths = _mainline_themes(as_of)
+    if not ths:
+        return "", ""
+    try:
+        import sys as _s
+        _s.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "apps", "main_line"))
+        from sector_g3 import symbol_themes
+        mine = symbol_themes(symbol) or []
+    except Exception:
+        mine = []
+    if not mine:
+        try:
+            from apps.main_line.sector_g3 import symbol_themes as _st2
+            mine = _st2(symbol) or []
+        except Exception:
+            mine = []
+    for t in ths:
+        if t in mine:
+            return t, theme_stage(t, as_of)
+    return "", ""
+
+
+def wave_size_mult(op: str, stage: str = "") -> float:
+    """**降档系数**（浪型不再一票否决 ⇒ 改用仓位降档 ✓）
+
+    出处 ✓：
+      · 大盘 `defense`（2025-06-05「主线板块筑底行情」以外的防御段 ✓；2016-04-29「预期大盘是跌…不用买进」✓）
+        ⇒ 0.5 折（**代理值** ✗ 无语料数字 ⇒ 标注为代理 ✓）
+      · 大盘 `t_only`（「只做T、不追不新建主升」✓）⇒ 0.7 折（同上，代理 ✓）
+      · 板块结构 `not_confirmed`（无确认 ⇒ 不确认不重仓 ✓）⇒ 再 ×0.7（代理 ✓）
+      · 板块 `confirmed` ⇒ ×1.0 ✓（「主线板块筑底行情…可以买」✓）
+    开关 `WOLF_WAVE_SOFT_MULT`（默认 1 = 启用降档 ✓；置 0 ⇒ 恒 1.0 ✓）
+    """
+    if str(os.getenv("WOLF_WAVE_SOFT_MULT", "1")).strip().lower() in ("0", "false", "no"):
+        return 1.0
+    m = 1.0
+    _o = str(op or "").lower()
+    if _o == "defense":
+        m *= 0.5
+    elif _o in ("t_only", "side"):
+        m *= 0.7
+    _s = str(stage or "").lower()
+    if _s == "not_confirmed":
+        m *= 0.7
+    return round(m, 4)
+
+
+def cond_buy_wave_block(kind: str, as_of: Optional[str] = None, symbol: str = "") -> tuple:
     """条件单买入是否被**浪型**拦下 ⇒ `(blocked: bool, why: str)` ✓
 
     · 开关关（默认 ✓）⇒ 恒 `(False, "")` ✓（生产零影响 ✓）
@@ -595,6 +699,30 @@ def cond_buy_wave_block(kind: str, as_of: Optional[str] = None) -> tuple:
         return False, ""
     if op == "build":
         return False, ""
+    # ── ★ 2026-10-13（用户拍板 ✓）：浪型对「建仓类」**不再一票否决** ⇒ 改为与 B 闸同口径 + 仓位降档 ✓
+    #    开关 `WOLF_WAVE_BUILD_SOFT`（默认 0 ✓ = 现状零影响 ✓；回测/灰度置 1 ✓）
+    #    两个浪型（scope ✓）：index（大盘 ✓）/ mainline（主线板块 ✓）
+    _soft = str(os.getenv("WOLF_WAVE_BUILD_SOFT", "0")).strip().lower() in ("1", "true", "yes", "on")
+    _cls = classify_buy_leg(kind)
+    if _soft and _cls in ("build", "ambush") and op != "exit":
+        _scope = wave_scope()
+        _th, _st = symbol_mainline_stage(symbol, _asof) if _scope == "mainline" else ("", "")
+        # ① 主线板块口径：属当日主线/次主线且结构**已确认** ⇒ 放行建仓 ✓
+        #    依据：2025-06-05「主线板块筑底行情…急杀可以买，缓跌不买」✓（时点仍由 B 闸把关 ✓）
+        if _th and str(_st).lower() == "confirmed":
+            _mult = wave_size_mult(op, _st)
+            return False, ("[WAVE-SCOPE=mainline] 主线板块 %s 结构=confirmed ⇒ 建仓放行 ✓"
+                           "（降档 ×%.2f；时点由 B 闸「不在下跌中买」把关 ✓；大盘档 %s/%s·%s）"
+                           % (_th, _mult, tag, op, _wd))
+        # ② t_only 下**追高/主升**类仍拦 ✓（语料：只做T、**不追不新建主升** ✓）
+        if op == "t_only" and _cls == "build" and any(x in str(kind or "").lower() for x in ("trend_break", "breakout", "new_high")):
+            return True, ("浪型 %s·t_only ⇒ 「只做T、不追**不新建主升**」✓，本腿（%s）属主升/突破 ✗ "
+                          "不放行（档 date=%s）" % (tag, str(kind)[:28], _wd))
+        # ③ 其余建仓/埋伏 ⇒ 放行但**降档** ✓（大盘 defense/t_only 只压仓位 ✓，不再否定 ✓）
+        _mult = wave_size_mult(op, _st)
+        return False, ("[WAVE-SOFT] 大盘档 %s·%s ⇒ 建仓**放行但降档 ×%.2f** ✓"
+                       "（原为硬拦 ✗；改按 B 闸「不在下跌中买」把关 ✓；板块结构=%s；档 date=%s）"
+                       % (tag, op, _mult, _st or "-", _wd))
     if op in ("defense", "exit"):
         return True, ("浪型 %s·%s ⇒ 建仓类不放行 ✓（狼大口径：%s，档 date=%s）"
                       % (tag, op, "防御不建仓" if op == "defense" else "兑现降仓", _wd))
