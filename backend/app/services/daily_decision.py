@@ -139,6 +139,11 @@ def _norm_date8(v: Any) -> Optional[str]:
 
 
 def _days_between(a8: Optional[str], b8: Optional[str]) -> Optional[int]:
+    # ★ 2026-10-13（用户收到 ALERT ✗）：入口先判空 —— 缺日期时直接返回 None ✓
+    #   原先直接 strptime(None) ⇒ 抛异常 ⇒ 虽被 except 兜住（行为不变 ✓），
+    #   但 alert_hub 会把"被捕获的异常"也推给你（实测告警：`strptime() argument 1 must be str, not None` ✗）
+    if not a8 or not b8:
+        return None
     try:
         import datetime as _dt
         a = _dt.datetime.strptime(a8, "%Y%m%d").date()
