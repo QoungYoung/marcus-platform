@@ -39,9 +39,12 @@ REASON_MAP = [
     ("可卖 0", "allow", "同上 ✓"),
     ("裸空", "allow", "同上 ✓"),
     ("as-of", "allow", "as-of 快照显示持仓/可卖不足 ⇒ 同上 ✓"),
-    ("底仓 floor", "unclear", "❓台账自陈「我们取 50% → 我们的代理」✗"),
-    ("floor", "unclear", "❓同上 ✗"),
-    ("收敛", "unclear", "❓底仓 floor 收敛（同上）✗"),
+    # ★ 2026-10-13 复核更正：底仓 floor = **部分有据**（原则有 ✓ / 比例与"绝对不可减"是代理 ✗）
+    ("底仓floor", "partial", "「底仓不动」有原话 ✓（2026-08-04「做T仓位和底仓的区别」）；"
+                           "**50% 比例**与「底仓不可减」是**我们的代理** ✗（台账自陈）"
+                           "（已有亏损豁免开关 WOLF_MA5_EXIT / WOLF_BASE_FLOOR_LOSS_EXEMPT ✓ 部分修正）"),
+    ("floor", "partial", "同上 ✓/✗"),
+    ("收敛", "partial", "同上 ✓/✗"),
     # ② 浪型/时点/时段/上影线（都有出处 ✓）
     ("浪型", "allow", "wave_agent operation 表（t_only/defense/exit ⇒ 买类拦 ✓）"),
     ("COND-TIMING", "allow", "2025-06-05「急杀可以买，缓跌不买」✓（B 闸=不在下跌中买 ✓）"),
@@ -55,7 +58,9 @@ REASON_MAP = [
     ("本轮已", "allow", "G6 日额度（用户拍板口径 ✓）"),
     ("买入1笔、卖出2笔", "allow", "G6 日额度 ✓"),
     # ④ 待核（找不到语料 ✗）
-    ("加仓口径", "unclear", "❓未找到语料（待核 ✗）"),
+    # ★ 复核更正：加仓口径 **有据 ✓**（reason 里自带原话+日期 ✓，先前是我的归类器没解析 ✗）
+    ("加仓口径", "allow", "狼大 2026-04-10「怕忍不住买回来…找低位的线挂进去 挂远一点」✓ / "
+                        "2025-04-03「冲上去一定不能追」✓ / 2026-06-15「第一根加一半+第二根尾盘打满，之后不再加」✓"),
     ("同轮累计", "unclear", "❓未找到语料（待核 ✗）"),
     ("下去不补", "unclear", "❓未找到语料（待核 ✗）"),
     ("买腿非低吸", "unclear", "❓未找到语料（待核 ✗）"),
@@ -127,11 +132,14 @@ def main():
     print("%-9s %-22s %6s  %s" % ("归属", "理由", "条数", "语料 / 说明"))
     for (v, pat), a in sorted(agg.items(), key=lambda x: -x[1]["n"]):
         print("%-9s %-22s %6d  %s" % (v, pat, a["n"], a["src"][:78]))
+    part = sum(a["n"] for (v, _p), a in agg.items() if v == "partial")
     ok = sum(a["n"] for (v, _p), a in agg.items() if v == "allow")
     unc = sum(a["n"] for (v, _p), a in agg.items() if v == "unclear")
     brk = sum(a["n"] for (v, _p), a in agg.items() if v == "broken")
-    print("\n⇒ 拦截合计 %d：**有语料依据 %d（%.0f%%）** ✓ ／ 待核 %d（%.0f%%）✗ ／ 系统故障 %d（%.0f%%）✗"
-          % (tot, ok, 100.0 * ok / max(1, tot), unc, 100.0 * unc / max(1, tot), brk, 100.0 * brk / max(1, tot)))
+    print("\n⇒ 拦截合计 %d：**有语料依据 %d（%.0f%%）** ✓ ／ **部分有据(原则✓/比例✗) %d（%.0f%%）** ✗ ／ "
+          "待核 %d（%.0f%%）✗ ／ 系统故障 %d（%.0f%%）✗"
+          % (tot, ok, 100.0 * ok / max(1, tot), part, 100.0 * part / max(1, tot),
+             unc, 100.0 * unc / max(1, tot), brk, 100.0 * brk / max(1, tot)))
     print("\n=== ③ AI 侧（做T唤醒决策，单独计 ✓ 不与系统拦截混算 ✗）===")
     n = sum(agent.values())
     print("  %s ⇒ exec %.0f%% / wait+abandon %.0f%% / wake_failed %.0f%%"
