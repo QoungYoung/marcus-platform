@@ -52,9 +52,11 @@ def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
     （session 含 backtest）一律不推 ✓。
 
     防刷屏（必须做：`alert_hub.push_qq` 是裸发送，没有 note() 那套去重/限流 ✓）：
-      · 同 (标的, 动作) 在 `WOLF_AI_DECISION_QQ_DEDUP_SEC`（默认 3600s）内只推一条
+      · 腿型静音名单 `WOLF_AI_DECISION_QQ_SKIP_KINDS`（默认 `wolf_dao_t_sell`）
+        —— 用户 2026-10-14「AI 裁决太多了，wolf_dao_t_sell 不要通知我」✓
+      · 同 (标的, 动作, 腿型) 在 `WOLF_AI_DECISION_QQ_DEDUP_SEC`（默认 3600s）内只推一条
         —— 实测 2026-10-08 单日 86 条 ai_abandon（同一标的反复触发）✗
-      · 每小时最多 `WOLF_AI_DECISION_QQ_MAX_PER_HOUR` 条（默认 8），超限只推一条提示
+      · 每小时最多 `WOLF_AI_DECISION_QQ_MAX_PER_HOUR` 条（默认 5），超限只推一条提示
       · `WOLF_AI_DECISION_QQ=0` 整体关闭 ✓
     """
     try:
@@ -65,6 +67,13 @@ def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
         _a = str(action or "")
         if _a == "exec" and str(status or "").lower() not in ("rejected", "error"):
             return
+        # ★ 2026-10-14（用户：「AI 裁决太多了，wolf_dao_t_sell 不要通知我」✓）：
+        #   腿型级静音名单（逗号分隔，`WOLF_AI_DECISION_QQ_SKIP_KINDS`，默认道氏T卖）。
+        #   这些腿型的裁决只落库（t_ai_actions）不推 QQ ✓；要加腿型直接往 env 里加 ✓。
+        _skip = {x.strip().lower() for x in str(os.getenv(
+            "WOLF_AI_DECISION_QQ_SKIP_KINDS", "wolf_dao_t_sell")).split(",") if x.strip()}
+        if str(event_type or "").strip().lower() in _skip:
+            return
         _icon = {"exec": "🟢", "wait": "⏸️", "abandon": "🚫", "update_condition": "✏️"}.get(_a, "ℹ️")
         _head = {"exec": "AI 裁决：执行被拒", "wait": "AI 裁决：等待（本次不接）",
                  "abandon": "AI 裁决：放弃", "update_condition": "AI 裁决：调整条件"}.get(_a, "AI 裁决")
@@ -74,9 +83,9 @@ def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
         now = time.time()
         try:
             _dedup = float(os.getenv("WOLF_AI_DECISION_QQ_DEDUP_SEC", "3600") or 3600)
-            _cap = int(os.getenv("WOLF_AI_DECISION_QQ_MAX_PER_HOUR", "8") or 8)
+            _cap = int(os.getenv("WOLF_AI_DECISION_QQ_MAX_PER_HOUR", "5") or 5)
         except Exception:
-            _dedup, _cap = 3600.0, 8
+            _dedup, _cap = 3600.0, 5
         _key = "%s|%s|%s" % (symbol or "?", _a, event_type or "-")
         with _DECISION_QQ_LOCK:
             if now - float(_DECISION_QQ_SEEN.get(_key, 0) or 0) < _dedup:
