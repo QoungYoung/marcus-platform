@@ -86,6 +86,21 @@ def zheng_t_buy_quote(quote, prev_days):
     return bool(ok), '日内回撤%.1f%%%s 量比%.2f 振幅%.1f%%' % (dd, ('/触前低' if hit_prev else ''), (vol/avg_vol if avg_vol else 0), amp)
 
 
+def _session_open_minutes(now=None):
+    """当日**已开盘的连续交易分钟**（240 分钟制 ✓，与 `t_monitor.calc_volume_ratio_at` 同口径 ✓）。"""
+    try:
+        import datetime as _d
+        n = now or _d.datetime.now()
+        hm = n.hour * 100 + n.minute
+        if 930 <= hm <= 1130:
+            return (n.hour - 9) * 60 + n.minute - 30
+        if 1300 <= hm <= 1500:
+            return 120 + (n.hour - 13) * 60 + n.minute
+    except Exception:
+        return 0
+    return 0
+
+
 def defensive_t_reduce_quote(quote, prev_days, wave_op='t_only'):
     """防御性减T(风险/结构驱动, 狼大08-27/09-01): wave∈只做T/末段 且 高位(接近前高/近5日大涨)
     且 (量能不足 或 滞涨(冲高回落)) → 减已持T仓.
@@ -100,7 +115,13 @@ def defensive_t_reduce_quote(quote, prev_days, wave_op='t_only'):
         return False, 'no_quote'
     pvols=[p.get('vol') for p in prev_days if p.get('vol')]
     avg=sum(pvols)/len(pvols) if pvols else 0
-    vol_low = avg>0 and vol <= avg*0.8
+    # ★ §9.862 ✓（2026-10-14 用户「买入卖出过于频繁…排查原因」✓）：量比**先做时段伸缩** ✗
+    #   旧口径把**当日累计量**直接比**前 5 日全天均量** ✗ ⇒ 开盘时必然"量能不足" ✗（恒真 ✓）
+    #   实测 ✓：05-13 09:35 东材这条触发 —— 规则自认 `vr=0.07`（缩量 ✗），而**同一条触发**的
+    #     snapshot 里引擎口径量比 = **3.408**（放量 ✗）；AI 的卖出理由也写"放量破位" ✓
+    #     ⇒ 同一时刻两个口径互相矛盾 ✓，以**引擎同口径**为准 ✓（换手 × 240/已开盘分钟 ÷ 基准 ✓）
+    vol_eff = vol * (240.0 / _session_open_minutes()) if _session_open_minutes() else vol
+    vol_low = avg>0 and vol_eff <= avg*0.8
     fade = high>0 and current < high*0.99
     # 高位门(狼大"接近前高/创高/大涨后短时顶"), 与 dao_t_sell 同口径
     pcloses=[p.get('close') for p in prev_days if p.get('close')]
@@ -109,8 +130,9 @@ def defensive_t_reduce_quote(quote, prev_days, wave_op='t_only'):
     gain=(current/start-1)*100 if start else 0
     high_pos = gain>=10.0 or (prev_high and high>=prev_high*0.97)
     ok = high_pos and vol_low and fade
-    return bool(ok), '高位(近5日gain=%.1f%% 接近前高=%s) 量能不足(vr=%.2f) 滞涨(收/高=%.2f)' % (
-        gain, (prev_high and high>=prev_high*0.97), (vol/avg if avg else 0), (current/high if high else 0))
+    return bool(ok), '高位(近5日gain=%.1f%% 接近前高=%s) 量能不足(vr=%.2f 时段伸缩 ✓；原始累计口径=%.2f) 滞涨(收/高=%.2f)' % (
+        gain, (prev_high and high>=prev_high*0.97), (vol_eff/avg if avg else 0),
+        (vol/avg if avg else 0), (current/high if high else 0))
 
 
 def dao_t_sell_quote(quote, prev_days):

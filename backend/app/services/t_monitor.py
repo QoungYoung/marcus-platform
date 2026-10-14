@@ -1170,6 +1170,16 @@ class TMonitor:
                 return False, ""
         except Exception:
             return False, ""
+        # ★ §9.849 配套 ✓（2026-10-13：只改了选股端 ⇒ 下游这道仍在 build 档误杀 ✗，实测 t52 05-06
+        #   的 trend_break_buy 仍被 [CHASE-POS] 拦 ✓）⇒ 这里补上**同一档位门** ✓：
+        #   `build` 档**不硬拦** ✗（改交"同批排序 + 降档"✓）；仅 t_only/side/defense 生效 ✓
+        try:
+            from app.services.build_position_filter import wave_op as _wop
+            _op_now = _wop()
+        except Exception:
+            _op_now = ""
+        if _op_now in ("", "build") or _op_now not in ("t_only", "side", "defense"):
+            return False, ""
         try:
             _near = abs(float(os.getenv("WOLF_BUILD_NEAR_HIGH_PCT", "0") or 0))
             _gmax = abs(float(os.getenv("WOLF_BUILD_GAIN20_MAX", "0") or 0))
@@ -1655,19 +1665,33 @@ class TMonitor:
             syms = sorted(set(active) | {s for s,t in self._wolf_bought_today if t==today})
             if not syms: return
             quotes = fetch_tencent_quote([_normalize_symbol(s) for s in syms])
+            # ★ §9.862 ✓（2026-10-14 用户「东材一买就卖…买入卖出过于频繁」✓）：档位**写死 `'t_only'`** 是 bug ✗ ——
+            #   规则自带这道门 ✓：`wolf_t_rules.py:94` `wave_op not in ('t_only','side','defense','exit')
+            #   ⇒ 返回 'wave allow build'`（狼大 08-27/09-01：只在只做T/末段触发 ✓，build 档不触发 ✓）。
+            #   写死 ⇒ 门**恒被绕过** ✗。实测 ✓：drabt56 05-13 09:35 东材(SH601208) 在 **build 档**
+            #   （`data/_bt_t56/20260513/wave_state.json` operation=build ✓）被"防御减T"卖出 300 股 ✗，
+            #   而买入是 05-12 14:05 ⇒ 约 17 小时就减仓 ✗（＝用户说的"过于频繁"✓）。
+            #   ⇒ 传**当日真实档位** ✓；取不到档位时**保持旧行为**（t_only ✓）—— 不新造规则 ✓、也不静默关掉风控 ✓
+            try:
+                from app.services.build_position_filter import wave_op as _wop
+                _wave_now = str(_wop() or "").strip().lower()
+            except Exception:
+                _wave_now = ""
+            if not _wave_now:
+                _wave_now = "t_only"
             for sym in syms:
                 q = quotes.get(_normalize_symbol(sym))
                 if not q: continue
                 prev = self._prev_daily(sym, 5)
                 if not prev: continue
-                ok, reason = defensive_t_reduce_quote(q, prev, wave_op='t_only')
+                ok, reason = defensive_t_reduce_quote(q, prev, wave_op=_wave_now)
                 if ok and (sym,'wolf_defensive_t_reduce',today) not in self._wolf_done:
                     self._insert_wolf_trigger(sym,'wolf_defensive_t_reduce',q,reason)
                     self._wolf_done.add((sym,'wolf_defensive_t_reduce',today))
                 # 个股申万行业级防御(行业近高而个股未跟, 泛化非科技) → 独立触发 wolf_defensive_t_reduce_index
                 sym_hi = float(q.get('high') or 0)
                 sym_hi_prev = max([p.get('high') for p in prev if p.get('high')], default=0)
-                iok, ireason = defensive_t_reduce_sw(sym, sym_hi, sym_hi_prev, wave_op='t_only')
+                iok, ireason = defensive_t_reduce_sw(sym, sym_hi, sym_hi_prev, wave_op=_wave_now)
                 if iok and (sym,'wolf_defensive_t_reduce_index',today) not in self._wolf_done:
                     self._insert_wolf_trigger(sym,'wolf_defensive_t_reduce_index',q,ireason)
                     self._wolf_done.add((sym,'wolf_defensive_t_reduce_index',today))

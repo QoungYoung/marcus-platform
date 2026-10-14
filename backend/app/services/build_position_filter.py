@@ -154,30 +154,53 @@ def block_reason(symbol: str, day: Optional[str] = None, price: Optional[float] 
         return ""
     return ""
 
-def _feat_from_bars(db_paths, ts_code, day):
-    """取 (现价=当日收盘, 60日高, 20日涨幅%) —— 只用 ≤ day 的行 ✓（防未来函数 ✗）"""
+def _bars_rows(db_paths, ts_code, day, limit=80, min_rows=21):
+    """取 ≤ day 的日线（**在候选库里选"最新交易日最靠后"的那个** ✓）。
+
+    为什么 ✗（2026-10-14 实测 ✓）：臂目录里的 `mkt_bars_local.db` 只到 **20251231** ✗，
+    但它的行数够（≥21 ✓）⇒ 旧实现**按顺序直接采用第一个够长的库** ✗ ⇒ 05-08 取到的"现价"
+    = **27.09**（2025-12-31 收盘 ✗；真实 05-07 收盘 = 45.16 ✓）
+    ⇒ §9.848 的 near60 排序、§9.861 的乖离分层**全部算在 2025 年的价格上** ✗（结论不可用 ✗）。
+    修法 ✓：所有候选库都读一遍，取 `rows[0]`（最新交易日）**最大**的那个 ✓ —— 同表同列，只换库 ✓。
+    """
     d8 = "".join(ch for ch in str(day or "") if ch.isdigit())[:8]
-    for db in db_paths:
+    _sql = ("select trade_date, close, high from %s where ts_code=? and trade_date<=? "
+            "order by trade_date desc limit ?")
+    _best = None
+    for db in db_paths or []:
         try:
-            cn = sqlite3.connect(db); cur = cn.cursor()
-            rows = list(cur.execute(
-                "select trade_date, close, high from mkt_bars_daily where ts_code=? and trade_date<=? "
-                "order by trade_date desc limit 80", (ts_code, d8)))
-            if not rows:
-                rows = list(cur.execute(
-                    "select trade_date, close, high from bars where ts_code=? and trade_date<=? "
-                    "order by trade_date desc limit 80", (ts_code, d8)))
-            cn.close()
+            cn = sqlite3.connect(db)
         except Exception:
             continue
-        if len(rows) < 21:
+        rows = []
+        for _tbl in ("mkt_bars_daily", "bars"):
+            try:
+                rows = list(cn.execute(_sql % _tbl, (ts_code, d8, int(limit))))
+            except Exception:
+                rows = []
+            if rows:
+                break
+        try:
+            cn.close()
+        except Exception:
+            pass
+        if len(rows) < int(min_rows):
             continue
-        rows = list(reversed(rows))
-        px = float(rows[-1][1] or 0)
-        hi60 = max(float(r[2] or r[1] or 0) for r in rows[-60:])
-        c20 = float(rows[-21][1] or 0)
-        return px, hi60, ((px / c20 - 1) * 100 if c20 else 0.0)
-    return None, None, None
+        if _best is None or str(rows[0][0]) > str(_best[0][0]):
+            _best = (rows, db)
+    return list(_best[0]) if _best else []
+
+
+def _feat_from_bars(db_paths, ts_code, day):
+    """取 (现价=当日收盘, 60日高, 20日涨幅%) —— 只用 ≤ day 的行 ✓（防未来函数 ✗）"""
+    rows = _bars_rows(db_paths, ts_code, day, 80, 21)
+    if not rows:
+        return None, None, None
+    rows = list(reversed(rows))
+    px = float(rows[-1][1] or 0)
+    hi60 = max(float(r[2] or r[1] or 0) for r in rows[-60:])
+    c20 = float(rows[-21][1] or 0)
+    return px, hi60, ((px / c20 - 1) * 100 if c20 else 0.0)
 
 
 def rank_trend_legs(rows, day, k, factor="auto", data_dir=None):
@@ -222,45 +245,45 @@ def rank_trend_legs(rows, day, k, factor="auto", data_dir=None):
             except Exception:
                 continue
         _fac = "near60" if _op == "build" else "g20"
-    # ★ §9.861 ✓（用户 2026-10-14：「前三名一只都没成交…这不是又回去了吗」✓）：
-    #   **分腿型排序** —— 第一层先看"这条腿能不能按**突破价**成交" ✓：
-    #   `trend_channel` 的规则 ✓：**乖离 MA20 > `WOLF_TREND_BIAS_MAX`(=10%)** ⇒ 该腿被挂成
-    #     **回踩价**（`expr_pullback` = MA20×0.95~1.05 ✓，原文「乖离过大…改等它回踩到 MA20 附近再买」✓）
-    #     ⇒ 强势票**几乎不回踩** ⇒ **永不成交** ✗（实测 05-08：排序 top-3 一次买入触发都没有 ✗、
-    #        全窗口成交 0 ✓；而排第 6 的中兴通讯因乖离合格 ⇒ 14:00 就成交 ✓）
-    #   ⇒ 所以排序**必须先分层**（能成交的优先 ✓），同层内再用已标定的强度因子 ✓
+    # ★ §9.862 ✓（2026-10-14 用户「开始修复吧」✓）：**撤掉 §9.861 的"乖离分层"** ✗ —— 它的病因是错的 ✗：
+    #   回测走 `bt_prod_run.py:1309` 的 `trend_channel.expr(level)`，挂的是**突破价** ✓；
+    #   "乖离门 ⇒ 改挂回踩腿（`expr_pullback`）"只存在于 `rotation_switch_arm.py` 那条路径 ✓
+    #   ⇒ 回测腿**从来没有**被挂成回踩价 ✗ ⇒ §9.861 的"分层"治错了病 ✗；
+    #   而且当时看到的"乖离 +14.98%"还是**用 2025-12-31 的旧价**算的 ✗（见 `_bars_rows` ✓）。
+    # ⇒ 只保留**一条**与"能不能成交"直接相关的过滤 ✓：**已过期腿** ——
+    #   买入条件 = `level ≤ 现价 ≤ level×(1+chase)`（`trend_channel.expr` ✓；
+    #   chase 上限 = `WOLF_TREND_CHASE_MAX`，默认 0.03 = +3% ✓）。
+    #   若 cut 日收盘**已经高于上限** ⇒ 当日只剩"深回踩进上限"才可能触发 ✓
+    #   （语料：2025-04-03「冲上去一定不能追」/ 2026-09-03「高开不追」✓）
+    #   实测 ✓：05-08 东材 SH601208 腿 level=39.14、上限 40.31，而 05-07 收盘 **45.16**（+15.4% ✗）
+    #     ⇒ 全天不可能按突破价成交 ✗，却占了一个 top-3 名额 ✗
+    #   ⇒ 过期腿**不占名额** ✓（本函数返回值 = 当日实际布腿集合 ✓；`RANK_TOP=0` 时本函数整体不生效 ✓）
     try:
-        _bmax = float(os.getenv("WOLF_TREND_BIAS_MAX", "10") or 10)
+        _chase = float(os.getenv("WOLF_TREND_CHASE_MAX", "0.03") or 0.03)
     except Exception:
-        _bmax = 10.0
-    _scored = []
+        _chase = 0.03
+    _scored, _expired = [], []
     for r in rows:
         ts = _ts_code(r.get("symbol"))
         px, hi60, g20 = _feat_from_bars(_dbp, ts, day) if ts else (None, None, None)
         if px is None:
-            _scored.append((1, float("-inf"), r))       # 缺数 ⇒ 排最后（不因缺数而丢 ✓）
+            _scored.append((float("-inf"), r))          # 缺数 ⇒ 排最后（不因缺数而丢 ✓）
             continue
-        _ma20 = None
-        for _db in _dbp:
-            try:
-                _cn = sqlite3.connect(_db); _cu = _cn.cursor()
-                _rr = [float(x[0]) for x in _cu.execute(
-                    "select close from mkt_bars_daily where ts_code=? and trade_date<=? "
-                    "order by trade_date desc limit 20", (ts, "".join(ch for ch in str(day or "") if ch.isdigit())[:8]))]
-                _cn.close()
-                if len(_rr) >= 20:
-                    _ma20 = sum(_rr) / len(_rr)
-                    break
-            except Exception:
-                continue
-        _bias = ((px / _ma20 - 1) * 100) if _ma20 else 0.0
-        _ok_entry = 0 if _bias <= _bmax else 1             # 0 = 可挂突破价（能成交 ✓）
+        try:
+            _lv = float(r.get("level") or 0)
+        except Exception:
+            _lv = 0.0
+        if _lv > 0 and px > _lv * (1.0 + _chase):
+            _expired.append((r.get("symbol"), _lv, px, (px / _lv - 1) * 100))
+            continue
         _v = (px / hi60 - 1) if (_fac == "near60" and hi60) else (g20 or 0.0)
-        _scored.append((_ok_entry, -_v, r))
-    _scored.sort(key=lambda x: (x[0], x[1]))
-    _keep = [r for _, _, r in _scored[:_k]]
-    print("[rank] 分层=%s ⇒ 保留 %s（乖离门 %.0f%%：超了会被挂回踩价 ⇒ 排后 ✓）"
-          % ("突破价可成交优先", [r.get("symbol") for r in _keep], _bmax), flush=True)
+        _scored.append((-_v, r))
+    _scored.sort(key=lambda x: x[0])
+    _keep = [r for _, r in _scored[:_k]]
+    if _expired:
+        print("[rank] 已过期腿（cut 收盘已高于突破位×(1+%.0f%%) ⇒ 当日不可能按突破价成交 ✗）"
+              "⇒ 不占名额: %s" % (_chase * 100, ["%s lv=%.2f cut=%.2f(%+.1f%%)" % x for x in _expired]),
+              flush=True)
     print("[rank] 趋势腿同批排序选优 ✓ 因子=%s 保留前 %d/%d 条 ⇒ %s（标定：build⇒near60 / t_only⇒g20 ✓）"
           % (_fac, _k, len(rows), [r.get("symbol") for r in _keep]), flush=True)
     return _keep
