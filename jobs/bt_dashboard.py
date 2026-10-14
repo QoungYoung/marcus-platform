@@ -580,6 +580,21 @@ class Store:
             "bars": data.get("bars") or [],
         }
 
+    @staticmethod
+    def _log_finished(path: str) -> bool:
+        """日志里已出现"完成：N 天"标记 ⇒ 该批**已结束** ✓（防 autofollow 把旧日志当成在跑 ✗）
+
+        来由 ✓：2026-10-13 用户发现「看板突然推进到 0826」✗ —— 实为 autofollow 把**已完成的
+        c 臂**（窗口到 20260828 ✓）当成了在跑对象 ⇒ 根目录被切走 ✗（当时 mtime 更旧，说明
+        判定走的是**日志回退链** ✗）。此处按"完成标记"直接排除 ✓。
+        """
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                tail = f.read()[-4000:]
+            return "完成：" in tail
+        except Exception:
+            return False
+
     def autofollow(self) -> None:
         """自动跟随最新在跑的跑批（最多每 10s 检查一次）。"""
         if not self.auto_follow:
@@ -594,6 +609,17 @@ class Store:
             runs = []
         if not runs:                   # 兜底：日志推断（沙箱禁 /proc）
             runs = [p for p in runs_from_logs() if p.get("kind") == "bt_days"]
+            # ★ 2026-10-13：排除"日志里已有 完成： 标记"的（= 已结束 ✗，别被当在跑 ✓）
+            _kept = []
+            for _p in runs:
+                _lg = str(_p.get("log") or "")
+                if _lg and self._log_finished(_lg):
+                    continue
+                _kept.append(_p)
+            if len(_kept) != len(runs):
+                print("[dashboard] autofollow：跳过 %d 个已结束的批（日志含 完成： 标记 ✓）"
+                      % (len(runs) - len(_kept)), flush=True)
+            runs = _kept
         if not runs:
             self._follow["reason"] = "无在跑跑批（保持当前根）"
             return
