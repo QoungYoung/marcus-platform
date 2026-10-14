@@ -3007,10 +3007,12 @@ def day_progress(root: str, account: str = "") -> dict:
             if os.path.exists(_sc):
                 _txt = open(_sc, encoding="utf-8", errors="replace").read()
                 _kv = []
-                for _k in ("WOLF_WAVE_SCOPE", "WOLF_WAVE_BUILD_SOFT", "WOLF_WAVE_COND_GATE"):
+                for _k in ("WOLF_WAVE_SCOPE", "WOLF_WAVE_BUILD_SOFT", "WOLF_WAVE_COND_GATE",
+                           "WOLF_BUILD_VIA_AI", "WOLF_BUILD_NEAR_HIGH_PCT", "WOLF_BUILD_GAIN20_MAX",
+                           "WOLF_BUY_RULES_BY_KIND", "WOLF_BREAKOUT_VOL_MIN", "WOLF_BUILD_CHASE_MAX"):
                     _mm = re.search(r"^export %s=['\"]?([^'\"\n]+)" % _k, _txt, re.M)
                     if _mm:
-                        _kv.append("%s=%s" % (_k.replace("WOLF_WAVE_", ""), _mm.group(1)))
+                        _kv.append("%s=%s" % (_k.replace("WOLF_WAVE_", "").replace("WOLF_", ""), _mm.group(1)))
                 out["wave_scope_text"] = " ".join(_kv)
         except Exception as _e_mw:
             print("[dashboard] 主线浪型读取失败: %s" % str(_e_mw)[:80], flush=True)
