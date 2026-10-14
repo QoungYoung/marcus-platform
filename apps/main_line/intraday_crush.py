@@ -444,6 +444,60 @@ def _near(px: float, level: Optional[float], tol_pct: float) -> bool:
     return abs(px / float(level) - 1.0) * 100.0 <= float(tol_pct)
 
 
+# ★ §9.865 ✓（2026-10-14 用户「执行被拒的原因是什么呢」⇒「实现再起」✓）
+#   **建仓腿的"回踩进买带"＝买点命中**（第 5 条豁免；开关库内默认 0 ⇒ 生产逐位不变 ✓）
+#
+# 病灶 ✓（用证据定位到执行口）：`.dsh-tmp`/DB 的 `t_ai_actions#69691`（2026-05-06 SH603893）：
+#   · AI 输出：`{'action':'exec', 'reason':'…带量突破腿(量比1.50达放量)且现价182.95相对突破参照位
+#     184.422偏离-0.80%在追高上限1.5%内…语料「带量突破就买」可接**按建议买价182.95执行建仓**'}`
+#     ⇒ **AI 批了** ✓
+#   · `gateway_result`：`{'level':'BUY_TIMING','reason':'缓跌且**未命中任何买点**：现价 184.010 <
+#     均价 186.085 且 自开盘逐根走低…（语料 2025-06-05「急杀可以买，缓跌不买」）'}`
+#     ⇒ **执行口拒了** ✗（同一个 v2 判据在监控侧与执行口各判一次 ✓）
+#
+# 为什么是**错配** ✗：两条语料都没错 ✓ —— 错在适用对象 ✓
+#   · 「缓跌不买」讲的是**抄底**（别接下跌中的刀 ✓）；
+#   · 而突破腿的买点定义**就是"回踩不破再买"** ✓：语料 2025-03-19「日K线W底上穿
+#     **带量突破均线 缩量回踩均线 继续带量上涨**」（他称顶级教科书级别 ✓）
+#     ⇒ 回踩在形态上天然是"几根小阴、价在均价下"✗ ⇒ 被 v2 一律当"真缓跌"否掉 ✗
+#
+# 判据 ✓（**不加新数字** ✓）：现价落在**该腿自己的买带**内 ⇒ 视为买点命中 ⇒ 放行 ✓
+#   买带从腿的表达式取 ✓（`band_from_expr` ✓：`quote.current` 的 ≥ 与 ≤ 两个界 ✓，
+#   即 `[level×stand_hold, level×(1+chase_max)]` ✓ —— 与"回踩不破"是同一个区间 ✓）
+def pullback_buypoint_on() -> bool:
+    """建仓腿「回踩进买带 ⇒ 视为买点命中」（库内默认 0 ⇒ 逐字沿用旧行为 ✓）。"""
+    return str(os.getenv("WOLF_TREND_PULLBACK_BUYPOINT", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def band_from_expr(expr: Any) -> Optional[Tuple[float, float]]:
+    """从腿的表达式里取 `quote.current` 的买带 (下界, 上界)；取不到 ⇒ None（⇒ 旧行为 ✓）。"""
+    if not isinstance(expr, dict):
+        return None
+    lo = hi = None
+    for node in (expr.get("and") or []):
+        try:
+            if not isinstance(node, dict) or str(node.get("field")) != "quote.current":
+                continue
+            v = float(node.get("value"))
+            op = str(node.get("op") or "")
+            if op in (">=", ">"):
+                lo = v if lo is None else max(lo, v)
+            elif op in ("<=", "<"):
+                hi = v if hi is None else min(hi, v)
+        except Exception:
+            continue
+    return (lo, hi) if (lo and hi and lo < hi) else None
+
+
+def _in_band(px: Any, band: Any) -> bool:
+    try:
+        lo, hi = float(band[0]), float(band[1])
+        p = float(px)
+        return p > 0 and lo <= p <= hi
+    except Exception:
+        return False
+
+
 def falling_v2(f: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     """B 闸 v2：**缓跌 = 分时形状下行 ∧ 且不命中他任何一类买点**。
 
@@ -465,7 +519,11 @@ def falling_v2(f: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Tuple
     | E3 **破一下当天拉回** | 当日低点 <（线或前低）∧ 现价 ≥ 该位 | 「C 缓跌的结束信号：不破 60 日线或**破一下当天拉回**」(nga:1873) |
     | E4 **急杀** | 近 2 根 5min 跌幅 ≥ `crash_pct` ∧ 量比 ≥ `crash_vr` | 「**急杀可以买，缓跌不买**」(2025-06-05)；「出现**急杀、某些票到线**→到线就长线配置」(xls2025:266) |
 
-    **没有第 5 条**：不引入"相对强度/位置分位"这类他没说过的量 —— 那会变成自设规则。
+    | E5 **回踩进买带**（§9.865 ✓ **仅建仓腿、开关默认关**） | 现价落在**该腿自己的买带**内（表达式 `quote.current` 的上下界 ✓） | 「日K线W底上穿**带量突破均线 缩量回踩均线 继续带量上涨**」(2025-03-19，他称顶级教科书级别) |
+
+    ⚠️ E1~E4 之外**不引入"相对强度/位置分位"这类他没说过的量** ✗（那会变成自设规则 ✓）；
+    E5 是**例外但不算自设** ✓：它用的是**该腿自己的买点定义**（回踩不破 ✓ = 买带 ✓，同一个数字 ✓），
+    只是把"回踩"从"缓跌"里区分出来 ✗ —— 开关 `WOLF_TREND_PULLBACK_BUYPOINT`（**库内默认 0 ⇒ 旧行为** ✓）。
 
     `ctx` 字段（全部可缺，缺 ⇒ 对应豁免不成立，退化为 v1 行为）：
       · `lines`: 序列 [13/34/60/144 均线值...]（**与分钟档同一复权空间**）
@@ -534,6 +592,17 @@ def falling_v2(f: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Tuple
         except Exception as _e_sil5:
             _silent_alert("intraday_crush.py:488", _e_sil5)
             continue
+    # ⑤.5 E5 **回踩进买带**（§9.865 ✓ 建仓腿专用；开关默认 0 ⇒ 旧行为 ✓）
+    if pullback_buypoint_on():
+        try:
+            _bd = (ctx or {}).get("band")
+            if _bd and _in_band(px, _bd):
+                return False, ("命中买点 E5 回踩进买带：现价 %.3f 落在本腿买带 [%.3f, %.3f] ✓"
+                               "（语料 2025-03-19「带量突破均线 **缩量回踩均线** 继续带量上涨」⇒"
+                               "突破腿的买点就是「回踩不破」✓，不算「未命中任何买点」✗）"
+                               % (px, float(_bd[0]), float(_bd[1])))
+        except Exception as _e5:
+            _silent_alert("intraday_crush.py:E5", _e5)
     # ⑤ E4 急杀（近 2 根跌幅 + 放量）
     try:
         drop2 = f.get("last2_drop_pct")
@@ -582,7 +651,7 @@ def weak_day(f: Dict[str, Any], pre_close: Optional[float]) -> Tuple[bool, str]:
 
 
 def timing_verdict(symbol: Any, day: str, hhmm: str, pre_close: Optional[float] = None,
-                   side: str = "buy") -> Tuple[bool, str]:
+                   side: str = "buy", band: Optional[Tuple[float, float]] = None) -> Tuple[bool, str]:
     """B/C 总入口：返回 (是否放行, 原因)。卖腿一律放行；分钟档取不到一律放行（fail-open）。"""
     if str(side or "buy").strip().lower() not in ("buy", "买入"):
         return True, ""
@@ -594,6 +663,10 @@ def timing_verdict(symbol: Any, day: str, hhmm: str, pre_close: Optional[float] 
     f = feats(code, str(day), str(hhmm), min_bars=2)
     if not f:
         return True, "缺分钟档→放行"
+    # ★ §9.865 ✓：建仓腿「回踩进买带」＝买点命中 ⇒ 放行 ✓（开关默认 0 ⇒ 旧行为 ✓）
+    if pullback_buypoint_on() and band and _in_band(f.get("px"), band):
+        return True, ("命中买点 E5 回踩进买带（现价 %.3f ∈ [%.3f, %.3f] ✓ 语料 2025-03-19"
+                      "「缩量回踩均线」✓）" % (float(f.get("px") or 0), float(band[0]), float(band[1])))
     if falling_on():
         bad, why = falling(f)
         if bad:

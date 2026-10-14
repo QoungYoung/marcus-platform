@@ -5229,8 +5229,9 @@ class TMonitor:
                             _pcq = None
                             print("[TMonitor] 条件单买入时点闸 pre_close 解析失败(按 None 继续 ✓): %s" % str(_epcq)[:60], flush=True)
                         # ★ 豁免名单（默认空 ✓）：命中则**跳过** B/C 闸 ⇒ 交给对照回测定论 ✓
+                        _cband = _leg_band(cond.get("expression")) if _is_build_kind(trigger_kind) else None
                         _cond_tb = (False if _falling_gate_exempt(trigger_kind)
-                                    else intraday_timing_blocked(symbol, True, pre_close=_pcq))
+                                    else intraday_timing_blocked(symbol, True, pre_close=_pcq, band=_cband))
                     # ★★ 账本 §9.746 ✓（用户 2026-10-07：「**条件命中自动执行也要过波浪浪型检查**」✓）：
                     #   本分支（条件单自动执行 ✓）原先**完全不经过浪型闸** ✗ ⇒ 实测 `t_only` 那几天
                     #   仍成交 `trend_break_buy`（趋势突破建仓 ✗ = 狼大说的"新建主升" ✗）：
@@ -6581,6 +6582,24 @@ def cond_window_ok(cond) -> bool:
         return True
 
 
+def _is_build_kind(kind) -> bool:
+    """**建仓类腿型**（与资金上限 `WOLF_BUILD_CAP_KINDS` 同一份 ✓）——§9.865 的买带豁免只对它生效 ✓。"""
+    return str(kind or "").strip() in {k.strip() for k in (os.getenv(
+        "WOLF_BUILD_CAP_KINDS", "trend_break_buy,buy_253,buy_254,custom_buy,wolf_build") or "").split(",") if k.strip()}
+
+
+def _leg_band(expr):
+    """建仓腿**买带** (下界, 上界)（§9.865 ✓）；取不到 ⇒ None（⇒ 旧行为 ✓）。"""
+    try:
+        try:
+            import intraday_crush as _ic
+        except ImportError:
+            from main_line import intraday_crush as _ic
+        return _ic.band_from_expr(expr)
+    except Exception:
+        return None
+
+
 def _falling_gate_exempt(trigger_kind) -> bool:
     """★ 2026-10-13（用户「做吧」）：**B/C 买入时点闸的豁免名单**（默认空 ⇒ 行为逐位不变 ✓）
 
@@ -6596,7 +6615,8 @@ def _falling_gate_exempt(trigger_kind) -> bool:
     return bool(kinds) and str(trigger_kind or "").strip().lower() in kinds
 
 
-def intraday_timing_blocked(symbol: str, is_buy: bool, pre_close: Optional[float] = None) -> bool:
+def intraday_timing_blocked(symbol: str, is_buy: bool, pre_close: Optional[float] = None,
+                           band=None) -> bool:
     """B/C 买入时点闸的**执行口兜底**（2026-09-22 用户拍板 "A+B+C"）。
 
     B `WOLF_FALLING_GATE`：现价 < 当日 VWAP ∧ 前 3 根 5min 连跌 ⇒ 本次不执行（不在下跌中买）。
@@ -6613,7 +6633,8 @@ def intraday_timing_blocked(symbol: str, is_buy: bool, pre_close: Optional[float
         if not (_ic.falling_on() or _ic.weak_defer_on()):
             return False
         now = datetime.now()
-        ok, why = _ic.timing_verdict(symbol, now.strftime("%Y%m%d"), now.strftime("%H%M"), pre_close=pre_close)
+        ok, why = _ic.timing_verdict(symbol, now.strftime("%Y%m%d"), now.strftime("%H%M"),
+                                     pre_close=pre_close, band=band)
         if not ok:
             print("[TMonitor] 买入时点闸拦下买腿 %s：%s" % (symbol, str(why)[:120]), flush=True)
             return True

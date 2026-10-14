@@ -1827,6 +1827,12 @@ def _wave_hold_action() -> str:
     return ""
 
 
+def _build_cap_kinds() -> set:
+    """**建仓类腿型**名单（与资金上限 `WOLF_BUILD_CAP_KINDS` 同一份 ✓；§9.865 买带豁免只对它生效 ✓）。"""
+    return {k.strip() for k in str(os.getenv(
+        "WOLF_BUILD_CAP_KINDS", "trend_break_buy,buy_253,buy_254,custom_buy,wolf_build") or "").split(",") if k.strip()}
+
+
 def _falling_gate_exempt(trigger_kind) -> bool:
     """★ 2026-10-13（用户「做吧」）：**B/C 买入时点闸的豁免名单**（默认空 ⇒ 行为逐位不变 ✓）
 
@@ -2138,7 +2144,25 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                             _lines = _ml.line_values(str(symbol), _now3.strftime("%Y%m%d"), _f3.get("px"))
                         except Exception as _mle:
                             print("[gateway] 到线判据线值取数失败(不豁免): %s" % str(_mle)[:60], flush=True)
-                        _bad2, _why2 = _icg.falling_v2(_f3, {"lines": _lines, "prev_low": _f3.get("prev_low")})
+                        # ★ §9.865 ✓（2026-10-14 用户「执行被拒的原因是什么呢」✓）：**建仓腿的买带**交给 v2 ✓
+                        #   病灶 ✓（DB `t_ai_actions#69691`）：AI 判 `exec`（现价 182.95 在追高上限内、
+                        #     语料「带量突破就买」可接 ✓）却被执行口以 `BUY_TIMING`（缓跌且未命中任何买点 ✗）拒掉 ✓
+                        #   为什么是错配 ✗：「缓跌不买」讲的是**抄底** ✓；突破腿的买点**就是"回踩不破"** ✓
+                        #     （语料 2025-03-19「带量突破均线 **缩量回踩均线** 继续带量上涨」✓）
+                        #   ⇒ 把该腿**自己的买带**（表达式里 `quote.current` 的上下界 ✓）传进去 ⇒
+                        #     现价落在带内即视为买点命中 E5 ✓（开关 `WOLF_TREND_PULLBACK_BUYPOINT` 默认 0 ✓）
+                        _band_g = None
+                        try:
+                            if str(kind or "") in _build_cap_kinds():
+                                _cid_g = (_trg3 or {}).get("condition_id")
+                                if _cid_g:
+                                    _cond_g = t_db.get_condition(int(_cid_g)) or {}
+                                    _band_g = _icg.band_from_expr(_cond_g.get("expression"))
+                        except Exception as _ebg:
+                            _band_g = None
+                            print("[gateway] 建仓腿买带取数失败(按无买带继续 ✓): %s" % str(_ebg)[:60], flush=True)
+                        _bad2, _why2 = _icg.falling_v2(_f3, {"lines": _lines, "prev_low": _f3.get("prev_low"),
+                                                            "band": _band_g})
                         _ok3 = not _bad2
                         _why3 = _why2
                     else:
