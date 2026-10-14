@@ -222,6 +222,28 @@ def huang_bai(force: bool = False) -> Optional[Dict[str, Any]]:
     try:
         src = (os.getenv("WOLF_HUANG_BAI_SRC", "index") or "index").strip().lower()
         scope = (os.getenv("WOLF_HUANG_BAI_SCOPE", "sh") or "sh").strip().lower()
+        # ★ §9.868 ✓（2026-10-14 用户「把口径对齐」⇒「做下去」✓）：**as-of 分支（回测专用）**
+        #   病灶 ✗：本模块只有实时取数（腾讯 qt / spot）⇒ 回测里算 2026-05 某天会拿到**现在**的黄白线 ✗
+        #     = 未来数据 ✗ ⇒ 生产 ⑫「白线在上 ∧ 缩量 ⇒ 当日没有买点」没法在回测里对齐 ✗。
+        #   判据 ✓：黄＝等权（小盘）／白＝加权（大盘）⇒ 用**指数对**（中证1000 − 上证 ✓ 本模块主口径 ✓）
+        #     取 `data/index_daily_<code>.json`（东财日线 `jobs/fetch_index_daily_em.py` ✓ 纯历史 ✓）
+        #     并**按 ≤ as-of 日过滤** ✓（as-of＝被 patch 的 datetime ✓ 与臂一致 ✓）。
+        #   取不到 ⇒ **return None** ✓（绝不回落实时 ✗ —— 宁可放行，也不许未来数据进回测 ✓）
+        if src in ("asof", "backtest", "offline"):
+            _a = _asof_pair()
+            if _a is None:
+                return None
+            _hb, _ix, _ref = float(_a[0]), float(_a[1]), _a[2]
+            _sp = round(_hb - _ix, 3)
+            _val = {"equal_pct": _hb, "index_pct": _ix, "ref50_pct": _ref, "spread": _sp,
+                    "side": classify(_sp), "n": 0, "scope": scope,
+                    "proxy": "index_pair(中证1000−上证) [as-of 日线 ✓]", "ts": int(now), "stale": False}
+            _CACHE.update({"at": now, "value": _val})
+            try:
+                _hist().append((now, _sp))
+            except Exception as _e_sil_asof:
+                _silent_alert("wolf_index_breadth.py:asof", _e_sil_asof)
+            return _val
         hb, ix, ref, n, proxy = None, None, None, 0, "index_pair(中证1000−上证)"
         if src == "spot":                       # 可选：全市场等权（不稳，失败自动回落）
             hb, n = _equal_weight_pct(scope)
@@ -250,6 +272,55 @@ def huang_bai(force: bool = False) -> Optional[Dict[str, Any]]:
         return val
     finally:
         _LOCK.release()
+
+
+def _asof_day8() -> str:
+    """as-of 交易日（回测里 datetime 被 patch 成模拟日 ✓；生产不设该 src ⇒ 用不到 ✓）。"""
+    try:
+        import datetime as _d
+        return _d.datetime.now().strftime("%Y%m%d")
+    except Exception:
+        return ""
+
+
+def _asof_rows(code: str):
+    """`data/index_daily_<code>.json` 里 **≤ as-of 日** 的行 → [(date8, close, amount), …] 升序 ✓。"""
+    try:
+        import json as _j
+        here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        cands = [os.path.join(here, "data", "index_daily_%s.json" % str(code).replace(".", "_")),
+                 os.path.join("data", "index_daily_%s.json" % str(code).replace(".", "_"))]
+        fn = next((x for x in cands if os.path.exists(x)), None)
+        if not fn:
+            return []
+        d = _j.load(open(fn, encoding="utf-8")) or {}
+        day8 = _asof_day8()
+        out = []
+        for r in (d.get("rows") or []):
+            try:
+                if day8 and str(r[0]) > day8:
+                    continue
+                out.append((str(r[0]), float(r[1]), float(r[3])))
+            except Exception:
+                continue
+        out.sort(key=lambda x: x[0])
+        return out
+    except Exception:
+        return []
+
+
+def _asof_pair():
+    """as-of（黄 − 白）用**最后两行**算当日涨跌幅：黄=中证1000 ✓ 白=上证 ✓。"""
+    def _pct(code):
+        rows = _asof_rows(code)
+        if len(rows) < 2 or not rows[-2][1]:
+            return None, None
+        return round((rows[-1][1] / rows[-2][1] - 1) * 100, 3), rows[-1][0]
+    hb, d1 = _pct("000852.SH")
+    ix, _d2 = _pct("000001.SH")
+    if hb is None or ix is None:
+        return None
+    return hb, ix, d1, 0
 
 
 def snapshot() -> Dict[str, Any]:

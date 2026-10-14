@@ -113,6 +113,36 @@ def _from_relay(code: str, start: str) -> List[Tuple[str, float, float]]:
 
 
 def series(code: Optional[str] = None, refresh: bool = True) -> List[Tuple[str, float, float]]:
+    # ★ §9.868 ✓（2026-10-14 用户「把口径对齐」⇒「做下去」✓）：**as-of 分支（回测专用 ✓）**
+    #   病灶 ✗：本函数走 relay/全局缓存（`index_amount_cache_*.json` 含**最新日期** ✗）⇒ 回测里
+    #     算 2026-05 某天会拿"现在"的额 ✗ = 未来数据 ✗ ⇒ ⑫ 没法在回测里对齐 ✗。
+    #   修 ✓：开关 `WOLF_LINE_REGIME_ASOF=1` 时读 `data/index_daily_<code>.json`（东财日线 ✓ 纯历史 ✓）
+    #     并**按 ≤ as-of 日过滤** ✓（as-of＝被 patch 的 datetime ✓ 与臂一致 ✓）
+    #     取不到 ⇒ 返回空 ⇒ 上层 fail-open 放行 ✓（**绝不回落实时** ✗）
+    if str(os.getenv("WOLF_LINE_REGIME_ASOF", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            import json as _j8, datetime as _d8
+            _day8 = _d8.datetime.now().strftime("%Y%m%d")
+            _here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            _fn = next((x for x in (os.path.join(_here, "data", "index_daily_%s.json" % index_code().replace(".", "_")),
+                                    os.path.join("data", "index_daily_%s.json" % index_code().replace(".", "_")))
+                        if os.path.exists(x)), None)
+            if _fn:
+                _d = _j8.load(open(_fn, encoding="utf-8")) or {}
+                _rows = []
+                for _r in (_d.get("rows") or []):
+                    try:
+                        if str(_r[0]) > _day8:
+                            continue
+                        _rows.append((str(_r[0]), float(_r[1]), float(_r[3])))
+                    except Exception:
+                        continue
+                _rows.sort(key=lambda x: x[0])
+                if _rows:
+                    return _rows
+        except Exception as _eas:
+            print("[LineRegime] as-of 取数失败(放行 ✓): %s" % str(_eas)[:80])
+        return []
     code = code or index_code()
     cf = _cache_file(code)
     cached: List[Tuple[str, float, float]] = []
