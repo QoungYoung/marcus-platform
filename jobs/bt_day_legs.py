@@ -565,6 +565,40 @@ def main() -> int:
     except Exception as _et:
         print("[legs] trend_channel ERR %s" % str(_et)[:110], flush=True)
 
+    # ★ §9.867 ✓（2026-10-14 用户「把口径对齐」✓）：复刻生产 `rotation_switch_arm.main()` 的 case ⑫
+    #   「**白线在上 ∧ 缩量 ⇒ 当日没有买点**」（`apps/main_line/wolf_line_regime.py` ✓）
+    #   为什么必须对齐 ✗：生产 `.env:94 WOLF_LINE_REGIME_GATE=1` ✓（日志实测它在跑 ✓ 且会**清空当日买腿** ✓：
+    #     「LINE_REGIME_GATE 拦下 5 条买腿（白线在上 ∧ 缩量 → 他说的没有买点）: [...]」✓），
+    #   而本 runner 是 main() 买侧的**复刻** ✗ ⇒ 缺这一条 ⇒ **回测与生产不同口径** ✗（同一天可能一个布腿一个不布 ✓）。
+    #   作用域 ✓：与生产一致 —— **只清本 runner 产出的买腿** ✓（08:18 的 `legs_switch.jsonl` 由另一条路径产出 ✓）。
+    #   开关 ✓ `WOLF_ARM_ALIGN_PROD`（**库内默认 0 ⇒ 臂行为逐位不变** ✓；置 1 ⇒ 与生产同口径 ✓）
+    if str(os.getenv("WOLF_ARM_ALIGN_PROD", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            import importlib as _ilLR
+            _pLR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+            if _pLR not in sys.path:
+                sys.path.insert(0, _pLR)
+            _LRM = _ilLR.import_module("wolf_line_regime")
+            _stLR = _LRM.state()
+            try:
+                _wop = str((json.load(open(os.path.join(sb, "wave_state.json"), encoding="utf-8")) or {})
+                           .get("operation") or "").lower()
+            except Exception:
+                _wop = ""
+            if _LRM.shadow_enabled():
+                _LRM.shadow_record({"wave_op": _wop, "gate_blocked": [], "pool": [],
+                                    "buy_legs": [l.get("symbol") for l in legs_out],
+                                    "raw_legs_n": len(legs_out)})
+            print("LINE_REGIME side=%s shrink=%s no_buy=%s gate=%s allow=%s"
+                  % (_stLR.get("side"), _stLR.get("shrink"), _stLR.get("no_buy"),
+                     _LRM.gate_enabled(), _LRM.allow(_stLR)), flush=True)
+            if _LRM.gate_enabled() and legs_out and not _LRM.allow(_stLR):
+                print("LINE_REGIME_GATE 拦下 %d 条买腿（白线在上 ∧ 缩量 → 他说的没有买点）: %s"
+                      % (len(legs_out), [l.get("symbol") for l in legs_out]), flush=True)
+                legs_out = []
+        except Exception as _elr:
+            print("[legs] line_regime(对齐生产)异常(放行 ✓): %s" % str(_elr)[:90], flush=True)
+
     out = a.out or os.path.join(sb, "legs.jsonl")
     with open(out, "w", encoding="utf-8") as f:
         for l in legs_out:
