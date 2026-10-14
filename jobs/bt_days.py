@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 # ★ 2026-10-14：回测编排进程打标（子进程继承）⇒ 回测不推 QQ ✓（见 t_ai_agent._is_backtest_ctx）
 os.environ.setdefault("MARCUS_BACKTEST", "1")
@@ -205,10 +206,75 @@ def prev_trade_day(d8: str, bars_db: str) -> str:
     return r[0] if r and r[0] else d8
 
 
-def run(cmd, log_path, timeout=3600):
+def _tee_note(path, name):
+    """产腿日志分段头（2026-10-15）：两条产腿链写**同一个** `<sandbox>/legs_producer_<day>.log` ✓
+    ⇒ 必须有 `==== <脚本名> ====` 才分得清是谁打的 ✓。写不进 ⇒ 静默点留痕，**不影响主流程** ✓。"""
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("==== %s ==== %s\n" % (name, time.strftime("%Y-%m-%d %H:%M:%S")))
+    except Exception as _e_tn:
+        _silent_alert("bt_days.py:tee_note", _e_tn)
+
+
+def run(cmd, log_path, timeout=3600, tee_path=None):
+    """跑一个子步骤（rc, 秒数）。
+
+    ★ 2026-10-15（用户要求）：给了 `tee_path` ⇒ 把子进程 stdout+stderr **同时**再存一份
+    （`<sandbox>/legs_producer_<day>.log`）✓ —— 起因：某天 `legs.jsonl` 产出 0 条 ✗ 时，只有耗时没有
+    产腿器自己的闸门判定（`[legs] SKIP_THEME_NOT_BUYABLE` / `[trend_channel] v2 硬门` / `ENTRY_FILTER` /
+    `WOLF_THEME_CAP` ✗）⇒ 必须**手动重跑**才知道为什么没布腿 ✗。
+    ⚠️ rc / 超时 / 参数语义与旧实现（`subprocess.call(stdout=f, stderr=STDOUT, timeout=…)`）**保持一致** ✓：
+    超时 ⇒ kill 后抛 `TimeoutExpired` ✓（与 call 相同）；rc 原样返回 ✓。**没给 `tee_path` 的调用方
+    （其余全部子步骤）走原路径 ⇒ 零变化** ✓。
+    """
     t0 = time.time()
-    with open(log_path, "w") as f:
-        rc = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=timeout)
+    if tee_path:
+        _tee_note(tee_path, os.path.basename(str(cmd[1] if isinstance(cmd, (list, tuple)) and len(cmd) > 1 else cmd)))
+        _tee = None
+        try:
+            _tee = open(tee_path, "ab")
+        except Exception as _e_tee:
+            _silent_alert("bt_days.py:run.tee_open", _e_tee)
+        with open(log_path, "wb") as f:
+            _dsts = [f] + ([_tee] if _tee is not None else [])
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            # 抽水线程（字节级 ⇒ 两份日志内容与旧 `call` 路径**逐字节一致** ✓）；主线程 `wait(timeout)` 保证超时语义 ✓
+            def _pump():
+                for _line in p.stdout:
+                    for _d in list(_dsts):
+                        try:
+                            _d.write(_line)
+                            _d.flush()
+                        except Exception as _e_w:
+                            _silent_alert("bt_days.py:run.tee_write", _e_w)
+                            try:
+                                _dsts.remove(_d)
+                            except Exception:
+                                pass
+            _th = threading.Thread(target=_pump, daemon=True)
+            _th.start()
+            try:
+                rc = p.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                p.kill()                      # 与 subprocess.call(timeout=…) 同：**kill 后抛** ✓
+                p.wait()
+                # 抽水线程只等它把已缓冲的输出落盘（孙子进程仍持有管道时**最多**多等 2s ⇒ 不拖住收尾）
+                _th.join(timeout=2)
+                if _tee is not None:
+                    try:
+                        _tee.close()
+                    except Exception:
+                        pass
+                raise
+            _th.join(timeout=30)
+        if _tee is not None:
+            try:
+                _tee.close()
+            except Exception as _e_tc:
+                _silent_alert("bt_days.py:run.tee_close", _e_tc)
+    else:
+        with open(log_path, "w") as f:
+            rc = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=timeout)
     _dt = time.time() - t0
     # ★ 账本 §9.693 ✓（用户「加上」✓）：每个子阶段自己报用时 ✓ —— 用来定位 26 分钟到底花在哪 ✗
     try:
@@ -430,8 +496,10 @@ def main() -> int:
                        "--sandbox", sb, "--bars-db", a.bars_db]
             if a.code_dir:
                 _sw_cmd += ["--code-dir", a.code_dir]
+            # ★ 2026-10-15：产腿器 stdout/stderr **同时**存一份到 <sandbox>/legs_producer_<day>.log（开关无关 ✓）
             rc_sw, dts = run(_sw_cmd,
-                             os.path.join(a.out, "switch_%s.log" % d8), timeout=1800)
+                             os.path.join(a.out, "switch_%s.log" % d8), timeout=1800,
+                             tee_path=os.path.join(sb, "legs_producer_%s.log" % d8))
             entry["steps"]["switch_0818"] = {"rc": rc_sw, "s": round(dts, 1)}
             # ── 账本 §9.470 ✓：当日**缺分钟⇒自动补齐（含退避重试）**（用户要求 ✓ 默认开 ✓）──
             #   为什么必须在这里 ✓：臂每天新布腿 ⇒ 新标的的分钟可能缺 ✗ ⇒ 盘中判断会被**静默跳过** ✗
@@ -489,8 +557,10 @@ def main() -> int:
             if a.code_dir:
                 _arm_cmd += ["--code-dir", a.code_dir]
             # 超时 2400 → 5400s（2026-09-20：0211 因 member 判定瞬时排队超时，把整个 run 打死）
+            # ★ 2026-10-15：同上，两条产腿链共写 <sandbox>/legs_producer_<day>.log（每段前有 `==== 脚本名 ====` ✓）
             rc_arm, dta = run(_arm_cmd,
-                              os.path.join(a.out, "arm_%s.log" % d8), timeout=5400)
+                              os.path.join(a.out, "arm_%s.log" % d8), timeout=5400,
+                              tee_path=os.path.join(sb, "legs_producer_%s.log" % d8))
             entry["steps"]["arm_0920"] = {"rc": rc_arm, "s": round(dta, 1)}
         # ③b **正式口径就地增量**（--formal）：当天腿 → 拉分钟 → 打包 → 账户层续跑
         _formal_legs = []
@@ -662,6 +732,25 @@ def main() -> int:
         by_day[d8] = entry
         all_legs.extend(legs)
         print("[days] %s cut=%s → 腿 %d 条 %s" % (d8, cut, len(legs), entry["legs"]), flush=True)
+
+        # ⑤ 低吸闸留痕（2026-10-15）：把「低吸腿命中后被闸拦 / 成交」落成
+        #   `<sandbox>/lowdip_block_report_<day>.jsonl` —— 起因：`jobs/lowdip_block_report.py` 此前
+        #   **全仓库无调用者**（孤儿工具 ✗）⇒ 文档说的"默认开"从来没生成过报告 ✗。
+        #   开关 `WOLF_LOWDIP_BLOCK_REPORT`：**代码默认 0 = 关 ⇒ 逐字不变** ✓；`jobs/bt_env_pins.sh` 里
+        #   已 `=1` ⇒ 回测臂自动生效 ✓。**fail-open** ✓：异常/失败只留痕，不影响当天流程与退出码 ✓。
+        if str(os.getenv("WOLF_LOWDIP_BLOCK_REPORT", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                _ld = subprocess.run([sys.executable, bt_env.jobs_file("lowdip_block_report.py"),
+                                      "--day", d8, "--sandbox", sb],
+                                     capture_output=True, text=True, timeout=900)
+                for _l in (_ld.stdout or "").splitlines():
+                    if _l.strip():
+                        print("[days] %s" % _l.strip()[:160], flush=True)
+                if _ld.returncode != 0:
+                    print("[days] lowdip_block rc=%s（fail-open ✓ 不影响当天）: %s"
+                          % (_ld.returncode, " ".join((_ld.stderr or "").split())[-160:]), flush=True)
+            except Exception as _e_ld:
+                _silent_alert("bt_days.py:lowdip_block", _e_ld)
 
     with open(os.path.join(a.out, "legs_all.jsonl"), "w", encoding="utf-8") as f:
         for l in all_legs:

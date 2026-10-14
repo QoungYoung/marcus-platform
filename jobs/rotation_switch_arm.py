@@ -30,6 +30,26 @@ def _silent_alert(where, exc=None):
         except Exception:
             pass
 
+
+def _gb_rec(theme, why, src, leg_kind="unknown", chain="", symbol=None, day=""):
+    """`gate_blocked` 一条记录（2026-10-15 用户要求补留痕 ✓）＋ 资金门数据源留痕。
+
+    旧字段 `theme`/`why` **原样保留** ✓（读方只用这两个 ✓）；**新增** `day`/`chain`/`symbol`/
+    `leg_kind`/`ts`/`src`（+ 可取到时 `fund_*`）—— 起因：旧记录无日期/腿型 ⇒ 无法按天归属 ✗。
+    ⚠️ 本文件**不写** `jobs/gate_blocked.jsonl`（唯一落盘方是 `jobs/bt_day_legs.py` ✓）；这里加的新字段
+    随 `pick_path_<day>.json` 的 `gate_blocked` 落盘 ✓ 并被 `pick_health` 之外的留痕消费 ✓。
+    """
+    rec = {"theme": theme, "why": str(why)[:200],
+           "day": str(day or ""), "chain": str(chain or theme), "symbol": symbol,
+           "leg_kind": str(leg_kind or "unknown"),
+           "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "src": str(src or "")}
+    try:
+        import wolf_theme_vol_fund as _wvf
+        rec.update(dict(getattr(_wvf, "last_fetch_info", lambda: {})() or {}))
+    except Exception as _e_fs:
+        _silent_alert("rotation_switch_arm.py:gb_rec.fund_src", _e_fs)
+    return rec
+
 sys.path.insert(0, "/app/app")
 sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "data")
@@ -1071,7 +1091,9 @@ def main():
                     _ok_pool.append(th)
                 else:
                     print("SKIP_THEME_NOT_BUYABLE", th, _why, file=sys.stderr)
-                    _blocked_themes.append({"theme": th, "why": str(_why)[:200]})
+                    # 主题级拦因（无票 ⇒ symbol 留空 None）；腿型 = 本门落到的**新建低吸腿**（253/254）
+                    _blocked_themes.append(_gb_rec(th, _why, "rotation_switch_arm",
+                                                   leg_kind="buy_253/254", day=today))
                     pick_health(th, "gate_blocked", "blocked", str(_why)[:200])
             pool = _ok_pool
             _gate_blocked.extend(_blocked_themes)

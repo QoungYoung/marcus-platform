@@ -45,6 +45,17 @@ def _silent_alert(where, exc=None):
             pass
 
 
+# ── 留痕（2026-10-15 用户要求）：「资金门这一判用的**哪个数据源 / 末日**」────────────────
+# 起因：日志里会出现 `资金门 as-of：PG 交易日不足，用缓存补齐 → 末日 20251231` ⇒ 闸门可能拿**兜底/过期**
+#   数据判定 ✗；不记下来就分不清"闸真的拦"还是"数据不全拦" ✗。这里只存**只读**状态供留痕读 ✓，**判据零改动** ✓。
+LAST_FETCH: Dict[str, Any] = {}
+
+
+def last_fetch_info() -> Dict[str, Any]:
+    """最近一次 `theme_nets` 取数事实 `{fund_asof, fund_last_day, fund_src, fund_n}`（取不到 ⇒ 空 dict ✓）。"""
+    return dict(LAST_FETCH)
+
+
 def _dsn() -> str:
     """DSN 统一解析（2026-09-19 修 postgres 主机名/.env 端口不对，见 apps/main_line/db_dsn.py）。"""
     try:
@@ -418,8 +429,10 @@ def theme_nets(theme: str, as_of: Optional[str] = None, days: int = FUND_DAYS + 
         # 盘前决策只用 ≤ 前一交易日的资金流（避免未来函数；见上文 as-of 说明）
         as_of = _asof_anchor()
     dts = _trade_days(as_of, days)
+    _src = "pg" if as_of else "pg(无锚)"
     if as_of:
         dts = [str(d) for d in dts if str(d) <= str(as_of)]   # 防御：任何来源的未来日期一律丢掉
+        _pg_n = len(set(dts))
         # 回放里 PG mkt_bars_daily 只有回放期起的数据（实测 min=20260105）⇒ ≤cut 的日子取不到；
         # 用「资金缓存里 ≤ as_of 的日期」补齐（缓存本身在 seed 时就按 cut 截断过，是 as-of 的）。
         _cached = sorted(str(d) for d in cache if str(d) <= str(as_of))
@@ -427,8 +440,12 @@ def theme_nets(theme: str, as_of: Optional[str] = None, days: int = FUND_DAYS + 
             _merged = sorted(set(dts) | set(_cached))
             if len(_merged) > len(set(dts)):
                 dts = _merged[-days:]
+                _src = "pg+缓存补齐" if _pg_n else "缓存(PG 无 ≤锚 的交易日)"
                 print("[theme_volfund] 资金门 as-of：PG 交易日不足，用缓存补齐 → 末日 %s（锚 %s，共 %d 日）"
                       % (dts[-1], as_of, len(dts)), flush=True)
+    # 留痕（只写状态、不改判据 ✓）：本次用的源 / 末日 —— 由 `last_fetch_info()` 供 gate_blocked 记录读取
+    LAST_FETCH.update({"fund_asof": str(as_of or ""), "fund_last_day": str(dts[-1]) if dts else "",
+                       "fund_n": len(dts), "fund_src": _src})
     if not dts:
         return []
     changed = False

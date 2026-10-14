@@ -45,6 +45,35 @@ def _silent_alert(where, exc=None):
         except Exception:
             pass
 
+
+def _gb_rec(theme, why, src, leg_kind="unknown", chain="", symbol=None, day=""):
+    """`gate_blocked.jsonl` 一行（2026-10-15 用户要求补留痕 ✓）。
+
+    旧字段 `theme`/`why` **原样保留** ✓（现有读取方只需这两个 ✓，多出的键不影响 JSON 解析 ✓）；**新增**
+    `day`(交易日) / `chain`(主题下具体链，拿不到 = theme) / `symbol`(票级拦因才有，主题级 None) /
+    `leg_kind`(腿型) / `ts`(写入时刻) / `src`(写入点) —— 起因：累计 1305 条**无法按天归属** ✗。
+    """
+    return {"theme": theme, "why": str(why)[:200],
+            "day": str(day or ""), "chain": str(chain or theme), "symbol": symbol,
+            "leg_kind": str(leg_kind or "unknown"),
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "src": str(src or "")}
+
+
+def _fund_src_note():
+    """资金门（P1/P2-2）**本次取数**用的「数据源 / 末日」✓（只留痕、**不改判据** ✓）。
+
+    来源 `wolf_theme_vol_fund.LAST_FETCH`（模块级只读状态 ✓）；取不到 ⇒ 空 dict（不拦、不抛 ✓）。
+    为什么值得记 ✓：`[theme_volfund] 资金门 as-of：PG 交易日不足，用缓存补齐 → 末日 …` 意味着闸门可能拿
+    **兜底/过期**数据判定 ✗ —— 不记下来就分不清"闸真的拦"还是"数据不全拦" ✗。
+    """
+    try:
+        import wolf_theme_vol_fund as _wvf
+        return dict(getattr(_wvf, "last_fetch_info", lambda: {})() or {})
+    except Exception as _e_fs:
+        _silent_alert("bt_day_legs.py:fund_src", _e_fs)
+        return {}
+
+
 bt_env.add_paths()
 
 
@@ -431,7 +460,10 @@ def main() -> int:
                     ok_pool.append(th)
                 else:
                     print("[legs] SKIP_THEME_NOT_BUYABLE %s %s" % (th, str(why)[:110]), flush=True)
-                    _gate_blocked.append({"theme": th, "why": str(why)[:200]})
+                    # 主题级拦因（无票 ⇒ symbol 留空 None）；腿型 = 本门落到的**新建低吸腿**（253/254）
+                    _rec = _gb_rec(th, why, "bt_day_legs", leg_kind="buy_253/254", day=a.date)
+                    _rec.update(_fund_src_note())
+                    _gate_blocked.append(_rec)
             pool = ok_pool
         except Exception as e:
             print("[legs] THEME_BUYABLE_ERR(放行) %s" % str(e)[:110], flush=True)
@@ -617,6 +649,8 @@ def main() -> int:
                     print("[legs] 腿缓存写入失败(不影响腿 ✓): %s" % str(_e_lw)[:90], flush=True)
     # ── 留痕（2026-09-18 用户"加上然后验证"）：此前 _gate_blocked 只进内存、从不落盘，
     #   导致 09:20 路径"静默 0 条腿"无法归因。这里落盘 + 打印各关计数。
+    #   2026-10-15 补字段：每行除 theme/why 外还带 day/chain/symbol/leg_kind/ts/src（见 `_gb_rec`）✓
+    #   —— 原因：旧记录**无日期/腿型** ⇒ 累计 1305 条混成一锅，无法按天归属 ✗（additive ✓ 不动旧键 ✓）
     try:
         import json as _j, os as _o
         _p = _o.path.join(os.path.dirname(_o.path.abspath(__file__)), "..", "data")  # 占位，下面用 day_dir
@@ -630,6 +664,7 @@ def main() -> int:
             print("    BLOCK %s: %s" % (_r.get("theme"), _r.get("why")), flush=True)
     except Exception as _be:
         print("[legs] gate_blocked 落盘失败 %s" % str(_be)[:80], flush=True)
+        _silent_alert("bt_day_legs.py:gate_blocked_write", _be)   # 留痕失败**绝不**影响产腿 ✓
 
     print("[legs] 写出 %s：%d 条腿 %s | shim local=%d remote=%d | %.0fs"
           % (out, len(legs_out), [l["symbol"] for l in legs_out], shim.n_local, shim.n_remote, time.time() - t0),

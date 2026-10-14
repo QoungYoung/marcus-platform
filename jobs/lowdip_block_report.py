@@ -15,7 +15,9 @@
 **输入** ✓：`<summary>/prod_<day>.json`（当日）、本目录上一份 `lowdip_block_report_*.jsonl`（取 `max_id`）、
            `<sandbox>/legs_switch.jsonl` ∪ `legs.jsonl`（当日腿）、`<sandbox>/stock_confirm_result_prev0818.json`（当日候选域）
 **输出** ✓：`<sandbox>/lowdip_block_report_<day>.jsonl`（首行 header 带 `max_id` ✓，之后一行一个命中标的 ✓）
-**开关** ✓：`WOLF_LOWDIP_BLOCK_REPORT`（**默认 1 = 开** ✓；置 0 关 ✓）
+**开关** ✓：`WOLF_LOWDIP_BLOCK_REPORT`（**默认 0 = 关 ⇒ 逐字不变** ✓；置 1 开 ✓）——
+  2026-10-15 由默认 1 改为默认 0 ✓：`jobs/bt_days.py` 每日流程末尾按它**决定是否调用** ✓，
+  而 `jobs/bt_env_pins.sh` 里已 `=1` ⇒ 回测臂自动生效 ✓，其它场景（含手动跑）不再"默认开" ✓。
 **零影响** ✓：只读产物、只写自己的报告文件；不碰判据、不碰生产库、不碰 t_conditions ✓。
 """
 from __future__ import annotations
@@ -49,7 +51,8 @@ LOWDIP = ("custom_prevlow", "custom_m5dump")
 
 
 def enabled() -> bool:
-    return str(os.getenv("WOLF_LOWDIP_BLOCK_REPORT", "1")).strip().lower() in ("1", "true", "yes", "on")
+    # 2026-10-15：默认由 "1" 改 "0" ⇒ 未显式开的场景（含手动跑）**逐字不变** ✓（回测臂由 bt_env_pins.sh 置 1 ✓）
+    return str(os.getenv("WOLF_LOWDIP_BLOCK_REPORT", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _code(x) -> str:
@@ -118,7 +121,8 @@ def main() -> int:
     ap.add_argument("--out", default="")
     a = ap.parse_args()
     if not enabled():
-        print("  [lowdip_block] 关（WOLF_LOWDIP_BLOCK_REPORT=0）⇒ 跳过 ✓")
+        print("  [lowdip_block] 关（WOLF_LOWDIP_BLOCK_REPORT=%s，默认 0）⇒ 跳过 ✓"
+              % os.getenv("WOLF_LOWDIP_BLOCK_REPORT", "0"))
         return 0
     day = str(a.day).replace("-", "")
     sb = a.sandbox or os.path.join(REPO, "data", "_bt_t35", day)
