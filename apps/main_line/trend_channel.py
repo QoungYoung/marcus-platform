@@ -419,17 +419,36 @@ def expr_pullback(ma20: float, lo: float = 0.95, hi: float = 1.05) -> Dict[str, 
 
 def expr(level: float, chase_max: Optional[float] = None,
          ma20: Optional[float] = None) -> Dict[str, Any]:
-    """买腿表达式：现价 ≥ 突破位 且 不追高（≤ 突破位×(1+chase_max)）。
+    """买腿表达式：现价 ≥ **回踩不破线** 且 不追高（≤ 突破位×(1+chase_max)）。
 
     语料：2026-02-12「放量突破 一口吃完上面挂单」；2026-09-03「高开不追」。chase_max 为**自设**上限。
+
+    ★ §9.863 ✓（2026-10-14 用户「为什么低于 level 也不买呢」✓）：**下界与 T2 站稳容差统一** ✓
+      这条腿的语义是「带量突破后**回踩不破**再买」✓ —— 语料 2025-03-19「日K线W底上穿
+      **带量突破均线 缩量回踩均线 继续带量上涨**」（他称顶级教科书级别 ✓），而 `level` = **突破日收盘** ✓。
+      但 T2 判「站稳」的容差是 **−3%**（`WOLF_TREND_STAND_HOLD=0.97` ✓，见本文件第 181 行 ✓）
+      ⇒ 旧代码下界写死 `level`（**0% 容差** ✗）**自相矛盾** ✗：
+        回踩到 −1%~−3% 时 T2 认为腿**仍有效** ✓、买腿却**买不到** ✗ ⇒ 漏掉教科书买点 ✗
+      实测 ✓（t57 臂 9 条腿日，用臂自身分钟档 ✓）：
+        ② 涨过上限 2 条（+7.03%／+17.06% ⇒ 追高不追 ✓ 设计如此 ✓）；
+        ③ **落在 level×0.97~level 之间被漏掉 2 条**（SH603893 −1.37%、SZ002466 −1.32% ✗）；
+        ④ 跌破 0.97 的 2 条（海康 −6.13% 真破位 ✓ 该不买 ✓；华勤是**尺子 bug** ✗ 另修 ✓）
+      开关 ✓ `WOLF_TREND_FLOOR_HOLD`（**库内默认 0 = 旧行为** ✓ 生产逐位不变 ✓；回测置 1 ✓）
+      ⚠️ 方向 ✓：这一改会让**成交变多**（用户担心的是"过于频繁"⇒ 必须单变量臂验证 ✓ 不直接上生产 ✗）
     """
     lv = round(float(level), 3)
     cap = round(lv * (1.0 + float(chase_max if chase_max is not None else params()["chase_max"])), 3)
     # ★ 乖离门（账本 §9.577／§9.578 ✓）放在**布腿阶段**判断 ✓
     #   ⚠️ 不能在 expr 里用"价格上限"实现 ✗（会与 `现价 ≥ 突破位` 互斥 ⇒ 永不触发 ✗）
     _ = ma20   # 保留参数（调用方传 MA20 ✓，布腿侧用它 ✓）
+    floor = lv
+    if os.getenv("WOLF_TREND_FLOOR_HOLD", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            floor = round(lv * float(params().get("stand_hold") or 0.97), 3)
+        except Exception:
+            floor = round(lv * 0.97, 3)
     return {"and": [
-        {"op": ">=", "field": "quote.current", "value": lv},
+        {"op": ">=", "field": "quote.current", "value": floor},
         {"op": "<=", "field": "quote.current", "value": cap},
         {"op": ">", "field": "quote.average", "value": 0},
     ]}

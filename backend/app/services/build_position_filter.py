@@ -52,12 +52,30 @@ def _ts_code(sym: str) -> str:
 
 
 def _db_paths() -> list:
+    """日线库候选（**与腿/引擎同尺子** ✓）。
+
+    ★ §9.863 ✓（2026-10-14 用户「为什么低于 level 也不买呢」⇒ 顺带查出的尺子 bug ✓）：
+      臂驱动原先把 `--bars-db` 指向 **不复权** 的 `bars.sqlite` ✗，而引擎侧 `WOLF_ADJ_PRICE=1`
+      用的是 **前复权** `bars_adj.sqlite` ✓ ⇒ 有送转/除权的票两边不是一个尺子 ✗：
+        实测华勤 603296 同日：不复权 109.80（＝腿 level ✓）｜前复权 77.54（比 0.706 ✓）
+        ⇒ 腿要"现价 ≥ 109.80"，而交易层永远只看到 ~83 ⇒ **结构上永不触发** ✗（死腿 ✗）
+      体检 ✓：可用 29 条 trend_break 腿里 **4 条（13.8%）**落在"两个尺子差 >2%"的票上 ✓
+      ⇒ 修法 ✓：`WOLF_ADJ_PRICE=1`（＝臂/引擎已在前复权的模式 ✓）时**只给前复权库** ✓
+        （不是"更靠前"✗ —— `_bars_rows` 是按"最新交易日"挑库 ✓，两库跨度相同 ⇒ 必须显式选 ✓）
+    """
     out = []
     dd = os.environ.get("DATA_DIR")
     if dd:
         out.append(os.path.join(dd, "mkt_bars_local.db"))
     here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    out += [os.path.join(here, "data", "_bt_full", "bars.sqlite"), "data/_bt_full/bars.sqlite"]
+    _adj = str(os.getenv("WOLF_ADJ_PRICE", "0")).strip().lower() in ("1", "true", "yes", "on")
+    _adjp = [os.path.join(here, "data", "_bt_full", "bars_adj.sqlite"), "data/_bt_full/bars_adj.sqlite"]
+    _rawp = [os.path.join(here, "data", "_bt_full", "bars.sqlite"), "data/_bt_full/bars.sqlite"]
+    if _adj and any(os.path.exists(p) for p in _adjp):
+        out += _adjp
+    else:
+        # 前复权库缺失（如生产机没同步 data/ ✓）⇒ 退回原库 ✓：宁可尺子旧，也不让取价全空 ✓（fail-safe ✓）
+        out += _rawp
     return [p for p in out if p and os.path.exists(p)]
 
 
