@@ -368,7 +368,17 @@ def slow_decline(prev_days, days=None, min_drop_pct=None, max_drop_pct=None, flu
       2. 窗口内**没有单日急杀**(无单日跌幅 ≥ flush_day_pct) —— 有急杀日则属"急杀", 不算缓跌;
       3. 量能萎缩 —— 近 2 日均量 < 前段均量 × shrink_ratio(默认 1.0, 即确实在缩量)。
 
-    prev_days: {YYYYMMDD: {"close","high","low","vol"}}(t_monitor._prev_daily 的返回格式)。数据不足 → 不算缓跌(放行)。
+    prev_days: 两种格式都收 ✓（2026-10-14 修 ✗）：
+      · `{YYYYMMDD: {"close","high","low","vol"}}`（`t_monitor._prev_daily` 的返回 ✓）
+      · `[{"close","high","low","vol"}, …]`（**按时间升序**；`t_monitor._prev_daily_rows` 的返回 ✓）
+    数据不足 → 不算缓跌(放行)。
+
+    ⚠️ 修的是这个 bug ✗（2026-10-14 线上告警 ✓）：
+      alert `t_monitor.py:6913`（标签 6896 ✓）`: raise×1：'<' not supported between instances of
+      'dict' and 'dict'` ✗ —— `pass_common_gates` 把 `_prev_daily_rows(...)`（**list** ✓）传进来 ✓，
+      而下面写的是 `sorted(prev_days)` ✗ ⇒ 对 **list[dict]** 排序 ⇒ **dict 与 dict 比大小** ✗。
+      后果 ✓：异常被 `pass_common_gates` 的 `except Exception` 兜住 ⇒ **fail-open** ✓
+        ⇒ 「253 语境闸」在 **253/`custom_m5dump` 腿上被静默跳过** ✗（不是崩，是**这条规则没生效** ✗）。
     """
     n = int(days if days is not None else os.getenv("WOLF_SLOW_DECLINE_DAYS", "5"))
     min_drop = float(min_drop_pct if min_drop_pct is not None else os.getenv("WOLF_SLOW_DECLINE_MIN_PCT", "1.0"))
@@ -381,7 +391,11 @@ def slow_decline(prev_days, days=None, min_drop_pct=None, max_drop_pct=None, flu
 
     if not prev_days:
         return False, "无日线数据 → 不作为缓跌(放行)"
-    rows = [prev_days[k] for k in sorted(prev_days)][-(n + 1):]
+    if isinstance(prev_days, dict):
+        rows = [prev_days[k] for k in sorted(prev_days)][-(n + 1):]
+    else:
+        # 列表形态（`_prev_daily_rows` ✓）：**已按时间升序** ⇒ 直接取尾部 ✓（不要再 sorted ✗）
+        rows = list(prev_days)[-(n + 1):]
     if len(rows) < 3:
         return False, "日线不足(%d) → 不作为缓跌(放行)" % len(rows)
     closes = [float(r.get("close") or 0) for r in rows]
