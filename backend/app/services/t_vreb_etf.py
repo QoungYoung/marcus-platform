@@ -546,6 +546,12 @@ def _buy_probe_first_half() -> List[Dict[str, Any]]:
             continue
         try:
             from app.services.t_build import build_t_position
+            from app.services.build_via_ai import defer_to_ai as _bvai_d
+            _d = _bvai_d(sym, price, "repair_probe_buy", reason="修复期探针第一半（repair_probe）",
+                         mode="repair_probe", extra={"volume_hint": vol})
+            if _d:
+                results.append({"symbol": sym, "volume": vol, "status": _d["status"], "reason": _d["reason"]})
+                continue
             out = build_t_position(sym, price, volume=vol,
                                    reason="修复期探针第一半（repair_probe，T+1试探）",
                                    decision_source="ai_led", build_mode="repair_probe")
@@ -617,6 +623,12 @@ def _buy_probe_second_half() -> List[Dict[str, Any]]:
             continue
         try:
             from app.services.t_build import build_t_position
+            from app.services.build_via_ai import defer_to_ai as _bvai_d
+            _d = _bvai_d(sym, price, "repair_probe_buy", reason="修复期探针第二半（repair_probe）",
+                         mode="repair_probe", extra={"volume_hint": vol})
+            if _d:
+                results.append({"symbol": sym, "volume": vol, "status": _d["status"], "reason": _d["reason"]})
+                continue
             out = build_t_position(sym, price, volume=vol,
                                    reason="修复期探针第二半（repair_probe，企稳补仓）",
                                    decision_source="ai_led", build_mode="repair_probe")
@@ -908,6 +920,11 @@ def try_build_candidates() -> List[Dict[str, Any]]:
             results.append({"symbol": sym, "status": "no_price"})
             continue
         try:
+            from app.services.build_via_ai import defer_to_ai as _bvai_d
+            _d = _bvai_d(sym, price, "vreb_etf_buy", reason="科技ETF V反建仓（vreb_etf）", mode="vreb_etf")
+            if _d:
+                results.append({"symbol": sym, "status": _d["status"], "reason": _d["reason"]})
+                continue
             out = build_t_position(sym, price, reason="科技ETF V反建仓（vreb_etf）",
                                    decision_source="ai_led", build_mode="vreb_etf")
             status = out.get("status")

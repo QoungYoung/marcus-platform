@@ -345,6 +345,11 @@ def try_build_candidates() -> List[Dict[str, Any]]:
             results.append({"symbol": sym, "status": "no_price"})
             continue
         try:
+            from app.services.build_via_ai import defer_to_ai as _bvai_d
+            _d = _bvai_d(sym, price, "trend_break_buy", reason="趋势突破短线建仓（trend_break）", mode="trend_break")
+            if _d:
+                results.append({"symbol": sym, "status": _d["status"], "reason": _d["reason"]})
+                continue
             out = build_t_position(sym, price, reason="趋势突破短线建仓（trend_break）",
                                    decision_source="ai_led", build_mode="trend_break")
             status = out.get("status")
