@@ -1130,6 +1130,63 @@ class TMonitor:
         except Exception:
             return False
 
+
+    # ── ★ §9.843 ✓（用户 2026-10-13「不算追高吗？都快历史新高了吧」✓）：建仓/埋伏类的
+    #   **追高闸 + 位置闸**（阈值来自本仓**历史成交标定** ✓，`scripts/calib_chase_position2.py` ✓）
+    #   标定样本 = 1796 笔真实买入（全账户 ✓，基准=**实际成交价** × **不复权序列** ✓）：
+    #     · 距 250 日高 **−2~0%**（贴新高 ✗）⇒ +10d 中位 **−7.19%**、胜率 **22.0%**（n=59 ✓）
+    #       对照 −10~−5% ⇒ −1.43% / 46.7%（n=392 ✓）⇒ **贴新高明显更差** ✓
+    #     · 20 日涨幅 **>30%** ⇒ +10d 中位 **−4.45%**、胜率 **36.9%**、MAE **−8.93%**（n=195 ✓）
+    #       对照 涨幅<0（回调里买 ✓）⇒ **+0.83% / 52.8%**（n=286 ✓）⇒ 反过来佐证他的
+    #       「**只在下跌里买**」✓（语料 ledger:450 ✓）
+    #   三个阈值**默认 0 = 关** ✓（生产零影响 ✓）；回测/灰度按标定值开启 ✓
+    #   （深圳华强 2026-05-06 ✓：距高 −2.36% ✓ 且 20 日涨幅 +51.6% ✓ ⇒ **两道闸任一都能拦住** ✓）
+    def _build_chase_block(self, sym, kind, price):
+        """建仓/埋伏类的追高/位置闸 ⇒ `(block, why)`；未启用或缺数 ⇒ 一律放行（fail-open ✓）"""
+        try:
+            from app.services.wave_gate import classify_buy_leg as _cbl3
+            if _cbl3(kind) not in ("build", "ambush"):
+                return False, ""
+        except Exception:
+            return False, ""
+        try:
+            _near = abs(float(os.getenv("WOLF_BUILD_NEAR_HIGH_PCT", "0") or 0))
+            _gmax = abs(float(os.getenv("WOLF_BUILD_GAIN20_MAX", "0") or 0))
+        except Exception:
+            _near = _gmax = 0.0
+        if _near <= 0 and _gmax <= 0:
+            return False, ""
+        try:
+            _px = float(price or 0)
+        except Exception:
+            _px = 0.0
+        if _px <= 0:
+            return False, ""
+        try:
+            _bd = self._daily_dated(sym, 260) or []
+        except Exception:
+            _bd = []
+        if len(_bd) < 25:
+            return False, ""
+        try:
+            _hi250 = max(float(b.get("high") or b.get("close") or 0) for b in _bd[-250:])
+            _c20 = float(_bd[-21].get("close") or 0)
+        except Exception:
+            return False, ""
+        if _near > 0 and _hi250 > 0:
+            _d = (_px / _hi250 - 1) * 100
+            if _d > -_near:
+                return True, ("[CHASE-POS] 建仓/埋伏类**贴 250 日新高** ✗：成交价 %.3f vs 250日高 %.3f"
+                              "（距高 %+.2f%% > −%.1f%%）⇒ 拦下 ✓（标定：该档 +10d 中位 −7.19%%、胜率 22%% ✓）"
+                              % (_px, _hi250, _d, _near))
+        if _gmax > 0 and _c20 > 0:
+            _g = (_px / _c20 - 1) * 100
+            if _g > _gmax:
+                return True, ("[CHASE-GAIN] 建仓/埋伏类**20 日已涨 %.1f%%** (> %.0f%%) ✗ ⇒ 拦下 ✓"
+                              "（标定：该档 +10d 中位 −4.45%%、胜率 36.9%%、MAE −8.93%% ✓；"
+                              "对照「回调里买」+0.83%%/52.8%% ✓）" % (_g, _gmax))
+        return False, ""
+
     def _ambush_warn_trim(self) -> None:
         """**指数层预警 ⇒ 埋伏仓减到防御档**（账本 §9.205 ✓）。
 
@@ -5169,6 +5226,13 @@ class TMonitor:
                     #   开关 `WOLF_BUILD_VIA_AI`（**库内默认 0 = 现状** ✓ 生产零影响 ✓；
                     #     回测/灰度置 1 ✓）⇒ 命中后**不自动执行** ✗，改送 agent 决策 ✓
                     #     （与浪型 `side` 同一机制：状态 pending + QQ 通知 + 后台唤醒 ✓）
+                    _cpb, _cpwhy = (False, "")
+                    if str(side).lower() in ("buy", "买入"):
+                        try:
+                            _cpb, _cpwhy = self._build_chase_block(symbol, trigger_kind, current)
+                        except Exception as _ecp:
+                            _cpb, _cpwhy = (False, "")
+                            print("[TMonitor] 建仓追高/位置闸异常(放行 ✓): %s" % str(_ecp)[:70], flush=True)
                     _bvai = False
                     if (str(os.getenv("WOLF_BUILD_VIA_AI", "0")).strip().lower() in ("1", "true", "yes", "on")
                             and str(side).lower() in ("buy", "买入")):
@@ -5260,6 +5324,10 @@ class TMonitor:
                                   % (symbol, trigger_kind, str(_wgwhy)[:110]), flush=True)
                             t_db.update_trigger_status(trig_id, "blocked",
                                                        reason="[WAVE-COND] " + str(_wgwhy)[:200])
+                    elif _cpb:
+                        exec_ok = False
+                        print("[TMonitor] 建仓追高/位置闸拦截 %s %s: %s" % (symbol, trigger_kind, str(_cpwhy)[:110]), flush=True)
+                        t_db.update_trigger_status(trig_id, "blocked", reason=str(_cpwhy)[:200])
                     elif _bvai:
                         # ★ 2026-10-13（用户拍板 ✓）：建仓类（trend_break_buy / *ambush_buy / 253-254 ✗）
                         #   不再"条件命中自动执行"✗ ⇒ **送 agent 决策** ✓（agent 按其提示词里的
