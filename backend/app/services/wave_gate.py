@@ -24,6 +24,7 @@
 开关 ✓：`WOLF_WAVE_GATE_ONLY=1` ⇒ 用本模块 ✓（**库内默认 0** ⇒ 生产行为不变 ✓；回测 pins 置 1 ✓）
 """
 from __future__ import annotations
+import re
 import json
 import os
 import sys
@@ -561,6 +562,55 @@ def cond_buy_wave_verdict(kind: str = "low_buy", as_of: Optional[str] = None, sy
     return {"blocked": bool(blocked), "mode": mode, "op": op, "why": str(why or "")}
 
 
+def theme_wave_op(theme: str, as_of: Optional[str] = None, extra_dirs=None) -> tuple:
+    """**主线板块浪型**（第一版：确定性派生 ✓）⇒ `(op, detail)` ✓
+
+    为什么不能用 `trend_confirm.stage` 当浪型 ✗（用户 2026-10-13 指出「主线浪型无效」✓）：
+      那个 `stage`（full_window_confirmed / suspect / not_confirmed / window_limited ✓）是
+      **主升结构确认档** ✓（docstring：「上升中继结构 = 低点抬高 + 2浪回调不破前低 + 再创新高」✓，
+      track_b 还只是**成分股确认比例** ✓）⇒ 它是"确认度"，**不是** level/sub_level/operation ✗
+
+    本函数用 `track_a` 的**结构事实**按他的原话派生 op ✓（原话：「低点抬高 + 2浪回调不破前低 + 再创新高」✓）：
+      · `no_break is False`（破前低 ✗）⇒ `defense`（结构破坏 ✓）
+      · `new_high=True` 且 `pullback` 为合格 2 浪回调（非空 ✓）⇒ `build`（主升中继 ✓）
+      · `new_high=True` 但回调不合格/缺失 ⇒ `t_only`（形态不全 ✓ ⇒ 只做T不新建主升 ✓）
+      · 其余（无新高 ✓）⇒ `side`（观望 ✓）
+    返回 `("", "")` 表示**取不到结构**（调用方回落大盘口径 ✓）
+    """
+    if not theme:
+        return "", ""
+    d8 = "".join(ch for ch in str(as_of or sim_day8() or "") if ch.isdigit())[:8]
+    import glob as _glob
+    cands = []
+    _dirs = list(extra_dirs or []) + _data_dirs()
+    for pat in [os.path.join(d, f) for d in _dirs
+                for f in ("trend_confirm_*_long.json", "trend_confirm_*.json")]:
+        cands += [f for f in _glob.glob(pat)
+                  if re.search(r"(\d{8})", os.path.basename(f))
+                  and (not d8 or re.search(r"(\d{8})", os.path.basename(f)).group(1) <= d8)]
+    cands.sort(key=lambda f: re.search(r"(\d{8})", os.path.basename(f)).group(1), reverse=True)
+    for fp in cands[:3]:
+        try:
+            with open(fp, encoding="utf-8") as f:
+                tr = json.load(f)
+        except Exception:
+            continue
+        for t in (tr.get("themes") or []):
+            if t.get("theme") != theme:
+                continue
+            a = t.get("track_a") or {}
+            nh, pb, nb = a.get("new_high"), a.get("pullback"), a.get("no_break")
+            _why = "; ".join(str(x) for x in (a.get("reason") or [])[:2])[:70]
+            if nb is False:
+                return "defense", "结构破前低(%s)" % _why
+            if nh and pb:
+                return "build", "新高+合格2浪回调(%s)" % _why
+            if nh:
+                return "t_only", "新高但回调不合格(%s)" % _why
+            return "side", "无新高(%s)" % _why
+    return "", ""
+
+
 def wave_scope() -> str:
     """★ 2026-10-13（用户拍板 ✓）：浪型判定的**范围** —— `index`（默认，现状 ✓）| `mainline`（主线板块 ✓）
 
@@ -591,13 +641,23 @@ def _mainline_themes(as_of: Optional[str] = None):
         return []
 
 
+def _data_dirs() -> list:
+    """数据目录候选（本地仓库 / 容器 / 沙箱 ✓）—— 先前只认 DATA_DIR ⇒ 本地/单测取不到文件 ✗"""
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    out = []
+    for d in (os.environ.get("DATA_DIR"), os.path.join(here, "data"), "data", "/app/data"):
+        if d and d not in out and os.path.isdir(d):
+            out.append(d)
+    return out
+
+
 def theme_stage(theme: str, as_of: Optional[str] = None) -> str:
     """主题的**结构确认档**（track_a 优先、缺失用 track_b ✓，`trend_confirm_<d>_long.json` ✓）"""
     if not theme:
         return ""
     d8 = "".join(ch for ch in str(as_of or sim_day8() or "") if ch.isdigit())[:8]
-    for cand in (os.path.join(os.environ.get("DATA_DIR", "/app/data"), "trend_confirm_%s_long.json" % d8),
-                 os.path.join(os.environ.get("DATA_DIR", "/app/data"), "trend_confirm_%s.json" % d8)):
+    for cand in [os.path.join(d, f) for d in _data_dirs()
+                 for f in ("trend_confirm_%s_long.json" % d8, "trend_confirm_%s.json" % d8)]:
         try:
             with open(cand, encoding="utf-8") as f:
                 tr = json.load(f)
@@ -709,11 +769,16 @@ def cond_buy_wave_block(kind: str, as_of: Optional[str] = None, symbol: str = ""
         _th, _st = symbol_mainline_stage(symbol, _asof) if _scope == "mainline" else ("", "")
         # ① 主线板块口径：属当日主线/次主线且结构**已确认** ⇒ 放行建仓 ✓
         #    依据：2025-06-05「主线板块筑底行情…急杀可以买，缓跌不买」✓（时点仍由 B 闸把关 ✓）
-        if _th and str(_st).lower() == "confirmed":
-            _mult = wave_size_mult(op, _st)
-            return False, ("[WAVE-SCOPE=mainline] 主线板块 %s 结构=confirmed ⇒ 建仓放行 ✓"
+        _top, _tdetail = theme_wave_op(_th, _asof) if _th else ("", "")
+        if _top == "build":
+            _mult = wave_size_mult("build", _st)
+            return False, ("[WAVE-SCOPE=mainline] 主线板块 %s 浪型=**build**（%s ✓）⇒ 建仓放行 ✓"
                            "（降档 ×%.2f；时点由 B 闸「不在下跌中买」把关 ✓；大盘档 %s/%s·%s）"
-                           % (_th, _mult, tag, op, _wd))
+                           % (_th, _tdetail, _mult, tag, op, _wd))
+        if _top == "defense":
+            return True, ("[WAVE-SCOPE=mainline] 主线板块 %s 浪型=**defense**（%s ✗）"
+                          "⇒ 建仓不放行（结构已破 ✓；大盘档 %s/%s·%s）"
+                          % (_th, _tdetail, tag, op, _wd))
         # ② t_only 下**追高/主升**类仍拦 ✓（语料：只做T、**不追不新建主升** ✓）
         if op == "t_only" and _cls == "build" and any(x in str(kind or "").lower() for x in ("trend_break", "breakout", "new_high")):
             return True, ("浪型 %s·t_only ⇒ 「只做T、不追**不新建主升**」✓，本腿（%s）属主升/突破 ✗ "
