@@ -2103,7 +2103,11 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     #   起点个案：环旭电子 601231 2026-03-03 —— 09:40 的 `wolf_zheng_t_buy` 因理由含「未跌破止损」
     #   被换手闸整段旁路（见 t_turnover 的 A 修复），买在 47.39（当日最高 48.50）⇒ 当日收跌停 43.58。
     #   数据源与 C2′/C2″ 同一套分钟档（`intraday_crush`）；取不到 ⇒ fail-open。
-    if str(side).lower() in ("buy", "买入") and not _falling_gate_exempt(kind):
+    # ★ §9.865 修 ✓（2026-10-14 实测）：这里原先用**原始入参 `kind`** ✗ ⇒ AI 执行路径
+    #   （`t_ai_agent` 调 `gateway_execute(...)` **不传 kind** ✗）下 `kind=""` ⇒ ①B/C 豁免恒不生效 ✗
+    #   ②本提交的"建仓腿买带（E5）"也取不到腿型 ⇒ E5 恒不生效 ✗（实测 #69698 仍被 BUY_TIMING 拒 ✓）。
+    #   必须用**已解析的** `_kind_gw` ✓（上面由 `kind` 或 `_turnover_kind(trigger_id, condition_id)` 得出 ✓）。
+    if str(side).lower() in ("buy", "买入") and not _falling_gate_exempt(_kind_gw):
         try:
             try:
                 import intraday_crush as _icg
@@ -2153,7 +2157,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                         #     现价落在带内即视为买点命中 E5 ✓（开关 `WOLF_TREND_PULLBACK_BUYPOINT` 默认 0 ✓）
                         _band_g = None
                         try:
-                            if str(kind or "") in _build_cap_kinds():
+                            if str(_kind_gw or "") in _build_cap_kinds():
                                 _cid_g = (_trg3 or {}).get("condition_id")
                                 if _cid_g:
                                     _cond_g = t_db.get_condition(int(_cid_g)) or {}
