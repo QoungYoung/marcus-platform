@@ -247,7 +247,7 @@ def main() -> int:
     # 交易腿 agent（LLM）透传给 bt_prod_run.py —— 年跑要带 agent 必须从这里过
     ap.add_argument("--agent", choices=["on", "off"], default=os.getenv("BT_AGENT", "off"),
                     help="交易腿 agent 的 LLM 决策层（on = 每触发调 /chat，默认 off）")
-    ap.add_argument("--agent-url", default=os.getenv("BT_AGENT_CHAT_URL", "http://127.0.0.1:13101/chat"),
+    ap.add_argument("--agent-url", default=os.getenv("BT_AGENT_CHAT_URL", "http://127.0.0.1:3001/chat"),
                     help="LLM /chat 地址（硬隔离后默认指向本地隔离 dsh 13101）")
     ap.add_argument("--agent-cache", default=os.getenv("BT_LLM_CACHE", os.path.join(DATA, "_bt_llm_year2")))
     ap.add_argument("--agent-mode", default=os.getenv("BT_LLM_MODE", "record"), choices=["record", "replay"])

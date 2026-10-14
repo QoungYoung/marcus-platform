@@ -115,7 +115,7 @@ export WOLF_MEMBER_PREWARM_WORKERS='1'     # 单票兜底并发（主路径已�
 export WOLF_WAVE_COND_FAIL='close'
 
 # 主营校验的 LLM 端点：**默认是 13101（已死）** ⇒ 必须显式指向活的 13001，否则逐票超时重试（一天几小时）
-export WOLF_MEMBER_LLM_URL='http://127.0.0.1:13001/chat'
+export WOLF_MEMBER_LLM_URL='http://127.0.0.1:3001/chat'
 export WOLF_MEMBER_BATCH='1'               # 主路径改**批量**：一次判 20–40 只（实测 40 只 10.0s），请求数 344/天→9–18/天。
 export WOLF_MEMBER_BATCH_SIZE='40'          # 每批只数（实测 n=25 → 18.9s；n=40 → 10.0s，都远低于 20s 超时）。
 export WOLF_MEMBER_BATCH_TIMEOUT='420'   # 账本 §9.646：实测 25 只批量 >193 秒（旧值 18.9s ✗）⇒ 90 必超时
@@ -898,7 +898,7 @@ export WOLF_AGENT_SESSION_PER_DAY='1'   # 账本 §9.596：回测每天独立 se
 
 export WOLF_MINS_1MIN_FALLBACK='1'   # 账本 §9.600：5min 拿不到时用 1min 回退＋本地聚合（库内默认 0 ⇒ 生产零影响）
 
-export WAVE_CHAT_URL='http://127.0.0.1:13001/chat'   # 账本 §9.602：low_logic/wave agent 的 LLM 端点（原默认 marcus-dsh:3001 在回测里解析不到⇒挂住⇒烧满 30 分钟超时 ✗）
+export WAVE_CHAT_URL='http://127.0.0.1:3001/chat'   # 账本 §9.602：low_logic/wave agent 的 LLM 端点（原默认 marcus-dsh:3001 在回测里解析不到⇒挂住⇒烧满 30 分钟超时 ✗）
 
 export WOLF_BT_ALSO_STOCK5MBT='1'   # 账本 §9.618：回测同时写 stock_5m_bt（库内默认 0 ⇒ 生产零影响）
 

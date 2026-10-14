@@ -848,7 +848,7 @@ def main() -> int:
                     help="LLM 录制/回放缓存根目录（默认 data/_bt_llm_year2）")
     ap.add_argument("--agent-mode", default=os.getenv("BT_LLM_MODE", "record"),
                     choices=["record", "replay"], help="record=真实外呼+落盘；replay=只读缓存")
-    ap.add_argument("--agent-url", default=os.getenv("BT_AGENT_CHAT_URL", "http://127.0.0.1:13001/chat"),
+    ap.add_argument("--agent-url", default=os.getenv("BT_AGENT_CHAT_URL", "http://127.0.0.1:3001/chat"),
                     help="PI_SERVER_URL 指向的 LLM /chat（本地隧道）")
     ap.add_argument("--agent-all-pending", action="store_true",
                     help="认领全部 pending（生产语义，含跨日遗留/孤儿单处置）；默认只认领本次运行产生的")
