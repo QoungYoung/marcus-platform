@@ -46,14 +46,24 @@ def _bridge_url() -> str:
         return "http://127.0.0.1:3001/chat"
 
 
-def _position_summary(symbol: str) -> Dict[str, Any]:
-    """持仓摘要（唤醒上下文用）：可卖底仓/持仓量/成本/浮动盈亏。"""
+def _position_summary(symbol: str, account_id: str = "") -> Dict[str, Any]:
+    """持仓摘要（唤醒上下文用）：可卖底仓/持仓量/成本/浮动盈亏。
+
+    ★ 2026-10-14（用户：「这种没有持仓的卖出不要走AI了」⇒ 查出的**真因** ✗✗）：
+      这里原来**不传账户** ⇒ `get_sellable_ledger()` 按默认 **t 账户** 读 ✗，而触发它的腿
+      在 **stock 账户** ⇒ 摘要恒为 `volume=0 / sellable=0` ✗ ⇒ AI 每次都判「空仓、无底仓、
+      卖腿即裸空 ⇒ abandon」✗（实测 sh600299：stock 账户**实际持有 1700 股、可卖 1700**，
+      而 AI 连续 6 次说"持仓仍为0股、可卖0股"✗）⇒ 高抛卖腿因此**永远执行不了** ✗。
+      修 ✓：按**触发所属账户**读（空则退回 `T_MONITOR_ACCOUNT` ✓）。
+    """
     try:
         from app.services.t_gateway import get_sellable_ledger
-        ledger = get_sellable_ledger()
+        _acc = account_id or os.getenv("T_MONITOR_ACCOUNT", "t")
+        ledger = get_sellable_ledger(account_id=_acc)
         item = ledger.get(symbol) or {}
         return {
             "symbol": symbol,
+            "account_id": _acc,
             "sellable": item.get("sellable", 0),
             "volume": item.get("volume", 0),
             "avg_price": item.get("avg_price"),
@@ -439,7 +449,9 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     symbol = trigger.get("symbol", "")
     ctx = dict(context or {})
     # 增强上下文：持仓摘要 + 最近决策（含结果） + 标的做T历史统计 + 连续命中计数
-    ctx.setdefault("position", _position_summary(symbol))
+    # ★ 2026-10-14：持仓摘要必须按**触发所属账户**读（原来缺省 t 账户 ⇒ stock 账户的腿
+    #   被喂成"0 股、可卖 0" ⇒ AI 恒判 abandon ✗，见 `_position_summary` 注释 ✓）
+    ctx.setdefault("position", _position_summary(symbol, trigger.get("account_id") or ""))
     ctx.setdefault("recent_decisions", _recent_decisions(symbol))
     ctx.setdefault("symbol_t_stats", _symbol_t_stats(symbol))
     ctx.setdefault("history_snapshot", symbol_history_snapshot(
@@ -710,12 +722,48 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     return None
 
 
+def _no_position_sell_reason(trigger: Dict[str, Any]) -> str:
+    """卖腿 + 账户 0 持仓 ⇒ 返回原因串（调用方跳过 AI 唤醒），否则返回 ""。
+
+    2026-10-14（用户：「这种没有持仓的卖出不要走AI了」✓）：实测 sh600299 wolf_profit_take_sell
+    连续 6 次唤醒 AI，每次结论都是「空仓无底仓可卖 ⇒ abandon（裸空）」——纯浪费 LLM，
+    还多推一条 QQ 裁决。**只看 volume==0**：T+1 锁住但有底仓的卖腿**照旧问 AI**（它可以决定等）✓。
+    """
+    try:
+        t = trigger or {}
+        if str(t_db.trigger_side(t)).lower() not in ("sell", "卖出"):
+            return ""
+        sym = str(t.get("symbol") or "")
+        if not sym:
+            return ""
+        from app.services.t_gateway import get_sellable_ledger
+        acc = t.get("account_id") or os.getenv("T_MONITOR_ACCOUNT", "stock")
+        item = (get_sellable_ledger(account_id=acc) or {}).get(sym) or {}
+        if int(item.get("volume") or 0) <= 0:
+            return "%s 持仓 0 股（%s 账户）⇒ 卖腿成交即裸空、不可能执行 ⇒ 不唤醒 AI" % (sym, acc)
+        return ""
+    except Exception:
+        return ""
+
+
 def wake_and_decide(trigger: Dict[str, Any], context: Optional[dict] = None,
                     session_id: Optional[str] = None) -> Dict[str, Any]:
     """AI 主导闭环：唤醒 AI → 取回复 → handle_ai_decision 路由（exec/wait/abandon/update_condition）→ 审计。
 
     唤醒失败（桥不可达）返回 {"status": "wake_failed"}，由调用方走降级（agent_review_and_execute 标记）。
+    ★ 2026-10-14：卖腿但账户 0 持仓时**先短路**（`_no_position_sell_reason`）——这种唤醒的答案
+      永远是"裸空 ⇒ abandon"，只会白烧 LLM 并多推一条 QQ ✓。
     """
+    _skip = _no_position_sell_reason(trigger)
+    if _skip:
+        _tid = int((trigger or {}).get("id") or 0)
+        try:
+            if _tid:
+                t_db.update_trigger_status(_tid, "await_retry", reason="[NO-POS] " + _skip)
+        except Exception as _e:
+            print("[t-bridge] 无持仓卖腿标记失败: %s" % str(_e)[:70], flush=True)
+        print("[t-bridge] 跳过 AI 唤醒（无持仓卖腿）: %s" % _skip, flush=True)
+        return {"status": "skipped_no_position", "reason": _skip, "trigger_id": _tid, "action": "skip"}
     reply = wake_agent(trigger, context=context)
     if not reply:
         return {"status": "wake_failed", "reason": "AI 唤醒失败（桥不可达）"}

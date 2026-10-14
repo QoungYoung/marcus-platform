@@ -10,6 +10,8 @@ AI 是选股/操作/条件/复盘的唯一决策主体，本模块承接 AI 决�
 """
 import json
 import os
+import threading
+import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +32,93 @@ def _silent_alert(where, exc=None):
                   str(exc)[:110] if exc is not None else ""), flush=True)
         except Exception:
             pass
+
+
+_DECISION_QQ_SEEN: Dict[str, float] = {}          # "symbol|action" → 上次推送时间
+_DECISION_QQ_TS: List[float] = []                 # 最近一小时推送时间戳
+_DECISION_QQ_MUTED: Dict[str, int] = {}           # "YYYYMMDDHH" → 被限流省略的条数
+_DECISION_QQ_LOCK = threading.Lock()
+
+# 默认静音腿型 = **高抛/止盈类卖腿**（routine 裁决只落库 t_ai_actions、不推 QQ ✓）。
+#   2026-10-14 用户：「AI 裁决太多了，wolf_dao_t_sell 不要通知我」→「高抛卖腿的 AI 裁决不用推送」✓
+#   口径来自 t_db.py:138 `sell_kinds = ("high_sell", "high_sell_then_buy_back", "high_only")`（高抛式）
+#   ＋止盈/上轨/道氏T卖；**stop_loss / 保护类卖腿不在名单**（那些是风险信号，要看得见 ✓）。
+_DEFAULT_QQ_SKIP_KINDS = ",".join((
+    "high_sell", "high_sell_then_buy_back", "high_only",
+    "wolf_profit_take_sell", "wolf_boll_upper_sell", "wolf_dao_t_sell",
+))
+
+
+def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
+                        action: str, reason: str, action_id: Optional[int],
+                        status: str = "") -> None:
+    """把 AI 裁决回推 QQ（wait / abandon / update_condition / exec 被拒）。绝不抛。
+
+    2026-10-14（用户：「把 AI 裁决回推 QQ」✓）：浪型 side 这类「送 agent 确认」原本只在
+    **请求**时推一条 QQ，AI 的裁决静默落库 ⇒ 用户看着像没人审
+    （实例 SH600025：#8218 触发 → 20 秒后 ai_wait #1012 有结论，但没有任何通知）。
+    只推「需要人知道」的：exec **成功**交给成交通知 ✓（避免重复）；回测会话
+    （session 含 backtest）一律不推 ✓。
+
+    防刷屏（必须做：`alert_hub.push_qq` 是裸发送，没有 note() 那套去重/限流 ✓）：
+      · 腿型静音名单 `WOLF_AI_DECISION_QQ_SKIP_KINDS`（默认 `wolf_dao_t_sell`）
+        —— 用户 2026-10-14「AI 裁决太多了，wolf_dao_t_sell 不要通知我」✓
+      · 同 (标的, 动作, 腿型) 在 `WOLF_AI_DECISION_QQ_DEDUP_SEC`（默认 3600s）内只推一条
+        —— 实测 2026-10-08 单日 86 条 ai_abandon（同一标的反复触发）✗
+      · 每小时最多 `WOLF_AI_DECISION_QQ_MAX_PER_HOUR` 条（默认 5），超限只推一条提示
+      · `WOLF_AI_DECISION_QQ=0` 整体关闭 ✓
+    """
+    try:
+        if "backtest" in str(session_id or ""):
+            return
+        if str(os.getenv("WOLF_AI_DECISION_QQ", "1")).strip().lower() in ("0", "false", "no"):
+            return
+        _a = str(action or "")
+        if _a == "exec" and str(status or "").lower() not in ("rejected", "error"):
+            return
+        # ★ 2026-10-14（用户：「AI 裁决太多了，wolf_dao_t_sell 不要通知我」→「高抛卖腿的 AI 裁决
+        #   不用推送」✓）：腿型级静音名单（`WOLF_AI_DECISION_QQ_SKIP_KINDS`，逗号分隔；
+        #   默认 = 高抛/止盈类卖腿，见 `_DEFAULT_QQ_SKIP_KINDS`）。
+        #   **exec 被网关拒仍照推** ✓（"想卖没卖成"是真问题，不能一起静音 ✗）。
+        _skip = {x.strip().lower() for x in str(os.getenv(
+            "WOLF_AI_DECISION_QQ_SKIP_KINDS", _DEFAULT_QQ_SKIP_KINDS)).split(",") if x.strip()}
+        _exec_rejected = (_a == "exec" and str(status or "").lower() in ("rejected", "error"))
+        if str(event_type or "").strip().lower() in _skip and not _exec_rejected:
+            return
+        _icon = {"exec": "🟢", "wait": "⏸️", "abandon": "🚫", "update_condition": "✏️"}.get(_a, "ℹ️")
+        _head = {"exec": "AI 裁决：执行被拒", "wait": "AI 裁决：等待（本次不接）",
+                 "abandon": "AI 裁决：放弃", "update_condition": "AI 裁决：调整条件"}.get(_a, "AI 裁决")
+        text = "%s %s｜%s %s%s\n%s" % (_icon, _head, symbol or "?", event_type or "-",
+                                       ("｜决策#%s" % action_id) if action_id else "",
+                                       str(reason or "")[:300])
+        now = time.time()
+        try:
+            _dedup = float(os.getenv("WOLF_AI_DECISION_QQ_DEDUP_SEC", "3600") or 3600)
+            _cap = int(os.getenv("WOLF_AI_DECISION_QQ_MAX_PER_HOUR", "5") or 5)
+        except Exception:
+            _dedup, _cap = 3600.0, 5
+        _key = "%s|%s|%s" % (symbol or "?", _a, event_type or "-")
+        with _DECISION_QQ_LOCK:
+            if now - float(_DECISION_QQ_SEEN.get(_key, 0) or 0) < _dedup:
+                return                                  # 同标的同动作刚推过 ⇒ 静默
+            _DECISION_QQ_SEEN[_key] = now
+            _cut = now - 3600
+            while _DECISION_QQ_TS and _DECISION_QQ_TS[0] < _cut:
+                _DECISION_QQ_TS.pop(0)
+            _hour = time.strftime("%Y%m%d%H")
+            if len(_DECISION_QQ_TS) >= _cap:
+                _n = _DECISION_QQ_MUTED.get(_hour, 0) + 1
+                _DECISION_QQ_MUTED[_hour] = _n
+                if _n > 1:
+                    return                              # 本小时已提示过 ⇒ 只计数
+                text = ("⚠️ AI 裁决量大：本小时已推 %d 条，其余仅计数不再逐条推送"
+                        "（明细见 t_ai_actions）｜最近：%s %s" % (_cap, symbol or "?", _a))
+            else:
+                _DECISION_QQ_TS.append(now)
+        from app.services import alert_hub as _ah
+        _ah.push_qq(text)
+    except Exception as e:
+        _silent_alert("t_ai_agent.py:_notify_ai_decision", e)
 
 
 # 决策动作白名单（AI 输出解析后的结构化动作）
@@ -253,6 +342,8 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                 result["gateway"] = gw
                 result["status"] = "rejected"
                 _update_gateway_result(action_id, gw)
+                _notify_ai_decision(session_id, symbol, (trigger or {}).get("event_type") or "",
+                                    action, gw.get("reason") or reason, action_id, "rejected")
                 return result
             if price <= 0:
                 gw = {"status": "rejected", "reason": "无有效价格（AI 决策未携带价格）"}
@@ -315,7 +406,9 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
         # 等待：事件 await_retry（冷却后重新武装）
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "await_retry", reason=reason or "AI 等待")
-    # abandon / wait：仅审计
+    # abandon / wait：仅审计 + 回推 QQ（2026-10-14 用户：「把 AI 裁决回推 QQ」✓）
+    _notify_ai_decision(session_id, symbol, (trigger or {}).get("event_type") or "",
+                        action, reason, action_id, str(result.get("status") or ""))
     return result
 
 
