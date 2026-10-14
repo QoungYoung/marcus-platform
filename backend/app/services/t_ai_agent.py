@@ -48,17 +48,48 @@ _DEFAULT_QQ_SKIP_KINDS = ",".join((
     "wolf_profit_take_sell", "wolf_boll_upper_sell", "wolf_dao_t_sell",
 ))
 
+# 回测/回放识别（回测**绝不推 QQ** ✓）
+_BT_ACCOUNT_PREFIXES = ("drab", "bt", "backtest")
+_BT_ENV_MARKERS = ("MARCUS_BACKTEST", "BT_ASOF_DAY", "BT_ASOF_STATE", "BT_CARRY_STATE",
+                   "BT_NET_OFFLINE", "BT_AGENT_LOOP")
+
+
+def _is_backtest_ctx(session_id: Optional[str], account_id: str = "") -> bool:
+    """是否回测/回放上下文。绝不抛。
+
+    2026-10-14（用户：「为什么午间休市也触发」✓ 实测真因 ✗）：本地/服务器在跑
+    `jobs/bt_days.py --account drabt53 --agent on`（回放 2026-05-01→07-30），回测里也走同一套
+    `handle_ai_decision` ⇒ 我的通知把**回测裁决**推给了用户（账户 drabt53、模拟时间 2026-05-07
+    09:50，与实时无关）。原判据只看 session 含 "backtest" ✗（回测常走 `t-agent-<symbol>` 或
+    `bt-*`）⇒ 现补三条：① session 含 backtest / 以 bt- 开头；② 账户前缀 drab/bt/backtest；
+    ③ 回测 env 标记（`MARCUS_BACKTEST` / `BT_*`，生产 .env 里没有任何 BT_* ⇒ 不会误伤 ✓）。
+    """
+    try:
+        _sid = str(session_id or "").lower()
+        if "backtest" in _sid or _sid.startswith(("bt-", "bt_")):
+            return True
+        if str(account_id or "").strip().lower().startswith(_BT_ACCOUNT_PREFIXES):
+            return True
+        for k in _BT_ENV_MARKERS:
+            if str(os.getenv(k, "")).strip():
+                return True
+        return False
+    except Exception:
+        return False
+
 
 def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
                         action: str, reason: str, action_id: Optional[int],
-                        status: str = "") -> None:
+                        status: str = "", account_id: str = "", gw_reason: str = "") -> None:
     """把 AI 裁决回推 QQ（wait / abandon / update_condition / exec 被拒）。绝不抛。
 
     2026-10-14（用户：「把 AI 裁决回推 QQ」✓）：浪型 side 这类「送 agent 确认」原本只在
     **请求**时推一条 QQ，AI 的裁决静默落库 ⇒ 用户看着像没人审
     （实例 SH600025：#8218 触发 → 20 秒后 ai_wait #1012 有结论，但没有任何通知）。
-    只推「需要人知道」的：exec **成功**交给成交通知 ✓（避免重复）；回测会话
-    （session 含 backtest）一律不推 ✓。
+    只推「需要人知道」的：exec **成功**交给成交通知 ✓（避免重复）；**回测/回放一律不推** ✓
+    （`_is_backtest_ctx`：回测账户 drab*/bt*、session 含 backtest、`BT_*` env 三条）。
+    exec **被网关拒**时把**网关的拒绝原因**也带上 ✓（2026-10-14 用户问「解释看起来是允许，
+    为何执行被拒」✗ —— 旧文案只带 AI 的理由，看不出是网关拦的 ✓）。
 
     防刷屏（必须做：`alert_hub.push_qq` 是裸发送，没有 note() 那套去重/限流 ✓）：
       · 腿型静音名单 `WOLF_AI_DECISION_QQ_SKIP_KINDS`（默认 `wolf_dao_t_sell`）
@@ -69,7 +100,7 @@ def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
       · `WOLF_AI_DECISION_QQ=0` 整体关闭 ✓
     """
     try:
-        if "backtest" in str(session_id or ""):
+        if _is_backtest_ctx(session_id, account_id):
             return
         if str(os.getenv("WOLF_AI_DECISION_QQ", "1")).strip().lower() in ("0", "false", "no"):
             return
@@ -88,9 +119,14 @@ def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
         _icon = {"exec": "🟢", "wait": "⏸️", "abandon": "🚫", "update_condition": "✏️"}.get(_a, "ℹ️")
         _head = {"exec": "AI 裁决：执行被拒", "wait": "AI 裁决：等待（本次不接）",
                  "abandon": "AI 裁决：放弃", "update_condition": "AI 裁决：调整条件"}.get(_a, "AI 裁决")
+        if _exec_rejected and str(gw_reason or "").strip():
+            # ★ 2026-10-14：exec 被拒时**必须写清是谁拒的** ✗（旧文案只有 AI 的理由 ⇒
+            #   用户看到「AI 说按默认执行」却显示"被拒"，无从判断 ⇒ 用户实际就是这么问的 ✓）
+            _body = "网关拒绝：%s\nAI 理由：%s" % (str(gw_reason)[:200], str(reason or "")[:160])
+        else:
+            _body = str(reason or "")[:300]
         text = "%s %s｜%s %s%s\n%s" % (_icon, _head, symbol or "?", event_type or "-",
-                                       ("｜决策#%s" % action_id) if action_id else "",
-                                       str(reason or "")[:300])
+                                       ("｜决策#%s" % action_id) if action_id else "", _body)
         now = time.time()
         try:
             _dedup = float(os.getenv("WOLF_AI_DECISION_QQ_DEDUP_SEC", "3600") or 3600)
@@ -343,7 +379,9 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                 result["status"] = "rejected"
                 _update_gateway_result(action_id, gw)
                 _notify_ai_decision(session_id, symbol, (trigger or {}).get("event_type") or "",
-                                    action, gw.get("reason") or reason, action_id, "rejected")
+                                    action, reason, action_id, "rejected",
+                                    account_id=str((trigger or {}).get("account_id") or ""),
+                                    gw_reason=str(gw.get("reason") or ""))
                 return result
             if price <= 0:
                 gw = {"status": "rejected", "reason": "无有效价格（AI 决策未携带价格）"}
@@ -406,9 +444,12 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
         # 等待：事件 await_retry（冷却后重新武装）
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "await_retry", reason=reason or "AI 等待")
-    # abandon / wait：仅审计 + 回推 QQ（2026-10-14 用户：「把 AI 裁决回推 QQ」✓）
+    # abandon / wait / exec 被拒：仅审计 + 回推 QQ（2026-10-14 用户：「把 AI 裁决回推 QQ」✓）
+    _gw = result.get("gateway") or {}
     _notify_ai_decision(session_id, symbol, (trigger or {}).get("event_type") or "",
-                        action, reason, action_id, str(result.get("status") or ""))
+                        action, reason, action_id, str(result.get("status") or ""),
+                        account_id=str((trigger or {}).get("account_id") or ""),
+                        gw_reason=str(_gw.get("reason") or ""))
     return result
 
 

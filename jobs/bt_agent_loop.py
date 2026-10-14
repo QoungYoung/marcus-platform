@@ -46,6 +46,10 @@ import json
 import os
 import sys
 import time
+
+# ★ 2026-10-14：回测进程显式打标 ⇒ 通知类代码（如 t_ai_agent._is_backtest_ctx）一眼可辨，
+#   回测裁决**绝不推 QQ**（实测：本地 t53 回放在模拟时间 2026-05-07 09:50 也发了通知 ✗）。
+os.environ.setdefault("MARCUS_BACKTEST", "1")
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 

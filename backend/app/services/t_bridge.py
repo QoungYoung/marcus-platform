@@ -13,6 +13,12 @@ import json
 import time
 import urllib.request
 import os
+# ★ 2026-10-14（打开 WOLF_BREAKOUT_NO_OPEN_CHASE 时实测）✗：§9.850「开盘不追」那段用了
+#   `datetime.now()`，但本模块只在别的**函数内** `from datetime import datetime as _dt`，
+#   顶层没有 datetime ⇒ 突破腿现价高于参考价时走到那行就 `NameError: name 'datetime' is
+#   not defined` ✗，而调用点（`_cf = _corpus_buy_flags(trigger)`）**没有 try** ⇒ 会打断整条
+#   唤醒消息构造（突破腿的 AI 决策直接失败）✗ ⇒ 补顶层导入 ✓
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.config import get_settings

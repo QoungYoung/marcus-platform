@@ -17,6 +17,9 @@ import json
 import os
 import subprocess
 import sys
+
+# ★ 2026-10-14：回测编排进程打标（子进程继承）⇒ 回测不推 QQ ✓（见 t_ai_agent._is_backtest_ctx）
+os.environ.setdefault("MARCUS_BACKTEST", "1")
 import time
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
