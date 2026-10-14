@@ -17,6 +17,15 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+# ★ 2026-10-14 修复：本脚本以 `python jobs/morning_diagnosis.py`（cwd=/app）拉起，sys.path[0]
+#   只有 jobs/ ⇒ `_read_wolf_context()` 里 `__import__("mstate_retired")`（10-13 提交 239f897
+#   §9.830 引入，模块在 apps/main_line/）必然 ModuleNotFoundError ⇒ 盘前诊断 09:10 直接失败。
+#   补上与 jobs/*.py 一致的入口路径（容器 /app、本地仓库根 + backend + apps/main_line）。
+_ROOT = "/app" if os.path.isdir("/app/app") else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (os.path.join(_ROOT, "apps", "main_line"), _ROOT, os.path.join(_ROOT, "backend")):
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 
 def _load_env():
     env_file = Path(__file__).resolve().parent.parent / ".env"
@@ -63,7 +72,10 @@ def _read_wolf_context() -> str:
         cands = ml.get("candidates") or []
         if cands:
             s += "（候选：" + "、".join(str(c) for c in cands) + "）"
-        cat = __import__("mstate_retired").get_retired(ml, "catalyst", {}, "morning_diagnosis") or {}
+        try:  # catalyst 2026-09-13 起退役、get_retired 恒返回 {} ⇒ 导入再出问题也只当空处理，不拖垮盘前诊断
+            cat = __import__("mstate_retired").get_retired(ml, "catalyst", {}, "morning_diagnosis") or {}
+        except Exception:
+            cat = {}
         top = sorted(((k, v) for k, v in cat.items() if v), key=lambda kv: -kv[1])[:3]
         if top:
             s += " ｜ catalyst " + "、".join(f"{k}:{v}" for k, v in top)

@@ -32,6 +32,20 @@ from langgraph.graph import StateGraph, END
 from trade_direction import SELL_WORDS, is_buy, is_sell  # noqa: E402 统一方向词表
 
 
+def _retired(state: Any, key: str, where: str) -> Any:
+    """读已退役 state 字段（§9.830），恒为空。
+
+    2026-10-14：`mstate_retired.py` 在 `apps/main_line/`，而进程 sys.path 不一定含该目录
+    （worker_main 只加 core/xueqiu/akshare/vnpy；jobs 子进程另算）⇒ 原裸 `__import__` 会
+    ModuleNotFoundError 打崩调用方（盘前诊断就是这么挂的）。这里兜底返回 {}，与 get_retired
+    的既定语义**逐位一致**（该字段 2026-09-13 起退役 ⇒ 本来就恒为空）。
+    """
+    try:
+        return __import__("mstate_retired").get_retired(state, key, {}, where)
+    except Exception:
+        return {}
+
+
 def _silent_alert(where, exc=None):
     """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
 
@@ -723,7 +737,7 @@ def _read_main_line_context() -> str:
                       + "2026 超额 +1.03%(t=3.37)、2025 +0.34%(t=3.01)；详见 docs/wolf-structural-pool.md" + chr(10)
                       + "- 说明：他在**期货/商品**（油/金）与**超短题材**（军工打短）上的动作不属于本层对照集。" + chr(10) + chr(10))
         # 2026-09-09 主线门(gate)结构资格闸摘要 + 主线浪型 + 农业全子概念确认(防前5截断)
-        g = __import__("mstate_retired").get_retired(st, "mainline_gate", {}, "trade_graph:726") or {}
+        g = _retired(st, "mainline_gate", "trade_graph:726") or {}
         if g:
             gth = g.get("themes") or []
             conf_l = g.get("confirmed_candidate") or []
@@ -822,7 +836,7 @@ def _read_stock_confirm_context() -> str:
                 mlp = __state_path("main_line_state.json")
                 if os.path.exists(mlp):
                     mst = _json2.load(open(mlp, encoding="utf-8"))
-                    gg = __import__("mstate_retired").get_retired(mst, "mainline_gate", {}, "trade_graph:825") or {}
+                    gg = _retired(mst, "mainline_gate", "trade_graph:825") or {}
                     conf_themes = gg.get("confirmed_candidate") or ([mst.get("main_line")] if mst.get("main_line") else [])
         except Exception as _e_sil10:
             print("[silent:trade_graph.py:810] %s: %s" % (type(_e_sil10).__name__, str(_e_sil10)[:110]), flush=True)
