@@ -46,14 +46,24 @@ def _bridge_url() -> str:
         return "http://127.0.0.1:3001/chat"
 
 
-def _position_summary(symbol: str) -> Dict[str, Any]:
-    """持仓摘要（唤醒上下文用）：可卖底仓/持仓量/成本/浮动盈亏。"""
+def _position_summary(symbol: str, account_id: str = "") -> Dict[str, Any]:
+    """持仓摘要（唤醒上下文用）：可卖底仓/持仓量/成本/浮动盈亏。
+
+    ★ 2026-10-14（用户：「这种没有持仓的卖出不要走AI了」⇒ 查出的**真因** ✗✗）：
+      这里原来**不传账户** ⇒ `get_sellable_ledger()` 按默认 **t 账户** 读 ✗，而触发它的腿
+      在 **stock 账户** ⇒ 摘要恒为 `volume=0 / sellable=0` ✗ ⇒ AI 每次都判「空仓、无底仓、
+      卖腿即裸空 ⇒ abandon」✗（实测 sh600299：stock 账户**实际持有 1700 股、可卖 1700**，
+      而 AI 连续 6 次说"持仓仍为0股、可卖0股"✗）⇒ 高抛卖腿因此**永远执行不了** ✗。
+      修 ✓：按**触发所属账户**读（空则退回 `T_MONITOR_ACCOUNT` ✓）。
+    """
     try:
         from app.services.t_gateway import get_sellable_ledger
-        ledger = get_sellable_ledger()
+        _acc = account_id or os.getenv("T_MONITOR_ACCOUNT", "t")
+        ledger = get_sellable_ledger(account_id=_acc)
         item = ledger.get(symbol) or {}
         return {
             "symbol": symbol,
+            "account_id": _acc,
             "sellable": item.get("sellable", 0),
             "volume": item.get("volume", 0),
             "avg_price": item.get("avg_price"),
@@ -423,7 +433,9 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     symbol = trigger.get("symbol", "")
     ctx = dict(context or {})
     # 增强上下文：持仓摘要 + 最近决策（含结果） + 标的做T历史统计 + 连续命中计数
-    ctx.setdefault("position", _position_summary(symbol))
+    # ★ 2026-10-14：持仓摘要必须按**触发所属账户**读（原来缺省 t 账户 ⇒ stock 账户的腿
+    #   被喂成"0 股、可卖 0" ⇒ AI 恒判 abandon ✗，见 `_position_summary` 注释 ✓）
+    ctx.setdefault("position", _position_summary(symbol, trigger.get("account_id") or ""))
     ctx.setdefault("recent_decisions", _recent_decisions(symbol))
     ctx.setdefault("symbol_t_stats", _symbol_t_stats(symbol))
     ctx.setdefault("history_snapshot", symbol_history_snapshot(
