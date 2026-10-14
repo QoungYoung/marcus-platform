@@ -108,6 +108,13 @@ def fetch_limit() -> int:
 #   "dist20h"    = 距 20 日收盘高点由近到远（「方向内选强、绝不后排」的可操作实现；四个月回放全正）
 #   "lead_cond"  = 大盘 5 日跌（共振回调）⇒ 按 r5 降序（抗跌优先）；否则退化为 dist20h
 #   "auto"       = lead_cond 的别名（同一条：条件切换）
+#   "purity_amount" = §9.508：纯度（正宗度）优先 ⇒ 同分按成交额
+#   "amount_purity" = §9.869 ✓：**成交额优先 ⇒ 同分按纯度** ✓
+#     ⚠️ **可选、未验证** ✗：最初的动机（"纯度主键把龙头挤出 top10" ✗）已被
+#       **带板块前置过滤的真值 trace** 推翻 ✗（20260526 实测龙头多数本来就进池 ✓：
+#       兆易创新 汽车芯片第1/存储芯片第4 ✓、华天科技 国产芯片第1 ✓）。
+#       整月聚合显示入口瓶颈是**两个数据 bug**（§9.870 判级窗口 ✗、§9.871 主题源缺 56 天 ✗），
+#       不是排序 ✓ ⇒ 要用本模式**必须先单变量回测** ✗。
 ORDER_MODE = str(os.getenv("STOCK_CONFIRM_ORDER", "") or "").strip().lower()
 
 # ── 候选域「宽度留痕」（`WOLF_CONFIRM_DOMAIN_TRACE`，**默认 1 = 开** ✓；用户 2026-10-03 要求）──
@@ -244,7 +251,22 @@ def order_members(codes, close, mode=None, lookback=20, vol=None):
     #     ⇒ ⇒ 同分改按**成交额** ⇒ 它（当日**成交额 #1** ✓）**直接排最前** ✓
     #   口径（**自我包含、无主题参数** ✓）：概念池 = 「本块成员里 ≥20% 都有的概念 ∧ 非全市场通用」✓
     #   安全 ✓：任何异常 ⇒ 落回原 pop_lead/dist20h 分支 ✓（fail-open ✓）
-    if mode == "purity_amount":
+    # ★ §9.869 ✓（2026-10-14 用户「5-6月龙头一个都选不出来」排查 ✓）：**成交额优先**模式 ✓
+    #   ⚠️ **必须如实说明：本模式不是这次排查的根因，且尚未回测验证** ✗
+    #     （用户说"先做1+2"后，用**带板块前置过滤的真值 trace** 复算 ⇒ 推翻了下面这组数字 ✗）
+    #   我最初的排名探针**漏了板块前置过滤** ✗ ⇒ 纯度分母错 ⇒ 排名算错 ✗。真值（20260526 trace ✓）：
+    #     兆易创新 在 汽车芯片 **第1名** ✓、存储芯片 **第4名** ✓（不是第11 ✗）；
+    #     华天科技 国产芯片 第1 ✓；长电科技 半导体概念 第2 ✓；亨通光电 CPO 第2 ✓
+    #     ⇒ 当天 **6/10 龙头本来就进了候选池** ✓ ⇒ **排序键在正常日不是瓶颈** ✗。
+    #   整月聚合 ✓（61 天 × 10 只 = 610 个"龙头日"）：✓入选 16% ／ **未被判级 75%** ✗
+    #     ⇒ 真正的入口原因是**两个数据 bug** ✗（不在排序 ✓）：
+    #       ① §9.870 ✓ 已修：`_trade_days` 把 start_date 写死 20260601 ✗ ⇒ 0602 起判级票全空 ✗
+    #       ② §9.871 ✗ 待修：`wolf_mainline_select.json` **两套 schema** ⇒ 0611~0828 共 56 天
+    #          `mainline_select` 缺失 ✗ ⇒ 主题源为空 ⇒ 候选池恒空 ✗
+    #   因此：本模式**保留为可选** ✓（默认关 ✓、不影响任何现有臂 ✓），
+    #     但**未经验证** ✗ —— 要用必须先单变量回测 ✓，不要当成已修 ✗。
+    #   安全 ✓：**只新增取值** ✓ —— `purity_amount` 分支的排序键**逐字不变** ✓。
+    if mode in ("purity_amount", "amount_purity"):
         try:
             import os as _os8, sys as _sys8, psycopg2 as _pg8
             import pandas as _pd8
@@ -289,7 +311,10 @@ def order_members(codes, close, mode=None, lookback=20, vol=None):
                         _v = 0.0
                     _amt[_t] = _v
                 _pur = {_t: (len(_c2.get(_t, set()) & set(_pool)) / float(len(_pool))) if _pool else 0.0 for _t in _val}
-                _ord = sorted(_val, key=lambda _t: (-_pur.get(_t, 0.0), -_amt.get(_t, 0.0), str(_t)))
+                if mode == "amount_purity":      # §9.869 ✓：成交额为主键 ✓、纯度降为并列键 ✓
+                    _ord = sorted(_val, key=lambda _t: (-_amt.get(_t, 0.0), -_pur.get(_t, 0.0), str(_t)))
+                else:                            # `purity_amount`：逐字不变 ✓
+                    _ord = sorted(_val, key=lambda _t: (-_pur.get(_t, 0.0), -_amt.get(_t, 0.0), str(_t)))
                 return _ord + [c for c in codes if c not in set(_ord)]
         except Exception as _e8:
             print("[stock_confirm] purity_amount 排序失败（退回旧口径）: %s" % str(_e8)[:80], file=sys.stderr)
@@ -391,9 +416,40 @@ def _gz(api, **p):
 
 
 def _trade_days():
+    """交易日历（**按 as-of 日动态回看** ✓）⇒ `(close, vol)` 才有足够历史 ✓。
+
+    ★ §9.870 ✓（2026-10-14 用户「5-6月龙头一个都选不出来，你排查下原因」✗ → 这是**入口根因** ✗）：
+    病灶 ✗：原实现把 `start_date` **写死 "20260601"** ✗ ⇒ 请求窗口恒为 `[20260601, 今天]` ⇒
+      **只要 as-of 在 0601 之后，窗口里就只剩"自 0601 起的交易日"** ✗。种子日志实测（`_seed.json` 的
+      `[shim] stock_confirm_judge.py as_of=… local=N` ✓）**精确吻合** ✓：
+        as_of=20260528 ⇒ local=**91** ✓ ｜ as_of=20260529 ⇒ **91** ✓
+        as_of=20260601 ⇒ local=**2**  ✗ ｜ as_of=20260608 ⇒ **7** ✗ ｜ as_of=20260612 ⇒ **11** ✗
+        （2/7/11 = 恰好"自 0601 起的交易日数" ✓ ⇒ 机理确证 ✓）
+      ⇒ `_fetch_market` 只拼出 2~11 行 ✗ ⇒ 逐票 `if len(ser) < 40: continue` **全部跳过** ✗
+      ⇒ `stock_confirm_result.json` 里每个概念的 `stocks` **全空** ✗
+      ⇒ 低吸（253/254）候选池为空 ✗ ⇒ **2026-06-02 起整条低吸选股路径死掉** ✗
+      （两个数据源都实测过 ✓：`data/_bt_year` 与 `data/_bt_t64` 的 0602 起 `判级票=0` ✓）
+      ⚠️ 这就是「一个都选不出来」的**入口原因** ✗ —— 而 5-6 月那 10 只龙头的涨幅主要在 6 月 ✓。
+    修法 ✓：与 **2026-09-12 已修过的同款 bug**（`build_etf_flow.py:70` 有同样的注释 ✓）一致 ——
+      按 as-of 日**动态回看** ✓，且 `end_date` 也用 as-of 日（不再请求未来 ✓）。
+    安全 ✓：① `days[-90:]` 截断保留 ⇒ **生产（as-of=今天）逐字不变** ✓（老窗口同样给满 90 ✓）；
+      ② 回看默认 200 自然日 ≈ 130+ 交易日 ⇒ 截断后仍有 90 ✓；
+      ③ 开关 `STOCK_CONFIRM_LOOKBACK_DAYS` 可调 ✓；④ 日期解析失败 ⇒ 退回"今天"（= 旧行为 ✓）。
+    """
+    _lb = int(os.getenv("STOCK_CONFIRM_LOOKBACK_DAYS", "200"))
+    _asof = (os.getenv("WOLF_ASOF_DAY") or "").strip()          # 回测/回放：显式 as-of 日（优先 ✓）
+    if not (len(_asof) == 8 and _asof.isdigit()):
+        _asof = _trace_day()                                    # 沙箱目录名 / 今天 ✓
+    try:
+        import datetime as _dt2
+        _end = _dt2.datetime.strptime(_asof, "%Y%m%d").date()
+    except Exception:
+        import datetime as _dt2
+        _end = _dt2.date.today()
+    _start = (_end - _dt2.timedelta(days=_lb)).strftime("%Y%m%d")
     _fields, items = _relay().relay_items(
-        "trade_cal", exchange="SSE", start_date="20260601",
-        end_date=time.strftime("%Y%m%d"), fields="cal_date,is_open")
+        "trade_cal", exchange="SSE", start_date=_start,
+        end_date=_end.strftime("%Y%m%d"), fields="cal_date,is_open")
     days = sorted(x[0] for x in (items or []) if x[1] == 1)
     return days[-90:] if len(days) > 90 else days
 
