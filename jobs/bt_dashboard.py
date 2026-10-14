@@ -2946,10 +2946,31 @@ def day_progress(root: str, account: str = "") -> dict:
                 _st, _g, _gr = _stage.get(_t, ("—", False, ""))
                 _rows.append({"theme": _t, "role": ("主线" if _i == 0 else "次主线"),
                               "stage": _st, "gate": _g, "gate_rule": _gr})
+            # ★ 2026-10-13（用户：「主线浪型无效呢」✓）：`trend_confirm.stage` 是**主升结构确认档** ✗
+            #   （docstring：低点抬高+2浪回调不破前低+再创新高 ✓；track_b 还是成分股确认比例 ✓）
+            #   ⇒ **不是浪型** ✗ ⇒ 这里补上**派生浪型**（用 track_a 的结构事实按他原话派生 op ✓，
+            #      见 wave_gate.theme_wave_op ✓），并把原 stage 改标为「结构确认」✓ 免得混淆 ✓
+            try:
+                import sys as _s3
+                _s3.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                "backend"))
+                from app.services.wave_gate import theme_wave_op as _twop
+            except Exception:
+                _twop = None
+            for r in _rows:
+                r["op"] = ""
+                r["op_detail"] = ""
+                if _twop is not None:
+                    try:
+                        _o, _od = _twop(r["theme"], _day8, extra_dirs=[os.path.join(root, str(cur))])
+                        r["op"], r["op_detail"] = _o, _od
+                    except Exception:
+                        pass
             out["mainline_wave"] = {"as_of": str((_mlj or {}).get("date") or _day8), "rows": _rows}
             if _rows:
                 out["mainline_wave_text"] = " ／ ".join(
-                    "%s %s·%s" % (r["role"], r["theme"], r["stage"]) for r in _rows)
+                    "%s %s·浪型=%s（结构确认=%s）" % (r["role"], r["theme"], r["op"] or "—", r["stage"])
+                    for r in _rows)
             else:
                 out["mainline_wave_text"] = "（无主线 select ✗）"
             # 该臂的浪型口径（臂脚本里反查 ✓）
