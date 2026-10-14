@@ -39,6 +39,15 @@ _DECISION_QQ_TS: List[float] = []                 # 最近一小时推送时间�
 _DECISION_QQ_MUTED: Dict[str, int] = {}           # "YYYYMMDDHH" → 被限流省略的条数
 _DECISION_QQ_LOCK = threading.Lock()
 
+# 默认静音腿型 = **高抛/止盈类卖腿**（routine 裁决只落库 t_ai_actions、不推 QQ ✓）。
+#   2026-10-14 用户：「AI 裁决太多了，wolf_dao_t_sell 不要通知我」→「高抛卖腿的 AI 裁决不用推送」✓
+#   口径来自 t_db.py:138 `sell_kinds = ("high_sell", "high_sell_then_buy_back", "high_only")`（高抛式）
+#   ＋止盈/上轨/道氏T卖；**stop_loss / 保护类卖腿不在名单**（那些是风险信号，要看得见 ✓）。
+_DEFAULT_QQ_SKIP_KINDS = ",".join((
+    "high_sell", "high_sell_then_buy_back", "high_only",
+    "wolf_profit_take_sell", "wolf_boll_upper_sell", "wolf_dao_t_sell",
+))
+
 
 def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
                         action: str, reason: str, action_id: Optional[int],
@@ -67,12 +76,14 @@ def _notify_ai_decision(session_id: Optional[str], symbol: str, event_type: str,
         _a = str(action or "")
         if _a == "exec" and str(status or "").lower() not in ("rejected", "error"):
             return
-        # ★ 2026-10-14（用户：「AI 裁决太多了，wolf_dao_t_sell 不要通知我」✓）：
-        #   腿型级静音名单（逗号分隔，`WOLF_AI_DECISION_QQ_SKIP_KINDS`，默认道氏T卖）。
-        #   这些腿型的裁决只落库（t_ai_actions）不推 QQ ✓；要加腿型直接往 env 里加 ✓。
+        # ★ 2026-10-14（用户：「AI 裁决太多了，wolf_dao_t_sell 不要通知我」→「高抛卖腿的 AI 裁决
+        #   不用推送」✓）：腿型级静音名单（`WOLF_AI_DECISION_QQ_SKIP_KINDS`，逗号分隔；
+        #   默认 = 高抛/止盈类卖腿，见 `_DEFAULT_QQ_SKIP_KINDS`）。
+        #   **exec 被网关拒仍照推** ✓（"想卖没卖成"是真问题，不能一起静音 ✗）。
         _skip = {x.strip().lower() for x in str(os.getenv(
-            "WOLF_AI_DECISION_QQ_SKIP_KINDS", "wolf_dao_t_sell")).split(",") if x.strip()}
-        if str(event_type or "").strip().lower() in _skip:
+            "WOLF_AI_DECISION_QQ_SKIP_KINDS", _DEFAULT_QQ_SKIP_KINDS)).split(",") if x.strip()}
+        _exec_rejected = (_a == "exec" and str(status or "").lower() in ("rejected", "error"))
+        if str(event_type or "").strip().lower() in _skip and not _exec_rejected:
             return
         _icon = {"exec": "🟢", "wait": "⏸️", "abandon": "🚫", "update_condition": "✏️"}.get(_a, "ℹ️")
         _head = {"exec": "AI 裁决：执行被拒", "wait": "AI 裁决：等待（本次不接）",
