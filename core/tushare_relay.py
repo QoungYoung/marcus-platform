@@ -9,7 +9,7 @@
 
 新数据源（两套，均 GET + Header `X-API-Key`，返回 Tushare 风格 `data.fields/items`）：
 
-1. **datahubco**（`DATAHUBCO_API_KEY`，默认 `http://datahubco.com/app-api/openapi/v1/tushare`）
+1. **datahubco**（`DATAHUBCO_API_KEY`，默认 `https://datahubco.com/app-api/openapi/v1/tushare`）
    —— 「15000 积分基础功能」，本地 RDS 为主，**速度飞快**，手册列 80 个基础接口
    （daily / daily_basic / trade_cal / index_daily / fund_daily / moneyflow / stk_limit ...），
    另有实测可用且字段兼容的扩展接口（adj_factor / stock_basic / moneyflow_dc / dc_* / ths_* /
@@ -50,7 +50,7 @@
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `DATAHUBCO_API_KEY` | 空 | datahubco 客户密钥（必需，否则该源不可用） |
-| `DATAHUBCO_API_URL` | `http://datahubco.com/app-api/openapi/v1/tushare` | datahubco 入口 |
+| `DATAHUBCO_API_URL` | `https://datahubco.com/app-api/openapi/v1/tushare` | datahubco 入口 |
 | `PROMAX_API_KEY` | 空 | promax 客户密钥（必需，否则该源不可用） |
 | `PROMAX_URL` | `https://pcd.mobcvb.cn/tushare/pro` | promax 入口 |
 | `TUSHARE_SOURCE` | `auto` | `auto`/`datahubco`/`promax`/`legacy` 强制指定源 |
@@ -114,7 +114,7 @@ def _load_env() -> None:
 
 _load_env()
 
-DEFAULT_DATAHUBCO_URL = "http://datahubco.com/app-api/openapi/v1/tushare"
+DEFAULT_DATAHUBCO_URL = "https://datahubco.com/app-api/openapi/v1/tushare"
 DEFAULT_PROMAX_URL = "https://pcd.mobcvb.cn/tushare/pro"
 
 # ── datahubco 覆盖的接口（手册 §4「80 个接口总览」，去掉 HTTP 不支持的 pro_bar） ──

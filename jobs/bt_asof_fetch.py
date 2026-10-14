@@ -48,8 +48,16 @@ _DATE_KEYS = ("end_date", "trade_date", "start_date", "ann_date", "list_date")
 ROUTE = {"daily": "promax", "stk_mins": "promax", "pro_bar": "promax", "weekly": "promax", "monthly": "promax", "pro_bar": "promax",
          "capabilities": "promax", "daily_basic": "basic", "index_member_all": "basic"}
 _BACKENDS = {
+    # ★ §9.873 ✓（2026-10-14 用户「先修通 basic 后端」✓）：`basic` 默认由 **http → https** ✓
+    #   病灶 ✗（实测 ✓）：`http://datahubco.com` 会 **301 重定向到 https** ✓，而本文件为了绕开回测的
+    #     断网保护走 **http.client 直连**（**不跟随重定向** ✗）⇒ 拿到 301 的 HTML ✗
+    #     ⇒ 报 "Expecting value: line 1 column 1 (char 0)" ✗ —— **报错还掩盖了真因** ✗
+    #     （所以 basic 后端等于长期不可用 ✗，全靠 promax 兜底 ✓）
+    #   实测修法 ✓：`https://datahubco.com/.../daily` → **HTTP 200 ✓ 424KB 正常 JSON ✓**
+    #   生产不受影响 ✓：生产走 `core/tushare_relay`（`requests.Session` ✓ 默认跟随重定向 ✓）⇒ 无感 ✓；
+    #     本改动只影响**回测的 as-of 取数层** ✓，与 `.env` 的 `DATAHUBCO_API_URL` 一致 ✓。
     "basic": {"url_env": "DATAHUBCO_API_URL", "key_env": "DATAHUBCO_API_KEY",
-              "default": "http://datahubco.com", "suffix": "/app-api/openapi/v1/tushare"},
+              "default": "https://datahubco.com", "suffix": "/app-api/openapi/v1/tushare"},
     "promax": {"url_env": "PROMAX_URL", "key_env": "PROMAX_API_KEY",
                "default": "https://pcd.mobcvb.cn", "suffix": "/tushare/pro"},
 }
