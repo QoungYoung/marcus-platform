@@ -268,10 +268,17 @@ def second_tail_block(seq: Sequence[Sequence[Any]], day: Any, now_hm: str,
         return False, ""
     d8 = _d8(day)
     try:
-        _bought_today = any(_d8(r[0]) == d8 and str(r[1]) in ("买入", "buy") for r in (seq or []))
-    except Exception as _e:
+        _rows = list(seq or [])
+        _buys = [r for r in _rows[round_start_idx(_rows):] if str(r[1]) in ("买入", "buy")]
+    except Exception:
         return False, ""                                   # 读不出 ⇒ fail-open ✓（与同模块其它闸一致 ✓）
-    if _bought_today:
+    # ★ 第 1 批**不受本闸约束** ✓（语料「**第一根开头我加一半**」＝首笔在突破日照买 ✓，无"尾盘/红K"要求 ✓）
+    #   为什么必须显式判 ✗：本闸只管**第二批** ✓ —— 实测（t60 首跑 ✗）只判"今日有没有买入"，
+    #   结果把**首笔**也拦了 ✗ ⇒ 05-07 天齐那笔本该成交的第 1 批被拦 ⇒ **全臂 0 成交** ✗
+    #   （05-06 的 SZ002812 / SH603893 同理 ✗）。修 ✓：本轮无买入 ⇒ 一律放行 ✓。
+    if not _buys:
+        return False, ""
+    if any(_d8(r[0]) == d8 for r in _buys):
         return True, ("第二批时点：**今日已建仓**（同日第二笔 ✗）⇒ 按语料"
                       "2026-06-15「第一根开头加一半 + **第二根红K尾盘**打满」⇒ 第 2 批须等**下一根日K** ✓")
     try:

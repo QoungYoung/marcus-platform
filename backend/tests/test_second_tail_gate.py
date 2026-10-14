@@ -54,3 +54,18 @@ def test_fetch_failure_fail_open(monkeypatch):
     monkeypatch.setattr(AC, "_fetch_seq", lambda a, s: (_ for _ in ()).throw(RuntimeError("db down")))
     ok, why = AC.check_second_tail("drabtX", "SZ002466", "20260507", "1410", 78.5, 79.07)
     assert ok is False, "取数失败 ⇒ fail-open（与同模块其它闸一致 ✓）"
+
+
+def test_first_tranche_passes_before_tail(monkeypatch):
+    """★ 回归（t60 首跑踩到 ✗）：**本轮还没有买入** ⇒ 首笔在 14:00、当日还是绿K 也必须放行 ✓。
+
+    病灶：旧实现只判"今日有没有买入" ⇒ 首笔被当成"第 2 批"拦掉 ✗ ⇒ 实测 t60 全臂 0 成交 ✗
+    （05-07 天齐 14:00 那笔、05-06 SZ002812 / SH603893 都被误拦 ✗）。
+    语料 ✓：「**第一根开头我加一半**」＝首笔在突破日就买 ✓，没有"尾盘/红K"要求 ✓。
+    """
+    monkeypatch.setenv("WOLF_BUILD_SECOND_TAIL", "1")
+    ok, why = AC.second_tail_block([], "20260507", "1400", 80.0, 78.97)
+    assert ok is False and why == "", "本轮无买入 ⇒ 首笔必须放行（不受尾盘/红K约束 ✓）"
+    # 只有**卖出**流水（本轮尚无买入 ✓）⇒ 同样放行 ✓
+    ok2, _ = AC.second_tail_block([("20260506", "卖出", 500, 80.0)], "20260507", "1400", 80.0, 78.97)
+    assert ok2 is False, "本轮只有卖出 ⇒ 本次是首笔建仓 ⇒ 放行 ✓"
