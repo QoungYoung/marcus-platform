@@ -370,10 +370,26 @@ def _corpus_buy_flags(trigger: dict) -> Optional[dict]:
                 return {"verdict": "skip",
                         "why": "突破腿**不带量**（量比 %.2f<%.2f）⇒ 语料：不带量突破不认 ✗"
                                "（2025-06-05「带量突破 空翻多」✓）" % (vr, _vmin)}
+            # ★ §29.1 语料口径 ✓（2026-10-13 用户追问"阈值是我们自己定的吗"后对齐 ✓）：
+            #   「C4 高开不追 → **不是"绝不追"，而是"不在开盘追"**」✓
+            #   ⇒ 开盘时段内**已经高于参考价**的突破腿 ⇒ 不追 ✓（2025-04-15 条件6：
+            #      「当日开盘高开快速拉升…想追进去的 ⇒ **在下午2.00-2.30这个时间段进行回补**」✓）
+            #   开关 `WOLF_BREAKOUT_NO_OPEN_CHASE`（**默认 0 = 关** ✓）
+            try:
+                _nooc = str(os.getenv("WOLF_BREAKOUT_NO_OPEN_CHASE", "0")).strip().lower() in ("1", "true", "yes", "on")
+                _until = str(os.getenv("WOLF_BREAKOUT_OPEN_UNTIL", "1000") or "1000")
+            except Exception:
+                _nooc, _until = False, "1000"
+            if _nooc and _cur and _sug and _cur > _sug:
+                _now = datetime.now().strftime("%H%M")
+                if _now < _until:
+                    return {"verdict": "skip",
+                            "why": "突破腿**开盘追高**（%s 前已高于参考价 ⇒ 语料：**不在开盘追** ✗，"
+                                   "想追要延后到 14:00–14:30 ✓；ledger §29.1 / 2025-04-15 条件6 ✓）" % _until}
             if _cur and _sug and _cur > _sug * (1 + _cmax / 100.0):
                 return {"verdict": "skip",
                         "why": "突破腿**追高**（现价 %.3f 高于建议价 %.3f 达 %+.2f%% > %.1f%% ✗）"
-                               "⇒ 语料：冲上去一定不能追 ✓（阈值为**代理值待标定** ✓）"
+                               "⇒ 语料：冲上去一定不能追 ✓（**数字 3%% 为代理值 ✗、无语料数值 ⇒ 待标定** ✓）"
                                % (_cur, _sug, (_cur / _sug - 1) * 100, _cmax)}
             return {"verdict": "buy",
                     "why": "突破腿**带量**（量比 %s ✓）⇒ 语料：带量突破就买 ✓"

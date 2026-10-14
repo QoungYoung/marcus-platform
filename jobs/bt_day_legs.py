@@ -537,6 +537,12 @@ def main() -> int:
             _trows = _TC.scan_mainline(cut, limit=int(os.getenv("WOLF_TREND_SCAN_LIMIT", "400")),
                                        bars_db=a.bars_db)
             _have = {l["symbol"] for l in legs_out}
+            # ★ §9.848 ✓（用户「排序因子需要调整」✓）：同批趋势腿**排序选优**（默认关 ✓）
+            try:
+                from app.services.build_position_filter import rank_trend_legs as _rank_tl
+                _trows = _rank_tl(list(_trows), cut, 0, data_dir=sb)
+            except Exception as _erk:
+                print("[legs] 趋势腿排序选优异常(跳过 ✓): %s" % str(_erk)[:90], flush=True)
             _tadd = 0
             for _r in _trows:
                 _s = _r.get("symbol")
