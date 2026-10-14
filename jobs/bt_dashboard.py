@@ -2560,7 +2560,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(GSAP_PATH, "application/javascript; charset=utf-8",
                                   cache="public, max-age=3600")
             if route == "/api/progress":
-                return self._json(day_progress(self.store.root, getattr(self.store, "account", "") or ""))
+                return self._json(day_progress(self.store.root, getattr(self.store, "account", "") or "",
+                                                getattr(self.store, "log_path", "") or ""))
             if route == "/api/snapshot":
                 return self._json(self.store.snapshot())
             if route == "/api/symbol":
@@ -2812,7 +2813,7 @@ def runs_payload() -> dict:
     return {"running": procs, "roots": _run_roots(), "logs": logs[:80], "now": now_iso()}
 
 
-def day_progress(root: str, account: str = "") -> dict:
+def day_progress(root: str, account: str = "", log_path: str = "") -> dict:
     """**当日进度 + 事件时间线**（账本 §9.588 ✓）——「走到什么时刻、发生了什么事」✓
 
     返回 ✓：
@@ -2986,9 +2987,12 @@ def day_progress(root: str, account: str = "") -> dict:
             _th = [t for t in (_ms.get("mainline"), _ms.get("second")) if t]
             _rows = []
             for _i, _t in enumerate(_th):
-                _st, _g, _gr = _stage.get(_t, ("—", False, ""))
+                # ★ §9.857 ✓（真凶 ✗）：这里原先用 `_g` 接 gate 标志 ⇒ **覆盖了本函数的 glob 别名** ✗
+                #   ⇒ 后面 `_g.glob(...)` 报 `'bool' object has no attribute 'glob'` ✓
+                #   ⇒ `day_progress` 半途抛异常 ⇒ **阶段全 pending ✗ / 日志尾为空 ✗**（本次"乱七八糟"的根因 ✓）
+                _st, _gate_f, _gr = _stage.get(_t, ("—", False, ""))
                 _rows.append({"theme": _t, "role": ("主线" if _i == 0 else "次主线"),
-                              "stage": _st, "gate": _g, "gate_rule": _gr})
+                              "stage": _st, "gate": _gate_f, "gate_rule": _gr})
             # ★ 2026-10-13（用户：「主线浪型无效呢」✓）：`trend_confirm.stage` 是**主升结构确认档** ✗
             #   （docstring：低点抬高+2浪回调不破前低+再创新高 ✓；track_b 还是成分股确认比例 ✓）
             #   ⇒ **不是浪型** ✗ ⇒ 这里补上**派生浪型**（用 track_a 的结构事实按他原话派生 op ✓，
@@ -3049,7 +3053,20 @@ def day_progress(root: str, account: str = "") -> dict:
         #     ⇒ 看起来像"卡在上一轮" ✗✓
         #   ⇒ 改为**优先"臂自己的日志"** ✓（`size_run_t35d.log` ✓：它每步都写 ✓ ⇒ 永远是活的 ✓），
         #     阶段日志作为**并列候选**保留 ✓（按 mtime 兜底 ✓）
-        _cands = [os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")]
+        # ★ §9.856 ✓（2026-10-13 用户「回测监控怎么又乱七八糟」→「修干净」✓）：
+        #   **病灶 ✗**：这里把候选日志**写死成 `size_run_t35d.log`** ✗（那是老臂 ✓）
+        #     ⇒ 看板的"阶段判定 + 实时日志尾"永远读**别的臂** ✗ ⇒ 页面阶段全 pending、日志尾为空 ✗
+        #   **修法 ✓**：改成本臂自己的日志 `size_run_<tag>.log` ✓（tag 由 root 目录名推 ✓，
+        #     取不到才回落旧的 t35d 路径 ✓ ⇒ 绝不因缺文件而报错 ✓）
+        _t2 = os.path.basename(str(root).rstrip("/"))
+        _t2 = _t2[4:] if _t2.startswith("_bt_") else _t2
+        _own2 = os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_%s.log" % _t2)
+        # ★ §9.856c ✓：**最优先用看板启动时显式指定的 `--log`** ✓（`store.log_path` ✓）
+        #   —— 这是最可靠的来源 ✓（不再依赖"按目录名猜 ✓/写死老臂 ✗"）
+        if log_path and os.path.isfile(log_path):
+            _own2 = log_path
+        _cands = [_own2] if os.path.exists(_own2) else [
+            os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")]
         _summ = os.path.join(root, "_summary")
         # ★ 账本 §9.655 补 ✓（用户：「怎么不打印了」✗ ⇒ 查出候选里**缺了"上一天的阶段日志"** ✗）：
         #   实测 ✓：Day2 跑完（`prod_20260106.json` ✓）后，Day3 的 `bt_day_legs` 要跑 **19+ 分钟** ✗，
@@ -3083,7 +3100,11 @@ def day_progress(root: str, account: str = "") -> dict:
         #   ⇒ 改为**新鲜度感知** ✓：**默认钉臂日志** ✓；若臂日志**超过 60 秒**没写 ✗
         #     且**别的候选更新** ✓ ⇒ **切到那份** ✓（阶段日志 ✓，正好显示 LLM 进度 ✓）
         #     其他时候仍钉臂日志 ✓（避免 §9.650 之前那种"来回跳"✓）
-        _arm = os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")
+        # ★ §9.856b ✓（同一病灶的第二处 ✗）：这里原来又**写死 `size_run_t35d.log`** ✗
+        #   ⇒ 看板实际永远在读 **t35d 老臂** 的日志 ✗ ⇒ 阶段/日志尾全是别人的 ✓（本次"乱七八糟"的真凶 ✓）
+        #   修法 ✓：改成本臂日志（`_own2` ✓，取不到再回落 t35d ✓）
+        _arm = _own2 if os.path.isfile(_own2) else os.path.join(
+            _base, ".dsh-tmp", "wolfbt", "logs", "size_run_t35d.log")
         f, _best = None, -1.0
         if os.path.isfile(_arm):
             _amt = os.path.getmtime(_arm)
@@ -3147,6 +3168,18 @@ def day_progress(root: str, account: str = "") -> dict:
                 stage = _st
                 break
         # 兜底：再按日志内容找标记 ✓
+        # ★ §9.855 ✓（2026-10-13 用户「回测监控怎么又乱七八糟」✓）：
+        #   阶段判定与"实时日志尾"**一律改读本臂主日志** ✓（size_run_<tag>.log ✓）
+        #   病灶 ✗：原先按"最新鲜的日志文件"挑 ⇒ 可能挑到天级/阶段小日志 ✗ ⇒ 阶段全 pending ✗、
+        #   日志尾为空 ✗（用户看到"日志也不打印了"✓）
+        try:
+            _lg2 = os.path.join(_base, ".dsh-tmp", "wolfbt", "logs", "size_run_%s.log" % _tag2)
+            if os.path.exists(_lg2):
+                with open(_lg2, encoding="utf-8", errors="replace") as _f2:
+                    lines = _f2.read().splitlines()
+                tail = "\n".join(lines[-300:])
+        except Exception as _e3:
+            pass
         if not stage:
             for k in ("summary", "prod", "legs", "pack", "ensure_mins", "low_logic", "carry"):
                 pat = {"carry": "跨日状态结转", "low_logic": "low_logic：", "ensure_mins": "ensure_mins",
