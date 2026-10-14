@@ -306,6 +306,45 @@ def _consecutive_hits(condition_id: Optional[int], symbol: str) -> int:
         return 0
 
 
+
+def _leg_level(symbol: str, data_dir: str = "") -> float:
+    """读**本臂当日**腿文件里的突破参照位（`legs.jsonl` 的 `level` ✓）。
+
+    §9.859 ✓（用户 2026-10-14：恩捷又买入 →「这个不是追高吗」✓）：
+      追高闸原先比的是 **现价 vs 建议买价** ✗ ⇒ 两者恒等（AI 自己也说「现价86.82=建议价」✓）
+      ⇒ **闸门形同虚设** ✗。而标定（`scripts/calib_chase_max.py` ✓ 154 笔）用的是
+      **成交价 ÷ 腿的突破参照位 − 1** ✓ ⇒ 两者口径必须一致 ✓ ⇒ 这里取腿的 `level` ✓。
+    取不到 ⇒ 返回 0.0（调用方回落旧口径 ✓ 不炸 ✓）。
+    """
+    try:
+        _d = data_dir or os.environ.get("DATA_DIR") or ""
+        if not _d:
+            return 0.0
+        _fp = os.path.join(_d, "legs.jsonl")
+        _cache = _LEG_LEVEL_CACHE.get(_fp)
+        if _cache is None:
+            _m = {}
+            try:
+                with open(_fp, encoding="utf-8") as _f:
+                    for _l in _f:
+                        if not _l.strip():
+                            continue
+                        _r = json.loads(_l)
+                        _lv = _r.get("level")
+                        if _lv is not None and str(_r.get("type")) == "trend_break":
+                            _m[str(_r.get("symbol") or "").upper()] = float(_lv)
+            except Exception:
+                _m = {}
+            _cache = _m
+            _LEG_LEVEL_CACHE[_fp] = _m
+        return float(_cache.get(str(symbol or "").upper()) or 0.0)
+    except Exception:
+        return 0.0
+
+
+_LEG_LEVEL_CACHE = {}
+
+
 def _corpus_buy_flags(trigger: dict) -> Optional[dict]:
     """★ 2026-10-12（用户「补上吧」）：把**狼大关于低吸的成文判据**接进做T低吸腿 ✓
 
@@ -370,6 +409,8 @@ def _corpus_buy_flags(trigger: dict) -> Optional[dict]:
             except Exception:
                 _cmax = 3.0
             _cur = _num("current", _num("price"))
+            # ★ §9.859 ✓：追高参照位 = **腿的突破参照位（level）** ✓，不再是"建议价"✗
+            _lv_ref = _leg_level(str((trigger or {}).get("symbol") or ""), "")
             _sug = None
             for _k2 in ("suggest_bid_price", "suggest_ask_price"):
                 _v2 = trigger.get(_k2) if isinstance(trigger, dict) else None
@@ -396,11 +437,15 @@ def _corpus_buy_flags(trigger: dict) -> Optional[dict]:
                     return {"verdict": "skip",
                             "why": "突破腿**开盘追高**（%s 前已高于参考价 ⇒ 语料：**不在开盘追** ✗，"
                                    "想追要延后到 14:00–14:30 ✓；ledger §29.1 / 2025-04-15 条件6 ✓）" % _until}
-            if _cur and _sug and _cur > _sug * (1 + _cmax / 100.0):
+            _ref = _lv_ref or _sug          # 优先用腿的参照位 ✓；取不到才回落建议价 ✓
+            if _cur and _ref and _cur > _ref * (1 + _cmax / 100.0):
                 return {"verdict": "skip",
-                        "why": "突破腿**追高**（现价 %.3f 高于建议价 %.3f 达 %+.2f%% > %.1f%% ✗）"
-                               "⇒ 语料：冲上去一定不能追 ✓（**数字 3%% 为代理值 ✗、无语料数值 ⇒ 待标定** ✓）"
-                               % (_cur, _sug, (_cur / _sug - 1) * 100, _cmax)}
+                        "why": "突破腿**追高**（现价 %.3f 相对%s %.3f 已 %.2f%% > %.1f%% ✗）"
+                               "⇒ 语料：「冲上去一定不能追 ✓」（ledger §29.1 明确：不是绝不追，"
+                               "而是**不在开盘追** ✓）；阈值**无数字依据** ✗ ⇒ 用本仓标定"
+                               "（calib_chase_max.py ✓ 154 笔：偏离 0~1%% 档 +6.88%%/胜率 80.6%% ✓，"
+                               ">1.5%% 不再改善 ✗）" % (_cur, ("腿的突破参照位" if _lv_ref else "建议价"),
+                                                        _ref, (_cur / _ref - 1) * 100, _cmax)}
             return {"verdict": "buy",
                     "why": "突破腿**带量**（量比 %s ✓）⇒ 语料：带量突破就买 ✓"
                            "（2025-06-05 / 2026-02-12 / 2025-07-09 ✓；回踩是突破**之后**的环节 ✓）"
@@ -638,6 +683,31 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
             msg += "【语料判据·低吸】%s ⇒ %s\n" % (
                 _cf.get("why"), "**可接 ✓**（仍按你判断）" if _cf.get("verdict") == "buy"
                 else "**本次不接 ✗ ⇒ 只能 wait（保留条件等更好位置 ✓，不要 abandon ✗）**")
+        # ★ §9.860 ✓（用户 2026-10-14：「还是有问题」✓ —— AI 同一票 17 秒内给出相反结论 ✗）：
+        #   实测 ✗（`t_ai_actions` #69624 vs #69626）：AI 在 #69624 写
+        #     「量比=0.91（**<1.00**，未达带量阈值）」✗，17 秒后在 #69626 又写「带量突破可接 ✓」✗。
+        #   真因 ✓：我们只把 `vol_ratio` 字段塞进快照 ✓，**从没告诉它本臂的判据值** ✗
+        #     ⇒ AI 用**行情软件的常识 1.0** 自行判定 ✗（与本臂 `WOLF_BREAKOUT_VOL_MIN=0` 矛盾 ✓）
+        #   ⇒ 修法 ✓：唤醒消息里**显式写入本臂判据与其值** ✓，并声明"不要引用未配置的阈值" ✗
+        try:
+            _btk = str((trigger or {}).get("trigger_kind") or (trigger or {}).get("event_type") or "")
+            if "trend_break" in _btk or "breakout" in _btk:
+                _vmin_t = float(os.getenv("WOLF_BREAKOUT_VOL_MIN", "0") or 0)
+                _cmax_t = float(os.getenv("WOLF_BUILD_CHASE_MAX", "0") or 0)
+                _lv_t = _leg_level(str((trigger or {}).get("symbol") or ""), "")
+                _vtxt = ("**本臂未设量比门槛** ✓（`WOLF_BREAKOUT_VOL_MIN=0`）⇒ "
+                         "**不要用 1.00 之类的未配置阈值判「带量」** ✗"
+                         if _vmin_t <= 0 else
+                         "本臂量比门槛 = %.2f ✓（低于它才叫不带量 ✗）" % _vmin_t)
+                _ctxt = ("**本臂未设追高上限** ✓" if _cmax_t <= 0 else
+                         "追高上限 = 相对**腿的突破参照位%s** 偏离 ≤ %.1f%% ✓"
+                         % (("（=%.3f）" % _lv_t) if _lv_t else "（取不到 ⇒ 回落建议价）", _cmax_t))
+                msg += ("【语料判据·突破】%s；%s。语料原话 ✓：2025-06-05「带量突破 空翻多」✓、"
+                        "2025-03-19「带量突破→缩量回踩→继续带量上涨」✓；ledger §29.1「不追」"
+                        "= **不在开盘追** ✓（要延后到 14:00–14:30 ✓）。口径与代码一致 ⇒ "
+                        "**同一标的、同一天不要给出相反结论** ✗\n" % (_vtxt, _ctxt))
+        except Exception as _e_bt:
+            pass
         # ★ 2026-10-12：优先渲染**人话浪型档位** ✓（`snapshot["wave"]`，由 t_monitor 注入 ✓）
         _wv = _f.get("wave") if isinstance(_f, dict) else None
         if isinstance(_wv, dict) and (_wv.get("text") or _wv.get("operation")):
