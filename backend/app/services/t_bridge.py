@@ -336,6 +336,59 @@ def _corpus_buy_flags(trigger: dict) -> Optional[dict]:
     q = _num("day_quantile")
     low = _num("today_low")
     prev_low = _num("prev_low")
+    # ── ★★ §9.845 ✓（用户 2026-10-13「1+2」）：**按腿型分口径** ────────────────────────
+    #   ① **突破腿**（trend_break_buy / trend_* ✓）⇒ 用**突破口径** ✓，**不再要求"缩量/等回踩"** ✗
+    #      语料（原话 ✓）：「**带量突破 空翻多** 50%→80%」2025-06-05 ✓；
+    #                    「**放量突破 一口吃完上面挂单**」2026-02-12 ✓；
+    #                    「**放量突破就是牛市最基础的逻辑**」2025-07-09 ✓；
+    #                    「**突破下跌趋势第一根开头我加一半**，突破后的第二根红K尾盘打满」2026-06-15 ✓；
+    #                    「**带量突破 → 缩量回踩 → 继续带量上涨**」2025-03-19 ✓（回踩在**突破之后** ✓）
+    #      而「缩量才接」出自 **正T/做T** 语境 ✓（R12 2025-03-06「挂前一天的低点…能买进去就做正T」✓）
+    #      ⇒ 拿它管突破腿 = **口径错配** ✗（实测 t47：SZ000063 / SH603068 的 trend_break_buy 被此拒 ✗）
+    #   ② **低吸/做T腿** ⇒ 保留低吸口径 ✓；`WOLF_DIP_VOL_MODE=expand` 时改用账本更新口径 ✓：
+    #      账本 3273（2026-03-22）「**缩量止跌已经不对了，必须是放量跌穿再到放量反弹**」✓
+    #   开关 `WOLF_BUY_RULES_BY_KIND`（**默认 0 = 现状零变化** ✓）
+    if str(os.getenv("WOLF_BUY_RULES_BY_KIND", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        _is_breakout = any(k in _kind for k in ("trend_break", "breakout", "new_high", "trend_buy"))
+        if _is_breakout:
+            try:
+                _vmin = abs(float(os.getenv("WOLF_BREAKOUT_VOL_MIN", "1.0") or 1.0))
+            except Exception:
+                _vmin = 1.0
+            try:
+                _cmax = abs(float(os.getenv("WOLF_BUILD_CHASE_MAX", "3.0") or 3.0))
+            except Exception:
+                _cmax = 3.0
+            _cur = _num("current", _num("price"))
+            _sug = None
+            for _k2 in ("suggest_bid_price", "suggest_ask_price"):
+                _v2 = trigger.get(_k2) if isinstance(trigger, dict) else None
+                if isinstance(_v2, (int, float)) and _v2 > 0:
+                    _sug = float(_v2)
+                    break
+            if vr is not None and vr < _vmin:
+                return {"verdict": "skip",
+                        "why": "突破腿**不带量**（量比 %.2f<%.2f）⇒ 语料：不带量突破不认 ✗"
+                               "（2025-06-05「带量突破 空翻多」✓）" % (vr, _vmin)}
+            if _cur and _sug and _cur > _sug * (1 + _cmax / 100.0):
+                return {"verdict": "skip",
+                        "why": "突破腿**追高**（现价 %.3f 高于建议价 %.3f 达 %+.2f%% > %.1f%% ✗）"
+                               "⇒ 语料：冲上去一定不能追 ✓（阈值为**代理值待标定** ✓）"
+                               % (_cur, _sug, (_cur / _sug - 1) * 100, _cmax)}
+            return {"verdict": "buy",
+                    "why": "突破腿**带量**（量比 %s ✓）⇒ 语料：带量突破就买 ✓"
+                           "（2025-06-05 / 2026-02-12 / 2025-07-09 ✓；回踩是突破**之后**的环节 ✓）"
+                           % ("%.2f" % vr if vr is not None else "未知")}
+        if str(os.getenv("WOLF_DIP_VOL_MODE", "shrink")).strip().lower() in ("expand", "fangliang", "1"):
+            if vr is not None:
+                try:
+                    _dmin = abs(float(os.getenv("WOLF_DIP_VOL_MIN", "1.0") or 1.0))
+                except Exception:
+                    _dmin = 1.0
+                if vr < _dmin:
+                    return {"verdict": "skip",
+                            "why": "低吸腿**未放量**（量比 %.2f<%.2f）⇒ 账本 2026-03-22："
+                                   "「缩量止跌已经不对了，必须是**放量跌穿再到放量反弹**」✗" % (vr, _dmin)}
     sh_drop = _num("sh_drop", _num("index_sh_drop"))
     idx = _f.get("index") if isinstance(_f.get("index"), dict) else {}
     if sh_drop is None and isinstance(idx.get("sh_drop"), (int, float)):
