@@ -694,12 +694,48 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
     return None
 
 
+def _no_position_sell_reason(trigger: Dict[str, Any]) -> str:
+    """卖腿 + 账户 0 持仓 ⇒ 返回原因串（调用方跳过 AI 唤醒），否则返回 ""。
+
+    2026-10-14（用户：「这种没有持仓的卖出不要走AI了」✓）：实测 sh600299 wolf_profit_take_sell
+    连续 6 次唤醒 AI，每次结论都是「空仓无底仓可卖 ⇒ abandon（裸空）」——纯浪费 LLM，
+    还多推一条 QQ 裁决。**只看 volume==0**：T+1 锁住但有底仓的卖腿**照旧问 AI**（它可以决定等）✓。
+    """
+    try:
+        t = trigger or {}
+        if str(t_db.trigger_side(t)).lower() not in ("sell", "卖出"):
+            return ""
+        sym = str(t.get("symbol") or "")
+        if not sym:
+            return ""
+        from app.services.t_gateway import get_sellable_ledger
+        acc = t.get("account_id") or os.getenv("T_MONITOR_ACCOUNT", "stock")
+        item = (get_sellable_ledger(account_id=acc) or {}).get(sym) or {}
+        if int(item.get("volume") or 0) <= 0:
+            return "%s 持仓 0 股（%s 账户）⇒ 卖腿成交即裸空、不可能执行 ⇒ 不唤醒 AI" % (sym, acc)
+        return ""
+    except Exception:
+        return ""
+
+
 def wake_and_decide(trigger: Dict[str, Any], context: Optional[dict] = None,
                     session_id: Optional[str] = None) -> Dict[str, Any]:
     """AI 主导闭环：唤醒 AI → 取回复 → handle_ai_decision 路由（exec/wait/abandon/update_condition）→ 审计。
 
     唤醒失败（桥不可达）返回 {"status": "wake_failed"}，由调用方走降级（agent_review_and_execute 标记）。
+    ★ 2026-10-14：卖腿但账户 0 持仓时**先短路**（`_no_position_sell_reason`）——这种唤醒的答案
+      永远是"裸空 ⇒ abandon"，只会白烧 LLM 并多推一条 QQ ✓。
     """
+    _skip = _no_position_sell_reason(trigger)
+    if _skip:
+        _tid = int((trigger or {}).get("id") or 0)
+        try:
+            if _tid:
+                t_db.update_trigger_status(_tid, "await_retry", reason="[NO-POS] " + _skip)
+        except Exception as _e:
+            print("[t-bridge] 无持仓卖腿标记失败: %s" % str(_e)[:70], flush=True)
+        print("[t-bridge] 跳过 AI 唤醒（无持仓卖腿）: %s" % _skip, flush=True)
+        return {"status": "skipped_no_position", "reason": _skip, "trigger_id": _tid, "action": "skip"}
     reply = wake_agent(trigger, context=context)
     if not reply:
         return {"status": "wake_failed", "reason": "AI 唤醒失败（桥不可达）"}
