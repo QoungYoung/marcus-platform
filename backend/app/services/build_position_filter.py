@@ -222,17 +222,45 @@ def rank_trend_legs(rows, day, k, factor="auto", data_dir=None):
             except Exception:
                 continue
         _fac = "near60" if _op == "build" else "g20"
+    # ★ §9.861 ✓（用户 2026-10-14：「前三名一只都没成交…这不是又回去了吗」✓）：
+    #   **分腿型排序** —— 第一层先看"这条腿能不能按**突破价**成交" ✓：
+    #   `trend_channel` 的规则 ✓：**乖离 MA20 > `WOLF_TREND_BIAS_MAX`(=10%)** ⇒ 该腿被挂成
+    #     **回踩价**（`expr_pullback` = MA20×0.95~1.05 ✓，原文「乖离过大…改等它回踩到 MA20 附近再买」✓）
+    #     ⇒ 强势票**几乎不回踩** ⇒ **永不成交** ✗（实测 05-08：排序 top-3 一次买入触发都没有 ✗、
+    #        全窗口成交 0 ✓；而排第 6 的中兴通讯因乖离合格 ⇒ 14:00 就成交 ✓）
+    #   ⇒ 所以排序**必须先分层**（能成交的优先 ✓），同层内再用已标定的强度因子 ✓
+    try:
+        _bmax = float(os.getenv("WOLF_TREND_BIAS_MAX", "10") or 10)
+    except Exception:
+        _bmax = 10.0
     _scored = []
     for r in rows:
         ts = _ts_code(r.get("symbol"))
         px, hi60, g20 = _feat_from_bars(_dbp, ts, day) if ts else (None, None, None)
         if px is None:
-            _scored.append((float("-inf"), r))          # 缺数 ⇒ 排最后（不因缺数而丢 ✓）
+            _scored.append((1, float("-inf"), r))       # 缺数 ⇒ 排最后（不因缺数而丢 ✓）
             continue
+        _ma20 = None
+        for _db in _dbp:
+            try:
+                _cn = sqlite3.connect(_db); _cu = _cn.cursor()
+                _rr = [float(x[0]) for x in _cu.execute(
+                    "select close from mkt_bars_daily where ts_code=? and trade_date<=? "
+                    "order by trade_date desc limit 20", (ts, "".join(ch for ch in str(day or "") if ch.isdigit())[:8]))]
+                _cn.close()
+                if len(_rr) >= 20:
+                    _ma20 = sum(_rr) / len(_rr)
+                    break
+            except Exception:
+                continue
+        _bias = ((px / _ma20 - 1) * 100) if _ma20 else 0.0
+        _ok_entry = 0 if _bias <= _bmax else 1             # 0 = 可挂突破价（能成交 ✓）
         _v = (px / hi60 - 1) if (_fac == "near60" and hi60) else (g20 or 0.0)
-        _scored.append((_v, r))
-    _scored.sort(key=lambda x: -x[0])
-    _keep = [r for _, r in _scored[:_k]]
+        _scored.append((_ok_entry, -_v, r))
+    _scored.sort(key=lambda x: (x[0], x[1]))
+    _keep = [r for _, _, r in _scored[:_k]]
+    print("[rank] 分层=%s ⇒ 保留 %s（乖离门 %.0f%%：超了会被挂回踩价 ⇒ 排后 ✓）"
+          % ("突破价可成交优先", [r.get("symbol") for r in _keep], _bmax), flush=True)
     print("[rank] 趋势腿同批排序选优 ✓ 因子=%s 保留前 %d/%d 条 ⇒ %s（标定：build⇒near60 / t_only⇒g20 ✓）"
           % (_fac, _k, len(rows), [r.get("symbol") for r in _keep]), flush=True)
     return _keep
