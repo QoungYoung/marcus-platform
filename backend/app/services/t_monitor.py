@@ -5157,10 +5157,27 @@ class TMonitor:
                     if str(side).lower() in ("buy", "买入"):
                         try:
                             from app.services.wave_gate import cond_buy_wave_block as _cbwb
-                            _wgb, _wgwhy = _cbwb(trigger_kind)
+                            _wgb, _wgwhy = _cbwb(trigger_kind, symbol=symbol)   # §9.840 补 symbol（主线板块口径需要 ✓）
                         except Exception as _ewg:
                             _wgb, _wgwhy = False, ""
                             print("[TMonitor] 条件单浪型闸异常(放行 ✓): %s" % str(_ewg)[:80], flush=True)
+                    # ★★ §9.840 ✓（用户 2026-10-13：「**trend_break_buy 也要过 AI 决策**」✓）：
+                    #   现状 ✗：条件命中走"自动执行闭环（迭代#57）"⇒ **建仓类直接下单** ✗，
+                    #     不经过 agent ⇒ 于是 AI 提示词里那条「现价与建议价脱节 >1% ⇒ wait/不追」
+                    #     **对建仓腿完全不起作用** ✗（实测 05-06 SZ002812：腿触发位 84.47、
+                    #     成交 86.82 = +2.78% ✗；同日同票 `wolf_zheng_t_buy @86.71` 反被判"追高不追" ✗）
+                    #   开关 `WOLF_BUILD_VIA_AI`（**库内默认 0 = 现状** ✓ 生产零影响 ✓；
+                    #     回测/灰度置 1 ✓）⇒ 命中后**不自动执行** ✗，改送 agent 决策 ✓
+                    #     （与浪型 `side` 同一机制：状态 pending + QQ 通知 + 后台唤醒 ✓）
+                    _bvai = False
+                    if (str(os.getenv("WOLF_BUILD_VIA_AI", "0")).strip().lower() in ("1", "true", "yes", "on")
+                            and str(side).lower() in ("buy", "买入")):
+                        try:
+                            from app.services.wave_gate import classify_buy_leg as _cbl2
+                            _bvai = _cbl2(trigger_kind) in ("build", "ambush")
+                        except Exception as _ebv:
+                            _bvai = False
+                            print("[TMonitor] 建仓过AI判定异常(按不过AI ✓): %s" % str(_ebv)[:60], flush=True)
                     # ★★ 账本 §9.764 ✓（用户拍板：「agent 判质地接生产」✓）：
                     #   验证结论 ✓（`.dsh-tmp/prod/quality_judge_result.json` ✓）：`avoid` 召回 4/4 ✓／误伤 0 ✓；
                     #     ★ 但 **`caution` 在下跌趋势里几乎对所有票都给** ✗ ⇒ v1 **只让 `avoid` 硬拦** ✓，
@@ -5243,6 +5260,34 @@ class TMonitor:
                                   % (symbol, trigger_kind, str(_wgwhy)[:110]), flush=True)
                             t_db.update_trigger_status(trig_id, "blocked",
                                                        reason="[WAVE-COND] " + str(_wgwhy)[:200])
+                    elif _bvai:
+                        # ★ 2026-10-13（用户拍板 ✓）：建仓类（trend_break_buy / *ambush_buy / 253-254 ✗）
+                        #   不再"条件命中自动执行"✗ ⇒ **送 agent 决策** ✓（agent 按其提示词里的
+                        #   "脱节>1%⇒wait、追高⇒abandon"等判据决定 ✓，再经网关执行 ✓）
+                        exec_ok = False
+                        print("[TMonitor] 建仓类过 AI %s %s ⇒ 不自动执行，送 agent 决策 ✓"
+                              % (symbol, trigger_kind), flush=True)
+                        t_db.update_trigger_status(
+                            trig_id, "pending",
+                            reason="[BUILD-VIA-AI] %s 属建仓类 ⇒ 不自动下单 ✗，已送 agent 决策 ✓" % trigger_kind)
+                        try:
+                            import threading as _th3
+                            from app.services.t_bridge import wake_agent as _wa3
+
+                            def _wake_build(_tid=trig_id, _sym=symbol, _kind=trigger_kind):
+                                try:
+                                    _t3 = t_db.get_trigger(int(_tid)) if hasattr(t_db, "get_trigger") else None
+                                except Exception:
+                                    _t3 = None
+                                _t3 = _t3 or {"id": _tid, "symbol": _sym, "event_type": _kind,
+                                              "trigger_kind": _kind}
+                                try:
+                                    _wa3(_t3, {"note": "建仓类过 AI 决策（WOLF_BUILD_VIA_AI=1）"})
+                                except Exception as _ew3:
+                                    print("[TMonitor] 建仓类唤醒 agent 失败: %s" % str(_ew3)[:80], flush=True)
+                            _th3.Thread(target=_wake_build, daemon=True).start()
+                        except Exception as _et3:
+                            print("[TMonitor] 建仓类唤醒线程启动失败: %s" % str(_et3)[:70], flush=True)
                     elif _qb:
                         exec_ok = False
                         print('[TMonitor] 质地闸拦截 %s %s: %s' % (symbol, trigger_kind, str(_qbwhy)[:110]), flush=True)
