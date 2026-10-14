@@ -135,6 +135,27 @@ POS_ACCOUNT = os.getenv("WOLF_POSITION_ACCOUNT", T_MONITOR_ACCOUNT)
 T_MONITOR_AUTO_MAINTAIN = os.getenv("T_MONITOR_AUTO_MAINTAIN", "0") == "1"
 print("[TM-BUILD] t_monitor 已加载 诊断版(§9.243) ✓", flush=True)
 
+# ★ 2026-10-14（用户：「🟡 浪型 side ⇒ 需 agent 确认 这个也去掉吧」✓）：
+#   那条「请求确认」QQ 每次触发都推（同一个标的 10.13 → 10.17 → 10.32 连着推 ✗），而
+#   AI 的裁决现在已回推 QQ（`t_ai_agent._notify_ai_decision`）⇒ 请求属重复 ⇒ 默认**不推** ✓。
+#   要恢复：`WOLF_WAVE_CONFIRM_QQ=1`（并按 (标的, 腿型) 每小时去重 ✓）。
+_WAVE_CONFIRM_SEEN: Dict[str, float] = {}
+
+
+def _wave_confirm_should_push(symbol: str, trigger_kind: str, dedup_sec: float = 3600.0) -> bool:
+    """「浪型 side ⇒ 需 agent 确认」的 QQ 请求是否该推（默认不推，见上方注释）。绝不抛。"""
+    try:
+        if str(os.getenv("WOLF_WAVE_CONFIRM_QQ", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+            return False
+        _k = "%s|%s" % (symbol or "?", trigger_kind or "-")
+        _now = time.time()
+        if _now - float(_WAVE_CONFIRM_SEEN.get(_k, 0) or 0) < float(dedup_sec):
+            return False
+        _WAVE_CONFIRM_SEEN[_k] = _now
+        return True
+    except Exception:
+        return False
+
 # ── 形态腿量比补齐（2026-09-24；`WOLF_VOL_RATIO_FILL` 库内默认 0 ⇒ 生产逐位不变）──────────
 # 病灶（账本 §9.13）：`_insert_wolf_trigger` 原先**只从 quote 读** vol_ratio，而**回测取数替身
 #   `fetch_tencent_quote` 不提供该字段** ⇒ `snapshot.vol_ratio` 恒 None ⇒
@@ -5293,10 +5314,14 @@ class TMonitor:
                                 reason="[WAVE-CONFIRM] " + str(_wgwhy)[:180] + " ⇒ 已送 agent 确认 ✓")
                             try:
                                 from app.services import alert_hub as _ah2
-                                _ah2.push_qq("🟡 浪型 side ⇒ 需 agent 确认（原先「人工确认」既不通知也不执行 ✗）\n"
-                                             "标的 %s｜腿型 %s｜报价 %s\n%s"
-                                             % (symbol, trigger_kind,
-                                                str((quote or {}).get("current") or "-"), str(_wgwhy)[:160]))
+                                # ★ 2026-10-14（用户：「这个也去掉吧」✓）：AI 裁决已回推 QQ
+                                #   ⇒ 这条"请求确认"默认不推（每 ~5 分钟随触发重发 ✗）；
+                                #   WOLF_WAVE_CONFIRM_QQ=1 可恢复，并按 (标的,腿型) 去重。
+                                if _wave_confirm_should_push(symbol, trigger_kind):
+                                    _ah2.push_qq("🟡 浪型 side ⇒ 需 agent 确认（原先「人工确认」既不通知也不执行 ✗）\n"
+                                                 "标的 %s｜腿型 %s｜报价 %s\n%s"
+                                                 % (symbol, trigger_kind,
+                                                    str((quote or {}).get("current") or "-"), str(_wgwhy)[:160]))
                             except Exception as _eqq:
                                 print("[TMonitor] 确认通知发送失败: %s" % str(_eqq)[:60], flush=True)
                             try:
