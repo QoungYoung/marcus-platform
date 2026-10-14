@@ -345,10 +345,23 @@ def _arm_legs(plan):
     _ambush_codes = {str(x).strip().split(".")[0].zfill(6) for x in _ambush if str(x).strip()}
     print("[switch_builder] _arm_legs 埋伏名单 %d 只（归一 6 位后 %d 个 ✓）"
           % (len(_ambush), len(_ambush_codes)), flush=True)
+    # ★ §9.844 ✓（用户 2026-10-13「把位置/涨幅条件前移到选股端」✓）：
+    #   下游闸（t_monitor._build_chase_block ✓）只能"拦" ✗ ⇒ 实测 t47 头 5 天：腿照样产生、全被拦 ⇒ 0 成交 ✗
+    #   本闸在**选股端**就不产生这类腿 ✓（阈值同源 ✓，开关同源 ✓：WOLF_BUILD_NEAR_HIGH_PCT / GAIN20_MAX ✓）
+    try:
+        from app.services.build_position_filter import block_reason as _sel_block
+    except Exception:
+        _sel_block = None
+    _sel_skipped = []
     for b in plan.get("buy_new") or []:
         code = b["code"]
         _c6 = str(code).strip().split(".")[0].zfill(6)
         sym = ("SH" if _c6[0] == "6" else "SZ") + _c6
+        if _sel_block is not None:
+            _why_sel = _sel_block(sym, day=today)
+            if _why_sel:
+                _sel_skipped.append((sym, _why_sel))
+                continue
         if _c6 in _ambush_codes or sym in _ambush or str(code) in _ambush:
             rid_a = arm(conn, cur, sym, "wolf_ambush_buy", "buy", BUY_253_EXPR, today)
             armed.append({"type": "wolf_ambush_buy", "symbol": sym, "253": rid_a})
@@ -449,6 +462,13 @@ def build_plan():
                     print("[switch_builder] 埋伏候选跳过（主题口径不一致）：%s 判级=%s 自身=%s"
                           % (_c6, _judged_theme, ",".join(sorted(_own))[:40]), flush=True)
                     continue
+                if _sel_block is not None:
+                    _why_sel2 = _sel_block(_c6, day=today)
+                    if _why_sel2:
+                        _sel_skipped.append((_c6, _why_sel2))
+                        print("[switch_builder] 埋伏候选跳过（选股端位置/涨幅闸 ✓）：%s ⇒ %s"
+                              % (_c6, _why_sel2[:120]), flush=True)
+                        continue
                 buy_new[_c6] = [_judged_theme, "ambush"]
                 _added.append(_c6)
             if _added:
@@ -495,6 +515,10 @@ if __name__ == "__main__":
     print("sell_old:", plan["sell_old"])
     print("keep:", plan["keep"])
     print("buy_new:", plan["buy_new"])
+    if _sel_skipped:
+        print("[switch_builder] 选股端位置/涨幅闸跳过 %d 只 ✓（示例 3 条）：" % len(_sel_skipped), flush=True)
+        for _s2, _w2 in _sel_skipped[:3]:
+            print("   %s ⇒ %s" % (_s2, _w2[:130]), flush=True)
     print("escalate:", plan["escalate"])
     print("armed:", plan["armed"])
     print("WROTE", PLAN_FILE)
