@@ -5308,7 +5308,37 @@ class TMonitor:
                         except Exception as _eqj:
                             _qb, _qbwhy = False, ''
                             print('[TMonitor] 质地闸异常(放行 ✓): %s' % str(_eqj)[:80], flush=True)
-                    if _cond_tb:
+                    # ★ §9.864 ✓（2026-10-14 用户「短间隔多次买入合理吗」⇒「实现，重新起臂」✓）：
+                    #   **第二批的时点闸** —— 语料 2026-06-15 的**下半句**此前没实现 ✗：
+                    #   「突破下跌趋势第一根开头我加一半，突破后的**第二根红K尾盘 打满**」✓
+                    #   实测病灶 ✗（用户贴的成交 ✓）：SZ002466 05-07 14:00 买 600 股 @78.970（第 1 批 ✓）、
+                    #     14:05 被"同价重复建仓"拦 ✓（那是**防双执行补丁** ✓）、**14:10 又买 400 股 @79.070** ✗
+                    #     ⇒ 第 2 批只隔 10 分钟 ✗（＝拿防重补丁当了建仓节奏 ✗，无语料依据 ✓）
+                    #   开关 `WOLF_BUILD_SECOND_TAIL`（**库内默认 0 ⇒ 生产逐位不变** ✓；回测置 1 ✓）
+                    #   只对**建仓类腿型**（`WOLF_BUILD_CAP_KINDS` ✓，与资金上限同一份名单 ✓）生效 ✓
+                    _stb, _stbwhy = (False, "")
+                    if str(side).lower() in ("buy", "买入"):
+                        try:
+                            _bck = {k.strip() for k in (os.getenv(
+                                "WOLF_BUILD_CAP_KINDS",
+                                "trend_break_buy,buy_253,buy_254,custom_buy,wolf_build") or "").split(",") if k.strip()}
+                            if str(trigger_kind) in _bck:
+                                from app.services import wolf_addon_cap as _ac2
+                                _now2 = datetime.now()
+                                _stb, _stbwhy = _ac2.check_second_tail(
+                                    cond.get("account_id", T_MONITOR_ACCOUNT), symbol,
+                                    _now2.strftime("%Y%m%d"), _now2.strftime("%H%M"),
+                                    quote.get("open"), current)
+                        except Exception as _estb:
+                            _stb, _stbwhy = (False, "")
+                            print("[TMonitor] 第二批时点闸异常(放行 ✓): %s" % str(_estb)[:70], flush=True)
+                    if _stb:
+                        exec_ok = False
+                        print("[TMonitor] 第二批时点闸拦截 %s %s: %s"
+                              % (symbol, trigger_kind, str(_stbwhy)[:120]), flush=True)
+                        t_db.update_trigger_status(trig_id, "blocked",
+                                                   reason="[SECOND-TAIL] " + str(_stbwhy)[:220])
+                    elif _cond_tb:
                         exec_ok = False
                         print("[TMonitor] 条件单买入时点闸拦截 %s %s: 不在下跌中买（B/C ✓）" % (symbol, trigger_kind), flush=True)
                         t_db.update_trigger_status(trig_id, "blocked",

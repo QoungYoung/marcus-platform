@@ -226,3 +226,78 @@ def check(account_id: str, symbol: str, add_volume: int, day: Any,
     except Exception as e:                                  # pragma: no cover
         print("[addon_cap] 查询失败(fail-open): %s" % str(e)[:90], flush=True)
         return True, ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ★ §9.864 ✓（2026-10-14 用户「短间隔多次买入合理吗」⇒「实现，重新起臂」✓）
+#   **第二批的"时点"**（语料原话的下半句 ✓，此前**只实现了次数/价上限，没实现时点** ✗）
+#
+# 语料 ✓（逐字，2026-06-15）：「突破下跌趋势**第一根开头我加一半**，突破后的
+#   **第二根红K尾盘 打满**，然后之后就只等卖点 中间会有调仓 但是**没有减仓**」
+# ⇒ 读法 ✓（**日级** ✓）：第 1 批 = 突破日的"第一根"（我们落在当天 14:00–14:30 的条件单 ✓）；
+#     第 2 批 = **第二根日K**，且要求那根是**红K** ✓，时点在它的**尾盘** ✓。
+#     即：**第 2 批不得与第 1 批同日** ✗；必须是"随后的某根红K日"的尾盘 ✓。
+#
+# 实测病灶 ✗（用户贴的成交记录 ✓）：SZ002466 2026-05-07
+#   14:00 买 600 股 @78.970（第 1 批 ✓）｜14:05 被"同价重复建仓"拦 ✓（那是**防双执行补丁** ✓，
+#   `t_buy_dedup.py` 原文：同价同量相隔 5 分钟 ⇒ 一次建仓被执行两次 ✗）
+#   14:10 **又买 400 股 @79.070** ✗ —— 79.07≠78.97 ⇒ 去重不触发 ⇒ 第 2 批只隔了 **10 分钟** ✗
+#   ⇒ 也就是：**拿"防重补丁"当了建仓节奏** ✗（我们自设的，无语料依据 ✗）
+#
+# 开关 ✓ `WOLF_BUILD_SECOND_TAIL`（**库内默认 0 ⇒ 生产逐位不变** ✓）
+#   · `WOLF_BUILD_SECOND_TAIL_HM` 尾盘哨，默认 **1445** ✓（复用库内既有尾盘时点 ✓ 不新增数字 ✓）
+#   · 适用腿型复用 `WOLF_BUILD_CAP_KINDS` 的**建仓类**口径 ✓（与资金上限同一份名单 ✓）
+# 拦下时返回 (True, 理由) ⇒ 调用方写 `blocked` ✓（审计可查 ✓）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def second_tail_on() -> bool:
+    return os.getenv("WOLF_BUILD_SECOND_TAIL", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def second_tail_hm() -> str:
+    return (os.getenv("WOLF_BUILD_SECOND_TAIL_HM", "1445") or "1445").strip()
+
+
+def second_tail_block(seq: Sequence[Sequence[Any]], day: Any, now_hm: str,
+                      today_open: Optional[float], cur: Optional[float]) -> Tuple[bool, str]:
+    """第 2 批的时点闸（纯函数 ✓）。返回 (True, why) ⇒ 应拦。
+
+    `seq` = `_fetch_seq()` 的行（(日, 方向, 量, 价) ✓，只读本轮流水 ✓；本函数只用"当日是否有买入"✓）。
+    """
+    if not second_tail_on():
+        return False, ""
+    d8 = _d8(day)
+    try:
+        _bought_today = any(_d8(r[0]) == d8 and str(r[1]) in ("买入", "buy") for r in (seq or []))
+    except Exception as _e:
+        return False, ""                                   # 读不出 ⇒ fail-open ✓（与同模块其它闸一致 ✓）
+    if _bought_today:
+        return True, ("第二批时点：**今日已建仓**（同日第二笔 ✗）⇒ 按语料"
+                      "2026-06-15「第一根开头加一半 + **第二根红K尾盘**打满」⇒ 第 2 批须等**下一根日K** ✓")
+    try:
+        _hm = str(now_hm or "")
+    except Exception:
+        _hm = ""
+    if second_tail_hm() and _hm and _hm < second_tail_hm():
+        return True, ("第二批时点：现在 %s < 尾盘哨 %s ⇒ 按语料「**尾盘**打满」⇒ 未到尾盘不补第 2 批 ✓"
+                      % (_hm, second_tail_hm()))
+    try:
+        _o = float(today_open or 0); _c = float(cur or 0)
+    except Exception:
+        _o = _c = 0.0
+    if _o > 0 and _c > 0 and _c < _o:
+        return True, ("第二批时点：今日**非红K**（现价 %.3f < 当日开盘 %.3f ✗）⇒ 语料要求"
+                      "「第二根**红K**」✓" % (_c, _o))
+    return False, ""
+
+
+def check_second_tail(account_id: str, symbol: str, day: Any, now_hm: str,
+                      today_open: Optional[float], cur: Optional[float]) -> Tuple[bool, str]:
+    """DB 版：读流水后调 `second_tail_block`。开关关或异常一律 fail-open（不拦 ✓）。"""
+    if not second_tail_on():
+        return False, ""
+    try:
+        return second_tail_block(_fetch_seq(account_id, symbol), day, now_hm, today_open, cur)
+    except Exception as e:                                  # pragma: no cover
+        print("[addon_cap] 第二批时点查询失败(fail-open): %s" % str(e)[:90], flush=True)
+        return False, ""
