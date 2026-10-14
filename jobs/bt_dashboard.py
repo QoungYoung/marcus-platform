@@ -2844,9 +2844,20 @@ def day_progress(root: str, account: str = "") -> dict:
         try:
             _lg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                ".dsh-tmp", "wolfbt", "logs")
-            _lp = _g.glob(os.path.join(_lg, "size_run_*.log"))
+            # ★ §9.852 ✓（2026-10-13 用户「这些日志也不打印了」✓）：**优先认本臂自己的日志** ✓
+            #   病灶 ✗：原先取"最新修改的 size_run_*.log" ⇒ 会串到别的臂/别的日志 ✗ ⇒
+            #   窗口与"当日"都可能来自别的臂 ⇒ 页面出现"全 pending + 日志尾为空" ✗
+            _tag2 = os.path.basename(str(root).rstrip("/"))
+            _tag2 = _tag2[4:] if _tag2.startswith("_bt_") else _tag2
+            _own = os.path.join(_lg, "size_run_%s.log" % _tag2)
+            _lp = [_own] if os.path.exists(_own) else _g.glob(os.path.join(_lg, "size_run_*.log"))
+            _log_day = None
             if _lp:
                 _txt = open(max(_lp, key=os.path.getmtime), encoding="utf-8", errors="replace").read()
+                import re as _re3
+                _dd = _re3.findall(r"\[days\]\s+(\d{8})", _txt)
+                if _dd:
+                    _log_day = _dd[-1]          # 驱动最后打印的那一天 = 它此刻在跑的天 ✓
                 import re as _re2
                 _m2 = _re2.findall(r"(\d{8})\s*→\s*(\d{8})", _txt)
                 if _m2:
@@ -2876,6 +2887,12 @@ def day_progress(root: str, account: str = "") -> dict:
         _in_prog = sorted(d for d in _stepped if d not in done and d in day_dirs)
         pend = [d for d in day_dirs if d not in done]
         cur = (_in_prog[-1] if _in_prog else (pend[0] if pend else (day_dirs[-1] if day_dirs else None)))
+        # ★ §9.852 ✓：若本臂日志显示它正在跑某天 ⇒ **以日志为准** ✓（否则会挑到"预建但还没跑"的未来天 ✗）
+        try:
+            if _log_day and _log_day in day_dirs:
+                cur = _log_day
+        except Exception:
+            pass
         out["day"] = cur
         out["day_index"] = (day_dirs.index(cur) + 1) if cur in day_dirs else 0
         # ★★ 账本 §9.739 ✓（用户 2026-10-07：「在当日进度这一行…后面加上**当日判定浪型**」✓）：
