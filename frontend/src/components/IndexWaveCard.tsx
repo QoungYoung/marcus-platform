@@ -29,12 +29,19 @@ const OP_CN: Record<string, string> = {
 const OP_COLOR: Record<string, string> = {
   build: '#e5484d', t_only: '#c98a12', side: '#2f7cd3', defense: '#e08b3a', exit: '#8a5cf0',
 };
-const RUNG_COLOR = ['#c98a12', '#2f7cd3', '#e08b3a', '#e5484d'];   // [0]4浪调整 [1]成功4-5 [2]失败4-5 [3]下跌1浪
-const MAINUP_COLOR = '#2f9e6e';                                     // 主升 3-3 叠加档
+// ★ 色带按 **operation** 染色（原来按档位序号 ⇒ W底/末段这类改写档会串色 ✗ 实测发现）
+const OP_FILL: Record<string, string> = {
+  build: '#2f9e6e',     // 建仓/追
+  side: '#2f7cd3',      // 观望·调仓换股
+  t_only: '#c98a12',    // 只做T·不新开
+  defense: '#8a5cf0',   // 防御·不建仓
+  exit: '#d64545',      // 兑现·降仓（防顶/先卖）
+};
+const OP_ORDER = ['build', 'side', 't_only', 'defense', 'exit'];
+const MAINUP_COLOR = '#2f9e6e';   // 主升 3-3 标记色（与 build 同色系 ✓）
 
 function bandColor(w: Wave): string {
-  if (w.main_up === '3-3') return MAINUP_COLOR;
-  return RUNG_COLOR[w.rung] || MUTED;
+  return OP_FILL[(w.operation || '').toLowerCase()] || MUTED;
 }
 
 export default function IndexWaveCard({ days = 250, height = 340 }: { days?: number; height?: number }) {
@@ -127,6 +134,12 @@ export default function IndexWaveCard({ days = 250, height = 340 }: { days?: num
             html += '<div>操作 <b style="color:' + oc + '">' + (OP_CN[w.operation] || w.operation || '-') + '</b>' +
                     (w.invest != null ? '　投入系数 ' + Number(w.invest).toFixed(2) : '') +
                     (w.mode ? '　模式 <b>' + w.mode + '</b>' : '') + '</div>';
+            // 「当日许可」：说明买/卖两侧究竟哪边被拦（卖类永不拦 ✓ 见 wave_gate.py:229-231）
+            const perm = w.operation === 'build' ? '买类放行；卖出不拦'
+              : w.operation === 'side' ? '买类需人工确认；卖出不拦'
+              : w.operation === 't_only' ? '买类拦（仅 probe ≤3%）；卖出不拦'
+              : '买类拦（禁新建）；卖出不拦';
+            html += '<div style="color:' + MUTED + '">当日许可：' + perm + '</div>';
             if (w.expect) html += '<div style="color:' + MUTED + '">预期：' + w.expect + '</div>';
             if (w.reasons) html += '<div style="color:' + MUTED + '">依据：' + w.reasons + '</div>';
             html += '</div>';
@@ -202,6 +215,15 @@ export default function IndexWaveCard({ days = 250, height = 340 }: { days?: num
         )}
       </div>
       <div ref={ref} style={{ width: '100%', height, opacity: loading ? 0.4 : 1 }} />
+      {/* 图例：色带 = 当日 operation（敞口许可），不是「能不能交易」 ✓ */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
+        {OP_ORDER.map((k) => (
+          <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9, color: MUTED }}>
+            <i style={{ width: 8, height: 8, borderRadius: 2, background: OP_FILL[k], opacity: 0.75 }} />
+            {OP_CN[k]}
+          </span>
+        ))}
+      </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 8, color: MUTED }}>
           {bars.length ? bars[0].date + ' ~ ' + bars[bars.length - 1].date + '（' + bars.length + ' 根）' : ''}
