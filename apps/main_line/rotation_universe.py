@@ -162,6 +162,28 @@ def _apply_hysteresis(raw_healthy, raw_sucking):
 def match_names(names, kws):
     return [n for n in names if any(k in n for k in kws)]
 
+def chain_momentum_top(hist, subs, n, meta_groups=None):
+    """按**过去 5 日涨幅**取前 n 条概念（`concept_hist.json` 的 close 序列 ✓，纯函数便于单测 ✓）。
+
+    依据（离线实测 127 天 ✓）：链动量 IC=+0.133（t=+3.3）显著 ✓ vs `space_score` IC=−0.053（噪声 ✗）。
+    返回 [(概念名, 5日收益率), ...]（降序 ✓）；数据不足的概念跳过 ✓，不抛异常 ✓。
+    """
+    if not n or n <= 0 or not isinstance(hist, dict):
+        return []
+    mg = set(meta_groups or ())
+    name2ret = {}
+    for _bk, _v in hist.items():
+        if not isinstance(_v, dict):
+            continue
+        nm = _norm(str(_v.get("name") or _bk))
+        cs = [c for c in (_v.get("close") or []) if isinstance(c, (int, float)) and c > 0]
+        if nm and len(cs) >= 6 and cs[-6] > 0:
+            name2ret[nm] = cs[-1] / cs[-6] - 1.0
+    rank = sorted([s for s in (subs or []) if s not in mg and s in name2ret],
+                  key=lambda s: name2ret[s], reverse=True)[:n]
+    return [(s, name2ret[s]) for s in rank]
+
+
 def proxies(pos=None):
     """从 position_class_result 计算子方向拥挤/资金/轮动健康代理。pos=None 自动读文件。"""
     pos = pos if pos is not None else load_json(POS)
@@ -274,6 +296,32 @@ def proxies(pos=None):
     crowded   = pick(lambda sc: sc["crowd_score"] >= 0.55 and sc["space_score"] < 0.55, lambda s: scores[s]["crowd_score"])[:3]
     holdT     = pick(lambda sc: sc["crowd_score"] >= 0.55 and sc["space_score"] >= 0.55, lambda s: scores[s]["space_score"])[:3]
     room_cand = pick(lambda sc: sc["crowd_score"] < 0.55 and sc["space_score"] >= 0.55, lambda s: scores[s]["space_score"])[:3]
+    # ── 「强势/动量」通道（2026-10-15 ✓ **开关默认 0 ⇒ 逐字不变** ✓）────────────────────
+    #   依据（离线实测 127 天 ✓）：
+    #     · `space_score`（低位/跌幅）与未来 5 日链收益 **IC=−0.053（t=−1.3）** ✗ = 噪声；
+    #       **链动量（过去 5 日涨幅）IC=+0.133（t=+3.3）** ✓ = 唯一显著的选链因子 ✓
+    #     · 现状 ⇒ `room_bottom` 127 天里**龙头所在链 0 次进榜** ✗
+    #       （榜上是 ChatGPT概念/AI语料/AIGC/券商/免税 ✗）；换动量口径后龙头链进榜 **56 次** ✓（0.59/天 ✓）
+    #     · 与语料一致 ✓：狼大 2025-07-29「**下跌浪只做龙头**」／2025-05-19「买就买强的 千万不要买后排补涨」✓
+    #   实现：取**前 N 条动量链**（`WOLF_CHAIN_MOM_N`，默认 2 ✓）**前置**到 `room_cand` ✓
+    #     ⇒ `bt_day_legs.py` 的 `buy_chains[:2]`（硬编码取前 2 ✗）会**先取到它们** ✓，
+    #       从而让"选票本来就按 leader 排序 ✓"的路径 A 真正去选龙头 ✓ —— 顺带也让
+    #       `ma_line_price`（要求"收盘下方有均线" ✓）在强势股上能取到线位 ⇒ 255 线组买点得以生效 ✓
+    #   取数：`concept_hist.json` 的**各概念 close 序列**（种子已按 as-of 截断 ✓ 零额外网络 ✓）。
+    try:
+        _momN = int(float(os.getenv("WOLF_CHAIN_MOM_N", "0") or 0))
+    except (TypeError, ValueError):
+        _momN = 0
+    if _momN > 0:
+        try:
+            _rank = chain_momentum_top(load_json(HIST) or {}, subs, _momN, META_GROUPS)
+            if _rank:
+                _names = [s for s, _r in _rank]
+                room_cand = [s for s in _names if s not in room_cand] + room_cand
+                print("[rotation] CHAIN_MOM 前置 %d 条动量链: %s（5日 %s）"
+                      % (len(_rank), _names, ["%.1f%%" % (r * 100) for _s, r in _rank]), flush=True)
+        except Exception as _e_mom:
+            _silent_alert("rotation_universe.py:chain_mom", _e_mom)
     crowded_represent = []
     try:
         cf = json.load(open(os.path.join(DATA, "rotation_crowding.json"), encoding="utf-8"))

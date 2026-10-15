@@ -124,3 +124,35 @@ class TestTraceStage(unittest.TestCase):
         WCP._trace_stage(st, "concept_top2", [], dropped=[{"ts": "T%02d" % i} for i in range(25)])
         self.assertEqual(len(st["stages"][0]["sample_dropped"]), 10)
         self.assertEqual(st["stages"][0]["dropped"], 25)
+
+
+class TestChainMomentumTop(unittest.TestCase):
+    """选链动量通道（2026-10-15 ✓）：纯函数单测，锁死排序/门槛/异常安全 ✓。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import rotation_universe as RU
+        cls.RU = RU
+
+    def _hist(self, mapping):
+        # mapping: 概念名 -> [close...]（末位=最新 ✓）
+        return {"BK%03d.DC" % i: {"name": nm, "close": cs} for i, (nm, cs) in enumerate(mapping.items())}
+
+    def test_ranked_by_5d_return(self):
+        h = self._hist({"甲": [10, 10, 10, 10, 10, 12],      # +20% ✓
+                        "乙": [10, 10, 10, 10, 10, 11],      # +10%
+                        "丙": [10, 10, 10, 10, 10, 9]})      # −10%
+        out = self.RU.chain_momentum_top(h, ["甲", "乙", "丙"], 2)
+        self.assertEqual([s for s, _ in out], ["甲", "乙"], "应按 5 日涨幅降序取前 2 ✓")
+        self.assertAlmostEqual(out[0][1], 0.2, places=6)
+
+    def test_off_and_insufficient(self):
+        h = self._hist({"甲": [10, 10, 10]})                      # 只有 3 根 ⇒ 跳过 ✓
+        self.assertEqual(self.RU.chain_momentum_top(h, ["甲"], 0), [], "n=0 ⇒ 关 ✓")
+        self.assertEqual(self.RU.chain_momentum_top(h, ["甲"], 2), [], "数据不足 ⇒ 空 ✓")
+        self.assertEqual(self.RU.chain_momentum_top(None, ["甲"], 2), [], "hist 缺失 ⇒ 空（不抛 ✓）")
+
+    def test_meta_groups_excluded(self):
+        h = self._hist({"甲": [10, 10, 10, 10, 10, 12], "银行": [10, 10, 10, 10, 10, 99]})
+        out = self.RU.chain_momentum_top(h, ["甲", "银行"], 2, meta_groups={"银行"})
+        self.assertEqual([s for s, _ in out], ["甲"], "元组概念（如银行）应被排除 ✓")
