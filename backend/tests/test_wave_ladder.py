@@ -240,9 +240,18 @@ def test_old_wave_agent_is_retired():
 
 
 # ─────────────── 主升叠加档 3-3（2026-10-15 补 B；3-2 不做接管） ───────────────
-def test_main_up_33_overlay():
+def test_main_up_33_requires_sync3(monkeypatch):
+    """他的原话是「**三大指数同时**化解顶背离」⇒ sync3=False（三指数不同步）时**不许**给 3-3 ✓。"""
+    rows = mk(FLAT + [103.0, 104.0, 105.0])
+    monkeypatch.setattr(W, "sync3", lambda asof, look=3: False)
+    ev = W.evaluate(rows, last(rows))
+    assert ev["main_up"] == "" and ev["features"]["sync3"] is False, ev["main_up"]
+
+
+def test_main_up_33_overlay(monkeypatch):
     """连续 ≥3 日收盘 > 前 20 日最高（「站稳三天」的量化）∧ 量能不缩 ⇒ 叠加档 3-3（level=d3 / op=build）。"""
     rows = mk(FLAT + [103.0, 104.0, 105.0])
+    monkeypatch.setattr(W, "sync3", lambda asof, look=3: None)      # 无三指数数据 ⇒ 退回单指数口径 ✓
     ev = W.evaluate(rows, last(rows))
     assert ev["main_up"] == "3-3" and ev["main_up_spec"]["operation"] == "build", ev["main_up"]
     ws = W.to_wave_state(ev)

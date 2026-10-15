@@ -121,6 +121,8 @@ MAIN_UP_PB = {"key": "mainup_32", "name": "主升回调3-2", "level": "d3", "sub
 MAIN_UP_STREAK = int(_envf("WOLF_WAVE_LADDER_UP_STREAK", 3))   # 「站稳三天」
 MAIN_UP_VOL = _envf("WOLF_WAVE_LADDER_UP_VOL", 1.0)            # 量能不缩：当日额 ≥ 20 日均额 × 该系数
 MAIN_UP_PULLBACK = _envf("WOLF_WAVE_LADDER_UP_PB", 0.03)       # 主升中的回调幅度门槛（⛔ 代理）
+_SYNC3: Optional[bool] = None   # features() 每轮写入：三指数同步状态（None=数据不全 ⇒ 退回单指数）
+_ROWS_CACHE: Dict[Any, Any] = {}   # (DATA, code) → rows
 # ★ 2026-10-15 修正（用户拍板 A）：下跌1浪拆成**两件事** ——
 #   「**不进**」= operation `defense`（禁新建仓；tier 目标 30% ⇐ 原表 down→defense ＋ 他「熊市不做，什么都不做」）
 #   「**怎么出**」= mode `自救`（存量借反弹/放量分批减；他 2026-10-15：「要出来光靠硬割不行 需要创造条件才能割肉」）
@@ -147,6 +149,36 @@ def _streak_above(hist: Sequence[Tuple[str, float, float, float]], win: int) -> 
         else:
             break
     return n
+
+
+SYNC_CODES = ("000001.SH", "399001.SZ", "399006.SZ")   # 上证 / 深证成指 / 创业板指 —— 他说的「三大指数」
+
+
+def sync3(asof: str, look: int = 3) -> Optional[bool]:
+    """「**三大指数同时**化解顶背离」（他 2025-10-29）——近 `look` 日内是否出现过三指数**同日**收 > 各自前 20 日最高。
+
+    数据：`data/index_daily_<code>.json`（`jobs/sync_index_daily_multi.py` 落盘；日线走东财 ✓，
+    datahubco 的 index_daily 实测只到 2026-08-03 ✗ 故不作主源）。任一指数缺数据 ⇒ 返回 None（fail-open ✓，
+    上层退回"只看上证"单指数口径并在 features 里标注 ✗ 不静默改语义）。"""
+    series = {}
+    for code in SYNC_CODES:
+        rows = load_rows(code)
+        hist = [r for r in rows if r[0] <= str(asof)[:8]]
+        if len(hist) < 25:
+            return None
+        series[code] = hist
+    for k in range(max(look, 1)):
+        ok = True
+        for code, hist in series.items():
+            seg = hist[:len(hist) - k]
+            if len(seg) < 21:
+                return None
+            if not (seg[-1][1] > max(r[1] for r in seg[-21:-1])):
+                ok = False
+                break
+        if ok:
+            return True
+    return False
 
 
 def _up33_in_window(hist: Sequence[Tuple[str, float, float, float]], win: int) -> bool:
@@ -251,6 +283,19 @@ def _load_csv(code: str) -> List[Tuple[str, float, float, float]]:
 
 
 def load_rows(code: Optional[str] = None) -> List[Tuple[str, float, float, float]]:
+    """带缓存：同一次运行里同一 (DATA, code) 只读一次盘（walk 要跑 2500+ 天 × 多个指数 ✓）。"""
+    _ck = (DATA, code or index_code())
+    if _ck in _ROWS_CACHE:
+        return _ROWS_CACHE[_ck]
+    _ROWS_CACHE[_ck] = _load_rows_uncached(code)
+    return _ROWS_CACHE[_ck]
+
+
+def clear_rows_cache() -> None:
+    _ROWS_CACHE.clear()
+
+
+def _load_rows_uncached(code: Optional[str] = None) -> List[Tuple[str, float, float, float]]:
     """→ [(date8, close, high, amount)] 升序；**两源合并**（CSV 2016+ 长历史 ∪ JSON 近一年，
     同日以 JSON 为准）；取不到返回 []（fail-open）。
     长历史是**铁律② 的前提**：JSON 只回溯到 2024-11 ⇒ 看不到 2024-10-08 那个 1 浪顶（3674）。"""
@@ -391,6 +436,8 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
     amt_prev = hist[-2][3]
     st = structural_levels(rows, asof)
     sub = sub_legs(rows, asof, st)
+    global _SYNC3
+    _SYNC3 = sync3(asof)          # None=数据不全 ⇒ 退回单指数口径（features 里可查 ✓）
     w1 = _env_pin_w1() or st["wave1_top"]
     return {
         "date": d, "close": close, "high": high, "prev_close": prev_close, "amount": amount,
@@ -403,8 +450,10 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "hi20_prev": max(r[1] for r in w), "streak_above_hi20": _streak_above(hist, RALLY_WIN),
         "vol_ratio20": (round(amount / (sum(r[3] for r in hist[-21:-1]) / 20), 2)
                         if len(hist) >= 21 and sum(r[3] for r in hist[-21:-1]) else 0.0),
+        "sync3": _SYNC3,          # True 三指数同步创 20 日新高 / False 不同步 / None 数据不全（退回单指数）
         "main_up_up": bool(_streak_above(hist, RALLY_WIN) >= MAIN_UP_STREAK
-                           and (sum(r[3] for r in hist[-21:-1]) / 20) and amount >= MAIN_UP_VOL * (sum(r[3] for r in hist[-21:-1]) / 20)),
+                           and (sum(r[3] for r in hist[-21:-1]) / 20) and amount >= MAIN_UP_VOL * (sum(r[3] for r in hist[-21:-1]) / 20)
+                           and (_SYNC3 is not False)),
         "main_up_pb": bool(_up33_in_window(hist, HI_WIN)
                            and hi20 and close <= hi20 * (1 - MAIN_UP_PULLBACK) and not bool(close < lo60_prev)),
         # ★ 2026-10-15 修：**首次下穿**才算事件。原来写成「close < 1浪顶」这种**状态** ⇒ 指数一旦
