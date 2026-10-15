@@ -49,7 +49,9 @@ function bandColor(w: Wave): string {
   return OP_FILL[(w.operation || '').toLowerCase()] || MUTED;
 }
 
-export default function IndexWaveCard({ days = 250, height = 340 }: { days?: number; height?: number }) {
+// days 默认 750（≈3 年）：形态标注（W底/双头）很稀有 —— 250 天窗口内往往一个都没有 ✗
+// （最近一次 W底确认是 2024-09-30 ✓，需要 ~490 个交易日才能覆盖 ✓）
+export default function IndexWaveCard({ days = 750, height = 340 }: { days?: number; height?: number }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   const [bars, setBars] = useState<Bar[]>([]);
