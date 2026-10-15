@@ -240,6 +240,28 @@ def test_old_wave_agent_is_retired():
 
 
 # ─────────────── 主升叠加档 3-3（2026-10-15 补 B；3-2 不做接管） ───────────────
+
+
+def test_walk_prefix_invariance_no_lookahead():
+    # ★ 未来函数检验（前缀截断不变性）：只喂到第 i 天算出的那一天判定，必须等于全量跑出来的同一天 ✓。
+    # 未来函数的黄金检验 —— 若某天状态用到了它之后的数据，两者必然不一致 ✗。
+    # 实测（2026-10-15，真实 5319 根序列抽样 14 天含最后两天）0 不一致 ✓。
+    rows = mk(FLAT + [102.0, 103.0, 104.0] + [104.0] * 30 + [110.0] + [108.0] * 12
+              + [96.0] * 23 + [99.0, 101.0] + [120.0] + [112.0] * 9)
+    evs = W.walk(rows)
+    assert len(evs) > 40
+    by = {e['date']: e for e in evs}
+    key = lambda e: (e['rung_index'], e['operation'], e.get('main_up') or '',
+                     (e.get('features') or {}).get('wave1_top'), (e.get('features') or {}).get('prev_peak'))
+    checked = 0
+    for i in range(80, len(rows), 7):
+        if rows[i][0] not in by:
+            continue
+        assert key(by[rows[i][0]]) == key(W.walk(rows[: i + 1])[-1]), ('future leak', rows[i][0])
+        checked += 1
+    assert checked >= 10, checked
+
+
 def test_main_up_33_requires_sync3(monkeypatch):
     """他的原话是「**三大指数同时**化解顶背离」⇒ sync3=False（三指数不同步）时**不许**给 3-3 ✓。"""
     rows = mk(FLAT + [103.0, 104.0, 105.0])
